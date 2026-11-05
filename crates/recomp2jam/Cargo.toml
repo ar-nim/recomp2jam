@@ -1,0 +1,18 @@
+[package]
+name = "recomp2jam"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "recomp2jam"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+o2jam-game = { path = "../o2jam-game" }
+o2jam-audio = { path = "../o2jam-audio" }
+o2jam-file = { path = "../o2jam-file" }

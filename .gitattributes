@@ -1,0 +1,8 @@
+* text=auto eol=lf
+*.exe binary
+*.ojm binary
+*.ojn binary
+*.ojt binary
+*.png binary
+*.jpg binary
+*.ogg binary

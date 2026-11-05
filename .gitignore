@@ -1,0 +1,43 @@
+# Rust
+/target/
+**/target/
+
+# Build artifacts
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.dll
+*.exe
+!fixtures/**/*.exe
+
+# Reverse-engineering work files (large, machine-specific)
+*.idb
+*.i64
+*.til
+*.dmp
+ghidra_projects/
+*.rep
+
+# Original copyrighted client / assets — never commit these
+*.ojm
+*.ojn
+*.ojt
+*.o2ma
+O2Jam*.exe
+NowSmartLauncher*.exe
+assets/original/
+fixtures/original/
+
+# Editors / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Env
+.env

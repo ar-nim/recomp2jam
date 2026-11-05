@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/o2jam-file",
+  "crates/o2jam-audio",
+  "crates/o2jam-game",
+  "crates/recomp2jam",
+  "crates/o2jam-dump",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/ar-nim/recomp2jam"
+authors = ["Arif Rahman Ibrahim <1311330+ar-nim@users.noreply.github.com>"]
+
+[workspace.dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+lewton = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
