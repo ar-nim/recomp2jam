@@ -32,11 +32,18 @@
 
 ## OJNList.dat (plaintext index?)
 
-`Image/OJNList.dat` (215848 bytes, sha256 `3be8ca00…`) starts
-`3202 0000 6400 0000 6F6A6E00` — plausibly 562 entries + `"ojn\0"`.
-Hypothesis: per-song metadata (BPM? level? id mapping `o2ma###`).
-Next: split into 384-byte records (`215848/562 ≈ 384.2`) and cross-check
-song 757's entry against its `.ojn`.
+## OJNList.dat (song index — VERIFIED layout)
+
+`Image/OJNList.dat` (215848 bytes): 300-byte records. Record 0 is the
+header (`562`, `100`, `"ojn"`); records 1+ are per-song entries with
+title, artist, level tag and `o2ma###.ojm` filename (e.g. `<Bach Alive` /
+`s.Doma` / `o2ma100.ojm`, ` on the fire[3M]`, `Out of Control` /
+`RAVEN`, `NoteFactory`). Cross-check: `o2ma757` → record 437,
+`o2ma770` → 450, `o2ma860` → 537. File holds 719 slots + 148-byte tail,
+so the `562` count's exact semantics (playable filter? region subset?) is
+TBD — next probe. Per-record numeric fields (BPM? levels? ids) still need
+a field map; use record 437 (song 757, whose `.ojn` we also have) as the
+Rosetta stone.
 
 ## Open questions (in priority order)
 
