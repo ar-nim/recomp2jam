@@ -936,6 +936,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "o2jam-render"
+version = "0.1.0"
+
+[[package]]
 name = "o2jam-shell"
 version = "0.1.0"
 dependencies = [

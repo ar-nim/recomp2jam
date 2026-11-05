@@ -4,6 +4,7 @@ members = [
   "crates/o2jam-file",
   "crates/o2jam-audio",
   "crates/o2jam-game",
+  "crates/o2jam-render",
   "crates/o2jam-shell",
   "crates/recomp2jam",
   "crates/o2jam-dump",

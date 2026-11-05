@@ -1,0 +1,5 @@
+[package]
+name = "o2jam-render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
