@@ -235,6 +235,30 @@ fixture tests.
    result-screen `.ojs` driven); `LongnoteMode` refs (`0x3a71c`,
    `0x1a4744`, …) remain `option.ini` display settings (dead end).
    `o2jam-game` implements verified windows + combo rule with
-   synthetic tests; points stay placeholders.
+   synthetic tests; points stay placeholders. Jam gauge + pill system
+   (7.55 exe sha256 `83a04541…`, 5,029,888 bytes; REA 6.7.0 /
+   Ghidra 12.1.2): UI anchors located — `Jamgauge_right_bar.ojs` /
+   `Jamgauge_left_bar.ojs` (VAs `0x64b1b8`/`0x64b1d0`, search
+   `ev_2ff06089…`; xrefs `ev_9a778412…`/`ev_d006b5ee…` → code
+   `0x4e7de2`/`0x4e7d7b` inside the play-scene `.ojs` loader
+   `FUN_004e7850`, dossier `ev_40f99221…`), `Playing_Effect_Jam`
+   (`0x64b0fc`, `ev_a17b38d2…`; xrefs `ev_b0f57cc5…` →
+   `0x4e822a`/`0x4ee9dc`/`0x4f2d5a`), `Note_JamNum.ojs` (`0x64c0fc`,
+   `ev_49a71dd5…`; xref `ev_bda08173…` → `0x50d0ae`), plus `JAM`
+   shop/grade strings near `0x24745e`/`0x24762b`/`0x2476b3` and the
+   `jamcard.asp` + `Itemdata_Korea.dat`/`ItemManager` shop leads
+   (earn flow OPEN, untraced). The gauge variable and its `+2`/`+1`/
+   `30` sites are NOT located in-exe — rating flows through the
+   `+0xa14` virtual callback, whose target object is unidentified —
+   so the gauge math below is player-reported (UNVERIFIED in-exe):
+   Cool feeds 2, Good feeds 1, Bad/Miss feed nothing; 30 progress
+   completes one jam combo with overflow carrying into the next
+   cycle (31 → 1); pills (max 5 held) are spent instead of breaking
+   the combo on Bad/Miss; higher jam combo scores more (direction
+   confirmed, per-level size OPEN). `o2jam-game` implements this
+   model (`JamGauge`/`PillStock`/`Score::apply_rated`) with
+   synthetic tests; gauge constants, pill earn flow, Bad/Miss
+   progress handling, bonus-on-completing-note ordering, and the
+   per-jam point size stay placeholders.
 3. Kind-0 meter semantics (single `0.75` float) and kind-1 `999.0`
    terminators — one song each so far.
