@@ -4,6 +4,7 @@ members = [
   "crates/o2jam-file",
   "crates/o2jam-audio",
   "crates/o2jam-game",
+  "crates/o2jam-shell",
   "crates/recomp2jam",
   "crates/o2jam-dump",
 ]
@@ -24,4 +25,5 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 thiserror = "2.0.21"
 tracing = "0.1.44"
+winit = "0.30"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

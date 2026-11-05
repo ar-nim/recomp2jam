@@ -31,6 +31,9 @@ enum Command {
         /// Chart file to load (`.ojn`, verified parsers pending).
         #[arg(long)]
         chart: Option<String>,
+        /// Open the game window (needs a display; headless CI skips it).
+        #[arg(long)]
+        window: bool,
     },
 }
 
@@ -52,9 +55,24 @@ fn main() -> Result<()> {
             println!("target: O2Jam 7.55 client (C++/CDX/Boost/libvorbis/MSVC2005) -> Rust");
             println!("status: day-0 scaffold; gameplay renderers pending file-parser verification");
         }
-        Command::Play { chart } => {
-            tracing::info!(?chart, "play stub: no windowed client yet");
-            println!("play: stub — chart Parers pending (got: {chart:?}). See docs/progress.md");
+        Command::Play { chart, window } => {
+            tracing::info!(?chart, ?window, "play stub");
+            if !window {
+                println!(
+                    "play: stub — chart parsers pending (got: {chart:?}). See docs/progress.md"
+                );
+                return Ok(());
+            }
+            struct StubGame;
+            impl o2jam_shell::GameLoop for StubGame {
+                fn lane_key(&mut self, lane: usize, down: bool) {
+                    tracing::info!(lane, down, "lane key");
+                }
+                fn redraw(&mut self) {}
+            }
+            let event_loop = winit::event_loop::EventLoop::new()
+                .map_err(|e| anyhow::anyhow!("event loop failed: {e:?}"))?;
+            o2jam_shell::Shell::new(Box::new(StubGame)).run(event_loop)?;
         }
     }
     Ok(())
