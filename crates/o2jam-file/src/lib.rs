@@ -2855,6 +2855,69 @@ mod tests {
             Err(FileError::UnknownFormat { .. })
         ));
     }
+
+    #[test]
+    fn control_list_parses_empty_bound_and_typo_header() {
+        // Mirrors real 7.55 shapes: `STATE_CHANNEL` carries a bare
+        // `BOUND` line with no file, and the select-music dialog
+        // header is spelled `DAILOG_` in the file.
+        let text = "NUMBER_OF_STATE\t\t0x02\n\
+            STATE_FIRST\t\t0x01\n\
+            {\n\
+            \tBOUND\n\
+            \tIDC_FIRST_SELF\t\t0X10000000\n\
+            \tIDC_SCROLL_FIRST_LIST\t0X10200001\t\"O2_SBS_VERT\t4\t\t100\"\n\
+            }\n\
+            DAILOG_TYPO\t\t0x01\n\
+            {\n\
+            \tBOUND\t\t\"Dialog_Typo.bnd\"\n\
+            \tIDC_TYPO_SELF\t\t0X20000000\n\
+            //\tIDC_COMMENTED_OUT\t\t0X20000001\t\"Ghost.ojs\"\n\
+            }\n";
+        let list = parse_control_list(text).unwrap();
+        assert_eq!(list.blocks.len(), 2);
+        let first = &list.blocks[0];
+        assert_eq!(first.name, "STATE_FIRST");
+        assert_eq!(first.bound_file, None);
+        assert_eq!(first.bound.len(), 2);
+        // Scrollbar style strings ride in `sprite` verbatim.
+        assert_eq!(
+            first.bound[1].sprite.as_deref(),
+            Some("O2_SBS_VERT\t4\t\t100")
+        );
+        let typo = &list.blocks[1];
+        assert_eq!(typo.name, "DAILOG_TYPO");
+        assert_eq!(typo.bound_file.as_deref(), Some("Dialog_Typo.bnd"));
+        // The `//`-commented row stays out of the block.
+        assert_eq!(typo.bound.len(), 1);
+    }
+
+    #[test]
+    fn control_list_parses_stub_and_trailing_comment() {
+        // Mirrors real 7.55 shapes: `0x00` stub headers with no body,
+        // and entry lines with trailing `//` notes (the Playing
+        // file's load-limit comment sits on entry 230 this way).
+        let text = "NUMBER_OF_STATE\t\t0x02\n\
+            STATE_FULL\t\t0x02\n\
+            {\n\
+            \tBOUND\t\t\"State_Full.bnd\"\n\
+            \tIDC_FULL_SELF\t\t0X10000000\n\
+            \tIDC_TEXT_FULL_TAIL\t\t0X1B400011\t\t// loads up to here\n\
+            }\n\
+            STATE_STUB\t\t0x00\n";
+        let list = parse_control_list(text).unwrap();
+        assert_eq!(list.num_states, Some(2));
+        assert_eq!(list.blocks.len(), 2);
+        let full = &list.blocks[0];
+        assert_eq!(full.number, 2);
+        assert_eq!(full.bound.len(), 2);
+        assert_eq!(full.bound[1].code, 0x1B400011);
+        assert_eq!(full.bound[1].sprite, None);
+        let stub = &list.blocks[1];
+        assert_eq!(stub.name, "STATE_STUB");
+        assert_eq!(stub.number, 0);
+        assert!(stub.bound.is_empty() && stub.sets.is_empty());
+    }
     fn ojn_event(tick: u32, kind: u16, payload: &[u32]) -> Vec<u8> {
         let mut event = Vec::with_capacity(8 + payload.len() * 4);
         event.extend_from_slice(&tick.to_le_bytes());
