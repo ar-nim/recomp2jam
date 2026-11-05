@@ -8,7 +8,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
-#[command(name = "o2jam-dump", version, about = "Inspect O2Jam 7.55 asset files")]
+#[command(name = "o2jam-dump", version, about = "Inspect O2Jam 7.55 asset files", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Command,

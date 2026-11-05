@@ -10,7 +10,8 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "recomp2jam",
     version,
-    about = "O2Jam 7.55 recompilation (Rust)"
+    about = "O2Jam 7.55 recompilation (Rust)",
+    long_about = None
 )]
 struct Cli {
     /// Increase log verbosity (-v, -vv).
