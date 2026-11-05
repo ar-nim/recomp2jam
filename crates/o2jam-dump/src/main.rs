@@ -68,13 +68,27 @@ fn main() -> Result<()> {
         Command::Opi { file } => {
             let bytes =
                 std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
-            let entries = o2jam_file::parse_opi(&bytes)?;
-            println!("{}: {} entries", file.display(), entries.len());
-            for e in &entries {
-                println!(
-                    "  kind={} {:>9}B +{:>4}B {}",
-                    e.kind, e.size, e.aux_size, e.name
-                );
+            let slots = o2jam_file::parse_opi_slots(&bytes)?;
+            let files = slots.iter().filter(|s| !s.is_free()).count();
+            println!(
+                "{}: {} slots ({} files, {} free)",
+                file.display(),
+                slots.len(),
+                files,
+                slots.len() - files
+            );
+            for (i, s) in slots.iter().enumerate() {
+                if s.is_free() {
+                    println!(
+                        "  [slot {i}] kind={} free reservation off={} aux={}B",
+                        s.kind, s.data_offset, s.aux_size
+                    );
+                } else {
+                    println!(
+                        "  [slot {i}] kind={} off={} {:>9}B +{:>4}B {}",
+                        s.kind, s.data_offset, s.size, s.aux_size, s.name
+                    );
+                }
             }
         }
         Command::Hex { file, len } => {

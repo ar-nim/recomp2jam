@@ -166,12 +166,75 @@ fn read_opi_name(bytes: &[u8], off: usize) -> Result<String, FileError> {
     Ok(String::from_utf8_lossy(&raw[..end]).into_owned())
 }
 
-/// Parse an OPI/OPA archive directory (trailing table). Returns one
-/// entry per named file; nameless free slots are skipped. Stored
-/// bytes are NOT validated (script, text, and binary bodies share
-/// the container).
-/// Verified on real 7.55 files (docs/file-formats/opi.md).
-pub fn parse_opi(bytes: &[u8]) -> Result<Vec<OpiEntry>, FileError> {
+/// One raw table slot in an OPI/OPA archive, including nameless free
+/// slots (deleted-entry reservations: `kind` 0, empty name, `size` 0,
+/// nonzero `data_offset`/`aux_size`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpiSlot {
+    /// File name (empty for free slots).
+    pub name: String,
+    /// Entry kind from the archive: 1 = file, 0 = free slot.
+    pub kind: u32,
+    /// Offset of the stored bytes (or reservation) from archive start.
+    pub data_offset: usize,
+    /// Stored byte count (0 for free slots).
+    pub size: u32,
+    /// Reserved on-disk stride to the next table slot's offset.
+    pub aux_size: u32,
+}
+
+impl OpiSlot {
+    /// True for nameless deleted-entry reservations.
+    pub fn is_free(&self) -> bool {
+        self.name.is_empty()
+    }
+}
+
+fn read_opi_slot(bytes: &[u8], entry_off: usize) -> Result<OpiSlot, FileError> {
+    let kind = read_u32le(bytes, entry_off)?;
+    let name = read_opi_name(bytes, entry_off + OPI_NAME_OFF)?;
+    let data_offset = read_u32le(bytes, entry_off + OPI_OFFSET_OFF)? as usize;
+    let size = read_u32le(bytes, entry_off + OPI_SIZE_OFF)?;
+    let aux_size = read_u32le(bytes, entry_off + OPI_AUX_SIZE_OFF)?;
+    let body_end = data_offset
+        .checked_add(size as usize)
+        .ok_or(FileError::Truncated {
+            need: usize::MAX,
+            have: bytes.len(),
+        })?;
+    if body_end > bytes.len() {
+        return Err(FileError::Truncated {
+            need: body_end,
+            have: bytes.len(),
+        });
+    }
+    let stride_end = data_offset
+        .checked_add(aux_size as usize)
+        .ok_or(FileError::Truncated {
+            need: usize::MAX,
+            have: bytes.len(),
+        })?;
+    if stride_end > bytes.len() {
+        return Err(FileError::Truncated {
+            need: stride_end,
+            have: bytes.len(),
+        });
+    }
+    Ok(OpiSlot {
+        name,
+        kind,
+        data_offset,
+        size,
+        aux_size,
+    })
+}
+
+/// Parse every OPI/OPA table slot in table order, including nameless
+/// free slots. Verified counts on real 7.55 files
+/// (docs/file-formats/opi.md): 1596 / 633 / 7149 slots.
+/// Stored bytes are NOT validated; readers must slice bodies by
+/// `size`, never by `aux_size`.
+pub fn parse_opi_slots(bytes: &[u8]) -> Result<Vec<OpiSlot>, FileError> {
     if bytes.len() < OPI_HEADER_LEN {
         return Err(FileError::TooShort(bytes.len()));
     }
@@ -188,38 +251,40 @@ pub fn parse_opi(bytes: &[u8]) -> Result<Vec<OpiEntry>, FileError> {
             have: bytes.len(),
         });
     }
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(slots.min(8192));
     let mut off = bytes.len() - table_len;
     for _ in 0..slots {
-        let kind = read_u32le(bytes, off)?;
-        let name = read_opi_name(bytes, off + OPI_NAME_OFF)?;
-        let data_offset = read_u32le(bytes, off + OPI_OFFSET_OFF)? as usize;
-        let size = read_u32le(bytes, off + OPI_SIZE_OFF)?;
-        let aux_size = read_u32le(bytes, off + OPI_AUX_SIZE_OFF)?;
-        let end = data_offset
-            .checked_add(size as usize)
-            .ok_or(FileError::Truncated {
-                need: usize::MAX,
-                have: bytes.len(),
-            })?;
-        if end > bytes.len() {
-            return Err(FileError::Truncated {
-                need: end,
-                have: bytes.len(),
-            });
-        }
-        if !name.is_empty() {
-            out.push(OpiEntry {
-                name,
-                kind,
-                data_offset,
-                size,
-                aux_size,
-            });
-        }
+        out.push(read_opi_slot(bytes, off)?);
         off += OPI_ENTRY_LEN;
     }
     Ok(out)
+}
+
+/// True when the body looks like a complete JPEG (`FF D8 … FF D9`).
+/// Verified on real 7.55 files: all 47 `ATI*`/`ati*` album-art `.ojs`
+/// bodies in `Interface1.opi` match, and no body in the other two
+/// archives starts with `FF D8`.
+pub fn is_jpeg_body(bytes: &[u8]) -> bool {
+    bytes.len() >= 4 && bytes.starts_with(&[0xFF, 0xD8]) && bytes.ends_with(&[0xFF, 0xD9])
+}
+
+/// Parse an OPI/OPA archive directory (trailing table). Returns one
+/// entry per named file; nameless free slots are skipped. Stored
+/// bytes are NOT validated (script, text, and binary bodies share
+/// the container).
+/// Verified on real 7.55 files (docs/file-formats/opi.md).
+pub fn parse_opi(bytes: &[u8]) -> Result<Vec<OpiEntry>, FileError> {
+    Ok(parse_opi_slots(bytes)?
+        .into_iter()
+        .filter(|slot| !slot.is_free())
+        .map(|slot| OpiEntry {
+            name: slot.name,
+            kind: slot.kind,
+            data_offset: slot.data_offset,
+            size: slot.size,
+            aux_size: slot.aux_size,
+        })
+        .collect())
 }
 
 /// Parse the M30 variant: 20-byte header, then inline 52-byte entries
@@ -1914,6 +1979,61 @@ mod tests {
             parse_opi(&countless),
             Err(FileError::Truncated { .. })
         ));
+    }
+
+    fn opi_blob_with_free_slot() -> Vec<u8> {
+        let mut blob = vec![0u8; OPI_HEADER_LEN];
+        blob[..4].copy_from_slice(&2u32.to_le_bytes());
+        blob[4..8].copy_from_slice(&3u32.to_le_bytes());
+        let first_data = OPI_HEADER_LEN;
+        blob.extend_from_slice(b"hello");
+        blob.extend_from_slice(b"world!");
+        blob.extend_from_slice(&opi_entry(b"a.ojs", first_data as u32, 5));
+        let mut free = vec![0u8; OPI_ENTRY_LEN];
+        free[OPI_OFFSET_OFF..OPI_OFFSET_OFF + 4]
+            .copy_from_slice(&(first_data as u32 + 11).to_le_bytes());
+        free[OPI_AUX_SIZE_OFF..OPI_AUX_SIZE_OFF + 4].copy_from_slice(&8u32.to_le_bytes());
+        blob.extend_from_slice(&free);
+        blob.extend_from_slice(&opi_entry(b"b.txt", (first_data + 5) as u32, 6));
+        blob
+    }
+
+    #[test]
+    fn opi_slots_keep_free_slots_in_table_order() {
+        let blob = opi_blob_with_free_slot();
+        let slots = parse_opi_slots(&blob).unwrap();
+        assert_eq!(slots.len(), 3);
+        assert_eq!(slots[0].name, "a.ojs");
+        assert!(!slots[0].is_free());
+        assert!(slots[1].is_free());
+        assert_eq!(slots[1].kind, 0);
+        assert_eq!(slots[1].size, 0);
+        assert_eq!(slots[2].name, "b.txt");
+        let files = parse_opi(&blob).unwrap();
+        assert_eq!(files.len(), 2);
+    }
+
+    #[test]
+    fn opi_slots_reject_stride_running_past_file() {
+        let mut blob = opi_blob();
+        let first_aux_at = OPI_HEADER_LEN + 5 + 6 + OPI_AUX_SIZE_OFF;
+        blob[first_aux_at..first_aux_at + 4].copy_from_slice(&99999u32.to_le_bytes());
+        assert!(matches!(
+            parse_opi_slots(&blob),
+            Err(FileError::Truncated { .. })
+        ));
+    }
+
+    #[test]
+    fn jpeg_body_needs_soi_marker_and_eoi_marker() {
+        assert!(is_jpeg_body(&[0xFF, 0xD8, 0xFF, 0xD9]));
+        assert!(is_jpeg_body(&[
+            0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0xFF, 0xD9
+        ]));
+        assert!(!is_jpeg_body(&[0xFF, 0xD8, 0xFF, 0xE0]));
+        assert!(!is_jpeg_body(&[0x55, 0x05, 0xFF, 0xD9]));
+        assert!(!is_jpeg_body(&[0xFF, 0xD8]));
+        assert!(!is_jpeg_body(&[]));
     }
 
     fn sprite55_image(
