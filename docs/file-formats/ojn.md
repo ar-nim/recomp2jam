@@ -92,12 +92,11 @@ pre-pass `FUN_00570f90` (called right before the parser in the
 
 ## Open questions (in priority order)
 
-1. New-format decrypt: `0x570f90` is just a constants setter (dossier
-   `ev_c91297e1…`, 29 lines, no callees) — dead end. New prime
-   suspect: the shared read wrapper `FUN_004069b0` (used by both
-   loaders; dossier in flight) — if it branches on magic, everything
-   fits. (Already ruled out on `o2ma757.ojn`: single-byte XOR/ADD/SUB,
-   zlib/LZMA, 4-periodic crib key, song-id/index u32 keys; per-file
-   keystream.)
+1. New-format decrypt: read wrapper `0x4069b0` is a plain chunked
+   `ReadFile` (dossier `ev_740cefda…`) — dead end. Remaining
+   suspects: inline transform in the per-difficulty loader body
+   `0x56ffa0` itself (dossier in flight) or its unknown callee
+   `0x570260`. (Also ruled out: reader, validator, `0x570f90`,
+   single-byte XOR/ADD/SUB, zlib/LZMA, 4-periodic crib key.)
 2. Note event encoding + difficulty slots per file.
 3. Long-note + simultaneous-press encoding.
