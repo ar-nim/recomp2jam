@@ -99,3 +99,30 @@ with even plain-stripes clean and odd stripes noise-like under the
 same chain — per-stripe/per-row/order/transpose variants ruled
 out; cause TBD. Dossiers `rea-samplefetch.json` (`ev_1601a757…`)
 + dispatch (`ev_fdb31596…`) banked.
+
+### Odd-stripe byte-swap anomaly — still OPEN (3 exe leads exhausted)
+
+DialogBGM.ojm's single 13 MB mode-2 sample decodes by the verified
+chain (17-way scatter per row `size % 17`, then NOT with keys
+`0xFF`,`0x00`) to PCM where even destination stripes correlate as
+speech (~0.73–0.85 adjacent-sample) while odd stripes sit near 0.00
+and correlate (~0.75–0.81) only after a pairwise byte-swap;
+bgEffect.ojm mode-2 sample 0 shows the same even-plain/odd-swapped
+split (0.96 overall). Searched the exe for the swapping code and
+found none — no `BSWAP`/`XCHG`/word-rotate on sample buffers in:
+
+1. Sample dispatch `0x54f580` (file `0x14f580`, dossier
+   `ev_fdb31596…`), de-interleavers `0x54f860`/`0x54f920`, and the
+   transform trio `0x54f9e0`/`0x54fa70`/`0x54fac0` (NOT / mirror
+   S-box / u32-XOR only).
+2. Full-coverage loader `0x54ef60` (file `0x14ef60`, dossier
+   `ev_f96b0fe5…`) and its codec targets: PCM decode `0x54d320`
+   (dossier `ev_c5a69874…`, header memcpy + body memcpy, no swap)
+   and Vorbis decode `0x54db40` (dossier `ev_0ee1373d…`).
+3. File-read chain `0x412620` → `0x4125b0` (dossier `ev_55fd256a…`,
+   plain `ReadFile`) and the setter region near `0x54b9f0`
+   (dossier `ev_45cf9963…`, free/malloc only).
+
+Per-stripe/per-row/order/transpose variants stay ruled out; cause
+TBD — no Rust change made (unverified transforms stay out of
+`o2jam-file`).
