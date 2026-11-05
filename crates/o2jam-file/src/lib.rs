@@ -261,11 +261,22 @@ pub fn parse_omc(bytes: &[u8]) -> Result<Vec<OjmSample<'_>>, FileError> {
     }
 }
 
-/// Minimal parsed view of an `.ojn` chart file (stub).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Minimal parsed view of an `.ojn` chart file.
+///
+/// Header field map verified on real 7.55 data (Tutorial.ojn and
+/// decrypted o2ma757.ojn agree on id/magic/BPM positions).
+#[derive(Debug, Clone, PartialEq)]
 pub struct OjnChartFile {
-    /// Raw magic tag seen.
+    /// Raw magic tag seen (`ojn`).
     pub magic: [u8; 4],
+    /// Song id (`u32` at +0).
+    pub song_id: u32,
+    /// Tempo (`f32` at +16; reads 100.0/124.0 on Tutorial/757).
+    pub bpm: f32,
+    /// Count field (`u32` at +64): equals the walked event total on
+    /// Tutorial.ojn (43) but not on decrypted o2ma757.ojn (208 vs a
+    /// 580-event run) — semantics TBD, exposed raw.
+    pub event_count_hint: u32,
 }
 
 /// Parse an `.ojm` container into its sample streams.
@@ -311,6 +322,17 @@ pub struct OjnListEntry<'a> {
     pub ojm_file: String,
     /// Raw record bytes for fields not yet mapped.
     pub raw: &'a [u8],
+}
+
+fn read_f32le(bytes: &[u8], off: usize) -> Result<f32, FileError> {
+    bytes
+        .get(off..off + 4)
+        .and_then(|w| w.try_into().ok())
+        .map(f32::from_le_bytes)
+        .ok_or(FileError::Truncated {
+            need: off + 4,
+            have: bytes.len(),
+        })
 }
 
 fn read_str(bytes: &[u8], off: usize, len: usize) -> Result<String, FileError> {
@@ -387,7 +409,7 @@ pub fn decrypt_ojn_new_format(bytes: &[u8]) -> Result<Vec<u8>, FileError> {
     let (k1, k2, k3) = (buf[n - 7], buf[n - 6], buf[n - 5]);
     let p = period as usize;
     for (i, b) in buf.iter_mut().enumerate() {
-        if i % p == 0 {
+        if i.is_multiple_of(p) {
             *b ^= k1;
         } else if i % p == p / 2 {
             *b ^= k2;
@@ -408,6 +430,9 @@ pub fn parse_ojn(bytes: &[u8]) -> Result<OjnChartFile, FileError> {
                 need: 4,
                 have: plain.len(),
             })?,
+            song_id: read_u32le(&plain, 0)?,
+            bpm: read_f32le(&plain, 16)?,
+            event_count_hint: read_u32le(&plain, 64)?,
         }),
         AssetKind::Ojm | AssetKind::OjnList => Err(FileError::UnknownFormat {
             magic: bytes[..4.min(bytes.len())].to_vec(),
@@ -564,7 +589,7 @@ mod tests {
         // key slots at buf[3..7], "new" tail, whole buffer reversed.
         let (k1, k2, k3, p): (u8, u8, u8, usize) = (0x97, 0xE0, 0x34, 6);
         let ks = |i: usize| {
-            if i % p == 0 {
+            if i.is_multiple_of(p) {
                 k1
             } else if i % p == p / 2 {
                 k2
@@ -596,8 +621,24 @@ mod tests {
         // must round-trip exactly, including the magic.
         assert_eq!(&dec[0..n - 7], &plain[0..n - 7]);
         // Old-format input passes through untouched.
-        let old = parse_ojn(b"ojnX....").unwrap();
+        let mut old_raw = vec![0u8; 300];
+        old_raw[..8].copy_from_slice(b"ojnX....");
+        let old = parse_ojn(&old_raw).unwrap();
         assert_eq!(old.magic, *b"ojnX");
+    }
+
+    #[test]
+    fn ojn_header_fields_parse() {
+        // Synthetic old-format header: id, magic, BPM, count.
+        let mut blob = vec![0u8; 300];
+        blob[0..4].copy_from_slice(&757u32.to_le_bytes());
+        blob[4..8].copy_from_slice(b"ojn\0");
+        blob[16..20].copy_from_slice(&124f32.to_le_bytes());
+        blob[64..68].copy_from_slice(&208u32.to_le_bytes());
+        let chart = parse_ojn(&blob).unwrap();
+        assert_eq!(chart.song_id, 757);
+        assert_eq!(chart.bpm, 124.0);
+        assert_eq!(chart.event_count_hint, 208);
     }
 
     #[test]
@@ -617,7 +658,9 @@ mod tests {
             Err(FileError::TooShort(_))
         ));
         // Old-format chart validates by magic.
-        let chart = parse_ojn(b"ojnX....").unwrap();
+        let mut raw = vec![0u8; 300];
+        raw[..8].copy_from_slice(b"ojnX....");
+        let chart = parse_ojn(&raw).unwrap();
         assert_eq!(chart.magic, *b"ojnX");
     }
 
