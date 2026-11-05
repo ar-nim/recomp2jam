@@ -32,22 +32,29 @@ with Python 3.14 — offsets and counts below, no disassembly.)
 | +4 | 128 B | name, NUL-padded ASCII (`*.ojs`, `*.oji`, `*.ojt`, `*.oja`, `*.bnd`, `*.txt`, `*.dat`) |
 | +132 | u32 | data offset from archive start |
 | +136 | u32 | stored size: the body is always the first `size` bytes |
-| +140 | u32 | on-disk stride (`aux_size`): gap to the next blob's offset |
+| +140 | u32 | on-disk stride (`aux_size`): gap to the next table slot's offset |
 | +144 | 8 B | zero pad |
 
-`aux_size` semantics (open question 1, resolved): for ~99.5% of
-slots, `aux_size == next_offset − data_offset`, i.e. the reserved
-stride; bytes in `[off+size, off+aux)` are zero padding. The last
+`aux_size` semantics (open question 1, resolved): table order is
+already offset order (0 inversions in all three archives), and for
+~99.9% of slots `aux_size == next_slot_offset − data_offset`, i.e.
+the reserved stride tiling `[16, table_start)` exactly. The last
 slot's stride runs to the data-region end (start of the entry
 table, e.g. `ControlList_Interface.txt`: `off 74438614 + aux
-419496 == table start 74858110`). A handful of stale slots
-disagree with the gap (notably several `avatar.opa` bodies whose
-`aux_size` overshoots the next offset), plus the known 32 B overlap
-in `Interface1.opi` (`State_MShop.bnd`/`SMI_790.ojs`); readers must
-slice by `size`, never by `aux_size`. Free (kind-0) slots are
-deleted-entry reservations: nonzero `offset`/`aux_size` with no
-body (open question 2, resolved — e.g. `Interface1.opi` slot 672
-reserves `[31694688, 31777792)` between two named blobs).
+419496 == table start 74858110`). Bytes in `[off+size, off+aux)`
+are stale slack, NOT zero padding (verified nonzero in 53 + 17 + 59
+bodies across the three archives); only the `Playing1.opi` tail
+(`[221621059, 221640810)`, 19751 B) is zero-filled. Readers must
+slice by `size`, never by `aux_size`. Table-order mismatches (stride
+overruns, never holes): 2 in `Interface1.opi` (the known 32 B
+overlap `State_MShop.bnd`/`SMI_790.ojs`: `63271746 + 2934 = 63274680
+> 63273928`; plus 16 B `FREE slot 1460`/`Messenger_Alram_PopUp.ojs`),
+0 in `Playing1.opi`, 6 in `avatar.opa` (1–10 KB overshoots, e.g.
+`X203FB13LA002.ojs` `+24688` vs `+14838` gap). Free (kind-0) slots
+are deleted-entry reservations: `size` 0 with nonzero
+`offset`/`aux_size` whose bytes are stale (verified nonzero in every
+free reservation — e.g. `Interface1.opi` slot 672 reserves
+`[31694688, 31777792)`, 83104 B, 83080 B nonzero).
 
 ## Verified inventories (real 7.55 files, counts only)
 
@@ -56,7 +63,56 @@ reserves `[31694688, 31777792)` between two named blobs).
 - `Playing1.opi` (221,737,026 B): 633 slots → 627 files
   (338 `.ojt`, 275 `.ojs`, 5 `.oji`, 4 `.bnd`, 3 `.oja`,
   1 `.dat`, 1 `.txt`), 6 free.
-- `avatar.opa` (144,761,749 B): 7149 slots → 7134 files, 15 free.
+- `avatar.opa` (144,761,749 B): 7149 slots → 7133 files
+  (7132 `.ojs`, 1 `.dat`), 16 free.
+
+(`o2jam-dump opi` prints every slot: `parse_opi_slots` keeps table
+order with offsets, free reservations shown as `free reservation`.)
+
+### Body classes per archive (magic/structure, counts only)
+
+Cross-checked with `o2jam-file` parsers (`parse_sprite55` +
+`parse_sprite55_strided(_, 4)`, `parse_bnd`, `parse_oja`,
+`is_jpeg_body`): every named body lands in exactly one class.
+
+| Class | `Interface1.opi` | `Playing1.opi` | `avatar.opa` | Total |
+|---|---|---|---|---|
+| sprite-55 standard (`55 05` envelope, exact `8+20·n+Σsize`) | 1485 | 615 | 7131 | 9231 |
+| sprite-55 strided ×4 (`Note_Combo4/5/6.ojt`) | 0 | 3 | 0 | 3 |
+| `.bnd` sections (`FFFFFFFF` + exact `6+16·n`) | 49 | 4 | 0 | 53 |
+| `.oja` animation envelopes (`5A 55`, 6/10/6 frames) | 0 | 3 | 0 | 3 |
+| JPEG album art (`FF D8 … FF D9`, `ATI*`/`ati*` `.ojs`) | 47 | 0 | 0 | 47 |
+| CP949 word-list text (`abusedata.ojs`, `abuse_NickNamedata.ojs`) | 2 | 0 | 0 | 2 |
+| CP949 control lists (`ControlList_*.txt`) | 1 | 1 | 0 | 2 |
+| small tables (`album`/`AlbumList`/`SMI_790`, `JamTable.dat`, `SetInfodata`/`Itemdata_Korea`) | 3 | 1 | 2 | 6 |
+| **Files** | **1587** | **627** | **7133** | **9347** |
+| free slots (kind 0, `size` 0, stale reservation) | 9 | 6 | 16 | 31 |
+| **Slots** | **1596** | **633** | **7149** | **9378** |
+
+Sprite-55 split of the 9231 standard bodies: tag 1 / tag 0 =
+1450/35 (Interface), 608/10 with 3 more tag-1 strided (Playing),
+7131/0 (avatar); colorkey `0x0000` / `0x7D5F` = 1142/343,
+547/71, 1758/5373. Free-slot reservations (offset + aux, table
+order): Interface slot 672 (+83104), 1169 (+1596), 1192/1193
+(+7780 each), 1351 (+1686), 1460 (+1750), 1502 (+1720), 1503
+(+1554068, largest), 1508 (+422); Playing 427 (+150), 429 (+630),
+445 (+68806), 446 (+758), 455 (+774), 468 (+22974); avatar 16 tiny
+reservations (228–368 B: slots 24, 26, 30, 988, 1238, 1544, 1546,
+1548, 1760, 1762, 1989, 2485, 4359, 4523, 4525, 4527).
+
+### Data-region coverage (offset-sorted walk, table order == offset order)
+
+First blob at offset 16 in all three archives; strides tile
+`[16, table_start)` with no holes — every gap is the stale slack of
+a body with `aux_size > size` (Interface 51 gaps + 2 overlaps =
+53 bodies; Playing 16 gaps + 0 overlaps; avatar 53 gaps + 0
+overlaps), and every overlap is a documented stride overrun, never
+an underrun. Named bytes vs region: Interface 71745062 +
+free 1659906 = 73404968 of 74858094 (1453126 B slack + 329024 B
+zero-free tail before the table); Playing 220063661 + 94092 =
+220157753 of 221640794 (1483041 B slack + 19751 B zero tail);
+avatar 143245748 + 4956 = 143250704 of 143675085 (424381 B slack,
+no tail — `Itemdata_Korea.dat` ends exactly at the table).
 
 ## Inner formats
 
@@ -160,7 +216,9 @@ parses by prefix.
 ## Implementation
 
 o2jam-file: `parse_opi` (entries with `name/kind/data_offset/
-size/aux_size`; nameless slots skipped; bounds-checked) +
+size/aux_size`; nameless slots skipped; bounds-checked),
+`parse_opi_slots` (every slot in table order incl. free reservations,
+stride-end checked), `is_jpeg_body` (`FF D8 … FF D9`, 47/47) +
 `decode_control_text`, `parse_sprite55` (+ `parse_sprite55_strided`,
 `rgb565_to_rgb888`), `parse_bnd`, `parse_oja`,
 `parse_jam_thresholds`, `parse_control_list` — each with synthetic
@@ -172,9 +230,9 @@ strides, and the Playing rect subset.
 ## Open questions
 
 1. ~~`aux_size` semantics when it exceeds `size`.~~ → on-disk
-   stride (gap to next blob); stale exceptions documented above.
+   stride (gap to next table slot); slack bytes are stale, not zero.
 2. ~~Type-0 free slots with nonzero offset/size2.~~ → deleted-entry
-   reservations, no bodies.
+   reservations (`size` 0, stale bytes, never bodies).
 3. The 32 B overlap: encoder sloppiness or intentional sharing?
 4. ~~Inner formats: `.ojs`/`.ojt`/`.oji`/`.oja` text vs binary,
    `.bnd` structure, `JamData.dat`/`Itemdata_Korea.dat` tables.~~ →
