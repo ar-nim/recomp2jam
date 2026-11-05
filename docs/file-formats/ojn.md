@@ -246,8 +246,21 @@ fixture tests.
    `0x4e822a`/`0x4ee9dc`/`0x4f2d5a`), `Note_JamNum.ojs` (`0x64c0fc`,
    `ev_49a71dd5…`; xref `ev_bda08173…` → `0x50d0ae`), plus `JAM`
    shop/grade strings near `0x24745e`/`0x24762b`/`0x2476b3` and the
-   `jamcard.asp` + `Itemdata_Korea.dat`/`ItemManager` shop leads
-   (earn flow OPEN, untraced). The gauge variable and its `+2`/`+1`/
+   `jamcard.asp` + `Itemdata_Korea.dat`/`ItemManager` shop leads.
+   Pill earning IS located in-exe: the `FUN_00576540` score path
+   (file `0x176540`, dossier `ev_c168abac…`) keeps a consecutive-Cool
+   counter (game object `+0x3990`, sub-object `+0x1820` field
+   `+0x2170`) and a pill stock (`+0x398c`, sub field `+0x216c`).
+   Each Cool adds 1 while pills < 5; crossing `> 14` (the 15th
+   consecutive Cool) adds a pill (cap 5) and resets the counter.
+   Good/Bad set the counter to 0. On Bad the counter resets and
+   pills > 0 spends one (`-1`) to keep the combo instead of
+   breaking it (mode byte `6` exempts both earning and spending).
+   So YES, pills come from Cool hits — 15 in a row mints one,
+   up to the max-5 stock; the displayed +2/+1/30 jam gauge itself
+   stays behind the `+0xa14` callback (UNVERIFIED in-exe).
+   `o2jam-game` implements the verified streak (`CoolStreak`)
+   alongside the player-reported gauge. The gauge variable and its `+2`/`+1`/
    `30` sites are NOT located in-exe — rating flows through the
    `+0xa14` virtual callback, whose target object is unidentified —
    so the gauge math below is player-reported (UNVERIFIED in-exe):

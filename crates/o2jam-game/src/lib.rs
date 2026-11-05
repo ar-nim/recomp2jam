@@ -251,6 +251,44 @@ impl PillStock {
     }
 }
 
+/// Consecutive-Cool streak that earns pills, exactly as the 7.55
+/// client runs it (`FUN_00576540` score path, file `0x176540`,
+/// dossier `ev_c168abac…`): while pills aren't full, each Cool adds
+/// 1; crossing `> 14` (the 15th consecutive Cool) grants a pill
+/// and resets; Good/Bad/Miss reset the streak. Mode byte `6`
+/// exempts both earning and spending (mode TBD).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CoolStreak {
+    count: u32,
+}
+
+impl CoolStreak {
+    /// Longest streak that still grants nothing (grant at 15).
+    pub const GRANT_AFTER: u32 = 14;
+
+    /// Record one judgement for the streak; returns `true` when a
+    /// pill is granted (caller adds it to [`PillStock`]).
+    pub fn note(&mut self, judgement: Judgement, pills: &mut PillStock) -> bool {
+        match judgement {
+            Judgement::Cool => {
+                if pills.count() < MAX_PILLS {
+                    self.count += 1;
+                    if self.count > Self::GRANT_AFTER {
+                        self.count = 0;
+                        pills.add(1);
+                        return true;
+                    }
+                }
+                false
+            }
+            _ => {
+                self.count = 0;
+                false
+            }
+        }
+    }
+}
+
 /// (file `0x176540`, VA `0x576540`, dossier `ev_14992eb2…` /
 /// decompile `ev_5ecb1ce8…`).
 ///
@@ -644,5 +682,53 @@ mod tests {
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].lane, Some(3));
         assert!(seq.is_empty());
+    }
+
+    #[test]
+    fn cool_streak_grants_pill_every_fifteen_cools() {
+        let mut pills = PillStock::new(0);
+        let mut streak = CoolStreak::default();
+        for _ in 0..14 {
+            assert!(!streak.note(Judgement::Cool, &mut pills));
+        }
+        assert_eq!(pills.count(), 0);
+        assert!(streak.note(Judgement::Cool, &mut pills));
+        assert_eq!(pills.count(), 1);
+        for _ in 0..14 {
+            assert!(!streak.note(Judgement::Cool, &mut pills));
+        }
+        assert!(streak.note(Judgement::Cool, &mut pills));
+        assert_eq!(pills.count(), 2);
+    }
+
+    #[test]
+    fn cool_streak_breaks_on_good() {
+        let mut pills = PillStock::new(0);
+        let mut streak = CoolStreak::default();
+        for _ in 0..14 {
+            streak.note(Judgement::Cool, &mut pills);
+        }
+        streak.note(Judgement::Good, &mut pills);
+        assert_eq!(pills.count(), 0);
+        for _ in 0..15 {
+            streak.note(Judgement::Cool, &mut pills);
+        }
+        assert_eq!(pills.count(), 1);
+    }
+
+    #[test]
+    fn cool_streak_freezes_when_pills_full() {
+        let mut pills = PillStock::new(MAX_PILLS);
+        let mut streak = CoolStreak::default();
+        for _ in 0..30 {
+            assert!(!streak.note(Judgement::Cool, &mut pills));
+        }
+        assert_eq!(pills.count(), MAX_PILLS);
+        assert!(pills.consume_to_keep_combo());
+        for _ in 0..14 {
+            assert!(!streak.note(Judgement::Cool, &mut pills));
+        }
+        assert!(streak.note(Judgement::Cool, &mut pills));
+        assert_eq!(pills.count(), MAX_PILLS);
     }
 }
