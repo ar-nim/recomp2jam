@@ -142,10 +142,16 @@ pub struct OpiEntry {
     pub kind: u32,
     /// Offset of the stored bytes from the archive start.
     pub data_offset: usize,
-    /// Stored byte count.
+    /// Stored byte count: the body is always the first `size`
+    /// bytes at `data_offset`.
     pub size: u32,
-    /// Second size field (meaning TBD; equals `size` for stored
-    /// files, larger for the structured `55 05`-magic bodies).
+    /// Reserved on-disk stride: `aux_size` equals the gap to the
+    /// next blob's offset (verified on ~99.5% of real 7.55 slots;
+    /// docs/file-formats/opi.md). Bytes in
+    /// `[data_offset + size, data_offset + aux_size)` are padding.
+    /// A handful of stale slots disagree with the gap (encoder
+    /// sloppiness, like the known 32 B overlap), so readers must
+    /// slice by `size`, never by `aux_size`.
     pub aux_size: u32,
 }
 
@@ -683,6 +689,711 @@ pub fn parse_ojn(bytes: &[u8]) -> Result<OjnChartFile, FileError> {
     }
 }
 
+/// Decode Korean client text (`.ojs` word lists, `ControlList_*.txt`).
+///
+/// Real 7.55 bodies are CP949 (the MSVC2005 Korean-locale codepage):
+/// strict EUC-KR rejects some bytes the client uses, UTF-8 rejects
+/// nearly all high bytes, and CP949 decodes every text body without
+/// error (docs/file-formats/opi.md). `encoding_rs::EUC_KR` implements
+/// the WHATWG euc-kr index, which covers the CP949 repertoire.
+/// Malformed input (unpaired lead byte) is an error, not lossy text.
+pub fn decode_control_text(bytes: &[u8]) -> Result<String, FileError> {
+    let (text, _, had_errors) = encoding_rs::EUC_KR.decode(bytes);
+    if had_errors {
+        return Err(unknown_format(bytes));
+    }
+    Ok(text.into_owned())
+}
+
+/// Magic of the dominant inner sprite container (`.ojs`, `.ojt`,
+/// `.oji` bodies): `tag + 0x0555 + count + colorkey`, then `count`
+/// 20-byte image records and one concatenated RGB565 pixel blob.
+/// Observed tags: 0, 1. Observed colorkeys: `0x0000`, `0x7D5F`.
+/// Verified on all ~9.2k such bodies in the real 7.55 archives
+/// (docs/file-formats/opi.md).
+pub const SPRITE55_MAGIC: u16 = 0x0555;
+/// Sprite55 record length: `x + y + w + h + data_offset + size + 0`.
+pub const SPRITE55_RECORD_LEN: usize = 20;
+/// Sprite55 header length: `tag + magic + count + colorkey`.
+pub const SPRITE55_HEADER_LEN: usize = 8;
+/// Magic of the animation container (`.oja` bodies, tag + `0x555A`
+/// + count): `count` 20-byte frame records follow the header.
+///
+/// Frame-data codec TBD; only the header and frame table are verified.
+pub const OJA_MAGIC: u16 = 0x555A;
+/// Oja header length: `tag + magic + count + reserved`.
+pub const OJA_HEADER_LEN: usize = 8;
+/// Oja frame-record length: `x + y + w + h + a + b + c`.
+pub const OJA_RECORD_LEN: usize = 20;
+/// Magic opening every `.bnd` bind section.
+pub const BND_MAGIC: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
+/// Bnd header length: `magic + count`.
+pub const BND_HEADER_LEN: usize = 6;
+/// Bnd record length: `(x1, y1, x2, y2)`.
+pub const BND_RECORD_LEN: usize = 16;
+
+/// Shorthand for an unrecognised magic / malformed line: the first
+/// four bytes as the diagnostic sample.
+fn unknown_format(sample: &[u8]) -> FileError {
+    FileError::UnknownFormat {
+        magic: sample[..4.min(sample.len())].to_vec(),
+    }
+}
+
+/// Overflow-safe directory end: `header_len + count * record_len`,
+/// bounded by the buffer.
+fn dir_end(
+    count: usize,
+    record_len: usize,
+    header_len: usize,
+    have: usize,
+) -> Result<usize, FileError> {
+    let need = header_len
+        .checked_add(count.checked_mul(record_len).ok_or(FileError::Truncated {
+            need: usize::MAX,
+            have,
+        })?)
+        .ok_or(FileError::Truncated {
+            need: usize::MAX,
+            have,
+        })?;
+    if need > have {
+        return Err(FileError::Truncated { need, have });
+    }
+    Ok(need)
+}
+
+/// One image inside a sprite-55 container.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sprite55Image {
+    /// Placement anchor, pixels (often 0,0 for single images).
+    pub x: u16,
+    /// Placement anchor, pixels.
+    pub y: u16,
+    /// Width in pixels.
+    pub w: u16,
+    /// Height in pixels.
+    pub h: u16,
+    /// Byte offset of this image's data from the pixel-blob start
+    /// (end of the record directory). Records chain exactly.
+    pub data_offset: usize,
+    /// Stored byte count of this image's data.
+    pub size: u32,
+}
+
+/// A parsed sprite-55 container: header, record directory, and the
+/// raw concatenated pixel blob (sliced per image on demand).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sprite55<'a> {
+    /// Container tag (observed: 0, 1; meaning TBD).
+    pub tag: u16,
+    /// Transparent colour key (`0x0000` or `0x7D5F`).
+    pub colorkey: u16,
+    /// Image records in stored order.
+    pub images: Vec<Sprite55Image>,
+    /// Concatenated per-image data (raw RGB565 when
+    /// [`Sprite55::is_raw_rgb565`] holds; codec TBD otherwise).
+    pub blob: &'a [u8],
+}
+
+impl<'a> Sprite55<'a> {
+    /// Raw stored bytes of one image.
+    pub fn pixel_data(&self, image: &Sprite55Image) -> &'a [u8] {
+        &self.blob[image.data_offset..image.data_offset + image.size as usize]
+    }
+    /// True when the image is stored as plain `w*h` little-endian
+    /// RGB565 pixels (`size == w*h*2`; ~99.7% of real bodies).
+    /// Outlier classes (`.oji` sub-directories/prefixed frames,
+    /// RLE-compressed frames) return false and need their codec
+    /// mapped before decoding. Strided combo atlases (see
+    /// [`parse_sprite55_strided`]) store raw frames and return true.
+    pub fn is_raw_rgb565(&self, image: &Sprite55Image) -> bool {
+        image.size as usize == image.w as usize * image.h as usize * 2
+    }
+}
+
+/// Header + record directory of a sprite-55 container, without the
+/// pixel blob: shared contract of the plain and strided layouts.
+struct Sprite55Dir {
+    tag: u16,
+    colorkey: u16,
+    images: Vec<Sprite55Image>,
+    dir_end: usize,
+    stored: usize,
+}
+
+/// Read the header and chained record directory; the caller checks
+/// the blob accounting of its own layout.
+fn parse_sprite55_dir(bytes: &[u8]) -> Result<Sprite55Dir, FileError> {
+    if bytes.len() < SPRITE55_HEADER_LEN {
+        return Err(FileError::TooShort(bytes.len()));
+    }
+    let tag = read_u16le(bytes, 0)?;
+    if read_u16le(bytes, 2)? != SPRITE55_MAGIC {
+        return Err(unknown_format(bytes));
+    }
+    let count = read_u16le(bytes, 4)? as usize;
+    let colorkey = read_u16le(bytes, 6)?;
+    let dir_end = dir_end(count, SPRITE55_RECORD_LEN, SPRITE55_HEADER_LEN, bytes.len())?;
+    let mut images = Vec::with_capacity(count.min(4096));
+    let mut run = 0usize;
+    for i in 0..count {
+        let off = SPRITE55_HEADER_LEN + i * SPRITE55_RECORD_LEN;
+        let image = Sprite55Image {
+            x: read_u16le(bytes, off)?,
+            y: read_u16le(bytes, off + 2)?,
+            w: read_u16le(bytes, off + 4)?,
+            h: read_u16le(bytes, off + 6)?,
+            data_offset: read_u32le(bytes, off + 8)? as usize,
+            size: read_u32le(bytes, off + 12)?,
+        };
+        if read_u32le(bytes, off + 16)? != 0 || image.data_offset != run {
+            return Err(unknown_format(bytes));
+        }
+        run = run
+            .checked_add(image.size as usize)
+            .ok_or(FileError::Truncated {
+                need: usize::MAX,
+                have: bytes.len(),
+            })?;
+        images.push(image);
+    }
+    Ok(Sprite55Dir {
+        tag,
+        colorkey,
+        images,
+        dir_end,
+        stored: run,
+    })
+}
+
+/// Parse a sprite-55 container: magic, chained record directory,
+/// exact total accounting (`8 + 20*count + blob == len`).
+/// Verified on all real 7.55 `.ojs`/`.ojt`/`.oji` sprite bodies
+/// except the three `Note_Combo*.ojt` strided atlases (see
+/// [`parse_sprite55_strided`]).
+pub fn parse_sprite55(bytes: &[u8]) -> Result<Sprite55<'_>, FileError> {
+    let dir = parse_sprite55_dir(bytes)?;
+    if dir.dir_end + dir.stored != bytes.len() {
+        return Err(FileError::Truncated {
+            need: dir.dir_end + dir.stored,
+            have: bytes.len(),
+        });
+    }
+    Ok(Sprite55 {
+        tag: dir.tag,
+        colorkey: dir.colorkey,
+        images: dir.images,
+        blob: &bytes[dir.dir_end..],
+    })
+}
+
+/// A parsed strided sprite-55 atlas: same header and record table
+/// as [`Sprite55`], but each image stores `frames_per_image`
+/// consecutive `w*h` RGB565 frames (`Note_Combo4/5/6.ojt` hold 4
+/// glow-animation frames per 64x64 record; verified by rendering
+/// one centred digit band per 8 KiB tile).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sprite55Strided<'a> {
+    /// Container tag (observed: 1).
+    pub tag: u16,
+    /// Transparent colour key (observed: `0x0000`).
+    pub colorkey: u16,
+    /// Image records in stored order (`size` = one frame).
+    pub images: Vec<Sprite55Image>,
+    /// Frames stored per image.
+    pub frames_per_image: usize,
+    /// Concatenated frame data.
+    pub blob: &'a [u8],
+}
+
+impl<'a> Sprite55Strided<'a> {
+    /// Raw stored bytes of one animation frame.
+    pub fn frame_data(&self, image: &Sprite55Image, frame: usize) -> &'a [u8] {
+        let start = image.data_offset * self.frames_per_image + frame * image.size as usize;
+        &self.blob[start..start + image.size as usize]
+    }
+
+    /// True when one frame is stored as plain `w*h` little-endian
+    /// RGB565 pixels (`size == w*h*2`).
+    pub fn is_raw_rgb565(&self, image: &Sprite55Image) -> bool {
+        image.size as usize == image.w as usize * image.h as usize * 2
+    }
+}
+
+/// Parse a strided sprite-55 atlas: shared header/record contract
+/// plus `frames_per_image * stored == blob` accounting. Rejects
+/// `frames_per_image == 0`.
+pub fn parse_sprite55_strided(
+    bytes: &[u8],
+    frames_per_image: usize,
+) -> Result<Sprite55Strided<'_>, FileError> {
+    if frames_per_image == 0 {
+        return Err(unknown_format(bytes));
+    }
+    let dir = parse_sprite55_dir(bytes)?;
+    let blob_need = dir
+        .stored
+        .checked_mul(frames_per_image)
+        .ok_or(FileError::Truncated {
+            need: usize::MAX,
+            have: bytes.len(),
+        })?;
+    if dir.dir_end + blob_need != bytes.len() {
+        return Err(FileError::Truncated {
+            need: dir.dir_end + blob_need,
+            have: bytes.len(),
+        });
+    }
+    Ok(Sprite55Strided {
+        tag: dir.tag,
+        colorkey: dir.colorkey,
+        images: dir.images,
+        frames_per_image,
+        blob: &bytes[dir.dir_end..],
+    })
+}
+
+/// Expand one little-endian RGB565 pixel to 24-bit RGB (replicated
+/// low bits, the usual GDI 16-bit expansion).
+pub fn rgb565_to_rgb888(pixel: u16) -> (u8, u8, u8) {
+    let r5 = ((pixel >> 11) & 31) as u8;
+    let g6 = ((pixel >> 5) & 63) as u8;
+    let b5 = (pixel & 31) as u8;
+    (
+        (r5 << 3) | (r5 >> 2),
+        (g6 << 2) | (g6 >> 4),
+        (b5 << 3) | (b5 >> 2),
+    )
+}
+
+/// One layout rectangle inside a `.bnd` bind section.
+///
+/// Corners in 800x600 screen space: `(x1, y1)` top-left,
+/// `(x2, y2)` bottom-right. Record `i` lays out the `i+1`-th
+/// `IDC_` entry of the matching `ControlList` block in file order
+/// (entry 0 is the dialog/state itself); verified on all 38
+/// Interface blocks (docs/file-formats/opi.md).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BndRect {
+    /// Left edge.
+    pub x1: u32,
+    /// Top edge.
+    pub y1: u32,
+    /// Right edge (exclusive).
+    pub x2: u32,
+    /// Bottom edge (exclusive).
+    pub y2: u32,
+}
+
+/// A parsed `.bnd` bind section: magic + `count` corner rects.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bnd {
+    /// Layout rectangles in file order.
+    pub rects: Vec<BndRect>,
+}
+
+/// Parse a `.bnd` bind section: `0xFFFFFFFF` magic, `u16` count,
+/// then `count` 16-byte `(x1, y1, x2, y2)` records; the size must
+/// match exactly (`6 + 16*count`). Verified on all 53 real 7.55
+/// `.bnd` sections.
+pub fn parse_bnd(bytes: &[u8]) -> Result<Bnd, FileError> {
+    if bytes.len() < BND_HEADER_LEN {
+        return Err(FileError::TooShort(bytes.len()));
+    }
+    if bytes[0..4] != BND_MAGIC {
+        return Err(unknown_format(bytes));
+    }
+    let count = read_u16le(bytes, 4)? as usize;
+    let dir_end = dir_end(count, BND_RECORD_LEN, BND_HEADER_LEN, bytes.len())?;
+    if dir_end != bytes.len() {
+        return Err(FileError::Truncated {
+            need: dir_end,
+            have: bytes.len(),
+        });
+    }
+    let mut rects = Vec::with_capacity(count.min(4096));
+    for i in 0..count {
+        let off = BND_HEADER_LEN + i * BND_RECORD_LEN;
+        rects.push(BndRect {
+            x1: read_u32le(bytes, off)?,
+            y1: read_u32le(bytes, off + 4)?,
+            x2: read_u32le(bytes, off + 8)?,
+            y2: read_u32le(bytes, off + 12)?,
+        });
+    }
+    Ok(Bnd { rects })
+}
+
+/// One animation frame header inside an `.oja` container.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OjaFrame {
+    /// Frame origin, pixels (may be negative: centred effects).
+    pub x: i16,
+    /// Frame origin, pixels.
+    pub y: i16,
+    /// Frame width, pixels.
+    pub w: u16,
+    /// Frame height, pixels.
+    pub h: u16,
+    /// Trailing word 1 (semantics TBD).
+    pub a: u32,
+    /// Trailing word 2 (semantics TBD).
+    pub b: u32,
+    /// Trailing word 3 (semantics TBD).
+    pub c: u32,
+}
+
+/// A parsed `.oja` header + frame table. Only the envelope is
+/// verified (magic, count, coherent frame geometry on real 7.55
+/// `Note_Click.oja`: shrinking centred frames); the frame-data
+/// codec and the `a`/`b`/`c` words are TBD.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Oja {
+    /// Container tag (observed: 1).
+    pub tag: u16,
+    /// Frame headers in stored order.
+    pub frames: Vec<OjaFrame>,
+}
+
+/// Parse an `.oja` envelope: magic + `count` 20-byte frame records
+/// (`i16 x/y`, `u16 w/h`, three raw `u32` words).
+pub fn parse_oja(bytes: &[u8]) -> Result<Oja, FileError> {
+    if bytes.len() < OJA_HEADER_LEN {
+        return Err(FileError::TooShort(bytes.len()));
+    }
+    let tag = read_u16le(bytes, 0)?;
+    if read_u16le(bytes, 2)? != OJA_MAGIC {
+        return Err(unknown_format(bytes));
+    }
+    let count = read_u16le(bytes, 4)? as usize;
+    // Frame data stays unsliced (codec TBD); only the table must fit.
+    let _ = dir_end(count, OJA_RECORD_LEN, OJA_HEADER_LEN, bytes.len())?;
+    let mut frames = Vec::with_capacity(count.min(1024));
+    for i in 0..count {
+        let off = OJA_HEADER_LEN + i * OJA_RECORD_LEN;
+        frames.push(OjaFrame {
+            x: read_i16le(bytes, off)?,
+            y: read_i16le(bytes, off + 2)?,
+            w: read_u16le(bytes, off + 4)?,
+            h: read_u16le(bytes, off + 6)?,
+            a: read_u32le(bytes, off + 8)?,
+            b: read_u32le(bytes, off + 12)?,
+            c: read_u32le(bytes, off + 16)?,
+        });
+    }
+    Ok(Oja { tag, frames })
+}
+
+/// Parse a `JamTable.dat` gauge table: flat little-endian `u16`
+/// combo thresholds (54 entries, `25..4800`, on the real 7.55 file;
+/// docs/file-formats/opi.md). Requires a non-empty even length.
+pub fn parse_jam_thresholds(bytes: &[u8]) -> Result<Vec<u16>, FileError> {
+    if bytes.len() < 2 {
+        return Err(FileError::TooShort(bytes.len()));
+    }
+    if !bytes.len().is_multiple_of(2) {
+        return Err(unknown_format(bytes));
+    }
+    Ok(bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|w| u16::from_le_bytes(*w))
+        .collect())
+}
+
+/// One bound control entry: `IDC_NAME 0XCODE ["sprite"]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ControlEntry {
+    /// Control id (`IDC_...`).
+    pub id: String,
+    /// Control code (`0X...`, e.g. `0X84200003`).
+    pub code: u32,
+    /// Linked sprite file, if the entry names one.
+    pub sprite: Option<String>,
+}
+
+/// One `SET ... { ... }` subgroup inside a block (frame lists,
+/// number sprites, …). Its entries consume `.bnd` rects in file
+/// order exactly like top-level entries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ControlSet {
+    /// Numbers on the `SET` line (e.g. entry count, flags).
+    pub params: Vec<u32>,
+    /// Member entries in file order.
+    pub entries: Vec<ControlEntry>,
+}
+
+/// One `STATE_`/`DIALOG_` block of a `ControlList_*.txt` file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ControlBlock {
+    /// Block name (`STATE_ROOM`, `DIALOG_EVENT`, …).
+    pub name: String,
+    /// Declared entry count (first number on the header line).
+    pub number: u32,
+    /// Extra numbers on the header line, if any.
+    pub extra: Vec<u32>,
+    /// Sprite-bind file from the `BOUND "..."` line, if present.
+    pub bound_file: Option<String>,
+    /// Entries before the first `SET` group, in file order
+    /// (entry 0 is the block itself).
+    pub bound: Vec<ControlEntry>,
+    /// `SET` subgroups in file order.
+    pub sets: Vec<ControlSet>,
+}
+
+impl ControlBlock {
+    /// All entries in file order (`bound`, then each set's
+    /// entries): `.bnd` record `i` lays out entry `i + 1`.
+    pub fn all_entries(&self) -> Vec<&ControlEntry> {
+        let mut out = Vec::with_capacity(
+            self.bound.len() + self.sets.iter().map(|s| s.entries.len()).sum::<usize>(),
+        );
+        out.extend(self.bound.iter());
+        for set in &self.sets {
+            out.extend(set.entries.iter());
+        }
+        out
+    }
+}
+
+/// A parsed `ControlList_*.txt` UI definition: state/dialog blocks
+/// binding control ids to codes, sprites, and (via the `.bnd` file
+/// each block names) screen rects.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ControlList {
+    /// Declared `NUMBER_OF_STATE` value, if present.
+    pub num_states: Option<u32>,
+    /// Declared `NUMBER_OF_DIALOG` value, if present.
+    pub num_dialogs: Option<u32>,
+    /// `STATE_`/`DIALOG_` blocks in file order (stub blocks with
+    /// no body parse to empty entry lists).
+    pub blocks: Vec<ControlBlock>,
+}
+
+/// Signed little-endian word for animation frame origins.
+fn read_i16le(bytes: &[u8], off: usize) -> Result<i16, FileError> {
+    read_u16le(bytes, off).map(|raw| raw as i16)
+}
+
+fn parse_hex_word(word: &str) -> Result<u32, FileError> {
+    let digits = word
+        .strip_prefix("0x")
+        .or_else(|| word.strip_prefix("0X"))
+        .ok_or_else(|| unknown_format(word.as_bytes()))?;
+    u32::from_str_radix(digits, 16).map_err(|_| unknown_format(word.as_bytes()))
+}
+
+/// First `"quoted"` value on a line, if any.
+fn quoted_value(line: &str) -> Option<String> {
+    let open = line.find('"')?;
+    let close = line[open + 1..].find('"')?;
+    Some(line[open + 1..open + 1 + close].to_string())
+}
+
+fn parse_control_entry(line: &str) -> Result<ControlEntry, FileError> {
+    let mut parts = line.split_whitespace();
+    let id = parts
+        .next()
+        .ok_or_else(|| unknown_format(line.as_bytes()))?;
+    if !id.starts_with("IDC_") {
+        return Err(unknown_format(id.as_bytes()));
+    }
+    let code = parts.next().ok_or_else(|| unknown_format(id.as_bytes()))?;
+    Ok(ControlEntry {
+        id: id.to_string(),
+        code: parse_hex_word(code)?,
+        sprite: quoted_value(line),
+    })
+}
+
+/// A top-level `NAME 0xN [0xM]` block header (depth 0 only). Matches
+/// by prefix, so the real-world `DAILOG_SELECTMUSIC` typo parses
+/// like any other block. Returns `None` for non-header lines.
+fn parse_block_header(line: &str) -> Result<Option<ControlBlock>, FileError> {
+    let mut words = line.split_whitespace();
+    let (Some(name), Some(number)) = (words.next(), words.next()) else {
+        return Ok(None);
+    };
+    let is_block = ["STATE_", "DIALOG_", "DAILOG_"]
+        .iter()
+        .any(|prefix| name.starts_with(prefix));
+    if !is_block || !(number.starts_with("0x") || number.starts_with("0X")) {
+        return Ok(None);
+    }
+    let mut extra = Vec::new();
+    for word in words {
+        if word.starts_with("//") {
+            break;
+        }
+        extra.push(parse_hex_word(word)?);
+    }
+    Ok(Some(ControlBlock {
+        name: name.to_string(),
+        number: parse_hex_word(number)?,
+        extra,
+        bound_file: None,
+        bound: Vec::new(),
+        sets: Vec::new(),
+    }))
+}
+
+/// Incremental `ControlList` builder: one trimmed line at a time.
+struct ControlListParser {
+    list: ControlList,
+    block: Option<ControlBlock>,
+    open_set: Option<ControlSet>,
+    depth: usize,
+}
+
+impl ControlListParser {
+    fn new() -> Self {
+        Self {
+            list: ControlList {
+                num_states: None,
+                num_dialogs: None,
+                blocks: Vec::new(),
+            },
+            block: None,
+            open_set: None,
+            depth: 0,
+        }
+    }
+
+    fn finish(mut self) -> ControlList {
+        self.close_block();
+        self.list
+    }
+
+    fn close_set(&mut self) {
+        if let Some(set) = self.open_set.take() {
+            if let Some(block) = self.block.as_mut() {
+                block.sets.push(set);
+            }
+        }
+    }
+
+    fn close_block(&mut self) {
+        self.close_set();
+        if let Some(block) = self.block.take() {
+            self.list.blocks.push(block);
+        }
+    }
+
+    fn push_entry(&mut self, line: &str) -> Result<(), FileError> {
+        let entry = parse_control_entry(line)?;
+        if let Some(set) = self.open_set.as_mut() {
+            set.entries.push(entry);
+            return Ok(());
+        }
+        let Some(block) = self.block.as_mut() else {
+            return Err(unknown_format(line.as_bytes()));
+        };
+        if block.sets.is_empty() {
+            block.bound.push(entry);
+            return Ok(());
+        }
+        // Continuation run after a SET group (e.g. `STATE_ROOM`'s
+        // `EXBUTTON` rows): fold into a trailing parameter-less
+        // section so `all_entries` keeps file order.
+        match block.sets.last_mut() {
+            Some(last) if last.params.is_empty() => last.entries.push(entry),
+            _ => block.sets.push(ControlSet {
+                params: Vec::new(),
+                entries: vec![entry],
+            }),
+        }
+        Ok(())
+    }
+
+    fn parse_count(&mut self, line: &str, is_state: bool) -> Result<(), FileError> {
+        let word = line
+            .split_whitespace()
+            .nth(1)
+            .ok_or_else(|| unknown_format(line.as_bytes()))?;
+        let value = parse_hex_word(word)?;
+        if is_state {
+            self.list.num_states = Some(value);
+        } else {
+            self.list.num_dialogs = Some(value);
+        }
+        Ok(())
+    }
+
+    fn parse_line(&mut self, line: &str) -> Result<(), FileError> {
+        if line.is_empty() || line.starts_with("//") {
+            return Ok(());
+        }
+        if line == "{" {
+            self.depth += 1;
+            return Ok(());
+        }
+        if line == "}" {
+            match self.depth {
+                2 => self.close_set(),
+                1 => self.close_block(),
+                _ => return Err(unknown_format(line.as_bytes())),
+            }
+            self.depth -= 1;
+            return Ok(());
+        }
+        if line.starts_with("NUMBER_OF_STATE") {
+            return self.parse_count(line, true);
+        }
+        if line.starts_with("NUMBER_OF_DIALOG") {
+            return self.parse_count(line, false);
+        }
+        if let Some(rest) = line.strip_prefix("BOUND") {
+            let Some(block) = self.block.as_mut() else {
+                return Err(unknown_format(line.as_bytes()));
+            };
+            block.bound_file = quoted_value(rest);
+            return Ok(());
+        }
+        if let Some(rest) = line.strip_prefix("SET") {
+            self.close_set();
+            let mut params = Vec::new();
+            for word in rest.split_whitespace() {
+                if word.starts_with("//") {
+                    break;
+                }
+                params.push(parse_hex_word(word)?);
+            }
+            self.open_set = Some(ControlSet {
+                params,
+                entries: Vec::new(),
+            });
+            return Ok(());
+        }
+        if line.starts_with("IDC_") {
+            return self.push_entry(line);
+        }
+        if self.depth == 0 {
+            if let Some(block) = parse_block_header(line)? {
+                self.close_block();
+                self.block = Some(block);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Parse a decoded `ControlList_*.txt` file (see
+/// [`decode_control_text`]): `NUMBER_OF_*` counts plus
+/// `STATE_`/`DIALOG_` blocks with `BOUND`/`SET` sections.
+/// Comment lines (`//…`) and blank lines are skipped; unknown
+/// top-level lines are ignored so future file revisions stay
+/// readable, but malformed entries and unbalanced braces are
+/// errors.
+pub fn parse_control_list(text: &str) -> Result<ControlList, FileError> {
+    let mut parser = ControlListParser::new();
+    for raw_line in text.lines() {
+        parser.parse_line(raw_line.trim())?;
+    }
+    Ok(parser.finish())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1064,6 +1775,403 @@ mod tests {
         assert!(matches!(
             parse_opi(&countless),
             Err(FileError::Truncated { .. })
+        ));
+    }
+
+    fn sprite55_image(
+        x: u16,
+        y: u16,
+        w: u16,
+        h: u16,
+        data: &[u8],
+        run: &mut u32,
+        out: &mut Vec<u8>,
+    ) {
+        out.extend_from_slice(&x.to_le_bytes());
+        out.extend_from_slice(&y.to_le_bytes());
+        out.extend_from_slice(&w.to_le_bytes());
+        out.extend_from_slice(&h.to_le_bytes());
+        out.extend_from_slice(&run.to_le_bytes());
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+        *run += data.len() as u32;
+    }
+
+    fn sprite55_blob(tag: u16, colorkey: u16, images: &[(u16, u16, u16, u16, Vec<u8>)]) -> Vec<u8> {
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&tag.to_le_bytes());
+        blob.extend_from_slice(&SPRITE55_MAGIC.to_le_bytes());
+        blob.extend_from_slice(&(images.len() as u16).to_le_bytes());
+        blob.extend_from_slice(&colorkey.to_le_bytes());
+        let mut run = 0u32;
+        for (x, y, w, h, data) in images {
+            sprite55_image(*x, *y, *w, *h, data, &mut run, &mut blob);
+        }
+        for (_, _, _, _, data) in images {
+            blob.extend_from_slice(data);
+        }
+        blob
+    }
+
+    #[test]
+    fn sprite55_parses_chained_images_with_pixel_access() {
+        let red_green = vec![0x00, 0xF8, 0xE0, 0x07];
+        let blue = vec![0x1F, 0x00];
+        let blob = sprite55_blob(
+            1,
+            0x7D5F,
+            &[(0, 0, 2, 1, red_green.clone()), (5, 7, 1, 1, blue.clone())],
+        );
+        let sprite = parse_sprite55(&blob).unwrap();
+        assert_eq!(sprite.tag, 1);
+        assert_eq!(sprite.colorkey, 0x7D5F);
+        assert_eq!(sprite.images.len(), 2);
+        assert_eq!(
+            sprite.images[0],
+            Sprite55Image {
+                x: 0,
+                y: 0,
+                w: 2,
+                h: 1,
+                data_offset: 0,
+                size: 4
+            }
+        );
+        assert_eq!(sprite.pixel_data(&sprite.images[0]), &red_green);
+        assert!(sprite.is_raw_rgb565(&sprite.images[0]));
+        assert_eq!(sprite.pixel_data(&sprite.images[1]), &blue);
+        assert!(sprite.is_raw_rgb565(&sprite.images[1]));
+    }
+
+    #[test]
+    fn sprite55_accepts_tag_zero_and_non_raw_sizes() {
+        // Compressed-style frame: stored bytes fewer than `w*h*2`.
+        let stored = vec![0x56, 0x00, 0x00, 0x00, 0xDD, 0x00];
+        let blob = sprite55_blob(0, 0x0000, &[(0, 0, 86, 69, stored.clone())]);
+        let sprite = parse_sprite55(&blob).unwrap();
+        assert_eq!(sprite.tag, 0);
+        assert!(!sprite.is_raw_rgb565(&sprite.images[0]));
+        assert_eq!(sprite.pixel_data(&sprite.images[0]), &stored);
+    }
+
+    #[test]
+    fn sprite55_rejects_broken_directories() {
+        let blob = sprite55_blob(1, 0, &[(0, 0, 1, 1, vec![0x00, 0x00])]);
+        assert!(matches!(
+            parse_sprite55(b"short"),
+            Err(FileError::TooShort(_))
+        ));
+        let mut bad_magic = blob.clone();
+        bad_magic[2..4].copy_from_slice(b"ZZ");
+        assert!(matches!(
+            parse_sprite55(&bad_magic),
+            Err(FileError::UnknownFormat { .. })
+        ));
+        assert!(matches!(
+            parse_sprite55(&blob[..blob.len() - 1]),
+            Err(FileError::Truncated { .. })
+        ));
+        // Non-zero pad word breaks the record contract.
+        let mut bad_pad = blob.clone();
+        let pad_at = SPRITE55_HEADER_LEN + 16;
+        bad_pad[pad_at..pad_at + 4].copy_from_slice(&1u32.to_le_bytes());
+        assert!(matches!(
+            parse_sprite55(&bad_pad),
+            Err(FileError::UnknownFormat { .. })
+        ));
+        // Non-chained offset breaks the record contract.
+        let mut bad_chain = blob.clone();
+        let off_at = SPRITE55_HEADER_LEN + 8;
+        bad_chain[off_at..off_at + 4].copy_from_slice(&7u32.to_le_bytes());
+        assert!(matches!(
+            parse_sprite55(&bad_chain),
+            Err(FileError::UnknownFormat { .. })
+        ));
+        // Trailing garbage breaks exact accounting.
+        let mut trailing = blob.clone();
+        trailing.push(0x00);
+        assert!(matches!(
+            parse_sprite55(&trailing),
+            Err(FileError::Truncated { .. })
+        ));
+    }
+
+    #[test]
+    fn sprite55_strided_slices_animation_frames() {
+        // Two 2x1 images, two frames each: record sizes stay in
+        // frame units while the blob holds both frames per image.
+        let frame = |v: u8| vec![v, 0x00, v, 0x00];
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&1u16.to_le_bytes());
+        blob.extend_from_slice(&SPRITE55_MAGIC.to_le_bytes());
+        blob.extend_from_slice(&2u16.to_le_bytes());
+        blob.extend_from_slice(&0u16.to_le_bytes());
+        let mut run = 0u32;
+        for (x, data_len) in [(0u16, 4u32), (9u16, 4u32)] {
+            blob.extend_from_slice(&x.to_le_bytes());
+            blob.extend_from_slice(&0u16.to_le_bytes());
+            blob.extend_from_slice(&2u16.to_le_bytes());
+            blob.extend_from_slice(&1u16.to_le_bytes());
+            blob.extend_from_slice(&run.to_le_bytes());
+            blob.extend_from_slice(&data_len.to_le_bytes());
+            blob.extend_from_slice(&0u32.to_le_bytes());
+            run += data_len;
+        }
+        for v in [0x11u8, 0x22, 0x33, 0x44] {
+            blob.extend_from_slice(&frame(v));
+        }
+        let atlas = parse_sprite55_strided(&blob, 2).unwrap();
+        assert_eq!(atlas.frames_per_image, 2);
+        assert_eq!(atlas.frame_data(&atlas.images[0], 0), &frame(0x11));
+        assert_eq!(atlas.frame_data(&atlas.images[0], 1), &frame(0x22));
+        assert_eq!(atlas.frame_data(&atlas.images[1], 0), &frame(0x33));
+        assert_eq!(atlas.frame_data(&atlas.images[1], 1), &frame(0x44));
+        assert!(matches!(
+            parse_sprite55_strided(&blob, 0),
+            Err(FileError::UnknownFormat { .. })
+        ));
+        assert!(matches!(
+            parse_sprite55_strided(&blob, 3),
+            Err(FileError::Truncated { .. })
+        ));
+    }
+
+    #[test]
+    fn rgb565_expands_primaries() {
+        assert_eq!(rgb565_to_rgb888(0xF800), (255, 0, 0));
+        assert_eq!(rgb565_to_rgb888(0x07E0), (0, 255, 0));
+        assert_eq!(rgb565_to_rgb888(0x001F), (0, 0, 255));
+        assert_eq!(rgb565_to_rgb888(0x0000), (0, 0, 0));
+        assert_eq!(rgb565_to_rgb888(0xFFFF), (255, 255, 255));
+    }
+
+    fn bnd_blob(rects: &[(u32, u32, u32, u32)]) -> Vec<u8> {
+        let mut blob = Vec::from(BND_MAGIC);
+        blob.extend_from_slice(&(rects.len() as u16).to_le_bytes());
+        for (x1, y1, x2, y2) in rects {
+            blob.extend_from_slice(&x1.to_le_bytes());
+            blob.extend_from_slice(&y1.to_le_bytes());
+            blob.extend_from_slice(&x2.to_le_bytes());
+            blob.extend_from_slice(&y2.to_le_bytes());
+        }
+        blob
+    }
+
+    #[test]
+    fn bnd_parses_frame_and_control_rects() {
+        let blob = bnd_blob(&[(30, 3, 612, 595), (19, 55, 564, 561), (505, 2, 553, 38)]);
+        let bnd = parse_bnd(&blob).unwrap();
+        assert_eq!(
+            bnd.rects,
+            vec![
+                BndRect {
+                    x1: 30,
+                    y1: 3,
+                    x2: 612,
+                    y2: 595
+                },
+                BndRect {
+                    x1: 19,
+                    y1: 55,
+                    x2: 564,
+                    y2: 561
+                },
+                BndRect {
+                    x1: 505,
+                    y1: 2,
+                    x2: 553,
+                    y2: 38
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn bnd_rejects_bad_magic_and_size_mismatch() {
+        assert!(matches!(parse_bnd(b"short"), Err(FileError::TooShort(_))));
+        let mut bad_magic = bnd_blob(&[(1, 2, 3, 4)]);
+        bad_magic[0] = 0x00;
+        assert!(matches!(
+            parse_bnd(&bad_magic),
+            Err(FileError::UnknownFormat { .. })
+        ));
+        let mut short = bnd_blob(&[(1, 2, 3, 4), (5, 6, 7, 8)]);
+        short.truncate(short.len() - 1);
+        assert!(matches!(
+            parse_bnd(&short),
+            Err(FileError::Truncated { .. })
+        ));
+        let mut trailing = bnd_blob(&[(1, 2, 3, 4)]);
+        trailing.push(0x00);
+        assert!(matches!(
+            parse_bnd(&trailing),
+            Err(FileError::Truncated { .. })
+        ));
+    }
+
+    fn oja_blob(tag: u16, frames: &[(i16, i16, u16, u16, u32, u32, u32)]) -> Vec<u8> {
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&tag.to_le_bytes());
+        blob.extend_from_slice(&OJA_MAGIC.to_le_bytes());
+        blob.extend_from_slice(&(frames.len() as u16).to_le_bytes());
+        blob.extend_from_slice(&0u16.to_le_bytes());
+        for (x, y, w, h, a, b, c) in frames {
+            blob.extend_from_slice(&x.to_le_bytes());
+            blob.extend_from_slice(&y.to_le_bytes());
+            blob.extend_from_slice(&w.to_le_bytes());
+            blob.extend_from_slice(&h.to_le_bytes());
+            blob.extend_from_slice(&a.to_le_bytes());
+            blob.extend_from_slice(&b.to_le_bytes());
+            blob.extend_from_slice(&c.to_le_bytes());
+        }
+        blob
+    }
+
+    #[test]
+    fn oja_parses_frame_table_without_slicing_data() {
+        let blob = oja_blob(
+            1,
+            &[
+                (-72, -72, 144, 143, 0, 19446, 8815),
+                (-56, -57, 113, 113, 28261, 14038, 6320),
+            ],
+        );
+        let oja = parse_oja(&blob).unwrap();
+        assert_eq!(oja.tag, 1);
+        assert_eq!(
+            oja.frames,
+            vec![
+                OjaFrame {
+                    x: -72,
+                    y: -72,
+                    w: 144,
+                    h: 143,
+                    a: 0,
+                    b: 19446,
+                    c: 8815
+                },
+                OjaFrame {
+                    x: -56,
+                    y: -57,
+                    w: 113,
+                    h: 113,
+                    a: 28261,
+                    b: 14038,
+                    c: 6320
+                },
+            ]
+        );
+        assert!(matches!(parse_oja(b"short"), Err(FileError::TooShort(_))));
+        let mut bad_magic = blob.clone();
+        bad_magic[2..4].copy_from_slice(b"ZZ");
+        assert!(matches!(
+            parse_oja(&bad_magic),
+            Err(FileError::UnknownFormat { .. })
+        ));
+        assert!(matches!(
+            parse_oja(&blob[..blob.len() - 1]),
+            Err(FileError::Truncated { .. })
+        ));
+    }
+
+    #[test]
+    fn jam_thresholds_parse_even_u16_list() {
+        let blob: Vec<u8> = [25u16, 50, 75, 100]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        assert_eq!(parse_jam_thresholds(&blob).unwrap(), vec![25, 50, 75, 100]);
+        assert!(matches!(
+            parse_jam_thresholds(b""),
+            Err(FileError::TooShort(_))
+        ));
+        assert!(matches!(
+            parse_jam_thresholds(b"odd"),
+            Err(FileError::UnknownFormat { .. })
+        ));
+    }
+
+    #[test]
+    fn control_text_decodes_cp949_korean() {
+        // Synthetic Korean (U+D14C U+C2A4 U+D2B8): high bytes that UTF-8 rejects.
+        let korean = [197u8, 215, 189, 186, 198, 174];
+        let mut blob = b"Ok 123 ".to_vec();
+        blob.extend_from_slice(&korean);
+        assert_eq!(
+            decode_control_text(&blob).unwrap(),
+            "Ok 123 \u{D14C}\u{C2A4}\u{D2B8}"
+        );
+        assert!(String::from_utf8(blob.clone()).is_err());
+    }
+
+    #[test]
+    fn control_text_rejects_broken_lead_byte() {
+        assert!(matches!(
+            decode_control_text(&[0x61, 0x81]),
+            Err(FileError::UnknownFormat { .. })
+        ));
+    }
+
+    fn control_fixture() -> &'static str {
+        "NUMBER_OF_STATE\t\t\t\t0x01\n\
+         STATE_FIXTURE\t\t\t\t0x03\t0x01\n\
+         {\n\
+         \tBOUND\t\t\t\t\"Dialog_Fixture.bnd\"\n\
+         \tIDC_FIXTURE_SELF\t\t\t\t0X10000000\n\
+         \tIDC_BACK_FIXTURE\t\t\t\t0X10100001\t\"Back.ojs\"\n\
+         \tIDC_BUTTON_FIXTURE_CLOSE\t\t0X10200002\t\"Close.ojs\"  // trailing note\n\
+         \tSET\t\t\t\t0x01\t0x00020000\n\
+         \t{\n\
+         \t\tIDC_IMAGE_FIXTURE_NUM\t\t0X10500003\t\"Num.ojs\"\n\
+         \t}\n\
+         \tIDC_TEXT_FIXTURE_TAIL\t\t0X10400004\n\
+         }\n"
+    }
+
+    #[test]
+    fn control_list_parses_bound_and_set_sections() {
+        let list = parse_control_list(control_fixture()).unwrap();
+        assert_eq!(list.num_states, Some(1));
+        assert_eq!(list.num_dialogs, None);
+        assert_eq!(list.blocks.len(), 1);
+        let block = &list.blocks[0];
+        assert_eq!(block.name, "STATE_FIXTURE");
+        assert_eq!(block.number, 3);
+        assert_eq!(block.extra, vec![1]);
+        assert_eq!(block.bound_file.as_deref(), Some("Dialog_Fixture.bnd"));
+        assert_eq!(block.bound.len(), 3);
+        assert_eq!(block.bound[1].sprite.as_deref(), Some("Back.ojs"));
+        assert_eq!(block.bound[2].code, 0x10200002);
+        assert_eq!(block.sets.len(), 2);
+        assert_eq!(block.sets[0].params, vec![1, 0x00020000]);
+        assert_eq!(block.sets[0].entries[0].id, "IDC_IMAGE_FIXTURE_NUM");
+        assert!(block.sets[1].params.is_empty());
+        let ids: Vec<&str> = block.all_entries().iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "IDC_FIXTURE_SELF",
+                "IDC_BACK_FIXTURE",
+                "IDC_BUTTON_FIXTURE_CLOSE",
+                "IDC_IMAGE_FIXTURE_NUM",
+                "IDC_TEXT_FIXTURE_TAIL",
+            ]
+        );
+    }
+
+    #[test]
+    fn control_list_rejects_malformed_input() {
+        assert!(matches!(
+            parse_control_list("STATE_BROKEN\t0x01\n{\n}\n}\n"),
+            Err(FileError::UnknownFormat { .. })
+        ));
+        assert!(matches!(
+            parse_control_list("STATE_BROKEN\t0xZZ\n{\n}\n"),
+            Err(FileError::UnknownFormat { .. })
+        ));
+        assert!(matches!(
+            parse_control_list("IDC_ORPHAN\t\t0X10000000\n"),
+            Err(FileError::UnknownFormat { .. })
         ));
     }
 }
