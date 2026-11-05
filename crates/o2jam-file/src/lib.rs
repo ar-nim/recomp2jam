@@ -49,10 +49,13 @@ pub fn detect_kind(bytes: &[u8]) -> Result<AssetKind, FileError> {
     if bytes.len() < 4 {
         return Err(FileError::TooShort(bytes.len()));
     }
-    // Community-lore magics, treated as candidates (UNVERIFIED for 7.55):
-    // OJM variants "M30\0"?/"M32\0"? and OJN "ojn"-ish headers.
-    // We check ASCII-printable tags without committing to offsets.
-    if bytes.starts_with(b"M30") || bytes.starts_with(b"M32") {
+    // Verified 7.55 magics (see docs/install-layout.md): M30, OMC, OJM.
+    // M32 is community lore, kept as a candidate until observed.
+    if bytes.starts_with(b"M30")
+        || bytes.starts_with(b"M32")
+        || bytes.starts_with(b"OMC")
+        || bytes.starts_with(b"OJM")
+    {
         return Ok(AssetKind::Ojm);
     }
     if bytes.starts_with(b"ojn") || bytes.starts_with(b"OJN") {
@@ -117,6 +120,9 @@ mod tests {
     fn sniffs_candidate_magics() {
         assert_eq!(detect_kind(b"M30\x00...."), Ok(AssetKind::Ojm));
         assert_eq!(detect_kind(b"M32\x00...."), Ok(AssetKind::Ojm));
+        // Verified on real 7.55 files (docs/install-layout.md).
+        assert_eq!(detect_kind(b"OMC\x00...."), Ok(AssetKind::Ojm));
+        assert_eq!(detect_kind(b"OJM\x00...."), Ok(AssetKind::Ojm));
         assert_eq!(detect_kind(b"ojnXXX...."), Ok(AssetKind::Ojn));
     }
 

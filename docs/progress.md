@@ -2,14 +2,20 @@
 
 All versions are **7.55** unless noted. Update one row per finding.
 
-## Binary inventory (fill after installing in a VM)
+## Binary inventory (7.55, extracted via Wine-less carve + unshield)
 
-| File | Size | SHA-256 | Compiler stamp | Notes |
-|---|---|---|---|---|
-| `O2Jam_Classic.exe` (installer) | 140,350,480 | _TODO_ | InstallShield 11.5 stub | in this folder, never committed |
-| `O2Jam.exe` (installed) | _TODO_ | _TODO_ | _TODO: dumpbin_ | |
-| `AngelO2Jam.exe` (installed) | _TODO_ | _TODO_ | _TODO: dumpbin_ | name seen in installer strings |
-| vorbis/ogg DLLs | _TODO_ | _TODO_ | | confirm static vs. sidecar |
+| File | Size | SHA-256 | Notes |
+|---|---|---|---|
+| `O2Jam_Classic.exe` (installer) | 140,350,480 | `a7247c49…3778a3` | InstallShield 11.5 stub; never committed |
+| `NowSmartLauncherInstaller.exe` | 2,041,051 | `6ad98f53…6261eac` | InstallShield 11.5 stub; never committed |
+| `AngelO2Jam.exe` (installed) | 5,029,888 | `83a04541…72c823b` | game client; PDB `d:\O2JamSvn\trunk\Client\O2Jam_Client(2005)\Release\OTwo.pdb` |
+| `OTwo.exe` | 5,029,888 | same as above | byte-identical twin of AngelO2Jam.exe |
+| `O2Net32.dll` | 53,248 | `190b66db…7298d3` | net lib |
+| `Player.dll` | 315,392 | `dce00db4…789379` | |
+| `SendWebData.dll` | 241,664 | `ff65b310…22a913` | telemetry? |
+| `NowSmartLauncher.ocx` | 462,848 | `ff8868ed…a19ca` | MFC ActiveX; patch URL `http://%s/O2Jam/pub/O2Jam/%s/%s%2.1f.zip` |
+| `Image/OJNList.dat` | 215,848 | `3be8ca00…a07fc` | chart index? starts `3202 0000 6400 0000 "ojn\0"` |
+| `Music/` | 35 files | — | 21 `.ojm` (magics M30/OMC/OJM) + 14 `.ojn` (all start `"new"`, obfuscated?) |
 
 ## Systems
 
