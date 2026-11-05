@@ -48,9 +48,38 @@ TBD — next probe. Per-record numeric fields (BPM? levels? ids) still need
 a field map; use record 437 (song 757, whose `.ojn` we also have) as the
 Rosetta stone.
 
+## Chart parser `FUN_00571d60` (file offset `0x171d60`) — REA dossier `ev_c0325c85…`
+
+Signature `(song_id, ?, level 0..2)`. Flow, in own words:
+
+- Reads the whole file (`FUN_00412890`), gates on the validator
+  (`FUN_005718b0` — the `"ojn"` memcmp + BPM float check). Invalid →
+  free, no parse.
+- Per-difficulty slice: data offset from table `+0x814[level]`, event
+  count from `+0x738[level]`, song BPM from `+0x708`.
+- Event stream is float-anchored: each event = `float beat_time` +
+  `u16 kind` + `u16 count` + `count` payload floats; pointer advances
+  in 4-byte units.
+  - `kind == 0`: BPM change (payload float, `0.0` means `1.0`); sets the
+    measure tick length.
+  - `kind == 1`: BPM list for tempo changes inside the slice.
+  - `kind >= 2`: note events; lane index is `kind - 9` (7 lanes),
+    payload entries are 32-bit values with bit 26 = long-note hold and
+    low 12 bits = key-sound sample id (matches the OJM sample-id
+    ranges `0–12` and `980–991`). Max lane tracked at `+0x838`.
+- Timing: 192 ticks per beat (`0xC0`); milliseconds via `240000 / BPM`
+  accumulators, float-rounded per event. Parsed notes land in the
+  `+0x42c` / `+0x504` object arrays; holds in a 1000-byte flag table.
+
+OPEN: the file bytes on disk are high-entropy but the parser reads
+plaintext floats — so a decrypt step sits in the reader
+(`FUN_00412890`, dossier pending) or the validator. That function is
+the last unknown in the OJN chain.
+
 ## Open questions (in priority order)
 
-1. New-format header: XOR keystream or 6-byte records? (crib against the
+1. New-format decrypt: reader `0x412890` or validator? (dossier in
+   flight; crib with the float/`u16` layout above.)
    old-format field positions; keystream search at the loader branch.)
 2. Note event encoding + difficulty slots per file.
 3. Long-note + simultaneous-press encoding.
