@@ -184,12 +184,13 @@ coordinates;
 `6 + 16*count == len` holds on all 53 real sections (49 + 4).
 `parse_bnd` enforces magic + exact size.
 
-### `ControlList_*.txt` — role mapped, block↔rect relation verified
+### `ControlList_*.txt` — full inventory VERIFIED
 
 UI state/dialog definitions, not scripts: `NUMBER_OF_STATE`
 (`0x0F` = 15; file holds 16 `STATE_` headers of which
 `PLAYING`/`TUTORIAL`/`DRUM_PLAYING`/`EXIT` are empty `0x00`
-stubs) and `NUMBER_OF_DIALOG` (`0x1B` = 27, exact). (CXO2
+stubs) and `NUMBER_OF_DIALOG` (`0x1B` = 27, exact — the
+`DAILOG_SELECTMUSIC` typo header is one of the 27). (CXO2
 lists `NUMBER_OF_STATES`/`NUMBER_OF_DIALOGS` — the 7.55 file
 spells them without the trailing S; the parser matches the file.) Each block is
 `NAME 0xN [0xM] { BOUND "stem.bnd" IDC… [SET … { IDC… }] }`;
@@ -202,17 +203,111 @@ interactable/clickable, `60` SET, `70` avatar.
 The header comment reads (CP949): "sets control structure and
 links used images".
 
-Rect mapping: `.bnd` record `i` lays out block entry `i + 1`
-(entry 0 is the block itself) — verified on all 38 Interface
-blocks with a matching `.bnd` (`entries − 1 == rects`), e.g.
-`DIALOG_EVENT` (4 entries → 3 rects: frame `(30,3,612,595)`,
-back `(19,55,564,561)`, close button `(505,2,553,38)`).
-`ControlList_Playing.txt` (`STATE_PLAYING`, 230 loaded entries —
-the file itself comments "loads up to here" at entry 230 of 235)
-names only 17 rects, so its rect↔entry subset is TBD.
-`parse_control_list` keeps file order across `SET` groups
-(`all_entries()`); the one `DAILOG_SELECTMUSIC` typo header
-parses by prefix.
+Counts below are live `IDC_` lines per block (full-line `//…`
+comments, including two commented-out scrollbar rows, excluded;
+entry 0 is the block itself). `SETs` lists file-actual `SET`
+groups as `members…`; the parser folds post-`SET` top-level runs
+into trailing parameter-less sets, so `ControlBlock::sets` is
+longer — `all_entries()` still yields file order. Verified rules:
+header `decl` == top-level (non-`SET`) entries excluding self
+(39/39 full blocks; stubs declare `0x00`); a `SET` group's first
+param == its member count (22/22 groups); `.bnd` record `i` lays
+out block entry `i + 1` (`entries − 1 == rects` on all 38 bound
+Interface blocks, e.g. `DIALOG_EVENT` 4 entries → 3 rects).
+`parse_control_list` parses both real files without dropping a
+line; the typo header parses by prefix, the empty `BOUND` line
+(`STATE_CHANNEL`) yields no bind file, scrollbar style strings
+(`"O2_SBS_VERT\t4\t\t100"` shape) ride in `sprite` verbatim,
+and trailing `//` comments on entry lines are ignored.
+
+Interface states (12 full + 4 stubs; 806 entries; 22 `SET` groups):
+
+| Block | decl | entries | SETs (members) | BOUND file | rects |
+|---|---|---|---|---|---|
+| `STATE_CHANNEL` | `0x27` (39) | 50 | 1 (10) | — (empty line) | — |
+| `STATE_ROOM` | `0x36` (54) | 76 | 2 (4, 17) | `State_Room.bnd` | 75 |
+| `STATE_SHOP` | `0xA4` (164) | 187 | 3 (4, 5, 13) | `State_ItemShop.bnd` | 186 |
+| `STATE_MYROOM` | `0x6A` (106) | 112 | 1 (5) | `State_Myroom.bnd` | 111 |
+| `STATE_WAITING` | `0x63` (99) | 117 | 3 (12, 4, 1) | `State_Waiting.bnd` | 116 |
+| `STATE_RESULT` | `0x07` (7) | 8 | 0 | `State_Result.bnd` | 7 |
+| `STATE_AVI` | `0x01` (1) | 2 | 0 | `State_Avi.bnd` | 1 |
+| `STATE_PLANET` | `0x11` (17) | 18 | 0 | `State_Planet.bnd` | 17 |
+| `STATE_MUSICSHOP` | `0x6B` (107) | 139 | 3 (21, 5, 5) | `State_MShop.bnd` | 138 |
+| `STATE_PLAYING` | `0x00` | 0 | — | — | — (stub) |
+| `STATE_TUTORIAL` | `0x00` | 0 | — | — | — (stub) |
+| `STATE_PAYMENT` | `0x09` (9) | 10 | 0 | `State_Payment.bnd` | 9 |
+| `STATE_PAYMENT2` | `0x0C` (12) | 13 | 0 | `State_Payment2.bnd` | 12 |
+| `STATE_LANKING` | `0x37` (55) | 74 | 2 (11, 7) | `State_Lanking.bnd` | 73 |
+| `STATE_DRUM_PLAYING` | `0x00` | 0 | — | — | — (stub) |
+| `STATE_EXIT` | `0x00` | 0 | — | — | — (stub) |
+
+Interface dialogs (27/27 declared, typo included; 489 entries):
+
+| Block | decl | entries | SETs (members) | BOUND file | rects |
+|---|---|---|---|---|---|
+| `DIALOG_INFORMATION` | `0x03` | 4 | 0 | `Dialog_Information.bnd` | 3 |
+| `DIALOG_QUESTION1` | `0x04` | 5 | 0 | `Dialog_Question1.bnd` | 4 |
+| `DIALOG_QUESTION2` | `0x04` | 5 | 0 | `Dialog_Question2.bnd` | 4 |
+| `DIALOG_CREATEROOM` | `0x09` | 10 | 0 | `Dialog_CreateRoom.bnd` | 9 |
+| `DIALOG_OPTION_KEY` | `0x19` (25) | 26 | 0 | `Dialog_Option_Key.bnd` | 25 |
+| `DIALOG_OPTION_SOUND` | `0x16` (22) | 23 | 0 | `Dialog_Option_Sound.bnd` | 22 |
+| `DAILOG_SELECTMUSIC` (typo) | `0x7A` (122) | 134 | 1 (11) | `Dialog_SelectMusic.bnd` | 133 |
+| `DIALOG_INPUTPASSWORD` | `0x05` | 6 | 0 | `Dialog_Password.bnd` | 5 |
+| `DIALOG_WHISPER` | `0x05` | 6 | 0 | `Dialog_Whisper.bnd` | 5 |
+| `DIALOG_CHANGETITLE` | `0x05` | 6 | 0 | `Dialog_ChangeTitle.bnd` | 5 |
+| `DIALOG_EMOTION` | `0x09` | 10 | 0 | `Dialog_EmotionHelp.bnd` | 9 |
+| `DIALOG_GIFTVIEW` | `0x13` (19) | 20 | 0 | `Dialog_GiftView.bnd` | 19 |
+| `DIALOG_SKILLIINFO` | `0x0B` (11) | 12 | 0 | `Dialog_SkillInfo.bnd` | 11 |
+| `DIALOG_CHANGENICKNAME` | `0x06` | 7 | 0 | `Dialog_ChangeNickName.bnd` | 6 |
+| `DIALOG_OPTION_GAME` | `0x17` (23) | 24 | 0 | `Dialog_Option_Game.bnd` | 23 |
+| `DIALOG_MUSICINFO` | `0x16` (22) | 23 | 0 | `Dialog_MusicInfo.bnd` | 22 |
+| `DIALOG_SHOPPINGBAG_ADD` | `0x07` | 8 | 0 | `Dialog_Shopping_Add.bnd` | 7 |
+| `DIALOG_CHARGECASH` | `0x03` | 4 | 0 | `Dialog_ChargeCash.bnd` | 3 |
+| `DIALOG_EVENT` | `0x03` | 4 | 0 | `Dialog_Event.bnd` | 3 |
+| `DIALOG_CONFERENCE` | `0x03` | 4 | 0 | `Dialog_Conference.bnd` | 3 |
+| `DIALOG_MESSENGER_MAIN` | `0x3E` (62) | 78 | 4 (4, 3, 4, 4) | `Dialog_Messenger_Main.bnd` | 77 |
+| `DIALOG_MESSENGER_FRIENDADD` | `0x06` | 7 | 0 | `Dialog_Messenger_FriendADD.bnd` | 6 |
+| `DIALOG_MESSENGER_QUESTION` | `0x07` | 8 | 0 | `Dialog_Messenger_Question.bnd` | 7 |
+| `DIALOG_MESSENGER_NOTE` | `0x0D` (13) | 14 | 0 | `Dialog_Messenger_Note.bnd` | 13 |
+| `DIALOG_MESSENGER_POPUPMENU` | `0x06` | 7 | 0 | `Dialog_Messenger_PopUpMenu.bnd` | 6 |
+| `DIALOG_MESSENGER_INFORMATION` | `0x05` | 6 | 0 | `Dialog_Messenger_Information.bnd` | 5 |
+| `DIALOG_CHANNEL_INFO` | `0x12` (18) | 28 | 2 (5, 4) | `Dialog_ChannelInfo.bnd` | 27 |
+
+Playing (`NUMBER_OF_STATE 0x01`, 1 header): `STATE_PLAYING`
+decl `0xE6` (230), 235 entries, 0 `SET` groups,
+`State_Playing.bnd` (17 rects — rect↔entry subset TBD). The file
+itself comments (CP949) "loads up to here" at entry 230, so
+decl 230 is the loaded count including self and the last 5
+entries ride unloaded.
+
+Declared-vs-actual: dialogs exact (27 == 27, typo counted);
+states off by one (15 declared, 16 headers). The 4 empty-`0x00`
+stubs explain the shape: 12 full states plus bodiless
+`PLAYING`/`TUTORIAL` (mid-file) and `DRUM_PLAYING`/`EXIT`
+(appended after `STATE_LANKING`, just before
+`NUMBER_OF_DIALOG`) — the count likely went stale when a stub
+was appended, or it excludes the `EXIT` pseudo-state.
+`STATE_CHANNEL` is the only full block without a bind file (bare
+`BOUND` line); all other 38 bound names resolve to a `.bnd`
+entry in the same archive, as does `State_Playing.bnd`.
+Second header numbers (`0X01`…`0X04` on 10 blocks) are preserved
+as `extra`; semantics TBD.
+
+Sprite references: Interface names 568 unique quoted strings —
+562 resolve to an archive entry (case-insensitive; 3 differ only
+by case) and 6 are scrollbar style params (`O2_SBS_VERT`/`HORZ`
+with numeric args), not files. Playing names 64 unique quoted
+sprites — 53 resolve (1 case-only: `Main_level.ojs` vs
+`main_level.ojs`) and 11 underscore-prefixed refs have no
+archive entry: `_Playing_BG.ojs`, `_Note_Miss.ojt`,
+`_Note_Bad.ojt`, `_Note_Good.ojt`, `_Note_Cool.ojt`,
+`_Note_Combo.ojt`, `_Note_ComboNum.ojt`, `_Note_LongCombo.ojt`,
+`_Note_LongComboNum.ojt`, `_Note_Click.ojt`,
+`_Playing_Effect_Jam.ojt`. Near-matches exist for each (bare
+name as `.ojs`/`.oja` or numbered `.ojt` siblings; the exact
+bare `.ojt` exists only for `Note_LongCombo`/`Note_LongComboNum`),
+so the `_` prefix likely marks a runtime resolution rule —
+semantics TBD.
 
 ### Other tables (envelopes only)
 
