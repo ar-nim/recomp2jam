@@ -5,6 +5,13 @@
 - **Old format** (`Tutorial.ojn`, 118738 bytes): header starts
   `B8 22 00 00 6F 6A 6E 00` (`"ojn\0"` magic at offset 4). This is the
   community-documented layout (~300-byte header + note blocks).
+  Verified by walking: the `0x571d60` event layout
+  (`f32 beat` + `u16 kind` + `u16 count` + payload) parses 43 clean
+  events from offset 300, landing exactly on an embedded JPEG
+  (`FFD8FFE0…JFIF`) at offset 11784 — the album art. Header offsets
+  288/292/296 all read `11784` (image offset per level); offset 284
+  reads `300` (header size). So old files interleave event sections
+  with embedded resources; per-level event ranges still TBD.
 - **New format** (`o2ma*.ojn`, 13 files, 179–1037 KB): header starts
   `"new\x06…"`, high-entropy afterwards, NO `"ojn"` anywhere (except one
   incidental hit in `o2ma770.ojn` at 435160). Byte-period analysis shows a
