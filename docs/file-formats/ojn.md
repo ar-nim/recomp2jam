@@ -92,11 +92,12 @@ pre-pass `FUN_00570f90` (called right before the parser in the
 
 ## Open questions (in priority order)
 
-1. New-format decrypt: per-difficulty pre-pass `0x570f90`? (dossier in
-   flight.) Ruled out so far, all on `o2ma757.ojn`: single-byte
-   XOR/ADD/SUB (no `ojn`/BPM-float crib in first 300 B), zlib/LZMA from
-   offsets 4/8/12, 4-periodic key from the `"ojn"@4` crib, u32 keys
-   (song id 757, index fields) — none yield structure. Keystream
-   differs per file, so no global key; per-file key or stronger cipher.
+1. New-format decrypt: `0x570f90` is just a constants setter (dossier
+   `ev_c91297e1…`, 29 lines, no callees) — dead end. New prime
+   suspect: the shared read wrapper `FUN_004069b0` (used by both
+   loaders; dossier in flight) — if it branches on magic, everything
+   fits. (Already ruled out on `o2ma757.ojn`: single-byte XOR/ADD/SUB,
+   zlib/LZMA, 4-periodic crib key, song-id/index u32 keys; per-file
+   keystream.)
 2. Note event encoding + difficulty slots per file.
 3. Long-note + simultaneous-press encoding.
