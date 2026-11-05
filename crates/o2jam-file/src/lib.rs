@@ -615,27 +615,115 @@ pub fn parse_ojm(bytes: &[u8]) -> Result<Vec<OjmSample<'_>>, FileError> {
 
 /// One 300-byte song entry in `OJNList.dat`.
 ///
-/// Field map verified on real 7.55 data (record 437 = song 757;
-/// cross-song BPM check 124/168/103). Offsets are in-record.
+/// Full field map verified on real 7.55 data: every record (including
+/// record 0, which is song 100, not a header) carries the same layout,
+/// and numeric fields align 1:1 with the decrypted `.ojn` chart header
+/// for the same song, shifted by 4 bytes (`OJNList.dat` has a leading
+/// `u32`; the `.ojn` header is the same 296 bytes without it, plus its
+/// own final slice end). Fields that match the on-disk `.ojn` files
+/// exactly are version-stable; the rest drifted between the index
+/// snapshot and the shipped charts (docs/file-formats/ojn.md).
+/// Offsets are in-record.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OjnListEntry<'a> {
-    /// Record index in the file (record 0 is the header).
+    /// Record index in the file (0-based; 7.55 holds 719 records).
     pub index: usize,
-    /// Song id (`u32` at +4).
+    /// Leading word (`u32` at +0; semantics TBD: range 562..2914704
+    /// over the 7.55 songs; not a file size, duration, or slice end).
+    pub unknown0: u32,
+    /// Song id (`u32` at +4; matches the `o2ma###` file number).
     pub song_id: u32,
     /// Tempo (`f32` at +20; reads 124.0/168.0/103.0 on songs
-    /// 757/770/860).
+    /// 757/770/860, matching the decrypted `.ojn` 13/13).
     pub bpm: f32,
-    /// Title area (+112, NUL-trimmed, lossy: Korean + tags).
+    /// Format marker (`f32` at +12; 2.9 on 557/562 songs, 2.0 on 5).
+    pub format_version: f32,
+    /// Category id (`u32` at +16; range 0..10; differs from the
+    /// on-disk `.ojn` on 6/13 songs, so it was re-categorised
+    /// between versions).
+    pub genre: u32,
+    /// Level-range-shaped flags (`u32` at +24; both `u16` halves range
+    /// 1..38; matches the `.ojn` 13/13).
+    pub level_flags: u32,
+    /// Small stable id (`u32` at +28, range 1..50; matches the `.ojn`
+    /// 13/13; semantics TBD).
+    pub stable_minor: u32,
+    /// Per-difficulty counts (`u32` at +32/+36/+40; drifted from the
+    /// on-disk `.ojn` values on 13/13; semantics TBD).
+    pub counts_a: [u32; OJN_LEVEL_COUNT],
+    /// Per-difficulty counts (`u32` at +44/+48/+52; match the
+    /// decrypted `.ojn` +40/+44/+48 on 13/13, so version-stable;
+    /// not events, payload units, samples, or sample ids — TBD).
+    pub counts_b: [u32; OJN_LEVEL_COUNT],
+    /// Per-difficulty measure counts (`u32` at +56/+60/+64;
+    /// positionally the `.ojn` max-tick, walk-verified there as the
+    /// last measure index; values drifted between versions).
+    pub measures: [u32; OJN_LEVEL_COUNT],
+    /// Per-difficulty event counts (`u32` at +68/+72/+76;
+    /// positionally the `.ojn` per-level event counts; values
+    /// drifted between versions).
+    pub events: [u32; OJN_LEVEL_COUNT],
+    /// Composite key (`u32` at +80): high `u16` tracks the song id
+    /// (exact on all 13 on-disk songs, else within ±13), low `u16`
+    /// is 29 on new-format songs and 27 on Tutorial.ojn; TBD.
+    pub key_field: u32,
+    /// Spare words (+84/+88/+92/+96; zero on most songs).
+    pub pad: [u32; 4],
+    /// Flag word (`u32` at +100; `0` or `0x01000000`).
+    pub flag100: u32,
+    /// Constant (`u32` at +104; 19256 on all but two songs).
+    pub const_a: u32,
+    /// Small tuning float (`f32` at +108; one of 0.0/0.01/0.02/0.03).
+    pub tune: f32,
+    /// Title area (+112, 64 B, NUL-trimmed, lossy: Korean + tags).
     pub title: String,
-    /// Artist area (+176, NUL-trimmed, lossy).
+    /// Artist area (+176, 32 B, NUL-trimmed, lossy).
     pub artist: String,
-    /// Label (+208, e.g. `NoteFactory`).
+    /// Label area (+208, 32 B, e.g. `NoteFactory`; 43/562 songs keep
+    /// stale tail bytes past the first NUL).
     pub label: String,
-    /// Container filename (+240, e.g. `o2ma757.ojm`).
+    /// Container filename (+240, 32 B, e.g. `o2ma757.ojm`; one song
+    /// ships uppercase; 148/562 keep stale tail bytes past the NUL).
     pub ojm_file: String,
-    /// Raw record bytes for fields not yet mapped.
+    /// Trailing word (`u32` at +272; range 0..483339; TBD).
+    pub unknown1: u32,
+    /// Per-difficulty durations (`u32` at +276/+280/+284, seconds-
+    /// shaped, range 0..315; roughly measures*4*60/BPM).
+    pub durations: [u32; OJN_LEVEL_COUNT],
+    /// First slice start (`u32` at +288; 300, like `.ojn` +284).
+    pub slice_start: u32,
+    /// First two per-level slice ends (`u32` at +292/+296; drifted
+    /// from the on-disk `.ojn`; the third end has no slot).
+    pub slice_ends: [u32; 2],
+    /// Raw record bytes for re-analysis.
     pub raw: &'a [u8],
+}
+
+impl<'a> OjnListEntry<'a> {
+    /// High word of [`OjnListEntry::key_field`] (tracks the song id).
+    pub fn key_hi(&self) -> u16 {
+        (self.key_field >> 16) as u16
+    }
+
+    /// Low word of [`OjnListEntry::key_field`] (29 / 27).
+    pub fn key_lo(&self) -> u16 {
+        (self.key_field & 0xFFFF) as u16
+    }
+
+    /// Whether this record looks like a real song entry rather than a
+    /// dead slot: the filename is an `o2ma###.ojm` token (any ASCII
+    /// case; `read_str` already cut it at the first NUL) and the tempo
+    /// is sane. Dead slots (157/719 in 7.55) hold heap residue or
+    /// zeros and fail one or both checks.
+    pub fn is_song(&self) -> bool {
+        let lower = self.ojm_file.to_ascii_lowercase();
+        let numbered = lower
+            .strip_prefix("o2ma")
+            .and_then(|rest| rest.strip_suffix(".ojm"))
+            .map(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+            .unwrap_or(false);
+        numbered && (30.0..300.0).contains(&self.bpm)
+    }
 }
 
 fn read_f32le(bytes: &[u8], off: usize) -> Result<f32, FileError> {
@@ -654,15 +742,16 @@ fn read_str(bytes: &[u8], off: usize, len: usize) -> Result<String, FileError> {
         need: off + len,
         have: bytes.len(),
     })?;
-    Ok(String::from_utf8_lossy(raw)
-        .trim_matches('\0')
-        .trim()
-        .to_string())
+    // C-string semantics: cut at the first NUL (stale tail bytes past
+    // it stay visible in `OjnListEntry::raw`).
+    let end = raw.iter().position(|&b| b == 0).unwrap_or(len);
+    Ok(String::from_utf8_lossy(&raw[..end]).trim().to_string())
 }
 
-/// Parse an `OJNList.dat` song index: 300-byte records; record 0 is the
-/// header (`562`, `100`, `"ojn"`). A trailing partial record (148
-/// bytes in 7.55) is ignored; the `562` count semantics are TBD.
+/// Parse an `OJNList.dat` song index: consecutive 300-byte records
+/// (record 0 is song 100, not a header). A trailing partial record
+/// (148 bytes in 7.55) is ignored. Dead slots past the song table
+/// parse like any record; filter them with [`OjnListEntry::is_song`].
 pub fn parse_ojn_list(bytes: &[u8]) -> Result<Vec<OjnListEntry<'_>>, FileError> {
     if bytes.len() < 300 || bytes[8..11] != *b"ojn" {
         return Err(FileError::UnknownFormat {
@@ -674,23 +763,59 @@ pub fn parse_ojn_list(bytes: &[u8]) -> Result<Vec<OjnListEntry<'_>>, FileError> 
     let mut off = 0usize;
     while off + 300 <= bytes.len() {
         let rec = &bytes[off..off + 300];
-        if index > 0 {
-            out.push(OjnListEntry {
-                index,
-                song_id: read_u32le(bytes, off + 4)?,
-                bpm: f32::from_le_bytes(rec[20..24].try_into().map_err(|_| {
-                    FileError::Truncated {
-                        need: off + 24,
-                        have: bytes.len(),
-                    }
-                })?),
-                title: read_str(bytes, off + 112, 64)?,
-                artist: read_str(bytes, off + 176, 32)?,
-                label: read_str(bytes, off + 208, 32)?,
-                ojm_file: read_str(bytes, off + 240, 32)?,
-                raw: rec,
-            });
-        }
+        out.push(OjnListEntry {
+            index,
+            unknown0: read_u32le(bytes, off)?,
+            song_id: read_u32le(bytes, off + 4)?,
+            bpm: read_f32le(bytes, off + 20)?,
+            format_version: read_f32le(bytes, off + 12)?,
+            genre: read_u32le(bytes, off + 16)?,
+            level_flags: read_u32le(bytes, off + 24)?,
+            stable_minor: read_u32le(bytes, off + 28)?,
+            counts_a: [
+                read_u32le(bytes, off + 32)?,
+                read_u32le(bytes, off + 36)?,
+                read_u32le(bytes, off + 40)?,
+            ],
+            counts_b: [
+                read_u32le(bytes, off + 44)?,
+                read_u32le(bytes, off + 48)?,
+                read_u32le(bytes, off + 52)?,
+            ],
+            measures: [
+                read_u32le(bytes, off + 56)?,
+                read_u32le(bytes, off + 60)?,
+                read_u32le(bytes, off + 64)?,
+            ],
+            events: [
+                read_u32le(bytes, off + 68)?,
+                read_u32le(bytes, off + 72)?,
+                read_u32le(bytes, off + 76)?,
+            ],
+            key_field: read_u32le(bytes, off + 80)?,
+            pad: [
+                read_u32le(bytes, off + 84)?,
+                read_u32le(bytes, off + 88)?,
+                read_u32le(bytes, off + 92)?,
+                read_u32le(bytes, off + 96)?,
+            ],
+            flag100: read_u32le(bytes, off + 100)?,
+            const_a: read_u32le(bytes, off + 104)?,
+            tune: read_f32le(bytes, off + 108)?,
+            title: read_str(bytes, off + 112, 64)?,
+            artist: read_str(bytes, off + 176, 32)?,
+            label: read_str(bytes, off + 208, 32)?,
+            ojm_file: read_str(bytes, off + 240, 32)?,
+            unknown1: read_u32le(bytes, off + 272)?,
+            durations: [
+                read_u32le(bytes, off + 276)?,
+                read_u32le(bytes, off + 280)?,
+                read_u32le(bytes, off + 284)?,
+            ],
+            slice_start: read_u32le(bytes, off + 288)?,
+            slice_ends: [read_u32le(bytes, off + 292)?, read_u32le(bytes, off + 296)?],
+            raw: rec,
+        });
         index += 1;
         off += 300;
     }
@@ -1718,25 +1843,107 @@ mod tests {
         assert_eq!(samples[1].name, "bgLogo.gg");
     }
 
+    fn ojn_list_record(song_id: u32, bpm: f32, title: &str, ojm_file: &str) -> Vec<u8> {
+        // Synthetic 300-byte song record with distinctive values at
+        // every mapped offset (scenario: full field map parses).
+        let mut rec = vec![0u8; 300];
+        rec[0..4].copy_from_slice(&113592u32.to_le_bytes());
+        rec[4..8].copy_from_slice(&song_id.to_le_bytes());
+        rec[8..11].copy_from_slice(b"ojn");
+        rec[12..16].copy_from_slice(&2.9f32.to_le_bytes());
+        rec[16..20].copy_from_slice(&4u32.to_le_bytes());
+        rec[20..24].copy_from_slice(&bpm.to_le_bytes());
+        rec[24..28].copy_from_slice(&0x50003u32.to_le_bytes());
+        rec[28..32].copy_from_slice(&7u32.to_le_bytes());
+        for (slot, base) in [(32, 3594), (44, 312), (56, 69), (68, 806)] {
+            for level in 0..3 {
+                let off = slot + level * 4;
+                rec[off..off + 4].copy_from_slice(&(base + level as u32).to_le_bytes());
+            }
+        }
+        rec[80..84].copy_from_slice(&((song_id << 16) | 29).to_le_bytes());
+        rec[100..104].copy_from_slice(&0x01000000u32.to_le_bytes());
+        rec[104..108].copy_from_slice(&19256u32.to_le_bytes());
+        rec[108..112].copy_from_slice(&0.02f32.to_le_bytes());
+        rec[112..112 + title.len()].copy_from_slice(title.as_bytes());
+        rec[240..240 + ojm_file.len()].copy_from_slice(ojm_file.as_bytes());
+        rec[272..276].copy_from_slice(&165019u32.to_le_bytes());
+        for (i, off) in [276, 280, 284].iter().enumerate() {
+            rec[*off..*off + 4].copy_from_slice(&(129 + i as u32).to_le_bytes());
+        }
+        rec[288..292].copy_from_slice(&300u32.to_le_bytes());
+        rec[292..296].copy_from_slice(&58376u32.to_le_bytes());
+        rec[296..300].copy_from_slice(&124284u32.to_le_bytes());
+        rec
+    }
+
     #[test]
     fn ojn_list_round_trip() {
-        let mut blob = vec![0u8; 600];
-        blob[8..11].copy_from_slice(b"ojn");
-        blob[300 + 4..300 + 8].copy_from_slice(&757u32.to_le_bytes());
-        blob[300 + 20..300 + 24].copy_from_slice(&124f32.to_le_bytes());
-        blob[300 + 112..300 + 117].copy_from_slice(b"Title");
-        blob[300 + 240..300 + 250].copy_from_slice(b"o2ma757.oj");
+        // Every full 300-byte record parses, including record 0
+        // (song 100, not a header); the 148-byte tail is ignored.
+        let mut blob = ojn_list_record(100, 130.0, "Title0", "o2ma100.ojm");
+        blob.extend_from_slice(&ojn_list_record(757, 124.0, "Title", "o2ma757.ojm"));
+        blob.extend_from_slice(&[0xABu8; 148]);
         let entries = parse_ojn_list(&blob).unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].index, 1);
-        assert_eq!(entries[0].song_id, 757);
-        assert_eq!(entries[0].bpm, 124.0);
-        assert_eq!(entries[0].title, "Title");
-        assert_eq!(entries[0].ojm_file, "o2ma757.oj");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].index, 0);
+        assert_eq!(entries[0].song_id, 100);
+        assert_eq!(entries[1].index, 1);
+        assert_eq!(entries[1].song_id, 757);
+        assert_eq!(entries[1].bpm, 124.0);
+        assert_eq!(entries[1].title, "Title");
+        assert_eq!(entries[1].ojm_file, "o2ma757.ojm");
         assert!(matches!(
             parse_ojn_list(b"nope"),
             Err(FileError::UnknownFormat { .. })
         ));
+    }
+
+    #[test]
+    fn ojn_list_full_fields_parse() {
+        let rec = ojn_list_record(757, 124.0, "Title", "o2ma757.ojm");
+        let entries = parse_ojn_list(&rec).unwrap();
+        assert_eq!(entries.len(), 1);
+        let e = &entries[0];
+        assert_eq!(e.unknown0, 113592);
+        assert_eq!(e.format_version, 2.9);
+        assert_eq!(e.genre, 4);
+        assert_eq!(e.level_flags, 0x50003);
+        assert_eq!(e.stable_minor, 7);
+        assert_eq!(e.counts_a, [3594, 3595, 3596]);
+        assert_eq!(e.counts_b, [312, 313, 314]);
+        assert_eq!(e.measures, [69, 70, 71]);
+        assert_eq!(e.events, [806, 807, 808]);
+        assert_eq!(e.key_field, (757 << 16) | 29);
+        assert_eq!(e.key_hi(), 757);
+        assert_eq!(e.key_lo(), 29);
+        assert_eq!(e.pad, [0, 0, 0, 0]);
+        assert_eq!(e.flag100, 0x01000000);
+        assert_eq!(e.const_a, 19256);
+        assert_eq!(e.tune, 0.02);
+        assert_eq!(e.unknown1, 165019);
+        assert_eq!(e.durations, [129, 130, 131]);
+        assert_eq!(e.slice_start, 300);
+        assert_eq!(e.slice_ends, [58376, 124284]);
+        assert!(e.is_song());
+    }
+
+    #[test]
+    fn ojn_list_is_song_filters_dead_slots() {
+        // Zeroed slot: no filename, no tempo.
+        let mut dead = vec![0u8; 300];
+        dead[8..11].copy_from_slice(b"ojn");
+        let dead = parse_ojn_list(&dead).unwrap();
+        assert!(!dead[0].is_song());
+        // Heap-residue slot: absurd tempo, no filename.
+        let mut junk = vec![0x77u8; 300];
+        junk[8..11].copy_from_slice(b"ojn");
+        junk[20..24].copy_from_slice(&2.6e17f32.to_le_bytes());
+        let junk = parse_ojn_list(&junk).unwrap();
+        assert!(!junk[0].is_song());
+        // Uppercase filename still counts (Windows is case-blind).
+        let upper = ojn_list_record(885, 106.0, "T", "O2MA885.ojm");
+        assert!(parse_ojn_list(&upper).unwrap()[0].is_song());
     }
 
     #[test]
