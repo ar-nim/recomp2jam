@@ -1,8 +1,9 @@
-//! File parsing for O2Jam 7.55 assets (`.ojm` music, `.ojn` charts).
+//! File parsing for O2Jam 7.55 assets (`.ojm` music, `.ojn` charts,
+//! `OJNList.dat` song index).
 //!
-//! Status: day-0 scaffolding. Magic sniffing works; full parsers are
-//! documented stubs until verified against installed 7.55 data.
-//! See `docs/file-formats/`.
+//! M30/OMC containers and the OJNList index are verified against real
+//! 7.55 data (see `docs/file-formats/`); `.ojn` note streams stay stubbed
+//! until the new-format decrypt lands.
 
 use thiserror::Error;
 
@@ -278,16 +279,90 @@ pub fn parse_ojm(bytes: &[u8]) -> Result<Vec<OjmSample<'_>>, FileError> {
         AssetKind::Ojm if bytes.starts_with(b"OMC") || bytes.starts_with(b"OJM") => {
             parse_omc(bytes)
         }
-        AssetKind::Ojm | AssetKind::OjnList => Err(FileError::UnknownFormat {
-            magic: bytes[..4.min(bytes.len())].to_vec(),
-        }),
-        AssetKind::Ojn => Err(FileError::UnknownFormat {
+        AssetKind::Ojm => Err(FileError::NotImplemented(
+            "M32 variant unobserved in 7.55 data",
+        )),
+        AssetKind::OjnList | AssetKind::Ojn => Err(FileError::UnknownFormat {
             magic: bytes[..4.min(bytes.len())].to_vec(),
         }),
     }
 }
 
-/// Parse an `.ojn` chart file. Same stub contract as [`parse_ojm`].
+/// One 300-byte song entry in `OJNList.dat`.
+///
+/// Field map verified on real 7.55 data (record 437 = song 757;
+/// cross-song BPM check 124/168/103). Offsets are in-record.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OjnListEntry<'a> {
+    /// Record index in the file (record 0 is the header).
+    pub index: usize,
+    /// Song id (`u32` at +4).
+    pub song_id: u32,
+    /// Tempo (`f32` at +20; reads 124.0/168.0/103.0 on songs
+    /// 757/770/860).
+    pub bpm: f32,
+    /// Title area (+112, NUL-trimmed, lossy: Korean + tags).
+    pub title: String,
+    /// Artist area (+176, NUL-trimmed, lossy).
+    pub artist: String,
+    /// Label (+208, e.g. `NoteFactory`).
+    pub label: String,
+    /// Container filename (+240, e.g. `o2ma757.ojm`).
+    pub ojm_file: String,
+    /// Raw record bytes for fields not yet mapped.
+    pub raw: &'a [u8],
+}
+
+fn read_str(bytes: &[u8], off: usize, len: usize) -> Result<String, FileError> {
+    let raw = bytes.get(off..off + len).ok_or(FileError::Truncated {
+        need: off + len,
+        have: bytes.len(),
+    })?;
+    Ok(String::from_utf8_lossy(raw)
+        .trim_matches('\0')
+        .trim()
+        .to_string())
+}
+
+/// Parse an `OJNList.dat` song index: 300-byte records; record 0 is the
+/// header (`562`, `100`, `"ojn"`). A trailing partial record (148
+/// bytes in 7.55) is ignored; the `562` count semantics are TBD.
+pub fn parse_ojn_list(bytes: &[u8]) -> Result<Vec<OjnListEntry<'_>>, FileError> {
+    if bytes.len() < 300 || bytes[8..11] != *b"ojn" {
+        return Err(FileError::UnknownFormat {
+            magic: bytes[..4.min(bytes.len())].to_vec(),
+        });
+    }
+    let mut out = Vec::new();
+    let mut index = 0usize;
+    let mut off = 0usize;
+    while off + 300 <= bytes.len() {
+        let rec = &bytes[off..off + 300];
+        if index > 0 {
+            out.push(OjnListEntry {
+                index,
+                song_id: read_u32le(bytes, off + 4)?,
+                bpm: f32::from_le_bytes(rec[20..24].try_into().map_err(|_| {
+                    FileError::Truncated {
+                        need: off + 24,
+                        have: bytes.len(),
+                    }
+                })?),
+                title: read_str(bytes, off + 112, 64)?,
+                artist: read_str(bytes, off + 176, 32)?,
+                label: read_str(bytes, off + 208, 32)?,
+                ojm_file: read_str(bytes, off + 240, 32)?,
+                raw: rec,
+            });
+        }
+        index += 1;
+        off += 300;
+    }
+    Ok(out)
+}
+
+/// Parse an `.ojn` chart file. Same stub contract as [`parse_ojm`]
+/// until the new-format decrypt lands (docs/file-formats/ojn.md).
 pub fn parse_ojn(bytes: &[u8]) -> Result<OjnChartFile, FileError> {
     match detect_kind(bytes)? {
         AssetKind::Ojn => Err(FileError::NotImplemented(
@@ -418,6 +493,27 @@ mod tests {
         assert_eq!(samples.len(), 2);
         assert_eq!(samples[0].name, "bgRoom.o");
         assert_eq!(samples[1].name, "bgLogo.gg");
+    }
+
+    #[test]
+    fn ojn_list_round_trip() {
+        let mut blob = vec![0u8; 600];
+        blob[8..11].copy_from_slice(b"ojn");
+        blob[300 + 4..300 + 8].copy_from_slice(&757u32.to_le_bytes());
+        blob[300 + 20..300 + 24].copy_from_slice(&124f32.to_le_bytes());
+        blob[300 + 112..300 + 117].copy_from_slice(b"Title");
+        blob[300 + 240..300 + 250].copy_from_slice(b"o2ma757.oj");
+        let entries = parse_ojn_list(&blob).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].index, 1);
+        assert_eq!(entries[0].song_id, 757);
+        assert_eq!(entries[0].bpm, 124.0);
+        assert_eq!(entries[0].title, "Title");
+        assert_eq!(entries[0].ojm_file, "o2ma757.oj");
+        assert!(matches!(
+            parse_ojn_list(b"nope"),
+            Err(FileError::UnknownFormat { .. })
+        ));
     }
 
     #[test]
