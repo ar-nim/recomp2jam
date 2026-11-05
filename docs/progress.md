@@ -32,6 +32,7 @@ All versions are **7.55** unless noted. Update one row per finding.
 | Song clock | sample-accurate audio position | ✅ `CpalBackend::samples_played` clock + `FrameClock` 60Hz interp | wire loop to clock TODO |
 | Judgement | windows TODO (grade strings at `0x247363`+ unreferenced; `LongnoteMode` refs are option.ini display) | default windows, tested | values UNVERIFIED; hold-marking code mapped, timing windows not yet located |
 | Score/combo | formula TODO | placeholder formula | parity TODO |
+| Game loop | autoplay sequencer | ✅ `Sequencer` + `play --chart/--ojm/--sound` (o2ma757 L0: 619 triggers, 618 sounded; Tutorial L0: 51) | judgement values + renderer blits TODO |
 | Renderer | CDX surfaces TODO | not started | screenshot diff TODO |
-| Input | DirectInput TODO | not started | latency budget TODO |
+| Input | DirectInput TODO | ✅ winit keymap (SDF SpaceJKL) + `play --window` shell | latency budget TODO |
 | Launcher/patcher | NowSmart | out of scope | — |
