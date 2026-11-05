@@ -10,8 +10,10 @@
   events from offset 300, landing exactly on an embedded JPEG
   (`FFD8FFE0…JFIF`) at offset 11784 — the album art. Header offsets
   288/292/296 all read `11784` (image offset per level); offset 284
-  reads `300` (header size). So old files interleave event sections
-  with embedded resources; per-level event ranges still TBD.
+  reads `300` (header size); offset 64 reads `43` = the walked event
+  count. Other header fields: id@0 (`8888`), `"ojn"`@4, BPM
+  (`100.0f`)@16, per-level-looking counts at 28/40/52
+  (`51/38/102`) — mapping TBD.
 - **New format** (`o2ma*.ojn`, 13 files, 179–1037 KB): header starts
   `"new\x06…"`, high-entropy afterwards, NO `"ojn"` anywhere (except one
   incidental hit in `o2ma770.ojn` at 435160). Byte-period analysis shows a
