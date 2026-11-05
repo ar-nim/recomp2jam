@@ -23,8 +23,8 @@ All versions are **7.55** unless noted. Update one row per finding.
 |---|---|---|---|
 | OJM parse (M30) | inline 52B entries + raw OGG | ✅ implemented + tested (`parse_m30`, 25-stream real-file check) | needs golden hash test |
 | OJM parse (OMC) | 36B entries + raw OGG | ✅ implemented + tested (`parse_omc`, 7-stream real-file check) | needs golden hash test |
-| OJN parse (old `"ojn"`) | ~300B header + blocks | loader + validator located in exe | `o2jam-file` table TODO |
-| OJN parse (new `"new"`) | 6-byte rhythm, obfuscated? | loader branch located; DeleteFileA TMP flow | decrypt/recode TODO |
+| OJN parse (old `"ojn"`) | ~300B header + blocks | header map + 43-event walk verified | per-level ranges TODO |
+| OJN parse (new `"new"`) | reverse + 3-key XOR (period stride) | ✅ decrypted (757: magic/id/BPM/580 events) + `decrypt_ojn_new_format` tested | per-level segmentation TODO |
 | Vorbis decode | libvorbis | `lewton` helper | PCM compare TODO |
 | Song clock | TODO (CDXTimer?) | `SongClock` stub (wall) | ±1 ms test TODO |
 | Judgement | windows TODO | default windows, tested | values UNVERIFIED |

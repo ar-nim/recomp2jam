@@ -99,16 +99,27 @@ between file read and parse: prime suspect the per-difficulty
 pre-pass `FUN_00570f90` (called right before the parser in the
 `0x170xxx` loader; dossier in flight).
 
+## New-format decrypt — CRACKED (`FUN_00412180`, dossier `ev_011eab73…`)
+
+The parser's read helper decrypts in place before returning the
+buffer (old-format files pass through when byte 0 is not `n`):
+
+1. Whole file is stored byte-reversed (`out[len-1-i] = in[i]`).
+2. From the reversed tail: `period = rev[len-4]` (byte), keys
+   `k1 = rev[len-7]`, `k2 = rev[len-6]`, `k3 = rev[len-5]`.
+3. For each byte `i`: `i % period == 0` → XOR `k1`;
+   `i % period == period/2` → XOR `k2`; else XOR `k3`.
+
+Verified: `o2ma757.ojn` decrypts to `"ojn\0"` magic at offset 4,
+song id `757`, BPM `124.0f`, and a 580-event walk from offset 300
+lands exactly on an embedded JPEG at 40020 (Photoshop blob to
+46530). o2jam-file implements this as `decrypt_ojn_new_format`
+with an encoder-accurate round-trip test; `parse_ojn` decrypts and
+validates the magic (note-table parsing next).
+
 ## Open questions (in priority order)
 
-1. New-format decrypt: the TMP-staging copy `0x412a50` is plain
-   open/write/close (dossier `ev_23e09c2f…`) — dead end. Remaining:
-   the parser's reader children `0x412020` (open; dossier
-   `ev_f0b58cef…`, plain CreateFile wrapper — dead end) and `0x412180`
-   (dossier in flight). (Also ruled out: reader, validator, `0x570f90`,
-   `0x4069b0`, `0x412080`, `0x573890`, per-difficulty body,
-   single-byte XOR/ADD/SUB, zlib/LZMA, 4-periodic crib key,
-   whole-file plaintext scan.)
-   plaintext scan.)
+1. New-format per-level segmentation: the decrypted body has a 580-event
+   run then images; map level offsets/counts (OJNList cross-check).
 2. Note event encoding + difficulty slots per file.
 3. Long-note + simultaneous-press encoding.

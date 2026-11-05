@@ -361,13 +361,54 @@ pub fn parse_ojn_list(bytes: &[u8]) -> Result<Vec<OjnListEntry<'_>>, FileError> 
     Ok(out)
 }
 
-/// Parse an `.ojn` chart file. Same stub contract as [`parse_ojm`]
-/// until the new-format decrypt lands (docs/file-formats/ojn.md).
+/// Decrypt a new-format (`"new"` magic) `.ojn` file in place.
+///
+/// Verified against the in-exe loader (`FUN_00412180`, dossier
+/// `ev_011eab73…`): the file is stored byte-reversed, then XORed with
+/// three key bytes on a `period` stride, with keys and period taken
+/// from the reversed tail (`keys` at `len-7..len-4`, period byte at
+/// `len-4`). Old-format files (no `"new"` prefix) are returned
+/// unchanged.
+pub fn decrypt_ojn_new_format(bytes: &[u8]) -> Result<Vec<u8>, FileError> {
+    if bytes.len() < 8 {
+        return Err(FileError::TooShort(bytes.len()));
+    }
+    if !bytes.starts_with(b"new") {
+        return Ok(bytes.to_vec());
+    }
+    let n = bytes.len();
+    let mut buf: Vec<u8> = bytes.iter().rev().copied().collect();
+    let period = buf[n - 4];
+    if period == 0 {
+        return Err(FileError::UnknownFormat {
+            magic: bytes[..4.min(bytes.len())].to_vec(),
+        });
+    }
+    let (k1, k2, k3) = (buf[n - 7], buf[n - 6], buf[n - 5]);
+    let p = period as usize;
+    for (i, b) in buf.iter_mut().enumerate() {
+        if i % p == 0 {
+            *b ^= k1;
+        } else if i % p == p / 2 {
+            *b ^= k2;
+        } else {
+            *b ^= k3;
+        }
+    }
+    Ok(buf)
+}
+/// Parse an `.ojn` chart file: decrypts new-format containers, then
+/// (old-format header parsing lands next; note-table work is tracked
+/// in docs/file-formats/ojn.md).
 pub fn parse_ojn(bytes: &[u8]) -> Result<OjnChartFile, FileError> {
-    match detect_kind(bytes)? {
-        AssetKind::Ojn => Err(FileError::NotImplemented(
-            "OJN note streams (see docs/file-formats/ojn.md)",
-        )),
+    let plain = decrypt_ojn_new_format(bytes)?;
+    match detect_kind(&plain)? {
+        AssetKind::Ojn => Ok(OjnChartFile {
+            magic: plain[..4].try_into().map_err(|_| FileError::Truncated {
+                need: 4,
+                have: plain.len(),
+            })?,
+        }),
         AssetKind::Ojm | AssetKind::OjnList => Err(FileError::UnknownFormat {
             magic: bytes[..4.min(bytes.len())].to_vec(),
         }),
@@ -517,6 +558,49 @@ mod tests {
     }
 
     #[test]
+    fn ojn_decrypt_round_trip() {
+        // Synthetic new-format container mirroring the in-exe encoder
+        // contract (FUN_00412180): XOR with (k1,k2,k3) on period P,
+        // key slots at buf[3..7], "new" tail, whole buffer reversed.
+        let (k1, k2, k3, p): (u8, u8, u8, usize) = (0x97, 0xE0, 0x34, 6);
+        let ks = |i: usize| {
+            if i % p == 0 {
+                k1
+            } else if i % p == p / 2 {
+                k2
+            } else {
+                k3
+            }
+        };
+        let n = 64usize;
+        let mut plain = vec![0u8; n];
+        plain[0..4].copy_from_slice(&[0xF5, 0x02, 0x00, 0x00]);
+        plain[4..8].copy_from_slice(b"ojn\0");
+        for (i, b) in plain.iter_mut().enumerate().take(n).skip(8) {
+            *b = (i * 7) as u8;
+        }
+        let mut buf: Vec<u8> = plain.iter().enumerate().map(|(i, &b)| b ^ ks(i)).collect();
+        // Key slots live at plaintext-space tail: rev[n-7..n-4].
+        buf[n - 7] = k1;
+        buf[n - 6] = k2;
+        buf[n - 5] = k3;
+        buf[n - 4] = p as u8;
+        // Tail bytes become the "new" magic after reversal.
+        buf[n - 3] = b'w';
+        buf[n - 2] = b'e';
+        buf[n - 1] = b'n';
+        let enc: Vec<u8> = buf.iter().rev().copied().collect();
+        assert!(enc.starts_with(b"new"));
+        let dec = decrypt_ojn_new_format(&enc).unwrap();
+        // Slots and tail are clobbered by key material; the middle
+        // must round-trip exactly, including the magic.
+        assert_eq!(&dec[0..n - 7], &plain[0..n - 7]);
+        // Old-format input passes through untouched.
+        let old = parse_ojn(b"ojnX....").unwrap();
+        assert_eq!(old.magic, *b"ojnX");
+    }
+
+    #[test]
     fn ojm_variant_parses_raw_tail() {
         // OJM magic dispatches to the entry parser: a minimal blob with
         // one entry parses; short input is rejected, not stubbed.
@@ -532,12 +616,9 @@ mod tests {
             parse_ojm(b"OJM\x00...."),
             Err(FileError::TooShort(_))
         ));
-        assert_eq!(
-            parse_ojn(b"ojnX...."),
-            Err(FileError::NotImplemented(
-                "OJN note streams (see docs/file-formats/ojn.md)"
-            ))
-        );
+        // Old-format chart validates by magic.
+        let chart = parse_ojn(b"ojnX....").unwrap();
+        assert_eq!(chart.magic, *b"ojnX");
     }
 
     #[test]
