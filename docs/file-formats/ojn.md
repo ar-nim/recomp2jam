@@ -265,18 +265,26 @@ fixture tests.
    Score formulas VERIFIED in the scorer `FUN_00570510` (file
    `0x170510`, called with the judgement class 4/3/2/1 for
    Cool/Good/Bad/Miss): Cool scores `200 + 10*X`, Good scores
-   `100 + 5*X` (word at game object `+0x396e`; identity TBD —
-   plausibly the jam combo, NOT confirmed), Bad-with-pill takes
+   `100 + 5*X` (word at game object `+0x396e`; identity RESOLVED
+   BELOW — not the live jam combo), Bad-with-pill takes
    the Cool path verbatim (BAD→COOL conversion confirmed),
    Bad-without-pill scores +4, Miss scores −10 floored (no
    negative total). This corrects the flat-100 Good of
    black-box accounts (the `*5` term is real) and confirms
    their 200/4/−10 figures; HP deltas partially corroborated
    (`[-10,-7,-5]` Bad row found exactly once in-shipped-bytes
-   at file `0x35e844`). Score bases in `o2jam-game` remain
-   placeholders pending the `+0x396e` identity. The gauge variable and its `+2`/`+1`/
+   at file `0x35e844`). Score bases in `o2jam-game` are
+   implemented (`Cool +200`, `Good +100`, `Bad +4`,
+   `Miss −10` floored); variable terms stay pending. The gauge variable and its `+2`/`+1`/
    `30` sites are NOT located in-exe — rating flows through the
    `+0xa14` virtual callback, whose target object is unidentified —
+   and exhaustive search finds ZERO writes to `+0x396e` anywhere in
+   the executable (only reads plus bulk-init copies), which rules
+   out a live-updating jam-combo variable there: a runtime counter
+   requires writes. `X` is consistent with a per-song constant
+   loaded at song setup (e.g. a difficulty multiplier — the init
+   chain at `0x58e2d0` leads toward song setup, source untraced)
+   or with dead scaling (`X == 0`).
    so the gauge math below is player-reported (UNVERIFIED in-exe):
    Cool feeds 2, Good feeds 1, Bad/Miss feed nothing; 30 progress
    completes one jam combo with overflow carrying into the next
