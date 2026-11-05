@@ -99,13 +99,15 @@ pre-pass `FUN_00570f90` (called right before the parser in the
 
 ## Open questions (in priority order)
 
-1. New-format decrypt: the per-difficulty body `0x56ffa0` has no
-   transform either (dossier `ev_f3ce92fb…` — path building +
-   parser call only). Remaining suspect: the parser's own read
-   helper `0x412080` (distinct from the proven-plain old-loader
-   reader `0x4069b0`; dossier in flight). (Also ruled out: reader
-   `0x412890`, validator, `0x570f90`, `0x4069b0`, single-byte
-   XOR/ADD/SUB, zlib/LZMA, 4-periodic crib key, whole-file
+1. New-format decrypt: `0x412080` is just close+memset and `0x573890`
+   is object init only (dossiers `ev_8e79ba94…`, `ev_1d728802…`) —
+   both dead ends. New prime suspect: the TMP-staging copy
+   `FUN_00412a50(dst, src, size-7)` in the old loader — the `-7`
+   length adjustment smells like a header strip/transform on the
+   copy path (dossier in flight). (Also ruled out: reader,
+   validator, `0x570f90`, `0x4069b0`, per-difficulty body,
+   single-byte XOR/ADD/SUB, zlib/LZMA, 4-periodic crib key,
+   whole-file plaintext scan.)
    plaintext scan.)
 2. Note event encoding + difficulty slots per file.
 3. Long-note + simultaneous-press encoding.
