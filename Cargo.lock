@@ -930,6 +930,7 @@ dependencies = [
 name = "o2jam-game"
 version = "0.1.0"
 dependencies = [
+ "o2jam-file",
  "serde",
  "thiserror 2.0.21",
 ]

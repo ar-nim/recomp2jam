@@ -7,6 +7,11 @@
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
+pub mod chart;
+pub use chart::{
+    build_level_chart, BackingNote, LevelChart, MeterChange, TempoChange, TempoMap, TimedHit,
+};
+
 /// A lane index for 7-key play (0..7).
 pub type Lane = u8;
 

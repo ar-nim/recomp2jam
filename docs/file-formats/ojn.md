@@ -6,7 +6,7 @@
   `B8 22 00 00 6F 6A 6E 00` (`"ojn\0"` magic at offset 4). This is the
   community-documented layout (~300-byte header + note blocks).
   Verified by walking: the `0x571d60` event layout
-  (`f32 beat` + `u16 kind` + `u16 count` + payload) parses 43 clean
+  (`i32 measure` + `u16 kind` + `u16 count` + payload) parses 43 clean
   events from offset 300, landing exactly on an embedded JPEG
   (`FFD8FFE0…JFIF`) at offset 11784 — the album art. Header offsets
   288/292/296 all read `11784` (image offset per level); offset 284
@@ -74,19 +74,56 @@ Signature `(song_id, ?, level 0..2)`. Flow, in own words:
   free, no parse.
 - Per-difficulty slice: data offset from table `+0x814[level]`, event
   count from `+0x738[level]`, song BPM from `+0x708`.
-- Event stream is float-anchored: each event = `float beat_time` +
-  `u16 kind` + `u16 count` + `count` payload floats; pointer advances
-  in 4-byte units.
-  - `kind == 0`: BPM change (payload float, `0.0` means `1.0`); sets the
-    measure tick length.
-  - `kind == 1`: BPM list for tempo changes inside the slice.
-  - `kind >= 2`: note events; lane index is `kind - 9` (7 lanes),
-    payload entries are 32-bit values with bit 26 = long-note hold and
-    low 12 bits = key-sound sample id (matches the OJM sample-id
-    ranges `0–12` and `980–991`). Max lane tracked at `+0x838`.
+- Event stream is measure-anchored: each event = `i32 measure_tick` +
+  `u16 kind` + `u16 count` + `count` payload `u32`s; pointer advances
+  in 4-byte units. (The head word is an integer measure index, not a
+  float beat: Tutorial.ojn ticks read 0/12/17/… as ints, new-format
+  ticks run 1..~100 per slice. Kinds up to 30 observed.)
+  - `kind == 0`: meter event (single `f32`, e.g. `0.75` = 3/4 time on
+    o2ma769 at measure 21 — TENTATIVE, one float per song observed).
+  - `kind == 1`: BPM list for tempo changes inside the slice — single
+    `f32` = new BPM from that measure (o2ma765: `290.0` at 62 then
+    `145.0` at 64; o2ma770: `100.0`/`75.0` at 70), or one `f32` per
+    subdivision with `0.0` = keep (o2ma769 at 21: `67.0` then `134.0`
+    at 16th 4). `999.0` terminators on o2ma770 (measures 71-72) TBD.
+  - `kinds 2-8`: playable lane notes; lane index is `kind - 2`
+    (7 lanes). Songs use either lanes {0, 2, 3} (10 songs) or all
+    seven (o2ma860/864 and, per-level, neither 861/865 — same `.ojm`,
+    3-lane charts). Max lane tracked at `+0x838`.
+  - `kinds 9+`: autoplay/BGM channels, same value encoding (e.g.
+    o2ma757 kind 19: BGM samples `981-992`, one per 4 measures;
+    o2ma860 kind 23: `988-993`; dense 16th backing on kind 11).
+  - Values: `0` = empty slot; else `(flags << 16) | (sample_id + 1)`.
+    `value - 1` lands in the song `.ojm` sample-id set for every lane
+    note on 12/13 new-format charts (one dangling ref on o2ma765:
+    value 35, id 34 absent from the `.ojm`) and for autoplay notes
+    modulo a few dangling high refs (`999`/`1000`-class on
+    768/769/770/860/861/864/865, `0`/`1` on 770 whose `.ojm` starts
+    at id 3). Counts: kinds 2-8 nonzero values per level equal the
+    header counts at +40/+44/+48 on 13/13 charts × 3 levels (39/39),
+    and all-nonzero (excl. kinds 0/1) equal +28/+32/+36 (39/39) — so
+    +40-group = playable notes, +28-group = playable + autoplay.
+    Observed subdivision counts are 1/16/32/192 (192 = full
+    resolution, e.g. Tutorial BGM channel).
+  - Flags (high word) semantics UNVERIFIED: observed `0x00`,
+    `0xC0-0xF0`, `0x70/0xB0`, `0x200/0x300`, `0x400` (Tutorial BGM
+    only). Bit 25 (`0x2000000`) is the leading hold-pattern
+    candidate (paired `0x200`→`0x300` same-sample notes), but flagged
+    spans routinely overlap the next same-lane note, so duration
+    encoding is ruled out and pairing is unproven.
 - Timing: 192 ticks per beat (`0xC0`); milliseconds via `240000 / BPM`
   accumulators, float-rounded per event. Parsed notes land in the
-  `+0x42c` / `+0x504` object arrays; holds in a 1000-byte flag table.
+  `+0x42c` / `+0x504` object arrays (stride `0xC`); scalar payloads
+  are staged in a stack array at the `8 + count * 4` walk.
+- Hold marking in-exe (objdump survey, dossier TBD): the parser tests
+  each staged payload word with `and eax, 0x4000000` (file offsets
+  `0x172a4f` and, in the post-parse fix-up `FUN_00572f50` at file
+  offset `0x172f50`, `0x173061`), masks `and edx, 0xFFF` (file offset
+  `0x172a64`), and sets byte `id` in a 1000-byte stack flag table
+  (store at file offset `0x172a6a`). Shipped note payloads never set
+  bit 26 (only Tutorial-BGM `0x0400000N` words and kind-0/1 `f32`
+  bit patterns do), so this path is live code whose on-disk trigger
+  is essentially absent — hold decoding stays UNVERIFIED.
 
 Validator `FUN_005718b0` (file offset `0x1718b0`) — dossier `ev_66e60d16…`:
 returns 0 = valid, 1 = invalid. Requires size ≥ 300, `__stricmp(buf+4,
@@ -162,6 +199,17 @@ fixture tests.
 
 ## Open questions (in priority order)
 
-1. Note event encoding + difficulty slots per file (first header word
-   is an integer tick, not a float beat; kinds up to 27 observed).
-2. Long-note + simultaneous-press encoding.
+1. Per-note flag (high word) semantics: hold vs expression/volume.
+   Bit 25 is the hold-pattern candidate; the in-exe bit-26 path
+   (`0x172a4f`/`0x173061`) never fires on shipped payloads.
+   Needs the `+0x42c`/`+0x504` object consumer + gameplay hold logic.
+2. Judgement function: timing windows, scoring, combo — grade strings
+   (`ALL COMBO`, `COOL 95%`, `MISS 10`, … at file offsets
+   `0x247363`/`0x2473db`/`0x24765b`) are unreferenced by code (likely
+   driven by `.ojs` result-screen scripts); `LongnoteMode` refs
+   (`0x3a71c`, `0x1a4744`, …) are `option.ini` display settings, not
+   judgement. Candidate region: the play-state update near `0x1a4xxx`
+   plus `timeGetTime` (IAT `0x63f4f8`, 28 call sites) consumers.
+   Windows and scoring stay UNVERIFIED in `o2jam-game`.
+3. Kind-0 meter semantics (single `0.75` float) and kind-1 `999.0`
+   terminators — one song each so far.
