@@ -13,24 +13,27 @@
 
 ## Loader in `AngelO2Jam.exe` (file offsets, v7.55 sha256 `83a04541…`)
 
-- `MUSIC\%sojn` → copied to `MUSIC\TMP_%sojn`, 0x12c (300) bytes read,
-  first-300-bytes scanned for `"ojn"` (`"ojn\0"` string at file offset
-  `0x24abbc`; validator at file offset `0x1731b0` also memcmps 300 bytes
-  against `"ojn"`, then does float timing math — BPM conversion against
-  constants at `0x24ce00`/`0x24a4e8`).
-- Branch at file offset `0x9c2d7` (`test/strstr` result): `"ojn"`-absent
-  headers (the 13 new files) take the main load path
-  (copy → `DeleteFileA` on the TMP copy — IAT slot `0x63f264` =
-  `KERNEL32!DeleteFileA`, hint 131 — → internal parse at `0x41e830`);
-  `"ojn"`-present headers take the other branch. So this loader handles
-  **both** generations; start RE at file offset `0x9c390` (function entry,
-  `ret $0x10`, thiscall) and the validator at `0x1731b0`.
-- No external decryptor: imports are the classic CDX-era surface —
-  `DDRAW!DirectDrawCreateEx`, `DINPUT`, `DSOUND`, `WINMM`, `WS2_32`,
-  `WININET`, `IMM32`, `SHLWAPI` — so the new-format transform (if any),
-  if it exists, is inline in the exe, near the loader above.
+Evidence: `ev_66e97a17…` (loader dossier), `ev_68d920c2…` (dispatch).
 
-## OJNList.dat (plaintext index?)
+- Old-format loader `FUN_004dc390` (file offset `0x9c390`): builds
+  `MUSIC\<id>.ojn` + `MUSIC\TMP_<id>.ojn` (strings at file offsets
+  `0x24abd0`/`0x24abc0`), stages a TMP copy, reads 300 bytes and
+  `__stricmp`s header+4 against `"ojn"`. Equal → malloc, full read,
+  `DeleteFileA(TMP)` (IAT `0x63f264` = `KERNEL32!DeleteFileA`),
+  parse via `FUN_0041e830`. Not equal (the 13 `"new"` files) → close,
+  return, **no parse**. So the new generation loads elsewhere.
+- Dispatch `FUN_004e47a0` (file offset `0x8e47a0`) is the song-select
+  flow (Trebuchet MS/Arial font setup, song vector stride `0x1b4`): it
+  calls the old loader per song id and falls back to a
+  `"MusicLoading.ojs"` overlay when the load returns 0. No new-format
+  branch here either.
+- Per-difficulty loader near file offset `0x170000`: maps type bytes
+  `2/3/4` → difficulties `1/2/3`, builds `MUSIC\%s` (string at
+  `0x24dc38`) + id, appends extension (`strcat`, `0x5f2800`), then calls
+  the real chart parser `FUN_00571d60(path, mask, type, level, …)`.
+  Ghidra dossier for `0x571d60` in progress — that function (plus the
+  `0x1731b0` validator with its BPM float math) is where the `"new"`
+  decode must live, if it exists.
 
 ## OJNList.dat (song index — VERIFIED layout)
 
