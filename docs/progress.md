@@ -23,7 +23,7 @@ All versions are **7.55** unless noted. Update one row per finding.
 |---|---|---|---|
 | OJM parse (M30) | inline 52B entries + raw OGG | ✅ implemented + tested (`parse_m30`, 25-stream real-file check) | needs golden hash test |
 | OJM parse (OMC) | 36B entries + raw OGG | ✅ implemented + tested (`parse_omc`, 7-stream real-file check) | needs golden hash test |
-| OJM parse (new-variant) | counts+offsets header, `0x38`/`0x24`B entries, 17-way + NOT | ✅ entries + NOT + deinterleave implemented + tested (`parse_new_variant_entries`, `not_decrypt`, `deinterleave_stripes`; bgEffect s0 0.97, Tutorial pads 0.99) | DialogBGM odd-stripe swap = encoder-side file anomaly (no in-exe cause; documented, uncompensated) |
+| OJM parse (new-variant) | counts+offsets header, `0x38`/`0x24`B entries, 17-way + NOT | ✅ entries + named WAV params + descriptor + PCM/OGG recovery implemented + tested (`parse_new_variant_entries`, `ojm_descriptor_for_version`, `decode_new_variant_pcm`, `recover_new_variant_sample`; bgEffect s0 0.97, Tutorial pads 0.99) | DialogBGM odd-stripe swap = encoder-side file anomaly (no in-exe cause; documented, uncompensated) |
 | OPI/OPA parse | 16B header + trailing 152B-entry table | ✅ implemented + tested (`parse_opi(_slots)`; 1587/627/7133 real-file counts, 9/6/16 free) | inner formats mapped: CP949 text, sprite-55 + strided combo variant, .bnd rects, ControlList↔rect relation (38/38 Interface); TBD: outlier pixel codecs, .oja frame data, Playing rect subset |
 | OJN parse (old `"ojn"`) | ~300B header + blocks | header map + 43-event walk verified | per-level ranges TODO |
 | OJN parse (new `"new"`) | reverse + 3-key XOR (period stride) | ✅ decrypted (757: magic/id/BPM/580 events) + `decrypt_ojn_new_format` tested | ✅ per-level segmentation mapped + implemented (`parse_ojn_levels`; 14/14 walks land exact, OJNList +40-group cross-check 13/13) |
@@ -32,7 +32,7 @@ All versions are **7.55** unless noted. Update one row per finding.
 | Song clock | sample-accurate audio position | ✅ `CpalBackend::samples_played` clock + `FrameClock` 60Hz interp | wire loop to clock TODO |
 | Judgement | windows TODO (grade strings at `0x247363`+ unreferenced; `LongnoteMode` refs are option.ini display) | default windows, tested | values UNVERIFIED; hold-marking code mapped, timing windows not yet located |
 | Score/combo | formula TODO | placeholder formula | parity TODO |
-| Game loop | autoplay sequencer | ✅ `Sequencer` + `play --chart/--ojm/--sound` (o2ma757 L0: 619 triggers, 618 sounded; Tutorial L0: 51) | judgement values + renderer blits TODO |
+| Game loop | autoplay sequencer | ✅ `Sequencer` + `play --chart/--ojm/--sound` (o2ma757 L0: 619 triggers, 618 sounded; Tutorial L0: 51/51 sounded via order fallback) | judgement values + renderer blits TODO |
 | Renderer | CDX surfaces TODO | not started | screenshot diff TODO |
 | Input | DirectInput TODO | ✅ winit keymap (SDF SpaceJKL) + `play --window` shell | latency budget TODO |
 | Launcher/patcher | NowSmart | out of scope | — |

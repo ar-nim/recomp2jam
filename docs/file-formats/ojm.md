@@ -18,8 +18,13 @@ Header (20 bytes):
 | 16 | 28 | first-entry offset |
 
 Then N entries, each immediately followed by its OGG (inline, no central
-table). Entry = `name[32] + u32 ogg_size + u32 0x00020005 + u32 1 + u32
-sample_id + u32 pcm_bytes?`, 52 bytes total; OGG starts at entry+52.
+table). Entry = `name[32] + u32 ogg_size + u32 codec + u32 flag +
+u16 ref + u16 reserved + u32 pcm_bytes?`, 52 bytes total; OGG starts at
+entry+52. Field split corroborated by the open2jam OJM documentation
+(`M30_sample_header`: `ref`/`unk_zero`; see Strike-slot mapping below):
+codec is `0x0005`/`0x0200` as halves of `0x00020005`, flag is `1`, and
+`ref` is the sample id the chart addresses (`reserved` reads 0 on all
+shipped entries; `parse_m30` reads only the `ref` word).
 
 Proof: `o2ma757.ojm` walks 25 entries to exactly EOF (749812), every
 stream opens with `OggS`, and every stream page-walks to exactly one EOS.
@@ -54,11 +59,18 @@ Sample IDs (M30) drive chart mapping: drum hits `0–12`
 (`SYNPC_Crash_01`, `SYNPC_Kick_021`, `Tom1–5`, `[WAV040]stick`…),
 music tracks `980–991` (`[WAV980]mr1` … `[WAV991]mr12`).
 
-OPEN: new-variant encrypted bodies — loader mapped below;
-`parse_new_variant_entries` + `not_decrypt` implemented, full
-body recovery verified on bgEffect s0, DialogBGM odd-stripe
-puzzle TBD. O2PlanetNPC is plain PCM (`OJM` magic → flags 0).
-Event's garbage name field still unexplained.
+RESOLVED (this branch): new-variant bodies decode per the chart's
++8 version float (`ojm_descriptor_for_version`: 2.9 → 17-way,
+2.7 → 16-way, ≤2.4 → plain) — mode-2 to raw PCM16 with entry
+header rate/channels (`decode_new_variant_pcm`), mode-3 as raw
+OGG (`recover_new_variant_sample`, checksum-validated).
+DialogBGM odd-stripe puzzle stays TBD (documented file anomaly,
+uncompensated). O2PlanetNPC is plain PCM (`OJM` magic → flags 0).
+Event's garbage name field still unexplained. Stream counts in
+the table above are old-variant-walk views; new-variant mode-2
++ mode-3 counts: bgEffect 40+1, Planet 4+1, Tutorial 30+12,
+DialogBGM 1+0, O2PlanetNPC 7+0, BGM/BGMwinter 0+10/0+10,
+Event 0+1.
 
 ## In-exe OJM loader — MAPPED (addrs VA; `ev_1601a757…`)
 
@@ -89,7 +101,66 @@ Event's garbage name field still unexplained.
   bit-reversal), `&0x10` → u32-XOR `0x54fac0` with key `"nami"`
   (`0x24ce1c`). 16/17-way interleave tables at file `0x27f1d0` /
   `0x27f3d0` are exact permutations (remainder-selected rows).
-  Mode-1 samples force NOT keys (`0xFF`,`0x00`).
+  Mode-1 samples force NOT keys (`0xFF`,`0x00`); mode-2/3 run the
+  zeroed schedule (keys differ from mode-1 only in the first 8
+  decoded bytes).
+- Mode-2 entry = open2jam `OMC_WAV_header` (56 B), verified on
+  DialogBGM/bgEffect/Planet/Tutorial/O2PlanetNPC (blanks excepted):
+  `name[32] + u16 audio_format(1) + u16 num_channels(1/2) +
+  u32 sample_rate + u32 bit_rate + u16 block_align + u16
+  bits_per_sample(16) + u32 reserved(0) + u32 chunk_size` at +52.
+  Byte rate checks as `rate * channels * 2` on every shipped entry
+  (e.g. 176400 on stereo 44100 Hz bodies, 64000 on mono 32000 Hz
+  brass, 88200 on mono 44100 Hz / stereo 22050 Hz). Mode-2 bodies
+  decode to raw PCM16 in that rate/channel layout
+  (`decode_new_variant_pcm`); mode-3 bodies are raw OGG.
+
+## Strike-slot mapping — VERIFIED (objdump static analysis; file addresses = VA − `0x400000`; no REA dossier IDs issued)
+
+How a chart strike `sample_id` (`decode_note_value`: `value − 1`)
+selects an OJM entry. Short version: by cache slot, and only M30
+entries carry an id — OMC/new-variant entries have no id field, so
+the game cannot address them individually.
+
+- Play time (gameplay `0x5703f0`, file `0x1703f0`):
+  `slot = (payload & 0xFFF) − 1`, plus `0x3E8` (1000) when the
+  payload sets bit 26. Play helpers (`0x551b20` song cache, bound
+  `0x7d0` = 2000 slots at mgr+`0x34220`; `0x551870` UI cache, bound
+  `0x34`) index the decoded-sample array by that slot directly —
+  no id→entry translation happens at play time.
+- Load time (song-bank bulk loader, file `0x1734xx`; UI-bank
+  loader `0x550db0` with per-bank base slots from the 7-entry table
+  at file `0x27f728`): each fetched entry registers at
+  `slot = entry_id` (`+0x3E8` when the entry's +`0x28` word sets
+  bit 31, gated on a chart-built usage byte table). For M30 the
+  entry buffer holds the full 52 B entry, so `entry_id` =
+  entry+44 `ref` and size = entry+48 — every M30 id lands in its
+  own slot (drums `0–12`, music `980–991`; Tutorial-style +1000
+  slots stay empty on M30 banks because no shipped M30-paired
+  chart sets bit 26).
+- New-variant entries carry no id: the fetcher copies only the
+  32 name bytes into the entry buffer (`strncpy` `0x5f2ad0`), so
+  buffer+`0x28`/`0x2c` read as the init-zeroed bytes for every
+  mode-2/3 entry. Every new-variant entry therefore registers at
+  slot 0 (last entry wins); only `sample_id` 0 can sound, and the
+  12 bit26 Tutorial intro notes (slots 1000–1011) address empty
+  slots. No order-based or name-based lookup exists anywhere on
+  the load/play paths (names are only copied, never compared;
+  the fetch-index field at obj+`0x150` is written but never read).
+- Corroboration: the open2jam OJM documentation
+  (`https://open2jam.wordpress.com/the-ojm-documentation/`)
+  independently documents the same header, `OMC_WAV_header`
+  (56 B) / `OMC_OGG_header` (36 B) split, WAV→key / OGG→BGM
+  section roles, and the M30 `ref` word — matching this map.
+
+Reconstruction fallback (ours, not exe behavior): id-less banks
+key by fetch order — `OjmTables::resolve_order_slot`: slot N names
+the Nth entry (mode-2 then mode-3), with the `0x3E8` high bank
+stripped to the same order. On Tutorial.ojn/ojm this sounds every
+strike: lanes `0–29` → 30 key sounds, plain kind-9 id 30 →
+`bgsplit-01`, bit26 ids `0–11` → key sounds `0–11` again.
+Autoplay: o2ma757 L0 618/619 sounded (M30, unchanged), Tutorial
+L0 51/51 (was 1/51 before the fallback).
 
 OPEN: DialogBGM's single 13 MB sample decodes with even plain
 stripes clean and odd stripes pairwise byte-swapped (17/17 stripes
