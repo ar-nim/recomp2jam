@@ -103,9 +103,9 @@ pre-pass `FUN_00570f90` (called right before the parser in the
 
 1. New-format decrypt: the TMP-staging copy `0x412a50` is plain
    open/write/close (dossier `ev_23e09c2f…`) — dead end. Remaining:
-   the parser's reader children `0x412020` (open?) and `0x412180`
-   (size?) — last unexamined functions on the data path (dossiers
-   in flight). (Also ruled out: reader, validator, `0x570f90`,
+   the parser's reader children `0x412020` (open; dossier
+   `ev_f0b58cef…`, plain CreateFile wrapper — dead end) and `0x412180`
+   (dossier in flight). (Also ruled out: reader, validator, `0x570f90`,
    `0x4069b0`, `0x412080`, `0x573890`, per-difficulty body,
    single-byte XOR/ADD/SUB, zlib/LZMA, 4-periodic crib key,
    whole-file plaintext scan.)
