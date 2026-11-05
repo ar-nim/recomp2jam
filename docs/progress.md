@@ -27,9 +27,10 @@ All versions are **7.55** unless noted. Update one row per finding.
 | OPI/OPA parse | 16B header + trailing 152B-entry table | ✅ implemented + tested (`parse_opi(_slots)`; 1587/627/7133 real-file counts, 9/6/16 free) | inner formats mapped: CP949 text, sprite-55 + strided combo variant, .bnd rects, ControlList↔rect relation (38/38 Interface); TBD: outlier pixel codecs, .oja frame data, Playing rect subset |
 | OJN parse (old `"ojn"`) | ~300B header + blocks | header map + 43-event walk verified | per-level ranges TODO |
 | OJN parse (new `"new"`) | reverse + 3-key XOR (period stride) | ✅ decrypted (757: magic/id/BPM/580 events) + `decrypt_ojn_new_format` tested | ✅ per-level segmentation mapped + implemented (`parse_ojn_levels`; 14/14 walks land exact, OJNList +40-group cross-check 13/13) |
+| OJN note semantics | i32 measure + kind classes + `(flags<<16)\|(sample+1)` | ✅ implemented (`ojn_lane_of_kind`, `decode_note_value`, `parse_ojn_level_events`, `build_level_chart`; 39/39 playable/total counts vs header +40/+28 groups, lanes 12/13 sample-cover) | flags (hold?) UNVERIFIED; in-exe bit26 sites `0x172a4f`/`0x173061` recorded, never fire on shipped payloads |
 | Vorbis decode | libvorbis | `lewton` helper | PCM compare TODO |
 | Song clock | TODO (CDXTimer?) | `SongClock` stub (wall) | ±1 ms test TODO |
-| Judgement | windows TODO | default windows, tested | values UNVERIFIED |
+| Judgement | windows TODO (grade strings at `0x247363`+ unreferenced; `LongnoteMode` refs are option.ini display) | default windows, tested | values UNVERIFIED; hold-marking code mapped, timing windows not yet located |
 | Score/combo | formula TODO | placeholder formula | parity TODO |
 | Renderer | CDX surfaces TODO | not started | screenshot diff TODO |
 | Input | DirectInput TODO | not started | latency budget TODO |

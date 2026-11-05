@@ -7,3 +7,4 @@ license.workspace = true
 [dependencies]
 serde.workspace = true
 thiserror.workspace = true
+o2jam-file = { path = "../o2jam-file" }

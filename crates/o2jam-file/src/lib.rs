@@ -1017,6 +1017,144 @@ pub fn parse_ojn_levels(bytes: &[u8]) -> Result<Vec<OjnLevelSlice>, FileError> {
     Ok(out)
 }
 
+/// First note-event kind: kinds 2..=8 are the seven playable lanes.
+/// Verified: per-level playable-note totals (kinds 2-8, nonzero values)
+/// equal the header counts at +40/+44/+48 on all 13 new-format 7.55
+/// charts x 3 levels (39/39; docs/file-formats/ojn.md).
+/// Songs use either lanes {0, 2, 3} or all seven.
+/// See `docs/file-formats/ojn.md`.
+pub const OJN_LANE_KIND_FIRST: u16 = 2;
+/// Last note-event kind (inclusive).
+pub const OJN_LANE_KIND_LAST: u16 = 8;
+/// Playable lane count (kinds 2..=8).
+pub const OJN_LANE_COUNT: usize = 7;
+/// Subdivisions per measure: event payload index `i` of `count` sits at
+/// `i * OJN_TICKS_PER_MEASURE / count` (observed counts 1/16/32/192
+/// all divide 192; Tutorial.ojn uses count 192 for its BGM channel).
+pub const OJN_TICKS_PER_MEASURE: u32 = 192;
+
+/// Lane index for a note-event kind, if it is a playable lane.
+///
+/// Verified: kinds 2..=8 map to lanes 0..=6 (`lane = kind - 2`);
+/// kinds 0/1 carry BPM floats and kinds 9+ carry autoplay/BGM notes
+/// in the same value encoding (docs/file-formats/ojn.md).
+#[must_use]
+pub fn ojn_lane_of_kind(kind: u16) -> Option<u8> {
+    if (OJN_LANE_KIND_FIRST..=OJN_LANE_KIND_LAST).contains(&kind) {
+        Some((kind - OJN_LANE_KIND_FIRST) as u8)
+    } else {
+        None
+    }
+}
+
+/// One decoded chart event: measure tick, channel kind, raw payload.
+///
+/// The head word is a signed measure index (not the float beat an
+/// early dossier guessed: Tutorial.ojn ticks read 0/12/17/... as ints
+/// and new-format ticks run 1..~100 per slice). Kinds 0/1 hold `f32`
+/// BPM data; kinds 2+ hold `u32` note values (see [`decode_note_value`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OjnEvent {
+    /// Measure index (`i32` head word).
+    pub measure: i32,
+    /// Channel kind (`u16`).
+    pub kind: u16,
+    /// Payload words (`count` x `u32`).
+    pub values: Vec<u32>,
+}
+
+/// Decode the events of one level slice into [`OjnEvent`]s.
+///
+/// Decrypts new-format containers, locates the slice via
+/// [`parse_ojn_levels`], then collects the `8 + count * 4` framed
+/// events. Fails like [`parse_ojn_levels`] on truncated input;
+/// an out-of-range `level` is a [`FileError::Truncated`] mismatch.
+/// Verified framing on all 14 shipped 7.55 charts
+/// (docs/file-formats/ojn.md).
+pub fn parse_ojn_level_events(bytes: &[u8], level: usize) -> Result<Vec<OjnEvent>, FileError> {
+    let plain = decrypt_ojn_new_format(bytes)?;
+    if plain.len() < OJN_HEADER_LEN {
+        return Err(FileError::TooShort(plain.len()));
+    }
+    let slices = parse_ojn_levels(bytes)?;
+    let slice = slices.get(level).ok_or(FileError::Truncated {
+        need: level + 1,
+        have: slices.len(),
+    })?;
+    let mut events = Vec::with_capacity(slice.event_count as usize);
+    let mut off = slice.data_start;
+    for _ in 0..slice.event_count {
+        let measure = read_u32le(&plain, off)? as i32;
+        let kind = read_u16le(&plain, off + 4)?;
+        let count = read_u16le(&plain, off + 6)? as usize;
+        let mut values = Vec::with_capacity(count);
+        for i in 0..count {
+            values.push(read_u32le(&plain, off + 8 + i * OJN_EVENT_UNIT_LEN)?);
+        }
+        off += OJN_EVENT_HEAD_LEN + count * OJN_EVENT_UNIT_LEN;
+        events.push(OjnEvent {
+            measure,
+            kind,
+            values,
+        });
+    }
+    Ok(events)
+}
+
+/// One nonzero note payload split into sample id + channel flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OjnNoteValue {
+    /// Key-sound sample id: raw low word minus one (`0` = empty,
+    /// so stored values run `sample_id + 1`).
+    ///
+    /// Verified: `value - 1` lands in the song `.ojm` sample-id set
+    /// for every lane note on 12/13 new-format charts (one dangling
+    /// ref on o2ma765: value 35, id 34 absent) and for autoplay
+    /// notes modulo a few dangling high refs (~999/1000).
+    pub sample_id: u32,
+    /// Raw high word: per-note flags (hold/expression).
+    /// Semantics UNVERIFIED (observed `0xC0..0xF0`, `0x200/0x300`,
+    /// `0x400` on Tutorial BGM; the in-exe parser tests payload bit
+    /// 26, which shipped note payloads never set — see
+    /// docs/file-formats/ojn.md).
+    pub flags: u16,
+}
+
+/// Split a raw note payload word (kinds 2+) into sample id + flags.
+///
+/// Returns `None` for empty slots (`0`, or a zero low word). Lanes
+/// and autoplay channels share the encoding; kinds 0/1 payloads are
+/// `f32` BPM data and must not go through here.
+#[must_use]
+pub fn decode_note_value(raw: u32) -> Option<OjnNoteValue> {
+    if raw == 0 {
+        return None;
+    }
+    let low = raw & 0xFFFF;
+    if low == 0 {
+        return None;
+    }
+    Some(OjnNoteValue {
+        sample_id: low - 1,
+        flags: (raw >> 16) as u16,
+    })
+}
+
+/// Position of payload index `i` of `count` within its measure, in
+/// [`OJN_TICKS_PER_MEASURE`]ths. Returns `None` for empty events
+/// (`count == 0`) or grids that do not divide 192 exactly.
+#[must_use]
+pub fn ojn_sub_position(sub_index: usize, sub_count: usize) -> Option<u32> {
+    if sub_count == 0 {
+        return None;
+    }
+    let scaled = (sub_index as u32).checked_mul(OJN_TICKS_PER_MEASURE)?;
+    if scaled % sub_count as u32 != 0 {
+        return None;
+    }
+    Some(scaled / sub_count as u32)
+}
+
 /// Decode Korean client text (`.ojs` word lists, `ControlList_*.txt`).
 ///
 /// Real 7.55 bodies are CP949 (the MSVC2005 Korean-locale codepage):
@@ -2781,5 +2919,87 @@ mod tests {
         assert_eq!(levels.len(), OJN_LEVEL_COUNT);
         assert_eq!(levels[0].event_count, 1);
         assert_eq!(levels[2].data_end + 64, plain.len());
+    }
+
+    #[test]
+    fn ojn_lane_of_kind_maps_lanes_two_to_eight() {
+        assert_eq!(ojn_lane_of_kind(0), None);
+        assert_eq!(ojn_lane_of_kind(1), None);
+        for kind in OJN_LANE_KIND_FIRST..=OJN_LANE_KIND_LAST {
+            assert_eq!(ojn_lane_of_kind(kind), Some((kind - 2) as u8));
+        }
+        assert_eq!(ojn_lane_of_kind(9), None);
+        assert_eq!(ojn_lane_of_kind(19), None);
+    }
+
+    #[test]
+    fn decode_note_value_splits_sample_plus_one_and_flags() {
+        // Lane tap: sample id 2 stored as 3, no flags.
+        assert_eq!(
+            decode_note_value(3),
+            Some(OjnNoteValue {
+                sample_id: 2,
+                flags: 0,
+            })
+        );
+        // Flagged autoplay note keeps the raw high word.
+        assert_eq!(
+            decode_note_value(0x00D0_0003),
+            Some(OjnNoteValue {
+                sample_id: 2,
+                flags: 0xD0,
+            })
+        );
+        assert_eq!(decode_note_value(0), None);
+        assert_eq!(decode_note_value(0x0200_0000), None);
+    }
+
+    #[test]
+    fn ojn_sub_position_places_sixteenths_on_twelve_tick_grid() {
+        assert_eq!(ojn_sub_position(0, 16), Some(0));
+        assert_eq!(ojn_sub_position(4, 16), Some(48));
+        assert_eq!(ojn_sub_position(15, 16), Some(180));
+        assert_eq!(ojn_sub_position(189, 192), Some(189));
+        assert_eq!(ojn_sub_position(0, 1), Some(0));
+        assert_eq!(ojn_sub_position(0, 0), None);
+        assert_eq!(ojn_sub_position(1, 7), None);
+    }
+
+    #[test]
+    fn ojn_level_events_decode_measure_kind_and_values() {
+        // Synthetic two-measure level: a lane tap, a BPM float word
+        // (kept raw here; the game layer interprets kinds 0/1), and
+        // an autoplay note with flags.
+        let bpm_bits = 134f32.to_bits();
+        let slices = [
+            [
+                ojn_event(1, 2, &[3, 0, 0, 0]),
+                ojn_event(1, 1, &[bpm_bits]),
+                ojn_event(2, 10, &[0x00D0_0002]),
+            ]
+            .concat(),
+            Vec::new(),
+            Vec::new(),
+        ];
+        let blob = ojn_levels_blob([3, 0, 0], &slices);
+        let events = parse_ojn_level_events(&blob, 0).unwrap();
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].measure, 1);
+        assert_eq!(events[0].kind, 2);
+        assert_eq!(events[0].values, vec![3, 0, 0, 0]);
+        assert_eq!(events[1].kind, 1);
+        assert_eq!(events[2].kind, 10);
+        assert_eq!(
+            decode_note_value(events[2].values[0]),
+            Some(OjnNoteValue {
+                sample_id: 1,
+                flags: 0xD0,
+            })
+        );
+        assert!(parse_ojn_level_events(&blob, 1).unwrap().is_empty());
+        assert!(matches!(
+            parse_ojn_level_events(&blob, 3),
+            Err(FileError::Truncated { .. })
+        ));
     }
 }
