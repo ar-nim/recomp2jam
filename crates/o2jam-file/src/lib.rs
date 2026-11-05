@@ -119,6 +119,103 @@ fn check_ogg(data: &[u8], at: usize) -> Result<(), FileError> {
     }
 }
 
+/// OPI/OPA archive layout, verified on real 7.55 files
+/// (`Interface1.opi`, `Playing1.opi`, `avatar.opa`;
+/// docs/file-formats/opi.md): 16-byte header (`u32` version +
+/// `u32` slot count + `u64` zero), data blobs from +16, and a
+/// trailing table of fixed-size entries. Versions observed: 2
+/// (`.opi`), 1 (`.opa`); the layout is identical.
+const OPI_HEADER_LEN: usize = 16;
+const OPI_ENTRY_LEN: usize = 152;
+const OPI_NAME_OFF: usize = 4;
+const OPI_NAME_LEN: usize = 128;
+const OPI_OFFSET_OFF: usize = 132;
+const OPI_SIZE_OFF: usize = 136;
+const OPI_AUX_SIZE_OFF: usize = 140;
+
+/// One file inside an OPI/OPA archive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpiEntry {
+    /// File name (NUL-trimmed ASCII: `*.ojs`, `*.bnd`, `*.txt`, …).
+    pub name: String,
+    /// Entry kind from the archive: 1 = file, 0 = free slot.
+    pub kind: u32,
+    /// Offset of the stored bytes from the archive start.
+    pub data_offset: usize,
+    /// Stored byte count.
+    pub size: u32,
+    /// Second size field (meaning TBD; equals `size` for stored
+    /// files, larger for the structured `55 05`-magic bodies).
+    pub aux_size: u32,
+}
+
+fn read_opi_name(bytes: &[u8], off: usize) -> Result<String, FileError> {
+    let raw = bytes
+        .get(off..off + OPI_NAME_LEN)
+        .ok_or(FileError::Truncated {
+            need: off + OPI_NAME_LEN,
+            have: bytes.len(),
+        })?;
+    let end = raw.iter().position(|&b| b == 0).unwrap_or(OPI_NAME_LEN);
+    Ok(String::from_utf8_lossy(&raw[..end]).into_owned())
+}
+
+/// Parse an OPI/OPA archive directory (trailing table). Returns one
+/// entry per named file; nameless free slots are skipped. Stored
+/// bytes are NOT validated (script, text, and binary bodies share
+/// the container).
+/// Verified on real 7.55 files (docs/file-formats/opi.md).
+pub fn parse_opi(bytes: &[u8]) -> Result<Vec<OpiEntry>, FileError> {
+    if bytes.len() < OPI_HEADER_LEN {
+        return Err(FileError::TooShort(bytes.len()));
+    }
+    let slots = read_u32le(bytes, 4)? as usize;
+    let table_len = slots
+        .checked_mul(OPI_ENTRY_LEN)
+        .ok_or(FileError::Truncated {
+            need: usize::MAX,
+            have: bytes.len(),
+        })?;
+    if table_len > bytes.len() || OPI_HEADER_LEN > bytes.len() - table_len {
+        return Err(FileError::Truncated {
+            need: table_len,
+            have: bytes.len(),
+        });
+    }
+    let mut out = Vec::new();
+    let mut off = bytes.len() - table_len;
+    for _ in 0..slots {
+        let kind = read_u32le(bytes, off)?;
+        let name = read_opi_name(bytes, off + OPI_NAME_OFF)?;
+        let data_offset = read_u32le(bytes, off + OPI_OFFSET_OFF)? as usize;
+        let size = read_u32le(bytes, off + OPI_SIZE_OFF)?;
+        let aux_size = read_u32le(bytes, off + OPI_AUX_SIZE_OFF)?;
+        let end = data_offset
+            .checked_add(size as usize)
+            .ok_or(FileError::Truncated {
+                need: usize::MAX,
+                have: bytes.len(),
+            })?;
+        if end > bytes.len() {
+            return Err(FileError::Truncated {
+                need: end,
+                have: bytes.len(),
+            });
+        }
+        if !name.is_empty() {
+            out.push(OpiEntry {
+                name,
+                kind,
+                data_offset,
+                size,
+                aux_size,
+            });
+        }
+        off += OPI_ENTRY_LEN;
+    }
+    Ok(out)
+}
+
 /// Parse the M30 variant: 20-byte header, then inline 52-byte entries
 /// (`name[32] + size + _ + _ + id + _`) each followed by its OGG.
 /// Verified byte-exact on real 7.55 files (docs/file-formats/ojm.md).
@@ -909,5 +1006,64 @@ mod tests {
         let mut buf = [0x00; 9];
         not_decrypt(&mut buf, 0xFF, 0);
         assert_eq!(buf, [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00]);
+    }
+
+    fn opi_entry(name: &[u8], offset: u32, size: u32) -> Vec<u8> {
+        let mut entry = vec![0u8; OPI_ENTRY_LEN];
+        entry[..4].copy_from_slice(&1u32.to_le_bytes());
+        entry[OPI_NAME_OFF..OPI_NAME_OFF + name.len()].copy_from_slice(name);
+        entry[OPI_OFFSET_OFF..OPI_OFFSET_OFF + 4].copy_from_slice(&offset.to_le_bytes());
+        entry[OPI_SIZE_OFF..OPI_SIZE_OFF + 4].copy_from_slice(&size.to_le_bytes());
+        entry[OPI_AUX_SIZE_OFF..OPI_AUX_SIZE_OFF + 4].copy_from_slice(&size.to_le_bytes());
+        entry
+    }
+
+    fn opi_blob() -> Vec<u8> {
+        let mut blob = vec![0u8; OPI_HEADER_LEN];
+        blob[..4].copy_from_slice(&2u32.to_le_bytes());
+        blob[4..8].copy_from_slice(&3u32.to_le_bytes());
+        let first_data = OPI_HEADER_LEN;
+        blob.extend_from_slice(b"hello");
+        blob.extend_from_slice(b"world!");
+        blob.extend_from_slice(&opi_entry(b"a.ojs", first_data as u32, 5));
+        blob.extend_from_slice(&[0u8; OPI_ENTRY_LEN]);
+        blob.extend_from_slice(&opi_entry(b"b.txt", (first_data + 5) as u32, 6));
+        blob
+    }
+
+    #[test]
+    fn opi_entries_list_named_files_with_offsets() {
+        let blob = opi_blob();
+        let entries = parse_opi(&blob).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].name, "a.ojs");
+        assert_eq!(entries[0].kind, 1);
+        assert_eq!(
+            &blob[entries[0].data_offset..entries[0].data_offset + 5],
+            b"hello"
+        );
+        assert_eq!(entries[1].name, "b.txt");
+        assert_eq!(
+            &blob[entries[1].data_offset..entries[1].data_offset + 6],
+            b"world!"
+        );
+    }
+
+    #[test]
+    fn opi_entries_reject_bad_input() {
+        assert!(matches!(parse_opi(b"short"), Err(FileError::TooShort(_))));
+        let mut oversized = opi_blob();
+        let first_size_at = OPI_HEADER_LEN + 5 + 6 + OPI_SIZE_OFF;
+        oversized[first_size_at..first_size_at + 4].copy_from_slice(&99999u32.to_le_bytes());
+        assert!(matches!(
+            parse_opi(&oversized),
+            Err(FileError::Truncated { .. })
+        ));
+        let mut countless = vec![0u8; OPI_HEADER_LEN];
+        countless[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(matches!(
+            parse_opi(&countless),
+            Err(FileError::Truncated { .. })
+        ));
     }
 }

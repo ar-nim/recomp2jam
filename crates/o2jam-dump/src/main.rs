@@ -26,6 +26,11 @@ enum Command {
         /// Container file to inspect.
         file: PathBuf,
     },
+    /// List entries in an `.opi`/`.opa` archive.
+    Opi {
+        /// Archive file to inspect.
+        file: PathBuf,
+    },
     /// Hexdump the first N bytes (default 64).
     Hex {
         /// File to inspect.
@@ -58,6 +63,18 @@ fn main() -> Result<()> {
                     None => "-".to_string(),
                 };
                 println!("  id={id:>5} {:>9}B {}", s.data.len(), s.name);
+            }
+        }
+        Command::Opi { file } => {
+            let bytes =
+                std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let entries = o2jam_file::parse_opi(&bytes)?;
+            println!("{}: {} entries", file.display(), entries.len());
+            for e in &entries {
+                println!(
+                    "  kind={} {:>9}B +{:>4}B {}",
+                    e.kind, e.size, e.aux_size, e.name
+                );
             }
         }
         Command::Hex { file, len } => {
