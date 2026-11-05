@@ -32,27 +32,31 @@ with Python 3.14 — offsets and counts below, no disassembly.)
 | +4 | 128 B | name, NUL-padded ASCII (`*.ojs`, `*.oji`, `*.ojt`, `*.oja`, `*.bnd`, `*.txt`, `*.dat`) |
 | +132 | u32 | data offset from archive start |
 | +136 | u32 | stored size: the body is always the first `size` bytes |
-| +140 | u32 | on-disk stride (`aux_size`): gap to the next table slot's offset |
+| +140 | u32 | reserved size: the entry's allocation when packed |
 | +144 | 8 B | zero pad |
 
-`aux_size` semantics (open question 1, resolved): table order is
+`reserved_size` semantics (open question 1, resolved, corroborated
+by the independent CXO2 spec): the patcher can shrink `size` for a
+replacement payload while `reserved_size` retains the original
+allocation, so slack is stale data, not padding — read exactly
+`size` bytes. table order is
 already offset order (0 inversions in all three archives), and for
-~99.9% of slots `aux_size == next_slot_offset − data_offset`, i.e.
+~99.9% of slots `reserved_size == next_slot_offset − data_offset`, i.e.
 the reserved stride tiling `[16, table_start)` exactly. The last
 slot's stride runs to the data-region end (start of the entry
 table, e.g. `ControlList_Interface.txt`: `off 74438614 + aux
-419496 == table start 74858110`). Bytes in `[off+size, off+aux)`
+419496 == table start 74858110`). Bytes in `[off+size, off+reserved)`
 are stale slack, NOT zero padding (verified nonzero in 53 + 17 + 59
 bodies across the three archives); only the `Playing1.opi` tail
 (`[221621059, 221640810)`, 19751 B) is zero-filled. Readers must
-slice by `size`, never by `aux_size`. Table-order mismatches (stride
+slice by `size`, never by `reserved_size`. Table-order mismatches (stride
 overruns, never holes): 2 in `Interface1.opi` (the known 32 B
 overlap `State_MShop.bnd`/`SMI_790.ojs`: `63271746 + 2934 = 63274680
 > 63273928`; plus 16 B `FREE slot 1460`/`Messenger_Alram_PopUp.ojs`),
 0 in `Playing1.opi`, 6 in `avatar.opa` (1–10 KB overshoots, e.g.
 `X203FB13LA002.ojs` `+24688` vs `+14838` gap). Free (kind-0) slots
 are deleted-entry reservations: `size` 0 with nonzero
-`offset`/`aux_size` whose bytes are stale (verified nonzero in every
+`offset`/`reserved_size` whose bytes are stale (verified nonzero in every
 free reservation — e.g. `Interface1.opi` slot 672 reserves
 `[31694688, 31777792)`, 83104 B, 83080 B nonzero).
 
@@ -92,7 +96,7 @@ Cross-checked with `o2jam-file` parsers (`parse_sprite55` +
 Sprite-55 split of the 9231 standard bodies: tag 1 / tag 0 =
 1450/35 (Interface), 608/10 with 3 more tag-1 strided (Playing),
 7131/0 (avatar); colorkey `0x0000` / `0x7D5F` = 1142/343,
-547/71, 1758/5373. Free-slot reservations (offset + aux, table
+547/71, 1758/5373. Free-slot reservations (offset + reserved, table
 order): Interface slot 672 (+83104), 1169 (+1596), 1192/1193
 (+7780 each), 1351 (+1686), 1460 (+1750), 1502 (+1720), 1503
 (+1554068, largest), 1508 (+422); Playing 427 (+150), 429 (+630),
@@ -104,7 +108,7 @@ reservations (228–368 B: slots 24, 26, 30, 988, 1238, 1544, 1546,
 
 First blob at offset 16 in all three archives; strides tile
 `[16, table_start)` with no holes — every gap is the stale slack of
-a body with `aux_size > size` (Interface 51 gaps + 2 overlaps =
+a body with `reserved_size > size` (Interface 51 gaps + 2 overlaps =
 53 bodies; Playing 16 gaps + 0 overlaps; avatar 53 gaps + 0
 overlaps), and every overlap is a documented stride overrun, never
 an underrun. Named bytes vs region: Interface 71745062 +
@@ -142,8 +146,12 @@ Record (20 B): `u16 x`, `u16 y` (placement anchor), `u16 w`,
 (`data_offset[i+1] == data_offset[i] + size[i]`) and
 `8 + 20*count + Σsize == len`.
 
-Pixels: `size == w*h*2` means raw little-endian RGB565
-(63742 images; `Sprite55::is_raw_rgb565` + `rgb565_to_rgb888`).
+Pixels: `size == w*h*2` means raw little-endian RGB555
+(63742 images; `Sprite55::is_raw_rgb555` + `rgb555_to_rgb888`).
+CXO2 documents the same 16-bit format for magic `0x0555` (plus a
+custom-logic variant for `0x555A`, matching our `.oja` codec TBD).
+Note for the renderer: non-power-of-two widths leave uneven
+bytes on every other scanline.
 Colorkey regions (`0x7D5F` runs) read as flat transparent art;
 e.g. `Shop_ItemGem.ojs` (9x12, 216 B) and `OptionKey_Checkbox.ojs`
 (16x16 at `(51, 400)`, 512 B) account byte-exact.
@@ -155,7 +163,7 @@ pixel-decoded): `.oji` list bars with per-image sub-directories
 stored for 86x69), prefixed frames (`Lanking_NoticeBoard.oji`:
 800x31 + 188 B header), and the three strided combo atlases
 (`Note_Combo4/5/6.ojt`: 6 records of 64x64/8192 B, blob holds 4
-consecutive RGB565 glow frames per record — 128 + 6·32768 =
+consecutive RGB555 glow frames per record — 128 + 6·32768 =
 196736 B exact; `parse_sprite55_strided(_, 4)`, digit bands
 rendered to confirm).
 
@@ -171,7 +179,8 @@ rendered to confirm).
 ### `.bnd` bind sections — VERIFIED
 
 `u32` magic `0xFFFFFFFF`, `u16` count, then `count` 16-byte
-`(u32 x1, u32 y1, u32 x2, u32 y2)` corner rects in 800x600 space;
+`(u32 x1, u32 y1, u32 x2, u32 y2)` corner rects in absolute
+coordinates;
 `6 + 16*count == len` holds on all 53 real sections (49 + 4).
 `parse_bnd` enforces magic + exact size.
 
@@ -180,9 +189,16 @@ rendered to confirm).
 UI state/dialog definitions, not scripts: `NUMBER_OF_STATE`
 (`0x0F` = 15; file holds 16 `STATE_` headers of which
 `PLAYING`/`TUTORIAL`/`DRUM_PLAYING`/`EXIT` are empty `0x00`
-stubs) and `NUMBER_OF_DIALOG` (`0x1B` = 27, exact). Each block is
+stubs) and `NUMBER_OF_DIALOG` (`0x1B` = 27, exact). (CXO2
+lists `NUMBER_OF_STATES`/`NUMBER_OF_DIALOGS` — the 7.55 file
+spells them without the trailing S; the parser matches the file.) Each block is
 `NAME 0xN [0xM] { BOUND "stem.bnd" IDC… [SET … { IDC… }] }`;
 entries are `IDC_NAME 0XCODE ["sprite.ojs"]` with `//` comments.
+The game stores the code as a single integer (CXO2 notes it does
+not split it); its second byte names the object type for the
+renderer: `00` state, `01` toggle/radio/checkbox, `02` scrollbar,
+`10` image/sprite, `20` button, `30` input box, `50`
+interactable/clickable, `60` SET, `70` avatar.
 The header comment reads (CP949): "sets control structure and
 links used images".
 
@@ -216,11 +232,11 @@ parses by prefix.
 ## Implementation
 
 o2jam-file: `parse_opi` (entries with `name/kind/data_offset/
-size/aux_size`; nameless slots skipped; bounds-checked),
+size/reserved_size`; nameless slots skipped; bounds-checked),
 `parse_opi_slots` (every slot in table order incl. free reservations,
 stride-end checked), `is_jpeg_body` (`FF D8 … FF D9`, 47/47) +
 `decode_control_text`, `parse_sprite55` (+ `parse_sprite55_strided`,
-`rgb565_to_rgb888`), `parse_bnd`, `parse_oja`,
+`rgb555_to_rgb888`), `parse_bnd`, `parse_oja`,
 `parse_jam_thresholds`, `parse_control_list` — each with synthetic
 unit tests; `o2jam-dump opi` for local listing. Still TBD: pixel
 codecs for the `.oji`/compressed outlier frames, `.oja`
@@ -229,7 +245,7 @@ strides, and the Playing rect subset.
 
 ## Open questions
 
-1. ~~`aux_size` semantics when it exceeds `size`.~~ → on-disk
+1. ~~`reserved_size` semantics when it exceeds `size`.~~ → on-disk
    stride (gap to next table slot); slack bytes are stale, not zero.
 2. ~~Type-0 free slots with nonzero offset/size2.~~ → deleted-entry
    reservations (`size` 0, stale bytes, never bodies).

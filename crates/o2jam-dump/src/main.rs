@@ -81,12 +81,12 @@ fn main() -> Result<()> {
                 if s.is_free() {
                     println!(
                         "  [slot {i}] kind={} free reservation off={} aux={}B",
-                        s.kind, s.data_offset, s.aux_size
+                        s.kind, s.data_offset, s.reserved_size
                     );
                 } else {
                     println!(
                         "  [slot {i}] kind={} off={} {:>9}B +{:>4}B {}",
-                        s.kind, s.data_offset, s.size, s.aux_size, s.name
+                        s.kind, s.data_offset, s.size, s.reserved_size, s.name
                     );
                 }
             }

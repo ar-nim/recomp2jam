@@ -131,7 +131,7 @@ const OPI_NAME_OFF: usize = 4;
 const OPI_NAME_LEN: usize = 128;
 const OPI_OFFSET_OFF: usize = 132;
 const OPI_SIZE_OFF: usize = 136;
-const OPI_AUX_SIZE_OFF: usize = 140;
+const OPI_RESERVED_OFF: usize = 140;
 
 /// One file inside an OPI/OPA archive.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,14 +145,13 @@ pub struct OpiEntry {
     /// Stored byte count: the body is always the first `size`
     /// bytes at `data_offset`.
     pub size: u32,
-    /// Reserved on-disk stride: `aux_size` equals the gap to the
-    /// next blob's offset (verified on ~99.5% of real 7.55 slots;
-    /// docs/file-formats/opi.md). Bytes in
-    /// `[data_offset + size, data_offset + aux_size)` are padding.
-    /// A handful of stale slots disagree with the gap (encoder
-    /// sloppiness, like the known 32 B overlap), so readers must
-    /// slice by `size`, never by `aux_size`.
-    pub aux_size: u32,
+    /// Reserved on-disk stride: the entry's allocation when the
+    /// archive was packed. The patcher can shrink `size` for a
+    /// replacement payload while `reserved_size` keeps the original
+    /// allocation, so slack bytes are stale data, not padding
+    /// (docs/file-formats/opi.md). Readers must slice bodies by
+    /// `size`, never by `reserved_size`.
+    pub reserved_size: u32,
 }
 
 fn read_opi_name(bytes: &[u8], off: usize) -> Result<String, FileError> {
@@ -168,7 +167,7 @@ fn read_opi_name(bytes: &[u8], off: usize) -> Result<String, FileError> {
 
 /// One raw table slot in an OPI/OPA archive, including nameless free
 /// slots (deleted-entry reservations: `kind` 0, empty name, `size` 0,
-/// nonzero `data_offset`/`aux_size`).
+/// nonzero `data_offset`/`reserved_size`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpiSlot {
     /// File name (empty for free slots).
@@ -180,7 +179,7 @@ pub struct OpiSlot {
     /// Stored byte count (0 for free slots).
     pub size: u32,
     /// Reserved on-disk stride to the next table slot's offset.
-    pub aux_size: u32,
+    pub reserved_size: u32,
 }
 
 impl OpiSlot {
@@ -195,7 +194,7 @@ fn read_opi_slot(bytes: &[u8], entry_off: usize) -> Result<OpiSlot, FileError> {
     let name = read_opi_name(bytes, entry_off + OPI_NAME_OFF)?;
     let data_offset = read_u32le(bytes, entry_off + OPI_OFFSET_OFF)? as usize;
     let size = read_u32le(bytes, entry_off + OPI_SIZE_OFF)?;
-    let aux_size = read_u32le(bytes, entry_off + OPI_AUX_SIZE_OFF)?;
+    let reserved_size = read_u32le(bytes, entry_off + OPI_RESERVED_OFF)?;
     let body_end = data_offset
         .checked_add(size as usize)
         .ok_or(FileError::Truncated {
@@ -208,12 +207,13 @@ fn read_opi_slot(bytes: &[u8], entry_off: usize) -> Result<OpiSlot, FileError> {
             have: bytes.len(),
         });
     }
-    let stride_end = data_offset
-        .checked_add(aux_size as usize)
-        .ok_or(FileError::Truncated {
-            need: usize::MAX,
-            have: bytes.len(),
-        })?;
+    let stride_end =
+        data_offset
+            .checked_add(reserved_size as usize)
+            .ok_or(FileError::Truncated {
+                need: usize::MAX,
+                have: bytes.len(),
+            })?;
     if stride_end > bytes.len() {
         return Err(FileError::Truncated {
             need: stride_end,
@@ -225,7 +225,7 @@ fn read_opi_slot(bytes: &[u8], entry_off: usize) -> Result<OpiSlot, FileError> {
         kind,
         data_offset,
         size,
-        aux_size,
+        reserved_size,
     })
 }
 
@@ -233,7 +233,7 @@ fn read_opi_slot(bytes: &[u8], entry_off: usize) -> Result<OpiSlot, FileError> {
 /// free slots. Verified counts on real 7.55 files
 /// (docs/file-formats/opi.md): 1596 / 633 / 7149 slots.
 /// Stored bytes are NOT validated; readers must slice bodies by
-/// `size`, never by `aux_size`.
+/// `size`, never by `reserved_size`.
 pub fn parse_opi_slots(bytes: &[u8]) -> Result<Vec<OpiSlot>, FileError> {
     if bytes.len() < OPI_HEADER_LEN {
         return Err(FileError::TooShort(bytes.len()));
@@ -282,7 +282,7 @@ pub fn parse_opi(bytes: &[u8]) -> Result<Vec<OpiEntry>, FileError> {
             kind: slot.kind,
             data_offset: slot.data_offset,
             size: slot.size,
-            aux_size: slot.aux_size,
+            reserved_size: slot.reserved_size,
         })
         .collect())
 }
@@ -1246,8 +1246,12 @@ pub fn decode_control_text(bytes: &[u8]) -> Result<String, FileError> {
 
 /// Magic of the dominant inner sprite container (`.ojs`, `.ojt`,
 /// `.oji` bodies): `tag + 0x0555 + count + colorkey`, then `count`
-/// 20-byte image records and one concatenated RGB565 pixel blob.
-/// Observed tags: 0, 1. Observed colorkeys: `0x0000`, `0x7D5F`.
+/// 20-byte image records and one concatenated RGB555 pixel blob.
+/// Field layout matches the independent CXO2 spec (their
+/// signature/format/frames/colorkey); observed tags 0 and 1 parse
+/// identically with exact accounting (CXO2 lists signature 1 as
+/// valid — tag 0 is a live 7.55 variant, not corruption).
+/// Observed colorkeys: `0x0000`, `0x7D5F`.
 /// Verified on all ~9.2k such bodies in the real 7.55 archives
 /// (docs/file-formats/opi.md).
 pub const SPRITE55_MAGIC: u16 = 0x0555;
@@ -1330,8 +1334,8 @@ pub struct Sprite55<'a> {
     pub colorkey: u16,
     /// Image records in stored order.
     pub images: Vec<Sprite55Image>,
-    /// Concatenated per-image data (raw RGB565 when
-    /// [`Sprite55::is_raw_rgb565`] holds; codec TBD otherwise).
+    /// Concatenated per-image data (raw RGB555 when
+    /// [`Sprite55::is_raw_rgb555`] holds; codec TBD otherwise).
     pub blob: &'a [u8],
 }
 
@@ -1341,12 +1345,12 @@ impl<'a> Sprite55<'a> {
         &self.blob[image.data_offset..image.data_offset + image.size as usize]
     }
     /// True when the image is stored as plain `w*h` little-endian
-    /// RGB565 pixels (`size == w*h*2`; ~99.7% of real bodies).
+    /// RGB555 pixels (`size == w*h*2`; ~99.7% of real bodies).
     /// Outlier classes (`.oji` sub-directories/prefixed frames,
     /// RLE-compressed frames) return false and need their codec
     /// mapped before decoding. Strided combo atlases (see
     /// [`parse_sprite55_strided`]) store raw frames and return true.
-    pub fn is_raw_rgb565(&self, image: &Sprite55Image) -> bool {
+    pub fn is_raw_rgb555(&self, image: &Sprite55Image) -> bool {
         image.size as usize == image.w as usize * image.h as usize * 2
     }
 }
@@ -1429,7 +1433,7 @@ pub fn parse_sprite55(bytes: &[u8]) -> Result<Sprite55<'_>, FileError> {
 
 /// A parsed strided sprite-55 atlas: same header and record table
 /// as [`Sprite55`], but each image stores `frames_per_image`
-/// consecutive `w*h` RGB565 frames (`Note_Combo4/5/6.ojt` hold 4
+/// consecutive `w*h` RGB555 frames (`Note_Combo4/5/6.ojt` hold 4
 /// glow-animation frames per 64x64 record; verified by rendering
 /// one centred digit band per 8 KiB tile).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1454,8 +1458,8 @@ impl<'a> Sprite55Strided<'a> {
     }
 
     /// True when one frame is stored as plain `w*h` little-endian
-    /// RGB565 pixels (`size == w*h*2`).
-    pub fn is_raw_rgb565(&self, image: &Sprite55Image) -> bool {
+    /// RGB555 pixels (`size == w*h*2`).
+    pub fn is_raw_rgb555(&self, image: &Sprite55Image) -> bool {
         image.size as usize == image.w as usize * image.h as usize * 2
     }
 }
@@ -1493,22 +1497,23 @@ pub fn parse_sprite55_strided(
     })
 }
 
-/// Expand one little-endian RGB565 pixel to 24-bit RGB (replicated
-/// low bits, the usual GDI 16-bit expansion).
-pub fn rgb565_to_rgb888(pixel: u16) -> (u8, u8, u8) {
-    let r5 = ((pixel >> 11) & 31) as u8;
-    let g6 = ((pixel >> 5) & 63) as u8;
+/// Expand one little-endian RGB555 pixel to 24-bit RGB (replicated
+/// low bits, the usual GDI 16-bit expansion; bit 15 unused).
+/// Matches the CXO2-documented 16-bit format for magic `0x0555`.
+pub fn rgb555_to_rgb888(pixel: u16) -> (u8, u8, u8) {
+    let r5 = ((pixel >> 10) & 31) as u8;
+    let g5 = ((pixel >> 5) & 31) as u8;
     let b5 = (pixel & 31) as u8;
     (
         (r5 << 3) | (r5 >> 2),
-        (g6 << 2) | (g6 >> 4),
+        (g5 << 3) | (g5 >> 2),
         (b5 << 3) | (b5 >> 2),
     )
 }
 
 /// One layout rectangle inside a `.bnd` bind section.
 ///
-/// Corners in 800x600 screen space: `(x1, y1)` top-left,
+/// Corners in absolute coordinates: `(x1, y1)` top-left,
 /// `(x2, y2)` bottom-right. Record `i` lays out the `i+1`-th
 /// `IDC_` entry of the matching `ControlList` block in file order
 /// (entry 0 is the dialog/state itself); verified on all 38
@@ -2346,7 +2351,7 @@ mod tests {
         entry[OPI_NAME_OFF..OPI_NAME_OFF + name.len()].copy_from_slice(name);
         entry[OPI_OFFSET_OFF..OPI_OFFSET_OFF + 4].copy_from_slice(&offset.to_le_bytes());
         entry[OPI_SIZE_OFF..OPI_SIZE_OFF + 4].copy_from_slice(&size.to_le_bytes());
-        entry[OPI_AUX_SIZE_OFF..OPI_AUX_SIZE_OFF + 4].copy_from_slice(&size.to_le_bytes());
+        entry[OPI_RESERVED_OFF..OPI_RESERVED_OFF + 4].copy_from_slice(&size.to_le_bytes());
         entry
     }
 
@@ -2410,7 +2415,7 @@ mod tests {
         let mut free = vec![0u8; OPI_ENTRY_LEN];
         free[OPI_OFFSET_OFF..OPI_OFFSET_OFF + 4]
             .copy_from_slice(&(first_data as u32 + 11).to_le_bytes());
-        free[OPI_AUX_SIZE_OFF..OPI_AUX_SIZE_OFF + 4].copy_from_slice(&8u32.to_le_bytes());
+        free[OPI_RESERVED_OFF..OPI_RESERVED_OFF + 4].copy_from_slice(&8u32.to_le_bytes());
         blob.extend_from_slice(&free);
         blob.extend_from_slice(&opi_entry(b"b.txt", (first_data + 5) as u32, 6));
         blob
@@ -2434,7 +2439,7 @@ mod tests {
     #[test]
     fn opi_slots_reject_stride_running_past_file() {
         let mut blob = opi_blob();
-        let first_aux_at = OPI_HEADER_LEN + 5 + 6 + OPI_AUX_SIZE_OFF;
+        let first_aux_at = OPI_HEADER_LEN + 5 + 6 + OPI_RESERVED_OFF;
         blob[first_aux_at..first_aux_at + 4].copy_from_slice(&99999u32.to_le_bytes());
         assert!(matches!(
             parse_opi_slots(&blob),
@@ -2514,9 +2519,9 @@ mod tests {
             }
         );
         assert_eq!(sprite.pixel_data(&sprite.images[0]), &red_green);
-        assert!(sprite.is_raw_rgb565(&sprite.images[0]));
+        assert!(sprite.is_raw_rgb555(&sprite.images[0]));
         assert_eq!(sprite.pixel_data(&sprite.images[1]), &blue);
-        assert!(sprite.is_raw_rgb565(&sprite.images[1]));
+        assert!(sprite.is_raw_rgb555(&sprite.images[1]));
     }
 
     #[test]
@@ -2526,7 +2531,7 @@ mod tests {
         let blob = sprite55_blob(0, 0x0000, &[(0, 0, 86, 69, stored.clone())]);
         let sprite = parse_sprite55(&blob).unwrap();
         assert_eq!(sprite.tag, 0);
-        assert!(!sprite.is_raw_rgb565(&sprite.images[0]));
+        assert!(!sprite.is_raw_rgb555(&sprite.images[0]));
         assert_eq!(sprite.pixel_data(&sprite.images[0]), &stored);
     }
 
@@ -2613,12 +2618,12 @@ mod tests {
     }
 
     #[test]
-    fn rgb565_expands_primaries() {
-        assert_eq!(rgb565_to_rgb888(0xF800), (255, 0, 0));
-        assert_eq!(rgb565_to_rgb888(0x07E0), (0, 255, 0));
-        assert_eq!(rgb565_to_rgb888(0x001F), (0, 0, 255));
-        assert_eq!(rgb565_to_rgb888(0x0000), (0, 0, 0));
-        assert_eq!(rgb565_to_rgb888(0xFFFF), (255, 255, 255));
+    fn rgb555_expands_primaries() {
+        assert_eq!(rgb555_to_rgb888(0x7C00), (255, 0, 0));
+        assert_eq!(rgb555_to_rgb888(0x03E0), (0, 255, 0));
+        assert_eq!(rgb555_to_rgb888(0x001F), (0, 0, 255));
+        assert_eq!(rgb555_to_rgb888(0x0000), (0, 0, 0));
+        assert_eq!(rgb555_to_rgb888(0xFFFF), (255, 255, 255));
     }
 
     fn bnd_blob(rects: &[(u32, u32, u32, u32)]) -> Vec<u8> {

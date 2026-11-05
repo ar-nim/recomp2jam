@@ -152,7 +152,12 @@ song id `757`, BPM `124.0f`, and a 580-event walk from offset 300
 lands exactly on an embedded JPEG at 40020 (Photoshop blob to
 46530). o2jam-file implements this as `decrypt_ojn_new_format`
 with an encoder-accurate round-trip test; `parse_ojn` decrypts and
-validates the magic (note-table parsing next).
+validates the magic (note-table parsing next). The independent
+CXO2 spec phrases the same transform as a 7-byte header
+(`new` + block-size byte + primary/middle/initial keys) plus
+reversed-payload block XOR — byte-identical output on 7.55
+files, so the formulations are equivalent; ours matches the exe
+and stays.
 
 ## Per-level segmentation — VERIFIED (all 14 `.ojn` files)
 
