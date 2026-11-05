@@ -92,13 +92,13 @@ pre-pass `FUN_00570f90` (called right before the parser in the
 
 ## Open questions (in priority order)
 
-1. New-format decrypt: read wrapper `0x4069b0` is a plain chunked
-   `ReadFile` (dossier `ev_740cefda…`) — dead end. Remaining
-   suspects: inline transform in the per-difficulty loader body
-   `0x56ffa0` itself (dossier in flight) or its unknown callee
-   `0x570260`. (Also ruled out: reader, validator, `0x570f90`,
-   single-byte XOR/ADD/SUB, zlib/LZMA, 4-periodic crib key,
-   whole-file plaintext scan — no offset yields even 6 sane events
-   under the `0x571d60` layout, so the body is not plaintext.)
+1. New-format decrypt: the per-difficulty body `0x56ffa0` has no
+   transform either (dossier `ev_f3ce92fb…` — path building +
+   parser call only). Remaining suspect: the parser's own read
+   helper `0x412080` (distinct from the proven-plain old-loader
+   reader `0x4069b0`; dossier in flight). (Also ruled out: reader
+   `0x412890`, validator, `0x570f90`, `0x4069b0`, single-byte
+   XOR/ADD/SUB, zlib/LZMA, 4-periodic crib key, whole-file
+   plaintext scan.)
 2. Note event encoding + difficulty slots per file.
 3. Long-note + simultaneous-press encoding.
