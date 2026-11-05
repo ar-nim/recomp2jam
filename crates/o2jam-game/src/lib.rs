@@ -141,6 +141,119 @@ pub enum Judgement {
     Miss,
 }
 
+/// Jam-progress points earned per judged note (player-reported 7.55
+/// behavior, UNVERIFIED in-exe: only Cool/Good feed the gauge).
+/// One jam combo costs `JAM_PROGRESS_PER_JAM` progress points.
+pub const JAM_PROGRESS_PER_COOL: u32 = 2;
+pub const JAM_PROGRESS_PER_GOOD: u32 = 1;
+/// Progress points that complete one jam combo (player-reported 7.55,
+/// UNVERIFIED in-exe). Overflow carries: e.g. reaching 31 leaves
+/// progress at 1 for the next cycle.
+pub const JAM_PROGRESS_PER_JAM: u32 = 30;
+/// Most combo-saving pills a player can hold (player-reported 7.55,
+/// UNVERIFIED in-exe: earning/spending UI outside the rated path is OPEN).
+pub const MAX_PILLS: u32 = 5;
+/// Extra score per jam-combo level on Cool/Good hits (placeholder,
+/// UNVERIFIED: 7.55 direction confirmed by player report — higher jam
+/// combo scores more — but the per-level size is not located in-exe).
+pub const JAM_SCORE_BONUS_PER_JAM: u64 = 10;
+
+/// Jam progress bar plus jam-combo count.
+///
+/// Feed rule (player-reported 7.55, UNVERIFIED in-exe): Cool adds 2,
+/// Good adds 1, Bad/Miss add nothing. Every 30 progress completes one
+/// jam combo; overflow carries into the next cycle. Whether Bad/Miss
+/// reset or preserve progress is OPEN — this keeps progress unchanged.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JamGauge {
+    /// Progress toward the next jam (`0..JAM_PROGRESS_PER_JAM`).
+    progress: u32,
+    /// Completed jam combos.
+    jams: u32,
+}
+
+impl JamGauge {
+    /// Current progress toward the next jam.
+    #[must_use]
+    pub fn progress(&self) -> u32 {
+        self.progress
+    }
+
+    /// Completed jam combos.
+    #[must_use]
+    pub fn jam_count(&self) -> u32 {
+        self.jams
+    }
+
+    /// Feed one judgement into the gauge.
+    ///
+    /// Returns the number of jam combos completed by this note (0 or more;
+    /// more than one only if a single feed overshoots by 2x — kept general).
+    pub fn feed(&mut self, judgement: Judgement) -> u32 {
+        let gain = match judgement {
+            Judgement::Cool => JAM_PROGRESS_PER_COOL,
+            Judgement::Good => JAM_PROGRESS_PER_GOOD,
+            Judgement::Bad | Judgement::Miss => 0,
+        };
+        self.progress += gain;
+        let mut earned = 0;
+        while self.progress >= JAM_PROGRESS_PER_JAM {
+            self.progress -= JAM_PROGRESS_PER_JAM;
+            self.jams += 1;
+            earned += 1;
+        }
+        earned
+    }
+}
+
+/// Combo-saving pill stock (player-reported 7.55, UNVERIFIED in-exe).
+///
+/// A pill is spent instead of breaking the combo on a combo-breaking
+/// judgement (Bad/Miss — the VERIFIED combo-break set). How pills are
+/// earned and which shop/UI flows grant them is OPEN; this tracks the
+/// spend side only, capped at `MAX_PILLS`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PillStock {
+    /// Pills currently held (`<= MAX_PILLS`).
+    pills: u32,
+}
+
+impl PillStock {
+    /// Hold `count` pills, capped at `MAX_PILLS`.
+    #[must_use]
+    pub fn new(count: u32) -> Self {
+        Self {
+            pills: count.min(MAX_PILLS),
+        }
+    }
+
+    /// Pills currently held.
+    #[must_use]
+    pub fn count(&self) -> u32 {
+        self.pills
+    }
+
+    /// Add pills (e.g. shop grant), capped at `MAX_PILLS`.
+    pub fn add(&mut self, count: u32) {
+        self.pills = self.pills.saturating_add(count).min(MAX_PILLS);
+    }
+
+    /// Spend one pill to keep the combo, if any is held.
+    ///
+    /// Returns true when a pill was spent (combo is kept).
+    pub fn consume_to_keep_combo(&mut self) -> bool {
+        if self.pills > 0 {
+            self.pills -= 1;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// (file `0x176540`, VA `0x576540`, dossier `ev_14992eb2…` /
+/// decompile `ev_5ecb1ce8…`).
+///
 /// Timing windows in ms, VERIFIED against 7.55 `FUN_00576540`
 /// (file `0x176540`, VA `0x576540`, dossier `ev_14992eb2…` /
 /// decompile `ev_5ecb1ce8…`).
@@ -240,6 +353,54 @@ impl Score {
         }
         self.max_combo = self.max_combo.max(self.combo);
     }
+
+    /// Apply one judgement through the jam + pill path.
+    ///
+    /// Rated rule (player-reported 7.55, scoring sizes UNVERIFIED in-exe):
+    /// the gauge feeds first (this note can complete a jam), Cool/Good
+    /// continue the combo and score base points plus
+    /// `JAM_SCORE_BONUS_PER_JAM` per completed jam, and Bad/Miss spend
+    /// one pill to keep the combo when a pill is held, else break it.
+    /// Whether ordering (bonus on the completing note) and pill-kept
+    /// Bad/Miss points match 7.55 is OPEN.
+    pub fn apply_rated(
+        &mut self,
+        judgement: Judgement,
+        gauge: &mut JamGauge,
+        pills: &mut PillStock,
+    ) {
+        gauge.feed(judgement);
+        let jam_bonus = u64::from(gauge.jam_count()) * JAM_SCORE_BONUS_PER_JAM;
+        let idx = match judgement {
+            Judgement::Cool => 0,
+            Judgement::Good => 1,
+            Judgement::Bad => 2,
+            Judgement::Miss => 3,
+        };
+        self.counts[idx] += 1;
+        match judgement {
+            Judgement::Cool => {
+                self.combo += 1;
+                self.points += 300 + jam_bonus;
+            }
+            Judgement::Good => {
+                self.combo += 1;
+                self.points += 100 + jam_bonus;
+            }
+            Judgement::Bad => {
+                if !pills.consume_to_keep_combo() {
+                    self.combo = 0;
+                }
+                self.points += 10;
+            }
+            Judgement::Miss => {
+                if !pills.consume_to_keep_combo() {
+                    self.combo = 0;
+                }
+            }
+        }
+        self.max_combo = self.max_combo.max(self.combo);
+    }
 }
 
 /// Song clock: elapsed time since song start.
@@ -330,6 +491,102 @@ mod tests {
         assert_eq!(s.combo, 0);
         assert_eq!(s.max_combo, 2);
         assert_eq!(s.counts, [2, 1, 1, 1]);
+    }
+
+    #[test]
+    fn jam_gauge_cool_feeds_two_good_feeds_one() {
+        let mut gauge = JamGauge::default();
+        assert_eq!(gauge.feed(Judgement::Cool), 0);
+        assert_eq!(gauge.progress(), 2);
+        assert_eq!(gauge.feed(Judgement::Good), 0);
+        assert_eq!(gauge.progress(), 3);
+        assert_eq!(gauge.jam_count(), 0);
+    }
+
+    #[test]
+    fn jam_gauge_thirty_progress_completes_one_jam() {
+        let mut gauge = JamGauge::default();
+        for _ in 0..15 {
+            gauge.feed(Judgement::Cool);
+        }
+        assert_eq!(gauge.jam_count(), 1);
+        assert_eq!(gauge.progress(), 0);
+    }
+
+    #[test]
+    fn jam_gauge_overflow_carries_remainder() {
+        let mut gauge = JamGauge::default();
+        for _ in 0..14 {
+            gauge.feed(Judgement::Cool);
+        }
+        assert_eq!(gauge.progress(), 28);
+        gauge.feed(Judgement::Good);
+        assert_eq!(gauge.progress(), 29);
+        assert_eq!(gauge.feed(Judgement::Cool), 1);
+        assert_eq!(gauge.jam_count(), 1);
+        assert_eq!(gauge.progress(), 1);
+    }
+
+    #[test]
+    fn jam_gauge_ignores_bad_and_miss() {
+        let mut gauge = JamGauge::default();
+        gauge.feed(Judgement::Cool);
+        gauge.feed(Judgement::Bad);
+        gauge.feed(Judgement::Miss);
+        assert_eq!(gauge.progress(), 2);
+        assert_eq!(gauge.jam_count(), 0);
+    }
+
+    #[test]
+    fn pill_stock_caps_at_five() {
+        let overfull = PillStock::new(9);
+        assert_eq!(overfull.count(), MAX_PILLS);
+        let mut stock = PillStock::default();
+        stock.add(3);
+        stock.add(4);
+        assert_eq!(stock.count(), 5);
+    }
+
+    #[test]
+    fn pill_saves_combo_from_bad_and_miss() {
+        let mut score = Score::default();
+        let mut gauge = JamGauge::default();
+        let mut pills = PillStock::new(2);
+        score.apply_rated(Judgement::Cool, &mut gauge, &mut pills);
+        score.apply_rated(Judgement::Bad, &mut gauge, &mut pills);
+        assert_eq!(score.combo, 1);
+        score.apply_rated(Judgement::Miss, &mut gauge, &mut pills);
+        assert_eq!(score.combo, 1);
+        assert_eq!(pills.count(), 0);
+        assert_eq!(score.counts, [1, 0, 1, 1]);
+    }
+
+    #[test]
+    fn rated_combo_breaks_without_pills() {
+        let mut score = Score::default();
+        let mut gauge = JamGauge::default();
+        let mut pills = PillStock::default();
+        score.apply_rated(Judgement::Cool, &mut gauge, &mut pills);
+        score.apply_rated(Judgement::Miss, &mut gauge, &mut pills);
+        assert_eq!(score.combo, 0);
+        assert_eq!(score.max_combo, 1);
+    }
+
+    #[test]
+    fn higher_jam_combo_scores_more_on_cool() {
+        let mut fresh_score = Score::default();
+        let mut fresh_gauge = JamGauge::default();
+        let mut pills = PillStock::default();
+        fresh_score.apply_rated(Judgement::Cool, &mut fresh_gauge, &mut pills);
+
+        let mut jammed_score = Score::default();
+        let mut jammed_gauge = JamGauge::default();
+        for _ in 0..15 {
+            jammed_gauge.feed(Judgement::Cool);
+        }
+        assert_eq!(jammed_gauge.jam_count(), 1);
+        jammed_score.apply_rated(Judgement::Cool, &mut jammed_gauge, &mut pills);
+        assert!(jammed_score.points > fresh_score.points);
     }
 
     #[test]
