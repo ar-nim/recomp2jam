@@ -260,7 +260,21 @@ fixture tests.
    up to the max-5 stock; the displayed +2/+1/30 jam gauge itself
    stays behind the `+0xa14` callback (UNVERIFIED in-exe).
    `o2jam-game` implements the verified streak (`CoolStreak`)
-   alongside the player-reported gauge. The gauge variable and its `+2`/`+1`/
+   alongside the player-reported gauge.
+
+   Score formulas VERIFIED in the scorer `FUN_00570510` (file
+   `0x170510`, called with the judgement class 4/3/2/1 for
+   Cool/Good/Bad/Miss): Cool scores `200 + 10*X`, Good scores
+   `100 + 5*X` (word at game object `+0x396e`; identity TBD —
+   plausibly the jam combo, NOT confirmed), Bad-with-pill takes
+   the Cool path verbatim (BAD→COOL conversion confirmed),
+   Bad-without-pill scores +4, Miss scores −10 floored (no
+   negative total). This corrects the flat-100 Good of
+   black-box accounts (the `*5` term is real) and confirms
+   their 200/4/−10 figures; HP deltas partially corroborated
+   (`[-10,-7,-5]` Bad row found exactly once in-shipped-bytes
+   at file `0x35e844`). Score bases in `o2jam-game` remain
+   placeholders pending the `+0x396e` identity. The gauge variable and its `+2`/`+1`/
    `30` sites are NOT located in-exe — rating flows through the
    `+0xa14` virtual callback, whose target object is unidentified —
    so the gauge math below is player-reported (UNVERIFIED in-exe):
