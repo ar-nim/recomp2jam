@@ -683,6 +683,144 @@ pub fn parse_ojn(bytes: &[u8]) -> Result<OjnChartFile, FileError> {
     }
 }
 
+/// Number of difficulty slices per `.ojn` chart. Every 7.55 chart
+/// carries three concatenated level slices (verified on all 13
+/// new-format files plus the old-format Tutorial.ojn; empty trailing
+/// slices have `data_start == data_end` and zero events).
+/// See `docs/file-formats/ojn.md`.
+pub const OJN_LEVEL_COUNT: usize = 3;
+
+/// Shared `.ojn` header length: slice tables live inside it and level
+/// data starts right after it (`u32` at +284 reads 300 on every file).
+pub const OJN_HEADER_LEN: usize = 300;
+
+/// Header offsets of the per-level event counts (`u32` each).
+const OJN_EVENT_COUNT_OFFS: [usize; OJN_LEVEL_COUNT] = [64, 68, 72];
+/// Header offsets of the per-level slice end offsets (`u32` each).
+const OJN_SLICE_END_OFFS: [usize; OJN_LEVEL_COUNT] = [288, 292, 296];
+/// Header offset of the first slice's start (`u32`).
+const OJN_SLICES_START_OFF: usize = 284;
+/// Byte length of one event head (`u32` tick + `u16` kind + `u16` count).
+const OJN_EVENT_HEAD_LEN: usize = 8;
+/// Byte length of one event payload unit (one `u32` sample/timing value).
+const OJN_EVENT_UNIT_LEN: usize = 4;
+
+/// One difficulty slice of an `.ojn` chart: the event range for a single
+/// level. Header tables locate each slice; the constructor walks the
+/// `8 + count * 4` event framing and only succeeds when the walk lands
+/// exactly on `data_end` with `event_count` events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OjnLevelSlice {
+    /// Difficulty level (0, 1, 2).
+    pub level: usize,
+    /// Event count from the header table (+64/+68/+72).
+    pub event_count: u32,
+    /// Byte offset where this level's events start.
+    pub data_start: usize,
+    /// Byte offset where this level's events end (next slice or images).
+    pub data_end: usize,
+}
+
+fn walk_level_events(
+    plain: &[u8],
+    start: usize,
+    end: usize,
+    event_count: u32,
+) -> Result<(), FileError> {
+    let mut off = start;
+    let mut walked = 0u32;
+    while walked < event_count {
+        let head_end = off
+            .checked_add(OJN_EVENT_HEAD_LEN)
+            .ok_or(FileError::Truncated {
+                need: usize::MAX,
+                have: plain.len(),
+            })?;
+        if head_end > end {
+            return Err(FileError::Truncated {
+                need: head_end,
+                have: end,
+            });
+        }
+        let units = u32::from(read_u16le(plain, off + 6)?) as usize;
+        let payload = units
+            .checked_mul(OJN_EVENT_UNIT_LEN)
+            .ok_or(FileError::Truncated {
+                need: usize::MAX,
+                have: plain.len(),
+            })?;
+        let step = OJN_EVENT_HEAD_LEN
+            .checked_add(payload)
+            .ok_or(FileError::Truncated {
+                need: usize::MAX,
+                have: plain.len(),
+            })?;
+        let next = off.checked_add(step).ok_or(FileError::Truncated {
+            need: usize::MAX,
+            have: plain.len(),
+        })?;
+        if next > end {
+            return Err(FileError::Truncated {
+                need: next,
+                have: end,
+            });
+        }
+        off = next;
+        walked += 1;
+    }
+    if off != end {
+        return Err(FileError::Truncated {
+            need: end,
+            have: off,
+        });
+    }
+    Ok(())
+}
+
+/// Split an `.ojn` chart into its per-level event slices: decrypts
+/// new-format containers, reads the counts at +64/+68/+72 and the slice
+/// ends at +288/+292/+296 (first start at +284), then validates each
+/// slice by walking its events to land exactly on its end.
+/// Verified on all 13 new-format 7.55 files plus Tutorial.ojn, with the
+/// last slice ending exactly on the first embedded JPEG and
+/// file bytes +40/+44/+48 matching `OJNList.dat` +44/+48/+52
+/// (docs/file-formats/ojn.md).
+pub fn parse_ojn_levels(bytes: &[u8]) -> Result<Vec<OjnLevelSlice>, FileError> {
+    let plain = decrypt_ojn_new_format(bytes)?;
+    if plain.len() < OJN_HEADER_LEN {
+        return Err(FileError::TooShort(plain.len()));
+    }
+    match detect_kind(&plain)? {
+        AssetKind::Ojn => {}
+        AssetKind::Ojm | AssetKind::OjnList => {
+            return Err(FileError::UnknownFormat {
+                magic: bytes[..4.min(bytes.len())].to_vec(),
+            });
+        }
+    }
+    let mut start = read_u32le(&plain, OJN_SLICES_START_OFF)? as usize;
+    let mut out = Vec::with_capacity(OJN_LEVEL_COUNT);
+    for level in 0..OJN_LEVEL_COUNT {
+        let end = read_u32le(&plain, OJN_SLICE_END_OFFS[level])? as usize;
+        let event_count = read_u32le(&plain, OJN_EVENT_COUNT_OFFS[level])?;
+        if start < OJN_HEADER_LEN || end < start || end > plain.len() {
+            return Err(FileError::Truncated {
+                need: end,
+                have: plain.len(),
+            });
+        }
+        walk_level_events(&plain, start, end, event_count)?;
+        out.push(OjnLevelSlice {
+            level,
+            event_count,
+            data_start: start,
+            data_end: end,
+        });
+        start = end;
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1065,5 +1203,149 @@ mod tests {
             parse_opi(&countless),
             Err(FileError::Truncated { .. })
         ));
+    }
+
+    fn ojn_event(tick: u32, kind: u16, payload: &[u32]) -> Vec<u8> {
+        let mut event = Vec::with_capacity(8 + payload.len() * 4);
+        event.extend_from_slice(&tick.to_le_bytes());
+        event.extend_from_slice(&kind.to_le_bytes());
+        event.extend_from_slice(&(payload.len() as u16).to_le_bytes());
+        for unit in payload {
+            event.extend_from_slice(&unit.to_le_bytes());
+        }
+        event
+    }
+
+    fn ojn_levels_blob(counts: [u32; OJN_LEVEL_COUNT], slices: &[Vec<u8>]) -> Vec<u8> {
+        let mut blob = vec![0u8; OJN_HEADER_LEN];
+        blob[0..4].copy_from_slice(&757u32.to_le_bytes());
+        blob[4..8].copy_from_slice(b"ojn\0");
+        blob[16..20].copy_from_slice(&124f32.to_le_bytes());
+        blob[OJN_SLICES_START_OFF..OJN_SLICES_START_OFF + 4]
+            .copy_from_slice(&(OJN_HEADER_LEN as u32).to_le_bytes());
+        let mut end = OJN_HEADER_LEN;
+        for (level, slice) in slices.iter().enumerate() {
+            blob[OJN_EVENT_COUNT_OFFS[level]..OJN_EVENT_COUNT_OFFS[level] + 4]
+                .copy_from_slice(&counts[level].to_le_bytes());
+            end += slice.len();
+            blob[OJN_SLICE_END_OFFS[level]..OJN_SLICE_END_OFFS[level] + 4]
+                .copy_from_slice(&(end as u32).to_le_bytes());
+        }
+        for slice in slices {
+            blob.extend_from_slice(slice);
+        }
+        blob
+    }
+
+    #[test]
+    fn ojn_levels_split_three_slices_with_exact_walks() {
+        // Mirrors the verified 7.55 layout: populated slices followed by
+        // an empty trailing slice (Tutorial.ojn levels 1-2 shape).
+        let slices = [
+            [ojn_event(1, 5, &[13, 0]), ojn_event(2, 2, &[3])].concat(),
+            ojn_event(1, 4, &[7]),
+            Vec::new(),
+        ];
+        let blob = ojn_levels_blob([2, 1, 0], &slices);
+        let levels = parse_ojn_levels(&blob).unwrap();
+        assert_eq!(levels.len(), OJN_LEVEL_COUNT);
+        assert_eq!(
+            levels[0],
+            OjnLevelSlice {
+                level: 0,
+                event_count: 2,
+                data_start: OJN_HEADER_LEN,
+                data_end: OJN_HEADER_LEN + slices[0].len(),
+            }
+        );
+        assert_eq!(levels[1].event_count, 1);
+        assert_eq!(levels[1].data_start, levels[0].data_end);
+        assert_eq!(levels[2].event_count, 0);
+        assert_eq!(levels[2].data_start, levels[2].data_end);
+        assert_eq!(levels[2].data_end, blob.len());
+    }
+
+    #[test]
+    fn ojn_levels_reject_count_mismatch() {
+        let slices = [ojn_event(1, 5, &[13]), Vec::new(), Vec::new()];
+        let blob = ojn_levels_blob([2, 0, 0], &slices);
+        assert!(matches!(
+            parse_ojn_levels(&blob),
+            Err(FileError::Truncated { .. })
+        ));
+    }
+
+    #[test]
+    fn ojn_levels_reject_trailing_bytes() {
+        // One event plus four stray bytes: the walk overshoots the
+        // header-declared end.
+        let mut first = ojn_event(1, 5, &[13]);
+        first.extend_from_slice(&[0u8; 4]);
+        let slices = [first, Vec::new(), Vec::new()];
+        let blob = ojn_levels_blob([1, 0, 0], &slices);
+        assert!(matches!(
+            parse_ojn_levels(&blob),
+            Err(FileError::Truncated { .. })
+        ));
+    }
+
+    #[test]
+    fn ojn_levels_reject_bad_input() {
+        assert!(matches!(
+            parse_ojn_levels(b"short"),
+            Err(FileError::TooShort(_))
+        ));
+        let mut bad_magic = ojn_levels_blob([0, 0, 0], &[Vec::new(), Vec::new(), Vec::new()]);
+        bad_magic[4..8].copy_from_slice(b"XXXX");
+        assert!(matches!(
+            parse_ojn_levels(&bad_magic),
+            Err(FileError::UnknownFormat { .. })
+        ));
+        let mut bad_end = ojn_levels_blob([0, 0, 0], &[Vec::new(), Vec::new(), Vec::new()]);
+        bad_end[OJN_SLICE_END_OFFS[0]..OJN_SLICE_END_OFFS[0] + 4]
+            .copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(matches!(
+            parse_ojn_levels(&bad_end),
+            Err(FileError::Truncated { .. })
+        ));
+    }
+
+    #[test]
+    fn ojn_levels_decrypt_new_format_containers() {
+        // Same encoder contract as `ojn_decrypt_round_trip`
+        // (`FUN_00412180`): the level parser decrypts first. Key slots
+        // live in the last seven plaintext bytes, so pad past the final
+        // slice end (the image area in real files) to keep them clear.
+        let mut plain =
+            ojn_levels_blob([1, 0, 0], &[ojn_event(1, 5, &[13]), Vec::new(), Vec::new()]);
+        plain.extend_from_slice(&[0xA5; 64]);
+        let (k1, k2, k3, period) = (0x97u8, 0xE0u8, 0x34u8, 6usize);
+        let mut buf: Vec<u8> = plain
+            .iter()
+            .enumerate()
+            .map(|(i, &b)| {
+                if i.is_multiple_of(period) {
+                    b ^ k1
+                } else if i % period == period / 2 {
+                    b ^ k2
+                } else {
+                    b ^ k3
+                }
+            })
+            .collect();
+        let n = buf.len();
+        buf[n - 7] = k1;
+        buf[n - 6] = k2;
+        buf[n - 5] = k3;
+        buf[n - 4] = period as u8;
+        buf[n - 3] = b'w';
+        buf[n - 2] = b'e';
+        buf[n - 1] = b'n';
+        let encrypted: Vec<u8> = buf.iter().rev().copied().collect();
+        assert!(encrypted.starts_with(b"new"));
+        let levels = parse_ojn_levels(&encrypted).unwrap();
+        assert_eq!(levels.len(), OJN_LEVEL_COUNT);
+        assert_eq!(levels[0].event_count, 1);
+        assert_eq!(levels[2].data_end + 64, plain.len());
     }
 }
