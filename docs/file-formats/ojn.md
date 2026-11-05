@@ -97,6 +97,8 @@ pre-pass `FUN_00570f90` (called right before the parser in the
    suspects: inline transform in the per-difficulty loader body
    `0x56ffa0` itself (dossier in flight) or its unknown callee
    `0x570260`. (Also ruled out: reader, validator, `0x570f90`,
-   single-byte XOR/ADD/SUB, zlib/LZMA, 4-periodic crib key.)
+   single-byte XOR/ADD/SUB, zlib/LZMA, 4-periodic crib key,
+   whole-file plaintext scan — no offset yields even 6 sane events
+   under the `0x571d60` layout, so the body is not plaintext.)
 2. Note event encoding + difficulty slots per file.
 3. Long-note + simultaneous-press encoding.
