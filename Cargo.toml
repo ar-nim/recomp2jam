@@ -18,6 +18,7 @@ authors = ["Arif Rahman Ibrahim <1311330+ar-nim@users.noreply.github.com>"]
 [workspace.dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
+cpal = "0.18"
 lewton = "0.10.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
