@@ -12,6 +12,8 @@ Pick one branch:
 - Game data → local-only under `install-root/` + `extracted/`
   (git-ignored); layout in `docs/install-layout.md`, status in
   `docs/progress.md`.
+- Implementing → invoke `/skill:clean-code` and hold its 10/10:
+  intent-revealing names, small functions, scenario-named tests.
 
 Rules:
 
