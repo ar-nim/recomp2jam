@@ -79,16 +79,21 @@ Signature `(song_id, ?, level 0..2)`. Flow, in own words:
   accumulators, float-rounded per event. Parsed notes land in the
   `+0x42c` / `+0x504` object arrays; holds in a 1000-byte flag table.
 
-OPEN: the file bytes on disk are high-entropy but the parser reads
-plaintext floats — the decrypt sits in the validator `FUN_005718b0`
-(the reader `FUN_00412890`, dossier `ev_ffc5053b…`, is a plain
-open/size/read/close wrapper with no transform). Validator dossier
-in flight.
+Validator `FUN_005718b0` (file offset `0x1718b0`) — dossier `ev_66e60d16…`:
+returns 0 = valid, 1 = invalid. Requires size ≥ 300, `__stricmp(buf+4,
+"ojn") == 0`, `u32(buf+0) == (song_id & 0xfffffff)`, per-level bound
+`< 301`, a float check (`ROUND(x*10 - 0.9) < 27`), then a song-vector
+scan (stride `0x1b4`) matching id + name + level field. (Fast path when
+global id == `0x22b8` = 8888 = Tutorial's song id.) Pure validation +
+table lookup — **no transform**. So the `"new"` decrypt, if any, is
+between file read and parse: prime suspect the per-difficulty
+pre-pass `FUN_00570f90` (called right before the parser in the
+`0x170xxx` loader; dossier in flight).
 
 ## Open questions (in priority order)
 
-1. New-format decrypt: reader `0x412890` or validator? (dossier in
-   flight; crib with the float/`u16` layout above.)
-   old-format field positions; keystream search at the loader branch.)
+1. New-format decrypt: per-difficulty pre-pass `0x570f90`? (dossier in
+   flight; if it is a XOR/stream transform, reimplement + verify by
+   parsing a decrypted `o2ma757.ojn` with the `0x571d60` layout.)
 2. Note event encoding + difficulty slots per file.
 3. Long-note + simultaneous-press encoding.
