@@ -174,12 +174,158 @@ pub fn parse_m30(bytes: &[u8]) -> Result<Vec<OjmSample<'_>>, FileError> {
     Ok(out)
 }
 
-/// Parse the OMC/OJM variants: 16-byte header with the first entry
-/// offset at +12, then 36-byte entries (`name[32] + size`) each
-/// followed by its OGG. Blank (all-zero) entries are skipped. Files
-/// whose entry offset equals the file length (fully encrypted bodies
-/// like `DialogBGM.ojm`) yield zero samples; encrypted bodies and
-/// garbage name fields are left for the decrypt work.
+/// New-variant OMC/OJM table layout, verified against the in-exe
+/// loader (`FUN_0054e930` reads counts at +4/+6 and seeks the offsets
+/// at +8/+12; `FUN_0054eca0` reads `0x38`-byte mode-2 and `0x24`-byte
+/// mode-3 entries) and on real 7.55 files (docs/file-formats/ojm.md).
+/// Sample bytes follow each entry directly (`[entry, data]` chaining).
+const MODE2_ENTRY_LEN: usize = 0x38;
+const MODE3_ENTRY_LEN: usize = 0x24;
+const MODE2_COUNT_OFF: usize = 4;
+const MODE3_COUNT_OFF: usize = 6;
+const MODE2_ENTRIES_OFF: usize = 8;
+const MODE3_ENTRIES_OFF: usize = 12;
+const MODE2_SIZE_OFF: usize = 52;
+const MODE3_SIZE_OFF: usize = 32;
+
+/// One entry of a new-variant OMC/OJM table: name, declared sample
+/// size, and file offset of the (possibly still encrypted) bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OjmEntry {
+    /// Sample name (NUL-trimmed ASCII).
+    pub name: String,
+    /// Declared sample size in bytes.
+    pub size: u32,
+    /// File offset where the sample bytes start.
+    pub data_offset: usize,
+}
+
+/// Both entry tables of a new-variant file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OjmTables {
+    /// Mode-2 entries (`0x38` bytes each, 32-byte names).
+    pub mode2: Vec<OjmEntry>,
+    /// Mode-3 entries (`0x24` bytes each, old 36-byte shape).
+    pub mode3: Vec<OjmEntry>,
+}
+
+fn read_u16le(bytes: &[u8], off: usize) -> Result<u16, FileError> {
+    bytes
+        .get(off..off + 2)
+        .and_then(|w| w.try_into().ok())
+        .map(u16::from_le_bytes)
+        .ok_or(FileError::Truncated {
+            need: off + 2,
+            have: bytes.len(),
+        })
+}
+
+fn walk_entries(
+    bytes: &[u8],
+    mut off: usize,
+    count: usize,
+    entry_len: usize,
+    size_off: usize,
+) -> Result<Vec<OjmEntry>, FileError> {
+    let mut out = Vec::with_capacity(count.min(4096));
+    for _ in 0..count {
+        let end = off.checked_add(entry_len).ok_or(FileError::Truncated {
+            need: usize::MAX,
+            have: bytes.len(),
+        })?;
+        if end > bytes.len() {
+            return Err(FileError::Truncated {
+                need: end,
+                have: bytes.len(),
+            });
+        }
+        let name = read_name(bytes, off)?;
+        let size = read_u32le(bytes, off + size_off)?;
+        let data_offset = end;
+        let next = data_offset
+            .checked_add(size as usize)
+            .ok_or(FileError::Truncated {
+                need: usize::MAX,
+                have: bytes.len(),
+            })?;
+        if next > bytes.len() {
+            return Err(FileError::Truncated {
+                need: next,
+                have: bytes.len(),
+            });
+        }
+        out.push(OjmEntry {
+            name,
+            size,
+            data_offset,
+        });
+        off = next;
+    }
+    Ok(out)
+}
+
+/// Parse the entry tables of a new-variant OMC/OJM file: counts at
+/// +4/+6, table offsets at +8/+12, `[entry, data]` chaining. Sample
+/// bytes are NOT validated (bodies may be encrypted); use
+/// [`not_decrypt`] plus de-interleaving to recover them.
+/// Verified on real 7.55 files (docs/file-formats/ojm.md).
+pub fn parse_new_variant_entries(bytes: &[u8]) -> Result<OjmTables, FileError> {
+    if bytes.len() < 16 {
+        return Err(FileError::TooShort(bytes.len()));
+    }
+    if !bytes.starts_with(b"OMC") && !bytes.starts_with(b"OJM") {
+        return Err(FileError::UnknownFormat {
+            magic: bytes[..4.min(bytes.len())].to_vec(),
+        });
+    }
+    let mode2_count = read_u16le(bytes, MODE2_COUNT_OFF)? as usize;
+    let mode3_count = read_u16le(bytes, MODE3_COUNT_OFF)? as usize;
+    let mode2_off = read_u32le(bytes, MODE2_ENTRIES_OFF)? as usize;
+    let mode3_off = read_u32le(bytes, MODE3_ENTRIES_OFF)? as usize;
+    Ok(OjmTables {
+        mode2: walk_entries(
+            bytes,
+            mode2_off,
+            mode2_count,
+            MODE2_ENTRY_LEN,
+            MODE2_SIZE_OFF,
+        )?,
+        mode3: walk_entries(
+            bytes,
+            mode3_off,
+            mode3_count,
+            MODE3_ENTRY_LEN,
+            MODE3_SIZE_OFF,
+        )?,
+    })
+}
+
+/// In-place bitwise-NOT stream decipher used for encrypted OJM
+/// samples (`FUN_0054f9e0`): each byte is inverted when
+/// `(key1 << key2) & 0x80` is set; `key2` cycles 0..7 and `key1`
+/// tracks the previous ciphertext byte. The loader seeds both from
+/// the stream rewind (`0xFF`, `0x00`).
+/// Verified against real 7.55 bodies (docs/file-formats/ojm.md).
+pub fn not_decrypt(buf: &mut [u8], mut key1: u8, mut key2: u8) {
+    for byte in buf.iter_mut() {
+        let cipher = *byte;
+        if (key1 << key2) & 0x80 != 0 {
+            *byte = !*byte;
+        }
+        if key2 >= 7 {
+            key2 = 0;
+            key1 = cipher;
+        } else {
+            key2 += 1;
+        }
+    }
+}
+/// Parse the old-variant OMC/OJM tables: 16-byte header with the
+/// first entry offset at +12, then 36-byte entries (`name[32] +
+/// size`) each followed by its OGG. Blank (all-zero) entries are
+/// skipped. New-variant files (counts at +4/+6, `0x38`-byte
+/// entries) need [`parse_new_variant_entries`] instead: their bodies
+/// may be encrypted, so no OGG check applies here.
 /// Verified byte-exact on real 7.55 files (docs/file-formats/ojm.md).
 pub fn parse_omc(bytes: &[u8]) -> Result<Vec<OjmSample<'_>>, FileError> {
     if bytes.len() < 16 {
@@ -674,5 +820,94 @@ mod tests {
             parse_ojn(b"M30\x00...."),
             Err(FileError::UnknownFormat { .. })
         ));
+    }
+
+    fn mode2_entry(name: &[u8], size: u32) -> Vec<u8> {
+        let mut entry = vec![0u8; MODE2_ENTRY_LEN];
+        entry[..name.len()].copy_from_slice(name);
+        entry[MODE2_SIZE_OFF..MODE2_SIZE_OFF + 4].copy_from_slice(&size.to_le_bytes());
+        entry
+    }
+
+    fn mode3_entry(name: &[u8], size: u32) -> Vec<u8> {
+        let mut entry = vec![0u8; MODE3_ENTRY_LEN];
+        entry[..name.len()].copy_from_slice(name);
+        entry[MODE3_SIZE_OFF..MODE3_SIZE_OFF + 4].copy_from_slice(&size.to_le_bytes());
+        entry
+    }
+
+    fn new_variant_blob() -> Vec<u8> {
+        let mut blob = vec![0u8; 20];
+        blob[..4].copy_from_slice(b"OMC\0");
+        blob[MODE2_COUNT_OFF..MODE2_COUNT_OFF + 2].copy_from_slice(&1u16.to_le_bytes());
+        blob[MODE3_COUNT_OFF..MODE3_COUNT_OFF + 2].copy_from_slice(&1u16.to_le_bytes());
+        blob[MODE2_ENTRIES_OFF..MODE2_ENTRIES_OFF + 4].copy_from_slice(&20u32.to_le_bytes());
+        let mode3_off = 20 + MODE2_ENTRY_LEN + 16;
+        blob[MODE3_ENTRIES_OFF..MODE3_ENTRIES_OFF + 4]
+            .copy_from_slice(&(mode3_off as u32).to_le_bytes());
+        blob.extend_from_slice(&mode2_entry(b"s1", 16));
+        blob.extend_from_slice(&[0xAA; 16]);
+        blob.extend_from_slice(&mode3_entry(b"s2", 8));
+        blob.extend_from_slice(&[0xBB; 8]);
+        blob
+    }
+
+    #[test]
+    fn new_variant_entries_walk_chained_layout() {
+        let blob = new_variant_blob();
+        let tables = parse_new_variant_entries(&blob).unwrap();
+        assert_eq!(tables.mode2.len(), 1);
+        assert_eq!(tables.mode2[0].name, "s1");
+        assert_eq!(tables.mode2[0].size, 16);
+        assert_eq!(
+            &blob[tables.mode2[0].data_offset..tables.mode2[0].data_offset + 16],
+            &[0xAA; 16]
+        );
+        assert_eq!(tables.mode3.len(), 1);
+        assert_eq!(tables.mode3[0].name, "s2");
+        assert_eq!(tables.mode3[0].size, 8);
+        assert_eq!(
+            &blob[tables.mode3[0].data_offset..tables.mode3[0].data_offset + 8],
+            &[0xBB; 8]
+        );
+    }
+
+    #[test]
+    fn new_variant_entries_reject_bad_input() {
+        assert!(matches!(
+            parse_new_variant_entries(b"short"),
+            Err(FileError::TooShort(_))
+        ));
+        let mut blob = new_variant_blob();
+        blob[..4].copy_from_slice(b"M30\0");
+        assert!(matches!(
+            parse_new_variant_entries(&blob),
+            Err(FileError::UnknownFormat { .. })
+        ));
+        let truncated = &new_variant_blob()[..32];
+        assert!(matches!(
+            parse_new_variant_entries(truncated),
+            Err(FileError::Truncated { .. })
+        ));
+    }
+
+    #[test]
+    fn not_decrypt_flips_flagged_bytes() {
+        // Hand-traced against `FUN_0054f9e0`: (0xFF << 0..2) & 0x80
+        // is set, so every byte inverts; key1 stays 0xFF (no reset
+        // before key2 reaches 7).
+        let mut buf = [0x41, 0x42, 0x43];
+        not_decrypt(&mut buf, 0xFF, 0);
+        assert_eq!(buf, [0xBE, 0xBD, 0xBC]);
+    }
+
+    #[test]
+    fn not_decrypt_resets_key_schedule_every_eight_bytes() {
+        // Eight 0x00 bytes flip (key1 0xFF, key2 0..7); at key2 == 7
+        // the schedule resets to key1 = last ciphertext (0x00), so
+        // the ninth byte is left alone.
+        let mut buf = [0x00; 9];
+        not_decrypt(&mut buf, 0xFF, 0);
+        assert_eq!(buf, [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00]);
     }
 }

@@ -23,6 +23,7 @@ All versions are **7.55** unless noted. Update one row per finding.
 |---|---|---|---|
 | OJM parse (M30) | inline 52B entries + raw OGG | ✅ implemented + tested (`parse_m30`, 25-stream real-file check) | needs golden hash test |
 | OJM parse (OMC) | 36B entries + raw OGG | ✅ implemented + tested (`parse_omc`, 7-stream real-file check) | needs golden hash test |
+| OJM parse (new-variant) | counts+offsets header, `0x38`/`0x24`B entries, 17-way + NOT | ✅ entries + NOT implemented + tested (`parse_new_variant_entries`, `not_decrypt`; bgEffect s0 0.97) | DialogBGM odd-stripe puzzle TBD |
 | OJN parse (old `"ojn"`) | ~300B header + blocks | header map + 43-event walk verified | per-level ranges TODO |
 | OJN parse (new `"new"`) | reverse + 3-key XOR (period stride) | ✅ decrypted (757: magic/id/BPM/580 events) + `decrypt_ojn_new_format` tested | per-level segmentation TODO |
 | Vorbis decode | libvorbis | `lewton` helper | PCM compare TODO |

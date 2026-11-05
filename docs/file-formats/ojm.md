@@ -54,9 +54,11 @@ Sample IDs (M30) drive chart mapping: drum hits `0–12`
 (`SYNPC_Crash_01`, `SYNPC_Kick_021`, `Tom1–5`, `[WAV040]stick`…),
 music tracks `980–991` (`[WAV980]mr1` … `[WAV991]mr12`).
 
-OPEN: the encrypted bodies (all of DialogBGM/O2PlanetNPC, heads of
-bgEffect/Planet/Tutorial) and Event's garbage name field — the
-in-exe OJM loader is now mapped (see below).
+OPEN: new-variant encrypted bodies — loader mapped below;
+`parse_new_variant_entries` + `not_decrypt` implemented, full
+body recovery verified on bgEffect s0, DialogBGM odd-stripe
+puzzle TBD. O2PlanetNPC is plain PCM (`OJM` magic → flags 0).
+Event's garbage name field still unexplained.
 
 ## In-exe OJM loader — MAPPED (addrs VA; `ev_1601a757…`)
 
@@ -65,8 +67,12 @@ in-exe OJM loader is now mapped (see below).
   float version arg (`(int)(v+0.01)<<16 | (int)(frac(v+0.01)*10)`).
 - Init `0x54e930`: M30 reads `0x1c` B at obj+`0x108`; OMC reads
   `0x14` B at +`0x168`, count = words at +`0x16c`/`0x16e`.
-  Flag bits at +`0x110`: `|1` if desc ≥ `0x20006`, `|2` if ≥
-  `0x20008`, `|4` if ≥ `0x20005`.
+  Flag bits at +`0x110`: `|2` if desc ≥ `0x20008` (17-way),
+  else `|1` if ≥ `0x20006` (16-way) — the `|2` arm jumps over
+  the `|1` check; `|4` if ≥ `0x20005` (bitwise-NOT). So
+  OMC-via-lobby (`0x20009`) = 17-way + NOT; OJM (`0x20000`)
+  and low versions = plain reads. (`0x8` mirror / `0x10` XOR
+  bits have no writers in 7.55 — vestigial.)
 - Entry fetcher `0x54eca0` (all plain `0x412620` reads): mode 1 =
   `0x34` B entries (M30), mode 2 = `0x38` B then `memcpy 0x20`,
   mode 3 = `0x24` B entries then `memcpy 0x20`.
@@ -79,9 +85,17 @@ in-exe OJM loader is now mapped (see below).
   `0x27f3d0` are exact permutations (remainder-selected rows).
   Mode-1 samples force NOT keys (`0xFF`,`0x00`).
 
-OPEN: NOT-key source (`+0x164`/`+0x165`) for mode-2/3 samples,
-order of interleave vs NOT on real bodies, new-variant entry-table
-location (DialogBGM `first==filesize`), and whether `0x8`/`0x10`
-bits ever set in 7.55 (no writer found — possibly vestigial).
-Dossiers `rea-samplefetch.json` (`ev_1601a757…`) banked;
-`0x54f580` dossier failed on snapshot contention — retry next.
+OPEN: NOT-key source is settled (forced `(0xFF,0x00)` at rewind
+for OMC, `+0x164`/`+0x165`; keys chain across samples). New-variant
+table layout VERIFIED and implemented in o2jam-file
+(`parse_new_variant_entries`, `not_decrypt`): counts u16 at +4/+6,
+table offsets u32 at +8/+12, mode-2 entries `0x38` B (32-B name +
+params, size u32 at +52), mode-3 entries `0x24` B (old 36-B shape),
+`[entry, data]` chaining per sample (bgEffect's `SampleSong.ogg`
+mode-3 entry at its +12 offset confirms the model). 17-way + NOT
+recovers bgEffect sample 0 cleanly (0.97 adjacent-sample
+correlation). Remaining: DialogBGM's 13 MB single sample decodes
+with even plain-stripes clean and odd stripes noise-like under the
+same chain — per-stripe/per-row/order/transpose variants ruled
+out; cause TBD. Dossiers `rea-samplefetch.json` (`ev_1601a757…`)
++ dispatch (`ev_fdb31596…`) banked.
