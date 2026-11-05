@@ -3,11 +3,29 @@
 > Rule: document behavior in your own words. Never paste disassembly or
 > decompiled original code into this repo.
 
-## 0. Prepare a clean VM
+## 0. Extract with Wine (no VM)
 
-1. Snapshot a Windows XP/7 x86 VM (era-appropriate for MSVC 2005 + DX9).
-2. Install `O2Jam_Classic.exe` (140,350,480 bytes, InstallShield 11.5).
-3. Snapshot again post-install. All RE reads from the installed tree.
+Use a dedicated prefix so the installer never touches your main `~/.wine`.
+All output paths below are git-ignored — hashes and notes go into
+`docs/progress.md`, never the extracted files themselves.
+
+```sh
+sudo pacman -S unshield   # InstallShield CAB extractor (Arch `extra`)
+
+# Option A — inspect/list embedded cabinets without installing:
+unshield -L O2Jam_Classic.exe   # if it reads the wrapper; else extract cabs first
+
+# Option B — run the installer into an isolated prefix:
+WINEPREFIX="$PWD/.wine-o2jam" wine O2Jam_Classic.exe
+# installed tree lands under .wine-o2jam/drive_c/... (ignored)
+
+# Option C — admin/extract-only (dumps files without registry churn):
+WINEPREFIX="$PWD/.wine-o2jam" wine O2Jam_Classic.exe /a
+```
+
+Tip: plain `.cab` files unpack with `7z x data1.cab` once they are out
+of the setup wrapper; `unshield x data1.cab` preserves InstallShield
+components/groups. Record which method you used in your RE notes.
 
 ## 1. Inventory (fill `docs/progress.md`)
 

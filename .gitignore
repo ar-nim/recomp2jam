@@ -29,6 +29,27 @@ NowSmartLauncher*.exe
 assets/original/
 fixtures/original/
 
+# Wine-based extraction workflow (no VM)
+# Dedicated prefix + everything the installer produces stays local.
+.wine-*/
+wineprefix*/
+**/drive_c/
+extracted/
+installer-out/
+game-data/
+original/
+install-root/
+dumps/
+*.cab
+*.hdr
+*data1.*
+Setup.ilg
+setup.ilg
+ikernel.ex_
+_ISDEL.EXE
+_ISMP*/
+_ISTMP*/
+
 # Editors / OS
 .vscode/*
 !.vscode/extensions.json
