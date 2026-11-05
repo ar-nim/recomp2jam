@@ -21,6 +21,11 @@ enum Command {
         /// File to inspect.
         file: PathBuf,
     },
+    /// List sample streams in an `.ojm` container (M30/OMC).
+    Samples {
+        /// Container file to inspect.
+        file: PathBuf,
+    },
     /// Hexdump the first N bytes (default 64).
     Hex {
         /// File to inspect.
@@ -40,6 +45,24 @@ fn main() -> Result<()> {
             match o2jam_file::detect_kind(&bytes) {
                 Ok(kind) => println!("{}: {kind:?}", file.display()),
                 Err(e) => println!("{}: unrecognised ({e})", file.display()),
+            }
+        }
+        Command::Samples { file } => {
+            let bytes =
+                std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let samples = o2jam_file::parse_ojm(&bytes)?;
+            println!("{}: {} samples", file.display(), samples.len());
+            for s in &samples {
+                println!(
+                    "  id={:>5} {:>9}B {}",
+                    if s.sample_id == u32::MAX {
+                        "-".to_string()
+                    } else {
+                        s.sample_id.to_string()
+                    },
+                    s.data.len(),
+                    s.name
+                );
             }
         }
         Command::Hex { file, len } => {

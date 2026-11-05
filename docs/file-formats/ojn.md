@@ -72,9 +72,10 @@ Signature `(song_id, ?, level 0..2)`. Flow, in own words:
   `+0x42c` / `+0x504` object arrays; holds in a 1000-byte flag table.
 
 OPEN: the file bytes on disk are high-entropy but the parser reads
-plaintext floats — so a decrypt step sits in the reader
-(`FUN_00412890`, dossier pending) or the validator. That function is
-the last unknown in the OJN chain.
+plaintext floats — the decrypt sits in the validator `FUN_005718b0`
+(the reader `FUN_00412890`, dossier `ev_ffc5053b…`, is a plain
+open/size/read/close wrapper with no transform). Validator dossier
+in flight.
 
 ## Open questions (in priority order)
 
