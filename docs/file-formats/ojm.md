@@ -55,6 +55,33 @@ Sample IDs (M30) drive chart mapping: drum hits `0–12`
 music tracks `980–991` (`[WAV980]mr1` … `[WAV991]mr12`).
 
 OPEN: the encrypted bodies (all of DialogBGM/O2PlanetNPC, heads of
-bgEffect/Planet/Tutorial) and Event's garbage name field — same
-unknown transform family as the `"new"` `.ojn` headers; the in-exe
-OJM loader is the next REA target after the OJN decrypt.
+bgEffect/Planet/Tutorial) and Event's garbage name field — the
+in-exe OJM loader is now mapped (see below).
+
+## In-exe OJM loader — MAPPED (addrs VA; `ev_1601a757…`)
+
+- Sniffer `0x54e7c0`: memcmp magic vs `M30`→`0x30000` else
+  `OMC`→`0x20000+minor` / `OJM`→`0x20000+minor`, minor from a
+  float version arg (`(int)(v+0.01)<<16 | (int)(frac(v+0.01)*10)`).
+- Init `0x54e930`: M30 reads `0x1c` B at obj+`0x108`; OMC reads
+  `0x14` B at +`0x168`, count = words at +`0x16c`/`0x16e`.
+  Flag bits at +`0x110`: `|1` if desc ≥ `0x20006`, `|2` if ≥
+  `0x20008`, `|4` if ≥ `0x20005`.
+- Entry fetcher `0x54eca0` (all plain `0x412620` reads): mode 1 =
+  `0x34` B entries (M30), mode 2 = `0x38` B then `memcpy 0x20`,
+  mode 3 = `0x24` B entries then `memcpy 0x20`.
+- Sample dispatch `0x54f580`: flags `&1` → 16-way de-interleave
+  `0x54f860`, `&2` → 17-way `0x54f920`, else plain read; then for
+  any mode, `&4` → bitwise-NOT stream `0x54f9e0`, `&8` →
+  byte-mirror S-box `0x54fa70` (table at file `0x27f618`, self-inverse
+  bit-reversal), `&0x10` → u32-XOR `0x54fac0` with key `"nami"`
+  (`0x24ce1c`). 16/17-way interleave tables at file `0x27f1d0` /
+  `0x27f3d0` are exact permutations (remainder-selected rows).
+  Mode-1 samples force NOT keys (`0xFF`,`0x00`).
+
+OPEN: NOT-key source (`+0x164`/`+0x165`) for mode-2/3 samples,
+order of interleave vs NOT on real bodies, new-variant entry-table
+location (DialogBGM `first==filesize`), and whether `0x8`/`0x10`
+bits ever set in 7.55 (no writer found — possibly vestigial).
+Dossiers `rea-samplefetch.json` (`ev_1601a757…`) banked;
+`0x54f580` dossier failed on snapshot contention — retry next.
