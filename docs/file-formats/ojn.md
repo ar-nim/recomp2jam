@@ -46,7 +46,15 @@ title, artist, level tag and `o2ma###.ojm` filename (e.g. `<Bach Alive` /
 so the `562` count's exact semantics (playable filter? region subset?) is
 TBD — next probe. Per-record numeric fields (BPM? levels? ids) still need
 a field map; use record 437 (song 757, whose `.ojn` we also have) as the
-Rosetta stone.
+Rosetta stone. First decode of record 437 (offsets in-record):
+`@4 id=757`, `@8 "ojn"`, `@20 f32 BPM=124.0`, `@24 `0x50003``
+(level flags?), `@32…` note counts per difficulty
+(`3594/3679/3700`, then `312/401/505`, `69/69/…`), `@112` Korean
+title + `" (O2 Ver.)[3K]"`, `@176–193` Korean artist + `"Penny)"`,
+`@208 "NoteFactory"`, `@240 "o2ma757.ojm"`, tail has `129/129/129`
+(per-difficulty levels? TBD), `300` (= record size) and two unknown
+u32s. Cross-song check: song 770 reads BPM `168.0`, song 860 `103.0` —
+the BPM field hypothesis holds.
 
 ## Chart parser `FUN_00571d60` (file offset `0x171d60`) — REA dossier `ev_c0325c85…`
 
