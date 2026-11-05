@@ -488,6 +488,79 @@ pub fn not_decrypt(buf: &mut [u8], mut key1: u8, mut key2: u8) {
         }
     }
 }
+/// De-interleave map, row-selected by `size % 16`.
+/// Copied from the game executable (file offsets 0x27f1d0..+512) as
+/// functional data required for interop; see docs/file-formats/ojm.md.
+const DEINTERLEAVE_16: [[u16; 16]; 16] = [
+    [14, 2, 9, 4, 0, 7, 1, 6, 8, 15, 10, 5, 12, 3, 13, 11], // row 0
+    [7, 2, 10, 11, 3, 5, 13, 8, 4, 0, 12, 6, 15, 14, 1, 9], // row 1
+    [12, 13, 3, 0, 6, 9, 10, 1, 7, 8, 2, 11, 14, 4, 15, 5], // row 2
+    [8, 3, 4, 13, 6, 5, 11, 2, 12, 7, 9, 10, 15, 14, 0, 1], // row 3
+    [15, 2, 12, 13, 0, 4, 1, 5, 7, 3, 9, 6, 11, 10, 8, 14], // row 4
+    [0, 4, 11, 15, 13, 12, 6, 5, 7, 1, 2, 3, 8, 9, 10, 14], // row 5
+    [3, 8, 7, 6, 9, 14, 13, 0, 10, 11, 4, 5, 12, 2, 1, 15], // row 6
+    [4, 14, 15, 5, 8, 7, 11, 0, 1, 6, 2, 12, 9, 3, 10, 13], // row 7
+    [6, 13, 14, 7, 10, 11, 0, 1, 12, 15, 2, 3, 8, 9, 4, 5], // row 8
+    [10, 12, 0, 8, 9, 13, 3, 4, 5, 14, 15, 1, 2, 11, 6, 7], // row 9
+    [5, 6, 12, 4, 13, 15, 7, 14, 8, 1, 9, 2, 10, 11, 0, 3], // row 10
+    [11, 15, 4, 14, 3, 1, 0, 2, 13, 12, 6, 7, 5, 9, 8, 10], // row 11
+    [3, 2, 1, 0, 4, 12, 13, 11, 5, 6, 15, 14, 7, 9, 10, 8], // row 12
+    [9, 10, 0, 7, 8, 6, 3, 4, 1, 2, 5, 11, 14, 15, 13, 12], // row 13
+    [10, 6, 9, 12, 11, 7, 8, 0, 15, 3, 1, 2, 5, 13, 14, 4], // row 14
+    [13, 0, 1, 14, 2, 3, 8, 11, 7, 12, 9, 5, 10, 15, 4, 6], // row 15
+];
+
+/// De-interleave map, row-selected by `size % 17`.
+/// Copied from the game executable (file offsets 0x27f3d0..+578) as
+/// functional data required for interop; see docs/file-formats/ojm.md.
+const DEINTERLEAVE_17: [[u16; 17]; 17] = [
+    [16, 14, 2, 9, 4, 0, 7, 1, 6, 8, 15, 10, 5, 12, 3, 13, 11], // row 0
+    [7, 2, 10, 11, 3, 5, 13, 8, 4, 0, 12, 6, 15, 14, 16, 1, 9], // row 1
+    [12, 13, 3, 0, 6, 9, 10, 1, 7, 8, 16, 2, 11, 14, 4, 15, 5], // row 2
+    [8, 3, 4, 13, 6, 5, 11, 16, 2, 12, 7, 9, 10, 15, 14, 0, 1], // row 3
+    [15, 2, 12, 13, 0, 4, 1, 5, 7, 3, 9, 16, 6, 11, 10, 8, 14], // row 4
+    [0, 4, 11, 16, 15, 13, 12, 6, 5, 7, 1, 2, 3, 8, 9, 10, 14], // row 5
+    [3, 16, 8, 7, 6, 9, 14, 13, 0, 10, 11, 4, 5, 12, 2, 1, 15], // row 6
+    [4, 14, 16, 15, 5, 8, 7, 11, 0, 1, 6, 2, 12, 9, 3, 10, 13], // row 7
+    [6, 13, 14, 7, 16, 10, 11, 0, 1, 12, 15, 2, 3, 8, 9, 4, 5], // row 8
+    [10, 12, 0, 8, 9, 13, 3, 4, 5, 16, 14, 15, 1, 2, 11, 6, 7], // row 9
+    [5, 6, 12, 4, 13, 15, 7, 14, 8, 1, 9, 2, 16, 10, 11, 0, 3], // row 10
+    [11, 15, 4, 14, 3, 1, 0, 2, 13, 12, 6, 7, 5, 16, 9, 8, 10], // row 11
+    [3, 2, 1, 0, 4, 12, 13, 11, 16, 5, 6, 15, 14, 7, 9, 10, 8], // row 12
+    [9, 10, 0, 7, 8, 6, 16, 3, 4, 1, 2, 5, 11, 14, 15, 13, 12], // row 13
+    [10, 6, 9, 12, 11, 16, 7, 8, 0, 15, 3, 1, 2, 5, 13, 14, 4], // row 14
+    [13, 0, 1, 14, 2, 3, 8, 11, 7, 12, 9, 5, 10, 15, 4, 6, 16], // row 15
+    [1, 14, 2, 3, 13, 11, 7, 0, 8, 12, 9, 6, 15, 16, 5, 10, 4], // row 16
+];
+
+/// Scatter de-interleave for encrypted OJM samples (`FUN_0054f860`
+/// 16-way, `FUN_0054f920` 17-way): the file holds `lanes` stripes of
+/// `size / lanes` bytes plus a `size % lanes` tail; stripe `i` lands at
+/// plain offset `row[size % lanes][i]`. Only the two lane counts the
+/// loader implements are accepted.
+/// Verified on real 7.55 bodies (docs/file-formats/ojm.md).
+pub fn deinterleave_stripes(data: &[u8], lanes: usize) -> Result<Vec<u8>, FileError> {
+    let size = data.len();
+    let row: &[u16] = match lanes {
+        16 => &DEINTERLEAVE_16[size % 16],
+        17 => &DEINTERLEAVE_17[size % 17],
+        _ => {
+            return Err(FileError::UnknownFormat {
+                magic: data[..4.min(size)].to_vec(),
+            });
+        }
+    };
+    let quotient = size / lanes;
+    let mut out = vec![0u8; size];
+    for (stripe, slot) in row.iter().enumerate() {
+        let from = stripe * quotient;
+        let to = *slot as usize * quotient;
+        out[to..to + quotient].copy_from_slice(&data[from..from + quotient]);
+    }
+    out[lanes * quotient..].copy_from_slice(&data[lanes * quotient..]);
+    Ok(out)
+}
+
 /// Parse the old-variant OMC/OJM tables: 16-byte header with the
 /// first entry offset at +12, then 36-byte entries (`name[32] +
 /// size`) each followed by its OGG. Blank (all-zero) entries are
@@ -3000,6 +3073,44 @@ mod tests {
         assert!(matches!(
             parse_ojn_level_events(&blob, 3),
             Err(FileError::Truncated { .. })
+        ));
+    }
+
+    fn interleave_stripes(plain: &[u8], lanes: usize) -> Vec<u8> {
+        let size = plain.len();
+        let quotient = size / lanes;
+        let row: &[u16] = match lanes {
+            16 => &DEINTERLEAVE_16[size % 16],
+            _ => &DEINTERLEAVE_17[size % 17],
+        };
+        let mut out = vec![0u8; size];
+        for (stripe, slot) in row.iter().enumerate() {
+            let from = *slot as usize * quotient;
+            let to = stripe * quotient;
+            out[to..to + quotient].copy_from_slice(&plain[from..from + quotient]);
+        }
+        out[lanes * quotient..].copy_from_slice(&plain[lanes * quotient..]);
+        out
+    }
+
+    #[test]
+    fn deinterleave_round_trips_synthetic_layouts() {
+        for lanes in [16, 17] {
+            for extra in [0, 3, 19] {
+                let size = lanes * 64 + extra;
+                let plain: Vec<u8> = (0..size).map(|i| (i * 7 + 1) as u8).collect();
+                let encoded = interleave_stripes(&plain, lanes);
+                assert_ne!(encoded, plain);
+                assert_eq!(deinterleave_stripes(&encoded, lanes).unwrap(), plain);
+            }
+        }
+    }
+
+    #[test]
+    fn deinterleave_rejects_unknown_lane_counts() {
+        assert!(matches!(
+            deinterleave_stripes(&[0u8; 32], 8),
+            Err(FileError::UnknownFormat { .. })
         ));
     }
 }

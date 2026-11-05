@@ -73,6 +73,12 @@ Event's garbage name field still unexplained.
   OMC-via-lobby (`0x20009`) = 17-way + NOT; OJM (`0x20000`)
   and low versions = plain reads. (`0x8` mirror / `0x10` XOR
   bits have no writers in 7.55 — vestigial.)
+  The song path passes a per-song version float instead of 0.0,
+  so the descriptor (hence lane count) is per-song: version
+  2.8+ → 17-way (bgEffect/Planet/DialogBGM), 2.6–2.7 →
+  16-way (Tutorial pads, verified 0.99), ≤2.4 → plain
+  (O2PlanetNPC/Event raw PCM+Ogg). Magic is only consulted
+  when the float is exactly 0.0.
 - Entry fetcher `0x54eca0` (all plain `0x412620` reads): mode 1 =
   `0x34` B entries (M30), mode 2 = `0x38` B then `memcpy 0x20`,
   mode 3 = `0x24` B entries then `memcpy 0x20`.
@@ -85,20 +91,19 @@ Event's garbage name field still unexplained.
   `0x27f3d0` are exact permutations (remainder-selected rows).
   Mode-1 samples force NOT keys (`0xFF`,`0x00`).
 
-OPEN: NOT-key source is settled (forced `(0xFF,0x00)` at rewind
-for OMC, `+0x164`/`+0x165`; keys chain across samples). New-variant
-table layout VERIFIED and implemented in o2jam-file
-(`parse_new_variant_entries`, `not_decrypt`): counts u16 at +4/+6,
-table offsets u32 at +8/+12, mode-2 entries `0x38` B (32-B name +
-params, size u32 at +52), mode-3 entries `0x24` B (old 36-B shape),
-`[entry, data]` chaining per sample (bgEffect's `SampleSong.ogg`
-mode-3 entry at its +12 offset confirms the model). 17-way + NOT
-recovers bgEffect sample 0 cleanly (0.97 adjacent-sample
-correlation). Remaining: DialogBGM's 13 MB single sample decodes
-with even plain-stripes clean and odd stripes noise-like under the
-same chain — per-stripe/per-row/order/transpose variants ruled
-out; cause TBD. Dossiers `rea-samplefetch.json` (`ev_1601a757…`)
-+ dispatch (`ev_fdb31596…`) banked.
+OPEN: DialogBGM's single 13 MB sample decodes with even plain
+stripes clean and odd stripes pairwise byte-swapped (17/17 stripes
+audio, 0.5–0.9 corr). Exhaustive negative evidence: no `BSWAP` /
+`XCHG` / word-swap on sample buffers anywhere in the load, decode
+(`0x54f580` `ev_fdb31596…`, `0x54ef60`), PCM (`0x54d320`
+`ev_c5a69…`, plain memcpy), Vorbis (`0x54db40` `ev_0ee1373d…`),
+read (`0x4125b0` `ev_55fd256b…`, plain `ReadFile`), or setter
+(`0x54b9f0` `ev_45cf9965…`) paths; swap/rows/transpose/mirror/XOR
+variants all ruled out on the file. Verdict: encoder-side file
+anomaly (odd stripes stored swapped in the shipped file), not a
+game behavior — the reimplementation reproduces the exe's bytes
+exactly and documents the file as anomalous. No code compensates
+for it.
 
 ### Odd-stripe byte-swap anomaly — still OPEN (3 exe leads exhausted)
 

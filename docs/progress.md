@@ -23,7 +23,7 @@ All versions are **7.55** unless noted. Update one row per finding.
 |---|---|---|---|
 | OJM parse (M30) | inline 52B entries + raw OGG | ✅ implemented + tested (`parse_m30`, 25-stream real-file check) | needs golden hash test |
 | OJM parse (OMC) | 36B entries + raw OGG | ✅ implemented + tested (`parse_omc`, 7-stream real-file check) | needs golden hash test |
-| OJM parse (new-variant) | counts+offsets header, `0x38`/`0x24`B entries, 17-way + NOT | ✅ entries + NOT implemented + tested (`parse_new_variant_entries`, `not_decrypt`; bgEffect s0 0.97) | DialogBGM odd-stripe puzzle TBD |
+| OJM parse (new-variant) | counts+offsets header, `0x38`/`0x24`B entries, 17-way + NOT | ✅ entries + NOT + deinterleave implemented + tested (`parse_new_variant_entries`, `not_decrypt`, `deinterleave_stripes`; bgEffect s0 0.97, Tutorial pads 0.99) | DialogBGM odd-stripe swap = encoder-side file anomaly (no in-exe cause; documented, uncompensated) |
 | OPI/OPA parse | 16B header + trailing 152B-entry table | ✅ implemented + tested (`parse_opi(_slots)`; 1587/627/7133 real-file counts, 9/6/16 free) | inner formats mapped: CP949 text, sprite-55 + strided combo variant, .bnd rects, ControlList↔rect relation (38/38 Interface); TBD: outlier pixel codecs, .oja frame data, Playing rect subset |
 | OJN parse (old `"ojn"`) | ~300B header + blocks | header map + 43-event walk verified | per-level ranges TODO |
 | OJN parse (new `"new"`) | reverse + 3-key XOR (period stride) | ✅ decrypted (757: magic/id/BPM/580 events) + `decrypt_ojn_new_format` tested | ✅ per-level segmentation mapped + implemented (`parse_ojn_levels`; 14/14 walks land exact, OJNList +40-group cross-check 13/13) |
