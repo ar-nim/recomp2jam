@@ -12,6 +12,78 @@ pub use chart::{
     build_level_chart, BackingNote, LevelChart, MeterChange, TempoChange, TempoMap, TimedHit,
 };
 
+/// One triggered sound: a lane hit or a backing note whose onset
+/// time has been reached by the song clock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Strike {
+    /// Lane for playable hits; `None` for backing tracks.
+    pub lane: Option<Lane>,
+    /// Key-sound sample id to play.
+    pub sample_id: u32,
+    /// Onset time in ms from song start.
+    pub at_ms: u64,
+}
+
+/// Autoplay scheduler: turns a [`LevelChart`] into clock-ordered
+/// sound triggers. Pure logic — the player maps `sample_id` to
+/// decoded PCM and feeds its audio backend.
+#[derive(Debug, Default)]
+pub struct Sequencer {
+    pending: std::collections::VecDeque<Strike>,
+}
+
+impl Sequencer {
+    /// Load every hit and backing onset, sorted by time.
+    #[must_use]
+    pub fn new(chart: &LevelChart) -> Self {
+        let mut pending: Vec<Strike> = chart
+            .hits
+            .iter()
+            .map(|hit| Strike {
+                lane: Some(hit.lane),
+                sample_id: hit.sample_id,
+                at_ms: chart.tempo.ms_at_tick(hit.tick),
+            })
+            .chain(chart.backing.iter().map(|note| Strike {
+                lane: None,
+                sample_id: note.sample_id,
+                at_ms: chart.tempo.ms_at_tick(note.tick),
+            }))
+            .collect();
+        pending.sort_by_key(|strike| strike.at_ms);
+        Self {
+            pending: pending.into(),
+        }
+    }
+
+    /// Remaining scheduled triggers.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.pending.len()
+    }
+
+    /// Whether every trigger has fired.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.pending.is_empty()
+    }
+
+    /// Drain every trigger with `at_ms <= now_ms`, in time order.
+    pub fn pop_due(&mut self, now_ms: u64) -> Vec<Strike> {
+        let mut due = Vec::new();
+        while self
+            .pending
+            .front()
+            .is_some_and(|next| next.at_ms <= now_ms)
+        {
+            if let Some(strike) = self.pending.pop_front() {
+                due.push(strike);
+            }
+        }
+        due
+    }
+}
+
 /// A lane index for 7-key play (0..7).
 pub type Lane = u8;
 
@@ -241,5 +313,55 @@ mod tests {
         let c = SongClock::start();
         std::thread::sleep(Duration::from_millis(5));
         assert!(c.now_ms() < 10_000);
+    }
+
+    fn chart_two_hits_one_backing() -> LevelChart {
+        let tempo = TempoMap {
+            base_bpm: 120.0,
+            changes: Vec::new(),
+            meters: Vec::new(),
+        };
+        LevelChart {
+            hits: vec![
+                TimedHit {
+                    lane: 3,
+                    tick: 192,
+                    sample_id: 7,
+                    flags: 0,
+                },
+                TimedHit {
+                    lane: 0,
+                    tick: 0,
+                    sample_id: 3,
+                    flags: 0,
+                },
+            ],
+            backing: vec![BackingNote {
+                tick: 96,
+                sample_id: 9,
+                flags: 0,
+            }],
+            tempo,
+        }
+    }
+
+    #[test]
+    fn sequencer_fires_in_time_order() {
+        let mut seq = Sequencer::new(&chart_two_hits_one_backing());
+        assert_eq!(seq.len(), 3);
+        let due = seq.pop_due(0);
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].lane, Some(0));
+        assert_eq!(due[0].at_ms, 0);
+        let due = seq.pop_due(999);
+        assert!(due.is_empty());
+        let due = seq.pop_due(1000);
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].lane, None);
+        assert_eq!(due[0].sample_id, 9);
+        let due = seq.pop_due(2000);
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].lane, Some(3));
+        assert!(seq.is_empty());
     }
 }
