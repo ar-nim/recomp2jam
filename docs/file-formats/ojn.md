@@ -99,13 +99,12 @@ pre-pass `FUN_00570f90` (called right before the parser in the
 
 ## Open questions (in priority order)
 
-1. New-format decrypt: `0x412080` is just close+memset and `0x573890`
-   is object init only (dossiers `ev_8e79ba94…`, `ev_1d728802…`) —
-   both dead ends. New prime suspect: the TMP-staging copy
-   `FUN_00412a50(dst, src, size-7)` in the old loader — the `-7`
-   length adjustment smells like a header strip/transform on the
-   copy path (dossier in flight). (Also ruled out: reader,
-   validator, `0x570f90`, `0x4069b0`, per-difficulty body,
+1. New-format decrypt: the TMP-staging copy `0x412a50` is plain
+   open/write/close (dossier `ev_23e09c2f…`) — dead end. Remaining:
+   the parser's reader children `0x412020` (open?) and `0x412180`
+   (size?) — last unexamined functions on the data path (dossiers
+   in flight). (Also ruled out: reader, validator, `0x570f90`,
+   `0x4069b0`, `0x412080`, `0x573890`, per-difficulty body,
    single-byte XOR/ADD/SUB, zlib/LZMA, 4-periodic crib key,
    whole-file plaintext scan.)
    plaintext scan.)
