@@ -21,8 +21,8 @@ All versions are **7.55** unless noted. Update one row per finding.
 
 | System | Original (7.55) | Rust status | Parity test |
 |---|---|---|---|
-| OJM parse (M30) | inline 52B entries + raw OGG | ✅ verified byte-exact (o2ma757: 25 streams, EOS each) | `o2jam-file` table TODO |
-| OJM parse (OMC) | 36B entries + raw OGG | ✅ verified byte-exact (BGM.ojm: 177 streams) | `o2jam-file` table TODO |
+| OJM parse (M30) | inline 52B entries + raw OGG | ✅ implemented + tested (`parse_m30`, 25-stream real-file check) | needs golden hash test |
+| OJM parse (OMC) | 36B entries + raw OGG | ✅ implemented + tested (`parse_omc`, 7-stream real-file check) | needs golden hash test |
 | OJN parse (old `"ojn"`) | ~300B header + blocks | loader + validator located in exe | `o2jam-file` table TODO |
 | OJN parse (new `"new"`) | 6-byte rhythm, obfuscated? | loader branch located; DeleteFileA TMP flow | decrypt/recode TODO |
 | Vorbis decode | libvorbis | `lewton` helper | PCM compare TODO |
