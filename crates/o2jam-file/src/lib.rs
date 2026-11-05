@@ -38,6 +38,8 @@ pub enum AssetKind {
     Ojm,
     /// Candidate `.ojn` chart.
     Ojn,
+    /// Candidate `OJNList.dat` song index.
+    OjnList,
 }
 
 /// Sniff the first bytes of a buffer.
@@ -60,6 +62,16 @@ pub fn detect_kind(bytes: &[u8]) -> Result<AssetKind, FileError> {
     }
     if bytes.starts_with(b"ojn") || bytes.starts_with(b"OJN") {
         return Ok(AssetKind::Ojn);
+    }
+    // Old-format `.ojn`: u32 song id, then `"ojn"` at offset 4
+    // (verified: Tutorial.ojn starts `B8 22 00 00 6F 6A 6E 00`).
+    if bytes.len() >= 8 && bytes[4..7] == *b"ojn" {
+        return Ok(AssetKind::Ojn);
+    }
+    // `OJNList.dat`: u32 song count, u32 ?, then `"ojn"` at offset 8
+    // (verified: starts `32 02 00 00 64 00 00 00 6F 6A 6E 00`).
+    if bytes.len() >= 12 && bytes[8..11] == *b"ojn" {
+        return Ok(AssetKind::OjnList);
     }
     Err(FileError::UnknownFormat {
         magic: bytes[..4.min(bytes.len())].to_vec(),
@@ -234,9 +246,12 @@ pub fn parse_ojm(bytes: &[u8]) -> Result<Vec<OjmSample<'_>>, FileError> {
     match detect_kind(bytes)? {
         AssetKind::Ojm if bytes.starts_with(b"M30") => parse_m30(bytes),
         AssetKind::Ojm if bytes.starts_with(b"OMC") => parse_omc(bytes),
-        AssetKind::Ojm => Err(FileError::NotImplemented(
+        AssetKind::Ojm if bytes.starts_with(b"OJM") => Err(FileError::NotImplemented(
             "OJM variant encrypted region (see docs/file-formats/ojm.md)",
         )),
+        AssetKind::Ojm | AssetKind::OjnList => Err(FileError::UnknownFormat {
+            magic: bytes[..4.min(bytes.len())].to_vec(),
+        }),
         AssetKind::Ojn => Err(FileError::UnknownFormat {
             magic: bytes[..4.min(bytes.len())].to_vec(),
         }),
@@ -249,8 +264,8 @@ pub fn parse_ojn(bytes: &[u8]) -> Result<OjnChartFile, FileError> {
         AssetKind::Ojn => Err(FileError::NotImplemented(
             "OJN note streams (see docs/file-formats/ojn.md)",
         )),
-        AssetKind::Ojm => Err(FileError::UnknownFormat {
-            magic: bytes[..4].to_vec(),
+        AssetKind::Ojm | AssetKind::OjnList => Err(FileError::UnknownFormat {
+            magic: bytes[..4.min(bytes.len())].to_vec(),
         }),
     }
 }
@@ -273,6 +288,13 @@ mod tests {
         assert_eq!(detect_kind(b"OMC\x00...."), Ok(AssetKind::Ojm));
         assert_eq!(detect_kind(b"OJM\x00...."), Ok(AssetKind::Ojm));
         assert_eq!(detect_kind(b"ojnXXX...."), Ok(AssetKind::Ojn));
+        // Old-format `.ojn` (id + "ojn" at offset 4) and OJNList.dat
+        // (counts + "ojn" at offset 8), verified on real files.
+        assert_eq!(detect_kind(b"\xb8\x22\x00\x00ojn\0..."), Ok(AssetKind::Ojn));
+        assert_eq!(
+            detect_kind(b"\x32\x02\x00\x00\x64\x00\x00\x00ojn\0"),
+            Ok(AssetKind::OjnList)
+        );
     }
 
     #[test]
