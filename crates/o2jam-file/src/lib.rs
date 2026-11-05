@@ -83,8 +83,8 @@ pub fn detect_kind(bytes: &[u8]) -> Result<AssetKind, FileError> {
 pub struct OjmSample<'a> {
     /// Sample name (NUL-trimmed ASCII).
     pub name: String,
-    /// Numeric sample id (drives chart→audio mapping).
-    pub sample_id: u32,
+    /// Sample id (`None` for variants that do not carry one, e.g. OMC).
+    pub sample_id: Option<u32>,
     /// Raw OGG Vorbis bytes.
     pub data: &'a [u8],
 }
@@ -137,6 +137,14 @@ pub fn parse_m30(bytes: &[u8]) -> Result<Vec<OjmSample<'_>>, FileError> {
         let name = read_name(bytes, off)?;
         let size = read_u32le(bytes, off + 32)? as usize;
         let sample_id = read_u32le(bytes, off + 44)?;
+        if size == 0 {
+            // Degenerate entry: no stream follows, and accepting it
+            // would stall the walk (end == start).
+            return Err(FileError::Truncated {
+                need: off + 52 + 1,
+                have: bytes.len().min(off + 52),
+            });
+        }
         let start = off + 52;
         let end = start.checked_add(size).ok_or(FileError::Truncated {
             need: usize::MAX,
@@ -151,7 +159,7 @@ pub fn parse_m30(bytes: &[u8]) -> Result<Vec<OjmSample<'_>>, FileError> {
         check_ogg(bytes, start)?;
         out.push(OjmSample {
             name,
-            sample_id,
+            sample_id: Some(sample_id),
             data: &bytes[start..end],
         });
         off = end;
@@ -165,43 +173,65 @@ pub fn parse_m30(bytes: &[u8]) -> Result<Vec<OjmSample<'_>>, FileError> {
     Ok(out)
 }
 
-/// Parse the OMC variant: 128-byte header (first stream's
-/// `name[32]` at 92, `size` at 124), then 36-byte entries
-/// (`name[32] + size`) each followed by its OGG. Blank (all-zero)
-/// 32-byte names are skipped. Verified byte-exact on real 7.55 files.
+/// Parse the OMC/OJM variants: 16-byte header with the first entry
+/// offset at +12, then 36-byte entries (`name[32] + size`) each
+/// followed by its OGG. Blank (all-zero) entries are skipped. Files
+/// whose entry offset equals the file length (fully encrypted bodies
+/// like `DialogBGM.ojm`) yield zero samples; encrypted bodies and
+/// garbage name fields are left for the decrypt work.
+/// Verified byte-exact on real 7.55 files (docs/file-formats/ojm.md).
 pub fn parse_omc(bytes: &[u8]) -> Result<Vec<OjmSample<'_>>, FileError> {
-    if bytes.len() < 128 {
+    if bytes.len() < 16 {
         return Err(FileError::TooShort(bytes.len()));
     }
-    if !bytes.starts_with(b"OMC") {
+    if !bytes.starts_with(b"OMC") && !bytes.starts_with(b"OJM") {
         return Err(FileError::UnknownFormat {
             magic: bytes[..4.min(bytes.len())].to_vec(),
         });
     }
-    let mut off = 92usize;
+    let mut off = read_u32le(bytes, 12)? as usize;
+    if off < 16 || off > bytes.len() {
+        return Err(FileError::Truncated {
+            need: off,
+            have: bytes.len(),
+        });
+    }
     let mut out = Vec::new();
     loop {
+        if off == bytes.len() {
+            // Clean end (also covers fully encrypted bodies with no
+            // raw streams: entry offset == file length).
+            return Ok(out);
+        }
         let name = read_name(bytes, off)?;
         let size = read_u32le(bytes, off + 32)? as usize;
-        let start = off + 36;
-        let end = start.checked_add(size).ok_or(FileError::Truncated {
-            need: usize::MAX,
-            have: bytes.len(),
-        })?;
-        if end > bytes.len() {
-            return Err(FileError::Truncated {
-                need: end,
-                have: bytes.len(),
-            });
-        }
         if name.is_empty() && size == 0 {
             // Blank slot: no stream follows; entry was padding.
-            off = start;
+            off += 36;
         } else {
+            if size == 0 {
+                // Degenerate entry: no stream follows, and accepting it
+                // would stall the walk (end == start).
+                return Err(FileError::Truncated {
+                    need: off + 36 + 1,
+                    have: bytes.len().min(off + 36),
+                });
+            }
+            let start = off + 36;
+            let end = start.checked_add(size).ok_or(FileError::Truncated {
+                need: usize::MAX,
+                have: bytes.len(),
+            })?;
+            if end > bytes.len() {
+                return Err(FileError::Truncated {
+                    need: end,
+                    have: bytes.len(),
+                });
+            }
             check_ogg(bytes, start)?;
             out.push(OjmSample {
                 name,
-                sample_id: u32::MAX,
+                sample_id: None,
                 data: &bytes[start..end],
             });
             off = end;
@@ -245,10 +275,9 @@ pub struct OjnChartFile {
 pub fn parse_ojm(bytes: &[u8]) -> Result<Vec<OjmSample<'_>>, FileError> {
     match detect_kind(bytes)? {
         AssetKind::Ojm if bytes.starts_with(b"M30") => parse_m30(bytes),
-        AssetKind::Ojm if bytes.starts_with(b"OMC") => parse_omc(bytes),
-        AssetKind::Ojm if bytes.starts_with(b"OJM") => Err(FileError::NotImplemented(
-            "OJM variant encrypted region (see docs/file-formats/ojm.md)",
-        )),
+        AssetKind::Ojm if bytes.starts_with(b"OMC") || bytes.starts_with(b"OJM") => {
+            parse_omc(bytes)
+        }
         AssetKind::Ojm | AssetKind::OjnList => Err(FileError::UnknownFormat {
             magic: bytes[..4.min(bytes.len())].to_vec(),
         }),
@@ -332,10 +361,10 @@ mod tests {
         let samples = parse_ojm(&blob).unwrap();
         assert_eq!(samples.len(), 2);
         assert_eq!(samples[0].name, "kick");
-        assert_eq!(samples[0].sample_id, 3);
+        assert_eq!(samples[0].sample_id, Some(3));
         assert_eq!(samples[0].data, b"OggSdata");
         assert_eq!(samples[1].name, "mr1");
-        assert_eq!(samples[1].sample_id, 980);
+        assert_eq!(samples[1].sample_id, Some(980));
         assert_eq!(samples[1].data, b"OggSmore");
     }
 
@@ -352,22 +381,27 @@ mod tests {
         ));
     }
 
-    fn omc_blob() -> Vec<u8> {
-        let mut b = vec![0u8; 128];
-        b[..4].copy_from_slice(b"OMC\0");
-        b[92..100].copy_from_slice(b"bgRoom.o");
-        b[124..128].copy_from_slice(&8u32.to_le_bytes());
-        b.extend_from_slice(b"OggSdata");
+    fn omc_entry(name: &str, size: u32) -> Vec<u8> {
         let mut e = vec![0u8; 36];
-        e[..9].copy_from_slice(b"bgLogo.gg");
-        e[32..36].copy_from_slice(&8u32.to_le_bytes());
-        b.extend_from_slice(&e);
+        e[..name.len()].copy_from_slice(name.as_bytes());
+        e[32..36].copy_from_slice(&size.to_le_bytes());
+        e
+    }
+
+    fn omc_blob() -> Vec<u8> {
+        // 16-byte header, first entry offset at +12.
+        let mut b = vec![0u8; 16];
+        b[..4].copy_from_slice(b"OMC\0");
+        b[12..16].copy_from_slice(&16u32.to_le_bytes());
+        b.extend_from_slice(&omc_entry("bgRoom.o", 8));
+        b.extend_from_slice(b"OggSdata");
+        b.extend_from_slice(&omc_entry("bgLogo.gg", 8));
         b.extend_from_slice(b"OggSlogo");
         b
     }
 
     #[test]
-    fn omc_round_trip_with_first_stream_in_header() {
+    fn omc_round_trip_with_blank_slots_skipped() {
         let blob = omc_blob();
         let samples = parse_ojm(&blob).unwrap();
         assert_eq!(samples.len(), 2);
@@ -375,16 +409,33 @@ mod tests {
         assert_eq!(samples[0].data, b"OggSdata");
         assert_eq!(samples[1].name, "bgLogo.gg");
         assert_eq!(samples[1].data, b"OggSlogo");
+        // Insert a blank 36-byte slot after the header: skipped, and
+        // everything downstream still parses (entries are positional).
+        let mut with_blank = blob[..16].to_vec();
+        with_blank.extend_from_slice(&[0u8; 36]);
+        with_blank.extend_from_slice(&blob[16..]);
+        let samples = parse_ojm(&with_blank).unwrap();
+        assert_eq!(samples.len(), 2);
+        assert_eq!(samples[0].name, "bgRoom.o");
+        assert_eq!(samples[1].name, "bgLogo.gg");
     }
 
     #[test]
-    fn ojm_variant_still_stubbed() {
-        assert_eq!(
+    fn ojm_variant_parses_raw_tail() {
+        // OJM magic dispatches to the entry parser: a minimal blob with
+        // one entry parses; short input is rejected, not stubbed.
+        let mut blob = vec![0u8; 16];
+        blob[..4].copy_from_slice(b"OJM\0");
+        blob[12..16].copy_from_slice(&16u32.to_le_bytes());
+        blob.extend_from_slice(&omc_entry("evt", 8));
+        blob.extend_from_slice(b"OggSdata");
+        let samples = parse_ojm(&blob).unwrap();
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].name, "evt");
+        assert!(matches!(
             parse_ojm(b"OJM\x00...."),
-            Err(FileError::NotImplemented(
-                "OJM variant encrypted region (see docs/file-formats/ojm.md)"
-            ))
-        );
+            Err(FileError::TooShort(_))
+        ));
         assert_eq!(
             parse_ojn(b"ojnX...."),
             Err(FileError::NotImplemented(

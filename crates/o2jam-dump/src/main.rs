@@ -53,16 +53,11 @@ fn main() -> Result<()> {
             let samples = o2jam_file::parse_ojm(&bytes)?;
             println!("{}: {} samples", file.display(), samples.len());
             for s in &samples {
-                println!(
-                    "  id={:>5} {:>9}B {}",
-                    if s.sample_id == u32::MAX {
-                        "-".to_string()
-                    } else {
-                        s.sample_id.to_string()
-                    },
-                    s.data.len(),
-                    s.name
-                );
+                let id = match s.sample_id {
+                    Some(id) => id.to_string(),
+                    None => "-".to_string(),
+                };
+                println!("  id={id:>5} {:>9}B {}", s.data.len(), s.name);
             }
         }
         Command::Hex { file, len } => {
