@@ -21,8 +21,10 @@ All versions are **7.55** unless noted. Update one row per finding.
 
 | System | Original (7.55) | Rust status | Parity test |
 |---|---|---|---|
-| OJM parse | header layout TODO | stub + magic sniff | `o2jam-file` round-trip TODO |
-| OJN parse | header layout TODO | stub + magic sniff | `o2jam-file` round-trip TODO |
+| OJM parse (M30) | inline 52B entries + raw OGG | ✅ verified byte-exact (o2ma757: 25 streams, EOS each) | `o2jam-file` table TODO |
+| OJM parse (OMC) | 36B entries + raw OGG | ✅ verified byte-exact (BGM.ojm: 177 streams) | `o2jam-file` table TODO |
+| OJN parse (old `"ojn"`) | ~300B header + blocks | loader + validator located in exe | `o2jam-file` table TODO |
+| OJN parse (new `"new"`) | 6-byte rhythm, obfuscated? | loader branch located; DeleteFileA TMP flow | decrypt/recode TODO |
 | Vorbis decode | libvorbis | `lewton` helper | PCM compare TODO |
 | Song clock | TODO (CDXTimer?) | `SongClock` stub (wall) | ±1 ms test TODO |
 | Judgement | windows TODO | default windows, tested | values UNVERIFIED |
