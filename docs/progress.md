@@ -26,7 +26,7 @@ All versions are **7.55** unless noted. Update one row per finding.
 | OJM parse (new-variant) | counts+offsets header, `0x38`/`0x24`B entries, 17-way + NOT | ✅ entries + NOT implemented + tested (`parse_new_variant_entries`, `not_decrypt`; bgEffect s0 0.97) | DialogBGM odd-stripe puzzle TBD |
 | OPI/OPA parse | 16B header + trailing 152B-entry table | ✅ implemented + tested (`parse_opi`; 1587/627/7134 real-file counts) | inner script/binary formats TODO |
 | OJN parse (old `"ojn"`) | ~300B header + blocks | header map + 43-event walk verified | per-level ranges TODO |
-| OJN parse (new `"new"`) | reverse + 3-key XOR (period stride) | ✅ decrypted (757: magic/id/BPM/580 events) + `decrypt_ojn_new_format` tested | per-level segmentation TODO |
+| OJN parse (new `"new"`) | reverse + 3-key XOR (period stride) | ✅ decrypted (757: magic/id/BPM/580 events) + `decrypt_ojn_new_format` tested | ✅ per-level segmentation mapped + implemented (`parse_ojn_levels`; 14/14 walks land exact, OJNList +40-group cross-check 13/13) |
 | Vorbis decode | libvorbis | `lewton` helper | PCM compare TODO |
 | Song clock | TODO (CDXTimer?) | `SongClock` stub (wall) | ±1 ms test TODO |
 | Judgement | windows TODO | default windows, tested | values UNVERIFIED |

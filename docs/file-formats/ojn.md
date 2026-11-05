@@ -117,9 +117,51 @@ lands exactly on an embedded JPEG at 40020 (Photoshop blob to
 with an encoder-accurate round-trip test; `parse_ojn` decrypts and
 validates the magic (note-table parsing next).
 
+## Per-level segmentation — VERIFIED (all 14 `.ojn` files)
+
+The decrypted header (300 bytes) locates three concatenated level
+slices (offsets are file bytes):
+
+- Event counts: `u32` at +64/+68/+72.
+- Slice end offsets: `u32` at +288/+292/+296 (first slice starts at
+  the `u32` at +284, which reads 300 on every file).
+- Each slice head is `u32` tick + `u16` kind + `u16` count, then
+  `count` payload `u32`s (`8 + count * 4` framing); walking
+  `event_count` events lands exactly on the slice end.
+- The last slice ends exactly on the first embedded JPEG (`end2 ==
+  jpeg0`) on every file; empty trailing slices (`start == end`,
+  count 0) cover Tutorial.ojn levels 1–2.
+
+Verified end-to-end (walk lands exactly, counts match) on all 13
+new-format files plus Tutorial.ojn:
+
+| Song | Counts +64/+68/+72 | Ends +288/+292/+296 |
+|---|---|---|
+| 757 | 208/180/192 | 15036/27036/40020 |
+| 758 | 168/171/176 | 21008/41932/63216 |
+| 763 | 739/724/717 | 84356/152112/218984 |
+| 765 | 579/582/552 | 41868/83652/123276 |
+| 766 | 195/205/196 | 22732/45180/66732 |
+| 767 | 197/175/161 | 13824/25764/36696 |
+| 768 | 284/264/217 | 54092/119948/178324 |
+| 769 | 310/295/289 | 36196/71012/105456 |
+| 770 | 350/358/363 | 197256/392928/589244 |
+| 860 | 321/375/426 | 22752/48792/78924 |
+| 861 | 315/326/373 | 22320/45792/72168 |
+| 864 | 396/459/462 | 28392/61020/93924 |
+| 865 | 393/378/394 | 28176/54912/82800 |
+| Tutorial | 43/0/0 | 11784/11784/11784 |
+
+OJNList cross-check (13/13): decrypted file bytes +40/+44/+48 equal
+the song's `OJNList.dat` record bytes +44/+48/+52 (list records carry
+a leading field, shifting them 4 bytes; e.g. 757 reads 312/401/505
+on both sides). The +28/+32/+36 group differs from the list +32/+36/+40
+group (semantics TBD — not event counts). o2jam-file implements this
+as `parse_ojn_levels` with walk-exact validation and synthetic-
+fixture tests.
+
 ## Open questions (in priority order)
 
-1. New-format per-level segmentation: the decrypted body has a 580-event
-   run then images; map level offsets/counts (OJNList cross-check).
-2. Note event encoding + difficulty slots per file.
-3. Long-note + simultaneous-press encoding.
+1. Note event encoding + difficulty slots per file (first header word
+   is an integer tick, not a float beat; kinds up to 27 observed).
+2. Long-note + simultaneous-press encoding.
