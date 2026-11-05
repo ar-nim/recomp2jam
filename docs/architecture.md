@@ -14,8 +14,9 @@ Clean-room: describe original behavior in docs, re-implement here.
               └─────────┬────────────────┬────────┘
                         │                │
               ┌─────────▼──────┐ ┌───────▼────────┐
-              │  o2jam-audio   │ │ renderer/input │  (planned)
-              │ lewton + trait │ │ winit+wgpu+cpal│
+              │  o2jam-audio   │ │ o2jam-shell    │  window + input
+              │ lewton + cpal  │ │ winit keymap + │  (wgpu blits next)
+              │ mixer pending  │ │ fixed timestep │
               └────────────────┘ └────────────────┘
 ```
 
@@ -25,12 +26,14 @@ Clean-room: describe original behavior in docs, re-implement here.
   OJM/OJN parsers). Pure Rust, `thiserror` only. No OS calls so WASM/test
   harnesses stay easy.
 - **`o2jam-audio`** (today: `AudioBackend` trait + `NullBackend` +
-  `lewton` decode helper). Later: `cpal` backend, mixer, latency probe.
+  `lewton` decode + live `cpal` backend with sample clock +
+  resampler). Later: mixer, latency probe.
 - **`o2jam-game`** (today: `Note`, `Chart`, `TimingWindows`, `Judgement`,
   `Score`, song-clock). Later: 7-key scroll, long-note state machine,
   replay-compare tests.
-- **`recomp2jam`** (today: CLI `--help`, version, log init). Later: the
-  windowed client (fixed-timestep loop anchored to the audio clock).
+- **`recomp2jam`** (today: CLI + `play --chart/--window`; window
+  opens via `o2jam-shell`). Later: chart loading into the loop,
+  wgpu sprite blits.
 - **`o2jam-dump`** (today: `identify` + hexdump helper). Later: full
   `dump-ojm` / `dump-ojn` pretty printers.
 
