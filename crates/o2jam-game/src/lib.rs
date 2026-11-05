@@ -1,8 +1,8 @@
 //! Core gameplay logic: chart model, song clock, judgement, score.
 //!
 //! Pure logic, no OS calls — the parity-test home for 7.55 behavior.
-//! Timing windows below are explicit placeholders (marked UNVERIFIED)
-//! until measured against the original.
+//! Timing windows VERIFIED against 7.55 (`FUN_00576540`); score point
+//! values stay UNVERIFIED placeholders (combo rule VERIFIED).
 
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
@@ -126,20 +126,35 @@ impl Chart {
     }
 }
 
-/// Judgement tiers. Windows are UNVERIFIED placeholders.
+/// Judgement tiers. Windows VERIFIED against 7.55 (see `TimingWindows`);
+/// point values stay UNVERIFIED placeholders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Judgement {
     /// Best window.
     Cool,
     /// Good window.
     Good,
-    /// Acceptable (breaks combo in some O2Jam mixes — TODO verify).
+    /// Bad breaks combo, like Miss (VERIFIED: `FUN_00576540` only continues
+    /// combo on tiers `0x10`/`0x20`; user-confirmed).
     Bad,
     /// Missed entirely.
     Miss,
 }
 
-/// Timing windows in ms. **UNVERIFIED** — replace with measured 7.55 values.
+/// Timing windows in ms, VERIFIED against 7.55 `FUN_00576540`
+/// (file `0x176540`, VA `0x576540`, dossier `ev_14992eb2…` /
+/// decompile `ev_5ecb1ce8…`).
+///
+/// Both judgement sites in that function compare the absolute
+/// `|song_ms - note_ms|` (song ms via `FUN_0057a240` tick→ms interpolation,
+/// dossier `ev_9f8e1c2b…` / decompile `ev_f170d5f6…`) against inclusive
+/// bounds 6 / 18 / 25 ms:
+/// file `0x176646` (`ev_b492dfe0…`), `0x176655` (`ev_c9145d1a…`),
+/// `0x176664` (`ev_da09b5c7…`) and key-press site file `0x176b7f`
+/// (`ev_c31f6413…`), `0x176b8e` (`ev_7611dac8…`), `0x176b9d`
+/// (`ev_3db1071b…`). Tiers emit flags `0x10`/`0x20`/`0x40`/`0x80`
+/// (Cool/Good/Bad/Miss). Long-note combo ticks exist alongside this
+/// path (hold-bit `0x2000000` handling in the same function) — OPEN.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimingWindows {
     /// |offset| <= cool = Cool.
@@ -153,9 +168,9 @@ pub struct TimingWindows {
 impl Default for TimingWindows {
     fn default() -> Self {
         Self {
-            cool: 20,
-            good: 50,
-            bad: 100,
+            cool: 6,
+            good: 18,
+            bad: 25,
         }
     }
 }
@@ -177,7 +192,13 @@ impl TimingWindows {
     }
 }
 
-/// Running score/combo. Formula is a placeholder until RE'd.
+/// Running score/combo. Point values are UNVERIFIED placeholders;
+/// combo rule is VERIFIED (Cool/Good continue, Bad/Miss reset —
+/// `FUN_00576540` file `0x176c86` `ev_63f07dfc…` / `0x176c8c` `ev_b7f03b4d…`
+/// vs Bad/Miss path `0x176d8b` `ev_55bfa19b…`; user-confirmed).
+/// Long-note combo bonus is OPEN (user-reported; hold path in same
+/// function, points not yet located — scoring lives behind the `+0xa14`
+/// virtual callback, no inline point immediates).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Score {
     /// Accumulated points.
@@ -282,14 +303,17 @@ mod tests {
     }
 
     #[test]
-    fn windows_judge_expected_tiers() {
+    fn windows_judge_verified_7_55_tiers() {
         let w = TimingWindows::default();
+        assert_eq!((w.cool, w.good, w.bad), (6, 18, 25));
         assert_eq!(w.judge(0), Judgement::Cool);
-        assert_eq!(w.judge(20), Judgement::Cool);
-        assert_eq!(w.judge(21), Judgement::Good);
-        assert_eq!(w.judge(-50), Judgement::Good);
-        assert_eq!(w.judge(100), Judgement::Bad);
-        assert_eq!(w.judge(101), Judgement::Miss);
+        assert_eq!(w.judge(6), Judgement::Cool);
+        assert_eq!(w.judge(7), Judgement::Good);
+        assert_eq!(w.judge(-18), Judgement::Good);
+        assert_eq!(w.judge(19), Judgement::Bad);
+        assert_eq!(w.judge(-25), Judgement::Bad);
+        assert_eq!(w.judge(26), Judgement::Miss);
+        assert_eq!(w.judge(-26), Judgement::Miss);
     }
 
     #[test]

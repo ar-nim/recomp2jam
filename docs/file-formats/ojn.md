@@ -208,13 +208,30 @@ fixture tests.
    Bit 25 is the hold-pattern candidate; the in-exe bit-26 path
    (`0x172a4f`/`0x173061`) never fires on shipped payloads.
    Needs the `+0x42c`/`+0x504` object consumer + gameplay hold logic.
-2. Judgement function: timing windows, scoring, combo — grade strings
-   (`ALL COMBO`, `COOL 95%`, `MISS 10`, … at file offsets
-   `0x247363`/`0x2473db`/`0x24765b`) are unreferenced by code (likely
-   driven by `.ojs` result-screen scripts); `LongnoteMode` refs
-   (`0x3a71c`, `0x1a4744`, …) are `option.ini` display settings, not
-   judgement. Candidate region: the play-state update near `0x1a4xxx`
-   plus `timeGetTime` (IAT `0x63f4f8`, 28 call sites) consumers.
-   Windows and scoring stay UNVERIFIED in `o2jam-game`.
+2. Judgement function — WINDOWS VERIFIED (`FUN_00576540`, file offset
+   `0x176540`, VA `0x576540`; function dossier `ev_14992eb2…`,
+   decompile `ev_5ecb1ce8…`). Both judgement sites in that function
+   compare absolute `|song_ms - note_ms|` (song ms via `FUN_0057a240`
+   tick→ms interpolation, function `ev_9f8e1c2b…` / decompile
+   `ev_f170d5f6…`) against inclusive bounds 6 / 18 / 25 ms:
+   autoplay/miss site file `0x176646` (`ev_b492dfe0…`), `0x176655`
+   (`ev_c9145d1a…`), `0x176664` (`ev_da09b5c7…`) and key-press site
+   file `0x176b7f` (`ev_c31f6413…`), `0x176b8e` (`ev_7611dac8…`),
+   `0x176b9d` (`ev_3db1071b…`). Tiers emit flags
+   `0x10`/`0x20`/`0x40`/`0x80` (Cool/Good/Bad/Miss). Combo rule
+   VERIFIED in the same function: tiers `0x10`/`0x20` continue combo
+   (file `0x176c86` `ev_63f07dfc…` / `0x176c8c` `ev_b7f03b4d…`),
+   `0x40`/Miss take the break path (file `0x176d8b` `ev_55bfa19b…`)
+   — matches user report (Bad and Miss break combo) plus the
+   long-note combo path (hold-bit `0x2000000` handling) also present.
+   Scoring point values stay UNVERIFIED/OPEN: no inline point
+   immediates in `FUN_00576540`; scoring flows through the `+0xa14`
+   virtual callback. Grade strings (`ALL COMBO`, `COOL 95%`,
+   `MISS 10`, … at file offsets `0x247363`/`0x2473db`/`0x24765b`)
+   remain code-unreferenced (zero pointer refs to those VAs —
+   result-screen `.ojs` driven); `LongnoteMode` refs (`0x3a71c`,
+   `0x1a4744`, …) remain `option.ini` display settings (dead end).
+   `o2jam-game` implements verified windows + combo rule with
+   synthetic tests; points stay placeholders.
 3. Kind-0 meter semantics (single `0.75` float) and kind-1 `999.0`
    terminators — one song each so far.
