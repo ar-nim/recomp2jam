@@ -128,4 +128,20 @@ mod tests {
             Err(AudioError::Decode(_))
         ));
     }
+
+    /// Local-only parity gate: decodes the real `bgRoom.ogg` from a
+    /// 7.55 install. Ignored in CI (needs git-ignored game data).
+    /// Verified 2026-11-05: stereo 44100 Hz, 4746240 samples, 53.8 s.
+    #[test]
+    #[ignore]
+    fn decodes_real_bgm_sample() {
+        let bytes =
+            std::fs::read("../../install-root/O2Jam/Music/BGM.ojm").expect("7.55 install required");
+        let blob = &bytes[128..128 + 2381130];
+        let pcm = decode_vorbis(blob).expect("bgRoom decodes");
+        assert_eq!(pcm.channels, 2);
+        assert_eq!(pcm.sample_rate, 44100);
+        assert_eq!(pcm.samples.len(), 4746240);
+        assert_eq!(pcm.duration_ms(), 53812);
+    }
 }
