@@ -287,8 +287,14 @@ pub fn parse_opi(bytes: &[u8]) -> Result<Vec<OpiEntry>, FileError> {
         .collect())
 }
 
+/// M30 sample-id offset: `ref` word selecting the chart strike slot
+/// (`docs/file-formats/ojm.md`); the high word is reserved zero.
+const M30_REF_OFF: usize = 44;
+
 /// Parse the M30 variant: 20-byte header, then inline 52-byte entries
-/// (`name[32] + size + _ + _ + id + _`) each followed by its OGG.
+/// (`name[32] + size + codec + flag + ref + reserved + pcm_bytes`)
+/// each followed by its OGG. Field split corroborated by the open2jam
+/// OJM documentation (`M30_sample_header`: `ref`/`unk_zero` words).
 /// Verified byte-exact on real 7.55 files (docs/file-formats/ojm.md).
 pub fn parse_m30(bytes: &[u8]) -> Result<Vec<OjmSample<'_>>, FileError> {
     if bytes.len() < 20 {
@@ -305,7 +311,7 @@ pub fn parse_m30(bytes: &[u8]) -> Result<Vec<OjmSample<'_>>, FileError> {
     for _ in 0..count {
         let name = read_name(bytes, off)?;
         let size = read_u32le(bytes, off + 32)? as usize;
-        let sample_id = read_u32le(bytes, off + 44)?;
+        let sample_id = u32::from(read_u16le(bytes, off + M30_REF_OFF)?);
         if size == 0 {
             // Degenerate entry: no stream follows, and accepting it
             // would stall the walk (end == start).
@@ -355,17 +361,70 @@ const MODE2_ENTRIES_OFF: usize = 8;
 const MODE3_ENTRIES_OFF: usize = 12;
 const MODE2_SIZE_OFF: usize = 52;
 const MODE3_SIZE_OFF: usize = 32;
+/// Mode-2 audio-format offset (`u16`; 1 = PCM on all shipped files).
+const MODE2_FORMAT_OFF: usize = 32;
+/// Mode-2 channel-count offset (`u16`; 1 mono, 2 stereo).
+const MODE2_CHANNELS_OFF: usize = 34;
+/// Mode-2 sample-rate offset (`u32` Hz).
+const MODE2_RATE_OFF: usize = 36;
+/// Mode-2 byte-rate offset (`u32`; `rate * channels * 2`).
+const MODE2_BITRATE_OFF: usize = 40;
+/// Mode-2 frame-alignment offset (`u16`; 2 mono, 4 stereo).
+const MODE2_ALIGN_OFF: usize = 44;
+/// Mode-2 bits-per-sample offset (`u16`; 16 on all shipped files).
+const MODE2_BITS_OFF: usize = 46;
+
+/// Byte offsets of the WAV audio params in a mode-2 entry
+/// (open2jam `OMC_WAV_header` field order).
+#[derive(Debug, Clone, Copy)]
+struct WavParamOffs {
+    format: usize,
+    channels: usize,
+    rate: usize,
+    bit_rate: usize,
+    align: usize,
+    bits: usize,
+}
+
+/// Offsets of the WAV audio params for mode-2 entries.
+const MODE2_WAV_OFFS: WavParamOffs = WavParamOffs {
+    format: MODE2_FORMAT_OFF,
+    channels: MODE2_CHANNELS_OFF,
+    rate: MODE2_RATE_OFF,
+    bit_rate: MODE2_BITRATE_OFF,
+    align: MODE2_ALIGN_OFF,
+    bits: MODE2_BITS_OFF,
+};
 
 /// One entry of a new-variant OMC/OJM table: name, declared sample
 /// size, and file offset of the (possibly still encrypted) bytes.
+/// Mode-2 entries carry the WAV audio params at +32..+52 (field map
+/// corroborated by the open2jam OJM documentation
+/// (`OMC_WAV_header`); see `docs/file-formats/ojm.md`). Mode-3
+/// entries carry none, so every audio field reads 0 there.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OjmEntry {
     /// Sample name (NUL-trimmed ASCII).
     pub name: String,
-    /// Declared sample size in bytes.
+    /// Declared sample size in bytes (chunk size at entry +52).
     pub size: u32,
     /// File offset where the sample bytes start.
     pub data_offset: usize,
+    /// Audio format (`u16` at entry +32; 1 = PCM on all shipped files).
+    pub audio_format: u16,
+    /// Channel count (`u16` at entry +34; 1 mono, 2 stereo).
+    pub num_channels: u16,
+    /// Audio sample rate in Hz (`u32` at entry +36). Verified: 44100
+    /// on mono Tutorial key sounds, 22050 on stereo pads, 32000 on
+    /// brass, 44100 on DialogBGM/bgEffect/Planet stereo bodies.
+    pub sample_rate: u32,
+    /// Byte rate (`u32` at entry +40; `rate * channels * 2` on every
+    /// shipped entry, e.g. 176400 on stereo 44100 Hz bodies).
+    pub bit_rate: u32,
+    /// Frame alignment in bytes (`u16` at entry +44; 2 mono, 4 stereo).
+    pub block_align: u16,
+    /// Bits per sample (`u16` at entry +46; 16 on all shipped files).
+    pub bits_per_sample: u16,
 }
 
 /// Both entry tables of a new-variant file.
@@ -394,6 +453,7 @@ fn walk_entries(
     count: usize,
     entry_len: usize,
     size_off: usize,
+    audio_off: Option<WavParamOffs>,
 ) -> Result<Vec<OjmEntry>, FileError> {
     let mut out = Vec::with_capacity(count.min(4096));
     for _ in 0..count {
@@ -409,6 +469,18 @@ fn walk_entries(
         }
         let name = read_name(bytes, off)?;
         let size = read_u32le(bytes, off + size_off)?;
+        let (audio_format, num_channels, sample_rate, bit_rate, block_align, bits_per_sample) =
+            match audio_off {
+                Some(offs) => (
+                    read_u16le(bytes, off + offs.format)?,
+                    read_u16le(bytes, off + offs.channels)?,
+                    read_u32le(bytes, off + offs.rate)?,
+                    read_u32le(bytes, off + offs.bit_rate)?,
+                    read_u16le(bytes, off + offs.align)?,
+                    read_u16le(bytes, off + offs.bits)?,
+                ),
+                None => (0, 0, 0, 0, 0, 0),
+            };
         let data_offset = end;
         let next = data_offset
             .checked_add(size as usize)
@@ -426,6 +498,12 @@ fn walk_entries(
             name,
             size,
             data_offset,
+            audio_format,
+            num_channels,
+            sample_rate,
+            bit_rate,
+            block_align,
+            bits_per_sample,
         });
         off = next;
     }
@@ -457,6 +535,7 @@ pub fn parse_new_variant_entries(bytes: &[u8]) -> Result<OjmTables, FileError> {
             mode2_count,
             MODE2_ENTRY_LEN,
             MODE2_SIZE_OFF,
+            Some(MODE2_WAV_OFFS),
         )?,
         mode3: walk_entries(
             bytes,
@@ -464,8 +543,140 @@ pub fn parse_new_variant_entries(bytes: &[u8]) -> Result<OjmTables, FileError> {
             mode3_count,
             MODE3_ENTRY_LEN,
             MODE3_SIZE_OFF,
+            None,
         )?,
     })
+}
+
+/// Slot-bank offset the exe adds for bit26-flagged strikes: gameplay
+/// (file `0x1703f0`) computes `slot = (value & 0xFFF) - 1`, plus `0x3E8`
+/// when the payload sets bit 26; the song-bank loader (file `0x1734xx`)
+/// registers bit31-flagged entries at `entry_id + 0x3E8` the same way.
+/// No shipped M30-paired chart sets bit 26; Tutorial.ojn (old format,
+/// new-variant bank) sets it on 12 kind-9 intro notes (ids 0-11).
+/// See `docs/file-formats/ojm.md`.
+pub const NEW_VARIANT_HIGH_BANK: u32 = 0x3E8;
+
+impl OjmEntry {
+    /// Byte range of this entry's (possibly still encrypted) sample
+    /// body within the file it was parsed from.
+    pub fn sample_bytes<'b>(&self, bytes: &'b [u8]) -> Result<&'b [u8], FileError> {
+        let end = self
+            .data_offset
+            .checked_add(self.size as usize)
+            .ok_or(FileError::Truncated {
+                need: usize::MAX,
+                have: bytes.len(),
+            })?;
+        bytes
+            .get(self.data_offset..end)
+            .ok_or(FileError::Truncated {
+                need: end,
+                have: bytes.len(),
+            })
+    }
+}
+
+impl OjmTables {
+    /// Flat fetch order: mode-2 entries first, then mode-3.
+    fn flat_index(&self, order: usize) -> Option<&OjmEntry> {
+        self.mode2
+            .get(order)
+            .or_else(|| self.mode3.get(order.wrapping_sub(self.mode2.len())))
+    }
+
+    /// Order-based strike-slot resolution for banks whose entries carry
+    /// no sample id (old-variant OMC names/sizes only; new-variant
+    /// mode-2/mode-3 entries): slot N names the Nth fetched entry,
+    /// mode-2 table first, then mode-3. Slots in the high bank
+    /// ([`NEW_VARIANT_HIGH_BANK`] + N, from bit26-flagged strikes)
+    /// resolve to the same Nth entry.
+    ///
+    /// This is a documented reconstruction fallback, NOT observed exe
+    /// behavior: in-exe the loader derives the slot from entry id words
+    /// that read as zero for every id-less entry, so all such entries
+    /// collapse onto slot 0 and only `sample_id` 0 can sound
+    /// (`docs/file-formats/ojm.md`). Returns `None` past the last entry.
+    /// Verified against Tutorial.ojn/ojm: lane ids 0-29 name the 30
+    /// mode-2 key sounds, plain kind-9 id 30 names `bgsplit-01`, and the
+    /// 12 bit26 intro notes name mode-2 entries 0-11 again.
+    #[must_use]
+    pub fn resolve_order_slot(&self, slot: u32) -> Option<&OjmEntry> {
+        let order = slot.checked_sub(NEW_VARIANT_HIGH_BANK).unwrap_or(slot) as usize;
+        self.flat_index(order)
+    }
+}
+
+/// Decoded OJM descriptor: what the in-exe loader derives from the
+/// per-song version float (`FUN_0054e7c0`: `major = (int)(v + 0.01)`,
+/// `minor = (int)(frac(v + 0.01) * 10)`, descriptor
+/// `major << 16 | minor`). The chart carries the float at header +8
+/// ([`OjnChartFile::format_version`]; 2.7 on Tutorial.ojn, 2.9 on
+/// decrypted o2ma757.ojn); the file magic only matters when the float
+/// is exactly 0.0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OjmDescriptor {
+    /// Stripe-lane count for de-interleaving, if the descriptor asks
+    /// for any (`17` at `>= 0x20008`, `16` at `>= 0x20006`).
+    pub lanes: Option<usize>,
+    /// Bitwise-NOT pass (`>= 0x20005`). Mode-1 samples force the
+    /// `0xFF`/`0x00` seed; mode-2/3 samples run the zeroed schedule.
+    pub not: bool,
+}
+
+/// Derive the loader descriptor from a per-song version float.
+/// Verified mapping: 2.9 (o2ma songs) selects 17-way + NOT, 2.7
+/// (Tutorial) selects 16-way + NOT, 2.4 and below select plain reads
+/// (`docs/file-formats/ojm.md`).
+#[must_use]
+pub fn ojm_descriptor_for_version(version: f32) -> OjmDescriptor {
+    let shifted = f64::from(version) + 0.01;
+    let major = shifted as u32;
+    let minor = ((shifted - f64::from(major)) * 10.0) as u32;
+    let descriptor = (major << 16) | minor;
+    OjmDescriptor {
+        lanes: if descriptor >= 0x20008 {
+            Some(17)
+        } else if descriptor >= 0x20006 {
+            Some(16)
+        } else {
+            None
+        },
+        not: descriptor >= 0x20005,
+    }
+}
+
+/// Decode a mode-2 style encrypted body to raw PCM16 samples: stripe
+/// de-interleave, then the zero-seeded [`not_decrypt`] pass the exe
+/// runs for mode-2/3 (keys stay zeroed; only the mode-1 branch forces
+/// `0xFF`/`0x00`). Rate and channel counts come from the entry header
+/// ([`OjmEntry::sample_rate`], [`OjmEntry::num_channels`]); bodies must
+/// hold whole little-endian frames.
+/// Verified on Tutorial.ojm pads (16-way tail energy matches the
+/// plain-PCM O2PlanetNPC.ojm ground truth; 17-way clips at full
+/// scale there).
+pub fn decode_new_variant_pcm(
+    data: &[u8],
+    descriptor: OjmDescriptor,
+) -> Result<Vec<i16>, FileError> {
+    let mut plain = match descriptor.lanes {
+        Some(lanes) => deinterleave_stripes(data, lanes)?,
+        None => data.to_vec(),
+    };
+    if descriptor.not {
+        not_decrypt(&mut plain, 0x00, 0x00);
+    }
+    if plain.len() % 2 != 0 {
+        return Err(FileError::Truncated {
+            need: plain.len() + 1,
+            have: plain.len(),
+        });
+    }
+    let (frames, _) = plain.as_chunks::<2>();
+    Ok(frames
+        .iter()
+        .map(|pair| i16::from_le_bytes(*pair))
+        .collect())
 }
 
 /// In-place bitwise-NOT stream decipher used for encrypted OJM
@@ -559,6 +770,103 @@ pub fn deinterleave_stripes(data: &[u8], lanes: usize) -> Result<Vec<u8>, FileEr
     }
     out[lanes * quotient..].copy_from_slice(&data[lanes * quotient..]);
     Ok(out)
+}
+
+/// Exact inverse of [`deinterleave_stripes`]: scatter plain stripes
+/// back into file order. Encryption-side helper for building
+/// synthetic fixtures and round-trip tests; the game never runs this
+/// direction (it only decodes shipped bodies).
+pub fn interleave_stripes(data: &[u8], lanes: usize) -> Result<Vec<u8>, FileError> {
+    let size = data.len();
+    let row: &[u16] = match lanes {
+        16 => &DEINTERLEAVE_16[size % 16],
+        17 => &DEINTERLEAVE_17[size % 17],
+        _ => {
+            return Err(FileError::UnknownFormat {
+                magic: data[..4.min(size)].to_vec(),
+            });
+        }
+    };
+    let quotient = size / lanes;
+    let mut out = vec![0u8; size];
+    for (stripe, slot) in row.iter().enumerate() {
+        let from = *slot as usize * quotient;
+        let to = stripe * quotient;
+        out[to..to + quotient].copy_from_slice(&data[from..from + quotient]);
+    }
+    out[lanes * quotient..].copy_from_slice(&data[lanes * quotient..]);
+    Ok(out)
+}
+
+/// CRC-32 (ISO 3309, polynomial `0x04C11DB7`) used by OGG page
+/// checksums. Bitwise and allocation-free; bank loading recovers a
+/// few dozen bodies at most.
+fn crc32_ogg(data: &[u8]) -> u32 {
+    let mut crc = 0u32;
+    for &byte in data {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xEDB88320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    crc
+}
+
+/// True when `data` opens with a complete, checksum-valid OGG page:
+/// magic, segment table, and body all present, CRC-32 (computed with
+/// the stored checksum zeroed) matching the stored checksum. A bare
+/// `OggS` prefix is not enough: a wrong-lane de-interleave of an
+/// encrypted body can preserve the head bytes while scrambling the
+/// page, so candidates need the full check.
+fn ogg_first_page_valid(data: &[u8]) -> bool {
+    if data.len() < 27 || &data[..4] != b"OggS" {
+        return false;
+    }
+    let segments = data[26] as usize;
+    let table_end = 27 + segments;
+    if data.len() < table_end {
+        return false;
+    }
+    let body_len: usize = data[27..table_end].iter().map(|&b| b as usize).sum();
+    let page_end = table_end + body_len;
+    if data.len() < page_end {
+        return false;
+    }
+    let stored = u32::from_le_bytes([data[22], data[23], data[24], data[25]]);
+    let mut page = data[..page_end].to_vec();
+    page[22..26].copy_from_slice(&[0, 0, 0, 0]);
+    crc32_ogg(&page) == stored
+}
+
+/// Recover one new-variant sample body to plain OGG bytes:
+/// de-interleave (17-way, then 16-way) plus the zero-seeded
+/// [`not_decrypt`] pass the exe runs for mode-2/3, accepting the
+/// first candidate whose opening OGG page checksum-validates.
+/// Mode-3 bodies ship raw, so the undecrypted bytes are the last
+/// resort. Only bodies that validate as OGG come back here;
+/// raw-PCM bodies (Tutorial key sounds) need
+/// [`decode_new_variant_pcm`] with the entry audio header instead.
+/// Verified on real 7.55 bodies (docs/file-formats/ojm.md).
+pub fn recover_new_variant_sample(data: &[u8]) -> Result<Vec<u8>, FileError> {
+    if ogg_first_page_valid(data) {
+        return Ok(data.to_vec());
+    }
+    for lanes in [17, 16] {
+        let Ok(mut plain) = deinterleave_stripes(data, lanes) else {
+            continue;
+        };
+        not_decrypt(&mut plain, 0x00, 0x00);
+        if ogg_first_page_valid(&plain) {
+            return Ok(plain);
+        }
+    }
+    Err(FileError::UnknownFormat {
+        magic: data[..4.min(data.len())].to_vec(),
+    })
 }
 
 /// Parse the old-variant OMC/OJM tables: 16-byte header with the
@@ -658,6 +966,12 @@ pub struct OjnChartFile {
     pub magic: [u8; 4],
     /// Song id (`u32` at +0).
     pub song_id: u32,
+    /// Container version (`f32` at +8; reads 2.7 on Tutorial.ojn,
+    /// 2.9 on decrypted o2ma757.ojn). The loader derives its OJM
+    /// descriptor from this float instead of the file magic, so it
+    /// also selects the new-variant lane count
+    /// ([`ojm_descriptor_for_version`]).
+    pub format_version: f32,
     /// Tempo (`f32` at +16; reads 100.0/124.0 on Tutorial/757).
     pub bpm: f32,
     /// Count field (`u32` at +64): equals the walked event total on
@@ -943,6 +1257,7 @@ pub fn parse_ojn(bytes: &[u8]) -> Result<OjnChartFile, FileError> {
                 have: plain.len(),
             })?,
             song_id: read_u32le(&plain, 0)?,
+            format_version: read_f32le(&plain, 8)?,
             bpm: read_f32le(&plain, 16)?,
             event_count_hint: read_u32le(&plain, 64)?,
         }),
@@ -2020,6 +2335,19 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn m30_sample_id_reads_ref_word_only() {
+        // Scenario: the id word is `ref` + reserved-high (open2jam
+        // `M30_sample_header` split); only the low `ref` word names
+        // the strike slot, so a nonzero reserved word is ignored.
+        let mut blob = m30_blob();
+        // First entry id field at 28 (header) + 44: ref 5, reserved 0xFF.
+        blob[28 + 44..28 + 46].copy_from_slice(&5u16.to_le_bytes());
+        blob[28 + 46..28 + 48].copy_from_slice(&0xFFu16.to_le_bytes());
+        let samples = parse_ojm(&blob).unwrap();
+        assert_eq!(samples[0].sample_id, Some(5));
+    }
+
     fn omc_entry(name: &str, size: u32) -> Vec<u8> {
         let mut e = vec![0u8; 36];
         e[..name.len()].copy_from_slice(name.as_bytes());
@@ -2209,14 +2537,16 @@ mod tests {
 
     #[test]
     fn ojn_header_fields_parse() {
-        // Synthetic old-format header: id, magic, BPM, count.
+        // Synthetic old-format header: id, magic, version, BPM, count.
         let mut blob = vec![0u8; 300];
         blob[0..4].copy_from_slice(&757u32.to_le_bytes());
         blob[4..8].copy_from_slice(b"ojn\0");
+        blob[8..12].copy_from_slice(&2.9f32.to_le_bytes());
         blob[16..20].copy_from_slice(&124f32.to_le_bytes());
         blob[64..68].copy_from_slice(&208u32.to_le_bytes());
         let chart = parse_ojn(&blob).unwrap();
         assert_eq!(chart.song_id, 757);
+        assert_eq!(chart.format_version, 2.9);
         assert_eq!(chart.bpm, 124.0);
         assert_eq!(chart.event_count_hint, 208);
     }
@@ -2256,9 +2586,20 @@ mod tests {
         ));
     }
 
-    fn mode2_entry(name: &[u8], size: u32) -> Vec<u8> {
+    fn mode2_entry(name: &[u8], size: u32, channels: u16, rate: u32) -> Vec<u8> {
         let mut entry = vec![0u8; MODE2_ENTRY_LEN];
         entry[..name.len()].copy_from_slice(name);
+        // WAV audio params in open2jam `OMC_WAV_header` order: PCM
+        // format, channel count, sample rate, byte rate, alignment,
+        // bits per sample. Byte rate and alignment derive from the
+        // channel count like the shipped entries.
+        entry[MODE2_FORMAT_OFF..MODE2_FORMAT_OFF + 2].copy_from_slice(&1u16.to_le_bytes());
+        entry[MODE2_CHANNELS_OFF..MODE2_CHANNELS_OFF + 2].copy_from_slice(&channels.to_le_bytes());
+        entry[MODE2_RATE_OFF..MODE2_RATE_OFF + 4].copy_from_slice(&rate.to_le_bytes());
+        entry[MODE2_BITRATE_OFF..MODE2_BITRATE_OFF + 4]
+            .copy_from_slice(&(rate * u32::from(channels) * 2).to_le_bytes());
+        entry[MODE2_ALIGN_OFF..MODE2_ALIGN_OFF + 2].copy_from_slice(&(channels * 2).to_le_bytes());
+        entry[MODE2_BITS_OFF..MODE2_BITS_OFF + 2].copy_from_slice(&16u16.to_le_bytes());
         entry[MODE2_SIZE_OFF..MODE2_SIZE_OFF + 4].copy_from_slice(&size.to_le_bytes());
         entry
     }
@@ -2279,7 +2620,7 @@ mod tests {
         let mode3_off = 20 + MODE2_ENTRY_LEN + 16;
         blob[MODE3_ENTRIES_OFF..MODE3_ENTRIES_OFF + 4]
             .copy_from_slice(&(mode3_off as u32).to_le_bytes());
-        blob.extend_from_slice(&mode2_entry(b"s1", 16));
+        blob.extend_from_slice(&mode2_entry(b"s1", 16, 1, 22050));
         blob.extend_from_slice(&[0xAA; 16]);
         blob.extend_from_slice(&mode3_entry(b"s2", 8));
         blob.extend_from_slice(&[0xBB; 8]);
@@ -2293,6 +2634,18 @@ mod tests {
         assert_eq!(tables.mode2.len(), 1);
         assert_eq!(tables.mode2[0].name, "s1");
         assert_eq!(tables.mode2[0].size, 16);
+        assert_eq!(tables.mode2[0].audio_format, 1);
+        assert_eq!(tables.mode2[0].num_channels, 1);
+        assert_eq!(tables.mode2[0].sample_rate, 22050);
+        assert_eq!(tables.mode2[0].bit_rate, 44100);
+        assert_eq!(tables.mode2[0].block_align, 2);
+        assert_eq!(tables.mode2[0].bits_per_sample, 16);
+        assert_eq!(tables.mode3[0].audio_format, 0);
+        assert_eq!(tables.mode3[0].num_channels, 0);
+        assert_eq!(tables.mode3[0].sample_rate, 0);
+        assert_eq!(tables.mode3[0].bit_rate, 0);
+        assert_eq!(tables.mode3[0].block_align, 0);
+        assert_eq!(tables.mode3[0].bits_per_sample, 0);
         assert_eq!(
             &blob[tables.mode2[0].data_offset..tables.mode2[0].data_offset + 16],
             &[0xAA; 16]
@@ -2304,6 +2657,28 @@ mod tests {
             &blob[tables.mode3[0].data_offset..tables.mode3[0].data_offset + 8],
             &[0xBB; 8]
         );
+    }
+
+    #[test]
+    fn new_variant_entries_parse_stereo_wav_params() {
+        // Scenario: a stereo 44100 Hz entry like DialogBGM/bgEffect/
+        // Planet bodies (2/44100/176400/4/16) parses to named fields.
+        let mut blob = vec![0u8; 20];
+        blob[..4].copy_from_slice(b"OMC\0");
+        blob[MODE2_COUNT_OFF..MODE2_COUNT_OFF + 2].copy_from_slice(&1u16.to_le_bytes());
+        blob[MODE2_ENTRIES_OFF..MODE2_ENTRIES_OFF + 4].copy_from_slice(&20u32.to_le_bytes());
+        blob.extend_from_slice(&mode2_entry(b"st", 4, 2, 44100));
+        blob.extend_from_slice(&[0x11, 0x22, 0x33, 0x44]);
+        let tables = parse_new_variant_entries(&blob).unwrap();
+        assert_eq!(tables.mode2.len(), 1);
+        let entry = &tables.mode2[0];
+        assert_eq!(entry.audio_format, 1);
+        assert_eq!(entry.num_channels, 2);
+        assert_eq!(entry.sample_rate, 44100);
+        assert_eq!(entry.bit_rate, 176400);
+        assert_eq!(entry.block_align, 4);
+        assert_eq!(entry.bits_per_sample, 16);
+        assert_eq!(entry.size, 4);
     }
 
     #[test]
@@ -2322,6 +2697,230 @@ mod tests {
         assert!(matches!(
             parse_new_variant_entries(truncated),
             Err(FileError::Truncated { .. })
+        ));
+    }
+
+    fn order_tables() -> OjmTables {
+        // Scenario: two mode-2 key sounds followed by one mode-3 BGM
+        // split, mirroring Tutorial.ojm's 30 + 12 shape at small scale.
+        let entry = |name: &str| OjmEntry {
+            name: name.to_string(),
+            size: 8,
+            data_offset: 0,
+            audio_format: 1,
+            num_channels: 1,
+            sample_rate: 44100,
+            bit_rate: 88200,
+            block_align: 2,
+            bits_per_sample: 16,
+        };
+        OjmTables {
+            mode2: vec![entry("apiano1"), entry("apiano2")],
+            mode3: vec![entry("bgsplit-01")],
+        }
+    }
+
+    #[test]
+    fn order_slot_maps_mode2_then_mode3_with_high_bank_alias() {
+        let tables = order_tables();
+        assert_eq!(tables.resolve_order_slot(0).unwrap().name, "apiano1");
+        assert_eq!(tables.resolve_order_slot(1).unwrap().name, "apiano2");
+        assert_eq!(tables.resolve_order_slot(2).unwrap().name, "bgsplit-01");
+        assert!(tables.resolve_order_slot(3).is_none());
+        // Bit26-flagged strikes land in the high bank but name the
+        // same fetch-order entries (Tutorial.ojn intro: slots 1000+N).
+        assert_eq!(
+            tables
+                .resolve_order_slot(NEW_VARIANT_HIGH_BANK)
+                .unwrap()
+                .name,
+            "apiano1"
+        );
+        assert_eq!(
+            tables
+                .resolve_order_slot(NEW_VARIANT_HIGH_BANK + 2)
+                .unwrap()
+                .name,
+            "bgsplit-01"
+        );
+        assert!(tables
+            .resolve_order_slot(NEW_VARIANT_HIGH_BANK + 3)
+            .is_none());
+    }
+
+    #[test]
+    fn entry_sample_bytes_bounds_checks() {
+        let bytes = b"0123456789abcdef";
+        let ok = OjmEntry {
+            name: "s".to_string(),
+            size: 4,
+            data_offset: 6,
+            audio_format: 1,
+            num_channels: 1,
+            sample_rate: 44100,
+            bit_rate: 88200,
+            block_align: 2,
+            bits_per_sample: 16,
+        };
+        assert_eq!(ok.sample_bytes(bytes).unwrap(), b"6789");
+        let past_end = OjmEntry {
+            name: "s".to_string(),
+            size: 4,
+            data_offset: 14,
+            audio_format: 1,
+            num_channels: 1,
+            sample_rate: 44100,
+            bit_rate: 88200,
+            block_align: 2,
+            bits_per_sample: 16,
+        };
+        assert!(matches!(
+            past_end.sample_bytes(bytes),
+            Err(FileError::Truncated { .. })
+        ));
+    }
+
+    /// Encryption-side mirror of [`not_decrypt`]: same key schedule,
+    /// but the 8-byte reset feeds back the ciphertext byte it just
+    /// wrote (decryption feeds back the byte it just read). Test-only:
+    /// the game never encrypts. Seeded `(0, 0)` like the exe's
+    /// mode-2/3 path (only mode-1 forces `0xFF`/`0x00`).
+    fn not_encrypt(buf: &mut [u8], mut key1: u8, mut key2: u8) {
+        for byte in buf.iter_mut() {
+            if (key1 << key2) & 0x80 != 0 {
+                *byte = !*byte;
+            }
+            if key2 >= 7 {
+                key2 = 0;
+                key1 = *byte;
+            } else {
+                key2 += 1;
+            }
+        }
+    }
+
+    fn encrypted_body(plain: &[u8], lanes: usize) -> Vec<u8> {
+        // Encode mirrors the loader in reverse: NOT-cipher, then
+        // scatter into file stripe order.
+        let mut cipher = plain.to_vec();
+        not_encrypt(&mut cipher, 0x00, 0x00);
+        interleave_stripes(&cipher, lanes).unwrap()
+    }
+
+    /// Minimal single-page OGG fixture with a valid checksum (header,
+    /// segment table, deterministic filler body sized by the table).
+    fn ogg_page_fixture(segments: &[u8]) -> Vec<u8> {
+        let mut page = Vec::new();
+        page.extend_from_slice(b"OggS");
+        page.push(0); // version
+        page.push(0x02); // header type: beginning of stream
+        page.extend_from_slice(&0u64.to_le_bytes()); // granule position
+        page.extend_from_slice(&1u32.to_le_bytes()); // bitstream serial
+        page.extend_from_slice(&0u32.to_le_bytes()); // page sequence
+        page.extend_from_slice(&0u32.to_le_bytes()); // checksum placeholder
+        page.push(segments.len() as u8);
+        page.extend_from_slice(segments);
+        let body_len: usize = segments.iter().map(|&b| b as usize).sum();
+        page.extend((0u8..=255).cycle().take(body_len));
+        let checksum = crc32_ogg(&page);
+        page[22..26].copy_from_slice(&checksum.to_le_bytes());
+        page
+    }
+
+    #[test]
+    fn recover_new_variant_sample_round_trips_both_lane_counts() {
+        // Scenario: a checksum-valid synthetic OGG page survives a
+        // full encrypt (NOT + 16/17-way scatter) then `recover` cycle.
+        // Four 200-byte segments keep every stripe non-empty.
+        for lanes in [16, 17] {
+            let plain = ogg_page_fixture(&[200, 200, 200, 200]);
+            let encoded = encrypted_body(&plain, lanes);
+            assert_ne!(encoded, plain);
+            assert_eq!(recover_new_variant_sample(&encoded).unwrap(), plain);
+        }
+    }
+
+    #[test]
+    fn descriptor_selects_lanes_and_not_from_version() {
+        // Scenario: shipped per-song floats map to the loader's flag
+        // arms (17-way + NOT, 16-way + NOT, plain).
+        assert_eq!(
+            ojm_descriptor_for_version(2.9),
+            OjmDescriptor {
+                lanes: Some(17),
+                not: true
+            }
+        );
+        assert_eq!(
+            ojm_descriptor_for_version(2.7),
+            OjmDescriptor {
+                lanes: Some(16),
+                not: true
+            }
+        );
+        assert_eq!(
+            ojm_descriptor_for_version(2.4),
+            OjmDescriptor {
+                lanes: None,
+                not: false
+            }
+        );
+    }
+
+    #[test]
+    fn decode_new_variant_pcm_round_trips_synthetic_frames() {
+        // Scenario: synthetic PCM16 frames survive a full encrypt
+        // (NOT + 16-way scatter) then `decode` cycle with the
+        // Tutorial descriptor (2.7: 16-way + NOT).
+        let descriptor = ojm_descriptor_for_version(2.7);
+        let frames: Vec<i16> = (0..2048).map(|i| (i * 13 % 5000) - 2500).collect();
+        let mut plain = Vec::with_capacity(frames.len() * 2);
+        for frame in &frames {
+            plain.extend_from_slice(&frame.to_le_bytes());
+        }
+        let encoded = encrypted_body(&plain, 16);
+        assert_ne!(encoded, plain);
+        assert_eq!(
+            decode_new_variant_pcm(&encoded, descriptor).unwrap(),
+            frames
+        );
+        // Plain descriptor (2.4 and below) skips both passes.
+        let raw_descriptor = ojm_descriptor_for_version(2.4);
+        assert_eq!(
+            decode_new_variant_pcm(&plain, raw_descriptor).unwrap(),
+            frames
+        );
+        // Odd trailing bytes are not whole frames.
+        assert!(matches!(
+            decode_new_variant_pcm(&[0x00], descriptor),
+            Err(FileError::Truncated { .. })
+        ));
+    }
+
+    #[test]
+    fn recover_new_variant_sample_passes_raw_and_rejects_garbage() {
+        // Mode-3 bodies ship raw: a checksum-valid page passes through.
+        let plain = ogg_page_fixture(&[8]);
+        assert_eq!(recover_new_variant_sample(&plain).unwrap(), plain);
+        // A bare `OggS` prefix without a valid page is not enough:
+        // wrong-lane decodes can preserve the head while scrambling
+        // the page, so they must not validate.
+        assert!(matches!(
+            recover_new_variant_sample(b"OggSraw-body"),
+            Err(FileError::UnknownFormat { .. })
+        ));
+        // Corrupted pages are unrecoverable, not silent.
+        let mut corrupt = plain.clone();
+        let last = corrupt.len() - 1;
+        corrupt[last] ^= 0xFF;
+        assert!(matches!(
+            recover_new_variant_sample(&corrupt),
+            Err(FileError::UnknownFormat { .. })
+        ));
+        // No lane count yields an OGG page: unrecoverable, not silent.
+        assert!(matches!(
+            recover_new_variant_sample(&[0xABu8; 64]),
+            Err(FileError::UnknownFormat { .. })
         ));
     }
 
@@ -3144,30 +3743,13 @@ mod tests {
         ));
     }
 
-    fn interleave_stripes(plain: &[u8], lanes: usize) -> Vec<u8> {
-        let size = plain.len();
-        let quotient = size / lanes;
-        let row: &[u16] = match lanes {
-            16 => &DEINTERLEAVE_16[size % 16],
-            _ => &DEINTERLEAVE_17[size % 17],
-        };
-        let mut out = vec![0u8; size];
-        for (stripe, slot) in row.iter().enumerate() {
-            let from = *slot as usize * quotient;
-            let to = stripe * quotient;
-            out[to..to + quotient].copy_from_slice(&plain[from..from + quotient]);
-        }
-        out[lanes * quotient..].copy_from_slice(&plain[lanes * quotient..]);
-        out
-    }
-
     #[test]
     fn deinterleave_round_trips_synthetic_layouts() {
         for lanes in [16, 17] {
             for extra in [0, 3, 19] {
                 let size = lanes * 64 + extra;
                 let plain: Vec<u8> = (0..size).map(|i| (i * 7 + 1) as u8).collect();
-                let encoded = interleave_stripes(&plain, lanes);
+                let encoded = interleave_stripes(&plain, lanes).unwrap();
                 assert_ne!(encoded, plain);
                 assert_eq!(deinterleave_stripes(&encoded, lanes).unwrap(), plain);
             }
