@@ -8,9 +8,11 @@ use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
 pub mod chart;
+pub mod lane_effect;
 pub use chart::{
     build_level_chart, BackingNote, LevelChart, MeterChange, TempoChange, TempoMap, TimedHit,
 };
+pub use lane_effect::{measure_index_of_tick, LaneMap, MeasureReshuffle};
 
 /// One triggered sound: a lane hit or a backing note whose onset
 /// time has been reached by the song clock.
