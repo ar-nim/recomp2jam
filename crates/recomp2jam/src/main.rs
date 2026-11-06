@@ -213,6 +213,148 @@ fn run_info() {
     println!("status: day-0 scaffold; gameplay renderers pending file-parser verification");
 }
 
+/// CLI fields that assemble one host song flow (`connect --music-id ...`).
+///
+/// Parameter object (clean-code §2/§6): one named bundle instead of a
+/// 19-argument builder, moved out of `run_command` for unit tests.
+#[derive(Debug, Clone)]
+struct SongFlowParams {
+    music_id: Option<u16>,
+    difficulty: u8,
+    game_speed: u8,
+    member_id: u8,
+    power_skill: i32,
+    stat_kind: String,
+    stat_value: u16,
+    stat_seq: i32,
+    stat_score: u32,
+    cool: u16,
+    good: u16,
+    bad: u16,
+    miss: u16,
+    max_combo: u16,
+    jam: u16,
+    max_jam: u16,
+    final_score: u32,
+    life: u8,
+    long_note: i32,
+}
+
+impl SongFlowParams {
+    /// Build the host song flow (`None` without `--music-id`).
+    ///
+    /// # Errors
+    ///
+    /// The `--stat-kind` word is unknown.
+    fn into_song_flow(self) -> Result<Option<connect::SongFlowOptions>> {
+        let Some(music_id) = self.music_id else {
+            return Ok(None);
+        };
+        let mut flow = connect::SongFlowOptions::new(music_id);
+        flow.difficulty = self.difficulty;
+        flow.speed = self.game_speed;
+        flow.member_id = self.member_id;
+        flow.power_skill_id = self.power_skill;
+        flow.stat_kind = connect::parse_stat_kind(&self.stat_kind)?;
+        flow.stat_value = self.stat_value;
+        flow.stat_sequence = self.stat_seq;
+        flow.stat_score = self.stat_score;
+        flow.cool = self.cool;
+        flow.good = self.good;
+        flow.bad = self.bad;
+        flow.miss = self.miss;
+        flow.max_combo = self.max_combo;
+        flow.jam = self.jam;
+        flow.max_jam = self.max_jam;
+        flow.final_score = self.final_score;
+        flow.life = self.life;
+        flow.long_note_score = self.long_note;
+        Ok(Some(flow))
+    }
+}
+
+/// CLI fields that assemble [`connect::ConnectOptions`]
+/// (`connect --host ...`).
+#[derive(Debug, Clone)]
+struct ConnectParams {
+    host: String,
+    port: u16,
+    user_id: i32,
+    token: String,
+    gender: String,
+    relay_key1: i32,
+    relay_key2: i32,
+    gateway_id: Option<i16>,
+    channel_id: Option<i16>,
+    character: bool,
+    avatar_opa: Option<String>,
+    join_room: Option<i32>,
+    room_password: String,
+}
+
+impl ConnectParams {
+    /// Assemble the login options, attaching a prebuilt song flow.
+    ///
+    /// # Errors
+    ///
+    /// The `--gender` word is unknown.
+    fn into_connect_options(
+        self,
+        song: Option<connect::SongFlowOptions>,
+    ) -> Result<connect::ConnectOptions> {
+        Ok(connect::ConnectOptions {
+            host: self.host,
+            port: self.port,
+            user_id: self.user_id,
+            token: self.token,
+            gender: connect::parse_gender(&self.gender)?,
+            relay_key1: self.relay_key1,
+            relay_key2: self.relay_key2,
+            channel: self.gateway_id.zip(self.channel_id),
+            character: self.character,
+            avatar_opa: self.avatar_opa,
+            join_room: self.join_room,
+            room_password: self.room_password,
+            song,
+        })
+    }
+}
+
+/// CLI fields that assemble [`connect::ConnectOptions`] for
+/// `play --online` (list-only: no channel entry, character, avatar,
+/// room, or song).
+#[derive(Debug, Clone, Default)]
+struct OnlineParams {
+    host: Option<String>,
+    user_id: Option<i32>,
+    token: Option<String>,
+    port: u16,
+    online_gateway_id: Option<i16>,
+    online_channel_id: Option<i16>,
+}
+
+impl OnlineParams {
+    /// Assemble list-only login options (infallible: every field has a
+    /// CLI default or an empty fallback).
+    fn into_connect_options(self) -> connect::ConnectOptions {
+        connect::ConnectOptions {
+            host: self.host.unwrap_or_default(),
+            port: self.port,
+            user_id: self.user_id.unwrap_or_default(),
+            token: self.token.unwrap_or_default(),
+            gender: o2jam_net::Gender::Any,
+            relay_key1: 0,
+            relay_key2: 0,
+            channel: self.online_gateway_id.zip(self.online_channel_id),
+            character: false,
+            avatar_opa: None,
+            join_room: None,
+            room_password: String::new(),
+            song: None,
+        }
+    }
+}
+
 /// Dispatch one CLI subcommand.
 ///
 /// # Errors
@@ -258,46 +400,44 @@ fn run_command(command: Command) -> Result<()> {
             life,
             long_note,
         } => {
-            let song = match music_id {
-                Some(id) => {
-                    let mut flow = connect::SongFlowOptions::new(id);
-                    flow.difficulty = difficulty;
-                    flow.speed = game_speed;
-                    flow.member_id = member_id;
-                    flow.power_skill_id = power_skill;
-                    flow.stat_kind = connect::parse_stat_kind(&stat_kind)?;
-                    flow.stat_value = stat_value;
-                    flow.stat_sequence = stat_seq;
-                    flow.stat_score = stat_score;
-                    flow.cool = cool;
-                    flow.good = good;
-                    flow.bad = bad;
-                    flow.miss = miss;
-                    flow.max_combo = max_combo;
-                    flow.jam = jam;
-                    flow.max_jam = max_jam;
-                    flow.final_score = final_score;
-                    flow.life = life;
-                    flow.long_note_score = long_note;
-                    Some(flow)
-                }
-                None => None,
-            };
-            let options = connect::ConnectOptions {
+            let song = SongFlowParams {
+                music_id,
+                difficulty,
+                game_speed,
+                member_id,
+                power_skill,
+                stat_kind,
+                stat_value,
+                stat_seq,
+                stat_score,
+                cool,
+                good,
+                bad,
+                miss,
+                max_combo,
+                jam,
+                max_jam,
+                final_score,
+                life,
+                long_note,
+            }
+            .into_song_flow()?;
+            let options = ConnectParams {
                 host,
                 port,
                 user_id,
                 token,
-                gender: connect::parse_gender(&gender)?,
+                gender,
                 relay_key1,
                 relay_key2,
-                channel: gateway_id.zip(channel_id),
+                gateway_id,
+                channel_id,
                 character,
                 avatar_opa,
                 join_room,
                 room_password,
-                song,
-            };
+            }
+            .into_connect_options(song)?;
             let report = connect::connect_and_login(&options)?;
             print_connect_report(&report);
             Ok(())
@@ -422,21 +562,15 @@ fn setup_online(
     if !online {
         return Ok(());
     }
-    let options = connect::ConnectOptions {
-        host: host.clone().unwrap_or_default(),
+    let options = OnlineParams {
+        host: host.clone(),
+        user_id,
+        token: token.clone(),
         port,
-        user_id: user_id.unwrap_or_default(),
-        token: token.clone().unwrap_or_default(),
-        gender: o2jam_net::Gender::Any,
-        relay_key1: 0,
-        relay_key2: 0,
-        channel: online_gateway_id.zip(online_channel_id),
-        character: false,
-        avatar_opa: None,
-        join_room: None,
-        room_password: String::new(),
-        song: None,
-    };
+        online_gateway_id,
+        online_channel_id,
+    }
+    .into_connect_options();
     let report = connect::connect_and_login(&options)?;
     tracing::info!(channels = report.channels.len(), "channels listed");
     game.set_channels(report.channels);
@@ -492,45 +626,52 @@ fn setup_chart_audio(
     Ok(())
 }
 
-/// Print one login-flow report (authorize, character, avatar, channels,
-/// rooms, login, join). Pure output, infallible.
-fn print_connect_report(report: &connect::ConnectReport) {
-    println!("authorize: {}", connect::name_result(report.auth_code));
+/// Render one login-flow report as text (authorize, character, avatar,
+/// channels, rooms, login, join, song), one line per section.
+///
+/// Pure: [`print_connect_report`] writes exactly this string, so the
+/// golden test below pins the CLI output.
+fn format_connect_report(report: &connect::ConnectReport) -> String {
+    let mut text = String::new();
+    text.push_str(&format!(
+        "authorize: {}\n",
+        connect::name_result(report.auth_code)
+    ));
     if let Some(hero) = &report.character {
-        println!(
-            "character: {} (Lv {}, {:?}, {} XP)",
+        text.push_str(&format!(
+            "character: {} (Lv {}, {:?}, {} XP)\n",
             hero.nickname, hero.level, hero.gender, hero.experience
-        );
+        ));
     }
     if report.avatar_layers > 0 {
-        println!("avatar: {} layers worn", report.avatar_layers);
+        text.push_str(&format!("avatar: {} layers worn\n", report.avatar_layers));
     }
-    println!("channels: {}", report.channels.len());
+    text.push_str(&format!("channels: {}\n", report.channels.len()));
     for channel in &report.channels {
-        println!(
-            "  gateway {} channel {}: {}/{} {}",
+        text.push_str(&format!(
+            "  gateway {} channel {}: {}/{} {}\n",
             channel.gateway_id,
             channel.channel_id,
             channel.population,
             channel.capacity,
             if channel.active { "open" } else { "closed" },
-        );
+        ));
     }
     let open_rooms: Vec<_> = report
         .rooms
         .iter()
         .filter(|room| room.number != 0)
         .collect();
-    println!("rooms: {} open", open_rooms.len());
+    text.push_str(&format!("rooms: {} open\n", open_rooms.len()));
     for room in open_rooms.iter().take(10) {
-        println!(
-            "  #{} {:?} {}/{}{}",
+        text.push_str(&format!(
+            "  #{} {:?} {}/{}{}\n",
             room.number,
             room.title,
             room.user_count,
             room.capacity,
             if room.has_password { " locked" } else { "" },
-        );
+        ));
     }
     if let Some(login) = &report.channel_login {
         let restricted = match login.restricted {
@@ -538,51 +679,61 @@ fn print_connect_report(report: &connect::ConnectReport) {
             Some(false) => "unrestricted",
             None => "restriction unknown",
         };
-        println!(
-            "channel: {} ({restricted})",
+        text.push_str(&format!(
+            "channel: {} ({restricted})\n",
             connect::name_result(login.result_code)
-        );
+        ));
     }
     if let Some(join) = &report.join {
         match &join.room {
-            Some(room) => println!(
-                "room: {} seats, {} in ({})",
+            Some(room) => text.push_str(&format!(
+                "room: {} seats, {} in ({})\n",
                 room.slots.len(),
                 room.user_count,
                 room.title
-            ),
-            None => println!("room: joined without snapshot"),
+            )),
+            None => text.push_str("room: joined without snapshot\n"),
         }
     }
     if let Some(song) = &report.song {
-        println!(
-            "music: {} entries (free music: {})",
+        text.push_str(&format!(
+            "music: {} entries (free music: {})\n",
             song.music_entries,
             if song.free_music { "yes" } else { "no" },
-        );
+        ));
         match &song.peer_bar {
-            Some(peer) => println!(
-                "tick: member {} {:?} = {}",
+            Some(peer) => text.push_str(&format!(
+                "tick: member {} {:?} = {}\n",
                 peer.member_id,
                 peer.kind(),
                 peer.value,
-            ),
-            None => println!("tick: no peer echo"),
+            )),
+            None => text.push_str("tick: no peer echo\n"),
         }
         match &song.peer_queue {
-            Some(queue) => println!(
-                "mirror: slot {} channel {} queued, {} ranks, life[0]={}",
+            Some(queue) => text.push_str(&format!(
+                "mirror: slot {} channel {} queued, {} ranks, life[0]={}\n",
                 queue.slot,
                 queue.stat_kind,
                 song.peer_ranks.len(),
                 song.peers.life_levels()[0],
-            ),
-            None => println!("mirror: no queue forward ({} ranks)", song.peer_ranks.len()),
+            )),
+            None => text.push_str(&format!(
+                "mirror: no queue forward ({} ranks)\n",
+                song.peer_ranks.len()
+            )),
         }
         if !song.skipped.is_empty() {
-            println!("skipped broadcasts: {:?}", song.skipped);
+            text.push_str(&format!("skipped broadcasts: {:?}\n", song.skipped));
         }
     }
+    text
+}
+
+/// Print one login-flow report (authorize, character, avatar, channels,
+/// rooms, login, join). Pure output, infallible.
+fn print_connect_report(report: &connect::ConnectReport) {
+    print!("{}", format_connect_report(report));
 }
 
 /// Build the strike-slot -> decoded-PCM bank for autoplay.
@@ -811,4 +962,374 @@ fn run_autoplay(chart_path: &str, ojm_path: Option<&str>, level: usize, sound: b
         println!("grades: OPEN (unimplemented, no in-exe refs)");
     }
     Ok(())
+}
+
+/// Builders and the report golden test (backlog item 5).
+#[cfg(test)]
+mod cli_build_tests {
+    use o2jam_game::{PeerBars, RankDelivery};
+    use o2jam_net::{
+        ChannelLoginResponse, ChannelState, CharacterInfo, GameStatsUpdate, Gender,
+        JoinRoomResponse, JoinedRoom, RoomListEntry, RoomSlot, StatKind,
+    };
+
+    use super::*;
+
+    fn song_params(music_id: Option<u16>) -> SongFlowParams {
+        SongFlowParams {
+            music_id,
+            difficulty: 2,
+            game_speed: 1,
+            member_id: 0,
+            power_skill: 0,
+            stat_kind: "jam".to_owned(),
+            stat_value: 3,
+            stat_seq: 1,
+            stat_score: 210,
+            cool: 10,
+            good: 2,
+            bad: 0,
+            miss: 0,
+            max_combo: 12,
+            jam: 1,
+            max_jam: 1,
+            final_score: 2210,
+            life: 100,
+            long_note: 0,
+        }
+    }
+
+    fn connect_params() -> ConnectParams {
+        ConnectParams {
+            host: "127.0.0.1".to_owned(),
+            port: 15010,
+            user_id: 7,
+            token: "tester".to_owned(),
+            gender: "any".to_owned(),
+            relay_key1: 0,
+            relay_key2: 0,
+            gateway_id: Some(1),
+            channel_id: Some(2),
+            character: false,
+            avatar_opa: None,
+            join_room: None,
+            room_password: String::new(),
+        }
+    }
+
+    #[test]
+    fn song_flow_absent_without_music_id() {
+        let song = song_params(None).into_song_flow().unwrap();
+        assert!(song.is_none());
+    }
+
+    #[test]
+    fn song_flow_maps_every_cli_field() {
+        let params = SongFlowParams {
+            music_id: Some(757),
+            difficulty: 3,
+            game_speed: 2,
+            member_id: 4,
+            power_skill: 11,
+            stat_kind: "life".to_owned(),
+            stat_value: 1000,
+            stat_seq: 9,
+            stat_score: 4242,
+            cool: 1,
+            good: 2,
+            bad: 3,
+            miss: 4,
+            max_combo: 5,
+            jam: 6,
+            max_jam: 7,
+            final_score: 8000,
+            life: 90,
+            long_note: 12,
+        };
+        let flow = params.into_song_flow().unwrap().unwrap();
+        assert_eq!(flow.music_id, 757);
+        assert_eq!(flow.difficulty, 3);
+        assert_eq!(flow.speed, 2);
+        assert_eq!(flow.member_id, 4);
+        assert_eq!(flow.power_skill_id, 11);
+        assert_eq!(flow.stat_kind, StatKind::Life);
+        assert_eq!(flow.stat_value, 1000);
+        assert_eq!(flow.stat_sequence, 9);
+        assert_eq!(flow.stat_score, 4242);
+        assert_eq!(flow.cool, 1);
+        assert_eq!(flow.good, 2);
+        assert_eq!(flow.bad, 3);
+        assert_eq!(flow.miss, 4);
+        assert_eq!(flow.max_combo, 5);
+        assert_eq!(flow.jam, 6);
+        assert_eq!(flow.max_jam, 7);
+        assert_eq!(flow.final_score, 8000);
+        assert_eq!(flow.life, 90);
+        assert_eq!(flow.long_note_score, 12);
+    }
+
+    #[test]
+    fn song_flow_rejects_unknown_stat_kind() {
+        let params = SongFlowParams {
+            music_id: Some(757),
+            stat_kind: "bogus".to_owned(),
+            ..song_params(None)
+        };
+        assert!(params.into_song_flow().is_err());
+    }
+
+    #[test]
+    fn connect_pairs_channel_ids() {
+        let song = song_params(Some(757)).into_song_flow().unwrap();
+        let options = connect_params().into_connect_options(song).unwrap();
+        assert_eq!(options.host, "127.0.0.1");
+        assert_eq!(options.port, 15010);
+        assert_eq!(options.user_id, 7);
+        assert_eq!(options.token, "tester");
+        assert_eq!(options.gender, Gender::Any);
+        assert_eq!(options.channel, Some((1, 2)));
+        assert!(options.song.is_some());
+    }
+
+    #[test]
+    fn connect_lists_without_channel() {
+        let params = ConnectParams {
+            gateway_id: None,
+            channel_id: Some(2),
+            ..connect_params()
+        };
+        let options = params.into_connect_options(None).unwrap();
+        assert_eq!(options.channel, None);
+        assert!(options.song.is_none());
+    }
+
+    #[test]
+    fn connect_rejects_unknown_gender() {
+        let params = ConnectParams {
+            gender: "bogus".to_owned(),
+            ..connect_params()
+        };
+        assert!(params.into_connect_options(None).is_err());
+    }
+
+    #[test]
+    fn online_defaults_without_ids() {
+        let options = OnlineParams {
+            port: 15010,
+            ..OnlineParams::default()
+        }
+        .into_connect_options();
+        assert_eq!(options.host, "");
+        assert_eq!(options.user_id, 0);
+        assert_eq!(options.token, "");
+        assert_eq!(options.gender, Gender::Any);
+        assert_eq!(options.channel, None);
+        assert!(!options.character);
+        assert!(options.avatar_opa.is_none());
+        assert!(options.join_room.is_none());
+        assert!(options.song.is_none());
+    }
+
+    #[test]
+    fn online_pairs_online_ids() {
+        let options = OnlineParams {
+            host: Some("127.0.0.1".to_owned()),
+            user_id: Some(7),
+            token: Some("tester".to_owned()),
+            port: 15010,
+            online_gateway_id: Some(0),
+            online_channel_id: Some(0),
+        }
+        .into_connect_options();
+        assert_eq!(options.host, "127.0.0.1");
+        assert_eq!(options.channel, Some((0, 0)));
+    }
+
+    fn room_row(number: i32, title: &str, locked: bool) -> RoomListEntry {
+        RoomListEntry {
+            number,
+            state_code: 1,
+            title: title.to_owned(),
+            has_password: locked,
+            music_id: 0,
+            difficulty: 0,
+            key_mode: 5,
+            game_mode: 0,
+            speed: 1,
+            capacity: 8,
+            user_count: 3,
+            min_level: 1,
+            max_level: 99,
+            skills: Vec::new(),
+            premium: false,
+            room_type: 0,
+        }
+    }
+
+    fn full_report() -> connect::ConnectReport {
+        let hero = CharacterInfo {
+            nickname: "tester".to_owned(),
+            gender: Gender::Male,
+            level: 3,
+            experience: 250,
+            ..Default::default()
+        };
+        let mut peers = PeerBars::new();
+        let queue = peers.apply_stats_update(0, 0, 1000).unwrap();
+        let slots: Vec<RoomSlot> = (0..7u8)
+            .map(|index| RoomSlot {
+                index,
+                state_code: 0,
+                member: None,
+            })
+            .collect();
+        connect::ConnectReport {
+            auth_code: 0,
+            character: Some(hero),
+            avatar_layers: 2,
+            channels: vec![
+                ChannelState {
+                    gateway_id: 0,
+                    channel_id: 1,
+                    capacity: 100,
+                    population: 12,
+                    active: true,
+                },
+                ChannelState {
+                    gateway_id: 0,
+                    channel_id: 2,
+                    capacity: 100,
+                    population: 100,
+                    active: false,
+                },
+            ],
+            channel_login: Some(ChannelLoginResponse {
+                result_code: 0,
+                restricted: Some(false),
+            }),
+            join: Some(JoinRoomResponse {
+                result_code: 0,
+                room: Some(JoinedRoom {
+                    member_id: 0,
+                    team: 0,
+                    title: "Lobby".to_owned(),
+                    music_id: 0,
+                    arena: 0,
+                    key_mode: 5,
+                    game_mode: 0,
+                    difficulty: 0,
+                    speed: 1,
+                    has_super_manager: false,
+                    user_count: 3,
+                    slots,
+                    skills: Vec::new(),
+                    premium: false,
+                    champion: None,
+                    champion_streak: None,
+                }),
+            }),
+            rooms: vec![room_row(0, "Empty", false), room_row(7, "Lobby", true)],
+            song: Some(connect::SongFlowReport {
+                music_entries: 4,
+                free_music: true,
+                peer_bar: Some(GameStatsUpdate {
+                    member_id: 0,
+                    kind_code: 0,
+                    value: 1000,
+                    ranks: [0; 8],
+                }),
+                peers,
+                peer_queue: Some(queue),
+                peer_ranks: vec![
+                    RankDelivery {
+                        position: 0,
+                        rank: 5,
+                        slot: Some(0),
+                    },
+                    RankDelivery {
+                        position: 1,
+                        rank: 6,
+                        slot: None,
+                    },
+                ],
+                skipped: vec![4001],
+            }),
+        }
+    }
+
+    #[test]
+    fn full_report_renders_the_golden_text() {
+        let expected = concat!(
+            "authorize: Success (0)\n",
+            "character: tester (Lv 3, Male, 250 XP)\n",
+            "avatar: 2 layers worn\n",
+            "channels: 2\n",
+            "  gateway 0 channel 1: 12/100 open\n",
+            "  gateway 0 channel 2: 100/100 closed\n",
+            "rooms: 1 open\n",
+            "  #7 \"Lobby\" 3/8 locked\n",
+            "channel: Success (0) (unrestricted)\n",
+            "room: 7 seats, 3 in (Lobby)\n",
+            "music: 4 entries (free music: yes)\n",
+            "tick: member 0 Some(Life) = 1000\n",
+            "mirror: slot 0 channel 0 queued, 2 ranks, life[0]=1000\n",
+            "skipped broadcasts: [4001]\n",
+        );
+        assert_eq!(format_connect_report(&full_report()), expected);
+    }
+
+    #[test]
+    fn minimal_report_renders_the_golden_text() {
+        let report = connect::ConnectReport {
+            auth_code: 99,
+            character: None,
+            avatar_layers: 0,
+            channels: Vec::new(),
+            channel_login: None,
+            join: None,
+            rooms: Vec::new(),
+            song: None,
+        };
+        let expected = "authorize: unknown code 99\nchannels: 0\nrooms: 0 open\n";
+        assert_eq!(format_connect_report(&report), expected);
+    }
+
+    #[test]
+    fn quiet_room_covers_the_fallback_lines() {
+        let report = connect::ConnectReport {
+            auth_code: 0,
+            character: None,
+            avatar_layers: 0,
+            channels: Vec::new(),
+            channel_login: Some(ChannelLoginResponse {
+                result_code: 0,
+                restricted: None,
+            }),
+            join: Some(JoinRoomResponse {
+                result_code: 0,
+                room: None,
+            }),
+            rooms: Vec::new(),
+            song: Some(connect::SongFlowReport {
+                music_entries: 0,
+                free_music: false,
+                peer_bar: None,
+                peers: PeerBars::new(),
+                peer_queue: None,
+                peer_ranks: Vec::new(),
+                skipped: Vec::new(),
+            }),
+        };
+        let expected = concat!(
+            "authorize: Success (0)\n",
+            "channels: 0\n",
+            "rooms: 0 open\n",
+            "channel: Success (0) (restriction unknown)\n",
+            "room: joined without snapshot\n",
+            "music: 0 entries (free music: no)\n",
+            "tick: no peer echo\n",
+            "mirror: no queue forward (0 ranks)\n",
+        );
+        assert_eq!(format_connect_report(&report), expected);
+    }
 }
