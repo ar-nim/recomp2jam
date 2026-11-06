@@ -3,9 +3,11 @@
 //! in `o2jam-game`, audio time in `o2jam-audio`. Headless tests cover
 //! the key map and the timestep math; window creation needs hardware.
 
+pub mod playing;
 pub mod screen;
 pub mod screens;
 
+pub use playing::{HighwayGeometry, PlayingView};
 pub use screen::{can_enter, BadTransition, Screen, ScreenFlow};
 pub use screens::{paint_screen, ScreenGame};
 
