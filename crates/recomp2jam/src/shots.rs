@@ -15,7 +15,7 @@ use o2jam_shell::avatar::{
     WAITING_BLOCK,
 };
 use o2jam_shell::screens::paint::PLAYING_BLOCK;
-use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
+use o2jam_shell::{GameLoop, MenuKey, PlaySkin, Screen, ScreenGame};
 
 /// Screenshot width in pixels.
 pub const SHOT_W: usize = 400;
@@ -230,6 +230,9 @@ fn stage_playing_archive(game: &mut ScreenGame, archive: &[u8]) {
         placements.extend(full_canvas(&[PLAYING_GAUGE_SPRITE.to_owned()]));
     }
     game.load_scene(Screen::Playing, placements, figures);
+    if let Some(skin) = PlaySkin::from_archive(archive) {
+        game.set_play_skin(skin);
+    }
 }
 
 /// Layer genuine 7.55 archive art under every scene when
@@ -546,6 +549,75 @@ mod tests {
             return;
         };
         assert!(stage_single_sprite(&playing, LOADING_SPRITE).is_some());
+    }
+
+    #[test]
+    fn play_skin_decodes_every_lane_when_present() {
+        use o2jam_shell::playing::PlaySkin;
+        let Some(archive) = read_archive(PLAYING_ARCHIVE) else {
+            println!("skip: missing {PLAYING_ARCHIVE}");
+            return;
+        };
+        let Some(skin) = PlaySkin::from_archive(&archive) else {
+            panic!("playing: PlaySkin decoded no lanes");
+        };
+        assert!(!skin.is_empty());
+        assert_eq!(skin.staged_lanes(), 7);
+        for lane in 0..7u8 {
+            assert!(skin.note_head(lane).is_some(), "lane {lane}: no note head");
+            assert!(
+                skin.receptor_frame_count(lane) > 0,
+                "lane {lane}: no receptor frames"
+            );
+        }
+    }
+
+    #[test]
+    fn play_skin_keeps_fallback_without_archive() {
+        use o2jam_shell::playing::PlaySkin;
+        assert!(PlaySkin::from_archive(&[]).is_none());
+        assert!(PlaySkin::from_archive(&[0u8; 64]).is_none());
+        assert!(read_archive("No/Such.opi").is_none());
+    }
+
+    #[test]
+    fn skinned_highway_replaces_procedural_note_ink() {
+        use o2jam_render::{pack_xrgb, Frame};
+        use o2jam_shell::playing::{HighwayGeometry, LivePlay, PlaySkin};
+        const NOTE_BLUE: u32 = pack_xrgb(0x40, 0xC0, 0xFF);
+        let Some(archive) = read_archive(PLAYING_ARCHIVE) else {
+            println!("skip: missing {PLAYING_ARCHIVE}");
+            return;
+        };
+        let Some(skin) = PlaySkin::from_archive(&archive) else {
+            println!("skip: PlaySkin decoded no lanes");
+            return;
+        };
+        assert!(skin.note_head(2).is_some());
+        let paint_notes = |skinned: bool| {
+            let mut live = LivePlay::new(&[(2, 1500, 7)]);
+            if skinned {
+                live.set_skin(skin.clone());
+            }
+            let geom = HighwayGeometry::centered(SHOT_W, SHOT_H);
+            let mut buf = vec![0u32; SHOT_W * SHOT_H];
+            live.paint(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: SHOT_W,
+                    h: SHOT_H,
+                },
+                &geom,
+                1_000,
+            );
+            buf
+        };
+        let plain = paint_notes(false);
+        assert!(plain.contains(&NOTE_BLUE), "procedural note ink missing");
+        let staged = paint_notes(true);
+        assert_ne!(plain, staged, "skin changed no pixels");
+        assert!(!staged.contains(&NOTE_BLUE), "procedural core under skin");
+        assert!(is_varied(&to_rgb(&staged)), "skinned frame is flat");
     }
 
     #[test]
