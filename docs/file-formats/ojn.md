@@ -341,12 +341,59 @@ test their fixed `ssang` partner slot (`0x645510`/`0x645514`/`0x645518`/
 (first-byte `A`–`Z` range check at file `0x4451af`, indexed load
 `mov 0x645538(,%ecx,4),%edx` at file `0x451ed`, `strncmp` `n = 1`; second
 site at file `0x4545f` in VA `0x444fe0`). The same names render the result
-banner downstream: dialog `+0x6bc` indexes sub-range base `0x645524`,
-`+0x6c0` indexes `0x6455a0`, `+0x6c4` indexes `0x6455bc`, formatted through
+banner downstream — note these are `DAILOG_SELECTMUSIC` dialog fields,
+not inline `0x238` select-entry fields (each offset exceeds the `0x238`
+entry stride, and every writer uses the dialog base next to the
+`+0x640`-family lists). Value domains (one writer each; sentinels skip
+their filters, so no banner formats with a sentinel):
+
+- `+0x6bc` in 0..=4, sentinel 5: writer `code - 0x2720101C` at file
+  `0x3f6c2` (VA `0x43f6c2`; five `STEP1_ALL/EASY/INTERMEDIATE/HIGH/`
+  `HIGHEST` buttons `0x2720101C..0x27201020`); inits to 5 at files
+  `0x3d324`/`0x5156b`; filter gate `> 4` at file `0x46b67` (5-arm table
+  file `0x47038`); highlight check at file `0x4fad2`.
+  Implemented as `o2jam-file::ojn_step1_banner_entry`.
+- `+0x6c0` in 0..=5, sentinel 6: writer `code - 0x2720B021` at file
+  `0x3f7ee` (VA `0x43f7ee`; six `STEP2_ALL/GOLD/BLACK/BLUE/RED/SILVER`
+  buttons `0x2720B021..0x2720B026`); inits to 6 at files `0x3d331`/
+  `0x51578`; filter gate `> 5` at file `0x47274` (6-arm table file
+  `0x47718`: arm 0 copies all, arms 1..=5 test `entry+0x4 == 1..=5`);
+  caller skips the filter on 6 (file `0x46d06`). MISMATCH (OPEN): the
+  entry-50 row holds seven names, so buttons 1..5 banner one row early
+  and row 56 (`실버`) is unreachable (details below).
+  Implemented as `o2jam-file::ojn_step2_banner_entry`.
+- `+0x6c4` in 0..=7, sentinel 8: writer `code - 0x2720B027` at file
+  `0x3f91b` (VA `0x43f91b`; eight `STEP3_ALL/BALLAD/ROCK/DANCE/`
+  `HIPHOP_SOUL/JAZZ_FUNK/CLASSIC/ETC` buttons `0x2720B027..0x2720B02E`);
+  inits to 8 at files `0x3d33e`/`0x51585`; filter gate `> 7` at file
+  `0x47958` (8-arm table file `0x47e50`); caller skips the filter on 8
+  (file `0x473ca`). Implemented as
+  `o2jam-file::ojn_step3_banner_entry`.
+
+Button-highlight sync loops the same three code ranges and compares
+`code - base` against the stored value (STEP1 files `0x4fa95`/`0x4fae4`,
+STEP2 files `0x4fb07`/`0x4fb90`, STEP3 files `0x4fbc8`/`0x4fc51`), with
+sentinel checks at files `0x4fad2`/`0x4fb42` (`cmpl $5`), `0x4fb84`/
+`0x4fc03` (`cmpl $6`), `0x4fc45` (`cmpl $8`). The three levels format
+through
 `"%s 검색 결과입니다."` / `"%s -> %s ..."` / `"%s -> %s -> %s ..."`
-(VAs `0x645a50`/`0x645a64`/`0x645a80`) at files `0x46fec`, `0x476b9`,
-`0x47de1`. So the table keys the song filter; the banner display reuses
-the selected keys.
+(VAs `0x645a50`/`0x645a64`/`0x645a80`): one key at file `0x46fec` (VA
+`0x446fec`: `mov 0x645524(,%edx,4)` on `+0x6bc`), two keys at files
+`0x476b6`/`0x476ca` (`+0x6c0` via `0x6455a0`, `+0x6bc` via `0x645524`),
+three keys at files `0x47de7`/`0x47dfb`/`0x47e0f` (`+0x6c4` via `0x6455bc`
+first). Sub-range bases are key-name entries 19/50/57: entry 19 row
+(`전체/초급/중급/고급/최고급`, 5 rows) matches STEP1 0..4 identity;
+entry 57 row (`전체/발라드/락/댄스/힙합/R&B/재즈/펑크/클래식/기타`,
+8 rows) matches STEP3 0..7 identity; entry 50 row holds seven names
+(`전체/신곡/골드/블랙/블루/레드/실버`) against six STEP2 buttons, so
+GOLD banners `신곡`, BLACK banners `골드`, BLUE banners `블랙`, RED
+banners `블루`, SILVER banners `레드`, and `실버` (row 6) is
+unreachable — OPEN whether the `신곡` row is a stale insert or an
+unmapped seventh state. The sentinel would index past its row
+(`+0x6bc = 5` reads entry 24 `A`; `+0x6c4 = 8` reads past entry 64
+into non-name VAs such as `0x6667e0`), but sentinels skip their
+filters, so no banner formats with them. So the table keys the song
+filter; the banner display reuses the selected keys.
 
 ## Chart parser `FUN_00571d60` (file offset `0x171d60`) — REA dossier `ev_c0325c85…`
 
