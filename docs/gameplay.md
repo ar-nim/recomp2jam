@@ -252,8 +252,18 @@ not ground truth):
   one packet carries both the peer lifebar and live ranks.
   The 4015 handler in our exe (where peer life would land,
   plausibly the 8-seat member array at VA `0x77ee90` +
-  `index*8592` seen at file `0x4eaf13`–`0x4eaf1d`) is NOT yet
-  located — OPEN. Relay TCP op 5 mirrors UpdateGameStats
+  `index*8592` seen at file `0xeaf13`–`0xeaf1d`
+  (VA `0x4eaf13`–`0x4eaf1d`)) is NOT yet located — OPEN.
+  Re-checked 2026-11-06: whole-image scan finds no true `0x0FAF`
+  word or immediate — zero `push 0xFAF` vs six `push 0xFAE`
+  C→S send sites (file `0xeaf3b`/`0xeb07e`/`0xf05cb`/`0xf070b`/
+  `0x16e660`/`0x16e7dd`); the only three `AF 0F` byte pairs
+  are a lea-offset constant (file `0x749f`), an indexed-table
+  read (file `0x1c1864`), and a multiply seed (file `0x1e8b15`).
+  The tick send site's member-slot computation (index scaled by
+  `0x2190` = 8592 onto base VA `0x77ee90`) is re-verified in
+  the tick function at VA `0x4eaf00` (dossier
+  `ev_b16e614c…`). No peer-life store found; no model added. Relay TCP op 5 mirrors UpdateGameStats
   C→S in Live mode, with `CO2JamMissPack`/`CO2JamCoolPack`
   combo broadcasts (ops 6/7, ctors file `0x16dfe0`/`0x16e080`).
 - `SubmitScore` (4016, `push $0xfb0`) layout corroborated
