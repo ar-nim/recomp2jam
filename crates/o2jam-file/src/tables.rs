@@ -306,6 +306,14 @@ pub const OJN_MID_TABLE5_HEAD: u32 = 1;
 /// Bytes per middle-table-5 entry (`song_id, category`).
 pub const OJN_MID_TABLE5_ENTRY_LEN: usize = 8;
 
+/// Parallel song-wheel lists the client fans `category` out into
+/// (global heads `0x77953c..0x77957c`; file `0xbfa5c` dispatch).
+/// The STEP2 label filter tests the same 1..=5 domain on inline
+/// select-entry `+0x4`, but the wheel pointer vectors and the
+/// `+0x650`/`+0x670`/`+0x690` inline `0x238` result lists share no
+/// storage — only the bucket value flows across (see `ojn_wheel_slot`).
+pub const OJN_WHEEL_LIST_COUNT: usize = 5;
+
 /// Bytes of the middle-region footer (closes with the
 /// `OJN_MID_SONG_COUNT`/`OJN_MID_TOP_SONG_ID` echo).
 pub const OJN_MID_FOOTER_LEN: usize = 40;
@@ -469,6 +477,15 @@ pub struct OjnMidTriple {
 /// `(end - begin) / 0x238` (e.g. file `0x42f8f`); the global `0x7797e0`
 /// list appended at file `0x42f4f` (cleared at `0x42e63`) is a
 /// different list.
+///
+/// Wheel-versus-filter relation: the five wheel lists and the
+/// `+0x650` / `+0x670` / `+0x690` result lists share no storage.
+/// Wheel lists hold song-record pointers; result lists hold inline
+/// `0x238` copies built by the `0x4441f0` entry builder. Only the
+/// bucket value crosses over, via `entry+0x4 = song+0x194`
+/// (VA `0x44422e` / file `0x4422e`); the STEP2 filter then tests
+/// `entry+0x4 == 1..=5` (VA `0x447050` / file `0x47050`).
+/// (Static disassembly survey; REA dossier TBD.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OjnMidTagEntry {
     /// Song id this entry belongs to.
@@ -476,6 +493,21 @@ pub struct OjnMidTagEntry {
     /// Song-wheel list bucket (1..=5 on the real file; indexes the five
     /// `0x77953c..0x77957c` lists via `category - 1`).
     pub category: u32,
+}
+
+/// Resolve a table-5 label bucket to its song-wheel list slot.
+///
+/// The client jump-tables on `category - 1` (range-check `> 4`)
+/// into the five wheel lists (dispatch at file `0xbfa5c`, heads
+/// `0x77953c..0x77957c` in category order); the STEP2 label filter
+/// tests the same 1..=5 domain on inline select-entry `+0x4`
+/// (VA `0x447050` / file `0x47050`). Returns the zero-based slot,
+/// or `None` when the bucket falls outside 1..=5.
+#[must_use]
+pub fn ojn_wheel_slot(category: u32) -> Option<usize> {
+    let one_based = category.checked_sub(1)?;
+    let slot = usize::try_from(one_based).ok()?;
+    (slot < OJN_WHEEL_LIST_COUNT).then_some(slot)
 }
 
 /// The decoded `OJNList.dat` middle region: header tables plus footer.
@@ -1465,13 +1497,30 @@ mod tests {
         // The client jump-tables on `category - 1` into five parallel
         // song lists (dispatches at file offsets `0xbfa5c` and
         // `0x16121e`): every stored bucket must index that table, so
-        // only 1..=5 parses and each value minus one lands in 0..5.
+        // only 1..=5 parses and each value resolves to a wheel slot.
         let blob = full_table5_blob(5);
         let entries = parse_ojn_mid_table5(&blob).unwrap();
         assert_eq!(entries.len(), OJN_MID_SONG_COUNT);
         for entry in &entries {
-            let bucket = entry.category.checked_sub(1).unwrap();
-            assert!(bucket < 5);
+            assert!(ojn_wheel_slot(entry.category).is_some());
+        }
+    }
+
+    #[test]
+    fn wheel_slot_maps_each_label_bucket_to_its_own_list() {
+        // Categories 1..=5 index the five `0x77953c..0x77957c` wheel
+        // lists via `category - 1` (dispatch at file `0xbfa5c`).
+        for (category, want) in [1u32, 2, 3, 4, 5].iter().zip(0..5) {
+            assert_eq!(ojn_wheel_slot(*category), Some(want));
+        }
+    }
+
+    #[test]
+    fn wheel_slot_rejects_buckets_outside_one_to_five() {
+        // `0`, `6`, and `u32::MAX` fail the exe range-check (`> 4`
+        // on `category - 1`), so no wheel list applies.
+        for category in [0u32, 6, 7, u32::MAX] {
+            assert_eq!(ojn_wheel_slot(category), None);
         }
     }
 
