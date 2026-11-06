@@ -9,13 +9,13 @@
 use std::collections::HashMap;
 
 use o2jam_file::{
-    classify_sprite, find_opi_entry, opi_entry_body, pair_entries_with_rects, AvatarItemTable, Bnd,
-    BndRect, ControlBlock, ControlEntry, ControlList, Sprite55, SpriteResolution,
+    classify_sprite, find_opi_entry, opi_entry_body, AvatarItemTable, Bnd, ControlBlock,
+    ControlEntry, ControlList, Sprite55, SpriteResolution,
 };
 use o2jam_net::CharacterInfo;
 use o2jam_render::{
-    blit_anchor_in_rect, blit_rgb555, blit_rgb555_clipped, rect_from_corners, scale_rect_to_frame,
-    Frame, Rect, Rgb555Image,
+    blit_rgb555, blit_rgb555_clipped, rect_from_corners, scale_rect_to_frame, Frame, Rect,
+    Rgb555Image,
 };
 
 /// Archive body name for a table filename: same stem, `.ojs`
@@ -265,15 +265,17 @@ pub fn entry_state_id(code: u32) -> u8 {
 }
 
 /// True when an entry's code leaves it a paintable control: the low
-/// word names the control instance, so a zero low word marks a
-/// scene/container row (entry 0 of every real block) that takes no
-/// rect and draws nothing (recipe: entry codes gate visibility).
-/// Verified on 7.55: the only zero-low-word rows in either control
-/// list are the block self rows, so genuine art never drops here
-/// while container rows stay unplaced even outside position 0.
+/// 12 bits name the control instance (verified pairing mask
+/// `0x548640`: ordinal = `(code & 0xFFF) − 1`), so a zero low word
+/// marks a scene/container row (entry 0 of every real block) that
+/// takes no rect and draws nothing (recipe: entry codes gate
+/// visibility). Verified on 7.55: the only zero-low-word rows in
+/// either control list are the block self rows, so genuine art never
+/// drops here while container rows stay unplaced even outside
+/// position 0.
 #[must_use]
 pub fn entry_takes_rect(entry: &ControlEntry) -> bool {
-    entry.code & 0xFFFF != 0
+    entry.code & 0xFFF != 0
 }
 
 /// Placements for blocks without a `.bnd` (recipe steps 4 + 7): a
@@ -288,14 +290,26 @@ pub fn anchor_placements(block: &ControlBlock) -> Vec<ScenePlacement> {
     block
         .all_entries()
         .into_iter()
-        .skip(1)
         .filter(|entry| entry_takes_rect(entry))
         .filter_map(anchor_placement)
         .collect()
 }
 
+/// The all-zero rect an entry carries when no `.bnd` rect claims it
+/// (verified pairing: a miss stores `(0,0,0,0)` instead of skipping
+/// the entry): the draw origin stays at the frame origin, so the
+/// sprite's record anchor positions the art alone.
+fn unplaced_rect() -> Rect {
+    Rect {
+        x: 0,
+        y: 0,
+        w: 0,
+        h: 0,
+    }
+}
+
 /// One anchor placement for an unbound entry: real id and code,
-/// empty rect (the sprite's own record anchor positions it).
+/// all-zero rect (the sprite's own record anchor positions it).
 /// Sprite-less entries and scrollbar parameters stage nothing.
 fn anchor_placement(entry: &ControlEntry) -> Option<ScenePlacement> {
     match classify_sprite(entry) {
@@ -306,12 +320,7 @@ fn anchor_placement(entry: &ControlEntry) -> Option<ScenePlacement> {
             id: entry.id.clone(),
             code: entry.code,
             sprite: entry.sprite.clone(),
-            rect: Rect {
-                x: 0,
-                y: 0,
-                w: 0,
-                h: 0,
-            },
+            rect: unplaced_rect(),
         }),
     }
 }
@@ -325,7 +334,8 @@ pub struct ScenePlacement {
     pub code: u32,
     /// Linked sprite body, when the entry names one.
     pub sprite: Option<String>,
-    /// Native-canvas layout rect.
+    /// Native-canvas layout rect: positions the draw origin, never
+    /// clips (verified draw path).
     pub rect: Rect,
 }
 
@@ -354,8 +364,9 @@ fn push_unique_name(names: &mut Vec<String>, sprite: Option<String>) {
     }
 }
 
-/// First `STATE_PLAYING` entry the 17-rect `.bnd` covers (`EXIT`):
-/// rect `i` lays out entry `213 + i` (`EXIT`..`VOLUME`), verified on
+/// First `STATE_PLAYING` entry of the bound run (`EXIT`): the
+/// 17-rect `.bnd` window pairs entries 213–229 by code ordinal —
+/// `EXIT` carries ordinal 1 and `VOLUME` ordinal 17, verified on
 /// 7.55 (`ControlList_Playing.txt` bound run, decl `0xE6` loads
 /// entries 0–229 including self; the last 5 ride unloaded).
 const PLAYING_SUBSET_FIRST_ENTRY: usize = 213;
@@ -420,18 +431,13 @@ pub fn is_playing_behind_sprite(sprite: &str) -> bool {
 
 /// Anchor placement for one static backdrop entry: no `.bnd` rect
 /// covers entries 0–212, so the sprite paints 1:1 at its own
-/// record anchor (empty rect, never full-bleed).
+/// record anchor (all-zero rect, never full-bleed).
 fn place_backdrop_panel(entry: &ControlEntry, sprite: &str) -> ScenePlacement {
     ScenePlacement {
         id: entry.id.clone(),
         code: entry.code,
         sprite: Some(sprite.to_owned()),
-        rect: Rect {
-            x: 0,
-            y: 0,
-            w: 0,
-            h: 0,
-        },
+        rect: unplaced_rect(),
     }
 }
 
@@ -468,19 +474,18 @@ fn bind_playing_behind(entries: &[&ControlEntry]) -> Vec<ScenePlacement> {
         .collect()
 }
 
-/// Pair block entries with `.bnd` rects verbatim on the native
-/// 800x600 canvas (recipe steps 3–5): rect `i` lays out entry
-/// `i + 1` in file order (entry 0 is the block itself and takes no
-/// rect; `SET` members count in file order, so `pair_entries_with_rects`
-/// already yields file order). Stub blocks stage nothing (step 3);
-/// container-coded entries (zero low word) stay unplaced.
-/// `STATE_PLAYING` is the verified subset: its 17 rects lay out
-/// entries 213–229 one-to-one, never the first 17; the static
-/// backdrop panels among entries 0–212 stage as anchor placements
-/// ahead of them, and the behind-highway scene stages first of all.
-/// Other entries without a rect stay unplaced (the
-/// Playing tail past `VOLUME` rides unloaded); rects without an
-/// entry are ignored.
+/// Pair block entries with `.bnd` rects by code ordinal on the
+/// native 800x600 canvas (verified pairing): rect index
+/// `(code & 0xFFF) − 1` per entry; a zero low word underflows and an
+/// out-of-range ordinal misses, both staging the all-zero rect
+/// (anchor draw from the origin, never a skip). Stub blocks stage
+/// nothing (step 3); container-coded entries (zero low word) stay
+/// unplaced. `STATE_PLAYING` keeps the verified window: its 17 rects
+/// lay out the `EXIT`..`VOLUME` run (entries 213–229, ordinals
+/// 1–17); the static backdrop panels among entries 0–212 stage as
+/// anchor placements ahead of them, and the behind-highway scene
+/// stages first of all. Rects no entry claims are ignored (the
+/// Playing tail past `VOLUME` rides unloaded).
 #[must_use]
 pub fn bind_scene_rects(block: &ControlBlock, bnd: &Bnd) -> Vec<ScenePlacement> {
     if is_stub_block(block) {
@@ -490,28 +495,47 @@ pub fn bind_scene_rects(block: &ControlBlock, bnd: &Bnd) -> Vec<ScenePlacement> 
     if block.name == "STATE_PLAYING" {
         return bind_playing_subset(&entries, bnd);
     }
-    bind_verbatim_entries(block, bnd)
+    bind_entries_by_ordinal(block, bnd)
 }
 
-/// Rect `i` lays out entry `i + 1`; entries without a rect, and
-/// container-coded entries, stay unplaced.
-fn bind_verbatim_entries(block: &ControlBlock, bnd: &Bnd) -> Vec<ScenePlacement> {
-    pair_entries_with_rects(block, bnd)
+/// Every paintable entry paired with its ordinal rect: ordinal
+/// misses stage the all-zero rect (anchor draw from the origin), and
+/// container-coded entries (zero low word) stay out. Paint stays in
+/// file order, so `all_entries` order is the order that matters.
+fn bind_entries_by_ordinal(block: &ControlBlock, bnd: &Bnd) -> Vec<ScenePlacement> {
+    block
+        .all_entries()
         .into_iter()
-        .filter(|placed| entry_takes_rect(placed.entry))
-        .filter_map(|placed| {
-            let corners = placed.rect?;
-            Some(place_entry(placed.entry, corners))
-        })
+        .filter(|entry| entry_takes_rect(entry))
+        .map(|entry| place_entry(entry, ordinal_rect(entry, bnd)))
         .collect()
+}
+
+/// `.bnd` rect of one entry by ordinal (verified pairing, exe
+/// `0x548640`): index `(code & 0xFFF) − 1`, bounds-checked against
+/// the rect count; the ordinal-0 underflow and out-of-range misses
+/// both yield the all-zero rect. `o2jam-file`'s
+/// `pair_entries_with_rects` still pairs positionally, so the
+/// corrected math lives here until that sibling lands.
+fn ordinal_rect(entry: &ControlEntry, bnd: &Bnd) -> Rect {
+    let found = (entry.code & 0xFFF)
+        .checked_sub(1)
+        .and_then(|index| bnd.rects.get(index as usize));
+    match found {
+        Some(corners) => rect_from_corners(corners.x1, corners.y1, corners.x2, corners.y2),
+        None => unplaced_rect(),
+    }
 }
 
 /// Playing subset: behind-highway scene first (entries 0–212,
 /// anchor-placed, clipped clear of lanes and HUD at paint), then the
-/// static backdrop panels, then rect `i` lays out entry `213 + i`.
-/// Backdrops paint first so the bound gauges and buttons keep their
-/// top slot. Container-coded entries stay unplaced in every run,
-/// like the verbatim path.
+/// static backdrop panels, then the bound run (entries 213–229)
+/// paired with the 17 rects by code ordinal (`EXIT` = ordinal 1 →
+/// rect 0; the run is capped at the rect count, so the tail past
+/// `VOLUME` rides unloaded). Backdrops paint first so the bound
+/// gauges and buttons keep their top slot. Container-coded entries
+/// stay out in every run; a window ordinal missing the table stages
+/// the all-zero rect (anchor draw), like the bound path.
 fn bind_playing_subset(entries: &[&ControlEntry], bnd: &Bnd) -> Vec<ScenePlacement> {
     let mut placed = bind_playing_behind(entries);
     placed.extend(bind_playing_backdrops(entries));
@@ -519,20 +543,20 @@ fn bind_playing_subset(entries: &[&ControlEntry], bnd: &Bnd) -> Vec<ScenePlaceme
         entries
             .iter()
             .skip(PLAYING_SUBSET_FIRST_ENTRY)
-            .zip(bnd.rects.iter())
-            .filter(|(entry, _)| entry_takes_rect(entry))
-            .map(|(entry, corners)| place_entry(entry, corners)),
+            .take(bnd.rects.len())
+            .filter(|entry| entry_takes_rect(entry))
+            .map(|entry| place_entry(entry, ordinal_rect(entry, bnd))),
     );
     placed
 }
 
-/// One placement from an entry plus its native `.bnd` corners.
-fn place_entry(entry: &ControlEntry, corners: &BndRect) -> ScenePlacement {
+/// One placement from an entry plus its native layout rect.
+fn place_entry(entry: &ControlEntry, rect: Rect) -> ScenePlacement {
     ScenePlacement {
         id: entry.id.clone(),
         code: entry.code,
         sprite: entry.sprite.clone(),
-        rect: rect_from_corners(corners.x1, corners.y1, corners.x2, corners.y2),
+        rect,
     }
 }
 
@@ -560,10 +584,12 @@ pub fn load_avi_logo(archive: &[u8]) -> Option<AvatarFigure> {
     load_archive_sprite(archive, AVI_LOGO_SPRITE)
 }
 
-/// Frame-space origin of a placement: the verbatim native `.bnd`
-/// origin scaled to the frame only at present. The rect itself stays
-/// native 800x600; unbound sprites paint 1:1 at this origin, while
-/// bound layers cover the whole scaled rect.
+/// Frame-space origin of a placement: the native `.bnd` rect origin
+/// scaled to the frame (the rect itself stays native 800x600; the
+/// scale is the one present-tense stand-in). Every layer paints 1:1
+/// at this origin plus its record anchor; an all-zero rect places
+/// the origin at the frame origin, so the anchor alone positions the
+/// art.
 #[must_use]
 pub fn placement_origin_in_frame(
     placement: &ScenePlacement,
@@ -574,17 +600,12 @@ pub fn placement_origin_in_frame(
     (scaled.x, scaled.y)
 }
 
-/// Paint every placed figure through its verbatim native rect
-/// (scaled to the frame only at present), in file order (recipe
-/// steps 7–8): the background lands first and later entries cover
-/// it. Bound placements blit each layer 1:1 at its record anchor,
-/// clipped to the rect — the rect size bounds the paint (pixels
-/// outside stay untouched) and scales with the frame, so layout
-/// never ignores it; single-image bodies duplicate their rect
-/// byte-exact, so anchor and rect coincide on real art. Unbound
-/// placements carry an empty rect and paint 1:1 at the sprite's
-/// own record anchor. Placements without a loaded figure are
-/// skipped, and live UI ink paints on top in the callers.
+/// Paint every placed figure in file order (verified step 8: the
+/// background lands first and later entries cover it). Each layer
+/// blits 1:1 at the scaled rect origin plus its record anchor,
+/// unclipped — the rect positions the blit and never clips (verified
+/// draw path). Placements without a loaded figure are skipped, and
+/// live UI ink paints on top in the callers.
 pub fn paint_scene_figures(
     frame: &mut Frame<'_>,
     placements: &[ScenePlacement],
@@ -596,12 +617,9 @@ pub fn paint_scene_figures(
     }
 }
 
-/// Paint one placed figure, if its sprite loaded. Bound
-/// placements anchor-blit every layer 1:1 at its record anchor
-/// (offset from the frame-scaled rect origin), clipped to the
-/// frame-scaled rect (recipe step 7: rect sizes honored, sprite
-/// anchors used); unbound placements carry an empty rect and
-/// paint 1:1 at the sprite's record anchor.
+/// Paint one placed figure, if its sprite loaded: every layer blits
+/// 1:1 at the frame-scaled rect origin plus its record anchor
+/// (dest = rect x1/y1 + anchor), unclipped.
 fn paint_placed_figure(
     frame: &mut Frame<'_>,
     placement: &ScenePlacement,
@@ -615,24 +633,8 @@ fn paint_placed_figure(
     let Some(figure) = figures.get(name) else {
         return;
     };
-    if placement.rect.w == 0 || placement.rect.h == 0 {
-        let (x, y) = placement_origin_in_frame(placement, frame_w, frame_h);
-        figure.paint(frame, x, y);
-        return;
-    }
-    let dest = scale_rect_to_frame(&placement.rect, frame_w, frame_h);
-    for index in 0..figure.len() {
-        if let Some(layer) = figure.layer(index) {
-            blit_anchor_in_rect(
-                frame,
-                &layer.image,
-                dest.x + layer.dx,
-                dest.y + layer.dy,
-                layer.colorkey,
-                &dest,
-            );
-        }
-    }
+    let (origin_x, origin_y) = placement_origin_in_frame(placement, frame_w, frame_h);
+    figure.paint(frame, origin_x, origin_y);
 }
 
 /// True for a behind-highway placement: its sprite names the venue
@@ -648,8 +650,8 @@ fn placement_is_behind(placement: &ScenePlacement) -> bool {
 /// Paint the behind-highway placements, skipping every pixel inside
 /// `exclusions` (lane columns plus HUD zones from the caller): the
 /// venue art fills the right side while notes, lanes, and UI ink
-/// stay uncovered. Bound behind placements additionally clip to
-/// their scaled rect, like [`paint_placed_figure`].
+/// stay uncovered. Like every painter, the rect only positions; the
+/// clip comes from the exclusions and the frame alone.
 pub fn paint_behind_placements(
     frame: &mut Frame<'_>,
     placements: &[ScenePlacement],
@@ -682,8 +684,9 @@ pub fn paint_foreground_placements(
 }
 
 /// Paint one behind-highway figure, if its sprite loaded: each layer
-/// blits 1:1 at its record anchor, clipped to the visible fragments
-/// of its box outside `exclusions`.
+/// blits 1:1 at its rect origin plus its record anchor (an all-zero
+/// rect leaves the origin at the frame corner), clipped to the
+/// fragments outside `exclusions`.
 fn paint_behind_placement(
     frame: &mut Frame<'_>,
     placement: &ScenePlacement,
@@ -696,35 +699,18 @@ fn paint_behind_placement(
     let Some(figure) = figures.get(name) else {
         return;
     };
-    let (frame_w, frame_h) = (frame.w, frame.h);
-    let bound = if placement.rect.w == 0 || placement.rect.h == 0 {
-        None
-    } else {
-        Some(scale_rect_to_frame(&placement.rect, frame_w, frame_h))
-    };
-    let (origin_x, origin_y) = bound.as_ref().map_or_else(
-        || placement_origin_in_frame(placement, frame_w, frame_h),
-        |dest| (dest.x, dest.y),
-    );
-    paint_behind_layers(
-        frame,
-        figure,
-        origin_x,
-        origin_y,
-        bound.as_ref(),
-        exclusions,
-    );
+    let (origin_x, origin_y) = placement_origin_in_frame(placement, frame.w, frame.h);
+    paint_behind_layers(frame, figure, origin_x, origin_y, exclusions);
 }
 
 /// Paint every layer of one figure through its visible fragments:
-/// the layer box, intersected with its bound rect when staged
-/// bound, minus the exclusion zones.
+/// the layer box (rect origin plus anchor) minus the exclusion
+/// zones.
 fn paint_behind_layers(
     frame: &mut Frame<'_>,
     figure: &AvatarFigure,
     origin_x: i32,
     origin_y: i32,
-    bound: Option<&Rect>,
     exclusions: &[Rect],
 ) {
     for index in 0..figure.len() {
@@ -735,14 +721,7 @@ fn paint_behind_layers(
                 w: u32::try_from(layer.image.w).unwrap_or(u32::MAX),
                 h: u32::try_from(layer.image.h).unwrap_or(u32::MAX),
             };
-            let base = match bound {
-                Some(dest) => intersect_rects(&layer_box, dest),
-                None => Some(layer_box),
-            };
-            let Some(base) = base else {
-                continue;
-            };
-            for fragment in subtract_rect(&base, exclusions) {
+            for fragment in subtract_rect(&layer_box, exclusions) {
                 blit_rgb555_clipped(
                     frame,
                     &layer.image.view(),
@@ -1204,8 +1183,9 @@ mod avatar_figure_tests {
 
     #[test]
     fn scene_rects_pair_entries_with_bnd_corners() {
-        // Entry 0 (the block itself) takes no rect; rect i covers
-        // entry i + 1, so IDC_LIST lands on the first corner run.
+        // Verified pairing: rect index `(code & 0xFFF) − 1`. The
+        // block-self row (low word 0) stays out; IDC_LIST (ordinal 1)
+        // takes rect 0 and IDC_BUTTON (ordinal 2) takes rect 1.
         let list = o2jam_file::parse_control_list(&room_control_text()).unwrap();
         let block = scene_block(&list, ROOM_BLOCK).unwrap();
         let bnd =
@@ -1224,23 +1204,44 @@ mod avatar_figure_tests {
             }
         );
         assert_eq!(placed[1].id, "IDC_BUTTON");
+        assert_eq!(placed[1].rect.x, 400);
     }
 
     #[test]
-    fn scene_rects_leave_extra_entries_unplaced() {
-        // One rect lays out entry 1 verbatim; entry 2 has no rect
-        // and stays unplaced (never silently dropped from a
-        // different offset).
+    fn scene_rect_misses_stage_the_all_zero_rect() {
+        // Verified pairing: ordinal 2 misses the 1-rect table, and a
+        // miss stores the all-zero rect instead of skipping the entry
+        // — the sprite draws at its record anchor from the origin.
         let list = o2jam_file::parse_control_list(&room_control_text()).unwrap();
         let block = scene_block(&list, ROOM_BLOCK).unwrap();
         let bnd = o2jam_file::parse_bnd(&bnd_blob(&[(8, 8, 16, 16)])).unwrap();
         let placed = bind_scene_rects(block, &bnd);
-        assert_eq!(placed.len(), 1);
+        assert_eq!(placed.len(), 2);
         assert_eq!(placed[0].id, "IDC_LIST");
+        assert_eq!(
+            placed[0].rect,
+            o2jam_render::Rect {
+                x: 8,
+                y: 8,
+                w: 8,
+                h: 8
+            }
+        );
+        assert_eq!(placed[1].id, "IDC_BUTTON");
+        assert_eq!(
+            placed[1].rect,
+            o2jam_render::Rect {
+                x: 0,
+                y: 0,
+                w: 0,
+                h: 0
+            }
+        );
     }
 
     /// Playing-shaped block: 235 entries in file order with the
-    /// bound run at 213-229 (`EXIT`..`VOLUME`).
+    /// bound run at 213-229 (`EXIT`..`VOLUME`) carrying code
+    /// ordinals 1-17, like the real block.
     fn playing_block() -> ControlBlock {
         let mut bound = Vec::new();
         bound.push(ControlEntry {
@@ -1260,6 +1261,13 @@ mod avatar_figure_tests {
             code: 0x1B20_0001,
             sprite: Some("Playing_Exit.ojs".to_owned()),
         };
+        for (index, entry) in bound.iter_mut().enumerate().take(229).skip(214) {
+            *entry = ControlEntry {
+                id: format!("IDC_BOUND_{index:03}"),
+                code: 0x1B50_0000 + u32::try_from(index - 212).unwrap_or(0),
+                sprite: None,
+            };
+        }
         bound[229] = ControlEntry {
             id: "IDC_TEXT_SPLAY_VLOLUME".to_owned(),
             code: 0x1B40_0011,
@@ -1276,9 +1284,10 @@ mod avatar_figure_tests {
     }
 
     #[test]
-    fn playing_rects_map_trailing_subset_verbatim() {
-        // 17 rects lay out entries 213-229 one-to-one, never the
-        // first 17 entries.
+    fn playing_rects_map_the_bound_run_by_ordinal() {
+        // Verified pairing: the run's codes carry ordinals 1-17, so
+        // ordinal rect lookup lays out entries 213-229 over the 17
+        // rects in file order — never the fill entries before them.
         let block = playing_block();
         let corners: Vec<(u32, u32, u32, u32)> =
             (0..17).map(|i| (751 + i, 554, 793 + i, 596)).collect();
@@ -1647,16 +1656,25 @@ mod avatar_figure_tests {
     }
 
     #[test]
-    fn bound_layers_paint_at_anchors_clipped_to_rect() {
-        // Recipe step 7: 1:1 at the record anchor, clipped to the
-        // rect — the 1x1 body paints one pixel at (10, 20); the
-        // rest of the 4x4 rect and the frame stay untouched.
-        let red = sprite55_blob(1, 0xFFFF, 1, 1, &[0x00, 0x7C]);
-        let archive = opa_blob(&[("Room_List.ojs", &red)]);
-        let figures = load_scene_figures(&archive, &["Room_List.ojs".to_owned()]);
+    fn bound_layers_paint_at_rect_origin_plus_anchor() {
+        // Verified draw math: dest = rect x1/y1 + anchor, unclipped.
+        // The 2-wide body over the 1-wide rect (10,20,11,21) paints
+        // both pixels; the anchored button pixel lands at rect
+        // (40,30) + anchor (2,3) = (42,33).
+        let wide = sprite55_blob(1, 0xFFFF, 2, 1, &[0x00, 0x7C, 0x00, 0x7C]);
+        let archive = opa_blob(&[("Room_List.ojs", &wide)]);
+        let mut figures = load_scene_figures(&archive, &["Room_List.ojs".to_owned()]);
+        let mut button = AvatarFigure::default();
+        button.push_layer(FigureLayer {
+            image: o2jam_render::Rgb555Image::decode(&[0x1F, 0x00], 1, 1).unwrap(),
+            dx: 2,
+            dy: 3,
+            colorkey: 0xFFFF,
+        });
+        figures.insert("Room_Button.ojs".to_owned(), button);
         let list = o2jam_file::parse_control_list(&room_control_text()).unwrap();
         let block = scene_block(&list, ROOM_BLOCK).unwrap();
-        let bnd = o2jam_file::parse_bnd(&bnd_blob(&[(10, 20, 14, 24), (0, 0, 8, 8)])).unwrap();
+        let bnd = o2jam_file::parse_bnd(&bnd_blob(&[(10, 20, 11, 21), (40, 30, 44, 34)])).unwrap();
         let placed = bind_scene_rects(block, &bnd);
         let mut buf = vec![0u32; 800 * 600];
         paint_scene_figures(
@@ -1669,9 +1687,12 @@ mod avatar_figure_tests {
             &figures,
         );
         let red_ink = o2jam_render::pack_xrgb(255, 0, 0);
+        let blue_ink = o2jam_render::pack_xrgb(0, 0, 255);
         assert_eq!(buf[20 * 800 + 10], red_ink);
-        assert_eq!(buf[20 * 800 + 11], 0);
+        assert_eq!(buf[20 * 800 + 11], red_ink);
         assert_eq!(buf[21 * 800 + 10], 0);
+        assert_eq!(buf[33 * 800 + 42], blue_ink);
+        assert_eq!(buf[33 * 800 + 40], 0);
         assert_eq!(buf[0], 0);
     }
 

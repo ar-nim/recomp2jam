@@ -5,13 +5,14 @@
 //! `O2mediaLogo.ojs`, channel/room/waiting/playing/loading/result blocks)
 //! through the scene kit in [`crate::avatar`] (`load_scene_figures`,
 //! `bind_scene_rects`, `anchor_placements`, `paint_scene_figures`).
-//! Rect `i` lays out entry `i + 1` (Playing lays out entries 213–229);
-//! bound layers cover-blit into their rect, unbound sprites paint 1:1
-//! at their record anchor, everything in file order with the
-//! background first. Number-font bodies (`Room_Number.ojs` and kin)
-//! paint live values digit by digit; entry codes gate visibility by
-//! state byte. Bare [`paint_screen`] keeps the flat-color fallback
-//! while no art is staged; staged scenes never paint flat cards.
+//! Rect ordinal `(code & 0xFFF) − 1` lays out each entry (Playing: the
+//! `EXIT`..`VOLUME` run, entries 213–229, ordinals 1–17); every layer
+//! paints 1:1 at its rect origin plus its record anchor — the rect
+//! positions, never clips — in file order with the background first.
+//! Number-font bodies (`Room_Number.ojs` and kin) paint live values
+//! digit by digit; entry codes gate visibility by state byte. Bare
+//! [`paint_screen`] keeps the flat-color fallback while no art is
+//! staged; staged scenes never paint flat cards.
 
 use std::collections::HashMap;
 
@@ -29,15 +30,15 @@ use o2jam_net::{
     RoomSlotState,
 };
 use o2jam_render::{
-    blit_anchor_in_rect, draw_number, draw_text, fill_rect, number_width, pack_xrgb,
-    scale_rect_to_frame, text_width, Frame, Rect,
+    blit_rgb555, draw_number, draw_text, fill_rect, number_width, pack_xrgb, scale_rect_to_frame,
+    text_width, Frame, Rect,
 };
 
 /// Gameplay block: real UI lives in `Playing1.opi` (235 entries,
 /// lifecycle §10).
 pub const PLAYING_BLOCK: &str = "STATE_PLAYING";
-/// Gameplay layout bind file: 17 rects over entries 213–229
-/// (`EXIT`..`VOLUME`), one-to-one in file order.
+/// Gameplay layout bind file: 17 rects over the bound run (entries
+/// 213–229, `EXIT`..`VOLUME`), paired by code ordinal 1–17.
 pub const PLAYING_BIND_FILE: &str = "State_Playing.bnd";
 /// Pre-game room layout bind file.
 pub const WAITING_BIND_FILE: &str = "State_Waiting.bnd";
@@ -563,12 +564,12 @@ fn font_places(placements: &[ScenePlacement], font: &str) -> Vec<(u32, Rect)> {
 }
 
 /// Paint `value` through a staged number font: the place of weight
-/// `w` shows digit `(value / w) % 10`, anchor-blitted 1:1 from the
-/// font figure's same-index layer into the place rect (recipe steps
-/// 6–7: `Room_Number.ojs` decodes ten digit layers in stored order,
-/// each 11x13 over its own 11x13 place rect, so anchor and rect
-/// coincide on real art). Missing fonts, short fonts, and empty
-/// rects paint nothing; every other staged body is untouched.
+/// `w` shows digit `(value / w) % 10`, blitted 1:1 from the font
+/// figure's same-index layer at the place-rect origin plus the
+/// layer's record anchor (`Room_Number.ojs` decodes ten digit layers
+/// in stored order, each 11x13 over its own 11x13 place rect, so
+/// anchor and rect coincide on real art). Missing fonts and short
+/// fonts paint nothing; every other staged body is untouched.
 fn paint_font_number(
     frame: &mut Frame<'_>,
     placements: &[ScenePlacement],
@@ -586,13 +587,12 @@ fn paint_font_number(
             .and_then(|index| figure.layer(index));
         if let Some(shown) = layer {
             let dest = scale_rect_to_frame(&rect, frame.w, frame.h);
-            blit_anchor_in_rect(
+            blit_rgb555(
                 frame,
-                &shown.image,
+                &shown.image.view(),
                 dest.x + shown.dx,
                 dest.y + shown.dy,
-                shown.colorkey,
-                &dest,
+                Some(shown.colorkey),
             );
         }
     }
@@ -1206,9 +1206,9 @@ pub fn paint_playing_backdrop(frame: &mut Frame<'_>, art: &SceneArt) {
 /// `avatar::PLAYING_BEHIND_SPRITES`), clipped clear of the lane
 /// columns and the HUD ink, then the static backdrop panels
 /// (`Playing_Menu.ojs`, the life/jam edge gauges, the level plate)
-/// and the bound gauges and buttons (`State_Playing.bnd` rects
-/// 213–229) on top. Lanes stay uncovered and notes, gauges, and UI
-/// ink keep their top slot.
+/// and the bound gauges and buttons (`State_Playing.bnd` ordinals
+/// 1–17) on top. Lanes stay uncovered and notes, gauges, and UI ink
+/// keep their top slot.
 pub fn paint_playing_overlay(frame: &mut Frame<'_>, art: &SceneArt) {
     let exclusions = playing_backdrop_exclusions(frame.w, frame.h);
     paint_behind_placements(frame, &art.placements, &art.figures, &exclusions);
@@ -2403,24 +2403,81 @@ mod paint_tests {
     }
 
     #[test]
+    fn font_digits_add_their_anchor_to_the_place_rect() {
+        // Verified draw math at the font painter too: the place rect
+        // positions and the digit layer's anchor adds — anchor (2,1)
+        // moves the digit off the rect corner, and nothing clips.
+        let mut figure = AvatarFigure::default();
+        figure.push_layer(FigureLayer {
+            image: Rgb555Image::decode(&0x7C00u16.to_le_bytes(), 1, 1).unwrap(),
+            dx: 2,
+            dy: 1,
+            colorkey: 0xFFFF,
+        });
+        let placements = vec![ScenePlacement {
+            id: "IDC_IMAGE_SROOM_ROOMNO100".to_owned(),
+            code: 0x1350_0001,
+            sprite: Some("Room_Number.ojs".to_owned()),
+            rect: Rect {
+                x: 10,
+                y: 10,
+                w: 4,
+                h: 4,
+            },
+        }];
+        let figures = HashMap::from([("Room_Number.ojs".to_owned(), figure)]);
+        let mut buf = vec![0u32; 800 * 600];
+        paint_font_number(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            &figures,
+            "Room_Number.ojs",
+            5,
+        );
+        assert_eq!(buf[11 * 800 + 12], pack_xrgb(255, 0, 0));
+        assert_eq!(buf[10 * 800 + 10], 0);
+    }
+
+    #[test]
     fn font_numbers_skip_missing_fonts_and_layers() {
         let placements = room_number_placements();
         let mut buf = vec![0x123456u32; 64 * 48];
-        let mut frame = Frame {
-            buf: &mut buf,
-            w: 64,
-            h: 48,
-        };
         paint_font_number(
-            &mut frame,
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 48,
+            },
             &placements,
             &HashMap::new(),
             "Room_Number.ojs",
             12,
         );
-        let short = HashMap::from([("Room_Number.ojs".to_owned(), red_figure())]);
-        paint_font_number(&mut frame, &placements, &short, "Room_Number.ojs", 12);
+        // Missing font paints nothing at all.
         assert_eq!(buf, vec![0x123456u32; 64 * 48]);
+        // Short font (one layer): only the hundreds digit (layer 0)
+        // paints — the tens and ones places need layers 1 and 2 and
+        // stay untouched. The place rects scale to zero width on the
+        // small frame, so the origin lands at the frame corner.
+        let short = HashMap::from([("Room_Number.ojs".to_owned(), red_figure())]);
+        paint_font_number(
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 48,
+            },
+            &placements,
+            &short,
+            "Room_Number.ojs",
+            12,
+        );
+        assert_eq!(buf[0], pack_xrgb(255, 0, 0));
+        assert_eq!(buf[1], 0x123456);
+        assert_eq!(buf[2], 0x123456);
     }
 
     #[test]
