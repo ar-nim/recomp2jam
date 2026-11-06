@@ -7,6 +7,7 @@
 //! the bottom, `lookahead` ms of chart visible above the line.
 
 use o2jam_game::{
+    lane_effect::{lane_map_for_modifier_byte, SkillRing},
     CoolStreak, Judgement, LaneMap, LongTail, MeasureReshuffle, PillStock, Score, TimingWindows,
 };
 use o2jam_render::{
@@ -225,6 +226,19 @@ impl PlayingView {
     }
 }
 
+/// Item-text curtain for one skill ring (geometry stays built in
+/// `o2jam-render::visible_spans`): the lane rings show everything,
+/// each sight ring covers or reveals its fifth of the highway.
+fn curtain_for_ring(ring: SkillRing) -> LaneCurtain {
+    match ring {
+        SkillRing::Hidden => LaneCurtain::Hidden,
+        SkillRing::Sudden => LaneCurtain::Sudden,
+        SkillRing::Dark => LaneCurtain::Dark,
+        SkillRing::ReverseDark => LaneCurtain::ReverseDark,
+        SkillRing::Mirror | SkillRing::Random | SkillRing::Panic => LaneCurtain::Full,
+    }
+}
+
 /// Word shown for each judgement tier.
 fn word_of(judgement: Judgement) -> &'static str {
     match judgement {
@@ -394,6 +408,35 @@ impl LivePlay {
     /// Skill-ring curtain worn for this run (default: none).
     pub fn set_curtain(&mut self, curtain: LaneCurtain) {
         self.curtain = curtain;
+    }
+
+    /// Song setup for one skill ring: remap lanes through the ring's
+    /// table, restart the per-measure reshuffle state, and hang the
+    /// ring's item-text curtain.
+    ///
+    /// Panic keeps reshuffling after setup: whenever
+    /// [`Self::should_rebuild_map`] says so, build a fresh table with
+    /// [`SkillRing::build_lane_map`] and feed it to [`Self::remap_lanes`].
+    pub fn apply_skill_ring(&mut self, ring: SkillRing, next_random: &mut impl FnMut() -> u32) {
+        let map = ring.build_lane_map(HIGHWAY_LANES as usize, next_random);
+        self.reshuffle = MeasureReshuffle::default();
+        self.set_curtain(curtain_for_ring(ring));
+        self.remap_lanes(&map);
+    }
+
+    /// Song setup from the room modifier byte (session byte at VA
+    /// `0x7789e4`, mirrored from room field `+0x20d`): the verified
+    /// lane path (byte 2 shuffles all lanes, byte 0 the narrow table,
+    /// anything else plays straight through) with a fresh reshuffle
+    /// state and no curtain — the setup copies static visibility
+    /// params for bytes 0 and 2, and the remaining clip math is
+    /// untraced, so rings with curtains are worn via
+    /// [`Self::apply_skill_ring`] instead.
+    pub fn apply_modifier_byte(&mut self, modifier: u8, next_random: &mut impl FnMut() -> u32) {
+        let map = lane_map_for_modifier_byte(modifier, HIGHWAY_LANES as usize, next_random);
+        self.reshuffle = MeasureReshuffle::default();
+        self.set_curtain(LaneCurtain::Full);
+        self.remap_lanes(&map);
     }
 
     /// Remap every pending lane through a skill-ring table
@@ -786,6 +829,104 @@ mod live_play_tests {
         assert!(live.should_rebuild_map(false));
         assert!(live.should_rebuild_map(true));
         assert!(!live.should_rebuild_map(true));
+    }
+
+    fn stub_words(words: Vec<u32>) -> impl FnMut() -> u32 {
+        let mut words = words.into_iter();
+        move || words.next().expect("stub randomness exhausted")
+    }
+
+    #[test]
+    fn mirror_ring_flips_lanes_with_no_curtain() {
+        let mut live = LivePlay::new(&[(0, 1000, 7)]);
+        let mut never_called = || -> u32 { panic!("mirror draws no randomness") };
+        live.apply_skill_ring(SkillRing::Mirror, &mut never_called);
+        assert_eq!(live.curtain, LaneCurtain::Full);
+        assert_eq!(live.strike_lane(6, 1000), Some(Judgement::Cool));
+    }
+
+    #[test]
+    fn random_ring_shuffles_lanes_with_no_curtain() {
+        let mut live = LivePlay::new(&[(0, 1000, 7)]);
+        live.apply_skill_ring(
+            SkillRing::Random,
+            &mut stub_words(vec![3, 1, 4, 8, 5, 9, 6]),
+        );
+        assert_eq!(live.curtain, LaneCurtain::Full);
+        // Fixed draws move source lane 0 to lane 3 (golden order).
+        assert_eq!(live.strike_lane(3, 1000), Some(Judgement::Cool));
+        assert_eq!(live.strike_lane(0, 1000), None);
+    }
+
+    #[test]
+    fn hidden_ring_keeps_lanes_and_covers_the_bottom() {
+        let mut live = LivePlay::new(&[(2, 1000, 7)]);
+        live.apply_skill_ring(SkillRing::Hidden, &mut stub_words(vec![]));
+        assert_eq!(live.curtain, LaneCurtain::Hidden);
+        assert_eq!(live.strike_lane(2, 1000), Some(Judgement::Cool));
+    }
+
+    #[test]
+    fn sudden_ring_keeps_lanes_and_shows_only_the_bottom() {
+        let mut live = LivePlay::new(&[(2, 1000, 7)]);
+        live.apply_skill_ring(SkillRing::Sudden, &mut stub_words(vec![]));
+        assert_eq!(live.curtain, LaneCurtain::Sudden);
+        assert_eq!(live.strike_lane(2, 1000), Some(Judgement::Cool));
+    }
+
+    #[test]
+    fn dark_ring_keeps_lanes_and_shows_only_the_middle() {
+        let mut live = LivePlay::new(&[(2, 1000, 7)]);
+        live.apply_skill_ring(SkillRing::Dark, &mut stub_words(vec![]));
+        assert_eq!(live.curtain, LaneCurtain::Dark);
+        assert_eq!(live.strike_lane(2, 1000), Some(Judgement::Cool));
+    }
+
+    #[test]
+    fn reverse_dark_ring_keeps_lanes_and_covers_the_middle() {
+        let mut live = LivePlay::new(&[(2, 1000, 7)]);
+        live.apply_skill_ring(SkillRing::ReverseDark, &mut stub_words(vec![]));
+        assert_eq!(live.curtain, LaneCurtain::ReverseDark);
+        assert_eq!(live.strike_lane(2, 1000), Some(Judgement::Cool));
+    }
+
+    #[test]
+    fn panic_ring_shuffles_and_rebuilds_each_plain_measure() {
+        let mut live = LivePlay::new(&[(0, 1000, 7)]);
+        live.apply_skill_ring(SkillRing::Panic, &mut stub_words(vec![3, 1, 4, 8, 5, 9, 6]));
+        assert_eq!(live.curtain, LaneCurtain::Full);
+        assert_eq!(live.strike_lane(3, 1000), Some(Judgement::Cool));
+        assert!(live.should_rebuild_map(false));
+        assert!(live.should_rebuild_map(false));
+        assert!(live.should_rebuild_map(true));
+        assert!(!live.should_rebuild_map(true));
+    }
+
+    #[test]
+    fn modifier_byte_two_shuffles_without_curtain() {
+        let mut live = LivePlay::new(&[(0, 1000, 7)]);
+        live.apply_modifier_byte(2, &mut stub_words(vec![3, 1, 4, 8, 5, 9, 6]));
+        assert_eq!(live.curtain, LaneCurtain::Full);
+        assert_eq!(live.strike_lane(3, 1000), Some(Judgement::Cool));
+    }
+
+    #[test]
+    fn modifier_byte_zero_builds_the_narrow_table_without_curtain() {
+        let mut live = LivePlay::new(&[(0, 1000, 7), (5, 1100, 9)]);
+        live.apply_modifier_byte(0, &mut stub_words(vec![2, 0, 1]));
+        assert_eq!(live.curtain, LaneCurtain::Full);
+        // Fixed draws move source lane 0 to lane 2; lanes outside
+        // the 4 slots stay put.
+        assert_eq!(live.strike_lane(2, 1000), Some(Judgement::Cool));
+        assert_eq!(live.strike_lane(5, 1100), Some(Judgement::Cool));
+    }
+
+    #[test]
+    fn unknown_modifier_byte_plays_straight_through() {
+        let mut live = LivePlay::new(&[(2, 1000, 7)]);
+        live.apply_modifier_byte(9, &mut stub_words(vec![]));
+        assert_eq!(live.curtain, LaneCurtain::Full);
+        assert_eq!(live.strike_lane(2, 1000), Some(Judgement::Cool));
     }
 
     #[test]
