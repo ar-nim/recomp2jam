@@ -315,3 +315,11 @@ solo or team. Grade thresholds OPEN.
 
 7.55 runs fullscreen 800x600; no windowed mode in this version.
 The winit shell should default to that mode.
+
+## Long-note release rule — player-reported, in-exe path identified but not traced
+
+Player holds from the note head; the tail MUST be released — missing
+the release is a miss, releasing early is a miss. Verified to exist:
+hold-bit handling and per-measure span markers in-exe, but the exact
+release-point judgement was not traced (never fires on shipped
+charts). Implemented as documented behavior only, not yet in code.
