@@ -40,6 +40,30 @@ pub const JAM_BAR_HEIGHT: u32 = 24;
 pub const JAM_BAR_TOP: i32 = 28;
 /// Gap between a jam edge-bar and the frame edge in pixels.
 pub const JAM_BAR_EDGE_GAP: i32 = 1;
+/// Odd-lane skin tint (even lanes keep the flat Playing backdrop so the
+/// staged `Playing1.opi` gauges ring unchanged edges; lifecycle §10).
+/// Procedural stand-in for the skinned lane panels (sprite-55 bodies in
+/// `Playing1.opi`; exact panel codecs TBD in `docs/file-formats/opi.md`).
+pub const LANE_SKIN_ODD: u32 = pack_xrgb(0x0E, 0x0E, 0x16);
+/// Note-cap highlight row above each falling note (mimics the sprite-55
+/// note caps; staged `_Note_Cool.ojt` / `_Note_Good.ojt` / `_Note_Bad.ojt`
+/// / `_Note_Miss.ojt` runtime refs resolve to bare `.oja` siblings —
+/// `docs/file-formats/opi.md` — until those figures bind).
+pub const NOTE_CAP: u32 = pack_xrgb(0xB0, 0xE0, 0xFF);
+/// Long-note tail beam ink (heads keep the `NOTE_BLUE` core below).
+pub const TAIL_BEAM: u32 = pack_xrgb(0x20, 0x80, 0xE0);
+/// Judgement-line receptor pad at rest (one pad per lane).
+pub const RECEPTOR_DIM: u32 = pack_xrgb(0x2A, 0x2A, 0x38);
+/// Judgement-line receptor pad flash on a struck lane.
+pub const RECEPTOR_LIT: u32 = pack_xrgb(0xC0, 0xE8, 0xFF);
+/// Hit-burst column rising above the line after a strike.
+pub const HIT_BURST: u32 = pack_xrgb(0xFF, 0xFF, 0xFF);
+/// Hit-burst lifetime in song ms (visual only; timing untouched).
+pub const BURST_MS: u64 = 150;
+/// Receptor pad height in pixels.
+pub const RECEPTOR_H: i32 = 5;
+/// Hit-burst column height in pixels.
+pub const BURST_H: i32 = 24;
 
 /// Lane layout for one frame size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,14 +150,11 @@ impl PlayingView {
     /// (lookahead ahead) to the judgement line (due now).
     #[must_use]
     pub fn visible(&self, geom: &HighwayGeometry) -> Vec<(u8, i32)> {
-        let px_per_ms = geom.line_y as f32 / self.lookahead_ms as f32;
         let mut notes = Vec::new();
         for (lane, at) in &self.onsets {
-            let ahead = at.saturating_sub(self.now_ms);
-            if *at <= self.now_ms || ahead > self.lookahead_ms {
-                continue;
+            if let Some(y) = y_for_onset(geom, *at, self.now_ms, self.lookahead_ms) {
+                notes.push((*lane, y));
             }
-            notes.push((*lane, geom.line_y - (ahead as f32 * px_per_ms) as i32));
         }
         notes
     }
@@ -191,7 +212,10 @@ impl PlayingView {
         }
     }
 
-    /// Background, lane separators, and the judgement line (no notes).
+    /// Background, lane skins, receptors, and the judgement line
+    /// (no notes). Even lanes keep the flat Playing backdrop; odd lanes
+    /// carry the tint above so staged `Playing1.opi` edge gauges keep
+    /// ringing a readable highway.
     fn paint_shell(&self, frame: &mut Frame<'_>, geom: &HighwayGeometry) {
         let w = frame.w as i32;
         fill_rect(
@@ -206,6 +230,18 @@ impl PlayingView {
         );
         for lane in 0..HIGHWAY_LANES {
             let column = geom.lane_rect(lane);
+            if lane % 2 == 1 {
+                fill_rect(
+                    frame,
+                    &Rect {
+                        x: column.x,
+                        y: 0,
+                        w: column.w,
+                        h: column.h,
+                    },
+                    LANE_SKIN_ODD,
+                );
+            }
             fill_rect(
                 frame,
                 &Rect {
@@ -216,6 +252,7 @@ impl PlayingView {
                 },
                 pack_xrgb(0x30, 0x30, 0x30),
             );
+            Self::paint_receptor(frame, geom, lane, RECEPTOR_DIM);
         }
         fill_rect(
             frame,
@@ -229,15 +266,43 @@ impl PlayingView {
         );
     }
 
-    /// One falling note block.
-    fn paint_note(frame: &mut Frame<'_>, geom: &HighwayGeometry, lane: u8, y: i32) {
+    /// One lane's receptor pad resting just above the judgement line.
+    fn paint_receptor(frame: &mut Frame<'_>, geom: &HighwayGeometry, lane: u8, ink: u32) {
         let column = geom.lane_rect(lane);
         fill_rect(
             frame,
             &Rect {
                 x: column.x + 1,
-                y,
+                y: geom.line_y - RECEPTOR_H,
                 w: column.w.saturating_sub(2),
+                h: u32::try_from(RECEPTOR_H).unwrap_or(0),
+            },
+            ink,
+        );
+    }
+
+    /// One falling note block: the `NOTE_BLUE` core the soak harness
+    /// (`real_art.rs` Playing row) and the shell overlay tests key on,
+    /// plus a cap highlight row above it toward the sprite-55 note art.
+    fn paint_note(frame: &mut Frame<'_>, geom: &HighwayGeometry, lane: u8, y: i32) {
+        let column = geom.lane_rect(lane);
+        let w = column.w.saturating_sub(2);
+        fill_rect(
+            frame,
+            &Rect {
+                x: column.x + 1,
+                y: y - 1,
+                w,
+                h: 1,
+            },
+            NOTE_CAP,
+        );
+        fill_rect(
+            frame,
+            &Rect {
+                x: column.x + 1,
+                y,
+                w,
                 h: NOTE_H as u32,
             },
             pack_xrgb(0x40, 0xC0, 0xFF),
@@ -267,6 +332,21 @@ fn jam_fill_rows(progress_in_level: u64, bar_h: u32) -> u32 {
         .checked_div(JAM_PROGRESS_PER_LEVEL)
         .unwrap_or(0);
     u32::try_from(filled).unwrap_or(u32::MAX).min(bar_h)
+}
+
+/// Row for one onset at `now_ms` (`None` while struck/past or beyond
+/// the lookahead). Shared by falling notes and long-note tail beams so
+/// both ride the same scroll speed.
+fn y_for_onset(geom: &HighwayGeometry, at_ms: u64, now_ms: u64, lookahead_ms: u64) -> Option<i32> {
+    if at_ms <= now_ms {
+        return None;
+    }
+    let ahead = at_ms.saturating_sub(now_ms);
+    if ahead > lookahead_ms || lookahead_ms == 0 {
+        return None;
+    }
+    let px_per_ms = geom.line_y as f32 / lookahead_ms as f32;
+    Some(geom.line_y - (ahead as f32 * px_per_ms) as i32)
 }
 
 /// Word shown for each judgement tier.
@@ -352,6 +432,9 @@ pub struct LivePlay {
     now_ms: u64,
     last_word: Option<(Judgement, u64)>,
     sounds: Vec<u32>,
+    /// Last strike per lane in song ms (visual hit-burst only; scoring
+    /// and timing never read this).
+    lane_flash: [Option<u64>; HIGHWAY_LANES as usize],
 }
 
 impl Default for LivePlay {
@@ -369,6 +452,7 @@ impl Default for LivePlay {
             now_ms: 0,
             last_word: None,
             sounds: Vec::new(),
+            lane_flash: [None; HIGHWAY_LANES as usize],
         }
     }
 }
@@ -401,6 +485,7 @@ impl LivePlay {
             now_ms: 0,
             last_word: None,
             sounds: Vec::new(),
+            lane_flash: [None; HIGHWAY_LANES as usize],
         }
     }
 
@@ -436,6 +521,7 @@ impl LivePlay {
             now_ms: 0,
             last_word: None,
             sounds: Vec::new(),
+            lane_flash: [None; HIGHWAY_LANES as usize],
         }
     }
 
@@ -475,6 +561,7 @@ impl LivePlay {
 
     /// Remap every pending lane through a skill-ring table
     /// (mirror / shuffle built by the `LaneMap` constructors).
+    /// Flashes clear: they are frame-space visuals for struck lanes.
     pub fn remap_lanes(&mut self, map: &LaneMap) {
         for note in &mut self.pending {
             if let Some(destination) = map.destination(note.lane) {
@@ -483,6 +570,7 @@ impl LivePlay {
         }
         self.pending.sort_by_key(|note| note.at_ms);
         self.view.remap_lanes(map);
+        self.lane_flash = [None; HIGHWAY_LANES as usize];
     }
 
     /// Whether the lane table needs a fresh build for the next measure
@@ -566,6 +654,7 @@ impl LivePlay {
         self.pending[i].holding = self.pending[i].tail_ms.is_some();
         self.view.strike(lane, at_ms);
         self.sounds.push(sample);
+        self.flash_lane(lane, now_ms);
         let judgement = self.windows.judge(offset);
         self.rate(judgement);
         Some(judgement)
@@ -595,6 +684,7 @@ impl LivePlay {
         };
         self.pending[i].holding = false;
         self.pending[i].tail_judged = true;
+        self.flash_lane(lane, now_ms);
         let judgement = if tail.is_early(now_ms, &self.windows) {
             Judgement::Miss
         } else {
@@ -634,6 +724,135 @@ impl LivePlay {
         self.streak.note(judgement, &mut self.pills);
         self.score.apply_rated(judgement, &mut self.pills);
         self.last_word = Some((judgement, self.now_ms));
+    }
+
+    /// Stamp a visual-only hit flash on one lane (never read by
+    /// timing or scoring).
+    fn flash_lane(&mut self, lane: u8, now_ms: u64) {
+        if let Some(slot) = self.lane_flash.get_mut(lane as usize) {
+            *slot = Some(now_ms);
+        }
+    }
+
+    /// Whether one lane's flash is still lit at `now_ms`.
+    fn flash_lit(&self, lane: u8, now_ms: u64) -> bool {
+        self.lane_flash
+            .get(lane as usize)
+            .copied()
+            .flatten()
+            .is_some_and(|at| now_ms.saturating_sub(at) < BURST_MS)
+    }
+
+    /// Long-note tail beams between head and tail rows (visual only;
+    /// heads and releases still rate through `strike_lane` /
+    /// `release_lane`). Held heads beam from the judgement line;
+    /// untouched holds beam head-to-tail. Beams obey the worn curtain.
+    fn paint_hold_tails(&self, frame: &mut Frame<'_>, geom: &HighwayGeometry) {
+        for note in &self.pending {
+            let Some(tail_ms) = note.tail_ms else {
+                continue;
+            };
+            if note.tail_judged || tail_ms <= self.now_ms {
+                continue;
+            }
+            let Some(top) = y_for_onset(geom, tail_ms, self.now_ms, DEFAULT_LOOKAHEAD_MS) else {
+                continue;
+            };
+            let bottom = if note.holding {
+                geom.line_y
+            } else {
+                let Some(head_y) = y_for_onset(geom, note.at_ms, self.now_ms, DEFAULT_LOOKAHEAD_MS)
+                else {
+                    continue;
+                };
+                head_y + NOTE_H
+            };
+            if top >= bottom || !self.tail_shown(frame, geom, top) {
+                continue;
+            }
+            let column = geom.lane_rect(note.lane);
+            fill_rect(
+                frame,
+                &Rect {
+                    x: column.x + column.w as i32 / 2 - 1,
+                    y: top,
+                    w: 2,
+                    h: u32::try_from(bottom - top).unwrap_or(0),
+                },
+                TAIL_BEAM,
+            );
+        }
+    }
+
+    /// Whether a tail row survives the worn sight-ring curtain (same
+    /// span rule as falling notes).
+    fn tail_shown(&self, frame: &Frame<'_>, geom: &HighwayGeometry, y: i32) -> bool {
+        if self.curtain == LaneCurtain::Full {
+            return true;
+        }
+        let highway = Rect {
+            x: 0,
+            y: 0,
+            w: frame.w as u32,
+            h: geom.line_y.max(0) as u32,
+        };
+        visible_spans(self.curtain, &highway)
+            .iter()
+            .any(|span| y >= span.y && y < span.y + span.h as i32)
+    }
+
+    /// Lit receptor pads plus burst columns on flashed lanes (the
+    /// judgement-line key effects: `KeyEffect_Tutorial_%d` siblings in
+    /// `Playing1.opi` mark the same per-lane anchors).
+    fn paint_hit_bursts(&self, frame: &mut Frame<'_>, geom: &HighwayGeometry, now_ms: u64) {
+        for lane in 0..HIGHWAY_LANES {
+            if !self.flash_lit(lane, now_ms) {
+                continue;
+            }
+            let column = geom.lane_rect(lane);
+            PlayingView::paint_receptor(frame, geom, lane, RECEPTOR_LIT);
+            fill_rect(
+                frame,
+                &Rect {
+                    x: column.x + 2,
+                    y: geom.line_y - RECEPTOR_H - BURST_H,
+                    w: column.w.saturating_sub(4),
+                    h: u32::try_from(BURST_H).unwrap_or(0),
+                },
+                HIT_BURST,
+            );
+        }
+    }
+
+    /// Judgement word above the line with the running combo beneath it
+    /// (the original stacks combo under the word; the top-left combo
+    /// digits stay as the HUD mirror). Words keep plain white ink.
+    fn paint_judgement_word(&self, frame: &mut Frame<'_>, geom: &HighwayGeometry, now_ms: u64) {
+        let Some((judgement, at)) = self.last_word else {
+            return;
+        };
+        if now_ms.saturating_sub(at) >= 600 {
+            return;
+        }
+        let word = word_of(judgement);
+        let text_w = i32::try_from(text_width(word)).unwrap_or(0);
+        draw_text(
+            frame,
+            frame.w as i32 / 2 - text_w / 2,
+            geom.line_y - 40,
+            word,
+            pack_xrgb(0xFF, 0xFF, 0xFF),
+        );
+        if self.score.combo > 0 {
+            let digits = i32::try_from(number_width(self.score.combo)).unwrap_or(0);
+            draw_number(
+                frame,
+                frame.w as i32 / 2 - digits / 2,
+                geom.line_y - 24,
+                self.score.combo,
+                pack_xrgb(0xFF, 0xFF, 0x40),
+            );
+        }
     }
 
     /// Peer life bars (top-right strip): one bar per 4015 member slot,
@@ -746,10 +965,13 @@ impl LivePlay {
         );
     }
 
-    /// Paint highway, notes, peer bars, jam gauge, score, combo, and word.
+    /// Paint highway, notes, tails, peer bars, jam gauge, score, combo,
+    /// bursts, and word.
     pub fn paint(&mut self, frame: &mut Frame<'_>, geom: &HighwayGeometry, now_ms: u64) {
         self.advance_to(now_ms);
         self.view.paint_curtained(frame, geom, self.curtain);
+        self.paint_hold_tails(frame, geom);
+        self.paint_hit_bursts(frame, geom, now_ms);
         self.paint_peer_bars(frame);
         self.paint_jam_gauge(frame);
         let points = u32::try_from(self.score.points).unwrap_or(u32::MAX);
@@ -757,19 +979,7 @@ impl LivePlay {
         if self.score.combo > 0 {
             draw_number(frame, 16, 32, self.score.combo, pack_xrgb(0xFF, 0xFF, 0x40));
         }
-        if let Some((judgement, at)) = self.last_word {
-            if now_ms.saturating_sub(at) < 600 {
-                let word = word_of(judgement);
-                let text_w = text_width(word) as i32;
-                draw_text(
-                    frame,
-                    frame.w as i32 / 2 - text_w / 2,
-                    geom.line_y - 40,
-                    word,
-                    pack_xrgb(0xFF, 0xFF, 0xFF),
-                );
-            }
-        }
+        self.paint_judgement_word(frame, geom, now_ms);
     }
 }
 
@@ -943,8 +1153,9 @@ mod live_play_tests {
             3400,
         );
         let jam_ink = pack_xrgb(0xFF, 0xC0, 0x40);
-        // Level 1 glyph top row is 0b010: left pixel stays background.
-        assert_eq!(buf[4 * 70 + 34], pack_xrgb(0x0A, 0x0A, 0x0A));
+        // Level 1 glyph top row is 0b010: left pixel keeps the lane skin
+        // (x 34 rides odd lane 3).
+        assert_eq!(buf[4 * 70 + 34], LANE_SKIN_ODD);
         assert_eq!(buf[4 * 70 + 35], jam_ink);
         let bottom = (JAM_BAR_TOP + 24 - 1) as usize;
         assert_eq!(buf[bottom * 70 + 2], pack_xrgb(0x10, 0x10, 0x30));
@@ -1271,11 +1482,180 @@ mod live_play_tests {
             &geom(),
             1700,
         );
+        // The faded word leaves the highway skin, which tints odd lanes.
+        let word_x = 35 - text_width("COOL") as i32 / 2;
+        let lane = (word_x + 2) / 10;
+        let skin = if lane % 2 == 1 {
+            LANE_SKIN_ODD
+        } else {
+            pack_xrgb(0x0A, 0x0A, 0x0A)
+        };
+        assert_eq!(buf[10 * 70 + word_x as usize + 2], skin);
+    }
+
+    #[test]
+    fn odd_lanes_carry_skin_tint() {
+        let mut live = LivePlay::default();
+        let mut buf = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            0,
+        );
+        assert_eq!(buf[5 * 70], pack_xrgb(0x0A, 0x0A, 0x0A));
+        assert_eq!(buf[5 * 70 + 12], LANE_SKIN_ODD);
+    }
+
+    #[test]
+    fn notes_carry_cap_highlight_over_blue_core() {
+        let geom = HighwayGeometry::centered(70, 60);
+        let mut view = PlayingView::new(vec![(0, 1500)]);
+        view.advance_to(1000);
+        let mut buf = vec![0u32; 70 * 60];
+        view.paint(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            &geom,
+        );
+        let note_y = 50 - (500.0 * 50.0 / 2000.0) as i32;
+        assert_eq!(buf[note_y as usize * 70 + 2], pack_xrgb(0x40, 0xC0, 0xFF));
+        assert_eq!(buf[(note_y - 1) as usize * 70 + 2], NOTE_CAP);
+    }
+
+    #[test]
+    fn receptors_rest_above_the_line() {
+        let geom = HighwayGeometry::centered(70, 60);
+        let view = PlayingView::default();
+        let mut buf = vec![0u32; 70 * 60];
+        view.paint(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            &geom,
+        );
+        assert_eq!(buf[47 * 70 + 2], RECEPTOR_DIM);
+        assert_eq!(buf[50 * 70], pack_xrgb(0xE0, 0xE0, 0xE0));
+    }
+
+    #[test]
+    fn hold_tail_beam_spans_head_to_tail() {
+        // Lane 3 sits clear of the edge jam bars and peer strip.
+        let mut live = LivePlay::new_holds(&[(3, 1500, 1900, 7)]);
+        let mut buf = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            1000,
+        );
+        assert!(buf.contains(&TAIL_BEAM));
+        assert_eq!(buf[30 * 70 + 34], TAIL_BEAM);
+    }
+
+    #[test]
+    fn strike_lights_receptor_and_burst_then_fades() {
+        // Lane 3 sits clear of the edge jam bars and peer strip.
+        let mut live = LivePlay::new(&[(3, 1000, 7)]);
+        live.strike_lane(3, 1000);
+        let mut lit = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut lit,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            1050,
+        );
+        assert_eq!(lit[47 * 70 + 33], RECEPTOR_LIT);
+        assert_eq!(lit[40 * 70 + 34], HIT_BURST);
+        let mut faded = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut faded,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            1200,
+        );
+        assert_eq!(faded[47 * 70 + 33], RECEPTOR_DIM);
+        assert_eq!(faded[40 * 70 + 34], LANE_SKIN_ODD);
+    }
+
+    #[test]
+    fn judgement_word_stacks_combo_beneath() {
+        let mut live = LivePlay::new(&[(0, 1000, 7)]);
+        live.strike_lane(0, 1000);
+        let mut buf = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            1100,
+        );
+        let amber = pack_xrgb(0xFF, 0xFF, 0x40);
         let word_x = 35 - text_width("COOL") as i32 / 2;
         assert_eq!(
             buf[10 * 70 + word_x as usize + 2],
-            pack_xrgb(0x0A, 0x0A, 0x0A)
+            pack_xrgb(0xFF, 0xFF, 0xFF)
         );
+        assert!(
+            (24..30).any(|y| (0..70).any(|x| buf[y * 70 + x] == amber)),
+            "combo cluster missing under the word"
+        );
+    }
+
+    #[test]
+    fn sudden_curtain_hides_tail_beams() {
+        let mut live = LivePlay::new_holds(&[(0, 1500, 2900, 7)]);
+        live.set_curtain(LaneCurtain::Sudden);
+        let mut buf = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            1000,
+        );
+        assert!(!buf.contains(&TAIL_BEAM));
+    }
+
+    #[test]
+    fn remap_clears_lane_flashes() {
+        let mut live = LivePlay::new(&[(0, 1000, 7)]);
+        live.strike_lane(0, 1000);
+        live.remap_lanes(&LaneMap::mirrored(7));
+        let mut buf = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            1050,
+        );
+        // Lane 0 receptor and burst rows peek past the edge jam bar.
+        assert_eq!(buf[47 * 70 + 7], RECEPTOR_DIM);
+        assert_eq!(buf[40 * 70 + 6], pack_xrgb(0x0A, 0x0A, 0x0A));
     }
 }
 
