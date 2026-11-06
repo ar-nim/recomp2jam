@@ -17,7 +17,7 @@ response S→C `N+1` (`docs/net-protocol.md` §3).
 |---|---|---|
 | `SyncItemPurchase` (request) | 5000 (`0x1388`) | empty (opcode word + length word 4, no appends) |
 | `SellItem` (request) | 5002 (`0x138a`) | `i32` selection, `i32` entry (8 B LE) |
-| `SellItemResponse` | 5003 (`0x138b`) | `i32` result + `i32` extra iff result `0` (4 or 8 B) |
+| `SellItemResponse` | 5003 (`0x138b`) | `i32` result + `i32` gem refund iff result `0` (4 or 8 B) |
 | `ChangeName` (request) | 5030 (`0x13a6`) | null-term name + `i32` selection + `i32` entry |
 | `ChangeNameResponse` | 5031 (`0x13a7`) | `i32` result (4 B LE) |
 | `CheckName` (request) | 5032 (`0x13a8`) | null-term name |
@@ -83,8 +83,10 @@ default — they are C→S requests with no S→C handler.)
 
 - index 0 (5003) → stub VA `0x558842` → handler VA `0x560c80`
   (file `0x160c80`): reads `i32` result; nonzero returns at
-  once, zero reads a second `i32` (into `0x768b4c`, applied via
-  `0x540090`). So: result always, extra iff result `0`. The
+  once, zero reads a second `i32` (gem refund into `0x768b44`, file
+  `0x160caa`, applied via `0x540090` to `0x77cd00+0x2c`, the shared
+  gem slot). So: result always, gem iff result `0` (Memoryer's
+  `SellItemResponse`: `Invalid` + nullable `Gem`). The
   shop-context case (VA `0x4a5c76`, file `0xa5c76`) treats `0`
   as success and `0xffffffa0` as failure.
 - index 2 (5005) → handler VA `0x560cf0` (file `0x160cf0`;
@@ -167,38 +169,47 @@ requests have live send paths per the sites above.
   standalone (stays OPEN, no `WireMessage` type). Exclusive handler VA
   `0x560a40` (file `0x160a40`); sole caller is the `0x1389` stub
   at VA `0x558831` (file `0x158831`), reached from the id check at
-  VA `0x55833d` (file `0x15833d`). Walked reads in wire order:
+  VA `0x55833d` (file `0x15833d`). Field order follows Memoryer's
+  `SyncItemPurchaseResponse` (`Gem`, `Point`, `O2Cash`, `CashPoint`,
+  `Inventory` (unprefixed), `MusicCash`, `ItemCash`,
+  `AttributiveItems` (`Int32` M), `FreePassExtensionDays`) and matches
+  the six-word wallet block the sibling handler at VA `0x560e00` (file
+  `0x160e00`) reads contiguously (`0x768b44`/`48`/`4c`/`50`/`54`, then
+  `0x768b58` last, files `0x160e12`–`0x160e6b`). Walked reads in wire
+  order:
   - Prefix: 4×`i32` via the fixed-size reader (`0x555d20`) into
     `0x768b44`/`0x768b48`/`0x768b4c`/`0x768b58` (push sites files
-    `0x160a59`/`0x160a68`/`0x160a77`/`0x160a86`). PINNED: word 1 is
-    the gem slot (applied via `0x540090` to `0x77cd00+0x2c` — the same
-    slot the `SyncCashPoint` gem word and the `SellItem` success word
-    update); word 4 is the cash slot (applied via `0x540d00` to
-    `0x77cd00+0x2128`, inside the wallet block copied at VA `0x4e93d1`,
-    file `0xe93d1`). Word 2 (`0x768b48`) is write-only — no reader
-    anywhere in `.text` — so it is modeled `reserved`. Word 3
-    (`0x768b4c`) is a shop-checked wallet word (compared against shop
-    state at VA `0x499f26`, file `0x99f26`, and pushed for price
-    display alongside the gem word at VAs `0x4a221b`/`0x4a3544`/
-    `0x4f45c4`, files `0xa221b`/`0xa3544`/`0xf45c4`); its exact game
-    meaning stays OPEN. The sibling handler at VA `0x560e00` (file
-    `0x160e00`) reads all six wallet words contiguously
-    (`0x768b44`/`48`/`4c`/`50`/`54`, then `0x768b58` last, files
-    `0x160e12`–`0x160e6b`) with the same two appliers, corroborating
-    the six-word block. Modeled as `SyncItemPurchasePrefix` (first 16
-    bytes only, `decode_prefix`/`encode_inner`).
+    `0x160a59`/`0x160a68`/`0x160a77`/`0x160a86`). PINNED: word 1 `Gem`
+    (applied via `0x540090` to `0x77cd00+0x2c` — the same slot the
+    `SyncCashPoint` gem word and the `SellItem` gem refund update);
+    word 2 `Point` (write-only — no reader anywhere in `.text`);
+    word 3 `O2Cash` (shop-checked: entry price `[0x77cce8+0x14]` via
+    `0x53c010` is affordable when it does not exceed `O2Cash` at VA
+    `0x499f26`, file `0x99f26`, or the matching wallet below; pushed
+    for price display alongside gem at VAs `0x4a221b`/`0x4a3544`/
+    `0x4f45c4`, files `0xa221b`/`0xa3544`/`0xf45c4`); word 4
+    `CashPoint` (applied via `0x540d00` to `0x77cd00+0x2128`, inside
+    the wallet block copied at VA `0x4e93d1`, file `0xe93d1` — the same
+    slot the `SyncCashPoint` cash word updates). Modeled as
+    `SyncItemPurchasePrefix { gem, point, o2_cash, cash_point }`
+    (`decode_prefix`/`encode_inner`).
   - Entry list: PINNED as before — bound snapshotted from the GLOBAL
     dword `0x77cce4` (VA `0x560ab4`, file `0x160ab4`), not from the
     packet, so the length is unknowable without that context: one shop
     entry word per entry (`N = 0x77cce4` words, each written into the
     shop list `0x77ccbc` via `0x537c10` at VA `0x560afc`, file
     `0x160afc` — the same helper/table triple `0x77ccbc`/`0x77ccc0`/
-    `0x77cce4` the sell/equip/rename send paths read).
+    `0x77cce4` the sell/equip/rename send paths read). Memoryer's
+    unprefixed `Inventory` list.
   - Post-list wallets: 2×`i32` into `0x768b50`/`0x768b54` (files
-    `0x160b03`/`0x160b12`). PINNED as wallet words 5–6: the same
-    globals the sibling handler reads contiguously, and both are
-    shop-checked (`0x768b50` at VA `0x499f39`, file `0x99f39`;
-    `0x768b54` at VA `0x499f7d`, file `0x99f7d`). Exact meanings OPEN.
+    `0x160b03`/`0x160b12`). PINNED: word 5 `MusicCash`, word 6
+    `ItemCash` (Memoryer orders 5–6; same order as `t_o2jam_charcash`
+    columns and `CharacterInfo` fields). Both are shop-checked as the
+    `O2Cash` alternative (`0x768b50` at VA `0x499f39`, file `0x99f39`;
+    `0x768b54` at VA `0x499f7d`, file `0x99f7d`; same pair duplicated
+    for the sibling shop at files `0xc841d`/`0xc8430` and
+    `0xc8461`/`0xc8474`). Modeled as `SyncItemPurchaseWallets
+    { music_cash, item_cash }`.
   - 12-byte blob: PROVEN ABSENT from the wire. The `push $0xc` +
     `push $0` + `call 0x5f1ef0` sequence (call site file `0x160b3e`)
     zeroes a 12-byte stack scratch: `0x5f1ef0` (file `0x1f1ef0`) is a
@@ -207,26 +218,29 @@ requests have live send paths per the sites above.
     `0x560b83`) — no packet read happens between the post-list words
     and the M count. The earlier "12-byte blob" wording was a misread
     of that `memset`; no wire bytes, no type.
-  - M-pair list: packet-counted `i32` M (file `0x160b8a`), then two
-    4-byte reads per entry (files `0x160bb6`/`0x160bc4`) — 8 wire
-    bytes per pair. PINNED widths: the first word is whole-consumed as
-    the entry id (validated by `0x537e90` on `0x77ccbc`, whose `0xff`
-    return skips the pair at file `0x160bf5`, then resolved by
-    `0x538240`, plus item-record lookups `0x52dba0` on `0x77b540`
-    with `[eax+0xa]`/`[eax+0xb]` feeding render `0x4a9b60` on
-    `0x7795fc`); only the LOW word of the second word is consumed
+  - M-pair list: PINNED as `AttributiveItems` (Memoryer order 7,
+    `Int32`-prefixed count M at file `0x160b8a`, then two 4-byte reads
+    per entry at files `0x160bb6`/`0x160bc4` — 8 wire bytes per pair).
+    The first word is the attributive item id (validated by `0x537e90`
+    on `0x77ccbc`, whose `0xff` return skips the pair at file
+    `0x160bf5`, then accumulated into the shop entry by `0x538240`,
+    plus item-record lookups `0x52dba0` on `0x77b540` with
+    `[eax+0xa]`/`[eax+0xb]` feeding render `0x4a9b60` on `0x7795fc`);
+    the second word is the stack count: only the LOW word is forwarded
     (`movzx cx`, file `0x160bd8`) — the high half is read to advance
-    the cursor then dropped. Modeled as `ShopRestockPair`
-    (`entry_id`, `aux_low`, reserved `aux_high`). Game meanings OPEN.
-  - Trailing word: single `i32` (file `0x160c54`), then a forward
-    stamping `$0x1389` + `$0x12` into the UI event queue (`0x478d50`;
-    `$0x1389` push file `0x160c68`, call file `0x160c75`). PINNED: the
-    `$0x1389` is the event id, not wire. The shop-context `0x1389`
-    consumer (VA `0x4f4144`, file `0xf4144`, dispatched at file
-    `0xf410e`) branches on the forwarded word: nonzero stores it to
-    `[ecx+0x64]` and notifies `0x13a1` (VA `0x4f417f`, file
-    `0xf417f`); zero takes the `0x4f4300` refresh path (VA `0x4f419e`,
-    file `0xf419e`). The word's meaning stays OPEN.
+    the cursor then dropped (zero in practice). Modeled as
+    `ShopRestockPair { attributive_item_id, item_count }` (both `i32`
+    for exact framing).
+  - Trailing word: PINNED as `FreePassExtensionDays` (Memoryer order 8).
+    Single `i32` (file `0x160c54`), then a forward stamping `$0x1389` +
+    `$0x12` into the UI event queue (`0x478d50`; `$0x1389` push file
+    `0x160c68`, call file `0x160c75`; the `$0x1389` is the event id,
+    not wire). The shop-context `0x1389` consumer (VA `0x4f4144`, file
+    `0xf4144`, dispatched at file `0xf410e`) branches on the forwarded
+    word: nonzero stores it to `[ecx+0x64]` and notifies `0x13a1` (VA
+    `0x4f417f`, file `0xf417f`; `0x13a1` = 5025 `SyncFreePass`);
+    zero takes the `0x4f4300` refresh path (VA `0x4f419e`, file
+    `0xf419e`). Modeled as `SyncItemPurchaseTail { free_pass_days }`.
 - `SellItem`/`ChangeName` word semantics: first word is the
   bounds-checked `0x77ccc0` selection index (role VERIFIED);
   the second word is the fetched entry's id word (usage
@@ -260,8 +274,8 @@ requests have live send paths per the sites above.
 `sell_item_rejects_trailing_bytes`,
 `sell_item_rejects_wrong_command`,
 `sell_item_response_decodes_result_only`,
-`sell_item_response_success_carries_extra_word` (exact frame),
-`sell_item_response_rejects_extra_word_on_error`,
+`sell_item_response_success_carries_gem_word` (exact frame),
+`sell_item_response_rejects_gem_word_on_error`,
 `sell_item_response_rejects_short_success`,
 `change_name_encodes_string_plus_two_words` (exact frame),
 `change_name_round_trips_through_frame`,
@@ -292,6 +306,13 @@ round-trip),
 `sync_item_purchase_prefix_decodes_first_sixteen_bytes`,
 `sync_item_purchase_prefix_names_wallet_roles`,
 `sync_item_purchase_prefix_rejects_short_prefix`,
-`shop_restock_pair_decodes_entry_plus_split_word`,
+`sync_item_purchase_prefix_encodes_named_wallets` (exact bytes),
+`sync_item_purchase_wallets_decode_music_and_item_cash`,
+`sync_item_purchase_wallets_round_trip`,
+`sync_item_purchase_wallets_reject_short_body`,
+`sync_item_purchase_tail_decodes_free_pass_days`,
+`sync_item_purchase_tail_round_trips_zero_refresh`,
+`sync_item_purchase_tail_rejects_short_body`,
+`shop_restock_pair_decodes_attributive_item_and_count`,
 `shop_restock_pair_round_trips_pair_list`,
 `shop_restock_pair_rejects_short_body`.

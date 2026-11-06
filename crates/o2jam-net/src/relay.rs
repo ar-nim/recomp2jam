@@ -1055,6 +1055,31 @@ impl WireMessage for GetP2PList {
 /// Fixed member-slot count of [`LiveStateResponse`]: the handler loops
 /// slot indices `0..8` (bound at file `0x159cf9`).
 const LIVE_STATE_SLOTS: usize = 8;
+/// Sibling lead-flag member-update command (room dispatcher id 3003).
+///
+/// Command binding (7.55, local-static, read-only, VA = file + `0x400000`):
+/// the room dispatcher subtracts base `0x0BBB` (3003), range-checks the
+/// bound `0x0B`, and jumps through the dword table at file `0x1589c4`
+/// (`ff 24 8d c4 89 55 00`); index 0 routes through the stub at file
+/// `0x1585ab` into the lead-flag handler at entry file `0x15cad0` (sole
+/// caller at file `0x1585af`). That handler reads the room-master flag
+/// (`+0x30`, helper file `0x140d20`) at site file `0x15cf0d`, ahead of
+/// the seat-byte readers (files `0x15cf26`/`0x15cf3f`/`0x15cf58`).
+/// (`ev_a83aada10d256cb689110409dc89c067`,
+/// `ev_f1ed2d82f90e372666e2a01a66831d6f`, observed.)
+/// (ERRORS-06: plain constant, no `unwrap`; PERF-07: `u16` literal.)
+pub const MEMBER_LEAD_FLAG_COMMAND: u16 = 3003;
+/// Sibling trailing-flag member-update command (room dispatcher id 3007).
+///
+/// Same dispatcher as [`MEMBER_LEAD_FLAG_COMMAND`] (base `0x0BBB`, bound
+/// `0x0B`, table file `0x1589c4`); index 4 routes through the stub at file
+/// `0x1585de` into the trailing-flag handler at entry file `0x15d820`
+/// (sole caller at file `0x1585e2`). That handler reads the room-master
+/// flag at site file `0x15dec3`, after the `playing_state`/`live_extra`
+/// pair like the 4043 path, then reads the win-streak word.
+/// (`ev_50242b6c183543f49ce6cbb43eccad2e`, observed.)
+/// (ERRORS-06: plain constant, no `unwrap`; PERF-07: `u16` literal.)
+pub const MEMBER_TRAIL_FLAG_COMMAND: u16 = 3007;
 /// Fixed equipment words per active [`MemberInfo`]: one `i32` plus a
 /// 16-read loop (`0x11` bound at file `0x140eb1`).
 const LIVE_EQUIPMENT_WORDS: usize = 17;
@@ -1145,6 +1170,18 @@ pub const MEMBER_OFF_PLAYING_STATE: u32 = 0x2130;
 /// files `0x141670`/`0x141690` back to back — keeps the wire byte whose
 /// in-memory first copy is discarded, semantics OPEN).
 pub const MEMBER_OFF_LIVE_EXTRA: u32 = 0x2131;
+/// Store offset of the sibling extra dword (4 B, slot `+0x2134`).
+///
+/// Byte-pinned in the lead-flag sibling handler (entry file `0x15cad0`,
+/// command [`MEMBER_LEAD_FLAG_COMMAND`]): the shared fixed-size reader
+/// (file `0x155d20`) reads 4 bytes at site file `0x15d009` (pushed 4)
+/// right after the `playing_state`/`live_extra` pair (sites files
+/// `0x15cfd5`/`0x15cfee`), then the handler stores that dword into the
+/// member slot at file `0x15d03c` (`89 88 34 21 00 00`).
+/// (`ev_bf2aa97d2356819f76df5ea05e24cfc4`, observed.) Value semantics
+/// stay OPEN: no compare or branch consumer is pinned yet.
+/// (ERRORS-06: plain constant, no `unwrap`; PERF-07: `u32` literal.)
+pub const MEMBER_OFF_EXTRA_DWORD: u32 = 0x2134;
 /// Store offset of the room-master flag ([`MemberInfo::is_room_master`])
 /// (1 B, helper file `0x140d20`). This is the only trailing flag the wire
 /// carries: the 4043 path reads it after `live_extra` (call site file
@@ -3032,6 +3069,34 @@ mod member_slot_tests {
                 field: "member field offset",
                 reason: "beyond slot"
             })
+        );
+    }
+
+    #[test]
+    fn sibling_commands_bind_room_dispatcher_ids() {
+        assert_eq!(MEMBER_LEAD_FLAG_COMMAND, 3003);
+        assert_eq!(MEMBER_TRAIL_FLAG_COMMAND, 3007);
+        assert_ne!(MEMBER_LEAD_FLAG_COMMAND, MEMBER_TRAIL_FLAG_COMMAND);
+    }
+
+    #[test]
+    fn extra_dword_sits_after_live_extra() {
+        assert_eq!(MEMBER_OFF_EXTRA_DWORD, 0x2134);
+        assert!(
+            member_slot_address(0, MEMBER_OFF_LIVE_EXTRA).ok()
+                < member_slot_address(0, MEMBER_OFF_EXTRA_DWORD).ok()
+        );
+        assert!(
+            member_slot_address(0, MEMBER_OFF_EXTRA_DWORD).ok()
+                < member_slot_address(0, MEMBER_OFF_SLOT_GROUP).ok()
+        );
+    }
+
+    #[test]
+    fn extra_dword_address_steps_by_stride() {
+        assert_eq!(
+            member_slot_address(2, MEMBER_OFF_EXTRA_DWORD),
+            Ok(MEMBER_SLOT_BASE + 2 * MEMBER_SLOT_STRIDE + MEMBER_OFF_EXTRA_DWORD)
         );
     }
 }
