@@ -1944,6 +1944,114 @@ pub fn parse_oja(bytes: &[u8]) -> Result<Oja, FileError> {
     Ok(Oja { tag, frames })
 }
 
+/// Item ids per avatar set row.
+pub const SET_INFO_ITEMS: usize = 5;
+/// Untagged stat `u32`s per avatar set row (prices/bonuses TBD).
+pub const SET_INFO_STATS: usize = 10;
+/// Fixed `u32` block per avatar set row: id + group + items + stats.
+const SET_INFO_FIXED_U32S: usize = 17;
+/// Bytes before the first set row: `u32` count + reserved zeros.
+const SET_INFO_ROWS_AT: usize = 81;
+
+/// One avatar outfit set (`SetInfodata.ojs` row): set metadata plus
+/// Korean name/description. Item ids reference the shop database
+/// (`Itemdata_Korea.dat` — join TBD); stat semantics are OPEN.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetInfoRow {
+    /// Set id (1-based on the real file).
+    pub set_id: u32,
+    /// Group word (high byte varies, low 3 bytes constant-ish; TBD).
+    pub group: u32,
+    /// Item ids in this set (0 = no item).
+    pub items: [u32; SET_INFO_ITEMS],
+    /// Untagged stat words.
+    pub stats: [u32; SET_INFO_STATS],
+    /// Korean set name (EUC-KR).
+    pub name: String,
+    /// Korean set description (EUC-KR).
+    pub description: String,
+}
+
+/// A parsed `SetInfodata.ojs` table: set rows plus the unconsumed
+/// tail. The real 7.55 file declares count 210 but holds 209 set
+/// rows and a 260-byte promo footer of a different shape, so the
+/// walk stops at the first row that no longer parses and the rest
+/// stays available (docs/file-formats/opi.md).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetInfoTable {
+    /// Set rows in file order.
+    pub rows: Vec<SetInfoRow>,
+    /// Bytes after the last parsed row.
+    pub trailer_len: usize,
+}
+
+/// Decode one EUC-KR text field (`u32` byte length + bytes) at `off`;
+/// returns the text and the offset after it.
+fn read_set_info_text(bytes: &[u8], off: usize) -> Result<(String, usize), FileError> {
+    let len = read_u32le(bytes, off)? as usize;
+    let end = off.checked_add(4 + len).ok_or(FileError::Truncated {
+        need: usize::MAX,
+        have: bytes.len(),
+    })?;
+    if end > bytes.len() {
+        return Err(FileError::Truncated {
+            need: end,
+            have: bytes.len(),
+        });
+    }
+    let (text, _, had_errors) = encoding_rs::EUC_KR.decode(&bytes[off + 4..end]);
+    if had_errors {
+        return Err(unknown_format(&bytes[off..end.min(off + 64)]));
+    }
+    Ok((text.into_owned(), end))
+}
+
+/// Parse a `SetInfodata.ojs` avatar-set table with exact row
+/// accounting: `u32` count, rows of 17 `u32` + pad byte + two
+/// length-prefixed strings, ids expected 1-based in order.
+/// Stops (instead of erroring) where the footer starts so the
+/// declared-count overstatement stays representable.
+pub fn parse_set_info_table(bytes: &[u8]) -> Result<SetInfoTable, FileError> {
+    let count = read_u32le(bytes, 0)? as usize;
+    let mut rows = Vec::new();
+    let mut off = SET_INFO_ROWS_AT;
+    for expected in 1..=count {
+        let row_end = off + SET_INFO_FIXED_U32S * 4 + 1;
+        if row_end > bytes.len() {
+            break;
+        }
+        let mut fixed = [0u32; SET_INFO_FIXED_U32S];
+        for (i, slot) in fixed.iter_mut().enumerate() {
+            *slot = read_u32le(bytes, off + i * 4)?;
+        }
+        if fixed[0] != expected as u32 {
+            break;
+        }
+        let (name, after_name) = read_set_info_text(bytes, row_end)?;
+        let (description, after_desc) = read_set_info_text(bytes, after_name)?;
+        let mut items = [0u32; SET_INFO_ITEMS];
+        items.copy_from_slice(&fixed[2..7]);
+        let mut stats = [0u32; SET_INFO_STATS];
+        stats.copy_from_slice(&fixed[7..17]);
+        rows.push(SetInfoRow {
+            set_id: fixed[0],
+            group: fixed[1],
+            items,
+            stats,
+            name,
+            description,
+        });
+        off = after_desc;
+    }
+    if rows.is_empty() {
+        return Err(FileError::TooShort(bytes.len()));
+    }
+    Ok(SetInfoTable {
+        rows,
+        trailer_len: bytes.len() - off,
+    })
+}
+
 /// Parse a `JamTable.dat` gauge table: flat little-endian `u16`
 /// combo thresholds (54 entries, `25..4800`, on the real 7.55 file;
 /// docs/file-formats/opi.md). Requires a non-empty even length.
@@ -3121,6 +3229,78 @@ mod tests {
         assert!(sprite.is_raw_rgb555(&sprite.images[0]));
         assert_eq!(sprite.pixel_data(&sprite.images[1]), &blue);
         assert!(sprite.is_raw_rgb555(&sprite.images[1]));
+    }
+
+    fn set_info_row(id: u32, name: &[u8], description: &[u8]) -> Vec<u8> {
+        let mut row = Vec::new();
+        let mut fixed = [0u32; 17];
+        fixed[0] = id;
+        fixed[1] = 0x0314_800b;
+        fixed[2] = 0x228 + id;
+        fixed[7] = 1200;
+        for word in fixed {
+            row.extend_from_slice(&word.to_le_bytes());
+        }
+        row.push(0);
+        row.extend_from_slice(&(name.len() as u32).to_le_bytes());
+        row.extend_from_slice(name);
+        row.extend_from_slice(&(description.len() as u32).to_le_bytes());
+        row.extend_from_slice(description);
+        row
+    }
+
+    fn set_info_blob(rows: &[Vec<u8>], trailer: &[u8]) -> Vec<u8> {
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&(rows.len() as u32).to_le_bytes());
+        blob.extend_from_slice(&[0u8; 77]);
+        for row in rows {
+            blob.extend_from_slice(row);
+        }
+        blob.extend_from_slice(trailer);
+        blob
+    }
+
+    #[test]
+    fn set_info_parses_rows_and_keeps_trailer() {
+        let blob = set_info_blob(
+            &[
+                set_info_row(1, b"set-one", b"first set"),
+                set_info_row(2, b"set-two", b"second set"),
+            ],
+            b"promo",
+        );
+        let table = parse_set_info_table(&blob).unwrap();
+        assert_eq!(table.rows.len(), 2);
+        assert_eq!(table.trailer_len, 5);
+        assert_eq!(
+            table.rows[0],
+            SetInfoRow {
+                set_id: 1,
+                group: 0x0314_800b,
+                items: [0x229, 0, 0, 0, 0],
+                stats: [1200, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                name: "set-one".to_owned(),
+                description: "first set".to_owned(),
+            }
+        );
+        assert_eq!(table.rows[1].name, "set-two");
+    }
+
+    #[test]
+    fn set_info_stops_at_id_break() {
+        let blob = set_info_blob(
+            &[set_info_row(1, b"a", b"b"), set_info_row(9, b"c", b"d")],
+            &[],
+        );
+        let table = parse_set_info_table(&blob).unwrap();
+        assert_eq!(table.rows.len(), 1);
+        assert_eq!(table.trailer_len, 68 + 1 + (4 + 1) + (4 + 1));
+    }
+
+    #[test]
+    fn set_info_rejects_empty_table() {
+        assert!(parse_set_info_table(&[]).is_err());
+        assert!(parse_set_info_table(&[1, 0, 0, 0]).is_err());
     }
 
     #[test]

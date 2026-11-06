@@ -318,9 +318,17 @@ semantics TBD.
 - `AlbumList.ojs` (2724 B): `u32` count 17, first id 1001 (stride TBD).
 - `SMI_790.ojs` (12828 B): `u16` lyric/scroll table (starts
   625, 569, 665, …; semantics TBD).
-- `avatar.opa` `SetInfodata.ojs` (32463 B): `u32` count 210 +
-  sparse table (TBD); `Itemdata_Korea.dat` (740945 B, starts
-  `06 06 …`): shop-item database (TBD).
+- `avatar.opa` `SetInfodata.ojs` (32463 B) — MAPPED
+  (`parse_set_info_table`): `u32` count 210, 77 reserved zero
+  bytes, then rows at file offset 81: 17 `u32` (set id 1-based,
+  group word, 5 item ids, 10 stat words) + 1 pad byte + two
+  EUC-KR length-prefixed strings (set name, description).
+  The file holds 209 such rows (ids 1–209, walk lands exact)
+  plus a 260-byte promo footer of a different shape (kept as
+  `trailer_len`; semantics TBD). Item-id join and stat meanings
+  stay OPEN.
+- `Itemdata_Korea.dat` (740945 B, starts `06 06 …`): shop-item
+  database (TBD).
 - 47 `.ojs` bodies are raw JPEGs (`FF D8 … FF D9` verified on
   all); 5 `.oji` bodies share the sprite-55 envelope.
 
