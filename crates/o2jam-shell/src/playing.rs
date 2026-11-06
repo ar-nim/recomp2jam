@@ -6,7 +6,8 @@
 //! relative to the frame: full-width lanes, line one sixth up from
 //! the bottom, `lookahead` ms of chart visible above the line.
 
-use o2jam_render::{fill_rect, pack_xrgb, Frame, Rect};
+use o2jam_game::{CoolStreak, Judgement, PillStock, Score, TimingWindows};
+use o2jam_render::{draw_number, draw_text, fill_rect, pack_xrgb, text_width, Frame, Rect};
 
 /// Lanes across the highway.
 pub const HIGHWAY_LANES: u8 = 7;
@@ -82,6 +83,20 @@ impl PlayingView {
         self.now_ms = now_ms;
     }
 
+    /// Remove a struck note so it stops falling; false when absent.
+    pub fn strike(&mut self, lane: u8, at_ms: u64) -> bool {
+        if let Some(i) = self
+            .onsets
+            .iter()
+            .position(|(hit_lane, hit_at)| *hit_lane == lane && *hit_at == at_ms)
+        {
+            self.onsets.remove(i);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Notes on screen as `(lane, y top)`; `y` runs from the top
     /// (lookahead ahead) to the judgement line (due now).
     #[must_use]
@@ -147,6 +162,246 @@ impl PlayingView {
                 pack_xrgb(0x40, 0xC0, 0xFF),
             );
         }
+    }
+}
+
+/// Word shown for each judgement tier.
+fn word_of(judgement: Judgement) -> &'static str {
+    match judgement {
+        Judgement::Cool => "COOL",
+        Judgement::Good => "GOOD",
+        Judgement::Bad => "BAD",
+        Judgement::Miss => "MISS",
+    }
+}
+
+/// One hittable note: rated once, by key press or by timeout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingNote {
+    lane: u8,
+    at_ms: u64,
+    judged: bool,
+}
+
+/// Live play: scrolling view plus verified judgement/scoring.
+///
+/// Key presses rate the nearest unjudged note in that lane inside
+/// the bad window; notes aging past it rate Miss on advance. Presses
+/// with no note nearby rate nothing (the original's empty-press
+/// behavior is unverified, so nothing is guessed).
+#[derive(Debug)]
+pub struct LivePlay {
+    view: PlayingView,
+    pending: Vec<PendingNote>,
+    score: Score,
+    pills: PillStock,
+    streak: CoolStreak,
+    windows: TimingWindows,
+    now_ms: u64,
+    last_word: Option<(Judgement, u64)>,
+}
+
+impl LivePlay {
+    /// Notes to play (empty until a chart loads).
+    #[must_use]
+    pub fn new(onsets: Vec<(u8, u64)>) -> Self {
+        let mut pending: Vec<PendingNote> = onsets
+            .iter()
+            .map(|(lane, at_ms)| PendingNote {
+                lane: *lane,
+                at_ms: *at_ms,
+                judged: false,
+            })
+            .collect();
+        pending.sort_by_key(|note| note.at_ms);
+        Self {
+            view: PlayingView::new(onsets),
+            pending,
+            score: Score::default(),
+            pills: PillStock::default(),
+            streak: CoolStreak::default(),
+            windows: TimingWindows::default(),
+            now_ms: 0,
+            last_word: None,
+        }
+    }
+
+    /// Move the song clock; notes past the bad window rate Miss.
+    pub fn advance_to(&mut self, now_ms: u64) {
+        self.now_ms = now_ms;
+        self.view.advance_to(now_ms);
+        let bad = self.windows.bad;
+        let mut late = Vec::new();
+        for note in &mut self.pending {
+            if !note.judged && note.at_ms.saturating_add(bad) < now_ms {
+                note.judged = true;
+                late.push(Judgement::Miss);
+            }
+        }
+        for judgement in late {
+            self.rate(judgement);
+        }
+    }
+
+    /// Strike a lane: rate the nearest unjudged note in range.
+    /// Returns the judgement, or `None` for an empty press.
+    pub fn strike_lane(&mut self, lane: u8, now_ms: u64) -> Option<Judgement> {
+        self.advance_to(now_ms);
+        let mut best: Option<(usize, u64)> = None;
+        for (i, note) in self.pending.iter().enumerate() {
+            if note.judged || note.lane != lane {
+                continue;
+            }
+            let gap = note.at_ms.abs_diff(now_ms);
+            if gap <= self.windows.bad && best.is_none_or(|(_, seen)| gap < seen) {
+                best = Some((i, gap));
+            }
+        }
+        let (i, _) = best?;
+        let offset = now_ms as i64 - self.pending[i].at_ms as i64;
+        let (lane, at_ms) = (self.pending[i].lane, self.pending[i].at_ms);
+        self.pending[i].judged = true;
+        self.view.strike(lane, at_ms);
+        let judgement = self.windows.judge(offset);
+        self.rate(judgement);
+        Some(judgement)
+    }
+
+    /// Running score and combo.
+    #[must_use]
+    pub fn score(&self) -> &Score {
+        &self.score
+    }
+
+    fn rate(&mut self, judgement: Judgement) {
+        self.streak.note(judgement, &mut self.pills);
+        self.score.apply_rated(judgement, &mut self.pills);
+        self.last_word = Some((judgement, self.now_ms));
+    }
+
+    /// Paint highway, notes, score, combo, and the latest word.
+    pub fn paint(&mut self, frame: &mut Frame<'_>, geom: &HighwayGeometry, now_ms: u64) {
+        self.advance_to(now_ms);
+        self.view.paint(frame, geom);
+        let points = u32::try_from(self.score.points).unwrap_or(u32::MAX);
+        draw_number(frame, 16, 16, points, pack_xrgb(0xFF, 0xFF, 0xFF));
+        if self.score.combo > 0 {
+            draw_number(frame, 16, 32, self.score.combo, pack_xrgb(0xFF, 0xFF, 0x40));
+        }
+        if let Some((judgement, at)) = self.last_word {
+            if now_ms.saturating_sub(at) < 600 {
+                let word = word_of(judgement);
+                let text_w = text_width(word) as i32;
+                draw_text(
+                    frame,
+                    frame.w as i32 / 2 - text_w / 2,
+                    geom.line_y - 40,
+                    word,
+                    pack_xrgb(0xFF, 0xFF, 0xFF),
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod live_play_tests {
+    use super::*;
+
+    fn geom() -> HighwayGeometry {
+        HighwayGeometry::centered(70, 60)
+    }
+
+    #[test]
+    fn strike_rates_cool_on_exact_hit() {
+        let mut live = LivePlay::new(vec![(2, 1000)]);
+        assert_eq!(live.strike_lane(2, 1000), Some(Judgement::Cool));
+        assert_eq!(live.score().combo, 1);
+        assert_eq!(live.score().points, 200);
+        assert!(live.view.visible(&geom()).is_empty());
+    }
+
+    #[test]
+    fn strike_rates_good_on_early_hit() {
+        let mut live = LivePlay::new(vec![(2, 1000)]);
+        assert_eq!(live.strike_lane(2, 990), Some(Judgement::Good));
+        assert_eq!(live.score().points, 100);
+    }
+
+    #[test]
+    fn strike_rates_bad_on_late_hit() {
+        let mut live = LivePlay::new(vec![(2, 1000)]);
+        assert_eq!(live.strike_lane(2, 1020), Some(Judgement::Bad));
+        assert_eq!(live.score().combo, 0);
+        assert_eq!(live.score().points, 4);
+    }
+
+    #[test]
+    fn late_notes_rate_miss_on_advance() {
+        let mut live = LivePlay::new(vec![(1, 1000)]);
+        live.advance_to(1000 + 25 + 1);
+        assert_eq!(live.score().counts[3], 1);
+        assert_eq!(live.score().points, 0);
+    }
+
+    #[test]
+    fn empty_press_rates_nothing() {
+        let mut live = LivePlay::new(vec![(2, 1000)]);
+        assert_eq!(live.strike_lane(0, 1000), None);
+        assert_eq!(live.score().counts, [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn nearest_note_wins_in_lane() {
+        let mut live = LivePlay::new(vec![(2, 1000), (2, 1100)]);
+        assert_eq!(live.strike_lane(2, 1010), Some(Judgement::Good));
+        assert_eq!(live.strike_lane(2, 1100), Some(Judgement::Cool));
+        assert_eq!(live.score().combo, 2);
+    }
+
+    #[test]
+    fn paint_shows_score_combo_and_word() {
+        let mut live = LivePlay::new(vec![(0, 1000)]);
+        live.strike_lane(0, 1000);
+        let mut buf = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            1100,
+        );
+        // Score "200" top-left, combo "1" below, "COOL" centered.
+        assert_eq!(buf[16 * 70 + 16], pack_xrgb(0xFF, 0xFF, 0xFF));
+        assert_eq!(buf[32 * 70 + 17], pack_xrgb(0xFF, 0xFF, 0x40));
+        let word_x = 35 - text_width("COOL") as i32 / 2;
+        assert_eq!(
+            buf[10 * 70 + word_x as usize + 2],
+            pack_xrgb(0xFF, 0xFF, 0xFF)
+        );
+    }
+
+    #[test]
+    fn word_fades_after_timeout() {
+        let mut live = LivePlay::new(vec![(0, 1000)]);
+        live.strike_lane(0, 1000);
+        let mut buf = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            1700,
+        );
+        let word_x = 35 - text_width("COOL") as i32 / 2;
+        assert_eq!(
+            buf[10 * 70 + word_x as usize + 2],
+            pack_xrgb(0x0A, 0x0A, 0x0A)
+        );
     }
 }
 

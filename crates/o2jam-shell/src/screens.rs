@@ -7,7 +7,7 @@
 //! [`ScreenGame`] owns a [`ScreenFlow`] and advances splash → channel
 //! on any lane key; later screens wire their own inputs next.
 
-use super::playing::{HighwayGeometry, PlayingView};
+use super::playing::{HighwayGeometry, LivePlay, PlayingView};
 use super::screen::{Screen, ScreenFlow};
 use super::GameLoop;
 use o2jam_render::{
@@ -167,7 +167,8 @@ pub fn paint_screen(frame: &mut Frame<'_>, screen: Screen) {
 /// channel screen. Room/waiting/loading inputs land with their UIs.
 pub struct ScreenGame {
     flow: ScreenFlow,
-    playing: PlayingView,
+    playing: LivePlay,
+    started_at: Option<std::time::Instant>,
 }
 
 impl ScreenGame {
@@ -176,19 +177,37 @@ impl ScreenGame {
     pub fn new() -> Self {
         Self {
             flow: ScreenFlow::new(),
-            playing: PlayingView::default(),
+            playing: LivePlay::new(Vec::new()),
+            started_at: None,
         }
     }
 
     /// Load a chart's onsets into the highway (empty until then).
     pub fn load_chart(&mut self, onsets: Vec<(u8, u64)>) {
-        self.playing = PlayingView::new(onsets);
+        self.playing = LivePlay::new(onsets);
+    }
+
+    /// Song position: wall clock since first Playing frame or key.
+    fn now_ms(&mut self) -> u64 {
+        let start = *self.started_at.get_or_insert_with(std::time::Instant::now);
+        start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
     }
 
     /// Screen currently shown.
     #[must_use]
     pub fn screen(&self) -> Screen {
         self.flow.current()
+    }
+
+    /// Paint with an explicit clock (tests use this; live paint reads
+    /// the wall clock).
+    pub fn paint_at(&mut self, frame: &mut Frame<'_>, now_ms: u64) {
+        if self.flow.current() == Screen::Playing {
+            let geom = HighwayGeometry::centered(frame.w, frame.h);
+            self.playing.paint(frame, &geom, now_ms);
+        } else {
+            paint_screen(frame, self.flow.current());
+        }
     }
 }
 
@@ -199,16 +218,26 @@ impl Default for ScreenGame {
 }
 
 impl GameLoop for ScreenGame {
-    fn lane_key(&mut self, _lane: usize, down: bool) {
-        if down && self.flow.current() == Screen::Avi {
-            let _ = self.flow.go(Screen::Channel);
+    fn lane_key(&mut self, lane: usize, down: bool) {
+        if !down {
+            return;
+        }
+        match self.flow.current() {
+            Screen::Avi => {
+                let _ = self.flow.go(Screen::Channel);
+            }
+            Screen::Playing => {
+                let now = self.now_ms();
+                self.playing.strike_lane(lane as u8, now);
+            }
+            _ => {}
         }
     }
 
     fn paint(&mut self, frame: &mut Frame<'_>) {
         if self.flow.current() == Screen::Playing {
-            let geom = HighwayGeometry::centered(frame.w, frame.h);
-            self.playing.paint(frame, &geom);
+            let now = self.now_ms();
+            self.paint_at(frame, now);
         } else {
             paint_screen(frame, self.flow.current());
         }
@@ -296,13 +325,15 @@ mod screen_paint_tests {
         ] {
             game.flow.go(next).unwrap();
         }
-        game.playing.advance_to(1000);
         let mut buf = vec![0u32; 70 * 60];
-        game.paint(&mut Frame {
-            buf: &mut buf,
-            w: 70,
-            h: 60,
-        });
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            1000,
+        );
         let note_y = 50 - (500.0 * 50.0 / 2000.0) as i32;
         // Lane 2 spans x 20..30; the note insets one pixel each side.
         assert_eq!(buf[note_y as usize * 70 + 22], pack_xrgb(0x40, 0xC0, 0xFF));
