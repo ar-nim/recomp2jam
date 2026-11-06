@@ -463,7 +463,9 @@ pub struct OjnMidTriple {
 /// (second loop). Guards are a byte-range check plus a 2-byte
 /// `strncmp` against the key-name table (indexed `0x6454d8` plus fixed
 /// `0x645510`/`0x645514`/`0x645518`/`0x64551c`/`0x645520`), under the
-/// dialog-mode dispatch on `+0x188` (0/1/else). The second
+/// dialog-mode dispatch on `+0x188` (0/1/else). The fixed arms select
+/// the doubled (`ssang`) initials — see [`ojn_search_doubled_initial`]
+/// (arms 0/2/5/6/8 → `ㄲ/ㄸ/ㅃ/ㅆ/ㅉ`). The second
 /// (VA `0x444fe0`/file `0x44fe0`, clear at file `0x45070`) appends at
 /// files `0x4528b` and `0x454fa` with the same keyed shape.
 /// (Static disassembly survey; REA dossier TBD.)
@@ -508,6 +510,63 @@ pub fn ojn_wheel_slot(category: u32) -> Option<usize> {
     let one_based = category.checked_sub(1)?;
     let slot = usize::try_from(one_based).ok()?;
     (slot < OJN_WHEEL_LIST_COUNT).then_some(slot)
+}
+
+/// Doubled (`ssang`) Korean initial selected by a `+0x680` keyed-rebuild arm.
+///
+/// VA `0x444630` (file `0x44630`) derives the arm as
+/// `code - 0x27200058` (`sub` at file `0x4464c`); codes
+/// `0x27200058..0x27200065` route through jump-table entry 8 to the
+/// rebuild caller at file `0x3fa45` (`call` at file `0x3fa99`). The first
+/// pass appends entries whose converted title matches the indexed key-name
+/// entry (`0x6454d8[arm]`, `strncmp` `n = 2`, append at file `0x44957`);
+/// arms `0/2/5/6/8` then test a second fixed entry and append on match.
+/// Those five are exactly the doublable base consonants, so each arm
+/// accepts the `ssang` partner alongside its base initial:
+///
+/// - arm `0` (`ㄱ` at file `0x2454d0` via slot file `0x2454d8`) also
+///   accepts `ㄲ` (U+3132, EUC-KR `A4 A2` at file `0x245498` via slot
+///   file `0x245510`; dispatch `cmp` at file `0x44962`, pointer load
+///   at file `0x44971`, append at file `0x44a08`);
+/// - arm `2` (`ㄷ` at file `0x2454c8` via slot file `0x2454e0`) also
+///   accepts `ㄸ` (U+3138, `A4 A8` at file `0x245494` via slot file
+///   `0x245514`; `cmp` at file `0x44a18`, load at file `0x44a27`,
+///   append at file `0x44abe`);
+/// - arm `5` (`ㅂ` at file `0x2454bc` via slot file `0x2454ec`) also
+///   accepts `ㅃ` (U+3143, `A4 B3` at file `0x245490` via slot file
+///   `0x245518`; `cmp` at file `0x44ace`, load at file `0x44add`,
+///   append at file `0x44b74`);
+/// - arm `6` (`ㅅ` at file `0x2454b8` via slot file `0x2454f0`) also
+///   accepts `ㅆ` (U+3146, `A4 B6` at file `0x24548c` via slot file
+///   `0x24551c`; `cmp` at file `0x44b84`, load at file `0x44b93`,
+///   append at file `0x44c2a`);
+/// - arm `8` (`ㅈ` at file `0x2454b0` via slot file `0x2454f8`) also
+///   accepts `ㅉ` (U+3149, `A4 B9` at file `0x245488` via slot file
+///   `0x245520`; `cmp` at file `0x44c3a`, load at file `0x44c49`,
+///   append at file `0x44ce6`).
+///
+/// Other arms (`1/3/4/7/9..13`: `ㄴ/ㄹ/ㅁ/ㅇ/ㅊ/ㅋ/ㅌ/ㅍ/ㅎ`) have no
+/// doubled form, so they fall through with only the indexed append
+/// (plus the second-loop indexed append at file `0x44f61`). Returns
+/// the doubled initial, or `None` for arms without one.
+/// (Static disassembly survey; REA dossier TBD.)
+const OJN_SEARCH_DOUBLED_INITIALS: [(u32, char); 5] = [
+    (0, '\u{3132}'),
+    (2, '\u{3138}'),
+    (5, '\u{3143}'),
+    (6, '\u{3146}'),
+    (8, '\u{3149}'),
+];
+
+/// Resolve a `+0x680` keyed-rebuild arm to its doubled Korean initial.
+///
+/// See [`OJN_SEARCH_DOUBLED_INITIALS`] for the per-arm evidence: arms
+/// `0/2/5/6/8` select `ㄲ/ㄸ/ㅃ/ㅆ/ㅉ`; every other arm returns `None`.
+#[must_use]
+pub fn ojn_search_doubled_initial(arm: u32) -> Option<char> {
+    OJN_SEARCH_DOUBLED_INITIALS
+        .iter()
+        .find_map(|(known_arm, initial)| (*known_arm == arm).then_some(*initial))
 }
 
 /// The decoded `OJNList.dat` middle region: header tables plus footer.
@@ -1521,6 +1580,35 @@ mod tests {
         // on `category - 1`), so no wheel list applies.
         for category in [0u32, 6, 7, u32::MAX] {
             assert_eq!(ojn_wheel_slot(category), None);
+        }
+    }
+
+    #[test]
+    fn search_arms_select_their_doubled_initials() {
+        // VA `0x444630` fixed arms append a second `+0x680` list entry
+        // when the title matches the `ssang` partner: `cmp` sites at
+        // files `0x44962`/`0x44a18`/`0x44ace`/`0x44b84`/`0x44c3a` with
+        // pointer loads at `0x44971`/`0x44a27`/`0x44add`/`0x44b93`/
+        // `0x44c49` and appends at `0x44a08`/`0x44abe`/`0x44b74`/
+        // `0x44c2a`/`0x44ce6`.
+        for (arm, want) in [
+            (0u32, '\u{3132}'),
+            (2u32, '\u{3138}'),
+            (5u32, '\u{3143}'),
+            (6u32, '\u{3146}'),
+            (8u32, '\u{3149}'),
+        ] {
+            assert_eq!(ojn_search_doubled_initial(arm), Some(want));
+        }
+    }
+
+    #[test]
+    fn search_arms_without_doubled_form_select_none() {
+        // `ㄴ/ㄹ/ㅁ/ㅇ/ㅊ/ㅋ/ㅌ/ㅍ/ㅎ` (arms 1/3/4/7/9..13) have no
+        // `ssang` partner, so the VA `0x444630` chain falls through
+        // with only the indexed append (files `0x44957`/`0x44f61`).
+        for arm in [1u32, 3, 4, 7, 9, 10, 11, 12, 13, u32::MAX] {
+            assert_eq!(ojn_search_doubled_initial(arm), None);
         }
     }
 
