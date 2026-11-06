@@ -502,3 +502,31 @@ skins, shell skin delegate, room-enums, spare slots):
   scenes 22, recomp2jam 57.
 - Live flow not re-run in this sweep (last green `23:37:43 +08:00`
   run above stands; no net flow code changed since).
+
+## Regression sweep — 2026-11-06 16:25 UTC (HEAD `7e03b63`, tree clean)
+
+Covers the verbatim batch: native-scale compose (`4265a00`), verbatim
+bnd rects (`3751327`), verbatim-derived highway (`5cb01a2`), audit
+approximations (`19a0c2b`), and the playing-shot refresh (`7e03b63`).
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **903 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 0, file 123, game 68, net 333,
+  render 59, shell 215, real_art 7, scenes 22, recomp2jam 57
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, no warnings.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.61 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`00:25:13 +08:00`):
+  `Authorize session` → `Create room: songflow` →
+  `Get music list: [0/00] 562 music` → `Start game: [000]` →
+  `Game [000] Submit score: 2210`.
+- **Verdict: no regression — suite is green on clean HEAD (903 passed;
+  +13 vs the 890 baseline from new render/shell verbatim tests,
+  0 failures). No commits, no pushes.** This sweep touched only
+  `docs/playtest.md`.
