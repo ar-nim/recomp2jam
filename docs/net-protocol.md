@@ -55,6 +55,12 @@ receiver/deliver/resender/`CUHPSender`, `CRelayServerConnect`/`CRelayRegisterReq
 `CPacket_Str` carries the id as little-endian u16 at buffer offset 2
 (`SetID` writes `[ebp+8]` word at base+2, `FUN_005a0550` file `0x1a0550`,
 `ev_861713e2`; `GetID` reads the word at base+2, vaddr `0x5a05d0`).
+The length prefix counts the WHOLE frame including itself
+(server-verified: Encore `SizePrefixedMessageFramer<short>`
+(Memoryer `Program.cs` registers it) writes `payload + prefix`
+and reads `size - prefix`, and a live gateway hung waiting for the
+2 bytes our old after-header lengths omitted (fixed 2026-11-06).
+An empty body thus frames as `04 00 <id>`.
 Send-fail logging tags each frame with `sendPack` id (`0x401cfe`).
 Direction convention (Memoryer): odd/even pairs — request C→S `N`,
 response S→C `N+1`; events S→C broadcasts.

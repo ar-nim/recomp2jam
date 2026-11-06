@@ -65,17 +65,20 @@ pub fn connect_and_login(options: &ConnectOptions) -> Result<ConnectReport> {
     let mut gateway = GatewayConnection::connect(address.as_str())
         .with_context(|| format!("connecting to {address}"))?;
     let auth_code = authorize(&mut gateway, options).context("authorizing")?;
-    let character = if options.character {
-        Some(fetch_character(&mut gateway).context("fetching character")?)
-    } else {
-        None
-    };
     let channels = fetch_channels(&mut gateway).context("listing channels")?;
     let channel_login = match options.channel {
         Some((gateway_id, channel_id)) => Some(
             login_channel(&mut gateway, gateway_id, channel_id).context("logging into channel")?,
         ),
         None => None,
+    };
+    // Character info requires channel membership (server-verified:
+    // `ChannelAuthorizeAttribute` rejects 2000 outside a channel),
+    // so it runs last and only with a channel login.
+    let character = if options.character {
+        Some(fetch_character(&mut gateway).context("fetching character")?)
+    } else {
+        None
     };
     Ok(ConnectReport {
         auth_code,
@@ -171,7 +174,7 @@ mod connect_flow_tests {
     use std::time::Duration;
 
     use o2jam_net::{
-        frame::decode_frame, AuthResponse, ChannelList, ChannelLoginResponse, Frame, ID_OFFSET,
+        frame::decode_frame, AuthResponse, ChannelList, ChannelLoginResponse, Frame, HEADER_LEN,
     };
 
     use super::*;
@@ -181,7 +184,7 @@ mod connect_flow_tests {
         let mut header = [0u8; 4];
         stream.read_exact(&mut header).unwrap();
         let body_len = u16::from_le_bytes([header[0], header[1]]) as usize;
-        let mut rest = vec![0u8; body_len - ID_OFFSET];
+        let mut rest = vec![0u8; body_len - HEADER_LEN];
         stream.read_exact(&mut rest).unwrap();
         let mut bytes = header.to_vec();
         bytes.extend_from_slice(&rest);
@@ -250,7 +253,7 @@ mod connect_flow_tests {
     }
 
     #[test]
-    fn fetches_character_after_authorize() {
+    fn fetches_character_after_channel_login() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let server = thread::spawn(move || {
@@ -264,6 +267,15 @@ mod connect_flow_tests {
                 tail: vec![],
             };
             stream.write_all(&authed.encode()).unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetChannelList.id());
+            let listed = ChannelList { channels: vec![] };
+            stream.write_all(&listed.encode()).unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::ChannelLogin.id());
+            let entered = ChannelLoginResponse {
+                result_code: 0,
+                restricted: Some(false),
+            };
+            stream.write_all(&entered.encode()).unwrap();
             assert_eq!(read_frame(&mut stream).id, Request::GetCharacterInfo.id());
             let hero = CharacterInfo {
                 nickname: "tester".to_owned(),
@@ -272,16 +284,13 @@ mod connect_flow_tests {
                 ..Default::default()
             };
             stream.write_all(&hero.encode()).unwrap();
-            assert_eq!(read_frame(&mut stream).id, Request::GetChannelList.id());
-            let listed = ChannelList { channels: vec![] };
-            stream.write_all(&listed.encode()).unwrap();
         });
-        let report = connect_and_login(&test_options(port, None, true)).unwrap();
+        let report = connect_and_login(&test_options(port, Some((1, 2)), true)).unwrap();
         server.join().unwrap();
         let hero = report.character.unwrap();
         assert_eq!(hero.nickname, "tester");
         assert_eq!(hero.level, 3);
-        assert!(report.channel_login.is_none());
+        assert!(report.channel_login.is_some());
     }
 
     #[test]

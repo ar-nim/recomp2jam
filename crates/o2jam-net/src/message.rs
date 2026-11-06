@@ -776,7 +776,7 @@ mod tests {
         };
         assert_eq!(
             message.encode(),
-            vec![0x06, 0x00, 0xEC, 0x03, 0x01, 0x00, 0x02, 0x00]
+            vec![0x08, 0x00, 0xEC, 0x03, 0x01, 0x00, 0x02, 0x00]
         );
     }
 
@@ -809,9 +809,9 @@ mod tests {
 
     #[test]
     fn empty_messages_encode_bare_frames() {
-        assert_eq!(GetChannelList.encode(), vec![0x02, 0x00, 0xEA, 0x03]);
-        assert_eq!(Ping.encode(), vec![0x02, 0x00, 0x71, 0x17]);
-        assert_eq!(Terminate.encode(), vec![0x02, 0x00, 0xF0, 0xFF]);
+        assert_eq!(GetChannelList.encode(), vec![0x04, 0x00, 0xEA, 0x03]);
+        assert_eq!(Ping.encode(), vec![0x04, 0x00, 0x71, 0x17]);
+        assert_eq!(Terminate.encode(), vec![0x04, 0x00, 0xF0, 0xFF]);
     }
 
     #[test]
@@ -882,9 +882,9 @@ mod tests {
 
     #[test]
     fn session_alerts_encode_bare_frames() {
-        assert_eq!(SubscriptionAlert.encode(), vec![0x02, 0x00, 0x32, 0x00]);
-        assert_eq!(ForceReauthorize.encode(), vec![0x02, 0x00, 0x33, 0x00]);
-        assert_eq!(MultiSessionError.encode(), vec![0x02, 0x00, 0x34, 0x00]);
+        assert_eq!(SubscriptionAlert.encode(), vec![0x04, 0x00, 0x32, 0x00]);
+        assert_eq!(ForceReauthorize.encode(), vec![0x04, 0x00, 0x33, 0x00]);
+        assert_eq!(MultiSessionError.encode(), vec![0x04, 0x00, 0x34, 0x00]);
     }
 
     #[test]

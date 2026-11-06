@@ -5,8 +5,8 @@
 //! `0x2513d8`) and move length-framed [`Frame`]s over it. The
 //! framing itself stays exe-verified (command id as little-endian
 //! `u16` at buffer offset 2, `FUN_005a0550` file `0x1a0550`); the
-//! length-after-header semantics still await live interop as the
-//! final check.
+//! length-includes-prefix semantics are server-verified (Encore
+//! `SizePrefixedMessageFramer<short>` + live gateway proof).
 //!
 //! The client is transport only: it sends raw frames and returns
 //! received frames. Message bodies stay in [`crate::message`], so
@@ -165,7 +165,7 @@ mod gateway_connection_tests {
 
     use super::*;
     use crate::command::Request;
-    use crate::frame::{decode_frame, encode_frame, ID_OFFSET};
+    use crate::frame::{decode_frame, encode_frame, HEADER_LEN};
     use crate::message::{ChannelList, WireMessage};
 
     fn loopback_pair() -> (GatewayConnection, TcpStream) {
@@ -194,7 +194,7 @@ mod gateway_connection_tests {
         client.send_frame(6001, &[]).unwrap();
         let mut header = [0u8; 4];
         server.read_exact(&mut header).unwrap();
-        assert_eq!(header, [0x02, 0x00, 0x71, 0x17]);
+        assert_eq!(header, [0x04, 0x00, 0x71, 0x17]);
     }
 
     #[test]
@@ -209,7 +209,7 @@ mod gateway_connection_tests {
         let mut header = [0u8; 4];
         server.read_exact(&mut header).unwrap();
         let body_len = u16::from_le_bytes([header[0], header[1]]) as usize;
-        let mut rest = vec![0u8; body_len - ID_OFFSET];
+        let mut rest = vec![0u8; body_len - HEADER_LEN];
         server.read_exact(&mut rest).unwrap();
         let mut bytes = header.to_vec();
         bytes.extend_from_slice(&rest);

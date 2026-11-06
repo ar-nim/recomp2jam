@@ -7,10 +7,9 @@
 //! little-endian `u16` at buffer offset 2, `FUN_005a0550`
 //! file `0x1a0550`) and the opcodes it sends.
 //!
-//! Length semantics (`len` = bytes after the length field) follow
-//! Memoryer convention and the in-repo UDP precedent — the exe
-//! only pins id-at-offset-2, so live interop is still the final
-//! check (`docs/net-protocol.md` records it OPEN).
+//! Length semantics (`len` = total frame length including the length
+//! field) are server-verified against Encore's `SizePrefixedMessageFramer`
+//! and a live Memoryer gateway (`docs/net-protocol.md` §3).
 
 pub mod character;
 pub mod client;
