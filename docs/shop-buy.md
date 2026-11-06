@@ -164,26 +164,69 @@ requests have live send paths per the sites above.
   message-text cases; cart serialization through them is
   unresolved and unclaimed.
 - `SyncItemPurchase` 5001 response body: CONFIRMED undecodable
-  standalone (stays OPEN, no type). Exclusive handler VA
+  standalone (stays OPEN, no `WireMessage` type). Exclusive handler VA
   `0x560a40` (file `0x160a40`); sole caller is the `0x1389` stub
   at VA `0x558831` (file `0x158831`), reached from the id check at
-  VA `0x55833d` (file `0x15833d`). Walked reads: 4×`i32` (first
-  applied via `0x540090` as the gem slot `0x77cd00+0x2c`, fourth
-  via `0x540d00` as the cash slot `0x77cd00+0x2128`; middle two
-  stored to `0x768b48`/`0x768b4c` unconsumed here), then an
-  `i32` list whose bound is snapshotted from the GLOBAL dword
-  `0x77cce4` (VA `0x560ab4`, file `0x160ab4`) — not from the
-  packet — so the length is unknowable without that context.
-  PINNED: that bounded list is one shop entry word per shop entry
-  (`N = 0x77cce4` words, each written into the shop list `0x77ccbc`
-  via `0x537c10` at VA `0x560afc`, file `0x160afc` — the same
-  helper/table triple `0x77ccbc`/`0x77ccc0`/`0x77cce4` the
-  sell/equip/rename send paths read). Then: 2×`i32`, a 12-byte
-  blob (`0x5f1ef0`), a packet-counted (`i32` M) list of `i32`+`i32`
-  pairs with item-record lookups (`0x52dba0` on `0x77b540`, plus
-  `0x537e90`/`0x538240` on `0x77ccbc`), a final `i32`, then a
-  forward stamping `$0x1389` (VA `0x560c6d`, file `0x160c6d`).
-  Widths observed; remaining field semantics stay OPEN.
+  VA `0x55833d` (file `0x15833d`). Walked reads in wire order:
+  - Prefix: 4×`i32` via the fixed-size reader (`0x555d20`) into
+    `0x768b44`/`0x768b48`/`0x768b4c`/`0x768b58` (push sites files
+    `0x160a59`/`0x160a68`/`0x160a77`/`0x160a86`). PINNED: word 1 is
+    the gem slot (applied via `0x540090` to `0x77cd00+0x2c` — the same
+    slot the `SyncCashPoint` gem word and the `SellItem` success word
+    update); word 4 is the cash slot (applied via `0x540d00` to
+    `0x77cd00+0x2128`, inside the wallet block copied at VA `0x4e93d1`,
+    file `0xe93d1`). Word 2 (`0x768b48`) is write-only — no reader
+    anywhere in `.text` — so it is modeled `reserved`. Word 3
+    (`0x768b4c`) is a shop-checked wallet word (compared against shop
+    state at VA `0x499f26`, file `0x99f26`, and pushed for price
+    display alongside the gem word at VAs `0x4a221b`/`0x4a3544`/
+    `0x4f45c4`, files `0xa221b`/`0xa3544`/`0xf45c4`); its exact game
+    meaning stays OPEN. The sibling handler at VA `0x560e00` (file
+    `0x160e00`) reads all six wallet words contiguously
+    (`0x768b44`/`48`/`4c`/`50`/`54`, then `0x768b58` last, files
+    `0x160e12`–`0x160e6b`) with the same two appliers, corroborating
+    the six-word block. Modeled as `SyncItemPurchasePrefix` (first 16
+    bytes only, `decode_prefix`/`encode_inner`).
+  - Entry list: PINNED as before — bound snapshotted from the GLOBAL
+    dword `0x77cce4` (VA `0x560ab4`, file `0x160ab4`), not from the
+    packet, so the length is unknowable without that context: one shop
+    entry word per entry (`N = 0x77cce4` words, each written into the
+    shop list `0x77ccbc` via `0x537c10` at VA `0x560afc`, file
+    `0x160afc` — the same helper/table triple `0x77ccbc`/`0x77ccc0`/
+    `0x77cce4` the sell/equip/rename send paths read).
+  - Post-list wallets: 2×`i32` into `0x768b50`/`0x768b54` (files
+    `0x160b03`/`0x160b12`). PINNED as wallet words 5–6: the same
+    globals the sibling handler reads contiguously, and both are
+    shop-checked (`0x768b50` at VA `0x499f39`, file `0x99f39`;
+    `0x768b54` at VA `0x499f7d`, file `0x99f7d`). Exact meanings OPEN.
+  - 12-byte blob: PROVEN ABSENT from the wire. The `push $0xc` +
+    `push $0` + `call 0x5f1ef0` sequence (call site file `0x160b3e`)
+    zeroes a 12-byte stack scratch: `0x5f1ef0` (file `0x1f1ef0`) is a
+    byte-fill (`rep stos`, file `0x1f1f4f`), and the cleared buffer
+    feeds four `0x7795fc`-table render calls (VAs `0x560b6e`/
+    `0x560b83`) — no packet read happens between the post-list words
+    and the M count. The earlier "12-byte blob" wording was a misread
+    of that `memset`; no wire bytes, no type.
+  - M-pair list: packet-counted `i32` M (file `0x160b8a`), then two
+    4-byte reads per entry (files `0x160bb6`/`0x160bc4`) — 8 wire
+    bytes per pair. PINNED widths: the first word is whole-consumed as
+    the entry id (validated by `0x537e90` on `0x77ccbc`, whose `0xff`
+    return skips the pair at file `0x160bf5`, then resolved by
+    `0x538240`, plus item-record lookups `0x52dba0` on `0x77b540`
+    with `[eax+0xa]`/`[eax+0xb]` feeding render `0x4a9b60` on
+    `0x7795fc`); only the LOW word of the second word is consumed
+    (`movzx cx`, file `0x160bd8`) — the high half is read to advance
+    the cursor then dropped. Modeled as `ShopRestockPair`
+    (`entry_id`, `aux_low`, reserved `aux_high`). Game meanings OPEN.
+  - Trailing word: single `i32` (file `0x160c54`), then a forward
+    stamping `$0x1389` + `$0x12` into the UI event queue (`0x478d50`;
+    `$0x1389` push file `0x160c68`, call file `0x160c75`). PINNED: the
+    `$0x1389` is the event id, not wire. The shop-context `0x1389`
+    consumer (VA `0x4f4144`, file `0xf4144`, dispatched at file
+    `0xf410e`) branches on the forwarded word: nonzero stores it to
+    `[ecx+0x64]` and notifies `0x13a1` (VA `0x4f417f`, file
+    `0xf417f`); zero takes the `0x4f4300` refresh path (VA `0x4f419e`,
+    file `0xf419e`). The word's meaning stays OPEN.
 - `SellItem`/`ChangeName` word semantics: first word is the
   bounds-checked `0x77ccc0` selection index (role VERIFIED);
   the second word is the fetched entry's id word (usage
@@ -245,4 +288,10 @@ round-trip),
 `equip_item_response_rejects_short_success`,
 `equip_item_response_rejects_trailing_success`,
 `equip_item_response_rejects_wrong_command`,
-`sync_cash_point_response_rejects_trailing_bytes`.
+`sync_cash_point_response_rejects_trailing_bytes`,
+`sync_item_purchase_prefix_decodes_first_sixteen_bytes`,
+`sync_item_purchase_prefix_names_wallet_roles`,
+`sync_item_purchase_prefix_rejects_short_prefix`,
+`shop_restock_pair_decodes_entry_plus_split_word`,
+`shop_restock_pair_round_trips_pair_list`,
+`shop_restock_pair_rejects_short_body`.
