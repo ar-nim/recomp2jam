@@ -166,6 +166,35 @@ the server sends.
 - Byte vectors: relay bodies cross-checked against independent
   Python `struct` builds; UDP vectors are Python `zlib.compress`
   outputs (levels 0/6/9, incl. a dynamic-Huffman block).
+- Relay endpoint selector (file `0x18c6c0`, VA `0x58c6c0`): the three
+  relay IP string pointers are staged at file
+  `0x18c6d7`/`0x18c6de`/`0x18c6e5` (`0x64e260`/`0x64e250`/`0x64e240`),
+  the dword selector is range-checked and dispatched through jump
+  tables at file `0x18c850`/`0x18c864` (VA `0x58c850`/`0x58c864`),
+  and each leaf stores port `0x998f` (39311) or `0x9990` (39312) with
+  relay index 0/1/2 (file `0x18c73b`–`0x18c77f`); follow-up stages
+  push `50000` (`$0xc350`) and add `10000` (`$0x2710`). Selector
+  immediates are the byte proof behind `RELAY_UDP_PORTS` in
+  `o2jam-net`.
+- UHP result sink (file ~`0x187a70`): references the logger name
+  `CHolePunchingCtrl::InsertUHPResult` (file `0x24e1e4`, ref file
+  `0x187a8c`) and the format `Hole punching Result : %d : IP : %d -
+  Port : %d` (file `0x24e208`, ref file `0x187a82`).
+- UHP start/success branch (file ~`0x18d7c5`): a status byte picks
+  `UDP Hole Punching Success~!!` (file `0x24e2c0`, ref file
+  `0x18d7cd`) when nonzero else `UHP Start` (file `0x24e2b0`, ref
+  file `0x18d80f`); both share one log-context pointer, then poll in
+  a `Sleep(300)` loop (push `$0x12c` + `call *Sleep`, IAT
+  `0x63f298`, call site file `0x18d84d`).
+- Adjunct `.52` host: string `203.238.136.52` (file `0x24e368`)
+  has exactly two code refs (files `0x1936e2`, `0x1936fc`) in a
+  setup block that also materializes constant `7788` (`$0x1e6c`,
+  file `0x19370b`, the only `0x1e6c` in the image) — role open, not
+  claimed as a port.
+- Fallback class: RTTI `.?AVCUDPFailTCPConnect@@` (name file
+  `0x28060c`); no dedicated log strings. UDP send/recv run through
+  `WSASendTo`/`WSARecvFrom` (IAT `0x63f584`/`0x63f580`; send site
+  file `0x1b1ad2`, recv site file `0x1b19cd`).
 
 ## 7. OPEN (not claimed)
 
@@ -173,18 +202,52 @@ the server sends.
   pinned); the op-5 game-loop writer in particular.
 - Relay TCP framing bytes (same-`SetID` inference +
   same-codec corroboration, not a capture).
-- UDP relay ports (only TCP `15010` pinned in-exe; relay ports
-  arrive via `GetLiveState` 4042/4043, `GetP2PList` 4044/4045).
-- UHP hole-punch flow (`ReportUdpPunchHole` 4046/4047,
-  `ConfirmRelay` 4055/4056); `CHolePunchingCtrl` strings only.
+- Relay TCP ports for the peer leg (only gateway TCP `15010` pinned
+  in-exe at file `0x2513d8`, ref file `0x1ab72a`); relay ports otherwise
+  arrive via `GetLiveState` 4042/4043, `GetP2PList` 4044/4045.
+- UHP hole-punch packet bodies (`ReportUdpPunchHole` 4046/4047,
+  `ConfirmRelay` 4055/4056): string/branch anchors only (§9); no
+  decoders added — bodies stay unclaimed until a capture or further
+  exe byte proof lands.
+- `CUDPFailTCPConnect` trigger site (RTTI name only, file
+  `0x28060c`); byte-pinned fallback behavior is relay op 3 forcing
+  TCP plus the RUDP trio — the class's own call sites are open.
 - Whether op-6/7 `autoplay` is ever 0, and what `code`/`unused`
   carry on the wire when nonzero.
 - S→C game 4015 handler (peer lifebar store); see
   `docs/4015-hunt.md`.
 
+## 9. UDP ports and UHP hole-punch flow (7.55 static map)
+
+No new REA dossier was issued (shared snapshot contended); all
+addresses below are file offsets (VA = file + `0x400000`), and no
+disassembly is reproduced. Decoder impact: none beyond the
+`RELAY_UDP_PORTS` selector-immediate constants — UHP bodies stay
+undecoded (not byte-verified).
+
+Flow in the exe's own words: the relay selector stages the three
+hardcoded relay IPs, picks one IP plus port 39311/39312 by selector,
+then the UHP controller logs `UHP Start`, polls with `Sleep(300)`
+until its status check passes, logs `UDP Hole Punching Success~!!`,
+and reports each outcome through `InsertUHPResult` with
+`(result, IP, port)`. If that path fails, the `CUDPFailTCPConnect`
+class name marks the TCP-fallback side, whose wire-visible half is
+relay op 3 (`PeerEndpointAssigned` forces TCP relay instead of
+peer-to-peer) and the RUDP-over-UDP vs framed-TCP split.
+
+| Item | Value / anchor |
+|---|---|---|
+| Relay UDP ports | 39311 (`0x998f`), 39312 (`0x9990`): selector-leaf immediates, file `0x18c73b`–`0x18c77f` |
+| Relay IP staging | `0x64e260`/`0x64e250`/`0x64e240` pushed at file `0x18c6d7`/`0x18c6de`/`0x18c6e5`; dispatch tables file `0x18c850`/`0x18c864` |
+| UHP start / success | branch file ~`0x18d7c5`; `UHP Start` file `0x24e2b0` (ref `0x18d80f`), `UDP Hole Punching Success~!!` file `0x24e2c0` (ref `0x18d7cd`); poll loop `Sleep(300)` via IAT `0x63f298` (site file `0x18d84d`) |
+| UHP result | `InsertUHPResult` file `0x24e1e4` (ref `0x187a8c`); format `Hole punching Result : %d : IP : %d - Port : %d` file `0x24e208` (ref `0x187a82`) |
+| Adjunct `.52` host | string file `0x24e368`, code refs files `0x1936e2`/`0x1936fc`; co-located constant 7788 (file `0x19370b`) — role open |
+| Fallback | RTTI `.?AVCUDPFailTCPConnect@@` file `0x28060c`; `WSASendTo`/`WSARecvFrom` IAT `0x63f584`/`0x63f580` (sites files `0x1b1ad2`/`0x1b19cd`) |
+
 ## 8. Tests (`cargo test -p o2jam-net`)
 
-`relay_command_tests`: id map, role map, exact-body vectors for
+`relay_command_tests`: id map, role map, relay UDP-port immediates,
+  exact-body vectors for
 ops 1–7/10–11, frame round-trips, short/trailing/foreign-id and
 bad-enum rejections. `udp_frame_tests`: ack encode/decode,
 stored/fixed-dictionary/dynamic-Huffman datagram vectors,
