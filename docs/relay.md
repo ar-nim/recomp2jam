@@ -420,7 +420,7 @@ exit), truncation/trailing/foreign-id rejections, per-field offset
 vectors; 4043 exact 17-byte all-inactive vector plus the 124-byte active-member vector (Python `struct` cross-checked), active-gate
 (non-1 bytes mean inactive), seat-byte wire order, single room-master trailing flag (no administrator byte),
 two-consecutive-active alignment, member-id bound, negative music-count,
-trailing/foreign-id rejections, header offset vectors; `member_slot_tests`: slot base/stride, seat/equipment/music/trailing/room-master/spare-flag/slot-group offsets, slot-group ordering, `slot_position_marks` for slots 0/3/other, stride stepping, slot/offset bounds.
+trailing/foreign-id rejections, header offset vectors; `member_slot_tests`: slot base/stride, seat/equipment/music/trailing/room-master/spare-flag/match-index/slot-group offsets, slot-group ordering, `slot_position_marks` for slots 0/3/other, match-index sentinel plus stride stepping, slot/offset bounds.
 
 ## 10. Live-state gateway handlers: 4042–4045 (7.55 static map)
 
@@ -497,6 +497,7 @@ calls (offset in the helper name). Decoded in `o2jam-net` as
 | seats: team | `+0x31` | `0x159dbc` → `0x140d40` (1 B) |
 | seats: ready (wire store, derived in memory) | `+0x32` | `0x159dd4` → `0x140d70` (1 B); the slot-index branch then overwrites `+0x32` from position without reading wire (setter `0x1400f0`: slot 0 stores 1 at file `0x159f00`, slot 3 stores 0 at file `0x159f2e`, other slots store 1 at file `0x159f5c`; `slot_position_marks` in `relay.rs`) |
 | seats: third byte (`music_state` position) | `+0x217c` | `0x159dec` → `0x141480` (1 B); value semantics OPEN: no compare/branch consumer image-wide — only the direct setter `0x141460` (27 callers, incl. UI-forward paths for codes `0x0FC3`/`0x0FC5` at files `0x159943`/`0x15995e`/`0x1599d2`/`0x1599ed`), the ctor default `+0x217c = 0` beside `+0x217d = 0xFF` (files `0x13fcc1`/`0x13fcc8`), and the bulk copy (files `0xe961d`/`0xe9623`); `ev_f11710744bbbb8279df245ae2e46aeac` |
+| match index (derived, not wire) | `+0x217d` | wire-order position `0..7`, `0xFF` = unmatched (decoder `MEMBER_OFF_MATCH_INDEX` / `MEMBER_MATCH_INDEX_UNSET`): ctor defaults `+0x217d = 0xFF` beside `+0x217c = 0` (files `0x13fcc1`/`0x13fcc8`); reset routine entered at file `0xdb6e0` restores `0xFF` to all eight slots (call site file `0xdb8c6`) plus the local object; the S→C 8-by-8 id-match routine at file `0x159a60` (stub file `0x15879c`; local store file `0x159acf`, slot store file `0x159b1a`) and the room-dispatcher routine entered at file `0x15fa20` (stub file `0x1586bf`; local store file `0x15fb34`, slot store file `0x15fb7e`) each compare the just-read id byte against the requesting id at `0x77cd04` or the slot id at `+0x04` and store the outer index on match. Direct setter `0x1414a0` has exactly six image-wide callers (the two stores in each of the three routines); the only other `0x217d` sites are the ctor default and the bulk-copy pair (files `0xe962f`/`0xe9635`); no compare/branch on `+0x217d` exists image-wide, so what the index selects stays OPEN; `ev_ef517890c33d30e9f73e4d968f15c740`, `ev_81b04a61265048cdf391244aeff6beac`, `ev_15e8653ce8cffef7c50fec80b16e4b14`, observed |
 | equipments count | `+0x2038` | `0x159e30` → `0x140e40` (4 B; `0x11` loop bound file `0x140eb1`) |
 | equipments | `+0x2040` | same call; 17 `i32` words |
 | music ids count | `+0x34` | `0x159e48` → `0x140db0` (4 B; loop bound is the count) |
@@ -506,7 +507,7 @@ calls (offset in the helper name). Decoded in `o2jam-net` as
 | states: playing_state | `+0x2130` | `0x159e90` → `0x141670` (1 B) |
 | states: live_extra (wire copy) | `+0x2131` | `0x159ea8` → `0x141690` (1 B); the second of two back-to-back 1 B reads (files `0x141670`/`0x141690` into `+0x2130`/`+0x2131`); semantics OPEN |
 | states: trailing flag (`is_room_master`) | `+0x30` | `0x159ec0` → `0x140d20` (1 B). The only trailing flag on the wire. Room-master (not administrator): the 4043 header derives the local object (`0x77cd00`) from the requesting member id at `0x77cd04`, storing `+0x30 = 1` exactly when the id is 0 (files `0x159bdf`/`0x159c1b`/`0x159c4d`, plus the `0x77ee3c = 1` mark at file `0x159be4`); the sibling handler compares the member id against the announced master id at `0x778a14` and marks the local `+0x30` when equal, the announced slot otherwise (files `0x15d888`–`0x15d8d3`); `ev_bc4842b1a6fa649bb1a62f21200a3a30` |
-| states: spare low flag (never wire) | `+0x33` | zeroed up front via the direct setter `0x140110` (file `0x159e18`, pushed 0); no wire reader in any of the three member-parse paths (helper `0x140d90` has zero image-wide callers). Elsewhere `+0x33` takes UI-driven 0–8 values on the local object and gates a score ticker on equal-to-6 (helper `0x141620`); `ev_c030b2551aa535f98e016858e180ae73` |
+| states: spare low flag (never wire) | `+0x33` | local-only effect selector holding `0..8` (decoder `MEMBER_OFF_SPARE_FLAG`): zeroed up front via the direct setter `0x140110` (file `0x159e18`, pushed 0); no wire reader in any of the three member-parse paths (helper `0x140d90` has zero image-wide callers; full-image relative-call scan: 49 callers of the setter — mostly immediates `0..8` to the local object at `0x77cd00`, one target `0x78fb10` — against zero of the reader). The lone consumer is the ticker helper file `0x141620` (six callers in the score region: files `0x16e5c1`/`0x16e73e`/`0x176140`/`0x176d86`/`0x177230`/`0x178200`), which skips the `+0x2158 += 10` bonus when `+0x33 == 6` yet always applies `+0x2152 += 1`; `ev_c030b2551aa535f98e016858e180ae73`, `ev_c18b6a071288740ad1166134e7fc92a6`, `ev_261849e6804de5f8d1b476fbe9d0fb55`, `ev_d6fa2e234044d3517f0c887799e19eda`, observed |
 | slot group (derived, not wire) | `+0x2186` | slot-index branch files `0x159ec5`–`0x159f5c` via setter `0x141520` (files `0x159eea`/`0x159f18`/`0x159f46`): slot 0 stores 1, slot 3 stores 2, others store 3 (`slot_position_marks` in `relay.rs`). The 4043 header runs the same 0/3/other mapping over the member id for the local object (files `0x159baf`–`0x159c5e`, plus `+0x2184` via `0x141500`); ctor default is 3 (file `0x13fa96`); `ev_14fd3f2dae86c90bf45f505c7c7a70ef` |
 | streak: win_streak | `+0x218c` | inline 4 B read file `0x159f61` → setter `0x141560` at file `0x159f82`; `0x218c + 4` ends exactly at the slot end `0x2190` |
 
@@ -538,11 +539,17 @@ lead order (`+0x30` at file `0x15cf0d` ahead of the seat readers at files
 dword (4 B read through the shared reader file `0x155d20` at site file
 `0x15d009`, pushed 4, stored into the slot at file `0x15d03c`;
 `ev_bf2aa97d2356819f76df5ea05e24cfc4`, observed; decoder
-`MEMBER_OFF_EXTRA_DWORD`). OPEN: seat-byte and trailing-byte
+`MEMBER_OFF_EXTRA_DWORD`). CLOSED: `+0x33` is a local-only effect
+selector (`0..8`, never wire) — 49 setter callers against zero reader
+callers, lone ticker consumer branching on 6 (`+0x2158 += 10` skipped,
+`+0x2152 += 1` always). CLOSED: `+0x217d` storage is the wire-order
+match index (`0..7`, `0xFF` = unmatched) — ctor default, eight-slot
+reset, and two 8-by-8 id-match routines through the six-caller setter,
+with no compare consumer. OPEN: seat-byte and trailing-byte
 value semantics (team/ready/music/playing/free-pass enums, `live_extra`,
-`+0x2134`, `+0x2186` group meaning — none has an in-exe compare consumer);
-the full 3003/3007 body layouts beyond the pinned order/offset; the
-`+0x217d = 0xFF` ctor default's purpose.
+`+0x2134`, `+0x2186` group meaning, what the `+0x217d` index selects —
+none has an in-exe compare consumer);
+the full 3003/3007 body layouts beyond the pinned order/offset.
 
 ## 11. Relay enum value sets (7.55 static map)
 
