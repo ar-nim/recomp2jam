@@ -108,16 +108,18 @@ Cool adds `+2` (`push $0x2`, file `0x1705b0`), Good adds `+1`
 (`push $0x1`, file `0x170628`), both via adder `0x5409f0`
 (file `0x1409f0`); Bad/Miss reset progress to `0` via setter
 `0x540770` on the shared low-branch tail (file `0x1708dd`).
-When progress beats the per-jam-level threshold table
-(game `+0xb66` indexed by `X`, file `0x17071d`; first level
-needs 30 points per the report — table lives in the game
-object so static bytes can't confirm the `30`), `X += 1` via
-adder `0x540a20` (file `0x140a20`), and `X` is reset to `0`
-on the Bad/Miss branch (file `0x170936`, after snapshotting
-via `0x5407f0` — likely maxJam). Jam multiplies the score
-(`200+10X`, `100+5X`); at zero jam Cool/Good score flat.
-Progress is cumulative across grants (no reset on level-up;
-higher table entries gate further levels).
+The threshold table is VERIFIED identical for every
+difficulty: `FUN_00570260` (file `0x170260`) fills
+`+0xb66[i] = (i+1) * 50` for `i = 0..399` (`0x190`) at game
+init — first jam level needs 50 progress, then 100, 150, …
+(cumulative; no reset on level-up). The earlier reported
+"30 points" is NOT in the exe — corrected. This table is
+per JAM LEVEL (index `X`), not per difficulty: same table
+for Easy/Normal/Hard. `X += 1` via adder `0x540a20` (file
+`0x140a20`) on the grant, and `X` resets to `0` on Bad/Miss
+(file `0x170936`, after snapshotting via `0x5407f0` — likely
+maxJam). Jam multiplies the score (`200+10X`, `100+5X`); at
+zero jam Cool/Good score flat.
 
 ## Room teams — UI + client send VERIFIED, scoring server-side
 
