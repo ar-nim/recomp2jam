@@ -132,6 +132,28 @@ impl MemberRole {
 /// no narrowing casts.)
 pub const RELAY_UDP_PORTS: [u16; 2] = [39311, 39312];
 
+/// Adjunct host configured by the shared setup helper entered at file
+/// `0x193650` (`docs/relay.md` §9).
+///
+/// Byte-verified references: the `203.238.136.52` string (file `0x24e368`)
+/// is pushed as a call argument at exactly two image-wide sites (files
+/// `0x1936e2`, `0x1936fc`), both inside the same setup block that stores
+/// [`ADJUNCT_SETUP_NUMBER`]; neither the relay selector (file `0x18c6c0`)
+/// nor the UHP controller (file `0x18d580`) references this host. It is
+/// therefore a separately configured adjunct endpoint — not a fourth
+/// relay-pool member, a UHP helper, or the `CUDPFailTCPConnect` fallback
+/// path — whose exact service role stays open.
+/// (ERRORS-06: plain constant, no `unwrap`; PERF-07: no narrowing casts.)
+pub const ADJUNCT_RELAY_HOST: Ipv4Addr = Ipv4Addr::new(203, 238, 136, 52);
+
+/// Numeric value co-located with the adjunct-host setup (file `0x19370b`).
+///
+/// Byte-verified immediate: the only `0x1e6c` dword image-wide, stored into
+/// a setup-block slot just after the second adjunct-host call. Recorded as
+/// a number, not claimed as a port: no socket-connect sequence ties it to
+/// the host. (ERRORS-06/PERF-07: plain `u16` literal.)
+pub const ADJUNCT_SETUP_NUMBER: u16 = 7788;
+
 /// Serialized size of one relay endpoint: 4 address bytes + `u16` port.
 const ENDPOINT_LEN: usize = 6;
 
@@ -1658,6 +1680,35 @@ mod live_handshake_tests {
             ReportUdpPunchHole::decode_frame(&answer),
             Err(Error::UnknownCommand(4056))
         );
+    }
+}
+
+#[cfg(test)]
+mod adjunct_host_tests {
+    use super::*;
+
+    #[test]
+    fn adjunct_host_matches_documented_address() {
+        assert_eq!(ADJUNCT_RELAY_HOST.octets(), [203, 238, 136, 52]);
+    }
+
+    #[test]
+    fn adjunct_host_shares_relay_subnet_but_not_pool() {
+        let pool = [
+            Ipv4Addr::new(203, 238, 136, 184),
+            Ipv4Addr::new(203, 238, 136, 182),
+            Ipv4Addr::new(203, 238, 136, 183),
+        ];
+        for member in pool {
+            assert_ne!(ADJUNCT_RELAY_HOST, member);
+            assert_eq!(ADJUNCT_RELAY_HOST.octets()[..3], member.octets()[..3]);
+        }
+    }
+
+    #[test]
+    fn adjunct_setup_number_matches_exe_immediate() {
+        assert_eq!(ADJUNCT_SETUP_NUMBER, 0x1E6C);
+        assert_eq!(ADJUNCT_SETUP_NUMBER, 7788);
     }
 }
 
