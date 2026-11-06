@@ -9,7 +9,29 @@
 
 use super::screen::{Screen, ScreenFlow};
 use super::GameLoop;
-use o2jam_render::{draw_number, fill_rect, number_width, pack_xrgb, Frame, Rect};
+use o2jam_render::{
+    draw_number, draw_text, fill_rect, number_width, pack_xrgb, text_width, Frame, Rect,
+};
+
+/// Title ink on lobby cards (dark on the light card).
+fn title_color() -> u32 {
+    pack_xrgb(0x20, 0x20, 0x20)
+}
+
+/// Title tucked just inside the card's top edge.
+fn paint_title(frame: &mut Frame<'_>, title: &str) {
+    if title.is_empty() {
+        return;
+    }
+    let text_w = text_width(title) as i32;
+    draw_text(
+        frame,
+        frame.w as i32 / 2 - text_w / 2,
+        frame.h as i32 / 2 - frame.h as i32 / 8 + 2,
+        title,
+        title_color(),
+    );
+}
 
 /// Client version stamped on the splash (matches the 7.55 target).
 const SPLASH_VERSION: u32 = 755;
@@ -112,13 +134,24 @@ fn background_of(screen: Screen) -> u32 {
     }
 }
 
+/// Title drawn on each lobby card.
+fn title_of(screen: Screen) -> &'static str {
+    match screen {
+        Screen::Channel => "CHANNEL",
+        Screen::Room => "ROOM",
+        Screen::Waiting => "WAITING",
+        _ => "",
+    }
+}
+
 /// Paint one screen's scene.
 pub fn paint_screen(frame: &mut Frame<'_>, screen: Screen) {
     match screen {
         Screen::Avi => paint_avi(frame),
-        Screen::Channel => paint_lobby(frame, background_of(screen)),
-        Screen::Room => paint_lobby(frame, background_of(screen)),
-        Screen::Waiting => paint_lobby(frame, background_of(screen)),
+        Screen::Channel | Screen::Room | Screen::Waiting => {
+            paint_lobby(frame, background_of(screen));
+            paint_title(frame, title_of(screen));
+        }
         Screen::Loading => paint_loading(frame),
         Screen::Playing => paint_card(frame, background_of(screen), pack_xrgb(0x40, 0x40, 0x40)),
         Screen::Result => paint_result(frame),
@@ -218,6 +251,21 @@ mod screen_paint_tests {
             let buf = painted(screen, 16, 12);
             assert_eq!(buf[0], background_of(screen), "{screen:?}");
         }
+    }
+
+    #[test]
+    fn lobby_cards_carry_titles() {
+        // 128x96 channel card spans x 48..80, y 36..60; the title
+        // starts at x = 64 - 27/2 = 51, y = 38, so the 'C' top
+        // bar (011) lights x+1..x+2 on card gray.
+        let buf = painted(Screen::Channel, 128, 96);
+        let ink = pack_xrgb(0x20, 0x20, 0x20);
+        let card = pack_xrgb(0xD0, 0xD0, 0xD0);
+        assert_eq!(buf[38 * 128 + 51], card);
+        assert_eq!(buf[38 * 128 + 52], ink);
+        assert_eq!(buf[38 * 128 + 53], ink);
+        let room = painted(Screen::Room, 128, 96);
+        assert!(room.contains(&ink));
     }
 
     #[test]
