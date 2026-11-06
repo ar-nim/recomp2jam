@@ -272,6 +272,208 @@ impl AudioBackend for CpalBackend {
     }
 }
 
+/// One mixed voice: normalized frames plus a linear gain and a start
+/// offset in song frames. Gain `1.0` is unity; `0.0` is silent.
+#[derive(Debug, Clone)]
+struct MixerVoice {
+    frames: Vec<f32>,
+    gain: f32,
+    start_frame: u64,
+}
+
+/// Song mixer: sums BGM plus per-note key-sounds into one PCM blob.
+///
+/// Voices are resampled to the mixer rate on `add_voice`, then summed
+/// in `mix` with clamping (no wraparound). Mono voices duplicate to
+/// every mixer channel, extra channels fold down by averaging.
+#[derive(Debug, Default)]
+pub struct SongMixer {
+    sample_rate: u32,
+    channels: usize,
+    voices: Vec<MixerVoice>,
+}
+
+impl SongMixer {
+    /// Create a mixer for song-rate output (`channels` > 0).
+    #[must_use]
+    pub fn new(sample_rate: u32, channels: usize) -> Self {
+        Self {
+            sample_rate,
+            channels: channels.max(1),
+            voices: Vec::new(),
+        }
+    }
+
+    /// Mixer output rate in Hz.
+    #[must_use]
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    /// Mixer channel count.
+    #[must_use]
+    pub fn channels(&self) -> usize {
+        self.channels
+    }
+
+    /// Queue one note/BGM voice with a linear per-note `gain`.
+    /// Negative gains clamp to silence; the voice starts at
+    /// `start_frame` song frames.
+    pub fn add_voice(&mut self, pcm: &PcmSamples, gain: f32, start_frame: u64) {
+        let gain = gain.max(0.0);
+        if gain == 0.0 {
+            return;
+        }
+        let in_channels = pcm.channels.max(1) as usize;
+        let mono: Vec<f32> = pcm
+            .samples
+            .iter()
+            .map(|s| f32::from(*s) / 32768.0)
+            .collect();
+        let resampled = resample_linear(&mono, in_channels, pcm.sample_rate, self.sample_rate);
+        let in_frames = resampled.len() / in_channels.max(1);
+        let mut frames = Vec::with_capacity(in_frames * self.channels);
+        for i in 0..in_frames {
+            for ch in 0..self.channels {
+                let sample = if in_channels == 1 {
+                    resampled[i]
+                } else if in_channels >= self.channels {
+                    resampled[i * in_channels + ch]
+                } else {
+                    let mut sum = 0.0;
+                    for c in 0..in_channels {
+                        sum += resampled[i * in_channels + c];
+                    }
+                    sum / in_channels as f32
+                };
+                frames.push(sample);
+            }
+        }
+        self.voices.push(MixerVoice {
+            frames,
+            gain,
+            start_frame,
+        });
+    }
+
+    /// Song length in frames (longest voice end).
+    #[must_use]
+    pub fn song_frames(&self) -> u64 {
+        self.voices
+            .iter()
+            .map(|voice| voice.start_frame + voice.frames.len() as u64 / self.channels as u64)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Sum all voices into one clamped PCM blob.
+    #[must_use]
+    pub fn mix(&self) -> PcmSamples {
+        let total = self.song_frames() as usize;
+        let mut acc = vec![0.0f32; total * self.channels];
+        for voice in &self.voices {
+            let start = voice.start_frame as usize * self.channels;
+            for (i, sample) in voice.frames.iter().enumerate() {
+                if let Some(slot) = acc.get_mut(start + i) {
+                    *slot += *sample * voice.gain;
+                }
+            }
+        }
+        let samples = acc
+            .iter()
+            .map(|s| (s.clamp(-1.0, 1.0) * 32767.0).round() as i16)
+            .collect();
+        PcmSamples {
+            samples,
+            sample_rate: self.sample_rate,
+            channels: self.channels as u8,
+        }
+    }
+}
+
+/// Convert a device frame counter to song milliseconds. This wires the
+/// song clock to audio time: callers pass
+/// [`AudioBackend::samples_played`] and the device rate.
+#[must_use]
+pub fn song_position_ms(samples_played: u64, sample_rate: u32) -> u64 {
+    if sample_rate == 0 {
+        return 0;
+    }
+    samples_played.saturating_mul(1000) / u64::from(sample_rate)
+}
+
+/// Song clock anchored on audio device frames: the single seam
+/// between game timing and the audio backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SongClock {
+    sample_rate: u32,
+    start_sample: u64,
+}
+
+impl SongClock {
+    /// Anchor a song at `start_sample` device frames.
+    #[must_use]
+    pub fn new(sample_rate: u32, start_sample: u64) -> Self {
+        Self {
+            sample_rate,
+            start_sample,
+        }
+    }
+
+    /// Song position in ms for a `samples_played` reading.
+    #[must_use]
+    pub fn position_ms(&self, samples_played: u64) -> u64 {
+        song_position_ms(
+            samples_played.saturating_sub(self.start_sample),
+            self.sample_rate,
+        )
+    }
+
+    /// Signed drift in ms: positive means the audio clock runs ahead
+    /// of the expected (frame-clock) position.
+    #[must_use]
+    pub fn drift_ms(&self, samples_played: u64, expected_ms: u64) -> i64 {
+        self.position_ms(samples_played) as i64 - expected_ms as i64
+    }
+}
+
+/// Output-latency probe: queued-but-unplayed frames plus the device's
+/// own base latency, all reported in milliseconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LatencyProbe {
+    sample_rate: u32,
+    queued_frames: u64,
+    device_latency_frames: u64,
+}
+
+impl LatencyProbe {
+    /// Snapshot a probe reading; zeros guard divide-by-zero callers.
+    #[must_use]
+    pub fn new(sample_rate: u32, queued_frames: u64, device_latency_frames: u64) -> Self {
+        Self {
+            sample_rate,
+            queued_frames,
+            device_latency_frames,
+        }
+    }
+
+    /// Milliseconds of audio queued but not yet played.
+    #[must_use]
+    pub fn pending_ms(&self) -> u64 {
+        song_position_ms(self.queued_frames, self.sample_rate)
+    }
+
+    /// Total output latency: device base plus queued audio.
+    #[must_use]
+    pub fn total_ms(&self) -> u64 {
+        song_position_ms(
+            self.queued_frames
+                .saturating_add(self.device_latency_frames),
+            self.sample_rate,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -367,5 +569,78 @@ mod tests {
         let mut out = [0.0f32; 2];
         assert_eq!(queue.pop_into(&mut out, 2), 1);
         assert_eq!(out, [0.5, 0.5]);
+    }
+
+    fn mono_pcm(values: &[i16]) -> PcmSamples {
+        PcmSamples {
+            samples: values.to_vec(),
+            sample_rate: 44100,
+            channels: 1,
+        }
+    }
+
+    #[test]
+    fn mixer_applies_per_note_gain() {
+        let mut mixer = SongMixer::new(44100, 1);
+        mixer.add_voice(&mono_pcm(&[10000, 10000]), 1.0, 0);
+        mixer.add_voice(&mono_pcm(&[10000, 10000]), 0.5, 0);
+        let mixed = mixer.mix();
+        assert_eq!(mixed.samples.len(), 2);
+        assert!((mixed.samples[0] - 15000).abs() <= 2);
+        assert!((mixed.samples[1] - 15000).abs() <= 2);
+    }
+
+    #[test]
+    fn mixer_clamps_instead_of_wrapping() {
+        let mut mixer = SongMixer::new(44100, 1);
+        mixer.add_voice(&mono_pcm(&[30000]), 1.0, 0);
+        mixer.add_voice(&mono_pcm(&[30000]), 1.0, 0);
+        let mixed = mixer.mix();
+        assert_eq!(mixed.samples, vec![32767]);
+    }
+
+    #[test]
+    fn mixer_offsets_late_voices_with_silence() {
+        let mut mixer = SongMixer::new(44100, 1);
+        mixer.add_voice(&mono_pcm(&[10000]), 1.0, 0);
+        mixer.add_voice(&mono_pcm(&[20000]), 1.0, 2);
+        let mixed = mixer.mix();
+        assert_eq!(mixed.samples.len(), 3);
+        assert!((mixed.samples[0] - 10000).abs() <= 2);
+        assert_eq!(mixed.samples[1], 0);
+        assert!((mixed.samples[2] - 20000).abs() <= 2);
+    }
+
+    #[test]
+    fn mixer_ignores_silent_and_negative_gains() {
+        let mut mixer = SongMixer::new(44100, 1);
+        mixer.add_voice(&mono_pcm(&[10000]), 0.0, 0);
+        mixer.add_voice(&mono_pcm(&[10000]), -1.0, 0);
+        assert_eq!(mixer.song_frames(), 0);
+        assert!(mixer.mix().samples.is_empty());
+    }
+
+    #[test]
+    fn song_position_converts_frames_to_ms() {
+        assert_eq!(song_position_ms(44100, 44100), 1000);
+        assert_eq!(song_position_ms(0, 44100), 0);
+        assert_eq!(song_position_ms(22050, 0), 0);
+    }
+
+    #[test]
+    fn song_clock_tracks_audio_time_and_drift() {
+        let clock = SongClock::new(44100, 44100);
+        assert_eq!(clock.position_ms(88200), 1000);
+        assert_eq!(clock.position_ms(0), 0);
+        assert_eq!(clock.drift_ms(88200, 900), 100);
+        assert_eq!(clock.drift_ms(88200, 1100), -100);
+    }
+
+    #[test]
+    fn latency_probe_reports_pending_and_total() {
+        let probe = LatencyProbe::new(44100, 4410, 4410);
+        assert_eq!(probe.pending_ms(), 100);
+        assert_eq!(probe.total_ms(), 200);
+        assert_eq!(LatencyProbe::new(0, 999, 999).total_ms(), 0);
     }
 }
