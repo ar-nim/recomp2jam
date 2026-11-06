@@ -145,35 +145,53 @@ REA dossiers TBD — file offsets = VA − `0x400000`). The loader
 table 4 → `+0x184/+0x188/+0x18c`, table 5 → `+0x190` (id echo) /
 `+0x194`.
 
-- Table 5 `category` = song-wheel label bucket. Three exe sites
-  jump-table on `song+0x194 − 1` (dispatches at file offsets `0xbfa5c`,
-  `0x16121e` and `0x493409`, 5-target tables at file offsets `0xbff7c`,
-  `0x162e2c` and `0x93a3c`) and append the song to one of five parallel
-  lists (`0x77953c`, `0x77954c`, `0x77955c`, `0x77956c`, `0x77957c` in
-  category order; each list is later walked/emptied, e.g. file offsets
-  `0x92a3c…0x92b68`). Labels are the select-music dialog STEP2 label
-  buttons (`DAILOG_SELECTMUSIC` in `install-root/Image/Interface1.opi`:
-  `STEP2_ALL`/`GOLD`/`BLACK`/`BLUE`/`RED`/`SILVER`, codes
-  `0x2720B021..0x2720B026`, art
+- Table 5 `category` = song-wheel label bucket. Four exe sites
+  jump-table on `song+0x194 − 1` (range-check `> 4`) and append the
+  song-record pointer into parallel wheel lists (vectors of song
+  pointers over `0x1b4`-stride records — not the `0x238` select
+  entries): file `0xbfa5c` (VA `0x4bfa5c`, 5-arm table at file
+  `0xbff7c`) and VA `0x493409` (file `0x93409`, read at VA
+  `0x4933ee`/file `0x933ee`, table at VA `0x493a3c`/file `0x93a3c`)
+  append via `0x47dd60` (file `0x7dd60`) into the global heads at VAs
+  `0x77953c`/`0x77954c`/`0x77955c`/`0x77956c`/`0x77957c` in category
+  order (writable-data region, no file image); file `0x16121e` (VA
+  `0x56121e`, table at file `0x162e2c`) id-matches then appends via
+  `0x454b90`/`0x4552b0`; VA `0x4cc82f` (file `0x8c82f`, table at VA
+  `0x4cc964`/file `0x8c964`) into dialog-relative pointer lists
+  (`+0x1d0`/`+0x1e0`/`+0x1f0` family, same add-displacement idiom).
+  Each wheel list is later walked/emptied (e.g. VA `0x492a3c`/file
+  `0x92a3c` region clears all five via `0x47de70`). The per-filter
+  result lists are a different world: inline `0x238`-byte entries
+  (count = `(end − begin) / 0x238`, element access via `imul $0x238`,
+  whole-entry copies via `0x452850`, clears via `0x452a00`) chained
+  master `+0x640` → STEP1 level bands (`+0x212`, VA `0x446950`/file
+  `0x46950`, 5-arm table VA `0x447038`/file `0x47038`, level ranges
+  1/8/19/27) → `+0x650` → STEP2 labels (`+0x4`, VA `0x447050`/file
+  `0x47050`, 6-arm table VA `0x447718`/file `0x47718`, ALL arm plus
+  arms at VAs `0x4472c1`/`0x4472fa`/`0x447333`/`0x447369`/`0x44739f`
+  (files `0x472c1`/`0x472fa`/`0x47333`/`0x47369`/`0x4739f`) testing
+  `entry+0x4 == 1..=5`) → `+0x660` → STEP3 genre (`+0x214`, VA
+  `0x447730`/file `0x47730`, table VA `0x447e50`/file `0x47e50`)
+  → `+0x670`; `+0x680`/`+0x690` serve auxiliary pre-filter outputs.
+  The STEP2 label buttons (`DAILOG_SELECTMUSIC` in
+  `install-root/Image/Interface1.opi`: `STEP2_ALL`/`GOLD`/`BLACK`/
+  `BLUE`/`RED`/`SILVER`, codes `0x2720B021..0x2720B026`, art
   `SelectMusic_Btn_Step2_{all,Gold,Black,Blue,Red,Silver}.ojs`;
   ControlList file offsets `0x470be28`, `0x470be76`, `0x470bec6`,
-  `0x470bf18`, `0x470bf68`, `0x470bfb6`). The STEP2 handler (file offset
-  `0x43f7e3`: `sub code, 0x2720B021`, index → dialog `+0x6c0`) feeds
-  the label filter at file offset `0x447050`, which jump-tables on the
-  label index (6-way table at file offset `0x477718`; ALL arm accepts,
-  arms 1..5 at file offsets
-  `0x4472c1`/`0x4472fa`/`0x447333`/`0x447369`/`0x44739f` test the
-  select-entry field at `+0x4 == 1..=5`). So category 1..5 =
-  GOLD/BLACK/BLUE/RED/SILVER in index order. Contrast: the STEP1 level
-  filter (file offset `0x446950`, table `0x47038`) tests a *different*
-  entry field (`+0x212`) against level ranges 1/8/19/27 (band strings
-  at file offsets `0x245781…0x2457d9`, range rows at
-  `0x24582c…0x245850`), and the STEP3 genre filter (file offset
-  `0x447730`, table `0x47e50`) tests entry `+0x214` — neither reads
-  1..5 categories. OPEN: the select-entry `+0x4` population site (the
-  `+0x194` copy) is not yet pinned; the five wheel lists vs the
-  per-filter result lists (`+0x650`/`+0x660`/`+0x670`) relation stays
-  OPEN. (Static disassembly survey; REA dossier TBD.)
+  `0x470bf18`, `0x470bf68`, `0x470bfb6`) feed the STEP2 handler (VA
+  `0x43f7e3`/file `0x3f7e3`: `sub code, 0x2720B021`, index → dialog
+  `+0x6c0`). So category 1..5 = GOLD/BLACK/BLUE/RED/SILVER in index
+  order. Band strings at file offsets `0x245781…0x2457d9`, range rows
+  at `0x24582c…0x245850`. OPEN: the select-entry `+0x4` population
+  site (the `+0x194` copy) is not yet pinned — the Table 5 loader loop
+  writes only song `+0x190`/`+0x194` (files `0x7ac77..0x7acf6`), and
+  the `0x4441f0` entry builder (file `0x441f0`) writes entry
+  `+0x205/+0x20d/+0x20e/+0x210/+0x212/+0x213`/`+0x214` with no `+0x4`
+  store in its span (surveyed files `0x35540..0x35960`); no direct
+  `0x194`-to-`0x4` register copy exists binary-wide. Strongest lead:
+  the dialog `+0x640` master fill at VA `0x4445cd` (file `0x445cd`)
+  from stack-built `0x238` entries. (Static disassembly survey; REA
+  dossier TBD.)
 - Table 2 `listing` = selection class. A song filter branches on
   `song+0x16c == 1` versus the rest (file offset `0x3706f`), and
   several passes skip songs whose word reads zero (e.g. file offset
