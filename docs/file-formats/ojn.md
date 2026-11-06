@@ -47,26 +47,70 @@ Evidence: `ev_66e97a17…` (loader dossier), `ev_68d920c2…` (dispatch).
   `0x1731b0` validator with its BPM float math) is where the `"new"`
   decode must live, if it exists.
 
-## OJNList.dat (song index — VERIFIED layout)
+## OJNList.dat (song index + patch tables — VERIFIED layout)
 
-`Image/OJNList.dat` (215848 bytes): 300-byte records. Record 0 is the
-header (`562`, `100`, `"ojn"`); records 1+ are per-song entries with
-title, artist, level tag and `o2ma###.ojm` filename (e.g. `<Bach Alive` /
-`s.Doma` / `o2ma100.ojm`, ` on the fire[3M]`, `Out of Control` /
-`RAVEN`, `NoteFactory`). Cross-check: `o2ma757` → record 437,
-`o2ma770` → 450, `o2ma860` → 537. File holds 719 slots + 148-byte tail,
-so the `562` count's exact semantics (playable filter? region subset?) is
-TBD — next probe. Per-record numeric fields (BPM? levels? ids) still need
-a field map; use record 437 (song 757, whose `.ojn` we also have) as the
-Rosetta stone. First decode of record 437 (offsets in-record):
-`@4 id=757`, `@8 "ojn"`, `@20 f32 BPM=124.0`, `@24 `0x50003``
-(level flags?), `@32…` note counts per difficulty
-(`3594/3679/3700`, then `312/401/505`, `69/69/…`), `@112` Korean
-title + `" (O2 Ver.)[3K]"`, `@176–193` Korean artist + `"Penny)"`,
-`@208 "NoteFactory"`, `@240 "o2ma757.ojm"`, tail has `129/129/129`
-(per-difficulty levels? TBD), `300` (= record size) and two unknown
-u32s. Cross-song check: song 770 reads BPM `168.0`, song 860 `103.0` —
-the BPM field hypothesis holds.
+`Image/OJNList.dat` (215848 bytes) holds four back-to-back sections
+that add up exactly (`168600 + 27016 + 4488 + 28 + 561*28 + 8`).
+The old "719 rows + 148 B tail" framing was wrong: row 0 is song 100's
+own record, and the `;HD` entries start mid-file, not after row 719.
+
+Song records `[0, 168600)`: 562 × 300-byte records (rows 0..561;
+last row carrying `"ojn"` magic is 561). Record 0 is song 100
+(`o2ma100.ojm`), *not* a header — its `@0 = 562` is the record count.
+Per-song entries carry title, artist, level tag and `o2ma###.ojm`
+filename (e.g. `<Bach Alive` / `s.Doma` / `o2ma100.ojm`). Cross-check:
+`o2ma757` → record 437, `o2ma770` → 450, `o2ma860` → 537. First decode
+of record 437 (offsets in-record): `@4 id=757`, `@8 "ojn"`,
+`@20 f32 BPM=124.0`, `@24 `0x50003`` (level flags?), `@32…` note
+counts per difficulty (`3594/3679/3700`, then `312/401/505`,
+`69/69/…`), `@112` Korean title + `" (O2 Ver.)[3K]"`, `@176–193`
+Korean artist + `"Penny)"`, `@208 "NoteFactory"`, `@240 "o2ma757.ojm"`,
+tail has `129/129/129` (per-difficulty levels? TBD), `300` (= record
+size) and two unknown u32s. Cross-song check: song 770 reads BPM
+`168.0`, song 860 `103.0` — the BPM field hypothesis holds.
+
+Undecoded u32 region `[168600, 195616)` (27016 bytes) — OPEN.
+Inventoried, not decoded: head `(0xf834, 0xcc)`, then 204 × 16-byte
+groups `(song_id, 0, flag, 0)` with flag 1 (ids 887..~774) then 2 (down
+to 100), then `(562, 887, 1, 0, 0, 0, …)` plus heap-address residue
+(`0x77d2…` pointers). No `"ojn"` magic anywhere inside.
+
+Patch index `[195616, 200104)`: 561 × 8-byte pairs (`u32` marker +
+`u32` song id). Markers are `0x43f403` (74×) / `0x43f407` (487× +
+header); ids run 886..100 sparse (same gaps and order as the patch
+records below). Marker semantics OPEN. Implemented as
+`o2jam-file::parse_ojn_patch_index`.
+
+Patch section `[200104, 215848)`: 28-byte header `{marker 0x43f407,
+count 562, top id 887, date "2009-10-29", tag}` then 561 × 28-byte
+records `{magic `;HD\0`, const `0xbd11` (48401), patch id,
+`YYYY-MM-DD\0`, 5-byte tag `77 30 f7 12 00`}` (ids 886..100, dates
+2003-10-31..2009-10-21, 222 distinct), then an 8-byte truncated tail
+(the 562nd slot: magic + const only, file ends mid-record).
+`count = full records + 1` for the partial slot. Implemented as
+`o2jam-file::parse_ojn_patch_section` (validates magic, const, date
+shape, tag, and the count).
+
+Key-name table (exe `.rdata`, file `0x2454d8..0x2455dc`, 260 bytes) —
+DECODED (correction: not codes). It is 65 × `u32` VA pointers to
+NUL-terminated CP949 names, *not* `?Td/?Sd/?Bd` codes: those readings
+are a VA-range coincidence (every pointer shares bytes `0x54`/`0x64`
+from the `0x645xxx` range). 63 unique targets; entries 19/50/57 alias
+one string. Decoded names: A–Z letters, KS X 1001 jamo
+(`0xA4A1…` = ㄱㄴ…), and words (`전체`, `초급`, `신곡`, `골드`,
+`블랙`, `레드`, `실버`, `발라드`, `락`, `댄스`, `힙합/R&B`,
+`재즈/펑크`, `클래식`, `기타`) — a genre/difficulty name table.
+Evidence (15 code refs): indexed loads `[edx*4+0x6454d8]` (file
+`0x448c2`, `0x44ecc`) and `[edx*4+0x645538]` (`0x451f0`, `0x4545f`),
+fixed loads of entries 14–18 (`0x44973…0x44c4b`) and entry 24
+(`0x451f0`, `0x4545f`), sub-range bases `0x645524`/`0x6455a0` with
+struct index `+0x6bc` (`0x46fef`, `0x476b9`, `0x476cd`, `0x47dea`,
+`0x47dfe`, `0x47e12`); byte-wise `strncmp` (`FUN_005f3f0c`) with `n`
+2 (jamo entries) / 1 (letter entries); first-byte `A`–`Z` range check
+(`0x4451af`); CP949→WCHAR converter `FUN_00406100` (`strlen`, `×3`
+buffer, DBCS lead-byte combine). Implemented as
+`o2jam-file::parse_key_name_table`. Exact UI role (search/genre
+filter?) stays OPEN.
 
 ## Chart parser `FUN_00571d60` (file offset `0x171d60`) — REA dossier `ev_c0325c85…`
 
