@@ -27,7 +27,12 @@ pub struct OjmSample<'a> {
 
 /// M30 sample-id offset: `ref` word selecting the chart strike slot
 /// (`docs/file-formats/ojm.md`); the high word is reserved zero.
+/// The song-bank loader reads it as `[entry+0x2C]` (file `0x173625`)
+/// to register each sample at its own strike slot.
 const M30_REF_OFF: usize = 44;
+
+// Loader anchor: the registered id word is the byte-44 `ref`.
+const _: () = assert!(M30_REF_OFF == 44);
 
 /// Parse the M30 variant: 20-byte header, then inline 52-byte entries
 /// (`name[32] + size + codec + flag + ref + reserved + pcm_bytes`)
@@ -297,9 +302,12 @@ pub fn parse_new_variant_entries(bytes: &[u8]) -> Result<OjmTables, FileError> {
 }
 
 /// Slot-bank offset the exe adds for bit26-flagged strikes: gameplay
-/// (file `0x1703f0`) computes `slot = (value & 0xFFF) - 1`, plus `0x3E8`
-/// when the payload sets bit 26; the song-bank loader (file `0x1734xx`)
-/// registers bit31-flagged entries at `entry_id + 0x3E8` the same way.
+/// (entry at file `0x1703f0`) computes `slot = (value & 0xFFF) - 1`
+/// (mask `0x170418`, subtract `0x17041e`), plus `0x3E8` when the
+/// payload sets bit 26 (test `0x170427`, add `0x170431`); the
+/// song-bank loader (file `0x1734xx`) registers bit31-flagged
+/// entries at `entry_id + 0x3E8` the same way (bit31 test
+/// `0x17361a`, add `0x17364f`).
 /// No shipped M30-paired chart sets bit 26; Tutorial.ojn (old format,
 /// new-variant bank) sets it on 12 kind-9 intro notes (ids 0-11).
 /// See `docs/file-formats/ojm.md`.
@@ -344,18 +352,64 @@ impl OjmTables {
     /// ([`NEW_VARIANT_HIGH_BANK`] + N, from bit26-flagged strikes)
     /// resolve to the same Nth entry.
     ///
-    /// This is a documented reconstruction fallback, NOT observed exe
-    /// behavior: in-exe the loader derives the slot from entry id words
-    /// that read as zero for every id-less entry, so all such entries
-    /// collapse onto slot 0 and only `sample_id` 0 can sound
-    /// (`docs/file-formats/ojm.md`). Returns `None` past the last entry.
+    /// This is our documented reconstruction fallback, NOT exe behavior
+    /// (claims C28/C29, sibling S4): the exe keys every bank by
+    /// explicit id. Strike time derives the slot from the chart
+    /// payload alone (`& 0xFFF` − 1, +`0x3E8` on bit26; ops pinned in
+    /// [`NEW_VARIANT_HIGH_BANK`]). Load time registers each fetched
+    /// entry at its own id word `[entry+0x2C]` (bit31 of
+    /// `[entry+0x28]` adds the same `0x3E8`, usage-gated; loader reads
+    /// `0x173625`/`0x17364a`, gate `0x173628`), but the fetcher copies
+    /// only the 32 name bytes for new variants (`strncpy` call sites
+    /// `0x14ee4a`/`0x14ef21`), so id-less entries all collapse onto
+    /// slot 0 (last wins) and only `sample_id` 0 can sound. No order-
+    /// or name-based lookup exists on the load/play paths. Returns
+    /// `None` past the last entry.
     /// Verified against Tutorial.ojn/ojm: lane ids 0-29 name the 30
     /// mode-2 key sounds, plain kind-9 id 30 names `bgsplit-01`, and the
     /// 12 bit26 intro notes name mode-2 entries 0-11 again.
     #[must_use]
     pub fn resolve_order_slot(&self, slot: u32) -> Option<&OjmEntry> {
-        let order = slot.checked_sub(NEW_VARIANT_HIGH_BANK).unwrap_or(slot) as usize;
+        let order = slot.checked_sub(NEW_VARIANT_HIGH_BANK).unwrap_or(slot);
+        let order = usize::try_from(order).ok()?;
         self.flat_index(order)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(name: &str) -> OjmEntry {
+        OjmEntry {
+            name: name.to_string(),
+            size: 8,
+            data_offset: 0,
+            audio_format: 1,
+            num_channels: 1,
+            sample_rate: 44100,
+            bit_rate: 88200,
+            block_align: 2,
+            bits_per_sample: 16,
+        }
+    }
+
+    #[test]
+    fn order_slot_fallback_keeps_distinct_slots_exe_collapses_to_zero() {
+        // Scenario: exe semantics register every id-less new-variant
+        // entry at slot 0 (name-only fetch leaves the id word zero;
+        // last wins). Our order-keyed fallback deliberately diverges
+        // by naming the Nth fetched entry; this pins the divergence so
+        // the fallback cannot be mistaken for exe behavior (C29).
+        let tables = OjmTables {
+            mode2: vec![entry("apiano1"), entry("apiano2")],
+            mode3: vec![],
+        };
+        assert_ne!(tables.resolve_order_slot(0), tables.resolve_order_slot(1));
+        // Plain slots below the high bank never alias down into it.
+        assert!(tables
+            .resolve_order_slot(NEW_VARIANT_HIGH_BANK - 1)
+            .is_none());
     }
 }
 
