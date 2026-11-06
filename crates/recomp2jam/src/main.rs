@@ -91,6 +91,21 @@ enum Command {
         /// Wear the male sprite variants.
         #[arg(long)]
         avatar_male: bool,
+        /// List live channels in the window (needs --host etc.).
+        #[arg(long)]
+        online: bool,
+        /// Gateway host for `--online`.
+        #[arg(long, requires = "online")]
+        host: Option<String>,
+        /// Account id for `--online`.
+        #[arg(long, requires = "online")]
+        user_id: Option<i32>,
+        /// Username for `--online`.
+        #[arg(long, requires = "online")]
+        token: Option<String>,
+        /// Gateway TCP port for `--online`.
+        #[arg(long, default_value_t = o2jam_net::DEFAULT_GATEWAY_PORT)]
+        port: u16,
     },
 }
 
@@ -180,10 +195,32 @@ fn main() -> Result<()> {
             avatar_opa,
             equip,
             avatar_male,
+            online,
+            host,
+            user_id,
+            token,
+            port,
         } => {
             tracing::info!(?chart, ?window, "play stub");
             if window {
                 let mut game = o2jam_shell::ScreenGame::new();
+                if online {
+                    let options = connect::ConnectOptions {
+                        host: host.clone().unwrap_or_default(),
+                        port,
+                        user_id: user_id.unwrap_or_default(),
+                        token: token.clone().unwrap_or_default(),
+                        gender: o2jam_net::Gender::Any,
+                        relay_key1: 0,
+                        relay_key2: 0,
+                        channel: None,
+                        character: false,
+                        avatar_opa: None,
+                    };
+                    let report = connect::connect_and_login(&options)?;
+                    tracing::info!(channels = report.channels.len(), "channels listed");
+                    game.set_channels(report.channels);
+                }
                 if let Some(opa_path) = &avatar_opa {
                     let ids = connect::parse_equipment(&equip)?;
                     let figure = connect::build_worn_figure(opa_path, &ids, avatar_male)?;
