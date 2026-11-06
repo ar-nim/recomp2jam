@@ -9,7 +9,7 @@
 //! list, room list, waiting seats, loading bar, highway, result
 //! digits. Layouts stay relative to the frame so headless tests can
 //! paint tiny buffers. Bare [`paint_screen`] keeps the flat-color
-//! fallback while no art is staged.
+//! fallback while no art is staged; staged scenes never paint flat cards.
 
 use std::collections::HashMap;
 
@@ -55,10 +55,15 @@ impl SceneArt {
         !self.figures.is_empty()
     }
 
-    /// Paint background plus every placed figure at its scaled
-    /// layout origin; placements without a loaded figure are skipped.
+    /// Paint staged figures at their scaled layout origins with no
+    /// flat fill, so the OPI art stays full-bleed. Empty art falls
+    /// back to the flat background; placements without a loaded
+    /// figure are skipped.
     pub fn paint_backdrop(&self, frame: &mut Frame<'_>, screen: Screen) {
-        fill_background(frame, screen);
+        if !self.has_figures() {
+            fill_background(frame, screen);
+            return;
+        }
         self.paint_overlay(frame);
     }
 
@@ -145,12 +150,76 @@ fn title_color() -> u32 {
     pack_xrgb(0x20, 0x20, 0x20)
 }
 
+/// Scrim ink behind live UI over staged art: near-black, distinct
+/// from every UI ink so text stays readable on bright OPI panels.
+fn scrim_color() -> u32 {
+    pack_xrgb(0x08, 0x08, 0x10)
+}
+
+/// Title ink over staged art (white on the scrim).
+fn art_title_ink() -> u32 {
+    pack_xrgb(0xFF, 0xFF, 0xFF)
+}
+
+/// Top-left of a centered title (shared by the card and art scenes).
+fn title_origin(frame: &Frame<'_>, title: &str) -> (i32, i32) {
+    let text_w = text_width(title) as i32;
+    (
+        frame.w as i32 / 2 - text_w / 2,
+        frame.h as i32 / 2 - frame.h as i32 / 8 + 2,
+    )
+}
+
+/// Title over staged art: dark scrim plus white ink (the card title
+/// stays dark-on-light for the flat fallback).
+fn paint_title_over_art(frame: &mut Frame<'_>, screen: Screen) {
+    let title = title_of(screen);
+    if title.is_empty() {
+        return;
+    }
+    let (x, y) = title_origin(frame, title);
+    let text_w = text_width(title) as i32;
+    fill_rect(
+        frame,
+        &Rect {
+            x: x - 4,
+            y: y - 2,
+            w: (text_w + 8).max(0) as u32,
+            h: 9,
+        },
+        scrim_color(),
+    );
+    draw_text(frame, x, y, title, art_title_ink());
+}
+
+/// Dark strip behind `row_count` channel/room rows so list ink
+/// stays readable over staged panels (skips the frame origin where
+/// full-bleed backdrops anchor).
+fn paint_list_scrim(frame: &mut Frame<'_>, row_count: usize) {
+    if row_count == 0 || frame.w == 0 || frame.h == 0 {
+        return;
+    }
+    let w = frame.w as i32;
+    let h = frame.h as i32;
+    fill_rect(
+        frame,
+        &Rect {
+            x: w / 4 - 8,
+            y: h / 4 - 2,
+            w: (w / 2 + 16).max(0) as u32,
+            h: (row_count as i32 * CHANNEL_ROW_H + 4).max(0) as u32,
+        },
+        scrim_color(),
+    );
+}
+
 /// Row height of one channel entry.
 const CHANNEL_ROW_H: i32 = 8;
 
 /// Channel rows plus highlight cursor (no background fill: shared by
 /// the flat fallback and the art scene).
 fn paint_channel_rows(frame: &mut Frame<'_>, channels: &[ChannelState], highlight: usize) {
+    paint_list_scrim(frame, channels.len());
     let w = frame.w as i32;
     let h = frame.h as i32;
     let text_x = w / 4;
@@ -210,7 +279,7 @@ pub fn paint_channel_scene(
     art: &SceneArt,
 ) {
     art.paint_backdrop(frame, Screen::Channel);
-    paint_title(frame, "CHANNEL");
+    paint_title_over_art(frame, Screen::Channel);
     paint_channel_rows(frame, channels, highlight);
 }
 
@@ -229,6 +298,7 @@ fn room_row_text(room: &RoomListEntry) -> String {
 /// Room rows plus highlight cursor (no background fill: shared by
 /// the flat fallback and the art scene).
 fn paint_room_rows(frame: &mut Frame<'_>, rooms: &[RoomListEntry], highlight: usize) {
+    paint_list_scrim(frame, rooms.len());
     let w = frame.w as i32;
     let h = frame.h as i32;
     let text_x = w / 4;
@@ -262,7 +332,7 @@ pub fn paint_room_scene(
     art: &SceneArt,
 ) {
     art.paint_backdrop(frame, Screen::Room);
-    paint_title(frame, "ROOM");
+    paint_title_over_art(frame, Screen::Room);
     paint_room_rows(frame, rooms, highlight);
 }
 
@@ -427,20 +497,38 @@ pub(crate) fn paint_waiting_members(frame: &mut Frame<'_>, room: &JoinedRoom) {
 /// live seats and ready dots on top.
 pub fn paint_waiting_scene(frame: &mut Frame<'_>, room: &JoinedRoom, art: &SceneArt) {
     art.paint_backdrop(frame, Screen::Waiting);
-    paint_title(frame, "WAITING");
+    paint_title_over_art(frame, Screen::Waiting);
     paint_waiting_rows(frame, room);
+}
+
+/// Dark strip behind one seat row so seat ink stays readable over
+/// staged art (vacant rows get one too: the placeholder must read).
+fn paint_seat_scrim(frame: &mut Frame<'_>, x: i32, y: i32, text: &str) {
+    let text_w = text_width(text) as i32;
+    fill_rect(
+        frame,
+        &Rect {
+            x: x - 8,
+            y: y - 1,
+            w: (text_w + 12).max(0) as u32,
+            h: 7,
+        },
+        scrim_color(),
+    );
 }
 
 /// Paint one seat row plus its ready dot (vacant seats have no dot).
 fn paint_waiting_seat(frame: &mut Frame<'_>, index: usize, seat: &WaitingSeat) {
     let occupied = seat.display_name().is_some();
     let (x, y) = seat_origin(index, frame.w, frame.h);
+    let row = waiting_row_text(index, seat);
+    paint_seat_scrim(frame, x, y, &row);
     let ink = if occupied {
         pack_xrgb(0xFF, 0xFF, 0xFF)
     } else {
         pack_xrgb(0x70, 0x70, 0x70)
     };
-    draw_text(frame, x, y, &waiting_row_text(index, seat), ink);
+    draw_text(frame, x, y, &row, ink);
     if occupied {
         fill_rect(
             frame,
@@ -460,20 +548,15 @@ fn paint_title(frame: &mut Frame<'_>, title: &str) {
     if title.is_empty() {
         return;
     }
-    let text_w = text_width(title) as i32;
-    draw_text(
-        frame,
-        frame.w as i32 / 2 - text_w / 2,
-        frame.h as i32 / 2 - frame.h as i32 / 8 + 2,
-        title,
-        title_color(),
-    );
+    let (x, y) = title_origin(frame, title);
+    draw_text(frame, x, y, title, title_color());
 }
 
-/// Staged lobby art behind an empty list: backdrop plus title.
+/// Staged lobby art behind an empty list: full-bleed backdrop plus
+/// a readable title (no flat card).
 pub fn paint_lobby_backdrop(frame: &mut Frame<'_>, screen: Screen, art: &SceneArt) {
     art.paint_backdrop(frame, screen);
-    paint_title(frame, title_of(screen));
+    paint_title_over_art(frame, screen);
 }
 
 /// Client version stamped on the splash (matches the 7.55 target).
@@ -511,10 +594,20 @@ fn paint_lobby(frame: &mut Frame<'_>, background: u32) {
     paint_card(frame, background, pack_xrgb(0xD0, 0xD0, 0xD0));
 }
 
-/// Loading progress bar (no background fill: shared by the flat
-/// fallback and the art scene).
+/// Loading progress bar over a dark track (no background fill:
+/// shared by the flat fallback and the art scene).
 fn paint_loading_bar(frame: &mut Frame<'_>) {
     let (w, h) = (frame.w as i32, frame.h as i32);
+    fill_rect(
+        frame,
+        &Rect {
+            x: w / 4 - 2,
+            y: h / 2 - 10,
+            w: (w / 2 + 4).max(0) as u32,
+            h: 20,
+        },
+        scrim_color(),
+    );
     fill_rect(
         frame,
         &Rect {
@@ -618,16 +711,17 @@ fn paint_battle_verdict(frame: &mut Frame<'_>, verdict: Option<BattleVerdict>) {
     draw_text(frame, 16, 48, verdict_text(known), verdict_ink(known));
 }
 
-/// Score, best combo, and avatar figure (no background fill: shared
 /// Score, best combo, verdict, and avatar figure (no background
-/// fill: shared by the flat fallback and the art scene). Grade
-/// letters stay out (mapping OPEN).
+/// fill: shared by the flat fallback and the art scene). A dark
+/// scrim sits behind the digits so they read over staged art.
+/// Grade letters stay out (mapping OPEN).
 fn paint_result_content(
     frame: &mut Frame<'_>,
     avatar: Option<&AvatarFigure>,
     score: &o2jam_game::Score,
     verdict: Option<BattleVerdict>,
 ) {
+    paint_digits_scrim(frame);
     if let Some(figure) = avatar {
         figure.paint(frame, frame.w as i32 / 2 - 32, frame.h as i32 / 2 - 32);
     }
@@ -635,6 +729,24 @@ fn paint_result_content(
     draw_number(frame, 16, 16, points, pack_xrgb(0xFF, 0xFF, 0xFF));
     draw_number(frame, 16, 32, score.max_combo, pack_xrgb(0xFF, 0xFF, 0x40));
     paint_battle_verdict(frame, verdict);
+}
+
+/// Dark sheet behind the result digits and verdict line so the
+/// score ink stays readable over staged result panels.
+fn paint_digits_scrim(frame: &mut Frame<'_>) {
+    if frame.w == 0 || frame.h == 0 {
+        return;
+    }
+    fill_rect(
+        frame,
+        &Rect {
+            x: 8,
+            y: 8,
+            w: 64,
+            h: 52,
+        },
+        scrim_color(),
+    );
 }
 
 /// Paint the results scene: score, best combo, rank-1 verdict, and a
@@ -819,27 +931,20 @@ mod paint_tests {
     }
 
     #[test]
-    fn splash_covers_background_with_card() {
-        let buf = painted(Screen::Avi, 32, 24);
-        assert_eq!(buf[0], pack_xrgb(0x08, 0x08, 0x10));
-        // Card top-left corner, above the version stamp.
-        assert_eq!(buf[9 * 32 + 12], pack_xrgb(0x20, 0x60, 0xC0));
+    fn splash_paints_logo_full_bleed_without_stamp() {
+        // Staged logo art covers the canvas: logo pixel at the
+        // origin, no flat card, no version-stamp white.
+        let buf = paint_art(Screen::Avi, &corner_art(), 32, 24);
+        assert_eq!(buf[0], pack_xrgb(255, 0, 0));
+        assert!(!buf.contains(&pack_xrgb(0x20, 0x60, 0xC0)));
+        assert!(!buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
     }
 
     #[test]
-    fn splash_stamps_version_in_card() {
-        // 32x24 splash: "755" starts at x = 16 - 11/2 = 11, y = 10;
-        // the '7' top bar lights the first three pixels.
-        let buf = painted(Screen::Avi, 32, 24);
-        let white = pack_xrgb(0xFF, 0xFF, 0xFF);
-        assert_eq!(buf[10 * 32 + 11], white);
-        assert_eq!(buf[10 * 32 + 12], white);
-        assert_eq!(buf[10 * 32 + 13], white);
-        assert_eq!(buf[10 * 32 + 14], pack_xrgb(0x20, 0x60, 0xC0));
-    }
-
-    #[test]
-    fn every_screen_paints_its_background() {
+    fn flat_fallback_covers_bare_frames() {
+        // While no art is staged the flat colors remain (the flat
+        // list/member painters depend on them); staged scenes never
+        // use them.
         for screen in [
             Screen::Avi,
             Screen::Channel,
@@ -851,6 +956,29 @@ mod paint_tests {
         ] {
             let buf = painted(screen, 16, 12);
             assert_eq!(buf[0], background_of(screen), "{screen:?}");
+        }
+    }
+
+    #[test]
+    fn every_art_scene_hides_flat_fill() {
+        // Staged art-first composition: the logo pixel survives at
+        // the origin and no flat background shows through.
+        let art = corner_art();
+        for screen in [
+            Screen::Avi,
+            Screen::Channel,
+            Screen::Room,
+            Screen::Waiting,
+            Screen::Loading,
+            Screen::Playing,
+            Screen::Result,
+        ] {
+            let buf = paint_art(screen, &art, 16, 12);
+            assert_eq!(buf[0], pack_xrgb(255, 0, 0), "{screen:?}");
+            assert!(
+                !buf.iter().all(|pixel| *pixel == background_of(screen)),
+                "{screen:?} paints a flat fill"
+            );
         }
     }
 
@@ -889,18 +1017,17 @@ mod paint_tests {
     }
 
     #[test]
-    fn lobby_cards_carry_titles() {
-        // 128x96 channel card spans x 48..80, y 36..60; the title
-        // starts at x = 64 - 27/2 = 51, y = 38, so the 'C' top
-        // bar (011) lights x+1..x+2 on card gray.
-        let buf = painted(Screen::Channel, 128, 96);
-        let ink = pack_xrgb(0x20, 0x20, 0x20);
+    fn lobby_titles_stay_readable_over_art() {
+        // 128x96 channel backdrop: white title ink over the dark
+        // scrim, never the flat card gray.
+        let buf = paint_art(Screen::Channel, &corner_art(), 128, 96);
+        let scrim = pack_xrgb(0x08, 0x08, 0x10);
+        let white = pack_xrgb(0xFF, 0xFF, 0xFF);
         let card = pack_xrgb(0xD0, 0xD0, 0xD0);
-        assert_eq!(buf[38 * 128 + 51], card);
-        assert_eq!(buf[38 * 128 + 52], ink);
-        assert_eq!(buf[38 * 128 + 53], ink);
-        let room = painted(Screen::Room, 128, 96);
-        assert!(room.contains(&ink));
+        assert_eq!(buf[0], pack_xrgb(255, 0, 0));
+        assert!(buf.contains(&white));
+        assert!(buf.contains(&scrim));
+        assert!(!buf.contains(&card));
     }
 
     fn waiting_room() -> JoinedRoom {
@@ -1007,11 +1134,11 @@ mod paint_tests {
             buf[(self_y + 1) as usize * 80 + (self_x - 6 + 1) as usize],
             dim
         );
-        // Seat 2 (empty) has no dot: background shows through.
+        // Seat 2 (empty) has no dot: the seat scrim shows through.
         let (empty_x, empty_y) = seat_origin(2, 80, 64);
         assert_eq!(
             buf[(empty_y + 1) as usize * 80 + (empty_x - 6 + 1) as usize],
-            waiting_bg
+            scrim_color()
         );
     }
 
@@ -1079,10 +1206,11 @@ mod paint_tests {
     #[test]
     fn avi_scene_shows_logo_without_stamp() {
         // Corner art paints the logo pixel; the stamp row that the
-        // flat splash whites out keeps the logo background instead.
+        // flat splash whites out stays unpainted (blank canvas)
+        // under staged art.
         let buf = paint_art(Screen::Avi, &corner_art(), 32, 24);
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
-        assert_eq!(buf[10 * 32 + 11], background_of(Screen::Avi));
+        assert_eq!(buf[10 * 32 + 11], 0);
         assert!(!buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
     }
 
@@ -1224,7 +1352,10 @@ mod paint_tests {
     }
 
     #[test]
-    fn empty_backdrops_match_plain_backgrounds() {
+    fn empty_art_falls_back_to_flat() {
+        // No figures staged: the backdrop keeps the flat fallback
+        // so a bare frame never shows garbage. Staged scenes (see
+        // `every_art_scene_hides_flat_fill`) never take this path.
         let art = SceneArt::default();
         for screen in [
             Screen::Avi,

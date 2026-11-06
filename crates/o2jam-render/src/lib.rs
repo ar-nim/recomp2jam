@@ -597,6 +597,1047 @@ fn fill_frame(frame: &mut Frame<'_>, background: u32) {
     );
 }
 
+/// Maximum alpha for blending: fully opaque source.
+const ALPHA_OPAQUE: u16 = 255;
+
+/// Unpack an XRGB8888 word into 8-bit channels.
+fn unpack_xrgb(pixel: u32) -> (u8, u8, u8) {
+    (
+        u8::try_from((pixel >> 16) & 0xFF).unwrap_or(u8::MAX),
+        u8::try_from((pixel >> 8) & 0xFF).unwrap_or(u8::MAX),
+        u8::try_from(pixel & 0xFF).unwrap_or(u8::MAX),
+    )
+}
+
+/// Blend one 8-bit channel: alpha 0 keeps dst, 255 takes src.
+fn blend_channel(src: u8, dst: u8, alpha: u8) -> u8 {
+    let mixed = u16::from(src) * u16::from(alpha)
+        + u16::from(dst) * (ALPHA_OPAQUE - u16::from(alpha))
+        + 127;
+    u8::try_from(mixed / ALPHA_OPAQUE).unwrap_or(u8::MAX)
+}
+
+/// Blend src over dst with byte alpha (0 = transparent, 255 = opaque).
+#[must_use]
+pub fn blend_xrgb(src: u32, dst: u32, alpha: u8) -> u32 {
+    if alpha == u8::MAX {
+        return src;
+    }
+    if alpha == 0 {
+        return dst;
+    }
+    let (sr, sg, sb) = unpack_xrgb(src);
+    let (dr, dg, db) = unpack_xrgb(dst);
+    pack_xrgb(
+        blend_channel(sr, dr, alpha),
+        blend_channel(sg, dg, alpha),
+        blend_channel(sb, db, alpha),
+    )
+}
+
+/// Fill a clipped rectangle with a translucent color.
+/// Alpha 0 paints nothing; 255 is a solid fill_rect.
+pub fn fill_rect_alpha(frame: &mut Frame<'_>, rect: &Rect, color: u32, alpha: u8) {
+    if alpha == 0 {
+        return;
+    }
+    if alpha == u8::MAX {
+        fill_rect(frame, rect, color);
+        return;
+    }
+    if frame.buf.len() < frame.w * frame.h {
+        return;
+    }
+    let Some((x0, y0, x1, y1)) = clip(rect, frame.w, frame.h) else {
+        return;
+    };
+    for row in frame.buf[y0 * frame.w..y1 * frame.w].chunks_exact_mut(frame.w) {
+        for pixel in &mut row[x0..x1] {
+            *pixel = blend_xrgb(color, *pixel, alpha);
+        }
+    }
+}
+
+/// Whether a scaled sprite blit has geometry and backing pixels.
+fn scaled_blit_ready(frame: &Frame<'_>, sprite: &Sprite<'_>, dest: &Rect) -> bool {
+    dest.w > 0
+        && dest.h > 0
+        && sprite.w > 0
+        && sprite.h > 0
+        && sprite.stride >= sprite.w
+        && frame.buf.len() >= frame.w * frame.h
+        && sprite.pixels.len() >= sprite.stride * sprite.h
+}
+
+/// One nearest-neighbor sample of a scaled sprite blit.
+#[derive(Debug, Clone, Copy)]
+struct ScaledPixel {
+    col: usize,
+    row: usize,
+    dest_w: usize,
+    dest_h: usize,
+    colorkey: Option<u16>,
+}
+
+/// Frame position of one scaled sample, or None on overflow.
+fn scaled_dest_xy(dest: &Rect, col: usize, row: usize) -> Option<(i32, i32)> {
+    let x = dest.x.checked_add(i32::try_from(col).unwrap_or(i32::MAX))?;
+    let y = dest.y.checked_add(i32::try_from(row).unwrap_or(i32::MAX))?;
+    Some((x, y))
+}
+
+/// Whether a frame position lies inside the frame.
+fn dest_in_frame(frame: &Frame<'_>, dest_x: i32, dest_y: i32) -> bool {
+    dest_x >= 0 && dest_y >= 0 && dest_x < frame.w as i32 && dest_y < frame.h as i32
+}
+
+/// Paint one nearest-neighbor pixel of a scaled sprite blit.
+fn paint_scaled_pixel(frame: &mut Frame<'_>, sprite: &Sprite<'_>, dest: &Rect, pixel: ScaledPixel) {
+    let Some((dest_x, dest_y)) = scaled_dest_xy(dest, pixel.col, pixel.row) else {
+        return;
+    };
+    if !dest_in_frame(frame, dest_x, dest_y) {
+        return;
+    }
+    let word = sprite.pixels[stretch_index(pixel.row, pixel.dest_h, sprite.h) * sprite.stride
+        + stretch_index(pixel.col, pixel.dest_w, sprite.w)];
+    if pixel.colorkey == Some(word) {
+        return;
+    }
+    let (r, g, b) = expand_rgb555(word);
+    frame.buf[dest_y as usize * frame.w + dest_x as usize] = pack_xrgb(r, g, b);
+}
+
+/// Blit a sprite stretched over dest, skipping colorkey pixels.
+/// Same-size dest is a plain blit; otherwise nearest-neighbor scale.
+pub fn blit_rgb555_scaled(
+    frame: &mut Frame<'_>,
+    sprite: &Sprite<'_>,
+    dest: &Rect,
+    colorkey: Option<u16>,
+) {
+    if !scaled_blit_ready(frame, sprite, dest) {
+        return;
+    }
+    let dest_w = usize::try_from(dest.w).unwrap_or(0);
+    let dest_h = usize::try_from(dest.h).unwrap_or(0);
+    for row in 0..dest_h {
+        for col in 0..dest_w {
+            paint_scaled_pixel(
+                frame,
+                sprite,
+                dest,
+                ScaledPixel {
+                    col,
+                    row,
+                    dest_w,
+                    dest_h,
+                    colorkey,
+                },
+            );
+        }
+    }
+}
+
+/// Paint one scaled sprite pixel blended over the frame.
+fn paint_scaled_alpha_pixel(
+    frame: &mut Frame<'_>,
+    sprite: &Sprite<'_>,
+    dest: &Rect,
+    pixel: ScaledPixel,
+    alpha: u8,
+) {
+    let Some((dest_x, dest_y)) = scaled_dest_xy(dest, pixel.col, pixel.row) else {
+        return;
+    };
+    if !dest_in_frame(frame, dest_x, dest_y) {
+        return;
+    }
+    let word = sprite.pixels[stretch_index(pixel.row, pixel.dest_h, sprite.h) * sprite.stride
+        + stretch_index(pixel.col, pixel.dest_w, sprite.w)];
+    if pixel.colorkey == Some(word) {
+        return;
+    }
+    let (r, g, b) = expand_rgb555(word);
+    let at = dest_y as usize * frame.w + dest_x as usize;
+    frame.buf[at] = blend_xrgb(pack_xrgb(r, g, b), frame.buf[at], alpha);
+}
+
+/// Blit a sprite stretched over dest with global alpha over the frame.
+/// Alpha 0 paints nothing; 255 is opaque.
+pub fn blit_rgb555_scaled_alpha(
+    frame: &mut Frame<'_>,
+    sprite: &Sprite<'_>,
+    dest: &Rect,
+    colorkey: Option<u16>,
+    alpha: u8,
+) {
+    if alpha == 0 || !scaled_blit_ready(frame, sprite, dest) {
+        return;
+    }
+    if alpha == u8::MAX {
+        blit_rgb555_scaled(frame, sprite, dest, colorkey);
+        return;
+    }
+    let dest_w = usize::try_from(dest.w).unwrap_or(0);
+    let dest_h = usize::try_from(dest.h).unwrap_or(0);
+    for row in 0..dest_h {
+        for col in 0..dest_w {
+            paint_scaled_alpha_pixel(
+                frame,
+                sprite,
+                dest,
+                ScaledPixel {
+                    col,
+                    row,
+                    dest_w,
+                    dest_h,
+                    colorkey,
+                },
+                alpha,
+            );
+        }
+    }
+}
+
+/// Blit an image stretched into dest with colorkey skip and global alpha.
+/// Alpha 0 paints nothing; 255 matches blit_image_in_rect.
+pub fn blit_image_in_rect_alpha(
+    frame: &mut Frame<'_>,
+    image: &Rgb555Image,
+    colorkey: u16,
+    dest: &Rect,
+    alpha: u8,
+) {
+    if alpha == 0 || !blit_target_ready(frame, image, dest) {
+        return;
+    }
+    if alpha == u8::MAX {
+        blit_image_in_rect(frame, image, colorkey, dest);
+        return;
+    }
+    let dest_w = usize::try_from(dest.w).unwrap_or(0);
+    let dest_h = usize::try_from(dest.h).unwrap_or(0);
+    for row in 0..dest_h {
+        for col in 0..dest_w {
+            let Some(dest_x) = dest.x.checked_add(i32::try_from(col).unwrap_or(i32::MAX)) else {
+                continue;
+            };
+            let Some(dest_y) = dest.y.checked_add(i32::try_from(row).unwrap_or(i32::MAX)) else {
+                continue;
+            };
+            if dest_x < 0 || dest_y < 0 || dest_x >= frame.w as i32 || dest_y >= frame.h as i32 {
+                continue;
+            }
+            let word = image.words[stretch_index(row, dest_h, image.h) * image.w
+                + stretch_index(col, dest_w, image.w)];
+            if word == colorkey {
+                continue;
+            }
+            let (r, g, b) = expand_rgb555(word);
+            let at = dest_y as usize * frame.w + dest_x as usize;
+            frame.buf[at] = blend_xrgb(pack_xrgb(r, g, b), frame.buf[at], alpha);
+        }
+    }
+}
+
+/// Large glyph width in pixels: 5-wide titles and HUD digits.
+pub const BIG_GLYPH_W: usize = 5;
+/// Large glyph height in pixels.
+pub const BIG_GLYPH_H: usize = 7;
+/// Horizontal advance per large glyph: glyph plus 1 px spacing.
+pub const BIG_GLYPH_ADVANCE: usize = BIG_GLYPH_W + 1;
+
+/// 5x7 bitmap rows for one decimal digit (bit 4 = left pixel).
+#[must_use]
+pub const fn big_digit_glyph(digit: u8) -> Option<[u8; BIG_GLYPH_H]> {
+    match digit {
+        0 => Some([
+            0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110,
+        ]),
+        1 => Some([
+            0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
+        ]),
+        2 => Some([
+            0b01110, 0b10001, 0b00001, 0b00110, 0b01000, 0b10000, 0b11111,
+        ]),
+        3 => Some([
+            0b01110, 0b10001, 0b00001, 0b00110, 0b00001, 0b10001, 0b01110,
+        ]),
+        4 => Some([
+            0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010,
+        ]),
+        5 => Some([
+            0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110,
+        ]),
+        6 => Some([
+            0b00110, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110,
+        ]),
+        7 => Some([
+            0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000,
+        ]),
+        8 => Some([
+            0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110,
+        ]),
+        9 => Some([
+            0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100,
+        ]),
+        _ => None,
+    }
+}
+
+/// 5x7 bitmap rows for one ASCII letter or mark (bit 4 = left pixel).
+#[must_use]
+pub const fn big_letter_glyph(ch: u8) -> Option<[u8; BIG_GLYPH_H]> {
+    match ch {
+        b'A' => Some([
+            0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ]),
+        b'B' => Some([
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110,
+        ]),
+        b'C' => Some([
+            0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110,
+        ]),
+        b'D' => Some([
+            0b11100, 0b10010, 0b10001, 0b10001, 0b10001, 0b10010, 0b11100,
+        ]),
+        b'E' => Some([
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111,
+        ]),
+        b'F' => Some([
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000,
+        ]),
+        b'G' => Some([
+            0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01111,
+        ]),
+        b'H' => Some([
+            0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ]),
+        b'I' => Some([
+            0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
+        ]),
+        b'J' => Some([
+            0b00111, 0b00010, 0b00010, 0b00010, 0b00010, 0b10010, 0b01100,
+        ]),
+        b'K' => Some([
+            0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001,
+        ]),
+        b'L' => Some([
+            0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10001, 0b11111,
+        ]),
+        b'M' => Some([
+            0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001,
+        ]),
+        b'N' => Some([
+            0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001,
+        ]),
+        b'O' => Some([
+            0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ]),
+        b'P' => Some([
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000,
+        ]),
+        b'Q' => Some([
+            0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101,
+        ]),
+        b'R' => Some([
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001,
+        ]),
+        b'S' => Some([
+            0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110,
+        ]),
+        b'T' => Some([
+            0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100,
+        ]),
+        b'U' => Some([
+            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ]),
+        b'V' => Some([
+            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100,
+        ]),
+        b'W' => Some([
+            0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001,
+        ]),
+        b'X' => Some([
+            0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001,
+        ]),
+        b'Y' => Some([
+            0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100,
+        ]),
+        b'Z' => Some([
+            0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111,
+        ]),
+        b' ' => Some([
+            0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000,
+        ]),
+        b'-' => Some([
+            0b00000, 0b00000, 0b00000, 0b11111, 0b00000, 0b00000, 0b00000,
+        ]),
+        b'.' => Some([
+            0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b01100,
+        ]),
+        b':' => Some([
+            0b00000, 0b01100, 0b01100, 0b00000, 0b01100, 0b01100, 0b00000,
+        ]),
+        b'!' => Some([
+            0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00000, 0b00100,
+        ]),
+        b'/' => Some([
+            0b00001, 0b00010, 0b00010, 0b00100, 0b01000, 0b01000, 0b10000,
+        ]),
+        _ => None,
+    }
+}
+
+/// Bitmap rows for one ASCII byte in the large face: digits, letters
+/// (either case), space, and marks. Else blank-but-advancing.
+#[must_use]
+pub const fn big_glyph_for(ch: u8) -> Option<[u8; BIG_GLYPH_H]> {
+    if ch.is_ascii_digit() {
+        return big_digit_glyph(ch - b'0');
+    }
+    big_letter_glyph(ch.to_ascii_uppercase())
+}
+
+/// Blit large glyph rows at (x, y); clips to the frame.
+fn draw_big_rows(frame: &mut Frame<'_>, x: i32, y: i32, rows: [u8; BIG_GLYPH_H], color: u32) {
+    if frame.buf.len() < frame.w * frame.h {
+        return;
+    }
+    for (row, bits) in rows.iter().enumerate() {
+        for col in 0..BIG_GLYPH_W {
+            if bits & (1 << (BIG_GLYPH_W - 1 - col)) == 0 {
+                continue;
+            }
+            let Some(dx) = x.checked_add(i32::try_from(col).unwrap_or(i32::MAX)) else {
+                continue;
+            };
+            let Some(dy) = y.checked_add(i32::try_from(row).unwrap_or(i32::MAX)) else {
+                continue;
+            };
+            if dx < 0 || dy < 0 || dx >= frame.w as i32 || dy >= frame.h as i32 {
+                continue;
+            }
+            frame.buf[dy as usize * frame.w + dx as usize] = color;
+        }
+    }
+}
+
+/// Draw one large digit; out-of-range digits draw nothing.
+pub fn draw_big_digit(frame: &mut Frame<'_>, x: i32, y: i32, digit: u8, color: u32) {
+    let Some(rows) = big_digit_glyph(digit) else {
+        return;
+    };
+    draw_big_rows(frame, x, y, rows, color);
+}
+
+/// Draw one large ASCII character (big_glyph_for coverage).
+pub fn draw_big_char(frame: &mut Frame<'_>, x: i32, y: i32, ch: u8, color: u32) {
+    if let Some(rows) = big_glyph_for(ch) {
+        draw_big_rows(frame, x, y, rows, color);
+    }
+}
+
+/// Pixel width of text in the large face (no trailing spacing).
+#[must_use]
+pub fn big_text_width(text: &str) -> usize {
+    if text.is_empty() {
+        return 0;
+    }
+    text.len() * BIG_GLYPH_ADVANCE - 1
+}
+
+/// Draw ASCII text in the large face; returns the x edge after it.
+pub fn draw_big_text(frame: &mut Frame<'_>, x: i32, y: i32, text: &str, color: u32) -> i32 {
+    for (i, byte) in text.bytes().enumerate() {
+        let Some(dx) = x.checked_add(i32::try_from(i * BIG_GLYPH_ADVANCE).unwrap_or(i32::MAX))
+        else {
+            break;
+        };
+        draw_big_char(frame, dx, y, byte, color);
+    }
+    x.checked_add(i32::try_from(text.len() * BIG_GLYPH_ADVANCE).unwrap_or(i32::MAX))
+        .unwrap_or(i32::MAX)
+}
+
+/// Pixel width of value in large digits (no trailing spacing).
+#[must_use]
+pub fn big_number_width(mut value: u32) -> usize {
+    let mut digits = 1;
+    while value >= 10 {
+        value /= 10;
+        digits += 1;
+    }
+    digits * BIG_GLYPH_ADVANCE - 1
+}
+
+/// Draw value in decimal in the large face; returns the x edge.
+pub fn draw_big_number(frame: &mut Frame<'_>, x: i32, y: i32, value: u32, color: u32) -> i32 {
+    let mut digits = [0u8; 10];
+    let mut count = 0;
+    let mut rest = value;
+    loop {
+        digits[count] = u8::try_from(rest % 10).unwrap_or(0);
+        count += 1;
+        rest /= 10;
+        if rest == 0 {
+            break;
+        }
+    }
+    for (i, digit) in digits[..count].iter().rev().enumerate() {
+        let Some(dx) = x.checked_add(i32::try_from(i * BIG_GLYPH_ADVANCE).unwrap_or(i32::MAX))
+        else {
+            break;
+        };
+        draw_big_digit(frame, dx, y, *digit, color);
+    }
+    x.checked_add(i32::try_from(count * BIG_GLYPH_ADVANCE).unwrap_or(i32::MAX))
+        .unwrap_or(i32::MAX)
+}
+
+/// Interior of a panel: rect inset by border_width on every side.
+/// Oversized borders collapse to an empty rect at the panel origin.
+#[must_use]
+pub fn panel_content_rect(rect: &Rect, border_width: u32) -> Rect {
+    let inset = i32::try_from(border_width).unwrap_or(i32::MAX);
+    let shrink = border_width.saturating_mul(2);
+    let Some(x) = rect.x.checked_add(inset) else {
+        return Rect {
+            x: rect.x,
+            y: rect.y,
+            w: 0,
+            h: 0,
+        };
+    };
+    let Some(y) = rect.y.checked_add(inset) else {
+        return Rect {
+            x: rect.x,
+            y: rect.y,
+            w: 0,
+            h: 0,
+        };
+    };
+    Rect {
+        x,
+        y,
+        w: rect.w.saturating_sub(shrink),
+        h: rect.h.saturating_sub(shrink),
+    }
+}
+
+/// Paint a border ring of border_width px over rect.
+/// Width 0 paints nothing; oversized widths fill the whole rect.
+pub fn draw_rect_border(frame: &mut Frame<'_>, rect: &Rect, color: u32, border_width: u32) {
+    if border_width == 0 || rect.w == 0 || rect.h == 0 {
+        return;
+    }
+    let edge = border_width.min(rect.w).min(rect.h);
+    let Some(bottom_y) = rect
+        .y
+        .checked_add(i32::try_from(rect.h - edge).unwrap_or(0))
+    else {
+        return;
+    };
+    let Some(right_x) = rect
+        .x
+        .checked_add(i32::try_from(rect.w - edge).unwrap_or(0))
+    else {
+        return;
+    };
+    let sides = [
+        Rect {
+            x: rect.x,
+            y: rect.y,
+            w: rect.w,
+            h: edge,
+        },
+        Rect {
+            x: rect.x,
+            y: bottom_y,
+            w: rect.w,
+            h: edge,
+        },
+        Rect {
+            x: rect.x,
+            y: rect.y,
+            w: edge,
+            h: rect.h,
+        },
+        Rect {
+            x: right_x,
+            y: rect.y,
+            w: edge,
+            h: rect.h,
+        },
+    ];
+    for side in &sides {
+        fill_rect(frame, side, color);
+    }
+}
+
+/// Paint a panel: optional solid fill plus an opaque border ring.
+pub fn draw_panel(
+    frame: &mut Frame<'_>,
+    rect: &Rect,
+    fill: Option<u32>,
+    border: u32,
+    border_width: u32,
+) {
+    if let Some(color) = fill {
+        fill_rect(frame, rect, color);
+    }
+    draw_rect_border(frame, rect, border, border_width);
+}
+
+/// Paint a panel with a translucent fill plus an opaque border ring.
+/// Fill alpha 0 skips the fill; 255 is a solid draw_panel.
+pub fn draw_panel_alpha(
+    frame: &mut Frame<'_>,
+    rect: &Rect,
+    fill: u32,
+    alpha: u8,
+    border: u32,
+    border_width: u32,
+) {
+    if alpha == u8::MAX {
+        draw_panel(frame, rect, Some(fill), border, border_width);
+        return;
+    }
+    if alpha != 0 {
+        fill_rect_alpha(frame, rect, fill, alpha);
+    }
+    draw_rect_border(frame, rect, border, border_width);
+}
+
+#[cfg(test)]
+mod fidelity_tests {
+    use super::*;
+
+    #[test]
+    fn blend_edges_keep_endpoints() {
+        let src = pack_xrgb(0xFF, 0x00, 0x00);
+        let dst = pack_xrgb(0x00, 0x00, 0xFF);
+        assert_eq!(blend_xrgb(src, dst, 0), dst);
+        assert_eq!(blend_xrgb(src, dst, 255), src);
+    }
+
+    #[test]
+    fn blend_half_mixes_channels() {
+        let src = pack_xrgb(0xFF, 0xFF, 0xFF);
+        assert_eq!(blend_xrgb(src, 0x000000, 128), pack_xrgb(0x80, 0x80, 0x80));
+    }
+
+    #[test]
+    fn translucent_fill_blends_inside_only() {
+        let mut buf = vec![pack_xrgb(0x00, 0x00, 0xFF); 4 * 4];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 4,
+            h: 4,
+        };
+        fill_rect_alpha(
+            &mut frame,
+            &Rect {
+                x: 1,
+                y: 1,
+                w: 2,
+                h: 2,
+            },
+            pack_xrgb(0xFF, 0x00, 0x00),
+            255,
+        );
+        assert_eq!(frame.buf[5], pack_xrgb(0xFF, 0x00, 0x00));
+        assert_eq!(frame.buf[0], pack_xrgb(0x00, 0x00, 0xFF));
+        fill_rect_alpha(
+            &mut frame,
+            &Rect {
+                x: 0,
+                y: 0,
+                w: 4,
+                h: 4,
+            },
+            pack_xrgb(0x00, 0x00, 0x00),
+            0,
+        );
+        assert_eq!(frame.buf[0], pack_xrgb(0x00, 0x00, 0xFF));
+    }
+
+    #[test]
+    fn half_fill_blends_toward_source() {
+        let mut buf = vec![0x000000u32; 1];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 1,
+            h: 1,
+        };
+        fill_rect_alpha(
+            &mut frame,
+            &Rect {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+            },
+            pack_xrgb(0xFF, 0xFF, 0xFF),
+            128,
+        );
+        assert_eq!(frame.buf[0], pack_xrgb(0x80, 0x80, 0x80));
+    }
+
+    #[test]
+    fn scaled_blit_upscales_single_pixel() {
+        let sprite = Sprite {
+            pixels: &[0x7C00],
+            w: 1,
+            h: 1,
+            stride: 1,
+        };
+        let mut buf = vec![0u32; 2 * 2];
+        blit_rgb555_scaled(
+            &mut Frame {
+                buf: &mut buf,
+                w: 2,
+                h: 2,
+            },
+            &sprite,
+            &Rect {
+                x: 0,
+                y: 0,
+                w: 2,
+                h: 2,
+            },
+            None,
+        );
+        assert_eq!(buf, vec![pack_xrgb(255, 0, 0); 4]);
+    }
+
+    #[test]
+    fn scaled_blit_skips_colorkey_and_clips() {
+        let sprite = Sprite {
+            pixels: &[0x7C00, 0x0000],
+            w: 2,
+            h: 1,
+            stride: 2,
+        };
+        let mut buf = vec![0x123456u32; 4];
+        blit_rgb555_scaled(
+            &mut Frame {
+                buf: &mut buf,
+                w: 4,
+                h: 1,
+            },
+            &sprite,
+            &Rect {
+                x: 0,
+                y: 0,
+                w: 4,
+                h: 1,
+            },
+            Some(0x0000),
+        );
+        let red = pack_xrgb(255, 0, 0);
+        assert_eq!(buf, vec![red, red, 0x123456, 0x123456]);
+    }
+
+    #[test]
+    fn scaled_blit_ignores_empty_geometry() {
+        let sprite = Sprite {
+            pixels: &[0x7C00],
+            w: 1,
+            h: 1,
+            stride: 1,
+        };
+        let mut buf = vec![0x123456u32; 1];
+        blit_rgb555_scaled(
+            &mut Frame {
+                buf: &mut buf,
+                w: 1,
+                h: 1,
+            },
+            &sprite,
+            &Rect {
+                x: 0,
+                y: 0,
+                w: 0,
+                h: 1,
+            },
+            None,
+        );
+        assert_eq!(buf, vec![0x123456u32]);
+    }
+
+    #[test]
+    fn scaled_alpha_blends_toward_sprite() {
+        let sprite = Sprite {
+            pixels: &[0x7FFF],
+            w: 1,
+            h: 1,
+            stride: 1,
+        };
+        let mut buf = vec![0x000000u32; 1];
+        blit_rgb555_scaled_alpha(
+            &mut Frame {
+                buf: &mut buf,
+                w: 1,
+                h: 1,
+            },
+            &sprite,
+            &Rect {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+            },
+            None,
+            128,
+        );
+        assert_eq!(buf[0], pack_xrgb(0x80, 0x80, 0x80));
+    }
+
+    #[test]
+    fn scaled_alpha_zero_paints_nothing() {
+        let sprite = Sprite {
+            pixels: &[0x7FFF],
+            w: 1,
+            h: 1,
+            stride: 1,
+        };
+        let mut buf = vec![0x123456u32; 1];
+        blit_rgb555_scaled_alpha(
+            &mut Frame {
+                buf: &mut buf,
+                w: 1,
+                h: 1,
+            },
+            &sprite,
+            &Rect {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+            },
+            None,
+            0,
+        );
+        assert_eq!(buf, vec![0x123456u32]);
+    }
+
+    #[test]
+    fn cover_alpha_matches_opaque_cover() {
+        let image = Rgb555Image::decode(&[0x00, 0x7C, 0xE0, 0x03], 2, 1).unwrap();
+        let mut plain = vec![0u32; 2];
+        let mut faded = vec![0u32; 2];
+        let dest = Rect {
+            x: 0,
+            y: 0,
+            w: 2,
+            h: 1,
+        };
+        blit_image_in_rect(
+            &mut Frame {
+                buf: &mut plain,
+                w: 2,
+                h: 1,
+            },
+            &image,
+            0xFFFF,
+            &dest,
+        );
+        blit_image_in_rect_alpha(
+            &mut Frame {
+                buf: &mut faded,
+                w: 2,
+                h: 1,
+            },
+            &image,
+            0xFFFF,
+            &dest,
+            255,
+        );
+        assert_eq!(plain, faded);
+    }
+
+    #[test]
+    fn big_digits_match_their_bitmaps() {
+        for digit in 0..10u8 {
+            let mut buf = vec![0u32; BIG_GLYPH_W * BIG_GLYPH_H];
+            let mut frame = Frame {
+                buf: &mut buf,
+                w: BIG_GLYPH_W,
+                h: BIG_GLYPH_H,
+            };
+            draw_big_digit(&mut frame, 0, 0, digit, 0xFFFFFF);
+            let rows = big_digit_glyph(digit).unwrap();
+            for (y, bits) in rows.iter().enumerate() {
+                for x in 0..BIG_GLYPH_W {
+                    let lit = bits & (1 << (BIG_GLYPH_W - 1 - x)) != 0;
+                    assert_eq!(frame.buf[y * BIG_GLYPH_W + x] != 0, lit);
+                }
+            }
+        }
+        assert_eq!(big_digit_glyph(10), None);
+    }
+
+    #[test]
+    fn big_letters_match_their_bitmaps() {
+        for ch in b'A'..=b'Z' {
+            let mut buf = vec![0u32; BIG_GLYPH_W * BIG_GLYPH_H];
+            let mut frame = Frame {
+                buf: &mut buf,
+                w: BIG_GLYPH_W,
+                h: BIG_GLYPH_H,
+            };
+            draw_big_char(&mut frame, 0, 0, ch, 0xFFFFFF);
+            let rows = big_letter_glyph(ch).unwrap();
+            for (y, bits) in rows.iter().enumerate() {
+                for x in 0..BIG_GLYPH_W {
+                    let lit = bits & (1 << (BIG_GLYPH_W - 1 - x)) != 0;
+                    assert_eq!(frame.buf[y * BIG_GLYPH_W + x] != 0, lit);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn big_text_lays_out_with_spacing() {
+        let hi = [72u8, 73u8, 33u8];
+        let text = core::str::from_utf8(&hi).unwrap();
+        assert_eq!(big_text_width(text), 3 * BIG_GLYPH_ADVANCE - 1);
+        let mut buf = vec![0u32; 20 * BIG_GLYPH_H];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 20,
+            h: BIG_GLYPH_H,
+        };
+        let end = draw_big_text(&mut frame, 0, 0, text, 0xFFFFFF);
+        assert_eq!(end, 18);
+        assert_eq!(frame.buf[0], 0xFFFFFF);
+        assert_eq!(big_glyph_for(97), big_glyph_for(65));
+        assert_eq!(big_glyph_for(64), None);
+    }
+
+    #[test]
+    fn big_number_renders_without_leading_zeros() {
+        assert_eq!(big_number_width(0), BIG_GLYPH_W);
+        assert_eq!(big_number_width(507), 3 * BIG_GLYPH_ADVANCE - 1);
+        let mut buf = vec![0u32; 20 * BIG_GLYPH_H];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 20,
+            h: BIG_GLYPH_H,
+        };
+        let end = draw_big_number(&mut frame, 0, 0, 507, 0xFFFFFF);
+        assert_eq!(end, 18);
+        assert_eq!(frame.buf[0], 0xFFFFFF);
+    }
+
+    #[test]
+    fn rect_border_paints_only_the_ring() {
+        let mut buf = vec![0u32; 4 * 4];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 4,
+            h: 4,
+        };
+        draw_rect_border(
+            &mut frame,
+            &Rect {
+                x: 0,
+                y: 0,
+                w: 4,
+                h: 4,
+            },
+            0xFFFFFF,
+            1,
+        );
+        assert_eq!(frame.buf[0], 0xFFFFFF);
+        assert_eq!(frame.buf[5], 0);
+        assert_eq!(frame.buf[3 * 4 + 3], 0xFFFFFF);
+        draw_rect_border(
+            &mut frame,
+            &Rect {
+                x: 0,
+                y: 0,
+                w: 4,
+                h: 4,
+            },
+            0xFFFFFF,
+            0,
+        );
+        assert_eq!(frame.buf[5], 0);
+    }
+
+    #[test]
+    fn panel_content_insets_by_border() {
+        let rect = Rect {
+            x: 2,
+            y: 2,
+            w: 10,
+            h: 8,
+        };
+        assert_eq!(
+            panel_content_rect(&rect, 1),
+            Rect {
+                x: 3,
+                y: 3,
+                w: 8,
+                h: 6
+            }
+        );
+        assert_eq!(panel_content_rect(&rect, 99).w, 0);
+    }
+
+    #[test]
+    fn panel_paints_fill_with_opaque_border() {
+        let mut buf = vec![0u32; 5 * 5];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 5,
+            h: 5,
+        };
+        draw_panel(
+            &mut frame,
+            &Rect {
+                x: 0,
+                y: 0,
+                w: 5,
+                h: 5,
+            },
+            Some(0x112233),
+            0xFFFFFF,
+            1,
+        );
+        assert_eq!(frame.buf[0], 0xFFFFFF);
+        assert_eq!(frame.buf[2 * 5 + 2], 0x112233);
+    }
+
+    #[test]
+    fn translucent_panel_blends_fill_keeps_border() {
+        let mut buf = vec![0x000000u32; 3 * 3];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 3,
+            h: 3,
+        };
+        draw_panel_alpha(
+            &mut frame,
+            &Rect {
+                x: 0,
+                y: 0,
+                w: 3,
+                h: 3,
+            },
+            pack_xrgb(0xFF, 0xFF, 0xFF),
+            128,
+            pack_xrgb(0xFF, 0x00, 0x00),
+            1,
+        );
+        assert_eq!(frame.buf[0], pack_xrgb(0xFF, 0x00, 0x00));
+        assert_eq!(frame.buf[4], pack_xrgb(0x80, 0x80, 0x80));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
