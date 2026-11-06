@@ -205,10 +205,12 @@ the server sends.
 - Relay TCP ports for the peer leg (only gateway TCP `15010` pinned
   in-exe at file `0x2513d8`, ref file `0x1ab72a`); relay ports otherwise
   arrive via `GetLiveState` 4042/4043, `GetP2PList` 4044/4045.
-- UHP hole-punch packet bodies (`ReportUdpPunchHole` 4046/4047,
-  `ConfirmRelay` 4055/4056): string/branch anchors only (§9); no
-  decoders added — bodies stay unclaimed until a capture or further
-  exe byte proof lands.
+- `ConfirmRelay` 4055 C→S body bytes: send site pinned (file
+  `0xf0439`) but the shared send helper also serves field-carrying
+  opcodes (4012 at files `0xf0420`/`0xeadcc`, 4014, 4016, 4048), so
+  the site does not prove emptiness; the decoder encodes empty per
+  Memoryer (`PlayingController.ConfirmRelay` takes no fields) until
+  byte proof lands. 4046/4047/4056 are byte-verified empty (§9).
 - `CUDPFailTCPConnect` trigger site (RTTI name only, file
   `0x28060c`); byte-pinned fallback behavior is relay op 3 forcing
   TCP plus the RUDP trio — the class's own call sites are open.
@@ -221,9 +223,13 @@ the server sends.
 
 No new REA dossier was issued (shared snapshot contended); all
 addresses below are file offsets (VA = file + `0x400000`), and no
-disassembly is reproduced. Decoder impact: none beyond the
-`RELAY_UDP_PORTS` selector-immediate constants — UHP bodies stay
-undecoded (not byte-verified).
+disassembly is reproduced. Decoder impact: `ReportUdpPunchHole` / `ReportUdpPunchHoleAnswer` /
+`ConfirmRelay` / `ConfirmRelayAnswer` empty bodies in `o2jam-net`
+(`live_handshake_tests`); 4046/4047/4056 are byte-verified in-exe
+while 4055 stays Memoryer-corroborated with its send site pinned
+(body OPEN, §7). Method for the new rows: `python3` byte scans over
+the local install-root copy (same method as the 4015 dossier),
+cross-checked against the Memoryer `PlayingController` handlers.
 
 Flow in the exe's own words: the relay selector stages the three
 hardcoded relay IPs, picks one IP plus port 39311/39312 by selector,
@@ -241,6 +247,10 @@ peer-to-peer) and the RUDP-over-UDP vs framed-TCP split.
 | Relay IP staging | `0x64e260`/`0x64e250`/`0x64e240` pushed at file `0x18c6d7`/`0x18c6de`/`0x18c6e5`; dispatch tables file `0x18c850`/`0x18c864` |
 | UHP start / success | branch file ~`0x18d7c5`; `UHP Start` file `0x24e2b0` (ref `0x18d80f`), `UDP Hole Punching Success~!!` file `0x24e2c0` (ref `0x18d7cd`); poll loop `Sleep(300)` via IAT `0x63f298` (site file `0x18d84d`) |
 | UHP result | `InsertUHPResult` file `0x24e1e4` (ref `0x187a8c`); format `Hole punching Result : %d : IP : %d - Port : %d` file `0x24e208` (ref `0x187a82`) |
+| UHP report 4046 C→S | empty (`04 00 CE 0F`): id `u16` `0x0FCE` at file `0x18d8a1`, len `u16` 4 at file `0x18d8ac`, adjacent on the stack in the UHP function (entry file `0x18d580`); id immediate unique image-wide; no `0x0FCE` dword site exists anywhere |
+| Punch echo 4047 S→C | body-ignored: dispatcher slot 21 (case file `0x1587cb`) → handler entry file `0x163d90` sets a session flag and returns without reading packet bytes; that flag gates the 4048 send (checked at file `0xeae6d`); no `0x0FCF` dword site exists |
+| Relay confirm 4055 C→S | send site file `0xf0439` (`push 0`, `push 0x0FD7`, session send via vtable +`0x84`); sole `0x0FD7` dword site image-wide; body OPEN — same shape serves field-carrying 4012/4014/4016/4048 |
+| Relay echo 4056 S→C | body-ignored: slot 26 (case file `0x158820`) → handler entry file `0x163d50` forwards `(0, 0, 0x0FD8, 0x12)` to the UI event queue; same shape as the 4052/4054 forwarders (entries `0x163d10`/`0x163d30`); game-state compare against `0x0FD8` at file `0xde4db` |
 | Adjunct `.52` host | string file `0x24e368`, code refs files `0x1936e2`/`0x1936fc`; co-located constant 7788 (file `0x19370b`) — role open |
 | Fallback | RTTI `.?AVCUDPFailTCPConnect@@` file `0x28060c`; `WSASendTo`/`WSARecvFrom` IAT `0x63f584`/`0x63f580` (sites files `0x1b1ad2`/`0x1b19cd`) |
 
@@ -249,7 +259,9 @@ peer-to-peer) and the RUDP-over-UDP vs framed-TCP split.
 `relay_command_tests`: id map, role map, relay UDP-port immediates,
   exact-body vectors for
 ops 1–7/10–11, frame round-trips, short/trailing/foreign-id and
-bad-enum rejections. `udp_frame_tests`: ack encode/decode,
+bad-enum rejections. `live_handshake_tests`: exact empty frames
+`04 00 <id>` for 4046/4047/4055/4056 (the 4046 bytes match the UHP
+stack frame), round-trips, payload and foreign-id rejections. `udp_frame_tests`: ack encode/decode,
 stored/fixed-dictionary/dynamic-Huffman datagram vectors,
 stored-encoder round-trip, length-prefix and checksum
 rejections. `stored_block_tests` (`inflate.rs`): Adler-32
