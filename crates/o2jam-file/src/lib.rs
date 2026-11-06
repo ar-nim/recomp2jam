@@ -198,6 +198,7 @@ pub mod loading;
 pub mod ojm;
 pub mod ojn;
 pub mod opi;
+pub mod resolve;
 pub mod sprites;
 pub mod tables;
 
@@ -206,6 +207,7 @@ pub use loading::*;
 pub use ojm::*;
 pub use ojn::*;
 pub use opi::*;
+pub use resolve::*;
 pub use sprites::*;
 pub use tables::*;
 
