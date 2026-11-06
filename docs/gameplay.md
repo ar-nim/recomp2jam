@@ -277,3 +277,41 @@ implements the item-text geometry data-driven (`LaneCurtain` +
 `visible_spans` + `blit_rgb555_clipped`, synthetic tests): hidden
 keeps the top 80%, sudden keeps the bottom 20%, dark keeps the middle
 20%, reverse-dark keeps the top and bottom 40%.
+
+## Life bar — player-reported values, implemented
+
+Max 1000 (possibly percent). Per-judgement deltas by difficulty,
+per player report (2026-11-07, UNVERIFIED in-exe):
+
+| Judgement | Easy | Normal | Hard |
+|---|---|---|---|
+| Cool | +3 | +2 | +1 |
+| Good | +2 | +1 | 0 |
+| Bad | 0 | 0 | 0 |
+| Miss | −50 | −40 | −30 |
+
+At 0 the player is dead: no more input, song ends, back to the
+waiting state. Binary note: `[3,2,1]`/`[2,1,0]` fragments exist
+in-shipped-bytes but are unattributed to any code path, and the
+unique `[-10,-7,-5]` triple contradicts Bad=no-change, so it
+belongs elsewhere until proven. Implemented as
+`o2jam-game::LifeGauge` (+ `Difficulty`) with synthetic tests.
+
+## Long-note release rule — player-reported
+
+No long-note options exist (at most a cosmetic long-note-combo
+toggle). Long notes are chart data: the head must be hit, the tail
+MUST be released exactly at its end — missing the release is a
+miss, and releasing mid-hold is a miss. Implemented nowhere yet:
+hold detection needs the in-exe release path (bit-26/0x2f50 sites
+never fire on shipped charts).
+
+## Win rule — player-reported
+
+Grades exist; WIN/LOSE art goes to rank #1 by highest score,
+solo or team. Grade thresholds OPEN.
+
+## Renderer default — player-reported
+
+7.55 runs fullscreen 800x600; no windowed mode in this version.
+The winit shell should default to that mode.
