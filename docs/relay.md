@@ -187,10 +187,20 @@ the server sends.
   a `Sleep(300)` loop (push `$0x12c` + `call *Sleep`, IAT
   `0x63f298`, call site file `0x18d84d`).
 - Adjunct `.52` host: string `203.238.136.52` (file `0x24e368`)
-  has exactly two code refs (files `0x1936e2`, `0x1936fc`) in a
-  setup block that also materializes constant `7788` (`$0x1e6c`,
-  file `0x19370b`, the only `0x1e6c` in the image) — role open, not
-  claimed as a port.
+  has exactly two code refs image-wide (both push the `0x64e368`
+  pointer: files `0x1936e2`, `0x1936fc`) inside the shared setup
+  helper entered at file `0x193650` (7 call sites: files `0x90921`/
+  `0x90cd9`/`0x9cf4a`/`0xa4d40`/`0xab25b`/`0xb0980`/`0xcb082`, each
+  passing the global at `0x7684d8`). The same block stores constant
+  `7788` (`$0x1e6c`, file `0x19370b`, the only `0x1e6c` dword
+  image-wide) into a setup slot just after the second host call —
+  recorded as a number, not claimed as a port. Verdict: separately
+  configured adjunct endpoint on the relay subnet, excluded from the
+  relay-pool, UHP-helper, and TCP-fallback wire paths (neither the
+  relay selector at file `0x18c6c0` nor the UHP controller at file
+  `0x18d580` references `.52` or `7788`, and no `SetID`/frame/send
+  immediates sit in the setup block). No packet shape is pinned for
+  it; the exact service role stays open.
 - Fallback class: RTTI `.?AVCUDPFailTCPConnect@@` (name file
   `0x28060c`); no dedicated log strings. UDP send/recv run through
   `WSASendTo`/`WSARecvFrom` (IAT `0x63f584`/`0x63f580`; send site
@@ -251,7 +261,7 @@ peer-to-peer) and the RUDP-over-UDP vs framed-TCP split.
 | Punch echo 4047 S→C | body-ignored: dispatcher slot 21 (case file `0x1587cb`) → handler entry file `0x163d90` sets a session flag and returns without reading packet bytes; that flag gates the 4048 send (checked at file `0xeae6d`); no `0x0FCF` dword site exists |
 | Relay confirm 4055 C→S | send site file `0xf0439` (`push 0`, `push 0x0FD7`, session send via vtable +`0x84`); sole `0x0FD7` dword site image-wide; body OPEN — same shape serves field-carrying 4012/4014/4016/4048 |
 | Relay echo 4056 S→C | body-ignored: slot 26 (case file `0x158820`) → handler entry file `0x163d50` forwards `(0, 0, 0x0FD8, 0x12)` to the UI event queue; same shape as the 4052/4054 forwarders (entries `0x163d10`/`0x163d30`); game-state compare against `0x0FD8` at file `0xde4db` |
-| Adjunct `.52` host | string file `0x24e368`, code refs files `0x1936e2`/`0x1936fc`; co-located constant 7788 (file `0x19370b`) — role open |
+| Adjunct `.52` host | string file `0x24e368`, pushed at files `0x1936e2`/`0x1936fc` inside helper file `0x193650` (7 call sites, §6); co-located number 7788 (file `0x19370b`); no packet shape — adjunct endpoint, exact role open |
 | Fallback | RTTI `.?AVCUDPFailTCPConnect@@` file `0x28060c`; `WSASendTo`/`WSARecvFrom` IAT `0x63f584`/`0x63f580` (sites files `0x1b1ad2`/`0x1b19cd`) |
 
 ## 8. Tests (`cargo test -p o2jam-net`)
@@ -259,7 +269,8 @@ peer-to-peer) and the RUDP-over-UDP vs framed-TCP split.
 `relay_command_tests`: id map, role map, relay UDP-port immediates,
   exact-body vectors for
 ops 1–7/10–11, frame round-trips, short/trailing/foreign-id and
-bad-enum rejections. `live_handshake_tests`: exact empty frames
+bad-enum rejections. `adjunct_host_tests`: adjunct address octets,
+relay-subnet-but-not-pool membership, `7788` immediate. `live_handshake_tests`: exact empty frames
 `04 00 <id>` for 4046/4047/4055/4056 (the 4046 bytes match the UHP
 stack frame), round-trips, payload and foreign-id rejections. `udp_frame_tests`: ack encode/decode,
 stored/fixed-dictionary/dynamic-Huffman datagram vectors,
