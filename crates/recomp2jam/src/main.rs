@@ -82,6 +82,15 @@ enum Command {
         /// Open the game window (needs a display; headless CI skips it).
         #[arg(long)]
         window: bool,
+        /// Stack the result-screen avatar from this `avatar.opa`.
+        #[arg(long)]
+        avatar_opa: Option<String>,
+        /// Equipped item ids for `--avatar-opa` (`"1,5,9"`).
+        #[arg(long, default_value = "")]
+        equip: String,
+        /// Wear the male sprite variants.
+        #[arg(long)]
+        avatar_male: bool,
     },
 }
 
@@ -168,10 +177,19 @@ fn main() -> Result<()> {
             level,
             sound,
             window,
+            avatar_opa,
+            equip,
+            avatar_male,
         } => {
             tracing::info!(?chart, ?window, "play stub");
             if window {
                 let mut game = o2jam_shell::ScreenGame::new();
+                if let Some(opa_path) = &avatar_opa {
+                    let ids = connect::parse_equipment(&equip)?;
+                    let figure = connect::build_worn_figure(opa_path, &ids, avatar_male)?;
+                    tracing::info!(layers = figure.len(), "avatar stacked");
+                    game.load_avatar(figure);
+                }
                 if let Some(path) = &chart {
                     let (level_chart, format_version) = load_level_chart(path, level)?;
                     game.load_chart(level_chart.hit_onsets_ms());

@@ -141,7 +141,14 @@ fn authorize(gateway: &mut GatewayConnection, options: &ConnectOptions) -> Resul
 /// Stack the worn figure for fetched equipment: read the local
 /// `avatar.opa`, parse its item table, and layer every resolvable
 /// part. `Any` gender wears the female parity (documented guess).
-fn fetch_avatar(opa_path: &str, hero: &CharacterInfo) -> Result<o2jam_shell::AvatarFigure> {
+/// Stack a worn figure from a local `avatar.opa` and explicit
+/// equipment ids (shared by `connect --avatar-opa` and
+/// `play --window --avatar-opa --equip`).
+pub fn build_worn_figure(
+    opa_path: &str,
+    equipment: &[i32],
+    male: bool,
+) -> Result<o2jam_shell::AvatarFigure> {
     let archive =
         std::fs::read(opa_path).with_context(|| format!("reading avatar archive {opa_path}"))?;
     let entries = o2jam_file::parse_opi(&archive)?;
@@ -153,13 +160,27 @@ fn fetch_avatar(opa_path: &str, hero: &CharacterInfo) -> Result<o2jam_shell::Ava
         .get(table_entry.data_offset..table_entry.data_offset + table_entry.size as usize)
         .with_context(|| "item table out of archive bounds")?;
     let table = o2jam_file::parse_avatar_item_table(table_bytes)?;
-    let male = hero.gender == Gender::Male;
     Ok(o2jam_shell::load_worn_figure(
-        &archive,
-        &table,
-        &hero.equipment,
-        male,
+        &archive, &table, equipment, male,
     ))
+}
+
+fn fetch_avatar(opa_path: &str, hero: &CharacterInfo) -> Result<o2jam_shell::AvatarFigure> {
+    build_worn_figure(opa_path, &hero.equipment, hero.gender == Gender::Male)
+}
+
+/// Parse `--equip` (`"1,5,9"`) into item ids; blank means none.
+pub fn parse_equipment(list: &str) -> Result<Vec<i32>> {
+    if list.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    list.split(',')
+        .map(|part| {
+            part.trim()
+                .parse::<i32>()
+                .with_context(|| format!("bad item id '{part}'"))
+        })
+        .collect()
 }
 
 fn fetch_character(gateway: &mut GatewayConnection) -> Result<CharacterInfo> {
@@ -243,6 +264,29 @@ mod connect_flow_tests {
             character,
             avatar_opa,
         }
+    }
+
+    #[test]
+    fn parses_equipment_lists() {
+        assert_eq!(parse_equipment("").unwrap(), Vec::<i32>::new());
+        assert_eq!(parse_equipment("1,5,9").unwrap(), vec![1, 5, 9]);
+        assert_eq!(parse_equipment(" 2 , 3 ").unwrap(), vec![2, 3]);
+        assert!(parse_equipment("1,nope").is_err());
+    }
+
+    #[test]
+    fn builds_worn_figure_from_archive() {
+        let archive = opa_blob(&[
+            ("Itemdata_Korea.dat", &item_table_blob()),
+            ("AA.ojs", &red_sprite()),
+        ]);
+        let dir = std::env::temp_dir();
+        let path = dir.join("recomp2jam-test-build-avatar.opa");
+        std::fs::write(&path, &archive).unwrap();
+        let figure = build_worn_figure(&path.to_string_lossy(), &[1], false).unwrap();
+        std::fs::remove_file(&path).ok();
+        assert_eq!(figure.len(), 1);
+        assert!(build_worn_figure("nonexistent.opa", &[1], false).is_err());
     }
 
     #[test]
