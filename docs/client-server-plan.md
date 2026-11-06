@@ -47,22 +47,29 @@ All request/response/event layouts live in
 
 ### Phase 1 — login + channel (offline-capable shell exists)
 - TCP connect to Memoryer gateway (`15010`), framing codec.
-- `Authorize` 1000 C→S payload: u8 `1`, relayKey1/2 i32,
+- `Authorize` 1000 C→S payload (Memoryer field order): u8 `1`, relayKey1/2 i32,
   public+local endpoints, i32 userId, str token, gender,
-  u8 `1`, str clientId (exe strings + Memoryer
-  `AuthorizeRequest`; RSA `user:authorize` params — see
-  lifecycle doc). Handle 1001/1003/1005/1008, 50/51/52.
+  u8 `1`, str clientId. Handle 1001/1003/1005/1008, 50/51/52.
 - BLOCKED on string wire format (exe forensics so far):
   in-memory strings are null-terminated (`strlen`-equivalent
-  at file `0x15f1bc0`, alignment-optimized scan), packet
-  builder appends counted bytes (`0x555d70`/`0x5f2450`);
-  room strings carry `maxLength` 22/12 (fixed buffers?),
-  auth strings carry none (variable-length?); prefix size
-  and charset (presumed CP949 for non-ASCII) unconfirmed.
-  Candidate sites: 1000 send wrapper file `0x147451c`,
-  CreateRoom builder file `0x1436462` (`SetID` 2004 inline).
-  No `Authorize` implementation until the format is pinned —
-  guessing the codec would break interop silently.
+  at file `0x15f1bc0`); packet builder appends raw `strlen`
+  bytes with no inline prefix/null (`0x555e30`→`0x555d70`→
+  `0x5f2450`; running packet length kept at buffer[0]) — so
+  the receiver must use out-of-band lengths.
+  The inline Authorize builder (SetID 1000 at file `0x147bcd`)
+  appends, in order: u8 `1`, key1+key2 (8 B), two 6-byte
+  blocks (dword+word each — IP+port?), userId i32, TWO runtime
+  strings (globals `0x768ac7`/`0x768b27`, filled from the
+  `0x15aaex` credential-prep code), one gender-ish byte, then
+  the hardcoded ClientId `726PNA-B1YW-28ZG9M-I5SC-Q0OPM6`
+  (file `0x2472c8`, byte-identical to Memoryer's
+  `AuthRequest.Id`). OPEN discrepancies vs Memoryer before
+  any implementation: (a) field order/content (exe shows
+  str,str,gender,const vs Memoryer token,gender,u8,clientId);
+  (b) endpoint size (exe 6 B vs Memoryer 8 B `port,zero,IP`);
+  (c) slot sizes / null-padding for every string field.
+  No `Authorize` implementation until these are resolved —
+  a wrong guess breaks interop silently.
 - `GetChannelList` 1002 → 1003; `ChannelLogin` 1004 (i16
   gatewayId/channelId) → 1005; `SessionKeys` 1007/1008.
 - `GetCharacterInfo` 2000 → 2001 (equipment codec:
