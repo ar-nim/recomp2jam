@@ -1438,9 +1438,12 @@ impl WireMessage for CheckGiftFreePass {
 }
 
 /// One gift message inside [`GetGiftMessageListResponse`] 5018
-/// (Memoryer's `GiftEntry`; order and widths are corroboration —
-/// exe side the handler walks a `0x168`-stride message table, VA
-/// `0x490e86`, file `0x90e86`, with the exact field split OPEN).
+/// (Memoryer's `GiftEntry`; order and widths are Memoryer-only:
+/// the exe handler at VA `0x490e86` (file `0x90e86`) never reads the
+/// body — it derives a count from the UI table bounds
+/// (`0x76fc80` minus `0x76fc7c`, divided by the `0x168` UI stride)
+/// and emits UI event `0xc` when nonzero, so the wire field split
+/// stays exe-unverified).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GiftMessage {
     /// Message id (passed back to [`ReadGiftMessage`]).
@@ -1502,7 +1505,7 @@ impl GiftMessage {
 
 /// Saturating `i16` collection prefix (Encore `Int16` counts).
 fn count_prefix(len: usize) -> i16 {
-    i16::try_from(len.min(i16::MAX as usize)).unwrap_or(i16::MAX)
+    i16::try_from(len).unwrap_or(i16::MAX)
 }
 
 /// `GetGiftMessageList` 5018 response: validity word plus an
@@ -1510,7 +1513,9 @@ fn count_prefix(len: usize) -> i16 {
 ///
 /// Dispatched by `cmpl $0x139a` (VA `0x490a4a`, file `0x90a4a`);
 /// Memoryer shapes the body as int-flag + `Int16` collection
-/// (corroboration).
+/// (Memoryer-only: the handler at VA `0x490e86` reads no payload
+/// bytes, so neither the count width nor the entry split is
+/// exe-verified).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GetGiftMessageListResponse {
     /// False when `messages` is valid.
@@ -1603,7 +1608,9 @@ impl ClaimGiftResult {
 /// Dispatched by `cmpl $0x13a0` (VA `0x4a55b1`, file `0xa55b1`);
 /// the handler takes the error path unless the first word is zero
 /// (VA `0x4a6135`, file `0xa6135`), matching the validity flag;
-/// the verdict byte itself is Memoryer corroboration.
+/// the success path (`0x4a6156` on) works the `0x24`-stride gift-box
+/// table and never reads the verdict slot (`0x14(%ebp)`), so the
+/// verdict byte is Memoryer-only (kept for server interop).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClaimGiftResponse {
     /// False when `result_code` applies.
@@ -1742,9 +1749,11 @@ impl SyncFreePassResult {
 }
 
 /// Wallet + pass snapshot inside [`SyncFreePassResponse`] 5026
-/// (Memoryer's `UserFreePassInfo`; corroboration — exe side only
-/// the first body word reaches the pass applier, VA `0x4f424f`,
-/// file `0xf424f`).
+/// (Memoryer's `UserFreePassInfo`; Memoryer-only — the 5026 path at
+/// VA `0x4f41f4` (file `0xf41f4`) references neither body slot
+/// (`0x10`/`0x14(%ebp)`); it forwards `0xc(%ebp)` to the pass applier
+/// at VA `0x4f4300` (file `0xf4300`, reached via VA `0x4f424f`),
+/// which itself reads no stack body bytes).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserFreePassInfo {
     /// Gem balance.
@@ -1833,7 +1842,8 @@ impl UserFreePassInfo {
 /// [`ChannelLoginResponse`]'s trailing flag).
 ///
 /// Dispatched by `cmpl $0x13a2` (VAs `0x4f40f2`/`0x4f40fe`, files
-/// `0xf40f2`/`0xf40fe`); the info tail is Memoryer corroboration.
+/// `0xf40f2`/`0xf40fe`); the info tail is Memoryer-only (see
+/// [`UserFreePassInfo`]: the handler consumes no tail bytes).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncFreePassResponse {
     /// Raw result code; see [`SyncFreePassResult::from_u32`].
@@ -3163,6 +3173,18 @@ mod tests {
     }
 
     #[test]
+    fn gift_list_response_encodes_empty_frame() {
+        let response = GetGiftMessageListResponse {
+            invalid: false,
+            messages: Vec::new(),
+        };
+        assert_eq!(
+            response.encode(),
+            vec![0x0A, 0x00, 0x9A, 0x13, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+        );
+    }
+
+    #[test]
     fn gift_list_response_round_trips_one_entry() {
         let response = GetGiftMessageListResponse {
             invalid: false,
@@ -3289,6 +3311,22 @@ mod tests {
     }
 
     #[test]
+    fn claim_gift_response_preserves_verdict_bytes() {
+        for verdict in [1, 2, 3, 4] {
+            let response = ClaimGiftResponse {
+                invalid: false,
+                result_code: verdict,
+            };
+            let back = ClaimGiftResponse::decode_body(&response.encode_body()).unwrap();
+            assert_eq!(back, response);
+        }
+        assert_eq!(
+            ClaimGiftResult::from_u8(2),
+            Some(ClaimGiftResult::NotDefined)
+        );
+    }
+
+    #[test]
     fn free_pass_type_names_flag_values() {
         assert_eq!(FreePassType::from_u32(0), Ok(FreePassType::None));
         assert_eq!(FreePassType::from_u32(1), Ok(FreePassType::AllMusic));
@@ -3325,6 +3363,18 @@ mod tests {
         assert_eq!(
             SyncFreePassResult::from_u32(response.result_code),
             Some(SyncFreePassResult::Success)
+        );
+    }
+
+    #[test]
+    fn sync_free_pass_response_encodes_result_only_frame() {
+        let response = SyncFreePassResponse {
+            result_code: 0,
+            info: None,
+        };
+        assert_eq!(
+            response.encode(),
+            vec![0x08, 0x00, 0xA2, 0x13, 0x00, 0x00, 0x00, 0x00]
         );
     }
 
