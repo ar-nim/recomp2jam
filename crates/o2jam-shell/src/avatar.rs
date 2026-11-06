@@ -1,60 +1,119 @@
 //! Avatar figure: decoded sprite-55 images, drawable on results.
 //!
 //! One parsed body becomes one figure: every raw-RGB555 image is
-//! decoded, anything else (compressed/outlier frames) is skipped —
-//! their codecs are still TBD in `o2jam-file`. Compositing equipped
-//! slots (positions, layering, `SetInfodata` mapping) lands later;
-//! for now the figure paints its first image, which is the whole
-//! body for single-image sprites.
+//! decoded at its record anchor, anything else (compressed/outlier
+//! frames) is skipped — their codecs are still TBD in `o2jam-file`.
+//! Equipped parts stack on as extra layers; which filenames those
+//! are comes from [`pick_wear_sprites`].
 
 use o2jam_file::Sprite55;
 use o2jam_render::{blit_rgb555, Frame, Rgb555Image};
 
-/// Drawable decoded sprite-55 body.
+/// One composited part: image plus its record anchor offset.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FigureLayer {
+    /// Decoded pixels.
+    pub image: Rgb555Image,
+    /// Placement anchor from the sprite record.
+    pub dx: i32,
+    /// Placement anchor from the sprite record.
+    pub dy: i32,
+}
+
+/// Drawable decoded sprite-55 body: layers painted back to front at
+/// their anchors (single-image bodies are unaffected; whether
+/// multi-image plain bodies are layers or animation frames is OPEN —
+/// true animation lives in the strided/`.oja` types).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AvatarFigure {
-    /// Decoded images in stored order.
-    images: Vec<Rgb555Image>,
+    /// Layers in paint order.
+    layers: Vec<FigureLayer>,
     /// Transparent colour key from the container.
     colorkey: u16,
 }
 
 impl AvatarFigure {
-    /// Decode every raw image; empty when none decodes.
+    /// Decode every raw image at its record anchor; empty when none
+    /// decodes.
     #[must_use]
     pub fn from_sprite55(sprite: &Sprite55<'_>) -> Self {
-        let images = sprite
+        let layers = sprite
             .images
             .iter()
             .filter(|image| sprite.is_raw_rgb555(image))
             .filter_map(|image| {
                 Rgb555Image::decode(sprite.pixel_data(image), image.w as usize, image.h as usize)
+                    .map(|decoded| FigureLayer {
+                        image: decoded,
+                        dx: i32::from(image.x),
+                        dy: i32::from(image.y),
+                    })
             })
             .collect();
         Self {
-            images,
+            layers,
             colorkey: sprite.colorkey,
         }
     }
 
-    /// Decoded image count.
+    /// Stack an extra layer on top (equipped parts resolve here).
+    pub fn push_layer(&mut self, layer: FigureLayer) {
+        self.layers.push(layer);
+    }
+
+    /// Decoded layer count.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.images.len()
+        self.layers.len()
     }
 
-    /// Whether any image decoded.
+    /// Whether any layer decoded.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.images.is_empty()
+        self.layers.is_empty()
     }
 
-    /// Paint the first image with its top-left at `(x, y)`.
+    /// Paint every layer with its top-left at `(x, y)` plus anchor.
     pub fn paint(&self, frame: &mut Frame<'_>, x: i32, y: i32) {
-        if let Some(first) = self.images.first() {
-            blit_rgb555(frame, &first.view(), x, y, Some(self.colorkey));
+        for layer in &self.layers {
+            blit_rgb555(
+                frame,
+                &layer.image.view(),
+                x + layer.dx,
+                y + layer.dy,
+                Some(self.colorkey),
+            );
         }
     }
+}
+
+/// Pick the sprite filenames one equipped item contributes to the
+/// worn figure (heuristic from 1541 real rows, exe part logic OPEN):
+/// slots 0–1 are icons (never worn); otherwise the wearer's parity
+/// wins — even slots for male, odd for female (`27M…`/`27F…` split
+/// filenames prove the parity); an empty parity falls back to the
+/// other side (unisex single-variant items). Slot order is kept so
+/// multi-part items (torso + arms) layer deterministically.
+#[must_use]
+pub fn pick_wear_sprites(row: &o2jam_file::AvatarItemRow, male: bool) -> Vec<String> {
+    let parity = if male { 0 } else { 1 };
+    let mut picked: Vec<String> = row
+        .sprites
+        .iter()
+        .enumerate()
+        .filter(|(slot, (_, name))| *slot >= 2 && *slot % 2 == parity && !name.is_empty())
+        .map(|(_, (_, name))| name.clone())
+        .collect();
+    if picked.is_empty() {
+        picked = row
+            .sprites
+            .iter()
+            .enumerate()
+            .filter(|(slot, (_, name))| *slot >= 2 && !name.is_empty())
+            .map(|(_, (_, name))| name.clone())
+            .collect();
+    }
+    picked
 }
 
 #[cfg(test)]
@@ -107,6 +166,85 @@ mod avatar_figure_tests {
         let blob = sprite55_blob(0, 0x0000, 2, 2, &[0xAA, 0xBB]);
         let sprite = parse_sprite55(&blob).unwrap();
         assert!(AvatarFigure::from_sprite55(&sprite).is_empty());
+    }
+
+    fn wear_row(sprites: Vec<(u8, &str)>) -> o2jam_file::AvatarItemRow {
+        o2jam_file::AvatarItemRow {
+            item_id: 1,
+            item_type: 0,
+            price: 0,
+            params: [0; 4],
+            flags: (0, 0),
+            name: String::new(),
+            description: String::new(),
+            sprites: sprites
+                .into_iter()
+                .map(|(flag, name)| (flag, name.to_owned()))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn wear_picks_parity_skipping_icons() {
+        let row = wear_row(vec![
+            (1, "icon.oji"),
+            (1, "icon.oji"),
+            (1, "27M23001.oji"),
+            (1, "27F23001.oji"),
+            (1, "27M23001.oji"),
+            (1, "27F23001.oji"),
+        ]);
+        assert_eq!(
+            pick_wear_sprites(&row, true),
+            vec!["27M23001.oji".to_owned(), "27M23001.oji".to_owned()]
+        );
+        assert_eq!(
+            pick_wear_sprites(&row, false),
+            vec!["27F23001.oji".to_owned(), "27F23001.oji".to_owned()]
+        );
+    }
+
+    #[test]
+    fn wear_falls_back_when_parity_empty() {
+        let row = wear_row(vec![
+            (1, "icon.oji"),
+            (1, "icon.oji"),
+            (1, ""),
+            (1, "uni.oji"),
+        ]);
+        assert_eq!(pick_wear_sprites(&row, true), vec!["uni.oji".to_owned()]);
+        let bare = wear_row(vec![(1, "icon.oji"), (1, "icon.oji")]);
+        assert!(pick_wear_sprites(&bare, false).is_empty());
+    }
+
+    #[test]
+    fn layers_composite_at_anchors_in_order() {
+        use o2jam_render::Rgb555Image;
+        let mut figure = AvatarFigure::default();
+        figure.push_layer(FigureLayer {
+            image: Rgb555Image::decode(&[0x00, 0x7C, 0x00, 0x7C], 2, 1).unwrap(),
+            dx: 0,
+            dy: 0,
+        });
+        figure.push_layer(FigureLayer {
+            image: Rgb555Image::decode(&[0xE0, 0x03, 0xE0, 0x03], 2, 1).unwrap(),
+            dx: 1,
+            dy: 0,
+        });
+        let mut buf = vec![0u32; 3];
+        figure.paint(
+            &mut Frame {
+                buf: &mut buf,
+                w: 3,
+                h: 1,
+            },
+            0,
+            0,
+        );
+        // Red base, then green over x 1..3 (colorkey black skips nothing here).
+        assert_eq!(buf[0], o2jam_render::pack_xrgb(255, 0, 0));
+        assert_eq!(buf[1], o2jam_render::pack_xrgb(0, 255, 0));
+        assert_eq!(buf[2], o2jam_render::pack_xrgb(0, 255, 0));
     }
 
     #[test]
