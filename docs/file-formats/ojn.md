@@ -206,7 +206,27 @@ table 4 → `+0x184/+0x188/+0x18c`, table 5 → `+0x190` (id echo) /
   a byte-range check plus a 2-byte `strncmp` against the key-name
   table (indexed `0x6454d8`, fixed `0x645510`/`0x645514`/`0x645518`/
   `0x64551c`/`0x645520`) under the dialog-mode dispatch on `+0x188`
-  (0/1/else); VA `0x444fe0` (file `0x44fe0`; clear at file `0x45070`)
+  (0/1/else). The arm is `code - 0x27200058` (`sub` at file `0x4464c`;
+  codes `0x27200058..0x27200065` reach this rebuild through jump-table
+  entry 8 at VA `0x43fa45`/file `0x3fa45`, `call` at file `0x3fa99`).
+  The five fixed arms are the doublable Korean initials: arm 0 selects
+  `ㄲ` (U+3132, EUC-KR `A4 A2` at file `0x245498` via slot file `0x245510`;
+  `cmp` at file `0x44962`, load at file `0x44971`, append at file `0x44a08`),
+  arm 2 selects `ㄸ` (U+3138, `A4 A8` at file `0x245494` via slot file `0x245514`;
+  `cmp` at file `0x44a18`, load at file `0x44a27`, append at file `0x44abe`),
+  arm 5 selects `ㅃ` (U+3143, `A4 B3` at file `0x245490` via slot file `0x245518`;
+  `cmp` at file `0x44ace`, load at file `0x44add`, append at file `0x44b74`),
+  arm 6 selects `ㅆ` (U+3146, `A4 B6` at file `0x24548c` via slot file `0x24551c`;
+  `cmp` at file `0x44b84`, load at file `0x44b93`, append at file `0x44c2a`),
+  arm 8 selects `ㅉ` (U+3149, `A4 B9` at file `0x245488` via slot file `0x245520`;
+  `cmp` at file `0x44c3a`, load at file `0x44c49`, append at file `0x44ce6`).
+  Each pairs with its base initial from the indexed row (arm 0 `ㄱ` at file
+  `0x2454d0`, arm 2 `ㄷ` at file `0x2454c8`, arm 5 `ㅂ` at file `0x2454bc`,
+  arm 6 `ㅅ` at file `0x2454b8`, arm 8 `ㅈ` at file `0x2454b0`); the other
+  arms (1/3/4/7/9..13) have no doubled form and fall through with only the
+  indexed appends (files `0x44957`/`0x44f61`). Implemented as
+  `o2jam-file::ojn_search_doubled_initial` with per-arm synthetic tests; VA
+  `0x444fe0` (file `0x44fe0`; clear at file `0x45070`)
   appends at files `0x4528b` and `0x454fa` with the same keyed shape.
   Dialog `+0x690` holds inline `0x238` entries, not retained
   pointers: five `0x452850` appends copy one entry each from a
