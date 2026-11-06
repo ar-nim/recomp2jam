@@ -104,6 +104,7 @@ empty_message!(MultiSessionError, 52);
 // `GetCharacterInfo` 2000 takes no parameters (its Memoryer handler
 // reads nothing but the session), so the request is an empty body.
 empty_message!(GetCharacterInfo, 2000);
+empty_message!(GetChannelInfo, 2002);
 
 /// Client identifier every 7.55 client sends (Memoryer `AuthRequest.Id`,
 /// byte-identical to the in-exe constant at file `0x2472c8`).
@@ -1101,6 +1102,8 @@ mod command_consistency_tests {
             Response::MultiSessionError as u16
         );
         assert_eq!(GetCharacterInfo::COMMAND, Request::GetCharacterInfo as u16);
+        assert_eq!(GetChannelInfo::COMMAND, Request::GetChannelInfo as u16);
+        assert_eq!(crate::rooms::RoomList::COMMAND, Response::RoomList as u16);
         assert_eq!(CreateRoom::COMMAND, Request::CreateRoom as u16);
         assert_eq!(CreateRoomResponse::COMMAND, Response::CreateRoom as u16);
         assert_eq!(RoomCreated::COMMAND, Event::RoomCreated as u16);
@@ -1501,11 +1504,12 @@ mod tests {
         let mut request = room_request();
         request.title = "A".repeat(40);
         let body = request.encode_body();
-        // 22 title bytes, no terminator: 22 + 1 + 1 + 1 + 7 + 1 + 1 + 2.
+        // 21 title bytes plus terminator: 22 + 1 + 1 + 1 + 7 + 1 + 1 + 2.
         assert_eq!(body.len(), 22 + 1 + 1 + 1 + 7 + 1 + 1 + 2);
-        assert_eq!(&body[..22], &[0x41; 22]);
+        assert_eq!(&body[..21], &[0x41; 21]);
+        assert_eq!(body[21], 0x00);
         let back = CreateRoom::decode_body(&body).unwrap();
-        assert_eq!(back.title, "A".repeat(22));
+        assert_eq!(back.title, "A".repeat(21));
     }
 
     #[test]
@@ -1513,7 +1517,7 @@ mod tests {
         let mut request = room_request();
         request.password = "B".repeat(20);
         let back = CreateRoom::decode_body(&request.encode_body()).unwrap();
-        assert_eq!(back.password, "B".repeat(12));
+        assert_eq!(back.password, "B".repeat(11));
     }
 
     #[test]

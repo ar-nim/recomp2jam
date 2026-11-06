@@ -17,6 +17,7 @@ pub mod command;
 pub mod error;
 pub mod frame;
 pub mod message;
+pub mod rooms;
 pub mod strings;
 
 pub use client::{GatewayConnection, DEFAULT_GATEWAY_PORT};
@@ -34,4 +35,5 @@ pub use message::{
     MultiSessionError, Ping, RoomCreated, RoomInfo, SessionKeys, SessionKeysRequest,
     SubscriptionAlert, Terminate, WireMessage, MEMORYER_CLIENT_ID,
 };
+pub use rooms::{Difficulty, GameSpeed, RoomList, RoomListEntry, RoomState, ROOM_TITLE_LEN};
 pub use strings::{decode_null_terminated, encode_null_terminated, MAX_STRING_LEN};

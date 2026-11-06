@@ -95,8 +95,11 @@ All request/response/event layouts live in
   work is complete and live-proven (see above).
 
 ### Phase 2 — main room / channel UI
-- Room list (2003), user list (2010/2011), chat
-  (2012/2013/2014), whisper (2017/2018/2019), announcements.
+- Room list DONE in `o2jam-net` (`RoomList` 2003 via empty 2002:
+  full row decode incl. mode enums; Memoryer.Data fork values rule
+  — GameSpeed is ordinal there, not the shuffled Mozart mapping).
+  User list (2010/2011), chat (2012/2013/2014), whisper
+  (2017/2018/2019), announcements.
 - `CreateRoom` 2004 → 2006; room events 2005/2007/2008/2009/
   2020/2023/2025.
 - Music metadata: OJNList already parsed locally; ranking
