@@ -1980,6 +1980,125 @@ impl WireMessage for SyncCashPointResponse {
     }
 }
 
+/// First 16 wire bytes of a `SyncItemPurchase` 5001 response: the
+/// four-word wallet prefix.
+///
+/// The S→C handler (VA `0x560a40`, file `0x160a40`) reads these words
+/// first via the fixed-size reader (`0x555d20`): into `0x768b44`
+/// (file `0x160a59`), `0x768b48` (file `0x160a68`), `0x768b4c`
+/// (file `0x160a77`), `0x768b58` (file `0x160a86`). The first word is
+/// the gem slot (applied via `0x540090` to `0x77cd00+0x2c`, the same
+/// slot the `SyncCashPoint` gem word updates) and the fourth is the
+/// cash slot (applied via `0x540d00` to `0x77cd00+0x2128`, the same
+/// slot the `SyncCashPoint` cash word updates). The second word has no
+/// reader anywhere in `.text` (reserved); the third word is a
+/// shop-checked wallet word (compared against shop state at VA
+/// `0x499f26`, file `0x99f26`, and pushed for price display alongside
+/// the gem word) whose exact game meaning stays OPEN. There is no full
+/// 5001 message type: the entry list after this prefix is sized from
+/// the GLOBAL `0x77cce4`, so the body is not decodable standalone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyncItemPurchasePrefix {
+    /// Gem balance (applied via `0x540090`).
+    pub gem: i32,
+    /// Second prefix word: stored to `0x768b48`, never read (reserved).
+    pub reserved: i32,
+    /// Third prefix word: shop-checked wallet word (meaning OPEN).
+    pub wallet_word: i32,
+    /// Cash points (applied via `0x540d00`).
+    pub cash_point: i32,
+}
+
+/// Wire length of [`SyncItemPurchasePrefix`]: four `i32` words.
+const SYNC_ITEM_PURCHASE_PREFIX_LEN: usize = 16;
+
+impl SyncItemPurchasePrefix {
+    /// Parse the prefix from the front of `body`, returning value and rest.
+    ///
+    /// # Errors
+    ///
+    /// `Error::TruncatedMessage` when fewer than 16 bytes remain.
+    pub fn decode_prefix(body: &[u8]) -> Result<(Self, &[u8]), Error> {
+        if body.len() < SYNC_ITEM_PURCHASE_PREFIX_LEN {
+            return Err(Error::TruncatedMessage {
+                need: SYNC_ITEM_PURCHASE_PREFIX_LEN,
+                have: body.len(),
+            });
+        }
+        Ok((
+            Self {
+                gem: i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+                reserved: i32::from_le_bytes([body[4], body[5], body[6], body[7]]),
+                wallet_word: i32::from_le_bytes([body[8], body[9], body[10], body[11]]),
+                cash_point: i32::from_le_bytes([body[12], body[13], body[14], body[15]]),
+            },
+            &body[SYNC_ITEM_PURCHASE_PREFIX_LEN..],
+        ))
+    }
+
+    /// Append the four words in wire order.
+    pub fn encode_inner(&self, body: &mut Vec<u8>) {
+        for word in [self.gem, self.reserved, self.wallet_word, self.cash_point] {
+            body.extend_from_slice(&word.to_le_bytes());
+        }
+    }
+}
+
+/// One `SyncItemPurchase` 5001 restock pair: 8 wire bytes.
+///
+/// The packet-counted (`i32` M, file `0x160b8a`) list reads two words
+/// per entry (files `0x160bb6`/`0x160bc4`). The first word is the shop
+/// entry id, validated by `0x537e90` on `0x77ccbc` (whose `0xff`
+/// return skips the pair, file `0x160bf5`) and then resolved by
+/// `0x538240` plus item-record lookups (`0x52dba0` on `0x77b540`,
+/// with `[eax+0xa]`/`[eax+0xb]` feeding render `0x4a9b60` on
+/// `0x7795fc`). Only the LOW word of the second word is ever consumed
+/// (`movzx cx`, file `0x160bd8`); the high half is read to advance the
+/// cursor then dropped. The pair's game meaning stays OPEN.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShopRestockPair {
+    /// Shop entry id (lookup key for `0x77ccbc` / `0x77b540`).
+    pub entry_id: i32,
+    /// Low word of the second word (forwarded to lookup + render).
+    pub aux_low: u16,
+    /// High word of the second word: wire-present but unconsumed.
+    pub aux_high: u16,
+}
+
+/// Wire length of [`ShopRestockPair`]: two `i32` reads.
+const SHOP_RESTOCK_PAIR_LEN: usize = 8;
+
+impl ShopRestockPair {
+    /// Parse one pair from the front of `body`, returning value and rest.
+    ///
+    /// # Errors
+    ///
+    /// `Error::TruncatedMessage` when fewer than 8 bytes remain.
+    pub fn decode_prefix(body: &[u8]) -> Result<(Self, &[u8]), Error> {
+        if body.len() < SHOP_RESTOCK_PAIR_LEN {
+            return Err(Error::TruncatedMessage {
+                need: SHOP_RESTOCK_PAIR_LEN,
+                have: body.len(),
+            });
+        }
+        Ok((
+            Self {
+                entry_id: i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+                aux_low: u16::from_le_bytes([body[4], body[5]]),
+                aux_high: u16::from_le_bytes([body[6], body[7]]),
+            },
+            &body[SHOP_RESTOCK_PAIR_LEN..],
+        ))
+    }
+
+    /// Append the pair in wire order (high half preserved for framing).
+    pub fn encode_inner(&self, body: &mut Vec<u8>) {
+        body.extend_from_slice(&self.entry_id.to_le_bytes());
+        body.extend_from_slice(&self.aux_low.to_le_bytes());
+        body.extend_from_slice(&self.aux_high.to_le_bytes());
+    }
+}
+
 /// `CheckGiftFreePass` 5041 response: recipient lookup verdict
 /// (Memoryer's `CheckGiftFreePassResponse`; corroboration only —
 /// no `0x13b1` site exists in `.text`).
@@ -3535,6 +3654,89 @@ mod tests {
         assert_eq!(
             SyncCashPointResponse::decode_body(&body),
             Err(Error::TrailingBytes(1))
+        );
+    }
+
+    fn purchase_prefix() -> SyncItemPurchasePrefix {
+        SyncItemPurchasePrefix {
+            gem: 5,
+            reserved: 0,
+            wallet_word: 10,
+            cash_point: 6,
+        }
+    }
+
+    #[test]
+    fn sync_item_purchase_prefix_decodes_first_sixteen_bytes() {
+        let mut body = Vec::new();
+        purchase_prefix().encode_inner(&mut body);
+        body.push(0xFF);
+        let (prefix, rest) = SyncItemPurchasePrefix::decode_prefix(&body).unwrap();
+        assert_eq!(prefix, purchase_prefix());
+        assert_eq!(rest, &[0xFF]);
+    }
+
+    #[test]
+    fn sync_item_purchase_prefix_names_wallet_roles() {
+        let mut body = Vec::new();
+        purchase_prefix().encode_inner(&mut body);
+        let (prefix, rest) = SyncItemPurchasePrefix::decode_prefix(&body).unwrap();
+        assert!(rest.is_empty());
+        assert_eq!(prefix.gem, 5);
+        assert_eq!(prefix.reserved, 0);
+        assert_eq!(prefix.wallet_word, 10);
+        assert_eq!(prefix.cash_point, 6);
+    }
+
+    #[test]
+    fn sync_item_purchase_prefix_rejects_short_prefix() {
+        assert_eq!(
+            SyncItemPurchasePrefix::decode_prefix(&[0x01; 15]),
+            Err(Error::TruncatedMessage { need: 16, have: 15 })
+        );
+    }
+
+    fn restock_pair() -> ShopRestockPair {
+        ShopRestockPair {
+            entry_id: 23001,
+            aux_low: 3,
+            aux_high: 0,
+        }
+    }
+
+    #[test]
+    fn shop_restock_pair_decodes_entry_plus_split_word() {
+        let body = vec![0xD9, 0x59, 0x00, 0x00, 0x03, 0x00, 0x07, 0x00];
+        let (pair, rest) = ShopRestockPair::decode_prefix(&body).unwrap();
+        assert!(rest.is_empty());
+        assert_eq!(pair.entry_id, 23001);
+        assert_eq!(pair.aux_low, 3);
+        assert_eq!(pair.aux_high, 7);
+    }
+
+    #[test]
+    fn shop_restock_pair_round_trips_pair_list() {
+        let mut body = Vec::new();
+        restock_pair().encode_inner(&mut body);
+        ShopRestockPair {
+            entry_id: -1,
+            aux_low: 9,
+            aux_high: 8,
+        }
+        .encode_inner(&mut body);
+        let (first, rest) = ShopRestockPair::decode_prefix(&body).unwrap();
+        assert_eq!(first, restock_pair());
+        let (second, rest) = ShopRestockPair::decode_prefix(rest).unwrap();
+        assert!(rest.is_empty());
+        assert_eq!(second.aux_low, 9);
+        assert_eq!(second.aux_high, 8);
+    }
+
+    #[test]
+    fn shop_restock_pair_rejects_short_body() {
+        assert_eq!(
+            ShopRestockPair::decode_prefix(&[0x01; 7]),
+            Err(Error::TruncatedMessage { need: 8, have: 7 })
         );
     }
 
