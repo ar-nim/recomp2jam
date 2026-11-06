@@ -213,11 +213,12 @@ So a "clear X to level up" mission mode is either a server-side
 rule of a different version or a player-report mix-up with
 level-gated rooms and difficulty bands — document, don't implement.
 
-## Lifebar — PARTIAL (memory fields OPEN, server sync VERIFIED)
+## Lifebar — VERIFIED local chain (memory field + deltas + application site; server sync VERIFIED)
 
-What the exe proves vs what stays open. No life model is
-implemented in `o2jam-game` (field unconfirmed — do not add
-until the client-side field + writer are pinned).
+What the exe proves vs what stays open. The local life model is
+implemented in `o2jam-game` as `LifeBar`/`LifeDeltas` (field, delta
+sets, application site and death gate all pinned — see the
+"Life bar — VERIFIED" section below).
 
 Client UI anchors VERIFIED: `Life_gauge_right_bar.ojs` /
 `Life_gauge_left_bar.ojs` (file `0x24b1e8`/`0x24b204` → VAs
@@ -282,24 +283,48 @@ not ground truth):
   wrappers, so the life field read happens downstream —
   field offset OPEN.
 
-Client memory fields OPEN:
-- Candidate signed table at file `0x35e1a0`–`0x35ec90`
-  (175 rows × 4 × `i32`, VA `0x75e1a0`; values +30…−30,
-  contains the player-reported Bad row `(-10,−7,−5,…)` at file
-  `0x35e844`) is *unconfirmed*: no absolute reference from
-  `.text` (objdump-wide grep), so its reader — if any — goes
-  through a pointer. Dimensions unexplained (175 rows). Do
-  NOT implement from it.
-- Scorer `FUN_00570510` and per-judgement setup `FUN_0056ddf0`
-  touch score-domain accumulators only (`+0x3962`/`+0x396c`/
-  `+0x3980` words via adders `0x540900`/`0x5409f0`/`0x540a50`;
-  judgement dispatch touches only `+0x398c`/`+0x3990`/
-  `+0x1853`); no scaled-index table read found in the score
-  path. Life write site unlocated.
-- Next steps: locate the 4015 handler (peer-life store +
-  probable local-life mirror), or the SubmitScore field
-  reader; then the delta-table reader, if the candidate is
-  real, should fall out via the life field's writers.
+Client memory fields — FOUND (re-verified from bytes 2026-11-07):
+- Life field: the u16 word at game `+0x3970`, reached as word `+0x2150`
+  on the score sub-object `this+0x1820` (`0x1820 + 0x2150 = 0x3970`).
+  The earlier "no writes to `+0x3970`" negative evidence was an
+  artifact of scanning whole-object offsets: every write goes through
+  the sub-object word `+0x2150` (same pattern as `+0x396e` via
+  `+0x214e`). Reads of the absolute offset do exist (`0x17051c`,
+  `0x17093e`, `0x170967` in the scorer; the `0x17094d` compare is the
+  1000 clamp).
+- Write site: adder `0x540a80` (file `0x140a80`) — adds the i32 arg
+  into the u16 word (write `0x140a97`), clamps to 1000 when a positive
+  delta lands above 1000 (files `0x140ab6`–`0x140abf`), snaps to 0 when
+  a negative delta's u16 wrap lands above 1000 (files
+  `0x140acd`–`0x140ae0`; the wrap only happens on underflow, so the
+  effective range saturates over 0..=1000). Raw setter `0x5407b0`
+  (file `0x1407b0`) stores a u16 arg; file `0x4dae7c` pushes 1000 into
+  it on the global game object VA `0x77cd00` (bar start).
+- Per-judgement consumer: scorer `FUN_00570510` (file `0x170510`).
+  Tier arg byte 4/3/2/1 = Cool/Good/Bad/Miss (pinned by the in-branch
+  score constants 200+10X / 100+5X / +4 / −10). Each tier block reads
+  the difficulty delta field — Cool `+0xe88` (file `0x17056c`), Good
+  `+0xe8c` (`0x1705e6`), Bad `+0xe90` (`0x170806`), Miss `+0xe94`
+  (`0x170861`) — and calls adder `0x540a80` on `+0x1820` (calls
+  `0x17057c`/`0x1705f6`/`0x170816`/`0x170871`). Entry snapshot of the
+  life word (`0x17051c`) gates every tier block (tests
+  `0x170557`/`0x1705d1`/`0x1707f1`/`0x17083c`): while life reads 0,
+  counts/score/jam/combo/life all freeze and only a per-note display
+  word clears (`0x17099b`). Tail: life > 1000 → zeroed via `0x5407b0`
+  (`0x17094d`–`0x17095f`); any change fires the gauge UI event
+  (`0x17097e`–`0x170997`, event 0x66/0x12 via vtable).
+- Delta-set selection: `FUN_00570f90` (files `0x170fa2`–`0x171056`,
+  ev `feebe490…`), called at game init (difficulty store `this+0x34`
+  file `0x1701f2`, call `0x170206`) — arms Easy {+3,+2,−10,−50},
+  Normal {+2,+1,−7,−40}, Hard {+1,0,−5,−30} as i32 immediates; details
+  in the "Life bar — VERIFIED" section below. Implemented as
+  `LifeBar` + `LifeDeltas`.
+- The candidate signed table at file `0x35e1a0`–`0x35ec90` stays
+  unattributed: the verified switch uses code immediates, not that
+  table, and no `.text` reader is known for it. Do NOT implement from
+  it.
+- Next steps: locate the 4015 handler (peer-life store + probable
+  local-life mirror), or the SubmitScore field reader.
 
 ## Jam gauge — player-reported, UNVERIFIED in-exe (negative evidence recorded)
 
@@ -420,39 +445,58 @@ implements the item-text geometry data-driven (`LaneCurtain` +
 keeps the top 80%, sudden keeps the bottom 20%, dark keeps the middle
 20%, reverse-dark keeps the top and bottom 40%.
 
-## Life bar — player-reported values, NOT implemented
+## Life bar — VERIFIED (delta sets + application site; implemented as `LifeBar`)
 
-Max 1000 (possibly percent). Per-judgement deltas by difficulty,
-per player report (2026-11-07, UNVERIFIED in-exe):
+Max 1000 (u16 life word, game `+0x3970`). Per-judgement deltas by
+difficulty, VERIFIED 2026-11-07 against the shipped exe (md5
+`34b789ff557a9bf6a1f275010dcaaceb`): the difficulty switch
+`FUN_00570f90` (files `0x170fa2`–`0x171056`, ev `feebe490…`) loads one
+arm of four i32 immediates into delta fields `+0xe88`/`+0xe8c`/
+`+0xe90`/`+0xe94` (Cool/Good/Bad/Miss) at game init (difficulty store
+`this+0x34` file `0x1701f2`, setter call `0x170206`):
 
 | Judgement | Easy | Normal | Hard |
 |---|---|---|---|
 | Cool | +3 | +2 | +1 |
 | Good | +2 | +1 | 0 |
-| Bad | 0 | 0 | 0 |
+| Bad | −10 | −7 | −5 |
 | Miss | −50 | −40 | −30 |
 
-At 0 the player is dead: no more input, song ends, back to the
-waiting state. Binary note: `[3,2,1]`/`[2,1,0]` fragments exist
-in-shipped-bytes but are unattributed to any code path, and the
-unique `[-10,-7,-5]` triple contradicts Bad=no-change, so it
-belongs elsewhere until proven. No life model is implemented:
-unconfirmed behavior stays out of code.
+Byte sites per arm — Easy files `0x170fbc`/`0x170fc9`/`0x170fd6`/
+`0x170fe3`, Normal `0x170ff2`/`0x170fff`/`0x17100c`/`0x171019`, Hard
+`0x171028`/`0x171035`/`0x171042`/`0x17104f`; a difficulty outside
+0..=2 takes the fallthrough and selects nothing (`0x170fb4`).
 
-Negative evidence (objdump static analysis, same binary): no
-writes to the candidate life word (game object `+0x3970`)
-exist nowhere in `.text` — only reads — so per-judgement life
-arithmetic (`+3/+2/+1`, `−50/−40/−30`) has no in-exe application
-site. (The sibling claim once made about `+0x396e` was wrong:
-that word IS written via sub-offset `+0x214e` copies — see the
-scoring section. `+0x3970` has no such writes.) The
-`+0x3970` compare in `FUN_00570510` (file `0x57094d`) is a clamp
-against `0x3e8` (1000), not a delta. The `[-10,-7,-5]` triple
-(file `0x35e844`, VA `0x75e800`, in `.data`) sits inside a larger
-signed-i32 delta table (repeated `−30`/`−26`/`−20`/… rows) with zero
-absolute xrefs in `.text` — unattributed to any code path. Verdict:
-per-difficulty life deltas stay OPEN (counter-evidence: no write
-site; Bad=0 unconfirmed either way).
+The player report had Bad=0 — the code says −10/−7/−5. That also
+resolves the old `[-10,-7,-5]` triple mystery: the exact triple IS the
+Bad column, stored as switch immediates — the `0x35e1a0` data table
+(which merely contains a copy) stays unattributed.
+
+Application site VERIFIED (re-verified from bytes): scorer
+`FUN_00570510` (file `0x170510`) reads the tier's delta field
+(files `0x17056c`/`0x1705e6`/`0x170806`/`0x170861`) and calls adder
+`0x540a80` (files `0x17057c`/`0x1705f6`/`0x170816`/`0x170871`), which
+updates the u16 word `+0x2150` on sub-object `+0x1820` = game
+`+0x3970` with 1000-clamp on positive overflow (`0x140ab6`–`0x140abf`)
+and 0-snap on negative underflow via u16 wrap (`0x140adf`). Tail:
+life > 1000 → zeroed (`0x17094d`–`0x17095f`, setter `0x1407b0`); any
+change fires the gauge UI event (`0x17097e`–`0x170997`).
+
+Death rule VERIFIED: the scorer snapshots the life word at entry
+(`0x17051c`) and skips every tier block while it reads 0
+(`0x170557`/`0x1705d1`/`0x1707f1`/`0x17083c`) — counts, score, jam,
+combo and life all freeze; only a per-note display word clears
+(`0x17099b`). The killing judgement still applies its delta (gate is
+pre-note). Bar start VERIFIED: 1000 via setter `0x5407b0` (file
+`0x4dae7c`).
+
+Implemented as `o2jam-game::LifeBar` + `LifeDeltas` (saturation over
+0..=1000, dead gate, difficulty selection), wired into `Score::apply`
+and `Score::apply_rated`. Pill-saved Bad feeds life like a Cool —
+the dispatch calls the scorer with tier arg 4 (file `0x16e880`,
+dossier `ev_c168abac…`). The dead-state pill path is untraced (the
+pill dispatch runs upstream of the scorer); the model freezes pill
+spend too — implementation choice, not an exe claim.
 
 ## Long-note release rule — player-reported
 
