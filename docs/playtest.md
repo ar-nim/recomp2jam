@@ -89,3 +89,29 @@ with env vars and passed.
   Note: the test requires both env vars; gateway alone aborts with
   `O2JAM_LIVE_TOKEN must hold a gateway session guid`.
 - **Verdict: no regression vs the 507-passed baseline.**
+
+## Regression sweep — 2026-11-06 20:56 UTC+8 (HEAD `0e5f3ca`, tree dirty)
+
+- `cargo build --workspace --release`: clean, `exit=0`. 7 dead-code
+  warnings on the peer's unwired WIP (`live_stats` fns, `SongFlowReport`
+  peer fields).
+- `recomp2jam shots` re-ran after scene changes: only
+  `docs/screenshots/playing.png` bytes changed (peer-bar mirror paint
+  from `0e5f3ca`); `avi.png` untouched (writer skips that stem).
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  --release -p recomp2jam live_host_song_flow_against_local_gateway` →
+  **ok** (1 passed, 0.62 s) against local Memoryer 7.2.0 (`Mode=Full`).
+- `cargo test --workspace --no-fail-fast`: **600 passed, 4 failed**,
+  `exit=101`. Failures, all in `o2jam-file` (peer's uncommitted `ojn.rs`
+  rework, edited mid-run): `ojn::header_fields_parse_from_their_own_slots`,
+  `ojn::tutorial_real_header_values_parse`,
+  `ojn::old_format_levels_walk_with_exact_ranges`,
+  `tests::cross_kind_is_type_error` (`parse_ojn(b"M30\\x00....")` no longer
+  `Err(UnknownFormat)`). The 3 earlier `live_stats` rank-broadcast failures
+  (`applied.ranks.len()` 0 vs 8) were fixed by the peer mid-sweep;
+  `recomp2jam` bin ends 34 passed, 0 failed.
+- **Verdict: REGRESSION vs the baseline — suite is red (4 failures),
+  all inside concurrent uncommitted peer-mirror edits, not committed HEAD.
+  No separate HEAD-only run was taken (would require stashing the peer's
+  work). No commits, no pushes.**
