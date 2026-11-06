@@ -1987,7 +1987,7 @@ pub struct SetInfoTable {
 
 /// Decode one EUC-KR text field (`u32` byte length + bytes) at `off`;
 /// returns the text and the offset after it.
-fn read_set_info_text(bytes: &[u8], off: usize) -> Result<(String, usize), FileError> {
+fn read_table_text(bytes: &[u8], off: usize) -> Result<(String, usize), FileError> {
     let len = read_u32le(bytes, off)? as usize;
     let end = off.checked_add(4 + len).ok_or(FileError::Truncated {
         need: usize::MAX,
@@ -2027,8 +2027,8 @@ pub fn parse_set_info_table(bytes: &[u8]) -> Result<SetInfoTable, FileError> {
         if fixed[0] != expected as u32 {
             break;
         }
-        let (name, after_name) = read_set_info_text(bytes, row_end)?;
-        let (description, after_desc) = read_set_info_text(bytes, after_name)?;
+        let (name, after_name) = read_table_text(bytes, row_end)?;
+        let (description, after_desc) = read_table_text(bytes, after_name)?;
         let mut items = [0u32; SET_INFO_ITEMS];
         items.copy_from_slice(&fixed[2..7]);
         let mut stats = [0u32; SET_INFO_STATS];
@@ -2050,6 +2050,112 @@ pub fn parse_set_info_table(bytes: &[u8]) -> Result<SetInfoTable, FileError> {
         rows,
         trailer_len: bytes.len() - off,
     })
+}
+
+/// Sprite filename slots per avatar item row (variants across
+/// genders/parts; per-slot meaning TBD).
+pub const AVATAR_SPRITE_SLOTS: usize = 42;
+/// Rows start after the header (`u32` count-plus-one + zeros).
+const AVATAR_ROWS_AT: usize = 84;
+/// Fixed bytes per avatar item row before the name.
+const AVATAR_FIXED_LEN: usize = 30;
+
+/// One avatar shop item (`Itemdata_Korea.dat` row): stats plus
+/// Korean name/description plus 42 sprite filename slots. Sprite
+/// stems resolve to `.ojs` bodies in `avatar.opa` (the table spells
+/// `.oji`); per-slot selection semantics are OPEN.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AvatarItemRow {
+    /// Item id (1-based on the real file).
+    pub item_id: u32,
+    /// Item type code.
+    pub item_type: u32,
+    /// Price.
+    pub price: u32,
+    /// Raw param words (TBD).
+    pub params: [u32; 4],
+    /// Raw flag bytes (TBD).
+    pub flags: (u8, u8),
+    /// Korean item name (EUC-KR).
+    pub name: String,
+    /// Korean item description (EUC-KR).
+    pub description: String,
+    /// `(flag, filename)` sprite slots in file order.
+    pub sprites: Vec<(u8, String)>,
+}
+
+/// A parsed `Itemdata_Korea.dat` table: item rows in file order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AvatarItemTable {
+    /// Item rows in file order.
+    pub rows: Vec<AvatarItemRow>,
+}
+
+/// Parse an `Itemdata_Korea.dat` avatar-item table with exact
+/// accounting: header (`u32` rows-plus-one, zeros), then rows of
+/// 30 fixed bytes + two length-prefixed strings + 42 counted
+/// filename slots, ids 1-based in order, landing exactly at EOF
+/// (docs/file-formats/opi.md).
+pub fn parse_avatar_item_table(bytes: &[u8]) -> Result<AvatarItemTable, FileError> {
+    let mut rows = Vec::new();
+    let mut off = AVATAR_ROWS_AT;
+    while off < bytes.len() {
+        if off + AVATAR_FIXED_LEN > bytes.len() {
+            return Err(FileError::Truncated {
+                need: off + AVATAR_FIXED_LEN,
+                have: bytes.len(),
+            });
+        }
+        let item_id = read_u32le(bytes, off)?;
+        if item_id != rows.len() as u32 + 1 {
+            return Err(unknown_format(&bytes[off..off + 4]));
+        }
+        let item_type = read_u32le(bytes, off + 4)?;
+        let flag_a = bytes[off + 12];
+        let price = read_u32le(bytes, off + 13)?;
+        let params = [
+            read_u32le(bytes, off + 8)?,
+            read_u32le(bytes, off + 17)?,
+            read_u32le(bytes, off + 21)?,
+            read_u32le(bytes, off + 25)?,
+        ];
+        let flag_b = bytes[off + 29];
+        let (name, after_name) = read_table_text(bytes, off + AVATAR_FIXED_LEN)?;
+        let (description, after_desc) = read_table_text(bytes, after_name)?;
+        let mut sprites = Vec::with_capacity(AVATAR_SPRITE_SLOTS);
+        let mut cursor = after_desc;
+        for _ in 0..AVATAR_SPRITE_SLOTS {
+            if cursor + 5 > bytes.len() {
+                return Err(FileError::Truncated {
+                    need: cursor + 5,
+                    have: bytes.len(),
+                });
+            }
+            let flag = bytes[cursor];
+            let (filename, next) = read_table_text(bytes, cursor + 1)?;
+            sprites.push((flag, filename));
+            cursor = next;
+        }
+        rows.push(AvatarItemRow {
+            item_id,
+            item_type,
+            price,
+            params,
+            flags: (flag_a, flag_b),
+            name,
+            description,
+            sprites,
+        });
+        off = cursor;
+    }
+    if rows.is_empty() {
+        return Err(FileError::TooShort(bytes.len()));
+    }
+    let declared = read_u32le(bytes, 0)?;
+    if declared != rows.len() as u32 + 1 {
+        return Err(unknown_format(&bytes[..4.min(bytes.len())]));
+    }
+    Ok(AvatarItemTable { rows })
 }
 
 /// Parse a `JamTable.dat` gauge table: flat little-endian `u16`
@@ -3295,6 +3401,77 @@ mod tests {
         let table = parse_set_info_table(&blob).unwrap();
         assert_eq!(table.rows.len(), 1);
         assert_eq!(table.trailer_len, 68 + 1 + (4 + 1) + (4 + 1));
+    }
+
+    fn avatar_item_row(id: u32, name: &[u8], sprites: &[&str]) -> Vec<u8> {
+        let mut row = Vec::new();
+        row.extend_from_slice(&id.to_le_bytes());
+        row.extend_from_slice(&0x106u32.to_le_bytes());
+        row.extend_from_slice(&0u32.to_le_bytes());
+        row.push(1);
+        row.extend_from_slice(&1000u32.to_le_bytes());
+        row.extend_from_slice(&[0u8; 12]);
+        row.push(0);
+        row.extend_from_slice(&(name.len() as u32).to_le_bytes());
+        row.extend_from_slice(name);
+        row.extend_from_slice(&3u32.to_le_bytes());
+        row.extend_from_slice(b"dsc");
+        for name in sprites {
+            row.push(1);
+            row.extend_from_slice(&(name.len() as u32).to_le_bytes());
+            row.extend_from_slice(name.as_bytes());
+        }
+        row
+    }
+
+    fn avatar_item_blob(count_plus_one: u32, rows: &[Vec<u8>]) -> Vec<u8> {
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&count_plus_one.to_le_bytes());
+        blob.extend_from_slice(&[0u8; 80]);
+        for row in rows {
+            blob.extend_from_slice(row);
+        }
+        blob
+    }
+
+    fn forty_two_sprites() -> Vec<&'static str> {
+        let mut slots = vec![""; AVATAR_SPRITE_SLOTS];
+        slots[0] = "01F01001.oji";
+        slots
+    }
+
+    #[test]
+    fn avatar_items_parse_with_sprite_slots() {
+        let blob = avatar_item_blob(
+            3,
+            &[
+                avatar_item_row(1, b"hair-one", &forty_two_sprites()),
+                avatar_item_row(2, b"hair-two", &forty_two_sprites()),
+            ],
+        );
+        let table = parse_avatar_item_table(&blob).unwrap();
+        assert_eq!(table.rows.len(), 2);
+        assert_eq!(table.rows[0].item_id, 1);
+        assert_eq!(table.rows[0].item_type, 0x106);
+        assert_eq!(table.rows[0].price, 1000);
+        assert_eq!(table.rows[0].name, "hair-one");
+        assert_eq!(table.rows[0].description, "dsc");
+        assert_eq!(table.rows[0].sprites.len(), AVATAR_SPRITE_SLOTS);
+        assert_eq!(table.rows[0].sprites[0], (1, "01F01001.oji".to_owned()));
+        assert_eq!(table.rows[1].sprites[0], (1, "01F01001.oji".to_owned()));
+    }
+
+    #[test]
+    fn avatar_items_reject_count_mismatch() {
+        let blob = avatar_item_blob(9, &[avatar_item_row(1, b"a", &forty_two_sprites())]);
+        assert!(parse_avatar_item_table(&blob).is_err());
+    }
+
+    #[test]
+    fn avatar_items_reject_truncated_row() {
+        let mut blob = avatar_item_blob(2, &[avatar_item_row(1, b"a", &forty_two_sprites())]);
+        blob.truncate(blob.len() - 10);
+        assert!(parse_avatar_item_table(&blob).is_err());
     }
 
     #[test]
