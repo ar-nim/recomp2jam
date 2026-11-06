@@ -113,8 +113,11 @@ impl ScreenGame {
     }
 
     /// Load a chart's onsets (with key-sound ids) into the highway.
+    /// The selected chart's difficulty re-applies to the fresh
+    /// [`LivePlay`] (see [`Self::apply_life_difficulty`]).
     pub fn load_chart(&mut self, onsets: Vec<(u8, u64, u32)>) {
         self.playing = LivePlay::new(&onsets);
+        self.apply_life_difficulty();
     }
 
     /// Stage real note/key art into the highway paint (procedural
@@ -202,10 +205,24 @@ impl ScreenGame {
     }
 
     /// Remember the host song choice (`SetRoomMusic` 4000 body);
-    /// Waiting paints its title and difficulty panel.
+    /// Waiting paints its title and difficulty panel, and the chosen
+    /// chart's difficulty byte selects the playing life-bar deltas.
     pub fn set_selected_music(&mut self, selection: SetRoomMusic) -> &mut Self {
         self.selected_music = Some(selection);
+        self.apply_life_difficulty();
         self
+    }
+
+    /// Seed the playing life bar from the selected chart's difficulty
+    /// (Ex/Nx/Hx → Easy/Normal/Hard deltas per `FUN_00570f90`); codes
+    /// without a verified arm (Rx, unknown) keep the current set. Runs
+    /// on both setup points — chart load and song selection — so the
+    /// flow order never matters.
+    fn apply_life_difficulty(&mut self) {
+        let Some(selection) = self.selected_music.as_ref() else {
+            return;
+        };
+        self.playing.set_life_difficulty(selection.difficulty);
     }
 
     /// Stage song catalog titles (`OJNList.dat` order, read-only copy).
@@ -1625,5 +1642,64 @@ mod game_tests {
         let layout = AvatarLayout::for_frame(800, 600);
         assert!(white_near(&buf, 800, 600, layout.song_origin));
         assert!(white_near(&buf, 800, 600, layout.strip_title_origin));
+    }
+
+    /// Paint Playing past the (5000 ms) note's bad window, rating the
+    /// timeout Miss on the explicit clock.
+    fn paint_playing_after_timeout_miss(game: &mut ScreenGame) -> Vec<u32> {
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            5000 + 25 + 1,
+        );
+        buf
+    }
+
+    #[test]
+    fn selected_chart_difficulty_drains_the_avatar_life_bar() {
+        use crate::playing::AvatarLayout;
+        // Chart load before selection: the choice still drives deltas.
+        let mut game = ScreenGame::new();
+        game.load_chart(vec![(2, 5000, 7)]);
+        game.set_selected_music(waiting_song_selection()); // difficulty 2 = Hard
+        walk_to_playing(&mut game);
+        let buf = paint_playing_after_timeout_miss(&mut game);
+        // Hard Miss drains 30 (Easy would drain 50); the bar paints
+        // the live 970/1000 fill (top row empty, rows below green).
+        assert_eq!(game.playing.score().life.life(), 1000 - 30);
+        let bar = AvatarLayout::for_frame(800, 600).life_bar;
+        assert_eq!(
+            buf[bar.y as usize * 800 + bar.x as usize],
+            pack_xrgb(0x30, 0x10, 0x10)
+        );
+        assert_eq!(
+            buf[(bar.y + 1) as usize * 800 + bar.x as usize],
+            pack_xrgb(0x20, 0xE0, 0x20)
+        );
+    }
+
+    #[test]
+    fn selection_before_chart_load_still_sets_life_difficulty() {
+        let mut game = ScreenGame::new();
+        game.set_selected_music(waiting_song_selection()); // difficulty 2 = Hard
+        game.load_chart(vec![(2, 5000, 7)]);
+        walk_to_playing(&mut game);
+        let _ = paint_playing_after_timeout_miss(&mut game);
+        assert_eq!(game.playing.score().life.life(), 1000 - 30);
+    }
+
+    #[test]
+    fn unselected_charts_drain_on_the_easy_default() {
+        let mut game = ScreenGame::new();
+        game.load_chart(vec![(2, 5000, 7)]);
+        walk_to_playing(&mut game);
+        let _ = paint_playing_after_timeout_miss(&mut game);
+        // No selection: the bar keeps the exe's init set (difficulty
+        // byte defaults to Easy, file `0x9515c`).
+        assert_eq!(game.playing.score().life.life(), 1000 - 50);
     }
 }

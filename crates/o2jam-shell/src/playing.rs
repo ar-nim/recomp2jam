@@ -12,8 +12,9 @@
 use crate::avatar::AvatarFigure;
 use o2jam_game::{
     lane_effect::{lane_map_for_modifier_byte, SkillRing},
-    CoolStreak, Judgement, LaneMap, LongTail, MeasureReshuffle, PeerBars, PillStock, QueueEvent,
-    RankDelivery, Score, TimingWindows, JAM_PROGRESS_PER_LEVEL, LIFE_MAX, PEER_SLOT_COUNT,
+    CoolStreak, Judgement, LaneMap, LifeBar, LongTail, MeasureReshuffle, PeerBars, PillStock,
+    QueueEvent, RankDelivery, Score, TimingWindows, JAM_PROGRESS_PER_LEVEL, LIFE_MAX,
+    PEER_SLOT_COUNT,
 };
 use o2jam_net::GameSpeed;
 use o2jam_render::{
@@ -1062,6 +1063,18 @@ impl LivePlay {
         self.curtain = curtain;
     }
 
+    /// Select the life-bar delta set from the playing chart's difficulty
+    /// (0 = Easy, 1 = Normal, 2 = Hard — VERIFIED switch `FUN_00570f90`).
+    /// Codes outside 0..=2 (e.g. Rx) select nothing and keep the current
+    /// set, like the exe's switch fallthrough (file `0x170fb4`). The bar
+    /// stays full: only judgements move it (setter `0x5407b0` pushes
+    /// 1000 at init, file `0x4dae7c`).
+    pub fn set_life_difficulty(&mut self, difficulty: u8) {
+        if let Some(bar) = LifeBar::new(difficulty) {
+            self.score.life = bar;
+        }
+    }
+
     /// Display-only avatar scene captions (level, song, volume).
     #[must_use]
     pub fn scene(&self) -> &AvatarScene {
@@ -1842,7 +1855,7 @@ impl AvatarScene {
     ) {
         let layout = AvatarLayout::for_frame(frame.w, frame.h);
         Self::paint_caption_line(frame, layout.level_origin, &self.player_line());
-        Self::paint_life_bar(frame, &layout.life_bar);
+        Self::paint_life_bar(frame, &layout.life_bar, score.life.life());
         if let Some(figure) = avatar {
             figure.paint(frame, layout.figure_origin.0, layout.figure_origin.1);
         }
@@ -1874,15 +1887,29 @@ impl AvatarScene {
         draw_text(frame, origin.0, origin.1, text, AVATAR_TEXT);
     }
 
-    /// Life-bar shell plus fill. The local life model is OPEN
-    /// (`docs/gameplay.md`: no client-side field pinned), so the bar
-    /// shows full until the model lands. Inks mirror the peer bars.
-    fn paint_life_bar(frame: &mut Frame<'_>, bar: &Rect) {
+    /// Life-bar shell plus fill from the live [`LifeBar`] (VERIFIED
+    /// 7.55 local life: per-difficulty deltas drain on Bad/Miss and
+    /// fill on Cool/Good; the dead gate freezes it at 0 —
+    /// `docs/gameplay.md`). The fill rises bottom-up like the peer
+    /// bars over the same inks; the empty shell stays when dead.
+    fn paint_life_bar(frame: &mut Frame<'_>, bar: &Rect, life: u16) {
         if bar.w == 0 || bar.h == 0 {
             return;
         }
         fill_rect(frame, bar, AVATAR_LIFE_EMPTY);
-        fill_rect(frame, bar, AVATAR_LIFE_FULL);
+        let filled = u32::from(life.min(LIFE_MAX)) * bar.h / u32::from(LIFE_MAX);
+        if filled > 0 {
+            fill_rect(
+                frame,
+                &Rect {
+                    x: bar.x,
+                    y: bar.y + (bar.h - filled) as i32,
+                    w: bar.w,
+                    h: filled,
+                },
+                AVATAR_LIFE_FULL,
+            );
+        }
     }
 
     /// TIME progress shell plus fill from the song clock; shell only
@@ -1980,6 +2007,35 @@ mod live_play_tests {
         live.advance_to(1000 + 25 + 1);
         assert_eq!(live.score().counts[3], 1);
         assert_eq!(live.score().points, 0);
+    }
+
+    #[test]
+    fn life_difficulty_selects_the_verified_drain_rate() {
+        let mut easy = LivePlay::new(&[(0, 1000, 7)]);
+        easy.advance_to(1000 + 25 + 1);
+        assert_eq!(easy.score().life.life(), LIFE_MAX - 50);
+        let mut hard = LivePlay::new(&[(0, 1000, 7)]);
+        hard.set_life_difficulty(2);
+        hard.advance_to(1000 + 25 + 1);
+        assert_eq!(hard.score().life.life(), LIFE_MAX - 30);
+    }
+
+    #[test]
+    fn selected_life_deltas_refill_on_cool() {
+        let mut live = LivePlay::new(&[(0, 1000, 7), (0, 2000, 7)]);
+        live.set_life_difficulty(1); // Normal: Cool +2, Miss −40
+        live.advance_to(1000 + 25 + 1);
+        assert_eq!(live.score().life.life(), LIFE_MAX - 40);
+        live.strike_lane(0, 2000);
+        assert_eq!(live.score().life.life(), LIFE_MAX - 40 + 2);
+    }
+
+    #[test]
+    fn unknown_life_difficulty_keeps_the_current_set() {
+        let mut live = LivePlay::new(&[(0, 1000, 7)]);
+        live.set_life_difficulty(3); // Rx: switch selects nothing (0x170fb4)
+        live.advance_to(1000 + 25 + 1);
+        assert_eq!(live.score().life.life(), LIFE_MAX - 50);
     }
 
     #[test]
@@ -3110,6 +3166,17 @@ mod avatar_scene_tests {
         w: usize,
         h: usize,
     ) -> Vec<u32> {
+        paint_score_scene(scene, avatar, &Score::default(), w, h)
+    }
+
+    /// Paint with an explicit score (drives the live life-bar fill).
+    fn paint_score_scene(
+        scene: &AvatarScene,
+        avatar: Option<&AvatarFigure>,
+        score: &Score,
+        w: usize,
+        h: usize,
+    ) -> Vec<u32> {
         let mut buf = vec![0u32; w * h];
         scene.paint(
             &mut Frame {
@@ -3118,7 +3185,7 @@ mod avatar_scene_tests {
                 h,
             },
             avatar,
-            &Score::default(),
+            score,
             0,
             Some(3000),
         );
@@ -3221,6 +3288,31 @@ mod avatar_scene_tests {
         let buf = paint_scene(&AvatarScene::default(), None, 800, 600);
         assert_eq!(buf[56 * 800 + 340], LIFE_FILL);
         assert_eq!(layout.life_bar, AVATAR_LIFE_NATIVE);
+    }
+
+    #[test]
+    fn life_bar_fill_tracks_live_life() {
+        let mut score = Score::default();
+        score.apply(Judgement::Miss); // Easy miss: 1000 - 50
+        let buf = paint_score_scene(&AvatarScene::default(), None, &score, 800, 600);
+        // 950/1000 fills 11 of the 12 shell rows: the top row empties.
+        assert_eq!(buf[56 * 800 + 340], AVATAR_LIFE_EMPTY);
+        assert_eq!(buf[57 * 800 + 340], LIFE_FILL);
+    }
+
+    #[test]
+    fn dead_life_bar_freezes_at_the_empty_shell() {
+        let mut score = Score::default();
+        for _ in 0..20 {
+            score.apply(Judgement::Miss); // Easy: 20 misses kill the bar
+        }
+        score.apply(Judgement::Cool); // dead gate freezes the bar at 0
+        assert!(score.life.is_dead());
+        let buf = paint_score_scene(&AvatarScene::default(), None, &score, 800, 600);
+        let bar = AvatarLayout::for_frame(800, 600).life_bar;
+        for row in bar.y..bar.y + bar.h as i32 {
+            assert_eq!(buf[row as usize * 800 + bar.x as usize], AVATAR_LIFE_EMPTY);
+        }
     }
 
     #[test]
