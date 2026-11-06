@@ -57,8 +57,8 @@ enum Command {
         /// Channel id to enter (needs --gateway-id too).
         #[arg(long, requires = "gateway_id")]
         channel_id: Option<i16>,
-        /// Fetch character info after authorizing.
-        #[arg(long)]
+        /// Fetch character info after channel login (needs --channel-id too).
+        #[arg(long, requires = "channel_id")]
         character: bool,
     },
     /// Stub gameplay entry point (autoplay with null backend for now).

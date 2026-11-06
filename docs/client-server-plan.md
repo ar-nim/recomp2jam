@@ -46,7 +46,7 @@ All request/response/event layouts live in
 = wire order). Minimum viable online session, in order:
 
 ### Phase 1 — login + channel (offline-capable shell exists)
-- TCP connect to Memoryer gateway (`15010`), framing codec — DONE in `o2jam-net` (`GatewayConnection::{send_frame,next_frame,exchange,await_response}`, loopback-tested; live interop still open). Login flow DONE in the binary (`recomp2jam connect`: authorize → channel list → optional channel login, e2e-tested against a fake gateway; no live Memoryer contact yet).
+- TCP connect to Memoryer gateway (`15010`), framing codec — DONE in `o2jam-net` (`GatewayConnection::{send_frame,next_frame,exchange,await_response}`) and LIVE-PROVEN 2026-11-06 against a local Memoryer 7.2.0 gateway (length-includes-prefix fix came from that session). Login flow DONE in the binary (`recomp2jam connect`: authorize → channel list → channel login → character, fake-gateway e2e-tested AND live-proven: `authorize: Success`, 10 channels, `channel: Success (unrestricted)`, `character: tester (Lv 1)`).
 - `Authorize` 1000 C→S payload (Memoryer field order): u8 `1`, relayKey1/2 i32,
   public+local endpoints, i32 userId, str token, gender,
   u8 `1`, str clientId. Handle 1001/1003/1005/1008, 50/51/52.
@@ -92,7 +92,7 @@ All request/response/event layouts live in
   (`CharacterInfo`: stats, 17-slot equipment table, inventory,
   gift boxes, cash/penalties; empty 2000 request) and wired to
   `recomp2jam connect --character` (e2e-tested). Phase 1 message
-  work is complete; only live-server proof stays open.
+  work is complete and live-proven (see above).
 
 ### Phase 2 — main room / channel UI
 - Room list (2003), user list (2010/2011), chat

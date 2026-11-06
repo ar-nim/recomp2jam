@@ -1,12 +1,13 @@
 //! Length-framed `CPacket_Str` messages.
 //!
 //! Wire layout: `[u16 len][u16 id][body...]`, all little-endian.
-//! `len` covers the bytes after the length field (id + body).
-//! The exe pins id-at-offset-2 (`FUN_005a0550` file `0x1a0550`);
-//! the len-after-header semantics match the in-repo UDP relay
-//! precedent (`UdpRelayFrameCodec`: `innerSize` covers the
-//! 4-byte command + body), so the convention is corroborated
-//! in-repo, with live interop as the final check.
+//! `len` is the TOTAL frame length including the length field
+//! itself (so an empty body frames as `04 00 <id>`). The exe pins
+//! id-at-offset-2 (`FUN_005a0550` file `0x1a0550`); the
+//! length-includes-prefix semantics are server-verified — Encore's
+//! `SizePrefixedMessageFramer` writes `payload + prefix` and reads
+//! `size - prefix`, and a live Memoryer gateway hung waiting for
+//! the 2 bytes our old after-header lengths omitted.
 
 use super::error::Error;
 
@@ -28,7 +29,7 @@ pub struct Frame {
 #[must_use]
 pub fn encode_frame(id: u16, body: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(HEADER_LEN + body.len());
-    let len = (ID_OFFSET + body.len()) as u16;
+    let len = (HEADER_LEN + body.len()) as u16;
     out.extend_from_slice(&len.to_le_bytes());
     out.extend_from_slice(&id.to_le_bytes());
     out.extend_from_slice(body);
@@ -54,10 +55,10 @@ fn split_frame(buffer: &[u8]) -> Result<(Frame, usize), Error> {
         });
     }
     let len = u16::from_le_bytes([buffer[0], buffer[1]]) as usize;
-    if len < ID_OFFSET {
+    if len < HEADER_LEN {
         return Err(Error::MissingCommand(len));
     }
-    let total = ID_OFFSET + len;
+    let total = len;
     if buffer.len() < total {
         return Err(Error::TruncatedBody {
             need: total,
@@ -93,11 +94,11 @@ impl FrameSplitter {
                 return Ok(frames);
             }
             let len = u16::from_le_bytes([self.buffer[0], self.buffer[1]]) as usize;
-            if len < ID_OFFSET {
+            if len < HEADER_LEN {
                 self.buffer.clear();
                 return Err(Error::MissingCommand(len));
             }
-            let total = ID_OFFSET + len;
+            let total = len;
             if self.buffer.len() < total {
                 return Ok(frames);
             }
@@ -115,13 +116,13 @@ mod tests {
     #[test]
     fn encodes_id_at_offset_two_little_endian() {
         let bytes = encode_frame(1004, &[0x01, 0x00]);
-        assert_eq!(bytes, vec![0x04, 0x00, 0xEC, 0x03, 0x01, 0x00]);
+        assert_eq!(bytes, vec![0x06, 0x00, 0xEC, 0x03, 0x01, 0x00]);
     }
 
     #[test]
     fn round_trips_empty_body() {
         let bytes = encode_frame(1002, &[]);
-        assert_eq!(bytes, vec![0x02, 0x00, 0xEA, 0x03]);
+        assert_eq!(bytes, vec![0x04, 0x00, 0xEA, 0x03]);
         assert_eq!(
             decode_frame(&bytes),
             Ok(Frame {
@@ -134,7 +135,7 @@ mod tests {
     #[test]
     fn rejects_truncated_header() {
         assert_eq!(
-            decode_frame(&[0x04, 0x00, 0xEC]),
+            decode_frame(&[0x06, 0x00, 0xEC]),
             Err(Error::TruncatedHeader { need: 4, have: 3 })
         );
     }
@@ -142,7 +143,7 @@ mod tests {
     #[test]
     fn rejects_truncated_body() {
         assert_eq!(
-            decode_frame(&[0x04, 0x00, 0xEC, 0x03, 0x01]),
+            decode_frame(&[0x06, 0x00, 0xEC, 0x03, 0x01]),
             Err(Error::TruncatedBody { need: 6, have: 5 })
         );
     }
