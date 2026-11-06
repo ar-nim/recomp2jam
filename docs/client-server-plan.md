@@ -52,6 +52,17 @@ All request/response/event layouts live in
   u8 `1`, str clientId (exe strings + Memoryer
   `AuthorizeRequest`; RSA `user:authorize` params — see
   lifecycle doc). Handle 1001/1003/1005/1008, 50/51/52.
+- BLOCKED on string wire format (exe forensics so far):
+  in-memory strings are null-terminated (`strlen`-equivalent
+  at file `0x15f1bc0`, alignment-optimized scan), packet
+  builder appends counted bytes (`0x555d70`/`0x5f2450`);
+  room strings carry `maxLength` 22/12 (fixed buffers?),
+  auth strings carry none (variable-length?); prefix size
+  and charset (presumed CP949 for non-ASCII) unconfirmed.
+  Candidate sites: 1000 send wrapper file `0x147451c`,
+  CreateRoom builder file `0x1436462` (`SetID` 2004 inline).
+  No `Authorize` implementation until the format is pinned —
+  guessing the codec would break interop silently.
 - `GetChannelList` 1002 → 1003; `ChannelLogin` 1004 (i16
   gatewayId/channelId) → 1005; `SessionKeys` 1007/1008.
 - `GetCharacterInfo` 2000 → 2001 (equipment codec:

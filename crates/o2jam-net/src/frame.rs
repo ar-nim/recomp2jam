@@ -1,11 +1,12 @@
 //! Length-framed `CPacket_Str` messages.
 //!
 //! Wire layout: `[u16 len][u16 id][body...]`, all little-endian.
-//! `len` counts the bytes after the length field (id + body),
-//! matching the in-repo UDP relay precedent (`innerSize` style).
-//! The exe pins id-at-offset-2 (`FUN_005a0550`); the length
-//! semantics follow Memoryer convention and need a live-server
-//! check before we call framing VERIFIED.
+//! `len` covers the bytes after the length field (id + body).
+//! The exe pins id-at-offset-2 (`FUN_005a0550` file `0x1a0550`);
+//! the len-after-header semantics match the in-repo UDP relay
+//! precedent (`UdpRelayFrameCodec`: `innerSize` covers the
+//! 4-byte command + body), so the convention is corroborated
+//! in-repo, with live interop as the final check.
 
 use super::error::Error;
 
