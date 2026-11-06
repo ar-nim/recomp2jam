@@ -313,11 +313,14 @@ pub const OJN_MID_FOOTER_LEN: usize = 40;
 /// One middle-table-1 entry: song id plus a group word.
 ///
 /// The real 7.55 file holds 204 entries: group 1 covers newer ids
-/// (887..774), group 2 older ids (506..100). The loader files the
-/// three trailing words into song-record slots `+0x144/+0x148/+0x14c`
-/// (stride `0x1b4`; stores at file offsets `0x7a390`/`0x7a3ed`/`0x7a44a`),
-/// but no song-base read of those slots was found in the client —
-/// purpose stays OPEN.
+/// (887..774, 108 rows), group 2 older ids (506..100, 96 rows). The
+/// loader files the three trailing words into song-record slots
+/// `+0x144/+0x148/+0x14c` (stride `0x1b4`; stores at file offsets
+/// `0x7a390`/`0x7a3ed`/`0x7a44a`). A full-binary objdump survey finds
+/// no song-stride (`imul 0x1b4`) read of these slots — the only indexed
+/// accesses are the three stores, and same-displacement hits elsewhere
+/// use other strides on unrelated structs — so the group word is
+/// write-only through the song vector and its meaning stays OPEN.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OjnMidGroupEntry {
     /// Song id this entry belongs to.
@@ -386,7 +389,15 @@ pub struct OjnMidParamEntry {
 /// The real 7.55 file holds 120 triples: triple 0 is the
 /// `(120, 246, 2)` header-ish word set, triples 1..119 run in
 /// 39/40/40 groups over one shared 40-song id set (mostly
-/// `(0/1, id, 0/1/2)` shapes). Field semantics are OPEN.
+/// `(0/1, id, 0/1/2)` shapes; the head triple's `b = 246` completes the
+/// 40-set). The loader files each triple into song-record slots
+/// `+0x184/+0x188/+0x18c` (stride `0x1b4`; stores at file offsets
+/// `0x7aa6d`/`0x7aacd`/`0x7ab2d`), keyed by song-id match. A full-binary
+/// objdump survey finds no song-stride (`imul 0x1b4`) read of these
+/// slots — the only indexed accesses are the three stores, and
+/// same-displacement hits elsewhere use `shl 4` (x16) strides on
+/// unrelated structs — so all three words are write-only through the
+/// song vector and their semantics stay OPEN.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OjnMidTriple {
     /// First word.
@@ -425,7 +436,8 @@ pub struct OjnMidTagEntry {
 /// the song-wheel list bucket, table 2's first word is a selection
 /// class, table 3's first word is a nonzero-gated feature switch.
 /// Table 1 groups, table 2's second word, table 3's second word and
-/// anchor, and all of table 4 stay OPEN (stored, never read back).
+/// anchor, and all of table 4 stay OPEN (table 1 and table 4 are
+/// write-only: stored by the loader, never read back — see entry docs).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OjnMidRegion {
     /// Table 1 group entries in file order.
