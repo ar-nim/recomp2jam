@@ -1148,46 +1148,94 @@ impl WireMessage for EquipItem {
     }
 }
 
-/// `EquipItem` 5005 response: the server's equip verdict.
+/// `EquipItem` 5005 response: result plus a four-word success tail.
 ///
-/// Body is one little-endian `i32`. The S→C handler (dispatched by
-/// `cmpl $0x138d` / `je 0x4a5fe8`, VAs `0x4a5570`/`0x4a5586`,
-/// files `0xa5570`/`0xa5586`) reads a single `i32` (VA `0x4a5fe8`,
-/// file `0xa5fe8`): nonzero routes to the equip-apply path
-/// (`0x4a3c80`, file `0xa3c80`), zero to the remove path
-/// (`0x4a3dc0`).
+/// Body is one little-endian `i32` result; when it is `0` four more
+/// `i32` words follow (20 B total), otherwise the body ends (4 B).
+/// The canonical S→C handler (VA `0x560cf0`, file `0x160cf0`; index 2
+/// of the `0x138b`-based receive switch, stub VA `0x558853`, file
+/// `0x158853`) reads the first word via the fixed-size reader
+/// (`0x555d20`), returns at once unless it is `0`, then reads four
+/// more words the same way and forwards the first and third tail
+/// words with opcode `0x138d` and `0x12` into the UI event queue
+/// (`0x478d50`, `ecx 0x762b44`). Result `1` and any other nonzero
+/// value exit with no further reads. The shop-context `0x138d`
+/// consumer (VA `0x4a5fe8`, file `0xa5fe8`, reached via
+/// `cmpl $0x138d` at VAs `0x4a5570`/`0x4a5586`) works on the
+/// already-decoded word (lookup via `0x537b80`, table `0x64ca38`)
+/// and is not a wire read. Tail word roles stay OPEN.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EquipItemResponse {
-    /// Echoed item id; `0` means the remove/failure path.
-    pub item_id: i32,
+    /// Equip verdict (`0` carries the success tail).
+    pub result: i32,
+    /// Four tail words; `Some` exactly when `result == 0`.
+    pub tail: Option<[i32; 4]>,
 }
 
-/// Body length of [`EquipItemResponse`]: one `i32` word.
-const EQUIP_ITEM_RESPONSE_BODY_LEN: usize = 4;
+/// Body length of a bare [`EquipItemResponse`] result.
+const EQUIP_ITEM_RESPONSE_MIN_LEN: usize = 4;
+/// Body length of an [`EquipItemResponse`] success (result + tail).
+const EQUIP_ITEM_RESPONSE_FULL_LEN: usize = 20;
+
+/// Read one little-endian `i32` at `body[offset..offset + 4]`.
+fn read_word_at(body: &[u8], offset: usize) -> i32 {
+    i32::from_le_bytes([
+        body[offset],
+        body[offset + 1],
+        body[offset + 2],
+        body[offset + 3],
+    ])
+}
 
 impl WireMessage for EquipItemResponse {
     const COMMAND: u16 = 5005;
 
     fn encode_body(&self) -> Vec<u8> {
-        let mut body = Vec::with_capacity(EQUIP_ITEM_RESPONSE_BODY_LEN);
-        body.extend_from_slice(&self.item_id.to_le_bytes());
+        let mut body = Vec::with_capacity(EQUIP_ITEM_RESPONSE_FULL_LEN);
+        body.extend_from_slice(&self.result.to_le_bytes());
+        if let Some(tail) = &self.tail {
+            for word in tail {
+                body.extend_from_slice(&word.to_le_bytes());
+            }
+        }
         body
     }
 
     fn decode_body(body: &[u8]) -> Result<Self, Error> {
-        if body.len() < EQUIP_ITEM_RESPONSE_BODY_LEN {
+        if body.len() < EQUIP_ITEM_RESPONSE_MIN_LEN {
             return Err(Error::TruncatedMessage {
-                need: EQUIP_ITEM_RESPONSE_BODY_LEN,
+                need: EQUIP_ITEM_RESPONSE_MIN_LEN,
                 have: body.len(),
             });
         }
-        if body.len() > EQUIP_ITEM_RESPONSE_BODY_LEN {
+        let result = read_word_at(body, 0);
+        if result != 0 {
+            if body.len() > EQUIP_ITEM_RESPONSE_MIN_LEN {
+                return Err(Error::TrailingBytes(
+                    body.len() - EQUIP_ITEM_RESPONSE_MIN_LEN,
+                ));
+            }
+            return Ok(Self { result, tail: None });
+        }
+        if body.len() < EQUIP_ITEM_RESPONSE_FULL_LEN {
+            return Err(Error::TruncatedMessage {
+                need: EQUIP_ITEM_RESPONSE_FULL_LEN,
+                have: body.len(),
+            });
+        }
+        if body.len() > EQUIP_ITEM_RESPONSE_FULL_LEN {
             return Err(Error::TrailingBytes(
-                body.len() - EQUIP_ITEM_RESPONSE_BODY_LEN,
+                body.len() - EQUIP_ITEM_RESPONSE_FULL_LEN,
             ));
         }
         Ok(Self {
-            item_id: i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+            result,
+            tail: Some([
+                read_word_at(body, 4),
+                read_word_at(body, 8),
+                read_word_at(body, 12),
+                read_word_at(body, 16),
+            ]),
         })
     }
 }
@@ -1833,9 +1881,18 @@ impl WireMessage for SyncFreePassResponse {
     }
 }
 
-/// `SyncCashPoint` 5029 response: wallet refresh after a web
-/// coupon/cash charge (Memoryer's `SyncCashPointResponse`;
-/// corroboration only — no `0x13a5` site exists in `.text`).
+/// `SyncCashPoint` 5029 response: two-word wallet refresh.
+///
+/// Body is two little-endian `i32` words. The S→C handler
+/// (VA `0x563900`, file `0x163900`; index 26 of the `0x138b`-based
+/// receive switch, stub VA `0x5588d7`, file `0x1588d7`) reads both
+/// words via the fixed-size reader (`0x555d20`) into `0x768b44` and
+/// `0x768b58`, then applies the first via `0x540090` (writes
+/// `0x77cd00+0x2c`, the same slot the `SellItem` success word and
+/// the 5001 prefix words update) and the second via `0x540d00`
+/// (writes `0x77cd00+0x2128`, inside the wallet block copied at
+/// VA `0x4e93d1`, file `0xe93d1`). Field names follow Memoryer's
+/// `SyncCashPointResponse` order (`gem`, `cash_point`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SyncCashPointResponse {
     /// Gem balance.
@@ -2817,7 +2874,14 @@ mod tests {
 
     #[test]
     fn equip_item_rejects_wrong_command() {
-        let frame = decode_frame(&EquipItemResponse { item_id: 5 }.encode()).unwrap();
+        let frame = decode_frame(
+            &EquipItemResponse {
+                result: 5,
+                tail: None,
+            }
+            .encode(),
+        )
+        .unwrap();
         assert_eq!(
             EquipItem::decode_frame(&frame),
             Err(Error::UnknownCommand(5005))
@@ -2825,34 +2889,78 @@ mod tests {
     }
 
     #[test]
-    fn equip_item_response_round_trips_through_frame() {
-        let response = EquipItemResponse { item_id: 23001 };
+    fn equip_item_response_success_carries_four_word_tail() {
+        let response = EquipItemResponse {
+            result: 0,
+            tail: Some([1, 2, 3, 4]),
+        };
+        assert_eq!(
+            response.encode(),
+            vec![
+                0x18, 0x00, 0x8D, 0x13, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00,
+                0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00
+            ]
+        );
         let frame = decode_frame(&response.encode()).unwrap();
         assert_eq!(frame.id, 5005);
         assert_eq!(EquipItemResponse::decode_frame(&frame), Ok(response));
     }
 
     #[test]
-    fn equip_item_response_zero_item_decodes() {
-        let response = EquipItemResponse::decode_body(&[0x00, 0x00, 0x00, 0x00]).unwrap();
-        assert_eq!(response.item_id, 0);
+    fn equip_item_response_error_decodes_result_only() {
+        let response = EquipItemResponse::decode_body(&[0x01, 0x00, 0x00, 0x00]).unwrap();
+        assert_eq!(response.result, 1);
+        assert_eq!(response.tail, None);
     }
 
     #[test]
-    fn equip_item_response_rejects_short_body() {
+    fn equip_item_response_rejects_tail_on_error() {
+        let body = vec![0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00];
         assert_eq!(
-            EquipItemResponse::decode_body(&[0x00, 0x00]),
-            Err(Error::TruncatedMessage { need: 4, have: 2 })
+            EquipItemResponse::decode_body(&body),
+            Err(Error::TrailingBytes(4))
         );
     }
 
     #[test]
-    fn equip_item_response_rejects_trailing_bytes() {
-        let mut body = EquipItemResponse { item_id: 1 }.encode_body();
+    fn equip_item_response_rejects_trailing_success() {
+        let mut body = EquipItemResponse {
+            result: 0,
+            tail: Some([1, 2, 3, 4]),
+        }
+        .encode_body();
         body.push(0xFF);
         assert_eq!(
             EquipItemResponse::decode_body(&body),
             Err(Error::TrailingBytes(1))
+        );
+    }
+
+    #[test]
+    fn equip_item_response_rejects_wrong_command() {
+        let frame = decode_frame(
+            &EquipItem {
+                slot: 0,
+                item_id: 1,
+            }
+            .encode(),
+        )
+        .unwrap();
+        assert_eq!(
+            EquipItemResponse::decode_frame(&frame),
+            Err(Error::UnknownCommand(5004))
+        );
+    }
+
+    #[test]
+    fn equip_item_response_rejects_short_success() {
+        assert_eq!(
+            EquipItemResponse::decode_body(&[0x00, 0x00, 0x00]),
+            Err(Error::TruncatedMessage { need: 4, have: 3 })
+        );
+        assert_eq!(
+            EquipItemResponse::decode_body(&[0x00, 0x00, 0x00, 0x00, 0x01]),
+            Err(Error::TruncatedMessage { need: 20, have: 5 })
         );
     }
 
@@ -3296,6 +3404,20 @@ mod tests {
         assert_eq!(
             SyncCashPointResponse::decode_body(&[0x00; 7]),
             Err(Error::TruncatedMessage { need: 8, have: 7 })
+        );
+    }
+
+    #[test]
+    fn sync_cash_point_response_rejects_trailing_bytes() {
+        let mut body = SyncCashPointResponse {
+            gem: 5,
+            cash_point: 6,
+        }
+        .encode_body();
+        body.push(0xFF);
+        assert_eq!(
+            SyncCashPointResponse::decode_body(&body),
+            Err(Error::TrailingBytes(1))
         );
     }
 

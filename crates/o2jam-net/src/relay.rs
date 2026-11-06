@@ -3,7 +3,18 @@
 //! Relay TCP carries [`RelayCommand`] frames with the same
 //! length-prefixed `CPacket_Str` framing as the game gateway
 //! (`[u16 len][u16 id][body]`, `len` counts the whole frame; id at
-//! buffer offset 2). UDP is the primary Live path: each datagram is
+//! buffer offset 2). The shared `SetID` writer is byte-verified:
+//! the op-5 ctor at file `0xea4e0` pushes 5 and calls the same
+//! `SetID` function at file `0x1a0550` as the gateway path
+//! (call site file `0xea4f4`; id-at-offset-2 pinned by
+//! `FUN_005a0550`, length-includes-prefix server-verified in
+//! `crate::frame`). Relay op 5 on TCP is therefore the 66-byte
+//! frame `42 00 05 00` + 62-byte tally, not the 20-byte game-
+//! gateway 4014 tick (`14 00 AE 0F` + 16-byte body); see
+//! `docs/relay.md` §2. Relay TCP peer-leg ports have no hardcoded
+//! immediate in-exe; they arrive via the server (`GetLiveState`
+//! 4042/4043, `GetP2PList` 4044/4045). The only hardcoded relay
+//! ports are [`RELAY_UDP_PORTS`]. UDP is the primary Live path: each datagram is
 //! `[u16 uncompressedLen][zlib(...)]` holding one RUDP inner frame,
 //! decoded by [`UdpRelayFrame`].
 //!
@@ -123,7 +134,14 @@ impl MemberRole {
 }
 
 /// Hardcoded relay endpoint ports picked by the in-exe relay selector
-/// alongside the three relay IPs (`docs/relay.md` §9).
+/// alongside the three relay IPs (`docs/relay.md` §9). These are the
+/// only hardcoded relay ports: a full-image `u16` scan finds `0x998f`
+/// at exactly the three selector-leaf stores (files
+/// `0x18c73b`–`0x18c77f`) and `0x9990` port-word stores only at the
+/// two matching leaves; the five other `0x9990` hits are non-port
+/// bytes (table address, relative call, jump table, data). Relay TCP
+/// peer-leg ports are server-provided (`GetLiveState`/`GetP2PList`),
+/// never immediates, so no `RELAY_TCP_PORTS` constant exists by design.
 ///
 /// Byte-verified immediates: `0x998f`/`0x9990` stored as the port word by
 /// the selector leaves at file `0x18c73b`–`0x18c77f`; transport role is
@@ -1108,7 +1126,8 @@ impl UdpRelayFrame {
         inner.extend_from_slice(body);
         let compressed = compress_zlib_stored(&inner);
         let mut datagram = Vec::with_capacity(DATAGRAM_LEN_LEN + compressed.len());
-        datagram.extend_from_slice(&(inner.len() as u16).to_le_bytes());
+        let prefix = u16::try_from(inner.len()).unwrap_or(u16::MAX);
+        datagram.extend_from_slice(&prefix.to_le_bytes());
         datagram.extend_from_slice(&compressed);
         datagram
     }
@@ -1384,6 +1403,43 @@ mod relay_command_tests {
         let mut body = full_tally().encode_body();
         body.push(0x00);
         assert_eq!(RelayStats::decode_body(&body), Err(Error::TrailingBytes(1)));
+    }
+
+    #[test]
+    fn relay_op5_tcp_frame_pins_shared_header_shape() {
+        use crate::frame::HEADER_LEN;
+        let frame_bytes = full_tally().encode();
+        assert_eq!(frame_bytes.len(), HEADER_LEN + 62);
+        assert_eq!(&frame_bytes[..HEADER_LEN], &[0x42, 0x00, 0x05, 0x00]);
+        let frame = decode_frame(&frame_bytes).unwrap();
+        assert_eq!(frame.id, 5);
+        assert_eq!(RelayStats::decode_frame(&frame), Ok(full_tally()));
+    }
+
+    #[test]
+    fn relay_op5_tally_is_not_a_gateway_4014_echo() {
+        use crate::play::UpdateGameStats;
+        let tally_body = full_tally().encode_body();
+        let tick = UpdateGameStats::jam_tick(3, 1, 210, 0);
+        let tick_body = tick.encode_body();
+        assert_eq!(tally_body.len(), 62);
+        assert_eq!(tick_body.len(), 16);
+        assert_eq!(full_tally().encode().len(), 66);
+        assert_eq!(tick.encode().len(), 20);
+        assert_eq!(
+            RelayStats::decode_body(&tick_body),
+            Err(Error::TruncatedMessage { need: 62, have: 16 })
+        );
+    }
+
+    #[test]
+    fn hardcoded_relay_ports_are_the_udp_pair_only() {
+        use crate::client::DEFAULT_GATEWAY_PORT;
+        assert_eq!(RELAY_UDP_PORTS, [39311, 39312]);
+        for port in RELAY_UDP_PORTS {
+            assert_ne!(port, DEFAULT_GATEWAY_PORT);
+            assert_ne!(port, ADJUNCT_SETUP_NUMBER);
+        }
     }
 
     #[test]
