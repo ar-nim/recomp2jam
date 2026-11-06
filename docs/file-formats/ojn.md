@@ -166,10 +166,19 @@ table 4 → `+0x184/+0x188/+0x18c`, table 5 → `+0x190` (id echo) /
   zero — all 155 row-less songs and rows with `param_a == 0` such as
   song 887 (`(0, 3000)`) — skips it. The gated feature's meaning
   stays OPEN.
-- OPEN (stored, never read back through the song base): table 1
-  groups (1 = newer era 887..774, 2 = older era 506..100 — observed
-  split, purpose unproven), table 2 `param_b`, table 3 `param_b` +
-  anchor, all of table 4.
+- Proven write-only (loader stores, no song-stride read anywhere in
+  the binary): table 1 groups (1 = newer era 887..774 over 108 rows,
+  2 = older era 506..100 over 96 rows — observed split, purpose
+  unproven; stores at file offsets `0x7a390`/`0x7a3ed`/`0x7a44a`) and
+  all of table 4 (triple words → `+0x184/+0x188/+0x18c`; stores at file
+  offsets `0x7aa6d`/`0x7aacd`/`0x7ab2d`). A full-binary objdump survey
+  finds the six loader stores are the only `imul 0x1b4` song-stride
+  accesses to those six slots — same-displacement hits elsewhere use
+  `shl 4` (x16) strides on unrelated structs, and no plain song-pointer
+  read sits near song-vector setup — so both stay OPEN. (Static
+  disassembly survey; REA dossier TBD.)
+- OPEN (stored, never read back through the song base): table 2
+  `param_b`, table 3 `param_b` + anchor.
 
 Patch index `[195616, 200104)`: 561 × 8-byte pairs (`u32` marker +
 `u32` song id). Markers are `0x43f403` (74×) / `0x43f407` (487× +
