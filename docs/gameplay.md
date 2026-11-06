@@ -420,7 +420,7 @@ implements the item-text geometry data-driven (`LaneCurtain` +
 keeps the top 80%, sudden keeps the bottom 20%, dark keeps the middle
 20%, reverse-dark keeps the top and bottom 40%.
 
-## Life bar — player-reported values, implemented
+## Life bar — player-reported values, NOT implemented
 
 Max 1000 (possibly percent). Per-judgement deltas by difficulty,
 per player report (2026-11-07, UNVERIFIED in-exe):
