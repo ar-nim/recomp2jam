@@ -180,6 +180,7 @@ fn word_of(judgement: Judgement) -> &'static str {
 struct PendingNote {
     lane: u8,
     at_ms: u64,
+    sample: u32,
     judged: bool,
 }
 
@@ -199,23 +200,31 @@ pub struct LivePlay {
     windows: TimingWindows,
     now_ms: u64,
     last_word: Option<(Judgement, u64)>,
+    sounds: Vec<u32>,
 }
 
 impl LivePlay {
-    /// Notes to play (empty until a chart loads).
+    /// Notes to play (empty until a chart loads); each onset carries
+    /// its key-sound sample id.
     #[must_use]
-    pub fn new(onsets: Vec<(u8, u64)>) -> Self {
+    pub fn new(onsets: Vec<(u8, u64, u32)>) -> Self {
         let mut pending: Vec<PendingNote> = onsets
             .iter()
-            .map(|(lane, at_ms)| PendingNote {
+            .map(|(lane, at_ms, sample)| PendingNote {
                 lane: *lane,
                 at_ms: *at_ms,
+                sample: *sample,
                 judged: false,
             })
             .collect();
         pending.sort_by_key(|note| note.at_ms);
         Self {
-            view: PlayingView::new(onsets),
+            view: PlayingView::new(
+                onsets
+                    .iter()
+                    .map(|(lane, at_ms, _)| (*lane, *at_ms))
+                    .collect(),
+            ),
             pending,
             score: Score::default(),
             pills: PillStock::default(),
@@ -223,6 +232,7 @@ impl LivePlay {
             windows: TimingWindows::default(),
             now_ms: 0,
             last_word: None,
+            sounds: Vec::new(),
         }
     }
 
@@ -259,9 +269,14 @@ impl LivePlay {
         }
         let (i, _) = best?;
         let offset = now_ms as i64 - self.pending[i].at_ms as i64;
-        let (lane, at_ms) = (self.pending[i].lane, self.pending[i].at_ms);
+        let (lane, at_ms, sample) = (
+            self.pending[i].lane,
+            self.pending[i].at_ms,
+            self.pending[i].sample,
+        );
         self.pending[i].judged = true;
         self.view.strike(lane, at_ms);
+        self.sounds.push(sample);
         let judgement = self.windows.judge(offset);
         self.rate(judgement);
         Some(judgement)
@@ -271,6 +286,11 @@ impl LivePlay {
     #[must_use]
     pub fn score(&self) -> &Score {
         &self.score
+    }
+
+    /// Take queued key-sound sample ids (one per struck note).
+    pub fn drain_sounds(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.sounds)
     }
 
     fn rate(&mut self, judgement: Judgement) {
@@ -314,7 +334,7 @@ mod live_play_tests {
 
     #[test]
     fn strike_rates_cool_on_exact_hit() {
-        let mut live = LivePlay::new(vec![(2, 1000)]);
+        let mut live = LivePlay::new(vec![(2, 1000, 7)]);
         assert_eq!(live.strike_lane(2, 1000), Some(Judgement::Cool));
         assert_eq!(live.score().combo, 1);
         assert_eq!(live.score().points, 200);
@@ -322,15 +342,24 @@ mod live_play_tests {
     }
 
     #[test]
+    fn struck_notes_queue_their_samples() {
+        let mut live = LivePlay::new(vec![(2, 1000, 7), (2, 1100, 9)]);
+        assert_eq!(live.drain_sounds(), Vec::<u32>::new());
+        live.strike_lane(2, 1010);
+        assert_eq!(live.drain_sounds(), vec![7]);
+        assert_eq!(live.drain_sounds(), Vec::<u32>::new());
+    }
+
+    #[test]
     fn strike_rates_good_on_early_hit() {
-        let mut live = LivePlay::new(vec![(2, 1000)]);
+        let mut live = LivePlay::new(vec![(2, 1000, 7)]);
         assert_eq!(live.strike_lane(2, 990), Some(Judgement::Good));
         assert_eq!(live.score().points, 100);
     }
 
     #[test]
     fn strike_rates_bad_on_late_hit() {
-        let mut live = LivePlay::new(vec![(2, 1000)]);
+        let mut live = LivePlay::new(vec![(2, 1000, 7)]);
         assert_eq!(live.strike_lane(2, 1020), Some(Judgement::Bad));
         assert_eq!(live.score().combo, 0);
         assert_eq!(live.score().points, 4);
@@ -338,7 +367,7 @@ mod live_play_tests {
 
     #[test]
     fn late_notes_rate_miss_on_advance() {
-        let mut live = LivePlay::new(vec![(1, 1000)]);
+        let mut live = LivePlay::new(vec![(1, 1000, 7)]);
         live.advance_to(1000 + 25 + 1);
         assert_eq!(live.score().counts[3], 1);
         assert_eq!(live.score().points, 0);
@@ -346,14 +375,14 @@ mod live_play_tests {
 
     #[test]
     fn empty_press_rates_nothing() {
-        let mut live = LivePlay::new(vec![(2, 1000)]);
+        let mut live = LivePlay::new(vec![(2, 1000, 7)]);
         assert_eq!(live.strike_lane(0, 1000), None);
         assert_eq!(live.score().counts, [0, 0, 0, 0]);
     }
 
     #[test]
     fn nearest_note_wins_in_lane() {
-        let mut live = LivePlay::new(vec![(2, 1000), (2, 1100)]);
+        let mut live = LivePlay::new(vec![(2, 1000, 7), (2, 1100, 9)]);
         assert_eq!(live.strike_lane(2, 1010), Some(Judgement::Good));
         assert_eq!(live.strike_lane(2, 1100), Some(Judgement::Cool));
         assert_eq!(live.score().combo, 2);
@@ -361,7 +390,7 @@ mod live_play_tests {
 
     #[test]
     fn paint_shows_score_combo_and_word() {
-        let mut live = LivePlay::new(vec![(0, 1000)]);
+        let mut live = LivePlay::new(vec![(0, 1000, 7)]);
         live.strike_lane(0, 1000);
         let mut buf = vec![0u32; 70 * 60];
         live.paint(
@@ -385,7 +414,7 @@ mod live_play_tests {
 
     #[test]
     fn word_fades_after_timeout() {
-        let mut live = LivePlay::new(vec![(0, 1000)]);
+        let mut live = LivePlay::new(vec![(0, 1000, 7)]);
         live.strike_lane(0, 1000);
         let mut buf = vec![0u32; 70 * 60];
         live.paint(

@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+o2jam-audio = { version = "0.1.0", path = "../o2jam-audio" }
 o2jam-game = { version = "0.1.0", path = "../o2jam-game" }
 o2jam-render = { version = "0.1.0", path = "../o2jam-render" }
 softbuffer = "0.4"

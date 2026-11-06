@@ -7,9 +7,12 @@
 //! [`ScreenGame`] owns a [`ScreenFlow`] and advances splash → channel
 //! on any lane key; later screens wire their own inputs next.
 
+use std::collections::HashMap;
+
 use super::playing::{HighwayGeometry, LivePlay, PlayingView};
 use super::screen::{Screen, ScreenFlow};
 use super::GameLoop;
+use o2jam_audio::{AudioBackend, PcmSamples};
 use o2jam_render::{
     draw_number, draw_text, fill_rect, number_width, pack_xrgb, text_width, Frame, Rect,
 };
@@ -169,6 +172,13 @@ pub struct ScreenGame {
     flow: ScreenFlow,
     playing: LivePlay,
     started_at: Option<std::time::Instant>,
+    audio: Option<AudioRig>,
+}
+
+/// Key-sound bank plus backend for windowed play.
+struct AudioRig {
+    backend: Box<dyn AudioBackend>,
+    bank: HashMap<u32, PcmSamples>,
 }
 
 impl ScreenGame {
@@ -179,18 +189,50 @@ impl ScreenGame {
             flow: ScreenFlow::new(),
             playing: LivePlay::new(Vec::new()),
             started_at: None,
+            audio: None,
         }
     }
 
-    /// Load a chart's onsets into the highway (empty until then).
-    pub fn load_chart(&mut self, onsets: Vec<(u8, u64)>) {
+    /// Attach key sounds; struck notes play through the backend.
+    /// Missing samples stay silent (no bank entry, no sound).
+    pub fn with_audio(
+        &mut self,
+        backend: Box<dyn AudioBackend>,
+        bank: HashMap<u32, PcmSamples>,
+    ) -> &mut Self {
+        self.audio = Some(AudioRig { backend, bank });
+        self
+    }
+
+    /// Load a chart's onsets (with key-sound ids) into the highway.
+    pub fn load_chart(&mut self, onsets: Vec<(u8, u64, u32)>) {
         self.playing = LivePlay::new(onsets);
+    }
+
+    /// Play every queued key sound through the attached backend.
+    fn pump_sounds(&mut self) {
+        let Some(rig) = self.audio.as_mut() else {
+            self.playing.drain_sounds();
+            return;
+        };
+        for sample in self.playing.drain_sounds() {
+            if let Some(pcm) = rig.bank.get(&sample) {
+                let _ = rig.backend.play_pcm(pcm);
+            }
+        }
     }
 
     /// Song position: wall clock since first Playing frame or key.
     fn now_ms(&mut self) -> u64 {
         let start = *self.started_at.get_or_insert_with(std::time::Instant::now);
         start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
+    }
+
+    /// Strike a lane at an explicit clock, playing its key sound.
+    /// Tests use this; live keys read the wall clock.
+    pub fn strike_at(&mut self, lane: usize, now_ms: u64) {
+        self.playing.strike_lane(lane as u8, now_ms);
+        self.pump_sounds();
     }
 
     /// Screen currently shown.
@@ -228,7 +270,7 @@ impl GameLoop for ScreenGame {
             }
             Screen::Playing => {
                 let now = self.now_ms();
-                self.playing.strike_lane(lane as u8, now);
+                self.strike_at(lane, now);
             }
             _ => {}
         }
@@ -315,7 +357,7 @@ mod screen_paint_tests {
     #[test]
     fn loaded_chart_scales_notes_down_the_highway() {
         let mut game = ScreenGame::new();
-        game.load_chart(vec![(2, 1500)]);
+        game.load_chart(vec![(2, 1500, 7)]);
         for next in [
             Screen::Channel,
             Screen::Room,
@@ -338,6 +380,34 @@ mod screen_paint_tests {
         // Lane 2 spans x 20..30; the note insets one pixel each side.
         assert_eq!(buf[note_y as usize * 70 + 22], pack_xrgb(0x40, 0xC0, 0xFF));
         assert_eq!(buf[0], pack_xrgb(0x0A, 0x0A, 0x0A));
+    }
+
+    #[test]
+    fn strikes_play_banked_samples() {
+        use o2jam_audio::{NullBackend, PcmSamples};
+        let mut game = ScreenGame::new();
+        let bank = HashMap::from([(
+            7u32,
+            PcmSamples {
+                samples: vec![0i16; 8],
+                sample_rate: 8000,
+                channels: 1,
+            },
+        )]);
+        game.with_audio(Box::new(NullBackend::new()), bank);
+        game.load_chart(vec![(2, 5000, 7), (2, 6000, 999)]);
+        for next in [
+            Screen::Channel,
+            Screen::Room,
+            Screen::Waiting,
+            Screen::Loading,
+            Screen::Playing,
+        ] {
+            game.flow.go(next).unwrap();
+        }
+        game.strike_at(2, 5000);
+        assert_eq!(game.playing.score().combo, 1);
+        assert!(game.playing.drain_sounds().is_empty());
     }
 
     #[test]
