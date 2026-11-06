@@ -8,26 +8,110 @@ use super::{detect_kind, read_f32le, read_str, read_u16le, read_u32le, AssetKind
 
 /// Minimal parsed view of an `.ojn` chart file.
 ///
-/// Header field map verified on real 7.55 data (Tutorial.ojn and
-/// decrypted o2ma757.ojn agree on id/magic/BPM positions).
+/// Full 300-byte header map, verified on real 7.55 data: the old-format
+/// `Tutorial.ojn` (song 8888) and every decrypted new-format chart share
+/// one layout, which is the `OJNList.dat` 300-byte record minus its
+/// leading `u32` (all record offsets shift by 4; the list's third slice
+/// end has no slot, while the header carries all three at
+/// +288/+292/+296). Per-level event slices start at +284 and are
+/// validated by [`parse_ojn_levels`]; playable/total/last-measure
+/// triplets cross-check against the walked events
+/// (docs/file-formats/ojn.md).
 #[derive(Debug, Clone, PartialEq)]
 pub struct OjnChartFile {
     /// Raw magic tag seen (`ojn`).
     pub magic: [u8; 4],
-    /// Song id (`u32` at +0).
+    /// Song id (`u32` at +0; 8888 on Tutorial.ojn).
     pub song_id: u32,
-    /// Container version (`f32` at +8; reads 2.7 on Tutorial.ojn,
-    /// 2.9 on decrypted o2ma757.ojn). The loader derives its OJM
+    /// Container version (`f32` at +8; 2.7 on Tutorial.ojn, 2.9 on
+    /// decrypted new-format charts). The loader derives its OJM
     /// descriptor from this float instead of the file magic, so it
     /// also selects the new-variant lane count
     /// ([`ojm_descriptor_for_version`]).
     pub format_version: f32,
+    /// Category id (`u32` at +12; 10 on Tutorial.ojn, 1..8 on the
+    /// shipped new-format songs; re-categorised between versions,
+    /// semantics TBD).
+    pub genre: u32,
     /// Tempo (`f32` at +16; reads 100.0/124.0 on Tutorial/757).
     pub bpm: f32,
-    /// Count field (`u32` at +64): equals the walked event total on
-    /// Tutorial.ojn (43) but not on decrypted o2ma757.ojn (208 vs a
-    /// 580-event run) — semantics TBD, exposed raw.
+    /// Level-range-shaped flags (`u32` at +20; 1 on Tutorial.ojn,
+    /// e.g. `0x50003` on song 757; both `u16` halves small; TBD).
+    pub level_flags: u32,
+    /// Small stable id (`u32` at +24; 0 on Tutorial.ojn, 5..19 on
+    /// the shipped new-format songs; semantics TBD).
+    pub stable_minor: u32,
+    /// Per-difficulty note totals (`u32` at +28/+32/+36): nonzero
+    /// payloads on kinds 2+ (playable lanes plus autoplay). Reads
+    /// 51/0/0 on Tutorial.ojn (level 0 walks 51 nonzero values).
+    pub total_counts: [u32; OJN_LEVEL_COUNT],
+    /// Per-difficulty playable counts (`u32` at +40/+44/+48):
+    /// nonzero payloads on kinds 2..=8. Reads 38/0/0 on
+    /// Tutorial.ojn (level 0 walks 38 lane notes).
+    pub playable_counts: [u32; OJN_LEVEL_COUNT],
+    /// Per-difficulty last measure index (`u32` at +52/+56/+60):
+    /// the greatest event `measure` in the slice (102/0/0 on
+    /// Tutorial.ojn; empty levels read 0 with no events).
+    pub last_measures: [u32; OJN_LEVEL_COUNT],
+    /// Per-difficulty event counts (`u32` at +64/+68/+72): the
+    /// walked `8 + count * 4` event totals. Reads 43/0/0 on
+    /// Tutorial.ojn (the 43-event walk lands exactly on the JPEG).
+    pub event_counts: [u32; OJN_LEVEL_COUNT],
+    /// Composite key (`u32` at +76): high `u16` tracks the song id
+    /// (8888 on Tutorial.ojn, exact on all 13 new-format songs),
+    /// low `u16` is 27 on old-format and 29 on new-format; TBD.
+    pub key_field: u32,
+    /// Spare words (`u32` at +80/+84/+88/+92; zero on every 7.55
+    /// chart).
+    pub pad: [u32; 4],
+    /// Flag word (`u32` at +96; `0` on Tutorial.ojn and 12/13
+    /// new-format songs, `0x01000000` on song 770).
+    pub flag96: u32,
+    /// Constant (`u32` at +100; 0 on Tutorial.ojn, 19256 on every
+    /// new-format song; semantics TBD).
+    pub const100: u32,
+    /// Small tuning float (`f32` at +104; 0.0 on Tutorial.ojn, one
+    /// of 0.0/0.01/0.02/0.03 on new-format songs).
+    pub tune: f32,
+    /// Title area (+108, 64 B, NUL-trimmed, lossy: CP949 Korean on
+    /// Tutorial.ojn, e.g. `NoteFactory` songs carry ASCII here).
+    pub title: String,
+    /// Artist area (+172, 32 B, NUL-trimmed, lossy).
+    pub artist: String,
+    /// Label area (+204, 32 B, e.g. `nao.paradigm` on Tutorial.ojn,
+    /// `NoteFactory` on song 757).
+    pub label: String,
+    /// Container filename (+236, 32 B, e.g. `Tutorial.ojm`).
+    pub ojm_file: String,
+    /// Trailing word (`u32` at +268; 106954 on Tutorial.ojn; TBD).
+    pub unknown1: u32,
+    /// Per-difficulty durations (`u32` at +272/+276/+280,
+    /// seconds-shaped; 247/0/0 on Tutorial.ojn, ~measures*4*60/BPM).
+    pub durations: [u32; OJN_LEVEL_COUNT],
+    /// First slice start (`u32` at +284; 300 on every 7.55 chart).
+    pub slice_start: u32,
+    /// Per-level slice end offsets (`u32` at +288/+292/+296; all
+    /// three read 11784 on Tutorial.ojn — empty trailing slices have
+    /// `start == end` — and bracket the event data on new-format
+    /// songs, the last end landing on the first embedded JPEG).
+    pub slice_ends: [u32; OJN_LEVEL_COUNT],
+    /// Level-0 event count (`u32` at +64): kept as a named alias of
+    /// `event_counts[0]` for callers that only open one difficulty.
     pub event_count_hint: u32,
+}
+
+impl OjnChartFile {
+    /// High word of [`OjnChartFile::key_field`] (tracks the song id).
+    #[must_use]
+    pub fn key_hi(&self) -> u16 {
+        (self.key_field >> 16) as u16
+    }
+
+    /// Low word of [`OjnChartFile::key_field`] (27 old / 29 new).
+    #[must_use]
+    pub fn key_lo(&self) -> u16 {
+        (self.key_field & 0xFFFF) as u16
+    }
 }
 
 /// Parse an `.ojm` container into its sample streams.
@@ -291,26 +375,81 @@ pub fn decrypt_ojn_new_format(bytes: &[u8]) -> Result<Vec<u8>, FileError> {
 }
 
 /// Parse an `.ojn` chart file: decrypts new-format containers, then
-/// (old-format header parsing lands next; note-table work is tracked
-/// in docs/file-formats/ojn.md).
+/// reads the full 300-byte header map (old-format Tutorial.ojn and
+/// decrypted new-format charts share one layout; per-level slices are
+/// walked by [`parse_ojn_levels`] and events by
+/// [`parse_ojn_level_events`], so an old-format song opens exactly
+/// like a new-format one).
 ///
 /// # Errors
 ///
-/// `FileError::Truncated` when the header overruns, `FileError::UnknownFormat`
+/// `FileError::TooShort` when the header overruns, `FileError::UnknownFormat`
 /// on a bad magic.
 pub fn parse_ojn(bytes: &[u8]) -> Result<OjnChartFile, FileError> {
     let plain = decrypt_ojn_new_format(bytes)?;
     match detect_kind(&plain)? {
-        AssetKind::Ojn => Ok(OjnChartFile {
-            magic: plain[..4].try_into().map_err(|_| FileError::Truncated {
-                need: 4,
-                have: plain.len(),
-            })?,
-            song_id: read_u32le(&plain, 0)?,
-            format_version: read_f32le(&plain, 8)?,
-            bpm: read_f32le(&plain, 16)?,
-            event_count_hint: read_u32le(&plain, 64)?,
-        }),
+        AssetKind::Ojn => {
+            if plain.len() < OJN_HEADER_LEN {
+                return Err(FileError::TooShort(plain.len()));
+            }
+            let event_counts = [
+                read_u32le(&plain, OJN_EVENT_COUNT_OFFS[0])?,
+                read_u32le(&plain, OJN_EVENT_COUNT_OFFS[1])?,
+                read_u32le(&plain, OJN_EVENT_COUNT_OFFS[2])?,
+            ];
+            Ok(OjnChartFile {
+                magic: ojn_magic_tag(&plain)?,
+                song_id: read_u32le(&plain, 0)?,
+                format_version: read_f32le(&plain, 8)?,
+                genre: read_u32le(&plain, 12)?,
+                bpm: read_f32le(&plain, 16)?,
+                level_flags: read_u32le(&plain, 20)?,
+                stable_minor: read_u32le(&plain, 24)?,
+                total_counts: [
+                    read_u32le(&plain, 28)?,
+                    read_u32le(&plain, 32)?,
+                    read_u32le(&plain, 36)?,
+                ],
+                playable_counts: [
+                    read_u32le(&plain, 40)?,
+                    read_u32le(&plain, 44)?,
+                    read_u32le(&plain, 48)?,
+                ],
+                last_measures: [
+                    read_u32le(&plain, 52)?,
+                    read_u32le(&plain, 56)?,
+                    read_u32le(&plain, 60)?,
+                ],
+                event_counts,
+                key_field: read_u32le(&plain, 76)?,
+                pad: [
+                    read_u32le(&plain, 80)?,
+                    read_u32le(&plain, 84)?,
+                    read_u32le(&plain, 88)?,
+                    read_u32le(&plain, 92)?,
+                ],
+                flag96: read_u32le(&plain, 96)?,
+                const100: read_u32le(&plain, 100)?,
+                tune: read_f32le(&plain, 104)?,
+                title: read_str(&plain, 108, 64)?,
+                artist: read_str(&plain, 172, 32)?,
+                label: read_str(&plain, 204, 32)?,
+                ojm_file: read_str(&plain, 236, 32)?,
+                unknown1: read_u32le(&plain, 268)?,
+                durations: [
+                    read_u32le(&plain, 272)?,
+                    read_u32le(&plain, 276)?,
+                    read_u32le(&plain, 280)?,
+                ],
+                slice_start: read_u32le(&plain, OJN_SLICES_START_OFF)?,
+                slice_ends: [
+                    read_u32le(&plain, OJN_SLICE_END_OFFS[0])?,
+                    read_u32le(&plain, OJN_SLICE_END_OFFS[1])?,
+                    read_u32le(&plain, OJN_SLICE_END_OFFS[2])?,
+                ],
+                event_count_hint: event_counts[0],
+            })
+        }
         AssetKind::Ojm | AssetKind::OjnList => Err(FileError::UnknownFormat {
             magic: bytes[..4.min(bytes.len())].to_vec(),
         }),
@@ -336,6 +475,25 @@ pub const OJN_SLICE_END_OFFS: [usize; OJN_LEVEL_COUNT] = [288, 292, 296];
 
 /// Header offset of the first slice's start (`u32`).
 pub const OJN_SLICES_START_OFF: usize = 284;
+
+/// Raw magic tag seen on an `.ojn` image: the old-format tag lives at
+/// file offset 4 (right after the song id: Tutorial.ojn opens
+/// `B8 22 00 00 6F 6A 6E 00`), while prefix-form synthetics carry it at
+/// 0. Reports whichever tag the sniff matched so real headers decode
+/// to `ojn` instead of the song-id bytes.
+fn ojn_magic_tag(plain: &[u8]) -> Result<[u8; 4], FileError> {
+    let at = if plain.len() >= 8 && plain[4..7] == *b"ojn" {
+        4
+    } else {
+        0
+    };
+    plain[at..at + 4]
+        .try_into()
+        .map_err(|_| FileError::Truncated {
+            need: at + 4,
+            have: plain.len(),
+        })
+}
 
 /// Byte length of one event head (`u32` tick + `u16` kind + `u16` count).
 const OJN_EVENT_HEAD_LEN: usize = 8;
@@ -608,4 +766,261 @@ pub fn ojn_sub_position(sub_index: usize, sub_count: usize) -> Option<u32> {
         return None;
     }
     Some(scaled / sub_count as u32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Synthetic 300-byte header with a distinctive value at every
+    /// mapped offset (scenario: each field parses from its own slot).
+    fn full_header() -> Vec<u8> {
+        let mut h = vec![0u8; OJN_HEADER_LEN];
+        h[0..4].copy_from_slice(&8888u32.to_le_bytes());
+        h[4..8].copy_from_slice(b"ojn\0");
+        h[8..12].copy_from_slice(&2.7f32.to_le_bytes());
+        h[12..16].copy_from_slice(&10u32.to_le_bytes());
+        h[16..20].copy_from_slice(&100f32.to_le_bytes());
+        h[20..24].copy_from_slice(&1u32.to_le_bytes());
+        for (i, off) in [28, 32, 36].iter().enumerate() {
+            h[*off..*off + 4].copy_from_slice(&(51u32 + i as u32).to_le_bytes());
+        }
+        for (i, off) in [40, 44, 48].iter().enumerate() {
+            h[*off..*off + 4].copy_from_slice(&(38u32 + i as u32).to_le_bytes());
+        }
+        for (i, off) in [52, 56, 60].iter().enumerate() {
+            h[*off..*off + 4].copy_from_slice(&(102u32 + i as u32).to_le_bytes());
+        }
+        for (i, off) in OJN_EVENT_COUNT_OFFS.iter().enumerate() {
+            h[*off..*off + 4].copy_from_slice(&(43u32 + i as u32).to_le_bytes());
+        }
+        h[76..80].copy_from_slice(&0x22B8_001Bu32.to_le_bytes());
+        h[104..108].copy_from_slice(&0f32.to_le_bytes());
+        h[108..120].copy_from_slice(b"Test Title\0\0");
+        h[172..183].copy_from_slice(b"TestArtist\0");
+        h[204..217].copy_from_slice(b"nao.paradigm\0");
+        h[236..249].copy_from_slice(b"Tutorial.ojm\0");
+        h[268..272].copy_from_slice(&106954u32.to_le_bytes());
+        h[272..276].copy_from_slice(&247u32.to_le_bytes());
+        h[284..288].copy_from_slice(&(OJN_HEADER_LEN as u32).to_le_bytes());
+        for off in OJN_SLICE_END_OFFS {
+            h[off..off + 4].copy_from_slice(&11784u32.to_le_bytes());
+        }
+        h
+    }
+
+    #[test]
+    fn header_fields_parse_from_their_own_slots() {
+        let chart = parse_ojn(&full_header()).unwrap();
+        assert_eq!(chart.song_id, 8888);
+        assert_eq!(chart.magic, *b"ojn\0");
+        assert_eq!(chart.format_version, 2.7);
+        assert_eq!(chart.genre, 10);
+        assert_eq!(chart.bpm, 100.0);
+        assert_eq!(chart.level_flags, 1);
+        assert_eq!(chart.stable_minor, 0);
+        assert_eq!(chart.total_counts, [51, 52, 53]);
+        assert_eq!(chart.playable_counts, [38, 39, 40]);
+        assert_eq!(chart.last_measures, [102, 103, 104]);
+        assert_eq!(chart.event_counts, [43, 44, 45]);
+        assert_eq!(chart.event_count_hint, 43);
+        assert_eq!(chart.key_field, 0x22B8_001B);
+        assert_eq!(chart.key_hi(), 8888);
+        assert_eq!(chart.key_lo(), 27);
+        assert_eq!(chart.pad, [0, 0, 0, 0]);
+        assert_eq!(chart.flag96, 0);
+        assert_eq!(chart.const100, 0);
+        assert_eq!(chart.tune, 0.0);
+        assert_eq!(chart.title, "Test Title");
+        assert_eq!(chart.artist, "TestArtist");
+        assert_eq!(chart.label, "nao.paradigm");
+        assert_eq!(chart.ojm_file, "Tutorial.ojm");
+        assert_eq!(chart.unknown1, 106954);
+        assert_eq!(chart.durations, [247, 0, 0]);
+        assert_eq!(chart.slice_start, OJN_HEADER_LEN as u32);
+        assert_eq!(chart.slice_ends, [11784, 11784, 11784]);
+    }
+
+    #[test]
+    fn tutorial_real_header_values_parse() {
+        // Pinned from the real 7.55 `Tutorial.ojn` (118738 bytes;
+        // header dumped byte-exact in docs/file-formats/ojn.md):
+        // every numeric field plus the ASCII areas. The Korean
+        // title/artist areas hold CP949 bytes (lossy here), so they
+        // assert non-empty at their offsets.
+        let mut h = vec![0u8; OJN_HEADER_LEN];
+        h[0..4].copy_from_slice(&8888u32.to_le_bytes());
+        h[4..8].copy_from_slice(b"ojn\0");
+        h[8..12].copy_from_slice(&2.7f32.to_le_bytes());
+        h[12..16].copy_from_slice(&10u32.to_le_bytes());
+        h[16..20].copy_from_slice(&100f32.to_le_bytes());
+        h[20..24].copy_from_slice(&1u32.to_le_bytes());
+        h[28..32].copy_from_slice(&51u32.to_le_bytes());
+        h[40..44].copy_from_slice(&38u32.to_le_bytes());
+        h[52..56].copy_from_slice(&102u32.to_le_bytes());
+        h[64..68].copy_from_slice(&43u32.to_le_bytes());
+        h[76..80].copy_from_slice(&0x22B8_001Bu32.to_le_bytes());
+        h[108..116].copy_from_slice(&[0xC6, 0xA9, 0xC5, 0xE4, 0xB8, 0xAE, 0xBE, 0xF3]);
+        h[172..182].copy_from_slice(&[0xBA, 0xE4, 0xC6, 0xBC, 0xC7, 0xAE, 0xB5, 0xA5, 0xC0, 0xCC]);
+        h[204..217].copy_from_slice(b"nao.paradigm\0");
+        h[236..249].copy_from_slice(b"Tutorial.ojm\0");
+        h[268..272].copy_from_slice(&106954u32.to_le_bytes());
+        h[272..276].copy_from_slice(&247u32.to_le_bytes());
+        h[284..288].copy_from_slice(&300u32.to_le_bytes());
+        for off in OJN_SLICE_END_OFFS {
+            h[off..off + 4].copy_from_slice(&11784u32.to_le_bytes());
+        }
+        let chart = parse_ojn(&h).unwrap();
+        assert_eq!(chart.song_id, 8888);
+        assert_eq!(chart.format_version, 2.7);
+        assert_eq!(chart.genre, 10);
+        assert_eq!(chart.bpm, 100.0);
+        assert_eq!(chart.level_flags, 1);
+        assert_eq!(chart.total_counts, [51, 0, 0]);
+        assert_eq!(chart.playable_counts, [38, 0, 0]);
+        assert_eq!(chart.last_measures, [102, 0, 0]);
+        assert_eq!(chart.event_counts, [43, 0, 0]);
+        assert_eq!(chart.key_hi(), 8888);
+        assert_eq!(chart.key_lo(), 27);
+        assert!(!chart.title.is_empty());
+        assert!(!chart.artist.is_empty());
+        assert_eq!(chart.label, "nao.paradigm");
+        assert_eq!(chart.ojm_file, "Tutorial.ojm");
+        assert_eq!(chart.durations, [247, 0, 0]);
+    }
+
+    #[test]
+    fn header_rejects_short_and_bad_magic() {
+        assert!(matches!(parse_ojn(b"short"), Err(FileError::TooShort(_))));
+        let mut bad = full_header();
+        bad[4..8].copy_from_slice(b"XXXX");
+        assert!(matches!(
+            parse_ojn(&bad),
+            Err(FileError::UnknownFormat { .. })
+        ));
+    }
+
+    fn framed_event(measure: i32, kind: u16, payload: &[u32]) -> Vec<u8> {
+        let mut event = Vec::with_capacity(OJN_EVENT_HEAD_LEN + payload.len() * 4);
+        event.extend_from_slice(&(measure as u32).to_le_bytes());
+        event.extend_from_slice(&kind.to_le_bytes());
+        event.extend_from_slice(&(payload.len() as u16).to_le_bytes());
+        for unit in payload {
+            event.extend_from_slice(&unit.to_le_bytes());
+        }
+        event
+    }
+
+    /// Tutorial-shaped level 0: one BGM event (kind 9, 192 slots),
+    /// lane taps on kinds 2/5, a meter float, a BPM lift, and the
+    /// closing 1-slot event — then two empty trailing levels.
+    fn tutorial_shaped_blob() -> Vec<u8> {
+        let level0 = [
+            framed_event(0, 9, &vec![0u32; 192]),
+            framed_event(12, 2, &[7, 0, 0, 0]),
+            framed_event(12, 1, &[150f32.to_bits()]),
+            framed_event(17, 0, &[0.75f32.to_bits()]),
+            framed_event(20, 5, &[0, 12, 0, 0]),
+            framed_event(102, 9, &[0x1F]),
+        ]
+        .concat();
+        let mut blob = full_header();
+        blob[28..32].copy_from_slice(&3u32.to_le_bytes());
+        blob[32..36].copy_from_slice(&0u32.to_le_bytes());
+        blob[36..40].copy_from_slice(&0u32.to_le_bytes());
+        blob[40..44].copy_from_slice(&2u32.to_le_bytes());
+        blob[44..48].copy_from_slice(&0u32.to_le_bytes());
+        blob[48..52].copy_from_slice(&0u32.to_le_bytes());
+        blob[52..56].copy_from_slice(&102u32.to_le_bytes());
+        blob[56..60].copy_from_slice(&0u32.to_le_bytes());
+        blob[60..64].copy_from_slice(&0u32.to_le_bytes());
+        blob[64..68].copy_from_slice(&6u32.to_le_bytes());
+        blob[68..72].copy_from_slice(&0u32.to_le_bytes());
+        blob[72..76].copy_from_slice(&0u32.to_le_bytes());
+        let end0 = OJN_HEADER_LEN + level0.len();
+        for off in OJN_SLICE_END_OFFS {
+            blob[off..off + 4].copy_from_slice(&(end0 as u32).to_le_bytes());
+        }
+        blob.extend_from_slice(&level0);
+        blob
+    }
+
+    #[test]
+    fn old_format_levels_walk_with_exact_ranges() {
+        let blob = tutorial_shaped_blob();
+        let header = parse_ojn(&blob).unwrap();
+        let slices = parse_ojn_levels(&blob).unwrap();
+        assert_eq!(slices.len(), OJN_LEVEL_COUNT);
+        assert_eq!(slices[0].event_count, 6);
+        assert_eq!(slices[0].data_start, OJN_HEADER_LEN);
+        assert_eq!(slices[1].event_count, 0);
+        assert_eq!(slices[2].event_count, 0);
+        assert_eq!(slices[1].data_start, slices[0].data_end);
+        assert_eq!(slices[2].data_start, slices[2].data_end);
+        assert_eq!(header.event_counts[0], slices[0].event_count);
+        assert_eq!(header.slice_ends[2] as usize, slices[2].data_end);
+        let events = parse_ojn_level_events(&blob, 0).unwrap();
+        assert_eq!(events.len(), 6);
+        assert_eq!(events[0].kind, 9);
+        assert_eq!(events[0].values.len(), 192);
+        assert_eq!(events[1].measure, 12);
+        assert_eq!(events[5].measure, 102);
+        assert_eq!(header.last_measures[0], 102);
+        let playable = events
+            .iter()
+            .filter(|e| ojn_lane_of_kind(e.kind).is_some())
+            .flat_map(|e| e.values.iter())
+            .filter(|v| decode_note_value(**v).is_some())
+            .count();
+        let total = events
+            .iter()
+            .filter(|e| e.kind >= 2)
+            .flat_map(|e| e.values.iter())
+            .filter(|v| decode_note_value(**v).is_some())
+            .count();
+        assert_eq!(playable, header.playable_counts[0] as usize);
+        assert_eq!(total, header.total_counts[0] as usize);
+        assert!(parse_ojn_level_events(&blob, 1).unwrap().is_empty());
+    }
+
+    #[test]
+    fn event_kinds_cover_meter_tempo_lanes_and_backing() {
+        let meter = framed_event(21, 0, &[0.75f32.to_bits()]);
+        assert_eq!(f32::from_le_bytes(meter[8..12].try_into().unwrap()), 0.75);
+        let tempo = framed_event(62, 1, &[290f32.to_bits(), 0, 145f32.to_bits()]);
+        let words: Vec<f32> = tempo[8..]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|w| f32::from_le_bytes(*w))
+            .collect();
+        assert_eq!(words, [290.0, 0.0, 145.0]);
+        for kind in OJN_LANE_KIND_FIRST..=OJN_LANE_KIND_LAST {
+            assert_eq!(ojn_lane_of_kind(kind), Some((kind - 2) as u8));
+        }
+        assert_eq!(ojn_lane_of_kind(0), None);
+        assert_eq!(ojn_lane_of_kind(1), None);
+        assert_eq!(ojn_lane_of_kind(9), None);
+        assert_eq!(ojn_lane_of_kind(19), None);
+        assert_eq!(decode_note_value(0), None);
+        assert_eq!(decode_note_value(0x0200_0000), None);
+        assert_eq!(
+            decode_note_value(3),
+            Some(OjnNoteValue {
+                sample_id: 2,
+                flags: 0,
+            })
+        );
+        assert_eq!(
+            decode_note_value(0x00D0_0002),
+            Some(OjnNoteValue {
+                sample_id: 1,
+                flags: 0xD0,
+            })
+        );
+        assert_eq!(ojn_sub_position(0, 16), Some(0));
+        assert_eq!(ojn_sub_position(4, 16), Some(48));
+        assert_eq!(ojn_sub_position(0, 0), None);
+        assert_eq!(ojn_sub_position(1, 7), None);
+    }
 }

@@ -15,8 +15,51 @@
   (`2.7f`)@8 — the float the song-bank loader derives its OJM
   descriptor from (new-variant lane count; `2.9f` on decrypted
   o2ma charts, matching `OJNList.dat` +12 per record) — BPM
-  (`100.0f`)@16, per-level-looking counts at 28/40/52
-  (`51/38/102`) — mapping TBD.
+  (`100.0f`)@16. FULL 300-byte header map VERIFIED (every offset
+  below read byte-exact off the real file; the layout is the
+  `OJNList.dat` 300-byte record minus its leading `u32` — all record
+  offsets shift by 4, and the list's third slice end has no slot
+  while the header carries all three):
+
+  | Off | Field | Tutorial value |
+  |---|---|---|
+  | 0 | song id (`u32`) | 8888 |
+  | 4 | magic (`"ojn\0"`) | `ojn` |
+  | 8 | container version (`f32`) | 2.7 (loader derives its OJM descriptor from this float: new-variant lane count; `2.9f` on decrypted o2ma charts) |
+  | 12 | genre (`u32`) | 10 (1..8 on new-format songs; re-categorised, TBD) |
+  | 16 | BPM (`f32`) | 100.0 |
+  | 20 | level flags (`u32`) | 1 (`0x50003`-shaped on new songs; TBD) |
+  | 24 | stable minor (`u32`) | 0 (5..19 on new songs; TBD) |
+  | 28/32/36 | total notes per level (`u32`, kinds 2+ nonzero) | 51/0/0 |
+  | 40/44/48 | playable notes per level (`u32`, kinds 2..=8 nonzero) | 38/0/0 |
+  | 52/56/60 | last measure index per level (`u32`) | 102/0/0 |
+  | 64/68/72 | event counts per level (`u32`) | 43/0/0 |
+  | 76 | key field (`u32`: hi tracks song id, lo 27 old / 29 new) | `0x22B8001B` |
+  | 80..92 | pad (`4x u32`) | 0 |
+  | 96 | flag (`u32`; `0x01000000` on song 770) | 0 |
+  | 100 | const (`u32`) | 0 (19256 on every new-format song; TBD) |
+  | 104 | tune (`f32`) | 0.0 (0.0..0.03 on new songs) |
+  | 108 | title (64 B, CP949 Korean) | 튜토리얼 |
+  | 172 | artist (32 B) | 뷰티풀데이 |
+  | 204 | label (32 B) | `nao.paradigm` |
+  | 236 | container filename (32 B) | `Tutorial.ojm` |
+  | 268 | unknown (`u32`) | 106954 |
+  | 272/276/280 | durations (`u32`, seconds-shaped) | 247/0/0 |
+  | 284 | first slice start (`u32`) | 300 |
+  | 288/292/296 | slice end offsets (`u32`) | 11784/11784/11784 |
+
+  Walked cross-checks (real bytes through
+  `o2jam-file::parse_ojn_levels` / `parse_ojn_level_events`): level
+  slices 43/0/0 with ranges 300..11784 (empty trailing slices have
+  `start == end`); 38 lane notes == +40, 51 kind-2+ notes == +28,
+  last measure 102 == +52; kinds seen 2..=8 (3/5/3/5/3/7/4 notes) +
+  13 kind-9 BGM events (192-slot opener through closing 1-slot
+  `0x1F`). `parse_ojn` + `parse_ojn_levels` +
+  `parse_ojn_level_events` open an old-format song exactly like a
+  decrypted new-format one (`open_chart` parity; header counts agree
+  with the slice walk), so old-format charts flow into timed hits
+  through the same path. Implemented as `o2jam-file::OjnChartFile`
+  (full map) with per-field and per-kind synthetic tests.
 - **New format** (`o2ma*.ojn`, 13 files, 179–1037 KB): header starts
   `"new\x06…"`, high-entropy afterwards, NO `"ojn"` anywhere (except one
   incidental hit in `o2ma770.ojn` at 435160). Byte-period analysis shows a
