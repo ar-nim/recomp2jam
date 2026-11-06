@@ -1061,6 +1061,124 @@ const LIVE_EQUIPMENT_WORDS: usize = 17;
 /// Serialized size of one [`PeerInfo`]: `i32` member + two 6-byte endpoints.
 const PEER_ENTRY_LEN: usize = 16;
 
+/// Member-slot table base (VA) the 4043 handler stores into: every active
+/// slot address is `MEMBER_SLOT_BASE + slot * MEMBER_SLOT_STRIDE`
+/// (files `0x159d38`–`0x159f82` repeat `imul $0x2190` + `add $0x77ee90`).
+/// Static only over the local install-root copy (read-only, VA = file +
+/// `0x400000`); behavior described in own words with file offsets plus
+/// local-static record ids, no disassembly reproduced.
+/// (`ev_5a25bf3fec517df32dde42e275128074`,
+/// `ev_7737f29fa5a4df1f2270ce72df7b6d54`,
+/// `ev_54701cf711eebb93adbcbd632629542c`,
+/// `ev_20f7c72d0d3f156c51ba3c3a0417f774`, observed.)
+/// (ERRORS-06: plain constants, no `unwrap`; PERF-07: `u32` literals,
+/// no narrowing casts.)
+pub const MEMBER_SLOT_BASE: u32 = 0x77ee90;
+/// Stride of one member slot (8592 bytes): slot `i` starts at
+/// `MEMBER_SLOT_BASE + i * MEMBER_SLOT_STRIDE` (8 slots).
+pub const MEMBER_SLOT_STRIDE: u32 = 0x2190;
+/// Store offset of [`MemberInfo::member_id`] (1 B, helper file `0x140bd0`,
+/// call site file `0x159d44`).
+pub const MEMBER_OFF_ID: u32 = 0x04;
+/// Store offset of [`MemberInfo::nickname`] (NUL-terminated copy, helper
+/// file `0x140bf0` via the string reader at file `0x155ea0`, call site
+/// file `0x159d5c`).
+pub const MEMBER_OFF_NICKNAME: u32 = 0x05;
+/// Store offset of [`MemberInfo::level`] (`i32`, helper file `0x140c50`,
+/// call site file `0x159d74`).
+pub const MEMBER_OFF_LEVEL: u32 = 0x20;
+/// Store offset of [`MemberInfo::gender`] (1 B raw; reader helper file
+/// `0x140c90` at call site file `0x159d8c`, then setter file `0x13fe50`
+/// stores `+0x28` and picks the avatar sub-object by zero/nonzero).
+pub const MEMBER_OFF_GENDER: u32 = 0x28;
+/// Store offset of [`MemberInfo::gem`] (`i32`, helper file `0x140cc0`,
+/// call site file `0x159da4`).
+pub const MEMBER_OFF_GEM: u32 = 0x2c;
+/// Store offset of the first seat byte ([`MemberInfo::team`]) (1 B, helper
+/// file `0x140d40`, call site file `0x159dbc`).
+pub const MEMBER_OFF_TEAM: u32 = 0x31;
+/// Wire store of the second seat byte ([`MemberInfo::ready`]) (1 B, helper
+/// file `0x140d70`, call site file `0x159dd4`). The slot-index branch
+/// later overwrites `+0x32` (setter file `0x1400f0` at files
+/// `0x159f00`/`0x159f2e`/`0x159f5c`), so the surviving semantics stay OPEN.
+pub const MEMBER_OFF_READY: u32 = 0x32;
+/// Store offset of the third seat byte (seat-candidate for
+/// [`MemberInfo::music_state`]) (1 B, helper file `0x141480`, call site
+/// file `0x159dec`). Field identity stays OPEN: storage order differs
+/// from wire order here and no enum semantics are pinned.
+pub const MEMBER_OFF_MUSIC_STATE: u32 = 0x217c;
+/// Equipment count word the music/equipment helper reads (`i32` at
+/// `+0x2038`, helper file `0x140e40`, call site file `0x159e30`; the
+/// `0x11` loop bound at file `0x140eb1` stages 17 words at
+/// [`MEMBER_OFF_EQUIPMENTS`]).
+pub const MEMBER_OFF_EQUIP_COUNT: u32 = 0x2038;
+/// Store offset of [`MemberInfo::equipments`] (17 `i32` words, helper file
+/// `0x140e40`, call site file `0x159e30`).
+pub const MEMBER_OFF_EQUIPMENTS: u32 = 0x2040;
+/// Store offset of the music-id count (`i32`, helper file `0x140db0`,
+/// call site file `0x159e48`; the loop bound is the stored count, and
+/// each `u16` is split into `+0x38` low bits plus `+0x1038` high nibble).
+pub const MEMBER_OFF_MUSIC_COUNT: u32 = 0x34;
+/// Store offset of [`MemberInfo::music_ids`] entries (helper file
+/// `0x140db0`, call site file `0x159e48`).
+pub const MEMBER_OFF_MUSIC_IDS: u32 = 0x38;
+/// Store offset of [`MemberInfo::cash_point`] (`i32`, helper file
+/// `0x140ce0`, call site file `0x159e60`).
+pub const MEMBER_OFF_CASH_POINT: u32 = 0x2128;
+/// Store offset of [`MemberInfo::free_pass`] (`i32`, helper file
+/// `0x1415a0`, call site file `0x159e78`).
+pub const MEMBER_OFF_FREE_PASS: u32 = 0x212c;
+/// Store offset of [`MemberInfo::playing_state`] (1 B, helper file
+/// `0x141670`, call site file `0x159e90`).
+pub const MEMBER_OFF_PLAYING_STATE: u32 = 0x2130;
+/// Store offset of [`MemberInfo::live_extra`] (1 B wire copy, helper file
+/// `0x141690`, call site file `0x159ea8`; the second `+0x2131` read —
+/// files `0x141670`/`0x141690` back to back — keeps the wire byte whose
+/// in-memory first copy is discarded, semantics OPEN).
+pub const MEMBER_OFF_LIVE_EXTRA: u32 = 0x2131;
+/// Store offset of the first trailing flag byte (1 B, helper file
+/// `0x140d20`, call site file `0x159ec0`). Whether this is
+/// administrator or room-master stays OPEN: no second wire reader was
+/// located (helper file `0x140d90` has no image-wide caller), and the
+/// slot-index branch writes `+0x32`/`+0x2186` instead.
+pub const MEMBER_OFF_ADMIN_FLAG: u32 = 0x30;
+/// Store offset of [`MemberInfo::win_streak`] (`i32`, inline size-4 read
+/// at file `0x159f61` then direct setter file `0x141560` at call site
+/// file `0x159f82`; `0x218c + 4` ends exactly at the slot end `0x2190`).
+pub const MEMBER_OFF_WIN_STREAK: u32 = 0x218c;
+
+/// Address (VA) of a member-slot field: `base + slot * stride + offset`.
+///
+/// # Errors
+///
+/// `Error::InvalidField` when `slot` is outside `0..8` or `offset` falls
+/// outside the `0x2190`-byte slot.
+/// (ERRORS-06: checked arithmetic, no `unwrap`; PERF-07: widening `u32`
+/// conversions only.)
+pub fn member_slot_address(slot: u8, field_offset: u32) -> Result<u32, Error> {
+    if usize::from(slot) >= LIVE_STATE_SLOTS {
+        return Err(Error::InvalidField {
+            field: "live member id",
+            reason: "not 0-7",
+        });
+    }
+    if field_offset >= MEMBER_SLOT_STRIDE {
+        return Err(Error::InvalidField {
+            field: "member field offset",
+            reason: "beyond slot",
+        });
+    }
+    let stepped = u32::from(slot)
+        .checked_mul(MEMBER_SLOT_STRIDE)
+        .and_then(|scaled| scaled.checked_add(field_offset))
+        .and_then(|inner| MEMBER_SLOT_BASE.checked_add(inner))
+        .ok_or(Error::InvalidField {
+            field: "member slot address",
+            reason: "offset overflow",
+        })?;
+    Ok(stepped)
+}
+
 /// Split one byte off the front of `body`.
 fn take_byte(body: &mut &[u8]) -> Result<u8, Error> {
     let (&first, rest) = body
@@ -2663,6 +2781,120 @@ mod live_state_tests {
         assert_eq!(
             LiveStateResponse::decode_frame(&peers),
             Err(Error::UnknownCommand(4044))
+        );
+    }
+}
+
+#[cfg(test)]
+mod member_slot_tests {
+    use super::*;
+
+    #[test]
+    fn slot_table_matches_exe_base_and_stride() {
+        assert_eq!(MEMBER_SLOT_BASE, 0x77ee90);
+        assert_eq!(MEMBER_SLOT_STRIDE, 0x2190);
+        assert_eq!(MEMBER_SLOT_STRIDE, 8592);
+    }
+
+    #[test]
+    fn identity_fields_sit_at_low_offsets() {
+        assert_eq!(MEMBER_OFF_ID, 0x04);
+        assert_eq!(MEMBER_OFF_NICKNAME, 0x05);
+        assert_eq!(MEMBER_OFF_LEVEL, 0x20);
+        assert_eq!(MEMBER_OFF_GENDER, 0x28);
+        assert_eq!(MEMBER_OFF_GEM, 0x2c);
+        assert!(
+            member_slot_address(0, MEMBER_OFF_NICKNAME).ok()
+                < member_slot_address(0, MEMBER_OFF_LEVEL).ok()
+        );
+    }
+
+    #[test]
+    fn seat_bytes_sit_at_expected_offsets() {
+        assert_eq!(MEMBER_OFF_TEAM, 0x31);
+        assert_eq!(MEMBER_OFF_READY, 0x32);
+        assert_eq!(MEMBER_OFF_MUSIC_STATE, 0x217c);
+    }
+
+    #[test]
+    fn equipment_words_sit_at_high_table() {
+        assert_eq!(MEMBER_OFF_EQUIP_COUNT, 0x2038);
+        assert_eq!(MEMBER_OFF_EQUIPMENTS, 0x2040);
+        assert_eq!(MEMBER_OFF_EQUIPMENTS + 17 * 4, 0x2084);
+    }
+
+    #[test]
+    fn music_ids_follow_their_count_word() {
+        assert_eq!(MEMBER_OFF_MUSIC_COUNT, 0x34);
+        assert_eq!(MEMBER_OFF_MUSIC_IDS, 0x38);
+        assert!(
+            member_slot_address(0, MEMBER_OFF_MUSIC_COUNT).ok()
+                < member_slot_address(0, MEMBER_OFF_MUSIC_IDS).ok()
+        );
+    }
+
+    #[test]
+    fn trailing_state_orders_cash_then_flags_then_streak() {
+        assert_eq!(MEMBER_OFF_CASH_POINT, 0x2128);
+        assert_eq!(MEMBER_OFF_FREE_PASS, 0x212c);
+        assert_eq!(MEMBER_OFF_PLAYING_STATE, 0x2130);
+        assert_eq!(MEMBER_OFF_LIVE_EXTRA, 0x2131);
+        assert_eq!(MEMBER_OFF_ADMIN_FLAG, 0x30);
+        assert_eq!(MEMBER_OFF_WIN_STREAK, 0x218c);
+        assert!(
+            member_slot_address(0, MEMBER_OFF_CASH_POINT).ok()
+                < member_slot_address(0, MEMBER_OFF_FREE_PASS).ok()
+        );
+        assert!(
+            member_slot_address(0, MEMBER_OFF_FREE_PASS).ok()
+                < member_slot_address(0, MEMBER_OFF_PLAYING_STATE).ok()
+        );
+        assert!(
+            member_slot_address(0, MEMBER_OFF_PLAYING_STATE).ok()
+                < member_slot_address(0, MEMBER_OFF_LIVE_EXTRA).ok()
+        );
+    }
+
+    #[test]
+    fn win_streak_ends_exactly_at_slot_end() {
+        assert_eq!(MEMBER_OFF_WIN_STREAK + 4, MEMBER_SLOT_STRIDE);
+    }
+
+    #[test]
+    fn slot_address_steps_by_stride_per_slot() {
+        assert_eq!(
+            member_slot_address(0, MEMBER_OFF_ID),
+            Ok(MEMBER_SLOT_BASE + MEMBER_OFF_ID)
+        );
+        assert_eq!(
+            member_slot_address(3, MEMBER_OFF_ID),
+            Ok(MEMBER_SLOT_BASE + 3 * MEMBER_SLOT_STRIDE + MEMBER_OFF_ID)
+        );
+        assert_eq!(
+            member_slot_address(7, MEMBER_OFF_WIN_STREAK),
+            Ok(MEMBER_SLOT_BASE + 7 * MEMBER_SLOT_STRIDE + MEMBER_OFF_WIN_STREAK)
+        );
+    }
+
+    #[test]
+    fn slot_address_rejects_slot_at_bound() {
+        assert_eq!(
+            member_slot_address(8, MEMBER_OFF_ID),
+            Err(Error::InvalidField {
+                field: "live member id",
+                reason: "not 0-7"
+            })
+        );
+    }
+
+    #[test]
+    fn slot_address_rejects_offset_beyond_slot() {
+        assert_eq!(
+            member_slot_address(0, MEMBER_SLOT_STRIDE),
+            Err(Error::InvalidField {
+                field: "member field offset",
+                reason: "beyond slot"
+            })
         );
     }
 }
