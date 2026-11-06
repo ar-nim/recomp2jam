@@ -459,3 +459,31 @@ slot2b-head log (`e923de2`).
   +6 vs the 803 baseline from new file step-banner tests,
   0 failures). No commits, no pushes.** This sweep touched only
   `docs/playtest.md`.
+
+## Regression sweep — 2026-11-06 15:37 UTC (HEAD `ee7bd9d`, tree clean)
+
+Covers the shots head: testable builder extraction (`5dd84fa`), tables
+split by section (`0952bcb`), art-first scenes + skin highway
+(`f720e52`), genuine art staged in scene shots (`600a6db`), and the
+slot2b-head log (`ee7bd9d`).
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **855 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 0, file 123, game 68, net 325,
+  render 53, shell 184, real_art 7, scenes 22, recomp2jam 54
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, no warnings.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.64 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`23:37:43 +08:00`):
+  `Create room: songflow` → `Get music list: [0/00] 562 music` →
+  `Start game: [000]` → `Game [000] Submit score: 2210`.
+- **Verdict: no regression — suite is green on clean HEAD (855 passed;
+  +46 vs the 809 baseline from new render/shell/recomp2jam shots and
+  builder tests, 0 failures). No commits, no pushes.** This sweep
+  touched only `docs/playtest.md`.
