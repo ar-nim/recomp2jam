@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use super::super::avatar::{AvatarFigure, ScenePlacement};
-use super::super::playing::{HighwayGeometry, LivePlay};
+use super::super::playing::{HighwayGeometry, LivePlay, PlaySkin};
 use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
@@ -104,6 +104,12 @@ impl ScreenGame {
     /// Load a chart's onsets (with key-sound ids) into the highway.
     pub fn load_chart(&mut self, onsets: Vec<(u8, u64, u32)>) {
         self.playing = LivePlay::new(&onsets);
+    }
+
+    /// Stage real note/key art into the highway paint (procedural
+    /// fallback stays on unstaged lanes).
+    pub fn set_play_skin(&mut self, skin: PlaySkin) {
+        self.playing.set_skin(skin);
     }
 
     /// Play every queued key sound through the attached backend.
