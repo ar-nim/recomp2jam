@@ -1907,6 +1907,302 @@ impl WireMessage for CheckGiftFreePassResponse {
     }
 }
 
+/// `SellItem` 5002 request: sell the selected shop entry back.
+///
+/// Body is two little-endian `i32` words: the validated selection
+/// index and the entry's id word. The send case (VA `0x4a510c`,
+/// file `0xa510c`; index 0 of the `0x138a`-based send switch, byte
+/// table file `0xa54ac`) appends exactly those two words via the
+/// fixed-size writer (`0x555d70`): first the `0x77ccc0` selection
+/// cell (bounds-checked against the entry count `0x77cce4`, entry
+/// fetched via `0x4a3250`), then the entry pair's first word. The
+/// two virtual-send call sites pass ignored zeros (VAs `0x49cee2`/
+/// `0x4a4c9e`, files `0x9cee2`/`0xa4c9e`); the values come from
+/// shop UI state, not the call. Exact game meaning of the id word
+/// stays OPEN.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SellItem {
+    /// Selection index snapshot (`0x77ccc0`).
+    pub selection: i32,
+    /// Entry id word (first word of the fetched entry pair).
+    pub entry: i32,
+}
+
+/// Body length of [`SellItem`]: two `i32` words.
+const SELL_ITEM_BODY_LEN: usize = 8;
+
+impl WireMessage for SellItem {
+    const COMMAND: u16 = 5002;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = Vec::with_capacity(SELL_ITEM_BODY_LEN);
+        body.extend_from_slice(&self.selection.to_le_bytes());
+        body.extend_from_slice(&self.entry.to_le_bytes());
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < SELL_ITEM_BODY_LEN {
+            return Err(Error::TruncatedMessage {
+                need: SELL_ITEM_BODY_LEN,
+                have: body.len(),
+            });
+        }
+        if body.len() > SELL_ITEM_BODY_LEN {
+            return Err(Error::TrailingBytes(body.len() - SELL_ITEM_BODY_LEN));
+        }
+        Ok(Self {
+            selection: i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+            entry: i32::from_le_bytes([body[4], body[5], body[6], body[7]]),
+        })
+    }
+}
+
+/// `SellItem` 5003 response: the server's sell verdict.
+///
+/// Body is one `i32` result plus an optional second `i32` present
+/// exactly when the result is zero. The S→C handler (VA `0x560c80`,
+/// file `0x160c80`; index 0 of the `0x138b`-based receive switch,
+/// byte table file `0x158ae0`) reads the first word and returns
+/// unless it is `0`, then reads the second word into `0x768b4c`
+/// and applies it (`0x540090`); the shop-context case
+/// (VA `0x4a5c76`, file `0xa5c76`) treats `0` as success and
+/// `0xffffffa0` as failure. Code meanings stay OPEN.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SellItemResponse {
+    /// Sell verdict (`0` takes the success path).
+    pub result: i32,
+    /// Second word; `Some` exactly when `result == 0`.
+    pub extra: Option<i32>,
+}
+
+/// Body length of a bare [`SellItemResponse`] result.
+const SELL_ITEM_RESPONSE_MIN_LEN: usize = 4;
+/// Body length of a [`SellItemResponse`] success (result + word).
+const SELL_ITEM_RESPONSE_FULL_LEN: usize = 8;
+
+impl WireMessage for SellItemResponse {
+    const COMMAND: u16 = 5003;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = Vec::with_capacity(SELL_ITEM_RESPONSE_FULL_LEN);
+        body.extend_from_slice(&self.result.to_le_bytes());
+        if let Some(extra) = self.extra {
+            body.extend_from_slice(&extra.to_le_bytes());
+        }
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < SELL_ITEM_RESPONSE_MIN_LEN {
+            return Err(Error::TruncatedMessage {
+                need: SELL_ITEM_RESPONSE_MIN_LEN,
+                have: body.len(),
+            });
+        }
+        let result = i32::from_le_bytes([body[0], body[1], body[2], body[3]]);
+        if result != 0 {
+            if body.len() > SELL_ITEM_RESPONSE_MIN_LEN {
+                return Err(Error::TrailingBytes(
+                    body.len() - SELL_ITEM_RESPONSE_MIN_LEN,
+                ));
+            }
+            return Ok(Self {
+                result,
+                extra: None,
+            });
+        }
+        if body.len() < SELL_ITEM_RESPONSE_FULL_LEN {
+            return Err(Error::TruncatedMessage {
+                need: SELL_ITEM_RESPONSE_FULL_LEN,
+                have: body.len(),
+            });
+        }
+        if body.len() > SELL_ITEM_RESPONSE_FULL_LEN {
+            return Err(Error::TrailingBytes(
+                body.len() - SELL_ITEM_RESPONSE_FULL_LEN,
+            ));
+        }
+        Ok(Self {
+            result,
+            extra: Some(i32::from_le_bytes([body[4], body[5], body[6], body[7]])),
+        })
+    }
+}
+
+/// `ChangeName` 5030 request: spend a rename coupon on `name`.
+///
+/// Body is a null-terminated name plus two `i32` words. The send
+/// case (VA `0x4a520f`, file `0xa520f`; index 28 of the
+/// `0x138a`-based send switch, byte table file `0xa54ac`)
+/// appends the name from the rename buffer (object `+0xb8`) via
+/// the string writer (`0x555e30` = `strlen + 1` bytes), then the
+/// selection-cell snapshot (`0x77ccc0`) and one `0x537b80` lookup
+/// word via the fixed-size writer (`0x555d70`). Live call sites
+/// pass ignored zeros (VAs `0x49ce55`/`0x4a4cba`, files `0x9ce55`/
+/// `0xa4cba`); the values come from shop UI state. The words'
+/// game meaning stays OPEN.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangeName {
+    /// New nickname (null-terminated on the wire).
+    pub name: String,
+    /// Selection-cell snapshot (`0x77ccc0`).
+    pub selection: i32,
+    /// Lookup word for the rename entry.
+    pub entry: i32,
+}
+
+/// Words after the name in a [`ChangeName`] body: two `i32`.
+const CHANGE_NAME_WORDS_LEN: usize = 8;
+
+impl WireMessage for ChangeName {
+    const COMMAND: u16 = 5030;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = encode_null_terminated(&self.name, MAX_STRING_LEN);
+        body.extend_from_slice(&self.selection.to_le_bytes());
+        body.extend_from_slice(&self.entry.to_le_bytes());
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        let (name, used) = decode_null_terminated(body, MAX_STRING_LEN)?;
+        let tail = &body[used..];
+        if tail.len() < CHANGE_NAME_WORDS_LEN {
+            return Err(Error::TruncatedMessage {
+                need: CHANGE_NAME_WORDS_LEN,
+                have: tail.len(),
+            });
+        }
+        if tail.len() > CHANGE_NAME_WORDS_LEN {
+            return Err(Error::TrailingBytes(tail.len() - CHANGE_NAME_WORDS_LEN));
+        }
+        Ok(Self {
+            name,
+            selection: i32::from_le_bytes([tail[0], tail[1], tail[2], tail[3]]),
+            entry: i32::from_le_bytes([tail[4], tail[5], tail[6], tail[7]]),
+        })
+    }
+}
+
+/// `ChangeName` 5031 response: the rename verdict.
+///
+/// Body is one little-endian `i32`. The S→C handler (VA `0x563950`,
+/// file `0x163950`; index 28 of the `0x138b`-based receive switch,
+/// byte table file `0x158ae0`) reads a single word: `0` runs the
+/// rename applier (`0x540bf0`), anything else skips it. Code
+/// meanings stay OPEN.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChangeNameResponse {
+    /// Rename verdict (`0` = applied).
+    pub result_code: i32,
+}
+
+/// Body length of [`ChangeNameResponse`]: one `i32` word.
+const CHANGE_NAME_RESPONSE_BODY_LEN: usize = 4;
+
+impl WireMessage for ChangeNameResponse {
+    const COMMAND: u16 = 5031;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = Vec::with_capacity(CHANGE_NAME_RESPONSE_BODY_LEN);
+        body.extend_from_slice(&self.result_code.to_le_bytes());
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < CHANGE_NAME_RESPONSE_BODY_LEN {
+            return Err(Error::TruncatedMessage {
+                need: CHANGE_NAME_RESPONSE_BODY_LEN,
+                have: body.len(),
+            });
+        }
+        if body.len() > CHANGE_NAME_RESPONSE_BODY_LEN {
+            return Err(Error::TrailingBytes(
+                body.len() - CHANGE_NAME_RESPONSE_BODY_LEN,
+            ));
+        }
+        Ok(Self {
+            result_code: i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+        })
+    }
+}
+
+/// `CheckName` 5032 request: look up `name` before renaming.
+///
+/// Body is one null-terminated nickname. The send case (VA
+/// `0x45c3af`, file `0x5c3af`) writes the header then appends the
+/// rename buffer (object `+0x288`) via the string writer
+/// (`0x555e30`); the call site (VA `0x45c200`, file `0x5c200`)
+/// passes ignored zeros, like the sell/name-change call sites —
+/// the value comes from UI state. A length gate precedes it: when
+/// the buffer's `strlen` already matches the expected count the
+/// client shows a notice instead of sending (VA `0x45c1cb`, file
+/// `0x5c1cb`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckName {
+    /// Nickname to check.
+    pub name: String,
+}
+
+impl WireMessage for CheckName {
+    const COMMAND: u16 = 5032;
+
+    fn encode_body(&self) -> Vec<u8> {
+        encode_null_terminated(&self.name, MAX_STRING_LEN)
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        let (name, used) = decode_null_terminated(body, MAX_STRING_LEN)?;
+        if used != body.len() {
+            return Err(Error::TrailingBytes(body.len() - used));
+        }
+        Ok(Self { name })
+    }
+}
+
+/// `CheckName` 5033 response: nickname-availability answer.
+///
+/// Body is one `i32` verdict plus a null-terminated string. The
+/// S→C handler (VA `0x5639a0`, file `0x1639a0`; index 30 of the
+/// `0x138b`-based receive switch) reads the word, then the string
+/// via the string reader (`0x555ea0` = `strlen + 1` bytes), and
+/// merges the word with `0xff000000`. The string's role
+/// (checked-name echo vs notice) stays OPEN.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckNameResponse {
+    /// Availability verdict (merged with `0xff000000` in-exe).
+    pub result_code: i32,
+    /// Trailing string (null-terminated on the wire).
+    pub name: String,
+}
+
+impl WireMessage for CheckNameResponse {
+    const COMMAND: u16 = 5033;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = Vec::with_capacity(4);
+        body.extend_from_slice(&self.result_code.to_le_bytes());
+        body.extend_from_slice(&encode_null_terminated(&self.name, MAX_STRING_LEN));
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < 4 {
+            return Err(Error::TruncatedMessage {
+                need: 4,
+                have: body.len(),
+            });
+        }
+        let result_code = i32::from_le_bytes([body[0], body[1], body[2], body[3]]);
+        let (name, used) = decode_null_terminated(&body[4..], MAX_STRING_LEN)?;
+        if 4 + used != body.len() {
+            return Err(Error::TrailingBytes(body.len() - 4 - used));
+        }
+        Ok(Self { result_code, name })
+    }
+}
+
 /// Keep [`Request`]/[`Response`]/[`Generic`] ids consistent with
 /// the message types above.
 #[cfg(test)]
@@ -3020,5 +3316,292 @@ mod tests {
         let back = CheckGiftFreePassResponse::decode_body(&response.encode_body()).unwrap();
         assert!(back.invalid);
         assert!(back.username.is_empty());
+    }
+
+    #[test]
+    fn sell_item_encodes_two_words() {
+        let request = SellItem {
+            selection: 3,
+            entry: 23001,
+        };
+        assert_eq!(
+            request.encode(),
+            vec![0x0C, 0x00, 0x8A, 0x13, 0x03, 0x00, 0x00, 0x00, 0xD9, 0x59, 0x00, 0x00]
+        );
+    }
+
+    #[test]
+    fn sell_item_round_trips_through_frame() {
+        let request = SellItem {
+            selection: 0,
+            entry: -1,
+        };
+        let frame = decode_frame(&request.encode()).unwrap();
+        assert_eq!(frame.id, 5002);
+        assert_eq!(SellItem::decode_frame(&frame), Ok(request));
+    }
+
+    #[test]
+    fn sell_item_rejects_short_body() {
+        assert_eq!(
+            SellItem::decode_body(&[0x01; 7]),
+            Err(Error::TruncatedMessage { need: 8, have: 7 })
+        );
+    }
+
+    #[test]
+    fn sell_item_rejects_trailing_bytes() {
+        let mut body = SellItem {
+            selection: 0,
+            entry: 1,
+        }
+        .encode_body();
+        body.push(0xFF);
+        assert_eq!(SellItem::decode_body(&body), Err(Error::TrailingBytes(1)));
+    }
+
+    #[test]
+    fn sell_item_rejects_wrong_command() {
+        let frame = decode_frame(
+            &SellItemResponse {
+                result: 0,
+                extra: None,
+            }
+            .encode(),
+        )
+        .unwrap();
+        assert_eq!(
+            SellItem::decode_frame(&frame),
+            Err(Error::UnknownCommand(5003))
+        );
+    }
+
+    #[test]
+    fn sell_item_response_decodes_result_only() {
+        let response = SellItemResponse::decode_body(&[0x05, 0x00, 0x00, 0x00]).unwrap();
+        assert_eq!(response.result, 5);
+        assert_eq!(response.extra, None);
+    }
+
+    #[test]
+    fn sell_item_response_success_carries_extra_word() {
+        let response = SellItemResponse {
+            result: 0,
+            extra: Some(7),
+        };
+        assert_eq!(
+            response.encode(),
+            vec![0x0C, 0x00, 0x8B, 0x13, 0x00, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00]
+        );
+        let frame = decode_frame(&response.encode()).unwrap();
+        assert_eq!(frame.id, 5003);
+        assert_eq!(SellItemResponse::decode_frame(&frame), Ok(response));
+    }
+
+    #[test]
+    fn sell_item_response_rejects_extra_word_on_error() {
+        let body = vec![0x01, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00];
+        assert_eq!(
+            SellItemResponse::decode_body(&body),
+            Err(Error::TrailingBytes(4))
+        );
+    }
+
+    #[test]
+    fn sell_item_response_rejects_short_success() {
+        assert_eq!(
+            SellItemResponse::decode_body(&[0x00, 0x00, 0x00]),
+            Err(Error::TruncatedMessage { need: 4, have: 3 })
+        );
+        assert_eq!(
+            SellItemResponse::decode_body(&[0x00, 0x00, 0x00, 0x00, 0x01]),
+            Err(Error::TruncatedMessage { need: 8, have: 5 })
+        );
+    }
+
+    #[test]
+    fn change_name_encodes_string_plus_two_words() {
+        let request = ChangeName {
+            name: "ab".to_owned(),
+            selection: 1,
+            entry: 2,
+        };
+        assert_eq!(
+            request.encode(),
+            vec![
+                0x0F, 0x00, 0xA6, 0x13, 0x61, 0x62, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00,
+                0x00
+            ]
+        );
+    }
+
+    #[test]
+    fn change_name_round_trips_through_frame() {
+        let request = ChangeName {
+            name: "newname".to_owned(),
+            selection: -1,
+            entry: 0,
+        };
+        let frame = decode_frame(&request.encode()).unwrap();
+        assert_eq!(frame.id, 5030);
+        assert_eq!(ChangeName::decode_frame(&frame), Ok(request));
+    }
+
+    #[test]
+    fn change_name_rejects_short_tail() {
+        let mut body = vec![0x61, 0x00];
+        body.extend_from_slice(&[0x01; 7]);
+        assert_eq!(
+            ChangeName::decode_body(&body),
+            Err(Error::TruncatedMessage { need: 8, have: 7 })
+        );
+    }
+
+    #[test]
+    fn change_name_rejects_trailing_bytes() {
+        let mut body = ChangeName {
+            name: "a".to_owned(),
+            selection: 0,
+            entry: 0,
+        }
+        .encode_body();
+        body.push(0xFF);
+        assert_eq!(ChangeName::decode_body(&body), Err(Error::TrailingBytes(1)));
+    }
+
+    #[test]
+    fn change_name_rejects_wrong_command() {
+        let frame = decode_frame(&ChangeNameResponse { result_code: 0 }.encode()).unwrap();
+        assert_eq!(
+            ChangeName::decode_frame(&frame),
+            Err(Error::UnknownCommand(5031))
+        );
+    }
+
+    #[test]
+    fn change_name_response_encodes_single_word() {
+        let response = ChangeNameResponse { result_code: 0 };
+        assert_eq!(
+            response.encode(),
+            vec![0x08, 0x00, 0xA7, 0x13, 0x00, 0x00, 0x00, 0x00]
+        );
+    }
+
+    #[test]
+    fn change_name_response_round_trips_through_frame() {
+        let response = ChangeNameResponse { result_code: -96 };
+        let frame = decode_frame(&response.encode()).unwrap();
+        assert_eq!(frame.id, 5031);
+        assert_eq!(ChangeNameResponse::decode_frame(&frame), Ok(response));
+    }
+
+    #[test]
+    fn change_name_response_rejects_short_body() {
+        assert_eq!(
+            ChangeNameResponse::decode_body(&[0x00, 0x00]),
+            Err(Error::TruncatedMessage { need: 4, have: 2 })
+        );
+    }
+
+    #[test]
+    fn change_name_response_rejects_trailing_bytes() {
+        let mut body = ChangeNameResponse { result_code: 0 }.encode_body();
+        body.push(0xFF);
+        assert_eq!(
+            ChangeNameResponse::decode_body(&body),
+            Err(Error::TrailingBytes(1))
+        );
+    }
+
+    #[test]
+    fn check_name_response_encodes_word_plus_string() {
+        let response = CheckNameResponse {
+            result_code: 0,
+            name: "ab".to_owned(),
+        };
+        assert_eq!(
+            response.encode(),
+            vec![0x0B, 0x00, 0xA9, 0x13, 0x00, 0x00, 0x00, 0x00, 0x61, 0x62, 0x00]
+        );
+    }
+
+    #[test]
+    fn check_name_response_round_trips_through_frame() {
+        let response = CheckNameResponse {
+            result_code: -1,
+            name: "taken".to_owned(),
+        };
+        let frame = decode_frame(&response.encode()).unwrap();
+        assert_eq!(frame.id, 5033);
+        assert_eq!(CheckNameResponse::decode_frame(&frame), Ok(response));
+    }
+
+    #[test]
+    fn check_name_response_rejects_short_body() {
+        assert_eq!(
+            CheckNameResponse::decode_body(&[0x00, 0x00, 0x00]),
+            Err(Error::TruncatedMessage { need: 4, have: 3 })
+        );
+    }
+
+    #[test]
+    fn check_name_response_rejects_trailing_bytes() {
+        let mut body = CheckNameResponse {
+            result_code: 0,
+            name: "a".to_owned(),
+        }
+        .encode_body();
+        body.push(0xFF);
+        assert_eq!(
+            CheckNameResponse::decode_body(&body),
+            Err(Error::TrailingBytes(1))
+        );
+    }
+
+    #[test]
+    fn check_name_encodes_terminated_name() {
+        let request = CheckName {
+            name: "ab".to_owned(),
+        };
+        assert_eq!(
+            request.encode(),
+            vec![0x07, 0x00, 0xA8, 0x13, 0x61, 0x62, 0x00]
+        );
+    }
+
+    #[test]
+    fn check_name_round_trips_through_frame() {
+        let request = CheckName {
+            name: "newname".to_owned(),
+        };
+        let frame = decode_frame(&request.encode()).unwrap();
+        assert_eq!(frame.id, 5032);
+        assert_eq!(CheckName::decode_frame(&frame), Ok(request));
+    }
+
+    #[test]
+    fn check_name_rejects_trailing_bytes() {
+        let mut body = CheckName {
+            name: "a".to_owned(),
+        }
+        .encode_body();
+        body.push(0xFF);
+        assert_eq!(CheckName::decode_body(&body), Err(Error::TrailingBytes(1)));
+    }
+
+    #[test]
+    fn check_name_rejects_wrong_command() {
+        let frame = decode_frame(
+            &CheckNameResponse {
+                result_code: 0,
+                name: "a".to_owned(),
+            }
+            .encode(),
+        )
+        .unwrap();
+        assert_eq!(
+            CheckName::decode_frame(&frame),
+            Err(Error::UnknownCommand(5033))
+        );
     }
 }
