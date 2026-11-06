@@ -82,6 +82,46 @@ pub fn fill_rect(frame: &mut Frame<'_>, rect: &Rect, color: u32) {
     }
 }
 
+/// Owned raw RGB555 image: the blittable form of one sprite-55 body
+/// (see `o2jam-file`). Words are native-endian decoded from the
+/// little-endian container bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rgb555Image {
+    /// Width in pixels.
+    pub w: usize,
+    /// Height in pixels.
+    pub h: usize,
+    /// Row-major pixels, `w * h` long.
+    pub words: Vec<u16>,
+}
+
+impl Rgb555Image {
+    /// Decode `w*h` little-endian pixels; `None` on size mismatch.
+    #[must_use]
+    pub fn decode(bytes: &[u8], w: usize, h: usize) -> Option<Self> {
+        if bytes.len() != w * h * 2 {
+            return None;
+        }
+        let (chunks, _) = bytes.as_chunks::<2>();
+        let words = chunks
+            .iter()
+            .map(|pair| u16::from_le_bytes(*pair))
+            .collect();
+        Some(Self { w, h, words })
+    }
+
+    /// Borrow as a blit-ready sprite (dense stride).
+    #[must_use]
+    pub fn view(&self) -> Sprite<'_> {
+        Sprite {
+            pixels: &self.words,
+            w: self.w,
+            h: self.h,
+            stride: self.w,
+        }
+    }
+}
+
 /// Blit a sprite at `(dx, dy)`, skipping `colorkey` pixels when set.
 /// Output clips to the frame.
 pub fn blit_rgb555(
@@ -725,6 +765,30 @@ mod tests {
         assert_eq!(frame.buf[0], 0);
         assert_eq!(frame.buf[1], 0xFFFFFF);
         assert!(frame.buf[4..8].iter().all(|pixel| *pixel == 0));
+    }
+
+    #[test]
+    fn rgb555_image_decodes_and_blits() {
+        // 2x1: red, green (little-endian words).
+        let image = Rgb555Image::decode(&[0x00, 0x7C, 0xE0, 0x03], 2, 1).unwrap();
+        assert_eq!(image.words, vec![0x7C00, 0x03E0]);
+        let mut buf = vec![0u32; 2];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 2,
+            h: 1,
+        };
+        blit_rgb555(&mut frame, &image.view(), 0, 0, None);
+        assert_eq!(frame.buf, vec![pack_xrgb(255, 0, 0), pack_xrgb(0, 255, 0)]);
+    }
+
+    #[test]
+    fn rgb555_image_rejects_size_mismatch() {
+        assert_eq!(Rgb555Image::decode(&[0x00, 0x00], 2, 1), None);
+        assert_eq!(
+            Rgb555Image::decode(&[], 0, 0).unwrap().words,
+            Vec::<u16>::new()
+        );
     }
 
     #[test]
