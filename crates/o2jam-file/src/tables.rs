@@ -408,18 +408,27 @@ pub struct OjnMidTriple {
     pub c: u32,
 }
 
-/// One middle-table-5 entry: song id plus the list bucket.
+/// One middle-table-5 entry: song id plus the label bucket.
 ///
 /// The real 7.55 file holds 562 entries (ids 887..100, strictly
 /// descending — the same id set as table 2): `category` runs 1..=5
-/// (193x5, 157x3, 82x2, 78x1, 52x4). The loader stores the pair at
-/// song-record `+0x190` (id echo) / `+0x194` (file offsets `0x7ac8f` /
-/// `0x7acef`). Two exe sites jump-table on `song+0x194 - 1` (dispatches
-/// at file offsets `0xbfa5c` and `0x16121e`, tables at `0xbff7c` and
-/// `0x162e2c`) and append the song to one of five parallel lists
-/// (`0x77953c`, `0x77954c`, `0x77955c`, `0x77956c`, `0x77957c` in
-/// category order): `category` is the song-wheel list bucket. Bucket
-/// labels (genre/mode names?) stay OPEN.
+/// (78x1 GOLD, 82x2 BLACK, 157x3 BLUE, 52x4 RED, 193x5 SILVER;
+/// see label order below). The loader stores the pair at song-record
+/// `+0x190` (id echo) / `+0x194` (file offsets `0x7ac8f` / `0x7acef`).
+/// Three exe sites jump-table on `song+0x194 - 1` (dispatches at file
+/// offsets `0xbfa5c`, `0x16121e` and `0x493409`, tables at file offsets
+/// `0xbff7c`, `0x162e2c` and `0x93a3c`) and append the song to one of
+/// five parallel lists (`0x77953c`, `0x77954c`, `0x77955c`, `0x77956c`,
+/// `0x77957c` in category order): `category` is the song-wheel label
+/// bucket. The select-music dialog filters it with its STEP2 label
+/// buttons (`DAILOG_SELECTMUSIC` in `Interface1.opi`: `STEP2_ALL` /
+/// `GOLD` / `BLACK` / `BLUE` / `RED` / `SILVER`, codes `0x2720B021..0x2720B026`;
+/// handler at file offset `0x43f7e3` stores `code - 0x2720B021`, and the
+/// label filter at file offset `0x447050` jump-tables on that index
+/// (6-way table at file offset `0x477718`; arms at file offsets
+/// `0x4472c1`/`0x4472fa`/`0x447333`/`0x447369`/`0x44739f` test the
+/// entry field at `+0x4 == 1..=5`). The entry `+0x4` population site
+/// (the `+0x194` copy) is not yet pinned — OPEN.
 /// (Static disassembly survey; REA dossier TBD.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OjnMidTagEntry {
@@ -433,8 +442,9 @@ pub struct OjnMidTagEntry {
 /// The decoded `OJNList.dat` middle region: header tables plus footer.
 ///
 /// Resolved against exe consumers (see each entry's docs): table 5 is
-/// the song-wheel list bucket, table 2's first word is a selection
-/// class, table 3's first word is a nonzero-gated feature switch.
+/// the song-wheel label bucket (STEP2 label filter), table 2's first
+/// word is a selection class, table 3's first word is a nonzero-gated
+/// feature switch.
 /// Table 1 groups, table 2's second word, table 3's second word and
 /// anchor, and all of table 4 stay OPEN (table 1 and table 4 are
 /// write-only: stored by the loader, never read back — see entry docs).

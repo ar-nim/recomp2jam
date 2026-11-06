@@ -125,7 +125,7 @@ real 7.55 file end to end).
 | Table 2 | 1 + 562 × 5 | count `562`, then `(song_id, listing∈{1,2}, 0, param_b∈{0,1}, 0)` — `listing` is the selection class (consumer-proven, see below); `param_b` OPEN |
 | Table 3 | 1 + 407 × 4 | count `407`, then `(song_id, param_a, param_b, 0x77D2E4B7)` — `param_a` is a nonzero-gated feature switch (consumer-proven, see below); `param_b` + anchor OPEN |
 | Table 4 | 120 × 3 | raw triples; triple 0 = `(120, 246, 2)`, rest 39/40/40 runs over one 40-song set |
-| Table 5 | 2 + 562 × 2 | head `(1, 562)`, then `(song_id, category∈1..=5)` (193x5, 157x3, 82x2, 78x1, 52x4) — the song-wheel list bucket (consumer-proven, see below) |
+| Table 5 | 2 + 562 × 2 | head `(1, 562)`, then `(song_id, category∈1..=5)` — the song-wheel label bucket (consumer-proven, see below): 78x1 GOLD, 82x2 BLACK, 157x3 BLUE, 52x4 RED, 193x5 SILVER |
 | Footer | 10 | 8 open words, then `(562, 887)` echo |
 
 Cross-checks (real file): table-2 ids equal table-5 ids and the
@@ -145,13 +145,35 @@ REA dossiers TBD — file offsets = VA − `0x400000`). The loader
 table 4 → `+0x184/+0x188/+0x18c`, table 5 → `+0x190` (id echo) /
 `+0x194`.
 
-- Table 5 `category` = song-wheel list bucket. Two sites jump-table
-  on `song+0x194 − 1` (dispatches at file offsets `0xbfa5c` and
-  `0x16121e`, 5-target tables at `0xbff7c` / `0x162e2c`) and append
-  the song to one of five parallel lists (`0x77953c`, `0x77954c`,
-  `0x77955c`, `0x77956c`, `0x77957c` in category order; each list is
-  later walked/emptied, e.g. file offsets `0x92a3c…0x92b68`). Bucket
-  labels (genre/mode names?) stay OPEN.
+- Table 5 `category` = song-wheel label bucket. Three exe sites
+  jump-table on `song+0x194 − 1` (dispatches at file offsets `0xbfa5c`,
+  `0x16121e` and `0x493409`, 5-target tables at file offsets `0xbff7c`,
+  `0x162e2c` and `0x93a3c`) and append the song to one of five parallel
+  lists (`0x77953c`, `0x77954c`, `0x77955c`, `0x77956c`, `0x77957c` in
+  category order; each list is later walked/emptied, e.g. file offsets
+  `0x92a3c…0x92b68`). Labels are the select-music dialog STEP2 label
+  buttons (`DAILOG_SELECTMUSIC` in `install-root/Image/Interface1.opi`:
+  `STEP2_ALL`/`GOLD`/`BLACK`/`BLUE`/`RED`/`SILVER`, codes
+  `0x2720B021..0x2720B026`, art
+  `SelectMusic_Btn_Step2_{all,Gold,Black,Blue,Red,Silver}.ojs`;
+  ControlList file offsets `0x470be28`, `0x470be76`, `0x470bec6`,
+  `0x470bf18`, `0x470bf68`, `0x470bfb6`). The STEP2 handler (file offset
+  `0x43f7e3`: `sub code, 0x2720B021`, index → dialog `+0x6c0`) feeds
+  the label filter at file offset `0x447050`, which jump-tables on the
+  label index (6-way table at file offset `0x477718`; ALL arm accepts,
+  arms 1..5 at file offsets
+  `0x4472c1`/`0x4472fa`/`0x447333`/`0x447369`/`0x44739f` test the
+  select-entry field at `+0x4 == 1..=5`). So category 1..5 =
+  GOLD/BLACK/BLUE/RED/SILVER in index order. Contrast: the STEP1 level
+  filter (file offset `0x446950`, table `0x47038`) tests a *different*
+  entry field (`+0x212`) against level ranges 1/8/19/27 (band strings
+  at file offsets `0x245781…0x2457d9`, range rows at
+  `0x24582c…0x245850`), and the STEP3 genre filter (file offset
+  `0x447730`, table `0x47e50`) tests entry `+0x214` — neither reads
+  1..5 categories. OPEN: the select-entry `+0x4` population site (the
+  `+0x194` copy) is not yet pinned; the five wheel lists vs the
+  per-filter result lists (`+0x650`/`+0x660`/`+0x670`) relation stays
+  OPEN. (Static disassembly survey; REA dossier TBD.)
 - Table 2 `listing` = selection class. A song filter branches on
   `song+0x16c == 1` versus the rest (file offset `0x3706f`), and
   several passes skip songs whose word reads zero (e.g. file offset
