@@ -95,15 +95,20 @@ other objects, never computed in the scorer — the "read from
 some other variable" half of the report is confirmed.
 The live incremented neighbor is `+0x3972`: `+1` per
 Cool/Good hit via `FUN_00541620` (file `0x141620`, gated on a
-flag bit and mode `!= 6`), reset to `0` on Miss (flag `0x80`
-gate, file `0x16ebcf`), *not* reset on Bad, zeroed at init
-(files `0x4de91e`/`0x4de9cc`). Its profile (survives Bad,
-dies on Miss, consumed by the scorer, synced cross-object)
-fits a live jam/combo counter — but the `+0x3972`→`+0x396e`
-link (mirror cadence: does `X` snapshot the live counter,
-and when?) is still OPEN; no such copy observed. `o2jam-game`
-implements the verified bases (`Cool +200`, `Good +100`,
-`Bad +4`, `Miss −10` floored); variable terms stay pending.
+flag bit and mode `!= 6`), reset to `0` on Bad AND Miss —
+shared tail block at file `0x16ebbd` zeroes it iff the
+judgement flag is `0x40` or `0x80` (`cmpl $0x40` / `je` plus
+`cmpl $0x80` / `jne`-skip; `0x180` flows skip), zeroed at init
+(files `0x4de91e`/`0x4de9cc`). An earlier "Miss-only, not
+reset on Bad" reading missed the `0x40` arm — corrected
+(player report caught it). Without jam the Cool/Good bonus
+terms vanish (`200 + 10*0`, `100 + 5*0`), matching the report.
+Its profile (builds on hits, dies on Bad/Miss, consumed by
+the scorer, synced cross-object) fits the live jam counter —
+but the `+0x3972`→`+0x396e` mirror cadence stays structurally
+open (no direct copy observed). `o2jam-game` implements the
+verified bases (`Cool +200`, `Good +100`, `Bad +4`,
+`Miss −10` floored); variable terms stay pending.
 
 ## Room teams — UI + client send VERIFIED, scoring server-side
 
@@ -406,10 +411,12 @@ belongs elsewhere until proven. No life model is implemented:
 unconfirmed behavior stays out of code.
 
 Negative evidence (objdump static analysis, same binary): no
-writes to the candidate life word (game object `+0x3970`) or the
-score-scale word (`+0x396e`) exist anywhere in `.text` — only reads
-plus bulk-init copies — so per-judgement life arithmetic
-(`+3/+2/+1`, `−50/−40/−30`) has no in-exe application site. The
+writes to the candidate life word (game object `+0x3970`)
+exist nowhere in `.text` — only reads — so per-judgement life
+arithmetic (`+3/+2/+1`, `−50/−40/−30`) has no in-exe application
+site. (The sibling claim once made about `+0x396e` was wrong:
+that word IS written via sub-offset `+0x214e` copies — see the
+scoring section. `+0x3970` has no such writes.) The
 `+0x3970` compare in `FUN_00570510` (file `0x57094d`) is a clamp
 against `0x3e8` (1000), not a delta. The `[-10,-7,-5]` triple
 (file `0x35e844`, VA `0x75e800`, in `.data`) sits inside a larger
