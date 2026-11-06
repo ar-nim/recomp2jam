@@ -143,66 +143,9 @@ pub enum Judgement {
     Miss,
 }
 
-/// Jam-progress points earned per judged note (player-reported 7.55
-/// behavior, UNVERIFIED in-exe: only Cool/Good feed the gauge).
-/// One jam combo costs `JAM_PROGRESS_PER_JAM` progress points.
-pub const JAM_PROGRESS_PER_COOL: u32 = 2;
-pub const JAM_PROGRESS_PER_GOOD: u32 = 1;
-/// Progress points that complete one jam combo (player-reported 7.55,
-/// UNVERIFIED in-exe). Overflow carries: e.g. reaching 31 leaves
-/// progress at 1 for the next cycle.
-pub const JAM_PROGRESS_PER_JAM: u32 = 30;
 /// Most combo-saving pills a player can hold (verified in-exe:
 /// the grant path checks `< 5` and the spend path checks `> 0`).
 pub const MAX_PILLS: u32 = 5;
-
-/// Jam progress bar plus jam-combo count.
-///
-/// Feed rule (player-reported 7.55, UNVERIFIED in-exe): Cool adds 2,
-/// Good adds 1, Bad/Miss add nothing. Every 30 progress completes one
-/// jam combo; overflow carries into the next cycle. Whether Bad/Miss
-/// reset or preserve progress is OPEN — this keeps progress unchanged.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct JamGauge {
-    /// Progress toward the next jam (`0..JAM_PROGRESS_PER_JAM`).
-    progress: u32,
-    /// Completed jam combos.
-    jams: u32,
-}
-
-impl JamGauge {
-    /// Current progress toward the next jam.
-    #[must_use]
-    pub fn progress(&self) -> u32 {
-        self.progress
-    }
-
-    /// Completed jam combos.
-    #[must_use]
-    pub fn jam_count(&self) -> u32 {
-        self.jams
-    }
-
-    /// Feed one judgement into the gauge.
-    ///
-    /// Returns the number of jam combos completed by this note (0 or more;
-    /// more than one only if a single feed overshoots by 2x — kept general).
-    pub fn feed(&mut self, judgement: Judgement) -> u32 {
-        let gain = match judgement {
-            Judgement::Cool => JAM_PROGRESS_PER_COOL,
-            Judgement::Good => JAM_PROGRESS_PER_GOOD,
-            Judgement::Bad | Judgement::Miss => 0,
-        };
-        self.progress += gain;
-        let mut earned = 0;
-        while self.progress >= JAM_PROGRESS_PER_JAM {
-            self.progress -= JAM_PROGRESS_PER_JAM;
-            self.jams += 1;
-            earned += 1;
-        }
-        earned
-    }
-}
 
 /// Combo-saving pill stock (player-reported 7.55, UNVERIFIED in-exe).
 ///
@@ -231,7 +174,8 @@ impl PillStock {
         self.pills
     }
 
-    /// Add pills (e.g. shop grant), capped at `MAX_PILLS`.
+    /// Add pills, capped at `MAX_PILLS`. Callers decide when a grant
+    /// happens (no in-exe earn path is verified).
     pub fn add(&mut self, count: u32) {
         self.pills = self.pills.saturating_add(count).min(MAX_PILLS);
     }
@@ -509,13 +453,7 @@ impl Score {
     /// absence of combo writes on the pill-save path); Bad with
     /// no pill and Miss break it (Miss spends no pill — verified
     /// absence of pill logic on its path).
-    pub fn apply_rated(
-        &mut self,
-        judgement: Judgement,
-        gauge: &mut JamGauge,
-        pills: &mut PillStock,
-    ) {
-        gauge.feed(judgement);
+    pub fn apply_rated(&mut self, judgement: Judgement, pills: &mut PillStock) {
         let idx = match judgement {
             Judgement::Cool => 0,
             Judgement::Good => 1,
@@ -585,76 +523,6 @@ impl SongClock {
         self.start.elapsed().as_millis() as u64 + self.offset.as_millis() as u64
     }
 }
-
-/// Difficulty tier selecting a life-delta row.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Difficulty {
-    /// Easy (+3/+2/0/−50).
-    Easy,
-    /// Normal (+2/+1/0/−40).
-    #[default]
-    Normal,
-    /// Hard (+1/+0/0/−30).
-    Hard,
-}
-
-/// Life bar: 0..=1000, dead at 0 (game over → back to waiting).
-///
-/// Deltas are player-reported 7.55 (UNVERIFIED in-exe): matching
-/// `[3,2,1]`/`[2,1,0]` fragments exist in-shipped-bytes but are not
-/// tied to this code path, and the unique `[-10,-7,-5]` triple
-/// nearby contradicts the reported Bad=no-change, so it belongs to
-/// an unidentified system until proven otherwise.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LifeGauge {
-    hp: u32,
-}
-
-impl LifeGauge {
-    /// Full life.
-    pub const MAX: u32 = 1000;
-
-    /// Create a full life bar.
-    #[must_use]
-    pub fn new() -> Self {
-        Self { hp: Self::MAX }
-    }
-
-    /// Current life.
-    #[must_use]
-    pub fn hp(&self) -> u32 {
-        self.hp
-    }
-
-    /// Whether the player is dead (game over).
-    #[must_use]
-    pub fn is_dead(&self) -> bool {
-        self.hp == 0
-    }
-
-    /// Apply one judgement's life delta for a difficulty.
-    pub fn apply(&mut self, judgement: Judgement, difficulty: Difficulty) {
-        let delta: i32 = match (judgement, difficulty) {
-            (Judgement::Cool, Difficulty::Easy) => 3,
-            (Judgement::Cool, Difficulty::Normal) => 2,
-            (Judgement::Cool, Difficulty::Hard) => 1,
-            (Judgement::Good, Difficulty::Easy) => 2,
-            (Judgement::Good, Difficulty::Normal) => 1,
-            (Judgement::Good, Difficulty::Hard) => 0,
-            (Judgement::Bad, _) => 0,
-            (Judgement::Miss, Difficulty::Easy) => -50,
-            (Judgement::Miss, Difficulty::Normal) => -40,
-            (Judgement::Miss, Difficulty::Hard) => -30,
-        };
-        self.hp = (self.hp as i32 + delta).clamp(0, Self::MAX as i32) as u32;
-    }
-}
-
-impl Default for LifeGauge {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -713,78 +581,14 @@ mod tests {
     #[test]
     fn pill_saved_bad_scores_cool_base_and_freezes_combo() {
         let mut s = Score::default();
-        let mut gauge = JamGauge::default();
         let mut pills = PillStock::new(1);
-        s.apply_rated(Judgement::Cool, &mut gauge, &mut pills);
+        s.apply_rated(Judgement::Cool, &mut pills);
         assert_eq!((s.combo, s.points), (1, 200));
-        s.apply_rated(Judgement::Bad, &mut gauge, &mut pills);
+        s.apply_rated(Judgement::Bad, &mut pills);
         assert_eq!(pills.count(), 0);
         assert_eq!((s.combo, s.points), (1, 400));
-        s.apply_rated(Judgement::Bad, &mut gauge, &mut pills);
+        s.apply_rated(Judgement::Bad, &mut pills);
         assert_eq!((s.combo, s.points), (0, 404));
-    }
-
-    #[test]
-    fn rated_scores_match_verified_bases_without_bonus() {
-        // Variable +10*X/+5*X terms are pending X's identity, so a
-        // jammed run scores the same verified bases as a fresh one.
-        let mut fresh_score = Score::default();
-        let mut fresh_gauge = JamGauge::default();
-        let mut pills = PillStock::default();
-        fresh_score.apply_rated(Judgement::Cool, &mut fresh_gauge, &mut pills);
-        let mut jammed_score = Score::default();
-        let mut jammed_gauge = JamGauge::default();
-        for _ in 0..15 {
-            jammed_gauge.feed(Judgement::Cool);
-        }
-        assert_eq!(jammed_gauge.jam_count(), 1);
-        jammed_score.apply_rated(Judgement::Cool, &mut jammed_gauge, &mut pills);
-        assert_eq!(jammed_score.points, fresh_score.points);
-        assert_eq!(jammed_score.points, 200);
-    }
-
-    #[test]
-    fn jam_gauge_cool_feeds_two_good_feeds_one() {
-        let mut gauge = JamGauge::default();
-        assert_eq!(gauge.feed(Judgement::Cool), 0);
-        assert_eq!(gauge.progress(), 2);
-        assert_eq!(gauge.feed(Judgement::Good), 0);
-        assert_eq!(gauge.progress(), 3);
-        assert_eq!(gauge.jam_count(), 0);
-    }
-
-    #[test]
-    fn jam_gauge_thirty_progress_completes_one_jam() {
-        let mut gauge = JamGauge::default();
-        for _ in 0..15 {
-            gauge.feed(Judgement::Cool);
-        }
-        assert_eq!(gauge.jam_count(), 1);
-        assert_eq!(gauge.progress(), 0);
-    }
-
-    #[test]
-    fn jam_gauge_overflow_carries_remainder() {
-        let mut gauge = JamGauge::default();
-        for _ in 0..14 {
-            gauge.feed(Judgement::Cool);
-        }
-        assert_eq!(gauge.progress(), 28);
-        gauge.feed(Judgement::Good);
-        assert_eq!(gauge.progress(), 29);
-        assert_eq!(gauge.feed(Judgement::Cool), 1);
-        assert_eq!(gauge.jam_count(), 1);
-        assert_eq!(gauge.progress(), 1);
-    }
-
-    #[test]
-    fn jam_gauge_ignores_bad_and_miss() {
-        let mut gauge = JamGauge::default();
-        gauge.feed(Judgement::Cool);
-        gauge.feed(Judgement::Bad);
-        gauge.feed(Judgement::Miss);
-        assert_eq!(gauge.progress(), 2);
-        assert_eq!(gauge.jam_count(), 0);
     }
 
     #[test]
@@ -800,27 +604,36 @@ mod tests {
     #[test]
     fn pill_saves_combo_from_bad_only() {
         let mut score = Score::default();
-        let mut gauge = JamGauge::default();
         let mut pills = PillStock::new(1);
-        score.apply_rated(Judgement::Cool, &mut gauge, &mut pills);
-        score.apply_rated(Judgement::Bad, &mut gauge, &mut pills);
+        score.apply_rated(Judgement::Cool, &mut pills);
+        score.apply_rated(Judgement::Bad, &mut pills);
         assert_eq!(score.combo, 1);
         assert_eq!(pills.count(), 0);
         // Miss spends no pill (verified absence) but still breaks.
-        score.apply_rated(Judgement::Cool, &mut gauge, &mut pills);
-        score.apply_rated(Judgement::Miss, &mut gauge, &mut pills);
+        score.apply_rated(Judgement::Cool, &mut pills);
+        score.apply_rated(Judgement::Miss, &mut pills);
         assert_eq!(score.combo, 0);
         assert_eq!(pills.count(), 0);
         assert_eq!(score.counts, [2, 0, 1, 1]);
     }
 
     #[test]
+    fn rated_uses_verified_score_bases() {
+        let mut score = Score::default();
+        let mut pills = PillStock::default();
+        score.apply_rated(Judgement::Cool, &mut pills);
+        score.apply_rated(Judgement::Good, &mut pills);
+        assert_eq!((score.combo, score.points), (2, 300));
+        score.apply_rated(Judgement::Bad, &mut pills);
+        assert_eq!((score.combo, score.points), (0, 304));
+    }
+
+    #[test]
     fn rated_combo_breaks_without_pills() {
         let mut score = Score::default();
-        let mut gauge = JamGauge::default();
         let mut pills = PillStock::default();
-        score.apply_rated(Judgement::Cool, &mut gauge, &mut pills);
-        score.apply_rated(Judgement::Miss, &mut gauge, &mut pills);
+        score.apply_rated(Judgement::Cool, &mut pills);
+        score.apply_rated(Judgement::Miss, &mut pills);
         assert_eq!(score.combo, 0);
         assert_eq!(score.max_combo, 1);
     }
@@ -971,24 +784,5 @@ mod tests {
         }
         assert!(streak.note(Judgement::Cool, &mut pills));
         assert_eq!(pills.count(), MAX_PILLS);
-    }
-
-    #[test]
-    fn life_gauge_applies_difficulty_table_and_dies_at_zero() {
-        let mut life = LifeGauge::new();
-        assert_eq!(life.hp(), 1000);
-        life.apply(Judgement::Cool, Difficulty::Normal);
-        assert_eq!(life.hp(), 1000);
-        life.apply(Judgement::Miss, Difficulty::Hard);
-        assert_eq!(life.hp(), 970);
-        life.apply(Judgement::Good, Difficulty::Easy);
-        assert_eq!(life.hp(), 972);
-        life.apply(Judgement::Bad, Difficulty::Easy);
-        assert_eq!(life.hp(), 972);
-        for _ in 0..40 {
-            life.apply(Judgement::Miss, Difficulty::Easy);
-        }
-        assert_eq!(life.hp(), 0);
-        assert!(life.is_dead());
     }
 }
