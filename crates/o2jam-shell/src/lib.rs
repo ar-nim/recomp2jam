@@ -138,6 +138,10 @@ pub enum MenuKey {
     Confirm,
     /// Back out (Escape).
     Back,
+    /// Highlight up (ArrowUp).
+    Up,
+    /// Highlight down (ArrowDown).
+    Down,
 }
 
 /// Menu key for a physical key, if any.
@@ -146,6 +150,8 @@ pub const fn menu_of(code: KeyCode) -> Option<MenuKey> {
     match code {
         KeyCode::Enter => Some(MenuKey::Confirm),
         KeyCode::Escape => Some(MenuKey::Back),
+        KeyCode::ArrowUp => Some(MenuKey::Up),
+        KeyCode::ArrowDown => Some(MenuKey::Down),
         _ => None,
     }
 }

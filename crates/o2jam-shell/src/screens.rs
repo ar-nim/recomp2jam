@@ -14,6 +14,7 @@ use super::playing::{HighwayGeometry, LivePlay, PlayingView};
 use super::screen::{Screen, ScreenFlow};
 use super::GameLoop;
 use o2jam_audio::{AudioBackend, PcmSamples};
+use o2jam_net::ChannelState;
 use o2jam_render::{
     draw_number, draw_text, fill_rect, number_width, pack_xrgb, text_width, Frame, Rect,
 };
@@ -21,6 +22,51 @@ use o2jam_render::{
 /// Title ink on lobby cards (dark on the light card).
 fn title_color() -> u32 {
     pack_xrgb(0x20, 0x20, 0x20)
+}
+
+/// Row height of one channel entry.
+const CHANNEL_ROW_H: i32 = 8;
+
+/// Paint the online channel list with a highlight cursor.
+fn paint_channel_list(frame: &mut Frame<'_>, channels: &[ChannelState], highlight: usize) {
+    let (w, h) = (frame.w as i32, frame.h as i32);
+    fill_rect(
+        frame,
+        &Rect {
+            x: 0,
+            y: 0,
+            w: w as u32,
+            h: h as u32,
+        },
+        background_of(Screen::Channel),
+    );
+    paint_title(frame, "CHANNEL");
+    let text_x = w / 4;
+    for (i, channel) in channels.iter().enumerate() {
+        let y = h / 4 + i as i32 * CHANNEL_ROW_H;
+        let entry = format!(
+            "{} {}/{}",
+            channel.channel_id, channel.population, channel.capacity
+        );
+        let ink = if channel.active {
+            pack_xrgb(0xFF, 0xFF, 0xFF)
+        } else {
+            pack_xrgb(0x70, 0x70, 0x70)
+        };
+        draw_text(frame, text_x, y, &entry, ink);
+        if i == highlight {
+            fill_rect(
+                frame,
+                &Rect {
+                    x: text_x - 6,
+                    y,
+                    w: 3,
+                    h: 5,
+                },
+                pack_xrgb(0xFF, 0xD0, 0x20),
+            );
+        }
+    }
 }
 
 /// Title tucked just inside the card's top edge.
@@ -182,6 +228,8 @@ pub struct ScreenGame {
     started_at: Option<std::time::Instant>,
     audio: Option<AudioRig>,
     avatar: Option<AvatarFigure>,
+    channels: Vec<ChannelState>,
+    highlight: usize,
 }
 
 /// Key-sound bank plus backend for windowed play.
@@ -200,6 +248,8 @@ impl ScreenGame {
             started_at: None,
             audio: None,
             avatar: None,
+            channels: Vec::new(),
+            highlight: 0,
         }
     }
 
@@ -264,6 +314,13 @@ impl ScreenGame {
         self.flow.current()
     }
 
+    /// Channels from the last online list (empty offline).
+    pub fn set_channels(&mut self, channels: Vec<ChannelState>) -> &mut Self {
+        self.channels = channels;
+        self.highlight = 0;
+        self
+    }
+
     /// Paint with an explicit clock (tests use this; live paint reads
     /// the wall clock).
     pub fn paint_at(&mut self, frame: &mut Frame<'_>, now_ms: u64) {
@@ -274,6 +331,9 @@ impl ScreenGame {
             Screen::Playing => {
                 let geom = HighwayGeometry::centered(frame.w, frame.h);
                 self.playing.paint(frame, &geom, now_ms);
+            }
+            Screen::Channel if !self.channels.is_empty() => {
+                paint_channel_list(frame, &self.channels, self.highlight);
             }
             Screen::Result => paint_result(frame, self.avatar.as_ref(), self.playing.score()),
             screen => paint_screen(frame, screen),
@@ -310,6 +370,13 @@ impl GameLoop for ScreenGame {
         }
         match (self.flow.current(), key) {
             (Screen::Channel, super::MenuKey::Confirm) => self.enter(Screen::Room),
+            (Screen::Channel, super::MenuKey::Up) => {
+                self.highlight = self.highlight.saturating_sub(1);
+            }
+            (Screen::Channel, super::MenuKey::Down) => {
+                let last = self.channels.len().saturating_sub(1);
+                self.highlight = (self.highlight + 1).min(last);
+            }
             (Screen::Room, super::MenuKey::Confirm) => self.enter(Screen::Waiting),
             (Screen::Room, super::MenuKey::Back) => self.enter(Screen::Channel),
             (Screen::Waiting, super::MenuKey::Confirm) => self.enter(Screen::Loading),
@@ -574,6 +641,71 @@ mod screen_paint_tests {
             4995,
         );
         assert_eq!(game.screen(), Screen::Playing);
+    }
+
+    fn two_channels() -> Vec<ChannelState> {
+        vec![
+            ChannelState {
+                gateway_id: 0,
+                channel_id: 2,
+                capacity: 100,
+                population: 5,
+                active: true,
+            },
+            ChannelState {
+                gateway_id: 0,
+                channel_id: 9,
+                capacity: 0,
+                population: 0,
+                active: false,
+            },
+        ]
+    }
+
+    #[test]
+    fn highlight_moves_with_bounds() {
+        use super::super::MenuKey;
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.lane_key(3, true);
+        game.menu_key(MenuKey::Down, true);
+        game.menu_key(MenuKey::Down, true);
+        game.menu_key(MenuKey::Up, true);
+        game.menu_key(MenuKey::Up, true);
+        game.menu_key(MenuKey::Up, true);
+        // Down,Down clamps at 1; three Ups clamp back at 0.
+        let mut probe = ScreenGame::new();
+        probe.set_channels(two_channels());
+        probe.lane_key(0, true);
+        probe.menu_key(MenuKey::Down, true);
+        probe.menu_key(MenuKey::Down, true);
+        assert_eq!(game.highlight, 0);
+        assert_eq!(probe.highlight, 1);
+        // Empty list never moves.
+        let mut bare = ScreenGame::new();
+        bare.lane_key(0, true);
+        bare.menu_key(MenuKey::Down, true);
+        assert_eq!(bare.highlight, 0);
+    }
+
+    #[test]
+    fn channel_list_paints_text_and_cursor() {
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.lane_key(3, true);
+        // 64x48 list: rows from y 12, text x 16; '2' top bar first.
+        let mut buf = vec![0u32; 64 * 48];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 48,
+            },
+            0,
+        );
+        assert_eq!(buf[12 * 64 + 16], pack_xrgb(0xFF, 0xFF, 0xFF));
+        assert_eq!(buf[12 * 64 + 10], pack_xrgb(0xFF, 0xD0, 0x20));
+        assert_eq!(buf[0], background_of(Screen::Channel));
     }
 
     #[test]
