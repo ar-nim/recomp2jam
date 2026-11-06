@@ -8,11 +8,11 @@
 
 use std::collections::HashMap;
 
-use o2jam_file::{AvatarItemTable, Bnd, ControlBlock, ControlList, Sprite55};
-use o2jam_net::CharacterInfo;
-use o2jam_render::{
-    blit_rgb555, center_rect, rect_from_corners, scale_rect_to_frame, Frame, Rect, Rgb555Image,
+use o2jam_file::{
+    AvatarItemTable, Bnd, BndRect, ControlBlock, ControlEntry, ControlList, Sprite55,
 };
+use o2jam_net::CharacterInfo;
+use o2jam_render::{blit_rgb555, rect_from_corners, scale_rect_to_frame, Frame, Rect, Rgb555Image};
 
 /// Archive body name for a table filename: same stem, `.ojs`
 /// container (the table spells `.oji`).
@@ -248,23 +248,57 @@ fn push_unique_name(names: &mut Vec<String>, sprite: Option<String>) {
     }
 }
 
-/// Pair block entries (minus the block header) with `.bnd` rects in
-/// file order, truncating to the shorter side (the Playing subset
-/// ships fewer rects than entries).
+/// First `STATE_PLAYING` entry the 17-rect `.bnd` covers (`EXIT`):
+/// rect `i` lays out entry `213 + i` (`EXIT`..`VOLUME`), verified on
+/// 7.55 (`ControlList_Playing.txt` bound run, decl `0xE6` loads
+/// entries 0-229 including self; the last 5 ride unloaded).
+const PLAYING_SUBSET_FIRST_ENTRY: usize = 213;
+
+/// Pair block entries with `.bnd` rects verbatim on the native
+/// 800x600 canvas: rect `i` lays out entry `i + 1` in file order
+/// (entry 0 is the block itself and takes no rect; `SET` members
+/// count in file order). `STATE_PLAYING` is the verified subset:
+/// its 17 rects lay out entries 213-229 one-to-one, never the first
+/// 17. Entries without a rect stay unplaced (the Playing tail past
+/// `VOLUME` rides unloaded); rects without an entry are ignored.
 #[must_use]
 pub fn bind_scene_rects(block: &ControlBlock, bnd: &Bnd) -> Vec<ScenePlacement> {
     let entries = block.all_entries();
+    if block.name == "STATE_PLAYING" {
+        return bind_playing_subset(&entries, bnd);
+    }
+    bind_verbatim_entries(&entries, bnd)
+}
+
+/// Rect `i` lays out entry `i + 1`; entries without a rect stay
+/// unplaced.
+fn bind_verbatim_entries(entries: &[&ControlEntry], bnd: &Bnd) -> Vec<ScenePlacement> {
     entries
         .iter()
         .skip(1)
         .zip(bnd.rects.iter())
-        .map(|(entry, corners)| ScenePlacement {
-            id: entry.id.clone(),
-            code: entry.code,
-            sprite: entry.sprite.clone(),
-            rect: rect_from_corners(corners.x1, corners.y1, corners.x2, corners.y2),
-        })
+        .map(|(entry, corners)| place_entry(entry, corners))
         .collect()
+}
+
+/// Playing subset: rect `i` lays out entry `213 + i`.
+fn bind_playing_subset(entries: &[&ControlEntry], bnd: &Bnd) -> Vec<ScenePlacement> {
+    entries
+        .iter()
+        .skip(PLAYING_SUBSET_FIRST_ENTRY)
+        .zip(bnd.rects.iter())
+        .map(|(entry, corners)| place_entry(entry, corners))
+        .collect()
+}
+
+/// One placement from an entry plus its native `.bnd` corners.
+fn place_entry(entry: &ControlEntry, corners: &BndRect) -> ScenePlacement {
+    ScenePlacement {
+        id: entry.id.clone(),
+        code: entry.code,
+        sprite: entry.sprite.clone(),
+        rect: rect_from_corners(corners.x1, corners.y1, corners.x2, corners.y2),
+    }
 }
 
 /// Load every named sprite body, skipping missing or undecodable
@@ -289,7 +323,9 @@ pub fn load_avi_logo(archive: &[u8]) -> Option<AvatarFigure> {
     load_archive_sprite(archive, AVI_LOGO_SPRITE)
 }
 
-/// Frame-space origin of a placement (native rect scaled down).
+/// Frame-space origin of a placement: the verbatim native `.bnd`
+/// origin scaled to the frame only at present. The rect itself stays
+/// native 800x600; the sprite paints 1:1 at this origin.
 #[must_use]
 pub fn placement_origin_in_frame(
     placement: &ScenePlacement,
@@ -300,8 +336,10 @@ pub fn placement_origin_in_frame(
     (scaled.x, scaled.y)
 }
 
-/// Paint every placed figure at its scaled layout origin.
-/// Placements without a loaded figure are skipped.
+/// Paint every placed figure at its verbatim native origin (scaled
+/// to the frame only at present), in file order. No centering and no
+/// full-canvas stretch: placements without a loaded figure are
+/// skipped, and live UI ink paints on top in the callers.
 pub fn paint_scene_figures(
     frame: &mut Frame<'_>,
     placements: &[ScenePlacement],
@@ -331,14 +369,6 @@ fn paint_placed_figure(
     figure.paint(frame, x, y);
 }
 
-/// Center of an avatar-sized figure in the frame (Waiting lobby
-/// portraits and Result figures share this anchor).
-#[must_use]
-pub fn avatar_center_origin(figure: &AvatarFigure, frame_w: usize, frame_h: usize) -> (i32, i32) {
-    let (w, h) = figure.extent();
-    let centered = center_rect(w, h, frame_w, frame_h);
-    (centered.x, centered.y)
-}
 /// Pick the sprite filenames one equipped item contributes to the
 /// worn figure (heuristic from 1541 real rows, exe part logic OPEN):
 /// slots 0–1 are icons (never worn); otherwise the wearer's parity
@@ -732,13 +762,71 @@ mod avatar_figure_tests {
     }
 
     #[test]
-    fn scene_rects_truncate_to_fewer_rects() {
+    fn scene_rects_leave_extra_entries_unplaced() {
+        // One rect lays out entry 1 verbatim; entry 2 has no rect
+        // and stays unplaced (never silently dropped from a
+        // different offset).
         let list = o2jam_file::parse_control_list(&room_control_text()).unwrap();
         let block = scene_block(&list, ROOM_BLOCK).unwrap();
         let bnd = o2jam_file::parse_bnd(&bnd_blob(&[(8, 8, 16, 16)])).unwrap();
         let placed = bind_scene_rects(block, &bnd);
         assert_eq!(placed.len(), 1);
         assert_eq!(placed[0].id, "IDC_LIST");
+    }
+
+    /// Playing-shaped block: 235 entries in file order with the
+    /// bound run at 213-229 (`EXIT`..`VOLUME`).
+    fn playing_block() -> ControlBlock {
+        let mut bound = Vec::new();
+        bound.push(ControlEntry {
+            id: "IDC_STATE_PLAY".to_owned(),
+            code: 0,
+            sprite: None,
+        });
+        for index in 1..235 {
+            bound.push(ControlEntry {
+                id: format!("IDC_FILL_{index:03}"),
+                code: 0,
+                sprite: None,
+            });
+        }
+        bound[213] = ControlEntry {
+            id: "IDC_BUTTON_SPLAY_EXIT".to_owned(),
+            code: 0,
+            sprite: Some("Playing_Exit.ojs".to_owned()),
+        };
+        bound[229] = ControlEntry {
+            id: "IDC_TEXT_SPLAY_VLOLUME".to_owned(),
+            code: 0,
+            sprite: None,
+        };
+        ControlBlock {
+            name: "STATE_PLAYING".to_owned(),
+            number: 0xE6,
+            extra: Vec::new(),
+            bound_file: Some("State_Playing.bnd".to_owned()),
+            bound,
+            sets: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn playing_rects_map_trailing_subset_verbatim() {
+        // 17 rects lay out entries 213-229 one-to-one, never the
+        // first 17 entries.
+        let block = playing_block();
+        let corners: Vec<(u32, u32, u32, u32)> =
+            (0..17).map(|i| (751 + i, 554, 793 + i, 596)).collect();
+        let bnd = o2jam_file::parse_bnd(&bnd_blob(&corners)).unwrap();
+        let placed = bind_scene_rects(&block, &bnd);
+        assert_eq!(placed.len(), 17);
+        assert_eq!(placed[0].id, "IDC_BUTTON_SPLAY_EXIT");
+        assert_eq!(placed[0].sprite.as_deref(), Some("Playing_Exit.ojs"));
+        assert_eq!(placed[16].id, "IDC_TEXT_SPLAY_VLOLUME");
+        assert_eq!(placed[0].rect.x, 751);
+        assert_eq!(placed[1].rect.x, 752);
+        assert!(block.all_entries()[1].id.starts_with("IDC_FILL_"));
+        assert_ne!(placed[0].id, block.all_entries()[1].id);
     }
 
     #[test]
@@ -750,8 +838,10 @@ mod avatar_figure_tests {
     }
 
     #[test]
-    fn scene_figures_paint_at_scaled_origins() {
-        // Native x 400 on an 80-wide frame scales to x 40.
+    fn scene_figures_paint_at_verbatim_origins() {
+        // Native `.bnd` rects stay verbatim: x 400 paints at x 400
+        // on the native canvas, scaled to x 40 only at present on
+        // an 80-wide frame.
         let red = sprite55_blob(1, 0xFFFF, 1, 1, &[0x00, 0x7C]);
         let archive = opa_blob(&[("Room_List.ojs", &red)]);
         let figures = load_scene_figures(&archive, &["Room_List.ojs".to_owned()]);
@@ -759,6 +849,7 @@ mod avatar_figure_tests {
         let block = scene_block(&list, ROOM_BLOCK).unwrap();
         let bnd = o2jam_file::parse_bnd(&bnd_blob(&[(400, 0, 800, 600), (0, 0, 8, 8)])).unwrap();
         let placed = bind_scene_rects(block, &bnd);
+        assert_eq!(placement_origin_in_frame(&placed[0], 800, 600), (400, 0));
         assert_eq!(placement_origin_in_frame(&placed[0], 80, 60), (40, 0));
         let mut buf = vec![0u32; 80 * 60];
         paint_scene_figures(
@@ -795,12 +886,12 @@ mod avatar_figure_tests {
 
     #[test]
     fn figure_extent_covers_anchors_and_sizes() {
+        // No centering: extent only measures native anchors plus
+        // sizes; placement origins come from `.bnd` rects verbatim.
         assert_eq!(AvatarFigure::default().extent(), (0, 0));
         let red = sprite55_blob(1, 0x0000, 1, 1, &[0x00, 0x7C]);
         let sprite = o2jam_file::parse_sprite55(&red).unwrap();
         let figure = AvatarFigure::from_sprite55(&sprite);
         assert_eq!(figure.extent(), (1, 1));
-        let (x, y) = avatar_center_origin(&figure, 10, 8);
-        assert_eq!((x, y), (4, 3));
     }
 }
