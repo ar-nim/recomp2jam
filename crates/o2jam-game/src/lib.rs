@@ -1,8 +1,16 @@
 //! Core gameplay logic: chart model, song clock, judgement, score.
 //!
 //! Pure logic, no OS calls — the parity-test home for 7.55 behavior.
-//! Timing windows VERIFIED against 7.55 (`FUN_00576540`); score point
-//! values stay UNVERIFIED placeholders (combo rule VERIFIED).
+//! Timing windows VERIFIED against 7.55 (`FUN_00576540`); score bases
+//! plus jam level `X` VERIFIED (`FUN_00570510` / `FUN_00570260`);
+//! long-note release documented as played (head hit + tail release).
+//!
+//! Life bar: documented only, no model. Per-judgement life deltas are
+//! UNVERIFIED (no write site; candidate table at file `0x35e1a0` has no
+//! `.text` reader) so they stay out of code. VERIFIED anchors live in
+//! `docs/gameplay.md`: `Life_gauge_*_bar.ojs` art, per-hit Jam (4014
+//! arg 1) vs tick-driven Life (4014 arg 0), `SubmitScore` (4016) field
+//! layout; the 4015 peer-life store is OPEN.
 
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
@@ -143,16 +151,156 @@ pub enum Judgement {
     Miss,
 }
 
+/// Jam threshold table: `FUN_00570260` (file `0x170260`) fills
+/// `+0xb66[i] = (i + 1) * 50` for `i = 0..400` at game init — first
+/// jam level needs 50 progress, then 100, 150, … cumulative with no
+/// reset on level-up. Identical for every difficulty.
+pub const JAM_LEVEL_COUNT: usize = 400;
+/// Progress one Cool feeds (`push $0x2`, file `0x1705b0`).
+pub const JAM_PROGRESS_PER_COOL: u64 = 2;
+/// Progress one Good feeds (`push $0x1`, file `0x170628`).
+pub const JAM_PROGRESS_PER_GOOD: u64 = 1;
+
+/// Cumulative progress needed to reach `level` (threshold table entry).
+///
+/// VERIFIED (`FUN_00570260`): threshold is `(level + 1) * 50`.
+#[must_use]
+pub fn jam_threshold_for(level: u32) -> u64 {
+    (u64::from(level) + 1) * 50
+}
+
+/// Jam level `X` (word at game object `+0x396e`, sub `+0x214e`) plus its
+/// `PROGRESS` counter (`+0x396c`, sub `+0x214c`) — VERIFIED 7.55:
+/// Cool feeds +2, Good feeds +1 (both via adder `0x5409f0`);
+/// Bad/Miss reset progress to `0` (setter `0x540770` on the shared
+/// low-branch tail, file `0x1708dd`); crossing the threshold grants
+/// `X += 1` (adder `0x140a20`, no progress reset — cumulative) and
+/// `X` resets to `0` on Bad/Miss (file `0x170936`, after a maxJam
+/// snapshot). A pill-saved Bad takes the Cool path verbatim, so it
+/// feeds like a Cool.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JamState {
+    level: u32,
+    progress: u64,
+    max_level: u32,
+}
+
+impl JamState {
+    /// Empty jam: level 0, no progress.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Current jam level `X` (score multiplier input).
+    #[must_use]
+    pub fn level(&self) -> u32 {
+        self.level
+    }
+
+    /// Cumulative progress toward the next level (never reset on grant).
+    #[must_use]
+    pub fn progress(&self) -> u64 {
+        self.progress
+    }
+
+    /// Highest level reached (snapshot kept across Bad/Miss resets).
+    #[must_use]
+    pub fn max_level(&self) -> u32 {
+        self.max_level
+    }
+
+    /// Progress needed to leave the current level.
+    #[must_use]
+    pub fn threshold(&self) -> u64 {
+        jam_threshold_for(self.level)
+    }
+
+    /// Feed one judgement into progress, granting levels while covered.
+    pub fn note(&mut self, judgement: Judgement) {
+        match judgement {
+            Judgement::Cool => self.feed(JAM_PROGRESS_PER_COOL),
+            Judgement::Good => self.feed(JAM_PROGRESS_PER_GOOD),
+            Judgement::Bad | Judgement::Miss => self.reset(),
+        }
+    }
+
+    /// A pill-saved Bad runs the Cool branch, so it feeds like a Cool.
+    pub fn note_pill_saved(&mut self) {
+        self.feed(JAM_PROGRESS_PER_COOL);
+    }
+
+    fn feed(&mut self, amount: u64) {
+        self.progress = self.progress.saturating_add(amount);
+        self.grant_while_covered();
+    }
+
+    fn grant_while_covered(&mut self) {
+        while usize::try_from(self.level).unwrap_or(usize::MAX) < JAM_LEVEL_COUNT
+            && self.progress >= self.threshold()
+        {
+            self.level += 1;
+            self.max_level = self.max_level.max(self.level);
+        }
+    }
+
+    fn reset(&mut self) {
+        self.max_level = self.max_level.max(self.level);
+        self.level = 0;
+        self.progress = 0;
+    }
+}
+
+/// Tail release of a long note: the head must be struck, then the tail
+/// MUST be released at its end — missing the release is a Miss and
+/// releasing mid-hold is a Miss (player-reported; hold-bit sites pinned
+/// in-exe at `0x576105`/`0x5766cb`/`0x576c42`/`0x576994` but the exact
+/// release judgement was not traced, so the release reuses the struck
+/// [`TimingWindows`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LongTail {
+    /// Head onset in ms.
+    pub head_ms: u64,
+    /// Tail (release point) in ms.
+    pub tail_ms: u64,
+}
+
+impl LongTail {
+    /// Hold from head to tail; `None` when the span is empty (a tap).
+    #[must_use]
+    pub fn new(head_ms: u64, tail_ms: u64) -> Option<Self> {
+        (tail_ms > head_ms).then_some(Self { head_ms, tail_ms })
+    }
+
+    /// A release before the window is mid-hold: Miss.
+    #[must_use]
+    pub fn is_early(&self, release_ms: u64, windows: &TimingWindows) -> bool {
+        release_ms.saturating_add(windows.bad) < self.tail_ms
+    }
+
+    /// No release by the window end: Miss (caller rates it on advance).
+    #[must_use]
+    pub fn is_expired(&self, now_ms: u64, windows: &TimingWindows) -> bool {
+        self.tail_ms.saturating_add(windows.bad) < now_ms
+    }
+
+    /// Judge a release inside the window with the strike tiers.
+    #[must_use]
+    pub fn judge_release(&self, release_ms: u64, windows: &TimingWindows) -> Judgement {
+        windows.judge(release_ms as i64 - self.tail_ms as i64)
+    }
+}
+
 /// Most combo-saving pills a player can hold (verified in-exe:
 /// the grant path checks `< 5` and the spend path checks `> 0`).
 pub const MAX_PILLS: u32 = 5;
 
-/// Combo-saving pill stock (player-reported 7.55, UNVERIFIED in-exe).
+/// Combo-saving pill stock (VERIFIED earn + spend, 7.55).
 ///
 /// A pill is spent instead of breaking the combo on a combo-breaking
-/// judgement (Bad/Miss — the VERIFIED combo-break set). How pills are
-/// earned and which shop/UI flows grant them is OPEN; this tracks the
-/// spend side only, capped at `MAX_PILLS`.
+/// judgement (Bad — Miss spends no pill; VERIFIED absence on its path).
+/// Earned via [`CoolStreak`] (15 consecutive Cools mints one, max 5);
+/// mode byte 6 exempts both earning and spending (mode TBD).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PillStock {
     /// Pills currently held (`<= MAX_PILLS`).
@@ -387,13 +535,16 @@ impl TimingWindows {
     }
 }
 
-/// Running score/combo. Point values are UNVERIFIED placeholders;
-/// combo rule is VERIFIED (Cool/Good continue, Bad/Miss reset —
+/// Running score/combo/jam. VERIFIED 7.55 scorer `FUN_00570510`
+/// (file `0x170510`): Cool `200 + 10*X`, Good `100 + 5*X`, Bad +4,
+/// Miss −10 floored at zero (`-10` when the field exceeds `0x0a`).
+/// Bad-with-pill takes the Cool path verbatim (BAD→COOL conversion).
+/// Combo rule VERIFIED (Cool/Good continue, Bad/Miss reset —
 /// `FUN_00576540` file `0x176c86` `ev_63f07dfc…` / `0x176c8c` `ev_b7f03b4d…`
-/// vs Bad/Miss path `0x176d8b` `ev_55bfa19b…`; user-confirmed).
-/// Long-note combo bonus is OPEN (user-reported; hold path in same
-/// function, points not yet located — scoring lives behind the `+0xa14`
-/// virtual callback, no inline point immediates).
+/// vs Bad/Miss path `0x176d8b` `ev_55bfa19b…`; user-confirmed);
+/// pill-save freezes the combo (no combo write on that path).
+/// Jam feed/grant order (feed, grant, then score with the resulting
+/// `X`) is an implementation choice — the exe order is untraced.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Score {
     /// Accumulated points.
@@ -404,81 +555,70 @@ pub struct Score {
     pub max_combo: u32,
     /// Per-tier counts [cool, good, bad, miss].
     pub counts: [u32; 4],
+    /// Jam level `X` plus progress (drives the `10*X` / `5*X` terms).
+    pub jam: JamState,
+}
+
+/// Count-bucket index for one tier: [cool, good, bad, miss].
+fn tier_index(judgement: Judgement) -> usize {
+    match judgement {
+        Judgement::Cool => 0,
+        Judgement::Good => 1,
+        Judgement::Bad => 2,
+        Judgement::Miss => 3,
+    }
 }
 
 impl Score {
+    /// Score one tier with the current jam level (`200 + 10*X` /
+    /// `100 + 5*X` / `+4` / `−10` floored at zero).
+    fn add_tier_points(&mut self, judgement: Judgement) {
+        let level = u64::from(self.jam.level());
+        match judgement {
+            Judgement::Cool => self.points += 200 + 10 * level,
+            Judgement::Good => self.points += 100 + 5 * level,
+            Judgement::Bad => self.points += 4,
+            Judgement::Miss => self.points = self.points.saturating_sub(10),
+        }
+    }
+
     /// Apply one judgement.
     pub fn apply(&mut self, j: Judgement) {
-        let idx = match j {
-            Judgement::Cool => 0,
-            Judgement::Good => 1,
-            Judgement::Bad => 2,
-            Judgement::Miss => 3,
-        };
-        self.counts[idx] += 1;
+        self.counts[tier_index(j)] += 1;
+        self.jam.note(j);
         match j {
-            Judgement::Cool => {
-                self.combo += 1;
-                self.points += 200;
-            }
-            Judgement::Good => {
-                self.combo += 1;
-                self.points += 100;
-            }
-            Judgement::Bad => {
-                self.combo = 0;
-                self.points += 4;
-            }
-            Judgement::Miss => {
-                self.combo = 0;
-                self.points = self.points.saturating_sub(10);
-            }
+            Judgement::Cool | Judgement::Good => self.combo += 1,
+            Judgement::Bad | Judgement::Miss => self.combo = 0,
         }
+        self.add_tier_points(j);
         self.max_combo = self.max_combo.max(self.combo);
     }
 
     /// Apply one judgement through the jam + pill path.
     ///
-    /// Verified 7.55 score bases (`FUN_00570510`, file `0x170540`):
-    /// Cool +200, Good +100, Bad +4, Miss −10 floored at zero.
-    /// Variable `+10*X`/`+5*X` terms use a word at game object
-    /// `+0x396e` whose identity is NOT established (no in-exe
-    /// writer found), so they are not implemented yet.
-    /// Bad with a pill held scores the full Cool base (+200) and
-    /// keeps the combo frozen (no increment, no reset — verified
-    /// absence of combo writes on the pill-save path); Bad with
-    /// no pill and Miss break it (Miss spends no pill — verified
+    /// Verified 7.55 (`FUN_00570510`, file `0x170510`): Cool
+    /// `200 + 10*X`, Good `100 + 5*X`, Bad-with-pill the Cool value
+    /// verbatim, Bad-without-pill +4, Miss −10 floored at zero.
+    /// Bad with a pill held keeps the combo frozen (no increment, no
+    /// reset — verified absence of combo writes on the pill-save
+    /// path) and feeds jam like a Cool; Bad with no pill and Miss
+    /// break combo and reset jam (Miss spends no pill — verified
     /// absence of pill logic on its path).
     pub fn apply_rated(&mut self, judgement: Judgement, pills: &mut PillStock) {
-        let idx = match judgement {
-            Judgement::Cool => 0,
-            Judgement::Good => 1,
-            Judgement::Bad => 2,
-            Judgement::Miss => 3,
-        };
-        self.counts[idx] += 1;
-        match judgement {
-            Judgement::Cool => {
-                self.combo += 1;
-                self.points += 200;
-            }
-            Judgement::Good => {
-                self.combo += 1;
-                self.points += 100;
-            }
-            Judgement::Bad => {
-                if pills.consume_to_keep_combo() {
-                    self.points += 200;
-                } else {
-                    self.combo = 0;
-                    self.points += 4;
-                }
-            }
-            Judgement::Miss => {
-                self.combo = 0;
-                self.points = self.points.saturating_sub(10);
-            }
+        self.counts[tier_index(judgement)] += 1;
+        if judgement == Judgement::Bad && pills.consume_to_keep_combo() {
+            self.jam.note_pill_saved();
+            let level = u64::from(self.jam.level());
+            self.points += 200 + 10 * level;
+            self.max_combo = self.max_combo.max(self.combo);
+            return;
         }
+        self.jam.note(judgement);
+        match judgement {
+            Judgement::Cool | Judgement::Good => self.combo += 1,
+            Judgement::Bad | Judgement::Miss => self.combo = 0,
+        }
+        self.add_tier_points(judgement);
         self.max_combo = self.max_combo.max(self.combo);
     }
 }
@@ -766,6 +906,105 @@ mod tests {
             streak.note(Judgement::Cool, &mut pills);
         }
         assert_eq!(pills.count(), 1);
+    }
+
+    #[test]
+    fn jam_threshold_table_matches_verified_fifties() {
+        assert_eq!(jam_threshold_for(0), 50);
+        assert_eq!(jam_threshold_for(1), 100);
+        assert_eq!(jam_threshold_for(2), 150);
+        assert_eq!(jam_threshold_for(399), 20_000);
+        assert_eq!(JAM_LEVEL_COUNT, 400);
+    }
+
+    #[test]
+    fn jam_feeds_two_per_cool_and_one_per_good() {
+        let mut jam = JamState::new();
+        jam.note(Judgement::Cool);
+        assert_eq!((jam.level(), jam.progress()), (0, 2));
+        jam.note(Judgement::Good);
+        assert_eq!((jam.level(), jam.progress()), (0, 3));
+    }
+
+    #[test]
+    fn jam_grants_level_without_resetting_progress() {
+        let mut jam = JamState::new();
+        for _ in 0..25 {
+            jam.note(Judgement::Cool);
+        }
+        assert_eq!((jam.level(), jam.progress()), (1, 50));
+        assert_eq!(jam.threshold(), 100);
+        assert_eq!(jam.max_level(), 1);
+    }
+
+    #[test]
+    fn jam_resets_level_and_progress_on_bad() {
+        let mut jam = JamState::new();
+        for _ in 0..25 {
+            jam.note(Judgement::Cool);
+        }
+        jam.note(Judgement::Bad);
+        assert_eq!((jam.level(), jam.progress()), (0, 0));
+        assert_eq!(jam.max_level(), 1);
+    }
+
+    #[test]
+    fn jam_resets_level_and_progress_on_miss() {
+        let mut jam = JamState::new();
+        jam.note(Judgement::Good);
+        jam.note(Judgement::Miss);
+        assert_eq!((jam.level(), jam.progress()), (0, 0));
+    }
+
+    #[test]
+    fn rated_scores_jam_multiplier_on_cool_and_good() {
+        let mut score = Score::default();
+        let mut pills = PillStock::default();
+        for _ in 0..25 {
+            score.apply_rated(Judgement::Cool, &mut pills);
+        }
+        assert_eq!(score.jam.level(), 1);
+        let before = score.points;
+        score.apply_rated(Judgement::Cool, &mut pills);
+        assert_eq!(score.points, before + 200 + 10);
+        let before = score.points;
+        score.apply_rated(Judgement::Good, &mut pills);
+        assert_eq!(score.points, before + 100 + 5);
+    }
+
+    #[test]
+    fn rated_pill_saved_bad_feeds_jam_like_cool() {
+        let mut score = Score::default();
+        let mut pills = PillStock::new(1);
+        score.apply_rated(Judgement::Cool, &mut pills);
+        let progress = score.jam.progress();
+        score.apply_rated(Judgement::Bad, &mut pills);
+        assert_eq!(score.jam.progress(), progress + JAM_PROGRESS_PER_COOL);
+        assert_eq!(score.combo, 1);
+    }
+
+    #[test]
+    fn long_tail_rejects_empty_spans() {
+        assert!(LongTail::new(1000, 1000).is_none());
+        assert!(LongTail::new(1000, 999).is_none());
+        assert!(LongTail::new(1000, 1500).is_some());
+    }
+
+    #[test]
+    fn long_tail_release_before_window_is_early() {
+        let windows = TimingWindows::default();
+        let tail = LongTail::new(1000, 2000).expect("hold");
+        assert!(tail.is_early(2000 - windows.bad - 1, &windows));
+        assert!(!tail.is_early(2000 - windows.bad, &windows));
+        assert_eq!(tail.judge_release(2000, &windows), Judgement::Cool);
+    }
+
+    #[test]
+    fn long_tail_missing_release_expires_after_window() {
+        let windows = TimingWindows::default();
+        let tail = LongTail::new(1000, 2000).expect("hold");
+        assert!(!tail.is_expired(2000 + windows.bad, &windows));
+        assert!(tail.is_expired(2000 + windows.bad + 1, &windows));
     }
 
     #[test]
