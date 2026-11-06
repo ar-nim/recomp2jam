@@ -9,10 +9,14 @@
 use std::collections::HashMap;
 
 use o2jam_file::{
-    AvatarItemTable, Bnd, BndRect, ControlBlock, ControlEntry, ControlList, Sprite55,
+    classify_sprite, find_opi_entry, opi_entry_body, pair_entries_with_rects, AvatarItemTable, Bnd,
+    BndRect, ControlBlock, ControlEntry, ControlList, Sprite55, SpriteResolution,
 };
 use o2jam_net::CharacterInfo;
-use o2jam_render::{blit_rgb555, rect_from_corners, scale_rect_to_frame, Frame, Rect, Rgb555Image};
+use o2jam_render::{
+    blit_anchor_in_rect, blit_rgb555, rect_from_corners, scale_rect_to_frame, Frame, Rect,
+    Rgb555Image,
+};
 
 /// Archive body name for a table filename: same stem, `.ojs`
 /// container (the table spells `.oji`).
@@ -79,6 +83,14 @@ impl AvatarFigure {
         self.layers.len()
     }
 
+    /// One decoded layer in paint order (`None` past the end).
+    /// Number-font bodies decode one layer per digit, so digit
+    /// painters index here instead of re-stacking the whole body.
+    #[must_use]
+    pub fn layer(&self, index: usize) -> Option<&FigureLayer> {
+        self.layers.get(index)
+    }
+
     /// Whether any layer decoded.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -113,12 +125,18 @@ impl AvatarFigure {
 
 /// Load one named sprite body from an OPI/OPA archive as a figure.
 /// Returns `None` when the entry is missing or undecodable (callers
-/// fall back to placeholder art).
+/// fall back to placeholder art). Lookup is exact first, then one
+/// ASCII-case fallback (recipe step 6): 7.55 spells four bodies
+/// differently from their block refs (`Main_level.ojs` vs
+/// `main_level.ojs`, plus three Interface case-only refs;
+/// docs/file-formats/opi.md). The body slices `size`, never
+/// `reserved_size` (step 6; the patcher keeps stale allocation bytes
+/// past `size`).
 #[must_use]
 pub fn load_archive_sprite(archive: &[u8], entry_name: &str) -> Option<AvatarFigure> {
     let entries = o2jam_file::parse_opi(archive).ok()?;
-    let entry = entries.iter().find(|entry| entry.name == entry_name)?;
-    let body = archive.get(entry.data_offset..entry.data_offset + entry.size as usize)?;
+    let entry = find_opi_entry(&entries, entry_name)?;
+    let body = opi_entry_body(archive, entry).ok()?;
     let sprite = o2jam_file::parse_sprite55(body).ok()?;
     let figure = AvatarFigure::from_sprite55(&sprite);
     if figure.is_empty() {
@@ -210,6 +228,87 @@ pub const LOADING_SPRITE: &str = "MusicLoading.ojs";
 /// Results block (`Result_WinLose.ojs`, number fonts, avatar).
 pub const RESULT_BLOCK: &str = "STATE_RESULT";
 
+/// Empty `0x00` stub blocks: present in `ControlList_Interface.txt`
+/// with no body (`PLAYING`, `TUTORIAL`, `DRUM_PLAYING`, `EXIT`).
+/// They draw nothing (recipe step 3); the real `STATE_PLAYING`
+/// lives in `Playing1.opi`.
+const STUB_BLOCK_NAMES: [&str; 4] = [
+    "STATE_PLAYING",
+    "STATE_TUTORIAL",
+    "STATE_DRUM_PLAYING",
+    "STATE_EXIT",
+];
+
+/// True for an empty stub block header (recipe step 3: draws nothing).
+/// Only the bare `0x00` stubs match: a real block that happens to
+/// share the name but carries entries still stages.
+#[must_use]
+pub fn is_stub_block(block: &ControlBlock) -> bool {
+    block.all_entries().is_empty() && STUB_BLOCK_NAMES.contains(&block.name.as_str())
+}
+
+/// State id of one entry: the top byte of its `IDC_` code
+/// (lifecycle §2: `0x12` channel … `0x1B` playing … `0x52` ranking).
+/// The second byte names the `CC*` control class; exact dispatch is
+/// TBD, so the composer only reads the state byte, never branches
+/// on the class.
+#[must_use]
+pub fn entry_state_id(code: u32) -> u8 {
+    (code >> 24) as u8
+}
+
+/// True when an entry's code leaves it a paintable control: the low
+/// word names the control instance, so a zero low word marks a
+/// scene/container row (entry 0 of every real block) that takes no
+/// rect and draws nothing (recipe: entry codes gate visibility).
+/// Verified on 7.55: the only zero-low-word rows in either control
+/// list are the block self rows, so genuine art never drops here
+/// while container rows stay unplaced even outside position 0.
+#[must_use]
+pub fn entry_takes_rect(entry: &ControlEntry) -> bool {
+    entry.code & 0xFFFF != 0
+}
+
+/// Placements for blocks without a `.bnd` (recipe steps 4 + 7): a
+/// bare `BOUND` line means no layout to claim, so each entry that
+/// names loadable art paints 1:1 at its own record anchor (empty
+/// rect, never full-bleed). Sprite-less entries draw no art (step
+/// 6); scrollbar parameters draw no art either (step 9). Runtime-
+/// deferred (`_`-prefix) and archive-missing names still stage:
+/// the loader skips what it cannot decode.
+#[must_use]
+pub fn anchor_placements(block: &ControlBlock) -> Vec<ScenePlacement> {
+    block
+        .all_entries()
+        .into_iter()
+        .skip(1)
+        .filter(|entry| entry_takes_rect(entry))
+        .filter_map(anchor_placement)
+        .collect()
+}
+
+/// One anchor placement for an unbound entry: real id and code,
+/// empty rect (the sprite's own record anchor positions it).
+/// Sprite-less entries and scrollbar parameters stage nothing.
+fn anchor_placement(entry: &ControlEntry) -> Option<ScenePlacement> {
+    match classify_sprite(entry) {
+        SpriteResolution::NoArt | SpriteResolution::ScrollbarParams => None,
+        SpriteResolution::RuntimeDeferred { .. }
+        | SpriteResolution::Found(_)
+        | SpriteResolution::Missing { .. } => Some(ScenePlacement {
+            id: entry.id.clone(),
+            code: entry.code,
+            sprite: entry.sprite.clone(),
+            rect: Rect {
+                x: 0,
+                y: 0,
+                w: 0,
+                h: 0,
+            },
+        }),
+    }
+}
+
 /// One `ControlList` entry with its `.bnd` layout rect.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScenePlacement {
@@ -251,44 +350,126 @@ fn push_unique_name(names: &mut Vec<String>, sprite: Option<String>) {
 /// First `STATE_PLAYING` entry the 17-rect `.bnd` covers (`EXIT`):
 /// rect `i` lays out entry `213 + i` (`EXIT`..`VOLUME`), verified on
 /// 7.55 (`ControlList_Playing.txt` bound run, decl `0xE6` loads
-/// entries 0-229 including self; the last 5 ride unloaded).
+/// entries 0–229 including self; the last 5 ride unloaded).
 const PLAYING_SUBSET_FIRST_ENTRY: usize = 213;
 
+/// Static Playing backdrop panels and gauge shells that paint over
+/// the highway without hiding it, in file order (back-to-front):
+/// the bottom menu strip plus the life/jam edge gauges and the
+/// level plate. Every name is a `STATE_PLAYING` entries 0–212
+/// sprite, decodes as raw RGB555 in 7.55, and anchors clear of the
+/// note lanes (native `x5..193 × y0..487`), the score digits at
+/// `(16, 16)`/`(16, 32)`, and the judgement word under the
+/// judgement row — so falling notes and live UI ink stay visible.
+/// Lane-covering panels stay out on purpose: `Note_BG.ojs`,
+/// `3Key_Note_BG.ojs`, and `P2P*Note_BG.ojs` overlap the lanes,
+/// and the opaque `Playing_BG.ojs` center panel blankets the
+/// judgement-text zone (0/1440 transparent there on real 7.55
+/// art). Those belong behind the highway (OPEN); the overlay
+/// pipeline paints after it, so only lane-clear art stages here.
+/// Right-hand gauge bars ride unreferenced by the block (only the
+/// left shells are named), so only staged — never invented — art
+/// appears below.
+pub const PLAYING_BACKDROP_PANELS: [&str; 6] = [
+    "Playing_Menu.ojs",
+    "Life_gauge_back.ojs",
+    "Life_gauge_left_bar.ojs",
+    "Jamgauge_left_bar.ojs",
+    "Jam_gauge_text.ojs",
+    "Main_level.ojs",
+];
+
+/// True for a static Playing backdrop panel sprite.
+fn is_playing_backdrop_panel(sprite: &str) -> bool {
+    PLAYING_BACKDROP_PANELS.contains(&sprite)
+}
+
+/// Anchor placement for one static backdrop entry: no `.bnd` rect
+/// covers entries 0–212, so the sprite paints 1:1 at its own
+/// record anchor (empty rect, never full-bleed).
+fn place_backdrop_panel(entry: &ControlEntry, sprite: &str) -> ScenePlacement {
+    ScenePlacement {
+        id: entry.id.clone(),
+        code: entry.code,
+        sprite: Some(sprite.to_owned()),
+        rect: Rect {
+            x: 0,
+            y: 0,
+            w: 0,
+            h: 0,
+        },
+    }
+}
+
+/// Anchor placements for the static Playing backdrop panels among
+/// entries `0..213`, in file order. Entries without a panel sprite
+/// contribute nothing, so short or sprite-less blocks stage no
+/// backdrop; container-coded entries stay out like the bound runs.
+fn bind_playing_backdrops(entries: &[&ControlEntry]) -> Vec<ScenePlacement> {
+    entries
+        .iter()
+        .take(PLAYING_SUBSET_FIRST_ENTRY)
+        .filter(|entry| entry_takes_rect(entry))
+        .filter_map(|entry| {
+            let sprite = entry.sprite.as_deref()?;
+            is_playing_backdrop_panel(sprite).then(|| place_backdrop_panel(entry, sprite))
+        })
+        .collect()
+}
+
 /// Pair block entries with `.bnd` rects verbatim on the native
-/// 800x600 canvas: rect `i` lays out entry `i + 1` in file order
-/// (entry 0 is the block itself and takes no rect; `SET` members
-/// count in file order). `STATE_PLAYING` is the verified subset:
-/// its 17 rects lay out entries 213-229 one-to-one, never the first
-/// 17. Entries without a rect stay unplaced (the Playing tail past
-/// `VOLUME` rides unloaded); rects without an entry are ignored.
+/// 800x600 canvas (recipe steps 3–5): rect `i` lays out entry
+/// `i + 1` in file order (entry 0 is the block itself and takes no
+/// rect; `SET` members count in file order, so `pair_entries_with_rects`
+/// already yields file order). Stub blocks stage nothing (step 3);
+/// container-coded entries (zero low word) stay unplaced.
+/// `STATE_PLAYING` is the verified subset: its 17 rects lay out
+/// entries 213–229 one-to-one, never the first 17; the static
+/// backdrop panels among entries 0–212 stage as anchor placements
+/// ahead of them. Other entries without a rect stay unplaced (the
+/// Playing tail past `VOLUME` rides unloaded); rects without an
+/// entry are ignored.
 #[must_use]
 pub fn bind_scene_rects(block: &ControlBlock, bnd: &Bnd) -> Vec<ScenePlacement> {
+    if is_stub_block(block) {
+        return Vec::new();
+    }
     let entries = block.all_entries();
     if block.name == "STATE_PLAYING" {
         return bind_playing_subset(&entries, bnd);
     }
-    bind_verbatim_entries(&entries, bnd)
+    bind_verbatim_entries(block, bnd)
 }
 
-/// Rect `i` lays out entry `i + 1`; entries without a rect stay
-/// unplaced.
-fn bind_verbatim_entries(entries: &[&ControlEntry], bnd: &Bnd) -> Vec<ScenePlacement> {
-    entries
-        .iter()
-        .skip(1)
-        .zip(bnd.rects.iter())
-        .map(|(entry, corners)| place_entry(entry, corners))
+/// Rect `i` lays out entry `i + 1`; entries without a rect, and
+/// container-coded entries, stay unplaced.
+fn bind_verbatim_entries(block: &ControlBlock, bnd: &Bnd) -> Vec<ScenePlacement> {
+    pair_entries_with_rects(block, bnd)
+        .into_iter()
+        .filter(|placed| entry_takes_rect(placed.entry))
+        .filter_map(|placed| {
+            let corners = placed.rect?;
+            Some(place_entry(placed.entry, corners))
+        })
         .collect()
 }
 
-/// Playing subset: rect `i` lays out entry `213 + i`.
+/// Playing subset: static backdrop panels first (entries 0–212,
+/// anchor-placed), then rect `i` lays out entry `213 + i`. Backdrops
+/// paint first so the bound gauges and buttons keep their top slot.
+/// Container-coded entries stay unplaced in both runs, like the
+/// verbatim path.
 fn bind_playing_subset(entries: &[&ControlEntry], bnd: &Bnd) -> Vec<ScenePlacement> {
-    entries
-        .iter()
-        .skip(PLAYING_SUBSET_FIRST_ENTRY)
-        .zip(bnd.rects.iter())
-        .map(|(entry, corners)| place_entry(entry, corners))
-        .collect()
+    let mut placed = bind_playing_backdrops(entries);
+    placed.extend(
+        entries
+            .iter()
+            .skip(PLAYING_SUBSET_FIRST_ENTRY)
+            .zip(bnd.rects.iter())
+            .filter(|(entry, _)| entry_takes_rect(entry))
+            .map(|(entry, corners)| place_entry(entry, corners)),
+    );
+    placed
 }
 
 /// One placement from an entry plus its native `.bnd` corners.
@@ -302,7 +483,9 @@ fn place_entry(entry: &ControlEntry, corners: &BndRect) -> ScenePlacement {
 }
 
 /// Load every named sprite body, skipping missing or undecodable
-/// bodies (one bad sprite never blanks the scene).
+/// bodies (one bad sprite never blanks the scene). Names that miss
+/// the archive — including scrollbar parameters, which are never
+/// files (recipe step 9) — or fail to decode contribute nothing.
 #[must_use]
 pub fn load_scene_figures(archive: &[u8], names: &[String]) -> HashMap<String, AvatarFigure> {
     let mut figures = HashMap::new();
@@ -325,7 +508,8 @@ pub fn load_avi_logo(archive: &[u8]) -> Option<AvatarFigure> {
 
 /// Frame-space origin of a placement: the verbatim native `.bnd`
 /// origin scaled to the frame only at present. The rect itself stays
-/// native 800x600; the sprite paints 1:1 at this origin.
+/// native 800x600; unbound sprites paint 1:1 at this origin, while
+/// bound layers cover the whole scaled rect.
 #[must_use]
 pub fn placement_origin_in_frame(
     placement: &ScenePlacement,
@@ -336,9 +520,16 @@ pub fn placement_origin_in_frame(
     (scaled.x, scaled.y)
 }
 
-/// Paint every placed figure at its verbatim native origin (scaled
-/// to the frame only at present), in file order. No centering and no
-/// full-canvas stretch: placements without a loaded figure are
+/// Paint every placed figure through its verbatim native rect
+/// (scaled to the frame only at present), in file order (recipe
+/// steps 7–8): the background lands first and later entries cover
+/// it. Bound placements blit each layer 1:1 at its record anchor,
+/// clipped to the rect — the rect size bounds the paint (pixels
+/// outside stay untouched) and scales with the frame, so layout
+/// never ignores it; single-image bodies duplicate their rect
+/// byte-exact, so anchor and rect coincide on real art. Unbound
+/// placements carry an empty rect and paint 1:1 at the sprite's
+/// own record anchor. Placements without a loaded figure are
 /// skipped, and live UI ink paints on top in the callers.
 pub fn paint_scene_figures(
     frame: &mut Frame<'_>,
@@ -351,7 +542,12 @@ pub fn paint_scene_figures(
     }
 }
 
-/// Paint one placed figure, if its sprite loaded.
+/// Paint one placed figure, if its sprite loaded. Bound
+/// placements anchor-blit every layer 1:1 at its record anchor
+/// (offset from the frame-scaled rect origin), clipped to the
+/// frame-scaled rect (recipe step 7: rect sizes honored, sprite
+/// anchors used); unbound placements carry an empty rect and
+/// paint 1:1 at the sprite's record anchor.
 fn paint_placed_figure(
     frame: &mut Frame<'_>,
     placement: &ScenePlacement,
@@ -365,8 +561,24 @@ fn paint_placed_figure(
     let Some(figure) = figures.get(name) else {
         return;
     };
-    let (x, y) = placement_origin_in_frame(placement, frame_w, frame_h);
-    figure.paint(frame, x, y);
+    if placement.rect.w == 0 || placement.rect.h == 0 {
+        let (x, y) = placement_origin_in_frame(placement, frame_w, frame_h);
+        figure.paint(frame, x, y);
+        return;
+    }
+    let dest = scale_rect_to_frame(&placement.rect, frame_w, frame_h);
+    for index in 0..figure.len() {
+        if let Some(layer) = figure.layer(index) {
+            blit_anchor_in_rect(
+                frame,
+                &layer.image,
+                dest.x + layer.dx,
+                dest.y + layer.dy,
+                layer.colorkey,
+                &dest,
+            );
+        }
+    }
 }
 
 /// Pick the sprite filenames one equipped item contributes to the
@@ -699,9 +911,9 @@ mod avatar_figure_tests {
             "STATE_ROOM 0x02",
             "{",
             "BOUND \"State_Room.bnd\"",
-            "IDC_ROOM 0X00100000",
-            "IDC_LIST 0X10500001 \"Room_List.ojs\"",
-            "IDC_BUTTON 0X20500002 \"Room_Button.ojs\"",
+            "IDC_ROOM 0X13000000",
+            "IDC_LIST 0X13500001 \"Room_List.ojs\"",
+            "IDC_BUTTON 0X13200002 \"Room_Button.ojs\"",
             "}",
             "",
         ]
@@ -780,24 +992,24 @@ mod avatar_figure_tests {
         let mut bound = Vec::new();
         bound.push(ControlEntry {
             id: "IDC_STATE_PLAY".to_owned(),
-            code: 0,
+            code: 0x1B00_0000,
             sprite: None,
         });
         for index in 1..235 {
             bound.push(ControlEntry {
                 id: format!("IDC_FILL_{index:03}"),
-                code: 0,
+                code: 0x1B50_0000 + index,
                 sprite: None,
             });
         }
         bound[213] = ControlEntry {
             id: "IDC_BUTTON_SPLAY_EXIT".to_owned(),
-            code: 0,
+            code: 0x1B20_0001,
             sprite: Some("Playing_Exit.ojs".to_owned()),
         };
         bound[229] = ControlEntry {
             id: "IDC_TEXT_SPLAY_VLOLUME".to_owned(),
-            code: 0,
+            code: 0x1B40_0011,
             sprite: None,
         };
         ControlBlock {
@@ -827,6 +1039,62 @@ mod avatar_figure_tests {
         assert_eq!(placed[1].rect.x, 752);
         assert!(block.all_entries()[1].id.starts_with("IDC_FILL_"));
         assert_ne!(placed[0].id, block.all_entries()[1].id);
+    }
+
+    #[test]
+    fn playing_backdrops_stage_ahead_of_bound_rects() {
+        // Static edge panels among entries 0-212 stage as anchor
+        // placements ahead of the 17 bound rects; the lane-covering
+        // `Note_BG.ojs` stays out so notes keep falling underneath.
+        let mut block = playing_block();
+        block.bound[114].sprite = Some("Note_BG.ojs".to_owned());
+        block.bound[115].sprite = Some("Playing_Menu.ojs".to_owned());
+        block.bound[125].sprite = Some("Life_gauge_back.ojs".to_owned());
+        block.bound[126].sprite = Some("Life_gauge_left_bar.ojs".to_owned());
+        block.bound[127].sprite = Some("Jamgauge_left_bar.ojs".to_owned());
+        block.bound[128].sprite = Some("Jam_gauge_text.ojs".to_owned());
+        block.bound[129].sprite = Some("Main_level.ojs".to_owned());
+        let corners: Vec<(u32, u32, u32, u32)> =
+            (0..17).map(|i| (751 + i, 554, 793 + i, 596)).collect();
+        let bnd = o2jam_file::parse_bnd(&bnd_blob(&corners)).unwrap();
+        let placed = bind_scene_rects(&block, &bnd);
+        assert_eq!(placed.len(), PLAYING_BACKDROP_PANELS.len() + 17);
+        let backdrops = &placed[..PLAYING_BACKDROP_PANELS.len()];
+        for (backdrop, panel) in backdrops.iter().zip(PLAYING_BACKDROP_PANELS) {
+            assert_eq!(backdrop.sprite.as_deref(), Some(panel));
+            assert_eq!(
+                backdrop.rect,
+                o2jam_render::Rect {
+                    x: 0,
+                    y: 0,
+                    w: 0,
+                    h: 0
+                }
+            );
+        }
+        assert!(!backdrops
+            .iter()
+            .any(|backdrop| backdrop.sprite.as_deref() == Some("Note_BG.ojs")));
+        assert_eq!(
+            placed[PLAYING_BACKDROP_PANELS.len()].id,
+            "IDC_BUTTON_SPLAY_EXIT"
+        );
+    }
+
+    #[test]
+    fn archive_sprite_load_ignores_ascii_case() {
+        // 7.55 spells the level plate `main_level.ojs` while the
+        // block names `Main_level.ojs`: the case fallback still
+        // stages it, and true misses still return `None`.
+        let red = sprite55_blob(1, 0x0000, 1, 1, &[0x00, 0x7C]);
+        let archive = opa_blob(&[("main_level.ojs", &red)]);
+        assert_eq!(
+            load_archive_sprite(&archive, "Main_level.ojs")
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(load_archive_sprite(&archive, "Missing.ojs").is_none());
     }
 
     #[test]
@@ -893,5 +1161,185 @@ mod avatar_figure_tests {
         let sprite = o2jam_file::parse_sprite55(&red).unwrap();
         let figure = AvatarFigure::from_sprite55(&sprite);
         assert_eq!(figure.extent(), (1, 1));
+    }
+
+    fn stub_block_text() -> String {
+        [
+            "NUMBER_OF_STATE 0x01",
+            "STATE_PLAYING 0x00",
+            "STATE_TUTORIAL 0x00",
+            "STATE_ROOM 0x01",
+            "{",
+            "BOUND \"State_Room.bnd\"",
+            "IDC_ROOM 0X13000000",
+            "}",
+            "",
+        ]
+        .join("\n")
+    }
+
+    #[test]
+    fn stub_blocks_stage_nothing() {
+        // Recipe step 3: the bare `0x00` stubs draw nothing, even
+        // with a bind section on hand.
+        let list = o2jam_file::parse_control_list(&stub_block_text()).unwrap();
+        let bnd = o2jam_file::parse_bnd(&bnd_blob(&[(0, 0, 800, 600)])).unwrap();
+        for stub in ["STATE_PLAYING", "STATE_TUTORIAL"] {
+            let block = scene_block(&list, stub).unwrap();
+            assert!(is_stub_block(block));
+            assert!(bind_scene_rects(block, &bnd).is_empty());
+            assert!(anchor_placements(block).is_empty());
+        }
+    }
+
+    #[test]
+    fn named_block_with_entries_is_no_stub() {
+        let list = o2jam_file::parse_control_list(&stub_block_text()).unwrap();
+        let block = scene_block(&list, ROOM_BLOCK).unwrap();
+        assert!(!is_stub_block(block));
+    }
+
+    #[test]
+    fn container_coded_rows_take_no_rect() {
+        // Entry codes gate visibility: a zero low word marks a
+        // scene/container row, so it stays unplaced even with a
+        // sprite and a spare rect.
+        let list = o2jam_file::parse_control_list(
+            &[
+                "NUMBER_OF_STATE 0x01",
+                "STATE_ROOM 0x02",
+                "{",
+                "BOUND \"State_Room.bnd\"",
+                "IDC_ROOM 0X13000000",
+                "IDC_LIST 0X13500001 \"Room_List.ojs\"",
+                "IDC_CONTAINER 0X13000000 \"Room_List.ojs\"",
+                "}",
+                "",
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let block = scene_block(&list, ROOM_BLOCK).unwrap();
+        let bnd =
+            o2jam_file::parse_bnd(&bnd_blob(&[(0, 0, 400, 300), (400, 0, 800, 600)])).unwrap();
+        let placed = bind_scene_rects(block, &bnd);
+        assert_eq!(placed.len(), 1);
+        assert_eq!(placed[0].id, "IDC_LIST");
+        assert!(entry_state_id(0x1B20_0001) == 0x1B);
+        assert!(entry_takes_rect(block.all_entries()[1]));
+    }
+
+    #[test]
+    fn bound_layers_paint_at_anchors_clipped_to_rect() {
+        // Recipe step 7: 1:1 at the record anchor, clipped to the
+        // rect — the 1x1 body paints one pixel at (10, 20); the
+        // rest of the 4x4 rect and the frame stay untouched.
+        let red = sprite55_blob(1, 0xFFFF, 1, 1, &[0x00, 0x7C]);
+        let archive = opa_blob(&[("Room_List.ojs", &red)]);
+        let figures = load_scene_figures(&archive, &["Room_List.ojs".to_owned()]);
+        let list = o2jam_file::parse_control_list(&room_control_text()).unwrap();
+        let block = scene_block(&list, ROOM_BLOCK).unwrap();
+        let bnd = o2jam_file::parse_bnd(&bnd_blob(&[(10, 20, 14, 24), (0, 0, 8, 8)])).unwrap();
+        let placed = bind_scene_rects(block, &bnd);
+        let mut buf = vec![0u32; 800 * 600];
+        paint_scene_figures(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placed,
+            &figures,
+        );
+        let red_ink = o2jam_render::pack_xrgb(255, 0, 0);
+        assert_eq!(buf[20 * 800 + 10], red_ink);
+        assert_eq!(buf[20 * 800 + 11], 0);
+        assert_eq!(buf[21 * 800 + 10], 0);
+        assert_eq!(buf[0], 0);
+    }
+
+    #[test]
+    fn unbound_layers_paint_at_the_record_anchor() {
+        // No `.bnd`: the sprite's own anchor positions it, 1:1.
+        let mut figure = AvatarFigure::default();
+        figure.push_layer(FigureLayer {
+            image: o2jam_render::Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap(),
+            dx: 5,
+            dy: 7,
+            colorkey: 0xFFFF,
+        });
+        let placed = anchor_placements(
+            &o2jam_file::parse_control_list(
+                &[
+                    "NUMBER_OF_STATE 0x01",
+                    "STATE_CHANNEL 0x01",
+                    "{",
+                    "BOUND",
+                    "IDC_STATE_CHANNEL 0X12000000",
+                    "IDC_BAR 0X12000000",
+                    "IDC_SELECT 0X12500001 \"Dialog_ChannelSelectBar.ojs\"",
+                    "}",
+                    "",
+                ]
+                .join("\n"),
+            )
+            .unwrap()
+            .blocks
+            .pop()
+            .unwrap(),
+        );
+        assert_eq!(placed.len(), 1);
+        assert_eq!(placed[0].id, "IDC_SELECT");
+        assert_eq!(placed[0].code, 0x1250_0001);
+        let mut buf = vec![0u32; 800 * 600];
+        paint_scene_figures(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placed,
+            &std::collections::HashMap::from([("Dialog_ChannelSelectBar.ojs".to_owned(), figure)]),
+        );
+        assert_eq!(buf[7 * 800 + 5], o2jam_render::pack_xrgb(255, 0, 0));
+        assert_eq!(buf[0], 0);
+    }
+
+    #[test]
+    fn anchor_placements_skip_artless_and_scrollbar_entries() {
+        // Sprite-less text rows and scrollbar parameters draw no
+        // art; runtime-deferred names still stage for the loader.
+        let block = o2jam_file::parse_control_list(
+            &[
+                "NUMBER_OF_STATE 0x01",
+                "STATE_CHANNEL 0x27",
+                "{",
+                "BOUND",
+                "IDC_STATE_CHANNEL 0X12000000",
+                "IDC_BACK 0X12100001",
+                "IDC_SCROLL 0X12021002 \"O2_SBS_VERT\t4\t\t100\"",
+                "IDC_BG 0X12500003 \"_Playing_BG.ojs\"",
+                "}",
+                "",
+            ]
+            .join("\n"),
+        )
+        .unwrap()
+        .blocks
+        .pop()
+        .unwrap();
+        let placed = anchor_placements(&block);
+        assert_eq!(placed.len(), 1);
+        assert_eq!(placed[0].sprite.as_deref(), Some("_Playing_BG.ojs"));
+    }
+
+    #[test]
+    fn figure_layers_index_in_paint_order() {
+        let red = sprite55_blob(1, 0x0000, 1, 1, &[0x00, 0x7C]);
+        let sprite = o2jam_file::parse_sprite55(&red).unwrap();
+        let figure = AvatarFigure::from_sprite55(&sprite);
+        assert_eq!(figure.layer(0).unwrap().dx, 0);
+        assert!(figure.layer(1).is_none());
+        assert!(AvatarFigure::default().layer(0).is_none());
     }
 }
