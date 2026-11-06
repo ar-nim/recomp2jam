@@ -197,14 +197,30 @@ table 4 → `+0x184/+0x188/+0x18c`, table 5 → `+0x190` (id echo) /
   `0x238` entry via `0x452850` into dialog `+0x640` at VA `0x4445cd`
   (file `0x445cd`) when flag `[ebp+0x1c0] == 0`, else into dialog
   `+0x680` at VA `0x4445e7` (file `0x445e7`) — the `+0x680`
-  producer. Dialog `+0x690` producers are five `0x452850` appends of
-  `0x238`-entry pointers (via `0x453780`) in the song-entry builder
+  seed producer. The `+0x680` filter chain rebuilds that list from
+  `+0x640` in two keyed functions: VA `0x444630` (file `0x44630`;
+  clear via `0x452a00` at file `0x446c0`) fans out through `0x452850`
+  at files `0x44957` (name-keyed first pass), `0x44a08` (index 0),
+  `0x44abe` (index 2), `0x44b74` (index 5), `0x44c2a` (index 6),
+  `0x44ce6` (index 8), and `0x44f61` (second loop), each guarded by
+  a byte-range check plus a 2-byte `strncmp` against the key-name
+  table (indexed `0x6454d8`, fixed `0x645510`/`0x645514`/`0x645518`/
+  `0x64551c`/`0x645520`) under the dialog-mode dispatch on `+0x188`
+  (0/1/else); VA `0x444fe0` (file `0x44fe0`; clear at file `0x45070`)
+  appends at files `0x4528b` and `0x454fa` with the same keyed shape.
+  Dialog `+0x690` holds inline `0x238` entries, not retained
+  pointers: five `0x452850` appends copy one entry each from a
+  source address returned by `0x453780` in the song-entry builder
   (`0x441d10` region): file `0x4298d` (`song+0x16c == 1` arm,
   `entry+0x210 == 0`), file `0x429e3` (`song+0x178 == 0` and
   `song+0x16c == 2`), file `0x42c05` (mode `0x76fc38 == 1`, level
   `+0x210 == 1`, `song+0x178 == 0`, `song+0x16c == 1`),
   file `0x42de8` (mode 0/4 path, same song guards), file `0x42e13`
-  (mode 3, unconditional). (Static disassembly survey; REA
+  (mode 3, unconditional). The `+0x690` copy is synchronous, so
+  each source pointer lifetime ends at return; `+0x690` is
+  `0x238`-stride inline storage (count at file `0x42f8f`), while the
+  global `0x7797e0` list appended at file `0x42f4f` (cleared at file
+  `0x42e63`) is a different list. (Static disassembly survey; REA
   dossier TBD.)
 - Table 2 `listing` = selection class. A song filter branches on
   `song+0x16c == 1` versus the rest (file offset `0x3706f`), and
