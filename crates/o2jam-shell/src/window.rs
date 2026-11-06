@@ -49,14 +49,21 @@ impl WindowHandler {
                 let Some(layout) = present_layout(width, height, buffer.len(), pixels.len()) else {
                     return;
                 };
-                o2jam_render::stretch_blit(
+                let Ok(window_w) = usize::try_from(layout.window_w) else {
+                    return;
+                };
+                let Ok(window_h) = usize::try_from(layout.window_h) else {
+                    return;
+                };
+                if !o2jam_render::present_native_frame(
                     &mut buffer,
-                    layout.dst_w as usize,
-                    layout.dst_h as usize,
+                    window_w,
+                    window_h,
                     pixels,
-                    DEFAULT_WIDTH as usize,
-                    DEFAULT_HEIGHT as usize,
-                );
+                    LETTERBOX,
+                ) {
+                    return;
+                }
                 if let Err(error) = buffer.present() {
                     self.paint_error = Some(anyhow::anyhow!("present failed: {error:?}"));
                     event_loop.exit();
@@ -141,13 +148,25 @@ impl WindowHandler {
     }
 }
 
-/// Validated present geometry: the window buffer to cover.
+/// Letterbox bar color: black bars around the aspect-fit image.
+pub const LETTERBOX: u32 = 0x000000;
+
+/// Validated present geometry: the centered uniform-scale draw rect
+/// of the native backbuffer inside the window buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PresentLayout {
     /// Window-buffer width in pixels.
-    pub dst_w: u32,
+    pub window_w: u32,
     /// Window-buffer height in pixels.
-    pub dst_h: u32,
+    pub window_h: u32,
+    /// Left offset of the scaled image inside the window.
+    pub offset_x: u32,
+    /// Top offset of the scaled image inside the window.
+    pub offset_y: u32,
+    /// Scaled image width (uniform scale, aspect preserved).
+    pub draw_w: u32,
+    /// Scaled image height (uniform scale, aspect preserved).
+    pub draw_h: u32,
 }
 
 /// Backbuffer words for the native 800x600 canvas.
@@ -163,8 +182,10 @@ pub fn backbuffer_ready(pixels_len: usize) -> bool {
 }
 
 /// Validate a present: nonzero window size, a window buffer that
-/// exactly covers it, and a complete native backbuffer. `None`
-/// means skip the frame rather than show a torn one.
+/// exactly covers it, and a complete native backbuffer. The draw
+/// rect is the largest aspect-preserving fit of 800x600, centered
+/// with letterbox bars. `None` means skip the frame rather than
+/// show a torn one.
 #[must_use]
 pub fn present_layout(
     width: u32,
@@ -172,18 +193,23 @@ pub fn present_layout(
     window_buffer_len: usize,
     backbuffer_len: usize,
 ) -> Option<PresentLayout> {
-    if width == 0 || height == 0 {
-        return None;
-    }
-    if window_buffer_len != width as usize * height as usize {
+    let window_w = usize::try_from(width).ok()?;
+    let window_h = usize::try_from(height).ok()?;
+    let window_len = window_w.checked_mul(window_h)?;
+    if window_len == 0 || window_buffer_len != window_len {
         return None;
     }
     if !backbuffer_ready(backbuffer_len) {
         return None;
     }
+    let fit = o2jam_render::native_present(window_w, window_h)?;
     Some(PresentLayout {
-        dst_w: width,
-        dst_h: height,
+        window_w: width,
+        window_h: height,
+        offset_x: u32::try_from(fit.offset_x).ok()?,
+        offset_y: u32::try_from(fit.offset_y).ok()?,
+        draw_w: u32::try_from(fit.draw_w).ok()?,
+        draw_h: u32::try_from(fit.draw_h).ok()?,
     })
 }
 
@@ -237,20 +263,44 @@ mod tests {
         assert_eq!(
             layout,
             Some(PresentLayout {
-                dst_w: 800,
-                dst_h: 600
+                window_w: 800,
+                window_h: 600,
+                offset_x: 0,
+                offset_y: 0,
+                draw_w: 800,
+                draw_h: 600,
             })
         );
     }
 
     #[test]
-    fn present_stretches_cleanly_to_other_window_sizes() {
+    fn present_letterboxes_wide_window_with_uniform_scale() {
         let layout = present_layout(1600, 900, 1600 * 900, backbuffer_words());
         assert_eq!(
             layout,
             Some(PresentLayout {
-                dst_w: 1600,
-                dst_h: 900
+                window_w: 1600,
+                window_h: 900,
+                offset_x: 200,
+                offset_y: 0,
+                draw_w: 1200,
+                draw_h: 900,
+            })
+        );
+    }
+
+    #[test]
+    fn present_letterboxes_tall_window_with_uniform_scale() {
+        let layout = present_layout(600, 800, 600 * 800, backbuffer_words());
+        assert_eq!(
+            layout,
+            Some(PresentLayout {
+                window_w: 600,
+                window_h: 800,
+                offset_x: 0,
+                offset_y: 175,
+                draw_w: 600,
+                draw_h: 450,
             })
         );
     }
@@ -284,15 +334,37 @@ mod tests {
         let backbuffer = vec![7u32; backbuffer_words()];
         let layout =
             present_layout(80, 60, 80 * 60, backbuffer.len()).expect("small window presents");
+        assert_eq!((layout.offset_x, layout.offset_y), (0, 0));
+        assert_eq!((layout.draw_w, layout.draw_h), (80, 60));
         let mut dst = vec![0u32; 80 * 60];
-        o2jam_render::stretch_blit(
+        let presented = o2jam_render::present_native_frame(
             &mut dst,
-            layout.dst_w as usize,
-            layout.dst_h as usize,
+            usize::try_from(layout.window_w).unwrap(),
+            usize::try_from(layout.window_h).unwrap(),
             &backbuffer,
-            DEFAULT_WIDTH as usize,
-            DEFAULT_HEIGHT as usize,
+            LETTERBOX,
         );
+        assert!(presented);
         assert!(dst.iter().all(|pixel| *pixel == 7));
+    }
+
+    #[test]
+    fn present_paints_letterbox_bars_black() {
+        let backbuffer = vec![7u32; backbuffer_words()];
+        let layout =
+            present_layout(1600, 900, 1600 * 900, backbuffer.len()).expect("wide window presents");
+        let mut dst = vec![0u32; 1600 * 900];
+        let presented = o2jam_render::present_native_frame(
+            &mut dst,
+            usize::try_from(layout.window_w).unwrap(),
+            usize::try_from(layout.window_h).unwrap(),
+            &backbuffer,
+            LETTERBOX,
+        );
+        assert!(presented);
+        assert_eq!(dst[0], LETTERBOX);
+        let bar_end = usize::try_from(layout.offset_x).unwrap();
+        assert!(dst[..bar_end].iter().all(|pixel| *pixel == LETTERBOX));
+        assert_eq!(dst[bar_end], 7);
     }
 }

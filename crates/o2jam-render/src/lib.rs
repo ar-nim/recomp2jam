@@ -480,13 +480,43 @@ pub fn rect_from_corners(x1: u32, y1: u32, x2: u32, y2: u32) -> Rect {
     }
 }
 
+/// Native destination for a layout rect: a verbatim copy.
+///
+/// Scenes compose at 800x600, so a `.bnd` rect addresses the frame
+/// directly: no per-axis stretch, no origin-only scaling that drops
+/// `w`/`h`. Only the finished native frame scales, once, at present
+/// (see [`present_native_frame`]).
+///
+/// Kept as a named step so call sites read as intent ("place this
+/// rect verbatim") instead of copying fields by hand.
+#[must_use]
+pub fn native_dest(rect: &Rect) -> Rect {
+    *rect
+}
+
+/// Whether `w` x `h` is the native 800x600 canvas.
+#[must_use]
+pub fn is_native_frame(frame_w: usize, frame_h: usize) -> bool {
+    u64::try_from(frame_w).unwrap_or(u64::MAX) == u64::from(NATIVE_WIDTH)
+        && u64::try_from(frame_h).unwrap_or(u64::MAX) == u64::from(NATIVE_HEIGHT)
+}
+
 /// Scale one native axis into frame pixels.
+///
+/// Legacy per-axis layout scaler: kept so existing painters keep
+/// compiling while they migrate to native compose + [`native_dest`].
+/// Do not use it for new layout work; it stretches aspect on any
+/// non-native frame instead of letterboxing at present.
 fn scale_axis(value: i32, frame_len: usize, native_len: u32) -> i32 {
     (i64::from(value) * frame_len as i64 / i64::from(native_len)) as i32
 }
 
 /// Scale a native-canvas rect into frame pixels (identity on
 /// 800x600, proportional on headless test buffers).
+///
+/// Legacy layout scaler (see [`scale_axis`]): prefer composing at
+/// native with [`native_dest`] and scaling the finished frame once
+/// with [`present_native_frame`].
 #[must_use]
 pub fn scale_rect_to_frame(rect: &Rect, frame_w: usize, frame_h: usize) -> Rect {
     Rect {
@@ -510,6 +540,124 @@ pub fn center_rect(inner_w: usize, inner_h: usize, frame_w: usize, frame_h: usiz
         y: frame_h.saturating_sub(inner_h) as i32 / 2,
         w: inner_w.min(frame_w) as u32,
         h: inner_h.min(frame_h) as u32,
+    }
+}
+
+/// Centered uniform-scale draw rect of the native frame inside a
+/// window: the single place where display scaling happens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NativePresent {
+    /// Left offset of the scaled image inside the window.
+    pub offset_x: usize,
+    /// Top offset of the scaled image inside the window.
+    pub offset_y: usize,
+    /// Scaled image width (uniform scale, aspect preserved).
+    pub draw_w: usize,
+    /// Scaled image height (uniform scale, aspect preserved).
+    pub draw_h: usize,
+}
+
+/// Uniform-scale present geometry for a `window_w` x `window_h`
+/// window: largest aspect-preserving fit of 800x600, centered.
+/// `None` on zero sides or overflowing geometry.
+#[must_use]
+pub fn native_present(window_w: usize, window_h: usize) -> Option<NativePresent> {
+    if window_w == 0 || window_h == 0 {
+        return None;
+    }
+    let wide = u64::try_from(window_w).unwrap_or(u64::MAX) * u64::from(NATIVE_HEIGHT)
+        >= u64::try_from(window_h).unwrap_or(u64::MAX) * u64::from(NATIVE_WIDTH);
+    let native_w = u64::from(NATIVE_WIDTH);
+    let native_h = u64::from(NATIVE_HEIGHT);
+    let (draw_w, draw_h) = if wide {
+        let scaled_w = native_w
+            .checked_mul(u64::try_from(window_h).unwrap_or(0))?
+            .checked_div(native_h)?;
+        (scaled_w, u64::try_from(window_h).unwrap_or(0))
+    } else {
+        let scaled_h = native_h
+            .checked_mul(u64::try_from(window_w).unwrap_or(0))?
+            .checked_div(native_w)?;
+        (u64::try_from(window_w).unwrap_or(0), scaled_h)
+    };
+    let draw_w = usize::try_from(draw_w).ok()?;
+    let draw_h = usize::try_from(draw_h).ok()?;
+    if draw_w == 0 || draw_h == 0 || draw_w > window_w || draw_h > window_h {
+        return None;
+    }
+    Some(NativePresent {
+        offset_x: window_w.saturating_sub(draw_w) / 2,
+        offset_y: window_h.saturating_sub(draw_h) / 2,
+        draw_w,
+        draw_h,
+    })
+}
+
+/// Scale one finished native frame into a window buffer, once.
+///
+/// Fills the whole window with `background` (the letterbox bars),
+/// then nearest-neighbor scales the 800x600 `native` image into the
+/// centered [`native_present`] rect. Returns `false` (leaving
+/// `window` untouched) on bad geometry so callers skip the frame
+/// instead of showing a torn one.
+#[must_use]
+pub fn present_native_frame(
+    window: &mut [u32],
+    window_w: usize,
+    window_h: usize,
+    native: &[u32],
+    background: u32,
+) -> bool {
+    let Some(layout) = native_present(window_w, window_h) else {
+        return false;
+    };
+    let Some(window_len) = window_w.checked_mul(window_h) else {
+        return false;
+    };
+    let Ok(native_expected) = usize::try_from(NATIVE_WIDTH)
+        .and_then(|w| usize::try_from(NATIVE_HEIGHT).map(|h| w.checked_mul(h).unwrap_or(0)))
+    else {
+        return false;
+    };
+    if window.len() < window_len || native.len() < native_expected {
+        return false;
+    }
+    window[..window_len].fill(background);
+    paint_present_rows(window, window_w, native, &layout);
+    true
+}
+
+/// Nearest-neighbor rows of the scaled native image.
+fn paint_present_rows(window: &mut [u32], window_w: usize, native: &[u32], layout: &NativePresent) {
+    let Ok(native_w) = usize::try_from(NATIVE_WIDTH) else {
+        return;
+    };
+    let Ok(native_h) = usize::try_from(NATIVE_HEIGHT) else {
+        return;
+    };
+    for row in 0..layout.draw_h {
+        let src_row = stretch_index(row, layout.draw_h, native_h);
+        let Some(window_row) = layout.offset_y.checked_add(row) else {
+            continue;
+        };
+        for col in 0..layout.draw_w {
+            let src_col = stretch_index(col, layout.draw_w, native_w);
+            let Some(window_col) = layout.offset_x.checked_add(col) else {
+                continue;
+            };
+            let Some(at) = window_row
+                .checked_mul(window_w)
+                .and_then(|base| base.checked_add(window_col))
+            else {
+                continue;
+            };
+            let Some(pixel) = native.get(src_row * native_w + src_col) else {
+                continue;
+            };
+            if let Some(slot) = window.get_mut(at) {
+                *slot = *pixel;
+            }
+        }
     }
 }
 
@@ -2153,6 +2301,80 @@ mod tests {
                 h: 60
             }
         );
+    }
+
+    #[test]
+    fn native_dest_keeps_verbatim_rect() {
+        let rect = Rect {
+            x: 100,
+            y: 150,
+            w: 200,
+            h: 120,
+        };
+        assert_eq!(native_dest(&rect), rect);
+    }
+
+    #[test]
+    fn native_frame_detection_matches_800x600() {
+        assert!(is_native_frame(800, 600));
+        assert!(!is_native_frame(80, 60));
+    }
+
+    #[test]
+    fn native_present_fits_wide_window_with_side_bars() {
+        assert_eq!(
+            native_present(1600, 900),
+            Some(NativePresent {
+                offset_x: 200,
+                offset_y: 0,
+                draw_w: 1200,
+                draw_h: 900,
+            })
+        );
+    }
+
+    #[test]
+    fn native_present_fits_tall_window_with_top_bars() {
+        assert_eq!(
+            native_present(600, 800),
+            Some(NativePresent {
+                offset_x: 0,
+                offset_y: 175,
+                draw_w: 600,
+                draw_h: 450,
+            })
+        );
+    }
+
+    #[test]
+    fn native_present_rejects_zero_window() {
+        assert_eq!(native_present(0, 600), None);
+        assert_eq!(native_present(800, 0), None);
+    }
+
+    #[test]
+    fn present_native_frame_letterboxes_and_scales_content() {
+        let native_w = usize::try_from(NATIVE_WIDTH).unwrap();
+        let native_h = usize::try_from(NATIVE_HEIGHT).unwrap();
+        let mut native = vec![0x111111u32; native_w * native_h];
+        native[0] = 0xFF0000;
+        let mut window = vec![0x222222u32; 1600 * 900];
+        assert!(present_native_frame(
+            &mut window,
+            1600,
+            900,
+            &native,
+            0x000000
+        ));
+        assert_eq!(window[0], 0x000000);
+        assert_eq!(window[200], 0xFF0000);
+        assert!(!present_native_frame(
+            &mut window,
+            0,
+            900,
+            &native,
+            0x000000
+        ));
     }
 
     #[test]
