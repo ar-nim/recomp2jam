@@ -503,20 +503,33 @@ fn authorize(gateway: &mut GatewayConnection, options: &ConnectOptions) -> Resul
     }
 }
 
-/// Stack the worn figure for fetched equipment: read the local
-/// `avatar.opa`, parse its item table, and layer every resolvable
-/// part. `Any` gender wears the female parity (documented guess).
-/// Stack a worn figure from a local `avatar.opa` and explicit
-/// equipment ids (shared by `connect --avatar-opa` and
-/// `play --window --avatar-opa --equip`).
-pub fn build_worn_figure(
-    opa_path: &str,
+/// Read a local avatar archive off disk.
+///
+/// File IO only: parsing and stacking live in [`stack_worn_figure`],
+/// so the login flow never touches the filesystem except through this
+/// one helper.
+///
+/// # Errors
+///
+/// The path is unreadable.
+fn read_avatar_archive(opa_path: &str) -> Result<Vec<u8>> {
+    std::fs::read(opa_path).with_context(|| format!("reading avatar archive {opa_path}"))
+}
+
+/// Stack the worn figure from an in-memory `avatar.opa` image: parse
+/// its item table and layer every resolvable part. `Any` gender wears
+/// the female parity (documented guess).
+///
+/// # Errors
+///
+/// The bytes are not an `.opa` archive, or its item table is missing
+/// or corrupt.
+pub fn stack_worn_figure(
+    archive: &[u8],
     equipment: &[i32],
     male: bool,
 ) -> Result<o2jam_shell::AvatarFigure> {
-    let archive =
-        std::fs::read(opa_path).with_context(|| format!("reading avatar archive {opa_path}"))?;
-    let entries = o2jam_file::parse_opi(&archive)?;
+    let entries = o2jam_file::parse_opi(archive)?;
     let table_entry = entries
         .iter()
         .find(|entry| entry.name == "Itemdata_Korea.dat")
@@ -526,12 +539,39 @@ pub fn build_worn_figure(
         .with_context(|| "item table out of archive bounds")?;
     let table = o2jam_file::parse_avatar_item_table(table_bytes)?;
     Ok(o2jam_shell::load_worn_figure(
-        &archive, &table, equipment, male,
+        archive, &table, equipment, male,
     ))
 }
 
+/// Stack a worn figure from a local `avatar.opa` and explicit
+/// equipment ids (shared by `connect --avatar-opa` and
+/// `play --window --avatar-opa --equip`).
+///
+/// # Errors
+///
+/// The archive is unreadable or unstackable (see [`stack_worn_figure`]).
+pub fn build_worn_figure(
+    opa_path: &str,
+    equipment: &[i32],
+    male: bool,
+) -> Result<o2jam_shell::AvatarFigure> {
+    let archive = read_avatar_archive(opa_path)?;
+    stack_worn_figure(&archive, equipment, male)
+}
+
+/// Stack the worn figure for fetched character info from an in-memory
+/// archive image (equipment and `Male` parity come from the hero).
+///
+/// # Errors
+///
+/// The archive image is unstackable (see [`stack_worn_figure`]).
+fn figure_for_character(archive: &[u8], hero: &CharacterInfo) -> Result<o2jam_shell::AvatarFigure> {
+    stack_worn_figure(archive, &hero.equipment, hero.gender == Gender::Male)
+}
+
 fn fetch_avatar(opa_path: &str, hero: &CharacterInfo) -> Result<o2jam_shell::AvatarFigure> {
-    build_worn_figure(opa_path, &hero.equipment, hero.gender == Gender::Male)
+    let archive = read_avatar_archive(opa_path)?;
+    figure_for_character(&archive, hero)
 }
 
 /// Load one named sprite from an interface archive on disk.
@@ -989,6 +1029,153 @@ mod connect_flow_tests {
         let message = format!("{:?}", outcome.unwrap_err());
         assert!(message.contains("authorize rejected"), "{message}");
         assert!(message.contains("InvalidLogin"), "{message}");
+    }
+}
+/// Avatar IO split: [`read_avatar_archive`] owns the filesystem,
+/// [`stack_worn_figure`] and [`figure_for_character`] own the bytes.
+#[cfg(test)]
+mod avatar_io_tests {
+    use super::*;
+
+    /// Minimal sprite-55 body: 1x1 red pixel, colorkey black.
+    fn red_sprite() -> Vec<u8> {
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&1u16.to_le_bytes());
+        blob.extend_from_slice(&o2jam_file::SPRITE55_MAGIC.to_le_bytes());
+        blob.extend_from_slice(&1u16.to_le_bytes());
+        blob.extend_from_slice(&0u16.to_le_bytes());
+        for field in [0u16, 0u16, 1u16, 1u16] {
+            blob.extend_from_slice(&field.to_le_bytes());
+        }
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        blob.extend_from_slice(&2u32.to_le_bytes());
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        blob.extend_from_slice(&[0x00, 0x7C]);
+        blob
+    }
+
+    /// Minimal `.opa`: header + bodies + trailing entry table.
+    fn opa_blob(bodies: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut blob = vec![0u8; 16];
+        blob[..4].copy_from_slice(&1u32.to_le_bytes());
+        blob[4..8].copy_from_slice(&(bodies.len() as u32).to_le_bytes());
+        let mut off = 16u32;
+        let mut table = Vec::new();
+        for (name, body) in bodies {
+            let mut entry = vec![0u8; 152];
+            entry[..4].copy_from_slice(&1u32.to_le_bytes());
+            entry[4..4 + name.len()].copy_from_slice(name.as_bytes());
+            entry[132..136].copy_from_slice(&off.to_le_bytes());
+            entry[136..140].copy_from_slice(&(body.len() as u32).to_le_bytes());
+            entry[140..144].copy_from_slice(&(body.len() as u32).to_le_bytes());
+            table.push(entry);
+            off += body.len() as u32;
+        }
+        let mut out = blob;
+        for (_, body) in bodies {
+            out.extend_from_slice(body);
+        }
+        for entry in table {
+            out.extend_from_slice(&entry);
+        }
+        out
+    }
+
+    /// Minimal item table: one row (id 1) wearing `AA.oji`.
+    fn item_table_blob() -> Vec<u8> {
+        let mut row = Vec::new();
+        row.extend_from_slice(&1u32.to_le_bytes());
+        row.extend_from_slice(&0x106u32.to_le_bytes());
+        row.extend_from_slice(&[0u8; 22]);
+        row.extend_from_slice(b"\x04\0\0\0hair\x03\0\0\0dsc");
+        let mut names: Vec<(u8, &str)> = vec![(1, ""); 42];
+        names[0] = (1, "i.oji");
+        names[1] = (1, "i.oji");
+        names[2] = (1, "AA.oji");
+        for (flag, name) in names {
+            row.push(flag);
+            row.extend_from_slice(&(name.len() as u32).to_le_bytes());
+            row.extend_from_slice(name.as_bytes());
+        }
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&2u32.to_le_bytes());
+        blob.extend_from_slice(&[0u8; 80]);
+        blob.extend_from_slice(&row);
+        blob
+    }
+
+    fn worn_archive() -> Vec<u8> {
+        opa_blob(&[
+            ("Itemdata_Korea.dat", &item_table_blob()),
+            ("AA.ojs", &red_sprite()),
+        ])
+    }
+
+    #[test]
+    fn stacks_figure_from_memory_without_disk() {
+        let archive = worn_archive();
+        let figure = stack_worn_figure(&archive, &[1], false).unwrap();
+        assert_eq!(figure.len(), 1);
+    }
+
+    #[test]
+    fn stacking_rejects_bare_buffers() {
+        assert!(stack_worn_figure(&[], &[1], false).is_err());
+        assert!(stack_worn_figure(&[0u8; 32], &[1], false).is_err());
+        let unknown = stack_worn_figure(&worn_archive(), &[999], false).unwrap();
+        assert_eq!(unknown.len(), 0);
+    }
+
+    #[test]
+    fn missing_item_table_stays_an_error() {
+        let archive = opa_blob(&[("AA.ojs", &red_sprite())]);
+        assert!(stack_worn_figure(&archive, &[1], false).is_err());
+    }
+
+    #[test]
+    fn archive_reader_round_trips_disk_bytes() {
+        let archive = worn_archive();
+        let path = std::env::temp_dir().join("recomp2jam-test-avatar-roundtrip.opa");
+        std::fs::write(&path, &archive).unwrap();
+        let back = read_avatar_archive(&path.to_string_lossy()).unwrap();
+        std::fs::remove_file(&path).ok();
+        assert_eq!(back, archive);
+        assert!(read_avatar_archive("nonexistent-avatar.opa").is_err());
+    }
+
+    #[test]
+    fn character_equipment_selects_worn_layers() {
+        let archive = worn_archive();
+        let mut equipped = CharacterInfo {
+            nickname: "tester".to_owned(),
+            ..Default::default()
+        };
+        equipped.equipment[0] = 1;
+        let figure = figure_for_character(&archive, &equipped).unwrap();
+        assert_eq!(figure.len(), 1);
+        let bare = CharacterInfo {
+            nickname: "tester".to_owned(),
+            ..Default::default()
+        };
+        let nothing = figure_for_character(&archive, &bare).unwrap();
+        assert_eq!(nothing.len(), 0);
+    }
+
+    #[test]
+    fn male_and_other_heroes_both_stack() {
+        let archive = worn_archive();
+        let mut male = CharacterInfo {
+            nickname: "tester".to_owned(),
+            gender: Gender::Male,
+            ..Default::default()
+        };
+        male.equipment[0] = 1;
+        let mut other = male.clone();
+        other.gender = Gender::Any;
+        assert_eq!(
+            figure_for_character(&archive, &male).unwrap().len(),
+            figure_for_character(&archive, &other).unwrap().len(),
+        );
     }
 }
 /// Host song flow over real gateway frames (plan Phases 3–4).
