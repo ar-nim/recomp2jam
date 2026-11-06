@@ -8,7 +8,10 @@ use super::super::playing::{HighwayGeometry, LivePlay};
 use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
-    paint_channel_list, paint_result, paint_room_list, paint_screen, paint_waiting_members,
+    paint_avi_scene, paint_channel_list, paint_channel_scene, paint_loading_scene,
+    paint_lobby_backdrop, paint_playing_overlay, paint_result, paint_result_scene, paint_room_list,
+    paint_room_scene, paint_screen, paint_waiting_members, paint_waiting_scene, scene_index,
+    SceneArt,
 };
 use super::side::{can_return_side, can_visit_side, paint_side_scene, SideScreen};
 use crate::MenuKey;
@@ -36,6 +39,7 @@ pub struct ScreenGame {
     side_origin: Option<Screen>,
     side_placements: Vec<ScenePlacement>,
     side_figures: HashMap<String, AvatarFigure>,
+    scene_art: [Option<SceneArt>; 7],
 }
 
 /// Key-sound bank plus backend for windowed play.
@@ -64,6 +68,7 @@ impl ScreenGame {
             side_origin: None,
             side_placements: Vec::new(),
             side_figures: HashMap::new(),
+            scene_art: std::array::from_fn(|_| None),
         }
     }
 
@@ -157,6 +162,28 @@ impl ScreenGame {
         self
     }
 
+    /// Stage real main-flow art for one screen: `.bnd` placements
+    /// (via `bind_scene_rects`, or full-canvas for unbound blocks)
+    /// plus figures loaded through `load_scene_figures`. Paint
+    /// layers the live UI over it; empty art keeps the flat fallback.
+    pub fn load_scene(
+        &mut self,
+        screen: Screen,
+        placements: Vec<ScenePlacement>,
+        figures: HashMap<String, AvatarFigure>,
+    ) -> &mut Self {
+        self.scene_art[scene_index(screen)] = Some(SceneArt {
+            placements,
+            figures,
+        });
+        self
+    }
+
+    /// Staged art for one screen, if any.
+    fn scene_art(&self, screen: Screen) -> Option<&SceneArt> {
+        self.scene_art[scene_index(screen)].as_ref()
+    }
+
     /// Open side screen, if any.
     #[must_use]
     pub fn side(&self) -> Option<SideScreen> {
@@ -210,31 +237,85 @@ impl ScreenGame {
             let _ = self.flow.go(Screen::Result);
         }
         match self.flow.current() {
-            Screen::Playing => {
-                let geom = HighwayGeometry::centered(frame.w, frame.h);
-                self.playing.paint(frame, &geom, now_ms);
+            Screen::Playing => self.paint_playing(frame, now_ms),
+            Screen::Avi => self.paint_avi(frame),
+            Screen::Channel => self.paint_channel(frame),
+            Screen::Room => self.paint_room(frame),
+            Screen::Waiting => self.paint_waiting(frame),
+            Screen::Loading => self.paint_loading(frame),
+            Screen::Result => self.paint_result(frame),
+        }
+    }
+
+    /// Splash: staged logo art when present, else the flat card;
+    /// the separately loaded splash figure paints on top either way.
+    fn paint_avi(&self, frame: &mut Frame<'_>) {
+        match self.scene_art(Screen::Avi) {
+            Some(art) => paint_avi_scene(frame, art),
+            None => paint_screen(frame, Screen::Avi),
+        }
+        if let Some(logo) = &self.splash {
+            logo.paint(frame, 0, 0);
+        }
+    }
+
+    /// Channel: staged art behind the live list, flat card fallback.
+    fn paint_channel(&self, frame: &mut Frame<'_>) {
+        match (self.scene_art(Screen::Channel), self.channels.is_empty()) {
+            (Some(art), false) => {
+                paint_channel_scene(frame, &self.channels, self.highlight, art);
             }
-            Screen::Avi => {
-                paint_screen(frame, Screen::Avi);
-                if let Some(logo) = &self.splash {
-                    logo.paint(frame, 0, 0);
-                }
+            (Some(art), true) => paint_lobby_backdrop(frame, Screen::Channel, art),
+            (None, false) => paint_channel_list(frame, &self.channels, self.highlight),
+            (None, true) => paint_screen(frame, Screen::Channel),
+        }
+    }
+
+    /// Room lobby: staged art behind the live list, flat card fallback.
+    fn paint_room(&self, frame: &mut Frame<'_>) {
+        match (self.scene_art(Screen::Room), self.rooms.is_empty()) {
+            (Some(art), false) => {
+                paint_room_scene(frame, &self.rooms, self.room_highlight, art);
             }
-            Screen::Channel if !self.channels.is_empty() => {
-                paint_channel_list(frame, &self.channels, self.highlight);
-            }
-            Screen::Room if !self.rooms.is_empty() => {
-                paint_room_list(frame, &self.rooms, self.room_highlight);
-            }
-            Screen::Result => paint_result(frame, self.avatar.as_ref(), self.playing.score()),
-            Screen::Waiting => {
-                if let Some(room) = &self.waiting {
-                    paint_waiting_members(frame, room);
-                } else {
-                    paint_screen(frame, Screen::Waiting);
-                }
-            }
-            screen => paint_screen(frame, screen),
+            (Some(art), true) => paint_lobby_backdrop(frame, Screen::Room, art),
+            (None, false) => paint_room_list(frame, &self.rooms, self.room_highlight),
+            (None, true) => paint_screen(frame, Screen::Room),
+        }
+    }
+
+    /// Waiting: staged art behind the live seats, flat card fallback.
+    fn paint_waiting(&self, frame: &mut Frame<'_>) {
+        match (self.scene_art(Screen::Waiting), &self.waiting) {
+            (Some(art), Some(room)) => paint_waiting_scene(frame, room, art),
+            (Some(art), None) => paint_lobby_backdrop(frame, Screen::Waiting, art),
+            (None, Some(room)) => paint_waiting_members(frame, room),
+            (None, None) => paint_screen(frame, Screen::Waiting),
+        }
+    }
+
+    /// Loading gate: staged art behind the progress bar.
+    fn paint_loading(&self, frame: &mut Frame<'_>) {
+        match self.scene_art(Screen::Loading) {
+            Some(art) => paint_loading_scene(frame, art),
+            None => paint_screen(frame, Screen::Loading),
+        }
+    }
+
+    /// Gameplay: highway first, then staged gauges/panels ring the
+    /// frame edges while notes keep falling underneath.
+    fn paint_playing(&mut self, frame: &mut Frame<'_>, now_ms: u64) {
+        let geom = HighwayGeometry::centered(frame.w, frame.h);
+        self.playing.paint(frame, &geom, now_ms);
+        if let Some(art) = self.scene_art(Screen::Playing) {
+            paint_playing_overlay(frame, art);
+        }
+    }
+
+    /// Results: staged art behind the avatar figure and digits.
+    fn paint_result(&self, frame: &mut Frame<'_>) {
+        match self.scene_art(Screen::Result) {
+            Some(art) => paint_result_scene(frame, self.avatar.as_ref(), self.playing.score(), art),
+            None => paint_result(frame, self.avatar.as_ref(), self.playing.score()),
         }
     }
 }
@@ -883,5 +964,135 @@ mod game_tests {
         );
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert_eq!(game.screen(), Screen::Channel);
+    }
+
+    /// One red pixel figure for staged scene art.
+    fn red_scene_figure() -> AvatarFigure {
+        use crate::avatar::FigureLayer;
+        let mut figure = AvatarFigure::default();
+        figure.push_layer(FigureLayer {
+            image: o2jam_render::Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap(),
+            dx: 0,
+            dy: 0,
+            colorkey: 0xFFFF,
+        });
+        figure
+    }
+
+    /// Full-canvas placement pinning one sprite at the frame origin.
+    fn corner_scene_art(name: &str) -> (Vec<ScenePlacement>, HashMap<String, AvatarFigure>) {
+        use crate::screens::paint::{unbound_scene_placements, SceneArt};
+        let _ = SceneArt::default();
+        let names = vec![name.to_owned()];
+        let figures = HashMap::from([(name.to_owned(), red_scene_figure())]);
+        (unbound_scene_placements(&names), figures)
+    }
+
+    #[test]
+    fn scene_art_backs_channel_list() {
+        let (placements, figures) = corner_scene_art("Dialog_ChannelSelectBar.ojs");
+        let mut game = ScreenGame::new();
+        game.load_scene(Screen::Channel, placements, figures);
+        game.set_channels(two_channels());
+        game.lane_key(3, true);
+        let mut buf = vec![0u32; 64 * 48];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 48,
+            },
+            0,
+        );
+        assert_eq!(buf[0], pack_xrgb(255, 0, 0));
+        assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+        assert!(buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
+    }
+
+    #[test]
+    fn scene_art_backs_waiting_seats() {
+        let (placements, figures) = corner_scene_art("Wait_TeamA.ojs");
+        let mut game = ScreenGame::new();
+        game.load_scene(Screen::Waiting, placements, figures);
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        let mut buf = vec![0u32; 80 * 64];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 80,
+                h: 64,
+            },
+            0,
+        );
+        assert_eq!(buf[0], pack_xrgb(255, 0, 0));
+        assert!(buf.contains(&pack_xrgb(0x30, 0xE0, 0x30)));
+    }
+
+    #[test]
+    fn scene_art_overlays_playing_without_hiding_notes() {
+        let (placements, figures) = corner_scene_art("Playing_Panel.ojs");
+        let mut game = ScreenGame::new();
+        game.load_chart(vec![(2, 1500, 7)]);
+        game.load_scene(Screen::Playing, placements, figures);
+        walk_to_playing(&mut game);
+        let mut buf = vec![0u32; 70 * 60];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            1000,
+        );
+        assert_eq!(game.screen(), Screen::Playing);
+        assert_eq!(buf[0], pack_xrgb(255, 0, 0));
+        assert!(buf.contains(&pack_xrgb(0x40, 0xC0, 0xFF)));
+    }
+
+    #[test]
+    fn scene_art_backs_result_digits() {
+        let (placements, figures) = corner_scene_art("Result_WinLose.ojs");
+        let mut game = ScreenGame::new();
+        game.load_chart(vec![(2, 5000, 7)]);
+        game.load_scene(Screen::Result, placements, figures);
+        walk_to_playing(&mut game);
+        game.strike_at(2, 5000);
+        let mut buf = vec![0u32; 70 * 60];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            7000,
+        );
+        assert_eq!(game.screen(), Screen::Result);
+        assert_eq!(buf[0], pack_xrgb(255, 0, 0));
+        assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+    }
+
+    #[test]
+    fn scene_art_backs_loading_bar() {
+        use MenuKey;
+        let (placements, figures) = corner_scene_art("MusicLoading.ojs");
+        let mut game = ScreenGame::new();
+        game.load_scene(Screen::Loading, placements, figures);
+        game.lane_key(3, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Loading);
+        let mut buf = vec![0u32; 64 * 48];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 48,
+            },
+            0,
+        );
+        assert_eq!(buf[0], pack_xrgb(255, 0, 0));
+        assert!(buf.contains(&pack_xrgb(0x30, 0xB0, 0x30)));
     }
 }
