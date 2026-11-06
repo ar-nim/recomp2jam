@@ -877,9 +877,10 @@ impl CreateResult {
     }
 }
 
-/// Room slot snapshot inside `CreateRoomResponse` 2006.
+/// Created-room snapshot inside `CreateRoomResponse` 2006 (Memoryer
+/// nests it as `RoomInfo`; renamed here since rooms share one namespace).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RoomInfo {
+pub struct CreatedRoom {
     /// Room number.
     pub number: i32,
     /// Premium-only room.
@@ -894,7 +895,7 @@ pub struct RoomInfo {
     pub max_level: u8,
 }
 
-impl RoomInfo {
+impl CreatedRoom {
     /// Parse from the front of `body`, returning the value and rest.
     fn decode_prefix(body: &[u8]) -> Result<(Self, &[u8]), Error> {
         if body.len() < 4 {
@@ -945,7 +946,7 @@ pub struct CreateRoomResponse {
     /// Success or channel-full.
     pub result: CreateResult,
     /// Slot snapshot; `None` when the body ends after `result`.
-    pub info: Option<RoomInfo>,
+    pub info: Option<CreatedRoom>,
 }
 
 impl WireMessage for CreateRoomResponse {
@@ -973,7 +974,7 @@ impl WireMessage for CreateRoomResponse {
         let info = if tail.is_empty() {
             None
         } else {
-            let (info, rest) = RoomInfo::decode_prefix(tail)?;
+            let (info, rest) = CreatedRoom::decode_prefix(tail)?;
             if !rest.is_empty() {
                 return Err(Error::TrailingBytes(rest.len()));
             }
@@ -1547,8 +1548,8 @@ mod tests {
         );
     }
 
-    fn room_info() -> RoomInfo {
-        RoomInfo {
+    fn created_room() -> CreatedRoom {
+        CreatedRoom {
             number: 7,
             premium: true,
             password: "pw".to_owned(),
@@ -1573,7 +1574,7 @@ mod tests {
     fn create_response_with_info_round_trips() {
         let response = CreateRoomResponse {
             result: CreateResult::Success,
-            info: Some(room_info()),
+            info: Some(created_room()),
         };
         let frame = decode_frame(&response.encode()).unwrap();
         assert_eq!(CreateRoomResponse::decode_frame(&frame), Ok(response));

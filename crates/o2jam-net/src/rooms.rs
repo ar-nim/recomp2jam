@@ -686,7 +686,7 @@ pub struct RoomSlot {
     pub member: Option<RoomMember>,
 }
 
-/// The joined room (`RoomInfo` submessage of 3003).
+/// The joined room (Memoryer nests it as `RoomInfo` inside 3003).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JoinedRoom {
     /// Our seat id.
