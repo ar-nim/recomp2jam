@@ -14,6 +14,8 @@ use super::super::avatar::{
 use super::super::screen::Screen;
 use o2jam_file::OJN_LEVEL_COUNT;
 use o2jam_file::{AvatarItemRow, AvatarItemTable, Bnd, ControlBlock, ControlList, OjnListEntry};
+use o2jam_net::play::MusicListAnswer;
+use o2jam_net::{CharacterInfo, GameStatsUpdate};
 use o2jam_render::Frame;
 
 /// Item-shop block (`CStateShop`, 164 decl entries).
@@ -236,6 +238,58 @@ pub fn music_shop_songs<'a>(entries: &'a [OjnListEntry<'a>]) -> Vec<MusicShopSon
         .collect()
 }
 
+/// One music-shop row with live shop flags (`GetMusicList` 4031
+/// answer): catalog identity from `OJNList.dat`, availability from
+/// the server. No flag invents a song: empty catalog stays empty.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MusicShopListing<'a> {
+    /// Catalog song.
+    pub song: MusicShopSong<'a>,
+    /// `FreeMusic` server option: every song plays free.
+    pub free: bool,
+    /// Server catalog carries this song id (chart data present).
+    pub listed: bool,
+}
+
+/// Music-shop rows in catalog order with live flags; a missing
+/// answer clears both flags without dropping rows.
+#[must_use]
+pub fn music_shop_listings<'a>(
+    entries: &'a [OjnListEntry<'a>],
+    answer: Option<&MusicListAnswer>,
+) -> Vec<MusicShopListing<'a>> {
+    music_shop_songs(entries)
+        .into_iter()
+        .map(|song| listing_for_song(song, answer))
+        .collect()
+}
+
+/// Attach live flags to one catalog song.
+fn listing_for_song<'a>(
+    song: MusicShopSong<'a>,
+    answer: Option<&MusicListAnswer>,
+) -> MusicShopListing<'a> {
+    let (free, listed) = shop_flags_for(song.song_id, answer);
+    MusicShopListing { song, free, listed }
+}
+
+/// Read the global free flag plus per-song server presence
+/// (`None` answer: no flags, rows still paint).
+fn shop_flags_for(song_id: u32, answer: Option<&MusicListAnswer>) -> (bool, bool) {
+    match answer {
+        None => (false, false),
+        Some(answer) => (answer.free_music, lists_song(answer, song_id)),
+    }
+}
+
+/// Whether the server catalog carries this song id.
+fn lists_song(answer: &MusicListAnswer, song_id: u32) -> bool {
+    let Ok(wanted) = u16::try_from(song_id) else {
+        return false;
+    };
+    answer.entries.iter().any(|entry| entry.id == wanted)
+}
+
 /// Equipped my-room rows in slot order, skipping zero and unknown ids
 /// exactly like [`load_worn_figure`](super::super::avatar::load_worn_figure)
 /// skips unresolvable pieces: one bad id never blanks the room.
@@ -257,6 +311,17 @@ fn equipped_item_view(table: &AvatarItemTable, id: i32) -> Option<ShopItemView<'
         return None;
     }
     avatar_item_by_id(table, item_id).map(shop_item_view)
+}
+
+/// My-room rows from fetched character data (`GetCharacterInfo`
+/// 2001): the server's 17-slot equipment table in slot order,
+/// skipping zero and unknown ids exactly like [`my_room_equipment`].
+#[must_use]
+pub fn my_room_equipment_from_character<'a>(
+    table: &'a AvatarItemTable,
+    character: &CharacterInfo,
+) -> Vec<ShopItemView<'a>> {
+    my_room_equipment(table, &character.equipment)
 }
 
 /// Solo-mission difficulty band: one per `.ojn` level slot (the
@@ -371,6 +436,42 @@ fn lanking_row<'a>(index: usize, entry: &'a OjnListEntry<'a>) -> Option<LankingR
         song_id: entry.song_id,
         title: &entry.title,
     })
+}
+
+/// One live rank row (`GameStatsUpdate` 4015 broadcast): member slot
+/// plus its live rank byte. Catalog scores never ship with the
+/// client, so only these wire bytes feed the board — never invented.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LiveRankRow {
+    /// Member slot (0-based, broadcast order).
+    pub slot: u8,
+    /// Live rank byte for that slot.
+    pub rank: u8,
+}
+
+/// Live rank rows in slot order, zero bytes skipped (empty seats);
+/// `None` yields no rows: the board paints its art without rows.
+#[must_use]
+pub fn live_rank_rows(update: Option<&GameStatsUpdate>) -> Vec<LiveRankRow> {
+    let Some(update) = update else {
+        return Vec::new();
+    };
+    update
+        .ranks
+        .iter()
+        .enumerate()
+        .filter_map(|(index, rank)| live_rank_row(index, *rank))
+        .collect()
+}
+
+/// Number one broadcast byte (`None` for empty seats and
+/// out-of-range slots).
+fn live_rank_row(index: usize, rank: u8) -> Option<LiveRankRow> {
+    if rank == 0 {
+        return None;
+    }
+    let slot = u8::try_from(index).ok()?;
+    Some(LiveRankRow { slot, rank })
 }
 
 /// Billing page behind `STATE_PAYMENT` (lifecycle §12 `CDPayment` view).
@@ -766,6 +867,114 @@ mod side_tests {
         assert_eq!(worn[1].item_id, 1);
         assert!(my_room_equipment(&table, &[]).is_empty());
         assert!(my_room_equipment(&table, &[0, -1, 999]).is_empty());
+    }
+
+    fn side_character(equipment: [i32; 17]) -> CharacterInfo {
+        CharacterInfo {
+            equipment,
+            ..CharacterInfo::default()
+        }
+    }
+
+    fn side_equipment(first: &[i32]) -> [i32; 17] {
+        let mut equipment = [0i32; 17];
+        for (slot, id) in first.iter().enumerate().take(17) {
+            equipment[slot] = *id;
+        }
+        equipment
+    }
+
+    #[test]
+    fn my_room_reads_fetched_character_equipment() {
+        let table = side_item_table();
+        let character = side_character(side_equipment(&[2, 0, 999, 1]));
+        let worn = my_room_equipment_from_character(&table, &character);
+        assert_eq!(worn.len(), 2);
+        assert_eq!(worn[0].item_id, 2);
+        assert_eq!(worn[1].item_id, 1);
+    }
+
+    #[test]
+    fn my_room_character_without_gear_wears_nothing() {
+        let table = side_item_table();
+        assert!(my_room_equipment_from_character(&table, &side_character([0; 17])).is_empty());
+        assert!(
+            my_room_equipment_from_character(&table, &side_character(side_equipment(&[999])))
+                .is_empty()
+        );
+    }
+
+    fn side_music_answer(free_music: bool) -> MusicListAnswer {
+        use o2jam_net::play::MusicListEntry;
+        MusicListAnswer {
+            entries: vec![MusicListEntry {
+                id: 757,
+                notes_ex: 100,
+                notes_nx: 200,
+                notes_hx: 300,
+            }],
+            free_music,
+        }
+    }
+
+    #[test]
+    fn music_shop_listings_carry_live_free_flags() {
+        let blob = side_catalog();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        let listings = music_shop_listings(&entries, Some(&side_music_answer(true)));
+        assert_eq!(listings.len(), 2);
+        assert_eq!(listings[0].song.song_id, 757);
+        assert!(listings[0].free);
+        assert!(listings[0].listed);
+        assert!(listings[1].free);
+        assert!(!listings[1].listed);
+    }
+
+    #[test]
+    fn music_shop_listings_clear_flags_without_answer() {
+        let blob = side_catalog();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        let listings = music_shop_listings(&entries, None);
+        assert_eq!(listings.len(), 2);
+        assert!(!listings[0].free);
+        assert!(!listings[0].listed);
+        let paid = music_shop_listings(&entries, Some(&side_music_answer(false)));
+        assert!(!paid[0].free);
+        assert!(paid[0].listed);
+    }
+
+    #[test]
+    fn music_shop_listings_stay_empty_without_catalog() {
+        assert!(music_shop_listings(&[], Some(&side_music_answer(true))).is_empty());
+        assert!(music_shop_listings(&[], None).is_empty());
+    }
+
+    fn side_rank_update(ranks: [u8; 8]) -> GameStatsUpdate {
+        GameStatsUpdate {
+            member_id: 0,
+            kind_code: 0,
+            value: 0,
+            ranks,
+        }
+    }
+
+    #[test]
+    fn lanking_live_rows_follow_broadcast_order_skipping_seats() {
+        let rows = live_rank_rows(Some(&side_rank_update([1, 0, 3, 0, 0, 0, 0, 2])));
+        assert_eq!(
+            rows,
+            vec![
+                LiveRankRow { slot: 0, rank: 1 },
+                LiveRankRow { slot: 2, rank: 3 },
+                LiveRankRow { slot: 7, rank: 2 },
+            ]
+        );
+    }
+
+    #[test]
+    fn lanking_live_rows_stay_empty_without_broadcast() {
+        assert!(live_rank_rows(None).is_empty());
+        assert!(live_rank_rows(Some(&side_rank_update([0; 8]))).is_empty());
     }
 
     #[test]

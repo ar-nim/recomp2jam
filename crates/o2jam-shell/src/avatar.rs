@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 
 use o2jam_file::{AvatarItemTable, Bnd, ControlBlock, ControlList, Sprite55};
+use o2jam_net::CharacterInfo;
 use o2jam_render::{
     blit_rgb555, center_rect, rect_from_corners, scale_rect_to_frame, Frame, Rect, Rgb555Image,
 };
@@ -176,6 +177,20 @@ pub fn load_worn_figure(
         }
     }
     figure
+}
+
+/// My-room figure from fetched character data (`GetCharacterInfo`
+/// 2001): the server's 17-slot equipment table composited exactly
+/// like [`load_worn_figure`]. Unresolvable pieces are skipped, never
+/// fatal; empty when nothing resolves.
+#[must_use]
+pub fn load_my_room_figure(
+    archive: &[u8],
+    table: &AvatarItemTable,
+    character: &CharacterInfo,
+    male: bool,
+) -> AvatarFigure {
+    load_worn_figure(archive, table, &character.equipment, male)
 }
 
 /// ControlList block per lobby scene (see `docs/file-formats/opi.md`).
@@ -584,6 +599,30 @@ mod avatar_figure_tests {
         let junk_archive = opa_blob(&[("junk.ojs", b"not a sprite")]);
         assert!(load_worn_figure(&archive, &table, &[999], true).is_empty());
         assert!(load_worn_figure(&junk_archive, &table, &[6], true).is_empty());
+    }
+
+    #[test]
+    fn my_room_figure_reads_fetched_character_equipment() {
+        let red = sprite55_blob(1, 0x0000, 2, 1, &[0x00, 0x00, 0x00, 0x7C]);
+        let archive = opa_blob(&[("01F01001.ojs", &red)]);
+        let table = o2jam_file::AvatarItemTable {
+            rows: vec![item_row(
+                5,
+                &["icon.oji", "icon.oji", "01F01001.oji", "01F01001.oji"],
+            )],
+        };
+        let mut equipment = [0i32; 17];
+        equipment[0] = 5;
+        let character = CharacterInfo {
+            equipment,
+            ..CharacterInfo::default()
+        };
+        assert_eq!(
+            load_my_room_figure(&archive, &table, &character, true).len(),
+            1
+        );
+        let bare = CharacterInfo::default();
+        assert!(load_my_room_figure(&archive, &table, &bare, true).is_empty());
     }
 
     #[test]
