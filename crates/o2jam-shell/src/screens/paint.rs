@@ -1,14 +1,15 @@
 //! Screen scenes: real `.ojs`/`.bnd` art behind each [`Screen`],
-//! with the working UI on top.
+//! with the working UI ink on top.
 //!
 //! Each scene paints its verified archive art first (lifecycle §5–11:
 //! `O2mediaLogo.ojs`, channel/room/waiting/playing/result blocks,
 //! `MusicLoading.ojs`) through the scene kit in [`crate::avatar`]
-//! (`load_scene_figures`, `bind_scene_rects`, `paint_scene_figures`,
-//! `NATIVE_WIDTH`/`HEIGHT`), then layers the live UI over it: channel
-//! list, room list, waiting seats, loading bar, highway, result
-//! digits. Layouts stay relative to the frame so headless tests can
-//! paint tiny buffers. Bare [`paint_screen`] keeps the flat-color
+//! (`load_scene_figures`, `bind_scene_rects`, `paint_scene_figures`).
+//! Rects stay verbatim on the native 800x600 canvas (rect `i` lays
+//! out entry `i + 1`; Playing lays out entries 213–229); scaling to
+//! the frame happens only at present, and live UI (channel list,
+//! room list, waiting seats, loading bar, highway, result digits)
+//! paints after the art. Bare [`paint_screen`] keeps the flat-color
 //! fallback while no art is staged; staged scenes never paint flat cards.
 
 use std::collections::HashMap;
@@ -27,13 +28,14 @@ use o2jam_net::{
 };
 use o2jam_render::{
     draw_number, draw_text, fill_rect, number_width, pack_xrgb, scale_rect_to_frame, text_width,
-    Frame, Rect, NATIVE_HEIGHT, NATIVE_WIDTH,
+    Frame, Rect,
 };
 
 /// Gameplay block: real UI lives in `Playing1.opi` (235 entries,
 /// lifecycle §10).
 pub const PLAYING_BLOCK: &str = "STATE_PLAYING";
-/// Gameplay layout bind file (17 rects over the entry subset).
+/// Gameplay layout bind file: 17 rects over entries 213–229
+/// (`EXIT`..`VOLUME`), one-to-one in file order.
 pub const PLAYING_BIND_FILE: &str = "State_Playing.bnd";
 /// Pre-game room layout bind file.
 pub const WAITING_BIND_FILE: &str = "State_Waiting.bnd";
@@ -58,8 +60,8 @@ impl SceneArt {
         !self.figures.is_empty()
     }
 
-    /// Paint staged figures at their scaled layout origins with no
-    /// flat fill, so the OPI art stays full-bleed. Empty art falls
+    /// Paint staged figures at their verbatim native origins with no
+    /// flat fill, so the OPI art keeps its `.bnd` layout. Empty art falls
     /// back to the flat background; placements without a loaded
     /// figure are skipped.
     pub fn paint_backdrop(&self, frame: &mut Frame<'_>, screen: Screen) {
@@ -128,8 +130,10 @@ pub fn main_scene_sprites(list: &ControlList, screen: Screen) -> Vec<String> {
 }
 
 /// Placements for blocks without a `.bnd` (splash, channel, loading):
-/// every sprite covers the native canvas, so `paint_scene_figures`
-/// draws each body full-bleed from the frame origin.
+/// no bind file means no layout to claim, so each sprite paints 1:1
+/// at the native origin with an empty rect — never full-bleed.
+/// `paint_scene_figures` draws each body at that origin; staged
+/// bodies keep their native size while live UI ink paints on top.
 #[must_use]
 pub fn unbound_scene_placements(names: &[String]) -> Vec<ScenePlacement> {
     names
@@ -141,8 +145,8 @@ pub fn unbound_scene_placements(names: &[String]) -> Vec<ScenePlacement> {
             rect: Rect {
                 x: 0,
                 y: 0,
-                w: NATIVE_WIDTH,
-                h: NATIVE_HEIGHT,
+                w: 0,
+                h: 0,
             },
         })
         .collect()
@@ -197,7 +201,7 @@ fn paint_title_over_art(frame: &mut Frame<'_>, screen: Screen) {
 
 /// Dark strip behind `row_count` channel/room rows so list ink
 /// stays readable over staged panels (skips the frame origin where
-/// full-bleed backdrops anchor).
+/// staged art anchors at the native origin).
 fn paint_list_scrim(frame: &mut Frame<'_>, row_count: usize) {
     if row_count == 0 || frame.w == 0 || frame.h == 0 {
         return;
@@ -760,7 +764,7 @@ fn paint_title(frame: &mut Frame<'_>, title: &str) {
     draw_text(frame, x, y, title, title_color());
 }
 
-/// Staged lobby art behind an empty list: full-bleed backdrop plus
+/// Staged lobby art behind an empty list: verbatim backdrop plus
 /// a readable title (no flat card).
 pub fn paint_lobby_backdrop(frame: &mut Frame<'_>, screen: Screen, art: &SceneArt) {
     art.paint_backdrop(frame, screen);
@@ -1139,9 +1143,9 @@ mod paint_tests {
     }
 
     #[test]
-    fn splash_paints_logo_full_bleed_without_stamp() {
-        // Staged logo art covers the canvas: logo pixel at the
-        // origin, no flat card, no version-stamp white.
+    fn splash_paints_logo_at_native_origin_without_stamp() {
+        // Unbound logo art paints 1:1 at the native origin: logo
+        // pixel at the origin, no flat card, no version-stamp white.
         let buf = paint_art(Screen::Avi, &corner_art(), 32, 24);
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert!(!buf.contains(&pack_xrgb(0x20, 0x60, 0xC0)));
@@ -1207,7 +1211,9 @@ mod paint_tests {
     }
 
     #[test]
-    fn unbound_placements_span_the_native_canvas() {
+    fn unbound_placements_pin_origin_without_size() {
+        // No `.bnd` means no layout: unbound sprites paint 1:1 at
+        // the native origin with an empty rect, never full-bleed.
         let placed = unbound_scene_placements(&["A.ojs".to_owned(), "B.ojs".to_owned()]);
         assert_eq!(placed.len(), 2);
         for placement in &placed {
@@ -1216,8 +1222,8 @@ mod paint_tests {
                 Rect {
                     x: 0,
                     y: 0,
-                    w: NATIVE_WIDTH,
-                    h: NATIVE_HEIGHT,
+                    w: 0,
+                    h: 0,
                 }
             );
         }

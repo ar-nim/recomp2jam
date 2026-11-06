@@ -460,9 +460,10 @@ mod game_tests {
             },
             1000,
         );
-        let note_y = 50 - (500.0 * 50.0 / 2000.0) as i32;
-        // Lane 2 spans x 20..30; the note insets one pixel each side.
-        assert_eq!(buf[note_y as usize * 70 + 22], pack_xrgb(0x40, 0xC0, 0xFF));
+        let note_y = 48 - (500.0 * 48.0 / 2000.0) as i32;
+        // Lane 2 spans x 4..6 at 70 wide (native x55 w28); the note
+        // insets one pixel each side.
+        assert_eq!(buf[note_y as usize * 70 + 4], pack_xrgb(0x40, 0xC0, 0xFF));
         assert_eq!(buf[0], pack_xrgb(0x0A, 0x0A, 0x0A));
     }
 
