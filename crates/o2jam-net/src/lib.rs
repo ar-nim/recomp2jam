@@ -18,11 +18,17 @@ pub mod command;
 pub mod error;
 pub mod frame;
 mod inflate;
+// `message` precedes `gift`/`shop`/`wallet`: its `empty_message!`
+// macro expands there (`macro_rules!` travels by textual scope).
+#[macro_use]
 pub mod message;
+pub mod gift;
 pub mod play;
 pub mod relay;
 pub mod rooms;
+pub mod shop;
 pub mod strings;
+pub mod wallet;
 
 pub use client::{GatewayConnection, DEFAULT_GATEWAY_PORT};
 
