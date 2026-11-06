@@ -153,6 +153,108 @@ impl MeasureReshuffle {
     }
 }
 
+/// Session modifier byte default (VA `0x7789e4`), written by
+/// `FUN_00495110` (file `0x95110`): the N-lane shuffle builder.
+///
+/// The room message `0x24200002` handler mirrors room field `+0x20d`
+/// into this byte; value 2 takes a player-count gate in one room path.
+pub const MODIFIER_BYTE_DEFAULT: u8 = 2;
+/// Modifier byte building the N-lane swap table (`FUN_00573940`).
+pub const MODIFIER_BYTE_FULL_SHUFFLE: u8 = 2;
+/// Modifier byte building the 3-lane table (`FUN_00573a10`).
+pub const MODIFIER_BYTE_NARROW_SHUFFLE: u8 = 0;
+
+/// Effect ring from the avatar-shop catalog (`Itemdata_Korea.dat` in
+/// `Image/avatar.opa`): mirror flips left-right, random shuffles the
+/// whole chart, hidden covers the bottom fifth, sudden shows only it,
+/// dark shows only the middle fifth, reverse-dark covers the middle
+/// fifth, and panic (super-random) re-randomises every measure.
+///
+/// Which ring item selects which modifier byte is translated
+/// room-side and stays OPEN; only the lane builders for bytes 0 and 2
+/// plus the mirror reversal are verified in-exe, so this enum carries
+/// the per-ring lane behavior and lets song setup hang the matching
+/// item-text curtain without claiming wire values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillRing {
+    /// Left-right flip, no randomness.
+    Mirror,
+    /// One full shuffle for the whole chart (item text).
+    Random,
+    /// Bottom fifth covered (lanes untouched).
+    Hidden,
+    /// Only the bottom fifth visible (lanes untouched).
+    Sudden,
+    /// Only the middle fifth visible (lanes untouched).
+    Dark,
+    /// Middle fifth covered (lanes untouched).
+    ReverseDark,
+    /// Fresh full shuffle every plain measure (item text).
+    Panic,
+}
+
+impl SkillRing {
+    /// Every effect ring, in catalog order.
+    #[must_use]
+    pub fn all() -> [Self; 7] {
+        [
+            Self::Mirror,
+            Self::Random,
+            Self::Hidden,
+            Self::Sudden,
+            Self::Dark,
+            Self::ReverseDark,
+            Self::Panic,
+        ]
+    }
+
+    /// Lane table for this ring: mirror reversal, the verified N-lane
+    /// swap builder for random/panic, identity for the curtain rings.
+    ///
+    /// Panic shares random's builder; the per-measure rebuild (see
+    /// [`Self::reshuffles_each_measure`]) is what distinguishes it.
+    /// The planner re-randomises both shuffle bytes in-exe, so the
+    /// item text's "whole chart" versus "every measure" split is
+    /// not corroborated there — it is kept here as the catalog claims.
+    #[must_use]
+    pub fn build_lane_map(self, width: usize, next_random: &mut impl FnMut() -> u32) -> LaneMap {
+        match self {
+            Self::Mirror => LaneMap::mirrored(width),
+            Self::Random | Self::Panic => LaneMap::shuffled_full(width, next_random),
+            Self::Hidden | Self::Sudden | Self::Dark | Self::ReverseDark => {
+                LaneMap::identity(width)
+            }
+        }
+    }
+
+    /// Only panic rebuilds the table every plain measure (and once per
+    /// hold-note span, via [`MeasureReshuffle`]).
+    #[must_use]
+    pub fn reshuffles_each_measure(self) -> bool {
+        matches!(self, Self::Panic)
+    }
+}
+
+/// Lane table for one raw session modifier byte (VA `0x7789e4`), the
+/// verified song-setup branch (`FUN_00571c30`, file `0x171c30`): byte 2
+/// builds the N-lane swap table, byte 0 the 3-lane table, anything else
+/// plays straight through.
+///
+/// The mirror reversal's selector byte is room-side OPEN, so mirror is
+/// worn through [`SkillRing::Mirror`] instead of here.
+#[must_use]
+pub fn lane_map_for_modifier_byte(
+    modifier: u8,
+    width: usize,
+    next_random: &mut impl FnMut() -> u32,
+) -> LaneMap {
+    match modifier {
+        MODIFIER_BYTE_FULL_SHUFFLE => LaneMap::shuffled_full(width, next_random),
+        MODIFIER_BYTE_NARROW_SHUFFLE => LaneMap::shuffled_narrow(width, next_random),
+        _ => LaneMap::identity(width),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,6 +392,111 @@ mod tests {
         };
         LaneMap::identity(4).apply_to_chart(&mut chart);
         assert_eq!(chart.hits[0].lane, 6);
+    }
+
+    #[test]
+    fn mirror_ring_reverses_without_randomness() {
+        let mut never_called = || -> u32 { panic!("mirror draws no randomness") };
+        let map = SkillRing::Mirror.build_lane_map(FULL_WIDTH_LANES, &mut never_called);
+        assert_eq!(map, LaneMap::mirrored(FULL_WIDTH_LANES));
+        assert!(!SkillRing::Mirror.reshuffles_each_measure());
+    }
+
+    #[test]
+    fn random_ring_shuffles_once_for_the_chart() {
+        let mut random = stub_random(vec![3, 1, 4, 8, 5, 9, 6]);
+        let map = SkillRing::Random.build_lane_map(FULL_WIDTH_LANES, &mut random);
+        let destinations: Vec<Lane> = (0..7)
+            .map(|lane| map.destination(lane).expect("covered lane"))
+            .collect();
+        assert_eq!(destinations, vec![3, 0, 2, 1, 5, 4, 6]);
+        assert!(!SkillRing::Random.reshuffles_each_measure());
+    }
+
+    #[test]
+    fn hidden_ring_leaves_lanes_straight_through() {
+        let mut random = stub_random(vec![]);
+        let map = SkillRing::Hidden.build_lane_map(FULL_WIDTH_LANES, &mut random);
+        assert_eq!(map, LaneMap::identity(FULL_WIDTH_LANES));
+        assert!(!SkillRing::Hidden.reshuffles_each_measure());
+    }
+
+    #[test]
+    fn sudden_ring_leaves_lanes_straight_through() {
+        let mut random = stub_random(vec![]);
+        let map = SkillRing::Sudden.build_lane_map(FULL_WIDTH_LANES, &mut random);
+        assert_eq!(map, LaneMap::identity(FULL_WIDTH_LANES));
+        assert!(!SkillRing::Sudden.reshuffles_each_measure());
+    }
+
+    #[test]
+    fn dark_ring_leaves_lanes_straight_through() {
+        let mut random = stub_random(vec![]);
+        let map = SkillRing::Dark.build_lane_map(FULL_WIDTH_LANES, &mut random);
+        assert_eq!(map, LaneMap::identity(FULL_WIDTH_LANES));
+        assert!(!SkillRing::Dark.reshuffles_each_measure());
+    }
+
+    #[test]
+    fn reverse_dark_ring_leaves_lanes_straight_through() {
+        let mut random = stub_random(vec![]);
+        let map = SkillRing::ReverseDark.build_lane_map(FULL_WIDTH_LANES, &mut random);
+        assert_eq!(map, LaneMap::identity(FULL_WIDTH_LANES));
+        assert!(!SkillRing::ReverseDark.reshuffles_each_measure());
+    }
+
+    #[test]
+    fn panic_ring_rebuilds_a_fresh_shuffle_each_measure() {
+        assert!(SkillRing::Panic.reshuffles_each_measure());
+        let mut first = stub_random(vec![3, 1, 4, 8, 5, 9, 6]);
+        let mut second = stub_random(vec![6, 6, 6, 6, 6, 6, 0]);
+        let one = SkillRing::Panic.build_lane_map(FULL_WIDTH_LANES, &mut first);
+        let two = SkillRing::Panic.build_lane_map(FULL_WIDTH_LANES, &mut second);
+        assert_ne!(one, two);
+    }
+
+    #[test]
+    fn modifier_byte_two_builds_the_full_shuffle() {
+        let mut random = stub_random(vec![3, 1, 4, 8, 5, 9, 6]);
+        let map =
+            lane_map_for_modifier_byte(MODIFIER_BYTE_FULL_SHUFFLE, FULL_WIDTH_LANES, &mut random);
+        assert_eq!(map.width(), FULL_WIDTH_LANES);
+        let destinations: Vec<Lane> = (0..7)
+            .map(|lane| map.destination(lane).expect("covered lane"))
+            .collect();
+        assert_eq!(destinations, vec![3, 0, 2, 1, 5, 4, 6]);
+    }
+
+    #[test]
+    fn modifier_byte_zero_builds_the_narrow_table() {
+        let mut random = stub_random(vec![2, 0, 1]);
+        let map =
+            lane_map_for_modifier_byte(MODIFIER_BYTE_NARROW_SHUFFLE, FULL_WIDTH_LANES, &mut random);
+        assert_eq!(map.width(), NARROW_SLOT_COUNT);
+        assert_eq!(map.destination(NARROW_UNUSED_SLOT as Lane), Some(1));
+    }
+
+    #[test]
+    fn unknown_modifier_byte_plays_straight_through() {
+        let mut random = stub_random(vec![]);
+        let map = lane_map_for_modifier_byte(9, FULL_WIDTH_LANES, &mut random);
+        assert_eq!(map, LaneMap::identity(FULL_WIDTH_LANES));
+    }
+
+    #[test]
+    fn every_ring_lists_exactly_once_in_catalog_order() {
+        assert_eq!(
+            SkillRing::all(),
+            [
+                SkillRing::Mirror,
+                SkillRing::Random,
+                SkillRing::Hidden,
+                SkillRing::Sudden,
+                SkillRing::Dark,
+                SkillRing::ReverseDark,
+                SkillRing::Panic,
+            ]
+        );
     }
 
     #[test]
