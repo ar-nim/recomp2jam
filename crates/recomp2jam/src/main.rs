@@ -162,18 +162,10 @@ fn main() -> Result<()> {
         } => {
             tracing::info!(?chart, ?window, "play stub");
             if window && chart.is_none() {
-                struct StubGame;
-                impl o2jam_shell::GameLoop for StubGame {
-                    fn lane_key(&mut self, lane: usize, down: bool) {
-                        tracing::info!(lane, down, "lane key");
-                    }
-                    fn paint(&mut self, frame: &mut o2jam_render::Frame<'_>) {
-                        frame.buf.fill(0);
-                    }
-                }
                 let event_loop = winit::event_loop::EventLoop::new()
                     .map_err(|e| anyhow::anyhow!("event loop failed: {e:?}"))?;
-                o2jam_shell::Shell::new(Box::new(StubGame)).run(event_loop)?;
+                o2jam_shell::Shell::new(Box::new(o2jam_shell::ScreenGame::new()))
+                    .run(event_loop)?;
                 return Ok(());
             }
             let chart_path = chart.ok_or_else(|| {

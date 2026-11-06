@@ -4,8 +4,10 @@
 //! the key map and the timestep math; window creation needs hardware.
 
 pub mod screen;
+pub mod screens;
 
 pub use screen::{can_enter, BadTransition, Screen, ScreenFlow};
+pub use screens::{paint_screen, ScreenGame};
 
 use std::collections::HashSet;
 use std::sync::Arc;
