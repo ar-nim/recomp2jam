@@ -75,6 +75,11 @@ fn read_table_text(bytes: &[u8], off: usize) -> Result<(String, usize), FileErro
 /// length-prefixed strings, ids expected 1-based in order.
 /// Stops (instead of erroring) where the footer starts so the
 /// declared-count overstatement stays representable.
+///
+/// # Errors
+///
+/// `FileError::TooShort` when no row parses at all, `FileError::UnknownFormat`
+/// on undecodable text.
 pub fn parse_set_info_table(bytes: &[u8]) -> Result<SetInfoTable, FileError> {
     let count = read_u32le(bytes, 0)? as usize;
     let mut rows = Vec::new();
@@ -162,6 +167,11 @@ pub struct AvatarItemTable {
 /// 30 fixed bytes + two length-prefixed strings + 42 counted
 /// filename slots, ids 1-based in order, landing exactly at EOF
 /// (docs/file-formats/opi.md).
+///
+/// # Errors
+///
+/// `FileError::TooShort`/`Truncated` when rows overrun, `UnknownFormat`
+/// when the row ids or declared count break sequence.
 pub fn parse_avatar_item_table(bytes: &[u8]) -> Result<AvatarItemTable, FileError> {
     let mut rows = Vec::new();
     let mut off = AVATAR_ROWS_AT;
@@ -227,6 +237,11 @@ pub fn parse_avatar_item_table(bytes: &[u8]) -> Result<AvatarItemTable, FileErro
 /// Parse a `JamTable.dat` gauge table: flat little-endian `u16`
 /// combo thresholds (54 entries, `25..4800`, on the real 7.55 file;
 /// docs/file-formats/opi.md). Requires a non-empty even length.
+///
+/// # Errors
+///
+/// `FileError::TooShort` on empty input, `FileError::UnknownFormat`
+/// on odd lengths.
 pub fn parse_jam_thresholds(bytes: &[u8]) -> Result<Vec<u16>, FileError> {
     if bytes.len() < 2 {
         return Err(FileError::TooShort(bytes.len()));

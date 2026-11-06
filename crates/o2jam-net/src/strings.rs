@@ -43,6 +43,10 @@ pub fn encode_null_terminated(value: &str, max_len: usize) -> Vec<u8> {
 /// `max_len` bytes as the string instead of erroring.
 ///
 /// An empty `body` decodes to empty; invalid UTF-8 is an error.
+///
+/// # Errors
+///
+/// `Error::InvalidField` without a terminator in range or on bad UTF-8.
 pub fn decode_null_terminated(body: &[u8], max_len: usize) -> Result<(String, usize), Error> {
     if body.is_empty() {
         return Ok((String::new(), 0));

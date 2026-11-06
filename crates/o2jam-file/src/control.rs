@@ -282,6 +282,11 @@ impl ControlListParser {
 /// top-level lines are ignored so future file revisions stay
 /// readable, but malformed entries and unbalanced braces are
 /// errors.
+///
+/// # Errors
+///
+/// `FileError::UnknownFormat` on malformed entries, `FileError::Truncated`
+/// on unbalanced braces.
 pub fn parse_control_list(text: &str) -> Result<ControlList, FileError> {
     let mut parser = ControlListParser::new();
     for raw_line in text.lines() {

@@ -37,6 +37,10 @@ pub fn encode_frame(id: u16, body: &[u8]) -> Vec<u8> {
 }
 
 /// Parse exactly one frame; rejects trailing bytes.
+///
+/// # Errors
+///
+/// Truncation, short lengths, and trailing bytes after the frame.
 pub fn decode_frame(buffer: &[u8]) -> Result<Frame, Error> {
     let (frame, consumed) = split_frame(buffer)?;
     if consumed != buffer.len() {
@@ -86,6 +90,10 @@ impl FrameSplitter {
     ///
     /// Errors on a malformed length and drops the buffer, since
     /// resync is impossible without more protocol knowledge.
+    ///
+    /// # Errors
+    ///
+    /// `Error::MissingCommand` on a malformed length (buffer dropped).
     pub fn push_bytes(&mut self, chunk: &[u8]) -> Result<Vec<Frame>, Error> {
         self.buffer.extend_from_slice(chunk);
         let mut frames = Vec::new();

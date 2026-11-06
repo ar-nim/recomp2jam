@@ -35,6 +35,11 @@ pub struct OjnChartFile {
 /// Dispatches on magic: `M30` and `OMC` variants are fully implemented;
 /// the `OJM` variant stays [`FileError::NotImplemented`] until its
 /// encrypted region is understood (docs/file-formats/ojm.md).
+///
+/// # Errors
+///
+/// `FileError::UnknownFormat` when no known container matches,
+/// `FileError::NotImplemented` for recognized-but-unhandled variants.
 pub fn parse_ojm(bytes: &[u8]) -> Result<Vec<OjmSample<'_>>, FileError> {
     match detect_kind(bytes)? {
         AssetKind::Ojm if bytes.starts_with(b"M30") => parse_m30(bytes),
@@ -169,6 +174,10 @@ impl OjnListEntry<'_> {
 /// (record 0 is song 100, not a header). A trailing partial record
 /// (148 bytes in 7.55) is ignored. Dead slots past the song table
 /// parse like any record; filter them with [`OjnListEntry::is_song`].
+///
+/// # Errors
+///
+/// `FileError::UnknownFormat` when the header magic mismatches.
 pub fn parse_ojn_list(bytes: &[u8]) -> Result<Vec<OjnListEntry<'_>>, FileError> {
     if bytes.len() < 300 || bytes[8..11] != *b"ojn" {
         return Err(FileError::UnknownFormat {
@@ -247,6 +256,11 @@ pub fn parse_ojn_list(bytes: &[u8]) -> Result<Vec<OjnListEntry<'_>>, FileError> 
 /// from the reversed tail (`keys` at `len-7..len-4`, period byte at
 /// `len-4`). Old-format files (no `"new"` prefix) are returned
 /// unchanged.
+///
+/// # Errors
+///
+/// `FileError::TooShort` on tiny input, `FileError::UnknownFormat`
+/// without the `"new"` prefix.
 pub fn decrypt_ojn_new_format(bytes: &[u8]) -> Result<Vec<u8>, FileError> {
     if bytes.len() < 8 {
         return Err(FileError::TooShort(bytes.len()));
@@ -279,6 +293,11 @@ pub fn decrypt_ojn_new_format(bytes: &[u8]) -> Result<Vec<u8>, FileError> {
 /// Parse an `.ojn` chart file: decrypts new-format containers, then
 /// (old-format header parsing lands next; note-table work is tracked
 /// in docs/file-formats/ojn.md).
+///
+/// # Errors
+///
+/// `FileError::Truncated` when the header overruns, `FileError::UnknownFormat`
+/// on a bad magic.
 pub fn parse_ojn(bytes: &[u8]) -> Result<OjnChartFile, FileError> {
     let plain = decrypt_ojn_new_format(bytes)?;
     match detect_kind(&plain)? {
@@ -404,6 +423,11 @@ fn walk_level_events(
 /// last slice ending exactly on the first embedded JPEG and
 /// file bytes +40/+44/+48 matching `OJNList.dat` +44/+48/+52
 /// (docs/file-formats/ojn.md).
+///
+/// # Errors
+///
+/// `FileError::TooShort`/`Truncated` when slices overrun the buffer,
+/// `FileError::UnknownFormat` on a bad header.
 pub fn parse_ojn_levels(bytes: &[u8]) -> Result<Vec<OjnLevelSlice>, FileError> {
     let plain = decrypt_ojn_new_format(bytes)?;
     if plain.len() < OJN_HEADER_LEN {
@@ -497,6 +521,11 @@ pub struct OjnEvent {
 /// an out-of-range `level` is a [`FileError::Truncated`] mismatch.
 /// Verified framing on all 14 shipped 7.55 charts
 /// (docs/file-formats/ojn.md).
+///
+/// # Errors
+///
+/// `FileError::TooShort`/`Truncated` when events overrun the buffer
+/// or the level index is out of range.
 pub fn parse_ojn_level_events(bytes: &[u8], level: usize) -> Result<Vec<OjnEvent>, FileError> {
     let plain = decrypt_ojn_new_format(bytes)?;
     if plain.len() < OJN_HEADER_LEN {

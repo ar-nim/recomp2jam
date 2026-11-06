@@ -17,6 +17,10 @@ pub trait WireMessage: Sized {
     /// Body bytes after the 4-byte header.
     fn encode_body(&self) -> Vec<u8>;
     /// Parse exactly the body bytes (no header).
+    ///
+    /// # Errors
+    ///
+    /// Whatever the command layout reports for malformed bodies.
     fn decode_body(body: &[u8]) -> Result<Self, Error>;
 
     /// Full frame bytes ready to send.
@@ -25,6 +29,10 @@ pub trait WireMessage: Sized {
     }
 
     /// Parse a received frame, checking its command first.
+    ///
+    /// # Errors
+    ///
+    /// `Error::UnknownCommand` on a foreign id, plus body errors.
     fn decode_frame(frame: &Frame) -> Result<Self, Error> {
         if frame.id != Self::COMMAND {
             return Err(Error::UnknownCommand(frame.id));
@@ -81,6 +89,11 @@ macro_rules! empty_message {
             }
 
             /// Parse a received frame, checking command and emptiness.
+            ///
+            /// # Errors
+            ///
+            /// `Error::UnknownCommand` on a foreign id,
+            /// `Error::TrailingBytes` on any payload.
             pub fn decode_frame(frame: &Frame) -> Result<Self, Error> {
                 decode_empty_frame::<Self>(frame)?;
                 Ok(Self)
@@ -684,6 +697,10 @@ impl KeyMode {
     }
 
     /// Parse a wire byte; unknown values are an error.
+    ///
+    /// # Errors
+    ///
+    /// `Error::InvalidField` outside 0–2.
     pub fn from_u8(value: u8) -> Result<Self, Error> {
         match value {
             0 => Ok(Self::ThreeKeys),
@@ -713,6 +730,10 @@ impl GameMode {
     }
 
     /// Parse a wire byte; unknown values are an error.
+    ///
+    /// # Errors
+    ///
+    /// `Error::InvalidField` outside 0–1.
     pub fn from_u8(value: u8) -> Result<Self, Error> {
         match value {
             0 => Ok(Self::Normal),
@@ -865,6 +886,10 @@ impl CreateResult {
     }
 
     /// Parse a wire word; unknown values are an error.
+    ///
+    /// # Errors
+    ///
+    /// `Error::InvalidField` outside the known codes.
     pub fn from_i32(value: i32) -> Result<Self, Error> {
         match value {
             0 => Ok(Self::Success),

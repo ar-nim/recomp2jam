@@ -41,6 +41,10 @@ impl PcmSamples {
 }
 
 /// Decode an OGG Vorbis blob (e.g. one `.ojm` payload) to PCM16.
+///
+/// # Errors
+///
+/// `AudioError::Decode` when the bytes are not a decodable OGG stream.
 pub fn decode_vorbis(ogg: &[u8]) -> Result<PcmSamples, AudioError> {
     let cursor = std::io::Cursor::new(ogg);
     let mut reader = lewton::inside_ogg::OggStreamReader::new(cursor)
@@ -65,6 +69,10 @@ pub fn decode_vorbis(ogg: &[u8]) -> Result<PcmSamples, AudioError> {
 /// tests use [`NullBackend`].
 pub trait AudioBackend {
     /// Queue decoded PCM for playback (fire-and-forget at this layer).
+    ///
+    /// # Errors
+    ///
+    /// `AudioError::Backend` when the device rejects the samples.
     fn play_pcm(&mut self, pcm: &PcmSamples) -> Result<(), AudioError>;
     /// Samples played so far (for song-clock anchoring later).
     fn samples_played(&self) -> u64;
@@ -177,6 +185,10 @@ pub struct CpalBackend {
 
 impl CpalBackend {
     /// Open the default output device. Fails cleanly headless.
+    ///
+    /// # Errors
+    ///
+    /// `AudioError::Backend` with no device, config, or stream.
     pub fn try_new() -> Result<Self, AudioError> {
         let host = cpal::default_host();
         let device = host

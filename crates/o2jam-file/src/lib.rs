@@ -48,6 +48,11 @@ pub enum AssetKind {
 /// This is intentionally conservative: it only reports kinds whose magic
 /// we already have reason to believe in, and says `UnknownFormat`
 /// otherwise. Real magic tables get pinned down in `docs/file-formats/`.
+///
+/// # Errors
+///
+/// `FileError::TooShort` under 4 bytes, `FileError::UnknownFormat`
+/// when no known magic matches.
 pub fn detect_kind(bytes: &[u8]) -> Result<AssetKind, FileError> {
     if bytes.len() < 4 {
         return Err(FileError::TooShort(bytes.len()));
@@ -140,6 +145,10 @@ fn read_str(bytes: &[u8], off: usize, len: usize) -> Result<String, FileError> {
 /// error (docs/file-formats/opi.md). `encoding_rs::EUC_KR` implements
 /// the WHATWG euc-kr index, which covers the CP949 repertoire.
 /// Malformed input (unpaired lead byte) is an error, not lossy text.
+///
+/// # Errors
+///
+/// `FileError::UnknownFormat` when EUC-KR decoding reports errors.
 pub fn decode_control_text(bytes: &[u8]) -> Result<String, FileError> {
     let (text, _, had_errors) = encoding_rs::EUC_KR.decode(bytes);
     if had_errors {
