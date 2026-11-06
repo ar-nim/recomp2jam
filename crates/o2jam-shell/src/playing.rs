@@ -190,7 +190,7 @@ struct PendingNote {
 /// the bad window; notes aging past it rate Miss on advance. Presses
 /// with no note nearby rate nothing (the original's empty-press
 /// behavior is unverified, so nothing is guessed).
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct LivePlay {
     view: PlayingView,
     pending: Vec<PendingNote>,
@@ -291,6 +291,16 @@ impl LivePlay {
     /// Take queued key-sound sample ids (one per struck note).
     pub fn drain_sounds(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.sounds)
+    }
+
+    /// Song over: every note judged and the tail (1.5 s) played out.
+    /// Empty charts never finish on their own (nothing to play).
+    #[must_use]
+    pub fn is_finished(&self, now_ms: u64) -> bool {
+        let Some(last) = self.pending.iter().map(|note| note.at_ms).max() else {
+            return false;
+        };
+        now_ms >= last.saturating_add(1500) && self.pending.iter().all(|note| note.judged)
     }
 
     fn rate(&mut self, judgement: Judgement) {
@@ -410,6 +420,21 @@ mod live_play_tests {
             buf[10 * 70 + word_x as usize + 2],
             pack_xrgb(0xFF, 0xFF, 0xFF)
         );
+    }
+
+    #[test]
+    fn finishes_after_tail_with_all_judged() {
+        let mut live = LivePlay::new(vec![(0, 1000, 7)]);
+        assert!(!live.is_finished(3000));
+        live.strike_lane(0, 1000);
+        assert!(!live.is_finished(2000));
+        assert!(live.is_finished(2500));
+    }
+
+    #[test]
+    fn empty_chart_never_finishes() {
+        let live = LivePlay::default();
+        assert!(!live.is_finished(u64::MAX));
     }
 
     #[test]

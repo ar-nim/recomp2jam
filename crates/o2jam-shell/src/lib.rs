@@ -131,12 +131,33 @@ impl FrameClock {
     }
 }
 
+/// Menu keys (non-lane UI input).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuKey {
+    /// Confirm / advance (Enter).
+    Confirm,
+    /// Back out (Escape).
+    Back,
+}
+
+/// Menu key for a physical key, if any.
+#[must_use]
+pub const fn menu_of(code: KeyCode) -> Option<MenuKey> {
+    match code {
+        KeyCode::Enter => Some(MenuKey::Confirm),
+        KeyCode::Escape => Some(MenuKey::Back),
+        _ => None,
+    }
+}
+
 /// Window event sink: the game implements [`GameLoop`] to receive
 /// input and paint requests. Paint targets an XRGB8888 `Frame`
 /// over the shell backbuffer; the shell presents it with softbuffer.
 pub trait GameLoop {
     /// A lane key changed state (`down` = press).
     fn lane_key(&mut self, lane: usize, down: bool);
+    /// A menu key changed state (`down` = press).
+    fn menu_key(&mut self, _key: MenuKey, _down: bool) {}
     /// Paint the current frame into the backbuffer view.
     fn paint(&mut self, frame: &mut o2jam_render::Frame<'_>);
 }
@@ -292,6 +313,8 @@ impl Shell {
                         };
                         if let Some(lane) = lane {
                             self.shell.game.lane_key(lane, down);
+                        } else if let Some(menu) = menu_of(code) {
+                            self.shell.game.menu_key(menu, down);
                         }
                     }
                     WindowEvent::Resized(size) => {
