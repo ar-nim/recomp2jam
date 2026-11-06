@@ -8,9 +8,13 @@
 use super::error::Error;
 use super::message::WireMessage;
 
-/// In-play stat channel (`UpdateGameStats` 4014 kind byte).
+/// In-play stat channel (`UpdateGameStats` 4014 kind word).
+///
+/// Wire width is live-proven: the gateway parses the kind as
+/// Memoryer's `GameUpdateStatsType` (`ushort`; a one-byte kind
+/// overruns into the value and the gateway drops the frame).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
+#[repr(u16)]
 pub enum StatKind {
     /// Lifebar value (tick-driven site, file `0x4eaec0`).
     Life = 0,
@@ -21,16 +25,16 @@ pub enum StatKind {
 impl StatKind {
     /// Numeric wire value.
     #[must_use]
-    pub fn as_u8(self) -> u8 {
-        self as u8
+    pub fn as_u16(self) -> u16 {
+        self as u16
     }
 
-    /// Parse a wire byte; unknown channels are an error.
+    /// Parse a wire word; unknown channels are an error.
     ///
     /// # Errors
     ///
     /// `Error::InvalidField` outside 0–1.
-    pub fn from_u8(value: u8) -> Result<Self, Error> {
+    pub fn from_u16(value: u16) -> Result<Self, Error> {
         match value {
             0 => Ok(Self::Life),
             1 => Ok(Self::Jam),
@@ -75,18 +79,22 @@ song_empty!(FinalizeRank, 4041);
 
 /// `SetRoomMusic` 4000: host picks the room song.
 ///
-/// Memoryer-corroborated shape (music id + difficulty, matching the
-/// `RoomListEntry`/`JoinedRoom` song fields); exe handler open.
+/// Memoryer-corroborated shape (music id + difficulty + scroll
+/// speed, matching the `RoomListEntry`/`JoinedRoom` song fields);
+/// live-proven: a speed-less body is dropped by the gateway while
+/// the four-byte form updates the room; exe handler open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SetRoomMusic {
     /// Song id (`u16`, as listed per room).
     pub music_id: u16,
     /// Chart difficulty code (`Difficulty::from_code`).
     pub difficulty: u8,
+    /// Scroll-speed code (`GameSpeed` ordinal).
+    pub speed: u8,
 }
 
-/// Body length of [`SetRoomMusic`]: 2 + 1.
-const SET_ROOM_MUSIC_BODY_LEN: usize = 3;
+/// Body length of [`SetRoomMusic`]: 2 + 1 + 1.
+const SET_ROOM_MUSIC_BODY_LEN: usize = 4;
 
 impl WireMessage for SetRoomMusic {
     const COMMAND: u16 = 4000;
@@ -95,6 +103,7 @@ impl WireMessage for SetRoomMusic {
         let mut body = Vec::with_capacity(SET_ROOM_MUSIC_BODY_LEN);
         body.extend_from_slice(&self.music_id.to_le_bytes());
         body.push(self.difficulty);
+        body.push(self.speed);
         body
     }
 
@@ -111,6 +120,7 @@ impl WireMessage for SetRoomMusic {
         Ok(Self {
             music_id: u16::from_le_bytes([body[0], body[1]]),
             difficulty: body[2],
+            speed: body[3],
         })
     }
 }
@@ -178,15 +188,15 @@ pub struct UpdateGameStats {
     pub long_note_score: i32,
 }
 
-/// Body length of [`UpdateGameStats`]: 1 + 2 + 4 + 4 + 4.
-const UPDATE_GAME_STATS_BODY_LEN: usize = 15;
+/// Body length of [`UpdateGameStats`]: 2 + 2 + 4 + 4 + 4.
+const UPDATE_GAME_STATS_BODY_LEN: usize = 16;
 
 impl WireMessage for UpdateGameStats {
     const COMMAND: u16 = 4014;
 
     fn encode_body(&self) -> Vec<u8> {
         let mut body = Vec::with_capacity(UPDATE_GAME_STATS_BODY_LEN);
-        body.push(self.kind.as_u8());
+        body.extend_from_slice(&self.kind.as_u16().to_le_bytes());
         body.extend_from_slice(&self.value.to_le_bytes());
         body.extend_from_slice(&self.sequence.to_le_bytes());
         body.extend_from_slice(&self.score.to_le_bytes());
@@ -207,11 +217,11 @@ impl WireMessage for UpdateGameStats {
             ));
         }
         Ok(Self {
-            kind: StatKind::from_u8(body[0])?,
-            value: u16::from_le_bytes([body[1], body[2]]),
-            sequence: i32::from_le_bytes([body[3], body[4], body[5], body[6]]),
-            score: u32::from_le_bytes([body[7], body[8], body[9], body[10]]),
-            long_note_score: i32::from_le_bytes([body[11], body[12], body[13], body[14]]),
+            kind: StatKind::from_u16(u16::from_le_bytes([body[0], body[1]]))?,
+            value: u16::from_le_bytes([body[2], body[3]]),
+            sequence: i32::from_le_bytes([body[4], body[5], body[6], body[7]]),
+            score: u32::from_le_bytes([body[8], body[9], body[10], body[11]]),
+            long_note_score: i32::from_le_bytes([body[12], body[13], body[14], body[15]]),
         })
     }
 }
@@ -225,22 +235,25 @@ impl WireMessage for UpdateGameStats {
 pub struct GameStatsUpdate {
     /// Member slot the stats belong to.
     pub member_id: u8,
-    /// Raw channel byte; see [`StatKind::from_u8`].
-    pub kind_code: u8,
+    /// Raw channel word; see [`StatKind::from_u16`].
+    pub kind_code: u16,
     /// Channel value (`u16`).
     pub value: u16,
     /// Eight live-rank bytes.
     pub ranks: [u8; 8],
 }
 
-/// Body length of [`GameStatsUpdate`]: 1 + 1 + 2 + 8.
-const GAME_STATS_UPDATE_BODY_LEN: usize = 12;
+/// Body length of [`GameStatsUpdate`]: 1 + 2 + 2 + 8.
+///
+/// Wire width is live-proven: the gateway broadcasts 13 bytes with
+/// the channel as Memoryer's `GameUpdateStatsType` (`ushort`).
+const GAME_STATS_UPDATE_BODY_LEN: usize = 13;
 
 impl GameStatsUpdate {
-    /// Interpret the channel byte. `None` means unknown.
+    /// Interpret the channel word. `None` means unknown.
     #[must_use]
     pub fn kind(self) -> Option<StatKind> {
-        StatKind::from_u8(self.kind_code).ok()
+        StatKind::from_u16(self.kind_code).ok()
     }
 }
 
@@ -250,7 +263,7 @@ impl WireMessage for GameStatsUpdate {
     fn encode_body(&self) -> Vec<u8> {
         let mut body = Vec::with_capacity(GAME_STATS_UPDATE_BODY_LEN);
         body.push(self.member_id);
-        body.push(self.kind_code);
+        body.extend_from_slice(&self.kind_code.to_le_bytes());
         body.extend_from_slice(&self.value.to_le_bytes());
         body.extend_from_slice(&self.ranks);
         body
@@ -269,11 +282,11 @@ impl WireMessage for GameStatsUpdate {
             ));
         }
         let mut ranks = [0u8; 8];
-        ranks.copy_from_slice(&body[4..12]);
+        ranks.copy_from_slice(&body[5..13]);
         Ok(Self {
             member_id: body[0],
-            kind_code: body[1],
-            value: u16::from_le_bytes([body[2], body[3]]),
+            kind_code: u16::from_le_bytes([body[1], body[2]]),
+            value: u16::from_le_bytes([body[3], body[4]]),
             ranks,
         })
     }
@@ -368,12 +381,13 @@ impl WireMessage for SubmitScore {
 
 /// `SyncMemberMusicState` 4036: publish our song readiness.
 ///
-/// Single state byte like `JoinRoom::music_state`; Memoryer
-/// corroboration, exe byte proof still open.
+/// Single member-slot byte: the gateway indexes its room slots by
+/// it (live-proven: slot 0 syncs and broadcasts member 0); the old
+/// `music_state` name misread that byte.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SyncMemberMusicState {
-    /// Song state byte.
-    pub music_state: u8,
+    /// Room slot the sync belongs to.
+    pub member_id: u8,
 }
 
 /// Body length of [`SyncMemberMusicState`].
@@ -383,7 +397,7 @@ impl WireMessage for SyncMemberMusicState {
     const COMMAND: u16 = 4036;
 
     fn encode_body(&self) -> Vec<u8> {
-        vec![self.music_state]
+        vec![self.member_id]
     }
 
     fn decode_body(body: &[u8]) -> Result<Self, Error> {
@@ -398,8 +412,88 @@ impl WireMessage for SyncMemberMusicState {
                 body.len() - SYNC_MEMBER_MUSIC_STATE_BODY_LEN,
             ));
         }
+        Ok(Self { member_id: body[0] })
+    }
+}
+
+/// One song row of the `GetMusicList` 4031 answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MusicListEntry {
+    /// Song id (`u16`, as selected per room).
+    pub id: u16,
+    /// Note count on EX.
+    pub notes_ex: u16,
+    /// Note count on NX.
+    pub notes_nx: u16,
+    /// Note count on HX.
+    pub notes_hx: u16,
+}
+
+/// Wire size of one [`MusicListEntry`]: 4 × `u16`.
+const MUSIC_LIST_ENTRY_LEN: usize = 8;
+
+/// `GetMusicList` 4031 answer: song catalog plus shop flag.
+///
+/// Live-proven shape: `i16` entry count, then 8-byte rows, then a
+/// one-byte free-music flag; further trailing bytes are ignored so
+/// newer gateway fields cannot break the list step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MusicListAnswer {
+    /// Catalog rows.
+    pub entries: Vec<MusicListEntry>,
+    /// Every song is free (`FreeMusic` server option).
+    pub free_music: bool,
+}
+
+impl WireMessage for MusicListAnswer {
+    const COMMAND: u16 = 4031;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = Vec::with_capacity(2 + self.entries.len() * MUSIC_LIST_ENTRY_LEN + 1);
+        let count = i16::try_from(self.entries.len()).unwrap_or(i16::MAX);
+        body.extend_from_slice(&count.to_le_bytes());
+        for entry in &self.entries {
+            body.extend_from_slice(&entry.id.to_le_bytes());
+            body.extend_from_slice(&entry.notes_ex.to_le_bytes());
+            body.extend_from_slice(&entry.notes_nx.to_le_bytes());
+            body.extend_from_slice(&entry.notes_hx.to_le_bytes());
+        }
+        body.push(u8::from(self.free_music));
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < 2 {
+            return Err(Error::TruncatedMessage {
+                need: 2,
+                have: body.len(),
+            });
+        }
+        let count = i16::from_le_bytes([body[0], body[1]]);
+        let count = usize::try_from(count).map_err(|_| Error::InvalidField {
+            field: "music list count",
+            reason: "negative entry count",
+        })?;
+        let need = 2 + count * MUSIC_LIST_ENTRY_LEN + 1;
+        if body.len() < need {
+            return Err(Error::TruncatedMessage {
+                need,
+                have: body.len(),
+            });
+        }
+        let mut entries = Vec::with_capacity(count);
+        for index in 0..count {
+            let at = 2 + index * MUSIC_LIST_ENTRY_LEN;
+            entries.push(MusicListEntry {
+                id: u16::from_le_bytes([body[at], body[at + 1]]),
+                notes_ex: u16::from_le_bytes([body[at + 2], body[at + 3]]),
+                notes_nx: u16::from_le_bytes([body[at + 4], body[at + 5]]),
+                notes_hx: u16::from_le_bytes([body[at + 6], body[at + 7]]),
+            });
+        }
         Ok(Self {
-            music_state: body[0],
+            entries,
+            free_music: body[2 + count * MUSIC_LIST_ENTRY_LEN] != 0,
         })
     }
 }
@@ -476,16 +570,16 @@ mod song_sync_tests {
 
     #[test]
     fn stat_kind_names_both_channels() {
-        assert_eq!(StatKind::from_u8(0), Ok(StatKind::Life));
-        assert_eq!(StatKind::from_u8(1), Ok(StatKind::Jam));
-        assert_eq!(StatKind::Life.as_u8(), 0);
-        assert_eq!(StatKind::Jam.as_u8(), 1);
+        assert_eq!(StatKind::from_u16(0), Ok(StatKind::Life));
+        assert_eq!(StatKind::from_u16(1), Ok(StatKind::Jam));
+        assert_eq!(StatKind::Life.as_u16(), 0);
+        assert_eq!(StatKind::Jam.as_u16(), 1);
     }
 
     #[test]
     fn stat_kind_rejects_unknown_channel() {
         assert_eq!(
-            StatKind::from_u8(9),
+            StatKind::from_u16(0x0301),
             Err(Error::InvalidField {
                 field: "stat kind",
                 reason: "not 0 or 1"
@@ -494,22 +588,23 @@ mod song_sync_tests {
     }
 
     #[test]
-    fn set_room_music_encodes_id_then_difficulty() {
+    fn set_room_music_encodes_id_difficulty_speed() {
         let select = SetRoomMusic {
             music_id: 757,
             difficulty: 2,
+            speed: 1,
         };
-        assert_eq!(select.encode_body(), vec![0xF5, 0x02, 0x02]);
+        assert_eq!(select.encode_body(), vec![0xF5, 0x02, 0x02, 0x01]);
         let frame = decode_frame(&select.encode()).unwrap();
         assert_eq!(frame.id, 4000);
         assert_eq!(SetRoomMusic::decode_frame(&frame), Ok(select));
     }
 
     #[test]
-    fn set_room_music_rejects_short_body() {
+    fn set_room_music_rejects_speed_less_body() {
         assert_eq!(
-            SetRoomMusic::decode_body(&[0xF5, 0x02]),
-            Err(Error::TruncatedMessage { need: 3, have: 2 })
+            SetRoomMusic::decode_body(&[0xF5, 0x02, 0x02]),
+            Err(Error::TruncatedMessage { need: 4, have: 3 })
         );
     }
 
@@ -569,8 +664,8 @@ mod song_sync_tests {
         assert_eq!(
             jam_tick().encode_body(),
             vec![
-                0x01, 0x34, 0x12, 0x04, 0x03, 0x02, 0x01, 0x08, 0x07, 0x06, 0x05, 0x0C, 0x0B, 0x0A,
-                0x09,
+                0x01, 0x00, 0x34, 0x12, 0x04, 0x03, 0x02, 0x01, 0x08, 0x07, 0x06, 0x05, 0x0C, 0x0B,
+                0x0A, 0x09,
             ]
         );
     }
@@ -598,7 +693,7 @@ mod song_sync_tests {
     #[test]
     fn game_stats_update_decodes_peer_bar() {
         let body = vec![
-            0x02, 0x00, 0xE8, 0x03, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+            0x02, 0x00, 0x00, 0xE8, 0x03, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
         ];
         let update = GameStatsUpdate::decode_body(&body).unwrap();
         assert_eq!(update.member_id, 2);
@@ -633,8 +728,8 @@ mod song_sync_tests {
     #[test]
     fn game_stats_update_rejects_short_body() {
         assert_eq!(
-            GameStatsUpdate::decode_body(&[0x01; 11]),
-            Err(Error::TruncatedMessage { need: 12, have: 11 })
+            GameStatsUpdate::decode_body(&[0x01; 12]),
+            Err(Error::TruncatedMessage { need: 13, have: 12 })
         );
     }
 
@@ -684,11 +779,66 @@ mod song_sync_tests {
 
     #[test]
     fn sync_member_music_state_round_trips() {
-        let state = SyncMemberMusicState { music_state: 2 };
+        let state = SyncMemberMusicState { member_id: 2 };
         assert_eq!(state.encode_body(), vec![0x02]);
         let frame = decode_frame(&state.encode()).unwrap();
         assert_eq!(frame.id, 4036);
         assert_eq!(SyncMemberMusicState::decode_frame(&frame), Ok(state));
+    }
+
+    #[test]
+    fn music_list_answer_round_trips() {
+        let answer = MusicListAnswer {
+            entries: vec![
+                MusicListEntry {
+                    id: 757,
+                    notes_ex: 100,
+                    notes_nx: 200,
+                    notes_hx: 300,
+                },
+                MusicListEntry {
+                    id: 758,
+                    notes_ex: 0,
+                    notes_nx: 0,
+                    notes_hx: 0,
+                },
+            ],
+            free_music: true,
+        };
+        let frame = decode_frame(&answer.encode()).unwrap();
+        assert_eq!(frame.id, 4031);
+        assert_eq!(MusicListAnswer::decode_frame(&frame), Ok(answer));
+    }
+
+    #[test]
+    fn music_list_answer_reads_count_then_flag() {
+        let body = vec![
+            0x01, 0x00, 0xF5, 0x02, 0x64, 0x00, 0xC8, 0x00, 0x2C, 0x01, 0x01,
+        ];
+        let answer = MusicListAnswer::decode_body(&body).unwrap();
+        assert_eq!(answer.entries.len(), 1);
+        assert_eq!(answer.entries[0].id, 757);
+        assert_eq!(answer.entries[0].notes_hx, 300);
+        assert!(answer.free_music);
+    }
+
+    #[test]
+    fn music_list_answer_rejects_negative_count() {
+        assert_eq!(
+            MusicListAnswer::decode_body(&[0xFF, 0xFF]),
+            Err(Error::InvalidField {
+                field: "music list count",
+                reason: "negative entry count"
+            })
+        );
+    }
+
+    #[test]
+    fn music_list_answer_rejects_truncated_row() {
+        assert_eq!(
+            MusicListAnswer::decode_body(&[0x01, 0x00, 0xF5]),
+            Err(Error::TruncatedMessage { need: 11, have: 3 })
+        );
     }
 
     #[test]
