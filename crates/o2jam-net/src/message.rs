@@ -228,6 +228,88 @@ impl WireMessage for ChannelLoginResponse {
     }
 }
 
+/// `Authorize` result codes (Memoryer `AuthResult`, `uint`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum AuthResult {
+    /// Login accepted.
+    Success = 0,
+    /// Bad credentials.
+    InvalidLogin = 0xFFFF_FFFF,
+    /// Account already online.
+    AlreadyConnected = 0xFFFF_FFFE,
+    /// Region mismatch.
+    RegionError = 0xFFFF_FFFD,
+    /// PC-room authorization missing.
+    UnauthorizedPc = 0xFFFF_FFFC,
+    /// Account banned.
+    Banned = 0xFFFF_FFFB,
+    /// Play time exhausted.
+    TimeExceeded = 0xFFFF_FFFA,
+    /// Server database failure.
+    DatabaseError = 0xFFFF_FF9B,
+}
+
+impl AuthResult {
+    /// Interpret a raw result code. `None` means a code the 7.55
+    /// server never sends (kept extensible, never guessed).
+    #[must_use]
+    pub fn from_code(code: u32) -> Option<Self> {
+        match code {
+            0 => Some(Self::Success),
+            0xFFFF_FFFF => Some(Self::InvalidLogin),
+            0xFFFF_FFFE => Some(Self::AlreadyConnected),
+            0xFFFF_FFFD => Some(Self::RegionError),
+            0xFFFF_FFFC => Some(Self::UnauthorizedPc),
+            0xFFFF_FFFB => Some(Self::Banned),
+            0xFFFF_FFFA => Some(Self::TimeExceeded),
+            0xFFFF_FF9B => Some(Self::DatabaseError),
+            _ => None,
+        }
+    }
+}
+
+/// `Authorize` 1001 response: `u32` result plus the pass-info tail
+/// kept opaque (Memoryer `PassesInfo?` — nested submessages with
+/// formatted durations; full decode deferred until the login flow
+/// needs subscription display. Encore skips trailing-nullable
+/// members when the stream is exhausted, so a 4-byte body is a
+/// complete result-only response).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthResponse {
+    /// Raw result code; see [`AuthResult::from_code`].
+    pub result_code: u32,
+    /// Bytes after the result (pass-info when present); untouched.
+    pub tail: Vec<u8>,
+}
+
+/// Body length of a result-only [`AuthResponse`].
+const AUTH_RESPONSE_MIN_LEN: usize = 4;
+
+impl WireMessage for AuthResponse {
+    const COMMAND: u16 = 1001;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = Vec::with_capacity(AUTH_RESPONSE_MIN_LEN + self.tail.len());
+        body.extend_from_slice(&self.result_code.to_le_bytes());
+        body.extend_from_slice(&self.tail);
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < AUTH_RESPONSE_MIN_LEN {
+            return Err(Error::TruncatedMessage {
+                need: AUTH_RESPONSE_MIN_LEN,
+                have: body.len(),
+            });
+        }
+        Ok(Self {
+            result_code: u32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+            tail: body[AUTH_RESPONSE_MIN_LEN..].to_vec(),
+        })
+    }
+}
+
 /// Fixed 51-byte `SessionKeys` 1008 body: seed, prefix, 32 random
 /// bytes, 16 random bytes (Memoryer `SessionKeysResponse`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -397,6 +479,7 @@ mod command_consistency_tests {
         assert_eq!(LegacyPing::COMMAND, Generic::LegacyPing as u16);
         assert_eq!(Ping::COMMAND, Generic::Ping as u16);
         assert_eq!(SessionKeys::COMMAND, Response::SessionKeys as u16);
+        assert_eq!(AuthResponse::COMMAND, Response::Authorize as u16);
         assert_eq!(ChannelList::COMMAND, Response::GetChannelList as u16);
         assert_eq!(ChannelLoginResponse::COMMAND, Response::ChannelLogin as u16);
         assert_eq!(
@@ -533,6 +616,66 @@ mod tests {
         assert_eq!(SubscriptionAlert.encode(), vec![0x02, 0x00, 0x32, 0x00]);
         assert_eq!(ForceReauthorize.encode(), vec![0x02, 0x00, 0x33, 0x00]);
         assert_eq!(MultiSessionError.encode(), vec![0x02, 0x00, 0x34, 0x00]);
+    }
+
+    #[test]
+    fn auth_response_decodes_success_without_tail() {
+        let response = AuthResponse::decode_body(&[0x00, 0x00, 0x00, 0x00]).unwrap();
+        assert_eq!(response.result_code, 0);
+        assert!(response.tail.is_empty());
+        assert_eq!(
+            AuthResult::from_code(response.result_code),
+            Some(AuthResult::Success)
+        );
+    }
+
+    #[test]
+    fn auth_response_names_failure_codes() {
+        assert_eq!(
+            AuthResult::from_code(0xFFFF_FFFF),
+            Some(AuthResult::InvalidLogin)
+        );
+        assert_eq!(
+            AuthResult::from_code(0xFFFF_FFFE),
+            Some(AuthResult::AlreadyConnected)
+        );
+        assert_eq!(
+            AuthResult::from_code(0xFFFF_FFFD),
+            Some(AuthResult::RegionError)
+        );
+        assert_eq!(
+            AuthResult::from_code(0xFFFF_FFFC),
+            Some(AuthResult::UnauthorizedPc)
+        );
+        assert_eq!(AuthResult::from_code(0xFFFF_FFFB), Some(AuthResult::Banned));
+        assert_eq!(
+            AuthResult::from_code(0xFFFF_FFFA),
+            Some(AuthResult::TimeExceeded)
+        );
+        assert_eq!(
+            AuthResult::from_code(0xFFFF_FF9B),
+            Some(AuthResult::DatabaseError)
+        );
+        assert_eq!(AuthResult::from_code(42), None);
+    }
+
+    #[test]
+    fn auth_response_preserves_opaque_tail() {
+        let response = AuthResponse {
+            result_code: 0,
+            tail: vec![0x01, 0x02, 0x03],
+        };
+        let frame = decode_frame(&response.encode()).unwrap();
+        assert_eq!(frame.id, 1001);
+        assert_eq!(AuthResponse::decode_frame(&frame), Ok(response));
+    }
+
+    #[test]
+    fn auth_response_rejects_short_body() {
+        assert_eq!(
+            AuthResponse::decode_body(&[0x00, 0x00]),
+            Err(Error::TruncatedMessage { need: 4, have: 2 })
+        );
     }
 
     #[test]
