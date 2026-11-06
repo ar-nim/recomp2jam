@@ -6,8 +6,13 @@
 //! relative to the frame: full-width lanes, line one sixth up from
 //! the bottom, `lookahead` ms of chart visible above the line.
 
-use o2jam_game::{CoolStreak, Judgement, PillStock, Score, TimingWindows};
-use o2jam_render::{draw_number, draw_text, fill_rect, pack_xrgb, text_width, Frame, Rect};
+use o2jam_game::{
+    CoolStreak, Judgement, LaneMap, LongTail, MeasureReshuffle, PillStock, Score, TimingWindows,
+};
+use o2jam_render::{
+    draw_number, draw_text, fill_rect, pack_xrgb, text_width, visible_spans, Frame, LaneCurtain,
+    Rect,
+};
 
 /// Lanes across the highway.
 pub const HIGHWAY_LANES: u8 = 7;
@@ -113,8 +118,61 @@ impl PlayingView {
         notes
     }
 
+    /// Remap every onset through a skill-ring lane table.
+    pub fn remap_lanes(&mut self, map: &LaneMap) {
+        for (lane, _) in &mut self.onsets {
+            if let Some(destination) = map.destination(*lane) {
+                *lane = destination;
+            }
+        }
+        self.onsets.sort_by_key(|(_, at)| *at);
+    }
+
     /// Paint highway, line, and visible notes.
     pub fn paint(&self, frame: &mut Frame<'_>, geom: &HighwayGeometry) {
+        self.paint_shell(frame, geom);
+        for (lane, y) in self.visible(geom) {
+            Self::paint_note(frame, geom, lane, y);
+        }
+    }
+
+    /// Paint the highway through a skill-ring curtain: notes outside the
+    /// item-text spans (hidden keeps the top 80%, sudden the bottom
+    /// 20%, dark the middle 20%, reverse-dark the outer 40% pair —
+    /// `o2jam-render::visible_spans`, clip math OPEN) are not drawn.
+    /// `Full` paints everything, like [`PlayingView::paint`].
+    pub fn paint_curtained(
+        &self,
+        frame: &mut Frame<'_>,
+        geom: &HighwayGeometry,
+        curtain: LaneCurtain,
+    ) {
+        self.paint_shell(frame, geom);
+        if curtain == LaneCurtain::Full {
+            for (lane, y) in self.visible(geom) {
+                Self::paint_note(frame, geom, lane, y);
+            }
+            return;
+        }
+        let highway = Rect {
+            x: 0,
+            y: 0,
+            w: frame.w as u32,
+            h: geom.line_y.max(0) as u32,
+        };
+        let spans = visible_spans(curtain, &highway);
+        for (lane, y) in self.visible(geom) {
+            if spans
+                .iter()
+                .any(|span| y >= span.y && y < span.y + span.h as i32)
+            {
+                Self::paint_note(frame, geom, lane, y);
+            }
+        }
+    }
+
+    /// Background, lane separators, and the judgement line (no notes).
+    fn paint_shell(&self, frame: &mut Frame<'_>, geom: &HighwayGeometry) {
         let w = frame.w as i32;
         fill_rect(
             frame,
@@ -149,19 +207,21 @@ impl PlayingView {
             },
             pack_xrgb(0xE0, 0xE0, 0xE0),
         );
-        for (lane, y) in self.visible(geom) {
-            let column = geom.lane_rect(lane);
-            fill_rect(
-                frame,
-                &Rect {
-                    x: column.x + 1,
-                    y,
-                    w: column.w.saturating_sub(2),
-                    h: NOTE_H as u32,
-                },
-                pack_xrgb(0x40, 0xC0, 0xFF),
-            );
-        }
+    }
+
+    /// One falling note block.
+    fn paint_note(frame: &mut Frame<'_>, geom: &HighwayGeometry, lane: u8, y: i32) {
+        let column = geom.lane_rect(lane);
+        fill_rect(
+            frame,
+            &Rect {
+                x: column.x + 1,
+                y,
+                w: column.w.saturating_sub(2),
+                h: NOTE_H as u32,
+            },
+            pack_xrgb(0x40, 0xC0, 0xFF),
+        );
     }
 }
 
@@ -176,12 +236,50 @@ fn word_of(judgement: Judgement) -> &'static str {
 }
 
 /// One hittable note: rated once, by key press or by timeout.
+/// Long notes carry a tail: after the head is struck the lane is
+/// held until the tail, then released exactly there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PendingNote {
     lane: u8,
     at_ms: u64,
+    tail_ms: Option<u64>,
     sample: u32,
     judged: bool,
+    holding: bool,
+    tail_judged: bool,
+}
+
+impl PendingNote {
+    /// Tap note (no tail).
+    fn tap(lane: u8, at_ms: u64, sample: u32) -> Self {
+        Self {
+            lane,
+            at_ms,
+            tail_ms: None,
+            sample,
+            judged: false,
+            holding: false,
+            tail_judged: true,
+        }
+    }
+
+    /// Long note: head at `at_ms`, release at `tail_ms`.
+    fn hold(lane: u8, at_ms: u64, tail_ms: u64, sample: u32) -> Self {
+        Self {
+            lane,
+            at_ms,
+            tail_ms: Some(tail_ms),
+            sample,
+            judged: false,
+            holding: false,
+            tail_judged: false,
+        }
+    }
+
+    /// Done when the head is judged and the tail (if any) is judged.
+    fn done(&self) -> bool {
+        self.judged && self.tail_judged
+    }
 }
 
 /// Live play: scrolling view plus verified judgement/scoring.
@@ -190,7 +288,13 @@ struct PendingNote {
 /// the bad window; notes aging past it rate Miss on advance. Presses
 /// with no note nearby rate nothing (the original's empty-press
 /// behavior is unverified, so nothing is guessed).
-#[derive(Debug, Default)]
+///
+/// Skill rings plug in here without touching net/render: remap lanes
+/// through a [`LaneMap`], hide notes behind a [`LaneCurtain`], and ask
+/// [`LivePlay::should_rebuild_map`] per measure for the panic-style
+/// per-measure reshuffle (`MeasureReshuffle`: rebuild every plain
+/// measure, once per hold span — `FUN_00574330`).
+#[derive(Debug)]
 pub struct LivePlay {
     view: PlayingView,
     pending: Vec<PendingNote>,
@@ -198,9 +302,29 @@ pub struct LivePlay {
     pills: PillStock,
     streak: CoolStreak,
     windows: TimingWindows,
+    reshuffle: MeasureReshuffle,
+    curtain: LaneCurtain,
     now_ms: u64,
     last_word: Option<(Judgement, u64)>,
     sounds: Vec<u32>,
+}
+
+impl Default for LivePlay {
+    fn default() -> Self {
+        Self {
+            view: PlayingView::default(),
+            pending: Vec::new(),
+            score: Score::default(),
+            pills: PillStock::default(),
+            streak: CoolStreak::default(),
+            windows: TimingWindows::default(),
+            reshuffle: MeasureReshuffle::default(),
+            curtain: LaneCurtain::Full,
+            now_ms: 0,
+            last_word: None,
+            sounds: Vec::new(),
+        }
+    }
 }
 
 impl LivePlay {
@@ -210,12 +334,7 @@ impl LivePlay {
     pub fn new(onsets: &[(u8, u64, u32)]) -> Self {
         let mut pending: Vec<PendingNote> = onsets
             .iter()
-            .map(|(lane, at_ms, sample)| PendingNote {
-                lane: *lane,
-                at_ms: *at_ms,
-                sample: *sample,
-                judged: false,
-            })
+            .map(|(lane, at_ms, sample)| PendingNote::tap(*lane, *at_ms, *sample))
             .collect();
         pending.sort_by_key(|note| note.at_ms);
         Self {
@@ -230,22 +349,96 @@ impl LivePlay {
             pills: PillStock::default(),
             streak: CoolStreak::default(),
             windows: TimingWindows::default(),
+            reshuffle: MeasureReshuffle::default(),
+            curtain: LaneCurtain::Full,
             now_ms: 0,
             last_word: None,
             sounds: Vec::new(),
         }
     }
 
+    /// Notes with long-note tails: `(lane, head ms, tail ms, sample)`.
+    /// A tail equal to (or before) its head degrades to a tap.
+    #[must_use]
+    pub fn new_holds(entries: &[(u8, u64, u64, u32)]) -> Self {
+        let mut pending: Vec<PendingNote> = entries
+            .iter()
+            .map(|(lane, head_ms, tail_ms, sample)| {
+                LongTail::new(*head_ms, *tail_ms).map_or_else(
+                    || PendingNote::tap(*lane, *head_ms, *sample),
+                    |tail| PendingNote::hold(*lane, tail.head_ms, tail.tail_ms, *sample),
+                )
+            })
+            .collect();
+        pending.sort_by_key(|note| note.at_ms);
+        Self {
+            view: PlayingView::new(
+                entries
+                    .iter()
+                    .map(|(lane, head_ms, _, _)| (*lane, *head_ms))
+                    .collect(),
+            ),
+            pending,
+            score: Score::default(),
+            pills: PillStock::default(),
+            streak: CoolStreak::default(),
+            windows: TimingWindows::default(),
+            reshuffle: MeasureReshuffle::default(),
+            curtain: LaneCurtain::Full,
+            now_ms: 0,
+            last_word: None,
+            sounds: Vec::new(),
+        }
+    }
+
+    /// Skill-ring curtain worn for this run (default: none).
+    pub fn set_curtain(&mut self, curtain: LaneCurtain) {
+        self.curtain = curtain;
+    }
+
+    /// Remap every pending lane through a skill-ring table
+    /// (mirror / shuffle built by the `LaneMap` constructors).
+    pub fn remap_lanes(&mut self, map: &LaneMap) {
+        for note in &mut self.pending {
+            if let Some(destination) = map.destination(note.lane) {
+                note.lane = destination;
+            }
+        }
+        self.pending.sort_by_key(|note| note.at_ms);
+        self.view.remap_lanes(map);
+    }
+
+    /// Whether the lane table needs a fresh build for the next measure
+    /// (panic-style ring: every plain measure, once per hold span).
+    pub fn should_rebuild_map(&mut self, measure_has_hold: bool) -> bool {
+        self.reshuffle.should_rebuild_map(measure_has_hold)
+    }
+
     /// Move the song clock; notes past the bad window rate Miss.
+    /// Heads missed by timeout kill their tails too, and tails with
+    /// no release by their window end rate Miss (missing the release
+    /// is a miss — long-note rule).
     pub fn advance_to(&mut self, now_ms: u64) {
         self.now_ms = now_ms;
         self.view.advance_to(now_ms);
-        let bad = self.windows.bad;
+        let windows = self.windows;
         let mut late = Vec::new();
         for note in &mut self.pending {
-            if !note.judged && note.at_ms.saturating_add(bad) < now_ms {
+            if !note.judged && note.at_ms.saturating_add(windows.bad) < now_ms {
                 note.judged = true;
+                note.tail_judged = true;
+                note.holding = false;
                 late.push(Judgement::Miss);
+            } else if let Some(tail) = note.tail_ms {
+                let hold = LongTail {
+                    head_ms: note.at_ms,
+                    tail_ms: tail,
+                };
+                if note.holding && !note.tail_judged && hold.is_expired(now_ms, &windows) {
+                    note.tail_judged = true;
+                    note.holding = false;
+                    late.push(Judgement::Miss);
+                }
             }
         }
         for judgement in late {
@@ -275,9 +468,43 @@ impl LivePlay {
             self.pending[i].sample,
         );
         self.pending[i].judged = true;
+        self.pending[i].holding = self.pending[i].tail_ms.is_some();
         self.view.strike(lane, at_ms);
         self.sounds.push(sample);
         let judgement = self.windows.judge(offset);
+        self.rate(judgement);
+        Some(judgement)
+    }
+
+    /// Release a held lane: rate the tail of the nearest held note.
+    /// Releasing mid-hold (before the tail window) is a Miss;
+    /// a release inside the window judges with the strike tiers.
+    /// Returns the judgement, or `None` when no lane is held.
+    pub fn release_lane(&mut self, lane: u8, now_ms: u64) -> Option<Judgement> {
+        self.advance_to(now_ms);
+        let mut best: Option<(usize, u64)> = None;
+        for (i, note) in self.pending.iter().enumerate() {
+            if !note.holding || note.tail_judged || note.lane != lane {
+                continue;
+            }
+            let tail = note.tail_ms.unwrap_or(note.at_ms);
+            let gap = tail.abs_diff(now_ms);
+            if best.is_none_or(|(_, seen)| gap < seen) {
+                best = Some((i, gap));
+            }
+        }
+        let (i, _) = best?;
+        let tail = LongTail {
+            head_ms: self.pending[i].at_ms,
+            tail_ms: self.pending[i].tail_ms.unwrap_or(self.pending[i].at_ms),
+        };
+        self.pending[i].holding = false;
+        self.pending[i].tail_judged = true;
+        let judgement = if tail.is_early(now_ms, &self.windows) {
+            Judgement::Miss
+        } else {
+            tail.judge_release(now_ms, &self.windows)
+        };
         self.rate(judgement);
         Some(judgement)
     }
@@ -293,14 +520,19 @@ impl LivePlay {
         std::mem::take(&mut self.sounds)
     }
 
-    /// Song over: every note judged and the tail (1.5 s) played out.
-    /// Empty charts never finish on their own (nothing to play).
+    /// Song over: every head and tail judged and the tail (1.5 s) played
+    /// out. Empty charts never finish on their own (nothing to play).
     #[must_use]
     pub fn is_finished(&self, now_ms: u64) -> bool {
-        let Some(last) = self.pending.iter().map(|note| note.at_ms).max() else {
+        let Some(last) = self
+            .pending
+            .iter()
+            .map(|note| note.tail_ms.unwrap_or(note.at_ms))
+            .max()
+        else {
             return false;
         };
-        now_ms >= last.saturating_add(1500) && self.pending.iter().all(|note| note.judged)
+        now_ms >= last.saturating_add(1500) && self.pending.iter().all(|note| note.done())
     }
 
     fn rate(&mut self, judgement: Judgement) {
@@ -312,7 +544,7 @@ impl LivePlay {
     /// Paint highway, notes, score, combo, and the latest word.
     pub fn paint(&mut self, frame: &mut Frame<'_>, geom: &HighwayGeometry, now_ms: u64) {
         self.advance_to(now_ms);
-        self.view.paint(frame, geom);
+        self.view.paint_curtained(frame, geom, self.curtain);
         let points = u32::try_from(self.score.points).unwrap_or(u32::MAX);
         draw_number(frame, 16, 16, points, pack_xrgb(0xFF, 0xFF, 0xFF));
         if self.score.combo > 0 {
@@ -435,6 +667,125 @@ mod live_play_tests {
     fn empty_chart_never_finishes() {
         let live = LivePlay::default();
         assert!(!live.is_finished(u64::MAX));
+    }
+
+    #[test]
+    fn hold_rates_head_then_tail_release() {
+        let mut live = LivePlay::new_holds(&[(2, 1000, 2000, 7)]);
+        assert_eq!(live.strike_lane(2, 1000), Some(Judgement::Cool));
+        assert_eq!(live.release_lane(2, 2000), Some(Judgement::Cool));
+        assert_eq!(live.score().combo, 2);
+        assert_eq!(live.score().points, 400);
+        assert!(live.is_finished(3500));
+    }
+
+    #[test]
+    fn hold_early_release_is_a_miss() {
+        let mut live = LivePlay::new_holds(&[(2, 1000, 2000, 7)]);
+        assert_eq!(live.strike_lane(2, 1000), Some(Judgement::Cool));
+        assert_eq!(live.release_lane(2, 1500), Some(Judgement::Miss));
+        assert_eq!(live.score().combo, 0);
+    }
+
+    #[test]
+    fn hold_missing_release_rates_miss_on_advance() {
+        let mut live = LivePlay::new_holds(&[(2, 1000, 2000, 7)]);
+        assert_eq!(live.strike_lane(2, 1000), Some(Judgement::Cool));
+        live.advance_to(2000 + 25 + 1);
+        assert_eq!(live.release_lane(2, 2000 + 25 + 1), None);
+        assert_eq!(live.score().counts, [1, 0, 0, 1]);
+        assert_eq!(live.score().combo, 0);
+    }
+
+    #[test]
+    fn hold_missing_head_kills_the_tail() {
+        let mut live = LivePlay::new_holds(&[(2, 1000, 2000, 7)]);
+        live.advance_to(1000 + 25 + 1);
+        assert_eq!(live.release_lane(2, 2000), None);
+        assert_eq!(live.score().counts[3], 1);
+        assert!(live.is_finished(3500));
+    }
+
+    #[test]
+    fn empty_tail_degrades_to_tap() {
+        let mut live = LivePlay::new_holds(&[(2, 1000, 1000, 7)]);
+        assert_eq!(live.strike_lane(2, 1000), Some(Judgement::Cool));
+        assert_eq!(live.release_lane(2, 1000), None);
+        assert!(live.is_finished(2500));
+    }
+
+    #[test]
+    fn lane_remap_moves_pending_and_view() {
+        let mut live = LivePlay::new(&[(0, 1000, 7)]);
+        live.remap_lanes(&LaneMap::mirrored(7));
+        assert_eq!(live.strike_lane(6, 1000), Some(Judgement::Cool));
+        assert_eq!(live.strike_lane(0, 1000), None);
+    }
+
+    #[test]
+    fn lane_remap_keeps_time_order() {
+        let mut live = LivePlay::new(&[(0, 1100, 7), (6, 1000, 9)]);
+        live.remap_lanes(&LaneMap::mirrored(7));
+        assert_eq!(live.strike_lane(0, 1000), Some(Judgement::Cool));
+        assert_eq!(live.strike_lane(6, 1100), Some(Judgement::Cool));
+    }
+
+    #[test]
+    fn sudden_curtain_hides_notes_above_the_bottom_fifth() {
+        let geom = HighwayGeometry::centered(70, 60);
+        let mut view = PlayingView::new(vec![(0, 1500), (0, 2900)]);
+        view.advance_to(1000);
+        assert_eq!(view.visible(&geom).len(), 2);
+        let mut full = vec![0u32; 70 * 60];
+        view.paint_curtained(
+            &mut Frame {
+                buf: &mut full,
+                w: 70,
+                h: 60,
+            },
+            &geom,
+            LaneCurtain::Full,
+        );
+        let mut sudden = vec![0u32; 70 * 60];
+        view.paint_curtained(
+            &mut Frame {
+                buf: &mut sudden,
+                w: 70,
+                h: 60,
+            },
+            &geom,
+            LaneCurtain::Sudden,
+        );
+        let note = pack_xrgb(0x40, 0xC0, 0xFF);
+        assert!(full.contains(&note));
+        assert!(!sudden.contains(&note));
+    }
+
+    #[test]
+    fn hidden_curtain_keeps_notes_at_the_top() {
+        let geom = HighwayGeometry::centered(70, 60);
+        let mut view = PlayingView::new(vec![(0, 2900)]);
+        view.advance_to(1000);
+        let mut hidden = vec![0u32; 70 * 60];
+        view.paint_curtained(
+            &mut Frame {
+                buf: &mut hidden,
+                w: 70,
+                h: 60,
+            },
+            &geom,
+            LaneCurtain::Hidden,
+        );
+        assert!(hidden.contains(&pack_xrgb(0x40, 0xC0, 0xFF)));
+    }
+
+    #[test]
+    fn reshuffle_rebuilds_every_plain_measure() {
+        let mut live = LivePlay::new(&[(0, 1000, 7)]);
+        assert!(live.should_rebuild_map(false));
+        assert!(live.should_rebuild_map(false));
+        assert!(live.should_rebuild_map(true));
+        assert!(!live.should_rebuild_map(true));
     }
 
     #[test]
