@@ -1,0 +1,257 @@
+# Behavioral-claims inventory (7.55) — by evidence level
+
+Every behavioral claim in `docs/*.md` (incl. `docs/file-formats/`) plus
+doc comments in `crates/*/src/*.rs`, tagged by evidence level. Version
+pin for all EXE rows: `AngelO2Jam.exe` 5,029,888 B, SHA-256
+`83a04541…72c823b`; DATA rows pin the archives listed in
+`docs/file-formats/opi.md`.
+
+## Levels
+
+- **EXE** — anchored in the client at a file offset (VA = file +
+  `0x400000`) with an evidence id: an REA dossier id where one exists,
+  else a local-static record id. Rows marked *(offset-only)* cite
+  offsets from objdump/byte surveys whose docs state no dossier was
+  filed.
+- **DATA** — byte-walk inference over shipped data files only; no
+  consumer code observed.
+- **ASSUMED** — player report, reference-implementation corroboration,
+  positional/ordinal guess, placeholder, or documented-unknown.
+
+**Drives** flags what a claim moves on screen or in play: `R`
+(rendering), `G` (gameplay), `R+G`, `—`.
+
+## Counts
+
+| Level | Claims |
+|---|---|
+| EXE | 63 |
+| DATA | 41 |
+| ASSUMED | 35 |
+| Total | 139 |
+
+## The pairing-rule family (known mistake + siblings)
+
+The known pattern: a file-order/positional rule asserted where the exe
+uses an explicit ordinal or id field. Source claim A2 ("rect *i* pairs
+entry *i+1* in file order") is a DATA walk that the EXE refines: the
+applier looks each entry up by `code & 0xFFF − 1` and bounds-checks
+(A1). Siblings found by hunting for the same shape:
+
+- **S1** — "SET entries consume `.bnd` rects in file order exactly like
+  top-level entries" (`o2jam-file/src/control.rs:17`). EXE matches SET
+  children by `code & 0xFF000` against the set key instead (A19).
+- **S2** — the Playing 17-rect subset is applied as a positional zip
+  ("rect *i* → entry 213+*i*", `o2jam-shell/src/avatar.rs:357`). The
+  exe assigns rects by per-entry ordinal; sequential low words in that
+  run make the zip *happen* to agree (A26).
+- **S3** — "entries − 1 == rects is the normal rule" (Room 75/76,
+  Waiting 116/117). Per A1 the exe gives an out-of-range entry an
+  all-zero rect; "minus self" is one story, not the mechanism (A27).
+- **S4** — `resolve_order_slot` keys id-less OJM banks by fetch order.
+  The exe has no order lookup anywhere on load/play paths; M30 banks
+  key by the explicit `ref` id, new-variant entries all land in slot 0
+  (C28). The fallback is ours, labeled as such (C29).
+- **S5** — difficulty mapping guessed by position: "+20 lo/hi/+24
+  ascending triple" (C34) names header fields by slot order, 13/13 fit.
+- **S6** — `GameSpeed`/`RoomState`/`Difficulty` value sets locked from
+  Memoryer ordinals, not exe consumers (D13); only the label chain and
+  the value-1 gate are exe-pinned (C22, A27 context).
+- **S7** — paint order asserted as file order beyond the
+  background-first proof (A5); nothing observes z-order in the chain.
+
+Lesson: wherever a sequential rule is claimed, ask which explicit
+field (code low word, code nibble, M30 `ref`, header per-level field)
+actually indexes the table — and what the exe does on an out-of-range
+index (all-zero rect, slot 0, default arm).
+
+## A. Rendering & scene composition
+
+| ID | Claim | Level | Anchor / evidence | Drives | Sibling |
+|---|---|---|---|---|---|
+| A1 | True pairing mechanism: rect ordinal = `(entry.code & 0xFFF) − 1`, bounds-checked, miss → all-zero rect | EXE | `0x548640`, ev `3a869bb7…` | R | corrects A2 |
+| A2 | File-order pairing: rect *i* lays out entry *i+1* (38/38 bound Interface blocks, zero mismatches) | DATA | `opi-pattern.md` 5, `bnd-semantics.md` walks | R | **source** |
+| A3 | Shell binds by zip-and-truncate (`bind_controls`, `bind_verbatim_entries`), silent drops | ASSUMED | `bnd-audit.md` 1–2; contradicts A1 zero-rect | R | S2/S3 |
+| A4 | Rect 0 is the full-screen background, painted first | DATA | `State_Room`/`State_Avi` rect 0 walks | R | feeds A5 |
+| A5 | Paint order is topmost-last by file order beyond background-first | ASSUMED | `opi-pattern.md` OPEN 1; `ui-loader.md` OPEN 5 | R | S7 |
+| A6 | Space: 800x600 absolute px, top-left origin, `(x2, y2)` exclusive; every `State_*.bnd` spans the canvas | DATA | all `State_*.bnd` spans | R | |
+| A7 | 800x600 default, fullscreen-only (`WS_POPUP` fork default; windowed branch unreachable) | EXE | `0x14b4c`/`0x14baf`, fork `0x41c0b` | R | |
+| A8 | Avatar-dialog rects are screen-absolute; dialog origin subtracted at apply | EXE | `0x4DA630`, ev `9e526b62…` | R | |
+| A9 | All 27 dialogs share the screen-absolute origin rule | ASSUMED | `0x4ED650` untraced (`ui-loader.md` OPEN 2–3) | R | |
+| A10 | Single-image sprite anchor == its rect, byte-exact (3 probes) | DATA | `Dialog_Information`/`Info_OK`/`Playing_Exit` probes | R | |
+| A11 | Raw frames: `size == w*h*2`, little-endian RGB555 | DATA | 63,742 images across archives | R | |
+| A12 | Colorkey `0x0000`/`0x7D5F` pixels are transparent | DATA | 3,444/5,787 bodies + byte-exact probes | R | |
+| A13 | Sprite lookup is ASCII-case-insensitive (3 case-only stems) | DATA | `opi-pattern.md` 6 | R | |
+| A14 | `O2_SBS_VERT`/`O2_SBS_HORZ` with numeric args are scrollbar params, not files | EXE | strings `0x24c190` | R | |
+| A15 | `_`-prefix marks runtime resolution; `%s.ojs`/`%s.oja`/`%s%d.ojs`/`%s.ojt` patterns | EXE | strings `0x24b0ec`, `0x247958` | R | exact expansion rule ASSUMED |
+| A16 | Playing screen feeds stack-built synthetic entries through the same factory | EXE | ev `1be2d784…` (`0x48B2D0` family) | R | |
+| A17 | One control per entry is created only when `code & 0xFF0000 ≠ 0` | EXE | `0x48A060`, ev `9e526b62…` | R | |
+| A18 | Code second byte selects control behavior (button/scrollbar/…) | ASSUMED | RTTI histogram correlation only; arm join open | R | |
+| A19 | SET children are matched by `code & 0xFF000` against the set key, recursed | EXE | `0x48A620`, ev `1be2d784…` | R | corrects S1 |
+| A20 | SET entries consume rects "in file order exactly like top-level" | DATA | `control.rs:17` doc; order-only observation | R | **S1** |
+| A21 | `SET` first param == member count | DATA | 22/22 groups; set `+0x08` ev `2fdbec57…` | R | |
+| A22 | Trailing parameter-less SET runs fill the declared slots | EXE | eager alloc at parse, ev `2fdbec57…` | R | |
+| A23 | The four empty `0x00` stub states draw nothing | DATA | empty names, `size` 0; stub walk | R | |
+| A24 | `BOUND` stem is data-driven; only `Avatar_Info`/`Map_Avatar`/`State_Playing_network` literals exist | EXE | `0x24ab9c`/`0x24b080`, ev `3eb885cd…` | R | |
+| A25 | Shell hardcodes bind stems per scene instead of reading `BOUND` | ASSUMED | `opi-ignored.md` sev 2; contradicts A24 | R | |
+| A26 | Playing subset: 17 rects cover entries 213–229; decl `0xE6` loads 0–229; last 5 ride unloaded | DATA | in-file CP949 comments + counts; decl alloc ev `f4662376…` | R | **S2** |
+| A27 | Room 75/76 and Waiting 116/117 are "entries − 1", not subsets | DATA | counts; zero mismatches on the walk | R | **S3** |
+| A28 | `.bnd` rects carry extent (4 dwords copied into the control) | EXE | `0x548640`, ev `3a869bb7…`; shell keeps origin only | R | |
+| A29 | Unbound scenes (bare `BOUND`) paint art full-bleed | ASSUMED | `bnd-audit.md` 15/23; "no bind" ≠ "full-bleed" | R | |
+| A30 | Highway geometry from staged art: lanes `(5,28)…(165,28)`, judgement row 487, 7 px heads | DATA | sprite-anchor walks (`KeydownImage` slot 33 et al.) | R | |
+| A31 | Jam bars at `(23,536)`/`(570,536)` 206x16; peer bars 46x8 | DATA | staged `Jamgauge` shell anchors | R | |
+| A32 | Judgement/combo/jam digit anchors, 600 ms fade, score digits at fixed pixels | ASSUMED | `bnd-audit.md` 31; rects unbound | R | |
+| A33 | Linear scroll, 2000 ms lookahead | ASSUMED | `bnd-audit.md` 32; scroll shape unobserved | R+G | |
+| A34 | Curtain bands are integer fifths, clipped to a frame box | ASSUMED | `bnd-audit.md` 20/30; exe clip math open | R | |
+| A35 | Procedural receptor pad 5 px, note 8 px + cap, burst 24 px | ASSUMED | `bnd-audit.md` 6/7/29 | R | |
+| A36 | Micro-font metrics + hardcoded placeholder labels (`CHANNEL`, `M{id}`, …) | ASSUMED | `dialog-strings.md` §2/§5: captions missing by design | R | |
+| A37 | 47 `.ojs` bodies are raw JPEG album art (`FF D8 … FF D9`) | DATA | `is_jpeg_body` 47/47 | R | unused in shell |
+| A38 | Present letterboxes 4:3, never stretches | ASSUMED | `playing-reference.md` photo | R | |
+| A39 | CDX/DirectDraw blit path: color-key blits, Flip, D3D texture upload | EXE | imports `0x63f01c`, CDX RTTI; call sites open | R | |
+
+## B. Gameplay
+
+| ID | Claim | Level | Anchor / evidence | Drives | Sibling |
+|---|---|---|---|---|---|
+| B1 | Judgement: `\|song_ms − note_ms\|` vs inclusive 6/18/25 ms → flags `0x10/0x20/0x40/0x80` | EXE | `0x176646/55/64`, `0x176b7f/8e/9d`; ev `14992eb2…` set | G | |
+| B2 | Song ms via tick→ms interpolation | EXE | ev `9f8e1c2b…`/`f170d5f6…` | G | |
+| B3 | Combo: `0x10`/`0x20` continue; `0x40`/Miss break | EXE | `0x176c86`/`0x176c8c`/`0x176d8b` | G | |
+| B4 | Grade strings are code-unreferenced; result art-driven | EXE | zero refs `0x247363`… (full-image) | R | |
+| B5 | Pills: 15th consecutive Cool mints one, cap 5; Good/Bad reset streak; Bad with stock spends one; mode 6 exempts | EXE | `0x16e4c0/0x16e509/0x16e84d`, ev `c168abac…` | G | |
+| B6 | Pill stock `+0x398c` (sub `+0x216c`), streak `+0x3990` | EXE | setter `0x140870`, adder `0x140b50` | G | |
+| B7 | Score: Cool `200+10X`, Good `100+5X`, Bad+pill → Cool path, Bad `+4`, Miss `−10` floored | EXE | `0x170510` | G | |
+| B8 | Jam level `X` at `+0x396e` is written (bulk copies + word stores) | EXE | `0x4e92a0`, `0x14079e`… | G | |
+| B9 | Jam progress +2 Cool/+1 Good; thresholds `(i+1)*50` cumulative, all difficulties; reset on Bad/Miss | EXE | `0x170260`/`0x1705b0`/`0x170628`/`0x1708dd`/`0x170936` | G | corrects "30" report |
+| B10 | `+0x3972` is the regular combo counter, `+0x3974` its max | EXE | `0x141620`, `0x1706da–0x1706ef` | G | |
+| B11 | Hold bonus: +10 score, +1 combo per playback tick while held | EXE | `0x178110`, ev `737dfe7b…`; writes `0x14163c`/`0x141652` | G | |
+| B12 | Long notes: head must be hit, tail released at its end; early release = miss | ASSUMED | player report; in-exe release path untraced | G | |
+| B13 | Hold-active flag at `+0x9f8`, written gated on payload hold-bit tests | EXE | writes `0x17617b`/`0x176c78`/`0x17726b`; tests `0x1766cb`… | G | |
+| B14 | Chart payload bit 25/26 = hold span/head semantics | ASSUMED | sites pinned, trigger absent on shipped charts | G | |
+| B15 | Kinds 2–8 are the seven lanes (`lane = kind − 2`); songs use `{0,2,3}` or all seven | DATA | 39/39 count cross-checks | G | |
+| B16 | Note value = `(flags << 16) \| (sample_id + 1)`; ids land in the `.ojm` set (one dangling) | DATA | 12/13 new-format charts walk | G | |
+| B17 | Strike slot = `(payload & 0xFFF) − 1`, plus `0x3E8` on bit 26 | EXE | `0x1703f0` | G | |
+| B18 | Timing: 192 ticks/beat, ms via `240000 / BPM`, per-event float rounding | DATA | event walks; parser reads | G | |
+| B19 | Kind-0 single float = beats per measure | ASSUMED | one observation (o2ma769 `0.75`) | G | |
+| B20 | Kind-1 single float = BPM change from that measure | DATA | o2ma765/769/770 cross-checks | G | |
+| B21 | Kind-1 per-subdivision `0.0` = keep; `999.0` = terminator | ASSUMED | one song each | G | |
+| B22 | Kinds 9+ are autoplay BGM channels, same value encoding | DATA | 13-chart sample-id membership | G | |
+| B23 | Lane shuffle: mirror = full reversal; byte 2 = N-lane `rand()%width`; byte 0 = 3-lane `rand()%3`; rebuilt per plain measure + per hold span | EXE | `0x171c30`/`0x173940`/`0x173a10`/`0x174330` dossiers | G | |
+| B24 | Item-text "whole chart vs every measure" distinction is false: both rebuild per measure | EXE | planner `0x174330` behavior | G | |
+| B25 | Which ring item selects which modifier byte | ASSUMED | room-side translation open | G | |
+| B26 | Curtain geometry: hidden top 80%, sudden bottom 20%, dark middle 20%, reverse-dark 40+40 | ASSUMED | item text; exe clip math open | R+G | |
+| B27 | Team buttons `0x16201004..0xB` → teams 0..7; press sends 4004 then 4008(0) when ungated | EXE | `0xb22d0`/`0x48c810`/`0x556680`; ev `2c8d3964…` set | G | |
+| B28 | Team scoring is server-side; client renders winner art only | EXE | no team-total arithmetic; `0x24b014`/`0x24a35c` | G | |
+| B29 | 4007 team-change handler refreshes the 8-slot UI, `< 8` guarded | EXE | `0x15f470`, ev `1ff324b4…` | G | |
+| B30 | Level-up missions do not exist client-side (server-side EXP) | EXE | ev `0ce27550…`; stub walk | G | |
+| B31 | Visible level gates: `Room_LevelLimit` icon, difficulty bands 1–8/8–19/19–27/27+; validator rejects bad slots | EXE | strings `0x24578e…`, ev `68760cac…`; `0x5718b0` ev `66e60d16…` | G | |
+| B32 | Life: max 1000, deltas +3/+2/+1, +2/+1/0, 0, −50/−40/−30; dead at 0 | ASSUMED | player report; no write site (counter-evidence). Stale headings say "implemented" — `o2jam-game` has no `LifeGauge`; only the peer mirror exists | G | doc conflict |
+| B33 | `+0x3970` is a 1000-clamp + rating gate + UI notify `(0,0,0x66,0x12)` | EXE | `0x57094d`, `0x1707c6–0x1707db` | G | |
+| B34 | Fail splash: GameOver static vs animated picked by a predicate | EXE | `0xe69a1` | R | |
+| B35 | Jam gauge math: Cool 2/Good 1, 30-progress cycles, overflow carries | ASSUMED | negative: zero `cmp $0x1e` in rating range | G | refuted vs B9 numbers |
+| B36 | Win/lose art goes to rank #1 by score | ASSUMED | player report; no rank math located | G | |
+| B37 | Play keys S D F Space J K L | ASSUMED | club standard; no bind storage found | G | |
+| B38 | Shell paces play on the wall clock, not the sample clock | ASSUMED | `parity.md` OPEN; audio clock is the plan | G | |
+| B39 | Rating-event sink `+0xa14`: codes 1/9/14, 16-way jump table, attach at song load | EXE | `0x56e170`, attach `0x170325` | G | |
+| B40 | `option.ini` table is display-only (MODE/BlendHalf/LONGNOTEMODE/NoteTail/NoteType) | EXE | key block `0x245224–0x2452a8` | R | |
+| B41 | NoteType 0–2 + per-level strings, NoteTail 0–4, LongnoteMode cached per song | EXE | `0x5713c7`/`0x16bf47`/`0x16fb0d`; on-screen effect ASSUMED | R | |
+| B42 | 8-seat member table: stride `0x2190`, base `0x77ee90` | EXE | tick site ev `b16e614c…` | G | |
+| B43 | Peer life/jam mirror + rank remap broadcast from 4015 (deliver via `0x5414a0`) | EXE | `0x15fa20` chain, ev `0ff34c44…` (Ghidra) | R+G | |
+
+## C. File formats
+
+| ID | Claim | Level | Anchor / evidence | Drives | Sibling |
+|---|---|---|---|---|---|
+| C1 | OPI layout: 16 B header, blobs from +16, trailing 152 B table | DATA | 3-archive walk | R | |
+| C2 | Slice bodies by `size`, never `reserved_size`; slack is stale | DATA | stride tiling + nonzero slack | R | |
+| C3 | Kind-0 slots are deleted-entry reservations, never bodies | DATA | free-slot survey | — | |
+| C4 | Archive inventories: 1596/633/7149 slots; 9231 sprite bodies; class table | DATA | body-class cross-check | R | |
+| C5 | Sprite-55 envelope: `tag + 0x0555 + count + colorkey`, exact accounting | DATA | 9231/9231 bodies | R | |
+| C6 | `.bnd` envelope: magic `FFFFFFFF`, `6 + 16*count` | DATA | 53/53 sections | R | |
+| C7 | `.oja` envelope `tag + 0x555A + count`; frame codec TBD | DATA | 3/3 envelopes; pixels unknown | R | codec ASSUMED |
+| C8 | Strided combo atlases: ×4 stride, 4 glow frames per record | DATA | `Note_Combo4/5/6.ojt` exact 196,736 B | R | |
+| C9 | Outlier `.oji`/compressed pixel codecs | ASSUMED | parsed, never decoded | R | |
+| C10 | ControlList/word-list text is CP949 | DATA | decode rejection study | R | |
+| C11 | Old OJN 300-byte header map, field-complete | DATA | byte-exact reads off `Tutorial.ojn` | G | |
+| C12 | New-format decrypt: byte-reversal + 3-key period XOR from the tail | EXE | `0x12180`, ev `011eab73…`; round-trip test | G | |
+| C13 | Per-level segmentation: counts +64/+68/+72, slice ends +284..+296 | DATA | 14/14 walk-exact | G | |
+| C14 | OJNList: 562 x 300 B records + middle + patch sections, exact sum | DATA | section-sum check | G | |
+| C15 | Mid-region tables 1–5 shapes decoded | DATA | 7-part exact split | G | |
+| C16 | Table 5 category (1..5) = wheel bucket; `song+0x194` → `entry+0x4`; STEP2 buttons 1..5 = GOLD..SILVER | EXE | jump tables `0xbfa5c`/`0x93409`; builder pin `0x4422e` | R | |
+| C17 | Patch index + `;HD` section shape (561 + truncated 562nd) | DATA | layout walk | — | |
+| C18 | Key-name table = 65 VA pointers to CP949 filter names | EXE | 15 code refs, `0x448c2` et al. | R | corrects `xTd` guess |
+| C19 | STEP1/2/3 banner domains, writers, sentinel skips | EXE | `0x3f6c2`/`0x3f7ee`/`0x3f91b` | R | |
+| C20 | STEP2 banner off-by-one: entry-50 row has 7 names, `실버` unreachable | EXE | pinned mismatch; interpretation open | R | |
+| C21 | Doublable-initial arms (ㄲㄸㅃㅆㅉ) pair base jamo from indexed rows | EXE | `0x44962`…`0x44ce6` | R | |
+| C22 | GameSpeed 0–11 labels `X 0.5`…`X R` from the label chain | EXE | `0xc4137`…`0xc4371`, ev `f2fa3e80…` | R | |
+| C23 | OJM M30/OMC/OJM containers: entry walks + OggS/EOS to EOF | DATA | 21-file walk | G | |
+| C24 | M30 sample-id roles: drums 0–12, music tracks 980–991 | DATA | entry names + chart refs | G | |
+| C25 | Loader descriptor from per-song version float: 2.9→17-way, 2.7→16-way, ≤2.4→plain | EXE | `0x54e930` flag bits | G | |
+| C26 | 16/17-way interleave tables are exact permutations | DATA | `0x27f1d0`/`0x27f3d0` checks | G | |
+| C27 | Body transforms: bitwise-NOT, mirror S-box, u32-XOR key `"nami"` | EXE | `0x54f9e0`/`0x54fa70`/`0x54fac0` | G | |
+| C28 | Id-less banks: new-variant entries register at slot 0 (last wins); only M30 carries ids | EXE | `strncpy`-only fetch, load/play path survey | G | **S4** context |
+| C29 | Order-based fallback `resolve_order_slot` (slot N = Nth entry) | ASSUMED | ours, not exe behavior | G | **S4** |
+| C30 | DialogBGM odd-stripe byte-swap is an encoder-side file anomaly; no exe compensates | DATA | correlation study + EXE negative sweep | G | |
+| C31 | `JamTable.dat`: 54 u16 thresholds 25..4800; consumer unknown | DATA | envelope only | — | |
+| C32 | `Itemdata_Korea.dat` 1541 rows / `SetInfodata.ojs` 209 rows mapped | DATA | walks land exact at EOF | R | |
+| C33 | Avatar sprite-slot parity: even male, odd female, fallback, slot order kept | ASSUMED | pattern heuristic; exe part logic open | R | |
+| C34 | Difficulty mapping: +20 lo=Easy/hi=Normal, +24=Hard (ascending triple) | ASSUMED | 13/13 fit; no chart-path consumer | G | **S5** |
+| C35 | `+24` completes the Hard-level triple | ASSUMED | same hypothesis | G | **S5** |
+| C36 | `+12` genre bits feed the song-select bitmask (`song+0x15c`) | ASSUMED | bitmask-shaped tests; transfer unpinned | R | |
+| C37 | First embedded JPEG bounds the last level slice on every chart | DATA | 14/14 `end == jpeg0` | G | |
+
+## D. Net (lighter — offsets already pinned in `net-protocol.md`/`relay.md`)
+
+| ID | Claim | Level | Anchor / evidence | Drives | Sibling |
+|---|---|---|---|---|---|
+| D1 | Framing: u16 id at buffer+2; length counts the whole frame | EXE | `0x1a0550`, ev `861713e2…`; server-verified | G | |
+| D2 | Opcode family table (1000–65520) | ASSUMED | Memoryer cross-check; send/dispatch sites where cited | G | |
+| D3 | Odd/even request/response pairing | ASSUMED | Memoryer convention | G | |
+| D4 | String fields: UTF-8, null-terminated, cap-inclusive truncation | ASSUMED | Encore codec; exe terminator emission open | G | |
+| D5 | 4014 sends: Jam per Cool/Good tail, Life on tick, mode-gated | EXE | `0x16e660`/`0x16e7dd`/`0x4eaf3b` | G | |
+| D6 | 4015 body: u8 slot + u16 type + u16 value + 8 rank bytes; rank remap loop | EXE | `0x15fa20`, ev `0ff34c44…` | R+G | |
+| D7 | 4016 SubmitScore wrapper sites; layout corroborated, life-field read open | EXE | *(offset-only)* `0x4eb018` et al. | G | |
+| D8 | Relay ops 1–11 pinned by `SetID` ctors + vtable refs | EXE | ctor files `0x18e100`…`0x16e080` | G | |
+| D9 | Relay body layouts (RelayStats 62 B et al.) | ASSUMED | Memoryer-corroborated; op-5 writer order EXE (`0xea230`), field names inferred | R+G | |
+| D10 | MemberRole 0 None / 1 Champion / 2 Challenger / 3 Spectator gates | EXE | `0x77ee86` loads, ev `acacd596…` set | G | |
+| D11 | Relay UDP ports 39311/39312; no hardcoded TCP relay ports; gateway 15010 | EXE | immediates `0x18c73e`…, ev `6e655b70…` | G | |
+| D12 | Room row record `0xb4` field map = parse order | EXE | `0x15b780` parser sites, ev `d9f9a8b4…` | R | |
+| D13 | `RoomState` 0/1/2, `Difficulty` 0–3, `GameSpeed` 0–11 value sets | ASSUMED | Memoryer-locked; only value 1 + labels exe-pinned | R | **S6** |
+| D14 | Equip 5004/5005 shapes; slot from item record; type 5 → slot 11; `< 0x11` | EXE | *(offset-only)* `0xa4ec8`/`0xa3cc9`/`0xa4baa` | G | |
+| D15 | Gift/shop shapes 5015–5033; 5040/5041 absent on 7.55 wire | EXE | *(offset-only)* dispatch sites in `gifts.md`/`shop-buy.md` | G | |
+| D16 | Member-slot offsets `+0x04` id … `+0x218c` streak; derived slot marks | EXE | reader sites `0x159d38`–`0x159f82`; ev set in `relay.md` §11 | R+G | |
+| D17 | UHP flow; 4046/4047/4055/4056 bodies empty/ignored | EXE | `0x18d8a1`/`0xf0439`/handlers `0x163d50`+ | G | |
+| D18 | Live-state 4042–4045 shapes incl. `MemberInfo` tail order | EXE | `0x159b50`/`0x18cf50` chains | G | |
+| D19 | Endpoints: FTP hosts, gateway IP/port, web/registry strings | EXE | string table `0x24b9c0`–`0x2514f0` | — | |
+| D20 | Authorize 1000 payload order (token, gender string, marker, clientId) | ASSUMED | Memoryer order; exe byte-proof open | G | |
+
+## Top-10 risky claims (visible behavior on the weakest evidence)
+
+1. **A2/A20** — file-order pairing still taught by `opi-pattern.md`,
+   `bnd-semantics.md`, and three doc comments; A1's code-ordinal rule
+   supersedes it. Every bound scene depends on the mechanism.
+2. **A3** — zip-and-truncate binding silently drops entries; the exe
+   gives out-of-range ordinals an all-zero rect instead.
+3. **C29** — order-based OJM slot fallback: id-less banks can sound the
+   wrong samples (exe: explicit `ref` ids, else slot 0).
+4. **C34/C35** — difficulty fields named by position; wrong mapping
+   picks the wrong chart level.
+5. **D13** — room-enum value sets locked from Memoryer ordinals; room
+   list, join gating, and speed labels render from them.
+6. **B32** — life deltas are a player report with in-exe
+   counter-evidence, and doc headings contradict the code state
+   (`LifeGauge` does not exist; only the peer mirror does).
+7. **B12** — long-note release rule (core to hold charts) is a player
+   report; the in-exe path exists but is untraced and unimplemented.
+8. **A34** — curtain geometry (ring visuals) from item text; the exe
+   clip math is untraced.
+9. **A32/A35/A36** — HUD digits, receptor/note/burst pixels, and font
+   metrics are invented placeholders behind genuine art.
+10. **A5** — topmost-last paint order beyond background-first is
+    unobserved; layering of every scene rides on it.
+
+## Maintenance
+
+- Update a row when its level changes; keep one claim per row.
+- New EXE evidence for an ASSUMED row retires its risk note.
+- The sibling list is the checklist for every new positional claim:
+  find the explicit ordinal/id field first.
