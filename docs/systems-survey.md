@@ -113,6 +113,15 @@ ends the song early or only picks the splash.
 song stop early on empty — or do you always finish and just get
 the GameOver splash)?
 
+**Answered by player (2026-11-07, UNVERIFIED in-exe):** max 1000
+(possibly 100%); Cool heals +3/+2/+1, Good +2/+1/+0, Bad nothing,
+Miss −50/−40/−30 by Easy/Normal/Hard; at 0 the player is dead
+(no more input) and returns to the waiting state. Implemented as
+`o2jam-game::LifeGauge` with synthetic tests. Binary note:
+`[3,2,1]`/`[2,1,0]` fragments exist but are unattributed, and the
+unique `[-10,-7,-5]` triple contradicts Bad=no-change, so it
+belongs elsewhere until proven.
+
 ## 3. Long-note implementation — STRONG LEADS (option plumbing mapped)
 
 **What it is.** Sustained notes with a head, a hold span and a tail,
@@ -158,6 +167,11 @@ whether `LongnoteMode` alters timing or only rendering.
 (names/choices in the option dialog), and does holding drain or
 heal life per tick?
 
+**Answered by player (2026-11-07):** no long-note options (at most
+a cosmetic long-note-combo toggle). Long notes are chart data:
+hold from the head, MUST release at the tail (missing the
+release is a miss), releasing mid-hold is a miss.
+
 ## 4. Result/grade computation — PARTIAL (builder found, strings dead)
 
 **What it is.** The post-song screen (`CStateResult`) showing
@@ -191,6 +205,9 @@ fills the result numbers; retry/exit flow into `STATE_WAITING`.
 
 **User question.** Does 7.55 show letter grades (S/A/B/…) anywhere,
 or only combo/rate numbers — and what decides the WIN/LOSE art?
+
+**Answered by player (2026-11-07):** grades exist; WIN/LOSE goes
+to rank #1 (solo or team) by highest score. Thresholds OPEN.
 
 ## 5. Renderer blits — INVENTORIED (DirectDraw/CDX path)
 
@@ -228,6 +245,9 @@ source (`timeGetTime` vs audio clock), exact blit call sites.
 resolution, and did notes visibly tear/stutter on slow machines
 (blit-bound) or stay smooth (flip-bound)?
 
+**Answered by player (2026-11-07):** 7.55 runs fullscreen 800x600;
+no windowed mode in this version. Renderer default recorded.)
+
 ## 6. Shop, items and equipment — INVENTORIED (tables located)
 
 **What it is.** Cash shop + song shop + avatar equipment, driven by
@@ -259,6 +279,10 @@ effects (client-visible at all?); equip persistence format.
 **User question.** Did avatar items change gameplay numbers you
 could feel (faster jam gain, more life), or only score bonuses —
 and were any items client-side toggles vs server flags?
+
+**Answered by player (2026-11-07):** avatars are cosmetic except
+skill rings (random/panic/sudden/hidden/dark), which are the
+only gameplay-affecting items.
 
 ## 7. Quick inventory hits (for other agents)
 

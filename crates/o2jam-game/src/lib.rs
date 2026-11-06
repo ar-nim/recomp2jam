@@ -586,6 +586,75 @@ impl SongClock {
     }
 }
 
+/// Difficulty tier selecting a life-delta row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Difficulty {
+    /// Easy (+3/+2/0/−50).
+    Easy,
+    /// Normal (+2/+1/0/−40).
+    #[default]
+    Normal,
+    /// Hard (+1/+0/0/−30).
+    Hard,
+}
+
+/// Life bar: 0..=1000, dead at 0 (game over → back to waiting).
+///
+/// Deltas are player-reported 7.55 (UNVERIFIED in-exe): matching
+/// `[3,2,1]`/`[2,1,0]` fragments exist in-shipped-bytes but are not
+/// tied to this code path, and the unique `[-10,-7,-5]` triple
+/// nearby contradicts the reported Bad=no-change, so it belongs to
+/// an unidentified system until proven otherwise.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LifeGauge {
+    hp: u32,
+}
+
+impl LifeGauge {
+    /// Full life.
+    pub const MAX: u32 = 1000;
+
+    /// Create a full life bar.
+    #[must_use]
+    pub fn new() -> Self {
+        Self { hp: Self::MAX }
+    }
+
+    /// Current life.
+    #[must_use]
+    pub fn hp(&self) -> u32 {
+        self.hp
+    }
+
+    /// Whether the player is dead (game over).
+    #[must_use]
+    pub fn is_dead(&self) -> bool {
+        self.hp == 0
+    }
+
+    /// Apply one judgement's life delta for a difficulty.
+    pub fn apply(&mut self, judgement: Judgement, difficulty: Difficulty) {
+        let delta: i32 = match (judgement, difficulty) {
+            (Judgement::Cool, Difficulty::Easy) => 3,
+            (Judgement::Cool, Difficulty::Normal) => 2,
+            (Judgement::Cool, Difficulty::Hard) => 1,
+            (Judgement::Good, Difficulty::Easy) => 2,
+            (Judgement::Good, Difficulty::Normal) => 1,
+            (Judgement::Good, Difficulty::Hard) => 0,
+            (Judgement::Bad, _) => 0,
+            (Judgement::Miss, Difficulty::Easy) => -50,
+            (Judgement::Miss, Difficulty::Normal) => -40,
+            (Judgement::Miss, Difficulty::Hard) => -30,
+        };
+        self.hp = (self.hp as i32 + delta).clamp(0, Self::MAX as i32) as u32;
+    }
+}
+
+impl Default for LifeGauge {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -902,5 +971,24 @@ mod tests {
         }
         assert!(streak.note(Judgement::Cool, &mut pills));
         assert_eq!(pills.count(), MAX_PILLS);
+    }
+
+    #[test]
+    fn life_gauge_applies_difficulty_table_and_dies_at_zero() {
+        let mut life = LifeGauge::new();
+        assert_eq!(life.hp(), 1000);
+        life.apply(Judgement::Cool, Difficulty::Normal);
+        assert_eq!(life.hp(), 1000);
+        life.apply(Judgement::Miss, Difficulty::Hard);
+        assert_eq!(life.hp(), 970);
+        life.apply(Judgement::Good, Difficulty::Easy);
+        assert_eq!(life.hp(), 972);
+        life.apply(Judgement::Bad, Difficulty::Easy);
+        assert_eq!(life.hp(), 972);
+        for _ in 0..40 {
+            life.apply(Judgement::Miss, Difficulty::Easy);
+        }
+        assert_eq!(life.hp(), 0);
+        assert!(life.is_dead());
     }
 }
