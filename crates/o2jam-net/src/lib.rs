@@ -28,6 +28,6 @@ pub use message::{
     AuthResponse, AuthResult, AuthorizeRequest, ChannelList, ChannelLogin, ChannelLoginResponse,
     ChannelLoginResult, ChannelState, EmptyMessage, ForceReauthorize, Gender, GetChannelList,
     LegacyPing, MultiSessionError, Ping, SessionKeys, SessionKeysRequest, SubscriptionAlert,
-    Terminate, MEMORYER_CLIENT_ID,
+    Terminate, WireMessage, MEMORYER_CLIENT_ID,
 };
 pub use strings::{decode_null_terminated, encode_null_terminated, MAX_STRING_LEN};

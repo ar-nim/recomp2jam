@@ -1402,6 +1402,7 @@ dependencies = [
  "o2jam-audio",
  "o2jam-file",
  "o2jam-game",
+ "o2jam-net",
  "o2jam-shell",
  "tracing",
  "tracing-subscriber",

@@ -14,7 +14,7 @@
 
 use std::collections::VecDeque;
 use std::io::{ErrorKind, Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 use super::command::Generic;
@@ -114,6 +114,11 @@ impl GatewayConnection {
     /// Wrap an already-connected stream (tests, harnesses).
     pub fn from_stream(stream: TcpStream) -> Result<Self, Error> {
         Self::wrap(stream)
+    }
+
+    /// Local socket address (login reports it as the LAN endpoint).
+    pub fn local_address(&self) -> Result<SocketAddr, Error> {
+        self.stream.local_addr().map_err(Error::transport)
     }
 
     fn wrap(stream: TcpStream) -> Result<Self, Error> {
