@@ -3,8 +3,11 @@
 //! Pure layout + paint over [`LevelChart`] onsets (`lane, ms` from
 //! [`LevelChart::hit_onsets_ms`]); timing comes from an explicit
 //! [`PlayingView::advance_to`], so tests drive the clock. Layout is
-//! relative to the frame: full-width lanes, line one sixth up from
-//! the bottom, `lookahead` ms of chart visible above the line.
+//! staged, not invented: lane columns, the judgement row, note-head
+//! extents, receptor pads, burst slices, and gauge boxes scale from
+//! the `STATE_PLAYING` block entries and `State_Playing.bnd` rects at
+//! native 800x600 (`docs/bnd-semantics.md`, `docs/bnd-audit.md`), via
+//! the shared [`scale_rect_to_frame`] scaler.
 
 use o2jam_game::{
     lane_effect::{lane_map_for_modifier_byte, SkillRing},
@@ -13,33 +16,117 @@ use o2jam_game::{
 };
 use o2jam_render::{
     blit_rgb555, blit_rgb555_clipped, draw_number, draw_text, fill_rect, number_width, pack_xrgb,
-    text_width, visible_spans, Frame, LaneCurtain, Rect, Rgb555Image,
+    scale_rect_to_frame, text_width, visible_spans, Frame, LaneCurtain, Rect, Rgb555Image,
+    NATIVE_HEIGHT,
 };
 
 /// Lanes across the highway.
 pub const HIGHWAY_LANES: u8 = 7;
 /// How far ahead notes appear, in song ms.
 pub const DEFAULT_LOOKAHEAD_MS: u64 = 2000;
-/// Note block height in pixels.
-pub const NOTE_H: i32 = 8;
-/// Peer life-bar width in pixels (one bar per 4015 member slot).
-pub const PEER_BAR_WIDTH: u32 = 3;
-/// Peer life-bar height in pixels.
-pub const PEER_BAR_HEIGHT: u32 = 20;
-/// Peer life-bar strip top row.
-pub const PEER_BAR_TOP: i32 = 4;
-/// Gap between peer life bars (and the frame edge) in pixels.
-pub const PEER_BAR_GAP: i32 = 1;
-/// Jam edge-bar width in pixels (layout-relative; the staged
-/// `Jamgauge_right_bar.ojs` / `Jamgauge_left_bar.ojs` shells ring the
-/// same edges once `paint_playing_overlay` binds them).
-pub const JAM_BAR_WIDTH: u32 = 4;
-/// Jam edge-bar height in pixels (clamped to the frame in paint).
-pub const JAM_BAR_HEIGHT: u32 = 24;
-/// Jam edge-bar top row (below the peer strip at 4 + 20).
-pub const JAM_BAR_TOP: i32 = 28;
-/// Gap between a jam edge-bar and the frame edge in pixels.
-pub const JAM_BAR_EDGE_GAP: i32 = 1;
+/// Judgement row on the native canvas: the `KeydownImage.ojs`
+/// press-down anchors sit on row 487 (archive slot 33), so due notes
+/// land there instead of one sixth up from the frame bottom.
+pub const NATIVE_LINE_Y: i32 = 487;
+/// Lane columns on the native canvas: `(x, width)` from the
+/// `Keyeffect1..7.ojs` beam anchors (archive slots 470-476). The
+/// `Keyeffect.ojs` / `KeyEffect_Tutorial_*` anchors and the
+/// `Note_Image.ojs` head widths agree at 28/22/28/32/28/22/28.
+/// Columns are uneven and hug the left of the canvas; they never
+/// tile the full width.
+pub const NATIVE_LANES: [(i32, u32); HIGHWAY_LANES as usize] = [
+    (5, 28),
+    (33, 22),
+    (55, 28),
+    (83, 32),
+    (115, 28),
+    (143, 22),
+    (165, 28),
+];
+/// Lane columns as native rects (full canvas height; beams run each
+/// column from row 0 toward the judgement row).
+pub const NATIVE_LANE_RECTS: [Rect; HIGHWAY_LANES as usize] = [
+    Rect {
+        x: 5,
+        y: 0,
+        w: 28,
+        h: NATIVE_HEIGHT,
+    },
+    Rect {
+        x: 33,
+        y: 0,
+        w: 22,
+        h: NATIVE_HEIGHT,
+    },
+    Rect {
+        x: 55,
+        y: 0,
+        w: 28,
+        h: NATIVE_HEIGHT,
+    },
+    Rect {
+        x: 83,
+        y: 0,
+        w: 32,
+        h: NATIVE_HEIGHT,
+    },
+    Rect {
+        x: 115,
+        y: 0,
+        w: 28,
+        h: NATIVE_HEIGHT,
+    },
+    Rect {
+        x: 143,
+        y: 0,
+        w: 22,
+        h: NATIVE_HEIGHT,
+    },
+    Rect {
+        x: 165,
+        y: 0,
+        w: 28,
+        h: NATIVE_HEIGHT,
+    },
+];
+/// Note-head height on the native canvas: `Note_Image.ojs` heads run
+/// 7 rows tall (archive slot 47).
+pub const NATIVE_NOTE_H: u32 = 7;
+/// Press-down key heights per lane on the native canvas
+/// (`KeydownImage.ojs`, archive slot 33): receptor pads and burst
+/// slices scale from these instead of fixed pixel boxes.
+pub const NATIVE_KEY_H: [u32; HIGHWAY_LANES as usize] = [46, 42, 46, 46, 46, 42, 46];
+/// Jam edge-bars on the native canvas: `Jamgauge_left_bar.ojs`
+/// `(23,536)` 206x16 and `Jamgauge_right_bar.ojs` `(570,536)` 206x16
+/// (archive slots 464-465) sit below the judgement row.
+pub const NATIVE_JAM_BARS: [Rect; 2] = [
+    Rect {
+        x: 23,
+        y: 536,
+        w: 206,
+        h: 16,
+    },
+    Rect {
+        x: 570,
+        y: 536,
+        w: 206,
+        h: 16,
+    },
+];
+/// Jam-level digit fallback row (frame pixels, not scaled):
+/// `Note_JamNum.ojs` anchors `(0,0)` (unbound), so the top-center
+/// digits keep their prior row.
+pub const JAM_DIGIT_FALLBACK_Y: i32 = 4;
+/// Peer life-bar box on the native canvas: each of the eight 4015
+/// member gauges follows the `Avatar_Info_LifeGauge.ojs` 46x8 extent
+/// (archive slot 6; anchors `(0,0)`, unbound), stacked from the flush
+/// top-right corner, clear of the note lane.
+pub const NATIVE_PEER_BAR: Rect = Rect {
+    x: 754,
+    y: 0,
+    w: 46,
+    h: 8,
+};
 /// Odd-lane skin tint (even lanes keep the flat Playing backdrop so the
 /// staged `Playing1.opi` gauges ring unchanged edges; lifecycle §10).
 /// Procedural stand-in for the skinned lane panels (sprite-55 bodies in
@@ -59,10 +146,6 @@ pub const RECEPTOR_LIT: u32 = pack_xrgb(0xC0, 0xE8, 0xFF);
 pub const HIT_BURST: u32 = pack_xrgb(0xFF, 0xFF, 0xFF);
 /// Hit-burst lifetime in song ms (visual only; timing untouched).
 pub const BURST_MS: u64 = 150;
-/// Receptor pad height in pixels.
-pub const RECEPTOR_H: i32 = 5;
-/// Hit-burst column height in pixels.
-pub const BURST_H: i32 = 24;
 /// Staged `Playing1.opi` note-head body: 7 lanes × 3 frames
 /// (widths 28/22/28/32/28/22/28; heads run before the tails).
 pub const NOTE_IMAGE_SPRITE: &str = "Note_Image.ojs";
@@ -379,51 +462,110 @@ fn skin_frames(body: &[u8]) -> Vec<SkinSprite> {
         .collect()
 }
 
-/// Hit-burst column rising above the line after a strike.
-fn burst_rect(column: &Rect, geom: &HighwayGeometry) -> Rect {
-    Rect {
-        x: column.x + 2,
-        y: geom.line_y - RECEPTOR_H - BURST_H,
-        w: column.w.saturating_sub(4),
-        h: u32::try_from(BURST_H).unwrap_or(0),
-    }
+/// Scale one native row into the frame (identity on 600).
+fn scale_row(native_y: i32, frame_h: usize) -> i32 {
+    let scaled = i64::from(native_y) * frame_h as i64 / i64::from(NATIVE_HEIGHT);
+    i32::try_from(scaled).unwrap_or(i32::MAX)
 }
 
-/// Lane layout for one frame size.
+/// Scale one native extent into the frame (floors; identity on native).
+fn scale_extent(native_len: u32, frame_len: usize, native_total: u32) -> u32 {
+    u32::try_from(u64::from(native_len) * frame_len as u64 / u64::from(native_total))
+        .unwrap_or(u32::MAX)
+}
+
+/// Lane layout for one frame size: the staged `STATE_PLAYING`
+/// columns and judgement row scaled into the frame (identity on
+/// 800x600, proportional on headless test buffers).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HighwayGeometry {
-    /// Left edge of lane 0.
-    pub x0: i32,
-    /// Lane width in pixels.
-    pub lane_w: u32,
-    /// Judgement-line row.
+    /// Scaled lane columns (uneven: 28/22/28/32/28/22/28 at native).
+    pub lanes: [Rect; HIGHWAY_LANES as usize],
+    /// Scaled judgement row (487 at native).
     pub line_y: i32,
     /// Frame height (notes never draw below the line).
     pub h: i32,
 }
 
 impl HighwayGeometry {
-    /// Full-width lanes; line one sixth up from the bottom.
+    /// Scale the native columns and judgement row into the frame.
+    /// (Kept name: the staged columns hug the left, they do not
+    /// center; only the scale is frame-relative.)
     #[must_use]
     pub fn centered(frame_w: usize, frame_h: usize) -> Self {
-        let lane_w = (frame_w / HIGHWAY_LANES as usize).max(1) as u32;
         Self {
-            x0: 0,
-            lane_w,
-            line_y: frame_h as i32 - frame_h as i32 / 6,
-            h: frame_h as i32,
+            lanes: NATIVE_LANE_RECTS.map(|rect| scale_rect_to_frame(&rect, frame_w, frame_h)),
+            line_y: scale_row(NATIVE_LINE_Y, frame_h),
+            h: i32::try_from(frame_h).unwrap_or(i32::MAX),
         }
     }
 
     /// Pixel column of one lane (clamped to lane count).
     #[must_use]
     pub fn lane_rect(&self, lane: u8) -> Rect {
-        let lane = lane.min(HIGHWAY_LANES - 1);
+        self.lanes[lane.min(HIGHWAY_LANES - 1) as usize]
+    }
+
+    /// Lane-span box above the line: curtain clips and tail spans
+    /// read this, so lane gaps and the left offset survive clipping.
+    #[must_use]
+    pub fn highway_rect(&self) -> Rect {
+        let first = self.lanes[0];
+        let last = self.lanes[HIGHWAY_LANES as usize - 1];
         Rect {
-            x: self.x0 + i32::from(lane) * self.lane_w as i32,
+            x: first.x,
             y: 0,
-            w: self.lane_w,
-            h: self.h as u32,
+            w: u32::try_from(last.x + i32::try_from(last.w).unwrap_or(0) - first.x).unwrap_or(0),
+            h: u32::try_from(self.line_y.max(0)).unwrap_or(0),
+        }
+    }
+
+    /// Scaled press-down height of one lane (clamped to lane count).
+    fn scaled_key_h(&self, lane: u8) -> i32 {
+        let native = NATIVE_KEY_H[lane.min(HIGHWAY_LANES - 1) as usize];
+        let frame_h = u32::try_from(self.h.max(0)).unwrap_or(0) as usize;
+        i32::try_from(scale_extent(native, frame_h, NATIVE_HEIGHT)).unwrap_or(0)
+    }
+
+    /// One falling note box: full lane width, scaled 7-row head
+    /// (at least one row, so heads survive tiny probe frames).
+    #[must_use]
+    pub fn note_rect(&self, lane: u8, top_y: i32) -> Rect {
+        let column = self.lane_rect(lane);
+        let frame_h = u32::try_from(self.h.max(0)).unwrap_or(0) as usize;
+        Rect {
+            x: column.x,
+            y: top_y,
+            w: column.w,
+            h: scale_extent(NATIVE_NOTE_H, frame_h, NATIVE_HEIGHT).max(1),
+        }
+    }
+
+    /// One lane's receptor pad resting on the judgement line: full
+    /// lane width, scaled press-down height.
+    #[must_use]
+    pub fn receptor_pad(&self, lane: u8) -> Rect {
+        let column = self.lane_rect(lane);
+        let pad_h = self.scaled_key_h(lane);
+        Rect {
+            x: column.x,
+            y: self.line_y - pad_h,
+            w: column.w,
+            h: u32::try_from(pad_h).unwrap_or(0),
+        }
+    }
+
+    /// Hit-burst slice: one pad-height block of the lane column
+    /// stacked above the receptor pad.
+    #[must_use]
+    pub fn burst_rect(&self, lane: u8) -> Rect {
+        let column = self.lane_rect(lane);
+        let pad_h = self.scaled_key_h(lane);
+        Rect {
+            x: column.x,
+            y: self.line_y - 2 * pad_h,
+            w: column.w,
+            h: u32::try_from(pad_h).unwrap_or(0),
         }
     }
 }
@@ -539,12 +681,7 @@ impl PlayingView {
             }
             return;
         }
-        let highway = Rect {
-            x: 0,
-            y: 0,
-            w: frame.w as u32,
-            h: geom.line_y.max(0) as u32,
-        };
+        let highway = geom.highway_rect();
         let spans = visible_spans(curtain, &highway);
         for (lane, y) in self.visible(geom) {
             if spans
@@ -559,7 +696,8 @@ impl PlayingView {
     /// Background, lane skins, receptors, and the judgement line
     /// (no notes). Even lanes keep the flat Playing backdrop; odd lanes
     /// carry the tint above so staged `Playing1.opi` edge gauges keep
-    /// ringing a readable highway.
+    /// ringing a readable highway. The line spans the staged lane
+    /// columns, not the full frame.
     fn paint_shell(&self, frame: &mut Frame<'_>, geom: &HighwayGeometry) {
         let w = frame.w as i32;
         fill_rect(
@@ -575,35 +713,29 @@ impl PlayingView {
         for lane in 0..HIGHWAY_LANES {
             let column = geom.lane_rect(lane);
             if lane % 2 == 1 {
+                fill_rect(frame, &column, LANE_SKIN_ODD);
+            }
+            if column.w > 0 {
                 fill_rect(
                     frame,
                     &Rect {
-                        x: column.x,
+                        x: column.x + column.w as i32 - 1,
                         y: 0,
-                        w: column.w,
+                        w: 1,
                         h: column.h,
                     },
-                    LANE_SKIN_ODD,
+                    pack_xrgb(0x30, 0x30, 0x30),
                 );
             }
-            fill_rect(
-                frame,
-                &Rect {
-                    x: column.x + column.w as i32 - 1,
-                    y: 0,
-                    w: 1,
-                    h: column.h,
-                },
-                pack_xrgb(0x30, 0x30, 0x30),
-            );
             self.paint_receptor(frame, geom, lane, RECEPTOR_DIM, None);
         }
+        let span = geom.highway_rect();
         fill_rect(
             frame,
             &Rect {
-                x: geom.x0,
+                x: span.x,
                 y: geom.line_y,
-                w: geom.lane_w * u32::from(HIGHWAY_LANES),
+                w: span.w,
                 h: 2,
             },
             pack_xrgb(0xE0, 0xE0, 0xE0),
@@ -624,17 +756,7 @@ impl PlayingView {
             rest.paint_bottom_anchored(frame, geom, lane, geom.line_y);
             return;
         }
-        let column = geom.lane_rect(lane);
-        fill_rect(
-            frame,
-            &Rect {
-                x: column.x + 1,
-                y: geom.line_y - RECEPTOR_H,
-                w: column.w.saturating_sub(2),
-                h: u32::try_from(RECEPTOR_H).unwrap_or(0),
-            },
-            ink,
-        );
+        fill_rect(frame, &geom.receptor_pad(lane), ink);
     }
 
     /// One falling note: the staged head when present, else the
@@ -645,28 +767,18 @@ impl PlayingView {
             head.paint_note_at(frame, geom, lane, y);
             return;
         }
-        let column = geom.lane_rect(lane);
-        let w = column.w.saturating_sub(2);
+        let core = geom.note_rect(lane, y);
         fill_rect(
             frame,
             &Rect {
-                x: column.x + 1,
-                y: y - 1,
-                w,
+                x: core.x,
+                y: core.y - 1,
+                w: core.w,
                 h: 1,
             },
             NOTE_CAP,
         );
-        fill_rect(
-            frame,
-            &Rect {
-                x: column.x + 1,
-                y,
-                w,
-                h: NOTE_H as u32,
-            },
-            pack_xrgb(0x40, 0xC0, 0xFF),
-        );
+        fill_rect(frame, &core, pack_xrgb(0x40, 0xC0, 0xFF));
     }
 }
 
@@ -681,6 +793,28 @@ fn curtain_for_ring(ring: SkillRing) -> LaneCurtain {
         SkillRing::ReverseDark => LaneCurtain::ReverseDark,
         SkillRing::Mirror | SkillRing::Random | SkillRing::Panic => LaneCurtain::Full,
     }
+}
+
+/// Jam edge-bars scaled into the frame: the staged left/right
+/// `Jamgauge` shells below the judgement row.
+fn jam_bar_rects(frame_w: usize, frame_h: usize) -> [Rect; 2] {
+    NATIVE_JAM_BARS.map(|rect| scale_rect_to_frame(&rect, frame_w, frame_h))
+}
+
+/// Peer life-bar boxes: one staged 46x8 gauge per 4015 member slot,
+/// stacked from the scaled top-right corner (kept at least one row
+/// tall on tiny probes).
+fn peer_bar_rects(frame_w: usize, frame_h: usize) -> Vec<Rect> {
+    let corner = scale_rect_to_frame(&NATIVE_PEER_BAR, frame_w, frame_h);
+    let bar_h = corner.h.max(1);
+    (0..PEER_SLOT_COUNT)
+        .map(|i| Rect {
+            x: corner.x,
+            y: corner.y + i32::try_from(i).unwrap_or(0) * bar_h as i32,
+            w: corner.w,
+            h: bar_h,
+        })
+        .collect()
 }
 
 /// Filled rows for `progress_in_level` (`0..50`) over a `bar_h`-row jam
@@ -1140,7 +1274,7 @@ impl LivePlay {
                 else {
                     continue;
                 };
-                head_y + NOTE_H
+                head_y + i32::try_from(geom.note_rect(note.lane, head_y).h).unwrap_or(0)
             };
             if top >= bottom || !self.tail_shown(frame, geom, top) {
                 continue;
@@ -1197,17 +1331,11 @@ impl LivePlay {
 
     /// Whether a tail row survives the worn sight-ring curtain (same
     /// span rule as falling notes).
-    fn tail_shown(&self, frame: &Frame<'_>, geom: &HighwayGeometry, y: i32) -> bool {
+    fn tail_shown(&self, _frame: &Frame<'_>, geom: &HighwayGeometry, y: i32) -> bool {
         if self.curtain == LaneCurtain::Full {
             return true;
         }
-        let highway = Rect {
-            x: 0,
-            y: 0,
-            w: frame.w as u32,
-            h: geom.line_y.max(0) as u32,
-        };
-        visible_spans(self.curtain, &highway)
+        visible_spans(self.curtain, &geom.highway_rect())
             .iter()
             .any(|span| y >= span.y && y < span.y + span.h as i32)
     }
@@ -1234,11 +1362,11 @@ impl LivePlay {
         lane: u8,
         age_ms: u64,
     ) {
-        let column = geom.lane_rect(lane);
+        let burst = geom.burst_rect(lane);
         if let Some(beam) = self.view.skin.release_beam(lane) {
-            beam.paint_clipped_to(frame, geom, lane, geom.line_y, &burst_rect(&column, geom));
+            beam.paint_clipped_to(frame, geom, lane, geom.line_y, &burst);
         } else {
-            fill_rect(frame, &burst_rect(&column, geom), HIT_BURST);
+            fill_rect(frame, &geom.burst_rect(lane), HIT_BURST);
         }
         self.view
             .paint_receptor(frame, geom, lane, RECEPTOR_LIT, Some(age_ms));
@@ -1278,40 +1406,27 @@ impl LivePlay {
         }
     }
 
-    /// Peer life bars (top-right strip): one bar per 4015 member slot,
-    /// filled green up to `life / LIFE_MAX` over a dark-red empty bar.
+    /// Peer life bars: one staged 46x8 gauge per 4015 member slot,
+    /// stacked from the top-right corner, each filled green bottom-up
+    /// over a dark-red empty bar.
     fn paint_peer_bars(&self, frame: &mut Frame<'_>) {
-        let width = i32::try_from(PEER_BAR_WIDTH).unwrap_or(0);
-        let count = i32::try_from(self.peers.life_levels().len()).unwrap_or(0);
-        let edge = i32::try_from(frame.w).unwrap_or(0);
-        let mut x = edge - count * (width + PEER_BAR_GAP) - PEER_BAR_GAP;
-        for level in self.peers.life_levels() {
-            Self::paint_peer_bar(frame, x.max(0), level);
-            x += width + PEER_BAR_GAP;
+        let levels = self.peers.life_levels();
+        for (level, bar) in levels.iter().zip(peer_bar_rects(frame.w, frame.h)) {
+            Self::paint_peer_bar(frame, &bar, *level);
         }
     }
 
     /// One empty bar plus its life fill, rising from the bottom.
-    fn paint_peer_bar(frame: &mut Frame<'_>, x: i32, life: u16) {
-        let height = i32::try_from(PEER_BAR_HEIGHT).unwrap_or(0);
+    fn paint_peer_bar(frame: &mut Frame<'_>, bar: &Rect, life: u16) {
+        fill_rect(frame, bar, pack_xrgb(0x30, 0x10, 0x10));
+        let filled = u32::from(life.min(LIFE_MAX)) * bar.h / u32::from(LIFE_MAX);
         fill_rect(
             frame,
             &Rect {
-                x,
-                y: PEER_BAR_TOP,
-                w: PEER_BAR_WIDTH,
-                h: PEER_BAR_HEIGHT,
-            },
-            pack_xrgb(0x30, 0x10, 0x10),
-        );
-        let filled = i32::from(life.min(LIFE_MAX)) * height / i32::from(LIFE_MAX);
-        fill_rect(
-            frame,
-            &Rect {
-                x,
-                y: PEER_BAR_TOP + height - filled,
-                w: PEER_BAR_WIDTH,
-                h: u32::try_from(filled).unwrap_or(0),
+                x: bar.x,
+                y: bar.y + (bar.h - filled) as i32,
+                w: bar.w,
+                h: filled,
             },
             pack_xrgb(0x20, 0xE0, 0x20),
         );
@@ -1326,49 +1441,27 @@ impl LivePlay {
     /// stand in for the `Note_JamNum.ojs` (`0x64c0fc` → `0x50d0ae`) art
     /// until staged figures bind.
     fn paint_jam_gauge(&self, frame: &mut Frame<'_>) {
-        let bar_h = Self::jam_bar_height(frame.h);
-        if bar_h <= 0 {
-            self.paint_jam_level(frame);
-            return;
+        for bar in jam_bar_rects(frame.w, frame.h) {
+            if bar.h == 0 {
+                continue;
+            }
+            let filled = jam_fill_rows(self.score.jam.level_progress(), bar.h);
+            Self::paint_jam_bar(frame, &bar, filled);
         }
-        let filled = jam_fill_rows(
-            self.score.jam.level_progress(),
-            u32::try_from(bar_h).unwrap_or(0),
-        );
-        let width = i32::try_from(JAM_BAR_WIDTH).unwrap_or(0);
-        let edge = i32::try_from(frame.w).unwrap_or(0);
-        Self::paint_jam_bar(frame, JAM_BAR_EDGE_GAP, filled, bar_h);
-        Self::paint_jam_bar(frame, edge - width - JAM_BAR_EDGE_GAP, filled, bar_h);
         self.paint_jam_level(frame);
     }
 
-    /// Jam bar height clamped to the frame below the peer strip.
-    fn jam_bar_height(frame_h: usize) -> i32 {
-        let full = i32::try_from(JAM_BAR_HEIGHT).unwrap_or(0);
-        let room = i32::try_from(frame_h).unwrap_or(0) - JAM_BAR_TOP;
-        full.min(room).max(0)
-    }
-
     /// One empty jam bar plus its progress fill, rising from the bottom.
-    fn paint_jam_bar(frame: &mut Frame<'_>, x: i32, filled: u32, bar_h: i32) {
-        let filled = i32::try_from(filled).unwrap_or(bar_h).min(bar_h);
+    fn paint_jam_bar(frame: &mut Frame<'_>, bar: &Rect, filled: u32) {
+        let filled = filled.min(bar.h);
+        fill_rect(frame, bar, pack_xrgb(0x10, 0x10, 0x30));
         fill_rect(
             frame,
             &Rect {
-                x,
-                y: JAM_BAR_TOP,
-                w: JAM_BAR_WIDTH,
-                h: u32::try_from(bar_h).unwrap_or(0),
-            },
-            pack_xrgb(0x10, 0x10, 0x30),
-        );
-        fill_rect(
-            frame,
-            &Rect {
-                x,
-                y: JAM_BAR_TOP + bar_h - filled,
-                w: JAM_BAR_WIDTH,
-                h: u32::try_from(filled).unwrap_or(0),
+                x: bar.x,
+                y: bar.y + (bar.h - filled) as i32,
+                w: bar.w,
+                h: filled,
             },
             pack_xrgb(0xFF, 0x80, 0x00),
         );
@@ -1382,7 +1475,7 @@ impl LivePlay {
         draw_number(
             frame,
             center - digits / 2,
-            PEER_BAR_TOP,
+            JAM_DIGIT_FALLBACK_Y,
             level,
             pack_xrgb(0xFF, 0xC0, 0x40),
         );
@@ -1490,7 +1583,7 @@ mod live_play_tests {
         assert_eq!(buf[32 * 70 + 17], pack_xrgb(0xFF, 0xFF, 0x40));
         let word_x = 35 - text_width("COOL") as i32 / 2;
         assert_eq!(
-            buf[10 * 70 + word_x as usize + 2],
+            buf[8 * 70 + word_x as usize + 2],
             pack_xrgb(0xFF, 0xFF, 0xFF)
         );
     }
@@ -1519,7 +1612,9 @@ mod live_play_tests {
         );
         let shell = pack_xrgb(0x10, 0x10, 0x30);
         let fill = pack_xrgb(0xFF, 0x80, 0x00);
-        assert_eq!(buf[(JAM_BAR_TOP as usize) * 70 + 2], shell);
+        // Left `Jamgauge` shell: native `(23,536)` 206x16 scales to
+        // x 2..20, row 53 at 70x60.
+        assert_eq!(buf[53 * 70 + 2], shell);
         assert!(!buf.contains(&fill));
     }
 
@@ -1527,26 +1622,25 @@ mod live_play_tests {
     fn jam_gauge_cool_and_good_fill_both_edge_bars() {
         let mut live = LivePlay::new(&[(0, 1000, 7), (0, 1100, 7)]);
         live.strike_lane(0, 1000);
-        live.strike_lane(0, 1110);
-        assert_eq!(live.score().jam.level_progress(), 3);
-        let mut buf = vec![0u32; 70 * 60];
+        live.strike_lane(0, 1100);
+        assert_eq!(live.score().jam.level_progress(), 4);
+        // Native frame: 16-row shells fill one row per 50/16 progress.
+        let geom = HighwayGeometry::centered(800, 600);
+        let mut buf = vec![0u32; 800 * 600];
         live.paint(
             &mut Frame {
                 buf: &mut buf,
-                w: 70,
-                h: 60,
+                w: 800,
+                h: 600,
             },
-            &geom(),
-            1110,
+            &geom,
+            1100,
         );
         let fill = pack_xrgb(0xFF, 0x80, 0x00);
-        let bottom = (JAM_BAR_TOP + 24 - 1) as usize;
-        assert_eq!(buf[bottom * 70 + 2], fill);
-        assert_eq!(buf[bottom * 70 + 66], fill);
-        assert_eq!(
-            buf[(JAM_BAR_TOP as usize) * 70 + 2],
-            pack_xrgb(0x10, 0x10, 0x30)
-        );
+        let bottom = 536 + 16 - 1;
+        assert_eq!(buf[bottom * 800 + 23], fill);
+        assert_eq!(buf[bottom * 800 + 570], fill);
+        assert_eq!(buf[536 * 800 + 23], pack_xrgb(0x10, 0x10, 0x30));
     }
 
     #[test]
@@ -1576,12 +1670,11 @@ mod live_play_tests {
             3400,
         );
         let jam_ink = pack_xrgb(0xFF, 0xC0, 0x40);
-        // Level 1 glyph top row is 0b010: left pixel keeps the lane skin
-        // (x 34 rides odd lane 3).
-        assert_eq!(buf[4 * 70 + 34], LANE_SKIN_ODD);
+        // Level 1 glyph top row is 0b010: x 34 rides the flat
+        // backdrop (the staged lane span ends at x 16), x 35 inks.
+        assert_eq!(buf[4 * 70 + 34], pack_xrgb(0x0A, 0x0A, 0x0A));
         assert_eq!(buf[4 * 70 + 35], jam_ink);
-        let bottom = (JAM_BAR_TOP + 24 - 1) as usize;
-        assert_eq!(buf[bottom * 70 + 2], pack_xrgb(0x10, 0x10, 0x30));
+        assert_eq!(buf[53 * 70 + 2], pack_xrgb(0x10, 0x10, 0x30));
     }
 
     #[test]
@@ -1860,8 +1953,8 @@ mod live_play_tests {
     fn paint_shows_peer_life_fill_over_empty_bar() {
         let full_green = pack_xrgb(0x20, 0xE0, 0x20);
         let empty_red = pack_xrgb(0x30, 0x10, 0x10);
-        let bar_x =
-            70 - PEER_SLOT_COUNT as i32 * (PEER_BAR_WIDTH as i32 + PEER_BAR_GAP) - PEER_BAR_GAP;
+        // Slot 0 gauge: staged 46x8 bar scales to x 65..69, row 0
+        // at 70x60 (flush top-right stack).
         let mut live = LivePlay::new(&[(0, 1000, 7)]);
         let mut bare = vec![0u32; 70 * 60];
         live.paint(
@@ -1873,7 +1966,7 @@ mod live_play_tests {
             &geom(),
             0,
         );
-        assert_eq!(bare[PEER_BAR_TOP as usize * 70 + bar_x as usize], empty_red);
+        assert_eq!(bare[65], empty_red);
         live.apply_peer_stats(0, STAT_LIFE, LIFE_MAX);
         let mut filled = vec![0u32; 70 * 60];
         live.paint(
@@ -1885,10 +1978,7 @@ mod live_play_tests {
             &geom(),
             0,
         );
-        assert_eq!(
-            filled[PEER_BAR_TOP as usize * 70 + bar_x as usize],
-            full_green
-        );
+        assert_eq!(filled[65], full_green);
     }
 
     #[test]
@@ -1905,15 +1995,14 @@ mod live_play_tests {
             &geom(),
             1700,
         );
-        // The faded word leaves the highway skin, which tints odd lanes.
+        // The faded word leaves the flat backdrop: the word sits past
+        // the staged lane span (x 0..16 at 70 wide), which ends clear
+        // of the frame-centered word.
         let word_x = 35 - text_width("COOL") as i32 / 2;
-        let lane = (word_x + 2) / 10;
-        let skin = if lane % 2 == 1 {
-            LANE_SKIN_ODD
-        } else {
+        assert_eq!(
+            buf[8 * 70 + word_x as usize + 2],
             pack_xrgb(0x0A, 0x0A, 0x0A)
-        };
-        assert_eq!(buf[10 * 70 + word_x as usize + 2], skin);
+        );
     }
 
     #[test]
@@ -1930,7 +2019,9 @@ mod live_play_tests {
             0,
         );
         assert_eq!(buf[5 * 70], pack_xrgb(0x0A, 0x0A, 0x0A));
-        assert_eq!(buf[5 * 70 + 12], LANE_SKIN_ODD);
+        // Lane 3 (odd) spans x 7..8 with its divider on x 8; x 7
+        // keeps the skin tint.
+        assert_eq!(buf[5 * 70 + 7], LANE_SKIN_ODD);
     }
 
     #[test]
@@ -1947,9 +2038,9 @@ mod live_play_tests {
             },
             &geom,
         );
-        let note_y = 50 - (500.0 * 50.0 / 2000.0) as i32;
-        assert_eq!(buf[note_y as usize * 70 + 2], pack_xrgb(0x40, 0xC0, 0xFF));
-        assert_eq!(buf[(note_y - 1) as usize * 70 + 2], NOTE_CAP);
+        let note_y = 48 - (500.0 * 48.0 / 2000.0) as i32;
+        assert_eq!(buf[note_y as usize * 70], pack_xrgb(0x40, 0xC0, 0xFF));
+        assert_eq!(buf[(note_y - 1) as usize * 70], NOTE_CAP);
     }
 
     #[test]
@@ -1965,8 +2056,8 @@ mod live_play_tests {
             },
             &geom,
         );
-        assert_eq!(buf[47 * 70 + 2], RECEPTOR_DIM);
-        assert_eq!(buf[50 * 70], pack_xrgb(0xE0, 0xE0, 0xE0));
+        assert_eq!(buf[46 * 70], RECEPTOR_DIM);
+        assert_eq!(buf[48 * 70], pack_xrgb(0xE0, 0xE0, 0xE0));
     }
 
     #[test]
@@ -1984,7 +2075,7 @@ mod live_play_tests {
             1000,
         );
         assert!(buf.contains(&TAIL_BEAM));
-        assert_eq!(buf[30 * 70 + 34], TAIL_BEAM);
+        assert_eq!(buf[30 * 70 + 7], TAIL_BEAM);
     }
 
     #[test]
@@ -2002,8 +2093,8 @@ mod live_play_tests {
             &geom(),
             1050,
         );
-        assert_eq!(lit[47 * 70 + 33], RECEPTOR_LIT);
-        assert_eq!(lit[40 * 70 + 34], HIT_BURST);
+        assert_eq!(lit[46 * 70 + 7], RECEPTOR_LIT);
+        assert_eq!(lit[42 * 70 + 7], HIT_BURST);
         let mut faded = vec![0u32; 70 * 60];
         live.paint(
             &mut Frame {
@@ -2014,8 +2105,8 @@ mod live_play_tests {
             &geom(),
             1200,
         );
-        assert_eq!(faded[47 * 70 + 33], RECEPTOR_DIM);
-        assert_eq!(faded[40 * 70 + 34], LANE_SKIN_ODD);
+        assert_eq!(faded[46 * 70 + 7], RECEPTOR_DIM);
+        assert_eq!(faded[42 * 70 + 7], LANE_SKIN_ODD);
     }
 
     #[test]
@@ -2035,7 +2126,7 @@ mod live_play_tests {
         let amber = pack_xrgb(0xFF, 0xFF, 0x40);
         let word_x = 35 - text_width("COOL") as i32 / 2;
         assert_eq!(
-            buf[10 * 70 + word_x as usize + 2],
+            buf[8 * 70 + word_x as usize + 2],
             pack_xrgb(0xFF, 0xFF, 0xFF)
         );
         assert!(
@@ -2076,9 +2167,10 @@ mod live_play_tests {
             &geom(),
             1050,
         );
-        // Lane 0 receptor and burst rows peek past the edge jam bar.
-        assert_eq!(buf[47 * 70 + 7], RECEPTOR_DIM);
-        assert_eq!(buf[40 * 70 + 6], pack_xrgb(0x0A, 0x0A, 0x0A));
+        // Lane 0 receptor and burst rows ride the staged columns,
+        // clear of the edge gauges.
+        assert_eq!(buf[46 * 70], RECEPTOR_DIM);
+        assert_eq!(buf[42 * 70], pack_xrgb(0x0A, 0x0A, 0x0A));
     }
 
     fn solid_sprite(w: usize, h: usize, word: u16) -> SkinSprite {
@@ -2103,7 +2195,7 @@ mod live_play_tests {
         live.set_skin(
             PlaySkin::default()
                 .with_receptors(3, vec![solid_sprite(8, 6, 0x03E0)])
-                .with_press_key(3, solid_sprite(4, 8, 0x7C1F))
+                .with_press_key(3, solid_sprite(4, 4, 0x7C1F))
                 .with_release_beam(3, solid_sprite(8, 64, 0x7FE0)),
         );
         assert!(live.has_skin());
@@ -2118,10 +2210,11 @@ mod live_play_tests {
             &geom(),
             1050,
         );
-        // Burst zone shows the beam, the pad row the press art, and
-        // the receptor peeks past its edges.
-        assert_eq!(buf[40 * 70 + 34], solid_ink(0x7FE0));
-        assert_eq!(buf[47 * 70 + 34], solid_ink(0x7C1F));
+        // Burst zone shows the beam, the pad rows the press art (4
+        // rows, so the burst peeks above it), and the receptor peeks
+        // past its edges.
+        assert_eq!(buf[40 * 70 + 7], solid_ink(0x7FE0));
+        assert_eq!(buf[46 * 70 + 7], solid_ink(0x7C1F));
         assert!(buf.contains(&solid_ink(0x03E0)));
         assert!(!buf.contains(&RECEPTOR_LIT));
     }
@@ -2245,12 +2338,133 @@ mod highway_tests {
     }
 
     #[test]
-    fn lanes_tile_full_width() {
+    fn lanes_follow_staged_keyeffect_columns() {
+        // Native 800x600: beam anchors `Keyeffect1..7.ojs` at
+        // x 5/33/55/83/115/143/165, judgement row 487 from
+        // `KeydownImage.ojs`.
+        let geom = HighwayGeometry::centered(800, 600);
+        assert_eq!(geom.lanes, NATIVE_LANE_RECTS);
+        assert_eq!(geom.line_y, NATIVE_LINE_Y);
+        assert_eq!(geom.line_y, 487);
+    }
+
+    #[test]
+    fn scaled_columns_keep_uneven_staged_widths() {
+        // 70x60 probe: uneven 28/22/28/32/28/22/28 heads survive
+        // the shared scaler; the lane span hugs the left.
         let geom = geom();
-        assert_eq!(geom.lane_w, 10);
-        assert_eq!(geom.lane_rect(0).x, 0);
-        assert_eq!(geom.lane_rect(6).x, 60);
-        assert_eq!(geom.line_y, 50);
+        let xs: Vec<i32> = (0..HIGHWAY_LANES)
+            .map(|lane| geom.lane_rect(lane).x)
+            .collect();
+        let ws: Vec<u32> = (0..HIGHWAY_LANES)
+            .map(|lane| geom.lane_rect(lane).w)
+            .collect();
+        assert_eq!(xs, vec![0, 2, 4, 7, 10, 12, 14]);
+        assert_eq!(ws, vec![2, 1, 2, 2, 2, 1, 2]);
+        assert_eq!(geom.line_y, 48);
+        assert_eq!(
+            geom.highway_rect(),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 16,
+                h: 48
+            }
+        );
+    }
+
+    #[test]
+    fn note_box_matches_staged_head_extent() {
+        // Heads fill the full lane width at the scaled 7-row height
+        // (kept at least one row on tiny probes).
+        let geom = geom();
+        assert_eq!(
+            geom.note_rect(3, 36),
+            Rect {
+                x: 7,
+                y: 36,
+                w: 2,
+                h: 1
+            }
+        );
+        let native = HighwayGeometry::centered(800, 600);
+        assert_eq!(
+            native.note_rect(3, 100),
+            Rect {
+                x: 83,
+                y: 100,
+                w: 32,
+                h: 7
+            }
+        );
+    }
+
+    #[test]
+    fn receptor_pad_matches_press_down_height() {
+        // Lane 3 press art `KeydownImage.ojs` anchors `(83,487)`
+        // 32x46: the pad is that box resting on the line.
+        let native = HighwayGeometry::centered(800, 600);
+        assert_eq!(
+            native.receptor_pad(3),
+            Rect {
+                x: 83,
+                y: 487 - 46,
+                w: 32,
+                h: 46
+            }
+        );
+        assert_eq!(
+            geom().burst_rect(3),
+            Rect {
+                x: 7,
+                y: 48 - 8,
+                w: 2,
+                h: 4
+            }
+        );
+    }
+
+    #[test]
+    fn jam_and_peer_boxes_match_staged_shells() {
+        assert_eq!(jam_bar_rects(800, 600), NATIVE_JAM_BARS);
+        // Peer bars follow the staged 46x8 life gauge, stacked flush
+        // top-right: slot `i` sits `i` bars below the corner.
+        let native: Vec<Rect> = (0..PEER_SLOT_COUNT)
+            .map(|i| Rect {
+                x: 754,
+                y: i as i32 * 8,
+                w: 46,
+                h: 8,
+            })
+            .collect();
+        assert_eq!(peer_bar_rects(800, 600), native);
+        assert_eq!(
+            peer_bar_rects(70, 60)[0],
+            Rect {
+                x: 65,
+                y: 0,
+                w: 4,
+                h: 1
+            }
+        );
+        assert_eq!(
+            jam_bar_rects(70, 60)[0],
+            Rect {
+                x: 2,
+                y: 53,
+                w: 18,
+                h: 1
+            }
+        );
+        assert_eq!(
+            jam_bar_rects(70, 60)[1],
+            Rect {
+                x: 49,
+                y: 53,
+                w: 18,
+                h: 1
+            }
+        );
     }
 
     #[test]
@@ -2261,7 +2475,7 @@ mod highway_tests {
         // Onset == now is due (struck), not falling.
         assert_eq!(view.visible(&geom), vec![(3, 0)]);
         view.advance_to(2000);
-        assert_eq!(view.visible(&geom), vec![(3, 25)]);
+        assert_eq!(view.visible(&geom), vec![(3, 24)]);
     }
 
     #[test]
@@ -2285,11 +2499,11 @@ mod highway_tests {
             },
             &geom,
         );
-        // Judgement line spans the lanes; the note sits above it.
-        assert_eq!(buf[50 * 70], pack_xrgb(0xE0, 0xE0, 0xE0));
-        assert_eq!(buf[50 * 70 + 69], pack_xrgb(0xE0, 0xE0, 0xE0));
-        let note_y = 50 - (500.0 * 50.0 / 2000.0) as i32;
-        assert_eq!(buf[note_y as usize * 70 + 2], pack_xrgb(0x40, 0xC0, 0xFF));
+        // Judgement line spans the staged lanes; the note sits above it.
+        assert_eq!(buf[48 * 70], pack_xrgb(0xE0, 0xE0, 0xE0));
+        assert_eq!(buf[48 * 70 + 69], pack_xrgb(0x0A, 0x0A, 0x0A));
+        let note_y = 48 - (500.0 * 48.0 / 2000.0) as i32;
+        assert_eq!(buf[note_y as usize * 70], pack_xrgb(0x40, 0xC0, 0xFF));
         assert_eq!(buf[0], pack_xrgb(0x0A, 0x0A, 0x0A));
     }
 
@@ -2307,7 +2521,7 @@ mod highway_tests {
             },
             &geom,
         );
-        assert_eq!(buf[10 * 21], pack_xrgb(0xE0, 0xE0, 0xE0));
+        assert_eq!(buf[9 * 21], pack_xrgb(0xE0, 0xE0, 0xE0));
     }
 
     fn solid_sprite(w: usize, h: usize, word: u16) -> SkinSprite {
