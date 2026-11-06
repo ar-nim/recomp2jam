@@ -68,16 +68,20 @@ All request/response/event layouts live in
   `0x15aaex` credential-prep code), one gender-ish byte, then
   the hardcoded ClientId `726PNA-B1YW-28ZG9M-I5SC-Q0OPM6`
   (file `0x2472c8`, byte-identical to Memoryer's
-  `AuthRequest.Id`). OPEN discrepancies vs Memoryer before
-  any implementation: (a) field order/content (exe shows
-  str,str,gender,const vs Memoryer token,gender,u8,clientId);
-  (b) endpoint size (exe 6 B vs Memoryer 8 B `port,zero,IP`);
-  (c) whether the exe emits the `0x00` string terminator
-  (its builder shows raw `strlen` bytes; Encore's decoder reads
-  to the terminator, so a missing one would swallow following
-  fields — needs live-interop proof).
-  No `Authorize` implementation until these are resolved —
-  a wrong guess breaks interop silently.
+  `AuthRequest.Id`). Resolved since: (b) endpoints are 6-byte
+  IP+port on both sides (Memoryer `IPEndpointCodec`: 4 address
+  bytes + u16 port — the old `8 B port,zero,IP` note was wrong);
+  gender is a null-terminated *string* on the wire (Memoryer
+  `AuthGenderCodec` is decode-only, accepts `m`/`1`/`f`/`0`), so
+  the exe's second runtime string now reads as the gender field
+  and its trailing byte as the u8 marker — matching Memoryer's
+  token,gender,u8,clientId order, byte-level proof still open.
+  Our `AuthorizeRequest` sends exactly Memoryer's order (the
+  server we connect to governs); only the exe-parity byte proof
+  stays open: (c) whether the 7.55 client emits the `0x00`
+  terminator (its builder shows raw `strlen` bytes; Encore's
+  decoder reads to the terminator, so a missing one would swallow
+  following fields — needs live-interop proof).
 - `GetChannelList` 1002 → 1003; `ChannelLogin` 1004 (i16
   gatewayId/channelId) → 1005; `SessionKeys` 1007/1008 — all DONE
   in `o2jam-net` (`ChannelLoginResponse`: u32 result + optional
