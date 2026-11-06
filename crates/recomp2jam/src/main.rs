@@ -70,6 +70,64 @@ enum Command {
         /// Password for `--join-room`.
         #[arg(long, default_value = "")]
         room_password: String,
+        /// Room song id: runs the host song flow after the room
+        /// join (needs --join-room; the room must let us host).
+        #[arg(long, requires = "join_room")]
+        music_id: Option<u16>,
+        /// Chart difficulty code (0 EX, 1 NX, 2 HX, 3 RX).
+        #[arg(long, default_value_t = 2, requires = "music_id")]
+        difficulty: u8,
+        /// Scroll-speed code (select + loaded + tally).
+        #[arg(long, default_value_t = 1, requires = "music_id")]
+        game_speed: u8,
+        /// Room slot the sync steps belong to.
+        #[arg(long, default_value_t = 0, requires = "music_id")]
+        member_id: u8,
+        /// Power skill-ring id for the loaded confirm.
+        #[arg(long, default_value_t = 0, requires = "music_id")]
+        power_skill: i32,
+        /// Tick channel: life or jam.
+        #[arg(long, default_value = "jam", requires = "music_id")]
+        stat_kind: String,
+        /// Channel value for the tick.
+        #[arg(long, default_value_t = 3, requires = "music_id")]
+        stat_value: u16,
+        /// Hit sequence number for the tick.
+        #[arg(long, default_value_t = 1, requires = "music_id")]
+        stat_seq: i32,
+        /// Running score for the tick.
+        #[arg(long, default_value_t = 210, requires = "music_id")]
+        stat_score: u32,
+        /// Cool hits for the tally.
+        #[arg(long, default_value_t = 10, requires = "music_id")]
+        cool: u16,
+        /// Good hits for the tally.
+        #[arg(long, default_value_t = 2, requires = "music_id")]
+        good: u16,
+        /// Bad hits for the tally.
+        #[arg(long, default_value_t = 0, requires = "music_id")]
+        bad: u16,
+        /// Misses for the tally.
+        #[arg(long, default_value_t = 0, requires = "music_id")]
+        miss: u16,
+        /// Best combo for the tally.
+        #[arg(long, default_value_t = 12, requires = "music_id")]
+        max_combo: u16,
+        /// Final jam level for the tally.
+        #[arg(long, default_value_t = 1, requires = "music_id")]
+        jam: u16,
+        /// Best jam level for the tally.
+        #[arg(long, default_value_t = 1, requires = "music_id")]
+        max_jam: u16,
+        /// Final score for the tally.
+        #[arg(long, default_value_t = 2210, requires = "music_id")]
+        final_score: u32,
+        /// Remaining life for the tally.
+        #[arg(long, default_value_t = 100, requires = "music_id")]
+        life: u8,
+        /// Long-note bonus total (tick and tally).
+        #[arg(long, default_value_t = 0, requires = "music_id")]
+        long_note: i32,
     },
     /// Stub gameplay entry point (autoplay with null backend for now).
     Play {
@@ -171,7 +229,51 @@ fn run_command(command: Command) -> Result<()> {
             avatar_opa,
             join_room,
             room_password,
+            music_id,
+            difficulty,
+            game_speed,
+            member_id,
+            power_skill,
+            stat_kind,
+            stat_value,
+            stat_seq,
+            stat_score,
+            cool,
+            good,
+            bad,
+            miss,
+            max_combo,
+            jam,
+            max_jam,
+            final_score,
+            life,
+            long_note,
         } => {
+            let song = match music_id {
+                Some(id) => {
+                    let mut flow = connect::SongFlowOptions::new(id);
+                    flow.difficulty = difficulty;
+                    flow.speed = game_speed;
+                    flow.member_id = member_id;
+                    flow.power_skill_id = power_skill;
+                    flow.stat_kind = connect::parse_stat_kind(&stat_kind)?;
+                    flow.stat_value = stat_value;
+                    flow.stat_sequence = stat_seq;
+                    flow.stat_score = stat_score;
+                    flow.cool = cool;
+                    flow.good = good;
+                    flow.bad = bad;
+                    flow.miss = miss;
+                    flow.max_combo = max_combo;
+                    flow.jam = jam;
+                    flow.max_jam = max_jam;
+                    flow.final_score = final_score;
+                    flow.life = life;
+                    flow.long_note_score = long_note;
+                    Some(flow)
+                }
+                None => None,
+            };
             let options = connect::ConnectOptions {
                 host,
                 port,
@@ -185,6 +287,7 @@ fn run_command(command: Command) -> Result<()> {
                 avatar_opa,
                 join_room,
                 room_password,
+                song,
             };
             let report = connect::connect_and_login(&options)?;
             print_connect_report(&report);
@@ -317,6 +420,7 @@ fn setup_online(
         avatar_opa: None,
         join_room: None,
         room_password: String::new(),
+        song: None,
     };
     let report = connect::connect_and_login(&options)?;
     tracing::info!(channels = report.channels.len(), "channels listed");
@@ -433,6 +537,25 @@ fn print_connect_report(report: &connect::ConnectReport) {
                 room.title
             ),
             None => println!("room: joined without snapshot"),
+        }
+    }
+    if let Some(song) = &report.song {
+        println!(
+            "music: {} entries (free music: {})",
+            song.music_entries,
+            if song.free_music { "yes" } else { "no" },
+        );
+        match &song.peer_bar {
+            Some(peer) => println!(
+                "tick: member {} {:?} = {}",
+                peer.member_id,
+                peer.kind(),
+                peer.value,
+            ),
+            None => println!("tick: no peer echo"),
+        }
+        if !song.skipped.is_empty() {
+            println!("skipped broadcasts: {:?}", song.skipped);
         }
     }
 }

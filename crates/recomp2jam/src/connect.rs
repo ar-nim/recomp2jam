@@ -9,13 +9,17 @@
 use std::net::SocketAddr;
 
 use anyhow::{bail, Context, Result};
+use o2jam_net::{play::MusicListAnswer, Frame};
 use o2jam_net::{
     AuthResponse, AuthResult, AuthorizeRequest, ChannelList, ChannelLogin, ChannelLoginResponse,
-    ChannelState, CharacterInfo, GatewayConnection, Gender, JoinRoom, JoinRoomResponse, Request,
-    RoomList, RoomListEntry, WireMessage,
+    ChannelState, CharacterInfo, ConfirmMusicLoaded, ExitPlaying, FinalizeRank, GameStatsUpdate,
+    GatewayConnection, Gender, Generic, GetMusicList, JoinRoom, JoinRoomResponse, Request,
+    RoomList, RoomListEntry, SetDownloadProgress, SetRoomMusic, StartGame, StatKind, SubmitScore,
+    SyncMemberMusicState, UpdateGameStats, WireMessage,
 };
 
 /// Login options (see `recomp2jam connect --help`).
+#[derive(Debug, Clone)]
 pub struct ConnectOptions {
     /// Gateway host.
     pub host: String,
@@ -43,6 +47,9 @@ pub struct ConnectOptions {
     pub join_room: Option<i32>,
     /// Password for `--join-room` (empty when unlocked).
     pub room_password: String,
+    /// Host song flow after the room join (`None` skips; needs a
+    /// room the gateway lets us host).
+    pub song: Option<SongFlowOptions>,
 }
 
 /// What the login flow learned.
@@ -63,6 +70,8 @@ pub struct ConnectReport {
     /// Room rows, fetched only after a channel login (the room
     /// controller rejects channel outsiders).
     pub rooms: Vec<RoomListEntry>,
+    /// Song-flow answer, when requested with a room join.
+    pub song: Option<SongFlowReport>,
 }
 
 /// Parse a `--gender` word.
@@ -73,6 +82,265 @@ pub fn parse_gender(word: &str) -> Result<Gender> {
         "any" | "unknown" | "" => Ok(Gender::Any),
         _ => bail!("unknown gender '{word}' (want male, female, or any)"),
     }
+}
+
+/// Parse a `--stat-kind` word (`UpdateGameStats` channel).
+pub fn parse_stat_kind(word: &str) -> Result<StatKind> {
+    match word.to_ascii_lowercase().as_str() {
+        "life" | "0" => Ok(StatKind::Life),
+        "jam" | "1" => Ok(StatKind::Jam),
+        _ => bail!("unknown stat kind '{word}' (want life or jam)"),
+    }
+}
+
+/// Host song-flow tunables (plan Phases 3–4).
+///
+/// Every field maps to one documented `play.rs` wire field; the flow
+/// runs select → list → sync → start → loaded → tick → submit →
+/// rank → exit. Needs channel membership plus a room the gateway
+/// lets us host (host-only steps reject outsiders).
+#[derive(Debug, Clone)]
+pub struct SongFlowOptions {
+    /// Room song id (`SetRoomMusic` 4000).
+    pub music_id: u16,
+    /// Chart difficulty code (0 EX, 1 NX, 2 HX, 3 RX).
+    pub difficulty: u8,
+    /// Scroll-speed code (`SetRoomMusic` + `ConfirmMusicLoaded`).
+    pub speed: u8,
+    /// Room slot the sync steps belong to.
+    pub member_id: u8,
+    /// Power skill-ring id (`ConfirmMusicLoaded` 4012).
+    pub power_skill_id: i32,
+    /// Life or Jam channel (`UpdateGameStats` 4014).
+    pub stat_kind: StatKind,
+    /// Channel value for the tick.
+    pub stat_value: u16,
+    /// Hit sequence number for the tick.
+    pub stat_sequence: i32,
+    /// Running score for the tick.
+    pub stat_score: u32,
+    /// Cool hits (`SubmitScore` 4016).
+    pub cool: u16,
+    /// Good hits.
+    pub good: u16,
+    /// Bad hits.
+    pub bad: u16,
+    /// Misses.
+    pub miss: u16,
+    /// Best combo.
+    pub max_combo: u16,
+    /// Final jam level.
+    pub jam: u16,
+    /// Best jam level.
+    pub max_jam: u16,
+    /// Final score.
+    pub final_score: u32,
+    /// Remaining life.
+    pub life: u8,
+    /// Long-note bonus total (tick and tally).
+    pub long_note_score: i32,
+    /// How long to wait for the peer-bar echo (best effort).
+    pub peer_bar_timeout: std::time::Duration,
+}
+
+impl SongFlowOptions {
+    /// Live-proven synthetic tally for `music_id` (defaults mirror
+    /// the fake-gateway test vectors).
+    #[must_use]
+    pub fn new(music_id: u16) -> Self {
+        Self {
+            music_id,
+            difficulty: 2,
+            speed: 1,
+            member_id: 0,
+            power_skill_id: 0,
+            stat_kind: StatKind::Jam,
+            stat_value: 3,
+            stat_sequence: 1,
+            stat_score: 210,
+            cool: 10,
+            good: 2,
+            bad: 0,
+            miss: 0,
+            max_combo: 12,
+            jam: 1,
+            max_jam: 1,
+            final_score: 2210,
+            life: 100,
+            long_note_score: 0,
+            peer_bar_timeout: std::time::Duration::from_secs(3),
+        }
+    }
+}
+
+/// What the host song flow learned.
+#[derive(Debug)]
+pub struct SongFlowReport {
+    /// Catalog rows in the `GetMusicList` 4031 answer.
+    pub music_entries: usize,
+    /// Gateway `FreeMusic` flag from the 4031 answer.
+    pub free_music: bool,
+    /// Peer lifebar echo after our tick (`None` on quiet rooms).
+    pub peer_bar: Option<GameStatsUpdate>,
+    /// Broadcast ids skipped while awaiting answers (kept, not lost).
+    pub skipped: Vec<u16>,
+}
+
+/// How long a blocking read waits outside the peer-bar window.
+///
+/// Mirrors `GatewayConnection`'s own default (`client.rs`
+/// `DEFAULT_IO_TIMEOUT`); restored after the peer-bar window so the
+/// connection behaves as the login flow left it.
+const SONG_FLOW_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Read until `expected` arrives, collecting broadcasts on the way.
+///
+/// Keepalives (6000/6001) stay silent; every other skipped id is
+/// reported in `skipped` so no server dispatch vanishes quietly.
+fn await_lenient(
+    gateway: &mut GatewayConnection,
+    expected: u16,
+    skipped: &mut Vec<u16>,
+) -> Result<Frame, o2jam_net::Error> {
+    loop {
+        let frame = gateway.next_frame()?;
+        if frame.id == expected {
+            return Ok(frame);
+        }
+        if Generic::from_id(frame.id).is_none() {
+            skipped.push(frame.id);
+        }
+    }
+}
+
+/// Run the host song flow over an authorized, room-joined gateway.
+///
+/// Fire-and-forget sends carry the play steps; only the music list
+/// (4030 → 4031) and the peer-bar echo (4015, best effort) await
+/// replies. Returns what the list step learned.
+pub fn run_song_flow(
+    gateway: &mut GatewayConnection,
+    options: &SongFlowOptions,
+) -> Result<SongFlowReport> {
+    let mut skipped = Vec::new();
+    send_select(gateway, options)?;
+    let listed = fetch_music_list(gateway, &mut skipped)?;
+    send_sync(gateway, options)?;
+    send_start(gateway, options)?;
+    send_tick(gateway, options)?;
+    let peer_bar = await_peer_bar(gateway, options, &mut skipped);
+    send_tally(gateway, options)?;
+    gateway
+        .set_timeouts(Some(SONG_FLOW_IO_TIMEOUT))
+        .map_err(|source| anyhow::anyhow!("{source}"))?;
+    Ok(SongFlowReport {
+        music_entries: listed.entries.len(),
+        free_music: listed.free_music,
+        peer_bar,
+        skipped,
+    })
+}
+
+fn send_select(gateway: &mut GatewayConnection, options: &SongFlowOptions) -> Result<()> {
+    let select = SetRoomMusic {
+        music_id: options.music_id,
+        difficulty: options.difficulty,
+        speed: options.speed,
+    };
+    gateway
+        .send_frame(Request::SetRoomMusic.id(), &select.encode_body())
+        .map_err(|source| anyhow::anyhow!("{source}"))
+}
+
+fn fetch_music_list(
+    gateway: &mut GatewayConnection,
+    skipped: &mut Vec<u16>,
+) -> Result<MusicListAnswer> {
+    gateway
+        .send_frame(Request::GetMusicList.id(), &GetMusicList.encode_body())
+        .map_err(|source| anyhow::anyhow!("{source}"))?;
+    let frame = await_lenient(gateway, MusicListAnswer::COMMAND, skipped)
+        .map_err(|source| anyhow::anyhow!("{source}"))?;
+    MusicListAnswer::decode_frame(&frame).map_err(|source| anyhow::anyhow!("{source}"))
+}
+
+fn send_sync(gateway: &mut GatewayConnection, options: &SongFlowOptions) -> Result<()> {
+    let state = SyncMemberMusicState {
+        member_id: options.member_id,
+    };
+    gateway
+        .send_frame(Request::SyncMemberMusicState.id(), &state.encode_body())
+        .map_err(|source| anyhow::anyhow!("{source}"))?;
+    let progress = SetDownloadProgress {
+        progress: 100,
+        member_id: options.member_id,
+    };
+    gateway
+        .send_frame(Request::SetDownloadProgress.id(), &progress.encode_body())
+        .map_err(|source| anyhow::anyhow!("{source}"))
+}
+
+fn send_start(gateway: &mut GatewayConnection, options: &SongFlowOptions) -> Result<()> {
+    gateway
+        .send_frame(Request::StartGame.id(), &StartGame.encode_body())
+        .map_err(|source| anyhow::anyhow!("{source}"))?;
+    let loaded = ConfirmMusicLoaded {
+        power_skill_id: options.power_skill_id,
+        speed: options.speed,
+    };
+    gateway
+        .send_frame(Request::ConfirmMusicLoaded.id(), &loaded.encode_body())
+        .map_err(|source| anyhow::anyhow!("{source}"))
+}
+
+fn send_tick(gateway: &mut GatewayConnection, options: &SongFlowOptions) -> Result<()> {
+    let tick = UpdateGameStats {
+        kind: options.stat_kind,
+        value: options.stat_value,
+        sequence: options.stat_sequence,
+        score: options.stat_score,
+        long_note_score: options.long_note_score,
+    };
+    gateway
+        .send_frame(Request::UpdateGameStats.id(), &tick.encode_body())
+        .map_err(|source| anyhow::anyhow!("{source}"))
+}
+
+/// Wait briefly for the tracker's peer-bar echo; `None` means the
+/// room stayed quiet (solo rooms may), never a hard failure.
+fn await_peer_bar(
+    gateway: &mut GatewayConnection,
+    options: &SongFlowOptions,
+    skipped: &mut Vec<u16>,
+) -> Option<GameStatsUpdate> {
+    gateway.set_timeouts(Some(options.peer_bar_timeout)).ok()?;
+    let frame = await_lenient(gateway, GameStatsUpdate::COMMAND, skipped).ok()?;
+    GameStatsUpdate::decode_frame(&frame).ok()
+}
+
+fn send_tally(gateway: &mut GatewayConnection, options: &SongFlowOptions) -> Result<()> {
+    let tally = SubmitScore {
+        cool: options.cool,
+        good: options.good,
+        bad: options.bad,
+        miss: options.miss,
+        max_combo: options.max_combo,
+        jam: options.jam,
+        max_jam: options.max_jam,
+        score: options.final_score,
+        life: options.life,
+        speed: options.speed,
+        long_note_score: options.long_note_score,
+    };
+    gateway
+        .send_frame(Request::SubmitScore.id(), &tally.encode_body())
+        .map_err(|source| anyhow::anyhow!("{source}"))?;
+    gateway
+        .send_frame(Request::FinalizeRank.id(), &FinalizeRank.encode_body())
+        .map_err(|source| anyhow::anyhow!("{source}"))?;
+    gateway
+        .send_frame(Request::ExitPlaying.id(), &ExitPlaying.encode_body())
+        .map_err(|source| anyhow::anyhow!("{source}"))
 }
 
 /// Connect, authorize, list channels, and optionally log into one.
@@ -99,6 +367,12 @@ pub fn connect_and_login(options: &ConnectOptions) -> Result<ConnectReport> {
         }
         _ => None,
     };
+    let song = match (&options.song, &join) {
+        (Some(flow), Some(_)) => {
+            Some(run_song_flow(&mut gateway, flow).context("running song flow")?)
+        }
+        _ => None,
+    };
     // Character info requires channel membership (server-verified:
     // `ChannelAuthorizeAttribute` rejects 2000 outside a channel),
     // so it runs last and only with a channel login.
@@ -119,6 +393,7 @@ pub fn connect_and_login(options: &ConnectOptions) -> Result<ConnectReport> {
         channel_login,
         join,
         rooms,
+        song,
     })
 }
 
@@ -327,6 +602,7 @@ mod connect_flow_tests {
             avatar_opa,
             join_room: None,
             room_password: String::new(),
+            song: None,
         }
     }
 
@@ -676,13 +952,12 @@ mod connect_flow_tests {
         assert!(message.contains("InvalidLogin"), "{message}");
     }
 }
-
 /// Host song flow over real gateway frames (plan Phases 3–4).
 ///
-/// Test-gated drivers for every new song opcode: production CLI
-/// wiring (`connect` flags in `main.rs`) is a later step outside
-/// this task's touch list, so the flow lives here as the
-/// executable proof against a fake gateway.
+/// Fake-gateway proofs for [`run_song_flow`]: the fake server asserts
+/// every request id and body, then answers the list step and the
+/// peer-bar echo. One env-gated live test replays the same flow
+/// against a local Memoryer gateway.
 #[cfg(test)]
 mod song_flow_tests {
     use std::io::{Read, Write};
@@ -692,10 +967,13 @@ mod song_flow_tests {
 
     use o2jam_net::{
         frame::{decode_frame, encode_frame},
-        ConfirmMusicLoaded, ExitPlaying, FinalizeRank, Frame, GameStatsUpdate, GatewayConnection,
-        GetMusicList, Request, SetDownloadProgress, SetRoomMusic, StartGame, StatKind, SubmitScore,
-        SyncMemberMusicState, UpdateGameStats, WireMessage, HEADER_LEN,
+        play::MusicListAnswer,
+        ConfirmMusicLoaded, Frame, GameStatsUpdate, GatewayConnection, Request,
+        SetDownloadProgress, SetRoomMusic, StatKind, SubmitScore, SyncMemberMusicState,
+        UpdateGameStats, WireMessage, HEADER_LEN,
     };
+
+    use super::{run_song_flow, SongFlowOptions};
 
     /// Read one whole frame off the fake server's socket.
     fn read_frame(stream: &mut TcpStream) -> Frame {
@@ -709,97 +987,36 @@ mod song_flow_tests {
         decode_frame(&bytes).unwrap()
     }
 
-    type NetResult<T> = Result<T, o2jam_net::Error>;
-
-    fn send_select(gateway: &mut GatewayConnection) -> NetResult<()> {
-        let select = SetRoomMusic {
-            music_id: 757,
-            difficulty: 2,
-        };
-        gateway.send_frame(Request::SetRoomMusic.id(), &select.encode_body())
+    fn flow_options() -> SongFlowOptions {
+        let mut options = SongFlowOptions::new(757);
+        options.peer_bar_timeout = Duration::from_millis(200);
+        options
     }
 
-    fn fetch_music_list(gateway: &mut GatewayConnection) -> NetResult<Frame> {
-        gateway.exchange(
-            Request::GetMusicList.id(),
-            &GetMusicList.encode_body(),
-            music_list_answer(),
-        )
-    }
-
-    /// `GetMusicList` 4031 answer id (body still opaque).
-    fn music_list_answer() -> u16 {
-        4031
-    }
-
-    fn send_sync(gateway: &mut GatewayConnection) -> NetResult<()> {
-        let state = SyncMemberMusicState { music_state: 2 };
-        gateway.send_frame(Request::SyncMemberMusicState.id(), &state.encode_body())?;
-        let progress = SetDownloadProgress {
-            progress: 100,
-            member_id: 0,
-        };
-        gateway.send_frame(Request::SetDownloadProgress.id(), &progress.encode_body())
-    }
-
-    fn send_start(gateway: &mut GatewayConnection) -> NetResult<()> {
-        gateway.send_frame(Request::StartGame.id(), &StartGame.encode_body())?;
-        let loaded = ConfirmMusicLoaded {
-            power_skill_id: 0,
-            speed: 1,
-        };
-        gateway.send_frame(Request::ConfirmMusicLoaded.id(), &loaded.encode_body())
-    }
-
-    fn send_jam_tick(gateway: &mut GatewayConnection) -> NetResult<()> {
-        let tick = UpdateGameStats {
-            kind: StatKind::Jam,
-            value: 3,
-            sequence: 1,
-            score: 210,
-            long_note_score: 0,
-        };
-        gateway.send_frame(Request::UpdateGameStats.id(), &tick.encode_body())
-    }
-
-    fn await_peer_bar(gateway: &mut GatewayConnection) -> NetResult<GameStatsUpdate> {
-        let frame = gateway.await_response(GameStatsUpdate::COMMAND)?;
-        GameStatsUpdate::decode_frame(&frame)
-    }
-
-    fn send_tally(gateway: &mut GatewayConnection) -> NetResult<()> {
-        let tally = SubmitScore {
-            cool: 10,
-            good: 2,
-            bad: 0,
-            miss: 0,
-            max_combo: 12,
-            jam: 1,
-            max_jam: 1,
-            score: 2210,
-            life: 100,
-            speed: 1,
-            long_note_score: 0,
-        };
-        gateway.send_frame(Request::SubmitScore.id(), &tally.encode_body())?;
-        gateway.send_frame(Request::FinalizeRank.id(), &FinalizeRank.encode_body())?;
-        gateway.send_frame(Request::ExitPlaying.id(), &ExitPlaying.encode_body())
-    }
-
-    /// Drive select → sync → start → tick → score → rank → exit.
-    fn drive_host_song_flow(gateway: &mut GatewayConnection) -> NetResult<(u16, GameStatsUpdate)> {
-        send_select(gateway)?;
-        let listed = fetch_music_list(gateway)?;
-        send_sync(gateway)?;
-        send_start(gateway)?;
-        send_jam_tick(gateway)?;
-        let peer = await_peer_bar(gateway)?;
-        send_tally(gateway)?;
-        Ok((listed.id, peer))
+    fn list_answer() -> MusicListAnswer {
+        use o2jam_net::play::MusicListEntry;
+        MusicListAnswer {
+            entries: vec![MusicListEntry {
+                id: 757,
+                notes_ex: 100,
+                notes_nx: 200,
+                notes_hx: 300,
+            }],
+            free_music: true,
+        }
     }
 
     #[test]
-    fn host_song_flow_reaches_score_over_fake_gateway() {
+    fn parses_stat_kind_words() {
+        use super::parse_stat_kind;
+        assert_eq!(parse_stat_kind("life").unwrap(), StatKind::Life);
+        assert_eq!(parse_stat_kind("Jam").unwrap(), StatKind::Jam);
+        assert_eq!(parse_stat_kind("1").unwrap(), StatKind::Jam);
+        assert!(parse_stat_kind("bogus").is_err());
+    }
+
+    #[test]
+    fn host_song_flow_reaches_exit_over_fake_gateway() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let server = thread::spawn(move || {
@@ -807,18 +1024,35 @@ mod song_flow_tests {
             stream
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
-            assert_eq!(read_frame(&mut stream).id, Request::SetRoomMusic.id());
-            assert_eq!(read_frame(&mut stream).id, Request::GetMusicList.id());
-            stream
-                .write_all(&encode_frame(music_list_answer(), &[]))
-                .unwrap();
+            let select = read_frame(&mut stream);
+            assert_eq!(select.id, Request::SetRoomMusic.id());
             assert_eq!(
-                read_frame(&mut stream).id,
-                Request::SyncMemberMusicState.id()
+                SetRoomMusic::decode_body(&select.payload).unwrap(),
+                SetRoomMusic {
+                    music_id: 757,
+                    difficulty: 2,
+                    speed: 1,
+                }
             );
+            // A room broadcast lands before the list answer (as live:
+            // the gateway emits `RoomParamsChanged` on select).
+            assert_eq!(read_frame(&mut stream).id, Request::GetMusicList.id());
+            stream.write_all(&encode_frame(4001, &[])).unwrap();
+            stream.write_all(&list_answer().encode()).unwrap();
+            let sync = read_frame(&mut stream);
+            assert_eq!(sync.id, Request::SyncMemberMusicState.id());
             assert_eq!(
-                read_frame(&mut stream).id,
-                Request::SetDownloadProgress.id()
+                SyncMemberMusicState::decode_body(&sync.payload).unwrap(),
+                SyncMemberMusicState { member_id: 0 }
+            );
+            let progress = read_frame(&mut stream);
+            assert_eq!(progress.id, Request::SetDownloadProgress.id());
+            assert_eq!(
+                SetDownloadProgress::decode_body(&progress.payload).unwrap(),
+                SetDownloadProgress {
+                    progress: 100,
+                    member_id: 0,
+                }
             );
             assert_eq!(read_frame(&mut stream).id, Request::StartGame.id());
             let loaded = read_frame(&mut stream);
@@ -834,23 +1068,208 @@ mod song_flow_tests {
             assert_eq!(tick.id, Request::UpdateGameStats.id());
             let stats = UpdateGameStats::decode_body(&tick.payload).unwrap();
             assert_eq!(stats.kind, StatKind::Jam);
+            assert_eq!(stats.value, 3);
             let echo = GameStatsUpdate {
                 member_id: 0,
-                kind_code: StatKind::Life.as_u8(),
+                kind_code: StatKind::Life.as_u16(),
                 value: 1000,
                 ranks: [0; 8],
             };
             stream.write_all(&echo.encode()).unwrap();
+            let tally = read_frame(&mut stream);
+            assert_eq!(tally.id, Request::SubmitScore.id());
+            let score = SubmitScore::decode_body(&tally.payload).unwrap();
+            assert_eq!(score.score, 2210);
+            assert_eq!(score.life, 100);
+            assert_eq!(read_frame(&mut stream).id, Request::FinalizeRank.id());
+            assert_eq!(read_frame(&mut stream).id, Request::ExitPlaying.id());
+        });
+        let mut gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let report = run_song_flow(&mut gateway, &flow_options()).unwrap();
+        server.join().unwrap();
+        assert_eq!(report.music_entries, 1);
+        assert!(report.free_music);
+        assert_eq!(report.skipped, vec![4001]);
+        let peer = report.peer_bar.unwrap();
+        assert_eq!(peer.member_id, 0);
+        assert_eq!(peer.kind(), Some(StatKind::Life));
+        assert_eq!(peer.value, 1000);
+    }
+
+    #[test]
+    fn song_flow_tolerates_a_quiet_room() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::SetRoomMusic.id());
+            assert_eq!(read_frame(&mut stream).id, Request::GetMusicList.id());
+            stream.write_all(&list_answer().encode()).unwrap();
+            assert_eq!(
+                read_frame(&mut stream).id,
+                Request::SyncMemberMusicState.id()
+            );
+            assert_eq!(
+                read_frame(&mut stream).id,
+                Request::SetDownloadProgress.id()
+            );
+            assert_eq!(read_frame(&mut stream).id, Request::StartGame.id());
+            assert_eq!(read_frame(&mut stream).id, Request::ConfirmMusicLoaded.id());
+            assert_eq!(read_frame(&mut stream).id, Request::UpdateGameStats.id());
+            // No peer-bar echo: the client must not hang.
             assert_eq!(read_frame(&mut stream).id, Request::SubmitScore.id());
             assert_eq!(read_frame(&mut stream).id, Request::FinalizeRank.id());
             assert_eq!(read_frame(&mut stream).id, Request::ExitPlaying.id());
         });
         let mut gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
-        let (listed_id, peer) = drive_host_song_flow(&mut gateway).unwrap();
+        let report = run_song_flow(&mut gateway, &flow_options()).unwrap();
         server.join().unwrap();
-        assert_eq!(listed_id, music_list_answer());
-        assert_eq!(peer.member_id, 0);
-        assert_eq!(peer.kind(), Some(StatKind::Life));
-        assert_eq!(peer.value, 1000);
+        assert_eq!(report.music_entries, 1);
+        assert!(report.peer_bar.is_none());
+        assert!(report.skipped.is_empty());
+    }
+
+    /// Live proof against a local Memoryer gateway (plan Phase 4).
+    ///
+    /// Guarded: runs only with `O2JAM_LIVE_GATEWAY=host:port` and
+    /// `O2JAM_LIVE_TOKEN=session-guid` (mint via the gateway's
+    /// `user:authorize` flow; user id 1, channel 0/0). Creates its own
+    /// room (so the flow hosts), drives the full song flow, and checks
+    /// the list answer plus the peer-bar echo.
+    #[test]
+    fn live_host_song_flow_against_local_gateway() {
+        use super::{connect_and_login, ConnectOptions};
+        use o2jam_net::{
+            AuthResponse, AuthorizeRequest, ChannelLogin, ChannelLoginResponse, CharacterInfo,
+            CreateRoom, CreateRoomResponse, GameMode, Gender, KeyMode,
+        };
+
+        let address = std::env::var("O2JAM_LIVE_GATEWAY").unwrap_or_default();
+        if address.is_empty() {
+            eprintln!("skipping live song flow (set O2JAM_LIVE_GATEWAY=host:port)");
+            return;
+        }
+        let token = std::env::var("O2JAM_LIVE_TOKEN")
+            .expect("O2JAM_LIVE_TOKEN must hold a gateway session guid");
+        let (host, port) = address.rsplit_once(':').expect("host:port");
+        let port: u16 = port.parse().expect("numeric port");
+
+        let options = ConnectOptions {
+            host: host.to_owned(),
+            port,
+            user_id: 1,
+            token,
+            gender: Gender::Any,
+            relay_key1: 0,
+            relay_key2: 0,
+            channel: Some((0, 0)),
+            character: true,
+            avatar_opa: None,
+            join_room: None,
+            room_password: String::new(),
+            song: None,
+        };
+        // Log in on a raw gateway: connect_and_login without a room
+        // leaves membership setup to this test (it must host).
+        // Channel entry races broadcasts (notably 2026), so every
+        // await below skips foreign frames like production does.
+        fn expect(gateway: &mut GatewayConnection, want: u16) -> o2jam_net::Frame {
+            loop {
+                let frame = gateway.next_frame().unwrap();
+                if frame.id == want {
+                    return frame;
+                }
+            }
+        }
+        let mut gateway = GatewayConnection::connect(address.as_str()).unwrap();
+        let local = match gateway.local_address().unwrap() {
+            std::net::SocketAddr::V4(endpoint) => endpoint,
+            std::net::SocketAddr::V6(_) => panic!("gateway resolved IPv6"),
+        };
+        let auth = AuthorizeRequest::new(0, 0, local, local, 1, options.token.clone(), Gender::Any);
+        gateway
+            .send_frame(Request::Authorize.id(), &auth.encode_body())
+            .unwrap();
+        let authed =
+            AuthResponse::decode_frame(&expect(&mut gateway, AuthResponse::COMMAND)).unwrap();
+        assert_eq!(authed.result_code, 0, "live authorize");
+        gateway
+            .send_frame(Request::GetChannelList.id(), &[])
+            .unwrap();
+        assert_eq!(expect(&mut gateway, 1003).id, 1003);
+        let login = ChannelLogin {
+            gateway_id: 0,
+            channel_id: 0,
+        };
+        gateway
+            .send_frame(Request::ChannelLogin.id(), &login.encode_body())
+            .unwrap();
+        let logged = ChannelLoginResponse::decode_frame(&expect(
+            &mut gateway,
+            ChannelLoginResponse::COMMAND,
+        ))
+        .unwrap();
+        assert_eq!(logged.result_code, 0, "live channel login");
+        gateway
+            .send_frame(Request::GetCharacterInfo.id(), &[])
+            .unwrap();
+        let hero =
+            CharacterInfo::decode_frame(&expect(&mut gateway, CharacterInfo::COMMAND)).unwrap();
+        assert!(!hero.invalid, "live character valid");
+
+        let create = CreateRoom {
+            title: "songflow".to_owned(),
+            key_mode: KeyMode::FiveKeys,
+            game_mode: GameMode::Normal,
+            has_password: false,
+            password: String::new(),
+            min_level: 1,
+            max_level: 99,
+            premium: false,
+        };
+        gateway
+            .send_frame(Request::CreateRoom.id(), &create.encode_body())
+            .unwrap();
+        let created =
+            CreateRoomResponse::decode_frame(&expect(&mut gateway, CreateRoomResponse::COMMAND))
+                .unwrap();
+        assert_eq!(created.result.as_i32(), 0, "live room created");
+        assert!(created.info.is_some(), "live room snapshot");
+
+        let flow = SongFlowOptions::new(757);
+        let report = run_song_flow(&mut gateway, &flow).unwrap();
+        assert!(
+            report.music_entries > 0,
+            "live catalog non-empty ({})",
+            report.music_entries
+        );
+        assert!(report.free_music, "live gateway runs FreeMusic");
+        assert!(
+            report.peer_bar.is_some(),
+            "live tracker echoes the tick (skipped={:?})",
+            report.skipped
+        );
+
+        // The shared login helper stays the CLI path: prove it still
+        // reaches character over the same gateway (separate session).
+        // The shared login helper stays the CLI path: prove it still
+        // reaches character over the same gateway once this session
+        // drains (the gateway holds the token briefly after close).
+        drop(gateway);
+        let mut helper = Err(anyhow::anyhow!("not attempted"));
+        for _ in 0..10 {
+            std::thread::sleep(Duration::from_millis(500));
+            helper = connect_and_login(&ConnectOptions {
+                song: None,
+                ..options.clone()
+            });
+            if helper.is_ok() {
+                break;
+            }
+        }
+        assert!(helper.is_ok(), "helper login still green: {helper:?}");
     }
 }
