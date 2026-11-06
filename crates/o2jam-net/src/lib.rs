@@ -30,9 +30,9 @@ pub use error::Error;
 pub use frame::{Frame, FrameSplitter, HEADER_LEN, ID_OFFSET};
 pub use message::{
     AuthResponse, AuthResult, AuthorizeRequest, ChannelList, ChannelLogin, ChannelLoginResponse,
-    ChannelLoginResult, ChannelState, CreateResult, CreateRoom, CreateRoomResponse, EmptyMessage,
-    ForceReauthorize, GameMode, Gender, GetChannelList, GetCharacterInfo, KeyMode, LegacyPing,
-    MultiSessionError, Ping, RoomCreated, RoomInfo, SessionKeys, SessionKeysRequest,
+    ChannelLoginResult, ChannelState, CreateResult, CreateRoom, CreateRoomResponse, CreatedRoom,
+    EmptyMessage, ForceReauthorize, GameMode, Gender, GetChannelList, GetCharacterInfo, KeyMode,
+    LegacyPing, MultiSessionError, Ping, RoomCreated, SessionKeys, SessionKeysRequest,
     SubscriptionAlert, Terminate, WireMessage, MEMORYER_CLIENT_ID,
 };
 pub use rooms::{

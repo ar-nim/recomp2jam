@@ -32,7 +32,7 @@ Automated baseline: `cargo fmt --check` clean,
 
 1. Split `o2jam-file/lib.rs` by format (`ojm.rs`, `ojn.rs`, `opi.rs`, shop tables).
 2. ~~Extract shell `Handler` out of `Shell::run`~~ DONE (`window.rs`; `run()` is 10 lines). Split `screens.rs` per screen.
-3. `message.rs`/`rooms.rs` naming consolidation (`RoomInfo` vs `RoomListEntry`).
+3. ~~`message.rs`/`rooms.rs` naming consolidation~~ DONE (`RoomInfo` → `CreatedRoom`; `RoomListEntry`/`JoinedRoom` kept).
 4. Pedantic polish pass (advisory only): `#[must_use]`, `# Errors` docs,
    `u32::from` over `as` where infallible. Production `as` casts reviewed
    sound (masked bits, repr enums, protocol-bounded lengths).
