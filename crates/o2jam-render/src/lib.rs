@@ -91,6 +91,20 @@ pub fn blit_rgb555(
     dy: i32,
     colorkey: Option<u16>,
 ) {
+    blit_rgb555_clipped(frame, sprite, dx, dy, colorkey, None);
+}
+
+/// Blit a sprite, additionally dropping pixels outside `clip`.
+/// Skill-ring curtains (hidden/sudden/dark) render notes through the
+/// spans from [`visible_spans`]; pass `None` for an uncurtained blit.
+pub fn blit_rgb555_clipped(
+    frame: &mut Frame<'_>,
+    sprite: &Sprite<'_>,
+    dx: i32,
+    dy: i32,
+    colorkey: Option<u16>,
+    clip: Option<&Rect>,
+) {
     if sprite.stride == 0
         || frame.buf.len() < frame.w * frame.h
         || sprite.pixels.len() < sprite.stride * sprite.h
@@ -99,12 +113,12 @@ pub fn blit_rgb555(
     }
     for row in 0..sprite.h {
         let dest_y = dy + row as i32;
-        if dest_y < 0 || dest_y >= frame.h as i32 {
+        if dest_y < 0 || dest_y >= frame.h as i32 || is_clipped_y(clip, dest_y) {
             continue;
         }
         for col in 0..sprite.w {
             let dest_x = dx + col as i32;
-            if dest_x < 0 || dest_x >= frame.w as i32 {
+            if dest_x < 0 || dest_x >= frame.w as i32 || is_clipped_x(clip, dest_x) {
                 continue;
             }
             let pixel = sprite.pixels[row * sprite.stride + col];
@@ -114,6 +128,74 @@ pub fn blit_rgb555(
             let (r, g, b) = expand_rgb555(pixel);
             frame.buf[dest_y as usize * frame.w + dest_x as usize] = pack_xrgb(r, g, b);
         }
+    }
+}
+
+/// Whether a destination row falls outside the clip rect.
+fn is_clipped_y(clip: Option<&Rect>, dest_y: i32) -> bool {
+    clip.is_some_and(|rect| dest_y < rect.y || dest_y >= rect.y + rect.h as i32)
+}
+
+/// Whether a destination column falls outside the clip rect.
+fn is_clipped_x(clip: Option<&Rect>, dest_x: i32) -> bool {
+    clip.is_some_and(|rect| dest_x < rect.x || dest_x >= rect.x + rect.w as i32)
+}
+
+/// Share of the note highway one curtain edge covers or reveals.
+///
+/// From the shipped ring descriptions (`Itemdata_Korea.dat` in
+/// `Image/avatar.opa`): hidden covers the bottom 20% of the chart,
+/// sudden shows only that bottom 20%, dark shows only the middle 20%,
+/// and reverse-dark covers the middle 20%.
+const CURTAIN_SHARE_DENOMINATOR: u32 = 5;
+
+/// Note-highway curtain worn by a skill ring.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaneCurtain {
+    /// Whole highway visible (no ring).
+    Full,
+    /// Bottom fifth covered (hidden ring).
+    Hidden,
+    /// Only the bottom fifth visible (sudden ring).
+    Sudden,
+    /// Only the middle fifth visible (dark ring).
+    Dark,
+    /// Middle fifth covered (reverse-dark ring).
+    ReverseDark,
+}
+
+/// Visible spans of a note `highway` under a curtain, top to bottom.
+///
+/// Notes scroll toward the judgement line at the bottom, so "bottom"
+/// spans sit at high `y`. Returns at most two spans (reverse-dark
+/// splits the highway); an empty highway yields no spans.
+#[must_use]
+pub fn visible_spans(curtain: LaneCurtain, highway: &Rect) -> Vec<Rect> {
+    if highway.w == 0 || highway.h == 0 {
+        return Vec::new();
+    }
+    let fifth = highway.h / CURTAIN_SHARE_DENOMINATOR;
+    let span = |y: i32, h: u32| Rect {
+        x: highway.x,
+        y,
+        w: highway.w,
+        h,
+    };
+    match curtain {
+        LaneCurtain::Full => vec![*highway],
+        LaneCurtain::Hidden => {
+            vec![span(highway.y, highway.h - fifth)]
+        }
+        LaneCurtain::Sudden => {
+            vec![span(highway.y + highway.h as i32 - fifth as i32, fifth)]
+        }
+        LaneCurtain::Dark => {
+            vec![span(highway.y + (2 * fifth) as i32, fifth)]
+        }
+        LaneCurtain::ReverseDark => vec![
+            span(highway.y, 2 * fifth),
+            span(highway.y + highway.h as i32 - (2 * fifth) as i32, 2 * fifth),
+        ],
     }
 }
 
@@ -198,5 +280,171 @@ mod tests {
         };
         blit_rgb555(&mut frame, &short, 5, 5, None);
         assert_eq!(frame.buf, vec![0u32; 4]);
+    }
+
+    fn highway() -> Rect {
+        Rect {
+            x: 10,
+            y: 0,
+            w: 70,
+            h: 100,
+        }
+    }
+
+    #[test]
+    fn full_curtain_keeps_the_whole_highway() {
+        assert_eq!(
+            visible_spans(LaneCurtain::Full, &highway()),
+            vec![highway()]
+        );
+    }
+
+    #[test]
+    fn hidden_curtain_covers_the_bottom_fifth() {
+        assert_eq!(
+            visible_spans(LaneCurtain::Hidden, &highway()),
+            vec![Rect {
+                x: 10,
+                y: 0,
+                w: 70,
+                h: 80,
+            }]
+        );
+    }
+
+    #[test]
+    fn sudden_curtain_shows_only_the_bottom_fifth() {
+        assert_eq!(
+            visible_spans(LaneCurtain::Sudden, &highway()),
+            vec![Rect {
+                x: 10,
+                y: 80,
+                w: 70,
+                h: 20,
+            }]
+        );
+    }
+
+    #[test]
+    fn dark_curtain_shows_only_the_middle_fifth() {
+        assert_eq!(
+            visible_spans(LaneCurtain::Dark, &highway()),
+            vec![Rect {
+                x: 10,
+                y: 40,
+                w: 70,
+                h: 20,
+            }]
+        );
+    }
+
+    #[test]
+    fn reverse_dark_curtain_splits_top_and_bottom_fifths() {
+        assert_eq!(
+            visible_spans(LaneCurtain::ReverseDark, &highway()),
+            vec![
+                Rect {
+                    x: 10,
+                    y: 0,
+                    w: 70,
+                    h: 40,
+                },
+                Rect {
+                    x: 10,
+                    y: 60,
+                    w: 70,
+                    h: 40,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_highway_has_no_visible_spans() {
+        let flat = Rect {
+            x: 0,
+            y: 0,
+            w: 70,
+            h: 0,
+        };
+        assert!(visible_spans(LaneCurtain::Sudden, &flat).is_empty());
+    }
+
+    #[test]
+    fn clipped_blit_drops_pixels_outside_the_curtain() {
+        // 1x4 red note strip blitted over the whole highway.
+        let sprite = Sprite {
+            pixels: &[0x7C00, 0x7C00, 0x7C00, 0x7C00],
+            w: 1,
+            h: 4,
+            stride: 1,
+        };
+        let red = pack_xrgb(255, 0, 0);
+        for curtain in [LaneCurtain::Sudden, LaneCurtain::Dark] {
+            let spans = visible_spans(
+                curtain,
+                &Rect {
+                    x: 0,
+                    y: 0,
+                    w: 1,
+                    h: 20,
+                },
+            );
+            assert_eq!(spans.len(), 1);
+            let mut buf = vec![0u32; 20];
+            let mut frame = Frame {
+                buf: &mut buf,
+                w: 1,
+                h: 20,
+            };
+            blit_rgb555_clipped(&mut frame, &sprite, 0, 16, None, spans.first());
+            let lit: Vec<usize> = frame
+                .buf
+                .iter()
+                .enumerate()
+                .filter(|(_, pixel)| **pixel == red)
+                .map(|(row, _)| row)
+                .collect();
+            match curtain {
+                LaneCurtain::Sudden => assert_eq!(lit, vec![16, 17, 18, 19]),
+                _ => assert_eq!(lit, Vec::<usize>::new()),
+            }
+        }
+    }
+
+    #[test]
+    fn clipped_blit_without_clip_matches_plain_blit() {
+        let sprite = Sprite {
+            pixels: &[0x7C00, 0x03E0],
+            w: 2,
+            h: 1,
+            stride: 2,
+        };
+        let mut plain = vec![0u32; 2];
+        let mut clipped = vec![0u32; 2];
+        blit_rgb555(
+            &mut Frame {
+                buf: &mut plain,
+                w: 2,
+                h: 1,
+            },
+            &sprite,
+            0,
+            0,
+            None,
+        );
+        blit_rgb555_clipped(
+            &mut Frame {
+                buf: &mut clipped,
+                w: 2,
+                h: 1,
+            },
+            &sprite,
+            0,
+            0,
+            None,
+            None,
+        );
+        assert_eq!(plain, clipped);
     }
 }
