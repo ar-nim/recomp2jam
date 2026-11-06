@@ -8,7 +8,8 @@ Pick one branch:
 
 - Code in `crates/` → crate map in `docs/architecture.md`.
 - RE findings → notes in `docs/` first, then code; method in
-  `docs/reversing.md`, format specs in `docs/file-formats/`.
+  `docs/reversing.md`, format specs in `docs/file-formats/`,
+  gameplay behavior in `docs/gameplay.md`.
 - Game data → local-only under `install-root/` + `extracted/`
   (git-ignored); layout in `docs/install-layout.md`, status in
   `docs/progress.md`.
