@@ -1,11 +1,11 @@
 //! Null-terminated UTF-8 string fields (`docs/net-protocol.md` §3b).
 //!
-//! Reference: Encore's `StringMessageField` defaults (open-source
-//! `SirusDoma/Encore` framework): UTF-8 bytes, one `0x00` terminator,
-//! no length prefix, at most 65535 bytes. Encoding truncates to the
-//! cap *including* the terminator; decoding consumes through the
-//! terminator and reports the bytes taken so the next field starts
-//! at the right offset.
+//! Reference: Encore's `StringMessageField` codec, verified live
+//! against the real implementation (probe `dotnet run` over
+//! `DefaultMessageCodec`): content chars fill up to `max_len`
+//! bytes on whole-char boundaries, then a `0x00` terminator iff
+//! room remains; over-long content is truncated (never errors).
+//! No length prefix. Default cap 65535 (`u16::MAX`).
 
 use super::error::Error;
 
@@ -15,43 +15,47 @@ pub const MAX_STRING_LEN: usize = u16::MAX as usize;
 const TERMINATOR: u8 = 0x00;
 
 /// Encode `value` as UTF-8 plus terminator, capped at `max_len`
-/// bytes including the terminator (mirrors Encore byte truncation).
+/// bytes: whole chars while they fit, then the terminator iff
+/// room remains (mirrors Encore byte-for-byte, probe-verified).
 #[must_use]
 pub fn encode_null_terminated(value: &str, max_len: usize) -> Vec<u8> {
-    let capacity = max_len.saturating_sub(1);
-    let mut bytes = value.as_bytes();
-    if bytes.len() > capacity {
-        bytes = &bytes[..capacity];
+    let mut out = Vec::new();
+    for ch in value.chars() {
+        let ch_len = ch.len_utf8();
+        if out.len() + ch_len > max_len {
+            break;
+        }
+        let mut buf = [0u8; 4];
+        out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
     }
-    let mut out = Vec::with_capacity(bytes.len() + 1);
-    out.extend_from_slice(bytes);
-    out.push(TERMINATOR);
+    if out.len() < max_len {
+        out.push(TERMINATOR);
+    }
     out
 }
 
 /// Decode one string from the front of `body`: bytes up to the first
 /// terminator (UTF-8), plus the terminator's own byte in `consumed`.
+/// No terminator within `max_len` means the field exactly fills its
+/// cap (probe-verified: 22-char titles carry no null) — consume
+/// `max_len` bytes as the string instead of erroring.
 ///
-/// An empty `body` decodes to empty (mirrors Encore); a body with no
-/// terminator inside `max_len` is malformed, not truncated.
+/// An empty `body` decodes to empty; invalid UTF-8 is an error.
 pub fn decode_null_terminated(body: &[u8], max_len: usize) -> Result<(String, usize), Error> {
     if body.is_empty() {
         return Ok((String::new(), 0));
     }
     let scan = body.len().min(max_len);
-    match body[..scan].iter().position(|byte| *byte == TERMINATOR) {
-        Some(end) => {
-            let text = std::str::from_utf8(&body[..end]).map_err(|_| Error::InvalidField {
-                field: "string field",
-                reason: "not valid UTF-8",
-            })?;
-            Ok((text.to_owned(), end + 1))
-        }
-        None => Err(Error::InvalidField {
-            field: "string field",
-            reason: "missing null terminator",
-        }),
-    }
+    let end = body[..scan]
+        .iter()
+        .position(|byte| *byte == TERMINATOR)
+        .unwrap_or(scan);
+    let consumed = if end < scan { end + 1 } else { end };
+    let text = std::str::from_utf8(&body[..end]).map_err(|_| Error::InvalidField {
+        field: "string field",
+        reason: "not valid UTF-8",
+    })?;
+    Ok((text.to_owned(), consumed))
 }
 
 #[cfg(test)]
@@ -75,10 +79,30 @@ mod string_codec_tests {
     }
 
     #[test]
-    fn truncates_to_cap_including_terminator() {
+    fn truncates_content_without_room_for_terminator() {
         assert_eq!(
             encode_null_terminated("abcdef", 4),
-            vec![0x61, 0x62, 0x63, 0x00]
+            vec![0x61, 0x62, 0x63, 0x64]
+        );
+    }
+
+    #[test]
+    fn drops_terminator_when_content_exactly_fills_cap() {
+        let title: String = "A".repeat(22);
+        assert_eq!(encode_null_terminated(&title, 22), vec![0x41; 22]);
+    }
+
+    #[test]
+    fn truncates_long_content_to_cap() {
+        let title: String = "A".repeat(40);
+        assert_eq!(encode_null_terminated(&title, 22), vec![0x41; 22]);
+    }
+
+    #[test]
+    fn truncates_multibyte_on_char_boundaries() {
+        assert_eq!(
+            encode_null_terminated("\u{e9}\u{e9}\u{e9}", 5),
+            vec![0xC3, 0xA9, 0xC3, 0xA9, 0x00]
         );
     }
 
@@ -99,14 +123,11 @@ mod string_codec_tests {
     }
 
     #[test]
-    fn rejects_body_without_terminator() {
-        assert_eq!(
-            decode_null_terminated(&[0x61, 0x62, 0x63], MAX_STRING_LEN),
-            Err(Error::InvalidField {
-                field: "string field",
-                reason: "missing null terminator"
-            })
-        );
+    fn decodes_cap_filling_body_without_terminator() {
+        let body = vec![0x41; 22];
+        let (text, consumed) = decode_null_terminated(&body, 22).unwrap();
+        assert_eq!(text, "A".repeat(22));
+        assert_eq!(consumed, 22);
     }
 
     #[test]

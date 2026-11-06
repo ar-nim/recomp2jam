@@ -13,6 +13,7 @@ pub enum Request {
     ChannelLogin = 1004,
     SessionKeys = 1007,
     GetCharacterInfo = 2000,
+    CreateRoom = 2004,
     Terminate = 65520,
 }
 
@@ -32,6 +33,7 @@ impl Request {
             1004 => Some(Self::ChannelLogin),
             1007 => Some(Self::SessionKeys),
             2000 => Some(Self::GetCharacterInfo),
+            2004 => Some(Self::CreateRoom),
             65520 => Some(Self::Terminate),
             _ => None,
         }
@@ -76,6 +78,7 @@ pub enum Response {
     ChannelLogin = 1005,
     SessionKeys = 1008,
     GetCharacterInfo = 2001,
+    CreateRoom = 2006,
 }
 
 impl Response {
@@ -97,6 +100,31 @@ impl Response {
             1005 => Some(Self::ChannelLogin),
             1008 => Some(Self::SessionKeys),
             2001 => Some(Self::GetCharacterInfo),
+            2006 => Some(Self::CreateRoom),
+            _ => None,
+        }
+    }
+}
+
+/// Server-to-client broadcasts (Phase 2 subset).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u16)]
+pub enum Event {
+    RoomCreated = 2007,
+}
+
+impl Event {
+    /// Wire value on the frame.
+    #[must_use]
+    pub fn id(self) -> u16 {
+        self as u16
+    }
+
+    /// Resolve a received id. `None` means not a known broadcast.
+    #[must_use]
+    pub fn from_id(id: u16) -> Option<Self> {
+        match id {
+            2007 => Some(Self::RoomCreated),
             _ => None,
         }
     }
@@ -133,6 +161,14 @@ mod tests {
         assert_eq!(Response::from_id(1003), Some(Response::GetChannelList));
         assert_eq!(Response::from_id(1008), Some(Response::SessionKeys));
         assert_eq!(Response::from_id(1002), None);
+    }
+
+    #[test]
+    fn resolves_room_ids() {
+        assert_eq!(Request::from_id(2004), Some(Request::CreateRoom));
+        assert_eq!(Response::from_id(2006), Some(Response::CreateRoom));
+        assert_eq!(Event::from_id(2007), Some(Event::RoomCreated));
+        assert_eq!(Event::from_id(2006), None);
     }
 
     #[test]
