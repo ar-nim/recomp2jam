@@ -126,6 +126,17 @@ pub fn load_archive_sprite(archive: &[u8], entry_name: &str) -> Option<AvatarFig
     Some(figure)
 }
 
+/// Find one avatar-shop row by id (file order; `None` when unknown).
+/// Single-lookup companion to the bulk map inside [`load_worn_figure`];
+/// side screens list equipment through it.
+#[must_use]
+pub fn avatar_item_by_id(
+    table: &AvatarItemTable,
+    item_id: u32,
+) -> Option<&o2jam_file::AvatarItemRow> {
+    table.rows.iter().find(|row| row.item_id == item_id)
+}
+
 /// Build the worn figure for an equipment table: per nonzero item
 /// id (in slot order) resolve the item row, pick its wear sprites,
 /// and stack every decodable body as layers. Unresolvable pieces —
@@ -583,6 +594,18 @@ mod avatar_figure_tests {
         assert_eq!(figure.len(), 1);
         assert!(load_archive_sprite(&archive, "Missing.ojs").is_none());
         assert!(load_archive_sprite(b"garbage", "Logo.ojs").is_none());
+    }
+
+    #[test]
+    fn avatar_item_by_id_finds_rows_in_file_order() {
+        let table = o2jam_file::AvatarItemTable {
+            rows: vec![
+                item_row(5, &["icon.oji", "icon.oji"]),
+                item_row(6, &["icon.oji", "icon.oji"]),
+            ],
+        };
+        assert_eq!(avatar_item_by_id(&table, 6).unwrap().item_id, 6);
+        assert!(avatar_item_by_id(&table, 999).is_none());
     }
 
     #[test]
