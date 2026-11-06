@@ -5,22 +5,28 @@
 //! plus jam level `X` VERIFIED (`FUN_00570510` / `FUN_00570260`);
 //! long-note release documented as played (head hit + tail release).
 //!
-//! Life bar: documented only, no model. Per-judgement life deltas are
-//! UNVERIFIED (no write site; candidate table at file `0x35e1a0` has no
-//! `.text` reader) so they stay out of code. VERIFIED anchors live in
-//! `docs/gameplay.md`: `Life_gauge_*_bar.ojs` art, per-hit Jam (4014
-//! arg 1) vs tick-driven Life (4014 arg 0), `SubmitScore` (4016) field
-//! layout; the 4015 peer-life store is OPEN.
+//! Life bar: local per-judgement deltas stay UNVERIFIED (no write site;
+//! candidate table at file `0x35e1a0` has no `.text` reader) so they stay
+//! out of code. The 4015 peer-life/rank mirror lives in [`PeerBars`]
+//! (VERIFIED handler shape, dossier `rea-4015-ghidra`). VERIFIED anchors
+//! live in `docs/gameplay.md`: `Life_gauge_*_bar.ojs` art, per-hit Jam
+//! (4014 arg 1) vs tick-driven Life (4014 arg 0), `SubmitScore` (4016)
+//! field layout.
 
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
 pub mod chart;
 pub mod lane_effect;
+pub mod peer;
 pub use chart::{
     build_level_chart, BackingNote, LevelChart, MeterChange, TempoChange, TempoMap, TimedHit,
 };
 pub use lane_effect::{measure_index_of_tick, LaneMap, MeasureReshuffle};
+pub use peer::{
+    PeerBars, QueueEvent, RankDelivery, LIFE_MAX, PEER_SLOT_COUNT, QUEUE_CATEGORY_PEER, STAT_JAM,
+    STAT_LIFE,
+};
 
 /// One triggered sound: a lane hit or a backing note whose onset
 /// time has been reached by the song clock.
