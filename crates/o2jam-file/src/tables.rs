@@ -439,15 +439,14 @@ pub struct OjnMidTriple {
 /// clears use `0x452a00`. The STEP2 handler (VA `0x43f7e3`/file
 /// `0x3f7e3`) stores `code - 0x2720B021` at dialog `+0x6c0`.
 ///
-/// The entry `+0x4` population site (the `+0x194` copy) is not yet
-/// pinned — OPEN: the Table 5 loader loop writes only `+0x190`/`+0x194`
-/// (files `0x7ac77..0x7acf6`), and the `0x4441f0` entry builder (file
-/// `0x441f0`) writes `+0x205/+0x20d/+0x20e/+0x210/+0x212/+0x213`/`+0x214`
-/// with no `+0x4` store in its span (surveyed files
-/// `0x35540..0x35960`); no direct `0x194`-to-`0x4` register copy exists
-/// binary-wide. Strongest lead: the dialog `+0x640` master fill at VA
-/// `0x4445cd` (file `0x445cd`) from stack-built `0x238` entries.
-/// (Static disassembly survey; REA dossier TBD.)
+/// The entry `+0x4` writer is pinned: the `0x4441f0` entry builder
+/// (file `0x441f0`) stores `entry+0x4 = song+0x194` at VA `0x44422e`
+/// (file `0x4422e`) from the by-value `0x1b4` song-record copy, then
+/// appends the `0x238` entry via `0x452850` into dialog `+0x640` at
+/// VA `0x4445cd` (file `0x445cd`) or dialog `+0x680` at VA `0x4445e7`
+/// (file `0x445e7`). Dialog `+0x690` producers are five `0x452850`
+/// appends in the song-entry builder: files `0x4298d` / `0x429e3` /
+/// `0x42c05` / `0x42de8` / `0x42e13` (docs/file-formats/ojn.md).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OjnMidTagEntry {
     /// Song id this entry belongs to.
