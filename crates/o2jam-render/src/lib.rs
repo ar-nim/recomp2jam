@@ -710,6 +710,173 @@ fn blit_cover_pixel(
     frame.buf[dest_y as usize * frame.w + dest_x as usize] = pack_xrgb(r, g, b);
 }
 
+/// Rect of a sprite body placed at its record anchor (`ax`, `ay` top-left,
+/// `w` x `h` extent): the native-space footprint one `.ojs` image covers
+/// when blitted 1:1 (recipe step 7). Single-image bodies duplicate their
+/// `.bnd` rect byte-exact here (`Dialog_Information.ojs` at `(241,206)`
+/// 318x187 == rect 0), so callers can compare this against the bound rect
+/// directly. Saturates absurd extents instead of wrapping.
+#[must_use]
+pub fn rect_at_anchor(ax: i32, ay: i32, w: usize, h: usize) -> Rect {
+    Rect {
+        x: ax,
+        y: ay,
+        w: u32::try_from(w).unwrap_or(u32::MAX),
+        h: u32::try_from(h).unwrap_or(u32::MAX),
+    }
+}
+
+/// Whether a native point lands inside `rect` (exclusive far edges).
+#[must_use]
+fn rect_contains(rect: &Rect, x: i32, y: i32) -> bool {
+    let inside_x = x >= rect.x
+        && rect
+            .w
+            .try_into()
+            .ok()
+            .and_then(|w: i32| rect.x.checked_add(w))
+            .is_some_and(|far| x < far);
+    let inside_y = y >= rect.y
+        && rect
+            .h
+            .try_into()
+            .ok()
+            .and_then(|h: i32| rect.y.checked_add(h))
+            .is_some_and(|far| y < far);
+    inside_x && inside_y
+}
+
+/// Blit `image` 1:1 at its record anchor (`ax`, `ay` top-left) into `rect`
+/// on the native 800x600 canvas, skipping `colorkey` words (recipe step 7:
+/// only `0x0000` / `0x7D5F` occur on real 7.55 bodies). Pixels outside
+/// `rect` stay untouched, so one multi-image body stages each image through
+/// its own bound rect; single-image bodies land byte-exact because their
+/// anchor duplicates the rect. Clips to the frame; ignores empty images.
+/// Coordinates are absolute native pixels, top-left origin.
+pub fn blit_anchor_in_rect(
+    frame: &mut Frame<'_>,
+    image: &Rgb555Image,
+    ax: i32,
+    ay: i32,
+    colorkey: u16,
+    rect: &Rect,
+) {
+    if image.w == 0
+        || image.h == 0
+        || rect.w == 0
+        || rect.h == 0
+        || frame.buf.len() < frame.w.saturating_mul(frame.h)
+        || image.words.len() < image.w.saturating_mul(image.h)
+    {
+        return;
+    }
+    for row in 0..image.h {
+        paint_anchor_row(frame, image, ax, ay, colorkey, rect, row);
+    }
+}
+
+/// One anchor-blit destination: shared per-row placement and clip.
+struct AnchorJob<'a> {
+    ax: i32,
+    dest_y: i32,
+    colorkey: u16,
+    rect: &'a Rect,
+}
+
+/// Blit one anchor-blit source row at its native destination row.
+fn paint_anchor_row(
+    frame: &mut Frame<'_>,
+    image: &Rgb555Image,
+    ax: i32,
+    ay: i32,
+    colorkey: u16,
+    rect: &Rect,
+    row: usize,
+) {
+    let Ok(offset) = i32::try_from(row) else {
+        return;
+    };
+    let Some(dest_y) = ay.checked_add(offset) else {
+        return;
+    };
+    let job = AnchorJob {
+        ax,
+        dest_y,
+        colorkey,
+        rect,
+    };
+    for col in 0..image.w {
+        paint_anchor_pixel(frame, image, &job, row, col);
+    }
+}
+
+/// Blit one anchor-blit pixel when it lands inside `rect` and the frame.
+fn paint_anchor_pixel(
+    frame: &mut Frame<'_>,
+    image: &Rgb555Image,
+    job: &AnchorJob<'_>,
+    row: usize,
+    col: usize,
+) {
+    let Ok(offset) = i32::try_from(col) else {
+        return;
+    };
+    let Some(dest_x) = job.ax.checked_add(offset) else {
+        return;
+    };
+    if !rect_contains(job.rect, dest_x, job.dest_y) {
+        return;
+    }
+    if dest_x < 0 || job.dest_y < 0 {
+        return;
+    }
+    let Ok(frame_x) = usize::try_from(dest_x) else {
+        return;
+    };
+    let Ok(frame_y) = usize::try_from(job.dest_y) else {
+        return;
+    };
+    if frame_x >= frame.w || frame_y >= frame.h {
+        return;
+    }
+    let Some(word) = image
+        .words
+        .get(row.saturating_mul(image.w).saturating_add(col))
+    else {
+        return;
+    };
+    if *word == job.colorkey {
+        return;
+    }
+    let (r, g, b) = expand_rgb555(*word);
+    let Some(at) = frame_y
+        .checked_mul(frame.w)
+        .and_then(|base| base.checked_add(frame_x))
+    else {
+        return;
+    };
+    if let Some(slot) = frame.buf.get_mut(at) {
+        *slot = pack_xrgb(r, g, b);
+    }
+}
+
+/// Fill `background`, then paint `layers` back to front in file order over
+/// the native 800x600 canvas (recipe step 8): rect 0 holds the fullscreen
+/// back art on every full state, so the first layer lands first and later
+/// entries cover it. Returns `false` (leaving `frame` untouched) when the
+/// frame is not native, so callers never stretch a scene by accident.
+pub fn paint_native_scene(
+    frame: &mut Frame<'_>,
+    background: u32,
+    layers: &[SceneLayer<'_>],
+) -> bool {
+    if !is_native_frame(frame.w, frame.h) {
+        return false;
+    }
+    paint_scene_layers(frame, background, layers);
+    true
+}
+
 /// One sprite layer painted into a scene frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SceneLayer<'a> {
@@ -2504,5 +2671,158 @@ mod tests {
         );
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert_eq!(buf[1], pack_xrgb(0, 255, 0));
+    }
+
+    #[test]
+    fn anchor_rect_marks_native_footprint() {
+        assert_eq!(
+            rect_at_anchor(241, 206, 318, 187),
+            Rect {
+                x: 241,
+                y: 206,
+                w: 318,
+                h: 187,
+            }
+        );
+        assert_eq!(
+            rect_at_anchor(751, 554, 42, 42),
+            rect_from_corners(751, 554, 793, 596)
+        );
+    }
+
+    #[test]
+    fn anchor_blit_lands_byte_exact_on_matching_rect() {
+        let image = Rgb555Image::decode(&[0x00, 0x7C, 0xE0, 0x03], 2, 1).unwrap();
+        let mut buf = vec![0u32; 4 * 2];
+        blit_anchor_in_rect(
+            &mut Frame {
+                buf: &mut buf,
+                w: 4,
+                h: 2,
+            },
+            &image,
+            1,
+            0,
+            0xFFFF,
+            &Rect {
+                x: 1,
+                y: 0,
+                w: 2,
+                h: 1,
+            },
+        );
+        assert_eq!(buf[1], pack_xrgb(255, 0, 0));
+        assert_eq!(buf[2], pack_xrgb(0, 255, 0));
+        assert_eq!(buf[0], 0);
+        assert_eq!(buf[3], 0);
+    }
+
+    #[test]
+    fn anchor_blit_clips_to_rect_and_skips_colorkey() {
+        let image = Rgb555Image::decode(&[0x00, 0x7C, 0x00, 0x00, 0xE0, 0x03], 3, 1).unwrap();
+        let mut buf = vec![0x123456u32; 3];
+        blit_anchor_in_rect(
+            &mut Frame {
+                buf: &mut buf,
+                w: 3,
+                h: 1,
+            },
+            &image,
+            0,
+            0,
+            0x0000,
+            &Rect {
+                x: 0,
+                y: 0,
+                w: 2,
+                h: 1,
+            },
+        );
+        assert_eq!(buf[0], pack_xrgb(255, 0, 0));
+        assert_eq!(buf[1], 0x123456);
+        assert_eq!(buf[2], 0x123456);
+    }
+
+    #[test]
+    fn anchor_blit_ignores_empty_geometry() {
+        let image = Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap();
+        let mut buf = vec![0x123456u32; 4];
+        blit_anchor_in_rect(
+            &mut Frame {
+                buf: &mut buf,
+                w: 2,
+                h: 2,
+            },
+            &image,
+            0,
+            0,
+            0xFFFF,
+            &Rect {
+                x: 0,
+                y: 0,
+                w: 0,
+                h: 2,
+            },
+        );
+        assert_eq!(buf, vec![0x123456u32; 4]);
+    }
+
+    #[test]
+    fn native_scene_paints_file_order_over_background() {
+        let native_w = usize::try_from(NATIVE_WIDTH).unwrap_or(0);
+        let native_h = usize::try_from(NATIVE_HEIGHT).unwrap_or(0);
+        let red = Rgb555Image::decode(&[0x00, 0x7C, 0x00, 0x7C], 2, 1).unwrap();
+        let green = Rgb555Image::decode(&[0xE0, 0x03, 0xE0, 0x03], 2, 1).unwrap();
+        let mut buf = vec![0u32; native_w * native_h];
+        let painted = paint_native_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: native_w,
+                h: native_h,
+            },
+            0x000000,
+            &[
+                SceneLayer {
+                    image: &red,
+                    colorkey: 0xFFFF,
+                    dest: Rect {
+                        x: 0,
+                        y: 0,
+                        w: 2,
+                        h: 1,
+                    },
+                },
+                SceneLayer {
+                    image: &green,
+                    colorkey: 0xFFFF,
+                    dest: Rect {
+                        x: 1,
+                        y: 0,
+                        w: 1,
+                        h: 1,
+                    },
+                },
+            ],
+        );
+        assert!(painted);
+        assert_eq!(buf[0], pack_xrgb(255, 0, 0));
+        assert_eq!(buf[1], pack_xrgb(0, 255, 0));
+        assert_eq!(buf[native_w], 0x000000);
+    }
+
+    #[test]
+    fn native_scene_rejects_off_size_frames() {
+        let mut buf = vec![0x123456u32; 8 * 8];
+        let painted = paint_native_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 8,
+                h: 8,
+            },
+            0x000000,
+            &[],
+        );
+        assert!(!painted);
+        assert_eq!(buf, vec![0x123456u32; 8 * 8]);
     }
 }
