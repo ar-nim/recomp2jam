@@ -101,6 +101,9 @@ empty_message!(Ping, 6001);
 empty_message!(SubscriptionAlert, 50);
 empty_message!(ForceReauthorize, 51);
 empty_message!(MultiSessionError, 52);
+// `GetCharacterInfo` 2000 takes no parameters (its Memoryer handler
+// reads nothing but the session), so the request is an empty body.
+empty_message!(GetCharacterInfo, 2000);
 
 /// Client identifier every 7.55 client sends (Memoryer `AuthRequest.Id`,
 /// byte-identical to the in-exe constant at file `0x2472c8`).
@@ -110,13 +113,14 @@ pub const MEMORYER_CLIENT_ID: &str = "726PNA-B1YW-28ZG9M-I5SC-Q0OPM6";
 /// `AuthGenderCodec` is decode-only and reads `"m"`/`"1"`, `"f"`/`"0"`,
 /// else `Any`). The exe's exact byte for this field is unverified, so
 /// both spellings decode and we send the numeric one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Gender {
     /// `"0"` on the wire.
     Female,
     /// `"1"` on the wire.
     Male,
     /// Empty string on the wire (decodes back to `Any`).
+    #[default]
     Any,
 }
 
@@ -128,6 +132,27 @@ impl Gender {
             Self::Female => "0",
             Self::Male => "1",
             Self::Any => "",
+        }
+    }
+
+    /// Byte form (`Encore.Metadata.Gender`: Female 0, Male 1, Any 2).
+    #[must_use]
+    pub fn as_byte(self) -> u8 {
+        match self {
+            Self::Female => 0,
+            Self::Male => 1,
+            Self::Any => 2,
+        }
+    }
+
+    /// Interpret a gender byte. `None` means out of range.
+    #[must_use]
+    pub fn from_byte(byte: u8) -> Option<Self> {
+        match byte {
+            0 => Some(Self::Female),
+            1 => Some(Self::Male),
+            2 => Some(Self::Any),
+            _ => None,
         }
     }
 
@@ -669,6 +694,11 @@ mod command_consistency_tests {
         assert_eq!(
             MultiSessionError::COMMAND,
             Response::MultiSessionError as u16
+        );
+        assert_eq!(GetCharacterInfo::COMMAND, Request::GetCharacterInfo as u16);
+        assert_eq!(
+            crate::character::CharacterInfo::COMMAND,
+            Response::GetCharacterInfo as u16
         );
     }
 }

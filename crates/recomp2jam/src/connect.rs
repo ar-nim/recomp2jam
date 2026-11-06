@@ -11,7 +11,7 @@ use std::net::SocketAddr;
 use anyhow::{bail, Context, Result};
 use o2jam_net::{
     AuthResponse, AuthResult, AuthorizeRequest, ChannelList, ChannelLogin, ChannelLoginResponse,
-    ChannelState, GatewayConnection, Gender, Request, WireMessage,
+    ChannelState, CharacterInfo, GatewayConnection, Gender, Request, WireMessage,
 };
 
 /// Login options (see `recomp2jam connect --help`).
@@ -32,6 +32,8 @@ pub struct ConnectOptions {
     pub relay_key2: i32,
     /// `(gateway, channel)` to enter after listing; `None` lists only.
     pub channel: Option<(i16, i16)>,
+    /// Fetch character info after authorizing.
+    pub character: bool,
 }
 
 /// What the login flow learned.
@@ -39,6 +41,8 @@ pub struct ConnectOptions {
 pub struct ConnectReport {
     /// Authorize result code (always success — else this errors).
     pub auth_code: u32,
+    /// Character info, when requested.
+    pub character: Option<CharacterInfo>,
     /// Channels the gateway listed.
     pub channels: Vec<ChannelState>,
     /// Channel login answer, when a channel was requested.
@@ -61,6 +65,11 @@ pub fn connect_and_login(options: &ConnectOptions) -> Result<ConnectReport> {
     let mut gateway = GatewayConnection::connect(address.as_str())
         .with_context(|| format!("connecting to {address}"))?;
     let auth_code = authorize(&mut gateway, options).context("authorizing")?;
+    let character = if options.character {
+        Some(fetch_character(&mut gateway).context("fetching character")?)
+    } else {
+        None
+    };
     let channels = fetch_channels(&mut gateway).context("listing channels")?;
     let channel_login = match options.channel {
         Some((gateway_id, channel_id)) => Some(
@@ -70,6 +79,7 @@ pub fn connect_and_login(options: &ConnectOptions) -> Result<ConnectReport> {
     };
     Ok(ConnectReport {
         auth_code,
+        character,
         channels,
         channel_login,
     })
@@ -113,6 +123,15 @@ fn authorize(gateway: &mut GatewayConnection, options: &ConnectOptions) -> Resul
         Some(AuthResult::Success) => Ok(response.result_code),
         _ => bail!("authorize rejected: {}", name_result(response.result_code)),
     }
+}
+
+fn fetch_character(gateway: &mut GatewayConnection) -> Result<CharacterInfo> {
+    let frame = gateway.exchange(Request::GetCharacterInfo.id(), &[], CharacterInfo::COMMAND)?;
+    let info = CharacterInfo::decode_frame(&frame)?;
+    if info.invalid {
+        bail!("server flagged the account invalid");
+    }
+    Ok(info)
 }
 
 fn fetch_channels(gateway: &mut GatewayConnection) -> Result<Vec<ChannelState>> {
@@ -169,7 +188,7 @@ mod connect_flow_tests {
         decode_frame(&bytes).unwrap()
     }
 
-    fn test_options(port: u16, channel: Option<(i16, i16)>) -> ConnectOptions {
+    fn test_options(port: u16, channel: Option<(i16, i16)>, character: bool) -> ConnectOptions {
         ConnectOptions {
             host: "127.0.0.1".to_owned(),
             port,
@@ -179,6 +198,7 @@ mod connect_flow_tests {
             relay_key1: 0,
             relay_key2: 0,
             channel,
+            character,
         }
     }
 
@@ -216,7 +236,7 @@ mod connect_flow_tests {
             };
             stream.write_all(&entered.encode()).unwrap();
         });
-        let report = connect_and_login(&test_options(port, Some((1, 2)))).unwrap();
+        let report = connect_and_login(&test_options(port, Some((1, 2)), false)).unwrap();
         server.join().unwrap();
         assert_eq!(report.auth_code, 0);
         assert!(report.channels.is_empty());
@@ -227,6 +247,41 @@ mod connect_flow_tests {
                 restricted: Some(false),
             })
         );
+    }
+
+    #[test]
+    fn fetches_character_after_authorize() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::Authorize.id());
+            let authed = AuthResponse {
+                result_code: 0,
+                tail: vec![],
+            };
+            stream.write_all(&authed.encode()).unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetCharacterInfo.id());
+            let hero = CharacterInfo {
+                nickname: "tester".to_owned(),
+                gender: Gender::Male,
+                level: 3,
+                ..Default::default()
+            };
+            stream.write_all(&hero.encode()).unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetChannelList.id());
+            let listed = ChannelList { channels: vec![] };
+            stream.write_all(&listed.encode()).unwrap();
+        });
+        let report = connect_and_login(&test_options(port, None, true)).unwrap();
+        server.join().unwrap();
+        let hero = report.character.unwrap();
+        assert_eq!(hero.nickname, "tester");
+        assert_eq!(hero.level, 3);
+        assert!(report.channel_login.is_none());
     }
 
     #[test]
@@ -245,7 +300,7 @@ mod connect_flow_tests {
             };
             stream.write_all(&rejected.encode()).unwrap();
         });
-        let outcome = connect_and_login(&test_options(port, None));
+        let outcome = connect_and_login(&test_options(port, None, false));
         server.join().unwrap();
         // Debug format carries the whole anyhow chain (`to_string`
         // shows only the outer context).
