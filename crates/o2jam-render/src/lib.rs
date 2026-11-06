@@ -150,8 +150,9 @@ pub fn stretch_blit(
     }
 }
 
-/// Blit a sprite at `(dx, dy)`, skipping `colorkey` pixels when set.
-/// Output clips to the frame.
+/// Blit a sprite at `(dx, dy)`, skipping `colorkey` pixels when set
+/// (the sprite's u16 key field, compared after decode). Output clips
+/// to the frame.
 pub fn blit_rgb555(
     frame: &mut Frame<'_>,
     sprite: &Sprite<'_>,
@@ -179,6 +180,7 @@ pub fn blit_rgb555_clipped(
     {
         return;
     }
+    let key = colorkey.map(decoded_xrgb);
     for row in 0..sprite.h {
         let dest_y = dy + row as i32;
         if dest_y < 0 || dest_y >= frame.h as i32 || is_clipped_y(clip, dest_y) {
@@ -189,12 +191,11 @@ pub fn blit_rgb555_clipped(
             if dest_x < 0 || dest_x >= frame.w as i32 || is_clipped_x(clip, dest_x) {
                 continue;
             }
-            let pixel = sprite.pixels[row * sprite.stride + col];
-            if colorkey == Some(pixel) {
+            let rgb = decoded_xrgb(sprite.pixels[row * sprite.stride + col]);
+            if key == Some(rgb) {
                 continue;
             }
-            let (r, g, b) = expand_rgb555(pixel);
-            frame.buf[dest_y as usize * frame.w + dest_x as usize] = pack_xrgb(r, g, b);
+            frame.buf[dest_y as usize * frame.w + dest_x as usize] = rgb;
         }
     }
 }
@@ -661,17 +662,19 @@ fn paint_present_rows(window: &mut [u32], window_w: usize, native: &[u32], layou
     }
 }
 
-/// Blit an RGB555 image stretched into `dest`, skipping `colorkey`
-/// words. A size match is a plain 1:1 blit; otherwise each dest
-/// pixel samples its nearest source pixel.
+/// Blit an RGB555 image stretched into `dest`, skipping decoded
+/// `colorkey` words (the sprite file's u16 key field). A size match
+/// is a plain 1:1 blit; otherwise each dest pixel samples its nearest
+/// source pixel.
 #[allow(clippy::cast_possible_wrap)]
 pub fn blit_image_in_rect(frame: &mut Frame<'_>, image: &Rgb555Image, colorkey: u16, dest: &Rect) {
     if !blit_target_ready(frame, image, dest) {
         return;
     }
+    let key = decoded_xrgb(colorkey);
     for row in 0..dest.h as usize {
         for col in 0..dest.w as usize {
-            blit_cover_pixel(frame, image, colorkey, dest, row, col);
+            blit_cover_pixel(frame, image, key, dest, row, col);
         }
     }
 }
@@ -691,7 +694,7 @@ fn blit_target_ready(frame: &Frame<'_>, image: &Rgb555Image, dest: &Rect) -> boo
 fn blit_cover_pixel(
     frame: &mut Frame<'_>,
     image: &Rgb555Image,
-    colorkey: u16,
+    key: u32,
     dest: &Rect,
     row: usize,
     col: usize,
@@ -701,13 +704,14 @@ fn blit_cover_pixel(
     if dest_x < 0 || dest_y < 0 || dest_x >= frame.w as i32 || dest_y >= frame.h as i32 {
         return;
     }
-    let word = image.words[stretch_index(row, dest.h as usize, image.h) * image.w
-        + stretch_index(col, dest.w as usize, image.w)];
-    if word == colorkey {
+    let rgb = decoded_xrgb(
+        image.words[stretch_index(row, dest.h as usize, image.h) * image.w
+            + stretch_index(col, dest.w as usize, image.w)],
+    );
+    if rgb == key {
         return;
     }
-    let (r, g, b) = expand_rgb555(word);
-    frame.buf[dest_y as usize * frame.w + dest_x as usize] = pack_xrgb(r, g, b);
+    frame.buf[dest_y as usize * frame.w + dest_x as usize] = rgb;
 }
 
 /// Rect of a sprite body placed at its record anchor (`ax`, `ay` top-left,
@@ -715,7 +719,9 @@ fn blit_cover_pixel(
 /// when blitted 1:1 (recipe step 7). Single-image bodies duplicate their
 /// `.bnd` rect byte-exact here (`Dialog_Information.ojs` at `(241,206)`
 /// 318x187 == rect 0), so callers can compare this against the bound rect
-/// directly. Saturates absurd extents instead of wrapping.
+/// directly. Saturates absurd extents instead of wrapping. The rect
+/// pairs at load time only; draws clip to the viewport, not the rect
+/// (see `blit_anchor_in_rect`).
 #[must_use]
 pub fn rect_at_anchor(ax: i32, ay: i32, w: usize, h: usize) -> Rect {
     Rect {
@@ -726,145 +732,160 @@ pub fn rect_at_anchor(ax: i32, ay: i32, w: usize, h: usize) -> Rect {
     }
 }
 
-/// Whether a native point lands inside `rect` (exclusive far edges).
-#[must_use]
-fn rect_contains(rect: &Rect, x: i32, y: i32) -> bool {
-    let inside_x = x >= rect.x
-        && rect
-            .w
-            .try_into()
-            .ok()
-            .and_then(|w: i32| rect.x.checked_add(w))
-            .is_some_and(|far| x < far);
-    let inside_y = y >= rect.y
-        && rect
-            .h
-            .try_into()
-            .ok()
-            .and_then(|h: i32| rect.y.checked_add(h))
-            .is_some_and(|far| y < far);
-    inside_x && inside_y
+/// Target-space color of one source word: pixel words and the sprite
+/// file's u16 colorkey field both decode through here before the
+/// transparency compare — 7.55 compares after the 555-to-target
+/// decode, never against a raw-space literal such as `0x7D5F`. The
+/// decode is injective, so the match set equals raw word equality.
+fn decoded_xrgb(word: u16) -> u32 {
+    let (r, g, b) = expand_rgb555(word);
+    pack_xrgb(r, g, b)
 }
 
-/// Blit `image` 1:1 at its record anchor (`ax`, `ay` top-left) into `rect`
-/// on the native 800x600 canvas, skipping `colorkey` words (recipe step 7:
-/// only `0x0000` / `0x7D5F` occur on real 7.55 bodies). Pixels outside
-/// `rect` stay untouched, so one multi-image body stages each image through
-/// its own bound rect; single-image bodies land byte-exact because their
-/// anchor duplicates the rect. Clips to the frame; ignores empty images.
-/// Coordinates are absolute native pixels, top-left origin.
+/// Compat anchored draw under the old name: the 7.55 draw adds the
+/// record anchor to the staged position, so this blits `image` 1:1
+/// with its top-left at `(ax, ay)` — the offset from the staged
+/// `(0, 0)` a CCImageBox-style control uses — skipping decoded
+/// `colorkey` words and clipping to the frame only. `rect` is the
+/// bound `.bnd` rect, kept in the signature for callers: the draw
+/// never reads it, so pixels beyond the rect now paint and an empty
+/// rect no longer suppresses the blit. Coordinates are native
+/// pixels, top-left origin.
 pub fn blit_anchor_in_rect(
     frame: &mut Frame<'_>,
     image: &Rgb555Image,
     ax: i32,
     ay: i32,
     colorkey: u16,
-    rect: &Rect,
+    _rect: &Rect,
 ) {
-    if image.w == 0
-        || image.h == 0
-        || rect.w == 0
-        || rect.h == 0
-        || frame.buf.len() < frame.w.saturating_mul(frame.h)
-        || image.words.len() < image.w.saturating_mul(image.h)
-    {
-        return;
-    }
-    for row in 0..image.h {
-        paint_anchor_row(frame, image, ax, ay, colorkey, rect, row);
-    }
+    blit_image_at(frame, image, ax, ay, colorkey);
 }
 
-/// One anchor-blit destination: shared per-row placement and clip.
-struct AnchorJob<'a> {
-    ax: i32,
-    dest_y: i32,
-    colorkey: u16,
-    rect: &'a Rect,
-}
-
-/// Blit one anchor-blit source row at its native destination row.
-fn paint_anchor_row(
+/// Blit `image` 1:1 with its top-left at the destination
+/// `position + anchor`: the anchor is a per-frame signed offset added
+/// to the staged position (frame-record words +0/+2), never an
+/// absolute spot. Clips to the frame only — the viewport is the only
+/// draw bound. `colorkey` is the sprite file's u16 key field,
+/// compared after decode (see `decoded_xrgb`); empty images draw
+/// nothing.
+pub fn blit_image_anchored(
     frame: &mut Frame<'_>,
     image: &Rgb555Image,
-    ax: i32,
-    ay: i32,
+    position_x: i32,
+    position_y: i32,
+    anchor_x: i16,
+    anchor_y: i16,
     colorkey: u16,
-    rect: &Rect,
-    row: usize,
 ) {
-    let Ok(offset) = i32::try_from(row) else {
+    let Some(dx) = position_x.checked_add(i32::from(anchor_x)) else {
         return;
     };
-    let Some(dest_y) = ay.checked_add(offset) else {
+    let Some(dy) = position_y.checked_add(i32::from(anchor_y)) else {
         return;
     };
-    let job = AnchorJob {
-        ax,
-        dest_y,
-        colorkey,
-        rect,
+    blit_image_at(frame, image, dx, dy, colorkey);
+}
+
+/// Blit `image` 1:1 with its top-left at `(dx, dy)`, frame-clipped,
+/// skipping pixels whose decoded color equals `decoded_xrgb(colorkey)`.
+/// Shared core of the anchored draws.
+fn blit_image_at(frame: &mut Frame<'_>, image: &Rgb555Image, dx: i32, dy: i32, colorkey: u16) {
+    if !anchored_image_ready(frame, image) {
+        return;
+    }
+    let key = decoded_xrgb(colorkey);
+    for row in 0..image.h {
+        paint_anchored_row(frame, image, dx, dy, row, key);
+    }
+}
+
+/// Whether an anchored blit has nonempty geometry and backing stores.
+fn anchored_image_ready(frame: &Frame<'_>, image: &Rgb555Image) -> bool {
+    image.w > 0
+        && image.h > 0
+        && frame.buf.len() >= frame.w.saturating_mul(frame.h)
+        && image.words.len() >= image.w.saturating_mul(image.h)
+}
+
+/// Blit one source row at its frame destination row.
+fn paint_anchored_row(
+    frame: &mut Frame<'_>,
+    image: &Rgb555Image,
+    dx: i32,
+    dy: i32,
+    row: usize,
+    key: u32,
+) {
+    let Ok(row_offset) = i32::try_from(row) else {
+        return;
+    };
+    let Some(dest_y) = dy.checked_add(row_offset) else {
+        return;
     };
     for col in 0..image.w {
-        paint_anchor_pixel(frame, image, &job, row, col);
+        paint_anchored_pixel(frame, image, dx, dest_y, row, col, key);
     }
 }
 
-/// Blit one anchor-blit pixel when it lands inside `rect` and the frame.
-fn paint_anchor_pixel(
+/// Blit one anchored pixel when it lands inside the frame.
+fn paint_anchored_pixel(
     frame: &mut Frame<'_>,
     image: &Rgb555Image,
-    job: &AnchorJob<'_>,
+    dx: i32,
+    dest_y: i32,
     row: usize,
     col: usize,
+    key: u32,
 ) {
-    let Ok(offset) = i32::try_from(col) else {
+    let Ok(col_offset) = i32::try_from(col) else {
         return;
     };
-    let Some(dest_x) = job.ax.checked_add(offset) else {
+    let Some(dest_x) = dx.checked_add(col_offset) else {
         return;
     };
-    if !rect_contains(job.rect, dest_x, job.dest_y) {
+    if !dest_in_frame(frame, dest_x, dest_y) {
         return;
     }
-    if dest_x < 0 || job.dest_y < 0 {
+    let Some(rgb) = image
+        .words
+        .get(row.saturating_mul(image.w).saturating_add(col))
+        .copied()
+        .map(decoded_xrgb)
+    else {
+        return;
+    };
+    if rgb == key {
         return;
     }
+    write_anchored_pixel(frame, dest_x, dest_y, rgb);
+}
+
+/// Store one anchored pixel in the frame.
+fn write_anchored_pixel(frame: &mut Frame<'_>, dest_x: i32, dest_y: i32, rgb: u32) {
     let Ok(frame_x) = usize::try_from(dest_x) else {
         return;
     };
-    let Ok(frame_y) = usize::try_from(job.dest_y) else {
+    let Ok(frame_y) = usize::try_from(dest_y) else {
         return;
     };
-    if frame_x >= frame.w || frame_y >= frame.h {
-        return;
-    }
-    let Some(word) = image
-        .words
-        .get(row.saturating_mul(image.w).saturating_add(col))
-    else {
-        return;
-    };
-    if *word == job.colorkey {
-        return;
-    }
-    let (r, g, b) = expand_rgb555(*word);
-    let Some(at) = frame_y
+    if let Some(at) = frame_y
         .checked_mul(frame.w)
         .and_then(|base| base.checked_add(frame_x))
-    else {
-        return;
-    };
-    if let Some(slot) = frame.buf.get_mut(at) {
-        *slot = pack_xrgb(r, g, b);
+    {
+        if let Some(slot) = frame.buf.get_mut(at) {
+            *slot = rgb;
+        }
     }
 }
 
-/// Fill `background`, then paint `layers` back to front in file order over
-/// the native 800x600 canvas (recipe step 8): rect 0 holds the fullscreen
-/// back art on every full state, so the first layer lands first and later
-/// entries cover it. Returns `false` (leaving `frame` untouched) when the
-/// frame is not native, so callers never stretch a scene by accident.
+/// Fill `background`, then paint `layers` back to front in file order
+/// over the native 800x600 canvas (recipe step 8): the fullscreen back
+/// art enters first, so later layers cover it. Each layer blits 1:1 at
+/// its `dest` position — the 7.55 draw never stretches into the dest
+/// extents and never clips to a layout rect; the frame (viewport) is
+/// the only bound. Returns `false` (leaving `frame` untouched) when
+/// the frame is not native, so callers never compose at the wrong size.
 pub fn paint_native_scene(
     frame: &mut Frame<'_>,
     background: u32,
@@ -873,7 +894,16 @@ pub fn paint_native_scene(
     if !is_native_frame(frame.w, frame.h) {
         return false;
     }
-    paint_scene_layers(frame, background, layers);
+    fill_frame(frame, background);
+    for layer in layers {
+        blit_image_at(
+            frame,
+            layer.image,
+            layer.dest.x,
+            layer.dest.y,
+            layer.colorkey,
+        );
+    }
     true
 }
 
@@ -882,14 +912,19 @@ pub fn paint_native_scene(
 pub struct SceneLayer<'a> {
     /// Decoded sprite pixels.
     pub image: &'a Rgb555Image,
-    /// Transparent word of the source body.
+    /// Transparent word of the source body: the sprite file's u16 key
+    /// field, compared after decode (`decoded_xrgb`).
     pub colorkey: u16,
-    /// Frame-space destination (cover-blitted when sizes differ).
+    /// Frame-space position (top-left). Extents stay in the shape for
+    /// callers, but the draw never reads them: 1:1 blit at
+    /// `dest.x`/`dest.y`, viewport clipping only.
     pub dest: Rect,
 }
 
-/// Fill `background`, then paint layers back to front. Later layers
-/// cover earlier ones; colorkey pixels leave the canvas untouched.
+/// Fill `background`, then paint layers back to front through the
+/// legacy rect-cover blit (stretch into `dest`, viewport clipping).
+/// Kept for callers of the old shape; `paint_native_scene` is the
+/// exe-faithful scene painter.
 pub fn paint_scene_layers(frame: &mut Frame<'_>, background: u32, layers: &[SceneLayer<'_>]) {
     fill_frame(frame, background);
     for layer in layers {
@@ -991,7 +1026,8 @@ struct ScaledPixel {
     row: usize,
     dest_w: usize,
     dest_h: usize,
-    colorkey: Option<u16>,
+    /// Decoded key color, `None` for an opaque blit.
+    key: Option<u32>,
 }
 
 /// Frame position of one scaled sample, or None on overflow.
@@ -1014,13 +1050,14 @@ fn paint_scaled_pixel(frame: &mut Frame<'_>, sprite: &Sprite<'_>, dest: &Rect, p
     if !dest_in_frame(frame, dest_x, dest_y) {
         return;
     }
-    let word = sprite.pixels[stretch_index(pixel.row, pixel.dest_h, sprite.h) * sprite.stride
-        + stretch_index(pixel.col, pixel.dest_w, sprite.w)];
-    if pixel.colorkey == Some(word) {
+    let rgb = decoded_xrgb(
+        sprite.pixels[stretch_index(pixel.row, pixel.dest_h, sprite.h) * sprite.stride
+            + stretch_index(pixel.col, pixel.dest_w, sprite.w)],
+    );
+    if pixel.key == Some(rgb) {
         return;
     }
-    let (r, g, b) = expand_rgb555(word);
-    frame.buf[dest_y as usize * frame.w + dest_x as usize] = pack_xrgb(r, g, b);
+    frame.buf[dest_y as usize * frame.w + dest_x as usize] = rgb;
 }
 
 /// Blit a sprite stretched over dest, skipping colorkey pixels.
@@ -1034,6 +1071,7 @@ pub fn blit_rgb555_scaled(
     if !scaled_blit_ready(frame, sprite, dest) {
         return;
     }
+    let key = colorkey.map(decoded_xrgb);
     let dest_w = usize::try_from(dest.w).unwrap_or(0);
     let dest_h = usize::try_from(dest.h).unwrap_or(0);
     for row in 0..dest_h {
@@ -1047,7 +1085,7 @@ pub fn blit_rgb555_scaled(
                     row,
                     dest_w,
                     dest_h,
-                    colorkey,
+                    key,
                 },
             );
         }
@@ -1068,14 +1106,15 @@ fn paint_scaled_alpha_pixel(
     if !dest_in_frame(frame, dest_x, dest_y) {
         return;
     }
-    let word = sprite.pixels[stretch_index(pixel.row, pixel.dest_h, sprite.h) * sprite.stride
-        + stretch_index(pixel.col, pixel.dest_w, sprite.w)];
-    if pixel.colorkey == Some(word) {
+    let rgb = decoded_xrgb(
+        sprite.pixels[stretch_index(pixel.row, pixel.dest_h, sprite.h) * sprite.stride
+            + stretch_index(pixel.col, pixel.dest_w, sprite.w)],
+    );
+    if pixel.key == Some(rgb) {
         return;
     }
-    let (r, g, b) = expand_rgb555(word);
     let at = dest_y as usize * frame.w + dest_x as usize;
-    frame.buf[at] = blend_xrgb(pack_xrgb(r, g, b), frame.buf[at], alpha);
+    frame.buf[at] = blend_xrgb(rgb, frame.buf[at], alpha);
 }
 
 /// Blit a sprite stretched over dest with global alpha over the frame.
@@ -1094,6 +1133,7 @@ pub fn blit_rgb555_scaled_alpha(
         blit_rgb555_scaled(frame, sprite, dest, colorkey);
         return;
     }
+    let key = colorkey.map(decoded_xrgb);
     let dest_w = usize::try_from(dest.w).unwrap_or(0);
     let dest_h = usize::try_from(dest.h).unwrap_or(0);
     for row in 0..dest_h {
@@ -1107,7 +1147,7 @@ pub fn blit_rgb555_scaled_alpha(
                     row,
                     dest_w,
                     dest_h,
-                    colorkey,
+                    key,
                 },
                 alpha,
             );
@@ -1115,8 +1155,8 @@ pub fn blit_rgb555_scaled_alpha(
     }
 }
 
-/// Blit an image stretched into dest with colorkey skip and global alpha.
-/// Alpha 0 paints nothing; 255 matches blit_image_in_rect.
+/// Blit an image stretched into dest with decoded-colorkey skip and
+/// global alpha. Alpha 0 paints nothing; 255 matches blit_image_in_rect.
 pub fn blit_image_in_rect_alpha(
     frame: &mut Frame<'_>,
     image: &Rgb555Image,
@@ -1131,6 +1171,7 @@ pub fn blit_image_in_rect_alpha(
         blit_image_in_rect(frame, image, colorkey, dest);
         return;
     }
+    let key = decoded_xrgb(colorkey);
     let dest_w = usize::try_from(dest.w).unwrap_or(0);
     let dest_h = usize::try_from(dest.h).unwrap_or(0);
     for row in 0..dest_h {
@@ -1144,14 +1185,15 @@ pub fn blit_image_in_rect_alpha(
             if dest_x < 0 || dest_y < 0 || dest_x >= frame.w as i32 || dest_y >= frame.h as i32 {
                 continue;
             }
-            let word = image.words[stretch_index(row, dest_h, image.h) * image.w
-                + stretch_index(col, dest_w, image.w)];
-            if word == colorkey {
+            let rgb = decoded_xrgb(
+                image.words[stretch_index(row, dest_h, image.h) * image.w
+                    + stretch_index(col, dest_w, image.w)],
+            );
+            if rgb == key {
                 continue;
             }
-            let (r, g, b) = expand_rgb555(word);
             let at = dest_y as usize * frame.w + dest_x as usize;
-            frame.buf[at] = blend_xrgb(pack_xrgb(r, g, b), frame.buf[at], alpha);
+            frame.buf[at] = blend_xrgb(rgb, frame.buf[at], alpha);
         }
     }
 }
@@ -2718,13 +2760,15 @@ mod tests {
     }
 
     #[test]
-    fn anchor_blit_clips_to_rect_and_skips_colorkey() {
+    fn anchor_blit_clips_to_viewport_not_rect() {
+        // The exe draw has no rect bound: the green pixel beyond the
+        // bound rect paints, and only the frame edge clips.
         let image = Rgb555Image::decode(&[0x00, 0x7C, 0x00, 0x00, 0xE0, 0x03], 3, 1).unwrap();
-        let mut buf = vec![0x123456u32; 3];
+        let mut buf = vec![0x123456u32; 4];
         blit_anchor_in_rect(
             &mut Frame {
                 buf: &mut buf,
-                w: 3,
+                w: 4,
                 h: 1,
             },
             &image,
@@ -2740,11 +2784,12 @@ mod tests {
         );
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert_eq!(buf[1], 0x123456);
-        assert_eq!(buf[2], 0x123456);
+        assert_eq!(buf[2], pack_xrgb(0, 255, 0));
+        assert_eq!(buf[3], 0x123456);
     }
 
     #[test]
-    fn anchor_blit_ignores_empty_geometry() {
+    fn anchor_blit_paints_even_with_empty_bound_rect() {
         let image = Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap();
         let mut buf = vec![0x123456u32; 4];
         blit_anchor_in_rect(
@@ -2764,7 +2809,136 @@ mod tests {
                 h: 2,
             },
         );
+        assert_eq!(buf[0], pack_xrgb(255, 0, 0));
+        assert_eq!(buf[1], 0x123456);
+    }
+
+    #[test]
+    fn anchor_blit_ignores_empty_geometry() {
+        let image = Rgb555Image::decode(&[], 0, 0).unwrap();
+        let mut buf = vec![0x123456u32; 4];
+        blit_anchor_in_rect(
+            &mut Frame {
+                buf: &mut buf,
+                w: 2,
+                h: 2,
+            },
+            &image,
+            0,
+            0,
+            0xFFFF,
+            &Rect {
+                x: 0,
+                y: 0,
+                w: 2,
+                h: 2,
+            },
+        );
         assert_eq!(buf, vec![0x123456u32; 4]);
+    }
+
+    #[test]
+    fn anchored_blit_adds_signed_anchor_to_position() {
+        // Frame-record +0/+2 anchors are signed offsets from the
+        // staged position, not absolute coordinates.
+        let image = Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap();
+        let mut buf = vec![0x123456u32; 5 * 5];
+        blit_image_anchored(
+            &mut Frame {
+                buf: &mut buf,
+                w: 5,
+                h: 5,
+            },
+            &image,
+            3,
+            3,
+            -2,
+            1,
+            0xFFFF,
+        );
+        assert_eq!(buf[4 * 5 + 1], pack_xrgb(255, 0, 0));
+        assert_eq!(buf[3 * 5 + 3], 0x123456);
+    }
+
+    #[test]
+    fn anchored_blit_clips_to_frame_only() {
+        let image = Rgb555Image::decode(&[0x00, 0x7C, 0xE0, 0x03], 2, 1).unwrap();
+        let mut buf = vec![0x123456u32; 2];
+        blit_image_anchored(
+            &mut Frame {
+                buf: &mut buf,
+                w: 2,
+                h: 1,
+            },
+            &image,
+            1,
+            0,
+            0,
+            0,
+            0xFFFF,
+        );
+        assert_eq!(buf[0], 0x123456);
+        assert_eq!(buf[1], pack_xrgb(255, 0, 0));
+    }
+
+    #[test]
+    fn anchor_blit_compares_colorkey_after_decode() {
+        // The authored key 0x7D5F is the file's u16 field: the compare
+        // runs on decoded colors, so the 565 re-encode 0xFA9F never
+        // matches the 555 key while the raw 0x7D5F word does.
+        let image = Rgb555Image::decode(&[0x5F, 0x7D, 0x9F, 0xFA, 0x5F, 0x7D], 3, 1).unwrap();
+        let mut buf = vec![0x123456u32; 3];
+        blit_anchor_in_rect(
+            &mut Frame {
+                buf: &mut buf,
+                w: 3,
+                h: 1,
+            },
+            &image,
+            0,
+            0,
+            0x7D5F,
+            &Rect {
+                x: 0,
+                y: 0,
+                w: 3,
+                h: 1,
+            },
+        );
+        assert_eq!(buf[0], 0x123456);
+        assert_eq!(buf[1], pack_xrgb(247, 165, 255));
+        assert_eq!(buf[2], 0x123456);
+    }
+
+    #[test]
+    fn native_scene_paints_layers_one_to_one_at_positions() {
+        // Scene layers draw 1:1 at dest.x/dest.y: a 3x1 layer over a
+        // 1x1 dest extent paints all three pixels, unstretched.
+        let native_w = usize::try_from(NATIVE_WIDTH).unwrap();
+        let native_h = usize::try_from(NATIVE_HEIGHT).unwrap();
+        let strip = Rgb555Image::decode(&[0x00, 0x7C, 0x00, 0x7C, 0xE0, 0x03], 3, 1).unwrap();
+        let mut buf = vec![0u32; native_w * native_h];
+        paint_native_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: native_w,
+                h: native_h,
+            },
+            0x000000,
+            &[SceneLayer {
+                image: &strip,
+                colorkey: 0xFFFF,
+                dest: Rect {
+                    x: 10,
+                    y: 20,
+                    w: 1,
+                    h: 1,
+                },
+            }],
+        );
+        assert_eq!(buf[20 * native_w + 10], pack_xrgb(255, 0, 0));
+        assert_eq!(buf[20 * native_w + 11], pack_xrgb(255, 0, 0));
+        assert_eq!(buf[20 * native_w + 12], pack_xrgb(0, 255, 0));
     }
 
     #[test]
