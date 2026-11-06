@@ -40,13 +40,29 @@ result-screen `.ojs` driven); `LongnoteMode` refs (`0x3a71c`,
 Pill stock lives at game object `+0x398c` (sub-object `+0x1820`
 field `+0x216c`); a consecutive-Cool streak counter lives at
 `+0x3990` (sub field `+0x2170`). Score path dossier
-`ev_c168abac…`:
+`ev_c168abac…`, independently re-verified from bytes (dispatch
+at file `0x16e43f`, accessors at file `0x140890`/`0x140b80`/`0x140b50`,
+producer emission sites below):
+- Judgement→flag mapping is exe-grounded, not dossier-only:
+  BOTH judgement sites emit the literals `0x10`/`0x20`/`0x40`
+  for windows `≤6`/`≤18`/`≤25` ms — autoplay site file
+  `0x176646`–`0x176673`, key-press site file `0x176b7f`–`0x176ba3`.
+  Tightest window emits `0x10` (= Cool path: builds the streak);
+  loosest non-miss tier emits `0x40` (= Bad path: resets +
+  spends). Miss variants (`0x80`/`0x180`) touch neither field
+  anywhere in file `0x16e400`–`0x16ea00` (region-wide absence).
 - Each Cool adds 1 to the streak while pills < 5; crossing
   `> 14` (the 15th consecutive Cool) grants a pill (cap 5)
   and resets the counter. Good/Bad reset the streak.
-- On Bad the streak resets and pills > 0 spends one (`-1`) to
-  keep the combo instead of breaking it (mode byte `6`
-  exempts both earning and spending).
+  (Good path file `0x16e680` zeroes `+0x3990` with no pill logic.)
+- On Bad (dispatch `0x40` → path file `0x16e7fd`) the streak
+  field `+0x3990` is unconditionally reset to 0 via setter
+  `0x540890` (file `0x140890`: `this+0x2170 = arg`, called with
+  `this = obj+0x1820`, arg `0`), and pills > 0 spends one
+  (`-1` via adder `0x540b50`, file `0x140b50`) to take the Cool
+  scoring branch (arg `4` to scorer `0x570510`) instead of the
+  pill-less branch (arg `2`); mode byte `6` exempts both
+  earning and spending.
 
 So pills come from Cool hits — 15 in a row mints one, up to
 the max-5 stock. Miss spends no pill (verified absence of pill
