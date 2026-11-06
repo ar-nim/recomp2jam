@@ -25,9 +25,9 @@ pin for all EXE rows: `AngelO2Jam.exe` 5,029,888 B, SHA-256
 
 | Level | Claims |
 |---|---|
-| EXE | 63 |
+| EXE | 67 |
 | DATA | 41 |
-| ASSUMED | 35 |
+| ASSUMED | 31 |
 | Total | 139 |
 
 ## The pairing-rule family (known mistake + siblings)
@@ -54,6 +54,9 @@ applier looks each entry up by `code & 0xFFF − 1` and bounds-checks
   (C28). The fallback is ours, labeled as such (C29).
 - **S5** — difficulty mapping guessed by position: "+20 lo/hi/+24
   ascending triple" (C34) names header fields by slot order, 13/13 fit.
+  The exe reads levels as `u16[difficulty]` over the song-record words
+  {+24 lo, +26 hi, +28} (= header +20 lo/hi, +24) and pins the
+  ascending order via the difficulty-keyed life sets (C34/C35).
 - **S6** — `GameSpeed`/`RoomState`/`Difficulty` value sets locked from
   Memoryer ordinals, not exe consumers (D13); only the label chain and
   the value-1 gate are exe-pinned (C22, A27 context).
@@ -144,7 +147,7 @@ index (all-zero rect, slot 0, default arm).
 | B29 | 4007 team-change handler refreshes the 8-slot UI, `< 8` guarded | EXE | `0x15f470`, ev `1ff324b4…` | G | |
 | B30 | Level-up missions do not exist client-side (server-side EXP) | EXE | ev `0ce27550…`; stub walk | G | |
 | B31 | Visible level gates: `Room_LevelLimit` icon, difficulty bands 1–8/8–19/19–27/27+; validator rejects bad slots | EXE | strings `0x24578e…`, ev `68760cac…`; `0x5718b0` ev `66e60d16…` | G | |
-| B32 | Life: max 1000, deltas +3/+2/+1, +2/+1/0, 0, −50/−40/−30; dead at 0 | ASSUMED | player report; no write site (counter-evidence). Stale headings say "implemented" — `o2jam-game` has no `LifeGauge`; only the peer mirror exists | G | doc conflict |
+| B32 | Life: max 1000; per-judgement deltas by difficulty — Cool +3/+2/+1, Good +2/+1/0, Bad −10/−7/−5, Miss −50/−40/−30; dead gate at 0 | EXE | switch `0x170fa2`–`0x171056`, ev `feebe490…`; scorer `0x170510` → adder `0x540a80`; `LifeBar`+`LifeDeltas` | G | corrects Bad=0 report |
 | B33 | `+0x3970` is a 1000-clamp + rating gate + UI notify `(0,0,0x66,0x12)` | EXE | `0x57094d`, `0x1707c6–0x1707db` | G | |
 | B34 | Fail splash: GameOver static vs animated picked by a predicate | EXE | `0xe69a1` | R | |
 | B35 | Jam gauge math: Cool 2/Good 1, 30-progress cycles, overflow carries | ASSUMED | negative: zero `cmp $0x1e` in rating range | G | refuted vs B9 numbers |
@@ -189,13 +192,13 @@ index (all-zero rect, slot 0, default arm).
 | C26 | 16/17-way interleave tables are exact permutations | DATA | `0x27f1d0`/`0x27f3d0` checks | G | |
 | C27 | Body transforms: bitwise-NOT, mirror S-box, u32-XOR key `"nami"` | EXE | `0x54f9e0`/`0x54fa70`/`0x54fac0` | G | |
 | C28 | Id-less banks: new-variant entries register at slot 0 (last wins); only M30 carries ids | EXE | `strncpy`-only fetch, load/play path survey | G | **S4** context |
-| C29 | Order-based fallback `resolve_order_slot` (slot N = Nth entry) | ASSUMED | ours, not exe behavior | G | **S4** |
+| C29 | OJM selection is id-keyed end to end; no order lookup exists (id-less entries all land at slot 0); `resolve_order_slot` is ours, not exe behavior | EXE | *(offset-only)* `0x1703f0` chain `0x170418`–`0x170431`, loader `0x173625`/`0x17364a`, fetch `0x14ee4a`/`0x14ef21` | G | corrects S4 |
 | C30 | DialogBGM odd-stripe byte-swap is an encoder-side file anomaly; no exe compensates | DATA | correlation study + EXE negative sweep | G | |
 | C31 | `JamTable.dat`: 54 u16 thresholds 25..4800; consumer unknown | DATA | envelope only | — | |
 | C32 | `Itemdata_Korea.dat` 1541 rows / `SetInfodata.ojs` 209 rows mapped | DATA | walks land exact at EOF | R | |
 | C33 | Avatar sprite-slot parity: even male, odd female, fallback, slot order kept | ASSUMED | pattern heuristic; exe part logic open | R | |
-| C34 | Difficulty mapping: +20 lo=Easy/hi=Normal, +24=Hard (ascending triple) | ASSUMED | 13/13 fit; no chart-path consumer | G | **S5** |
-| C35 | `+24` completes the Hard-level triple | ASSUMED | same hypothesis | G | **S5** |
+| C34 | Difficulty mapping: +20 lo=Easy/hi=Normal, +24=Hard (ascending triple) | EXE | builder read `0x44268` ev `b5c3094a…`; order pinned by switch `0x170fa2`, ev `feebe490…` | G | corrects S5 |
+| C35 | `+24` completes the Hard-level triple | EXE | same 3-slot read `0x44268` ev `b5c3094a…` (`u16[2]` = rec +28 = header +24); switch `0x170fa2` ev `feebe490…` | G | corrects S5 |
 | C36 | `+12` genre bits feed the song-select bitmask (`song+0x15c`) | ASSUMED | bitmask-shaped tests; transfer unpinned | R | |
 | C37 | First embedded JPEG bounds the last level slice on every chart | DATA | 14/14 `end == jpeg0` | G | |
 
@@ -224,29 +227,22 @@ index (all-zero rect, slot 0, default arm).
 | D19 | Endpoints: FTP hosts, gateway IP/port, web/registry strings | EXE | string table `0x24b9c0`–`0x2514f0` | — | |
 | D20 | Authorize 1000 payload order (token, gender string, marker, clientId) | ASSUMED | Memoryer order; exe byte-proof open | G | |
 
-## Top-10 risky claims (visible behavior on the weakest evidence)
+## Top-7 risky claims (visible behavior on the weakest evidence)
 
 1. **A2/A20** — file-order pairing still taught by `opi-pattern.md`,
    `bnd-semantics.md`, and three doc comments; A1's code-ordinal rule
    supersedes it. Every bound scene depends on the mechanism.
 2. **A3** — zip-and-truncate binding silently drops entries; the exe
    gives out-of-range ordinals an all-zero rect instead.
-3. **C29** — order-based OJM slot fallback: id-less banks can sound the
-   wrong samples (exe: explicit `ref` ids, else slot 0).
-4. **C34/C35** — difficulty fields named by position; wrong mapping
-   picks the wrong chart level.
-5. **D13** — room-enum value sets locked from Memoryer ordinals; room
+3. **D13** — room-enum value sets locked from Memoryer ordinals; room
    list, join gating, and speed labels render from them.
-6. **B32** — life deltas are a player report with in-exe
-   counter-evidence, and doc headings contradict the code state
-   (`LifeGauge` does not exist; only the peer mirror does).
-7. **B12** — long-note release rule (core to hold charts) is a player
+4. **B12** — long-note release rule (core to hold charts) is a player
    report; the in-exe path exists but is untraced and unimplemented.
-8. **A34** — curtain geometry (ring visuals) from item text; the exe
+5. **A34** — curtain geometry (ring visuals) from item text; the exe
    clip math is untraced.
-9. **A32/A35/A36** — HUD digits, receptor/note/burst pixels, and font
+6. **A32/A35/A36** — HUD digits, receptor/note/burst pixels, and font
    metrics are invented placeholders behind genuine art.
-10. **A5** — topmost-last paint order beyond background-first is
+7. **A5** — topmost-last paint order beyond background-first is
     unobserved; layering of every scene rides on it.
 
 ## Maintenance
