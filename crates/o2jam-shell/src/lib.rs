@@ -7,6 +7,7 @@ pub mod avatar;
 pub mod playing;
 pub mod screen;
 pub mod screens;
+mod window;
 
 pub use avatar::{
     load_archive_sprite, load_worn_figure, pick_wear_sprites, AvatarFigure, FigureLayer,
@@ -17,10 +18,8 @@ pub use screens::{paint_screen, ScreenGame};
 
 use std::collections::HashSet;
 use std::sync::Arc;
-use winit::event::{ElementState, KeyEvent, WindowEvent};
-use winit::event_loop::ActiveEventLoop;
-use winit::keyboard::{KeyCode, PhysicalKey};
-use winit::window::{Window, WindowAttributes};
+use winit::keyboard::KeyCode;
+use winit::window::Window;
 
 /// Game tick rate: the original client ran its pump at display rate;
 /// logic advances in fixed 60 Hz steps interpolated for render.
@@ -178,10 +177,10 @@ const BACKBUFFER_WORDS: usize = DEFAULT_WIDTH as usize * DEFAULT_HEIGHT as usize
 /// headless-safe; [`Shell::run`] needs a display and never returns
 /// until the window closes.
 pub struct Shell {
-    keymap: Keymap,
-    window: Option<Arc<Window>>,
-    game: Box<dyn GameLoop>,
-    pixels: Vec<u32>,
+    pub(crate) keymap: Keymap,
+    pub(crate) window: Option<Arc<Window>>,
+    pub(crate) game: Box<dyn GameLoop>,
+    pub(crate) pixels: Vec<u32>,
 }
 
 impl Shell {
@@ -202,7 +201,7 @@ impl Shell {
     }
 
     /// Paint the next frame into the backbuffer.
-    fn paint_backbuffer(&mut self) {
+    pub(crate) fn paint_backbuffer(&mut self) {
         let mut frame = o2jam_render::Frame {
             buf: &mut self.pixels,
             w: DEFAULT_WIDTH as usize,
@@ -213,159 +212,11 @@ impl Shell {
 
     /// Open the window and run the event loop.
     pub fn run(self, event_loop: winit::event_loop::EventLoop<()>) -> anyhow::Result<()> {
-        use std::num::NonZeroU32;
-        use winit::application::ApplicationHandler;
-        use winit::event_loop::OwnedDisplayHandle;
-        struct Handler {
-            shell: Shell,
-            surface: Option<softbuffer::Surface<OwnedDisplayHandle, Arc<Window>>>,
-            surface_size: Option<(u32, u32)>,
-            paint_error: Option<anyhow::Error>,
-        }
-        impl Handler {
-            /// Stretch the backbuffer over the window buffer (softbuffer
-            /// draws mismatched buffers unscaled, so the client scales
-            /// itself and every window size shows the whole frame).
-            fn present(&mut self, event_loop: &ActiveEventLoop) {
-                let Some(surface) = self.surface.as_mut() else {
-                    return;
-                };
-                let pixels = &self.shell.pixels;
-                match surface.buffer_mut() {
-                    Ok(mut buffer) => {
-                        let Some((width, height)) = self.surface_size else {
-                            return;
-                        };
-                        if buffer.len() != width as usize * height as usize {
-                            return;
-                        }
-                        o2jam_render::stretch_blit(
-                            &mut buffer,
-                            width as usize,
-                            height as usize,
-                            pixels,
-                            DEFAULT_WIDTH as usize,
-                            DEFAULT_HEIGHT as usize,
-                        );
-                        if let Err(error) = buffer.present() {
-                            self.paint_error = Some(anyhow::anyhow!("present failed: {error:?}"));
-                            event_loop.exit();
-                        }
-                    }
-                    Err(error) => {
-                        self.paint_error = Some(anyhow::anyhow!("frame buffer failed: {error:?}"));
-                        event_loop.exit();
-                    }
-                }
-            }
-
-            /// Resize the surface to a window size.
-            fn resize_surface(&mut self, width: u32, height: u32, event_loop: &ActiveEventLoop) {
-                let Some(surface) = self.surface.as_mut() else {
-                    return;
-                };
-                let (Some(width), Some(height)) = (NonZeroU32::new(width), NonZeroU32::new(height))
-                else {
-                    return;
-                };
-                if let Err(error) = surface.resize(width, height) {
-                    self.paint_error = Some(anyhow::anyhow!("surface resize failed: {error:?}"));
-                    event_loop.exit();
-                } else {
-                    self.surface_size = Some((width.get(), height.get()));
-                }
-            }
-        }
-        impl ApplicationHandler for Handler {
-            fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-                let attrs = WindowAttributes::default()
-                    .with_title("recomp2jam")
-                    .with_inner_size(winit::dpi::PhysicalSize::new(DEFAULT_WIDTH, DEFAULT_HEIGHT));
-                let window = Arc::new(
-                    event_loop
-                        .create_window(attrs)
-                        .expect("window creation failed"),
-                );
-                match softbuffer::Context::new(event_loop.owned_display_handle()) {
-                    Ok(context) => match softbuffer::Surface::new(&context, window.clone()) {
-                        Ok(mut surface) => {
-                            let size = window.inner_size();
-                            if let (Some(width), Some(height)) =
-                                (NonZeroU32::new(size.width), NonZeroU32::new(size.height))
-                            {
-                                if surface.resize(width, height).is_ok() {
-                                    self.surface_size = Some((width.get(), height.get()));
-                                    self.surface = Some(surface);
-                                }
-                            }
-                            self.shell.window = Some(window.clone());
-                        }
-                        Err(error) => {
-                            self.paint_error = Some(anyhow::anyhow!("surface failed: {error:?}"));
-                            event_loop.exit();
-                        }
-                    },
-                    Err(error) => {
-                        self.paint_error = Some(anyhow::anyhow!("display failed: {error:?}"));
-                        event_loop.exit();
-                    }
-                }
-            }
-            fn window_event(
-                &mut self,
-                event_loop: &ActiveEventLoop,
-                _id: winit::window::WindowId,
-                event: WindowEvent,
-            ) {
-                match event {
-                    WindowEvent::CloseRequested => event_loop.exit(),
-                    WindowEvent::KeyboardInput {
-                        event:
-                            KeyEvent {
-                                physical_key: PhysicalKey::Code(code),
-                                state,
-                                ..
-                            },
-                        ..
-                    } => {
-                        let down = state == ElementState::Pressed;
-                        let lane = if down {
-                            self.shell.keymap.press(code)
-                        } else {
-                            self.shell.keymap.release(&code)
-                        };
-                        if let Some(lane) = lane {
-                            self.shell.game.lane_key(lane, down);
-                        } else if let Some(menu) = menu_of(code) {
-                            self.shell.game.menu_key(menu, down);
-                        }
-                    }
-                    WindowEvent::Resized(size) => {
-                        self.resize_surface(size.width, size.height, event_loop);
-                    }
-                    WindowEvent::RedrawRequested => {
-                        self.shell.paint_backbuffer();
-                        self.present(event_loop);
-                    }
-                    _ => {}
-                }
-            }
-            fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-                if let Some(window) = self.shell.window.as_ref() {
-                    window.request_redraw();
-                }
-            }
-        }
-        let mut handler = Handler {
-            shell: self,
-            surface: None,
-            surface_size: None,
-            paint_error: None,
-        };
+        let mut handler = window::WindowHandler::new(self);
         event_loop
             .run_app(&mut handler)
             .map_err(|e| anyhow::anyhow!("event loop failed: {e:?}"))?;
-        if let Some(error) = handler.paint_error {
+        if let Some(error) = handler.paint_error() {
             return Err(error);
         }
         Ok(())
