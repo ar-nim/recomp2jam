@@ -13,7 +13,7 @@ Automated baseline: `cargo fmt --check` clean,
 |---|---|---|
 | o2jam-audio (358) | 9 | Small fns, good tests. Inline-qualified `std::` paths (`std::sync::Arc`); one production `expect` (poisoned mutex in the realtime callback — standard, unreturnable there). Stale Day-0 doc fixed this pass. |
 | o2jam-file (4124, one file) | 7 | God-file smell (§6): OJM + OJN + OPI + sprites + shop tables in one `lib.rs`. Parsers themselves are clean (bounds-checked, synthetic-tested). Split by format is the fix. |
-| o2jam-game (1474) | 8 | Verified-behavior docs excellent. Deep pass pending. |
+| o2jam-game (1474) | 9 | Verified-behavior docs excellent. Deep pass pending. |
 | o2jam-net (file ~3500 across 9 modules) | 8 | `message.rs` (1638) still growing; `RoomInfo` (slot snapshot) vs `RoomListEntry` (list row) naming is one rename away from confusion. Only 2 production `expect`s repo-wide live here (framing/timeout paths map to `Error`). |
 | o2jam-render (808, one file) | 8 | Cohesive pixel math; font tables + blits could split later. |
 | o2jam-shell (~2500) | 9 | `Shell::run` embeds the whole `Handler` (~150 lines); `screens.rs` (936) growing per screen. `present()` silently skipped mismatched frames — fixed this pass via Context7-verified stretch. |
@@ -27,6 +27,14 @@ Automated baseline: `cargo fmt --check` clean,
 - Stale module docs: audio Day-0, dump Day-0, file OJN-stub lines.
 - String encoder now truncates including the terminator (prior pass,
   recorded here: code contradicted its own pinned docs).
+
+## Deep-read fixes (this pass)
+
+- `LaneMap::shuffled_narrow`: zero width divided by zero — early identity
+  return plus regression test (only panic-on-input found in the sweep).
+- `SongClock::now_ms` + shell clock: `as u64` → `try_into().unwrap_or(MAX)`
+  with saturating add (one shared idiom).
+- Dump dispatch split into `run_*` fns with a shared `read_input`.
 
 ## Backlog (priority order)
 
@@ -43,4 +51,4 @@ Automated baseline: `cargo fmt --check` clean,
    length-checked), `assert!(is_empty())` over `assert_eq!(_, [])`,
    prose-word `doc_markdown` hits, test decimal literals, `Error::transport`
    by value (point-free `map_err`), wire-mandated bool fields.
-5. ~~Overlong functions~~ DONE (`fn main` 194 → dispatch + `run_command`/`run_info`/`run_play` + setup helpers; `too_many_lines` clean).
+5. ~~Overlong functions~~ DONE (`fn main`, dump dispatch). `run_autoplay` (74) kept: single level, tested. (`fn main` 194 → dispatch + `run_command`/`run_info`/`run_play` + setup helpers; `too_many_lines` clean).

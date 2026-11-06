@@ -79,9 +79,13 @@ impl LaneMap {
     /// [`NARROW_UNUSED_SLOT`] (`FUN_00573a10`, file `0x173a10`, dossier
     /// `ev_327cea5d…`): each touched slot draws `rand() % 3`; a drawn 1
     /// swaps slot 2 with slot `i % 3`, any other draw swaps slot `drawn`
-    /// with slot `i % width`.
+    /// with slot `i % width`. A zero width yields the identity map
+    /// instead of dividing by zero.
     pub fn shuffled_narrow(width: usize, next_random: &mut impl FnMut() -> u32) -> Self {
         let mut map = Self::identity(NARROW_SLOT_COUNT);
+        if width == 0 {
+            return map;
+        }
         for source in 0..NARROW_SLOT_COUNT {
             if source == NARROW_UNUSED_SLOT {
                 continue;
@@ -213,6 +217,13 @@ mod tests {
             .map(|lane| map.destination(lane).expect("covered lane"))
             .collect();
         assert_eq!(destinations, vec![3, 0, 2, 1, 5, 4, 6]);
+    }
+
+    #[test]
+    fn narrow_shuffle_with_zero_width_stays_identity() {
+        let mut random = stub_random(vec![]);
+        let map = LaneMap::shuffled_narrow(0, &mut random);
+        assert_eq!(map, LaneMap::identity(NARROW_SLOT_COUNT));
     }
 
     #[test]

@@ -513,10 +513,12 @@ impl SongClock {
         }
     }
 
-    /// Elapsed song time in ms.
+    /// Elapsed song time in ms (saturates instead of wrapping).
     #[must_use]
     pub fn now_ms(&self) -> u64 {
-        self.start.elapsed().as_millis() as u64 + self.offset.as_millis() as u64
+        u64::try_from(self.start.elapsed().as_millis())
+            .unwrap_or(u64::MAX)
+            .saturating_add(u64::try_from(self.offset.as_millis()).unwrap_or(u64::MAX))
     }
 }
 #[cfg(test)]

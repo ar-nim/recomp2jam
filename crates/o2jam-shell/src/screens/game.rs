@@ -96,10 +96,10 @@ impl ScreenGame {
         }
     }
 
-    /// Song position: wall clock since entering Playing.
+    /// Song position: wall clock since entering Playing (saturates).
     fn now_ms(&mut self) -> u64 {
         let start = *self.started_at.get_or_insert_with(std::time::Instant::now);
-        start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
+        u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)
     }
 
     /// Step the flow, restarting the song clock on Playing entry.
