@@ -414,21 +414,39 @@ pub struct OjnMidTriple {
 /// descending — the same id set as table 2): `category` runs 1..=5
 /// (78x1 GOLD, 82x2 BLACK, 157x3 BLUE, 52x4 RED, 193x5 SILVER;
 /// see label order below). The loader stores the pair at song-record
-/// `+0x190` (id echo) / `+0x194` (file offsets `0x7ac8f` / `0x7acef`).
-/// Three exe sites jump-table on `song+0x194 - 1` (dispatches at file
-/// offsets `0xbfa5c`, `0x16121e` and `0x493409`, tables at file offsets
-/// `0xbff7c`, `0x162e2c` and `0x93a3c`) and append the song to one of
-/// five parallel lists (`0x77953c`, `0x77954c`, `0x77955c`, `0x77956c`,
-/// `0x77957c` in category order): `category` is the song-wheel label
-/// bucket. The select-music dialog filters it with its STEP2 label
-/// buttons (`DAILOG_SELECTMUSIC` in `Interface1.opi`: `STEP2_ALL` /
-/// `GOLD` / `BLACK` / `BLUE` / `RED` / `SILVER`, codes `0x2720B021..0x2720B026`;
-/// handler at file offset `0x43f7e3` stores `code - 0x2720B021`, and the
-/// label filter at file offset `0x447050` jump-tables on that index
-/// (6-way table at file offset `0x477718`; arms at file offsets
-/// `0x4472c1`/`0x4472fa`/`0x447333`/`0x447369`/`0x44739f` test the
-/// entry field at `+0x4 == 1..=5`). The entry `+0x4` population site
-/// (the `+0x194` copy) is not yet pinned — OPEN.
+/// `+0x190` (id echo) / `+0x194` (file offsets `0x7ac8f` / `0x7acef`,
+/// VAs `0x47ac8f` / `0x47acef`).
+///
+/// Four exe sites jump-table on `song+0x194 - 1` (range-check `> 4`)
+/// and append the song-record pointer into parallel wheel lists
+/// (vectors of song pointers, stride `0x1b4` records): file `0xbfa5c`
+/// (VA `0x4bfa5c`, table file `0xbff7c`) and VA `0x493409`
+/// (file `0x93409`, table VA `0x493a3c`) append via `0x47dd60`
+/// into the global heads (VAs `0x77953c..0x77957c` in category order),
+/// file `0x16121e` (VA `0x56121e`, table file `0x162e2c`) via
+/// `0x454b90`/`0x4552b0`, and VA `0x4cc82f` (file `0x8c82f`, table VA
+/// `0x4cc964`) into dialog-relative pointer lists (`+0x1d0`/`+0x1e0`/
+/// `+0x1f0` family). `category` is the song-wheel label bucket.
+///
+/// The select-music dialog filters inline `0x238`-byte entries (NOT the
+/// wheel pointers) through chained result lists: master `+0x640`
+/// → STEP1 level bands (`+0x212`, VA `0x446950`/file `0x46950`) →
+/// `+0x650` → STEP2 labels (`+0x4`, VA `0x447050`/file `0x47050`,
+/// 6-arm table VA `0x447718`/file `0x47718`, arms at files
+/// `0x472c1`/`0x472fa`/`0x47333`/`0x47369`/`0x4739f` testing
+/// `entry+0x4 == 1..=5`) → `+0x660` → STEP3 genre (`+0x214`, VA
+/// `0x447730`/file `0x47730`) → `+0x670`. Copies use `0x452850`,
+/// clears use `0x452a00`. The STEP2 handler (VA `0x43f7e3`/file
+/// `0x3f7e3`) stores `code - 0x2720B021` at dialog `+0x6c0`.
+///
+/// The entry `+0x4` population site (the `+0x194` copy) is not yet
+/// pinned — OPEN: the Table 5 loader loop writes only `+0x190`/`+0x194`
+/// (files `0x7ac77..0x7acf6`), and the `0x4441f0` entry builder (file
+/// `0x441f0`) writes `+0x205/+0x20d/+0x20e/+0x210/+0x212/+0x213`/`+0x214`
+/// with no `+0x4` store in its span (surveyed files
+/// `0x35540..0x35960`); no direct `0x194`-to-`0x4` register copy exists
+/// binary-wide. Strongest lead: the dialog `+0x640` master fill at VA
+/// `0x4445cd` (file `0x445cd`) from stack-built `0x238` entries.
 /// (Static disassembly survey; REA dossier TBD.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OjnMidTagEntry {
