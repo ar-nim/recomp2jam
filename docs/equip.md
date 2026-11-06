@@ -16,7 +16,7 @@ response S→C `5005` (`docs/net-protocol.md` §3).
 | Message | Id | Body |
 |---|---|---|
 | `EquipItem` (request) | 5004 (`0x138c`) | `i32` slot, `i32` item id (8 B LE) |
-| `EquipItemResponse` | 5005 (`0x138d`) | `i32` item id (4 B LE); `0` = remove/failure path |
+| `EquipItemResponse` | 5005 (`0x138d`) | `i32` result + `Option<[i32; 4]>` tail (`Some` iff result `0`, 20 B total) |
 
 Send builder case for 5004 (VA `0x4a4ec8`, file `0xa4ec8`):
 stores the opcode as `u16`, stamps length `4`, then appends both
@@ -24,11 +24,15 @@ args as 4-byte words — hence two `i32`. Both C→S call sites push
 slot then item: the shop-control path (VA `0x4a4af4`, file
 `0xa4af4`) and the apply path (VA `0x4a4bcb`, file `0xa4bcb`).
 
-The S→C handler is dispatched by `cmpl $0x138d` / `je 0x4a5fe8`
-(VAs `0x4a5570`/`0x4a5586`, files `0xa5570`/`0xa5586`) and reads a
-single `i32` (VA `0x4a5fe8`, file `0xa5fe8`): nonzero routes to
-the equip-apply function (`0x4a3c80`, file `0xa3c80`), zero to the
-remove function (`0x4a3dc0`).
+The canonical S→C handler (VA `0x560cf0`, file `0x160cf0`,
+stub `0x558853`) reads the result word via `0x555d20`: nonzero
+takes the shared exit, zero reads four more `i32` (20 B total)
+and forwards tail words 0 and 2 to queue `0x478d50`. The
+`0x4a5fe8` (file `0xa5fe8`) site reached from dispatch
+`0x4a5570`/`0x4a5586` is a downstream consumer of the decoded
+word (lookup `0x537b80`, table `0x64ca38`), not a wire read:
+nonzero routes to the equip-apply function (`0x4a3c80`, file
+`0xa3c80`), zero to the remove function (`0x4a3dc0`).
 
 ## Slot selection (17 equipment slots)
 
@@ -81,9 +85,9 @@ slot order (`docs/file-formats/opi.md`; exe part logic OPEN).
 
 - `EquipItem` 5004 request layout + slot derivation + 17-slot
   array write: VERIFIED (static sites above).
-- `EquipItemResponse` 5005 single-`i32` read + zero/nonzero
-  apply/remove routing: VERIFIED (handler site above); any
-  further body fields: OPEN (handler reads exactly one `i32`).
+- `EquipItemResponse` 5005 result word + 4-word success tail:
+  VERIFIED (handler file `0x160cf0`, stub `0x558853`); tail-word
+  roles: OPEN.
 - Per-item stat effects: server-authoritative, no local math
   found (unchanged); avatars cosmetic except skill rings
   (`docs/gameplay.md`).
