@@ -8,14 +8,15 @@ use super::super::playing::{HighwayGeometry, LivePlay};
 use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
-    paint_avi_scene, paint_channel_list, paint_channel_scene, paint_loading_scene,
+    battle_verdict, paint_avi_scene, paint_channel_list, paint_channel_scene, paint_loading_scene,
     paint_lobby_backdrop, paint_playing_overlay, paint_result, paint_result_scene, paint_room_list,
     paint_room_scene, paint_screen, paint_waiting_members, paint_waiting_scene, scene_index,
-    SceneArt,
+    BattleVerdict, SceneArt,
 };
 use super::side::{can_return_side, can_visit_side, paint_side_scene, SideScreen};
 use crate::MenuKey;
 use o2jam_audio::{AudioBackend, PcmSamples};
+use o2jam_game::RoomTeams;
 use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry};
 use o2jam_render::Frame;
 
@@ -35,6 +36,8 @@ pub struct ScreenGame {
     rooms: Vec<RoomListEntry>,
     room_highlight: usize,
     waiting: Option<JoinedRoom>,
+    battle_teams: RoomTeams,
+    battle_self_team: Option<u8>,
     side: Option<SideScreen>,
     side_origin: Option<Screen>,
     side_placements: Vec<ScenePlacement>,
@@ -64,6 +67,8 @@ impl ScreenGame {
             rooms: Vec::new(),
             room_highlight: 0,
             waiting: None,
+            battle_teams: RoomTeams::new(),
+            battle_self_team: None,
             side: None,
             side_origin: None,
             side_placements: Vec::new(),
@@ -160,6 +165,26 @@ impl ScreenGame {
     pub fn set_joined_room(&mut self, room: JoinedRoom) -> &mut Self {
         self.waiting = Some(room);
         self
+    }
+
+    /// Stage battle totals (`RoomTeams` mirrors the server-side 4014/4016
+    /// accumulation); the result verdict reads rank 1 from these totals.
+    pub fn set_battle_teams(&mut self, teams: RoomTeams) -> &mut Self {
+        self.battle_teams = teams;
+        self
+    }
+
+    /// Claim the local battle team (winner art compares this seat team
+    /// against rank 1; `None` clears the claim and hides the verdict).
+    pub fn set_battle_self_team(&mut self, team: Option<u8>) -> &mut Self {
+        self.battle_self_team = team;
+        self
+    }
+
+    /// Rank-1 battle verdict for the claimed local team, if known.
+    #[must_use]
+    pub fn battle_verdict(&self) -> Option<BattleVerdict> {
+        battle_verdict(&self.battle_teams, self.battle_self_team)
     }
 
     /// Stage real main-flow art for one screen: `.bnd` placements
@@ -311,11 +336,21 @@ impl ScreenGame {
         }
     }
 
-    /// Results: staged art behind the avatar figure and digits.
+    /// Results: staged art (`StateResult_Top/Bottom.ojs` plus
+    /// `Result_WinLose.ojs` via `FUN_004c2390`, file `0xc2390`) behind
+    /// the avatar figure, digits, and the `Winner_image.ojs` /
+    /// `Result_WinLose.ojs` rank-1 verdict.
     fn paint_result(&self, frame: &mut Frame<'_>) {
+        let verdict = self.battle_verdict();
         match self.scene_art(Screen::Result) {
-            Some(art) => paint_result_scene(frame, self.avatar.as_ref(), self.playing.score(), art),
-            None => paint_result(frame, self.avatar.as_ref(), self.playing.score()),
+            Some(art) => paint_result_scene(
+                frame,
+                self.avatar.as_ref(),
+                self.playing.score(),
+                art,
+                verdict,
+            ),
+            None => paint_result(frame, self.avatar.as_ref(), self.playing.score(), verdict),
         }
     }
 }
@@ -1094,5 +1129,90 @@ mod game_tests {
         );
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert!(buf.contains(&pack_xrgb(0x30, 0xB0, 0x30)));
+    }
+
+    fn battle_teams_self_wins() -> o2jam_game::RoomTeams {
+        let mut teams = o2jam_game::RoomTeams::new();
+        teams.set_team(0, 0);
+        teams.set_team(1, 1);
+        teams.submit(0, 100_000);
+        teams.submit(1, 150_000);
+        teams
+    }
+
+    fn finish_song(game: &mut ScreenGame) {
+        game.load_chart(vec![(2, 5000, 7)]);
+        walk_to_playing(game);
+        game.strike_at(2, 5000);
+    }
+
+    fn paint_result_frame(game: &mut ScreenGame) -> Vec<u32> {
+        let mut buf = vec![0u32; 70 * 70];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 70,
+            },
+            7000,
+        );
+        buf
+    }
+
+    #[test]
+    fn result_without_battle_claim_paints_no_verdict() {
+        let mut game = ScreenGame::new();
+        finish_song(&mut game);
+        assert_eq!(game.battle_verdict(), None);
+        let buf = paint_result_frame(&mut game);
+        assert_eq!(game.screen(), Screen::Result);
+        assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+        assert!(!buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
+        assert!(!buf.contains(&pack_xrgb(0x90, 0x90, 0x90)));
+    }
+
+    #[test]
+    fn result_win_paints_gold_verdict_for_rank_one() {
+        let mut game = ScreenGame::new();
+        game.set_battle_teams(battle_teams_self_wins());
+        game.set_battle_self_team(Some(1));
+        assert_eq!(game.battle_verdict(), Some(BattleVerdict::Win));
+        finish_song(&mut game);
+        let buf = paint_result_frame(&mut game);
+        assert!(buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
+    }
+
+    #[test]
+    fn result_lose_paints_gray_verdict_off_rank_one() {
+        let mut game = ScreenGame::new();
+        game.set_battle_teams(battle_teams_self_wins());
+        game.set_battle_self_team(Some(0));
+        assert_eq!(game.battle_verdict(), Some(BattleVerdict::Lose));
+        finish_song(&mut game);
+        let buf = paint_result_frame(&mut game);
+        assert!(buf.contains(&pack_xrgb(0x90, 0x90, 0x90)));
+    }
+
+    #[test]
+    fn result_verdict_layers_over_winner_and_winlose_art() {
+        use crate::screens::paint::unbound_scene_placements;
+        let names = vec![
+            "Winner_image.ojs".to_owned(),
+            "Result_WinLose.ojs".to_owned(),
+        ];
+        let figures = HashMap::from([
+            (names[0].clone(), red_scene_figure()),
+            (names[1].clone(), red_scene_figure()),
+        ]);
+        let placements = unbound_scene_placements(&names);
+        let mut game = ScreenGame::new();
+        game.set_battle_teams(battle_teams_self_wins());
+        game.set_battle_self_team(Some(1));
+        game.load_scene(Screen::Result, placements, figures);
+        finish_song(&mut game);
+        let buf = paint_result_frame(&mut game);
+        assert_eq!(buf[0], pack_xrgb(255, 0, 0));
+        assert!(buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
+        assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
     }
 }
