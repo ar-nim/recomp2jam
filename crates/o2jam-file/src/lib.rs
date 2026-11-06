@@ -1,9 +1,9 @@
 //! File parsing for O2Jam 7.55 assets (`.ojm` music, `.ojn` charts,
 //! `OJNList.dat` song index).
 //!
-//! M30/OMC containers and the OJNList index are verified against real
-//! 7.55 data (see `docs/file-formats/`); `.ojn` note streams stay stubbed
-//! until the new-format decrypt lands.
+//! M30/OMC containers, the OJNList index, and old/new-format `.ojn`
+//! note streams are verified against real 7.55 data (see
+//! `docs/file-formats/`).
 
 use thiserror::Error;
 

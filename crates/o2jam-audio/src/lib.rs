@@ -1,8 +1,7 @@
 //! Audio for recomp2jam: Vorbis decode (replacing libvorbis) plus a
-//! backend trait so game logic stays testable without hardware.
-//!
-//! Day-0: [`NullBackend`] (silent, deterministic) + [`decode_vorbis`]
-//! via `lewton`. A `cpal` backend lands once latency is measured.
+//! backend trait so game logic stays testable without hardware:
+//! [`NullBackend`] (silent, deterministic), [`decode_vorbis`] via
+//! `lewton`, and [`CpalBackend`] for live output.
 
 use thiserror::Error;
 
