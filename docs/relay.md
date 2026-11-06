@@ -84,8 +84,10 @@ Multi-byte integers are little-endian. Struct names are the
   `long_note_score` `u32` + `life` `u16` + `pill_buildup` `u32` +
   `pill_count` `u32` + `score` `u32`.
 - `ComboBroken` 6 / `ComboStarted` 7 (30 B each): preface +
-  `autoplay` as `u32` (only 0/1 accepted; hardcoded to 1 when
-  sent) + `role` `u16`.
+  `autoplay` as `u32` (only 0/1 accepted; 7.55 always sends 1 —
+  five hardcoded dword-1 stores feed the send paths, no zero-store
+  exists; §6) + `role` `u16`. Client sends carry `code`/`unused`
+  as 0 (no nonzero writer located on any combo send path; §6).
 - `CreateRelaySession` 10 / `DeleteRelaySession` 11
   (1 + 8×N B): `u8` member count + N×(`session_key1` `i32`,
   `session_key2` `i32`).
@@ -152,6 +154,60 @@ the server sends.
   Life on the tick site file `0x4eaec0`; event-sink suspect
   (codes 1/9/14 at files `0x176691…`/`0x176bdf…`/`0x176ea9…`,
   `docs/systems-survey.md`) may feed the combo packs.
+
+### Combo writers: when `autoplay` and the state field go nonzero (7.55)
+
+Static only over the local `install-root` copy (read-only, VA = file
++ `0x400000`); behavior described in own words with file offsets plus
+local-static record ids (sha256 of the record tag, truncated to 32 hex).
+Tools: `python3` byte scans; no new REA dossier was issued. No
+disassembly is reproduced.
+
+- Ctor anchors (carried from §1): `SetID(6)` at file `0x16dfe0`
+  (vtable ref file `0x24dc1c`), `SetID(7)` at file `0x16e080` (ref
+  file `0x24dc2c`). A full-image scan for relative calls into either
+  ctor finds none (`ev_55d43b289edf1ab13813a2a3530c03f1`, observed):
+  both packs are table-constructed, same as op-5 (whose `SetID(5)`
+  ctor likewise has no direct caller).
+- Shared send path: the relay send helper at file `0x187870` has
+  exactly three callers image-wide (`ev_fae5559777b535cb3878108d9b0484df`,
+  observed): `0xea385` (op-5 tally, see `docs/op5-writer.md`) plus
+  `0x16dee9` and `0x16df58` (the combo pair below). The op-6/7 packs
+  share op-5's send path.
+- Score-region dispatcher at file `0x16ddf0`
+  (`ev_09e854f508b2e4040ee438ec6356d8f8`, observed): entered from
+  four score-region call sites (files `0x16e49b`/`0x16e686`/`0x16e803`/
+  `0x16e8e0`, passing small selectors 1–4); gated on the Live-mode
+  byte at `0x77cd33` equal to 6 (the op-5 tick gates the same byte
+  equal to 5) and the caller selector. Two send branches follow,
+  selected by the object field at `+0x39b0`: equal to 1 stages the
+  miss-side pack (vtable `0x64dc24`, whose first entry points at file
+  `0x16e110`), equal to 2 stages the cool-side pack (vtable
+  `0x64dc14`, first entry file `0x16e140`). Each branch stages an
+  autoplay dword of 1 (stores at files `0x16dec0` and
+  `0x16df28`/`0x16df2f`), reads the role word from global `0x77ee86`
+  (14 readers image-wide, incl. the op-5 tick and the fanout below),
+  sends through `0x187870` with a zero flag word, then re-stores the
+  same state value (1 at file `0x16def3`; 2 at file `0x16df62`) and
+  restores vtable `0x64b31c`. Image-wide, `+0x39b0` has exactly five
+  sites: the two compares, the two stores, plus a zeroing reset at
+  file `0x16f90e` (round-init zeroing). No autoplay-0 store exists on
+  either send path — the one zero-store in the region targets a
+  different epilogue slot (file `0x16deb9`). So `autoplay` is nonzero
+  (= 1) on every dispatcher-sent combo pack, and the state field is
+  nonzero (1/2) from the send until the next round init.
+- Relay-table fanout wrappers at files `0x16df90`/`0x16e030`
+  (`ev_881b47397192e387e32beb24c313ba1b`, observed): each hardcodes
+  an autoplay local to 1 (files `0x16dfa8`/`0x16e048`) and stages
+  routing/autoplay/role through the `0xeb4d0`/`0xeb570`/`0xeb550`
+  helpers (pushed sizes `0x18`/`0x04`/`0x02` match the 24/4/2 wire
+  field lengths). `0x16df90` has exactly one caller (file `0x18eafa`,
+  inside the relay-table fanout function at file `0x18ea9a`, which
+  builds a cool-side object (vtable `0x64dc14`), re-stages role from
+  `0x77ee86`, and fans out to members with zeroed slots);
+  `0x16e030` has no direct caller (reached through the relay table).
+  No nonzero `code`/`unused` writer was located on any of these
+  paths — client combo sends carry both as 0.
 - Memoryer layouts: `Memoryer.Relay/Messages/Commands.cs`
   (`RelayCommand`), `Messages/Events/UpdateGameStatsEventData.cs`,
   `ComboBrokenEventData.cs`, `ComboStartedEventData.cs`,
@@ -218,8 +274,13 @@ the server sends.
 - `CUDPFailTCPConnect` trigger site (RTTI name only, file
   `0x28060c`); byte-pinned fallback behavior is relay op 3 forcing
   TCP plus the RUDP trio — the class's own call sites are open.
-- Whether op-6/7 `autoplay` is ever 0, and what `code`/`unused`
-  carry on the wire when nonzero.
+- Closed: op-6/7 `autoplay` is never 0 on client send paths (five
+  dword-1 stores across the dispatcher and both fanout wrappers, no
+  zero-store; §6). Still open: which caller selector (1–4) reaches
+  which dispatcher branch (grade mapping), and what `code`/`unused`
+  carry on server-rewritten S→C copies (no nonzero writer located
+  client-side; needs a wire capture, plus a Ghidra function dossier
+  for VAs `0x56ddf0`, `0x4ea640`, `0x58ea9a` before any field rename).
 - S→C game 4015 handler (peer lifebar store); see
   `docs/4015-hunt.md`.
 
@@ -262,7 +323,9 @@ peer-to-peer) and the RUDP-over-UDP vs framed-TCP split.
 `relay_command_tests`: id map, role map, relay UDP-port immediates,
   exact-body vectors for
 ops 1–7/10–11, frame round-trips, short/trailing/foreign-id and
-bad-enum rejections. `adjunct_host_tests`: adjunct address octets,
+bad-enum rejections, per-field offset vectors for the op-5 tally (15
+fields) and the op-6/7 nonzero fields (code at 0, autoplay at 24, role
+at 28) with unknown-role rejections. `adjunct_host_tests`: adjunct address octets,
 relay-subnet-but-not-pool membership, `7788` immediate. `live_handshake_tests`: exact empty frames
 `04 00 <id>` for 4046/4047/4055/4056 (the 4046 bytes match the UHP
 stack frame; the 4055 send site is the sole `0x0FD7` dword image-wide),

@@ -611,11 +611,23 @@ fn decode_combo_tail(body: &[u8]) -> Result<(bool, MemberRole), Error> {
 const COMBO_BODY_LEN: usize = 30;
 
 /// `ComboBroken` 6 (`CO2JamMissPack`): combo broke, disable play.
+///
+/// In-exe senders (7.55, local-static, read-only): the score-region
+/// dispatcher at file `0x16ddf0` (miss branch, state field `+0x39b0 == 1`,
+/// autoplay dword-1 store at file `0x16dec0`) and the relay-table fanout
+/// through the wrapper at file `0x16df90` (autoplay dword-1 store at file
+/// `0x16dfa8`, sole caller at file `0x18eafa`). No direct call into the
+/// `SetID(6)` ctor at file `0x16dfe0` exists image-wide. See `docs/relay.md`
+/// (`ev_09e854f508b2e4040ee438ec6356d8f8`,
+/// `ev_881b47397192e387e32beb24c313ba1b`,
+/// `ev_55d43b289edf1ab13813a2a3530c03f1`,
+/// `ev_fae5559777b535cb3878108d9b0484df`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ComboBroken {
     /// Routing preface (code, relay endpoints, unused).
     pub routing: RelayRouting,
-    /// Autoplay flag (hardcoded to 1 when sent).
+    /// Autoplay flag (7.55 always sends 1; no zero-store exists on any
+    /// combo send path).
     pub autoplay: bool,
     /// Seat role of the sender.
     pub role: MemberRole,
@@ -653,11 +665,21 @@ impl WireMessage for ComboBroken {
 }
 
 /// `ComboStarted` 7 (`CO2JamCoolPack`): combo (re)started, enable play.
+///
+/// In-exe senders (7.55, local-static, read-only): the score-region
+/// dispatcher at file `0x16ddf0` (cool branch, state field `+0x39b0 == 2`,
+/// autoplay dword-1 stores at files `0x16df28`/`0x16df2f`) and the
+/// relay-table fanout through the wrapper at file `0x16e030` (autoplay
+/// dword-1 store at file `0x16e048`; no direct caller, reached through the
+/// relay table). No direct call into the `SetID(7)` ctor at file `0x16e080`
+/// exists image-wide. See `docs/relay.md` (same evidence ids as
+/// [`ComboBroken`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ComboStarted {
     /// Routing preface (code, relay endpoints, unused).
     pub routing: RelayRouting,
-    /// Autoplay flag (hardcoded to 1 when sent).
+    /// Autoplay flag (7.55 always sends 1; no zero-store exists on any
+    /// combo send path).
     pub autoplay: bool,
     /// Seat role of the sender.
     pub role: MemberRole,
@@ -1427,6 +1449,94 @@ mod relay_command_tests {
         assert_eq!(
             ComboStarted::decode_body(&[0x01; 29]),
             Err(Error::TruncatedMessage { need: 30, have: 29 })
+        );
+    }
+
+    fn zero_combo_routing() -> RelayRouting {
+        RelayRouting {
+            code: 0,
+            relays: routing().relays,
+            unused: 0,
+        }
+    }
+
+    #[test]
+    fn combo_code_zero_sits_at_body_offset_0() {
+        let broken = ComboBroken {
+            routing: zero_combo_routing(),
+            autoplay: true,
+            role: MemberRole::None,
+        };
+        assert_eq!(&broken.encode_body()[0..4], &[0x00, 0x00, 0x00, 0x00]);
+        let started = ComboStarted {
+            routing: zero_combo_routing(),
+            autoplay: true,
+            role: MemberRole::None,
+        };
+        assert_eq!(&started.encode_body()[0..4], &[0x00, 0x00, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn combo_autoplay_one_sits_at_body_offset_24() {
+        let broken = ComboBroken {
+            routing: zero_combo_routing(),
+            autoplay: true,
+            role: MemberRole::None,
+        };
+        assert_eq!(&broken.encode_body()[24..28], &[0x01, 0x00, 0x00, 0x00]);
+        let started = ComboStarted {
+            routing: zero_combo_routing(),
+            autoplay: true,
+            role: MemberRole::None,
+        };
+        assert_eq!(&started.encode_body()[24..28], &[0x01, 0x00, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn combo_role_sits_at_body_offset_28() {
+        let broken = ComboBroken {
+            routing: zero_combo_routing(),
+            autoplay: true,
+            role: MemberRole::Challenger,
+        };
+        assert_eq!(&broken.encode_body()[28..30], &[0x02, 0x00]);
+        let started = ComboStarted {
+            routing: zero_combo_routing(),
+            autoplay: true,
+            role: MemberRole::Champion,
+        };
+        assert_eq!(&started.encode_body()[28..30], &[0x01, 0x00]);
+    }
+
+    #[test]
+    fn combo_packs_reject_unknown_role() {
+        let mut body = ComboBroken {
+            routing: zero_combo_routing(),
+            autoplay: true,
+            role: MemberRole::None,
+        }
+        .encode_body();
+        body[28] = 0x09;
+        assert_eq!(
+            ComboBroken::decode_body(&body),
+            Err(Error::InvalidField {
+                field: "member role",
+                reason: "not 0, 1, 2, or 3"
+            })
+        );
+        let mut body = ComboStarted {
+            routing: zero_combo_routing(),
+            autoplay: true,
+            role: MemberRole::None,
+        }
+        .encode_body();
+        body[28] = 0x09;
+        assert_eq!(
+            ComboStarted::decode_body(&body),
+            Err(Error::InvalidField {
+                field: "member role",
+                reason: "not 0, 1, 2, or 3"
+            })
         );
     }
 
