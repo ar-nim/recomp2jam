@@ -8,7 +8,9 @@
 
 use std::net::SocketAddr;
 
+use crate::live_stats::{apply_peer_update, jam_tick_for_score, life_tick_for_score};
 use anyhow::{bail, Context, Result};
+use o2jam_game::{PeerBars, QueueEvent, RankDelivery};
 use o2jam_net::{play::MusicListAnswer, Frame};
 use o2jam_net::{
     AuthResponse, AuthResult, AuthorizeRequest, ChannelList, ChannelLogin, ChannelLoginResponse,
@@ -171,6 +173,28 @@ impl SongFlowOptions {
             peer_bar_timeout: std::time::Duration::from_secs(3),
         }
     }
+
+    /// Outgoing 4014 tick for the configured channel and score tail.
+    ///
+    /// Funneled through the live-stats score builders so the wire
+    /// always carries saturated score state, never a hand-built body.
+    #[must_use]
+    pub fn tick(&self) -> UpdateGameStats {
+        match self.stat_kind {
+            StatKind::Life => life_tick_for_score(
+                self.stat_value,
+                u64::from(self.stat_score),
+                self.stat_sequence,
+                self.long_note_score,
+            ),
+            StatKind::Jam => jam_tick_for_score(
+                u64::from(self.stat_score),
+                u32::from(self.stat_value),
+                self.stat_sequence,
+                self.long_note_score,
+            ),
+        }
+    }
 }
 
 /// What the host song flow learned.
@@ -182,6 +206,12 @@ pub struct SongFlowReport {
     pub free_music: bool,
     /// Peer lifebar echo after our tick (`None` on quiet rooms).
     pub peer_bar: Option<GameStatsUpdate>,
+    /// Mirror after applying the echo (untouched on quiet rooms).
+    pub peers: PeerBars,
+    /// Queue forward from the echo (`None` when quiet/unknown).
+    pub peer_queue: Option<QueueEvent>,
+    /// Rank deliveries from the echo (empty when quiet).
+    pub peer_ranks: Vec<RankDelivery>,
     /// Broadcast ids skipped while awaiting answers (kept, not lost).
     pub skipped: Vec<u16>,
 }
@@ -229,6 +259,7 @@ pub fn run_song_flow(
     send_start(gateway, options)?;
     send_tick(gateway, options)?;
     let peer_bar = await_peer_bar(gateway, options, &mut skipped);
+    let (peers, peer_queue, peer_ranks) = mirror_peer_bar(peer_bar);
     send_tally(gateway, options)?;
     gateway
         .set_timeouts(Some(SONG_FLOW_IO_TIMEOUT))
@@ -237,6 +268,9 @@ pub fn run_song_flow(
         music_entries: listed.entries.len(),
         free_music: listed.free_music,
         peer_bar,
+        peers,
+        peer_queue,
+        peer_ranks,
         skipped,
     })
 }
@@ -294,15 +328,8 @@ fn send_start(gateway: &mut GatewayConnection, options: &SongFlowOptions) -> Res
 }
 
 fn send_tick(gateway: &mut GatewayConnection, options: &SongFlowOptions) -> Result<()> {
-    let tick = UpdateGameStats {
-        kind: options.stat_kind,
-        value: options.stat_value,
-        sequence: options.stat_sequence,
-        score: options.stat_score,
-        long_note_score: options.long_note_score,
-    };
     gateway
-        .send_frame(Request::UpdateGameStats.id(), &tick.encode_body())
+        .send_frame(Request::UpdateGameStats.id(), &options.tick().encode_body())
         .map_err(|source| anyhow::anyhow!("{source}"))
 }
 
@@ -316,6 +343,18 @@ fn await_peer_bar(
     gateway.set_timeouts(Some(options.peer_bar_timeout)).ok()?;
     let frame = await_lenient(gateway, GameStatsUpdate::COMMAND, skipped).ok()?;
     GameStatsUpdate::decode_frame(&frame).ok()
+}
+
+/// Mirror one 4015 echo into fresh peer bars (quiet rooms stay empty).
+fn mirror_peer_bar(
+    echo: Option<GameStatsUpdate>,
+) -> (PeerBars, Option<QueueEvent>, Vec<RankDelivery>) {
+    let mut peers = PeerBars::new();
+    let Some(update) = echo else {
+        return (peers, None, Vec::new());
+    };
+    let applied = apply_peer_update(&mut peers, update);
+    (peers, applied.queue, applied.ranks)
 }
 
 fn send_tally(gateway: &mut GatewayConnection, options: &SongFlowOptions) -> Result<()> {
@@ -1094,6 +1133,13 @@ mod song_flow_tests {
         assert_eq!(peer.member_id, 0);
         assert_eq!(peer.kind(), Some(StatKind::Life));
         assert_eq!(peer.value, 1000);
+        assert_eq!(report.peers.life(0), Some(1000));
+        assert_eq!(report.peers.jam(0), Some(0));
+        let queue = report.peer_queue.expect("life echo forwards a queue event");
+        assert_eq!(queue.slot, 0);
+        assert_eq!(queue.stat_kind, StatKind::Life.as_u16());
+        assert_eq!(report.peer_ranks.len(), 8);
+        assert_eq!(report.peers.rank_row(0), Some(0));
     }
 
     #[test]
@@ -1130,6 +1176,97 @@ mod song_flow_tests {
         assert_eq!(report.music_entries, 1);
         assert!(report.peer_bar.is_none());
         assert!(report.skipped.is_empty());
+        assert_eq!(report.peers.life_levels(), [0; 8]);
+        assert_eq!(report.peer_queue, None);
+        assert!(report.peer_ranks.is_empty());
+    }
+
+    /// Drive the standard flow against a fake gateway, answering the
+    /// peer-bar window with `echo` (`None` stays quiet).
+    fn run_flow_with_echo(echo: Option<GameStatsUpdate>) -> super::SongFlowReport {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::SetRoomMusic.id());
+            assert_eq!(read_frame(&mut stream).id, Request::GetMusicList.id());
+            stream.write_all(&list_answer().encode()).unwrap();
+            assert_eq!(
+                read_frame(&mut stream).id,
+                Request::SyncMemberMusicState.id()
+            );
+            assert_eq!(
+                read_frame(&mut stream).id,
+                Request::SetDownloadProgress.id()
+            );
+            assert_eq!(read_frame(&mut stream).id, Request::StartGame.id());
+            assert_eq!(read_frame(&mut stream).id, Request::ConfirmMusicLoaded.id());
+            let tick = read_frame(&mut stream);
+            assert_eq!(tick.id, Request::UpdateGameStats.id());
+            assert_eq!(
+                UpdateGameStats::decode_body(&tick.payload).unwrap(),
+                flow_options().tick()
+            );
+            if let Some(echo) = echo {
+                stream.write_all(&echo.encode()).unwrap();
+            }
+            assert_eq!(read_frame(&mut stream).id, Request::SubmitScore.id());
+            assert_eq!(read_frame(&mut stream).id, Request::FinalizeRank.id());
+            assert_eq!(read_frame(&mut stream).id, Request::ExitPlaying.id());
+        });
+        let mut gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let report = run_song_flow(&mut gateway, &flow_options()).unwrap();
+        server.join().unwrap();
+        report
+    }
+
+    #[test]
+    fn jam_echo_mirrors_jam_word_and_ranks() {
+        let report = run_flow_with_echo(Some(GameStatsUpdate {
+            member_id: 1,
+            kind_code: StatKind::Jam.as_u16(),
+            value: 42,
+            ranks: [0; 8],
+        }));
+        let peer = report.peer_bar.unwrap();
+        assert_eq!(peer.kind(), Some(StatKind::Jam));
+        assert_eq!(report.peers.jam(1), Some(42));
+        assert_eq!(report.peers.life(1), Some(0));
+        let queue = report.peer_queue.expect("jam echo forwards a queue event");
+        assert_eq!(queue.stat_kind, StatKind::Jam.as_u16());
+        assert_eq!(report.peer_ranks.len(), 8);
+        assert_eq!(report.peers.rank_row(0), Some(0));
+    }
+
+    #[test]
+    fn unknown_channel_echo_keeps_bars_but_broadcasts_ranks() {
+        let report = run_flow_with_echo(Some(GameStatsUpdate {
+            member_id: 1,
+            kind_code: 9,
+            value: 7,
+            ranks: [0; 8],
+        }));
+        assert_eq!(report.peer_bar.unwrap().kind(), None);
+        assert_eq!(report.peer_queue, None);
+        assert_eq!(report.peers.life(1), Some(0));
+        assert_eq!(report.peers.jam(1), Some(0));
+        assert_eq!(report.peer_ranks.len(), 8);
+        assert_eq!(report.peers.rank_row(0), Some(0));
+    }
+
+    #[test]
+    fn song_options_tick_names_its_channel() {
+        let mut options = flow_options();
+        assert_eq!(options.tick().kind, StatKind::Jam);
+        options.stat_kind = StatKind::Life;
+        options.stat_value = 1000;
+        let tick = options.tick();
+        assert_eq!(tick.kind, StatKind::Life);
+        assert_eq!(tick.value, 1000);
+        assert_eq!(tick.sequence, options.stat_sequence);
     }
 
     /// Live proof against a local Memoryer gateway (plan Phase 4).
