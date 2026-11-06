@@ -7,6 +7,7 @@
 //! [`ScreenGame`] owns a [`ScreenFlow`] and advances splash → channel
 //! on any lane key; later screens wire their own inputs next.
 
+use super::playing::{HighwayGeometry, PlayingView};
 use super::screen::{Screen, ScreenFlow};
 use super::GameLoop;
 use o2jam_render::{
@@ -129,7 +130,7 @@ fn background_of(screen: Screen) -> u32 {
         Screen::Room => pack_xrgb(0x10, 0x50, 0x20),
         Screen::Waiting => pack_xrgb(0x50, 0x40, 0x10),
         Screen::Loading => pack_xrgb(0x18, 0x18, 0x18),
-        Screen::Playing => pack_xrgb(0x00, 0x00, 0x00),
+        Screen::Playing => pack_xrgb(0x0A, 0x0A, 0x0A),
         Screen::Result => pack_xrgb(0x10, 0x10, 0x08),
     }
 }
@@ -153,7 +154,9 @@ pub fn paint_screen(frame: &mut Frame<'_>, screen: Screen) {
             paint_title(frame, title_of(screen));
         }
         Screen::Loading => paint_loading(frame),
-        Screen::Playing => paint_card(frame, background_of(screen), pack_xrgb(0x40, 0x40, 0x40)),
+        Screen::Playing => {
+            PlayingView::default().paint(frame, &HighwayGeometry::centered(frame.w, frame.h))
+        }
         Screen::Result => paint_result(frame),
     }
 }
@@ -164,6 +167,7 @@ pub fn paint_screen(frame: &mut Frame<'_>, screen: Screen) {
 /// channel screen. Room/waiting/loading inputs land with their UIs.
 pub struct ScreenGame {
     flow: ScreenFlow,
+    playing: PlayingView,
 }
 
 impl ScreenGame {
@@ -172,7 +176,13 @@ impl ScreenGame {
     pub fn new() -> Self {
         Self {
             flow: ScreenFlow::new(),
+            playing: PlayingView::default(),
         }
+    }
+
+    /// Load a chart's onsets into the highway (empty until then).
+    pub fn load_chart(&mut self, onsets: Vec<(u8, u64)>) {
+        self.playing = PlayingView::new(onsets);
     }
 
     /// Screen currently shown.
@@ -196,7 +206,12 @@ impl GameLoop for ScreenGame {
     }
 
     fn paint(&mut self, frame: &mut Frame<'_>) {
-        paint_screen(frame, self.flow.current());
+        if self.flow.current() == Screen::Playing {
+            let geom = HighwayGeometry::centered(frame.w, frame.h);
+            self.playing.paint(frame, &geom);
+        } else {
+            paint_screen(frame, self.flow.current());
+        }
     }
 }
 
@@ -266,6 +281,32 @@ mod screen_paint_tests {
         assert_eq!(buf[38 * 128 + 53], ink);
         let room = painted(Screen::Room, 128, 96);
         assert!(room.contains(&ink));
+    }
+
+    #[test]
+    fn loaded_chart_scales_notes_down_the_highway() {
+        let mut game = ScreenGame::new();
+        game.load_chart(vec![(2, 1500)]);
+        for next in [
+            Screen::Channel,
+            Screen::Room,
+            Screen::Waiting,
+            Screen::Loading,
+            Screen::Playing,
+        ] {
+            game.flow.go(next).unwrap();
+        }
+        game.playing.advance_to(1000);
+        let mut buf = vec![0u32; 70 * 60];
+        game.paint(&mut Frame {
+            buf: &mut buf,
+            w: 70,
+            h: 60,
+        });
+        let note_y = 50 - (500.0 * 50.0 / 2000.0) as i32;
+        // Lane 2 spans x 20..30; the note insets one pixel each side.
+        assert_eq!(buf[note_y as usize * 70 + 22], pack_xrgb(0x40, 0xC0, 0xFF));
+        assert_eq!(buf[0], pack_xrgb(0x0A, 0x0A, 0x0A));
     }
 
     #[test]
