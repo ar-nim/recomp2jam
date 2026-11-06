@@ -29,17 +29,34 @@ pub struct OjnChartFile {
     /// also selects the new-variant lane count
     /// ([`ojm_descriptor_for_version`]).
     pub format_version: f32,
-    /// Category id (`u32` at +12; 10 on Tutorial.ojn, 1..8 on the
-    /// shipped new-format songs; re-categorised between versions,
-    /// semantics TBD).
+    /// Category id (`u32` at +12; 10 on Tutorial.ojn, single bits
+    /// 1/2/4/8 on the shipped new-format songs, Tutorial 10 = 8|2).
+    /// Chart path ignores it: the validator (`FUN_005718b0`, file
+    /// `0x1718b0`) checks id/magic/version/last-measure/counts only,
+    /// and the parser (`FUN_00571d60`, file `0x171d60`) reads slice
+    /// tables/counts/BPM only. Song-select tests a song bitmask at
+    /// `song+0x15c` (`and $0x7` at file `0xbe79f`, `and $0x8` at file
+    /// `0x36f4f`), but the header+12 to song-slot transfer is unpinned,
+    /// so the meaning stays OPEN (bitmask-shaped, unproven).
     pub genre: u32,
     /// Tempo (`f32` at +16; reads 100.0/124.0 on Tutorial/757).
     pub bpm: f32,
-    /// Level-range-shaped flags (`u32` at +20; 1 on Tutorial.ojn,
-    /// e.g. `0x50003` on song 757; both `u16` halves small; TBD).
+    /// Level-shaped flags (`u32` at +20; 1 on Tutorial.ojn, packed
+    /// `(hi, lo)` halves on new songs with lo 1..5, hi 4..10).
+    /// Ascending-triple hypothesis (Easy = lo, Normal = hi,
+    /// Hard = [`OjnChartFile::stable_minor`]) fits 13/13 songs plus the
+    /// Tutorial edge (0,1,0 = only Easy present); `OJNList.dat` record
+    /// `@24` matches the disk header 13/13. STEP1 level bands read the
+    /// select-entry level word at `+0x212` (file `0x46bb7`, thresholds
+    /// 1/8/19/27), but the song-to-entry level transfer is unpinned,
+    /// so this stays OPEN.
     pub level_flags: u32,
-    /// Small stable id (`u32` at +24; 0 on Tutorial.ojn, 5..19 on
-    /// the shipped new-format songs; semantics TBD).
+    /// Small stable id (`u32` at +24; 0 on Tutorial.ojn, 5..19 on the
+    /// shipped new-format songs). Ascending-triple hypothesis
+    /// (Hard level, completing [`OjnChartFile::level_flags`] lo/hi as
+    /// Easy/Normal) fits 13/13 songs; `OJNList.dat` record `@28`
+    /// matches the disk header 13/13. No chart-path consumer (validator
+    /// and parser never read +24); stays OPEN.
     pub stable_minor: u32,
     /// Per-difficulty note totals (`u32` at +28/+32/+36): nonzero
     /// payloads on kinds 2+ (playable lanes plus autoplay). Reads
@@ -68,7 +85,9 @@ pub struct OjnChartFile {
     /// new-format songs, `0x01000000` on song 770).
     pub flag96: u32,
     /// Constant (`u32` at +100; 0 on Tutorial.ojn, 19256 on every
-    /// new-format song; semantics TBD).
+    /// new-format song). No `19256`/`0x4B38` immediate exists in `.text`
+    /// (byte scan; the lone hit at file `0xd2094` is a `call` rel32
+    /// coincidence); validator and parser never read +100. Stays OPEN.
     pub const100: u32,
     /// Small tuning float (`f32` at +104; 0.0 on Tutorial.ojn, one
     /// of 0.0/0.01/0.02/0.03 on new-format songs).
@@ -401,10 +420,10 @@ pub fn parse_ojn(bytes: &[u8]) -> Result<OjnChartFile, FileError> {
                 magic: ojn_magic_tag(&plain)?,
                 song_id: read_u32le(&plain, 0)?,
                 format_version: read_f32le(&plain, 8)?,
-                genre: read_u32le(&plain, 12)?,
-                bpm: read_f32le(&plain, 16)?,
-                level_flags: read_u32le(&plain, 20)?,
-                stable_minor: read_u32le(&plain, 24)?,
+                genre: read_u32le(&plain, OJN_GENRE_OFF)?,
+                bpm: read_f32le(&plain, OJN_BPM_OFF)?,
+                level_flags: read_u32le(&plain, OJN_LEVEL_FLAGS_OFF)?,
+                stable_minor: read_u32le(&plain, OJN_STABLE_MINOR_OFF)?,
                 total_counts: [
                     read_u32le(&plain, 28)?,
                     read_u32le(&plain, 32)?,
@@ -428,9 +447,9 @@ pub fn parse_ojn(bytes: &[u8]) -> Result<OjnChartFile, FileError> {
                     read_u32le(&plain, 88)?,
                     read_u32le(&plain, 92)?,
                 ],
-                flag96: read_u32le(&plain, 96)?,
-                const100: read_u32le(&plain, 100)?,
-                tune: read_f32le(&plain, 104)?,
+                flag96: read_u32le(&plain, OJN_FLAG96_OFF)?,
+                const100: read_u32le(&plain, OJN_CONST100_OFF)?,
+                tune: read_f32le(&plain, OJN_TUNE_OFF)?,
                 title: read_str(&plain, 108, 64)?,
                 artist: read_str(&plain, 172, 32)?,
                 label: read_str(&plain, 204, 32)?,
@@ -475,6 +494,31 @@ pub const OJN_SLICE_END_OFFS: [usize; OJN_LEVEL_COUNT] = [288, 292, 296];
 
 /// Header offset of the first slice's start (`u32`).
 pub const OJN_SLICES_START_OFF: usize = 284;
+
+/// Header offset of the category id (`u32` at +12). See
+/// [`OjnChartFile::genre`]: bitmask-shaped, consumer-open.
+pub const OJN_GENRE_OFF: usize = 12;
+
+/// Header offset of the tempo (`f32` at +16).
+pub const OJN_BPM_OFF: usize = 16;
+
+/// Header offset of the packed level flags (`u32` at +20). See
+/// [`OjnChartFile::level_flags`]: Easy/Normal hypothesis, open.
+pub const OJN_LEVEL_FLAGS_OFF: usize = 20;
+
+/// Header offset of the small stable id (`u32` at +24). See
+/// [`OjnChartFile::stable_minor`]: Hard-level hypothesis, open.
+pub const OJN_STABLE_MINOR_OFF: usize = 24;
+
+/// Header offset of the flag word (`u32` at +96).
+pub const OJN_FLAG96_OFF: usize = 96;
+
+/// Header offset of the new-format constant (`u32` at +100, 19256).
+/// See [`OjnChartFile::const100`]: no consumer, open.
+pub const OJN_CONST100_OFF: usize = 100;
+
+/// Header offset of the small tuning float (`f32` at +104).
+pub const OJN_TUNE_OFF: usize = 104;
 
 /// Raw magic tag seen on an `.ojn` image: the old-format tag lives at
 /// file offset 4 (right after the song id: Tutorial.ojn opens
@@ -649,7 +693,8 @@ pub const OJN_TICKS_PER_MEASURE: u32 = 192;
 #[must_use]
 pub fn ojn_lane_of_kind(kind: u16) -> Option<u8> {
     if (OJN_LANE_KIND_FIRST..=OJN_LANE_KIND_LAST).contains(&kind) {
-        Some((kind - OJN_LANE_KIND_FIRST) as u8)
+        // Range is 2..=8, so the difference fits `u8` (PERF-07: no `as`).
+        u8::try_from(kind - OJN_LANE_KIND_FIRST).ok()
     } else {
         None
     }
@@ -697,7 +742,13 @@ pub fn parse_ojn_level_events(bytes: &[u8], level: usize) -> Result<Vec<OjnEvent
     let mut events = Vec::with_capacity(slice.event_count as usize);
     let mut off = slice.data_start;
     for _ in 0..slice.event_count {
-        let measure = read_u32le(&plain, off)? as i32;
+        // Head word is a signed measure index; values that do not fit
+        // `i32` are malformed input (ERRORS-01), not wraparound data.
+        let measure =
+            i32::try_from(read_u32le(&plain, off)?).map_err(|_| FileError::Truncated {
+                need: off + 4,
+                have: plain.len(),
+            })?;
         let kind = read_u16le(&plain, off + 4)?;
         let count = read_u16le(&plain, off + 6)? as usize;
         let mut values = Vec::with_capacity(count);
@@ -749,7 +800,8 @@ pub fn decode_note_value(raw: u32) -> Option<OjnNoteValue> {
     }
     Some(OjnNoteValue {
         sample_id: low - 1,
-        flags: (raw >> 16) as u16,
+        // `raw >> 16` is at most 0xFFFF, so this always fits (PERF-07).
+        flags: u16::try_from(raw >> 16).ok()?,
     })
 }
 
