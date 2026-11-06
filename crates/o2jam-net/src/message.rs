@@ -1158,18 +1158,57 @@ impl WireMessage for EquipItem {
 /// (`0x555d20`), returns at once unless it is `0`, then reads four
 /// more words the same way and forwards the first and third tail
 /// words with opcode `0x138d` and `0x12` into the UI event queue
-/// (`0x478d50`, `ecx 0x762b44`). Result `1` and any other nonzero
-/// value exit with no further reads. The shop-context `0x138d`
-/// consumer (VA `0x4a5fe8`, file `0xa5fe8`, reached via
-/// `cmpl $0x138d` at VAs `0x4a5570`/`0x4a5586`) works on the
-/// already-decoded word (lookup via `0x537b80`, table `0x64ca38`)
-/// and is not a wire read. Tail word roles stay OPEN.
+/// (`0x478d50`, `ecx 0x762b44`): the queue arg at `0x10` carries the
+/// first tail word and the arg at `0x14` carries the third tail word.
+/// Result `1` and any other nonzero value exit with no further reads.
+/// The shop-context `0x138d` consumer (VA `0x4a5fe8`, file `0xa5fe8`,
+/// reached via `cmpl $0x138d` at VAs `0x4a5570`/`0x4a5586`) looks up the
+/// `0x14` word in the shop list (`0x537b80` on `0x77ccbc`, VA `0x4a5ff8`)
+/// and feeds its low word to the equip-apply function (`0x4a3c80`, VAs
+/// `0x4a6089`/`0x4a60ea`; zero selects the remove path), while the `0x10`
+/// word indexes the slot table (`0x64ca38`, VA `0x4a6008`) and is the
+/// remove key (`0x4a3dc0`, VA `0x4a60b9`). The second and fourth tail
+/// words are read to advance the packet cursor and then dropped:
+/// wire-present but unconsumed, so modeled as reserved.
+/// See [`EquipTail`] for the pinned word roles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EquipTail {
+    /// First tail word: slot selector forwarded as queue arg `0x10`.
+    /// Indexes `0x64ca38` (VA `0x4a6008`); zero takes the default
+    /// (`0x77ed38`) path, and the word is the remove key (`0x4a3dc0`).
+    pub slot_select: i32,
+    /// Second tail word: read via `0x555d20` then dropped.
+    /// Wire-present but unconsumed; kept for exact framing.
+    pub reserved_a: i32,
+    /// Third tail word: shop entry/item id forwarded as queue arg `0x14`.
+    /// Lookup key for `0x77ccbc` via `0x537b80` (VA `0x4a5ff8`); the low
+    /// word feeds equip-apply (`0x4a3c80`), zero selects remove.
+    pub entry_id: i32,
+    /// Fourth tail word: read via `0x555d20` then dropped.
+    /// Wire-present but unconsumed; kept for exact framing.
+    pub reserved_b: i32,
+}
+
+impl EquipTail {
+    /// Append the four words in wire order.
+    fn encode_inner(&self, body: &mut Vec<u8>) {
+        for word in [
+            self.slot_select,
+            self.reserved_a,
+            self.entry_id,
+            self.reserved_b,
+        ] {
+            body.extend_from_slice(&word.to_le_bytes());
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EquipItemResponse {
     /// Equip verdict (`0` carries the success tail).
     pub result: i32,
     /// Four tail words; `Some` exactly when `result == 0`.
-    pub tail: Option<[i32; 4]>,
+    pub tail: Option<EquipTail>,
 }
 
 /// Body length of a bare [`EquipItemResponse`] result.
@@ -1194,9 +1233,7 @@ impl WireMessage for EquipItemResponse {
         let mut body = Vec::with_capacity(EQUIP_ITEM_RESPONSE_FULL_LEN);
         body.extend_from_slice(&self.result.to_le_bytes());
         if let Some(tail) = &self.tail {
-            for word in tail {
-                body.extend_from_slice(&word.to_le_bytes());
-            }
+            tail.encode_inner(&mut body);
         }
         body
     }
@@ -1230,12 +1267,12 @@ impl WireMessage for EquipItemResponse {
         }
         Ok(Self {
             result,
-            tail: Some([
-                read_word_at(body, 4),
-                read_word_at(body, 8),
-                read_word_at(body, 12),
-                read_word_at(body, 16),
-            ]),
+            tail: Some(EquipTail {
+                slot_select: read_word_at(body, 4),
+                reserved_a: read_word_at(body, 8),
+                entry_id: read_word_at(body, 12),
+                reserved_b: read_word_at(body, 16),
+            }),
         })
     }
 }
@@ -2902,7 +2939,12 @@ mod tests {
     fn equip_item_response_success_carries_four_word_tail() {
         let response = EquipItemResponse {
             result: 0,
-            tail: Some([1, 2, 3, 4]),
+            tail: Some(EquipTail {
+                slot_select: 1,
+                reserved_a: 2,
+                entry_id: 3,
+                reserved_b: 4,
+            }),
         };
         assert_eq!(
             response.encode(),
@@ -2914,6 +2956,26 @@ mod tests {
         let frame = decode_frame(&response.encode()).unwrap();
         assert_eq!(frame.id, 5005);
         assert_eq!(EquipItemResponse::decode_frame(&frame), Ok(response));
+    }
+
+    #[test]
+    fn equip_item_response_names_forwarded_tail_words() {
+        let response = EquipItemResponse {
+            result: 0,
+            tail: Some(EquipTail {
+                slot_select: 11,
+                reserved_a: 22,
+                entry_id: 33,
+                reserved_b: 44,
+            }),
+        };
+        let frame = decode_frame(&response.encode()).unwrap();
+        let back = EquipItemResponse::decode_frame(&frame).unwrap();
+        let tail = back.tail.unwrap();
+        assert_eq!(tail.slot_select, 11);
+        assert_eq!(tail.entry_id, 33);
+        assert_eq!(tail.reserved_a, 22);
+        assert_eq!(tail.reserved_b, 44);
     }
 
     #[test]
@@ -2936,7 +2998,12 @@ mod tests {
     fn equip_item_response_rejects_trailing_success() {
         let mut body = EquipItemResponse {
             result: 0,
-            tail: Some([1, 2, 3, 4]),
+            tail: Some(EquipTail {
+                slot_select: 1,
+                reserved_a: 2,
+                entry_id: 3,
+                reserved_b: 4,
+            }),
         }
         .encode_body();
         body.push(0xFF);

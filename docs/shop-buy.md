@@ -93,12 +93,21 @@ default — they are C→S requests with no S→C handler.)
   it is `0`, then reads four more `i32` the same way (5 words
   total on success) and forwards the first and third tail words
   with opcode `0x138d` and `0x12` into the UI event queue
-  (`0x478d50`, `ecx 0x762b44`). Result `1` and any other nonzero
+  (`0x478d50`, `ecx 0x762b44`): queue arg `0x10` carries the first
+  tail word, arg `0x14` the third. Result `1` and any other nonzero
   value exit with no further reads. SETTLED: the wire shape is
-  result plus a four-word tail iff result `0`. The shop-context
-  `0x138d` consumer (VA `0x4a5fe8`, file `0xa5fe8`) works on the
-  already-decoded word (lookup via `0x537b80`, table `0x64ca38`)
-  and is not a wire read.
+  result plus a four-word tail iff result `0`. Roles PINNED:
+  tail word 1 = slot selector (consumer VA `0x4a5fe8`, file
+  `0xa5fe8`: `0x10` indexes table `0x64ca38` at VA `0x4a6008`,
+  zero takes the `0x77ed38` default path, and the word is the
+  remove key for `0x4a3dc0` at VA `0x4a60b9`); tail word 3 = shop
+  entry/item id (consumer `0x14` looked up in `0x77ccbc` via
+  `0x537b80` at VA `0x4a5ff8`, low word fed to equip-apply
+  `0x4a3c80` at VAs `0x4a6089`/`0x4a60ea`, zero selects remove).
+  Tail words 2 and 4 are read to advance the cursor then dropped
+  (wire-present, unconsumed → reserved). The shop-context
+  `0x138d` consumer works on the already-decoded words (lookups
+  above) and is not a wire read.
 - index 26 (5029) → stub VA `0x5588d7` → handler VA `0x563900`
   (file `0x163900`): reads two `i32` via the fixed-size reader
   (`0x555d20`) into `0x768b44` and `0x768b58`, then applies the
@@ -158,16 +167,23 @@ requests have live send paths per the sites above.
   standalone (stays OPEN, no type). Exclusive handler VA
   `0x560a40` (file `0x160a40`); sole caller is the `0x1389` stub
   at VA `0x558831` (file `0x158831`), reached from the id check at
-  VA `0x55833d` (file `0x15833d`). Walked reads: 4×`i32`, then an
+  VA `0x55833d` (file `0x15833d`). Walked reads: 4×`i32` (first
+  applied via `0x540090` as the gem slot `0x77cd00+0x2c`, fourth
+  via `0x540d00` as the cash slot `0x77cd00+0x2128`; middle two
+  stored to `0x768b48`/`0x768b4c` unconsumed here), then an
   `i32` list whose bound is snapshotted from the GLOBAL dword
   `0x77cce4` (VA `0x560ab4`, file `0x160ab4`) — not from the
-  packet — so the length is unknowable without that context;
-  2×`i32`, a 12-byte blob (`0x5f1ef0`), a packet-counted (`i32`
-  M) list of `i32`+`i32` pairs with item-record lookups
-  (`0x52dba0` on `0x77b540`, plus `0x537e90`/`0x538240` on
-  `0x77ccbc`), a final `i32`, then a forward stamping `$0x1389`
-  (VA `0x560c6d`, file `0x160c6d`). Widths observed, field
-  semantics unpinned.
+  packet — so the length is unknowable without that context.
+  PINNED: that bounded list is one shop entry word per shop entry
+  (`N = 0x77cce4` words, each written into the shop list `0x77ccbc`
+  via `0x537c10` at VA `0x560afc`, file `0x160afc` — the same
+  helper/table triple `0x77ccbc`/`0x77ccc0`/`0x77cce4` the
+  sell/equip/rename send paths read). Then: 2×`i32`, a 12-byte
+  blob (`0x5f1ef0`), a packet-counted (`i32` M) list of `i32`+`i32`
+  pairs with item-record lookups (`0x52dba0` on `0x77b540`, plus
+  `0x537e90`/`0x538240` on `0x77ccbc`), a final `i32`, then a
+  forward stamping `$0x1389` (VA `0x560c6d`, file `0x160c6d`).
+  Widths observed; remaining field semantics stay OPEN.
 - `SellItem`/`ChangeName` word semantics: first word is the
   bounds-checked `0x77ccc0` selection index (role VERIFIED);
   the second word is the fetched entry's id word (usage
@@ -175,8 +191,13 @@ requests have live send paths per the sites above.
   item-record helper `0x52dba0`; exact game meaning OPEN).
 - `EquipItemResponse` 5005: SETTLED as result plus a four-word
   success tail (`result == 0` → 20 B; else 4 B). Handler file
-  `0x160cf0` reads the tail only on `0`; the `0x4a5fe8` site is a
-  downstream consumer of the decoded word, not a wire read.
+  `0x160cf0` reads the tail only on `0`; words 1 and 3 are
+  forwarded as queue args `0x10`/`0x14` (`0x478d50` with
+  `0x138d`/`0x12`), and the `0x4a5fe8` consumer pins them:
+  word 1 = slot selector (`0x64ca38` index, remove key),
+  word 3 = shop entry/item id (`0x77ccbc` lookup, equip-apply id).
+  Words 2 and 4 are read-and-dropped (reserved). Modeled as
+  `EquipTail { slot_select, reserved_a, entry_id, reserved_b }`.
   `docs/equip.md` still records the old single-word read and needs
   a follow-up edit (out of scope here).
 - `SyncCashPointResponse` 5029: SETTLED as two words, both
@@ -217,6 +238,8 @@ requests have live send paths per the sites above.
 `check_name_rejects_trailing_bytes`,
 `check_name_rejects_wrong_command`,
 `equip_item_response_success_carries_four_word_tail` (exact frame),
+`equip_item_response_names_forwarded_tail_words` (named roles survive
+round-trip),
 `equip_item_response_error_decodes_result_only`,
 `equip_item_response_rejects_tail_on_error`,
 `equip_item_response_rejects_short_success`,

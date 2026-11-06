@@ -449,3 +449,53 @@ has no Memoryer v7.2.0 counterpart (likely 7.55 drift) and whose
 semantics stay OPEN, as do all enum value sets. Negative counts decode
 as empty (the exe's signed exit tests skip the loops: 4045 file
 `0x18cfb7`, music ids with the same shape), matching the client.
+
+### `MemberInfo` to member-slot map (field-to-offset only, 7.55 static map)
+
+Each active 4043 slot stores into the 8592-byte (`0x2190`-stride) member
+table at VA `0x77ee90` (`slot * 0x2190 + base`; `imul $0x2190` + `add
+$0x77ee90` repeats at files `0x159d38`–`0x159f82`). Static only over
+the local install-root copy (read-only, VA = file + `0x400000`); behavior
+described in own words with file offsets plus local-static record ids
+(sha256 of the record tag, truncated to 32 hex), no disassembly
+reproduced. Tools: `python3` byte scans plus `objdump -d` slices (same
+method as the 4015 hunt). No new REA dossier was issued. Reader site =
+the 4043 call site that stores the field; helper = the small writer it
+calls (offset in the helper name). Decoded in `o2jam-net` as
+`MEMBER_SLOT_BASE`/`MEMBER_SLOT_STRIDE` plus `MEMBER_OFF_*` and the
+`member_slot_address` reader (`member_slot_tests`).
+
+| `MemberInfo` field | Slot offset | Reader site (call file → helper file, size) |
+|---|---|---|
+| id | `+0x04` | `0x159d44` → `0x140bd0` (1 B) |
+| nickname | `+0x05` | `0x159d5c` → `0x140bf0` (NUL-terminated via `0x155ea0`) |
+| level | `+0x20` | `0x159d74` → `0x140c50` (4 B) |
+| gender | `+0x28` | `0x159d8c` → `0x140c90` (1 B) then setter `0x13fe50` (zero/nonzero) |
+| gem | `+0x2c` | `0x159da4` → `0x140cc0` (4 B) |
+| seats: team | `+0x31` | `0x159dbc` → `0x140d40` (1 B) |
+| seats: ready (wire store) | `+0x32` | `0x159dd4` → `0x140d70` (1 B); slot-index branch later overwrites `+0x32` via `0x1400f0` (files `0x159f00`/`0x159f2e`/`0x159f5c`), semantics OPEN |
+| seats: third byte (music_state candidate) | `+0x217c` | `0x159dec` → `0x141480` (1 B); field identity OPEN |
+| equipments count | `+0x2038` | `0x159e30` → `0x140e40` (4 B; `0x11` loop bound file `0x140eb1`) |
+| equipments | `+0x2040` | same call; 17 `i32` words |
+| music ids count | `+0x34` | `0x159e48` → `0x140db0` (4 B; loop bound is the count) |
+| music ids | `+0x38` | same call; entries split low `+0x38` / high `+0x1038` |
+| states: cash_point | `+0x2128` | `0x159e60` → `0x140ce0` (4 B) |
+| states: free_pass | `+0x212c` | `0x159e78` → `0x1415a0` (4 B) |
+| states: playing_state | `+0x2130` | `0x159e90` → `0x141670` (1 B) |
+| states: live_extra (wire copy) | `+0x2131` | `0x159ea8` → `0x141690` (1 B); second `+0x2131` read, first copy discarded, semantics OPEN |
+| states: trailing flag (admin candidate) | `+0x30` | `0x159ec0` → `0x140d20` (1 B); which of admin/master stays OPEN |
+| streak: win_streak | `+0x218c` | inline 4 B read file `0x159f61` → setter `0x141560` at file `0x159f82`; `0x218c + 4` ends exactly at the slot end `0x2190` |
+
+Header (not per-slot): `u8` member id + `i32` users + `i32` streak via
+the shared reader (files `0x159b5d`/`0x159b6b`/`0x159b79`);
+`ev_5a25bf3fec517df32dde42e275128074`, observed. Active-tail stores
+above: `ev_7737f29fa5a4df1f2270ce72df7b6d54`; equipment/music stores:
+`ev_54701cf711eebb93adbcbd632629542c`; trailing stores:
+`ev_20f7c72d0d3f156c51ba3c3a0417f774` (all observed). OPEN: which seat
+byte is team/ready/music_state beyond storage order; which trailing flag
+byte is administrator vs room-master (helper `0x140d90` has no
+image-wide caller, so no second wire reader was located); the slot-index
+branch (`0x159ec5`–`0x159f5c`: slot 0/3/other stages `+0x2186` = 1/2/3
+via `0x141520` plus `+0x32` = 1/0/1 via `0x1400f0`) derivation;
+`+0x30`/`+0x33` zeroing (files `0x159e02`/`0x159e18`) before the wire
+stores; all enum value sets.
