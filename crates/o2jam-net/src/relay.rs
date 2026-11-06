@@ -15,9 +15,13 @@
 //! `DeleteRelaySessionRequest`, `UdpRelayFrameCodec`,
 //! `UdpRelayPacketType`. The exe pins the opcodes (`SetID(1..7)`
 //! ctors), the class names (`CO2JamCoolPack`/`CO2JamMissPack`
-//! RTTI), and the endpoints — not the field bytes, so every body
-//! below is Memoryer-corroborated; see `docs/relay.md` for the
-//! anchor table and the open exe-verification items.
+//! RTTI), and the endpoints — not the field bytes, so the relay
+//! bodies below are Memoryer-corroborated; see `docs/relay.md` for
+//! the anchor table and the open exe-verification items. The
+//! trailing Live-handshake section (game-gateway 4046/4047/4055/
+//! 4056) is the exception: 4046/4047/4056 are byte-verified empty
+//! in-exe (per-type offsets below), while 4055's send site is pinned
+//! but its body stays Memoryer-corroborated (open item).
 
 use std::net::{Ipv4Addr, SocketAddrV4};
 
@@ -770,6 +774,135 @@ impl WireMessage for DeleteRelaySession {
     }
 }
 
+/// Live handshake on the game gateway: UHP punch report + relay confirm.
+///
+/// Unlike [`RelayCommand`] frames these ride the game TCP gateway
+/// (`[u16 len][u16 id]`, `len` counts the whole frame, no routing
+/// preface). Memoryer implements both pairs as fieldless log-only
+/// requests with empty echo responses (`PlayingController.ConfirmRelay`
+/// and `ReportPunchHole` take no request object); the exe byte proof
+/// behind each shape is quoted on the type itself.
+///
+/// `ReportUdpPunchHole` 4046 (C→S): client reports its UDP hole-punch
+/// attempt.
+///
+/// Byte-verified empty: the UHP controller (function entry file
+/// `0x18d580`, the `UHP Start` / `UDP Hole Punching Success~!!` +
+/// `Sleep(300)` poller) writes the id as `u16` `0x0FCE` at file
+/// `0x18d8a1` and the length as `u16` 4 at file `0x18d8ac`, forming
+/// the stack frame `04 00 CE 0F` (empty `CPacket_Str` body) ahead of
+/// the session send call. The id immediate is unique image-wide, and
+/// Memoryer agrees (no request fields).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReportUdpPunchHole;
+
+impl WireMessage for ReportUdpPunchHole {
+    /// Game-gateway command id (Memoryer `RequestCommand`, `0x0FCE`).
+    const COMMAND: u16 = 4046;
+
+    fn encode_body(&self) -> Vec<u8> {
+        Vec::new()
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.is_empty() {
+            Ok(Self)
+        } else {
+            Err(Error::TrailingBytes(body.len()))
+        }
+    }
+}
+
+/// `ReportUdpPunchHoleAnswer` 4047 (S→C): hole-punch report echo
+/// (Memoryer `ResponseCommand.ReportUdpPunchHole`).
+///
+/// Byte-verified body-ignored: the S→C dispatcher (id minus base
+/// `0xFA3`, bound `0x37`, byte table file `0x158a68`, address table
+/// file `0x1589f4`) routes 4047 (index 44) through slot 21 (case
+/// file `0x1587cb`) to the sub-handler at file `0x163d90`, which
+/// sets a session flag and returns without reading any packet bytes.
+/// The flag is the same word the 4048 send path checks, and Memoryer
+/// sends no response fields — empty is the only consistent shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReportUdpPunchHoleAnswer;
+
+impl WireMessage for ReportUdpPunchHoleAnswer {
+    /// Game-gateway command id (Memoryer `ResponseCommand`, `0x0FCF`).
+    const COMMAND: u16 = 4047;
+
+    fn encode_body(&self) -> Vec<u8> {
+        Vec::new()
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.is_empty() {
+            Ok(Self)
+        } else {
+            Err(Error::TrailingBytes(body.len()))
+        }
+    }
+}
+
+/// `ConfirmRelay` 4055 (C→S): relay-path confirmation.
+///
+/// Send site pinned (file `0xf0439`: `push 0` + `push 0x0FD7` into
+/// the session send through vtable offset `0x84`, with no field
+/// staging before the call); encoded empty per Memoryer
+/// (`PlayingController.ConfirmRelay` takes no request fields,
+/// log-only). The body bytes stay OPEN: the same send shape also
+/// serves opcodes whose bodies the helper gathers internally (4012
+/// at files `0xf0420`/`0xeadcc`, 4014, 4016, 4048), so the site
+/// alone does not prove emptiness — see `docs/relay.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConfirmRelay;
+
+impl WireMessage for ConfirmRelay {
+    /// Game-gateway command id (Memoryer `RequestCommand`, `0x0FD7`).
+    const COMMAND: u16 = 4055;
+
+    fn encode_body(&self) -> Vec<u8> {
+        Vec::new()
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.is_empty() {
+            Ok(Self)
+        } else {
+            Err(Error::TrailingBytes(body.len()))
+        }
+    }
+}
+
+/// `ConfirmRelayAnswer` 4056 (S→C): relay-confirm echo (Memoryer
+/// `ResponseCommand.ConfirmRelay`).
+///
+/// Byte-verified body-ignored: the S→C dispatcher routes 4056
+/// (index 53) through slot 26 (case file `0x158820`) to the
+/// sub-handler at file `0x163d50`, which forwards only immediates
+/// (`0, 0, 0x0FD8, 0x12`) to the UI event queue and returns — the
+/// same body-ignoring shape as the 4052/4054 forwarders at files
+/// `0x163d10`/`0x163d30`. A game-state compare against `0x0FD8`
+/// also sits at file `0xde4db`. Memoryer sends no response fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConfirmRelayAnswer;
+
+impl WireMessage for ConfirmRelayAnswer {
+    /// Game-gateway command id (Memoryer `ResponseCommand`, `0x0FD8`).
+    const COMMAND: u16 = 4056;
+
+    fn encode_body(&self) -> Vec<u8> {
+        Vec::new()
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.is_empty() {
+            Ok(Self)
+        } else {
+            Err(Error::TrailingBytes(body.len()))
+        }
+    }
+}
+
 /// RUDP inner packet types (`Memoryer.Relay` `UdpRelayPacketType`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -1454,6 +1587,77 @@ mod relay_command_tests {
         let mut tally = zero_tally();
         tally.score = 0x5566_7788;
         assert_eq!(&tally.encode_body()[58..62], &[0x88, 0x77, 0x66, 0x55]);
+    }
+}
+
+#[cfg(test)]
+mod live_handshake_tests {
+    use super::*;
+    use crate::frame::decode_frame;
+
+    #[test]
+    fn punch_report_frames_exact_uhp_bytes() {
+        assert_eq!(ReportUdpPunchHole.encode(), vec![0x04, 0x00, 0xCE, 0x0F]);
+        assert_eq!(
+            ReportUdpPunchHoleAnswer.encode(),
+            vec![0x04, 0x00, 0xCF, 0x0F]
+        );
+        assert_eq!(ConfirmRelay.encode(), vec![0x04, 0x00, 0xD7, 0x0F]);
+        assert_eq!(ConfirmRelayAnswer.encode(), vec![0x04, 0x00, 0xD8, 0x0F]);
+    }
+
+    #[test]
+    fn punch_and_confirm_round_trip_empty() {
+        let punch = decode_frame(&ReportUdpPunchHole.encode()).unwrap();
+        assert_eq!(punch.id, 4046);
+        assert_eq!(
+            ReportUdpPunchHole::decode_frame(&punch),
+            Ok(ReportUdpPunchHole)
+        );
+        let echo = decode_frame(&ReportUdpPunchHoleAnswer.encode()).unwrap();
+        assert_eq!(echo.id, 4047);
+        assert_eq!(
+            ReportUdpPunchHoleAnswer::decode_frame(&echo),
+            Ok(ReportUdpPunchHoleAnswer)
+        );
+        let confirm = decode_frame(&ConfirmRelay.encode()).unwrap();
+        assert_eq!(confirm.id, 4055);
+        assert_eq!(ConfirmRelay::decode_frame(&confirm), Ok(ConfirmRelay));
+        let answer = decode_frame(&ConfirmRelayAnswer.encode()).unwrap();
+        assert_eq!(answer.id, 4056);
+        assert_eq!(
+            ConfirmRelayAnswer::decode_frame(&answer),
+            Ok(ConfirmRelayAnswer)
+        );
+    }
+
+    #[test]
+    fn punch_and_confirm_reject_payload() {
+        assert_eq!(
+            ReportUdpPunchHole::decode_body(&[0x00]),
+            Err(Error::TrailingBytes(1))
+        );
+        assert_eq!(
+            ReportUdpPunchHoleAnswer::decode_body(&[0x00]),
+            Err(Error::TrailingBytes(1))
+        );
+        assert_eq!(
+            ConfirmRelay::decode_body(&[0x00]),
+            Err(Error::TrailingBytes(1))
+        );
+        assert_eq!(
+            ConfirmRelayAnswer::decode_body(&[0x00]),
+            Err(Error::TrailingBytes(1))
+        );
+    }
+
+    #[test]
+    fn punch_report_rejects_confirm_command() {
+        let answer = decode_frame(&ConfirmRelayAnswer.encode()).unwrap();
+        assert_eq!(
+            ReportUdpPunchHole::decode_frame(&answer),
+            Err(Error::UnknownCommand(4056))
+        );
     }
 }
 
