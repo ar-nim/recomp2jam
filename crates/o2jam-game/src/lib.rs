@@ -5,9 +5,11 @@
 //! plus jam level `X` VERIFIED (`FUN_00570510` / `FUN_00570260`);
 //! long-note release documented as played (head hit + tail release).
 //!
-//! Life bar: local per-judgement deltas stay UNVERIFIED (no write site;
-//! candidate table at file `0x35e1a0` has no `.text` reader) so they stay
-//! out of code. The 4015 peer-life/rank mirror lives in [`PeerBars`]
+//! Life bar VERIFIED end to end: the difficulty switch `FUN_00570f90`
+//! (files `0x170fa2`–`0x171056`, ev `feebe490…`) selects per-difficulty
+//! deltas, and the scorer `FUN_00570510` applies them per judgement to
+//! the u16 life word at game `+0x3970` via adder `0x540a80` — modeled as
+//! [`LifeBar`]. The 4015 peer-life/rank mirror lives in [`PeerBars`]
 //! (VERIFIED handler shape, dossier `rea-4015-ghidra`). VERIFIED anchors
 //! live in `docs/gameplay.md`: `Life_gauge_*_bar.ojs` art, per-hit Jam
 //! (4014 arg 1) vs tick-driven Life (4014 arg 0), `SubmitScore` (4016)
@@ -610,6 +612,180 @@ impl TimingWindows {
     }
 }
 
+/// Per-difficulty per-judgement life deltas, VERIFIED 7.55: the
+/// difficulty switch `FUN_00570f90` (files `0x170fa2`–`0x171056`, ev
+/// `feebe490…`, called at game init right after the difficulty byte is
+/// stored to `this+0x34`, files `0x1701f2`/`0x170206`) loads one set of
+/// four i32 immediates into the delta fields `+0xe88` (Cool), `+0xe8c`
+/// (Good), `+0xe90` (Bad), `+0xe94` (Miss): Easy {+3, +2, −10, −50}
+/// (files `0x170fbc`/`0x170fc9`/`0x170fd6`/`0x170fe3`), Normal {+2, +1,
+/// −7, −40} (files `0x170ff2`/`0x170fff`/`0x17100c`/`0x171019`), Hard
+/// {+1, 0, −5, −30} (files `0x171028`/`0x171035`/`0x171042`/`0x17104f`).
+/// A difficulty outside 0..=2 takes the switch fallthrough and selects
+/// nothing (file `0x170fb4`). Bad takes −10/−7/−5 — the player-reported
+/// Bad=0 row was wrong (see `docs/gameplay.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LifeDeltas {
+    /// Per-Cool change (field `+0xe88`).
+    cool: i32,
+    /// Per-Good change (field `+0xe8c`).
+    good: i32,
+    /// Per-Bad change (field `+0xe90`).
+    bad: i32,
+    /// Per-Miss change (field `+0xe94`).
+    miss: i32,
+}
+
+impl LifeDeltas {
+    /// Easy arm {+3, +2, −10, −50} (files `0x170fbc`/`0x170fc9`/
+    /// `0x170fd6`/`0x170fe3`).
+    pub const EASY: Self = Self {
+        cool: 3,
+        good: 2,
+        bad: -10,
+        miss: -50,
+    };
+
+    /// Normal arm {+2, +1, −7, −40} (files `0x170ff2`/`0x170fff`/
+    /// `0x17100c`/`0x171019`).
+    pub const NORMAL: Self = Self {
+        cool: 2,
+        good: 1,
+        bad: -7,
+        miss: -40,
+    };
+
+    /// Hard arm {+1, 0, −5, −30} (files `0x171028`/`0x171035`/
+    /// `0x171042`/`0x17104f`).
+    pub const HARD: Self = Self {
+        cool: 1,
+        good: 0,
+        bad: -5,
+        miss: -30,
+    };
+
+    /// The set the switch arm selects; `None` outside 0..=2.
+    #[must_use]
+    pub fn for_difficulty(difficulty: u8) -> Option<Self> {
+        match difficulty {
+            0 => Some(Self::EASY),
+            1 => Some(Self::NORMAL),
+            2 => Some(Self::HARD),
+            _ => None,
+        }
+    }
+
+    /// The delta the scorer reads for one judgement tier.
+    #[must_use]
+    fn delta_for(&self, judgement: Judgement) -> i32 {
+        match judgement {
+            Judgement::Cool => self.cool,
+            Judgement::Good => self.good,
+            Judgement::Bad => self.bad,
+            Judgement::Miss => self.miss,
+        }
+    }
+}
+
+/// Local life bar, VERIFIED 7.55 end to end.
+///
+/// Field: the u16 life word at game `+0x3970`, reached as word `+0x2150`
+/// on the score sub-object `this+0x1820` (`0x1820 + 0x2150 = 0x3970`) —
+/// which is why earlier whole-offset scans of `+0x3970` found reads
+/// only. Application: the scorer `FUN_00570510` (file `0x170510`)
+/// selects the tier's delta field per judgement (Cool/Good/Bad/Miss →
+/// `+0xe88`/`+0xe8c`/`+0xe90`/`+0xe94`, files `0x17056c`/`0x1705e6`/
+/// `0x170806`/`0x170861`) and calls adder `0x540a80` (files
+/// `0x17057c`/`0x1705f6`/`0x170816`/`0x170871`).
+///
+/// Adder `0x540a80` (file `0x140a80`) adds the i32 delta into the u16
+/// word (write `0x140a97`), clamps to [`LIFE_MAX`] when a positive delta
+/// lands above 1000 (files `0x140ab6`–`0x140abf`), and snaps to 0 when a
+/// negative delta's u16 wrap lands above 1000 — the wrap only happens on
+/// underflow, so the range is saturating over `0..=[LIFE_MAX]`.
+///
+/// Death gate: the scorer snapshots the life word at entry (file
+/// `0x17051c`) and skips every tier block while it is 0 (files
+/// `0x170557`/`0x1705d1`/`0x1707f1`/`0x17083c`), so a dead bar ignores
+/// further judgements; the killing judgement still applies its delta.
+/// On any change the scorer fires the gauge UI event (files
+/// `0x17097e`–`0x170997`). The bar starts full: 1000 is pushed into the
+/// life setter `0x5407b0` on the global game object (file `0x4dae7c`,
+/// re-verified from bytes; setter at file `0x1407b0`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LifeBar {
+    /// Life remaining (`0..=LIFE_MAX`; the exe's u16 field `+0x3970`).
+    life: u16,
+    /// Difficulty-selected per-judgement deltas.
+    deltas: LifeDeltas,
+}
+
+impl LifeBar {
+    /// A full bar on the Easy set — the exe's init state (difficulty
+    /// byte defaults to 0, file `0x9515c`; life set to 1000, file
+    /// `0x4dae7c`).
+    #[must_use]
+    pub fn starting() -> Self {
+        Self {
+            life: LIFE_MAX,
+            deltas: LifeDeltas::EASY,
+        }
+    }
+
+    /// A full bar on `difficulty`'s delta set (0 = Easy, 1 = Normal,
+    /// 2 = Hard); `None` outside 0..=2, where the switch selects
+    /// nothing (file `0x170fb4`).
+    #[must_use]
+    pub fn new(difficulty: u8) -> Option<Self> {
+        Some(Self {
+            life: LIFE_MAX,
+            deltas: LifeDeltas::for_difficulty(difficulty)?,
+        })
+    }
+
+    /// Life remaining (`0..=[LIFE_MAX]`).
+    #[must_use]
+    pub fn life(&self) -> u16 {
+        self.life
+    }
+
+    /// Whether the bar is empty (the scorer's dead state).
+    #[must_use]
+    pub fn is_dead(&self) -> bool {
+        self.life == 0
+    }
+
+    /// Apply one judgement's delta. No-op while dead, mirroring the
+    /// scorer's entry gate (file `0x17051c`, tests `0x170557`/`0x1705d1`/
+    /// `0x1707f1`/`0x17083c`) so the type is safe to drive directly.
+    pub fn apply(&mut self, judgement: Judgement) {
+        if self.is_dead() {
+            return;
+        }
+        self.add(self.deltas.delta_for(judgement));
+    }
+
+    /// One pass of adder `0x540a80` (file `0x140a80`): absorb the i32
+    /// delta into the u16 word, clamp positive overflow at [`LIFE_MAX`]
+    /// (file `0x140ab9`), snap negative underflow to 0 (file `0x140adf`).
+    fn add(&mut self, delta: i32) {
+        let summed = i32::from(self.life) + delta;
+        if delta > 0 && summed > i32::from(LIFE_MAX) {
+            self.life = LIFE_MAX;
+        } else if delta < 0 && summed < 0 {
+            self.life = 0;
+        } else {
+            self.life = u16::try_from(summed).unwrap_or(LIFE_MAX);
+        }
+    }
+}
+
+impl Default for LifeBar {
+    fn default() -> Self {
+        Self::starting()
+    }
+}
+
 /// Running score/combo/jam. VERIFIED 7.55 scorer `FUN_00570510`
 /// (file `0x170510`): Cool `200 + 10*X`, Good `100 + 5*X`, Bad +4,
 /// Miss −10 floored at zero (`-10` when the field exceeds `0x0a`).
@@ -632,6 +808,8 @@ pub struct Score {
     pub counts: [u32; 4],
     /// Jam level `X` plus progress (drives the `10*X` / `5*X` terms).
     pub jam: JamState,
+    /// Life bar (u16 `+0x3970`, per-difficulty deltas — VERIFIED).
+    pub life: LifeBar,
 }
 
 /// Count-bucket index for one tier: [cool, good, bad, miss].
@@ -658,8 +836,18 @@ impl Score {
     }
 
     /// Apply one judgement.
+    ///
+    /// Dead gate VERIFIED (`FUN_00570510` files `0x170557`/`0x1705d1`/
+    /// `0x1707f1`/`0x17083c`): once the life word reads 0, every tier
+    /// block is skipped, so counts, jam, combo, score and life all
+    /// freeze; only a per-note display word clears (file `0x17099b`,
+    /// out of model scope). The killing judgement still applies.
     pub fn apply(&mut self, j: Judgement) {
+        if self.life.is_dead() {
+            return;
+        }
         self.counts[tier_index(j)] += 1;
+        self.life.apply(j);
         self.jam.note(j);
         match j {
             Judgement::Cool | Judgement::Good => self.combo += 1,
@@ -676,12 +864,22 @@ impl Score {
     /// verbatim, Bad-without-pill +4, Miss −10 floored at zero.
     /// Bad with a pill held keeps the combo frozen (no increment, no
     /// reset — verified absence of combo writes on the pill-save
-    /// path) and feeds jam like a Cool; Bad with no pill and Miss
-    /// break combo and reset jam (Miss spends no pill — verified
-    /// absence of pill logic on its path).
+    /// path) and feeds jam AND life like a Cool (the dispatch calls
+    /// the scorer with tier arg 4, file `0x16e880`, dossier
+    /// `ev_c168abac…`, so the scorer's Cool life add runs verbatim);
+    /// Bad with no pill and Miss break combo and reset jam (Miss
+    /// spends no pill — verified absence of pill logic on its path).
+    /// The same dead gate as [`Score::apply`] freezes everything; the
+    /// pill dispatch runs upstream of the scorer and its dead-state
+    /// behavior is untraced, so the model conservatively freezes pill
+    /// spend too — an implementation choice, not an exe claim.
     pub fn apply_rated(&mut self, judgement: Judgement, pills: &mut PillStock) {
+        if self.life.is_dead() {
+            return;
+        }
         self.counts[tier_index(judgement)] += 1;
         if judgement == Judgement::Bad && pills.consume_to_keep_combo() {
+            self.life.apply(Judgement::Cool);
             self.jam.note_pill_saved();
             let level = u64::from(self.jam.level());
             self.points += 200 + 10 * level;
@@ -694,6 +892,7 @@ impl Score {
             Judgement::Bad | Judgement::Miss => self.combo = 0,
         }
         self.add_tier_points(judgement);
+        self.life.apply(judgement);
         self.max_combo = self.max_combo.max(self.combo);
     }
 }
@@ -1141,5 +1340,128 @@ mod tests {
         }
         assert!(streak.note(Judgement::Cool, &mut pills));
         assert_eq!(pills.count(), MAX_PILLS);
+    }
+
+    #[test]
+    fn life_delta_sets_match_the_verified_switch_arms() {
+        let easy = LifeDeltas::for_difficulty(0).expect("easy");
+        assert_eq!((easy.cool, easy.good), (3, 2));
+        assert_eq!((easy.bad, easy.miss), (-10, -50));
+        let normal = LifeDeltas::for_difficulty(1).expect("normal");
+        assert_eq!((normal.cool, normal.good), (2, 1));
+        assert_eq!((normal.bad, normal.miss), (-7, -40));
+        let hard = LifeDeltas::for_difficulty(2).expect("hard");
+        assert_eq!((hard.cool, hard.good), (1, 0));
+        assert_eq!((hard.bad, hard.miss), (-5, -30));
+    }
+
+    #[test]
+    fn unknown_difficulty_selects_no_life_set() {
+        assert!(LifeDeltas::for_difficulty(3).is_none());
+        assert!(LifeDeltas::for_difficulty(u8::MAX).is_none());
+        assert!(LifeBar::new(3).is_none());
+    }
+
+    #[test]
+    fn bar_starts_full_on_every_difficulty() {
+        assert_eq!(LifeBar::default().life(), LIFE_MAX);
+        for difficulty in 0..3 {
+            let bar = LifeBar::new(difficulty).expect("set");
+            assert_eq!(bar.life(), LIFE_MAX);
+            assert!(!bar.is_dead());
+        }
+    }
+
+    #[test]
+    fn cool_on_a_full_bar_clamps_at_1000() {
+        let mut bar = LifeBar::starting();
+        bar.apply(Judgement::Cool);
+        assert_eq!(bar.life(), LIFE_MAX);
+    }
+
+    #[test]
+    fn hard_good_changes_nothing() {
+        let mut bar = LifeBar::new(2).expect("hard");
+        bar.apply(Judgement::Good);
+        assert_eq!(bar.life(), LIFE_MAX);
+    }
+
+    #[test]
+    fn easy_misses_drain_and_floor_at_zero() {
+        let mut bar = LifeBar::starting();
+        for _ in 0..19 {
+            bar.apply(Judgement::Miss);
+        }
+        assert_eq!(bar.life(), 50);
+        bar.apply(Judgement::Miss);
+        assert_eq!(bar.life(), 0);
+        assert!(bar.is_dead());
+    }
+
+    #[test]
+    fn dead_bar_ignores_further_deltas() {
+        let mut bar = LifeBar::starting();
+        for _ in 0..20 {
+            bar.apply(Judgement::Miss);
+        }
+        bar.apply(Judgement::Cool);
+        assert_eq!(bar.life(), 0);
+    }
+
+    #[test]
+    fn normal_bar_drains_at_its_verified_rate() {
+        let mut bar = LifeBar::new(1).expect("normal");
+        for _ in 0..24 {
+            bar.apply(Judgement::Miss);
+        }
+        assert_eq!(bar.life(), 40);
+        bar.apply(Judgement::Good);
+        assert_eq!(bar.life(), 41);
+        bar.apply(Judgement::Miss);
+        assert_eq!(bar.life(), 1);
+        bar.apply(Judgement::Miss);
+        assert_eq!(bar.life(), 0);
+    }
+
+    #[test]
+    fn score_freezes_once_life_hits_zero() {
+        let mut score = Score::default();
+        for _ in 0..20 {
+            score.apply(Judgement::Miss);
+        }
+        assert!(score.life.is_dead());
+        let frozen = (score.points, score.combo, score.counts);
+        score.apply(Judgement::Cool);
+        score.apply(Judgement::Miss);
+        assert_eq!((score.points, score.combo, score.counts), frozen);
+    }
+
+    #[test]
+    fn killing_miss_still_applies_its_accounting() {
+        let mut score = Score::default();
+        for _ in 0..19 {
+            score.apply(Judgement::Miss);
+        }
+        assert_eq!(score.life.life(), 50);
+        let misses = score.counts[3];
+        score.apply(Judgement::Miss);
+        assert_eq!(score.life.life(), 0);
+        assert_eq!(score.counts[3], misses + 1);
+    }
+
+    #[test]
+    fn rated_pill_saved_bad_takes_the_cool_life_delta() {
+        let mut score = Score::default();
+        let mut pills = PillStock::new(1);
+        for _ in 0..18 {
+            score.apply_rated(Judgement::Miss, &mut pills);
+        }
+        assert_eq!(score.life.life(), 100);
+        score.apply_rated(Judgement::Cool, &mut pills);
+        assert_eq!((score.life.life(), score.combo), (103, 1));
+        score.apply_rated(Judgement::Bad, &mut pills);
+        assert_eq!(pills.count(), 0);
+        assert_eq!((score.life.life(), score.combo), (106, 1));
+        assert_eq!(score.counts, [1, 0, 1, 18]);
     }
 }
