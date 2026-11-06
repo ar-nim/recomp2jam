@@ -14,7 +14,7 @@ use super::playing::{HighwayGeometry, LivePlay, PlayingView};
 use super::screen::{Screen, ScreenFlow};
 use super::GameLoop;
 use o2jam_audio::{AudioBackend, PcmSamples};
-use o2jam_net::ChannelState;
+use o2jam_net::{ChannelState, RoomListEntry};
 use o2jam_render::{
     draw_number, draw_text, fill_rect, number_width, pack_xrgb, text_width, Frame, Rect,
 };
@@ -54,6 +54,57 @@ fn paint_channel_list(frame: &mut Frame<'_>, channels: &[ChannelState], highligh
             pack_xrgb(0x70, 0x70, 0x70)
         };
         draw_text(frame, text_x, y, &entry, ink);
+        if i == highlight {
+            fill_rect(
+                frame,
+                &Rect {
+                    x: text_x - 6,
+                    y,
+                    w: 3,
+                    h: 5,
+                },
+                pack_xrgb(0xFF, 0xD0, 0x20),
+            );
+        }
+    }
+}
+
+/// One room row: `3 TITLE 5/8`, locked rooms suffixed `!`.
+fn room_row_text(room: &RoomListEntry) -> String {
+    let mut text = format!(
+        "{} {} {}/{}",
+        room.number, room.title, room.user_count, room.capacity
+    );
+    if room.has_password {
+        text.push('!');
+    }
+    text
+}
+
+/// Paint the online room list with a highlight cursor.
+fn paint_room_list(frame: &mut Frame<'_>, rooms: &[RoomListEntry], highlight: usize) {
+    let (w, h) = (frame.w as i32, frame.h as i32);
+    fill_rect(
+        frame,
+        &Rect {
+            x: 0,
+            y: 0,
+            w: w as u32,
+            h: h as u32,
+        },
+        background_of(Screen::Room),
+    );
+    paint_title(frame, "ROOM");
+    let text_x = w / 4;
+    for (i, room) in rooms.iter().enumerate() {
+        let y = h / 4 + i as i32 * CHANNEL_ROW_H;
+        draw_text(
+            frame,
+            text_x,
+            y,
+            &room_row_text(room),
+            pack_xrgb(0xFF, 0xFF, 0xFF),
+        );
         if i == highlight {
             fill_rect(
                 frame,
@@ -230,6 +281,8 @@ pub struct ScreenGame {
     avatar: Option<AvatarFigure>,
     channels: Vec<ChannelState>,
     highlight: usize,
+    rooms: Vec<RoomListEntry>,
+    room_highlight: usize,
 }
 
 /// Key-sound bank plus backend for windowed play.
@@ -250,6 +303,8 @@ impl ScreenGame {
             avatar: None,
             channels: Vec::new(),
             highlight: 0,
+            rooms: Vec::new(),
+            room_highlight: 0,
         }
     }
 
@@ -321,6 +376,15 @@ impl ScreenGame {
         self
     }
 
+    /// Rooms from the last online list (empty offline). Empty slots
+    /// (`Number` 0, which the server sends for every free slot) are
+    /// not listed — display choice, the data stays unfiltered upstream.
+    pub fn set_rooms(&mut self, rooms: Vec<RoomListEntry>) -> &mut Self {
+        self.rooms = rooms.into_iter().filter(|room| room.number != 0).collect();
+        self.room_highlight = 0;
+        self
+    }
+
     /// Paint with an explicit clock (tests use this; live paint reads
     /// the wall clock).
     pub fn paint_at(&mut self, frame: &mut Frame<'_>, now_ms: u64) {
@@ -334,6 +398,9 @@ impl ScreenGame {
             }
             Screen::Channel if !self.channels.is_empty() => {
                 paint_channel_list(frame, &self.channels, self.highlight);
+            }
+            Screen::Room if !self.rooms.is_empty() => {
+                paint_room_list(frame, &self.rooms, self.room_highlight);
             }
             Screen::Result => paint_result(frame, self.avatar.as_ref(), self.playing.score()),
             screen => paint_screen(frame, screen),
@@ -379,6 +446,13 @@ impl GameLoop for ScreenGame {
             }
             (Screen::Room, super::MenuKey::Confirm) => self.enter(Screen::Waiting),
             (Screen::Room, super::MenuKey::Back) => self.enter(Screen::Channel),
+            (Screen::Room, super::MenuKey::Up) => {
+                self.room_highlight = self.room_highlight.saturating_sub(1);
+            }
+            (Screen::Room, super::MenuKey::Down) => {
+                let last = self.rooms.len().saturating_sub(1);
+                self.room_highlight = (self.room_highlight + 1).min(last);
+            }
             (Screen::Waiting, super::MenuKey::Confirm) => self.enter(Screen::Loading),
             (Screen::Waiting, super::MenuKey::Back) => self.enter(Screen::Room),
             (Screen::Loading, super::MenuKey::Confirm) => self.enter(Screen::Playing),
@@ -706,6 +780,83 @@ mod screen_paint_tests {
         assert_eq!(buf[12 * 64 + 16], pack_xrgb(0xFF, 0xFF, 0xFF));
         assert_eq!(buf[12 * 64 + 10], pack_xrgb(0xFF, 0xD0, 0x20));
         assert_eq!(buf[0], background_of(Screen::Channel));
+    }
+
+    fn two_rooms() -> Vec<RoomListEntry> {
+        vec![
+            RoomListEntry {
+                number: 3,
+                state_code: 1,
+                title: "Jam".to_owned(),
+                has_password: false,
+                music_id: 0,
+                difficulty: 0,
+                key_mode: 2,
+                game_mode: 0,
+                speed: 1,
+                capacity: 8,
+                user_count: 5,
+                min_level: 0,
+                max_level: 0,
+                skills: vec![],
+                premium: false,
+                room_type: 0,
+            },
+            RoomListEntry {
+                number: 7,
+                state_code: 1,
+                title: "Locked".to_owned(),
+                has_password: true,
+                music_id: 0,
+                difficulty: 0,
+                key_mode: 2,
+                game_mode: 0,
+                speed: 1,
+                capacity: 8,
+                user_count: 1,
+                min_level: 0,
+                max_level: 0,
+                skills: vec![],
+                premium: false,
+                room_type: 0,
+            },
+        ]
+    }
+
+    #[test]
+    fn room_highlight_moves_with_bounds() {
+        use super::super::MenuKey;
+        let mut game = ScreenGame::new();
+        game.set_rooms(two_rooms());
+        game.lane_key(3, true);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        game.menu_key(MenuKey::Down, true);
+        game.menu_key(MenuKey::Down, true);
+        assert_eq!(game.room_highlight, 1);
+        game.menu_key(MenuKey::Up, true);
+        assert_eq!(game.room_highlight, 0);
+    }
+
+    #[test]
+    fn room_list_paints_rows_and_cursor() {
+        let mut game = ScreenGame::new();
+        game.set_rooms(two_rooms());
+        game.lane_key(3, true);
+        game.menu_key(super::super::MenuKey::Confirm, true);
+        // 64x48 list: rows from y 12, text x 16; '3' top bar first.
+        let mut buf = vec![0u32; 64 * 48];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 48,
+            },
+            0,
+        );
+        assert_eq!(buf[12 * 64 + 16], pack_xrgb(0xFF, 0xFF, 0xFF));
+        assert_eq!(buf[12 * 64 + 10], pack_xrgb(0xFF, 0xD0, 0x20));
+        assert_eq!(buf[0], background_of(Screen::Room));
     }
 
     #[test]

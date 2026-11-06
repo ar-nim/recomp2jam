@@ -106,6 +106,12 @@ enum Command {
         /// Gateway TCP port for `--online`.
         #[arg(long, default_value_t = o2jam_net::DEFAULT_GATEWAY_PORT)]
         port: u16,
+        /// Gateway id to enter for `--online` (needs --channel-id too).
+        #[arg(long, requires = "online_channel_id")]
+        online_gateway_id: Option<i16>,
+        /// Channel id to enter for `--online` (needs --online-gateway-id too).
+        #[arg(long, requires = "online_gateway_id")]
+        online_channel_id: Option<i16>,
     },
 }
 
@@ -174,6 +180,22 @@ fn main() -> Result<()> {
                     if channel.active { "open" } else { "closed" },
                 );
             }
+            let open_rooms: Vec<_> = report
+                .rooms
+                .iter()
+                .filter(|room| room.number != 0)
+                .collect();
+            println!("rooms: {} open", open_rooms.len());
+            for room in open_rooms.iter().take(10) {
+                println!(
+                    "  #{} {:?} {}/{}{}",
+                    room.number,
+                    room.title,
+                    room.user_count,
+                    room.capacity,
+                    if room.has_password { " locked" } else { "" },
+                );
+            }
             if let Some(login) = &report.channel_login {
                 let restricted = match login.restricted {
                     Some(true) => "restricted",
@@ -200,6 +222,8 @@ fn main() -> Result<()> {
             user_id,
             token,
             port,
+            online_gateway_id,
+            online_channel_id,
         } => {
             tracing::info!(?chart, ?window, "play stub");
             if window {
@@ -213,13 +237,17 @@ fn main() -> Result<()> {
                         gender: o2jam_net::Gender::Any,
                         relay_key1: 0,
                         relay_key2: 0,
-                        channel: None,
+                        channel: online_gateway_id.zip(online_channel_id),
                         character: false,
                         avatar_opa: None,
                     };
                     let report = connect::connect_and_login(&options)?;
                     tracing::info!(channels = report.channels.len(), "channels listed");
                     game.set_channels(report.channels);
+                    if !report.rooms.is_empty() {
+                        tracing::info!(rooms = report.rooms.len(), "rooms listed");
+                        game.set_rooms(report.rooms);
+                    }
                 }
                 if let Some(opa_path) = &avatar_opa {
                     let ids = connect::parse_equipment(&equip)?;
