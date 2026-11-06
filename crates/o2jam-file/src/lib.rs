@@ -124,14 +124,15 @@ fn check_ogg(data: &[u8], at: usize) -> Result<(), FileError> {
 /// docs/file-formats/opi.md): 16-byte header (`u32` version +
 /// `u32` slot count + `u64` zero), data blobs from +16, and a
 /// trailing table of fixed-size entries. Versions observed: 2
-/// (`.opi`), 1 (`.opa`); the layout is identical.
-const OPI_HEADER_LEN: usize = 16;
-const OPI_ENTRY_LEN: usize = 152;
-const OPI_NAME_OFF: usize = 4;
-const OPI_NAME_LEN: usize = 128;
-const OPI_OFFSET_OFF: usize = 132;
-const OPI_SIZE_OFF: usize = 136;
-const OPI_RESERVED_OFF: usize = 140;
+/// (`.opi`), 1 (`.opa`); the layout is identical. Public for
+/// test-archive builders (real archives stay local-only).
+pub const OPI_HEADER_LEN: usize = 16;
+pub const OPI_ENTRY_LEN: usize = 152;
+pub const OPI_NAME_OFF: usize = 4;
+pub const OPI_NAME_LEN: usize = 128;
+pub const OPI_OFFSET_OFF: usize = 132;
+pub const OPI_SIZE_OFF: usize = 136;
+pub const OPI_RESERVED_OFF: usize = 140;
 
 /// One file inside an OPI/OPA archive.
 #[derive(Debug, Clone, PartialEq, Eq)]
