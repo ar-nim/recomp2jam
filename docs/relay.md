@@ -106,7 +106,24 @@ Multi-byte integers are little-endian. Struct names are the
   `session_key2` `i32`).
 
 `MemberRole` (`u16` on the wire): 0 None, 1 Champion, 2
-Challenger, 3 Spectator (`Encore.Metadata.MemberRole`).
+Challenger, 3 Spectator. Memoryer agrees
+(`Encore.Metadata.MemberRole`), but the meanings are exe-pinned: the
+role word at VA `0x77ee86` is loaded by seven `66 A1 86 EE 77 00`
+sites (files `0xaec29`/`0xc33b4`/`0xdbb1c`/`0xe6f81`/`0xe7a75`/
+`0xe840a`/`0xea26e`); four gate Spectator with `83 F9 03` (files
+`0xaec3d`/`0xc33c2`/`0xe7a89`/`0xe841e`); file `0xdbb1c` dispatches
+Champion/Challenger with `83 7D 8C 01`/`83 7D 8C 02` (else fallthrough)
+and file `0xe6f81` checks `83 F9 01` then `83 F8 02`; 0 is the residual
+None. The op-5 packer site (`0xea26e`) copies without branching.
+(`ev_acacd596017f22ba805e419c18cfe686`,
+`ev_cbe189ba7fb55898e42e98c6175b8e75`,
+`ev_6f91b9283627171b33801a2c0e653100`,
+`ev_e5879e64727f6c4c5ab0759b929433c8`, observed.) Corroborating
+context (not value proof): `Winner_image.ojs` is pushed at file
+`0xe66cc` and `Challenger_image.ojs` at file `0xe671e`, both inside the
+same `0xe6xxx`–`0xe8xxx` Live-result region as the role branches; which
+value selects which art needs a Ghidra dossier before claiming. Full
+table in §11.
 
 ### Op 5 is a tally, not a 4014 echo
 
@@ -326,7 +343,9 @@ disassembly is reproduced.
   TCP plus the RUDP trio — the class's own call sites are open.
 - Closed: op-6/7 `autoplay` is never 0 on client send paths (five
   dword-1 stores across the dispatcher and both fanout wrappers, no
-  zero-store; §6). Still open: which caller selector (1–4) reaches
+  zero-store; §6). Closed: combo client `code` is 0 (no nonzero
+  `code`/`unused` writer on any combo send path; §11,
+  `ev_e4c4a65ec986bea1dc13e28cbcf9d36c`). Still open: which caller selector (1–4) reaches
   which dispatcher branch (grade mapping), and what `code`/`unused`
   carry on server-rewritten S→C copies (no nonzero writer located
   client-side; needs a wire capture, plus a Ghidra function dossier
@@ -381,7 +400,7 @@ lock (ports differ from gateway `15010` and adjunct `7788`),
 short/trailing/foreign-id and
 bad-enum rejections, per-field offset vectors for the op-5 tally (15
 fields) and the op-6/7 nonzero fields (code at 0, autoplay at 24, role
-at 28) with unknown-role rejections. `adjunct_host_tests`: adjunct address octets,
+at 28) with unknown-role rejections. `relay_enum_value_tests`: full value tables for `RoomState` (0–2), `Difficulty` (0–3), `GameSpeed` (0–11) plus out-of-range rejections (Memoryer values locked; exe consumers §11). `adjunct_host_tests`: adjunct address octets,
 relay-subnet-but-not-pool membership, `7788` immediate. `live_handshake_tests`: exact empty frames
 `04 00 <id>` for 4046/4047/4055/4056 (the 4046 bytes match the UHP
 stack frame; the 4055 send site is the sole `0x0FD7` dword image-wide),
@@ -524,3 +543,27 @@ value semantics (team/ready/music/playing/free-pass enums, `live_extra`,
 `+0x2134`, `+0x2186` group meaning — none has an in-exe compare consumer);
 the full 3003/3007 body layouts beyond the pinned order/offset; the
 `+0x217d = 0xFF` ctor default's purpose.
+
+## 11. Relay enum value sets (7.55 static map)
+
+Widths were already pinned (`u16` role, `u8` lifecycle/difficulty/speed,
+`i32` code: the fanout wrappers stage routing/autoplay/role through the
+`0xeb4d0`/`0xeb570`/`0xeb550` helpers with pushed sizes `0x18`/`0x04`/
+`0x02`, matching the 24/4/2 wire lengths, §6). This section adds the
+branch-or-table consumer each value needs. Static only over the local
+install-root copy (read-only, VA = file + `0x400000`); behavior described
+in own words with file offsets plus local-static record ids (sha256 of the
+record tag, truncated to 32 hex). Tools: `python3` byte scans plus
+Capstone disassembly; no disassembly is reproduced.
+
+| Enum | Values (pinned) | Exe consumer |
+|---|---|---|
+| `MemberRole` (`role`, ops 5/6/7) | 0 None, 1 Champion, 2 Challenger, 3 Spectator | Role word VA `0x77ee86`: `66 A1 86 EE 77 00` loads at files `0xaec29`/`0xc33b4`/`0xdbb1c`/`0xe6f81`/`0xe7a75`/`0xe840a`/`0xea26e` (`ev_acacd596017f22ba805e419c18cfe686`, observed); `83 F9 03` Spectator gates at files `0xaec3d`/`0xc33c2`/`0xe7a89`/`0xe841e` (`ev_cbe189ba7fb55898e42e98c6175b8e75`, observed); `83 7D 8C 01`/`83 7D 8C 02` Champion/Challenger dispatch with else fallthrough at files `0xdbb2d`/`0xdbb33` (`ev_6f91b9283627171b33801a2c0e653100`, observed); `83 F9 01` then `83 F8 02` at files `0xe6f95`/`0xe6faf` (`ev_e5879e64727f6c4c5ab0759b929433c8`, observed); 0 is the residual None; `0xea26e` (op-5 packer) copies without branching. |
+| Combo `code` (preface, ops 1–7) | 0 = client send (only client-sent value) | No nonzero `code`/`unused` writer on any combo send path (§6); client combo sends carry both as 0 (`ev_e4c4a65ec986bea1dc13e28cbcf9d36c`, observed). Server-rewritten S→C values OPEN (needs a wire capture). |
+| `RoomState` (`rooms.rs`, `u8`) | 0 Unavailable, 1 Waiting, 2 Playing (Memoryer `Encore.Metadata.RoomState`) | OPEN: values locked by `relay_enum_value_tests`; no dedicated branch/table consumer located in the relay/live regions. Nearest context: the `0xe6xxx`–`0xe8xxx` Live-result UI holds the role-gated art pushes at files `0xe66cc`/`0xe671e`; needs a Ghidra dossier before attributing any state compare. |
+| `Difficulty` (`rooms.rs`, `u8`) | 0 Ex, 1 Nx, 2 Hx, 3 Rx (Memoryer `Encore.Metadata.Difficulty`) | OPEN: values locked by `relay_enum_value_tests`; `83 F8`/`83 F9 03` compares occur at 31 sites image-wide each with none attributed to the difficulty byte yet. Per-difficulty life/score deltas stay OPEN (see `docs/gameplay.md`). |
+| `GameSpeed` (`rooms.rs`, `u8`) | 0 X05, 1 X10, 2 X15, 3 X20, 4 X25, 5 X30, 6 X35, 7 X40, 8 X45, 9 X50, 10 X60, 11 Xr (Memoryer `Mozart.Metadata.GameSpeed` fork ordinal) | OPEN: values locked by `relay_enum_value_tests`. One lead: `83 F9 0B` (`cmp ecx, 11`, the 0–11 upper bound) at file `0x1c20f7` follows a function-prologue load from `[eax + 0x16bc]`; the six other `ecx, 11` sites (`0x9af0e`/`0x9c4c0`/`0xc436c`/`0x12c718`/`0x1c2189`/`0x208e0f`) and the four `eax, 11` sites show no room/speed context. No 12-entry speed table located; needs a Ghidra dossier for VA `0x5c20f7` before claiming (`ev_0e43412d808afbe3ec14be719f45a098`, observed). |
+
+Tests: `relay_enum_value_tests` in `relay.rs` asserts every value above
+(plus out-of-range rejections); `relay_command_tests` keeps the
+per-field offset vectors and unknown-role rejections.
