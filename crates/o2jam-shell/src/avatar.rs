@@ -97,6 +97,22 @@ impl AvatarFigure {
     }
 }
 
+/// Load one named sprite body from an OPI/OPA archive as a figure.
+/// Returns `None` when the entry is missing or undecodable (callers
+/// fall back to placeholder art).
+#[must_use]
+pub fn load_archive_sprite(archive: &[u8], entry_name: &str) -> Option<AvatarFigure> {
+    let entries = o2jam_file::parse_opi(archive).ok()?;
+    let entry = entries.iter().find(|entry| entry.name == entry_name)?;
+    let body = archive.get(entry.data_offset..entry.data_offset + entry.size as usize)?;
+    let sprite = o2jam_file::parse_sprite55(body).ok()?;
+    let figure = AvatarFigure::from_sprite55(&sprite);
+    if figure.is_empty() {
+        return None;
+    }
+    Some(figure)
+}
+
 /// Build the worn figure for an equipment table: per nonzero item
 /// id (in slot order) resolve the item row, pick its wear sprites,
 /// and stack every decodable body as layers. Unresolvable pieces —
@@ -399,6 +415,16 @@ mod avatar_figure_tests {
         let junk_archive = opa_blob(&[("junk.ojs", b"not a sprite")]);
         assert!(load_worn_figure(&archive, &table, &[999], true).is_empty());
         assert!(load_worn_figure(&junk_archive, &table, &[6], true).is_empty());
+    }
+
+    #[test]
+    fn archive_sprite_loads_by_name() {
+        let red = sprite55_blob(1, 0x0000, 1, 1, &[0x00, 0x7C]);
+        let archive = opa_blob(&[("Logo.ojs", &red)]);
+        let figure = load_archive_sprite(&archive, "Logo.ojs").unwrap();
+        assert_eq!(figure.len(), 1);
+        assert!(load_archive_sprite(&archive, "Missing.ojs").is_none());
+        assert!(load_archive_sprite(b"garbage", "Logo.ojs").is_none());
     }
 
     #[test]

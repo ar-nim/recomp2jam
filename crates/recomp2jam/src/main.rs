@@ -97,6 +97,10 @@ enum Command {
         /// Wear the male sprite variants.
         #[arg(long)]
         avatar_male: bool,
+        /// Load the splash backdrop from this `.opi` archive
+        /// (`O2mediaLogo.ojs`).
+        #[arg(long)]
+        interface: Option<String>,
         /// List live channels in the window (needs --host etc.).
         #[arg(long)]
         online: bool,
@@ -238,6 +242,7 @@ fn main() -> Result<()> {
             avatar_opa,
             equip,
             avatar_male,
+            interface,
             online,
             host,
             user_id,
@@ -249,6 +254,11 @@ fn main() -> Result<()> {
             tracing::info!(?chart, ?window, "play stub");
             if window {
                 let mut game = o2jam_shell::ScreenGame::new();
+                if let Some(opi_path) = &interface {
+                    let logo = connect::load_interface_sprite(opi_path, "O2mediaLogo.ojs")?;
+                    tracing::info!(layers = logo.len(), "splash art loaded");
+                    game.load_splash(logo);
+                }
                 if online {
                     let options = connect::ConnectOptions {
                         host: host.clone().unwrap_or_default(),
