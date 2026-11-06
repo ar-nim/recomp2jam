@@ -676,3 +676,181 @@ mod connect_flow_tests {
         assert!(message.contains("InvalidLogin"), "{message}");
     }
 }
+
+/// Host song flow over real gateway frames (plan Phases 3–4).
+///
+/// Test-gated drivers for every new song opcode: production CLI
+/// wiring (`connect` flags in `main.rs`) is a later step outside
+/// this task's touch list, so the flow lives here as the
+/// executable proof against a fake gateway.
+#[cfg(test)]
+mod song_flow_tests {
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::thread;
+    use std::time::Duration;
+
+    use o2jam_net::{
+        frame::{decode_frame, encode_frame},
+        ConfirmMusicLoaded, ExitPlaying, FinalizeRank, Frame, GameStatsUpdate, GatewayConnection,
+        GetMusicList, Request, SetDownloadProgress, SetRoomMusic, StartGame, StatKind, SubmitScore,
+        SyncMemberMusicState, UpdateGameStats, WireMessage, HEADER_LEN,
+    };
+
+    /// Read one whole frame off the fake server's socket.
+    fn read_frame(stream: &mut TcpStream) -> Frame {
+        let mut header = [0u8; 4];
+        stream.read_exact(&mut header).unwrap();
+        let body_len = u16::from_le_bytes([header[0], header[1]]) as usize;
+        let mut rest = vec![0u8; body_len - HEADER_LEN];
+        stream.read_exact(&mut rest).unwrap();
+        let mut bytes = header.to_vec();
+        bytes.extend_from_slice(&rest);
+        decode_frame(&bytes).unwrap()
+    }
+
+    type NetResult<T> = Result<T, o2jam_net::Error>;
+
+    fn send_select(gateway: &mut GatewayConnection) -> NetResult<()> {
+        let select = SetRoomMusic {
+            music_id: 757,
+            difficulty: 2,
+        };
+        gateway.send_frame(Request::SetRoomMusic.id(), &select.encode_body())
+    }
+
+    fn fetch_music_list(gateway: &mut GatewayConnection) -> NetResult<Frame> {
+        gateway.exchange(
+            Request::GetMusicList.id(),
+            &GetMusicList.encode_body(),
+            music_list_answer(),
+        )
+    }
+
+    /// `GetMusicList` 4031 answer id (body still opaque).
+    fn music_list_answer() -> u16 {
+        4031
+    }
+
+    fn send_sync(gateway: &mut GatewayConnection) -> NetResult<()> {
+        let state = SyncMemberMusicState { music_state: 2 };
+        gateway.send_frame(Request::SyncMemberMusicState.id(), &state.encode_body())?;
+        let progress = SetDownloadProgress {
+            progress: 100,
+            member_id: 0,
+        };
+        gateway.send_frame(Request::SetDownloadProgress.id(), &progress.encode_body())
+    }
+
+    fn send_start(gateway: &mut GatewayConnection) -> NetResult<()> {
+        gateway.send_frame(Request::StartGame.id(), &StartGame.encode_body())?;
+        let loaded = ConfirmMusicLoaded {
+            power_skill_id: 0,
+            speed: 1,
+        };
+        gateway.send_frame(Request::ConfirmMusicLoaded.id(), &loaded.encode_body())
+    }
+
+    fn send_jam_tick(gateway: &mut GatewayConnection) -> NetResult<()> {
+        let tick = UpdateGameStats {
+            kind: StatKind::Jam,
+            value: 3,
+            sequence: 1,
+            score: 210,
+            long_note_score: 0,
+        };
+        gateway.send_frame(Request::UpdateGameStats.id(), &tick.encode_body())
+    }
+
+    fn await_peer_bar(gateway: &mut GatewayConnection) -> NetResult<GameStatsUpdate> {
+        let frame = gateway.await_response(GameStatsUpdate::COMMAND)?;
+        GameStatsUpdate::decode_frame(&frame)
+    }
+
+    fn send_tally(gateway: &mut GatewayConnection) -> NetResult<()> {
+        let tally = SubmitScore {
+            cool: 10,
+            good: 2,
+            bad: 0,
+            miss: 0,
+            max_combo: 12,
+            jam: 1,
+            max_jam: 1,
+            score: 2210,
+            life: 100,
+            speed: 1,
+            long_note_score: 0,
+        };
+        gateway.send_frame(Request::SubmitScore.id(), &tally.encode_body())?;
+        gateway.send_frame(Request::FinalizeRank.id(), &FinalizeRank.encode_body())?;
+        gateway.send_frame(Request::ExitPlaying.id(), &ExitPlaying.encode_body())
+    }
+
+    /// Drive select → sync → start → tick → score → rank → exit.
+    fn drive_host_song_flow(gateway: &mut GatewayConnection) -> NetResult<(u16, GameStatsUpdate)> {
+        send_select(gateway)?;
+        let listed = fetch_music_list(gateway)?;
+        send_sync(gateway)?;
+        send_start(gateway)?;
+        send_jam_tick(gateway)?;
+        let peer = await_peer_bar(gateway)?;
+        send_tally(gateway)?;
+        Ok((listed.id, peer))
+    }
+
+    #[test]
+    fn host_song_flow_reaches_score_over_fake_gateway() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::SetRoomMusic.id());
+            assert_eq!(read_frame(&mut stream).id, Request::GetMusicList.id());
+            stream
+                .write_all(&encode_frame(music_list_answer(), &[]))
+                .unwrap();
+            assert_eq!(
+                read_frame(&mut stream).id,
+                Request::SyncMemberMusicState.id()
+            );
+            assert_eq!(
+                read_frame(&mut stream).id,
+                Request::SetDownloadProgress.id()
+            );
+            assert_eq!(read_frame(&mut stream).id, Request::StartGame.id());
+            let loaded = read_frame(&mut stream);
+            assert_eq!(loaded.id, Request::ConfirmMusicLoaded.id());
+            assert_eq!(
+                ConfirmMusicLoaded::decode_body(&loaded.payload).unwrap(),
+                ConfirmMusicLoaded {
+                    power_skill_id: 0,
+                    speed: 1,
+                }
+            );
+            let tick = read_frame(&mut stream);
+            assert_eq!(tick.id, Request::UpdateGameStats.id());
+            let stats = UpdateGameStats::decode_body(&tick.payload).unwrap();
+            assert_eq!(stats.kind, StatKind::Jam);
+            let echo = GameStatsUpdate {
+                member_id: 0,
+                kind_code: StatKind::Life.as_u8(),
+                value: 1000,
+                ranks: [0; 8],
+            };
+            stream.write_all(&echo.encode()).unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::SubmitScore.id());
+            assert_eq!(read_frame(&mut stream).id, Request::FinalizeRank.id());
+            assert_eq!(read_frame(&mut stream).id, Request::ExitPlaying.id());
+        });
+        let mut gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let (listed_id, peer) = drive_host_song_flow(&mut gateway).unwrap();
+        server.join().unwrap();
+        assert_eq!(listed_id, music_list_answer());
+        assert_eq!(peer.member_id, 0);
+        assert_eq!(peer.kind(), Some(StatKind::Life));
+        assert_eq!(peer.value, 1000);
+    }
+}
