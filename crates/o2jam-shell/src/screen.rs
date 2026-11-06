@@ -82,6 +82,10 @@ impl ScreenFlow {
     }
 
     /// Move to the next screen, rejecting jumps the client never makes.
+    ///
+    /// # Errors
+    ///
+    /// `BadTransition` when the edge is not in the transition map.
     pub fn go(&mut self, next: Screen) -> Result<(), BadTransition> {
         if !can_enter(self.current, next) {
             return Err(BadTransition {

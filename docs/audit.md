@@ -37,7 +37,7 @@ Automated baseline: `cargo fmt --check` clean,
    `From` ×4, or-pattern merges, `is_some_and`/`map_or`, elided lifetimes,
    `LivePlay::new` takes a slice, explicit enum imports, reasoned `ignore`,
    `Ipv4Addr::LOCALHOST`, ctor field order, `u8::from(!male)`-free parity
-   test, per-layer colorkeys); `# Errors` docs still open (58 sites).
+   test, per-layer colorkeys); `# Errors` docs DONE (zero `missing_errors_doc` remaining).
    ACCEPTED with rationale (not churned): protocol-bounded `as` casts
    (target-dependent `usize` widths have no `From`; values are
    length-checked), `assert!(is_empty())` over `assert_eq!(_, [])`,

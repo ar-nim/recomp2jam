@@ -34,6 +34,11 @@ const M30_REF_OFF: usize = 44;
 /// each followed by its OGG. Field split corroborated by the open2jam
 /// OJM documentation (`M30_sample_header`: `ref`/`unk_zero` words).
 /// Verified byte-exact on real 7.55 files (docs/file-formats/ojm.md).
+///
+/// # Errors
+///
+/// `FileError::TooShort`/`Truncated` when the buffer ends early,
+/// `FileError::UnknownFormat` on a bad header or non-OGG body.
 pub fn parse_m30(bytes: &[u8]) -> Result<Vec<OjmSample<'_>>, FileError> {
     if bytes.len() < 20 {
         return Err(FileError::TooShort(bytes.len()));
@@ -254,6 +259,10 @@ fn walk_entries(
 /// bytes are NOT validated (bodies may be encrypted); use
 /// [`not_decrypt`] plus de-interleaving to recover them.
 /// Verified on real 7.55 files (docs/file-formats/ojm.md).
+///
+/// # Errors
+///
+/// `FileError::TooShort`/`Truncated` when tables run past the buffer.
 pub fn parse_new_variant_entries(bytes: &[u8]) -> Result<OjmTables, FileError> {
     if bytes.len() < 16 {
         return Err(FileError::TooShort(bytes.len()));
@@ -299,6 +308,10 @@ pub const NEW_VARIANT_HIGH_BANK: u32 = 0x3E8;
 impl OjmEntry {
     /// Byte range of this entry's (possibly still encrypted) sample
     /// body within the file it was parsed from.
+    ///
+    /// # Errors
+    ///
+    /// `FileError::Truncated` when the entry body overruns the buffer.
     pub fn sample_bytes<'b>(&self, bytes: &'b [u8]) -> Result<&'b [u8], FileError> {
         let end = self
             .data_offset
@@ -394,6 +407,10 @@ pub fn ojm_descriptor_for_version(version: f32) -> OjmDescriptor {
 /// Verified on Tutorial.ojm pads (16-way tail energy matches the
 /// plain-PCM O2PlanetNPC.ojm ground truth; 17-way clips at full
 /// scale there).
+///
+/// # Errors
+///
+/// `FileError::UnknownFormat` on undecodable lane layouts.
 pub fn decode_new_variant_pcm(
     data: &[u8],
     descriptor: OjmDescriptor,
@@ -490,6 +507,10 @@ const DEINTERLEAVE_17: [[u16; 17]; 17] = [
 /// plain offset `row[size % lanes][i]`. Only the two lane counts the
 /// loader implements are accepted.
 /// Verified on real 7.55 bodies (docs/file-formats/ojm.md).
+///
+/// # Errors
+///
+/// `FileError::UnknownFormat` for unsupported lane counts.
 pub fn deinterleave_stripes(data: &[u8], lanes: usize) -> Result<Vec<u8>, FileError> {
     let size = data.len();
     let row: &[u16] = match lanes {
@@ -516,6 +537,10 @@ pub fn deinterleave_stripes(data: &[u8], lanes: usize) -> Result<Vec<u8>, FileEr
 /// back into file order. Encryption-side helper for building
 /// synthetic fixtures and round-trip tests; the game never runs this
 /// direction (it only decodes shipped bodies).
+///
+/// # Errors
+///
+/// `FileError::UnknownFormat` for unsupported lane counts.
 pub fn interleave_stripes(data: &[u8], lanes: usize) -> Result<Vec<u8>, FileError> {
     let size = data.len();
     let row: &[u16] = match lanes {
@@ -593,6 +618,10 @@ fn ogg_first_page_valid(data: &[u8]) -> bool {
 /// raw-PCM bodies (Tutorial key sounds) need
 /// [`decode_new_variant_pcm`] with the entry audio header instead.
 /// Verified on real 7.55 bodies (docs/file-formats/ojm.md).
+///
+/// # Errors
+///
+/// `FileError::UnknownFormat` when the body is neither OGG nor PCM.
 pub fn recover_new_variant_sample(data: &[u8]) -> Result<Vec<u8>, FileError> {
     if ogg_first_page_valid(data) {
         return Ok(data.to_vec());
@@ -618,6 +647,11 @@ pub fn recover_new_variant_sample(data: &[u8]) -> Result<Vec<u8>, FileError> {
 /// entries) need [`parse_new_variant_entries`] instead: their bodies
 /// may be encrypted, so no OGG check applies here.
 /// Verified byte-exact on real 7.55 files (docs/file-formats/ojm.md).
+///
+/// # Errors
+///
+/// `FileError::TooShort`/`Truncated` when the buffer ends early,
+/// `FileError::UnknownFormat` on a bad header or non-OGG body.
 pub fn parse_omc(bytes: &[u8]) -> Result<Vec<OjmSample<'_>>, FileError> {
     if bytes.len() < 16 {
         return Err(FileError::TooShort(bytes.len()));

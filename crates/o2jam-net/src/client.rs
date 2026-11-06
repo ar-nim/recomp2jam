@@ -38,17 +38,29 @@ pub struct GatewayConnection {
 
 impl GatewayConnection {
     /// Open a connection to any socket address.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Transport` when the socket fails or times out.
     pub fn connect(address: impl ToSocketAddrs) -> Result<Self, Error> {
         let stream = TcpStream::connect(address).map_err(Error::transport)?;
         Self::wrap(stream)
     }
 
     /// Open a connection to `host` on the default gateway port.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Transport` when the socket fails or times out.
     pub fn connect_to_gateway(host: &str) -> Result<Self, Error> {
         Self::connect((host, DEFAULT_GATEWAY_PORT))
     }
 
     /// Send one frame (`id` + raw body bytes).
+    ///
+    /// # Errors
+    ///
+    /// `Error::Transport` when the socket fails or times out.
     pub fn send_frame(&mut self, id: u16, body: &[u8]) -> Result<(), Error> {
         let bytes = encode_frame(id, body);
         self.stream.write_all(&bytes).map_err(Error::transport)
@@ -58,6 +70,10 @@ impl GatewayConnection {
     ///
     /// Bodies stay raw so callers can drive opcodes whose layouts are
     /// still open (notably `Authorize` 1000) without guessing codecs.
+    ///
+    /// # Errors
+    ///
+    /// Whatever sending, receiving, or awaiting the response reports.
     pub fn exchange(
         &mut self,
         request_id: u16,
@@ -73,6 +89,11 @@ impl GatewayConnection {
     /// Any other non-keepalive id is an [`Error::UnexpectedResponse`],
     /// not a skip: silently dropping server frames would hide
     /// dispatches the caller must handle (alerts 50/51/52, say).
+    ///
+    /// # Errors
+    ///
+    /// `Error::UnexpectedResponse` on a foreign non-keepalive id,
+    /// plus whatever receiving reports.
     pub fn await_response(&mut self, expected: u16) -> Result<Frame, Error> {
         loop {
             let frame = self.next_frame()?;
@@ -90,6 +111,11 @@ impl GatewayConnection {
     }
 
     /// Block until the next complete frame arrives.
+    ///
+    /// # Errors
+    ///
+    /// `Error::ConnectionClosed` on peer close, `Error::Transport` on
+    /// socket failure, framing errors on malformed lengths.
     pub fn next_frame(&mut self) -> Result<Frame, Error> {
         loop {
             if let Some(frame) = self.pending.pop_front() {
@@ -102,6 +128,10 @@ impl GatewayConnection {
     }
 
     /// Override the blocking read/write timeouts.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Transport` when the socket rejects the timeout.
     pub fn set_timeouts(&self, timeout: Option<Duration>) -> Result<(), Error> {
         self.stream
             .set_read_timeout(timeout)
@@ -112,11 +142,19 @@ impl GatewayConnection {
     }
 
     /// Wrap an already-connected stream (tests, harnesses).
+    ///
+    /// # Errors
+    ///
+    /// `Error::Transport` when the socket rejects the timeouts.
     pub fn from_stream(stream: TcpStream) -> Result<Self, Error> {
         Self::wrap(stream)
     }
 
     /// Local socket address (login reports it as the LAN endpoint).
+    ///
+    /// # Errors
+    ///
+    /// `Error::Transport` when the socket is already gone.
     pub fn local_address(&self) -> Result<SocketAddr, Error> {
         self.stream.local_addr().map_err(Error::transport)
     }

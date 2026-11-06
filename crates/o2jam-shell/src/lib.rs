@@ -211,6 +211,10 @@ impl Shell {
     }
 
     /// Open the window and run the event loop.
+    ///
+    /// # Errors
+    ///
+    /// Paint-backend failures and event-loop errors.
     pub fn run(self, event_loop: winit::event_loop::EventLoop<()>) -> anyhow::Result<()> {
         let mut handler = window::WindowHandler::new(self);
         event_loop

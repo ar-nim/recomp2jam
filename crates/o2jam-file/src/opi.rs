@@ -127,6 +127,10 @@ fn read_opi_slot(bytes: &[u8], entry_off: usize) -> Result<OpiSlot, FileError> {
 /// (docs/file-formats/opi.md): 1596 / 633 / 7149 slots.
 /// Stored bytes are NOT validated; readers must slice bodies by
 /// `size`, never by `reserved_size`.
+///
+/// # Errors
+///
+/// `FileError::TooShort`/`Truncated` when the trailing table overruns.
 pub fn parse_opi_slots(bytes: &[u8]) -> Result<Vec<OpiSlot>, FileError> {
     if bytes.len() < OPI_HEADER_LEN {
         return Err(FileError::TooShort(bytes.len()));
@@ -167,6 +171,10 @@ pub fn is_jpeg_body(bytes: &[u8]) -> bool {
 /// bytes are NOT validated (script, text, and binary bodies share
 /// the container).
 /// Verified on real 7.55 files (docs/file-formats/opi.md).
+///
+/// # Errors
+///
+/// Whatever [`parse_opi_slots`] reports for a malformed archive.
 pub fn parse_opi(bytes: &[u8]) -> Result<Vec<OpiEntry>, FileError> {
     Ok(parse_opi_slots(bytes)?
         .into_iter()

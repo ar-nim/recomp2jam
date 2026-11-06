@@ -155,6 +155,10 @@ fn parse_sprite55_dir(bytes: &[u8]) -> Result<Sprite55Dir, FileError> {
 /// Verified on all real 7.55 `.ojs`/`.ojt`/`.oji` sprite bodies
 /// except the three `Note_Combo*.ojt` strided atlases (see
 /// [`parse_sprite55_strided`]).
+///
+/// # Errors
+///
+/// `FileError::Truncated` when records or blob overrun the buffer.
 pub fn parse_sprite55(bytes: &[u8]) -> Result<Sprite55<'_>, FileError> {
     let dir = parse_sprite55_dir(bytes)?;
     if dir.dir_end + dir.stored != bytes.len() {
@@ -209,6 +213,11 @@ impl<'a> Sprite55Strided<'a> {
 /// Parse a strided sprite-55 atlas: shared header/record contract
 /// plus `frames_per_image * stored == blob` accounting. Rejects
 /// `frames_per_image == 0`.
+///
+/// # Errors
+///
+/// `FileError::UnknownFormat` on zero frames, `FileError::Truncated`
+/// when records or blob overrun.
 pub fn parse_sprite55_strided(
     bytes: &[u8],
     frames_per_image: usize,
@@ -284,6 +293,10 @@ pub struct Bnd {
 /// then `count` 16-byte `(x1, y1, x2, y2)` records; the size must
 /// match exactly (`6 + 16*count`). Verified on all 53 real 7.55
 /// `.bnd` sections.
+///
+/// # Errors
+///
+/// `FileError::TooShort`/`Truncated` when records overrun the buffer.
 pub fn parse_bnd(bytes: &[u8]) -> Result<Bnd, FileError> {
     if bytes.len() < BND_HEADER_LEN {
         return Err(FileError::TooShort(bytes.len()));
@@ -345,6 +358,10 @@ pub struct Oja {
 
 /// Parse an `.oja` envelope: magic + `count` 20-byte frame records
 /// (`i16 x/y`, `u16 w/h`, three raw `u32` words).
+///
+/// # Errors
+///
+/// `FileError::TooShort` when the frame table overruns the buffer.
 pub fn parse_oja(bytes: &[u8]) -> Result<Oja, FileError> {
     if bytes.len() < OJA_HEADER_LEN {
         return Err(FileError::TooShort(bytes.len()));
