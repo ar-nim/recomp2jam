@@ -398,10 +398,10 @@ rejections; 4045 exact 36-byte two-peer vector (`i32` count + `i32`
 member + 6-byte endpoints, Python `struct` cross-checked), empty and
 negative counts (negative yields zero peers, matching the signed loop
 exit), truncation/trailing/foreign-id rejections, per-field offset
-vectors; 4043 exact 17-byte all-inactive vector plus the 125-byte
-active-member vector (Python `struct` cross-checked), active-gate
-(non-1 bytes mean inactive), member-id bound, negative music-count,
-trailing/foreign-id rejections, header offset vectors.
+vectors; 4043 exact 17-byte all-inactive vector plus the 124-byte active-member vector (Python `struct` cross-checked), active-gate
+(non-1 bytes mean inactive), seat-byte wire order, single room-master trailing flag (no administrator byte),
+two-consecutive-active alignment, member-id bound, negative music-count,
+trailing/foreign-id rejections, header offset vectors; `member_slot_tests`: slot base/stride, seat/equipment/music/trailing/room-master/spare-flag/slot-group offsets, slot-group ordering, `slot_position_marks` for slots 0/3/other, stride stepping, slot/offset bounds.
 
 ## 10. Live-state gateway handlers: 4042–4045 (7.55 static map)
 
@@ -441,8 +441,11 @@ consumes it), level, gender byte (raw: only a zero/nonzero branch
 observed, file `0x13fe50`), gem, three seat bytes, 17 `i32` equipment
 words (count read plus a `0x11`-bounded 16-read loop), `i32` count plus
 `u16` music ids, two `i32` counters, trailing bytes `playing_state`,
-`live_extra`, `is_administrator`, `is_room_master`, `i32` win streak
-(read inline at file `0x159f61`). The exe reads one slot byte twice in
+`live_extra`, `is_room_master`, `i32` win streak
+(read inline at file `0x159f61`). The wire carries exactly three trailing
+bytes (the `+0x33` reader at file `0x140d90` has zero image-wide callers,
+so no fourth flag exists; the sibling lead-flag shape reads the same
+`+0x30` flag ahead of the seat bytes instead — see the table). The exe reads one slot byte twice in
 a row (files `0x141670`/`0x141690`), so the first copy is discarded
 in-memory; the decoder preserves that wire byte as `live_extra`, which
 has no Memoryer v7.2.0 counterpart (likely 7.55 drift) and whose
@@ -473,8 +476,8 @@ calls (offset in the helper name). Decoded in `o2jam-net` as
 | gender | `+0x28` | `0x159d8c` → `0x140c90` (1 B) then setter `0x13fe50` (zero/nonzero) |
 | gem | `+0x2c` | `0x159da4` → `0x140cc0` (4 B) |
 | seats: team | `+0x31` | `0x159dbc` → `0x140d40` (1 B) |
-| seats: ready (wire store) | `+0x32` | `0x159dd4` → `0x140d70` (1 B); slot-index branch later overwrites `+0x32` via `0x1400f0` (files `0x159f00`/`0x159f2e`/`0x159f5c`), semantics OPEN |
-| seats: third byte (music_state candidate) | `+0x217c` | `0x159dec` → `0x141480` (1 B); field identity OPEN |
+| seats: ready (wire store, derived in memory) | `+0x32` | `0x159dd4` → `0x140d70` (1 B); the slot-index branch then overwrites `+0x32` from position without reading wire (setter `0x1400f0`: slot 0 stores 1 at file `0x159f00`, slot 3 stores 0 at file `0x159f2e`, other slots store 1 at file `0x159f5c`; `slot_position_marks` in `relay.rs`) |
+| seats: third byte (`music_state` position) | `+0x217c` | `0x159dec` → `0x141480` (1 B); value semantics OPEN: no compare/branch consumer image-wide — only the direct setter `0x141460` (27 callers, incl. UI-forward paths for codes `0x0FC3`/`0x0FC5` at files `0x159943`/`0x15995e`/`0x1599d2`/`0x1599ed`), the ctor default `+0x217c = 0` beside `+0x217d = 0xFF` (files `0x13fcc1`/`0x13fcc8`), and the bulk copy (files `0xe961d`/`0xe9623`); `ev_f11710744bbbb8279df245ae2e46aeac` |
 | equipments count | `+0x2038` | `0x159e30` → `0x140e40` (4 B; `0x11` loop bound file `0x140eb1`) |
 | equipments | `+0x2040` | same call; 17 `i32` words |
 | music ids count | `+0x34` | `0x159e48` → `0x140db0` (4 B; loop bound is the count) |
@@ -482,8 +485,10 @@ calls (offset in the helper name). Decoded in `o2jam-net` as
 | states: cash_point | `+0x2128` | `0x159e60` → `0x140ce0` (4 B) |
 | states: free_pass | `+0x212c` | `0x159e78` → `0x1415a0` (4 B) |
 | states: playing_state | `+0x2130` | `0x159e90` → `0x141670` (1 B) |
-| states: live_extra (wire copy) | `+0x2131` | `0x159ea8` → `0x141690` (1 B); second `+0x2131` read, first copy discarded, semantics OPEN |
-| states: trailing flag (admin candidate) | `+0x30` | `0x159ec0` → `0x140d20` (1 B); which of admin/master stays OPEN |
+| states: live_extra (wire copy) | `+0x2131` | `0x159ea8` → `0x141690` (1 B); the second of two back-to-back 1 B reads (files `0x141670`/`0x141690` into `+0x2130`/`+0x2131`); semantics OPEN |
+| states: trailing flag (`is_room_master`) | `+0x30` | `0x159ec0` → `0x140d20` (1 B). The only trailing flag on the wire. Room-master (not administrator): the 4043 header derives the local object (`0x77cd00`) from the requesting member id at `0x77cd04`, storing `+0x30 = 1` exactly when the id is 0 (files `0x159bdf`/`0x159c1b`/`0x159c4d`, plus the `0x77ee3c = 1` mark at file `0x159be4`); the sibling handler compares the member id against the announced master id at `0x778a14` and marks the local `+0x30` when equal, the announced slot otherwise (files `0x15d888`–`0x15d8d3`); `ev_bc4842b1a6fa649bb1a62f21200a3a30` |
+| states: spare low flag (never wire) | `+0x33` | zeroed up front via the direct setter `0x140110` (file `0x159e18`, pushed 0); no wire reader in any of the three member-parse paths (helper `0x140d90` has zero image-wide callers). Elsewhere `+0x33` takes UI-driven 0–8 values on the local object and gates a score ticker on equal-to-6 (helper `0x141620`); `ev_c030b2551aa535f98e016858e180ae73` |
+| slot group (derived, not wire) | `+0x2186` | slot-index branch files `0x159ec5`–`0x159f5c` via setter `0x141520` (files `0x159eea`/`0x159f18`/`0x159f46`): slot 0 stores 1, slot 3 stores 2, others store 3 (`slot_position_marks` in `relay.rs`). The 4043 header runs the same 0/3/other mapping over the member id for the local object (files `0x159baf`–`0x159c5e`, plus `+0x2184` via `0x141500`); ctor default is 3 (file `0x13fa96`); `ev_14fd3f2dae86c90bf45f505c7c7a70ef` |
 | streak: win_streak | `+0x218c` | inline 4 B read file `0x159f61` → setter `0x141560` at file `0x159f82`; `0x218c + 4` ends exactly at the slot end `0x2190` |
 
 Header (not per-slot): `u8` member id + `i32` users + `i32` streak via
@@ -491,11 +496,19 @@ the shared reader (files `0x159b5d`/`0x159b6b`/`0x159b79`);
 `ev_5a25bf3fec517df32dde42e275128074`, observed. Active-tail stores
 above: `ev_7737f29fa5a4df1f2270ce72df7b6d54`; equipment/music stores:
 `ev_54701cf711eebb93adbcbd632629542c`; trailing stores:
-`ev_20f7c72d0d3f156c51ba3c3a0417f774` (all observed). OPEN: which seat
-byte is team/ready/music_state beyond storage order; which trailing flag
-byte is administrator vs room-master (helper `0x140d90` has no
-image-wide caller, so no second wire reader was located); the slot-index
-branch (`0x159ec5`–`0x159f5c`: slot 0/3/other stages `+0x2186` = 1/2/3
-via `0x141520` plus `+0x32` = 1/0/1 via `0x1400f0`) derivation;
-`+0x30`/`+0x33` zeroing (files `0x159e02`/`0x159e18`) before the wire
-stores; all enum value sets.
+`ev_20f7c72d0d3f156c51ba3c3a0417f774` (all observed). CLOSED: the wire
+carries one trailing flag (`+0x30` = room-master; the decoder's former
+`is_administrator` byte had no wire source and is removed) — full-image
+relative-call scan finds zero callers of the `+0x33` reader `0x140d90`
+against three callers of the `+0x30` reader `0x140d20` (files `0x159ec0` /
+`0x15cf0d` / `0x15dec3`); CLOSED: the slot-index branch derivation (slot
+0 → `+0x2186` = 1 / `+0x32` = 1, slot 3 → 2 / 0, else 3 / 1, no wire
+reads) and its header twin over the member id; CLOSED: `+0x30`/`+0x33`
+are zeroed through the direct setters `0x1400b0`/`0x140110` (files
+`0x159e02`/`0x159e18`, pushed 0) before the equipment/music reads, and
+only `+0x30` is re-populated from wire. OPEN: seat-byte and trailing-byte
+value semantics (team/ready/music/playing/free-pass enums, `live_extra`,
+`+0x2186` group meaning — none has an in-exe compare consumer); the
+sibling lead-flag shape's command binding (dispatcher slot unmapped) and
+its trailing `+0x2134` dword (stored at file `0x15d03c`, no decoder
+field); the `+0x217d = 0xFF` ctor default's purpose.

@@ -1098,14 +1098,23 @@ pub const MEMBER_OFF_GEM: u32 = 0x2c;
 /// file `0x140d40`, call site file `0x159dbc`).
 pub const MEMBER_OFF_TEAM: u32 = 0x31;
 /// Wire store of the second seat byte ([`MemberInfo::ready`]) (1 B, helper
-/// file `0x140d70`, call site file `0x159dd4`). The slot-index branch
-/// later overwrites `+0x32` (setter file `0x1400f0` at files
-/// `0x159f00`/`0x159f2e`/`0x159f5c`), so the surviving semantics stay OPEN.
+/// file `0x140d70`, call site file `0x159dd4`). The byte is consumed from
+/// the wire, then the slot-index branch overwrites `+0x32` from position
+/// (setter file `0x1400f0`: slot 0 pushes 1 at file `0x159f00`, slot 3
+/// pushes 0 at file `0x159f2e`, any other slot pushes 1 at file
+/// `0x159f5c`; see [`slot_position_marks`]), so the decoded `ready` keeps
+/// the wire value while the live slot shows the derived one.
 pub const MEMBER_OFF_READY: u32 = 0x32;
-/// Store offset of the third seat byte (seat-candidate for
-/// [`MemberInfo::music_state`]) (1 B, helper file `0x141480`, call site
-/// file `0x159dec`). Field identity stays OPEN: storage order differs
-/// from wire order here and no enum semantics are pinned.
+/// Store offset of the third seat byte ([`MemberInfo::music_state`])
+/// (1 B, helper file `0x141480`, call site file `0x159dec`). Storage is
+/// pinned but value semantics stay OPEN: no compare or branch on
+/// `+0x217c` was located image-wide (only the direct setter file
+/// `0x141460` with 27 callers, incl. the UI-forward paths for codes
+/// `0x0FC3`/`0x0FC5` at files `0x159943`/`0x15995e`/`0x1599d2`/`0x1599ed`,
+/// the slot-ctor default `+0x217c = 0` beside `+0x217d = 0xFF` at files
+/// `0x13fcc1`/`0x13fcc8`, and the bulk copy at files `0xe961d`/`0xe9623`;
+/// `ev_f11710744bbbb8279df245ae2e46aeac`, observed). The Memoryer
+/// `MusicState` position matches; its value set does not transfer.
 pub const MEMBER_OFF_MUSIC_STATE: u32 = 0x217c;
 /// Equipment count word the music/equipment helper reads (`i32` at
 /// `+0x2038`, helper file `0x140e40`, call site file `0x159e30`; the
@@ -1136,16 +1145,65 @@ pub const MEMBER_OFF_PLAYING_STATE: u32 = 0x2130;
 /// files `0x141670`/`0x141690` back to back — keeps the wire byte whose
 /// in-memory first copy is discarded, semantics OPEN).
 pub const MEMBER_OFF_LIVE_EXTRA: u32 = 0x2131;
-/// Store offset of the first trailing flag byte (1 B, helper file
-/// `0x140d20`, call site file `0x159ec0`). Whether this is
-/// administrator or room-master stays OPEN: no second wire reader was
-/// located (helper file `0x140d90` has no image-wide caller), and the
-/// slot-index branch writes `+0x32`/`+0x2186` instead.
-pub const MEMBER_OFF_ADMIN_FLAG: u32 = 0x30;
+/// Store offset of the room-master flag ([`MemberInfo::is_room_master`])
+/// (1 B, helper file `0x140d20`). This is the only trailing flag the wire
+/// carries: the 4043 path reads it after `live_extra` (call site file
+/// `0x159ec0`), while the sibling parse path reads it ahead of the seat
+/// bytes (file `0x15cf0d`) and a third path trails it the same way 4043
+/// does (file `0x15dec3`). Identification as room-master (not
+/// administrator): the 4043 header derives the local object
+/// (`0x77cd00`) from the requesting member id at `0x77cd04`, storing
+/// `+0x30 = 1` exactly when the id is 0 (pushes at files
+/// `0x159bdf`/`0x159c1b`/`0x159c4d`) alongside the `0x77ee3c = 1` mark at
+/// file `0x159be4`; and the sibling handler compares the member id
+/// against the announced master id byte at `0x778a14`, marking the local
+/// `+0x30` when equal and the announced slot otherwise (files
+/// `0x15d888`–`0x15d8d3`; `ev_bc4842b1a6fa649bb1a62f21200a3a30`,
+/// observed). No administrator flag exists on this wire: helper file
+/// `0x140d90` (the `+0x33` reader) has no image-wide caller.
+pub const MEMBER_OFF_ROOM_MASTER: u32 = 0x30;
+/// Store offset of the spare low flag byte (1 B). Never populated from
+/// the 4043 wire: the handler zeroes `+0x33` through the direct setter
+/// file `0x140110` (call site file `0x159e18`, pushed 0) right after the
+/// third seat byte, and no wire reader targets it in any of the three
+/// member-parse paths (helper file `0x140d90` has zero image-wide
+/// callers). Elsewhere `+0x33` takes UI-driven values 0–8 on the local
+/// object and gates a score ticker on equal-to-6 (helper file `0x141620`);
+/// `ev_c030b2551aa535f98e016858e180ae73`, observed.
+pub const MEMBER_OFF_SPARE_FLAG: u32 = 0x33;
+/// Store offset of the slot-group word the 4043 handler derives from slot
+/// position (2 B, setter file `0x141520`; call sites files `0x159eea` /
+/// `0x159f18` / `0x159f46`). Never wire-read: slot 0 stores 1, slot 3
+/// stores 2, any other slot stores 3 (branch files `0x159ec5`–`0x159f5c`;
+/// see [`slot_position_marks`]). The slot ctor defaults it to 3 (file
+/// `0x13fa96`) and the bulk copy preserves it (files `0xe9665`/`0xe966f`);
+/// `ev_14fd3f2dae86c90bf45f505c7c7a70ef`, observed.
+pub const MEMBER_OFF_SLOT_GROUP: u32 = 0x2186;
 /// Store offset of [`MemberInfo::win_streak`] (`i32`, inline size-4 read
 /// at file `0x159f61` then direct setter file `0x141560` at call site
 /// file `0x159f82`; `0x218c + 4` ends exactly at the slot end `0x2190`).
 pub const MEMBER_OFF_WIN_STREAK: u32 = 0x218c;
+
+/// Marks the 4043 handler derives from slot position, not the wire.
+///
+/// The slot-index branch (files `0x159ec5`–`0x159f5c`) stores a group word
+/// at [`MEMBER_OFF_SLOT_GROUP`] (setter file `0x141520`) and a ready byte
+/// at [`MEMBER_OFF_READY`] (setter file `0x1400f0`) without reading packet
+/// bytes: slot 0 stores `(1, true)`, slot 3 stores `(2, false)`, and any
+/// other slot stores `(3, true)`. The 4043 header runs the same 0/3/other
+/// mapping over the requesting member id for the local object at
+/// `0x77cd00` (files `0x159baf`–`0x159c5e`, plus `+0x2184` via file
+/// `0x141500` and `+0x30` via file `0x1400b0`).
+/// (`ev_14fd3f2dae86c90bf45f505c7c7a70ef`, observed.)
+/// (ERRORS-06: total function, no `unwrap`; PERF-07: no narrowing casts.)
+#[must_use]
+pub fn slot_position_marks(slot: u8) -> (u16, bool) {
+    match slot {
+        0 => (1, true),
+        3 => (2, false),
+        _ => (3, true),
+    }
+}
 
 /// Address (VA) of a member-slot field: `base + slot * stride + offset`.
 ///
@@ -1250,12 +1308,16 @@ pub struct MemberLiveState {
 /// observed): `u8` id, null-terminated nickname, `i32` level, `u8` gender
 /// (stored raw; the handler only branches zero/nonzero, file `0x13fe50`),
 /// `i32` gem, three `u8` seat bytes, 17 `i32` equipment words, `i32` count
-/// plus `u16` music ids, two `i32` counters, four trailing `u8` bytes,
-/// `i32` win streak. The trailing run holds
-/// (`playing_state`, `live_extra`, `is_administrator`, `is_room_master`):
-/// the exe reads slot `+0x2131` twice in a row (files `0x141670`/`0x141690`),
-/// so the first copy is discarded in memory — `live_extra` preserves that
-/// wire byte, which has no Memoryer v7.2.0 counterpart (likely 7.55 drift).
+/// plus `u16` music ids, two `i32` counters, three trailing `u8` bytes,
+/// `i32` win streak. The trailing run holds (`playing_state`,
+/// `live_extra`, `is_room_master`): the two helpers at files
+/// `0x141670`/`0x141690` read one wire byte each into `+0x2130`/`+0x2131`,
+/// then file `0x140d20` reads the room-master flag into `+0x30` (call
+/// sites files `0x159e90`/`0x159ea8`/`0x159ec0`). There is no fourth
+/// trailing flag on this wire: helper file `0x140d90` (the `+0x33`
+/// reader) has zero image-wide callers, and `+0x33` is zeroed up front
+/// (direct setter file `0x140110`, call site file `0x159e18`); the
+/// pre-Memoryer-style administrator flag is not carried here.
 /// Enum semantics (gender/team/music/playing/free-pass values) stay OPEN.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemberInfo {
@@ -1288,9 +1350,7 @@ pub struct MemberInfo {
     pub playing_state: u8,
     /// Extra wire byte of the trailing run (see above; semantics OPEN).
     pub live_extra: u8,
-    /// Administrator flag.
-    pub is_administrator: bool,
-    /// Room-master flag.
+    /// Room-master flag (the only trailing flag on the wire).
     pub is_room_master: bool,
     /// Win streak (`i32`, read inline at file `0x159f61`).
     pub win_streak: i32,
@@ -1332,7 +1392,6 @@ impl MemberInfo {
         let free_pass = take_le_i32(body)?;
         let playing_state = take_byte(body)?;
         let live_extra = take_byte(body)?;
-        let is_administrator = take_flag(body, "member administrator flag")?;
         let is_room_master = take_flag(body, "member room-master flag")?;
         let win_streak = take_le_i32(body)?;
         Ok(Self {
@@ -1350,7 +1409,6 @@ impl MemberInfo {
             free_pass,
             playing_state,
             live_extra,
-            is_administrator,
             is_room_master,
             win_streak,
         })
@@ -1378,7 +1436,6 @@ impl MemberInfo {
         body.extend_from_slice(&self.free_pass.to_le_bytes());
         body.push(self.playing_state);
         body.push(self.live_extra);
-        body.push(u8::from(self.is_administrator));
         body.push(u8::from(self.is_room_master));
         body.extend_from_slice(&self.win_streak.to_le_bytes());
     }
@@ -2599,7 +2656,6 @@ mod live_state_tests {
             free_pass: 1,
             playing_state: 2,
             live_extra: 0,
-            is_administrator: false,
             is_room_master: true,
             win_streak: 4,
         }
@@ -2668,7 +2724,7 @@ mod live_state_tests {
                 0x0C, 0x00, 0x00, 0x00, 0x0D, 0x00, 0x00, 0x00, 0x0E, 0x00, 0x00, 0x00, 0x0F, 0x00,
                 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x11, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
                 0x07, 0x00, 0xB8, 0x01, 0x88, 0x13, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00,
-                0x00, 0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             ]
         );
     }
@@ -2696,6 +2752,60 @@ mod live_state_tests {
         assert_eq!(info.music_ids, vec![7, 440]);
         assert_eq!(info.win_streak, 4);
         assert!(decoded.members[1..].iter().all(|slot| !slot.active));
+    }
+
+    #[test]
+    fn seat_bytes_follow_gem_in_wire_order() {
+        // member_id(1) + NUL-terminated nickname(3) + level(4) + gender(1) + gem(4).
+        let mut tail = Vec::new();
+        sample_info().encode_inner(&mut tail);
+        assert_eq!(&tail[13..16], &[0x02, 0x01, 0x03]);
+    }
+
+    #[test]
+    fn trailing_flag_is_room_master_not_administrator() {
+        // The wire carries exactly three trailing bytes (playing_state,
+        // live_extra, room-master); no administrator byte exists (helper
+        // file `0x140d90` has no caller). The tail therefore ends with
+        // `02 00 01` ahead of the win streak.
+        let mut tail = Vec::new();
+        sample_info().encode_inner(&mut tail);
+        let tail_len = tail.len();
+        assert_eq!(
+            &tail[tail_len - 7..tail_len],
+            &[0x02, 0x00, 0x01, 0x04, 0x00, 0x00, 0x00]
+        );
+    }
+
+    #[test]
+    fn two_consecutive_active_members_stay_aligned() {
+        // Guards the single-trailing-flag shape: with two active tails in
+        // a row, a phantom fourth flag byte would eat the next slot's
+        // active byte and desynchronize the parse.
+        let mut second = sample_info();
+        second.nickname = "C".to_owned();
+        second.is_room_master = false;
+        let mut members = inactive_slots();
+        members[0] = MemberLiveState {
+            active: true,
+            info: Some(sample_info()),
+        };
+        members[1] = MemberLiveState {
+            active: true,
+            info: Some(second),
+        };
+        let snapshot = LiveStateResponse {
+            member_id: 0,
+            user_count: 2,
+            win_streak: 0,
+            members,
+        };
+        let decoded = LiveStateResponse::decode_body(&snapshot.encode_body()).unwrap();
+        assert_eq!(decoded, snapshot);
+        assert!(decoded.members[0].info.as_ref().unwrap().is_room_master);
+        assert!(!decoded.members[1].info.as_ref().unwrap().is_room_master);
+        assert_eq!(decoded.members[1].info.as_ref().unwrap().nickname, "C");
+        assert!(decoded.members[2..].iter().all(|slot| !slot.active));
     }
 
     #[test]
@@ -2839,7 +2949,8 @@ mod member_slot_tests {
         assert_eq!(MEMBER_OFF_FREE_PASS, 0x212c);
         assert_eq!(MEMBER_OFF_PLAYING_STATE, 0x2130);
         assert_eq!(MEMBER_OFF_LIVE_EXTRA, 0x2131);
-        assert_eq!(MEMBER_OFF_ADMIN_FLAG, 0x30);
+        assert_eq!(MEMBER_OFF_ROOM_MASTER, 0x30);
+        assert_eq!(MEMBER_OFF_SPARE_FLAG, 0x33);
         assert_eq!(MEMBER_OFF_WIN_STREAK, 0x218c);
         assert!(
             member_slot_address(0, MEMBER_OFF_CASH_POINT).ok()
@@ -2858,6 +2969,32 @@ mod member_slot_tests {
     #[test]
     fn win_streak_ends_exactly_at_slot_end() {
         assert_eq!(MEMBER_OFF_WIN_STREAK + 4, MEMBER_SLOT_STRIDE);
+    }
+
+    #[test]
+    fn slot_group_word_sits_before_streak() {
+        assert_eq!(MEMBER_OFF_SLOT_GROUP, 0x2186);
+        assert!(
+            member_slot_address(0, MEMBER_OFF_SLOT_GROUP).ok()
+                < member_slot_address(0, MEMBER_OFF_WIN_STREAK).ok()
+        );
+    }
+
+    #[test]
+    fn slot_zero_marks_group_one_and_ready() {
+        assert_eq!(slot_position_marks(0), (1, true));
+    }
+
+    #[test]
+    fn slot_three_marks_group_two_and_not_ready() {
+        assert_eq!(slot_position_marks(3), (2, false));
+    }
+
+    #[test]
+    fn other_slots_mark_group_three_and_ready() {
+        for slot in [1, 2, 4, 5, 6, 7] {
+            assert_eq!(slot_position_marks(slot), (3, true));
+        }
     }
 
     #[test]
