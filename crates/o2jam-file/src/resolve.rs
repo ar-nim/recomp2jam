@@ -2,21 +2,39 @@
 //!
 //! Pure helpers over the verified parsers for `docs/opi-pattern.md`
 //! steps 4–6, 8–9: the `BOUND` stem comes from the block itself
-//! (never a hardcoded bind list), `.bnd` rect `i` lays out block
-//! entry `i + 1` in file order, sprite names resolve against the
-//! same archive case-insensitively, and the `O2_SBS_*` / `_`-prefix
-//! rules apply before reporting a sprite missing. Step 7 (blit)
-//! stays caller-side: this module only pairs entries with rects
-//! and classifies sprite references.
+//! (never a hardcoded bind list), each entry pairs with the `.bnd`
+//! rect its code selects — ordinal `(code & 0xFFF) − 1`, the
+//! all-zero rect on a miss (exe `0x548640`, dossier
+//! `ev_3a869bb7…`) — sprite names resolve against the same archive
+//! case-insensitively, and the `O2_SBS_*` / `_`-prefix rules apply
+//! before reporting a sprite missing. Step 7 (blit) stays
+//! caller-side: this module only pairs entries with rects and
+//! classifies sprite references.
 
 use super::{Bnd, BndRect, ControlBlock, ControlEntry, FileError, OpiEntry};
 
-/// One laid-out control: a block entry past self plus its `.bnd` rect, if any.
+/// Mask isolating a control code's `.bnd` rect ordinal: the exe
+/// pairs by the low 12 bits (`0x548640`, ev `3a869bb7…`).
+const RECT_ORDINAL_MASK: u32 = 0xFFF;
+
+/// The exe's out-of-range rect: four zero dwords, copied verbatim
+/// when an ordinal misses the table (`0x548640`, ev `3a869bb7…`).
+static ZERO_RECT: BndRect = BndRect {
+    x1: 0,
+    y1: 0,
+    x2: 0,
+    y2: 0,
+};
+
+/// One laid-out control: a block entry plus the `.bnd` rect its
+/// code selects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlacedControl<'a> {
-    /// Block entry (`all_entries()[i + 1]`).
+    /// Block entry in file order (`ControlBlock::all_entries`).
     pub entry: &'a ControlEntry,
-    /// `.bnd` rect `i`, when the bind section covers this entry.
+    /// The rect named by `(entry.code & 0xFFF) − 1`, else the
+    /// all-zero rect on a miss. Always `Some`: the exe stores a
+    /// rect for every entry, it never skips one.
     pub rect: Option<&'a BndRect>,
 }
 
@@ -92,13 +110,13 @@ pub fn opi_entry_body<'a>(archive: &'a [u8], entry: &OpiEntry) -> Result<&'a [u8
         })
 }
 
-/// Pair `.bnd` rect `i` with block entry `i + 1` in file order
-/// (step 5). Entry 0 names the block and takes no rect; `SET`
-/// members count because [`ControlBlock::all_entries`] already
-/// yields file order. Extra entries keep a `None` rect (the
-/// `State_Playing` tail rides unloaded); extra rects are ignored.
-/// File order is the paint order: the entry-1 background lands
-/// first and later entries cover it (step 8).
+/// Pair every block entry with the `.bnd` rect its code selects
+/// (step 5): ordinal = `(entry.code & 0xFFF) − 1`, bounds-checked
+/// against the rect count, miss → the all-zero rect, never a skip
+/// (exe pairing step VA `0x548640`, dossier `ev_3a869bb7…`). File
+/// position plays no role in the choice; the result keeps file
+/// order because paint order is file order (step 8). Entry 0 (the
+/// block-self entry) pairs by its own code like any entry.
 #[must_use]
 pub fn pair_entries_with_rects<'a>(
     block: &'a ControlBlock,
@@ -107,13 +125,29 @@ pub fn pair_entries_with_rects<'a>(
     block
         .all_entries()
         .into_iter()
-        .skip(1)
-        .enumerate()
-        .map(|(index, entry)| PlacedControl {
+        .map(|entry| PlacedControl {
             entry,
-            rect: bind.rects.get(index),
+            rect: Some(selected_rect(entry, bind)),
         })
         .collect()
+}
+
+/// The rect the exe copies for one entry: its code low word minus
+/// one selects the record; an out-of-range or zero low word falls
+/// back to the all-zero rect.
+fn selected_rect<'a>(entry: &ControlEntry, bind: &'a Bnd) -> &'a BndRect {
+    rect_ordinal(entry)
+        .and_then(|ordinal| bind.rects.get(ordinal))
+        .unwrap_or(&ZERO_RECT)
+}
+
+/// Rect ordinal for one entry's control code (`0x548640`, ev
+/// `3a869bb7…`): low word minus one; `None` when the low word is
+/// zero — the exe's wrapped `− 1` then misses the bounds check.
+fn rect_ordinal(entry: &ControlEntry) -> Option<usize> {
+    let ordinal = entry.code & RECT_ORDINAL_MASK;
+    let ordinal = ordinal.checked_sub(1)?;
+    usize::try_from(ordinal).ok()
 }
 
 /// Classify one entry's sprite reference without touching the
@@ -164,6 +198,7 @@ STATE_ROOM 0x02\n\
 \tIDC_STATE_ROOM\t0X00200003\n\
 \tIDC_BACK_SROOM_1\t0X10200001\t\"Back.ojs\"\n\
 \tIDC_OK\t0X20200002\t\"Ok.ojs\"\n\
+\tIDC_PANE\t0X10200000\n\
 \tSET 0x00000001 // count\n\
 \t{\n\
 \t\tIDC_FRAME\t0X10200004\t\"frame.ojs\"\n\
@@ -212,6 +247,14 @@ STATE_ROOM 0x02\n\
         parse_bnd(&blob).unwrap()
     }
 
+    fn rect(x1: u32, y1: u32, x2: u32, y2: u32) -> BndRect {
+        BndRect { x1, y1, x2, y2 }
+    }
+
+    fn all_zero_rect() -> BndRect {
+        rect(0, 0, 0, 0)
+    }
+
     #[test]
     fn bound_resolves_from_block_stem_without_hardcoded_names() {
         let block = fixture_block();
@@ -236,37 +279,68 @@ STATE_ROOM 0x02\n\
     }
 
     #[test]
-    fn pairing_maps_rect_index_to_entry_index_plus_one() {
+    fn pairing_selects_rects_by_code_low_word_minus_one() {
         let block = fixture_block();
         let bind = fixture_bind();
         let placed = pair_entries_with_rects(&block, &bind);
-        let ids: Vec<&str> = placed.iter().map(|pair| pair.entry.id.as_str()).collect();
-        assert_eq!(ids, ["IDC_BACK_SROOM_1", "IDC_OK", "IDC_FRAME"]);
-        assert_eq!(placed[0].rect.unwrap().x2, 800);
-        assert_eq!(placed[1].rect.unwrap().x1, 10);
-        assert_eq!(placed[2].rect.unwrap().x1, 200);
+        assert_eq!(placed[0].entry.id, "IDC_STATE_ROOM");
+        assert_eq!(placed[0].rect, Some(&rect(200, 200, 300, 240))); // low word 3 → ordinal 2
+        assert_eq!(placed[1].rect, Some(&rect(0, 0, 800, 600))); // low word 1 → ordinal 0
+        assert_eq!(placed[2].rect, Some(&rect(10, 10, 100, 60))); // low word 2 → ordinal 1
     }
 
     #[test]
-    fn pairing_keeps_set_members_in_file_order_with_background_first() {
+    fn pairing_ignores_file_position_when_choosing_a_rect() {
         let block = fixture_block();
         let bind = fixture_bind();
         let placed = pair_entries_with_rects(&block, &bind);
-        assert_eq!(placed.first().unwrap().entry.id, "IDC_BACK_SROOM_1");
+        // The file-order model gave the first entry nothing and the
+        // last (SET-child) entry rect 2; by code, rect 2 belongs to
+        // the first entry's low word 3 and the last entry misses.
+        assert_eq!(
+            placed.first().unwrap().rect,
+            Some(&rect(200, 200, 300, 240))
+        );
+        assert_eq!(placed.last().unwrap().rect, Some(&all_zero_rect()));
+    }
+
+    #[test]
+    fn pairing_gives_missed_ordinals_the_all_zero_rect() {
+        let block = fixture_block();
+        let bind = fixture_bind();
+        let placed = pair_entries_with_rects(&block, &bind);
+        // SET child `IDC_FRAME`: low word 4 → ordinal 3, just past
+        // the 3-rect table; the exe stores a rect anyway.
         assert_eq!(placed.last().unwrap().entry.id, "IDC_FRAME");
+        assert_eq!(placed.last().unwrap().rect, Some(&all_zero_rect()));
     }
 
     #[test]
-    fn pairing_leaves_uncovered_tail_entries_rectless() {
+    fn pairing_maps_zero_low_word_to_the_all_zero_rect() {
+        let block = fixture_block();
+        let bind = fixture_bind();
+        let placed = pair_entries_with_rects(&block, &bind);
+        let pane = placed
+            .iter()
+            .find(|placed| placed.entry.id == "IDC_PANE")
+            .unwrap();
+        assert_eq!(pane.rect, Some(&all_zero_rect()));
+    }
+
+    #[test]
+    fn pairing_gives_entries_past_the_table_the_all_zero_rect() {
         let short = parse_bnd(&[
             0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0,
         ])
         .unwrap();
         let block = fixture_block();
         let placed = pair_entries_with_rects(&block, &short);
-        assert!(placed[0].rect.is_some());
-        assert!(placed[1].rect.is_none());
-        assert!(placed[2].rect.is_none());
+        assert_eq!(placed[1].rect, Some(&rect(0, 0, 1, 1))); // low word 1 fits
+        let zero = all_zero_rect();
+        assert!(
+            placed[0].rect == Some(&zero)
+                && placed[2..].iter().all(|placed| placed.rect == Some(&zero))
+        );
     }
 
     #[test]
