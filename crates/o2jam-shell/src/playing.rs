@@ -8,7 +8,8 @@
 
 use o2jam_game::{
     lane_effect::{lane_map_for_modifier_byte, SkillRing},
-    CoolStreak, Judgement, LaneMap, LongTail, MeasureReshuffle, PillStock, Score, TimingWindows,
+    CoolStreak, Judgement, LaneMap, LongTail, MeasureReshuffle, PeerBars, PillStock, QueueEvent,
+    RankDelivery, Score, TimingWindows, LIFE_MAX, PEER_SLOT_COUNT,
 };
 use o2jam_render::{
     draw_number, draw_text, fill_rect, pack_xrgb, text_width, visible_spans, Frame, LaneCurtain,
@@ -21,6 +22,14 @@ pub const HIGHWAY_LANES: u8 = 7;
 pub const DEFAULT_LOOKAHEAD_MS: u64 = 2000;
 /// Note block height in pixels.
 pub const NOTE_H: i32 = 8;
+/// Peer life-bar width in pixels (one bar per 4015 member slot).
+pub const PEER_BAR_WIDTH: u32 = 3;
+/// Peer life-bar height in pixels.
+pub const PEER_BAR_HEIGHT: u32 = 20;
+/// Peer life-bar strip top row.
+pub const PEER_BAR_TOP: i32 = 4;
+/// Gap between peer life bars (and the frame edge) in pixels.
+pub const PEER_BAR_GAP: i32 = 1;
 
 /// Lane layout for one frame size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -314,6 +323,7 @@ pub struct LivePlay {
     pending: Vec<PendingNote>,
     score: Score,
     pills: PillStock,
+    peers: PeerBars,
     streak: CoolStreak,
     windows: TimingWindows,
     reshuffle: MeasureReshuffle,
@@ -330,6 +340,7 @@ impl Default for LivePlay {
             pending: Vec::new(),
             score: Score::default(),
             pills: PillStock::default(),
+            peers: PeerBars::default(),
             streak: CoolStreak::default(),
             windows: TimingWindows::default(),
             reshuffle: MeasureReshuffle::default(),
@@ -361,6 +372,7 @@ impl LivePlay {
             pending,
             score: Score::default(),
             pills: PillStock::default(),
+            peers: PeerBars::default(),
             streak: CoolStreak::default(),
             windows: TimingWindows::default(),
             reshuffle: MeasureReshuffle::default(),
@@ -395,6 +407,7 @@ impl LivePlay {
             pending,
             score: Score::default(),
             pills: PillStock::default(),
+            peers: PeerBars::default(),
             streak: CoolStreak::default(),
             windows: TimingWindows::default(),
             reshuffle: MeasureReshuffle::default(),
@@ -455,6 +468,24 @@ impl LivePlay {
     /// (panic-style ring: every plain measure, once per hold span).
     pub fn should_rebuild_map(&mut self, measure_has_hold: bool) -> bool {
         self.reshuffle.should_rebuild_map(measure_has_hold)
+    }
+
+    /// Peer bars mirrored from S→C `GameStatsUpdate` (4015).
+    #[must_use]
+    pub fn peers(&self) -> &PeerBars {
+        &self.peers
+    }
+
+    /// Apply one peer stats write (Life-`0`/Jam-`1` u16 to the slot) and
+    /// return its `(0x12, type, slot, 0)` queue forward, if any.
+    pub fn apply_peer_stats(&mut self, slot: u8, kind: u16, value: u16) -> Option<QueueEvent> {
+        self.peers.apply_stats_update(slot, kind, value)
+    }
+
+    /// Apply one 8-byte peer rank broadcast; returns per-position
+    /// deliveries under the rank-remap rule.
+    pub fn apply_peer_ranks(&mut self, packet: [u8; PEER_SLOT_COUNT]) -> Vec<RankDelivery> {
+        self.peers.apply_rank_broadcast(packet)
     }
 
     /// Move the song clock; notes past the bad window rate Miss.
@@ -584,10 +615,50 @@ impl LivePlay {
         self.last_word = Some((judgement, self.now_ms));
     }
 
-    /// Paint highway, notes, score, combo, and the latest word.
+    /// Peer life bars (top-right strip): one bar per 4015 member slot,
+    /// filled green up to `life / LIFE_MAX` over a dark-red empty bar.
+    fn paint_peer_bars(&self, frame: &mut Frame<'_>) {
+        let width = i32::try_from(PEER_BAR_WIDTH).unwrap_or(0);
+        let count = i32::try_from(self.peers.life_levels().len()).unwrap_or(0);
+        let edge = i32::try_from(frame.w).unwrap_or(0);
+        let mut x = edge - count * (width + PEER_BAR_GAP) - PEER_BAR_GAP;
+        for level in self.peers.life_levels() {
+            Self::paint_peer_bar(frame, x.max(0), level);
+            x += width + PEER_BAR_GAP;
+        }
+    }
+
+    /// One empty bar plus its life fill, rising from the bottom.
+    fn paint_peer_bar(frame: &mut Frame<'_>, x: i32, life: u16) {
+        let height = i32::try_from(PEER_BAR_HEIGHT).unwrap_or(0);
+        fill_rect(
+            frame,
+            &Rect {
+                x,
+                y: PEER_BAR_TOP,
+                w: PEER_BAR_WIDTH,
+                h: PEER_BAR_HEIGHT,
+            },
+            pack_xrgb(0x30, 0x10, 0x10),
+        );
+        let filled = i32::from(life.min(LIFE_MAX)) * height / i32::from(LIFE_MAX);
+        fill_rect(
+            frame,
+            &Rect {
+                x,
+                y: PEER_BAR_TOP + height - filled,
+                w: PEER_BAR_WIDTH,
+                h: u32::try_from(filled).unwrap_or(0),
+            },
+            pack_xrgb(0x20, 0xE0, 0x20),
+        );
+    }
+
+    /// Paint highway, notes, peer bars, score, combo, and the latest word.
     pub fn paint(&mut self, frame: &mut Frame<'_>, geom: &HighwayGeometry, now_ms: u64) {
         self.advance_to(now_ms);
         self.view.paint_curtained(frame, geom, self.curtain);
+        self.paint_peer_bars(frame);
         let points = u32::try_from(self.score.points).unwrap_or(u32::MAX);
         draw_number(frame, 16, 16, points, pack_xrgb(0xFF, 0xFF, 0xFF));
         if self.score.combo > 0 {
@@ -612,6 +683,7 @@ impl LivePlay {
 #[cfg(test)]
 mod live_play_tests {
     use super::*;
+    use o2jam_game::{STAT_JAM, STAT_LIFE};
 
     fn geom() -> HighwayGeometry {
         HighwayGeometry::centered(70, 60)
@@ -927,6 +999,63 @@ mod live_play_tests {
         live.apply_modifier_byte(9, &mut stub_words(vec![]));
         assert_eq!(live.curtain, LaneCurtain::Full);
         assert_eq!(live.strike_lane(2, 1000), Some(Judgement::Cool));
+    }
+
+    #[test]
+    fn peer_stats_update_forwards_queue_event_and_stores_life() {
+        let mut live = LivePlay::new(&[(0, 1000, 7)]);
+        let event = live.apply_peer_stats(3, STAT_LIFE, 500);
+        assert_eq!(event.map(|forward| forward.category), Some(0x12));
+        assert_eq!(event.map(|forward| forward.slot), Some(3));
+        assert_eq!(live.peers().life(3), Some(500));
+        assert_eq!(live.apply_peer_stats(8, STAT_LIFE, 500), None);
+        assert_eq!(live.apply_peer_stats(0, 9, 500), None);
+        live.apply_peer_stats(0, STAT_JAM, 7);
+        assert_eq!(live.peers().jam(0), Some(7));
+    }
+
+    #[test]
+    fn peer_rank_broadcast_wires_through_global_match() {
+        let mut live = LivePlay::new(&[(0, 1000, 7)]);
+        let deliveries = live.apply_peer_ranks([0; PEER_SLOT_COUNT]);
+        assert_eq!(deliveries.len(), PEER_SLOT_COUNT);
+        assert!(deliveries.iter().all(|found| found.slot.is_none()));
+        assert_eq!(live.peers().rank_row(0), Some(0));
+    }
+
+    #[test]
+    fn paint_shows_peer_life_fill_over_empty_bar() {
+        let full_green = pack_xrgb(0x20, 0xE0, 0x20);
+        let empty_red = pack_xrgb(0x30, 0x10, 0x10);
+        let bar_x =
+            70 - PEER_SLOT_COUNT as i32 * (PEER_BAR_WIDTH as i32 + PEER_BAR_GAP) - PEER_BAR_GAP;
+        let mut live = LivePlay::new(&[(0, 1000, 7)]);
+        let mut bare = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut bare,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            0,
+        );
+        assert_eq!(bare[PEER_BAR_TOP as usize * 70 + bar_x as usize], empty_red);
+        live.apply_peer_stats(0, STAT_LIFE, LIFE_MAX);
+        let mut filled = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut filled,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            0,
+        );
+        assert_eq!(
+            filled[PEER_BAR_TOP as usize * 70 + bar_x as usize],
+            full_green
+        );
     }
 
     #[test]
