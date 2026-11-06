@@ -327,8 +327,13 @@ semantics TBD.
   plus a 260-byte promo footer of a different shape (kept as
   `trailer_len`; semantics TBD). Item-id join and stat meanings
   stay OPEN.
-- `Itemdata_Korea.dat` (740945 B, starts `06 06 …`): shop-item
-  database (TBD).
+- `Itemdata_Korea.dat` (740945 B) — MAPPED
+  (`parse_avatar_item_table`): header `u32` rows-plus-one + zeros
+  (rows at offset 84), then 1541 rows, ids 1–1541, walk lands
+  exact at EOF. Row = 30 fixed bytes (id, type, price, params,
+  flags) + EUC-KR name/description + 42 `(flag, filename)` sprite
+  slots (stems resolve to `.ojs` bodies in `avatar.opa`; the table
+  spells `.oji`). Per-slot selection semantics stay OPEN.
 - 47 `.ojs` bodies are raw JPEGs (`FF D8 … FF D9` verified on
   all); 5 `.oji` bodies share the sprite-55 envelope.
 
