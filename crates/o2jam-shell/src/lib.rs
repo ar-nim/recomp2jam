@@ -12,7 +12,7 @@ mod window;
 pub use avatar::{
     load_archive_sprite, load_worn_figure, pick_wear_sprites, AvatarFigure, FigureLayer,
 };
-pub use playing::{HighwayGeometry, LivePlay, PlayingView};
+pub use playing::{HighwayGeometry, LivePlay, PlaySkin, PlayingView};
 pub use screen::{can_enter, BadTransition, Screen, ScreenFlow};
 pub use screens::{paint_screen, ScreenGame};
 
