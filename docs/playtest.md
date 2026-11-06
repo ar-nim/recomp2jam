@@ -299,3 +299,30 @@ shop-head log (`eb20dba`).
   (`crates/o2jam-file/src/tables.rs`: new `OJN_WHEEL_LIST_COUNT`
   const + slot resolver plus doc comments; `docs/file-formats/ojn.md`:
   matching notes). `o2jam-file` still 107 passed, 0 failed under it.
+
+## Regression sweep — 2026-11-06 14:20 UTC (HEAD `2ed5af3`, tree clean)
+
+Covers the wheel-relation (`ef61672`), cart-tail (`ce3b304`), and
+5005-tail-words (`2ed5af3`) HEADs.
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **736 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 0, file 109, game 68, net 266,
+  render 35, shell 176, real_art 7, scenes 22, recomp2jam 34
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, no warnings
+  (0 warning lines on a touched-`main.rs` rebuild check).
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.62 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`22:19:56 +08:00`):
+  `Create room: songflow` → `Get music list: [0/00] 562 music` →
+  `Start game: [000]` → `Game [000] Submit score: 2210`.
+- **Verdict: no regression — suite is green on clean HEAD (736 passed;
+  +8 vs the 728 baseline from new file/net tests,
+  0 failures). No commits, no pushes.** This sweep touched only
+  `docs/playtest.md`.
