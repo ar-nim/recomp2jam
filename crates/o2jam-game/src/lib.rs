@@ -166,6 +166,10 @@ pub const JAM_LEVEL_COUNT: usize = 400;
 pub const JAM_PROGRESS_PER_COOL: u64 = 2;
 /// Progress one Good feeds (`push $0x1`, file `0x170628`).
 pub const JAM_PROGRESS_PER_GOOD: u64 = 1;
+/// Progress one jam level spans: successive thresholds differ by 50
+/// (`(i + 1) * 50`, `FUN_00570260`), so each level needs 50 more
+/// cumulative progress.
+pub const JAM_PROGRESS_PER_LEVEL: u64 = 50;
 
 /// Cumulative progress needed to reach `level` (threshold table entry).
 ///
@@ -220,6 +224,15 @@ impl JamState {
     #[must_use]
     pub fn threshold(&self) -> u64 {
         jam_threshold_for(self.level)
+    }
+
+    /// Progress inside the current level (`0..50`): cumulative progress
+    /// minus the base the level started from (level * 50, since every
+    /// threshold step spans [`JAM_PROGRESS_PER_LEVEL`]).
+    #[must_use]
+    pub fn level_progress(&self) -> u64 {
+        self.progress
+            .saturating_sub(u64::from(self.level) * JAM_PROGRESS_PER_LEVEL)
     }
 
     /// Feed one judgement into progress, granting levels while covered.
@@ -1016,6 +1029,26 @@ mod tests {
         jam.note(Judgement::Good);
         jam.note(Judgement::Miss);
         assert_eq!((jam.level(), jam.progress()), (0, 0));
+    }
+
+    #[test]
+    fn jam_level_progress_tracks_position_inside_the_level() {
+        let mut jam = JamState::new();
+        assert_eq!(jam.level_progress(), 0);
+        jam.note(Judgement::Cool);
+        assert_eq!(jam.level_progress(), JAM_PROGRESS_PER_COOL);
+        for _ in 0..24 {
+            jam.note(Judgement::Cool);
+        }
+        assert_eq!((jam.level(), jam.level_progress()), (1, 0));
+        jam.note(Judgement::Good);
+        assert_eq!((jam.level(), jam.level_progress()), (1, 1));
+    }
+
+    #[test]
+    fn jam_level_span_matches_verified_threshold_step() {
+        assert_eq!(JAM_PROGRESS_PER_LEVEL, 50);
+        assert_eq!(jam_threshold_for(1) - jam_threshold_for(0), 50);
     }
 
     #[test]

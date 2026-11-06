@@ -9,11 +9,11 @@
 use o2jam_game::{
     lane_effect::{lane_map_for_modifier_byte, SkillRing},
     CoolStreak, Judgement, LaneMap, LongTail, MeasureReshuffle, PeerBars, PillStock, QueueEvent,
-    RankDelivery, Score, TimingWindows, LIFE_MAX, PEER_SLOT_COUNT,
+    RankDelivery, Score, TimingWindows, JAM_PROGRESS_PER_LEVEL, LIFE_MAX, PEER_SLOT_COUNT,
 };
 use o2jam_render::{
-    draw_number, draw_text, fill_rect, pack_xrgb, text_width, visible_spans, Frame, LaneCurtain,
-    Rect,
+    draw_number, draw_text, fill_rect, number_width, pack_xrgb, text_width, visible_spans, Frame,
+    LaneCurtain, Rect,
 };
 
 /// Lanes across the highway.
@@ -30,6 +30,16 @@ pub const PEER_BAR_HEIGHT: u32 = 20;
 pub const PEER_BAR_TOP: i32 = 4;
 /// Gap between peer life bars (and the frame edge) in pixels.
 pub const PEER_BAR_GAP: i32 = 1;
+/// Jam edge-bar width in pixels (layout-relative; the staged
+/// `Jamgauge_right_bar.ojs` / `Jamgauge_left_bar.ojs` shells ring the
+/// same edges once `paint_playing_overlay` binds them).
+pub const JAM_BAR_WIDTH: u32 = 4;
+/// Jam edge-bar height in pixels (clamped to the frame in paint).
+pub const JAM_BAR_HEIGHT: u32 = 24;
+/// Jam edge-bar top row (below the peer strip at 4 + 20).
+pub const JAM_BAR_TOP: i32 = 28;
+/// Gap between a jam edge-bar and the frame edge in pixels.
+pub const JAM_BAR_EDGE_GAP: i32 = 1;
 
 /// Lane layout for one frame size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -246,6 +256,17 @@ fn curtain_for_ring(ring: SkillRing) -> LaneCurtain {
         SkillRing::ReverseDark => LaneCurtain::ReverseDark,
         SkillRing::Mirror | SkillRing::Random | SkillRing::Panic => LaneCurtain::Full,
     }
+}
+
+/// Filled rows for `progress_in_level` (`0..50`) over a `bar_h`-row jam
+/// bar. Integer math keeps the exe's cumulative-progress shape
+/// (each level spans [`JAM_PROGRESS_PER_LEVEL`]; no reset on grant).
+fn jam_fill_rows(progress_in_level: u64, bar_h: u32) -> u32 {
+    let filled = progress_in_level
+        .saturating_mul(u64::from(bar_h))
+        .checked_div(JAM_PROGRESS_PER_LEVEL)
+        .unwrap_or(0);
+    u32::try_from(filled).unwrap_or(u32::MAX).min(bar_h)
 }
 
 /// Word shown for each judgement tier.
@@ -654,11 +675,83 @@ impl LivePlay {
         );
     }
 
-    /// Paint highway, notes, peer bars, score, combo, and the latest word.
+    /// Jam edge-bars plus level digits from [`JamState`]: Cool feeds +2,
+    /// Good feeds +1, each level spans [`JAM_PROGRESS_PER_LEVEL`] cumulative
+    /// progress (`FUN_00570260` / `FUN_00570510`), and a pill-saved Bad
+    /// feeds like a Cool (`apply_rated`). The bars fill where the staged
+    /// `Jamgauge_right_bar.ojs` / `Jamgauge_left_bar.ojs` shells sit
+    /// (VAs `0x64b1b8` / `0x64b1d0`, loader `FUN_004e7850`); the digits
+    /// stand in for the `Note_JamNum.ojs` (`0x64c0fc` → `0x50d0ae`) art
+    /// until staged figures bind.
+    fn paint_jam_gauge(&self, frame: &mut Frame<'_>) {
+        let bar_h = Self::jam_bar_height(frame.h);
+        if bar_h <= 0 {
+            self.paint_jam_level(frame);
+            return;
+        }
+        let filled = jam_fill_rows(
+            self.score.jam.level_progress(),
+            u32::try_from(bar_h).unwrap_or(0),
+        );
+        let width = i32::try_from(JAM_BAR_WIDTH).unwrap_or(0);
+        let edge = i32::try_from(frame.w).unwrap_or(0);
+        Self::paint_jam_bar(frame, JAM_BAR_EDGE_GAP, filled, bar_h);
+        Self::paint_jam_bar(frame, edge - width - JAM_BAR_EDGE_GAP, filled, bar_h);
+        self.paint_jam_level(frame);
+    }
+
+    /// Jam bar height clamped to the frame below the peer strip.
+    fn jam_bar_height(frame_h: usize) -> i32 {
+        let full = i32::try_from(JAM_BAR_HEIGHT).unwrap_or(0);
+        let room = i32::try_from(frame_h).unwrap_or(0) - JAM_BAR_TOP;
+        full.min(room).max(0)
+    }
+
+    /// One empty jam bar plus its progress fill, rising from the bottom.
+    fn paint_jam_bar(frame: &mut Frame<'_>, x: i32, filled: u32, bar_h: i32) {
+        let filled = i32::try_from(filled).unwrap_or(bar_h).min(bar_h);
+        fill_rect(
+            frame,
+            &Rect {
+                x,
+                y: JAM_BAR_TOP,
+                w: JAM_BAR_WIDTH,
+                h: u32::try_from(bar_h).unwrap_or(0),
+            },
+            pack_xrgb(0x10, 0x10, 0x30),
+        );
+        fill_rect(
+            frame,
+            &Rect {
+                x,
+                y: JAM_BAR_TOP + bar_h - filled,
+                w: JAM_BAR_WIDTH,
+                h: u32::try_from(filled).unwrap_or(0),
+            },
+            pack_xrgb(0xFF, 0x80, 0x00),
+        );
+    }
+
+    /// Jam level digits, top-centered (digit bodies follow `Note_JamNum`).
+    fn paint_jam_level(&self, frame: &mut Frame<'_>) {
+        let level = self.score.jam.level();
+        let digits = i32::try_from(number_width(level)).unwrap_or(0);
+        let center = i32::try_from(frame.w).unwrap_or(0) / 2;
+        draw_number(
+            frame,
+            center - digits / 2,
+            PEER_BAR_TOP,
+            level,
+            pack_xrgb(0xFF, 0xC0, 0x40),
+        );
+    }
+
+    /// Paint highway, notes, peer bars, jam gauge, score, combo, and word.
     pub fn paint(&mut self, frame: &mut Frame<'_>, geom: &HighwayGeometry, now_ms: u64) {
         self.advance_to(now_ms);
         self.view.paint_curtained(frame, geom, self.curtain);
         self.paint_peer_bars(frame);
+        self.paint_jam_gauge(frame);
         let points = u32::try_from(self.score.points).unwrap_or(u32::MAX);
         draw_number(frame, 16, 16, points, pack_xrgb(0xFF, 0xFF, 0xFF));
         if self.score.combo > 0 {
@@ -767,6 +860,112 @@ mod live_play_tests {
             buf[10 * 70 + word_x as usize + 2],
             pack_xrgb(0xFF, 0xFF, 0xFF)
         );
+    }
+
+    #[test]
+    fn jam_fill_rows_scales_verified_progress_to_height() {
+        assert_eq!(jam_fill_rows(0, 24), 0);
+        assert_eq!(jam_fill_rows(2, 50), 2);
+        assert_eq!(jam_fill_rows(1, 50), 1);
+        assert_eq!(jam_fill_rows(50, 24), 24);
+        assert_eq!(jam_fill_rows(60, 24), 24);
+    }
+
+    #[test]
+    fn jam_gauge_empty_shows_shell_without_fill() {
+        let mut live = LivePlay::default();
+        let mut buf = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            0,
+        );
+        let shell = pack_xrgb(0x10, 0x10, 0x30);
+        let fill = pack_xrgb(0xFF, 0x80, 0x00);
+        assert_eq!(buf[(JAM_BAR_TOP as usize) * 70 + 2], shell);
+        assert!(!buf.contains(&fill));
+    }
+
+    #[test]
+    fn jam_gauge_cool_and_good_fill_both_edge_bars() {
+        let mut live = LivePlay::new(&[(0, 1000, 7), (0, 1100, 7)]);
+        live.strike_lane(0, 1000);
+        live.strike_lane(0, 1110);
+        assert_eq!(live.score().jam.level_progress(), 3);
+        let mut buf = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            1110,
+        );
+        let fill = pack_xrgb(0xFF, 0x80, 0x00);
+        let bottom = (JAM_BAR_TOP + 24 - 1) as usize;
+        assert_eq!(buf[bottom * 70 + 2], fill);
+        assert_eq!(buf[bottom * 70 + 66], fill);
+        assert_eq!(
+            buf[(JAM_BAR_TOP as usize) * 70 + 2],
+            pack_xrgb(0x10, 0x10, 0x30)
+        );
+    }
+
+    #[test]
+    fn jam_gauge_grant_advances_level_digits_and_empties_fill() {
+        let notes: Vec<(u8, u64, u32)> = (0..25u32)
+            .map(|i| (0, 1000 + u64::from(i) * 100, 7))
+            .collect();
+        let mut live = LivePlay::new(&notes);
+        for i in 0..25u32 {
+            assert_eq!(
+                live.strike_lane(0, 1000 + u64::from(i) * 100),
+                Some(Judgement::Cool)
+            );
+        }
+        assert_eq!(
+            (live.score().jam.level(), live.score().jam.level_progress()),
+            (1, 0)
+        );
+        let mut buf = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            3400,
+        );
+        let jam_ink = pack_xrgb(0xFF, 0xC0, 0x40);
+        // Level 1 glyph top row is 0b010: left pixel stays background.
+        assert_eq!(buf[4 * 70 + 34], pack_xrgb(0x0A, 0x0A, 0x0A));
+        assert_eq!(buf[4 * 70 + 35], jam_ink);
+        let bottom = (JAM_BAR_TOP + 24 - 1) as usize;
+        assert_eq!(buf[bottom * 70 + 2], pack_xrgb(0x10, 0x10, 0x30));
+    }
+
+    #[test]
+    fn jam_gauge_pill_saved_bad_feeds_progress_like_cool() {
+        let notes: Vec<(u8, u64, u32)> = (0..16u32)
+            .map(|i| (0, 1000 + u64::from(i) * 100, 7))
+            .collect();
+        let mut live = LivePlay::new(&notes);
+        for i in 0..15u32 {
+            assert_eq!(
+                live.strike_lane(0, 1000 + u64::from(i) * 100),
+                Some(Judgement::Cool)
+            );
+        }
+        assert_eq!(live.score().jam.progress(), 30);
+        assert_eq!(live.strike_lane(0, 2500 + 20), Some(Judgement::Bad));
+        assert_eq!(live.score().jam.progress(), 32);
+        assert_eq!(live.score().combo, 15);
     }
 
     #[test]
