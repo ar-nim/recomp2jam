@@ -6,6 +6,8 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
+mod connect;
+
 #[derive(Debug, Parser)]
 #[command(
     name = "recomp2jam",
@@ -26,6 +28,36 @@ struct Cli {
 enum Command {
     /// Show build info and original-stack mapping.
     Info,
+    /// Connect to a Memoryer gateway and run the login flow.
+    Connect {
+        /// Gateway host (Memoryer `Server` address).
+        #[arg(long)]
+        host: String,
+        /// Gateway TCP port (15010 in-exe default).
+        #[arg(long, default_value_t = o2jam_net::DEFAULT_GATEWAY_PORT)]
+        port: u16,
+        /// Account id.
+        #[arg(long)]
+        user_id: i32,
+        /// Username.
+        #[arg(long)]
+        token: String,
+        /// Account gender (male, female, any).
+        #[arg(long, default_value = "any")]
+        gender: String,
+        /// Relay session key 1 (launcher auth; 0 without one).
+        #[arg(long, default_value_t = 0)]
+        relay_key1: i32,
+        /// Relay session key 2 (launcher auth; 0 without one).
+        #[arg(long, default_value_t = 0)]
+        relay_key2: i32,
+        /// Gateway id to enter (needs --channel-id too).
+        #[arg(long, requires = "channel_id")]
+        gateway_id: Option<i16>,
+        /// Channel id to enter (needs --gateway-id too).
+        #[arg(long, requires = "gateway_id")]
+        channel_id: Option<i16>,
+    },
     /// Stub gameplay entry point (autoplay with null backend for now).
     Play {
         /// Chart file to load (`.ojn`, verified parsers pending).
@@ -63,6 +95,52 @@ fn main() -> Result<()> {
             println!("recomp2jam {}", env!("CARGO_PKG_VERSION"));
             println!("target: O2Jam 7.55 client (C++/CDX/Boost/libvorbis/MSVC2005) -> Rust");
             println!("status: day-0 scaffold; gameplay renderers pending file-parser verification");
+        }
+        Command::Connect {
+            host,
+            port,
+            user_id,
+            token,
+            gender,
+            relay_key1,
+            relay_key2,
+            gateway_id,
+            channel_id,
+        } => {
+            let options = connect::ConnectOptions {
+                host,
+                port,
+                user_id,
+                token,
+                gender: connect::parse_gender(&gender)?,
+                relay_key1,
+                relay_key2,
+                channel: gateway_id.zip(channel_id),
+            };
+            let report = connect::connect_and_login(&options)?;
+            println!("authorize: {}", connect::name_result(report.auth_code));
+            println!("channels: {}", report.channels.len());
+            for channel in &report.channels {
+                println!(
+                    "  gateway {} channel {}: {}/{} {}",
+                    channel.gateway_id,
+                    channel.channel_id,
+                    channel.population,
+                    channel.capacity,
+                    if channel.active { "open" } else { "closed" },
+                );
+            }
+            if let Some(login) = &report.channel_login {
+                let restricted = match login.restricted {
+                    Some(true) => "restricted",
+                    Some(false) => "unrestricted",
+                    None => "restriction unknown",
+                };
+                println!(
+                    "channel: {} ({restricted})",
+                    connect::name_result(login.result_code)
+                );
+            }
         }
         Command::Play {
             chart,

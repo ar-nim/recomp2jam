@@ -46,7 +46,7 @@ All request/response/event layouts live in
 = wire order). Minimum viable online session, in order:
 
 ### Phase 1 — login + channel (offline-capable shell exists)
-- TCP connect to Memoryer gateway (`15010`), framing codec — DONE in `o2jam-net` (`GatewayConnection::{send_frame,next_frame,exchange,await_response}`, loopback-tested; live interop still open).
+- TCP connect to Memoryer gateway (`15010`), framing codec — DONE in `o2jam-net` (`GatewayConnection::{send_frame,next_frame,exchange,await_response}`, loopback-tested; live interop still open). Login flow DONE in the binary (`recomp2jam connect`: authorize → channel list → optional channel login, e2e-tested against a fake gateway; no live Memoryer contact yet).
 - `Authorize` 1000 C→S payload (Memoryer field order): u8 `1`, relayKey1/2 i32,
   public+local endpoints, i32 userId, str token, gender,
   u8 `1`, str clientId. Handle 1001/1003/1005/1008, 50/51/52.
