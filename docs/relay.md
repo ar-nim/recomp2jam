@@ -215,12 +215,6 @@ the server sends.
 - Relay TCP ports for the peer leg (only gateway TCP `15010` pinned
   in-exe at file `0x2513d8`, ref file `0x1ab72a`); relay ports otherwise
   arrive via `GetLiveState` 4042/4043, `GetP2PList` 4044/4045.
-- `ConfirmRelay` 4055 C→S body bytes: send site pinned (file
-  `0xf0439`) but the shared send helper also serves field-carrying
-  opcodes (4012 at files `0xf0420`/`0xeadcc`, 4014, 4016, 4048), so
-  the site does not prove emptiness; the decoder encodes empty per
-  Memoryer (`PlayingController.ConfirmRelay` takes no fields) until
-  byte proof lands. 4046/4047/4056 are byte-verified empty (§9).
 - `CUDPFailTCPConnect` trigger site (RTTI name only, file
   `0x28060c`); byte-pinned fallback behavior is relay op 3 forcing
   TCP plus the RUDP trio — the class's own call sites are open.
@@ -235,9 +229,8 @@ No new REA dossier was issued (shared snapshot contended); all
 addresses below are file offsets (VA = file + `0x400000`), and no
 disassembly is reproduced. Decoder impact: `ReportUdpPunchHole` / `ReportUdpPunchHoleAnswer` /
 `ConfirmRelay` / `ConfirmRelayAnswer` empty bodies in `o2jam-net`
-(`live_handshake_tests`); 4046/4047/4056 are byte-verified in-exe
-while 4055 stays Memoryer-corroborated with its send site pinned
-(body OPEN, §7). Method for the new rows: `python3` byte scans over
+(`live_handshake_tests`); all four are byte-verified in-exe (§7
+closed for 4055, §9). Method for the new rows: `python3` byte scans over
 the local install-root copy (same method as the 4015 dossier),
 cross-checked against the Memoryer `PlayingController` handlers.
 
@@ -259,7 +252,7 @@ peer-to-peer) and the RUDP-over-UDP vs framed-TCP split.
 | UHP result | `InsertUHPResult` file `0x24e1e4` (ref `0x187a8c`); format `Hole punching Result : %d : IP : %d - Port : %d` file `0x24e208` (ref `0x187a82`) |
 | UHP report 4046 C→S | empty (`04 00 CE 0F`): id `u16` `0x0FCE` at file `0x18d8a1`, len `u16` 4 at file `0x18d8ac`, adjacent on the stack in the UHP function (entry file `0x18d580`); id immediate unique image-wide; no `0x0FCE` dword site exists anywhere |
 | Punch echo 4047 S→C | body-ignored: dispatcher slot 21 (case file `0x1587cb`) → handler entry file `0x163d90` sets a session flag and returns without reading packet bytes; that flag gates the 4048 send (checked at file `0xeae6d`); no `0x0FCF` dword site exists |
-| Relay confirm 4055 C→S | send site file `0xf0439` (`push 0`, `push 0x0FD7`, session send via vtable +`0x84`); sole `0x0FD7` dword site image-wide; body OPEN — same shape serves field-carrying 4012/4014/4016/4048 |
+| Relay confirm 4055 C→S | byte-verified empty (`04 00 D7 0F`): send `push 0` + `push 0x0FD7` at file `0xf0439` (immediate at file `0xf043a`, byte `0x68` before) via session send vtable +`0x84`; sole `0x0FD7` dword site image-wide, zero `66 C7 .. D7 0F` word-store / `66 3D D7 0F` / `66 81 .. D7 0F` sites; fires 25 bytes after the 4012 send at file `0xf0420` with no field-staging immediates between, while the builder switch holds dword cases for 4016 (files `0xdd4c0`/`0xdd4cc`), 4012 (file `0xdd51d`), 4014 (file `0xdd529`) and none for `0x0FD7` |
 | Relay echo 4056 S→C | body-ignored: slot 26 (case file `0x158820`) → handler entry file `0x163d50` forwards `(0, 0, 0x0FD8, 0x12)` to the UI event queue; same shape as the 4052/4054 forwarders (entries `0x163d10`/`0x163d30`); game-state compare against `0x0FD8` at file `0xde4db` |
 | Adjunct `.52` host | string file `0x24e368`, pushed at files `0x1936e2`/`0x1936fc` inside helper file `0x193650` (7 call sites, §6); co-located number 7788 (file `0x19370b`); no packet shape — adjunct endpoint, exact role open |
 | Fallback | RTTI `.?AVCUDPFailTCPConnect@@` file `0x28060c`; `WSASendTo`/`WSARecvFrom` IAT `0x63f584`/`0x63f580` (sites files `0x1b1ad2`/`0x1b19cd`) |
@@ -272,7 +265,9 @@ ops 1–7/10–11, frame round-trips, short/trailing/foreign-id and
 bad-enum rejections. `adjunct_host_tests`: adjunct address octets,
 relay-subnet-but-not-pool membership, `7788` immediate. `live_handshake_tests`: exact empty frames
 `04 00 <id>` for 4046/4047/4055/4056 (the 4046 bytes match the UHP
-stack frame), round-trips, payload and foreign-id rejections. `udp_frame_tests`: ack encode/decode,
+stack frame; the 4055 send site is the sole `0x0FD7` dword image-wide),
+round-trips, payload and foreign-id rejections, plus 4055 shaped-length
+(5/16/24 B) rejections separating it from 4012/4014/4016. `udp_frame_tests`: ack encode/decode,
 stored/fixed-dictionary/dynamic-Huffman datagram vectors,
 stored-encoder round-trip, length-prefix and checksum
 rejections. `stored_block_tests` (`inflate.rs`): Adler-32

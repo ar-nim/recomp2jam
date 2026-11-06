@@ -19,9 +19,9 @@
 //! bodies below are Memoryer-corroborated; see `docs/relay.md` for
 //! the anchor table and the open exe-verification items. The
 //! trailing Live-handshake section (game-gateway 4046/4047/4055/
-//! 4056) is the exception: 4046/4047/4056 are byte-verified empty
-//! in-exe (per-type offsets below), while 4055's send site is pinned
-//! but its body stays Memoryer-corroborated (open item).
+//! 4056) is the exception: all four are byte-verified empty
+//! in-exe (per-type offsets below; 4055 separated from the
+//! field-carrying send sites, see `docs/relay.md`).
 
 use std::net::{Ipv4Addr, SocketAddrV4};
 
@@ -867,14 +867,19 @@ impl WireMessage for ReportUdpPunchHoleAnswer {
 
 /// `ConfirmRelay` 4055 (C→S): relay-path confirmation.
 ///
-/// Send site pinned (file `0xf0439`: `push 0` + `push 0x0FD7` into
-/// the session send through vtable offset `0x84`, with no field
-/// staging before the call); encoded empty per Memoryer
-/// (`PlayingController.ConfirmRelay` takes no request fields,
-/// log-only). The body bytes stay OPEN: the same send shape also
-/// serves opcodes whose bodies the helper gathers internally (4012
-/// at files `0xf0420`/`0xeadcc`, 4014, 4016, 4048), so the site
-/// alone does not prove emptiness — see `docs/relay.md`.
+/// Byte-verified empty: the send at file `0xf0439` (`push 0` +
+/// `push 0x0FD7` into the session send through vtable offset `0x84`)
+/// is the sole `0x0FD7` dword site image-wide (immediate at file
+/// `0xf043a`; no `66 C7 .. D7 0F` word-store, `66 3D D7 0F`, or
+/// `66 81 .. D7 0F` compare site exists, so no helper-internal
+/// field branch can key on the id). It fires 25 bytes after the
+/// 4012 send at file `0xf0420` with only the next send's `6A 00`
+/// opener between them — none of the field-staging immediates that
+/// precede every 4012/4014/4016 send — while the packet-builder
+/// switch (dword cases for 4016 at files `0xdd4c0`/`0xdd4cc`, 4012
+/// at file `0xdd51d`, 4014 at file `0xdd529`) holds no `0x0FD7`
+/// case. Encoded empty per Memoryer (`PlayingController.ConfirmRelay`
+/// takes no request fields, log-only) — see `docs/relay.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConfirmRelay;
 
@@ -1679,6 +1684,24 @@ mod live_handshake_tests {
         assert_eq!(
             ReportUdpPunchHole::decode_frame(&answer),
             Err(Error::UnknownCommand(4056))
+        );
+    }
+
+    #[test]
+    fn confirm_relay_rejects_shaped_bodies() {
+        // Separation from the shared helper's field-carrying callers:
+        // 4012 (5 B), 4014 (16 B), 4016 (24 B) lengths never decode as 4055.
+        assert_eq!(
+            ConfirmRelay::decode_body(&[0x00; 5]),
+            Err(Error::TrailingBytes(5))
+        );
+        assert_eq!(
+            ConfirmRelay::decode_body(&[0x00; 16]),
+            Err(Error::TrailingBytes(16))
+        );
+        assert_eq!(
+            ConfirmRelay::decode_body(&[0x00; 24]),
+            Err(Error::TrailingBytes(24))
         );
     }
 }
