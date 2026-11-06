@@ -89,9 +89,14 @@ flows above are its TCP counterpart.
   `SyncFreePassResponse` + `SubscriptionTimeExpiryCodec`) is
   Memoryer corroboration. A 4-byte result-only body means "no
   snapshot" (nullable trailing member, as in `ChannelLoginResponse`).
-- 5029/5041: no `0x13a5`/`0x13b1` immediates in `.text` → exe
-  neither dispatches nor reads them; shapes are Memoryer-only
-  (`{gem, cash_point}`; `{invalid i32, username}`).
+- 5029: handler VA `0x563900` (file `0x163900`, stub `0x5588d7`)
+  reads two `i32` (words VERIFIED, Memoryer names `gem`,
+  `cash_point` kept): word 1 via `0x540090` into
+  `0x77cd00+0x2c` (same slot as SellItem extra and 5001 prefix),
+  word 2 via `0x540d00` into `0x77cd00+0x2128` (wallet block
+  copied at file `0x4e93d1`). 5041: no `0x13b1` immediate in
+  `.text` → exe neither dispatches nor reads it; shape is
+  Memoryer-only (`{invalid i32, username}`).
 
 ## Verdict
 
@@ -100,7 +105,8 @@ flows above are its TCP counterpart.
 - Response dispatch 5016/5018/5024/5026: VERIFIED; 5024 first
   word + 5026 first word: VERIFIED; remaining response bytes:
   Memoryer-corroborated.
-- 5029/5040/5041: OPEN on the exe side (no sites); implemented
+- 5029: VERIFIED (two words, slots above); 5040/5041: OPEN on
+  the exe side (no sites); implemented
   for Memoryer interop, labeled as such in
   `crates/o2jam-net/src/message.rs`.
 - Coupon redemption itself: web-only (`coupon.phtml`), OPEN.

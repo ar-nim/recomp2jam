@@ -268,3 +268,34 @@ Covers the shop-head re-proof: shop trade + confirm relay empty
   +27 vs the 693 baseline from new net shop-trade tests,
   0 failures). No commits, no pushes.** This sweep touched only
   `docs/playtest.md`.
+
+## Regression sweep — 2026-11-06 14:12 UTC (HEAD `eb20dba`, tree dirty)
+
+Covers the cart-head re-proof: cart purchase pair (`bb65587`), combo
++ autoplay/code pins (`492d6de`), filter-append map (`fae630d`), and the
+shop-head log (`eb20dba`).
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **728 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 0, file 107, game 68, net 260,
+  render 35, shell 176, real_art 7, scenes 22, recomp2jam 34
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, no warnings.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.62 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`22:12:11 +08:00`):
+  `Create room: songflow` → `Get music list: [0/00] 562 music` →
+  `Start game: [000]` → `Game [000] Submit score: 2210`.
+- **Verdict: no regression — suite is green (728 passed;
+  +8 vs the 720 baseline from new net cart tests,
+  0 failures). No commits, no pushes.** This sweep touched only
+  `docs/playtest.md`.
+- Tree note: a peer holds uncommitted wheel/filter work
+  (`crates/o2jam-file/src/tables.rs`: new `OJN_WHEEL_LIST_COUNT`
+  const + slot resolver plus doc comments; `docs/file-formats/ojn.md`:
+  matching notes). `o2jam-file` still 107 passed, 0 failed under it.
