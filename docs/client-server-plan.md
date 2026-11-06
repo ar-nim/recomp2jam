@@ -52,7 +52,8 @@ All request/response/event layouts live in
   u8 `1`, str clientId. Handle 1001/1003/1005/1008, 50/51/52.
 - String wire format, Memoryer side PINNED (`docs/net-protocol.md`
   §3b; Encore `StringMessageFieldCodec`, defaults UTF-8 +
-  null-terminated + no prefix; AuthRequest Token/ClientId are bare
+  null-terminated + no prefix, implemented in `o2jam-net::strings`;
+  AuthRequest Token/ClientId are bare
   fields of that form; room names carry maxLength 22/12/21 as
   forensics guessed). Exe forensics so far: in-memory strings are
   null-terminated (`strlen`-equivalent at file `0x15f1bc0`);
