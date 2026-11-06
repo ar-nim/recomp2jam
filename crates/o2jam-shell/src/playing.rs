@@ -12,8 +12,8 @@ use o2jam_game::{
     RankDelivery, Score, TimingWindows, JAM_PROGRESS_PER_LEVEL, LIFE_MAX, PEER_SLOT_COUNT,
 };
 use o2jam_render::{
-    draw_number, draw_text, fill_rect, number_width, pack_xrgb, text_width, visible_spans, Frame,
-    LaneCurtain, Rect,
+    blit_rgb555, blit_rgb555_clipped, draw_number, draw_text, fill_rect, number_width, pack_xrgb,
+    text_width, visible_spans, Frame, LaneCurtain, Rect, Rgb555Image,
 };
 
 /// Lanes across the highway.
@@ -45,10 +45,9 @@ pub const JAM_BAR_EDGE_GAP: i32 = 1;
 /// Procedural stand-in for the skinned lane panels (sprite-55 bodies in
 /// `Playing1.opi`; exact panel codecs TBD in `docs/file-formats/opi.md`).
 pub const LANE_SKIN_ODD: u32 = pack_xrgb(0x0E, 0x0E, 0x16);
-/// Note-cap highlight row above each falling note (mimics the sprite-55
-/// note caps; staged `_Note_Cool.ojt` / `_Note_Good.ojt` / `_Note_Bad.ojt`
-/// / `_Note_Miss.ojt` runtime refs resolve to bare `.oja` siblings —
-/// `docs/file-formats/opi.md` — until those figures bind).
+/// Note-cap highlight row above each falling note (procedural
+/// fallback while no skin is staged; staged heads from
+/// [`NOTE_IMAGE_SPRITE`] replace the cap and core outright).
 pub const NOTE_CAP: u32 = pack_xrgb(0xB0, 0xE0, 0xFF);
 /// Long-note tail beam ink (heads keep the `NOTE_BLUE` core below).
 pub const TAIL_BEAM: u32 = pack_xrgb(0x20, 0x80, 0xE0);
@@ -64,6 +63,331 @@ pub const BURST_MS: u64 = 150;
 pub const RECEPTOR_H: i32 = 5;
 /// Hit-burst column height in pixels.
 pub const BURST_H: i32 = 24;
+/// Staged `Playing1.opi` note-head body: 7 lanes × 3 frames
+/// (widths 28/22/28/32/28/22/28; heads run before the tails).
+pub const NOTE_IMAGE_SPRITE: &str = "Note_Image.ojs";
+/// Staged press-down key body: one image per lane (native row 487
+/// sits at the judgement line).
+pub const KEY_DOWN_SPRITE: &str = "KeydownImage.ojs";
+/// Staged release-beam body: one full-height column per lane (ink
+/// runs from row 80 down to the line).
+pub const KEY_EFFECT_SPRITE: &str = "Keyeffect.ojs";
+/// Staged long-note release body.
+pub const LONG_NOTE_EFFECT_SPRITE: &str = "LongNote_Effect.ojt";
+/// Staged receptor stem: `KeyEffect_Tutorial_1.ojs` … `_7.ojs`
+/// (five full-height frames per lane, glow in the bottom quarter).
+pub const TUTORIAL_EFFECT_STEM: &str = "KeyEffect_Tutorial";
+/// Note-head frames per lane in [`NOTE_IMAGE_SPRITE`].
+pub const NOTE_FRAMES_PER_LANE: usize = 3;
+/// Receptor frames per tutorial body.
+pub const TUTORIAL_FRAMES_PER_LANE: usize = 5;
+/// Receptor animation step in song ms (visual only; timing untouched).
+pub const RECEPTOR_FRAME_MS: u64 = 45;
+
+/// One decoded skin image: raw RGB555 pixels plus the source body
+/// colorkey (skipped while blitting).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkinSprite {
+    image: Rgb555Image,
+    colorkey: u16,
+}
+
+impl SkinSprite {
+    /// Wrap decoded pixels with their transparent colour key.
+    #[must_use]
+    pub fn new(image: Rgb555Image, colorkey: u16) -> Self {
+        Self { image, colorkey }
+    }
+
+    /// Pixel extent.
+    #[must_use]
+    pub fn extent(&self) -> (usize, usize) {
+        (self.image.w, self.image.h)
+    }
+
+    /// Lane-centered left edge (wide art overhangs narrow lanes; the
+    /// blit clips to the frame, like the original overlap).
+    fn centered_x(&self, geom: &HighwayGeometry, lane: u8) -> i32 {
+        let column = geom.lane_rect(lane);
+        let lane_w = i32::try_from(column.w).unwrap_or(0);
+        let art_w = i32::try_from(self.image.w).unwrap_or(0);
+        column.x + (lane_w - art_w) / 2
+    }
+
+    /// Paint with its top at `top_y`, centered on the lane.
+    fn paint_note_at(&self, frame: &mut Frame<'_>, geom: &HighwayGeometry, lane: u8, top_y: i32) {
+        blit_rgb555(
+            frame,
+            &self.image.view(),
+            self.centered_x(geom, lane),
+            top_y,
+            Some(self.colorkey),
+        );
+    }
+
+    /// Paint with its bottom at `bottom_y` (tall columns anchor their
+    /// glow rows at the judgement line; overflow clips to the frame).
+    fn paint_bottom_anchored(
+        &self,
+        frame: &mut Frame<'_>,
+        geom: &HighwayGeometry,
+        lane: u8,
+        bottom_y: i32,
+    ) {
+        let height = i32::try_from(self.image.h).unwrap_or(0);
+        blit_rgb555(
+            frame,
+            &self.image.view(),
+            self.centered_x(geom, lane),
+            bottom_y - height,
+            Some(self.colorkey),
+        );
+    }
+
+    /// Paint bottom-anchored but only inside `clip` (burst columns and
+    /// tail spans show their slice of a full-height beam).
+    fn paint_clipped_to(
+        &self,
+        frame: &mut Frame<'_>,
+        geom: &HighwayGeometry,
+        lane: u8,
+        bottom_y: i32,
+        clip: &Rect,
+    ) {
+        let height = i32::try_from(self.image.h).unwrap_or(0);
+        blit_rgb555_clipped(
+            frame,
+            &self.image.view(),
+            self.centered_x(geom, lane),
+            bottom_y - height,
+            Some(self.colorkey),
+            Some(clip),
+        );
+    }
+}
+
+/// Staged highway art: per-lane note heads, press-down keys, release
+/// beams, receptor frames, and the long-note effect. Empty while
+/// nothing is staged: every paint path falls back to the procedural
+/// highway (the `real_art.rs` Playing row keys on the fallback inks,
+/// so staged lanes only replace their own art).
+#[derive(Debug, Clone, Default)]
+pub struct PlaySkin {
+    note_heads: [Option<SkinSprite>; HIGHWAY_LANES as usize],
+    press_keys: [Option<SkinSprite>; HIGHWAY_LANES as usize],
+    release_beams: [Option<SkinSprite>; HIGHWAY_LANES as usize],
+    receptors: [Vec<SkinSprite>; HIGHWAY_LANES as usize],
+    long_effect: Option<SkinSprite>,
+}
+
+impl PlaySkin {
+    /// Whether any lane staged art.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.long_effect.is_none()
+            && self.note_heads.iter().all(Option::is_none)
+            && self.press_keys.iter().all(Option::is_none)
+            && self.release_beams.iter().all(Option::is_none)
+            && self.receptors.iter().all(Vec::is_empty)
+    }
+
+    /// Lanes with a staged note head.
+    #[must_use]
+    pub fn staged_lanes(&self) -> usize {
+        self.note_heads.iter().filter(|head| head.is_some()).count()
+    }
+
+    /// Note head for one lane (the first of its triple).
+    #[must_use]
+    pub fn note_head(&self, lane: u8) -> Option<&SkinSprite> {
+        self.note_heads.get(lane as usize)?.as_ref()
+    }
+
+    /// Press-down key art for one lane.
+    #[must_use]
+    pub fn press_key(&self, lane: u8) -> Option<&SkinSprite> {
+        self.press_keys.get(lane as usize)?.as_ref()
+    }
+
+    /// Release beam for one lane.
+    #[must_use]
+    pub fn release_beam(&self, lane: u8) -> Option<&SkinSprite> {
+        self.release_beams.get(lane as usize)?.as_ref()
+    }
+
+    /// Long-note release effect.
+    #[must_use]
+    pub fn long_effect(&self) -> Option<&SkinSprite> {
+        self.long_effect.as_ref()
+    }
+
+    /// Receptor frame count for one lane.
+    #[must_use]
+    pub fn receptor_frame_count(&self, lane: u8) -> usize {
+        self.receptors.get(lane as usize).map_or(0, Vec::len)
+    }
+
+    /// Receptor frame for one lane: the rest frame while `flash_age_ms`
+    /// is `None`, then one step per [`RECEPTOR_FRAME_MS`] (clamped to
+    /// the last frame).
+    #[must_use]
+    pub fn receptor_frame(&self, lane: u8, flash_age_ms: Option<u64>) -> Option<&SkinSprite> {
+        let frames = self.receptors.get(lane as usize)?;
+        match flash_age_ms {
+            None => frames.first(),
+            Some(age) => {
+                let last = frames.len().saturating_sub(1);
+                let step = usize::try_from(age / RECEPTOR_FRAME_MS).unwrap_or(last);
+                frames.get(step.min(last))
+            }
+        }
+    }
+
+    /// Stage one lane's note head (out-of-range lanes are ignored).
+    #[must_use]
+    pub fn with_note_head(mut self, lane: u8, sprite: SkinSprite) -> Self {
+        if let Some(slot) = self.note_heads.get_mut(lane as usize) {
+            *slot = Some(sprite);
+        }
+        self
+    }
+
+    /// Stage one lane's press-down key art.
+    #[must_use]
+    pub fn with_press_key(mut self, lane: u8, sprite: SkinSprite) -> Self {
+        if let Some(slot) = self.press_keys.get_mut(lane as usize) {
+            *slot = Some(sprite);
+        }
+        self
+    }
+
+    /// Stage one lane's release beam.
+    #[must_use]
+    pub fn with_release_beam(mut self, lane: u8, sprite: SkinSprite) -> Self {
+        if let Some(slot) = self.release_beams.get_mut(lane as usize) {
+            *slot = Some(sprite);
+        }
+        self
+    }
+
+    /// Stage one lane's receptor frames (rest first, then flash steps).
+    #[must_use]
+    pub fn with_receptors(mut self, lane: u8, frames: Vec<SkinSprite>) -> Self {
+        if let Some(slot) = self.receptors.get_mut(lane as usize) {
+            *slot = frames;
+        }
+        self
+    }
+
+    /// Stage the long-note release effect.
+    #[must_use]
+    pub fn with_long_effect(mut self, sprite: SkinSprite) -> Self {
+        self.long_effect = Some(sprite);
+        self
+    }
+
+    /// Decode every staged body from a read-only archive slice; `None`
+    /// when no lane yields art (entries missing or undecodable).
+    #[must_use]
+    pub fn from_archive(archive: &[u8]) -> Option<Self> {
+        let mut skin = Self::default();
+        if let Some(body) = archive_body(archive, NOTE_IMAGE_SPRITE) {
+            for lane in 0..HIGHWAY_LANES {
+                let index = lane as usize * NOTE_FRAMES_PER_LANE;
+                if let Some(slot) = skin.note_heads.get_mut(lane as usize) {
+                    *slot = lane_sprite(body, index);
+                }
+            }
+        }
+        if let Some(body) = archive_body(archive, KEY_DOWN_SPRITE) {
+            for lane in 0..HIGHWAY_LANES {
+                if let Some(slot) = skin.press_keys.get_mut(lane as usize) {
+                    *slot = lane_sprite(body, lane as usize);
+                }
+            }
+        }
+        if let Some(body) = archive_body(archive, KEY_EFFECT_SPRITE) {
+            for lane in 0..HIGHWAY_LANES {
+                if let Some(slot) = skin.release_beams.get_mut(lane as usize) {
+                    *slot = lane_sprite(body, lane as usize);
+                }
+            }
+        }
+        for lane in 0..HIGHWAY_LANES {
+            let frames = archive_body(archive, &tutorial_sprite_name(lane)).map(skin_frames);
+            if let Some(frames) = frames.filter(|frames| !frames.is_empty()) {
+                if let Some(slot) = skin.receptors.get_mut(lane as usize) {
+                    *slot = frames;
+                }
+            }
+        }
+        if let Some(body) = archive_body(archive, LONG_NOTE_EFFECT_SPRITE) {
+            skin.long_effect = lane_sprite(body, 0);
+        }
+        (!skin.is_empty()).then_some(skin)
+    }
+}
+
+/// `KeyEffect_Tutorial_%d.ojs` body name for one lane (1-based).
+fn tutorial_sprite_name(lane: u8) -> String {
+    format!("{TUTORIAL_EFFECT_STEM}_{}.ojs", lane + 1)
+}
+
+/// One archive entry body by stored size (never the reserved stride;
+/// the archive stays read-only).
+fn archive_body<'archive>(archive: &'archive [u8], entry_name: &str) -> Option<&'archive [u8]> {
+    let entries = o2jam_file::parse_opi(archive).ok()?;
+    let entry = entries.iter().find(|entry| entry.name == entry_name)?;
+    let size = usize::try_from(entry.size).ok()?;
+    let end = entry.data_offset.checked_add(size)?;
+    archive.get(entry.data_offset..end)
+}
+
+/// One raw-RGB555 image as a skin sprite (`None` for missing images
+/// or compressed/outlier frames whose codec is still TBD).
+fn lane_sprite(body: &[u8], index: usize) -> Option<SkinSprite> {
+    let sprite = o2jam_file::parse_sprite55(body).ok()?;
+    let record = sprite.images.get(index)?;
+    if !sprite.is_raw_rgb555(record) {
+        return None;
+    }
+    let decoded = Rgb555Image::decode(
+        sprite.pixel_data(record),
+        record.w as usize,
+        record.h as usize,
+    )?;
+    Some(SkinSprite::new(decoded, sprite.colorkey))
+}
+
+/// Every raw image in stored order (tutorial receptor frames).
+fn skin_frames(body: &[u8]) -> Vec<SkinSprite> {
+    let Ok(sprite) = o2jam_file::parse_sprite55(body) else {
+        return Vec::new();
+    };
+    sprite
+        .images
+        .iter()
+        .filter(|record| sprite.is_raw_rgb555(record))
+        .filter_map(|record| {
+            Rgb555Image::decode(
+                sprite.pixel_data(record),
+                record.w as usize,
+                record.h as usize,
+            )
+            .map(|decoded| SkinSprite::new(decoded, sprite.colorkey))
+        })
+        .collect()
+}
+
+/// Hit-burst column rising above the line after a strike.
+fn burst_rect(column: &Rect, geom: &HighwayGeometry) -> Rect {
+    Rect {
+        x: column.x + 2,
+        y: geom.line_y - RECEPTOR_H - BURST_H,
+        w: column.w.saturating_sub(4),
+        h: u32::try_from(BURST_H).unwrap_or(0),
+    }
+}
 
 /// Lane layout for one frame size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,6 +437,8 @@ pub struct PlayingView {
     now_ms: u64,
     /// Visible window ahead in ms.
     lookahead_ms: u64,
+    /// Staged note/receptor art (empty falls back to procedural).
+    skin: PlaySkin,
 }
 
 impl PlayingView {
@@ -124,7 +450,25 @@ impl PlayingView {
             onsets,
             now_ms: 0,
             lookahead_ms: DEFAULT_LOOKAHEAD_MS,
+            skin: PlaySkin::default(),
         }
+    }
+
+    /// Stage real note/receptor art; clears the procedural fallback
+    /// on staged lanes only.
+    pub fn set_skin(&mut self, skin: PlaySkin) {
+        self.skin = skin;
+    }
+
+    /// Drop staged art and restore the full procedural highway.
+    pub fn clear_skin(&mut self) {
+        self.skin = PlaySkin::default();
+    }
+
+    /// Whether any lane staged art.
+    #[must_use]
+    pub fn has_skin(&self) -> bool {
+        !self.skin.is_empty()
     }
 
     /// Move the song clock (tests and the frame pump call this).
@@ -173,7 +517,7 @@ impl PlayingView {
     pub fn paint(&self, frame: &mut Frame<'_>, geom: &HighwayGeometry) {
         self.paint_shell(frame, geom);
         for (lane, y) in self.visible(geom) {
-            Self::paint_note(frame, geom, lane, y);
+            self.paint_note(frame, geom, lane, y);
         }
     }
 
@@ -191,7 +535,7 @@ impl PlayingView {
         self.paint_shell(frame, geom);
         if curtain == LaneCurtain::Full {
             for (lane, y) in self.visible(geom) {
-                Self::paint_note(frame, geom, lane, y);
+                self.paint_note(frame, geom, lane, y);
             }
             return;
         }
@@ -207,7 +551,7 @@ impl PlayingView {
                 .iter()
                 .any(|span| y >= span.y && y < span.y + span.h as i32)
             {
-                Self::paint_note(frame, geom, lane, y);
+                self.paint_note(frame, geom, lane, y);
             }
         }
     }
@@ -252,7 +596,7 @@ impl PlayingView {
                 },
                 pack_xrgb(0x30, 0x30, 0x30),
             );
-            Self::paint_receptor(frame, geom, lane, RECEPTOR_DIM);
+            self.paint_receptor(frame, geom, lane, RECEPTOR_DIM, None);
         }
         fill_rect(
             frame,
@@ -266,8 +610,20 @@ impl PlayingView {
         );
     }
 
-    /// One lane's receptor pad resting just above the judgement line.
-    fn paint_receptor(frame: &mut Frame<'_>, geom: &HighwayGeometry, lane: u8, ink: u32) {
+    /// One lane's receptor pad resting just above the judgement line
+    /// (staged tutorial frame when present, procedural pad otherwise).
+    fn paint_receptor(
+        &self,
+        frame: &mut Frame<'_>,
+        geom: &HighwayGeometry,
+        lane: u8,
+        ink: u32,
+        flash_age_ms: Option<u64>,
+    ) {
+        if let Some(rest) = self.skin.receptor_frame(lane, flash_age_ms) {
+            rest.paint_bottom_anchored(frame, geom, lane, geom.line_y);
+            return;
+        }
         let column = geom.lane_rect(lane);
         fill_rect(
             frame,
@@ -281,10 +637,14 @@ impl PlayingView {
         );
     }
 
-    /// One falling note block: the `NOTE_BLUE` core the soak harness
-    /// (`real_art.rs` Playing row) and the shell overlay tests key on,
-    /// plus a cap highlight row above it toward the sprite-55 note art.
-    fn paint_note(frame: &mut Frame<'_>, geom: &HighwayGeometry, lane: u8, y: i32) {
+    /// One falling note: the staged head when present, else the
+    /// `NOTE_BLUE` core the soak harness (`real_art.rs` Playing row)
+    /// and the shell overlay tests key on, plus its cap highlight.
+    fn paint_note(&self, frame: &mut Frame<'_>, geom: &HighwayGeometry, lane: u8, y: i32) {
+        if let Some(head) = self.skin.note_head(lane) {
+            head.paint_note_at(frame, geom, lane, y);
+            return;
+        }
         let column = geom.lane_rect(lane);
         let w = column.w.saturating_sub(2);
         fill_rect(
@@ -530,6 +890,23 @@ impl LivePlay {
         self.curtain = curtain;
     }
 
+    /// Stage real note/key art into the highway paint (procedural
+    /// fallback stays on unstaged lanes).
+    pub fn set_skin(&mut self, skin: PlaySkin) {
+        self.view.set_skin(skin);
+    }
+
+    /// Drop staged art and restore the full procedural highway.
+    pub fn clear_skin(&mut self) {
+        self.view.clear_skin();
+    }
+
+    /// Whether any lane staged art.
+    #[must_use]
+    pub fn has_skin(&self) -> bool {
+        self.view.has_skin()
+    }
+
     /// Song setup for one skill ring: remap lanes through the ring's
     /// table, restart the per-measure reshuffle state, and hang the
     /// ring's item-text curtain.
@@ -734,13 +1111,11 @@ impl LivePlay {
         }
     }
 
-    /// Whether one lane's flash is still lit at `now_ms`.
-    fn flash_lit(&self, lane: u8, now_ms: u64) -> bool {
-        self.lane_flash
-            .get(lane as usize)
-            .copied()
-            .flatten()
-            .is_some_and(|at| now_ms.saturating_sub(at) < BURST_MS)
+    /// Flash age of one lane at `now_ms` (`None` when unlit).
+    fn flash_age(&self, lane: u8, now_ms: u64) -> Option<u64> {
+        let struck = self.lane_flash.get(lane as usize).copied().flatten()?;
+        let age = now_ms.saturating_sub(struck);
+        (age < BURST_MS).then_some(age)
     }
 
     /// Long-note tail beams between head and tail rows (visual only;
@@ -770,18 +1145,54 @@ impl LivePlay {
             if top >= bottom || !self.tail_shown(frame, geom, top) {
                 continue;
             }
-            let column = geom.lane_rect(note.lane);
-            fill_rect(
+            self.paint_tail_span(frame, geom, note.lane, note.holding, top, bottom);
+        }
+    }
+
+    /// One tail span: the staged long effect on held heads, the
+    /// staged release beam on untouched holds, else the procedural
+    /// [`TAIL_BEAM`] core.
+    fn paint_tail_span(
+        &self,
+        frame: &mut Frame<'_>,
+        geom: &HighwayGeometry,
+        lane: u8,
+        holding: bool,
+        top: i32,
+        bottom: i32,
+    ) {
+        if holding {
+            if let Some(art) = self.view.skin.long_effect() {
+                art.paint_bottom_anchored(frame, geom, lane, geom.line_y);
+                return;
+            }
+        } else if let Some(beam) = self.view.skin.release_beam(lane) {
+            let column = geom.lane_rect(lane);
+            beam.paint_clipped_to(
                 frame,
+                geom,
+                lane,
+                bottom,
                 &Rect {
-                    x: column.x + column.w as i32 / 2 - 1,
+                    x: column.x,
                     y: top,
-                    w: 2,
+                    w: column.w,
                     h: u32::try_from(bottom - top).unwrap_or(0),
                 },
-                TAIL_BEAM,
             );
+            return;
         }
+        let column = geom.lane_rect(lane);
+        fill_rect(
+            frame,
+            &Rect {
+                x: column.x + column.w as i32 / 2 - 1,
+                y: top,
+                w: 2,
+                h: u32::try_from(bottom - top).unwrap_or(0),
+            },
+            TAIL_BEAM,
+        );
     }
 
     /// Whether a tail row survives the worn sight-ring curtain (same
@@ -801,26 +1212,38 @@ impl LivePlay {
             .any(|span| y >= span.y && y < span.y + span.h as i32)
     }
 
-    /// Lit receptor pads plus burst columns on flashed lanes (the
-    /// judgement-line key effects: `KeyEffect_Tutorial_%d` siblings in
-    /// `Playing1.opi` mark the same per-lane anchors).
+    /// Lit receptor pads plus burst columns on flashed lanes (staged
+    /// `KeyEffect_Tutorial_%d` receptors, `KeydownImage` press art, and
+    /// `Keyeffect` beams when present; procedural pad and column
+    /// otherwise).
     fn paint_hit_bursts(&self, frame: &mut Frame<'_>, geom: &HighwayGeometry, now_ms: u64) {
         for lane in 0..HIGHWAY_LANES {
-            if !self.flash_lit(lane, now_ms) {
+            let Some(age) = self.flash_age(lane, now_ms) else {
                 continue;
-            }
-            let column = geom.lane_rect(lane);
-            PlayingView::paint_receptor(frame, geom, lane, RECEPTOR_LIT);
-            fill_rect(
-                frame,
-                &Rect {
-                    x: column.x + 2,
-                    y: geom.line_y - RECEPTOR_H - BURST_H,
-                    w: column.w.saturating_sub(4),
-                    h: u32::try_from(BURST_H).unwrap_or(0),
-                },
-                HIT_BURST,
-            );
+            };
+            self.paint_lane_flash(frame, geom, lane, age);
+        }
+    }
+
+    /// One flashed lane: staged beam, animated receptor, and press art
+    /// (each falls back to its procedural ink when unstaged).
+    fn paint_lane_flash(
+        &self,
+        frame: &mut Frame<'_>,
+        geom: &HighwayGeometry,
+        lane: u8,
+        age_ms: u64,
+    ) {
+        let column = geom.lane_rect(lane);
+        if let Some(beam) = self.view.skin.release_beam(lane) {
+            beam.paint_clipped_to(frame, geom, lane, geom.line_y, &burst_rect(&column, geom));
+        } else {
+            fill_rect(frame, &burst_rect(&column, geom), HIT_BURST);
+        }
+        self.view
+            .paint_receptor(frame, geom, lane, RECEPTOR_LIT, Some(age_ms));
+        if let Some(press) = self.view.skin.press_key(lane) {
+            press.paint_bottom_anchored(frame, geom, lane, geom.line_y);
         }
     }
 
@@ -1657,6 +2080,160 @@ mod live_play_tests {
         assert_eq!(buf[47 * 70 + 7], RECEPTOR_DIM);
         assert_eq!(buf[40 * 70 + 6], pack_xrgb(0x0A, 0x0A, 0x0A));
     }
+
+    fn solid_sprite(w: usize, h: usize, word: u16) -> SkinSprite {
+        SkinSprite::new(
+            Rgb555Image {
+                w,
+                h,
+                words: vec![word; w.saturating_mul(h)],
+            },
+            0x0000,
+        )
+    }
+
+    fn solid_ink(word: u16) -> u32 {
+        let (r, g, b) = o2jam_render::expand_rgb555(word);
+        pack_xrgb(r, g, b)
+    }
+
+    #[test]
+    fn full_lane_skin_replaces_burst_inks_on_strike() {
+        let mut live = LivePlay::new(&[(3, 1000, 7)]);
+        live.set_skin(
+            PlaySkin::default()
+                .with_receptors(3, vec![solid_sprite(8, 6, 0x03E0)])
+                .with_press_key(3, solid_sprite(4, 8, 0x7C1F))
+                .with_release_beam(3, solid_sprite(8, 64, 0x7FE0)),
+        );
+        assert!(live.has_skin());
+        live.strike_lane(3, 1000);
+        let mut buf = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            1050,
+        );
+        // Burst zone shows the beam, the pad row the press art, and
+        // the receptor peeks past its edges.
+        assert_eq!(buf[40 * 70 + 34], solid_ink(0x7FE0));
+        assert_eq!(buf[47 * 70 + 34], solid_ink(0x7C1F));
+        assert!(buf.contains(&solid_ink(0x03E0)));
+        assert!(!buf.contains(&RECEPTOR_LIT));
+    }
+
+    #[test]
+    fn receptor_animates_across_flash_frames() {
+        let mut live = LivePlay::new(&[(3, 1000, 7)]);
+        live.set_skin(PlaySkin::default().with_receptors(
+            3,
+            vec![solid_sprite(8, 6, 0x03E0), solid_sprite(8, 6, 0x001F)],
+        ));
+        live.strike_lane(3, 1000);
+        let mut first = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut first,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            1000,
+        );
+        assert!(first.contains(&solid_ink(0x03E0)));
+        assert!(!first.contains(&solid_ink(0x001F)));
+        let mut second = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut second,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            1060,
+        );
+        assert!(second.contains(&solid_ink(0x001F)));
+        assert!(!second.contains(&solid_ink(0x03E0)));
+    }
+
+    #[test]
+    fn skinned_tail_span_shows_beam_art() {
+        let mut live = LivePlay::new_holds(&[(3, 1500, 1900, 7)]);
+        live.set_skin(PlaySkin::default().with_release_beam(3, solid_sprite(8, 64, 0x7FE0)));
+        let mut buf = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            1000,
+        );
+        assert!(buf.contains(&solid_ink(0x7FE0)));
+        assert!(!buf.contains(&TAIL_BEAM));
+    }
+
+    #[test]
+    fn held_note_shows_long_effect() {
+        let mut live = LivePlay::new_holds(&[(3, 1500, 1900, 7)]);
+        live.set_skin(PlaySkin::default().with_long_effect(solid_sprite(8, 8, 0x03FF)));
+        live.strike_lane(3, 1500);
+        let mut buf = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            1600,
+        );
+        assert!(buf.contains(&solid_ink(0x03FF)));
+        assert!(!buf.contains(&TAIL_BEAM));
+    }
+
+    #[test]
+    fn skin_staging_toggles_fallback() {
+        let mut live = LivePlay::new(&[(3, 1000, 7)]);
+        assert!(!live.has_skin());
+        live.set_skin(PlaySkin::default().with_note_head(3, solid_sprite(6, 4, 0x7C00)));
+        assert!(live.has_skin());
+        live.clear_skin();
+        assert!(!live.has_skin());
+    }
+
+    #[test]
+    fn from_archive_binds_all_seven_lanes() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Image/Playing1.opi");
+        let Ok(archive) = std::fs::read(&path) else {
+            return;
+        };
+        let Some(skin) = PlaySkin::from_archive(&archive) else {
+            panic!("Playing1.opi staged no skin art");
+        };
+        assert_eq!(skin.staged_lanes(), HIGHWAY_LANES as usize);
+        let widths = [28, 22, 28, 32, 28, 22, 28];
+        for lane in 0..HIGHWAY_LANES {
+            let head = skin.note_head(lane).expect("note head per lane");
+            assert_eq!(head.extent().0, widths[lane as usize]);
+            assert!(skin.press_key(lane).is_some());
+            assert!(skin.release_beam(lane).is_some());
+            assert_eq!(skin.receptor_frame_count(lane), TUTORIAL_FRAMES_PER_LANE);
+        }
+        assert!(skin.long_effect().is_some());
+    }
+
+    #[test]
+    fn from_archive_empty_returns_none() {
+        assert!(PlaySkin::from_archive(&[]).is_none());
+        assert!(PlaySkin::from_archive(&[0u8; 64]).is_none());
+    }
 }
 
 #[cfg(test)]
@@ -1731,5 +2308,95 @@ mod highway_tests {
             &geom,
         );
         assert_eq!(buf[10 * 21], pack_xrgb(0xE0, 0xE0, 0xE0));
+    }
+
+    fn solid_sprite(w: usize, h: usize, word: u16) -> SkinSprite {
+        SkinSprite::new(
+            Rgb555Image {
+                w,
+                h,
+                words: vec![word; w.saturating_mul(h)],
+            },
+            0x0000,
+        )
+    }
+
+    fn solid_ink(word: u16) -> u32 {
+        let (r, g, b) = o2jam_render::expand_rgb555(word);
+        pack_xrgb(r, g, b)
+    }
+
+    #[test]
+    fn skinned_note_head_replaces_blue_core() {
+        let mut view = PlayingView::new(vec![(0, 1500)]);
+        view.advance_to(1000);
+        view.set_skin(PlaySkin::default().with_note_head(0, solid_sprite(6, 4, 0x7C00)));
+        assert!(view.has_skin());
+        let mut buf = vec![0u32; 70 * 60];
+        view.paint(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+        );
+        assert!(buf.contains(&solid_ink(0x7C00)));
+        assert!(!buf.contains(&pack_xrgb(0x40, 0xC0, 0xFF)));
+    }
+
+    #[test]
+    fn receptor_rest_shows_tutorial_frame() {
+        let mut view = PlayingView::default();
+        view.set_skin(PlaySkin::default().with_receptors(0, vec![solid_sprite(6, 6, 0x03E0)]));
+        let mut buf = vec![0u32; 70 * 60];
+        view.paint(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+        );
+        assert!(buf.contains(&solid_ink(0x03E0)));
+        assert!(buf.contains(&RECEPTOR_DIM));
+    }
+
+    #[test]
+    fn sudden_curtain_hides_skinned_notes() {
+        let mut view = PlayingView::new(vec![(0, 2900)]);
+        view.advance_to(1000);
+        view.set_skin(PlaySkin::default().with_note_head(0, solid_sprite(6, 4, 0x7C00)));
+        let mut buf = vec![0u32; 70 * 60];
+        view.paint_curtained(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            LaneCurtain::Sudden,
+        );
+        assert!(!buf.contains(&solid_ink(0x7C00)));
+    }
+
+    #[test]
+    fn clear_skin_restores_blue_core() {
+        let mut view = PlayingView::new(vec![(0, 1500)]);
+        view.advance_to(1000);
+        view.set_skin(PlaySkin::default().with_note_head(0, solid_sprite(6, 4, 0x7C00)));
+        view.clear_skin();
+        assert!(!view.has_skin());
+        let mut buf = vec![0u32; 70 * 60];
+        view.paint(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+        );
+        assert!(buf.contains(&pack_xrgb(0x40, 0xC0, 0xFF)));
+        assert!(!buf.contains(&solid_ink(0x7C00)));
     }
 }

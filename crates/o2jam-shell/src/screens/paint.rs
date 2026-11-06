@@ -21,10 +21,13 @@ use super::super::playing::{HighwayGeometry, PlayingView};
 use super::super::screen::Screen;
 use o2jam_file::ControlList;
 use o2jam_game::RoomTeams;
-use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry, RoomSlot, RoomSlotState};
+use o2jam_net::{
+    ChannelState, Difficulty, GameMode, GameSpeed, JoinedRoom, KeyMode, RoomListEntry, RoomSlot,
+    RoomSlotState,
+};
 use o2jam_render::{
-    draw_number, draw_text, fill_rect, number_width, pack_xrgb, text_width, Frame, Rect,
-    NATIVE_HEIGHT, NATIVE_WIDTH,
+    draw_number, draw_text, fill_rect, number_width, pack_xrgb, scale_rect_to_frame, text_width,
+    Frame, Rect, NATIVE_HEIGHT, NATIVE_WIDTH,
 };
 
 /// Gameplay block: real UI lives in `Playing1.opi` (235 entries,
@@ -317,11 +320,215 @@ fn paint_room_rows(frame: &mut Frame<'_>, rooms: &[RoomListEntry], highlight: us
     }
 }
 
+/// Title anchor of the highlighted-room panel (`SET 0x11` row
+/// template in `STATE_ROOM`).
+const ROOM_DETAIL_TITLE_ID: &str = "IDC_TEXT_SROOM_ROOMNAME";
+/// Seat-count anchor (`ROOM_USER`).
+const ROOM_DETAIL_USERS_ID: &str = "IDC_TEXT_SROOM_ROOM_USER";
+/// Selected-song anchor.
+const ROOM_DETAIL_MUSIC_ID: &str = "IDC_TEXT_SROOM_MUSICTITLE";
+/// Difficulty anchor (second music-title slot).
+const ROOM_DETAIL_DIFFICULTY_ID: &str = "IDC_TEXT_SROOM_MUSICTITLE2";
+/// Scroll-speed icon anchor; text stands in for the icon body.
+const ROOM_DETAIL_SPEED_ID: &str = "IDC_IMAGE_SROOM_SPEED";
+/// Game-mode icon anchor (`Room_Mode.ojs`); text stands in.
+const ROOM_DETAIL_MODE_ID: &str = "IDC_IMAGE_SROOM_MODE";
+/// Key-mode anchor (`Room_Om.ojs` option-mode icon).
+const ROOM_DETAIL_KEY_ID: &str = "IDC_IMAGE_SROOM_OM";
+/// Level-gate text anchor beside `Room_LevelLimit.ojs`.
+const ROOM_DETAIL_LEVEL_ID: &str = "IDC_TEXT_SROOM_LEVEL_RANGE";
+/// Lock-icon anchor (`Room_Password.ojs`); text stands in.
+const ROOM_DETAIL_LOCK_ID: &str = "IDC_IMAGE_SROOM_PASSWORD";
+
+/// Detail lines per panel: title plus the eight entry fields.
+const ROOM_DETAIL_LINES: usize = 9;
+
+/// Game-mode label (`NORMAL`/`LIVE`; raw code while unknown).
+#[must_use]
+fn room_mode_label(game_mode: u8) -> String {
+    match GameMode::from_u8(game_mode) {
+        Ok(GameMode::Normal) => "NORMAL".to_owned(),
+        Ok(GameMode::Live) => "LIVE".to_owned(),
+        Err(_) => format!("MODE {game_mode}"),
+    }
+}
+
+/// Selected-song label (the song table lives server-side, so the id).
+#[must_use]
+fn room_music_label(music_id: u16) -> String {
+    format!("M{music_id}")
+}
+
+/// Difficulty label (`EX`/`NX`/`HX`/`RX`; raw code while unknown).
+#[must_use]
+fn room_difficulty_label(difficulty: u8) -> String {
+    match Difficulty::from_code(difficulty) {
+        Some(Difficulty::Ex) => "EX".to_owned(),
+        Some(Difficulty::Nx) => "NX".to_owned(),
+        Some(Difficulty::Hx) => "HX".to_owned(),
+        Some(Difficulty::Rx) => "RX".to_owned(),
+        None => format!("DIF {difficulty}"),
+    }
+}
+
+/// Key-mode label (`3KEY`/`5KEY`/`7KEY`; raw code while unknown).
+#[must_use]
+fn room_key_label(key_mode: u8) -> String {
+    match KeyMode::from_u8(key_mode) {
+        Ok(KeyMode::ThreeKeys) => "3KEY".to_owned(),
+        Ok(KeyMode::FiveKeys) => "5KEY".to_owned(),
+        Ok(KeyMode::SevenKeys) => "7KEY".to_owned(),
+        Err(_) => format!("KEY {key_mode}"),
+    }
+}
+
+/// Scroll-speed label (`X0.5`..`X6`, `XR`; raw code while unknown).
+#[must_use]
+fn room_speed_label(speed: u8) -> String {
+    match GameSpeed::from_code(speed) {
+        Some(GameSpeed::X05) => "X0.5".to_owned(),
+        Some(GameSpeed::X10) => "X1".to_owned(),
+        Some(GameSpeed::X15) => "X1.5".to_owned(),
+        Some(GameSpeed::X20) => "X2".to_owned(),
+        Some(GameSpeed::X25) => "X2.5".to_owned(),
+        Some(GameSpeed::X30) => "X3".to_owned(),
+        Some(GameSpeed::X35) => "X3.5".to_owned(),
+        Some(GameSpeed::X40) => "X4".to_owned(),
+        Some(GameSpeed::X45) => "X4.5".to_owned(),
+        Some(GameSpeed::X50) => "X5".to_owned(),
+        Some(GameSpeed::X60) => "X6".to_owned(),
+        Some(GameSpeed::Xr) => "XR".to_owned(),
+        None => format!("SPD {speed}"),
+    }
+}
+
+/// Seat label (`seated/capacity`).
+#[must_use]
+fn room_capacity_label(room: &RoomListEntry) -> String {
+    format!("{}/{}", room.user_count, room.capacity)
+}
+
+/// Level-gate label (`LV min-max`).
+#[must_use]
+fn room_level_label(room: &RoomListEntry) -> String {
+    format!("LV {}-{}", room.min_level, room.max_level)
+}
+
+/// Lock label (`LOCK` with a password, `OPEN` without).
+#[must_use]
+fn room_lock_label(has_password: bool) -> &'static str {
+    if has_password {
+        "LOCK"
+    } else {
+        "OPEN"
+    }
+}
+
+/// Lock-line ink: red while a password is set, dim otherwise.
+fn room_lock_ink(locked: bool) -> u32 {
+    if locked {
+        pack_xrgb(0xFF, 0x50, 0x50)
+    } else {
+        pack_xrgb(0x90, 0x90, 0x90)
+    }
+}
+
+/// Ordered detail entries for one room: (`State_Room.bnd`
+/// control id, text).
+#[must_use]
+fn room_detail_entries(room: &RoomListEntry) -> [(&'static str, String); ROOM_DETAIL_LINES] {
+    [
+        (ROOM_DETAIL_TITLE_ID, room.title.clone()),
+        (ROOM_DETAIL_USERS_ID, room_capacity_label(room)),
+        (ROOM_DETAIL_MUSIC_ID, room_music_label(room.music_id)),
+        (
+            ROOM_DETAIL_DIFFICULTY_ID,
+            room_difficulty_label(room.difficulty),
+        ),
+        (ROOM_DETAIL_KEY_ID, room_key_label(room.key_mode)),
+        (ROOM_DETAIL_MODE_ID, room_mode_label(room.game_mode)),
+        (ROOM_DETAIL_SPEED_ID, room_speed_label(room.speed)),
+        (ROOM_DETAIL_LEVEL_ID, room_level_label(room)),
+        (
+            ROOM_DETAIL_LOCK_ID,
+            room_lock_label(room.has_password).to_owned(),
+        ),
+    ]
+}
+
+/// Scaled frame origin of one `State_Room.bnd` control (`None`
+/// while the staged art names no such control).
+#[must_use]
+fn room_detail_bnd_origin(
+    placements: &[ScenePlacement],
+    id: &str,
+    frame: &Frame<'_>,
+) -> Option<(i32, i32)> {
+    let placement = placements.iter().find(|placed| placed.id == id)?;
+    let scaled = scale_rect_to_frame(&placement.rect, frame.w, frame.h);
+    Some((scaled.x, scaled.y))
+}
+
+/// Fallback origin of detail line `slot` without staged art: stacked
+/// rows under the list so the list plus cursor keep their room.
+fn room_detail_fallback_origin(slot: usize, row_count: usize, frame: &Frame<'_>) -> (i32, i32) {
+    let rows = i32::try_from(row_count).unwrap_or(i32::MAX);
+    let slot_offset = i32::try_from(slot).unwrap_or(i32::MAX);
+    (
+        frame.w as i32 / 4,
+        frame.h as i32 / 4 + rows * CHANNEL_ROW_H + 4 + slot_offset * CHANNEL_ROW_H,
+    )
+}
+
+/// One detail line: dark scrim plus ink (shared by the flat fallback
+/// and the art scene).
+fn paint_room_detail_line(frame: &mut Frame<'_>, x: i32, y: i32, text: &str, ink: u32) {
+    let text_w = text_width(text) as i32;
+    fill_rect(
+        frame,
+        &Rect {
+            x: x - 4,
+            y: y - 2,
+            w: (text_w + 8).max(0) as u32,
+            h: 9,
+        },
+        scrim_color(),
+    );
+    draw_text(frame, x, y, text, ink);
+}
+
+/// Details of the highlighted room: title, song, difficulty, key
+/// mode, game mode, speed, seats, level gate, lock. Lines anchor to
+/// their `State_Room.bnd` rects while staged art names them and
+/// stack under the list otherwise; nothing paints without a room.
+fn paint_room_details(
+    frame: &mut Frame<'_>,
+    rooms: &[RoomListEntry],
+    highlight: usize,
+    placements: Option<&[ScenePlacement]>,
+) {
+    let Some(room) = rooms.get(highlight) else {
+        return;
+    };
+    for (slot, (id, text)) in room_detail_entries(room).iter().enumerate() {
+        let origin = placements
+            .and_then(|placed| room_detail_bnd_origin(placed, id, frame))
+            .unwrap_or_else(|| room_detail_fallback_origin(slot, rooms.len(), frame));
+        let ink = if *id == ROOM_DETAIL_LOCK_ID {
+            room_lock_ink(room.has_password)
+        } else {
+            art_title_ink()
+        };
+        paint_room_detail_line(frame, origin.0, origin.1, text, ink);
+    }
+}
+
 /// Paint the online room list with a highlight cursor.
 pub(crate) fn paint_room_list(frame: &mut Frame<'_>, rooms: &[RoomListEntry], highlight: usize) {
     fill_background(frame, Screen::Room);
     paint_title(frame, "ROOM");
     paint_room_rows(frame, rooms, highlight);
+    paint_room_details(frame, rooms, highlight, None);
 }
 
 /// Paint staged lobby art with the live room list and cursor on top.
@@ -334,6 +541,7 @@ pub fn paint_room_scene(
     art.paint_backdrop(frame, Screen::Room);
     paint_title_over_art(frame, Screen::Room);
     paint_room_rows(frame, rooms, highlight);
+    paint_room_details(frame, rooms, highlight, Some(&art.placements));
 }
 
 /// Seats shown on the waiting screen: self plus the seven wire slots.
@@ -1290,6 +1498,213 @@ mod paint_tests {
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
         assert!(buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
+    }
+
+    /// Room fixture with every detail field set to a distinct value.
+    fn detailed_room() -> RoomListEntry {
+        RoomListEntry {
+            number: 3,
+            state_code: 1,
+            title: "Jam".to_owned(),
+            has_password: true,
+            music_id: 757,
+            difficulty: 2,
+            key_mode: 1,
+            game_mode: 1,
+            speed: 3,
+            capacity: 8,
+            user_count: 5,
+            min_level: 10,
+            max_level: 99,
+            skills: vec![],
+            premium: false,
+            room_type: 0,
+        }
+    }
+
+    #[test]
+    fn room_mode_names_each_game_mode() {
+        assert_eq!(room_mode_label(0), "NORMAL");
+        assert_eq!(room_mode_label(1), "LIVE");
+        assert_eq!(room_mode_label(9), "MODE 9");
+    }
+
+    #[test]
+    fn room_music_shows_song_id() {
+        assert_eq!(room_music_label(757), "M757");
+        assert_eq!(room_music_label(0), "M0");
+    }
+
+    #[test]
+    fn room_difficulty_names_each_band() {
+        assert_eq!(room_difficulty_label(0), "EX");
+        assert_eq!(room_difficulty_label(1), "NX");
+        assert_eq!(room_difficulty_label(2), "HX");
+        assert_eq!(room_difficulty_label(3), "RX");
+        assert_eq!(room_difficulty_label(9), "DIF 9");
+    }
+
+    #[test]
+    fn room_key_names_each_key_mode() {
+        assert_eq!(room_key_label(0), "3KEY");
+        assert_eq!(room_key_label(1), "5KEY");
+        assert_eq!(room_key_label(2), "7KEY");
+        assert_eq!(room_key_label(7), "KEY 7");
+    }
+
+    #[test]
+    fn room_speed_names_each_step() {
+        let expected = [
+            "X0.5", "X1", "X1.5", "X2", "X2.5", "X3", "X3.5", "X4", "X4.5", "X5", "X6", "XR",
+        ];
+        for (code, label) in expected.iter().enumerate() {
+            assert_eq!(&room_speed_label(code as u8), label);
+        }
+        assert_eq!(room_speed_label(12), "SPD 12");
+    }
+
+    #[test]
+    fn room_capacity_shows_seats_over_capacity() {
+        assert_eq!(room_capacity_label(&detailed_room()), "5/8");
+    }
+
+    #[test]
+    fn room_level_shows_min_to_max_gate() {
+        assert_eq!(room_level_label(&detailed_room()), "LV 10-99");
+    }
+
+    #[test]
+    fn room_lock_names_password_state() {
+        assert_eq!(room_lock_label(true), "LOCK");
+        assert_eq!(room_lock_label(false), "OPEN");
+        assert_eq!(
+            room_lock_ink(true),
+            pack_xrgb(0xFF, 0x50, 0x50),
+            "locked line reads red"
+        );
+    }
+
+    #[test]
+    fn room_detail_entries_cover_every_panel_line() {
+        let entries = room_detail_entries(&detailed_room());
+        assert_eq!(entries.len(), ROOM_DETAIL_LINES);
+        let ids: Vec<&str> = entries.iter().map(|(id, _)| *id).collect();
+        let mut sorted = ids.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(ids.len(), sorted.len(), "each line anchors to its own rect");
+        let by_id = |want: &str| {
+            entries
+                .iter()
+                .find(|(id, _)| *id == want)
+                .map(|(_, text)| text.clone())
+                .unwrap()
+        };
+        assert_eq!(by_id(ROOM_DETAIL_TITLE_ID), "Jam");
+        assert_eq!(by_id(ROOM_DETAIL_USERS_ID), "5/8");
+        assert_eq!(by_id(ROOM_DETAIL_MUSIC_ID), "M757");
+        assert_eq!(by_id(ROOM_DETAIL_DIFFICULTY_ID), "HX");
+        assert_eq!(by_id(ROOM_DETAIL_KEY_ID), "5KEY");
+        assert_eq!(by_id(ROOM_DETAIL_MODE_ID), "LIVE");
+        assert_eq!(by_id(ROOM_DETAIL_SPEED_ID), "X2");
+        assert_eq!(by_id(ROOM_DETAIL_LEVEL_ID), "LV 10-99");
+        assert_eq!(by_id(ROOM_DETAIL_LOCK_ID), "LOCK");
+    }
+
+    /// Placements pinning the title rect apart from the rest: the
+    /// title lands at native (80, 60), every other line at native
+    /// (720, 540).
+    fn detail_placements() -> Vec<ScenePlacement> {
+        let title = ScenePlacement {
+            id: ROOM_DETAIL_TITLE_ID.to_owned(),
+            code: 0,
+            sprite: None,
+            rect: Rect {
+                x: 80,
+                y: 60,
+                w: 80,
+                h: 60,
+            },
+        };
+        let rest = room_detail_entries(&detailed_room())
+            .iter()
+            .filter(|(id, _)| *id != ROOM_DETAIL_TITLE_ID)
+            .map(|(id, _)| ScenePlacement {
+                id: (*id).to_owned(),
+                code: 0,
+                sprite: None,
+                rect: Rect {
+                    x: 720,
+                    y: 540,
+                    w: 80,
+                    h: 60,
+                },
+            })
+            .collect::<Vec<_>>();
+        std::iter::once(title).chain(rest).collect()
+    }
+
+    #[test]
+    fn room_details_anchor_to_bnd_rects() {
+        // 200x150 frame: native (80, 60) scales to (20, 15), so the
+        // title scrim opens at (16, 13) — clear of the list scrim
+        // (x 42.., y 35..47) and the centered title.
+        let rooms = vec![detailed_room()];
+        let mut buf = vec![0u32; 200 * 150];
+        paint_room_details(
+            &mut Frame {
+                buf: &mut buf,
+                w: 200,
+                h: 150,
+            },
+            &rooms,
+            0,
+            Some(&detail_placements()),
+        );
+        assert_eq!(buf[13 * 200 + 16], scrim_color());
+        assert!(buf.contains(&art_title_ink()));
+    }
+
+    #[test]
+    fn room_details_fall_back_under_list_without_staged_ids() {
+        // Flat fallback stacks the first detail line under the one
+        // list row: x 50, y 49, so its scrim opens at (46, 47) —
+        // below the row ink (y 37..42) and the list scrim (y 35..47).
+        let rooms = vec![detailed_room()];
+        let mut buf = vec![0u32; 200 * 150];
+        paint_room_list(
+            &mut Frame {
+                buf: &mut buf,
+                w: 200,
+                h: 150,
+            },
+            &rooms,
+            0,
+        );
+        assert_eq!(buf[47 * 200 + 46], scrim_color());
+        // List plus cursor keep working under the panel.
+        assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+        assert!(buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
+        // Locked room paints the red lock line.
+        assert!(buf.contains(&pack_xrgb(0xFF, 0x50, 0x50)));
+    }
+
+    #[test]
+    fn room_details_stay_empty_without_a_room() {
+        let mut buf = vec![0u32; 64 * 48];
+        paint_room_list(
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 48,
+            },
+            &[],
+            0,
+        );
+        assert_eq!(buf[0], background_of(Screen::Room));
+        assert!(!buf.contains(&scrim_color()));
+        assert!(!buf.contains(&pack_xrgb(0xFF, 0x50, 0x50)));
+        assert!(!buf.contains(&pack_xrgb(0x90, 0x90, 0x90)));
     }
 
     #[test]

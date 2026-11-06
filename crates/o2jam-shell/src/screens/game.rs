@@ -734,6 +734,41 @@ mod game_tests {
     }
 
     #[test]
+    fn room_highlight_selects_details_panel() {
+        // 200x150 fits all nine fallback detail lines; the open room
+        // paints OPEN dim while the locked room paints LOCK red.
+        let mut game = ScreenGame::new();
+        game.set_rooms(two_rooms());
+        game.lane_key(3, true);
+        game.menu_key(super::MenuKey::Confirm, true);
+        let mut buf = vec![0u32; 200 * 150];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 200,
+                h: 150,
+            },
+            0,
+        );
+        assert!(buf.contains(&pack_xrgb(0x90, 0x90, 0x90)));
+        assert!(!buf.contains(&pack_xrgb(0xFF, 0x50, 0x50)));
+        game.menu_key(super::MenuKey::Down, true);
+        let mut buf = vec![0u32; 200 * 150];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 200,
+                h: 150,
+            },
+            0,
+        );
+        assert!(buf.contains(&pack_xrgb(0xFF, 0x50, 0x50)));
+        // List plus cursor keep working under the panel.
+        assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+        assert!(buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
+    }
+
+    #[test]
     fn room_list_paints_rows_and_cursor() {
         let mut game = ScreenGame::new();
         game.set_rooms(two_rooms());
