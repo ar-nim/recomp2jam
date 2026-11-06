@@ -194,6 +194,7 @@ fn read_i16le(bytes: &[u8], off: usize) -> Result<i16, FileError> {
 }
 
 pub mod control;
+pub mod loading;
 pub mod ojm;
 pub mod ojn;
 pub mod opi;
@@ -201,6 +202,7 @@ pub mod sprites;
 pub mod tables;
 
 pub use control::*;
+pub use loading::*;
 pub use ojm::*;
 pub use ojn::*;
 pub use opi::*;
