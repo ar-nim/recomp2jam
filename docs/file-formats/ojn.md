@@ -220,8 +220,20 @@ table 4 → `+0x184/+0x188/+0x18c`, table 5 → `+0x190` (id echo) /
   each source pointer lifetime ends at return; `+0x690` is
   `0x238`-stride inline storage (count at file `0x42f8f`), while the
   global `0x7797e0` list appended at file `0x42f4f` (cleared at file
-  `0x42e63`) is a different list. (Static disassembly survey; REA
-  dossier TBD.)
+  `0x42e63`) is a different list.
+  Relation: the five wheel lists and the `+0x650` / `+0x670` / `+0x690`
+  result lists share no storage. Wheel lists hold song-record pointers
+  (dispatches at files `0xbfa5c` and `0x16121e`); result lists hold
+  inline `0x238` copies built by the entry builder (file `0x441f0`).
+  Only the bucket value crosses over: `song+0x194` is copied to
+  `entry+0x4` (VA `0x44422e` / file `0x4422e`), and the STEP2 filter
+  (VA `0x447050` / file `0x47050`) tests `entry+0x4 == 1..=5`.
+  `+0x650` is the STEP1 output (producer VA `0x446950` / file `0x46950`),
+  `+0x660` the STEP2 output feeding STEP3, `+0x670` the STEP3 output
+  (producer VA `0x447730` / file `0x47730`); `+0x690` is a pre-filter
+  auxiliary built synchronously in the entry builder (the five appends
+  above), not downstream of the STEP chain. (Static disassembly
+  survey; REA dossier TBD.)
 - Table 2 `listing` = selection class. A song filter branches on
   `song+0x16c == 1` versus the rest (file offset `0x3706f`), and
   several passes skip songs whose word reads zero (e.g. file offset
