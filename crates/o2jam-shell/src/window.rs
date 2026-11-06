@@ -46,13 +46,13 @@ impl WindowHandler {
                 let Some((width, height)) = self.surface_size else {
                     return;
                 };
-                if buffer.len() != width as usize * height as usize {
+                let Some(layout) = present_layout(width, height, buffer.len(), pixels.len()) else {
                     return;
-                }
+                };
                 o2jam_render::stretch_blit(
                     &mut buffer,
-                    width as usize,
-                    height as usize,
+                    layout.dst_w as usize,
+                    layout.dst_h as usize,
                     pixels,
                     DEFAULT_WIDTH as usize,
                     DEFAULT_HEIGHT as usize,
@@ -141,6 +141,52 @@ impl WindowHandler {
     }
 }
 
+/// Validated present geometry: the window buffer to cover.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PresentLayout {
+    /// Window-buffer width in pixels.
+    pub dst_w: u32,
+    /// Window-buffer height in pixels.
+    pub dst_h: u32,
+}
+
+/// Backbuffer words for the native 800x600 canvas.
+#[must_use]
+pub fn backbuffer_words() -> usize {
+    DEFAULT_WIDTH as usize * DEFAULT_HEIGHT as usize
+}
+
+/// Whether a backbuffer holds exactly one native frame.
+#[must_use]
+pub fn backbuffer_ready(pixels_len: usize) -> bool {
+    pixels_len == backbuffer_words()
+}
+
+/// Validate a present: nonzero window size, a window buffer that
+/// exactly covers it, and a complete native backbuffer. `None`
+/// means skip the frame rather than show a torn one.
+#[must_use]
+pub fn present_layout(
+    width: u32,
+    height: u32,
+    window_buffer_len: usize,
+    backbuffer_len: usize,
+) -> Option<PresentLayout> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+    if window_buffer_len != width as usize * height as usize {
+        return None;
+    }
+    if !backbuffer_ready(backbuffer_len) {
+        return None;
+    }
+    Some(PresentLayout {
+        dst_w: width,
+        dst_h: height,
+    })
+}
+
 impl ApplicationHandler for WindowHandler {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         self.attach_window(event_loop);
@@ -178,5 +224,75 @@ impl ApplicationHandler for WindowHandler {
         if let Some(window) = self.shell.window.as_ref() {
             window.request_redraw();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn present_accepts_native_backbuffer_at_native_size() {
+        let layout = present_layout(800, 600, 800 * 600, backbuffer_words());
+        assert_eq!(
+            layout,
+            Some(PresentLayout {
+                dst_w: 800,
+                dst_h: 600
+            })
+        );
+    }
+
+    #[test]
+    fn present_stretches_cleanly_to_other_window_sizes() {
+        let layout = present_layout(1600, 900, 1600 * 900, backbuffer_words());
+        assert_eq!(
+            layout,
+            Some(PresentLayout {
+                dst_w: 1600,
+                dst_h: 900
+            })
+        );
+    }
+
+    #[test]
+    fn present_rejects_zero_window_sides() {
+        assert_eq!(present_layout(0, 600, 0, backbuffer_words()), None);
+        assert_eq!(present_layout(800, 0, 0, backbuffer_words()), None);
+    }
+
+    #[test]
+    fn present_rejects_mismatched_window_buffer() {
+        assert_eq!(
+            present_layout(800, 600, 800 * 600 - 1, backbuffer_words()),
+            None
+        );
+    }
+
+    #[test]
+    fn present_rejects_short_backbuffer() {
+        assert!(!backbuffer_ready(backbuffer_words() - 1));
+        assert!(backbuffer_ready(backbuffer_words()));
+        assert_eq!(
+            present_layout(800, 600, 800 * 600, backbuffer_words() - 1),
+            None
+        );
+    }
+
+    #[test]
+    fn present_layout_covers_small_window_from_full_frame() {
+        let backbuffer = vec![7u32; backbuffer_words()];
+        let layout =
+            present_layout(80, 60, 80 * 60, backbuffer.len()).expect("small window presents");
+        let mut dst = vec![0u32; 80 * 60];
+        o2jam_render::stretch_blit(
+            &mut dst,
+            layout.dst_w as usize,
+            layout.dst_h as usize,
+            &backbuffer,
+            DEFAULT_WIDTH as usize,
+            DEFAULT_HEIGHT as usize,
+        );
+        assert!(dst.iter().all(|pixel| *pixel == 7));
     }
 }
