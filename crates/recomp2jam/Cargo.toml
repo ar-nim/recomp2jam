@@ -19,3 +19,4 @@ o2jam-shell = { path = "../o2jam-shell" }
 o2jam-audio = { path = "../o2jam-audio" }
 o2jam-file = { path = "../o2jam-file" }
 winit.workspace = true
+o2jam-render = { version = "0.1.0", path = "../o2jam-render" }

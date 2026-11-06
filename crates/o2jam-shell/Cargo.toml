@@ -6,6 +6,8 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+o2jam-render = { version = "0.1.0", path = "../o2jam-render" }
+softbuffer = "0.4"
 winit.workspace = true
 
 [dev-dependencies]

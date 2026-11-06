@@ -167,7 +167,9 @@ fn main() -> Result<()> {
                     fn lane_key(&mut self, lane: usize, down: bool) {
                         tracing::info!(lane, down, "lane key");
                     }
-                    fn redraw(&mut self) {}
+                    fn paint(&mut self, frame: &mut o2jam_render::Frame<'_>) {
+                        frame.buf.fill(0);
+                    }
                 }
                 let event_loop = winit::event_loop::EventLoop::new()
                     .map_err(|e| anyhow::anyhow!("event loop failed: {e:?}"))?;

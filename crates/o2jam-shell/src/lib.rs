@@ -8,6 +8,7 @@ pub mod screen;
 pub use screen::{can_enter, BadTransition, Screen, ScreenFlow};
 
 use std::collections::HashSet;
+use std::sync::Arc;
 use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{KeyCode, PhysicalKey};
@@ -125,21 +126,27 @@ impl FrameClock {
 }
 
 /// Window event sink: the game implements [`GameLoop`] to receive
-/// input and redraw requests.
+/// input and paint requests. Paint targets an XRGB8888 `Frame`
+/// over the shell backbuffer; the shell presents it with softbuffer.
 pub trait GameLoop {
     /// A lane key changed state (`down` = press).
     fn lane_key(&mut self, lane: usize, down: bool);
-    /// Redraw the current frame.
-    fn redraw(&mut self);
+    /// Paint the current frame into the backbuffer view.
+    fn paint(&mut self, frame: &mut o2jam_render::Frame<'_>);
 }
 
+/// Backbuffer words (`DEFAULT_WIDTH` x `DEFAULT_HEIGHT` XRGB8888).
+const BACKBUFFER_WORDS: usize = DEFAULT_WIDTH as usize * DEFAULT_HEIGHT as usize;
+
 /// Minimal winit shell: one window, keyboard routed to lanes,
-/// redraw on demand. Constructed headless-safe; [`Shell::run`]
-/// needs a display and never returns until the window closes.
+/// game-painted backbuffer presented on demand. Constructed
+/// headless-safe; [`Shell::run`] needs a display and never returns
+/// until the window closes.
 pub struct Shell {
     keymap: Keymap,
-    window: Option<Window>,
+    window: Option<Arc<Window>>,
     game: Box<dyn GameLoop>,
+    pixels: Vec<u32>,
 }
 
 impl Shell {
@@ -149,25 +156,110 @@ impl Shell {
             keymap: Keymap::new(),
             window: None,
             game,
+            pixels: vec![0; BACKBUFFER_WORDS],
         }
+    }
+
+    /// Run the game painter over a caller buffer (headless-safe).
+    pub fn paint_into(&mut self, buf: &mut [u32], w: usize, h: usize) {
+        let mut frame = o2jam_render::Frame { buf, w, h };
+        self.game.paint(&mut frame);
+    }
+
+    /// Paint the next frame into the backbuffer.
+    fn paint_backbuffer(&mut self) {
+        let mut frame = o2jam_render::Frame {
+            buf: &mut self.pixels,
+            w: DEFAULT_WIDTH as usize,
+            h: DEFAULT_HEIGHT as usize,
+        };
+        self.game.paint(&mut frame);
     }
 
     /// Open the window and run the event loop.
     pub fn run(self, event_loop: winit::event_loop::EventLoop<()>) -> anyhow::Result<()> {
+        use std::num::NonZeroU32;
         use winit::application::ApplicationHandler;
+        use winit::event_loop::OwnedDisplayHandle;
         struct Handler {
             shell: Shell,
+            surface: Option<softbuffer::Surface<OwnedDisplayHandle, Arc<Window>>>,
+            paint_error: Option<anyhow::Error>,
+        }
+        impl Handler {
+            /// Copy the backbuffer to the window, skipping frames when
+            /// the surface size drifts (e.g. right after a resize).
+            fn present(&mut self, event_loop: &ActiveEventLoop) {
+                let Some(surface) = self.surface.as_mut() else {
+                    return;
+                };
+                let pixels = &self.shell.pixels;
+                match surface.buffer_mut() {
+                    Ok(mut buffer) => {
+                        if buffer.len() != pixels.len() {
+                            return;
+                        }
+                        buffer.copy_from_slice(pixels);
+                        if let Err(error) = buffer.present() {
+                            self.paint_error = Some(anyhow::anyhow!("present failed: {error:?}"));
+                            event_loop.exit();
+                        }
+                    }
+                    Err(error) => {
+                        self.paint_error = Some(anyhow::anyhow!("frame buffer failed: {error:?}"));
+                        event_loop.exit();
+                    }
+                }
+            }
+
+            /// Resize the surface to a window size.
+            fn resize_surface(&mut self, width: u32, height: u32, event_loop: &ActiveEventLoop) {
+                let Some(surface) = self.surface.as_mut() else {
+                    return;
+                };
+                let (Some(width), Some(height)) = (NonZeroU32::new(width), NonZeroU32::new(height))
+                else {
+                    return;
+                };
+                if let Err(error) = surface.resize(width, height) {
+                    self.paint_error = Some(anyhow::anyhow!("surface resize failed: {error:?}"));
+                    event_loop.exit();
+                }
+            }
         }
         impl ApplicationHandler for Handler {
             fn resumed(&mut self, event_loop: &ActiveEventLoop) {
                 let attrs = WindowAttributes::default()
                     .with_title("recomp2jam")
                     .with_inner_size(winit::dpi::PhysicalSize::new(DEFAULT_WIDTH, DEFAULT_HEIGHT));
-                self.shell.window = Some(
+                let window = Arc::new(
                     event_loop
                         .create_window(attrs)
                         .expect("window creation failed"),
                 );
+                match softbuffer::Context::new(event_loop.owned_display_handle()) {
+                    Ok(context) => match softbuffer::Surface::new(&context, window.clone()) {
+                        Ok(mut surface) => {
+                            let size = window.inner_size();
+                            if let (Some(width), Some(height)) =
+                                (NonZeroU32::new(size.width), NonZeroU32::new(size.height))
+                            {
+                                if surface.resize(width, height).is_ok() {
+                                    self.surface = Some(surface);
+                                }
+                            }
+                            self.shell.window = Some(window.clone());
+                        }
+                        Err(error) => {
+                            self.paint_error = Some(anyhow::anyhow!("surface failed: {error:?}"));
+                            event_loop.exit();
+                        }
+                    },
+                    Err(error) => {
+                        self.paint_error = Some(anyhow::anyhow!("display failed: {error:?}"));
+                        event_loop.exit();
+                    }
+                }
             }
             fn window_event(
                 &mut self,
@@ -196,7 +288,13 @@ impl Shell {
                             self.shell.game.lane_key(lane, down);
                         }
                     }
-                    WindowEvent::RedrawRequested => self.shell.game.redraw(),
+                    WindowEvent::Resized(size) => {
+                        self.resize_surface(size.width, size.height, event_loop);
+                    }
+                    WindowEvent::RedrawRequested => {
+                        self.shell.paint_backbuffer();
+                        self.present(event_loop);
+                    }
                     _ => {}
                 }
             }
@@ -206,10 +304,17 @@ impl Shell {
                 }
             }
         }
-        let mut handler = Handler { shell: self };
+        let mut handler = Handler {
+            shell: self,
+            surface: None,
+            paint_error: None,
+        };
         event_loop
             .run_app(&mut handler)
             .map_err(|e| anyhow::anyhow!("event loop failed: {e:?}"))?;
+        if let Some(error) = handler.paint_error {
+            return Err(error);
+        }
         Ok(())
     }
 }
@@ -251,6 +356,28 @@ mod tests {
         assert!((alpha - 0.25).abs() < 1e-6);
         let (ticks, _) = clock.advance(0);
         assert_eq!(ticks, 0);
+    }
+
+    struct SolidGame(u32);
+    impl GameLoop for SolidGame {
+        fn lane_key(&mut self, _lane: usize, _down: bool) {}
+        fn paint(&mut self, frame: &mut o2jam_render::Frame<'_>) {
+            frame.buf.fill(self.0);
+        }
+    }
+
+    #[test]
+    fn paint_into_runs_game_over_caller_buffer() {
+        let mut shell = Shell::new(Box::new(SolidGame(0x0011_2233)));
+        let mut buf = vec![0u32; 64];
+        shell.paint_into(&mut buf, 8, 8);
+        assert!(buf.iter().all(|pixel| *pixel == 0x0011_2233));
+    }
+
+    #[test]
+    fn backbuffer_matches_verified_mode() {
+        let shell = Shell::new(Box::new(SolidGame(0)));
+        assert_eq!(shell.pixels.len(), 800 * 600);
     }
 
     #[test]
