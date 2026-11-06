@@ -78,7 +78,11 @@ All request/response/event layouts live in
   No `Authorize` implementation until these are resolved —
   a wrong guess breaks interop silently.
 - `GetChannelList` 1002 → 1003; `ChannelLogin` 1004 (i16
-  gatewayId/channelId) → 1005; `SessionKeys` 1007/1008.
+  gatewayId/channelId) → 1005; `SessionKeys` 1007/1008 — all DONE
+  in `o2jam-net` (`ChannelLoginResponse`: u32 result + optional
+  trailing i32 flag; alerts 50/51/52 as empty bodies). Left: 1001
+  `AuthResponse` (u32 result + optional nested pass-info; full
+  submessage decode deferred).
 - `GetCharacterInfo` 2000 → 2001 (equipment codec:
   `CharacterEquipmentInfoCodec`).
 

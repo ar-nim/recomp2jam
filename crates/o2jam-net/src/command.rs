@@ -66,6 +66,9 @@ impl Generic {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum Response {
+    SubscriptionAlert = 50,
+    ForceReauthorize = 51,
+    MultiSessionError = 52,
     Authorize = 1001,
     GetChannelList = 1003,
     ChannelLogin = 1005,
@@ -83,6 +86,9 @@ impl Response {
     #[must_use]
     pub fn from_id(id: u16) -> Option<Self> {
         match id {
+            50 => Some(Self::SubscriptionAlert),
+            51 => Some(Self::ForceReauthorize),
+            52 => Some(Self::MultiSessionError),
             1001 => Some(Self::Authorize),
             1003 => Some(Self::GetChannelList),
             1005 => Some(Self::ChannelLogin),
@@ -122,5 +128,13 @@ mod tests {
         assert_eq!(Response::from_id(1003), Some(Response::GetChannelList));
         assert_eq!(Response::from_id(1008), Some(Response::SessionKeys));
         assert_eq!(Response::from_id(1002), None);
+    }
+
+    #[test]
+    fn resolves_session_alert_ids() {
+        assert_eq!(Response::from_id(50), Some(Response::SubscriptionAlert));
+        assert_eq!(Response::from_id(51), Some(Response::ForceReauthorize));
+        assert_eq!(Response::from_id(52), Some(Response::MultiSessionError));
+        assert_eq!(Response::from_id(53), None);
     }
 }

@@ -24,6 +24,7 @@ pub use command::{Generic, Request, Response};
 pub use error::Error;
 pub use frame::{Frame, FrameSplitter, HEADER_LEN, ID_OFFSET};
 pub use message::{
-    ChannelList, ChannelLogin, ChannelState, EmptyMessage, GetChannelList, LegacyPing, Ping,
-    SessionKeys, SessionKeysRequest, Terminate,
+    ChannelList, ChannelLogin, ChannelLoginResponse, ChannelLoginResult, ChannelState,
+    EmptyMessage, ForceReauthorize, GetChannelList, LegacyPing, MultiSessionError, Ping,
+    SessionKeys, SessionKeysRequest, SubscriptionAlert, Terminate,
 };
