@@ -76,6 +76,98 @@ leads toward song setup, source untraced) or with dead scaling
 (`Cool +200`, `Good +100`, `Bad +4`, `Miss −10` floored);
 variable terms stay pending.
 
+## Room teams — UI + client send VERIFIED, scoring server-side
+
+Multiplayer team play in 7.55 is room teams (battle mode), not
+per-song parties. `o2jam-game::RoomTeams` mirrors the room state
+(8 seats, per-seat team, per-seat submitted totals, winner pick)
+with synthetic tests.
+
+### UI (ControlList, `install-root/Image/*.opi`)
+
+- `STATE_WAITING` (decl `0x63`, 117 entries): eight team buttons
+  `IDC_BUTTON_SWAIT_TEAMA..TEAMH` (`0x16201004..0x1620100B`,
+  `Wait_TeamA.ojs` … `Wait_TeamH.ojs`), eight avatar covers
+  (`IDC_IMAGE_SWAIT_COVERAVATAR1..8`) and eight extend slots — one
+  team toggle per seat, eight seats per room.
+- `STATE_ROOM` (decl `0x36`, 76 entries): mode filter buttons
+  `SHOW_ALLMODE` / `SHOW_NORMALMODE` / `SHOW_BATTLEMODE` and a
+  per-row `Room_Mode.ojs` icon — battle rooms are listed and
+  joined like normal ones.
+- `DIALOG_CREATEROOM` (decl `0x09`): room mode is
+  `NORMAL_MODE` vs `LIVEBATTLE_MODE` (plus `3KEY_MODE` / `7KEY_MODE`).
+- Win/lose display: `Winner_image.ojs` in `STATE_PLAYING`
+  (file `0x24b014`) and `Result_WinLose.ojs` in `STATE_RESULT`
+  (file `0x24a35c`). No per-team score panel exists in either
+  ControlList — the client renders only the final winner.
+
+### Client behavior (in-exe, 7.55)
+
+- Waiting-room button dispatch `FUN_004b22d0` (file `0xb22d0`,
+  dossier `ev_2c8d3964…`): control codes `0x16201004..0x1620100B`
+  take the team path; anything else (e.g. `START` `0x16202012`)
+  falls through elsewhere.
+- Index mapper `FUN_0048c810` (dossier `ev_13212723…`): walks
+  the 8-wide button run, highlights exactly the pressed button,
+  and returns `button − 0x16201004` (team 0..7).
+- Gate helper `FUN_00556680` (dossier `ev_0a91311f…`): scans a
+  handler table for an opcode id; when it (or the room-mode bytes
+  at `0x77cd30..32`) blocks, the press only refreshes the local
+  highlight — otherwise the client sends `SetRoomTeam` (4004) with
+  the team index, then `Ready` (4008) with 0 (ready cleared on
+  team switch).
+- S→C team-change handler `FUN_0055f470` (file `0x15f470`,
+  dossier `ev_1ff324b4…`): reads a u8 slot/team index (guarded
+  `< 8`) plus an i32 member key, refreshes the 8-slot waiting UI
+  through the stride-`0x2190` member table, and forwards
+  (`0x12`, 4007, index, 0) into the UI event queue — 4007 is the
+  team-change broadcast every client applies.
+- Result loader `FUN_004c2390` (file `0xc2390`, dossier
+  `ev_d6de3a7f…`) mounts `StateResult_Top/Bottom.ojs` plus
+  `Result_WinLose.ojs` — the win/lose art the server verdict drives.
+- Scoring stays server-side: per-member `UpdateGameStats` (4014)
+  and `SubmitScore` (4016) carry cool/good/bad/miss/maxCombo/jam +
+  score; team totals and the winner are computed remotely (no
+  team-total arithmetic found in-exe).
+- RTTI has no team classes — only `CLiveWaiting` / `CNormalWaiting`
+  and `CStateLivePlaying`; ASCII `TEAM`/`MISSION` appear solely as
+  CRT false positives. Team identity is numeric (0..7) everywhere.
+
+## Level-up missions — NOT in the 7.55 client
+
+When a player reaches a level threshold, no clear-something-to-level
+screen, check, or packet exists in this build — level-up is
+server-side (EXP accounting behind `SubmitScore` 4016), the client
+only displays values the server sends. Evidence:
+
+- Case-sensitive REA procedure search for
+  `Mission|Quest|LevelUp|Team|Battle` over the Ghidra inventory
+  returns nothing (dossier `ev_0ce27550…`).
+- `STATE_PLANET`'s fifth button (`IDC_BUTTON_SPLANET_DRUM`) is
+  commented `퀘스트(미정)` — "quest (undecided)" — and its backend
+  was never wired: no `CStateDrum*` class exists and
+  `STATE_DRUM_PLAYING` is an empty `0x00` stub.
+- Player level/EXP are display text fields (`MYLEVEL`, `EXP`,
+  `NEXTUPEXP`, `MYRANK` in `STATE_ROOM`/`STATE_MYROOM`); the
+  room-screen fill (`FUN_00491af0`, dossier `ev_240c6f0e…`)
+  formats `"Lv.%d:%s"` from a server-fed global with no
+  threshold comparison or mission trigger.
+- What 7.55 *does* gate by level, client-visibly: rooms carry a
+  `Room_LevelLimit.ojs` icon plus `LEVEL_RANGE` text per row
+  (join rejected server-side via `JoinWaiting` 3002/3003), and the
+  song-select dialog filters by chart-level bands (`초급 1–8` /
+  `중급 8–19` / `고급 19–27` / `최고급 27+`, format `"X급 : LEVEL %s"`,
+  file `0x24578e…`, strings dossier `ev_68760cac…`); candidate
+  select validation `FUN_005718b0` (dossier `ev_66e60d16…`, see
+  lifecycle doc) rejects unknown song/difficulty slots.
+- No level-up-mission packet exists in the opcode map
+  (`net-protocol.md`); character data arrives via
+  `GetCharacterInfo` (2000/2001).
+
+So a "clear X to level up" mission mode is either a server-side
+rule of a different version or a player-report mix-up with
+level-gated rooms and difficulty bands — document, don't implement.
+
 ## Jam gauge — player-reported, UNVERIFIED in-exe
 
 UI anchors located: `Jamgauge_right_bar.ojs` /
