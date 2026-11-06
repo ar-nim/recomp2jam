@@ -158,7 +158,9 @@ the game cannot address them individually.
   `id+0x3E8` add `0x17364f`). The fetcher's name-only strncpy (call
   sites `0x14ee4a`/`0x14ef21`) is what zeroes id-less entries onto
   slot 0 — no order lookup exists. The order-keyed
-  `resolve_order_slot` stays our invented fallback (C29, ASSUMED).
+  `resolve_order_slot` stays our invented fallback; exe selection is
+  id-keyed end to end (C29, EXE — strike chain `0x1703f0` → `0x170431`,
+  loader `0x173625`/`0x17364a`, fetch `0x14ee4a`/`0x14ef21`).
 - Corroboration: the open2jam OJM documentation
   (`https://open2jam.wordpress.com/the-ojm-documentation/`)
   independently documents the same header, `OMC_WAV_header`
