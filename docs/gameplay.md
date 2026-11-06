@@ -260,6 +260,14 @@ not ground truth):
   `0x16e660`/`0x16e7dd`); the only three `AF 0F` byte pairs
   are a lea-offset constant (file `0x749f`), an indexed-table
   read (file `0x1c1864`), and a multiply seed (file `0x1e8b15`).
+  Re-hunted 2026-11-06 (see `docs/4015-hunt.md`): the 122-caller UI
+  event-queue family (`0x478d50`, 61 opcodes incl. 4007/4013/4017/
+  4018) has NO 4011/4014/4015/4016 forwarder — expected, since
+  S→C 4015 is never pushed; strong but UNVERIFIED candidate at
+  file `0x15fa20` (u8 slot `< 8` + u16 Life-`0`/Jam-`1` branch into
+  member-slot setters file `0x140e0`/`0x140c0`, i.e. game `+0x3970`/
+  `+0x396e`, plus an 8×8 refresh loop) lacks an REA id, so no
+  model is added.
   The tick send site's member-slot computation (index scaled by
   `0x2190` = 8592 onto base VA `0x77ee90`) is re-verified in
   the tick function at VA `0x4eaf00` (dossier

@@ -38,35 +38,35 @@ a missing room hits the known Memoryer wart (throws
 Phase 2). The room step is proven by the live test's hosted create
 instead. No invented passes.
 
-## Scenes (windowed client, spectacle) — 1 PASS, 6 FAIL (blocked)
+## Scenes (in-process capture, no window) — 7 PASS, 0 FAIL
 
-Screenshots: `docs/screenshots/`. Command used:
-`spectacle -b -a -n -o <file>` (active window — `-f` fullscreen
-silently writes nothing in this session).
+`cargo run -p recomp2jam -- shots` drives `ScreenGame` with
+scripted `lane_key`/`menu_key` calls, rasterizes each scene with
+`paint_at` at 400x300, and encodes std-only PNGs (none filter,
+stored deflate; `crates/recomp2jam/src/shots.rs`). No OS key
+injection, no window. Seeded data: 2 channels, 2 rooms, 1 ready
+host, chart note at 5 s (struck for Result). `avi.png` is untouched:
+the checked-in file stays the real-`O2mediaLogo.ojs` evidence and
+the writer skips that stem.
 
 | Scene | Verdict | Evidence |
 |---|---|---|
-| Avi (splash) | **PASS** | `avi.png`: real Nowcom logo from `install-root/O2Jam/Image/Interface1.opi` (`O2mediaLogo.ojs`, 1 layer) |
-| Channel | **FAIL** (blocked input) | client stuck on Avi; see below |
-| Room | **FAIL** (blocked input) | same |
-| Waiting | **FAIL** (blocked input) | same |
-| Loading | **FAIL** (blocked input) | same |
-| Playing | **FAIL** (blocked input) | same |
-| Result | **FAIL** (blocked input) | same |
+| Avi (splash) | **PASS** (unchanged) | `avi.png`: real Nowcom logo from `install-root/O2Jam/Image/Interface1.opi` |
+| Channel | **PASS** | `channel.png` (360,393 B): rows `2 5/100`, `9 0/0` + amber cursor |
+| Room | **PASS** | `room.png` (360,393 B): rows `Jam`, locked `Locked` + cursor |
+| Waiting | **PASS** | `waiting.png` (360,393 B): 8 seat rows, green ready dot for host |
+| Loading | **PASS** | `loading.png` (360,393 B): green progress bar card |
+| Playing | **PASS** | `playing.png` (360,393 B): highway + falling note at 4.5 s |
+| Result | **PASS** | `result.png` (360,393 B): score `200`, combo `1` after chart end |
 
-`input-blocked.png` shows the client still on the Avi splash after
-EWMH activation plus Space+Enter through a uinput keyboard — the walk
-never starts. Root causes, all verified in-session:
+Placeholder shell art is still the known composition gap
+(`docs/parity.md`, 7 FAIL cells) — these shots prove the walk and
+the rasterizer, never art fidelity.
 
-- XTEST fake input is dropped by Xwayland (own probe window got 0/3
-  keys; `query_extension` says present, delivery does not happen).
-- uinput devices get no `seat`/`uaccess` tags (only `:power-switch:`,
-  even with `ID_INPUT_KEYBOARD=1`), so logind grants no user ACL
-  (`getfacl` shows no `arnim` entry) and KWin/libinput never opens the
-  device. A global MUTE key did toggle (root-level handler), proving
-  kernel delivery but not window delivery; `kwrite` received nothing.
-- No fallback exists here: no Xephyr/Xvfb/xdotool/wtype/ydotool,
-  `sudo -n` needs interactive auth (not pursued).
+Prior windowed attempt (spectacle + XTEST/uinput) stays on record:
+`input-blocked.png` showed the client stuck on Avi — XTEST drops
+under Xwayland, uinput got no seat ACL, no Xephyr/Xvfb/xdotool/wtype
+ydotool here. The in-process walk above supersedes it.
 
 ## Regression
 
