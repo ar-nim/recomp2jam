@@ -117,8 +117,8 @@ pub fn connect_and_login(options: &ConnectOptions) -> Result<ConnectReport> {
         avatar_layers,
         channels,
         channel_login,
-        rooms,
         join,
+        rooms,
     })
 }
 

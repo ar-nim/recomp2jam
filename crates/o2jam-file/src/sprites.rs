@@ -79,6 +79,7 @@ pub struct Sprite55<'a> {
 
 impl<'a> Sprite55<'a> {
     /// Raw stored bytes of one image.
+    #[must_use]
     pub fn pixel_data(&self, image: &Sprite55Image) -> &'a [u8] {
         &self.blob[image.data_offset..image.data_offset + image.size as usize]
     }
@@ -88,6 +89,7 @@ impl<'a> Sprite55<'a> {
     /// RLE-compressed frames) return false and need their codec
     /// mapped before decoding. Strided combo atlases (see
     /// [`parse_sprite55_strided`]) store raw frames and return true.
+    #[must_use]
     pub fn is_raw_rgb555(&self, image: &Sprite55Image) -> bool {
         image.size as usize == image.w as usize * image.h as usize * 2
     }
@@ -190,6 +192,7 @@ pub struct Sprite55Strided<'a> {
 
 impl<'a> Sprite55Strided<'a> {
     /// Raw stored bytes of one animation frame.
+    #[must_use]
     pub fn frame_data(&self, image: &Sprite55Image, frame: usize) -> &'a [u8] {
         let start = image.data_offset * self.frames_per_image + frame * image.size as usize;
         &self.blob[start..start + image.size as usize]
@@ -197,6 +200,7 @@ impl<'a> Sprite55Strided<'a> {
 
     /// True when one frame is stored as plain `w*h` little-endian
     /// RGB555 pixels (`size == w*h*2`).
+    #[must_use]
     pub fn is_raw_rgb555(&self, image: &Sprite55Image) -> bool {
         image.size as usize == image.w as usize * image.h as usize * 2
     }
@@ -238,6 +242,7 @@ pub fn parse_sprite55_strided(
 /// Expand one little-endian RGB555 pixel to 24-bit RGB (replicated
 /// low bits, the usual GDI 16-bit expansion; bit 15 unused).
 /// Matches the CXO2-documented 16-bit format for magic `0x0555`.
+#[must_use]
 pub fn rgb555_to_rgb888(pixel: u16) -> (u8, u8, u8) {
     let r5 = ((pixel >> 10) & 31) as u8;
     let g5 = ((pixel >> 5) & 31) as u8;

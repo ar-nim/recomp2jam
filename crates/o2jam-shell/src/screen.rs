@@ -36,8 +36,14 @@ pub struct BadTransition {
 
 /// Whether the client may move from one screen to another.
 #[must_use]
+// Grouped by source screen to read as the client journey (see
+// docs/lifecycle.md), not by destination as the lint prefers.
+#[allow(
+    clippy::unnested_or_patterns,
+    reason = "source-grouped transition table"
+)]
 pub const fn can_enter(from: Screen, to: Screen) -> bool {
-    use Screen::*;
+    use Screen::{Avi, Channel, Loading, Playing, Result, Room, Waiting};
     matches!(
         (from, to),
         (Avi, Channel)

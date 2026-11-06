@@ -163,12 +163,11 @@ pub fn load_worn_figure(
 /// multi-part items (torso + arms) layer deterministically.
 #[must_use]
 pub fn pick_wear_sprites(row: &o2jam_file::AvatarItemRow, male: bool) -> Vec<String> {
-    let parity = if male { 0 } else { 1 };
     let mut picked: Vec<String> = row
         .sprites
         .iter()
         .enumerate()
-        .filter(|(slot, (_, name))| *slot >= 2 && *slot % 2 == parity && !name.is_empty())
+        .filter(|(slot, (_, name))| *slot >= 2 && (*slot % 2 == 0) == male && !name.is_empty())
         .map(|(_, (_, name))| name.clone())
         .collect();
     if picked.is_empty() {

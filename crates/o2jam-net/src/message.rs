@@ -173,7 +173,7 @@ impl Gender {
 /// One IPv4 endpoint as Memoryer frames it: 4 address bytes then the
 /// port as little-endian u16 (6 bytes total — same as the exe's two
 /// inline 6-byte blocks at the `Authorize` builder).
-fn encode_endpoint(endpoint: &SocketAddrV4, body: &mut Vec<u8>) {
+fn encode_endpoint(endpoint: SocketAddrV4, body: &mut Vec<u8>) {
     body.extend_from_slice(&endpoint.ip().octets());
     body.extend_from_slice(&endpoint.port().to_le_bytes());
 }
@@ -249,8 +249,8 @@ impl WireMessage for AuthorizeRequest {
         body.push(1);
         body.extend_from_slice(&self.relay_key1.to_le_bytes());
         body.extend_from_slice(&self.relay_key2.to_le_bytes());
-        encode_endpoint(&self.public_endpoint, &mut body);
-        encode_endpoint(&self.local_endpoint, &mut body);
+        encode_endpoint(self.public_endpoint, &mut body);
+        encode_endpoint(self.local_endpoint, &mut body);
         body.extend_from_slice(&self.user_id.to_le_bytes());
         body.extend_from_slice(&encode_null_terminated(&self.token, MAX_STRING_LEN));
         body.extend_from_slice(&encode_null_terminated(
@@ -1154,7 +1154,7 @@ mod tests {
             7,
             8,
             SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 1), 15010),
-            SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 15010),
+            SocketAddrV4::new(Ipv4Addr::LOCALHOST, 15010),
             99,
             "player".to_owned(),
             Gender::Female,

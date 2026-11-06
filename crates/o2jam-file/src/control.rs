@@ -46,6 +46,7 @@ pub struct ControlBlock {
 impl ControlBlock {
     /// All entries in file order (`bound`, then each set's
     /// entries): `.bnd` record `i` lays out entry `i + 1`.
+    #[must_use]
     pub fn all_entries(&self) -> Vec<&ControlEntry> {
         let mut out = Vec::with_capacity(
             self.bound.len() + self.sets.iter().map(|s| s.entries.len()).sum::<usize>(),

@@ -33,7 +33,14 @@ Automated baseline: `cargo fmt --check` clean,
 1. Split `o2jam-file/lib.rs` by format (`ojm.rs`, `ojn.rs`, `opi.rs`, shop tables).
 2. ~~Extract shell `Handler` out of `Shell::run`~~ DONE (`window.rs`; `run()` is 10 lines). Split `screens.rs` per screen.
 3. ~~`message.rs`/`rooms.rs` naming consolidation~~ DONE (`RoomInfo` → `CreatedRoom`; `RoomListEntry`/`JoinedRoom` kept).
-4. Pedantic polish pass (advisory only): `#[must_use]`, `# Errors` docs,
-   `u32::from` over `as` where infallible. Production `as` casts reviewed
-   sound (masked bits, repr enums, protocol-bounded lengths).
+4. Pedantic polish: DONE mechanical classes (`must_use` ×13, infallible
+   `From` ×4, or-pattern merges, `is_some_and`/`map_or`, elided lifetimes,
+   `LivePlay::new` takes a slice, explicit enum imports, reasoned `ignore`,
+   `Ipv4Addr::LOCALHOST`, ctor field order, `u8::from(!male)`-free parity
+   test, per-layer colorkeys); `# Errors` docs still open (58 sites).
+   ACCEPTED with rationale (not churned): protocol-bounded `as` casts
+   (target-dependent `usize` widths have no `From`; values are
+   length-checked), `assert!(is_empty())` over `assert_eq!(_, [])`,
+   prose-word `doc_markdown` hits, test decimal literals, `Error::transport`
+   by value (point-free `map_err`), wire-mandated bool fields.
 5. `run()`-length functions anywhere over ~20 lines (none blocking today).

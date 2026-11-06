@@ -139,9 +139,9 @@ pub enum MenuKey {
     Confirm,
     /// Back out (Escape).
     Back,
-    /// Highlight up (ArrowUp).
+    /// Highlight up (`ArrowUp`).
     Up,
-    /// Highlight down (ArrowDown).
+    /// Highlight down (`ArrowDown`).
     Down,
 }
 

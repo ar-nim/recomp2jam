@@ -542,13 +542,14 @@ pub fn interleave_stripes(data: &[u8], lanes: usize) -> Result<Vec<u8>, FileErro
 /// checksums. Bitwise and allocation-free; bank loading recovers a
 /// few dozen bodies at most.
 /// CRC-32 over an OGG page body (test-visible helper).
+#[must_use]
 pub fn crc32_ogg(data: &[u8]) -> u32 {
     let mut crc = 0u32;
     for &byte in data {
         crc ^= u32::from(byte);
         for _ in 0..8 {
             crc = if crc & 1 != 0 {
-                (crc >> 1) ^ 0xEDB88320
+                (crc >> 1) ^ 0xEDB8_8320
             } else {
                 crc >> 1
             };

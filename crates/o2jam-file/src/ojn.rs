@@ -136,13 +136,15 @@ pub struct OjnListEntry<'a> {
     pub raw: &'a [u8],
 }
 
-impl<'a> OjnListEntry<'a> {
+impl OjnListEntry<'_> {
     /// High word of [`OjnListEntry::key_field`] (tracks the song id).
+    #[must_use]
     pub fn key_hi(&self) -> u16 {
         (self.key_field >> 16) as u16
     }
 
     /// Low word of [`OjnListEntry::key_field`] (29 / 27).
+    #[must_use]
     pub fn key_lo(&self) -> u16 {
         (self.key_field & 0xFFFF) as u16
     }
@@ -152,13 +154,13 @@ impl<'a> OjnListEntry<'a> {
     /// case; `read_str` already cut it at the first NUL) and the tempo
     /// is sane. Dead slots (157/719 in 7.55) hold heap residue or
     /// zeros and fail one or both checks.
+    #[must_use]
     pub fn is_song(&self) -> bool {
         let lower = self.ojm_file.to_ascii_lowercase();
         let numbered = lower
             .strip_prefix("o2ma")
             .and_then(|rest| rest.strip_suffix(".ojm"))
-            .map(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
-            .unwrap_or(false);
+            .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()));
         numbered && (30.0..300.0).contains(&self.bpm)
     }
 }

@@ -47,7 +47,7 @@ impl HighwayGeometry {
     pub fn lane_rect(&self, lane: u8) -> Rect {
         let lane = lane.min(HIGHWAY_LANES - 1);
         Rect {
-            x: self.x0 + lane as i32 * self.lane_w as i32,
+            x: self.x0 + i32::from(lane) * self.lane_w as i32,
             y: 0,
             w: self.lane_w,
             h: self.h as u32,
@@ -207,7 +207,7 @@ impl LivePlay {
     /// Notes to play (empty until a chart loads); each onset carries
     /// its key-sound sample id.
     #[must_use]
-    pub fn new(onsets: Vec<(u8, u64, u32)>) -> Self {
+    pub fn new(onsets: &[(u8, u64, u32)]) -> Self {
         let mut pending: Vec<PendingNote> = onsets
             .iter()
             .map(|(lane, at_ms, sample)| PendingNote {
@@ -344,7 +344,7 @@ mod live_play_tests {
 
     #[test]
     fn strike_rates_cool_on_exact_hit() {
-        let mut live = LivePlay::new(vec![(2, 1000, 7)]);
+        let mut live = LivePlay::new(&[(2, 1000, 7)]);
         assert_eq!(live.strike_lane(2, 1000), Some(Judgement::Cool));
         assert_eq!(live.score().combo, 1);
         assert_eq!(live.score().points, 200);
@@ -353,7 +353,7 @@ mod live_play_tests {
 
     #[test]
     fn struck_notes_queue_their_samples() {
-        let mut live = LivePlay::new(vec![(2, 1000, 7), (2, 1100, 9)]);
+        let mut live = LivePlay::new(&[(2, 1000, 7), (2, 1100, 9)]);
         assert_eq!(live.drain_sounds(), Vec::<u32>::new());
         live.strike_lane(2, 1010);
         assert_eq!(live.drain_sounds(), vec![7]);
@@ -362,14 +362,14 @@ mod live_play_tests {
 
     #[test]
     fn strike_rates_good_on_early_hit() {
-        let mut live = LivePlay::new(vec![(2, 1000, 7)]);
+        let mut live = LivePlay::new(&[(2, 1000, 7)]);
         assert_eq!(live.strike_lane(2, 990), Some(Judgement::Good));
         assert_eq!(live.score().points, 100);
     }
 
     #[test]
     fn strike_rates_bad_on_late_hit() {
-        let mut live = LivePlay::new(vec![(2, 1000, 7)]);
+        let mut live = LivePlay::new(&[(2, 1000, 7)]);
         assert_eq!(live.strike_lane(2, 1020), Some(Judgement::Bad));
         assert_eq!(live.score().combo, 0);
         assert_eq!(live.score().points, 4);
@@ -377,7 +377,7 @@ mod live_play_tests {
 
     #[test]
     fn late_notes_rate_miss_on_advance() {
-        let mut live = LivePlay::new(vec![(1, 1000, 7)]);
+        let mut live = LivePlay::new(&[(1, 1000, 7)]);
         live.advance_to(1000 + 25 + 1);
         assert_eq!(live.score().counts[3], 1);
         assert_eq!(live.score().points, 0);
@@ -385,14 +385,14 @@ mod live_play_tests {
 
     #[test]
     fn empty_press_rates_nothing() {
-        let mut live = LivePlay::new(vec![(2, 1000, 7)]);
+        let mut live = LivePlay::new(&[(2, 1000, 7)]);
         assert_eq!(live.strike_lane(0, 1000), None);
         assert_eq!(live.score().counts, [0, 0, 0, 0]);
     }
 
     #[test]
     fn nearest_note_wins_in_lane() {
-        let mut live = LivePlay::new(vec![(2, 1000, 7), (2, 1100, 9)]);
+        let mut live = LivePlay::new(&[(2, 1000, 7), (2, 1100, 9)]);
         assert_eq!(live.strike_lane(2, 1010), Some(Judgement::Good));
         assert_eq!(live.strike_lane(2, 1100), Some(Judgement::Cool));
         assert_eq!(live.score().combo, 2);
@@ -400,7 +400,7 @@ mod live_play_tests {
 
     #[test]
     fn paint_shows_score_combo_and_word() {
-        let mut live = LivePlay::new(vec![(0, 1000, 7)]);
+        let mut live = LivePlay::new(&[(0, 1000, 7)]);
         live.strike_lane(0, 1000);
         let mut buf = vec![0u32; 70 * 60];
         live.paint(
@@ -424,7 +424,7 @@ mod live_play_tests {
 
     #[test]
     fn finishes_after_tail_with_all_judged() {
-        let mut live = LivePlay::new(vec![(0, 1000, 7)]);
+        let mut live = LivePlay::new(&[(0, 1000, 7)]);
         assert!(!live.is_finished(3000));
         live.strike_lane(0, 1000);
         assert!(!live.is_finished(2000));
@@ -439,7 +439,7 @@ mod live_play_tests {
 
     #[test]
     fn word_fades_after_timeout() {
-        let mut live = LivePlay::new(vec![(0, 1000, 7)]);
+        let mut live = LivePlay::new(&[(0, 1000, 7)]);
         live.strike_lane(0, 1000);
         let mut buf = vec![0u32; 70 * 60];
         live.paint(

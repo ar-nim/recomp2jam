@@ -211,23 +211,19 @@ impl CoolStreak {
     /// Record one judgement for the streak; returns `true` when a
     /// pill is granted (caller adds it to [`PillStock`]).
     pub fn note(&mut self, judgement: Judgement, pills: &mut PillStock) -> bool {
-        match judgement {
-            Judgement::Cool => {
-                if pills.count() < MAX_PILLS {
-                    self.count += 1;
-                    if self.count > Self::GRANT_AFTER {
-                        self.count = 0;
-                        pills.add(1);
-                        return true;
-                    }
-                }
-                false
-            }
-            _ => {
+        if judgement != Judgement::Cool {
+            self.count = 0;
+            return false;
+        }
+        if pills.count() < MAX_PILLS {
+            self.count += 1;
+            if self.count > Self::GRANT_AFTER {
                 self.count = 0;
-                false
+                pills.add(1);
+                return true;
             }
         }
+        false
     }
 }
 
