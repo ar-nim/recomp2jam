@@ -123,6 +123,23 @@ impl ScreenGame {
         self.playing.set_skin(skin);
     }
 
+    /// Caption the avatar scene with the local player (`Lv.<n> <name>`;
+    /// display only, scoring untouched).
+    pub fn set_player(&mut self, level: u32, name: &str) {
+        self.playing.scene_mut().set_player(level, name);
+    }
+
+    /// Caption the avatar scene song line (`X3.5 <title>`); the waiting
+    /// choice re-syncs each Playing paint while one is selected.
+    pub fn set_song_caption(&mut self, title: &str, speed_code: u8) {
+        self.playing.scene_mut().set_song(title, speed_code);
+    }
+
+    /// Caption the VOL readout (display only).
+    pub fn set_volume(&mut self, volume: u8) {
+        self.playing.scene_mut().set_volume(volume);
+    }
+
     /// Play every queued key sound through the attached backend.
     fn pump_sounds(&mut self) {
         let Some(rig) = self.audio.as_mut() else {
@@ -456,13 +473,30 @@ impl ScreenGame {
     }
 
     /// Gameplay: highway first, then staged gauges/panels ring the
-    /// frame edges while notes keep falling underneath.
+    /// frame edges while notes keep falling underneath, then the
+    /// right-side avatar scene (life bar, figure, song, VOL) with the
+    /// bottom tally strip over both. Missing figures paint art
+    /// without avatar.
     fn paint_playing(&mut self, frame: &mut Frame<'_>, now_ms: u64) {
         let geom = HighwayGeometry::centered(frame.w, frame.h);
         self.playing.paint(frame, &geom, now_ms);
         if let Some(art) = self.scene_art(Screen::Playing) {
             paint_playing_overlay(frame, art);
         }
+        self.sync_song_caption();
+        self.playing
+            .paint_avatar_scene(frame, self.avatar.as_ref(), now_ms);
+    }
+
+    /// Re-caption the song line from the waiting choice while one is
+    /// selected (manual captions stand while nothing is selected).
+    fn sync_song_caption(&mut self) {
+        let Some(selection) = self.selected_music.as_ref() else {
+            return;
+        };
+        let speed_code = selection.speed;
+        let title = self.selected_song_title().unwrap_or("").to_owned();
+        self.playing.scene_mut().set_song(&title, speed_code);
     }
 
     /// Results: staged art (`StateResult_Top/Bottom.ojs` plus
@@ -1467,5 +1501,129 @@ mod game_tests {
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert!(buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
         assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+    }
+
+    fn paint_playing_frame(game: &mut ScreenGame, w: usize, h: usize) -> Vec<u32> {
+        let mut buf = vec![0u32; w * h];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w,
+                h,
+            },
+            1000,
+        );
+        buf
+    }
+
+    /// True while white text ink lands near a caption origin (glyph
+    /// top-left cells are often blank, so scan the scrim box).
+    fn white_near(buf: &[u32], w: usize, h: usize, origin: (i32, i32)) -> bool {
+        let (ox, oy) = origin;
+        for row in oy..oy + 9 {
+            for col in ox..ox + 64 {
+                let (Ok(r), Ok(c)) = (usize::try_from(row), usize::try_from(col)) else {
+                    continue;
+                };
+                if r < h && c < w && buf[r * w + c] == pack_xrgb(0xFF, 0xFF, 0xFF) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn playing_avatar_game() -> ScreenGame {
+        use o2jam_file::{parse_sprite55, SPRITE55_MAGIC};
+        // 2x1 sprite-55: transparent black, then red (result-test shape).
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&1u16.to_le_bytes());
+        blob.extend_from_slice(&SPRITE55_MAGIC.to_le_bytes());
+        blob.extend_from_slice(&1u16.to_le_bytes());
+        blob.extend_from_slice(&0u16.to_le_bytes());
+        for field in [0u16, 0u16, 2u16, 1u16] {
+            blob.extend_from_slice(&field.to_le_bytes());
+        }
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        blob.extend_from_slice(&4u32.to_le_bytes());
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        blob.extend_from_slice(&[0x00, 0x00, 0x00, 0x7C]);
+        let sprite = parse_sprite55(&blob).unwrap();
+        let mut game = ScreenGame::new();
+        game.load_avatar(AvatarFigure::from_sprite55(&sprite));
+        game.load_chart(vec![(2, 5000, 7)]);
+        walk_to_playing(&mut game);
+        game.set_player(43, "HOST");
+        game.set_song_caption("First", 6);
+        game.set_volume(5);
+        game.strike_at(2, 5000);
+        game
+    }
+
+    #[test]
+    fn playing_paints_avatar_scene_with_captions_and_tally() {
+        use crate::playing::AvatarLayout;
+        let mut game = playing_avatar_game();
+        let buf = paint_playing_frame(&mut game, 800, 600);
+        assert_eq!(game.screen(), Screen::Playing);
+        let layout = AvatarLayout::for_frame(800, 600);
+        // Worn figure lands at the scene origin (red pixel after the
+        // transparent one).
+        let (fx, fy) = layout.figure_origin;
+        assert_eq!(
+            buf[fy as usize * 800 + fx as usize + 1],
+            pack_xrgb(255, 0, 0)
+        );
+        // Life bar shows full; level, song, VOL, counts, EXIT ink white.
+        assert_eq!(buf[56 * 800 + 340], pack_xrgb(0x20, 0xE0, 0x20));
+        for origin in [
+            layout.level_origin,
+            layout.song_origin,
+            layout.volume_origin,
+            layout.counts_origin,
+            layout.strip_title_origin,
+            layout.exit_origin,
+        ] {
+            assert!(white_near(&buf, 800, 600, origin));
+        }
+        // The struck note's COOL feeds the tally through the score.
+        assert_eq!(game.playing.score().counts[0], 1);
+    }
+
+    #[test]
+    fn playing_without_figure_paints_scene_without_avatar() {
+        use crate::playing::AvatarLayout;
+        let mut game = ScreenGame::new();
+        game.load_chart(vec![(2, 5000, 7)]);
+        walk_to_playing(&mut game);
+        game.set_player(43, "HOST");
+        let buf = paint_playing_frame(&mut game, 800, 600);
+        let layout = AvatarLayout::for_frame(800, 600);
+        // No figure: the scene origin keeps the highway backdrop while
+        // the captions still paint.
+        let (fx, fy) = layout.figure_origin;
+        assert_eq!(
+            buf[fy as usize * 800 + fx as usize],
+            pack_xrgb(0x0A, 0x0A, 0x0A)
+        );
+        let (lx, ly) = layout.level_origin;
+        assert!(white_near(&buf, 800, 600, (lx, ly)));
+    }
+
+    #[test]
+    fn playing_syncs_song_line_from_waiting_choice() {
+        use crate::playing::AvatarLayout;
+        let mut game = ScreenGame::new();
+        game.load_chart(vec![(2, 5000, 7)]);
+        let blob = waiting_song_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_song_catalog(&entries);
+        game.set_selected_music(waiting_song_selection());
+        walk_to_playing(&mut game);
+        let buf = paint_playing_frame(&mut game, 800, 600);
+        // `M757` catalog title with speed X2 (code 3): the song line inks.
+        let layout = AvatarLayout::for_frame(800, 600);
+        assert!(white_near(&buf, 800, 600, layout.song_origin));
+        assert!(white_near(&buf, 800, 600, layout.strip_title_origin));
     }
 }
