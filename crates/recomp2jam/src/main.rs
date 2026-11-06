@@ -164,15 +164,23 @@ fn main() -> Result<()> {
             if window {
                 let mut game = o2jam_shell::ScreenGame::new();
                 if let Some(path) = &chart {
-                    let (level_chart, _) = load_level_chart(path, level)?;
-                    game.load_chart(
-                        level_chart
-                            .hit_onsets_ms()
-                            .into_iter()
-                            .map(|(lane, at_ms, _)| (lane, at_ms))
-                            .collect(),
-                    );
+                    let (level_chart, format_version) = load_level_chart(path, level)?;
+                    game.load_chart(level_chart.hit_onsets_ms());
                     tracing::info!(hits = level_chart.hit_count(), "chart loaded");
+                    if let Some(bank_path) = &ojm {
+                        let bank_bytes = std::fs::read(bank_path)?;
+                        let bank = load_sound_bank(&bank_bytes, format_version);
+                        let backend: Box<dyn o2jam_audio::AudioBackend> =
+                            match o2jam_audio::CpalBackend::try_new() {
+                                Ok(backend) => Box::new(backend),
+                                Err(e) => {
+                                    eprintln!("audio unavailable ({e}); continuing silent");
+                                    Box::new(o2jam_audio::NullBackend::new())
+                                }
+                            };
+                        game.with_audio(backend, bank);
+                        tracing::info!("key sounds attached");
+                    }
                 }
                 let event_loop = winit::event_loop::EventLoop::new()
                     .map_err(|e| anyhow::anyhow!("event loop failed: {e:?}"))?;
