@@ -161,11 +161,22 @@ fn main() -> Result<()> {
             window,
         } => {
             tracing::info!(?chart, ?window, "play stub");
-            if window && chart.is_none() {
+            if window {
+                let mut game = o2jam_shell::ScreenGame::new();
+                if let Some(path) = &chart {
+                    let (level_chart, _) = load_level_chart(path, level)?;
+                    game.load_chart(
+                        level_chart
+                            .hit_onsets_ms()
+                            .into_iter()
+                            .map(|(lane, at_ms, _)| (lane, at_ms))
+                            .collect(),
+                    );
+                    tracing::info!(hits = level_chart.hit_count(), "chart loaded");
+                }
                 let event_loop = winit::event_loop::EventLoop::new()
                     .map_err(|e| anyhow::anyhow!("event loop failed: {e:?}"))?;
-                o2jam_shell::Shell::new(Box::new(o2jam_shell::ScreenGame::new()))
-                    .run(event_loop)?;
+                o2jam_shell::Shell::new(Box::new(game)).run(event_loop)?;
                 return Ok(());
             }
             let chart_path = chart.ok_or_else(|| {
@@ -276,29 +287,33 @@ fn load_sound_bank(
     bank
 }
 
+/// Load one chart level from disk (chart + slice checks shared by
+/// autoplay and the windowed game).
+fn load_level_chart(chart_path: &str, level: usize) -> Result<(o2jam_game::LevelChart, f32)> {
+    use anyhow::Context;
+    let chart_bytes =
+        std::fs::read(chart_path).with_context(|| format!("reading chart {chart_path}"))?;
+    let header = o2jam_file::parse_ojn(&chart_bytes)?;
+    let slices = o2jam_file::parse_ojn_levels(&chart_bytes)?;
+    if slices.get(level).is_none() {
+        anyhow::bail!("level {level} missing (chart has {} slices)", slices.len());
+    }
+    let events = o2jam_file::parse_ojn_level_events(&chart_bytes, level)?;
+    let chart = o2jam_game::build_level_chart(header.bpm, &events);
+    Ok((chart, header.format_version))
+}
+
 /// Headless autoplay: load chart + bank, step a virtual clock (or the
 /// wall clock with `--sound`), trigger key sounds, judge perfect.
 fn run_autoplay(chart_path: &str, ojm_path: Option<&str>, level: usize, sound: bool) -> Result<()> {
     use anyhow::Context;
     use o2jam_game::{Judgement, Score, Sequencer};
-    let chart_bytes =
-        std::fs::read(chart_path).with_context(|| format!("reading chart {chart_path}"))?;
-    let header = o2jam_file::parse_ojn(&chart_bytes)?;
-    let slices = o2jam_file::parse_ojn_levels(&chart_bytes)?;
-    let slice = slices.get(level).ok_or_else(|| {
-        anyhow::anyhow!("level {level} missing (chart has {} slices)", slices.len())
-    })?;
-    let events = o2jam_file::parse_ojn_level_events(&chart_bytes, level)?;
-    let chart = o2jam_game::build_level_chart(header.bpm, &events);
-    tracing::info!(
-        hits = chart.hit_count(),
-        slice = ?slice,
-        "chart loaded"
-    );
+    let (chart, format_version) = load_level_chart(chart_path, level)?;
+    tracing::info!(hits = chart.hit_count(), "chart loaded");
     let mut bank = std::collections::HashMap::new();
     if let Some(path) = ojm_path {
         let bank_bytes = std::fs::read(path).with_context(|| format!("reading bank {path}"))?;
-        bank = load_sound_bank(&bank_bytes, header.format_version);
+        bank = load_sound_bank(&bank_bytes, format_version);
         tracing::info!(samples = bank.len(), "bank decoded");
     }
     let mut backend: Box<dyn o2jam_audio::AudioBackend> = if sound {

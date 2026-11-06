@@ -7,7 +7,7 @@ pub mod playing;
 pub mod screen;
 pub mod screens;
 
-pub use playing::{HighwayGeometry, PlayingView};
+pub use playing::{HighwayGeometry, LivePlay, PlayingView};
 pub use screen::{can_enter, BadTransition, Screen, ScreenFlow};
 pub use screens::{paint_screen, ScreenGame};
 
