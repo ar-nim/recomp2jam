@@ -17,8 +17,10 @@ pub mod client;
 pub mod command;
 pub mod error;
 pub mod frame;
+mod inflate;
 pub mod message;
 pub mod play;
+pub mod relay;
 pub mod rooms;
 pub mod strings;
 
@@ -41,6 +43,11 @@ pub use play::{
     ConfirmMusicLoaded, ExitPlaying, FinalizeRank, GameStatsUpdate, GetMusicList,
     SetDownloadProgress, SetRoomMusic, StartGame, StatKind, SubmitScore, SyncMemberMusicState,
     UpdateGameStats,
+};
+pub use relay::{
+    ComboBroken, ComboStarted, ConnectionEndpoint, CreateRelaySession, DeleteRelaySession,
+    MemberRole, PeerConfirm, PeerConnected, PeerEndpointAssigned, RelayCommand, RelayMember,
+    RelayPing, RelayRouting, RelayStats, UdpPacketType, UdpRelayFrame,
 };
 pub use rooms::{
     Difficulty, GameSpeed, JoinResult, JoinRoom, JoinRoomResponse, JoinedRoom, RoomList,
