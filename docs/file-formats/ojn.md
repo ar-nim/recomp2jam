@@ -316,8 +316,26 @@ struct index `+0x6bc` (`0x46fef`, `0x476b9`, `0x476cd`, `0x47dea`,
 2 (jamo entries) / 1 (letter entries); first-byte `A`–`Z` range check
 (`0x4451af`); CP949→WCHAR converter `FUN_00406100` (`strlen`, `×3`
 buffer, DBCS lead-byte combine). Implemented as
-`o2jam-file::parse_key_name_table`. Exact UI role (search/genre
-filter?) stays OPEN.
+`o2jam-file::parse_key_name_table` plus `key_name_filter_entry` /
+`key_name_letter_entry` with per-arm synthetic tests.
+
+Role: song filter (search input), PINNED. The table-base consumer is the
+`+0x680` keyed rebuild: `mov 0x6454d8(,%edx,4),%eax` at file `0x448c2`
+(VA `0x4448c2`; second loop at file `0x44ecc`) loads entry `[arm]` for
+arms 0..=13 (the fourteen chosung initials), `strncmp`s it
+(`n = 2`) against the CP949-converted (`FUN_00406100`) song title, and
+appends matches via `0x452850` into dialog `+0x680`; arms 0/2/5/6/8 then
+test their fixed `ssang` partner slot (`0x645510`/`0x645514`/`0x645518`/
+`0x64551c`/`0x645520`). The A–Z row is the letter-search counterpart
+(first-byte `A`–`Z` range check at file `0x4451af`, indexed load
+`mov 0x645538(,%ecx,4),%edx` at file `0x451ed`, `strncmp` `n = 1`; second
+site at file `0x4545f` in VA `0x444fe0`). The same names render the result
+banner downstream: dialog `+0x6bc` indexes sub-range base `0x645524`,
+`+0x6c0` indexes `0x6455a0`, `+0x6c4` indexes `0x6455bc`, formatted through
+`"%s 검색 결과입니다."` / `"%s -> %s ..."` / `"%s -> %s -> %s ..."`
+(VAs `0x645a50`/`0x645a64`/`0x645a80`) at files `0x46fec`, `0x476b9`,
+`0x47de1`. So the table keys the song filter; the banner display reuses
+the selected keys.
 
 ## Chart parser `FUN_00571d60` (file offset `0x171d60`) — REA dossier `ev_c0325c85…`
 
