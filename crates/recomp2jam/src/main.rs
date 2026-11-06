@@ -60,6 +60,10 @@ enum Command {
         /// Fetch character info after channel login (needs --channel-id too).
         #[arg(long, requires = "channel_id")]
         character: bool,
+        /// Stack the worn avatar figure from this `avatar.opa`
+        /// (needs --character too).
+        #[arg(long, requires = "character")]
+        avatar_opa: Option<String>,
     },
     /// Stub gameplay entry point (autoplay with null backend for now).
     Play {
@@ -110,6 +114,7 @@ fn main() -> Result<()> {
             gateway_id,
             channel_id,
             character,
+            avatar_opa,
         } => {
             let options = connect::ConnectOptions {
                 host,
@@ -121,6 +126,7 @@ fn main() -> Result<()> {
                 relay_key2,
                 channel: gateway_id.zip(channel_id),
                 character,
+                avatar_opa,
             };
             let report = connect::connect_and_login(&options)?;
             println!("authorize: {}", connect::name_result(report.auth_code));
@@ -129,6 +135,9 @@ fn main() -> Result<()> {
                     "character: {} (Lv {}, {:?}, {} XP)",
                     hero.nickname, hero.level, hero.gender, hero.experience
                 );
+            }
+            if report.avatar_layers > 0 {
+                println!("avatar: {} layers worn", report.avatar_layers);
             }
             println!("channels: {}", report.channels.len());
             for channel in &report.channels {
