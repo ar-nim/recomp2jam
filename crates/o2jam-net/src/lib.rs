@@ -24,13 +24,14 @@ pub use client::{GatewayConnection, DEFAULT_GATEWAY_PORT};
 pub use character::{
     AttributiveItemInfo, CharacterInfo, GiftItemInfo, GiftMusicInfo, EQUIPMENT_SLOTS,
 };
-pub use command::{Generic, Request, Response};
+pub use command::{Event, Generic, Request, Response};
 pub use error::Error;
 pub use frame::{Frame, FrameSplitter, HEADER_LEN, ID_OFFSET};
 pub use message::{
     AuthResponse, AuthResult, AuthorizeRequest, ChannelList, ChannelLogin, ChannelLoginResponse,
-    ChannelLoginResult, ChannelState, EmptyMessage, ForceReauthorize, Gender, GetChannelList,
-    LegacyPing, MultiSessionError, Ping, SessionKeys, SessionKeysRequest, SubscriptionAlert,
-    Terminate, WireMessage, MEMORYER_CLIENT_ID,
+    ChannelLoginResult, ChannelState, CreateResult, CreateRoom, CreateRoomResponse, EmptyMessage,
+    ForceReauthorize, GameMode, Gender, GetChannelList, GetCharacterInfo, KeyMode, LegacyPing,
+    MultiSessionError, Ping, RoomCreated, RoomInfo, SessionKeys, SessionKeysRequest,
+    SubscriptionAlert, Terminate, WireMessage, MEMORYER_CLIENT_ID,
 };
 pub use strings::{decode_null_terminated, encode_null_terminated, MAX_STRING_LEN};

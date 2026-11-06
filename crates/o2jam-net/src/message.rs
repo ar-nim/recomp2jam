@@ -666,12 +666,417 @@ impl WireMessage for ChannelList {
     }
 }
 
+/// Key mode: 3/5/7-key play (one byte on the wire).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum KeyMode {
+    ThreeKeys = 0,
+    FiveKeys = 1,
+    SevenKeys = 2,
+}
+
+impl KeyMode {
+    /// Numeric wire value.
+    #[must_use]
+    pub fn as_u8(self) -> u8 {
+        self as u8
+    }
+
+    /// Parse a wire byte; unknown values are an error.
+    pub fn from_u8(value: u8) -> Result<Self, Error> {
+        match value {
+            0 => Ok(Self::ThreeKeys),
+            1 => Ok(Self::FiveKeys),
+            2 => Ok(Self::SevenKeys),
+            _ => Err(Error::InvalidField {
+                field: "key mode",
+                reason: "not 0, 1, or 2",
+            }),
+        }
+    }
+}
+
+/// Game mode: normal play or Live PvP (one byte on the wire).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum GameMode {
+    Normal = 0,
+    Live = 1,
+}
+
+impl GameMode {
+    /// Numeric wire value.
+    #[must_use]
+    pub fn as_u8(self) -> u8 {
+        self as u8
+    }
+
+    /// Parse a wire byte; unknown values are an error.
+    pub fn from_u8(value: u8) -> Result<Self, Error> {
+        match value {
+            0 => Ok(Self::Normal),
+            1 => Ok(Self::Live),
+            _ => Err(Error::InvalidField {
+                field: "game mode",
+                reason: "not 0 or 1",
+            }),
+        }
+    }
+}
+
+/// One `0`/`1` byte as bool.
+fn read_flag<'body>(body: &'body [u8], field: &'static str) -> Result<(bool, &'body [u8]), Error> {
+    let (&first, rest) = body
+        .split_first()
+        .ok_or(Error::TruncatedMessage { need: 1, have: 0 })?;
+    match first {
+        0 => Ok((false, rest)),
+        1 => Ok((true, rest)),
+        _ => Err(Error::InvalidField {
+            field,
+            reason: "not 0 or 1",
+        }),
+    }
+}
+
+/// `bool` as little-endian `i16` (`MessageFieldCodec<short>`).
+fn encode_short_flag(value: bool, body: &mut Vec<u8>) {
+    body.extend_from_slice(&i16::from(value).to_le_bytes());
+}
+
+/// Parse an `i16` `0`/`1` as bool.
+fn decode_short_flag<'body>(
+    body: &'body [u8],
+    field: &'static str,
+) -> Result<(bool, &'body [u8]), Error> {
+    if body.len() < 2 {
+        return Err(Error::TruncatedMessage {
+            need: 2,
+            have: body.len(),
+        });
+    }
+    match i16::from_le_bytes([body[0], body[1]]) {
+        0 => Ok((false, &body[2..])),
+        1 => Ok((true, &body[2..])),
+        _ => Err(Error::InvalidField {
+            field,
+            reason: "not 0 or 1",
+        }),
+    }
+}
+
+/// Room title cap, bytes including terminator (Memoryer
+/// `maxLength: 22`).
+pub const ROOM_TITLE_CAP: usize = 22;
+/// Room password cap, bytes including terminator (Memoryer
+/// `maxLength: 12`).
+pub const ROOM_PASSWORD_CAP: usize = 12;
+
+/// `CreateRoom` 2004: title, modes, lock, level band, premium flag.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateRoom {
+    /// Room title (max 22 bytes).
+    pub title: String,
+    /// 3/5/7 keys.
+    pub key_mode: KeyMode,
+    /// Normal or Live.
+    pub game_mode: GameMode,
+    /// Whether `password` applies.
+    pub has_password: bool,
+    /// Room password (max 12 bytes).
+    pub password: String,
+    /// Minimum level limit.
+    pub min_level: u8,
+    /// Maximum level limit.
+    pub max_level: u8,
+    /// Premium-only room.
+    pub premium: bool,
+}
+
+impl WireMessage for CreateRoom {
+    const COMMAND: u16 = 2004;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = Vec::new();
+        body.extend_from_slice(&encode_null_terminated(&self.title, ROOM_TITLE_CAP));
+        body.push(self.key_mode.as_u8());
+        body.push(self.game_mode.as_u8());
+        body.push(u8::from(self.has_password));
+        body.extend_from_slice(&encode_null_terminated(&self.password, ROOM_PASSWORD_CAP));
+        body.push(self.min_level);
+        body.push(self.max_level);
+        encode_short_flag(self.premium, &mut body);
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        let (title, used) = decode_null_terminated(body, ROOM_TITLE_CAP)?;
+        let mut tail = &body[used..];
+        let (&key_mode, rest) = tail
+            .split_first()
+            .ok_or(Error::TruncatedMessage { need: 1, have: 0 })?;
+        let key_mode = KeyMode::from_u8(key_mode)?;
+        tail = rest;
+        let (&game_mode, rest) = tail
+            .split_first()
+            .ok_or(Error::TruncatedMessage { need: 1, have: 0 })?;
+        let game_mode = GameMode::from_u8(game_mode)?;
+        tail = rest;
+        let (has_password, rest) = read_flag(tail, "has password")?;
+        let (password, used) = decode_null_terminated(rest, ROOM_PASSWORD_CAP)?;
+        tail = &rest[used..];
+        let (&min_level, rest) = tail
+            .split_first()
+            .ok_or(Error::TruncatedMessage { need: 1, have: 0 })?;
+        let (&max_level, rest) = rest
+            .split_first()
+            .ok_or(Error::TruncatedMessage { need: 1, have: 0 })?;
+        let (premium, rest) = decode_short_flag(rest, "premium")?;
+        if !rest.is_empty() {
+            return Err(Error::TrailingBytes(rest.len()));
+        }
+        Ok(Self {
+            title,
+            key_mode,
+            game_mode,
+            has_password,
+            password,
+            min_level,
+            max_level,
+            premium,
+        })
+    }
+}
+
+/// `CreateRoom` result: success or channel full.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum CreateResult {
+    Success = 0,
+    ChannelFull = 1,
+}
+
+impl CreateResult {
+    /// Numeric wire value.
+    #[must_use]
+    pub fn as_i32(self) -> i32 {
+        self as i32
+    }
+
+    /// Parse a wire word; unknown values are an error.
+    pub fn from_i32(value: i32) -> Result<Self, Error> {
+        match value {
+            0 => Ok(Self::Success),
+            1 => Ok(Self::ChannelFull),
+            _ => Err(Error::InvalidField {
+                field: "create result",
+                reason: "not 0 or 1",
+            }),
+        }
+    }
+}
+
+/// Room slot snapshot inside `CreateRoomResponse` 2006.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoomInfo {
+    /// Room number.
+    pub number: i32,
+    /// Premium-only room.
+    pub premium: bool,
+    /// Room password (may be empty).
+    pub password: String,
+    /// Whether `password` applies.
+    pub has_password: bool,
+    /// Minimum level limit.
+    pub min_level: u8,
+    /// Maximum level limit.
+    pub max_level: u8,
+}
+
+impl RoomInfo {
+    /// Parse from the front of `body`, returning the value and rest.
+    fn decode_prefix(body: &[u8]) -> Result<(Self, &[u8]), Error> {
+        if body.len() < 4 {
+            return Err(Error::TruncatedMessage {
+                need: 4,
+                have: body.len(),
+            });
+        }
+        let number = i32::from_le_bytes([body[0], body[1], body[2], body[3]]);
+        let (premium, tail) = decode_short_flag(&body[4..], "premium")?;
+        let (password, used) = decode_null_terminated(tail, MAX_STRING_LEN)?;
+        let tail = &tail[used..];
+        let (has_password, tail) = read_flag(tail, "has password")?;
+        let (&min_level, tail) = tail
+            .split_first()
+            .ok_or(Error::TruncatedMessage { need: 1, have: 0 })?;
+        let (&max_level, tail) = tail
+            .split_first()
+            .ok_or(Error::TruncatedMessage { need: 1, have: 0 })?;
+        Ok((
+            Self {
+                number,
+                premium,
+                password,
+                has_password,
+                min_level,
+                max_level,
+            },
+            tail,
+        ))
+    }
+
+    /// Full body for sending (tests and future use).
+    fn encode_inner(&self, body: &mut Vec<u8>) {
+        body.extend_from_slice(&self.number.to_le_bytes());
+        encode_short_flag(self.premium, body);
+        body.extend_from_slice(&encode_null_terminated(&self.password, MAX_STRING_LEN));
+        body.push(u8::from(self.has_password));
+        body.push(self.min_level);
+        body.push(self.max_level);
+    }
+}
+
+/// `CreateRoom` 2006 response: result plus the room slot when
+/// creation succeeded (present iff bytes follow the result).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateRoomResponse {
+    /// Success or channel-full.
+    pub result: CreateResult,
+    /// Slot snapshot; `None` when the body ends after `result`.
+    pub info: Option<RoomInfo>,
+}
+
+impl WireMessage for CreateRoomResponse {
+    const COMMAND: u16 = 2006;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = Vec::with_capacity(4);
+        body.extend_from_slice(&self.result.as_i32().to_le_bytes());
+        if let Some(info) = &self.info {
+            info.encode_inner(&mut body);
+        }
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < 4 {
+            return Err(Error::TruncatedMessage {
+                need: 4,
+                have: body.len(),
+            });
+        }
+        let result =
+            CreateResult::from_i32(i32::from_le_bytes([body[0], body[1], body[2], body[3]]))?;
+        let tail = &body[4..];
+        let info = if tail.is_empty() {
+            None
+        } else {
+            let (info, rest) = RoomInfo::decode_prefix(tail)?;
+            if !rest.is_empty() {
+                return Err(Error::TrailingBytes(rest.len()));
+            }
+            Some(info)
+        };
+        Ok(Self { result, info })
+    }
+}
+
+/// `RoomCreated` 2007 broadcast: the new room's full descriptor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoomCreated {
+    /// Room number.
+    pub number: i32,
+    /// Room title.
+    pub title: String,
+    /// 3/5/7 keys.
+    pub key_mode: KeyMode,
+    /// Normal or Live.
+    pub game_mode: GameMode,
+    /// Whether a password is set.
+    pub has_password: bool,
+    /// Minimum level limit.
+    pub min_level: u8,
+    /// Maximum level limit.
+    pub max_level: u8,
+    /// Premium-only room.
+    pub premium: bool,
+    /// Room type tag.
+    pub room_type: u8,
+}
+
+impl WireMessage for RoomCreated {
+    const COMMAND: u16 = 2007;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = Vec::with_capacity(4);
+        body.extend_from_slice(&self.number.to_le_bytes());
+        body.extend_from_slice(&encode_null_terminated(&self.title, MAX_STRING_LEN));
+        body.push(self.key_mode.as_u8());
+        body.push(self.game_mode.as_u8());
+        body.push(u8::from(self.has_password));
+        body.push(self.min_level);
+        body.push(self.max_level);
+        encode_short_flag(self.premium, &mut body);
+        body.push(self.room_type);
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < 4 {
+            return Err(Error::TruncatedMessage {
+                need: 4,
+                have: body.len(),
+            });
+        }
+        let number = i32::from_le_bytes([body[0], body[1], body[2], body[3]]);
+        let (title, used) = decode_null_terminated(&body[4..], MAX_STRING_LEN)?;
+        let mut tail = &body[4 + used..];
+        let (&key_mode, rest) = tail
+            .split_first()
+            .ok_or(Error::TruncatedMessage { need: 1, have: 0 })?;
+        let key_mode = KeyMode::from_u8(key_mode)?;
+        tail = rest;
+        let (&game_mode, rest) = tail
+            .split_first()
+            .ok_or(Error::TruncatedMessage { need: 1, have: 0 })?;
+        let game_mode = GameMode::from_u8(game_mode)?;
+        tail = rest;
+        let (has_password, rest) = read_flag(tail, "has password")?;
+        tail = rest;
+        let (&min_level, rest) = tail
+            .split_first()
+            .ok_or(Error::TruncatedMessage { need: 1, have: 0 })?;
+        let (&max_level, rest) = rest
+            .split_first()
+            .ok_or(Error::TruncatedMessage { need: 1, have: 0 })?;
+        let (premium, rest) = decode_short_flag(rest, "premium")?;
+        let (&room_type, rest) = rest
+            .split_first()
+            .ok_or(Error::TruncatedMessage { need: 1, have: 0 })?;
+        if !rest.is_empty() {
+            return Err(Error::TrailingBytes(rest.len()));
+        }
+        Ok(Self {
+            number,
+            title,
+            key_mode,
+            game_mode,
+            has_password,
+            min_level,
+            max_level,
+            premium,
+            room_type,
+        })
+    }
+}
+
 /// Keep [`Request`]/[`Response`]/[`Generic`] ids consistent with
 /// the message types above.
 #[cfg(test)]
 mod command_consistency_tests {
     use super::*;
-    use crate::command::{Generic, Request, Response};
+    use crate::command::{Event, Generic, Request, Response};
 
     #[test]
     fn command_ids_match_message_types() {
@@ -696,6 +1101,9 @@ mod command_consistency_tests {
             Response::MultiSessionError as u16
         );
         assert_eq!(GetCharacterInfo::COMMAND, Request::GetCharacterInfo as u16);
+        assert_eq!(CreateRoom::COMMAND, Request::CreateRoom as u16);
+        assert_eq!(CreateRoomResponse::COMMAND, Response::CreateRoom as u16);
+        assert_eq!(RoomCreated::COMMAND, Event::RoomCreated as u16);
         assert_eq!(
             crate::character::CharacterInfo::COMMAND,
             Response::GetCharacterInfo as u16
@@ -1065,5 +1473,157 @@ mod tests {
             ChannelList::decode_body(&body),
             Err(Error::TruncatedMessage { need: 17, have: 6 })
         );
+    }
+
+    fn room_request() -> CreateRoom {
+        CreateRoom {
+            title: "Test Room".to_owned(),
+            key_mode: KeyMode::SevenKeys,
+            game_mode: GameMode::Normal,
+            has_password: true,
+            password: "secret".to_owned(),
+            min_level: 1,
+            max_level: 30,
+            premium: false,
+        }
+    }
+
+    #[test]
+    fn create_room_round_trips() {
+        let request = room_request();
+        let frame = decode_frame(&request.encode()).unwrap();
+        assert_eq!(frame.id, 2004);
+        assert_eq!(CreateRoom::decode_frame(&frame), Ok(request));
+    }
+
+    #[test]
+    fn create_room_truncates_long_title() {
+        let mut request = room_request();
+        request.title = "A".repeat(40);
+        let body = request.encode_body();
+        // 22 title bytes, no terminator: 22 + 1 + 1 + 1 + 7 + 1 + 1 + 2.
+        assert_eq!(body.len(), 22 + 1 + 1 + 1 + 7 + 1 + 1 + 2);
+        assert_eq!(&body[..22], &[0x41; 22]);
+        let back = CreateRoom::decode_body(&body).unwrap();
+        assert_eq!(back.title, "A".repeat(22));
+    }
+
+    #[test]
+    fn create_room_truncates_long_password() {
+        let mut request = room_request();
+        request.password = "B".repeat(20);
+        let back = CreateRoom::decode_body(&request.encode_body()).unwrap();
+        assert_eq!(back.password, "B".repeat(12));
+    }
+
+    #[test]
+    fn create_room_rejects_bad_key_mode() {
+        assert_eq!(
+            KeyMode::from_u8(7),
+            Err(Error::InvalidField {
+                field: "key mode",
+                reason: "not 0, 1, or 2"
+            })
+        );
+    }
+
+    #[test]
+    fn create_room_rejects_bad_game_mode() {
+        assert_eq!(
+            GameMode::from_u8(9),
+            Err(Error::InvalidField {
+                field: "game mode",
+                reason: "not 0 or 1"
+            })
+        );
+    }
+
+    fn room_info() -> RoomInfo {
+        RoomInfo {
+            number: 7,
+            premium: true,
+            password: "pw".to_owned(),
+            has_password: true,
+            min_level: 1,
+            max_level: 30,
+        }
+    }
+
+    #[test]
+    fn create_response_without_info_decodes() {
+        let response = CreateRoomResponse {
+            result: CreateResult::ChannelFull,
+            info: None,
+        };
+        let frame = decode_frame(&response.encode()).unwrap();
+        assert_eq!(frame.id, 2006);
+        assert_eq!(CreateRoomResponse::decode_frame(&frame), Ok(response));
+    }
+
+    #[test]
+    fn create_response_with_info_round_trips() {
+        let response = CreateRoomResponse {
+            result: CreateResult::Success,
+            info: Some(room_info()),
+        };
+        let frame = decode_frame(&response.encode()).unwrap();
+        assert_eq!(CreateRoomResponse::decode_frame(&frame), Ok(response));
+    }
+
+    #[test]
+    fn create_response_rejects_bad_result() {
+        let mut body = vec![0x02, 0x00, 0x00, 0x00];
+        assert_eq!(
+            CreateRoomResponse::decode_body(&body),
+            Err(Error::InvalidField {
+                field: "create result",
+                reason: "not 0 or 1"
+            })
+        );
+        body.clear();
+        assert_eq!(
+            CreateRoomResponse::decode_body(&body),
+            Err(Error::TruncatedMessage { need: 4, have: 0 })
+        );
+    }
+
+    #[test]
+    fn room_created_round_trips() {
+        let event = RoomCreated {
+            number: 3,
+            title: "Lobby".to_owned(),
+            key_mode: KeyMode::FiveKeys,
+            game_mode: GameMode::Live,
+            has_password: false,
+            min_level: 0,
+            max_level: 99,
+            premium: false,
+            room_type: 0,
+        };
+        let frame = decode_frame(&event.encode()).unwrap();
+        assert_eq!(frame.id, 2007);
+        assert_eq!(RoomCreated::decode_frame(&frame), Ok(event));
+    }
+
+    #[test]
+    fn room_created_rejects_trailing_bytes() {
+        let mut event = RoomCreated {
+            number: 3,
+            title: String::new(),
+            key_mode: KeyMode::ThreeKeys,
+            game_mode: GameMode::Normal,
+            has_password: false,
+            min_level: 0,
+            max_level: 0,
+            premium: false,
+            room_type: 0,
+        };
+        let mut body = event.encode_body();
+        body.push(0xFF);
+        assert_eq!(
+            RoomCreated::decode_body(&body),
+            Err(Error::TrailingBytes(1))
+        );
+        event.title = "x".to_owned();
     }
 }
