@@ -20,6 +20,7 @@ use super::super::avatar::{
 use super::super::playing::{HighwayGeometry, PlayingView};
 use super::super::screen::Screen;
 use o2jam_file::ControlList;
+use o2jam_game::RoomTeams;
 use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry, RoomSlot, RoomSlotState};
 use o2jam_render::{
     draw_number, draw_text, fill_rect, number_width, pack_xrgb, text_width, Frame, Rect,
@@ -539,13 +540,93 @@ pub fn paint_loading_scene(frame: &mut Frame<'_>, art: &SceneArt) {
     paint_loading_bar(frame);
 }
 
+/// Battle verdict art mounted by the result builder `FUN_004c2390`
+/// (file `0xc2390`): `StateResult_Top.ojs` plus
+/// `StateResult_Bottom.ojs` plus `Result_WinLose.ojs` (file `0x24a35c`).
+/// The play-scene winner banner `Winner_image.ojs` (file `0x24b014`)
+/// names the same verdict; the result scene surfaces both verdict arts.
+/// Winner is rank 1 by team score only (`RoomTeams::winner`); team
+/// totals stay server-side (per-member 4014/4016). Grade letters stay
+/// out (mapping OPEN).
+pub const RESULT_TOP_SPRITE: &str = "StateResult_Top.ojs";
+/// Bottom half mounted by `FUN_004c2390` (file `0xc2390`).
+pub const RESULT_BOTTOM_SPRITE: &str = "StateResult_Bottom.ojs";
+/// Win/lose verdict mounted by `FUN_004c2390` (file `0xc2390`).
+pub const RESULT_WINLOSE_SPRITE: &str = "Result_WinLose.ojs";
+/// Winner banner from `STATE_PLAYING` (file `0x24b014`), surfaced on
+/// the result scene as the same rank-1 verdict.
+pub const WINNER_IMAGE_SPRITE: &str = "Winner_image.ojs";
+
+/// Sprites the result builder `FUN_004c2390` (file `0xc2390`) mounts,
+/// in load order: top, bottom, then the win/lose verdict.
+#[must_use]
+pub fn result_loader_sprites() -> [&'static str; 3] {
+    [
+        RESULT_TOP_SPRITE,
+        RESULT_BOTTOM_SPRITE,
+        RESULT_WINLOSE_SPRITE,
+    ]
+}
+
+/// Battle verdict: rank 1 by team score wins (`RoomTeams::winner`).
+/// Solo or team, grades play no part (mapping OPEN).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BattleVerdict {
+    /// Local team holds rank 1.
+    Win,
+    /// Another team holds rank 1.
+    Lose,
+}
+
+/// Rank-1 verdict for the local team: `Win` when it holds the top
+/// total, `Lose` otherwise. `None` while the winner or the local
+/// team is unknown (empty room, solo with no seat claimed).
+#[must_use]
+pub fn battle_verdict(teams: &RoomTeams, self_team: Option<u8>) -> Option<BattleVerdict> {
+    let winner = teams.winner()?;
+    let local = self_team?;
+    if local == winner {
+        Some(BattleVerdict::Win)
+    } else {
+        Some(BattleVerdict::Lose)
+    }
+}
+
+/// Verdict caption standing in for the staged `Winner_image.ojs` /
+/// `Result_WinLose.ojs` bodies until those figures bind.
+fn verdict_text(verdict: BattleVerdict) -> &'static str {
+    match verdict {
+        BattleVerdict::Win => "WIN",
+        BattleVerdict::Lose => "LOSE",
+    }
+}
+
+/// Verdict ink: gold for a win, dim gray for a loss.
+fn verdict_ink(verdict: BattleVerdict) -> u32 {
+    match verdict {
+        BattleVerdict::Win => pack_xrgb(0xFF, 0xD0, 0x20),
+        BattleVerdict::Lose => pack_xrgb(0x90, 0x90, 0x90),
+    }
+}
+
+/// Paint the rank-1 verdict line under the score digits; nothing
+/// while the verdict is unknown.
+fn paint_battle_verdict(frame: &mut Frame<'_>, verdict: Option<BattleVerdict>) {
+    let Some(known) = verdict else {
+        return;
+    };
+    draw_text(frame, 16, 48, verdict_text(known), verdict_ink(known));
+}
+
 /// Score, best combo, and avatar figure (no background fill: shared
-/// by the flat fallback and the art scene). Grade letters stay out
-/// (mapping OPEN).
+/// Score, best combo, verdict, and avatar figure (no background
+/// fill: shared by the flat fallback and the art scene). Grade
+/// letters stay out (mapping OPEN).
 fn paint_result_content(
     frame: &mut Frame<'_>,
     avatar: Option<&AvatarFigure>,
     score: &o2jam_game::Score,
+    verdict: Option<BattleVerdict>,
 ) {
     if let Some(figure) = avatar {
         figure.paint(frame, frame.w as i32 / 2 - 32, frame.h as i32 / 2 - 32);
@@ -553,33 +634,39 @@ fn paint_result_content(
     let points = u32::try_from(score.points).unwrap_or(u32::MAX);
     draw_number(frame, 16, 16, points, pack_xrgb(0xFF, 0xFF, 0xFF));
     draw_number(frame, 16, 32, score.max_combo, pack_xrgb(0xFF, 0xFF, 0x40));
+    paint_battle_verdict(frame, verdict);
 }
 
-/// Paint the results scene: score, best combo, and a loaded avatar
-/// figure over the card. Grade letters stay out (mapping OPEN).
+/// Paint the results scene: score, best combo, rank-1 verdict, and a
+/// loaded avatar figure over the card. Grade letters stay out
+/// (mapping OPEN).
 pub(crate) fn paint_result(
     frame: &mut Frame<'_>,
     avatar: Option<&AvatarFigure>,
     score: &o2jam_game::Score,
+    verdict: Option<BattleVerdict>,
 ) {
     paint_card(
         frame,
         pack_xrgb(0x10, 0x10, 0x08),
         pack_xrgb(0xC0, 0xA0, 0x20),
     );
-    paint_result_content(frame, avatar, score);
+    paint_result_content(frame, avatar, score, verdict);
 }
 
-/// Paint staged result art (`Result_WinLose.ojs`, number fonts) with
-/// the avatar figure and live digits on top.
+/// Paint staged result art (`StateResult_Top/Bottom.ojs` plus
+/// `Result_WinLose.ojs` via `FUN_004c2390`, file `0xc2390`) with the
+/// avatar figure, live digits, and the `Winner_image.ojs` /
+/// `Result_WinLose.ojs` verdict on top.
 pub fn paint_result_scene(
     frame: &mut Frame<'_>,
     avatar: Option<&AvatarFigure>,
     score: &o2jam_game::Score,
     art: &SceneArt,
+    verdict: Option<BattleVerdict>,
 ) {
     art.paint_backdrop(frame, Screen::Result);
-    paint_result_content(frame, avatar, score);
+    paint_result_content(frame, avatar, score, verdict);
 }
 
 /// Paint staged gameplay art over the highway: life/jam gauges and
@@ -662,7 +749,7 @@ pub fn paint_screen(frame: &mut Frame<'_>, screen: Screen) {
         Screen::Playing => {
             PlayingView::default().paint(frame, &HighwayGeometry::centered(frame.w, frame.h));
         }
-        Screen::Result => paint_result(frame, None, &o2jam_game::Score::default()),
+        Screen::Result => paint_result(frame, None, &o2jam_game::Score::default(), None),
     }
 }
 
@@ -725,7 +812,7 @@ mod paint_tests {
                 paint_playing_overlay(&mut frame, art);
             }
             Screen::Result => {
-                paint_result_scene(&mut frame, None, &o2jam_game::Score::default(), art)
+                paint_result_scene(&mut frame, None, &o2jam_game::Score::default(), art, None)
             }
         }
         buf
@@ -1120,6 +1207,7 @@ mod paint_tests {
             Some(&red_figure()),
             &score,
             &art,
+            None,
         );
         // Logo pixel at the origin, avatar red inside the frame, and
         // the white score digits top-left.
@@ -1151,5 +1239,112 @@ mod paint_tests {
             let buf = paint_art(screen, &art, 16, 12);
             assert_eq!(buf[0], background_of(screen), "{screen:?}");
         }
+    }
+
+    fn battle_room() -> RoomTeams {
+        let mut teams = RoomTeams::new();
+        teams.set_team(0, 0);
+        teams.set_team(1, 1);
+        teams.submit(0, 100_000);
+        teams.submit(1, 150_000);
+        teams
+    }
+
+    #[test]
+    fn result_loader_names_top_bottom_and_winlose() {
+        assert_eq!(
+            result_loader_sprites(),
+            [
+                "StateResult_Top.ojs",
+                "StateResult_Bottom.ojs",
+                "Result_WinLose.ojs"
+            ]
+        );
+        assert_eq!(RESULT_WINLOSE_SPRITE, "Result_WinLose.ojs");
+        assert_eq!(WINNER_IMAGE_SPRITE, "Winner_image.ojs");
+    }
+
+    #[test]
+    fn battle_verdict_goes_to_rank_one_by_score() {
+        let teams = battle_room();
+        assert_eq!(teams.winner(), Some(1));
+        assert_eq!(battle_verdict(&teams, Some(1)), Some(BattleVerdict::Win));
+        assert_eq!(battle_verdict(&teams, Some(0)), Some(BattleVerdict::Lose));
+    }
+
+    #[test]
+    fn battle_verdict_stays_empty_without_winner_or_self() {
+        let empty = RoomTeams::new();
+        assert_eq!(battle_verdict(&empty, Some(0)), None);
+        let teams = battle_room();
+        assert_eq!(battle_verdict(&teams, None), None);
+    }
+
+    #[test]
+    fn result_win_paints_gold_caption() {
+        let mut buf = vec![0u32; 64 * 64];
+        paint_result(
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 64,
+            },
+            None,
+            &o2jam_game::Score::default(),
+            Some(BattleVerdict::Win),
+        );
+        assert!(buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
+    }
+
+    #[test]
+    fn result_lose_paints_gray_caption() {
+        let mut buf = vec![0u32; 64 * 64];
+        paint_result(
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 64,
+            },
+            None,
+            &o2jam_game::Score::default(),
+            Some(BattleVerdict::Lose),
+        );
+        assert!(buf.contains(&pack_xrgb(0x90, 0x90, 0x90)));
+    }
+
+    #[test]
+    fn result_without_verdict_paints_no_caption() {
+        let mut buf = vec![0u32; 64 * 64];
+        paint_result(
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 64,
+            },
+            None,
+            &o2jam_game::Score::default(),
+            None,
+        );
+        assert!(!buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
+        assert!(!buf.contains(&pack_xrgb(0x90, 0x90, 0x90)));
+    }
+
+    #[test]
+    fn result_scene_layers_verdict_over_staged_art() {
+        let art = corner_art();
+        let mut buf = vec![0u32; 64 * 64];
+        paint_result_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 64,
+            },
+            None,
+            &o2jam_game::Score::default(),
+            &art,
+            Some(BattleVerdict::Win),
+        );
+        assert_eq!(buf[0], pack_xrgb(255, 0, 0));
+        assert!(buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
     }
 }
