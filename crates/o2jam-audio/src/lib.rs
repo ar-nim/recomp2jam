@@ -67,6 +67,12 @@ pub fn decode_vorbis(ogg: &[u8]) -> Result<PcmSamples, AudioError> {
 
 /// Minimal audio sink. Game code plays key-sounds/BGM through this;
 /// tests use [`NullBackend`].
+///
+/// The song clock is [`AudioBackend::samples_played`]: device frames
+/// consumed so far. Mixing a key sound never moves the clock; the voice
+/// starts at the playhead (front of the not-yet-played queue), so its
+/// onset latency is one callback quantum plus the device base latency
+/// (see [`LatencyProbe`])..
 pub trait AudioBackend {
     /// Queue decoded PCM for playback (fire-and-forget at this layer).
     ///
@@ -74,8 +80,30 @@ pub trait AudioBackend {
     ///
     /// `AudioError::Backend` when the device rejects the samples.
     fn play_pcm(&mut self, pcm: &PcmSamples) -> Result<(), AudioError>;
-    /// Samples played so far (for song-clock anchoring later).
+    /// Mix one struck key sound at the current song position.
+    ///
+    /// Linear `gain` (`1.0` is unity); silent gains (`<= 0.0`) are a
+    /// no-op. The default routes through [`AudioBackend::play_pcm`] so
+    /// clock-only sinks (like [`NullBackend`]) keep counting struck
+    /// frames; [`CpalBackend`] overrides this with a true playhead mix.
+    ///
+    /// # Errors
+    ///
+    /// `AudioError::Backend` when the device rejects the voice.
+    fn play_key(&mut self, pcm: &PcmSamples, gain: f32) -> Result<(), AudioError> {
+        if gain <= 0.0 {
+            return Ok(());
+        }
+        self.play_pcm(pcm)
+    }
+    /// Song position in device frames (see trait docs).
     fn samples_played(&self) -> u64;
+    /// Queued-but-unplayed frames behind the playhead. Defaults to
+    /// zero for clock-only sinks; live backends report real depth for
+    /// [`LatencyProbe`].
+    fn pending_frames(&self) -> u64 {
+        0
+    }
 }
 
 /// Silent deterministic backend for tests and headless runs.
@@ -126,6 +154,46 @@ fn resample_linear(frames: &[f32], channels: usize, from_rate: u32, to_rate: u32
     out
 }
 
+/// Convert decoded PCM to normalized device-rate `f32` frames.
+///
+/// Shared by the live queue and [`SongMixer`] voices so a struck key
+/// sounds identical mixed live or baked offline: mono duplicates to
+/// every output channel, wider input folds down by averaging, narrower
+/// input picks its channel subset. Output holds whole frames only.
+fn voice_frames(pcm: &PcmSamples, out_channels: usize, out_rate: u32) -> Vec<f32> {
+    let out_channels = out_channels.max(1);
+    let in_channels = pcm.channels.max(1) as usize;
+    let mono: Vec<f32> = pcm
+        .samples
+        .iter()
+        .map(|s| f32::from(*s) / 32768.0)
+        .collect();
+    let resampled = resample_linear(&mono, in_channels, pcm.sample_rate, out_rate);
+    let in_frames = resampled.len() / in_channels.max(1);
+    let mut frames = Vec::with_capacity(in_frames * out_channels);
+    for i in 0..in_frames {
+        if in_channels == 1 {
+            for _ in 0..out_channels {
+                frames.push(resampled[i]);
+            }
+        } else if in_channels >= out_channels {
+            for ch in 0..out_channels {
+                frames.push(resampled[i * in_channels + ch]);
+            }
+        } else {
+            let mut sum = 0.0;
+            for c in 0..in_channels {
+                sum += resampled[i * in_channels + c];
+            }
+            let average = sum / in_channels as f32;
+            for _ in 0..out_channels {
+                frames.push(average);
+            }
+        }
+    }
+    frames
+}
+
 /// Device-side sample queue: converted/resampled frames plus the
 /// consumed-frame counter that anchors the song clock.
 #[derive(Debug, Default)]
@@ -136,39 +204,42 @@ struct PcmQueue {
 
 impl PcmQueue {
     fn push_pcm(&mut self, pcm: &PcmSamples, out_channels: usize, out_rate: u32) {
-        let in_channels = pcm.channels.max(1) as usize;
-        let mut frames: Vec<f32> = pcm
-            .samples
-            .iter()
-            .map(|s| f32::from(*s) / 32768.0)
-            .collect();
-        frames = resample_linear(&frames, in_channels, pcm.sample_rate, out_rate);
-        let in_frames = frames.len() / in_channels.max(1);
-        for i in 0..in_frames {
-            for ch in 0..out_channels {
-                let src = if in_channels == 1 {
-                    frames[i]
-                } else {
-                    frames.get(i * in_channels + ch).copied().unwrap_or(0.0)
-                };
-                self.buf.push_back(src);
+        self.buf.extend(voice_frames(pcm, out_channels, out_rate));
+    }
+
+    /// Layer `voice` (device-rate frames, already gain-scaled) over the
+    /// pending queue starting at the playhead: indices before the
+    /// playhead do not exist, so mixing starts at the front of what is
+    /// still queued and extends the tail when the voice rings past it.
+    /// Sums clamp to `[-1.0, 1.0]` (no wraparound), matching
+    /// [`SongMixer::mix`]. Never moves `consumed_frames`.
+    fn mix_at_playhead(&mut self, voice: &[f32]) {
+        for (i, sample) in voice.iter().enumerate() {
+            match self.buf.get_mut(i) {
+                Some(slot) => *slot = (*slot + *sample).clamp(-1.0, 1.0),
+                None => self.buf.push_back(sample.clamp(-1.0, 1.0)),
             }
         }
     }
 
-    fn pop_into(&mut self, out: &mut [f32], channels: usize) -> usize {
-        let mut frames = 0;
-        for frame in out.chunks_mut(channels.max(1)) {
-            if self.buf.len() < frame.len() {
-                break;
-            }
-            for sample in frame.iter_mut() {
-                *sample = self.buf.pop_front().unwrap_or(0.0);
-            }
-            frames += 1;
-        }
-        self.consumed_frames += frames as u64;
-        frames
+    /// Samples still queued behind the playhead.
+    fn pending_samples(&self) -> u64 {
+        u64::try_from(self.buf.len()).unwrap_or(u64::MAX)
+    }
+
+    /// Buffered sample count for the realtime callback's underflow check.
+    fn buffered_samples(&self) -> usize {
+        self.buf.len()
+    }
+
+    /// Pop one pending sample; silence when the queue is dry.
+    fn pop_sample(&mut self) -> f32 {
+        self.buf.pop_front().unwrap_or(0.0)
+    }
+
+    /// Note one fully served device frame (realtime side only).
+    fn mark_frame_consumed(&mut self) {
+        self.consumed_frames = self.consumed_frames.saturating_add(1);
     }
 }
 
@@ -227,11 +298,27 @@ impl CpalBackend {
             .build_output_stream(
                 *config,
                 move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
-                    let mut guard = worker.lock().expect("audio queue poisoned");
-                    let mut tmp = vec![0.0f32; data.len()];
-                    guard.pop_into(&mut tmp, channels);
-                    for (slot, sample) in data.iter_mut().zip(tmp.iter()) {
-                        *slot = T::from_sample(*sample);
+                    // Realtime context: never block, allocate, or panic
+                    // (CONCURRENCY-02/20, ERRORS-06, PERF-07). A contended
+                    // or poisoned queue emits silence for this quantum;
+                    // the song clock stalls with it instead of tearing.
+                    let Ok(mut guard) = worker.try_lock() else {
+                        for slot in data.iter_mut() {
+                            *slot = T::from_sample(0.0);
+                        }
+                        return;
+                    };
+                    for frame in data.chunks_mut(channels.max(1)) {
+                        if guard.buffered_samples() < frame.len() {
+                            for slot in frame.iter_mut() {
+                                *slot = T::from_sample(0.0);
+                            }
+                            continue;
+                        }
+                        for slot in frame.iter_mut() {
+                            *slot = T::from_sample(guard.pop_sample());
+                        }
+                        guard.mark_frame_consumed();
                     }
                 },
                 |err| eprintln!("audio stream error: {err}"),
@@ -255,6 +342,46 @@ impl CpalBackend {
     pub fn channels(&self) -> u16 {
         self.channels
     }
+
+    /// Layer one struck key sound over the pending queue at the current
+    /// song position (the playhead). Same conversion as [`SongMixer`]
+    /// voices, so live strikes match baked mixes; silent gains
+    /// (`<= 0.0`) are a no-op and the consumed-frame clock is untouched.
+    ///
+    /// # Errors
+    ///
+    /// `AudioError::Backend` when the queue lock is poisoned.
+    pub fn play_key(&mut self, pcm: &PcmSamples, gain: f32) -> Result<(), AudioError> {
+        if gain <= 0.0 {
+            return Ok(());
+        }
+        let voice: Vec<f32> = voice_frames(pcm, usize::from(self.channels.max(1)), self.rate)
+            .iter()
+            .map(|sample| sample * gain)
+            .collect();
+        let mut guard = self
+            .queue
+            .lock()
+            .map_err(|_| AudioError::Backend("audio queue poisoned".into()))?;
+        guard.mix_at_playhead(&voice);
+        Ok(())
+    }
+
+    /// Queued-but-unplayed device frames behind the playhead.
+    #[must_use]
+    pub fn pending_frames(&self) -> u64 {
+        let channels = u64::from(self.channels.max(1));
+        self.queue
+            .lock()
+            .map_or(0, |q| q.pending_samples() / channels)
+    }
+
+    /// Snapshot a [`LatencyProbe`] for this backend: pending queue depth
+    /// at the device rate plus the caller's device base latency.
+    #[must_use]
+    pub fn latency_probe(&self, device_latency_frames: u64) -> LatencyProbe {
+        LatencyProbe::new(self.rate, self.pending_frames(), device_latency_frames)
+    }
 }
 
 impl AudioBackend for CpalBackend {
@@ -263,12 +390,20 @@ impl AudioBackend for CpalBackend {
             .queue
             .lock()
             .map_err(|_| AudioError::Backend("audio queue poisoned".into()))?;
-        guard.push_pcm(pcm, self.channels as usize, self.rate);
+        guard.push_pcm(pcm, usize::from(self.channels.max(1)), self.rate);
         Ok(())
+    }
+
+    fn play_key(&mut self, pcm: &PcmSamples, gain: f32) -> Result<(), AudioError> {
+        CpalBackend::play_key(self, pcm, gain)
     }
 
     fn samples_played(&self) -> u64 {
         self.queue.lock().map_or(0, |q| q.consumed_frames)
+    }
+
+    fn pending_frames(&self) -> u64 {
+        CpalBackend::pending_frames(self)
     }
 }
 
@@ -546,14 +681,32 @@ mod tests {
         assert!(doubled.iter().all(|&s| (s - 1.0).abs() < 1e-6));
     }
 
+    /// Drain whole frames the way the realtime callback does: full
+    /// frames pop and advance the song clock, short tails stay silent
+    /// without moving it.
+    fn drain_frames(queue: &mut PcmQueue, channels: usize, out: &mut [f32]) -> usize {
+        let mut frames = 0;
+        for frame in out.chunks_mut(channels.max(1)) {
+            if queue.buffered_samples() < frame.len() {
+                break;
+            }
+            for sample in frame.iter_mut() {
+                *sample = queue.pop_sample();
+            }
+            queue.mark_frame_consumed();
+            frames += 1;
+        }
+        frames
+    }
+
     #[test]
     fn queue_counts_consumed_device_frames() {
         let mut queue = PcmQueue::default();
         queue.push_pcm(&stereo_pcm(&[1000, -1000, 2000, -2000]), 2, 44100);
         let mut out = [0.0f32; 4];
-        assert_eq!(queue.pop_into(&mut out, 2), 2);
+        assert_eq!(drain_frames(&mut queue, 2, &mut out), 2);
         assert_eq!(queue.consumed_frames, 2);
-        assert_eq!(queue.pop_into(&mut out, 2), 0);
+        assert_eq!(drain_frames(&mut queue, 2, &mut out), 0);
         assert_eq!(queue.consumed_frames, 2);
     }
 
@@ -567,8 +720,64 @@ mod tests {
         };
         queue.push_pcm(&mono, 2, 44100);
         let mut out = [0.0f32; 2];
-        assert_eq!(queue.pop_into(&mut out, 2), 1);
+        assert_eq!(drain_frames(&mut queue, 2, &mut out), 1);
         assert_eq!(out, [0.5, 0.5]);
+    }
+
+    #[test]
+    fn key_voice_mixes_over_pending_audio_at_playhead() {
+        let mut queue = PcmQueue::default();
+        queue.push_pcm(&stereo_pcm(&[10000, -10000, 20000, -20000]), 2, 44100);
+        let voice = voice_frames(&stereo_pcm(&[10000, 10000]), 2, 44100);
+        queue.mix_at_playhead(&voice);
+        let mut out = [0.0f32; 4];
+        assert_eq!(drain_frames(&mut queue, 2, &mut out), 2);
+        assert!((out[0] - 20000.0 / 32768.0).abs() < 1e-6);
+        assert_eq!(queue.consumed_frames, 2);
+    }
+
+    #[test]
+    fn key_voice_rings_past_tail_without_moving_clock() {
+        let mut queue = PcmQueue::default();
+        let voice = voice_frames(&mono_pcm(&[16384]), 1, 44100);
+        queue.mix_at_playhead(&voice);
+        assert_eq!(queue.consumed_frames, 0);
+        let mut out = [0.0f32; 1];
+        assert_eq!(drain_frames(&mut queue, 1, &mut out), 1);
+        assert!((out[0] - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn null_backend_key_hit_counts_frames_like_struck_note() {
+        let mut backend = NullBackend::new();
+        let pcm = PcmSamples {
+            samples: vec![0i16; 100],
+            sample_rate: 44100,
+            channels: 2,
+        };
+        backend.play_key(&pcm, 1.0).unwrap();
+        assert_eq!(backend.samples_played(), 50);
+        assert_eq!(backend.pending_frames(), 0);
+    }
+
+    #[test]
+    fn null_backend_silent_key_gain_leaves_clock_untouched() {
+        let mut backend = NullBackend::new();
+        let pcm = PcmSamples {
+            samples: vec![1000i16; 100],
+            sample_rate: 44100,
+            channels: 2,
+        };
+        backend.play_key(&pcm, 0.0).unwrap();
+        assert_eq!(backend.samples_played(), 0);
+    }
+
+    #[test]
+    fn mixer_voice_conversion_matches_live_queue_depth() {
+        let pcm = stereo_pcm(&[16384, -16384, 16384, -16384]);
+        let mut queue = PcmQueue::default();
+        queue.push_pcm(&pcm, 2, 44100);
+        assert_eq!(queue.pending_samples(), 4);
     }
 
     fn mono_pcm(values: &[i16]) -> PcmSamples {
