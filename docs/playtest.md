@@ -160,3 +160,27 @@ with env vars and passed.
 - **Verdict: no regression — suite is green on clean HEAD (621 passed;
   +17 vs the 604 baseline from new file/net tests, 0 failures).
   No commits, no pushes.**
+
+## Regression sweep — 2026-11-06 13:21 UTC (HEAD `cd9e999`, tree clean)
+
+Covers the equip (`4bcb4a8`) and winner (`5d87c4b`) HEAD.
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **641 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 0, file 107, game 68, net 181,
+  render 35, shell 168, real_art 7, scenes 22, recomp2jam 34
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, no warnings.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.63 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`21:21:40 +08:00`):
+  `Create room: songflow` → `Get music list: [0/00] 562 music` →
+  `Start game: [000]` → `Submit score: 2210`.
+- **Verdict: no regression — suite is green on clean HEAD (641 passed;
+  +20 vs the 621 baseline from new net/shell equip + winner tests,
+  0 failures). No commits, no pushes.**
