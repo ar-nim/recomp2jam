@@ -64,6 +64,12 @@ enum Command {
         /// (needs --character too).
         #[arg(long, requires = "character")]
         avatar_opa: Option<String>,
+        /// Room number to join after channel login (needs --channel-id).
+        #[arg(long, requires = "channel_id")]
+        join_room: Option<i32>,
+        /// Password for `--join-room`.
+        #[arg(long, default_value = "")]
+        room_password: String,
     },
     /// Stub gameplay entry point (autoplay with null backend for now).
     Play {
@@ -145,6 +151,8 @@ fn main() -> Result<()> {
             channel_id,
             character,
             avatar_opa,
+            join_room,
+            room_password,
         } => {
             let options = connect::ConnectOptions {
                 host,
@@ -157,6 +165,8 @@ fn main() -> Result<()> {
                 channel: gateway_id.zip(channel_id),
                 character,
                 avatar_opa,
+                join_room,
+                room_password,
             };
             let report = connect::connect_and_login(&options)?;
             println!("authorize: {}", connect::name_result(report.auth_code));
@@ -207,6 +217,17 @@ fn main() -> Result<()> {
                     connect::name_result(login.result_code)
                 );
             }
+            if let Some(join) = &report.join {
+                match &join.room {
+                    Some(room) => println!(
+                        "room: {} seats, {} in ({})",
+                        room.slots.len(),
+                        room.user_count,
+                        room.title
+                    ),
+                    None => println!("room: joined without snapshot"),
+                }
+            }
         }
         Command::Play {
             chart,
@@ -240,6 +261,8 @@ fn main() -> Result<()> {
                         channel: online_gateway_id.zip(online_channel_id),
                         character: false,
                         avatar_opa: None,
+                        join_room: None,
+                        room_password: String::new(),
                     };
                     let report = connect::connect_and_login(&options)?;
                     tracing::info!(channels = report.channels.len(), "channels listed");

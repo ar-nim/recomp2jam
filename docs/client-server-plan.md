@@ -98,6 +98,12 @@ All request/response/event layouts live in
 - Room list DONE in `o2jam-net` (`RoomList` 2003 via empty 2002:
   full row decode incl. mode enums; Memoryer.Data fork values rule
   — GameSpeed is ordinal there, not the shuffled Mozart mapping).
+  Join room DONE (`JoinWaiting` 3002 + `JoinRoom` 3003 incl. member
+  slots; null members ride occupied-state only — verified against
+  the controller). Live: our 3002 parses server-side (`Join room:
+  [001]`), but joining a missing room throws server-side
+  (`ArgumentOutOfRangeException`, no reply — server wart, client
+  times out); success path covered by fake-gateway e2e.
   User list (2010/2011), chat (2012/2013/2014), whisper
   (2017/2018/2019), announcements.
 - `CreateRoom` 2004 → 2006; room events 2005/2007/2008/2009/

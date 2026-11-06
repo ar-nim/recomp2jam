@@ -1102,6 +1102,11 @@ mod command_consistency_tests {
             Response::MultiSessionError as u16
         );
         assert_eq!(GetCharacterInfo::COMMAND, Request::GetCharacterInfo as u16);
+        assert_eq!(crate::rooms::JoinRoom::COMMAND, Request::JoinWaiting as u16);
+        assert_eq!(
+            crate::rooms::JoinRoomResponse::COMMAND,
+            Response::JoinRoom as u16
+        );
         assert_eq!(GetChannelInfo::COMMAND, Request::GetChannelInfo as u16);
         assert_eq!(crate::rooms::RoomList::COMMAND, Response::RoomList as u16);
         assert_eq!(CreateRoom::COMMAND, Request::CreateRoom as u16);
