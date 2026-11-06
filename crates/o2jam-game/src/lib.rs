@@ -291,6 +291,62 @@ impl LongTail {
     }
 }
 
+/// Bonus one held long-note tick feeds (VERIFIED 7.55: `+10` to the hold
+/// accumulator at game `+0x3978` on every tick while held — write at file
+/// `0x14163c` via the combo helper, called at file `0x178200`).
+pub const HOLD_TICK_BONUS_POINTS: u64 = 10;
+
+/// Accumulated bonus for held long notes — VERIFIED 7.55.
+///
+/// While a hold stays active (per-lane flag at game `+0x9f8`, raised at
+/// the Cool/Good hold head), the per-frame hold scan `FUN_00578110`
+/// (file `0x178110`, dossier `ev_737dfe7b…`) advances each held lane
+/// cursor by `+6` (file `0x1781f6`) and runs the combo helper
+/// `FUN_00541620` (call at file `0x178200`), which adds
+/// [`HOLD_TICK_BONUS_POINTS`] to the hold accumulator (game `+0x3978`,
+/// sub-object `+0x2158`, write at file `0x14163c`) plus `+1` combo
+/// (write at file `0x141652`; mode byte `6` exempts only the `+10`,
+/// mode TBD so the exemption is not modeled — same as pills).
+/// The accumulator is the lead candidate for the dedicated
+/// `longNoteScore` slot in `SubmitScore` (4016) / `UpdateGameStats`
+/// (4014) — layout in `net-protocol.md`; the submit-side read runs
+/// through a vtable path, so that link is corroborated, not proven.
+///
+/// Gate [`LongNoteBonus::hold_tick`] on hold-active, mirroring the
+/// exe's `+0x9f8` flag check (file `0x178194`): one call per held
+/// tick, nothing on taps or after release.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LongNoteBonus {
+    points: u64,
+    ticks: u64,
+}
+
+impl LongNoteBonus {
+    /// Empty bonus: no held ticks yet.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Bonus points accumulated (`ticks * 10`).
+    #[must_use]
+    pub fn points(&self) -> u64 {
+        self.points
+    }
+
+    /// Held ticks counted.
+    #[must_use]
+    pub fn ticks(&self) -> u64 {
+        self.ticks
+    }
+
+    /// Record one tick of an active hold: `+10` bonus points.
+    pub fn hold_tick(&mut self) {
+        self.ticks = self.ticks.saturating_add(1);
+        self.points = self.points.saturating_add(HOLD_TICK_BONUS_POINTS);
+    }
+}
+
 /// Most combo-saving pills a player can hold (verified in-exe:
 /// the grant path checks `< 5` and the spend path checks `> 0`).
 pub const MAX_PILLS: u32 = 5;
@@ -1005,6 +1061,31 @@ mod tests {
         let tail = LongTail::new(1000, 2000).expect("hold");
         assert!(!tail.is_expired(2000 + windows.bad, &windows));
         assert!(tail.is_expired(2000 + windows.bad + 1, &windows));
+    }
+
+    #[test]
+    fn fresh_hold_bonus_holds_nothing() {
+        let bonus = LongNoteBonus::new();
+        assert_eq!(bonus.ticks(), 0);
+        assert_eq!(bonus.points(), 0);
+    }
+
+    #[test]
+    fn hold_tick_grants_ten_bonus_points() {
+        let mut bonus = LongNoteBonus::new();
+        bonus.hold_tick();
+        assert_eq!(bonus.ticks(), 1);
+        assert_eq!(bonus.points(), HOLD_TICK_BONUS_POINTS);
+    }
+
+    #[test]
+    fn hold_bonus_accumulates_while_held() {
+        let mut bonus = LongNoteBonus::new();
+        for _ in 0..5 {
+            bonus.hold_tick();
+        }
+        assert_eq!(bonus.ticks(), 5);
+        assert_eq!(bonus.points(), 5 * HOLD_TICK_BONUS_POINTS);
     }
 
     #[test]
