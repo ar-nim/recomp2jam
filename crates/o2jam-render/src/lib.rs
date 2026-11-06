@@ -63,8 +63,8 @@ pub struct Sprite<'a> {
 fn clip(rect: &Rect, w: usize, h: usize) -> Option<(usize, usize, usize, usize)> {
     let x0 = rect.x.max(0) as usize;
     let y0 = rect.y.max(0) as usize;
-    let x1 = (rect.x as i64 + rect.w as i64).min(w as i64).max(0) as usize;
-    let y1 = (rect.y as i64 + rect.h as i64).min(h as i64).max(0) as usize;
+    let x1 = (i64::from(rect.x) + i64::from(rect.w)).min(w as i64).max(0) as usize;
+    let y1 = (i64::from(rect.y) + i64::from(rect.h)).min(h as i64).max(0) as usize;
     (x0 < x1 && y0 < y1).then_some((x0, y0, x1, y1))
 }
 
@@ -347,7 +347,7 @@ pub const fn glyph_for(ch: u8) -> Option<[u8; GLYPH_H]> {
 }
 
 /// Blit glyph rows at `(x, y)`; clips to the frame.
-fn draw_rows(frame: &mut Frame<'_>, x: i32, y: i32, rows: &[u8; GLYPH_H], color: u32) {
+fn draw_rows(frame: &mut Frame<'_>, x: i32, y: i32, rows: [u8; GLYPH_H], color: u32) {
     if frame.buf.len() < frame.w * frame.h {
         return;
     }
@@ -371,14 +371,14 @@ pub fn draw_digit(frame: &mut Frame<'_>, x: i32, y: i32, digit: u8, color: u32) 
     let Some(rows) = digit_glyph(digit) else {
         return;
     };
-    draw_rows(frame, x, y, &rows, color);
+    draw_rows(frame, x, y, rows, color);
 }
 
 /// Draw one ASCII character (`glyph_for` coverage) at `(x, y)`;
 /// undrawable bytes leave a blank advance so layout stays stable.
 pub fn draw_char(frame: &mut Frame<'_>, x: i32, y: i32, ch: u8, color: u32) {
     if let Some(rows) = glyph_for(ch) {
-        draw_rows(frame, x, y, &rows, color);
+        draw_rows(frame, x, y, rows, color);
     }
 }
 

@@ -44,6 +44,9 @@ pub enum Error {
 
 impl Error {
     /// Wrap a socket fault without leaking `io::Error` (not `Eq`).
+    // Takes ownership instead of a reference so `map_err` call sites
+    // stay point-free; nothing is cloned.
+    #[allow(clippy::needless_pass_by_value, reason = "consumed for formatting")]
     #[must_use]
     pub fn transport(source: io::Error) -> Self {
         Self::Transport(source.to_string())

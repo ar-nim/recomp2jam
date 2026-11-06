@@ -263,7 +263,7 @@ pub fn paint_screen(frame: &mut Frame<'_>, screen: Screen) {
         }
         Screen::Loading => paint_loading(frame),
         Screen::Playing => {
-            PlayingView::default().paint(frame, &HighwayGeometry::centered(frame.w, frame.h))
+            PlayingView::default().paint(frame, &HighwayGeometry::centered(frame.w, frame.h));
         }
         Screen::Result => paint_result(frame, None, &o2jam_game::Score::default()),
     }
@@ -298,7 +298,7 @@ impl ScreenGame {
     pub fn new() -> Self {
         Self {
             flow: ScreenFlow::new(),
-            playing: LivePlay::new(Vec::new()),
+            playing: LivePlay::new(&[]),
             started_at: None,
             audio: None,
             avatar: None,
@@ -336,7 +336,7 @@ impl ScreenGame {
 
     /// Load a chart's onsets (with key-sound ids) into the highway.
     pub fn load_chart(&mut self, onsets: Vec<(u8, u64, u32)>) {
-        self.playing = LivePlay::new(onsets);
+        self.playing = LivePlay::new(&onsets);
     }
 
     /// Play every queued key sound through the attached backend.
@@ -451,7 +451,6 @@ impl GameLoop for ScreenGame {
             return;
         }
         match (self.flow.current(), key) {
-            (Screen::Channel, super::MenuKey::Confirm) => self.enter(Screen::Room),
             (Screen::Channel, super::MenuKey::Up) => {
                 self.highlight = self.highlight.saturating_sub(1);
             }
@@ -459,8 +458,6 @@ impl GameLoop for ScreenGame {
                 let last = self.channels.len().saturating_sub(1);
                 self.highlight = (self.highlight + 1).min(last);
             }
-            (Screen::Room, super::MenuKey::Confirm) => self.enter(Screen::Waiting),
-            (Screen::Room, super::MenuKey::Back) => self.enter(Screen::Channel),
             (Screen::Room, super::MenuKey::Up) => {
                 self.room_highlight = self.room_highlight.saturating_sub(1);
             }
@@ -468,12 +465,15 @@ impl GameLoop for ScreenGame {
                 let last = self.rooms.len().saturating_sub(1);
                 self.room_highlight = (self.room_highlight + 1).min(last);
             }
-            (Screen::Waiting, super::MenuKey::Confirm) => self.enter(Screen::Loading),
-            (Screen::Waiting, super::MenuKey::Back) => self.enter(Screen::Room),
             (Screen::Loading, super::MenuKey::Confirm) => self.enter(Screen::Playing),
-            (Screen::Loading, super::MenuKey::Back) => self.enter(Screen::Waiting),
-            (Screen::Result, super::MenuKey::Confirm) => self.enter(Screen::Waiting),
-            (Screen::Result, super::MenuKey::Back) => self.enter(Screen::Room),
+            (Screen::Room, super::MenuKey::Back) => self.enter(Screen::Channel),
+            (Screen::Channel, super::MenuKey::Confirm)
+            | (Screen::Waiting, super::MenuKey::Back)
+            | (Screen::Result, super::MenuKey::Back) => self.enter(Screen::Room),
+            (Screen::Room, super::MenuKey::Confirm)
+            | (Screen::Loading, super::MenuKey::Back)
+            | (Screen::Result, super::MenuKey::Confirm) => self.enter(Screen::Waiting),
+            (Screen::Waiting, super::MenuKey::Confirm) => self.enter(Screen::Loading),
             _ => {}
         }
     }

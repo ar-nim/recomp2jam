@@ -638,6 +638,9 @@ impl RoomSlotState {
 }
 
 /// One seated member (`RoomMemberInfo` submessage).
+// Four flags mirror the wire layout one-to-one; grouping them would
+// obscure the field order.
+#[allow(clippy::struct_excessive_bools, reason = "wire-mandated flag fields")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoomMember {
     /// Display name.

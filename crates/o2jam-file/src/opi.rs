@@ -76,6 +76,7 @@ pub struct OpiSlot {
 
 impl OpiSlot {
     /// True for nameless deleted-entry reservations.
+    #[must_use]
     pub fn is_free(&self) -> bool {
         self.name.is_empty()
     }
@@ -156,6 +157,7 @@ pub fn parse_opi_slots(bytes: &[u8]) -> Result<Vec<OpiSlot>, FileError> {
 /// Verified on real 7.55 files: all 47 `ATI*`/`ati*` album-art `.ojs`
 /// bodies in `Interface1.opi` match, and no body in the other two
 /// archives starts with `FF D8`.
+#[must_use]
 pub fn is_jpeg_body(bytes: &[u8]) -> bool {
     bytes.len() >= 4 && bytes.starts_with(&[0xFF, 0xD8]) && bytes.ends_with(&[0xFF, 0xD9])
 }

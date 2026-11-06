@@ -3,6 +3,7 @@
 //! [`NullBackend`] (silent, deterministic), [`decode_vorbis`] via
 //! `lewton`, and [`CpalBackend`] for live output.
 
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use thiserror::Error;
 
 /// Audio errors.
@@ -128,7 +129,11 @@ struct PcmQueue {
 impl PcmQueue {
     fn push_pcm(&mut self, pcm: &PcmSamples, out_channels: usize, out_rate: u32) {
         let in_channels = pcm.channels.max(1) as usize;
-        let mut frames: Vec<f32> = pcm.samples.iter().map(|s| *s as f32 / 32768.0).collect();
+        let mut frames: Vec<f32> = pcm
+            .samples
+            .iter()
+            .map(|s| f32::from(*s) / 32768.0)
+            .collect();
         frames = resample_linear(&frames, in_channels, pcm.sample_rate, out_rate);
         let in_frames = frames.len() / in_channels.max(1);
         for i in 0..in_frames {
@@ -173,7 +178,6 @@ pub struct CpalBackend {
 impl CpalBackend {
     /// Open the default output device. Fails cleanly headless.
     pub fn try_new() -> Result<Self, AudioError> {
-        use cpal::traits::{DeviceTrait, HostTrait};
         let host = cpal::default_host();
         let device = host
             .default_output_device()
@@ -204,7 +208,6 @@ impl CpalBackend {
     where
         T: cpal::Sample + cpal::SizedSample + cpal::FromSample<f32> + Send + 'static,
     {
-        use cpal::traits::DeviceTrait;
         let queue = std::sync::Arc::new(std::sync::Mutex::new(PcmQueue::default()));
         let worker = std::sync::Arc::clone(&queue);
         let channels = config.channels as usize;
@@ -223,7 +226,6 @@ impl CpalBackend {
                 None,
             )
             .map_err(|e| AudioError::Backend(e.to_string()))?;
-        use cpal::traits::StreamTrait;
         stream
             .play()
             .map_err(|e| AudioError::Backend(e.to_string()))?;
@@ -254,7 +256,7 @@ impl AudioBackend for CpalBackend {
     }
 
     fn samples_played(&self) -> u64 {
-        self.queue.lock().map(|q| q.consumed_frames).unwrap_or(0)
+        self.queue.lock().map_or(0, |q| q.consumed_frames)
     }
 }
 
@@ -293,14 +295,14 @@ mod tests {
     }
 
     /// Local-only parity gate: decodes the real `bgRoom.ogg` from a
-    /// 7.55 install. Ignored in CI (needs git-ignored game data).
+    /// 7.55 install. Needs git-ignored game data, so it never runs in CI.
     /// Verified 2026-11-05: stereo 44100 Hz, 4746240 samples, 53.8 s.
     #[test]
-    #[ignore]
+    #[ignore = "needs a local 7.55 install"]
     fn decodes_real_bgm_sample() {
         let bytes =
             std::fs::read("../../install-root/O2Jam/Music/BGM.ojm").expect("7.55 install required");
-        let blob = &bytes[128..128 + 2381130];
+        let blob = &bytes[128..128 + 2_381_130];
         let pcm = decode_vorbis(blob).expect("bgRoom decodes");
         assert_eq!(pcm.channels, 2);
         assert_eq!(pcm.sample_rate, 44100);
