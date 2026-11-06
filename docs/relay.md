@@ -318,7 +318,7 @@ disassembly is reproduced.
   the only hardcoded relay ports are 39311/39312 (UDP-context
   selector); TCP peer-leg ports arrive via the server
   (`GetLiveState` 4042/4043, `GetP2PList` 4044/4045, Memoryer
-  shape; exe handler coverage still open). Gateway TCP `15010`
+  shape; exe handler coverage closed in §10). Gateway TCP `15010`
   stays the only hardcoded TCP port (file `0x2513d8`, ref file
   `0x1ab72a`).
 - `CUDPFailTCPConnect` trigger site (RTTI name only, file
@@ -392,3 +392,60 @@ stored-encoder round-trip, length-prefix and checksum
 rejections. `stored_block_tests` (`inflate.rs`): Adler-32
 reference, stored round-trips incl. empty, complement/checksum/
 truncation rejections.
+`live_state_tests`: exact empty frames `04 00 CA 0F` (4042) and
+`04 00 CC 0F` (4044), empty round-trips, payload and foreign-id
+rejections; 4045 exact 36-byte two-peer vector (`i32` count + `i32`
+member + 6-byte endpoints, Python `struct` cross-checked), empty and
+negative counts (negative yields zero peers, matching the signed loop
+exit), truncation/trailing/foreign-id rejections, per-field offset
+vectors; 4043 exact 17-byte all-inactive vector plus the 125-byte
+active-member vector (Python `struct` cross-checked), active-gate
+(non-1 bytes mean inactive), member-id bound, negative music-count,
+trailing/foreign-id rejections, header offset vectors.
+
+## 10. Live-state gateway handlers: 4042–4045 (7.55 static map)
+
+Game-gateway (not relay-TCP) messages that deliver the TCP peer-leg
+ports: the client sends empty `GetLiveState` 4042 / `GetP2PList` 4044
+and the server answers `LiveStateResponse` 4043 / `P2PListResponse`
+4045. Decoders live in `o2jam-net` (`relay.rs`, beside the
+4046/4047/4055/4056 handshake types). Static analysis only over the
+local install-root copy (read-only, VA = file + `0x400000`); behavior
+described in own words with file offsets plus local-static record ids
+(truncated sha256 of the record tag). Tools: `python3` byte scans plus
+Capstone disassembly; no disassembly is reproduced. Memoryer v7.2.0
+(`memoryer-local` binaries) corroborates the enum ids and the
+`LiveStateResponse` / `P2PListResponse` field orders (incl. the
+`Int32`-coded peer member and the `Int32`-prefixed peer list); it has no
+request classes for 4042/4044, consistent with the empty sends below.
+
+| Packet | Body shape (bytes after the frame header) | Exe anchor |
+|---|---|---|
+| `GetLiveState` 4042 C→S | empty (`04 00 CA 0F`) | sole `0x0FCA` push-immediate at file `0xc365c` (`push 0` + `push 0x0FCA`, session send vtable `+0x5c`), gated on the global byte at `0x7789e6` equal to 1; no field staging (`ev_f133f3bf30eb77f74ddc57f2c81d8783`, observed) |
+| `GetP2PList` 4044 C→S | empty (`04 00 CC 0F`) | sole `0x0FCC` push-immediate at file `0xead18` (session send vtable `+0x84`), gated on the Live-mode byte at `0x77cd33` equal to 1 plus a session once-flag at `+0x89c` (set to 1 right after the send) (`ev_70b81e37e5e8d6f15ec316c1b93b3947`, observed) |
+| `LiveStateResponse` 4043 S→C | `u8` member id (< 8) + `i32` users + `i32` streak + 8 fixed slots, each `u8` active + `MemberInfo` tail iff active (`== 1`) | dispatcher slot 19 → case file `0x1587a9` → handler entry file `0x159b50`: header reads 1/4/4 through the shared reader (files `0x159b5d`/`0x159b6b`/`0x159b79`), member `>= 8` takes the error path at file `0x159fc2` (returns without forwarding), 8-slot loop bound at file `0x159cf9`, per-slot active read + `!= 1` skip at files `0x159d0a`/`0x159d24`, completion forwards `(0, 0, 0x0FCB, 0x12)` to the UI queue at file `0x159fb0` (same shape as the 4056 forwarder; `ev_55248e1f2c72c6ef9d26603f94925bf2`, observed) (`ev_83bc05cdd0c1b7b5fb9313f9a1f485e6`, `ev_5396edb7c26f6ac2aa78c743fff3905f`, observed) |
+| `P2PListResponse` 4045 S→C | `i32` count + N × (`i32` member + 6-byte public + 6-byte local; 4-byte IP + `u16` port) | dispatcher slot 20 → case file `0x1587ba` → handler entry file `0x163d70` → relay-side parser at file `0x18cf50`: count read-4 (file `0x18cf94`), signed loop bound (file `0x18cfb7`), per-peer read-4/6/6 (files `0x18cfc5`/`0x18cfd3`/`0x18cfe1`), endpoint dword-plus-word staging (files `0x18cfeb`/`0x18cff0`, `0x18cffd`/`0x18d002`) into the per-peer record call at file `0x18d00a` (`ev_0a144946a7ac801729031065ad78008d`, observed) |
+
+Push-immediate scan (`ev_dc7171af6c958b25a6b37cc34a1cb0ad`, observed):
+`0x0FCA` and `0x0FCC` each have exactly one `push`-immediate site (the
+two sends above); `0x0FCB` has exactly one (the 4043 completion
+forwarder); `0x0FCD` has no `push`-immediate or word-compare site
+image-wide, so 4045 is S→C-only. 4042/4044 map to the dispatcher's
+default slot 28 (no S→C handler), consistent with C→S-only use.
+
+`MemberInfo` wire order is the handler's read order through the shared
+1/4/6-byte reader (sub-decoders at files `0x140bd0`–`0x141690`;
+`ev_e781f2560f769dc9425a997e25f263dd`, observed): id, null-terminated
+nickname (reader at file `0x155ea0` measures to the terminator, then
+consumes it), level, gender byte (raw: only a zero/nonzero branch
+observed, file `0x13fe50`), gem, three seat bytes, 17 `i32` equipment
+words (count read plus a `0x11`-bounded 16-read loop), `i32` count plus
+`u16` music ids, two `i32` counters, trailing bytes `playing_state`,
+`live_extra`, `is_administrator`, `is_room_master`, `i32` win streak
+(read inline at file `0x159f61`). The exe reads one slot byte twice in
+a row (files `0x141670`/`0x141690`), so the first copy is discarded
+in-memory; the decoder preserves that wire byte as `live_extra`, which
+has no Memoryer v7.2.0 counterpart (likely 7.55 drift) and whose
+semantics stay OPEN, as do all enum value sets. Negative counts decode
+as empty (the exe's signed exit tests skip the loops: 4045 file
+`0x18cfb7`, music ids with the same shape), matching the client.

@@ -39,6 +39,7 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use super::error::Error;
 use super::inflate::{compress_zlib_stored, decompress_zlib};
 use super::message::WireMessage;
+use super::strings::{decode_null_terminated, encode_null_terminated, MAX_STRING_LEN};
 
 /// Relay opcodes (`Memoryer.Relay` `RelayCommand`, matched in-exe by
 /// the `SetID(1..7)` ctors; see `docs/relay.md`).
@@ -970,6 +971,463 @@ impl WireMessage for ConfirmRelayAnswer {
     }
 }
 
+/// Live-state setup on the game gateway: `GetLiveState` 4042 (C→S),
+/// `LiveStateResponse` 4043 (S→C), `GetP2PList` 4044 (C→S),
+/// `P2PListResponse` 4045 (S→C).
+///
+/// The two requests are empty: each send site pushes only `0` plus the
+/// id ahead of the session send (`GetLiveState` at file `0xc365c`, gated
+/// on the global byte at `0x7789e6` equal to 1, vtable slot `+0x5c`;
+/// `GetP2PList` at file `0xead18`, gated on the Live-mode byte at
+/// `0x77cd33` equal to 1 plus a once-flag at session `+0x89c`, vtable
+/// slot `+0x84`). Each id's `push`-immediate is the sole image-wide site
+/// (`ev_dc7171af6c958b25a6b37cc34a1cb0ad`, observed); `0x0FCD` has no
+/// `push`-immediate or word-compare site at all, so 4045 is S→C-only.
+///
+/// The responses arrive through the S→C dispatcher (id minus base `0xFA3`):
+/// 4043 takes slot 19 (case file `0x1587a9`, handler entry file `0x159b50`),
+/// 4045 takes slot 20 (case file `0x1587ba`, handler entry file `0x163d70`,
+/// which forwards the packet into the relay-side parser at file `0x18cf50`).
+/// The sibling C→S ids 4042/4044 map to the default slot 28 (no S→C
+/// handler), as do the other C→S-only live ids. Layouts below mirror
+/// Memoryer's `LiveStateResponse` / `P2PListResponse` field orders (clean-room
+/// C#, v7.2.0); every width, bound, and read order is exe-pinned (see
+/// `docs/relay.md` §10), except the enum semantics, which stay OPEN.
+/// (ERRORS-06: no `unwrap`; PERF-07: `try_from` for narrowing conversions.)
+///
+/// `GetLiveState` 4042 (C→S): ask the server for the room's live snapshot.
+///
+/// Byte-verified empty: the send at file `0xc365c` (`push 0` +
+/// `push 0x0FCA` into the session send through vtable offset `+0x5c`)
+/// is the sole `0x0FCA` `push`-immediate image-wide, fires only when the
+/// global byte at `0x7789e6` equals 1, and stages no fields.
+/// (`ev_f133f3bf30eb77f74ddc57f2c81d8783`, observed).
+/// See `docs/relay.md` §10.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GetLiveState;
+
+impl WireMessage for GetLiveState {
+    /// Game-gateway command id (Memoryer `RequestCommand`, `0x0FCA`).
+    const COMMAND: u16 = 4042;
+
+    fn encode_body(&self) -> Vec<u8> {
+        Vec::new()
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.is_empty() {
+            Ok(Self)
+        } else {
+            Err(Error::TrailingBytes(body.len()))
+        }
+    }
+}
+
+/// `GetP2PList` 4044 (C→S): ask the server for the room's peer endpoints.
+///
+/// Byte-verified empty: the send at file `0xead18` (`push 0` +
+/// `push 0x0FCC` into the session send through vtable offset `+0x84`)
+/// is the sole `0x0FCC` `push`-immediate image-wide, fires only when the
+/// Live-mode byte at `0x77cd33` equals 1 and the session once-flag at
+/// `+0x89c` is still 0 (then sets it to 1), and stages no fields — the
+/// same empty shape as the 4042 send (`ev_70b81e37e5e8d6f15ec316c1b93b3947`,
+/// observed). See `docs/relay.md` §10.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GetP2PList;
+
+impl WireMessage for GetP2PList {
+    /// Game-gateway command id (Memoryer `RequestCommand`, `0x0FCC`).
+    const COMMAND: u16 = 4044;
+
+    fn encode_body(&self) -> Vec<u8> {
+        Vec::new()
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.is_empty() {
+            Ok(Self)
+        } else {
+            Err(Error::TrailingBytes(body.len()))
+        }
+    }
+}
+
+/// Fixed member-slot count of [`LiveStateResponse`]: the handler loops
+/// slot indices `0..8` (bound at file `0x159cf9`).
+const LIVE_STATE_SLOTS: usize = 8;
+/// Fixed equipment words per active [`MemberInfo`]: one `i32` plus a
+/// 16-read loop (`0x11` bound at file `0x140eb1`).
+const LIVE_EQUIPMENT_WORDS: usize = 17;
+/// Serialized size of one [`PeerInfo`]: `i32` member + two 6-byte endpoints.
+const PEER_ENTRY_LEN: usize = 16;
+
+/// Split one byte off the front of `body`.
+fn take_byte(body: &mut &[u8]) -> Result<u8, Error> {
+    let (&first, rest) = body
+        .split_first()
+        .ok_or(Error::TruncatedMessage { need: 1, have: 0 })?;
+    *body = rest;
+    Ok(first)
+}
+
+/// Split one little-endian `u16` off the front of `body`.
+fn take_le_u16(body: &mut &[u8]) -> Result<u16, Error> {
+    if body.len() < 2 {
+        return Err(Error::TruncatedMessage {
+            need: 2,
+            have: body.len(),
+        });
+    }
+    let (word, rest) = body.split_at(2);
+    *body = rest;
+    Ok(u16::from_le_bytes([word[0], word[1]]))
+}
+
+/// Split one little-endian `i32` off the front of `body`.
+fn take_le_i32(body: &mut &[u8]) -> Result<i32, Error> {
+    if body.len() < 4 {
+        return Err(Error::TruncatedMessage {
+            need: 4,
+            have: body.len(),
+        });
+    }
+    let (word, rest) = body.split_at(4);
+    *body = rest;
+    Ok(i32::from_le_bytes([word[0], word[1], word[2], word[3]]))
+}
+
+/// Split one `0`/`1` byte off the front of `body` as bool.
+fn take_flag(body: &mut &[u8], field: &'static str) -> Result<bool, Error> {
+    match take_byte(body)? {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(Error::InvalidField {
+            field,
+            reason: "not 0 or 1",
+        }),
+    }
+}
+
+/// Clamp a wire count to a length: negative bounds skip the exe's copy
+/// loops (signed exit test), so they decode as empty on the client.
+fn nonnegative_count(raw: i32) -> usize {
+    usize::try_from(raw.max(0)).unwrap_or(0)
+}
+
+/// One member slot of [`LiveStateResponse`]: the per-slot `active` byte
+/// gates the [`MemberInfo`] tail (only `1` continues; any other byte takes
+/// the skip path, file `0x159d24`).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MemberLiveState {
+    /// True when the slot carries a [`MemberInfo`] tail.
+    pub active: bool,
+    /// Member detail; `Some` exactly when `active`.
+    pub info: Option<MemberInfo>,
+}
+
+/// One room member's live detail (S→C 4043 tail, per active slot).
+///
+/// Wire order is the handler's read order (shared fixed-size reader at
+/// file `0x155d20`, sizes below; `ev_e781f2560f769dc9425a997e25f263dd`,
+/// observed): `u8` id, null-terminated nickname, `i32` level, `u8` gender
+/// (stored raw; the handler only branches zero/nonzero, file `0x13fe50`),
+/// `i32` gem, three `u8` seat bytes, 17 `i32` equipment words, `i32` count
+/// plus `u16` music ids, two `i32` counters, four trailing `u8` bytes,
+/// `i32` win streak. The trailing run holds
+/// (`playing_state`, `live_extra`, `is_administrator`, `is_room_master`):
+/// the exe reads slot `+0x2131` twice in a row (files `0x141670`/`0x141690`),
+/// so the first copy is discarded in memory — `live_extra` preserves that
+/// wire byte, which has no Memoryer v7.2.0 counterpart (likely 7.55 drift).
+/// Enum semantics (gender/team/music/playing/free-pass values) stay OPEN.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemberInfo {
+    /// Slot member id (`u8`).
+    pub member_id: u8,
+    /// Nickname, null-terminated UTF-8 (reader at file `0x155ea0`
+    /// measures to the terminator, then consumes it).
+    pub nickname: String,
+    /// Level (`i32`).
+    pub level: i32,
+    /// Gender byte, raw (no range gate in-exe).
+    pub gender: u8,
+    /// Gem count (`i32`).
+    pub gem: i32,
+    /// Team byte, raw.
+    pub team: u8,
+    /// Ready flag.
+    pub ready: bool,
+    /// Music-state byte, raw.
+    pub music_state: u8,
+    /// Equipment words (17 `i32`, `0x11`-bounded loop).
+    pub equipments: [i32; LIVE_EQUIPMENT_WORDS],
+    /// Owned music ids (`i32` count plus `u16` entries).
+    pub music_ids: Vec<u16>,
+    /// Cash points (`i32`).
+    pub cash_point: i32,
+    /// Free-pass counter (`i32`).
+    pub free_pass: i32,
+    /// Playing-state byte, raw.
+    pub playing_state: u8,
+    /// Extra wire byte of the trailing run (see above; semantics OPEN).
+    pub live_extra: u8,
+    /// Administrator flag.
+    pub is_administrator: bool,
+    /// Room-master flag.
+    pub is_room_master: bool,
+    /// Win streak (`i32`, read inline at file `0x159f61`).
+    pub win_streak: i32,
+}
+
+impl MemberInfo {
+    /// Parse from the front of `body`, advancing the cursor past the tail.
+    fn decode_prefix(body: &mut &[u8]) -> Result<Self, Error> {
+        let member_id = take_byte(body)?;
+        let (nickname, used) = decode_null_terminated(body, MAX_STRING_LEN)?;
+        *body = &body[used..];
+        let level = take_le_i32(body)?;
+        let gender = take_byte(body)?;
+        let gem = take_le_i32(body)?;
+        let team = take_byte(body)?;
+        let ready = take_flag(body, "member ready flag")?;
+        let music_state = take_byte(body)?;
+        let mut equipments = [0i32; LIVE_EQUIPMENT_WORDS];
+        for slot in equipments.iter_mut() {
+            *slot = take_le_i32(body)?;
+        }
+        let music_raw = take_le_i32(body)?;
+        let music_count = nonnegative_count(music_raw);
+        let music_need = music_count.checked_mul(2).ok_or(Error::InvalidField {
+            field: "member music ids",
+            reason: "count too large",
+        })?;
+        if body.len() < music_need {
+            return Err(Error::TruncatedMessage {
+                need: music_need,
+                have: body.len(),
+            });
+        }
+        let mut music_ids = Vec::with_capacity(music_count);
+        for _ in 0..music_count {
+            music_ids.push(take_le_u16(body)?);
+        }
+        let cash_point = take_le_i32(body)?;
+        let free_pass = take_le_i32(body)?;
+        let playing_state = take_byte(body)?;
+        let live_extra = take_byte(body)?;
+        let is_administrator = take_flag(body, "member administrator flag")?;
+        let is_room_master = take_flag(body, "member room-master flag")?;
+        let win_streak = take_le_i32(body)?;
+        Ok(Self {
+            member_id,
+            nickname,
+            level,
+            gender,
+            gem,
+            team,
+            ready,
+            music_state,
+            equipments,
+            music_ids,
+            cash_point,
+            free_pass,
+            playing_state,
+            live_extra,
+            is_administrator,
+            is_room_master,
+            win_streak,
+        })
+    }
+
+    /// Append the full tail for sending (tests and future use).
+    fn encode_inner(&self, body: &mut Vec<u8>) {
+        body.push(self.member_id);
+        body.extend_from_slice(&encode_null_terminated(&self.nickname, MAX_STRING_LEN));
+        body.extend_from_slice(&self.level.to_le_bytes());
+        body.push(self.gender);
+        body.extend_from_slice(&self.gem.to_le_bytes());
+        body.push(self.team);
+        body.push(u8::from(self.ready));
+        body.push(self.music_state);
+        for word in self.equipments {
+            body.extend_from_slice(&word.to_le_bytes());
+        }
+        let music_count = i32::try_from(self.music_ids.len()).unwrap_or(i32::MAX);
+        body.extend_from_slice(&music_count.to_le_bytes());
+        for id in &self.music_ids {
+            body.extend_from_slice(&id.to_le_bytes());
+        }
+        body.extend_from_slice(&self.cash_point.to_le_bytes());
+        body.extend_from_slice(&self.free_pass.to_le_bytes());
+        body.push(self.playing_state);
+        body.push(self.live_extra);
+        body.push(u8::from(self.is_administrator));
+        body.push(u8::from(self.is_room_master));
+        body.extend_from_slice(&self.win_streak.to_le_bytes());
+    }
+}
+
+/// `LiveStateResponse` 4043 (S→C): room live snapshot — header plus eight
+/// fixed member slots, each starting with the `active` byte.
+///
+/// Byte-verified structure: the handler at file `0x159b50` reads `u8`
+/// member id, `i32` user count, `i32` win streak through the shared reader
+/// (files `0x159b5d`/`0x159b6b`/`0x159b79`), rejects member ids `>= 8`
+/// (check at file `0x159b87`, error path at file `0x159fc2` returns without
+/// forwarding), then loops the eight slots (bound at file `0x159cf9`):
+/// each slot's `u8` active byte (read at file `0x159d0a`) gates some
+/// fifteen field reads, and completion forwards `(0, 0, 0x0FCB, 0x12)` to
+/// the UI queue (file `0x159fb0`; `ev_55248e1f2c72c6ef9d26603f94925bf2`,
+/// observed — same shape as the 4056 forwarder).
+/// (`ev_83bc05cdd0c1b7b5fb9313f9a1f485e6`,
+/// `ev_5396edb7c26f6ac2aa78c743fff3905f`, observed.)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveStateResponse {
+    /// Requesting member id (`u8`, must be below 8).
+    pub member_id: u8,
+    /// Room user count (`i32`).
+    pub user_count: i32,
+    /// Room win streak (`i32`).
+    pub win_streak: i32,
+    /// Eight fixed member slots in wire order.
+    pub members: [MemberLiveState; LIVE_STATE_SLOTS],
+}
+
+impl WireMessage for LiveStateResponse {
+    const COMMAND: u16 = 4043;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = Vec::new();
+        body.push(self.member_id);
+        body.extend_from_slice(&self.user_count.to_le_bytes());
+        body.extend_from_slice(&self.win_streak.to_le_bytes());
+        for slot in &self.members {
+            body.push(u8::from(slot.active));
+            if let Some(info) = &slot.info {
+                info.encode_inner(&mut body);
+            }
+        }
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        let mut tail = body;
+        let member_id = take_byte(&mut tail)?;
+        if usize::from(member_id) >= LIVE_STATE_SLOTS {
+            return Err(Error::InvalidField {
+                field: "live member id",
+                reason: "not 0-7",
+            });
+        }
+        let user_count = take_le_i32(&mut tail)?;
+        let win_streak = take_le_i32(&mut tail)?;
+        let mut members: [MemberLiveState; LIVE_STATE_SLOTS] = Default::default();
+        for slot in members.iter_mut() {
+            let active_byte = take_byte(&mut tail)?;
+            if active_byte == 1 {
+                slot.active = true;
+                slot.info = Some(MemberInfo::decode_prefix(&mut tail)?);
+            }
+        }
+        if !tail.is_empty() {
+            return Err(Error::TrailingBytes(tail.len()));
+        }
+        Ok(Self {
+            member_id,
+            user_count,
+            win_streak,
+            members,
+        })
+    }
+}
+
+/// One peer of [`P2PListResponse`]: member key plus the two 6-byte
+/// endpoints (public, local) the TCP peer leg dials.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PeerInfo {
+    /// Peer member key (`i32` on the wire: Memoryer's `MessageFieldCodec`
+    /// for this `Byte` property is `Int32`, and the exe reads 4 bytes).
+    pub member_id: i32,
+    /// Public endpoint (4-byte IP + `u16` port).
+    pub public_endpoint: SocketAddrV4,
+    /// Local endpoint (4-byte IP + `u16` port).
+    pub local_endpoint: SocketAddrV4,
+}
+
+/// `P2PListResponse` 4045 (S→C): the room's peer list carrying the TCP
+/// peer-leg ports.
+///
+/// Byte-verified shape: the relay-side parser at file `0x18cf50` reads an
+/// `i32` peer count through the shared reader (file `0x18cf9d`), loops
+/// while the index stays below it (signed bound, file `0x18cfb7` — a
+/// negative count yields zero peers, as on the client), and per peer
+/// reads `i32` member, 6-byte public, 6-byte local (files
+/// `0x18cfc5`/`0x18cfd3`/`0x18cfe1`), staging each endpoint as a dword IP
+/// plus a word port (files `0x18cfeb`/`0x18cff0`, `0x18cffd`/`0x18d002`)
+/// into the per-peer record call (file `0x18d00a`).
+/// (`ev_0a144946a7ac801729031065ad78008d`, observed.)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct P2PListResponse {
+    /// Peers in server order.
+    pub peers: Vec<PeerInfo>,
+}
+
+impl WireMessage for P2PListResponse {
+    const COMMAND: u16 = 4045;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = Vec::with_capacity(4 + self.peers.len() * PEER_ENTRY_LEN);
+        let count = i32::try_from(self.peers.len()).unwrap_or(i32::MAX);
+        body.extend_from_slice(&count.to_le_bytes());
+        for peer in &self.peers {
+            body.extend_from_slice(&peer.member_id.to_le_bytes());
+            encode_socket(peer.public_endpoint, &mut body);
+            encode_socket(peer.local_endpoint, &mut body);
+        }
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < 4 {
+            return Err(Error::TruncatedMessage {
+                need: 4,
+                have: body.len(),
+            });
+        }
+        let raw = i32::from_le_bytes([body[0], body[1], body[2], body[3]]);
+        let count = nonnegative_count(raw);
+        let need = count
+            .checked_mul(PEER_ENTRY_LEN)
+            .and_then(|entries| entries.checked_add(4))
+            .ok_or(Error::InvalidField {
+                field: "peer count",
+                reason: "count too large",
+            })?;
+        if body.len() < need {
+            return Err(Error::TruncatedMessage {
+                need,
+                have: body.len(),
+            });
+        }
+        if body.len() > need {
+            return Err(Error::TrailingBytes(body.len() - need));
+        }
+        let mut peers = Vec::with_capacity(count);
+        let mut tail = &body[4..];
+        for _ in 0..count {
+            let member_id = i32::from_le_bytes([tail[0], tail[1], tail[2], tail[3]]);
+            let (public_endpoint, rest) = decode_socket(&tail[4..])?;
+            let (local_endpoint, rest) = decode_socket(rest)?;
+            peers.push(PeerInfo {
+                member_id,
+                public_endpoint,
+                local_endpoint,
+            });
+            tail = rest;
+        }
+        Ok(Self { peers })
+    }
+}
+
 /// RUDP inner packet types (`Memoryer.Relay` `UdpRelayPacketType`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -1868,6 +2326,343 @@ mod live_handshake_tests {
         assert_eq!(
             ConfirmRelay::decode_body(&[0x00; 24]),
             Err(Error::TrailingBytes(24))
+        );
+    }
+}
+
+#[cfg(test)]
+mod live_state_tests {
+    use super::*;
+    use crate::frame::decode_frame;
+
+    #[test]
+    fn live_requests_frame_exact_empty_bytes() {
+        assert_eq!(GetLiveState.encode(), vec![0x04, 0x00, 0xCA, 0x0F]);
+        assert_eq!(GetP2PList.encode(), vec![0x04, 0x00, 0xCC, 0x0F]);
+    }
+
+    #[test]
+    fn live_requests_round_trip_empty() {
+        let live = decode_frame(&GetLiveState.encode()).unwrap();
+        assert_eq!(live.id, 4042);
+        assert_eq!(GetLiveState::decode_frame(&live), Ok(GetLiveState));
+        let peers = decode_frame(&GetP2PList.encode()).unwrap();
+        assert_eq!(peers.id, 4044);
+        assert_eq!(GetP2PList::decode_frame(&peers), Ok(GetP2PList));
+    }
+
+    #[test]
+    fn live_requests_reject_payload() {
+        assert_eq!(
+            GetLiveState::decode_body(&[0x00]),
+            Err(Error::TrailingBytes(1))
+        );
+        assert_eq!(
+            GetP2PList::decode_body(&[0x00]),
+            Err(Error::TrailingBytes(1))
+        );
+    }
+
+    #[test]
+    fn live_requests_reject_foreign_command() {
+        let peers = decode_frame(&GetP2PList.encode()).unwrap();
+        assert_eq!(
+            GetLiveState::decode_frame(&peers),
+            Err(Error::UnknownCommand(4044))
+        );
+    }
+
+    fn two_peers() -> P2PListResponse {
+        P2PListResponse {
+            peers: vec![
+                PeerInfo {
+                    member_id: 3,
+                    public_endpoint: SocketAddrV4::new(Ipv4Addr::new(203, 238, 136, 184), 39311),
+                    local_endpoint: SocketAddrV4::new(Ipv4Addr::new(192, 168, 0, 2), 1111),
+                },
+                PeerInfo {
+                    member_id: 5,
+                    public_endpoint: SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 1), 3333),
+                    local_endpoint: SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 4444),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn p2p_list_encodes_two_peers() {
+        assert_eq!(
+            two_peers().encode_body(),
+            vec![
+                0x02, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0xCB, 0xEE, 0x88, 0xB8, 0x8F, 0x99,
+                0xC0, 0xA8, 0x00, 0x02, 0x57, 0x04, 0x05, 0x00, 0x00, 0x00, 0x0A, 0x00, 0x00, 0x01,
+                0x05, 0x0D, 0x0A, 0x00, 0x00, 0x02, 0x5C, 0x11,
+            ]
+        );
+    }
+
+    #[test]
+    fn p2p_list_round_trips_through_frame() {
+        let frame = decode_frame(&two_peers().encode()).unwrap();
+        assert_eq!(frame.id, 4045);
+        assert_eq!(P2PListResponse::decode_frame(&frame), Ok(two_peers()));
+    }
+
+    #[test]
+    fn p2p_list_decodes_empty_count() {
+        assert_eq!(
+            P2PListResponse::decode_body(&[0x00, 0x00, 0x00, 0x00]),
+            Ok(P2PListResponse { peers: vec![] })
+        );
+    }
+
+    #[test]
+    fn p2p_list_negative_count_decodes_empty() {
+        // The exe exits its peer loop on a negative bound (signed exit
+        // test at file `0x18cfb7`), so the client yields no peers.
+        assert_eq!(
+            P2PListResponse::decode_body(&[0xFF, 0xFF, 0xFF, 0xFF]),
+            Ok(P2PListResponse { peers: vec![] })
+        );
+    }
+
+    #[test]
+    fn p2p_list_rejects_truncated_peer() {
+        let mut body = two_peers().encode_body();
+        body.truncate(body.len() - 1);
+        assert_eq!(
+            P2PListResponse::decode_body(&body),
+            Err(Error::TruncatedMessage { need: 36, have: 35 })
+        );
+    }
+
+    #[test]
+    fn p2p_list_rejects_trailing_bytes() {
+        let mut body = two_peers().encode_body();
+        body.push(0x00);
+        assert_eq!(
+            P2PListResponse::decode_body(&body),
+            Err(Error::TrailingBytes(1))
+        );
+    }
+
+    #[test]
+    fn p2p_list_rejects_foreign_command() {
+        let live = decode_frame(&GetLiveState.encode()).unwrap();
+        assert_eq!(
+            P2PListResponse::decode_frame(&live),
+            Err(Error::UnknownCommand(4042))
+        );
+    }
+
+    #[test]
+    fn p2p_fields_sit_at_expected_offsets() {
+        let body = two_peers().encode_body();
+        assert_eq!(&body[0..4], &[0x02, 0x00, 0x00, 0x00]);
+        assert_eq!(&body[4..8], &[0x03, 0x00, 0x00, 0x00]);
+        assert_eq!(&body[8..14], &[0xCB, 0xEE, 0x88, 0xB8, 0x8F, 0x99]);
+        assert_eq!(&body[14..20], &[0xC0, 0xA8, 0x00, 0x02, 0x57, 0x04]);
+        assert_eq!(&body[20..24], &[0x05, 0x00, 0x00, 0x00]);
+    }
+
+    fn sample_info() -> MemberInfo {
+        MemberInfo {
+            member_id: 0,
+            nickname: "AB".to_owned(),
+            level: 10,
+            gender: 1,
+            gem: 100,
+            team: 2,
+            ready: true,
+            music_state: 3,
+            equipments: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+            music_ids: vec![7, 440],
+            cash_point: 5000,
+            free_pass: 1,
+            playing_state: 2,
+            live_extra: 0,
+            is_administrator: false,
+            is_room_master: true,
+            win_streak: 4,
+        }
+    }
+
+    fn inactive_slots() -> [MemberLiveState; LIVE_STATE_SLOTS] {
+        Default::default()
+    }
+
+    #[test]
+    fn live_state_inactive_members_exact_bytes() {
+        let snapshot = LiveStateResponse {
+            member_id: 1,
+            user_count: 7,
+            win_streak: 2,
+            members: inactive_slots(),
+        };
+        assert_eq!(
+            snapshot.encode_body(),
+            vec![
+                0x01, 0x07, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00,
+            ]
+        );
+        let frame = decode_frame(&snapshot.encode()).unwrap();
+        assert_eq!(frame.id, 4043);
+        assert_eq!(LiveStateResponse::decode_frame(&frame), Ok(snapshot));
+    }
+
+    #[test]
+    fn live_state_header_fields_sit_at_expected_offsets() {
+        let snapshot = LiveStateResponse {
+            member_id: 1,
+            user_count: 7,
+            win_streak: 2,
+            members: inactive_slots(),
+        };
+        let body = snapshot.encode_body();
+        assert_eq!(&body[0..1], &[0x01]);
+        assert_eq!(&body[1..5], &[0x07, 0x00, 0x00, 0x00]);
+        assert_eq!(&body[5..9], &[0x02, 0x00, 0x00, 0x00]);
+        assert_eq!(&body[9..10], &[0x00]);
+    }
+
+    #[test]
+    fn live_state_active_member_exact_bytes() {
+        let mut members = inactive_slots();
+        members[0] = MemberLiveState {
+            active: true,
+            info: Some(sample_info()),
+        };
+        let snapshot = LiveStateResponse {
+            member_id: 0,
+            user_count: 1,
+            win_streak: 0,
+            members,
+        };
+        assert_eq!(
+            snapshot.encode_body(),
+            vec![
+                0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x41, 0x42, 0x00,
+                0x0A, 0x00, 0x00, 0x00, 0x01, 0x64, 0x00, 0x00, 0x00, 0x02, 0x01, 0x03, 0x01, 0x00,
+                0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00,
+                0x05, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x08, 0x00,
+                0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x0A, 0x00, 0x00, 0x00, 0x0B, 0x00, 0x00, 0x00,
+                0x0C, 0x00, 0x00, 0x00, 0x0D, 0x00, 0x00, 0x00, 0x0E, 0x00, 0x00, 0x00, 0x0F, 0x00,
+                0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x11, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+                0x07, 0x00, 0xB8, 0x01, 0x88, 0x13, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00,
+                0x00, 0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            ]
+        );
+    }
+
+    #[test]
+    fn live_state_active_member_round_trips() {
+        let mut members = inactive_slots();
+        members[0] = MemberLiveState {
+            active: true,
+            info: Some(sample_info()),
+        };
+        let snapshot = LiveStateResponse {
+            member_id: 0,
+            user_count: 1,
+            win_streak: 0,
+            members,
+        };
+        let frame = decode_frame(&snapshot.encode()).unwrap();
+        assert_eq!(frame.id, 4043);
+        let decoded = LiveStateResponse::decode_frame(&frame).unwrap();
+        assert_eq!(decoded, snapshot);
+        let info = decoded.members[0].info.as_ref().unwrap();
+        assert_eq!(info.nickname, "AB");
+        assert_eq!(info.equipments[16], 17);
+        assert_eq!(info.music_ids, vec![7, 440]);
+        assert_eq!(info.win_streak, 4);
+        assert!(decoded.members[1..].iter().all(|slot| !slot.active));
+    }
+
+    #[test]
+    fn live_state_non_one_active_byte_means_inactive() {
+        // The handler continues only on `active == 1` (file `0x159d24`);
+        // any other byte takes the skip path with no tail.
+        let mut body = vec![0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        body.push(0x02);
+        body.extend_from_slice(&[0x00; 7]);
+        let decoded = LiveStateResponse::decode_body(&body).unwrap();
+        assert!(!decoded.members[0].active);
+        assert_eq!(decoded.members[0].info, None);
+    }
+
+    #[test]
+    fn live_state_rejects_member_id_at_slot_bound() {
+        let mut body = vec![0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        body.extend_from_slice(&[0x00; 8]);
+        assert_eq!(
+            LiveStateResponse::decode_body(&body),
+            Err(Error::InvalidField {
+                field: "live member id",
+                reason: "not 0-7"
+            })
+        );
+    }
+
+    #[test]
+    fn live_state_rejects_short_header() {
+        // 8-byte body: member id plus user count parse, then the win
+        // streak read finds only 3 bytes left.
+        assert_eq!(
+            LiveStateResponse::decode_body(&[0x01; 8]),
+            Err(Error::TruncatedMessage { need: 4, have: 3 })
+        );
+    }
+
+    #[test]
+    fn live_state_rejects_trailing_bytes() {
+        let mut body = LiveStateResponse {
+            member_id: 1,
+            user_count: 7,
+            win_streak: 2,
+            members: inactive_slots(),
+        }
+        .encode_body();
+        body.push(0x00);
+        assert_eq!(
+            LiveStateResponse::decode_body(&body),
+            Err(Error::TrailingBytes(1))
+        );
+    }
+
+    #[test]
+    fn live_state_negative_music_count_decodes_empty() {
+        let mut info = sample_info();
+        info.music_ids.clear();
+        let mut members = inactive_slots();
+        members[0] = MemberLiveState {
+            active: true,
+            info: Some(info),
+        };
+        let snapshot = LiveStateResponse {
+            member_id: 0,
+            user_count: 1,
+            win_streak: 0,
+            members,
+        };
+        let mut body = snapshot.encode_body();
+        // Music-id count sits 84 bytes into the active tail (past the
+        // 9-byte header, the active byte, and the 84 fixed prefix bytes).
+        body[94..98].copy_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]);
+        let decoded = LiveStateResponse::decode_body(&body).unwrap();
+        assert_eq!(
+            decoded.members[0].info.as_ref().unwrap().music_ids,
+            Vec::<u16>::new()
+        );
+    }
+
+    #[test]
+    fn live_state_rejects_foreign_command() {
+        let peers = decode_frame(&GetP2PList.encode()).unwrap();
+        assert_eq!(
+            LiveStateResponse::decode_frame(&peers),
+            Err(Error::UnknownCommand(4044))
         );
     }
 }
