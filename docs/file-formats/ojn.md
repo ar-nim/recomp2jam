@@ -69,11 +69,31 @@ tail has `129/129/129` (per-difficulty levels? TBD), `300` (= record
 size) and two unknown u32s. Cross-song check: song 770 reads BPM
 `168.0`, song 860 `103.0` — the BPM field hypothesis holds.
 
-Undecoded u32 region `[168600, 195616)` (27016 bytes) — OPEN.
-Inventoried, not decoded: head `(0xf834, 0xcc)`, then 204 × 16-byte
-groups `(song_id, 0, flag, 0)` with flag 1 (ids 887..~774) then 2 (down
-to 100), then `(562, 887, 1, 0, 0, 0, …)` plus heap-address residue
-(`0x77d2…` pointers). No `"ojn"` magic anywhere inside.
+Middle region `[168600, 195616)` (27016 bytes) — DECODED (shape;
+field semantics OPEN). Seven parts add up exactly:
+`8 + 3264 + 11244 + 6516 + 1440 + 4504 + 40`. Implemented as
+`o2jam-file::parse_ojn_mid_region` (exact-length, validated by the
+real 7.55 file end to end).
+
+| Part | Words | Shape |
+|---|---|---|
+| Header | 2 | magic `63540` (`0xF834`), count `204` |
+| Table 1 | 204 × 4 | `(song_id, 0, group, 0)`, group 1 (ids 887..774) then 2 (506..100) |
+| Table 2 | 1 + 562 × 5 | count `562`, then `(song_id, param_a∈{1,2}, 0, param_b∈{0,1}, 0)` |
+| Table 3 | 1 + 407 × 4 | count `407`, then `(song_id, param_a, param_b, 0x77D2E4B7)` |
+| Table 4 | 120 × 3 | raw triples; triple 0 = `(120, 246, 2)`, rest 39/40/40 runs over one 40-song set |
+| Table 5 | 2 + 562 × 2 | head `(1, 562)`, then `(song_id, tag∈1..=5)` |
+| Footer | 10 | 8 open words, then `(562, 887)` echo |
+
+Cross-checks (real file): table-2 ids equal table-5 ids and the
+song-record id set in reverse record order (562 ids, 887..100
+sparse, strictly descending); table-1 (204) and table-3 (407,
+ids 887..102) id sets are subsets; table 4 covers 40 songs
+(174..501 plus 870..873). Table-3 params read like round money
+(`param_a` 0..5000, `param_b` 0..30000) and every 4th word repeats
+`0x77D2E4B7` (heap-address range — residue, not exe pointers).
+No `"ojn"` magic anywhere inside. OPEN: what each tag/group/param
+selects (no exe consumer traced — tables crate only).
 
 Patch index `[195616, 200104)`: 561 × 8-byte pairs (`u32` marker +
 `u32` song id). Markers are `0x43f403` (74×) / `0x43f407` (487× +

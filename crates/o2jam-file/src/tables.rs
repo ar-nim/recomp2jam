@@ -1,6 +1,6 @@
 //! Data tables: avatar outfit sets, avatar shop items, the jam gauge
-//! thresholds, the `OJNList.dat` patch index/records, and the key-name
-//! string table.
+//! thresholds, the `OJNList.dat` song index (records, middle tables,
+//! patch index/records), and the key-name string table.
 //!
 //! Verified on real 7.55 files (docs/file-formats/opi.md,
 //! docs/file-formats/ojn.md).
@@ -257,6 +257,437 @@ pub fn parse_jam_thresholds(bytes: &[u8]) -> Result<Vec<u16>, FileError> {
         .iter()
         .map(|w| u16::from_le_bytes(*w))
         .collect())
+}
+
+/// Byte length of the `OJNList.dat` middle u32 region
+/// (`[168600, 195616)`, between the song records and the patch index).
+/// Layout: 8-byte header, table 1, table 2, table 3, table 4, table 5,
+/// 40-byte footer — the parts below add up exactly
+/// (`8 + 3264 + 11244 + 6516 + 1440 + 4504 + 40`; docs/file-formats/ojn.md).
+pub const OJN_MID_REGION_LEN: usize = 27016;
+
+/// Magic heading the middle region (first header word on the real file).
+pub const OJN_MID_MAGIC: u32 = 63540;
+
+/// Entries in middle table 1 (second header word on the real file).
+pub const OJN_MID_TABLE1_COUNT: usize = 204;
+
+/// Bytes per middle-table-1 entry (`song_id, 0, param, 0`).
+pub const OJN_MID_TABLE1_ENTRY_LEN: usize = 16;
+
+/// Song slots in middle tables 2 and 5 (and the footer echo).
+pub const OJN_MID_SONG_COUNT: usize = 562;
+
+/// Newest song id (middle-table-2/5 head id and footer echo).
+pub const OJN_MID_TOP_SONG_ID: u32 = 887;
+
+/// Bytes per middle-table-2 entry (`song_id, param_a, 0, param_b, 0`).
+pub const OJN_MID_TABLE2_ENTRY_LEN: usize = 20;
+
+/// Entries in middle table 3.
+pub const OJN_MID_TABLE3_COUNT: usize = 407;
+
+/// Bytes per middle-table-3 entry (`song_id, param_a, param_b, anchor`).
+pub const OJN_MID_TABLE3_ENTRY_LEN: usize = 16;
+
+/// Constant closing every middle-table-3 entry on the real file
+/// (`0x77D2E4B7`, heap-address range — residue candidate, semantics OPEN).
+pub const OJN_MID_TABLE3_ANCHOR: u32 = 2010252407;
+
+/// Triples in middle table 4.
+pub const OJN_MID_TABLE4_COUNT: usize = 120;
+
+/// Bytes per middle-table-4 triple.
+pub const OJN_MID_TABLE4_ENTRY_LEN: usize = 12;
+
+/// Marker heading middle table 5 (word before its song count).
+pub const OJN_MID_TABLE5_HEAD: u32 = 1;
+
+/// Bytes per middle-table-5 entry (`song_id, tag`).
+pub const OJN_MID_TABLE5_ENTRY_LEN: usize = 8;
+
+/// Bytes of the middle-region footer (closes with the
+/// `OJN_MID_SONG_COUNT`/`OJN_MID_TOP_SONG_ID` echo).
+pub const OJN_MID_FOOTER_LEN: usize = 40;
+
+/// One middle-table-1 entry: song id plus a group word.
+///
+/// The real 7.55 file holds 204 entries (ids 887..100, sparse,
+/// descending): group 1 for ids 887..774, group 2 for 506..100.
+/// Group semantics are OPEN.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OjnMidGroupEntry {
+    /// Song id this entry belongs to.
+    pub song_id: u32,
+    /// Group word (1 or 2 on the real file).
+    pub group: u32,
+}
+
+/// One middle-table-2 entry: song id plus two tagged words.
+///
+/// The real 7.55 file holds 562 entries (ids 887..100, strictly
+/// descending — the reversed song-record order): `param_a` is 1
+/// (545x) or 2 (17x), `param_b` is 0 (512x) or 1 (50x).
+/// Both semantics are OPEN.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OjnMidSongEntry {
+    /// Song id this entry belongs to.
+    pub song_id: u32,
+    /// First tag word (1 or 2 on the real file).
+    pub param_a: u32,
+    /// Second tag word (0 or 1 on the real file).
+    pub param_b: u32,
+}
+
+/// One middle-table-3 entry: song id plus two param words plus the
+/// constant anchor.
+///
+/// The real 7.55 file holds 407 entries (ids 887..102, sparse,
+/// strictly descending): `param_a` reads 0..5000 and `param_b`
+/// 0..30000 in round hundreds (price-like, unconfirmed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OjnMidParamEntry {
+    /// Song id this entry belongs to.
+    pub song_id: u32,
+    /// First param word.
+    pub param_a: u32,
+    /// Second param word.
+    pub param_b: u32,
+    /// Closing word (always `OJN_MID_TABLE3_ANCHOR`).
+    pub anchor: u32,
+}
+
+/// One middle-table-4 triple.
+///
+/// The real 7.55 file holds 120 triples: triple 0 is the
+/// `(120, 246, 2)` header-ish word set, triples 1..119 run in
+/// 39/40/40 groups over one shared 40-song id set (mostly
+/// `(0/1, id, 0/1/2)` shapes). Field semantics are OPEN.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OjnMidTriple {
+    /// First word.
+    pub a: u32,
+    /// Second word (a song id outside the head triple).
+    pub b: u32,
+    /// Third word.
+    pub c: u32,
+}
+
+/// One middle-table-5 entry: song id plus tag.
+///
+/// The real 7.55 file holds 562 entries (ids 887..100, strictly
+/// descending — the same id set as table 2): tags run 1..=5
+/// (192x5, 157x3, 82x2, 78x1, 52x4). Tag semantics are OPEN.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OjnMidTagEntry {
+    /// Song id this entry belongs to.
+    pub song_id: u32,
+    /// Tag word (1..=5 on the real file).
+    pub tag: u32,
+}
+
+/// The decoded `OJNList.dat` middle region: header tables plus footer.
+///
+/// Field semantics (beyond shape and counts) stay OPEN: no calling
+/// code in the tables crate consumes these yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OjnMidRegion {
+    /// Table 1 group entries in file order.
+    pub groups: Vec<OjnMidGroupEntry>,
+    /// Table 2 song entries in file order.
+    pub songs: Vec<OjnMidSongEntry>,
+    /// Table 3 param entries in file order.
+    pub params: Vec<OjnMidParamEntry>,
+    /// Table 4 triples in file order.
+    pub triples: Vec<OjnMidTriple>,
+    /// Table 5 tag entries in file order.
+    pub tags: Vec<OjnMidTagEntry>,
+    /// Footer words (last two echo `OJN_MID_SONG_COUNT` /
+    /// `OJN_MID_TOP_SONG_ID`).
+    pub footer: [u32; 10],
+}
+
+/// Compare a file `u32` count against an expected table length
+/// without narrowing casts (PERF-07).
+fn count_matches(actual: u32, expected: usize) -> bool {
+    u32::try_from(expected).is_ok_and(|want| actual == want)
+}
+
+/// Split `len` bytes off the cursor; errors when they overrun.
+fn take_region<'bytes>(
+    bytes: &'bytes [u8],
+    cursor: &mut usize,
+    len: usize,
+) -> Result<&'bytes [u8], FileError> {
+    let end = cursor.checked_add(len).ok_or(FileError::Truncated {
+        need: usize::MAX,
+        have: bytes.len(),
+    })?;
+    let window = bytes.get(*cursor..end).ok_or(FileError::Truncated {
+        need: end,
+        have: bytes.len(),
+    })?;
+    *cursor = end;
+    Ok(window)
+}
+
+/// Parse middle table 1: `OJN_MID_TABLE1_COUNT` entries of
+/// (`song_id`, 0, `group`, 0). Requires the exact table length.
+///
+/// # Errors
+///
+/// `FileError::Truncated` on a short table, `FileError::UnknownFormat`
+/// on a long table, a nonzero reserved word, or a group outside 1..=2.
+pub fn parse_ojn_mid_table1(bytes: &[u8]) -> Result<Vec<OjnMidGroupEntry>, FileError> {
+    let need = OJN_MID_TABLE1_COUNT * OJN_MID_TABLE1_ENTRY_LEN;
+    if bytes.len() < need {
+        return Err(FileError::Truncated {
+            need,
+            have: bytes.len(),
+        });
+    }
+    if bytes.len() > need {
+        return Err(unknown_format(bytes));
+    }
+    let mut entries = Vec::with_capacity(OJN_MID_TABLE1_COUNT);
+    let mut off = 0;
+    while off < need {
+        let song_id = read_u32le(bytes, off)?;
+        let reserved_a = read_u32le(bytes, off + 4)?;
+        let group = read_u32le(bytes, off + 8)?;
+        let reserved_b = read_u32le(bytes, off + 12)?;
+        if reserved_a != 0 || reserved_b != 0 || group == 0 || group > 2 {
+            return Err(unknown_format(&bytes[off..off + 4]));
+        }
+        entries.push(OjnMidGroupEntry { song_id, group });
+        off += OJN_MID_TABLE1_ENTRY_LEN;
+    }
+    Ok(entries)
+}
+
+/// Parse middle table 2: `u32` count plus `OJN_MID_SONG_COUNT` entries
+/// of (`song_id`, `param_a`, 0, `param_b`, 0). Requires the exact
+/// table length.
+///
+/// # Errors
+///
+/// `FileError::Truncated` on a short table, `FileError::UnknownFormat`
+/// on a long table, a wrong count, a nonzero reserved word, or a tag
+/// outside its observed domain (`param_a` 1..=2, `param_b` 0..=1).
+pub fn parse_ojn_mid_table2(bytes: &[u8]) -> Result<Vec<OjnMidSongEntry>, FileError> {
+    let need = 4 + OJN_MID_SONG_COUNT * OJN_MID_TABLE2_ENTRY_LEN;
+    if bytes.len() < need {
+        return Err(FileError::Truncated {
+            need,
+            have: bytes.len(),
+        });
+    }
+    if bytes.len() > need {
+        return Err(unknown_format(bytes));
+    }
+    let count = read_u32le(bytes, 0)?;
+    if !count_matches(count, OJN_MID_SONG_COUNT) {
+        return Err(unknown_format(&bytes[..4]));
+    }
+    let mut entries = Vec::with_capacity(OJN_MID_SONG_COUNT);
+    let mut off = 4;
+    while off < need {
+        let song_id = read_u32le(bytes, off)?;
+        let param_a = read_u32le(bytes, off + 4)?;
+        let reserved_a = read_u32le(bytes, off + 8)?;
+        let param_b = read_u32le(bytes, off + 12)?;
+        let reserved_b = read_u32le(bytes, off + 16)?;
+        if reserved_a != 0 || reserved_b != 0 || param_a == 0 || param_a > 2 || param_b > 1 {
+            return Err(unknown_format(&bytes[off..off + 4]));
+        }
+        entries.push(OjnMidSongEntry {
+            song_id,
+            param_a,
+            param_b,
+        });
+        off += OJN_MID_TABLE2_ENTRY_LEN;
+    }
+    Ok(entries)
+}
+
+/// Parse middle table 3: `u32` count plus `OJN_MID_TABLE3_COUNT`
+/// entries of (`song_id`, `param_a`, `param_b`, `anchor`). Requires
+/// the exact table length.
+///
+/// # Errors
+///
+/// `FileError::Truncated` on a short table, `FileError::UnknownFormat`
+/// on a long table, a wrong count, or an anchor that is not
+/// `OJN_MID_TABLE3_ANCHOR`.
+pub fn parse_ojn_mid_table3(bytes: &[u8]) -> Result<Vec<OjnMidParamEntry>, FileError> {
+    let need = 4 + OJN_MID_TABLE3_COUNT * OJN_MID_TABLE3_ENTRY_LEN;
+    if bytes.len() < need {
+        return Err(FileError::Truncated {
+            need,
+            have: bytes.len(),
+        });
+    }
+    if bytes.len() > need {
+        return Err(unknown_format(bytes));
+    }
+    let count = read_u32le(bytes, 0)?;
+    if !count_matches(count, OJN_MID_TABLE3_COUNT) {
+        return Err(unknown_format(&bytes[..4]));
+    }
+    let mut entries = Vec::with_capacity(OJN_MID_TABLE3_COUNT);
+    let mut off = 4;
+    while off < need {
+        let song_id = read_u32le(bytes, off)?;
+        let param_a = read_u32le(bytes, off + 4)?;
+        let param_b = read_u32le(bytes, off + 8)?;
+        let anchor = read_u32le(bytes, off + 12)?;
+        if anchor != OJN_MID_TABLE3_ANCHOR {
+            return Err(unknown_format(&bytes[off..off + 4]));
+        }
+        entries.push(OjnMidParamEntry {
+            song_id,
+            param_a,
+            param_b,
+            anchor,
+        });
+        off += OJN_MID_TABLE3_ENTRY_LEN;
+    }
+    Ok(entries)
+}
+
+/// Parse middle table 4: `OJN_MID_TABLE4_COUNT` raw triples.
+/// Requires the exact table length.
+///
+/// # Errors
+///
+/// `FileError::Truncated` on a short table, `FileError::UnknownFormat`
+/// on a long table.
+pub fn parse_ojn_mid_table4(bytes: &[u8]) -> Result<Vec<OjnMidTriple>, FileError> {
+    let need = OJN_MID_TABLE4_COUNT * OJN_MID_TABLE4_ENTRY_LEN;
+    if bytes.len() < need {
+        return Err(FileError::Truncated {
+            need,
+            have: bytes.len(),
+        });
+    }
+    if bytes.len() > need {
+        return Err(unknown_format(bytes));
+    }
+    let mut entries = Vec::with_capacity(OJN_MID_TABLE4_COUNT);
+    let mut off = 0;
+    while off < need {
+        entries.push(OjnMidTriple {
+            a: read_u32le(bytes, off)?,
+            b: read_u32le(bytes, off + 4)?,
+            c: read_u32le(bytes, off + 8)?,
+        });
+        off += OJN_MID_TABLE4_ENTRY_LEN;
+    }
+    Ok(entries)
+}
+
+/// Parse middle table 5: (`OJN_MID_TABLE5_HEAD`, `OJN_MID_SONG_COUNT`)
+/// plus entries of (`song_id`, `tag`). Requires the exact length.
+///
+/// # Errors
+///
+/// `FileError::Truncated` on a short table, `FileError::UnknownFormat`
+/// on a long table, a wrong head/count, or a tag outside 1..=5.
+pub fn parse_ojn_mid_table5(bytes: &[u8]) -> Result<Vec<OjnMidTagEntry>, FileError> {
+    let need = 8 + OJN_MID_SONG_COUNT * OJN_MID_TABLE5_ENTRY_LEN;
+    if bytes.len() < need {
+        return Err(FileError::Truncated {
+            need,
+            have: bytes.len(),
+        });
+    }
+    if bytes.len() > need {
+        return Err(unknown_format(bytes));
+    }
+    let head = read_u32le(bytes, 0)?;
+    let count = read_u32le(bytes, 4)?;
+    if head != OJN_MID_TABLE5_HEAD || !count_matches(count, OJN_MID_SONG_COUNT) {
+        return Err(unknown_format(&bytes[..4]));
+    }
+    let mut entries = Vec::with_capacity(OJN_MID_SONG_COUNT);
+    let mut off = 8;
+    while off < need {
+        let song_id = read_u32le(bytes, off)?;
+        let tag = read_u32le(bytes, off + 4)?;
+        if tag == 0 || tag > 5 {
+            return Err(unknown_format(&bytes[off..off + 4]));
+        }
+        entries.push(OjnMidTagEntry { song_id, tag });
+        off += OJN_MID_TABLE5_ENTRY_LEN;
+    }
+    Ok(entries)
+}
+
+/// Parse the `OJNList.dat` middle region: magic + table-1 count, the
+/// five tables, and the footer. Requires exactly `OJN_MID_REGION_LEN`
+/// bytes.
+///
+/// # Errors
+///
+/// `FileError::Truncated` on a short region, `FileError::UnknownFormat`
+/// on a long region, a wrong magic/count, or any malformed table.
+pub fn parse_ojn_mid_region(bytes: &[u8]) -> Result<OjnMidRegion, FileError> {
+    if bytes.len() < OJN_MID_REGION_LEN {
+        return Err(FileError::Truncated {
+            need: OJN_MID_REGION_LEN,
+            have: bytes.len(),
+        });
+    }
+    if bytes.len() > OJN_MID_REGION_LEN {
+        return Err(unknown_format(bytes));
+    }
+    let magic = read_u32le(bytes, 0)?;
+    let group_count = read_u32le(bytes, 4)?;
+    if magic != OJN_MID_MAGIC || !count_matches(group_count, OJN_MID_TABLE1_COUNT) {
+        return Err(unknown_format(&bytes[..4]));
+    }
+    let mut cursor = 8;
+    let groups = parse_ojn_mid_table1(take_region(
+        bytes,
+        &mut cursor,
+        OJN_MID_TABLE1_COUNT * OJN_MID_TABLE1_ENTRY_LEN,
+    )?)?;
+    let songs = parse_ojn_mid_table2(take_region(
+        bytes,
+        &mut cursor,
+        4 + OJN_MID_SONG_COUNT * OJN_MID_TABLE2_ENTRY_LEN,
+    )?)?;
+    let params = parse_ojn_mid_table3(take_region(
+        bytes,
+        &mut cursor,
+        4 + OJN_MID_TABLE3_COUNT * OJN_MID_TABLE3_ENTRY_LEN,
+    )?)?;
+    let triples = parse_ojn_mid_table4(take_region(
+        bytes,
+        &mut cursor,
+        OJN_MID_TABLE4_COUNT * OJN_MID_TABLE4_ENTRY_LEN,
+    )?)?;
+    let tags = parse_ojn_mid_table5(take_region(
+        bytes,
+        &mut cursor,
+        8 + OJN_MID_SONG_COUNT * OJN_MID_TABLE5_ENTRY_LEN,
+    )?)?;
+    let footer_bytes = take_region(bytes, &mut cursor, OJN_MID_FOOTER_LEN)?;
+    let mut footer = [0u32; 10];
+    for (slot, word) in footer.iter_mut().enumerate() {
+        *word = read_u32le(footer_bytes, slot * 4)?;
+    }
+    if !count_matches(footer[8], OJN_MID_SONG_COUNT) || footer[9] != OJN_MID_TOP_SONG_ID {
+        return Err(unknown_format(&footer_bytes[..4]));
+    }
+    Ok(OjnMidRegion {
+        groups,
+        songs,
+        params,
+        triples,
+        tags,
+        footer,
+    })
 }
 
 /// Magic heading each `OJNList.dat` patch record (`;HD\0`).
@@ -699,6 +1130,305 @@ mod tests {
         blob.extend_from_slice(&record);
         assert!(matches!(
             parse_ojn_patch_section(&blob),
+            Err(FileError::UnknownFormat { .. })
+        ));
+    }
+
+    fn full_table1_blob(group: u32) -> Vec<u8> {
+        // Synthetic ids mirror the real shape (descending); values are
+        // arbitrary but in-domain.
+        let mut blob = Vec::with_capacity(OJN_MID_TABLE1_COUNT * OJN_MID_TABLE1_ENTRY_LEN);
+        for song_id in (684..=887u32).rev() {
+            blob.extend_from_slice(&song_id.to_le_bytes());
+            blob.extend_from_slice(&0u32.to_le_bytes());
+            blob.extend_from_slice(&group.to_le_bytes());
+            blob.extend_from_slice(&0u32.to_le_bytes());
+        }
+        blob
+    }
+
+    #[test]
+    fn mid_table1_parses_ids_and_groups() {
+        let blob = full_table1_blob(2);
+        let entries = parse_ojn_mid_table1(&blob).unwrap();
+        assert_eq!(entries.len(), OJN_MID_TABLE1_COUNT);
+        assert_eq!(
+            entries[0],
+            OjnMidGroupEntry {
+                song_id: 887,
+                group: 2
+            }
+        );
+        assert_eq!(entries[OJN_MID_TABLE1_COUNT - 1].group, 2);
+    }
+
+    #[test]
+    fn mid_table1_rejects_bad_group() {
+        let mut blob = full_table1_blob(1);
+        blob[8..12].copy_from_slice(&3u32.to_le_bytes());
+        assert!(matches!(
+            parse_ojn_mid_table1(&blob),
+            Err(FileError::UnknownFormat { .. })
+        ));
+    }
+
+    #[test]
+    fn mid_table1_rejects_nonzero_reserved() {
+        let mut blob = full_table1_blob(1);
+        blob[4..8].copy_from_slice(&1u32.to_le_bytes());
+        assert!(matches!(
+            parse_ojn_mid_table1(&blob),
+            Err(FileError::UnknownFormat { .. })
+        ));
+    }
+
+    #[test]
+    fn mid_table1_rejects_short_and_long_input() {
+        let blob = full_table1_blob(1);
+        assert!(matches!(
+            parse_ojn_mid_table1(&blob[..blob.len() - 1]),
+            Err(FileError::Truncated { .. })
+        ));
+        let mut long = blob.clone();
+        long.extend_from_slice(&[0u8; 4]);
+        assert!(matches!(
+            parse_ojn_mid_table1(&long),
+            Err(FileError::UnknownFormat { .. })
+        ));
+    }
+
+    fn full_table2_blob(param_a: u32, param_b: u32) -> Vec<u8> {
+        let mut blob = Vec::with_capacity(4 + OJN_MID_SONG_COUNT * OJN_MID_TABLE2_ENTRY_LEN);
+        let count = u32::try_from(OJN_MID_SONG_COUNT).unwrap();
+        blob.extend_from_slice(&count.to_le_bytes());
+        for song_id in (326..=887u32).rev() {
+            blob.extend_from_slice(&song_id.to_le_bytes());
+            blob.extend_from_slice(&param_a.to_le_bytes());
+            blob.extend_from_slice(&0u32.to_le_bytes());
+            blob.extend_from_slice(&param_b.to_le_bytes());
+            blob.extend_from_slice(&0u32.to_le_bytes());
+        }
+        blob
+    }
+
+    #[test]
+    fn mid_table2_parses_count_and_tags() {
+        let blob = full_table2_blob(2, 1);
+        let entries = parse_ojn_mid_table2(&blob).unwrap();
+        assert_eq!(entries.len(), OJN_MID_SONG_COUNT);
+        assert_eq!(
+            entries[0],
+            OjnMidSongEntry {
+                song_id: 887,
+                param_a: 2,
+                param_b: 1
+            }
+        );
+    }
+
+    #[test]
+    fn mid_table2_rejects_bad_count_and_tags() {
+        let mut blob = full_table2_blob(1, 0);
+        blob[0..4].copy_from_slice(&561u32.to_le_bytes());
+        assert!(matches!(
+            parse_ojn_mid_table2(&blob),
+            Err(FileError::UnknownFormat { .. })
+        ));
+        let mut blob = full_table2_blob(3, 0);
+        assert!(matches!(
+            parse_ojn_mid_table2(&blob),
+            Err(FileError::UnknownFormat { .. })
+        ));
+        blob = full_table2_blob(1, 2);
+        assert!(matches!(
+            parse_ojn_mid_table2(&blob),
+            Err(FileError::UnknownFormat { .. })
+        ));
+    }
+
+    fn full_table3_blob() -> Vec<u8> {
+        let mut blob = Vec::with_capacity(4 + OJN_MID_TABLE3_COUNT * OJN_MID_TABLE3_ENTRY_LEN);
+        let count = u32::try_from(OJN_MID_TABLE3_COUNT).unwrap();
+        blob.extend_from_slice(&count.to_le_bytes());
+        for song_id in (481..=887u32).rev() {
+            blob.extend_from_slice(&song_id.to_le_bytes());
+            blob.extend_from_slice(&2000u32.to_le_bytes());
+            blob.extend_from_slice(&5000u32.to_le_bytes());
+            blob.extend_from_slice(&OJN_MID_TABLE3_ANCHOR.to_le_bytes());
+        }
+        blob
+    }
+
+    #[test]
+    fn mid_table3_parses_params_and_anchor() {
+        let blob = full_table3_blob();
+        let entries = parse_ojn_mid_table3(&blob).unwrap();
+        assert_eq!(entries.len(), OJN_MID_TABLE3_COUNT);
+        assert_eq!(
+            entries[0],
+            OjnMidParamEntry {
+                song_id: 887,
+                param_a: 2000,
+                param_b: 5000,
+                anchor: OJN_MID_TABLE3_ANCHOR
+            }
+        );
+    }
+
+    #[test]
+    fn mid_table3_rejects_bad_anchor() {
+        let mut blob = full_table3_blob();
+        let last = blob.len() - 4;
+        blob[last..].copy_from_slice(&0u32.to_le_bytes());
+        assert!(matches!(
+            parse_ojn_mid_table3(&blob),
+            Err(FileError::UnknownFormat { .. })
+        ));
+    }
+
+    #[test]
+    fn mid_table4_parses_triples() {
+        let mut blob = Vec::with_capacity(OJN_MID_TABLE4_COUNT * OJN_MID_TABLE4_ENTRY_LEN);
+        for i in 0..u32::try_from(OJN_MID_TABLE4_COUNT).unwrap() {
+            blob.extend_from_slice(&i.to_le_bytes());
+            blob.extend_from_slice(&(873 - i).to_le_bytes());
+            blob.extend_from_slice(&2u32.to_le_bytes());
+        }
+        let triples = parse_ojn_mid_table4(&blob).unwrap();
+        assert_eq!(triples.len(), OJN_MID_TABLE4_COUNT);
+        assert_eq!(triples[0], OjnMidTriple { a: 0, b: 873, c: 2 });
+        assert_eq!(
+            triples[OJN_MID_TABLE4_COUNT - 1],
+            OjnMidTriple {
+                a: 119,
+                b: 754,
+                c: 2
+            }
+        );
+    }
+
+    #[test]
+    fn mid_table4_rejects_short_and_long_input() {
+        let need = OJN_MID_TABLE4_COUNT * OJN_MID_TABLE4_ENTRY_LEN;
+        assert!(matches!(
+            parse_ojn_mid_table4(&vec![0u8; need - 4]),
+            Err(FileError::Truncated { .. })
+        ));
+        assert!(matches!(
+            parse_ojn_mid_table4(&vec![0u8; need + 4]),
+            Err(FileError::UnknownFormat { .. })
+        ));
+    }
+
+    fn full_table5_blob(tag: u32) -> Vec<u8> {
+        let mut blob = Vec::with_capacity(8 + OJN_MID_SONG_COUNT * OJN_MID_TABLE5_ENTRY_LEN);
+        blob.extend_from_slice(&OJN_MID_TABLE5_HEAD.to_le_bytes());
+        let count = u32::try_from(OJN_MID_SONG_COUNT).unwrap();
+        blob.extend_from_slice(&count.to_le_bytes());
+        for song_id in (326..=887u32).rev() {
+            blob.extend_from_slice(&song_id.to_le_bytes());
+            blob.extend_from_slice(&tag.to_le_bytes());
+        }
+        blob
+    }
+
+    #[test]
+    fn mid_table5_parses_ids_and_tags() {
+        let blob = full_table5_blob(5);
+        let entries = parse_ojn_mid_table5(&blob).unwrap();
+        assert_eq!(entries.len(), OJN_MID_SONG_COUNT);
+        assert_eq!(
+            entries[0],
+            OjnMidTagEntry {
+                song_id: 887,
+                tag: 5
+            }
+        );
+    }
+
+    #[test]
+    fn mid_table5_rejects_bad_head_count_and_tag() {
+        let mut blob = full_table5_blob(1);
+        blob[0..4].copy_from_slice(&2u32.to_le_bytes());
+        assert!(matches!(
+            parse_ojn_mid_table5(&blob),
+            Err(FileError::UnknownFormat { .. })
+        ));
+        let mut blob = full_table5_blob(1);
+        blob[8..12].copy_from_slice(&0u32.to_le_bytes());
+        blob[12..16].copy_from_slice(&6u32.to_le_bytes());
+        assert!(matches!(
+            parse_ojn_mid_table5(&blob),
+            Err(FileError::UnknownFormat { .. })
+        ));
+    }
+
+    fn full_mid_region_blob() -> Vec<u8> {
+        let mut blob = Vec::with_capacity(OJN_MID_REGION_LEN);
+        blob.extend_from_slice(&OJN_MID_MAGIC.to_le_bytes());
+        let group_count = u32::try_from(OJN_MID_TABLE1_COUNT).unwrap();
+        blob.extend_from_slice(&group_count.to_le_bytes());
+        blob.extend_from_slice(&full_table1_blob(1));
+        blob.extend_from_slice(&full_table2_blob(1, 0));
+        blob.extend_from_slice(&full_table3_blob());
+        for _ in 0..OJN_MID_TABLE4_COUNT {
+            blob.extend_from_slice(&0u32.to_le_bytes());
+            blob.extend_from_slice(&246u32.to_le_bytes());
+            blob.extend_from_slice(&2u32.to_le_bytes());
+        }
+        blob.extend_from_slice(&full_table5_blob(1));
+        for word in [2u32, 173, 50, 0, 166, 50, 0, 0, 562, 887] {
+            blob.extend_from_slice(&word.to_le_bytes());
+        }
+        blob
+    }
+
+    #[test]
+    fn mid_region_parses_all_tables_and_footer() {
+        let blob = full_mid_region_blob();
+        assert_eq!(blob.len(), OJN_MID_REGION_LEN);
+        let region = parse_ojn_mid_region(&blob).unwrap();
+        assert_eq!(region.groups.len(), OJN_MID_TABLE1_COUNT);
+        assert_eq!(region.songs.len(), OJN_MID_SONG_COUNT);
+        assert_eq!(region.params.len(), OJN_MID_TABLE3_COUNT);
+        assert_eq!(region.triples.len(), OJN_MID_TABLE4_COUNT);
+        assert_eq!(region.tags.len(), OJN_MID_SONG_COUNT);
+        assert_eq!(region.groups[0].song_id, 887);
+        assert_eq!(region.songs[0].song_id, 887);
+        assert_eq!(region.params[0].anchor, OJN_MID_TABLE3_ANCHOR);
+        assert_eq!(region.tags[0].tag, 1);
+        assert_eq!(region.footer[8], u32::try_from(OJN_MID_SONG_COUNT).unwrap());
+        assert_eq!(region.footer[9], OJN_MID_TOP_SONG_ID);
+    }
+
+    #[test]
+    fn mid_region_rejects_bad_magic_and_footer() {
+        let mut blob = full_mid_region_blob();
+        blob[0..4].copy_from_slice(&0u32.to_le_bytes());
+        assert!(matches!(
+            parse_ojn_mid_region(&blob),
+            Err(FileError::UnknownFormat { .. })
+        ));
+        let mut blob = full_mid_region_blob();
+        let last = blob.len() - 4;
+        blob[last..].copy_from_slice(&0u32.to_le_bytes());
+        assert!(matches!(
+            parse_ojn_mid_region(&blob),
+            Err(FileError::UnknownFormat { .. })
+        ));
+    }
+
+    #[test]
+    fn mid_region_rejects_short_and_long_input() {
+        let blob = full_mid_region_blob();
+        assert!(matches!(
+            parse_ojn_mid_region(&blob[..blob.len() - 4]),
+            Err(FileError::Truncated { .. })
+        ));
+        let mut long = blob.clone();
+        long.extend_from_slice(&[0u8; 4]);
+        assert!(matches!(
+            parse_ojn_mid_region(&long),
             Err(FileError::UnknownFormat { .. })
         ));
     }
