@@ -92,8 +92,9 @@ fn paint_loading(frame: &mut Frame<'_>) {
     );
 }
 
-/// Paint the results scene; a loaded avatar figure replaces the card.
-fn paint_result(frame: &mut Frame<'_>, avatar: Option<&AvatarFigure>) {
+/// Paint the results scene: score, best combo, and a loaded avatar
+/// figure over the card. Grade letters stay out (mapping OPEN).
+fn paint_result(frame: &mut Frame<'_>, avatar: Option<&AvatarFigure>, score: &o2jam_game::Score) {
     paint_card(
         frame,
         pack_xrgb(0x10, 0x10, 0x08),
@@ -102,6 +103,9 @@ fn paint_result(frame: &mut Frame<'_>, avatar: Option<&AvatarFigure>) {
     if let Some(figure) = avatar {
         figure.paint(frame, frame.w as i32 / 2 - 32, frame.h as i32 / 2 - 32);
     }
+    let points = u32::try_from(score.points).unwrap_or(u32::MAX);
+    draw_number(frame, 16, 16, points, pack_xrgb(0xFF, 0xFF, 0xFF));
+    draw_number(frame, 16, 32, score.max_combo, pack_xrgb(0xFF, 0xFF, 0x40));
 }
 
 /// Background plus a centered card.
@@ -164,7 +168,7 @@ pub fn paint_screen(frame: &mut Frame<'_>, screen: Screen) {
         Screen::Playing => {
             PlayingView::default().paint(frame, &HighwayGeometry::centered(frame.w, frame.h))
         }
-        Screen::Result => paint_result(frame, None),
+        Screen::Result => paint_result(frame, None, &o2jam_game::Score::default()),
     }
 }
 
@@ -234,12 +238,17 @@ impl ScreenGame {
         }
     }
 
-    /// Song position: wall clock since first paint or key. Playing
-    /// entry is not wired yet, so the clock starts early; entry will
-    /// reset it when transitions land.
+    /// Song position: wall clock since entering Playing.
     fn now_ms(&mut self) -> u64 {
         let start = *self.started_at.get_or_insert_with(std::time::Instant::now);
         start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
+    }
+
+    /// Step the flow, restarting the song clock on Playing entry.
+    fn enter(&mut self, next: Screen) {
+        if self.flow.go(next).is_ok() && next == Screen::Playing {
+            self.started_at = Some(std::time::Instant::now());
+        }
     }
 
     /// Strike a lane at an explicit clock, playing its key sound.
@@ -258,12 +267,15 @@ impl ScreenGame {
     /// Paint with an explicit clock (tests use this; live paint reads
     /// the wall clock).
     pub fn paint_at(&mut self, frame: &mut Frame<'_>, now_ms: u64) {
+        if self.flow.current() == Screen::Playing && self.playing.is_finished(now_ms) {
+            let _ = self.flow.go(Screen::Result);
+        }
         match self.flow.current() {
             Screen::Playing => {
                 let geom = HighwayGeometry::centered(frame.w, frame.h);
                 self.playing.paint(frame, &geom, now_ms);
             }
-            Screen::Result => paint_result(frame, self.avatar.as_ref()),
+            Screen::Result => paint_result(frame, self.avatar.as_ref(), self.playing.score()),
             screen => paint_screen(frame, screen),
         }
     }
@@ -288,6 +300,24 @@ impl GameLoop for ScreenGame {
                 let now = self.now_ms();
                 self.strike_at(lane, now);
             }
+            _ => {}
+        }
+    }
+
+    fn menu_key(&mut self, key: super::MenuKey, down: bool) {
+        if !down {
+            return;
+        }
+        match (self.flow.current(), key) {
+            (Screen::Channel, super::MenuKey::Confirm) => self.enter(Screen::Room),
+            (Screen::Room, super::MenuKey::Confirm) => self.enter(Screen::Waiting),
+            (Screen::Room, super::MenuKey::Back) => self.enter(Screen::Channel),
+            (Screen::Waiting, super::MenuKey::Confirm) => self.enter(Screen::Loading),
+            (Screen::Waiting, super::MenuKey::Back) => self.enter(Screen::Room),
+            (Screen::Loading, super::MenuKey::Confirm) => self.enter(Screen::Playing),
+            (Screen::Loading, super::MenuKey::Back) => self.enter(Screen::Waiting),
+            (Screen::Result, super::MenuKey::Confirm) => self.enter(Screen::Waiting),
+            (Screen::Result, super::MenuKey::Back) => self.enter(Screen::Room),
             _ => {}
         }
     }
@@ -465,6 +495,85 @@ mod screen_paint_tests {
         );
         assert_eq!(buf[96 * 256 + 97], pack_xrgb(255, 0, 0));
         assert_eq!(buf[96 * 256 + 96], pack_xrgb(0xC0, 0xA0, 0x20));
+    }
+
+    fn walk_to_playing(game: &mut ScreenGame) {
+        use super::super::MenuKey;
+        game.lane_key(3, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Playing);
+    }
+
+    #[test]
+    fn menu_walks_lobbies_to_playing() {
+        use super::super::MenuKey;
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        assert_eq!(game.screen(), Screen::Channel);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Loading);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Playing);
+        assert!(game.started_at.is_some());
+    }
+
+    #[test]
+    fn menu_backs_out_of_lobbies() {
+        use super::super::MenuKey;
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Back, true);
+        assert_eq!(game.screen(), Screen::Room);
+        game.menu_key(MenuKey::Back, true);
+        assert_eq!(game.screen(), Screen::Channel);
+        game.menu_key(MenuKey::Back, true);
+        assert_eq!(game.screen(), Screen::Channel);
+    }
+
+    #[test]
+    fn chart_end_moves_to_result_with_score() {
+        let mut game = ScreenGame::new();
+        game.load_chart(vec![(2, 5000, 7)]);
+        walk_to_playing(&mut game);
+        game.strike_at(2, 5000);
+        let mut buf = vec![0u32; 70 * 60];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            7000,
+        );
+        assert_eq!(game.screen(), Screen::Result);
+        // Score "200" top-left in white.
+        assert_eq!(buf[16 * 70 + 16], pack_xrgb(0xFF, 0xFF, 0xFF));
+    }
+
+    #[test]
+    fn unfinished_chart_stays_playing() {
+        let mut game = ScreenGame::new();
+        game.load_chart(vec![(2, 5000, 7)]);
+        walk_to_playing(&mut game);
+        let mut buf = vec![0u32; 70 * 60];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            4995,
+        );
+        assert_eq!(game.screen(), Screen::Playing);
     }
 
     #[test]
