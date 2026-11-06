@@ -487,3 +487,18 @@ slot2b-head log (`ee7bd9d`).
   +46 vs the 809 baseline from new render/shell/recomp2jam shots and
   builder tests, 0 failures). No commits, no pushes.** This sweep
   touched only `docs/playtest.md`.
+
+## Integration sweep — post skins/room-enums (`890 passed`)
+
+Gates run at integration on HEAD `5e626ea` (shots with staged
+skins, shell skin delegate, room-enums, spare slots):
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`.
+- `cargo test --workspace`: **890 passed, 0 failed, 1 ignored**
+  (`o2jam_audio`), `exit=0`. Per target: audio 19, dump 0,
+  file 123, game 68, net 333, render 53, shell 208, real_art 7,
+  scenes 22, recomp2jam 57.
+- Live flow not re-run in this sweep (last green `23:37:43 +08:00`
+  run above stands; no net flow code changed since).
