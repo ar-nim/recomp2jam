@@ -11,7 +11,8 @@ use std::net::SocketAddr;
 use anyhow::{bail, Context, Result};
 use o2jam_net::{
     AuthResponse, AuthResult, AuthorizeRequest, ChannelList, ChannelLogin, ChannelLoginResponse,
-    ChannelState, CharacterInfo, GatewayConnection, Gender, Request, WireMessage,
+    ChannelState, CharacterInfo, GatewayConnection, Gender, Request, RoomList, RoomListEntry,
+    WireMessage,
 };
 
 /// Login options (see `recomp2jam connect --help`).
@@ -52,6 +53,9 @@ pub struct ConnectReport {
     pub channels: Vec<ChannelState>,
     /// Channel login answer, when a channel was requested.
     pub channel_login: Option<ChannelLoginResponse>,
+    /// Room rows, fetched only after a channel login (the room
+    /// controller rejects channel outsiders).
+    pub rooms: Vec<RoomListEntry>,
 }
 
 /// Parse a `--gender` word.
@@ -77,6 +81,11 @@ pub fn connect_and_login(options: &ConnectOptions) -> Result<ConnectReport> {
         ),
         None => None,
     };
+    let rooms = if channel_login.is_some() {
+        fetch_rooms(&mut gateway).context("listing rooms")?
+    } else {
+        Vec::new()
+    };
     // Character info requires channel membership (server-verified:
     // `ChannelAuthorizeAttribute` rejects 2000 outside a channel),
     // so it runs last and only with a channel login.
@@ -95,7 +104,13 @@ pub fn connect_and_login(options: &ConnectOptions) -> Result<ConnectReport> {
         avatar_layers,
         channels,
         channel_login,
+        rooms,
     })
+}
+
+fn fetch_rooms(gateway: &mut GatewayConnection) -> Result<Vec<RoomListEntry>> {
+    let frame = gateway.exchange(Request::GetChannelInfo.id(), &[], RoomList::COMMAND)?;
+    Ok(RoomList::decode_frame(&frame)?.rooms)
 }
 
 /// Human-readable authorize/channel result code.
@@ -322,6 +337,9 @@ mod connect_flow_tests {
                 restricted: Some(false),
             };
             stream.write_all(&entered.encode()).unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetChannelInfo.id());
+            let rooms = RoomList { rooms: vec![] };
+            stream.write_all(&rooms.encode()).unwrap();
         });
         let report = connect_and_login(&test_options(port, Some((1, 2)), false, None)).unwrap();
         server.join().unwrap();
@@ -360,6 +378,9 @@ mod connect_flow_tests {
                 restricted: Some(false),
             };
             stream.write_all(&entered.encode()).unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetChannelInfo.id());
+            let rooms = RoomList { rooms: vec![] };
+            stream.write_all(&rooms.encode()).unwrap();
             assert_eq!(read_frame(&mut stream).id, Request::GetCharacterInfo.id());
             let hero = CharacterInfo {
                 nickname: "tester".to_owned(),
@@ -475,6 +496,9 @@ mod connect_flow_tests {
                 restricted: Some(false),
             };
             stream.write_all(&entered.encode()).unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetChannelInfo.id());
+            let rooms = RoomList { rooms: vec![] };
+            stream.write_all(&rooms.encode()).unwrap();
             assert_eq!(read_frame(&mut stream).id, Request::GetCharacterInfo.id());
             let mut hero = CharacterInfo {
                 nickname: "tester".to_owned(),
