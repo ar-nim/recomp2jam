@@ -4,8 +4,11 @@
 //! strings whose encoding is not yet exe-verified, so it stays
 //! out until the string codec is pinned down.
 
+use std::net::{Ipv4Addr, SocketAddrV4};
+
 use super::error::Error;
 use super::frame::{encode_frame, Frame};
+use super::strings::{decode_null_terminated, encode_null_terminated, MAX_STRING_LEN};
 
 /// Encode/decode contract for one command's body.
 pub trait WireMessage: Sized {
@@ -98,6 +101,181 @@ empty_message!(Ping, 6001);
 empty_message!(SubscriptionAlert, 50);
 empty_message!(ForceReauthorize, 51);
 empty_message!(MultiSessionError, 52);
+
+/// Client identifier every 7.55 client sends (Memoryer `AuthRequest.Id`,
+/// byte-identical to the in-exe constant at file `0x2472c8`).
+pub const MEMORYER_CLIENT_ID: &str = "726PNA-B1YW-28ZG9M-I5SC-Q0OPM6";
+
+/// Gender as the wire carries it: a null-terminated string (Memoryer
+/// `AuthGenderCodec` is decode-only and reads `"m"`/`"1"`, `"f"`/`"0"`,
+/// else `Any`). The exe's exact byte for this field is unverified, so
+/// both spellings decode and we send the numeric one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gender {
+    /// `"0"` on the wire.
+    Female,
+    /// `"1"` on the wire.
+    Male,
+    /// Empty string on the wire (decodes back to `Any`).
+    Any,
+}
+
+impl Gender {
+    /// Wire spelling we send.
+    #[must_use]
+    pub fn as_code(self) -> &'static str {
+        match self {
+            Self::Female => "0",
+            Self::Male => "1",
+            Self::Any => "",
+        }
+    }
+
+    /// Wire spelling Memoryer accepts (case-insensitive).
+    #[must_use]
+    pub fn from_code(code: &str) -> Self {
+        if code.eq_ignore_ascii_case("m") || code == "1" {
+            Self::Male
+        } else if code.eq_ignore_ascii_case("f") || code == "0" {
+            Self::Female
+        } else {
+            Self::Any
+        }
+    }
+}
+
+/// One IPv4 endpoint as Memoryer frames it: 4 address bytes then the
+/// port as little-endian u16 (6 bytes total — same as the exe's two
+/// inline 6-byte blocks at the `Authorize` builder).
+fn encode_endpoint(endpoint: &SocketAddrV4, body: &mut Vec<u8>) {
+    body.extend_from_slice(&endpoint.ip().octets());
+    body.extend_from_slice(&endpoint.port().to_le_bytes());
+}
+
+/// Split 6 endpoint bytes off the front of `body`.
+fn decode_endpoint(body: &[u8]) -> Result<(SocketAddrV4, &[u8]), Error> {
+    if body.len() < 6 {
+        return Err(Error::TruncatedMessage {
+            need: 6,
+            have: body.len(),
+        });
+    }
+    let ip = Ipv4Addr::new(body[0], body[1], body[2], body[3]);
+    let port = u16::from_le_bytes([body[4], body[5]]);
+    Ok((SocketAddrV4::new(ip, port), &body[6..]))
+}
+
+/// `Authorize` 1000 request in Memoryer's field order: marker, relay
+/// keys, public + local endpoints, user id, token, gender, marker,
+/// client id. This is the order our client sends to Memoryer; the
+/// exe's builder emits the same shape (its second runtime string now
+/// reads as the gender string), with byte-level proof still open.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthorizeRequest {
+    /// Relay session key 1.
+    pub relay_key1: i32,
+    /// Relay session key 2.
+    pub relay_key2: i32,
+    /// Client's public address.
+    pub public_endpoint: SocketAddrV4,
+    /// Client's LAN address.
+    pub local_endpoint: SocketAddrV4,
+    /// Account id.
+    pub user_id: i32,
+    /// Username.
+    pub token: String,
+    /// Account gender.
+    pub gender: Gender,
+    /// Client id; defaults to [`MEMORYER_CLIENT_ID`].
+    pub client_id: String,
+}
+
+impl AuthorizeRequest {
+    /// Request with the standard client id filled in.
+    #[must_use]
+    pub fn new(
+        relay_key1: i32,
+        relay_key2: i32,
+        public_endpoint: SocketAddrV4,
+        local_endpoint: SocketAddrV4,
+        user_id: i32,
+        token: String,
+        gender: Gender,
+    ) -> Self {
+        Self {
+            relay_key1,
+            relay_key2,
+            public_endpoint,
+            local_endpoint,
+            user_id,
+            token,
+            gender,
+            client_id: MEMORYER_CLIENT_ID.to_owned(),
+        }
+    }
+}
+
+impl WireMessage for AuthorizeRequest {
+    const COMMAND: u16 = 1000;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = Vec::new();
+        body.push(1);
+        body.extend_from_slice(&self.relay_key1.to_le_bytes());
+        body.extend_from_slice(&self.relay_key2.to_le_bytes());
+        encode_endpoint(&self.public_endpoint, &mut body);
+        encode_endpoint(&self.local_endpoint, &mut body);
+        body.extend_from_slice(&self.user_id.to_le_bytes());
+        body.extend_from_slice(&encode_null_terminated(&self.token, MAX_STRING_LEN));
+        body.extend_from_slice(&encode_null_terminated(
+            self.gender.as_code(),
+            MAX_STRING_LEN,
+        ));
+        body.push(1);
+        body.extend_from_slice(&encode_null_terminated(&self.client_id, MAX_STRING_LEN));
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < 25 {
+            return Err(Error::TruncatedMessage {
+                need: 25,
+                have: body.len(),
+            });
+        }
+        let rest = &body[1..];
+        let relay_key1 = i32::from_le_bytes([rest[0], rest[1], rest[2], rest[3]]);
+        let relay_key2 = i32::from_le_bytes([rest[4], rest[5], rest[6], rest[7]]);
+        let (public_endpoint, tail) = decode_endpoint(&rest[8..])?;
+        let (local_endpoint, tail) = decode_endpoint(tail)?;
+        let user_id = i32::from_le_bytes([tail[0], tail[1], tail[2], tail[3]]);
+        let (token, token_used) = decode_null_terminated(&tail[4..], MAX_STRING_LEN)?;
+        let after_token = &tail[4 + token_used..];
+        let (gender_code, gender_used) = decode_null_terminated(after_token, MAX_STRING_LEN)?;
+        let after_gender = &after_token[gender_used..];
+        if after_gender.len() < 2 {
+            return Err(Error::TruncatedMessage {
+                need: 2,
+                have: after_gender.len(),
+            });
+        }
+        let (client_id, client_used) = decode_null_terminated(&after_gender[1..], MAX_STRING_LEN)?;
+        let rest = &after_gender[1 + client_used..];
+        if !rest.is_empty() {
+            return Err(Error::TrailingBytes(rest.len()));
+        }
+        Ok(Self {
+            relay_key1,
+            relay_key2,
+            public_endpoint,
+            local_endpoint,
+            user_id,
+            token,
+            gender: Gender::from_code(&gender_code),
+            client_id,
+        })
+    }
+}
 
 /// `ChannelLogin` 1004: two little-endian shorts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -472,6 +650,7 @@ mod command_consistency_tests {
 
     #[test]
     fn command_ids_match_message_types() {
+        assert_eq!(AuthorizeRequest::COMMAND, Request::Authorize as u16);
         assert_eq!(ChannelLogin::COMMAND, Request::ChannelLogin as u16);
         assert_eq!(GetChannelList::COMMAND, Request::GetChannelList as u16);
         assert_eq!(SessionKeysRequest::COMMAND, Request::SessionKeys as u16);
@@ -498,6 +677,66 @@ mod command_consistency_tests {
 mod tests {
     use super::*;
     use crate::frame::decode_frame;
+
+    #[test]
+    fn authorize_encodes_memoryer_field_order() {
+        use std::net::{Ipv4Addr, SocketAddrV4};
+        let request = AuthorizeRequest::new(
+            0x0102_0304,
+            0,
+            SocketAddrV4::new(Ipv4Addr::new(1, 2, 3, 4), 5678),
+            SocketAddrV4::new(Ipv4Addr::new(192, 168, 0, 2), 0),
+            42,
+            "ab".to_owned(),
+            Gender::Male,
+        );
+        let mut expected = vec![
+            0x01, 0x04, 0x03, 0x02, 0x01, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04, 0x2E,
+            0x16, 0xC0, 0xA8, 0x00, 0x02, 0x00, 0x00, 0x2A, 0x00, 0x00, 0x00, 0x61, 0x62, 0x00,
+            0x31, 0x00, 0x01,
+        ];
+        expected.extend_from_slice(MEMORYER_CLIENT_ID.as_bytes());
+        expected.push(0x00);
+        assert_eq!(request.encode_body(), expected);
+    }
+
+    #[test]
+    fn authorize_round_trips_through_frame() {
+        use std::net::{Ipv4Addr, SocketAddrV4};
+        let request = AuthorizeRequest::new(
+            7,
+            8,
+            SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 1), 15010),
+            SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 15010),
+            99,
+            "player".to_owned(),
+            Gender::Female,
+        );
+        let frame = decode_frame(&request.encode()).unwrap();
+        assert_eq!(frame.id, 1000);
+        assert_eq!(AuthorizeRequest::decode_frame(&frame), Ok(request));
+    }
+
+    #[test]
+    fn gender_accepts_memoryer_spellings() {
+        assert_eq!(Gender::from_code("m"), Gender::Male);
+        assert_eq!(Gender::from_code("1"), Gender::Male);
+        assert_eq!(Gender::from_code("M"), Gender::Male);
+        assert_eq!(Gender::from_code("f"), Gender::Female);
+        assert_eq!(Gender::from_code("0"), Gender::Female);
+        assert_eq!(Gender::from_code("anything-else"), Gender::Any);
+        assert_eq!(Gender::from_code(""), Gender::Any);
+        assert_eq!(Gender::Male.as_code(), "1");
+        assert_eq!(Gender::Female.as_code(), "0");
+    }
+
+    #[test]
+    fn authorize_rejects_short_body() {
+        assert_eq!(
+            AuthorizeRequest::decode_body(&[0x01; 10]),
+            Err(Error::TruncatedMessage { need: 25, have: 10 })
+        );
+    }
 
     #[test]
     fn channel_login_encodes_little_endian_shorts() {
