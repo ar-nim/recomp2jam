@@ -16,7 +16,7 @@ Automated baseline: `cargo fmt --check` clean,
 | o2jam-game (1474) | 8 | Verified-behavior docs excellent. Deep pass pending. |
 | o2jam-net (file ~3500 across 9 modules) | 8 | `message.rs` (1638) still growing; `RoomInfo` (slot snapshot) vs `RoomListEntry` (list row) naming is one rename away from confusion. Only 2 production `expect`s repo-wide live here (framing/timeout paths map to `Error`). |
 | o2jam-render (808, one file) | 8 | Cohesive pixel math; font tables + blits could split later. |
-| o2jam-shell (~2500) | 8 | `Shell::run` embeds the whole `Handler` (~150 lines); `screens.rs` (936) growing per screen. `present()` silently skipped mismatched frames — fixed this pass via Context7-verified stretch. |
+| o2jam-shell (~2500) | 9 | `Shell::run` embeds the whole `Handler` (~150 lines); `screens.rs` (936) growing per screen. `present()` silently skipped mismatched frames — fixed this pass via Context7-verified stretch. |
 | recomp2jam (1192) | 8 | `main.rs` mixes CLI + bank/audio setup + autoplay; `connect.rs` mixes flow + avatar file IO. No production `unwrap`/`expect` (verified by sweep). |
 
 ## Fixed this pass
@@ -31,7 +31,7 @@ Automated baseline: `cargo fmt --check` clean,
 ## Backlog (priority order)
 
 1. Split `o2jam-file/lib.rs` by format (`ojm.rs`, `ojn.rs`, `opi.rs`, shop tables).
-2. Extract shell `Handler` out of `Shell::run`; split `screens.rs` per screen.
+2. ~~Extract shell `Handler` out of `Shell::run`~~ DONE (`window.rs`; `run()` is 10 lines). Split `screens.rs` per screen.
 3. `message.rs`/`rooms.rs` naming consolidation (`RoomInfo` vs `RoomListEntry`).
 4. Pedantic polish pass (advisory only): `#[must_use]`, `# Errors` docs,
    `u32::from` over `as` where infallible. Production `as` casts reviewed
