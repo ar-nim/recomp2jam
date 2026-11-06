@@ -199,26 +199,41 @@ bars at `0x4e7de2`/`0x4e7d7b`); grade string `"LIFE 100%"`
 fail is presumably bar-empty + `Image_GameOver_Image.ojs`
 (file `0x24af72`), unconfirmed.
 
-Server tracking VERIFIED (this is how peers' bars work):
+Server tracking VERIFIED (this is how peers' bars work),
+with the type split nailed down via Mozart.Encore's
+Memoryer server (clean-room C# reimplementation for v7.55;
+its `GameUpdateStatsType` enum reads `Life = 0`, `Jam = 1`,
+which explains the exe's two send sites — corroboration,
+not ground truth):
 - `UpdateGameStats` (game TCP 4014, `push $0xfae`) is sent
-  mid-song from the score path itself: Cool-path tail (file
-  `0x16e660`) and Good-path tail (file `0x16e7dd`) each do
-  `push $0x1; push $0xfae; call [netobj.vtable+0x84]`, where
-  `netobj = obj->field4 - 0x3c`. A second site (file
-  `0x4eaf3b`) sends with arg `0`, gated on globals byte
-  `!= 6` (same mode-6 exemption shape as pills). Bad/Miss
-  tails in this region send no 4014. Relay TCP op 5 is also
-  `UpdateGameStats` C→S (ctor file `0xea4e0`), and Live mode
-  broadcasts combo events (`CO2JamMissPack` op 6, ctor file
-  `0x16dfe0`; `CO2JamCoolPack` op 7, ctor file `0x16e080`).
-  S→C echo is `4015 GameStatsUpdate` (response list); the 4015
-  handler (where peer life would land, plausibly the 8-seat
-  member array at VA `0x77ee90` + `index*8592` seen at file
-  `0x4eaf13`–`0x4eaf1d`) is NOT yet located — OPEN.
-- `SubmitScore` (4016, `push $0xfb0`) carries `u8 life`
-  (format per net-protocol doc); in-exe sites (e.g. file
-  `0x4eb018`) are thin `vtable+0x84` wrappers, so the life
-  field read happens downstream — field offset OPEN.
+  mid-song from the score path itself: Cool tail (file
+  `0x16e660`) and Good tail (file `0x16e7dd`) send with
+  arg `1` = Jam (jam streams per-hit); a tick-driven site
+  (function file `0x4eaec0`, reached when per-tick helper
+  `0x570a50` returns 2, file `0x4ea990`) sends with arg `0`
+  = Life (file `0x4eaf3b`), gated on globals byte `!= 6`.
+  Bad/Miss tails in this region send no 4014. So life
+  streams on a tick, jam streams per hit.
+- Memoryer's `ScoreTracker` (hypothesis for our exe except
+  where the exe confirms): life range 0–1000, validates
+  `0 <= life <= 1000`, ignores updates once `Life == 0`,
+  and on submit sets `Clear = Life > 0` — death (0) = fail.
+  It broadcasts S→C `GameStatsUpdate` (4015) with
+  `memberId + type + value + 8 member ranks` to the room —
+  one packet carries both the peer lifebar and live ranks.
+  The 4015 handler in our exe (where peer life would land,
+  plausibly the 8-seat member array at VA `0x77ee90` +
+  `index*8592` seen at file `0x4eaf13`–`0x4eaf1d`) is NOT yet
+  located — OPEN. Relay TCP op 5 mirrors UpdateGameStats
+  C→S in Live mode, with `CO2JamMissPack`/`CO2JamCoolPack`
+  combo broadcasts (ops 6/7, ctors file `0x16dfe0`/`0x16e080`).
+- `SubmitScore` (4016, `push $0xfb0`) layout corroborated
+  field-for-field by Memoryer's `ScoreSubmissionRequest`
+  (`u16 cool/good/bad/miss/maxCombo/jam/maxJam`, `u32`
+  score, `u8 life`, speed, `i32 longNoteScore`); in-exe
+  sites (e.g. file `0x4eb018`) are thin `vtable+0x84`
+  wrappers, so the life field read happens downstream —
+  field offset OPEN.
 
 Client memory fields OPEN:
 - Candidate signed table at file `0x35e1a0`–`0x35ec90`
