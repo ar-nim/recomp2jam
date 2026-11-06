@@ -31,7 +31,7 @@ Automated baseline: `cargo fmt --check` clean,
 ## Backlog (priority order)
 
 1. Split `o2jam-file/lib.rs` by format (`ojm.rs`, `ojn.rs`, `opi.rs`, shop tables).
-2. ~~Extract shell `Handler` out of `Shell::run`~~ DONE (`window.rs`; `run()` is 10 lines). Split `screens.rs` per screen.
+2. ~~Extract shell `Handler` out of `Shell::run`~~ DONE (`window.rs`; `run()` is 10 lines). Split `screens.rs` per screen — DONE (`screens/paint.rs` + `screens/game.rs`; tests moved alongside).
 3. ~~`message.rs`/`rooms.rs` naming consolidation~~ DONE (`RoomInfo` → `CreatedRoom`; `RoomListEntry`/`JoinedRoom` kept).
 4. Pedantic polish: DONE mechanical classes (`must_use` ×13, infallible
    `From` ×4, or-pattern merges, `is_some_and`/`map_or`, elided lifetimes,
