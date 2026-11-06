@@ -88,8 +88,11 @@ All request/response/event layouts live in
   trailing i32 flag; alerts 50/51/52 as empty bodies; 1001
   `AuthResponse` (u32 result + opaque tail; full pass-info
   submessage decode deferred until subscription display needs it).
-- `GetCharacterInfo` 2000 → 2001 (equipment codec:
-  `CharacterEquipmentInfoCodec`).
+- `GetCharacterInfo` 2000 → 2001 — DONE in `o2jam-net`
+  (`CharacterInfo`: stats, 17-slot equipment table, inventory,
+  gift boxes, cash/penalties; empty 2000 request) and wired to
+  `recomp2jam connect --character` (e2e-tested). Phase 1 message
+  work is complete; only live-server proof stays open.
 
 ### Phase 2 — main room / channel UI
 - Room list (2003), user list (2010/2011), chat

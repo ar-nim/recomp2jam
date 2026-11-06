@@ -12,6 +12,7 @@ pub enum Request {
     GetChannelList = 1002,
     ChannelLogin = 1004,
     SessionKeys = 1007,
+    GetCharacterInfo = 2000,
     Terminate = 65520,
 }
 
@@ -30,6 +31,7 @@ impl Request {
             1002 => Some(Self::GetChannelList),
             1004 => Some(Self::ChannelLogin),
             1007 => Some(Self::SessionKeys),
+            2000 => Some(Self::GetCharacterInfo),
             65520 => Some(Self::Terminate),
             _ => None,
         }
@@ -73,6 +75,7 @@ pub enum Response {
     GetChannelList = 1003,
     ChannelLogin = 1005,
     SessionKeys = 1008,
+    GetCharacterInfo = 2001,
 }
 
 impl Response {
@@ -93,6 +96,7 @@ impl Response {
             1003 => Some(Self::GetChannelList),
             1005 => Some(Self::ChannelLogin),
             1008 => Some(Self::SessionKeys),
+            2001 => Some(Self::GetCharacterInfo),
             _ => None,
         }
     }
@@ -108,6 +112,7 @@ mod tests {
         assert_eq!(Request::from_id(1002), Some(Request::GetChannelList));
         assert_eq!(Request::from_id(1004), Some(Request::ChannelLogin));
         assert_eq!(Request::from_id(1007), Some(Request::SessionKeys));
+        assert_eq!(Request::from_id(2000), Some(Request::GetCharacterInfo));
         assert_eq!(Request::from_id(65520), Some(Request::Terminate));
     }
 
@@ -128,6 +133,12 @@ mod tests {
         assert_eq!(Response::from_id(1003), Some(Response::GetChannelList));
         assert_eq!(Response::from_id(1008), Some(Response::SessionKeys));
         assert_eq!(Response::from_id(1002), None);
+    }
+
+    #[test]
+    fn resolves_character_info_id() {
+        assert_eq!(Response::from_id(2001), Some(Response::GetCharacterInfo));
+        assert_eq!(Response::from_id(2000), None);
     }
 
     #[test]

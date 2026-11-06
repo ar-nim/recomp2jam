@@ -12,6 +12,7 @@
 //! only pins id-at-offset-2, so live interop is still the final
 //! check (`docs/net-protocol.md` records it OPEN).
 
+pub mod character;
 pub mod client;
 pub mod command;
 pub mod error;
@@ -21,6 +22,9 @@ pub mod strings;
 
 pub use client::{GatewayConnection, DEFAULT_GATEWAY_PORT};
 
+pub use character::{
+    AttributiveItemInfo, CharacterInfo, GiftItemInfo, GiftMusicInfo, EQUIPMENT_SLOTS,
+};
 pub use command::{Generic, Request, Response};
 pub use error::Error;
 pub use frame::{Frame, FrameSplitter, HEADER_LEN, ID_OFFSET};

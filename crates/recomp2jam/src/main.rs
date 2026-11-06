@@ -57,6 +57,9 @@ enum Command {
         /// Channel id to enter (needs --gateway-id too).
         #[arg(long, requires = "gateway_id")]
         channel_id: Option<i16>,
+        /// Fetch character info after authorizing.
+        #[arg(long)]
+        character: bool,
     },
     /// Stub gameplay entry point (autoplay with null backend for now).
     Play {
@@ -106,6 +109,7 @@ fn main() -> Result<()> {
             relay_key2,
             gateway_id,
             channel_id,
+            character,
         } => {
             let options = connect::ConnectOptions {
                 host,
@@ -116,9 +120,16 @@ fn main() -> Result<()> {
                 relay_key1,
                 relay_key2,
                 channel: gateway_id.zip(channel_id),
+                character,
             };
             let report = connect::connect_and_login(&options)?;
             println!("authorize: {}", connect::name_result(report.auth_code));
+            if let Some(hero) = &report.character {
+                println!(
+                    "character: {} (Lv {}, {:?}, {} XP)",
+                    hero.nickname, hero.level, hero.gender, hero.experience
+                );
+            }
             println!("channels: {}", report.channels.len());
             for channel in &report.channels {
                 println!(
