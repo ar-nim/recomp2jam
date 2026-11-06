@@ -35,5 +35,8 @@ pub use message::{
     MultiSessionError, Ping, RoomCreated, RoomInfo, SessionKeys, SessionKeysRequest,
     SubscriptionAlert, Terminate, WireMessage, MEMORYER_CLIENT_ID,
 };
-pub use rooms::{Difficulty, GameSpeed, RoomList, RoomListEntry, RoomState, ROOM_TITLE_LEN};
+pub use rooms::{
+    Difficulty, GameSpeed, JoinResult, JoinRoom, JoinRoomResponse, JoinedRoom, RoomList,
+    RoomListEntry, RoomMember, RoomSlot, RoomSlotState, RoomState, ROOM_TITLE_LEN,
+};
 pub use strings::{decode_null_terminated, encode_null_terminated, MAX_STRING_LEN};

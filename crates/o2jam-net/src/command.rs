@@ -15,6 +15,7 @@ pub enum Request {
     GetCharacterInfo = 2000,
     GetChannelInfo = 2002,
     CreateRoom = 2004,
+    JoinWaiting = 3002,
     Terminate = 65520,
 }
 
@@ -25,7 +26,7 @@ impl Request {
         self as u16
     }
 
-    /// Resolve a received id. `None` means not a Phase-1 request.
+    /// Resolve a received id. `None` means not a known request.
     #[must_use]
     pub fn from_id(id: u16) -> Option<Self> {
         match id {
@@ -36,6 +37,7 @@ impl Request {
             2000 => Some(Self::GetCharacterInfo),
             2002 => Some(Self::GetChannelInfo),
             2004 => Some(Self::CreateRoom),
+            3002 => Some(Self::JoinWaiting),
             65520 => Some(Self::Terminate),
             _ => None,
         }
@@ -82,6 +84,7 @@ pub enum Response {
     GetCharacterInfo = 2001,
     RoomList = 2003,
     CreateRoom = 2006,
+    JoinRoom = 3003,
 }
 
 impl Response {
@@ -91,7 +94,7 @@ impl Response {
         self as u16
     }
 
-    /// Resolve a received id. `None` means not a Phase-1 response.
+    /// Resolve a received id. `None` means not a known response.
     #[must_use]
     pub fn from_id(id: u16) -> Option<Self> {
         match id {
@@ -105,6 +108,7 @@ impl Response {
             2001 => Some(Self::GetCharacterInfo),
             2003 => Some(Self::RoomList),
             2006 => Some(Self::CreateRoom),
+            3003 => Some(Self::JoinRoom),
             _ => None,
         }
     }
@@ -145,6 +149,7 @@ mod tests {
         assert_eq!(Request::from_id(1004), Some(Request::ChannelLogin));
         assert_eq!(Request::from_id(1007), Some(Request::SessionKeys));
         assert_eq!(Request::from_id(2000), Some(Request::GetCharacterInfo));
+        assert_eq!(Request::from_id(3002), Some(Request::JoinWaiting));
         assert_eq!(Request::from_id(2002), Some(Request::GetChannelInfo));
         assert_eq!(Request::from_id(65520), Some(Request::Terminate));
     }

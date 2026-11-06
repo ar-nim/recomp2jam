@@ -11,8 +11,8 @@ use std::net::SocketAddr;
 use anyhow::{bail, Context, Result};
 use o2jam_net::{
     AuthResponse, AuthResult, AuthorizeRequest, ChannelList, ChannelLogin, ChannelLoginResponse,
-    ChannelState, CharacterInfo, GatewayConnection, Gender, Request, RoomList, RoomListEntry,
-    WireMessage,
+    ChannelState, CharacterInfo, GatewayConnection, Gender, JoinRoom, JoinRoomResponse, Request,
+    RoomList, RoomListEntry, WireMessage,
 };
 
 /// Login options (see `recomp2jam connect --help`).
@@ -38,6 +38,11 @@ pub struct ConnectOptions {
     /// `avatar.opa` path: stack the worn figure from the fetched
     /// equipment (`None` skips avatar work; needs `character`).
     pub avatar_opa: Option<String>,
+    /// Room number to join after the channel login (`None` skips;
+    /// needs a channel).
+    pub join_room: Option<i32>,
+    /// Password for `--join-room` (empty when unlocked).
+    pub room_password: String,
 }
 
 /// What the login flow learned.
@@ -53,6 +58,8 @@ pub struct ConnectReport {
     pub channels: Vec<ChannelState>,
     /// Channel login answer, when a channel was requested.
     pub channel_login: Option<ChannelLoginResponse>,
+    /// Join answer, when a room was requested.
+    pub join: Option<JoinRoomResponse>,
     /// Room rows, fetched only after a channel login (the room
     /// controller rejects channel outsiders).
     pub rooms: Vec<RoomListEntry>,
@@ -86,6 +93,12 @@ pub fn connect_and_login(options: &ConnectOptions) -> Result<ConnectReport> {
     } else {
         Vec::new()
     };
+    let join = match (options.join_room, &channel_login) {
+        (Some(number), Some(_)) => {
+            Some(join_room(&mut gateway, number, &options.room_password).context("joining room")?)
+        }
+        _ => None,
+    };
     // Character info requires channel membership (server-verified:
     // `ChannelAuthorizeAttribute` rejects 2000 outside a channel),
     // so it runs last and only with a channel login.
@@ -105,7 +118,30 @@ pub fn connect_and_login(options: &ConnectOptions) -> Result<ConnectReport> {
         channels,
         channel_login,
         rooms,
+        join,
     })
+}
+
+fn join_room(
+    gateway: &mut GatewayConnection,
+    number: i32,
+    password: &str,
+) -> Result<JoinRoomResponse> {
+    let request = JoinRoom {
+        number,
+        music_state: 0,
+        password: password.to_owned(),
+    };
+    let frame = gateway.exchange(
+        Request::JoinWaiting.id(),
+        &request.encode_body(),
+        JoinRoomResponse::COMMAND,
+    )?;
+    let response = JoinRoomResponse::decode_frame(&frame)?;
+    match o2jam_net::JoinResult::from_code(response.result_code) {
+        Some(o2jam_net::JoinResult::Success) => Ok(response),
+        _ => bail!("join rejected: {}", name_result(response.result_code)),
+    }
 }
 
 fn fetch_rooms(gateway: &mut GatewayConnection) -> Result<Vec<RoomListEntry>> {
@@ -278,6 +314,8 @@ mod connect_flow_tests {
             channel,
             character,
             avatar_opa,
+            join_room: None,
+            room_password: String::new(),
         }
     }
 
@@ -517,6 +555,77 @@ mod connect_flow_tests {
         server.join().unwrap();
         std::fs::remove_file(&path).ok();
         assert_eq!(report.avatar_layers, 1);
+    }
+
+    #[test]
+    fn joins_room_after_channel_login() {
+        use o2jam_net::{JoinRoomResponse, JoinedRoom};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::Authorize.id());
+            let authed = AuthResponse {
+                result_code: 0,
+                tail: vec![],
+            };
+            stream.write_all(&authed.encode()).unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetChannelList.id());
+            let listed = ChannelList { channels: vec![] };
+            stream.write_all(&listed.encode()).unwrap();
+            let join = read_frame(&mut stream);
+            assert_eq!(join.id, Request::ChannelLogin.id());
+            let entered = ChannelLoginResponse {
+                result_code: 0,
+                restricted: Some(false),
+            };
+            stream.write_all(&entered.encode()).unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetChannelInfo.id());
+            let rooms = RoomList { rooms: vec![] };
+            stream.write_all(&rooms.encode()).unwrap();
+            let asked = read_frame(&mut stream);
+            assert_eq!(asked.id, Request::JoinWaiting.id());
+            let mut slots = Vec::new();
+            for index in 0..7u8 {
+                slots.push(o2jam_net::RoomSlot {
+                    index,
+                    state_code: 0,
+                    member: None,
+                });
+            }
+            let answered = JoinRoomResponse {
+                result_code: 0,
+                room: Some(JoinedRoom {
+                    member_id: 0,
+                    team: 0,
+                    title: "Lobby".to_owned(),
+                    music_id: 0,
+                    arena: 0,
+                    key_mode: 2,
+                    game_mode: 0,
+                    difficulty: 0,
+                    speed: 1,
+                    has_super_manager: false,
+                    user_count: 1,
+                    slots,
+                    skills: vec![],
+                    premium: false,
+                    champion: None,
+                    champion_streak: None,
+                }),
+            };
+            stream.write_all(&answered.encode()).unwrap();
+        });
+        let mut options = test_options(port, Some((1, 2)), false, None);
+        options.join_room = Some(3);
+        let report = connect_and_login(&options).unwrap();
+        server.join().unwrap();
+        let room = report.join.unwrap().room.unwrap();
+        assert_eq!(room.title, "Lobby");
+        assert_eq!(room.user_count, 1);
     }
 
     #[test]
