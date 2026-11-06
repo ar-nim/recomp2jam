@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 
+use super::avatar::AvatarFigure;
 use super::playing::{HighwayGeometry, LivePlay, PlayingView};
 use super::screen::{Screen, ScreenFlow};
 use super::GameLoop;
@@ -91,13 +92,16 @@ fn paint_loading(frame: &mut Frame<'_>) {
     );
 }
 
-/// Paint the results scene.
-fn paint_result(frame: &mut Frame<'_>) {
+/// Paint the results scene; a loaded avatar figure replaces the card.
+fn paint_result(frame: &mut Frame<'_>, avatar: Option<&AvatarFigure>) {
     paint_card(
         frame,
         pack_xrgb(0x10, 0x10, 0x08),
         pack_xrgb(0xC0, 0xA0, 0x20),
     );
+    if let Some(figure) = avatar {
+        figure.paint(frame, frame.w as i32 / 2 - 32, frame.h as i32 / 2 - 32);
+    }
 }
 
 /// Background plus a centered card.
@@ -160,7 +164,7 @@ pub fn paint_screen(frame: &mut Frame<'_>, screen: Screen) {
         Screen::Playing => {
             PlayingView::default().paint(frame, &HighwayGeometry::centered(frame.w, frame.h))
         }
-        Screen::Result => paint_result(frame),
+        Screen::Result => paint_result(frame, None),
     }
 }
 
@@ -173,6 +177,7 @@ pub struct ScreenGame {
     playing: LivePlay,
     started_at: Option<std::time::Instant>,
     audio: Option<AudioRig>,
+    avatar: Option<AvatarFigure>,
 }
 
 /// Key-sound bank plus backend for windowed play.
@@ -190,7 +195,14 @@ impl ScreenGame {
             playing: LivePlay::new(Vec::new()),
             started_at: None,
             audio: None,
+            avatar: None,
         }
+    }
+
+    /// Load the result-screen avatar figure.
+    pub fn load_avatar(&mut self, figure: AvatarFigure) -> &mut Self {
+        self.avatar = Some(figure);
+        self
     }
 
     /// Attach key sounds; struck notes play through the backend.
@@ -222,7 +234,9 @@ impl ScreenGame {
         }
     }
 
-    /// Song position: wall clock since first Playing frame or key.
+    /// Song position: wall clock since first paint or key. Playing
+    /// entry is not wired yet, so the clock starts early; entry will
+    /// reset it when transitions land.
     fn now_ms(&mut self) -> u64 {
         let start = *self.started_at.get_or_insert_with(std::time::Instant::now);
         start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
@@ -244,11 +258,13 @@ impl ScreenGame {
     /// Paint with an explicit clock (tests use this; live paint reads
     /// the wall clock).
     pub fn paint_at(&mut self, frame: &mut Frame<'_>, now_ms: u64) {
-        if self.flow.current() == Screen::Playing {
-            let geom = HighwayGeometry::centered(frame.w, frame.h);
-            self.playing.paint(frame, &geom, now_ms);
-        } else {
-            paint_screen(frame, self.flow.current());
+        match self.flow.current() {
+            Screen::Playing => {
+                let geom = HighwayGeometry::centered(frame.w, frame.h);
+                self.playing.paint(frame, &geom, now_ms);
+            }
+            Screen::Result => paint_result(frame, self.avatar.as_ref()),
+            screen => paint_screen(frame, screen),
         }
     }
 }
@@ -277,12 +293,8 @@ impl GameLoop for ScreenGame {
     }
 
     fn paint(&mut self, frame: &mut Frame<'_>) {
-        if self.flow.current() == Screen::Playing {
-            let now = self.now_ms();
-            self.paint_at(frame, now);
-        } else {
-            paint_screen(frame, self.flow.current());
-        }
+        let now = self.now_ms();
+        self.paint_at(frame, now);
     }
 }
 
@@ -408,6 +420,51 @@ mod screen_paint_tests {
         game.strike_at(2, 5000);
         assert_eq!(game.playing.score().combo, 1);
         assert!(game.playing.drain_sounds().is_empty());
+    }
+
+    #[test]
+    fn result_paints_loaded_avatar_over_card() {
+        use o2jam_file::{parse_sprite55, SPRITE55_MAGIC};
+        // 2x1 sprite-55: transparent black, then red.
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&1u16.to_le_bytes());
+        blob.extend_from_slice(&SPRITE55_MAGIC.to_le_bytes());
+        blob.extend_from_slice(&1u16.to_le_bytes());
+        blob.extend_from_slice(&0u16.to_le_bytes());
+        for field in [0u16, 0u16, 2u16, 1u16] {
+            blob.extend_from_slice(&field.to_le_bytes());
+        }
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        blob.extend_from_slice(&4u32.to_le_bytes());
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        blob.extend_from_slice(&[0x00, 0x00, 0x00, 0x7C]);
+        let sprite = parse_sprite55(&blob).unwrap();
+        let mut game = ScreenGame::new();
+        game.load_avatar(AvatarFigure::from_sprite55(&sprite));
+        for next in [
+            Screen::Channel,
+            Screen::Room,
+            Screen::Waiting,
+            Screen::Loading,
+            Screen::Playing,
+            Screen::Result,
+        ] {
+            game.flow.go(next).unwrap();
+        }
+        // 256x256 result: card spans 96..160 both ways and the
+        // figure paints at (96, 96); the red pixel lands at
+        // (97, 96), the transparent one keeps card gray.
+        let mut buf = vec![0u32; 256 * 256];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 256,
+                h: 256,
+            },
+            0,
+        );
+        assert_eq!(buf[96 * 256 + 97], pack_xrgb(255, 0, 0));
+        assert_eq!(buf[96 * 256 + 96], pack_xrgb(0xC0, 0xA0, 0x20));
     }
 
     #[test]
