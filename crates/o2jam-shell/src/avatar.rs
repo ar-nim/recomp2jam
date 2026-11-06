@@ -6,8 +6,19 @@
 //! Equipped parts stack on as extra layers; which filenames those
 //! are comes from [`pick_wear_sprites`].
 
-use o2jam_file::Sprite55;
+use std::collections::HashMap;
+
+use o2jam_file::{AvatarItemTable, Sprite55};
 use o2jam_render::{blit_rgb555, Frame, Rgb555Image};
+
+/// Archive body name for a table filename: same stem, `.ojs`
+/// container (the table spells `.oji`).
+fn archive_name(filename: &str) -> String {
+    match filename.rsplit_once('.') {
+        Some((stem, _)) => format!("{stem}.ojs"),
+        None => filename.to_owned(),
+    }
+}
 
 /// One composited part: image plus its record anchor offset.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,6 +29,8 @@ pub struct FigureLayer {
     pub dx: i32,
     /// Placement anchor from the sprite record.
     pub dy: i32,
+    /// Transparent colour key of the source body.
+    pub colorkey: u16,
 }
 
 /// Drawable decoded sprite-55 body: layers painted back to front at
@@ -28,8 +41,6 @@ pub struct FigureLayer {
 pub struct AvatarFigure {
     /// Layers in paint order.
     layers: Vec<FigureLayer>,
-    /// Transparent colour key from the container.
-    colorkey: u16,
 }
 
 impl AvatarFigure {
@@ -47,13 +58,11 @@ impl AvatarFigure {
                         image: decoded,
                         dx: i32::from(image.x),
                         dy: i32::from(image.y),
+                        colorkey: sprite.colorkey,
                     })
             })
             .collect();
-        Self {
-            layers,
-            colorkey: sprite.colorkey,
-        }
+        Self { layers }
     }
 
     /// Stack an extra layer on top (equipped parts resolve here).
@@ -73,7 +82,8 @@ impl AvatarFigure {
         self.layers.is_empty()
     }
 
-    /// Paint every layer with its top-left at `(x, y)` plus anchor.
+    /// Paint every layer with its top-left at `(x, y)` plus anchor,
+    /// each under its own source colorkey.
     pub fn paint(&self, frame: &mut Frame<'_>, x: i32, y: i32) {
         for layer in &self.layers {
             blit_rgb555(
@@ -81,10 +91,51 @@ impl AvatarFigure {
                 &layer.image.view(),
                 x + layer.dx,
                 y + layer.dy,
-                Some(self.colorkey),
+                Some(layer.colorkey),
             );
         }
     }
+}
+
+/// Build the worn figure for an equipment table: per nonzero item
+/// id (in slot order) resolve the item row, pick its wear sprites,
+/// and stack every decodable body as layers. Unresolvable pieces —
+/// unknown ids, missing archive entries, non-sprite or undecodable
+/// bodies — are skipped, never fatal: one bad sprite must not blank
+/// the whole avatar. Empty when nothing resolves.
+#[must_use]
+pub fn load_worn_figure(
+    archive: &[u8],
+    table: &AvatarItemTable,
+    equipment: &[i32],
+    male: bool,
+) -> AvatarFigure {
+    let rows: HashMap<u32, _> = table.rows.iter().map(|row| (row.item_id, row)).collect();
+    let entries = o2jam_file::parse_opi(archive).unwrap_or_default();
+    let mut figure = AvatarFigure::default();
+    for id in equipment.iter().copied().filter(|id| *id != 0) {
+        let Some(row) = rows.get(&(id as u32)) else {
+            continue;
+        };
+        for filename in pick_wear_sprites(row, male) {
+            let wanted = archive_name(&filename);
+            let Some(entry) = entries.iter().find(|entry| entry.name == wanted) else {
+                continue;
+            };
+            let Some(body) =
+                archive.get(entry.data_offset..entry.data_offset + entry.size as usize)
+            else {
+                continue;
+            };
+            let Ok(sprite) = o2jam_file::parse_sprite55(body) else {
+                continue;
+            };
+            figure
+                .layers
+                .extend(AvatarFigure::from_sprite55(&sprite).layers);
+        }
+    }
+    figure
 }
 
 /// Pick the sprite filenames one equipped item contributes to the
@@ -225,11 +276,13 @@ mod avatar_figure_tests {
             image: Rgb555Image::decode(&[0x00, 0x7C, 0x00, 0x7C], 2, 1).unwrap(),
             dx: 0,
             dy: 0,
+            colorkey: 0x0000,
         });
         figure.push_layer(FigureLayer {
             image: Rgb555Image::decode(&[0xE0, 0x03, 0xE0, 0x03], 2, 1).unwrap(),
             dx: 1,
             dy: 0,
+            colorkey: 0x0000,
         });
         let mut buf = vec![0u32; 3];
         figure.paint(
@@ -245,6 +298,107 @@ mod avatar_figure_tests {
         assert_eq!(buf[0], o2jam_render::pack_xrgb(255, 0, 0));
         assert_eq!(buf[1], o2jam_render::pack_xrgb(0, 255, 0));
         assert_eq!(buf[2], o2jam_render::pack_xrgb(0, 255, 0));
+    }
+
+    /// Minimal `.opa`: header + bodies + trailing entry table.
+    fn opa_blob(bodies: &[(&str, &[u8])]) -> Vec<u8> {
+        use o2jam_file::{
+            OPI_ENTRY_LEN, OPI_HEADER_LEN, OPI_NAME_OFF, OPI_OFFSET_OFF, OPI_RESERVED_OFF,
+            OPI_SIZE_OFF,
+        };
+        let mut blob = vec![0u8; OPI_HEADER_LEN];
+        blob[..4].copy_from_slice(&1u32.to_le_bytes());
+        blob[4..8].copy_from_slice(&(bodies.len() as u32).to_le_bytes());
+        let mut off = OPI_HEADER_LEN as u32;
+        let mut table = Vec::new();
+        for (name, body) in bodies {
+            let mut entry = vec![0u8; OPI_ENTRY_LEN];
+            entry[..4].copy_from_slice(&1u32.to_le_bytes());
+            entry[OPI_NAME_OFF..OPI_NAME_OFF + name.len()].copy_from_slice(name.as_bytes());
+            entry[OPI_OFFSET_OFF..OPI_OFFSET_OFF + 4].copy_from_slice(&off.to_le_bytes());
+            entry[OPI_SIZE_OFF..OPI_SIZE_OFF + 4]
+                .copy_from_slice(&(body.len() as u32).to_le_bytes());
+            entry[OPI_RESERVED_OFF..OPI_RESERVED_OFF + 4]
+                .copy_from_slice(&(body.len() as u32).to_le_bytes());
+            table.push(entry);
+            off += body.len() as u32;
+        }
+        for (name, body) in bodies {
+            let _ = name;
+            blob.extend_from_slice(body);
+        }
+        for entry in table {
+            blob.extend_from_slice(&entry);
+        }
+        blob
+    }
+
+    fn item_row(id: u32, slots: &[&str]) -> o2jam_file::AvatarItemRow {
+        o2jam_file::AvatarItemRow {
+            item_id: id,
+            item_type: 0,
+            price: 0,
+            params: [0; 4],
+            flags: (0, 0),
+            name: String::new(),
+            description: String::new(),
+            sprites: slots.iter().map(|name| (1u8, (*name).to_owned())).collect(),
+        }
+    }
+
+    #[test]
+    fn worn_figure_stacks_resolved_sprites() {
+        let red = sprite55_blob(1, 0x0000, 2, 1, &[0x00, 0x00, 0x00, 0x7C]);
+        let green = sprite55_blob(1, 0x0000, 1, 1, &[0xE0, 0x03]);
+        let archive = opa_blob(&[("01F01001.ojs", &red), ("01F01002.ojs", &green)]);
+        let table = o2jam_file::AvatarItemTable {
+            rows: vec![item_row(
+                5,
+                &["icon.oji", "icon.oji", "01F01001.oji", "01F01002.oji"],
+            )],
+        };
+        let male = load_worn_figure(&archive, &table, &[5], true);
+        assert_eq!(male.len(), 1);
+        let female = load_worn_figure(&archive, &table, &[5], false);
+        assert_eq!(female.len(), 1);
+        let mut buf = vec![0u32; 2];
+        male.paint(
+            &mut Frame {
+                buf: &mut buf,
+                w: 2,
+                h: 1,
+            },
+            0,
+            0,
+        );
+        assert_eq!(buf[1], o2jam_render::pack_xrgb(255, 0, 0));
+        let mut buf = vec![0u32; 1];
+        female.paint(
+            &mut Frame {
+                buf: &mut buf,
+                w: 1,
+                h: 1,
+            },
+            0,
+            0,
+        );
+        assert_eq!(buf[0], o2jam_render::pack_xrgb(0, 255, 0));
+    }
+
+    #[test]
+    fn worn_figure_skips_unresolvable_pieces() {
+        let archive = opa_blob(&[("real.ojs", &sprite55_blob(1, 0, 1, 1, &[0x00, 0x00]))]);
+        let table = o2jam_file::AvatarItemTable {
+            rows: vec![
+                item_row(5, &["x.oji", "x.oji", "missing.oji", "real.oji"]),
+                item_row(6, &["x.oji", "x.oji", "junk.oji"]),
+            ],
+        };
+        // Unknown id 999 skipped; missing entry skipped; junk.oji has
+        // no archive body so id 6 contributes nothing either.
+        let junk_archive = opa_blob(&[("junk.ojs", b"not a sprite")]);
+        assert!(load_worn_figure(&archive, &table, &[999], true).is_empty());
+        assert!(load_worn_figure(&junk_archive, &table, &[6], true).is_empty());
     }
 
     #[test]
