@@ -14,8 +14,8 @@ use o2jam_file::{
 };
 use o2jam_net::CharacterInfo;
 use o2jam_render::{
-    blit_anchor_in_rect, blit_rgb555, rect_from_corners, scale_rect_to_frame, Frame, Rect,
-    Rgb555Image,
+    blit_anchor_in_rect, blit_rgb555, blit_rgb555_clipped, rect_from_corners, scale_rect_to_frame,
+    Frame, Rect, Rgb555Image,
 };
 
 /// Archive body name for a table filename: same stem, `.ojs`
@@ -129,13 +129,20 @@ impl AvatarFigure {
 /// ASCII-case fallback (recipe step 6): 7.55 spells four bodies
 /// differently from their block refs (`Main_level.ojs` vs
 /// `main_level.ojs`, plus three Interface case-only refs;
-/// docs/file-formats/opi.md). The body slices `size`, never
-/// `reserved_size` (step 6; the patcher keeps stale allocation bytes
-/// past `size`).
+/// docs/file-formats/opi.md). A leading `_` falls back to its bare
+/// stem (`_Playing_BG.ojs` loads through `Playing_BG.ojs`): the
+/// underscore marks runtime resolution (numbered/`.oja` siblings
+/// live beside the bare stem), never an archive miss. The body
+/// slices `size`, never `reserved_size` (step 6; the patcher keeps
+/// stale allocation bytes past `size`).
 #[must_use]
 pub fn load_archive_sprite(archive: &[u8], entry_name: &str) -> Option<AvatarFigure> {
     let entries = o2jam_file::parse_opi(archive).ok()?;
-    let entry = find_opi_entry(&entries, entry_name)?;
+    let entry = find_opi_entry(&entries, entry_name).or_else(|| {
+        entry_name
+            .strip_prefix('_')
+            .and_then(|stem| find_opi_entry(&entries, stem))
+    })?;
     let body = opi_entry_body(archive, entry).ok()?;
     let sprite = o2jam_file::parse_sprite55(body).ok()?;
     let figure = AvatarFigure::from_sprite55(&sprite);
@@ -361,12 +368,8 @@ const PLAYING_SUBSET_FIRST_ENTRY: usize = 213;
 /// note lanes (native `x5..193 × y0..487`), the score digits at
 /// `(16, 16)`/`(16, 32)`, and the judgement word under the
 /// judgement row — so falling notes and live UI ink stay visible.
-/// Lane-covering panels stay out on purpose: `Note_BG.ojs`,
-/// `3Key_Note_BG.ojs`, and `P2P*Note_BG.ojs` overlap the lanes,
-/// and the opaque `Playing_BG.ojs` center panel blankets the
-/// judgement-text zone (0/1440 transparent there on real 7.55
-/// art). Those belong behind the highway (OPEN); the overlay
-/// pipeline paints after it, so only lane-clear art stages here.
+/// Lane-covering panels stay out on purpose: they belong to the
+/// behind-highway scene below, never to this overlay set.
 /// Right-hand gauge bars ride unreferenced by the block (only the
 /// left shells are named), so only staged — never invented — art
 /// appears below.
@@ -382,6 +385,37 @@ pub const PLAYING_BACKDROP_PANELS: [&str; 6] = [
 /// True for a static Playing backdrop panel sprite.
 fn is_playing_backdrop_panel(sprite: &str) -> bool {
     PLAYING_BACKDROP_PANELS.contains(&sprite)
+}
+
+/// Behind-highway scene: the venue `BACK1` runtime ref plus the
+/// note-background `BACK2`/`3Key`/`P2P` siblings (`STATE_PLAYING`
+/// entries 113–114 and 209–212, quoted names in file order).
+/// `Playing_BG.ojs` anchors at native `(204, 0)` clear of the note
+/// lanes (`x5..193`), so the right side shows venue art instead of
+/// black; the `Note_BG` siblings overlap the lanes on some layers,
+/// so behind painters clip the lane columns plus the HUD zones
+/// (see `paint_behind_placements`) instead of dropping them.
+/// Every name resolves in `Playing1.opi` through
+/// [`load_archive_sprite`] (the `_Playing_BG.ojs` block ref loads
+/// through its bare stem). Couple-mode variants ride unreferenced
+/// by the block, so only these five stage here — never invented art.
+pub const PLAYING_BEHIND_SPRITES: [&str; 5] = [
+    "Playing_BG.ojs",
+    "Note_BG.ojs",
+    "3Key_Note_BG.ojs",
+    "P2P3KeyNote_BG.ojs",
+    "P2P7KeyNote_BG.ojs",
+];
+
+/// True for a behind-highway scene sprite, quoted or resolved: the
+/// `_Playing_BG.ojs` block ref and its bare `Playing_BG.ojs` stem
+/// both match.
+#[must_use]
+pub fn is_playing_behind_sprite(sprite: &str) -> bool {
+    PLAYING_BEHIND_SPRITES.contains(&sprite)
+        || sprite
+            .strip_prefix('_')
+            .is_some_and(|stem| PLAYING_BEHIND_SPRITES.contains(&stem))
 }
 
 /// Anchor placement for one static backdrop entry: no `.bnd` rect
@@ -417,6 +451,23 @@ fn bind_playing_backdrops(entries: &[&ControlEntry]) -> Vec<ScenePlacement> {
         .collect()
 }
 
+/// Anchor placements for the behind-highway scene among entries
+/// `0..213`, in file order. Staging keeps the quoted block ref
+/// (`_Playing_BG.ojs` resolves at load through
+/// [`load_archive_sprite`]); container-coded entries stay out like
+/// the bound runs.
+fn bind_playing_behind(entries: &[&ControlEntry]) -> Vec<ScenePlacement> {
+    entries
+        .iter()
+        .take(PLAYING_SUBSET_FIRST_ENTRY)
+        .filter(|entry| entry_takes_rect(entry))
+        .filter_map(|entry| {
+            let sprite = entry.sprite.as_deref()?;
+            is_playing_behind_sprite(sprite).then(|| place_backdrop_panel(entry, sprite))
+        })
+        .collect()
+}
+
 /// Pair block entries with `.bnd` rects verbatim on the native
 /// 800x600 canvas (recipe steps 3–5): rect `i` lays out entry
 /// `i + 1` in file order (entry 0 is the block itself and takes no
@@ -426,7 +477,8 @@ fn bind_playing_backdrops(entries: &[&ControlEntry]) -> Vec<ScenePlacement> {
 /// `STATE_PLAYING` is the verified subset: its 17 rects lay out
 /// entries 213–229 one-to-one, never the first 17; the static
 /// backdrop panels among entries 0–212 stage as anchor placements
-/// ahead of them. Other entries without a rect stay unplaced (the
+/// ahead of them, and the behind-highway scene stages first of all.
+/// Other entries without a rect stay unplaced (the
 /// Playing tail past `VOLUME` rides unloaded); rects without an
 /// entry are ignored.
 #[must_use]
@@ -454,13 +506,15 @@ fn bind_verbatim_entries(block: &ControlBlock, bnd: &Bnd) -> Vec<ScenePlacement>
         .collect()
 }
 
-/// Playing subset: static backdrop panels first (entries 0–212,
-/// anchor-placed), then rect `i` lays out entry `213 + i`. Backdrops
-/// paint first so the bound gauges and buttons keep their top slot.
-/// Container-coded entries stay unplaced in both runs, like the
-/// verbatim path.
+/// Playing subset: behind-highway scene first (entries 0–212,
+/// anchor-placed, clipped clear of lanes and HUD at paint), then the
+/// static backdrop panels, then rect `i` lays out entry `213 + i`.
+/// Backdrops paint first so the bound gauges and buttons keep their
+/// top slot. Container-coded entries stay unplaced in every run,
+/// like the verbatim path.
 fn bind_playing_subset(entries: &[&ControlEntry], bnd: &Bnd) -> Vec<ScenePlacement> {
-    let mut placed = bind_playing_backdrops(entries);
+    let mut placed = bind_playing_behind(entries);
+    placed.extend(bind_playing_backdrops(entries));
     placed.extend(
         entries
             .iter()
@@ -579,6 +633,205 @@ fn paint_placed_figure(
             );
         }
     }
+}
+
+/// True for a behind-highway placement: its sprite names the venue
+/// or a note background, quoted or resolved (see
+/// [`is_playing_behind_sprite`)).
+fn placement_is_behind(placement: &ScenePlacement) -> bool {
+    placement
+        .sprite
+        .as_deref()
+        .is_some_and(is_playing_behind_sprite)
+}
+
+/// Paint the behind-highway placements, skipping every pixel inside
+/// `exclusions` (lane columns plus HUD zones from the caller): the
+/// venue art fills the right side while notes, lanes, and UI ink
+/// stay uncovered. Bound behind placements additionally clip to
+/// their scaled rect, like [`paint_placed_figure`].
+pub fn paint_behind_placements(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    figures: &HashMap<String, AvatarFigure>,
+    exclusions: &[Rect],
+) {
+    for placement in placements
+        .iter()
+        .filter(|placed| placement_is_behind(placed))
+    {
+        paint_behind_placement(frame, placement, figures, exclusions);
+    }
+}
+
+/// Paint every placement except the behind-highway scene, verbatim
+/// in file order: overlay panels and bound gauges keep their top
+/// slot over the clipped scene below.
+pub fn paint_foreground_placements(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    figures: &HashMap<String, AvatarFigure>,
+) {
+    let (frame_w, frame_h) = (frame.w, frame.h);
+    for placement in placements
+        .iter()
+        .filter(|placed| !placement_is_behind(placed))
+    {
+        paint_placed_figure(frame, placement, figures, frame_w, frame_h);
+    }
+}
+
+/// Paint one behind-highway figure, if its sprite loaded: each layer
+/// blits 1:1 at its record anchor, clipped to the visible fragments
+/// of its box outside `exclusions`.
+fn paint_behind_placement(
+    frame: &mut Frame<'_>,
+    placement: &ScenePlacement,
+    figures: &HashMap<String, AvatarFigure>,
+    exclusions: &[Rect],
+) {
+    let Some(name) = placement.sprite.as_ref() else {
+        return;
+    };
+    let Some(figure) = figures.get(name) else {
+        return;
+    };
+    let (frame_w, frame_h) = (frame.w, frame.h);
+    let bound = if placement.rect.w == 0 || placement.rect.h == 0 {
+        None
+    } else {
+        Some(scale_rect_to_frame(&placement.rect, frame_w, frame_h))
+    };
+    let (origin_x, origin_y) = bound.as_ref().map_or_else(
+        || placement_origin_in_frame(placement, frame_w, frame_h),
+        |dest| (dest.x, dest.y),
+    );
+    paint_behind_layers(
+        frame,
+        figure,
+        origin_x,
+        origin_y,
+        bound.as_ref(),
+        exclusions,
+    );
+}
+
+/// Paint every layer of one figure through its visible fragments:
+/// the layer box, intersected with its bound rect when staged
+/// bound, minus the exclusion zones.
+fn paint_behind_layers(
+    frame: &mut Frame<'_>,
+    figure: &AvatarFigure,
+    origin_x: i32,
+    origin_y: i32,
+    bound: Option<&Rect>,
+    exclusions: &[Rect],
+) {
+    for index in 0..figure.len() {
+        if let Some(layer) = figure.layer(index) {
+            let layer_box = Rect {
+                x: origin_x + layer.dx,
+                y: origin_y + layer.dy,
+                w: u32::try_from(layer.image.w).unwrap_or(u32::MAX),
+                h: u32::try_from(layer.image.h).unwrap_or(u32::MAX),
+            };
+            let base = match bound {
+                Some(dest) => intersect_rects(&layer_box, dest),
+                None => Some(layer_box),
+            };
+            let Some(base) = base else {
+                continue;
+            };
+            for fragment in subtract_rect(&base, exclusions) {
+                blit_rgb555_clipped(
+                    frame,
+                    &layer.image.view(),
+                    origin_x + layer.dx,
+                    origin_y + layer.dy,
+                    Some(layer.colorkey),
+                    Some(&fragment),
+                );
+            }
+        }
+    }
+}
+
+/// Left/top/right/bottom edges of one rect in `i64` space (widths
+/// add without overflowing `i32`).
+fn rect_edges(rect: &Rect) -> (i64, i64, i64, i64) {
+    let left = i64::from(rect.x);
+    let top = i64::from(rect.y);
+    (left, top, left + i64::from(rect.w), top + i64::from(rect.h))
+}
+
+/// Intersection of two rects (`None` when they do not overlap).
+fn intersect_rects(first: &Rect, second: &Rect) -> Option<Rect> {
+    let (first_left, first_top, first_right, first_bottom) = rect_edges(first);
+    let (second_left, second_top, second_right, second_bottom) = rect_edges(second);
+    let (left, top) = (first_left.max(second_left), first_top.max(second_top));
+    let (right, bottom) = (
+        first_right.min(second_right),
+        first_bottom.min(second_bottom),
+    );
+    if right <= left || bottom <= top {
+        return None;
+    }
+    Some(Rect {
+        x: i32::try_from(left).unwrap_or(i32::MAX),
+        y: i32::try_from(top).unwrap_or(i32::MAX),
+        w: u32::try_from(right - left).unwrap_or(0),
+        h: u32::try_from(bottom - top).unwrap_or(0),
+    })
+}
+
+/// Fragments of `rect` outside every exclusion, in row order (top
+/// strip, middle sides, bottom strip per cut).
+fn subtract_rect(rect: &Rect, exclusions: &[Rect]) -> Vec<Rect> {
+    let mut visible = vec![*rect];
+    for cut in exclusions {
+        visible = visible
+            .into_iter()
+            .flat_map(|kept| subtract_cut(&kept, cut))
+            .collect();
+    }
+    visible
+}
+
+/// Fragments of `kept` outside one cut: the top strip above the
+/// overlap, the bottom strip below it, and the middle row split
+/// into left/right (empty pieces dropped).
+fn subtract_cut(kept: &Rect, cut: &Rect) -> Vec<Rect> {
+    let Some(overlap) = intersect_rects(kept, cut) else {
+        return vec![*kept];
+    };
+    let (kept_left, kept_top, kept_right, kept_bottom) = rect_edges(kept);
+    let (cut_left, cut_top, cut_right, cut_bottom) = rect_edges(&overlap);
+    let mut fragments = Vec::new();
+    push_fragment(&mut fragments, kept_left, kept_top, kept_right, cut_top);
+    push_fragment(
+        &mut fragments,
+        kept_left,
+        cut_bottom,
+        kept_right,
+        kept_bottom,
+    );
+    push_fragment(&mut fragments, kept_left, cut_top, cut_left, cut_bottom);
+    push_fragment(&mut fragments, cut_right, cut_top, kept_right, cut_bottom);
+    fragments
+}
+
+/// Push one edge-box fragment unless it is empty (coordinates stay
+/// inside `i32` range: every edge comes from an input rect edge).
+fn push_fragment(fragments: &mut Vec<Rect>, left: i64, top: i64, right: i64, bottom: i64) {
+    if right <= left || bottom <= top {
+        return;
+    }
+    fragments.push(Rect {
+        x: i32::try_from(left).unwrap_or(i32::MAX),
+        y: i32::try_from(top).unwrap_or(i32::MAX),
+        w: u32::try_from(right - left).unwrap_or(0),
+        h: u32::try_from(bottom - top).unwrap_or(0),
+    });
 }
 
 /// Pick the sprite filenames one equipped item contributes to the
@@ -1044,9 +1297,11 @@ mod avatar_figure_tests {
     #[test]
     fn playing_backdrops_stage_ahead_of_bound_rects() {
         // Static edge panels among entries 0-212 stage as anchor
-        // placements ahead of the 17 bound rects; the lane-covering
-        // `Note_BG.ojs` stays out so notes keep falling underneath.
+        // placements ahead of the 17 bound rects; the behind scene
+        // (`_Playing_BG.ojs`, `Note_BG.ojs`) stages first of all and
+        // paints clipped clear of lanes at paint time.
         let mut block = playing_block();
+        block.bound[113].sprite = Some("_Playing_BG.ojs".to_owned());
         block.bound[114].sprite = Some("Note_BG.ojs".to_owned());
         block.bound[115].sprite = Some("Playing_Menu.ojs".to_owned());
         block.bound[125].sprite = Some("Life_gauge_back.ojs".to_owned());
@@ -1058,8 +1313,25 @@ mod avatar_figure_tests {
             (0..17).map(|i| (751 + i, 554, 793 + i, 596)).collect();
         let bnd = o2jam_file::parse_bnd(&bnd_blob(&corners)).unwrap();
         let placed = bind_scene_rects(&block, &bnd);
-        assert_eq!(placed.len(), PLAYING_BACKDROP_PANELS.len() + 17);
-        let backdrops = &placed[..PLAYING_BACKDROP_PANELS.len()];
+        assert_eq!(placed.len(), 2 + PLAYING_BACKDROP_PANELS.len() + 17);
+        let behind = &placed[..2];
+        assert_eq!(behind[0].sprite.as_deref(), Some("_Playing_BG.ojs"));
+        assert_eq!(behind[1].sprite.as_deref(), Some("Note_BG.ojs"));
+        assert!(is_playing_behind_sprite(
+            behind[0].sprite.as_deref().unwrap()
+        ));
+        for staged in behind {
+            assert_eq!(
+                staged.rect,
+                o2jam_render::Rect {
+                    x: 0,
+                    y: 0,
+                    w: 0,
+                    h: 0
+                }
+            );
+        }
+        let backdrops = &placed[2..2 + PLAYING_BACKDROP_PANELS.len()];
         for (backdrop, panel) in backdrops.iter().zip(PLAYING_BACKDROP_PANELS) {
             assert_eq!(backdrop.sprite.as_deref(), Some(panel));
             assert_eq!(
@@ -1074,11 +1346,23 @@ mod avatar_figure_tests {
         }
         assert!(!backdrops
             .iter()
-            .any(|backdrop| backdrop.sprite.as_deref() == Some("Note_BG.ojs")));
+            .any(|backdrop| is_playing_behind_sprite(backdrop.sprite.as_deref().unwrap_or(""))));
         assert_eq!(
-            placed[PLAYING_BACKDROP_PANELS.len()].id,
+            placed[2 + PLAYING_BACKDROP_PANELS.len()].id,
             "IDC_BUTTON_SPLAY_EXIT"
         );
+    }
+
+    #[test]
+    fn behind_names_match_quoted_and_resolved_forms() {
+        assert!(is_playing_behind_sprite("_Playing_BG.ojs"));
+        assert!(is_playing_behind_sprite("Playing_BG.ojs"));
+        assert!(is_playing_behind_sprite("Note_BG.ojs"));
+        assert!(is_playing_behind_sprite("3Key_Note_BG.ojs"));
+        assert!(is_playing_behind_sprite("P2P3KeyNote_BG.ojs"));
+        assert!(is_playing_behind_sprite("P2P7KeyNote_BG.ojs"));
+        assert!(!is_playing_behind_sprite("Playing_Menu.ojs"));
+        assert!(!is_playing_behind_sprite("Missing.ojs"));
     }
 
     #[test]
@@ -1095,6 +1379,139 @@ mod avatar_figure_tests {
             1
         );
         assert!(load_archive_sprite(&archive, "Missing.ojs").is_none());
+    }
+
+    #[test]
+    fn runtime_behind_ref_loads_through_its_bare_stem() {
+        // The `_Playing_BG.ojs` block ref is runtime-deferred, never
+        // an archive miss: the loader falls back to the bare stem
+        // beside its numbered siblings. True misses stay `None`.
+        let red = sprite55_blob(1, 0x0000, 1, 1, &[0x00, 0x7C]);
+        let archive = opa_blob(&[("Playing_BG.ojs", &red)]);
+        assert_eq!(
+            load_archive_sprite(&archive, "_Playing_BG.ojs")
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(load_archive_sprite(&archive, "_Missing.ojs").is_none());
+        assert!(load_archive_sprite(&archive, "Missing.ojs").is_none());
+    }
+
+    #[test]
+    fn behind_paint_clips_exclusion_zones() {
+        // One 4-wide red layer at the origin with the middle two
+        // columns excluded: only the outer pixels paint.
+        let red = sprite55_blob(
+            1,
+            0xFFFF,
+            4,
+            1,
+            &[0x00, 0x7C, 0x00, 0x7C, 0x00, 0x7C, 0x00, 0x7C],
+        );
+        let archive = opa_blob(&[("Playing_BG.ojs", &red)]);
+        let figures = load_scene_figures(&archive, &["_Playing_BG.ojs".to_owned()]);
+        let placed = vec![ScenePlacement {
+            id: "IDC_IMAGE_SPLAY_BACK1".to_owned(),
+            code: 0x1B50_0071,
+            sprite: Some("_Playing_BG.ojs".to_owned()),
+            rect: Rect {
+                x: 0,
+                y: 0,
+                w: 0,
+                h: 0,
+            },
+        }];
+        let exclusions = vec![Rect {
+            x: 1,
+            y: 0,
+            w: 2,
+            h: 1,
+        }];
+        let mut buf = vec![0u32; 4];
+        paint_behind_placements(
+            &mut Frame {
+                buf: &mut buf,
+                w: 4,
+                h: 1,
+            },
+            &placed,
+            &figures,
+            &exclusions,
+        );
+        let red_ink = o2jam_render::pack_xrgb(255, 0, 0);
+        assert_eq!(buf, vec![red_ink, 0, 0, red_ink]);
+    }
+
+    #[test]
+    fn foreground_paint_skips_behind_sprites() {
+        // The split paints disjoint sets: foreground paints the
+        // overlay sprite only, behind paints the scene sprite only.
+        let mut behind = AvatarFigure::default();
+        behind.push_layer(FigureLayer {
+            image: o2jam_render::Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap(),
+            dx: 0,
+            dy: 0,
+            colorkey: 0xFFFF,
+        });
+        let mut overlay = AvatarFigure::default();
+        overlay.push_layer(FigureLayer {
+            image: o2jam_render::Rgb555Image::decode(&[0x1F, 0x00], 1, 1).unwrap(),
+            dx: 0,
+            dy: 0,
+            colorkey: 0xFFFF,
+        });
+        let placed = vec![
+            ScenePlacement {
+                id: "IDC_IMAGE_SPLAY_BACK1".to_owned(),
+                code: 0,
+                sprite: Some("Playing_BG.ojs".to_owned()),
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 0,
+                    h: 0,
+                },
+            },
+            ScenePlacement {
+                id: "IDC_IMAGE_SPLAY_BACK3".to_owned(),
+                code: 0,
+                sprite: Some("Playing_Menu.ojs".to_owned()),
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 0,
+                    h: 0,
+                },
+            },
+        ];
+        let figures = HashMap::from([
+            ("Playing_BG.ojs".to_owned(), behind),
+            ("Playing_Menu.ojs".to_owned(), overlay),
+        ]);
+        let mut foreground = vec![0u32; 1];
+        paint_foreground_placements(
+            &mut Frame {
+                buf: &mut foreground,
+                w: 1,
+                h: 1,
+            },
+            &placed,
+            &figures,
+        );
+        assert_eq!(foreground, vec![o2jam_render::pack_xrgb(0, 0, 255)]);
+        let mut behind_buf = vec![0u32; 1];
+        paint_behind_placements(
+            &mut Frame {
+                buf: &mut behind_buf,
+                w: 1,
+                h: 1,
+            },
+            &placed,
+            &figures,
+            &[],
+        );
+        assert_eq!(behind_buf, vec![o2jam_render::pack_xrgb(255, 0, 0)]);
     }
 
     #[test]
