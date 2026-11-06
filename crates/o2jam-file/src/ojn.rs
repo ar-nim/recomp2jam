@@ -43,20 +43,25 @@ pub struct OjnChartFile {
     pub bpm: f32,
     /// Level-shaped flags (`u32` at +20; 1 on Tutorial.ojn, packed
     /// `(hi, lo)` halves on new songs with lo 1..5, hi 4..10).
-    /// Ascending-triple hypothesis (Easy = lo, Normal = hi,
-    /// Hard = [`OjnChartFile::stable_minor`]) fits 13/13 songs plus the
-    /// Tutorial edge (0,1,0 = only Easy present); `OJNList.dat` record
-    /// `@24` matches the disk header 13/13. STEP1 level bands read the
-    /// select-entry level word at `+0x212` (file `0x46bb7`, thresholds
-    /// 1/8/19/27), but the song-to-entry level transfer is unpinned,
-    /// so this stays OPEN.
+    /// Difficulty mapping EXE-PROVEN (`AngelO2Jam.exe` 7.55, sha256
+    /// `83a04541…`), no longer a positional guess: the select-entry
+    /// builder reads `u16[difficulty]` over the `OJNList.dat` row
+    /// words `{+24 lo, +26 hi, +28}` into `entry+0x212`, the STEP1
+    /// band input (file `0x44268`, ev `b5c3094a…`). So difficulty
+    /// 0 = low half (Easy), 1 = high half (Normal), 2 =
+    /// [`OjnChartFile::stable_minor`] (Hard) — see
+    /// [`OjnChartFile::level_for_difficulty`]. Fits 13/13 songs plus
+    /// the Tutorial edge (0, 1, 0 = only Easy present); `OJNList.dat`
+    /// record `@24` matches the disk header 13/13.
     pub level_flags: u32,
     /// Small stable id (`u32` at +24; 0 on Tutorial.ojn, 5..19 on the
-    /// shipped new-format songs). Ascending-triple hypothesis
-    /// (Hard level, completing [`OjnChartFile::level_flags`] lo/hi as
-    /// Easy/Normal) fits 13/13 songs; `OJNList.dat` record `@28`
-    /// matches the disk header 13/13. No chart-path consumer (validator
-    /// and parser never read +24); stays OPEN.
+    /// shipped new-format songs). Hard-level slot, EXE-PROVEN: it is
+    /// index 2 of the same `u16[difficulty]` read that maps
+    /// [`OjnChartFile::level_flags`] to Easy/Normal (file `0x44268`,
+    /// ev `b5c3094a…`), so +24 completes the Easy/Normal/Hard triple
+    /// (C35). 13/13 ascending; `OJNList.dat` record `@28` matches the
+    /// disk header 13/13. The exe reads only the low `u16` here;
+    /// observed values (0..50) fit.
     pub stable_minor: u32,
     /// Per-difficulty note totals (`u32` at +28/+32/+36): nonzero
     /// payloads on kinds 2+ (playable lanes plus autoplay). Reads
@@ -120,6 +125,32 @@ pub struct OjnChartFile {
 }
 
 impl OjnChartFile {
+    /// Chart level per difficulty slot: 0 = Easy (+20 low word),
+    /// 1 = Normal (+20 high word), 2 = Hard (+24, low `u16` like the
+    /// exe). `None` for out-of-range slots (7.55 charts carry
+    /// [`OJN_LEVEL_COUNT`] slices).
+    ///
+    /// Order EXE-PROVEN (`AngelO2Jam.exe` 7.55): the entry builder
+    /// indexes exactly these three words by the chosen difficulty
+    /// (file `0x44268`, ev `b5c3094a…`), and the same difficulty byte
+    /// (global `0x7789e7`, range-checked 0..2 at file `0x171d91`) is
+    /// stored to the parser's slice index at file `0x171c18`, so it
+    /// selects the per-difficulty header triplets — slice `i` =
+    /// difficulty `i` (docs/file-formats/ojn.md, C34/C35). The slot
+    /// *names* (Easy/Normal/Hard) stay label-level: the exe pins the
+    /// ascending order via the per-difficulty life sets (file
+    /// `0x170fa2`, ev `feebe490…`), not strings.
+    #[must_use]
+    pub fn level_for_difficulty(&self, difficulty: usize) -> Option<u32> {
+        match difficulty {
+            0 => Some(self.level_flags & 0xFFFF),
+            1 => Some(self.level_flags >> 16),
+            // The exe reads the low `u16` of +24 here (file `0x44268`).
+            2 => Some(self.stable_minor & 0xFFFF),
+            _ => None,
+        }
+    }
+
     /// High word of [`OjnChartFile::key_field`] (tracks the song id).
     #[must_use]
     pub fn key_hi(&self) -> u16 {
@@ -503,11 +534,13 @@ pub const OJN_GENRE_OFF: usize = 12;
 pub const OJN_BPM_OFF: usize = 16;
 
 /// Header offset of the packed level flags (`u32` at +20). See
-/// [`OjnChartFile::level_flags`]: Easy/Normal hypothesis, open.
+/// [`OjnChartFile::level_flags`]: Easy = low half, Normal = high
+/// half (exe-pinned, file `0x44268`).
 pub const OJN_LEVEL_FLAGS_OFF: usize = 20;
 
 /// Header offset of the small stable id (`u32` at +24). See
-/// [`OjnChartFile::stable_minor`]: Hard-level hypothesis, open.
+/// [`OjnChartFile::stable_minor`]: Hard level, exe-pinned slot 2 of
+/// the difficulty-indexed read (file `0x44268`).
 pub const OJN_STABLE_MINOR_OFF: usize = 24;
 
 /// Header offset of the flag word (`u32` at +96).
@@ -551,7 +584,10 @@ const OJN_EVENT_UNIT_LEN: usize = 4;
 /// exactly on `data_end` with `event_count` events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OjnLevelSlice {
-    /// Difficulty level (0, 1, 2).
+    /// Difficulty slot 0/1/2 = Easy/Normal/Hard: the exe indexes the
+    /// per-difficulty header triplets with the chosen difficulty
+    /// (stored to its slice index at file `0x171c18`), so slice `i`
+    /// belongs to difficulty `i` (docs/file-formats/ojn.md, C34/C35).
     pub level: usize,
     /// Event count from the header table (+64/+68/+72).
     pub event_count: u32,
@@ -939,6 +975,35 @@ mod tests {
         assert_eq!(chart.label, "nao.paradigm");
         assert_eq!(chart.ojm_file, "Tutorial.ojm");
         assert_eq!(chart.durations, [247, 0, 0]);
+    }
+
+    #[test]
+    fn difficulty_slots_read_low_high_and_hard_levels() {
+        // C34/C35 verdict scenario: the exe indexes {+20 lo, +20 hi,
+        // +24} by the chosen difficulty (entry builder file `0x44268`,
+        // slice index via file `0x171c18`), so slot 0/1/2 must read
+        // low half / high half / +24.
+        let mut h = full_header();
+        h[20..24].copy_from_slice(&((7u32 << 16) | 3).to_le_bytes());
+        h[24..28].copy_from_slice(&13u32.to_le_bytes());
+        let chart = parse_ojn(&h).unwrap();
+        assert_eq!(chart.level_for_difficulty(0), Some(3));
+        assert_eq!(chart.level_for_difficulty(1), Some(7));
+        assert_eq!(chart.level_for_difficulty(2), Some(13));
+        assert_eq!(chart.level_for_difficulty(3), None);
+    }
+
+    #[test]
+    fn tutorial_edge_maps_only_easy() {
+        // Tutorial.ojn edge: level flags 1, +24 = 0 — only Easy has a
+        // level; Normal and Hard read 0.
+        let mut h = full_header();
+        h[20..24].copy_from_slice(&1u32.to_le_bytes());
+        h[24..28].copy_from_slice(&0u32.to_le_bytes());
+        let chart = parse_ojn(&h).unwrap();
+        assert_eq!(chart.level_for_difficulty(0), Some(1));
+        assert_eq!(chart.level_for_difficulty(1), Some(0));
+        assert_eq!(chart.level_for_difficulty(2), Some(0));
     }
 
     #[test]

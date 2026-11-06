@@ -28,8 +28,8 @@
   | 8 | container version (`f32`) | 2.7 (loader derives its OJM descriptor from this float: new-variant lane count; `2.9f` on decrypted o2ma charts) |
   | 12 | genre (`u32`) | 10 (new songs use single bits 1/2/4/8; Tutorial 10 = 8\|2). Chart path ignores it: validator `FUN_005718b0` (file `0x1718b0`) checks id/magic/version/last-measure/counts only, parser `FUN_00571d60` (file `0x171d60`) reads slices/counts/BPM only. Song-select tests a song bitmask at `song+0x15c` (`and $0x7` file `0xbe79f`, `and $0x8` file `0x36f4f`, `and [0x680724]` file `0x36fb2`), but the header+12 to song-slot transfer is unpinned — OPEN (bitmask-shaped, unproven) |
   | 16 | BPM (`f32`) | 100.0 |
-  | 20 | level flags (`u32`) | 1 (new songs pack `(hi, lo)`: lo 1..5, hi 4..10). Ascending-triple hypothesis (Easy = lo, Normal = hi, Hard = +24) fits 13/13 plus Tutorial edge (0,1,0 = Easy only); `OJNList.dat` `@24` matches disk 13/13. STEP1 bands read select-entry `+0x212` as `u16` (file `0x46bb7`, thresholds 1/8/19/27), but the song-to-entry transfer is unpinned — OPEN |
-  | 24 | stable minor (`u32`) | 0 (5..19 on new songs). Hard-level hypothesis completing the +20 lo/hi triple (13/13 ascending; `OJNList.dat` `@28` matches disk 13/13). No chart-path consumer (validator/parser never read +24) — OPEN |
+  | 20 | level flags (`u32`) | 1 (new songs pack `(hi, lo)`: lo 1..5, hi 4..10). Difficulty mapping VERIFIED, not positional: the select-entry builder reads `u16[difficulty]` over the song-record words {+24 lo, +26 hi, +28} into `entry+0x212` — the STEP1 band input (file `0x44268`, ev `b5c3094a…` local-static) — so slot 0 = low half = Easy, slot 1 = high half = Normal (see the mapping section below). `OJNList.dat` `@24` matches disk 13/13; Tutorial edge (0,1,0 = Easy only) |
+  | 24 | stable minor (`u32`) | 0 (5..19 on new songs). Hard level, VERIFIED as slot 2 of the same difficulty-indexed read (file `0x44268`, ev `b5c3094a…`; exe reads the low `u16`); 13/13 ascending, `OJNList.dat` `@28` matches disk 13/13 |
   | 28/32/36 | total notes per level (`u32`, kinds 2+ nonzero) | 51/0/0 |
   | 40/44/48 | playable notes per level (`u32`, kinds 2..=8 nonzero) | 38/0/0 |
   | 52/56/60 | last measure index per level (`u32`) | 102/0/0 |
@@ -82,13 +82,64 @@ Evidence: `ev_66e97a17…` (loader dossier), `ev_68d920c2…` (dispatch).
   calls the old loader per song id and falls back to a
   `"MusicLoading.ojs"` overlay when the load returns 0. No new-format
   branch here either.
-- Per-difficulty loader near file offset `0x170000`: maps type bytes
-  `2/3/4` → difficulties `1/2/3`, builds `MUSIC\%s` (string at
-  `0x24dc38`) + id, appends extension (`strcat`, `0x5f2800`), then calls
-  the real chart parser `FUN_00571d60(path, mask, type, level, …)`.
-  Ghidra dossier for `0x571d60` in progress — that function (plus the
-  `0x1731b0` validator with its BPM float math) is where the `"new"`
-  decode must live, if it exists.
+- Per-difficulty loader near file offset `0x170000`: builds
+  `MUSIC\%s` (string at `0x24dc38`) + id, appends extension
+  (`strcat`, `0x5f2800`), then calls the real chart parser
+  `FUN_00571d60(chart+0x134, path, song_id, difficulty, pattern, mask)`
+  (push order, files `0x170222`–`0x17024b`). The chart slice comes
+  from the difficulty byte at global `0x7789e7` (stored to
+  `chart+0x34` at file `0x1701e5`; parser arg 3, range-checked
+  0..2 at file `0x171d91`), NOT from the queue element: the byte
+  `+6` there (`2/3/4` mapped to `1/2/3` at files
+  `0x17014d`–`0x17017c`, forced to 0 when word `+4` reads 0 at file
+  `0x170183`) is the lane-PATTERN arg — 1 = mirror, 2/3 = random
+  variants via `0x173a10`/`0x173940`, keyed on the key-mode byte
+  `0x7789e4` (B23 dossiers; ev `ca263d2a…` local-static). Earlier
+  notes calling those bytes difficulties are wrong. Ghidra dossier
+  for `0x571d60` in progress — that function (plus the `0x1731b0`
+  validator with its BPM float math) is where the `"new"` decode
+  must live, if it exists.
+
+## Difficulty ↔ slice mapping — VERIFIED (exe chain)
+
+The Easy/Normal/Hard assignment of the header triplets (+20 lo/hi,
++24; totals +28/32/36; playable +40/44/48; last measures +52/56/60;
+counts +64/68/72; slice ends +288/292/296) is exe-consumed, not a
+positional guess. One difficulty byte drives the whole chain:
+
+- Song records (`0x1b4` stride, vector at `0x779528`) are verbatim
+  300-byte `OJNList.dat` rows copied after the leading count word
+  (record fill at files `0x7a100`–`0x7a18b`, ev `b38af2da…`
+  local-static), so record `+N` = row `+N+4`.
+- The select-entry builder (VA `0x4441f0`) stores the chosen
+  difficulty (arg word) to `entry+0x210` (file `0x4425d`) and reads
+  the level as `u16[difficulty]` over record words {+24 lo, +26 hi,
+  +28} (file `0x44268`, ev `b5c3094a…`) into `entry+0x212` — the
+  STEP1 band input (file `0x46bb7`, thresholds 1/8/19/27). Slot 0 =
+  +20 low half (Easy), slot 1 = +20 high half (Normal), slot 2 =
+  +24 (Hard).
+- At song start `entry+0x210` lands in the global byte `0x7789e7`
+  (writers: files `0xbf4a1` with mode clamps `0xbf4bb`/`0xbf4d9`,
+  `0x3f3f7`, `0x3f25c`, `0xbeb58`; init 0 at file `0x9515c`; ev
+  `ddac906f…`). The same byte selects the per-difficulty
+  life/judgement constants (`FUN_00570f90`, files
+  `0x170fa2`–`0x171056`: arms {+3/+2/−10/−50}, {+2/+1/−7/−40},
+  {+1/0/−5/−30} — the B32 sets in ascending order; ev
+  `feebe490…`) and becomes the chart slice index: parser arg 3,
+  range-checked 0..2 (file `0x171d91`), stored to `chart+0x830` by
+  the validator (file `0x171c18`), then indexing the header tables —
+  playable-count cross-check vs the record +44/+48/+52 words (file
+  `0x171bfe`, dossier `ev_66e60d16…`), last-measure bound ≤ 300
+  (file `0x17193b`), slice offsets `+0x814[idx]` and event counts
+  `+0x738[idx]` (files `0x171e5f`/`0x171ee9`, dossier
+  `ev_c0325c85…`).
+
+Verdicts: C34/C35 EXE-proven (+20 lo = difficulty 0/Easy, +20 hi =
+difficulty 1/Normal, +24 = difficulty 2/Hard); slice `i` =
+difficulty `i`. The slot *names* stay label-level (icon-driven per
+`docs/room-enums.md`); the exe pins the ascending order via the
+life sets above. Implemented as
+`o2jam-file::OjnChartFile::level_for_difficulty` with slot tests.
 
 ## OJNList.dat (song index + patch tables — VERIFIED layout)
 
@@ -403,7 +454,9 @@ Signature `(song_id, ?, level 0..2)`. Flow, in own words:
   (`FUN_005718b0` — the `"ojn"` memcmp + BPM float check). Invalid →
   free, no parse.
 - Per-difficulty slice: data offset from table `+0x814[level]`, event
-  count from `+0x738[level]`, song BPM from `+0x708`.
+  count from `+0x738[level]`, song BPM from `+0x708`. `level` is the
+  difficulty byte (`chart+0x830`, set by the validator from arg 3 —
+  see the mapping section above), so slice 0/1/2 = Easy/Normal/Hard.
 - Event stream is measure-anchored: each event = `i32 measure_tick` +
   `u16 kind` + `u16 count` + `count` payload `u32`s; pointer advances
   in 4-byte units. (The head word is an integer measure index, not a
@@ -460,11 +513,18 @@ returns 0 = valid, 1 = invalid. Requires size ≥ 300, `__stricmp(buf+4,
 "ojn") == 0`, `u32(buf+0) == (song_id & 0xfffffff)`, per-level bound
 `< 301`, a float check (`ROUND(x*10 - 0.9) < 27`), then a song-vector
 scan (stride `0x1b4`) matching id + name + level field. (Fast path when
-global id == `0x22b8` = 8888 = Tutorial's song id.) Pure validation +
-table lookup — **no transform**. So the `"new"` decrypt, if any, is
-between file read and parse: prime suspect the per-difficulty
-pre-pass `FUN_00570f90` (called right before the parser in the
-`0x170xxx` loader; dossier in flight).
+global id == `0x22b8` = 8888 = Tutorial's song id.) Filled in this pass:
+it first `memcpy`s the 300-byte header to `chart+0x6f8` (file
+`0x1718de`, so header `+N` = chart `+0x6f8+N`); the per-level bound is
+`last_measures[difficulty] ≤ 300` (file `0x17193b`) and the scan
+cross-checks `playable_counts[difficulty]` against the matched record's
++44/+48/+52 words (file `0x171bfe`), both indexed by arg 3 — the
+difficulty byte, which it stores to `chart+0x830`, the parser's slice
+index (file `0x171c18`). Pure validation + table lookup — **no
+transform**. So the `"new"` decrypt, if any, is between file read and
+parse: the other pre-parse call, `FUN_00570f90`, is now identified as
+the per-difficulty life/judgement arm selector (files
+`0x170fa2`–`0x171056`, ev `feebe490…` local-static), not a decrypt.
 
 ## New-format decrypt — CRACKED (`FUN_00412180`, dossier `ev_011eab73…`)
 
