@@ -210,13 +210,22 @@ fn is_clipped_x(clip: Option<&Rect>, dest_x: i32) -> bool {
     clip.is_some_and(|rect| dest_x < rect.x || dest_x >= rect.x + rect.w as i32)
 }
 
-/// Share of the note highway one curtain edge covers or reveals.
+/// Percent of the note highway one curtain edge covers or reveals.
 ///
 /// From the shipped ring descriptions (`Itemdata_Korea.dat` in
-/// `Image/avatar.opa`): hidden covers the bottom 20% of the chart,
-/// sudden shows only that bottom 20%, dark shows only the middle 20%,
-/// and reverse-dark covers the middle 20%.
-const CURTAIN_SHARE_DENOMINATOR: u32 = 5;
+/// `Image/avatar.opa`, claim B26): hidden covers the bottom 20% of the
+/// chart, sudden shows only that bottom 20%, dark shows only the
+/// middle 20%, and reverse-dark covers the middle 20%.
+const CURTAIN_EDGE_PCT: u32 = 20;
+
+/// Nearest-pixel length of `pct` percent of `total` (round-half-up).
+/// Rounded band edges keep the item-text 20%/40% lines on frame
+/// heights off the 100 grid, where truncated integer fifths slid
+/// every edge (the 487-row staged highway: 40% is 195, not 2 * 97).
+#[must_use]
+fn pct_of(total: u32, pct: u32) -> u32 {
+    u32::try_from((u64::from(total) * u64::from(pct) + 50) / 100).unwrap_or(u32::MAX)
+}
 
 /// Note-highway curtain worn by a skill ring.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -235,6 +244,9 @@ pub enum LaneCurtain {
 
 /// Visible spans of a note `highway` under a curtain, top to bottom.
 ///
+/// The curtain box is the note highway itself (the staged lane
+/// columns down to the judgement row, claim B26 geometry), and band
+/// edges are rounded [`CURTAIN_EDGE_PCT`] percentages of that box.
 /// Notes scroll toward the judgement line at the bottom, so "bottom"
 /// spans sit at high `y`. Returns at most two spans (reverse-dark
 /// splits the highway); an empty highway yields no spans.
@@ -243,7 +255,8 @@ pub fn visible_spans(curtain: LaneCurtain, highway: &Rect) -> Vec<Rect> {
     if highway.w == 0 || highway.h == 0 {
         return Vec::new();
     }
-    let fifth = highway.h / CURTAIN_SHARE_DENOMINATOR;
+    let edge = pct_of(highway.h, CURTAIN_EDGE_PCT);
+    let band = pct_of(highway.h, 2 * CURTAIN_EDGE_PCT);
     let span = |y: i32, h: u32| Rect {
         x: highway.x,
         y,
@@ -253,17 +266,17 @@ pub fn visible_spans(curtain: LaneCurtain, highway: &Rect) -> Vec<Rect> {
     match curtain {
         LaneCurtain::Full => vec![*highway],
         LaneCurtain::Hidden => {
-            vec![span(highway.y, highway.h - fifth)]
+            vec![span(highway.y, highway.h - edge)]
         }
         LaneCurtain::Sudden => {
-            vec![span(highway.y + highway.h as i32 - fifth as i32, fifth)]
+            vec![span(highway.y + (highway.h - edge) as i32, edge)]
         }
         LaneCurtain::Dark => {
-            vec![span(highway.y + (2 * fifth) as i32, fifth)]
+            vec![span(highway.y + band as i32, edge)]
         }
         LaneCurtain::ReverseDark => vec![
-            span(highway.y, 2 * fifth),
-            span(highway.y + highway.h as i32 - (2 * fifth) as i32, 2 * fifth),
+            span(highway.y, band),
+            span(highway.y + (highway.h - band) as i32, band),
         ],
     }
 }
@@ -2150,6 +2163,100 @@ mod tests {
                     y: 60,
                     w: 70,
                     h: 40,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn curtain_bands_round_on_heights_off_the_100_grid() {
+        // 48 rows: 20% is 10 (9.6 rounds up), 40% is 19 (19.2 rounds
+        // down); truncated fifths would slide every edge one pixel.
+        let highway = Rect {
+            x: 10,
+            y: 0,
+            w: 70,
+            h: 48,
+        };
+        assert_eq!(
+            visible_spans(LaneCurtain::Hidden, &highway),
+            vec![Rect {
+                x: 10,
+                y: 0,
+                w: 70,
+                h: 38,
+            }]
+        );
+        assert_eq!(
+            visible_spans(LaneCurtain::Sudden, &highway),
+            vec![Rect {
+                x: 10,
+                y: 38,
+                w: 70,
+                h: 10,
+            }]
+        );
+        assert_eq!(
+            visible_spans(LaneCurtain::Dark, &highway),
+            vec![Rect {
+                x: 10,
+                y: 19,
+                w: 70,
+                h: 10,
+            }]
+        );
+        assert_eq!(
+            visible_spans(LaneCurtain::ReverseDark, &highway),
+            vec![
+                Rect {
+                    x: 10,
+                    y: 0,
+                    w: 70,
+                    h: 19,
+                },
+                Rect {
+                    x: 10,
+                    y: 29,
+                    w: 70,
+                    h: 19,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn curtain_bands_round_from_the_staged_487_row_highway() {
+        // Native staged highway (lanes 5..193, judgement row 487):
+        // 20% edge 97, 40% band 195 — integer fifths gave 2 * 97 = 194.
+        let highway = Rect {
+            x: 5,
+            y: 0,
+            w: 188,
+            h: 487,
+        };
+        assert_eq!(
+            visible_spans(LaneCurtain::Hidden, &highway),
+            vec![Rect {
+                x: 5,
+                y: 0,
+                w: 188,
+                h: 390,
+            }]
+        );
+        assert_eq!(
+            visible_spans(LaneCurtain::ReverseDark, &highway),
+            vec![
+                Rect {
+                    x: 5,
+                    y: 0,
+                    w: 188,
+                    h: 195,
+                },
+                Rect {
+                    x: 5,
+                    y: 292,
+                    w: 188,
+                    h: 195,
                 },
             ]
         );
