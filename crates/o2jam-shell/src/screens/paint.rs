@@ -16,13 +16,14 @@
 use std::collections::HashMap;
 
 use super::super::avatar::{
-    paint_scene_figures, scene_block, scene_sprite_names, AvatarFigure, ScenePlacement, AVI_BLOCK,
-    AVI_LOGO_SPRITE, CHANNEL_BLOCK, LOADING_SPRITE, RESULT_BLOCK, ROOM_BLOCK, WAITING_BLOCK,
+    paint_behind_placements, paint_foreground_placements, paint_scene_figures, scene_block,
+    scene_sprite_names, AvatarFigure, ScenePlacement, AVI_BLOCK, AVI_LOGO_SPRITE, CHANNEL_BLOCK,
+    LOADING_SPRITE, RESULT_BLOCK, ROOM_BLOCK, WAITING_BLOCK,
 };
-use super::super::playing::{HighwayGeometry, PlayingView};
+use super::super::playing::{HighwayGeometry, PlayingView, NATIVE_JAM_BARS, NATIVE_PEER_BAR};
 use super::super::screen::Screen;
 use o2jam_file::ControlList;
-use o2jam_game::RoomTeams;
+use o2jam_game::{RoomTeams, PEER_SLOT_COUNT};
 use o2jam_net::{
     ChannelState, Difficulty, GameMode, GameSpeed, JoinedRoom, KeyMode, RoomListEntry, RoomSlot,
     RoomSlotState,
@@ -1129,17 +1130,89 @@ pub fn paint_result_scene(
     paint_result_content(frame, avatar, score, verdict);
 }
 
-/// Paint staged gameplay art over the highway: static backdrop
-/// panels first (`Playing_Menu.ojs`, the life/jam edge gauges, the
-/// level plate — see `avatar::PLAYING_BACKDROP_PANELS`), then the
-/// bound gauges and buttons (`State_Playing.bnd` rects 213–229) on
-/// top. Every staged panel anchors clear of the note lanes and the
-/// live score/judgement ink, so notes keep falling underneath.
-/// Full-bleed center panels stay out: opaque art there would
-/// blanket notes and the judgement word, so it belongs behind the
-/// highway (OPEN).
+/// Score digits anchor top-left (`LivePlay` draws points at
+/// `(16, 16)` and combo at `(16, 32)`): the behind scene stays out
+/// of the same digits box the result scrim uses, in frame pixels.
+const PLAYING_SCORE_EXCLUSION: Rect = Rect {
+    x: 8,
+    y: 8,
+    w: 64,
+    h: 52,
+};
+/// Half-width of the judgement-word exclusion around frame center:
+/// tier words run ≤4 glyphs (`COOL`, 15px at advance 4) and combo
+/// digits stay narrow, so ±24 keeps every tier legible with margin.
+const JUDGE_BAND_HALF_W: i32 = 24;
+/// Rows of the judgement-word exclusion around the judgement line:
+/// the tier word sits at `line_y - 40` and the combo digits at
+/// `line_y - 24` (5px glyphs), covered with margin.
+const JUDGE_BAND_TOP: i32 = 44;
+const JUDGE_BAND_BOTTOM: i32 = 16;
+
+/// Frame-space zones the behind-highway scene never paints: the
+/// lane columns plus the HUD ink (`LivePlay` score, judgement
+/// word, peer gauges, jam bars) that always sits on top.
+fn playing_backdrop_exclusions(frame_w: usize, frame_h: usize) -> Vec<Rect> {
+    let geom = HighwayGeometry::centered(frame_w, frame_h);
+    let mut zones: Vec<Rect> = geom.lanes.into_iter().collect();
+    zones.push(PLAYING_SCORE_EXCLUSION);
+    zones.push(judge_band(frame_w, &geom));
+    zones.push(peer_stack(frame_w, frame_h));
+    zones.extend(jam_bars(frame_w, frame_h));
+    zones
+}
+
+/// Judgement-word band: centered on the frame at the tier-word and
+/// combo rows under the judgement line.
+fn judge_band(frame_w: usize, geom: &HighwayGeometry) -> Rect {
+    let center = i32::try_from(frame_w).unwrap_or(i32::MAX) / 2;
+    Rect {
+        x: center - JUDGE_BAND_HALF_W,
+        y: geom.line_y - JUDGE_BAND_TOP,
+        w: u32::try_from(JUDGE_BAND_HALF_W * 2).unwrap_or(0),
+        h: u32::try_from(JUDGE_BAND_TOP - JUDGE_BAND_BOTTOM).unwrap_or(0),
+    }
+}
+
+/// Peer gauge stack: the staged 46x8 gauge (`NATIVE_PEER_BAR`) once
+/// per member slot from the scaled top-right corner (`LivePlay`
+/// stacks one 4015 gauge per slot there).
+fn peer_stack(frame_w: usize, frame_h: usize) -> Rect {
+    let corner = scale_rect_to_frame(&NATIVE_PEER_BAR, frame_w, frame_h);
+    let slots = u32::try_from(PEER_SLOT_COUNT).unwrap_or(0);
+    Rect {
+        x: corner.x,
+        y: corner.y,
+        w: corner.w,
+        h: corner.h.saturating_mul(slots),
+    }
+}
+
+/// Jam edge bars below the judgement row, scaled into the frame.
+fn jam_bars(frame_w: usize, frame_h: usize) -> [Rect; 2] {
+    NATIVE_JAM_BARS.map(|bar| scale_rect_to_frame(&bar, frame_w, frame_h))
+}
+
+/// Paint the behind-highway scene with no exclusions: the caller
+/// paints the highway after it, so lanes and UI ink cover the scene
+/// wherever they overlap. Staged overlay panels are untouched here;
+/// see [`paint_playing_overlay`] for the post-highway path.
+pub fn paint_playing_backdrop(frame: &mut Frame<'_>, art: &SceneArt) {
+    paint_behind_placements(frame, &art.placements, &art.figures, &[]);
+}
+
+/// Paint staged gameplay art around the highway: the behind-highway
+/// scene first (`Playing_BG.ojs` plus the `Note_BG` siblings — see
+/// `avatar::PLAYING_BEHIND_SPRITES`), clipped clear of the lane
+/// columns and the HUD ink, then the static backdrop panels
+/// (`Playing_Menu.ojs`, the life/jam edge gauges, the level plate)
+/// and the bound gauges and buttons (`State_Playing.bnd` rects
+/// 213–229) on top. Lanes stay uncovered and notes, gauges, and UI
+/// ink keep their top slot.
 pub fn paint_playing_overlay(frame: &mut Frame<'_>, art: &SceneArt) {
-    art.paint_overlay(frame);
+    let exclusions = playing_backdrop_exclusions(frame.w, frame.h);
+    paint_behind_placements(frame, &art.placements, &art.figures, &exclusions);
+    paint_foreground_placements(frame, &art.placements, &art.figures);
 }
 
 /// Fill the whole frame with one screen's background.
@@ -1650,6 +1723,120 @@ mod paint_tests {
         paint_playing_overlay(&mut frame, &art);
         assert_eq!(buf[100 * 800 + 10], pack_xrgb(0x0A, 0x0A, 0x0A));
         assert_eq!(buf[0], pack_xrgb(0x0A, 0x0A, 0x0A));
+    }
+
+    /// Behind scene with red pixels at the native venue anchor
+    /// (`Playing_BG.ojs` sweeps `x204` rightward, clear of the
+    /// lanes) plus one lane-column pixel so clipping is observable.
+    fn venue_backdrop_art() -> SceneArt {
+        let mut venue = AvatarFigure::default();
+        for dx in [10, 204, 400] {
+            venue.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap(),
+                dx,
+                dy: 100,
+                colorkey: 0xFFFF,
+            });
+        }
+        SceneArt {
+            placements: vec![ScenePlacement {
+                id: "IDC_IMAGE_SPLAY_BACK1".to_owned(),
+                code: 0,
+                sprite: Some("Playing_BG.ojs".to_owned()),
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 0,
+                    h: 0,
+                },
+            }],
+            figures: HashMap::from([("Playing_BG.ojs".to_owned(), venue)]),
+        }
+    }
+
+    #[test]
+    fn playing_overlay_keeps_lanes_clear_of_behind_scene() {
+        // Right-side venue pixels show the scene art; the lane
+        // column, the score corner, the judgement band, and the
+        // peer stack keep their highway ink.
+        let art = venue_backdrop_art();
+        let mut buf = vec![0u32; 800 * 600];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 800,
+            h: 600,
+        };
+        PlayingView::default().paint(&mut frame, &HighwayGeometry::centered(800, 600));
+        paint_playing_overlay(&mut frame, &art);
+        let highway = pack_xrgb(0x0A, 0x0A, 0x0A);
+        assert_eq!(buf[100 * 800 + 400], pack_xrgb(255, 0, 0));
+        assert_eq!(buf[100 * 800 + 10], highway);
+        assert_eq!(buf[16 * 800 + 16], highway);
+        assert_eq!(buf[447 * 800 + 400], highway);
+        assert_eq!(buf[4 * 800 + 760], highway);
+    }
+
+    #[test]
+    fn playing_backdrop_paints_unclipped_before_highway() {
+        // The pre-highway API paints the whole scene body with no
+        // exclusions: lane and venue pixels turn red alike, and the
+        // highway shell covers every one of them after.
+        let art = venue_backdrop_art();
+        let mut buf = vec![0u32; 800 * 600];
+        paint_playing_backdrop(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &art,
+        );
+        assert_eq!(buf[100 * 800 + 10], pack_xrgb(255, 0, 0));
+        assert_eq!(buf[100 * 800 + 204], pack_xrgb(255, 0, 0));
+        assert_eq!(buf[100 * 800 + 400], pack_xrgb(255, 0, 0));
+        PlayingView::default().paint(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &HighwayGeometry::centered(800, 600),
+        );
+        assert_eq!(buf[100 * 800 + 10], pack_xrgb(0x0A, 0x0A, 0x0A));
+        assert_eq!(buf[100 * 800 + 204], pack_xrgb(0x0A, 0x0A, 0x0A));
+        assert_eq!(buf[100 * 800 + 400], pack_xrgb(0x0A, 0x0A, 0x0A));
+    }
+
+    #[test]
+    fn playing_overlay_layers_gauges_over_behind_scene() {
+        // Bound gauges keep their top slot: the shared strip pixel
+        // shows the gauge ink while the scene survives beside it.
+        let mut art = venue_backdrop_art();
+        art.placements.push(ScenePlacement {
+            id: "IDC_BUTTON_SPLAY_EXIT".to_owned(),
+            code: 0,
+            sprite: Some("Playing_Exit.ojs".to_owned()),
+            rect: Rect {
+                x: 400,
+                y: 100,
+                w: 10,
+                h: 10,
+            },
+        });
+        art.figures.insert(
+            "Playing_Exit.ojs".to_owned(),
+            anchored_pixel(0, 0, &[0x1F, 0x00]),
+        );
+        let mut buf = vec![0u32; 800 * 600];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 800,
+            h: 600,
+        };
+        PlayingView::default().paint(&mut frame, &HighwayGeometry::centered(800, 600));
+        paint_playing_overlay(&mut frame, &art);
+        assert_eq!(buf[100 * 800 + 400], pack_xrgb(0, 0, 255));
+        assert_eq!(buf[100 * 800 + 204], pack_xrgb(255, 0, 0));
     }
 
     #[test]
