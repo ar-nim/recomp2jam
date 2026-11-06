@@ -1,7 +1,8 @@
 //! Game TCP wire contract for a Memoryer-compatible client.
 //!
 //! Phase 1 of `docs/client-server-plan.md`: framing plus the
-//! login/channel messages. Layouts mirror Mozart.Encore
+//! login/channel messages, with the Phase 3/4 host song-flow
+//! messages alongside. Layouts mirror Mozart.Encore
 //! Memoryer's `Source/Memoryer` field orders (clean-room C#,
 //! v7.55); the exe confirms the framing anchor (command id as
 //! little-endian `u16` at buffer offset 2, `FUN_005a0550`
@@ -17,6 +18,7 @@ pub mod command;
 pub mod error;
 pub mod frame;
 pub mod message;
+pub mod play;
 pub mod rooms;
 pub mod strings;
 
@@ -34,6 +36,11 @@ pub use message::{
     EmptyMessage, ForceReauthorize, GameMode, Gender, GetChannelList, GetCharacterInfo, KeyMode,
     LegacyPing, MultiSessionError, Ping, RoomCreated, SessionKeys, SessionKeysRequest,
     SubscriptionAlert, Terminate, WireMessage, MEMORYER_CLIENT_ID,
+};
+pub use play::{
+    ConfirmMusicLoaded, ExitPlaying, FinalizeRank, GameStatsUpdate, GetMusicList,
+    SetDownloadProgress, SetRoomMusic, StartGame, StatKind, SubmitScore, SyncMemberMusicState,
+    UpdateGameStats,
 };
 pub use rooms::{
     Difficulty, GameSpeed, JoinResult, JoinRoom, JoinRoomResponse, JoinedRoom, RoomList,

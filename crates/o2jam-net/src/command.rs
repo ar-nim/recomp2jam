@@ -4,7 +4,8 @@
 //! events S->C broadcasts. Only Phase-1 login/channel opcodes
 //! live here; later phases extend these enums.
 
-/// Client-to-server requests (Phase 1 subset).
+/// Client-to-server requests (Phase 1 login/channel plus the
+/// Phase 3/4 host song-flow requests).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum Request {
@@ -16,6 +17,16 @@ pub enum Request {
     GetChannelInfo = 2002,
     CreateRoom = 2004,
     JoinWaiting = 3002,
+    SetRoomMusic = 4000,
+    StartGame = 4010,
+    ConfirmMusicLoaded = 4012,
+    UpdateGameStats = 4014,
+    SubmitScore = 4016,
+    ExitPlaying = 4021,
+    GetMusicList = 4030,
+    SyncMemberMusicState = 4036,
+    SetDownloadProgress = 4038,
+    FinalizeRank = 4041,
     Terminate = 65520,
 }
 
@@ -38,6 +49,16 @@ impl Request {
             2002 => Some(Self::GetChannelInfo),
             2004 => Some(Self::CreateRoom),
             3002 => Some(Self::JoinWaiting),
+            4000 => Some(Self::SetRoomMusic),
+            4010 => Some(Self::StartGame),
+            4012 => Some(Self::ConfirmMusicLoaded),
+            4014 => Some(Self::UpdateGameStats),
+            4016 => Some(Self::SubmitScore),
+            4021 => Some(Self::ExitPlaying),
+            4030 => Some(Self::GetMusicList),
+            4036 => Some(Self::SyncMemberMusicState),
+            4038 => Some(Self::SetDownloadProgress),
+            4041 => Some(Self::FinalizeRank),
             65520 => Some(Self::Terminate),
             _ => None,
         }
@@ -114,11 +135,13 @@ impl Response {
     }
 }
 
-/// Server-to-client broadcasts (Phase 2 subset).
+/// Server-to-client broadcasts (Phase 2 rooms plus the 4015
+/// in-play stats echo).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum Event {
     RoomCreated = 2007,
+    GameStatsUpdate = 4015,
 }
 
 impl Event {
@@ -133,6 +156,7 @@ impl Event {
     pub fn from_id(id: u16) -> Option<Self> {
         match id {
             2007 => Some(Self::RoomCreated),
+            4015 => Some(Self::GameStatsUpdate),
             _ => None,
         }
     }
@@ -156,7 +180,21 @@ mod tests {
 
     #[test]
     fn rejects_unknown_request_id() {
-        assert_eq!(Request::from_id(4014), None);
+        assert_eq!(Request::from_id(9999), None);
+    }
+
+    #[test]
+    fn resolves_song_request_ids() {
+        assert_eq!(Request::from_id(4000), Some(Request::SetRoomMusic));
+        assert_eq!(Request::from_id(4010), Some(Request::StartGame));
+        assert_eq!(Request::from_id(4012), Some(Request::ConfirmMusicLoaded));
+        assert_eq!(Request::from_id(4014), Some(Request::UpdateGameStats));
+        assert_eq!(Request::from_id(4016), Some(Request::SubmitScore));
+        assert_eq!(Request::from_id(4021), Some(Request::ExitPlaying));
+        assert_eq!(Request::from_id(4030), Some(Request::GetMusicList));
+        assert_eq!(Request::from_id(4036), Some(Request::SyncMemberMusicState));
+        assert_eq!(Request::from_id(4038), Some(Request::SetDownloadProgress));
+        assert_eq!(Request::from_id(4041), Some(Request::FinalizeRank));
     }
 
     #[test]
@@ -180,6 +218,12 @@ mod tests {
         assert_eq!(Response::from_id(2006), Some(Response::CreateRoom));
         assert_eq!(Event::from_id(2007), Some(Event::RoomCreated));
         assert_eq!(Event::from_id(2006), None);
+    }
+
+    #[test]
+    fn resolves_game_stats_update_event() {
+        assert_eq!(Event::from_id(4015), Some(Event::GameStatsUpdate));
+        assert_eq!(Event::from_id(4014), None);
     }
 
     #[test]
