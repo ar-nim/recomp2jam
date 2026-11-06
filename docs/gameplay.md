@@ -102,16 +102,22 @@ flag `0x40`/`0x80`), zeroed at init, max-tracked into `+0x3974`
 by the scorer (file `0x1706da`–`0x1706ef`). This matches the
 combo rule exactly (0x10/0x20 continue, 0x40/Miss break).
 The JAM counter is `X` itself (`+0x396e`, sub `+0x214e`),
-managed inside the scorer `FUN_00570510`: `+1` via adder
-`0x540a20` (file `0x140a20`) gated on live-combo beating a
-per-jam-level threshold table (`+0xb66` indexed by `X`, file
-`0x17071d`), reset to `0` on the Bad/Miss branch (file
-`0x170936`, after snapshotting via `0x5407f0` — likely
-maxJam), zeroed at init/setup. Jam multiplies the score
-(`200+10X`, `100+5X`); at zero jam Cool/Good score flat,
-matching the report. `o2jam-game` still implements only the
-verified bases until the Good-path jam-increment reachability
-is pinned down.
+with a separate PROGRESS counter at `+0x396c` (sub `+0x214c`)
+— player report confirmed instruction-by-instruction:
+Cool adds `+2` (`push $0x2`, file `0x1705b0`), Good adds `+1`
+(`push $0x1`, file `0x170628`), both via adder `0x5409f0`
+(file `0x1409f0`); Bad/Miss reset progress to `0` via setter
+`0x540770` on the shared low-branch tail (file `0x1708dd`).
+When progress beats the per-jam-level threshold table
+(game `+0xb66` indexed by `X`, file `0x17071d`; first level
+needs 30 points per the report — table lives in the game
+object so static bytes can't confirm the `30`), `X += 1` via
+adder `0x540a20` (file `0x140a20`), and `X` is reset to `0`
+on the Bad/Miss branch (file `0x170936`, after snapshotting
+via `0x5407f0` — likely maxJam). Jam multiplies the score
+(`200+10X`, `100+5X`); at zero jam Cool/Good score flat.
+Progress is cumulative across grants (no reset on level-up;
+higher table entries gate further levels).
 
 ## Room teams — UI + client send VERIFIED, scoring server-side
 
