@@ -50,12 +50,16 @@ All request/response/event layouts live in
 - `Authorize` 1000 C→S payload (Memoryer field order): u8 `1`, relayKey1/2 i32,
   public+local endpoints, i32 userId, str token, gender,
   u8 `1`, str clientId. Handle 1001/1003/1005/1008, 50/51/52.
-- BLOCKED on string wire format (exe forensics so far):
-  in-memory strings are null-terminated (`strlen`-equivalent
-  at file `0x15f1bc0`); packet builder appends raw `strlen`
-  bytes with no inline prefix/null (`0x555e30`→`0x555d70`→
-  `0x5f2450`; running packet length kept at buffer[0]) — so
-  the receiver must use out-of-band lengths.
+- String wire format, Memoryer side PINNED (`docs/net-protocol.md`
+  §3b; Encore `StringMessageFieldCodec`, defaults UTF-8 +
+  null-terminated + no prefix; AuthRequest Token/ClientId are bare
+  fields of that form; room names carry maxLength 22/12/21 as
+  forensics guessed). Exe forensics so far: in-memory strings are
+  null-terminated (`strlen`-equivalent at file `0x15f1bc0`);
+  packet builder appends raw `strlen` bytes with no inline
+  prefix/null (`0x555e30`→`0x555d70`→`0x5f2450`; running packet
+  length kept at buffer[0]) — so the receiver must use
+  out-of-band lengths.
   The inline Authorize builder (SetID 1000 at file `0x147bcd`)
   appends, in order: u8 `1`, key1+key2 (8 B), two 6-byte
   blocks (dword+word each — IP+port?), userId i32, TWO runtime
@@ -67,7 +71,10 @@ All request/response/event layouts live in
   any implementation: (a) field order/content (exe shows
   str,str,gender,const vs Memoryer token,gender,u8,clientId);
   (b) endpoint size (exe 6 B vs Memoryer 8 B `port,zero,IP`);
-  (c) slot sizes / null-padding for every string field.
+  (c) whether the exe emits the `0x00` string terminator
+  (its builder shows raw `strlen` bytes; Encore's decoder reads
+  to the terminator, so a missing one would swallow following
+  fields — needs live-interop proof).
   No `Authorize` implementation until these are resolved —
   a wrong guess breaks interop silently.
 - `GetChannelList` 1002 → 1003; `ChannelLogin` 1004 (i16

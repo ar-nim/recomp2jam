@@ -59,6 +59,32 @@ Send-fail logging tags each frame with `sendPack` id (`0x401cfe`).
 Direction convention (Memoryer): odd/even pairs — request C→S `N`,
 response S→C `N+1`; events S→C broadcasts.
 
+### 3b. String fields (Memoryer/Encore side, pinned)
+
+Reference: Encore framework (`SirusDoma/Encore`, open source),
+`Messaging/Codecs/StringMessageFieldCodec.cs` +
+`Utilities/StreamExtensions.cs` + `StringMessageFieldCodecTests.cs`.
+`[StringMessageField]` defaults: UTF-8, null-terminated (`0x00`), no
+length prefix, max 65535 chars. Encode = UTF-8 bytes + terminator,
+truncated to `maxLength` *including* the terminator; a length prefix,
+when present, counts bytes *including* the terminator. Decode =
+consume until the `0x00` unit (encoding-aware) and stop there; empty
+stream decodes to empty string. Plain `[MessageField]` on a string
+means no terminator and no prefix — it consumes to end of stream.
+Test vectors from Encore's own suite: `"abc"` → `61 62 63 00`;
+prefixed-u16 unterminated → `03 00 61 62 63`; prefixed-byte
+terminated → `04 61 62 63 00`.
+
+Memoryer usage: every Phase-1 string is a bare
+`StringMessageField(order: N)` — `AuthRequest` Token (order 6) and
+ClientId (order 9) are null-terminated UTF-8 with no prefix.
+Room-name fields carry `maxLength`: 22 (`CreateRoomRequest`), 12
+(`SetRoomParamsRequest`), 21 elsewhere — as the earlier forensics
+note guessed. Still OPEN on the exe side: whether the 7.55 client
+emits the `0x00` terminator per string (its builder appends raw
+`strlen` bytes), so live interop remains the final check before any
+`Authorize` implementation.
+
 ## 4. Packet families (opcodes decimal; Memoryer `Source/Memoryer` Commands.cs)
 
 ### 4a. Game TCP — requests C→S
