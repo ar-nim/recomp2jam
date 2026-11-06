@@ -444,9 +444,31 @@ pub struct OjnMidTriple {
 /// (file `0x4422e`) from the by-value `0x1b4` song-record copy, then
 /// appends the `0x238` entry via `0x452850` into dialog `+0x640` at
 /// VA `0x4445cd` (file `0x445cd`) or dialog `+0x680` at VA `0x4445e7`
-/// (file `0x445e7`). Dialog `+0x690` producers are five `0x452850`
-/// appends in the song-entry builder: files `0x4298d` / `0x429e3` /
-/// `0x42c05` / `0x42de8` / `0x42e13` (docs/file-formats/ojn.md).
+/// (file `0x445e7`).
+///
+/// Dialog `+0x680` is rebuilt from `+0x640` by two keyed filter
+/// functions. The first (VA `0x444630`/file `0x44630`) clears `+0x680`
+/// via `0x452a00` at file `0x446c0`, then fans matching `+0x640`
+/// entries out through `0x452850` at files `0x44957` (name-keyed first
+/// pass), `0x44a08` (index 0), `0x44abe` (index 2), `0x44b74`
+/// (index 5), `0x44c2a` (index 6), `0x44ce6` (index 8), and `0x44f61`
+/// (second loop). Guards are a byte-range check plus a 2-byte
+/// `strncmp` against the key-name table (indexed `0x6454d8` plus fixed
+/// `0x645510`/`0x645514`/`0x645518`/`0x64551c`/`0x645520`), under the
+/// dialog-mode dispatch on `+0x188` (0/1/else). The second
+/// (VA `0x444fe0`/file `0x44fe0`, clear at file `0x45070`) appends at
+/// files `0x4528b` and `0x454fa` with the same keyed shape.
+/// (Static disassembly survey; REA dossier TBD.)
+///
+/// Dialog `+0x690` holds inline `0x238` entries, not retained
+/// pointers: five `0x452850` appends in the song-entry builder copy
+/// one entry each from a source address returned by `0x453780`
+/// (files `0x4298d` / `0x429e3` / `0x42c05` / `0x42de8` / `0x42e13`;
+/// docs/file-formats/ojn.md). The copy is synchronous, so the source
+/// pointer lifetime ends at return. The `+0x690` count itself reads
+/// `(end - begin) / 0x238` (e.g. file `0x42f8f`); the global `0x7797e0`
+/// list appended at file `0x42f4f` (cleared at `0x42e63`) is a
+/// different list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OjnMidTagEntry {
     /// Song id this entry belongs to.
