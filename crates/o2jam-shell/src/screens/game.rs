@@ -13,12 +13,17 @@ use super::paint::{
     paint_room_scene, paint_screen, paint_waiting_members, paint_waiting_scene, scene_index,
     BattleVerdict, SceneArt,
 };
-use super::side::{can_return_side, can_visit_side, paint_side_scene, SideScreen};
+use super::side::{
+    can_return_side, can_visit_side, paint_side_scene, waiting_song_detail_line,
+    waiting_song_title_line, SideScreen,
+};
 use crate::MenuKey;
 use o2jam_audio::{AudioBackend, PcmSamples};
+use o2jam_file::OjnListEntry;
 use o2jam_game::RoomTeams;
+use o2jam_net::play::SetRoomMusic;
 use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry};
-use o2jam_render::Frame;
+use o2jam_render::{draw_text, fill_rect, pack_xrgb, text_width, Frame, Rect};
 
 /// Game loop that shows each screen's scene and walks the flow.
 ///
@@ -36,6 +41,9 @@ pub struct ScreenGame {
     rooms: Vec<RoomListEntry>,
     room_highlight: usize,
     waiting: Option<JoinedRoom>,
+    selected_music: Option<SetRoomMusic>,
+    song_titles: HashMap<u16, String>,
+    select_music_art: Option<SceneArt>,
     battle_teams: RoomTeams,
     battle_self_team: Option<u8>,
     side: Option<SideScreen>,
@@ -67,6 +75,9 @@ impl ScreenGame {
             rooms: Vec::new(),
             room_highlight: 0,
             waiting: None,
+            selected_music: None,
+            song_titles: HashMap::new(),
+            select_music_art: None,
             battle_teams: RoomTeams::new(),
             battle_self_team: None,
             side: None,
@@ -171,6 +182,63 @@ impl ScreenGame {
     pub fn set_joined_room(&mut self, room: JoinedRoom) -> &mut Self {
         self.waiting = Some(room);
         self
+    }
+
+    /// Remember the host song choice (`SetRoomMusic` 4000 body);
+    /// Waiting paints its title and difficulty panel.
+    pub fn set_selected_music(&mut self, selection: SetRoomMusic) -> &mut Self {
+        self.selected_music = Some(selection);
+        self
+    }
+
+    /// Stage song catalog titles (`OJNList.dat` order, read-only copy).
+    /// Missing catalogs paint dialog art without rows.
+    pub fn set_song_catalog(&mut self, entries: &[OjnListEntry<'_>]) -> &mut Self {
+        self.song_titles.clear();
+        for entry in entries.iter().filter(|entry| entry.is_song()) {
+            let Ok(song_id) = u16::try_from(entry.song_id) else {
+                continue;
+            };
+            self.song_titles
+                .entry(song_id)
+                .or_insert_with(|| entry.title.clone());
+        }
+        self
+    }
+
+    /// Stage real song-select dialog art (`DAILOG_SELECTMUSIC` placements
+    /// plus figures loaded through `load_scene_figures`). Waiting layers
+    /// it over the seats; empty art paints nothing extra.
+    pub fn load_select_music_scene(
+        &mut self,
+        placements: Vec<ScenePlacement>,
+        figures: HashMap<String, AvatarFigure>,
+    ) -> &mut Self {
+        self.select_music_art = Some(SceneArt {
+            placements,
+            figures,
+        });
+        self
+    }
+
+    /// Catalog title for the chosen song, if staged.
+    fn selected_song_title(&self) -> Option<&str> {
+        let selection = self.selected_music.as_ref()?;
+        self.song_titles
+            .get(&selection.music_id)
+            .map(String::as_str)
+    }
+
+    /// Waiting song panel rows: title row plus difficulty row.
+    /// `None` while the choice or its title is missing; dialog art
+    /// still paints then.
+    fn selected_song_lines(&self) -> Option<[String; 2]> {
+        let selection = self.selected_music.as_ref()?;
+        let title = self.selected_song_title()?;
+        Some([
+            waiting_song_title_line(selection.music_id, title),
+            waiting_song_detail_line(selection),
+        ])
     }
 
     /// Stage battle totals (`RoomTeams` mirrors the server-side 4014/4016
@@ -314,7 +382,8 @@ impl ScreenGame {
         }
     }
 
-    /// Waiting: staged art behind the live seats, flat card fallback.
+    /// Waiting: staged art behind the live seats, flat card fallback,
+    /// then the staged song-select dialog with the chosen-song panel.
     fn paint_waiting(&self, frame: &mut Frame<'_>) {
         match (self.scene_art(Screen::Waiting), &self.waiting) {
             (Some(art), Some(room)) => paint_waiting_scene(frame, room, art),
@@ -322,6 +391,60 @@ impl ScreenGame {
             (None, Some(room)) => paint_waiting_members(frame, room),
             (None, None) => paint_screen(frame, Screen::Waiting),
         }
+        self.paint_select_music_art(frame);
+        self.paint_selected_song_panel(frame);
+    }
+
+    /// Layer staged song-select dialog figures over the waiting seats.
+    /// Placements without a loaded figure paint nothing.
+    fn paint_select_music_art(&self, frame: &mut Frame<'_>) {
+        let Some(art) = self.select_music_art.as_ref() else {
+            return;
+        };
+        art.paint_overlay(frame);
+    }
+
+    /// Paint the chosen-song panel rows (title, then difficulty).
+    /// Missing choices or titles paint nothing: art without rows.
+    fn paint_selected_song_panel(&self, frame: &mut Frame<'_>) {
+        let Some([title_line, detail_line]) = self.selected_song_lines() else {
+            return;
+        };
+        Self::paint_song_panel_line(frame, 0, &title_line);
+        Self::paint_song_panel_line(frame, 1, &detail_line);
+    }
+
+    /// Panel rows stacked below the seat grid: title row 0, detail row 1.
+    const SONG_PANEL_ROWS: usize = 2;
+    /// Row step matching the lobby list height.
+    const SONG_PANEL_ROW_H: i32 = 8;
+
+    /// Top-left of song panel row `slot` (bottom-left, below the seats).
+    fn song_panel_origin(frame: &Frame<'_>, slot: usize) -> (i32, i32) {
+        let width = i32::try_from(frame.w).unwrap_or(i32::MAX);
+        let height = i32::try_from(frame.h).unwrap_or(i32::MAX);
+        let step = i32::try_from(slot).unwrap_or(i32::MAX);
+        (width / 8, height * 3 / 4 + step * Self::SONG_PANEL_ROW_H)
+    }
+
+    /// One song panel row: dark scrim plus white ink.
+    fn paint_song_panel_line(frame: &mut Frame<'_>, slot: usize, text: &str) {
+        if slot >= Self::SONG_PANEL_ROWS || text.is_empty() {
+            return;
+        }
+        let (x, y) = Self::song_panel_origin(frame, slot);
+        let text_w = u32::try_from(text_width(text)).unwrap_or(u32::MAX);
+        fill_rect(
+            frame,
+            &Rect {
+                x: x - 4,
+                y: y - 2,
+                w: text_w.saturating_add(8),
+                h: 9,
+            },
+            pack_xrgb(0x08, 0x08, 0x10),
+        );
+        draw_text(frame, x, y, text, pack_xrgb(0xFF, 0xFF, 0xFF));
     }
 
     /// Loading gate: staged art behind the progress bar.
@@ -882,6 +1005,94 @@ mod game_tests {
             0,
         );
         assert_eq!(buf[0], background_of(Screen::Waiting));
+    }
+
+    fn waiting_song_catalog_blob() -> Vec<u8> {
+        let mut rec = vec![0u8; 300];
+        rec[8..11].copy_from_slice(b"ojn");
+        rec[4..8].copy_from_slice(&757u32.to_le_bytes());
+        rec[20..24].copy_from_slice(&124.0f32.to_le_bytes());
+        rec[112..117].copy_from_slice(b"First");
+        rec[176..180].copy_from_slice(b"Band");
+        rec[240..251].copy_from_slice(b"o2ma757.ojm");
+        rec
+    }
+
+    fn waiting_song_selection() -> o2jam_net::play::SetRoomMusic {
+        o2jam_net::play::SetRoomMusic {
+            music_id: 757,
+            difficulty: 2,
+            speed: 3,
+        }
+    }
+
+    fn stage_waiting_song(game: &mut ScreenGame) {
+        let blob = waiting_song_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_song_catalog(&entries);
+        game.set_selected_music(waiting_song_selection());
+    }
+
+    fn paint_waiting_frame(game: &mut ScreenGame, w: usize, h: usize) -> Vec<u32> {
+        let mut buf = vec![0u32; w * h];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w,
+                h,
+            },
+            0,
+        );
+        buf
+    }
+
+    #[test]
+    fn waiting_selected_song_paints_title_and_difficulty_rows() {
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        stage_waiting_song(&mut game);
+        let buf = paint_waiting_frame(&mut game, 80, 64);
+        // Panel sits below the seats: title `M...` at (10, 48),
+        // detail `H...` at (10, 56); both glyphs light their origin.
+        assert_eq!(buf[48 * 80 + 10], pack_xrgb(0xFF, 0xFF, 0xFF));
+        assert_eq!(buf[56 * 80 + 10], pack_xrgb(0xFF, 0xFF, 0xFF));
+        // Seats keep painting under the panel.
+        assert!(buf.contains(&pack_xrgb(0x30, 0xE0, 0x30)));
+    }
+
+    #[test]
+    fn waiting_without_catalog_paints_art_without_rows() {
+        let (placements, figures) = corner_scene_art("MusicLoading.ojs");
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        game.load_select_music_scene(placements, figures);
+        game.set_selected_music(waiting_song_selection());
+        let buf = paint_waiting_frame(&mut game, 80, 64);
+        // Dialog art lands at the origin; the unresolved panel leaves
+        // the bottom strip on the flat background.
+        assert_eq!(buf[0], pack_xrgb(255, 0, 0));
+        assert_eq!(buf[48 * 80 + 10], background_of(Screen::Waiting));
+        assert_eq!(buf[56 * 80 + 10], background_of(Screen::Waiting));
+    }
+
+    #[test]
+    fn select_music_art_layers_over_waiting_without_hiding_seats() {
+        let (placements, figures) = corner_scene_art("AlbumList.ojs");
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        game.load_select_music_scene(placements, figures);
+        stage_waiting_song(&mut game);
+        let buf = paint_waiting_frame(&mut game, 80, 64);
+        assert_eq!(buf[0], pack_xrgb(255, 0, 0));
+        assert_eq!(buf[48 * 80 + 10], pack_xrgb(0xFF, 0xFF, 0xFF));
+        let (x, y) = seat_origin(1, 80, 64);
+        assert_eq!(
+            buf[(y + 1) as usize * 80 + (x - 6 + 1) as usize],
+            pack_xrgb(0x30, 0xE0, 0x30)
+        );
     }
 
     #[test]

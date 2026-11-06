@@ -2,15 +2,16 @@
 //! with the working UI ink on top.
 //!
 //! Each scene paints its verified archive art first (lifecycle §5–11:
-//! `O2mediaLogo.ojs`, channel/room/waiting/playing/result blocks,
-//! `MusicLoading.ojs`) through the scene kit in [`crate::avatar`]
-//! (`load_scene_figures`, `bind_scene_rects`, `paint_scene_figures`).
-//! Rects stay verbatim on the native 800x600 canvas (rect `i` lays
-//! out entry `i + 1`; Playing lays out entries 213–229); scaling to
-//! the frame happens only at present, and live UI (channel list,
-//! room list, waiting seats, loading bar, highway, result digits)
-//! paints after the art. Bare [`paint_screen`] keeps the flat-color
-//! fallback while no art is staged; staged scenes never paint flat cards.
+//! `O2mediaLogo.ojs`, channel/room/waiting/playing/loading/result blocks)
+//! through the scene kit in [`crate::avatar`] (`load_scene_figures`,
+//! `bind_scene_rects`, `anchor_placements`, `paint_scene_figures`).
+//! Rect `i` lays out entry `i + 1` (Playing lays out entries 213–229);
+//! bound layers cover-blit into their rect, unbound sprites paint 1:1
+//! at their record anchor, everything in file order with the
+//! background first. Number-font bodies (`Room_Number.ojs` and kin)
+//! paint live values digit by digit; entry codes gate visibility by
+//! state byte. Bare [`paint_screen`] keeps the flat-color fallback
+//! while no art is staged; staged scenes never paint flat cards.
 
 use std::collections::HashMap;
 
@@ -27,8 +28,8 @@ use o2jam_net::{
     RoomSlotState,
 };
 use o2jam_render::{
-    draw_number, draw_text, fill_rect, number_width, pack_xrgb, scale_rect_to_frame, text_width,
-    Frame, Rect,
+    blit_anchor_in_rect, draw_number, draw_text, fill_rect, number_width, pack_xrgb,
+    scale_rect_to_frame, text_width, Frame, Rect,
 };
 
 /// Gameplay block: real UI lives in `Playing1.opi` (235 entries,
@@ -93,6 +94,13 @@ pub const fn scene_index(screen: Screen) -> usize {
     }
 }
 
+/// Channel dialog bar: `STATE_CHANNEL` names zero sprites (verified
+/// on 7.55), so the channel scene stages this code-mounted bar
+/// instead — the same fallback the real-art soak uses. The bar
+/// carries no block entry, so it stages with an empty id and paints
+/// at its record anchor.
+pub const DIALOG_BAR_SPRITE: &str = "Dialog_ChannelSelectBar.ojs";
+
 /// Sprite bodies one `ControlList` block names, in file order (empty
 /// for unknown blocks).
 fn block_sprites(list: &ControlList, block: &str) -> Vec<String> {
@@ -112,15 +120,23 @@ fn block_or_single(list: &ControlList, block: &str, single: &str) -> Vec<String>
 }
 
 /// Sprite bodies one main scene needs, in block order (lifecycle
-/// §5–11). Splash and loading resolve to their single art sprites;
-/// channel names its dialog bar and buttons (no `.bnd`: the only
-/// full state without one); room, waiting, playing, and result name
-/// their block entries for `bind_scene_rects`.
+/// §5–11). Splash and loading resolve to their single art sprites
+/// (code-mounted, not block-named); channel falls back to the
+/// code-mounted dialog bar (`STATE_CHANNEL` names zero sprites);
+/// room, waiting, playing, and result name their block entries for
+/// `bind_scene_rects`.
 #[must_use]
 pub fn main_scene_sprites(list: &ControlList, screen: Screen) -> Vec<String> {
     match screen {
         Screen::Avi => block_or_single(list, AVI_BLOCK, AVI_LOGO_SPRITE),
-        Screen::Channel => block_sprites(list, CHANNEL_BLOCK),
+        Screen::Channel => {
+            let names = block_sprites(list, CHANNEL_BLOCK);
+            if names.is_empty() {
+                vec![DIALOG_BAR_SPRITE.to_owned()]
+            } else {
+                names
+            }
+        }
         Screen::Room => block_sprites(list, ROOM_BLOCK),
         Screen::Waiting => block_sprites(list, WAITING_BLOCK),
         Screen::Loading => block_or_single(list, "STATE_LOADING", LOADING_SPRITE),
@@ -129,11 +145,13 @@ pub fn main_scene_sprites(list: &ControlList, screen: Screen) -> Vec<String> {
     }
 }
 
-/// Placements for blocks without a `.bnd` (splash, channel, loading):
-/// no bind file means no layout to claim, so each sprite paints 1:1
-/// at the native origin with an empty rect — never full-bleed.
-/// `paint_scene_figures` draws each body at that origin; staged
-/// bodies keep their native size while live UI ink paints on top.
+/// Placements for code-mounted sprites without a block entry
+/// (channel dialog bar, loading gate): no entry means no id, code,
+/// or layout to claim, so each sprite paints 1:1 at its own record
+/// anchor with an empty rect — never full-bleed. Entries of bare-
+/// `BOUND` blocks keep their real id and code through
+/// [`anchor_placements`](super::super::avatar::anchor_placements);
+/// this bare-name form is only for entry-less mounted art.
 #[must_use]
 pub fn unbound_scene_placements(names: &[String]) -> Vec<ScenePlacement> {
     names
@@ -501,6 +519,120 @@ fn paint_room_detail_line(frame: &mut Frame<'_>, x: i32, y: i32, text: &str, ink
     draw_text(frame, x, y, text, ink);
 }
 
+/// Decimal weight of a digit-place id: its trailing decimal run
+/// (`ROOMNO100` → 100, `RMNUM_010` → 10, `CHNUM_01` → 1). `None`
+/// without a trailing run: `SPEED_NUM` holds one value, not one
+/// digit per place.
+#[must_use]
+fn digit_place_weight(id: &str) -> Option<u32> {
+    let digits = id.bytes().rev().take_while(u8::is_ascii_digit).count();
+    if digits == 0 {
+        return None;
+    }
+    id[id.len() - digits..].parse().ok()
+}
+
+/// True for a digit-place weight: powers of ten only. Shared bodies
+/// with sequential suffixes (`SHADOW1`…`8`, `JAM_NUM1`…`8`) are frame
+/// lists, not digit places, so only 1/10/100/… group into a number.
+#[must_use]
+fn is_place_weight(mut weight: u32) -> bool {
+    if weight == 0 {
+        return false;
+    }
+    while weight.is_multiple_of(10) {
+        weight /= 10;
+    }
+    weight == 1
+}
+
+/// Digit places sharing one number-font body, in file order:
+/// `(weight, place rect)` per entry whose id carries a place weight
+/// (`ROOMNO1/10/100` share `Room_Number.ojs` on real 7.55 art).
+#[must_use]
+fn font_places(placements: &[ScenePlacement], font: &str) -> Vec<(u32, Rect)> {
+    placements
+        .iter()
+        .filter(|placed| placed.sprite.as_deref() == Some(font))
+        .filter_map(|placed| {
+            let weight = digit_place_weight(&placed.id)?;
+            is_place_weight(weight).then_some((weight, placed.rect))
+        })
+        .collect()
+}
+
+/// Paint `value` through a staged number font: the place of weight
+/// `w` shows digit `(value / w) % 10`, anchor-blitted 1:1 from the
+/// font figure's same-index layer into the place rect (recipe steps
+/// 6–7: `Room_Number.ojs` decodes ten digit layers in stored order,
+/// each 11x13 over its own 11x13 place rect, so anchor and rect
+/// coincide on real art). Missing fonts, short fonts, and empty
+/// rects paint nothing; every other staged body is untouched.
+fn paint_font_number(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    figures: &HashMap<String, AvatarFigure>,
+    font: &str,
+    value: u32,
+) {
+    let Some(figure) = figures.get(font) else {
+        return;
+    };
+    for (weight, rect) in font_places(placements, font) {
+        let digit = value / weight % 10;
+        let layer = usize::try_from(digit)
+            .ok()
+            .and_then(|index| figure.layer(index));
+        if let Some(shown) = layer {
+            let dest = scale_rect_to_frame(&rect, frame.w, frame.h);
+            blit_anchor_in_rect(
+                frame,
+                &shown.image,
+                dest.x + shown.dx,
+                dest.y + shown.dy,
+                shown.colorkey,
+                &dest,
+            );
+        }
+    }
+}
+
+/// Number-font bodies staged for this scene: every sprite with two
+/// or more digit places. `STATE_ROOM` carries exactly one
+/// (`Room_Number.ojs` over `ROOMNO1/10/100`, verified on 7.55).
+#[must_use]
+fn staged_number_fonts(placements: &[ScenePlacement]) -> Vec<&str> {
+    let mut fonts = Vec::new();
+    for placed in placements {
+        let Some(sprite) = placed.sprite.as_deref() else {
+            continue;
+        };
+        if !fonts.contains(&sprite) && font_places(placements, sprite).len() >= 2 {
+            fonts.push(sprite);
+        }
+    }
+    fonts
+}
+
+/// Room number through the staged number fonts: `ROOMNO1/10/100`
+/// show the highlighted room's number digit by digit, each in its
+/// own `.bnd` rect. No staged font means no digits (the row text
+/// already names the number); nothing paints without a room.
+fn paint_room_number(
+    frame: &mut Frame<'_>,
+    art: &SceneArt,
+    rooms: &[RoomListEntry],
+    highlight: usize,
+) {
+    let Some(room) = rooms.get(highlight) else {
+        return;
+    };
+    let value = u32::try_from(room.number.max(0)).unwrap_or(u32::MAX);
+    for font in staged_number_fonts(&art.placements) {
+        paint_font_number(frame, &art.placements, &art.figures, font, value);
+    }
+}
+
 /// Details of the highlighted room: title, song, difficulty, key
 /// mode, game mode, speed, seats, level gate, lock. Lines anchor to
 /// their `State_Room.bnd` rects while staged art names them and
@@ -546,6 +678,7 @@ pub fn paint_room_scene(
     paint_title_over_art(frame, Screen::Room);
     paint_room_rows(frame, rooms, highlight);
     paint_room_details(frame, rooms, highlight, Some(&art.placements));
+    paint_room_number(frame, art, rooms, highlight);
 }
 
 /// Seats shown on the waiting screen: self plus the seven wire slots.
@@ -926,7 +1059,10 @@ fn paint_battle_verdict(frame: &mut Frame<'_>, verdict: Option<BattleVerdict>) {
 /// Score, best combo, verdict, and avatar figure (no background
 /// fill: shared by the flat fallback and the art scene). A dark
 /// scrim sits behind the digits so they read over staged art.
-/// Grade letters stay out (mapping OPEN).
+/// `STATE_RESULT` names no number font (verified decl `0x07`: the
+/// block carries art, tap fields, and buttons but no digit places),
+/// so the live score stays procedural UI ink painted last, after
+/// the staged panels. Grade letters stay out (mapping OPEN).
 fn paint_result_content(
     frame: &mut Frame<'_>,
     avatar: Option<&AvatarFigure>,
@@ -993,8 +1129,15 @@ pub fn paint_result_scene(
     paint_result_content(frame, avatar, score, verdict);
 }
 
-/// Paint staged gameplay art over the highway: life/jam gauges and
-/// panels ring the frame edges while notes keep falling underneath.
+/// Paint staged gameplay art over the highway: static backdrop
+/// panels first (`Playing_Menu.ojs`, the life/jam edge gauges, the
+/// level plate — see `avatar::PLAYING_BACKDROP_PANELS`), then the
+/// bound gauges and buttons (`State_Playing.bnd` rects 213–229) on
+/// top. Every staged panel anchors clear of the note lanes and the
+/// live score/judgement ink, so notes keep falling underneath.
+/// Full-bleed center panels stay out: opaque art there would
+/// blanket notes and the judgement word, so it belongs behind the
+/// highway (OPEN).
 pub fn paint_playing_overlay(frame: &mut Frame<'_>, art: &SceneArt) {
     art.paint_overlay(frame);
 }
@@ -1415,6 +1558,98 @@ mod paint_tests {
         );
         assert!(main_scene_sprites(&list, Screen::Playing).is_empty());
         assert!(main_scene_sprites(&list, Screen::Result).is_empty());
+    }
+
+    /// One 1x1 pixel figure at a native anchor (colorkey white).
+    fn anchored_pixel(dx: i32, dy: i32, bytes: &[u8]) -> AvatarFigure {
+        let mut figure = AvatarFigure::default();
+        figure.push_layer(FigureLayer {
+            image: Rgb555Image::decode(bytes, 1, 1).unwrap(),
+            dx,
+            dy,
+            colorkey: 0xFFFF,
+        });
+        figure
+    }
+
+    #[test]
+    fn playing_overlay_layers_bound_panels_over_backdrop() {
+        // Backdrop-first file order: the bound button pixel wins
+        // the shared menu-strip pixel, the strip survives beside
+        // it, and the lane pixel keeps its highway ink.
+        let mut menu = AvatarFigure::default();
+        for dx in [750, 751] {
+            menu.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap(),
+                dx,
+                dy: 550,
+                colorkey: 0xFFFF,
+            });
+        }
+        let art = SceneArt {
+            placements: vec![
+                ScenePlacement {
+                    id: "IDC_IMAGE_SPLAY_BACK3".to_owned(),
+                    code: 0,
+                    sprite: Some("Playing_Menu.ojs".to_owned()),
+                    rect: Rect {
+                        x: 0,
+                        y: 0,
+                        w: 0,
+                        h: 0,
+                    },
+                },
+                ScenePlacement {
+                    id: "IDC_BUTTON_SPLAY_EXIT".to_owned(),
+                    code: 0,
+                    sprite: Some("Playing_Exit.ojs".to_owned()),
+                    rect: Rect {
+                        x: 751,
+                        y: 550,
+                        w: 10,
+                        h: 10,
+                    },
+                },
+            ],
+            figures: HashMap::from([
+                ("Playing_Menu.ojs".to_owned(), menu),
+                (
+                    "Playing_Exit.ojs".to_owned(),
+                    anchored_pixel(0, 0, &[0x1F, 0x00]),
+                ),
+            ]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 800,
+            h: 600,
+        };
+        PlayingView::default().paint(&mut frame, &HighwayGeometry::centered(800, 600));
+        paint_playing_overlay(&mut frame, &art);
+        assert_eq!(buf[550 * 800 + 750], pack_xrgb(255, 0, 0));
+        assert_eq!(buf[550 * 800 + 751], pack_xrgb(0, 0, 255));
+        assert_eq!(buf[100 * 800 + 10], pack_xrgb(0x0A, 0x0A, 0x0A));
+    }
+
+    #[test]
+    fn playing_overlay_skips_panels_without_figures() {
+        // A named-but-undecodable panel paints nothing: the highway
+        // ink underneath survives.
+        let art = SceneArt {
+            placements: unbound_scene_placements(&["Missing.ojs".to_owned()]),
+            figures: HashMap::new(),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 800,
+            h: 600,
+        };
+        PlayingView::default().paint(&mut frame, &HighwayGeometry::centered(800, 600));
+        paint_playing_overlay(&mut frame, &art);
+        assert_eq!(buf[100 * 800 + 10], pack_xrgb(0x0A, 0x0A, 0x0A));
+        assert_eq!(buf[0], pack_xrgb(0x0A, 0x0A, 0x0A));
     }
 
     #[test]
@@ -1898,5 +2133,177 @@ mod paint_tests {
         );
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert!(buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
+    }
+
+    /// Ten-layer number font: layer `i` paints digit `i`.
+    fn digit_font_figure() -> AvatarFigure {
+        let words = [
+            0x7C00u16, 0x03E0, 0x001F, 0x7FFF, 0x0000, 0x7FE0, 0x03FF, 0x7C1F, 0x4210, 0x2108,
+        ];
+        let mut figure = AvatarFigure::default();
+        for word in words {
+            figure.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&word.to_le_bytes(), 1, 1).unwrap(),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+        }
+        figure
+    }
+
+    /// `ROOMNO` digit places in real file order (ones first).
+    fn room_number_placements() -> Vec<ScenePlacement> {
+        [
+            ("IDC_IMAGE_SROOM_ROOMNO1", 30),
+            ("IDC_IMAGE_SROOM_ROOMNO10", 20),
+            ("IDC_IMAGE_SROOM_ROOMNO100", 10),
+        ]
+        .into_iter()
+        .map(|(id, x)| ScenePlacement {
+            id: id.to_owned(),
+            code: 0x1350_0001,
+            sprite: Some("Room_Number.ojs".to_owned()),
+            rect: Rect {
+                x,
+                y: 10,
+                w: 4,
+                h: 4,
+            },
+        })
+        .collect()
+    }
+
+    #[test]
+    fn digit_place_weights_read_trailing_runs() {
+        assert_eq!(digit_place_weight("IDC_IMAGE_SROOM_ROOMNO1"), Some(1));
+        assert_eq!(digit_place_weight("IDC_IMAGE_SROOM_ROOMNO10"), Some(10));
+        assert_eq!(digit_place_weight("IDC_IMAGE_SROOM_ROOMNO100"), Some(100));
+        assert_eq!(digit_place_weight("IDC_IMAGE_SWAIT_CHNUM_01"), Some(1));
+        assert_eq!(digit_place_weight("IDC_IMAGE_SWAIT_RMNUM_010"), Some(10));
+        assert_eq!(digit_place_weight("IDC_IMAGE_SWAIT_SPEED_NUM"), None);
+        assert!(is_place_weight(1));
+        assert!(is_place_weight(10));
+        assert!(is_place_weight(100));
+        assert!(!is_place_weight(0));
+        assert!(!is_place_weight(8));
+        assert!(!is_place_weight(20));
+    }
+
+    #[test]
+    fn font_numbers_blits_weighted_digits_into_place_rects() {
+        // Value 12 over ones-first places: weight picks the digit,
+        // not file order — hundreds red (0), tens green (1), ones
+        // blue (2).
+        let placements = room_number_placements();
+        let figures = HashMap::from([("Room_Number.ojs".to_owned(), digit_font_figure())]);
+        let mut buf = vec![0u32; 800 * 600];
+        paint_font_number(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            &figures,
+            "Room_Number.ojs",
+            12,
+        );
+        assert_eq!(buf[10 * 800 + 10], pack_xrgb(255, 0, 0));
+        assert_eq!(buf[10 * 800 + 20], pack_xrgb(0, 255, 0));
+        assert_eq!(buf[10 * 800 + 30], pack_xrgb(0, 0, 255));
+        assert_eq!(buf[0], 0);
+    }
+
+    #[test]
+    fn font_numbers_skip_missing_fonts_and_layers() {
+        let placements = room_number_placements();
+        let mut buf = vec![0x123456u32; 64 * 48];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 64,
+            h: 48,
+        };
+        paint_font_number(
+            &mut frame,
+            &placements,
+            &HashMap::new(),
+            "Room_Number.ojs",
+            12,
+        );
+        let short = HashMap::from([("Room_Number.ojs".to_owned(), red_figure())]);
+        paint_font_number(&mut frame, &placements, &short, "Room_Number.ojs", 12);
+        assert_eq!(buf, vec![0x123456u32; 64 * 48]);
+    }
+
+    #[test]
+    fn sequential_suffixes_are_frames_not_fonts() {
+        // `SHADOW1`…`8` share one body but never form a number.
+        let placements: Vec<ScenePlacement> = (1..=8)
+            .map(|n| ScenePlacement {
+                id: format!("IDC_IMAGE_SPLAY_SHADOW{n}"),
+                code: 0x1B50_0000 + n,
+                sprite: Some("Avatar_Shadow.oji".to_owned()),
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 8,
+                    h: 8,
+                },
+            })
+            .collect();
+        assert!(staged_number_fonts(&placements).is_empty());
+        assert_eq!(
+            staged_number_fonts(&room_number_placements()),
+            vec!["Room_Number.ojs"]
+        );
+    }
+
+    #[test]
+    fn room_scene_paints_room_number_through_staged_font() {
+        let art = SceneArt {
+            placements: room_number_placements(),
+            figures: HashMap::from([("Room_Number.ojs".to_owned(), digit_font_figure())]),
+        };
+        let mut rooms = two_rooms();
+        rooms[0].number = 12;
+        let mut buf = vec![0u32; 800 * 600];
+        paint_room_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &rooms,
+            0,
+            &art,
+        );
+        assert_eq!(buf[10 * 800 + 10], pack_xrgb(255, 0, 0));
+        assert_eq!(buf[10 * 800 + 20], pack_xrgb(0, 255, 0));
+        assert_eq!(buf[10 * 800 + 30], pack_xrgb(0, 0, 255));
+    }
+
+    #[test]
+    fn channel_falls_back_to_the_dialog_bar() {
+        // `STATE_CHANNEL` names zero sprites on 7.55: the scene
+        // stages the code-mounted dialog bar instead.
+        let list = o2jam_file::parse_control_list(
+            &[
+                "NUMBER_OF_STATE 0x01",
+                "STATE_CHANNEL 0x27",
+                "{",
+                "BOUND",
+                "IDC_STATE_CHANNEL 0X12000000",
+                "IDC_BACK 0X12100001",
+                "}",
+                "",
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        assert_eq!(
+            main_scene_sprites(&list, Screen::Channel),
+            vec![DIALOG_BAR_SPRITE.to_owned()]
+        );
     }
 }
