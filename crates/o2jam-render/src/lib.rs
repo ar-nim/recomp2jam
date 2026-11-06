@@ -227,15 +227,62 @@ pub const fn digit_glyph(digit: u8) -> Option<[u8; GLYPH_H]> {
     }
 }
 
-/// Draw one digit with its top-left at `(x, y)`; clips to the frame,
-/// draws nothing for out-of-range digits.
-pub fn draw_digit(frame: &mut Frame<'_>, x: i32, y: i32, digit: u8, color: u32) {
+/// 3x5 bitmap rows for one ASCII letter or mark (bit 2 = left pixel).
+/// Lowercase maps to upper; `None` means undrawable (drawn blank).
+#[must_use]
+pub const fn letter_glyph(ch: u8) -> Option<[u8; GLYPH_H]> {
+    match ch {
+        b'A' => Some([0b010, 0b101, 0b111, 0b101, 0b101]),
+        b'B' => Some([0b110, 0b101, 0b110, 0b101, 0b110]),
+        b'C' => Some([0b011, 0b100, 0b100, 0b100, 0b011]),
+        b'D' => Some([0b110, 0b101, 0b101, 0b101, 0b110]),
+        b'E' => Some([0b111, 0b100, 0b110, 0b100, 0b111]),
+        b'F' => Some([0b111, 0b100, 0b110, 0b100, 0b100]),
+        b'G' => Some([0b011, 0b100, 0b101, 0b101, 0b011]),
+        b'H' => Some([0b101, 0b101, 0b111, 0b101, 0b101]),
+        b'I' => Some([0b111, 0b010, 0b010, 0b010, 0b111]),
+        b'J' => Some([0b001, 0b001, 0b001, 0b101, 0b010]),
+        b'K' => Some([0b101, 0b101, 0b110, 0b101, 0b101]),
+        b'L' => Some([0b100, 0b100, 0b100, 0b100, 0b111]),
+        b'M' => Some([0b101, 0b111, 0b111, 0b101, 0b101]),
+        b'N' => Some([0b110, 0b101, 0b101, 0b101, 0b101]),
+        b'O' => Some([0b010, 0b101, 0b101, 0b101, 0b010]),
+        b'P' => Some([0b110, 0b101, 0b110, 0b100, 0b100]),
+        b'Q' => Some([0b010, 0b101, 0b101, 0b110, 0b011]),
+        b'R' => Some([0b110, 0b101, 0b110, 0b101, 0b101]),
+        b'S' => Some([0b011, 0b100, 0b010, 0b001, 0b110]),
+        b'T' => Some([0b111, 0b010, 0b010, 0b010, 0b010]),
+        b'U' => Some([0b101, 0b101, 0b101, 0b101, 0b111]),
+        b'V' => Some([0b101, 0b101, 0b101, 0b101, 0b010]),
+        b'W' => Some([0b101, 0b101, 0b111, 0b111, 0b101]),
+        b'X' => Some([0b101, 0b101, 0b010, 0b101, 0b101]),
+        b'Y' => Some([0b101, 0b101, 0b010, 0b010, 0b010]),
+        b'Z' => Some([0b111, 0b001, 0b010, 0b100, 0b111]),
+        b' ' => Some([0b000, 0b000, 0b000, 0b000, 0b000]),
+        b'-' => Some([0b000, 0b000, 0b111, 0b000, 0b000]),
+        b'.' => Some([0b000, 0b000, 0b000, 0b000, 0b010]),
+        b':' => Some([0b000, 0b010, 0b000, 0b010, 0b000]),
+        b'!' => Some([0b010, 0b010, 0b010, 0b000, 0b010]),
+        b'/' => Some([0b001, 0b001, 0b010, 0b100, 0b100]),
+        _ => None,
+    }
+}
+
+/// Bitmap rows for one ASCII byte: digits, letters (either case),
+/// space, and `-.:!/`. Anything else draws blank but still advances.
+#[must_use]
+pub const fn glyph_for(ch: u8) -> Option<[u8; GLYPH_H]> {
+    if ch.is_ascii_digit() {
+        return digit_glyph(ch - b'0');
+    }
+    letter_glyph(ch.to_ascii_uppercase())
+}
+
+/// Blit glyph rows at `(x, y)`; clips to the frame.
+fn draw_rows(frame: &mut Frame<'_>, x: i32, y: i32, rows: &[u8; GLYPH_H], color: u32) {
     if frame.buf.len() < frame.w * frame.h {
         return;
     }
-    let Some(rows) = digit_glyph(digit) else {
-        return;
-    };
     for (row, bits) in rows.iter().enumerate() {
         for col in 0..GLYPH_W {
             if bits & (1 << (GLYPH_W - 1 - col)) == 0 {
@@ -248,6 +295,41 @@ pub fn draw_digit(frame: &mut Frame<'_>, x: i32, y: i32, digit: u8, color: u32) 
             frame.buf[dy as usize * frame.w + dx as usize] = color;
         }
     }
+}
+
+/// Draw one digit with its top-left at `(x, y)`; clips to the frame,
+/// draws nothing for out-of-range digits.
+pub fn draw_digit(frame: &mut Frame<'_>, x: i32, y: i32, digit: u8, color: u32) {
+    let Some(rows) = digit_glyph(digit) else {
+        return;
+    };
+    draw_rows(frame, x, y, &rows, color);
+}
+
+/// Draw one ASCII character (`glyph_for` coverage) at `(x, y)`;
+/// undrawable bytes leave a blank advance so layout stays stable.
+pub fn draw_char(frame: &mut Frame<'_>, x: i32, y: i32, ch: u8, color: u32) {
+    if let Some(rows) = glyph_for(ch) {
+        draw_rows(frame, x, y, &rows, color);
+    }
+}
+
+/// Pixel width of `text` in bytes (no trailing spacing).
+#[must_use]
+pub fn text_width(text: &str) -> usize {
+    if text.is_empty() {
+        return 0;
+    }
+    text.len() * GLYPH_ADVANCE - 1
+}
+
+/// Draw ASCII `text` from `x` (top-left), [`GLYPH_ADVANCE`] spacing;
+/// returns the x edge after the last byte.
+pub fn draw_text(frame: &mut Frame<'_>, x: i32, y: i32, text: &str, color: u32) -> i32 {
+    for (i, byte) in text.bytes().enumerate() {
+        draw_char(frame, x + (i * GLYPH_ADVANCE) as i32, y, byte, color);
+    }
+    x + (text.len() * GLYPH_ADVANCE) as i32
 }
 
 /// Pixel width of `value` in digits (no trailing spacing).
@@ -581,6 +663,68 @@ mod tests {
         assert_eq!(frame.buf[3], 0);
         assert_eq!(frame.buf[4], 0xFFFFFF);
         assert_eq!(frame.buf[8], 0xFFFFFF);
+    }
+
+    #[test]
+    fn all_letters_match_their_bitmaps() {
+        for ch in b'A'..=b'Z' {
+            let mut buf = vec![0u32; GLYPH_W * GLYPH_H];
+            let mut frame = Frame {
+                buf: &mut buf,
+                w: GLYPH_W,
+                h: GLYPH_H,
+            };
+            draw_char(&mut frame, 0, 0, ch, 0xFFFFFF);
+            let rows = letter_glyph(ch).unwrap();
+            for (y, bits) in rows.iter().enumerate() {
+                for x in 0..GLYPH_W {
+                    let lit = bits & (1 << (GLYPH_W - 1 - x)) != 0;
+                    assert_eq!(frame.buf[y * GLYPH_W + x] != 0, lit, "{ch} at {x},{y}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn lowercase_maps_to_upper() {
+        assert_eq!(glyph_for(b'a'), glyph_for(b'A'));
+        assert_eq!(glyph_for(b'z'), glyph_for(b'Z'));
+        assert_eq!(glyph_for(b'5'), digit_glyph(5));
+        assert_eq!(glyph_for(b'@'), None);
+    }
+
+    #[test]
+    fn text_lays_out_with_spacing() {
+        let mut buf = vec![0u32; 16 * GLYPH_H];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 16,
+            h: GLYPH_H,
+        };
+        let end = draw_text(&mut frame, 0, 0, "HI!", 0xFFFFFF);
+        assert_eq!(end, 12);
+        assert_eq!(text_width("HI!"), 11);
+        assert_eq!(text_width(""), 0);
+        // 'H' stems, gap column, 'I' top bar.
+        assert_eq!(frame.buf[0], 0xFFFFFF);
+        assert_eq!(frame.buf[3], 0);
+        assert_eq!(frame.buf[4], 0xFFFFFF);
+        assert_eq!(frame.buf[5], 0xFFFFFF);
+        assert_eq!(frame.buf[6], 0xFFFFFF);
+    }
+
+    #[test]
+    fn text_skips_undrawable_bytes_blank() {
+        let mut buf = vec![0u32; 8 * GLYPH_H];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 8,
+            h: GLYPH_H,
+        };
+        draw_text(&mut frame, 0, 0, "A@", 0xFFFFFF);
+        assert_eq!(frame.buf[0], 0);
+        assert_eq!(frame.buf[1], 0xFFFFFF);
+        assert!(frame.buf[4..8].iter().all(|pixel| *pixel == 0));
     }
 
     #[test]
