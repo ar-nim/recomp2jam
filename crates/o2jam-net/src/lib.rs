@@ -17,6 +17,7 @@ pub mod command;
 pub mod error;
 pub mod frame;
 pub mod message;
+pub mod strings;
 
 pub use client::{GatewayConnection, DEFAULT_GATEWAY_PORT};
 
@@ -28,3 +29,4 @@ pub use message::{
     EmptyMessage, ForceReauthorize, GetChannelList, LegacyPing, MultiSessionError, Ping,
     SessionKeys, SessionKeysRequest, SubscriptionAlert, Terminate,
 };
+pub use strings::{decode_null_terminated, encode_null_terminated, MAX_STRING_LEN};
