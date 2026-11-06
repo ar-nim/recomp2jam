@@ -191,6 +191,32 @@ pub struct UpdateGameStats {
 /// Body length of [`UpdateGameStats`]: 2 + 2 + 4 + 4 + 4.
 const UPDATE_GAME_STATS_BODY_LEN: usize = 16;
 
+impl UpdateGameStats {
+    /// Life-channel tick (`StatKind::Life`) with its score tail.
+    #[must_use]
+    pub fn life_tick(value: u16, sequence: i32, score: u32, long_note_score: i32) -> Self {
+        Self {
+            kind: StatKind::Life,
+            value,
+            sequence,
+            score,
+            long_note_score,
+        }
+    }
+
+    /// Jam-channel tick (`StatKind::Jam`) with its score tail.
+    #[must_use]
+    pub fn jam_tick(value: u16, sequence: i32, score: u32, long_note_score: i32) -> Self {
+        Self {
+            kind: StatKind::Jam,
+            value,
+            sequence,
+            score,
+            long_note_score,
+        }
+    }
+}
+
 impl WireMessage for UpdateGameStats {
     const COMMAND: u16 = 4014;
 
@@ -254,6 +280,21 @@ impl GameStatsUpdate {
     #[must_use]
     pub fn kind(self) -> Option<StatKind> {
         StatKind::from_u16(self.kind_code).ok()
+    }
+
+    /// Typed stats write for the peer mirror: slot, channel, value.
+    ///
+    /// `None` when the channel word is unknown; the rank broadcast
+    /// below still applies then.
+    #[must_use]
+    pub fn stats_channel(self) -> Option<(u8, StatKind, u16)> {
+        self.kind().map(|kind| (self.member_id, kind, self.value))
+    }
+
+    /// Eight live-rank bytes for the peer mirror.
+    #[must_use]
+    pub fn rank_packet(self) -> [u8; 8] {
+        self.ranks
     }
 }
 
@@ -731,6 +772,43 @@ mod song_sync_tests {
             GameStatsUpdate::decode_body(&[0x01; 12]),
             Err(Error::TruncatedMessage { need: 13, have: 12 })
         );
+    }
+
+    #[test]
+    fn stat_ticks_name_their_channel() {
+        let life = UpdateGameStats::life_tick(1000, 7, 2210, 0);
+        assert_eq!(life.kind, StatKind::Life);
+        assert_eq!(life.value, 1000);
+        assert_eq!(life.sequence, 7);
+        let jam = UpdateGameStats::jam_tick(3, 1, 210, 0);
+        assert_eq!(jam.kind, StatKind::Jam);
+        let frame = decode_frame(&jam.encode()).unwrap();
+        assert_eq!(frame.id, 4014);
+        assert_eq!(UpdateGameStats::decode_frame(&frame), Ok(jam));
+    }
+
+    #[test]
+    fn stats_channel_types_the_peer_mirror_write() {
+        let update = GameStatsUpdate {
+            member_id: 2,
+            kind_code: StatKind::Jam.as_u16(),
+            value: 42,
+            ranks: [1, 2, 3, 4, 5, 6, 7, 8],
+        };
+        assert_eq!(update.stats_channel(), Some((2, StatKind::Jam, 42)));
+        assert_eq!(update.rank_packet(), [1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn stats_channel_stays_empty_on_unknown_kind() {
+        let update = GameStatsUpdate {
+            member_id: 1,
+            kind_code: 9,
+            value: 7,
+            ranks: [0; 8],
+        };
+        assert_eq!(update.stats_channel(), None);
+        assert_eq!(update.rank_packet(), [0; 8]);
     }
 
     fn final_tally() -> SubmitScore {

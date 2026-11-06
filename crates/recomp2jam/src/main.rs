@@ -7,6 +7,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 mod connect;
+mod live_stats;
 mod loading;
 mod shots;
 
@@ -567,6 +568,16 @@ fn print_connect_report(report: &connect::ConnectReport) {
                 peer.value,
             ),
             None => println!("tick: no peer echo"),
+        }
+        match &song.peer_queue {
+            Some(queue) => println!(
+                "mirror: slot {} channel {} queued, {} ranks, life[0]={}",
+                queue.slot,
+                queue.stat_kind,
+                song.peer_ranks.len(),
+                song.peers.life_levels()[0],
+            ),
+            None => println!("mirror: no queue forward ({} ranks)", song.peer_ranks.len()),
         }
         if !song.skipped.is_empty() {
             println!("skipped broadcasts: {:?}", song.skipped);
