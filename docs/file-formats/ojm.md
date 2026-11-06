@@ -147,6 +147,18 @@ the game cannot address them individually.
   slots. No order-based or name-based lookup exists anywhere on
   the load/play paths (names are only copied, never compared;
   the fetch-index field at obj+`0x150` is written but never read).
+- C28/C29 verdict (re-confirmed by byte-pattern survey on the pinned
+  build, SHA-256 `83a04541…72c823b`, 5,029,888 B; python3 3.14 byte
+  scan, hand-decoded, no dossier): selection is id-keyed end to end.
+  Strike fn at file `0x1703f0` derives the slot from the payload
+  alone: mask `&0xFFF` at `0x170418`, `−1` at `0x17041e`, bit26 test
+  at `0x170427`, `+0x3E8` add at `0x170431`. The loader registers at
+  the entry id `[entry+0x2C]` (reads `0x173625`/`0x17364a`, usage
+  gate `byte[table+id]` `0x173628`, bit31 test `0x17361a`,
+  `id+0x3E8` add `0x17364f`). The fetcher's name-only strncpy (call
+  sites `0x14ee4a`/`0x14ef21`) is what zeroes id-less entries onto
+  slot 0 — no order lookup exists. The order-keyed
+  `resolve_order_slot` stays our invented fallback (C29, ASSUMED).
 - Corroboration: the open2jam OJM documentation
   (`https://open2jam.wordpress.com/the-ojm-documentation/`)
   independently documents the same header, `OMC_WAV_header`
