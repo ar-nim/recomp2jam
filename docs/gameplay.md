@@ -184,6 +184,61 @@ So a "clear X to level up" mission mode is either a server-side
 rule of a different version or a player-report mix-up with
 level-gated rooms and difficulty bands — document, don't implement.
 
+## Lifebar — PARTIAL (memory fields OPEN, server sync VERIFIED)
+
+What the exe proves vs what stays open. No life model is
+implemented in `o2jam-game` (field unconfirmed — do not add
+until the client-side field + writer are pinned).
+
+Client UI anchors VERIFIED: `Life_gauge_right_bar.ojs` /
+`Life_gauge_left_bar.ojs` (file `0x24b1e8`/`0x24b204` → VAs
+`0x64b1e8`/`0x64b204`; xrefs from play-scene `.ojs` loader code
+file `0xe7ca9`/`0xe7d10`, same loader family as the jam-gauge
+bars at `0x4e7de2`/`0x4e7d7b`); grade string `"LIFE 100%"`
+(file `0x2474df`). No "stage failed"/death strings exist —
+fail is presumably bar-empty + `Image_GameOver_Image.ojs`
+(file `0x24af72`), unconfirmed.
+
+Server tracking VERIFIED (this is how peers' bars work):
+- `UpdateGameStats` (game TCP 4014, `push $0xfae`) is sent
+  mid-song from the score path itself: Cool-path tail (file
+  `0x16e660`) and Good-path tail (file `0x16e7dd`) each do
+  `push $0x1; push $0xfae; call [netobj.vtable+0x84]`, where
+  `netobj = obj->field4 - 0x3c`. A second site (file
+  `0x4eaf3b`) sends with arg `0`, gated on globals byte
+  `!= 6` (same mode-6 exemption shape as pills). Bad/Miss
+  tails in this region send no 4014. Relay TCP op 5 is also
+  `UpdateGameStats` C→S (ctor file `0xea4e0`), and Live mode
+  broadcasts combo events (`CO2JamMissPack` op 6, ctor file
+  `0x16dfe0`; `CO2JamCoolPack` op 7, ctor file `0x16e080`).
+  S→C echo is `4015 GameStatsUpdate` (response list); the 4015
+  handler (where peer life would land, plausibly the 8-seat
+  member array at VA `0x77ee90` + `index*8592` seen at file
+  `0x4eaf13`–`0x4eaf1d`) is NOT yet located — OPEN.
+- `SubmitScore` (4016, `push $0xfb0`) carries `u8 life`
+  (format per net-protocol doc); in-exe sites (e.g. file
+  `0x4eb018`) are thin `vtable+0x84` wrappers, so the life
+  field read happens downstream — field offset OPEN.
+
+Client memory fields OPEN:
+- Candidate signed table at file `0x35e1a0`–`0x35ec90`
+  (175 rows × 4 × `i32`, VA `0x75e1a0`; values +30…−30,
+  contains the player-reported Bad row `(-10,−7,−5,…)` at file
+  `0x35e844`) is *unconfirmed*: no absolute reference from
+  `.text` (objdump-wide grep), so its reader — if any — goes
+  through a pointer. Dimensions unexplained (175 rows). Do
+  NOT implement from it.
+- Scorer `FUN_00570510` and per-judgement setup `FUN_0056ddf0`
+  touch score-domain accumulators only (`+0x3962`/`+0x396c`/
+  `+0x3980` words via adders `0x540900`/`0x5409f0`/`0x540a50`;
+  judgement dispatch touches only `+0x398c`/`+0x3990`/
+  `+0x1853`); no scaled-index table read found in the score
+  path. Life write site unlocated.
+- Next steps: locate the 4015 handler (peer-life store +
+  probable local-life mirror), or the SubmitScore field
+  reader; then the delta-table reader, if the candidate is
+  real, should fall out via the life field's writers.
+
 ## Jam gauge — player-reported, UNVERIFIED in-exe (negative evidence recorded)
 
 UI anchors located: `Jamgauge_right_bar.ojs` /

@@ -89,7 +89,7 @@ Events: 2005 RoomCreated, 2007 RoomRemoved, 2008 RoomParamsChanged, 2009 RoomUse
 
 - `1000 Authorize` C→S: u8 `1`, i32 relayKey1/2 (from `user:authorize` RSA params), public+local endpoints, i32 userId, str token, gender, u8 `1`, str clientId.
 - `1004 ChannelLogin` C→S: i16 gatewayId, i16 channelId.
-- `4012 ConfirmMusicLoaded` C→S: i32 powerSkillId, speed; `4014 UpdateGameStats`: type/u16 value/i32 seq/u32 score/i32 longNote; `4016 SubmitScore`: u16 cool/good/bad/miss/maxCombo/jam/maxJam + u32 score + u8 life + speed + i32 longNoteScore.
+- `4012 ConfirmMusicLoaded` C→S: i32 powerSkillId, speed; `4014 UpdateGameStats`: type/u16 value/i32 seq/u32 score/i32 longNote — sent mid-song from the score path itself (Cool tail file `0x16e660`, Good tail file `0x16e7dd`: `push $0x1; push $0xfae; vtable+0x84`, netobj = `obj->field4 - 0x3c`; conditional arg-`0` send at file `0x4eaf3b` gated on globals byte `!= 6`); Bad/Miss tails send none in this region. Relay TCP op 5 mirrors it C→S in Live mode; S→C echo is `4015 GameStatsUpdate` (handler unlocated); `4016 SubmitScore`: u16 cool/good/bad/miss/maxCombo/jam/maxJam + u32 score + u8 life + speed + i32 longNoteScore.
 - `5012 SyncMusicDownload` C→S: u16 musicId = FTP-download-complete notice; server marks installed and broadcasts `4026 MemberStateChanged`. Actual bytes move over FTP, never game TCP.
 - `4038 SetDownloadProgress`: u8 progress + u8 memberId; `4034 AcquireMusicRequest`: u8-counted memberId list.
 
