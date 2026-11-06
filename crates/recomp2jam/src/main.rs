@@ -7,6 +7,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 mod connect;
+mod loading;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -575,23 +576,32 @@ fn print_connect_report(report: &connect::ConnectReport) {
 /// [`o2jam_file::decode_new_variant_pcm`] into the entry header's
 /// rate/channels.
 /// Decode one OGG body into the bank, skipping undecodable streams.
+///
+/// Loading gate 4 (`0x54d460`): only mono/stereo decodes enter the bank.
 fn insert_ogg(
     bank: &mut std::collections::HashMap<u32, o2jam_audio::PcmSamples>,
     slot: u32,
     ogg: &[u8],
 ) {
     if let Ok(pcm) = o2jam_audio::decode_vorbis(ogg) {
-        bank.insert(slot, pcm);
+        if o2jam_file::validate_decoded_channels(pcm.channels).is_ok() {
+            bank.insert(slot, pcm);
+        }
     }
 }
 
 /// Wrap decoded PCM frames with the entry header's rate/channels.
+///
+/// Loading gate 4 (`0x54d460`): only mono/stereo streams enter the bank.
 fn insert_pcm(
     bank: &mut std::collections::HashMap<u32, o2jam_audio::PcmSamples>,
     slot: u32,
     entry: &o2jam_file::OjmEntry,
     samples: Vec<i16>,
 ) {
+    if o2jam_file::validate_decoded_channels(entry.num_channels as u8).is_err() {
+        return;
+    }
     if entry.sample_rate > 0 && entry.num_channels > 0 && !samples.is_empty() {
         bank.insert(
             slot,
@@ -628,6 +638,12 @@ fn load_sound_bank(
         let flat: Vec<&OjmEntry> = tables.mode2.iter().chain(tables.mode3.iter()).collect();
         let mut decoded_any = false;
         for (order, entry) in flat.iter().enumerate() {
+            // Codec gate (`0x54d460`): mode-2 entries carry header
+            // WAV params, so reject bad shapes before decode;
+            // mode-3 splits carry none and gate post-decode instead.
+            if order < tables.mode2.len() && loading::check_bank_entry(entry).is_err() {
+                continue;
+            }
             let Ok(body) = entry.sample_bytes(bank_bytes) else {
                 continue;
             };
@@ -661,18 +677,32 @@ fn load_sound_bank(
 
 /// Load one chart level from disk (chart + slice checks shared by
 /// autoplay and the windowed game).
+///
+/// Runs the lifecycle §9 loading gate: select validation is the
+/// level-slot range check (`0x5718b0`), staging logs the
+/// `MUSIC\Temp\%s%d_%d` extract name (`0x4f8b80`), the open goes
+/// through `loading::load_gated_level` (`0x412180`), and the return
+/// arms the song clock downstream (`0x4e47a0`).
 fn load_level_chart(chart_path: &str, level: usize) -> Result<(o2jam_game::LevelChart, f32)> {
     use anyhow::Context;
     let chart_bytes =
         std::fs::read(chart_path).with_context(|| format!("reading chart {chart_path}"))?;
-    let header = o2jam_file::parse_ojn(&chart_bytes)?;
-    let slices = o2jam_file::parse_ojn_levels(&chart_bytes)?;
-    if slices.get(level).is_none() {
-        anyhow::bail!("level {level} missing (chart has {} slices)", slices.len());
-    }
+    let prepared = loading::prepare_chart(&chart_bytes, level)
+        .with_context(|| format!("loading gate rejected {chart_path} level {level}"))?;
     let events = o2jam_file::parse_ojn_level_events(&chart_bytes, level)?;
-    let chart = o2jam_game::build_level_chart(header.bpm, &events);
-    Ok((chart, header.format_version))
+    let chart = o2jam_game::build_level_chart(prepared.bpm, &events);
+    let stem = std::path::Path::new(chart_path)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(chart_path);
+    let selection = loading::stage_offline_select(prepared.song_id, level, stem);
+    tracing::info!(
+        extract = %selection.extract_name,
+        level,
+        "staged select (0x4f8b80)"
+    );
+    tracing::info!("{}", loading::handoff_note(&selection, &prepared));
+    Ok((chart, prepared.format_version))
 }
 
 /// Headless autoplay: load chart + bank, step a virtual clock (or the
@@ -749,5 +779,12 @@ fn run_autoplay(chart_path: &str, ojm_path: Option<&str>, level: usize, sound: b
         score.points,
         score.max_combo
     );
+    // Result grades stay OPEN until an in-exe reference pins the
+    // thresholds (`gameplay.md` win rule); never print a grade here.
+    if loading::RESULT_GRADES_VERIFIED {
+        println!("grades: exe-verified");
+    } else {
+        println!("grades: OPEN (unimplemented, no in-exe refs)");
+    }
     Ok(())
 }
