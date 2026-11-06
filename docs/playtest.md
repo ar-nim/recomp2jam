@@ -73,3 +73,19 @@ ydotool here. The in-process walk above supersedes it.
 `cargo test --workspace` (no live env): **444 passed, 0 failed**
 (15 binaries), `exit=0`. The live-gateway test above ran separately
 with env vars and passed.
+
+## Regression sweep — 2026-11-06 12:28 UTC (HEAD `77f22ff`)
+
+- `cargo test --workspace`: **507 passed, 0 failed** (1 ignored in
+  `o2jam_audio`), `exit=0`. Per binary: audio 14, file 86, game 55,
+  net 115, render 35, shell 149, real_art 7, scenes 22, recomp2jam 24.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`.
+- `cargo fmt --check`: clean, `exit=0`.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test -p
+  recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0.64 s) against local Memoryer 7.2.0 (`Mode=Full`).
+  Note: the test requires both env vars; gateway alone aborts with
+  `O2JAM_LIVE_TOKEN must hold a gateway session guid`.
+- **Verdict: no regression vs the 507-passed baseline.**

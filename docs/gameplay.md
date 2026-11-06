@@ -499,3 +499,32 @@ charts). Implemented as documented behavior only, not yet in code.
 Hold-bit sites pinned by objdump (same binary): `cmp $0x2000000`
 at `0x576105`/`0x576c42`, `and $0x2000000` at `0x5766cb`,
 `and $0x1000000` at `0x576994` — all inside `FUN_00576540`.
+
+## Long-note hold bonus — VERIFIED (+10 per tick, +1 combo)
+
+While a hold stays active, each playback tick feeds a bonus
+accumulator plus combo. Chain, in the player's own words:
+the parser fix-up `FUN_00572f50` (file `0x172f50`) marks hold
+spans (payload bit 26 test at file `0x173061`; survey at file
+`0x172a4f`); a judged hold head raises the per-lane hold-active
+flag at game `+0x9f8` (head writes at files `0x17617b`/`0x176c78`/
+`0x17726b`, gated on the hold-bit `0x2000000` tests at files
+`0x1766cb`/`0x176c42`/`0x1771f5`, with the hold judgement
+recursed as rating event `0xe` — sends at files
+`0x16e5d4`/`0x16e751`/`0x16e8ce`/`0x16e91d`/`0x1766ef` into the
+16-way dispatcher at file `0x16e170`, hold case at file `0x16ebbd`);
+then the per-frame hold scan `FUN_00578110` (file `0x178110`,
+dossier `ev_737dfe7b…`, Ghidra 12.1.2, same binary md5
+`34b789ff…`) checks the flag per lane (file `0x178194`) and, while
+held, advances the lane cursor by `+6` (file `0x1781f6`) and runs
+the combo helper (call at file `0x178200`), which writes `+10` to
+the hold accumulator (game `+0x3978`, sub-object `+0x2158`, write
+at file `0x14163c`) and `+1` combo (game `+0x3972`, sub `+0x2152`,
+write at file `0x141652`; mode byte `6` exempts only the `+10`).
+Implemented as `o2jam-game::LongNoteBonus` (`hold_tick` = one
+`+10` tick, gated on hold-active by the caller) with synthetic
+tests. The accumulator is the lead candidate for the dedicated
+`longNoteScore` slot in `SubmitScore` (4016) / `UpdateGameStats`
+(4014) — layout corroborated in `net-protocol.md`, but the
+submit-side read runs through a vtable path, so that link stays
+corroborated, not proven.
