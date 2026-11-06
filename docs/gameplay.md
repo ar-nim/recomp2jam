@@ -82,15 +82,28 @@ accounts (the `*5` term is real) and confirms their 200/4/−10
 figures; HP deltas partially corroborated (`[-10,-7,-5]` Bad
 row found exactly once in-shipped-bytes at file `0x35e844`).
 
-`X` is NOT the live jam combo: exhaustive search finds ZERO
-writes to `+0x396e` anywhere in the executable (only reads plus
-bulk-init copies) — a runtime counter requires writes. `X` is
-consistent with a per-song constant loaded at song setup
-(e.g. a difficulty multiplier — the init chain at `0x58e2d0`
-leads toward song setup, source untraced) or with dead scaling
-(`X == 0`). `o2jam-game` implements the verified bases
-(`Cool +200`, `Good +100`, `Bad +4`, `Miss −10` floored);
-variable terms stay pending.
+`X` (word at `+0x396e`) IS written — correction of an earlier
+"zero writes" claim that only grepped the `+0x396e` displacement
+spelling and missed the sub-object-offset writes (`+0x214e` of the
+`+0x1820` sub-object): bulk struct-sync `FUN_004e92a0` (file
+`0x4e92a0`, same-offset cross-object copies of `+0x214e`/`+0x2150`/
+`+0x2152`/`+0x2154`/`+0x2158`…, called from member-setup paths
+allocating 8592 (`0x2190`)-byte slots), word stores (files
+`0x14079e`/`0x140a37`/`0x1413c2`, cross-object copies), and
+zeroing (files `0x13fb6f`/`0x13fd8e`). So `X` is populated from
+other objects, never computed in the scorer — the "read from
+some other variable" half of the report is confirmed.
+The live incremented neighbor is `+0x3972`: `+1` per
+Cool/Good hit via `FUN_00541620` (file `0x141620`, gated on a
+flag bit and mode `!= 6`), reset to `0` on Miss (flag `0x80`
+gate, file `0x16ebcf`), *not* reset on Bad, zeroed at init
+(files `0x4de91e`/`0x4de9cc`). Its profile (survives Bad,
+dies on Miss, consumed by the scorer, synced cross-object)
+fits a live jam/combo counter — but the `+0x3972`→`+0x396e`
+link (mirror cadence: does `X` snapshot the live counter,
+and when?) is still OPEN; no such copy observed. `o2jam-game`
+implements the verified bases (`Cool +200`, `Good +100`,
+`Bad +4`, `Miss −10` floored); variable terms stay pending.
 
 ## Room teams — UI + client send VERIFIED, scoring server-side
 
