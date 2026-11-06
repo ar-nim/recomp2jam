@@ -1163,6 +1163,32 @@ pub const MEMBER_OFF_READY: u32 = 0x32;
 /// `ev_f11710744bbbb8279df245ae2e46aeac`, observed). The Memoryer
 /// `MusicState` position matches; its value set does not transfer.
 pub const MEMBER_OFF_MUSIC_STATE: u32 = 0x217c;
+/// Store offset of the wire-order match index (1 B, direct setter file
+/// `0x1414a0`). Storage role is pinned: the slot ctor defaults `+0x217d`
+/// to `0xFF` beside `+0x217c = 0` (files `0x13fcc1`/`0x13fcc8`), the reset
+/// routine entered at file `0xdb6e0` restores `0xFF` to all eight slots
+/// (call site file `0xdb8c6`) plus the local object, and two 8-by-8
+/// id-match routines record the wire position `0..7` there — the S→C
+/// routine at file `0x159a60` (stub file `0x15879c`; local store file
+/// `0x159acf`, slot store file `0x159b1a`) and the room-dispatcher
+/// routine entered at file `0x15fa20` (stub file `0x1586bf`; local store
+/// file `0x15fb34`, slot store file `0x15fb7e`) — each comparing the
+/// just-read id byte against the requesting id at `0x77cd04` or the slot
+/// id at `+0x04` (`0x77ee94`) and storing the outer index on match. The
+/// direct setter has exactly six image-wide callers (the two stores in
+/// each of the three routines above); the only other `0x217d` sites are
+/// the ctor default and the bulk-copy pair (files `0xe962f`/`0xe9635`).
+/// No compare or branch on `+0x217d` was located image-wide, so what the
+/// index selects stays OPEN; `0xFF` means unmatched.
+/// (`ev_ef517890c33d30e9f73e4d968f15c740`,
+/// `ev_81b04a61265048cdf391244aeff6beac`,
+/// `ev_15e8653ce8cffef7c50fec80b16e4b14`, observed.)
+/// (ERRORS-06: plain constant, no `unwrap`; PERF-07: `u32` literal.)
+pub const MEMBER_OFF_MATCH_INDEX: u32 = 0x217d;
+/// Sentinel stored at [`MEMBER_OFF_MATCH_INDEX`] when no wire position
+/// matches the slot (slot-ctor default and reset-loop value).
+/// (ERRORS-06: plain constant, no `unwrap`; PERF-07: no narrowing casts.)
+pub const MEMBER_MATCH_INDEX_UNSET: u8 = 0xFF;
 /// Equipment count word the music/equipment helper reads (`i32` at
 /// `+0x2038`, helper file `0x140e40`, call site file `0x159e30`; the
 /// `0x11` loop bound at file `0x140eb1` stages 17 words at
@@ -1226,9 +1252,17 @@ pub const MEMBER_OFF_ROOM_MASTER: u32 = 0x30;
 /// file `0x140110` (call site file `0x159e18`, pushed 0) right after the
 /// third seat byte, and no wire reader targets it in any of the three
 /// member-parse paths (helper file `0x140d90` has zero image-wide
-/// callers). Elsewhere `+0x33` takes UI-driven values 0–8 on the local
-/// object and gates a score ticker on equal-to-6 (helper file `0x141620`);
-/// `ev_c030b2551aa535f98e016858e180ae73`, observed.
+/// callers). Elsewhere `+0x33` is a local-only effect selector holding
+/// `0..8`: the direct setter has 49 image-wide callers, mostly pushing
+/// immediates `0..8` to the local object at `0x77cd00` (one call targets
+/// `0x78fb10`); the lone consumer is the ticker helper file `0x141620`
+/// (six callers in the score region: files
+/// `0x16e5c1`/`0x16e73e`/`0x176140`/`0x176d86`/`0x177230`/`0x178200`),
+/// which skips the `+0x2158 += 10` bonus when `+0x33 == 6` yet always
+/// applies `+0x2152 += 1`. `ev_c030b2551aa535f98e016858e180ae73`,
+/// `ev_c18b6a071288740ad1166134e7fc92a6`,
+/// `ev_261849e6804de5f8d1b476fbe9d0fb55`,
+/// `ev_d6fa2e234044d3517f0c887799e19eda`, observed.
 pub const MEMBER_OFF_SPARE_FLAG: u32 = 0x33;
 /// Store offset of the slot-group word the 4043 handler derives from slot
 /// position (2 B, setter file `0x141520`; call sites files `0x159eea` /
@@ -3035,6 +3069,21 @@ mod member_slot_tests {
     }
 
     #[test]
+    fn match_index_follows_music_state_with_unset_sentinel() {
+        assert_eq!(MEMBER_OFF_MATCH_INDEX, 0x217d);
+        assert_eq!(MEMBER_OFF_MATCH_INDEX, MEMBER_OFF_MUSIC_STATE + 1);
+        assert_eq!(MEMBER_MATCH_INDEX_UNSET, 0xFF);
+        assert!(
+            member_slot_address(0, MEMBER_OFF_MUSIC_STATE).ok()
+                < member_slot_address(0, MEMBER_OFF_MATCH_INDEX).ok()
+        );
+        assert!(
+            member_slot_address(0, MEMBER_OFF_MATCH_INDEX).ok()
+                < member_slot_address(0, MEMBER_OFF_SLOT_GROUP).ok()
+        );
+    }
+
+    #[test]
     fn equipment_words_sit_at_high_table() {
         assert_eq!(MEMBER_OFF_EQUIP_COUNT, 0x2038);
         assert_eq!(MEMBER_OFF_EQUIPMENTS, 0x2040);
@@ -3118,6 +3167,18 @@ mod member_slot_tests {
         assert_eq!(
             member_slot_address(7, MEMBER_OFF_WIN_STREAK),
             Ok(MEMBER_SLOT_BASE + 7 * MEMBER_SLOT_STRIDE + MEMBER_OFF_WIN_STREAK)
+        );
+    }
+
+    #[test]
+    fn match_index_address_steps_by_stride_per_slot() {
+        assert_eq!(
+            member_slot_address(2, MEMBER_OFF_MATCH_INDEX),
+            Ok(MEMBER_SLOT_BASE + 2 * MEMBER_SLOT_STRIDE + MEMBER_OFF_MATCH_INDEX)
+        );
+        assert_eq!(
+            member_slot_address(7, MEMBER_OFF_MATCH_INDEX),
+            Ok(MEMBER_SLOT_BASE + 7 * MEMBER_SLOT_STRIDE + MEMBER_OFF_MATCH_INDEX)
         );
     }
 

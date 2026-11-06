@@ -16,6 +16,9 @@ pub const ROOM_TITLE_LEN: usize = 21;
 
 /// Room lifecycle state (`Encore.Metadata.RoomState`: 0 defaults to
 /// unavailable).
+///
+/// The 7.55 client keeps the state byte at row `+0x04` of its 0xb4-stride
+/// room table and gates on value 1 (Waiting); see `docs/room-enums.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum RoomState {
@@ -41,6 +44,9 @@ impl RoomState {
 }
 
 /// Chart difficulty (`Encore.Metadata.Difficulty`).
+///
+/// The 7.55 client stores the wire byte but no compare consumer is
+/// located yet; see `docs/room-enums.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Difficulty {
@@ -71,6 +77,9 @@ impl Difficulty {
 /// Scroll speed (`Mozart.Metadata.GameSpeed` as forked by
 /// Memoryer.Data — ordinal, unlike the Mozart_Client build's
 /// shuffled mapping).
+///
+/// The 7.55 client maps each value 0–11 to an `X …` label in one
+/// function; see `docs/room-enums.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum GameSpeed {
@@ -881,6 +890,43 @@ mod room_list_tests {
         assert_eq!(GameSpeed::from_code(1), Some(GameSpeed::X10));
         assert_eq!(GameSpeed::from_code(5), Some(GameSpeed::X30));
         assert_eq!(GameSpeed::from_code(12), None);
+    }
+
+    #[test]
+    fn room_state_names_each_wire_value() {
+        assert_eq!(RoomState::from_code(0), Some(RoomState::Unavailable));
+        assert_eq!(RoomState::from_code(1), Some(RoomState::Waiting));
+        assert_eq!(RoomState::from_code(2), Some(RoomState::Playing));
+        assert_eq!(RoomState::from_code(3), None);
+        assert_eq!(RoomState::from_code(0xFF), None);
+    }
+
+    #[test]
+    fn difficulty_names_each_wire_value() {
+        assert_eq!(Difficulty::from_code(0), Some(Difficulty::Ex));
+        assert_eq!(Difficulty::from_code(1), Some(Difficulty::Nx));
+        assert_eq!(Difficulty::from_code(2), Some(Difficulty::Hx));
+        assert_eq!(Difficulty::from_code(3), Some(Difficulty::Rx));
+        assert_eq!(Difficulty::from_code(4), None);
+        assert_eq!(Difficulty::from_code(0xFF), None);
+    }
+
+    #[test]
+    fn game_speed_names_each_wire_value() {
+        assert_eq!(GameSpeed::from_code(0), Some(GameSpeed::X05));
+        assert_eq!(GameSpeed::from_code(1), Some(GameSpeed::X10));
+        assert_eq!(GameSpeed::from_code(2), Some(GameSpeed::X15));
+        assert_eq!(GameSpeed::from_code(3), Some(GameSpeed::X20));
+        assert_eq!(GameSpeed::from_code(4), Some(GameSpeed::X25));
+        assert_eq!(GameSpeed::from_code(5), Some(GameSpeed::X30));
+        assert_eq!(GameSpeed::from_code(6), Some(GameSpeed::X35));
+        assert_eq!(GameSpeed::from_code(7), Some(GameSpeed::X40));
+        assert_eq!(GameSpeed::from_code(8), Some(GameSpeed::X45));
+        assert_eq!(GameSpeed::from_code(9), Some(GameSpeed::X50));
+        assert_eq!(GameSpeed::from_code(10), Some(GameSpeed::X60));
+        assert_eq!(GameSpeed::from_code(11), Some(GameSpeed::Xr));
+        assert_eq!(GameSpeed::from_code(12), None);
+        assert_eq!(GameSpeed::from_code(0xFF), None);
     }
 
     #[test]
