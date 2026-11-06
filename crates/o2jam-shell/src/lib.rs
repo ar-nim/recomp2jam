@@ -19,6 +19,20 @@ pub const TICK_NANOS: u64 = 1_000_000_000 / TICK_HZ;
 /// Seven play lanes, left to right.
 pub const LANE_COUNT: usize = 7;
 
+/// Default window size, VERIFIED against 7.55: the CDX display init
+/// hardcodes 800x600 (`SetWindowPos(hwnd, 0, 0, 0, 800, 600,
+/// SWP_SHOWWINDOW)` at file `0x14b4c`/`0x14baf` via the USER32 IAT slot
+/// `0x63f3a0`; matching 800/600 pushes at `0x4169xx`/`0x416bxx`/
+/// `0x416cxx`; `DirectDrawCreateEx` exclusive-mode init via thunk
+/// `0x5adccc` from `0x413080`/`0x413c2f`). Window creation forks at
+/// file `0x41c0b` on a runtime flag bit: default `WS_POPUP|WS_VISIBLE`
+/// (`0x90000000`, fullscreen) vs `WS_CAPTION` (`0xC00000`, windowed)
+/// — no config/registry toggle for the flag exists in 7.55, so the
+/// client runs fullscreen 800x600 in practice.
+pub const DEFAULT_WIDTH: u32 = 800;
+/// Default window height in px (see [`DEFAULT_WIDTH`]).
+pub const DEFAULT_HEIGHT: u32 = 600;
+
 /// Maps physical keys to the seven play lanes (S D F Space J K L,
 /// the club-standard layout) plus menu keys.
 #[derive(Debug, Default)]
@@ -142,7 +156,9 @@ impl Shell {
         }
         impl ApplicationHandler for Handler {
             fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-                let attrs = WindowAttributes::default().with_title("recomp2jam");
+                let attrs = WindowAttributes::default()
+                    .with_title("recomp2jam")
+                    .with_inner_size(winit::dpi::PhysicalSize::new(DEFAULT_WIDTH, DEFAULT_HEIGHT));
                 self.shell.window = Some(
                     event_loop
                         .create_window(attrs)
@@ -216,6 +232,11 @@ mod tests {
         assert_eq!(map.press(KeyCode::Enter), None);
         assert_eq!(map.release(&KeyCode::KeyS), Some(0));
         assert!(!map.lane_held(0));
+    }
+
+    #[test]
+    fn default_window_matches_verified_7_55_mode() {
+        assert_eq!((DEFAULT_WIDTH, DEFAULT_HEIGHT), (800, 600));
     }
 
     #[test]
