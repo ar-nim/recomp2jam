@@ -91,6 +91,13 @@ empty_message!(SessionKeysRequest, 1007);
 empty_message!(Terminate, 65520);
 empty_message!(LegacyPing, 6000);
 empty_message!(Ping, 6001);
+// Session alerts: Memoryer defines 51/52 as empty classes and has no
+// message class at all for 50 (bare opcode, never sent by its server
+// code); the exe handler for all three is still open, so empty bodies
+// are Memoryer corroboration, not exe-verified behavior.
+empty_message!(SubscriptionAlert, 50);
+empty_message!(ForceReauthorize, 51);
+empty_message!(MultiSessionError, 52);
 
 /// `ChannelLogin` 1004: two little-endian shorts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,6 +131,99 @@ impl WireMessage for ChannelLogin {
         Ok(Self {
             gateway_id: i16::from_le_bytes([body[0], body[1]]),
             channel_id: i16::from_le_bytes([body[2], body[3]]),
+        })
+    }
+}
+
+/// `ChannelLogin` result codes (Memoryer `ChannelLoginResult`, `uint`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum ChannelLoginResult {
+    /// Channel entered.
+    Success = 0,
+    /// Channel needs a premium subscription.
+    PremiumNotAuthorized = 1,
+    /// Channel info lookup failed.
+    ChannelInfoUnavailable = 6,
+    /// Channel is closed or full.
+    ChannelUnavailable = 7,
+}
+
+impl ChannelLoginResult {
+    /// Interpret a raw result code. `None` means a code the 7.55
+    /// server never sends (kept extensible, never guessed).
+    #[must_use]
+    pub fn from_code(code: u32) -> Option<Self> {
+        match code {
+            0 => Some(Self::Success),
+            1 => Some(Self::PremiumNotAuthorized),
+            6 => Some(Self::ChannelInfoUnavailable),
+            7 => Some(Self::ChannelUnavailable),
+            _ => None,
+        }
+    }
+}
+
+/// `ChannelLogin` 1005 response: `u32` result plus an optional
+/// trailing `i32` restricted flag (Memoryer `bool? Restricted` —
+/// Encore skips trailing-nullable members when the stream is
+/// exhausted, so a 4-byte body means "no restriction info").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChannelLoginResponse {
+    /// Raw result code; see [`ChannelLoginResult::from_code`].
+    pub result_code: u32,
+    /// Account restriction flag; `None` when the server sent none.
+    pub restricted: Option<bool>,
+}
+
+/// Body length without the optional flag.
+const CHANNEL_LOGIN_RESPONSE_MIN_LEN: usize = 4;
+/// Body length with the optional flag.
+const CHANNEL_LOGIN_RESPONSE_MAX_LEN: usize = 8;
+
+impl WireMessage for ChannelLoginResponse {
+    const COMMAND: u16 = 1005;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = Vec::with_capacity(CHANNEL_LOGIN_RESPONSE_MAX_LEN);
+        body.extend_from_slice(&self.result_code.to_le_bytes());
+        if let Some(restricted) = self.restricted {
+            body.extend_from_slice(&i32::from(restricted).to_le_bytes());
+        }
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < CHANNEL_LOGIN_RESPONSE_MIN_LEN {
+            return Err(Error::TruncatedMessage {
+                need: CHANNEL_LOGIN_RESPONSE_MIN_LEN,
+                have: body.len(),
+            });
+        }
+        if body.len() != CHANNEL_LOGIN_RESPONSE_MIN_LEN
+            && body.len() != CHANNEL_LOGIN_RESPONSE_MAX_LEN
+        {
+            return Err(Error::TrailingBytes(
+                body.len() - CHANNEL_LOGIN_RESPONSE_MIN_LEN,
+            ));
+        }
+        let restricted = if body.len() == CHANNEL_LOGIN_RESPONSE_MAX_LEN {
+            match i32::from_le_bytes([body[4], body[5], body[6], body[7]]) {
+                0 => Some(false),
+                1 => Some(true),
+                _ => {
+                    return Err(Error::InvalidField {
+                        field: "channel restriction flag",
+                        reason: "not 0 or 1",
+                    });
+                }
+            }
+        } else {
+            None
+        };
+        Ok(Self {
+            result_code: u32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+            restricted,
         })
     }
 }
@@ -298,6 +398,16 @@ mod command_consistency_tests {
         assert_eq!(Ping::COMMAND, Generic::Ping as u16);
         assert_eq!(SessionKeys::COMMAND, Response::SessionKeys as u16);
         assert_eq!(ChannelList::COMMAND, Response::GetChannelList as u16);
+        assert_eq!(ChannelLoginResponse::COMMAND, Response::ChannelLogin as u16);
+        assert_eq!(
+            SubscriptionAlert::COMMAND,
+            Response::SubscriptionAlert as u16
+        );
+        assert_eq!(ForceReauthorize::COMMAND, Response::ForceReauthorize as u16);
+        assert_eq!(
+            MultiSessionError::COMMAND,
+            Response::MultiSessionError as u16
+        );
     }
 }
 
@@ -350,6 +460,79 @@ mod tests {
         assert_eq!(GetChannelList.encode(), vec![0x02, 0x00, 0xEA, 0x03]);
         assert_eq!(Ping.encode(), vec![0x02, 0x00, 0x71, 0x17]);
         assert_eq!(Terminate.encode(), vec![0x02, 0x00, 0xF0, 0xFF]);
+    }
+
+    #[test]
+    fn channel_login_response_decodes_success_without_flag() {
+        let response = ChannelLoginResponse::decode_body(&[0x00, 0x00, 0x00, 0x00]).unwrap();
+        assert_eq!(response.result_code, 0);
+        assert_eq!(response.restricted, None);
+        assert_eq!(
+            ChannelLoginResult::from_code(response.result_code),
+            Some(ChannelLoginResult::Success)
+        );
+    }
+
+    #[test]
+    fn channel_login_response_round_trips_restricted_flag() {
+        let response = ChannelLoginResponse {
+            result_code: 0,
+            restricted: Some(true),
+        };
+        let frame = decode_frame(&response.encode()).unwrap();
+        assert_eq!(frame.id, 1005);
+        assert_eq!(ChannelLoginResponse::decode_frame(&frame), Ok(response));
+    }
+
+    #[test]
+    fn channel_login_response_names_all_result_codes() {
+        assert_eq!(
+            ChannelLoginResult::from_code(1),
+            Some(ChannelLoginResult::PremiumNotAuthorized)
+        );
+        assert_eq!(
+            ChannelLoginResult::from_code(6),
+            Some(ChannelLoginResult::ChannelInfoUnavailable)
+        );
+        assert_eq!(
+            ChannelLoginResult::from_code(7),
+            Some(ChannelLoginResult::ChannelUnavailable)
+        );
+        assert_eq!(ChannelLoginResult::from_code(2), None);
+    }
+
+    #[test]
+    fn channel_login_response_rejects_bad_flag_value() {
+        assert_eq!(
+            ChannelLoginResponse::decode_body(&[0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00]),
+            Err(Error::InvalidField {
+                field: "channel restriction flag",
+                reason: "not 0 or 1"
+            })
+        );
+    }
+
+    #[test]
+    fn channel_login_response_rejects_short_body() {
+        assert_eq!(
+            ChannelLoginResponse::decode_body(&[0x00, 0x00]),
+            Err(Error::TruncatedMessage { need: 4, have: 2 })
+        );
+    }
+
+    #[test]
+    fn channel_login_response_rejects_partial_flag() {
+        assert_eq!(
+            ChannelLoginResponse::decode_body(&[0x00, 0x00, 0x00, 0x00, 0x01]),
+            Err(Error::TrailingBytes(1))
+        );
+    }
+
+    #[test]
+    fn session_alerts_encode_bare_frames() {
+        assert_eq!(SubscriptionAlert.encode(), vec![0x02, 0x00, 0x32, 0x00]);
+        assert_eq!(ForceReauthorize.encode(), vec![0x02, 0x00, 0x33, 0x00]);
+        assert_eq!(MultiSessionError.encode(), vec![0x02, 0x00, 0x34, 0x00]);
     }
 
     #[test]
