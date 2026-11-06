@@ -279,6 +279,7 @@ pub struct ScreenGame {
     started_at: Option<std::time::Instant>,
     audio: Option<AudioRig>,
     avatar: Option<AvatarFigure>,
+    splash: Option<AvatarFigure>,
     channels: Vec<ChannelState>,
     highlight: usize,
     rooms: Vec<RoomListEntry>,
@@ -301,6 +302,7 @@ impl ScreenGame {
             started_at: None,
             audio: None,
             avatar: None,
+            splash: None,
             channels: Vec::new(),
             highlight: 0,
             rooms: Vec::new(),
@@ -311,6 +313,13 @@ impl ScreenGame {
     /// Load the result-screen avatar figure.
     pub fn load_avatar(&mut self, figure: AvatarFigure) -> &mut Self {
         self.avatar = Some(figure);
+        self
+    }
+
+    /// Load real splash art (e.g. `O2mediaLogo.ojs`); the placeholder
+    /// shows while none is loaded.
+    pub fn load_splash(&mut self, figure: AvatarFigure) -> &mut Self {
+        self.splash = Some(figure);
         self
     }
 
@@ -395,6 +404,12 @@ impl ScreenGame {
             Screen::Playing => {
                 let geom = HighwayGeometry::centered(frame.w, frame.h);
                 self.playing.paint(frame, &geom, now_ms);
+            }
+            Screen::Avi => {
+                paint_screen(frame, Screen::Avi);
+                if let Some(logo) = &self.splash {
+                    logo.paint(frame, 0, 0);
+                }
             }
             Screen::Channel if !self.channels.is_empty() => {
                 paint_channel_list(frame, &self.channels, self.highlight);
@@ -520,6 +535,31 @@ mod screen_paint_tests {
             let buf = painted(screen, 16, 12);
             assert_eq!(buf[0], background_of(screen), "{screen:?}");
         }
+    }
+
+    #[test]
+    fn splash_shows_loaded_art() {
+        use super::super::{AvatarFigure, FigureLayer};
+        let mut logo = AvatarFigure::default();
+        logo.push_layer(FigureLayer {
+            image: o2jam_render::Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap(),
+            dx: 0,
+            dy: 0,
+            colorkey: 0x0000,
+        });
+        let mut game = ScreenGame::new();
+        game.load_splash(logo);
+        let mut buf = vec![0u32; 8 * 8];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 8,
+                h: 8,
+            },
+            0,
+        );
+        assert_eq!(buf[0], pack_xrgb(255, 0, 0));
+        assert_eq!(buf[63], pack_xrgb(0x08, 0x08, 0x10));
     }
 
     #[test]
