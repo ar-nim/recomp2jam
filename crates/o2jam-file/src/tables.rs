@@ -329,6 +329,12 @@ pub const OJN_MID_FOOTER_LEN: usize = 40;
 /// accesses are the three stores, and same-displacement hits elsewhere
 /// use other strides on unrelated structs — so the group word is
 /// write-only through the song vector and its meaning stays OPEN.
+/// Re-surveyed this pass: song-stride accesses outside the loader touch
+/// only `+0x134` / `+0x150` (table-3 `param_a` gate) / `+0x15c` /
+/// `+0x17c..0x180` / `+0x194` (table-5 bucket); direct-displacement
+/// `0x144/0x148/0x14c` hits (e.g. file `0x221f5`) sit in methods with
+/// no direct caller in the image, so their base is unattributed —
+/// no consumer site, OPEN stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OjnMidGroupEntry {
     /// Song id this entry belongs to.
@@ -405,7 +411,10 @@ pub struct OjnMidParamEntry {
 /// slots — the only indexed accesses are the three stores, and
 /// same-displacement hits elsewhere use `shl 4` (x16) strides on
 /// unrelated structs — so all three words are write-only through the
-/// song vector and their semantics stay OPEN.
+/// song vector and their semantics stay OPEN. Re-surveyed this pass:
+/// direct-displacement `0x184/0x188/0x18c` hits elsewhere are byte/word
+/// accesses on smaller structs (e.g. `movb` at file `0x38e51`) with
+/// unattributed bases — no consumer site, OPEN stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OjnMidTriple {
     /// First word.
@@ -478,7 +487,11 @@ pub struct OjnMidTriple {
 /// pointer lifetime ends at return. The `+0x690` count itself reads
 /// `(end - begin) / 0x238` (e.g. file `0x42f8f`); the global `0x7797e0`
 /// list appended at file `0x42f4f` (cleared at `0x42e63`) is a
-/// different list.
+/// different list. Two dialog `+0x690` clears use the same empty-guarded
+/// count idiom (skip `0x452a00` when the span is empty) — see
+/// [`ojn_inline_list_count`]: file `0x468b8` (VA `0x4468b8`, dialog
+/// function `0x446630`) and file `0x4de57` (VA `0x44de57`, dialog
+/// function `0x44d500`).
 ///
 /// Wheel-versus-filter relation: the five wheel lists and the
 /// `+0x650` / `+0x670` / `+0x690` result lists share no storage.
@@ -567,6 +580,26 @@ pub fn ojn_search_doubled_initial(arm: u32) -> Option<char> {
     OJN_SEARCH_DOUBLED_INITIALS
         .iter()
         .find_map(|(known_arm, initial)| (*known_arm == arm).then_some(*initial))
+}
+
+/// Byte stride of one inline select entry (`0x238`).
+///
+/// The select-music dialog result lists (`+0x640` family, `+0x680`,
+/// `+0x690`) hold inline `0x238`-byte entries; every count site divides
+/// the `(end - begin)` span by this stride (e.g. the `+0x690` count at
+/// file `0x42f8f` and the clear guards at files `0x468b8` / `0x4de57`).
+pub const OJN_INLINE_ENTRY_LEN: u32 = 0x238;
+
+/// Count inline entries in a `(begin, end)` list span.
+///
+/// Mirrors the exe guard idiom: an empty span counts zero and the caller
+/// skips the clear (`0x452a00`) — see the `+0x690` clears at file offsets
+/// `0x468b8` (VA `0x4468b8`, function `0x446630`) and `0x4de57`
+/// (VA `0x44de57`, function `0x44d500`). A span that runs backwards
+/// (corrupt) also counts zero, so it never triggers a clear.
+#[must_use]
+pub fn ojn_inline_list_count(begin: u32, end: u32) -> u32 {
+    end.saturating_sub(begin) / OJN_INLINE_ENTRY_LEN
 }
 
 /// The decoded `OJNList.dat` middle region: header tables plus footer.
@@ -1634,6 +1667,29 @@ mod tests {
         for category in [0u32, 6, 7, u32::MAX] {
             assert_eq!(ojn_wheel_slot(category), None);
         }
+    }
+
+    #[test]
+    fn inline_list_count_divides_span_by_entry_stride() {
+        // The exe counts inline entries as `(end - begin) / 0x238`:
+        // the `+0x690` count at file `0x42f8f` and the clear guards at
+        // files `0x468b8` and `0x4de57`.
+        assert_eq!(ojn_inline_list_count(0x1000, 0x1000), 0);
+        assert_eq!(
+            ojn_inline_list_count(0x1000, 0x1000 + OJN_INLINE_ENTRY_LEN),
+            1
+        );
+        assert_eq!(
+            ojn_inline_list_count(0x1000, 0x1000 + 2 * OJN_INLINE_ENTRY_LEN),
+            2
+        );
+    }
+
+    #[test]
+    fn inline_list_count_clamps_inverted_span_to_zero() {
+        // A backwards span (corrupt) counts as empty, so the caller
+        // skips the `0x452a00` clear instead of dividing garbage.
+        assert_eq!(ojn_inline_list_count(0x2000, 0x1000), 0);
     }
 
     #[test]

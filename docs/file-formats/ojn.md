@@ -240,7 +240,11 @@ table 4 → `+0x184/+0x188/+0x18c`, table 5 → `+0x190` (id echo) /
   each source pointer lifetime ends at return; `+0x690` is
   `0x238`-stride inline storage (count at file `0x42f8f`), while the
   global `0x7797e0` list appended at file `0x42f4f` (cleared at file
-  `0x42e63`) is a different list.
+  `0x42e63`) is a different list. Two dialog `+0x690` clears use the same
+  empty-guarded count idiom (`(end − begin) / 0x238`, skip `0x452a00` when
+  zero): file `0x468b8` (VA `0x4468b8`, dialog function `0x446630`) and
+  file `0x4de57` (VA `0x44de57`, dialog function `0x44d500`); modeled as
+  `o2jam-file::ojn_inline_list_count`.
   Relation: the five wheel lists and the `+0x650` / `+0x670` / `+0x690`
   result lists share no storage. Wheel lists hold song-record pointers
   (dispatches at files `0xbfa5c` and `0x16121e`); result lists hold
@@ -277,7 +281,14 @@ table 4 → `+0x184/+0x188/+0x18c`, table 5 → `+0x190` (id echo) /
   finds the six loader stores are the only `imul 0x1b4` song-stride
   accesses to those six slots — same-displacement hits elsewhere use
   `shl 4` (x16) strides on unrelated structs, and no plain song-pointer
-  read sits near song-vector setup — so both stay OPEN. (Static
+  read sits near song-vector setup — so both stay OPEN. Re-surveyed this
+  pass: song-stride accesses outside the loader touch only
+  `+0x134`/`+0x150` (table-3 `param_a` gate)/`+0x15c`/`+0x17c..0x180`/
+  `+0x194` (table-5 bucket); direct-displacement `0x144/0x148/0x14c`
+  hits (e.g. file `0x221f5`) sit in methods with no direct caller in the
+  image, and `0x184/0x188/0x18c` hits are byte/word accesses on smaller
+  structs (e.g. `movb` at file `0x38e51`) — all bases unattributed, so no
+  value is pinned. (Static
   disassembly survey; REA dossier TBD.)
 - OPEN (stored, never read back through the song base): table 2
   `param_b`, table 3 `param_b` + anchor.
