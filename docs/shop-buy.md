@@ -110,7 +110,9 @@ default — they are C→S requests with no S→C handler.)
   (wire-present, unconsumed → reserved). The shop-context
   `0x138d` consumer works on the already-decoded words (lookups
   above) and is not a wire read.
-- index 26 (5029) → stub VA `0x5588d7` → handler VA `0x563900`
+- index 26 (5029) → stub VA `0x5588d7` (file `0x1588d7`; byte-table
+  file `0x158ae0` value 9 at index 26 → dword-table file `0x158aa0`[9])
+  → handler VA `0x563900`
   (file `0x163900`): reads two `i32` via the fixed-size reader
   (`0x555d20`) into `0x768b44` and `0x768b58`, then applies the
   first via `0x540090` (writes `0x77cd00+0x2c`, the same slot the
@@ -183,11 +185,17 @@ requests have live send paths per the sites above.
     (applied via `0x540090` to `0x77cd00+0x2c` — the same slot the
     `SyncCashPoint` gem word and the `SellItem` gem refund update);
     word 2 `Point` (write-only — no reader anywhere in `.text`);
-    word 3 `O2Cash` (shop-checked: entry price `[0x77cce8+0x14]` via
-    `0x53c010` is affordable when it does not exceed `O2Cash` at VA
-    `0x499f26`, file `0x99f26`, or the matching wallet below; pushed
-    for price display alongside gem at VAs `0x4a221b`/`0x4a3544`/
-    `0x4f45c4`, files `0xa221b`/`0xa3544`/`0xf45c4`); word 4
+    word 3 `O2Cash` (cash-price baseline: the entry `+0x14` cash price
+    via the `0x53c010` getter, file `0x13b010`, is affordable when it
+    does not exceed `O2Cash` at VA `0x499f26`, file `0x99f26`
+    (sibling file `0xc841d`), or the matching wallet below; the entry
+    `+0x18` gem price via the `0x53c030` getter, file `0x13b030`, is
+    instead checked against gem at file `0x99fae`, sibling file
+    `0xc84a5`; wallet balances display alongside gem at VAs
+    `0x4a221b`/`0x4a3544`/`0x4f45c4`, files `0xa221b`/`0xa3544`/
+    `0xf45c4`, while the entry prices render through the same decimal
+    renderer at files `0xa2961` (`+0x14` cash) / `0xa2995` (`+0x18`
+    gem), duplicated at files `0xc66be`/`0xc6693`); word 4
     `CashPoint` (applied via `0x540d00` to `0x77cd00+0x2128`, inside
     the wallet block copied at VA `0x4e93d1`, file `0xe93d1` — the same
     slot the `SyncCashPoint` cash word updates). Modeled as
@@ -204,11 +212,14 @@ requests have live send paths per the sites above.
   - Post-list wallets: 2×`i32` into `0x768b50`/`0x768b54` (files
     `0x160b03`/`0x160b12`). PINNED: word 5 `MusicCash`, word 6
     `ItemCash` (Memoryer orders 5–6; same order as `t_o2jam_charcash`
-    columns and `CharacterInfo` fields). Both are shop-checked as the
-    `O2Cash` alternative (`0x768b50` at VA `0x499f39`, file `0x99f39`;
-    `0x768b54` at VA `0x499f7d`, file `0x99f7d`; same pair duplicated
-    for the sibling shop at files `0xc841d`/`0xc8430` and
-    `0xc8461`/`0xc8474`). Modeled as `SyncItemPurchaseWallets
+    columns and `CharacterInfo` fields). Both are the `O2Cash`
+    alternative for the entry `+0x14` cash price (`0x768b50` at VA
+    `0x499f39`, file `0x99f39`; `0x768b54` at VA `0x499f7d`, file
+    `0x99f7d`; same pair duplicated for the sibling shop at files
+    `0xc841d`/`0xc8430` and `0xc8461`/`0xc8474`). PINNED: entry `+0x14`
+    = cash price (getter `0x53c010`, file `0x13b010`), entry `+0x18` =
+    gem price (getter `0x53c030`, file `0x13b030`, checked vs gem at
+    files `0x99fae`/`0xc84a5`). Modeled as `SyncItemPurchaseWallets
     { music_cash, item_cash }`.
   - 12-byte blob: PROVEN ABSENT from the wire. The `push $0xc` +
     `push $0` + `call 0x5f1ef0` sequence (call site file `0x160b3e`)

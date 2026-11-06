@@ -25,9 +25,9 @@ field names/order only.
 | 5025 | C→S | `SyncFreePass` | empty | VERIFIED |
 | 5026 | S→C | `SyncFreePassResponse` | `u32` result + optional wallet snapshot | dispatch VERIFIED, tail pinned exe-ignored |
 | 5028 | C→S | `SyncCashPoint` | empty | VERIFIED |
-| 5029 | S→C | `SyncCashPointResponse` | `i32` gem + `i32` cash point (8 B) | Memoryer only, exe site OPEN |
-| 5040 | C→S | `CheckGiftFreePass` | null-terminated nickname | Memoryer only, exe site OPEN |
-| 5041 | S→C | `CheckGiftFreePassResponse` | `i32` flag + nickname | Memoryer only, exe site OPEN |
+| 5029 | S→C | `SyncCashPointResponse` | `i32` gem + `i32` cash point (8 B) | VERIFIED (dispatched + two-word handler) |
+| 5040 | C→S | `CheckGiftFreePass` | null-terminated nickname | absent on 7.55 wire (Memoryer-only shape, kept for interop) |
+| 5041 | S→C | `CheckGiftFreePassResponse` | `i32` flag + nickname | absent on 7.55 wire (Memoryer-only shape, kept for interop) |
 
 There is no coupon TCP opcode. `coupon.phtml` is an HTTP URL
 (`http://o2jam.nopp.co.kr/client/coupon2/coupon.phtml?`, in-exe
@@ -62,9 +62,12 @@ flows above are its TCP counterpart.
   `0x4902fc`/`0x499ffb`/`0x49a150`/`0x4c84f2`/`0x4c8646`).
 - 5028: case appends nothing (VA `0x491436`, file `0x91436`) →
   empty; virtual-send site VA `0x48ee81` (file `0x8ee81`).
-- 5040: NO `0x13b0` immediate anywhere in `.text` (raw-byte push
-  scan + full disassembly grep) → the exe never sends it; shape
-  (`StringMessageField Name`) is Memoryer-only.
+- 5040: absent on 7.55 wire. Raw-byte scan finds no `0xb0 0x13`
+  opcode immediate (the sole `b0 13` bytes are a call rel32 at
+  file `0x162fdc`) and no `0xb1 0x13` anywhere; `0x13b0` also falls
+  outside the `0x138b`-based receive range (`0x25 > 0x24` → default)
+  → the exe never sends it; shape (`StringMessageField Name`) is
+  Memoryer-only, kept for server interop.
 
 ## S→C evidence (dispatch `cmpl`, then handler)
 
@@ -98,14 +101,17 @@ flows above are its TCP counterpart.
   is Memoryer-only (kept for server interop). A 4-byte result-only
   body means "no snapshot" (nullable trailing member, as in
   `ChannelLoginResponse`).
-- 5029: handler VA `0x563900` (file `0x163900`, stub `0x5588d7`)
-  reads two `i32` (words VERIFIED, Memoryer names `gem`,
-  `cash_point` kept): word 1 via `0x540090` into
-  `0x77cd00+0x2c` (same slot as SellItem extra and 5001 prefix),
-  word 2 via `0x540d00` into `0x77cd00+0x2128` (wallet block
-  copied at file `0x4e93d1`). 5041: no `0x13b1` immediate in
-  `.text` → exe neither dispatches nor reads it; shape is
-  Memoryer-only (`{invalid i32, username}`).
+- 5029: VERIFIED on 7.55. The `0x138b`-based receive switch routes
+  `0x13a5` (index 26) through byte-table file `0x158ae0` (value 9)
+  to stub VA `0x5588d7` (file `0x1588d7`), which calls handler VA
+  `0x563900` (file `0x163900`): it reads two `i32` via the fixed-size
+  reader (`0x555d20`) — word 1 via `0x540090` into `0x77cd00+0x2c`
+  (same slot as SellItem extra and 5001 prefix), word 2 via `0x540d00`
+  into `0x77cd00+0x2128` (wallet block copied at file `0x4e93d1`).
+  Names `gem`, `cash_point` follow Memoryer order. 5041: absent on
+  7.55 wire — no `0xb1 0x13` bytes and no `0x13b1` dispatch in
+  `.text`; shape is Memoryer-only (`{invalid i32, username}`), kept
+  for server interop.
 
 ## Verdict
 
@@ -116,9 +122,11 @@ flows above are its TCP counterpart.
   PINNED as exe-ignored (handlers consume no such bytes — see
   sites above); wire shapes kept Memoryer-compatible for server
   interop.
-- 5029: VERIFIED (two words, slots above); 5040/5041: OPEN on
-  the exe side (no sites); implemented
-  for Memoryer interop, labeled as such in
+- 5029: VERIFIED (dispatched at index 26 via byte-table value 9 to
+  stub file `0x1588d7` → handler file `0x163900`; two words with
+  the slots above). 5040/5041: absent on 7.55 wire (no send or
+  dispatch sites; shapes kept Memoryer-only); implemented for
+  server interop and labeled as such in
   `crates/o2jam-net/src/message.rs`.
 - Coupon redemption itself: web-only (`coupon.phtml`), OPEN.
 
@@ -139,6 +147,7 @@ missing-user for 5041.
 
 ## OPEN
 
-- Whether 5029/5040/5041 travel on 7.55 wire at all (server may
-  send 5029/5041 unprompted; client trigger for 5040 unlocated).
-- `5040` recipient-exists gating vs web `gift_input.aspx`.
+- Whether the server ever sends 5041 unprompted on 7.55 (no
+dispatch exists, so the client would drop it).
+- `5040` recipient-exists gating lives in web `gift_input.aspx`
+  (URL string at file `0x24b65f`); no TCP trigger exists to verify.

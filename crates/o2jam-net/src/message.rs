@@ -1447,11 +1447,14 @@ impl WireMessage for ClaimGift {
 }
 
 /// `CheckGiftFreePass` 5040 request: look up `name` before gifting
-/// a free pass.
-///
-/// Body is one null-terminated nickname (Memoryer's
-/// `CheckGiftFreePassRequest`; corroboration only — no `0x13b0`
-/// send site exists in `.text`, so the exe's trigger stays OPEN).
+/// a free pass. Absent from 7.55 wire: raw-byte scan finds no
+/// `0xb0 0x13` / `0xb1 0x13` opcode immediates (the sole `b0 13`
+/// bytes are a call rel32 at file `0x162fdc`), and `0x13b0` falls
+/// outside the `0x138b`-based receive range (`0x25 > 0x24` →
+/// default). Body is one null-terminated nickname (Memoryer's
+/// `CheckGiftFreePassRequest`); kept for server interop. The
+/// recipient-exists gate lives in the `gift_input.aspx` web view
+/// (URL string at file `0x24b65f`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckGiftFreePass {
     /// Recipient nickname.
@@ -1930,14 +1933,15 @@ impl WireMessage for SyncFreePassResponse {
 
 /// `SyncCashPoint` 5029 response: two-word wallet refresh.
 ///
-/// Body is two little-endian `i32` words. The S→C handler
-/// (VA `0x563900`, file `0x163900`; index 26 of the `0x138b`-based
-/// receive switch, stub VA `0x5588d7`, file `0x1588d7`) reads both
-/// words via the fixed-size reader (`0x555d20`) into `0x768b44` and
-/// `0x768b58`, then applies the first via `0x540090` (writes
-/// `0x77cd00+0x2c`, the same slot the `SellItem` success word and
-/// the 5001 prefix words update) and the second via `0x540d00`
-/// (writes `0x77cd00+0x2128`, inside the wallet block copied at
+/// Body is two little-endian `i32` words. VERIFIED on 7.55: the
+/// `0x138b`-based receive switch routes `0x13a5` (index 26) through
+/// byte-table file `0x158ae0` (value 9) to stub VA `0x5588d7` (file
+/// `0x1588d7`), which calls the S→C handler (VA `0x563900`, file
+/// `0x163900`). It reads both words via the fixed-size reader
+/// (`0x555d20`) into `0x768b44` and `0x768b58`, then applies the first
+/// via `0x540090` (writes `0x77cd00+0x2c`, the same slot the `SellItem`
+/// success word and the 5001 prefix words update) and the second via
+/// `0x540d00` (writes `0x77cd00+0x2128`, inside the wallet block copied at
 /// VA `0x4e93d1`, file `0xe93d1`). Field names follow Memoryer's
 /// `SyncCashPointResponse` order (`gem`, `cash_point`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1994,21 +1998,32 @@ impl WireMessage for SyncCashPointResponse {
 /// update) and the fourth is the cash-point slot (applied via `0x540d00`
 /// to `0x77cd00+0x2128`, the same slot the `SyncCashPoint` cash word
 /// updates). The second word (`Point`) has no reader anywhere in `.text`
-/// (write-only); the third word (`O2Cash`) is shop-checked (compared
-/// against the entry price at VA `0x499f26`, file `0x99f26`, with the
-/// `0x768b50`/`0x768b54` alternatives at files `0x99f39`/`0x99f7d`)
-/// and pushed for price display alongside the gem word at VAs
-/// `0x4a221b`/`0x4a3544`/`0x4f45c4` (files `0xa221b`/`0xa3544`/`0xf45c4`).
+/// (write-only). Shop prices live on the entry (`ecx 0x77cce8`): the
+/// `+0x14` getter (`0x53c010`, file `0x13b010`) is the cash price and
+/// the `+0x18` getter (`0x53c030`, file `0x13b030`) is the gem price.
+/// The third prefix word (`O2Cash`) is the cash-price baseline: the
+/// entry `+0x14` price is affordable when it does not exceed `O2Cash`
+/// (VA `0x499f26`, file `0x99f26`, sibling file `0xc841d`) or the
+/// matching shop wallet (`0x768b50` at file `0x99f39`, `0x768b54` at
+/// file `0x99f7d`; sibling files `0xc8430`/`0xc8474`), while the entry
+/// `+0x18` price is checked against gem (`0x768b44` at file `0x99fae`,
+/// sibling file `0xc84a5`). Balances display alongside gem at VAs
+/// `0x4a221b`/`0x4a3544`/`0x4f45c4` (files `0xa221b`/`0xa3544`/`0xf45c4`);
+/// entry prices render via the same decimal renderer at files `0xa2961`
+/// (`+0x14` cash) and `0xa2995` (`+0x18` gem), duplicated at files
+/// `0xc66be`/`0xc6693` for the sibling shop.
 /// There is no full 5001 message type: the entry list after this prefix
 /// is sized from the GLOBAL `0x77cce4`, so the body is not decodable
 /// standalone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SyncItemPurchasePrefix {
-    /// Gem balance (applied via `0x540090`).
+    /// Gem balance (applied via `0x540090`; entry `+0x18` gem price
+    /// is checked against it at file `0x99fae`).
     pub gem: i32,
     /// Distribution points: stored to `0x768b48`, never read in `.text`.
     pub point: i32,
-    /// Premium cash: shop-checked (`0x99f26`) and displayed with gem.
+    /// Premium cash: entry `+0x14` cash-price baseline (`0x99f26`)
+    /// and displayed with gem.
     pub o2_cash: i32,
     /// Cash points (applied via `0x540d00`).
     pub cash_point: i32,
@@ -2055,8 +2070,8 @@ impl SyncItemPurchasePrefix {
 /// Field order follows Memoryer's `SyncItemPurchaseResponse` (orders 5-6).
 /// The S→C handler reads them via the fixed-size reader (`0x555d20`)
 /// into `0x768b50` (file `0x160b03`) and `0x768b54` (file `0x160b12`).
-/// Both are shop-checked as the `O2Cash` alternative: the entry price
-/// (`[0x77cce8+0x14]` via `0x53c010`) is affordable when it does not
+/// Both are the `O2Cash` alternative for the entry `+0x14` cash price
+/// (`0x53c010`, file `0x13b010`): it is affordable when it does not
 /// exceed `O2Cash` or the matching wallet (`0x768b50` at file `0x99f39`,
 /// `0x768b54` at file `0x99f7d`; same pair duplicated for the sibling
 /// shop at files `0xc841d`/`0xc8430` and `0xc8461`/`0xc8474`). Order 5 is
@@ -2202,9 +2217,10 @@ impl SyncItemPurchaseTail {
     }
 }
 
-/// `CheckGiftFreePass` 5041 response: recipient lookup verdict
-/// (Memoryer's `CheckGiftFreePassResponse`; corroboration only —
-/// no `0x13b1` site exists in `.text`).
+/// `CheckGiftFreePass` 5041 response: recipient lookup verdict.
+/// Absent from 7.55 wire with 5040 (no `0x13b1` immediate or
+/// dispatch in `.text`); shape is Memoryer's
+/// `CheckGiftFreePassResponse`, kept for server interop.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckGiftFreePassResponse {
     /// True when `username` is empty (no such account).
