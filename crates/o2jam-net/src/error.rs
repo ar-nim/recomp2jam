@@ -1,4 +1,6 @@
-//! Framing errors: truncated input, unknown ids, bad lengths.
+//! Transport errors: truncated input, unknown ids, bad lengths, TCP faults.
+
+use std::io;
 
 use thiserror::Error;
 
@@ -29,4 +31,18 @@ pub enum Error {
         field: &'static str,
         reason: &'static str,
     },
+    /// The socket failed or closed mid-exchange.
+    #[error("transport: {0}")]
+    Transport(String),
+    /// The peer closed the connection mid-frame.
+    #[error("connection closed by peer")]
+    ConnectionClosed,
+}
+
+impl Error {
+    /// Wrap a socket fault without leaking `io::Error` (not `Eq`).
+    #[must_use]
+    pub fn transport(source: io::Error) -> Self {
+        Self::Transport(source.to_string())
+    }
 }

@@ -12,10 +12,13 @@
 //! only pins id-at-offset-2, so live interop is still the final
 //! check (`docs/net-protocol.md` records it OPEN).
 
+pub mod client;
 pub mod command;
 pub mod error;
 pub mod frame;
 pub mod message;
+
+pub use client::{GatewayConnection, DEFAULT_GATEWAY_PORT};
 
 pub use command::{Generic, Request, Response};
 pub use error::Error;
