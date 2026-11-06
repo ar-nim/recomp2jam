@@ -281,7 +281,7 @@ pub const OJN_MID_SONG_COUNT: usize = 562;
 /// Newest song id (middle-table-2/5 head id and footer echo).
 pub const OJN_MID_TOP_SONG_ID: u32 = 887;
 
-/// Bytes per middle-table-2 entry (`song_id, param_a, 0, param_b, 0`).
+/// Bytes per middle-table-2 entry (`song_id, listing, 0, param_b, 0`).
 pub const OJN_MID_TABLE2_ENTRY_LEN: usize = 20;
 
 /// Entries in middle table 3.
@@ -303,7 +303,7 @@ pub const OJN_MID_TABLE4_ENTRY_LEN: usize = 12;
 /// Marker heading middle table 5 (word before its song count).
 pub const OJN_MID_TABLE5_HEAD: u32 = 1;
 
-/// Bytes per middle-table-5 entry (`song_id, tag`).
+/// Bytes per middle-table-5 entry (`song_id, category`).
 pub const OJN_MID_TABLE5_ENTRY_LEN: usize = 8;
 
 /// Bytes of the middle-region footer (closes with the
@@ -312,9 +312,12 @@ pub const OJN_MID_FOOTER_LEN: usize = 40;
 
 /// One middle-table-1 entry: song id plus a group word.
 ///
-/// The real 7.55 file holds 204 entries (ids 887..100, sparse,
-/// descending): group 1 for ids 887..774, group 2 for 506..100.
-/// Group semantics are OPEN.
+/// The real 7.55 file holds 204 entries: group 1 covers newer ids
+/// (887..774), group 2 older ids (506..100). The loader files the
+/// three trailing words into song-record slots `+0x144/+0x148/+0x14c`
+/// (stride `0x1b4`; stores at file offsets `0x7a390`/`0x7a3ed`/`0x7a44a`),
+/// but no song-base read of those slots was found in the client —
+/// purpose stays OPEN.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OjnMidGroupEntry {
     /// Song id this entry belongs to.
@@ -323,18 +326,31 @@ pub struct OjnMidGroupEntry {
     pub group: u32,
 }
 
-/// One middle-table-2 entry: song id plus two tagged words.
+/// One middle-table-2 entry: song id plus the selection class and a
+/// second tag word.
 ///
 /// The real 7.55 file holds 562 entries (ids 887..100, strictly
-/// descending — the reversed song-record order): `param_a` is 1
-/// (545x) or 2 (17x), `param_b` is 0 (512x) or 1 (50x).
-/// Both semantics are OPEN.
+/// descending — the reversed song-record order): `listing` is 1
+/// (545x) or 2 (17x: ids 385..395, 426, 427, 693..700, all absent
+/// from table 3), `param_b` is 0 (512x) or 1 (50x).
+///
+/// The loader files the four words into song-record slots
+/// `+0x16c/+0x170/+0x174/+0x178` (stride `0x1b4`; stores at file
+/// offsets `0x7a5c9`/`0x7a629`/`0x7a689`/`0x7a6e9`). Exe consumers pin
+/// `listing` down: one song filter branches on `listing == 1` versus
+/// the rest (file offset `0x3706f`), and several passes skip songs
+/// whose word reads zero (e.g. file offset `0xadc68`). The non-1 arm
+/// additionally requires `+0x178 != 0` (file offset `0x37261`), which
+/// never holds on real data (both reserved words validate zero), so
+/// class 2 never passes that selector. `param_b` has no calling read
+/// site yet — OPEN. (Static disassembly survey; REA dossier TBD.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OjnMidSongEntry {
     /// Song id this entry belongs to.
     pub song_id: u32,
-    /// First tag word (1 or 2 on the real file).
-    pub param_a: u32,
+    /// Selection class (1 = standard path, 2 = 17-song special class
+    /// routed away from the `listing == 1` selector; see struct docs).
+    pub listing: u32,
     /// Second tag word (0 or 1 on the real file).
     pub param_b: u32,
 }
@@ -344,7 +360,15 @@ pub struct OjnMidSongEntry {
 ///
 /// The real 7.55 file holds 407 entries (ids 887..102, sparse,
 /// strictly descending): `param_a` reads 0..5000 and `param_b`
-/// 0..30000 in round hundreds (price-like, unconfirmed).
+/// 0..30000, always in round hundreds. The loader files the three
+/// words into song-record slots `+0x150/+0x154/+0x158` (stride `0x1b4`;
+/// stores at file offsets `0x7a84b`/`0x7a8ab`/`0x7a90b`). Exe sites gate
+/// on `song+0x150 != 0` (e.g. file offsets `0xdd6b6`, `0xe54f0`,
+/// `0xeca0c`, `0xecb38`): a nonzero `param_a` enables a per-song
+/// feature call, while zero — all 155 row-less songs and rows with
+/// `param_a == 0` such as song 887 — skips it. The gated feature's
+/// meaning, `param_b`, and the anchor stay OPEN.
+/// (Static disassembly survey; REA dossier TBD.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OjnMidParamEntry {
     /// Song id this entry belongs to.
@@ -373,23 +397,35 @@ pub struct OjnMidTriple {
     pub c: u32,
 }
 
-/// One middle-table-5 entry: song id plus tag.
+/// One middle-table-5 entry: song id plus the list bucket.
 ///
 /// The real 7.55 file holds 562 entries (ids 887..100, strictly
-/// descending — the same id set as table 2): tags run 1..=5
-/// (192x5, 157x3, 82x2, 78x1, 52x4). Tag semantics are OPEN.
+/// descending — the same id set as table 2): `category` runs 1..=5
+/// (193x5, 157x3, 82x2, 78x1, 52x4). The loader stores the pair at
+/// song-record `+0x190` (id echo) / `+0x194` (file offsets `0x7ac8f` /
+/// `0x7acef`). Two exe sites jump-table on `song+0x194 - 1` (dispatches
+/// at file offsets `0xbfa5c` and `0x16121e`, tables at `0xbff7c` and
+/// `0x162e2c`) and append the song to one of five parallel lists
+/// (`0x77953c`, `0x77954c`, `0x77955c`, `0x77956c`, `0x77957c` in
+/// category order): `category` is the song-wheel list bucket. Bucket
+/// labels (genre/mode names?) stay OPEN.
+/// (Static disassembly survey; REA dossier TBD.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OjnMidTagEntry {
     /// Song id this entry belongs to.
     pub song_id: u32,
-    /// Tag word (1..=5 on the real file).
-    pub tag: u32,
+    /// Song-wheel list bucket (1..=5 on the real file; indexes the five
+    /// `0x77953c..0x77957c` lists via `category - 1`).
+    pub category: u32,
 }
 
 /// The decoded `OJNList.dat` middle region: header tables plus footer.
 ///
-/// Field semantics (beyond shape and counts) stay OPEN: no calling
-/// code in the tables crate consumes these yet.
+/// Resolved against exe consumers (see each entry's docs): table 5 is
+/// the song-wheel list bucket, table 2's first word is a selection
+/// class, table 3's first word is a nonzero-gated feature switch.
+/// Table 1 groups, table 2's second word, table 3's second word and
+/// anchor, and all of table 4 stay OPEN (stored, never read back).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OjnMidRegion {
     /// Table 1 group entries in file order.
@@ -400,7 +436,7 @@ pub struct OjnMidRegion {
     pub params: Vec<OjnMidParamEntry>,
     /// Table 4 triples in file order.
     pub triples: Vec<OjnMidTriple>,
-    /// Table 5 tag entries in file order.
+    /// Table 5 bucket entries in file order.
     pub tags: Vec<OjnMidTagEntry>,
     /// Footer words (last two echo `OJN_MID_SONG_COUNT` /
     /// `OJN_MID_TOP_SONG_ID`).
@@ -466,14 +502,14 @@ pub fn parse_ojn_mid_table1(bytes: &[u8]) -> Result<Vec<OjnMidGroupEntry>, FileE
 }
 
 /// Parse middle table 2: `u32` count plus `OJN_MID_SONG_COUNT` entries
-/// of (`song_id`, `param_a`, 0, `param_b`, 0). Requires the exact
+/// of (`song_id`, `listing`, 0, `param_b`, 0). Requires the exact
 /// table length.
 ///
 /// # Errors
 ///
 /// `FileError::Truncated` on a short table, `FileError::UnknownFormat`
-/// on a long table, a wrong count, a nonzero reserved word, or a tag
-/// outside its observed domain (`param_a` 1..=2, `param_b` 0..=1).
+/// on a long table, a wrong count, a nonzero reserved word, or a class
+/// outside its observed domain (`listing` 1..=2, `param_b` 0..=1).
 pub fn parse_ojn_mid_table2(bytes: &[u8]) -> Result<Vec<OjnMidSongEntry>, FileError> {
     let need = 4 + OJN_MID_SONG_COUNT * OJN_MID_TABLE2_ENTRY_LEN;
     if bytes.len() < need {
@@ -493,16 +529,16 @@ pub fn parse_ojn_mid_table2(bytes: &[u8]) -> Result<Vec<OjnMidSongEntry>, FileEr
     let mut off = 4;
     while off < need {
         let song_id = read_u32le(bytes, off)?;
-        let param_a = read_u32le(bytes, off + 4)?;
+        let listing = read_u32le(bytes, off + 4)?;
         let reserved_a = read_u32le(bytes, off + 8)?;
         let param_b = read_u32le(bytes, off + 12)?;
         let reserved_b = read_u32le(bytes, off + 16)?;
-        if reserved_a != 0 || reserved_b != 0 || param_a == 0 || param_a > 2 || param_b > 1 {
+        if reserved_a != 0 || reserved_b != 0 || listing == 0 || listing > 2 || param_b > 1 {
             return Err(unknown_format(&bytes[off..off + 4]));
         }
         entries.push(OjnMidSongEntry {
             song_id,
-            param_a,
+            listing,
             param_b,
         });
         off += OJN_MID_TABLE2_ENTRY_LEN;
@@ -587,12 +623,12 @@ pub fn parse_ojn_mid_table4(bytes: &[u8]) -> Result<Vec<OjnMidTriple>, FileError
 }
 
 /// Parse middle table 5: (`OJN_MID_TABLE5_HEAD`, `OJN_MID_SONG_COUNT`)
-/// plus entries of (`song_id`, `tag`). Requires the exact length.
+/// plus entries of (`song_id`, `category`). Requires the exact length.
 ///
 /// # Errors
 ///
 /// `FileError::Truncated` on a short table, `FileError::UnknownFormat`
-/// on a long table, a wrong head/count, or a tag outside 1..=5.
+/// on a long table, a wrong head/count, or a bucket outside 1..=5.
 pub fn parse_ojn_mid_table5(bytes: &[u8]) -> Result<Vec<OjnMidTagEntry>, FileError> {
     let need = 8 + OJN_MID_SONG_COUNT * OJN_MID_TABLE5_ENTRY_LEN;
     if bytes.len() < need {
@@ -613,11 +649,11 @@ pub fn parse_ojn_mid_table5(bytes: &[u8]) -> Result<Vec<OjnMidTagEntry>, FileErr
     let mut off = 8;
     while off < need {
         let song_id = read_u32le(bytes, off)?;
-        let tag = read_u32le(bytes, off + 4)?;
-        if tag == 0 || tag > 5 {
+        let category = read_u32le(bytes, off + 4)?;
+        if category == 0 || category > 5 {
             return Err(unknown_format(&bytes[off..off + 4]));
         }
-        entries.push(OjnMidTagEntry { song_id, tag });
+        entries.push(OjnMidTagEntry { song_id, category });
         off += OJN_MID_TABLE5_ENTRY_LEN;
     }
     Ok(entries)
@@ -1197,13 +1233,13 @@ mod tests {
         ));
     }
 
-    fn full_table2_blob(param_a: u32, param_b: u32) -> Vec<u8> {
+    fn full_table2_blob(listing: u32, param_b: u32) -> Vec<u8> {
         let mut blob = Vec::with_capacity(4 + OJN_MID_SONG_COUNT * OJN_MID_TABLE2_ENTRY_LEN);
         let count = u32::try_from(OJN_MID_SONG_COUNT).unwrap();
         blob.extend_from_slice(&count.to_le_bytes());
         for song_id in (326..=887u32).rev() {
             blob.extend_from_slice(&song_id.to_le_bytes());
-            blob.extend_from_slice(&param_a.to_le_bytes());
+            blob.extend_from_slice(&listing.to_le_bytes());
             blob.extend_from_slice(&0u32.to_le_bytes());
             blob.extend_from_slice(&param_b.to_le_bytes());
             blob.extend_from_slice(&0u32.to_le_bytes());
@@ -1212,7 +1248,7 @@ mod tests {
     }
 
     #[test]
-    fn mid_table2_parses_count_and_tags() {
+    fn mid_table2_parses_count_and_classes() {
         let blob = full_table2_blob(2, 1);
         let entries = parse_ojn_mid_table2(&blob).unwrap();
         assert_eq!(entries.len(), OJN_MID_SONG_COUNT);
@@ -1220,14 +1256,14 @@ mod tests {
             entries[0],
             OjnMidSongEntry {
                 song_id: 887,
-                param_a: 2,
+                listing: 2,
                 param_b: 1
             }
         );
     }
 
     #[test]
-    fn mid_table2_rejects_bad_count_and_tags() {
+    fn mid_table2_rejects_bad_count_and_classes() {
         let mut blob = full_table2_blob(1, 0);
         blob[0..4].copy_from_slice(&561u32.to_le_bytes());
         assert!(matches!(
@@ -1320,20 +1356,20 @@ mod tests {
         ));
     }
 
-    fn full_table5_blob(tag: u32) -> Vec<u8> {
+    fn full_table5_blob(category: u32) -> Vec<u8> {
         let mut blob = Vec::with_capacity(8 + OJN_MID_SONG_COUNT * OJN_MID_TABLE5_ENTRY_LEN);
         blob.extend_from_slice(&OJN_MID_TABLE5_HEAD.to_le_bytes());
         let count = u32::try_from(OJN_MID_SONG_COUNT).unwrap();
         blob.extend_from_slice(&count.to_le_bytes());
         for song_id in (326..=887u32).rev() {
             blob.extend_from_slice(&song_id.to_le_bytes());
-            blob.extend_from_slice(&tag.to_le_bytes());
+            blob.extend_from_slice(&category.to_le_bytes());
         }
         blob
     }
 
     #[test]
-    fn mid_table5_parses_ids_and_tags() {
+    fn mid_table5_parses_ids_and_buckets() {
         let blob = full_table5_blob(5);
         let entries = parse_ojn_mid_table5(&blob).unwrap();
         assert_eq!(entries.len(), OJN_MID_SONG_COUNT);
@@ -1341,13 +1377,13 @@ mod tests {
             entries[0],
             OjnMidTagEntry {
                 song_id: 887,
-                tag: 5
+                category: 5
             }
         );
     }
 
     #[test]
-    fn mid_table5_rejects_bad_head_count_and_tag() {
+    fn mid_table5_rejects_bad_head_count_and_bucket() {
         let mut blob = full_table5_blob(1);
         blob[0..4].copy_from_slice(&2u32.to_le_bytes());
         assert!(matches!(
@@ -1361,6 +1397,21 @@ mod tests {
             parse_ojn_mid_table5(&blob),
             Err(FileError::UnknownFormat { .. })
         ));
+    }
+
+    #[test]
+    fn mid_table5_category_indexes_five_lists() {
+        // The client jump-tables on `category - 1` into five parallel
+        // song lists (dispatches at file offsets `0xbfa5c` and
+        // `0x16121e`): every stored bucket must index that table, so
+        // only 1..=5 parses and each value minus one lands in 0..5.
+        let blob = full_table5_blob(5);
+        let entries = parse_ojn_mid_table5(&blob).unwrap();
+        assert_eq!(entries.len(), OJN_MID_SONG_COUNT);
+        for entry in &entries {
+            let bucket = entry.category.checked_sub(1).unwrap();
+            assert!(bucket < 5);
+        }
     }
 
     fn full_mid_region_blob() -> Vec<u8> {
@@ -1396,7 +1447,7 @@ mod tests {
         assert_eq!(region.groups[0].song_id, 887);
         assert_eq!(region.songs[0].song_id, 887);
         assert_eq!(region.params[0].anchor, OJN_MID_TABLE3_ANCHOR);
-        assert_eq!(region.tags[0].tag, 1);
+        assert_eq!(region.tags[0].category, 1);
         assert_eq!(region.footer[8], u32::try_from(OJN_MID_SONG_COUNT).unwrap());
         assert_eq!(region.footer[9], OJN_MID_TOP_SONG_ID);
     }

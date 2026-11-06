@@ -122,10 +122,10 @@ real 7.55 file end to end).
 |---|---|---|
 | Header | 2 | magic `63540` (`0xF834`), count `204` |
 | Table 1 | 204 × 4 | `(song_id, 0, group, 0)`, group 1 (ids 887..774) then 2 (506..100) |
-| Table 2 | 1 + 562 × 5 | count `562`, then `(song_id, param_a∈{1,2}, 0, param_b∈{0,1}, 0)` |
-| Table 3 | 1 + 407 × 4 | count `407`, then `(song_id, param_a, param_b, 0x77D2E4B7)` |
+| Table 2 | 1 + 562 × 5 | count `562`, then `(song_id, listing∈{1,2}, 0, param_b∈{0,1}, 0)` — `listing` is the selection class (consumer-proven, see below); `param_b` OPEN |
+| Table 3 | 1 + 407 × 4 | count `407`, then `(song_id, param_a, param_b, 0x77D2E4B7)` — `param_a` is a nonzero-gated feature switch (consumer-proven, see below); `param_b` + anchor OPEN |
 | Table 4 | 120 × 3 | raw triples; triple 0 = `(120, 246, 2)`, rest 39/40/40 runs over one 40-song set |
-| Table 5 | 2 + 562 × 2 | head `(1, 562)`, then `(song_id, tag∈1..=5)` |
+| Table 5 | 2 + 562 × 2 | head `(1, 562)`, then `(song_id, category∈1..=5)` (193x5, 157x3, 82x2, 78x1, 52x4) — the song-wheel list bucket (consumer-proven, see below) |
 | Footer | 10 | 8 open words, then `(562, 887)` echo |
 
 Cross-checks (real file): table-2 ids equal table-5 ids and the
@@ -135,8 +135,41 @@ ids 887..102) id sets are subsets; table 4 covers 40 songs
 (174..501 plus 870..873). Table-3 params read like round money
 (`param_a` 0..5000, `param_b` 0..30000) and every 4th word repeats
 `0x77D2E4B7` (heap-address range — residue, not exe pointers).
-No `"ojn"` magic anywhere inside. OPEN: what each tag/group/param
-selects (no exe consumer traced — tables crate only).
+No `"ojn"` magic anywhere inside.
+
+Exe consumers (7.55, `sha256 83a04541…`; static disassembly survey,
+REA dossiers TBD — file offsets = VA − `0x400000`). The loader
+(files `0x7a390`–`0x7b25b`) files each table into song-record slots
+(stride `0x1b4`): table 1 → `+0x144/+0x148/+0x14c`, table 2 →
+`+0x16c/+0x170/+0x174/+0x178`, table 3 → `+0x150/+0x154/+0x158`,
+table 4 → `+0x184/+0x188/+0x18c`, table 5 → `+0x190` (id echo) /
+`+0x194`.
+
+- Table 5 `category` = song-wheel list bucket. Two sites jump-table
+  on `song+0x194 − 1` (dispatches at file offsets `0xbfa5c` and
+  `0x16121e`, 5-target tables at `0xbff7c` / `0x162e2c`) and append
+  the song to one of five parallel lists (`0x77953c`, `0x77954c`,
+  `0x77955c`, `0x77956c`, `0x77957c` in category order; each list is
+  later walked/emptied, e.g. file offsets `0x92a3c…0x92b68`). Bucket
+  labels (genre/mode names?) stay OPEN.
+- Table 2 `listing` = selection class. A song filter branches on
+  `song+0x16c == 1` versus the rest (file offset `0x3706f`), and
+  several passes skip songs whose word reads zero (e.g. file offset
+  `0xadc68`). Class 2 covers 17 songs (ids 385..395, 426, 427,
+  693..700 — all tag-5, none in table 3); the non-1 arm additionally
+  requires `+0x178 != 0` (file offset `0x37261`), which never holds
+  on real data (both reserved words validate zero), so class 2 never
+  passes that selector.
+- Table 3 `param_a` = nonzero-gated per-song switch. Sites test
+  `song+0x150 != 0` (e.g. file offsets `0xdd6b6`, `0xe54f0`,
+  `0xeca0c`, `0xecb38`): nonzero enables a per-song feature call,
+  zero — all 155 row-less songs and rows with `param_a == 0` such as
+  song 887 (`(0, 3000)`) — skips it. The gated feature's meaning
+  stays OPEN.
+- OPEN (stored, never read back through the song base): table 1
+  groups (1 = newer era 887..774, 2 = older era 506..100 — observed
+  split, purpose unproven), table 2 `param_b`, table 3 `param_b` +
+  anchor, all of table 4.
 
 Patch index `[195616, 200104)`: 561 × 8-byte pairs (`u32` marker +
 `u32` song id). Markers are `0x43f403` (74×) / `0x43f407` (487× +
