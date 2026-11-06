@@ -3,10 +3,18 @@
 //! and encode PNGs with the std-only writer below. No OS key
 //! injection, no window.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use o2jam_file::{Bnd, ControlList};
 use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
-use o2jam_render::Frame;
+use o2jam_render::{Frame, Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
+use o2jam_shell::avatar::{
+    bind_scene_rects, load_avi_logo, load_scene_figures, scene_block, scene_sprite_names,
+    AvatarFigure, ScenePlacement, AVI_BLOCK, LOADING_SPRITE, RESULT_BLOCK, ROOM_BLOCK,
+    WAITING_BLOCK,
+};
+use o2jam_shell::screens::paint::PLAYING_BLOCK;
 use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
 
 /// Screenshot width in pixels.
@@ -73,8 +81,173 @@ pub fn write_shots(out_dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
     Ok(written)
 }
 
+/// Interface archive under `install-root` (Avi/Channel/Room/Waiting/Result art).
+const INTERFACE_ARCHIVE: &str = "O2Jam/Image/Interface1.opi";
+/// Playing archive under `install-root` (Loading/Playing art).
+const PLAYING_ARCHIVE: &str = "O2Jam/Image/Playing1.opi";
+/// Interface control list entry.
+const INTERFACE_LIST: &str = "ControlList_Interface.txt";
+/// Playing control list entry.
+const PLAYING_LIST: &str = "ControlList_Playing.txt";
+
+/// `STATE_CHANNEL` names zero sprites, so shots stage the real
+/// channel dialog bar full-canvas instead.
+const CHANNEL_FALLBACK_SPRITE: &str = "Dialog_ChannelSelectBar.ojs";
+/// The Playing bound window stages no decodable art, so shots pin
+/// this corner life gauge full-canvas; its native anchor sits clear
+/// of the note lane.
+const PLAYING_GAUGE_SPRITE: &str = "Avatar_Info_LifeGauge.ojs";
+
+/// Repository-local `install-root` (git-ignored game data).
+fn install_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root")
+}
+
+/// Read one archive read-only, if present (`None` keeps synthetic staging).
+fn read_archive(relative: &str) -> Option<Vec<u8>> {
+    std::fs::read(install_root().join(relative)).ok()
+}
+
+/// Borrow one entry body by its stored size (never the reserved stride).
+fn entry_body<'a>(archive: &'a [u8], entry_name: &str) -> Option<&'a [u8]> {
+    let entries = o2jam_file::parse_opi(archive).ok()?;
+    let entry = entries.iter().find(|entry| entry.name == entry_name)?;
+    let size = usize::try_from(entry.size).ok()?;
+    let end = entry.data_offset.checked_add(size)?;
+    archive.get(entry.data_offset..end)
+}
+
+/// Parse a `ControlList_*.txt` entry from an archive.
+fn control_list(archive: &[u8], entry_name: &str) -> Option<ControlList> {
+    let body = entry_body(archive, entry_name)?;
+    let text = o2jam_file::decode_control_text(body).ok()?;
+    o2jam_file::parse_control_list(&text).ok()
+}
+
+/// Parse a `.bnd` layout entry from an archive.
+fn bind_data(archive: &[u8], bound_file: &str) -> Option<Bnd> {
+    let body = entry_body(archive, bound_file)?;
+    o2jam_file::parse_bnd(body).ok()
+}
+
+/// Full-canvas placements for art without a `.bnd`.
+fn full_canvas(names: &[String]) -> Vec<ScenePlacement> {
+    names
+        .iter()
+        .map(|name| ScenePlacement {
+            id: String::new(),
+            code: 0,
+            sprite: Some(name.clone()),
+            rect: Rect {
+                x: 0,
+                y: 0,
+                w: NATIVE_WIDTH,
+                h: NATIVE_HEIGHT,
+            },
+        })
+        .collect()
+}
+
+/// Stage a bound block: named figures plus `.bnd` placements.
+fn stage_bound_block(
+    archive: &[u8],
+    list: &ControlList,
+    block_name: &str,
+) -> Option<(Vec<ScenePlacement>, HashMap<String, AvatarFigure>)> {
+    let block = scene_block(list, block_name)?;
+    let names = scene_sprite_names(block);
+    if names.is_empty() {
+        return None;
+    }
+    let figures = load_scene_figures(archive, &names);
+    if figures.is_empty() {
+        return None;
+    }
+    let bnd = bind_data(archive, block.bound_file.as_ref()?)?;
+    let placements = bind_scene_rects(block, &bnd);
+    if placements.is_empty() {
+        return None;
+    }
+    Some((placements, figures))
+}
+
+/// Stage one sprite full-canvas (Channel fallback, Loading gate).
+fn stage_single_sprite(
+    archive: &[u8],
+    sprite_name: &str,
+) -> Option<(Vec<ScenePlacement>, HashMap<String, AvatarFigure>)> {
+    let names = vec![sprite_name.to_owned()];
+    let figures = load_scene_figures(archive, &names);
+    if figures.is_empty() {
+        return None;
+    }
+    Some((full_canvas(&names), figures))
+}
+
+/// Stage Interface-archive scenes; each scene stages independently
+/// so one bad block never blanks the rest.
+fn stage_interface_archive(game: &mut ScreenGame, archive: &[u8]) {
+    if let Some((placements, figures)) = stage_single_sprite(archive, CHANNEL_FALLBACK_SPRITE) {
+        game.load_scene(Screen::Channel, placements, figures);
+    }
+    if let Some(logo) = load_avi_logo(archive) {
+        game.load_splash(logo);
+    }
+    let Some(list) = control_list(archive, INTERFACE_LIST) else {
+        return;
+    };
+    for (screen, block) in [
+        (Screen::Avi, AVI_BLOCK),
+        (Screen::Room, ROOM_BLOCK),
+        (Screen::Waiting, WAITING_BLOCK),
+        (Screen::Result, RESULT_BLOCK),
+    ] {
+        if let Some((placements, figures)) = stage_bound_block(archive, &list, block) {
+            game.load_scene(screen, placements, figures);
+        }
+    }
+}
+
+/// Stage Playing-archive scenes (Loading gate plus Playing gauges).
+fn stage_playing_archive(game: &mut ScreenGame, archive: &[u8]) {
+    if let Some((placements, figures)) = stage_single_sprite(archive, LOADING_SPRITE) {
+        game.load_scene(Screen::Loading, placements, figures);
+    }
+    let Some(list) = control_list(archive, PLAYING_LIST) else {
+        return;
+    };
+    let Some((mut placements, mut figures)) = stage_bound_block(archive, &list, PLAYING_BLOCK)
+    else {
+        return;
+    };
+    if !figures.contains_key(PLAYING_GAUGE_SPRITE) {
+        figures.extend(load_scene_figures(
+            archive,
+            &[PLAYING_GAUGE_SPRITE.to_owned()],
+        ));
+    }
+    if figures.contains_key(PLAYING_GAUGE_SPRITE) {
+        placements.extend(full_canvas(&[PLAYING_GAUGE_SPRITE.to_owned()]));
+    }
+    game.load_scene(Screen::Playing, placements, figures);
+}
+
+/// Layer genuine 7.55 archive art under every scene when
+/// `install-root` is present; missing or unreadable archives keep
+/// the synthetic staging. Archives stay read-only, never fail.
+fn stage_real_art(game: &mut ScreenGame) {
+    if let Some(archive) = read_archive(INTERFACE_ARCHIVE) {
+        stage_interface_archive(game, &archive);
+    }
+    if let Some(archive) = read_archive(PLAYING_ARCHIVE) {
+        stage_playing_archive(game, &archive);
+    }
+}
+
 /// Game preloaded with list rows, one waiting member, and a chart
 /// whose note lands at 5 s (visible in Playing, spent by Result).
+/// Genuine archive art stages underneath when `install-root` holds
+/// it; otherwise the synthetic fallback paints.
 fn seeded_game() -> ScreenGame {
     let mut game = ScreenGame::new();
     game.set_channels(vec![
@@ -99,6 +272,7 @@ fn seeded_game() -> ScreenGame {
     ]);
     game.set_joined_room(waiting_room());
     game.load_chart(vec![(2, 5_000, 7)]);
+    stage_real_art(&mut game);
     game
 }
 
@@ -345,6 +519,40 @@ mod tests {
         );
         for shot in &shots {
             assert_eq!((shot.w, shot.h), (SHOT_W, SHOT_H));
+            assert!(is_varied(&shot.rgb), "{} paints a flat frame", shot.name);
+        }
+    }
+
+    #[test]
+    fn missing_archives_stage_nothing() {
+        assert!(read_archive("No/Such.opi").is_none());
+        assert!(entry_body(&[], CHANNEL_FALLBACK_SPRITE).is_none());
+        assert!(control_list(&[], INTERFACE_LIST).is_none());
+        assert!(bind_data(&[], "State_Room.bnd").is_none());
+        assert!(stage_single_sprite(&[], CHANNEL_FALLBACK_SPRITE).is_none());
+        assert!(stage_single_sprite(&[], LOADING_SPRITE).is_none());
+    }
+
+    #[test]
+    fn present_archives_stage_key_scenes() {
+        let Some(interface) = read_archive(INTERFACE_ARCHIVE) else {
+            println!("skip: missing {INTERFACE_ARCHIVE}");
+            return;
+        };
+        assert!(stage_single_sprite(&interface, CHANNEL_FALLBACK_SPRITE).is_some());
+        assert!(load_avi_logo(&interface).is_some());
+        let Some(playing) = read_archive(PLAYING_ARCHIVE) else {
+            println!("skip: missing {PLAYING_ARCHIVE}");
+            return;
+        };
+        assert!(stage_single_sprite(&playing, LOADING_SPRITE).is_some());
+    }
+
+    #[test]
+    fn staging_attempt_never_breaks_the_walk() {
+        let shots = capture_all().unwrap();
+        assert_eq!(shots.len(), 7);
+        for shot in &shots {
             assert!(is_varied(&shot.rgb), "{} paints a flat frame", shot.name);
         }
     }
