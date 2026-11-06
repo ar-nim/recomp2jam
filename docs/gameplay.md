@@ -168,7 +168,7 @@ So a "clear X to level up" mission mode is either a server-side
 rule of a different version or a player-report mix-up with
 level-gated rooms and difficulty bands — document, don't implement.
 
-## Jam gauge — player-reported, UNVERIFIED in-exe
+## Jam gauge — player-reported, UNVERIFIED in-exe (negative evidence recorded)
 
 UI anchors located: `Jamgauge_right_bar.ojs` /
 `Jamgauge_left_bar.ojs` (VAs `0x64b1b8`/`0x64b1d0`, search
@@ -188,6 +188,18 @@ pills (max 5 held) are spent instead of breaking the combo on
 Bad/Miss; higher jam combo scores more (direction confirmed,
 per-level size OPEN). No gauge model is implemented: unconfirmed
 behavior stays out of code; see `JamGauge`-free `apply_rated`.
+
+Negative evidence (objdump static analysis, 7.55
+`AngelO2Jam.exe` = `OTwo.exe`, md5 `34b789ff…`): zero `cmp $0x1e`
+(30) sites anywhere in the rating/judgement range VA
+`0x56xxxx`–`0x58xxxx` — the only five in `.text` sit in unrelated
+loader/CRT regions (`0x5249a2`/`0x5249b7`/`0x52b7a0`,
+`0x5c03fa`/`0x5c413d`). `FUN_00570510` writes no gauge field
+(only the judgement store `+0xb58`, combo-ish words `+0x39b4`/
+`+0x3974`, and display virtual calls). The `+0xa14` rating-event
+dispatcher (`0x56e170`, jump table `0x56ec5c`) clamps against
+`0x1e0` (480) with a `0xf` (15) compare — neither is the claimed
+30-combo threshold. Gauge numbers stay OPEN (player-reported only).
 
 ## Skill-ring modifiers — VERIFIED storage + lane path, item-text visibility
 
@@ -294,6 +306,19 @@ unique `[-10,-7,-5]` triple contradicts Bad=no-change, so it
 belongs elsewhere until proven. No life model is implemented:
 unconfirmed behavior stays out of code.
 
+Negative evidence (objdump static analysis, same binary): no
+writes to the candidate life word (game object `+0x3970`) or the
+score-scale word (`+0x396e`) exist anywhere in `.text` — only reads
+plus bulk-init copies — so per-judgement life arithmetic
+(`+3/+2/+1`, `−50/−40/−30`) has no in-exe application site. The
+`+0x3970` compare in `FUN_00570510` (file `0x57094d`) is a clamp
+against `0x3e8` (1000), not a delta. The `[-10,-7,-5]` triple
+(file `0x35e844`, VA `0x75e800`, in `.data`) sits inside a larger
+signed-i32 delta table (repeated `−30`/`−26`/`−20`/… rows) with zero
+absolute xrefs in `.text` — unattributed to any code path. Verdict:
+per-difficulty life deltas stay OPEN (counter-evidence: no write
+site; Bad=0 unconfirmed either way).
+
 ## Long-note release rule — player-reported
 
 No long-note options exist (at most a cosmetic long-note-combo
@@ -306,12 +331,28 @@ never fire on shipped charts).
 ## Win rule — player-reported
 
 Grades exist; WIN/LOSE art goes to rank #1 by highest score,
-solo or team. Grade thresholds OPEN.
+solo or team. Grade thresholds OPEN. Negative evidence: zero
+pointer refs in `.text` to any grade-string VA (file `0x247363`/
+`0x2473db`/`0x24765b`, `JAM` strings `0x24745e`/`0x24762b`/`0x2476b3`)
+— result-screen grades are `.ojs`-driven; no rank-comparison
+arithmetic located in-exe. `Winner_image`/`Result_WinLose` each occur
+once in-shipped-bytes (UI names only).
 
-## Renderer default — player-reported
+## Renderer default — VERIFIED 800x600, effectively fullscreen-only
 
-7.55 runs fullscreen 800x600; no windowed mode in this version.
-The winit shell should default to that mode.
+7.55 targets 800x600: `SetWindowPos(hwnd, 0, 0, 0, 800, 600,
+SWP_SHOWWINDOW)` at file `0x14b4c`/`0x14baf` (via the USER32 IAT slot
+`0x63f3a0` = `SetWindowPos`), with matching 800/600 pushes at
+`0x4169xx`/`0x416bxx`/`0x416cxx` (`AdjustWindowRect`/`MoveWindow`
+path); `DDRAW.dll!DirectDrawCreateEx` is imported (IAT `0x63f01c`,
+thunk `0x5adccc`) and called from the CDX display init
+(`0x413080`/`0x413c2f`). Window creation forks at file `0x41c0b` on
+a runtime flag bit (`+0x1c` of the global at VA `0x768128`): default
+`WS_POPUP|WS_VISIBLE` (`0x90000000`, fullscreen) vs `WS_CAPTION`
+(`0xC00000`, windowed) — but no config/registry/option writer for
+that flag exists in 7.55, so the windowed branch is unreachable in
+practice. Implemented as `o2jam-shell::{DEFAULT_WIDTH,
+DEFAULT_HEIGHT}` = 800x600 with a synthetic test.
 
 ## Long-note release rule — player-reported, in-exe path identified but not traced
 
@@ -320,3 +361,6 @@ the release is a miss, releasing early is a miss. Verified to exist:
 hold-bit handling and per-measure span markers in-exe, but the exact
 release-point judgement was not traced (never fires on shipped
 charts). Implemented as documented behavior only, not yet in code.
+Hold-bit sites pinned by objdump (same binary): `cmp $0x2000000`
+at `0x576105`/`0x576c42`, `and $0x2000000` at `0x5766cb`,
+`and $0x1000000` at `0x576994` — all inside `FUN_00576540`.
