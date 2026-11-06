@@ -506,9 +506,21 @@ against three callers of the `+0x30` reader `0x140d20` (files `0x159ec0` /
 reads) and its header twin over the member id; CLOSED: `+0x30`/`+0x33`
 are zeroed through the direct setters `0x1400b0`/`0x140110` (files
 `0x159e02`/`0x159e18`, pushed 0) before the equipment/music reads, and
-only `+0x30` is re-populated from wire. OPEN: seat-byte and trailing-byte
+only `+0x30` is re-populated from wire. CLOSED: sibling command binding —
+room dispatcher base `0x0BBB` (3003), bound `0x0B`, dword table file
+`0x1589c4`; lead-flag is id 3003 (stub file `0x1585ab` → handler entry
+file `0x15cad0`, sole caller file `0x1585af`;
+`ev_a83aada10d256cb689110409dc89c067`, observed) and trailing-flag is id
+3007 (stub file `0x1585de` → entry file `0x15d820`, sole caller file
+`0x1585e2`; `ev_50242b6c183543f49ce6cbb43eccad2e`, observed). CLOSED:
+lead order (`+0x30` at file `0x15cf0d` ahead of the seat readers at files
+`0x15cf26`/`0x15cf3f`/`0x15cf58`;
+`ev_f1ed2d82f90e372666e2a01a66831d6f`, observed) and the `+0x2134`
+dword (4 B read through the shared reader file `0x155d20` at site file
+`0x15d009`, pushed 4, stored into the slot at file `0x15d03c`;
+`ev_bf2aa97d2356819f76df5ea05e24cfc4`, observed; decoder
+`MEMBER_OFF_EXTRA_DWORD`). OPEN: seat-byte and trailing-byte
 value semantics (team/ready/music/playing/free-pass enums, `live_extra`,
-`+0x2186` group meaning — none has an in-exe compare consumer); the
-sibling lead-flag shape's command binding (dispatcher slot unmapped) and
-its trailing `+0x2134` dword (stored at file `0x15d03c`, no decoder
-field); the `+0x217d = 0xFF` ctor default's purpose.
+`+0x2134`, `+0x2186` group meaning — none has an in-exe compare consumer);
+the full 3003/3007 body layouts beyond the pinned order/offset; the
+`+0x217d = 0xFF` ctor default's purpose.

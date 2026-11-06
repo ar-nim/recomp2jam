@@ -1981,30 +1981,35 @@ impl WireMessage for SyncCashPointResponse {
 }
 
 /// First 16 wire bytes of a `SyncItemPurchase` 5001 response: the
-/// four-word wallet prefix.
+/// four-word wallet prefix (`Gem`, `Point`, `O2Cash`, `CashPoint`).
 ///
-/// The S→C handler (VA `0x560a40`, file `0x160a40`) reads these words
+/// Field order follows Memoryer's `SyncItemPurchaseResponse`
+/// (orders 0-3: `Gem`, `Point`, `O2Cash`, `CashPoint`) and matches the
+/// S→C handler (VA `0x560a40`, file `0x160a40`), which reads these words
 /// first via the fixed-size reader (`0x555d20`): into `0x768b44`
 /// (file `0x160a59`), `0x768b48` (file `0x160a68`), `0x768b4c`
 /// (file `0x160a77`), `0x768b58` (file `0x160a86`). The first word is
 /// the gem slot (applied via `0x540090` to `0x77cd00+0x2c`, the same
-/// slot the `SyncCashPoint` gem word updates) and the fourth is the
-/// cash slot (applied via `0x540d00` to `0x77cd00+0x2128`, the same
-/// slot the `SyncCashPoint` cash word updates). The second word has no
-/// reader anywhere in `.text` (reserved); the third word is a
-/// shop-checked wallet word (compared against shop state at VA
-/// `0x499f26`, file `0x99f26`, and pushed for price display alongside
-/// the gem word) whose exact game meaning stays OPEN. There is no full
-/// 5001 message type: the entry list after this prefix is sized from
-/// the GLOBAL `0x77cce4`, so the body is not decodable standalone.
+/// slot the `SyncCashPoint` gem word and the `SellItem` success word
+/// update) and the fourth is the cash-point slot (applied via `0x540d00`
+/// to `0x77cd00+0x2128`, the same slot the `SyncCashPoint` cash word
+/// updates). The second word (`Point`) has no reader anywhere in `.text`
+/// (write-only); the third word (`O2Cash`) is shop-checked (compared
+/// against the entry price at VA `0x499f26`, file `0x99f26`, with the
+/// `0x768b50`/`0x768b54` alternatives at files `0x99f39`/`0x99f7d`)
+/// and pushed for price display alongside the gem word at VAs
+/// `0x4a221b`/`0x4a3544`/`0x4f45c4` (files `0xa221b`/`0xa3544`/`0xf45c4`).
+/// There is no full 5001 message type: the entry list after this prefix
+/// is sized from the GLOBAL `0x77cce4`, so the body is not decodable
+/// standalone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SyncItemPurchasePrefix {
     /// Gem balance (applied via `0x540090`).
     pub gem: i32,
-    /// Second prefix word: stored to `0x768b48`, never read (reserved).
-    pub reserved: i32,
-    /// Third prefix word: shop-checked wallet word (meaning OPEN).
-    pub wallet_word: i32,
+    /// Distribution points: stored to `0x768b48`, never read in `.text`.
+    pub point: i32,
+    /// Premium cash: shop-checked (`0x99f26`) and displayed with gem.
+    pub o2_cash: i32,
     /// Cash points (applied via `0x540d00`).
     pub cash_point: i32,
 }
@@ -2028,8 +2033,8 @@ impl SyncItemPurchasePrefix {
         Ok((
             Self {
                 gem: i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
-                reserved: i32::from_le_bytes([body[4], body[5], body[6], body[7]]),
-                wallet_word: i32::from_le_bytes([body[8], body[9], body[10], body[11]]),
+                point: i32::from_le_bytes([body[4], body[5], body[6], body[7]]),
+                o2_cash: i32::from_le_bytes([body[8], body[9], body[10], body[11]]),
                 cash_point: i32::from_le_bytes([body[12], body[13], body[14], body[15]]),
             },
             &body[SYNC_ITEM_PURCHASE_PREFIX_LEN..],
@@ -2038,31 +2043,84 @@ impl SyncItemPurchasePrefix {
 
     /// Append the four words in wire order.
     pub fn encode_inner(&self, body: &mut Vec<u8>) {
-        for word in [self.gem, self.reserved, self.wallet_word, self.cash_point] {
+        for word in [self.gem, self.point, self.o2_cash, self.cash_point] {
             body.extend_from_slice(&word.to_le_bytes());
         }
     }
 }
 
-/// One `SyncItemPurchase` 5001 restock pair: 8 wire bytes.
+/// Two `SyncItemPurchase` 5001 post-list wallet words (`MusicCash`,
+/// `ItemCash`) read after the `0x77cce4`-sized entry list.
 ///
-/// The packet-counted (`i32` M, file `0x160b8a`) list reads two words
-/// per entry (files `0x160bb6`/`0x160bc4`). The first word is the shop
+/// Field order follows Memoryer's `SyncItemPurchaseResponse` (orders 5-6).
+/// The S→C handler reads them via the fixed-size reader (`0x555d20`)
+/// into `0x768b50` (file `0x160b03`) and `0x768b54` (file `0x160b12`).
+/// Both are shop-checked as the `O2Cash` alternative: the entry price
+/// (`[0x77cce8+0x14]` via `0x53c010`) is affordable when it does not
+/// exceed `O2Cash` or the matching wallet (`0x768b50` at file `0x99f39`,
+/// `0x768b54` at file `0x99f7d`; same pair duplicated for the sibling
+/// shop at files `0xc841d`/`0xc8430` and `0xc8461`/`0xc8474`). Order 5 is
+/// the music-shop wallet and order 6 the item-shop wallet (Memoryer
+/// order, `t_o2jam_charcash` column order, `CharacterInfo` field order).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyncItemPurchaseWallets {
+    /// Music-shop cash (`0x768b50`).
+    pub music_cash: i32,
+    /// Item-shop cash (`0x768b54`).
+    pub item_cash: i32,
+}
+
+/// Wire length of [`SyncItemPurchaseWallets`]: two `i32` words.
+const SYNC_ITEM_PURCHASE_WALLETS_LEN: usize = 8;
+
+impl SyncItemPurchaseWallets {
+    /// Parse the wallet pair from the front of `body`.
+    ///
+    /// # Errors
+    ///
+    /// `Error::TruncatedMessage` when fewer than 8 bytes remain.
+    pub fn decode_prefix(body: &[u8]) -> Result<(Self, &[u8]), Error> {
+        if body.len() < SYNC_ITEM_PURCHASE_WALLETS_LEN {
+            return Err(Error::TruncatedMessage {
+                need: SYNC_ITEM_PURCHASE_WALLETS_LEN,
+                have: body.len(),
+            });
+        }
+        Ok((
+            Self {
+                music_cash: read_word_at(body, 0),
+                item_cash: read_word_at(body, 4),
+            },
+            &body[SYNC_ITEM_PURCHASE_WALLETS_LEN..],
+        ))
+    }
+
+    /// Append the pair in wire order.
+    pub fn encode_inner(&self, body: &mut Vec<u8>) {
+        body.extend_from_slice(&self.music_cash.to_le_bytes());
+        body.extend_from_slice(&self.item_cash.to_le_bytes());
+    }
+}
+
+/// One `SyncItemPurchase` 5001 restock pair: 8 wire bytes (one
+/// `AttributiveItemInfo`: `AttributiveItemId` + `ItemCount`, Memoryer's
+/// `SyncItemPurchaseResponse` order 7, `Int32`-prefixed list with count
+/// M at file `0x160b8a`).
+///
+/// The list reads two words per entry (files `0x160bb6`/`0x160bc4`). The first word is the shop
 /// entry id, validated by `0x537e90` on `0x77ccbc` (whose `0xff`
 /// return skips the pair, file `0x160bf5`) and then resolved by
 /// `0x538240` plus item-record lookups (`0x52dba0` on `0x77b540`,
 /// with `[eax+0xa]`/`[eax+0xb]` feeding render `0x4a9b60` on
-/// `0x7795fc`). Only the LOW word of the second word is ever consumed
+/// `0x7795fc`). The exe forwards only the LOW word of the count
 /// (`movzx cx`, file `0x160bd8`); the high half is read to advance the
-/// cursor then dropped. The pair's game meaning stays OPEN.
+/// cursor then dropped (zero in practice: counts fit in `u16`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShopRestockPair {
-    /// Shop entry id (lookup key for `0x77ccbc` / `0x77b540`).
-    pub entry_id: i32,
-    /// Low word of the second word (forwarded to lookup + render).
-    pub aux_low: u16,
-    /// High word of the second word: wire-present but unconsumed.
-    pub aux_high: u16,
+    /// Attributive item id (lookup key for `0x77ccbc` / `0x77b540`).
+    pub attributive_item_id: i32,
+    /// Stack count added into the shop entry by `0x538240`.
+    pub item_count: i32,
 }
 
 /// Wire length of [`ShopRestockPair`]: two `i32` reads.
@@ -2083,19 +2141,64 @@ impl ShopRestockPair {
         }
         Ok((
             Self {
-                entry_id: i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
-                aux_low: u16::from_le_bytes([body[4], body[5]]),
-                aux_high: u16::from_le_bytes([body[6], body[7]]),
+                attributive_item_id: read_word_at(body, 0),
+                item_count: read_word_at(body, 4),
             },
             &body[SHOP_RESTOCK_PAIR_LEN..],
         ))
     }
 
-    /// Append the pair in wire order (high half preserved for framing).
+    /// Append the pair in wire order.
     pub fn encode_inner(&self, body: &mut Vec<u8>) {
-        body.extend_from_slice(&self.entry_id.to_le_bytes());
-        body.extend_from_slice(&self.aux_low.to_le_bytes());
-        body.extend_from_slice(&self.aux_high.to_le_bytes());
+        body.extend_from_slice(&self.attributive_item_id.to_le_bytes());
+        body.extend_from_slice(&self.item_count.to_le_bytes());
+    }
+}
+
+/// Trailing word of a `SyncItemPurchase` 5001 response: free-pass
+/// extension days (`FreePassExtensionDays`, Memoryer's
+/// `SyncItemPurchaseResponse` order 8).
+///
+/// The S→C handler reads one `i32` (file `0x160c54`), then forwards it
+/// with event id `0x1389` into the UI queue (`0x478d50`; pushes at files
+/// `0x160c68`/`0x160c75`). The shop-context `0x1389` consumer (VA
+/// `0x4f4144`, file `0xf4144`, dispatched at file `0xf410e`) branches on
+/// it: nonzero stores it to shop state `[ecx+0x64]` and notifies `0x13a1`
+/// (VA `0x4f417f`, file `0xf417f`; `0x13a1` = 5025 `SyncFreePass`); zero
+/// takes the `0x4f4300` refresh path (VA `0x4f419e`, file `0xf419e`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyncItemPurchaseTail {
+    /// Free-pass extension days (0 = plain shop refresh).
+    pub free_pass_days: i32,
+}
+
+/// Wire length of [`SyncItemPurchaseTail`]: one `i32` word.
+const SYNC_ITEM_PURCHASE_TAIL_LEN: usize = 4;
+
+impl SyncItemPurchaseTail {
+    /// Parse the trailing word from the front of `body`.
+    ///
+    /// # Errors
+    ///
+    /// `Error::TruncatedMessage` when fewer than 4 bytes remain.
+    pub fn decode_prefix(body: &[u8]) -> Result<(Self, &[u8]), Error> {
+        if body.len() < SYNC_ITEM_PURCHASE_TAIL_LEN {
+            return Err(Error::TruncatedMessage {
+                need: SYNC_ITEM_PURCHASE_TAIL_LEN,
+                have: body.len(),
+            });
+        }
+        Ok((
+            Self {
+                free_pass_days: read_word_at(body, 0),
+            },
+            &body[SYNC_ITEM_PURCHASE_TAIL_LEN..],
+        ))
+    }
+
+    /// Append the word in wire order.
+    pub fn encode_inner(&self, body: &mut Vec<u8>) {
+        body.extend_from_slice(&self.free_pass_days.to_le_bytes());
     }
 }
 
@@ -2189,20 +2292,21 @@ impl WireMessage for SellItem {
 
 /// `SellItem` 5003 response: the server's sell verdict.
 ///
-/// Body is one `i32` result plus an optional second `i32` present
-/// exactly when the result is zero. The S→C handler (VA `0x560c80`,
-/// file `0x160c80`; index 0 of the `0x138b`-based receive switch,
-/// byte table file `0x158ae0`) reads the first word and returns
-/// unless it is `0`, then reads the second word into `0x768b4c`
-/// and applies it (`0x540090`); the shop-context case
-/// (VA `0x4a5c76`, file `0xa5c76`) treats `0` as success and
-/// `0xffffffa0` as failure. Code meanings stay OPEN.
+/// Body is one `i32` result plus an optional gem refund present exactly
+/// when the result is zero (Memoryer's `SellItemResponse`: `Invalid`
+/// bool + nullable `Gem`). The S→C handler (VA `0x560c80`, file
+/// `0x160c80`; index 0 of the `0x138b`-based receive switch, byte table
+/// file `0x158ae0`) reads the first word and returns unless it is `0`,
+/// then reads the second word into `0x768b44` (file `0x160caa`) and
+/// applies it via `0x540090` (writes `0x77cd00+0x2c`, the shared gem
+/// slot); the shop-context case (VA `0x4a5c76`, file `0xa5c76`) treats
+/// `0` as success and `0xffffffa0` as failure. Code meanings stay OPEN.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SellItemResponse {
     /// Sell verdict (`0` takes the success path).
     pub result: i32,
-    /// Second word; `Some` exactly when `result == 0`.
-    pub extra: Option<i32>,
+    /// Gem refund; `Some` exactly when `result == 0`.
+    pub gem: Option<i32>,
 }
 
 /// Body length of a bare [`SellItemResponse`] result.
@@ -2216,8 +2320,8 @@ impl WireMessage for SellItemResponse {
     fn encode_body(&self) -> Vec<u8> {
         let mut body = Vec::with_capacity(SELL_ITEM_RESPONSE_FULL_LEN);
         body.extend_from_slice(&self.result.to_le_bytes());
-        if let Some(extra) = self.extra {
-            body.extend_from_slice(&extra.to_le_bytes());
+        if let Some(gem) = self.gem {
+            body.extend_from_slice(&gem.to_le_bytes());
         }
         body
     }
@@ -2236,10 +2340,7 @@ impl WireMessage for SellItemResponse {
                     body.len() - SELL_ITEM_RESPONSE_MIN_LEN,
                 ));
             }
-            return Ok(Self {
-                result,
-                extra: None,
-            });
+            return Ok(Self { result, gem: None });
         }
         if body.len() < SELL_ITEM_RESPONSE_FULL_LEN {
             return Err(Error::TruncatedMessage {
@@ -2254,7 +2355,7 @@ impl WireMessage for SellItemResponse {
         }
         Ok(Self {
             result,
-            extra: Some(i32::from_le_bytes([body[4], body[5], body[6], body[7]])),
+            gem: Some(read_word_at(body, 4)),
         })
     }
 }
@@ -3660,8 +3761,8 @@ mod tests {
     fn purchase_prefix() -> SyncItemPurchasePrefix {
         SyncItemPurchasePrefix {
             gem: 5,
-            reserved: 0,
-            wallet_word: 10,
+            point: 0,
+            o2_cash: 10,
             cash_point: 6,
         }
     }
@@ -3683,8 +3784,8 @@ mod tests {
         let (prefix, rest) = SyncItemPurchasePrefix::decode_prefix(&body).unwrap();
         assert!(rest.is_empty());
         assert_eq!(prefix.gem, 5);
-        assert_eq!(prefix.reserved, 0);
-        assert_eq!(prefix.wallet_word, 10);
+        assert_eq!(prefix.point, 0);
+        assert_eq!(prefix.o2_cash, 10);
         assert_eq!(prefix.cash_point, 6);
     }
 
@@ -3696,22 +3797,90 @@ mod tests {
         );
     }
 
+    #[test]
+    fn sync_item_purchase_prefix_encodes_named_wallets() {
+        let mut body = Vec::new();
+        SyncItemPurchasePrefix {
+            gem: 1,
+            point: 2,
+            o2_cash: 3,
+            cash_point: 4,
+        }
+        .encode_inner(&mut body);
+        assert_eq!(body, vec![1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0]);
+    }
+
+    #[test]
+    fn sync_item_purchase_wallets_decode_music_and_item_cash() {
+        let body = vec![11, 0, 0, 0, 12, 0, 0, 0, 0xFF];
+        let (wallets, rest) = SyncItemPurchaseWallets::decode_prefix(&body).unwrap();
+        assert_eq!(wallets.music_cash, 11);
+        assert_eq!(wallets.item_cash, 12);
+        assert_eq!(rest, &[0xFF]);
+    }
+
+    #[test]
+    fn sync_item_purchase_wallets_round_trip() {
+        let wallets = SyncItemPurchaseWallets {
+            music_cash: -2,
+            item_cash: 7,
+        };
+        let mut body = Vec::new();
+        wallets.encode_inner(&mut body);
+        let (back, rest) = SyncItemPurchaseWallets::decode_prefix(&body).unwrap();
+        assert!(rest.is_empty());
+        assert_eq!(back, wallets);
+    }
+
+    #[test]
+    fn sync_item_purchase_wallets_reject_short_body() {
+        assert_eq!(
+            SyncItemPurchaseWallets::decode_prefix(&[0x01; 7]),
+            Err(Error::TruncatedMessage { need: 8, have: 7 })
+        );
+    }
+
+    #[test]
+    fn sync_item_purchase_tail_decodes_free_pass_days() {
+        let body = vec![5, 0, 0, 0, 0xFF];
+        let (tail, rest) = SyncItemPurchaseTail::decode_prefix(&body).unwrap();
+        assert_eq!(tail.free_pass_days, 5);
+        assert_eq!(rest, &[0xFF]);
+    }
+
+    #[test]
+    fn sync_item_purchase_tail_round_trips_zero_refresh() {
+        let tail = SyncItemPurchaseTail { free_pass_days: 0 };
+        let mut body = Vec::new();
+        tail.encode_inner(&mut body);
+        assert_eq!(body, vec![0, 0, 0, 0]);
+        let (back, rest) = SyncItemPurchaseTail::decode_prefix(&body).unwrap();
+        assert!(rest.is_empty());
+        assert_eq!(back, tail);
+    }
+
+    #[test]
+    fn sync_item_purchase_tail_rejects_short_body() {
+        assert_eq!(
+            SyncItemPurchaseTail::decode_prefix(&[0x01; 3]),
+            Err(Error::TruncatedMessage { need: 4, have: 3 })
+        );
+    }
+
     fn restock_pair() -> ShopRestockPair {
         ShopRestockPair {
-            entry_id: 23001,
-            aux_low: 3,
-            aux_high: 0,
+            attributive_item_id: 23001,
+            item_count: 3,
         }
     }
 
     #[test]
-    fn shop_restock_pair_decodes_entry_plus_split_word() {
-        let body = vec![0xD9, 0x59, 0x00, 0x00, 0x03, 0x00, 0x07, 0x00];
+    fn shop_restock_pair_decodes_attributive_item_and_count() {
+        let body = vec![0xD9, 0x59, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00];
         let (pair, rest) = ShopRestockPair::decode_prefix(&body).unwrap();
         assert!(rest.is_empty());
-        assert_eq!(pair.entry_id, 23001);
-        assert_eq!(pair.aux_low, 3);
-        assert_eq!(pair.aux_high, 7);
+        assert_eq!(pair.attributive_item_id, 23001);
+        assert_eq!(pair.item_count, 3);
     }
 
     #[test]
@@ -3719,17 +3888,15 @@ mod tests {
         let mut body = Vec::new();
         restock_pair().encode_inner(&mut body);
         ShopRestockPair {
-            entry_id: -1,
-            aux_low: 9,
-            aux_high: 8,
+            attributive_item_id: -1,
+            item_count: 9,
         }
         .encode_inner(&mut body);
         let (first, rest) = ShopRestockPair::decode_prefix(&body).unwrap();
         assert_eq!(first, restock_pair());
         let (second, rest) = ShopRestockPair::decode_prefix(rest).unwrap();
         assert!(rest.is_empty());
-        assert_eq!(second.aux_low, 9);
-        assert_eq!(second.aux_high, 8);
+        assert_eq!(second.item_count, 9);
     }
 
     #[test]
@@ -3842,7 +4009,7 @@ mod tests {
         let frame = decode_frame(
             &SellItemResponse {
                 result: 0,
-                extra: None,
+                gem: None,
             }
             .encode(),
         )
@@ -3857,14 +4024,14 @@ mod tests {
     fn sell_item_response_decodes_result_only() {
         let response = SellItemResponse::decode_body(&[0x05, 0x00, 0x00, 0x00]).unwrap();
         assert_eq!(response.result, 5);
-        assert_eq!(response.extra, None);
+        assert_eq!(response.gem, None);
     }
 
     #[test]
-    fn sell_item_response_success_carries_extra_word() {
+    fn sell_item_response_success_carries_gem_word() {
         let response = SellItemResponse {
             result: 0,
-            extra: Some(7),
+            gem: Some(7),
         };
         assert_eq!(
             response.encode(),
@@ -3876,7 +4043,7 @@ mod tests {
     }
 
     #[test]
-    fn sell_item_response_rejects_extra_word_on_error() {
+    fn sell_item_response_rejects_gem_word_on_error() {
         let body = vec![0x01, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00];
         assert_eq!(
             SellItemResponse::decode_body(&body),
