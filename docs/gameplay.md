@@ -186,11 +186,8 @@ Good feeds 1, Bad/Miss feed nothing; 30 progress completes one
 jam combo with overflow carrying into the next cycle (31 → 1);
 pills (max 5 held) are spent instead of breaking the combo on
 Bad/Miss; higher jam combo scores more (direction confirmed,
-per-level size OPEN). `o2jam-game` implements this model
-(`JamGauge`/`PillStock`/`Score::apply_rated`) with synthetic
-tests; gauge constants, Bad/Miss progress handling,
-bonus-on-completing-note ordering, and the per-jam point size
-stay placeholders.
+per-level size OPEN). No gauge model is implemented: unconfirmed
+behavior stays out of code; see `JamGauge`-free `apply_rated`.
 
 ## Skill-ring modifiers — VERIFIED storage + lane path, item-text visibility
 
@@ -294,8 +291,8 @@ At 0 the player is dead: no more input, song ends, back to the
 waiting state. Binary note: `[3,2,1]`/`[2,1,0]` fragments exist
 in-shipped-bytes but are unattributed to any code path, and the
 unique `[-10,-7,-5]` triple contradicts Bad=no-change, so it
-belongs elsewhere until proven. Implemented as
-`o2jam-game::LifeGauge` (+ `Difficulty`) with synthetic tests.
+belongs elsewhere until proven. No life model is implemented:
+unconfirmed behavior stays out of code.
 
 ## Long-note release rule — player-reported
 

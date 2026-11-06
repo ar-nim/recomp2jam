@@ -231,7 +231,6 @@ fn run_autoplay(chart_path: &str, ojm_path: Option<&str>, level: usize, sound: b
     };
     let mut sequencer = Sequencer::new(&chart);
     let mut score = Score::default();
-    let mut gauge = o2jam_game::JamGauge::default();
     let mut pills = o2jam_game::PillStock::default();
     let mut streak = o2jam_game::CoolStreak::default();
     let mut sounded = 0u64;
@@ -239,18 +238,17 @@ fn run_autoplay(chart_path: &str, ojm_path: Option<&str>, level: usize, sound: b
     // Autoplay judges everything Cool; the streak feeds pills exactly
     // as the 7.55 score path does.
     let judge_cool = |score: &mut Score,
-                      gauge: &mut o2jam_game::JamGauge,
                       pills: &mut o2jam_game::PillStock,
                       streak: &mut o2jam_game::CoolStreak| {
         streak.note(Judgement::Cool, pills);
-        score.apply_rated(Judgement::Cool, gauge, pills);
+        score.apply_rated(Judgement::Cool, pills);
     };
     if sound {
         let clock = o2jam_game::SongClock::start();
         while !sequencer.is_empty() {
             let now = clock.now_ms();
             for strike in sequencer.pop_due(now) {
-                judge_cool(&mut score, &mut gauge, &mut pills, &mut streak);
+                judge_cool(&mut score, &mut pills, &mut streak);
                 if let Some(pcm) = bank.get(&strike.sample_id) {
                     backend.play_pcm(pcm)?;
                     sounded += 1;
@@ -265,7 +263,7 @@ fn run_autoplay(chart_path: &str, ojm_path: Option<&str>, level: usize, sound: b
         let mut now = 0u64;
         while !sequencer.is_empty() {
             for strike in sequencer.pop_due(now) {
-                judge_cool(&mut score, &mut gauge, &mut pills, &mut streak);
+                judge_cool(&mut score, &mut pills, &mut streak);
                 if bank.contains_key(&strike.sample_id) {
                     sounded += 1;
                 } else {
