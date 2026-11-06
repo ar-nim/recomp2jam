@@ -16,15 +16,19 @@ ink present, UI ink on top, frame never one flat fill) plus the flat
 fallback (non-uniform card-over-background scenes, per-scene
 markers) and the full transition matrix plus input/timing edges
 through the public API (`ScreenGame` incl. `load_scene`/`load_splash`,
-`paint_screen`, `ScreenFlow`, `can_enter`) only. Staged figures are
-synthetic stand-ins: real `.ojs`/`.bnd` bytes stay out of the repo,
-so composition cells stay FAIL until a local-only real-art soak runs.
+`paint_screen`, `ScreenFlow`, `can_enter`) only. Staged figures stay
+synthetic in the repo (real `.ojs`/`.bnd` bytes stay out), but the
+local-only real-art soak now runs: `cargo test -p recomp2jam shots`
+stages genuine `Interface1`/`Playing1` art from git-ignored
+`install-root` (10/10 green, zero skips, 2026-11-07), and the six
+PNGs below are genuine-art frames. Composition cells stay FAIL where
+invented placement remains (cited per cell), never for lack of art.
 
 ## `STATE_AVI` — logo splash (`CStateAvi`)
 
 | Dimension | 7.55 expectation (evidence) | Shell status | Verdict |
 |---|---|---|---|
-| Composition | First visible screen; one-entry block `IDC_BACK_LOGO` → `O2mediaLogo.ojs` (lifecycle §5) | Flat fallback is card + `755` stamp; `load_scene`/`load_splash` layering proven by harness with staged figures; real `.ojs` never loaded | FAIL |
+| Composition | First visible screen; one-entry block `IDC_BACK_LOGO` → `O2mediaLogo.ojs` (lifecycle §5) | Genuine logo stages via `load_splash` in soak (`present_archives_stage_key_scenes` asserts `load_avi_logo` is_some; `avi.png` shows the NowCOM window capture); sole `.bnd` rect `(0,0)-(800,600)` is verbatim full-bleed (bnd-semantics). Still FAIL: splash bypasses `bind_scene_rects`, so the `IDC_BACK_LOGO` bind is unproven | FAIL |
 | Input | Splash timer/dismiss → channel | Any lane-key press dismisses to Channel | OPEN (dismiss key/timer unconfirmed) |
 | Timing | Logo hold duration unknown (dispatch call not in dossier set) | Immediate on key press | OPEN |
 | Transitions | `Avi → Channel` only | `can_enter` allows exactly that; tested | PASS |
@@ -33,7 +37,7 @@ so composition cells stay FAIL until a local-only real-art soak runs.
 
 | Dimension | 7.55 expectation (evidence) | Shell status | Verdict |
 |---|---|---|---|
-| Composition | 50 controls, decl `0x27`, **no `.bnd`** (bare `BOUND`); `Dialog_ChannelSelectBar.ojs`, back/rank buttons (lifecycle §6) | Text list + amber cursor over staged art proven (harness); no real `.ojs`/`.bnd` binding | FAIL |
+| Composition | 50 controls, decl `0x27`, **no `.bnd`** (bare `BOUND`); `Dialog_ChannelSelectBar.ojs`, back/rank buttons (lifecycle §6) | Soak stages the bar full-canvas (`stage_single_sprite`), but `channel.png` still reads as fallback paint (dark frame, list + `CHANNEL` stamp only): the bar's real rect is one panel, not the canvas (audit 15), and list rows step at invented `h/4 + i*8` (audit 10–11). Still FAIL | FAIL |
 | Input | Pick channel/planet → room (`My_channel`/`My_planet` bridge, file `0x24df70`–`0x24e024`) | Up/Down moves highlight (clamped), Confirm → Room | OPEN (no planet/solo fork) |
 | Timing | None documented | n/a | PASS (vacuous) |
 | Transitions | `Channel → Room`; hosted by unknown class (open question) | Implemented + tested | PASS |
@@ -42,7 +46,7 @@ so composition cells stay FAIL until a local-only real-art soak runs.
 
 | Dimension | 7.55 expectation (evidence) | Shell status | Verdict |
 |---|---|---|---|
-| Composition | Decl `0x36`, 76 entries, `State_Room.bnd` (75 rects); mode filters, `Room_ButtonRoom.ojs` (lifecycle §7) | Text rows + lock suffix + cursor over staged art proven (harness); no real `.bnd` | FAIL |
+| Composition | Decl `0x36`, 76 entries, `State_Room.bnd` (75 rects); mode filters, `Room_ButtonRoom.ojs` (lifecycle §7) | Soak binds 75 rects verbatim (`bind_verbatim_entries`: rect `i` → entry `i + 1`) under genuine panels — `room.png` shows real Korean room art with list + `ROOM` stamp on top. Still FAIL: list scrim/rows/cursor sit at invented quarter-frame anchors (audit 10–11) and the nine `IDC_*` detail fields draw from rect corners with micro-font metrics, sizes discarded (audit 3, 24–25) | FAIL |
 | Input | Join/create room; `DIALOG_CREATEROOM`, password dialog | Confirm → Waiting, Back → Channel; no create/password UI | OPEN |
 | Timing | None documented | n/a | PASS (vacuous) |
 | Transitions | `Room → Waiting`, `Room → Channel` | Implemented + tested | PASS |
@@ -51,7 +55,7 @@ so composition cells stay FAIL until a local-only real-art soak runs.
 
 | Dimension | 7.55 expectation (evidence) | Shell status | Verdict |
 |---|---|---|---|
-| Composition | Decl `0x63`, 117 entries, `State_Waiting.bnd`; 8 team buttons `0x16201004..0B` (`Wait_TeamA..H.ojs`), 8 avatar covers; song dialog decl `0x7A`/134 entries (lifecycle §8, gameplay room-teams) | 8 seat rows + ready dots over staged art proven (harness); no team buttons, covers, or song dialog | FAIL |
+| Composition | Decl `0x63`, 117 entries, `State_Waiting.bnd`; 8 team buttons `0x16201004..0B` (`Wait_TeamA..H.ojs`), 8 avatar covers; song dialog decl `0x7A`/134 entries (lifecycle §8, gameplay room-teams) | Soak binds 116 rects verbatim under genuine art — `waiting.png` shows real avatar tiles with seats + `WAITING` stamp on top. Still FAIL: seats sit on an invented 2-col × 4-row grid (audit 12), portraits center blind (audit 18–19); no team buttons, covers, or song dialog | FAIL |
 | Input | Team toggle → `SetRoomTeam` 4004 + `Ready` 4008(0); host start; back button (gameplay room-teams: `FUN_004b22d0` file `0xb22d0`, ev `2c8d3964…`) | Confirm → Loading, Back → Room; no team/send path | OPEN |
 | Timing | `MusicLoading.ojs` + song clock arming at load (lifecycle §9.5) | n/a (see Loading) | OPEN |
 | Transitions | `Waiting → Loading`, `Waiting → Room` | Implemented + tested | PASS |
@@ -61,7 +65,7 @@ so composition cells stay FAIL until a local-only real-art soak runs.
 
 | Dimension | 7.55 expectation (evidence) | Shell status | Verdict |
 |---|---|---|---|
-| Composition | `MusicLoading.ojs`, Trebuchet/Arial fonts, song-table walk + clock arm (`FUN_004e47a0` file `0xe47a0`, ev `68d920c2…`); OJN decrypt + Vorbis init precede it (lifecycle §9) | Green progress bar over staged art proven (harness); no fonts, no OJN/Vorbis path | FAIL |
+| Composition | `MusicLoading.ojs`, Trebuchet/Arial fonts, song-table walk + clock arm (`FUN_004e47a0` file `0xe47a0`, ev `68d920c2…`); OJN decrypt + Vorbis init precede it (lifecycle §9) | Soak stages genuine planet art full-canvas (`loading.png`); bare `BOUND` makes full-bleed the documented fallback, but per-sprite native sizes are ignored (audit 23). Still FAIL: bar is an unbound centered placeholder track/fill (audit 35) with no progress fraction, no fonts, no OJN/Vorbis path | FAIL |
 | Input | Host start triggers gate | Confirm → Playing, Back → Waiting | OPEN (no validation/staging) |
 | Timing | Select validation `0x5718b0` → staging `0x4f8b80` → decrypt `0x412180` → codec `0x54db40` → load screen | Instant on Confirm | OPEN |
 | Transitions | `Waiting → Loading → Playing`, `Loading → Waiting` | Implemented + tested | PASS |
@@ -70,7 +74,7 @@ so composition cells stay FAIL until a local-only real-art soak runs.
 
 | Dimension | 7.55 expectation (evidence) | Shell status | Verdict |
 |---|---|---|---|
-| Composition | Real UI in `Playing1.opi` (235 entries, `State_Playing.bnd`); life/jam gauge bars, `Winner_image.ojs` (lifecycle §10, gameplay lifebar/jam sections) | Highway + falling notes under staged gauges proven (harness); no real gauges, effects, teams art | FAIL |
+| Composition | Real UI in `Playing1.opi` (235 entries, `State_Playing.bnd` — bound run is entries 213–229 `EXIT`…`VOLUME`, decl `0xE6`; bnd-semantics); life/jam gauge bars, `Winner_image.ojs` (lifecycle §10, gameplay lifebar/jam sections) | Highway now derives from staged art, not frame fractions: uneven lanes `(5,28)…(165,28)`, judgement row 487, 7 px heads, per-lane receptor heights, jam bars `(23,536)`/`(570,536)` 206×16, peer 46×8 (5cb01a2; audit 4–9 superseded); soak proves it (`play_skin_decodes_every_lane_when_present`, `skinned_highway_replaces_procedural_note_ink` green; `playing.png` shows left-hugging lanes + staged burst/gauge ink). Still FAIL: gauge appended full-canvas over the bound window (audit 16), judgement/combo/jam digits at invented anchors (audit 31), linear scroll map (audit 32), curtain clips a frame box not lane columns (audit 30) | FAIL |
 | Input | 7-lane keys, judgement vs `\|song−note\|` ≤ 6/18/25 ms → flags `0x10/0x20/0x40/0x80` (gameplay judgement, file `0x176540`) | Lane strikes hit `LivePlay`; windows live in `o2jam-game`, shell uses wall clock | OPEN (shell clock not sample clock) |
 | Timing | Sample-accurate song clock; per-frame bg-effect loop `0x550db0` (ev `4164031c…`) | 60 Hz `FrameClock`; paint-advance to Result at chart end tested | OPEN |
 | Transitions | `Loading → Playing → Result` | Implemented + tested, incl. auto-advance | PASS |
@@ -80,7 +84,7 @@ so composition cells stay FAIL until a local-only real-art soak runs.
 
 | Dimension | 7.55 expectation (evidence) | Shell status | Verdict |
 |---|---|---|---|
-| Composition | Decl `0x07`, 8 entries: `Result_WinLose.ojs`, `Result_NumFont_*.ojs`, Top/Bottom, Retry; builder `FUN_004c2390` (file `0xc2390`, ev `d6de3a7f…`) | Score + max-combo digits over staged art proven (harness); no WinLose art, grade letters out (mapping OPEN) | FAIL |
+| Composition | Decl `0x07`, 8 entries: `Result_WinLose.ojs`, `Result_NumFont_*.ojs`, Top/Bottom, Retry; builder `FUN_004c2390` (file `0xc2390`, ev `d6de3a7f…`) | Soak stages genuine panels — `result.png` shows real COOL/GOOD/BAD + music-name art with digits on top. Still FAIL: avatar/digits/verdict sit at fixed-pixel anchors `(16,16)`/`(16,32)`/`(16,48)` behind a 64×52 scrim (audit 13), ignoring the 7 `State_Result.bnd` rects; no WinLose art, grade letters out (mapping OPEN) | FAIL |
 | Input | Retry → waiting loading; leave → room/channel; event-ticket web call (file `0x24a338`) | Confirm → Waiting, Back → Room | OPEN (no ticket call) |
 | Timing | None documented | Paint-driven, immediate | PASS (vacuous) |
 | Transitions | `Result → Waiting`, `Result → Room` | Implemented + tested | PASS |
@@ -107,9 +111,13 @@ pass is ever claimed):
 - PASS: boot-into-splash, 800×600 default (`SetWindowPos` file
   `0x14b4c`/`0x14baf`), all 11 documented transition edges (plus
   rejections), vacuous-timing scenes — 14 cells.
-- FAIL (known placeholder gaps): 7 composition cells (real `.ojs`/`.bnd`
-  art not loaded; the `load_scene` layering behind them is implemented
-  and harness-proven with synthetic staged figures).
+- FAIL (known placement gaps): 7 composition cells (genuine art now
+  stages in the local soak — shots green, six PNGs refreshed 2026-11-07 —
+  but invented placement remains per cell: audit 3, 10–16, 18–19,
+  23–25, 30–32; audit 4–9 superseded by the verbatim highway 5cb01a2).
+  The `load_scene` layering behind them stays harness-proven (22/22).
 - OPEN: all input/timing/gameplay cells above plus every side state —
   next evidence targets are the loading-gate validation sequence
-  (`0x5718b0` → `0x4f8b80` → `0x412180`) and the peer-life 4015 handler.
+  (`0x5718b0` → `0x4f8b80` → `0x412180`), the peer-life 4015 handler,
+  and per-cell rect bindings (channel bar/rows, room `IDC_*` fields,
+  waiting seats/teams, result digits, playing digits/scroll).

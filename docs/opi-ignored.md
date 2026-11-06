@@ -1,0 +1,90 @@
+# OPI ignored fields audit
+
+Scope: every parsed `OPI` / `ControlList` / `.ojs` / `.bnd` / sprite field the
+scene composer (`o2jam-shell` `avatar.rs`, `screens/paint.rs`, `screens/game.rs`,
+`screens/side.rs`, `playing.rs`) reads through the parser but drops before the
+pixel. Parser sites live in `o2jam-file` (`opi.rs`, `control.rs`, `sprites.rs`,
+`tables/shop.rs`, `ojn.rs`). No source was changed for this audit.
+
+## Severity 1 — wrong pixels on screen
+
+- `BndRect` size (`x2/y2`, `sprites.rs` `BndRect`) — composer keeps only the
+  origin. `avatar.rs` `placement_origin_in_frame` scales `rect` then reads
+  `(scaled.x, scaled.y)`; `paint_placed_figure` blits 1:1 there. Every panel
+  keeps native art size instead of stretching to its rect.
+- `Sprite55Image.x/y` in highway skin — `playing.rs` `lane_sprite` /
+  `skin_frames` decode `w*h` but center with `centered_x` and anchor to the
+  judgement line, never adding record `x/y`. Avatar path (`avatar.rs`
+  `from_sprite55` → `dx/dy`) does use them.
+- Non-raw `Sprite55` images — `avatar.rs` `from_sprite55` filters on
+  `is_raw_rgb555`; `playing.rs` `lane_sprite` returns `None` otherwise.
+  Compressed / outlier `.oji` frames vanish instead of decoding.
+- `Sprite55Strided` (`Note_Combo4/5/6.ojt`, `sprites.rs`
+  `parse_sprite55_strided`, `frames_per_image`, `frame_data`) — never called
+  in shell; combo glow animation paints as one static frame or not at all.
+- `Oja` envelope (`sprites.rs` `parse_oja`, `OjaFrame{x,y,w,h,a,b,c}`) —
+  no shell call site. `Note_Click.oja` centred shrinking frames and the
+  `a/b/c` words never animate.
+- JPEG `.ojs` bodies (`opi.rs` `is_jpeg_body`: `ATI*` album art) — never
+  called in shell; select-music / album panels paint dialog art without rows.
+- Number-sprite `SET` groups — `paint.rs` `paint_result_content` calls
+  procedural `draw_number` at fixed `(16,16)` / `(16,32)` instead of the
+  block's number-font sprites.
+
+## Severity 2 — layout / visibility wrong
+
+- `ControlEntry.code` (`control.rs` `ControlEntry.code`, e.g.
+  `0X10500001`, `0X84200003`) — copied into `avatar.rs` `place_entry`
+  (`ScenePlacement.code`) and never read. Visibility / blend / state bits in
+  the top byte never hide, disable, or reorder anything; `paint_scene_figures`
+  draws every loaded placement unconditionally in file order.
+- `ControlSet.params` (`control.rs` `ControlSet.params`, e.g. `SET 0x11`
+  count/flags) — flattened by `all_entries`; frame-list vs number-sprite
+  grouping survives only as order.
+- `ControlBlock.number` / `extra`, `ControlList.num_states` /
+  `num_dialogs` (`control.rs`) — never read in shell. Declared-count vs
+  actual-entry mismatches (Playing `0xE6` vs 235 entries, trailing 5 ride
+  unloaded) are hardcoded in `avatar.rs` `PLAYING_SUBSET_FIRST_ENTRY` instead.
+- `ControlBlock.bound_file` — shell hardcodes `ROOM_BIND_FILE`,
+  `PLAYING_BIND_FILE`, etc. (`avatar.rs`, `paint.rs`, `side.rs`) instead of
+  reading the block's `BOUND "..."` line.
+- Unbound blocks (`CHANNEL`, splash, loading) — `paint.rs`
+  `unbound_scene_placements` emits `id=""`, `code=0`, empty `Rect`; true
+  layout (if any) is discarded and art pins at the native origin.
+- Rect/entry count mismatch — `avatar.rs` `bind_verbatim_entries` zips and
+  stops at the shorter side: entries past the last rect stay unplaced (Playing
+  tail past `VOLUME`, surplus room entries), rects past the last entry are
+  ignored. Both are silent.
+- Synthetic origins — `paint.rs` `seat_origin`, `song_panel_origin`,
+  `room_detail_fallback_origin`, result digits at `(16,16)` / verdict at
+  `(16,48)` ignore `Dialog_SelectMusic.bnd` / `State_Waiting.bnd` rects; only
+  9 hardcoded `ROOM_DETAIL_*_ID` anchors ever consult `.bnd`.
+
+## Severity 3 — text / labels replaced with placeholders
+
+- Decoded `.ojs` / `ControlList` Korean text (`lib.rs`
+  `decode_control_text`) — never drawn. `paint.rs` hardcodes `CHANNEL`,
+  `ROOM`, `WAITING`, `WIN`/`LOSE`, `M{music_id}`, `NORMAL`/`LIVE`, etc.;
+  `room_detail_entries` maps `IDC_TEXT_*` ids to wire values, not to the
+  archived strings beside `Room_LevelLimit.ojs` / `Room_Password.ojs`.
+- `AvatarItemRow.name` / `description` reach `side.rs` `shop_item_view`, but
+  `item_type`, `params[4]`, `flags(u8,u8)`, and the per-slot `(flag, name)`
+  bytes (`tables/shop.rs` `AvatarItemRow`) never reach the screen; slot
+  semantics are the parity heuristic in `avatar.rs` `pick_wear_sprites`.
+- `OjnListEntry` catalog detail (`ojn.rs`: `unknown0`, `format_version`,
+  `level_flags`, `stable_minor`, `counts_a/b`, `measures`, `events`,
+  `key_field`, `pad`, `flag100`, `const_a`, `tune`, `label`, `ojm_file`) —
+  `side.rs` `music_shop_songs` keeps only `song_id/title/artist/genre/bpm`.
+
+## Severity 4 — archive bookkeeping ignored (by design, listed)
+
+- `OpiEntry.kind`, `reserved_size`; `OpiSlot` free slots, `parse_opi_slots`
+  (`opi.rs`) — shell calls `parse_opi` only (`avatar.rs`
+  `load_archive_sprite`, `playing.rs` `archive_body`), slicing by
+  `data_offset..data_offset+size`. Free-slot reservations and slack bytes
+  never affect the scene.
+- `Sprite55.tag`, `Sprite55.colorkey` provenance — `tag` never branches;
+  `colorkey` is threaded through (`FigureLayer.colorkey`,
+  `SkinSprite::new`) and honored at blit, so it is used, not ignored.
+- `Sprite55Image.data_offset` / `size` — used only to slice
+  (`pixel_data`); chaining / exact-accounting checks stay parser-side.
