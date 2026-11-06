@@ -1238,6 +1238,12 @@ empty_message!(GetGiftMessageList, 5017);
 // `0x4f400c`, file `0xf400c`; the three virtual-send sites pass a
 // placeholder zero: VAs `0x4f4184`/`0x4f41c6`/`0x4f51b4`).
 empty_message!(SyncFreePass, 5025);
+// `SyncItemPurchase` 5000 (cart sync request) sends a bare header:
+// the opcode-arg builder case for `0x1388` (VA `0x4f3fa8`, file
+// `0xf3fa8`, dispatched on the id word at VA `0x4f3f7f`, file `0xf3f7f`)
+// writes the opcode word plus a length word of 4 with no appends, and
+// the common tail (VA `0x4f4051`, file `0xf4051`) transmits it unchanged.
+empty_message!(SyncItemPurchase, 5000);
 // `StartPayment` 5015 (web-coupon charge trigger) sends a bare
 // header (send case VA `0x491a27`, file `0x91a27`).
 empty_message!(StartPayment, 5015);
@@ -3316,6 +3322,36 @@ mod tests {
         let back = CheckGiftFreePassResponse::decode_body(&response.encode_body()).unwrap();
         assert!(back.invalid);
         assert!(back.username.is_empty());
+    }
+
+    #[test]
+    fn sync_item_purchase_encodes_bare_frame() {
+        assert_eq!(SyncItemPurchase.encode(), vec![0x04, 0x00, 0x88, 0x13]);
+    }
+
+    #[test]
+    fn sync_item_purchase_round_trips_through_frame() {
+        let frame = decode_frame(&SyncItemPurchase.encode()).unwrap();
+        assert_eq!(frame.id, 5000);
+        assert_eq!(SyncItemPurchase::decode_frame(&frame), Ok(SyncItemPurchase));
+    }
+
+    #[test]
+    fn sync_item_purchase_rejects_trailing_bytes() {
+        let frame = decode_frame(&[0x05, 0x00, 0x88, 0x13, 0x00]).unwrap();
+        assert_eq!(
+            SyncItemPurchase::decode_frame(&frame),
+            Err(Error::TrailingBytes(1))
+        );
+    }
+
+    #[test]
+    fn sync_item_purchase_rejects_wrong_command() {
+        let frame = decode_frame(&SyncCashPoint.encode()).unwrap();
+        assert_eq!(
+            SyncItemPurchase::decode_frame(&frame),
+            Err(Error::UnknownCommand(5028))
+        );
     }
 
     #[test]

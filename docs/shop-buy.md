@@ -15,6 +15,7 @@ response S→C `N+1` (`docs/net-protocol.md` §3).
 
 | Message | Id | Body |
 |---|---|---|
+| `SyncItemPurchase` (request) | 5000 (`0x1388`) | empty (opcode word + length word 4, no appends) |
 | `SellItem` (request) | 5002 (`0x138a`) | `i32` selection, `i32` entry (8 B LE) |
 | `SellItemResponse` | 5003 (`0x138b`) | `i32` result + `i32` extra iff result `0` (4 or 8 B) |
 | `ChangeName` (request) | 5030 (`0x13a6`) | null-term name + `i32` selection + `i32` entry |
@@ -121,24 +122,40 @@ requests have live send paths per the sites above.
 
 ## OPEN (not claimed)
 
-- `SyncItemPurchase` 5000 request body. Fourteen `$0x1388`
-  virtual-send sites exist (files `0x3289`/`0x3d9c3`/`0x3da5d`/
-  `0x917a4`/`0xba0d8`/`0xba610`/`0xc3766`/`0xc37a7`/`0xde143`/
-  `0xf026d`/`0xf3dc9`/`0x18dbb`/`0x18cd2f`/`0x18cd7e`), but two
-  send shapes were observed: empty headers via the opcode-arg
-  builder (file `0xf3f7f`: cases `0x1388`/`0x1392`/`0x13a1`,
-  length 4, no appends) and a string-body build at file
-  `0x191744` (one `0x555e30` append from `0x517fb0` output,
-  transmitted as `0x1388`). Cart serialization through
-  `0x517fb0`/`0x518000` is unresolved.
-- `SyncItemPurchase` 5001 response body. Exclusive handler VA
-  `0x560a40` (file `0x160a40`; sole caller is the `0x1389` case)
-  reads: 4×`i32`, an `i32` list bounded by the GLOBAL
-  `0x77cce4` (not a packet count — standalone decode is
-  impossible without that context), 2×`i32`, a 12-byte blob
-  (`0x5f1ef0`), a packet-counted (`i32` M) list of `i32`+`i32`
-  pairs with item-record lookups (`0x52dba0`), and a final
-  `i32`. Widths observed, field semantics unpinned.
+- `SyncItemPurchase` 5000 request body: SETTLED as empty-only.
+  The empty send is byte-verified (case `0x1388` at VA `0x4f3fa8`,
+  file `0xf3fa8`, in the opcode-arg builder dispatching on the id
+  word at VA `0x4f3f7f`, file `0xf3f7f`; common transmit tail VA
+  `0x4f4051`, file `0xf4051`): opcode word plus length word 4, no
+  appends — modeled as `SyncItemPurchase`. No byte-verified string
+  body for 5000 exists: the walked string-body case (VA `0x491744`,
+  file `0x91744` — previously mis-recorded as file `0x191744`)
+  belongs to the `0x7d0`-based dispatch (index 15, so the wire id is
+  `0x7df`, written from the dispatch arg); its `push $0x1388` is the
+  trailing queue-send helper (`0x556270`) word — the same slot that
+  carries `0x0` / `0x3e8` / `0xbb8` in the sibling cases — and never
+  reaches the wire. Sibling string cases: index 12 (`0x7dc`, one
+  append) and index 17 (`0x7e1`, two appends). `0x1388` matches no
+  case in that builder (falls to the default at VA `0x491a6f`, file
+  `0x91a6f`), and the `$0x1388` immediates at the reserve/commit
+  helper (`0x411ea0`) sites are a 5000-byte size, not an id. The
+  `0x517f70` / `0x517fb0` / `0x518000` getters serve those
+  message-text cases; cart serialization through them is
+  unresolved and unclaimed.
+- `SyncItemPurchase` 5001 response body: CONFIRMED undecodable
+  standalone (stays OPEN, no type). Exclusive handler VA
+  `0x560a40` (file `0x160a40`); sole caller is the `0x1389` stub
+  at VA `0x558831` (file `0x158831`), reached from the id check at
+  VA `0x55833d` (file `0x15833d`). Walked reads: 4×`i32`, then an
+  `i32` list whose bound is snapshotted from the GLOBAL dword
+  `0x77cce4` (VA `0x560ab4`, file `0x160ab4`) — not from the
+  packet — so the length is unknowable without that context;
+  2×`i32`, a 12-byte blob (`0x5f1ef0`), a packet-counted (`i32`
+  M) list of `i32`+`i32` pairs with item-record lookups
+  (`0x52dba0` on `0x77b540`, plus `0x537e90`/`0x538240` on
+  `0x77ccbc`), a final `i32`, then a forward stamping `$0x1389`
+  (VA `0x560c6d`, file `0x160c6d`). Widths observed, field
+  semantics unpinned.
 - `SellItem`/`ChangeName` word semantics: first word is the
   bounds-checked `0x77ccc0` selection index (role VERIFIED);
   the second word is the fetched entry's id word (usage
@@ -153,6 +170,10 @@ requests have live send paths per the sites above.
 
 ## Tests (`crates/o2jam-net/src/message.rs`)
 
+`sync_item_purchase_encodes_bare_frame` (exact frame),
+`sync_item_purchase_round_trips_through_frame`,
+`sync_item_purchase_rejects_trailing_bytes`,
+`sync_item_purchase_rejects_wrong_command`,
 `sell_item_encodes_two_words` (exact frame bytes),
 `sell_item_round_trips_through_frame`,
 `sell_item_rejects_short_body`,
