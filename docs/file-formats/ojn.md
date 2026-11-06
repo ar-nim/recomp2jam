@@ -172,7 +172,8 @@ table 4 → `+0x184/+0x188/+0x18c`, table 5 → `+0x190` (id echo) /
   (files `0x472c1`/`0x472fa`/`0x47333`/`0x47369`/`0x4739f`) testing
   `entry+0x4 == 1..=5`) → `+0x660` → STEP3 genre (`+0x214`, VA
   `0x447730`/file `0x47730`, table VA `0x447e50`/file `0x47e50`)
-  → `+0x670`; `+0x680`/`+0x690` serve auxiliary pre-filter outputs.
+  → `+0x670`; `+0x680`/`+0x690` are auxiliary pre-filter outputs
+  (producers below).
   The STEP2 label buttons (`DAILOG_SELECTMUSIC` in
   `install-root/Image/Interface1.opi`: `STEP2_ALL`/`GOLD`/`BLACK`/
   `BLUE`/`RED`/`SILVER`, codes `0x2720B021..0x2720B026`, art
@@ -182,15 +183,28 @@ table 4 → `+0x184/+0x188/+0x18c`, table 5 → `+0x190` (id echo) /
   `0x43f7e3`/file `0x3f7e3`: `sub code, 0x2720B021`, index → dialog
   `+0x6c0`). So category 1..5 = GOLD/BLACK/BLUE/RED/SILVER in index
   order. Band strings at file offsets `0x245781…0x2457d9`, range rows
-  at `0x24582c…0x245850`. OPEN: the select-entry `+0x4` population
-  site (the `+0x194` copy) is not yet pinned — the Table 5 loader loop
-  writes only song `+0x190`/`+0x194` (files `0x7ac77..0x7acf6`), and
-  the `0x4441f0` entry builder (file `0x441f0`) writes entry
-  `+0x205/+0x20d/+0x20e/+0x210/+0x212/+0x213`/`+0x214` with no `+0x4`
-  store in its span (surveyed files `0x35540..0x35960`); no direct
-  `0x194`-to-`0x4` register copy exists binary-wide. Strongest lead:
-  the dialog `+0x640` master fill at VA `0x4445cd` (file `0x445cd`)
-  from stack-built `0x238` entries. (Static disassembly survey; REA
+  at `0x24582c…0x245850`. The select-entry `+0x4` writer is pinned:
+  the `0x4441f0` entry builder (file `0x441f0`) stores
+  `entry+0x4 = song+0x194` (Table 5 category 1..=5) at VA `0x44422e`
+  (file `0x4422e`: `mov [ebp-0x23c], edx`, `edx = [ebp+0x19c]`).
+  The value arrives by value, not by register copy: each `0x441ac0`
+  caller copies the full `0x1b4`-byte song record onto the stack
+  (`rep movs`, `0x6d` dwords, e.g. file `0x41b08`), so callee struct
+  base `[ebp+8]` plus `0x194` lands exactly at `[ebp+0x19c]`; no
+  binary-wide direct `0x194`-to-`0x4` register copy exists because
+  none is needed. Companion store `entry+0 = song id` at VA
+  `0x444222` (file `0x44222`). The builder appends the stack-built
+  `0x238` entry via `0x452850` into dialog `+0x640` at VA `0x4445cd`
+  (file `0x445cd`) when flag `[ebp+0x1c0] == 0`, else into dialog
+  `+0x680` at VA `0x4445e7` (file `0x445e7`) — the `+0x680`
+  producer. Dialog `+0x690` producers are five `0x452850` appends of
+  `0x238`-entry pointers (via `0x453780`) in the song-entry builder
+  (`0x441d10` region): file `0x4298d` (`song+0x16c == 1` arm,
+  `entry+0x210 == 0`), file `0x429e3` (`song+0x178 == 0` and
+  `song+0x16c == 2`), file `0x42c05` (mode `0x76fc38 == 1`, level
+  `+0x210 == 1`, `song+0x178 == 0`, `song+0x16c == 1`),
+  file `0x42de8` (mode 0/4 path, same song guards), file `0x42e13`
+  (mode 3, unconditional). (Static disassembly survey; REA
   dossier TBD.)
 - Table 2 `listing` = selection class. A song filter branches on
   `song+0x16c == 1` versus the rest (file offset `0x3706f`), and
