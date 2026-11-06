@@ -43,4 +43,4 @@ Automated baseline: `cargo fmt --check` clean,
    length-checked), `assert!(is_empty())` over `assert_eq!(_, [])`,
    prose-word `doc_markdown` hits, test decimal literals, `Error::transport`
    by value (point-free `map_err`), wire-mandated bool fields.
-5. `run()`-length functions anywhere over ~20 lines (none blocking today).
+5. ~~Overlong functions~~ DONE (`fn main` 194 → dispatch + `run_command`/`run_info`/`run_play` + setup helpers; `too_many_lines` clean).

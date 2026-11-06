@@ -136,12 +136,26 @@ fn main() -> Result<()> {
         .with_env_filter(filter)
         .try_init()
         .ok();
+    run_command(cli.command.unwrap_or(Command::Info))
+}
 
-    match cli.command.unwrap_or(Command::Info) {
+/// Build info for `recomp2jam info`.
+fn run_info() {
+    println!("recomp2jam {}", env!("CARGO_PKG_VERSION"));
+    println!("target: O2Jam 7.55 client (C++/CDX/Boost/libvorbis/MSVC2005) -> Rust");
+    println!("status: day-0 scaffold; gameplay renderers pending file-parser verification");
+}
+
+/// Dispatch one CLI subcommand.
+///
+/// # Errors
+///
+/// Whatever the subcommand reports (net, file, audio, window).
+fn run_command(command: Command) -> Result<()> {
+    match command {
         Command::Info => {
-            println!("recomp2jam {}", env!("CARGO_PKG_VERSION"));
-            println!("target: O2Jam 7.55 client (C++/CDX/Boost/libvorbis/MSVC2005) -> Rust");
-            println!("status: day-0 scaffold; gameplay renderers pending file-parser verification");
+            run_info();
+            Ok(())
         }
         Command::Connect {
             host,
@@ -173,65 +187,8 @@ fn main() -> Result<()> {
                 room_password,
             };
             let report = connect::connect_and_login(&options)?;
-            println!("authorize: {}", connect::name_result(report.auth_code));
-            if let Some(hero) = &report.character {
-                println!(
-                    "character: {} (Lv {}, {:?}, {} XP)",
-                    hero.nickname, hero.level, hero.gender, hero.experience
-                );
-            }
-            if report.avatar_layers > 0 {
-                println!("avatar: {} layers worn", report.avatar_layers);
-            }
-            println!("channels: {}", report.channels.len());
-            for channel in &report.channels {
-                println!(
-                    "  gateway {} channel {}: {}/{} {}",
-                    channel.gateway_id,
-                    channel.channel_id,
-                    channel.population,
-                    channel.capacity,
-                    if channel.active { "open" } else { "closed" },
-                );
-            }
-            let open_rooms: Vec<_> = report
-                .rooms
-                .iter()
-                .filter(|room| room.number != 0)
-                .collect();
-            println!("rooms: {} open", open_rooms.len());
-            for room in open_rooms.iter().take(10) {
-                println!(
-                    "  #{} {:?} {}/{}{}",
-                    room.number,
-                    room.title,
-                    room.user_count,
-                    room.capacity,
-                    if room.has_password { " locked" } else { "" },
-                );
-            }
-            if let Some(login) = &report.channel_login {
-                let restricted = match login.restricted {
-                    Some(true) => "restricted",
-                    Some(false) => "unrestricted",
-                    None => "restriction unknown",
-                };
-                println!(
-                    "channel: {} ({restricted})",
-                    connect::name_result(login.result_code)
-                );
-            }
-            if let Some(join) = &report.join {
-                match &join.room {
-                    Some(room) => println!(
-                        "room: {} seats, {} in ({})",
-                        room.slots.len(),
-                        room.user_count,
-                        room.title
-                    ),
-                    None => println!("room: joined without snapshot"),
-                }
-            }
+            print_connect_report(&report);
+            Ok(())
         }
         Command::Play {
             chart,
@@ -250,75 +207,234 @@ fn main() -> Result<()> {
             port,
             online_gateway_id,
             online_channel_id,
-        } => {
-            tracing::info!(?chart, ?window, "play stub");
-            if window {
-                let mut game = o2jam_shell::ScreenGame::new();
-                if let Some(opi_path) = &interface {
-                    let logo = connect::load_interface_sprite(opi_path, "O2mediaLogo.ojs")?;
-                    tracing::info!(layers = logo.len(), "splash art loaded");
-                    game.load_splash(logo);
-                }
-                if online {
-                    let options = connect::ConnectOptions {
-                        host: host.clone().unwrap_or_default(),
-                        port,
-                        user_id: user_id.unwrap_or_default(),
-                        token: token.clone().unwrap_or_default(),
-                        gender: o2jam_net::Gender::Any,
-                        relay_key1: 0,
-                        relay_key2: 0,
-                        channel: online_gateway_id.zip(online_channel_id),
-                        character: false,
-                        avatar_opa: None,
-                        join_room: None,
-                        room_password: String::new(),
-                    };
-                    let report = connect::connect_and_login(&options)?;
-                    tracing::info!(channels = report.channels.len(), "channels listed");
-                    game.set_channels(report.channels);
-                    if !report.rooms.is_empty() {
-                        tracing::info!(rooms = report.rooms.len(), "rooms listed");
-                        game.set_rooms(report.rooms);
+        } => run_play(
+            chart,
+            ojm,
+            level,
+            sound,
+            window,
+            avatar_opa,
+            equip,
+            avatar_male,
+            interface,
+            online,
+            host,
+            user_id,
+            token,
+            port,
+            online_gateway_id,
+            online_channel_id,
+        ),
+    }
+}
+
+/// `play` subcommand: windowed game or headless autoplay.
+///
+/// # Errors
+///
+/// Whatever chart/bank loading, login, audio, or the window reports.
+#[allow(clippy::too_many_arguments, reason = "CLI fields pass through once")]
+fn run_play(
+    chart: Option<String>,
+    ojm: Option<String>,
+    level: usize,
+    sound: bool,
+    window: bool,
+    avatar_opa: Option<String>,
+    equip: String,
+    avatar_male: bool,
+    interface: Option<String>,
+    online: bool,
+    host: Option<String>,
+    user_id: Option<i32>,
+    token: Option<String>,
+    port: u16,
+    online_gateway_id: Option<i16>,
+    online_channel_id: Option<i16>,
+) -> Result<()> {
+    tracing::info!(?chart, ?window, "play stub");
+    if window {
+        let mut game = o2jam_shell::ScreenGame::new();
+        setup_splash(&mut game, &interface)?;
+        setup_online(
+            &mut game,
+            online,
+            &host,
+            user_id,
+            &token,
+            port,
+            online_gateway_id,
+            online_channel_id,
+        )?;
+        setup_avatar(&mut game, &avatar_opa, &equip, avatar_male)?;
+        setup_chart_audio(&mut game, &chart, &ojm, level)?;
+        let event_loop = winit::event_loop::EventLoop::new()
+            .map_err(|e| anyhow::anyhow!("event loop failed: {e:?}"))?;
+        o2jam_shell::Shell::new(Box::new(game)).run(event_loop)?;
+        return Ok(());
+    }
+    let chart_path = chart.ok_or_else(|| {
+        anyhow::anyhow!("--chart FILE.ojn is required (add --window for the empty shell)")
+    })?;
+    run_autoplay(&chart_path, ojm.as_deref(), level, sound)
+}
+
+/// Load the splash backdrop into a windowed game, if requested.
+fn setup_splash(game: &mut o2jam_shell::ScreenGame, interface: &Option<String>) -> Result<()> {
+    if let Some(opi_path) = interface {
+        let logo = connect::load_interface_sprite(opi_path, "O2mediaLogo.ojs")?;
+        tracing::info!(layers = logo.len(), "splash art loaded");
+        game.load_splash(logo);
+    }
+    Ok(())
+}
+
+/// Authenticate and list channels/rooms into a windowed game.
+#[allow(clippy::too_many_arguments, reason = "CLI fields pass through once")]
+fn setup_online(
+    game: &mut o2jam_shell::ScreenGame,
+    online: bool,
+    host: &Option<String>,
+    user_id: Option<i32>,
+    token: &Option<String>,
+    port: u16,
+    online_gateway_id: Option<i16>,
+    online_channel_id: Option<i16>,
+) -> Result<()> {
+    if !online {
+        return Ok(());
+    }
+    let options = connect::ConnectOptions {
+        host: host.clone().unwrap_or_default(),
+        port,
+        user_id: user_id.unwrap_or_default(),
+        token: token.clone().unwrap_or_default(),
+        gender: o2jam_net::Gender::Any,
+        relay_key1: 0,
+        relay_key2: 0,
+        channel: online_gateway_id.zip(online_channel_id),
+        character: false,
+        avatar_opa: None,
+        join_room: None,
+        room_password: String::new(),
+    };
+    let report = connect::connect_and_login(&options)?;
+    tracing::info!(channels = report.channels.len(), "channels listed");
+    game.set_channels(report.channels);
+    if !report.rooms.is_empty() {
+        tracing::info!(rooms = report.rooms.len(), "rooms listed");
+        game.set_rooms(report.rooms);
+    }
+    Ok(())
+}
+
+/// Stack the worn avatar figure into a windowed game, if requested.
+fn setup_avatar(
+    game: &mut o2jam_shell::ScreenGame,
+    avatar_opa: &Option<String>,
+    equip: &str,
+    avatar_male: bool,
+) -> Result<()> {
+    if let Some(opa_path) = avatar_opa {
+        let ids = connect::parse_equipment(equip)?;
+        let figure = connect::build_worn_figure(opa_path, &ids, avatar_male)?;
+        tracing::info!(layers = figure.len(), "avatar stacked");
+        game.load_avatar(figure);
+    }
+    Ok(())
+}
+
+/// Load a chart plus its key sounds into a windowed game, if requested.
+fn setup_chart_audio(
+    game: &mut o2jam_shell::ScreenGame,
+    chart: &Option<String>,
+    ojm: &Option<String>,
+    level: usize,
+) -> Result<()> {
+    if let Some(path) = chart {
+        let (level_chart, format_version) = load_level_chart(path, level)?;
+        game.load_chart(level_chart.hit_onsets_ms());
+        tracing::info!(hits = level_chart.hit_count(), "chart loaded");
+        if let Some(bank_path) = ojm {
+            let bank_bytes = std::fs::read(bank_path)?;
+            let bank = load_sound_bank(&bank_bytes, format_version);
+            let backend: Box<dyn o2jam_audio::AudioBackend> =
+                match o2jam_audio::CpalBackend::try_new() {
+                    Ok(backend) => Box::new(backend),
+                    Err(e) => {
+                        eprintln!("audio unavailable ({e}); continuing silent");
+                        Box::new(o2jam_audio::NullBackend::new())
                     }
-                }
-                if let Some(opa_path) = &avatar_opa {
-                    let ids = connect::parse_equipment(&equip)?;
-                    let figure = connect::build_worn_figure(opa_path, &ids, avatar_male)?;
-                    tracing::info!(layers = figure.len(), "avatar stacked");
-                    game.load_avatar(figure);
-                }
-                if let Some(path) = &chart {
-                    let (level_chart, format_version) = load_level_chart(path, level)?;
-                    game.load_chart(level_chart.hit_onsets_ms());
-                    tracing::info!(hits = level_chart.hit_count(), "chart loaded");
-                    if let Some(bank_path) = &ojm {
-                        let bank_bytes = std::fs::read(bank_path)?;
-                        let bank = load_sound_bank(&bank_bytes, format_version);
-                        let backend: Box<dyn o2jam_audio::AudioBackend> =
-                            match o2jam_audio::CpalBackend::try_new() {
-                                Ok(backend) => Box::new(backend),
-                                Err(e) => {
-                                    eprintln!("audio unavailable ({e}); continuing silent");
-                                    Box::new(o2jam_audio::NullBackend::new())
-                                }
-                            };
-                        game.with_audio(backend, bank);
-                        tracing::info!("key sounds attached");
-                    }
-                }
-                let event_loop = winit::event_loop::EventLoop::new()
-                    .map_err(|e| anyhow::anyhow!("event loop failed: {e:?}"))?;
-                o2jam_shell::Shell::new(Box::new(game)).run(event_loop)?;
-                return Ok(());
-            }
-            let chart_path = chart.ok_or_else(|| {
-                anyhow::anyhow!("--chart FILE.ojn is required (add --window for the empty shell)")
-            })?;
-            run_autoplay(&chart_path, ojm.as_deref(), level, sound)?;
+                };
+            game.with_audio(backend, bank);
+            tracing::info!("key sounds attached");
         }
     }
     Ok(())
+}
+
+/// Print one login-flow report (authorize, character, avatar, channels,
+/// rooms, login, join). Pure output, infallible.
+fn print_connect_report(report: &connect::ConnectReport) {
+    println!("authorize: {}", connect::name_result(report.auth_code));
+    if let Some(hero) = &report.character {
+        println!(
+            "character: {} (Lv {}, {:?}, {} XP)",
+            hero.nickname, hero.level, hero.gender, hero.experience
+        );
+    }
+    if report.avatar_layers > 0 {
+        println!("avatar: {} layers worn", report.avatar_layers);
+    }
+    println!("channels: {}", report.channels.len());
+    for channel in &report.channels {
+        println!(
+            "  gateway {} channel {}: {}/{} {}",
+            channel.gateway_id,
+            channel.channel_id,
+            channel.population,
+            channel.capacity,
+            if channel.active { "open" } else { "closed" },
+        );
+    }
+    let open_rooms: Vec<_> = report
+        .rooms
+        .iter()
+        .filter(|room| room.number != 0)
+        .collect();
+    println!("rooms: {} open", open_rooms.len());
+    for room in open_rooms.iter().take(10) {
+        println!(
+            "  #{} {:?} {}/{}{}",
+            room.number,
+            room.title,
+            room.user_count,
+            room.capacity,
+            if room.has_password { " locked" } else { "" },
+        );
+    }
+    if let Some(login) = &report.channel_login {
+        let restricted = match login.restricted {
+            Some(true) => "restricted",
+            Some(false) => "unrestricted",
+            None => "restriction unknown",
+        };
+        println!(
+            "channel: {} ({restricted})",
+            connect::name_result(login.result_code)
+        );
+    }
+    if let Some(join) = &report.join {
+        match &join.room {
+            Some(room) => println!(
+                "room: {} seats, {} in ({})",
+                room.slots.len(),
+                room.user_count,
+                room.title
+            ),
+            None => println!("room: joined without snapshot"),
+        }
+    }
 }
 
 /// Build the strike-slot -> decoded-PCM bank for autoplay.
