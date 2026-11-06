@@ -431,6 +431,172 @@ pub fn draw_number(frame: &mut Frame<'_>, x: i32, y: i32, value: u32, color: u32
     x + (count * GLYPH_ADVANCE) as i32
 }
 
+/// Native 7.55 canvas every `.bnd` rect addresses (see
+/// `docs/file-formats/opi.md`): 800x600 fullscreen.
+pub const NATIVE_WIDTH: u32 = 800;
+/// Native canvas height in pixels.
+pub const NATIVE_HEIGHT: u32 = 600;
+
+/// One `ControlList` entry bound to its `.bnd` rect on the native
+/// canvas: rect `i` lays out entry `i + 1` (entry 0 is the block
+/// itself). Callers pass the entries *after* the block header.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlacedControl {
+    /// Control code (`IDC_` second word, top byte names the state).
+    pub code: u32,
+    /// Native-canvas layout rect from the `.bnd` file.
+    pub rect: Rect,
+    /// Whether the entry names a sprite body.
+    pub has_sprite: bool,
+}
+
+/// Bind entry codes to layout rects in file order, truncating to
+/// the shortest input (the Playing subset ships fewer rects than
+/// entries, so extra entries ride unlaid-out).
+#[must_use]
+pub fn bind_controls(codes: &[u32], has_sprite: &[bool], rects: &[Rect]) -> Vec<PlacedControl> {
+    codes
+        .iter()
+        .zip(has_sprite.iter())
+        .zip(rects.iter())
+        .map(|((code, sprite), rect)| PlacedControl {
+            code: *code,
+            rect: *rect,
+            has_sprite: *sprite,
+        })
+        .collect()
+}
+
+/// Build a frame rect from absolute corners, saturating inverted
+/// edges to an empty rect at the top-left corner.
+#[must_use]
+pub fn rect_from_corners(x1: u32, y1: u32, x2: u32, y2: u32) -> Rect {
+    let (x, y) = (x1.min(x2), y1.min(y2));
+    Rect {
+        x: x.min(i32::MAX as u32) as i32,
+        y: y.min(i32::MAX as u32) as i32,
+        w: x2.saturating_sub(x1),
+        h: y2.saturating_sub(y1),
+    }
+}
+
+/// Scale one native axis into frame pixels.
+fn scale_axis(value: i32, frame_len: usize, native_len: u32) -> i32 {
+    (i64::from(value) * frame_len as i64 / i64::from(native_len)) as i32
+}
+
+/// Scale a native-canvas rect into frame pixels (identity on
+/// 800x600, proportional on headless test buffers).
+#[must_use]
+pub fn scale_rect_to_frame(rect: &Rect, frame_w: usize, frame_h: usize) -> Rect {
+    Rect {
+        x: scale_axis(rect.x, frame_w, NATIVE_WIDTH),
+        y: scale_axis(rect.y, frame_h, NATIVE_HEIGHT),
+        w: scale_extent(rect.w, frame_w, NATIVE_WIDTH),
+        h: scale_extent(rect.h, frame_h, NATIVE_HEIGHT),
+    }
+}
+
+/// Scale one native extent into frame pixels.
+fn scale_extent(value: u32, frame_len: usize, native_len: u32) -> u32 {
+    (u64::from(value) * frame_len as u64 / u64::from(native_len)) as u32
+}
+
+/// Center an `inner_w` x `inner_h` box in the frame.
+#[must_use]
+pub fn center_rect(inner_w: usize, inner_h: usize, frame_w: usize, frame_h: usize) -> Rect {
+    Rect {
+        x: frame_w.saturating_sub(inner_w) as i32 / 2,
+        y: frame_h.saturating_sub(inner_h) as i32 / 2,
+        w: inner_w.min(frame_w) as u32,
+        h: inner_h.min(frame_h) as u32,
+    }
+}
+
+/// Blit an RGB555 image stretched into `dest`, skipping `colorkey`
+/// words. A size match is a plain 1:1 blit; otherwise each dest
+/// pixel samples its nearest source pixel.
+#[allow(clippy::cast_possible_wrap)]
+pub fn blit_image_in_rect(frame: &mut Frame<'_>, image: &Rgb555Image, colorkey: u16, dest: &Rect) {
+    if !blit_target_ready(frame, image, dest) {
+        return;
+    }
+    for row in 0..dest.h as usize {
+        for col in 0..dest.w as usize {
+            blit_cover_pixel(frame, image, colorkey, dest, row, col);
+        }
+    }
+}
+
+/// Whether a cover blit has nonzero geometry and backing stores.
+fn blit_target_ready(frame: &Frame<'_>, image: &Rgb555Image, dest: &Rect) -> bool {
+    image.w > 0
+        && image.h > 0
+        && dest.w > 0
+        && dest.h > 0
+        && frame.buf.len() >= frame.w * frame.h
+        && image.words.len() >= image.w * image.h
+}
+
+/// Blit one cover-blit pixel with nearest-neighbor sampling.
+#[allow(clippy::cast_possible_wrap)]
+fn blit_cover_pixel(
+    frame: &mut Frame<'_>,
+    image: &Rgb555Image,
+    colorkey: u16,
+    dest: &Rect,
+    row: usize,
+    col: usize,
+) {
+    let dest_x = dest.x + col as i32;
+    let dest_y = dest.y + row as i32;
+    if dest_x < 0 || dest_y < 0 || dest_x >= frame.w as i32 || dest_y >= frame.h as i32 {
+        return;
+    }
+    let word = image.words[stretch_index(row, dest.h as usize, image.h) * image.w
+        + stretch_index(col, dest.w as usize, image.w)];
+    if word == colorkey {
+        return;
+    }
+    let (r, g, b) = expand_rgb555(word);
+    frame.buf[dest_y as usize * frame.w + dest_x as usize] = pack_xrgb(r, g, b);
+}
+
+/// One sprite layer painted into a scene frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SceneLayer<'a> {
+    /// Decoded sprite pixels.
+    pub image: &'a Rgb555Image,
+    /// Transparent word of the source body.
+    pub colorkey: u16,
+    /// Frame-space destination (cover-blitted when sizes differ).
+    pub dest: Rect,
+}
+
+/// Fill `background`, then paint layers back to front. Later layers
+/// cover earlier ones; colorkey pixels leave the canvas untouched.
+pub fn paint_scene_layers(frame: &mut Frame<'_>, background: u32, layers: &[SceneLayer<'_>]) {
+    fill_frame(frame, background);
+    for layer in layers {
+        blit_image_in_rect(frame, layer.image, layer.colorkey, &layer.dest);
+    }
+}
+
+/// Fill the whole frame when it has backing pixels.
+fn fill_frame(frame: &mut Frame<'_>, background: u32) {
+    let (w, h) = (frame.w, frame.h);
+    fill_rect(
+        frame,
+        &Rect {
+            x: 0,
+            y: 0,
+            w: w as u32,
+            h: h as u32,
+        },
+        background,
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -862,5 +1028,218 @@ mod tests {
         assert_eq!(frame.buf[1], 0xFFFFFF);
         assert_eq!(frame.buf[2], 0xFFFFFF);
         assert_eq!(frame.buf[4], 0);
+    }
+
+    #[test]
+    fn bind_pairs_codes_with_rects_in_order() {
+        let rects = vec![
+            Rect {
+                x: 0,
+                y: 0,
+                w: 10,
+                h: 10,
+            },
+            Rect {
+                x: 20,
+                y: 20,
+                w: 10,
+                h: 10,
+            },
+        ];
+        let bound = bind_controls(&[0x20, 0x50], &[true, false], &rects);
+        assert_eq!(bound.len(), 2);
+        assert_eq!(bound[0].code, 0x20);
+        assert!(bound[0].has_sprite);
+        assert_eq!(bound[0].rect, rects[0]);
+        assert_eq!(bound[1].rect, rects[1]);
+    }
+
+    #[test]
+    fn bind_truncates_to_the_shortest_input() {
+        // Playing ships fewer rects than entries: extras stay unlaid-out.
+        let rects = vec![Rect {
+            x: 1,
+            y: 2,
+            w: 3,
+            h: 4,
+        }];
+        let bound = bind_controls(&[1, 2, 3], &[true, true, true], &rects);
+        assert_eq!(bound.len(), 1);
+        assert_eq!(bound[0].code, 1);
+    }
+
+    #[test]
+    fn corners_build_sized_rects() {
+        let rect = rect_from_corners(30, 3, 612, 595);
+        assert_eq!(
+            rect,
+            Rect {
+                x: 30,
+                y: 3,
+                w: 582,
+                h: 592
+            }
+        );
+        assert_eq!(rect_from_corners(5, 5, 5, 9).w, 0);
+        assert_eq!(rect_from_corners(9, 9, 5, 5).w, 0);
+    }
+
+    #[test]
+    fn scale_keeps_native_identity() {
+        let rect = Rect {
+            x: 100,
+            y: 150,
+            w: 200,
+            h: 120,
+        };
+        assert_eq!(scale_rect_to_frame(&rect, 800, 600), rect);
+    }
+
+    #[test]
+    fn scale_shrinks_proportionally() {
+        let rect = Rect {
+            x: 400,
+            y: 300,
+            w: 800,
+            h: 600,
+        };
+        assert_eq!(
+            scale_rect_to_frame(&rect, 80, 60),
+            Rect {
+                x: 40,
+                y: 30,
+                w: 80,
+                h: 60
+            }
+        );
+    }
+
+    #[test]
+    fn center_places_box_mid_frame() {
+        assert_eq!(
+            center_rect(4, 2, 10, 8),
+            Rect {
+                x: 3,
+                y: 3,
+                w: 4,
+                h: 2
+            }
+        );
+        assert_eq!(
+            center_rect(20, 20, 10, 8),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 10,
+                h: 8
+            }
+        );
+    }
+
+    #[test]
+    fn cover_matches_plain_blit_at_same_size() {
+        let image = Rgb555Image::decode(&[0x00, 0x7C, 0xE0, 0x03], 2, 1).unwrap();
+        let mut buf = vec![0u32; 2];
+        blit_image_in_rect(
+            &mut Frame {
+                buf: &mut buf,
+                w: 2,
+                h: 1,
+            },
+            &image,
+            0xFFFF,
+            &Rect {
+                x: 0,
+                y: 0,
+                w: 2,
+                h: 1,
+            },
+        );
+        assert_eq!(buf, vec![pack_xrgb(255, 0, 0), pack_xrgb(0, 255, 0)]);
+    }
+
+    #[test]
+    fn cover_stretches_and_skips_colorkey() {
+        // 2x1 red/key stretched over 4x1: key columns stay background.
+        let image = Rgb555Image::decode(&[0x00, 0x7C, 0x00, 0x00], 2, 1).unwrap();
+        let mut buf = vec![0x123456u32; 4];
+        blit_image_in_rect(
+            &mut Frame {
+                buf: &mut buf,
+                w: 4,
+                h: 1,
+            },
+            &image,
+            0x0000,
+            &Rect {
+                x: 0,
+                y: 0,
+                w: 4,
+                h: 1,
+            },
+        );
+        let red = pack_xrgb(255, 0, 0);
+        assert_eq!(buf, vec![red, red, 0x123456, 0x123456]);
+    }
+
+    #[test]
+    fn cover_ignores_empty_targets() {
+        let image = Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap();
+        let mut buf = vec![0x123456u32; 4];
+        blit_image_in_rect(
+            &mut Frame {
+                buf: &mut buf,
+                w: 2,
+                h: 2,
+            },
+            &image,
+            0xFFFF,
+            &Rect {
+                x: 0,
+                y: 0,
+                w: 0,
+                h: 2,
+            },
+        );
+        assert_eq!(buf, vec![0x123456u32; 4]);
+    }
+
+    #[test]
+    fn scene_layers_paint_back_to_front() {
+        let red = Rgb555Image::decode(&[0x00, 0x7C, 0x00, 0x7C], 2, 1).unwrap();
+        let green = Rgb555Image::decode(&[0xE0, 0x03, 0xE0, 0x03], 2, 1).unwrap();
+        let mut buf = vec![0u32; 2];
+        paint_scene_layers(
+            &mut Frame {
+                buf: &mut buf,
+                w: 2,
+                h: 1,
+            },
+            0x000000,
+            &[
+                SceneLayer {
+                    image: &red,
+                    colorkey: 0xFFFF,
+                    dest: Rect {
+                        x: 0,
+                        y: 0,
+                        w: 2,
+                        h: 1,
+                    },
+                },
+                SceneLayer {
+                    image: &green,
+                    colorkey: 0xFFFF,
+                    dest: Rect {
+                        x: 1,
+                        y: 0,
+                        w: 1,
+                        h: 1,
+                    },
+                },
+            ],
+        );
+        assert_eq!(buf[0], pack_xrgb(255, 0, 0));
+        assert_eq!(buf[1], pack_xrgb(0, 255, 0));
     }
 }

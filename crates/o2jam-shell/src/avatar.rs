@@ -8,8 +8,10 @@
 
 use std::collections::HashMap;
 
-use o2jam_file::{AvatarItemTable, Sprite55};
-use o2jam_render::{blit_rgb555, Frame, Rgb555Image};
+use o2jam_file::{AvatarItemTable, Bnd, ControlBlock, ControlList, Sprite55};
+use o2jam_render::{
+    blit_rgb555, center_rect, rect_from_corners, scale_rect_to_frame, Frame, Rect, Rgb555Image,
+};
 
 /// Archive body name for a table filename: same stem, `.ojs`
 /// container (the table spells `.oji`).
@@ -80,6 +82,17 @@ impl AvatarFigure {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.layers.is_empty()
+    }
+
+    /// Pixel extent covering every layer anchor plus size.
+    #[must_use]
+    pub fn extent(&self) -> (usize, usize) {
+        let (mut w, mut h) = (0usize, 0usize);
+        for layer in &self.layers {
+            w = w.max(layer.dx.max(0) as usize + layer.image.w);
+            h = h.max(layer.dy.max(0) as usize + layer.image.h);
+        }
+        (w, h)
     }
 
     /// Paint every layer with its top-left at `(x, y)` plus anchor,
@@ -154,6 +167,152 @@ pub fn load_worn_figure(
     figure
 }
 
+/// ControlList block per lobby scene (see `docs/file-formats/opi.md`).
+pub const AVI_BLOCK: &str = "STATE_AVI";
+/// Splash logo sprite bound by `STATE_AVI` (`IDC_BACK_LOGO`).
+pub const AVI_LOGO_SPRITE: &str = "O2mediaLogo.ojs";
+/// Channel-select block (no `.bnd` bind file: bare `BOUND` line).
+pub const CHANNEL_BLOCK: &str = "STATE_CHANNEL";
+/// Multiplayer-lobby block laid out by `State_Room.bnd`.
+pub const ROOM_BLOCK: &str = "STATE_ROOM";
+/// Room layout bind file (75 rects for 76 entries minus self).
+pub const ROOM_BIND_FILE: &str = "State_Room.bnd";
+/// Pre-game room block laid out by `State_Waiting.bnd`.
+pub const WAITING_BLOCK: &str = "STATE_WAITING";
+/// Loading-gate art shown while the song table stages.
+pub const LOADING_SPRITE: &str = "MusicLoading.ojs";
+/// Results block (`Result_WinLose.ojs`, number fonts, avatar).
+pub const RESULT_BLOCK: &str = "STATE_RESULT";
+
+/// One `ControlList` entry with its `.bnd` layout rect.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScenePlacement {
+    /// Control id (`IDC_...`).
+    pub id: String,
+    /// Control code (top byte names the state).
+    pub code: u32,
+    /// Linked sprite body, when the entry names one.
+    pub sprite: Option<String>,
+    /// Native-canvas layout rect.
+    pub rect: Rect,
+}
+
+/// Find a `STATE_`/`DIALOG_` block by name.
+#[must_use]
+pub fn scene_block<'a>(list: &'a ControlList, name: &str) -> Option<&'a ControlBlock> {
+    list.blocks.iter().find(|block| block.name == name)
+}
+
+/// Sprite bodies one block references, in file order without repeats.
+#[must_use]
+pub fn scene_sprite_names(block: &ControlBlock) -> Vec<String> {
+    let mut names = Vec::new();
+    for entry in block.all_entries() {
+        push_unique_name(&mut names, entry.sprite.clone());
+    }
+    names
+}
+
+/// Push a sprite name once, skipping missing refs.
+fn push_unique_name(names: &mut Vec<String>, sprite: Option<String>) {
+    if let Some(name) = sprite {
+        if !name.is_empty() && !names.contains(&name) {
+            names.push(name);
+        }
+    }
+}
+
+/// Pair block entries (minus the block header) with `.bnd` rects in
+/// file order, truncating to the shorter side (the Playing subset
+/// ships fewer rects than entries).
+#[must_use]
+pub fn bind_scene_rects(block: &ControlBlock, bnd: &Bnd) -> Vec<ScenePlacement> {
+    let entries = block.all_entries();
+    entries
+        .iter()
+        .skip(1)
+        .zip(bnd.rects.iter())
+        .map(|(entry, corners)| ScenePlacement {
+            id: entry.id.clone(),
+            code: entry.code,
+            sprite: entry.sprite.clone(),
+            rect: rect_from_corners(corners.x1, corners.y1, corners.x2, corners.y2),
+        })
+        .collect()
+}
+
+/// Load every named sprite body, skipping missing or undecodable
+/// bodies (one bad sprite never blanks the scene).
+#[must_use]
+pub fn load_scene_figures(archive: &[u8], names: &[String]) -> HashMap<String, AvatarFigure> {
+    let mut figures = HashMap::new();
+    for name in names {
+        if figures.contains_key(name) {
+            continue;
+        }
+        if let Some(figure) = load_archive_sprite(archive, name) {
+            figures.insert(name.clone(), figure);
+        }
+    }
+    figures
+}
+
+/// Load the splash logo (`O2mediaLogo.ojs`) from the archive.
+#[must_use]
+pub fn load_avi_logo(archive: &[u8]) -> Option<AvatarFigure> {
+    load_archive_sprite(archive, AVI_LOGO_SPRITE)
+}
+
+/// Frame-space origin of a placement (native rect scaled down).
+#[must_use]
+pub fn placement_origin_in_frame(
+    placement: &ScenePlacement,
+    frame_w: usize,
+    frame_h: usize,
+) -> (i32, i32) {
+    let scaled = scale_rect_to_frame(&placement.rect, frame_w, frame_h);
+    (scaled.x, scaled.y)
+}
+
+/// Paint every placed figure at its scaled layout origin.
+/// Placements without a loaded figure are skipped.
+pub fn paint_scene_figures(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    figures: &HashMap<String, AvatarFigure>,
+) {
+    let (w, h) = (frame.w, frame.h);
+    for placement in placements {
+        paint_placed_figure(frame, placement, figures, w, h);
+    }
+}
+
+/// Paint one placed figure, if its sprite loaded.
+fn paint_placed_figure(
+    frame: &mut Frame<'_>,
+    placement: &ScenePlacement,
+    figures: &HashMap<String, AvatarFigure>,
+    frame_w: usize,
+    frame_h: usize,
+) {
+    let Some(name) = placement.sprite.as_ref() else {
+        return;
+    };
+    let Some(figure) = figures.get(name) else {
+        return;
+    };
+    let (x, y) = placement_origin_in_frame(placement, frame_w, frame_h);
+    figure.paint(frame, x, y);
+}
+
+/// Center of an avatar-sized figure in the frame (Waiting lobby
+/// portraits and Result figures share this anchor).
+#[must_use]
+pub fn avatar_center_origin(figure: &AvatarFigure, frame_w: usize, frame_h: usize) -> (i32, i32) {
+    let (w, h) = figure.extent();
+    let centered = center_rect(w, h, frame_w, frame_h);
+    (centered.x, centered.y)
+}
 /// Pick the sprite filenames one equipped item contributes to the
 /// worn figure (heuristic from 1541 real rows, exe part logic OPEN):
 /// slots 0–1 are icons (never worn); otherwise the wearer's parity
@@ -440,5 +599,146 @@ mod avatar_figure_tests {
             0,
         );
         assert_eq!(buf, vec![0x123456u32; 4]);
+    }
+
+    fn room_control_text() -> String {
+        [
+            "NUMBER_OF_STATE 0x01",
+            "STATE_ROOM 0x02",
+            "{",
+            "BOUND \"State_Room.bnd\"",
+            "IDC_ROOM 0X00100000",
+            "IDC_LIST 0X10500001 \"Room_List.ojs\"",
+            "IDC_BUTTON 0X20500002 \"Room_Button.ojs\"",
+            "}",
+            "",
+        ]
+        .join("\n")
+    }
+
+    fn bnd_blob(rects: &[(u32, u32, u32, u32)]) -> Vec<u8> {
+        let mut blob = vec![0xFF; 4];
+        blob.extend_from_slice(&(rects.len() as u16).to_le_bytes());
+        for (x1, y1, x2, y2) in rects {
+            blob.extend_from_slice(&x1.to_le_bytes());
+            blob.extend_from_slice(&y1.to_le_bytes());
+            blob.extend_from_slice(&x2.to_le_bytes());
+            blob.extend_from_slice(&y2.to_le_bytes());
+        }
+        blob
+    }
+
+    #[test]
+    fn scene_block_finds_room_by_name() {
+        let list = o2jam_file::parse_control_list(&room_control_text()).unwrap();
+        assert_eq!(scene_block(&list, ROOM_BLOCK).unwrap().name, ROOM_BLOCK);
+        assert!(scene_block(&list, RESULT_BLOCK).is_none());
+    }
+
+    #[test]
+    fn scene_sprite_names_keep_file_order_without_repeats() {
+        let list = o2jam_file::parse_control_list(&room_control_text()).unwrap();
+        let block = scene_block(&list, ROOM_BLOCK).unwrap();
+        assert_eq!(
+            scene_sprite_names(block),
+            vec!["Room_List.ojs".to_owned(), "Room_Button.ojs".to_owned()]
+        );
+    }
+
+    #[test]
+    fn scene_rects_pair_entries_with_bnd_corners() {
+        // Entry 0 (the block itself) takes no rect; rect i covers
+        // entry i + 1, so IDC_LIST lands on the first corner run.
+        let list = o2jam_file::parse_control_list(&room_control_text()).unwrap();
+        let block = scene_block(&list, ROOM_BLOCK).unwrap();
+        let bnd =
+            o2jam_file::parse_bnd(&bnd_blob(&[(0, 0, 400, 300), (400, 0, 800, 600)])).unwrap();
+        let placed = bind_scene_rects(block, &bnd);
+        assert_eq!(placed.len(), 2);
+        assert_eq!(placed[0].id, "IDC_LIST");
+        assert_eq!(placed[0].sprite.as_deref(), Some("Room_List.ojs"));
+        assert_eq!(
+            placed[0].rect,
+            o2jam_render::Rect {
+                x: 0,
+                y: 0,
+                w: 400,
+                h: 300
+            }
+        );
+        assert_eq!(placed[1].id, "IDC_BUTTON");
+    }
+
+    #[test]
+    fn scene_rects_truncate_to_fewer_rects() {
+        let list = o2jam_file::parse_control_list(&room_control_text()).unwrap();
+        let block = scene_block(&list, ROOM_BLOCK).unwrap();
+        let bnd = o2jam_file::parse_bnd(&bnd_blob(&[(8, 8, 16, 16)])).unwrap();
+        let placed = bind_scene_rects(block, &bnd);
+        assert_eq!(placed.len(), 1);
+        assert_eq!(placed[0].id, "IDC_LIST");
+    }
+
+    #[test]
+    fn avi_logo_loads_under_its_control_name() {
+        let red = sprite55_blob(1, 0x0000, 1, 1, &[0x00, 0x7C]);
+        let archive = opa_blob(&[(AVI_LOGO_SPRITE, &red)]);
+        assert_eq!(load_avi_logo(&archive).unwrap().len(), 1);
+        assert!(load_avi_logo(b"garbage").is_none());
+    }
+
+    #[test]
+    fn scene_figures_paint_at_scaled_origins() {
+        // Native x 400 on an 80-wide frame scales to x 40.
+        let red = sprite55_blob(1, 0xFFFF, 1, 1, &[0x00, 0x7C]);
+        let archive = opa_blob(&[("Room_List.ojs", &red)]);
+        let figures = load_scene_figures(&archive, &["Room_List.ojs".to_owned()]);
+        let list = o2jam_file::parse_control_list(&room_control_text()).unwrap();
+        let block = scene_block(&list, ROOM_BLOCK).unwrap();
+        let bnd = o2jam_file::parse_bnd(&bnd_blob(&[(400, 0, 800, 600), (0, 0, 8, 8)])).unwrap();
+        let placed = bind_scene_rects(block, &bnd);
+        assert_eq!(placement_origin_in_frame(&placed[0], 80, 60), (40, 0));
+        let mut buf = vec![0u32; 80 * 60];
+        paint_scene_figures(
+            &mut Frame {
+                buf: &mut buf,
+                w: 80,
+                h: 60,
+            },
+            &placed,
+            &figures,
+        );
+        assert_eq!(buf[40], o2jam_render::pack_xrgb(255, 0, 0));
+        assert_eq!(buf[0], 0);
+    }
+
+    #[test]
+    fn scene_figures_skip_missing_sprites() {
+        let list = o2jam_file::parse_control_list(&room_control_text()).unwrap();
+        let block = scene_block(&list, ROOM_BLOCK).unwrap();
+        let bnd = o2jam_file::parse_bnd(&bnd_blob(&[(0, 0, 8, 8), (0, 0, 8, 8)])).unwrap();
+        let placed = bind_scene_rects(block, &bnd);
+        let mut buf = vec![0x123456u32; 8 * 8];
+        paint_scene_figures(
+            &mut Frame {
+                buf: &mut buf,
+                w: 8,
+                h: 8,
+            },
+            &placed,
+            &std::collections::HashMap::new(),
+        );
+        assert_eq!(buf, vec![0x123456u32; 8 * 8]);
+    }
+
+    #[test]
+    fn figure_extent_covers_anchors_and_sizes() {
+        assert_eq!(AvatarFigure::default().extent(), (0, 0));
+        let red = sprite55_blob(1, 0x0000, 1, 1, &[0x00, 0x7C]);
+        let sprite = o2jam_file::parse_sprite55(&red).unwrap();
+        let figure = AvatarFigure::from_sprite55(&sprite);
+        assert_eq!(figure.extent(), (1, 1));
+        let (x, y) = avatar_center_origin(&figure, 10, 8);
+        assert_eq!((x, y), (4, 3));
     }
 }
