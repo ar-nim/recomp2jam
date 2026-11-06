@@ -7,10 +7,12 @@ use super::super::avatar::AvatarFigure;
 use super::super::playing::{HighwayGeometry, LivePlay};
 use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
-use super::paint::{paint_channel_list, paint_result, paint_room_list, paint_screen};
+use super::paint::{
+    paint_channel_list, paint_result, paint_room_list, paint_screen, paint_waiting_members,
+};
 use crate::MenuKey;
 use o2jam_audio::{AudioBackend, PcmSamples};
-use o2jam_net::{ChannelState, RoomListEntry};
+use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry};
 use o2jam_render::Frame;
 
 /// Game loop that shows each screen's scene and walks the flow.
@@ -28,6 +30,7 @@ pub struct ScreenGame {
     highlight: usize,
     rooms: Vec<RoomListEntry>,
     room_highlight: usize,
+    waiting: Option<JoinedRoom>,
 }
 
 /// Key-sound bank plus backend for windowed play.
@@ -51,6 +54,7 @@ impl ScreenGame {
             highlight: 0,
             rooms: Vec::new(),
             room_highlight: 0,
+            waiting: None,
         }
     }
 
@@ -138,6 +142,12 @@ impl ScreenGame {
         self
     }
 
+    /// Remember the joined room; Waiting paints its eight seats.
+    pub fn set_joined_room(&mut self, room: JoinedRoom) -> &mut Self {
+        self.waiting = Some(room);
+        self
+    }
+
     /// Paint with an explicit clock (tests use this; live paint reads
     /// the wall clock).
     pub fn paint_at(&mut self, frame: &mut Frame<'_>, now_ms: u64) {
@@ -162,6 +172,13 @@ impl ScreenGame {
                 paint_room_list(frame, &self.rooms, self.room_highlight);
             }
             Screen::Result => paint_result(frame, self.avatar.as_ref(), self.playing.score()),
+            Screen::Waiting => {
+                if let Some(room) = &self.waiting {
+                    paint_waiting_members(frame, room);
+                } else {
+                    paint_screen(frame, Screen::Waiting);
+                }
+            }
             screen => paint_screen(frame, screen),
         }
     }
@@ -230,12 +247,12 @@ impl GameLoop for ScreenGame {
 
 #[cfg(test)]
 mod game_tests {
-    use super::super::paint::background_of;
+    use super::super::paint::{background_of, seat_origin};
     use super::*;
     use crate::avatar::AvatarFigure;
     use crate::screen::Screen;
     use crate::{GameLoop, MenuKey};
-    use o2jam_net::{ChannelState, RoomListEntry};
+    use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
     use o2jam_render::{pack_xrgb, Frame};
 
     #[test]
@@ -558,6 +575,94 @@ mod game_tests {
         assert_eq!(buf[12 * 64 + 16], pack_xrgb(0xFF, 0xFF, 0xFF));
         assert_eq!(buf[12 * 64 + 10], pack_xrgb(0xFF, 0xD0, 0x20));
         assert_eq!(buf[0], background_of(Screen::Room));
+    }
+
+    fn waiting_room() -> JoinedRoom {
+        let member = RoomMember {
+            nickname: "host".to_owned(),
+            level: 9,
+            gender: 0,
+            gem: 0,
+            master: true,
+            team: 0,
+            ready: true,
+            music_state: 0,
+            equipment: [0; 17],
+            music_ids: Vec::new(),
+            cash_point: 0,
+            free_pass: 0,
+            playing_state: 0,
+            administrator: false,
+            super_manager: false,
+        };
+        JoinedRoom {
+            member_id: 0,
+            team: 1,
+            title: "Jam".to_owned(),
+            music_id: 0,
+            arena: 0,
+            key_mode: 2,
+            game_mode: 0,
+            difficulty: 0,
+            speed: 1,
+            has_super_manager: false,
+            user_count: 2,
+            slots: vec![RoomSlot {
+                index: 0,
+                state_code: 1,
+                member: Some(member),
+            }],
+            skills: Vec::new(),
+            premium: false,
+            champion: None,
+            champion_streak: None,
+        }
+    }
+
+    fn walk_to_waiting(game: &mut ScreenGame) {
+        game.lane_key(3, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+    }
+
+    #[test]
+    fn waiting_paints_joined_members_with_ready_flags() {
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        let mut buf = vec![0u32; 80 * 64];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 80,
+                h: 64,
+            },
+            0,
+        );
+        assert_eq!(buf[0], background_of(Screen::Waiting));
+        // Ready host sits at seat 1: green ready dot left of its row.
+        let (x, y) = seat_origin(1, 80, 64);
+        assert_eq!(
+            buf[(y + 1) as usize * 80 + (x - 6 + 1) as usize],
+            pack_xrgb(0x30, 0xE0, 0x30)
+        );
+    }
+
+    #[test]
+    fn waiting_without_room_paints_lobby_card() {
+        let mut game = ScreenGame::new();
+        walk_to_waiting(&mut game);
+        let mut buf = vec![0u32; 16 * 12];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 16,
+                h: 12,
+            },
+            0,
+        );
+        assert_eq!(buf[0], background_of(Screen::Waiting));
     }
 
     #[test]

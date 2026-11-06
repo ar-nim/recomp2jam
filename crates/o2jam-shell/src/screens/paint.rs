@@ -6,7 +6,7 @@
 use super::super::avatar::AvatarFigure;
 use super::super::playing::{HighwayGeometry, PlayingView};
 use super::super::screen::Screen;
-use o2jam_net::{ChannelState, RoomListEntry};
+use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry, RoomSlot, RoomSlotState};
 use o2jam_render::{
     draw_number, draw_text, fill_rect, number_width, pack_xrgb, text_width, Frame, Rect,
 };
@@ -113,6 +113,191 @@ pub(crate) fn paint_room_list(frame: &mut Frame<'_>, rooms: &[RoomListEntry], hi
                 pack_xrgb(0xFF, 0xD0, 0x20),
             );
         }
+    }
+}
+
+/// Seats shown on the waiting screen: self plus the seven wire slots.
+pub(crate) const WAITING_SEATS: usize = 8;
+/// Peer slots carried beside self in [`JoinedRoom`].
+const WAITING_PEERS: usize = 7;
+/// Waiting rows share the lobby row height.
+const WAITING_ROW_H: i32 = 8;
+
+/// One waiting-room seat view: display name plus team/ready state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WaitingSeat {
+    team: u8,
+    name: String,
+    kind: SeatKind,
+}
+
+/// Seat occupancy: only occupied seats carry a name and ready flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SeatKind {
+    Occupied { ready: bool },
+    Empty,
+    Locked,
+}
+
+impl WaitingSeat {
+    /// Display name (`None` for vacant/locked seats).
+    #[must_use]
+    pub(crate) fn display_name(&self) -> Option<&str> {
+        match self.kind {
+            SeatKind::Occupied { .. } => Some(&self.name),
+            SeatKind::Empty | SeatKind::Locked => None,
+        }
+    }
+
+    /// Ready flag (vacant/locked seats are never ready).
+    #[must_use]
+    pub(crate) fn is_ready(&self) -> bool {
+        matches!(self.kind, SeatKind::Occupied { ready: true })
+    }
+}
+
+/// Team button letter (`0` -> `A` .. `7` -> `H`); `?` when out of range.
+fn team_letter(team: u8) -> char {
+    if team < 8 {
+        (b'A' + team) as char
+    } else {
+        '?'
+    }
+}
+
+/// Our own seat: name is local-only (the wire sends no self nickname).
+fn self_seat(room: &JoinedRoom) -> WaitingSeat {
+    WaitingSeat {
+        team: room.team,
+        name: "YOU".to_owned(),
+        kind: SeatKind::Occupied { ready: false },
+    }
+}
+
+/// Vacant seat placeholder.
+fn empty_seat() -> WaitingSeat {
+    WaitingSeat {
+        team: 0,
+        name: String::new(),
+        kind: SeatKind::Empty,
+    }
+}
+
+/// View for one wire slot: named when occupied, locked/empty otherwise.
+fn peer_seat(slot: &RoomSlot) -> WaitingSeat {
+    match &slot.member {
+        Some(member) => WaitingSeat {
+            team: member.team,
+            name: member.nickname.clone(),
+            kind: SeatKind::Occupied {
+                ready: member.ready,
+            },
+        },
+        None if slot.state_code == RoomSlotState::Locked as i32 => WaitingSeat {
+            team: 0,
+            name: String::new(),
+            kind: SeatKind::Locked,
+        },
+        None => empty_seat(),
+    }
+}
+
+/// Eight seat views: our seat first, then the wire slots, padded empty.
+///
+/// The wire carries seven peer slots beside self (`JoinedRoom.slots`);
+/// together they are the eight waiting-room seats.
+#[must_use]
+pub(crate) fn waiting_seats(room: &JoinedRoom) -> Vec<WaitingSeat> {
+    let mut seats = Vec::with_capacity(WAITING_SEATS);
+    seats.push(self_seat(room));
+    for slot in room.slots.iter().take(WAITING_PEERS) {
+        seats.push(peer_seat(slot));
+    }
+    while seats.len() < WAITING_SEATS {
+        seats.push(empty_seat());
+    }
+    seats
+}
+
+/// One seat row: seat, team, name, flag (`R` ready, `-` waiting).
+/// Vacant seats keep their index with a `---`/`LOCK` placeholder.
+fn waiting_row_text(index: usize, seat: &WaitingSeat) -> String {
+    match seat.kind {
+        SeatKind::Occupied { ready } => {
+            let flag = if ready { 'R' } else { '-' };
+            format!(
+                "{} {} {} {}",
+                index,
+                team_letter(seat.team),
+                seat.name,
+                flag
+            )
+        }
+        SeatKind::Empty => format!("{index} - ---"),
+        SeatKind::Locked => format!("{index} - LOCK"),
+    }
+}
+
+/// Ready-dot ink: green when ready, dim otherwise.
+fn ready_dot_color(ready: bool) -> u32 {
+    if ready {
+        pack_xrgb(0x30, 0xE0, 0x30)
+    } else {
+        pack_xrgb(0x50, 0x50, 0x50)
+    }
+}
+
+/// Top-left of seat `index`: two columns by four rows, relative to frame.
+#[must_use]
+pub(crate) fn seat_origin(index: usize, w: usize, h: usize) -> (i32, i32) {
+    let col = (index % 2) as i32;
+    let row = (index / 2) as i32;
+    (
+        w as i32 / 8 + col * (w as i32 / 2),
+        h as i32 / 4 + row * WAITING_ROW_H,
+    )
+}
+
+/// Paint the eight waiting-room seats with names and ready flags.
+pub(crate) fn paint_waiting_members(frame: &mut Frame<'_>, room: &JoinedRoom) {
+    let (w, h) = (frame.w, frame.h);
+    fill_rect(
+        frame,
+        &Rect {
+            x: 0,
+            y: 0,
+            w: w as u32,
+            h: h as u32,
+        },
+        background_of(Screen::Waiting),
+    );
+    paint_title(frame, "WAITING");
+    for (index, seat) in waiting_seats(room).iter().enumerate() {
+        paint_waiting_seat(frame, index, seat);
+    }
+}
+
+/// Paint one seat row plus its ready dot (vacant seats have no dot).
+fn paint_waiting_seat(frame: &mut Frame<'_>, index: usize, seat: &WaitingSeat) {
+    let occupied = seat.display_name().is_some();
+    let (x, y) = seat_origin(index, frame.w, frame.h);
+    let ink = if occupied {
+        pack_xrgb(0xFF, 0xFF, 0xFF)
+    } else {
+        pack_xrgb(0x70, 0x70, 0x70)
+    };
+    draw_text(frame, x, y, &waiting_row_text(index, seat), ink);
+    if occupied {
+        fill_rect(
+            frame,
+            &Rect {
+                x: x - 6,
+                y,
+                w: 3,
+                h: 5,
+            },
+            ready_dot_color(seat.is_ready()),
+        );
     }
 }
 
@@ -273,6 +458,7 @@ pub fn paint_screen(frame: &mut Frame<'_>, screen: Screen) {
 mod paint_tests {
     use super::*;
     use crate::screen::Screen;
+    use o2jam_net::{JoinedRoom, RoomMember, RoomSlot};
     use o2jam_render::{pack_xrgb, Frame};
 
     fn painted(screen: Screen, w: usize, h: usize) -> Vec<u32> {
@@ -337,6 +523,118 @@ mod paint_tests {
         assert_eq!(buf[38 * 128 + 53], ink);
         let room = painted(Screen::Room, 128, 96);
         assert!(room.contains(&ink));
+    }
+
+    fn waiting_room() -> JoinedRoom {
+        let member = RoomMember {
+            nickname: "host".to_owned(),
+            level: 9,
+            gender: 0,
+            gem: 0,
+            master: true,
+            team: 0,
+            ready: true,
+            music_state: 0,
+            equipment: [0; 17],
+            music_ids: Vec::new(),
+            cash_point: 0,
+            free_pass: 0,
+            playing_state: 0,
+            administrator: false,
+            super_manager: false,
+        };
+        JoinedRoom {
+            member_id: 0,
+            team: 1,
+            title: "Jam".to_owned(),
+            music_id: 0,
+            arena: 0,
+            key_mode: 2,
+            game_mode: 0,
+            difficulty: 0,
+            speed: 1,
+            has_super_manager: false,
+            user_count: 2,
+            slots: vec![
+                RoomSlot {
+                    index: 0,
+                    state_code: 1,
+                    member: Some(member),
+                },
+                RoomSlot {
+                    index: 1,
+                    state_code: 0,
+                    member: None,
+                },
+                RoomSlot {
+                    index: 2,
+                    state_code: 2,
+                    member: None,
+                },
+            ],
+            skills: Vec::new(),
+            premium: false,
+            champion: None,
+            champion_streak: None,
+        }
+    }
+
+    #[test]
+    fn waiting_seats_pad_self_plus_slots_to_eight() {
+        let seats = waiting_seats(&waiting_room());
+        assert_eq!(seats.len(), WAITING_SEATS);
+        assert_eq!(seats[0].display_name(), Some("YOU"));
+        assert_eq!(seats[1].display_name(), Some("host"));
+        assert!(seats[1].is_ready());
+        assert!(!seats[0].is_ready());
+        assert_eq!(seats[2].display_name(), None);
+        assert_eq!(seats[3].kind, SeatKind::Locked);
+        assert!(seats[4..].iter().all(|seat| seat.kind == SeatKind::Empty));
+    }
+
+    #[test]
+    fn waiting_row_text_shows_name_team_and_ready() {
+        let seats = waiting_seats(&waiting_room());
+        assert_eq!(waiting_row_text(1, &seats[1]), "1 A host R");
+        assert_eq!(waiting_row_text(0, &seats[0]), "0 B YOU -");
+        assert_eq!(waiting_row_text(2, &seats[2]), "2 - ---");
+        assert_eq!(waiting_row_text(3, &seats[3]), "3 - LOCK");
+    }
+
+    #[test]
+    fn waiting_paints_ready_dots_for_seats() {
+        let room = waiting_room();
+        let mut buf = vec![0u32; 80 * 64];
+        paint_waiting_members(
+            &mut Frame {
+                buf: &mut buf,
+                w: 80,
+                h: 64,
+            },
+            &room,
+        );
+        let waiting_bg = background_of(Screen::Waiting);
+        let ready_green = pack_xrgb(0x30, 0xE0, 0x30);
+        let dim = pack_xrgb(0x50, 0x50, 0x50);
+        assert_eq!(buf[0], waiting_bg);
+        // Seat 1 (ready host) sits in column 1, row 0: dot at (44, 16).
+        let (host_x, host_y) = seat_origin(1, 80, 64);
+        assert_eq!(
+            buf[(host_y + 1) as usize * 80 + (host_x - 6 + 1) as usize],
+            ready_green
+        );
+        // Seat 0 (self, not ready) keeps a dim dot.
+        let (self_x, self_y) = seat_origin(0, 80, 64);
+        assert_eq!(
+            buf[(self_y + 1) as usize * 80 + (self_x - 6 + 1) as usize],
+            dim
+        );
+        // Seat 2 (empty) has no dot: background shows through.
+        let (empty_x, empty_y) = seat_origin(2, 80, 64);
+        assert_eq!(
+            buf[(empty_y + 1) as usize * 80 + (empty_x - 6 + 1) as usize],
+            waiting_bg
+        );
     }
 
     #[test]
