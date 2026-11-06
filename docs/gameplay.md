@@ -93,22 +93,25 @@ allocating 8592 (`0x2190`)-byte slots), word stores (files
 zeroing (files `0x13fb6f`/`0x13fd8e`). So `X` is populated from
 other objects, never computed in the scorer — the "read from
 some other variable" half of the report is confirmed.
-The live incremented neighbor is `+0x3972`: `+1` per
-Cool/Good hit via `FUN_00541620` (file `0x141620`, gated on a
-flag bit and mode `!= 6`), reset to `0` on Bad AND Miss —
-shared tail block at file `0x16ebbd` zeroes it iff the
-judgement flag is `0x40` or `0x80` (`cmpl $0x40` / `je` plus
-`cmpl $0x80` / `jne`-skip; `0x180` flows skip), zeroed at init
-(files `0x4de91e`/`0x4de9cc`). An earlier "Miss-only, not
-reset on Bad" reading missed the `0x40` arm — corrected
-(player report caught it). Without jam the Cool/Good bonus
-terms vanish (`200 + 10*0`, `100 + 5*0`), matching the report.
-Its profile (builds on hits, dies on Bad/Miss, consumed by
-the scorer, synced cross-object) fits the live jam counter —
-but the `+0x3972`→`+0x396e` mirror cadence stays structurally
-open (no direct copy observed). `o2jam-game` implements the
-verified bases (`Cool +200`, `Good +100`, `Bad +4`,
-`Miss −10` floored); variable terms stay pending.
+The live incremented neighbor is `+0x3972` — but it is the
+regular COMBO counter, not jam (player report corrected a
+mislabel here): `+1` per Cool/Good hit via `FUN_00541620`
+(file `0x141620`, gated on a flag bit and mode `!= 6`),
+reset to `0` on Bad AND Miss (shared tail file `0x16ebbd`,
+flag `0x40`/`0x80`), zeroed at init, max-tracked into `+0x3974`
+by the scorer (file `0x1706da`–`0x1706ef`). This matches the
+combo rule exactly (0x10/0x20 continue, 0x40/Miss break).
+The JAM counter is `X` itself (`+0x396e`, sub `+0x214e`),
+managed inside the scorer `FUN_00570510`: `+1` via adder
+`0x540a20` (file `0x140a20`) gated on live-combo beating a
+per-jam-level threshold table (`+0xb66` indexed by `X`, file
+`0x17071d`), reset to `0` on the Bad/Miss branch (file
+`0x170936`, after snapshotting via `0x5407f0` — likely
+maxJam), zeroed at init/setup. Jam multiplies the score
+(`200+10X`, `100+5X`); at zero jam Cool/Good score flat,
+matching the report. `o2jam-game` still implements only the
+verified bases until the Good-path jam-increment reachability
+is pinned down.
 
 ## Room teams — UI + client send VERIFIED, scoring server-side
 
