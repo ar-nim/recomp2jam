@@ -1098,6 +1098,100 @@ impl WireMessage for RoomCreated {
     }
 }
 
+/// `EquipItem` 5004 request: wear `item_id` in equipment `slot`.
+///
+/// Body is two little-endian `i32` words, slot first. The send
+/// builder stores the opcode as `u16`, stamps length `4`, then
+/// appends both args as 4-byte words (VA `0x4a4ec8`, file
+/// `0xa4ec8`); both C→S call sites pass slot then item (VAs
+/// `0x4a4af4`/`0x4a4bcb`, files `0xa4af4`/`0xa4bcb`). The server
+/// echoes the result as [`EquipItemResponse`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EquipItem {
+    /// Equipment slot index (`0..EQUIPMENT_SLOTS`;
+    /// `crates/o2jam-net/src/character.rs`). The client derives it
+    /// from the item record and range-checks `0 <= slot < 0x11`
+    /// (VA `0x4a4baa`, file `0xa4baa`).
+    pub slot: i32,
+    /// Item id from `Itemdata_Korea.dat` (`1..=1541`); `0` is the
+    /// empty-slot value (see `CharacterInfo::equipment`).
+    pub item_id: i32,
+}
+
+/// Body length of [`EquipItem`]: two `i32` words.
+const EQUIP_ITEM_BODY_LEN: usize = 8;
+
+impl WireMessage for EquipItem {
+    const COMMAND: u16 = 5004;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = Vec::with_capacity(EQUIP_ITEM_BODY_LEN);
+        body.extend_from_slice(&self.slot.to_le_bytes());
+        body.extend_from_slice(&self.item_id.to_le_bytes());
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < EQUIP_ITEM_BODY_LEN {
+            return Err(Error::TruncatedMessage {
+                need: EQUIP_ITEM_BODY_LEN,
+                have: body.len(),
+            });
+        }
+        if body.len() > EQUIP_ITEM_BODY_LEN {
+            return Err(Error::TrailingBytes(body.len() - EQUIP_ITEM_BODY_LEN));
+        }
+        Ok(Self {
+            slot: i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+            item_id: i32::from_le_bytes([body[4], body[5], body[6], body[7]]),
+        })
+    }
+}
+
+/// `EquipItem` 5005 response: the server's equip verdict.
+///
+/// Body is one little-endian `i32`. The S→C handler (dispatched by
+/// `cmpl $0x138d` / `je 0x4a5fe8`, VAs `0x4a5570`/`0x4a5586`,
+/// files `0xa5570`/`0xa5586`) reads a single `i32` (VA `0x4a5fe8`,
+/// file `0xa5fe8`): nonzero routes to the equip-apply path
+/// (`0x4a3c80`, file `0xa3c80`), zero to the remove path
+/// (`0x4a3dc0`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EquipItemResponse {
+    /// Echoed item id; `0` means the remove/failure path.
+    pub item_id: i32,
+}
+
+/// Body length of [`EquipItemResponse`]: one `i32` word.
+const EQUIP_ITEM_RESPONSE_BODY_LEN: usize = 4;
+
+impl WireMessage for EquipItemResponse {
+    const COMMAND: u16 = 5005;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = Vec::with_capacity(EQUIP_ITEM_RESPONSE_BODY_LEN);
+        body.extend_from_slice(&self.item_id.to_le_bytes());
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < EQUIP_ITEM_RESPONSE_BODY_LEN {
+            return Err(Error::TruncatedMessage {
+                need: EQUIP_ITEM_RESPONSE_BODY_LEN,
+                have: body.len(),
+            });
+        }
+        if body.len() > EQUIP_ITEM_RESPONSE_BODY_LEN {
+            return Err(Error::TrailingBytes(
+                body.len() - EQUIP_ITEM_RESPONSE_BODY_LEN,
+            ));
+        }
+        Ok(Self {
+            item_id: i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+        })
+    }
+}
+
 /// Keep [`Request`]/[`Response`]/[`Generic`] ids consistent with
 /// the message types above.
 #[cfg(test)]
@@ -1660,5 +1754,88 @@ mod tests {
             Err(Error::TrailingBytes(1))
         );
         event.title = "x".to_owned();
+    }
+
+    #[test]
+    fn equip_item_encodes_slot_then_item() {
+        let request = EquipItem {
+            slot: 3,
+            item_id: 5,
+        };
+        assert_eq!(
+            request.encode(),
+            vec![0x0C, 0x00, 0x8C, 0x13, 0x03, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00]
+        );
+    }
+
+    #[test]
+    fn equip_item_round_trips_through_frame() {
+        let request = EquipItem {
+            slot: 11,
+            item_id: 23001,
+        };
+        let frame = decode_frame(&request.encode()).unwrap();
+        assert_eq!(frame.id, 5004);
+        assert_eq!(EquipItem::decode_frame(&frame), Ok(request));
+    }
+
+    #[test]
+    fn equip_item_rejects_short_body() {
+        assert_eq!(
+            EquipItem::decode_body(&[0x01; 7]),
+            Err(Error::TruncatedMessage { need: 8, have: 7 })
+        );
+    }
+
+    #[test]
+    fn equip_item_rejects_trailing_bytes() {
+        let mut body = EquipItem {
+            slot: 0,
+            item_id: 1,
+        }
+        .encode_body();
+        body.push(0xFF);
+        assert_eq!(EquipItem::decode_body(&body), Err(Error::TrailingBytes(1)));
+    }
+
+    #[test]
+    fn equip_item_rejects_wrong_command() {
+        let frame = decode_frame(&EquipItemResponse { item_id: 5 }.encode()).unwrap();
+        assert_eq!(
+            EquipItem::decode_frame(&frame),
+            Err(Error::UnknownCommand(5005))
+        );
+    }
+
+    #[test]
+    fn equip_item_response_round_trips_through_frame() {
+        let response = EquipItemResponse { item_id: 23001 };
+        let frame = decode_frame(&response.encode()).unwrap();
+        assert_eq!(frame.id, 5005);
+        assert_eq!(EquipItemResponse::decode_frame(&frame), Ok(response));
+    }
+
+    #[test]
+    fn equip_item_response_zero_item_decodes() {
+        let response = EquipItemResponse::decode_body(&[0x00, 0x00, 0x00, 0x00]).unwrap();
+        assert_eq!(response.item_id, 0);
+    }
+
+    #[test]
+    fn equip_item_response_rejects_short_body() {
+        assert_eq!(
+            EquipItemResponse::decode_body(&[0x00, 0x00]),
+            Err(Error::TruncatedMessage { need: 4, have: 2 })
+        );
+    }
+
+    #[test]
+    fn equip_item_response_rejects_trailing_bytes() {
+        let mut body = EquipItemResponse { item_id: 1 }.encode_body();
+        body.push(0xFF);
+        assert_eq!(
+            EquipItemResponse::decode_body(&body),
+            Err(Error::TrailingBytes(1))
+        );
     }
 }
