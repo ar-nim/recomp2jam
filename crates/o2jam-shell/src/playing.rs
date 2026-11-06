@@ -18,8 +18,8 @@ use o2jam_game::{
 use o2jam_net::GameSpeed;
 use o2jam_render::{
     blit_rgb555, blit_rgb555_clipped, draw_number, draw_text, fill_rect, number_width, pack_xrgb,
-    scale_rect_to_frame, text_width, visible_spans, Frame, LaneCurtain, Rect, Rgb555Image,
-    NATIVE_HEIGHT,
+    panel_content_rect, scale_rect_to_frame, text_width, visible_spans, Frame, LaneCurtain, Rect,
+    Rgb555Image, NATIVE_HEIGHT,
 };
 
 /// Lanes across the highway.
@@ -98,9 +98,10 @@ pub const NATIVE_NOTE_H: u32 = 7;
 /// (`KeydownImage.ojs`, archive slot 33): receptor pads and burst
 /// slices scale from these instead of fixed pixel boxes.
 pub const NATIVE_KEY_H: [u32; HIGHWAY_LANES as usize] = [46, 42, 46, 46, 46, 42, 46];
-/// Jam edge-bars on the native canvas: `Jamgauge_left_bar.ojs`
-/// `(23,536)` 206x16 and `Jamgauge_right_bar.ojs` `(570,536)` 206x16
-/// (archive slots 464-465) sit below the judgement row.
+/// Jam edge bars on the native canvas: the staged
+/// `Jamgauge_left_bar.ojs` `(23,536)` 206x16 and
+/// `Jamgauge_right_bar.ojs` `(570,536)` 206x16 (archive slots 464-465)
+/// below the judgement row.
 pub const NATIVE_JAM_BARS: [Rect; 2] = [
     Rect {
         x: 23,
@@ -115,6 +116,31 @@ pub const NATIVE_JAM_BARS: [Rect; 2] = [
         h: 16,
     },
 ];
+/// Panel-bottom jam bar on the native canvas: `Jam_gauge_bar.ojs`
+/// `(4,536)` 191x12 (archive slot 31, labeled by `Jam_gauge_text.ojs`
+/// `(85,539)` 29x7) spans the highway panel under the judgement row —
+/// the photo's "JAM bar at the panel bottom"
+/// (`docs/playing-reference.md`). Where it overlaps an edge bar it
+/// paints last (topmost-last, A5).
+pub const NATIVE_JAM_BOTTOM_BAR: Rect = Rect {
+    x: 4,
+    y: 536,
+    w: 191,
+    h: 12,
+};
+/// Gauge fills paint inside their shell, one pixel in from each side:
+/// the staged life-gauge pair pins the family rule byte-exact
+/// (`Life_gauge_back.ojs` `(202,246)` 13x303 shell vs
+/// `Life_gauge_bar.ojs` fill `(203,247)` 11x301), so jam fills
+/// occupy the shell interior instead of the full shell extent.
+const GAUGE_FILL_INSET: u32 = 1;
+/// Highway-panel strip content row on the native canvas:
+/// `Playing_Exit.ojs` anchors `(751,554)` and `Normal_TimeBar.ojs`
+/// `(489,556)` pin the strip band, and `Playing_Menu.ojs` `(204,558)`
+/// 596x42 is the strip panel. Score digits center over the bottom
+/// jam bar, combo digits take its left edge — the photo's panel
+/// strip: MAX COMBO left, score center (`docs/playing-reference.md`).
+const STRIP_ROW_NATIVE: i32 = 554;
 /// Jam-level digit fallback row (frame pixels, not scaled):
 /// `Note_JamNum.ojs` anchors `(0,0)` (unbound), so the top-center
 /// digits keep their prior row.
@@ -668,7 +694,8 @@ impl PlayingView {
     /// Paint the highway through a skill-ring curtain: notes outside the
     /// item-text spans (hidden keeps the top 80%, sudden the bottom
     /// 20%, dark the middle 20%, reverse-dark the outer 40% pair —
-    /// `o2jam-render::visible_spans`, clip math OPEN) are not drawn.
+    /// rounded bands of the staged highway box via
+    /// `o2jam-render::visible_spans`) are not drawn.
     /// `Full` paints everything, like [`PlayingView::paint`].
     pub fn paint_curtained(
         &self,
@@ -797,10 +824,13 @@ fn curtain_for_ring(ring: SkillRing) -> LaneCurtain {
     }
 }
 
-/// Jam edge-bars scaled into the frame: the staged left/right
-/// `Jamgauge` shells below the judgement row.
-fn jam_bar_rects(frame_w: usize, frame_h: usize) -> [Rect; 2] {
-    NATIVE_JAM_BARS.map(|rect| scale_rect_to_frame(&rect, frame_w, frame_h))
+/// Jam gauge shells scaled into the frame: the staged left/right
+/// `Jamgauge` edge bars below the judgement row plus the staged
+/// panel-bottom bar (last, so it paints over an edge-bar overlap).
+fn jam_bar_rects(frame_w: usize, frame_h: usize) -> [Rect; 3] {
+    let edge_bars = NATIVE_JAM_BARS.map(|rect| scale_rect_to_frame(&rect, frame_w, frame_h));
+    let bottom_bar = scale_rect_to_frame(&NATIVE_JAM_BOTTOM_BAR, frame_w, frame_h);
+    [edge_bars[0], edge_bars[1], bottom_bar]
 }
 
 /// Peer life-bar boxes: one staged 46x8 gauge per 4015 member slot,
@@ -819,9 +849,10 @@ fn peer_bar_rects(frame_w: usize, frame_h: usize) -> Vec<Rect> {
         .collect()
 }
 
-/// Filled rows for `progress_in_level` (`0..50`) over a `bar_h`-row jam
-/// bar. Integer math keeps the exe's cumulative-progress shape
-/// (each level spans [`JAM_PROGRESS_PER_LEVEL`]; no reset on grant).
+/// Filled rows for `progress_in_level` (`0..50`) over a `bar_h`-row
+/// gauge interior. Integer math keeps the exe's cumulative-progress
+/// shape (each level spans [`JAM_PROGRESS_PER_LEVEL`]; no reset on
+/// grant).
 fn jam_fill_rows(progress_in_level: u64, bar_h: u32) -> u32 {
     let filled = progress_in_level
         .saturating_mul(u64::from(bar_h))
@@ -1418,9 +1449,23 @@ impl LivePlay {
         }
     }
 
-    /// Judgement word above the line with the running combo beneath it
-    /// (the original stacks combo under the word; the top-left combo
-    /// digits stay as the HUD mirror). Words keep plain white ink.
+    /// Center x of the staged lane columns: the draw point the
+    /// judgement word and combo cluster center on (the lane spans run
+    /// `5..193` at native, so the cluster rides the lanes, not the
+    /// frame center at 400).
+    fn highway_center_x(geom: &HighwayGeometry) -> i32 {
+        let span = geom.highway_rect();
+        span.x + i32::try_from(span.w).unwrap_or(0) / 2
+    }
+
+    /// Judgement word above the line with the running combo beneath
+    /// it, both centered on the highway. The staged word art is
+    /// center-anchored — every `Note_Cool/Good/Bad/Miss.ojs` frame
+    /// carries a signed anchor near `(-w/2, -h/2)` (e.g. `Note_Cool`
+    /// frame 2 `(-78,-37)` 154x72) — so the draw point is the word
+    /// center, and `docs/playing-reference.md` puts the big combo +
+    /// tier word over the lanes. Word rows keep the staged offsets
+    /// above the judgement line; ink stays plain white.
     fn paint_judgement_word(&self, frame: &mut Frame<'_>, geom: &HighwayGeometry, now_ms: u64) {
         let Some((judgement, at)) = self.last_word else {
             return;
@@ -1428,11 +1473,12 @@ impl LivePlay {
         if now_ms.saturating_sub(at) >= 600 {
             return;
         }
+        let center_x = Self::highway_center_x(geom);
         let word = word_of(judgement);
         let text_w = i32::try_from(text_width(word)).unwrap_or(0);
         draw_text(
             frame,
-            frame.w as i32 / 2 - text_w / 2,
+            center_x - text_w / 2,
             geom.line_y - 40,
             word,
             pack_xrgb(0xFF, 0xFF, 0xFF),
@@ -1441,7 +1487,7 @@ impl LivePlay {
             let digits = i32::try_from(number_width(self.score.combo)).unwrap_or(0);
             draw_number(
                 frame,
-                frame.w as i32 / 2 - digits / 2,
+                center_x - digits / 2,
                 geom.line_y - 24,
                 self.score.combo,
                 pack_xrgb(0xFF, 0xFF, 0x40),
@@ -1475,39 +1521,43 @@ impl LivePlay {
         );
     }
 
-    /// Jam edge-bars plus level digits from [`JamState`]: Cool feeds +2,
-    /// Good feeds +1, each level spans [`JAM_PROGRESS_PER_LEVEL`] cumulative
-    /// progress (`FUN_00570260` / `FUN_00570510`), and a pill-saved Bad
-    /// feeds like a Cool (`apply_rated`). The bars fill where the staged
-    /// `Jamgauge_right_bar.ojs` / `Jamgauge_left_bar.ojs` shells sit
-    /// (VAs `0x64b1b8` / `0x64b1d0`, loader `FUN_004e7850`); the digits
-    /// stand in for the `Note_JamNum.ojs` (`0x64c0fc` → `0x50d0ae`) art
-    /// until staged figures bind.
+    /// Jam edge bars plus the panel-bottom bar, and level digits from
+    /// [`JamState`]: Cool feeds +2, Good feeds +1, each level spans
+    /// [`JAM_PROGRESS_PER_LEVEL`] cumulative progress (`FUN_00570260` /
+    /// `FUN_00570510`), and a pill-saved Bad feeds like a Cool
+    /// (`apply_rated`). The bars fill where the staged shells sit —
+    /// `Jamgauge_right_bar.ojs` / `Jamgauge_left_bar.ojs` (VAs
+    /// `0x64b1b8` / `0x64b1d0`, loader `FUN_004e7850`) and the
+    /// panel-bottom `Jam_gauge_bar.ojs` (slot 31); fills rise inside
+    /// the shell interior ([`GAUGE_FILL_INSET`]). The digits stand in
+    /// for the `Note_JamNum.ojs` (`0x64c0fc` → `0x50d0ae`) art until
+    /// staged figures bind (its `(0,0)` anchor is unbound).
     fn paint_jam_gauge(&self, frame: &mut Frame<'_>) {
+        let progress = self.score.jam.level_progress();
         for bar in jam_bar_rects(frame.w, frame.h) {
-            if bar.h == 0 {
-                continue;
-            }
-            let filled = jam_fill_rows(self.score.jam.level_progress(), bar.h);
-            Self::paint_jam_bar(frame, &bar, filled);
+            Self::paint_jam_bar(frame, &bar, progress);
         }
         self.paint_jam_level(frame);
     }
 
-    /// One empty jam bar plus its progress fill, rising from the bottom.
-    fn paint_jam_bar(frame: &mut Frame<'_>, bar: &Rect, filled: u32) {
-        let filled = filled.min(bar.h);
+    /// One empty jam shell plus its progress fill, rising from the
+    /// bottom of the shell interior (one pixel in from each side).
+    fn paint_jam_bar(frame: &mut Frame<'_>, bar: &Rect, progress: u64) {
+        let interior = panel_content_rect(bar, GAUGE_FILL_INSET);
+        let filled = jam_fill_rows(progress, interior.h);
         fill_rect(frame, bar, pack_xrgb(0x10, 0x10, 0x30));
-        fill_rect(
-            frame,
-            &Rect {
-                x: bar.x,
-                y: bar.y + (bar.h - filled) as i32,
-                w: bar.w,
-                h: filled,
-            },
-            pack_xrgb(0xFF, 0x80, 0x00),
-        );
+        if filled > 0 {
+            fill_rect(
+                frame,
+                &Rect {
+                    x: interior.x,
+                    y: interior.y + (interior.h - filled) as i32,
+                    w: interior.w,
+                    h: filled,
+                },
+                pack_xrgb(0xFF, 0x80, 0x00),
+            );
+        }
     }
 
     /// Jam level digits, top-centered (digit bodies follow `Note_JamNum`).
@@ -1524,8 +1574,45 @@ impl LivePlay {
         );
     }
 
-    /// Paint highway, notes, tails, peer bars, jam gauge, score, combo,
-    /// bursts, and word.
+    /// Scaled panel-strip readout origins: `(combo x, score center x,
+    /// row)` from the staged bottom jam bar and strip row. Score
+    /// digits center over the bar (photo: score center of the panel
+    /// strip), combo digits take the bar's left edge (photo: MAX
+    /// COMBO left).
+    fn strip_origins(frame_w: usize, frame_h: usize) -> (i32, i32, i32) {
+        let bar = jam_bar_rects(frame_w, frame_h)[2];
+        let row = scale_row(STRIP_ROW_NATIVE, frame_h);
+        let bar_w = i32::try_from(bar.w).unwrap_or(0);
+        (bar.x, bar.x + bar_w / 2, row)
+    }
+
+    /// Score and combo digits in the highway-panel strip (below the
+    /// jam bar, on the staged strip row) — replacing the invented
+    /// top-left `(16,16)`/`(16,32)` anchors.
+    fn paint_panel_strip(&self, frame: &mut Frame<'_>) {
+        let (combo_x, score_center_x, row) = Self::strip_origins(frame.w, frame.h);
+        let points = u32::try_from(self.score.points).unwrap_or(u32::MAX);
+        let digits = i32::try_from(number_width(points)).unwrap_or(0);
+        draw_number(
+            frame,
+            score_center_x - digits / 2,
+            row,
+            points,
+            pack_xrgb(0xFF, 0xFF, 0xFF),
+        );
+        if self.score.combo > 0 {
+            draw_number(
+                frame,
+                combo_x,
+                row,
+                self.score.combo,
+                pack_xrgb(0xFF, 0xFF, 0x40),
+            );
+        }
+    }
+
+    /// Paint highway, notes, tails, peer bars, jam gauge, panel-strip
+    /// score/combo, bursts, and word.
     pub fn paint(&mut self, frame: &mut Frame<'_>, geom: &HighwayGeometry, now_ms: u64) {
         self.advance_to(now_ms);
         self.view.paint_curtained(frame, geom, self.curtain);
@@ -1533,11 +1620,7 @@ impl LivePlay {
         self.paint_hit_bursts(frame, geom, now_ms);
         self.paint_peer_bars(frame);
         self.paint_jam_gauge(frame);
-        let points = u32::try_from(self.score.points).unwrap_or(u32::MAX);
-        draw_number(frame, 16, 16, points, pack_xrgb(0xFF, 0xFF, 0xFF));
-        if self.score.combo > 0 {
-            draw_number(frame, 16, 32, self.score.combo, pack_xrgb(0xFF, 0xFF, 0x40));
-        }
+        self.paint_panel_strip(frame);
         self.paint_judgement_word(frame, geom, now_ms);
     }
 }
@@ -1561,19 +1644,24 @@ const AVATAR_FIGURE_NATIVE: (i32, i32) = (470, 120);
 const AVATAR_SONG_NATIVE: (i32, i32) = (340, 420);
 /// `VOL <n>` readout below the song line (native origin).
 const AVATAR_VOLUME_NATIVE: (i32, i32) = (340, 444);
-/// Counts line on the native canvas (left of the tally strip).
-const TALLY_COUNTS_NATIVE: (i32, i32) = (16, 556);
-/// TIME progress bar on the native canvas (strip center).
+/// Counts line on the native canvas: at the staged `WaveGage.ojs`
+/// panel x — `(225,514)` 226x73, the strip's left-center panel — on
+/// the strip content row (`Normal_TimeBar.ojs` `(489,556)`).
+const TALLY_COUNTS_NATIVE: (i32, i32) = (225, 556);
+/// TIME progress bar on the native canvas: staged
+/// `Normal_TimeBar.ojs` `(489,556)` 254x10 in the strip
+/// (`Playing_Menu.ojs` `(204,558)` 596x42 is the strip panel).
 const TALLY_TIME_NATIVE: Rect = Rect {
-    x: 300,
-    y: 560,
-    w: 220,
+    x: 489,
+    y: 556,
+    w: 254,
     h: 10,
 };
 /// Strip song-title line below the TIME bar (native origin).
 const TALLY_TITLE_NATIVE: (i32, i32) = (300, 576);
-/// EXIT button readout on the native canvas (strip right).
-const TALLY_EXIT_NATIVE: (i32, i32) = (740, 556);
+/// EXIT readout on the native canvas: staged `Playing_Exit.ojs`
+/// anchor `(751,554)` (archive slot 92, 42x42 button art).
+const TALLY_EXIT_NATIVE: (i32, i32) = (751, 554);
 /// Caption ink over staged art (white on the scrim).
 const AVATAR_TEXT: u32 = pack_xrgb(0xFF, 0xFF, 0xFF);
 /// Scrim ink behind caption lines (matches the lobby scrims).
@@ -1923,14 +2011,12 @@ mod live_play_tests {
             &geom(),
             1100,
         );
-        // Score "200" top-left, combo "1" below, "COOL" centered.
-        assert_eq!(buf[16 * 70 + 16], pack_xrgb(0xFF, 0xFF, 0xFF));
-        assert_eq!(buf[32 * 70 + 17], pack_xrgb(0xFF, 0xFF, 0x40));
-        let word_x = 35 - text_width("COOL") as i32 / 2;
-        assert_eq!(
-            buf[8 * 70 + word_x as usize + 2],
-            pack_xrgb(0xFF, 0xFF, 0xFF)
-        );
+        // Score "200" centered over the staged bottom jam bar (probe
+        // bar x 0..16 → center 8, strip row 55), combo "1" at the
+        // bar's left edge, "COOL" centered over the highway (center 8).
+        assert_eq!(buf[55 * 70 + 3], pack_xrgb(0xFF, 0xFF, 0xFF));
+        assert_eq!(buf[55 * 70 + 1], pack_xrgb(0xFF, 0xFF, 0x40));
+        assert_eq!(buf[8 * 70 + 3], pack_xrgb(0xFF, 0xFF, 0xFF));
     }
 
     #[test]
@@ -1969,7 +2055,13 @@ mod live_play_tests {
         live.strike_lane(0, 1000);
         live.strike_lane(0, 1100);
         assert_eq!(live.score().jam.level_progress(), 4);
-        // Native frame: 16-row shells fill one row per 50/16 progress.
+        // Native frame: interiors fill one row per 50/14 progress —
+        // left bar interior x 24..228 rows 537..550, right 571..775.
+        // Progress 4 fills the single bottom interior row (550); the
+        // bottom bar interior (10 rows) shows no fill at progress 4
+        // (4 * 10 / 50 = 0).
+        let fill = pack_xrgb(0xFF, 0x80, 0x00);
+        let shell = pack_xrgb(0x10, 0x10, 0x30);
         let geom = HighwayGeometry::centered(800, 600);
         let mut buf = vec![0u32; 800 * 600];
         live.paint(
@@ -1981,11 +2073,12 @@ mod live_play_tests {
             &geom,
             1100,
         );
-        let fill = pack_xrgb(0xFF, 0x80, 0x00);
-        let bottom = 536 + 16 - 1;
-        assert_eq!(buf[bottom * 800 + 23], fill);
-        assert_eq!(buf[bottom * 800 + 570], fill);
-        assert_eq!(buf[536 * 800 + 23], pack_xrgb(0x10, 0x10, 0x30));
+        assert_eq!(buf[550 * 800 + 24], fill);
+        assert_eq!(buf[550 * 800 + 571], fill);
+        assert_eq!(buf[550 * 800 + 23], shell);
+        assert_eq!(buf[551 * 800 + 23], shell);
+        assert_eq!(buf[536 * 800 + 23], shell);
+        assert_eq!(buf[546 * 800 + 5], shell);
     }
 
     #[test]
@@ -2340,14 +2433,10 @@ mod live_play_tests {
             &geom(),
             1700,
         );
-        // The faded word leaves the flat backdrop: the word sits past
-        // the staged lane span (x 0..16 at 70 wide), which ends clear
-        // of the frame-centered word.
-        let word_x = 35 - text_width("COOL") as i32 / 2;
-        assert_eq!(
-            buf[8 * 70 + word_x as usize + 2],
-            pack_xrgb(0x0A, 0x0A, 0x0A)
-        );
+        // The faded word leaves the flat backdrop: the word centers on
+        // the highway (draw x 1 at 70 wide), whose gap column keeps
+        // the backdrop after the 600 ms fade.
+        assert_eq!(buf[8 * 70 + 3], pack_xrgb(0x0A, 0x0A, 0x0A));
     }
 
     #[test]
@@ -2469,15 +2558,10 @@ mod live_play_tests {
             1100,
         );
         let amber = pack_xrgb(0xFF, 0xFF, 0x40);
-        let word_x = 35 - text_width("COOL") as i32 / 2;
-        assert_eq!(
-            buf[8 * 70 + word_x as usize + 2],
-            pack_xrgb(0xFF, 0xFF, 0xFF)
-        );
-        assert!(
-            (24..30).any(|y| (0..70).any(|x| buf[y * 70 + x] == amber)),
-            "combo cluster missing under the word"
-        );
+        // Word centers on the highway (center 8, draw x 1); combo
+        // digits "1" beneath at rows 24..28, centered on the same x.
+        assert_eq!(buf[8 * 70 + 3], pack_xrgb(0xFF, 0xFF, 0xFF));
+        assert_eq!(buf[24 * 70 + 8], amber);
     }
 
     #[test]
@@ -2771,7 +2855,9 @@ mod highway_tests {
 
     #[test]
     fn jam_and_peer_boxes_match_staged_shells() {
-        assert_eq!(jam_bar_rects(800, 600), NATIVE_JAM_BARS);
+        assert_eq!(jam_bar_rects(800, 600)[0], NATIVE_JAM_BARS[0]);
+        assert_eq!(jam_bar_rects(800, 600)[1], NATIVE_JAM_BARS[1]);
+        assert_eq!(jam_bar_rects(800, 600)[2], NATIVE_JAM_BOTTOM_BAR);
         // Peer bars follow the staged 46x8 life gauge, stacked flush
         // top-right: slot `i` sits `i` bars below the corner.
         let native: Vec<Rect> = (0..PEER_SLOT_COUNT)
@@ -2807,6 +2893,15 @@ mod highway_tests {
                 x: 49,
                 y: 53,
                 w: 18,
+                h: 1
+            }
+        );
+        assert_eq!(
+            jam_bar_rects(70, 60)[2],
+            Rect {
+                x: 0,
+                y: 53,
+                w: 16,
                 h: 1
             }
         );
@@ -3162,7 +3257,7 @@ mod avatar_scene_tests {
         assert!(white_near(&buf, 800, 600, layout.counts_origin));
         assert!(white_near(&buf, 800, 600, layout.strip_title_origin));
         assert!(white_near(&buf, 800, 600, layout.exit_origin));
-        assert_eq!(buf[560 * 800 + 300], TIME_EMPTY);
+        assert_eq!(buf[556 * 800 + 489], TIME_EMPTY);
     }
 
     #[test]
@@ -3181,7 +3276,7 @@ mod avatar_scene_tests {
             0,
             Some(3000),
         );
-        assert_eq!(start[560 * 800 + 300], TIME_EMPTY);
+        assert_eq!(start[556 * 800 + 489], TIME_EMPTY);
         let mut end = vec![0u32; 800 * 600];
         scene.paint(
             &mut Frame {
@@ -3194,7 +3289,7 @@ mod avatar_scene_tests {
             3000,
             Some(3000),
         );
-        assert_eq!(end[560 * 800 + 300], TIME_FILL);
+        assert_eq!(end[556 * 800 + 489], TIME_FILL);
         let mut unknown = vec![0u32; 800 * 600];
         scene.paint(
             &mut Frame {
@@ -3207,7 +3302,7 @@ mod avatar_scene_tests {
             3000,
             None,
         );
-        assert_eq!(unknown[560 * 800 + 300], TIME_EMPTY);
+        assert_eq!(unknown[556 * 800 + 489], TIME_EMPTY);
         let _ = layout;
     }
 
