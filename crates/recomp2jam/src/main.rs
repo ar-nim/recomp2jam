@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 
 mod connect;
 mod loading;
+mod shots;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -129,6 +130,12 @@ enum Command {
         /// Long-note bonus total (tick and tally).
         #[arg(long, default_value_t = 0, requires = "music_id")]
         long_note: i32,
+    },
+    /// Drive `ScreenGame` in-process and write scene PNGs (no window).
+    Shots {
+        /// Directory for `<scene>.png` files.
+        #[arg(long, default_value = "docs/screenshots")]
+        out_dir: String,
     },
     /// Stub gameplay entry point (autoplay with null backend for now).
     Play {
@@ -292,6 +299,12 @@ fn run_command(command: Command) -> Result<()> {
             };
             let report = connect::connect_and_login(&options)?;
             print_connect_report(&report);
+            Ok(())
+        }
+        Command::Shots { out_dir } => {
+            for path in shots::write_shots(std::path::Path::new(&out_dir))? {
+                println!("wrote {}", path.display());
+            }
             Ok(())
         }
         Command::Play {
