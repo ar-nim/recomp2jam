@@ -333,7 +333,15 @@ semantics TBD.
   exact at EOF. Row = 30 fixed bytes (id, type, price, params,
   flags) + EUC-KR name/description + 42 `(flag, filename)` sprite
   slots (stems resolve to `.ojs` bodies in `avatar.opa`; the table
-  spells `.oji`). Per-slot selection semantics stay OPEN.
+  spells `.oji`). Slot use (1541-row survey): slots 0–1 are icons
+  (shop portraits, never worn); even slots carry male variants, odd
+  slots female ones (`27M23001`/`27F23001` alternation) — unisex
+  items fill one parity only; multi-part items (tops + arms) spread
+  torso/parts across their parity in slot order. Filename stems
+  encode gender+part (`01F…`/`01M…`, `…T…` torso, `…LA…`/`…RA…`
+  arms). Worn-figure rule (`pick_wear_sprites`): wearer parity from
+  slot 2 up, fallback to the other parity, slot order kept; exe
+  part logic stays OPEN.
 - 47 `.ojs` bodies are raw JPEGs (`FF D8 … FF D9` verified on
   all); 5 `.oji` bodies share the sprite-55 envelope.
 
