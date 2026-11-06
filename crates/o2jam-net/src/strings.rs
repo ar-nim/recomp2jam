@@ -19,18 +19,20 @@ const TERMINATOR: u8 = 0x00;
 /// room remains (mirrors Encore byte-for-byte, probe-verified).
 #[must_use]
 pub fn encode_null_terminated(value: &str, max_len: usize) -> Vec<u8> {
+    if max_len == 0 {
+        return Vec::new();
+    }
+    let capacity = max_len - 1;
     let mut out = Vec::new();
     for ch in value.chars() {
         let ch_len = ch.len_utf8();
-        if out.len() + ch_len > max_len {
+        if out.len() + ch_len > capacity {
             break;
         }
         let mut buf = [0u8; 4];
         out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
     }
-    if out.len() < max_len {
-        out.push(TERMINATOR);
-    }
+    out.push(TERMINATOR);
     out
 }
 
@@ -79,23 +81,20 @@ mod string_codec_tests {
     }
 
     #[test]
-    fn truncates_content_without_room_for_terminator() {
+    fn truncates_content_including_terminator() {
+        // Encore vector: maxLength counts the terminator.
         assert_eq!(
             encode_null_terminated("abcdef", 4),
-            vec![0x61, 0x62, 0x63, 0x64]
+            vec![0x61, 0x62, 0x63, 0x00]
         );
-    }
-
-    #[test]
-    fn drops_terminator_when_content_exactly_fills_cap() {
-        let title: String = "A".repeat(22);
-        assert_eq!(encode_null_terminated(&title, 22), vec![0x41; 22]);
     }
 
     #[test]
     fn truncates_long_content_to_cap() {
         let title: String = "A".repeat(40);
-        assert_eq!(encode_null_terminated(&title, 22), vec![0x41; 22]);
+        let mut expected = vec![0x41; 21];
+        expected.push(0x00);
+        assert_eq!(encode_null_terminated(&title, 22), expected);
     }
 
     #[test]
