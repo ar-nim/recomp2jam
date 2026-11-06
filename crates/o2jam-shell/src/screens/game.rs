@@ -3,13 +3,14 @@
 
 use std::collections::HashMap;
 
-use super::super::avatar::AvatarFigure;
+use super::super::avatar::{AvatarFigure, ScenePlacement};
 use super::super::playing::{HighwayGeometry, LivePlay};
 use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
     paint_channel_list, paint_result, paint_room_list, paint_screen, paint_waiting_members,
 };
+use super::side::{can_return_side, can_visit_side, paint_side_scene, SideScreen};
 use crate::MenuKey;
 use o2jam_audio::{AudioBackend, PcmSamples};
 use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry};
@@ -31,6 +32,10 @@ pub struct ScreenGame {
     rooms: Vec<RoomListEntry>,
     room_highlight: usize,
     waiting: Option<JoinedRoom>,
+    side: Option<SideScreen>,
+    side_origin: Option<Screen>,
+    side_placements: Vec<ScenePlacement>,
+    side_figures: HashMap<String, AvatarFigure>,
 }
 
 /// Key-sound bank plus backend for windowed play.
@@ -55,6 +60,10 @@ impl ScreenGame {
             rooms: Vec::new(),
             room_highlight: 0,
             waiting: None,
+            side: None,
+            side_origin: None,
+            side_placements: Vec::new(),
+            side_figures: HashMap::new(),
         }
     }
 
@@ -148,9 +157,55 @@ impl ScreenGame {
         self
     }
 
+    /// Open side screen, if any.
+    #[must_use]
+    pub fn side(&self) -> Option<SideScreen> {
+        self.side
+    }
+
+    /// Stage real side art: `.bnd` placements plus figures loaded
+    /// through [`load_scene_figures`](super::super::avatar::load_scene_figures).
+    pub fn load_side_scene(
+        &mut self,
+        placements: Vec<ScenePlacement>,
+        figures: HashMap<String, AvatarFigure>,
+    ) -> &mut Self {
+        self.side_placements = placements;
+        self.side_figures = figures;
+        self
+    }
+
+    /// Open a side screen from a lobby; rejects other origins and
+    /// remembers the lobby to return to.
+    pub fn visit_side(&mut self, side: SideScreen) -> bool {
+        if self.side.is_some() || !can_visit_side(self.flow.current(), side) {
+            return false;
+        }
+        self.side_origin = Some(self.flow.current());
+        self.side = Some(side);
+        true
+    }
+
+    /// Return to the lobby that opened the side screen.
+    pub fn leave_side(&mut self) -> bool {
+        let (Some(side), Some(origin)) = (self.side, self.side_origin) else {
+            return false;
+        };
+        if !can_return_side(side, origin) {
+            return false;
+        }
+        self.side = None;
+        self.side_origin = None;
+        true
+    }
+
     /// Paint with an explicit clock (tests use this; live paint reads
     /// the wall clock).
     pub fn paint_at(&mut self, frame: &mut Frame<'_>, now_ms: u64) {
+        if self.side.is_some() {
+            paint_side_scene(frame, &self.side_placements, &self.side_figures);
+            return;
+        }
         if self.flow.current() == Screen::Playing && self.playing.is_finished(now_ms) {
             let _ = self.flow.go(Screen::Result);
         }
@@ -209,6 +264,12 @@ impl GameLoop for ScreenGame {
 
     fn menu_key(&mut self, key: MenuKey, down: bool) {
         if !down {
+            return;
+        }
+        if self.side.is_some() {
+            if key == MenuKey::Back {
+                self.leave_side();
+            }
             return;
         }
         match (self.flow.current(), key) {
@@ -710,5 +771,117 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.lane_key(0, false);
         assert_eq!(game.screen(), Screen::Avi);
+    }
+
+    fn walk_to_lobby(game: &mut ScreenGame, lobby: Screen) {
+        game.lane_key(3, true);
+        if lobby == Screen::Channel {
+            return;
+        }
+        game.menu_key(MenuKey::Confirm, true);
+        if lobby == Screen::Room {
+            return;
+        }
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+    }
+
+    #[test]
+    fn side_screens_open_from_every_lobby() {
+        use super::super::side::ALL_SIDE_SCREENS;
+        for lobby in [Screen::Channel, Screen::Room, Screen::Waiting] {
+            for side in ALL_SIDE_SCREENS {
+                let mut game = ScreenGame::new();
+                walk_to_lobby(&mut game, lobby);
+                assert!(game.visit_side(side), "{lobby:?} -> {side:?}");
+                assert_eq!(game.side(), Some(side));
+                assert_eq!(game.screen(), lobby);
+            }
+        }
+    }
+
+    #[test]
+    fn side_screens_reject_main_flow_origins() {
+        use super::super::side::ALL_SIDE_SCREENS;
+        for side in ALL_SIDE_SCREENS {
+            let mut splash = ScreenGame::new();
+            assert!(!splash.visit_side(side));
+            assert_eq!(splash.side(), None);
+        }
+        for side in ALL_SIDE_SCREENS {
+            let mut game = ScreenGame::new();
+            walk_to_playing(&mut game);
+            assert!(!game.visit_side(side));
+            assert_eq!(game.side(), None);
+        }
+    }
+
+    #[test]
+    fn side_visit_rejects_nested_sides() {
+        use super::super::side::SideScreen;
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Room);
+        assert!(game.visit_side(SideScreen::Shop));
+        assert!(!game.visit_side(SideScreen::Planet));
+        assert_eq!(game.side(), Some(SideScreen::Shop));
+    }
+
+    #[test]
+    fn side_back_key_returns_to_lobby() {
+        use super::super::side::SideScreen;
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Room);
+        assert!(game.visit_side(SideScreen::MyRoom));
+        game.menu_key(MenuKey::Back, true);
+        assert_eq!(game.side(), None);
+        assert_eq!(game.screen(), Screen::Room);
+    }
+
+    #[test]
+    fn side_leaves_without_entry() {
+        let mut game = ScreenGame::new();
+        assert!(!game.leave_side());
+    }
+
+    #[test]
+    fn side_paints_loaded_art() {
+        use super::super::side::SideScreen;
+        use crate::avatar::{AvatarFigure, FigureLayer, ScenePlacement};
+        use o2jam_render::{Rect, Rgb555Image};
+        let mut figure = AvatarFigure::default();
+        figure.push_layer(FigureLayer {
+            image: Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap(),
+            dx: 0,
+            dy: 0,
+            colorkey: 0x0000,
+        });
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Channel);
+        game.load_side_scene(
+            vec![ScenePlacement {
+                id: "IDC_SHOP".to_owned(),
+                code: 0,
+                sprite: Some("Shop_Item.ojs".to_owned()),
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 800,
+                    h: 600,
+                },
+            }],
+            HashMap::from([("Shop_Item.ojs".to_owned(), figure)]),
+        );
+        assert!(game.visit_side(SideScreen::Shop));
+        let mut buf = vec![0u32; 8 * 8];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 8,
+                h: 8,
+            },
+            0,
+        );
+        assert_eq!(buf[0], pack_xrgb(255, 0, 0));
+        assert_eq!(game.screen(), Screen::Channel);
     }
 }

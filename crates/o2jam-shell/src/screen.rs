@@ -66,6 +66,17 @@ pub struct ScreenFlow {
     current: Screen,
 }
 
+impl Screen {
+    /// Lobbies hosting the §12 side screens (channel/room/waiting).
+    ///
+    /// Side views (shop, planet, …) open from these screens and
+    /// return to them; see `screens::side`.
+    #[must_use]
+    pub const fn is_side_lobby(self) -> bool {
+        matches!(self, Screen::Channel | Screen::Room | Screen::Waiting)
+    }
+}
+
 impl ScreenFlow {
     /// Boot into the splash screen.
     #[must_use]
@@ -180,6 +191,25 @@ mod screen_flow_tests {
             })
         );
         assert_eq!(flow.current(), Screen::Avi);
+    }
+
+    #[test]
+    fn lobbies_host_side_screens() {
+        for screen in [Screen::Channel, Screen::Room, Screen::Waiting] {
+            assert!(screen.is_side_lobby(), "{screen:?}");
+        }
+    }
+
+    #[test]
+    fn main_flow_screens_host_no_side_screens() {
+        for screen in [
+            Screen::Avi,
+            Screen::Loading,
+            Screen::Playing,
+            Screen::Result,
+        ] {
+            assert!(!screen.is_side_lobby(), "{screen:?}");
+        }
     }
 
     #[test]
