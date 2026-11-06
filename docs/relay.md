@@ -40,14 +40,27 @@ field layout below is Memoryer-corroborated (`Memoryer.Relay`
 messages, field order = wire order); exe byte-level proof of the
 bodies is still open (ctors traced only to the `SetID` call).
 
-## 2. Relay TCP framing
+## 2. Relay TCP framing (byte-verified shared shape)
 
-Same `CPacket_Str` framing as the game gateway (`[u16 len][u16
-id][body]`, `len` counts the whole frame, id at buffer offset 2):
-the relay ctors call the same `SetID`, and Memoryer's relay stack
-runs on the same Encore `TcpServer` message codec. Exe-side frame
-bytes for relay traffic are still open (only the `SetID` writes
-are pinned).
+Relay TCP uses the same `CPacket_Str` framing as the game gateway
+(`[u16 len][u16 id][body]`, `len` counts the whole frame, id at
+buffer offset 2). Byte proof: the op-5 ctor at file `0xea4e0`
+stages word 5 ahead of its `SetID` call and reaches the same
+`SetID` function at file `0x1a0550` as the gateway path (call
+site file `0xea4f4`; `ev_96ec199150e74ab84e56be7c868839f3`,
+observed) — the id half of the frame is the identical write
+(id-at-offset-2 pinned by `FUN_005a0550`, `ev_861713e2`;
+length-includes-prefix server-verified in `docs/net-protocol.md`
+§3). The relay leg therefore frames op 5 as the 66-byte TCP frame
+`42 00 05 00` plus the 62-byte tally
+(`ev_28b94c98febf3700c39fc4a07d6a9f26`, observed codec shape),
+against the 20-byte gateway 4014 tick (`14 00 AE 0F` plus the
+16-byte body; `ev_f5441895dffce3c0a41edd2c605f63cc`). No
+separate relay framer exists: both legs share
+`frame::encode_frame`/`decode_frame`, locked by the op-5
+header-shape and tally-vs-tick byte-vector tests in `relay.rs`.
+No captured relay wire bytes are claimed; the vectors are
+struct-built codec shapes.
 
 ## 3. Common routing preface (ops 1–7, 24 bytes)
 
@@ -232,6 +245,28 @@ disassembly is reproduced.
   push `50000` (`$0xc350`) and add `10000` (`$0x2710`). Selector
   immediates are the byte proof behind `RELAY_UDP_PORTS` in
   `o2jam-net`.
+- Relay TCP shared framing (`ev_96ec199150e74ab84e56be7c868839f3`,
+  `ev_28b94c98febf3700c39fc4a07d6a9f26`,
+  `ev_f5441895dffce3c0a41edd2c605f63cc`, observed): the op-5
+  ctor at file `0xea4e0` stages word 5 and calls the same `SetID`
+  function at file `0x1a0550` as the gateway path (call site file
+  `0xea4f4`), so the id half of the relay TCP frame is the
+  identical id-at-offset-2 write; with the server-verified
+  length-includes-prefix semantics this yields the 66-byte op-5
+  TCP frame (`42 00 05 00` + 62-byte tally) against the 20-byte
+  gateway 4014 tick (`14 00 AE 0F` + 16-byte body). Vectors are
+  struct-built codec shapes in `relay.rs`; no wire capture claimed.
+- Relay TCP ports: no hardcoded immediate
+  (`ev_6e655b70da829a83f2b6d07105cb025c`, observed):
+  full-image `u16` scan over the local copy finds `0x998f` at
+  exactly files `0x18c73e`/`0x18c75e`/`0x18c77e` (all `C7 45 F0`
+  port-word stores in the selector leaves) and `0x9990` port-word
+  stores only at files `0x18c74e`/`0x18c76e`; the five other
+  `0x9990` hits are a vtable-table address (`0xb3d3a`/`0xb3da1`),
+  a relative call (`0xc263c`), a jump table (`0x12994c`), and data
+  (`0x28b5b5`). TCP peer-leg ports are therefore server-provided
+  (`GetLiveState`/`GetP2PList`); `RELAY_UDP_PORTS` stays the only
+  hardcoded relay-port constant by design.
 - UHP result sink (file ~`0x187a70`): references the logger name
   `CHolePunchingCtrl::InsertUHPResult` (file `0x24e1e4`, ref file
   `0x187a8c`) and the format `Hole punching Result : %d : IP : %d -
@@ -266,11 +301,26 @@ disassembly is reproduced.
 
 - Exe byte-level proof of any relay body (only `SetID` + RTTI
   pinned); the op-5 game-loop writer in particular.
-- Relay TCP framing bytes (same-`SetID` inference +
-  same-codec corroboration, not a capture).
-- Relay TCP ports for the peer leg (only gateway TCP `15010` pinned
-  in-exe at file `0x2513d8`, ref file `0x1ab72a`); relay ports otherwise
-  arrive via `GetLiveState` 4042/4043, `GetP2PList` 4044/4045.
+- Relay TCP framing: CLOSED at the shared-shape level (§2: op-5
+  ctor stages word 5 into the same `SetID` at file `0x1a0550`,
+  call site file `0xea4f4`; 66-byte op-5 TCP frame vs 20-byte
+  gateway 4014 tick). Still open: captured relay wire bytes
+  (vectors are struct-built codec shapes, not a capture).
+- Relay TCP ports for the peer leg: no hardcoded immediate exists
+  in-exe. A full-image `u16` scan finds `0x998f` at exactly the
+  three selector-leaf port-word stores (files `0x18c73e`/`0x18c75e`/
+  `0x18c77e`, `C7 45 F0 8F 99 00 00`) and `0x9990` port-word stores
+  only at the two matching leaves (files `0x18c74e`/`0x18c76e`);
+  the five other `0x9990` hits are non-port bytes (table address at
+  files `0xb3d3a`/`0xb3da1`, relative call at file `0xc263c`, jump
+  table at file `0x12994c`, data at file `0x28b5b5`)
+  (`ev_6e655b70da829a83f2b6d07105cb025c`, observed). Verdict:
+  the only hardcoded relay ports are 39311/39312 (UDP-context
+  selector); TCP peer-leg ports arrive via the server
+  (`GetLiveState` 4042/4043, `GetP2PList` 4044/4045, Memoryer
+  shape; exe handler coverage still open). Gateway TCP `15010`
+  stays the only hardcoded TCP port (file `0x2513d8`, ref file
+  `0x1ab72a`).
 - `CUDPFailTCPConnect` trigger site (RTTI name only, file
   `0x28060c`); byte-pinned fallback behavior is relay op 3 forcing
   TCP plus the RUDP trio — the class's own call sites are open.
@@ -308,6 +358,7 @@ peer-to-peer) and the RUDP-over-UDP vs framed-TCP split.
 | Item | Value / anchor |
 |---|---|---|
 | Relay UDP ports | 39311 (`0x998f`), 39312 (`0x9990`): selector-leaf immediates, file `0x18c73b`–`0x18c77f` |
+| Relay TCP ports | none hardcoded (negative `u16` scan, `ev_6e655b70da829a83f2b6d07105cb025c`): `0x998f` exactly at the 3 selector leaves, `0x9990` port-word stores only at the 2 matching leaves; TCP peer-leg ports arrive via `GetLiveState` 4042/4043 / `GetP2PList` 4044/4045 |
 | Relay IP staging | `0x64e260`/`0x64e250`/`0x64e240` pushed at file `0x18c6d7`/`0x18c6de`/`0x18c6e5`; dispatch tables file `0x18c850`/`0x18c864` |
 | UHP start / success | branch file ~`0x18d7c5`; `UHP Start` file `0x24e2b0` (ref `0x18d80f`), `UDP Hole Punching Success~!!` file `0x24e2c0` (ref `0x18d7cd`); poll loop `Sleep(300)` via IAT `0x63f298` (site file `0x18d84d`) |
 | UHP result | `InsertUHPResult` file `0x24e1e4` (ref `0x187a8c`); format `Hole punching Result : %d : IP : %d - Port : %d` file `0x24e208` (ref `0x187a82`) |
@@ -322,7 +373,12 @@ peer-to-peer) and the RUDP-over-UDP vs framed-TCP split.
 
 `relay_command_tests`: id map, role map, relay UDP-port immediates,
   exact-body vectors for
-ops 1–7/10–11, frame round-trips, short/trailing/foreign-id and
+ops 1–7/10–11, frame round-trips, relay op-5 TCP header-shape
+vector (`42 00 05 00` + 62 B = 66 B frame), tally-vs-4014-tick
+separation vector (62 B vs 16 B bodies, 66 B vs 20 B frames, 16 B
+body rejected as tally with `need 62`), hardcoded-ports-are-UDP-only
+lock (ports differ from gateway `15010` and adjunct `7788`),
+short/trailing/foreign-id and
 bad-enum rejections, per-field offset vectors for the op-5 tally (15
 fields) and the op-6/7 nonzero fields (code at 0, autoplay at 24, role
 at 28) with unknown-role rejections. `adjunct_host_tests`: adjunct address octets,

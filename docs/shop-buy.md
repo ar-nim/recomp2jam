@@ -87,15 +87,27 @@ default — they are C→S requests with no S→C handler.)
   `0x540090`). So: result always, extra iff result `0`. The
   shop-context case (VA `0x4a5c76`, file `0xa5c76`) treats `0`
   as success and `0xffffffa0` as failure.
-- index 2 (5005) → handler VA `0x560cf0`: reads result plus up
-  to four more `i32` when result is `0`. This EXTENDS the
-  single-word `EquipItemResponse` read (VA `0x4a5fe8`,
-  `docs/equip.md`); reconciliation stays OPEN — the existing
-  type is untouched.
+- index 2 (5005) → handler VA `0x560cf0` (file `0x160cf0`;
+  stub VA `0x558853`, file `0x158853`): reads the result word
+  via the fixed-size reader (`0x555d20`), returns at once unless
+  it is `0`, then reads four more `i32` the same way (5 words
+  total on success) and forwards the first and third tail words
+  with opcode `0x138d` and `0x12` into the UI event queue
+  (`0x478d50`, `ecx 0x762b44`). Result `1` and any other nonzero
+  value exit with no further reads. SETTLED: the wire shape is
+  result plus a four-word tail iff result `0`. The shop-context
+  `0x138d` consumer (VA `0x4a5fe8`, file `0xa5fe8`) works on the
+  already-decoded word (lookup via `0x537b80`, table `0x64ca38`)
+  and is not a wire read.
 - index 26 (5029) → stub VA `0x5588d7` → handler VA `0x563900`
-  (file `0x163900`): reads one `i32` into `0x768b4c`. Prefix-read
-  consistent with the existing two-word `SyncCashPointResponse`
-  (Memoryer corroboration); the second word's role stays OPEN.
+  (file `0x163900`): reads two `i32` via the fixed-size reader
+  (`0x555d20`) into `0x768b44` and `0x768b58`, then applies the
+  first via `0x540090` (writes `0x77cd00+0x2c`, the same slot the
+  `SellItem` success word and the 5001 prefix words update) and
+  the second via `0x540d00` (writes `0x77cd00+0x2128`, inside the
+  wallet block copied at VA `0x4e93d1`, file `0xe93d1`).
+  SETTLED: two-word body, both words exe-verified; names follow
+  Memoryer order (`gem`, `cash_point`).
 - index 28 (5031) → stub VA `0x5588e5` → handler VA `0x563950`
   (file `0x163950`): reads a single `i32`; `0` runs the rename
   applier (`0x540bf0`). Exact 4-byte body, VERIFIED. Its trace
@@ -161,12 +173,16 @@ requests have live send paths per the sites above.
   the second word is the fetched entry's id word (usage
   corroborated — sibling paths feed such words to the
   item-record helper `0x52dba0`; exact game meaning OPEN).
-- `EquipItemResponse` 5005 extended tail (four words when
-  result `0`, handler file `0x160cf0`) vs the single-word
-  equip-path read — reconciliation OPEN; type unchanged.
-- `SyncCashPointResponse` 5029 second word: handler reads only
-  the first word in the walked context; two-word shape stays
-  Memoryer-corroborated.
+- `EquipItemResponse` 5005: SETTLED as result plus a four-word
+  success tail (`result == 0` → 20 B; else 4 B). Handler file
+  `0x160cf0` reads the tail only on `0`; the `0x4a5fe8` site is a
+  downstream consumer of the decoded word, not a wire read.
+  `docs/equip.md` still records the old single-word read and needs
+  a follow-up edit (out of scope here).
+- `SyncCashPointResponse` 5029: SETTLED as two words, both
+  exe-verified at file `0x163900`. First word → `0x77cd00+0x2c`
+  (shared gem/currency slot); second word → `0x77cd00+0x2128`
+  (wallet-block cash slot).
 
 ## Tests (`crates/o2jam-net/src/message.rs`)
 
@@ -199,4 +215,11 @@ requests have live send paths per the sites above.
 `check_name_encodes_terminated_name` (exact frame),
 `check_name_round_trips_through_frame`,
 `check_name_rejects_trailing_bytes`,
-`check_name_rejects_wrong_command`.
+`check_name_rejects_wrong_command`,
+`equip_item_response_success_carries_four_word_tail` (exact frame),
+`equip_item_response_error_decodes_result_only`,
+`equip_item_response_rejects_tail_on_error`,
+`equip_item_response_rejects_short_success`,
+`equip_item_response_rejects_trailing_success`,
+`equip_item_response_rejects_wrong_command`,
+`sync_cash_point_response_rejects_trailing_bytes`.
