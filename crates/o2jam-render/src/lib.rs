@@ -122,6 +122,34 @@ impl Rgb555Image {
     }
 }
 
+/// Nearest-neighbor source coordinate for one destination coordinate.
+fn stretch_index(dst: usize, dst_len: usize, src_len: usize) -> usize {
+    dst * src_len / dst_len
+}
+
+/// Stretch `src` (`src_w` x `src_h`) over `dst` (`dst_w` x `dst_h`).
+pub fn stretch_blit(
+    dst: &mut [u32],
+    dst_w: usize,
+    dst_h: usize,
+    src: &[u32],
+    src_w: usize,
+    src_h: usize,
+) {
+    if dst_w == 0 || dst_h == 0 || src_w == 0 || src_h == 0 {
+        return;
+    }
+    if dst.len() < dst_w * dst_h || src.len() < src_w * src_h {
+        return;
+    }
+    for y in 0..dst_h {
+        for x in 0..dst_w {
+            dst[y * dst_w + x] =
+                src[stretch_index(y, dst_h, src_h) * src_w + stretch_index(x, dst_w, src_w)];
+        }
+    }
+}
+
 /// Blit a sprite at `(dx, dy)`, skipping `colorkey` pixels when set.
 /// Output clips to the frame.
 pub fn blit_rgb555(
@@ -789,6 +817,36 @@ mod tests {
             Rgb555Image::decode(&[], 0, 0).unwrap().words,
             Vec::<u16>::new()
         );
+    }
+
+    #[test]
+    fn stretch_doubles_each_pixel() {
+        let src = vec![0xAA, 0xBB, 0xCC, 0xDD];
+        let mut dst = vec![0u32; 4 * 4];
+        stretch_blit(&mut dst, 4, 4, &src, 2, 2);
+        assert_eq!(
+            dst,
+            vec![
+                0xAA, 0xAA, 0xBB, 0xBB, 0xAA, 0xAA, 0xBB, 0xBB, 0xCC, 0xCC, 0xDD, 0xDD, 0xCC, 0xCC,
+                0xDD, 0xDD,
+            ]
+        );
+    }
+
+    #[test]
+    fn stretch_shrinks_from_top_left_samples() {
+        let src: Vec<u32> = (0..16).collect();
+        let mut dst = vec![0u32; 2 * 2];
+        stretch_blit(&mut dst, 2, 2, &src, 4, 4);
+        assert_eq!(dst, vec![0, 2, 8, 10]);
+    }
+
+    #[test]
+    fn stretch_ignores_bad_geometry() {
+        let mut dst = vec![0u32; 4];
+        stretch_blit(&mut dst, 0, 2, &[1, 2, 3, 4], 2, 2);
+        stretch_blit(&mut dst, 2, 2, &[1, 2], 2, 2);
+        assert_eq!(dst, vec![0u32; 4]);
     }
 
     #[test]

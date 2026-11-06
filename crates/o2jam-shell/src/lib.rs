@@ -219,11 +219,13 @@ impl Shell {
         struct Handler {
             shell: Shell,
             surface: Option<softbuffer::Surface<OwnedDisplayHandle, Arc<Window>>>,
+            surface_size: Option<(u32, u32)>,
             paint_error: Option<anyhow::Error>,
         }
         impl Handler {
-            /// Copy the backbuffer to the window, skipping frames when
-            /// the surface size drifts (e.g. right after a resize).
+            /// Stretch the backbuffer over the window buffer (softbuffer
+            /// draws mismatched buffers unscaled, so the client scales
+            /// itself and every window size shows the whole frame).
             fn present(&mut self, event_loop: &ActiveEventLoop) {
                 let Some(surface) = self.surface.as_mut() else {
                     return;
@@ -231,10 +233,20 @@ impl Shell {
                 let pixels = &self.shell.pixels;
                 match surface.buffer_mut() {
                     Ok(mut buffer) => {
-                        if buffer.len() != pixels.len() {
+                        let Some((width, height)) = self.surface_size else {
+                            return;
+                        };
+                        if buffer.len() != width as usize * height as usize {
                             return;
                         }
-                        buffer.copy_from_slice(pixels);
+                        o2jam_render::stretch_blit(
+                            &mut buffer,
+                            width as usize,
+                            height as usize,
+                            pixels,
+                            DEFAULT_WIDTH as usize,
+                            DEFAULT_HEIGHT as usize,
+                        );
                         if let Err(error) = buffer.present() {
                             self.paint_error = Some(anyhow::anyhow!("present failed: {error:?}"));
                             event_loop.exit();
@@ -259,6 +271,8 @@ impl Shell {
                 if let Err(error) = surface.resize(width, height) {
                     self.paint_error = Some(anyhow::anyhow!("surface resize failed: {error:?}"));
                     event_loop.exit();
+                } else {
+                    self.surface_size = Some((width.get(), height.get()));
                 }
             }
         }
@@ -280,6 +294,7 @@ impl Shell {
                                 (NonZeroU32::new(size.width), NonZeroU32::new(size.height))
                             {
                                 if surface.resize(width, height).is_ok() {
+                                    self.surface_size = Some((width.get(), height.get()));
                                     self.surface = Some(surface);
                                 }
                             }
@@ -344,6 +359,7 @@ impl Shell {
         let mut handler = Handler {
             shell: self,
             surface: None,
+            surface_size: None,
             paint_error: None,
         };
         event_loop

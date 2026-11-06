@@ -1,7 +1,5 @@
-//! `o2jam-dump` — inspect O2Jam asset files.
-//!
-//! Day-0: `identify` (magic sniff) + bounded hexdump. Pretty printers for
-//! OJM/OJN arrive with verified parsers.
+//! `o2jam-dump` — inspect O2Jam asset files: magic sniffing, OJM
+//! sample lists, OPI/OPA entry lists, bounded hexdumps.
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
