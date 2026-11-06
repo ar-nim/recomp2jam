@@ -2,16 +2,24 @@
 //! checked for composition (what it paints) and for the transitions,
 //! input, and timing edges the 7.55 client performs.
 //!
-//! Composition pins the current placeholder scenes (see
-//! `docs/parity.md`: all art cells are FAIL until real `.ojs`/`.bnd`
-//! art loads). Transitions pin the documented journey
-//! (`docs/lifecycle.md`): splash → channel → room → waiting →
-//! loading → playing → result, with retry/leave-back edges. Only the
-//! public API is used, the way the window uses it.
+//! Composition pins art-backed layering per scene: a staged figure
+//! behind the live UI (figure ink present, UI ink on top, never one
+//! flat fill), plus the flat fallback that shows with no art staged
+//! (see `docs/parity.md`: art cells stay FAIL until real `.ojs`/`.bnd`
+//! bytes load, which cannot ship in-repo). Transitions pin the
+//! documented journey (`docs/lifecycle.md`): splash → channel → room
+//! → waiting → loading → playing → result, with retry/leave-back
+//! edges. Only the public API is used, the way the window uses it.
+
+use std::collections::HashMap;
 
 use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
-use o2jam_render::{pack_xrgb, Frame};
-use o2jam_shell::{can_enter, paint_screen, GameLoop, MenuKey, Screen, ScreenFlow, ScreenGame};
+use o2jam_render::{pack_xrgb, Frame, Rect, Rgb555Image, NATIVE_HEIGHT, NATIVE_WIDTH};
+use o2jam_shell::avatar::ScenePlacement;
+use o2jam_shell::{
+    can_enter, paint_screen, AvatarFigure, FigureLayer, GameLoop, MenuKey, Screen, ScreenFlow,
+    ScreenGame,
+};
 
 /// Corner ink of the splash placeholder (logo card on dark ground).
 fn splash_background() -> u32 {
@@ -387,4 +395,149 @@ fn flow_allows_every_documented_edge() {
     for (from, to) in journey {
         assert!(can_enter(from, to), "{from:?} -> {to:?}");
     }
+}
+
+/// Staged-figure ink: one red pixel proving archive art sits behind
+/// the live UI (a synthetic stand-in; real `.ojs` bytes stay out of
+/// the repo).
+fn staged_ink() -> u32 {
+    pack_xrgb(255, 0, 0)
+}
+
+/// One decoded red pixel; colorkey white keeps the pixel opaque.
+fn staged_figure() -> AvatarFigure {
+    let mut figure = AvatarFigure::default();
+    figure.push_layer(FigureLayer {
+        image: Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap(),
+        dx: 0,
+        dy: 0,
+        colorkey: 0xFFFF,
+    });
+    figure
+}
+
+/// Stage one full-canvas figure for a screen (mirrors the unbound
+/// blocks: splash, channel, and loading cover the native canvas, so
+/// the figure lands on the frame origin at any size).
+fn stage_screen_art(game: &mut ScreenGame, screen: Screen, name: &str) {
+    let placements = vec![ScenePlacement {
+        id: "IDC_HARNESS".to_owned(),
+        code: 0,
+        sprite: Some(name.to_owned()),
+        rect: Rect {
+            x: 0,
+            y: 0,
+            w: NATIVE_WIDTH,
+            h: NATIVE_HEIGHT,
+        },
+    }];
+    game.load_scene(
+        screen,
+        placements,
+        HashMap::from([(name.to_owned(), staged_figure())]),
+    );
+}
+
+/// Art-backed composition: the staged figure shows through, every
+/// live UI ink paints on top, and the frame is never one flat fill.
+fn assert_composed(buf: &[u32], ui_inks: &[u32]) {
+    assert!(buf.contains(&staged_ink()));
+    for ink in ui_inks {
+        assert!(buf.contains(ink));
+    }
+    assert!(buf.iter().any(|pixel| *pixel != buf[0]));
+}
+
+#[test]
+fn splash_layers_logo_over_staged_art() {
+    let mut game = ScreenGame::new();
+    stage_screen_art(&mut game, Screen::Avi, "O2mediaLogo.ojs");
+    // Splash UI is the logo itself: a green pixel offset so the
+    // staged scene figure stays visible underneath it.
+    let mut logo = AvatarFigure::default();
+    logo.push_layer(FigureLayer {
+        image: Rgb555Image::decode(&[0xE0, 0x03], 1, 1).unwrap(),
+        dx: 5,
+        dy: 0,
+        colorkey: 0xFFFF,
+    });
+    game.load_splash(logo);
+    let buf = painted_game(&mut game, 32, 24, 0);
+    assert_composed(&buf, &[pack_xrgb(0, 255, 0)]);
+}
+
+#[test]
+fn channel_layers_list_over_staged_art() {
+    let mut game = ScreenGame::new();
+    game.set_channels(two_channels());
+    stage_screen_art(&mut game, Screen::Channel, "Dialog_ChannelSelectBar.ojs");
+    game.lane_key(3, true);
+    assert_eq!(game.screen(), Screen::Channel);
+    let buf = painted_game(&mut game, 64, 48, 0);
+    assert_composed(
+        &buf,
+        &[pack_xrgb(0xFF, 0xFF, 0xFF), pack_xrgb(0xFF, 0xD0, 0x20)],
+    );
+}
+
+#[test]
+fn room_layers_rows_over_staged_art() {
+    let mut game = ScreenGame::new();
+    game.set_rooms(vec![room_row(false)]);
+    stage_screen_art(&mut game, Screen::Room, "Room_List.ojs");
+    game.lane_key(3, true);
+    game.menu_key(MenuKey::Confirm, true);
+    assert_eq!(game.screen(), Screen::Room);
+    let buf = painted_game(&mut game, 64, 48, 0);
+    assert_composed(
+        &buf,
+        &[pack_xrgb(0xFF, 0xFF, 0xFF), pack_xrgb(0xFF, 0xD0, 0x20)],
+    );
+}
+
+#[test]
+fn waiting_layers_seats_over_staged_art() {
+    let mut game = ScreenGame::new();
+    game.set_joined_room(seated_room());
+    stage_screen_art(&mut game, Screen::Waiting, "Wait_TeamA.ojs");
+    game.lane_key(3, true);
+    game.menu_key(MenuKey::Confirm, true);
+    game.menu_key(MenuKey::Confirm, true);
+    assert_eq!(game.screen(), Screen::Waiting);
+    let buf = painted_game(&mut game, 80, 64, 0);
+    assert_composed(
+        &buf,
+        &[pack_xrgb(0xFF, 0xFF, 0xFF), pack_xrgb(0x30, 0xE0, 0x30)],
+    );
+}
+
+#[test]
+fn loading_layers_bar_over_staged_art() {
+    let mut game = ScreenGame::new();
+    stage_screen_art(&mut game, Screen::Loading, "MusicLoading.ojs");
+    walk_to_loading(&mut game);
+    let buf = painted_game(&mut game, 64, 48, 0);
+    assert_composed(&buf, &[pack_xrgb(0x30, 0xB0, 0x30)]);
+}
+
+#[test]
+fn playing_layers_notes_over_staged_gauges() {
+    let mut game = ScreenGame::new();
+    game.load_chart(vec![(2, 1500, 7)]);
+    stage_screen_art(&mut game, Screen::Playing, "Playing_Panel.ojs");
+    walk_to_playing(&mut game);
+    let buf = painted_game(&mut game, 70, 60, 1000);
+    assert_composed(&buf, &[pack_xrgb(0x40, 0xC0, 0xFF)]);
+}
+
+#[test]
+fn result_layers_digits_over_staged_art() {
+    let mut game = ScreenGame::new();
+    game.load_chart(vec![(2, 5000, 7)]);
+    stage_screen_art(&mut game, Screen::Result, "Result_WinLose.ojs");
+    walk_to_playing(&mut game);
+    game.strike_at(2, 5000);
+    let buf = painted_game(&mut game, 70, 60, 7000);
+    assert_eq!(game.screen(), Screen::Result);
+    assert_composed(&buf, &[pack_xrgb(0xFF, 0xFF, 0xFF)]);
 }
