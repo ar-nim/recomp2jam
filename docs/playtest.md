@@ -210,3 +210,34 @@ Covers the punch/relay (`05d52be`), song-wheel (`1dff270`), and side-screen
 - **Verdict: no regression — suite is green on clean HEAD (653 passed;
   +12 vs the 641 baseline from new net/shell tests, 0 failures).
   No commits, no pushes.**
+
+## Regression sweep — 2026-11-06 13:50 UTC (HEAD `ae36b9e`, tree clean at start)
+
+Covers the gift-head re-proof: adjunct host + gift flows (`766f75e`)
+and the wheel-filter leave-entry-open pin (`a84ca93`).
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **693 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 0, file 107, game 68, net 225,
+  render 35, shell 176, real_art 7, scenes 22, recomp2jam 34
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, no warnings
+  (0 warning lines on a touched-`main.rs` rebuild check).
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.63 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`21:50:31 +08:00`):
+  `Authorize session` → `Create room: songflow` →
+  `Get music list: [0/00]` → `Start game: [000]` →
+  `Submit score: 2210`.
+- **Verdict: no regression — suite is green on HEAD (693 passed;
+  +40 vs the 653 baseline from new net gift/adjunct-flow tests,
+  0 failures). No commits, no pushes.**
+- Tree note: a peer landed uncommitted doc-comment-only edits mid-sweep
+  (`o2jam-file/src/tables.rs`, `docs/file-formats/ojn.md` — comment text,
+  no behavior change); `cargo test -p o2jam-file` re-run after: 107 passed,
+  0 failed. This sweep touched only `docs/playtest.md`.
