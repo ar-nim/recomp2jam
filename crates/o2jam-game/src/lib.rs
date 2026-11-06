@@ -287,6 +287,112 @@ impl CoolStreak {
     }
 }
 
+/// A waiting-room seat count, VERIFIED against 7.55: eight team buttons
+/// `TEAMA..TEAMH` (`0x16201004..0x1620100B`) plus eight avatar covers and
+/// eight extend slots in `STATE_WAITING`, and the S→C team-change handler
+/// `FUN_0055f470` guards its slot index with `< 8`.
+///
+/// Assignment is per-seat: the client maps the pressed button to an index
+/// (`button − 0x16201004`, see `FUN_004b22d0` / `FUN_0048c810`) and sends
+/// `SetRoomTeam` (4004) with that index; the server rebroadcasts and each
+/// client refreshes its 8-slot UI. Score aggregation and the winner live
+/// server-side (per-member `UpdateGameStats` 4014 / `SubmitScore` 4016;
+/// `Winner_image.ojs` in play, `Result_WinLose.ojs` on the result screen).
+/// This type mirrors that room state: per-seat teams plus per-seat
+/// submitted totals, so tests can pin the client-visible behavior
+/// (assignment, totals, winner pick) without a server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoomTeams {
+    /// Team per seat (`None` = seat empty), index = seat 0..8.
+    seats: [Option<u8>; MAX_SEATS],
+    /// Submitted score total per seat.
+    totals: [u64; MAX_SEATS],
+}
+
+/// Seats in a 7.55 waiting room (eight team buttons, eight avatar covers).
+pub const MAX_SEATS: usize = 8;
+/// Team ids are the 0..8 button indices (`TEAMA` = 0 … `TEAMH` = 7).
+pub const MAX_TEAMS: u8 = 8;
+
+impl Default for RoomTeams {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RoomTeams {
+    /// Empty room: every seat vacant, every total zero.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            seats: [None; MAX_SEATS],
+            totals: [0; MAX_SEATS],
+        }
+    }
+
+    /// Seat count (always [`MAX_SEATS`]).
+    #[must_use]
+    pub fn seats(&self) -> usize {
+        MAX_SEATS
+    }
+
+    /// Assign `seat` to `team` (both range-checked; out-of-range is ignored).
+    ///
+    /// Mirrors the client send path: pressing `TEAMx` yields index
+    /// `x − 'A'` which the client ships as `SetRoomTeam` (4004).
+    pub fn set_team(&mut self, seat: usize, team: u8) {
+        if seat < MAX_SEATS && team < MAX_TEAMS {
+            self.seats[seat] = Some(team);
+        }
+    }
+
+    /// Vacate `seat` (clears team and total; out-of-range is ignored).
+    pub fn vacate(&mut self, seat: usize) {
+        if seat < MAX_SEATS {
+            self.seats[seat] = None;
+            self.totals[seat] = 0;
+        }
+    }
+
+    /// Team of `seat`, or `None` when the seat is empty/out of range.
+    #[must_use]
+    pub fn team_of(&self, seat: usize) -> Option<u8> {
+        self.seats.get(seat).copied().flatten()
+    }
+
+    /// Record a member's submitted total (as the server would accumulate
+    /// from `UpdateGameStats`/`SubmitScore`); ignored for empty seats.
+    pub fn submit(&mut self, seat: usize, points: u64) {
+        if seat < MAX_SEATS && self.seats[seat].is_some() {
+            self.totals[seat] = self.totals[seat].saturating_add(points);
+        }
+    }
+
+    /// Combined total of every seated member on `team`.
+    #[must_use]
+    pub fn team_total(&self, team: u8) -> u64 {
+        self.seats
+            .iter()
+            .zip(self.totals.iter())
+            .filter(|(seat, _)| **seat == Some(team))
+            .map(|(_, total)| *total)
+            .sum()
+    }
+
+    /// Winning team: highest combined total, `None` when no seat is filled.
+    ///
+    /// Ties break toward the lower team id, matching the
+    /// first-seat-wins order of an 8-slot scan. Which side the client
+    /// renders (`Winner_image.ojs`, `Result_WinLose.ojs`) is decided by
+    /// this same comparison server-side.
+    #[must_use]
+    pub fn winner(&self) -> Option<u8> {
+        (0..MAX_TEAMS)
+            .filter(|team| self.seats.contains(&Some(*team)))
+            .max_by_key(|team| (self.team_total(*team), MAX_TEAMS - team))
+    }
+}
+
 /// (file `0x176540`, VA `0x576540`, dossier `ev_14992eb2…` /
 /// decompile `ev_5ecb1ce8…`).
 ///
@@ -648,6 +754,49 @@ mod tests {
         score.apply_rated(Judgement::Miss, &mut gauge, &mut pills);
         assert_eq!(score.combo, 0);
         assert_eq!(score.max_combo, 1);
+    }
+
+    #[test]
+    fn eight_seats_take_teams_a_through_h() {
+        let mut room = RoomTeams::new();
+        assert_eq!(room.seats(), 8);
+        assert_eq!(room.winner(), None);
+        for seat in 0..8 {
+            #[allow(clippy::cast_possible_truncation)]
+            room.set_team(seat, seat as u8);
+        }
+        assert_eq!(room.team_of(0), Some(0));
+        assert_eq!(room.team_of(7), Some(7));
+        assert_eq!(room.team_of(8), None);
+        room.set_team(8, 0);
+        room.set_team(0, 8);
+        assert_eq!(room.team_of(0), Some(0));
+    }
+
+    #[test]
+    fn team_totals_sum_only_their_own_seats() {
+        let mut room = RoomTeams::new();
+        room.set_team(0, 0);
+        room.set_team(1, 1);
+        room.set_team(2, 0);
+        room.submit(0, 100_000);
+        room.submit(1, 150_000);
+        room.submit(2, 50_000);
+        room.submit(3, 999_999);
+        assert_eq!(room.team_total(0), 150_000);
+        assert_eq!(room.team_total(1), 150_000);
+        assert_eq!(room.winner(), Some(0));
+    }
+
+    #[test]
+    fn vacated_seat_loses_team_and_total() {
+        let mut room = RoomTeams::new();
+        room.set_team(0, 3);
+        room.submit(0, 10_000);
+        room.vacate(0);
+        assert_eq!(room.team_of(0), None);
+        assert_eq!(room.team_total(3), 0);
+        assert_eq!(room.winner(), None);
     }
 
     #[test]
