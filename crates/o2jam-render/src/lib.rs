@@ -199,6 +199,88 @@ pub fn visible_spans(curtain: LaneCurtain, highway: &Rect) -> Vec<Rect> {
     }
 }
 
+/// Micro-font glyph width in pixels (digits only for now; the combo
+/// counters, scores, and version stamps need no letters yet).
+/// Glyphs are hand-authored below — no font assets involved.
+pub const GLYPH_W: usize = 3;
+/// Micro-font glyph height in pixels.
+pub const GLYPH_H: usize = 5;
+/// Horizontal advance per digit: glyph plus 1 px spacing.
+pub const GLYPH_ADVANCE: usize = GLYPH_W + 1;
+
+/// 3x5 bitmap rows for one decimal digit (bit 2 = left pixel).
+/// `None` when out of range — callers draw nothing.
+#[must_use]
+pub const fn digit_glyph(digit: u8) -> Option<[u8; GLYPH_H]> {
+    match digit {
+        0 => Some([0b111, 0b101, 0b101, 0b101, 0b111]),
+        1 => Some([0b010, 0b110, 0b010, 0b010, 0b111]),
+        2 => Some([0b111, 0b001, 0b111, 0b100, 0b111]),
+        3 => Some([0b111, 0b001, 0b111, 0b001, 0b111]),
+        4 => Some([0b101, 0b101, 0b111, 0b001, 0b001]),
+        5 => Some([0b111, 0b100, 0b111, 0b001, 0b111]),
+        6 => Some([0b111, 0b100, 0b111, 0b101, 0b111]),
+        7 => Some([0b111, 0b001, 0b010, 0b010, 0b010]),
+        8 => Some([0b111, 0b101, 0b111, 0b101, 0b111]),
+        9 => Some([0b111, 0b101, 0b111, 0b001, 0b111]),
+        _ => None,
+    }
+}
+
+/// Draw one digit with its top-left at `(x, y)`; clips to the frame,
+/// draws nothing for out-of-range digits.
+pub fn draw_digit(frame: &mut Frame<'_>, x: i32, y: i32, digit: u8, color: u32) {
+    if frame.buf.len() < frame.w * frame.h {
+        return;
+    }
+    let Some(rows) = digit_glyph(digit) else {
+        return;
+    };
+    for (row, bits) in rows.iter().enumerate() {
+        for col in 0..GLYPH_W {
+            if bits & (1 << (GLYPH_W - 1 - col)) == 0 {
+                continue;
+            }
+            let (dx, dy) = (x + col as i32, y + row as i32);
+            if dx < 0 || dy < 0 || dx >= frame.w as i32 || dy >= frame.h as i32 {
+                continue;
+            }
+            frame.buf[dy as usize * frame.w + dx as usize] = color;
+        }
+    }
+}
+
+/// Pixel width of `value` in digits (no trailing spacing).
+#[must_use]
+pub fn number_width(mut value: u32) -> usize {
+    let mut digits = 1;
+    while value >= 10 {
+        value /= 10;
+        digits += 1;
+    }
+    digits * GLYPH_ADVANCE - 1
+}
+
+/// Draw `value` in decimal from `x` (top-left), digits spaced by
+/// [`GLYPH_ADVANCE`]; returns the x edge after the last digit.
+pub fn draw_number(frame: &mut Frame<'_>, x: i32, y: i32, value: u32, color: u32) -> i32 {
+    let mut digits = [0u8; 10];
+    let mut count = 0;
+    let mut rest = value;
+    loop {
+        digits[count] = (rest % 10) as u8;
+        count += 1;
+        rest /= 10;
+        if rest == 0 {
+            break;
+        }
+    }
+    for (i, digit) in digits[..count].iter().rev().enumerate() {
+        draw_digit(frame, x + (i * GLYPH_ADVANCE) as i32, y, *digit, color);
+    }
+    x + (count * GLYPH_ADVANCE) as i32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -446,5 +528,73 @@ mod tests {
             None,
         );
         assert_eq!(plain, clipped);
+    }
+
+    #[test]
+    fn all_digits_match_their_bitmaps() {
+        for digit in 0..10u8 {
+            let mut buf = vec![0u32; GLYPH_W * GLYPH_H];
+            let mut frame = Frame {
+                buf: &mut buf,
+                w: GLYPH_W,
+                h: GLYPH_H,
+            };
+            draw_digit(&mut frame, 0, 0, digit, 0xFFFFFF);
+            let rows = digit_glyph(digit).unwrap();
+            for (y, bits) in rows.iter().enumerate() {
+                for x in 0..GLYPH_W {
+                    let lit = bits & (1 << (GLYPH_W - 1 - x)) != 0;
+                    assert_eq!(frame.buf[y * GLYPH_W + x] != 0, lit, "{digit} at {x},{y}");
+                }
+            }
+        }
+        assert_eq!(digit_glyph(10), None);
+    }
+
+    #[test]
+    fn digit_draw_clips_off_frame() {
+        let mut buf = vec![0u32; 2 * 2];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 2,
+            h: 2,
+        };
+        draw_digit(&mut frame, -1, -1, 8, 0xFFFFFF);
+        draw_digit(&mut frame, 0, 0, 10, 0xFFFFFF);
+        assert_eq!(frame.buf, vec![0, 0xFFFFFF, 0xFFFFFF, 0xFFFFFF]);
+    }
+
+    #[test]
+    fn number_renders_decimal_without_leading_zeros() {
+        let mut buf = vec![0u32; 12 * GLYPH_H];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 12,
+            h: GLYPH_H,
+        };
+        let end = draw_number(&mut frame, 0, 0, 507, 0xFFFFFF);
+        assert_eq!(end, 12);
+        assert_eq!(number_width(507), 11);
+        assert_eq!(number_width(0), GLYPH_W);
+        // '5' top bar, gap column, '0' top-left pixel.
+        assert_eq!(frame.buf[0], 0xFFFFFF);
+        assert_eq!(frame.buf[3], 0);
+        assert_eq!(frame.buf[4], 0xFFFFFF);
+        assert_eq!(frame.buf[8], 0xFFFFFF);
+    }
+
+    #[test]
+    fn number_zero_renders_single_glyph() {
+        let mut buf = vec![0u32; GLYPH_W * GLYPH_H];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: GLYPH_W,
+            h: GLYPH_H,
+        };
+        draw_number(&mut frame, 0, 0, 0, 0xFFFFFF);
+        assert_eq!(frame.buf[0], 0xFFFFFF);
+        assert_eq!(frame.buf[1], 0xFFFFFF);
+        assert_eq!(frame.buf[2], 0xFFFFFF);
+        assert_eq!(frame.buf[4], 0);
     }
 }

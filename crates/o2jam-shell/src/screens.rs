@@ -9,7 +9,14 @@
 
 use super::screen::{Screen, ScreenFlow};
 use super::GameLoop;
-use o2jam_render::{fill_rect, pack_xrgb, Frame, Rect};
+use o2jam_render::{draw_number, fill_rect, number_width, pack_xrgb, Frame, Rect};
+
+/// Client version stamped on the splash (matches the 7.55 target).
+const SPLASH_VERSION: u32 = 755;
+/// Splash version color (white on the logo card).
+fn version_color() -> u32 {
+    pack_xrgb(0xFF, 0xFF, 0xFF)
+}
 
 /// Paint the splash (logo) scene.
 fn paint_avi(frame: &mut Frame<'_>) {
@@ -17,6 +24,14 @@ fn paint_avi(frame: &mut Frame<'_>) {
         frame,
         pack_xrgb(0x08, 0x08, 0x10),
         pack_xrgb(0x20, 0x60, 0xC0),
+    );
+    let text_w = number_width(SPLASH_VERSION) as i32;
+    draw_number(
+        frame,
+        frame.w as i32 / 2 - text_w / 2,
+        frame.h as i32 / 2 - 2,
+        SPLASH_VERSION,
+        version_color(),
     );
 }
 
@@ -173,7 +188,20 @@ mod screen_paint_tests {
     fn splash_covers_background_with_card() {
         let buf = painted(Screen::Avi, 32, 24);
         assert_eq!(buf[0], pack_xrgb(0x08, 0x08, 0x10));
-        assert_eq!(buf[12 * 32 + 16], pack_xrgb(0x20, 0x60, 0xC0));
+        // Card top-left corner, above the version stamp.
+        assert_eq!(buf[9 * 32 + 12], pack_xrgb(0x20, 0x60, 0xC0));
+    }
+
+    #[test]
+    fn splash_stamps_version_in_card() {
+        // 32x24 splash: "755" starts at x = 16 - 11/2 = 11, y = 10;
+        // the '7' top bar lights the first three pixels.
+        let buf = painted(Screen::Avi, 32, 24);
+        let white = pack_xrgb(0xFF, 0xFF, 0xFF);
+        assert_eq!(buf[10 * 32 + 11], white);
+        assert_eq!(buf[10 * 32 + 12], white);
+        assert_eq!(buf[10 * 32 + 13], white);
+        assert_eq!(buf[10 * 32 + 14], pack_xrgb(0x20, 0x60, 0xC0));
     }
 
     #[test]
