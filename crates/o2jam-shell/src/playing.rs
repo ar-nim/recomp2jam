@@ -9,11 +9,13 @@
 //! native 800x600 (`docs/bnd-semantics.md`, `docs/bnd-audit.md`), via
 //! the shared [`scale_rect_to_frame`] scaler.
 
+use crate::avatar::AvatarFigure;
 use o2jam_game::{
     lane_effect::{lane_map_for_modifier_byte, SkillRing},
     CoolStreak, Judgement, LaneMap, LongTail, MeasureReshuffle, PeerBars, PillStock, QueueEvent,
     RankDelivery, Score, TimingWindows, JAM_PROGRESS_PER_LEVEL, LIFE_MAX, PEER_SLOT_COUNT,
 };
+use o2jam_net::GameSpeed;
 use o2jam_render::{
     blit_rgb555, blit_rgb555_clipped, draw_number, draw_text, fill_rect, number_width, pack_xrgb,
     scale_rect_to_frame, text_width, visible_spans, Frame, LaneCurtain, Rect, Rgb555Image,
@@ -929,6 +931,8 @@ pub struct LivePlay {
     /// Last strike per lane in song ms (visual hit-burst only; scoring
     /// and timing never read this).
     lane_flash: [Option<u64>; HIGHWAY_LANES as usize],
+    /// Display-only avatar scene captions (level, song, volume).
+    scene: AvatarScene,
 }
 
 impl Default for LivePlay {
@@ -947,6 +951,7 @@ impl Default for LivePlay {
             last_word: None,
             sounds: Vec::new(),
             lane_flash: [None; HIGHWAY_LANES as usize],
+            scene: AvatarScene::default(),
         }
     }
 }
@@ -980,6 +985,7 @@ impl LivePlay {
             last_word: None,
             sounds: Vec::new(),
             lane_flash: [None; HIGHWAY_LANES as usize],
+            scene: AvatarScene::default(),
         }
     }
 
@@ -1016,12 +1022,49 @@ impl LivePlay {
             last_word: None,
             sounds: Vec::new(),
             lane_flash: [None; HIGHWAY_LANES as usize],
+            scene: AvatarScene::default(),
         }
     }
 
     /// Skill-ring curtain worn for this run (default: none).
     pub fn set_curtain(&mut self, curtain: LaneCurtain) {
         self.curtain = curtain;
+    }
+
+    /// Display-only avatar scene captions (level, song, volume).
+    #[must_use]
+    pub fn scene(&self) -> &AvatarScene {
+        &self.scene
+    }
+
+    /// Caption the avatar scene (display only; scoring and timing
+    /// never read this).
+    pub fn scene_mut(&mut self) -> &mut AvatarScene {
+        &mut self.scene
+    }
+
+    /// Paint the right-side avatar scene plus bottom tally strip over
+    /// the highway and staged art. Counts feed from the live
+    /// [`Score`]; state is untouched (shared `&self` like a query).
+    pub fn paint_avatar_scene(
+        &self,
+        frame: &mut Frame<'_>,
+        avatar: Option<&AvatarFigure>,
+        now_ms: u64,
+    ) {
+        self.scene
+            .paint(frame, avatar, &self.score, now_ms, self.song_end_ms());
+    }
+
+    /// Song end for the TIME bar: last head/tail plus the 1.5 s outro
+    /// from [`Self::is_finished`]; `None` while nothing is charted.
+    fn song_end_ms(&self) -> Option<u64> {
+        let last = self
+            .pending
+            .iter()
+            .map(|note| note.tail_ms.unwrap_or(note.at_ms))
+            .max()?;
+        Some(last.saturating_add(1500))
     }
 
     /// Stage real note/key art into the highway paint (procedural
@@ -1496,6 +1539,308 @@ impl LivePlay {
             draw_number(frame, 16, 32, self.score.combo, pack_xrgb(0xFF, 0xFF, 0x40));
         }
         self.paint_judgement_word(frame, geom, now_ms);
+    }
+}
+
+/// Native scene width the avatar layout scales from (800x600 canvas).
+const SCENE_NATIVE_W: u32 = 800;
+/// Native scene height the avatar layout scales from.
+const SCENE_NATIVE_H: u32 = 600;
+/// `Lv.<n> <name>` line above the life bar (native origin).
+const AVATAR_LEVEL_NATIVE: (i32, i32) = (340, 40);
+/// Life-bar shell on the native canvas (above the figure).
+const AVATAR_LIFE_NATIVE: Rect = Rect {
+    x: 340,
+    y: 56,
+    w: 200,
+    h: 12,
+};
+/// Avatar figure origin on the native canvas (center-right).
+const AVATAR_FIGURE_NATIVE: (i32, i32) = (470, 120);
+/// Song info line (`X3.5 <title>`) on the native canvas (lower area).
+const AVATAR_SONG_NATIVE: (i32, i32) = (340, 420);
+/// `VOL <n>` readout below the song line (native origin).
+const AVATAR_VOLUME_NATIVE: (i32, i32) = (340, 444);
+/// Counts line on the native canvas (left of the tally strip).
+const TALLY_COUNTS_NATIVE: (i32, i32) = (16, 556);
+/// TIME progress bar on the native canvas (strip center).
+const TALLY_TIME_NATIVE: Rect = Rect {
+    x: 300,
+    y: 560,
+    w: 220,
+    h: 10,
+};
+/// Strip song-title line below the TIME bar (native origin).
+const TALLY_TITLE_NATIVE: (i32, i32) = (300, 576);
+/// EXIT button readout on the native canvas (strip right).
+const TALLY_EXIT_NATIVE: (i32, i32) = (740, 556);
+/// Caption ink over staged art (white on the scrim).
+const AVATAR_TEXT: u32 = pack_xrgb(0xFF, 0xFF, 0xFF);
+/// Scrim ink behind caption lines (matches the lobby scrims).
+const AVATAR_SCRIM: u32 = pack_xrgb(0x08, 0x08, 0x10);
+/// Life-bar empty shell (mirrors the peer bars).
+const AVATAR_LIFE_EMPTY: u32 = pack_xrgb(0x30, 0x10, 0x10);
+/// Life-bar fill (mirrors the peer bars).
+const AVATAR_LIFE_FULL: u32 = pack_xrgb(0x20, 0xE0, 0x20);
+/// TIME-bar empty shell.
+const AVATAR_TIME_EMPTY: u32 = pack_xrgb(0x20, 0x20, 0x20);
+/// TIME-bar progress fill.
+const AVATAR_TIME_FILL: u32 = pack_xrgb(0xE0, 0xE0, 0xE0);
+
+/// Scale one avatar-layout axis into the frame (identity on native).
+fn scale_scene_axis(native: i32, frame_len: usize, native_total: u32) -> i32 {
+    let frame = i32::try_from(frame_len).unwrap_or(i32::MAX);
+    let total = i32::try_from(native_total).unwrap_or(1).max(1);
+    let scaled = i64::from(native) * i64::from(frame) / i64::from(total);
+    i32::try_from(scaled).unwrap_or(i32::MAX)
+}
+
+/// Scale one avatar-layout origin into the frame.
+fn scale_scene_origin(native: (i32, i32), frame_w: usize, frame_h: usize) -> (i32, i32) {
+    (
+        scale_scene_axis(native.0, frame_w, SCENE_NATIVE_W),
+        scale_scene_axis(native.1, frame_h, SCENE_NATIVE_H),
+    )
+}
+
+/// Scale one avatar-layout rect into the frame.
+fn scale_scene_rect(native: &Rect, frame_w: usize, frame_h: usize) -> Rect {
+    scale_rect_to_frame(native, frame_w, frame_h)
+}
+
+/// Scaled avatar-scene layout for one frame size: every origin and
+/// bar the [`AvatarScene`] painter reads, so paint and tests share
+/// one source. Right-side panel opens at native x 330 with the tally
+/// strip at native y 540 (`docs/playing-reference.md`, photo-measured).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AvatarLayout {
+    /// `Lv.<n> <name>` text origin.
+    pub(crate) level_origin: (i32, i32),
+    /// Life-bar shell.
+    pub(crate) life_bar: Rect,
+    /// Avatar figure top-left.
+    pub(crate) figure_origin: (i32, i32),
+    /// Song info text origin.
+    pub(crate) song_origin: (i32, i32),
+    /// VOL text origin.
+    pub(crate) volume_origin: (i32, i32),
+    /// Counts text origin.
+    pub(crate) counts_origin: (i32, i32),
+    /// TIME progress shell.
+    pub(crate) time_bar: Rect,
+    /// Strip title text origin.
+    pub(crate) strip_title_origin: (i32, i32),
+    /// EXIT text origin.
+    pub(crate) exit_origin: (i32, i32),
+}
+
+impl AvatarLayout {
+    /// Scale the native avatar layout into the frame (identity on
+    /// 800x600, proportional on headless probe frames).
+    #[must_use]
+    pub(crate) fn for_frame(frame_w: usize, frame_h: usize) -> Self {
+        Self {
+            level_origin: scale_scene_origin(AVATAR_LEVEL_NATIVE, frame_w, frame_h),
+            life_bar: scale_scene_rect(&AVATAR_LIFE_NATIVE, frame_w, frame_h),
+            figure_origin: scale_scene_origin(AVATAR_FIGURE_NATIVE, frame_w, frame_h),
+            song_origin: scale_scene_origin(AVATAR_SONG_NATIVE, frame_w, frame_h),
+            volume_origin: scale_scene_origin(AVATAR_VOLUME_NATIVE, frame_w, frame_h),
+            counts_origin: scale_scene_origin(TALLY_COUNTS_NATIVE, frame_w, frame_h),
+            time_bar: scale_scene_rect(&TALLY_TIME_NATIVE, frame_w, frame_h),
+            strip_title_origin: scale_scene_origin(TALLY_TITLE_NATIVE, frame_w, frame_h),
+            exit_origin: scale_scene_origin(TALLY_EXIT_NATIVE, frame_w, frame_h),
+        }
+    }
+}
+
+/// Scroll-speed label for one room speed code. Mirrors the waiting
+/// `room_speed_label` table in `screens::paint` (private there, and
+/// other files are out of touch): `X0.5`..`X6`, `XR`, raw fallback.
+fn speed_label_for(speed_code: u8) -> String {
+    match GameSpeed::from_code(speed_code) {
+        Some(GameSpeed::X05) => "X0.5".to_owned(),
+        Some(GameSpeed::X10) => "X1".to_owned(),
+        Some(GameSpeed::X15) => "X1.5".to_owned(),
+        Some(GameSpeed::X20) => "X2".to_owned(),
+        Some(GameSpeed::X25) => "X2.5".to_owned(),
+        Some(GameSpeed::X30) => "X3".to_owned(),
+        Some(GameSpeed::X35) => "X3.5".to_owned(),
+        Some(GameSpeed::X40) => "X4".to_owned(),
+        Some(GameSpeed::X45) => "X4.5".to_owned(),
+        Some(GameSpeed::X50) => "X5".to_owned(),
+        Some(GameSpeed::X60) => "X6".to_owned(),
+        Some(GameSpeed::Xr) => "XR".to_owned(),
+        None => format!("SPD {speed_code}"),
+    }
+}
+
+/// Right-side avatar scene plus bottom tally strip display state.
+///
+/// Painted by [`LivePlay::paint_avatar_scene`] over the highway and
+/// staged art: life bar plus `Lv.<n> <name>` with the worn figure,
+/// song info line (speed plus title), VOL readout, and the bottom
+/// tally strip (counts from [`Score`], TIME bar, song title, EXIT).
+/// Missing captions paint nothing (waiting-panel precedent); a
+/// missing figure paints art without avatar.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AvatarScene {
+    player_level: Option<u32>,
+    player_name: String,
+    song_title: String,
+    speed_code: Option<u8>,
+    volume: Option<u8>,
+}
+
+impl AvatarScene {
+    /// Caption `Lv.<n> <name>` above the life bar (display only).
+    pub fn set_player(&mut self, level: u32, name: &str) {
+        self.player_level = Some(level);
+        self.player_name = name.to_owned();
+    }
+
+    /// Caption the song info line (`X3.5 <title>`, display only).
+    pub fn set_song(&mut self, title: &str, speed_code: u8) {
+        self.song_title = title.to_owned();
+        self.speed_code = Some(speed_code);
+    }
+
+    /// Caption the VOL readout (display only).
+    pub fn set_volume(&mut self, volume: u8) {
+        self.volume = Some(volume);
+    }
+
+    /// `Lv.43 <name>`: level, name, or both; empty while unset.
+    fn player_line(&self) -> String {
+        match (self.player_level, self.player_name.trim()) {
+            (Some(level), "") => format!("Lv.{level}"),
+            (Some(level), name) => format!("Lv.{level} {name}"),
+            (None, "") => String::new(),
+            (None, name) => name.to_owned(),
+        }
+    }
+
+    /// `X3.5 <title>`: speed, title, or both; empty while unset.
+    fn song_line(&self) -> String {
+        match (self.speed_code, self.song_title.is_empty()) {
+            (Some(code), false) => format!("{} {}", speed_label_for(code), self.song_title),
+            (Some(code), true) => speed_label_for(code),
+            (None, _) => self.song_title.clone(),
+        }
+    }
+
+    /// `VOL <n>` readout; `None` while unset.
+    fn volume_line(&self) -> Option<String> {
+        self.volume.map(|volume| format!("VOL {volume}"))
+    }
+
+    /// `COOL <n> GOOD <n> BAD <n> MISS <n>` from the live score.
+    fn counts_line(score: &Score) -> String {
+        format!(
+            "COOL {} GOOD {} BAD {} MISS {}",
+            score.counts[0], score.counts[1], score.counts[2], score.counts[3]
+        )
+    }
+
+    /// Paint the right-side scene plus tally strip: captions, life
+    /// bar, figure, and counts. Staged art stays underneath;
+    /// a missing figure paints art without avatar.
+    pub fn paint(
+        &self,
+        frame: &mut Frame<'_>,
+        avatar: Option<&AvatarFigure>,
+        score: &Score,
+        now_ms: u64,
+        song_end_ms: Option<u64>,
+    ) {
+        let layout = AvatarLayout::for_frame(frame.w, frame.h);
+        Self::paint_caption_line(frame, layout.level_origin, &self.player_line());
+        Self::paint_life_bar(frame, &layout.life_bar);
+        if let Some(figure) = avatar {
+            figure.paint(frame, layout.figure_origin.0, layout.figure_origin.1);
+        }
+        Self::paint_caption_line(frame, layout.song_origin, &self.song_line());
+        if let Some(volume) = self.volume_line() {
+            Self::paint_caption_line(frame, layout.volume_origin, &volume);
+        }
+        Self::paint_tally_strip(frame, &layout, score, now_ms, song_end_ms, &self.song_title);
+    }
+
+    /// One caption line: dark scrim plus white ink; empty text paints
+    /// nothing (missing captions stay off the art).
+    fn paint_caption_line(frame: &mut Frame<'_>, origin: (i32, i32), text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let text_w = i32::try_from(text_width(text)).unwrap_or(i32::MAX);
+        let scrim_w = u32::try_from(text_w.saturating_add(8)).unwrap_or(u32::MAX);
+        fill_rect(
+            frame,
+            &Rect {
+                x: origin.0 - 4,
+                y: origin.1 - 2,
+                w: scrim_w,
+                h: 9,
+            },
+            AVATAR_SCRIM,
+        );
+        draw_text(frame, origin.0, origin.1, text, AVATAR_TEXT);
+    }
+
+    /// Life-bar shell plus fill. The local life model is OPEN
+    /// (`docs/gameplay.md`: no client-side field pinned), so the bar
+    /// shows full until the model lands. Inks mirror the peer bars.
+    fn paint_life_bar(frame: &mut Frame<'_>, bar: &Rect) {
+        if bar.w == 0 || bar.h == 0 {
+            return;
+        }
+        fill_rect(frame, bar, AVATAR_LIFE_EMPTY);
+        fill_rect(frame, bar, AVATAR_LIFE_FULL);
+    }
+
+    /// TIME progress shell plus fill from the song clock; shell only
+    /// while the song end is unknown (empty chart).
+    fn paint_time_bar(frame: &mut Frame<'_>, bar: &Rect, now_ms: u64, song_end_ms: Option<u64>) {
+        if bar.w == 0 || bar.h == 0 {
+            return;
+        }
+        fill_rect(frame, bar, AVATAR_TIME_EMPTY);
+        let filled = match song_end_ms {
+            Some(end) if end > 0 => now_ms
+                .saturating_mul(u64::from(bar.w))
+                .checked_div(end)
+                .unwrap_or(0),
+            _ => 0,
+        };
+        let filled = u32::try_from(filled).unwrap_or(u32::MAX).min(bar.w);
+        if filled > 0 {
+            fill_rect(
+                frame,
+                &Rect {
+                    x: bar.x,
+                    y: bar.y,
+                    w: filled,
+                    h: bar.h,
+                },
+                AVATAR_TIME_FILL,
+            );
+        }
+    }
+
+    /// Bottom tally strip: counts line, TIME bar, strip title, EXIT.
+    /// Counts always feed from the score (zeros included); the title
+    /// paints while captioned; EXIT always marks the button.
+    fn paint_tally_strip(
+        frame: &mut Frame<'_>,
+        layout: &AvatarLayout,
+        score: &Score,
+        now_ms: u64,
+        song_end_ms: Option<u64>,
+        strip_title: &str,
+    ) {
+        Self::paint_caption_line(frame, layout.counts_origin, &Self::counts_line(score));
+        Self::paint_time_bar(frame, &layout.time_bar, now_ms, song_end_ms);
+        Self::paint_caption_line(frame, layout.strip_title_origin, strip_title);
+        Self::paint_caption_line(frame, layout.exit_origin, "EXIT");
     }
 }
 
@@ -2612,5 +2957,279 @@ mod highway_tests {
         );
         assert!(buf.contains(&pack_xrgb(0x40, 0xC0, 0xFF)));
         assert!(!buf.contains(&solid_ink(0x7C00)));
+    }
+}
+
+#[cfg(test)]
+mod avatar_scene_tests {
+    use super::*;
+    use crate::avatar::FigureLayer;
+
+    const WHITE: u32 = pack_xrgb(0xFF, 0xFF, 0xFF);
+    const LIFE_FILL: u32 = pack_xrgb(0x20, 0xE0, 0x20);
+    const TIME_FILL: u32 = pack_xrgb(0xE0, 0xE0, 0xE0);
+    const TIME_EMPTY: u32 = pack_xrgb(0x20, 0x20, 0x20);
+
+    fn captioned_scene() -> AvatarScene {
+        let mut scene = AvatarScene::default();
+        scene.set_player(43, "HOST");
+        scene.set_song("First", 6);
+        scene.set_volume(5);
+        scene
+    }
+
+    /// True while white text ink lands near a caption origin (glyph
+    /// top-left cells are often blank, so the origin pixel itself may
+    /// show the scrim; the scrim box spans one row above through eight
+    /// below the origin).
+    fn white_near(buf: &[u32], w: usize, h: usize, origin: (i32, i32)) -> bool {
+        let (ox, oy) = origin;
+        for row in oy..oy + 9 {
+            for col in ox..ox + 64 {
+                let (Ok(r), Ok(c)) = (usize::try_from(row), usize::try_from(col)) else {
+                    continue;
+                };
+                if r < h && c < w && buf[r * w + c] == WHITE {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// One red pixel figure (colorkey white, so the pixel paints).
+    fn red_figure() -> AvatarFigure {
+        let mut figure = AvatarFigure::default();
+        figure.push_layer(FigureLayer {
+            image: Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap(),
+            dx: 0,
+            dy: 0,
+            colorkey: 0xFFFF,
+        });
+        figure
+    }
+
+    fn paint_scene(
+        scene: &AvatarScene,
+        avatar: Option<&AvatarFigure>,
+        w: usize,
+        h: usize,
+    ) -> Vec<u32> {
+        let mut buf = vec![0u32; w * h];
+        scene.paint(
+            &mut Frame {
+                buf: &mut buf,
+                w,
+                h,
+            },
+            avatar,
+            &Score::default(),
+            0,
+            Some(3000),
+        );
+        buf
+    }
+
+    #[test]
+    fn player_line_formats_level_and_name() {
+        assert_eq!(captioned_scene().player_line(), "Lv.43 HOST");
+        let mut level_only = AvatarScene::default();
+        level_only.set_player(7, "");
+        assert_eq!(level_only.player_line(), "Lv.7");
+        let name_only = AvatarScene {
+            player_name: "HOST".to_owned(),
+            ..Default::default()
+        };
+        assert_eq!(name_only.player_line(), "HOST");
+        assert_eq!(AvatarScene::default().player_line(), "");
+    }
+
+    #[test]
+    fn song_line_shows_speed_and_title() {
+        assert_eq!(captioned_scene().song_line(), "X3.5 First");
+        let speed_only = AvatarScene {
+            speed_code: Some(6),
+            ..Default::default()
+        };
+        assert_eq!(speed_only.song_line(), "X3.5");
+        let title_only = AvatarScene {
+            song_title: "First".to_owned(),
+            ..Default::default()
+        };
+        assert_eq!(title_only.song_line(), "First");
+        assert_eq!(AvatarScene::default().song_line(), "");
+    }
+
+    #[test]
+    fn volume_line_formats_readout() {
+        assert_eq!(captioned_scene().volume_line(), Some("VOL 5".to_owned()));
+        assert_eq!(AvatarScene::default().volume_line(), None);
+    }
+
+    #[test]
+    fn speed_label_covers_known_and_unknown_codes() {
+        assert_eq!(speed_label_for(6), "X3.5");
+        assert_eq!(speed_label_for(0), "X0.5");
+        assert_eq!(speed_label_for(200), "SPD 200");
+    }
+
+    #[test]
+    fn counts_line_feeds_all_four_tiers() {
+        let score = Score {
+            counts: [1, 2, 3, 4],
+            ..Default::default()
+        };
+        assert_eq!(
+            AvatarScene::counts_line(&score),
+            "COOL 1 GOOD 2 BAD 3 MISS 4"
+        );
+        assert_eq!(
+            AvatarScene::counts_line(&Score::default()),
+            "COOL 0 GOOD 0 BAD 0 MISS 0"
+        );
+    }
+
+    #[test]
+    fn layout_scales_proportionally() {
+        let native = AvatarLayout::for_frame(800, 600);
+        assert_eq!(native.level_origin, AVATAR_LEVEL_NATIVE);
+        assert_eq!(native.life_bar, AVATAR_LIFE_NATIVE);
+        assert_eq!(native.figure_origin, AVATAR_FIGURE_NATIVE);
+        let probe = AvatarLayout::for_frame(70, 60);
+        assert_eq!(probe.level_origin, (29, 4));
+    }
+
+    #[test]
+    fn level_line_paints_over_scrim() {
+        let layout = AvatarLayout::for_frame(800, 600);
+        let buf = paint_scene(&captioned_scene(), None, 800, 600);
+        assert!(white_near(&buf, 800, 600, layout.level_origin));
+        assert!(buf.contains(&AVATAR_SCRIM));
+    }
+
+    #[test]
+    fn missing_captions_paint_nothing() {
+        let layout = AvatarLayout::for_frame(800, 600);
+        let buf = paint_scene(&AvatarScene::default(), None, 800, 600);
+        let (x, y) = layout.level_origin;
+        assert_eq!(buf[y as usize * 800 + x as usize], 0);
+        assert!(!white_near(&buf, 800, 600, layout.level_origin));
+        let (x, y) = layout.song_origin;
+        assert_eq!(buf[y as usize * 800 + x as usize], 0);
+        let (x, y) = layout.volume_origin;
+        assert_eq!(buf[y as usize * 800 + x as usize], 0);
+    }
+
+    #[test]
+    fn life_bar_paints_full_fill() {
+        let layout = AvatarLayout::for_frame(800, 600);
+        let buf = paint_scene(&AvatarScene::default(), None, 800, 600);
+        assert_eq!(buf[56 * 800 + 340], LIFE_FILL);
+        assert_eq!(layout.life_bar, AVATAR_LIFE_NATIVE);
+    }
+
+    #[test]
+    fn figure_paints_at_layout_origin() {
+        let figure = red_figure();
+        let layout = AvatarLayout::for_frame(800, 600);
+        let buf = paint_scene(&captioned_scene(), Some(&figure), 800, 600);
+        let (x, y) = layout.figure_origin;
+        assert_eq!(buf[y as usize * 800 + x as usize], pack_xrgb(255, 0, 0));
+    }
+
+    #[test]
+    fn missing_figure_paints_art_without_avatar() {
+        let layout = AvatarLayout::for_frame(800, 600);
+        let buf = paint_scene(&captioned_scene(), None, 800, 600);
+        let (x, y) = layout.figure_origin;
+        assert_eq!(buf[y as usize * 800 + x as usize], 0);
+        let (x, y) = layout.level_origin;
+        assert_eq!(buf[y as usize * 800 + x as usize], WHITE);
+    }
+
+    #[test]
+    fn song_and_volume_lines_paint() {
+        let layout = AvatarLayout::for_frame(800, 600);
+        let buf = paint_scene(&captioned_scene(), None, 800, 600);
+        assert!(white_near(&buf, 800, 600, layout.song_origin));
+        assert!(white_near(&buf, 800, 600, layout.volume_origin));
+    }
+
+    #[test]
+    fn tally_strip_shows_counts_title_time_and_exit() {
+        let layout = AvatarLayout::for_frame(800, 600);
+        let buf = paint_scene(&captioned_scene(), None, 800, 600);
+        assert!(white_near(&buf, 800, 600, layout.counts_origin));
+        assert!(white_near(&buf, 800, 600, layout.strip_title_origin));
+        assert!(white_near(&buf, 800, 600, layout.exit_origin));
+        assert_eq!(buf[560 * 800 + 300], TIME_EMPTY);
+    }
+
+    #[test]
+    fn time_bar_fills_with_song_progress() {
+        let scene = AvatarScene::default();
+        let layout = AvatarLayout::for_frame(800, 600);
+        let mut start = vec![0u32; 800 * 600];
+        scene.paint(
+            &mut Frame {
+                buf: &mut start,
+                w: 800,
+                h: 600,
+            },
+            None,
+            &Score::default(),
+            0,
+            Some(3000),
+        );
+        assert_eq!(start[560 * 800 + 300], TIME_EMPTY);
+        let mut end = vec![0u32; 800 * 600];
+        scene.paint(
+            &mut Frame {
+                buf: &mut end,
+                w: 800,
+                h: 600,
+            },
+            None,
+            &Score::default(),
+            3000,
+            Some(3000),
+        );
+        assert_eq!(end[560 * 800 + 300], TIME_FILL);
+        let mut unknown = vec![0u32; 800 * 600];
+        scene.paint(
+            &mut Frame {
+                buf: &mut unknown,
+                w: 800,
+                h: 600,
+            },
+            None,
+            &Score::default(),
+            3000,
+            None,
+        );
+        assert_eq!(unknown[560 * 800 + 300], TIME_EMPTY);
+        let _ = layout;
+    }
+
+    #[test]
+    fn live_play_routes_score_and_clock_to_scene() {
+        let mut live = LivePlay::new(&[(2, 1000, 7)]);
+        live.scene_mut().set_player(43, "HOST");
+        live.strike_lane(2, 1000);
+        assert_eq!(live.scene().player_line(), "Lv.43 HOST");
+        assert_eq!(live.song_end_ms(), Some(2500));
+        let mut buf = vec![0u32; 800 * 600];
+        live.paint_avatar_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            None,
+            1000,
+        );
+        let layout = AvatarLayout::for_frame(800, 600);
+        assert!(white_near(&buf, 800, 600, layout.counts_origin));
+        assert_eq!(LivePlay::default().song_end_ms(), None);
     }
 }
