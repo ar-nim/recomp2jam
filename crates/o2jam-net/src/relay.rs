@@ -91,9 +91,23 @@ impl RelayCommand {
     }
 }
 
-/// Room seat role, carried as `u16` on relay op 5/6/7
-/// (`Encore.Metadata.MemberRole`: None 0, Champion 1, Challenger 2,
-/// Spectator 3).
+/// Room seat role, carried as `u16` on relay op 5/6/7.
+///
+/// Value meanings are exe-pinned, not just Memoryer-corroborated
+/// (`Encore.Metadata.MemberRole` agrees: None 0, Champion 1, Challenger 2,
+/// Spectator 3). The role word lives at VA `0x77ee86`: seven sites load it
+/// with `66 A1 86 EE 77 00` (files `0xaec29`/`0xc33b4`/`0xdbb1c`/`0xe6f81`/
+/// `0xe7a75`/`0xe840a`/`0xea26e`); six branch on the value while the op-5
+/// packer (`0xea26e`) only copies it into the tally. Spectator gates on
+/// `83 F9 03` at files `0xaec3d`/`0xc33c2`/`0xe7a89`/`0xe841e`; the
+/// dispatcher at file `0xdbb1c` splits Champion/Challenger with
+/// `83 7D 8C 01`/`83 7D 8C 02` plus an else fallthrough, and file `0xe6f81`
+/// checks `83 F9 01` then `83 F8 02`. None (0) is the residual value taken
+/// when none of the 1/2/3 compares hit. See `docs/relay.md` §11
+/// (`ev_acacd596017f22ba805e419c18cfe686`,
+/// `ev_cbe189ba7fb55898e42e98c6175b8e75`,
+/// `ev_6f91b9283627171b33801a2c0e653100`,
+/// `ev_e5879e64727f6c4c5ab0759b929433c8`, observed).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum MemberRole {
@@ -247,6 +261,14 @@ impl ConnectionEndpoint {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RelayRouting {
     /// Session code (private `Code` field; zero in server events).
+    ///
+    /// The only client-sent value is 0: no nonzero `code`/`unused` writer
+    /// was located on any combo send path (the fanout wrappers stage
+    /// routing through the `0xeb4d0` helper with pushed size `0x18`, and
+    /// client combo sends carry both fields as 0; see `docs/relay.md` §6).
+    /// Server-rewritten S→C values stay OPEN (needs a wire capture).
+    /// Value pinned in `docs/relay.md` §11
+    /// (`ev_e4c4a65ec986bea1dc13e28cbcf9d36c`, observed).
     pub code: i32,
     /// The 3 relay-server endpoints (no count prefix; always 3).
     pub relays: [SocketAddrV4; 3],
@@ -2450,6 +2472,55 @@ mod relay_command_tests {
         let mut tally = zero_tally();
         tally.score = 0x5566_7788;
         assert_eq!(&tally.encode_body()[58..62], &[0x88, 0x77, 0x66, 0x55]);
+    }
+}
+
+/// Value sets of the live/room gateway leg the relay peer leg depends on.
+///
+/// Widths are exe-pinned (`u16` role, `u8` lifecycle/difficulty/speed,
+/// `i32` code: the fanout wrappers stage routing/autoplay/role through
+/// helpers with pushed sizes `0x18`/`0x04`/`0x02`, matching the 24/4/2 wire
+/// lengths). Value meanings below are Memoryer-corroborated; exe consumer
+/// sites stay OPEN except `MemberRole` and the combo client code, both
+/// pinned in `docs/relay.md` §11. These tests lock the shared value tables
+/// in one place so the relay leg and the room leg cannot drift apart.
+/// (ERRORS-06: no `unwrap`; PERF-07: no narrowing casts.)
+#[cfg(test)]
+mod relay_enum_value_tests {
+    use crate::rooms::{Difficulty, GameSpeed, RoomState};
+
+    #[test]
+    fn room_state_maps_all_lifecycle_codes() {
+        assert_eq!(RoomState::from_code(0), Some(RoomState::Unavailable));
+        assert_eq!(RoomState::from_code(1), Some(RoomState::Waiting));
+        assert_eq!(RoomState::from_code(2), Some(RoomState::Playing));
+        assert_eq!(RoomState::from_code(3), None);
+    }
+
+    #[test]
+    fn difficulty_maps_all_chart_codes() {
+        assert_eq!(Difficulty::from_code(0), Some(Difficulty::Ex));
+        assert_eq!(Difficulty::from_code(1), Some(Difficulty::Nx));
+        assert_eq!(Difficulty::from_code(2), Some(Difficulty::Hx));
+        assert_eq!(Difficulty::from_code(3), Some(Difficulty::Rx));
+        assert_eq!(Difficulty::from_code(4), None);
+    }
+
+    #[test]
+    fn game_speed_maps_all_scroll_codes() {
+        assert_eq!(GameSpeed::from_code(0), Some(GameSpeed::X05));
+        assert_eq!(GameSpeed::from_code(1), Some(GameSpeed::X10));
+        assert_eq!(GameSpeed::from_code(2), Some(GameSpeed::X15));
+        assert_eq!(GameSpeed::from_code(3), Some(GameSpeed::X20));
+        assert_eq!(GameSpeed::from_code(4), Some(GameSpeed::X25));
+        assert_eq!(GameSpeed::from_code(5), Some(GameSpeed::X30));
+        assert_eq!(GameSpeed::from_code(6), Some(GameSpeed::X35));
+        assert_eq!(GameSpeed::from_code(7), Some(GameSpeed::X40));
+        assert_eq!(GameSpeed::from_code(8), Some(GameSpeed::X45));
+        assert_eq!(GameSpeed::from_code(9), Some(GameSpeed::X50));
+        assert_eq!(GameSpeed::from_code(10), Some(GameSpeed::X60));
+        assert_eq!(GameSpeed::from_code(11), Some(GameSpeed::Xr));
+        assert_eq!(GameSpeed::from_code(12), None);
     }
 }
 
