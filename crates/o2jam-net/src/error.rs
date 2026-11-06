@@ -37,6 +37,9 @@ pub enum Error {
     /// The peer closed the connection mid-frame.
     #[error("connection closed by peer")]
     ConnectionClosed,
+    /// A non-keepalive frame arrived while waiting for another command.
+    #[error("unexpected response: want {expected:#06x}, got {found:#06x}")]
+    UnexpectedResponse { expected: u16, found: u16 },
 }
 
 impl Error {

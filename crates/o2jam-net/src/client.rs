@@ -12,10 +12,12 @@
 //! received frames. Message bodies stay in [`crate::message`], so
 //! the blocked `Authorize` string codec cannot leak in here.
 
-use std::io::{Read, Write};
+use std::collections::VecDeque;
+use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
+use super::command::Generic;
 use super::error::Error;
 use super::frame::{encode_frame, Frame, FrameSplitter};
 
@@ -31,6 +33,7 @@ const READ_CHUNK_LEN: usize = 1024;
 pub struct GatewayConnection {
     stream: TcpStream,
     incoming: FrameSplitter,
+    pending: VecDeque<Frame>,
 }
 
 impl GatewayConnection {
@@ -51,17 +54,50 @@ impl GatewayConnection {
         self.stream.write_all(&bytes).map_err(Error::transport)
     }
 
+    /// Send a request, then block for the frame under `response`.
+    ///
+    /// Bodies stay raw so callers can drive opcodes whose layouts are
+    /// still open (notably `Authorize` 1000) without guessing codecs.
+    pub fn exchange(
+        &mut self,
+        request_id: u16,
+        request_body: &[u8],
+        response_id: u16,
+    ) -> Result<Frame, Error> {
+        self.send_frame(request_id, request_body)?;
+        self.await_response(response_id)
+    }
+
+    /// Block for the frame under `expected`, skipping keepalive pings.
+    ///
+    /// Any other non-keepalive id is an [`Error::UnexpectedResponse`],
+    /// not a skip: silently dropping server frames would hide
+    /// dispatches the caller must handle (alerts 50/51/52, say).
+    pub fn await_response(&mut self, expected: u16) -> Result<Frame, Error> {
+        loop {
+            let frame = self.next_frame()?;
+            if is_keepalive(frame.id) {
+                continue;
+            }
+            if frame.id == expected {
+                return Ok(frame);
+            }
+            return Err(Error::UnexpectedResponse {
+                expected,
+                found: frame.id,
+            });
+        }
+    }
+
     /// Block until the next complete frame arrives.
     pub fn next_frame(&mut self) -> Result<Frame, Error> {
         loop {
-            if let Some(frame) = self.drain_pending()? {
+            if let Some(frame) = self.pending.pop_front() {
                 return Ok(frame);
             }
             let chunk = self.read_chunk()?;
             let frames = self.incoming.push_bytes(&chunk)?;
-            if let Some(frame) = frames.into_iter().next() {
-                return Ok(frame);
-            }
+            self.pending.extend(frames);
         }
     }
 
@@ -90,23 +126,30 @@ impl GatewayConnection {
         Ok(Self {
             stream,
             incoming: FrameSplitter::default(),
+            pending: VecDeque::new(),
         })
-    }
-
-    fn drain_pending(&mut self) -> Result<Option<Frame>, Error> {
-        let frames = self.incoming.push_bytes(&[])?;
-        Ok(frames.into_iter().next())
     }
 
     fn read_chunk(&mut self) -> Result<Vec<u8>, Error> {
         let mut chunk = vec![0u8; READ_CHUNK_LEN];
-        let read = self.stream.read(&mut chunk).map_err(Error::transport)?;
+        let read = self.stream.read(&mut chunk).map_err(|source| {
+            if source.kind() == ErrorKind::WouldBlock {
+                Error::Transport("read timed out waiting for server frame".to_owned())
+            } else {
+                Error::transport(source)
+            }
+        })?;
         if read == 0 {
             return Err(Error::ConnectionClosed);
         }
         chunk.truncate(read);
         Ok(chunk)
     }
+}
+
+/// Keepalive echo ids (`6000`/`6001`) carry no session meaning.
+fn is_keepalive(id: u16) -> bool {
+    Generic::from_id(id).is_some()
 }
 
 #[cfg(test)]
@@ -116,7 +159,9 @@ mod gateway_connection_tests {
     use std::thread;
 
     use super::*;
-    use crate::frame::encode_frame;
+    use crate::command::Request;
+    use crate::frame::{decode_frame, encode_frame, ID_OFFSET};
+    use crate::message::{ChannelList, WireMessage};
 
     fn loopback_pair() -> (GatewayConnection, TcpStream) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -152,6 +197,62 @@ mod gateway_connection_tests {
         let (mut client, server) = loopback_pair();
         drop(server);
         assert_eq!(client.next_frame(), Err(Error::ConnectionClosed));
+    }
+
+    /// Read one whole frame off the test server's socket.
+    fn read_request_frame(server: &mut TcpStream) -> Frame {
+        let mut header = [0u8; 4];
+        server.read_exact(&mut header).unwrap();
+        let body_len = u16::from_le_bytes([header[0], header[1]]) as usize;
+        let mut rest = vec![0u8; body_len - ID_OFFSET];
+        server.read_exact(&mut rest).unwrap();
+        let mut bytes = header.to_vec();
+        bytes.extend_from_slice(&rest);
+        decode_frame(&bytes).unwrap()
+    }
+
+    #[test]
+    fn exchange_returns_empty_channel_list_for_list_request() {
+        let (mut client, mut server) = loopback_pair();
+        let responder = thread::spawn(move || {
+            let request = read_request_frame(&mut server);
+            assert_eq!(request.id, Request::GetChannelList.id());
+            assert!(request.payload.is_empty());
+            let empty = ChannelList { channels: vec![] };
+            server.write_all(&empty.encode()).unwrap();
+        });
+        let frame = client
+            .exchange(Request::GetChannelList.id(), &[], ChannelList::COMMAND)
+            .unwrap();
+        responder.join().unwrap();
+        assert_eq!(
+            ChannelList::decode_frame(&frame).unwrap(),
+            ChannelList { channels: vec![] }
+        );
+    }
+
+    #[test]
+    fn await_response_skips_keepalive_ping_before_answer() {
+        let (mut client, mut server) = loopback_pair();
+        server.write_all(&encode_frame(6001, &[])).unwrap();
+        server
+            .write_all(&encode_frame(1003, &[0x00, 0x00, 0x00, 0x00]))
+            .unwrap();
+        let frame = client.await_response(1003).unwrap();
+        assert_eq!(frame.id, 1003);
+    }
+
+    #[test]
+    fn await_response_rejects_wrong_command_id() {
+        let (mut client, mut server) = loopback_pair();
+        server.write_all(&encode_frame(1008, &[0x00; 51])).unwrap();
+        assert_eq!(
+            client.await_response(1003),
+            Err(Error::UnexpectedResponse {
+                expected: 1003,
+                found: 1008
+            })
+        );
     }
 
     #[test]
