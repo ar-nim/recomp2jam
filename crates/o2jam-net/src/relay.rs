@@ -118,6 +118,16 @@ impl MemberRole {
     }
 }
 
+/// Hardcoded relay endpoint ports picked by the in-exe relay selector
+/// alongside the three relay IPs (`docs/relay.md` §9).
+///
+/// Byte-verified immediates: `0x998f`/`0x9990` stored as the port word by
+/// the selector leaves at file `0x18c73b`–`0x18c77f`; transport role is
+/// inferred from the UHP/UDP context, not proven by those bytes alone.
+/// (ERRORS-06: plain constants, no `unwrap`; PERF-07: `u16` literals,
+/// no narrowing casts.)
+pub const RELAY_UDP_PORTS: [u16; 2] = [39311, 39312];
+
 /// Serialized size of one relay endpoint: 4 address bytes + `u16` port.
 const ENDPOINT_LEN: usize = 6;
 
@@ -435,6 +445,15 @@ impl WireMessage for RelayPing {
 /// This is the relay stats mirror: unlike game TCP 4014 (a 16-byte
 /// life/jam tick), op 5 carries the whole tally the relay fans out
 /// to every other member of the game session.
+///
+/// In-exe writer (7.55, local-static, read-only): tally packer at file
+/// `0xea230` (VA `0x4ea230`), called per tick from `0xeaec0` at site
+/// `0xeb0c9`; ctor `SetID(5)` at file `0xea4e0` (vtable entry file
+/// `0x24b334`); send helper at file `0x187870`. See
+/// `docs/op5-writer.md` (`ev_deb10e8fcc5d56f0435fc92c3afc57bc`,
+/// `ev_ccded3a418039e0962f34de24a6a669f`,
+/// `ev_3f1b719e9d41cdc2eef7b7b7584396b3`,
+/// `ev_8f8df9d42c5cfbc0073f6a1c13f91cb9`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RelayStats {
     /// Routing preface (code, relay endpoints, unused).
@@ -982,6 +1001,14 @@ mod relay_command_tests {
     }
 
     #[test]
+    fn relay_udp_ports_match_exe_selector_immediates() {
+        assert_eq!(RELAY_UDP_PORTS, [0x998F, 0x9990]);
+        assert_eq!(RELAY_UDP_PORTS[0], 39311);
+        assert_eq!(RELAY_UDP_PORTS[1], 39312);
+        assert_ne!(RELAY_UDP_PORTS[0], RELAY_UDP_PORTS[1]);
+    }
+
+    #[test]
     fn member_role_names_all_seats() {
         assert_eq!(MemberRole::from_u16(0), Ok(MemberRole::None));
         assert_eq!(MemberRole::from_u16(1), Ok(MemberRole::Champion));
@@ -1301,6 +1328,132 @@ mod relay_command_tests {
             ComboBroken::decode_frame(&frame),
             Err(Error::UnknownCommand(7))
         );
+    }
+
+    fn zero_tally() -> RelayStats {
+        RelayStats {
+            routing: routing(),
+            role: MemberRole::None,
+            cool: 0,
+            good: 0,
+            bad: 0,
+            miss: 0,
+            combo: 0,
+            max_combo: 0,
+            jam_combo: 0,
+            total_jam_combo: 0,
+            long_note_combo: 0,
+            long_note_score: 0,
+            life: 0,
+            pill_buildup: 0,
+            pill_count: 0,
+            score: 0,
+        }
+    }
+
+    #[test]
+    fn role_sits_at_body_offset_24() {
+        let mut tally = zero_tally();
+        tally.role = MemberRole::Challenger;
+        assert_eq!(&tally.encode_body()[24..26], &[0x02, 0x00]);
+    }
+
+    #[test]
+    fn cool_sits_at_body_offset_26() {
+        let mut tally = zero_tally();
+        tally.cool = 11;
+        assert_eq!(&tally.encode_body()[26..28], &[11, 0]);
+    }
+
+    #[test]
+    fn good_sits_at_body_offset_28() {
+        let mut tally = zero_tally();
+        tally.good = 22;
+        assert_eq!(&tally.encode_body()[28..30], &[22, 0]);
+    }
+
+    #[test]
+    fn bad_sits_at_body_offset_30() {
+        let mut tally = zero_tally();
+        tally.bad = 33;
+        assert_eq!(&tally.encode_body()[30..32], &[33, 0]);
+    }
+
+    #[test]
+    fn miss_sits_at_body_offset_32() {
+        let mut tally = zero_tally();
+        tally.miss = 44;
+        assert_eq!(&tally.encode_body()[32..34], &[44, 0]);
+    }
+
+    #[test]
+    fn combo_sits_at_body_offset_34() {
+        let mut tally = zero_tally();
+        tally.combo = 55;
+        assert_eq!(&tally.encode_body()[34..36], &[55, 0]);
+    }
+
+    #[test]
+    fn max_combo_sits_at_body_offset_36() {
+        let mut tally = zero_tally();
+        tally.max_combo = 66;
+        assert_eq!(&tally.encode_body()[36..38], &[66, 0]);
+    }
+
+    #[test]
+    fn jam_combo_sits_at_body_offset_38() {
+        let mut tally = zero_tally();
+        tally.jam_combo = 77;
+        assert_eq!(&tally.encode_body()[38..40], &[77, 0]);
+    }
+
+    #[test]
+    fn total_jam_combo_sits_at_body_offset_40() {
+        let mut tally = zero_tally();
+        tally.total_jam_combo = 88;
+        assert_eq!(&tally.encode_body()[40..42], &[88, 0]);
+    }
+
+    #[test]
+    fn long_note_combo_sits_at_body_offset_42() {
+        let mut tally = zero_tally();
+        tally.long_note_combo = 99;
+        assert_eq!(&tally.encode_body()[42..44], &[99, 0]);
+    }
+
+    #[test]
+    fn long_note_score_sits_at_body_offset_44() {
+        let mut tally = zero_tally();
+        tally.long_note_score = 0x1122_3344;
+        assert_eq!(&tally.encode_body()[44..48], &[0x44, 0x33, 0x22, 0x11]);
+    }
+
+    #[test]
+    fn life_sits_at_body_offset_48() {
+        let mut tally = zero_tally();
+        tally.life = 1000;
+        assert_eq!(&tally.encode_body()[48..50], &[0xE8, 0x03]);
+    }
+
+    #[test]
+    fn pill_buildup_sits_at_body_offset_50() {
+        let mut tally = zero_tally();
+        tally.pill_buildup = 5;
+        assert_eq!(&tally.encode_body()[50..54], &[5, 0, 0, 0]);
+    }
+
+    #[test]
+    fn pill_count_sits_at_body_offset_54() {
+        let mut tally = zero_tally();
+        tally.pill_count = 3;
+        assert_eq!(&tally.encode_body()[54..58], &[3, 0, 0, 0]);
+    }
+
+    #[test]
+    fn score_sits_at_body_offset_58() {
+        let mut tally = zero_tally();
+        tally.score = 0x5566_7788;
+        assert_eq!(&tally.encode_body()[58..62], &[0x88, 0x77, 0x66, 0x55]);
     }
 }
 
