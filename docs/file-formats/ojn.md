@@ -26,10 +26,10 @@
   | 0 | song id (`u32`) | 8888 |
   | 4 | magic (`"ojn\0"`) | `ojn` |
   | 8 | container version (`f32`) | 2.7 (loader derives its OJM descriptor from this float: new-variant lane count; `2.9f` on decrypted o2ma charts) |
-  | 12 | genre (`u32`) | 10 (1..8 on new-format songs; re-categorised, TBD) |
+  | 12 | genre (`u32`) | 10 (new songs use single bits 1/2/4/8; Tutorial 10 = 8\|2). Chart path ignores it: validator `FUN_005718b0` (file `0x1718b0`) checks id/magic/version/last-measure/counts only, parser `FUN_00571d60` (file `0x171d60`) reads slices/counts/BPM only. Song-select tests a song bitmask at `song+0x15c` (`and $0x7` file `0xbe79f`, `and $0x8` file `0x36f4f`, `and [0x680724]` file `0x36fb2`), but the header+12 to song-slot transfer is unpinned — OPEN (bitmask-shaped, unproven) |
   | 16 | BPM (`f32`) | 100.0 |
-  | 20 | level flags (`u32`) | 1 (`0x50003`-shaped on new songs; TBD) |
-  | 24 | stable minor (`u32`) | 0 (5..19 on new songs; TBD) |
+  | 20 | level flags (`u32`) | 1 (new songs pack `(hi, lo)`: lo 1..5, hi 4..10). Ascending-triple hypothesis (Easy = lo, Normal = hi, Hard = +24) fits 13/13 plus Tutorial edge (0,1,0 = Easy only); `OJNList.dat` `@24` matches disk 13/13. STEP1 bands read select-entry `+0x212` as `u16` (file `0x46bb7`, thresholds 1/8/19/27), but the song-to-entry transfer is unpinned — OPEN |
+  | 24 | stable minor (`u32`) | 0 (5..19 on new songs). Hard-level hypothesis completing the +20 lo/hi triple (13/13 ascending; `OJNList.dat` `@28` matches disk 13/13). No chart-path consumer (validator/parser never read +24) — OPEN |
   | 28/32/36 | total notes per level (`u32`, kinds 2+ nonzero) | 51/0/0 |
   | 40/44/48 | playable notes per level (`u32`, kinds 2..=8 nonzero) | 38/0/0 |
   | 52/56/60 | last measure index per level (`u32`) | 102/0/0 |
@@ -37,7 +37,7 @@
   | 76 | key field (`u32`: hi tracks song id, lo 27 old / 29 new) | `0x22B8001B` |
   | 80..92 | pad (`4x u32`) | 0 |
   | 96 | flag (`u32`; `0x01000000` on song 770) | 0 |
-  | 100 | const (`u32`) | 0 (19256 on every new-format song; TBD) |
+  | 100 | const (`u32`) | 0 (19256 on every new-format song). No `19256`/`0x4B38` immediate in `.text` (byte scan; lone hit at file `0xd2094` is a `call` rel32 coincidence); validator/parser never read +100 — OPEN |
   | 104 | tune (`f32`) | 0.0 (0.0..0.03 on new songs) |
   | 108 | title (64 B, CP949 Korean) | 튜토리얼 |
   | 172 | artist (32 B) | 뷰티풀데이 |
