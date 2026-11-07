@@ -7,15 +7,18 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use o2jam_file::{Bnd, ControlList};
+use o2jam_net::play::SetRoomMusic;
 use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
 use o2jam_render::{Frame, Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
 use o2jam_shell::avatar::{
-    bind_scene_rects, load_avi_logo, load_scene_figures, scene_block, scene_sprite_names,
-    AvatarFigure, ScenePlacement, AVI_BLOCK, LOADING_SPRITE, RESULT_BLOCK, ROOM_BLOCK,
-    WAITING_BLOCK,
+    bind_scene_rects, load_avi_logo, load_scene_figures, load_scene_figures_for_stage, scene_block,
+    scene_sprite_names, AvatarFigure, ScenePlacement, AVI_BLOCK, LOADING_SPRITE, RESULT_BLOCK,
+    ROOM_BLOCK, WAITING_BLOCK,
 };
 use o2jam_shell::screens::paint::PLAYING_BLOCK;
 use o2jam_shell::{GameLoop, MenuKey, PlaySkin, Screen, ScreenGame};
+
+use crate::connect::stack_worn_figure;
 
 /// Screenshot width in pixels.
 pub const SHOT_W: usize = 400;
@@ -35,6 +38,9 @@ pub struct Shot {
 }
 
 /// Capture avi, channel, room, waiting, loading, playing, result.
+/// The playing shot paints a mid-song state: the 5 s note is struck
+/// first (combo 1) and the paint lands 100 ms later, while the
+/// judgement word, hit burst, tally counts, and TIME progress show.
 ///
 /// # Errors
 ///
@@ -51,9 +57,10 @@ pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
     shots.push(shoot_checked(&mut game, "waiting", Screen::Waiting, 0)?);
     game.menu_key(MenuKey::Confirm, true);
     shots.push(shoot_checked(&mut game, "loading", Screen::Loading, 0)?);
+    stage_playing_scene(&mut game);
     game.menu_key(MenuKey::Confirm, true);
-    shots.push(shoot_checked(&mut game, "playing", Screen::Playing, 4_500)?);
     game.strike_at(2, 5_000);
+    shots.push(shoot_checked(&mut game, "playing", Screen::Playing, 5_100)?);
     shots.push(shoot_result(&mut game, 7_000)?);
     Ok(shots)
 }
@@ -85,6 +92,21 @@ pub fn write_shots(out_dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
 const INTERFACE_ARCHIVE: &str = "O2Jam/Image/Interface1.opi";
 /// Playing archive under `install-root` (Loading/Playing art).
 const PLAYING_ARCHIVE: &str = "O2Jam/Image/Playing1.opi";
+/// Worn-figure archive under `install-root` (avatar item art + table).
+const AVATAR_ARCHIVE: &str = "O2Jam/Image/avatar.opa";
+/// Equipment the playing shot wears, verified to resolve against 7.55
+/// `avatar.opa` (`Itemdata_Korea.dat` rows: male hair 16, face 30,
+/// torso+arms outfit 376, pants 383, shoes 389).
+const PLAYING_EQUIPMENT: [i32; 5] = [16, 30, 376, 383, 389];
+/// Player caption staged for the playing shot.
+const PLAYING_PLAYER: (u32, &str) = (43, "TESTER");
+/// Host song pick the playing shot captions (catalog id 757, Hard
+/// chart, speed X3.5 — the paint re-syncs the song line from this).
+const PLAYING_SONG: SetRoomMusic = SetRoomMusic {
+    music_id: 757,
+    difficulty: 2,
+    speed: 3,
+};
 /// Interface control list entry.
 const INTERFACE_LIST: &str = "ControlList_Interface.txt";
 /// Playing control list entry.
@@ -97,6 +119,13 @@ const CHANNEL_FALLBACK_SPRITE: &str = "Dialog_ChannelSelectBar.ojs";
 /// this corner life gauge full-canvas; its native anchor sits clear
 /// of the note lane.
 const PLAYING_GAUGE_SPRITE: &str = "Avatar_Info_LifeGauge.ojs";
+/// Room arena value the playing shot joins with: stage 5, whose
+/// `Playing_BG5.ojs` stages the warm wooden-deck floor the avatar
+/// stands on — the closest staged match to the reference rooftop
+/// photo (`docs/playing-reference.md`; the exact 3D rooftop is not
+/// among the 36 stages). Rides the room's arena word so the shot
+/// exercises the room-entry stage wiring end to end.
+const PLAYING_ARENA_STAGE: i32 = 5;
 
 /// Repository-local `install-root` (git-ignored game data).
 fn install_root() -> PathBuf {
@@ -148,18 +177,22 @@ fn full_canvas(names: &[String]) -> Vec<ScenePlacement> {
         .collect()
 }
 
-/// Stage a bound block: named figures plus `.bnd` placements.
+/// Stage a bound block: named figures plus `.bnd` placements. The
+/// room arena stage rides along so `_` runtime refs resolve their
+/// stage-numbered siblings (`None` keeps the bare arm; Interface
+/// blocks name no `_` refs).
 fn stage_bound_block(
     archive: &[u8],
     list: &ControlList,
     block_name: &str,
+    arena_stage: Option<u16>,
 ) -> Option<(Vec<ScenePlacement>, HashMap<String, AvatarFigure>)> {
     let block = scene_block(list, block_name)?;
     let names = scene_sprite_names(block);
     if names.is_empty() {
         return None;
     }
-    let figures = load_scene_figures(archive, &names);
+    let figures = load_scene_figures_for_stage(archive, &names, arena_stage);
     if figures.is_empty() {
         return None;
     }
@@ -202,13 +235,15 @@ fn stage_interface_archive(game: &mut ScreenGame, archive: &[u8]) {
         (Screen::Waiting, WAITING_BLOCK),
         (Screen::Result, RESULT_BLOCK),
     ] {
-        if let Some((placements, figures)) = stage_bound_block(archive, &list, block) {
+        if let Some((placements, figures)) = stage_bound_block(archive, &list, block, None) {
             game.load_scene(screen, placements, figures);
         }
     }
 }
 
-/// Stage Playing-archive scenes (Loading gate plus Playing gauges).
+/// Stage Playing-archive scenes (Loading gate plus Playing gauges)
+/// through the game's room arena stage: the venue `_Playing_BG.ojs`
+/// and the stage-keyed kits resolve their numbered siblings.
 fn stage_playing_archive(game: &mut ScreenGame, archive: &[u8]) {
     if let Some((placements, figures)) = stage_single_sprite(archive, LOADING_SPRITE) {
         game.load_scene(Screen::Loading, placements, figures);
@@ -216,7 +251,9 @@ fn stage_playing_archive(game: &mut ScreenGame, archive: &[u8]) {
     let Some(list) = control_list(archive, PLAYING_LIST) else {
         return;
     };
-    let Some((mut placements, mut figures)) = stage_bound_block(archive, &list, PLAYING_BLOCK)
+    let arena_stage = game.arena_stage();
+    let Some((mut placements, mut figures)) =
+        stage_bound_block(archive, &list, PLAYING_BLOCK, Some(arena_stage))
     else {
         return;
     };
@@ -279,6 +316,41 @@ fn seeded_game() -> ScreenGame {
     game
 }
 
+/// Stage the playing shot's mid-song scene: the player caption, the
+/// worn figure (`avatar.opa`; a missing or unstackable archive keeps
+/// no figure), and the host song pick whose caption the Playing paint
+/// re-syncs into the scene and tally strip. Staged after the loading
+/// shot so earlier shots stay untouched; never fails.
+fn stage_playing_scene(game: &mut ScreenGame) {
+    let (level, name) = PLAYING_PLAYER;
+    game.set_player(level, name);
+    if let Some(archive) = read_archive(AVATAR_ARCHIVE) {
+        if let Ok(figure) = stack_worn_figure(&archive, &PLAYING_EQUIPMENT, true) {
+            if !figure.is_empty() {
+                game.load_avatar(figure);
+            }
+        }
+    }
+    if let Ok(entries) = o2jam_file::parse_ojn_list(&playing_song_catalog()) {
+        game.set_song_catalog(&entries);
+    }
+    game.set_selected_music(PLAYING_SONG);
+}
+
+/// Synthetic one-song catalog blob (the 7.55 `OJNList.dat` record
+/// shape, title `First` at id 757) feeding the playing shot's song
+/// caption; bytes live here so no game data is read.
+fn playing_song_catalog() -> Vec<u8> {
+    let mut rec = vec![0u8; 300];
+    rec[8..11].copy_from_slice(b"ojn");
+    rec[4..8].copy_from_slice(&757u32.to_le_bytes());
+    rec[20..24].copy_from_slice(&124.0f32.to_le_bytes());
+    rec[112..117].copy_from_slice(b"First");
+    rec[176..180].copy_from_slice(b"Band");
+    rec[240..251].copy_from_slice(b"o2ma757.ojm");
+    rec
+}
+
 /// One room-list row.
 fn room_entry(number: i32, title: &str, locked: bool, users: u8) -> RoomListEntry {
     RoomListEntry {
@@ -301,14 +373,15 @@ fn room_entry(number: i32, title: &str, locked: bool, users: u8) -> RoomListEntr
     }
 }
 
-/// Waiting room with a single ready host in seat 0.
+/// Waiting room with a single ready host in seat 0, joined at the
+/// reference-matching arena stage (see [`PLAYING_ARENA_STAGE`]).
 fn waiting_room() -> JoinedRoom {
     JoinedRoom {
         member_id: 0,
         team: 1,
         title: "Jam".to_owned(),
         music_id: 0,
-        arena: 0,
+        arena: PLAYING_ARENA_STAGE,
         key_mode: 2,
         game_mode: 0,
         difficulty: 0,
@@ -488,6 +561,97 @@ fn adler32(data: &[u8]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use o2jam_shell::avatar::{
+        load_archive_sprite, paint_foreground_placements, paint_scene_figures,
+        placement_origin_in_frame,
+    };
+
+    #[test]
+    fn pinned_equipment_stacks_a_worn_figure() {
+        let Some(archive) = read_archive(AVATAR_ARCHIVE) else {
+            println!("skip: missing {AVATAR_ARCHIVE}");
+            return;
+        };
+        let figure = stack_worn_figure(&archive, &PLAYING_EQUIPMENT, true)
+            .expect("pinned ids stack against 7.55 avatar.opa");
+        assert!(!figure.is_empty());
+        let (w, h) = figure.extent();
+        assert!(w > 0 && h > 0, "figure extent {w}x{h} paints nothing");
+    }
+
+    #[test]
+    fn playing_venue_stages_the_room_arena_backdrop() {
+        // The joined room's arena word (stage 5) drives the venue
+        // resolution: the staged `_Playing_BG.ojs` figure is the
+        // `Playing_BG5.ojs` body, not the bare stem's.
+        let Some(archive) = read_archive(PLAYING_ARCHIVE) else {
+            println!("skip: missing {PLAYING_ARCHIVE}");
+            return;
+        };
+        let list = control_list(&archive, PLAYING_LIST).expect("control list parses");
+        let game = seeded_game();
+        assert_eq!(game.arena_stage(), 5);
+        let Some((_, figures)) =
+            stage_bound_block(&archive, &list, PLAYING_BLOCK, Some(game.arena_stage()))
+        else {
+            panic!("playing: STATE_PLAYING staged no figures");
+        };
+        let venue = figures
+            .get("_Playing_BG.ojs")
+            .expect("the venue runtime ref stages a figure");
+        assert_eq!(
+            venue,
+            &load_archive_sprite(&archive, "Playing_BG5.ojs").expect("stage 5 body decodes"),
+            "venue must load the arena stage's numbered body"
+        );
+        assert_ne!(
+            figures.get("_Playing_BG.ojs"),
+            load_archive_sprite(&archive, "Playing_BG.ojs").as_ref(),
+            "stage-less bare stem must not win while a stage is set"
+        );
+    }
+
+    #[test]
+    fn playing_shot_paints_staged_mid_song_state() {
+        let walk_to_playing = |game: &mut ScreenGame| {
+            game.lane_key(3, true);
+            for _ in 0..4 {
+                game.menu_key(MenuKey::Confirm, true);
+            }
+        };
+        let mut plain = seeded_game();
+        walk_to_playing(&mut plain);
+        let mut plain_buf = vec![0u32; SHOT_W * SHOT_H];
+        plain.paint_at(
+            &mut Frame {
+                buf: &mut plain_buf,
+                w: SHOT_W,
+                h: SHOT_H,
+            },
+            5_100,
+        );
+        let mut staged = seeded_game();
+        walk_to_playing(&mut staged);
+        stage_playing_scene(&mut staged);
+        staged.strike_at(2, 5_000);
+        let staged_rgb = frame_rgb(&mut staged, 5_100);
+        assert_eq!(staged.screen(), Screen::Playing);
+        assert_ne!(
+            staged_rgb,
+            to_rgb(&plain_buf),
+            "captions, figure, or strike changed no pixels"
+        );
+        let mut end_buf = vec![0u32; SHOT_W * SHOT_H];
+        staged.paint_at(
+            &mut Frame {
+                buf: &mut end_buf,
+                w: SHOT_W,
+                h: SHOT_H,
+            },
+            7_000,
+        );
+        assert_eq!(staged.screen(), Screen::Result, "spent chart missed Result");
+    }
 
     #[test]
     fn png_carries_signature_and_dimensions() {
@@ -524,6 +688,162 @@ mod tests {
             assert_eq!((shot.w, shot.h), (SHOT_W, SHOT_H));
             assert!(is_varied(&shot.rgb), "{} paints a flat frame", shot.name);
         }
+    }
+
+    /// First opaque pixel of a figure's first layer plus its decoded
+    /// color, via a 1x1 probe blit (only that pixel survives the
+    /// clip). `None` when the body has no decodable layer or no
+    /// opaque pixel.
+    fn first_opaque_probe(figure: &AvatarFigure) -> Option<(i32, i32, u32)> {
+        let layer = figure.layer(0)?;
+        let at = (0..layer.image.w * layer.image.h)
+            .find(|at| layer.image.words[*at] != layer.colorkey)?;
+        let (px, py) = ((at % layer.image.w) as i32, (at / layer.image.w) as i32);
+        let mut probe = vec![0u32; 1];
+        o2jam_render::blit_rgb555(
+            &mut Frame {
+                buf: &mut probe,
+                w: 1,
+                h: 1,
+            },
+            &layer.image.view(),
+            -px,
+            -py,
+            Some(layer.colorkey),
+        );
+        (probe[0] != 0).then_some((px, py, probe[0]))
+    }
+
+    /// Drive every `.bnd`-claimed placement with a decodable body of
+    /// one real block through the shared painter, alone on a blank
+    /// native frame, and require its first opaque pixel to land at
+    /// its own rect origin. Returns the number of entries proven.
+    fn bound_entries_paint_on_rects(archive: &[u8], list_entry: &str, block_name: &str) -> usize {
+        let Some(list) = control_list(archive, list_entry) else {
+            return 0;
+        };
+        let Some(block) = scene_block(&list, block_name) else {
+            return 0;
+        };
+        let Some(bind_file) = block.bound_file.clone() else {
+            return 0;
+        };
+        let Some(bnd) = bind_data(archive, &bind_file) else {
+            return 0;
+        };
+        let placements = bind_scene_rects(block, &bnd);
+        let figures = load_scene_figures(archive, &scene_sprite_names(block));
+        let (frame_w, frame_h) = (
+            usize::try_from(NATIVE_WIDTH).expect("native width fits usize"),
+            usize::try_from(NATIVE_HEIGHT).expect("native height fits usize"),
+        );
+        let mut checked = 0;
+        for placed in &placements {
+            let claimed = placed.rect.w != 0 || placed.rect.h != 0;
+            let Some(name) = placed.sprite.as_deref() else {
+                continue;
+            };
+            let Some(figure) = figures.get(name) else {
+                continue;
+            };
+            if !claimed {
+                continue;
+            }
+            let Some((px, py, ink)) = first_opaque_probe(figure) else {
+                continue;
+            };
+            let (origin_x, origin_y) = placement_origin_in_frame(placed, frame_w, frame_h);
+            let mut buf = vec![0u32; frame_w * frame_h];
+            paint_scene_figures(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: frame_w,
+                    h: frame_h,
+                },
+                std::slice::from_ref(placed),
+                &figures,
+            );
+            let at = (origin_y + py) as usize * frame_w + (origin_x + px) as usize;
+            assert_eq!(
+                buf[at], ink,
+                "{block_name}:{name} must paint on its own rect origin"
+            );
+            checked += 1;
+        }
+        checked
+    }
+
+    #[test]
+    fn every_bound_entry_paints_on_its_rect_origin() {
+        // Multi-entry proof of the shared rule on real 7.55 bytes:
+        // ordinal pairing feeds every bound entry its own rect, and
+        // the painter places each body at that rect origin — record
+        // anchors duplicate bound rects (TimeBar (489,556), EXIT
+        // (751,554), Hottime (710,21), ...) and must never add. The
+        // same loop runs the Playing bound run (Playing1.opi) and the
+        // Room block (Interface1.opi), so the correction holds per
+        // scene and per entry, not for one sprite.
+        let mut checked = 0;
+        if let Some(archive) = read_archive(PLAYING_ARCHIVE) {
+            checked += bound_entries_paint_on_rects(&archive, PLAYING_LIST, PLAYING_BLOCK);
+        } else {
+            println!("skip: missing {PLAYING_ARCHIVE}");
+        }
+        if let Some(archive) = read_archive(INTERFACE_ARCHIVE) {
+            checked += bound_entries_paint_on_rects(&archive, INTERFACE_LIST, ROOM_BLOCK);
+        } else {
+            println!("skip: missing {INTERFACE_ARCHIVE}");
+        }
+        assert!(
+            checked >= 5,
+            "multi-entry proof covered only {checked} bound entries"
+        );
+        println!("proved {checked} bound entries paint on their own rect origins");
+    }
+
+    #[test]
+    fn staged_time_bar_paints_on_its_bound_rect() {
+        // Verified trace on real 7.55 bytes: `IDC_IMAGE_SPLAY_TIMEBAR`
+        // (entry 215 of `STATE_PLAYING`, code `0x1B500003`) pairs by
+        // code ordinal 3 with `State_Playing.bnd` rect[2]
+        // (489,556)-(743,566), and its body's record anchor duplicates
+        // that origin byte-exact — so the overlay must paint the art
+        // at (489,556), never at rect + anchor (which lands off-canvas
+        // and hides the bar).
+        let Some(archive) = read_archive(PLAYING_ARCHIVE) else {
+            println!("skip: missing {PLAYING_ARCHIVE}");
+            return;
+        };
+        let list = control_list(&archive, PLAYING_LIST).expect("control list parses");
+        let block = scene_block(&list, PLAYING_BLOCK).expect("STATE_PLAYING stages");
+        let bnd = bind_data(&archive, "State_Playing.bnd").expect("bind file parses");
+        let placements = bind_scene_rects(block, &bnd);
+        let placed = placements
+            .iter()
+            .find(|placed| placed.sprite.as_deref() == Some("Normal_TimeBar.ojs"))
+            .expect("the bound run stages the TIME bar");
+        assert_eq!(placed.rect.x, 489);
+        assert_eq!(placed.rect.y, 556);
+        assert_eq!(placed.rect.w, 254);
+        assert_eq!(placed.rect.h, 10);
+        let figures = load_scene_figures(&archive, &scene_sprite_names(block));
+        let figure = figures.get("Normal_TimeBar.ojs").expect("body decodes");
+        let (px, py, ink) = first_opaque_probe(figure).expect("body has opaque pixels");
+        let mut buf = vec![0u32; 800 * 600];
+        paint_foreground_placements(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            &figures,
+        );
+        assert_eq!(
+            buf[(556 + py as usize) * 800 + (489 + px as usize)],
+            ink,
+            "TIME-bar art must land at its bound rect origin"
+        );
     }
 
     #[test]
