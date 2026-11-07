@@ -127,6 +127,26 @@ sprites ride layer 1, `.oji` sprites layer 2 through the clipped
 callback, so overlay-class art composites above the sprite layer
 regardless of file position.
 
+## GDI text (TEXT controls and scene numbers)
+
+TEXT controls do not stage sprites: their slot-9 Draw
+(`CCTextBox` painter `0x50f320`, `channel-fill.md`) calls the
+CDXSurface text painters, which take the page surface's DC through a
+COM vtable call and draw with GDI (`SetBkMode(TRANSPARENT)`,
+`SetTextColor`, `TextOutA`/`DrawTextA`). Fonts are name-keyed cached
+descriptors (`CreateFontA`: Trebuchet MS `0x64ae78`, Arial
+`0x64a320`, Gulimche `0x64407c`; weight 400, DEFAULT_CHARSET,
+PROOF_QUALITY), cell size = extent of the single char `'A'`. Two
+paint modes exist: scene numbers are painted once per fill into the
+loaded body's page surface (persists, rides the background quad),
+while control/dialog text redraws live each frame onto the current
+target (`0x415d00`). Full painter family, pinned font tables, draw
+sites, and the outline (halo) mode: `docs/gdi-text.md` (PINNED).
+Import-site ownership refines `channel-fill.md`: `TextOutA` sites
+`0x42c534`/`0x42c7e1`/`0x42c856` belong to plain `0x42c4c0` and
+outline `0x42c730`; `DrawTextA` sites `0x42c6ec`+ to rect
+`0x42c650`, rect outline `0x42c8a0`, and variant `0x42cab0`.
+
 ## Per-hit effect entries (playing scene burst art)
 
 The `0x5dec30` render loop's playing-scene entries come from
