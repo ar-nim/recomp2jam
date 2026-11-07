@@ -18,7 +18,11 @@ pub const ROOM_TITLE_LEN: usize = 21;
 /// unavailable).
 ///
 /// The 7.55 client keeps the state byte at row `+0x04` of its 0xb4-stride
-/// room table and gates on value 1 (Waiting); see `docs/room-enums.md`.
+/// room table. Consumers: the row fill passes the raw byte as the
+/// Room_State.ojs image frame (file `0x968ae`, set at `0x968b6` — frames
+/// 0/1/2 are distinct icons), the builder gates on 1 (files `0x92405`,
+/// `0x924b2`, `0x92568`), and the row bind zero-tests it (file `0x951cc`);
+/// see `docs/room-enums.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum RoomState {
@@ -45,8 +49,12 @@ impl RoomState {
 
 /// Chart difficulty (`Encore.Metadata.Difficulty`).
 ///
-/// The 7.55 client stores the wire byte but no compare consumer is
-/// located yet; see `docs/room-enums.md`.
+/// The 7.55 client reads the row `+0x8c` byte as an index into the music
+/// record's `u16` level table at `+0x14` (stride 2, files `0x95c52`,
+/// `0x95db9`, `0x961bd`, `0x965ae`) and into the Room_Speed.ojs icon grid
+/// (`byte*12`, file `0x96751`); value 0 has a zero-test with an extra
+/// `+0x30` icon offset (files `0x96610`, `0x9664e`); see
+/// `docs/room-enums.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Difficulty {
@@ -79,7 +87,9 @@ impl Difficulty {
 /// shuffled mapping).
 ///
 /// The 7.55 client maps each value 0–11 to an `X …` label in one
-/// function; see `docs/room-enums.md`.
+/// function and to consecutive Room_Speed.ojs icon cells (frame =
+/// `speed + 12*difficulty + 1`, file `0x96751`); see
+/// `docs/room-enums.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum GameSpeed {
@@ -894,6 +904,11 @@ mod room_list_tests {
 
     #[test]
     fn room_state_names_each_wire_value() {
+        // Icon frames render the raw byte (file 0x968ae), so the
+        // discriminants must equal the wire values one to one.
+        assert_eq!(RoomState::Unavailable as u8, 0);
+        assert_eq!(RoomState::Waiting as u8, 1);
+        assert_eq!(RoomState::Playing as u8, 2);
         assert_eq!(RoomState::from_code(0), Some(RoomState::Unavailable));
         assert_eq!(RoomState::from_code(1), Some(RoomState::Waiting));
         assert_eq!(RoomState::from_code(2), Some(RoomState::Playing));
@@ -903,28 +918,42 @@ mod room_list_tests {
 
     #[test]
     fn difficulty_names_each_wire_value() {
-        assert_eq!(Difficulty::from_code(0), Some(Difficulty::Ex));
-        assert_eq!(Difficulty::from_code(1), Some(Difficulty::Nx));
-        assert_eq!(Difficulty::from_code(2), Some(Difficulty::Hx));
-        assert_eq!(Difficulty::from_code(3), Some(Difficulty::Rx));
+        // The exe indexes the level table with the raw byte (files
+        // 0x95c52 et al.), so ordinals 0..3 must stay contiguous.
+        for (code, name) in [
+            (0, Difficulty::Ex),
+            (1, Difficulty::Nx),
+            (2, Difficulty::Hx),
+            (3, Difficulty::Rx),
+        ] {
+            assert_eq!(name as u8, code);
+            assert_eq!(Difficulty::from_code(code), Some(name));
+        }
         assert_eq!(Difficulty::from_code(4), None);
         assert_eq!(Difficulty::from_code(0xFF), None);
     }
 
     #[test]
     fn game_speed_names_each_wire_value() {
-        assert_eq!(GameSpeed::from_code(0), Some(GameSpeed::X05));
-        assert_eq!(GameSpeed::from_code(1), Some(GameSpeed::X10));
-        assert_eq!(GameSpeed::from_code(2), Some(GameSpeed::X15));
-        assert_eq!(GameSpeed::from_code(3), Some(GameSpeed::X20));
-        assert_eq!(GameSpeed::from_code(4), Some(GameSpeed::X25));
-        assert_eq!(GameSpeed::from_code(5), Some(GameSpeed::X30));
-        assert_eq!(GameSpeed::from_code(6), Some(GameSpeed::X35));
-        assert_eq!(GameSpeed::from_code(7), Some(GameSpeed::X40));
-        assert_eq!(GameSpeed::from_code(8), Some(GameSpeed::X45));
-        assert_eq!(GameSpeed::from_code(9), Some(GameSpeed::X50));
-        assert_eq!(GameSpeed::from_code(10), Some(GameSpeed::X60));
-        assert_eq!(GameSpeed::from_code(11), Some(GameSpeed::Xr));
+        // Icon cells follow label order (file 0x96751: twelve cells per
+        // difficulty row), so each discriminant must equal its code.
+        for (code, name) in [
+            (0, GameSpeed::X05),
+            (1, GameSpeed::X10),
+            (2, GameSpeed::X15),
+            (3, GameSpeed::X20),
+            (4, GameSpeed::X25),
+            (5, GameSpeed::X30),
+            (6, GameSpeed::X35),
+            (7, GameSpeed::X40),
+            (8, GameSpeed::X45),
+            (9, GameSpeed::X50),
+            (10, GameSpeed::X60),
+            (11, GameSpeed::Xr),
+        ] {
+            assert_eq!(name as u8, code);
+            assert_eq!(GameSpeed::from_code(code), Some(name));
+        }
         assert_eq!(GameSpeed::from_code(12), None);
         assert_eq!(GameSpeed::from_code(0xFF), None);
     }
