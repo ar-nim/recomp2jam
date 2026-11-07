@@ -12,9 +12,9 @@
 use crate::avatar::AvatarFigure;
 use o2jam_game::{
     lane_effect::{lane_map_for_modifier_byte, SkillRing},
-    CoolStreak, Judgement, LaneMap, LifeBar, LongTail, MeasureReshuffle, PeerBars, PillStock,
-    QueueEvent, RankDelivery, Score, TimingWindows, JAM_PROGRESS_PER_LEVEL, LIFE_MAX,
-    PEER_SLOT_COUNT,
+    CoolStreak, HoldSpan, HoldState, Judgement, LaneMap, LifeBar, LongNoteBonus, MeasureReshuffle,
+    PeerBars, PillStock, QueueEvent, RankDelivery, Score, TimingWindows, JAM_PROGRESS_PER_LEVEL,
+    LIFE_MAX, PEER_SLOT_COUNT,
 };
 use o2jam_net::GameSpeed;
 use o2jam_render::{
@@ -887,18 +887,26 @@ fn word_of(judgement: Judgement) -> &'static str {
     }
 }
 
-/// One hittable note: rated once, by key press or by timeout.
-/// Long notes carry a tail: after the head is struck the lane is
-/// held until the tail, then released exactly there.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// One hittable record: rated once, by key press, key-up strike, or
+/// expiry. A long note pairs its head record with a chart tail
+/// ([`HoldSpan`]): the head strike arms the hold (Cool/Good), the
+/// armed hold ticks bonus while its span is open, the tail rates only
+/// by the expiry Miss, and a missed or Bad head marks the tail judged
+/// (the verified kill). No release judgement exists — key-up strikes
+/// the nearest unjudged record instead (`docs/gameplay.md`).
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct PendingNote {
     lane: u8,
     at_ms: u64,
     tail_ms: Option<u64>,
     sample: u32,
     judged: bool,
+    /// Display-only beam flag ("key down on this struck hold"); never
+    /// read by timing or scoring — the verified hold flag never clears.
     holding: bool,
     tail_judged: bool,
+    /// Verified hold machine for a long note (`None` on taps).
+    hold: Option<HoldState>,
 }
 
 impl PendingNote {
@@ -912,19 +920,21 @@ impl PendingNote {
             judged: false,
             holding: false,
             tail_judged: true,
+            hold: None,
         }
     }
 
-    /// Long note: head at `at_ms`, release at `tail_ms`.
-    fn hold(lane: u8, at_ms: u64, tail_ms: u64, sample: u32) -> Self {
+    /// Long note over a validated [`HoldSpan`] (head to tail record).
+    fn hold(lane: u8, span: HoldSpan, sample: u32) -> Self {
         Self {
             lane,
-            at_ms,
-            tail_ms: Some(tail_ms),
+            at_ms: span.head_ms,
+            tail_ms: Some(span.tail_ms),
             sample,
             judged: false,
             holding: false,
             tail_judged: false,
+            hold: Some(HoldState::new(span)),
         }
     }
 
@@ -952,6 +962,10 @@ pub struct LivePlay {
     pending: Vec<PendingNote>,
     score: Score,
     pills: PillStock,
+    /// Verified hold-bonus accumulator (+10 per held tick, game
+    /// `+0x3978`): fed per advance through [`HoldState::hold_tick_due`]
+    /// gates; kept separate from [`Score`], like the exe's sub-object.
+    bonus: LongNoteBonus,
     peers: PeerBars,
     streak: CoolStreak,
     windows: TimingWindows,
@@ -974,6 +988,7 @@ impl Default for LivePlay {
             pending: Vec::new(),
             score: Score::default(),
             pills: PillStock::default(),
+            bonus: LongNoteBonus::default(),
             peers: PeerBars::default(),
             streak: CoolStreak::default(),
             windows: TimingWindows::default(),
@@ -1008,6 +1023,7 @@ impl LivePlay {
             pending,
             score: Score::default(),
             pills: PillStock::default(),
+            bonus: LongNoteBonus::default(),
             peers: PeerBars::default(),
             streak: CoolStreak::default(),
             windows: TimingWindows::default(),
@@ -1028,9 +1044,9 @@ impl LivePlay {
         let mut pending: Vec<PendingNote> = entries
             .iter()
             .map(|(lane, head_ms, tail_ms, sample)| {
-                LongTail::new(*head_ms, *tail_ms).map_or_else(
+                HoldSpan::new(*head_ms, *tail_ms).map_or_else(
                     || PendingNote::tap(*lane, *head_ms, *sample),
-                    |tail| PendingNote::hold(*lane, tail.head_ms, tail.tail_ms, *sample),
+                    |span| PendingNote::hold(*lane, span, *sample),
                 )
             })
             .collect();
@@ -1045,6 +1061,7 @@ impl LivePlay {
             pending,
             score: Score::default(),
             pills: PillStock::default(),
+            bonus: LongNoteBonus::default(),
             peers: PeerBars::default(),
             streak: CoolStreak::default(),
             windows: TimingWindows::default(),
@@ -1195,10 +1212,13 @@ impl LivePlay {
         self.peers.apply_rank_broadcast(packet)
     }
 
-    /// Move the song clock; notes past the bad window rate Miss.
-    /// Heads missed by timeout kill their tails too, and tails with
-    /// no release by their window end rate Miss (missing the release
-    /// is a miss — long-note rule).
+    /// Move the song clock; unjudged records past the bad window rate
+    /// Miss. The verified 7.55 hold machine (`docs/gameplay.md`): a
+    /// missed head also marks its paired tail judged (the scan kill —
+    /// a mark, never a rating), a tail rates only by the expiry Miss —
+    /// no release judgement exists — and the hold-bonus scan then
+    /// feeds one +10 tick per armed hold whose span window is still
+    /// open (strict on both ends).
     pub fn advance_to(&mut self, now_ms: u64) {
         self.now_ms = now_ms;
         self.view.advance_to(now_ms);
@@ -1210,12 +1230,11 @@ impl LivePlay {
                 note.tail_judged = true;
                 note.holding = false;
                 late.push(Judgement::Miss);
-            } else if let Some(tail) = note.tail_ms {
-                let hold = LongTail {
-                    head_ms: note.at_ms,
-                    tail_ms: tail,
-                };
-                if note.holding && !note.tail_judged && hold.is_expired(now_ms, &windows) {
+            } else if let Some(tail_ms) = note.tail_ms {
+                if note.judged
+                    && !note.tail_judged
+                    && HoldSpan::is_expired(tail_ms, now_ms, &windows)
+                {
                     note.tail_judged = true;
                     note.holding = false;
                     late.push(Judgement::Miss);
@@ -1225,12 +1244,54 @@ impl LivePlay {
         for judgement in late {
             self.rate(judgement);
         }
+        let held_spans = self
+            .pending
+            .iter()
+            .filter_map(|note| note.hold.as_ref())
+            .filter(|hold| hold.hold_tick_due(now_ms))
+            .count();
+        for _ in 0..held_spans {
+            self.bonus.hold_tick();
+        }
     }
 
-    /// Strike a lane: rate the nearest unjudged note in range.
-    /// Returns the judgement, or `None` for an empty press.
+    /// Strike a lane (key-down): rate the nearest unjudged record in
+    /// range. Returns the judgement, or `None` for an empty press.
     pub fn strike_lane(&mut self, lane: u8, now_ms: u64) -> Option<Judgement> {
         self.advance_to(now_ms);
+        let i = self.nearest_strike_in_lane(lane, now_ms)?;
+        let is_hold = self.pending[i].tail_ms.is_some();
+        self.sounds.push(self.pending[i].sample);
+        let judgement = self.strike_record(i, now_ms);
+        self.pending[i].holding = is_hold;
+        Some(judgement)
+    }
+
+    /// Release a lane (key-up): the verified key-up branch never
+    /// judges a tail — it strikes the nearest unjudged record in the
+    /// lane with the shared strike windows (a Cool/Good hit arms that
+    /// record's hold; a Bad hit marks its paired tail judged) and
+    /// rates nothing when no record is in range. Releasing mid-hold
+    /// raises nothing on the hold itself: the hold flag never clears,
+    /// so the armed span keeps ticking its bonus. Returns the struck
+    /// record's judgement, or `None`.
+    pub fn release_lane(&mut self, lane: u8, now_ms: u64) -> Option<Judgement> {
+        self.advance_to(now_ms);
+        for note in &mut self.pending {
+            if note.lane == lane {
+                note.holding = false;
+            }
+        }
+        let i = self.nearest_strike_in_lane(lane, now_ms)?;
+        Some(self.strike_record(i, now_ms))
+    }
+
+    /// Index of the nearest unjudged record in `lane` within the bad
+    /// window, closer-of before/after the strike time (`None` when the
+    /// strike lands on nothing). Shared by the key-down judge and the
+    /// key-up candidate walk; tail records are never pending records
+    /// here, so both walks see heads only.
+    fn nearest_strike_in_lane(&self, lane: u8, now_ms: u64) -> Option<usize> {
         let mut best: Option<(usize, u64)> = None;
         for (i, note) in self.pending.iter().enumerate() {
             if note.judged || note.lane != lane {
@@ -1241,61 +1302,48 @@ impl LivePlay {
                 best = Some((i, gap));
             }
         }
-        let (i, _) = best?;
-        let offset = now_ms as i64 - self.pending[i].at_ms as i64;
-        let (lane, at_ms, sample) = (
-            self.pending[i].lane,
-            self.pending[i].at_ms,
-            self.pending[i].sample,
-        );
-        self.pending[i].judged = true;
-        self.pending[i].holding = self.pending[i].tail_ms.is_some();
-        self.view.strike(lane, at_ms);
-        self.sounds.push(sample);
-        self.flash_lane(lane, now_ms);
-        let judgement = self.windows.judge(offset);
-        self.rate(judgement);
-        Some(judgement)
+        best.map(|(i, _)| i)
     }
 
-    /// Release a held lane: rate the tail of the nearest held note.
-    /// Releasing mid-hold (before the tail window) is a Miss;
-    /// a release inside the window judges with the strike tiers.
-    /// Returns the judgement, or `None` when no lane is held.
-    pub fn release_lane(&mut self, lane: u8, now_ms: u64) -> Option<Judgement> {
-        self.advance_to(now_ms);
-        let mut best: Option<(usize, u64)> = None;
-        for (i, note) in self.pending.iter().enumerate() {
-            if !note.holding || note.tail_judged || note.lane != lane {
-                continue;
-            }
-            let tail = note.tail_ms.unwrap_or(note.at_ms);
-            let gap = tail.abs_diff(now_ms);
-            if best.is_none_or(|(_, seen)| gap < seen) {
-                best = Some((i, gap));
-            }
+    /// Strike record `i`: tier the offset with the shared strike
+    /// windows, apply the hold wiring (Cool/Good arms the hold; a Bad
+    /// strike marks the paired tail judged — the verified key-up kill,
+    /// a mark like the expiry scan's, never a rating), remove the head
+    /// from the scroll, flash the lane, and rate. Returns the tier.
+    fn strike_record(&mut self, i: usize, now_ms: u64) -> Judgement {
+        let offset = now_ms as i64 - self.pending[i].at_ms as i64;
+        let (lane, at_ms, is_hold) = (
+            self.pending[i].lane,
+            self.pending[i].at_ms,
+            self.pending[i].tail_ms.is_some(),
+        );
+        let judgement = self.windows.judge(offset);
+        let note = &mut self.pending[i];
+        note.judged = true;
+        if let Some(hold) = note.hold.as_mut() {
+            hold.apply_head(judgement);
         }
-        let (i, _) = best?;
-        let tail = LongTail {
-            head_ms: self.pending[i].at_ms,
-            tail_ms: self.pending[i].tail_ms.unwrap_or(self.pending[i].at_ms),
-        };
-        self.pending[i].holding = false;
-        self.pending[i].tail_judged = true;
+        if judgement == Judgement::Bad && is_hold {
+            note.tail_judged = true;
+        }
+        self.view.strike(lane, at_ms);
         self.flash_lane(lane, now_ms);
-        let judgement = if tail.is_early(now_ms, &self.windows) {
-            Judgement::Miss
-        } else {
-            tail.judge_release(now_ms, &self.windows)
-        };
         self.rate(judgement);
-        Some(judgement)
+        judgement
     }
 
     /// Running score and combo.
     #[must_use]
     pub fn score(&self) -> &Score {
         &self.score
+    }
+
+    /// Verified hold-bonus accumulator (game `+0x3978`; the lead
+    /// `longNoteScore` candidate for 4016): one +10 tick per held span
+    /// per advance while armed and the span window is open.
+    #[must_use]
+    pub fn bonus(&self) -> &LongNoteBonus {
+        &self.bonus
     }
 
     /// Take queued key-sound sample ids (one per struck note).
@@ -1340,8 +1388,8 @@ impl LivePlay {
     }
 
     /// Long-note tail beams between head and tail rows (visual only;
-    /// heads and releases still rate through `strike_lane` /
-    /// `release_lane`). Held heads beam from the judgement line;
+    /// heads rate through `strike_lane` / key-up strikes, tails only
+    /// by the expiry Miss). Held heads beam from the judgement line;
     /// untouched holds beam head-to-tail. Beams obey the worn curtain.
     fn paint_hold_tails(&self, frame: &mut Frame<'_>, geom: &HighwayGeometry) {
         for note in &self.pending {
@@ -1962,7 +2010,7 @@ impl AvatarScene {
 #[cfg(test)]
 mod live_play_tests {
     use super::*;
-    use o2jam_game::{STAT_JAM, STAT_LIFE};
+    use o2jam_game::{HOLD_TICK_BONUS_POINTS, STAT_JAM, STAT_LIFE};
 
     fn geom() -> HighwayGeometry {
         HighwayGeometry::centered(70, 60)
@@ -2205,20 +2253,28 @@ mod live_play_tests {
     }
 
     #[test]
-    fn hold_rates_head_then_tail_release() {
+    fn hold_rates_head_then_tail_by_expiry_only() {
         let mut live = LivePlay::new_holds(&[(2, 1000, 2000, 7)]);
         assert_eq!(live.strike_lane(2, 1000), Some(Judgement::Cool));
-        assert_eq!(live.release_lane(2, 2000), Some(Judgement::Cool));
-        assert_eq!(live.score().combo, 2);
-        assert_eq!(live.score().points, 400);
+        // No release judgement exists: the key-up on the tail rates
+        // nothing; the tail rates only by the expiry Miss.
+        assert_eq!(live.release_lane(2, 2000), None);
+        live.advance_to(2000 + 25 + 1);
+        assert_eq!(live.score().counts, [1, 0, 0, 1]);
         assert!(live.is_finished(3500));
     }
 
     #[test]
-    fn hold_early_release_is_a_miss() {
+    fn hold_early_release_rates_nothing_and_tail_still_expires() {
         let mut live = LivePlay::new_holds(&[(2, 1000, 2000, 7)]);
         assert_eq!(live.strike_lane(2, 1000), Some(Judgement::Cool));
-        assert_eq!(live.release_lane(2, 1500), Some(Judgement::Miss));
+        // Releasing mid-hold raises nothing (no release judgement),
+        // and the armed span keeps ticking its bonus.
+        assert_eq!(live.release_lane(2, 1500), None);
+        assert_eq!(live.score().counts, [1, 0, 0, 0]);
+        assert_eq!(live.bonus().ticks(), 1);
+        live.advance_to(2000 + 25 + 1);
+        assert_eq!(live.score().counts, [1, 0, 0, 1]);
         assert_eq!(live.score().combo, 0);
     }
 
@@ -2237,8 +2293,63 @@ mod live_play_tests {
         let mut live = LivePlay::new_holds(&[(2, 1000, 2000, 7)]);
         live.advance_to(1000 + 25 + 1);
         assert_eq!(live.release_lane(2, 2000), None);
-        assert_eq!(live.score().counts[3], 1);
+        // The scan kill marks the tail judged without a second rating.
+        assert_eq!(live.score().counts, [0, 0, 0, 1]);
         assert!(live.is_finished(3500));
+    }
+
+    #[test]
+    fn bad_head_strike_kills_the_paired_tail() {
+        let mut live = LivePlay::new_holds(&[(2, 1000, 2000, 7)]);
+        assert_eq!(live.strike_lane(2, 1020), Some(Judgement::Bad));
+        // The key-up tail kill marks the tail judged (like the expiry
+        // scan's mark), so it never rates a second Miss and never
+        // arms the hold.
+        assert_eq!(live.score().counts, [0, 0, 1, 0]);
+        live.advance_to(2000 + 25 + 1);
+        assert_eq!(live.score().counts, [0, 0, 1, 0]);
+        assert_eq!(live.bonus().ticks(), 0);
+        assert!(live.is_finished(3500));
+    }
+
+    #[test]
+    fn keyup_strikes_the_nearest_unjudged_record() {
+        let mut live = LivePlay::new_holds(&[(2, 1000, 2000, 7), (2, 1500, 1500, 9)]);
+        assert_eq!(live.strike_lane(2, 1000), Some(Judgement::Cool));
+        // Key-up walks the lane's unjudged records (tails excluded)
+        // and strikes the tap at 1500 with the shared windows.
+        assert_eq!(live.release_lane(2, 1490), Some(Judgement::Good));
+        assert_eq!(live.score().counts, [1, 1, 0, 0]);
+        // The hold flag never clears mid-song: the armed span keeps
+        // ticking its bonus through the key-up (one tick per advance).
+        live.advance_to(1600);
+        assert_eq!(live.bonus().ticks(), 2);
+    }
+
+    #[test]
+    fn hold_bonus_ticks_only_while_armed_and_span_open() {
+        let mut live = LivePlay::new_holds(&[(2, 1000, 2000, 7)]);
+        assert_eq!(live.strike_lane(2, 1000), Some(Judgement::Cool));
+        // One +10 tick per advance inside the open span (strict ends).
+        live.advance_to(1500);
+        assert_eq!(
+            (live.bonus().ticks(), live.bonus().points()),
+            (1, HOLD_TICK_BONUS_POINTS)
+        );
+        live.advance_to(1999);
+        assert_eq!(live.bonus().ticks(), 2);
+        live.advance_to(2000);
+        assert_eq!(live.bonus().ticks(), 2);
+    }
+
+    #[test]
+    fn hold_bonus_needs_an_armed_hold() {
+        let mut live = LivePlay::new_holds(&[(2, 1000, 2000, 7)]);
+        live.advance_to(1010); // inside the span, head unstruck
+        assert_eq!(live.bonus().ticks(), 0);
+        live.advance_to(2000 + 25 + 1); // missed head kills the tail
+        assert_eq!(live.bonus().ticks(), 0);
+        assert_eq!(live.score().counts, [0, 0, 0, 1]);
     }
 
     #[test]

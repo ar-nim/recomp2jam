@@ -514,9 +514,9 @@ fn bind_entries_by_ordinal(block: &ControlBlock, bnd: &Bnd) -> Vec<ScenePlacemen
 /// `.bnd` rect of one entry by ordinal (verified pairing, exe
 /// `0x548640`): index `(code & 0xFFF) − 1`, bounds-checked against
 /// the rect count; the ordinal-0 underflow and out-of-range misses
-/// both yield the all-zero rect. `o2jam-file`'s
-/// `pair_entries_with_rects` still pairs positionally, so the
-/// corrected math lives here until that sibling lands.
+/// both yield the all-zero rect. `o2jam-render`'s `bind_controls`
+/// still zips positionally, so callers must run this ordinal math
+/// before handing rects there.
 fn ordinal_rect(entry: &ControlEntry, bnd: &Bnd) -> Rect {
     let found = (entry.code & 0xFFF)
         .checked_sub(1)
