@@ -9,12 +9,18 @@
 //! `EXIT`..`VOLUME` run, entries 213–229, ordinals 1–17); every layer
 //! paints 1:1 at its record anchor scaled into the frame — the
 //! verified draw chain (the blit adds the anchor to the view
-//! position; `.bnd` rects are input bounds, never read at draw) — in
-//! file order with the background first.
+//! position; anchored bodies author their absolute position) — over
+//! the view origin its placement stages: a bound rect positions
+//! anchor-free bodies (lobby row icons, avatar covers), unbound rects
+//! leave the frame origin. Painting stays in file order with the
+//! background first.
 //! Number-font bodies (`Room_Number.ojs` and kin) paint live values
-//! digit by digit; entry codes gate visibility by state byte. Bare
-//! [`paint_screen`] keeps the flat-color fallback while no art is
-//! staged; staged scenes never paint flat cards.
+//! digit by digit; the lobby row icons (`Room_State.ojs`,
+//! `Room_Mode.ojs`, `Room_Om.ojs`) paint the highlighted room's
+//! frames at their `SET 0x11` template rects; entry codes gate
+//! visibility by state byte. Bare [`paint_screen`] keeps the
+//! flat-color fallback while no art is staged; staged scenes never
+//! paint flat cards.
 
 use std::collections::HashMap;
 
@@ -28,8 +34,8 @@ use super::super::screen::Screen;
 use o2jam_file::ControlList;
 use o2jam_game::RoomTeams;
 use o2jam_net::{
-    ChannelState, Difficulty, GameMode, GameSpeed, JoinedRoom, KeyMode, RoomListEntry, RoomSlot,
-    RoomSlotState,
+    rooms::om_icon_frame, ChannelState, Difficulty, GameMode, GameSpeed, JoinedRoom, KeyMode,
+    RoomListEntry, RoomSlot, RoomSlotState,
 };
 use o2jam_render::{
     blit_rgb555, draw_number, draw_text, fill_rect, number_width, pack_xrgb, scale_rect_to_frame,
@@ -636,6 +642,150 @@ fn paint_room_number(
     }
 }
 
+/// Lobby row-state icon body (`SET 0x11` row template, child 12):
+/// frame = the raw state byte (icon site `0x1268ae`), so frames 0/1/2
+/// drive its images (docs/room-enums.md).
+pub const ROOM_STATE_SPRITE: &str = "Room_State.ojs";
+/// Lobby key-mode icon body (child 7): frame 1 = 3-key, frame 2 =
+/// 7-key — the key-mode mark, not the battle mark (icon sites
+/// `0x1267ad`–`0x1267e2`).
+pub const ROOM_MODE_SPRITE: &str = "Room_Mode.ojs";
+/// Lobby option-mode icon body (child 8): frames 1–4 depict 1–4
+/// pudding mascots, banded by the selected song's level word (band
+/// mapper `0x126cb0`).
+pub const ROOM_OM_SPRITE: &str = "Room_Om.ojs";
+/// Music floor a room row must pass to run the per-row fill (row
+/// `+0x88` vs `0x64`, file `0x1251da`); below it the room shows the
+/// no-song display state.
+pub const ROOM_MUSIC_FLOOR: u16 = 0x64;
+
+/// `Room_State.ojs` frame for one room: the state byte unmodified
+/// (icon site `0x1268ae`, docs/room-enums.md).
+#[must_use]
+fn room_state_icon_frame(state_code: u8) -> u8 {
+    state_code
+}
+
+/// `Room_Mode.ojs` frame for one room: key mode 0 → frame 1, 2 →
+/// frame 2, anything else untouched (`None` — the exe leaves the
+/// icon alone; icon sites `0x1267ad`–`0x1267e2`).
+#[must_use]
+fn room_key_icon_frame(key_mode: u8) -> Option<u8> {
+    match KeyMode::from_u8(key_mode) {
+        Ok(KeyMode::ThreeKeys) => Some(1),
+        Ok(KeyMode::SevenKeys) => Some(2),
+        _ => None,
+    }
+}
+
+/// `Room_Om.ojs` frame for one room: below the pinned music floor the
+/// row shows the no-song display state → constant level 1 → frame 1
+/// (mapper call `0x1266b9`); past the floor the song's level word
+/// maps through the band mapper ([`om_icon_frame`], bands 0–4/5–8/
+/// 9–12/13+ → frames 1–4). The shell stages no song table (it lives
+/// server-side), so a song without a known level paints nothing
+/// rather than a wrong pudding count.
+#[must_use]
+fn room_om_icon_frame(music_id: u16, level: Option<u16>) -> Option<u8> {
+    if music_id < ROOM_MUSIC_FLOOR {
+        Some(1)
+    } else {
+        level.map(om_icon_frame)
+    }
+}
+
+/// Image index the exe sprite setter paints for frame value `frame`
+/// (setter `0x2f870`: store verbatim, clamp against the stored count,
+/// subtract 1 before the image lookup — frame *n* paints image *n−1*):
+/// saturating at image 0 for frame 0, clamped at the last decoded
+/// layer otherwise. `None` for an empty body.
+#[must_use]
+fn icon_frame_layer(frame: u8, layers: usize) -> Option<usize> {
+    if layers == 0 {
+        return None;
+    }
+    Some(usize::from(frame.saturating_sub(1)).min(layers - 1))
+}
+
+/// Paint one frame of a staged icon body at its bound placement: the
+/// first placement naming `sprite` supplies the rect, the frame's
+/// layer blits 1:1 at the rect origin plus its record anchor (the
+/// same draw math as [`paint_font_number`]; the row icons anchor at
+/// `(0,0)`, so the rect origin positions them). A missing placement,
+/// figure, frame, or layer paints nothing — the exe leaves an
+/// untouched icon exactly so.
+fn paint_icon_frame(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    figures: &HashMap<String, AvatarFigure>,
+    sprite: &str,
+    icon_frame: Option<u8>,
+) {
+    let Some(icon_frame) = icon_frame else {
+        return;
+    };
+    let Some(placed) = placements
+        .iter()
+        .find(|placed| placed.sprite.as_deref() == Some(sprite))
+    else {
+        return;
+    };
+    let Some(figure) = figures.get(sprite) else {
+        return;
+    };
+    let Some(layer_index) = icon_frame_layer(icon_frame, figure.len()) else {
+        return;
+    };
+    let Some(layer) = figure.layer(layer_index) else {
+        return;
+    };
+    let dest = scale_rect_to_frame(&placed.rect, frame.w, frame.h);
+    blit_rgb555(
+        frame,
+        &layer.image.view(),
+        dest.x + layer.dx,
+        dest.y + layer.dy,
+        Some(layer.colorkey),
+    );
+}
+
+/// Row icons of the highlighted room: state, key mode, and Om
+/// pudding count, each at its `State_Room.bnd` icon rect (the `SET
+/// 0x11` row template binds one copy per icon; the exe clones the
+/// template per row button). Missing art paints nothing; the detail
+/// text draws on top.
+fn paint_room_row_icons(
+    frame: &mut Frame<'_>,
+    art: &SceneArt,
+    rooms: &[RoomListEntry],
+    highlight: usize,
+) {
+    let Some(room) = rooms.get(highlight) else {
+        return;
+    };
+    paint_icon_frame(
+        frame,
+        &art.placements,
+        &art.figures,
+        ROOM_STATE_SPRITE,
+        Some(room_state_icon_frame(room.state_code)),
+    );
+    paint_icon_frame(
+        frame,
+        &art.placements,
+        &art.figures,
+        ROOM_MODE_SPRITE,
+        room_key_icon_frame(room.key_mode),
+    );
+    paint_icon_frame(
+        frame,
+        &art.placements,
+        &art.figures,
+        ROOM_OM_SPRITE,
+        room_om_icon_frame(room.music_id, None),
+    );
+}
+
 /// Details of the highlighted room: title, song, difficulty, key
 /// mode, game mode, speed, seats, level gate, lock. Lines anchor to
 /// their `State_Room.bnd` rects while staged art names them and
@@ -680,6 +830,7 @@ pub fn paint_room_scene(
     art.paint_backdrop(frame, Screen::Room);
     paint_title_over_art(frame, Screen::Room);
     paint_room_rows(frame, rooms, highlight);
+    paint_room_row_icons(frame, art, rooms, highlight);
     paint_room_details(frame, rooms, highlight, Some(&art.placements));
     paint_room_number(frame, art, rooms, highlight);
 }
@@ -2485,6 +2636,316 @@ mod paint_tests {
         assert_eq!(buf[10 * 800 + 10], pack_xrgb(255, 0, 0));
         assert_eq!(buf[10 * 800 + 20], pack_xrgb(0, 255, 0));
         assert_eq!(buf[10 * 800 + 30], pack_xrgb(0, 0, 255));
+    }
+
+    /// Multi-layer icon body: layer `i` paints one solid RGB555
+    /// `words[i]` image (colorkey white, so every pixel paints).
+    fn icon_figure(words: &[u16]) -> AvatarFigure {
+        let mut figure = AvatarFigure::default();
+        for word in words {
+            let pixels = vec![word.to_le_bytes(); 40 * 20].concat();
+            figure.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&pixels, 40, 20).unwrap(),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+        }
+        figure
+    }
+
+    /// The three lobby row-icon placements at their `State_Room.bnd`
+    /// template rects, with a distinct-layer figure per icon (green,
+    /// red, blue, white in frame order; last layers feed the backdrop
+    /// pass, selected frames the icon pass).
+    fn room_icon_art() -> SceneArt {
+        let placed = |id: &str, code: u32, sprite: &str, x: i32, y: i32| ScenePlacement {
+            id: id.to_owned(),
+            code,
+            sprite: Some(sprite.to_owned()),
+            rect: Rect { x, y, w: 40, h: 20 },
+        };
+        SceneArt {
+            placements: vec![
+                placed(
+                    "IDC_IMAGE_SROOM_MODE",
+                    0x1350_0028,
+                    ROOM_MODE_SPRITE,
+                    400,
+                    280,
+                ),
+                placed("IDC_IMAGE_SROOM_OM", 0x1350_0029, ROOM_OM_SPRITE, 450, 280),
+                placed(
+                    "IDC_IMAGE_SROOM_STATE",
+                    0x1350_002D,
+                    ROOM_STATE_SPRITE,
+                    500,
+                    300,
+                ),
+            ],
+            figures: HashMap::from([
+                (
+                    ROOM_MODE_SPRITE.to_owned(),
+                    icon_figure(&[0x03E0, 0x7C00, 0x001F]),
+                ),
+                (
+                    ROOM_OM_SPRITE.to_owned(),
+                    icon_figure(&[0x03E0, 0x7C00, 0x001F, 0x7FE0]),
+                ),
+                (
+                    ROOM_STATE_SPRITE.to_owned(),
+                    icon_figure(&[0x03E0, 0x7C00, 0x001F]),
+                ),
+            ]),
+        }
+    }
+
+    /// One room row overriding the listed fields.
+    fn room_with(state_code: u8, key_mode: u8, music_id: u16) -> RoomListEntry {
+        RoomListEntry {
+            state_code,
+            key_mode,
+            music_id,
+            ..two_rooms()[0].clone()
+        }
+    }
+
+    #[test]
+    fn icon_frame_layers_clamp_like_the_exe_setter() {
+        // Setter `0x2f870`: frame n paints image n−1, saturating at 0
+        // for frame 0 and clamping at the last decoded layer.
+        assert_eq!(icon_frame_layer(0, 2), Some(0));
+        assert_eq!(icon_frame_layer(1, 2), Some(0));
+        assert_eq!(icon_frame_layer(2, 2), Some(1));
+        assert_eq!(icon_frame_layer(9, 2), Some(1));
+        assert_eq!(icon_frame_layer(1, 4), Some(0));
+        assert_eq!(icon_frame_layer(4, 4), Some(3));
+        assert_eq!(icon_frame_layer(0, 0), None);
+    }
+
+    #[test]
+    fn room_state_icon_frame_tracks_the_state_byte() {
+        assert_eq!(room_state_icon_frame(0), 0);
+        assert_eq!(room_state_icon_frame(1), 1);
+        assert_eq!(room_state_icon_frame(2), 2);
+    }
+
+    #[test]
+    fn room_key_icon_frames_follow_the_3_and_7_key_rule() {
+        // Icon sites `0x1267ad`–`0x1267e2`: key 0 → frame 1, key 2 →
+        // frame 2, anything else untouched.
+        assert_eq!(room_key_icon_frame(0), Some(1));
+        assert_eq!(room_key_icon_frame(2), Some(2));
+        assert_eq!(room_key_icon_frame(1), None);
+        assert_eq!(room_key_icon_frame(9), None);
+    }
+
+    #[test]
+    fn room_om_icon_bands_follow_the_level_mapper() {
+        // Mapper `0x126cb0` via `om_icon_frame`: 0–4 → 1, 5–8 → 2,
+        // 9–12 → 3, 13+ → 4.
+        for (level, frame) in [
+            (0u16, 1),
+            (4, 1),
+            (5, 2),
+            (8, 2),
+            (9, 3),
+            (12, 3),
+            (13, 4),
+            (99, 4),
+        ] {
+            assert_eq!(room_om_icon_frame(200, Some(level)), Some(frame), "{level}");
+        }
+    }
+
+    #[test]
+    fn room_om_icon_shows_the_no_song_frame_below_the_music_floor() {
+        // Floor compare `0x1251da` + constant level 1 (`0x1266b9`):
+        // below the floor the row shows frame 1; past it an unknown
+        // level (no staged song table) paints nothing.
+        assert_eq!(room_om_icon_frame(0, None), Some(1));
+        assert_eq!(room_om_icon_frame(ROOM_MUSIC_FLOOR - 1, None), Some(1));
+        assert_eq!(room_om_icon_frame(ROOM_MUSIC_FLOOR, None), None);
+        assert_eq!(room_om_icon_frame(u16::MAX, None), None);
+    }
+
+    #[test]
+    fn room_icons_paint_their_frames_at_the_rect_origins() {
+        // State 2 (frame 2 → layer 1 red), key 2 (frame 2 → layer 1
+        // red), no song (frame 1 → layer 0 green): each at its own
+        // template rect origin, none at the frame corner.
+        let art = room_icon_art();
+        let rooms = vec![room_with(2, 2, 0)];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_room_row_icons(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &art,
+            &rooms,
+            0,
+        );
+        let red = pack_xrgb(255, 0, 0);
+        let green = pack_xrgb(0, 255, 0);
+        assert_eq!(buf[300 * 800 + 500], red, "state icon frame");
+        assert_eq!(buf[280 * 800 + 400], red, "key-mode icon frame");
+        assert_eq!(buf[280 * 800 + 450], green, "om icon frame");
+        assert_eq!(buf[0], 0);
+    }
+
+    #[test]
+    fn room_icons_skip_untouched_frames_and_missing_art() {
+        // Key 1 leaves the mode icon untouched (the backdrop's last
+        // layer stays), a song without a staged level leaves the om
+        // icon untouched, and an unstaged body paints nothing.
+        let mut art = room_icon_art();
+        art.figures.remove(ROOM_STATE_SPRITE);
+        let rooms = vec![room_with(1, 1, ROOM_MUSIC_FLOOR)];
+        let mut buf = vec![0u32; 800 * 600];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 800,
+            h: 600,
+        };
+        art.paint_overlay(&mut frame);
+        paint_room_row_icons(&mut frame, &art, &rooms, 0);
+        let blue = pack_xrgb(0, 0, 255);
+        let yellow = pack_xrgb(255, 255, 0);
+        assert_eq!(buf[280 * 800 + 400], blue, "mode icon untouched");
+        assert_eq!(buf[280 * 800 + 450], yellow, "om icon untouched");
+        assert_eq!(buf[300 * 800 + 500], 0, "missing state body paints nothing");
+    }
+
+    #[test]
+    fn room_scene_layers_icons_under_the_detail_ink() {
+        // Full pipeline: the backdrop paints every layer, the icon
+        // pass overlays the selected frames, and the detail text
+        // draws last — the icon survives beside the small text scrim
+        // (asserted inside the icon box, clear of the scrim).
+        let art = room_icon_art();
+        let rooms = vec![room_with(2, 2, 0)];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_room_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &rooms,
+            0,
+            &art,
+        );
+        let red = pack_xrgb(255, 0, 0);
+        assert_eq!(buf[315 * 800 + 538], red, "state icon at its rect");
+        assert_eq!(buf[295 * 800 + 438], red, "key-mode icon at its rect");
+    }
+
+    #[test]
+    fn channel_bar_paints_at_its_authored_anchor_not_the_canvas() {
+        // `Dialog_ChannelSelectBar.ojs` anchors at `(0, 0)` (347x41 on
+        // 7.55): staged unbound it paints 1:1 at that authored anchor —
+        // never stretched over the canvas.
+        let art = SceneArt {
+            placements: unbound_scene_placements(&[DIALOG_BAR_SPRITE.to_owned()]),
+            figures: HashMap::from([(DIALOG_BAR_SPRITE.to_owned(), red_figure())]),
+        };
+        let mut buf = vec![0u32; 128 * 96];
+        paint_channel_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 128,
+                h: 96,
+            },
+            &two_channels(),
+            0,
+            &art,
+        );
+        assert_eq!(buf[0], pack_xrgb(255, 0, 0), "the authored anchor");
+        assert_eq!(buf[50 * 128 + 100], 0, "no canvas-wide stretch");
+    }
+
+    #[test]
+    fn loading_gate_paints_its_full_native_rect() {
+        // `MusicLoading.ojs` is one 800x600 body at anchor (0,0):
+        // staged unbound it covers exactly its native extent at 1:1 —
+        // the art's own geometry is the rect, not a claimed scaler.
+        let pixels = [[0x00, 0x7C]; 4 * 3].concat();
+        let mut figure = AvatarFigure::default();
+        figure.push_layer(FigureLayer {
+            image: Rgb555Image::decode(&pixels, 4, 3).unwrap(),
+            dx: 0,
+            dy: 0,
+            colorkey: 0xFFFF,
+        });
+        let art = SceneArt {
+            placements: unbound_scene_placements(&[LOADING_SPRITE.to_owned()]),
+            figures: HashMap::from([(LOADING_SPRITE.to_owned(), figure)]),
+        };
+        let mut buf = vec![0u32; 32 * 24];
+        paint_loading_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 32,
+                h: 24,
+            },
+            &art,
+        );
+        let red = pack_xrgb(255, 0, 0);
+        for y in 0..3 {
+            for x in 0..4 {
+                assert_eq!(buf[y * 32 + x], red, "native rect pixel ({x},{y})");
+            }
+        }
+        assert_eq!(buf[4], 0, "nothing past the body's own extent");
+    }
+
+    #[test]
+    fn waiting_covers_paint_per_seat_rects() {
+        // `Wait_Cover_Avatar.ojs` anchors at (0,0): its eight rect-
+        // bound placements (COVERAVATAR1..8, codes 0x1650003D..44)
+        // each paint at their own rect origin — the view-from-rect
+        // case ui-draw.md leaves open, resolved for anchor-free
+        // bodies.
+        let placements = (0..8)
+            .map(|seat| ScenePlacement {
+                id: format!("IDC_IMAGE_SWAIT_COVERAVATAR{}", seat + 1),
+                code: 0x1650_003D + seat as u32,
+                sprite: Some("Wait_Cover_Avatar.ojs".to_owned()),
+                rect: Rect {
+                    x: 10 + seat * 60,
+                    y: 200 + seat * 45,
+                    w: 141,
+                    h: 175,
+                },
+            })
+            .collect();
+        let art = SceneArt {
+            placements,
+            figures: HashMap::from([("Wait_Cover_Avatar.ojs".to_owned(), red_figure())]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &waiting_room(),
+            &art,
+        );
+        let red = pack_xrgb(255, 0, 0);
+        for seat in 0..8u32 {
+            let x = 10 + seat * 60;
+            let y = 200 + seat * 45;
+            assert_eq!(
+                buf[y as usize * 800 + x as usize],
+                red,
+                "cover {seat} at its seat rect"
+            );
+        }
+        assert_eq!(buf[0], 0, "covers no longer stack at the frame corner");
     }
 
     #[test]

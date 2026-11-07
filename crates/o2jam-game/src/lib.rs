@@ -274,11 +274,21 @@ impl JamState {
     }
 }
 
-/// Chart-data span of one long note, VERIFIED 7.55: a same-lane pair of
-/// records where the head carries payload bit 25 only (`0x2000000`) and
-/// the tail adds bit 24 (`0x1000000`) — the judge arms holds on records
-/// with `payload & 0x3000000 == 0x2000000` (file `0x176105`) and pairs a
-/// head to the next bit-24 record (file `0x1774b4`).
+/// Chart-data span of one long note, VERIFIED 7.55 (payload-bit rules,
+/// claim B14): a same-lane record pair whose head payload tests
+/// [`HoldSpan::marks_hold_head`] (bit 25 set, bit 24 clear) and whose
+/// paired tail payload tests [`HoldSpan::marks_hold_tail`] (bit 24).
+/// The pairing is positional — the span latch advances the lane list
+/// once from the head to the next record (advance call at file
+/// `0x17612c`, latch stores `0x176197`/`0x1761af`) — and the load-end
+/// pairing sweep re-derives it from the same bits (bit-25 tests at
+/// files `0x173c7f`/`0x173e23`, bit-24 test at file `0x173fd5`,
+/// dossier `ev_edc4cc84…`). Bit 26 (`0x4000000`) never reaches any
+/// judge or scan: its only payload consumers are parser-side (survey
+/// `0x172a4f`, fix-up `0x173061`) plus the sample-slot bank `+0x3E8`
+/// (files `0x170427`/`0x170431`, claim B17), so claim B14's "bit
+/// 25/26" resolves to bit 25 = head / bit 24 = tail / bit 26 = parser
+/// span marker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HoldSpan {
     /// Head onset in ms.
@@ -292,6 +302,45 @@ impl HoldSpan {
     #[must_use]
     pub fn new(head_ms: u64, tail_ms: u64) -> Option<Self> {
         (tail_ms > head_ms).then_some(Self { head_ms, tail_ms })
+    }
+
+    /// Head arming test, VERIFIED 7.55: bit 25 (`0x2000000`) set with
+    /// bit 24 (`0x1000000`) clear. The equality form runs in the second
+    /// judge (files `0x1760ff`/`0x176105`, dossier `ev_3d707204…`), the
+    /// keyup branch (files `0x176c3b`/`0x176c41`), the auto judge
+    /// (files `0x1771ef`/`0x1771f5`), the expiry-scan head test
+    /// (`0x17746d`) and the dead lane planner (`0x1748ce`); the mode-0
+    /// keydown judge tests bit 25 alone (`and ecx, 0x2000000`, file
+    /// `0x1766cb`) — that divergence cannot fire, because the candidate
+    /// walk excludes bit-24 records first (files
+    /// `0x176837`/`0x176906`/`0x176994`).
+    pub const HOLD_HEAD_TEST_MASK: u32 = 0x0300_0000;
+    /// The masked payload must equal this to mark a head (see
+    /// [`Self::HOLD_HEAD_TEST_MASK`]).
+    pub const HOLD_HEAD_TEST_BITS: u32 = 0x0200_0000;
+    /// Tail marker test, VERIFIED 7.55: bit 24 set. The expiry pairing
+    /// scan marks the first bit-24 record after an unjudged head
+    /// `0x180` (test file `0x1774b4`, store `0x1774e2`, dossier
+    /// `ev_0ece39cb…`), a Bad keyup head hit kills it (file
+    /// `0x176dab`), the strike-slot computer forks the tail spawn call
+    /// on it (files `0x17043d`/`0x170487`), and the pass-event scan
+    /// re-tests the same bits (files `0x177bc0`–`0x177f5b`). Shipped
+    /// tails keep bit 25 set too (flag word `0x300`, B16 data walk);
+    /// no exe site requires bit 25 on a tail.
+    pub const HOLD_TAIL_TEST_MASK: u32 = 0x0100_0000;
+
+    /// Whether a chart payload word marks a hold head: bit 25 set with
+    /// bit 24 clear (see [`Self::HOLD_HEAD_TEST_MASK`]).
+    #[must_use]
+    pub fn marks_hold_head(payload: u32) -> bool {
+        payload & Self::HOLD_HEAD_TEST_MASK == Self::HOLD_HEAD_TEST_BITS
+    }
+
+    /// Whether a chart payload word marks the paired hold tail: bit 24
+    /// set (see [`Self::HOLD_TAIL_TEST_MASK`]).
+    #[must_use]
+    pub fn marks_hold_tail(payload: u32) -> bool {
+        payload & Self::HOLD_TAIL_TEST_MASK != 0
     }
 
     /// Judge a head strike with the shared strike windows: the key-down
@@ -1501,6 +1550,46 @@ mod tests {
         assert!(HoldSpan::new(1000, 1000).is_none());
         assert!(HoldSpan::new(1000, 999).is_none());
         assert!(HoldSpan::new(1000, 1500).is_some());
+    }
+
+    #[test]
+    fn bit_25_only_payload_marks_hold_head() {
+        // Head flag word `0x200` plus sample ref (B16 layout), bit 24 clear.
+        let payload = 0x0200_0000 | 0x11;
+        assert!(HoldSpan::marks_hold_head(payload));
+        assert!(!HoldSpan::marks_hold_tail(payload));
+    }
+
+    #[test]
+    fn bits_25_and_24_payload_marks_tail_not_head() {
+        // Shipped tails keep the head bit set (flag word `0x300`); the
+        // bit-24 test still claims it and the head equality rejects it.
+        let payload = 0x0300_0000 | 0x22;
+        assert!(HoldSpan::marks_hold_tail(payload));
+        assert!(!HoldSpan::marks_hold_head(payload));
+    }
+
+    #[test]
+    fn bit_24_only_payload_marks_tail() {
+        let payload = 0x0100_0000 | 0x33;
+        assert!(HoldSpan::marks_hold_tail(payload));
+        assert!(!HoldSpan::marks_hold_head(payload));
+    }
+
+    #[test]
+    fn bit_26_payload_marks_neither_head_nor_tail() {
+        // Bit 26 is judge-invisible (negative sweep 0x5703f0–0x578300):
+        // its only payload consumers are parser-side (survey 0x172a4f,
+        // fix-up 0x173061) and the sample bank +0x3E8 (0x170427).
+        let payload = 0x0400_0000;
+        assert!(!HoldSpan::marks_hold_head(payload));
+        assert!(!HoldSpan::marks_hold_tail(payload));
+    }
+
+    #[test]
+    fn tap_payload_marks_neither_head_nor_tail() {
+        assert!(!HoldSpan::marks_hold_head(0));
+        assert!(!HoldSpan::marks_hold_tail(0));
     }
 
     #[test]

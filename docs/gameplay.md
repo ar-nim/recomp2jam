@@ -721,11 +721,56 @@ hold-bonus scan `FUN_00578110` (file `0x178110`, dossier
    inversion is real and is what makes key-down judge the head and
    key-up judge the armed tail — the modeled wiring needs no change.
 
+**Payload bit rules — VERIFIED (claim B14 CORRECTED).** Which payload
+bits mark a record as hold head/tail, re-verified from bytes (same
+binary as above; bit tests swept across the slot computer, judges,
+scans, pairing sweep and parser — VAs `0x5703f0`–`0x578300` and
+`0x572a4f`/`0x573061`):
+
+- **Bit 25 (`0x2000000`) = hold head.** The equality form
+  `payload & 0x3000000 == 0x2000000` (bit 25 set with bit 24 clear)
+  runs in the second judge (files `0x1760ff`/`0x176105`, dossier
+  `ev_3d707204…`), the keyup branch (files `0x176c3b`/`0x176c41`),
+  the auto judge (files `0x1771ef`/`0x1771f5`), the expiry-scan head
+  test (`0x17746d`) and the dead lane planner (`0x1748ce`); the mode-0
+  keydown judge tests bit 25 alone (`and ecx, 0x2000000`, file
+  `0x1766cb`) — a divergence that cannot fire, because the candidate
+  walk excludes bit-24 records first (files
+  `0x176837`/`0x176906`/`0x176994`).
+- **Bit 24 (`0x1000000`) = paired tail.** The strike walks drop
+  bit-24 records from candidacy (files
+  `0x176837`/`0x176906`/`0x176994`); the expiry pairing scan marks the
+  first bit-24 record after an unjudged head `0x180` (test file
+  `0x1774b4`, store `0x1774e2`, dossier `ev_0ece39cb…`); a Bad keyup
+  head hit kills it (`0x176dab`); the span latch advances the lane
+  list once from the head to the next record (advance call `0x17612c`,
+  latch stores `0x176197`/`0x1761af`); the strike-slot computer forks
+  the tail spawn call on the bit (files `0x17043d`/`0x170487`); the
+  pass-event scan re-tests it (files `0x177bc0`–`0x177f5b`); the
+  load-end pairing sweep re-derives head→tail from the same bits
+  (bit-25 tests `0x173c7f`/`0x173e23`, bit-24 test `0x173fd5`, dossier
+  `ev_edc4cc84…`). Shipped tails keep bit 25 set too (flag word
+  `0x300`, the B16 data walk); no site requires bit 25 on a tail.
+- **Bit 26 (`0x4000000`) is judge-invisible — the B14 correction.**
+  The sweep finds no bit-26 test in any judge or scan; its only
+  payload consumers are the parser span-marker survey (bit-26 test
+  `0x172a4f`, id `and edx, 0xFFF` at `0x172a64`, byte-table store
+  `0x172a6a`), the post-parse fix-up (`0x173061`, fix-up at file
+  `0x172f50`), and the strike-slot sample bank `+0x3E8` (files
+  `0x170427`/`0x170431`, claim B17). Shipped playable payloads never
+  set the bit. B14's "bit 25/26 = hold span/head semantics" therefore
+  resolves to: bit 25 = head, bit 24 = tail, bit 26 = parser
+  span/sample-bank marker.
+
 Modeled as `o2jam-game::HoldSpan` + `o2jam-game::HoldState`
 (`judge_head`, `apply_head`, `judge_tail`, `hold_tick_due`,
-`HoldSpan::is_expired`); the deprecated `LongTail` release model lacks
-the verified arming gate and one-shot cursor semantics and stays
-deprecated in favor of `HoldState::judge_tail`.
+`HoldSpan::is_expired`), with the payload-bit rules pinned as
+`HoldSpan::marks_hold_head`/`marks_hold_tail` and the named masks
+`HOLD_HEAD_TEST_MASK`/`HOLD_HEAD_TEST_BITS`/`HOLD_TAIL_TEST_MASK`
+(tested on the shipped flag words `0x200`/`0x300`); the deprecated
+`LongTail` release model lacks the verified arming gate and one-shot
+cursor semantics and stays deprecated in favor of
+`HoldState::judge_tail`.
 
 ## Long-note hold bonus — VERIFIED (+10 per tick, +1 combo)
 

@@ -92,6 +92,18 @@ impl AvatarFigure {
         self.layers.get(index)
     }
 
+    /// Whether any layer carries a nonzero record anchor. Such a body
+    /// authors its own absolute position (see
+    /// [`placement_view_origin`]), so a bound rect never moves it;
+    /// bodies without any anchor take their position from their
+    /// placement's rect alone.
+    #[must_use]
+    pub fn has_anchor_offset(&self) -> bool {
+        self.layers
+            .iter()
+            .any(|layer| layer.dx != 0 || layer.dy != 0)
+    }
+
     /// Whether any layer decoded.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -175,14 +187,14 @@ impl AvatarFigure {
         }
     }
 
-    /// Paint every layer with its top-left at `(x, y)` plus its
-    /// record anchor scaled into the frame, each under its own source
-    /// colorkey. The verified draw path for every placement: the exe
-    /// blit adds the per-frame anchor to the view position and `.bnd`
-    /// rects are not read at draw time (`docs/ui-draw.md` via
-    /// `docs/stage-bga.md`); the exe canvas is native 800x600, so
-    /// native anchors scale with the frame, keeping the art's exe
-    /// proportions at any frame size.
+    /// Paint every layer with its top-left at the view origin `(x,
+    /// y)` plus its record anchor scaled into the frame, each under
+    /// its own source colorkey. The verified draw path for every
+    /// placement: the exe blit adds the per-frame anchor to the view
+    /// position (`docs/ui-draw.md` via `docs/stage-bga.md`); the exe
+    /// canvas is native 800x600, so native anchors scale with the
+    /// frame, keeping the art's exe proportions at any frame size. The
+    /// view origin itself comes from [`placement_view_origin`].
     pub fn paint_scaled_anchors(
         &self,
         frame: &mut Frame<'_>,
@@ -805,19 +817,43 @@ pub fn load_avi_logo(archive: &[u8]) -> Option<AvatarFigure> {
     load_archive_sprite(archive, AVI_LOGO_SPRITE)
 }
 
+/// Staged view position of one placement (`docs/ui-draw.md`): the
+/// exe's image boxes stage view `(0, 0)` and the blit adds the
+/// per-frame record anchor, so an anchor offset is the body's
+/// authored absolute position — the reference photo pins the
+/// disagreeing pair: `BpPoint_Left_bar.ojs` anchor `(2,266)` shows at
+/// the far-left edge while its bound rect is `(200,3)`. A zero anchor
+/// contributes no position, though, and then the bound rect is the
+/// only authored placement data: its scaled origin stages the view
+/// (the view-from-rect question `docs/ui-draw.md` leaves open — the
+/// eight `Wait_Cover_Avatar.ojs` covers carry anchor `(0,0)` while
+/// their eight `State_Waiting.bnd` rects name the seats, and the
+/// `Room_*.ojs` lobby icons anchor at `(0,0)` inside their row
+/// template). Unbound rects scale to the frame origin, so unbound art
+/// still draws at its anchors alone.
+fn placement_view_origin(
+    figure: &AvatarFigure,
+    placement: &ScenePlacement,
+    frame_w: usize,
+    frame_h: usize,
+) -> (i32, i32) {
+    if figure.has_anchor_offset() {
+        return (0, 0);
+    }
+    let scaled = scale_rect_to_frame(&placement.rect, frame_w, frame_h);
+    (scaled.x, scaled.y)
+}
+
 /// Paint every placed figure in file order (verified step 8: the
 /// background lands first and later entries cover it). Each layer
-/// blits 1:1 at its record anchor scaled into the frame — the
-/// verified draw path: the blit adds the per-frame anchor to the
-/// view position and `.bnd` rects are never read at draw
-/// (`docs/ui-draw.md` via `docs/stage-bga.md`; the reference photo
-/// pins the disagreeing pair too: `BpPoint_Left_bar.ojs` anchor
-/// `(2,266)` shows at the far-left edge while its bound rect is
-/// `(200,3)`). Most bound bodies duplicate their rect origins
-/// byte-exact (`Normal_TimeBar.ojs` (489,556) == rect[2]), so rect-
-/// bound art lands where its rect bounds it anyway. Placements
-/// without a loaded figure are skipped, and live UI ink paints on
-/// top in the callers.
+/// blits 1:1 at its record anchor scaled into the frame, over the
+/// staged view position of its placement
+/// ([`placement_view_origin`]): anchored bodies draw at their
+/// anchors, anchor-free bodies at their bound rect origins. Most
+/// bound bodies duplicate their rect origins byte-exact
+/// (`Normal_TimeBar.ojs` (489,556) == rect[2]), so anchored art lands
+/// where its rect bounds it anyway. Placements without a loaded
+/// figure are skipped, and live UI ink paints on top in the callers.
 pub fn paint_scene_figures(
     frame: &mut Frame<'_>,
     placements: &[ScenePlacement],
@@ -830,8 +866,9 @@ pub fn paint_scene_figures(
 }
 
 /// Paint one placed figure, if its sprite loaded: every layer blits
-/// 1:1 at its record anchor scaled into the frame (see
-/// [`paint_scene_figures`] for the verified draw chain), unclipped.
+/// 1:1 at its record anchor scaled into the frame, over the staged
+/// view position (see [`paint_scene_figures`] for the draw chain),
+/// unclipped.
 fn paint_placed_figure(
     frame: &mut Frame<'_>,
     placement: &ScenePlacement,
@@ -845,7 +882,8 @@ fn paint_placed_figure(
     let Some(figure) = figures.get(name) else {
         return;
     };
-    figure.paint_scaled_anchors(frame, 0, 0, frame_w, frame_h);
+    let (view_x, view_y) = placement_view_origin(figure, placement, frame_w, frame_h);
+    figure.paint_scaled_anchors(frame, view_x, view_y, frame_w, frame_h);
 }
 
 /// True for a behind-highway placement: its sprite names the venue
@@ -897,8 +935,8 @@ pub fn paint_foreground_placements(
 
 /// Paint one behind-highway figure, if its sprite loaded: each layer
 /// blits 1:1 at its record anchor (scaled into the frame — the same
-/// verified draw chain as every painter), clipped to the fragments
-/// outside `exclusions`.
+/// verified draw chain as every painter, over the staged view
+/// position), clipped to the fragments outside `exclusions`.
 fn paint_behind_placement(
     frame: &mut Frame<'_>,
     placement: &ScenePlacement,
@@ -911,7 +949,8 @@ fn paint_behind_placement(
     let Some(figure) = figures.get(name) else {
         return;
     };
-    paint_behind_layers(frame, figure, 0, 0, exclusions);
+    let (view_x, view_y) = placement_view_origin(figure, placement, frame.w, frame.h);
+    paint_behind_layers(frame, figure, view_x, view_y, exclusions);
 }
 
 /// Paint every layer of one figure through its visible fragments:
@@ -1503,6 +1542,97 @@ mod avatar_figure_tests {
         assert_eq!(anchor_in_frame(204, 558, 800, 600), (204, 558));
     }
 
+    /// The `Wait_Cover_Avatar.ojs` shape: one 1x1 layer anchored
+    /// `(0, 0)`, bound to a seat rect away from the origin. The rect
+    /// stages the view position (ui-draw.md's open view-from-rect
+    /// role); the anchor adds nothing — the art lands on the rect
+    /// origin, never on the frame corner.
+    #[test]
+    fn zero_anchor_body_paints_at_its_bound_rect_origin() {
+        let figure = anchored_red_figure(0, 0);
+        let figures = HashMap::from([("Wait_Cover_Avatar.ojs".to_owned(), figure)]);
+        let placement = ScenePlacement {
+            id: "IDC_IMAGE_SWAIT_COVERAVATAR1".to_owned(),
+            code: 0x165_003D,
+            sprite: Some("Wait_Cover_Avatar.ojs".to_owned()),
+            rect: Rect {
+                x: 300,
+                y: 200,
+                w: 141,
+                h: 175,
+            },
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_placed_figure(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placement,
+            &figures,
+            800,
+            600,
+        );
+        assert_eq!(
+            buf[200 * 800 + 300],
+            o2jam_render::pack_xrgb(255, 0, 0),
+            "the bound rect stages the view position"
+        );
+        assert_ne!(
+            buf[0],
+            o2jam_render::pack_xrgb(255, 0, 0),
+            "a zero anchor leaves the art off the frame corner"
+        );
+    }
+
+    #[test]
+    fn one_anchored_layer_keeps_the_whole_figure_on_its_anchors() {
+        // Any anchor offset makes the whole body self-positioned: both
+        // layers draw at their anchors from the frame origin, and the
+        // bound rect never moves them (the verified anchor chain).
+        let mut figure = AvatarFigure::default();
+        figure.push_layer(FigureLayer {
+            image: Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap(),
+            dx: 0,
+            dy: 0,
+            colorkey: 0xFFFF,
+        });
+        figure.push_layer(FigureLayer {
+            image: Rgb555Image::decode(&[0x1F, 0x00], 1, 1).unwrap(),
+            dx: 2,
+            dy: 0,
+            colorkey: 0xFFFF,
+        });
+        let figures = HashMap::from([("Room_Mode.ojs".to_owned(), figure)]);
+        let placement = ScenePlacement {
+            id: "IDC_IMAGE_SROOM_MODE".to_owned(),
+            code: 0x135_0028,
+            sprite: Some("Room_Mode.ojs".to_owned()),
+            rect: Rect {
+                x: 500,
+                y: 400,
+                w: 44,
+                h: 18,
+            },
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_placed_figure(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placement,
+            &figures,
+            800,
+            600,
+        );
+        assert_eq!(buf[0], o2jam_render::pack_xrgb(255, 0, 0));
+        assert_eq!(buf[2], o2jam_render::pack_xrgb(0, 0, 255));
+        assert_ne!(buf[400 * 800 + 500], o2jam_render::pack_xrgb(255, 0, 0));
+    }
+
     /// The three room modes the photo and the wire name: solo 7-key
     /// (the reference photo), solo 3-key, team 7-key.
     #[test]
@@ -2035,12 +2165,12 @@ mod avatar_figure_tests {
     }
 
     #[test]
-    fn scene_figures_paint_at_verbatim_anchors() {
-        // The verified draw chain on a synthetic room: the body's
-        // record anchor (0,0) positions it on the native canvas and
-        // scales with the frame (x 0 stays x 0 on an 80-wide frame);
-        // the bound rect (400,0,800,600) rides along as input-bound
-        // data without steering the blit.
+    fn scene_figures_paint_zero_anchor_body_at_its_bound_rect() {
+        // The verified draw chain, refined for zero anchors: the
+        // record anchor (0,0) contributes no position, so the bound
+        // rect stages the view — the body lands on the scaled rect
+        // origin (400,0) → (40,0) on an 80-wide frame, not the frame
+        // corner; ordinal pairing still binds the rect.
         let red = sprite55_blob(1, 0xFFFF, 1, 1, &[0x00, 0x7C]);
         let archive = opa_blob(&[("Room_List.ojs", &red)]);
         let figures = load_scene_figures(&archive, &["Room_List.ojs".to_owned()]);
@@ -2068,7 +2198,16 @@ mod avatar_figure_tests {
             &placed,
             &figures,
         );
-        assert_eq!(buf[0], o2jam_render::pack_xrgb(255, 0, 0));
+        assert_eq!(
+            buf[40],
+            o2jam_render::pack_xrgb(255, 0, 0),
+            "the bound rect origin stages the view"
+        );
+        assert_ne!(
+            buf[0],
+            o2jam_render::pack_xrgb(255, 0, 0),
+            "the zero anchor leaves the body off the frame corner"
+        );
     }
 
     #[test]
@@ -2168,13 +2307,13 @@ mod avatar_figure_tests {
     }
 
     #[test]
-    fn bound_layers_paint_at_their_record_anchors() {
+    fn bound_layers_paint_at_their_authored_positions() {
         // Verified draw math (draw-chain audit): each layer blits at
-        // its own record anchor scaled into the frame — the rect
-        // (10,20,11,21)/(40,30,44,34) rides along as bound data and
-        // never steers the blit. The 2-wide list body (anchor 0,0)
-        // paints both pixels at the frame origin; the button pixel
-        // lands at its record anchor (2,3).
+        // its own record anchor scaled into the frame; a body with no
+        // anchor offset takes the bound rect origin as its view. The
+        // anchor-free 2-wide list body (rect 10,20) paints both pixels
+        // from the rect origin; the button pixel lands at its record
+        // anchor (2,3), never steered by its rect (40,30).
         let wide = sprite55_blob(1, 0xFFFF, 2, 1, &[0x00, 0x7C, 0x00, 0x7C]);
         let archive = opa_blob(&[("Room_List.ojs", &wide)]);
         let mut figures = load_scene_figures(&archive, &["Room_List.ojs".to_owned()]);
@@ -2202,9 +2341,9 @@ mod avatar_figure_tests {
         );
         let red_ink = o2jam_render::pack_xrgb(255, 0, 0);
         let blue_ink = o2jam_render::pack_xrgb(0, 0, 255);
-        assert_eq!(buf[0], red_ink);
-        assert_eq!(buf[1], red_ink);
-        assert_eq!(buf[20 * 800 + 10], 0);
+        assert_eq!(buf[20 * 800 + 10], red_ink);
+        assert_eq!(buf[20 * 800 + 11], red_ink);
+        assert_eq!(buf[0], 0);
         assert_eq!(buf[3 * 800 + 2], blue_ink);
         assert_eq!(buf[30 * 800 + 40], 0);
     }
@@ -2341,14 +2480,15 @@ mod avatar_figure_tests {
     }
 
     #[test]
-    fn every_bound_body_paints_on_its_record_anchor() {
+    fn every_bound_body_paints_on_its_authored_position() {
         // Multi-entry proof of the shared placement rule on real 7.55
         // bytes (skips without `install-root`): every decodable
-        // `.bnd`-claimed placement of `STATE_PLAYING` and `STATE_ROOM`
-        // lands its first opaque pixel on its own record anchor — the
-        // verified draw chain (blit adds the anchor to the view
-        // position; rects are never read at draw). Most bound anchors
-        // duplicate their rect origins byte-exact
+        // `.bnd`-claimed placement lands its first opaque pixel on its
+        // authored position — the record anchor when the body carries
+        // one (the verified draw chain: blit adds the anchor to the
+        // view position), the bound rect origin when the body anchors
+        // at (0,0) and the rect is its only placement data. Most bound
+        // anchors duplicate their rect origins byte-exact
         // (docs/bnd-semantics.md; pairing `0x548640`, ev `3a869bb7…`),
         // and the reference photo pins the disagreeing pair
         // (`BpPoint_Left_bar.ojs` (2,266) vs rect[3] (200,3)).
@@ -2407,6 +2547,7 @@ mod avatar_figure_tests {
                     continue;
                 };
                 let anchor = (layer.dx, layer.dy);
+                let anchored = figure.has_anchor_offset();
                 let placement = ScenePlacement {
                     id: placed.entry.id.clone(),
                     code: placed.entry.code,
@@ -2430,11 +2571,15 @@ mod avatar_figure_tests {
                     800,
                     600,
                 );
-                let (ax, ay) = anchor_in_frame(anchor.0, anchor.1, 800, 600);
+                let (ax, ay) = if anchored {
+                    anchor_in_frame(anchor.0, anchor.1, 800, 600)
+                } else {
+                    (placement.rect.x, placement.rect.y)
+                };
                 let at = (ay + py) as usize * 800 + (ax + px) as usize;
                 assert_eq!(
                     buf[at], ink,
-                    "{} ({sprite}) must paint on its record anchor",
+                    "{} ({sprite}) must paint on its authored position",
                     placed.entry.id
                 );
                 proven += 1;
