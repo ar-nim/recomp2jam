@@ -143,6 +143,7 @@ impl Response {
 #[repr(u16)]
 pub enum Event {
     RoomCreated = 2007,
+    RoomArenaEcho = 4003,
     GameStatsUpdate = 4015,
 }
 
@@ -158,6 +159,7 @@ impl Event {
     pub fn from_id(id: u16) -> Option<Self> {
         match id {
             2007 => Some(Self::RoomCreated),
+            4003 => Some(Self::RoomArenaEcho),
             4015 => Some(Self::GameStatsUpdate),
             _ => None,
         }
@@ -224,6 +226,7 @@ mod tests {
 
     #[test]
     fn resolves_game_stats_update_event() {
+        assert_eq!(Event::from_id(4003), Some(Event::RoomArenaEcho));
         assert_eq!(Event::from_id(4015), Some(Event::GameStatsUpdate));
         assert_eq!(Event::from_id(4014), None);
     }
