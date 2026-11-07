@@ -38,9 +38,24 @@ pixel. Parser sites live in `o2jam-file` (`opi.rs`, `control.rs`, `sprites.rs`,
   (`ScenePlacement.code`) and never read. Visibility / blend / state bits in
   the top byte never hide, disable, or reorder anything; `paint_scene_figures`
   draws every loaded placement unconditionally in file order.
+  Exe side (byte sweep, *(offset-only)*): the load/create/draw chain
+  consumes byte 2 only — `code & 0xFF0000` gates creation (`0x48A134`)
+  and selects the ctor arm (`0x48B30A`, `0x48A668`). No consumer of
+  bits 24–31 exists in `0x48A060`/`0x48A620`/`0x48B2D0`/`0x4DA630`/
+  `0x4E4EE0`/`0x548640`/`0x5DEC30`/`0x50A890`. The top-nibble tests in
+  the image draw (`0x50000000`/`0xA0000000` at `0x50A9BD`/`0x50AD92`)
+  decode the draw-call flag argument, not the entry code. So
+  "blend/visibility in the top byte" is refuted: the bits the exe acts
+  on live in byte 2 (control class) and the low word (rect ordinal,
+  set key).
 - `ControlSet.params` (`control.rs` `ControlSet.params`, e.g. `SET 0x11`
   count/flags) — flattened by `all_entries`; frame-list vs number-sprite
   grouping survives only as order.
+  Exe side: the parser reads param 1 as member count (set `+0x08`) and
+  param 2 as the SET match key (set `+0x04`, matched against
+  `code & 0xFF000` at apply), allocating the child array at parse
+  (`0x411890`, ev `2fdbec57…`). Our `params[0] == count` reading
+  matches; the "flags" guess does not.
 - `ControlBlock.number` / `extra`, `ControlList.num_states` /
   `num_dialogs` (`control.rs`) — never read in shell. Declared-count vs
   actual-entry mismatches (Playing `0xE6` vs 235 entries, trailing 5 ride
@@ -67,6 +82,11 @@ pixel. Parser sites live in `o2jam-file` (`opi.rs`, `control.rs`, `sprites.rs`,
   `ROOM`, `WAITING`, `WIN`/`LOSE`, `M{music_id}`, `NORMAL`/`LIVE`, etc.;
   `room_detail_entries` maps `IDC_TEXT_*` ids to wire values, not to the
   archived strings beside `Room_LevelLimit.ojs` / `Room_Password.ojs`.
+  The exe has no archived captions to fall back on: ControlList entries
+  carry no caption literals (exe parse stores only code + sprite stem,
+  `0x4115F0`); labels come from sprite art or runtime strings (room
+  fill `Lv.%d:%s`), so our placeholders replace runtime text, not
+  archived strings.
 - `AvatarItemRow.name` / `description` reach `side.rs` `shop_item_view`, but
   `item_type`, `params[4]`, `flags(u8,u8)`, and the per-slot `(flag, name)`
   bytes (`tables/shop.rs` `AvatarItemRow`) never reach the screen; slot

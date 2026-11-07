@@ -660,8 +660,34 @@ hold-bonus scan `FUN_00578110` (file `0x178110`, dossier
    element, so either a terminator record is inserted before each
    lane's earliest note (insert site not located) or the earliest
    note of each lane is excluded from walk candidacy — needs dynamic
-   evidence; (b) the press/release polarity rests on the inversion in
-   `FUN_005714b0` — confirm with an input trace.
+   evidence; (b) RESOLVED — press/release polarity settled statically
+   (third trace, no runtime needed). The queue drained by
+   `FUN_004e15f0` carries {lane, kind, time}: kind 1 (press) reaches
+   the forward as pressed argument 1 (push sites files `0xe17ae`/
+   `0xe185f`, kept to the in-play states {5,6}) and kind 2 (release)
+   as pressed argument 0 (push site file `0xe1afa`, ungated so
+   releases always settle the edge flags) (dossier `ev_c01db4a8…`).
+   The forward `FUN_005714b0` inverts the pressed word (file
+   `0x1714b0`: pressed ≠ 0 forwards 0, == 0 forwards 1, dossier
+   `ev_cea19f7d…`); `FUN_00577ff0` relays verbatim (dossier
+   `ev_7e8cc6d7…`) and `FUN_00579b80` copies that value into the
+   ring event byte (dossier `ev_248c9713…`) with per-lane pressed
+   flags `+0x408[lane]` initialized to 1 (file `0x179b61`) — under
+   the inversion that reads 'all keys start released', so the first
+   key-down (forwarded 0) is the edge that fires: byte 0 = key-down
+   = walk/head strike, byte 1 = key-up = `+0x864` tail judge. The
+   flag-1 init also refutes the no-inversion reading: there every
+   key-down edge would be swallowed at start. The keyboard side
+   feeds the queue with the raw pressed bit: buffered DirectInput
+   keyboard device (`GUID_SysKeyboard` data `0x652af0`, device setup
+   `FUN_00542ab0` dossier `ev_eb523feb…`), `Option.ini` KEY_1–7
+   scancode table (file `0x173290`, dossier `ev_fc65241f…`),
+   scancode→lane poster `FUN_00544b50` pushing INPUT_STATE verbatim
+   through `FUN_005429b0`; `GetKeyState`/`GetAsyncKeyState` imports
+   (`0x63f42c`/`0x63f420`) touch only VK_SHIFT/VK_CONTROL modifiers
+   (sites `0x5187b1`/`0x51984b`/`0x5198b6`/`0x519b10`). Verdict: the
+   inversion is real and is what makes key-down judge the head and
+   key-up judge the armed tail — the modeled wiring needs no change.
 
 Modeled as `o2jam-game::HoldSpan` + `o2jam-game::HoldState`
 (`judge_head`, `apply_head`, `judge_tail`, `hold_tick_due`,
