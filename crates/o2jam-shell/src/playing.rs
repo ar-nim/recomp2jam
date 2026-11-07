@@ -173,7 +173,8 @@ pub const RECEPTOR_DIM: u32 = pack_xrgb(0x2A, 0x2A, 0x38);
 pub const RECEPTOR_LIT: u32 = pack_xrgb(0xC0, 0xE8, 0xFF);
 /// Procedural hit-burst column rising above the line after a strike
 /// (the stand-in while neither the staged [`HIT_BURST_SPRITE`]
-/// explosion nor the `Keyeffect.ojs` beam column is present).
+/// explosion nor a staged [`LANE_BEAM_STEM`] / `Keyeffect.ojs` beam
+/// column is present).
 pub const HIT_BURST: u32 = pack_xrgb(0xFF, 0xFF, 0xFF);
 /// Hit-burst lifetime in song ms (visual only; timing untouched).
 pub const BURST_MS: u64 = 150;
@@ -184,8 +185,26 @@ pub const NOTE_IMAGE_SPRITE: &str = "Note_Image.ojs";
 /// sits at the judgement line).
 pub const KEY_DOWN_SPRITE: &str = "KeydownImage.ojs";
 /// Staged release-beam body: one full-height column per lane (ink
-/// runs from row 80 down to the line).
+/// runs from row 80 down to the line). Kept as the untouched-hold
+/// tail slice only: the exe never names this body (the control list
+/// stages the dark `Keyeffect1..7.ojs` bars), and the bright
+/// press/held lane beams stage from [`LANE_BEAM_STEM`].
 pub const KEY_EFFECT_SPRITE: &str = "Keyeffect.ojs";
+/// Staged press/held lane-beam kit: `KeyEffect_7Key1_1.ojs` …
+/// `_7.ojs`. The playing scene stages it through the
+/// `KeyEffect_7Key%d_%d.ojs` loader format string (file `0x24abf8`),
+/// which pairs `Playing_NormalBG%d.ojs` (`0x24ac44`) — the BG-skin
+/// kits 1..3 in the archive (plus Black / P2P / Left-Right variants).
+/// Kit 1 pins the deterministic default, like [`HIT_BURST_SPRITE`].
+/// Each body is five raw full-column frames whose brightest inks are
+/// the lane colors — red 255,33,41 (lanes 1/3/5/7), sky-blue
+/// 132,181,255 (lanes 2/6, the reference photo's cyan beam), amber
+/// 255,214,115 (lane 4) — concentrated at rows 470..479, the glow
+/// band over the judgement line (`docs/ui-draw.md`, beam color
+/// source).
+pub const LANE_BEAM_STEM: &str = "KeyEffect_7Key1";
+/// Lane-beam frames per kit body ([`LANE_BEAM_STEM`]).
+pub const LANE_BEAM_FRAMES_PER_LANE: usize = 5;
 /// Staged long-note release body.
 pub const LONG_NOTE_EFFECT_SPRITE: &str = "LongNote_Effect.ojt";
 /// Staged receptor stem: `KeyEffect_Tutorial_1.ojs` … `_7.ojs`
@@ -478,6 +497,7 @@ pub struct PlaySkin {
     note_heads: [Option<SkinSprite>; HIGHWAY_LANES as usize],
     press_keys: [Option<SkinSprite>; HIGHWAY_LANES as usize],
     release_beams: [Option<SkinSprite>; HIGHWAY_LANES as usize],
+    lane_beams: [Vec<SkinSprite>; HIGHWAY_LANES as usize],
     receptors: [Vec<SkinSprite>; HIGHWAY_LANES as usize],
     long_effect: Option<SkinSprite>,
     hit_bursts: Vec<SkinSprite>,
@@ -500,6 +520,7 @@ impl PlaySkin {
             && self.note_heads.iter().all(Option::is_none)
             && self.press_keys.iter().all(Option::is_none)
             && self.release_beams.iter().all(Option::is_none)
+            && self.lane_beams.iter().all(Vec::is_empty)
             && self.receptors.iter().all(Vec::is_empty)
     }
 
@@ -521,10 +542,29 @@ impl PlaySkin {
         self.press_keys.get(lane as usize)?.as_ref()
     }
 
-    /// Release beam for one lane.
+    /// Release beam for one lane (the untouched-hold tail slice).
     #[must_use]
     pub fn release_beam(&self, lane: u8) -> Option<&SkinSprite> {
         self.release_beams.get(lane as usize)?.as_ref()
+    }
+
+    /// Steady lane-beam body for one lane ([`LANE_BEAM_STEM`]): the
+    /// held lane light reads the body's last, fullest frame.
+    #[must_use]
+    pub fn lane_beam(&self, lane: u8) -> Option<&SkinSprite> {
+        self.lane_beams.get(lane as usize)?.last()
+    }
+
+    /// Lane-beam frame for one lane ([`LANE_BEAM_STEM`]): `None` age
+    /// reads the steady held-lane frame ([`Self::lane_beam`]); a flash age
+    /// steps one frame per [`RECEPTOR_FRAME_MS`], clamped to the last.
+    #[must_use]
+    pub fn lane_beam_frame(&self, lane: u8, flash_age_ms: Option<u64>) -> Option<&SkinSprite> {
+        let frames = self.lane_beams.get(lane as usize)?;
+        match flash_age_ms {
+            None => frames.last(),
+            Some(age) => frames.get(stepped_frame(frames.len(), age)),
+        }
     }
 
     /// Long-note release effect.
@@ -545,9 +585,8 @@ impl PlaySkin {
     /// the body is unstaged).
     #[must_use]
     pub fn hit_burst_frame(&self, flash_age_ms: u64) -> Option<&SkinSprite> {
-        let last = self.hit_bursts.len().saturating_sub(1);
-        let step = usize::try_from(flash_age_ms / RECEPTOR_FRAME_MS).unwrap_or(last);
-        self.hit_bursts.get(step.min(last))
+        self.hit_bursts
+            .get(stepped_frame(self.hit_bursts.len(), flash_age_ms))
     }
 
     /// Staged score-digit font ([`SCORE_FONT_SPRITE`]).
@@ -588,11 +627,7 @@ impl PlaySkin {
         let frames = self.receptors.get(lane as usize)?;
         match flash_age_ms {
             None => frames.first(),
-            Some(age) => {
-                let last = frames.len().saturating_sub(1);
-                let step = usize::try_from(age / RECEPTOR_FRAME_MS).unwrap_or(last);
-                frames.get(step.min(last))
-            }
+            Some(age) => frames.get(stepped_frame(frames.len(), age)),
         }
     }
 
@@ -619,6 +654,15 @@ impl PlaySkin {
     pub fn with_release_beam(mut self, lane: u8, sprite: SkinSprite) -> Self {
         if let Some(slot) = self.release_beams.get_mut(lane as usize) {
             *slot = Some(sprite);
+        }
+        self
+    }
+
+    /// Stage one lane's kit lane-beam frames ([`LANE_BEAM_STEM`]).
+    #[must_use]
+    pub fn with_lane_beams(mut self, lane: u8, frames: Vec<SkinSprite>) -> Self {
+        if let Some(slot) = self.lane_beams.get_mut(lane as usize) {
+            *slot = frames;
         }
         self
     }
@@ -702,6 +746,14 @@ impl PlaySkin {
             }
         }
         for lane in 0..HIGHWAY_LANES {
+            let frames = archive_body(archive, &lane_beam_sprite_name(lane)).map(skin_frames);
+            if let Some(frames) = frames.filter(|frames| !frames.is_empty()) {
+                if let Some(slot) = skin.lane_beams.get_mut(lane as usize) {
+                    *slot = frames;
+                }
+            }
+        }
+        for lane in 0..HIGHWAY_LANES {
             let frames = archive_body(archive, &tutorial_sprite_name(lane)).map(skin_frames);
             if let Some(frames) = frames.filter(|frames| !frames.is_empty()) {
                 if let Some(slot) = skin.receptors.get_mut(lane as usize) {
@@ -727,6 +779,20 @@ impl PlaySkin {
 /// `KeyEffect_Tutorial_%d.ojs` body name for one lane (1-based).
 fn tutorial_sprite_name(lane: u8) -> String {
     format!("{TUTORIAL_EFFECT_STEM}_{}.ojs", lane + 1)
+}
+
+/// `KeyEffect_7Key1_%d.ojs` kit body name for one lane (1-based).
+fn lane_beam_sprite_name(lane: u8) -> String {
+    format!("{LANE_BEAM_STEM}_{}.ojs", lane + 1)
+}
+
+/// Frame index for a flash age: one step per [`RECEPTOR_FRAME_MS`],
+/// clamped to the last frame.
+fn stepped_frame(count: usize, age_ms: u64) -> usize {
+    let last = count.saturating_sub(1);
+    usize::try_from(age_ms / RECEPTOR_FRAME_MS)
+        .unwrap_or(last)
+        .min(last)
 }
 
 /// One archive entry body by stored size (never the reserved stride;
@@ -1786,9 +1852,10 @@ impl LivePlay {
         }
     }
 
-    /// One tail span: the staged long effect on held heads, the
-    /// staged release beam on untouched holds, else the procedural
-    /// [`TAIL_BEAM`] core.
+    /// One tail span: the staged kit lane beam on held heads (the
+    /// exe's held lane light, [`LANE_BEAM_STEM`]), then the staged
+    /// long effect; the staged release beam on untouched holds, else
+    /// the procedural [`TAIL_BEAM`] core.
     fn paint_tail_span(
         &self,
         frame: &mut Frame<'_>,
@@ -1799,6 +1866,10 @@ impl LivePlay {
         bottom: i32,
     ) {
         if holding {
+            if let Some(beam) = self.view.skin.lane_beam_frame(lane, None) {
+                beam.paint_bottom_anchored(frame, geom, lane, geom.line_y);
+                return;
+            }
             if let Some(art) = self.view.skin.long_effect() {
                 art.paint_bottom_anchored(frame, geom, lane, geom.line_y);
                 return;
@@ -1845,7 +1916,7 @@ impl LivePlay {
 
     /// Lit receptor pads plus burst art on flashed lanes (staged
     /// `Note_Click` bursts over `KeyEffect_Tutorial_%d` receptors,
-    /// `KeydownImage` press art, and `Keyeffect` beams when present;
+    /// `KeydownImage` press art, and the kit lane beams when present;
     /// procedural pad and column otherwise).
     fn paint_hit_bursts(&self, frame: &mut Frame<'_>, geom: &HighwayGeometry, now_ms: u64) {
         for lane in 0..HIGHWAY_LANES {
@@ -1875,7 +1946,9 @@ impl LivePlay {
         self.paint_staged_burst(frame, geom, lane, age_ms);
     }
 
-    /// The lane column under the flash: the staged `Keyeffect` beam
+    /// The lane column under the flash: the staged kit lane beam
+    /// ([`LANE_BEAM_STEM`], the exe's bright press beam, drawn as the
+    /// full fading column it authors), else the staged `Keyeffect`
     /// slice, else the procedural [`HIT_BURST`] column (skipped when
     /// the staged burst art already covers the lane).
     fn paint_burst_column(
@@ -1885,7 +1958,9 @@ impl LivePlay {
         lane: u8,
         age_ms: u64,
     ) {
-        if let Some(beam) = self.view.skin.release_beam(lane) {
+        if let Some(beam) = self.view.skin.lane_beam_frame(lane, Some(age_ms)) {
+            beam.paint_bottom_anchored(frame, geom, lane, geom.line_y);
+        } else if let Some(beam) = self.view.skin.release_beam(lane) {
             let burst = geom.burst_rect(lane);
             beam.paint_clipped_to(frame, geom, lane, geom.line_y, &burst);
         } else if self.view.skin.hit_burst_frame(age_ms).is_none() {
@@ -3350,6 +3425,98 @@ mod live_play_tests {
     }
 
     #[test]
+    fn held_lane_lights_the_staged_kit_beam_column() {
+        // The exe's held lane light rides the `KeyEffect_7Key1_%d`
+        // kit bodies (the reference photo's bright cyan column): a
+        // held head paints the steady (last, fullest) frame instead
+        // of the long-effect art or the procedural tail core.
+        let mut live = LivePlay::new_holds(&[(3, 1500, 1900, 7)]);
+        live.set_skin(
+            PlaySkin::default()
+                .with_lane_beams(
+                    3,
+                    vec![solid_sprite(8, 32, 0x02C0), solid_sprite(8, 32, 0x03FF)],
+                )
+                .with_long_effect(solid_sprite(8, 8, 0x7FE0)),
+        );
+        assert!(live.has_skin());
+        live.strike_lane(3, 1500);
+        let mut buf = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            1600,
+        );
+        assert!(buf.contains(&solid_ink(0x03FF)));
+        assert!(!buf.contains(&solid_ink(0x02C0)));
+        assert!(!buf.contains(&solid_ink(0x7FE0)));
+        assert!(!buf.contains(&TAIL_BEAM));
+    }
+
+    #[test]
+    fn press_flash_steps_the_kit_beam_frames() {
+        let mut live = LivePlay::new(&[(3, 1000, 7)]);
+        live.set_skin(PlaySkin::default().with_lane_beams(
+            3,
+            vec![solid_sprite(8, 32, 0x03FF), solid_sprite(8, 32, 0x001F)],
+        ));
+        live.strike_lane(3, 1000);
+        let mut first = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut first,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            1000,
+        );
+        assert!(first.contains(&solid_ink(0x03FF)));
+        assert!(!first.contains(&solid_ink(0x001F)));
+        let mut second = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut second,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            1060,
+        );
+        assert!(second.contains(&solid_ink(0x001F)));
+        assert!(!second.contains(&solid_ink(0x03FF)));
+    }
+
+    #[test]
+    fn kit_beams_take_priority_over_the_keyeffect_slice() {
+        // The exe-cited kit beams replace the exe-unnamed
+        // `Keyeffect.ojs` stand-in at the press-flash column.
+        let mut live = LivePlay::new(&[(3, 1000, 7)]);
+        live.set_skin(
+            PlaySkin::default()
+                .with_lane_beams(3, vec![solid_sprite(8, 32, 0x03FF)])
+                .with_release_beam(3, solid_sprite(8, 32, 0x7C00)),
+        );
+        live.strike_lane(3, 1000);
+        let mut buf = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            1000,
+        );
+        assert!(buf.contains(&solid_ink(0x03FF)));
+        assert!(!buf.contains(&solid_ink(0x7C00)));
+    }
+
+    #[test]
     fn judgement_word_stacks_combo_beneath() {
         let mut live = LivePlay::new(&[(0, 1000, 7)]);
         live.strike_lane(0, 1000);
@@ -3733,6 +3900,26 @@ mod live_play_tests {
         assert_eq!(skin.hit_burst_frame_count(), 8);
         let first = skin.hit_burst_frame(0).expect("first burst frame");
         assert_eq!(first.extent(), (128, 128));
+    }
+
+    #[test]
+    fn from_archive_binds_the_kit_lane_beams() {
+        let Some(skin) = staged_skin() else {
+            println!("skip: missing Playing1.opi");
+            return;
+        };
+        // Verified 7.55 `KeyEffect_7Key1_1..7.ojs` (kit 1 pairs
+        // `Playing_NormalBG1.ojs`): five raw full-column frames per
+        // lane, widths 29/23/29/36/29/23/29 at 480 rows.
+        let widths = [29, 23, 29, 36, 29, 23, 29];
+        for lane in 0..HIGHWAY_LANES {
+            let beam = skin.lane_beam(lane).expect("kit beam per lane");
+            assert_eq!(beam.extent(), (widths[lane as usize], 480));
+        }
+        assert_eq!(
+            skin.lane_beam_frame(1, Some(0)).map(|b| b.extent()),
+            Some((23, 480))
+        );
     }
 
     /// Read the pinned archive and stage the full skin (`None` test

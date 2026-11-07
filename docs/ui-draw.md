@@ -140,13 +140,21 @@ the header (Python 3.14 byte survey). Negative findings:
   `0x24b0ec`). `Keyeffect.ojs` (slot 34, one static 7-lane beam body)
   is absent from the control list — the exe never names it, so the
   shell's `KeyEffect` release-beam binding stays a stand-in.
-- The per-skin receptor-flash bodies are real but another scene's
-  staging: format strings `KeyEffect_7Key%d_%d.ojs`,
-  `KeyEffect_Black_*_%d.ojs`, `KeyEffect_{3,7}Key_{Left,Right}%d_%d.ojs`
-  (file `0x24abdc`–`0x24ad00`) are referenced only from stage functions
-  `0x4dc750` (file `0xdc750`, NormalBG/P2PBG kit) and `0x4dcab0`, and
+- The playing scene's BG-skin kit beams are real and this scene's
+  staging (earlier "another scene" reading retracted): the format
+  strings `KeyEffect_7Key%d_%d.ojs`, `KeyEffect_Black_*_%d.ojs`,
+  `KeyEffect_{3,7}Key_{Left,Right}%d_%d.ojs` (file `0x24abdc`–
+  `0x24ad00`) sit inside the playing staging cluster — neighbors of
+  `MUSIC\%sojn` (`0x24abd0`), `Playing_NormalBG%d.ojs` (`0x24ac44`),
+  `Playing_P2PBG%d.ojs` (`0x24acec`), `Note_Click` (`0x24b160`),
+  `Jamgauge_right_bar.ojs` (`0x24b1b8`), `LongNote_Effect.ojt`
+  (`0x24b280`), `Normal_TimeBar.ojs` (`0x24b424`), `Playing_Exit.ojs`
+  (`0x24b450`) — and are referenced from the kit stage functions
+  `0x4dc750` (file `0xdc750`) and `0x4dcab0`, with
   `KeyEffect_Tutorial_%d.ojs` from `0x4dd290` (Tutorial, file
-  `0xdd3e6`). They are 5-frame full-column stems, not the explosion.
+  `0xdd3e6`). They are 5-frame full-column stems, not the explosion;
+  the bright press/held lane beams trace here (see the beam color
+  source section below).
 - The burst draw point is unbound: rect ordinals 147–153 sit past the
   17 `State_Playing.bnd` rects (same shape as the long-combo plate),
   so the exe places the explosion at the struck receptor at runtime
@@ -158,6 +166,52 @@ paints one frame per `RECEPTOR_FRAME_MS` of flash age, centered on the
 receptor pad, over the beam column — the exe's file order puts the
 `NOTECLICK` entries after `KEYDOWN`. The procedural white column
 (`HIT_BURST`) stays the no-body fallback.
+
+## Held lane beam color source — body pixels, not the blit (VERIFIED)
+
+The reference photo's bright cyan beam band traces to sprite-body
+pixels, not the draw chain: steps 6–8 pass only `(x, y, src, rect,
+flags)` — no color word, no per-lane tint — from `Draw`/`DrawClip`
+through helper `0x42b450` to the page blit, so per-lane tinting and a
+tinted beam surface are both excluded by the verified chain. Which
+body stages decides the color:
+
+- Kit bodies: `Playing1.opi` `KeyEffect_7Key1_1..7.ojs` (kit 1 pairs
+  `Playing_NormalBG1.ojs`; slots at archive offsets 208693199,
+  208832507, 208943015, 209082323, 209255231, 209394539, 209505047;
+  read-only byte walk, same 7.55 version pin) — five raw RGB555
+  frames each, full 480-row columns 29/23/29/36/29/23/29 wide,
+  anchors (24/54/78/108/145/175/199, 0), colorkey `0x0000`. Lane
+  inks: bright red family, brightest (255,33,41) on lanes 1/3/5/7;
+  sky-blue (132,181,255) on lanes 2/6 — the photo's bright cyan/blue
+  band; amber (255,214,115) on lane 4. Kit-1 frames are 94–100%
+  inked, and every column's brightest ink concentrates at rows
+  470..479 — the glow band over the judgement line. Kits 2 and 3 and
+  the Black kit share the identical palette, so the beam color is
+  lane-fixed, not kit-fixed.
+- The control-list `IDC_IMAGE_SPLAY_KEYEFFECT1..7` bodies
+  (`Keyeffect1..7.ojs`, archive offsets 183347707..184116355) keep
+  the five-frame rising-fill shape but dark lane inks — reds
+  8..74,0,0, blues up to 16,33,82, amber 115,74,0, with a ≤1.3% bright
+  accent ((214,0,8), (33,115,231)) on frame 0 — the dim "seven long
+  bars" underlay; they cannot produce the photo's bright column.
+  `Keyeffect.ojs` (slot 34, archive offset 6137344) stays
+  exe-unnamed. `LongNote_Effect.ojt` (archive offset 40940469) frames
+  are white-ink art (brightest 248,248,248), not the beam color.
+
+Shell binding (`playing.rs`): `PlaySkin` stages the kit-1 bodies
+(`LANE_BEAM_STEM`, deterministic kit 1, like `Note_Click1_1`) as
+`lane_beams`; held lanes paint the steady last frame bottom-anchored
+at the line and press flashes step frames per `RECEPTOR_FRAME_MS`
+through the same helper as receptors/bursts. The `Keyeffect.ojs`
+binding remains only as the untouched-hold slice and the `Keyeffect`
+flash fallback; the procedural inks stay the no-body fallback.
+
+OPEN: the kit anchors (x 24..199) sit off the control-list lane pins
+(5..165), so the kit draw carries a dialog/skin view offset the chain
+does not show (extends OPEN 3); which kit index a default room
+selects (assumed 1) and how the exe steps the five frames (assumed
+receptor-like) are untraced.
 
 ## Verdicts on recipe claims (`docs/opi-pattern.md`)
 
@@ -201,6 +255,8 @@ f2c991649fec`; list render loop
    in this chain translates by a dialog origin, so dialog-frame
    handling must set view positions or draw into dialog-local
    surfaces (CWindow `0x6448bc` / CDialogBase `0x67d7e0` unexamined).
+   The BG-skin kit beams' anchors (x 24..199 vs the control-list lane
+   pins 5..165) ride this same unresolved offset.
 4. `.bnd` rect runtime consumers beyond pairing (hit-testing?) — not
    in the blit path.
 5. `CDXSprite`'s role (Sprite.cpp twin of the image classes; clip
