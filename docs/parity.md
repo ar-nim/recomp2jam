@@ -55,7 +55,7 @@ invented placement remains (cited per cell), never for lack of art.
 
 | Dimension | 7.55 expectation (evidence) | Shell status | Verdict |
 |---|---|---|---|
-| Composition | Decl `0x63`, 117 entries, `State_Waiting.bnd`; 8 team buttons `0x16201004..0B` (`Wait_TeamA..H.ojs`), 8 avatar covers; song dialog decl `0x7A`/134 entries (lifecycle §8, gameplay room-teams) | Soak binds 116 rects verbatim under genuine art — `waiting.png` shows real avatar tiles with seats + `WAITING` stamp on top. Still FAIL: seats sit on an invented 2-col × 4-row grid (audit 12), portraits center blind (audit 18–19); no team buttons, covers, or song dialog | FAIL |
+| Composition | Decl `0x63`, 117 entries, `State_Waiting.bnd`; 8 team buttons `0x16201004..0B` (`Wait_TeamA..H.ojs`), 8 avatar covers; song dialog decl `0x7A`/134 entries (lifecycle §8, gameplay room-teams) | Soak binds 116 rects verbatim under genuine art — `waiting.png` shows real avatar tiles with seats + `WAITING` stamp on top. Still FAIL: seats sit on an invented 2-col × 4-row grid (audit 12), portraits center blind (audit 18–19); no team buttons or covers. The song dialog now stages over the seats — see the musicselect row below — so the dialog half of this cell rides there | FAIL |
 | Input | Team toggle → `SetRoomTeam` 4004 + `Ready` 4008(0); host start; back button (gameplay room-teams: `FUN_004b22d0` file `0xb22d0`, ev `2c8d3964…`) | Confirm → Loading, Back → Room; no team/send path | OPEN |
 | Timing | `MusicLoading.ojs` + song clock arming at load (lifecycle §9.5) | n/a (see Loading) | OPEN |
 | Transitions | `Waiting → Loading`, `Waiting → Room` | Implemented + tested | PASS |
@@ -107,36 +107,38 @@ pass is ever claimed):
 
 ## Reference-photo verify pass (2026-11-07 re-shoot)
 
-All six PNGs regenerated via `cargo run -q -p recomp2jam -- shots`
-(`cargo test -p recomp2jam` 72/72 green, incl. the new
-`result_shot_paints_the_rank_table_row` guard). Per-region read is
+All seven PNGs regenerated via `cargo run -q -p recomp2jam -- shots`
+(`cargo test -p recomp2jam` 75/75 green, incl. the new
+`result_shot_paints_the_rank_table_row` guard and the three
+musicselect guards). Per-region read is
 ink-presence per band (shot std vs photo std — content differs by
 scenario, so structure, not pixels, is compared):
 
 | Shot vs photo | Region verdicts |
 |---|---|
 | `playing.png` vs `reference-4x3.png` | HOLD, byte-identical to the e9fd95f bytes (no pipeline drift). Highway panel (59.5 vs 78.7), edge gauges (40.8 vs 64.9), avatar scene (67.6 vs 41.5), bottom strip (75.3 vs 54.0) — every band carries staged ink on both sides. Residuals unchanged: stage-5 studio stands for the unshipped rooftop, `Note_BG` red panel at (570,458)–(774,478) with no exe cover, blue-metallic strip vs the photo's dark strip, BO/EA05 labels unpainted |
-| `waiting.png` vs `reference-waiting-4x3.png` | HOLD, byte-identical (no drift). Top panel (59.6 vs 65.6), seat grid (55.5 vs 53.0), right column (59.4 vs 61.4), bottom chat/song (71.5 vs 70.2). Residuals unchanged: invented 2-col x 4-row seat grid, no team buttons/covers, no song dialog |
+| `waiting.png` vs `reference-waiting-4x3.png` | HOLD, byte-identical (no drift). Top panel (59.6 vs 65.6), seat grid (55.5 vs 53.0), right column (59.4 vs 61.4), bottom chat/song (71.5 vs 70.2). Residuals unchanged: invented 2-col x 4-row seat grid, no team buttons/covers (the song dialog now lives in `musicselect.png` below) |
 | `result.png` vs `reference-result-4x3.png` | REFRESHED (was stale). Score dome (48.6 vs 50.7), verdict banner (46.5 vs 48.7), rank table (85.3 vs 48.5), footer (59.1 vs 51.2). The checked-in PNG predated the rank-row wiring (`04e2462`) — its row band was empty; the re-shoot carries row 0 (`YOU`, `1/0/0/0`, `200`) at the pinned columns, guarded by `result_shot_paints_the_rank_table_row` (proven to fail on wrong text). Scenario deltas vs the photo stay: GOOD! solo arm vs LOSE, one local row vs two wire rows, P plate vs C |
-| `reference-musicselect-4x3.png` | UNCOVERED — no shell music-select scene exists, so no shot maps to it. The photo's dialog (level/label/genre filters, 1608-song table, OK/BACK) has no staged counterpart; the waiting song panel stays unimplemented (see `STATE_WAITING` composition). OPEN |
+| `musicselect.png` vs `reference-musicselect-4x3.png` | NEW (was UNCOVERED — no shot mapped to it). The walk now repaints Waiting through the host song flow (installed 7.55 562-song catalog, pick id 757 Hard X3.5; 4-song synthetic fallback without game data) under genuine `DAILOG_SELECTMUSIC` art, and the staged structure paints over it: filter columns (75.0 vs 183.4), search table (61.3 vs 83.2), status + search row (76.4 vs 114.7), chosung + OK (84.3 vs 128.1) — staged ink in every band on both sides. Still FAIL: per-chart level and grade cells draw the unknown dash (never staged), the 다운/듣기/정보 icon cells stay blank (no staged art), chosung hangul + word cells stay blank (no CP949 glyphs), the dialog bind pairing is unproven (the every-bound-entry proof covers Playing + Room only), and pager/search/chosung are display-only. Guarded by `musicselect_shot_repaints_waiting_with_song_panel`, `musicselect_fallback_catalog_lists_four_synthetic_songs`, `musicselect_dialog_structure_paints_search_tab_over_waiting` |
 | `channel.png`, `room.png`, `loading.png` | HOLD, byte-identical (no drift). No reference photo covers them; channel still reads as fallback paint (bar staged full-canvas, rect is one panel — audit 15) |
 
-No pipeline regressions: five of six shots byte-identical, the sixth
-differs by exactly 129 pixels of newly-wired rank-row ink.
+No pipeline regressions: six of seven shots byte-identical, the
+seventh (`musicselect.png`) is new; the rank-row refresh still
+accounts for the only other delta (129 pixels of row-0 ink).
 
 ## Scoreboard
 
 Verify pass 2026-11-07: 3 HOLD (playing/waiting + channel/room/loading
-byte-identical), 1 REFRESHED (result rank rows), 1 UNCOVERED
-(musicselect — no shell scene). Detail in "Reference-photo verify
+byte-identical), 1 REFRESHED (result rank rows), 1 NEW (musicselect
+song dialog). Detail in "Reference-photo verify
 pass" above.
 
-- Scenes covered: 7 main + loading gate + 9 side states.
+- Scenes covered: 7 main + musicselect dialog + loading gate + 9 side states.
 - PASS: boot-into-splash, 800×600 default (`SetWindowPos` file
   `0x14b4c`/`0x14baf`), all 11 documented transition edges (plus
   rejections), vacuous-timing scenes — 14 cells.
-- FAIL (known placement gaps): 7 composition cells (genuine art now
-  stages in the local soak — shots green, six PNGs refreshed 2026-11-07 —
+- FAIL (known placement gaps): 8 composition cells (genuine art now
+  stages in the local soak — shots green, seven PNGs refreshed 2026-11-07 —
   but invented placement remains per cell: audit 3, 10–16, 18–19,
   23–25, 30–32; audit 4–9 superseded by the verbatim highway 5cb01a2).
   The `load_scene` layering behind them stays harness-proven (22/22).
