@@ -37,7 +37,7 @@ invented placement remains (cited per cell), never for lack of art.
 
 | Dimension | 7.55 expectation (evidence) | Shell status | Verdict |
 |---|---|---|---|
-| Composition | 50 controls, decl `0x27`, **no `.bnd`** (bare `BOUND`); `Dialog_ChannelSelectBar.ojs`, back/rank buttons (lifecycle §6) | Soak stages the bar full-canvas (`stage_single_sprite`), but `channel.png` still reads as fallback paint (dark frame, list + `CHANNEL` stamp only): the bar's real rect is one panel, not the canvas (audit 15), and list rows step at invented `h/4 + i*8` (audit 10–11). Still FAIL | FAIL |
+| Composition | 50 controls, decl `0x27`, **no `.bnd`** (bare `BOUND`); `Dialog_ChannelSelectBar.ojs`, back/rank buttons (lifecycle §6) | Soak stages the empty scene (no-fill pinned per `docs/channel-fill.md` — the block names zero sprites and the code-fetched bar has no pinned host, so no bar body stages): `channel.png` re-shot 2026-11-07 reads as art-less black + scrim + list + `CHANNEL` stamp + cursor (corner untouched, navy 0). Still FAIL: list rows step at invented `h/4 + i*8` (audit 10–11), no bar body (host unpinned) | FAIL |
 | Input | Pick channel/planet → room (`My_channel`/`My_planet` bridge, file `0x24df70`–`0x24e024`) | Up/Down moves highlight (clamped), Confirm → Room | OPEN (no planet/solo fork) |
 | Timing | None documented | n/a | PASS (vacuous) |
 | Transitions | `Channel → Room`; hosted by unknown class (open question) | Implemented + tested | PASS |
@@ -120,7 +120,8 @@ scenario, so structure, not pixels, is compared):
 | `waiting.png` vs `reference-waiting-4x3.png` | HOLD, byte-identical (no drift). Top panel (59.6 vs 65.6), seat grid (55.5 vs 53.0), right column (59.4 vs 61.4), bottom chat/song (71.5 vs 70.2). Residuals unchanged: invented 2-col x 4-row seat grid, no team buttons/covers (the song dialog now lives in `musicselect.png` below) |
 | `result.png` vs `reference-result-4x3.png` | REFRESHED (was stale). Score dome (48.6 vs 50.7), verdict banner (46.5 vs 48.7), rank table (85.3 vs 48.5), footer (59.1 vs 51.2). The checked-in PNG predated the rank-row wiring (`04e2462`) — its row band was empty; the re-shoot carries row 0 (`YOU`, `1/0/0/0`, `200`) at the pinned columns, guarded by `result_shot_paints_the_rank_table_row` (proven to fail on wrong text). Scenario deltas vs the photo stay: GOOD! solo arm vs LOSE, one local row vs two wire rows, P plate vs C |
 | `musicselect.png` vs `reference-musicselect-4x3.png` | NEW (was UNCOVERED — no shot mapped to it). The walk now repaints Waiting through the host song flow (installed 7.55 562-song catalog, pick id 757 Hard X3.5; 4-song synthetic fallback without game data) under genuine `DAILOG_SELECTMUSIC` art, and the staged structure paints over it: filter columns (75.0 vs 183.4), search table (61.3 vs 83.2), status + search row (76.4 vs 114.7), chosung + OK (84.3 vs 128.1) — staged ink in every band on both sides. Still FAIL: per-chart level and grade cells draw the unknown dash (never staged), the 다운/듣기/정보 icon cells stay blank (no staged art), chosung hangul + word cells stay blank (no CP949 glyphs), the dialog bind pairing is unproven (the every-bound-entry proof covers Playing + Room only), and pager/search/chosung are display-only. Guarded by `musicselect_shot_repaints_waiting_with_song_panel`, `musicselect_fallback_catalog_lists_four_synthetic_songs`, `musicselect_dialog_structure_paints_search_tab_over_waiting` |
-| `channel.png`, `room.png`, `loading.png` | HOLD, byte-identical (no drift). No reference photo covers them; channel still reads as fallback paint (bar staged full-canvas, rect is one panel — audit 15) |
+| `channel.png` | REFRESHED (was stale). Re-shot 2026-11-07 after the no-fill pin: the staged full-canvas bar is gone (audit 15 — rect is one panel, never the canvas), the shot now stages the empty scene, and the frame reads as art-less black + scrim + list + `CHANNEL` stamp + cursor (corner `(0,0)` untouched, navy count 0, 2170 inked px of 120000). No reference photo covers it; list rows stay at invented `h/4 + i*8` (audit 10–11), no bar body (host unpinned) |
+| `room.png`, `loading.png` | HOLD, byte-identical (no drift). No reference photo covers them; loading keeps staged `MusicLoading.ojs` art + green bar (1600 px) + bright caption ink under the no-fill rule (empty stage would paint nothing, staged art is unaffected) |
 
 No pipeline regressions: six of seven shots byte-identical, the
 seventh (`musicselect.png`) is new; the rank-row refresh still
@@ -157,9 +158,9 @@ Dialog stays FAIL (blank level/grade/icon/chosung cells, unproven bind pairing, 
 
 ## Scoreboard
 
-Verify pass 2026-11-07: 3 HOLD (playing/waiting + channel/room/loading
-byte-identical), 1 REFRESHED (result rank rows), 1 NEW (musicselect
-song dialog). Detail in "Reference-photo verify
+Verify pass 2026-11-07 (amended post no-fill): 2 HOLD (playing/waiting
++ room/loading byte-identical), 2 REFRESHED (result rank rows;
+channel art-less re-shoot), 1 NEW (musicselect song dialog). Detail in "Reference-photo verify
 pass" above.
 
 - Scenes covered: 7 main + musicselect dialog + loading gate + 9 side states.
