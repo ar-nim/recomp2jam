@@ -247,15 +247,33 @@ here).
    loop. Which opcode lands on slot 9 stays OPEN. Honest scope:
    the trio writes style fields (`+0x174` color, `+0x164` font
    handle, `+0x178`/`+0x180`/`+0x184` triple); string bytes reach
-   captions through the sibling `0x50f520` (`+0x60` buffer) and row
-   store `0x50fcc0` paths. So live packets are joined to TEXT
-   caption fields through one caller chain (`0x4aef80` →
+   captions only through the siblings `0x50f520` (`+0x60` buffer,
+   352 B at file `0x10f520`..`0x10f680`, head adds `0x60` then calls,
+   291 E8 callers full-image) and row store `0x50fcc0` (6 E8 callers
+   exhaustive). String-to-field join (sweep 2026-11-07, offset-only E8
+   scan, no new dossier): chat twins `0xb9a10`/`0xb9a60` call `0x50fcc0`
+   at files `0xb9a55`/`0xb9aa5`, with four sibling row-store sites at
+   files `0x628c1`/`0x6294f` (channel arm) and `0x906dc`/`0x9073c`
+   (room arm) — row string (sender plus text, `edx`) into list rows,
+   CLOSED; room-fill `0x491af0` (file `0x91af0`..`0x92300`) calls
+   `0x50f520` at 12 sites (files `0x91df9`/`0x91e32`/`0x91f62`/`0x91fba`/
+   `0x92005`/`0x92034`/`0x9207f`/`0x92108`/`0x92155`/`0x921a2`/`0x921d1`/
+   `0x922d4`) with zero trio calls, beside the `Lv.%d:%s` format
+   (VA `0x64816c`, file `0x91bee`) and room format pushes — pinned
+   string-to-`+0x60` flow, trio-free; dialog-open `0x4ED650` (file
+   `0xed650`..`0xee320`) calls `0x50f520` at file `0xeddf0` beside its
+   8 trio sites — pinned string-plus-style join in one builder. Net
+   slot-9 chain is string-negative: helper `0x4b9ab0` (file `0xb9ab0`..
+   `0xb9dc0`) 4 trio calls plus zero `0x50f520`, `0x4aef80` (file
+   `0xaef80`..`0xaefe0`) zero of both, `0x52af70` (file `0x12af70`..
+   `0x12b150`) 2 trio calls plus zero `0x50f520` — packet path writes
+   style only, string source OPEN. So live packets are joined to TEXT
+   style fields through one caller chain (`0x4aef80` →
    `0x52af70`/`0x4b9ab0` → `0x50f6f0`); the earlier candidates
    `0x43dcc4` (func `0x43dbc0`), `0x44c479` (func `0x44ac50`),
    `0x45ca8d` (func `0x45c560`) stay unjoined, and room-fill
-   `0x491af0` (file `0x91af0`, `Lv.` format VA `0x64816c`, file
-   `0x91bee`) still reaches captions only via `0x50f520` (files
-   `0x91df9`/`0x91e32`), not the trio.
+   `0x491af0` reaches captions only via the pinned 12-site `0x50f520`
+   flow above, not the trio.
    ControlList carries no caption literals by design (dialog-strings
    §2); the grade-string precedent (zero refs, claims B4) shows exe
    text can be unbound. Render loop `0x5dec30` (ev `ff581cfa…`)

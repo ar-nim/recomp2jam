@@ -1760,3 +1760,41 @@ plus the sweep log in the same commit.
   from the scripted chat-rows shot/walk tests, all other targets
   unchanged, 0 failures). No lint findings. No commits, no pushes.**
   This sweep touched only `docs/playtest.md`.
+
+## Regression sweep — 2026-11-07 22:23 UTC+8 (HEAD `2bc5c1a`, tree clean)
+
+Live re-proof on the setter-head. Covers only the docs-log commit landed
+after the chat-rows baseline `035990f` (`2bc5c1a`: join setter chain
+notes in `channel-fill.md` plus the sweep log) — no code changed, so no
+new tests were expected.
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1266 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 7, file 149, game 92, net 346,
+  render 73, shell 455, real_art 7, scenes 22, recomp2jam 96
+  (6 doc-test targets, 0 each) — identical to the baseline, as
+  expected for a docs-only HEAD.
+- `cargo build --workspace --release`: clean, `exit=0`, no warnings.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.60 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`22:23:07 +08:00`):
+  `Authorize session` → `Get channel list` →
+  `Enter channel` → `Get character info: [tester]` →
+  `Create room: songflow` → `Get music list` →
+  `Sync room member music state` → `download progress` →
+  `Start game: [000]` → `User music loaded` →
+  `Game [000] Update #1` → `Game [000] Submit score: 2210`.
+- **Verdict: no regression — suite is green on the setter-head (1266
+  passed; identical to the chat-rows baseline, docs-only delta,
+  0 failures). No lint findings. No commits, no pushes.** This sweep
+  touched only `docs/playtest.md`.
+- Tree note: a peer saved uncommitted edits in `docs/channel-fill.md`
+  mid-sweep (after the clean-tree check at sweep start). Every gate
+  above ran before that save, so every count above is the clean-HEAD
+  result. Per the sweep rules (touch only `docs/playtest.md`, fix only
+  my own lint findings) the peer's file was left alone.
