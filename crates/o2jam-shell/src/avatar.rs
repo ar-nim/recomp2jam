@@ -406,6 +406,25 @@ pub const ROOM_BLOCK: &str = "STATE_ROOM";
 pub const ROOM_BIND_FILE: &str = "State_Room.bnd";
 /// Pre-game room block laid out by `State_Waiting.bnd`.
 pub const WAITING_BLOCK: &str = "STATE_WAITING";
+/// Pre-game room bind file (116 rects for 117 entries minus self).
+pub const WAITING_BIND_FILE: &str = "State_Waiting.bnd";
+/// Waiting seat-cover body: one `Wait_Cover_Avatar.ojs` per seat
+/// (`IDC_IMAGE_SWAIT_COVERAVATAR1..8`, codes `0x1650003D..44`,
+/// `.bnd` rects 60..67), anchored at `(0,0)` so each bound rect
+/// positions its own seat.
+pub const WAIT_COVER_SPRITE: &str = "Wait_Cover_Avatar.ojs";
+/// Waiting team-button bodies in seat order (`IDC_BUTTON_SWAIT_TEAMA..H`,
+/// codes `0x16201004..0B`, `.bnd` rects 3..10).
+pub const WAIT_TEAM_SPRITES: [&str; 8] = [
+    "Wait_TeamA.ojs",
+    "Wait_TeamB.ojs",
+    "Wait_TeamC.ojs",
+    "Wait_TeamD.ojs",
+    "Wait_TeamE.ojs",
+    "Wait_TeamF.ojs",
+    "Wait_TeamG.ojs",
+    "Wait_TeamH.ojs",
+];
 /// Loading-gate art shown while the song table stages.
 pub const LOADING_SPRITE: &str = "MusicLoading.ojs";
 /// Results block (`Result_WinLose.ojs`, number fonts, avatar).
