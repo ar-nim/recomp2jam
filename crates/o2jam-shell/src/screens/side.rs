@@ -769,9 +769,74 @@ pub fn planet_missions<'a>(entries: &'a [OjnListEntry<'a>]) -> Vec<PlanetMission
     missions
 }
 
+/// Distinct catalog songs behind the planet board (dead slots filtered
+/// out exactly like [`planet_missions`]): every band offers each song,
+/// so this is also the per-band mission count.
+#[must_use]
+pub fn planet_song_count(entries: &[OjnListEntry<'_>]) -> usize {
+    entries.iter().filter(|entry| entry.is_song()).count()
+}
+
+/// Planet missions for one band, in song order; empty without catalog
+/// data. One band draws one third of [`planet_missions`].
+#[must_use]
+pub fn planet_missions_for_band<'a>(
+    entries: &'a [OjnListEntry<'a>],
+    band: PlanetBand,
+) -> Vec<PlanetMission<'a>> {
+    entries
+        .iter()
+        .filter(|entry| entry.is_song())
+        .map(|entry| mission_for_band(entry, band))
+        .collect()
+}
+
+/// Offer one catalog song at one band.
+fn mission_for_band<'a>(entry: &'a OjnListEntry<'a>, band: PlanetBand) -> PlanetMission<'a> {
+    PlanetMission {
+        band,
+        song_id: entry.song_id,
+        title: &entry.title,
+    }
+}
+
+/// One band plus its mission count: every band offers the whole catalog,
+/// so each count equals [`planet_song_count`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlanetBandCensus {
+    /// Difficulty band.
+    pub band: PlanetBand,
+    /// Missions offered at this band.
+    pub song_count: usize,
+}
+
+/// Per-band mission counts in button order ([`PLANET_BANDS`]).
+#[must_use]
+pub fn planet_band_census(entries: &[OjnListEntry<'_>]) -> [PlanetBandCensus; OJN_LEVEL_COUNT] {
+    let song_count = planet_song_count(entries);
+    PLANET_BANDS.map(|band| PlanetBandCensus { band, song_count })
+}
+
+/// Band button caption with its mission count (`EASY (12)`).
+#[must_use]
+pub fn planet_band_caption(census: &PlanetBandCensus) -> String {
+    format!("{} ({})", census.band.name(), census.song_count)
+}
+
+/// Free-pick caption over the whole catalog (`FREE (12)`): `FREE` takes
+/// any song at any band ([`PLANET_FREE_LABEL`]), so the count is the
+/// full catalog, never one band.
+#[must_use]
+pub fn planet_free_caption(song_count: usize) -> String {
+    format!("{PLANET_FREE_LABEL} ({song_count})")
+}
+
 /// One lanking board row: catalog position, not a score. No score
-/// table ships with the client, so the board lists songs in catalog
-/// order and numbers only the position.
+/// table ships with the client, and the rank-notification path (the
+/// 2029/4029 family) has no `o2jam-net` decoder — no new opcode is
+/// staged here — so the board lists songs in catalog order and numbers
+/// only the position; live 4015 bytes ride [`live_rank_rows`] instead.
+/// Never a score: positions and wire bytes only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LankingRow<'a> {
     /// 1-based catalog position.
@@ -840,6 +905,28 @@ fn live_rank_row(index: usize, rank: u8) -> Option<LiveRankRow> {
     Some(LiveRankRow { slot, rank })
 }
 
+/// Board caption with the row count (`RANKING (12)`); empty catalogs
+/// still name the board with zero rows.
+#[must_use]
+pub fn lanking_caption(row_count: usize) -> String {
+    format!("RANKING ({row_count})")
+}
+
+/// One song's catalog position (`None` for dead slots and unknown ids).
+/// Dead-slot filtering matches [`lanking_rows`]: only song entries resolve.
+#[must_use]
+pub fn lanking_row_for_song<'a>(
+    entries: &'a [OjnListEntry<'a>],
+    song_id: u32,
+) -> Option<LankingRow<'a>> {
+    entries
+        .iter()
+        .filter(|entry| entry.is_song())
+        .enumerate()
+        .find(|(_, entry)| entry.song_id == song_id)
+        .and_then(|(index, entry)| lanking_row(index, entry))
+}
+
 /// Billing page behind `STATE_PAYMENT` (lifecycle §12 `CDPayment` view).
 pub const PAYMENT_PAGE: &str = "payment_input.aspx";
 /// Billing page behind `STATE_PAYMENT2` (gift view).
@@ -867,6 +954,33 @@ pub const fn payment_labels() -> [PaymentLabel; 2] {
             page: GIFT_PAGE,
         },
     ]
+}
+
+/// Lifecycle-verified path behind `STATE_PAYMENT`: the
+/// `.../np/billing/payment/payment_input.aspx` web view (lifecycle §12).
+/// The host comes from the web bridge; only the path is staged.
+pub const PAYMENT_URL_PATH: &str = "np/billing/payment/payment_input.aspx";
+/// Lifecycle-verified path behind `STATE_PAYMENT2` (gift view): the
+/// `.../billing/gift/gift_input.aspx` web view (lifecycle §12).
+pub const GIFT_URL_PATH: &str = "billing/gift/gift_input.aspx";
+
+impl PaymentLabel {
+    /// Lifecycle-verified URL path for this view (payment vs gift by block).
+    #[must_use]
+    pub fn url_path(self) -> &'static str {
+        if self.block == PAYMENT2_BLOCK {
+            GIFT_URL_PATH
+        } else {
+            PAYMENT_URL_PATH
+        }
+    }
+}
+
+/// View caption pairing the block with its billing path
+/// (`STATE_PAYMENT np/billing/payment/payment_input.aspx`).
+#[must_use]
+pub fn payment_view_caption(label: &PaymentLabel) -> String {
+    format!("{} {}", label.block, label.url_path())
 }
 
 /// Tutorial backdrop figure from the archive (`Playing1.opi` art for
@@ -1598,6 +1712,52 @@ mod side_tests {
     }
 
     #[test]
+    fn planet_missions_for_band_lists_only_the_picked_band() {
+        let blob = side_catalog();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        let hard = planet_missions_for_band(&entries, PlanetBand::Hard);
+        assert_eq!(hard.len(), 2);
+        assert!(hard.iter().all(|mission| mission.band == PlanetBand::Hard));
+        assert_eq!(hard[0].song_id, 757);
+        assert_eq!(hard[1].title, "Second");
+        assert!(planet_missions_for_band(&[], PlanetBand::Easy).is_empty());
+    }
+
+    #[test]
+    fn planet_song_count_skips_dead_slots() {
+        let blob = side_catalog();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        assert_eq!(planet_song_count(&entries), 2);
+        assert_eq!(planet_song_count(&[]), 0);
+    }
+
+    #[test]
+    fn planet_band_census_counts_every_song_per_band() {
+        let blob = side_catalog();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        let census = planet_band_census(&entries);
+        assert_eq!(
+            census.map(|entry| entry.band),
+            [PlanetBand::Easy, PlanetBand::Normal, PlanetBand::Hard]
+        );
+        assert!(census.iter().all(|entry| entry.song_count == 2));
+        assert!(planet_band_census(&[])
+            .iter()
+            .all(|entry| entry.song_count == 0));
+    }
+
+    #[test]
+    fn planet_captions_carry_band_and_song_count() {
+        let blob = side_catalog();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        let census = planet_band_census(&entries);
+        assert_eq!(planet_band_caption(&census[0]), "EASY (2)");
+        assert_eq!(planet_band_caption(&census[2]), "HARD (2)");
+        assert_eq!(planet_free_caption(planet_song_count(&entries)), "FREE (2)");
+        assert_eq!(planet_free_caption(0), "FREE (0)");
+    }
+
+    #[test]
     fn lanking_positions_follow_catalog_order() {
         let blob = side_catalog();
         let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
@@ -1612,6 +1772,30 @@ mod side_tests {
     }
 
     #[test]
+    fn lanking_row_for_song_resolves_catalog_position() {
+        let blob = side_catalog();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        let row = lanking_row_for_song(&entries, 770).unwrap();
+        assert_eq!(row.position, 2);
+        assert_eq!(row.title, "Second");
+        assert_eq!(lanking_row_for_song(&entries, 757).unwrap().position, 1);
+    }
+
+    #[test]
+    fn lanking_row_for_song_misses_dead_slots_and_unknown_ids() {
+        let blob = side_catalog();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        assert_eq!(lanking_row_for_song(&entries, 999), None);
+        assert_eq!(lanking_row_for_song(&[], 757), None);
+    }
+
+    #[test]
+    fn lanking_caption_counts_rows() {
+        assert_eq!(lanking_caption(2), "RANKING (2)");
+        assert_eq!(lanking_caption(0), "RANKING (0)");
+    }
+
+    #[test]
     fn payment_labels_name_both_billing_views() {
         let labels = payment_labels();
         assert_eq!(labels.len(), 2);
@@ -1621,6 +1805,31 @@ mod side_tests {
         assert_eq!(labels[1].block, PAYMENT2_BLOCK);
         assert_eq!(labels[1].page, GIFT_PAGE);
         assert_eq!(labels[1].page, "gift_input.aspx");
+    }
+
+    #[test]
+    fn payment_url_paths_name_lifecycle_verified_billing_views() {
+        let labels = payment_labels();
+        assert_eq!(labels[0].url_path(), PAYMENT_URL_PATH);
+        assert_eq!(
+            labels[0].url_path(),
+            "np/billing/payment/payment_input.aspx"
+        );
+        assert_eq!(labels[1].url_path(), GIFT_URL_PATH);
+        assert_eq!(labels[1].url_path(), "billing/gift/gift_input.aspx");
+    }
+
+    #[test]
+    fn payment_view_captions_pair_block_with_path() {
+        let labels = payment_labels();
+        assert_eq!(
+            payment_view_caption(&labels[0]),
+            "STATE_PAYMENT np/billing/payment/payment_input.aspx"
+        );
+        assert_eq!(
+            payment_view_caption(&labels[1]),
+            "STATE_PAYMENT2 billing/gift/gift_input.aspx"
+        );
     }
 
     #[test]
