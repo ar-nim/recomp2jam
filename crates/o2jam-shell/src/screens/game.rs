@@ -14,8 +14,17 @@ use super::paint::{
     paint_waiting_scene, scene_index, BattleVerdict, ResultVerdict, SceneArt,
 };
 use super::side::{
-    can_return_side, can_visit_side, paint_side_scene, waiting_song_detail_line,
-    waiting_song_title_line, SideScreen,
+    can_return_side, can_visit_side, paint_side_scene, select_chosung_cells, select_difficulty_ink,
+    select_music_rows, select_music_songs, select_pager_caption, select_picked_caption,
+    select_search_caption, select_status_line, waiting_song_detail_line, waiting_song_title_line,
+    SelectMusicRow, SelectMusicSong, SideScreen, SELECT_ARTIST_RADIO, SELECT_CHO_SUNG_LEFT,
+    SELECT_CHO_SUNG_PITCH, SELECT_CHO_SUNG_ROW_CELLS, SELECT_CHO_SUNG_Y, SELECT_FILTER_BUTTON_H,
+    SELECT_FILTER_BUTTON_PITCH, SELECT_FILTER_BUTTON_TOP, SELECT_FILTER_COLUMNS,
+    SELECT_GENRE_FILTERS, SELECT_HEADER_COLUMNS, SELECT_HEADER_Y, SELECT_LEVEL_FILTERS,
+    SELECT_OK_BUTTON, SELECT_PAGER_RIGHT, SELECT_RESULT_TABS, SELECT_ROW_PITCH, SELECT_ROW_TOP,
+    SELECT_SEARCH_BOX, SELECT_SEARCH_BUTTON, SELECT_SEARCH_Y, SELECT_STATUS_H, SELECT_STATUS_Y,
+    SELECT_TABLE_HEADERS, SELECT_TABLE_LEFT, SELECT_TABLE_WIDTH, SELECT_TITLE_RADIO,
+    SELECT_VISIBLE_ROWS, SELECT_WHEEL_FILTERS,
 };
 use crate::MenuKey;
 use o2jam_audio::{AudioBackend, PcmSamples};
@@ -23,7 +32,10 @@ use o2jam_file::OjnListEntry;
 use o2jam_game::RoomTeams;
 use o2jam_net::play::SetRoomMusic;
 use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry};
-use o2jam_render::{draw_text, fill_rect, pack_xrgb, text_width, Frame, Rect};
+use o2jam_render::{
+    draw_char, draw_text, fill_rect, pack_xrgb, scale_rect_to_frame, text_width, Frame, Rect,
+    GLYPH_H,
+};
 
 /// Stage the Playing backdrop defaults to before a room names one:
 /// the exe's room entry replaces a zero stage with a real one (the
@@ -53,7 +65,9 @@ pub struct ScreenGame {
     /// (`Playing_BG<stage>.ojs` and the staged kits; see
     /// [`Self::arena_stage`]).
     arena_stage: u16,
-    song_titles: HashMap<u16, String>,
+    /// Staged select-music catalog (`OJNList.dat` order, owned copies;
+    /// see [`Self::set_song_catalog`]).
+    catalog_songs: Vec<SelectMusicSong>,
     select_music_art: Option<SceneArt>,
     battle_teams: RoomTeams,
     battle_self_team: Option<u8>,
@@ -104,7 +118,7 @@ impl ScreenGame {
             waiting: None,
             selected_music: None,
             arena_stage: DEFAULT_ARENA_STAGE,
-            song_titles: HashMap::new(),
+            catalog_songs: Vec::new(),
             select_music_art: None,
             battle_teams: RoomTeams::new(),
             battle_self_team: None,
@@ -291,18 +305,11 @@ impl ScreenGame {
         self.playing.set_life_difficulty(selection.difficulty);
     }
 
-    /// Stage song catalog titles (`OJNList.dat` order, read-only copy).
-    /// Missing catalogs paint dialog art without rows.
+    /// Stage the song catalog (`OJNList.dat` order, owned copies) for
+    /// the select-music table and the chosen-song caption. Dead slots
+    /// stay out; a missing catalog paints dialog art without rows.
     pub fn set_song_catalog(&mut self, entries: &[OjnListEntry<'_>]) -> &mut Self {
-        self.song_titles.clear();
-        for entry in entries.iter().filter(|entry| entry.is_song()) {
-            let Ok(song_id) = u16::try_from(entry.song_id) else {
-                continue;
-            };
-            self.song_titles
-                .entry(song_id)
-                .or_insert_with(|| entry.title.clone());
-        }
+        self.catalog_songs = select_music_songs(entries);
         self
     }
 
@@ -321,12 +328,21 @@ impl ScreenGame {
         self
     }
 
+    /// Staged select-music catalog songs (catalog order, dead slots
+    /// filtered out).
+    #[must_use]
+    pub fn select_songs(&self) -> &[SelectMusicSong] {
+        &self.catalog_songs
+    }
+
     /// Catalog title for the chosen song, if staged.
     fn selected_song_title(&self) -> Option<&str> {
         let selection = self.selected_music.as_ref()?;
-        self.song_titles
-            .get(&selection.music_id)
-            .map(String::as_str)
+        let wanted = u32::from(selection.music_id);
+        self.catalog_songs
+            .iter()
+            .find(|song| song.song_id == wanted)
+            .map(|song| song.title.as_str())
     }
 
     /// Waiting song panel rows: title row plus difficulty row.
@@ -518,7 +534,8 @@ impl ScreenGame {
     }
 
     /// Waiting: staged art behind the live seats, flat card fallback,
-    /// then the staged song-select dialog with the chosen-song panel.
+    /// then the staged song-select dialog: art, its structure overlay
+    /// (catalog-driven table), and the chosen-song panel.
     fn paint_waiting(&self, frame: &mut Frame<'_>) {
         match (self.scene_art(Screen::Waiting), &self.waiting) {
             (Some(art), Some(room)) => paint_waiting_scene(frame, room, art),
@@ -527,7 +544,27 @@ impl ScreenGame {
             (None, None) => paint_screen(frame, Screen::Waiting),
         }
         self.paint_select_music_art(frame);
+        self.paint_select_music_structure(frame);
         self.paint_selected_song_panel(frame);
+    }
+
+    /// Paint the song-select dialog structure over the staged art:
+    /// filter columns, result tabs, the catalog-driven search table,
+    /// status + pager, search row, chosung grid, and the OK pill.
+    /// Rows come from the staged catalog alone; no art is invented for
+    /// the check or 다운/듣기/정보 icon cells (documented gaps).
+    fn paint_select_music_structure(&self, frame: &mut Frame<'_>) {
+        if self.select_music_art.is_none() {
+            return;
+        }
+        let rows = select_music_rows(&self.catalog_songs);
+        paint_select_filter_columns(frame);
+        paint_select_result_tabs(frame, rows.len());
+        paint_select_table(frame, &rows);
+        paint_select_status_row(frame, rows.len());
+        paint_select_search_row(frame);
+        paint_select_chosung_rows(frame);
+        paint_select_ok(frame);
     }
 
     /// Layer staged song-select dialog figures over the waiting seats.
@@ -640,6 +677,329 @@ impl Default for ScreenGame {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// --- Song-select dialog structure painters (`reference-musicselect-4x3.png`) ---
+
+/// Filter-column headers (reference 곡레벨선택/래별선택/장르선택;
+/// ASCII stand-ins).
+const SELECT_FILTER_HEADERS: [&str; 3] = ["LEVEL", "KEY", "GENRE"];
+
+/// Structure panel scrim behind the stand-in captions.
+fn select_scrim() -> u32 {
+    pack_xrgb(0x10, 0x10, 0x18)
+}
+
+/// Caption ink (white).
+fn select_ink() -> u32 {
+    pack_xrgb(0xFF, 0xFF, 0xFF)
+}
+
+/// Ink for unknown cells and the inactive tab.
+fn select_dim_ink() -> u32 {
+    pack_xrgb(0x90, 0x90, 0x90)
+}
+
+/// Ink of the active search tab (reference orange).
+fn select_active_ink() -> u32 {
+    pack_xrgb(0xFF, 0xA0, 0x20)
+}
+
+/// Staged title-radio fill (reference green dot).
+fn select_radio_ink() -> u32 {
+    pack_xrgb(0x30, 0xE0, 0x30)
+}
+
+/// Frame-space step `index * pitch` for native row lists (saturates).
+fn select_step(index: usize, pitch: i32) -> i32 {
+    i32::try_from(index).map_or(i32::MAX, |step| step.saturating_mul(pitch))
+}
+
+/// Band height for one native `pitch` (frame rects size in `u32`).
+fn select_band_h(pitch: i32) -> u32 {
+    u32::try_from(pitch).unwrap_or(0)
+}
+
+/// Native-pixel anchor scaled into the frame (the shared art ratios).
+fn select_anchor(rect: Rect, frame: &Frame<'_>) -> Rect {
+    scale_rect_to_frame(&rect, frame.w, frame.h)
+}
+
+/// One native x scaled into the frame.
+fn select_x(x: i32, frame: &Frame<'_>) -> i32 {
+    select_anchor(
+        Rect {
+            x,
+            y: 0,
+            w: 0,
+            h: 0,
+        },
+        frame,
+    )
+    .x
+}
+
+/// One native y scaled into the frame.
+fn select_y(y: i32, frame: &Frame<'_>) -> i32 {
+    select_anchor(
+        Rect {
+            x: 0,
+            y,
+            w: 0,
+            h: 0,
+        },
+        frame,
+    )
+    .y
+}
+
+/// One caption on a scrim panel at its native anchor.
+fn paint_select_caption(frame: &mut Frame<'_>, panel: Rect, text: &str, ink: u32) {
+    let spot = select_anchor(panel, frame);
+    fill_rect(frame, &spot, select_scrim());
+    draw_text(frame, spot.x + 2, spot.y + 2, text, ink);
+}
+
+/// The three filter columns: header band plus one button per caption
+/// (song-level bands, wheel buckets, genres).
+fn paint_select_filter_columns(frame: &mut Frame<'_>) {
+    let filters: [&[&str]; 3] = [
+        &SELECT_LEVEL_FILTERS,
+        &SELECT_WHEEL_FILTERS,
+        &SELECT_GENRE_FILTERS,
+    ];
+    for (index, column) in SELECT_FILTER_COLUMNS.iter().enumerate() {
+        paint_select_column(frame, *column, SELECT_FILTER_HEADERS[index], filters[index]);
+    }
+}
+
+/// One filter column: header band on the panel top, then one button
+/// per caption from [`SELECT_FILTER_BUTTON_TOP`] at its pitch.
+fn paint_select_column(frame: &mut Frame<'_>, panel: Rect, header: &str, captions: &[&str]) {
+    let band = Rect {
+        w: panel.w,
+        h: SELECT_FILTER_BUTTON_H,
+        ..panel
+    };
+    paint_select_caption(frame, band, header, select_ink());
+    for (index, caption) in captions.iter().enumerate() {
+        let button = Rect {
+            y: SELECT_FILTER_BUTTON_TOP + select_step(index, SELECT_FILTER_BUTTON_PITCH),
+            h: SELECT_FILTER_BUTTON_H,
+            ..panel
+        };
+        paint_select_caption(frame, button, caption, select_ink());
+    }
+}
+
+/// Result tabs: the search tab active (amber caption), the picked tab
+/// dim at its staged-zero count.
+fn paint_select_result_tabs(frame: &mut Frame<'_>, row_count: usize) {
+    paint_select_caption(
+        frame,
+        SELECT_RESULT_TABS[0],
+        &select_search_caption(row_count),
+        select_active_ink(),
+    );
+    paint_select_caption(
+        frame,
+        SELECT_RESULT_TABS[1],
+        select_picked_caption(),
+        select_dim_ink(),
+    );
+}
+
+/// Search table: header captions on a band, then up to
+/// [`SELECT_VISIBLE_ROWS`] catalog rows.
+fn paint_select_table(frame: &mut Frame<'_>, rows: &[SelectMusicRow<'_>]) {
+    paint_select_table_header(frame);
+    for (index, row) in rows.iter().take(SELECT_VISIBLE_ROWS).enumerate() {
+        paint_select_table_row(frame, index, *row);
+    }
+}
+
+/// Header band across the table plus the nine column captions.
+fn paint_select_table_header(frame: &mut Frame<'_>) {
+    let band = select_anchor(
+        Rect {
+            x: SELECT_TABLE_LEFT,
+            y: SELECT_HEADER_Y,
+            w: SELECT_TABLE_WIDTH,
+            h: select_band_h(SELECT_ROW_PITCH),
+        },
+        frame,
+    );
+    fill_rect(frame, &band, select_scrim());
+    let y = select_y(SELECT_HEADER_Y + 2, frame);
+    for (caption, x) in SELECT_TABLE_HEADERS
+        .iter()
+        .zip(SELECT_HEADER_COLUMNS[1..].iter())
+    {
+        draw_text(frame, select_x(*x, frame), y, caption, select_ink());
+    }
+}
+
+/// One search row: scrim band, difficulty letter, catalog title and
+/// artist; the level and grade cells draw the unknown dash, and the
+/// 다운/듣기/정보 icon cells stay blank (no staged art for them).
+fn paint_select_table_row(frame: &mut Frame<'_>, index: usize, row: SelectMusicRow<'_>) {
+    let top = SELECT_ROW_TOP + select_step(index, SELECT_ROW_PITCH);
+    let band = select_anchor(
+        Rect {
+            x: SELECT_TABLE_LEFT,
+            y: top,
+            w: SELECT_TABLE_WIDTH,
+            h: select_band_h(SELECT_ROW_PITCH - 1),
+        },
+        frame,
+    );
+    fill_rect(frame, &band, select_scrim());
+    let y = select_y(top + 2, frame);
+    draw_text(
+        frame,
+        select_x(SELECT_HEADER_COLUMNS[2], frame),
+        y,
+        row.letter(),
+        select_difficulty_ink(row.slot),
+    );
+    draw_text(
+        frame,
+        select_x(SELECT_HEADER_COLUMNS[3], frame),
+        y,
+        &row.song.title,
+        select_ink(),
+    );
+    draw_text(
+        frame,
+        select_x(SELECT_HEADER_COLUMNS[4], frame),
+        y,
+        &row.song.artist,
+        select_ink(),
+    );
+    draw_text(
+        frame,
+        select_x(SELECT_HEADER_COLUMNS[5], frame),
+        y,
+        "-",
+        select_dim_ink(),
+    );
+    draw_text(
+        frame,
+        select_x(SELECT_HEADER_COLUMNS[9], frame),
+        y,
+        "-",
+        select_dim_ink(),
+    );
+}
+
+/// Status strip: the ALL -> ALL banner plus the 1/pages pager,
+/// right-aligned to [`SELECT_PAGER_RIGHT`].
+fn paint_select_status_row(frame: &mut Frame<'_>, row_count: usize) {
+    let band = select_anchor(
+        Rect {
+            x: SELECT_TABLE_LEFT,
+            y: SELECT_STATUS_Y,
+            w: SELECT_TABLE_WIDTH,
+            h: select_band_h(SELECT_STATUS_H),
+        },
+        frame,
+    );
+    fill_rect(frame, &band, select_scrim());
+    let y = select_y(SELECT_STATUS_Y + 4, frame);
+    draw_text(
+        frame,
+        select_x(SELECT_TABLE_LEFT, frame),
+        y,
+        select_status_line(),
+        select_ink(),
+    );
+    let pager = select_pager_caption(row_count);
+    draw_text(
+        frame,
+        select_x(SELECT_PAGER_RIGHT, frame) - text_width(&pager) as i32,
+        y,
+        &pager,
+        select_ink(),
+    );
+}
+
+/// Search row: staged title radio (green), empty artist radio, edit
+/// box, and the search button. Captions 곡명/작곡가/검색 draw as
+/// ASCII stand-ins.
+fn paint_select_search_row(frame: &mut Frame<'_>) {
+    let y = select_y(SELECT_SEARCH_Y + 8, frame);
+    fill_rect(
+        frame,
+        &select_anchor(SELECT_TITLE_RADIO, frame),
+        select_radio_ink(),
+    );
+    fill_rect(
+        frame,
+        &select_anchor(SELECT_ARTIST_RADIO, frame),
+        select_scrim(),
+    );
+    draw_text(
+        frame,
+        select_x(SELECT_TITLE_RADIO.x + 12, frame),
+        y,
+        "TITLE",
+        select_ink(),
+    );
+    draw_text(
+        frame,
+        select_x(SELECT_ARTIST_RADIO.x + 12, frame),
+        y,
+        "ARTIST",
+        select_ink(),
+    );
+    fill_rect(
+        frame,
+        &select_anchor(SELECT_SEARCH_BOX, frame),
+        select_scrim(),
+    );
+    paint_select_caption(frame, SELECT_SEARCH_BUTTON, "SEARCH", select_ink());
+}
+
+/// Chosung grid rows: hangul and word cells stay blank (no CP949
+/// glyphs in the micro-font — documented gap); the A–Z letters draw
+/// at their grid slots.
+fn paint_select_chosung_rows(frame: &mut Frame<'_>) {
+    let cells = select_chosung_cells();
+    let mut first = 0;
+    for (row, count) in SELECT_CHO_SUNG_ROW_CELLS.iter().enumerate() {
+        let y = select_y(SELECT_CHO_SUNG_Y[row] + 2, frame);
+        for cell in 0..*count {
+            let Some(letter) = cells.get(first + cell).copied().flatten() else {
+                continue;
+            };
+            draw_char(
+                frame,
+                select_x(
+                    SELECT_CHO_SUNG_LEFT + select_step(cell, SELECT_CHO_SUNG_PITCH),
+                    frame,
+                ),
+                y,
+                letter,
+                select_ink(),
+            );
+        }
+        first += count;
+    }
+}
+
+/// The bottom-center OK pill: scrim plus centered white caption.
+fn paint_select_ok(frame: &mut Frame<'_>) {
+    let button = select_anchor(SELECT_OK_BUTTON, frame);
+    fill_rect(frame, &button, select_scrim());
+    let width = i32::try_from(text_width("OK")).unwrap_or(0);
+    let height = i32::try_from(GLYPH_H).unwrap_or(0);
+    draw_text(
+        frame,
+        button.x + (button.w as i32 - width) / 2,
+        button.y + (button.h as i32 - height) / 2,
+        "OK",
+        select_ink(),
+    );
 }
 
 impl GameLoop for ScreenGame {
@@ -1232,7 +1592,10 @@ mod game_tests {
     }
 
     #[test]
-    fn select_music_art_layers_over_waiting_without_hiding_seats() {
+    fn select_music_structure_layers_over_waiting_seats() {
+        // The dialog is modal: with its art staged, the structure's
+        // table band covers the seat grid while the art and the
+        // chosen-song panel stay visible on top.
         let (placements, figures) = corner_scene_art("AlbumList.ojs");
         let mut game = ScreenGame::new();
         game.set_joined_room(waiting_room());
@@ -1245,7 +1608,109 @@ mod game_tests {
         let (x, y) = seat_origin(1, 80, 64);
         assert_eq!(
             buf[(y + 1) as usize * 80 + (x - 6 + 1) as usize],
-            pack_xrgb(0x30, 0xE0, 0x30)
+            select_scrim(),
+            "the modal dialog structure covers the seats"
+        );
+    }
+
+    #[test]
+    fn set_song_catalog_stages_select_songs() {
+        let mut game = ScreenGame::new();
+        assert!(game.select_songs().is_empty());
+        let blob = waiting_song_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_song_catalog(&entries);
+        assert_eq!(game.select_songs().len(), 1);
+        assert_eq!(game.select_songs()[0].song_id, 757);
+        assert_eq!(game.select_songs()[0].title, "First");
+        assert_eq!(game.select_songs()[0].artist, "Band");
+    }
+
+    /// Waiting game with dialog art and the one-song catalog staged:
+    /// the structure-paint scenario.
+    fn select_structure_game() -> ScreenGame {
+        let (placements, figures) = corner_scene_art("AlbumList.ojs");
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        game.load_select_music_scene(placements, figures);
+        stage_waiting_song(&mut game);
+        game
+    }
+
+    #[test]
+    fn select_structure_paints_regions_over_dialog_art() {
+        let mut game = select_structure_game();
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        // Staged art stays visible behind the structure.
+        assert_eq!(buf[0], pack_xrgb(255, 0, 0));
+        // Filter column one: header scrim plus EASY button at its
+        // reference pitch (129 + 33).
+        assert_eq!(buf[95 * 800 + 30], select_scrim());
+        assert_eq!(buf[162 * 800 + 30], select_scrim());
+        // Row one: green E letter at the icon column (text sits two
+        // px into the band), white title ink at the TITLE column,
+        // unknown dashes at LVL and GRADE.
+        assert_eq!(buf[152 * 800 + 392], pack_xrgb(0x30, 0xE0, 0x30));
+        assert!(white_near(&buf, 800, 600, (417, 150)));
+        assert_eq!(buf[154 * 800 + 628], select_dim_ink());
+        assert_eq!(buf[154 * 800 + 716], select_dim_ink());
+        // Search tab (amber caption), status banner, pager, and the
+        // centered OK caption.
+        assert_eq!(buf[95 * 800 + 355], select_active_ink());
+        assert!(white_near(&buf, 800, 600, (346, 398)));
+        assert!(white_near(&buf, 800, 600, (744, 398)));
+        assert!(white_near(&buf, 800, 600, (380, 523)));
+        // Chosung letter A (row 1, cell 14) at its grid slot.
+        assert_eq!(buf[446 * 800 + 563], pack_xrgb(0xFF, 0xFF, 0xFF));
+    }
+
+    #[test]
+    fn select_structure_paints_without_catalog_rows() {
+        let (placements, figures) = corner_scene_art("AlbumList.ojs");
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        game.load_select_music_scene(placements, figures);
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        // The zero-row search tab still counts (amber ink); no row
+        // band paints, so the row area keeps the waiting backdrop.
+        assert_eq!(buf[0], pack_xrgb(255, 0, 0));
+        assert_eq!(buf[95 * 800 + 355], select_active_ink());
+        assert_eq!(
+            buf[160 * 800 + 400],
+            super::super::paint::background_of(Screen::Waiting)
+        );
+    }
+
+    #[test]
+    fn select_structure_stays_hidden_without_dialog_art() {
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        stage_waiting_song(&mut game);
+        let buf = paint_waiting_frame(&mut game, 80, 64);
+        // No dialog art staged: the structure never paints (the
+        // scaled filter-column anchor stays waiting background).
+        assert_eq!(
+            buf[10 * 80 + 2],
+            super::super::paint::background_of(Screen::Waiting)
         );
     }
 
