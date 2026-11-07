@@ -3,7 +3,8 @@
 //! Pure logic, no OS calls — the parity-test home for 7.55 behavior.
 //! Timing windows VERIFIED against 7.55 (`FUN_00576540`); score bases
 //! plus jam level `X` VERIFIED (`FUN_00570510` / `FUN_00570260`);
-//! long-note release documented as played (head hit + tail release).
+//! long-note hold machine traced in-exe (head hit arms the hold, bonus
+//! ticks over the span, no release-at-tail judgement — [`HoldState`]).
 //!
 //! Life bar VERIFIED end to end: the difficulty switch `FUN_00570f90`
 //! (files `0x170fa2`–`0x171056`, ev `feebe490…`) selects per-difficulty
@@ -272,12 +273,145 @@ impl JamState {
     }
 }
 
-/// Tail release of a long note: the head must be struck, then the tail
-/// MUST be released at its end — missing the release is a Miss and
-/// releasing mid-hold is a Miss (player-reported; hold-bit sites pinned
-/// in-exe at `0x576105`/`0x5766cb`/`0x576c42`/`0x576994` but the exact
-/// release judgement was not traced, so the release reuses the struck
-/// [`TimingWindows`]).
+/// Chart-data span of one long note, VERIFIED 7.55: a same-lane pair of
+/// records where the head carries payload bit 25 only (`0x2000000`) and
+/// the tail adds bit 24 (`0x1000000`) — the judge arms holds on records
+/// with `payload & 0x3000000 == 0x2000000` (file `0x176105`) and pairs a
+/// head to the next bit-24 record (file `0x1774b4`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HoldSpan {
+    /// Head onset in ms.
+    pub head_ms: u64,
+    /// Tail record time in ms (span end for the bonus ticker).
+    pub tail_ms: u64,
+}
+
+impl HoldSpan {
+    /// Hold from head to tail; `None` when the span is empty (a tap).
+    #[must_use]
+    pub fn new(head_ms: u64, tail_ms: u64) -> Option<Self> {
+        (tail_ms > head_ms).then_some(Self { head_ms, tail_ms })
+    }
+
+    /// Judge a head strike with the shared strike windows: the keyup
+    /// judge tiers |hit − record time| against the same 6/18/25 bounds
+    /// as taps (compare chain at files `0x176b7f`–`0x176ba7`).
+    #[must_use]
+    pub fn judge_head(&self, hit_ms: u64, windows: &TimingWindows) -> Judgement {
+        windows.judge(saturating_offset_ms(hit_ms, self.head_ms))
+    }
+
+    /// Record expiry, VERIFIED (`FUN_005772f0`): an unjudged record
+    /// becomes a Miss once `now > record_ms + windows.bad` (grace add
+    /// at file `0x1773bf`, Miss store at file `0x17740f`). The scan
+    /// applies it to the head and — while the head is still unjudged —
+    /// also marks the paired tail Miss (file `0x1774e2`), so a span
+    /// whose head is never struck dies whole.
+    #[must_use]
+    pub fn is_expired(record_ms: u64, now_ms: u64, windows: &TimingWindows) -> bool {
+        record_ms.saturating_add(windows.bad) < now_ms
+    }
+}
+
+/// Per-lane long-note hold state, VERIFIED 7.55 (`FUN_00576540` /
+/// `FUN_00575fa0` / `FUN_00578110`, dossier `ev_1baf7ef1…` for the
+/// scan; binary md5 `34b789ff…`).
+///
+/// The in-exe machine has no release judgement:
+///
+/// 1. A judged head raises the per-lane hold-active flag `+0x9f8` —
+///    battle keydown write at file `0x17617b` (hold-bit test `0x176105`,
+///    `FUN_00575fa0`), keyup write at file `0x176d78` gated to the
+///    Cool/Good tiers (files `0x176c86`–`0x176c90`, `FUN_00576540`),
+///    auto-play write at file `0x17726b`. It also latches the hold span
+///    `+0x9c0`/`+0x9dc` from the paired records (files `0x176197`/
+///    `0x1761af`).
+/// 2. The flag never clears mid-song: its only clear sites are the
+///    start/restart loops (files `0x18ec0b`/`0x18ed25`/`0x18ee3b`), and
+///    its only read is the bonus scan (file `0x178194`). Early releases
+///    are not detected.
+/// 3. The per-frame scan `FUN_00578110` ticks the +10 bonus only while
+///    the flag is set and `span_start < now < span_end` (both strict:
+///    files `0x1781c1`/`0x1781d7`); it issues no judgement.
+/// 4. A key-up never judges the tail: the keyup branch strikes the
+///    nearest unjudged non-tail record with the strike windows
+///    (candidate walk files `0x1767c9`–`0x176b00`, bit-24 exclusions at
+///    files `0x176837`/`0x176994`), and a Bad hit there kills the paired
+///    tail instead (Miss `0x180`, files `0x176dab`–`0x176df6`).
+/// 5. The tail record is judged only by the expiry scan: a head missed
+///    or hit Bad Misses the tail with it, and — OPEN — no site was found
+///    that rates a held-to-end tail as judged, so whether a fully held
+///    tail escapes the expiry Miss stays unresolved (see
+///    `docs/gameplay.md`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HoldState {
+    span: HoldSpan,
+    armed: bool,
+}
+
+impl HoldState {
+    /// Idle hold for one chart span: not armed, nothing judged.
+    #[must_use]
+    pub fn new(span: HoldSpan) -> Self {
+        Self { span, armed: false }
+    }
+
+    /// Whether the per-lane hold-active flag `+0x9f8` is raised.
+    #[must_use]
+    pub fn is_armed(&self) -> bool {
+        self.armed
+    }
+
+    /// The chart span this state tracks.
+    #[must_use]
+    pub fn span(&self) -> HoldSpan {
+        self.span
+    }
+
+    /// Apply a judged head strike. Cool/Good arm the hold (both tiers
+    /// pass the verified keyup gate; the battle-keydown site sits in the
+    /// Cool branch, so the Good keydown branch is untraced but implied).
+    /// Bad leaves the hold unarmed and — per the verified keyup tail
+    /// kill — the paired tail is rated Miss by the caller.
+    pub fn apply_head(&mut self, judgement: Judgement) {
+        if matches!(judgement, Judgement::Cool | Judgement::Good) {
+            self.armed = true;
+        }
+    }
+
+    /// Whether this hold feeds one [`LongNoteBonus::hold_tick`] now:
+    /// the verified scan gate — armed, and the span window open
+    /// (`span_start < now < span_end`, strict on both ends).
+    #[must_use]
+    pub fn hold_tick_due(&self, now_ms: u64) -> bool {
+        self.armed
+            && now_ms.saturating_sub(self.span.head_ms) > 0
+            && self.span.tail_ms.saturating_sub(now_ms) > 0
+    }
+}
+
+/// Signed ms offset `later − earlier`, saturating at `i64` bounds so a
+/// strike time can never wrap when fed to [`TimingWindows::judge`].
+#[must_use]
+fn saturating_offset_ms(later_ms: u64, earlier_ms: u64) -> i64 {
+    let later = i64::try_from(later_ms).unwrap_or(i64::MAX);
+    let earlier = i64::try_from(earlier_ms).unwrap_or(i64::MAX);
+    later.saturating_sub(earlier)
+}
+
+/// Deprecated pre-trace long-note model, kept only until
+/// `o2jam-shell`'s release path migrates to [`HoldState`].
+///
+/// `is_expired` matches the verified record-expiry rule
+/// ([`HoldSpan::is_expired`]). `is_early` and `judge_release` model a
+/// release-vs-tail judgement that the 7.55 trace REFUTED (no site
+/// judges a key-up against the tail time; see `docs/gameplay.md`,
+/// "Long-note hold machine"): they describe how the release was
+/// reported to play, not how `OTwo.exe` judges it.
+#[deprecated(
+    since = "0.1.0",
+    note = "superseded by `HoldState`; the release judgement is refuted for 7.55"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LongTail {
     /// Head onset in ms.
@@ -286,6 +420,7 @@ pub struct LongTail {
     pub tail_ms: u64,
 }
 
+#[allow(deprecated)]
 impl LongTail {
     /// Hold from head to tail; `None` when the span is empty (a tap).
     #[must_use]
@@ -294,6 +429,7 @@ impl LongTail {
     }
 
     /// A release before the window is mid-hold: Miss.
+    /// REFUTED for 7.55 — kept for `o2jam-shell` compatibility only.
     #[must_use]
     pub fn is_early(&self, release_ms: u64, windows: &TimingWindows) -> bool {
         release_ms.saturating_add(windows.bad) < self.tail_ms
@@ -302,13 +438,14 @@ impl LongTail {
     /// No release by the window end: Miss (caller rates it on advance).
     #[must_use]
     pub fn is_expired(&self, now_ms: u64, windows: &TimingWindows) -> bool {
-        self.tail_ms.saturating_add(windows.bad) < now_ms
+        HoldSpan::is_expired(self.tail_ms, now_ms, windows)
     }
 
     /// Judge a release inside the window with the strike tiers.
+    /// REFUTED for 7.55 — kept for `o2jam-shell` compatibility only.
     #[must_use]
     pub fn judge_release(&self, release_ms: u64, windows: &TimingWindows) -> Judgement {
-        windows.judge(release_ms as i64 - self.tail_ms as i64)
+        windows.judge(saturating_offset_ms(release_ms, self.tail_ms))
     }
 }
 
@@ -333,9 +470,10 @@ pub const HOLD_TICK_BONUS_POINTS: u64 = 10;
 /// (4014) — layout in `net-protocol.md`; the submit-side read runs
 /// through a vtable path, so that link is corroborated, not proven.
 ///
-/// Gate [`LongNoteBonus::hold_tick`] on hold-active, mirroring the
-/// exe's `+0x9f8` flag check (file `0x178194`): one call per held
-/// tick, nothing on taps or after release.
+/// Gate [`LongNoteBonus::hold_tick`] with [`HoldState::hold_tick_due`],
+/// mirroring the verified scan gate (flag check at file `0x178194`, span
+/// window at files `0x1781c1`/`0x1781d7`): one call per held tick,
+/// nothing on taps, before the head, or past the tail.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LongNoteBonus {
     points: u64,
@@ -1278,27 +1416,74 @@ mod tests {
     }
 
     #[test]
-    fn long_tail_rejects_empty_spans() {
-        assert!(LongTail::new(1000, 1000).is_none());
-        assert!(LongTail::new(1000, 999).is_none());
-        assert!(LongTail::new(1000, 1500).is_some());
+    fn hold_span_rejects_empty_spans() {
+        assert!(HoldSpan::new(1000, 1000).is_none());
+        assert!(HoldSpan::new(1000, 999).is_none());
+        assert!(HoldSpan::new(1000, 1500).is_some());
     }
 
     #[test]
-    fn long_tail_release_before_window_is_early() {
+    fn head_strike_uses_shared_strike_windows() {
         let windows = TimingWindows::default();
-        let tail = LongTail::new(1000, 2000).expect("hold");
-        assert!(tail.is_early(2000 - windows.bad - 1, &windows));
-        assert!(!tail.is_early(2000 - windows.bad, &windows));
-        assert_eq!(tail.judge_release(2000, &windows), Judgement::Cool);
+        let span = HoldSpan::new(10_000, 12_000).expect("hold");
+        assert_eq!(
+            span.judge_head(10_000 + windows.cool, &windows),
+            Judgement::Cool
+        );
+        assert_eq!(
+            span.judge_head(10_000 + windows.good, &windows),
+            Judgement::Good
+        );
+        assert_eq!(
+            span.judge_head(10_000 + windows.bad, &windows),
+            Judgement::Bad
+        );
+        assert_eq!(
+            span.judge_head(10_000 + windows.bad + 1, &windows),
+            Judgement::Miss
+        );
+        assert_eq!(
+            span.judge_head(10_000 - windows.cool, &windows),
+            Judgement::Cool
+        );
     }
 
     #[test]
-    fn long_tail_missing_release_expires_after_window() {
+    fn cool_or_good_head_arms_hold_and_bad_does_not() {
+        let span = HoldSpan::new(1000, 2000).expect("hold");
+        let mut cool = HoldState::new(span);
+        cool.apply_head(Judgement::Cool);
+        assert!(cool.is_armed());
+        let mut good = HoldState::new(span);
+        good.apply_head(Judgement::Good);
+        assert!(good.is_armed());
+        let mut bad = HoldState::new(span);
+        bad.apply_head(Judgement::Bad);
+        assert!(!bad.is_armed());
+        let mut missed = HoldState::new(span);
+        missed.apply_head(Judgement::Miss);
+        assert!(!missed.is_armed());
+    }
+
+    #[test]
+    fn hold_tick_due_needs_armed_hold_and_open_span() {
+        let span = HoldSpan::new(1000, 2000).expect("hold");
+        let mut hold = HoldState::new(span);
+        assert!(!hold.hold_tick_due(1500));
+        hold.apply_head(Judgement::Good);
+        assert!(!hold.hold_tick_due(999));
+        assert!(!hold.hold_tick_due(1000));
+        assert!(hold.hold_tick_due(1001));
+        assert!(hold.hold_tick_due(1999));
+        assert!(!hold.hold_tick_due(2000));
+        assert!(!hold.hold_tick_due(2001));
+    }
+
+    #[test]
+    fn unjudged_record_expires_past_bad_window() {
         let windows = TimingWindows::default();
-        let tail = LongTail::new(1000, 2000).expect("hold");
-        assert!(!tail.is_expired(2000 + windows.bad, &windows));
-        assert!(tail.is_expired(2000 + windows.bad + 1, &windows));
+        assert!(!HoldSpan::is_expired(2000, 2000 + windows.bad, &windows));
+        assert!(HoldSpan::is_expired(2000, 2000 + windows.bad + 1, &windows));
     }
 
     #[test]

@@ -498,14 +498,14 @@ dossier `ev_c168abac…`). The dead-state pill path is untraced (the
 pill dispatch runs upstream of the scorer); the model freezes pill
 spend too — implementation choice, not an exe claim.
 
-## Long-note release rule — player-reported
+## Long-note release rule — player report CORRECTED by trace (see below)
 
-No long-note options exist (at most a cosmetic long-note-combo
-toggle). Long notes are chart data: the head must be hit, the tail
-MUST be released exactly at its end — missing the release is a
-miss, and releasing mid-hold is a miss. Implemented nowhere yet:
-hold detection needs the in-exe release path (bit-26/0x2f50 sites
-never fire on shipped charts).
+The player report ("head hit, tail released exactly at its end, missing
+or early release is a miss") matches neither the traced state machine
+nor shipped chart data: holds never arm bit 26, and no release-vs-tail
+judgement exists. The traced rule lives in "Long-note hold machine —
+VERIFIED" below; the release-scan claim in `claims.md` B12 needs the
+CORRECTED verdict recorded there (this doc keeps the evidence).
 
 ## Win rule — player-reported
 
@@ -533,16 +533,94 @@ that flag exists in 7.55, so the windowed branch is unreachable in
 practice. Implemented as `o2jam-shell::{DEFAULT_WIDTH,
 DEFAULT_HEIGHT}` = 800x600 with a synthetic test.
 
-## Long-note release rule — player-reported, in-exe path identified but not traced
+## Long-note hold machine — VERIFIED (no release-at-tail judgement)
 
-Player holds from the note head; the tail MUST be released — missing
-the release is a miss, releasing early is a miss. Verified to exist:
-hold-bit handling and per-measure span markers in-exe, but the exact
-release-point judgement was not traced (never fires on shipped
-charts). Implemented as documented behavior only, not yet in code.
-Hold-bit sites pinned by objdump (same binary): `cmp $0x2000000`
-at `0x576105`/`0x576c42`, `and $0x2000000` at `0x5766cb`,
-`and $0x1000000` at `0x576994` — all inside `FUN_00576540`.
+Traced end to end in `OTwo.exe` md5 `34b789ff557a9bf6a1f275010dcaaceb`
+(5,029,888 B, sha256 `83a045418b62…` as opened by REA; Ghidra 12.1.2,
+REA 6.7.0; evidence ids below are per-function). Event plumbing: the
+input forward `FUN_005714b0` (file `0x1714b0`, inverts its pressed
+word) calls the ring producer `FUN_00577ff0` → `FUN_00579b80` (file
+`0x179b80`), which edge-detects per lane via the pressed flags at
+`+0x408[lane]` (set file `0x179c21`, cleared file `0x179beb`) and
+pushes 8-byte events {lane, pressed, time} into the 128-slot ring at
+`+0x400` (pop `FUN_00579c90`, file `0x179c90`; ring init file
+`0x179b2c`). Remote play events carry the sender's timestamp and enter
+through the same forward (network handler calls at files `0xe17c6`/
+`0xe1877`/`0xe1b12`, wrapper at file `0x1714d1`/`0x1714ec`).
+
+Per frame, the play advance `FUN_00571060` (file `0x171060`, dossier
+`ev_d444398b…`, called at file `0xde7e0`) calls `FUN_00575d70`
+(file `0x175d70`, dossier `ev_efdaac19…`): it gates on play state
+`+0x828 == 2` (file `0x175d7c`), rebases `timeGetTime()` (IAT
+`0x63f4f8`) on the song start `+0x834`, then dispatches on the mode
+word at `0x77ee84` (file `0x175f07`) to the keydown judge — mode 0
+`FUN_00576540` (via `FUN_00575c20`, call at file `0x175c58`); mode 1
+runs auto-play `FUN_00577090`, else `FUN_00576540`, else — when
+`+0xa1c` is set (file `0x175cca`) — the second judge `FUN_00575fa0`
+(file `0x175fa0`, dossier `ev_3d707204…`, call at file `0x175cde`),
+each followed by the expiry scan `FUN_005772f0` (file `0x1772f0`,
+dossier `ev_0ece39cb…`); the scroll-line scan `FUN_005763d0` (file
+`0x1763d0`, dossier `ev_292d6cf2…`), the song-end scan `FUN_00577630`
+(file `0x177630`, dossier `ev_dbec9dc8…`), the pass-event scan
+`FUN_00577920` (file `0x177920`, dossier `ev_86593220…`), and the
+hold-bonus scan `FUN_00578110` (file `0x178110`, dossier
+`ev_1baf7ef1…`).
+
+1. **Head strike — VERIFIED.** Both judges tier |hit − record time|
+   against the shared 6/18/25 bounds (compare chains files
+   `0x176b7f`–`0x176ba7` and `0x176646`–`0x17667a`) and OR the tier
+   bits `0x10`/`0x20`/`0x40` into the record's judged word `+0xe`
+   (files `0x176687`/`0x176bd7`). Key-up strikes too: the keyup branch
+   (file `0x176719`) walks the lane's note list and judges the nearest
+   unjudged record to now, closer-of before/after (distance pick files
+   `0x176acd`–`0x176ae7`), excluding bit-24 tail records from
+   candidacy (files `0x176837`/`0x176994`).
+2. **Head arms the hold — VERIFIED.** A record with
+   `payload & 0x3000000 == 0x2000000` (bit 25 only = head; second-judge
+   test file `0x176105`, keyup test file `0x176c42`) raises the
+   per-lane hold-active flag `+0x9f8[lane] = 1` (second-judge keydown
+   file `0x17617b`, keyup file `0x176d78` gated Cool/Good at files
+   `0x176c86`–`0x176c90`, auto-play file `0x17726b`), latches the
+   render cursor `+0x988` and head mirror `+0x9a4` from the head time,
+   latches the hold span `+0x9c0` (head) / `+0x9dc` (paired tail, via
+   the list advance at file `0x17612c`), feeds the combo helper
+   `FUN_00541620` (files `0x17613d`/`0x176d86`), and — second-judge
+   keydown only — re-aims the lane judge cursor `+0x864` at the tail
+   record (file `0x1761c4`). Hold heads forward rating event `0xe`
+   (bit-25 test at files `0x1766cb`/`0x176105`, sends at files
+   `0x1766ef`/`0x1760d6`) into the render dispatcher `FUN_0056e170`
+   (file `0x16e170`, dossier `ev_c168abac…`); its Bad/Miss case resets
+   combo to 0 (file `0x16ebcf`).
+3. **No release judgement — VERIFIED (negative).** The hold flag is
+   read exactly once (file `0x178194`, the bonus scan) and cleared only
+   by the start/restart loops (files `0x18ec0b`/`0x18ed25`/`0x18ee3b`).
+   No site judges a release against the tail time; no site reads the
+   flag to rate a release; releasing mid-hold raises nothing.
+4. **Bonus over the span — VERIFIED.** `FUN_00578110` ticks `+10`/`+1`
+   per frame while flag ∧ `span_start < now < span_end` (strict:
+   files `0x1781c1`/`0x1781d7`) — see the hold-bonus section below.
+5. **Expiry — VERIFIED.** The expiry scan `FUN_005772f0` Misses any
+   unjudged record once `now > record_time + 25` (grace file
+   `0x1773bf`, Miss `0x80` file `0x17740f`, rating call file
+   `0x177448`) and, while a head is unjudged, also marks its paired
+   bit-24 tail `0x180` (files `0x177468`–`0x1774e2`). A Bad keyup hit
+   on a head kills the paired tail the same way (files
+   `0x176dab`–`0x176df6`).
+6. **OPEN — held-tail consumption.** All tier-word writes in the play
+   region are enumerated (keydown judges files `0x17609e`/`0x176687`,
+   keyup `0x176bd7`, expiry `0x17740f`/`0x1774e2`, keyup tail kill
+   `0x176df6`, auto variants ~`0x1771xx`): none rates a bit-24 tail
+   Cool/Good. How a fully held tail escapes (or incurs) the expiry Miss
+   is unresolved — candidates are the dual-chain list structure (two
+   link words per record; advance-along-`+0` `FUN_00579590` vs
+   `+4` `FUN_005795f0`) hiding tails from the expiry walk, or a
+   consumption path outside the judges. Needs dynamic evidence or a
+   list-construction trace (insert side of the freeze path).
+
+Modeled as `o2jam-game::HoldSpan` + `o2jam-game::HoldState`
+(`judge_head`, `apply_head`, `hold_tick_due`, `HoldSpan::is_expired`);
+the former `LongTail` release model (`is_early`/`judge_release`) was
+REFUTED and removed.
 
 ## Long-note hold bonus — VERIFIED (+10 per tick, +1 combo)
 
@@ -556,7 +634,8 @@ flag at game `+0x9f8` (head writes at files `0x17617b`/`0x176c78`/
 `0x1766cb`/`0x176c42`/`0x1771f5`, with the hold judgement
 recursed as rating event `0xe` — sends at files
 `0x16e5d4`/`0x16e751`/`0x16e8ce`/`0x16e91d`/`0x1766ef` into the
-16-way dispatcher at file `0x16e170`, hold case at file `0x16ebbd`);
+16-way dispatcher at file `0x16e170`, whose Bad/Miss case (combo
+reset) sits at file `0x16ebbd`);
 then the per-frame hold scan `FUN_00578110` (file `0x178110`,
 dossier `ev_737dfe7b…`, Ghidra 12.1.2, same binary md5
 `34b789ff…`) checks the flag per lane (file `0x178194`) and, while
