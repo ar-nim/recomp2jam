@@ -25,6 +25,13 @@ use o2jam_net::play::SetRoomMusic;
 use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry};
 use o2jam_render::{draw_text, fill_rect, pack_xrgb, text_width, Frame, Rect};
 
+/// Stage the Playing backdrop defaults to before a room names one:
+/// the exe's room entry replaces a zero stage with a real one (the
+/// waiting-room picker's value, store `0x4aacea`, `docs/stage-bga.md`),
+/// so the composer never carries stage 0; the first stage stands in
+/// for the picker's pick (exact default untraced).
+const DEFAULT_ARENA_STAGE: u16 = 1;
+
 /// Game loop that shows each screen's scene and walks the flow.
 ///
 /// Input wiring so far: any lane key dismisses the splash into the
@@ -42,6 +49,10 @@ pub struct ScreenGame {
     room_highlight: usize,
     waiting: Option<JoinedRoom>,
     selected_music: Option<SetRoomMusic>,
+    /// Room arena stage the Playing `_` sprites resolve through
+    /// (`Playing_BG<stage>.ojs` and the staged kits; see
+    /// [`Self::arena_stage`]).
+    arena_stage: u16,
     song_titles: HashMap<u16, String>,
     select_music_art: Option<SceneArt>,
     battle_teams: RoomTeams,
@@ -57,6 +68,19 @@ pub struct ScreenGame {
 struct AudioRig {
     backend: Box<dyn AudioBackend>,
     bank: HashMap<u32, PcmSamples>,
+}
+
+/// Stage word behind one room arena value (the Playing applier's
+/// seeding rule, exe `0x4e78db`, `docs/stage-bga.md`): the low 16
+/// bits when a high word is set, the full value otherwise. `None`
+/// names no stage — a zero stage (room entry replaces zero with a
+/// real one, store `0x4aacea`) or a negative word.
+#[must_use]
+fn arena_stage_word(arena: i32) -> Option<u16> {
+    let word = u32::try_from(arena).ok()?;
+    let high = word >> 16;
+    let stage = if high != 0 { word & 0xFFFF } else { word };
+    u16::try_from(stage).ok().filter(|stage| *stage != 0)
 }
 
 impl ScreenGame {
@@ -76,6 +100,7 @@ impl ScreenGame {
             room_highlight: 0,
             waiting: None,
             selected_music: None,
+            arena_stage: DEFAULT_ARENA_STAGE,
             song_titles: HashMap::new(),
             select_music_art: None,
             battle_teams: RoomTeams::new(),
@@ -198,10 +223,25 @@ impl ScreenGame {
         self
     }
 
-    /// Remember the joined room; Waiting paints its eight seats.
+    /// Remember the joined room; Waiting paints its eight seats, and
+    /// the room's arena word sets the Playing backdrop stage (zero or
+    /// negative words keep the current stage: the exe replaces a zero
+    /// stage on room entry, it never stores one).
     pub fn set_joined_room(&mut self, room: JoinedRoom) -> &mut Self {
+        if let Some(stage) = arena_stage_word(room.arena) {
+            self.arena_stage = stage;
+        }
         self.waiting = Some(room);
         self
+    }
+
+    /// Room arena stage the Playing `_` sprites resolve through: the
+    /// default until a joined room names one, the room's arena word
+    /// afterwards (`docs/stage-bga.md` global `0x7789dc`). Loaders
+    /// build `Playing_BG<stage>.ojs` and the stage-keyed kits from it.
+    #[must_use]
+    pub fn arena_stage(&self) -> u16 {
+        self.arena_stage
     }
 
     /// Remember the host song choice (`SetRoomMusic` 4000 body);
@@ -1701,5 +1741,48 @@ mod game_tests {
         // No selection: the bar keeps the exe's init set (difficulty
         // byte defaults to Easy, file `0x9515c`).
         assert_eq!(game.playing.score().life.life(), 1000 - 50);
+    }
+
+    #[test]
+    fn arena_stage_defaults_to_a_real_stage_before_any_room() {
+        // Exe room entry replaces a zero stage with a real one (store
+        // `0x4aacea`), so the composer never carries stage 0.
+        let game = ScreenGame::new();
+        assert_eq!(game.arena_stage(), DEFAULT_ARENA_STAGE);
+        assert_ne!(game.arena_stage(), 0);
+    }
+
+    #[test]
+    fn joined_room_arena_sets_the_backdrop_stage() {
+        let mut game = ScreenGame::new();
+        let mut room = waiting_room();
+        room.arena = 7;
+        game.set_joined_room(room);
+        assert_eq!(game.arena_stage(), 7);
+        let mut next = waiting_room();
+        next.arena = 36;
+        game.set_joined_room(next);
+        assert_eq!(game.arena_stage(), 36);
+    }
+
+    #[test]
+    fn zero_arena_keeps_the_current_stage() {
+        // Room entry replaces zero with a real stage, it never stores
+        // one, so a zero word names no stage and the default stands.
+        let mut game = ScreenGame::new();
+        let mut room = waiting_room();
+        room.arena = 0;
+        game.set_joined_room(room);
+        assert_eq!(game.arena_stage(), DEFAULT_ARENA_STAGE);
+    }
+
+    #[test]
+    fn arena_high_word_seeds_the_low_stage_word() {
+        // Applier seeding (`0x4e78db`): the low word when a high word
+        // is set, the full value otherwise; negative names no stage.
+        assert_eq!(arena_stage_word((1 << 16) | 5), Some(5));
+        assert_eq!(arena_stage_word(5), Some(5));
+        assert_eq!(arena_stage_word(0), None);
+        assert_eq!(arena_stage_word(-1), None);
     }
 }

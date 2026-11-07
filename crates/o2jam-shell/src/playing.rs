@@ -195,6 +195,16 @@ pub const NOTE_FRAMES_PER_LANE: usize = 3;
 pub const TUTORIAL_FRAMES_PER_LANE: usize = 5;
 /// Receptor animation step in song ms (visual only; timing untouched).
 pub const RECEPTOR_FRAME_MS: u64 = 45;
+/// Staged score-digit body: `Scroe.ojs` (archive spelling), ten raw
+/// ~11x21 frames in digit order 0..=9 (verified on 7.55
+/// `Playing1.opi`, archive slot 557; every frame anchors at (0,0)).
+pub const SCORE_FONT_SPRITE: &str = "Scroe.ojs";
+/// Staged combo-digit body: `Note_ComboNum.ojs`, ten raw frames up
+/// to 33x51 in digit order 0..=9 (archive slot 44).
+pub const COMBO_FONT_SPRITE: &str = "Note_ComboNum.ojs";
+/// Staged play-time-digit body: `PlayTimeNum.ojs`, ten raw 27x21
+/// frames in digit order 0..=9 (archive slot 96).
+pub const PLAY_TIME_FONT_SPRITE: &str = "PlayTimeNum.ojs";
 
 /// One decoded skin image: raw RGB555 pixels plus the source body
 /// colorkey (skipped while blitting).
@@ -278,11 +288,129 @@ impl SkinSprite {
     }
 }
 
+/// Ten digit frames (stored order 0..=9) of one staged bitmap number
+/// font. A font binds only with all ten frames present, so a bound
+/// font never paints holes.
+#[derive(Debug, Clone, Default)]
+pub struct DigitFont {
+    digits: [Option<SkinSprite>; 10],
+}
+
+impl DigitFont {
+    /// Bind one font from ten digit frames; `None` unless every digit
+    /// frame is present.
+    #[must_use]
+    pub fn from_frames(frames: Vec<SkinSprite>) -> Option<Self> {
+        if frames.len() != 10 {
+            return None;
+        }
+        let mut digits: [Option<SkinSprite>; 10] = Default::default();
+        for (slot, frame) in digits.iter_mut().zip(frames) {
+            *slot = Some(frame);
+        }
+        Some(Self { digits })
+    }
+
+    /// Frame of one decimal digit (`None` where the font is absent).
+    #[must_use]
+    pub fn digit(&self, digit: u8) -> Option<&SkinSprite> {
+        self.digits.get(usize::from(digit))?.as_ref()
+    }
+
+    /// Row height of the font (digit-0 frame height; 0 while absent).
+    #[must_use]
+    pub fn height(&self) -> u32 {
+        self.digit(0).map_or(0, |frame| frame.image.h as u32)
+    }
+
+    /// Total left-to-right width of `value` painted in this font.
+    #[must_use]
+    pub fn width_of(&self, value: u32) -> u32 {
+        self.width_of_digits(&decimal_digits(value))
+    }
+
+    /// Width of `value` zero-padded to `places` digits.
+    #[must_use]
+    pub fn padded_width(&self, value: u32, places: usize) -> u32 {
+        self.width_of_digits(&padded_digits(value, places))
+    }
+
+    /// Paint `value`'s digits left to right from `(x, y)`, each frame
+    /// at its stored (0,0) anchor (top-left; every digit frame carries
+    /// a zero anchor on 7.55). Blits clip to the frame like any skin
+    /// art.
+    pub fn paint(&self, frame: &mut Frame<'_>, x: i32, y: i32, value: u32) {
+        self.paint_digits(frame, x, y, &decimal_digits(value));
+    }
+
+    /// Paint `value` zero-padded to `places` digits (a fixed-width
+    /// readout; surplus low digits keep the right end).
+    pub fn paint_padded(&self, frame: &mut Frame<'_>, x: i32, y: i32, value: u32, places: usize) {
+        self.paint_digits(frame, x, y, &padded_digits(value, places));
+    }
+
+    /// Paint `value` centered on `center_x` at row `y`.
+    pub fn paint_centered(&self, frame: &mut Frame<'_>, center_x: i32, y: i32, value: u32) {
+        let width = i32::try_from(self.width_of(value)).unwrap_or(0);
+        self.paint(frame, center_x - width / 2, y, value);
+    }
+
+    /// Sum of the digit frames' widths.
+    fn width_of_digits(&self, digits: &[u8]) -> u32 {
+        digits
+            .iter()
+            .filter_map(|digit| self.digit(*digit))
+            .map(|frame| frame.image.w as u32)
+            .sum()
+    }
+
+    /// Blit the digits left to right, advancing by each frame width.
+    fn paint_digits(&self, frame: &mut Frame<'_>, x: i32, y: i32, digits: &[u8]) {
+        let mut pen = x;
+        for digit in digits {
+            let Some(sprite) = self.digit(*digit) else {
+                continue;
+            };
+            blit_rgb555(frame, &sprite.image.view(), pen, y, Some(sprite.colorkey));
+            pen += i32::try_from(sprite.image.w).unwrap_or(0);
+        }
+    }
+}
+
+/// Decimal digits of `value`, most significant first (`0` → `[0]`).
+#[must_use]
+fn decimal_digits(value: u32) -> Vec<u8> {
+    let mut digits = Vec::new();
+    let mut rest = value;
+    loop {
+        digits.push(u8::try_from(rest % 10).unwrap_or(0));
+        rest /= 10;
+        if rest == 0 {
+            break;
+        }
+    }
+    digits.reverse();
+    digits
+}
+
+/// `places` decimal digits of `value`, zero-padded on the left
+/// (surplus high digits drop off the left, like a fixed-width readout).
+#[must_use]
+fn padded_digits(value: u32, places: usize) -> Vec<u8> {
+    let mut digits = decimal_digits(value);
+    digits.reverse();
+    digits.resize(places, 0);
+    digits.reverse();
+    digits
+}
+
 /// Staged highway art: per-lane note heads, press-down keys, release
-/// beams, receptor frames, and the long-note effect. Empty while
-/// nothing is staged: every paint path falls back to the procedural
-/// highway (the `real_art.rs` Playing row keys on the fallback inks,
-/// so staged lanes only replace their own art).
+/// beams, receptor frames, the long-note effect, and the HUD number
+/// fonts ([`SCORE_FONT_SPRITE`], [`COMBO_FONT_SPRITE`],
+/// [`PLAY_TIME_FONT_SPRITE`]). Empty while nothing is staged: every
+/// paint path falls back to the procedural highway and digits (the
+/// `real_art.rs` Playing row keys on the fallback inks, so staged
+/// lanes only replace their own art).
 #[derive(Debug, Clone, Default)]
 pub struct PlaySkin {
     note_heads: [Option<SkinSprite>; HIGHWAY_LANES as usize],
@@ -290,13 +418,19 @@ pub struct PlaySkin {
     release_beams: [Option<SkinSprite>; HIGHWAY_LANES as usize],
     receptors: [Vec<SkinSprite>; HIGHWAY_LANES as usize],
     long_effect: Option<SkinSprite>,
+    score_font: Option<DigitFont>,
+    combo_font: Option<DigitFont>,
+    play_time_font: Option<DigitFont>,
 }
 
 impl PlaySkin {
-    /// Whether any lane staged art.
+    /// Whether any lane or HUD font staged art.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.long_effect.is_none()
+            && self.score_font.is_none()
+            && self.combo_font.is_none()
+            && self.play_time_font.is_none()
             && self.note_heads.iter().all(Option::is_none)
             && self.press_keys.iter().all(Option::is_none)
             && self.release_beams.iter().all(Option::is_none)
@@ -331,6 +465,24 @@ impl PlaySkin {
     #[must_use]
     pub fn long_effect(&self) -> Option<&SkinSprite> {
         self.long_effect.as_ref()
+    }
+
+    /// Staged score-digit font ([`SCORE_FONT_SPRITE`]).
+    #[must_use]
+    pub fn score_font(&self) -> Option<&DigitFont> {
+        self.score_font.as_ref()
+    }
+
+    /// Staged combo-digit font ([`COMBO_FONT_SPRITE`]).
+    #[must_use]
+    pub fn combo_font(&self) -> Option<&DigitFont> {
+        self.combo_font.as_ref()
+    }
+
+    /// Staged play-time-digit font ([`PLAY_TIME_FONT_SPRITE`]).
+    #[must_use]
+    pub fn play_time_font(&self) -> Option<&DigitFont> {
+        self.play_time_font.as_ref()
     }
 
     /// Receptor frame count for one lane.
@@ -398,6 +550,27 @@ impl PlaySkin {
         self
     }
 
+    /// Stage the score-digit font.
+    #[must_use]
+    pub fn with_score_font(mut self, font: DigitFont) -> Self {
+        self.score_font = Some(font);
+        self
+    }
+
+    /// Stage the combo-digit font.
+    #[must_use]
+    pub fn with_combo_font(mut self, font: DigitFont) -> Self {
+        self.combo_font = Some(font);
+        self
+    }
+
+    /// Stage the play-time-digit font.
+    #[must_use]
+    pub fn with_play_time_font(mut self, font: DigitFont) -> Self {
+        self.play_time_font = Some(font);
+        self
+    }
+
     /// Decode every staged body from a read-only archive slice; `None`
     /// when no lane yields art (entries missing or undecodable).
     #[must_use]
@@ -436,6 +609,9 @@ impl PlaySkin {
         if let Some(body) = archive_body(archive, LONG_NOTE_EFFECT_SPRITE) {
             skin.long_effect = lane_sprite(body, 0);
         }
+        skin.score_font = digit_font(archive, SCORE_FONT_SPRITE);
+        skin.combo_font = digit_font(archive, COMBO_FONT_SPRITE);
+        skin.play_time_font = digit_font(archive, PLAY_TIME_FONT_SPRITE);
         (!skin.is_empty()).then_some(skin)
     }
 }
@@ -489,6 +665,18 @@ fn skin_frames(body: &[u8]) -> Vec<SkinSprite> {
             .map(|decoded| SkinSprite::new(decoded, sprite.colorkey))
         })
         .collect()
+}
+
+/// One HUD number font from an archive body: ten digit frames in
+/// stored order 0..=9; `None` unless every digit decodes as raw
+/// RGB555 (a compressed frame would misalign the digit index, so the
+/// font stays out and the procedural digits keep painting).
+fn digit_font(archive: &[u8], entry_name: &str) -> Option<DigitFont> {
+    let body = archive_body(archive, entry_name)?;
+    let digits = (0..10usize)
+        .map(|index| lane_sprite(body, index))
+        .collect::<Option<Vec<_>>>()?;
+    DigitFont::from_frames(digits)
 }
 
 /// Scale one native row into the frame (identity on 600).
@@ -1107,6 +1295,9 @@ impl LivePlay {
     /// Paint the right-side avatar scene plus bottom tally strip over
     /// the highway and staged art. Counts feed from the live
     /// [`Score`]; state is untouched (shared `&self` like a query).
+    /// Play-time digits ride the tally strip when the
+    /// [`PLAY_TIME_FONT_SPRITE`] font stages (see
+    /// [`Self::paint_play_time`]).
     pub fn paint_avatar_scene(
         &self,
         frame: &mut Frame<'_>,
@@ -1115,6 +1306,28 @@ impl LivePlay {
     ) {
         self.scene
             .paint(frame, avatar, &self.score, now_ms, self.song_end_ms());
+        self.paint_play_time(frame, now_ms);
+    }
+
+    /// Play-time digits over the TIME bar through the staged
+    /// `PlayTimeNum.ojs` font: elapsed `MMSS` zero-padded, centered on
+    /// the bar so the fill stays readable between the strokes.
+    /// Staged-only — without the font the bar alone paints, like
+    /// today's fallback; the bar-side anchor is assumed (bnd-audit 31:
+    /// no bound digit rect on real art).
+    fn paint_play_time(&self, frame: &mut Frame<'_>, now_ms: u64) {
+        let Some(font) = self.view.skin.play_time_font() else {
+            return;
+        };
+        let bar = scale_scene_rect(&TALLY_TIME_NATIVE, frame.w, frame.h);
+        let minutes = u32::try_from(now_ms / 60_000).unwrap_or(u32::MAX).min(99);
+        let seconds = u32::try_from(now_ms / 1_000 % 60).unwrap_or(0);
+        let value = minutes * 100 + seconds;
+        let width = i32::try_from(font.padded_width(value, 4)).unwrap_or(0);
+        let height = i32::try_from(font.height()).unwrap_or(0);
+        let x = bar.x + i32::try_from(bar.w).unwrap_or(0) / 2 - width / 2;
+        let y = bar.y + i32::try_from(bar.h).unwrap_or(0) / 2 - height / 2;
+        font.paint_padded(frame, x, y, value, 4);
     }
 
     /// Song end for the TIME bar: last head/tail plus the 1.5 s outro
@@ -1526,7 +1739,9 @@ impl LivePlay {
     /// frame 2 `(-78,-37)` 154x72) — so the draw point is the word
     /// center, and `docs/playing-reference.md` puts the big combo +
     /// tier word over the lanes. Word rows keep the staged offsets
-    /// above the judgement line; ink stays plain white.
+    /// above the judgement line; ink stays plain white. Combo digits
+    /// paint through the staged `Note_ComboNum.ojs` font when present
+    /// (the big photo digits), procedural glyphs otherwise.
     fn paint_judgement_word(&self, frame: &mut Frame<'_>, geom: &HighwayGeometry, now_ms: u64) {
         let Some((judgement, at)) = self.last_word else {
             return;
@@ -1545,14 +1760,21 @@ impl LivePlay {
             pack_xrgb(0xFF, 0xFF, 0xFF),
         );
         if self.score.combo > 0 {
-            let digits = i32::try_from(number_width(self.score.combo)).unwrap_or(0);
-            draw_number(
-                frame,
-                center_x - digits / 2,
-                geom.line_y - 24,
-                self.score.combo,
-                pack_xrgb(0xFF, 0xFF, 0x40),
-            );
+            match self.view.skin.combo_font() {
+                Some(font) => {
+                    font.paint_centered(frame, center_x, geom.line_y - 24, self.score.combo);
+                }
+                None => {
+                    let digits = i32::try_from(number_width(self.score.combo)).unwrap_or(0);
+                    draw_number(
+                        frame,
+                        center_x - digits / 2,
+                        geom.line_y - 24,
+                        self.score.combo,
+                        pack_xrgb(0xFF, 0xFF, 0x40),
+                    );
+                }
+            }
         }
     }
 
@@ -1649,18 +1871,27 @@ impl LivePlay {
 
     /// Score and combo digits in the highway-panel strip (below the
     /// jam bar, on the staged strip row) — replacing the invented
-    /// top-left `(16,16)`/`(16,32)` anchors.
+    /// top-left `(16,16)`/`(16,32)` anchors. Score digits paint
+    /// through the staged `Scroe.ojs` font when present, procedural
+    /// glyphs otherwise; the strip combo keeps the procedural glyphs
+    /// (its own 7x10 `ComboScroe.ojs` family is outside this
+    /// three-font binding).
     fn paint_panel_strip(&self, frame: &mut Frame<'_>) {
         let (combo_x, score_center_x, row) = Self::strip_origins(frame.w, frame.h);
         let points = u32::try_from(self.score.points).unwrap_or(u32::MAX);
-        let digits = i32::try_from(number_width(points)).unwrap_or(0);
-        draw_number(
-            frame,
-            score_center_x - digits / 2,
-            row,
-            points,
-            pack_xrgb(0xFF, 0xFF, 0xFF),
-        );
+        match self.view.skin.score_font() {
+            Some(font) => font.paint_centered(frame, score_center_x, row, points),
+            None => {
+                let digits = i32::try_from(number_width(points)).unwrap_or(0);
+                draw_number(
+                    frame,
+                    score_center_x - digits / 2,
+                    row,
+                    points,
+                    pack_xrgb(0xFF, 0xFF, 0xFF),
+                );
+            }
+        }
         if self.score.combo > 0 {
             draw_number(
                 frame,
@@ -2780,6 +3011,20 @@ mod live_play_tests {
         )
     }
 
+    /// One synthetic number font: digit `d` paints a solid frame of
+    /// `0x0001 << (d + 1)` (a distinct ink per digit, black colorkey).
+    fn digit_font() -> DigitFont {
+        let frames = (0..10u8)
+            .map(|digit| solid_sprite(8, 4, 0x0001 << (digit + 1)))
+            .collect();
+        DigitFont::from_frames(frames).expect("ten frames bind one font")
+    }
+
+    /// Solid ink of synthetic digit `d` (see `digit_font`).
+    fn digit_ink(digit: u8) -> u32 {
+        solid_ink(0x0001 << (digit + 1))
+    }
+
     fn solid_ink(word: u16) -> u32 {
         let (r, g, b) = o2jam_render::expand_rgb555(word);
         pack_xrgb(r, g, b)
@@ -2897,6 +3142,118 @@ mod live_play_tests {
     }
 
     #[test]
+    fn fonts_alone_stage_a_skin() {
+        assert!(PlaySkin::default().is_empty());
+        assert!(!PlaySkin::default().with_score_font(digit_font()).is_empty());
+        assert!(!PlaySkin::default().with_combo_font(digit_font()).is_empty());
+        assert!(!PlaySkin::default()
+            .with_play_time_font(digit_font())
+            .is_empty());
+    }
+
+    #[test]
+    fn font_digits_read_values_and_padding() {
+        assert_eq!(decimal_digits(0), vec![0]);
+        assert_eq!(decimal_digits(205), vec![2, 0, 5]);
+        assert_eq!(padded_digits(65, 4), vec![0, 0, 6, 5]);
+        assert_eq!(padded_digits(1234, 2), vec![3, 4]);
+        let font = digit_font();
+        assert_eq!(font.height(), 4);
+        assert_eq!(font.width_of(205), 24);
+        assert_eq!(font.padded_width(65, 4), 32);
+        assert!(DigitFont::from_frames(Vec::new()).is_none());
+        assert!(font.digit(10).is_none());
+    }
+
+    #[test]
+    fn staged_score_font_replaces_strip_digits() {
+        let mut live = LivePlay::new(&[(0, 1000, 7)]);
+        live.strike_lane(0, 1000); // Cool: 200 points → "200"
+        live.set_skin(PlaySkin::default().with_score_font(digit_font()));
+        let mut buf = vec![0u32; 800 * 600];
+        live.paint(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &HighwayGeometry::centered(800, 600),
+            1400,
+        );
+        // Score "200" centered on the bottom jam bar's center x 99:
+        // 24 px wide, so digit 2 opens at 87, the zeros at 95/103,
+        // row 554 (the staged strip row).
+        assert_eq!(buf[554 * 800 + 87], digit_ink(2));
+        assert_eq!(buf[554 * 800 + 95], digit_ink(0));
+        assert_eq!(buf[554 * 800 + 103], digit_ink(0));
+        // The strip combo keeps its procedural amber glyph (digit 1
+        // inks one column in from its advance, as in the probe test).
+        assert_eq!(buf[554 * 800 + 5], pack_xrgb(0xFF, 0xFF, 0x40));
+    }
+
+    #[test]
+    fn staged_combo_font_replaces_judgement_digits() {
+        let mut live = LivePlay::new(&[(0, 1000, 7)]);
+        live.strike_lane(0, 1000); // combo 1 → "1"
+        live.set_skin(PlaySkin::default().with_combo_font(digit_font()));
+        let mut buf = vec![0u32; 800 * 600];
+        live.paint(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &HighwayGeometry::centered(800, 600),
+            1050,
+        );
+        // Combo "1" centered on the highway center x 99: 8 px wide →
+        // x 95..103 on rows 463..467 (line_y − 24).
+        assert_eq!(buf[465 * 800 + 97], digit_ink(1));
+        // The strip combo keeps its procedural amber glyph.
+        assert_eq!(buf[554 * 800 + 5], pack_xrgb(0xFF, 0xFF, 0x40));
+    }
+
+    #[test]
+    fn staged_play_time_font_paints_over_the_time_bar() {
+        let mut live = LivePlay::default();
+        live.set_skin(PlaySkin::default().with_play_time_font(digit_font()));
+        let mut buf = vec![0u32; 800 * 600];
+        live.paint_avatar_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            None,
+            65_000,
+        );
+        // 01:05 → "0105" centered on the TIME bar (489,556) 254x10:
+        // 32 px wide → x 600..632, digit rows 559..563.
+        assert_eq!(buf[561 * 800 + 602], digit_ink(0));
+        assert_eq!(buf[561 * 800 + 610], digit_ink(1));
+        assert_eq!(buf[561 * 800 + 626], digit_ink(5));
+    }
+
+    #[test]
+    fn hud_digits_keep_procedural_fallback_without_fonts() {
+        // No fonts staged: every HUD digit keeps its procedural ink
+        // and the TIME bar keeps its shell (nothing is ever blank).
+        let mut live = LivePlay::new(&[(0, 1000, 7)]);
+        live.strike_lane(0, 1000);
+        let mut buf = vec![0u32; 800 * 600];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 800,
+            h: 600,
+        };
+        live.paint(&mut frame, &HighwayGeometry::centered(800, 600), 1050);
+        live.paint_avatar_scene(&mut frame, None, 1050);
+        assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF))); // score + word
+        assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0x40))); // combo
+        assert!(buf.contains(&pack_xrgb(0x20, 0x20, 0x20))); // TIME shell
+    }
+
+    #[test]
     fn from_archive_binds_all_seven_lanes() {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../install-root/O2Jam/Image/Playing1.opi");
@@ -2916,6 +3273,31 @@ mod live_play_tests {
             assert_eq!(skin.receptor_frame_count(lane), TUTORIAL_FRAMES_PER_LANE);
         }
         assert!(skin.long_effect().is_some());
+    }
+
+    #[test]
+    fn from_archive_binds_the_hud_number_fonts() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Image/Playing1.opi");
+        let Ok(archive) = std::fs::read(&path) else {
+            return;
+        };
+        let Some(skin) = PlaySkin::from_archive(&archive) else {
+            panic!("Playing1.opi staged no skin art");
+        };
+        // Verified 7.55 metrics (archive slots 557 / 96 / 44): ten raw
+        // digit frames each, ~11x21 score, 27x21 play time, combo up
+        // to 33x51.
+        let score = skin.score_font().expect("Scroe.ojs font");
+        assert_eq!(score.digit(0).expect("digit frame").extent(), (11, 21));
+        let time = skin.play_time_font().expect("PlayTimeNum.ojs font");
+        assert_eq!(time.digit(0).expect("digit frame").extent(), (27, 21));
+        let combo = skin.combo_font().expect("Note_ComboNum.ojs font");
+        for digit in 0..10u8 {
+            let (w, h) = combo.digit(digit).expect("digit frame").extent();
+            assert!(w <= 33 && h <= 51, "combo digit {digit} {w}x{h}");
+        }
+        assert_eq!(combo.digit(9).expect("digit frame").extent(), (31, 51));
     }
 
     #[test]

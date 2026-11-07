@@ -2542,7 +2542,7 @@ mod tests {
     }
 
     #[test]
-    fn bind_pairs_codes_with_rects_in_order() {
+    fn bind_bridges_codes_sprites_and_rects_in_order() {
         let rects = vec![
             Rect {
                 x: 0,
@@ -2566,8 +2566,9 @@ mod tests {
     }
 
     #[test]
-    fn bind_truncates_to_the_shortest_input() {
-        // Playing ships fewer rects than entries: extras stay unlaid-out.
+    fn bind_bridges_inputs_positionally_truncating_short() {
+        // Positional bridge: zip stops at the shortest input, so
+        // fewer rects than entries leaves extras unlaid-out.
         let rects = vec![Rect {
             x: 1,
             y: 2,

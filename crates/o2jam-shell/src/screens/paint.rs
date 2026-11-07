@@ -7,8 +7,10 @@
 //! `bind_scene_rects`, `anchor_placements`, `paint_scene_figures`).
 //! Rect ordinal `(code & 0xFFF) − 1` lays out each entry (Playing: the
 //! `EXIT`..`VOLUME` run, entries 213–229, ordinals 1–17); every layer
-//! paints 1:1 at its rect origin plus its record anchor — the rect
-//! positions, never clips — in file order with the background first.
+//! paints 1:1 at its rect origin — plus its record anchor only while
+//! no rect claims the entry (7.55 records store absolute anchors that
+//! duplicate their bound rects) — the rect positions, never clips —
+//! in file order with the background first.
 //! Number-font bodies (`Room_Number.ojs` and kin) paint live values
 //! digit by digit; entry codes gate visibility by state byte. Bare
 //! [`paint_screen`] keeps the flat-color fallback while no art is
@@ -21,10 +23,10 @@ use super::super::avatar::{
     scene_sprite_names, AvatarFigure, ScenePlacement, AVI_BLOCK, AVI_LOGO_SPRITE, CHANNEL_BLOCK,
     LOADING_SPRITE, RESULT_BLOCK, ROOM_BLOCK, WAITING_BLOCK,
 };
-use super::super::playing::{HighwayGeometry, PlayingView, NATIVE_JAM_BARS, NATIVE_PEER_BAR};
+use super::super::playing::{HighwayGeometry, PlayingView};
 use super::super::screen::Screen;
 use o2jam_file::ControlList;
-use o2jam_game::{RoomTeams, PEER_SLOT_COUNT};
+use o2jam_game::RoomTeams;
 use o2jam_net::{
     ChannelState, Difficulty, GameMode, GameSpeed, JoinedRoom, KeyMode, RoomListEntry, RoomSlot,
     RoomSlotState,
@@ -1133,64 +1135,18 @@ pub fn paint_result_scene(
 /// Score digits anchor top-left (`LivePlay` draws points at
 /// `(16, 16)` and combo at `(16, 32)`): the behind scene stays out
 /// of the same digits box the result scrim uses, in frame pixels.
-const PLAYING_SCORE_EXCLUSION: Rect = Rect {
-    x: 8,
-    y: 8,
-    w: 64,
-    h: 52,
-};
-/// Half-width of the judgement-word exclusion around frame center:
-/// tier words run ≤4 glyphs (`COOL`, 15px at advance 4) and combo
-/// digits stay narrow, so ±24 keeps every tier legible with margin.
-const JUDGE_BAND_HALF_W: i32 = 24;
-/// Rows of the judgement-word exclusion around the judgement line:
-/// the tier word sits at `line_y - 40` and the combo digits at
-/// `line_y - 24` (5px glyphs), covered with margin.
-const JUDGE_BAND_TOP: i32 = 44;
-const JUDGE_BAND_BOTTOM: i32 = 16;
-
-/// Frame-space zones the behind-highway scene never paints: the
-/// lane columns plus the HUD ink (`LivePlay` score, judgement
-/// word, peer gauges, jam bars) that always sits on top.
-fn playing_backdrop_exclusions(frame_w: usize, frame_h: usize) -> Vec<Rect> {
-    let geom = HighwayGeometry::centered(frame_w, frame_h);
-    let mut zones: Vec<Rect> = geom.lanes.into_iter().collect();
-    zones.push(PLAYING_SCORE_EXCLUSION);
-    zones.push(judge_band(frame_w, &geom));
-    zones.push(peer_stack(frame_w, frame_h));
-    zones.extend(jam_bars(frame_w, frame_h));
-    zones
-}
-
-/// Judgement-word band: centered on the frame at the tier-word and
-/// combo rows under the judgement line.
-fn judge_band(frame_w: usize, geom: &HighwayGeometry) -> Rect {
-    let center = i32::try_from(frame_w).unwrap_or(i32::MAX) / 2;
-    Rect {
-        x: center - JUDGE_BAND_HALF_W,
-        y: geom.line_y - JUDGE_BAND_TOP,
-        w: u32::try_from(JUDGE_BAND_HALF_W * 2).unwrap_or(0),
-        h: u32::try_from(JUDGE_BAND_TOP - JUDGE_BAND_BOTTOM).unwrap_or(0),
-    }
-}
-
-/// Peer gauge stack: the staged 46x8 gauge (`NATIVE_PEER_BAR`) once
-/// per member slot from the scaled top-right corner (`LivePlay`
-/// stacks one 4015 gauge per slot there).
-fn peer_stack(frame_w: usize, frame_h: usize) -> Rect {
-    let corner = scale_rect_to_frame(&NATIVE_PEER_BAR, frame_w, frame_h);
-    let slots = u32::try_from(PEER_SLOT_COUNT).unwrap_or(0);
-    Rect {
-        x: corner.x,
-        y: corner.y,
-        w: corner.w,
-        h: corner.h.saturating_mul(slots),
-    }
-}
-
-/// Jam edge bars below the judgement row, scaled into the frame.
-fn jam_bars(frame_w: usize, frame_h: usize) -> [Rect; 2] {
-    NATIVE_JAM_BARS.map(|bar| scale_rect_to_frame(&bar, frame_w, frame_h))
+/// Frame-space zones the behind-highway scene never paints: the lane
+/// columns only. The exe paints the stage backdrop first of all
+/// (applier `0x4e7850`, file order `BACK1` before `BACK2`/`BACK3`),
+/// so the art fills the frame whole — no HUD cutouts — and the passes
+/// after it (staged gauges, avatar-scene captions, tally strip) keep
+/// their top slot; only the falling lanes must stay uncovered, since
+/// notes ride them.
+fn playing_lane_exclusions(frame_w: usize, frame_h: usize) -> Vec<Rect> {
+    HighwayGeometry::centered(frame_w, frame_h)
+        .lanes
+        .into_iter()
+        .collect()
 }
 
 /// Paint the behind-highway scene with no exclusions: the caller
@@ -1202,15 +1158,16 @@ pub fn paint_playing_backdrop(frame: &mut Frame<'_>, art: &SceneArt) {
 }
 
 /// Paint staged gameplay art around the highway: the behind-highway
-/// scene first (`Playing_BG.ojs` plus the `Note_BG` siblings — see
-/// `avatar::PLAYING_BEHIND_SPRITES`), clipped clear of the lane
-/// columns and the HUD ink, then the static backdrop panels
-/// (`Playing_Menu.ojs`, the life/jam edge gauges, the level plate)
-/// and the bound gauges and buttons (`State_Playing.bnd` ordinals
-/// 1–17) on top. Lanes stay uncovered and notes, gauges, and UI ink
-/// keep their top slot.
+/// scene first (`Playing_BG<stage>.ojs` plus the `Note_BG` siblings —
+/// see `avatar::PLAYING_BEHIND_SPRITES`), clipped only around the
+/// lane columns per the exe paint order (the backdrop sits at the
+/// bottom; staged gauges, captions, and the tally strip paint over
+/// it), then the static backdrop panels (`Playing_Menu.ojs`, the
+/// life/jam edge gauges, the level plate) and the bound gauges and
+/// buttons (`State_Playing.bnd` ordinals 1–17) on top. Lanes stay
+/// uncovered and notes keep their top slot.
 pub fn paint_playing_overlay(frame: &mut Frame<'_>, art: &SceneArt) {
-    let exclusions = playing_backdrop_exclusions(frame.w, frame.h);
+    let exclusions = playing_lane_exclusions(frame.w, frame.h);
     paint_behind_placements(frame, &art.placements, &art.figures, &exclusions);
     paint_foreground_placements(frame, &art.placements, &art.figures);
 }
@@ -1725,16 +1682,18 @@ mod paint_tests {
         assert_eq!(buf[0], pack_xrgb(0x0A, 0x0A, 0x0A));
     }
 
-    /// Behind scene with red pixels at the native venue anchor
-    /// (`Playing_BG.ojs` sweeps `x204` rightward, clear of the
-    /// lanes) plus one lane-column pixel so clipping is observable.
+    /// Behind scene with red pixels across the frame: one in a lane
+    /// column (10,100), the venue body box (204,100), and the former
+    /// HUD-zone cutouts — judgement band row (400,447), peer-stack
+    /// corner (760,4), jam-bar row (600,540) — so the exe-order rule
+    /// is observable: only lane columns stay clear.
     fn venue_backdrop_art() -> SceneArt {
         let mut venue = AvatarFigure::default();
-        for dx in [10, 204, 400] {
+        for (dx, dy) in [(10, 100), (204, 100), (400, 447), (760, 4), (600, 540)] {
             venue.push_layer(FigureLayer {
                 image: Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap(),
                 dx,
-                dy: 100,
+                dy,
                 colorkey: 0xFFFF,
             });
         }
@@ -1755,10 +1714,11 @@ mod paint_tests {
     }
 
     #[test]
-    fn playing_overlay_keeps_lanes_clear_of_behind_scene() {
-        // Right-side venue pixels show the scene art; the lane
-        // column, the score corner, the judgement band, and the
-        // peer stack keep their highway ink.
+    fn playing_overlay_keeps_only_the_lanes_clear_of_behind_scene() {
+        // Exe paint order: the backdrop sits at the bottom (applier
+        // `0x4e7850`, `BACK1` first), so no HUD cutouts remain — the
+        // art fills the former score/judgement/peer/jam zones while
+        // the lane column alone keeps its highway ink.
         let art = venue_backdrop_art();
         let mut buf = vec![0u32; 800 * 600];
         let mut frame = Frame {
@@ -1769,11 +1729,11 @@ mod paint_tests {
         PlayingView::default().paint(&mut frame, &HighwayGeometry::centered(800, 600));
         paint_playing_overlay(&mut frame, &art);
         let highway = pack_xrgb(0x0A, 0x0A, 0x0A);
-        assert_eq!(buf[100 * 800 + 400], pack_xrgb(255, 0, 0));
         assert_eq!(buf[100 * 800 + 10], highway);
-        assert_eq!(buf[16 * 800 + 16], highway);
-        assert_eq!(buf[447 * 800 + 400], highway);
-        assert_eq!(buf[4 * 800 + 760], highway);
+        assert_eq!(buf[100 * 800 + 204], pack_xrgb(255, 0, 0));
+        assert_eq!(buf[447 * 800 + 400], pack_xrgb(255, 0, 0));
+        assert_eq!(buf[4 * 800 + 760], pack_xrgb(255, 0, 0));
+        assert_eq!(buf[540 * 800 + 600], pack_xrgb(255, 0, 0));
     }
 
     #[test]
@@ -1793,7 +1753,7 @@ mod paint_tests {
         );
         assert_eq!(buf[100 * 800 + 10], pack_xrgb(255, 0, 0));
         assert_eq!(buf[100 * 800 + 204], pack_xrgb(255, 0, 0));
-        assert_eq!(buf[100 * 800 + 400], pack_xrgb(255, 0, 0));
+        assert_eq!(buf[447 * 800 + 400], pack_xrgb(255, 0, 0));
         PlayingView::default().paint(
             &mut Frame {
                 buf: &mut buf,
