@@ -118,8 +118,63 @@ missing-archive fallbacks).
    (`o2jam-render`), `present_clears_only_bars_over_stale_pixels`
    (`o2jam-shell`). The exact `Flip` call site stays open
    (claims-render OPEN 1).
-2. Sprite-less control paint (text/button/image with no art or rect).
+2. Sprite-less control paint — TRACED but UNPINNED (stays OPEN):
+   `STATE_CHANNEL` stages 49 art-less controls (self `0x12000000` gates
+   out at `0x48A134`, ev `9e526b62…`; bare `BOUND` skips the bind so
+   rects are all-zero, but Draw ignores rects — anchor-based per
+   ui-draw/claims-render). Factory `0x48B2D0` (mask `0x48B30A`,
+   ev `1be2d784…`) covers all five channel second-bytes
+   (`0x10` image ×1, `0x20` button ×9, `0x01` toggle ×10,
+   `0x50` number/image-family ×20, `0x40` text ×10). Class→Draw
+   join is offset-only (vftable slot 4 = base+`0x10`, COL→TD names
+   at file `0x27e3a8`–`0x27e8e0`, no new dossier): `CCImageBox`
+   `0x50a890` (vft `0x64bf54`, ev `cc0942ba…`), `CCButton`
+   `0x4f60c0` (vft `0x64b95c`), `CCTextBox` `0x50f280` (vft
+   `0x64c1b4`), `CCListBox` `0x50bbe0`, scroll `0x50e320`, plus
+   `CCBtn*` Draws (`0x52a0e0`/`0x526ed0`/`0x520f70`/`0x523990`/
+   `0x524430`/`0x5297a0`/`0x51ebe0`). Sprite-driven Draws call
+   stagers `0x42fc70`/`0x42fc10`, rect getter `0x548640`, frame
+   `0x42f5a0`, with zero GDI imports in range — art-less means
+   zero pixels. No default box: `Rectangle` (IAT `0x63f058`,
+   sites file `0x114daa`/`0x115274`/`0x1158f9`/`0x11625b`) and
+   the `CreateSolidBrush`/`DrawTextA` cluster sit only in the
+   tooltip/message region (file `0x1137b0`–`0x1167b0` around
+   `CCToolTip::Draw` `0x5137b0`), unreachable from the channel
+   arms. Text Draw exists — `CCTextBox::Draw` `0x50f280` calls
+   font helpers `0x42c360`/`0x42c650`/`0x42c730`/`0x42c8a0`
+   (owners of the `TextOutA` IAT `0x63f074` sites file
+   `0x2c532`/`0x2c7df`/`0x2c854` and `DrawTextA` IAT `0x63f468`
+   sites file `0x2c6ec`+) — but the caption source for the 10
+   `TITLE` entries (`0x1240001E`–27) is unpinned: the entry-`+0x04`
+   string consumer is untraced (ui-loader OPEN 4), and the
+   grade-string precedent (zero refs, claims B4) shows exe text can
+   be unbound. Render loop `0x5dec30` (ev `ff581cfa…`) plus the
+   child-array paint (`0x50dea0`/`0x50ddf0` → vtable `+0x24`,
+   claims-render verdict 3) draw stored controls only. So:
+   imageless image/button/toggle/number paint nothing; TEXT paints
+   its bound runtime string or nothing — unpinned. To pin: trace
+   the wrapper first half (entry `+0x04` → control text field) and
+   the string-field read inside `0x50f280`.
 3. Dialog host mounting the code-fetched select bar
    (`DIALOG_CHANNEL_INFO`/`CDChannelInfo` index path; `0x4ED650` excluded
    as the fetch site but its own behavior is unread — ui-loader OPEN 2).
 4. `CWindow`/`CDialogBase` default fill, if any (ui-draw OPEN 3).
+5. Loading bar/caption geometry — OPEN, negative result (placeholders
+   kept): `MusicLoading.ojs` (`Playing1.opi` slot 39, 960,028 B) is
+   one sprite-55 body, single 800x600 layer at anchor (0,0),
+   colorkey `0x0` — no bar/caption sub-rect exists in the art.
+   The `0x4e47a0` dossier (`ev_68d920c2…`, file `0xe47a0`) carries
+   three font creations (`Trebuchet MS` at VA `0x64ae78`, `Arial`
+   at `0x64a320`, Korean face at `0x64407c`), the overlay mount
+   (`MusicLoading.ojs` at VA `0x64ae64` via `0x4795a0`/`0x40d3d0`/
+   `0x479750`), the song-table walk (stride `0x1b4`), and the song
+   clock — no literal bar/caption rect. Adjacent bar bodies belong
+   to other dialogs (`Loading_Sign.ojs` 134x37, `Wait_Downloding_Bar.ojs`
+   65x7 at (0,0), `Payment_BackLoading.ojs` 119x23 at (619,529),
+   `AlbumLoading_Panel.ojs` 197x179 at (410,210)) — none is the
+   loading-gate fill. Shell rule: `loading_track_origin` (`w/4, h/2-8`),
+   `loading_track_width` (`w/2`), `loading_song_origin` (`w/4, h/2+12`)
+   stay honestly labeled OPEN placeholders (bnd-audit 35); only the
+   walk fraction and the `TITLE - ARTIST` caption are live. Test:
+   `loading_bar_geometry_stays_open_placeholder` pins the placeholder
+   formula so any future grounding must update it with evidence.
