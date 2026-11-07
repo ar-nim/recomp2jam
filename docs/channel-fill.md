@@ -262,7 +262,29 @@ here).
    (VA `0x64816c`, file `0x91bee`) and room format pushes — pinned
    string-to-`+0x60` flow, trio-free; dialog-open `0x4ED650` (file
    `0xed650`..`0xee320`) calls `0x50f520` at file `0xeddf0` beside its
-   8 trio sites — pinned string-plus-style join in one builder. Net
+   8 trio sites — pinned string-plus-style join in one builder. Target of
+   that sole `0x50f520` site PINNED (offset-only E8/LE32 scans, no new
+   dossier): the receiver is the synthetic TEXT `0x1b400007` built just
+   above — `0x11c` memset (file `0xedd5f`), code store (file `0xedd67`),
+   create `0x48a620` (file `0xedd80`) — cached at `this+0x3f4` (store file
+   `0xedd8b`), null-guarded (files `0xedd91`–`0xedd9e`), colored `0x9a9a9a`
+   via `0x50f680` (file `0xeddb5`), then string-set (file `0xeddf0`, sole
+   `0x50f520` site in the builder; SSO-tested c_str of the `[-0x160]`
+   field, file `0xeddba`). The `0x400000` arm pins it to text ctor
+   `0x50f160`, so the bytes land in the `+0x60` buffer the slot-9 painter
+   `0x50f320` reads: the join paints. Host correction: `0x4ED650` is not
+   a dialog opener. It selects archive slot 2 (file `0xed681`,
+   `Playing1.opi`), mounts eight `Playing1.opi`-only bodies
+   (`Playing_Exit.ojs` VA `0x64b450` at file `0xed6c8`, plus chat-window,
+   time-bar, bp-bar, hottime, game-over, and maxcombo bodies — all present
+   in `Playing1.opi`, zero in `Interface1.opi`), shares the synthetic-`0x1b`
+   idiom with playing applier `0x4F1140` (same push at file `0xf11a1`),
+   has zero direct E8 callers, and sits at table VA `0x64b404` (file
+   `0x24b404`; ctor-installed starts nearby at VA `0x64b38c`/`0x64b39c`,
+   refs files `0xeb64a`/`0xeb654`/`0xeb83c`/`0xeb846`). Owning playing
+   class and runtime caption bytes (a `0x5f2450` format product over
+   builder members) stay OPEN; `ui-loader.md` OPEN 2's "dialog-open" label
+   is refuted, noted here. Net
    slot-9 chain is string-negative: helper `0x4b9ab0` (file `0xb9ab0`..
    `0xb9dc0`) 4 trio calls plus zero `0x50f520`, `0x4aef80` (file
    `0xaef80`..`0xaefe0`) zero of both, `0x52af70` (file `0x12af70`..
@@ -300,8 +322,9 @@ here).
    `TITLE` targets are never code-addressed; captions, if any, must
    arrive via cached pointers or array iteration, both untraced.
 3. Dialog host mounting the code-fetched select bar
-   (`DIALOG_CHANNEL_INFO`/`CDChannelInfo` index path; `0x4ED650` excluded
-   as the fetch site but its own behavior is unread — ui-loader OPEN 2).
+   (`DIALOG_CHANNEL_INFO`/`CDChannelInfo` index path; `0x4ED650` is since
+   read — a playing-screen builder, not a dialog host candidate — see the
+   OPEN 2 join; `ui-loader.md` OPEN 2 itself untouched).
 4. `CWindow`/`CDialogBase` default fill, if any (ui-draw OPEN 3).
 5. Loading bar/caption geometry — OPEN, negative result (placeholders
    kept): `MusicLoading.ojs` (`Playing1.opi` slot 39, 960,028 B) is

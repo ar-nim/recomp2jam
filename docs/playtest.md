@@ -1830,3 +1830,41 @@ were expected.
   passed; identical to the setter-head baseline, docs-only delta,
   0 failures). No lint findings. No commits, no pushes.** This sweep
   touched only `docs/playtest.md`.
+
+## Regression sweep — 2026-11-07 22:43 UTC+8 (HEAD `2c00969`, tree clean)
+
+Live re-proof on the captions-head. Covers the feat commit landed after the
+strings-head baseline `a3473fc`: paint live text captions (`6776b31`:
+waiting musicname/music caption paint in `game.rs`/`paint.rs` resolving the
+catalog title with song-id fallback), plus the docs log (`2c00969`).
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1271 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 7, file 149, game 92, net 346,
+  render 73, shell 460, real_art 7, scenes 22, recomp2jam 96
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, no warnings.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.60 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`22:42:48 +08:00`):
+  `Authorize session` → `Get channel list: [0]` →
+  `Enter channel: [0/00]` → `Get character info: [tester]` →
+  `Create room: songflow` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure stack on room delete; a second session walked
+  `Get channel list` → `Enter channel` → `Get room list` →
+  `Get character info`).
+- **Verdict: no regression — suite is green on the captions-head (1271
+  passed; +5 vs the 1266 strings-head baseline, all shell 455 → 460
+  from the live music-caption/musicname tests, all other targets
+  unchanged, 0 failures). No lint findings. No commits, no pushes.**
+  This sweep touched only `docs/playtest.md`.
