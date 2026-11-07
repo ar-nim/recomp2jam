@@ -5,12 +5,12 @@
 //! `O2mediaLogo.ojs`, channel/room/waiting/playing/loading/result blocks)
 //! through the scene kit in [`crate::avatar`] (`load_scene_figures`,
 //! `bind_scene_rects`, `anchor_placements`, `paint_scene_figures`).
-//! Rect ordinal `(code & 0xFFF) − 1` lays out each entry (Playing: the
+//! Rect ordinal `(code & 0xFFF) − 1` pairs each entry (Playing: the
 //! `EXIT`..`VOLUME` run, entries 213–229, ordinals 1–17); every layer
-//! paints 1:1 at its rect origin — plus its record anchor only while
-//! no rect claims the entry (7.55 records store absolute anchors that
-//! duplicate their bound rects) — the rect positions, never clips —
-//! in file order with the background first.
+//! paints 1:1 at its record anchor scaled into the frame — the
+//! verified draw chain (the blit adds the anchor to the view
+//! position; `.bnd` rects are input bounds, never read at draw) — in
+//! file order with the background first.
 //! Number-font bodies (`Room_Number.ojs` and kin) paint live values
 //! digit by digit; entry codes gate visibility by state byte. Bare
 //! [`paint_screen`] keeps the flat-color fallback while no art is
@@ -1645,7 +1645,7 @@ mod paint_tests {
                 ("Playing_Menu.ojs".to_owned(), menu),
                 (
                     "Playing_Exit.ojs".to_owned(),
-                    anchored_pixel(0, 0, &[0x1F, 0x00]),
+                    anchored_pixel(751, 550, &[0x1F, 0x00]),
                 ),
             ]),
         };
@@ -1785,7 +1785,7 @@ mod paint_tests {
         });
         art.figures.insert(
             "Playing_Exit.ojs".to_owned(),
-            anchored_pixel(0, 0, &[0x1F, 0x00]),
+            anchored_pixel(400, 100, &[0x1F, 0x00]),
         );
         let mut buf = vec![0u32; 800 * 600];
         let mut frame = Frame {

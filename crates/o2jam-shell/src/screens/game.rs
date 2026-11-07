@@ -244,6 +244,26 @@ impl ScreenGame {
         self.arena_stage
     }
 
+    /// Wire key mode of the joined room (7-key while none is joined):
+    /// the Playing art families split members by it
+    /// (`avatar::PlayingArtMode`).
+    #[must_use]
+    pub fn room_key_mode(&self) -> u8 {
+        self.waiting
+            .as_ref()
+            .map_or(o2jam_net::KeyMode::SevenKeys as u8, |room| room.key_mode)
+    }
+
+    /// Whether the joined room plays team/versus (`Live`); solo
+    /// (`Normal`) otherwise, including while no room is joined.
+    #[must_use]
+    pub fn room_team_play(&self) -> bool {
+        self.waiting
+            .as_ref()
+            .and_then(|room| o2jam_net::GameMode::from_u8(room.game_mode).ok())
+            .is_some_and(|mode| mode == o2jam_net::GameMode::Live)
+    }
+
     /// Remember the host song choice (`SetRoomMusic` 4000 body);
     /// Waiting paints its title and difficulty panel, and the chosen
     /// chart's difficulty byte selects the playing life-bar deltas.
@@ -1624,21 +1644,22 @@ mod game_tests {
         let buf = paint_playing_frame(&mut game, 800, 600);
         assert_eq!(game.screen(), Screen::Playing);
         let layout = AvatarLayout::for_frame(800, 600);
-        // Worn figure lands at the scene origin (red pixel after the
-        // transparent one).
-        let (fx, fy) = layout.figure_origin;
+        // Worn figure extent-centers in the seat: the 2x1 sprite's
+        // red pixel (layer x 1) lands right of the centered box origin.
         assert_eq!(
-            buf[fy as usize * 800 + fx as usize + 1],
-            pack_xrgb(255, 0, 0)
+            buf[310 * 800 + 457],
+            pack_xrgb(255, 0, 0),
+            "figure extent-centers in the seat"
         );
-        // Life bar shows full; level, song, VOL, counts, EXIT ink white.
-        assert_eq!(buf[56 * 800 + 340], pack_xrgb(0x20, 0xE0, 0x20));
+        // Life gauge shows full amber; plate, speed, song, VOL, counts,
+        // EXIT ink white.
+        assert_eq!(buf[215 * 800 + 400], pack_xrgb(255, 180, 16));
         for origin in [
             layout.level_origin,
-            layout.song_origin,
+            layout.speed_origin,
+            layout.title_origin,
             layout.volume_origin,
-            layout.counts_origin,
-            layout.strip_title_origin,
+            layout.counts_origins[0],
             layout.exit_origin,
         ] {
             assert!(white_near(&buf, 800, 600, origin));
@@ -1656,12 +1677,12 @@ mod game_tests {
         game.set_player(43, "HOST");
         let buf = paint_playing_frame(&mut game, 800, 600);
         let layout = AvatarLayout::for_frame(800, 600);
-        // No figure: the scene origin keeps the highway backdrop while
-        // the captions still paint.
-        let (fx, fy) = layout.figure_origin;
+        // No figure: the seat center keeps the highway backdrop while
+        // the plate still paints.
         assert_eq!(
-            buf[fy as usize * 800 + fx as usize],
-            pack_xrgb(0x0A, 0x0A, 0x0A)
+            buf[310 * 800 + 456],
+            pack_xrgb(0x0A, 0x0A, 0x0A),
+            "empty seat shows the backdrop"
         );
         let (lx, ly) = layout.level_origin;
         assert!(white_near(&buf, 800, 600, (lx, ly)));
@@ -1678,10 +1699,11 @@ mod game_tests {
         game.set_selected_music(waiting_song_selection());
         walk_to_playing(&mut game);
         let buf = paint_playing_frame(&mut game, 800, 600);
-        // `M757` catalog title with speed X2 (code 3): the song line inks.
+        // `M757` catalog title with speed X2 (code 3): the strip lines ink
+        // at the bound text rects.
         let layout = AvatarLayout::for_frame(800, 600);
-        assert!(white_near(&buf, 800, 600, layout.song_origin));
-        assert!(white_near(&buf, 800, 600, layout.strip_title_origin));
+        assert!(white_near(&buf, 800, 600, layout.speed_origin));
+        assert!(white_near(&buf, 800, 600, layout.title_origin));
     }
 
     /// Paint Playing past the (5000 ms) note's bad window, rating the
@@ -1709,7 +1731,7 @@ mod game_tests {
         walk_to_playing(&mut game);
         let buf = paint_playing_after_timeout_miss(&mut game);
         // Hard Miss drains 30 (Easy would drain 50); the bar paints
-        // the live 970/1000 fill (top row empty, rows below green).
+        // the live 970/1000 amber fill (top row empty, rows below lit).
         assert_eq!(game.playing.score().life.life(), 1000 - 30);
         let bar = AvatarLayout::for_frame(800, 600).life_bar;
         assert_eq!(
@@ -1718,7 +1740,7 @@ mod game_tests {
         );
         assert_eq!(
             buf[(bar.y + 1) as usize * 800 + bar.x as usize],
-            pack_xrgb(0x20, 0xE0, 0x20)
+            pack_xrgb(255, 180, 16)
         );
     }
 
