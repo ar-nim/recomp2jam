@@ -9,7 +9,7 @@
 //! native 800x600 (`docs/bnd-semantics.md`, `docs/bnd-audit.md`), via
 //! the shared [`scale_rect_to_frame`] scaler.
 
-use crate::avatar::{strided_sprite55, AvatarFigure};
+use crate::avatar::{strided_sprite55, AvatarFigure, FigureLayer};
 use o2jam_game::{
     lane_effect::{lane_map_for_modifier_byte, SkillRing},
     CoolStreak, HoldSpan, HoldState, Judgement, LaneMap, LifeBar, LongNoteBonus, MeasureReshuffle,
@@ -228,6 +228,25 @@ pub const RECEPTOR_FRAME_MS: u64 = 45;
 /// the variant with `rand()%2+1`; this pins the deterministic stage 1
 /// variant 1 body.
 pub const HIT_BURST_SPRITE: &str = "Note_Click1_1.ojt";
+/// Staged tap-effect `.oja`: the bare-arm body of the `_Note_Click`
+/// runtime ref (applier `0x4e8212`, `docs/stage-bga.md`; the in-song
+/// arm keeps the stage-numbered [`HIT_BURST_SPRITE`] `.ojt` as the
+/// fallback body). Six shrinking ring frames 144x143..39x39 whose
+/// negative centred anchors mark frame-centre draw points — the
+/// staged burst already paints from the receptor-pad centre.
+pub const HIT_BURST_OJA_SPRITE: &str = "Note_Click.oja";
+/// Staged jam-effect `.oja`: the bare-arm body of
+/// `_Playing_Effect_Jam` (same applier arm, `docs/stage-bga.md`).
+/// Ten 300x300 flash frames at anchor `(0, 0)`; the exe draw point
+/// is untraced, so the staged flash centers on the highway at the
+/// judgement line.
+pub const JAM_EFFECT_SPRITE: &str = "Playing_Effect_Jam.oja";
+/// Staged hold-ring `.oja`: the literal exe stem `LongNote_Effect.oja`
+/// (claims C7, file `0x24b26c`) — byte-identical to
+/// [`HIT_BURST_OJA_SPRITE`], so the same six ring frames animate the
+/// held span (the static [`LONG_NOTE_EFFECT_SPRITE`] frame 0 stays
+/// the fallback body).
+pub const HOLD_RING_SPRITE: &str = "LongNote_Effect.oja";
 /// Staged score-digit body: `Scroe.ojs` (archive spelling), ten raw
 /// ~11x21 frames in digit order 0..=9 (verified on 7.55
 /// `Playing1.opi`, archive slot 557; every frame anchors at (0,0)).
@@ -512,7 +531,9 @@ pub struct PlaySkin {
     lane_beams: [Vec<SkinSprite>; HIGHWAY_LANES as usize],
     receptors: [Vec<SkinSprite>; HIGHWAY_LANES as usize],
     long_effect: Option<SkinSprite>,
+    hold_rings: Vec<SkinSprite>,
     hit_bursts: Vec<SkinSprite>,
+    jam_flash: Vec<SkinSprite>,
     score_font: Option<DigitFont>,
     combo_font: Option<DigitFont>,
     play_time_font: Option<DigitFont>,
@@ -525,6 +546,8 @@ impl PlaySkin {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.long_effect.is_none()
+            && self.hold_rings.is_empty()
+            && self.jam_flash.is_empty()
             && self.hit_bursts.is_empty()
             && self.score_font.is_none()
             && self.combo_font.is_none()
@@ -581,10 +604,51 @@ impl PlaySkin {
         }
     }
 
+    /// Jam-flash frame count ([`JAM_EFFECT_SPRITE`]).
+    #[must_use]
+    pub fn jam_flash_frame_count(&self) -> usize {
+        self.jam_flash.len()
+    }
+
+    /// Jam-flash frame for the age since the jam level grant: one
+    /// step per [`RECEPTOR_FRAME_MS`], ending after the staged frame
+    /// count (the flash plays once, it never freezes on the last
+    /// frame; `None` while unstaged or past the window).
+    #[must_use]
+    pub fn jam_flash_frame(&self, flash_age_ms: u64) -> Option<&SkinSprite> {
+        let frames = u64::try_from(self.jam_flash.len()).unwrap_or(0);
+        if flash_age_ms >= frames.saturating_mul(RECEPTOR_FRAME_MS) {
+            return None;
+        }
+        self.jam_flash
+            .get(stepped_frame(self.jam_flash.len(), flash_age_ms))
+    }
+
     /// Long-note release effect.
     #[must_use]
     pub fn long_effect(&self) -> Option<&SkinSprite> {
         self.long_effect.as_ref()
+    }
+
+    /// Hold-ring frame count ([`HOLD_RING_SPRITE`]).
+    #[must_use]
+    pub fn hold_ring_frame_count(&self) -> usize {
+        self.hold_rings.len()
+    }
+
+    /// Hold-ring frame for a hold age ([`HOLD_RING_SPRITE`]): the
+    /// steady last frame while `hold_age_ms` is `None`, then one step
+    /// per [`RECEPTOR_FRAME_MS`], clamped to the last (`None` while
+    /// the rings are unstaged — the static `.ojt` effect and the
+    /// procedural tail keep their fallback slots).
+    #[must_use]
+    pub fn hold_ring_frame(&self, hold_age_ms: Option<u64>) -> Option<&SkinSprite> {
+        match hold_age_ms {
+            None => self.hold_rings.last(),
+            Some(age) => self
+                .hold_rings
+                .get(stepped_frame(self.hold_rings.len(), age)),
+        }
     }
 
     /// Hit-burst frame count ([`HIT_BURST_SPRITE`] bodies stage one
@@ -819,8 +883,16 @@ impl PlaySkin {
         if let Some(body) = archive_body(archive, LONG_NOTE_EFFECT_SPRITE) {
             skin.long_effect = lane_sprite(body, 0);
         }
-        skin.hit_bursts = archive_body(archive, HIT_BURST_SPRITE)
-            .map(skin_frames)
+        skin.hold_rings = archive_body(archive, HOLD_RING_SPRITE)
+            .map(oja_skin_frames)
+            .unwrap_or_default();
+        skin.jam_flash = archive_body(archive, JAM_EFFECT_SPRITE)
+            .map(oja_skin_frames)
+            .unwrap_or_default();
+        skin.hit_bursts = archive_body(archive, HIT_BURST_OJA_SPRITE)
+            .map(oja_skin_frames)
+            .filter(|frames| !frames.is_empty())
+            .or_else(|| archive_body(archive, HIT_BURST_SPRITE).map(skin_frames))
             .unwrap_or_default();
         skin.score_font = digit_font(archive, SCORE_FONT_SPRITE);
         skin.combo_font = digit_font(archive, COMBO_FONT_SPRITE);
@@ -933,6 +1005,28 @@ fn strided_skin_frames(body: &[u8]) -> Vec<SkinSprite> {
         }
     }
     frames
+}
+
+/// `.oja` effect frames of one body in stored order: every frame's
+/// row-group pixel plane pastes onto its full `w*h` canvas at the
+/// stored transparent word 0 ([`FigureLayer::from_oja_frame`] — one
+/// paste, shared with the scene figures). Empty unless the body
+/// decodes as a `.oja` container. Anchors stay on the layer: the
+/// centred-effect records carry negative frame-centre anchors, and
+/// the lane-centred effect paints already draw from the frame
+/// centre, so a [`SkinSprite`] carries the pixels alone.
+fn oja_skin_frames(body: &[u8]) -> Vec<SkinSprite> {
+    let Ok(animation) = o2jam_file::parse_oja55(body) else {
+        return Vec::new();
+    };
+    animation
+        .frames
+        .iter()
+        .map(|frame| {
+            let layer = FigureLayer::from_oja_frame(frame);
+            SkinSprite::new(layer.image, layer.colorkey)
+        })
+        .collect()
 }
 
 /// One HUD number font from an archive body: ten digit frames in
@@ -1362,6 +1456,9 @@ struct PendingNote {
     /// Display-only beam flag ("key down on this struck hold"); never
     /// read by timing or scoring — the verified hold flag never clears.
     holding: bool,
+    /// Hold strike stamp in song ms (visual ring animation anchor;
+    /// never read by timing or scoring).
+    holding_since: Option<u64>,
     tail_judged: bool,
     /// Verified hold machine for a long note (`None` on taps).
     hold: Option<HoldState>,
@@ -1377,6 +1474,7 @@ impl PendingNote {
             sample,
             judged: false,
             holding: false,
+            holding_since: None,
             tail_judged: true,
             hold: None,
         }
@@ -1391,6 +1489,7 @@ impl PendingNote {
             sample,
             judged: false,
             holding: false,
+            holding_since: None,
             tail_judged: false,
             hold: Some(HoldState::new(span)),
         }
@@ -1435,6 +1534,9 @@ pub struct LivePlay {
     /// Last strike per lane in song ms (visual hit-burst only; scoring
     /// and timing never read this).
     lane_flash: [Option<u64>; HIGHWAY_LANES as usize],
+    /// Jam level grant stamp in song ms (visual flash only; scoring
+    /// and timing never read this).
+    jam_flash_at: Option<u64>,
     /// Display-only avatar scene captions (level, song, volume).
     scene: AvatarScene,
     /// Slots the 4015 peer broadcast has reported: occupancy for the
@@ -1460,6 +1562,7 @@ impl Default for LivePlay {
             last_word: None,
             sounds: Vec::new(),
             lane_flash: [None; HIGHWAY_LANES as usize],
+            jam_flash_at: None,
             scene: AvatarScene::default(),
             peer_seen: [false; PEER_SLOT_COUNT],
         }
@@ -1496,6 +1599,7 @@ impl LivePlay {
             last_word: None,
             sounds: Vec::new(),
             lane_flash: [None; HIGHWAY_LANES as usize],
+            jam_flash_at: None,
             scene: AvatarScene::default(),
             peer_seen: [false; PEER_SLOT_COUNT],
         }
@@ -1535,6 +1639,7 @@ impl LivePlay {
             last_word: None,
             sounds: Vec::new(),
             lane_flash: [None; HIGHWAY_LANES as usize],
+            jam_flash_at: None,
             scene: AvatarScene::default(),
             peer_seen: [false; PEER_SLOT_COUNT],
         }
@@ -1755,6 +1860,7 @@ impl LivePlay {
         self.sounds.push(self.pending[i].sample);
         let judgement = self.strike_record(i, now_ms);
         self.pending[i].holding = is_hold;
+        self.pending[i].holding_since = is_hold.then_some(now_ms);
         Some(judgement)
     }
 
@@ -1775,6 +1881,7 @@ impl LivePlay {
         for note in &mut self.pending {
             if note.lane == lane {
                 note.holding = false;
+                note.holding_since = None;
             }
         }
         let struck = self
@@ -1895,9 +2002,13 @@ impl LivePlay {
     }
 
     fn rate(&mut self, judgement: Judgement) {
+        let level_before = self.score.jam.level();
         self.streak.note(judgement, &mut self.pills);
         self.score.apply_rated(judgement, &mut self.pills);
         self.last_word = Some((judgement, self.now_ms));
+        if self.score.jam.level() > level_before {
+            self.jam_flash_at = Some(self.now_ms);
+        }
     }
 
     /// Stamp a visual-only hit flash on one lane (never read by
@@ -1942,26 +2053,35 @@ impl LivePlay {
             if top >= bottom || !self.tail_shown(frame, geom, top) {
                 continue;
             }
-            self.paint_tail_span(frame, geom, note.lane, note.holding, top, bottom);
+            self.paint_tail_span(frame, geom, note, top, bottom);
         }
     }
 
     /// One tail span: the staged kit lane beam on held heads (the
     /// exe's held lane light, [`LANE_BEAM_STEM`]), then the staged
-    /// long effect; the staged release beam on untouched holds, else
-    /// the procedural [`TAIL_BEAM`] core.
+    /// `.oja` hold rings stepping from the hold strike
+    /// ([`HOLD_RING_SPRITE`]), then the staged static long effect; the
+    /// staged release beam on untouched holds, else the procedural
+    /// [`TAIL_BEAM`] core.
     fn paint_tail_span(
         &self,
         frame: &mut Frame<'_>,
         geom: &HighwayGeometry,
-        lane: u8,
-        holding: bool,
+        note: &PendingNote,
         top: i32,
         bottom: i32,
     ) {
-        if holding {
+        let lane = note.lane;
+        if note.holding {
             if let Some(beam) = self.view.skin.lane_beam_frame(lane, None) {
                 beam.paint_bottom_anchored(frame, geom, lane, geom.line_y);
+                return;
+            }
+            let hold_age_ms = note
+                .holding_since
+                .map(|since| self.now_ms.saturating_sub(since));
+            if let Some(ring) = self.view.skin.hold_ring_frame(hold_age_ms) {
+                ring.paint_bottom_anchored(frame, geom, lane, geom.line_y);
                 return;
             }
             if let Some(art) = self.view.skin.long_effect() {
@@ -2164,6 +2284,32 @@ impl LivePlay {
         );
     }
 
+    /// Jam flash over the lanes (staged [`JAM_EFFECT_SPRITE`] frames):
+    /// plays once per jam level grant, one frame per
+    /// [`RECEPTOR_FRAME_MS`] from the grant stamp, centered on the
+    /// highway at the judgement line (the 300x300 frames anchor
+    /// `(0, 0)` in the container; the exe draw point is untraced, so
+    /// the staged flash rides the lane columns it effects — the blit
+    /// clips to the frame). Ignores the sight-ring curtain like the
+    /// combo glow (per-hit effect overlays). Staged-only: without the
+    /// body nothing paints (the gauge keeps its bars and digits).
+    fn paint_jam_flash(&self, frame: &mut Frame<'_>, geom: &HighwayGeometry, now_ms: u64) {
+        let Some(stamped) = self.jam_flash_at else {
+            return;
+        };
+        let age = now_ms.saturating_sub(stamped);
+        let Some(flash) = self.view.skin.jam_flash_frame(age) else {
+            return;
+        };
+        let (w, h) = flash.extent();
+        let center_x = Self::highway_center_x(geom);
+        flash.paint_at(
+            frame,
+            center_x - i32::try_from(w).unwrap_or(0) / 2,
+            geom.line_y - i32::try_from(h).unwrap_or(0) / 2,
+        );
+    }
+
     /// Peer life bars: one staged 46x8 gauge per 4015 member slot,
     /// stacked from the top-right corner, each filled green bottom-up
     /// over a dark-red empty bar.
@@ -2305,6 +2451,7 @@ impl LivePlay {
         self.view.paint_curtained(frame, geom, self.curtain);
         self.paint_hold_tails(frame, geom);
         self.paint_hit_bursts(frame, geom, now_ms);
+        self.paint_jam_flash(frame, geom, now_ms);
         self.paint_peer_bars(frame);
         self.paint_jam_gauge(frame);
         self.paint_panel_strip(frame);
@@ -2879,6 +3026,349 @@ mod live_play_tests {
         assert_eq!(jam_fill_rows(1, 50), 1);
         assert_eq!(jam_fill_rows(50, 24), 24);
         assert_eq!(jam_fill_rows(60, 24), 24);
+    }
+
+    /// One row span of a synthetic `.oja` pixel plane:
+    /// `[u16 width][u16 x][u16 y]` + `width` RGB555 words + the zero
+    /// terminator word (the verified plane layout).
+    fn oja_span(x: u16, y: u16, pixels: &[u16]) -> Vec<u8> {
+        let mut span = Vec::new();
+        span.extend_from_slice(&(pixels.len() as u16).to_le_bytes());
+        span.extend_from_slice(&x.to_le_bytes());
+        span.extend_from_slice(&y.to_le_bytes());
+        for word in pixels {
+            span.extend_from_slice(&word.to_le_bytes());
+        }
+        span.extend_from_slice(&0u16.to_le_bytes());
+        span
+    }
+
+    /// One synthetic `.oja` frame spec: record geometry plus the
+    /// pixel and alpha plane bytes.
+    type OjaFrameSpec<'a> = ((i16, i16, u16, u16), &'a [u8], &'a [u8]);
+
+    /// Synthetic `.oja` body: header + one 20-byte record per frame
+    /// (`x y w h` plus the chained `a = a + b + c` offsets), then each
+    /// frame's pixel plane and alpha plane (the `parse_oja55` layout).
+    fn oja55_body(frames: &[OjaFrameSpec<'_>]) -> Vec<u8> {
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&1u16.to_le_bytes());
+        blob.extend_from_slice(&o2jam_file::OJA_MAGIC.to_le_bytes());
+        blob.extend_from_slice(&(frames.len() as u16).to_le_bytes());
+        blob.extend_from_slice(&0u16.to_le_bytes());
+        let mut offset = 0u32;
+        let mut records = Vec::new();
+        for ((x, y, w, h), pixels, alpha) in frames {
+            records.push((
+                *x,
+                *y,
+                *w,
+                *h,
+                offset,
+                pixels.len() as u32,
+                alpha.len() as u32,
+            ));
+            offset += pixels.len() as u32 + alpha.len() as u32;
+        }
+        for (x, y, w, h, a, b, c) in records {
+            blob.extend_from_slice(&x.to_le_bytes());
+            blob.extend_from_slice(&y.to_le_bytes());
+            blob.extend_from_slice(&w.to_le_bytes());
+            blob.extend_from_slice(&h.to_le_bytes());
+            blob.extend_from_slice(&a.to_le_bytes());
+            blob.extend_from_slice(&b.to_le_bytes());
+            blob.extend_from_slice(&c.to_le_bytes());
+        }
+        for (_, pixels, alpha) in frames {
+            blob.extend_from_slice(pixels);
+            blob.extend_from_slice(alpha);
+        }
+        blob
+    }
+
+    /// Two one-row `.oja` burst frames (stored order, distinct inks).
+    fn burst_oja_body() -> Vec<u8> {
+        let plane0 = oja_span(0, 0, &[0x7FE0, 0x7FE0]);
+        let plane1 = oja_span(0, 0, &[0x03E0, 0x03E0]);
+        oja55_body(&[
+            ((-1, 0, 2, 1), &plane0, &[0xFF, 0xFF]),
+            ((0, 0, 2, 1), &plane1, &[0x80, 0x80]),
+        ])
+    }
+
+    #[test]
+    fn note_click_oja_frames_stage_the_hit_burst() {
+        // The `.oja` bare arm of `_Note_Click` wins the burst slot
+        // over the stage-1 variant-1 `.ojt` sibling: two stored ring
+        // frames, each plane pasted at its span onto the word-0-
+        // cleared canvas (the alpha planes stay out until a blended
+        // paint).
+        let ojt = strided55_body(&[(0, 0, 1, 1); 8], 1, &[0x7C00; 8]);
+        let archive = opi_blob(&[
+            ("Note_Click.oja", &burst_oja_body()),
+            ("Note_Click1_1.ojt", &ojt),
+        ]);
+        let skin = PlaySkin::from_archive(&archive).unwrap();
+        assert_eq!(skin.hit_burst_frame_count(), 2);
+        assert_eq!(
+            skin.hit_burst_frame(0).unwrap().image.words,
+            vec![0x7FE0, 0x7FE0]
+        );
+        assert_eq!(
+            skin.hit_burst_frame(RECEPTOR_FRAME_MS).unwrap().image.words,
+            vec![0x03E0, 0x03E0]
+        );
+    }
+
+    /// Three one-pixel `.oja` flash frames (stored order, distinct
+    /// inks) — the synthetic stand-in for the ten 300x300
+    /// `Playing_Effect_Jam.oja` frames.
+    fn jam_oja_body() -> Vec<u8> {
+        let mut frames = Vec::new();
+        for ink in [0x7FE0u16, 0x03E0, 0x001F] {
+            let plane = oja_span(0, 0, &[ink]);
+            frames.push(((0, 0, 1, 1), plane, vec![0xFFu8]));
+        }
+        let refs: Vec<OjaFrameSpec<'_>> = frames
+            .iter()
+            .map(|(geom, plane, alpha)| (*geom, plane.as_slice(), alpha.as_slice()))
+            .collect();
+        oja55_body(&refs)
+    }
+
+    #[test]
+    fn playing_effect_jam_oja_frames_stage_the_jam_flash() {
+        // The `.oja` bare arm of `_Playing_Effect_Jam` stages the jam
+        // flash: three stored frames step one per
+        // [`RECEPTOR_FRAME_MS`] and the flash ends after the staged
+        // frame count (it plays once, never freezing on the last
+        // frame). The body alone stages a skin.
+        let archive = opi_blob(&[("Playing_Effect_Jam.oja", &jam_oja_body())]);
+        let skin = PlaySkin::from_archive(&archive).unwrap();
+        assert_eq!(skin.jam_flash_frame_count(), 3);
+        assert_eq!(skin.jam_flash_frame(0).unwrap().image.words, vec![0x7FE0]);
+        assert_eq!(
+            skin.jam_flash_frame(RECEPTOR_FRAME_MS * 2)
+                .unwrap()
+                .image
+                .words,
+            vec![0x001F]
+        );
+        assert!(skin.jam_flash_frame(RECEPTOR_FRAME_MS * 3).is_none());
+    }
+
+    #[test]
+    fn jam_level_grant_flashes_the_staged_jam_effect() {
+        // A jam level grant (25 Cools fill the 50-progress level)
+        // plays the staged flash centered on the highway at the
+        // judgement line (highway center 8, line row 48 at 70x60):
+        // the flash pixel covers the judgement line, and the flash
+        // ends after the staged frame window.
+        let notes: Vec<(u8, u64, u32)> = (0..25u32)
+            .map(|i| (0, 1000 + u64::from(i) * 100, 7))
+            .collect();
+        let mut live = LivePlay::new(&notes);
+        for i in 0..25u32 {
+            assert_eq!(
+                live.strike_lane(0, 1000 + u64::from(i) * 100),
+                Some(Judgement::Cool)
+            );
+        }
+        // The 25 Cools fill the 50-progress level: the grant stamps
+        // the flash at the last strike.
+        assert_eq!(live.score().jam.level(), 1);
+        let mut baseline = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut baseline,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            3400,
+        );
+        assert_eq!(baseline[48 * 70 + 8], pack_xrgb(0xE0, 0xE0, 0xE0));
+        let archive = opi_blob(&[("Playing_Effect_Jam.oja", &jam_oja_body())]);
+        live.set_skin(PlaySkin::from_archive(&archive).unwrap());
+        let mut flashed = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut flashed,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            3400,
+        );
+        assert_eq!(flashed[48 * 70 + 8], solid_ink(0x7FE0));
+        let mut faded = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut faded,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            3400 + RECEPTOR_FRAME_MS * 3,
+        );
+        assert_eq!(faded[48 * 70 + 8], pack_xrgb(0xE0, 0xE0, 0xE0));
+        assert!(!faded.contains(&solid_ink(0x03E0)));
+    }
+
+    /// Two nine-row `.oja` ring frames whose ink sits on the top row
+    /// (stored order, distinct inks) — above the burst-slice rows and
+    /// receptor pad that paint over a flashed lane's bottom band.
+    fn ring_oja_body() -> Vec<u8> {
+        let plane0 = oja_span(0, 0, &[0x7C00, 0x7C00]);
+        let plane1 = oja_span(0, 0, &[0x03E0, 0x03E0]);
+        oja55_body(&[
+            ((-1, 0, 2, 9), &plane0, &[0xFF, 0xFF]),
+            ((0, 0, 2, 9), &plane1, &[0x80, 0x80]),
+        ])
+    }
+
+    #[test]
+    fn long_note_effect_oja_rings_stage_the_hold_paint() {
+        // The literal `LongNote_Effect.oja` stem stages the animated
+        // hold rings: the held span reads the steady last frame while
+        // no hold age exists, otherwise one ring step per
+        // [`RECEPTOR_FRAME_MS`]. The static `LongNote_Effect.ojt`
+        // frame stays the fallback body when the `.oja` is absent.
+        let archive = opi_blob(&[("LongNote_Effect.oja", &ring_oja_body())]);
+        let skin = PlaySkin::from_archive(&archive).unwrap();
+        assert_eq!(skin.hold_ring_frame_count(), 2);
+        assert_eq!(
+            skin.hold_ring_frame(Some(0)).unwrap().image.words,
+            vec![0x7C00, 0x7C00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
+        assert_eq!(
+            skin.hold_ring_frame(None).unwrap().image.words,
+            vec![0x03E0, 0x03E0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
+        let ojt = strided55_body(&[(0, 0, 1, 1); 2], 1, &[0x7C00, 0x001F]);
+        let fallback = opi_blob(&[("LongNote_Effect.ojt", &ojt)]);
+        let skin = PlaySkin::from_archive(&fallback).unwrap();
+        assert_eq!(skin.hold_ring_frame_count(), 0);
+        assert!(skin.hold_ring_frame(Some(0)).is_none());
+        assert!(skin.long_effect().is_some());
+    }
+
+    #[test]
+    fn held_note_paints_the_staged_ring_frames() {
+        // The rings join the held span paint over the lane beams (the
+        // exe's held lane light) and under nothing: each ring steps
+        // per [`RECEPTOR_FRAME_MS`] from the hold strike, freezing on
+        // the last frame, and the procedural tail core stays out. The
+        // static `.ojt` effect never paints under staged rings.
+        let ojt = strided55_body(&[(0, 0, 1, 1)], 1, &[0x001F]);
+        let archive = opi_blob(&[
+            ("LongNote_Effect.oja", &ring_oja_body()),
+            ("LongNote_Effect.ojt", &ojt),
+        ]);
+        let mut live = LivePlay::new_holds(&[(3, 1500, 1900, 7)]);
+        live.set_skin(PlaySkin::from_archive(&archive).unwrap());
+        assert!(live.has_skin());
+        live.strike_lane(3, 1500);
+        let mut first = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut first,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            1500,
+        );
+        assert!(first.contains(&solid_ink(0x7C00)));
+        assert!(!first.contains(&solid_ink(0x03E0)));
+        assert!(!first.contains(&solid_ink(0x001F)));
+        assert!(!first.contains(&TAIL_BEAM));
+        let mut second = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut second,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            1500 + RECEPTOR_FRAME_MS,
+        );
+        assert!(second.contains(&solid_ink(0x03E0)));
+        assert!(!second.contains(&solid_ink(0x7C00)));
+        // A long hold freezes on the last ring (no flicker, no
+        // restart) instead of replaying or collapsing to the tail.
+        let mut steady = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut steady,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            1700,
+        );
+        assert!(steady.contains(&solid_ink(0x03E0)));
+    }
+
+    #[test]
+    fn hit_burst_ojt_stages_when_the_oja_arm_is_absent_or_corrupt() {
+        // The stage-numbered `.ojt` stays the fallback body: without
+        // `Note_Click.oja` (or with one that fails to decode) the
+        // eight-frame `.ojt` stages the burst.
+        let ojt = strided55_body(&[(0, 0, 1, 1); 8], 1, &[0x7C00; 8]);
+        let missing = opi_blob(&[("Note_Click1_1.ojt", &ojt)]);
+        assert_eq!(
+            PlaySkin::from_archive(&missing)
+                .unwrap()
+                .hit_burst_frame_count(),
+            8
+        );
+        let corrupt = opi_blob(&[("Note_Click.oja", &[0u8; 8]), ("Note_Click1_1.ojt", &ojt)]);
+        assert_eq!(
+            PlaySkin::from_archive(&corrupt)
+                .unwrap()
+                .hit_burst_frame_count(),
+            8
+        );
+    }
+
+    #[test]
+    fn note_click_oja_burst_bypasses_the_white_column() {
+        // The staged `.oja` rings ride the existing burst slot: the
+        // frame centers on the lane-3 pad (rows 44..48, so its center
+        // row 46 carries the ink), the burst-slice rows above keep
+        // the white column out, and the animation steps across the
+        // flash frames.
+        let archive = opi_blob(&[("Note_Click.oja", &burst_oja_body())]);
+        let mut live = LivePlay::new(&[(3, 1000, 7)]);
+        live.set_skin(PlaySkin::from_archive(&archive).unwrap());
+        assert!(live.has_skin());
+        live.strike_lane(3, 1000);
+        let mut first = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut first,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            1000,
+        );
+        assert!(first.contains(&solid_ink(0x7FE0)));
+        assert_eq!(first[46 * 70 + 7], solid_ink(0x7FE0));
+        assert_ne!(first[42 * 70 + 7], HIT_BURST);
+        let mut second = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut second,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            1050,
+        );
+        assert!(second.contains(&solid_ink(0x03E0)));
+        assert!(!second.contains(&solid_ink(0x7FE0)));
     }
 
     #[test]
@@ -4274,11 +4764,34 @@ mod live_play_tests {
             println!("skip: missing Playing1.opi");
             return;
         };
-        // Verified 7.55 `Note_Click1_1.ojt`: eight raw 128x128
-        // explosion frames, all anchors (0,0).
-        assert_eq!(skin.hit_burst_frame_count(), 8);
+        // The `.oja` bare arm of `_Note_Click` stages the burst
+        // (verified 7.55 `Note_Click.oja`: six shrinking ring frames
+        // 144x143..39x39, centred negative anchors; the stage-1
+        // variant-1 `.ojt` stays the fallback body).
+        assert_eq!(skin.hit_burst_frame_count(), 6);
         let first = skin.hit_burst_frame(0).expect("first burst frame");
-        assert_eq!(first.extent(), (128, 128));
+        assert_eq!(first.extent(), (144, 143));
+    }
+
+    #[test]
+    fn from_archive_binds_the_jam_flash_and_hold_rings() {
+        let Some(skin) = staged_skin() else {
+            println!("skip: missing Playing1.opi");
+            return;
+        };
+        // Verified 7.55 `Playing_Effect_Jam.oja`: ten 300x300 flash
+        // frames at anchor (0, 0). `LongNote_Effect.oja` (byte-
+        // identical to `Note_Click.oja`): six shrinking ring frames.
+        assert_eq!(skin.jam_flash_frame_count(), 10);
+        assert_eq!(
+            skin.jam_flash_frame(0).expect("jam frame").extent(),
+            (300, 300)
+        );
+        assert_eq!(skin.hold_ring_frame_count(), 6);
+        assert_eq!(
+            skin.hold_ring_frame(Some(0)).expect("ring frame").extent(),
+            (144, 143)
+        );
     }
 
     #[test]

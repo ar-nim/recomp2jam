@@ -15,8 +15,8 @@ use std::collections::HashMap;
 
 use o2jam_file::{
     classify_sprite, find_opi_entry, opi_entry_body, pair_entries_with_rects, resolve_sprite_entry,
-    AvatarItemTable, Bnd, BndRect, ControlBlock, ControlEntry, ControlList, Oja55, OpiEntry,
-    PlacedControl, Sprite55, Sprite55Prefixed, Sprite55Strided, SpriteResolution,
+    AvatarItemTable, Bnd, BndRect, ControlBlock, ControlEntry, ControlList, Oja55, Oja55Frame,
+    OpiEntry, PlacedControl, Sprite55, Sprite55Prefixed, Sprite55Strided, SpriteResolution,
 };
 use o2jam_net::CharacterInfo;
 use o2jam_render::{
@@ -44,6 +44,42 @@ pub struct FigureLayer {
     pub dy: i32,
     /// Transparent colour key of the source body.
     pub colorkey: u16,
+}
+
+impl FigureLayer {
+    /// One `.oja` animation frame pasted onto its full `w*h` canvas:
+    /// the stored transparent word 0 clears the canvas (`.oja`
+    /// headers carry no colour-key word; claims A12 key `0x0000`) and
+    /// each pixel-plane row span pastes at its `(x, y)` — the plane
+    /// layout chains through the container parser
+    /// ([`o2jam_file::parse_oja55`]). The record anchor becomes the
+    /// layer anchor (negative anchors mark centred effects). The
+    /// per-pixel alpha plane (claims C7: read straight after the
+    /// pixels, uploaded raw) stays out — the layer model has no alpha
+    /// channel yet, so frames paste opaque like the prefixed bodies
+    /// and the intensity pass rides
+    /// [`o2jam_file::Oja55Frame::alpha`] for a blended paint.
+    #[must_use]
+    pub(crate) fn from_oja_frame(frame: &Oja55Frame<'_>) -> Self {
+        let mut words = vec![0u16; frame.w as usize * frame.h as usize];
+        for span in &frame.rows {
+            let base = span.y as usize * frame.w as usize + span.x as usize;
+            let (pairs, _) = span.pixels.as_chunks::<2>();
+            for (index, pair) in pairs.iter().enumerate() {
+                words[base + index] = u16::from_le_bytes(*pair);
+            }
+        }
+        Self {
+            image: Rgb555Image {
+                w: frame.w as usize,
+                h: frame.h as usize,
+                words,
+            },
+            dx: i32::from(frame.x),
+            dy: i32::from(frame.y),
+            colorkey: 0x0000,
+        }
+    }
 }
 
 /// Drawable decoded sprite-55 body: layers painted back to front at
@@ -111,42 +147,17 @@ impl AvatarFigure {
         Self { layers }
     }
 
-    /// Decode every frame of a `.oja` effect animation (codec gap ⑤)
-    /// onto its full `w*h` canvas: the stored transparent word 0
-    /// clears the canvas (`.oja` headers carry no colour-key word;
-    /// claims A12 key `0x0000`), each pixel-plane row span pastes at
-    /// its `(x, y)`, and one layer per frame sits at the record
-    /// anchor — the tap/hold/jam frames chain through the container's
-    /// plane layout ([`o2jam_file::parse_oja55`]). The frames also
-    /// carry a per-pixel alpha plane (claims C7: read straight after
-    /// the pixels, uploaded raw); the figure model has no alpha
-    /// channel yet, so frames paste opaque like the prefixed bodies
-    /// and the intensity pass is left for a blended paint.
+    /// Decode every frame of a `.oja` effect animation (codec gap ⑤):
+    /// one layer per frame at its record anchor — the tap/hold/jam
+    /// frames chain through the container's plane layout
+    /// ([`o2jam_file::parse_oja55`]); [`FigureLayer::from_oja_frame`]
+    /// carries the canvas paste and the alpha-plane caveat.
     #[must_use]
     pub fn from_oja55(animation: &Oja55<'_>) -> Self {
         let layers = animation
             .frames
             .iter()
-            .map(|frame| {
-                let mut words = vec![0u16; frame.w as usize * frame.h as usize];
-                for span in &frame.rows {
-                    let base = span.y as usize * frame.w as usize + span.x as usize;
-                    let (pairs, _) = span.pixels.as_chunks::<2>();
-                    for (index, pair) in pairs.iter().enumerate() {
-                        words[base + index] = u16::from_le_bytes(*pair);
-                    }
-                }
-                FigureLayer {
-                    image: Rgb555Image {
-                        w: frame.w as usize,
-                        h: frame.h as usize,
-                        words,
-                    },
-                    dx: i32::from(frame.x),
-                    dy: i32::from(frame.y),
-                    colorkey: 0x0000,
-                }
-            })
+            .map(FigureLayer::from_oja_frame)
             .collect();
         Self { layers }
     }
