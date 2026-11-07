@@ -69,7 +69,12 @@ pixel. Parser sites live in `o2jam-file` (`opi.rs`, `control.rs`, `sprites.rs`,
 - Rect/entry count mismatch — `avatar.rs` `bind_verbatim_entries` zips and
   stops at the shorter side: entries past the last rect stay unplaced (Playing
   tail past `VOLUME`, surplus room entries), rects past the last entry are
-  ignored. Both are silent.
+  ignored. Both are silent. Exe side (byte survey, *(offset-only)*): control
+  creation never zips — each entry resolves its rect by code ordinal
+  (wrapper VA `0x48b09c`, gated on the block stem byte, into the pairing
+  getter `0x548640`), and an out-of-range ordinal gets an all-zero rect
+  instead of a silent drop; the full 4-dword rect reaches the control setter
+  `0x50dc90`.
 - Synthetic origins — `paint.rs` `seat_origin`, `song_panel_origin`,
   `room_detail_fallback_origin`, result digits at `(16,16)` / verdict at
   `(16,48)` ignore `Dialog_SelectMusic.bnd` / `State_Waiting.bnd` rects; only

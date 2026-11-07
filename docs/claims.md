@@ -25,9 +25,9 @@ pin for all EXE rows: `AngelO2Jam.exe` 5,029,888 B, SHA-256
 
 | Level | Claims |
 |---|---|
-| EXE | 75 |
-| DATA | 37 |
-| ASSUMED | 27 |
+| EXE | 79 |
+| DATA | 35 |
+| ASSUMED | 25 |
 | Total | 139 |
 
 ## The pairing-rule family (known mistake + siblings)
@@ -45,9 +45,9 @@ applier looks each entry up by `code & 0xFFF − 1` and bounds-checks
   ("rect *i* → entry 213+*i*", `o2jam-shell/src/avatar.rs:357`). The
   exe assigns rects by per-entry ordinal; sequential low words in that
   run make the zip *happen* to agree (A26).
-- **S3** — "entries − 1 == rects is the normal rule" (Room 75/76,
-  Waiting 116/117). Per A1 the exe gives an out-of-range entry an
-  all-zero rect; "minus self" is one story, not the mechanism (A27).
+- **S3** — RESOLVED: the exe pairs Room/Waiting entries by code
+  ordinal at control creation (wrapper VA `0x48b09c`); the one-entry
+  surplus takes the all-zero rect (A27).
 - **S4** — `resolve_order_slot` keys id-less OJM banks by fetch order.
   The exe has no order lookup anywhere on load/play paths; M30 banks
   key by the explicit `ref` id, new-variant entries all land in slot 0
@@ -74,11 +74,11 @@ index (all-zero rect, slot 0, default arm).
 | ID | Claim | Level | Anchor / evidence | Drives | Sibling |
 |---|---|---|---|---|---|
 | A1 | True pairing mechanism: rect ordinal = `(entry.code & 0xFFF) − 1`, bounds-checked, miss → all-zero rect | EXE | `0x548640`, ev `3a869bb7…` | R | corrects A2 |
-| A2 | File-order pairing: rect *i* lays out entry *i+1* (38/38 bound Interface blocks, zero mismatches) | DATA | `opi-pattern.md` 5, `bnd-semantics.md` walks | R | **source** |
+| A2 | File-order pairing: rect *i* lays out entry *i+1* (38/38 bound Interface blocks, zero mismatches) | DATA | `opi-pattern.md` 5, `bnd-semantics.md` walks; REFUTED as mechanism: the create wrapper pairs every bound control by code ordinal (VA `0x48b09c` — stem-byte gate, entry code dword pushed into `0x548640`, 4-dword rect passed to setter `0x50dc90`), so the 38/38 agreement is the sequential-ordinal consequence and the ordinal-overflow entry takes the all-zero rect (A1) | R | **source** |
 | A3 | Shell binds by zip-and-truncate (`bind_controls`, `bind_verbatim_entries`), silent drops | ASSUMED | `bnd-audit.md` 1–2; contradicts A1 zero-rect | R | S2/S3 |
-| A4 | Rect 0 is the full-screen background, painted first | DATA | `State_Room`/`State_Avi` rect 0 walks | R | feeds A5 |
+| A4 | Rect 0 is the full-screen background, painted first | DATA | `State_Room`/`State_Avi` rect 0 walks; painted-first is file order (A5); no exe background special-case observed — the image-draw arms fetch rects through the same ordinal getter and blit at origin only (VA `0x50aa32`–`0x50aa56`); the canvas span stays data-side | R | feeds A5 |
 | A5 | Paint order is topmost-last by file order beyond background-first | EXE | render loop `0x5DEC30` walks the control array in stored (file) order, building quads sequentially, ev `ff581cfa…`; nuance: `.oji` sprites ride layer 2 above the `.ojs` layer 1 regardless of file position (`ui-draw.md` step 3) | R | refines S7 |
-| A6 | Space: 800x600 absolute px, top-left origin, `(x2, y2)` exclusive; every `State_*.bnd` spans the canvas | DATA | all `State_*.bnd` spans | R | |
+| A6 | Space: 800x600 absolute px, top-left origin, `(x2, y2)` exclusive; every `State_*.bnd` spans the canvas | DATA | all `State_*.bnd` spans; top-left origin exe-backed: the image-draw arms load all 4 rect dwords but push origin x/y only into the blit (VAs `0x50aa32`–`0x50aa56`, `0x50ac88`–`0x50acac`, `0x50ae02`–`0x50ae20`); no `x2−x1` extent consumer located, exclusivity stays data-side *(offset-only survey)* | R | |
 | A7 | 800x600 default, fullscreen-only (`WS_POPUP` fork default; windowed branch unreachable) | EXE | `0x14b4c`/`0x14baf`, fork `0x41c0b` | R | |
 | A8 | Avatar-dialog rects are screen-absolute; dialog origin subtracted at apply | EXE | `0x4DA630`, ev `9e526b62…` | R | |
 | A9 | All 27 dialogs share the screen-absolute origin rule | ASSUMED | `0x4ED650` untraced (`ui-loader.md` OPEN 2–3) | R | |
@@ -98,12 +98,12 @@ index (all-zero rect, slot 0, default arm).
 | A23 | The four empty `0x00` stub states draw nothing | EXE | applier `0x48A060` creates controls only from the block's entry array, gated `code & 0xFF0000 ≠ 0` (`0x48A134`, ev `9e526b62…`); zero-entry stubs create nothing, and the render loop `0x5DEC30` draws stored controls only (ev `ff581cfa…`); stub inventory (empty names, `size` 0) stays data-side | R | |
 | A24 | `BOUND` stem is data-driven; only `Avatar_Info`/`Map_Avatar`/`State_Playing_network` literals exist | EXE | `0x24ab9c`/`0x24b080`, ev `3eb885cd…` | R | |
 | A25 | Shell hardcodes bind stems per scene instead of reading `BOUND` | ASSUMED | `opi-ignored.md` sev 2; contradicts A24 | R | |
-| A26 | Playing subset: 17 rects cover entries 213–229; decl `0xE6` loads 0–229; last 5 ride unloaded | DATA | in-file CP949 comments + counts; decl alloc ev `f4662376…` | R | **S2** |
-| A27 | Room 75/76 and Waiting 116/117 are "entries − 1", not subsets | DATA | counts; zero mismatches on the walk | R | **S3** |
+| A26 | Playing subset: entries 213–229 land on the 17 rects through the shared ordinal pairing; the declared `0xE6` count bounds parsing/creation; entries 230–234 are never parsed | EXE | declared-count eager alloc ev `f4662376…`; playing applier `0x4F1140` binds via the into-record loader (relcall VA `0x4f117b`); pairing getter `0x548640` ev `3a869bb7…` called from the playing-screen functions (relcall VAs `0x4f36c5`/`0x4f4878`/`0x4f6238`) and the shared wrapper (`0x48b09c`); the 17-rect/213–229 coverage numbers themselves stay the data walk (CP949 comments + counts) | R | **S2** |
+| A27 | Room 75/76 and Waiting 116/117: every entry resolves its rect by code ordinal at control creation; the one-entry surplus overflows the table and takes the exe's all-zero rect; the equal counts are data corroboration | EXE | wrapper pairing VA `0x48b09c` (stem-byte gate, code dword → `0x548640` ev `3a869bb7…`, 4-dword rect to setter `0x50dc90`); state applier binds via the into-record loader `0x547DB0` (relcall VA `0x48a0ef`); counts from the walk | R | closes S3 |
 | A28 | `.bnd` rects carry extent (4 dwords copied into the control) | EXE | `0x548640`, ev `3a869bb7…`; shell keeps origin only | R | |
 | A29 | Unbound scenes (bare `BOUND`) paint art full-bleed | ASSUMED | `bnd-audit.md` 15/23; exe stages `(0,0)` and draws at the sprite anchor (`ui-draw.md`), so full-bleed depends on per-scene art size — unverified | R | |
 | A30 | Highway geometry from staged art: lanes `(5,28)…(165,28)`, judgement row 487, 7 px heads | DATA | sprite-anchor walks (`KeydownImage` slot 33 et al.) | R | |
-| A31 | Jam bars at `(23,536)`/`(570,536)` 206x16; peer bars 46x8 | DATA | staged `Jamgauge` shell anchors | R | |
+| A31 | Jam bars at `(23,536)`/`(570,536)` 206x16; peer bars 46x8 | DATA | staged `Jamgauge` shell anchors; exe side builds the gauge shells as synthetic `0x11c` entries through the factory (loader VA `0x4e7850`: zeroed `0x11c` allocs, vtable words `0x64b258`/`0x64b244`), so placement still resolves through bind rects — the pixel numbers stay data-side | R | |
 | A32 | Judgement/combo/jam digit anchors, 600 ms fade, score digits at fixed pixels | ASSUMED | `bnd-audit.md` 31; rects unbound | R | |
 | A33 | Linear scroll, 2000 ms lookahead | ASSUMED | `bnd-audit.md` 32; scroll shape unobserved | R+G | |
 | A34 | Curtain bands are integer fifths, clipped to a frame box | ASSUMED | `bnd-audit.md` 20/30; exe clip math open | R | |
@@ -152,8 +152,8 @@ index (all-zero rect, slot 0, default arm).
 | B33 | `+0x3970` is a 1000-clamp + rating gate + UI notify `(0,0,0x66,0x12)` | EXE | `0x57094d`, `0x1707c6–0x1707db` | G | |
 | B34 | Fail splash: GameOver static vs animated picked by a predicate | EXE | `0xe69a1` | R | |
 | B35 | Jam gauge math: Cool 2/Good 1, 30-progress cycles, overflow carries | ASSUMED | negative: zero `cmp $0x1e` in rating range | G | refuted vs B9 numbers |
-| B36 | Win/lose art goes to rank #1 by score | ASSUMED | player report; no rank math located | G | |
-| B37 | Play keys S D F Space J K L | ASSUMED | club standard; no bind storage found | G | |
+| B36 | Win/lose art goes to rank #1 by score | ASSUMED | player report; no client-side score-sort located. Exe context: the result screen is state block 6 — opener VA `0x4c2390` stages `StateResult_Top.ojs`/`StateResult_Bottom.ojs`/`Result_WinLose.ojs` (VA `0x64a388`/`0x64a370`/`0x64a35c`) and calls the state applier at `0x4c23e2`; the Live-result region creates `Winner_image`/`Challenger_image` entries unconditionally (codes `0x1B500012`/`0x1B500013` at VAs `0x4e66c2`/`0x4e6714`, controls `+0x7b4`/`+0x7b8`) and gates a `Lv.%d` label on role 1/2 (`0x4e6f95`/`0x4e6faf`, role global `0x77ee86`); the rank→art selection itself stays open | G | |
+| B37 | Play keys S D F Space J K L | ASSUMED | club standard; no bind storage found; negative *(offset-only)*: image-wide scans for contiguous DIK `{1F,20,21,39,24,25,26}` and VK `{53,44,46,20,4A,4B,4C}` runs (byte and dword, both lane orders) find no bind table | G | |
 | B38 | Shell paces play on the wall clock, not the sample clock | ASSUMED | `parity.md` OPEN; audio clock is the plan | G | |
 | B39 | Rating-event sink `+0xa14`: codes 1/9/14, 16-way jump table, attach at song load | EXE | `0x56e170`, attach `0x170325` | G | |
 | B40 | `option.ini` table is display-only (MODE/BlendHalf/LONGNOTEMODE/NoteTail/NoteType) | EXE | key block `0x245224–0x2452a8` | R | |
@@ -209,13 +209,13 @@ index (all-zero rect, slot 0, default arm).
 |---|---|---|---|---|---|
 | D1 | Framing: u16 id at buffer+2; length counts the whole frame | EXE | `0x1a0550`, ev `861713e2…`; server-verified | G | |
 | D2 | Opcode family table (1000–65520) | ASSUMED | Memoryer cross-check; send/dispatch sites where cited | G | |
-| D3 | Odd/even request/response pairing | ASSUMED | Memoryer convention | G | |
-| D4 | String fields: UTF-8, null-terminated, cap-inclusive truncation | ASSUMED | Encore codec; exe terminator emission open | G | |
+| D3 | Odd/even request/response pairing | EXE | every pinned pair is send↔handler in-exe: 4042 send VA `0x4c365c` ↔ 4043 handler file `0x159b50`; 4044 `0x4ead18` ↔ 4045 `0x163d70`/`0x18cf50`; 4046 `0x58d8a1` ↔ 4047 `0x163d90`; 4055 `0x4f0439` ↔ 4056 `0x163d50`; 4014 sends (files `0x16e660`/`0x16e7dd`/`0x4eaf3b`) ↔ 4015 handler `0x15fa20`; the convention beyond these pairs stays Memoryer-corroborated | G | |
+| D4 | String fields: UTF-8, null-terminated, cap-inclusive truncation | ASSUMED | Encore codec; exe read-side consumes NUL-terminated strings (nickname reader file `0x155ea0` measures to the terminator, then consumes it — `relay.md` §10); terminator emission stays open | G | |
 | D5 | 4014 sends: Jam per Cool/Good tail, Life on tick, mode-gated | EXE | `0x16e660`/`0x16e7dd`/`0x4eaf3b` | G | |
 | D6 | 4015 body: u8 slot + u16 type + u16 value + 8 rank bytes; rank remap loop | EXE | `0x15fa20`, ev `0ff34c44…` | R+G | |
 | D7 | 4016 SubmitScore wrapper sites; layout corroborated, life-field read open | EXE | *(offset-only)* `0x4eb018` et al. | G | |
 | D8 | Relay ops 1–11 pinned by `SetID` ctors + vtable refs | EXE | ctor files `0x18e100`…`0x16e080` | G | |
-| D9 | Relay body layouts (RelayStats 62 B et al.) | ASSUMED | Memoryer-corroborated; op-5 writer order EXE (`0xea230`), field names inferred | R+G | |
+| D9 | Relay body layouts (RelayStats 62 B et al.) | EXE | op-5 tally is exe-written: packer file `0xea230` stages 11 words + 4 dwords (38 B post-routing) from `0x77eeXX` globals in wire order, sends via file `0x187870`, single tick caller file `0xeb0c9` gated `0x77ee84==1` ∧ `0x77cd33==5` (ev `deb10e8f…`/`ccded3a4…`/`8f8df9d4…`, `docs/op5-writer.md`); routing preface staged as pushed `0x18`/`0x04`/`0x02` sizes through `0xeb4d0`/`0xeb570`/`0xeb550` (ev `881b4739…`); combo packs share the send path with autoplay pinned nonzero (relay.md §6); field names beyond count/order stay inferred, remaining op bodies stay Memoryer-corroborated | R+G | |
 | D10 | MemberRole 0 None / 1 Champion / 2 Challenger / 3 Spectator gates | EXE | `0x77ee86` loads, ev `acacd596…` set | G | |
 | D11 | Relay UDP ports 39311/39312; no hardcoded TCP relay ports; gateway 15010 | EXE | immediates `0x18c73e`…, ev `6e655b70…` | G | |
 | D12 | Room row record `0xb4` field map = parse order | EXE | `0x15b780` parser sites, ev `d9f9a8b4…` | R | |
@@ -226,7 +226,7 @@ index (all-zero rect, slot 0, default arm).
 | D17 | UHP flow; 4046/4047/4055/4056 bodies empty/ignored | EXE | `0x18d8a1`/`0xf0439`/handlers `0x163d50`+ | G | |
 | D18 | Live-state 4042–4045 shapes incl. `MemberInfo` tail order | EXE | `0x159b50`/`0x18cf50` chains | G | |
 | D19 | Endpoints: FTP hosts, gateway IP/port, web/registry strings | EXE | string table `0x24b9c0`–`0x2514f0` | — | |
-| D20 | Authorize 1000 payload order (token, gender string, marker, clientId) | ASSUMED | Memoryer order; exe byte-proof open | G | |
+| D20 | Authorize 1000 payload order (token, gender string, marker, clientId) | ASSUMED | Memoryer order; exe byte-proof open; negative *(offset-only)*: image-wide scans find no 1000 send staging — all 46 `push 0x3E8` sites are non-packet uses (e.g. ReadFile size VA `0x5acd82`, tick timeout VA `0x5b71c9`), and the only 9 direct `SetID` (file `0x1a0550`) callers are the relay ctor family (files `0xea4f4`/`0x16dff4`/`0x16e094`/`0x18622c`/`0x18ca74`/`0x18cc64`/`0x18e114`/`0x18e1f4`/`0x1a0423`) | G | |
 
 ## Top-6 risky claims (visible behavior on the weakest evidence)
 
