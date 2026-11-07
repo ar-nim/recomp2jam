@@ -1234,3 +1234,59 @@ notes, `result.png` refresh) on top of the sell-refund feat (`2912a65`).
   result-shot pins, all other targets unchanged, 0 failures). No lint
   findings. No commits, no pushes.** This sweep touched only
   `docs/playtest.md`.
+
+## Regression sweep — 2026-11-07 20:24 UTC+8 (HEAD `46f0a7d`, tree clean at start)
+
+Live re-proof on the verdict-head. Covers the two feat commits landed
+after the verify-head baseline `5b9808c`: music-select shot reverify
+(`08cc4ca`: `musicselect.png` staged shot + claims/parity re-proof) and
+dossier verdict frames (`46f0a7d`: battle walk shows-lose frames in
+`paint.rs`/`shots.rs`, `result-variants.md` dossier, shot refreshes).
+
+- `cargo fmt --check`: clean, `exit=0` (on clean HEAD).
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1199 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 7, file 149, game 92, net 337,
+  render 72, shell 417, real_art 7, scenes 22, recomp2jam 77
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, no warnings.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.59 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`20:24:13 +08:00`):
+  `Authorize session` → `Get channel list: [0]` →
+  `Enter channel: [0/00]` → `Get character info: [tester]` →
+  `Create room: songflow` →
+  `Update room [000] music settings: [HX / X10 / o2ma757]` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Update #1 - Jam: 3 (Bonus: 0)` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure WARNs on room delete).
+- **Verdict: no regression — suite is green on the verdict-head (1199
+  passed; +7 vs the 1192 baseline: shell 415 → 417, recomp2jam
+  72 → 77 from the verdict-frames/musicselect tests, all other
+  targets unchanged, 0 failures). No lint findings. No commits, no
+  pushes.** This sweep touched only `docs/playtest.md`.
+- Tree note: a peer landed uncommitted edits at 20:24:19 +08:00,
+  after every clean-HEAD gate above had finished
+  (`crates/recomp2jam/src/shots.rs` +26/-4: native-canvas
+  `playing-native`/`result-native` companions,
+  `Vec::with_capacity(10)`). Re-ran on that dirty state:
+  `cargo fmt --check` FAILS on one of the peer's lines (long
+  `shoot_checked_native` call, needs rewrapping); `cargo clippy
+  --workspace --all-targets -- -D warnings` stays clean;
+  `cargo test -p recomp2jam` → **74 passed, 3 failed**
+  (`walk_covers_eight_distinct_scenes`,
+  `writer_saves_seven_scenes_and_keeps_avi`,
+  `staging_attempt_never_breaks_the_walk` — expectations still pin
+  the old 8-scene/7-file walk, not yet updated for the 2 native
+  companions). None of that is mine: per the sweep rules (touch
+  only `docs/playtest.md`, fix only my own lint findings) the peer's
+  file was left alone. Clean-HEAD verdict above stands; the dirty
+  file is the peer's uncommitted work, not mine.
