@@ -498,14 +498,19 @@ dossier `ev_c168abac…`). The dead-state pill path is untraced (the
 pill dispatch runs upstream of the scorer); the model freezes pill
 spend too — implementation choice, not an exe claim.
 
-## Long-note release rule — player report CORRECTED by trace (see below)
+## Long-note release rule — player report CORRECTED twice by trace
 
 The player report ("head hit, tail released exactly at its end, missing
-or early release is a miss") matches neither the traced state machine
-nor shipped chart data: holds never arm bit 26, and no release-vs-tail
-judgement exists. The traced rule lives in "Long-note hold machine —
-VERIFIED" below; the release-scan claim in `claims.md` B12 needs the
-CORRECTED verdict recorded there (this doc keeps the evidence).
+or early release is a miss") is close to the final trace: the tail IS
+rated against a release event, through the armed per-lane cursor
+`+0x864[lane]` — but the rating is symmetric |release − tail time|
+with the shared 6/18/25/≥26 windows, not "early release = miss" (a
+late release past the Bad bound Misses too). The first trace's
+negative ("no release-vs-tail judgement exists") was itself wrong: it
+missed the `+0x864` indirection (arming file `0x176e60`, strike files
+`0x176646`–`0x176687`, clear file `0x176709`). The full rule lives in
+"Long-note hold machine — VERIFIED" below; `claims.md` B12 needs a
+second CORRECTED verdict (this doc keeps the evidence).
 
 ## Win rule — player-reported
 
@@ -533,7 +538,7 @@ that flag exists in 7.55, so the windowed branch is unreachable in
 practice. Implemented as `o2jam-shell::{DEFAULT_WIDTH,
 DEFAULT_HEIGHT}` = 800x600 with a synthetic test.
 
-## Long-note hold machine — VERIFIED (no release-at-tail judgement)
+## Long-note hold machine — VERIFIED (tail rates on the release strike)
 
 Traced end to end in `OTwo.exe` md5 `34b789ff557a9bf6a1f275010dcaaceb`
 (5,029,888 B, sha256 `83a045418b62…` as opened by REA; Ghidra 12.1.2,
@@ -570,11 +575,14 @@ hold-bonus scan `FUN_00578110` (file `0x178110`, dossier
    against the shared 6/18/25 bounds (compare chains files
    `0x176b7f`–`0x176ba7` and `0x176646`–`0x17667a`) and OR the tier
    bits `0x10`/`0x20`/`0x40` into the record's judged word `+0xe`
-   (files `0x176687`/`0x176bd7`). Key-up strikes too: the keyup branch
-   (file `0x176719`) walks the lane's note list and judges the nearest
+   (files `0x176687`/`0x176bd7`). The walk branch strikes too (file
+   `0x176719`): it walks the lane's note list and judges the nearest
    unjudged record to now, closer-of before/after (distance pick files
    `0x176acd`–`0x176ae7`), excluding bit-24 tail records from
-   candidacy (files `0x176837`/`0x176994`).
+   candidacy (files `0x176837`/`0x176994`). With the pressed-word
+   inversion (file `0x1714b0`) this branch rides the key-down; the
+   docs' earlier "key-up" label for it predates the polarity finding
+   in item 6.
 2. **Head arms the hold — VERIFIED.** A record with
    `payload & 0x3000000 == 0x2000000` (bit 25 only = head; second-judge
    test file `0x176105`, keyup test file `0x176c42`) raises the
@@ -591,36 +599,75 @@ hold-bonus scan `FUN_00578110` (file `0x178110`, dossier
    `0x1766ef`/`0x1760d6`) into the render dispatcher `FUN_0056e170`
    (file `0x16e170`, dossier `ev_c168abac…`); its Bad/Miss case resets
    combo to 0 (file `0x16ebcf`).
-3. **No release judgement — VERIFIED (negative).** The hold flag is
-   read exactly once (file `0x178194`, the bonus scan) and cleared only
-   by the start/restart loops (files `0x18ec0b`/`0x18ed25`/`0x18ee3b`).
-   No site judges a release against the tail time; no site reads the
-   flag to rate a release; releasing mid-hold raises nothing.
+3. **No release gate on the hold flag — VERIFIED (negative).** The
+   hold flag is read exactly once (file `0x178194`, the bonus scan) and
+   cleared only by the start/restart loops (files `0x18ec0b`/
+   `0x18ed25`/`0x18ee3b`). No site reads the flag to rate a release;
+   releasing mid-hold raises nothing — the bonus keeps ticking. The
+   tail itself, however, IS release-rated through the `+0x864`
+   indirection (item 6); the first trace's blanket negative
+   ("no site judges a release against the tail time") is corrected
+   there.
 4. **Bonus over the span — VERIFIED.** `FUN_00578110` ticks `+10`/`+1`
    per frame while flag ∧ `span_start < now < span_end` (strict:
    files `0x1781c1`/`0x1781d7`) — see the hold-bonus section below.
-5. **Expiry — VERIFIED.** The expiry scan `FUN_005772f0` Misses any
-   unjudged record once `now > record_time + 25` (grace file
-   `0x1773bf`, Miss `0x80` file `0x17740f`, rating call file
-   `0x177448`) and, while a head is unjudged, also marks its paired
-   bit-24 tail `0x180` (files `0x177468`–`0x1774e2`). A Bad keyup hit
-   on a head kills the paired tail the same way (files
-   `0x176dab`–`0x176df6`).
-6. **OPEN — held-tail consumption.** All tier-word writes in the play
-   region are enumerated (keydown judges files `0x17609e`/`0x176687`,
-   keyup `0x176bd7`, expiry `0x17740f`/`0x1774e2`, keyup tail kill
-   `0x176df6`, auto variants ~`0x1771xx`): none rates a bit-24 tail
-   Cool/Good. How a fully held tail escapes (or incurs) the expiry Miss
-   is unresolved — candidates are the dual-chain list structure (two
-   link words per record; advance-along-`+0` `FUN_00579590` vs
-   `+4` `FUN_005795f0`) hiding tails from the expiry walk, or a
-   consumption path outside the judges. Needs dynamic evidence or a
-   list-construction trace (insert side of the freeze path).
+5. **Expiry — VERIFIED rule, VERIFIED inert on shipped cursors.** The
+   expiry scan `FUN_005772f0` (dossier `ev_16e274b8…`, raw
+   `ev_02842ce1…`) would Miss any unjudged record once
+   `now > record_time + 25` (grace file `0x1773bf`, Miss `0x80` file
+   `0x17740f`, rating call file `0x177448`) and, while a head is
+   unjudged, also marks its paired bit-24 tail `0x180` (files
+   `0x177468`–`0x1774e2`). But the scan cannot reach any record: its
+   per-lane walk runs on the cursor pair `+0x480[lane]`/`+0x484[lane]`
+   (`{stop, current}` over the lane list), initialized at chart load to
+   `{list head, list head}` (files `0x172d32`/`0x172d39`) and never
+   advanced by any site — the judges and the scan advance stack copies
+   only (walk advance `FUN_00579590` on `LEA ECX,[EBP−0x10]` locals;
+   the scan's only save path keeps `current` when it equals the list
+   head, file `0x177530`–`0x1775ec`). The walk's first record access
+   therefore lands on the list-head node itself, whose payload+8 field
+   holds the adjacent lane's link pointer — a value far above any song
+   time — so the grace test breaks the walk immediately, every frame
+   (files `0x1773bf`–`0x1773c5`). The Miss store and the paired-tail
+   marking are unreachable on shipped cursors; a held tail can never be
+   expired. A Bad keyup hit on a head still kills the paired tail
+   `0x180` (files `0x176dab`–`0x176df6`), and the auto judges rate due
+   records themselves (below).
+6. **RESOLVED — held-tail consumption (second trace).** The tail is
+   player-rated through the per-lane judge cursor `+0x864[lane]`:
+   the strike walk (event byte 0) judges the nearest unjudged
+   non-tail record; a Cool/Good hit on a hold head arms `+0x864`
+   at the paired tail (raw store file `0x176e60`, evidence
+   `ev_9faabadd…`) while raising `+0x9f8`; the other input branch
+   (event byte 1) judges the record at `+0x864` — the tail — against
+   the tail time with the shared windows (compare chain files
+   `0x176646`–`0x17667a`, store file `0x176687`, cursor clear file
+   `0x176709`), so |release − tail| ≥ 26 ms rates the tail `0x80`
+   Miss and in-window releases rate Cool/Good/Bad. The input forward
+   inverts the pressed word (file `0x1714b0`), so byte 0 rides the
+   key-down and byte 1 the key-up: press strikes the head, release
+   strikes the tail. In assist modes the auto judges
+   `FUN_00577090`/`FUN_00575fa0` (evidence `ev_d6802fde…`/
+   `ev_b83c2c24…`) rate every due unjudged record — tails included,
+   no bit-24 exclusion — Cool `0x10` before any scan could see it.
+   The dual-chain insert candidate is REFUTED: the two link words are
+   the prev/next of ONE circular doubly-linked list (embedded
+   sentinel `{first=+0, last=+4, size=+8}`; lane insert `FUN_00578990`
+   inserts before `*(sentinel+4)`, evidence `ev_690d8393…`/
+   `ev_c17d173f…`; loader `FUN_00571d60` evidence `ev_8659c2d0…`),
+   and both directions cover the same records. OPEN refinements: (a)
+   the walk stop-marker is `*(sentinel+4)` = the first-inserted
+   element, so either a terminator record is inserted before each
+   lane's earliest note (insert site not located) or the earliest
+   note of each lane is excluded from walk candidacy — needs dynamic
+   evidence; (b) the press/release polarity rests on the inversion in
+   `FUN_005714b0` — confirm with an input trace.
 
 Modeled as `o2jam-game::HoldSpan` + `o2jam-game::HoldState`
-(`judge_head`, `apply_head`, `hold_tick_due`, `HoldSpan::is_expired`);
-the former `LongTail` release model (`is_early`/`judge_release`) was
-REFUTED and removed.
+(`judge_head`, `apply_head`, `judge_tail`, `hold_tick_due`,
+`HoldSpan::is_expired`); the deprecated `LongTail` release model lacks
+the verified arming gate and one-shot cursor semantics and stays
+deprecated in favor of `HoldState::judge_tail`.
 
 ## Long-note hold bonus — VERIFIED (+10 per tick, +1 combo)
 
