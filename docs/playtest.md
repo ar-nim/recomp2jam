@@ -629,3 +629,47 @@ docs (`4a55283`) and the shots refresh (`abc4807`).
   (980 passed; +8 vs the 972 baseline: file +2, render +5,
   shell +1 from the fix commits' tests, 0 failures). No commits,
   no pushes.** This sweep touched only `docs/playtest.md`.
+
+## Regression sweep — 2026-11-06 23:22 UTC (HEAD `8886d32`, tree clean at start)
+
+Live re-proof on the life-head. Covers the life-batch commits over the
+audit-fix baseline `abc4807`: ojm banks keyed by explicit id (`8d139ad`),
+difficulty slice mapping proof (`7df654d`), curtain + hud box rederivation
+(`d0dd70f`), life bar from attributed deltas (`8c48ca4`), audit2 re-proof
+log (`72a4c4f`), ojm bank selection exe-verified doc (`268f2f6`), live
+life-bar drain paint (`b32ea82`), and audit rows flipped to exe evidence
+(`8886d32`).
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1004 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 0, file 141, game 79, net 333,
+  render 72, shell 274, real_art 7, scenes 22, recomp2jam 57
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, no warnings.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.61 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`07:21:59 +08:00`):
+  `Authorize session` → `Get channel list` → `Enter channel: [0/00]` →
+  `Get character info: [tester]` → `Create room: songflow` →
+  `Update room [000] music settings` → `Get music list: [0/00] 562 music`
+  → `Sync room member [000] [0] music state` → `download progress` →
+  `Start game: [000]` → `User music loaded` →
+  `Game [000] Update #1 - Jam: 3 (Bonus: 0)` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broken-pipe broadcast WARNs on room delete).
+- **Verdict: no regression — suite is green on the life-head (1004
+  passed; +24 vs the 980 baseline: file +3, game +11, render +2,
+  shell +8 from the life-bar/difficulty-slice tests, 0 failures).
+  No commits, no pushes.** This sweep touched only `docs/playtest.md`.
+- Tree note: a peer landed uncommitted edits mid-sweep
+  (`o2jam-file/src/control.rs`, `o2jam-file/src/sprites.rs`,
+  `o2jam-render/src/lib.rs`, `o2jam-shell/src/avatar.rs`; 24 insertions,
+  14 deletions, no behavior claims checked). The edits predate the first
+  test compile, so every gate above ran on the dirty state; fmt, clippy,
+  and the full suite were re-run after and stayed green with identical
+  counts.
