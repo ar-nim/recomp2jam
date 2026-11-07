@@ -227,12 +227,35 @@ here).
    calls `0x50f680` at files `0xeddb5`/`0xedf3b`/`0xedfbc`/`0xee299`/
    `0xee2b8`, `0x50f6a0` at files `0xedf57`/`0xedfd8`, and `0x50f6f0`
    at file `0xee2d6`; channel bar builder `0x48dd10` (file `0x8dd10`)
-   calls `0x50f680` at files `0x8df10`/`0x8df1f`. Net writers OPEN:
-   room-fill `0x491af0` (file `0x91af0`) pushes the `Lv.` format
-   (VA `0x64816c`, file `0x91bee`) but calls `0x50f520` (files
-   `0x91df9`/`0x91e32`), not the family setters, in its `0x400` B
-   window; packet-side setter callers (`0x43dcc4`, `0x44c479`,
-   `0x45ca8d`, `0x52xxxx` button-Draw cluster) stay unjoined.
+   calls `0x50f680` at files `0x8df10`/`0x8df1f`. Net writers
+   PART-JOINED (sweep 2026-11-07, offset-only scan, no new dossier):
+   slot 9 of the same three 10-entry `.rdata` handler tables that pin
+   the 3012/3013 twins (files `0x249710`/`0x2499f0`/`0x249b28`, each
+   opening with `0x489ee0`; slots 6/7 select user/admin; dispatch
+   stubs push opcode plus subindex into `0x478d50`, first 3012 stub
+   file `0x15e601`, `ev_aba36a3a…`) is a packet-side caption path
+   into `0x50f6f0`. Table 1 slot 9 `0x4aef80` (file `0xaef80`)
+   calls helper `0x4b9ab0` (site file `0xaef93`) and list-Draw
+   `0x52af70` (sites files `0xaefb3`/`0xaefd3`, after lookups of
+   `0x16015022`/`0x16015025`); table 2 slot 9 `0x4b5540`
+   (file `0xb5540`) calls the same helper (site file `0xb554a`);
+   table 3 slot 9 IS the helper `0x4b9ab0` (file `0xb9ab0`). The
+   helper calls `0x50f6f0` at files `0xb9b67`/`0xb9bef`/`0xb9c19`/
+   `0xb9c9c` over looked-up `TEXT` controls (`0x16400016`–18 plus
+   index-looped rows and `0x1650001b`); `0x52af70` (file `0x12af70`)
+   calls `0x50f6f0` at files `0x12b064`/`0x12b108` in its 0–11 row
+   loop. Which opcode lands on slot 9 stays OPEN. Honest scope:
+   the trio writes style fields (`+0x174` color, `+0x164` font
+   handle, `+0x178`/`+0x180`/`+0x184` triple); string bytes reach
+   captions through the sibling `0x50f520` (`+0x60` buffer) and row
+   store `0x50fcc0` paths. So live packets are joined to TEXT
+   caption fields through one caller chain (`0x4aef80` →
+   `0x52af70`/`0x4b9ab0` → `0x50f6f0`); the earlier candidates
+   `0x43dcc4` (func `0x43dbc0`), `0x44c479` (func `0x44ac50`),
+   `0x45ca8d` (func `0x45c560`) stay unjoined, and room-fill
+   `0x491af0` (file `0x91af0`, `Lv.` format VA `0x64816c`, file
+   `0x91bee`) still reaches captions only via `0x50f520` (files
+   `0x91df9`/`0x91e32`), not the trio.
    ControlList carries no caption literals by design (dialog-strings
    §2); the grade-string precedent (zero refs, claims B4) shows exe
    text can be unbound. Render loop `0x5dec30` (ev `ff581cfa…`)
