@@ -1448,3 +1448,37 @@ ranks-head baseline `1619301`: solo result walk live loading progress
   pushes.** This sweep touched only `docs/playtest.md`.
 - Tree note: one untracked scratch file present (`check_solo.py`, not
   mine, left alone); no tracked file modified.
+
+## Regression sweep — 2026-11-07 21:14 UTC+8 (HEAD `fb31866`, tree clean)
+
+Live re-proof on the fill-head. Covers the channel-fill commit landed
+after the solo-head baseline `91bcff1`: channel fill stays open
+(`paint.rs`: spriteless channel keeps the documented placeholder fill
+instead of staging no scene art; renamed test +
+`empty_channel_art_keeps_the_documented_placeholder_fill`), plus
+`docs/channel-fill.md` and the solo sweep log (`fb31866`).
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1232 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 7, file 149, game 92, net 338,
+  render 72, shell 434, real_art 7, scenes 22, recomp2jam 92
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, no warnings.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.60 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`21:13:40 +08:00`):
+  `Authorize session` → `Create room: songflow` →
+  `Sync room member [000] [0] music state` → `download progress` →
+  `Start game: [000]` → `User music loaded` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure WARNs on room delete).
+- **Verdict: no regression — suite is green on the fill-head (1232
+  passed; +1 vs the 1231 solo-head baseline, shell 433 → 434 from
+  the new placeholder-fill test, all other targets unchanged,
+  0 failures). No lint findings. No commits, no pushes.** This sweep
+  touched only `docs/playtest.md`.
