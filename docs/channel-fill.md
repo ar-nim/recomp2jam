@@ -93,32 +93,73 @@ fill), `empty_art_falls_back_to_flat` (staged-empty scenes carry no fill;
 bare `paint_screen` cards and the result backdrop keep their own
 missing-archive fallbacks).
 
-## Chat row feed (`TEXT_SWAIT_CHAT 0x1640003C`, `SET 0x00031000`) — CLOSED
+## Chat row feed (`TEXT_SWAIT_CHAT 0x1640003C`, `SET 0x00031000`) —
+TEMPLATE SIDE PINNED, LIVE DISPATCH OPEN
 
-The row template is fed by twin waiting-room feed functions, never by
-code immediate. Full-image LE32 scan: `TEXT_SWAIT_CHAT` has zero refs;
-`SET 0x00031000` has one unaligned data-coincidence hit only (file
-`0x3324b3`, spanning dwords `0x0`/`0x310` in `.data` — not code).
+The row template resolves only through the staged list object; the twin
+waiting-room feed functions name it by lookup, never by code immediate.
+Full-image LE32 scan: `TEXT_SWAIT_CHAT` has zero refs; `SET 0x00031000`
+has one unaligned data-coincidence hit only (file `0x3324b3`, spanning
+dwords `0x0`/`0x310` in `.data` — not code).
 
-- **Handler**: `0xb9a10` feeds user rows (3012), `0xb9a60` feeds admin
-  rows (3013). Each guards a style/code pair (`0x13` vs `0x14` with
-  code `0x1602102a`), looks up `LIST_SWAIT_CHAT 0x1680002B` through
-  control lookup `0x48BCF0`, and passes the row string to the list row
-  store `0x50fcc0`. Both live in the waiting UI region beside the
-  chat-view stager `0xb8d00` and the 3011 send sites.
-- **Upstream**: trampolines `0xac5b0`/`0xac5e0` and `0xb2dd0`/`0xb2e00`
-  forward into the twins; their addresses sit in three parallel
-  10-entry handler tables (files `0x249710`/`0x2499f0`/`0x249b28`,
-  `.rdata`, each opening with `0x489ee0`). 3012 vs 3013 selects user
-  vs admin by table slot (index 6/7), and the dispatch stubs push
-  opcode plus subindex into `0x478d50` (first 3012 stub file
-  `0x15e601`, `ev_aba36a3a…`). Sibling feeds share the same store:
-  `0x62840`/`0x628d0` (channel arm — cached list object in `ecx`, no
-  `LIST` immediate at all) and `0x90690`/`0x906f0` (room arm, `LIST`
-  `0x13800014`).
-- **Fields**: sender plus text compose the row string (`edx` into the
-  store); the slot hard-codes the user/admin style. The trailing seat
-  byte has no evidenced consumer on the feed path.
+- **Feed twins, bodies pinned**: `0xb9a10` guards the user pair
+  (style `0x13`, code `0x1602102a`), `0xb9a60` the admin pair (style
+  `0x14`, same code). Each looks up `LIST_SWAIT_CHAT 0x1680002B`
+  through control lookup `0x48BCF0`, null-guards the hit, and hands
+  the row string to the list row store `0x50fcc0` (store call sites
+  files `0xb9a55`/`0xb9aa5`; the list rides `ecx`, the string is
+  loaded into `edx` then pushed). The row string arrives already
+  composed as the third stack argument — the twins compose nothing.
+  Both live in the waiting UI region beside the chat-view stager
+  `0xb8d00` and the 3011 send sites.
+- **Upstream — dispatch link REFUTED**: the twins' only direct callers
+  are four adapters (`0xac5b0`/`0xac5e0`/`0xb2dd0`/`0xb2e00`, call
+  sites files `0xac5c6`/`0xac5f6`/`0xb2de6`/`0xb2e16`); the six VAs
+  (twins plus adapters) appear as data only inside three isolated
+  10-entry arrays (files `0x249710`/`0x2499f0`/`0x249b28`, each
+  opening with `0x489ee0`). The arrays interlock per slot — slot 5
+  adapters call stager `0xb8d00` (sites `0xac57e`/`0xb2d9e`), slots
+  6/7 call the twins, slot 9 calls caption helper `0xb9ab0` (sites
+  `0xaef93`/`0xb554a`) — but no reader exists for any array:
+  exhaustive LE32 scan returns zero hits for each base as immediate,
+  displacement, vftable member, or `.data` initializer; no window-scan
+  base within `±0x1000` indexes into them (they float inside the
+  CP949 string pool); nothing outside the cluster calls any listed
+  handler; and `O2Net32.dll`/`Player.dll` carry no twin, adapter, or
+  array address. The packet path never reaches them.
+- **Packet side, pinned**: the receive stubs push a 4-dword record
+  `(0x12, opcode, record, 0)` onto the parent global `0x762B44` into
+  dispatcher `0x478d50` (file `0x78d50`, 160 B, 122 direct call/jmp
+  sites),
+  which enqueues it via `0x47eaf0` (file `0x7eaf0`, its only caller)
+  at `this+0x3c` — the subindex is the constant `0x12`, not a slot
+  number. Posts: 3012 at file `0x15e601` (`ev_aba36a3a…`, stub fn
+  `0x15e430`..`0x15e740`), 3013 at file `0x15f051` inside the shared
+  stub fn `0x15eca0`..`0x15f210` (reached from fn `0x158080`; it also
+  posts `0xbc4` at files `0x15ef4b`/`0x15f110`/`0x15f181`). The queue
+  consumer that would turn such records into row-store calls stays
+  unpinned — none of the store's six direct callers is reachable from
+  the dispatcher by any evidenced encoding, and the store has no
+  vftable presence either.
+- **Row composition, enqueue side**: inside the shared stub fn, an
+  imported printf (IAT `0x63f440`) formats `[%12s] %s` (format VA
+  `0x64d8d4`, file `0x24d8d4`; call file `0x15f076`) from a
+  sender-shaped and a text-shaped local into an out-buffer — bracket,
+  sender right-aligned to width 12, bracket, space, text; the exact
+  record that consumes it stays OPEN. User-side strings are built by
+  string helpers (files `0x1f1aa2`/`0x1f1bc0`/`0x1f34ff`/`0x1f3f0c`).
+  The parent getter `0x478a00` (on `0x762B44`) gates both branches:
+  a return of 5 selects a nine-entry table of CP949 emote words
+  (files `0x249dac`..`0x249dcc`: 사랑해, 미워, 꽃, `321`, `!!`, `~`,
+  `?`, `!`, `7`), a return of 0xa precedes the bracket format. The
+  trailing seat byte still has no evidenced consumer anywhere on the
+  path.
+- **Sibling arms**: `0x62840`/`0x628d0` (codes `0x86021041`/
+  `0x86022046`, cached list in `ecx+0x528`) and `0x90690`/`0x906f0`
+  (`LIST` `0x13800014`) share the store and the same body shape, have
+  zero direct callers, and sit in their own arrays (files
+  `0x2469e4`/`0x247c00`; the room array's slot 9 overruns into string
+  data — nine real entries) with no references in a `±0x40` window.
 - **Array iteration, pinned**: the row store `0x50fcc0` (file
   `0x10fcc0`, `0xa70` B) materializes rows by indexing the list's own
   vector (`this+0x198`, `imul` index × `0x6a5c`, checked-iterator
@@ -129,8 +170,10 @@ Pin: `OTwo.exe` 5029888 B, sha256
 `83a04541…c823b`, offsets file-based, found by offset-only byte scan
 (Python 3.14.9, capstone 5.0.7, GNU objdump 2.47 — no new dossier).
 Shell rule unchanged: live 3012/3013 packets only, newest visible rows
-stack from the list origin; the `[ADMIN]` prefix and row colors stay
-stand-ins (the matching OPEN sentences in `net-protocol.md`,
+stack from the list origin. The pinned enqueue-side shape now grounds
+the admin row look — bracket plus right-aligned sender — while the
+shell's `[ADMIN]` prefix and row colors stay stand-ins until the queue
+consumer is pinned (the matching OPEN sentences in `net-protocol.md`,
 `rooms.rs`, and `paint.rs` are owned by other docs/code and untouched
 here).
 
@@ -345,10 +388,14 @@ here).
    walk fraction and the `TITLE - ARTIST` caption are live. Test:
    `loading_bar_geometry_stays_open_placeholder` pins the placeholder
    formula so any future grounding must update it with evidence.
-6. Chat row feed (`TEXT_SWAIT_CHAT`) — CLOSED by the trace above:
-   feed twins `0xb9a10`/`0xb9a60` via handler-table slots 6/7, row
-   string carries sender plus text, seat byte unused on the path, and
-   the template resolves through list-vector iteration (zero code
-   immediates). Shell stand-ins (`[ADMIN]` prefix, row colors) stay
-   open in their owning files.
+6. Chat row feed (`TEXT_SWAIT_CHAT`) — template side pinned, live
+   dispatch OPEN (sweep 2026-11-08): twin bodies, adapter arrays, the
+   `(0x12, opcode, record, 0)` dispatcher posts, and the enqueue-side
+   `[%12s] %s` admin format are pinned above; refuted is any runtime
+   path from the 3012/3013 stubs into the twins (no reader exists for
+   the handler arrays by any absolute encoding, direct call, or
+   cross-module reference). OPEN: the queue consumer that turns
+   enqueued records into row-store calls, the exact gate that selects
+   the bracket format, and the user-row separator. Shell stand-ins
+   (`[ADMIN]` prefix, row colors) stay open in their owning files.
 
