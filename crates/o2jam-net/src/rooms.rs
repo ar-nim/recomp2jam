@@ -19,10 +19,11 @@ pub const ROOM_TITLE_LEN: usize = 21;
 ///
 /// The 7.55 client keeps the state byte at row `+0x04` of its 0xb4-stride
 /// room table. Consumers: the row fill passes the raw byte as the
-/// Room_State.ojs image frame (file `0x968ae`, set at `0x968b6` — frames
+/// Room_State.ojs image frame (file `0x1268ae`, set at `0x1268b6` — frames
 /// 0/1/2 are distinct icons), the builder gates on 1 (files `0x92405`,
-/// `0x924b2`, `0x92568`), and the row bind zero-tests it (file `0x951cc`);
-/// see `docs/room-enums.md`.
+/// `0x924b2`, `0x92568` — cite prefix unverified, see
+/// `docs/room-enums.md` OPEN), and the row bind zero-tests it (file
+/// `0x1251cc`); see `docs/room-enums.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum RoomState {
@@ -50,11 +51,14 @@ impl RoomState {
 /// Chart difficulty (`Encore.Metadata.Difficulty`).
 ///
 /// The 7.55 client reads the row `+0x8c` byte as an index into the music
-/// record's `u16` level table at `+0x14` (stride 2, files `0x95c52`,
-/// `0x95db9`, `0x961bd`, `0x965ae`) and into the Room_Speed.ojs icon grid
-/// (`byte*12`, file `0x96751`); value 0 has a zero-test with an extra
-/// `+0x30` icon offset (files `0x96610`, `0x9664e`); see
-/// `docs/room-enums.md`.
+/// record's `u16` level table at `+0x14` (stride 2, files `0x125c52`,
+/// `0x125db9`, `0x1261bd`, `0x1265ae`) and into the Room_Speed.ojs icon
+/// grid (`byte*12`, file `0x126751`); value 0 has a zero-test with an
+/// extra `+0x30` icon-frame term (files `0x126610`, `0x12664e`, reset at
+/// `0x12566c`); see `docs/room-enums.md`.
+///
+/// The selected level word then bands the Room_Om.ojs icon through
+/// [`om_icon_frame`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Difficulty {
@@ -82,14 +86,38 @@ impl Difficulty {
     }
 }
 
+/// Room-list Om icon frame for a song level: the 1-based
+/// `Room_Om.ojs` frame the lobby row paints, whose *n*-th frame
+/// depicts *n* pudding mascots.
+///
+/// The 7.55 client's row fill (file `0x125240`) reads the selected
+/// song's level word — the `u16` at `music record + 2*difficulty +
+/// 0x14` — and passes it to the band mapper (file `0x126cb0`): a level
+/// above 12 defaults to frame 4 (compare at `0x126cc7`), otherwise a
+/// 13-entry byte table (file `0x126d18`) walks a jump table (file
+/// `0x126d0c`) to frames 1–3. The sprite setter (file `0x2f870`)
+/// subtracts 1 before its image lookup, and `Room_Om.ojs`
+/// (Interface1.opi, 6168 B) carries exactly four 40×19 frames of 1,
+/// 2, 3, and 4 puddings — so frame value `n` paints `n` puddings.
+/// See `docs/room-enums.md`.
+#[must_use]
+pub fn om_icon_frame(level: u16) -> u8 {
+    match level {
+        0..=4 => 1,
+        5..=8 => 2,
+        9..=12 => 3,
+        13.. => 4,
+    }
+}
+
 /// Scroll speed (`Mozart.Metadata.GameSpeed` as forked by
 /// Memoryer.Data — ordinal, unlike the Mozart_Client build's
 /// shuffled mapping).
 ///
 /// The 7.55 client maps each value 0–11 to an `X …` label in one
 /// function and to consecutive Room_Speed.ojs icon cells (frame =
-/// `speed + 12*difficulty + 1`, file `0x96751`); see
-/// `docs/room-enums.md`.
+/// `speed + 12*difficulty + extra + 1`, files `0x12674a`–`0x12676f`);
+/// see `docs/room-enums.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum GameSpeed {
@@ -919,7 +947,7 @@ mod room_list_tests {
     #[test]
     fn difficulty_names_each_wire_value() {
         // The exe indexes the level table with the raw byte (files
-        // 0x95c52 et al.), so ordinals 0..3 must stay contiguous.
+        // 0x125c52 et al.), so ordinals 0..3 must stay contiguous.
         for (code, name) in [
             (0, Difficulty::Ex),
             (1, Difficulty::Nx),
@@ -956,6 +984,44 @@ mod room_list_tests {
         }
         assert_eq!(GameSpeed::from_code(12), None);
         assert_eq!(GameSpeed::from_code(0xFF), None);
+    }
+
+    #[test]
+    fn om_icon_frame_one_covers_levels_0_to_4() {
+        // Band table entries for levels 0..4 are all 0 (file
+        // 0x126d18), and jump-table slot 0 returns frame 1.
+        for level in 0..=4_u16 {
+            assert_eq!(om_icon_frame(level), 1);
+        }
+    }
+
+    #[test]
+    fn om_icon_frame_two_starts_at_level_5() {
+        // The 4→5 cut and the whole 5..8 run (table bytes 0x126d1d..).
+        assert_eq!(om_icon_frame(4), 1);
+        for level in 5..=8_u16 {
+            assert_eq!(om_icon_frame(level), 2);
+        }
+    }
+
+    #[test]
+    fn om_icon_frame_three_starts_at_level_9() {
+        // The 8→9 cut and the whole 9..12 run; 12 is the last table
+        // index before the mapper's >12 default.
+        assert_eq!(om_icon_frame(8), 2);
+        for level in 9..=12_u16 {
+            assert_eq!(om_icon_frame(level), 3);
+        }
+    }
+
+    #[test]
+    fn om_icon_frame_four_starts_at_level_13() {
+        // The 12→13 cut rides the mapper's bound (compare at file
+        // 0x126cc7), so every level past the 13-entry table lands on 4.
+        assert_eq!(om_icon_frame(12), 3);
+        for level in [13, 14, 27, 100, u16::MAX] {
+            assert_eq!(om_icon_frame(level), 4);
+        }
     }
 
     #[test]

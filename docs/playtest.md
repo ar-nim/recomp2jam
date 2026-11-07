@@ -717,3 +717,41 @@ Live re-proof on the hold-head. Covers the net difficulty-icon pins
   targets unchanged, 0 failures). No commits, no pushes.** This sweep
   touched only `docs/playtest.md`; the two dirty files are the peer's
   uncommitted work, not mine.
+
+## Regression sweep — 2026-11-07 11:07 UTC+8 (HEAD `8bee765`, tree clean)
+
+Live re-proof on the hold-migration head. Covers the three commits landed
+after the hold-head baseline `2ed7b97`: multi-entry proof skip without
+archives (`e107697`), inert expiry arm release judging (`cc10667`), and
+armed tails judged on release (`8bee765`).
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1047 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 0, file 149, game 84, net 333,
+  render 72, shell 299, real_art 7, scenes 22, recomp2jam 62
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, no warnings.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.61 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`11:06:40 +08:00`):
+  `Authorize session` → `Get channel list: [0]` →
+  `Enter channel: [0/00]` → `Get character info: [tester]` →
+  `Create room: songflow` →
+  `Update room [000] music settings: [HX / X10 / o2ma757]` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Update #1 - Jam: 3 (Bonus: 0)` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broken-pipe broadcast WARNs on room delete).
+- **Verdict: no regression — suite is green on the hold-migration head
+  (1047 passed; +37 vs the 1010 baseline: file +8, game +3, shell +21,
+  recomp2jam +5 from the three commits above, all other targets
+  unchanged, 0 failures). No commits, no pushes.** This sweep touched
+  only `docs/playtest.md`.

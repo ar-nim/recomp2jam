@@ -25,9 +25,9 @@ pin for all EXE rows: `AngelO2Jam.exe` 5,029,888 B, SHA-256
 
 | Level | Claims |
 |---|---|
-| EXE | 68 |
-| DATA | 41 |
-| ASSUMED | 30 |
+| EXE | 75 |
+| DATA | 37 |
+| ASSUMED | 27 |
 | Total | 139 |
 
 ## The pairing-rule family (known mistake + siblings)
@@ -57,11 +57,12 @@ applier looks each entry up by `code & 0xFFF − 1` and bounds-checks
   The exe reads levels as `u16[difficulty]` over the song-record words
   {+24 lo, +26 hi, +28} (= header +20 lo/hi, +24) and pins the
   ascending order via the difficulty-keyed life sets (C34/C35).
-- **S6** — `GameSpeed`/`RoomState`/`Difficulty` value sets locked from
-  Memoryer ordinals, not exe consumers (D13); only the label chain and
-  the value-1 gate are exe-pinned (C22, A27 context).
-- **S7** — paint order asserted as file order beyond the
-  background-first proof (A5); nothing observes z-order in the chain.
+- **S6** — RESOLVED: the D13 value sets are exe-pinned (icon frames,
+  level-table indexing, icon grid, label chain); the Memoryer ordinals
+  stand as corroboration.
+- **S7** — RESOLVED to the loop level: the render loop paints stored
+  (file) order (A5); the only z-order nuance found is the
+  `.oji`-over-`.ojs` layer split.
 
 Lesson: wherever a sequential rule is claimed, ask which explicit
 field (code low word, code nibble, M30 `ref`, header per-level field)
@@ -76,41 +77,41 @@ index (all-zero rect, slot 0, default arm).
 | A2 | File-order pairing: rect *i* lays out entry *i+1* (38/38 bound Interface blocks, zero mismatches) | DATA | `opi-pattern.md` 5, `bnd-semantics.md` walks | R | **source** |
 | A3 | Shell binds by zip-and-truncate (`bind_controls`, `bind_verbatim_entries`), silent drops | ASSUMED | `bnd-audit.md` 1–2; contradicts A1 zero-rect | R | S2/S3 |
 | A4 | Rect 0 is the full-screen background, painted first | DATA | `State_Room`/`State_Avi` rect 0 walks | R | feeds A5 |
-| A5 | Paint order is topmost-last by file order beyond background-first | ASSUMED | `opi-pattern.md` OPEN 1; `ui-loader.md` OPEN 5 | R | S7 |
+| A5 | Paint order is topmost-last by file order beyond background-first | EXE | render loop `0x5DEC30` walks the control array in stored (file) order, building quads sequentially, ev `ff581cfa…`; nuance: `.oji` sprites ride layer 2 above the `.ojs` layer 1 regardless of file position (`ui-draw.md` step 3) | R | refines S7 |
 | A6 | Space: 800x600 absolute px, top-left origin, `(x2, y2)` exclusive; every `State_*.bnd` spans the canvas | DATA | all `State_*.bnd` spans | R | |
 | A7 | 800x600 default, fullscreen-only (`WS_POPUP` fork default; windowed branch unreachable) | EXE | `0x14b4c`/`0x14baf`, fork `0x41c0b` | R | |
 | A8 | Avatar-dialog rects are screen-absolute; dialog origin subtracted at apply | EXE | `0x4DA630`, ev `9e526b62…` | R | |
 | A9 | All 27 dialogs share the screen-absolute origin rule | ASSUMED | `0x4ED650` untraced (`ui-loader.md` OPEN 2–3) | R | |
-| A10 | Single-image sprite anchor == its rect, byte-exact (3 probes) | DATA | `Dialog_Information`/`Info_OK`/`Playing_Exit` probes | R | |
+| A10 | Single-image sprites land at their rect: dest = view position + per-frame sprite anchor, byte-exact == rect (3 probes); the rect is unread at blit | EXE | anchor math `0x41DF80` (anchor words at frame-record `+0`/`+2`, stride `0x14`), ev `7418d033…`; equality probed on `Dialog_Information`/`Info_OK`/`Playing_Exit` | R | |
 | A11 | Raw frames: `size == w*h*2`, little-endian RGB555 | DATA | 63,742 images across archives | R | |
-| A12 | Colorkey `0x0000`/`0x7D5F` pixels are transparent | DATA | 3,444/5,787 bodies + byte-exact probes | R | |
-| A13 | Sprite lookup is ASCII-case-insensitive (3 case-only stems) | DATA | `opi-pattern.md` 6 | R | |
+| A12 | Colorkey `0x0000`/`0x7D5F` pixels are transparent | DATA | 3,444/5,787 bodies + byte-exact probes; honest limit: the draw path never compares the key on CPU — consumption is device-side (OPEN, `ui-draw.md` Colorkey) | R | |
+| A13 | Sprite lookup is ASCII-case-insensitive (3 case-only stems) | EXE | *(offset-only)* archive slot walk `0x40A9C0` (0x98-stride records, count at `+0x110`) compares each name via the CRT case-fold compare — fast path folds A–Z by `+0x20` at `0x5F33F7`, called through `0x5F34FF` ← lookup `0x4797D0` ← open `0x4795E0`; stems: `opi-pattern.md` 6 | R | |
 | A14 | `O2_SBS_VERT`/`O2_SBS_HORZ` with numeric args are scrollbar params, not files | EXE | strings `0x24c190` | R | |
 | A15 | `_`-prefix marks runtime resolution; `%s.ojs`/`%s.oja`/`%s%d.ojs`/`%s.ojt` patterns | EXE | strings `0x24b0ec`, `0x247958` | R | exact expansion rule ASSUMED |
 | A16 | Playing screen feeds stack-built synthetic entries through the same factory | EXE | ev `1be2d784…` (`0x48B2D0` family) | R | |
 | A17 | One control per entry is created only when `code & 0xFF0000 ≠ 0` | EXE | `0x48A060`, ev `9e526b62…` | R | |
-| A18 | Code second byte selects control behavior (button/scrollbar/…) | ASSUMED | RTTI histogram correlation only; arm join open | R | |
+| A18 | Code second byte selects the control class (ctor arm) | EXE | factory `0x48B2D0` masks `code & 0xFF0000` (`0x48B30A`) into a compare chain of ctor arms (allocs `0x60`…`0x20C`); wrapper `0x48A620` repeats the dispatch (`0x48A668`, e.g. image arm ctor `0x50A820`) and splits the toggle arm further on `code & 0xF000` (`0x48AA1F`); ev `1be2d784…`; arm ↔ RTTI class-name join open, behavior names stay CXO2-corroborated only | R | |
 | A19 | SET children are matched by `code & 0xFF000` against the set key, recursed | EXE | `0x48A620`, ev `1be2d784…` | R | corrects S1 |
 | A20 | SET entries consume rects "in file order exactly like top-level" | DATA | `control.rs:17` doc; order-only observation | R | **S1** |
-| A21 | `SET` first param == member count | DATA | 22/22 groups; set `+0x08` ev `2fdbec57…` | R | |
+| A21 | `SET` first param == member count | EXE | parser `0x411890` sscanf (format file `0x243F68`) stores param 1 → set `+0x08` and param 2 → match key `+0x04` (`0x411913`–`0x41193A`), then allocates count × `0x11C` children at parse (`0x41198B`–`0x4119A5`); ev `2fdbec57…`; 22/22 groups | R | |
 | A22 | Trailing parameter-less SET runs fill the declared slots | EXE | eager alloc at parse, ev `2fdbec57…` | R | |
-| A23 | The four empty `0x00` stub states draw nothing | DATA | empty names, `size` 0; stub walk | R | |
+| A23 | The four empty `0x00` stub states draw nothing | EXE | applier `0x48A060` creates controls only from the block's entry array, gated `code & 0xFF0000 ≠ 0` (`0x48A134`, ev `9e526b62…`); zero-entry stubs create nothing, and the render loop `0x5DEC30` draws stored controls only (ev `ff581cfa…`); stub inventory (empty names, `size` 0) stays data-side | R | |
 | A24 | `BOUND` stem is data-driven; only `Avatar_Info`/`Map_Avatar`/`State_Playing_network` literals exist | EXE | `0x24ab9c`/`0x24b080`, ev `3eb885cd…` | R | |
 | A25 | Shell hardcodes bind stems per scene instead of reading `BOUND` | ASSUMED | `opi-ignored.md` sev 2; contradicts A24 | R | |
 | A26 | Playing subset: 17 rects cover entries 213–229; decl `0xE6` loads 0–229; last 5 ride unloaded | DATA | in-file CP949 comments + counts; decl alloc ev `f4662376…` | R | **S2** |
 | A27 | Room 75/76 and Waiting 116/117 are "entries − 1", not subsets | DATA | counts; zero mismatches on the walk | R | **S3** |
 | A28 | `.bnd` rects carry extent (4 dwords copied into the control) | EXE | `0x548640`, ev `3a869bb7…`; shell keeps origin only | R | |
-| A29 | Unbound scenes (bare `BOUND`) paint art full-bleed | ASSUMED | `bnd-audit.md` 15/23; "no bind" ≠ "full-bleed" | R | |
+| A29 | Unbound scenes (bare `BOUND`) paint art full-bleed | ASSUMED | `bnd-audit.md` 15/23; exe stages `(0,0)` and draws at the sprite anchor (`ui-draw.md`), so full-bleed depends on per-scene art size — unverified | R | |
 | A30 | Highway geometry from staged art: lanes `(5,28)…(165,28)`, judgement row 487, 7 px heads | DATA | sprite-anchor walks (`KeydownImage` slot 33 et al.) | R | |
 | A31 | Jam bars at `(23,536)`/`(570,536)` 206x16; peer bars 46x8 | DATA | staged `Jamgauge` shell anchors | R | |
 | A32 | Judgement/combo/jam digit anchors, 600 ms fade, score digits at fixed pixels | ASSUMED | `bnd-audit.md` 31; rects unbound | R | |
 | A33 | Linear scroll, 2000 ms lookahead | ASSUMED | `bnd-audit.md` 32; scroll shape unobserved | R+G | |
 | A34 | Curtain bands are integer fifths, clipped to a frame box | ASSUMED | `bnd-audit.md` 20/30; exe clip math open | R | |
 | A35 | Procedural receptor pad 5 px, note 8 px + cap, burst 24 px | ASSUMED | `bnd-audit.md` 6/7/29 | R | |
-| A36 | Micro-font metrics + hardcoded placeholder labels (`CHANNEL`, `M{id}`, …) | ASSUMED | `dialog-strings.md` §2/§5: captions missing by design | R | |
+| A36 | Micro-font metrics + hardcoded placeholder labels (`CHANNEL`, `M{id}`, …) | ASSUMED | `dialog-strings.md` §2/§5: captions missing by design; exe label sources are sprite art + runtime strings (`Lv.%d:%s` fill, song-select fonts), so our placeholders replace runtime text, not archived captions | R | |
 | A37 | 47 `.ojs` bodies are raw JPEG album art (`FF D8 … FF D9`) | DATA | `is_jpeg_body` 47/47 | R | unused in shell |
 | A38 | Present letterboxes 4:3, never stretches | ASSUMED | `playing-reference.md` photo | R | |
-| A39 | CDX/DirectDraw blit path: color-key blits, Flip, D3D texture upload | EXE | imports `0x63f01c`, CDX RTTI; call sites open | R | |
+| A39 | CDX/DirectDraw blit path: DirectDraw init, CDX surface blits, D3D texture upload | EXE | import verified `DDRAW.dll!DirectDrawCreateEx`, IAT VA `0x63F01C` (descriptor file `0x27AF2C`, *(offset-only)*); consumer chain pinned in `ui-draw.md`: display init `0x413030`, `CDXSurface::Draw` `0x42B4D0` ev `867ac248…`, `DrawClip` `0x42B5E0` ev `85764b28…`, page dispatch `0x42B450` ev `08a33fe4…`, page upload `0x42A580`, D3D variant `0x423390`; colorkey-consuming device call + `Flip` site stay open | R | |
 
 ## B. Gameplay
 
@@ -218,7 +219,7 @@ index (all-zero rect, slot 0, default arm).
 | D10 | MemberRole 0 None / 1 Champion / 2 Challenger / 3 Spectator gates | EXE | `0x77ee86` loads, ev `acacd596…` set | G | |
 | D11 | Relay UDP ports 39311/39312; no hardcoded TCP relay ports; gateway 15010 | EXE | immediates `0x18c73e`…, ev `6e655b70…` | G | |
 | D12 | Room row record `0xb4` field map = parse order | EXE | `0x15b780` parser sites, ev `d9f9a8b4…` | R | |
-| D13 | `RoomState` 0/1/2, `Difficulty` 0–3, `GameSpeed` 0–11 value sets | ASSUMED | Memoryer-locked; only value 1 + labels exe-pinned | R | **S6** |
+| D13 | `RoomState` 0/1/2, `Difficulty` 0–3, `GameSpeed` 0–11 value sets | EXE | every value renders: state byte → `Room_State.ojs` frame 0/1/2 (`0x968AE`, ev `453c83b4…`/`c63d088a…`), value-1 gates (ev `575ba6dd…`), difficulty byte indexes the level table (`0x95C52` et al.) and drives the `×12` speed-icon grid (`0x96751`, ev `5d40cd1e…`), speed label chain `0xC4137`–`0xC4371` (ev `f2fa3e80…`, C22) with the icon grid corroborating the 0–11 order (`room-enums.md`); Memoryer ordinals now corroboration, not source | R | closes S6 |
 | D14 | Equip 5004/5005 shapes; slot from item record; type 5 → slot 11; `< 0x11` | EXE | *(offset-only)* `0xa4ec8`/`0xa3cc9`/`0xa4baa` | G | |
 | D15 | Gift/shop shapes 5015–5033; 5040/5041 absent on 7.55 wire | EXE | *(offset-only)* dispatch sites in `gifts.md`/`shop-buy.md` | G | |
 | D16 | Member-slot offsets `+0x04` id … `+0x218c` streak; derived slot marks | EXE | reader sites `0x159d38`–`0x159f82`; ev set in `relay.md` §11 | R+G | |
@@ -234,14 +235,14 @@ index (all-zero rect, slot 0, default arm).
    supersedes it. Every bound scene depends on the mechanism.
 2. **A3** — zip-and-truncate binding silently drops entries; the exe
    gives out-of-range ordinals an all-zero rect instead.
-3. **D13** — room-enum value sets locked from Memoryer ordinals; room
-   list, join gating, and speed labels render from them.
-4. **A34** — curtain geometry (ring visuals) from item text; the exe
+3. **A34** — curtain geometry (ring visuals) from item text; the exe
    clip math is untraced.
-5. **A32/A35/A36** — HUD digits, receptor/note/burst pixels, and font
+4. **A32/A35/A36** — HUD digits, receptor/note/burst pixels, and font
    metrics are invented placeholders behind genuine art.
-6. **A5** — topmost-last paint order beyond background-first is
-    unobserved; layering of every scene rides on it.
+5. **A29** — "unbound scene paints full-bleed" rests on the shell
+   guess; the exe draws at the sprite anchor, so per-scene art decides.
+6. **A38** — letterbox-vs-stretch under the fixed 800x600 fullscreen
+   display rests on a photo; no exe scaling-path evidence either way.
 
 ## Maintenance
 

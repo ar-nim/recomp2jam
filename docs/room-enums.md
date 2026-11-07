@@ -31,10 +31,10 @@ observed):
 
 | Enum value | Consumer site (file) | How |
 |---|---|---|
-| RoomState 1 (Waiting) | `0x92405`, `0x924b2`, `0x92568` (room-list builder, func `0x92300`); `0x94b31` (sorted-list path, func `0x944c0`) | Loads the row `+0x04` byte, compares against 1, skips the row otherwise (`ev_575ba6dd8313da2a089810a5a6fb0b07`, observed) |
-| RoomState 0 (Unavailable) | `0x968ae` (row fill, func `0x125240`): raw byte pushed as image frame, set at `0x968b6` | Room_State.ojs (row child 12, id `0x1350002D`) frame = the state byte unmodified — frames 0/1/2 are the three icons (`ev_453c83b428119f26c6d5d8befcd48ea5`, `ev_c63d088a33a9ec1096e022c2a9a6453d`, observed). Also `0x951cc` (row bind, func `0x1251b0`): zero-test on the byte gates the level/Om display flag via `0x409bd0` (`ev_a0e29f0405d2f8088ee47d794228717d`, observed) |
-| RoomState 2 (Playing) | `0x968ae` (same icon site as value 0) | Frame 2 of Room_State.ojs (`ev_453c83b428119f26c6d5d8befcd48ea5`, observed) |
-| Difficulty 0–3 (Ex/Nx/Hx/Rx) | `0x95c52`, `0x95db9`, `0x961bd`, `0x965ae` (row fill, one per title/level display state): byte read, then `u16 [music record + 2*byte + 0x14]` | The difficulty byte indexes the music record's level table (same `+0x14` triple as C34/S5); the level word maps through `0x96cb0` (13-entry jump table, bound 12 → frames 1–4) onto the Room_Om.ojs digit icon (`ev_748bbf68c76030c4856ecc817b0d8f2a`, `ev_5222041b7c82c3b37995b066845f3e46`, `ev_e8ed6c0becb4e7acfc6bcc5d7d539b3d`, `ev_e518468223d47d6523fe7899d0915f3a`, `ev_de514889a12f1207baef1be5651d3e12`, observed). Value 0 zero-test at `0x96610`: record level > 3 sets a `+0x30` icon offset (`0x9664e`, reset at `0x9566c`; `ev_850115f9467abbaadf41e71f4dba02d3`, `ev_1073f0293f0c773e75bdc3c586b60e19`, `ev_e4749a0cc840c1aaeeaedb52853bd99a`, observed). Numeric `byte*12` grid into the Room_Speed.ojs frame at `0x96751` (`ev_5d40cd1e52ffd67466b3558fe68dbf65`, observed) |
+| RoomState 1 (Waiting) | `0x92405`, `0x924b2`, `0x92568` (room-list builder, func `0x92300`); `0x94b31` (sorted-list path, func `0x944c0`) | Loads the row `+0x04` byte, compares against 1, skips the row otherwise (`ev_575ba6dd8313da2a089810a5a6fb0b07`, observed; cite prefix unverified — see OPEN) |
+| RoomState 0 (Unavailable) | `0x1268ae` (row fill, func `0x125240`): raw byte pushed as image frame, set at `0x1268b6` | Room_State.ojs (row child 12, id `0x1350002D`) frame = the state byte unmodified — frames 0/1/2 are the three icons (`ev_453c83b428119f26c6d5d8befcd48ea5`, `ev_c63d088a33a9ec1096e022c2a9a6453d`, observed; offsets re-pinned byte-exact, offset-only survey — see the band-table section below). Also `0x1251cc` (row bind, func `0x1251b0`): zero-test on the byte gates the level/Om display flag via `0x409bd0` (`ev_a0e29f0405d2f8088ee47d794228717d`, observed; `0x1251da` pins the paired `+0x88` vs `0x64` music-floor compare) |
+| RoomState 2 (Playing) | `0x1268ae` (same icon site as value 0) | Frame 2 of Room_State.ojs (`ev_453c83b428119f26c6d5d8befcd48ea5`, observed) |
+| Difficulty 0–3 (Ex/Nx/Hx/Rx) | `0x125c52`, `0x125db9`, `0x1261bd`, `0x1265ae` (row fill, one per title/level display state): byte read, then `u16 [music record + 2*byte + 0x14]` | The difficulty byte indexes the music record's level table (same `+0x14` triple as C34/S5); the level word maps through the band mapper `0x126cb0` (doc previously cited `0x96cb0` — cite prefix restored) onto the Room_Om.ojs pudding icon: levels 0–4 → frame 1, 5–8 → 2, 9–12 → 3, 13+ → 4 (`ev_748bbf68c76030c4856ecc817b0d8f2a`, `ev_5222041b7c82c3b37995b066845f3e46`, `ev_e8ed6c0becb4e7acfc6bcc5d7d539b3d`, `ev_e518468223d47d6523fe7899d0915f3a`, `ev_de514889a12f1207baef1be5651d3e12`, observed; boundaries re-pinned byte-exact — see the band-table section below). A fifth mapper call at `0x1266b9` passes constant level 1 (no-song display state → frame 1). Value 0 zero-test at `0x126610`: Ex level > 3 sets a `+0x30` extra in the *Room_Speed* frame term (`0x12664e`, reset at `0x12566c`, consumed at `0x126764`; `ev_850115f9467abbaadf41e71f4dba02d3`, `ev_1073f0293f0c773e75bdc3c586b60e19`, `ev_e4749a0cc840c1aaeeaedb52853bd99a`, observed). Numeric `byte*12` grid into the Room_Speed.ojs frame at `0x126751` (`ev_5d40cd1e52ffd67466b3558fe68dbf65`, observed) |
 | GameSpeed 0 (X05) | `0xc4137` (`test`, equal) → pushes `X 0.5` at `0xc413b` | Label chain, func file `0xc3b40` (see below) |
 | GameSpeed 1 (X10) | `0xc416a` → pushes `X 1` at `0xc416f` | Label chain |
 | GameSpeed 2 (X15) | `0xc419e` → pushes `X 1.5` at `0xc41a3` | Label chain |
@@ -56,9 +56,10 @@ the matching `X …` label from the contiguous string table at VAs
 `X 3.5`, `X 4`, `X 4.5`, `X 5`, `X 6`, `X R`)
 (`ev_f2fa3e808b206eb15716703d82970f78`, observed). The same ordinal order
 drives the room-list speed icon: Room_Speed.ojs frame = `speed +
-12*difficulty + extra + 1` (`0x96751`–`0x9676f`, twelve icon cells per
-difficulty row), or `speed + 0x25` when the row `+0x88` word has its high
-nibble flag set (`0x9672a`–`0x96738`, `ev_d8cb12a1b5d0a42e6e0f05b13706b51d`,
+12*difficulty + extra + 1` (`0x12674a`–`0x12676f`, twelve icon cells per
+difficulty row; the `extra` term is the difficulty-0 level test's `+0x30`,
+`0x126764`), or `speed + 0x25` when the row `+0x88` word has its high
+nibble flag set (`0x12671f`–`0x126738`, `ev_d8cb12a1b5d0a42e6e0f05b13706b51d`,
 observed) — the icon grid corroborates the label chain order 0–11.
 
 RoomState detail: the icon site above consumes all three values — the
@@ -66,11 +67,11 @@ raw `+0x04` byte becomes the Room_State.ojs frame, so 0 (unavailable),
 1 (waiting), and 2 (playing) each render a distinct icon. Besides that,
 the value-1 gates in the builder/filter stand as pinned before, and the
 func-`0x944c0` filter compares row `+0x04` against two runtime filter
-variables (files `0x94650`, `0x94665`) and checks level gates (row
+variables (files `0x94650`, `0x94665`; cite prefix unverified — see OPEN) and checks level gates (row
 `+0x92`/`+0x93` against the byte at `0x77cd20`, files `0x946b5`/`0x946d8`),
 the password flag (row `+0x85`, file `0x9467e`), and full rooms (row
 `+0x91` against row `+0x90`, file `0x94743`). The row bind (`0x1251b0`)
-also compares the row `+0x88` dword against `0x64` (file `0x951da`,
+also compares the row `+0x88` dword against `0x64` (file `0x1251da`,
 `ev_b4d5ce890d00293ac5b67ad16a4e2445`, observed): only rows past that
 music floor run the per-row fill.
 
@@ -87,13 +88,13 @@ count). Icon-per-child (file offsets within the fill):
 
 | Child | Control / sprite | Variant driver (row byte) | Site (file) |
 |---|---|---|---|
-| 6 | `IDC_IMAGE_SROOM_SPEED` `0x13500027` Room_Speed.ojs | `+0x8f` speed (+ `12*+0x8c` difficulty + `0x30` Ex extra + 1; or `+0x8f + 0x25` on the `+0x88` nibble flag) | `0x9672a`, `0x9674a`–`0x9676f` |
-| 7 | `IDC_IMAGE_SROOM_MODE` `0x13500028` **Room_Mode.ojs** | `+0x8d` key_mode: 0 → frame 1, 2 → frame 2, else untouched | `0x967ad`–`0x967e2` (`ev_9c3ee393db495f0b4475b38b6602d800`, observed) |
-| 8 | `IDC_IMAGE_SROOM_OM` `0x13500029` Room_Om.ojs | level word indexed by `+0x8c`, banded 1–4 via `0x96cb0` | `0x95c52` et al. |
-| 9 | `IDC_IMAGE_SROOM_LEVEL` `0x1350002A` Room_LevelLimit.ojs | `+0x8e` game_mode: 1 → frame 1, else 0 | `0x96820`–`0x96841` (`ev_157564dc6c7d3e6a7df30c60a405dba9`, observed) |
-| 11 | `IDC_IMAGE_SROOM_PASSWORD` `0x1350002C` Room_Password.ojs | `+0x85` has_password as frame | `0x96872`–`0x9687d` (`ev_a0eb629f2da7ae70e304e9040bbb855f`, observed) |
-| 12 | `IDC_IMAGE_SROOM_STATE` `0x1350002D` Room_State.ojs | `+0x04` state as frame | `0x968ae`–`0x968b6` |
-| 13–15 | `IDC_IMAGE_SROOM_ROOMNO1/10/100` `0x1350002E`–`0x13500030` Room_Number.ojs | room number digits, frame = digit + 1 | `0x968e5`+ (`ev_fa04f51cde8f822abfd391ef0961bfb2`, observed) |
+| 6 | `IDC_IMAGE_SROOM_SPEED` `0x13500027` Room_Speed.ojs | `+0x8f` speed (+ `12*+0x8c` difficulty + `0x30` Ex extra + 1; or `+0x8f + 0x25` on the `+0x88` nibble flag) | `0x12671f`, `0x12674a`–`0x12676f` |
+| 7 | `IDC_IMAGE_SROOM_MODE` `0x13500028` **Room_Mode.ojs** | `+0x8d` key_mode: 0 → frame 1, 2 → frame 2, else untouched | `0x1267ad`–`0x1267e2` (`ev_9c3ee393db495f0b4475b38b6602d800`, observed) |
+| 8 | `IDC_IMAGE_SROOM_OM` `0x13500029` Room_Om.ojs | level word indexed by `+0x8c`, banded 0–4/5–8/9–12/13+ → frames 1–4 via `0x126cb0` | `0x125c52` et al. |
+| 9 | `IDC_IMAGE_SROOM_LEVEL` `0x1350002A` Room_LevelLimit.ojs | `+0x8e` game_mode: 1 → frame 1, else 0 | `0x126820`–`0x126841` (`ev_157564dc6c7d3e6a7df30c60a405dba9`, observed) |
+| 11 | `IDC_IMAGE_SROOM_PASSWORD` `0x1350002C` Room_Password.ojs | `+0x85` has_password as frame | `0x126872`–`0x12687d` (`ev_a0eb629f2da7ae70e304e9040bbb855f`, observed) |
+| 12 | `IDC_IMAGE_SROOM_STATE` `0x1350002D` Room_State.ojs | `+0x04` state as frame | `0x1268ae`–`0x1268b6` |
+| 13–15 | `IDC_IMAGE_SROOM_ROOMNO1/10/100` `0x1350002E`–`0x13500030` Room_Number.ojs | room number digits, frame = digit + 1 | `0x1268e5`+ (`ev_fa04f51cde8f822abfd391ef0961bfb2`, observed) |
 
 So `Room_Mode.ojs` — despite the name — is the **key-mode icon**: frame 1
 = 3-key, frame 2 = 7-key, frame 0 unused; the battle/normal distinction
@@ -103,6 +104,49 @@ page callback (`0x95a80`, `ev_9250c806d0aa5f1fd3ee90296f1838da`, observed)
 stages the row button's own image (`0x42fc70`, ui-draw.md step 2) and sets
 frame = room_type (`+0xb0`) + 1 when room_type != 0, frame 1 otherwise
 after a music-record lookup miss.
+
+## Om icon band table (`0x126cb0`) — CLOSED
+
+*(offset-only byte survey: python byte reads + Capstone 5.0.7; no dossier
+filed. Exe pin per the header above; art bytes from the local
+`Interface1.opi` copy, hash pinned in `docs/file-formats/opi.md`.)*
+
+Earlier rows in this file cited the Om mapper as `0x96cb0` and the row-fill
+icon sites as `0x95xxx`/`0x96xxx`; both had lost a `0x100000` prefix. The
+real sites sit inside the row fill, file `0x125240`–`0x1269d1`
+(VA `0x525240`–`0x5269d1`): the four per-display-state level reads at
+`0x125c52`, `0x125db9`, `0x1261bd`, `0x1265ae` (each `movzx` of row `+0x8c`,
+then `mov ax, word [music record + idx*2 + 0x14]`, push, call), one constant
+level-1 call at `0x1266b9` (no-song state → frame 1), and the frame setter
+`0x42f870` on the child-8 sprite.
+
+The mapper at file `0x126cb0` (VA `0x526cb0`) takes the level word as its
+one stack argument and returns the 1-based Om frame:
+
+- `cmp level, 12` + unsigned-above default → frame 4 (compare at
+  `0x126cc7`, constant store `0x126cf9`),
+- levels 0–12 read a 13-entry byte table at file `0x126d18`
+  (VA `0x526d18`): `00 ×5, 01 ×4, 02 ×4`, indexing a 4-entry jump table at
+  file `0x126d0c` (VA `0x526d0c`): slot 0 → `0x526cde` (frame 1), slot 1 →
+  `0x526ce7` (frame 2), slot 2 → `0x526cf0` (frame 3); slot 3 is a
+  never-produced `NULL`.
+
+Bands: **levels 0–4 → frame 1, 5–8 → frame 2, 9–12 → frame 3, 13+ →
+frame 4** (case constants at `0x126cde`/`0x126ce7`/`0x126cf0`/`0x126cf9`,
+`ret 4` at `0x126d06`).
+
+Art confirmation: `Room_Om.ojs` (Interface1.opi entry, 6168 B) is a
+sprite-55 body, tag 0, colorkey `0x0000`, exactly four frames of 40×19 raw
+RGB555 — frame 1 paints 1 pudding mascot (red cap), frame 2 paints 2 (red +
+blue), frame 3 paints 3 (green + red + blue), frame 4 paints 4 (green + red
++ blue + red). The sprite setter (file `0x2f870`) stores the frame value
+verbatim (`0x2f891`–`0x2f897`), clamps it against a stored count
+(`0x2f8c7`–`0x2f8e1`), and subtracts 1 before the image lookup
+(`0x2f8ea`–`0x2f8f7`) — so frame value *n* paints image *n−1*, and the
+mapper's 1–4 output covers all four art frames exactly.
+
+Rust mirror: `om_icon_frame` in `crates/o2jam-net/src/rooms.rs`, with a
+test per band cut.
 
 ## Triage of the `cmp *,3` lead (`ev_746a8bbc4ebf9916302cedbeb0186058`)
 
@@ -164,13 +208,24 @@ compare-shaped scan can see. Superseded by the Difficulty rows in
 ## OPEN
 
 - RoomState 0/1/2 and Difficulty 0–3 value sets are closed: every value
-  has an exe consumer (icon frames for RoomState 0/2 at `0x968ae`;
+  has an exe consumer (icon frames for RoomState 0/2 at `0x1268ae`;
   indexed level-table reads plus the `*12` icon grid for Difficulty,
   sites above). Remaining unattributed `cmp *,3` sites (12 + 3 codec
   ones listed in the triage above) stay out of scope for D13.
-- The `0x96cb0` level→frame band boundaries (which Om frames mean which
-  level ranges beyond the 13-entry bound) are inferred from the jump
-  table shape, not from art; pixel confirmation would need the
-  Room_Om.ojs frames.
+- The Om level→frame band boundaries are closed (see the band-table
+  section above): the 13-entry table plus the >12 default give
+  0–4/5–8/9–12/13+ → frames 1–4, art-confirmed against the four
+  pudding frames of `Room_Om.ojs`.
+- Cite-prefix audit: this file's row-fill and row-bind byte sites had
+  lost a `0x100000` prefix (e.g. `0x96cb0` → `0x126cb0`, `0x968ae` →
+  `0x1268ae`, `0x951cc` → `0x1251cc`); all sites named in the
+  Consumers table, the icon table, and the GameSpeed/RoomState detail
+  paragraphs are now re-pinned byte-exact. Still unverified and
+  suspect: the builder/filter cites (`0x92300`, `0x92405`, `0x924b2`,
+  `0x92568`, `0x94b31`, `0x944c0`, `0x94650`, `0x94665`, `0x946b5`,
+  `0x946d8`, `0x9467e`, `0x94743`) — probe reads near `0x192405`
+  found no matching gate, so their true addresses are open. Re-verify
+  before relying on them; the `relay_enum_value_tests` lock and the
+  `rooms.rs` per-value tests do not depend on them.
 - `relay_enum_value_tests` still locks the value sets on the Rust side;
   `rooms.rs` per-value tests below mirror them.

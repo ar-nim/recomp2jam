@@ -294,9 +294,13 @@ impl HoldSpan {
         (tail_ms > head_ms).then_some(Self { head_ms, tail_ms })
     }
 
-    /// Judge a head strike with the shared strike windows: the keyup
-    /// judge tiers |hit − record time| against the same 6/18/25 bounds
-    /// as taps (compare chain at files `0x176b7f`–`0x176ba7`).
+    /// Judge a head strike with the shared strike windows: the key-down
+    /// walk branch tiers |hit − record time| against the same 6/18/25
+    /// bounds as taps (compare chain at files `0x176b7f`–`0x176ba7`).
+    /// The strike rides the key-down: the input forward inversion
+    /// (dossier `ev_cea19f7d…`) plus the pressed-flag init to 1 at file
+    /// `0x179b61` put the byte-0 walk edge on the press (see
+    /// [`HoldState`] item 5 and `docs/gameplay.md`).
     #[must_use]
     pub fn judge_head(&self, hit_ms: u64, windows: &TimingWindows) -> Judgement {
         windows.judge(saturating_offset_ms(hit_ms, self.head_ms))
@@ -353,9 +357,21 @@ impl HoldSpan {
 ///    judges the record at `+0x864[lane]` against the tail time with
 ///    the shared windows (files `0x176646`–`0x176687`) and clears the
 ///    cursor (file `0x176709`) — modeled by [`HoldState::judge_tail`].
-///    The input forward inverts the pressed word (file `0x1714b0`), so
-///    the walk branch rides the key-down and the `+0x864` branch the
-///    key-up.
+///    The press/release polarity is settled statically: the drained
+///    queue's kind 1 (press, pushed at files `0xe17ae`/`0xe185f`, kept
+///    to the in-play states) arrives as pressed argument 1 and kind 2
+///    (release, file `0xe1afa`, ungated) as argument 0 (dossier
+///    `ev_c01db4a8…`); the forward `FUN_005714b0` inverts it (pressed
+///    ≠ 0 forwards 0, == 0 forwards 1, dossier `ev_cea19f7d…`); the
+///    edge detector copies that value into the event byte (dossier
+///    `ev_248c9713…`) with pressed flags `+0x408[lane]` initialized
+///    to 1 (file `0x179b61`) — 'start released' under the inversion —
+///    so byte 0 rides the key-down and byte 1 the key-up. Without the
+///    inversion the flag-1 init would swallow every key-down edge.
+///    The raw DirectInput pressed bit reaches the drain uninverted
+///    (scancode→lane poster `FUN_00544b50` → `FUN_005429b0`, keyboard
+///    device dossier `ev_eb523feb…`), so the single forward inversion
+///    is the polarity point.
 /// 6. The expiry scan cannot Miss a held tail: its walk runs on the
 ///    per-lane cursor pair `+0x480[lane]`/`+0x484[lane]`, loaded once
 ///    as `{list head, list head}` at chart load (files `0x172d32`/
