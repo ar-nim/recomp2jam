@@ -248,6 +248,16 @@ fn paint_list_scrim(frame: &mut Frame<'_>, row_count: usize) {
 /// Row height of one channel entry.
 const CHANNEL_ROW_H: i32 = 8;
 
+/// One channel row: `gateway/channel population/capacity` (both ids
+/// ride the `GetChannelList` 1003 row; population over capacity).
+#[must_use]
+fn channel_row_text(channel: &ChannelState) -> String {
+    format!(
+        "{}/{} {}/{}",
+        channel.gateway_id, channel.channel_id, channel.population, channel.capacity
+    )
+}
+
 /// Channel rows plus highlight cursor (no background fill: shared by
 /// the flat fallback and the art scene).
 fn paint_channel_rows(frame: &mut Frame<'_>, channels: &[ChannelState], highlight: usize) {
@@ -257,10 +267,7 @@ fn paint_channel_rows(frame: &mut Frame<'_>, channels: &[ChannelState], highligh
     let text_x = w / 4;
     for (index, channel) in channels.iter().enumerate() {
         let row = index_as_row(index, h);
-        let entry = format!(
-            "{} {}/{}",
-            channel.channel_id, channel.population, channel.capacity
-        );
+        let entry = channel_row_text(channel);
         let ink = if channel.active {
             pack_xrgb(0xFF, 0xFF, 0xFF)
         } else {
@@ -2720,6 +2727,47 @@ mod paint_tests {
         );
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+        assert!(buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
+    }
+
+    #[test]
+    fn channel_row_names_gateway_and_channel_ids() {
+        let channel = ChannelState {
+            gateway_id: 1,
+            channel_id: 2,
+            capacity: 100,
+            population: 5,
+            active: true,
+        };
+        assert_eq!(channel_row_text(&channel), "1/2 5/100");
+    }
+
+    #[test]
+    fn channel_row_orders_population_over_capacity() {
+        let channel = ChannelState {
+            gateway_id: 0,
+            channel_id: 9,
+            capacity: 200,
+            population: 7,
+            active: false,
+        };
+        assert_eq!(channel_row_text(&channel), "0/9 7/200");
+    }
+
+    #[test]
+    fn channel_rows_dim_inactive_channels() {
+        let mut buf = vec![0u32; 64 * 48];
+        paint_channel_list(
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 48,
+            },
+            &two_channels(),
+            1,
+        );
+        assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+        assert!(buf.contains(&pack_xrgb(0x70, 0x70, 0x70)));
         assert!(buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
     }
 
