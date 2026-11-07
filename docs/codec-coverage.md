@@ -8,23 +8,25 @@ the repo. Numbers come from the real bytes, not estimates.
 
 ## Answer: counts per archive per codec
 
-| Archive | Named | Sprite bodies | raw-RGB555 (render) | .oji raster (skip) | strided atlas (skip) | .oja anim (skip) | JPEG (render) | data/`.bnd`/`.txt` |
+| Archive | Named | Sprite bodies | raw-RGB555 (render) | .oji raster (prefixed render) | strided atlas (render) | .oja anim (skip) | JPEG (render) | data/`.bnd`/`.txt` |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `Interface1.opi` | 1587 | 1532 | 1480 | 5 | 0 | 0 | 47 | 55 |
 | `Playing1.opi` | 627 | 621 | 610 | 5 | 3 | 3 | 0 | 6 |
 | `avatar.opa` | 7133 | 7131 | 7131 | 0 | 0 | 0 | 0 | 2 |
 | **Total** | **9347** | **9284** | **9221 (99.3%)** | **10** | **3** | **3** | **47** | **63** |
 
-Body-level render coverage: `Interface1.opi` 99.7% (1527/1532: the
-47 JPEG album-art bodies decode since codec gap ②), `Playing1.opi`
-98.2%, `avatar.opa` 100%. Image-record level: 63,796 records total,
-63,760 raw (99.94%); all 36 non-raw records live inside the 10 `.oji`
-bodies. The "compressed `.ojs`/`.ojt` frame" class is empty: no plain
-sprite body carries a single non-raw image, so every lost frame sits
-in an `.oji` or a `.oja` envelope — the strided atlases (gap ①) and
-the 47 JPEG album-art bodies (6.8 MB, gap ②) render now. Lost bytes:
-4.2 MB in `Interface1.opi`, 4.1 MB in `Playing1.opi`, none in
-`avatar.opa`.
+Body-level render coverage: `Interface1.opi` 100% (1532/1532),
+`Playing1.opi` 99.5% (618/621 — only the 3 `.oja` effect envelopes
+still drop their frame data), `avatar.opa` 100% — 9281/9284 bodies
+(99.97%). Image-record level: all 63,796 records decode — 63,760 raw
+(99.94%) plus the 36 non-raw records inside the 10 `.oji` bodies
+(prefixed walk, gaps ③+④). The "compressed `.ojs`/`.ojt` frame" class
+is empty: no plain sprite body carries a single non-raw image, so
+every formerly lost frame sat in an `.oji` or a `.oja` envelope — the
+strided atlases (gap ①), the 47 JPEG album-art bodies (6.8 MB, gap ②)
+and all 10 `.oji` bodies (gaps ③+④) render now. Lost bytes: only the
+3 `.oja` frame blobs in `Playing1.opi` (2,891,152 B total); none in
+`Interface1.opi`, none in `avatar.opa`.
 
 ## Lost bodies and the scene elements they belong to
 
@@ -33,7 +35,7 @@ file (`ControlList_Interface.txt`, `ControlList_Playing.txt`),
 including the runtime `_` stem rule (`resolve.rs`). Bodies with no
 `ControlList` reference are drawn by scene code.
 
-### `Interface1.opi` — 5 lost bodies
+### `Interface1.opi` — formerly 5 lost bodies, all render now
 
 The 47 `ATI*/ati*_{id}.ojs` JPEG album-art panels (music-select album
 rows, fetched by id convention; no `ControlList` reference) decode
@@ -42,26 +44,29 @@ now — see "JPEG album-art bodies" below.
 - `Lanking_NoticeBoard.oji` — rank notice board in five states:
   `IDC_IMAGE_SSHOP_NOTICEBOARD`, `IDC_IMAGE_SMYROOM_NOTICEBOARD`,
   `IDC_IMAGE_SWAIT_NOTICEBOARD`, `IDC_IMAGE_MSHOP_NOTICEBOARD`,
-  `IDC_IMAGE_LANKING_NOTICEBOARD`.
+  `IDC_IMAGE_LANKING_NOTICEBOARD` (renders since gap ③).
 - `Myroom_MybagSelect.oji` / `Shop_MybagSelect.oji` — my-bag buttons
-  (`IDC_IMAGE_SMYROOM_MYBAGSELECT`, `IDC_IMAGE_SSHOP_MYBAGSELECT`).
+  (`IDC_IMAGE_SMYROOM_MYBAGSELECT`, `IDC_IMAGE_SSHOP_MYBAGSELECT`;
+  repeated-y edge spans, render since gap ④).
 - `SelectAlbum_Bar.oji` (15 frames) / `SelectMusic_Bar.oji` (10
-  frames) — music-select list bars (code-drawn).
+  frames) — music-select list bars (code-drawn; render since gap ③).
 
-### `Playing1.opi` — 11 lost bodies (the in-play scene)
+### `Playing1.opi` — formerly 11 lost bodies; 8 render, 3 `.oja` remain
 
 - `Note_Combo4/5/6.ojt` — combo milestone glow animation, referenced
   by `IDC_IMAGE_SPLAY_NOTECOMBO` through runtime `_Note_Combo.ojt`
   (renders since gap ① wired: archive loader + `PlaySkin` glow).
 - `Avatar_Shadow.oji` — six avatar shadow slots
-  (`IDC_IMAGE_SPLAY_SHADOW1..6`).
+  (`IDC_IMAGE_SPLAY_SHADOW1..6`; renders since gap ③).
 - `Playing_ChatWindow.oji` — in-play chat window
-  (`IDC_IMAGE_SPLAY_CHATWINDOW`).
+  (`IDC_IMAGE_SPLAY_CHATWINDOW`; repeated-y row groups, renders
+  since gap ④).
 - `BG_Ani.oji` (4-frame background animation),
   `Lanking_NoticeBoard_Playing.oji`, `Playing_Loding_Lankview.oji` —
-  code-drawn (no `ControlList` reference).
+  code-drawn (no `ControlList` reference; render since gap ③).
 - `Note_Click.oja`, `LongNote_Effect.oja`, `Playing_Effect_Jam.oja` —
-  tap / hold / jam effect animation envelopes; their raw `.ojt`
+  tap / hold / jam effect animation envelopes; their frame data is
+  the only sprite loss left (gap ⑤). Their raw `.ojt`
   siblings (`_Note_Click.ojt`, `_Playing_Effect_Jam.ojt`,
   `LongNote_Effect.ojt`) do render.
 
@@ -70,15 +75,17 @@ now — see "JPEG album-art bodies" below.
 All 7131 sprite bodies render. Item art is referenced from
 `Itemdata_Korea.dat` shop tables; the archive holds no `ControlList`.
 
-## `.oji` body detail: one codec mapped, one remaining
+## `.oji` body detail: fully mapped (prefixed row groups)
 
-All 36 `.oji` frames fail `is_raw_rgb555`. The prefixed walk
-(`parse_sprite55_prefixed`) now maps 33 of them (7 bodies): each
-image stores `h` row groups of `[u16 width][u16 x][u16 y]` +
-`width` RGB555 pixels plus one zero terminator word; `y` counts
-rows positionally `0..h-1` and every span stays inside its row
-(`x + width <= w`), so the decode pastes spans onto a
-colour-key-cleared canvas — uncovered pixels are transparent, never
+All 36 `.oji` frames fail `is_raw_rgb555`; the prefixed walk
+(`parse_sprite55_prefixed`) maps all of them (10 bodies). Each image
+stores a run of row groups of `[u16 width][u16 x][u16 y]` +
+`width` RGB555 pixels plus one zero terminator word; `y` walks rows
+in order — the first group sits on row 0, a group repeats the previous
+row (x runs accumulate along it) or steps one row down, so every row
+carries at least one span — every span stays inside its row
+(`x + width <= w`), and the decode pastes spans onto a
+colour-key-cleared canvas: uncovered pixels are transparent, never
 invented. Shapes by stored delta (`size − w·h·2` per image):
 
 - **Full-row spans** (positive delta, 28 images; each row costs its
@@ -90,10 +97,17 @@ invented. Shapes by stored delta (`size − w·h·2` per image):
   outright): `BG_Ani` −29,022 ×4 and `Avatar_Shadow` −244 — the same
   row-group layout, previously guessed "compressed"; they render
   through the same route.
-- **Still un-mapped** (3 images): the walk fails mid-image with
-  repeating y words — `Playing_ChatWindow` −592,540 (stores 11% of
-  raw), `Myroom_MybagSelect`/`Shop_MybagSelect` −9,854 ×2. A real
-  codec (RLE-like) to reverse.
+- **Repeated-y spans** (negative delta, 3 images; only frame
+  outlines stored, ~10% of raw pixels): `Playing_ChatWindow`
+  −592,540 (671 groups over its 558 rows — 96 rows carry two x runs,
+  one border row packs 18), `Myroom_MybagSelect`/`Shop_MybagSelect`
+  −9,854 ×2 (134 groups over 69 rows — 65 rows carry the two edge
+  spans, four full-width fill rows; both bodies open on a full row of
+  one stored colour, `0x00DD`). Same walk, no new codec: the earlier
+  "RLE-like compressed frames" guess is retired — the row groups just
+  repeat the `y` word. The strict order walk (in-order rows, each
+  carried at least once, ending on row `h − 1`) accepts all 36
+  images; skipped, dropped, or reordered rows still reject.
 
 ## JPEG album-art bodies: decoded (codec gap ②)
 
@@ -145,9 +159,17 @@ outside {0xC0, 0xC2} occurs in the 47; classes the crate rejects
    record anchor through the archive loader (`sprite55_figure`). The
    strict walk also took the two negative-delta bodies (see the
    detail section), so 33 of the 36 `.oji` frames render.
-4. **`.oji` compressed frames** (3 images left) — the row-group walk
-   cleared `BG_Ani` and `Avatar_Shadow`; `Playing_ChatWindow` and the
-   two MybagSelect bodies still need codec RE.
+4. ~~**`.oji` repeated-y frames** (`Playing_ChatWindow`, both
+   MybagSelect)~~ — **DONE**: `parse_sprite55_prefixed` accepts
+   repeated y words (rows in order, x runs accumulate along a row,
+   every row carried at least once, walk ends on row `h − 1`), so
+   all 36 `.oji` frames decode; the shell already routes them
+   unchanged (`from_sprite55_prefixed` pastes every span onto the
+   cleared canvas). `sprites.rs` pins the real bodies with span
+   counts and per-row run histograms. The shell tests flipped with
+   the decode: `oji_repeated_y_bodies_render_from_the_archives`
+   renders the three bodies, and
+   `oji_prefixed_bodies_render_from_the_archives` sweeps all ten.
 5. **`.oja` frame data + `a`/`b`/`c` words** (3 bodies) — biggest RE
    unknown; envelopes parse today (`parse_oja`), frames do not.
 

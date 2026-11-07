@@ -12,8 +12,8 @@ use super::paint::{
     paint_loading_scene, paint_loading_scene_with_status, paint_lobby_backdrop,
     paint_playing_overlay, paint_result, paint_result_scene, paint_room_list, paint_room_scene,
     paint_screen, paint_waiting_chat, paint_waiting_members, paint_waiting_scene, scene_index,
-    BattleVerdict, LoadingStatus, ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions,
-    WaitingChatMessage,
+    BattleVerdict, LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt,
+    WaitingCaptions, WaitingChatMessage,
 };
 use super::side::{
     can_return_side, can_visit_side, paint_side_scene, select_chosung_cells, select_difficulty_ink,
@@ -36,7 +36,9 @@ use o2jam_net::play::SetRoomMusic;
 use o2jam_net::rooms::{SendWaitingMessage, WaitingAdminMessage, WaitingUserMessage};
 use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry};
 use o2jam_render::font::{draw_text_cell, Cell};
-use o2jam_render::{draw_text, fill_rect, pack_xrgb, scale_rect_to_frame, text_width, Frame, Rect};
+use o2jam_render::{
+    draw_text, fill_rect, pack_xrgb, scale_rect_to_frame, text_width, Frame, Rect, Rgb555Image,
+};
 
 /// Stage the Playing backdrop defaults to before a room names one:
 /// the exe's room entry replaces a zero stage with a real one (the
@@ -85,6 +87,15 @@ pub struct ScreenGame {
     /// column, the waiting `BPM` caption source; the title table
     /// above drops the column).
     catalog_bpm: HashMap<u32, f32>,
+    /// Staged catalog container tokens by song id (`OJNList.dat` row
+    /// +240 filename, e.g. `o2ma757.ojm`): the album-cover path source
+    /// (see [`Self::resolve_song_cover`]).
+    catalog_chart_files: HashMap<u32, String>,
+    /// Played song's album cover: the OJN cover section of the walked
+    /// chart, decoded to RGB555 for the result music-name box (see
+    /// [`Self::resolve_song_cover`]). `None` paints the staged box
+    /// as-is; nothing is invented.
+    song_cover: Option<Rgb555Image>,
     /// Staged inventory counts, one per skill slot (the waiting
     /// `SKILLCOUNT` source; `JoinedRoom.skills` carries the ring ids
     /// only). Zeroed until staged.
@@ -121,6 +132,50 @@ fn arena_stage_word(arena: i32) -> Option<u16> {
     u16::try_from(stage).ok().filter(|stage| *stage != 0)
 }
 
+/// Install `Music` path of one catalog container token: the record's
+/// `.ojm` token names its chart file with the `.ojn` extension
+/// (`o2ma757.ojm` → `Music/o2ma757.ojn`; the shipped tokens match
+/// their chart files 14/14, both generations). `None` when the token
+/// carries no `.ojm` extension (no invented fallback path).
+#[must_use]
+fn chart_cover_path(token: &str) -> Option<std::path::PathBuf> {
+    let stem_len = token.len().checked_sub(".ojm".len())?;
+    let stem = token
+        .get(..stem_len)
+        .filter(|_| token[stem_len..].eq_ignore_ascii_case(".ojm"))?;
+    Some(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Music")
+            .join(format!("{stem}.ojn")),
+    )
+}
+
+/// Decoded cover pixels as an RGB555 image (5-bit channels; the frame
+/// blit composes in RGB555 words). `None` when the pixel buffer does
+/// not tile the claimed dimensions.
+#[must_use]
+fn cover_image(decoded: &o2jam_file::JpegRgbImage) -> Option<Rgb555Image> {
+    let pixels = decoded.width.checked_mul(decoded.height)?.checked_mul(3)?;
+    if decoded.pixels.len() != pixels {
+        return None;
+    }
+    let words = decoded
+        .pixels
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|pixel| {
+            let [r, g, b] = *pixel;
+            (u16::from(r) >> 3) << 10 | (u16::from(g) >> 3) << 5 | u16::from(b) >> 3
+        })
+        .collect();
+    Some(Rgb555Image {
+        w: decoded.width,
+        h: decoded.height,
+        words,
+    })
+}
+
 impl ScreenGame {
     /// Start at the splash screen.
     #[must_use]
@@ -144,6 +199,8 @@ impl ScreenGame {
             arena_stage: DEFAULT_ARENA_STAGE,
             catalog_songs: Vec::new(),
             catalog_bpm: HashMap::new(),
+            catalog_chart_files: HashMap::new(),
+            song_cover: None,
             skill_counts: [0, 0, 0],
             select_music_art: None,
             battle_teams: RoomTeams::new(),
@@ -406,9 +463,11 @@ impl ScreenGame {
     /// Remember the host song choice (`SetRoomMusic` 4000 body);
     /// Waiting paints its title and difficulty panel, and the chosen
     /// chart's difficulty byte selects the playing life-bar deltas.
+    /// Also resolves the album cover (see [`Self::resolve_song_cover`]).
     pub fn set_selected_music(&mut self, selection: SetRoomMusic) -> &mut Self {
         self.selected_music = Some(selection);
         self.apply_life_difficulty();
+        self.resolve_song_cover();
         self
     }
 
@@ -446,7 +505,9 @@ impl ScreenGame {
     /// Stage the song catalog (`OJNList.dat` order, owned copies) for
     /// the select-music table and the chosen-song caption. Dead slots
     /// stay out; a missing catalog paints dialog art without rows.
-    /// The BPM column stages alongside for the waiting `BPM` caption.
+    /// The BPM column stages alongside for the waiting `BPM` caption,
+    /// and the container tokens for the album-cover path (see
+    /// [`Self::resolve_song_cover`]).
     pub fn set_song_catalog(&mut self, entries: &[OjnListEntry<'_>]) -> &mut Self {
         self.catalog_songs = select_music_songs(entries);
         self.catalog_bpm = entries
@@ -454,7 +515,47 @@ impl ScreenGame {
             .filter(|entry| entry.is_song())
             .map(|entry| (entry.song_id, entry.bpm))
             .collect();
+        self.catalog_chart_files = entries
+            .iter()
+            .filter(|entry| entry.is_song())
+            .map(|entry| (entry.song_id, entry.ojm_file.clone()))
+            .collect();
+        self.resolve_song_cover();
         self
+    }
+
+    /// Load the selected song's album cover from the staged catalog
+    /// plus the install's `Music` folder. Runs on both staging points —
+    /// catalog and song selection — so the flow order never matters.
+    /// The selection's id names a catalog record, whose container token
+    /// (`o2ma757.ojm`) swaps to the chart file (`o2ma757.ojn`; the
+    /// shipped tokens match their chart files 14/14) and the OJN cover
+    /// section ([`o2jam_file::ojn_cover_jpeg`],
+    /// [`o2jam_file::decode_ojn_cover`], docs/file-formats/ojn.md)
+    /// decodes to the box image. Any miss — no selection, no catalog
+    /// record, no install, undecodable cover — leaves `None` and the
+    /// staged music-name box paints as-is; nothing is invented.
+    fn resolve_song_cover(&mut self) {
+        self.song_cover = None;
+        let Some(selection) = self.selected_music.as_ref() else {
+            return;
+        };
+        let Some(token) = self.catalog_chart_files.get(&u32::from(selection.music_id)) else {
+            return;
+        };
+        let Some(path) = chart_cover_path(token) else {
+            return;
+        };
+        let Ok(bytes) = std::fs::read(path) else {
+            return;
+        };
+        let Ok(cover) = o2jam_file::ojn_cover_jpeg(&bytes) else {
+            return;
+        };
+        let Ok(decoded) = o2jam_file::decode_ojn_cover(&cover) else {
+            return;
+        };
+        self.song_cover = cover_image(&decoded);
     }
 
     /// Stage real song-select dialog art (`DAILOG_SELECTMUSIC` placements
@@ -473,10 +574,17 @@ impl ScreenGame {
     }
 
     /// Staged select-music catalog songs (catalog order, dead slots
-    /// filtered out).
+    /// filtered out). Empty without catalog data.
     #[must_use]
     pub fn select_songs(&self) -> &[SelectMusicSong] {
         &self.catalog_songs
+    }
+
+    /// Played song's album cover, if it resolved from the walked
+    /// chart's OJN cover section (see [`Self::resolve_song_cover`]).
+    #[must_use]
+    pub fn song_cover(&self) -> Option<&Rgb555Image> {
+        self.song_cover.as_ref()
     }
 
     /// Catalog title for one song id, if staged.
@@ -960,23 +1068,30 @@ impl ScreenGame {
     /// `Result_WinLose.ojs` via `FUN_004c2390`, file `0xc2390`) behind
     /// the exe-selected verdict banner and grade plate frames, the
     /// avatar figure, the pinned GDI numbers from the live score,
-    /// and the rank rows from live peers plus room names.
+    /// and the rank rows from live peers plus room names. The played
+    /// song's album cover paints into the music-name box when it
+    /// resolved (see [`Self::resolve_song_cover`]).
     fn paint_result(&self, frame: &mut Frame<'_>) {
+        let album = self.song_cover.as_ref();
         match self.scene_art(Screen::Result) {
             Some(art) => paint_result_scene(
                 frame,
-                self.avatar.as_ref(),
-                self.playing.score(),
-                &self.result_rank_rows(),
-                art,
-                self.result_verdict(),
-                self.grade(),
+                &ResultPaint {
+                    avatar: self.avatar.as_ref(),
+                    score: self.playing.score(),
+                    rows: &self.result_rank_rows(),
+                    art,
+                    verdict: self.result_verdict(),
+                    grade: self.grade(),
+                    album,
+                },
             ),
             None => paint_result(
                 frame,
                 self.avatar.as_ref(),
                 self.playing.score(),
                 &self.result_rank_rows(),
+                album,
             ),
         }
     }
@@ -1377,7 +1492,7 @@ impl GameLoop for ScreenGame {
 
 #[cfg(test)]
 mod game_tests {
-    use super::super::paint::{background_of, seat_origin};
+    use super::super::paint::{background_of, seat_origin, RESULT_MUSIC_BOX};
     use super::*;
     use crate::avatar::AvatarFigure;
     use crate::screen::Screen;
@@ -1385,6 +1500,7 @@ mod game_tests {
     use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
     use o2jam_render::{has_ink_near, near_xrgb};
     use o2jam_render::{pack_xrgb, Frame};
+    use std::path::PathBuf;
 
     #[test]
     fn loaded_chart_scales_notes_down_the_highway() {
@@ -1876,6 +1992,116 @@ mod game_tests {
         let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
         game.set_song_catalog(&entries);
         game.set_selected_music(waiting_song_selection());
+    }
+
+    #[test]
+    fn chart_cover_path_maps_the_catalog_token_to_the_chart_file() {
+        // The record's `.ojm` token names its chart file with the
+        // `.ojn` extension under the install's Music folder (14/14
+        // shipped tokens match); case-blind like the Windows client;
+        // a non-token names no path.
+        let numbered = chart_cover_path("o2ma757.ojm").unwrap();
+        assert!(numbered
+            .to_str()
+            .is_some_and(|path| path.ends_with("Music/o2ma757.ojn")));
+        let old = chart_cover_path("Tutorial.ojm").unwrap();
+        assert!(old
+            .to_str()
+            .is_some_and(|path| path.ends_with("Music/Tutorial.ojn")));
+        let upper = chart_cover_path("O2MA999.OJM").unwrap();
+        assert!(upper
+            .to_str()
+            .is_some_and(|path| path.ends_with("Music/O2MA999.ojn")));
+        assert!(chart_cover_path("bgEffect.zip").is_none());
+    }
+
+    #[test]
+    fn cover_image_converts_jpeg_pixels_to_rgb555() {
+        let decoded = o2jam_file::JpegRgbImage {
+            width: 2,
+            height: 1,
+            pixels: vec![255, 0, 0, 0, 255, 0],
+        };
+        let image = cover_image(&decoded).unwrap();
+        assert_eq!((image.w, image.h), (2, 1));
+        assert_eq!(image.words, vec![0x7C00, 0x03E0]);
+        let short = o2jam_file::JpegRgbImage {
+            width: 2,
+            height: 1,
+            pixels: vec![255, 0, 0, 0, 255],
+        };
+        assert!(cover_image(&short).is_none());
+    }
+
+    #[test]
+    fn selection_without_a_catalog_record_keeps_no_cover() {
+        // The cover path runs through the staged catalog's container
+        // token; a selection with no staged record resolves nothing
+        // (regardless of the install), so the box stays as-is.
+        let mut game = ScreenGame::new();
+        game.set_selected_music(waiting_song_selection());
+        assert!(game.song_cover().is_none());
+    }
+
+    #[test]
+    fn staged_catalog_and_selection_load_the_walked_cover() {
+        // End to end on a real install: the 757 token maps to
+        // `Music/o2ma757.ojn`, whose OJN cover section decodes to the
+        // 800x600 album art (docs/file-formats/ojn.md). Skips when
+        // `install-root` is absent.
+        let chart = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Music/o2ma757.ojn");
+        let Ok(_) = std::fs::read(&chart) else {
+            return;
+        };
+        let mut game = ScreenGame::new();
+        stage_waiting_song(&mut game);
+        let cover = game.song_cover().expect("the walked cover resolves");
+        assert_eq!((cover.w, cover.h), (800, 600));
+    }
+
+    #[test]
+    fn result_paint_layers_the_cover_over_the_scene_ink() {
+        // The full loop: the result scene paints, the cover fills the
+        // box interior at its pinned rect (dest (0,0) samples the
+        // cover's own (0,0)), driven by the staged catalog + selection.
+        // Skips when `install-root` is absent.
+        let chart = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Music/o2ma757.ojn");
+        let Ok(bytes) = std::fs::read(&chart) else {
+            return;
+        };
+        let cover_bytes = o2jam_file::ojn_cover_jpeg(&bytes).unwrap();
+        let cover = cover_image(&o2jam_file::decode_ojn_cover(&cover_bytes).unwrap());
+        let mut game = ScreenGame::new();
+        stage_waiting_song(&mut game);
+        game.load_chart(vec![(2, 5000, 7)]);
+        walk_to_playing(&mut game);
+        game.strike_at(2, 5000);
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            7_000,
+        );
+        assert_eq!(game.screen(), Screen::Result);
+        let at =
+            |x: i32, y: i32| buf[usize::try_from(y).unwrap() * 800 + usize::try_from(x).unwrap()];
+        // The box interior's top-left pixel carries the cover's
+        // top-left ink, widened to the frame (the wiring target).
+        let word = cover.as_ref().expect("cover resolves").words[0];
+        let (r, g, b) = (
+            (((word >> 10) & 31) as u8) << 3 | (((word >> 10) & 31) as u8) >> 2,
+            (((word >> 5) & 31) as u8) << 3 | (((word >> 5) & 31) as u8) >> 2,
+            ((word & 31) as u8) << 3 | ((word & 31) as u8) >> 2,
+        );
+        assert_eq!(
+            at(RESULT_MUSIC_BOX.x, RESULT_MUSIC_BOX.y),
+            pack_xrgb(r, g, b)
+        );
     }
 
     fn paint_waiting_frame(game: &mut ScreenGame, w: usize, h: usize) -> Vec<u32> {

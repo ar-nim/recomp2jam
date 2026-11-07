@@ -156,12 +156,19 @@ Colorkey regions (`0x7D5F` runs) read as flat transparent art;
 e.g. `Shop_ItemGem.ojs` (9x12, 216 B) and `OptionKey_Checkbox.ojs`
 (16x16 at `(51, 400)`, 512 B) account byte-exact.
 
-Outlier classes (same envelope, non-raw blobs, parsed but not
-pixel-decoded): `.oji` list bars with per-image sub-directories
-(`SelectAlbum_Bar.oji`: 15 records + 20 B sub-records),
-`RLE`-style compressed frames (`Shop_MybagSelect.oji`: 2014 B
-stored for 86x69), prefixed frames (`Lanking_NoticeBoard.oji`:
-800x31 + 188 B header), and the three strided combo atlases
+Outlier classes (same envelope, non-raw blobs): `.oji` bodies
+store one 20-byte record per image plus a run of prefixed row
+groups — `[u16 width][u16 x][u16 y]` + `width` RGB555 pixels
+plus one zero terminator word (`SelectAlbum_Bar.oji`: 15
+records, `Lanking_NoticeBoard.oji`: 800x31 + 188 B header); `y`
+walks rows in order and may repeat, so outline-only bodies
+(`Shop_MybagSelect.oji`: 2014 B stored for 86x69 — row edges
+kept, interiors colour-key) map through the same strict walk
+`parse_sprite55_prefixed` (codec gaps ③+④; all 36 images in the
+10 real `.oji` bodies decode — `docs/codec-coverage.md`). The
+former "`RLE`-style compressed frames" guess for those bodies is
+retired: nothing is compressed, the row groups just repeat the
+`y` word. The three strided combo atlases
 (`Note_Combo4/5/6.ojt`: 6 records of 64x64/8192 B, blob holds 4
 consecutive RGB555 glow frames per record — 128 + 6·32768 =
 196736 B exact; `parse_sprite55_strided(_, 4)`, digit bands
@@ -352,12 +359,12 @@ size/reserved_size`; nameless slots skipped; bounds-checked),
 `parse_opi_slots` (every slot in table order incl. free reservations,
 stride-end checked), `is_jpeg_body` (`FF D8 … FF D9`, 47/47) +
 `decode_control_text`, `parse_sprite55` (+ `parse_sprite55_strided`,
-`rgb555_to_rgb888`), `parse_bnd`, `parse_oja`,
+`parse_sprite55_prefixed`, `rgb555_to_rgb888`), `parse_bnd`,
+`parse_oja`,
 `parse_jam_thresholds`, `parse_control_list` — each with synthetic
-unit tests; `o2jam-dump opi` for local listing. Still TBD: pixel
-codecs for the `.oji`/compressed outlier frames, `.oja`
-frame-data words, `album`/`AlbumList`/`SMI`/`SetInfo`/`Itemdata`
-strides, and the Playing rect subset.
+unit tests; `o2jam-dump opi` for local listing. Still TBD: the
+`.oja` frame-data words, `album`/`AlbumList`/`SMI`/`SetInfo`/
+`Itemdata` strides, and the Playing rect subset.
 
 ## Open questions
 

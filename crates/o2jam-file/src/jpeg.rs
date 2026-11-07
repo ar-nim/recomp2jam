@@ -26,6 +26,11 @@ const RGB_BYTES_PER_PIXEL: usize = 3;
 /// Length of the JPEG SOI marker.
 const JPEG_SOI_LEN: usize = 2;
 
+/// The JPEG SOI marker (`FF D8`): opens every real JPEG body, and the
+/// only framing the OJN-embedded covers guarantee (their stream runs
+/// to end of file with no EOI marker).
+pub(crate) const JPEG_SOI: [u8; JPEG_SOI_LEN] = [0xFF, 0xD8];
+
 /// One decoded JPEG body: full-resolution RGB888 pixels, ready for
 /// [`o2jam_render::Rgb888Image`] / [`o2jam_render::blit_rgb888`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +60,12 @@ pub fn decode_jpeg_body(bytes: &[u8]) -> Result<JpegRgbImage, FileError> {
     if !is_jpeg_body(bytes) {
         return Err(unknown_format(bytes));
     }
+    decode_jpeg_pixels(bytes)
+}
+
+/// Shared JPEG decode behind the two body sniffs: color space,
+/// decoder run, dimensions, and pixel-count check.
+fn decode_jpeg_pixels(bytes: &[u8]) -> Result<JpegRgbImage, FileError> {
     let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGB);
     let mut decoder = JpegDecoder::new_with_options(ZCursor::new(bytes), options);
     let pixels = decoder
@@ -83,6 +94,25 @@ pub fn decode_jpeg_body(bytes: &[u8]) -> Result<JpegRgbImage, FileError> {
         height,
         pixels,
     })
+}
+
+/// Decode one OJN-embedded album cover (docs/file-formats/ojn.md):
+/// the JPEG stream after the last level slice runs to end of file and
+/// carries no EOI marker on every shipped 7.55 chart (14/14), so this
+/// sniffs only the SOI marker — unlike [`decode_jpeg_body`], which
+/// needs the complete-body frame — and decodes what is there.
+///
+/// # Errors
+///
+/// [`FileError::UnknownFormat`] when the bytes carry no SOI marker,
+/// [`FileError::JpegDecode`] when tables or entropy data are corrupt,
+/// [`FileError::Truncated`] when the decoded pixel count disagrees
+/// with the claimed dimensions.
+pub fn decode_ojn_cover(bytes: &[u8]) -> Result<JpegRgbImage, FileError> {
+    if !bytes.starts_with(&JPEG_SOI) {
+        return Err(unknown_format(bytes));
+    }
+    decode_jpeg_pixels(bytes)
 }
 
 /// First SOF marker of a JPEG stream: `Some(0xC0)` baseline, `Some(0xC2)`
@@ -285,6 +315,31 @@ mod tests {
     }
 
     #[test]
+    fn ojn_cover_stream_decodes_without_the_eoi_marker() {
+        // The shipped OJN covers run to end of file: same fixture with
+        // the EOI stripped decodes to the same mid gray, while the
+        // complete-body sniff rightly refuses it.
+        let full = minimal_jpeg(COLOR_444, 0xC0, 3);
+        let cover = &full[..full.len() - 2];
+        assert!(!is_jpeg_body(cover));
+        let image = decode_ojn_cover(cover).expect("cover stream decodes");
+        assert_eq!((image.width, image.height), (8, 8));
+        assert_eq!(image.pixels, vec![128u8; 8 * 8 * RGB_BYTES_PER_PIXEL]);
+    }
+
+    #[test]
+    fn ojn_cover_rejects_streams_without_the_soi_marker() {
+        assert!(matches!(
+            decode_ojn_cover(b"not a jpeg at all"),
+            Err(FileError::UnknownFormat { .. })
+        ));
+        assert!(matches!(
+            decode_ojn_cover(b""),
+            Err(FileError::UnknownFormat { .. })
+        ));
+    }
+
+    #[test]
     fn decoded_fixture_blits_into_frame() {
         // The end-to-end JPEG -> Frame path album-art panels use.
         let decoded = decode_jpeg_body(&minimal_jpeg(COLOR_444, 0xC0, 3)).expect("decodes");
@@ -309,6 +364,46 @@ mod tests {
     fn interface_archive() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../install-root/O2Jam/Image/Interface1.opi")
+    }
+
+    /// Repository-local `Music` chart folder (git-ignored game data).
+    fn music_folder() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root/O2Jam/Music")
+    }
+
+    /// Real OJN covers end to end: all 14 shipped 7.55 charts (old
+    /// Tutorial.ojn plus the 13 new-format files) locate a SOI at the
+    /// third slice end, and the EOI-less stream decodes to an
+    /// 800x600 baseline body (docs/file-formats/ojn.md). Skips when
+    /// `install-root` is absent.
+    #[test]
+    fn real_ojn_covers_extract_and_decode() {
+        let Ok(folder) = std::fs::read_dir(music_folder()) else {
+            return;
+        };
+        let mut charts = Vec::new();
+        for entry in folder.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "ojn") {
+                charts.push(path);
+            }
+        }
+        assert_eq!(charts.len(), 14, "the 7.55 install ships 14 charts");
+        for path in &charts {
+            let bytes =
+                std::fs::read(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+            let cover = crate::ojn_cover_jpeg(&bytes)
+                .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+            assert!(cover.starts_with(&JPEG_SOI), "{}: SOI", path.display());
+            let image = decode_ojn_cover(&cover)
+                .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+            assert_eq!(
+                (image.width, image.height),
+                (800, 600),
+                "{}",
+                path.display()
+            );
+        }
     }
 
     /// Real album-art bodies: 47 JPEGs, 21 baseline + 26 progressive,

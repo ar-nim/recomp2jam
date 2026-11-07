@@ -5,6 +5,7 @@
 
 use super::ojm::{parse_m30, parse_omc, OjmSample};
 use super::{detect_kind, read_f32le, read_str, read_u16le, read_u32le, AssetKind, FileError};
+use crate::jpeg::JPEG_SOI;
 
 /// Minimal parsed view of an `.ojn` chart file.
 ///
@@ -702,6 +703,51 @@ pub fn parse_ojn_levels(bytes: &[u8]) -> Result<Vec<OjnLevelSlice>, FileError> {
     Ok(out)
 }
 
+/// Album cover of one `.ojn` chart (docs/file-formats/ojn.md): the
+/// embedded JPEG after the last level slice. Verified on all 14
+/// shipped 7.55 charts: a level walk lands exactly on a `FF D8` SOI
+/// at the third slice-end word (`u32` at +296; the last slice ends
+/// exactly on the first embedded JPEG), and the stream runs to end of
+/// file — the shipped covers carry no EOI marker, the file just ends
+/// (decode with [`crate::decode_ojn_cover`]). This is the album art
+/// the select/album panels show, not chart data.
+///
+/// # Errors
+///
+/// `FileError::TooShort` when the header overruns,
+/// `FileError::UnknownFormat` on a non-`.ojn` magic or a cover offset
+/// that misses the SOI marker, `FileError::Truncated` when the cover
+/// offset points outside the file (the [`parse_ojn_levels`]
+/// slice-geometry convention).
+pub fn ojn_cover_jpeg(bytes: &[u8]) -> Result<Vec<u8>, FileError> {
+    let plain = decrypt_ojn_new_format(bytes)?;
+    match detect_kind(&plain)? {
+        AssetKind::Ojn => {}
+        AssetKind::Ojm | AssetKind::OjnList => {
+            return Err(FileError::UnknownFormat {
+                magic: bytes[..4.min(bytes.len())].to_vec(),
+            });
+        }
+    }
+    if plain.len() < OJN_HEADER_LEN {
+        return Err(FileError::TooShort(plain.len()));
+    }
+    let offset = read_u32le(&plain, OJN_SLICE_END_OFFS[OJN_LEVEL_COUNT - 1])? as usize;
+    if offset < OJN_HEADER_LEN || offset > plain.len() {
+        return Err(FileError::Truncated {
+            need: offset,
+            have: plain.len(),
+        });
+    }
+    if !plain[offset..].starts_with(&JPEG_SOI) {
+        let magic_end = offset.saturating_add(JPEG_SOI.len()).min(plain.len());
+        return Err(FileError::UnknownFormat {
+            magic: plain[offset..magic_end].to_vec(),
+        });
+    }
+    Ok(plain[offset..].to_vec())
+}
+
 /// First note-event kind: kinds 2..=8 are the seven playable lanes.
 /// Verified: per-level playable-note totals (kinds 2-8, nonzero values)
 /// equal the header counts at +40/+44/+48 on all 13 new-format 7.55
@@ -1139,5 +1185,105 @@ mod tests {
         assert_eq!(ojn_sub_position(4, 16), Some(48));
         assert_eq!(ojn_sub_position(0, 0), None);
         assert_eq!(ojn_sub_position(1, 7), None);
+    }
+
+    /// SOI-prefixed stand-in cover body: [`ojn_cover_jpeg`] frames the
+    /// stream by slice ends and the SOI sniff; pixel decoding lives in
+    /// [`crate::decode_ojn_cover`] (tested in `jpeg.rs`).
+    fn fake_cover() -> Vec<u8> {
+        let mut body = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
+        body.extend_from_slice(b"JFIF\0");
+        body.extend_from_slice(&[0x01, 0x02, 0x03, 0xFF, 0xD9]);
+        body
+    }
+
+    /// Chart blob with every slice ending on an appended cover body
+    /// (the shipped shape: the last slice ends exactly on the JPEG).
+    fn chart_with_cover() -> Vec<u8> {
+        let mut blob = tutorial_shaped_blob();
+        let cover_offset = blob.len() as u32;
+        for off in OJN_SLICE_END_OFFS {
+            blob[off..off + 4].copy_from_slice(&cover_offset.to_le_bytes());
+        }
+        blob.extend_from_slice(&fake_cover());
+        blob
+    }
+
+    #[test]
+    fn cover_runs_from_the_last_slice_end_to_eof() {
+        let blob = chart_with_cover();
+        let cover = ojn_cover_jpeg(&blob).unwrap();
+        let offset = blob.len() - cover.len();
+        assert_eq!(
+            offset,
+            usize::try_from(parse_ojn(&blob).unwrap().slice_ends[2]).unwrap()
+        );
+        assert_eq!(cover, fake_cover());
+    }
+
+    #[test]
+    fn cover_extracts_after_the_new_format_decrypt() {
+        // Encoder contract of FUN_00412180 (see the lib.rs round-trip
+        // test): XOR with (k1,k2,k3) on period p over the plaintext,
+        // key slots at plaintext tail, `new` magic after reversal.
+        let plain = chart_with_cover();
+        let (k1, k2, k3, p): (u8, u8, u8, usize) = (0x97, 0xE0, 0x34, 6);
+        let key = |i: usize| {
+            if i.is_multiple_of(p) {
+                k1
+            } else if i % p == p / 2 {
+                k2
+            } else {
+                k3
+            }
+        };
+        let n = plain.len();
+        let mut buf: Vec<u8> = plain.iter().enumerate().map(|(i, &b)| b ^ key(i)).collect();
+        buf[n - 7] = k1;
+        buf[n - 6] = k2;
+        buf[n - 5] = k3;
+        buf[n - 4] = u8::try_from(p).unwrap();
+        // Tail bytes become the "new" magic after reversal.
+        buf[n - 3] = b'w';
+        buf[n - 2] = b'e';
+        buf[n - 1] = b'n';
+        let encrypted: Vec<u8> = buf.iter().rev().copied().collect();
+        assert!(encrypted.starts_with(b"new"));
+        // Key slots and magic tail are clobbered by the encoder
+        // contract (lib.rs round-trip test); the body round-trips.
+        let cover = ojn_cover_jpeg(&encrypted).unwrap();
+        let intact = fake_cover().len() - 7;
+        assert_eq!(&cover[..intact], &fake_cover()[..intact]);
+    }
+
+    #[test]
+    fn cover_rejects_offsets_outside_the_file() {
+        // full_header() names 11784 with no body behind the header.
+        assert!(matches!(
+            ojn_cover_jpeg(&full_header()),
+            Err(FileError::Truncated { .. })
+        ));
+        let mut early = full_header();
+        for off in OJN_SLICE_END_OFFS {
+            early[off..off + 4].copy_from_slice(&10u32.to_le_bytes());
+        }
+        assert!(matches!(
+            ojn_cover_jpeg(&early),
+            Err(FileError::Truncated { .. })
+        ));
+    }
+
+    #[test]
+    fn cover_rejects_an_offset_that_misses_the_soi() {
+        let mut blob = full_header();
+        let cover_offset = u32::try_from(blob.len()).unwrap();
+        for off in OJN_SLICE_END_OFFS {
+            blob[off..off + 4].copy_from_slice(&cover_offset.to_le_bytes());
+        }
+        blob.extend_from_slice(b"not a jpeg");
+        assert!(matches!(
+            ojn_cover_jpeg(&blob),
+            Err(FileError::UnknownFormat { .. })
+        ));
     }
 }

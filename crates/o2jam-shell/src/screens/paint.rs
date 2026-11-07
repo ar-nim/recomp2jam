@@ -42,7 +42,7 @@ use o2jam_net::{
 };
 use o2jam_render::{
     blit_rgb555, draw_number, draw_text, fill_rect, number_width, pack_xrgb, scale_rect_to_frame,
-    text_width, Frame, Rect, NATIVE_HEIGHT, NATIVE_WIDTH,
+    text_width, Frame, Rect, Rgb555Image, NATIVE_HEIGHT, NATIVE_WIDTH,
 };
 
 /// Gameplay block: real UI lives in `Playing1.opi` (235 entries,
@@ -1946,6 +1946,23 @@ pub const WINNER_IMAGE_SPRITE: &str = "Winner_image.ojs";
 /// 1..=8 shows images 0..=7.
 pub const RESULT_RANK_SPRITE: &str = "Result_Imgs_Rank.ojs";
 
+/// Music-name box interior on the native canvas: the
+/// `Result_EachResult.ojs` body (`STATE_RESULT` rect 4
+/// `IDC_IMAGE_SRESULT_RESULTTAP`, 800×350 anchored (0,250)) bakes a
+/// default mascot pane into its inner box, and the played song's
+/// album art paints over exactly that interior — the reference photo's
+/// green panel measures this rect (body-local interior (70,54)–
+/// (733,268) plus the (0,250) anchor; the baked frame borders at
+/// x 68–69/734–735 and y 52–53/269–270 stay art). The cover section
+/// comes from the walked chart's `.ojn` (docs/file-formats/ojn.md); a
+/// missing cover leaves the baked box as-is.
+pub const RESULT_MUSIC_BOX: Rect = Rect {
+    x: 70,
+    y: 304,
+    w: 664,
+    h: 215,
+};
+
 /// Sprites whose frames the result painter selects one of (the
 /// verdict banner plus the grade plate): kept out of the whole-stack
 /// backdrop pass so unused frames never bleed through, then painted
@@ -2379,6 +2396,73 @@ fn paint_result_body_frame(
     blit_rgb555(frame, &layer.image.view(), x, y, Some(layer.colorkey));
 }
 
+/// Stretch the album cover over one rect, opaque: JPEG pixels carry
+/// no transparency, and any 5-bit colorkey would punch holes where
+/// cover colors match the key (the render cover blit compares decoded
+/// colors). Nearest-neighbor sampling matches `blit_image_in_rect`;
+/// pixels clip to the frame. 5-bit channels widen to 8 by
+/// bit-replication, matching the render RGB555 expansion.
+fn paint_album_cover(frame: &mut Frame<'_>, cover: &Rgb555Image, dest: Rect) {
+    if cover.w == 0 || cover.h == 0 || dest.w == 0 || dest.h == 0 {
+        return;
+    }
+    let dest_w = dest.w as usize;
+    let dest_h = dest.h as usize;
+    let frame_w = i32::try_from(frame.w).unwrap_or(i32::MAX);
+    let frame_h = i32::try_from(frame.h).unwrap_or(i32::MAX);
+    for row in 0..dest_h {
+        let Some(y) = i32::try_from(row)
+            .ok()
+            .and_then(|offset| dest.y.checked_add(offset))
+        else {
+            continue;
+        };
+        if y < 0 || y >= frame_h {
+            continue;
+        }
+        let src_row = row * cover.h / dest_h;
+        for col in 0..dest_w {
+            let Some(x) = i32::try_from(col)
+                .ok()
+                .and_then(|offset| dest.x.checked_add(offset))
+            else {
+                continue;
+            };
+            if x < 0 || x >= frame_w {
+                continue;
+            }
+            let word = cover.words[src_row * cover.w + col * cover.w / dest_w];
+            // 5-bit channels widened by bit-replication (the render
+            // RGB555 expansion).
+            let (r, g, b) = (
+                ((word >> 10) & 31) as u8,
+                ((word >> 5) & 31) as u8,
+                (word & 31) as u8,
+            );
+            frame.buf[y as usize * frame.w + x as usize] = pack_xrgb(
+                (r << 3) | (r >> 2),
+                (g << 3) | (g >> 2),
+                (b << 3) | (b >> 2),
+            );
+        }
+    }
+}
+
+/// Paint the played song's album cover into the music-name box
+/// ([`RESULT_MUSIC_BOX`], scaled into the frame like the placements):
+/// the exe fills the box interior with the song's art over the baked
+/// default pane. `None` paints nothing — the staged box stays as-is.
+fn paint_result_album(frame: &mut Frame<'_>, album: Option<&Rgb555Image>) {
+    let Some(cover) = album else {
+        return;
+    };
+    paint_album_cover(
+        frame,
+        cover,
+        scale_rect_to_frame(&RESULT_MUSIC_BOX, frame.w, frame.h),
+    );
+}
+
 /// Paint the result backdrop: the staged scene minus the frame
 /// bodies ([`RESULT_FRAME_BODIES`]) in file order, so their unused
 /// frames never stack through the whole-layer pass. The Top/Bottom
@@ -2413,12 +2497,16 @@ fn paint_result_backdrop(frame: &mut Frame<'_>, art: &SceneArt) {
 /// Paint the avatar figure, the pinned result numbers, and the rank
 /// rows (shared by the flat fallback and the staged scene; the
 /// numbers and rows are GDI text the exe paints regardless of art).
+/// The album cover paints first into the music-name box so the text
+/// layers over it, exactly on the green panel of the reference photo.
 fn paint_result_content(
     frame: &mut Frame<'_>,
     avatar: Option<&AvatarFigure>,
     score: &o2jam_game::Score,
     rows: &[ResultRankRow],
+    album: Option<&Rgb555Image>,
 ) {
+    paint_result_album(frame, album);
     if let Some(figure) = avatar {
         figure.paint(frame, frame.w as i32 / 2 - 32, frame.h as i32 / 2 - 32);
     }
@@ -2426,52 +2514,69 @@ fn paint_result_content(
     paint_result_rank_rows(frame, rows);
 }
 
-/// Paint the flat results fallback: card, avatar figure, the pinned
-/// result numbers, and the rank rows. The retired text verdict stays
-/// gone — the banner is a sprite frame of the staged art.
+/// Paint the flat results fallback: card, album cover, avatar figure,
+/// the pinned result numbers, and the rank rows. The retired text
+/// verdict stays gone — the banner is a sprite frame of the staged art.
 pub(crate) fn paint_result(
     frame: &mut Frame<'_>,
     avatar: Option<&AvatarFigure>,
     score: &o2jam_game::Score,
     rows: &[ResultRankRow],
+    album: Option<&Rgb555Image>,
 ) {
     paint_card(
         frame,
         pack_xrgb(0x10, 0x10, 0x08),
         pack_xrgb(0xC0, 0xA0, 0x20),
     );
-    paint_result_content(frame, avatar, score, rows);
+    paint_result_content(frame, avatar, score, rows, album);
+}
+
+/// One staged result paint: everything the scene layers over the
+/// backdrop, grouped so the painter keeps a readable signature
+/// (`docs/cresult-anchors.md` + the album cover in the music-name
+/// box).
+#[derive(Debug, Clone, Copy)]
+pub struct ResultPaint<'a> {
+    /// Avatar figure (center card slot; `None` paints without one).
+    pub avatar: Option<&'a AvatarFigure>,
+    /// Live score behind the pinned GDI numbers.
+    pub score: &'a o2jam_game::Score,
+    /// Rank-table rows from live data.
+    pub rows: &'a [ResultRankRow],
+    /// Staged `.bnd` art for the scene.
+    pub art: &'a SceneArt,
+    /// Verdict the banner frame maps from.
+    pub verdict: ResultVerdict,
+    /// Grade plate frame (1..=8; `None` paints no plate).
+    pub grade: Option<u8>,
+    /// Played song's album cover (music-name box; `None` paints the
+    /// staged box as-is).
+    pub album: Option<&'a Rgb555Image>,
 }
 
 /// Paint the staged result scene (`docs/cresult-anchors.md`): the
 /// `.bnd`-bound block art first (minus the frame bodies), then the
 /// exe-selected verdict banner and grade plate frames, then the
-/// avatar figure, the pinned GDI numbers, and the rank rows on top —
-/// the fill order of `FUN_004c3120` (banner, then top-panel painter,
+/// played song's album cover in the music-name box, the avatar
+/// figure, the pinned GDI numbers, and the rank rows on top — the
+/// fill order of `FUN_004c3120` (banner, then top-panel painter,
 /// then rows).
-pub fn paint_result_scene(
-    frame: &mut Frame<'_>,
-    avatar: Option<&AvatarFigure>,
-    score: &o2jam_game::Score,
-    rows: &[ResultRankRow],
-    art: &SceneArt,
-    verdict: ResultVerdict,
-    grade: Option<u8>,
-) {
-    paint_result_backdrop(frame, art);
+pub fn paint_result_scene(frame: &mut Frame<'_>, paint: &ResultPaint<'_>) {
+    paint_result_backdrop(frame, paint.art);
     paint_result_body_frame(
         frame,
-        &art.figures,
+        &paint.art.figures,
         RESULT_WINLOSE_SPRITE,
-        winlose_frame(verdict),
+        winlose_frame(paint.verdict),
     );
     paint_result_body_frame(
         frame,
-        &art.figures,
+        &paint.art.figures,
         RESULT_RANK_SPRITE,
-        grade.filter(|g| *g >= 1),
+        paint.grade.filter(|g| *g >= 1),
     );
-    paint_result_content(frame, avatar, score, rows);
+    paint_result_content(frame, paint.avatar, paint.score, paint.rows, paint.album);
 }
 
 /// Score digits anchor top-left (`LivePlay` draws points at
@@ -2590,7 +2695,7 @@ pub fn paint_screen(frame: &mut Frame<'_>, screen: Screen) {
         Screen::Playing => {
             PlayingView::default().paint(frame, &HighwayGeometry::centered(frame.w, frame.h));
         }
-        Screen::Result => paint_result(frame, None, &o2jam_game::Score::default(), &[]),
+        Screen::Result => paint_result(frame, None, &o2jam_game::Score::default(), &[], None),
     }
 }
 
@@ -2655,12 +2760,15 @@ mod paint_tests {
             }
             Screen::Result => paint_result_scene(
                 &mut frame,
-                None,
-                &o2jam_game::Score::default(),
-                &[],
-                art,
-                ResultVerdict::Solo,
-                None,
+                &ResultPaint {
+                    avatar: None,
+                    score: &o2jam_game::Score::default(),
+                    rows: &[],
+                    art,
+                    verdict: ResultVerdict::Solo,
+                    grade: None,
+                    album: None,
+                },
             ),
         }
         buf
@@ -3531,12 +3639,15 @@ mod paint_tests {
                 w: 64,
                 h: 48,
             },
-            Some(&red_figure()),
-            &score,
-            &[],
-            &art,
-            ResultVerdict::Solo,
-            None,
+            &ResultPaint {
+                avatar: Some(&red_figure()),
+                score: &score,
+                rows: &[],
+                art: &art,
+                verdict: ResultVerdict::Solo,
+                grade: None,
+                album: None,
+            },
         );
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert!(buf.contains(&pack_xrgb(255, 0, 0)));
@@ -3686,6 +3797,7 @@ mod paint_tests {
             None,
             score,
             rows,
+            None,
         );
         buf
     }
@@ -3705,12 +3817,15 @@ mod paint_tests {
                 w: 800,
                 h: 600,
             },
-            None,
-            &o2jam_game::Score::default(),
-            &[],
-            art,
-            verdict,
-            grade,
+            &ResultPaint {
+                avatar: None,
+                score: &o2jam_game::Score::default(),
+                rows: &[],
+                art,
+                verdict,
+                grade,
+                album: None,
+            },
         );
         buf
     }
@@ -3871,6 +3986,7 @@ mod paint_tests {
             None,
             &full_score(),
             &[],
+            None,
         );
         assert!(!buf.contains(&result_number_ink()));
     }
@@ -4118,6 +4234,7 @@ mod paint_tests {
             None,
             &o2jam_game::Score::default(),
             &[live_row()],
+            None,
         );
         assert!(!buf.contains(&result_number_ink()));
     }
@@ -4390,18 +4507,120 @@ mod paint_tests {
                 w: 64,
                 h: 64,
             },
-            None,
-            &o2jam_game::Score::default(),
-            &[],
-            &art,
-            ResultVerdict::Battle(Some(BattleVerdict::Win)),
-            None,
+            &ResultPaint {
+                avatar: None,
+                score: &o2jam_game::Score::default(),
+                rows: &[],
+                art: &art,
+                verdict: ResultVerdict::Battle(Some(BattleVerdict::Win)),
+                grade: None,
+                album: None,
+            },
         );
         // The staged art paints (the corner banner body rides frame 1
         // onto its clamped layer); the retired amber caption ink
         // never comes back.
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert!(!has_ink_near(&buf, pack_xrgb(0xFF, 0xD0, 0x20)));
+    }
+
+    /// Red/green 2x1 cover stand-in: the widened inks probe pixels
+    /// (5-bit channels widened by replication, so red lands (255,0,0)).
+    fn tiny_cover() -> Rgb555Image {
+        Rgb555Image {
+            w: 2,
+            h: 1,
+            words: vec![0x7C00, 0x03E0],
+        }
+    }
+
+    #[test]
+    fn album_cover_paints_into_the_music_name_box() {
+        // The OJN cover section (game-resolved) stretches opaque over
+        // the box interior ([RESULT_MUSIC_BOX]): the left half of the
+        // 2x1 cover covers the box's left columns, the right half its
+        // right column, and the frame border pixel left of the box
+        // stays card ink.
+        let mut buf = vec![0u32; 800 * 600];
+        paint_result(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            None,
+            &o2jam_game::Score::default(),
+            &[],
+            Some(&tiny_cover()),
+        );
+        let at = |x: i32, y: i32| buf[y as usize * 800 + x as usize];
+        assert_eq!(at(70, 304), pack_xrgb(255, 0, 0));
+        assert_eq!(at(733, 518), pack_xrgb(0, 255, 0));
+        assert_eq!(at(60, 304), pack_xrgb(0x10, 0x10, 0x08));
+    }
+
+    #[test]
+    fn missing_cover_paints_the_box_as_is() {
+        // No resolved cover: the box region keeps whatever the scene
+        // stages — the flat card here — with zero album pixels.
+        let without = {
+            let mut buf = vec![0u32; 800 * 600];
+            paint_result(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                None,
+                &o2jam_game::Score::default(),
+                &[],
+                None,
+            );
+            buf
+        };
+        let with = {
+            let mut buf = vec![0u32; 800 * 600];
+            paint_result(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                None,
+                &o2jam_game::Score::default(),
+                &[],
+                Some(&tiny_cover()),
+            );
+            buf
+        };
+        let at = |buf: &[u32], x: i32, y: i32| buf[y as usize * 800 + x as usize];
+        assert_eq!(at(&without, 70, 304), pack_xrgb(0x10, 0x10, 0x08));
+        assert_eq!(at(&with, 60, 304), at(&without, 60, 304));
+    }
+
+    #[test]
+    fn album_cover_scales_into_small_frames() {
+        // Non-native frames scale the box rect like the placements;
+        // the cover still fills it (the window composes at native and
+        // scales once, so this is the small-probe path only).
+        let mut buf = vec![0u32; 64 * 48];
+        paint_result(
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 48,
+            },
+            None,
+            &o2jam_game::Score::default(),
+            &[],
+            Some(&tiny_cover()),
+        );
+        let dest = scale_rect_to_frame(&RESULT_MUSIC_BOX, 64, 48);
+        let at = |x: i32, y: i32| buf[y as usize * 64 + x as usize];
+        assert_eq!(at(dest.x, dest.y), pack_xrgb(255, 0, 0));
+        let last_x = dest.x + dest.w as i32 - 1;
+        let last_y = dest.y + dest.h as i32 - 1;
+        assert_eq!(at(last_x, last_y), pack_xrgb(0, 255, 0));
     }
 
     /// Ten-layer number font: layer `i` paints digit `i`.

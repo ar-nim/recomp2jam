@@ -1725,14 +1725,16 @@ mod avatar_figure_tests {
         assert_eq!(layer.image.words[0], 0x03E0);
     }
 
-    /// All seven 7.55 prefixed `.oji` bodies load and render (skips
+    /// All ten 7.55 prefixed `.oji` bodies load and render (skips
     /// without `install-root`): one composed layer per stored frame —
     /// `SelectAlbum_Bar` 15, `SelectMusic_Bar` 10, the notice boards
-    /// and loading rank view one each, plus the four `BG_Ani`
-    /// background frames and the shadow. The full-row bodies ride the
-    /// positive deltas codec-coverage pinned (+92..+902);
-    /// `BG_Ani`/`Avatar_Shadow` walk the same row groups with narrower
-    /// spans (transparent margins skipped, negative deltas).
+    /// and loading rank view one each, the four `BG_Ani` background
+    /// frames and the shadow, plus the three repeated-y bodies
+    /// (gap ④). The full-row bodies ride the positive deltas
+    /// codec-coverage pinned (+92..+902); `BG_Ani`/`Avatar_Shadow`
+    /// walk the same row groups with narrower spans (transparent
+    /// margins skipped, negative deltas); the repeated-y trio stores
+    /// frame outlines only, sharing rows by repeating the `y` word.
     #[test]
     fn oji_prefixed_bodies_render_from_the_archives() {
         let Some(interface) = install_archive("Interface1.opi") else {
@@ -1749,6 +1751,9 @@ mod avatar_figure_tests {
             (&playing, "Playing_Loding_Lankview.oji", 1),
             (&playing, "BG_Ani.oji", 4),
             (&playing, "Avatar_Shadow.oji", 1),
+            (&playing, "Playing_ChatWindow.oji", 1),
+            (&interface, "Myroom_MybagSelect.oji", 1),
+            (&interface, "Shop_MybagSelect.oji", 1),
         ] {
             let figure = load_archive_sprite(archive, name)
                 .unwrap_or_else(|| panic!("{name} must route to a figure"));
@@ -1756,27 +1761,28 @@ mod avatar_figure_tests {
         }
     }
 
-    /// The remaining unmapped `.oji` frames (codec gap ④) stay
-    /// dropped: their stored bytes repeat y words mid-image and walk
-    /// as neither row groups nor any other layout (skips without
-    /// `install-root`).
+    /// The three repeated-y `.oji` bodies (codec gap ④) load and
+    /// render (skips without `install-root`): their stored bytes
+    /// repeat the row-group `y` word to keep outline rows shared, and
+    /// the strict in-order walk accepts exactly that — rows stay
+    /// ordered, every row carried at least once, the walk ends on row
+    /// `h − 1`.
     #[test]
-    fn oji_unmapped_bodies_stay_dropped() {
+    fn oji_repeated_y_bodies_render_from_the_archives() {
         let Some(interface) = install_archive("Interface1.opi") else {
             return;
         };
         let Some(playing) = install_archive("Playing1.opi") else {
             return;
         };
-        for (archive, name) in [
-            (&playing, "Playing_ChatWindow.oji"),
-            (&interface, "Myroom_MybagSelect.oji"),
-            (&interface, "Shop_MybagSelect.oji"),
+        for (archive, name, frames) in [
+            (&playing, "Playing_ChatWindow.oji", 1),
+            (&interface, "Myroom_MybagSelect.oji", 1),
+            (&interface, "Shop_MybagSelect.oji", 1),
         ] {
-            assert!(
-                load_archive_sprite(archive, name).is_none(),
-                "{name} has no codec yet"
-            );
+            let figure = load_archive_sprite(archive, name)
+                .unwrap_or_else(|| panic!("{name} must route to a figure"));
+            assert_eq!(figure.len(), frames, "{name} stored frames");
         }
     }
 

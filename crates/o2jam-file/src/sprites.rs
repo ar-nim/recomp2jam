@@ -412,18 +412,20 @@ pub const SPRITE55_ROW_TAIL_LEN: usize = 2;
 
 /// A parsed prefixed sprite-55 container (the `.oji` bodies of
 /// `docs/codec-coverage.md`): shared header and record table with
-/// [`Sprite55`], but each image stores `h` row groups of `u16`
+/// [`Sprite55`], but each image stores a run of row groups of `u16`
 /// `width`, `x`, `y` words followed by `width` RGB555 pixels, plus
 /// one zero terminator word, instead of one raw blob. The `y` words
-/// count rows positionally `0..h-1`, every span stays inside its row
+/// walk rows in order: the first group sits on row 0, a group either
+/// repeats the previous row (x runs accumulate along it) or steps one
+/// row down, so every row carries at least one span and the walk ends
+/// on row `h - 1`. Every span stays inside its row
 /// (`x + width <= w`), and pixels no span covers stay colour-key
 /// (transparent): the `Playing_Loding_Lankview.oji` bottom rows
-/// trim both sides for rounded corners, and the negative-delta
-/// bodies (`BG_Ani.oji`, `Avatar_Shadow.oji`) store narrower spans
-/// that skip transparent margins outright. Verified on all seven
-/// prefixed bodies (33 images) in the real 7.55 archives; the three
-/// remaining `.oji` bodies (`Playing_ChatWindow`, both MybagSelect)
-/// repeat y words and fail this walk.
+/// trim both sides for rounded corners, `BG_Ani.oji` and
+/// `Avatar_Shadow.oji` skip transparent margins outright, both
+/// MybagSelect buttons paint each row as two edge spans, and the
+/// `Playing_ChatWindow.oji` border rows pack up to 18 runs. Verified
+/// on all ten prefixed bodies (36 images) in the real 7.55 archives.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sprite55Prefixed<'a> {
     /// Container tag (observed: 1).
@@ -437,10 +439,14 @@ pub struct Sprite55Prefixed<'a> {
     pub rows: Vec<Vec<Sprite55RowSpan<'a>>>,
 }
 
-/// Walk one image's row groups: `h` groups of `u16 width`, `u16 x`,
-/// `u16 y` followed by `width` pixels, closed by one zero word. Any
-/// other layout (raw blob, compressed frames, a dropped or reordered
-/// row, a span past the right edge) is not a prefixed image.
+/// Walk one image's row groups: consecutive groups of `u16 width`,
+/// `u16 x`, `u16 y` followed by `width` pixels, closed by one zero
+/// word. Rows arrive in order: the first group sits on row 0, a group
+/// repeats the previous row (x runs accumulate along it) or steps one
+/// row down, and the walk ends on row `h - 1` — every row carries at
+/// least one span. Any other layout (raw blob, compressed frames, a
+/// dropped, skipped, or reordered row, a span past the right edge) is
+/// not a prefixed image.
 fn parse_prefixed_rows<'a>(
     blob: &'a [u8],
     image: &Sprite55Image,
@@ -449,13 +455,18 @@ fn parse_prefixed_rows<'a>(
     let data = &blob[image.data_offset..image.data_offset + image.size as usize];
     let mut rest = data;
     let mut spans = Vec::with_capacity(image.h as usize);
-    for row in 0..image.h {
+    let mut last_row = None;
+    loop {
         if rest.len() < SPRITE55_ROW_HEADER_LEN + SPRITE55_ROW_TAIL_LEN {
             return Err(unknown_format(sample));
         }
         let width = read_u16le(rest, 0)?;
         let x = read_u16le(rest, 2)?;
         let y = read_u16le(rest, 4)?;
+        let row_in_order = match last_row {
+            None => y == 0,
+            Some(row) => y == row || u32::from(y) == u32::from(row) + 1,
+        };
         let span = usize::from(width)
             .checked_mul(2)
             .ok_or(FileError::Truncated {
@@ -468,7 +479,11 @@ fn parse_prefixed_rows<'a>(
                 need: usize::MAX,
                 have: rest.len(),
             })?;
-        if y != row || u32::from(x) + u32::from(width) > u32::from(image.w) || rest.len() < need {
+        if u32::from(y) >= u32::from(image.h)
+            || !row_in_order
+            || u32::from(x) + u32::from(width) > u32::from(image.w)
+            || rest.len() < need
+        {
             return Err(unknown_format(sample));
         }
         spans.push(Sprite55RowSpan {
@@ -476,9 +491,16 @@ fn parse_prefixed_rows<'a>(
             y,
             pixels: &rest[SPRITE55_ROW_HEADER_LEN..need],
         });
+        last_row = Some(y);
         rest = &rest[need..];
+        if rest.len() == SPRITE55_ROW_TAIL_LEN {
+            break;
+        }
     }
     if rest.len() != SPRITE55_ROW_TAIL_LEN || read_u16le(rest, 0)? != 0 {
+        return Err(unknown_format(sample));
+    }
+    if last_row.is_none_or(|row| u32::from(row) + 1 != u32::from(image.h)) {
         return Err(unknown_format(sample));
     }
     Ok(spans)
@@ -518,7 +540,11 @@ pub fn parse_sprite55_prefixed(bytes: &[u8]) -> Result<Sprite55Prefixed<'_>, Fil
 
 #[cfg(test)]
 mod sprite55_prefixed_tests {
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
     use super::*;
+    use crate::parse_opi;
 
     /// Container blob in the plain sprite-55 shape (header + one
     /// record per image + concatenated stored data).
@@ -600,6 +626,133 @@ mod sprite55_prefixed_tests {
         assert_eq!(spans[1].pixels, &[0xE0, 0x03, 0x1F, 0x00]);
     }
 
+    /// Repeated-y shape (codec gap ④): a middle row stored as two
+    /// x runs with a transparent gap between them — the MybagSelect
+    /// edge-span shape. Spans keep stored order and share the row's
+    /// y; the walk never invents a span for the gap.
+    #[test]
+    fn repeated_y_groups_accumulate_x_runs_on_one_row() {
+        let data = prefixed_image(&[
+            row_group(4, 0, 0, &[0x7C00, 0x03E0, 0x001F, 0x7C00]),
+            row_group(1, 0, 1, &[0x03E0]),
+            row_group(2, 2, 1, &[0x001F, 0x7C00]),
+            row_group(4, 0, 2, &[0x7C00, 0x03E0, 0x001F, 0x7C00]),
+        ]);
+        let body = prefixed55_body(&[(0, 0, 4, 3, data)]);
+        let sprite = parse_sprite55_prefixed(&body).unwrap();
+        let spans = &sprite.rows[0];
+        assert_eq!(spans.len(), 4);
+        assert_eq!((spans[0].x, spans[0].y), (0, 0));
+        assert_eq!((spans[1].x, spans[1].y), (0, 1));
+        assert_eq!(spans[1].pixels, &[0xE0, 0x03]);
+        assert_eq!((spans[2].x, spans[2].y), (2, 1));
+        assert_eq!(spans[2].pixels, &[0x1F, 0x00, 0x00, 0x7C]);
+        assert_eq!((spans[3].x, spans[3].y), (0, 2));
+    }
+
+    /// Repository-local `install-root` (git-ignored game data).
+    fn install_archive(name: &str) -> Option<Vec<u8>> {
+        std::fs::read(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../install-root/O2Jam/Image")
+                .join(name),
+        )
+        .ok()
+    }
+
+    /// Real repeated-y bodies (codec gap ④): the in-play chat window
+    /// and both my-bag buttons walk with repeated y words — rows
+    /// arrive in order and some rows carry several x runs (each
+    /// MybagSelect row paints two edge spans; one chat-window border
+    /// row packs 18). Container accounting lands byte-exact. Skips
+    /// when `install-root` is absent.
+    /// One real repeated-y body's pinned shape: archive and body
+    /// names, image `w×h`, span count, and rows grouped by how many
+    /// x runs paint them: `(runs, row count)`.
+    struct RepeatedYCase {
+        archive: &'static str,
+        body: &'static str,
+        w: u16,
+        h: u16,
+        span_count: usize,
+        rows_per_run_count: &'static [(usize, usize)],
+    }
+
+    #[test]
+    fn repeated_y_oji_bodies_walk_from_the_archives() {
+        let cases = [
+            RepeatedYCase {
+                archive: "Interface1.opi",
+                body: "Myroom_MybagSelect.oji",
+                w: 86,
+                h: 69,
+                span_count: 134,
+                rows_per_run_count: &[(1, 4), (2, 65)],
+            },
+            RepeatedYCase {
+                archive: "Interface1.opi",
+                body: "Shop_MybagSelect.oji",
+                w: 86,
+                h: 69,
+                span_count: 134,
+                rows_per_run_count: &[(1, 4), (2, 65)],
+            },
+            RepeatedYCase {
+                archive: "Playing1.opi",
+                body: "Playing_ChatWindow.oji",
+                w: 596,
+                h: 558,
+                span_count: 671,
+                rows_per_run_count: &[(1, 461), (2, 96), (18, 1)],
+            },
+        ];
+        for case in cases {
+            let name = case.body;
+            let Some(bytes) = install_archive(case.archive) else {
+                return;
+            };
+            let entries = parse_opi(&bytes).expect("archive table parses");
+            let entry = entries
+                .iter()
+                .find(|entry| entry.name == name)
+                .unwrap_or_else(|| panic!("{name} in {}", case.archive));
+            let body = &bytes[entry.data_offset..entry.data_offset + entry.size as usize];
+            let sprite =
+                parse_sprite55_prefixed(body).unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(sprite.images.len(), 1, "{name}");
+            let image = &sprite.images[0];
+            assert_eq!((image.w, image.h), (case.w, case.h), "{name}");
+            let spans = &sprite.rows[0];
+            assert_eq!(spans.len(), case.span_count, "{name}");
+            let mut rows_per_y: BTreeMap<u16, usize> = BTreeMap::new();
+            for span in spans {
+                *rows_per_y.entry(span.y).or_insert(0) += 1;
+            }
+            let mut run_counts: BTreeMap<usize, usize> = BTreeMap::new();
+            for row_runs in rows_per_y.into_values() {
+                *run_counts.entry(row_runs).or_insert(0) += 1;
+            }
+            let histogram: Vec<(usize, usize)> = run_counts.into_iter().collect();
+            assert_eq!(
+                histogram, case.rows_per_run_count,
+                "{name} rows per run count"
+            );
+            assert_eq!(spans.last().map(|span| span.y), Some(case.h - 1), "{name}");
+            if name.ends_with("MybagSelect.oji") {
+                // Leading full-width fill row of one stored colour:
+                // the decode invents no pixel outside the spans.
+                assert_eq!((spans[0].x, spans[0].y), (0, 0), "{name}");
+                assert_eq!(spans[0].pixels, &[0xDD, 0x00].repeat(usize::from(case.w)));
+            }
+            if name == "Playing_ChatWindow.oji" {
+                assert_eq!((spans[0].x, spans[0].y), (0, 0));
+                assert_eq!(spans[0].pixels.len(), 2);
+                assert_eq!((spans[1].x, spans[1].y), (30, 0));
+                assert_eq!(spans[1].pixels.len(), 702);
+            }
+        }
+    }
+
     #[test]
     fn prefixed_rejects_every_other_layout() {
         // A plain raw blob is not a row-group walk (no terminator).
@@ -613,10 +766,33 @@ mod sprite55_prefixed_tests {
         let mut bad_tail = trimmed_body();
         *bad_tail.last_mut().unwrap() = 1;
         assert!(parse_sprite55_prefixed(&bad_tail).is_err());
-        // A dropped last row breaks the positional row count.
+        // A dropped last row breaks the row coverage (the walk must
+        // end on row h-1).
         let short = prefixed_image(&[row_group(4, 0, 0, &[0x7C00; 4])]);
         let short_body = prefixed55_body(&[(0, 0, 4, 2, short)]);
         assert!(parse_sprite55_prefixed(&short_body).is_err());
+        // A first row past row 0 skips the top row.
+        let skipped_top = prefixed_image(&[
+            row_group(4, 0, 1, &[0x7C00; 4]),
+            row_group(4, 0, 1, &[0x03E0; 4]),
+        ]);
+        let skipped_top_body = prefixed55_body(&[(0, 0, 4, 2, skipped_top)]);
+        assert!(parse_sprite55_prefixed(&skipped_top_body).is_err());
+        // A +2 row jump leaves a row unpainted.
+        let skipped_middle = prefixed_image(&[
+            row_group(4, 0, 0, &[0x7C00; 4]),
+            row_group(4, 0, 2, &[0x03E0; 4]),
+        ]);
+        let skipped_middle_body = prefixed55_body(&[(0, 0, 4, 3, skipped_middle)]);
+        assert!(parse_sprite55_prefixed(&skipped_middle_body).is_err());
+        // A row revisited after advancing walks out of order.
+        let revisited = prefixed_image(&[
+            row_group(4, 0, 0, &[0x7C00; 4]),
+            row_group(4, 0, 1, &[0x03E0; 4]),
+            row_group(4, 0, 0, &[0x001F; 4]),
+        ]);
+        let revisited_body = prefixed55_body(&[(0, 0, 4, 2, revisited)]);
+        assert!(parse_sprite55_prefixed(&revisited_body).is_err());
         // A span past the right edge breaks the row containment.
         let wide = prefixed_image(&[
             row_group(4, 0, 0, &[0x7C00; 4]),
