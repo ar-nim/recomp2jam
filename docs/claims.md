@@ -25,9 +25,9 @@ pin for all EXE rows: `AngelO2Jam.exe` 5,029,888 B, SHA-256
 
 | Level | Claims |
 |---|---|
-| EXE | 67 |
+| EXE | 68 |
 | DATA | 41 |
-| ASSUMED | 31 |
+| ASSUMED | 30 |
 | Total | 139 |
 
 ## The pairing-rule family (known mistake + siblings)
@@ -127,7 +127,7 @@ index (all-zero rect, slot 0, default arm).
 | B9 | Jam progress +2 Cool/+1 Good; thresholds `(i+1)*50` cumulative, all difficulties; reset on Bad/Miss | EXE | `0x170260`/`0x1705b0`/`0x170628`/`0x1708dd`/`0x170936` | G | corrects "30" report |
 | B10 | `+0x3972` is the regular combo counter, `+0x3974` its max | EXE | `0x141620`, `0x1706da–0x1706ef` | G | |
 | B11 | Hold bonus: +10 score, +1 combo per playback tick while held | EXE | `0x178110`, ev `737dfe7b…`; writes `0x14163c`/`0x141652` | G | |
-| B12 | Long notes: head must be hit, tail released at its end; early release = miss | ASSUMED | player report; in-exe release path untraced | G | |
+| B12 | Long notes: no release judgement — head strike arms the hold (Cool/Good), bonus ticks while armed ∧ span open, tail rates only by the expiry Miss, missed/Bad head marks its paired tail judged, key-up strikes the nearest unjudged non-tail record | EXE | judges `0x176540`/`0x175fa0` (key-up walk `0x1767c9`–`0x176b00`, tail exclusions `0x176837`/`0x176994`); flag `0x17617b`/`0x176d78`; bonus scan `0x178110`, files `0x178194`/`0x1781c1`/`0x1781d7`; expiry `0x1773bf`/`0x17740f`/`0x177468`–`0x1774e2`; tail kill `0x176dab`–`0x176df6`; dossiers `ev_1baf7ef1…`/`ev_737dfe7b…`/`ev_0ece39cb…`/`ev_3d707204…`; `HoldSpan`/`HoldState` | G | CORRECTED: refutes "tail released at its end; early release = miss" |
 | B13 | Hold-active flag at `+0x9f8`, written gated on payload hold-bit tests | EXE | writes `0x17617b`/`0x176c78`/`0x17726b`; tests `0x1766cb`… | G | |
 | B14 | Chart payload bit 25/26 = hold span/head semantics | ASSUMED | sites pinned, trigger absent on shipped charts | G | |
 | B15 | Kinds 2–8 are the seven lanes (`lane = kind − 2`); songs use `{0,2,3}` or all seven | DATA | 39/39 count cross-checks | G | |
@@ -227,7 +227,7 @@ index (all-zero rect, slot 0, default arm).
 | D19 | Endpoints: FTP hosts, gateway IP/port, web/registry strings | EXE | string table `0x24b9c0`–`0x2514f0` | — | |
 | D20 | Authorize 1000 payload order (token, gender string, marker, clientId) | ASSUMED | Memoryer order; exe byte-proof open | G | |
 
-## Top-7 risky claims (visible behavior on the weakest evidence)
+## Top-6 risky claims (visible behavior on the weakest evidence)
 
 1. **A2/A20** — file-order pairing still taught by `opi-pattern.md`,
    `bnd-semantics.md`, and three doc comments; A1's code-ordinal rule
@@ -236,13 +236,11 @@ index (all-zero rect, slot 0, default arm).
    gives out-of-range ordinals an all-zero rect instead.
 3. **D13** — room-enum value sets locked from Memoryer ordinals; room
    list, join gating, and speed labels render from them.
-4. **B12** — long-note release rule (core to hold charts) is a player
-   report; the in-exe path exists but is untraced and unimplemented.
-5. **A34** — curtain geometry (ring visuals) from item text; the exe
+4. **A34** — curtain geometry (ring visuals) from item text; the exe
    clip math is untraced.
-6. **A32/A35/A36** — HUD digits, receptor/note/burst pixels, and font
+5. **A32/A35/A36** — HUD digits, receptor/note/burst pixels, and font
    metrics are invented placeholders behind genuine art.
-7. **A5** — topmost-last paint order beyond background-first is
+6. **A5** — topmost-last paint order beyond background-first is
     unobserved; layering of every scene rides on it.
 
 ## Maintenance
