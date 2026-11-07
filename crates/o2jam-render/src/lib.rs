@@ -452,8 +452,11 @@ pub const NATIVE_WIDTH: u32 = 800;
 pub const NATIVE_HEIGHT: u32 = 600;
 
 /// One `ControlList` entry bound to its `.bnd` rect on the native
-/// canvas: rect `i` lays out entry `i + 1` (entry 0 is the block
-/// itself). Callers pass the entries *after* the block header.
+/// canvas. The exe does not pair by file position: each entry's
+/// rect record is `(entry.code & 0xFFF) − 1`, bounds-checked, with
+/// an all-zero rect on a miss (exe `0x548640`, dossier
+/// `ev_3a869bb7…`). Callers must already have selected rects that
+/// way before handing them here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlacedControl {
     /// Control code (`IDC_` second word, top byte names the state).
@@ -464,9 +467,12 @@ pub struct PlacedControl {
     pub has_sprite: bool,
 }
 
-/// Bind entry codes to layout rects in file order, truncating to
-/// the shortest input (the Playing subset ships fewer rects than
-/// entries, so extra entries ride unlaid-out).
+/// Zip caller-supplied codes with caller-supplied rects
+/// positionally, truncating to the shortest input. This is only a
+/// bridge, not the pairing mechanism: the exe selects each entry's
+/// rect by code ordinal `(code & 0xFFF) − 1` with an all-zero rect
+/// on a miss (exe `0x548640`, dossier `ev_3a869bb7…`), so callers
+/// must resolve rects by ordinal before calling.
 #[must_use]
 pub fn bind_controls(codes: &[u32], has_sprite: &[bool], rects: &[Rect]) -> Vec<PlacedControl> {
     codes
