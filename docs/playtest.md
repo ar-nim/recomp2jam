@@ -960,3 +960,36 @@ docs logs (`c98e101`, `a1a4599`) landed after the result-anchor baseline
   music-select dialog tests, all other targets unchanged, 0 failures).
   No lint findings. No commits, no pushes.** This sweep touched only
   `docs/playtest.md`.
+
+## Regression sweep — 2026-11-07 19:18 UTC+8 (HEAD `691235a`, tree clean)
+
+Live re-proof on the waiting-head. Covers the waiting scene region parity
+commit (`df65e26`) plus the sweep log (`691235a`) landed after the
+musicselect-head baseline `a1a4599`.
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1137 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 0, file 149, game 92, net 337, render 72,
+  shell 368, real_art 7, scenes 22, recomp2jam 71
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, no warnings.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.60 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`19:18:03 +08:00`):
+  `Authorize session` → `Create room: songflow` →
+  `Update room [000] music settings: [HX / X10 / o2ma757]` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` → `Start game: [000]` →
+  `User music loaded: [000] - 0 / X10` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure stack on room delete).
+- **Verdict: no regression — suite is green on the waiting-head (1137
+  passed; +12 vs the 1125 baseline, all shell +12 from the waiting
+  region-parity tests, all other targets unchanged, 0 failures). No lint
+  findings. No commits, no pushes.** This sweep touched only
+  `docs/playtest.md`.
