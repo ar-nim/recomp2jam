@@ -1594,3 +1594,44 @@ guard-shot (`58cfe20`) work.
   from the loading-geometry trace tests, all other targets unchanged,
   0 failures). No lint findings. No commits, no pushes.** This sweep
   touched only `docs/playtest.md`.
+
+## Regression sweep — 2026-11-07 21:46 UTC+8 (HEAD `9e12282`, tree clean)
+
+Live re-proof on the negatives-head. Covers the waiting-negatives commit
+landed after the fill-head baseline `a90b5c1`: recorded chat/cards
+negatives in `paint_waiting` docs (`game.rs`: `EDIT_SWAIT_CHAT` /
+`LIST_SWAIT_CHAT` / `TEXT_SWAIT_CHAT` rects and `Random` `?` cards stay
+staged art with no text source), paint-side absence pins (`paint.rs`),
+and the `channel-fill.md` rework, plus the sweep log (`9e12282`).
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1240 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 7, file 149, game 92, net 338,
+  render 73, shell 440, real_art 7, scenes 22, recomp2jam 93
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, 0 warning
+  lines (touched-`main.rs` rebuild check).
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.59 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`21:45:53 +08:00`):
+  `Authorize session` → `Get channel list: [0]` →
+  `Enter channel: [0/00]` → `Get character info: [tester]` →
+  `Create room: songflow` →
+  `Update room [000] music settings: [HX / X10 / o2ma757]` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Update #1 - Jam: 3 (Bonus: 0)` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure stack on room delete).
+- **Verdict: no regression — suite is green on the negatives-head (1240
+  passed; +2 vs the 1238 fill-head baseline, all shell 438 → 440
+  from the chat/cards absence tests, all other targets unchanged,
+  0 failures). No lint findings. No commits, no pushes.** This sweep
+  touched only `docs/playtest.md`.

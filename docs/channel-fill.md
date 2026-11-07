@@ -166,21 +166,41 @@ missing-archive fallbacks).
    sites file `0x2c532`/`0x2c7df`/`0x2c854` and `DrawTextA` IAT
    `0x63f468` sites file `0x2c6ec`+ — over the field set control
    `+0x164`/`+0x174`/`+0x178`/`+0x180`/`+0x184` (reads files
-   `0x10f415`–`0x10f4f4`). The caption source for the 10 `TITLE`
-   entries (`0x1240001E`–27) stays unpinned: the factory/wrapper
-   tail passes the entry only to slot-4 Draw, and neither the ctor
-   (no entry argument) nor Draw copies entry `+0x04` — the
-   `+0x164`-family fields are written at runtime elsewhere, and
+   `0x10f415`–`0x10f4f4`). Caption writers traced by offset-only
+   byte scan (no new dossier; function bounds from prologue walk:
+   ctor `0x50f160`, slot 4 `0x50f280` 96 B, slot 1 `0x50f2e0` 64 B,
+   painter `0x50f320` 512 B, setters `0x50f680`/`0x50f6a0`/`0x50f6f0`):
+   base Draw `0x50da40` (file `0x10da40`) is REFUTED — bounded scan
+   touches only `+0x58`/`+0x4c`, never the family. Slot 1 `0x50f2e0`
+   (file `0x10f2e0`) is REFUTED — guard only (calls base slot 1
+   `0x50dae0` at file `0x10f2ea`, tests `+0x164` at file `0x10f2f2`,
+   calls `0x41cb20`); single caller `0x50f97a` (file `0x10f97a`).
+   Ctor `0x50f160` only zeroes the family (`+0x164` file `0x10f17b`,
+   `+0x178` file `0x10f195`, `+0x170` file `0x10f1a2`) and sets
+   `+0x174` to `0xffffff` (file `0x10f188`) — init, not caption.
+   The pinned writers are the setter trio: `0x50f680` stores `+0x174`
+   (file `0x10f68d`, 96 callers), `0x50f6a0` stores `+0x164` (file
+   `0x10f6e0`, 37 callers), `0x50f6f0` stores `+0x178`/`+0x180`/
+   `+0x184` (files `0x10f70a`/`0x10f716`/`0x10f722`, 38 callers).
+   Dialog writers PINNED: dialog-open `0x4ED650` (file `0xed650`)
+   calls `0x50f680` at files `0xeddb5`/`0xedf3b`/`0xedfbc`/`0xee299`/
+   `0xee2b8`, `0x50f6a0` at files `0xedf57`/`0xedfd8`, and `0x50f6f0`
+   at file `0xee2d6`; channel bar builder `0x48dd10` (file `0x8dd10`)
+   calls `0x50f680` at files `0x8df10`/`0x8df1f`. Net writers OPEN:
+   room-fill `0x491af0` (file `0x91af0`) pushes the `Lv.` format
+   (VA `0x64816c`, file `0x91bee`) but calls `0x50f520` (files
+   `0x91df9`/`0x91e32`), not the family setters, in its `0x400` B
+   window; packet-side setter callers (`0x43dcc4`, `0x44c479`,
+   `0x45ca8d`, `0x52xxxx` button-Draw cluster) stay unjoined.
    ControlList carries no caption literals by design (dialog-strings
    §2); the grade-string precedent (zero refs, claims B4) shows exe
    text can be unbound. Render loop `0x5dec30` (ev `ff581cfa…`)
    plus the child-array paint (`0x50dea0`/`0x50ddf0` → vtable
    `+0x24`, claims-render verdict 3) draw stored controls only. So:
    imageless image/button/toggle/number paint nothing; TEXT paints
-   its stored runtime field or nothing — source OPEN. To pin: trace
-   the runtime writer of the `+0x164`-family fields (candidates: base
-   Draw `0x50da40` entry path, slot-1 `0x50f2e0`, or dialog/net
-   writers per dialog-strings §3 channel bridge).
+   its stored runtime field or nothing — source PART-PINNED (setters
+   + dialog path pinned, channel-TITLE join OPEN). Remaining: join one
+   channel `TITLE` entry (`0x1240001E`–27) to a setter call site.
 3. Dialog host mounting the code-fetched select bar
    (`DIALOG_CHANNEL_INFO`/`CDChannelInfo` index path; `0x4ED650` excluded
    as the fetch site but its own behavior is unread — ui-loader OPEN 2).
