@@ -993,3 +993,42 @@ musicselect-head baseline `a1a4599`.
   region-parity tests, all other targets unchanged, 0 failures). No lint
   findings. No commits, no pushes.** This sweep touched only
   `docs/playtest.md`.
+
+## Regression sweep — 2026-11-07 19:26 UTC+8 (HEAD `15ff02e`, tree clean)
+
+Live re-proof on the dump-head. Covers the two feat commits landed after
+the waiting-head baseline `691235a`: dump pretty-print ojm and ojn
+(`64c0acd`) and side-content close result items (`5677e2f`), plus the
+sweep log (`15ff02e`).
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1156 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 7, file 149, game 92, net 337,
+  render 72, shell 380, real_art 7, scenes 22, recomp2jam 71
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, 0 warning
+  lines (touched-`main.rs` rebuild check; mtime only, no content
+  change).
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.59 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`19:25:58 +08:00`):
+  `Authorize session` → `Get channel list: [0]` →
+  `Enter channel: [0/00]` → `Get character info: [tester]` →
+  `Create room: songflow` → `Update room music settings` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member music state` → `download progress` →
+  `Start game: [000]` → `User music loaded` → `Game [000] Update` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure WARNs on room delete; a second session walked
+  `Get channel list` → `Enter channel` → `Get room list` →
+  `Get character info`).
+- **Verdict: no regression — suite is green on the dump-head (1156
+  passed; +19 vs the 1137 baseline: dump +7 from the new pretty-print
+  test target, shell +12 from the side-content tests, all other
+  targets unchanged, 0 failures). No lint findings. No commits, no
+  pushes.** This sweep touched only `docs/playtest.md`.

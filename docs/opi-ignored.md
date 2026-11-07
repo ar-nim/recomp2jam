@@ -72,6 +72,8 @@ pixel. Parser sites live in `o2jam-file` (`opi.rs`, `control.rs`, `sprites.rs`,
 - Unbound blocks (`CHANNEL`, splash, loading) — `paint.rs`
   `unbound_scene_placements` emits `id=""`, `code=0`, empty `Rect`; true
   layout (if any) is discarded and art pins at the native origin.
+  Exe side re-verified 2026-11-07: the blit arms push origin x/y only
+  (VA `0x50aa32`–`0x50aa36`), so no full-bleed rect consumer exists.
 - Rect/entry count mismatch — `avatar.rs` `bind_verbatim_entries` zips and
   stops at the shorter side: entries past the last rect stay unplaced (Playing
   tail past `VOLUME`, surplus room entries), rects past the last entry are
