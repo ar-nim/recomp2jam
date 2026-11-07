@@ -15,6 +15,7 @@
 
 use anyhow::Result;
 use o2jam_file::{FileError, OjmEntry};
+use o2jam_shell::screens::paint::LoadingStatus;
 
 /// Whether result grade thresholds are exe-verified and implemented.
 ///
@@ -27,6 +28,67 @@ pub const RESULT_GRADES_VERIFIED: bool = false;
 pub const LOADING_FONTS: [&str; 2] = ["Trebuchet MS", "Arial"];
 /// Loading-screen overlay the handoff shows (`0x4e47a0`).
 pub const LOADING_OVERLAY: &str = "MusicLoading.ojs";
+
+/// Staged loading-gate phases (lifecycle §9 steps 2–5): staging
+/// (`0x4f8b80`), OJN decrypt (`0x412180`), Vorbis decode
+/// (`0x54d460`), and song-clock arming (`0x4e47a0`).
+///
+/// Staged for the windowed loader wiring (`main.rs` stays untouched
+/// here): allowed dead until that follow-up calls it.
+#[allow(dead_code)]
+pub const LOADING_GATE_STEPS: usize = 4;
+
+/// Walk fraction for `completed` of `total` gate units (`None` while
+/// `total` is zero: archives stay read-only, unknown stays
+/// indeterminate — never invents a fraction).
+///
+/// Staged for the windowed loader wiring: allowed dead until then.
+#[allow(dead_code)]
+#[must_use]
+pub fn loading_fraction(completed: usize, total: usize) -> Option<f32> {
+    let done = u32::try_from(completed).ok()?;
+    let whole = u32::try_from(total).ok()?;
+    if whole == 0 {
+        return None;
+    }
+    let ratio = f64::from(done.min(whole)) / f64::from(whole);
+    Some(ratio.clamp(0.0, 1.0) as f32)
+}
+
+/// Live loading status for a walk position plus the song being
+/// loaded (OJN header / `OJNList.dat` title-artist). `None` while the
+/// walk size is unknown — the shell keeps its indeterminate full bar.
+///
+/// Staged for the windowed loader wiring: allowed dead until then.
+#[allow(dead_code)]
+#[must_use]
+pub fn loading_status(
+    completed: usize,
+    total: usize,
+    title: &str,
+    artist: &str,
+) -> Option<LoadingStatus> {
+    let progress = loading_fraction(completed, total)?;
+    Some(LoadingStatus {
+        progress,
+        title: title.to_owned(),
+        artist: artist.to_owned(),
+    })
+}
+
+/// Live loading status for one gate phase (`0` = gate entered,
+/// `LOADING_GATE_STEPS` = song clock armed). `None` past the gate:
+/// overruns are unknown, never a fraction.
+///
+/// Staged for the windowed loader wiring: allowed dead until then.
+#[allow(dead_code)]
+#[must_use]
+pub fn loading_phase_status(phase: usize, title: &str, artist: &str) -> Option<LoadingStatus> {
+    if phase > LOADING_GATE_STEPS {
+        return None;
+    }
+    loading_status(phase, LOADING_GATE_STEPS, title, artist)
+}
 
 /// A validated song select plus its staged extract name.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -203,5 +265,48 @@ mod tests {
     #[test]
     fn grades_stay_open_until_exe_verified() {
         const { assert!(!RESULT_GRADES_VERIFIED) };
+    }
+
+    #[test]
+    fn staging_phase_marks_a_quarter() {
+        assert_eq!(loading_fraction(1, LOADING_GATE_STEPS), Some(0.25));
+    }
+
+    #[test]
+    fn decrypt_phase_marks_a_half() {
+        assert_eq!(loading_fraction(2, LOADING_GATE_STEPS), Some(0.5));
+    }
+
+    #[test]
+    fn decode_phase_marks_three_quarters() {
+        assert_eq!(loading_fraction(3, LOADING_GATE_STEPS), Some(0.75));
+    }
+
+    #[test]
+    fn clock_phase_marks_full() {
+        assert_eq!(loading_fraction(4, LOADING_GATE_STEPS), Some(1.0));
+    }
+
+    #[test]
+    fn unknown_walk_stays_indeterminate() {
+        assert_eq!(loading_fraction(0, 0), None);
+    }
+
+    #[test]
+    fn phase_past_the_gate_stays_indeterminate() {
+        assert_eq!(loading_phase_status(LOADING_GATE_STEPS + 1, "T", "A"), None);
+    }
+
+    #[test]
+    fn phase_status_carries_title_and_artist() {
+        let status = loading_phase_status(2, "First", "Band").unwrap();
+        assert_eq!(status.progress, 0.5);
+        assert_eq!(status.title, "First");
+        assert_eq!(status.artist, "Band");
+    }
+
+    #[test]
+    fn walk_status_needs_a_known_size() {
+        assert_eq!(loading_status(0, 0, "First", "Band"), None);
     }
 }

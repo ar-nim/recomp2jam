@@ -20,10 +20,11 @@ words with file offsets and REA evidence ids.
    (100,190), 595×65 (rank 1); frame 2 paints image 1 at (100,190),
    595×65 (rank 2); frame 3 paints image 2 at (151,190), 498×65
    (other). Role 3 draws frame 0. (`ev_38f32576…`, `ev_bb4e402e…`)
-3. Shell mapping: `ResultVerdict::Solo` → frame 4;
-   `Battle(Win)` → frame 1; `Battle(Lose)` → frame 3. The flag-2
-   arm has no shell counterpart, so a rank-2 battle loss renders
-   as the generic frame-3 loss. (`crates/o2jam-shell/src/screens/paint.rs`)
+3. Shell mapping (`crates/o2jam-shell/src/screens/paint.rs`
+   `winlose_frame`): `ResultVerdict::Solo` → frame 4;
+   `Battle(Win)` → frame 1; `Battle(Lose)` → frame 2;
+   `Battle(Other)` → frame 3; `Battle(None)` → no banner (the
+   observer frame-0 arm stays OPEN, note 8 below).
 4. Rank table row count: one call per qualifying member of the row
    painter (`FUN_004c3b40`, file `0xc3b40`). Solo fill site
    (file `0xc3579`) qualifies one row; battle fill site
@@ -75,6 +76,36 @@ banner image 3 in the same band (the scripted walk renders
 "GOOD!"), the same top-panel numbers at (151/240/337/426, 125)
 and (505/596, 130), and a grade plate from the same threshold
 table at (395,531).
+
+## Walked solo capture (`result-solo.png`, `result-solo-native.png`)
+
+`cargo run -p recomp2jam -- shots` drives a second game with a
+peer-free Normal room (`crates/recomp2jam/src/shots.rs`
+`drive_solo_to_result`): the shared one-note chart struck once at
+5 s, painted at 7 s. Every value is walked state — no battle
+scoreboard, no scripted ranks:
+
+- Verdict `ResultVerdict::Solo` → WinLose frame 4 → image 3, the
+  solo banner in the y=190 band (rule 1), proven by
+  `solo_shot_paints_the_solo_banner_frame`.
+- One rank row (`YOU`, counts 1/0/0/0, 200 points, `+ 0`, X1)
+  and no `%d` at x=91: a single row hides the rank number
+  (rule 5), proven by `solo_walk_builds_one_rank_free_row` and
+  `solo_shot_paints_the_single_row_without_rank`.
+- Grade plate from the walked play data (rule 6): one Cool equals
+  the all-Cool max, so the equal-to-max arm gives grade 8
+  (image 7 at (395,531)), proven by
+  `solo_shot_paints_the_walked_grade_plate`.
+- Same top-panel numbers as the battle walk (rule 7 and the
+  `FUN_004c38a0` anchors): the same struck onset feeds the same
+  `Score`, so (151/240/337/426, 125), (505/596, 130), and the
+  total 200 at (605,533) match `result.png`.
+
+Against the reference photo (battle variant, above): the solo
+shots show the frame-4 solo banner where the photo shows the
+frame-2 LOSE! banner, one rank-free row where the photo shows
+two numbered rows, and the same number/grade geometry otherwise.
+The battle walk (`result.png`, `result-native.png`) is unchanged.
 
 ## OPEN items
 

@@ -41,7 +41,8 @@ pub struct Shot {
 }
 
 /// Capture avi, channel, room, waiting, musicselect, loading,
-/// playing, playing-native, result, result-native. The native
+/// playing, playing-native, result, result-native, result-solo,
+/// result-solo-native. The native
 /// companions re-emit the playing and result instants at the full
 /// 800x600 exe canvas so pinned details (combo font, 3x5 result
 /// digits, rank rows) stay provable instead of downscale smudges.
@@ -57,7 +58,7 @@ pub struct Shot {
 /// When the scripted walk leaves the expected screen.
 pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
     let mut game = seeded_game();
-    let mut shots = Vec::with_capacity(10);
+    let mut shots = Vec::with_capacity(12);
     shots.push(shoot(&mut game, "avi", 0)?);
     game.lane_key(3, true);
     shots.push(shoot_checked(&mut game, "channel", Screen::Channel, 0)?);
@@ -79,8 +80,19 @@ pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
         Screen::Playing,
         5_100,
     )?);
-    shots.push(shoot_result(&mut game, 7_000)?);
-    shots.push(shoot_result_native(&mut game, 7_000)?);
+    shots.push(shoot_result_named(&mut game, "result", 7_000)?);
+    shots.push(shoot_result_native_named(
+        &mut game,
+        "result-native",
+        7_000,
+    )?);
+    let mut solo = drive_solo_to_result();
+    shots.push(shoot_result_named(&mut solo, "result-solo", 7_000)?);
+    shots.push(shoot_result_native_named(
+        &mut solo,
+        "result-solo-native",
+        7_000,
+    )?);
     Ok(shots)
 }
 
@@ -341,13 +353,9 @@ fn stage_real_art(game: &mut ScreenGame) {
     }
 }
 
-/// Game preloaded with list rows, a Live waiting duo, the duo's
-/// battle scoreboard, and a chart whose note lands at 5 s (visible
-/// in Playing, spent by Result). Genuine archive art stages
-/// underneath when `install-root` holds it; otherwise the synthetic
-/// fallback paints.
-fn seeded_game() -> ScreenGame {
-    let mut game = ScreenGame::new();
+/// Lobby list rows shared by the battle and solo walks (channels
+/// plus room rows): display data only, no walked state.
+fn seed_lobby_lists(game: &mut ScreenGame) {
     game.set_channels(vec![
         ChannelState {
             gateway_id: 0,
@@ -368,12 +376,83 @@ fn seeded_game() -> ScreenGame {
         room_entry(3, "Jam", false, 5),
         room_entry(7, "Locked", true, 1),
     ]);
+}
+
+/// Shared chart: one note at 5 s (visible in Playing, spent by
+/// Result). The solo walk strikes the same onset, so its top-panel
+/// numbers and grade plate match the battle walk's play data.
+fn seed_chart(game: &mut ScreenGame) {
+    game.load_chart(vec![(2, 5_000, 7)]);
+}
+
+/// Game preloaded with list rows, a Live waiting duo, the duo's
+/// battle scoreboard, and a chart whose note lands at 5 s (visible
+/// in Playing, spent by Result). Genuine archive art stages
+/// underneath when `install-root` holds it; otherwise the synthetic
+/// fallback paints.
+fn seeded_game() -> ScreenGame {
+    let mut game = ScreenGame::new();
+    seed_lobby_lists(&mut game);
     game.set_joined_room(waiting_room());
     game.set_battle_teams(result_battle_teams());
     game.set_battle_self_team(Some(RESULT_SELF_TEAM));
-    game.load_chart(vec![(2, 5_000, 7)]);
+    seed_chart(&mut game);
     stage_result_ranks(&mut game);
     stage_real_art(&mut game);
+    game
+}
+
+/// Solo waiting room for the solo walk: the same arena, key mode,
+/// and speed as the battle duo, but a Normal room with no wire
+/// peers — one seat, so Result takes the solo path (player-count
+/// branch, frame 4) with a single rank row.
+fn solo_waiting_room() -> JoinedRoom {
+    JoinedRoom {
+        member_id: 0,
+        team: RESULT_SELF_TEAM,
+        title: "Jam".to_owned(),
+        music_id: 0,
+        arena: PLAYING_ARENA_STAGE,
+        key_mode: 2,
+        game_mode: GameMode::Normal as u8,
+        difficulty: 0,
+        speed: 1,
+        has_super_manager: false,
+        user_count: 1,
+        slots: Vec::new(),
+        skills: Vec::new(),
+        premium: false,
+        champion: None,
+        champion_streak: None,
+    }
+}
+
+/// Solo game: lobby rows, the solo room, and the shared chart, with
+/// genuine archive art underneath when present. No battle scoreboard
+/// and no scripted ranks — every solo value comes from the walked
+/// play alone.
+fn seeded_solo_game() -> ScreenGame {
+    let mut game = ScreenGame::new();
+    seed_lobby_lists(&mut game);
+    game.set_joined_room(solo_waiting_room());
+    seed_chart(&mut game);
+    stage_real_art(&mut game);
+    game
+}
+
+/// Drive the solo walk from splash into Result: the same
+/// lane/menu/strike script as the battle walk, with the song-pick
+/// and playing captions staged at the same points.
+fn drive_solo_to_result() -> ScreenGame {
+    let mut game = seeded_solo_game();
+    game.lane_key(3, true);
+    game.menu_key(MenuKey::Confirm, true);
+    game.menu_key(MenuKey::Confirm, true);
+    stage_select_music_scene(&mut game);
+    game.menu_key(MenuKey::Confirm, true);
+    stage_playing_scene(&mut game);
+    game.menu_key(MenuKey::Confirm, true);
+    game.strike_at(2, 5_000);
     game
 }
 
@@ -663,34 +742,38 @@ fn shoot_checked(
     shoot(game, name, now_ms)
 }
 
-/// Rasterize, failing when the walk missed its screen.
-fn shoot_result(game: &mut ScreenGame, now_ms: u64) -> anyhow::Result<Shot> {
+/// Rasterize a result instant under `name`, failing when the walk
+/// missed its screen.
+fn shoot_result_named(
+    game: &mut ScreenGame,
+    name: &'static str,
+    now_ms: u64,
+) -> anyhow::Result<Shot> {
     let rgb = frame_rgb(game, now_ms);
     if game.screen() != Screen::Result {
-        anyhow::bail!("shot result: still at {:?}", game.screen());
+        anyhow::bail!("shot {name}: still at {:?}", game.screen());
     }
     Ok(Shot {
-        name: "result",
+        name,
         w: SHOT_W,
         h: SHOT_H,
         rgb,
     })
 }
 
-/// Rasterize the full native canvas, failing unless the chart end
-/// advanced the flow.
-fn shoot_result_native(game: &mut ScreenGame, now_ms: u64) -> anyhow::Result<Shot> {
+/// Rasterize a full-native result instant under `name`, failing
+/// unless the chart end advanced the flow.
+fn shoot_result_native_named(
+    game: &mut ScreenGame,
+    name: &'static str,
+    now_ms: u64,
+) -> anyhow::Result<Shot> {
     let rgb = frame_native_rgb(game, now_ms);
     if game.screen() != Screen::Result {
-        anyhow::bail!("shot result-native: still at {:?}", game.screen());
+        anyhow::bail!("shot {name}: still at {:?}", game.screen());
     }
     let (w, h) = native_size();
-    Ok(Shot {
-        name: "result-native",
-        w,
-        h,
-        rgb,
-    })
+    Ok(Shot { name, w, h, rgb })
 }
 
 /// Rasterize the full native canvas without checking the screen.
@@ -1126,7 +1209,7 @@ mod tests {
     }
 
     #[test]
-    fn walk_covers_eight_distinct_scenes() {
+    fn walk_covers_all_scenes_plus_solo_result() {
         let shots = capture_all().unwrap();
         let names: Vec<&str> = shots.iter().map(|shot| shot.name).collect();
         assert_eq!(
@@ -1141,7 +1224,9 @@ mod tests {
                 "playing",
                 "playing-native",
                 "result",
-                "result-native"
+                "result-native",
+                "result-solo",
+                "result-solo-native"
             ]
         );
         for shot in &shots {
@@ -1799,23 +1884,133 @@ mod tests {
     }
 
     #[test]
+    fn solo_walk_builds_one_rank_free_row() {
+        // The solo room holds no peers: one named row, no rank
+        // number (the exe draws `%d` at x=91 only with 2+ players),
+        // local numbers on row 0, and the solo verdict.
+        let mut game = drive_solo_to_result();
+        let mut probe = native_probe();
+        paint_probe(&mut probe, |frame| game.paint_at(frame, 7_000));
+        assert_eq!(game.screen(), Screen::Result);
+        assert_eq!(
+            game.result_verdict(),
+            o2jam_shell::screens::paint::ResultVerdict::Solo,
+            "a peer-free Normal room must take the solo banner arm",
+        );
+        let rows = game.result_rank_rows();
+        assert_eq!(rows.len(), 1, "solo must build one row");
+        assert_eq!(rows[0].name.as_deref(), Some("YOU"));
+        assert_eq!(rows[0].rank, None);
+        assert_eq!(rows[0].judgements, Some([1, 0, 0, 0]));
+        assert_eq!(rows[0].combos, Some((1, 0)));
+        assert_eq!(rows[0].score, Some(200));
+        assert_eq!(rows[0].bonus, Some(0));
+        assert_eq!(rows[0].speed, Some(1));
+    }
+
+    #[test]
+    fn solo_shot_paints_the_solo_banner_frame() {
+        let Some(archive) = read_archive(INTERFACE_ARCHIVE) else {
+            println!("skip: missing {INTERFACE_ARCHIVE}");
+            return;
+        };
+        // Solo verdict selects WinLose frame 4, clamped onto image
+        // 3 — the GOOD! solo banner in the y=190 band.
+        let banner = load_archive_sprite(&archive, RESULT_WINLOSE_SPRITE)
+            .expect("the builder's banner body decodes");
+        assert_eq!(banner.len(), 4, "four stored frames");
+        assert_eq!(
+            o2jam_shell::screens::paint::winlose_frame(
+                o2jam_shell::screens::paint::ResultVerdict::Solo,
+            ),
+            Some(4),
+            "solo must select the frame-4 banner",
+        );
+        let mut expected = native_probe();
+        paint_probe(&mut expected, |frame| {
+            let layer = banner.layer(3).expect("image 3 decodes");
+            let (x, y) = anchor_in_frame(layer.dx, layer.dy, 800, 600);
+            o2jam_render::blit_rgb555(frame, &layer.image.view(), x, y, Some(layer.colorkey));
+        });
+        let mut game = drive_solo_to_result();
+        assert_eq!(
+            game.result_verdict(),
+            o2jam_shell::screens::paint::ResultVerdict::Solo,
+        );
+        let mut actual = native_probe();
+        paint_probe(&mut actual, |frame| game.paint_at(frame, 7_000));
+        assert_eq!(game.screen(), Screen::Result);
+        assert_pixels_came_from_font(&actual, &expected, "solo banner");
+    }
+
+    #[test]
+    fn solo_shot_paints_the_single_row_without_rank() {
+        // Row 0 carries the walked local tally at the pinned
+        // columns; no `%d` paints at x=91 on the solo single row.
+        let mut game = drive_solo_to_result();
+        let mut actual = native_probe();
+        paint_probe(&mut actual, |frame| game.paint_at(frame, 7_000));
+        assert_eq!(game.screen(), Screen::Result);
+        let mut expected = native_probe();
+        paint_probe(&mut expected, |frame| {
+            let ink = o2jam_render::pack_xrgb(0xFF, 0xFF, 0xFF);
+            for (x, y, text) in [
+                RANK_ROW_NAME,
+                RANK_ROW_JUDGEMENTS,
+                RANK_ROW_SCORE,
+                RANK_ROW_BONUS,
+                RANK_ROW_SPEED_LOCAL,
+            ] {
+                o2jam_render::draw_text(frame, x, y, text, ink);
+            }
+        });
+        assert_pixels_came_from_font(&actual, &expected, "solo row");
+    }
+
+    #[test]
+    fn solo_shot_paints_the_walked_grade_plate() {
+        let Some(archive) = read_archive(INTERFACE_ARCHIVE) else {
+            println!("skip: missing {INTERFACE_ARCHIVE}");
+            return;
+        };
+        // Same struck note as the battle walk, same play data: one
+        // Cool equals the all-Cool max, so the pinned equal-to-max
+        // arm gives grade 8 (image 7) on the solo walk too.
+        let plate = load_archive_sprite(&archive, o2jam_shell::screens::paint::RESULT_RANK_SPRITE)
+            .expect("the block's grade plate decodes");
+        let mut expected = native_probe();
+        paint_probe(&mut expected, |frame| {
+            let layer = plate.layer(7).expect("image 7 decodes");
+            let (x, y) = anchor_in_frame(layer.dx, layer.dy, 800, 600);
+            o2jam_render::blit_rgb555(frame, &layer.image.view(), x, y, Some(layer.colorkey));
+        });
+        let mut game = drive_solo_to_result();
+        let mut actual = native_probe();
+        paint_probe(&mut actual, |frame| game.paint_at(frame, 7_000));
+        assert_eq!(game.screen(), Screen::Result);
+        assert_pixels_came_from_font(&actual, &expected, "solo grade plate");
+    }
+
+    #[test]
     fn staging_attempt_never_breaks_the_walk() {
         let shots = capture_all().unwrap();
-        assert_eq!(shots.len(), 10);
+        assert_eq!(shots.len(), 12);
         for shot in &shots {
             assert!(is_varied(&shot.rgb), "{} paints a flat frame", shot.name);
         }
     }
 
     #[test]
-    fn writer_saves_seven_scenes_and_keeps_avi() {
+    fn writer_saves_eleven_scenes_and_keeps_avi() {
         let dir = std::env::temp_dir().join(format!("recomp2jam-shots-{}", std::process::id()));
         let written = write_shots(&dir).unwrap();
-        assert_eq!(written.len(), 9);
+        assert_eq!(written.len(), 11);
         assert!(!dir.join("avi.png").exists());
         assert!(dir.join("musicselect.png").exists());
         assert!(dir.join("playing-native.png").exists());
         assert!(dir.join("result-native.png").exists());
+        assert!(dir.join("result-solo.png").exists());
+        assert!(dir.join("result-solo-native.png").exists());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1831,7 +2026,11 @@ mod tests {
                 .find(|shot| shot.name == name)
                 .unwrap_or_else(|| panic!("missing shot {name}"))
         };
-        for (preview, native) in [("playing", "playing-native"), ("result", "result-native")] {
+        for (preview, native) in [
+            ("playing", "playing-native"),
+            ("result", "result-native"),
+            ("result-solo", "result-solo-native"),
+        ] {
             let (small, full) = (by_name(preview), by_name(native));
             assert_eq!((full.w, full.h), (800, 600));
             assert_eq!(full.rgb.len(), 800 * 600 * 3);

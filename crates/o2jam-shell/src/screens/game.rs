@@ -9,9 +9,10 @@ use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
     battle_verdict, grade_frame, paint_avi_scene, paint_channel_list, paint_channel_scene,
-    paint_loading_scene, paint_lobby_backdrop, paint_playing_overlay, paint_result,
-    paint_result_scene, paint_room_list, paint_room_scene, paint_screen, paint_waiting_members,
-    paint_waiting_scene, scene_index, BattleVerdict, ResultRankRow, ResultVerdict, SceneArt,
+    paint_loading_scene, paint_loading_scene_with_status, paint_lobby_backdrop,
+    paint_playing_overlay, paint_result, paint_result_scene, paint_room_list, paint_room_scene,
+    paint_screen, paint_waiting_members, paint_waiting_scene, scene_index, BattleVerdict,
+    LoadingStatus, ResultRankRow, ResultVerdict, SceneArt,
 };
 use super::side::{
     can_return_side, can_visit_side, paint_side_scene, select_chosung_cells, select_difficulty_ink,
@@ -61,6 +62,9 @@ pub struct ScreenGame {
     room_highlight: usize,
     waiting: Option<JoinedRoom>,
     selected_music: Option<SetRoomMusic>,
+    /// Live loading status (walk fraction + title–artist, lifecycle
+    /// §9): `None` paints the indeterminate full bar.
+    loading_status: Option<LoadingStatus>,
     /// Room arena stage the Playing `_` sprites resolve through
     /// (`Playing_BG<stage>.ojs` and the staged kits; see
     /// [`Self::arena_stage`]).
@@ -117,6 +121,7 @@ impl ScreenGame {
             room_highlight: 0,
             waiting: None,
             selected_music: None,
+            loading_status: None,
             arena_stage: DEFAULT_ARENA_STAGE,
             catalog_songs: Vec::new(),
             select_music_art: None,
@@ -291,6 +296,25 @@ impl ScreenGame {
         self.selected_music = Some(selection);
         self.apply_life_difficulty();
         self
+    }
+
+    /// Stage a live loading status (real gate fractions only — see
+    /// `recomp2jam::loading`; unknown stays `None`, never invented).
+    pub fn set_loading_status(&mut self, status: LoadingStatus) -> &mut Self {
+        self.loading_status = Some(status);
+        self
+    }
+
+    /// Forget the walk state: Loading paints indeterminate again.
+    pub fn clear_loading(&mut self) -> &mut Self {
+        self.loading_status = None;
+        self
+    }
+
+    /// Live loading status, if a real gate walk staged one.
+    #[must_use]
+    pub fn loading_status(&self) -> Option<&LoadingStatus> {
+        self.loading_status.as_ref()
     }
 
     /// Seed the playing life bar from the selected chart's difficulty
@@ -701,11 +725,19 @@ impl ScreenGame {
         draw_text(frame, x, y, text, pack_xrgb(0xFF, 0xFF, 0xFF));
     }
 
-    /// Loading gate: staged art behind the progress bar.
+    /// Loading gate: staged art behind the progress bar. A staged
+    /// walk fraction paints the live bar plus title–artist; unknown
+    /// (no status, or no art) keeps the indeterminate full bar.
     fn paint_loading(&self, frame: &mut Frame<'_>) {
-        match self.scene_art(Screen::Loading) {
-            Some(art) => paint_loading_scene(frame, art),
-            None => paint_screen(frame, Screen::Loading),
+        match (
+            self.scene_art(Screen::Loading),
+            self.loading_status.as_ref(),
+        ) {
+            (Some(art), Some(status)) => {
+                paint_loading_scene_with_status(frame, art, status);
+            }
+            (Some(art), None) => paint_loading_scene(frame, art),
+            (None, _) => paint_screen(frame, Screen::Loading),
         }
     }
 
@@ -2612,5 +2644,103 @@ mod game_tests {
         assert_eq!(arena_stage_word(5), Some(5));
         assert_eq!(arena_stage_word(0), None);
         assert_eq!(arena_stage_word(-1), None);
+    }
+
+    fn loading_status_at_half() -> LoadingStatus {
+        LoadingStatus {
+            progress: 0.5,
+            title: "First".to_owned(),
+            artist: "Band".to_owned(),
+        }
+    }
+
+    fn walk_to_loading(game: &mut ScreenGame) {
+        use MenuKey;
+        game.lane_key(3, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Loading);
+    }
+
+    #[test]
+    fn loading_status_starts_empty() {
+        assert_eq!(ScreenGame::new().loading_status(), None);
+    }
+
+    #[test]
+    fn set_loading_status_remembers_the_walk() {
+        let mut game = ScreenGame::new();
+        game.set_loading_status(loading_status_at_half());
+        assert_eq!(game.loading_status(), Some(&loading_status_at_half()));
+    }
+
+    #[test]
+    fn clear_loading_restores_the_indeterminate_bar() {
+        let mut game = ScreenGame::new();
+        game.set_loading_status(loading_status_at_half());
+        game.clear_loading();
+        assert_eq!(game.loading_status(), None);
+    }
+
+    #[test]
+    fn loading_paints_the_staged_walk_fraction() {
+        // 64x48: track x16 w32 y16; half fill spans x16..32.
+        let (placements, figures) = corner_scene_art("MusicLoading.ojs");
+        let mut game = ScreenGame::new();
+        game.load_scene(Screen::Loading, placements, figures);
+        game.set_loading_status(loading_status_at_half());
+        walk_to_loading(&mut game);
+        let mut buf = vec![0u32; 64 * 48];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 48,
+            },
+            0,
+        );
+        assert_eq!(buf[16 * 64 + 16], pack_xrgb(0x30, 0xB0, 0x30));
+        assert_ne!(buf[16 * 64 + 40], pack_xrgb(0x30, 0xB0, 0x30));
+    }
+
+    #[test]
+    fn loading_paints_the_staged_song_caption() {
+        // Song row sits one placeholder row below the bar (y36).
+        let (placements, figures) = corner_scene_art("MusicLoading.ojs");
+        let mut game = ScreenGame::new();
+        game.load_scene(Screen::Loading, placements, figures);
+        game.set_loading_status(loading_status_at_half());
+        walk_to_loading(&mut game);
+        let mut buf = vec![0u32; 64 * 48];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 48,
+            },
+            0,
+        );
+        assert!(white_near(&buf, 64, 48, (16, 36)));
+    }
+
+    #[test]
+    fn loading_without_a_walk_keeps_the_full_bar() {
+        // No status: the legacy indeterminate full bar (x16..48).
+        let (placements, figures) = corner_scene_art("MusicLoading.ojs");
+        let mut game = ScreenGame::new();
+        game.load_scene(Screen::Loading, placements, figures);
+        walk_to_loading(&mut game);
+        let mut buf = vec![0u32; 64 * 48];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 48,
+            },
+            0,
+        );
+        assert_eq!(game.loading_status(), None);
+        assert_eq!(buf[16 * 64 + 47], pack_xrgb(0x30, 0xB0, 0x30));
     }
 }
