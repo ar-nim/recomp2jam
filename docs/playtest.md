@@ -1331,3 +1331,47 @@ companions sharing the walked source frame, scripted rank fixture,
   the clean-HEAD result. Per the sweep rules (touch only
   `docs/playtest.md`, fix only my own lint findings) the peer's
   files were left alone.
+
+## Regression sweep — 2026-11-07 20:43 UTC+8 (HEAD `ff4faf6`, tree clean)
+
+Live re-proof on the channel-head. Covers the fix commit landed after the
+native-head baseline `0975314`: name gateway in channel rows (`4284c44`:
+`channel_row_text` helper folding the gateway id into the channel row),
+plus the docs log (`ff4faf6`).
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1208 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 7, file 149, game 92, net 337,
+  render 72, shell 423, real_art 7, scenes 22, recomp2jam 80
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, 0 warning
+  lines.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.59 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`20:42:57 +08:00`):
+  `Create room: songflow` →
+  `Get music list: [0/00] 562 music` → `Start game: [000]` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure stack on room delete).
+- **Verdict: no regression — suite is green on the channel-head (1208
+  passed; +4 vs the 1204 baseline, all shell 419 → 423 from the
+  gateway channel-row tests, all other targets unchanged, 0 failures).
+  No lint findings. No commits, no pushes.** This sweep touched only
+  `docs/playtest.md`.
+- Tree note: a peer landed uncommitted edits mid-sweep
+  (`crates/o2jam-shell/src/avatar.rs` +4, saved 20:42:53 +08:00;
+  `crates/o2jam-shell/src/screens/paint.rs` +145/-20ish, saved
+  20:43:06 +08:00). The full-suite/fmt/clippy/build gates above all ran
+  before either edit, so every count above is the clean-HEAD result.
+  The live flow (server-logged 20:42:57–58 +08:00) compiled after the
+  `avatar.rs` save, so it ran with that edit present — still **ok**;
+  the edit is a doc-comment plus a `LOADING_BLOCK` const, no song-flow
+  behavior change. The `paint.rs` edit landed after every gate had
+  finished; nothing was re-run on it. Per the sweep rules (touch only
+  `docs/playtest.md`, fix only my own lint findings) the peer's files
+  were left alone.
