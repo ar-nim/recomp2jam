@@ -7,8 +7,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use o2jam_file::{Bnd, ControlList};
+use o2jam_game::RoomTeams;
 use o2jam_net::play::SetRoomMusic;
-use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
+use o2jam_net::{ChannelState, GameMode, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
 use o2jam_render::{Frame, Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
 use o2jam_shell::avatar::{
     bind_scene_rects, load_archive_sprite, load_avi_logo, load_scene_figures,
@@ -329,10 +330,11 @@ fn stage_real_art(game: &mut ScreenGame) {
     }
 }
 
-/// Game preloaded with list rows, one waiting member, and a chart
-/// whose note lands at 5 s (visible in Playing, spent by Result).
-/// Genuine archive art stages underneath when `install-root` holds
-/// it; otherwise the synthetic fallback paints.
+/// Game preloaded with list rows, a Live waiting duo, the duo's
+/// battle scoreboard, and a chart whose note lands at 5 s (visible
+/// in Playing, spent by Result). Genuine archive art stages
+/// underneath when `install-root` holds it; otherwise the synthetic
+/// fallback paints.
 fn seeded_game() -> ScreenGame {
     let mut game = ScreenGame::new();
     game.set_channels(vec![
@@ -356,6 +358,8 @@ fn seeded_game() -> ScreenGame {
         room_entry(7, "Locked", true, 1),
     ]);
     game.set_joined_room(waiting_room());
+    game.set_battle_teams(result_battle_teams());
+    game.set_battle_self_team(Some(RESULT_SELF_TEAM));
     game.load_chart(vec![(2, 5_000, 7)]);
     stage_real_art(&mut game);
     game
@@ -523,31 +527,61 @@ fn room_entry(number: i32, title: &str, locked: bool, users: u8) -> RoomListEntr
     }
 }
 
-/// Waiting room with a single ready host in seat 0, joined at the
-/// reference-matching arena stage (see [`PLAYING_ARENA_STAGE`]).
+/// Wire peer nickname on the result rank table (a synthetic
+/// reference-style name; the local row stays `YOU`). The peer
+/// holds rank 2, mirroring the reference's second row.
+const RESULT_PEER_NAME: &str = "Lujia";
+/// Local battle team (team A, the `TEAMA` seat).
+const RESULT_SELF_TEAM: u8 = 0;
+/// Peer battle team (team B).
+const RESULT_PEER_TEAM: u8 = 1;
+/// Synthetic server-side total on the local seat: underscores the
+/// peer so rank 2 sits on the local team and the banner reads LOSE!,
+/// like the reference battle photo.
+const RESULT_SELF_TOTAL: u64 = 100;
+/// Synthetic server-side total on the peer seat.
+const RESULT_PEER_TOTAL: u64 = 300;
+
+/// Battle scoreboard behind the result verdict: rank 1 by team
+/// total wins, so the peer takes it and the claim below resolves
+/// to Lose (frame 2, image 1). Only the ordering reaches the paint.
+fn result_battle_teams() -> RoomTeams {
+    let mut teams = RoomTeams::new();
+    teams.set_team(0, RESULT_SELF_TEAM);
+    teams.set_team(1, RESULT_PEER_TEAM);
+    teams.submit(0, RESULT_SELF_TOTAL);
+    teams.submit(1, RESULT_PEER_TOTAL);
+    teams
+}
+
+/// Waiting room for the result walk: a Live duo so Result takes
+/// the battle path — self on team A beside the wire peer `Xter` on
+/// team B, joined at the reference-matching arena stage (see
+/// [`PLAYING_ARENA_STAGE`]). The peer sits ready: the walk spends
+/// the chart straight through.
 fn waiting_room() -> JoinedRoom {
     JoinedRoom {
         member_id: 0,
-        team: 1,
+        team: RESULT_SELF_TEAM,
         title: "Jam".to_owned(),
         music_id: 0,
         arena: PLAYING_ARENA_STAGE,
         key_mode: 2,
-        game_mode: 0,
+        game_mode: GameMode::Live as u8,
         difficulty: 0,
         speed: 1,
         has_super_manager: false,
         user_count: 2,
         slots: vec![RoomSlot {
-            index: 0,
+            index: 1,
             state_code: 1,
             member: Some(RoomMember {
-                nickname: "host".to_owned(),
-                level: 9,
+                nickname: RESULT_PEER_NAME.to_owned(),
+                level: 12,
                 gender: 0,
                 gem: 0,
-                master: true,
-                team: 0,
+                master: false,
+                team: RESULT_PEER_TEAM,
                 ready: true,
                 music_state: 0,
                 equipment: [0; 17],
@@ -811,7 +845,7 @@ mod tests {
             team_play: game.room_team_play(),
         };
         assert_eq!(mode.key_mode, 2, "the shot's room plays 7 keys");
-        assert!(!mode.team_play, "the shot's room is solo");
+        assert!(mode.team_play, "the shot's room is a Live duo");
         let Some((_, figures)) = stage_bound_block(
             &archive,
             &list,
@@ -1422,21 +1456,34 @@ mod tests {
 
     /// Rank-row columns the shot pins (mirror the painter's
     /// anchors in `o2jam-shell/src/screens/paint.rs`: name x=128
-    /// y=318, judgements x=230 y=317, score x=530 y=317).
+    /// y=318, judgements x=230 y=317, score x=530 y=317, GEM bonus
+    /// x=626, speed x=685; rows step 22 px). Row 0 is the local
+    /// tally, row 1 the wire peer (name and shared speed only —
+    /// per-member tallies stay server-side).
     const RANK_ROW_NAME: (i32, i32, &str) = (128, 318, "YOU");
     /// Combined judgement text (`%5d /%5d /%3d /%3d`) for the
     /// scripted one-Cool walk.
     const RANK_ROW_JUDGEMENTS: (i32, i32, &str) = (230, 317, "    1 /    0 /  0 /  0");
     /// Row score text (`%8d`) for the scripted 200-point walk.
     const RANK_ROW_SCORE: (i32, i32, &str) = (530, 317, "     200");
+    /// Peer name text on row 1 (name column, one 22 px pitch down).
+    const RANK_ROW_PEER: (i32, i32, &str) = (128, 340, RESULT_PEER_NAME);
+    /// GEM bonus text (`+ %d`) for the walked hold bonus: the tap
+    /// chart arms no holds, so the accumulator stays zero — a walked
+    /// zero, never a blank.
+    const RANK_ROW_BONUS: (i32, i32, &str) = (626, 317, "+ 0");
+    /// Shared room speed text on both rows (the room's X1 code).
+    const RANK_ROW_SPEED_LOCAL: (i32, i32, &str) = (685, 317, "X1");
+    const RANK_ROW_SPEED_PEER: (i32, i32, &str) = (685, 339, "X1");
 
     #[test]
-    fn result_shot_paints_the_rank_table_row() {
+    fn result_shot_paints_the_rank_table_rows() {
         // The rank table (`FUN_004c3b40`) paints row 0 from the local
         // tally: name `YOU`, one Cool strike (counts 1/0/0/0, 200
-        // points) at the pinned columns. A stale shot from before the
-        // rank-row wiring leaves this band empty; the re-shoot must
-        // carry ink there.
+        // points, `+ 0` walked hold bonus, shared X1 speed) at the
+        // pinned columns, plus the wire peer's name and shared speed
+        // on row 1. A stale shot from before the duo walk leaves the
+        // peer band empty; the re-shoot must carry ink there.
         let mut game = seeded_game();
         walk_to_playing(&mut game);
         game.strike_at(2, 5_000);
@@ -1446,37 +1493,121 @@ mod tests {
         let mut expected = native_probe();
         paint_probe(&mut expected, |frame| {
             let ink = o2jam_render::pack_xrgb(0xFF, 0xFF, 0xFF);
-            for (x, y, text) in [RANK_ROW_NAME, RANK_ROW_JUDGEMENTS, RANK_ROW_SCORE] {
+            for (x, y, text) in [
+                RANK_ROW_NAME,
+                RANK_ROW_JUDGEMENTS,
+                RANK_ROW_SCORE,
+                RANK_ROW_PEER,
+                RANK_ROW_BONUS,
+                RANK_ROW_SPEED_LOCAL,
+                RANK_ROW_SPEED_PEER,
+            ] {
                 o2jam_render::draw_text(frame, x, y, text, ink);
             }
         });
-        assert_pixels_came_from_font(&actual, &expected, "rank row");
+        assert_pixels_came_from_font(&actual, &expected, "rank rows");
     }
 
     #[test]
-    fn result_shot_paints_the_solo_verdict_frame() {
+    fn result_walk_names_the_duo_and_hides_unbroadcast_ranks() {
+        // The Live duo builds two rank rows: local numbers on row 0
+        // (`YOU`), the peer name on row 1. Rank bytes stay hidden —
+        // no 4015 broadcast reaches `ScreenGame`'s mirror, so the
+        // zero-byte convention keeps both rank cells unpainted rather
+        // than inventing a standing.
+        let mut game = seeded_game();
+        walk_to_playing(&mut game);
+        game.strike_at(2, 5_000);
+        let rows = game.result_rank_rows();
+        assert_eq!(rows.len(), 2, "the duo must build two rows");
+        assert_eq!(rows[0].name.as_deref(), Some("YOU"));
+        assert_eq!(rows[0].rank, None);
+        assert_eq!(rows[0].judgements, Some([1, 0, 0, 0]));
+        assert_eq!(rows[0].score, Some(200));
+        assert_eq!(rows[0].bonus, Some(0));
+        assert_eq!(rows[0].speed, Some(1));
+        assert_eq!(rows[1].name.as_deref(), Some(RESULT_PEER_NAME));
+        assert_eq!(rows[1].rank, None);
+        assert_eq!(rows[1].judgements, None);
+        assert_eq!(rows[1].combos, None);
+        assert_eq!(rows[1].score, None);
+        assert_eq!(rows[1].bonus, None);
+        assert_eq!(rows[1].speed, Some(1));
+    }
+
+    #[test]
+    fn rank_broadcast_maps_4015_bytes_onto_rank_rows() {
+        // The mechanism the walked rows rely on: a decoded 4015 echo
+        // writes its stats word, then delivers each rank byte to the
+        // slot holding that rank — the rank-remap rule. Bytes with no
+        // holder leave their rows alone (never invented).
+        use crate::live_stats::apply_peer_update;
+        use o2jam_game::PeerBars;
+        use o2jam_net::{GameStatsUpdate, StatKind};
+        let mut peers = PeerBars::new();
+        peers.set_global_rank(0xFF);
+        for slot in 0..o2jam_game::PEER_SLOT_COUNT {
+            let rank = u8::try_from(slot).unwrap_or(u8::MAX).saturating_add(10);
+            peers.set_stored_rank(slot, rank);
+        }
+        let applied = apply_peer_update(
+            &mut peers,
+            GameStatsUpdate {
+                member_id: 2,
+                kind_code: StatKind::Life.as_u16(),
+                value: 1000,
+                ranks: [10, 11, 12, 13, 14, 15, 16, 17],
+            },
+        );
+        assert_eq!(applied.ranks.len(), o2jam_game::PEER_SLOT_COUNT);
+        assert_eq!(peers.life(2), Some(1000));
+        assert_eq!(peers.rank_row(0), Some(10));
+        assert_eq!(peers.rank_row(1), Some(11));
+        assert_eq!(peers.rank_row(7), Some(17));
+    }
+
+    #[test]
+    fn result_shot_paints_the_battle_lose_frame() {
         let Some(archive) = read_archive(INTERFACE_ARCHIVE) else {
             println!("skip: missing {INTERFACE_ARCHIVE}");
             return;
         };
-        // Solo play draws WinLose frame 4, clamped onto image 3 —
-        // the 547x65 solo banner anchored (126,190).
+        // Rank 2 sits on the local team, so the battle verdict
+        // resolves to Lose: WinLose frame 2, clamped onto image 1 —
+        // the LOSE! banner in the verdict band, like the reference
+        // battle photo.
         let banner = load_archive_sprite(&archive, RESULT_WINLOSE_SPRITE)
             .expect("the builder's banner body decodes");
         assert_eq!(banner.len(), 4, "four stored frames");
+        assert_eq!(
+            o2jam_shell::screens::paint::winlose_frame(
+                o2jam_shell::screens::paint::ResultVerdict::Battle(Some(
+                    o2jam_shell::screens::paint::BattleVerdict::Lose,
+                )),
+            ),
+            Some(2),
+            "rank 2 on the local team must select the LOSE frame",
+        );
         let mut expected = native_probe();
         paint_probe(&mut expected, |frame| {
-            let layer = banner.layer(3).expect("image 3 decodes");
+            let layer = banner.layer(1).expect("image 1 decodes");
             let (x, y) = anchor_in_frame(layer.dx, layer.dy, 800, 600);
             o2jam_render::blit_rgb555(frame, &layer.image.view(), x, y, Some(layer.colorkey));
         });
         let mut game = seeded_game();
         walk_to_playing(&mut game);
         game.strike_at(2, 5_000);
+        assert_eq!(
+            game.result_verdict(),
+            o2jam_shell::screens::paint::ResultVerdict::Battle(Some(
+                o2jam_shell::screens::paint::BattleVerdict::Lose,
+            )),
+            "the walked scoreboard must keep rank 2",
+        );
         let mut actual = native_probe();
         paint_probe(&mut actual, |frame| game.paint_at(frame, 7_000));
         assert_eq!(game.screen(), Screen::Result);
-        assert_pixels_came_from_font(&actual, &expected, "solo banner");
+        assert_pixels_came_from_font(&actual, &expected, "LOSE banner");
     }
 
     #[test]

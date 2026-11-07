@@ -1488,27 +1488,59 @@ pub fn result_loader_sprites() -> [&'static str; 3] {
     ]
 }
 
-/// Battle verdict: rank 1 by team score wins (`RoomTeams::winner`).
+/// Battle verdict: team standing by server-side total (`RoomTeams`
+/// mirrors the 4014/4016 accumulation; `Winner_image.ojs` and
+/// `Result_WinLose.ojs` render this same comparison server-side).
 /// Solo or team, grades play no part (mapping OPEN).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BattleVerdict {
-    /// Local team holds rank 1.
+    /// Local team holds rank 1 (exe win-flag 1 → frame 1 → image 0).
     Win,
-    /// Another team holds rank 1.
+    /// Local team holds rank 2 (exe win-flag 2 → frame 2 → image 1,
+    /// the LOSE! banner of the reference battle photo).
     Lose,
+    /// Local team ranks third or worse (exe win-flag anything else
+    /// → frame 3 → image 2).
+    Other,
 }
 
-/// Rank-1 verdict for the local team: `Win` when it holds the top
-/// total, `Lose` otherwise. `None` while the winner or the local
-/// team is unknown (empty room, solo with no seat claimed).
+/// Distinct seated teams in seat order (each `TEAMx` button index once).
+#[must_use]
+fn seated_battle_teams(teams: &RoomTeams) -> Vec<u8> {
+    let mut seen = Vec::new();
+    for seat in 0..teams.seats() {
+        if let Some(team) = teams.team_of(seat) {
+            if !seen.contains(&team) {
+                seen.push(team);
+            }
+        }
+    }
+    seen
+}
+
+/// Zero-based standing of `team` among the seated teams: highest
+/// combined total first, ties toward the lower team id (the
+/// `RoomTeams::winner` first-seat-wins order). `None` while `team`
+/// holds no seat.
+#[must_use]
+fn battle_team_rank(teams: &RoomTeams, team: u8) -> Option<usize> {
+    let mut standings: Vec<(u64, u8)> = seated_battle_teams(teams)
+        .into_iter()
+        .map(|candidate| (teams.team_total(candidate), candidate))
+        .collect();
+    standings.sort_by(|left, right| right.0.cmp(&left.0).then(left.1.cmp(&right.1)));
+    standings.iter().position(|(_, seated)| *seated == team)
+}
+
+/// Standing verdict for the local team: rank 1 wins, rank 2 loses,
+/// rank 3+ falls to the generic other arm. `None` while the local
+/// team is unknown or unseated (empty room, solo with no seat claimed).
 #[must_use]
 pub fn battle_verdict(teams: &RoomTeams, self_team: Option<u8>) -> Option<BattleVerdict> {
-    let winner = teams.winner()?;
-    let local = self_team?;
-    if local == winner {
-        Some(BattleVerdict::Win)
-    } else {
-        Some(BattleVerdict::Lose)
+    match battle_team_rank(teams, self_team?)? {
+        0 => Some(BattleVerdict::Win),
+        1 => Some(BattleVerdict::Lose),
+        _ => Some(BattleVerdict::Other),
     }
 }
 
@@ -1528,16 +1560,18 @@ pub enum ResultVerdict {
 
 /// WinLose frame for one verdict (`FUN_004c3120`, dossier
 /// `ev_38f32576…`): solo draws frame 4; a battle win-flag byte of 1
-/// draws frame 1 and 2 draws frame 2, anything else frame 3. The
-/// shell's verdict model only resolves rank-1 (flag 1) or not, so
-/// the flag-2 arm stays unreachable here; frame 4 clamps to the
-/// fourth image at draw time like the exe setter.
+/// draws frame 1, 2 draws frame 2, anything else frame 3. The shell
+/// resolves the same standing from team totals (rank 1 → `Win`,
+/// rank 2 → `Lose`, rank 3+ → `Other`), so every dossier frame is
+/// reachable. Frame 4 clamps to the fourth image at draw time like
+/// the exe setter.
 #[must_use]
 pub fn winlose_frame(verdict: ResultVerdict) -> Option<u8> {
     match verdict {
         ResultVerdict::Solo => Some(4),
         ResultVerdict::Battle(Some(BattleVerdict::Win)) => Some(1),
-        ResultVerdict::Battle(Some(BattleVerdict::Lose)) => Some(3),
+        ResultVerdict::Battle(Some(BattleVerdict::Lose)) => Some(2),
+        ResultVerdict::Battle(Some(BattleVerdict::Other)) => Some(3),
         ResultVerdict::Battle(None) => None,
     }
 }
@@ -3053,6 +3087,20 @@ mod paint_tests {
     }
 
     #[test]
+    fn battle_verdict_ranks_three_teams_to_other() {
+        let mut teams = RoomTeams::new();
+        teams.set_team(0, 0);
+        teams.set_team(1, 1);
+        teams.set_team(2, 2);
+        teams.submit(0, 300_000);
+        teams.submit(1, 200_000);
+        teams.submit(2, 100_000);
+        assert_eq!(battle_verdict(&teams, Some(0)), Some(BattleVerdict::Win));
+        assert_eq!(battle_verdict(&teams, Some(1)), Some(BattleVerdict::Lose));
+        assert_eq!(battle_verdict(&teams, Some(2)), Some(BattleVerdict::Other));
+    }
+
+    #[test]
     fn battle_verdict_stays_empty_without_winner_or_self() {
         let empty = RoomTeams::new();
         assert_eq!(battle_verdict(&empty, Some(0)), None);
@@ -3619,8 +3667,8 @@ mod paint_tests {
     #[test]
     fn winlose_frames_follow_the_pinned_rule() {
         // `FUN_004c3120`: solo 4; battle flag 1 -> 1, flag 2 -> 2,
-        // else 3. The shell resolves flag 1 (rank 1) or not; the
-        // flag-2 arm stays unreachable (dossier OPEN 10).
+        // else 3. The shell resolves the same standing from team
+        // totals, so every dossier frame stays reachable.
         assert_eq!(winlose_frame(ResultVerdict::Solo), Some(4));
         assert_eq!(
             winlose_frame(ResultVerdict::Battle(Some(BattleVerdict::Win))),
@@ -3628,6 +3676,10 @@ mod paint_tests {
         );
         assert_eq!(
             winlose_frame(ResultVerdict::Battle(Some(BattleVerdict::Lose))),
+            Some(2)
+        );
+        assert_eq!(
+            winlose_frame(ResultVerdict::Battle(Some(BattleVerdict::Other))),
             Some(3)
         );
         assert_eq!(winlose_frame(ResultVerdict::Battle(None)), None);
@@ -3670,15 +3722,30 @@ mod paint_tests {
     }
 
     #[test]
-    fn battle_lose_paints_the_third_banner_image() {
+    fn battle_lose_paints_the_second_banner_image() {
         let buf = painted_native_scene(
             &banner_art(),
             ResultVerdict::Battle(Some(BattleVerdict::Lose)),
             None,
         );
         let at = |x: i32, y: i32| buf[y as usize * 800 + x as usize];
+        assert_eq!(at(100, 190), frame_ink(1));
+        assert_ne!(at(100, 190), frame_ink(0));
+        assert_ne!(at(151, 190), frame_ink(2));
+        assert_ne!(at(126, 190), frame_ink(3));
+    }
+
+    #[test]
+    fn battle_other_paints_the_third_banner_image() {
+        let buf = painted_native_scene(
+            &banner_art(),
+            ResultVerdict::Battle(Some(BattleVerdict::Other)),
+            None,
+        );
+        let at = |x: i32, y: i32| buf[y as usize * 800 + x as usize];
         assert_eq!(at(151, 190), frame_ink(2));
         assert_ne!(at(100, 190), frame_ink(0));
+        assert_ne!(at(100, 190), frame_ink(1));
         assert_ne!(at(126, 190), frame_ink(3));
     }
 
