@@ -7,7 +7,9 @@
 //! all-zero rect on a miss (exe `0x548640`, dossier
 //! `ev_3a869bb7…`) — sprite names resolve against the same archive
 //! case-insensitively, and the `O2_SBS_*` / `_`-prefix rules apply
-//! before reporting a sprite missing. Step 7 (blit) stays
+//! before reporting a sprite missing (`_` names build their
+//! stage-numbered sibling from the room arena stage,
+//! `docs/stage-bga.md`). Step 7 (blit) stays
 //! caller-side: this module only pairs entries with rects and
 //! classifies sprite references.
 
@@ -25,6 +27,20 @@ static ZERO_RECT: BndRect = BndRect {
     x2: 0,
     y2: 0,
 };
+
+/// Lowest room stage: the waiting-room picker returns 1..=36 and
+/// room entry replaces a zero value with a real stage
+/// (`docs/stage-bga.md`, store `0x4aace5`).
+const STAGE_MIN: u16 = 1;
+
+/// Highest room stage: 36 numbered variants per stem
+/// (`Playing_BG1..36.ojs`, Playing1.opi slots 55–90).
+const STAGE_MAX: u16 = 36;
+
+/// Length of the 4-char sprite extension the `_` runtime rule
+/// drops together with the `_` (strip length strlen − 5,
+/// `0x4e80ef`).
+const EXTENSION_LEN: usize = 4;
 
 /// One laid-out control: a block entry plus the `.bnd` rect its
 /// code selects.
@@ -48,6 +64,10 @@ pub enum SpriteResolution<'a> {
     ScrollbarParams,
     /// Leading `_` marks runtime resolution (numbered/`.oja`
     /// siblings live beside the bare stem); not an archive miss.
+    /// [`resolve_sprite_entry`] refines this arm through the room
+    /// stage ([`resolve_stage_sprite`]); without a stage — or for
+    /// stems whose exe arm needs more (variant/bare) — it stays
+    /// deferred.
     RuntimeDeferred {
         /// Quoted name as written in the block.
         wanted: &'a str,
@@ -56,6 +76,8 @@ pub enum SpriteResolution<'a> {
     /// case-insensitive: three Interface stems differ only by case).
     Found(&'a OpiEntry),
     /// Named file with no archive entry after both rules pass.
+    /// A stage-resolved `_` name that misses reports the reference
+    /// as written in the block.
     Missing {
         /// Quoted name as written in the block.
         wanted: &'a str,
@@ -152,7 +174,9 @@ fn rect_ordinal(entry: &ControlEntry) -> Option<usize> {
 
 /// Classify one entry's sprite reference without touching the
 /// archive (steps 6 + 9): no art, scrollbar params, runtime
-/// `_`-prefix, else a named file needing a directory lookup.
+/// `_`-prefix, else a named file needing a directory lookup. The
+/// `_` arm stays deferred here — classification sees no stage;
+/// [`resolve_sprite_entry`] refines it.
 #[must_use]
 pub fn classify_sprite(entry: &ControlEntry) -> SpriteResolution<'_> {
     let Some(wanted) = entry.sprite.as_deref() else {
@@ -167,20 +191,102 @@ pub fn classify_sprite(entry: &ControlEntry) -> SpriteResolution<'_> {
     SpriteResolution::Missing { wanted }
 }
 
+/// Build the stage-numbered archive name for one `_` runtime
+/// sprite reference (applier `0x4e7850`, `docs/stage-bga.md`):
+/// drop the `_` and the 4-char extension (`_Playing_BG.ojs` →
+/// `Playing_BG`; `strncpy` length strlen − 5, `0x4e80ef`), clamp
+/// the room stage into 1..=36, and rebuild with the original
+/// extension → `Playing_BG7.ojs`. A reference without the full
+/// `_` + stem + 4-char-extension shape comes back unchanged: the
+/// exe names no numbered sibling for it either.
+#[must_use]
+pub fn resolve_stage_sprite(arena_stage: u16, stem: &str) -> String {
+    let Some((core, extension)) = runtime_stem(stem) else {
+        return stem.to_string();
+    };
+    let stage = arena_stage.clamp(STAGE_MIN, STAGE_MAX);
+    format!("{core}{stage}{extension}")
+}
+
+/// The exe's post-strip parts of one `_` runtime reference: the
+/// stem between the `_` and the trailing 4-char extension
+/// (`_Playing_BG.ojs` → `("Playing_BG", ".ojs")`; strip length
+/// strlen − 5 at `0x4e80ef`). `None` without the full shape — `_`
+/// plus at least one stem character — or when a cut would split a
+/// multi-byte character (exe names are ASCII; a split names no
+/// archive file).
+fn runtime_stem(wanted: &str) -> Option<(&str, &str)> {
+    // `_` plus a bare 4-char extension (5 bytes) strips to an
+    // empty stem: the exe's `strlen − 5` then names nothing.
+    let stem_end = wanted.len().checked_sub(EXTENSION_LEN)?;
+    if stem_end < 2 {
+        return None;
+    }
+    // `get` rejects cuts inside a multi-byte character.
+    Some((wanted.get(1..stem_end)?, wanted.get(stem_end..)?))
+}
+
+/// True when this runtime stem's in-song arm appends the stage
+/// number. The exe classifies stems by exact case-insensitive
+/// equality (`_stricmp` wrapper `0x5f34ff`); two arms take more
+/// than the stage and stay deferred here (`docs/stage-bga.md`
+/// table): `Note_Click` builds `%s%d_%d.ojt` from a random
+/// variant, `Note_LongCombo`/`Note_LongComboNum` stay bare
+/// (`%s.ojt`).
+fn is_stage_numbered_stem(stem: &str) -> bool {
+    !(stem.eq_ignore_ascii_case("Note_Click")
+        || stem.eq_ignore_ascii_case("Note_LongCombo")
+        || stem.eq_ignore_ascii_case("Note_LongComboNum"))
+}
+
 /// Resolve one entry's sprite against the same archive (steps 6 +
 /// 9): special names first, then a case-insensitive lookup.
 /// Entries without a sprite draw no art; they are never missing.
+/// A `_` runtime reference resolves through the room arena stage
+/// when the caller passes one (applier `0x4e7850`,
+/// [`resolve_stage_sprite`]): the numbered name is looked up like
+/// any other and a miss reports the written reference. Without a
+/// stage — UI-preview contexts, the exe's bare-name arm — or for
+/// stems whose arm needs more than the stage, the entry stays
+/// [`SpriteResolution::RuntimeDeferred`].
 #[must_use]
 pub fn resolve_sprite_entry<'a>(
     entry: &'a ControlEntry,
     directory: &'a [OpiEntry],
+    arena_stage: Option<u16>,
 ) -> SpriteResolution<'a> {
     match classify_sprite(entry) {
+        SpriteResolution::RuntimeDeferred { wanted } => {
+            resolve_runtime_entry(wanted, arena_stage, directory)
+        }
         SpriteResolution::Missing { wanted } => match find_opi_entry(directory, wanted) {
             Some(found) => SpriteResolution::Found(found),
             None => SpriteResolution::Missing { wanted },
         },
         settled => settled,
+    }
+}
+
+/// The `_` runtime arm of [`resolve_sprite_entry`] (applier
+/// `0x4e7850`): build the stage-numbered sibling and look it up.
+fn resolve_runtime_entry<'a>(
+    wanted: &'a str,
+    arena_stage: Option<u16>,
+    directory: &'a [OpiEntry],
+) -> SpriteResolution<'a> {
+    let Some(stage) = arena_stage else {
+        return SpriteResolution::RuntimeDeferred { wanted };
+    };
+    let Some((stem, _extension)) = runtime_stem(wanted) else {
+        return SpriteResolution::RuntimeDeferred { wanted };
+    };
+    if !is_stage_numbered_stem(stem) {
+        return SpriteResolution::RuntimeDeferred { wanted };
+    }
+    let numbered = resolve_stage_sprite(stage, wanted);
+    match find_opi_entry(directory, &numbered) {
+        Some(found) => SpriteResolution::Found(found),
+        None => SpriteResolution::Missing { wanted },
     }
 }
 
@@ -367,7 +473,7 @@ STATE_ROOM 0x02\n\
         let directory = fixture_directory();
         let layout = block.all_entries();
         assert_eq!(
-            resolve_sprite_entry(layout[1], &directory),
+            resolve_sprite_entry(layout[1], &directory, None),
             SpriteResolution::Found(&directory[1])
         );
         assert_eq!(
@@ -377,7 +483,8 @@ STATE_ROOM 0x02\n\
                     code: 1,
                     sprite: None,
                 },
-                &fixture_directory()
+                &fixture_directory(),
+                None
             ),
             SpriteResolution::NoArt
         );
@@ -392,7 +499,7 @@ STATE_ROOM 0x02\n\
         };
         let directory = for_entry(["O2_SBS_VERT\t4\t\t100"]);
         assert_eq!(
-            resolve_sprite_entry(&entry, &directory),
+            resolve_sprite_entry(&entry, &directory, None),
             SpriteResolution::ScrollbarParams
         );
     }
@@ -406,10 +513,102 @@ STATE_ROOM 0x02\n\
         };
         let directory = for_entry(["Playing_BG.ojs"]);
         assert_eq!(
-            resolve_sprite_entry(&entry, &directory),
+            resolve_sprite_entry(&entry, &directory, None),
             SpriteResolution::RuntimeDeferred {
                 wanted: "_Playing_BG.ojs"
             }
+        );
+    }
+
+    #[test]
+    fn stage_sprite_names_the_first_backdrop_for_stage_one() {
+        assert_eq!(
+            resolve_stage_sprite(1, "_Playing_BG.ojs"),
+            "Playing_BG1.ojs"
+        );
+    }
+
+    #[test]
+    fn stage_sprite_names_the_last_backdrop_for_stage_thirty_six() {
+        assert_eq!(
+            resolve_stage_sprite(36, "_Playing_BG.ojs"),
+            "Playing_BG36.ojs"
+        );
+    }
+
+    #[test]
+    fn stage_sprite_clamps_out_of_range_stages_into_the_exe_range() {
+        assert_eq!(
+            resolve_stage_sprite(0, "_Playing_BG.ojs"),
+            "Playing_BG1.ojs"
+        );
+        assert_eq!(
+            resolve_stage_sprite(37, "_Playing_BG.ojs"),
+            "Playing_BG36.ojs"
+        );
+    }
+
+    #[test]
+    fn stage_sprite_keeps_non_ojs_extensions() {
+        assert_eq!(resolve_stage_sprite(2, "_Note_Miss.ojt"), "Note_Miss2.ojt");
+    }
+
+    #[test]
+    fn stage_prefix_resolves_through_the_stage_number_instead_of_deferring() {
+        let entry = ControlEntry {
+            id: "IDC_BG".to_string(),
+            code: 3,
+            sprite: Some("_Playing_BG.ojs".to_string()),
+        };
+        let directory = for_entry(["Playing_BG7.ojs"]);
+        assert!(matches!(
+            resolve_sprite_entry(&entry, &directory, Some(7)),
+            SpriteResolution::Found(_)
+        ));
+    }
+
+    #[test]
+    fn stage_resolved_sprite_missing_reports_the_written_reference() {
+        let entry = ControlEntry {
+            id: "IDC_BG".to_string(),
+            code: 3,
+            sprite: Some("_Playing_BG.ojs".to_string()),
+        };
+        // Only stage 1 is present: stage 7 must miss, not find it.
+        let directory = for_entry(["Playing_BG1.ojs"]);
+        assert_eq!(
+            resolve_sprite_entry(&entry, &directory, Some(7)),
+            SpriteResolution::Missing {
+                wanted: "_Playing_BG.ojs"
+            }
+        );
+    }
+
+    #[test]
+    fn stage_arm_stems_needing_more_than_the_stage_stay_deferred() {
+        let entry = ControlEntry {
+            id: "IDC_CLICK".to_string(),
+            code: 3,
+            sprite: Some("_Note_Click.ojs".to_string()),
+        };
+        assert_eq!(
+            resolve_sprite_entry(&entry, &[], Some(7)),
+            SpriteResolution::RuntimeDeferred {
+                wanted: "_Note_Click.ojs"
+            }
+        );
+    }
+
+    #[test]
+    fn unshaped_underscore_reference_stays_deferred_even_with_a_stage() {
+        let entry = ControlEntry {
+            id: "IDC_ODD".to_string(),
+            code: 3,
+            sprite: Some("_Ab".to_string()),
+        };
+        assert_eq!(
+            resolve_sprite_entry(&entry, &[], Some(7)),
+            SpriteResolution::RuntimeDeferred { wanted: "_Ab" }
         );
     }
 
@@ -421,7 +620,7 @@ STATE_ROOM 0x02\n\
             sprite: Some("OK.OJS".to_string()),
         };
         assert!(matches!(
-            resolve_sprite_entry(&entry, &fixture_directory()),
+            resolve_sprite_entry(&entry, &fixture_directory(), None),
             SpriteResolution::Found(_)
         ));
     }
@@ -434,7 +633,7 @@ STATE_ROOM 0x02\n\
             sprite: Some("Absent.ojs".to_string()),
         };
         assert_eq!(
-            resolve_sprite_entry(&entry, &fixture_directory()),
+            resolve_sprite_entry(&entry, &fixture_directory(), None),
             SpriteResolution::Missing {
                 wanted: "Absent.ojs"
             }
