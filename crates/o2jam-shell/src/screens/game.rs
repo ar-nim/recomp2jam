@@ -1391,6 +1391,20 @@ mod game_tests {
     }
 
     #[test]
+    fn channel_confirm_enters_highlighted_channel() {
+        use MenuKey;
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.lane_key(3, true);
+        assert_eq!(game.screen(), Screen::Channel);
+        game.menu_key(MenuKey::Down, true);
+        assert_eq!(game.highlight, 1);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        assert_eq!(game.highlight, 1);
+    }
+
+    #[test]
     fn channel_list_paints_text_and_cursor() {
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
