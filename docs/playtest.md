@@ -931,3 +931,32 @@ archive-lookup work) landed after the icons-head baseline `03657b3`.
   recomp2jam +3, all other targets unchanged, 0 failures). No lint
   findings. No commits, no pushes.** This sweep touched only
   `docs/playtest.md`.
+
+## Regression sweep — 2026-11-07 19:07 UTC+8 (HEAD `a1a4599`, tree clean)
+
+Live re-proof on the musicselect-head. Covers the music-select dialog
+structural parity commit (`17e3a6f`) plus the claims-sweep and icons2
+docs logs (`c98e101`, `a1a4599`) landed after the result-anchor baseline
+`44831e1`.
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1125 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 0, file 149, game 92, net 337,
+  render 72, shell 356, real_art 7, scenes 22, recomp2jam 71
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, no warnings.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.59 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`19:07:30 +08:00`):
+  `Create room: songflow` → `Get music list: [0/00] 562 music` →
+  `Start game: [000]` → `Game [000] Submit score: 2210`.
+- **Verdict: no regression — suite is green on the musicselect-head
+  (1125 passed; +14 vs the 1111 baseline, all shell +14 from the
+  music-select dialog tests, all other targets unchanged, 0 failures).
+  No lint findings. No commits, no pushes.** This sweep touched only
+  `docs/playtest.md`.
