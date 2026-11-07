@@ -126,6 +126,35 @@ No pipeline regressions: six of seven shots byte-identical, the
 seventh (`musicselect.png`) is new; the rank-row refresh still
 accounts for the only other delta (129 pixels of row-0 ink).
 
+## Waiting / music-select region verify (2026-11-07 re-shoot)
+
+Both PNGs regenerated via `cargo run -q -p recomp2jam -- shots`
+(`cargo test -p o2jam-shell -p recomp2jam` 92 green); both byte-identical
+to the committed shots (no pipeline drift). Bands below are column-
+restricted luminance std (shot vs photo — structure, not pixels):
+
+### `waiting.png` vs `reference-waiting-4x3.png` — HOLD, still FAIL
+
+| Region | Shot | Photo | Verdict + residual |
+|---|---|---|---|
+| Top panel (title/Ch/Wins bar) | 51.2 | 56.7 | HOLD — staged art + title/song/wins ink on both; shot room is the `Jam` duo (no Ch/No/MX3 line, `M0` song id) — scenario delta |
+| Seat grid (covers, champion row) | 45.0 | 47.7 | HOLD — staged covers + seat text on both; shot names no CHAMPION/CHALLENGER roles (joined room carries no champion) and centers portrait text blind (audit 18–19); seats still on staged cover rects, team grid highlight only |
+| Right column (TEAM/SKILL/SPEED) | 43.1 | 49.7 | HOLD — staged panel + button/speed ink on both; team highlight is the live amber cursor over the staged `Wait_Team?.ojs`, no covers; skills paint ids only, counts have no wire field |
+| Bottom chat/song (chat, arrow, Random, BACK) | 60.1 | 57.8 | HOLD — staged bar + panel ink on both; chat history, Random cards, and BACK stay staged art (no chat/card/nav state rides the snapshot) |
+
+Composition stays FAIL (invented placement where noted above; no team-button bodies or covers staged).
+
+### `musicselect.png` vs `reference-musicselect-4x3.png` — HOLD, still FAIL
+
+| Region | Shot | Photo | Verdict + residual |
+|---|---|---|---|
+| Filter columns (level/wheel/genre) | 24.6 | 61.5 | HOLD — staged art + column/button ink on both; lower shot std is the 562-song catalog vs the photo's 1608 plus ASCII stand-ins (no CP949 hangul); pager/search/chosung display-only |
+| Search table (label/note/title/artist/lvl/icons/grade) | 25.4 | 30.8 | HOLD — 10 staged rows + header on both; per-chart level draws the unknown dash, grade blank, 다운/듣기/정보 icon cells blank (no staged art) |
+| Status + search row | 26.2 | 39.0 | HOLD — `ALL -> ALL SEARCH RESULT.` + pager `1/<pages>` + title/artist radios + edit + search button on both; photo page `3/161`, shot page 1 (no paging input staged) |
+| Chosung + OK | 37.4 | 46.3 | HOLD — `A`–`Z` letters + OK pill on both; hangul jamo + 숫자/기타 word cells blank (micro-font has no CP949 glyphs), dialog bind pairing unproven |
+
+Dialog stays FAIL (blank level/grade/icon/chosung cells, unproven bind pairing, display-only pager/search/chosung).
+
 ## Scoreboard
 
 Verify pass 2026-11-07: 3 HOLD (playing/waiting + channel/room/loading
