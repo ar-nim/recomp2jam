@@ -1611,15 +1611,18 @@ fn result_score_field(score: &o2jam_game::Score) -> u32 {
 }
 
 /// Paint the pinned result numbers from the live `Score`
-/// (docs/cresult-anchors.md, top-panel painter `FUN_004c38a0`):
-/// COOL/GOOD/BAD/MISS at y=125, MAX/JAM COMBO at y=130, total score
-/// at (605,533) — white GDI text under the baked `StateResult_Top`
-/// headers, never digit sprites. Each field draws its decimal from
-/// the anchor's left edge: the exe printf widths (`%5d`/`%3d`/
-/// `%4d`/`%8d`) ride a text helper whose left/right anchoring is
-/// OPEN (dossier note 5), so the verified passed x is kept as the
-/// left edge. JAM COMBO reads the jam level chain (the wire's u16
-/// `jam` field; mapping OPEN 3); non-native frames paint nothing.
+/// (docs/cresult-anchors.md, top-panel painter `FUN_004c38a0`, file
+/// `0xc38a0`): COOL/GOOD/BAD/MISS at y=125, MAX/JAM COMBO at y=130,
+/// total score at (605,533) — white GDI text under the baked
+/// `StateResult_Top` headers, never digit sprites. Each field draws its
+/// decimal from the anchor's left edge: every text call in the top
+/// painter, the row painter (`FUN_004c3b40`, file `0xc3b40`), and the
+/// width wrapper (`FUN_004c43d0`) passes identical trailing text-helper
+/// args `(0, 3, 4)`, and the body of `FUN_0042c730` is not dumped, so
+/// left-vs-right anchoring stays OPEN (dossier note 5) and the verified
+/// passed x is kept as the left edge. JAM COMBO reads the jam level
+/// chain (the wire's u16 `jam` field; mapping OPEN 3); non-native
+/// frames paint nothing.
 fn paint_result_numbers(frame: &mut Frame<'_>, score: &o2jam_game::Score) {
     if !frame_is_native(frame) {
         return;
@@ -1708,9 +1711,16 @@ fn paint_result_body_frame(
 
 /// Paint the result backdrop: the staged scene minus the frame
 /// bodies ([`RESULT_FRAME_BODIES`]) in file order, so their unused
-/// frames never stack through the whole-layer pass. Empty art falls
-/// back to the flat background; placements without a loaded figure
-/// are skipped.
+/// frames never stack through the whole-layer pass. The Top/Bottom
+/// panels (`StateResult_Top.ojs` at (0,0), `StateResult_Bottom.ojs`
+/// at (0,250), overlapping y=250..316 with Bottom on top) ride this
+/// pass: the fill (`FUN_004c3120`, file `0xc3120`) never issues draw
+/// calls for the Top/Bottom row objects (`this+0x60[0..1]`), and the
+/// per-frame draw-all (slot 9, `FUN_0048c570`) owns every control —
+/// so staging their bodies here is the visible equivalent. How the
+/// post-mount commit call registers them with that renderer stays
+/// OPEN (dossier note 6). Empty art falls back to the flat
+/// background; placements without a loaded figure are skipped.
 fn paint_result_backdrop(frame: &mut Frame<'_>, art: &SceneArt) {
     if !art.has_figures() {
         fill_background(frame, Screen::Result);
@@ -2882,6 +2892,53 @@ mod paint_tests {
         assert_eq!(battle_verdict(&teams, None), None);
     }
 
+    /// Pinned but unpainted digit-sprite cells (dossier OPEN 1): the
+    /// life readout and the bottom counter run through the
+    /// frame-select/draw pair over eight fixed 24 px cells,
+    /// least-significant digit rightmost, digit 1 kerned +5 (shared
+    /// painter bodies at files `0xc44c0`/`0xc4630`: cells
+    /// `last - 168 ..= last` in 24 px steps). Life value =
+    /// `0x77ee58 + 0x77ee60`, y=77, last x=460
+    /// (292/316/340/364/388/412/436/460); bottom value = `0x76fc66`,
+    /// y=536, last x=176. The pitch and kern match `PointNum.ojs`, but
+    /// the binding is inference, not observed — so neither paints.
+    /// `Result_NumFont_Blue.ojs` (`this+0x10d0c`) has no reader either.
+    const RESULT_LIFE_Y: i32 = 77;
+    const RESULT_LIFE_LAST_X: i32 = 460;
+    const RESULT_BOTTOM_Y: i32 = 536;
+    const RESULT_BOTTOM_LAST_X: i32 = 176;
+    const RESULT_DIGIT_PITCH: i32 = 24;
+    const RESULT_DIGIT_CELLS: usize = 8;
+
+    /// Pinned but unpainted member-row columns (row painter
+    /// `FUN_004c3b40`, file `0xc3b40`; dossier OPEN 4/7): row base
+    /// y = 320 + 22·row, combined `"%5d /%5d /%3d /%3d"` at x=230,
+    /// `"%4d /%4d"` at x=416, `"%8d"` at x=530, `"+ %d"` at x=626
+    /// (semantic OPEN), `X 0.5`…`X R` at x=685, nickname at x=128,
+    /// rank at x=91 (2+ players only). No member-row model exists, so
+    /// no row paints.
+    const RESULT_ROW_BASE_Y: i32 = 320;
+    const RESULT_ROW_PITCH: i32 = 22;
+    const RESULT_RANK_X: i32 = 91;
+    const RESULT_ROW_NAME_X: i32 = 128;
+    const RESULT_ROW_JUDGE_X: i32 = 230;
+    const RESULT_ROW_COMBO_X: i32 = 416;
+    const RESULT_ROW_SCORE_X: i32 = 530;
+    const RESULT_ROW_BONUS_X: i32 = 626;
+    const RESULT_ROW_SPEED_X: i32 = 685;
+
+    /// Cell x values of one eight-cell digit field, rightmost last.
+    fn digit_cell_xs(last_x: i32) -> [i32; RESULT_DIGIT_CELLS] {
+        let mut xs = [0; RESULT_DIGIT_CELLS];
+        let mut index = 0;
+        while index < RESULT_DIGIT_CELLS {
+            let back = i32::try_from(RESULT_DIGIT_CELLS - 1 - index).unwrap_or(0);
+            xs[index] = last_x - back * RESULT_DIGIT_PITCH;
+            index += 1;
+        }
+        xs
+    }
+
     /// Flat native result for `score`, exactly as the no-art
     /// fallback paints it.
     fn flat_native_result(score: &o2jam_game::Score) -> Vec<u32> {
@@ -3065,6 +3122,114 @@ mod paint_tests {
             &full_score(),
         );
         assert!(!buf.contains(&result_number_ink()));
+    }
+
+    #[test]
+    fn life_and_bottom_digit_cells_stay_unpainted() {
+        // Dossier OPEN 1: the eight-cell digit fields (24 px pitch,
+        // digit 1 kerned +5) have no observed font binding, so the
+        // shell paints neither — the GDI numbers above never touch
+        // the (292..460, 77) or (8..176, 536) cell rows.
+        let buf = flat_native_result(&full_score());
+        let ink = result_number_ink();
+        for x in digit_cell_xs(RESULT_LIFE_LAST_X) {
+            let pixel = buf[RESULT_LIFE_Y as usize * 800 + x as usize];
+            assert_ne!(pixel, ink, "life cell x={x}");
+        }
+        for x in digit_cell_xs(RESULT_BOTTOM_LAST_X) {
+            let pixel = buf[RESULT_BOTTOM_Y as usize * 800 + x as usize];
+            assert_ne!(pixel, ink, "bottom cell x={x}");
+        }
+        assert_eq!(digit_cell_xs(RESULT_LIFE_LAST_X).len(), 8);
+        assert_eq!(digit_cell_xs(RESULT_LIFE_LAST_X)[0], 292);
+        assert_eq!(digit_cell_xs(RESULT_BOTTOM_LAST_X)[0], 8);
+    }
+
+    #[test]
+    fn member_rows_stay_unpainted_without_a_row_model() {
+        // Dossier OPEN 4/7: the shell carries no member-row model,
+        // so the row band keeps the flat card — none of the pinned
+        // row columns (rank 91, name 128, judge 230, combo 416,
+        // score 530, bonus 626, speed 685) take GDI ink.
+        let buf = flat_native_result(&full_score());
+        let ink = result_number_ink();
+        let row_y = RESULT_ROW_BASE_Y - 3;
+        for x in [
+            RESULT_RANK_X,
+            RESULT_ROW_NAME_X,
+            RESULT_ROW_JUDGE_X,
+            RESULT_ROW_COMBO_X,
+            RESULT_ROW_SCORE_X,
+            RESULT_ROW_BONUS_X,
+            RESULT_ROW_SPEED_X,
+        ] {
+            let pixel = buf[row_y as usize * 800 + x as usize];
+            assert_ne!(pixel, ink, "row column x={x}");
+        }
+        assert_eq!(RESULT_ROW_PITCH, 22);
+    }
+
+    #[test]
+    fn backdrop_keeps_top_and_bottom_panels() {
+        // Dossier note 6: the fill never draws the Top/Bottom row
+        // objects itself; the per-frame draw-all owns them. The
+        // shell backdrop stages their bodies, skipping only the
+        // frame bodies (the verdict placement must not paint).
+        let art = SceneArt {
+            placements: vec![
+                ScenePlacement {
+                    id: "IDC_TOP".to_owned(),
+                    code: 0,
+                    sprite: Some(RESULT_TOP_SPRITE.to_owned()),
+                    rect: Rect {
+                        x: 0,
+                        y: 0,
+                        w: 4,
+                        h: 4,
+                    },
+                },
+                ScenePlacement {
+                    id: "IDC_BOTTOM".to_owned(),
+                    code: 0,
+                    sprite: Some(RESULT_BOTTOM_SPRITE.to_owned()),
+                    rect: Rect {
+                        x: 0,
+                        y: 250,
+                        w: 4,
+                        h: 4,
+                    },
+                },
+                ScenePlacement {
+                    id: "IDC_VERDICT".to_owned(),
+                    code: 0,
+                    sprite: Some(RESULT_WINLOSE_SPRITE.to_owned()),
+                    rect: Rect {
+                        x: 400,
+                        y: 100,
+                        w: 4,
+                        h: 4,
+                    },
+                },
+            ],
+            figures: HashMap::from([
+                (RESULT_TOP_SPRITE.to_owned(), red_figure()),
+                (RESULT_BOTTOM_SPRITE.to_owned(), red_figure()),
+                (RESULT_WINLOSE_SPRITE.to_owned(), red_figure()),
+            ]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_result_backdrop(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &art,
+        );
+        let red = pack_xrgb(255, 0, 0);
+        assert_eq!(buf[0], red, "top panel paints");
+        assert_eq!(buf[250 * 800], red, "bottom panel paints");
+        assert_eq!(buf[100 * 800 + 400], 0, "verdict body skipped");
     }
 
     #[test]

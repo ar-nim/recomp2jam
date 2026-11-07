@@ -193,11 +193,17 @@ VA `0x64a3a0`) while siblings are ready. The relay wraps
 ## OPEN
 
 1. Digit-font binding for the two digit-cell fields (life readout,
-   bottom counter): the painters receive the background-control body
+   bottom counter): the shared digit painter bodies (files `0xc44c0`/
+   `0xc4630`) build eight cells as `last - 168 ..= last` in 24 px
+   steps and shift digit 1 by +5, confirming the dossier geometry
+   (life y=77 last x=460; bottom y=536 last x=176) from the register
+   flow alone. The painters receive the background-control body
    through the fetch chain, and the body backing those frames is not
    pinned to a loaded sprite name. `PointNum.ojs` metrics match the
    24 px cells and the +5 kern of the 12 px-wide digit 1
    ((23−12)/2 ≈ 5), but the attachment is inference, not observed.
+   Shell consequence: `paint.rs` stages neither field (new
+   `life_and_bottom_digit_cells_stay_unpainted` test).
 2. `Result_NumFont_Blue.ojs` use site: mounted at `this+0x10d0c`, no
    reader found in the painter set.
 3. Stat-name mapping for the globals: COOL/GOOD/BAD/MISS ↔
@@ -208,14 +214,35 @@ VA `0x64a3a0`) while siblings are ready. The relay wraps
    — exact semantics OPEN.
 4. Row-record fields `+0x2142`… are painter-relative; the record's
    stride bookkeeping inside the state (0x864×4 = 0x2190 in the call
-   sites) is not normalized to a named layout.
+   sites) is not normalized to a named layout. The row painter
+   (file `0xc3b40`) passes them as fixed combined strings —
+   `"%5d /%5d /%3d /%3d"` at x=230, `"%4d /%4d"` at x=416,
+   `"%8d"` of record `+0x2160` plus the `0x77ee58` global at x=530,
+   `"+ %d"` of record `+0x2164` at x=626, the `X 0.5`…`X R` chain of
+   record `+0x2168` at x=685, nickname at x=128 (truncated past 100
+   display chars), rank `%d` at x=91 only with 2+ players — so the
+   columns are closed while the record layout stays OPEN. Shell
+   consequence: no member-row model exists, so `paint.rs` paints no
+   rows (new `member_rows_stay_unpainted_without_a_row_model` test).
 5. Text helper `FUN_0042c730` alignment (left vs right anchor of the x
-   argument) not pinned; column x values are verified as passed.
+   argument) not pinned: every call in the top painter (file
+   `0xc38a0`), the row painter (file `0xc3b40`), and the width
+   wrapper (which selects `%3d`/`%4d`/`%5d`) passes identical
+   trailing args `(0, 3, 4)`, and the helper body itself is not
+   dumped. Column x values are verified as passed; `paint.rs` keeps
+   each passed x as the left edge (existing per-field tests assert
+   the pixel left of each anchor stays unpainted).
 6. Top/Bottom row objects (`this+0x60[0..1]`) are never drawn by the
-   fill; the commit call `FUN_0042f5a0(1)` after each mount is presumed
-   to register them with the per-frame renderer. Mechanism OPEN.
-7. The `+ %d` bonus column (record +0x2164) semantic (long-note bonus?
-   per the 4016 field order) OPEN.
+   fill (file `0xc3120` issues draws only for the WinLose row object,
+   then the top-panel painter and the row painter); the commit call
+   `FUN_0042f5a0(1)` after each mount is presumed to register them
+   with the per-frame renderer (slot 9, `FUN_00448c570` heritage).
+   Mechanism OPEN. Shell consequence: `paint_result_backdrop` stages
+   the Top/Bottom bodies ((0,0) and (0,250)) and skips only the frame
+   bodies (new `backdrop_keeps_top_and_bottom_panels` test).
+7. The `+ %d` bonus column (record +0x2164, `"+ %d"` at x=626 in
+   file `0xc3b40`) semantic (long-note bonus? per the 4016 field
+   order) OPEN. Unpainted with the rows (see 4).
 8. Grade 6→7 promotion compares max combo to note count − 1
    (`0x77ee5c` == `0x778a00`−1); what `0x778a00` counts (notes or
    notes−1) OPEN.
