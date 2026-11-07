@@ -2245,3 +2245,41 @@ arena-head baseline `e277f9a`: solo composition stage-two venue pin
   `playing_shot_pins_solo_composition_despite_live_room`, all other
   targets unchanged, 0 failures). No lint findings. No commits, no
   pushes.** This sweep touched only `docs/playtest.md`.
+
+## Regression sweep — 2026-11-08 00:57 UTC+8 (HEAD `939b483`, tree clean)
+
+Live re-proof on the burst-head. Covers the two commits landed after the
+venue-head baseline `9b42aaf`: burst art arm held beam bound in shots
+(`e26c6e5`) and the venue sweep docs log (`939b483`).
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1306 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 7, file 149, game 92, net 360,
+  render 73, shell 475, real_art 7, scenes 22, recomp2jam 102
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, 0 warning
+  lines (shell + recomp2jam recompiled, rest cached).
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.61 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`00:54:48 +08:00`):
+  `Create room: songflow` →
+  `Update room [000] music settings: [HX / X10 / o2ma757]` →
+  `Update room [000] arena: [1] (0)` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Update #1 - Jam: 3 (Bonus: 0)` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure WARNs on room delete; a second session walked
+  `Get character info` → `Get room list`).
+- **Verdict: no regression — suite is green on the burst-head (1306
+  passed; +5 vs the 1301 venue-head baseline: shell 472 → 475,
+  recomp2jam 100 → 102 from the burst-art shots tests, all other
+  targets unchanged, 0 failures). No lint findings. No commits, no
+  pushes.** This sweep touched only `docs/playtest.md`.
