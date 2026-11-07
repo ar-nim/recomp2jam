@@ -47,7 +47,8 @@ including the runtime `_` stem rule (`resolve.rs`). Bodies with no
 ### `Playing1.opi` — 11 lost bodies (the in-play scene)
 
 - `Note_Combo4/5/6.ojt` — combo milestone glow animation, referenced
-  by `IDC_IMAGE_SPLAY_NOTECOMBO` through runtime `_Note_Combo.ojt`.
+  by `IDC_IMAGE_SPLAY_NOTECOMBO` through runtime `_Note_Combo.ojt`
+  (renders since gap ① wired: archive loader + `PlaySkin` glow).
 - `Avatar_Shadow.oji` — six avatar shadow slots
   (`IDC_IMAGE_SPLAY_SHADOW1..6`).
 - `Playing_ChatWindow.oji` — in-play chat window
@@ -81,10 +82,15 @@ All 36 `.oji` frames fail `is_raw_rgb555`, in two shapes
 
 ## Recommended codec implementation order
 
-1. **Strided atlas playback** (`Note_Combo4/5/6.ojt`) — the parser
-   (`parse_sprite55_strided`, 4 frames per 64×64 record) is already
-   file-verified; only the shell lacks a call site. Cheapest visible
-   win.
+1. ~~**Strided atlas playback** (`Note_Combo4/5/6.ojt`)~~ — **DONE**:
+   the shell routes strided bodies now. `o2jam-shell/src/avatar.rs`
+   (`strided_sprite55` stride search +
+   `AvatarFigure::from_sprite55_strided`) loads them as scene figures
+   through the archive loader (the `_Note_Combo.ojt` runtime ref
+   resolves `Note_Combo<stage>.ojt`), and `playing.rs` stages the glow
+   as the `PlaySkin` combo-glow animation
+   (`COMBO_GLOW_SPRITE` / `from_archive_for_stage`), painted behind
+   the combo digits. Frames come from `parse_sprite55_strided` only.
 2. **JPEG album art** (47 bodies) — largest single lost class;
    standard decoder, no format work beyond dimensions.
 3. **`.oji` prefixed frames** (28 images) — near-trivial: strip the

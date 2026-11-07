@@ -1,17 +1,18 @@
 //! Avatar figure: decoded sprite-55 images, drawable on results.
 //!
 //! One parsed body becomes one figure: every raw-RGB555 image is
-//! decoded at its record anchor, anything else (compressed/outlier
-//! frames) is skipped — their codecs are still TBD in `o2jam-file`.
-//! Equipped parts stack on as extra layers; which filenames those
-//! are comes from [`pick_wear_sprites`].
+//! decoded at its record anchor, strided atlases contribute their
+//! animation frames (see [`AvatarFigure::from_sprite55_strided`]), and
+//! anything else (compressed/outlier frames) is skipped — their codecs
+//! are still TBD in `o2jam-file`. Equipped parts stack on as extra
+//! layers; which filenames those are comes from [`pick_wear_sprites`].
 
 use std::collections::HashMap;
 
 use o2jam_file::{
     classify_sprite, find_opi_entry, opi_entry_body, pair_entries_with_rects, resolve_sprite_entry,
     AvatarItemTable, Bnd, BndRect, ControlBlock, ControlEntry, ControlList, OpiEntry,
-    PlacedControl, Sprite55, SpriteResolution,
+    PlacedControl, Sprite55, Sprite55Strided, SpriteResolution,
 };
 use o2jam_net::CharacterInfo;
 use o2jam_render::{
@@ -70,6 +71,39 @@ impl AvatarFigure {
                     })
             })
             .collect();
+        Self { layers }
+    }
+
+    /// Decode every animation frame of a strided atlas: one layer per
+    /// parser frame in stored order (record-major,
+    /// [`Sprite55Strided::frame_data`]), each at its record anchor
+    /// under the atlas colour key. Records sharing an anchor are
+    /// animation frames — the `Note_Click` bodies pin that reading —
+    /// so a single-frame view cuts through [`Self::layers_through`]
+    /// (the exe image control paints one frame per view, loader
+    /// default frame 0).
+    #[must_use]
+    pub fn from_sprite55_strided(sprite: &Sprite55Strided<'_>) -> Self {
+        let mut layers = Vec::new();
+        for image in &sprite.images {
+            if !sprite.is_raw_rgb555(image) {
+                continue;
+            }
+            for frame in 0..sprite.frames_per_image {
+                if let Some(decoded) = Rgb555Image::decode(
+                    sprite.frame_data(image, frame),
+                    image.w as usize,
+                    image.h as usize,
+                ) {
+                    layers.push(FigureLayer {
+                        image: decoded,
+                        dx: i32::from(image.x),
+                        dy: i32::from(image.y),
+                        colorkey: sprite.colorkey,
+                    });
+                }
+            }
+        }
         Self { layers }
     }
 
@@ -254,6 +288,35 @@ pub fn anchor_in_frame(dx: i32, dy: i32, frame_w: usize, frame_h: usize) -> (i32
     (moved.x, moved.y)
 }
 
+/// Highest frame-per-image stride the body parser searches: the 7.55
+/// combo atlases store ×4 (`Note_Combo4/5/6.ojt`, 196,736 B exact),
+/// and the parser's exact blob accounting rejects every wrong
+/// candidate, so the bound only caps wasted attempts.
+const STRIDED_STRIDE_SEARCH_MAX: usize = 16;
+
+/// Parse one archive body as a strided sprite-55 atlas: search the
+/// frames-per-image stride whose exact accounting matches the body,
+/// `None` when none does. Plain bodies account at stride 1 and never
+/// reach the search; unknown bodies (the `.oji` outlier classes) fail
+/// every candidate.
+#[must_use]
+pub(crate) fn strided_sprite55(body: &[u8]) -> Option<Sprite55Strided<'_>> {
+    (2..=STRIDED_STRIDE_SEARCH_MAX)
+        .map(|stride| o2jam_file::parse_sprite55_strided(body, stride))
+        .find_map(Result::ok)
+}
+
+/// Decode one archive body as a figure: the plain sprite-55 layout
+/// first, then the strided-atlas layout (the combo glow atlases;
+/// exact blob accounting separates the two). `None` when neither
+/// decodes — unknown bodies keep their codec gap.
+fn sprite55_figure(body: &[u8]) -> Option<AvatarFigure> {
+    if let Ok(sprite) = o2jam_file::parse_sprite55(body) {
+        return Some(AvatarFigure::from_sprite55(&sprite));
+    }
+    strided_sprite55(body).map(|atlas| AvatarFigure::from_sprite55_strided(&atlas))
+}
+
 /// Load one named sprite body from an OPI/OPA archive as a figure.
 /// Returns `None` when the entry is missing or undecodable (callers
 /// fall back to placeholder art). Lookup is exact first, then one
@@ -288,8 +351,7 @@ pub fn load_archive_sprite_for_stage(
     let entries = o2jam_file::parse_opi(archive).ok()?;
     let entry = resolved_archive_entry(&entries, entry_name, arena_stage)?;
     let body = opi_entry_body(archive, &entry).ok()?;
-    let sprite = o2jam_file::parse_sprite55(body).ok()?;
-    let figure = AvatarFigure::from_sprite55(&sprite);
+    let figure = sprite55_figure(body)?;
     if figure.is_empty() {
         return None;
     }
@@ -1443,6 +1505,92 @@ mod avatar_figure_tests {
         assert_eq!(figure.len(), 1);
         assert!(load_archive_sprite(&archive, "Missing.ojs").is_none());
         assert!(load_archive_sprite(b"garbage", "Logo.ojs").is_none());
+    }
+
+    /// Strided sprite-55 atlas body: one 20-byte record per entry,
+    /// record `i` chained at data offset `i * w * h * 2`, and a blob of
+    /// `records * stride` consecutive `w * h` RGB555 frames (the
+    /// `Note_Combo4/5/6.ojt` layout; `parse_sprite55_strided` accepts
+    /// only the stride that accounts exactly).
+    fn strided55_body(
+        records: &[(i16, i16, u16, u16)],
+        stride: usize,
+        frame_words: &[u16],
+    ) -> Vec<u8> {
+        assert_eq!(records.len() * stride, frame_words.len());
+        let frame_bytes = frame_words.len() * 2 / (records.len() * stride);
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&1u16.to_le_bytes());
+        blob.extend_from_slice(&o2jam_file::SPRITE55_MAGIC.to_le_bytes());
+        blob.extend_from_slice(&(records.len() as u16).to_le_bytes());
+        blob.extend_from_slice(&0x0000u16.to_le_bytes());
+        for (index, (x, y, w, h)) in records.iter().enumerate() {
+            blob.extend_from_slice(&x.to_le_bytes());
+            blob.extend_from_slice(&y.to_le_bytes());
+            blob.extend_from_slice(&w.to_le_bytes());
+            blob.extend_from_slice(&h.to_le_bytes());
+            blob.extend_from_slice(&((index * frame_bytes) as u32).to_le_bytes());
+            blob.extend_from_slice(&(frame_bytes as u32).to_le_bytes());
+            blob.extend_from_slice(&0u32.to_le_bytes());
+        }
+        for word in frame_words {
+            blob.extend_from_slice(&word.to_le_bytes());
+        }
+        blob
+    }
+
+    /// Codec gap ①: the stage-resolved combo glow body
+    /// (`_Note_Combo.ojt` + room stage 4 → the strided
+    /// `Note_Combo4.ojt` atlas) routes through the archive loader
+    /// instead of dropping (the plain layout accounting rejects it).
+    #[test]
+    fn combo_runtime_ref_routes_the_stage_atlas() {
+        let frames: Vec<u16> = (0..8u16).map(|frame| 0x7C00 + frame).collect();
+        let body = strided55_body(&[(0, 0, 1, 1); 2], 4, &frames);
+        let archive = opa_blob(&[("Note_Combo4.ojt", &body)]);
+        let figure = load_archive_sprite_for_stage(&archive, "_Note_Combo.ojt", Some(4)).unwrap();
+        assert_eq!(figure.len(), 8);
+    }
+
+    /// Every strided layer carries the parser's own frame pixels
+    /// (`frame_data`, record-major), its record anchor, and the atlas
+    /// colour key — no invented pixels.
+    #[test]
+    fn strided_figure_decodes_parser_frames_at_record_anchors() {
+        let frames: Vec<u16> = (0..8u16).map(|frame| 0x7C00 + frame).collect();
+        let body = strided55_body(&[(0, 0, 1, 1), (3, 4, 1, 1)], 4, &frames);
+        let atlas = strided_sprite55(&body).unwrap();
+        assert_eq!(atlas.frames_per_image, 4);
+        let figure = AvatarFigure::from_sprite55_strided(&atlas);
+        assert_eq!(figure.len(), 8);
+        for index in 0..8 {
+            let (record, frame) = (index / 4, index % 4);
+            let layer = figure.layer(index).unwrap();
+            assert_eq!(layer.image.words, vec![0x7C00 + index as u16]);
+            assert_eq!(layer.image.w, 1);
+            assert_eq!(layer.image.h, 1);
+            let (dx, dy) = if record == 0 { (0, 0) } else { (3, 4) };
+            assert_eq!((layer.dx, layer.dy), (dx, dy));
+            assert_eq!(layer.colorkey, 0x0000);
+            assert_eq!(atlas.frame_data(&atlas.images[record], frame).len(), 2);
+        }
+    }
+
+    /// The stride search accepts only the accounting-exact stride, so
+    /// plain bodies and unknown bodies never route as strided.
+    #[test]
+    fn strided_search_accounts_exactly_or_not_at_all() {
+        let plain = sprite55_blob(1, 0x0000, 1, 1, &[0x00, 0x7C]);
+        assert!(strided_sprite55(&plain).is_none());
+        assert!(strided_sprite55(b"not a sprite").is_none());
+        let frames: Vec<u16> = (0..8u16).map(|frame| 0x03E0 + frame).collect();
+        let body = strided55_body(&[(0, 0, 1, 1); 2], 4, &frames);
+        assert_eq!(strided_sprite55(&body).unwrap().frames_per_image, 4);
+        // One byte short of the strided accounting: both layouts miss.
+        let truncated: &[u8] = &body[..body.len() - 2];
+        assert!(strided_sprite55(truncated).is_none());
+        let archive = opa_blob(&[("Truncated.ojt", truncated)]);
+        assert!(load_archive_sprite(&archive, "Truncated.ojt").is_none());
     }
 
     #[test]

@@ -9,7 +9,7 @@
 //! native 800x600 (`docs/bnd-semantics.md`, `docs/bnd-audit.md`), via
 //! the shared [`scale_rect_to_frame`] scaler.
 
-use crate::avatar::AvatarFigure;
+use crate::avatar::{strided_sprite55, AvatarFigure};
 use o2jam_game::{
     lane_effect::{lane_map_for_modifier_byte, SkillRing},
     CoolStreak, HoldSpan, HoldState, Judgement, LaneMap, LifeBar, LongNoteBonus, MeasureReshuffle,
@@ -235,6 +235,18 @@ pub const SCORE_FONT_SPRITE: &str = "Scroe.ojs";
 /// Staged combo-digit body: `Note_ComboNum.ojs`, ten raw frames up
 /// to 33x51 in digit order 0..=9 (archive slot 44).
 pub const COMBO_FONT_SPRITE: &str = "Note_ComboNum.ojs";
+/// Staged combo-milestone glow body: `Note_Combo4.ojt`, the lowest
+/// strided glow atlas in `Playing1.opi` — stages 4/5/6 store four
+/// 64x64 glow frames per record (196,736 B exact; the other 33 stage
+/// bodies are single-frame). The exe applier loads the room stage's
+/// own body through `_Note_Combo.ojt` (`Note_Combo<stage>.ojt`,
+/// `docs/stage-bga.md`); the stage-less skin pins this deterministic
+/// atlas like [`HIT_BURST_SPRITE`], and
+/// [`PlaySkin::from_archive_for_stage`] routes the room stage.
+pub const COMBO_GLOW_SPRITE: &str = "Note_Combo4.ojt";
+/// Combo-digit row above the judgement line: the big photo digits
+/// (`docs/playing-reference.md`) and their glow band center here.
+const COMBO_ROW_ABOVE_LINE: i32 = 24;
 /// Staged play-time-digit body: `PlayTimeNum.ojs`, ten raw 27x21
 /// frames in digit order 0..=9 (archive slot 96).
 pub const PLAY_TIME_FONT_SPRITE: &str = "PlayTimeNum.ojs";
@@ -505,6 +517,7 @@ pub struct PlaySkin {
     combo_font: Option<DigitFont>,
     play_time_font: Option<DigitFont>,
     long_combo_plate: Option<SkinSprite>,
+    combo_glow: Vec<SkinSprite>,
 }
 
 impl PlaySkin {
@@ -517,6 +530,7 @@ impl PlaySkin {
             && self.combo_font.is_none()
             && self.play_time_font.is_none()
             && self.long_combo_plate.is_none()
+            && self.combo_glow.is_empty()
             && self.note_heads.iter().all(Option::is_none)
             && self.press_keys.iter().all(Option::is_none)
             && self.release_beams.iter().all(Option::is_none)
@@ -611,6 +625,27 @@ impl PlaySkin {
     #[must_use]
     pub fn long_combo_plate(&self) -> Option<&SkinSprite> {
         self.long_combo_plate.as_ref()
+    }
+
+    /// Combo-glow frame count ([`COMBO_GLOW_SPRITE`]).
+    #[must_use]
+    pub fn combo_glow_frame_count(&self) -> usize {
+        self.combo_glow.len()
+    }
+
+    /// Combo-glow frame: the steady first frame while `flash_age_ms`
+    /// is `None`, then one step per [`RECEPTOR_FRAME_MS`], clamped to
+    /// the last frame. The glow plays across the atlas's stored frames
+    /// in order (record-major, the exe's flat consumption), empty
+    /// frames included — they paint nothing.
+    #[must_use]
+    pub fn combo_glow_frame(&self, flash_age_ms: Option<u64>) -> Option<&SkinSprite> {
+        match flash_age_ms {
+            None => self.combo_glow.first(),
+            Some(age) => self
+                .combo_glow
+                .get(stepped_frame(self.combo_glow.len(), age)),
+        }
     }
 
     /// Receptor frame count for one lane.
@@ -718,10 +753,30 @@ impl PlaySkin {
         self
     }
 
+    /// Stage the combo-glow animation frames.
+    #[must_use]
+    pub fn with_combo_glow(mut self, frames: Vec<SkinSprite>) -> Self {
+        self.combo_glow = frames;
+        self
+    }
+
     /// Decode every staged body from a read-only archive slice; `None`
-    /// when nothing stages (entries missing or undecodable).
+    /// when nothing stages (entries missing or undecodable). Stage-less
+    /// form: the combo glow rides the deterministic
+    /// [`COMBO_GLOW_SPRITE`] atlas.
     #[must_use]
     pub fn from_archive(archive: &[u8]) -> Option<Self> {
+        Self::from_archive_for_stage(archive, None)
+    }
+
+    /// [`from_archive`] through the room arena stage: the combo glow
+    /// stages from the stage's own `Note_Combo<stage>.ojt` atlas (the
+    /// exe applier's stage-numbered arm for `_Note_Combo.ojt`). A stage
+    /// whose body is missing or not a strided atlas leaves the glow
+    /// unstaged — the combo digits keep painting — like every optional
+    /// staged body.
+    #[must_use]
+    pub fn from_archive_for_stage(archive: &[u8], arena_stage: Option<u16>) -> Option<Self> {
         let mut skin = Self::default();
         if let Some(body) = archive_body(archive, NOTE_IMAGE_SPRITE) {
             for lane in 0..HIGHWAY_LANES {
@@ -772,6 +827,11 @@ impl PlaySkin {
         skin.play_time_font = digit_font(archive, PLAY_TIME_FONT_SPRITE);
         skin.long_combo_plate = archive_body(archive, LONG_COMBO_PLATE_SPRITE)
             .and_then(|body| lane_sprite(body, LONG_COMBO_PLATE_FRAME));
+        let glow_name =
+            arena_stage.map_or_else(|| COMBO_GLOW_SPRITE.to_owned(), combo_glow_sprite_name);
+        skin.combo_glow = archive_body(archive, &glow_name)
+            .map(strided_skin_frames)
+            .unwrap_or_default();
         (!skin.is_empty()).then_some(skin)
     }
 }
@@ -784,6 +844,12 @@ fn tutorial_sprite_name(lane: u8) -> String {
 /// `KeyEffect_7Key1_%d.ojs` kit body name for one lane (1-based).
 fn lane_beam_sprite_name(lane: u8) -> String {
     format!("{LANE_BEAM_STEM}_{}.ojs", lane + 1)
+}
+
+/// `Note_Combo%d.ojt` glow body name for one room arena stage (the
+/// stage-numbered arm of `_Note_Combo.ojt`).
+fn combo_glow_sprite_name(stage: u16) -> String {
+    format!("Note_Combo{stage}.ojt")
 }
 
 /// Frame index for a flash age: one step per [`RECEPTOR_FRAME_MS`],
@@ -839,6 +905,34 @@ fn skin_frames(body: &[u8]) -> Vec<SkinSprite> {
             .map(|decoded| SkinSprite::new(decoded, sprite.colorkey))
         })
         .collect()
+}
+
+/// Glow frames of one strided atlas body in stored order (record-major,
+/// [`o2jam_file::Sprite55Strided::frame_data`] — the exe consumes the
+/// blob flat): empty unless the body parses as a strided atlas with
+/// empty unless the body parses as a strided atlas with raw frames
+/// (plain single-frame glow stages sit outside the strided gap). Every
+/// pixel comes from the parser — none is invented.
+fn strided_skin_frames(body: &[u8]) -> Vec<SkinSprite> {
+    let Some(sprite) = strided_sprite55(body) else {
+        return Vec::new();
+    };
+    let mut frames = Vec::new();
+    for image in &sprite.images {
+        if !sprite.is_raw_rgb555(image) {
+            continue;
+        }
+        for frame in 0..sprite.frames_per_image {
+            if let Some(decoded) = Rgb555Image::decode(
+                sprite.frame_data(image, frame),
+                image.w as usize,
+                image.h as usize,
+            ) {
+                frames.push(SkinSprite::new(decoded, sprite.colorkey));
+            }
+        }
+    }
+    frames
 }
 
 /// One HUD number font from an archive body: ten digit frames in
@@ -2025,22 +2119,49 @@ impl LivePlay {
             pack_xrgb(0xFF, 0xFF, 0xFF),
         );
         if self.score.combo > 0 {
+            self.paint_combo_glow(frame, geom, now_ms.saturating_sub(at));
             match self.view.skin.combo_font() {
                 Some(font) => {
-                    font.paint_centered(frame, center_x, geom.line_y - 24, self.score.combo);
+                    font.paint_centered(
+                        frame,
+                        center_x,
+                        geom.line_y - COMBO_ROW_ABOVE_LINE,
+                        self.score.combo,
+                    );
                 }
                 None => {
                     let digits = i32::try_from(number_width(self.score.combo)).unwrap_or(0);
                     draw_number(
                         frame,
                         center_x - digits / 2,
-                        geom.line_y - 24,
+                        geom.line_y - COMBO_ROW_ABOVE_LINE,
                         self.score.combo,
                         pack_xrgb(0xFF, 0xFF, 0x40),
                     );
                 }
             }
         }
+    }
+
+    /// Combo glow band behind the digits: the staged strided atlas
+    /// ([`COMBO_GLOW_SPRITE`]) steps one frame per [`RECEPTOR_FRAME_MS`]
+    /// across the word window (`glow_age_ms` since the judgement; the
+    /// combo cluster shows only while the word is fresh). Every atlas
+    /// record anchors `(0, 0)`, so the band centers on the combo
+    /// cluster point — the digits' draw center — and the word and
+    /// digits paint over it. Staged-only: without the atlas nothing
+    /// paints (the digits keep their plain band).
+    fn paint_combo_glow(&self, frame: &mut Frame<'_>, geom: &HighwayGeometry, glow_age_ms: u64) {
+        let Some(glow) = self.view.skin.combo_glow_frame(Some(glow_age_ms)) else {
+            return;
+        };
+        let (w, h) = glow.extent();
+        let center_x = Self::highway_center_x(geom);
+        glow.paint_at(
+            frame,
+            center_x - i32::try_from(w).unwrap_or(0) / 2,
+            geom.line_y - COMBO_ROW_ABOVE_LINE - i32::try_from(h).unwrap_or(0) / 2,
+        );
     }
 
     /// Peer life bars: one staged 46x8 gauge per 4015 member slot,
@@ -3537,6 +3658,112 @@ mod live_play_tests {
         assert_eq!(buf[24 * 70 + 8], amber);
     }
 
+    /// Codec gap ①: the strided combo-glow atlas (`Note_Combo4/5/6.ojt`)
+    /// stages a skin, so an archive carrying only the glow body is no
+    /// longer "nothing staged" (the plain layout accounting rejects it).
+    #[test]
+    fn combo_glow_atlas_stages_a_skin() {
+        let frames: Vec<u16> = (0..8u16).map(|frame| 0x7C00 + frame).collect();
+        let body = strided55_body(&[(0, 0, 1, 1); 2], 4, &frames);
+        let archive = opi_blob(&[("Note_Combo4.ojt", &body)]);
+        assert!(PlaySkin::from_archive(&archive).is_some());
+    }
+
+    /// Every glow frame carries the parser's frame pixels in stored
+    /// order (record-major), and a body that is not a strided atlas
+    /// stages nothing (the digits keep painting).
+    #[test]
+    fn combo_glow_stages_parser_frames_in_stored_order() {
+        let frames: Vec<u16> = (0..8u16).map(|frame| 0x7C00 + frame).collect();
+        let body = strided55_body(&[(0, 0, 1, 1); 2], 4, &frames);
+        let archive = opi_blob(&[("Note_Combo4.ojt", &body)]);
+        let skin = PlaySkin::from_archive(&archive).unwrap();
+        assert_eq!(skin.combo_glow_frame_count(), 8);
+        assert_eq!(
+            skin.combo_glow_frame(None).unwrap().image.words,
+            vec![0x7C00]
+        );
+        assert_eq!(
+            skin.combo_glow_frame(Some(0)).unwrap().image.words,
+            vec![0x7C00]
+        );
+        assert_eq!(
+            skin.combo_glow_frame(Some(RECEPTOR_FRAME_MS * 7))
+                .unwrap()
+                .image
+                .words,
+            vec![0x7C07]
+        );
+        // A stride-1 body is plain: no strided stride answers, the
+        // glow stays unstaged, the skin is empty.
+        let plain = strided55_body(&[(0, 0, 1, 1)], 1, &[0x7C00]);
+        let plain_archive = opi_blob(&[("Note_Combo4.ojt", &plain)]);
+        assert!(PlaySkin::from_archive(&plain_archive).is_none());
+    }
+
+    /// The glow body follows the room arena stage (the exe applier's
+    /// stage-numbered arm); a stage without a strided atlas leaves the
+    /// glow unstaged, and the stage-less pin stays
+    /// [`COMBO_GLOW_SPRITE`].
+    #[test]
+    fn combo_glow_stage_routes_the_room_stage_body() {
+        let body4 = strided55_body(&[(0, 0, 1, 1); 2], 4, &[0x7C00; 8]);
+        let body5 = strided55_body(&[(0, 0, 1, 1); 2], 4, &[0x03E0; 8]);
+        let body6 = strided55_body(&[(0, 0, 1, 1); 2], 4, &[0x001F; 8]);
+        let archive = opi_blob(&[
+            ("Note_Combo4.ojt", &body4),
+            ("Note_Combo5.ojt", &body5),
+            ("Note_Combo6.ojt", &body6),
+        ]);
+        for (stage, ink) in [(4, 0x7C00), (5, 0x03E0), (6, 0x001F)] {
+            let skin = PlaySkin::from_archive_for_stage(&archive, Some(stage)).unwrap();
+            assert_eq!(skin.combo_glow_frame(None).unwrap().image.words, vec![ink]);
+        }
+        assert!(PlaySkin::from_archive_for_stage(&archive, Some(1)).is_none());
+        let stage_less = PlaySkin::from_archive(&archive).unwrap();
+        assert_eq!(
+            stage_less.combo_glow_frame(None).unwrap().image.words,
+            vec![0x7C00]
+        );
+    }
+
+    /// The glow band centers on the combo cluster point (center x,
+    /// row `line_y - 24`): its top-left corner rides clear of the word
+    /// and digits, the digits paint over the band, and the band steps
+    /// one frame per [`RECEPTOR_FRAME_MS`].
+    #[test]
+    fn combo_glow_plays_behind_the_combo_digits() {
+        let mut live = LivePlay::new(&[(0, 1000, 7)]);
+        live.strike_lane(0, 1000);
+        live.set_skin(
+            PlaySkin::default()
+                .with_combo_glow(vec![solid_sprite(8, 8, 0x7FE0), solid_sprite(8, 8, 0x001F)]),
+        );
+        let mut first = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut first,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            1005,
+        );
+        assert_eq!(first[20 * 70 + 4], solid_ink(0x7FE0));
+        assert_eq!(first[24 * 70 + 8], pack_xrgb(0xFF, 0xFF, 0x40));
+        let mut second = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut second,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            1100,
+        );
+        assert_eq!(second[20 * 70 + 4], solid_ink(0x001F));
+    }
+
     #[test]
     fn sudden_curtain_hides_tail_beams() {
         let mut live = LivePlay::new_holds(&[(0, 1500, 2900, 7)]);
@@ -3598,6 +3825,70 @@ mod live_play_tests {
     /// Solid ink of synthetic digit `d` (see `digit_font`).
     fn digit_ink(digit: u8) -> u32 {
         solid_ink(0x0001 << (digit + 1))
+    }
+
+    /// Strided sprite-55 atlas body: one 20-byte record per entry,
+    /// record `i` chained at data offset `i * w * h * 2`, and a blob of
+    /// `records * stride` consecutive `w * h` RGB555 frames (the
+    /// `Note_Combo4/5/6.ojt` layout).
+    fn strided55_body(
+        records: &[(i16, i16, u16, u16)],
+        stride: usize,
+        frame_words: &[u16],
+    ) -> Vec<u8> {
+        assert_eq!(records.len() * stride, frame_words.len());
+        let frame_bytes = frame_words.len() * 2 / (records.len() * stride);
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&1u16.to_le_bytes());
+        blob.extend_from_slice(&o2jam_file::SPRITE55_MAGIC.to_le_bytes());
+        blob.extend_from_slice(&(records.len() as u16).to_le_bytes());
+        blob.extend_from_slice(&0x0000u16.to_le_bytes());
+        for (index, (x, y, w, h)) in records.iter().enumerate() {
+            blob.extend_from_slice(&x.to_le_bytes());
+            blob.extend_from_slice(&y.to_le_bytes());
+            blob.extend_from_slice(&w.to_le_bytes());
+            blob.extend_from_slice(&h.to_le_bytes());
+            blob.extend_from_slice(&((index * frame_bytes) as u32).to_le_bytes());
+            blob.extend_from_slice(&(frame_bytes as u32).to_le_bytes());
+            blob.extend_from_slice(&0u32.to_le_bytes());
+        }
+        for word in frame_words {
+            blob.extend_from_slice(&word.to_le_bytes());
+        }
+        blob
+    }
+
+    /// Minimal `.opi` container: header + bodies + trailing entry
+    /// table (`PlaySkin::from_archive` walks it read-only).
+    fn opi_blob(bodies: &[(&str, &[u8])]) -> Vec<u8> {
+        use o2jam_file::{
+            OPI_ENTRY_LEN, OPI_HEADER_LEN, OPI_NAME_OFF, OPI_OFFSET_OFF, OPI_RESERVED_OFF,
+            OPI_SIZE_OFF,
+        };
+        let mut blob = vec![0u8; OPI_HEADER_LEN];
+        blob[..4].copy_from_slice(&1u32.to_le_bytes());
+        blob[4..8].copy_from_slice(&(bodies.len() as u32).to_le_bytes());
+        let mut off = OPI_HEADER_LEN as u32;
+        let mut table = Vec::new();
+        for (name, body) in bodies {
+            let mut entry = vec![0u8; OPI_ENTRY_LEN];
+            entry[..4].copy_from_slice(&1u32.to_le_bytes());
+            entry[OPI_NAME_OFF..OPI_NAME_OFF + name.len()].copy_from_slice(name.as_bytes());
+            entry[OPI_OFFSET_OFF..OPI_OFFSET_OFF + 4].copy_from_slice(&off.to_le_bytes());
+            entry[OPI_SIZE_OFF..OPI_SIZE_OFF + 4]
+                .copy_from_slice(&(body.len() as u32).to_le_bytes());
+            entry[OPI_RESERVED_OFF..OPI_RESERVED_OFF + 4]
+                .copy_from_slice(&(body.len() as u32).to_le_bytes());
+            table.push(entry);
+            off += body.len() as u32;
+        }
+        for (_, body) in bodies {
+            blob.extend_from_slice(body);
+        }
+        for entry in table {
+            blob.extend_from_slice(&entry);
+        }
+        blob
     }
 
     fn solid_ink(word: u16) -> u32 {
