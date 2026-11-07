@@ -15,8 +15,11 @@ pub struct ControlEntry {
 }
 
 /// One `SET ... { ... }` subgroup inside a block (frame lists,
-/// number sprites, …). Its entries consume `.bnd` rects in file
-/// order exactly like top-level entries.
+/// number sprites, …). Its entries pick `.bnd` rects by the same
+/// code-ordinal rule as top-level entries —
+/// `(entry.code & 0xFFF) − 1`, all-zero rect on a miss (exe
+/// `0x548640`, dossier `ev_3a869bb7…`) — file position plays no
+/// role in the choice.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ControlSet {
     /// Numbers on the `SET` line (e.g. entry count, flags).
