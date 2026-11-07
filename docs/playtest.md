@@ -1062,3 +1062,54 @@ dump-head baseline `15ff02e`: stage nothing for spriteless channel
   fix tests, all other targets unchanged, 0 failures). No lint
   findings. No commits, no pushes.** This sweep touched only
   `docs/playtest.md`.
+
+## Regression sweep — 2026-11-07 19:38 UTC+8 (HEAD `188bee3`, tree clean)
+
+Live re-proof on the result-head. Covers only the docs log commit landed
+after the channel-head baseline `c5a5015` (`188bee3`: result-screen
+verify sweep-ten notes in `claims.md`/`cresult-anchors.md`/`opi-ignored.md`
+plus the sweep log and a `waiting.png` refresh) — no code changed, so no
+new tests were expected.
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1157 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 7, file 149, game 92, net 337,
+  render 72, shell 381, real_art 7, scenes 22, recomp2jam 71
+  (6 doc-test targets, 0 each) — identical to the baseline, as
+  expected for a docs-only HEAD.
+- `cargo build --workspace --release`: clean, `exit=0`, 0 warning
+  lines (touched-`main.rs` rebuild check; mtime only, no content
+  change).
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.60 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`19:37:47 +08:00`):
+  `Authorize session` → `Create room: songflow` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `download progress` → `Start game: [000]` →
+  `User music loaded: [000] - 0 / X10` →
+  `Game [000] Submit score: 2210`.
+- **Verdict: no regression — suite is green on the result-head (1157
+  passed; identical to the channel-head baseline, docs-only delta,
+  0 failures). No lint findings. No commits, no pushes.** This sweep
+  touched only `docs/playtest.md`.
+- Tree note: a peer landed uncommitted edits mid-sweep (`side.rs` +118:
+  `WalletState` live wallet balances folded from 5029/5001 wire words
+  for the payment/result displays; `gifts.md` notes). Re-ran on that
+  dirty state: `cargo fmt --check` clean, `cargo clippy --workspace
+  --all-targets -- -D warnings` clean, `cargo test --workspace`
+  **1165 passed, 0 failed, 1 ignored** (shell 381 → 389 from the new
+  wallet tests, all other targets unchanged), live flow re-run →
+  **ok** (1 passed, 0.59 s). The peer then kept editing: the current
+  dirty state (`paint.rs` saved 19:39:09, in-flight `paint_result_scene`
+  signature change with callers not yet updated) does NOT compile —
+  4× E0061 arg-count errors in `o2jam-shell` lib test — and carries
+  peer fmt diffs. None of that is mine: per the sweep rules (touch
+  only `docs/playtest.md`, fix only my own lint findings) I left the
+  peer's files alone. Clean-HEAD verdict above stands; the dirty files
+  are the peer's uncommitted work, not mine.
