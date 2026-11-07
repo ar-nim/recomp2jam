@@ -71,8 +71,8 @@ evidenced. Byte scans return 0 hits for `FillRect`, `fill`, `Fill`,
   paint-time fill vocabulary. Display init (`0x413030`) pins mode/Flip
   vocabulary only (claims A38/A39, `ev_c7d5a15f…`). Combined with the
   zero-pixel staging above, the rule is: the exe contributes no fill
-  behind art-less states; whether the device shows a stale frame or a
-  presenter clear is presenter behavior, and the shell paints nothing.
+  behind art-less states; the presenter preserves the stale frame
+  (pinned in OPEN 1 below), and the shell paints nothing.
 - **First-child art**: refuted above (no sprite, no rect).
 
 ## Shell rule (`crates/o2jam-shell/src/screens/paint.rs`)
@@ -95,9 +95,29 @@ missing-archive fallbacks).
 
 ## OPEN
 
-1. Presenter backbuffer policy behind art-less states (stale frame vs
-   presenter clear): the shell contributes zero pixels; the device side
-   is unpinned.
+1. Presenter backbuffer policy behind art-less states — PINNED to
+   stale (preserve, not clear): display init `0x413030`
+   (file `0x13030`, `.\Display\Display.cpp` via
+   `DirectDrawCreateEx`, fullscreen 800x600x16 per claims A38/A39,
+   `ev_c7d5a15f…`) builds the device with no clear-color argument
+   evidenced; `Flip`/`BltFast`/`BitBlt` survive only as DirectDraw
+   error strings (files `0x24ffdc`/`0x250b43`/`0x24f032`), and byte
+   scans return 0 hits for `FillRect`, `PatBlt`, `StretchBlt`,
+   `ColorFill`, `DDBLT`, `fill`, `Fill`, `Paint`, `OnDraw`,
+   `BackBuffer`, `Clear`, `clear`, `EraseBkgnd`, `WM_ERASE`, and
+   `BeginPaint`. The GDI names that do exist (`TextOutA` file
+   `0x27ba66`, `CreateSolidBrush` file `0x27baa4`, `SetRect` file
+   `0x27bb92`, `GetDC` file `0x27bba8`, `DrawTextA` file `0x27bc8c`)
+   are the import-region window/text toolkit, not a backbuffer
+   clear. The shell matches: `paint_backdrop` with empty art paints
+   nothing, `paint_backbuffer` never pre-clears, and
+   `present_native_frame` fills only the window letterbox bars
+   (`LETTERBOX` black) while copying the stale native frame
+   verbatim. Tests:
+   `present_native_frame_preserves_stale_pixels_verbatim`
+   (`o2jam-render`), `present_clears_only_bars_over_stale_pixels`
+   (`o2jam-shell`). The exact `Flip` call site stays open
+   (claims-render OPEN 1).
 2. Sprite-less control paint (text/button/image with no art or rect).
 3. Dialog host mounting the code-fetched select bar
    (`DIALOG_CHANNEL_INFO`/`CDChannelInfo` index path; `0x4ED650` excluded
