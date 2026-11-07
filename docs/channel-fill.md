@@ -93,6 +93,47 @@ fill), `empty_art_falls_back_to_flat` (staged-empty scenes carry no fill;
 bare `paint_screen` cards and the result backdrop keep their own
 missing-archive fallbacks).
 
+## Chat row feed (`TEXT_SWAIT_CHAT 0x1640003C`, `SET 0x00031000`) — CLOSED
+
+The row template is fed by twin waiting-room feed functions, never by
+code immediate. Full-image LE32 scan: `TEXT_SWAIT_CHAT` has zero refs;
+`SET 0x00031000` has one unaligned data-coincidence hit only (file
+`0x3324b3`, spanning dwords `0x0`/`0x310` in `.data` — not code).
+
+- **Handler**: `0xb9a10` feeds user rows (3012), `0xb9a60` feeds admin
+  rows (3013). Each guards a style/code pair (`0x13` vs `0x14` with
+  code `0x1602102a`), looks up `LIST_SWAIT_CHAT 0x1680002B` through
+  control lookup `0x48BCF0`, and passes the row string to the list row
+  store `0x50fcc0`. Both live in the waiting UI region beside the
+  chat-view stager `0xb8d00` and the 3011 send sites.
+- **Upstream**: trampolines `0xac5b0`/`0xac5e0` and `0xb2dd0`/`0xb2e00`
+  forward into the twins; their addresses sit in three parallel
+  10-entry handler tables (files `0x249710`/`0x2499f0`/`0x249b28`,
+  `.rdata`, each opening with `0x489ee0`). 3012 vs 3013 selects user
+  vs admin by table slot (index 6/7), and the dispatch stubs push
+  opcode plus subindex into `0x478d50` (first 3012 stub file
+  `0x15e601`, `ev_aba36a3a…`). Sibling feeds share the same store:
+  `0x62840`/`0x628d0` (channel arm — cached list object in `ecx`, no
+  `LIST` immediate at all) and `0x90690`/`0x906f0` (room arm, `LIST`
+  `0x13800014`).
+- **Fields**: sender plus text compose the row string (`edx` into the
+  store); the slot hard-codes the user/admin style. The trailing seat
+  byte has no evidenced consumer on the feed path.
+- **Array iteration, pinned**: the row store `0x50fcc0` (file
+  `0x10fcc0`, `0xa70` B) materializes rows by indexing the list's own
+  vector (`this+0x198`, `imul` index × `0x6a5c`, checked-iterator
+  guards) — the template is consumed through the staged list object.
+  No channel/waiting row control is code-addressed by immediate.
+
+Pin: `OTwo.exe` 5029888 B, sha256
+`83a04541…c823b`, offsets file-based, found by offset-only byte scan
+(Python 3.14.9, capstone 5.0.7, GNU objdump 2.47 — no new dossier).
+Shell rule unchanged: live 3012/3013 packets only, newest visible rows
+stack from the list origin; the `[ADMIN]` prefix and row colors stay
+stand-ins (the matching OPEN sentences in `net-protocol.md`,
+`rooms.rs`, and `paint.rs` are owned by other docs/code and untouched
+here).
+
 ## OPEN
 
 1. Presenter backbuffer policy behind art-less states — PINNED to
@@ -240,4 +281,10 @@ missing-archive fallbacks).
    walk fraction and the `TITLE - ARTIST` caption are live. Test:
    `loading_bar_geometry_stays_open_placeholder` pins the placeholder
    formula so any future grounding must update it with evidence.
+6. Chat row feed (`TEXT_SWAIT_CHAT`) — CLOSED by the trace above:
+   feed twins `0xb9a10`/`0xb9a60` via handler-table slots 6/7, row
+   string carries sender plus text, seat byte unused on the path, and
+   the template resolves through list-vector iteration (zero code
+   immediates). Shell stand-ins (`[ADMIN]` prefix, row colors) stay
+   open in their owning files.
 

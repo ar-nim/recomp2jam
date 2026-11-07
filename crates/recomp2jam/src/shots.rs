@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use o2jam_file::{Bnd, ControlList};
 use o2jam_game::{RankDelivery, RoomTeams, PEER_SLOT_COUNT};
 use o2jam_net::play::SetRoomMusic;
+use o2jam_net::rooms::{WaitingAdminMessage, WaitingUserMessage};
 use o2jam_net::{ChannelState, GameMode, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
 use o2jam_render::{Frame, Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
 use o2jam_shell::avatar::{
@@ -42,7 +43,9 @@ pub struct Shot {
 
 /// Capture avi, channel, room, waiting, musicselect, loading,
 /// playing, playing-native, result, result-native, result-solo,
-/// result-solo-native. The native
+/// result-solo-native. The waiting shot carries the scripted
+/// 3012/3013 chat fixture (one user row plus one admin row, so the
+/// history box shows live rows). The native
 /// companions re-emit the playing and result instants at the full
 /// 800x600 exe canvas so pinned details (combo font, 3x5 result
 /// digits, rank rows) stay provable instead of downscale smudges.
@@ -394,10 +397,11 @@ fn stage_empty_channel_scene(game: &mut ScreenGame) {
 }
 
 /// Game preloaded with list rows, a Live waiting duo, the duo's
-/// battle scoreboard, and a chart whose note lands at 5 s (visible
-/// in Playing, spent by Result). Genuine archive art stages
-/// underneath when `install-root` holds it; otherwise the synthetic
-/// fallback paints.
+/// battle scoreboard, scripted waiting chat (one 3012 user row plus
+/// one 3013 admin row, so `waiting.png` shows live rows), and a
+/// chart whose note lands at 5 s (visible in Playing, spent by
+/// Result). Genuine archive art stages underneath when `install-root`
+/// holds it; otherwise the synthetic fallback paints.
 fn seeded_game() -> ScreenGame {
     let mut game = ScreenGame::new();
     seed_lobby_lists(&mut game);
@@ -406,6 +410,7 @@ fn seeded_game() -> ScreenGame {
     game.set_battle_self_team(Some(RESULT_SELF_TEAM));
     seed_chart(&mut game);
     stage_result_ranks(&mut game);
+    stage_waiting_chat(&mut game);
     stage_real_art(&mut game);
     stage_empty_channel_scene(&mut game);
     game
@@ -669,6 +674,41 @@ fn stage_result_ranks(game: &mut ScreenGame) -> Vec<RankDelivery> {
         SCRIPTED_RANK_STORED,
         SCRIPTED_RANK_PACKET,
     )
+}
+
+/// Scripted 3012 user sender (fixture, not wire data): the wire
+/// peer, echoing the reference photo's `[ Lujia] YOOO!!!` row
+/// (`reference-waiting-4x3.png`).
+const SCRIPTED_CHAT_USER_SENDER: &str = RESULT_PEER_NAME;
+/// Scripted 3012 user text (fixture, not wire data).
+const SCRIPTED_CHAT_USER_TEXT: &str = "YOOO!!!";
+/// Scripted 3012 sender seat (fixture): the peer's slot.
+const SCRIPTED_CHAT_USER_SEAT: u8 = 1;
+/// Scripted 3013 admin sender (fixture, not wire data).
+const SCRIPTED_CHAT_ADMIN_SENDER: &str = "Admin";
+/// Scripted 3013 admin text (fixture, not wire data).
+const SCRIPTED_CHAT_ADMIN_TEXT: &str = "Welcome";
+/// Scripted 3013 sender seat (fixture).
+const SCRIPTED_CHAT_ADMIN_SEAT: u8 = 0;
+
+/// Deliver the scripted chat fixture through the live 3012/3013
+/// push path (same honesty as the scripted rank bytes): one user
+/// row plus one admin row, so the waiting shot's history box shows
+/// live rows with sender, text, and admin ink. Staged after the
+/// room join — `set_joined_room` clears the history — so earlier
+/// shots stay untouched; never fails. Texts are ASCII stand-ins
+/// (documented gap: no CP949 glyphs, no live server).
+fn stage_waiting_chat(game: &mut ScreenGame) {
+    game.push_waiting_user_message(&WaitingUserMessage {
+        sender: SCRIPTED_CHAT_USER_SENDER.to_owned(),
+        content: SCRIPTED_CHAT_USER_TEXT.as_bytes().to_vec(),
+        member_id: SCRIPTED_CHAT_USER_SEAT,
+    });
+    game.push_waiting_admin_message(&WaitingAdminMessage {
+        sender: SCRIPTED_CHAT_ADMIN_SENDER.to_owned(),
+        content: SCRIPTED_CHAT_ADMIN_TEXT.as_bytes().to_vec(),
+        member_id: SCRIPTED_CHAT_ADMIN_SEAT,
+    });
 }
 
 /// Battle scoreboard behind the result verdict: rank 1 by team
@@ -1590,6 +1630,15 @@ mod tests {
         }
     }
 
+    /// The scripted walk from splash into Waiting, as `capture_all`
+    /// drives it (the waiting shot's instant).
+    fn walk_to_waiting(game: &mut ScreenGame) {
+        game.lane_key(3, true);
+        for _ in 0..2 {
+            game.menu_key(MenuKey::Confirm, true);
+        }
+    }
+
     #[test]
     fn playing_shot_paints_the_staged_combo_digit() {
         use o2jam_shell::playing::HighwayGeometry;
@@ -1819,6 +1868,70 @@ mod tests {
         assert_eq!(rows.len(), 2, "the duo must build two rows");
         assert_eq!(rows[0].rank, None);
         assert_eq!(rows[1].rank, None);
+    }
+
+    #[test]
+    fn scripted_chat_fixture_delivers_user_then_admin_rows() {
+        // The 3012/3013 push path converts the scripted wire structs
+        // into display rows: the peer's user text first, then the
+        // administrator row with its flag — sender, text, and admin
+        // all pinned, in walk order.
+        let rows = seeded_game().waiting_chat().to_vec();
+        assert_eq!(rows.len(), 2, "the fixture must deliver two rows");
+        assert_eq!(rows[0].sender, SCRIPTED_CHAT_USER_SENDER);
+        assert_eq!(rows[0].text, SCRIPTED_CHAT_USER_TEXT);
+        assert!(!rows[0].admin, "the 3012 row must not flag admin");
+        assert_eq!(rows[1].sender, SCRIPTED_CHAT_ADMIN_SENDER);
+        assert_eq!(rows[1].text, SCRIPTED_CHAT_ADMIN_TEXT);
+        assert!(rows[1].admin, "the 3013 row must flag admin");
+    }
+
+    #[test]
+    fn waiting_walk_without_staged_chat_holds_no_history() {
+        // Empty histories paint nothing (the shell's no-invention
+        // pin): re-joining the same room clears the scripted rows,
+        // so no history is carried across rooms.
+        let mut game = seeded_game();
+        game.set_joined_room(waiting_room());
+        assert!(
+            game.waiting_chat().is_empty(),
+            "re-join must clear the scripted rows"
+        );
+    }
+
+    #[test]
+    fn waiting_shot_paints_the_scripted_chat_rows() {
+        // Wiring end to end: the battle walk lands both fixture rows
+        // in the Waiting frame. The cleared twin stages identical
+        // art (same seed, same re-join, same walk), so only the chat
+        // rows may differ between the frames — and the row texts must
+        // read sender, text, and the admin prefix.
+        use o2jam_shell::screens::paint::waiting_chat_row_text;
+
+        let mut staged = seeded_game();
+        let mut plain = seeded_game();
+        plain.set_joined_room(waiting_room());
+        walk_to_waiting(&mut staged);
+        walk_to_waiting(&mut plain);
+        assert_eq!(staged.screen(), Screen::Waiting);
+        assert_eq!(plain.screen(), Screen::Waiting);
+        let mut staged_frame = native_probe();
+        paint_probe(&mut staged_frame, |frame| staged.paint_at(frame, 0));
+        let mut plain_frame = native_probe();
+        paint_probe(&mut plain_frame, |frame| plain.paint_at(frame, 0));
+        assert_ne!(
+            staged_frame, plain_frame,
+            "the scripted chat rows changed no pixels"
+        );
+        let rows = staged.waiting_chat();
+        assert_eq!(
+            waiting_chat_row_text(&rows[0]),
+            format!("{SCRIPTED_CHAT_USER_SENDER}: {SCRIPTED_CHAT_USER_TEXT}")
+        );
+        assert_eq!(
+            waiting_chat_row_text(&rows[1]),
+            format!("[ADMIN] {SCRIPTED_CHAT_ADMIN_SENDER}: {SCRIPTED_CHAT_ADMIN_TEXT}")
+        );
     }
 
     #[test]
