@@ -747,6 +747,49 @@ mod song_sync_tests {
     }
 
     #[test]
+    fn game_stats_update_decodes_live_capture() {
+        // Solo echo against local Memoryer (score 210, jam 3): the
+        // leader plus empty places, `0xff`-padded.
+        let solo = decode_frame(&[
+            0x11, 0x00, 0xaf, 0x0f, 0x00, 0x01, 0x00, 0x03, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff,
+        ])
+        .unwrap();
+        assert_eq!(solo.id, 4015);
+        let update = GameStatsUpdate::decode_frame(&solo).unwrap();
+        assert_eq!(update.member_id, 0);
+        assert_eq!(update.kind(), Some(StatKind::Jam));
+        assert_eq!(update.value, 3);
+        assert_eq!(
+            update.ranks,
+            [0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]
+        );
+
+        // Duo lead flip: A leads at 9000, then B's 9500 retakes it.
+        let leading = decode_frame(&[
+            0x11, 0x00, 0xaf, 0x0f, 0x00, 0x01, 0x00, 0x07, 0x00, 0x00, 0x01, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff,
+        ])
+        .unwrap();
+        let flipped = decode_frame(&[
+            0x11, 0x00, 0xaf, 0x0f, 0x01, 0x01, 0x00, 0x04, 0x00, 0x01, 0x00, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff,
+        ])
+        .unwrap();
+        let before = GameStatsUpdate::decode_frame(&leading).unwrap();
+        let after = GameStatsUpdate::decode_frame(&flipped).unwrap();
+        assert_eq!(
+            before.rank_packet(),
+            [0, 1, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]
+        );
+        assert_eq!(
+            after.rank_packet(),
+            [1, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]
+        );
+        assert_eq!(after.stats_channel(), Some((1, StatKind::Jam, 4)));
+    }
+
+    #[test]
     fn game_stats_update_keeps_unknown_channel_raw() {
         let mut update = GameStatsUpdate {
             member_id: 1,

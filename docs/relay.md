@@ -351,7 +351,8 @@ disassembly is reproduced.
   client-side; needs a wire capture, plus a Ghidra function dossier
   for VAs `0x56ddf0`, `0x4ea640`, `0x58ea9a` before any field rename).
 - S→C game 4015 handler (peer lifebar store); see
-  `docs/4015-hunt.md`.
+  `docs/4015-hunt.md`. The rank bytes it carries are now live-pinned
+  against local Memoryer (§12); the handler's exe byte proof stays open.
 
 ## 9. UDP ports and UHP hole-punch flow (7.55 static map)
 
@@ -574,3 +575,54 @@ Capstone disassembly; no disassembly is reproduced.
 Tests: `relay_enum_value_tests` in `relay.rs` asserts every value above
 (plus out-of-range rejections); `relay_command_tests` keeps the
 per-field offset vectors and unknown-role rejections.
+
+## 12. Live 4015 rank-byte capture (local Memoryer, 2026-11-07)
+
+First captured S→C 4015 wire bytes: the server's `GameStatsUpdate`
+broadcast is 17-byte frames (`11 00 af 0f` + 13-byte body), matching the
+`GameStatsUpdate` decoder shape exactly (member `u8` + kind `u16` +
+value `u16` + 8 rank bytes) — no decoder change needed.
+
+Method: a logging TCP proxy on `127.0.0.1:15011` → `127.0.0.1:15010`
+splits the `[u16 len][u16 id][body]` framing in both directions and logs
+`id/len/hex` per frame (scratch `proxy.py`, kept out of the repo); a
+minimal Python song client drives authorize → channel login → create
+room → set music → music list → sync → start → loaded → 4014 tick →
+await 4015 → tally → finalize → exit. Solo runs use one session; the
+duo run holds two sessions in one room (joiner readies via 4008,
+loads only after the master's start/track broadcast, else `StartGame`
+answers `NotReady`/`TeamUnbalanced`). Tokens are the `t_o2jam_login`
+session guids (`SessionExpiry=0`, local Sqlite `O2JAM.db`). Server:
+local Memoryer Full-mode build, same process as `docs/handoff.md`.
+
+Raw S→C 4015 frames (`len id member kind value ranks`):
+
+| Run | Tick behind it | Frame hex |
+|---|---|---|
+| solo, score 210, jam 3 | member 0, kind 1, value 3 | `11 00 af 0f 00 01 00 03 00 00 ff ff ff ff ff ff ff` |
+| solo, score 98765, jam 9 | member 0, kind 1, value 9 | `11 00 af 0f 00 01 00 09 00 00 ff ff ff ff ff ff ff` |
+| duo, A ticks 9000 (B tracked, score 0) | member 0, kind 1, value 7 | `11 00 af 0f 00 01 00 07 00 00 01 ff ff ff ff ff ff` |
+| duo, B ticks 50 (A leads 9000) | member 1, kind 1, value 2 | `11 00 af 0f 01 01 00 02 00 00 01 ff ff ff ff ff ff` |
+| duo, B ticks 9500 (B retakes lead) | member 1, kind 1, value 4 | `11 00 af 0f 01 01 00 04 00 01 00 ff ff ff ff ff ff` |
+
+Each broadcast reaches every room member (the proxy logged all three
+duo echoes on both sessions). Pinned, by comparing the runs:
+
+- `member`, `kind`, `value` echo the triggering 4014 tick (sender
+  slot, Life-`0`/Jam-`1` channel, channel value). They track the
+  sender, not the leader: the B echoes carry member 1 while A leads.
+- Rank byte `i` is the member id holding leaderboard place `i`,
+  ordered by score descending: `00 01 …` while A (9000) leads B, and
+  the bytes flip to `01 00 …` the moment B's 9500 takes the lead.
+  Solo rooms read `00 ff ff ff ff ff ff ff` (leader plus empty
+  places) at every score, so the bytes carry member ids, never
+  scores. `0xff` marks a place no member holds.
+- This is the wire image of Memoryer's `ComputeMemberRanks`
+  (`ScoreTrackerEventPublisher`: `OrderByDescending` score → member
+  ids, padded with `0xff` to 8), now live-confirmed byte-for-byte.
+
+Verdict: CLOSED at the wire level for the gateway leg — 13-byte body
+shape, echo fields, rank order, and `0xff` pad are all captured above
+(`game_stats_update_decodes_live_capture` in `play.rs` locks the vectors).
+The exe
+S→C handler proof (`docs/4015-hunt.md`) is unchanged and still open.
