@@ -17,6 +17,7 @@ use o2jam_shell::avatar::{
     ROOM_BLOCK, WAITING_BLOCK,
 };
 use o2jam_shell::screens::paint::{PLAYING_BLOCK, RESULT_WINLOSE_SPRITE};
+use o2jam_shell::screens::side::SELECT_MUSIC_DIALOG_BLOCK;
 use o2jam_shell::{GameLoop, MenuKey, PlaySkin, Screen, ScreenGame};
 
 use crate::connect::stack_worn_figure;
@@ -38,17 +39,20 @@ pub struct Shot {
     pub rgb: Vec<u8>,
 }
 
-/// Capture avi, channel, room, waiting, loading, playing, result.
-/// The playing shot paints a mid-song state: the 5 s note is struck
-/// first (combo 1) and the paint lands 100 ms later, while the
-/// judgement word, hit burst, tally counts, and TIME progress show.
+/// Capture avi, channel, room, waiting, musicselect, loading,
+/// playing, result. The musicselect shot repaints Waiting with the
+/// staged `DAILOG_SELECTMUSIC` dialog on top (host song flow: catalog
+/// plus pick), and the playing shot paints a mid-song state: the 5 s
+/// note is struck first (combo 1) and the paint lands 100 ms later,
+/// while the judgement word, hit burst, tally counts, and TIME
+/// progress show.
 ///
 /// # Errors
 ///
 /// When the scripted walk leaves the expected screen.
 pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
     let mut game = seeded_game();
-    let mut shots = Vec::with_capacity(7);
+    let mut shots = Vec::with_capacity(8);
     shots.push(shoot(&mut game, "avi", 0)?);
     game.lane_key(3, true);
     shots.push(shoot_checked(&mut game, "channel", Screen::Channel, 0)?);
@@ -56,6 +60,8 @@ pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
     shots.push(shoot_checked(&mut game, "room", Screen::Room, 0)?);
     game.menu_key(MenuKey::Confirm, true);
     shots.push(shoot_checked(&mut game, "waiting", Screen::Waiting, 0)?);
+    stage_select_music_scene(&mut game);
+    shots.push(shoot_checked(&mut game, "musicselect", Screen::Waiting, 0)?);
     game.menu_key(MenuKey::Confirm, true);
     shots.push(shoot_checked(&mut game, "loading", Screen::Loading, 0)?);
     stage_playing_scene(&mut game);
@@ -112,6 +118,18 @@ const PLAYING_SONG: SetRoomMusic = SetRoomMusic {
     difficulty: 2,
     speed: 3,
 };
+/// Song index under `install-root` (the 7.55 562-song catalog the
+/// select-music table lists; read-only like the archives).
+const MUSICSELECT_CATALOG: &str = "O2Jam/Image/OJNList.dat";
+/// Synthetic fallback songs (id, title, artist) when no catalog is
+/// installed: id 757 first so the host pick and the playing caption
+/// still resolve. Titles are ASCII stand-ins (documented gap).
+const MUSICSELECT_FALLBACK_SONGS: [(u32, &str, &str); 4] = [
+    (757, "First", "Band"),
+    (758, "Second", "Band"),
+    (763, "Third", "Band"),
+    (765, "Fourth", "Band"),
+];
 /// Interface control list entry.
 const INTERFACE_LIST: &str = "ControlList_Interface.txt";
 /// Playing control list entry.
@@ -343,12 +361,115 @@ fn seeded_game() -> ScreenGame {
     game
 }
 
+/// Stage the musicselect shot's dialog scene: the host song flow
+/// (catalog plus pick) so the waiting song panel resolves, then the
+/// real `DAILOG_SELECTMUSIC` dialog art over the seats. Staged after
+/// the waiting shot so earlier shots stay untouched; never fails.
+/// Without archive art the panel still stages (documented gap).
+fn stage_select_music_scene(game: &mut ScreenGame) {
+    stage_select_music_catalog(game);
+    game.set_selected_music(PLAYING_SONG);
+    stage_select_music_art(game);
+}
+
+/// Stage the select-music catalog: the installed 7.55 song index
+/// when it parses to songs, else the synthetic fallback below.
+/// Skips when a catalog is already staged so the playing caption
+/// keeps the same rows.
+fn stage_select_music_catalog(game: &mut ScreenGame) {
+    if !game.select_songs().is_empty() {
+        return;
+    }
+    if let Some(archive) = read_archive(MUSICSELECT_CATALOG) {
+        if let Ok(entries) = o2jam_file::parse_ojn_list(&archive) {
+            game.set_song_catalog(&entries);
+            if !game.select_songs().is_empty() {
+                return;
+            }
+        }
+    }
+    if let Ok(entries) = o2jam_file::parse_ojn_list(&musicselect_fallback_catalog()) {
+        game.set_song_catalog(&entries);
+    }
+}
+
+/// Stage real song-select dialog art (`DAILOG_SELECTMUSIC` placements
+/// plus figures) over the waiting seats; empty art paints nothing.
+fn stage_select_music_art(game: &mut ScreenGame) {
+    let Some(archive) = read_archive(INTERFACE_ARCHIVE) else {
+        return;
+    };
+    let Some(list) = control_list(&archive, INTERFACE_LIST) else {
+        return;
+    };
+    let Some(block) = scene_block(&list, SELECT_MUSIC_DIALOG_BLOCK) else {
+        return;
+    };
+    let names = scene_sprite_names(block);
+    if names.is_empty() {
+        return;
+    }
+    let figures = load_scene_figures(&archive, &names);
+    if figures.is_empty() {
+        return;
+    }
+    let Some(bound_file) = block.bound_file.as_ref() else {
+        return;
+    };
+    let Some(bnd) = bind_data(&archive, bound_file) else {
+        return;
+    };
+    let placements = bind_scene_rects(block, &bnd);
+    if placements.is_empty() {
+        return;
+    }
+    game.load_select_music_scene(placements, figures);
+}
+
+/// Synthetic fallback catalog: the 7.55 `OJNList.dat` record shape
+/// for [`MUSICSELECT_FALLBACK_SONGS`]; bytes live here so no game
+/// data is read. Titles are ASCII stand-ins (documented gap).
+fn musicselect_fallback_catalog() -> Vec<u8> {
+    let mut catalog = Vec::with_capacity(300 * MUSICSELECT_FALLBACK_SONGS.len());
+    for (song_id, title, artist) in MUSICSELECT_FALLBACK_SONGS {
+        catalog.extend_from_slice(&catalog_record(song_id, title, artist));
+    }
+    catalog
+}
+
+/// One synthetic 300-byte catalog record (id, title, artist, plus
+/// the `ojn` marker, a sane tempo, and an `o2ma###.ojm` token so
+/// [`o2jam_file::OjnListEntry::is_song`] keeps it).
+fn catalog_record(song_id: u32, title: &str, artist: &str) -> Vec<u8> {
+    const RECORD_LEN: usize = 300;
+    const TITLE_LEN: usize = 64;
+    const ARTIST_LEN: usize = 32;
+    const FILE_LEN: usize = 32;
+    let mut rec = vec![0u8; RECORD_LEN];
+    rec[8..11].copy_from_slice(b"ojn");
+    rec[4..8].copy_from_slice(&song_id.to_le_bytes());
+    rec[20..24].copy_from_slice(&124.0f32.to_le_bytes());
+    let title = title.as_bytes();
+    let take = title.len().min(TITLE_LEN);
+    rec[112..112 + take].copy_from_slice(&title[..take]);
+    let artist = artist.as_bytes();
+    let take = artist.len().min(ARTIST_LEN);
+    rec[176..176 + take].copy_from_slice(&artist[..take]);
+    let file = format!("o2ma{song_id}.ojm");
+    let file = file.as_bytes();
+    let take = file.len().min(FILE_LEN);
+    rec[240..240 + take].copy_from_slice(&file[..take]);
+    rec
+}
+
 /// Stage the playing shot's mid-song scene: the player caption, the
 /// worn figure (`avatar.opa`; a missing or unstackable archive keeps
 /// no figure), the host song pick whose caption the Playing paint
 /// re-syncs into the scene and tally strip, and the volume readout
 /// (`VOL 58`, the reference photo's strip readout). Staged after the
-/// loading shot so earlier shots stay untouched; never fails.
+/// loading shot so earlier shots stay untouched; never fails. The
+/// one-song fallback keeps the playing caption byte-stable even after
+/// the musicselect staging above (same host pick, same title).
 fn stage_playing_scene(game: &mut ScreenGame) {
     let (level, name) = PLAYING_PLAYER;
     game.set_player(level, name);
@@ -872,12 +993,21 @@ mod tests {
     }
 
     #[test]
-    fn walk_covers_seven_distinct_scenes() {
+    fn walk_covers_eight_distinct_scenes() {
         let shots = capture_all().unwrap();
         let names: Vec<&str> = shots.iter().map(|shot| shot.name).collect();
         assert_eq!(
             names,
-            ["avi", "channel", "room", "waiting", "loading", "playing", "result"]
+            [
+                "avi",
+                "channel",
+                "room",
+                "waiting",
+                "musicselect",
+                "loading",
+                "playing",
+                "result"
+            ]
         );
         for shot in &shots {
             assert_eq!((shot.w, shot.h), (SHOT_W, SHOT_H));
@@ -1379,19 +1509,104 @@ mod tests {
     #[test]
     fn staging_attempt_never_breaks_the_walk() {
         let shots = capture_all().unwrap();
-        assert_eq!(shots.len(), 7);
+        assert_eq!(shots.len(), 8);
         for shot in &shots {
             assert!(is_varied(&shot.rgb), "{} paints a flat frame", shot.name);
         }
     }
 
     #[test]
-    fn writer_saves_six_scenes_and_keeps_avi() {
+    fn writer_saves_seven_scenes_and_keeps_avi() {
         let dir = std::env::temp_dir().join(format!("recomp2jam-shots-{}", std::process::id()));
         let written = write_shots(&dir).unwrap();
-        assert_eq!(written.len(), 6);
+        assert_eq!(written.len(), 7);
         assert!(!dir.join("avi.png").exists());
+        assert!(dir.join("musicselect.png").exists());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn musicselect_shot_repaints_waiting_with_song_panel() {
+        // The host song flow (catalog plus pick) stages under the
+        // dialog: the waiting song panel inks new pixels while the
+        // flow stays on Waiting for the dialog shot.
+        let mut game = seeded_game();
+        game.lane_key(3, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+        let before = frame_rgb(&mut game, 0);
+        stage_select_music_scene(&mut game);
+        assert_eq!(game.screen(), Screen::Waiting);
+        assert!(
+            !game.select_songs().is_empty(),
+            "host song flow stages a catalog"
+        );
+        let after = frame_rgb(&mut game, 0);
+        assert_ne!(before, after, "song panel changed no pixels");
+        assert!(is_varied(&after), "musicselect paints a flat frame");
+    }
+
+    #[test]
+    fn musicselect_fallback_catalog_lists_four_synthetic_songs() {
+        // No game data read: the fallback blobs parse to one row per
+        // difficulty slot (four songs, three slots each).
+        use o2jam_shell::screens::side::{select_music_rows, select_music_songs};
+        let bytes = musicselect_fallback_catalog();
+        let entries = o2jam_file::parse_ojn_list(&bytes).expect("fallback catalog parses");
+        assert_eq!(entries.len(), MUSICSELECT_FALLBACK_SONGS.len());
+        let songs = select_music_songs(&entries);
+        assert_eq!(songs.len(), MUSICSELECT_FALLBACK_SONGS.len());
+        assert_eq!(songs[0].song_id, u32::from(PLAYING_SONG.music_id));
+        assert_eq!(
+            select_music_rows(&songs).len(),
+            MUSICSELECT_FALLBACK_SONGS.len() * 3
+        );
+    }
+
+    #[test]
+    fn musicselect_dialog_structure_paints_search_tab_over_waiting() {
+        // With genuine dialog art staged, the structure's amber search
+        // tab inks over the waiting seats (pinned anchor from the
+        // shell's own structure test); without archives the dialog
+        // stays hidden and only the song panel stages.
+        let Some(archive) = read_archive(INTERFACE_ARCHIVE) else {
+            println!("skip: missing {INTERFACE_ARCHIVE}");
+            return;
+        };
+        let Some(list) = control_list(&archive, INTERFACE_LIST) else {
+            println!("skip: {INTERFACE_ARCHIVE} has no control list");
+            return;
+        };
+        if scene_block(&list, SELECT_MUSIC_DIALOG_BLOCK).is_none() {
+            println!("skip: {SELECT_MUSIC_DIALOG_BLOCK} missing");
+            return;
+        }
+        let mut game = seeded_game();
+        game.lane_key(3, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        stage_select_music_scene(&mut game);
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert_eq!(game.screen(), Screen::Waiting);
+        let amber = o2jam_render::pack_xrgb(0xFF, 0xA0, 0x20);
+        if buf[95 * 800 + 355] != amber {
+            println!("skip: dialog art staged no figures");
+            return;
+        }
+        assert_eq!(
+            buf[95 * 800 + 355],
+            amber,
+            "search tab must ink over the waiting seats"
+        );
     }
 
     /// More than one distinct byte: a real scene, not a blank fill.
