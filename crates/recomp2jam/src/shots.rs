@@ -866,13 +866,20 @@ mod tests {
             let Some((px, py, ink)) = first_opaque_probe(figure) else {
                 continue;
             };
-            // Verified draw chain: art lands on its record anchor
-            // (frame-scaled), never on the `.bnd` rect — the anchor
-            // duplicates the rect for most bound bodies, and the
-            // reference photo pins the disagreeing pair
-            // (`BpPoint_Left_bar.ojs` (2,266) vs rect[3] (200,3)).
-            let layer = figure.layer(0).expect("probed figure has a layer");
-            let (anchor_x, anchor_y) = anchor_in_frame(layer.dx, layer.dy, frame_w, frame_h);
+            // Verified draw chain (avatar.rs `placement_view_origin`):
+            // anchored bodies draw at their record anchors (frame
+            // scaled); anchor-free bodies at their bound rect origins.
+            // Most bound bodies duplicate their rect origins byte-exact;
+            // `BpPoint_Left_bar.ojs` (2,266) is the photo-pinned
+            // disagreeing pair whose anchor wins.
+            let expected = if figure.has_anchor_offset() {
+                let layer = figure.layer(0).expect("probed figure has a layer");
+                let (ax, ay) = anchor_in_frame(layer.dx, layer.dy, frame_w, frame_h);
+                (ax, ay)
+            } else {
+                let scaled = o2jam_render::scale_rect_to_frame(&placed.rect, frame_w, frame_h);
+                (scaled.x, scaled.y)
+            };
             let mut buf = vec![0u32; frame_w * frame_h];
             paint_scene_figures(
                 &mut Frame {
@@ -883,10 +890,10 @@ mod tests {
                 std::slice::from_ref(placed),
                 &figures,
             );
-            let at = (anchor_y + py) as usize * frame_w + (anchor_x + px) as usize;
+            let at = (expected.1 + py) as usize * frame_w + (expected.0 + px) as usize;
             assert_eq!(
                 buf[at], ink,
-                "{block_name}:{name} must paint on its record anchor"
+                "{block_name}:{name} must paint at its placement origin"
             );
             checked += 1;
         }
@@ -894,16 +901,15 @@ mod tests {
     }
 
     #[test]
-    fn every_bound_entry_paints_on_its_record_anchor() {
+    fn every_bound_entry_paints_at_its_placement_origin() {
         // Multi-entry proof of the shared rule on real 7.55 bytes:
         // ordinal pairing feeds every bound entry its own rect, and
-        // the painter places each body at its record anchor — which
-        // duplicates the bound rect for TimeBar (489,556), EXIT
-        // (751,554), Hottime (710,21), ... and disagrees (and wins)
-        // for the BP buffer bars. The same loop runs the Playing
-        // bound run (Playing1.opi) and the Room block (Interface1.opi),
-        // so the correction holds per scene and per entry, not for
-        // one sprite.
+        // the painter places anchored bodies at their record anchors
+        // (TimeBar (489,556), EXIT (751,554), BpPoint (2,266) — the
+        // photo-pinned disagreeing pair) and anchor-free bodies at
+        // their rect origins. The same loop runs the Playing bound
+        // run (Playing1.opi) and the Room block (Interface1.opi), so
+        // the rule holds per scene and per entry, not for one sprite.
         let mut checked = 0;
         if let Some(archive) = read_archive(PLAYING_ARCHIVE) {
             checked += bound_entries_paint_on_rects(&archive, PLAYING_LIST, PLAYING_BLOCK);

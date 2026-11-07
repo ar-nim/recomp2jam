@@ -789,3 +789,40 @@ Live re-proof on the parity-head. Covers the playing-screen parity commit
   passed; +13 vs the 1047 baseline: net +4, shell +6, recomp2jam +3,
   all other targets unchanged, 0 failures). No lint findings. No
   commits, no pushes.** This sweep touched only `docs/playtest.md`.
+
+## Regression sweep — 2026-11-07 15:55 UTC+8 (HEAD `a1ead7f`, tree clean)
+
+Live re-proof on the claims-head. Covers the two commits landed after the
+parity-head baseline `e9fd95f`: om-band polarity/divergence claims docs
+(`e06eaba`) and lane walk end-marker discipline proof (`00688fc`), plus
+the docs log (`a1ead7f`).
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1062 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 0, file 149, game 86, net 337, render 72,
+  shell 305, real_art 7, scenes 22, recomp2jam 65
+  (7 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, no warnings
+  (0 warning lines).
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.62 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`15:55:12 +08:00`):
+  `Authorize session` → `Create room: songflow` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Update #1 - Jam: 3 (Bonus: 0)` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure WARNs on room delete; a second session walked
+  `Get channel list` → `Enter channel` → `Get character info`).
+- **Verdict: no regression — suite is green on the claims-head (1062
+  passed; +2 vs the 1060 baseline: game +2 from the lane walk
+  end-marker tests, all other targets unchanged, 0 failures). No lint
+  findings. No commits, no pushes.** This sweep touched only
+  `docs/playtest.md`.

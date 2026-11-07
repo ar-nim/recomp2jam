@@ -25,9 +25,9 @@ pin for all EXE rows: `AngelO2Jam.exe` 5,029,888 B, SHA-256
 
 | Level | Claims |
 |---|---|
-| EXE | 79 |
-| DATA | 35 |
-| ASSUMED | 25 |
+| EXE | 87 |
+| DATA | 31 |
+| ASSUMED | 21 |
 | Total | 139 |
 
 ## The pairing-rule family (known mistake + siblings)
@@ -81,7 +81,7 @@ index (all-zero rect, slot 0, default arm).
 | A6 | Space: 800x600 absolute px, top-left origin, `(x2, y2)` exclusive; every `State_*.bnd` spans the canvas | DATA | all `State_*.bnd` spans; top-left origin exe-backed: the image-draw arms load all 4 rect dwords but push origin x/y only into the blit (VAs `0x50aa32`–`0x50aa56`, `0x50ac88`–`0x50acac`, `0x50ae02`–`0x50ae20`); no `x2−x1` extent consumer located, exclusivity stays data-side *(offset-only survey)* | R | |
 | A7 | 800x600 default, fullscreen-only (`WS_POPUP` fork default; windowed branch unreachable) | EXE | `0x14b4c`/`0x14baf`, fork `0x41c0b` | R | |
 | A8 | Avatar-dialog rects are screen-absolute; dialog origin subtracted at apply | EXE | `0x4DA630`, ev `9e526b62…` | R | |
-| A9 | All 27 dialogs share the screen-absolute origin rule | ASSUMED | `0x4ED650` untraced (`ui-loader.md` OPEN 2–3) | R | |
+| A9 | All 27 dialogs share the screen-absolute origin rule | ASSUMED | `0x4ED650` traced *(offset-only)* and is NOT the shared dialog applier: a single-block scene builder (stem lookup `0x4795a0` ← `0x4ed689`, into-record loader `0x547DB0` ← `0x4ed6a3`, synthetic entries `0x1B200001`/`0x1B300006` through factory `0x48B2D0` ← `0x4ed6e9` and wrapper `0x48A620` ← `0x4ed729`, 4-dword rect getter `0x50DC60` reading control `+0x3c` ← `0x4ed760`) — the 27-dialog origin rule stays untraced (`ui-loader.md` OPEN 2–3) | R | |
 | A10 | Single-image sprites land at their rect: dest = view position + per-frame sprite anchor, byte-exact == rect (3 probes); the rect is unread at blit | EXE | anchor math `0x41DF80` (anchor words at frame-record `+0`/`+2`, stride `0x14`), ev `7418d033…`; equality probed on `Dialog_Information`/`Info_OK`/`Playing_Exit` | R | |
 | A11 | Raw frames: `size == w*h*2`, little-endian RGB555 | DATA | 63,742 images across archives | R | |
 | A12 | Colorkey `0x0000`/`0x7D5F` pixels are transparent | DATA | 3,444/5,787 bodies + byte-exact probes; honest limit: the draw path never compares the key on CPU — consumption is device-side (OPEN, `ui-draw.md` Colorkey) | R | |
@@ -130,15 +130,15 @@ index (all-zero rect, slot 0, default arm).
 | B11 | Hold bonus: +10 score, +1 combo per playback tick while held | EXE | `0x178110`, ev `737dfe7b…`; writes `0x14163c`/`0x141652` | G | |
 | B12 | Long notes: a Cool/Good head arms the hold flag and the per-lane tail cursor `+0x864`; the release strike judges the armed tail vs the tail time with the shared 6/18/25 windows (≥26 ms off = Miss either side, one-shot — cursor cleared on consumption); the expiry scan is inert (per-lane cursors `+0x480`/`+0x484` load as the list head and never advance, so the Miss store and paired-tail marking are unreachable — a held tail can never be expired); a missed/Bad head kills its paired tail; bonus ticks while armed ∧ span open; the walk strike takes the nearest unjudged non-tail record (rides key-down per the `0x1714b0` inversion) | EXE | arming `0x176e60`, tail judge `0x176646`–`0x176687`, clear `0x176709`, ev `9faabadd…`/decompile `9a80eb3b…`; walk `0x1767c9`–`0x176b00`, tail exclusions `0x176837`/`0x176994`, inversion `0x1714b0`; flag `0x17617b`/`0x176d78`; bonus scan `0x178110`, files `0x178194`/`0x1781c1`/`0x1781d7` (ev `1baf7ef1…`); inert scan: dossier `ev_16e274b8…`/raw `ev_02842ce1…`, cursor init `0x172d32`/`0x172d39`, walk break `0x1773bf`–`0x1773c5`, Miss store `0x17740f` unreachable; tail kill `0x176dab`–`0x176df6`; judges ev `14992eb2…`/`3d707204…`; `HoldState::judge_tail` | G | CORRECTED ×2: refutes "tail released at its end; early release = miss", then refutes "no release judgement — tail rates only by the expiry Miss" |
 | B13 | Hold-active flag at `+0x9f8`, written gated on payload hold-bit tests | EXE | writes `0x17617b`/`0x176c78`/`0x17726b`; tests `0x1766cb`… | G | |
-| B14 | Chart payload bit 25/26 = hold span/head semantics | ASSUMED | sites pinned, trigger absent on shipped charts | G | |
-| B15 | Kinds 2–8 are the seven lanes (`lane = kind − 2`); songs use `{0,2,3}` or all seven | DATA | 39/39 count cross-checks | G | |
+| B14 | Chart payload bit 25/26 = hold head/span-tail semantics | EXE | bit-25 head test `(payload & 0x3000000) == 0x2000000` at VAs `0x576105` (second judge, ev `3d707204…`), `0x576c42` (judge keyup, ev `14992eb2…`), `0x5771f5` (auto judge, ev `d6802fde…`); bit-26 span mark `and $0x4000000` at `0x573061` (parser fix-up `0x572f50`, *(offset-only)*); paired tails carry bit 24 and are excluded from walk candidacy (`0x576837`, ev `14992eb2…`) | G | |
+| B15 | Kinds 2–8 are the seven lane channels, lane = `map[kind − 2]` (identity ⇒ `kind − 2`); shipped-chart usage (`{0,2,3}`/all seven) stays data-side | EXE | loader kind gate VA `0x572732`–`0x57275a` (`kind ≥ 2 ∧ kind < [+0x82c]+2`; width 7 ⇒ 2..8; ev `8659c2d0…`); lane index read from the u16 map at `0x572791` (map filled by lane setup `0x571c30` via the out-array call `0x571e42`, ev `41695a9b…`), lane list `+0x42c + idx*0xC` at `0x572853`; kinds ≥ 0x22 fail the load (`0x5723b9`) | G | |
 | B16 | Note value = `(flags << 16) \| (sample_id + 1)`; ids land in the `.ojm` set (one dangling) | DATA | 12/13 new-format charts walk | G | |
 | B17 | Strike slot = `(payload & 0xFFF) − 1`, plus `0x3E8` on bit 26 | EXE | `0x1703f0` | G | |
-| B18 | Timing: 192 ticks/beat, ms via `240000 / BPM`, per-event float rounding | DATA | event walks; parser reads | G | |
-| B19 | Kind-0 single float = beats per measure | ASSUMED | one observation (o2ma769 `0.75`) | G | |
-| B20 | Kind-1 single float = BPM change from that measure | DATA | o2ma765/769/770 cross-checks | G | |
-| B21 | Kind-1 per-subdivision `0.0` = keep; `999.0` = terminator | ASSUMED | one song each | G | |
-| B22 | Kinds 9+ are autoplay BGM channels, same value encoding | DATA | 13-chart sample-id membership | G | |
+| B18 | Timing: 192 ticks/beat, ms via `240000 / BPM`, per-event float rounding | EXE | loader `0x571d60` (ev `8659c2d0…`): doubles `192.0` (VA `0x64b540`, × at `0x57221f`) and `240000.0` (VA `0x64dc80`, ÷ at `0x5720dc`/`0x572225`/`0x57233a`/`0x5725b8`); 0xC0 subdivision bounds `0x572273`/`0x572411`/`0x572444`; round-half-up `+0.5` (constant VA `0x644888`, site `0x572491`) into truncating `fistp` under control-word `0xC00` (`0x57211b`–`0x572132` et al.) | G | |
+| B19 | Kind-0 single float = beats per measure (a stored zero dword defaults to 1.0) | EXE | loader branch `0x572453` (`test kind`), float read `0x572462`–`0x572475` with `fld1` default `0x57247d`, measure tick length = beats × 192 (+0.5 round) stored `0x572485`–`0x5724d6`; ev `8659c2d0…`; the lone o2ma769 `0.75` observation stays corroboration | G | |
+| B20 | Kind-1 per-subdivision floats = BPM changes applied mid-measure | EXE | loader branch `0x5724e2` (`cmp $0x1`, ev `8659c2d0…`): count floats copied `0x5724f2`–`0x57250b`, each non-zero float applied to the BPM word `0x57259f`–`0x5725a6`, tick ms recomputed `0x5725b2`–`0x5725be`, BPM events inserted via `0x579f00` (`0x572639`); the o2ma765/769/770 cross-checks stay corroboration | G | |
+| B21 | Kind-1 per-subdivision `0.0` = keep; `999.0` = terminator | ASSUMED | exe half *(offset-only)*: the `0.0`-keep skip is pinned (compare vs `0.0f` VA `0x643fa8`, skip branch `0x572592`); the `999.0` terminator is refuted as an exe mechanism — the run is bounded by the u16 count (≤ 192, `0x572411`) with a synthetic `0.0` appended (`fldz` `0x57251a`), and no 999 test exists in the parse (the sole `999.0f` constant VA `0x657ca8` is read only at `0x5d5f1a`, outside the loader); a literal 999.0 would load as BPM 999 | G | |
+| B22 | Kinds 9+ are autoplay BGM channels, same value encoding | DATA | 13-chart sample-id membership; exe structure *(offset-only)*: kinds ≥ 9 (capped `< 0x22`, `0x5723b9`) take the BGM branch `0x5728e9`, channel = `kind − 9` (`0x572913`–`0x57291d`, max tracked at `+0x838` `0x572931`–`0x572946`), per-channel lists `+0x504 + ch*0xC` (`0x5729bc`–`0x5729cc`), value words carry bit-26 + 12-bit sample id (`0x572a4f`–`0x572a6a`); autoplay consumption of these lists stays data-side | G | |
 | B23 | Lane shuffle: mirror = full reversal; byte 2 = N-lane `rand()%width`; byte 0 = 3-lane `rand()%3`; rebuilt per plain measure + per hold span | EXE | `0x171c30`/`0x173940`/`0x173a10`/`0x174330` dossiers | G | |
 | B24 | Item-text "whole chart vs every measure" distinction is false: both rebuild per measure | EXE | planner `0x174330` behavior | G | |
 | B25 | Which ring item selects which modifier byte | ASSUMED | room-side translation open | G | |
@@ -153,8 +153,8 @@ index (all-zero rect, slot 0, default arm).
 | B34 | Fail splash: GameOver static vs animated picked by a predicate | EXE | `0xe69a1` | R | |
 | B35 | Jam gauge math: Cool 2/Good 1, 30-progress cycles, overflow carries | ASSUMED | negative: zero `cmp $0x1e` in rating range | G | refuted vs B9 numbers |
 | B36 | Win/lose art goes to rank #1 by score | ASSUMED | player report; no client-side score-sort located. Exe context: the result screen is state block 6 — opener VA `0x4c2390` stages `StateResult_Top.ojs`/`StateResult_Bottom.ojs`/`Result_WinLose.ojs` (VA `0x64a388`/`0x64a370`/`0x64a35c`) and calls the state applier at `0x4c23e2`; the Live-result region creates `Winner_image`/`Challenger_image` entries unconditionally (codes `0x1B500012`/`0x1B500013` at VAs `0x4e66c2`/`0x4e6714`, controls `+0x7b4`/`+0x7b8`) and gates a `Lv.%d` label on role 1/2 (`0x4e6f95`/`0x4e6faf`, role global `0x77ee86`); the rank→art selection itself stays open | G | |
-| B37 | Play keys S D F Space J K L | ASSUMED | club standard; no bind storage found; negative *(offset-only)*: image-wide scans for contiguous DIK `{1F,20,21,39,24,25,26}` and VK `{53,44,46,20,4A,4B,4C}` runs (byte and dword, both lane orders) find no bind table | G | |
-| B38 | Shell paces play on the wall clock, not the sample clock | ASSUMED | `parity.md` OPEN; audio clock is the plan | G | |
+| B37 | Play keys S D F Space J K L (option.ini `Key`/`KEY_1..7`, exe-built DIK defaults) | EXE | *(offset-only)* key-table init VA `0x543290`: `GetPrivateProfileIntA` (IAT `0x63f268`) per slot with defaults `0x1f`/`0x20`/`0x21`/`0x39`/`0x24`/`0x25`/`0x26` pushed at `0x5432b3`–`0x543373`, stored to `+0x345..+0x34b` (`0x5432c8`–`0x543388`); strings `Key`/`KEY_1..KEY_7` VA `0x64ccd0`–`0x64cd04`; 3-key defaults + DIK reverse map at `0x67ebb0` (`0x5436bb`–`0x5437cf`); the earlier "no bind table" scan missed the `push $imm8`-separated defaults | G | |
+| B38 | Play paces on the wall clock, not the sample clock | EXE | play advance derives song time from `timeGetTime()` (IAT `0x63f4f8`, call VA `0x575d98`) rebased on the song start `+0x834` (`0x575da7`), gated on play state `+0x828 == 2` (`0x575d7c`) — ev `efdaac19…`; tick→ms interpolation `0x57a240` (ev `9f8e1c2b…`) consumes that wall ms; DSOUND imports `DirectSoundCreate` only (creation, no clocking); audio-cursor reads stay unlocated *(offset-only)* | G | |
 | B39 | Rating-event sink `+0xa14`: codes 1/9/14, 16-way jump table, attach at song load | EXE | `0x56e170`, attach `0x170325` | G | |
 | B40 | `option.ini` table is display-only (MODE/BlendHalf/LONGNOTEMODE/NoteTail/NoteType) | EXE | key block `0x245224–0x2452a8` | R | |
 | B41 | NoteType 0–2 + per-level strings, NoteTail 0–4, LongnoteMode cached per song | EXE | `0x5713c7`/`0x16bf47`/`0x16fb0d`; on-screen effect ASSUMED | R | |
@@ -165,7 +165,7 @@ index (all-zero rect, slot 0, default arm).
 
 | ID | Claim | Level | Anchor / evidence | Drives | Sibling |
 |---|---|---|---|---|---|
-| C1 | OPI layout: 16 B header, blobs from +16, trailing 152 B table | DATA | 3-archive walk | R | |
+| C1 | OPI layout: 16 B header, blobs from +16, trailing 152 B table | DATA | 3-archive walk; exe slot-table reader *(offset-only)*: count × 0x98 records (imul VA `0x40a9ff`, read stride push `$0x98` `0x40aa39`) with count at archive object `+0x110` — header/blob layout stays data-side | R | |
 | C2 | Slice bodies by `size`, never `reserved_size`; slack is stale | DATA | stride tiling + nonzero slack | R | |
 | C3 | Kind-0 slots are deleted-entry reservations, never bodies | DATA | free-slot survey | — | |
 | C4 | Archive inventories: 1596/633/7149 slots; 9231 sprite bodies; class table | DATA | body-class cross-check | R | |
@@ -177,7 +177,7 @@ index (all-zero rect, slot 0, default arm).
 | C10 | ControlList/word-list text is CP949 | DATA | decode rejection study | R | |
 | C11 | Old OJN 300-byte header map, field-complete | DATA | byte-exact reads off `Tutorial.ojn` | G | |
 | C12 | New-format decrypt: byte-reversal + 3-key period XOR from the tail | EXE | `0x12180`, ev `011eab73…`; round-trip test | G | |
-| C13 | Per-level segmentation: counts +64/+68/+72, slice ends +284..+296 | DATA | 14/14 walk-exact | G | |
+| C13 | Per-level segmentation: counts +64/+68/+72, slice ends +284..+296 | DATA | 14/14 walk-exact; exe side *(offset-only)*: the loader bounds each difficulty's event walk by the count table game `+0x738[difficulty]` (read VA `0x571ee9`, difficulty selector `+0x830` at `0x571eb8`, ev `8659c2d0…`) and the validator enforces the 300-byte header (`cmpl $0x12c` VA `0x5718cb`, ev `66e60d16…`); the header-word copy site into `+0x738` stays unlocated | G | |
 | C14 | OJNList: 562 x 300 B records + middle + patch sections, exact sum | DATA | section-sum check | G | |
 | C15 | Mid-region tables 1–5 shapes decoded | DATA | 7-part exact split | G | |
 | C16 | Table 5 category (1..5) = wheel bucket; `song+0x194` → `entry+0x4`; STEP2 buttons 1..5 = GOLD..SILVER | EXE | jump tables `0xbfa5c`/`0x93409`; builder pin `0x4422e` | R | |
@@ -190,7 +190,7 @@ index (all-zero rect, slot 0, default arm).
 | C23 | OJM M30/OMC/OJM containers: entry walks + OggS/EOS to EOF | DATA | 21-file walk | G | |
 | C24 | M30 sample-id roles: drums 0–12, music tracks 980–991 | DATA | entry names + chart refs | G | |
 | C25 | Loader descriptor from per-song version float: 2.9→17-way, 2.7→16-way, ≤2.4→plain | EXE | `0x54e930` flag bits | G | |
-| C26 | 16/17-way interleave tables are exact permutations | DATA | `0x27f1d0`/`0x27f3d0` checks | G | |
+| C26 | 16/17-way interleave tables are exact permutations | EXE | the exe consumes both tables as u16 permutation lookups: VA `0x67f1d0` read at `0x54f8ac` (de-interleave fn `0x54f860`), VA `0x67f3d0` read at `0x54f972` (fn `0x54f920`), beside the C27 transforms *(offset-only)*; the permutation-exactness numbers stay the data walk (file `0x27f1d0`/`0x27f3d0`) | G | |
 | C27 | Body transforms: bitwise-NOT, mirror S-box, u32-XOR key `"nami"` | EXE | `0x54f9e0`/`0x54fa70`/`0x54fac0` | G | |
 | C28 | Id-less banks: new-variant entries register at slot 0 (last wins); only M30 carries ids | EXE | `strncpy`-only fetch, load/play path survey | G | **S4** context |
 | C29 | OJM selection is id-keyed end to end; no order lookup exists (id-less entries all land at slot 0); `resolve_order_slot` is ours, not exe behavior | EXE | *(offset-only)* `0x1703f0` chain `0x170418`–`0x170431`, loader `0x173625`/`0x17364a`, fetch `0x14ee4a`/`0x14ef21` | G | corrects S4 |
