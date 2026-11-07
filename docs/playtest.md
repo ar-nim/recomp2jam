@@ -1290,3 +1290,44 @@ dossier verdict frames (`46f0a7d`: battle walk shows-lose frames in
   only `docs/playtest.md`, fix only my own lint findings) the peer's
   file was left alone. Clean-HEAD verdict above stands; the dirty
   file is the peer's uncommitted work, not mine.
+
+## Regression sweep — 2026-11-07 20:37 UTC+8 (HEAD `0975314`, tree clean)
+
+Live re-proof on the native-head. Covers the feat commit landed after the
+verdict-head baseline `46f0a7d`: native verification shots with scripted
+rank rows (`3b604ae`: native-canvas `playing-native`/`result-native`
+companions sharing the walked source frame, scripted rank fixture,
+`playing.rs`/`game.rs` rank rows, shot refreshes), plus the sweep log
+(`0975314`).
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1204 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 7, file 149, game 92, net 337,
+  render 72, shell 419, real_art 7, scenes 22, recomp2jam 80
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, 0 warning
+  lines (touched-`main.rs` rebuild check).
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.59 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`20:37:03 +08:00`):
+  `Authorize session` → `Create room: songflow` →
+  `Get music list: [0/00] 562 music` → `Start game: [000]` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  connection-lost WARNs on session close).
+- **Verdict: no regression — suite is green on the native-head (1204
+  passed; +5 vs the 1199 baseline: shell 417 → 419, recomp2jam
+  77 → 80 from the native-shots/scripted-rank tests, all other
+  targets unchanged, 0 failures). No lint findings. No commits, no
+  pushes.** This sweep touched only `docs/playtest.md`.
+- Tree note: a peer landed uncommitted edits after every gate above
+  had finished on clean HEAD (`o2jam-shell/src/screens/paint.rs`:
+  `channel_row_text` helper folding the gateway id into the channel
+  row; `o2jam-shell/src/screens/game.rs` +14). Every count above is
+  the clean-HEAD result. Per the sweep rules (touch only
+  `docs/playtest.md`, fix only my own lint findings) the peer's
+  files were left alone.
