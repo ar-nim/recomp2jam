@@ -250,3 +250,31 @@ VA `0x64a3a0`) while siblings are ready. The relay wraps
    `0x10d10`): write site not located.
 10. Role 3 (observer) draws the verdict banner at frame 0 (image 0);
     whether observers really see the rank-1 banner OPEN.
+
+## Verification against `docs/screenshots/reference-result-4x3.png`
+
+Checked 2026-11-07: regenerated `docs/screenshots/result.png`
+(scripted walk: solo room, one-note chart, one Cool strike — counts
+1/0/0/0, combo 1, 200 points) against the reference photo (battle
+2P play: 825/20/0/2, MAX 320, JAM 563, LOSE!, rows Xter/Lujia,
+grade C, TOTAL GEM 110371). `cargo test -p o2jam-shell
+-p recomp2jam` green (71 passed); no failing test, so no code
+change — all deltas below are fixture-data or by-design unpainted.
+
+| Region | Verdict | Note |
+|---|---|---|
+| Score headers + boxes (Top panel) | PASS | Staged `StateResult_Top.ojs` boxes align with the photo. |
+| COOL/GOOD/BAD/MISS at (151/240/337/426, 125) | PASS | GDI numbers paint at the anchors (`result_shot_paints_the_pinned_digits`); values 1/0/0/0 vs 825/20/0/2 are the scripted walk's, not the photo's play. |
+| MAX/JAM COMBO at (505/596, 130) | PASS | Same anchor tests; 1/level-0 vs 320/563 by fixture data. |
+| SCORE readout, top center (digit-sprite life readout, y=77) | UNPAINTED, by design | Photo's 226750 is the OPEN 1 cell field; shell paints neither cell row (`life_and_bottom_digit_cells_stay_unpainted`). |
+| Verdict banner, y=190 band | PASS position | Solo walk paints image 3 at (126,190) ("GOOD!"), photo paints battle-lose "LOSE!" in the same band; frame differs by mode (`result_shot_paints_the_solo_verdict_frame`), not a regression. |
+| Rank table columns (91/128/230/416/530/626/685, 22 px pitch) | UNPAINTED, by design | Photo's two rows have no shell counterpart: no member-row model (OPEN 4, `member_rows_stay_unpainted_without_a_row_model`). |
+| Grade plate (395,531) | PASS position | Frame 8 ("Perfect", all-Cool max) vs photo's C by play data (`result_shot_paints_the_perfect_grade_plate`). |
+| Total score `%8d` at (605,533) | PASS | Paints 200 at the anchor, visible at the left of the TOTAL GEM bar (`total_score_field_paints_at_its_pinned_anchor`). |
+| Bottom counter digit cells (y=536) | UNPAINTED, by design | OPEN 1, same test as the life readout. |
+| TOTAL GEM digits | No live value | Bar is staged art; shell carries no gem model, so only the total-score GDI digits overlap it. Residual. |
+| RETRY/BACK (rects 5/6) | Staged art present | Buttons paint at the pinned rects; RETRY shows its highlight frame (shared whole-body staging, no button-state model pinned). Observation, not a regression. |
+
+Residuals carried: OPEN 1 (digit-cell font binding), OPEN 4/7
+(row model + bonus semantic), gem model, button-state frames.
+Nothing invented; unpainted stays unpainted.
