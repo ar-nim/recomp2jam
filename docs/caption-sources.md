@@ -88,9 +88,16 @@ shell leaves unpainted (`MAPNAME`/`INSTNAME` per the
    indexed by `0x7789dc % 2`.
 4. SKILLCOUNT upstream: the server fill of the owned-item vectors
    (`0x77960c` / `0x77961c` / `0x77962c`).
-5. Global `0x7789d8`: the BPM path matches it against song-record
-   ids, while `stage-bga.md` labels it channel id. Its ownership
-   stays open.
+5. Global `0x7789d8` — RESOLVED as the selected-song id (low 28 bits;
+   top-nibble flag overlay). Writer sites: select-time song-id store file
+   `0x3f379`, init default `0x22b8` (8888, "none") file `0x95137`,
+   sentinel compares files `0xd8806`/`0x1719c0`, and high-half OR-compose file
+   `0x15caa8`. Readers: the BPM full-dword record-id compare (files
+   `0xbe0b6`–`0xbe0e4`, compare file `0xbe0d2`) and the play loader masked
+   scan (`& 0x0FFFFFFF` file `0x1719d6`, scan files `0x171a8c`–`0x171ab8`).
+   The old `stage-bga.md` channel-id label was wrong: the picker compares at
+   files `0xbb324`/`0xbb330` are song ids 654/655, both present in the
+   562-record `OJNList.dat` walk.
 
 ## Shell rule
 

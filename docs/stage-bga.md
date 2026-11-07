@@ -44,8 +44,15 @@ so the backdrop always shows.
 ## Stage selection (room side)
 
 - Global `0x7789dc` = the stage value; `0x7789e0` = click-effect variant;
-  neighbours `0x7789d8` (channel id, compared against `0x28e`/`0x28f`) and
+  neighbours `0x7789d8` (selected-song id: song-select store file `0x3f379`,
+  init default `0x22b8` = 8888 "none" file `0x95137`, sentinel compares files
+  `0xd8806`/`0x1719c0`; the picker compares it as song ids against `0x28e`/
+  `0x28f` = 654/655, both present in the 562-record `OJNList.dat` walk) and
   `0x7789e4`..`0x7789e7` (key mode/difficulty bytes) are the room-setup block.
+  Flag overlay on the same dword: file `0x15caa8` ORs a `0xF000`-masked word
+  shifted to the high half into `0x7789d8`, so masked readers (`& 0x0FFFFFFF`
+  at file `0x1719d6`) stay robust while the BPM full-dword compare
+  (file `0xbe0d2`) matches only when the overlay is clear.
 - Picker `0x4bb2c0`: reads the waiting-room preview control `0x1650001A`
   (`IDC_IMAGE_SWAIT_MAP` = `Wait_Map.ojs` in `State_Waiting`), returns a stage
   value. Callers `0x4aace5` (default-if-zero on room entry: virtual call slot
@@ -143,7 +150,8 @@ bytes `0x4e85d4`), the rest the generic path at `0x4e7fde`:
 3. Who calls the three twin appliers (`0x4e7850` and the `0x4ee8f5`/`0x4f2c73`
    clusters): addresses sit adjacently in `.rdata` at `0x64ae48`–`0x64ae50`,
    suggesting a state-vtable dispatch (solo/P2P/tutorial variants unattributed).
-4. Meaning of `0x7789d8 == 0x28e/0x28f` (channels 654/655) inside the picker,
-   and of the stage value's high word (animated-stage flag vs room flag).
+4. Why `0x7789d8 == 0x28e/0x28f` (song ids 654/655, forcing picker stage 4 at
+   files `0xbb324`/`0xbb330`) singles out those two songs, and of the stage
+   value's high word (animated-stage flag vs room flag).
 5. Protocol 4002's exact packet layout (stage id width, who may change it) —
    `docs/net-protocol.md` cross-check pending.
