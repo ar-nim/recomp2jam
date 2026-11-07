@@ -1545,11 +1545,23 @@ const WAITING_CHAT_EDIT_RECT: Rect = Rect {
     w: 440,
     h: 20,
 };
-/// Rows visible in the history box: list height 98 over the 8 px row
-/// pitch (the `TEXT_SWAIT_CHAT` template carries no per-row staged
-/// rect — rows stack from the list origin, so the exact row-feed call
-/// stays OPEN).
-const WAITING_CHAT_VISIBLE_ROWS: usize = 12;
+/// Row pitch of the history box: the reference rows sit 17 native px
+/// apart (row tops at native y 455.4/472.5/489.8 in
+/// `reference-waiting-4x3.png`), and six 17 px slots fill the 98 px
+/// `LIST` rect exactly. The `TEXT_SWAIT_CHAT` template carries no
+/// per-row staged rect — rows stack from the list origin, so the
+/// exact row-feed call stays OPEN while the pitch is photo-pinned.
+const WAITING_CHAT_ROW_H: i32 = 17;
+/// Rows visible in the history box: the [`WAITING_CHAT_ROW_H`] slots
+/// that fit the 98 px `LIST` rect.
+const WAITING_CHAT_VISIBLE_ROWS: usize = 6;
+/// Focus-caret inset inside the input rect: the reference shows the
+/// caret bar starting at native (25, 568) inside `EDIT_SWAIT_CHAT`
+/// rect 19 `(20,563,460,583)` (`reference-waiting-4x3.png`, empty
+/// input).
+const WAITING_CHAT_CARET_INSET: (i32, i32) = (5, 5);
+/// Focus-caret bar size: a 2x10 white bar in the same photo.
+const WAITING_CHAT_CARET_SIZE: (u32, u32) = (2, 10);
 
 /// One waiting-room chat row from a live 3012/3013 packet
 /// (`ScreenGame` converts `WaitingUserMessage`/`WaitingAdminMessage`
@@ -1586,15 +1598,22 @@ impl WaitingChatMessage {
     }
 }
 
-/// Display text of one chat row: `sender: text`, administrator rows
-/// prefixed `[ADMIN]` (prefix and colors are stand-ins — the exact
-/// row-feed call stays OPEN).
+/// Display text of one chat row. User rows bracket the nickname
+/// right-aligned in a 13-wide field — the reference row shape
+/// `[        Lujia] YOOO!!!` (one photo sample pins the field width;
+/// wider and 2-byte names stay OPEN). Administrator rows keep the
+/// `[ADMIN]` prefix stand-in: the reference admin notice shows no
+/// sender at all, so the real admin row-feed stays OPEN.
 #[must_use]
 pub fn waiting_chat_row_text(message: &WaitingChatMessage) -> String {
     if message.admin {
         format!("[ADMIN] {}: {}", message.sender, message.text)
     } else {
-        format!("{}: {}", message.sender, message.text)
+        format!(
+            "[{sender:>13}] {text}",
+            sender = message.sender,
+            text = message.text
+        )
     }
 }
 
@@ -1605,13 +1624,24 @@ pub fn waiting_chat_visible_messages(messages: &[WaitingChatMessage]) -> &[Waiti
     messages.get(skip..).unwrap_or(&[])
 }
 
-/// Row ink: amber for administrator rows, white otherwise.
-fn waiting_chat_ink(admin: bool) -> u32 {
-    if admin {
-        pack_xrgb(0xFF, 0xD0, 0x20)
-    } else {
-        art_title_ink()
-    }
+/// Row ink: warm gold for every chat row. All three reference rows
+/// read warm (known-white ink in the same photo calibrates neutral),
+/// so user and administrator rows share one amber; distinct per-kind
+/// hues are unverifiable in the lossy photo (residual in
+/// `docs/parity.md`).
+fn chat_amber_ink() -> u32 {
+    pack_xrgb(0xFF, 0xD0, 0x20)
+}
+
+/// Frame y of history row `offset`: the list origin plus
+/// [`WAITING_CHAT_ROW_H`] steps (photo-pinned pitch).
+#[must_use]
+fn waiting_chat_row_y(list_y: i32, offset: usize) -> i32 {
+    list_y.saturating_add(
+        i32::try_from(offset)
+            .unwrap_or(i32::MAX)
+            .saturating_mul(WAITING_CHAT_ROW_H),
+    )
 }
 
 /// Frame origin of the history box: the staged `LIST` rect while bound,
@@ -1635,11 +1665,14 @@ fn waiting_chat_edit_origin(frame: &Frame<'_>, placements: &[ScenePlacement]) ->
 }
 
 /// Paint live chat rows plus the input line: the newest visible rows
-/// stack from the history origin at the lobby row pitch, the draft
-/// paints at the input origin. Empty histories and empty drafts paint
-/// nothing — no history without packets, no invented input.
-/// Missing placements fall back to the scaled native rects so the
-/// flat fallback still reads.
+/// stack from the history origin at the photo-pinned 17 px pitch,
+/// straight on the box art (the reference rows carry no scrim band),
+/// the draft paints at the input origin and the focus caret rides
+/// the insertion point (inset plus typed width — the reference shows
+/// the caret on an empty input). Rows come only from live packets;
+/// the caret is the input-line state, not history. Missing
+/// placements fall back to the scaled native rects so the flat
+/// fallback still reads.
 pub fn paint_waiting_chat(
     frame: &mut Frame<'_>,
     messages: &[WaitingChatMessage],
@@ -1648,20 +1681,31 @@ pub fn paint_waiting_chat(
 ) {
     let (list_x, list_y) = waiting_chat_list_origin(frame, placements);
     for (offset, message) in waiting_chat_visible_messages(messages).iter().enumerate() {
-        let step = i32::try_from(offset).unwrap_or(i32::MAX);
-        let y = list_y.saturating_add(step.saturating_mul(WAITING_ROW_H));
-        paint_room_detail_line(
+        draw_text(
             frame,
             list_x,
-            y,
+            waiting_chat_row_y(list_y, offset),
             &waiting_chat_row_text(message),
-            waiting_chat_ink(message.admin),
+            chat_amber_ink(),
         );
     }
+    let (edit_x, edit_y) = waiting_chat_edit_origin(frame, placements);
+    let caret_x =
+        edit_x + WAITING_CHAT_CARET_INSET.0 + i32::try_from(text_width(input)).unwrap_or(i32::MAX);
+    let caret_y = edit_y + WAITING_CHAT_CARET_INSET.1;
     if !input.is_empty() {
-        let (edit_x, edit_y) = waiting_chat_edit_origin(frame, placements);
-        paint_room_detail_line(frame, edit_x, edit_y, input, art_title_ink());
+        draw_text(frame, edit_x, edit_y, input, art_title_ink());
     }
+    fill_rect(
+        frame,
+        &Rect {
+            x: caret_x,
+            y: caret_y,
+            w: WAITING_CHAT_CARET_SIZE.0,
+            h: WAITING_CHAT_CARET_SIZE.1,
+        },
+        art_title_ink(),
+    );
 }
 
 /// Dark strip behind one seat row so seat ink stays readable over
@@ -5576,9 +5620,22 @@ mod paint_tests {
     }
 
     #[test]
-    fn waiting_chat_row_text_names_sender_and_text() {
+    fn waiting_chat_row_text_brackets_the_sender_field() {
+        // Reference row shape (`reference-waiting-4x3.png`):
+        // `[        Lujia] YOOO!!!` — the nickname right-aligned in a
+        // 13-wide bracket field, text after the bracket.
         let row = WaitingChatMessage::user("host", "hello");
-        assert_eq!(waiting_chat_row_text(&row), "host: hello");
+        assert_eq!(waiting_chat_row_text(&row), "[         host] hello");
+    }
+
+    #[test]
+    fn waiting_chat_rows_stack_at_the_reference_pitch() {
+        // Reference rows sit 17 native px apart (rows at y 455.4,
+        // 472.5, 489.8 in `reference-waiting-4x3.png`); six 17 px
+        // slots fill the 98 px `LIST` rect exactly.
+        assert_eq!(waiting_chat_row_y(455, 0), 455);
+        assert_eq!(waiting_chat_row_y(455, 1), 472);
+        assert_eq!(waiting_chat_row_y(455, WAITING_CHAT_VISIBLE_ROWS - 1), 540);
     }
 
     #[test]
@@ -5588,7 +5645,11 @@ mod paint_tests {
     }
 
     #[test]
-    fn waiting_chat_paints_nothing_without_live_rows() {
+    fn waiting_chat_without_live_rows_paints_only_the_caret() {
+        // No packets → no history (the no-invention pin); the input
+        // line still shows its focus caret (`reference-waiting-4x3.png`
+        // shows exactly this state: empty history-less rows, caret in
+        // the edit rect) — a 2x10 white bar inset (5,5) of rect 19.
         let placements = vec![
             waiting_probe("IDC_LIST_SWAIT_CHAT", None, (24, 455, 511, 553)),
             waiting_probe("IDC_EDIT_SWAIT_CHAT", None, (20, 563, 460, 583)),
@@ -5604,11 +5665,26 @@ mod paint_tests {
             "",
             &placements,
         );
-        assert!(buf.iter().all(|pixel| *pixel == 0));
+        let lit: Vec<usize> = buf
+            .iter()
+            .enumerate()
+            .filter(|(_, pixel)| **pixel != 0)
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(lit.len(), 20, "only the 2x10 caret may light");
+        for index in lit {
+            assert_eq!(buf[index], art_title_ink());
+            let (x, y) = (index % 800, index / 800);
+            assert!((25..=26).contains(&x), "caret x {x}");
+            assert!((568..=577).contains(&y), "caret y {y}");
+        }
     }
 
     #[test]
-    fn waiting_chat_paints_user_rows_at_the_list_rect() {
+    fn waiting_chat_paints_user_rows_in_amber_at_the_list_rect() {
+        // Reference rows are warm-gold ink (known-white ink in the
+        // same photo calibrates neutral) and paint straight on the
+        // box art — no per-row scrim band.
         let placements = vec![waiting_probe(
             "IDC_LIST_SWAIT_CHAT",
             None,
@@ -5626,8 +5702,17 @@ mod paint_tests {
             "",
             &placements,
         );
-        assert_eq!(buf[453 * 800 + 20], scrim_color());
-        assert!(has_ink_near(&buf, art_title_ink()));
+        assert_eq!(buf[453 * 800 + 20], 0, "no scrim band over the row");
+        assert!(has_ink_near(&buf, chat_amber_ink()));
+        // White belongs only to the input caret (below the list),
+        // never to a chat row: the reference rows are all warm.
+        let row_band = &buf[440 * 800..555 * 800];
+        assert!(
+            !row_band
+                .iter()
+                .any(|pixel| near_xrgb(*pixel, art_title_ink())),
+            "no white row ink"
+        );
     }
 
     #[test]
@@ -5649,8 +5734,8 @@ mod paint_tests {
             "",
             &placements,
         );
-        assert_eq!(buf[453 * 800 + 20], scrim_color());
-        assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xD0, 0x20)));
+        assert_eq!(buf[453 * 800 + 20], 0, "no scrim band over the row");
+        assert!(has_ink_near(&buf, chat_amber_ink()));
     }
 
     #[test]
@@ -5678,11 +5763,40 @@ mod paint_tests {
             "",
             &placements,
         );
-        assert!(buf.contains(&scrim_color()));
+        assert!(buf.contains(&chat_amber_ink()));
+        assert!(!buf.contains(&scrim_color()), "no scrim bands");
     }
 
     #[test]
-    fn waiting_chat_paints_the_input_line_at_the_edit_rect() {
+    fn waiting_chat_paints_the_draft_at_the_edit_rect_with_the_caret_after_it() {
+        let placements = vec![waiting_probe(
+            "IDC_EDIT_SWAIT_CHAT",
+            None,
+            (20, 563, 460, 583),
+        )];
+        let input = "go";
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_chat(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &[],
+            input,
+            &placements,
+        );
+        assert_eq!(buf[561 * 800 + 16], 0, "no scrim band over the draft");
+        assert!(has_ink_near(&buf, art_title_ink()));
+        // The caret rides the insertion point: inset (5,5) plus the
+        // typed width (empty-input case: `reference-waiting-4x3.png`).
+        let caret_x = 20 + 5 + text_width(input) as i32;
+        assert_eq!(buf[568 * 800 + caret_x as usize], art_title_ink());
+        assert_eq!(buf[577 * 800 + (caret_x + 1) as usize], art_title_ink());
+    }
+
+    #[test]
+    fn waiting_chat_paints_the_caret_on_an_empty_input() {
         let placements = vec![waiting_probe(
             "IDC_EDIT_SWAIT_CHAT",
             None,
@@ -5696,11 +5810,11 @@ mod paint_tests {
                 h: 600,
             },
             &[],
-            "go",
+            "",
             &placements,
         );
-        assert_eq!(buf[561 * 800 + 16], scrim_color());
-        assert!(has_ink_near(&buf, art_title_ink()));
+        assert_eq!(buf[568 * 800 + 25], art_title_ink());
+        assert_eq!(buf[577 * 800 + 26], art_title_ink());
     }
 
     #[test]
@@ -5717,8 +5831,10 @@ mod paint_tests {
             "go",
             &[],
         );
-        assert_eq!(buf[453 * 800 + 20], scrim_color());
-        assert_eq!(buf[561 * 800 + 16], scrim_color());
+        assert_eq!(buf[453 * 800 + 20], 0, "no scrim over the row");
+        assert_eq!(buf[561 * 800 + 16], 0, "no scrim over the draft");
+        assert!(has_ink_near(&buf, chat_amber_ink()));
+        assert!(has_ink_near(&buf, art_title_ink()));
     }
 
     #[test]

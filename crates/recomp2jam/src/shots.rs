@@ -753,22 +753,23 @@ fn stage_waiting_captions(game: &mut ScreenGame) {
 }
 
 /// Deliver the scripted chat fixture through the live 3012/3013
-/// push path (same honesty as the scripted rank bytes): one user
-/// row plus one admin row, so the waiting shot's history box shows
-/// live rows with sender, text, and admin ink. Staged after the
+/// push path (same honesty as the scripted rank bytes): one admin
+/// row plus one user row, in the reference stacking (admin notice on
+/// top, the peer's user row last), so the waiting shot's history box
+/// reads like `reference-waiting-4x3.png` rows 2–3. Staged after the
 /// room join — `set_joined_room` clears the history — so earlier
 /// shots stay untouched; never fails. Texts are ASCII stand-ins
 /// (documented gap: no CP949 glyphs, no live server).
 fn stage_waiting_chat(game: &mut ScreenGame) {
-    game.push_waiting_user_message(&WaitingUserMessage {
-        sender: SCRIPTED_CHAT_USER_SENDER.to_owned(),
-        content: SCRIPTED_CHAT_USER_TEXT.as_bytes().to_vec(),
-        member_id: SCRIPTED_CHAT_USER_SEAT,
-    });
     game.push_waiting_admin_message(&WaitingAdminMessage {
         sender: SCRIPTED_CHAT_ADMIN_SENDER.to_owned(),
         content: SCRIPTED_CHAT_ADMIN_TEXT.as_bytes().to_vec(),
         member_id: SCRIPTED_CHAT_ADMIN_SEAT,
+    });
+    game.push_waiting_user_message(&WaitingUserMessage {
+        sender: SCRIPTED_CHAT_USER_SENDER.to_owned(),
+        content: SCRIPTED_CHAT_USER_TEXT.as_bytes().to_vec(),
+        member_id: SCRIPTED_CHAT_USER_SEAT,
     });
 }
 
@@ -2091,19 +2092,20 @@ mod tests {
     }
 
     #[test]
-    fn scripted_chat_fixture_delivers_user_then_admin_rows() {
+    fn scripted_chat_fixture_delivers_admin_then_user_rows() {
         // The 3012/3013 push path converts the scripted wire structs
-        // into display rows: the peer's user text first, then the
-        // administrator row with its flag — sender, text, and admin
-        // all pinned, in walk order.
+        // into display rows in walk order: the administrator row first,
+        // then the peer's user row — the reference stacking (admin
+        // notice on top, the user's chat last) at
+        // `reference-waiting-4x3.png` rows 2–3.
         let rows = seeded_game().waiting_chat().to_vec();
         assert_eq!(rows.len(), 2, "the fixture must deliver two rows");
-        assert_eq!(rows[0].sender, SCRIPTED_CHAT_USER_SENDER);
-        assert_eq!(rows[0].text, SCRIPTED_CHAT_USER_TEXT);
-        assert!(!rows[0].admin, "the 3012 row must not flag admin");
-        assert_eq!(rows[1].sender, SCRIPTED_CHAT_ADMIN_SENDER);
-        assert_eq!(rows[1].text, SCRIPTED_CHAT_ADMIN_TEXT);
-        assert!(rows[1].admin, "the 3013 row must flag admin");
+        assert_eq!(rows[0].sender, SCRIPTED_CHAT_ADMIN_SENDER);
+        assert_eq!(rows[0].text, SCRIPTED_CHAT_ADMIN_TEXT);
+        assert!(rows[0].admin, "the 3013 row must flag admin");
+        assert_eq!(rows[1].sender, SCRIPTED_CHAT_USER_SENDER);
+        assert_eq!(rows[1].text, SCRIPTED_CHAT_USER_TEXT);
+        assert!(!rows[1].admin, "the 3012 row must not flag admin");
     }
 
     #[test]
@@ -2146,11 +2148,11 @@ mod tests {
         let rows = staged.waiting_chat();
         assert_eq!(
             waiting_chat_row_text(&rows[0]),
-            format!("{SCRIPTED_CHAT_USER_SENDER}: {SCRIPTED_CHAT_USER_TEXT}")
+            format!("[ADMIN] {SCRIPTED_CHAT_ADMIN_SENDER}: {SCRIPTED_CHAT_ADMIN_TEXT}")
         );
         assert_eq!(
             waiting_chat_row_text(&rows[1]),
-            format!("[ADMIN] {SCRIPTED_CHAT_ADMIN_SENDER}: {SCRIPTED_CHAT_ADMIN_TEXT}")
+            format!("[{SCRIPTED_CHAT_USER_SENDER:>13}] {SCRIPTED_CHAT_USER_TEXT}")
         );
     }
 

@@ -117,7 +117,7 @@ scenario, so structure, not pixels, is compared):
 | Shot vs photo | Region verdicts |
 |---|---|
 | `playing.png` vs `reference-4x3.png` | HOLD, byte-identical to the e9fd95f bytes (no pipeline drift). Highway panel (59.5 vs 78.7), edge gauges (40.8 vs 64.9), avatar scene (67.6 vs 41.5), bottom strip (75.3 vs 54.0) — every band carries staged ink on both sides. Residuals unchanged: stage-5 studio stands for the unshipped rooftop, `Note_BG` red panel at (570,458)–(774,478) with no exe cover, blue-metallic strip vs the photo's dark strip, BO/EA05 labels unpainted |
-| `waiting.png` vs `reference-waiting-4x3.png` | REFRESHED 2026-11-07 (scripted 3012/3013 chat fixture — see below). Top panel (59.6 vs 65.6), seat grid (55.5 vs 53.0), right column (59.4 vs 61.4) unchanged; bottom chat band now carries two live rows (`Lujia: YOOO!!!` + `[ADMIN] Admin: Welcome` at the list origin, 1104 differing bytes over shot rows 226–234). Caption refresh 2026-11-07 (see below): only `waiting.png` changed again — 682 px confined to the six caption rects (MUSICNAME/MAPNAME/BPM/3×SKILLCOUNT), every other shot byte-identical, no pipeline drift. Residuals: invented 2-col x 4-row seat grid, no team buttons/covers (the song dialog lives in `musicselect.png` below); chat texts are ASCII stand-ins, no paging/scroll |
+| `waiting.png` vs `reference-waiting-4x3.png` | REFRESHED 2026-11-07 (scripted 3012/3013 chat fixture — see below). Top panel (59.6 vs 65.6), seat grid (55.5 vs 53.0), right column (59.4 vs 61.4) unchanged; bottom chat band carries two live rows plus the input caret (bracket-form amber rows at the photo-pinned 17 px pitch — see the 2026-11-08 chat-box verify below). Caption refresh 2026-11-07 (see below): only `waiting.png` changed again — 682 px confined to the six caption rects (MUSICNAME/MAPNAME/BPM/3×SKILLCOUNT), every other shot byte-identical, no pipeline drift. Residuals: invented 2-col x 4-row seat grid, no team buttons/covers (the song dialog lives in `musicselect.png` below); chat texts are ASCII stand-ins, no paging/scroll |
 | `result.png` vs `reference-result-4x3.png` | REFRESHED (was stale). Score dome (48.6 vs 50.7), verdict banner (46.5 vs 48.7), rank table (85.3 vs 48.5), footer (59.1 vs 51.2). The checked-in PNG predated the rank-row wiring (`04e2462`) — its row band was empty; the re-shoot carries row 0 (`YOU`, `1/0/0/0`, `200`) at the pinned columns, guarded by `result_shot_paints_the_rank_table_row` (proven to fail on wrong text). Scenario deltas vs the photo stay: GOOD! solo arm vs LOSE, one local row vs two wire rows, P plate vs C |
 | `musicselect.png` vs `reference-musicselect-4x3.png` | NEW (was UNCOVERED — no shot mapped to it). The walk now repaints Waiting through the host song flow (installed 7.55 562-song catalog, pick id 757 Hard X3.5; 4-song synthetic fallback without game data) under genuine `DAILOG_SELECTMUSIC` art, and the staged structure paints over it: filter columns (75.0 vs 183.4), search table (61.3 vs 83.2), status + search row (76.4 vs 114.7), chosung + OK (84.3 vs 128.1) — staged ink in every band on both sides. Still FAIL: per-chart level and grade cells draw the unknown dash (never staged), the 다운/듣기/정보 icon cells stay blank (no staged art), chosung hangul + word cells stay blank (no CP949 glyphs), the dialog bind pairing is unproven (the every-bound-entry proof covers Playing + Room only), and pager/search/chosung are display-only. Guarded by `musicselect_shot_repaints_waiting_with_song_panel`, `musicselect_fallback_catalog_lists_four_synthetic_songs`, `musicselect_dialog_structure_paints_search_tab_over_waiting` |
 | `channel.png` | REFRESHED (was stale). Re-shot 2026-11-07 after the no-fill pin: the staged full-canvas bar is gone (audit 15 — rect is one panel, never the canvas), the shot now stages the empty scene, and the frame reads as art-less black + scrim + list + `CHANNEL` stamp + cursor (corner `(0,0)` untouched, navy count 0, 2170 inked px of 120000). No reference photo covers it; list rows stay at invented `h/4 + i*8` (audit 10–11), no bar body (host unpinned) |
@@ -127,6 +127,32 @@ Chat refresh 2026-11-07: only `waiting.png` changed (1104 bytes
 of two chat rows at the list origin); every other shot byte-identical
 — no pipeline drift. Earlier deltas stand: `musicselect.png` is new;
 the rank-row refresh added 129 pixels of row-0 ink.
+
+Chat-box verify 2026-11-08 (chat band vs
+`reference-waiting-4x3.png`, photo pixels pinned per item; failing
+tests first, then the shared painter): re-shot `waiting.png` (chat
+band rows 225–250 + caret block) and `musicselect.png` (the same
+input strip's caret, 10 px). `playing.png`/`playing-native.png`
+regen diffs reproduce at HEAD with this change stashed — pre-
+existing drift (committed bytes predate a HEAD jam-effect change),
+not from this work. Per-item:
+
+| Item | Verdict |
+|---|---|
+| Composition (sender/text rows at the list origin) | FIXED — user rows bracket the nickname right-aligned in a 13-wide field (`[{sender:>13}] text`), the photo's `[        Lujia] YOOO!!!` shape (was `sender: text`); rows paint bare on the box art, per-row scrim bands removed. Residuals: field width pinned by the one photo row (2-byte-name padding OPEN); `[ADMIN]` prefix stays a stand-in (the photo's admin notice shows no sender); the photo's `/r` command echo has no shell source |
+| Ink colors | FIXED — user rows amber (photo user row reads warm while known-white ink in the same photo calibrates neutral; was white); admin stays amber. Residuals: distinct user-vs-admin hues unverifiable in the lossy photo; caret white per photo |
+| Row stacking | FIXED — pitch 17 native px (photo row tops 455.4/472.5/489.8; was the lobby 8 px), 6 visible slots fill the 98 px `LIST` rect exactly (was 12); fixture reordered admin→user so the peer's row sits last, matching photo rows 2–3. Chronological top-down confirmed both sides |
+| Draft line | FIXED — focus caret now paints: 2×10 white bar inset (5,5) of `EDIT_SWAIT_CHAT` rect 19, riding the typed width (photo shows the caret on an empty input; we painted nothing). Residuals: draft-text origin unevidenced (photo input is empty); `game.rs`'s "empty histories paint nothing" sentence predates the caret (out-of-scope file — follow-up) |
+
+Guards: `waiting_chat_row_text_brackets_the_sender_field`,
+`waiting_chat_rows_stack_at_the_reference_pitch`,
+`waiting_chat_paints_user_rows_in_amber_at_the_list_rect`,
+`waiting_chat_without_live_rows_paints_only_the_caret`,
+`waiting_chat_paints_the_caret_on_an_empty_input`,
+`scripted_chat_fixture_delivers_admin_then_user_rows`
+(renamed), `waiting_shot_paints_the_scripted_chat_rows` — all
+proven red before the fix (compile-red for the new painter API,
+order-red for the fixture swap).
 
 Caption refresh 2026-11-07: the waiting walk now stages the song
 catalog plus inventory before the shot (room song 757, counts
@@ -155,7 +181,7 @@ restricted luminance std (shot vs photo — structure, not pixels):
 | Top panel (title/Ch/Wins bar) | 51.2 | 56.7 | HOLD — staged art + title/song/wins ink on both; shot room is the `Jam` duo (no Ch/No/MX3 line, song caption now resolves the staged catalog title for 757 instead of bare `M0`) — scenario delta |
 | Seat grid (covers, champion row) | 45.0 | 47.7 | HOLD — staged covers + seat text on both; shot names no CHAMPION/CHALLENGER roles (joined room carries no champion) and centers portrait text blind (audit 18–19); seats still on staged cover rects, team grid highlight only |
 | Right column (TEAM/SKILL/SPEED) | 43.1 | 49.7 | REFRESHED — staged panel + button/speed ink on both; BPM now inks the catalog column of song 757 (was `-0-`) and the three SKILLCOUNT rects ink the staged inventory (`  7`/` 42`/`999`-capped); team highlight is the live amber cursor over the staged `Wait_Team?.ojs`, no covers; skills paint ids only, counts ride the staged inventory (no wire field) |
-| Bottom chat/song (chat, arrow, Random, BACK) | 60.1 | 57.8 | REFRESHED — the history box now stages two scripted 3012/3013 rows (`Lujia: YOOO!!!` white + `[ADMIN] Admin: Welcome` amber at the list origin, labeled fixture like the rank bytes); Random cards and BACK stay staged art (no card/nav state rides the snapshot). MAPNAME now inks the map-cycle entry of room word 5 at its `.bnd` rect (was bare). Guarded by `scripted_chat_fixture_delivers_user_then_admin_rows`, `waiting_walk_without_staged_chat_holds_no_history`, `waiting_shot_paints_the_scripted_chat_rows`, `waiting_shot_paints_mapname_bpm_skillcount_captions` |
+| Bottom chat/song (chat, arrow, Random, BACK) | 60.1 | 57.8 | REFRESHED — the history box stages two scripted 3012/3013 rows in the photo stacking (amber bracket-form rows at the 17 px pitch, admin notice on top, `Lujia`'s user row last) plus the input-strip caret (2026-11-08 chat-box verify below); Random cards and BACK stay staged art (no card/nav state rides the snapshot). MAPNAME now inks the map-cycle entry of room word 5 at its `.bnd` rect (was bare). Guarded by `scripted_chat_fixture_delivers_admin_then_user_rows`, `waiting_walk_without_staged_chat_holds_no_history`, `waiting_shot_paints_the_scripted_chat_rows`, `waiting_shot_paints_mapname_bpm_skillcount_captions` |
 
 Composition stays FAIL (invented placement where noted above; no team-button bodies or covers staged).
 
@@ -172,11 +198,14 @@ Dialog stays FAIL (blank level/grade/icon/chosung cells, unproven bind pairing, 
 
 ## Scoreboard
 
-Verify pass 2026-11-07 (amended post no-fill, plus chat refresh,
-plus caption refresh):
-2 HOLD (playing + room/loading byte-identical), 3 REFRESHED
+Verify pass 2026-11-08 (chat-box verify on top of the
+2026-11-07 passes: post no-fill, chat refresh, caption refresh):
+2 HOLD (playing + room/loading byte-identical at their last
+verified pass; the 2026-11-08 regen carries pre-existing
+`playing.png` drift — see the chat-box verify note), 4 REFRESHED
 (result rank rows; channel art-less re-shoot; waiting scripted
-chat rows + staged MAPNAME/BPM/SKILLCOUNT captions), 1 NEW (musicselect song dialog). Detail in "Reference-photo verify
+chat rows + staged captions; waiting chat band re-verified and
+corrected), 1 NEW (musicselect song dialog). Detail in "Reference-photo verify
 pass" above.
 
 - Scenes covered: 7 main + musicselect dialog + loading gate + 9 side states.

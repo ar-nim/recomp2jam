@@ -2372,3 +2372,48 @@ straggler wiring, `codec-coverage.md` notes).
   shell 489 → 499 from the oji-straggler/oja55-frame tests, all other
   targets unchanged, 0 failures). No lint findings. No commits, no
   pushes.** This sweep touched only `docs/playtest.md`.
+
+## Regression sweep — 2026-11-08 07:23 UTC+8 (HEAD `69d3bf1`, tree clean)
+
+Live re-proof on the chatrows-head. Covers the two feat commits landed
+after the oja-head baseline `887de12`: stage oja effects tap jam holds
+(`e72d7ae`) and decode jam oja tail frames (`69d3bf1`).
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1382 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 7, file 177, game 92, net 360,
+  render 89, shell 507, real_art 7, scenes 22, recomp2jam 102
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, 0 warning
+  lines (touched-`main.rs` rebuild check; mtime only, no content
+  change; tree still clean after).
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.61 s; run twice, both ok) against local
+  Memoryer 7.2.0 (`Mode=Full`). Server log for the second run
+  (`07:22:49 +08:00`, session `127.0.0.1:33844`):
+  `Authorize session` → `Get channel list: [0]` →
+  `Enter channel: [0/00]` → `Get character info: [tester]` →
+  `Create room: songflow` →
+  `Update room [000] music settings: [HX / X10 / o2ma757]` →
+  `Update room [000] arena: [1] (0)` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Update #1 - Jam: 3 (Bonus: 0)` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  `ScoreTracker::OnGameCompleted` broadcast WARNs on room delete; a
+  second session `127.0.0.1:33846` walked `Authorize session` →
+  `Get channel list: [0]` → `Enter channel: [0/00]` →
+  `Get room list: [0/00]` → `Get character info: [tester]`).
+- **Verdict: no regression — suite is green on the chatrows-head
+  (1382 passed; +11 vs the 1371 oja-head baseline: shell 499 → 507
+  from the oja-effects-hold tests (`e72d7ae`), file 174 → 177 from
+  the jam-oja-tail tests (`69d3bf1`), all other targets unchanged,
+  0 failures). No lint findings. No commits, no pushes.** This sweep
+  touched only `docs/playtest.md`.
