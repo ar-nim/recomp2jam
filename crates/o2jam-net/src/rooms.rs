@@ -6,6 +6,8 @@
 //! [`from_code`](RoomState::from_code)-style converters so unknown
 //! values never break decoding.
 
+use std::borrow::Cow;
+
 use super::error::Error;
 use super::frame::encode_frame;
 use super::message::WireMessage;
@@ -859,6 +861,210 @@ impl WireMessage for JoinRoomResponse {
     }
 }
 
+/// `SendWaitingMessage` 3011 request: raw chat bytes fill the whole
+/// body — no length prefix, no terminator, and an empty body sends an
+/// empty line. Memoryer (`Messages/Requests/Messaging/
+/// `SendWaitingMessageRequest.cs`) carries one
+/// `CollectionMessageField(order: 0)` byte array; Encore 1.0.0
+/// `DefaultMessageCodec` encodes `abc` as body `61 62 63` and an empty
+/// array as the bare opcode (`C3 0B` + no body), both round-tripping
+/// through its decoder. The exe stages five send sites that push opcode
+/// 3011 with a zero word then send indirectly (files `0xb9385`,
+/// `0xb95b4`, `0xb9742`, `0xe1aa6`, `0xe1ff7`,
+/// `ev_130b4726ca4f7075f8526a05fda5d876`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SendWaitingMessage {
+    /// Chat text bytes (client encoding; opaque on the wire).
+    pub content: Vec<u8>,
+}
+
+impl SendWaitingMessage {
+    /// Chat text as UTF-8 with invalid sequences replaced.
+    #[must_use]
+    pub fn content_text(&self) -> Cow<'_, str> {
+        String::from_utf8_lossy(&self.content)
+    }
+}
+
+impl WireMessage for SendWaitingMessage {
+    const COMMAND: u16 = 3011;
+
+    fn encode_body(&self) -> Vec<u8> {
+        self.content.clone()
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        Ok(Self {
+            content: body.to_vec(),
+        })
+    }
+}
+
+/// One waiting-room chat line: null-terminated sender, raw content
+/// bytes, trailing seat id. The content length rides out-of-band
+/// (`body.len - sender_used - 1`); the sender terminator delimits the
+/// front and the fixed seat byte anchors the end.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WaitingChatLine {
+    /// Chatter nickname (UTF-8, null-terminated on the wire).
+    pub sender: String,
+    /// Chat text bytes (client encoding; opaque on the wire).
+    pub content: Vec<u8>,
+    /// Sender seat index (matches `MessagingController`, which fills it
+    /// from the room slot list).
+    pub member_id: u8,
+}
+
+impl WaitingChatLine {
+    /// Chat text as UTF-8 with invalid sequences replaced.
+    #[must_use]
+    pub fn content_text(&self) -> Cow<'_, str> {
+        String::from_utf8_lossy(&self.content)
+    }
+}
+
+fn encode_chat_line(line: &WaitingChatLine) -> Vec<u8> {
+    let mut body = encode_null_terminated(&line.sender, MAX_STRING_LEN);
+    body.extend_from_slice(&line.content);
+    body.push(line.member_id);
+    body
+}
+
+fn decode_chat_line_body(body: &[u8]) -> Result<WaitingChatLine, Error> {
+    let (sender, used) = decode_null_terminated(body, MAX_STRING_LEN)?;
+    let tail = body.get(used..).ok_or(Error::TruncatedMessage {
+        need: used.saturating_add(1),
+        have: body.len(),
+    })?;
+    if tail.is_empty() {
+        return Err(Error::TruncatedMessage {
+            need: used.saturating_add(1),
+            have: body.len(),
+        });
+    }
+    let member_id = tail[tail.len() - 1];
+    Ok(WaitingChatLine {
+        sender,
+        content: tail[..tail.len() - 1].to_vec(),
+        member_id,
+    })
+}
+
+/// `WaitingUserMessage` 3012 response: a chat line from a player.
+/// Memoryer (`Messages/Responses/Messaging/
+/// `WaitingUserMessageResponse.cs`): string sender (order 0), byte-array
+/// content (order 1), byte seat id (order 2). Encore 1.0.0 encodes
+/// (`ab`, `abc`, seat 5) as body `61 62 00 61 62 63 05` and
+/// (`""`, empty, seat 0) as `00 00`; its own decoder throws on these
+/// vectors (middle-collection plus trailing field), so the encode side
+/// is the verified contract and this decoder inverts it. Exe receive
+/// cluster: ten sites push 3012 beside the ControlList parent global
+/// `0x762B44` from file `0x15e601`
+/// (`ev_aba36a3aa42dfa2b7bde94cae4e28a45`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WaitingUserMessage {
+    /// Chatter nickname.
+    pub sender: String,
+    /// Chat text bytes.
+    pub content: Vec<u8>,
+    /// Sender seat index.
+    pub member_id: u8,
+}
+
+impl WaitingUserMessage {
+    /// Chat text as UTF-8 with invalid sequences replaced.
+    #[must_use]
+    pub fn content_text(&self) -> Cow<'_, str> {
+        String::from_utf8_lossy(&self.content)
+    }
+
+    fn line(&self) -> WaitingChatLine {
+        WaitingChatLine {
+            sender: self.sender.clone(),
+            content: self.content.clone(),
+            member_id: self.member_id,
+        }
+    }
+
+    fn from_line(line: WaitingChatLine) -> Self {
+        Self {
+            sender: line.sender,
+            content: line.content,
+            member_id: line.member_id,
+        }
+    }
+}
+
+impl WireMessage for WaitingUserMessage {
+    const COMMAND: u16 = 3012;
+
+    fn encode_body(&self) -> Vec<u8> {
+        encode_chat_line(&self.line())
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        decode_chat_line_body(body).map(Self::from_line)
+    }
+}
+
+/// `WaitingAdminMessage` 3013 response: a chat line from an
+/// administrator. Same layout as 3012 (`Messages/Responses/Messaging/
+/// `WaitingAdminMessageResponse.cs`); Encore 1.0.0 encodes (`ab`,
+/// `a`, seat 7) as body `61 62 00 61 07`. Exe receive cluster: three
+/// sites push 3013 beside the ControlList parent global `0x762B44`
+/// from file `0x15f051`
+/// (`ev_aba36a3aa42dfa2b7bde94cae4e28a45`). The waiting chat view
+/// (`EDIT_SWAIT_CHAT 0x16300014`, one ref at file `0xbaf1a`;
+/// `LIST_SWAIT_CHAT 0x1680002B`, five refs from file `0xb8e11`;
+/// `ev_f8422c8a059247042312e3d7224dbdff`) stages art, but the row
+/// template `TEXT_SWAIT_CHAT 0x1640003C` has zero immediate refs — the
+/// exact row-feed call stays OPEN.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WaitingAdminMessage {
+    /// Chatter nickname.
+    pub sender: String,
+    /// Chat text bytes.
+    pub content: Vec<u8>,
+    /// Sender seat index.
+    pub member_id: u8,
+}
+
+impl WaitingAdminMessage {
+    /// Chat text as UTF-8 with invalid sequences replaced.
+    #[must_use]
+    pub fn content_text(&self) -> Cow<'_, str> {
+        String::from_utf8_lossy(&self.content)
+    }
+
+    fn line(&self) -> WaitingChatLine {
+        WaitingChatLine {
+            sender: self.sender.clone(),
+            content: self.content.clone(),
+            member_id: self.member_id,
+        }
+    }
+
+    fn from_line(line: WaitingChatLine) -> Self {
+        Self {
+            sender: line.sender,
+            content: line.content,
+            member_id: line.member_id,
+        }
+    }
+}
+
+impl WireMessage for WaitingAdminMessage {
+    const COMMAND: u16 = 3013;
+
+    fn encode_body(&self) -> Vec<u8> {
+        encode_chat_line(&self.line())
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        decode_chat_line_body(body).map(Self::from_line)
+    }
+}
+
 #[cfg(test)]
 mod room_list_tests {
     use super::*;
@@ -1199,5 +1405,96 @@ mod room_list_tests {
                 reason: "not 0 or 1"
             })
         );
+    }
+}
+
+#[cfg(test)]
+mod waiting_chat_tests {
+    use super::*;
+    use crate::frame::decode_frame;
+
+    #[test]
+    fn send_carries_raw_bytes_verbatim() {
+        // Encore vector: `C7 D1 B1 DB` encodes bare (opcode `C3 0B` + body).
+        let message = SendWaitingMessage {
+            content: vec![0xC7, 0xD1, 0xB1, 0xDB],
+        };
+        assert_eq!(message.encode_body(), vec![0xC7, 0xD1, 0xB1, 0xDB]);
+        let frame = decode_frame(&message.encode()).unwrap();
+        assert_eq!(frame.id, 3011);
+        assert_eq!(SendWaitingMessage::decode_frame(&frame), Ok(message));
+    }
+
+    #[test]
+    fn send_empty_body_is_an_empty_line() {
+        let message = SendWaitingMessage {
+            content: Vec::new(),
+        };
+        assert_eq!(message.encode(), vec![0x04, 0x00, 0xC3, 0x0B]);
+        assert_eq!(SendWaitingMessage::decode_body(&[]), Ok(message));
+    }
+
+    #[test]
+    fn user_message_matches_encore_vector() {
+        // Encore vector: (`ab`, `abc`, seat 5) -> body below.
+        let message = WaitingUserMessage {
+            sender: "ab".to_owned(),
+            content: vec![0x61, 0x62, 0x63],
+            member_id: 5,
+        };
+        assert_eq!(
+            message.encode_body(),
+            vec![0x61, 0x62, 0x00, 0x61, 0x62, 0x63, 0x05]
+        );
+        let frame = decode_frame(&message.encode()).unwrap();
+        assert_eq!(frame.id, 3012);
+        assert_eq!(WaitingUserMessage::decode_frame(&frame), Ok(message));
+    }
+
+    #[test]
+    fn admin_message_matches_encore_vector() {
+        // Encore vector: (`ab`, `a`, seat 7) -> body below.
+        let message = WaitingAdminMessage {
+            sender: "ab".to_owned(),
+            content: vec![0x61],
+            member_id: 7,
+        };
+        assert_eq!(message.encode_body(), vec![0x61, 0x62, 0x00, 0x61, 0x07]);
+        let frame = decode_frame(&message.encode()).unwrap();
+        assert_eq!(frame.id, 3013);
+        assert_eq!(WaitingAdminMessage::decode_frame(&frame), Ok(message));
+    }
+
+    #[test]
+    fn empty_line_decodes_sender_plus_seat() {
+        // Encore vector: empty user message -> body `00 00`.
+        let message = WaitingUserMessage::decode_body(&[0x00, 0x00]).unwrap();
+        assert_eq!(message.sender, String::new());
+        assert!(message.content.is_empty());
+        assert_eq!(message.member_id, 0);
+    }
+
+    #[test]
+    fn rejects_line_without_seat_byte() {
+        assert_eq!(
+            WaitingUserMessage::decode_body(&[0x61, 0x62, 0x00]),
+            Err(Error::TruncatedMessage { need: 4, have: 3 })
+        );
+    }
+
+    #[test]
+    fn rejects_line_without_sender_terminator() {
+        assert_eq!(
+            WaitingAdminMessage::decode_body(&[0x61, 0x62, 0x05]),
+            Err(Error::TruncatedMessage { need: 4, have: 3 })
+        );
+    }
+
+    #[test]
+    fn content_text_replaces_invalid_utf8() {
+        let message = SendWaitingMessage {
+            content: vec![0xC7, 0xD1],
+        };
+        assert_eq!(message.content_text(), "\u{FFFD}\u{FFFD}");
     }
 }
