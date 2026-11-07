@@ -43,9 +43,12 @@ pub struct Shot {
 
 /// Capture avi, channel, room, waiting, musicselect, loading,
 /// playing, playing-native, result, result-native, result-solo,
-/// result-solo-native. The waiting shot carries the scripted
-/// 3012/3013 chat fixture (one user row plus one admin row, so the
-/// history box shows live rows). The native
+/// result-solo-native. The waiting shot carries the staged song
+/// catalog plus inventory (so MAPNAME/BPM/SKILLCOUNT ink their
+/// `.bnd` rects from the room word, the catalog BPM column, and
+/// the staged counts) and the scripted 3012/3013 chat fixture (one
+/// user row plus one admin row, so the history box shows live
+/// rows). The native
 /// companions re-emit the playing and result instants at the full
 /// 800x600 exe canvas so pinned details (combo font, 3x5 result
 /// digits, rank rows) stay provable instead of downscale smudges.
@@ -400,7 +403,10 @@ fn stage_empty_channel_scene(game: &mut ScreenGame) {
 /// battle scoreboard, scripted waiting chat (one 3012 user row plus
 /// one 3013 admin row, so `waiting.png` shows live rows), and a
 /// chart whose note lands at 5 s (visible in Playing, spent by
-/// Result). Genuine archive art stages underneath when `install-root`
+/// Result). The waiting captions stage here — catalog plus
+/// inventory — so the waiting shot inks MAPNAME/BPM/SKILLCOUNT
+/// while later shots keep their own staging. Genuine archive art
+/// stages underneath when `install-root`
 /// holds it; otherwise the synthetic fallback paints.
 fn seeded_game() -> ScreenGame {
     let mut game = ScreenGame::new();
@@ -410,6 +416,7 @@ fn seeded_game() -> ScreenGame {
     game.set_battle_self_team(Some(RESULT_SELF_TEAM));
     seed_chart(&mut game);
     stage_result_ranks(&mut game);
+    stage_waiting_captions(&mut game);
     stage_waiting_chat(&mut game);
     stage_real_art(&mut game);
     stage_empty_channel_scene(&mut game);
@@ -691,6 +698,25 @@ const SCRIPTED_CHAT_ADMIN_TEXT: &str = "Welcome";
 /// Scripted 3013 sender seat (fixture).
 const SCRIPTED_CHAT_ADMIN_SEAT: u8 = 0;
 
+/// Staged inventory counts behind the waiting `SKILLCOUNT`
+/// captions, one per skill slot: slot 1 shows `  7`, slot 2
+/// ` 42`, slot 3 caps at `999` (the pinned slot-2/3 clamp), so the
+/// shot exercises padding and the cap in one frame.
+const WAITING_SKILL_COUNTS: [u32; 3] = [7, 42, 1500];
+
+/// Stage the waiting caption sources: the song catalog (the `BPM`
+/// caption reads its row +20 column for the room's song, `-0-`
+/// while it names none) plus the inventory counts (the
+/// `SKILLCOUNT` source; `MAPNAME` rides the room word, already
+/// set). Staged before the waiting shot so earlier shots stay
+/// untouched; never fails. The musicselect staging below reuses
+/// the same catalog when present, and the playing staging
+/// overwrites it with its one-song blob.
+fn stage_waiting_captions(game: &mut ScreenGame) {
+    stage_select_music_catalog(game);
+    game.set_skill_counts(WAITING_SKILL_COUNTS);
+}
+
 /// Deliver the scripted chat fixture through the live 3012/3013
 /// push path (same honesty as the scripted rank bytes): one user
 /// row plus one admin row, so the waiting shot's history box shows
@@ -726,14 +752,16 @@ fn result_battle_teams() -> RoomTeams {
 /// Waiting room for the result walk: a Live duo so Result takes
 /// the battle path — self on team A beside the wire peer `Lujia`
 /// on team B, joined at the reference-matching arena stage (see
-/// [`PLAYING_ARENA_STAGE`]). The peer sits ready: the walk spends
-/// the chart straight through.
+/// [`PLAYING_ARENA_STAGE`]). The room song is the host pick (the
+/// waiting `BPM`/song captions resolve through the staged
+/// catalog; `-0-`/bare id while it names none). The peer sits
+/// ready: the walk spends the chart straight through.
 fn waiting_room() -> JoinedRoom {
     JoinedRoom {
         member_id: 0,
         team: RESULT_SELF_TEAM,
         title: "Jam".to_owned(),
-        music_id: 0,
+        music_id: PLAYING_SONG.music_id,
         arena: PLAYING_ARENA_STAGE,
         key_mode: 2,
         game_mode: GameMode::Live as u8,
@@ -1932,6 +1960,121 @@ mod tests {
             waiting_chat_row_text(&rows[1]),
             format!("[ADMIN] {SCRIPTED_CHAT_ADMIN_SENDER}: {SCRIPTED_CHAT_ADMIN_TEXT}")
         );
+    }
+
+    /// Catalog BPM behind the waiting `BPM` caption for one song
+    /// id, mirroring [`stage_select_music_catalog`]: the installed
+    /// 7.55 index when it parses to songs, else the synthetic
+    /// fallback. `None` while no staged source names the song.
+    fn staged_catalog_bpm(song_id: u32) -> Option<f32> {
+        use o2jam_shell::screens::side::select_music_songs;
+        if let Some(archive) = read_archive(MUSICSELECT_CATALOG) {
+            if let Ok(entries) = o2jam_file::parse_ojn_list(&archive) {
+                if !select_music_songs(&entries).is_empty() {
+                    return entries
+                        .iter()
+                        .filter(|entry| entry.is_song())
+                        .find(|entry| entry.song_id == song_id)
+                        .map(|entry| entry.bpm);
+                }
+            }
+        }
+        let bytes = musicselect_fallback_catalog();
+        let entries = o2jam_file::parse_ojn_list(&bytes).ok()?;
+        entries
+            .iter()
+            .find(|entry| entry.song_id == song_id)
+            .map(|entry| entry.bpm)
+    }
+
+    #[test]
+    fn waiting_shot_paints_mapname_bpm_skillcount_captions() {
+        // The staged caption sources ink their verbatim `.bnd`
+        // rects on real 7.55 art: the map-cycle entry of the room
+        // word (arena stage 5), the catalog BPM column of the room
+        // song (757), and the staged inventory counts (slot 1
+        // uncapped, slots 2-3 capped at 999). Each caption's scrim
+        // pixel plus every font pixel of its exact text must land
+        // in the waiting frame — no invented strings, no
+        // off-rect ink. `INSTNAME`/`NOTICE` stay unpainted (OPEN
+        // 1/2): no test looks for them.
+        use o2jam_shell::screens::paint::{
+            waiting_bpm_caption, waiting_map_name, waiting_skillcount_text,
+        };
+        let Some(archive) = read_archive(INTERFACE_ARCHIVE) else {
+            println!("skip: missing {INTERFACE_ARCHIVE}");
+            return;
+        };
+        let list = control_list(&archive, INTERFACE_LIST).expect("control list parses");
+        let block = scene_block(&list, WAITING_BLOCK).expect("STATE_WAITING stages");
+        let bound_file = block.bound_file.clone().expect("waiting binds a .bnd");
+        let bnd = bind_data(&archive, &bound_file).expect("waiting .bnd parses");
+        let placements = bind_scene_rects(block, &bnd);
+        let caption_origin = |id: &str| {
+            let placed = placements
+                .iter()
+                .find(|placed| placed.id == id)
+                .unwrap_or_else(|| panic!("waiting must bind {id}"));
+            assert!(
+                placed.rect.w != 0 || placed.rect.h != 0,
+                "{id} binds an empty rect"
+            );
+            let scaled = o2jam_render::scale_rect_to_frame(&placed.rect, 800, 600);
+            assert!(
+                scaled.x >= 4 && scaled.y >= 2,
+                "{id} rect ({}, {}) leaves no scrim corner",
+                scaled.x,
+                scaled.y
+            );
+            (scaled.x, scaled.y)
+        };
+        let song_id = u32::from(PLAYING_SONG.music_id);
+        let song_bpm = staged_catalog_bpm(song_id);
+        assert!(
+            song_bpm.is_some(),
+            "staged catalog must name song {song_id} for the BPM caption"
+        );
+        let captions = [
+            (
+                caption_origin("IDC_TEXT_SWAIT_MAPNAME"),
+                waiting_map_name(PLAYING_ARENA_STAGE).to_owned(),
+            ),
+            (
+                caption_origin("IDC_TEXT_SWAIT_BPM"),
+                waiting_bpm_caption(song_bpm),
+            ),
+            (
+                caption_origin("IDC_TEXT_SWAIT_1SKILLCOUNT"),
+                waiting_skillcount_text(WAITING_SKILL_COUNTS[0], false),
+            ),
+            (
+                caption_origin("IDC_TEXT_SWAIT_2SKILLCOUNT"),
+                waiting_skillcount_text(WAITING_SKILL_COUNTS[1], true),
+            ),
+            (
+                caption_origin("IDC_TEXT_SWAIT_3SKILLCOUNT"),
+                waiting_skillcount_text(WAITING_SKILL_COUNTS[2], true),
+            ),
+        ];
+        let mut game = seeded_game();
+        walk_to_waiting(&mut game);
+        assert_eq!(game.screen(), Screen::Waiting);
+        let mut actual = native_probe();
+        paint_probe(&mut actual, |frame| game.paint_at(frame, 0));
+        let scrim = o2jam_render::pack_xrgb(0x08, 0x08, 0x10);
+        let ink = o2jam_render::pack_xrgb(0xFF, 0xFF, 0xFF);
+        for ((x, y), text) in &captions {
+            assert_eq!(
+                actual[(y - 2) as usize * 800 + (x - 4) as usize],
+                scrim,
+                "caption `{text}` scrims its rect corner"
+            );
+            let mut expected = native_probe();
+            paint_probe(&mut expected, |frame| {
+                o2jam_render::draw_text(frame, *x, *y, text, ink);
+            });
+            assert_pixels_came_from_font(&actual, &expected, text);
+        }
     }
 
     #[test]

@@ -55,9 +55,26 @@ so the backdrop always shows.
   (file `0xbe0d2`) matches only when the overlay is clear.
 - Picker `0x4bb2c0`: reads the waiting-room preview control `0x1650001A`
   (`IDC_IMAGE_SWAIT_MAP` = `Wait_Map.ojs` in `State_Waiting`), returns a stage
-  value. Callers `0x4aace5` (default-if-zero on room entry: virtual call slot
-  `+0x60` at `0x4aacd1`, then store to `0x7789dc` at `0x4aacea`), `0x4b06d9`,
-  `0x4ba86f`, `0x4bb63d` (cycle: advance/change stage).
+  value. The normal path rolls a random stage (seeded `rand`, mod the
+  control count, plus one) and re-rolls past a 4-entry avoid list at VA
+  `0x649ac4` (file `0x249ac4`). Songs 654/655 bypass the roll: two
+  immediate compares on the selected-song id (files `0xbb324`/`0xbb330`)
+  store stage 4 directly and return it with the high-word flag set (file
+  `0xbb3cf`), which the room setter and the `_` resolver read as stage 4.
+  Verdict — hardcoded event-song override, not map data and not
+  stage-locked content: the two songs form one pair (adjacent
+  `OJNList.dat` rows 354/355, shared artist `presented by 거북이`,
+  Sirius/Everfree `.o2SE` labels, Christmas `Rudolph` title fragments)
+  pinned to stage 4 by id compare. Their catalog rows carry no stage
+  column (BPM 120/130, normal counts and slices, listing 1, category
+  BLUE, params `(2000, 0)` — all overlapping neighbours such as 647/658/
+  659 of the same GRADATION-45 family), so map data cannot drive the
+  choice; and stage 4 holds nothing unique (`Playing_BG4.ojs` is one of
+  37 identical-size 665164 B stills, the only animated variant is stage
+  19, OJM carries audio only). Callers `0x4aace5` (default-if-zero on room
+  entry: virtual call slot `+0x60` at `0x4aacd1`, then store to `0x7789dc`
+  at `0x4aacea`), `0x4b06d9`, `0x4ba86f`, `0x4bb63d` (cycle:
+  advance/change stage).
 - The stage change rides protocol **4002** (`0xFA2` pushed before a vtable
   slot `+0x5c` call at `0x4bb600`/`0x4bb64d`) — a server-visible room state.
 - Applier `0x4ad350(arg)` stores `arg` to `0x7789dc` (file `0x4ad413`), then
@@ -150,8 +167,9 @@ bytes `0x4e85d4`), the rest the generic path at `0x4e7fde`:
 3. Who calls the three twin appliers (`0x4e7850` and the `0x4ee8f5`/`0x4f2c73`
    clusters): addresses sit adjacently in `.rdata` at `0x64ae48`–`0x64ae50`,
    suggesting a state-vtable dispatch (solo/P2P/tutorial variants unattributed).
-4. Why `0x7789d8 == 0x28e/0x28f` (song ids 654/655, forcing picker stage 4 at
-   files `0xbb324`/`0xbb330`) singles out those two songs, and of the stage
-   value's high word (animated-stage flag vs room flag).
+4. The stage value's high word (animated-stage flag vs room flag): the picker
+   returns the stage with `0x80000000` set (file `0xbb3cf`) and the room
+   setter (`0x4ad350`) plus the `_` resolver branch on it, but which meaning
+   the flag carries stays untraced.
 5. Protocol 4002's exact packet layout (stage id width, who may change it) —
    `docs/net-protocol.md` cross-check pending.
