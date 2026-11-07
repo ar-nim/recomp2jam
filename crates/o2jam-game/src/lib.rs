@@ -1163,6 +1163,22 @@ impl Score {
         self.life.apply(judgement);
         self.max_combo = self.max_combo.max(self.combo);
     }
+
+    /// Points an all-Cool play of `note_count` notes earns through the
+    /// verified scorer path above (jam feed, grant, then score with the
+    /// resulting `X`). The result grade compares the played score
+    /// against a max-score reference the exe never shows a write site
+    /// for (docs/cresult-anchors.md OPEN 9), so the shell runs this
+    /// simulation as the documented stand-in denominator — an
+    /// implementation choice, not an exe claim.
+    #[must_use]
+    pub fn all_cool_total(note_count: u32) -> u64 {
+        let mut score = Self::default();
+        for _ in 0..note_count {
+            score.apply(Judgement::Cool);
+        }
+        score.points
+    }
 }
 
 /// Song clock: elapsed time since song start.
@@ -1834,6 +1850,20 @@ mod tests {
         assert_eq!(bar.life(), 1);
         bar.apply(Judgement::Miss);
         assert_eq!(bar.life(), 0);
+    }
+
+    #[test]
+    fn all_cool_total_tracks_the_jam_level_climb() {
+        // Notes 1..24 score Cool at jam level 0 (progress 2..48 stays
+        // under the 50 threshold); note 25 grants level 1 first, so it
+        // scores 210. Hand-computed from the verified feed/grant/score
+        // order — not from the code under test.
+        assert_eq!(Score::all_cool_total(0), 0);
+        assert_eq!(Score::all_cool_total(1), 200);
+        assert_eq!(Score::all_cool_total(24), 4_800);
+        assert_eq!(Score::all_cool_total(25), 5_010);
+        // Notes 26..50 sit at level 1 (210 each); note 50 grants level 2.
+        assert_eq!(Score::all_cool_total(50), 10_270);
     }
 
     #[test]

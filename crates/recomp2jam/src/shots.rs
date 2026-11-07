@@ -16,7 +16,7 @@ use o2jam_shell::avatar::{
     AvatarFigure, PlayingArtMode, ScenePlacement, AVI_BLOCK, LOADING_SPRITE, RESULT_BLOCK,
     ROOM_BLOCK, WAITING_BLOCK,
 };
-use o2jam_shell::screens::paint::{PLAYING_BLOCK, RESULT_NUM_FONT_SPRITE};
+use o2jam_shell::screens::paint::{PLAYING_BLOCK, RESULT_WINLOSE_SPRITE};
 use o2jam_shell::{GameLoop, MenuKey, PlaySkin, Screen, ScreenGame};
 
 use crate::connect::stack_worn_figure;
@@ -250,18 +250,19 @@ fn stage_interface_archive(game: &mut ScreenGame, archive: &[u8]) {
 }
 
 /// Stage the result scene: the `STATE_RESULT` block art plus the
-/// builder's digit font body (`Result_NumFont_Blue.ojs`, lifecycle
-/// §11 — the block itself names no digit font), so the scene figures
-/// carry it beside the panels and the digits paint through it. A
-/// missing body keeps the scene font-less (procedural digits stay).
+/// builder-mounted verdict banner body (`Result_WinLose.ojs`, file
+/// `0xc2390` — the block itself carries only the background, the
+/// each-result box, the buttons, and the grade plate), so the scene
+/// figures carry the banner and the painter selects its frame. A
+/// missing body keeps the scene banner-less.
 fn stage_result_block(game: &mut ScreenGame, archive: &[u8], list: &ControlList) {
     let Some((placements, mut figures)) =
         stage_bound_block(archive, list, RESULT_BLOCK, None, None)
     else {
         return;
     };
-    if let Some(font) = load_archive_sprite(archive, RESULT_NUM_FONT_SPRITE) {
-        figures.insert(RESULT_NUM_FONT_SPRITE.to_owned(), font);
+    if let Some(banner) = load_archive_sprite(archive, RESULT_WINLOSE_SPRITE) {
+        figures.insert(RESULT_WINLOSE_SPRITE.to_owned(), banner);
     }
     game.load_scene(Screen::Result, placements, figures);
 }
@@ -1231,38 +1232,115 @@ mod tests {
     }
 
     #[test]
-    fn result_shot_paints_digits_through_the_staged_numfont() {
-        use o2jam_shell::playing::{DigitFont, SkinSprite};
-        let Some(archive) = read_archive(INTERFACE_ARCHIVE) else {
-            println!("skip: missing {INTERFACE_ARCHIVE}");
+    fn playing_shot_paints_the_staged_long_note_caption() {
+        // The reference photo's LONGNOTE COMBO caption over the lanes
+        // (ink (91,282)-(165,291) game px) stages through the runtime
+        // body `Note_LongCombo.ojt` frame 1 and paints over the staged
+        // scene art: every plate ink pixel of a lone blit at the
+        // pinned origin must appear in the playing shot's frame.
+        use o2jam_shell::playing::long_combo_plate_origin;
+        let Some(archive) = read_archive(PLAYING_ARCHIVE) else {
+            println!("skip: missing {PLAYING_ARCHIVE}");
             return;
         };
-        let figure = load_archive_sprite(&archive, RESULT_NUM_FONT_SPRITE)
-            .expect("the builder's digit font body decodes");
-        assert_eq!(figure.len(), 10, "ten stored digit frames 0..=9");
-        let font = DigitFont::from_frames(
-            (0..10usize)
-                .filter_map(|index| figure.layer(index))
-                .map(|layer| SkinSprite::new(layer.image.clone(), layer.colorkey))
-                .collect(),
-        )
-        .expect("ten frames bind one font");
-        // The shot's result readouts at their fixed anchors (16,16)
-        // and (16,32): one Cool strike leaves 200 points, combo 1.
+        let Some(skin) = PlaySkin::from_archive(&archive) else {
+            panic!("playing: PlaySkin decoded no lanes");
+        };
+        let plate = skin.long_combo_plate().expect("Note_LongCombo.ojt plate");
+        let (origin_x, origin_y) = long_combo_plate_origin(
+            usize::try_from(NATIVE_WIDTH).expect("native width fits usize"),
+            usize::try_from(NATIVE_HEIGHT).expect("native height fits usize"),
+        );
         let mut expected = native_probe();
         paint_probe(&mut expected, |frame| {
-            font.paint(frame, 16, 16, 200);
-            font.paint(frame, 16, 32, 1);
+            plate.paint_at(frame, origin_x, origin_y)
         });
-        // The walk spends the chart into Result with the font staged
-        // beside the block art (stage_result_block).
+        let mut game = seeded_game();
+        walk_to_playing(&mut game);
+        game.strike_at(2, 5_000);
+        let mut actual = native_probe();
+        paint_probe(&mut actual, |frame| game.paint_at(frame, 5_100));
+        assert_eq!(game.screen(), Screen::Playing);
+        assert_pixels_came_from_font(&actual, &expected, "long-note caption");
+    }
+
+    #[test]
+    fn result_shot_paints_the_pinned_digits() {
+        // The digits are GDI text (no staged body): the scripted walk
+        // spends the one-note chart with one Cool — counts 1/0/0/0,
+        // combo 1, jam level 0, 200 points — at the seven pinned
+        // fields (docs/cresult-anchors.md).
         let mut game = seeded_game();
         walk_to_playing(&mut game);
         game.strike_at(2, 5_000);
         let mut actual = native_probe();
         paint_probe(&mut actual, |frame| game.paint_at(frame, 7_000));
         assert_eq!(game.screen(), Screen::Result);
-        assert_pixels_came_from_font(&actual, &expected, "result digits");
+        let mut expected = native_probe();
+        paint_probe(&mut expected, |frame| {
+            let ink = o2jam_render::pack_xrgb(0xFF, 0xFF, 0xFF);
+            o2jam_render::draw_number(frame, 151, 125, 1, ink);
+            o2jam_render::draw_number(frame, 240, 125, 0, ink);
+            o2jam_render::draw_number(frame, 337, 125, 0, ink);
+            o2jam_render::draw_number(frame, 426, 125, 0, ink);
+            o2jam_render::draw_number(frame, 505, 130, 1, ink);
+            o2jam_render::draw_number(frame, 596, 130, 0, ink);
+            o2jam_render::draw_number(frame, 605, 533, 200, ink);
+        });
+        assert_pixels_came_from_font(&actual, &expected, "pinned result digits");
+    }
+
+    #[test]
+    fn result_shot_paints_the_solo_verdict_frame() {
+        let Some(archive) = read_archive(INTERFACE_ARCHIVE) else {
+            println!("skip: missing {INTERFACE_ARCHIVE}");
+            return;
+        };
+        // Solo play draws WinLose frame 4, clamped onto image 3 —
+        // the 547x65 solo banner anchored (126,190).
+        let banner = load_archive_sprite(&archive, RESULT_WINLOSE_SPRITE)
+            .expect("the builder's banner body decodes");
+        assert_eq!(banner.len(), 4, "four stored frames");
+        let mut expected = native_probe();
+        paint_probe(&mut expected, |frame| {
+            let layer = banner.layer(3).expect("image 3 decodes");
+            let (x, y) = anchor_in_frame(layer.dx, layer.dy, 800, 600);
+            o2jam_render::blit_rgb555(frame, &layer.image.view(), x, y, Some(layer.colorkey));
+        });
+        let mut game = seeded_game();
+        walk_to_playing(&mut game);
+        game.strike_at(2, 5_000);
+        let mut actual = native_probe();
+        paint_probe(&mut actual, |frame| game.paint_at(frame, 7_000));
+        assert_eq!(game.screen(), Screen::Result);
+        assert_pixels_came_from_font(&actual, &expected, "solo banner");
+    }
+
+    #[test]
+    fn result_shot_paints_the_perfect_grade_plate() {
+        let Some(archive) = read_archive(INTERFACE_ARCHIVE) else {
+            println!("skip: missing {INTERFACE_ARCHIVE}");
+            return;
+        };
+        // One Cool equals the all-Cool max, so the pinned
+        // equal-to-max arm gives grade 8: image 7, the 79x41 frame
+        // anchored (395,531).
+        let plate = load_archive_sprite(&archive, o2jam_shell::screens::paint::RESULT_RANK_SPRITE)
+            .expect("the block's grade plate decodes");
+        assert_eq!(plate.len(), 8, "eight stored frames");
+        let mut expected = native_probe();
+        paint_probe(&mut expected, |frame| {
+            let layer = plate.layer(7).expect("image 7 decodes");
+            let (x, y) = anchor_in_frame(layer.dx, layer.dy, 800, 600);
+            o2jam_render::blit_rgb555(frame, &layer.image.view(), x, y, Some(layer.colorkey));
+        });
+        let mut game = seeded_game();
+        walk_to_playing(&mut game);
+        game.strike_at(2, 5_000);
+        let mut actual = native_probe();
+        paint_probe(&mut actual, |frame| game.paint_at(frame, 7_000));
+        assert_eq!(game.screen(), Screen::Result);
+        assert_pixels_came_from_font(&actual, &expected, "grade plate");
     }
 
     #[test]

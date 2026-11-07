@@ -111,5 +111,9 @@ pixel. Parser sites live in `o2jam-file` (`opi.rs`, `control.rs`, `sprites.rs`,
 - `Sprite55.tag`, `Sprite55.colorkey` provenance — `tag` never branches;
   `colorkey` is threaded through (`FigureLayer.colorkey`,
   `SkinSprite::new`) and honored at blit, so it is used, not ignored.
+  Exe side the sprite reader `0x4249f0` likewise never tests the `+0`
+  tag word — it gates on the `+2` format word only (`0x555`/`0x555a`,
+  compares `0x424c96`/`0x424caf`, ev `103158a8…`) — and consumes the
+  colorkey word at load, so neither field is dead in the exe either.
 - `Sprite55Image.data_offset` / `size` — used only to slice
   (`pixel_data`); chaining / exact-accounting checks stay parser-side.

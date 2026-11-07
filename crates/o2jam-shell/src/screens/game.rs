@@ -8,10 +8,10 @@ use super::super::playing::{HighwayGeometry, LivePlay, PlaySkin};
 use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
-    battle_verdict, paint_avi_scene, paint_channel_list, paint_channel_scene, paint_loading_scene,
-    paint_lobby_backdrop, paint_playing_overlay, paint_result, paint_result_scene, paint_room_list,
-    paint_room_scene, paint_screen, paint_waiting_members, paint_waiting_scene, scene_index,
-    BattleVerdict, SceneArt,
+    battle_verdict, grade_frame, paint_avi_scene, paint_channel_list, paint_channel_scene,
+    paint_loading_scene, paint_lobby_backdrop, paint_playing_overlay, paint_result,
+    paint_result_scene, paint_room_list, paint_room_scene, paint_screen, paint_waiting_members,
+    paint_waiting_scene, scene_index, BattleVerdict, ResultVerdict, SceneArt,
 };
 use super::side::{
     can_return_side, can_visit_side, paint_side_scene, waiting_song_detail_line,
@@ -57,6 +57,9 @@ pub struct ScreenGame {
     select_music_art: Option<SceneArt>,
     battle_teams: RoomTeams,
     battle_self_team: Option<u8>,
+    /// Notes of the loaded chart, remembered for the grade plate's
+    /// stand-in ratio (see [`Self::grade`]).
+    chart_notes: u32,
     side: Option<SideScreen>,
     side_origin: Option<Screen>,
     side_placements: Vec<ScenePlacement>,
@@ -105,6 +108,7 @@ impl ScreenGame {
             select_music_art: None,
             battle_teams: RoomTeams::new(),
             battle_self_team: None,
+            chart_notes: 0,
             side: None,
             side_origin: None,
             side_placements: Vec::new(),
@@ -139,8 +143,10 @@ impl ScreenGame {
 
     /// Load a chart's onsets (with key-sound ids) into the highway.
     /// The selected chart's difficulty re-applies to the fresh
-    /// [`LivePlay`] (see [`Self::apply_life_difficulty`]).
+    /// [`LivePlay`] (see [`Self::apply_life_difficulty`]); the note
+    /// count feeds the result grade's ratio.
     pub fn load_chart(&mut self, onsets: Vec<(u8, u64, u32)>) {
+        self.chart_notes = u32::try_from(onsets.len()).unwrap_or(u32::MAX);
         self.playing = LivePlay::new(&onsets);
         self.apply_life_difficulty();
     }
@@ -353,6 +359,41 @@ impl ScreenGame {
     #[must_use]
     pub fn battle_verdict(&self) -> Option<BattleVerdict> {
         battle_verdict(&self.battle_teams, self.battle_self_team)
+    }
+
+    /// Result verdict for the banner: solo rooms (and no room at
+    /// all) take the solo banner; team battles carry the rank-1
+    /// verdict when it resolves (`FUN_004c3120` branches).
+    #[must_use]
+    pub fn result_verdict(&self) -> ResultVerdict {
+        if self.room_team_play() {
+            ResultVerdict::Battle(self.battle_verdict())
+        } else {
+            ResultVerdict::Solo
+        }
+    }
+
+    /// Grade plate frame for the finished play, if a chart loaded.
+    /// The exe compares its score global against a max-score
+    /// reference with no located write site (docs/cresult-anchors.md
+    /// OPEN 9), so the ratio runs the played points against the
+    /// verified scorer's all-Cool total for the loaded chart — the
+    /// documented stand-in — through the pinned table
+    /// [`grade_frame`].
+    #[must_use]
+    fn grade(&self) -> Option<u8> {
+        let notes = self.chart_notes;
+        if notes == 0 {
+            return None;
+        }
+        let max = o2jam_game::Score::all_cool_total(notes);
+        let score = self.playing.score();
+        let ratio = score.points as f64 / max as f64;
+        Some(grade_frame(
+            ratio,
+            u64::from(score.max_combo) + 1 == u64::from(notes),
+            score.points == max,
+        ))
     }
 
     /// Stage real main-flow art for one screen: `.bnd` placements
@@ -578,19 +619,19 @@ impl ScreenGame {
 
     /// Results: staged art (`StateResult_Top/Bottom.ojs` plus
     /// `Result_WinLose.ojs` via `FUN_004c2390`, file `0xc2390`) behind
-    /// the avatar figure, digits, and the `Winner_image.ojs` /
-    /// `Result_WinLose.ojs` rank-1 verdict.
+    /// the exe-selected verdict banner and grade plate frames, the
+    /// avatar figure, and the pinned GDI numbers from the live score.
     fn paint_result(&self, frame: &mut Frame<'_>) {
-        let verdict = self.battle_verdict();
         match self.scene_art(Screen::Result) {
             Some(art) => paint_result_scene(
                 frame,
                 self.avatar.as_ref(),
                 self.playing.score(),
                 art,
-                verdict,
+                self.result_verdict(),
+                self.grade(),
             ),
-            None => paint_result(frame, self.avatar.as_ref(), self.playing.score(), verdict),
+            None => paint_result(frame, self.avatar.as_ref(), self.playing.score()),
         }
     }
 }
@@ -832,8 +873,10 @@ mod game_tests {
             7000,
         );
         assert_eq!(game.screen(), Screen::Result);
-        // Score "200" top-left in white.
-        assert_eq!(buf[16 * 70 + 16], pack_xrgb(0xFF, 0xFF, 0xFF));
+        // 70x60 is not the native canvas, so the pinned number
+        // fields wait (frame_is_native); the score lives in state
+        // (`playing.score()`).
+        assert_ne!(buf[16 * 70 + 16], pack_xrgb(0xFF, 0xFF, 0xFF));
     }
 
     #[test]
@@ -1450,7 +1493,7 @@ mod game_tests {
     }
 
     #[test]
-    fn scene_art_backs_result_digits() {
+    fn scene_art_backs_result_without_small_frame_digits() {
         let (placements, figures) = corner_scene_art("Result_WinLose.ojs");
         let mut game = ScreenGame::new();
         game.load_chart(vec![(2, 5000, 7)]);
@@ -1468,7 +1511,9 @@ mod game_tests {
         );
         assert_eq!(game.screen(), Screen::Result);
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
-        assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+        // Small frame: the pinned number fields stay off (the solo
+        // banner body paints its corner layer instead).
+        assert_ne!(buf[16 * 70 + 16], pack_xrgb(0xFF, 0xFF, 0xFF));
     }
 
     #[test]
@@ -1527,38 +1572,107 @@ mod game_tests {
     fn result_without_battle_claim_paints_no_verdict() {
         let mut game = ScreenGame::new();
         finish_song(&mut game);
-        assert_eq!(game.battle_verdict(), None);
+        assert_eq!(game.result_verdict(), ResultVerdict::Solo);
         let buf = paint_result_frame(&mut game);
         assert_eq!(game.screen(), Screen::Result);
-        assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+        // The retired caption inks never come back; the banner is a
+        // sprite frame of the staged art (none here).
         assert!(!buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
         assert!(!buf.contains(&pack_xrgb(0x90, 0x90, 0x90)));
     }
 
     #[test]
-    fn result_win_paints_gold_verdict_for_rank_one() {
+    fn result_verdict_is_battle_only_in_team_play() {
+        // No room: solo banner. A joined Live room carries the
+        // rank-1 verdict once teams and the claim resolve.
+        let mut game = ScreenGame::new();
+        assert_eq!(game.result_verdict(), ResultVerdict::Solo);
+        let mut live = waiting_room();
+        live.game_mode = o2jam_net::GameMode::Live as u8;
+        game.set_joined_room(live);
+        assert_eq!(game.result_verdict(), ResultVerdict::Battle(None));
+        game.set_battle_teams(battle_teams_self_wins());
+        game.set_battle_self_team(Some(1));
+        assert_eq!(
+            game.result_verdict(),
+            ResultVerdict::Battle(Some(BattleVerdict::Win))
+        );
+        game.set_battle_self_team(Some(0));
+        assert_eq!(
+            game.result_verdict(),
+            ResultVerdict::Battle(Some(BattleVerdict::Lose))
+        );
+    }
+
+    #[test]
+    fn grade_runs_the_pinned_table_on_the_chart() {
+        // One-note chart fully Cool: points equal the all-Cool max,
+        // the pinned equal-to-max arm gives grade 8.
+        let mut game = ScreenGame::new();
+        game.load_chart(vec![(2, 5000, 7)]);
+        walk_to_playing(&mut game);
+        game.strike_at(2, 5000);
+        assert_eq!(game.grade(), Some(8));
+        assert_eq!(game.playing.score().points, 200);
+    }
+
+    #[test]
+    fn grade_stays_below_the_lowest_threshold_on_a_miss() {
+        // The timeout miss floors the points at zero: ratio 0 stays
+        // under 0.30, the plate's empty state.
+        let mut game = ScreenGame::new();
+        game.load_chart(vec![(2, 5000, 7)]);
+        walk_to_playing(&mut game);
+        let mut buf = vec![0u32; 70 * 60];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            5_100,
+        );
+        paint_result_frame(&mut game);
+        assert_eq!(game.screen(), Screen::Result);
+        assert_eq!(game.playing.score().counts[3], 1);
+        assert_eq!(game.grade(), Some(0));
+    }
+
+    #[test]
+    fn grade_needs_a_chart() {
+        // No chart, no ratio: the plate waits (frame None).
+        let game = ScreenGame::new();
+        assert_eq!(game.grade(), None);
+    }
+
+    #[test]
+    fn result_win_paints_no_invented_verdict_for_rank_one() {
         let mut game = ScreenGame::new();
         game.set_battle_teams(battle_teams_self_wins());
         game.set_battle_self_team(Some(1));
         assert_eq!(game.battle_verdict(), Some(BattleVerdict::Win));
         finish_song(&mut game);
         let buf = paint_result_frame(&mut game);
-        assert!(buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
+        // The retired text verdict never comes back; the banner is a
+        // sprite frame of the staged art (none in this flat frame).
+        assert_ne!(buf[48 * 70 + 16], pack_xrgb(0xFF, 0xD0, 0x20));
+        assert!(!buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
     }
 
     #[test]
-    fn result_lose_paints_gray_verdict_off_rank_one() {
+    fn result_lose_paints_no_invented_verdict_off_rank_one() {
         let mut game = ScreenGame::new();
         game.set_battle_teams(battle_teams_self_wins());
         game.set_battle_self_team(Some(0));
         assert_eq!(game.battle_verdict(), Some(BattleVerdict::Lose));
         finish_song(&mut game);
         let buf = paint_result_frame(&mut game);
-        assert!(buf.contains(&pack_xrgb(0x90, 0x90, 0x90)));
+        assert_ne!(buf[48 * 70 + 16], pack_xrgb(0x90, 0x90, 0x90));
+        assert!(!buf.contains(&pack_xrgb(0x90, 0x90, 0x90)));
     }
 
     #[test]
-    fn result_verdict_layers_over_winner_and_winlose_art() {
+    fn result_scene_art_paints_without_the_invented_verdict() {
         use crate::screens::paint::unbound_scene_placements;
         let names = vec![
             "Winner_image.ojs".to_owned(),
@@ -1575,9 +1689,11 @@ mod game_tests {
         game.load_scene(Screen::Result, placements, figures);
         finish_song(&mut game);
         let buf = paint_result_frame(&mut game);
+        // The staged winner/winlose art paints; the retired text
+        // caption ink does not.
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
-        assert!(buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
-        assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+        assert!(!buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
+        assert!(!buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
     }
 
     fn paint_playing_frame(game: &mut ScreenGame, w: usize, h: usize) -> Vec<u32> {

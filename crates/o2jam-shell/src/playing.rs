@@ -205,6 +205,35 @@ pub const COMBO_FONT_SPRITE: &str = "Note_ComboNum.ojs";
 /// Staged play-time-digit body: `PlayTimeNum.ojs`, ten raw 27x21
 /// frames in digit order 0..=9 (archive slot 96).
 pub const PLAY_TIME_FONT_SPRITE: &str = "PlayTimeNum.ojs";
+/// Staged long-note combo caption plate: `Note_LongCombo.ojt`, two raw
+/// 128x128 frames (archive slot 432; the runtime body — the Playing
+/// applier resolves `_Note_LongCombo.ojt` through the `%s.ojt`
+/// special stem, site `0x4e819e`, `docs/stage-bga.md`). Block entries
+/// 129–134 name it and the `_Note_LongComboNum.ojt` digits; their
+/// codes (`0x1B50008C`..`0x1B500091`) pair rect ordinals 139–144, all
+/// past the 17 `State_Playing.bnd` rects, so the caption has no
+/// `.bnd` rect and rides the photo-pinned box
+/// [`NATIVE_LONG_COMBO_PLATE`] instead.
+pub const LONG_COMBO_PLATE_SPRITE: &str = "Note_LongCombo.ojt";
+/// The clean plate frame: frame 0 duplicates the plate but carries a
+/// stray 10-pixel artifact run along its top row; frame 1 carries the
+/// plate ink alone.
+const LONG_COMBO_PLATE_FRAME: usize = 1;
+/// Plate ink offset inside the 128x128 frame: the 74x9 plate ink sits
+/// at (52,61)-(125,69) (verified 7.55 `Playing1.opi` slot 432, frame
+/// 1; frame 0 adds the stray top-row run).
+pub const LONG_COMBO_PLATE_INK: (i32, i32) = (52, 61);
+/// LONGNOTE COMBO plate ink box on the native canvas: the reference
+/// photo's caption ink reads (91.2,282.1)-(164.6,289.6) game px
+/// (bright-ink scan, `docs/playing-reference.md` method) — exactly
+/// the staged frame's 74x9 ink at 1:1, so the box pins the draw with
+/// no scaling.
+pub const NATIVE_LONG_COMBO_PLATE: Rect = Rect {
+    x: 91,
+    y: 282,
+    w: 74,
+    h: 9,
+};
 
 /// One decoded skin image: raw RGB555 pixels plus the source body
 /// colorkey (skipped while blitting).
@@ -245,6 +274,11 @@ impl SkinSprite {
             top_y,
             Some(self.colorkey),
         );
+    }
+
+    /// Paint with its top-left at `(x, y)` (blits clip to the frame).
+    pub fn paint_at(&self, frame: &mut Frame<'_>, x: i32, y: i32) {
+        blit_rgb555(frame, &self.image.view(), x, y, Some(self.colorkey));
     }
 
     /// Paint with its bottom at `bottom_y` (tall columns anchor their
@@ -421,6 +455,7 @@ pub struct PlaySkin {
     score_font: Option<DigitFont>,
     combo_font: Option<DigitFont>,
     play_time_font: Option<DigitFont>,
+    long_combo_plate: Option<SkinSprite>,
 }
 
 impl PlaySkin {
@@ -431,6 +466,7 @@ impl PlaySkin {
             && self.score_font.is_none()
             && self.combo_font.is_none()
             && self.play_time_font.is_none()
+            && self.long_combo_plate.is_none()
             && self.note_heads.iter().all(Option::is_none)
             && self.press_keys.iter().all(Option::is_none)
             && self.release_beams.iter().all(Option::is_none)
@@ -483,6 +519,12 @@ impl PlaySkin {
     #[must_use]
     pub fn play_time_font(&self) -> Option<&DigitFont> {
         self.play_time_font.as_ref()
+    }
+
+    /// Staged long-note combo caption plate ([`LONG_COMBO_PLATE_SPRITE`]).
+    #[must_use]
+    pub fn long_combo_plate(&self) -> Option<&SkinSprite> {
+        self.long_combo_plate.as_ref()
     }
 
     /// Receptor frame count for one lane.
@@ -571,6 +613,13 @@ impl PlaySkin {
         self
     }
 
+    /// Stage the long-note combo caption plate.
+    #[must_use]
+    pub fn with_long_combo_plate(mut self, plate: SkinSprite) -> Self {
+        self.long_combo_plate = Some(plate);
+        self
+    }
+
     /// Decode every staged body from a read-only archive slice; `None`
     /// when no lane yields art (entries missing or undecodable).
     #[must_use]
@@ -612,6 +661,8 @@ impl PlaySkin {
         skin.score_font = digit_font(archive, SCORE_FONT_SPRITE);
         skin.combo_font = digit_font(archive, COMBO_FONT_SPRITE);
         skin.play_time_font = digit_font(archive, PLAY_TIME_FONT_SPRITE);
+        skin.long_combo_plate = archive_body(archive, LONG_COMBO_PLATE_SPRITE)
+            .and_then(|body| lane_sprite(body, LONG_COMBO_PLATE_FRAME));
         (!skin.is_empty()).then_some(skin)
     }
 }
@@ -1302,11 +1353,11 @@ impl LivePlay {
     }
 
     /// Paint the right-side avatar scene plus bottom tally strip over
-    /// the highway and staged art. Counts feed from the live
-    /// [`Score`]; state is untouched (shared `&self` like a query).
-    /// Play-time digits ride the tally strip when the
-    /// [`PLAY_TIME_FONT_SPRITE`] font stages (see
-    /// [`Self::paint_play_time`]).
+    /// the highway and staged art — this is the over-art layer, so the
+    /// LONGNOTE COMBO caption plate rides here too (staged scene art
+    /// paints after [`Self::paint`], and the caption must cover it,
+    /// like the strip readouts). Counts feed from the live [`Score`];
+    /// state is untouched (shared `&self` like a query).
     pub fn paint_avatar_scene(
         &self,
         frame: &mut Frame<'_>,
@@ -1315,28 +1366,21 @@ impl LivePlay {
     ) {
         self.scene
             .paint(frame, avatar, &self.score, now_ms, self.song_end_ms());
-        self.paint_play_time(frame, now_ms);
+        self.paint_long_combo_caption(frame);
     }
 
-    /// Play-time digits over the TIME bar through the staged
-    /// `PlayTimeNum.ojs` font: elapsed `MMSS` zero-padded, centered on
-    /// the bar so the fill stays readable between the strokes.
-    /// Staged-only — without the font the bar alone paints, like
-    /// today's fallback; the bar-side anchor is assumed (bnd-audit 31:
-    /// no bound digit rect on real art).
-    fn paint_play_time(&self, frame: &mut Frame<'_>, now_ms: u64) {
-        let Some(font) = self.view.skin.play_time_font() else {
+    /// LONGNOTE COMBO caption plate over the lanes through the staged
+    /// `Note_LongCombo.ojt` body: the frame blits 1:1 so its 74x9 ink
+    /// lands on the photo-pinned box (see [`NATIVE_LONG_COMBO_PLATE`]).
+    /// Staged-only — without the body nothing paints. The exe's
+    /// show/hide rule is untraced, so the plate paints while staged
+    /// (the reference photo shows it standing mid-song).
+    fn paint_long_combo_caption(&self, frame: &mut Frame<'_>) {
+        let Some(plate) = self.view.skin.long_combo_plate() else {
             return;
         };
-        let bar = scale_scene_rect(&TALLY_TIME_NATIVE, frame.w, frame.h);
-        let minutes = u32::try_from(now_ms / 60_000).unwrap_or(u32::MAX).min(99);
-        let seconds = u32::try_from(now_ms / 1_000 % 60).unwrap_or(0);
-        let value = minutes * 100 + seconds;
-        let width = i32::try_from(font.padded_width(value, 4)).unwrap_or(0);
-        let height = i32::try_from(font.height()).unwrap_or(0);
-        let x = bar.x + i32::try_from(bar.w).unwrap_or(0) / 2 - width / 2;
-        let y = bar.y + i32::try_from(bar.h).unwrap_or(0) / 2 - height / 2;
-        font.paint_padded(frame, x, y, value, 4);
+        let (origin_x, origin_y) = long_combo_plate_origin(frame.w, frame.h);
+        plate.paint_at(frame, origin_x, origin_y);
     }
 
     /// Song end for the TIME bar: last head/tail plus the 1.5 s outro
@@ -2000,6 +2044,26 @@ const TALLY_COUNT_GRID: [(i32, i32); 4] = [(317, 556), (392, 556), (317, 578), (
 /// TIME progress bar on the native canvas: staged
 /// `Normal_TimeBar.ojs` `(489,556)` 254x10 in the strip
 /// (`Playing_Menu.ojs` `(204,558)` 596x42 is the strip panel).
+///
+/// Documented strip unpaints (verified absent — never invented):
+/// - Play-time `MMSS` digits: the staged `PlayTimeNum.ojs` font has
+///   no draw anchor — no `.bnd` rect pairs it (`State_Playing.bnd`'s
+///   17 rects pair `EXIT`…`VOLUME` only; `State_Playing_network.bnd`'s
+///   19 add `Winner_image` (265,472) / `Challenger_image` (410,472)),
+///   the exe references the name only in its loader cluster (file
+///   `0x24c0d8`), and the reference photo's strip carries no MMSS
+///   ink — so the former bar-centered anchor (bnd-audit 31, claims
+///   A32 ASSUMED) was invented and is removed, not re-anchored. The
+///   font stays staged ([`PlaySkin::play_time_font`]).
+/// - `BO` / `EA05` / `O2JAM` edge labels (photo ink (6,571)-(25,584)
+///   and (241,575)-(262,596) plus the ⚡ badge (242,554)-(279,575)):
+///   no 7.55 source exists — the rect walks above name no such
+///   control, the strip panel art bakes only
+///   VOL/EQUALIZER/COMBO/COOL/GOOD/BAD/MISS/EXIT, and the exe has no
+///   draw string ("EA05" absent; "O2JAM" hits are FTP/server-list
+///   context). The photo's labels are baked vintage strip art of a
+///   different client build (`docs/parity.md` venue-vintage class);
+///   painting them would inject ink 7.55 cannot produce.
 const TALLY_TIME_NATIVE: Rect = Rect {
     x: 489,
     y: 556,
@@ -2052,6 +2116,20 @@ fn scale_scene_origin(native: (i32, i32), frame_w: usize, frame_h: usize) -> (i3
 /// Scale one avatar-layout rect into the frame.
 fn scale_scene_rect(native: &Rect, frame_w: usize, frame_h: usize) -> Rect {
     scale_rect_to_frame(native, frame_w, frame_h)
+}
+
+/// Blit origin that lands the staged long-note caption plate ink on
+/// [`NATIVE_LONG_COMBO_PLATE`] at one frame size: the scaled box
+/// origin minus the frame ink offset (the plate blits 1:1, like every
+/// staged body, so the offset itself never scales).
+#[must_use]
+pub fn long_combo_plate_origin(frame_w: usize, frame_h: usize) -> (i32, i32) {
+    (
+        scale_scene_axis(NATIVE_LONG_COMBO_PLATE.x, frame_w, SCENE_NATIVE_W)
+            - LONG_COMBO_PLATE_INK.0,
+        scale_scene_axis(NATIVE_LONG_COMBO_PLATE.y, frame_h, SCENE_NATIVE_H)
+            - LONG_COMBO_PLATE_INK.1,
+    )
 }
 
 /// Scaled avatar-scene layout for one frame size: every origin and
@@ -3367,24 +3445,38 @@ mod live_play_tests {
     }
 
     #[test]
-    fn staged_play_time_font_paints_over_the_time_bar() {
+    fn staged_play_time_font_paints_nothing_without_a_verified_anchor() {
+        // bnd-audit 31's bar-centered MMSS anchor was invented: no
+        // `.bnd` rect pairs `PlayTimeNum.ojs` (17 + 19 rect walk), the
+        // exe names it only in the loader cluster (file `0x24c0d8`),
+        // and the reference strip shows no MMSS ink. The staged font
+        // therefore paints nothing — the TIME bar's shell art alone.
         let mut live = LivePlay::default();
-        live.set_skin(PlaySkin::default().with_play_time_font(digit_font()));
         let mut buf = vec![0u32; 800 * 600];
+        let plain = {
+            let mut frame = Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            };
+            live.paint_avatar_scene(&mut frame, None, 65_000);
+            buf.clone()
+        };
+        live.set_skin(PlaySkin::default().with_play_time_font(digit_font()));
+        let mut staged = vec![0u32; 800 * 600];
         live.paint_avatar_scene(
             &mut Frame {
-                buf: &mut buf,
+                buf: &mut staged,
                 w: 800,
                 h: 600,
             },
             None,
             65_000,
         );
-        // 01:05 → "0105" centered on the TIME bar (489,556) 254x10:
-        // 32 px wide → x 600..632, digit rows 559..563.
-        assert_eq!(buf[561 * 800 + 602], digit_ink(0));
-        assert_eq!(buf[561 * 800 + 610], digit_ink(1));
-        assert_eq!(buf[561 * 800 + 626], digit_ink(5));
+        assert_eq!(
+            plain, staged,
+            "staging PlayTimeNum must not add MMSS ink at an invented anchor"
+        );
     }
 
     #[test]
@@ -3451,6 +3543,98 @@ mod live_play_tests {
             assert!(w <= 33 && h <= 51, "combo digit {digit} {w}x{h}");
         }
         assert_eq!(combo.digit(9).expect("digit frame").extent(), (31, 51));
+    }
+
+    /// Read the pinned archive and stage the full skin (`None` test
+    /// skip when the git-ignored game data is absent).
+    fn staged_skin() -> Option<PlaySkin> {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Image/Playing1.opi");
+        let archive = std::fs::read(&path).ok()?;
+        PlaySkin::from_archive(&archive)
+    }
+
+    /// Paint one skin's over-art layer (avatar scene + captions) alone
+    /// on a blank native frame at the playing shot's instant.
+    fn paint_over_art_layer(skin: &PlaySkin) -> Vec<u32> {
+        let mut live = LivePlay::new(&[]);
+        live.set_skin(skin.clone());
+        let mut buf = vec![0u32; 800 * 600];
+        live.paint_avatar_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            None,
+            5_100,
+        );
+        buf
+    }
+
+    #[test]
+    fn play_time_digits_paint_nowhere_without_a_verified_anchor() {
+        // bnd-audit 31 / claims A32 carried the MMSS paint on an
+        // assumed bar-centered anchor. Ground truth: no `.bnd` rect
+        // pairs `PlayTimeNum.ojs` (17-rect `State_Playing.bnd` and
+        // 19-rect `State_Playing_network.bnd` walks cover `EXIT`…
+        // `VOLUME` plus `Winner_image`/`Challenger_image` only), the
+        // exe names it just in the loader cluster (file `0x24c0d8`),
+        // and the reference strip shows no MMSS ink — so the staged
+        // font must not paint at all. Skins differing only in the
+        // play-time font must paint identical frames.
+        let Some(skin) = staged_skin() else {
+            println!("skip: missing Playing1.opi");
+            return;
+        };
+        assert!(skin.play_time_font().is_some(), "font stages");
+        let mut fontless = skin.clone();
+        fontless.play_time_font = None;
+        assert_eq!(
+            paint_over_art_layer(&skin),
+            paint_over_art_layer(&fontless),
+            "staged PlayTimeNum must not paint at an invented anchor"
+        );
+    }
+
+    #[test]
+    fn long_combo_caption_paints_the_staged_plate_on_the_photo_box() {
+        // The caption stages from the runtime body (`Note_LongCombo.ojt`
+        // frame 1, clean 74x9 plate ink at frame offset (52,61)) and
+        // blits 1:1 so the ink lands on the photo-pinned box
+        // (91,282)-(165,291): every plate ink pixel of a lone blit must
+        // appear unchanged in the over-art layer's frame.
+        let Some(skin) = staged_skin() else {
+            println!("skip: missing Playing1.opi");
+            return;
+        };
+        let plate = skin.long_combo_plate().expect("Note_LongCombo.ojt plate");
+        assert_eq!(plate.extent(), (128, 128));
+        let (origin_x, origin_y) = long_combo_plate_origin(800, 600);
+        assert_eq!((origin_x, origin_y), (39, 221));
+        const BACKDROP: u32 = 0x020202;
+        let mut expected = vec![BACKDROP; 800 * 600];
+        plate.paint_at(
+            &mut Frame {
+                buf: &mut expected,
+                w: 800,
+                h: 600,
+            },
+            origin_x,
+            origin_y,
+        );
+        let actual = paint_over_art_layer(&skin);
+        let mut checked = 0;
+        for at in 0..expected.len() {
+            if expected[at] != BACKDROP {
+                assert_eq!(
+                    actual[at], expected[at],
+                    "plate pixel {at} must land on the photo box"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked >= 400, "plate ink covered only {checked} px");
     }
 
     #[test]
