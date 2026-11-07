@@ -1113,3 +1113,51 @@ new tests were expected.
   only `docs/playtest.md`, fix only my own lint findings) I left the
   peer's files alone. Clean-HEAD verdict above stands; the dirty files
   are the peer's uncommitted work, not mine.
+
+## Regression sweep — 2026-11-07 19:45 UTC+8 (HEAD `d212d50`, tree dirty)
+
+Live re-proof on the wallet-head. Covers the feat commit landed after the
+result-head baseline `188bee3`: rank rows wire wallet display (`04e2462`:
+`WalletState` live gem/cash balances folded from 5029/5001 wire words for
+the payment/result displays), plus the docs log (`d212d50`).
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1184 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 7, file 149, game 92, net 337,
+  render 72, shell 408, real_art 7, scenes 22, recomp2jam 71
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, no warnings.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.60 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`19:45:04 +08:00`,
+  session `127.0.0.1:42462`): `Authorize session` →
+  `Get channel list: [0]` → `Enter channel: [0/00]` →
+  `Get character info: [tester]` → `Create room: songflow` →
+  `Update room [000] music settings: [HX / X10 / o2ma757]` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Update #1 - Jam: 3 (Bonus: 0)` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure WARNs on room delete).
+- **Verdict: no regression — suite is green (1184 passed; +27 vs the
+  1157 baseline, all shell 381 → 408, all other targets unchanged,
+  0 failures). No lint findings. No commits, no pushes.** This sweep
+  touched only `docs/playtest.md`.
+- Tree note: a peer landed uncommitted edits before the first gate
+  (`crates/o2jam-shell/src/screens/side.rs` +42/-1: new
+  `WalletState::apply_sell_response` folding the 5003 success gem word
+  into the shared gem slot plus 2 tests; `docs/shop-buy.md` +4/-1:
+  matching sell-gem notes), so every gate above ran on the dirty
+  state. Of the +27 shell tests, 25 come from the committed wallet
+  work and 2 (`wallet_applies_sell_success_gem_word`,
+  `wallet_keeps_gem_on_sell_error`) are the peer's uncommitted tests —
+  both observed passing, none of it mine. Per the sweep rules (touch
+  only `docs/playtest.md`, fix only my own lint findings) the peer's
+  files were left alone.
