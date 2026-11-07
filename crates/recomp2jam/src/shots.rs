@@ -159,9 +159,12 @@ const INTERFACE_LIST: &str = "ControlList_Interface.txt";
 /// Playing control list entry.
 const PLAYING_LIST: &str = "ControlList_Playing.txt";
 
-/// `STATE_CHANNEL` names zero sprites, so shots stage the real
-/// channel dialog bar full-canvas instead.
-const CHANNEL_FALLBACK_SPRITE: &str = "Dialog_ChannelSelectBar.ojs";
+/// `STATE_CHANNEL` names zero sprites on 7.55 (bare `BOUND`, no art),
+/// and the code-fetched channel bar (`Dialog_ChannelSelectBar.ojs`)
+/// has no pinned dialog host — so shots stage no scene art for
+/// Channel. The art-less state paints nothing; only the live list,
+/// title, and cursor layer on top (pinned no-fill rule per
+/// `docs/channel-fill.md`).
 /// Room arena value the playing shot joins with: stage 5, whose
 /// `Playing_BG5.ojs` stages the warm wooden-deck floor the avatar
 /// stands on — the closest staged match to the reference rooftop
@@ -268,11 +271,9 @@ fn stage_single_sprite(
 }
 
 /// Stage Interface-archive scenes; each scene stages independently
-/// so one bad block never blanks the rest.
+/// so one bad block never blanks the rest. Channel stages nothing:
+/// the art-less state paints no fill under the live list.
 fn stage_interface_archive(game: &mut ScreenGame, archive: &[u8]) {
-    if let Some((placements, figures)) = stage_single_sprite(archive, CHANNEL_FALLBACK_SPRITE) {
-        game.load_scene(Screen::Channel, placements, figures);
-    }
     if let Some(logo) = load_avi_logo(archive) {
         game.load_splash(logo);
     }
@@ -385,6 +386,13 @@ fn seed_chart(game: &mut ScreenGame) {
     game.load_chart(vec![(2, 5_000, 7)]);
 }
 
+/// Art-less `STATE_CHANNEL`: stage the empty scene so the walk takes
+/// the staged path (`paint_channel_scene` paints no fill under the
+/// live list) instead of the flat `paint_channel_list` fallback.
+fn stage_empty_channel_scene(game: &mut ScreenGame) {
+    game.load_scene(Screen::Channel, Vec::new(), HashMap::new());
+}
+
 /// Game preloaded with list rows, a Live waiting duo, the duo's
 /// battle scoreboard, and a chart whose note lands at 5 s (visible
 /// in Playing, spent by Result). Genuine archive art stages
@@ -399,6 +407,7 @@ fn seeded_game() -> ScreenGame {
     seed_chart(&mut game);
     stage_result_ranks(&mut game);
     stage_real_art(&mut game);
+    stage_empty_channel_scene(&mut game);
     game
 }
 
@@ -437,6 +446,7 @@ fn seeded_solo_game() -> ScreenGame {
     game.set_joined_room(solo_waiting_room());
     seed_chart(&mut game);
     stage_real_art(&mut game);
+    stage_empty_channel_scene(&mut game);
     game
 }
 
@@ -1417,10 +1427,9 @@ mod tests {
     #[test]
     fn missing_archives_stage_nothing() {
         assert!(read_archive("No/Such.opi").is_none());
-        assert!(entry_body(&[], CHANNEL_FALLBACK_SPRITE).is_none());
+        assert!(entry_body(&[], LOADING_SPRITE).is_none());
         assert!(control_list(&[], INTERFACE_LIST).is_none());
         assert!(bind_data(&[], "State_Room.bnd").is_none());
-        assert!(stage_single_sprite(&[], CHANNEL_FALLBACK_SPRITE).is_none());
         assert!(stage_single_sprite(&[], LOADING_SPRITE).is_none());
     }
 
@@ -1430,13 +1439,44 @@ mod tests {
             println!("skip: missing {INTERFACE_ARCHIVE}");
             return;
         };
-        assert!(stage_single_sprite(&interface, CHANNEL_FALLBACK_SPRITE).is_some());
+        assert_channel_block_names_no_sprites(&interface);
         assert!(load_avi_logo(&interface).is_some());
         let Some(playing) = read_archive(PLAYING_ARCHIVE) else {
             println!("skip: missing {PLAYING_ARCHIVE}");
             return;
         };
         assert!(stage_single_sprite(&playing, LOADING_SPRITE).is_some());
+    }
+
+    /// Pinned 7.55 fact the channel soak relies on: `STATE_CHANNEL`
+    /// names zero sprites, so shots stage no scene art for it.
+    fn assert_channel_block_names_no_sprites(archive: &[u8]) {
+        let list = control_list(archive, INTERFACE_LIST).expect("control list parses");
+        let block = scene_block(&list, "STATE_CHANNEL").expect("STATE_CHANNEL exists");
+        assert!(
+            scene_sprite_names(block).is_empty(),
+            "channel block names art"
+        );
+    }
+
+    #[test]
+    fn channel_shot_paints_no_fill_under_the_live_list() {
+        // Pinned no-fill rule (`docs/channel-fill.md`): the art-less
+        // channel stages nothing, so the native corner stays untouched
+        // (no navy fill) while the live title and list rows still ink.
+        let mut game = seeded_game();
+        game.lane_key(3, true);
+        assert_eq!(game.screen(), Screen::Channel);
+        let frame = paint_native_frame(&mut game, 0);
+        assert_eq!(frame[0], 0, "art-less channel paints no fill");
+        assert!(
+            !frame.contains(&o2jam_render::pack_xrgb(0x10, 0x20, 0x50)),
+            "channel keeps the retired navy placeholder"
+        );
+        assert!(
+            frame.contains(&o2jam_render::pack_xrgb(0xFF, 0xFF, 0xFF)),
+            "live title and list ink missing"
+        );
     }
 
     #[test]
