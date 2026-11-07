@@ -92,6 +92,24 @@ impl AvatarFigure {
         self.layers.get(index)
     }
 
+    /// The single-frame view of a multi-frame body: layers `0..=last`
+    /// only. The exe image control paints one frame per view (the view
+    /// draws the current frame's surface, `docs/ui-draw.md` steps 3–6;
+    /// a frame setter swaps the image, it never stacks frames), so a
+    /// mode-family frame cut loads through this
+    /// ([`playing_member_frame`]).
+    #[must_use]
+    pub fn layers_through(&self, last: usize) -> Self {
+        Self {
+            layers: self
+                .layers
+                .iter()
+                .take(last.saturating_add(1))
+                .cloned()
+                .collect(),
+        }
+    }
+
     /// Whether any layer carries a nonzero record anchor. Such a body
     /// authors its own absolute position (see
     /// [`placement_view_origin`]), so a bound rect never moves it;
@@ -564,11 +582,14 @@ fn is_playing_backdrop_panel(sprite: &str) -> bool {
 /// anchors at native `(204, 0)` clear of the note lanes (`x5..193`),
 /// so the right side shows the room's venue art; the exe paints it
 /// first of all (file order `BACK1`), so it sits behind every later
-/// pass. The `Note_BG` siblings overlap the lanes on some layers,
-/// so behind painters clip the lane columns the caller passes (see
-/// `paint_behind_placements`). Every name resolves in
-/// `Playing1.opi`. Couple-mode variants ride unreferenced by the
-/// block, so only these five stage here — never invented art.
+/// pass. The `Note_BG` siblings overlap the lanes on some layers, so
+/// behind painters clip the lane columns the caller passes (see
+/// `paint_behind_placements`), and `Note_BG.ojs` rides its
+/// exe-selected frame only (`playing_member_frame` — image 0, the
+/// left strip; the right strip never paints on any Playing family).
+/// Every name resolves in `Playing1.opi`. Couple-mode variants ride
+/// unreferenced by the block, so only these five stage here — never
+/// invented art.
 pub const PLAYING_BEHIND_SPRITES: [&str; 5] = [
     "Playing_BG.ojs",
     "Note_BG.ojs",
@@ -609,7 +630,9 @@ pub struct PlayingArtMode {
 /// Families (`ControlList_Playing.txt` entries + archive anchors;
 /// solo set verified against the reference photo):
 /// - note backgrounds: solo `Note_BG.ojs` (3-key rooms take
-///   `3Key_Note_BG.ojs`), team `P2P{3,7}KeyNote_BG.ojs`;
+///   `3Key_Note_BG.ojs`), team `P2P{3,7}KeyNote_BG.ojs`; `Note_BG.ojs`
+///   loads its exe-selected frame only (`playing_member_frame` —
+///   image 0, the left strip; image 1 never paints on any family);
 /// - life gauges: `Life_gauge_left_bar.ojs` always, the
 ///   `Life_gauge_back.ojs` shell team-only (the photo hides it);
 /// - BP buffer bars: `BpPoint_Left_bar.ojs` solo (the photo's
@@ -631,9 +654,37 @@ pub fn playing_member_selected(sprite: &str, mode: &PlayingArtMode) -> bool {
     }
 }
 
+/// Frame the exe view paints of a note-background body: `Some(0)`
+/// for `Note_BG.ojs`, `None` for every other sprite.
+///
+/// `IDC_IMAGE_SPLAY_BACK2` (code `0x1B500072`, `Note_BG.ojs`) stores
+/// two 213x484 raw strips — image 0 at anchor (20,0), image 1 at
+/// (567,0), byte-identical pixels (Playing1.opi body walk, 412,416 B,
+/// records at body +8/+28; `docs/notebg-cover.md`). The exe image
+/// control paints one frame per view (`docs/ui-draw.md` steps 3–6;
+/// setter `0x2f870` swaps images, file `0x2f891`–`0x2f8f7`), and a
+/// frame change needs an exe writer for that control code — a
+/// whole-image dword sweep finds none (`0x1B500072`: zero hits; the
+/// only BACK-family literals are BACK1 `0x1B500071` at VA
+/// `0x4dc822`/`0x4dcb8c`/`0x4dd2ec` and `0x1B5000D2` at
+/// `0x4e7525`/`0x4e7577`). BACK2 therefore keeps its loader-default
+/// image 0 — the left strip — on every Playing mode family; image 1
+/// is authored but unselected, and the reference photo pins venue
+/// deck over its band (`docs/playing-reference.md`). The unselected
+/// family members (`3Key_Note_BG.ojs`, the `P2P*Note_BG.ojs` bodies)
+/// are single-frame full-screen bodies, so the cut only ever bites
+/// `Note_BG.ojs` (`docs/notebg-cover.md`).
+#[must_use]
+pub fn playing_member_frame(sprite: &str) -> Option<usize> {
+    (sprite == "Note_BG.ojs").then_some(0)
+}
+
 /// [`load_scene_figures_for_stage`] through the room mode: family
 /// members the room does not select (see [`playing_member_selected`])
-/// never load, leaving their slots empty.
+/// never load, leaving their slots empty, and the selected
+/// `Note_BG.ojs` member loads its exe-selected frame only (see
+/// [`playing_member_frame`] — the view paints image 0, the left
+/// strip; the right strip never covers the venue).
 #[must_use]
 pub fn load_scene_figures_for_room(
     archive: &[u8],
@@ -646,7 +697,13 @@ pub fn load_scene_figures_for_room(
         .filter(|name| playing_member_selected(name, mode))
         .cloned()
         .collect();
-    load_scene_figures_for_stage(archive, &selected, arena_stage)
+    let mut figures = load_scene_figures_for_stage(archive, &selected, arena_stage);
+    for (name, figure) in figures.iter_mut() {
+        if let Some(last) = playing_member_frame(name) {
+            *figure = figure.layers_through(last);
+        }
+    }
+    figures
 }
 
 /// Anchor placement for one static backdrop entry: no `.bnd` rect
@@ -1676,6 +1733,17 @@ mod avatar_figure_tests {
         assert!(!playing_member_selected("Note_BG.ojs", &solo3));
     }
 
+    /// The frame cut rides the family table: `Note_BG.ojs` loads its
+    /// exe-selected image 0 only; every other sprite loads whole (the
+    /// other family members are single-frame bodies).
+    #[test]
+    fn note_bg_frame_cut_selects_image_zero() {
+        assert_eq!(playing_member_frame("Note_BG.ojs"), Some(0));
+        assert_eq!(playing_member_frame("3Key_Note_BG.ojs"), None);
+        assert_eq!(playing_member_frame("P2P7KeyNote_BG.ojs"), None);
+        assert_eq!(playing_member_frame("Playing_BG.ojs"), None);
+    }
+
     /// Loading through the room mode leaves the unselected members'
     /// slots empty (the exe slot-loader rule: a miss loads nothing and
     /// an empty slot paints nothing).
@@ -1700,6 +1768,84 @@ mod avatar_figure_tests {
         assert!(figures.contains_key("Note_BG.ojs"));
         assert!(figures.contains_key("_Playing_BG.ojs"));
         assert!(!figures.contains_key("P2P7KeyNote_BG.ojs"));
+    }
+
+    /// Two-frame body shaped like the real `Note_BG.ojs` (Playing1.opi
+    /// body walk, `docs/notebg-cover.md`): two identical 213x484 raw
+    /// RGB555 strips, image 0 anchored (20,0), image 1 anchored
+    /// (567,0), colorkey `0x0000`.
+    fn two_strip_note_bg() -> Vec<u8> {
+        let (w, h) = (213u16, 484u16);
+        let psize = u32::from(w) * u32::from(h) * 2;
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&1u16.to_le_bytes());
+        blob.extend_from_slice(&o2jam_file::SPRITE55_MAGIC.to_le_bytes());
+        blob.extend_from_slice(&2u16.to_le_bytes());
+        blob.extend_from_slice(&0x0000u16.to_le_bytes());
+        for (index, (ax, ay)) in [(20u16, 0u16), (567u16, 0u16)].into_iter().enumerate() {
+            let index = u32::try_from(index).unwrap_or(0);
+            blob.extend_from_slice(&ax.to_le_bytes());
+            blob.extend_from_slice(&ay.to_le_bytes());
+            blob.extend_from_slice(&w.to_le_bytes());
+            blob.extend_from_slice(&h.to_le_bytes());
+            blob.extend_from_slice(&(index * psize).to_le_bytes());
+            blob.extend_from_slice(&psize.to_le_bytes());
+            blob.extend_from_slice(&0u32.to_le_bytes());
+        }
+        let red = [0x00u8, 0x7C];
+        blob.extend(std::iter::repeat_n(red, psize as usize).flatten());
+        blob
+    }
+
+    /// The parity residual (docs/parity.md Playing row): our shot
+    /// painted the `Note_BG.ojs` right strip at (570,458)–(774,478)
+    /// over the venue deck. The exe paints BACK2 as a single-frame
+    /// view — image 0, the left strip — because no exe writer selects
+    /// image 1 (whole-image dword sweep: zero `0x1B500072` hits; the
+    /// view draws one frame, `docs/ui-draw.md` steps 3–6), and the
+    /// reference photo pins venue over that band. The room-mode load
+    /// must cut the figure to the selected frame.
+    #[test]
+    fn note_bg_room_load_keeps_only_the_left_strip() {
+        let archive = opa_blob(&[("Note_BG.ojs", &two_strip_note_bg())]);
+        let solo7 = PlayingArtMode {
+            key_mode: 2,
+            team_play: false,
+        };
+        let figures =
+            load_scene_figures_for_room(&archive, &["Note_BG.ojs".to_owned()], None, &solo7);
+        assert_eq!(
+            figures.get("Note_BG.ojs").map(AvatarFigure::len),
+            Some(1),
+            "the exe view paints image 0; image 1 stays unloaded"
+        );
+        let placed = vec![ScenePlacement {
+            id: "IDC_IMAGE_SPLAY_BACK2".to_owned(),
+            code: 0x1B50_0072,
+            sprite: Some("Note_BG.ojs".to_owned()),
+            rect: Rect {
+                x: 0,
+                y: 0,
+                w: 0,
+                h: 0,
+            },
+        }];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_behind_placements(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placed,
+            &figures,
+            &[],
+        );
+        let red_ink = o2jam_render::pack_xrgb(255, 0, 0);
+        assert_eq!(buf[20], red_ink, "the left strip paints at (20,0)");
+        assert_eq!(buf[567], 0, "the right strip never paints at (567,0)");
+        assert_eq!(buf[458 * 800 + 570], 0, "the checked band stays venue");
+        assert_eq!(buf[477 * 800 + 773], 0, "band bottom-right corner too");
     }
 
     fn room_control_text() -> String {

@@ -18,18 +18,20 @@
 //! digit by digit; the lobby row icons (`Room_State.ojs`,
 //! `Room_Mode.ojs`, `Room_Om.ojs`) paint the highlighted room's
 //! frames at their `SET 0x11` template rects; entry codes gate
-//! visibility by state byte. Bare [`paint_screen`] keeps the
-//! flat-color fallback while no art is staged; staged scenes never
-//! paint flat cards.
+//! visibility by state byte. The result screen pins its readouts as
+//! GDI text on the native canvas and selects verdict/grade frames
+//! from the staged bodies (`docs/cresult-anchors.md`). Bare
+//! [`paint_screen`] keeps the flat-color fallback while no art is
+//! staged; staged scenes never paint flat cards.
 
 use std::collections::HashMap;
 
 use super::super::avatar::{
-    paint_behind_placements, paint_foreground_placements, paint_scene_figures, scene_block,
-    scene_sprite_names, AvatarFigure, ScenePlacement, AVI_BLOCK, AVI_LOGO_SPRITE, CHANNEL_BLOCK,
-    LOADING_SPRITE, RESULT_BLOCK, ROOM_BLOCK, WAITING_BLOCK,
+    anchor_in_frame, paint_behind_placements, paint_foreground_placements, paint_scene_figures,
+    scene_block, scene_sprite_names, AvatarFigure, ScenePlacement, AVI_BLOCK, AVI_LOGO_SPRITE,
+    CHANNEL_BLOCK, LOADING_SPRITE, RESULT_BLOCK, ROOM_BLOCK, WAITING_BLOCK,
 };
-use super::super::playing::{DigitFont, HighwayGeometry, PlayingView, SkinSprite};
+use super::super::playing::{HighwayGeometry, PlayingView};
 use super::super::screen::Screen;
 use o2jam_file::ControlList;
 use o2jam_game::RoomTeams;
@@ -39,7 +41,7 @@ use o2jam_net::{
 };
 use o2jam_render::{
     blit_rgb555, draw_number, draw_text, fill_rect, number_width, pack_xrgb, scale_rect_to_frame,
-    text_width, Frame, Rect,
+    text_width, Frame, Rect, NATIVE_HEIGHT, NATIVE_WIDTH,
 };
 
 /// Gameplay block: real UI lives in `Playing1.opi` (235 entries,
@@ -1138,8 +1140,8 @@ pub fn paint_loading_scene(frame: &mut Frame<'_>, art: &SceneArt) {
 /// The play-scene winner banner `Winner_image.ojs` (file `0x24b014`)
 /// names the same verdict; the result scene surfaces both verdict arts.
 /// Winner is rank 1 by team score only (`RoomTeams::winner`); team
-/// totals stay server-side (per-member 4014/4016). Grade letters stay
-/// out (mapping OPEN).
+/// totals stay server-side (per-member 4014/4016). The grade plate
+/// runs on the pinned threshold table ([`grade_frame`]).
 pub const RESULT_TOP_SPRITE: &str = "StateResult_Top.ojs";
 /// Bottom half mounted by `FUN_004c2390` (file `0xc2390`).
 pub const RESULT_BOTTOM_SPRITE: &str = "StateResult_Bottom.ojs";
@@ -1148,27 +1150,18 @@ pub const RESULT_WINLOSE_SPRITE: &str = "Result_WinLose.ojs";
 /// Winner banner from `STATE_PLAYING` (file `0x24b014`), surfaced on
 /// the result scene as the same rank-1 verdict.
 pub const WINNER_IMAGE_SPRITE: &str = "Winner_image.ojs";
-/// Staged result digit font: the builder's `Result_NumFont_Blue.ojs`
-/// body (art block file `0x24a338`–`0x24a38d`, lifecycle §11; the
-/// `STATE_RESULT` block itself names no digit font — verified decl
-/// `0x07`). Ten stored digit frames 0..=9, all raw RGB555 at (0,0)
-/// anchors (frames 17x13 … 19x14). The scene figures carry the body;
-/// [`result_digit_font`] binds it through the shared [`DigitFont`].
-pub const RESULT_NUM_FONT_SPRITE: &str = "Result_NumFont_Blue.ojs";
+/// Grade plate bound by `STATE_RESULT` rect 7
+/// (`IDC_IMAGE_SRESULT_RANKINGFIELD`, `Result_Imgs_Rank.ojs`): eight
+/// frames, all anchored (395,531) — 35×41 ×2, 39×41 ×4, 38×41, 79×41
+/// (dossier `ev_c61d99f8…`). Frame *n* paints image *n−1*, so grade
+/// 1..=8 shows images 0..=7.
+pub const RESULT_RANK_SPRITE: &str = "Result_Imgs_Rank.ojs";
 
-/// The result digit font staged among `figures` (`None` without the
-/// body or with fewer than ten decoded frames — a compressed frame
-/// would misalign the digit index, so the font stays out and the
-/// procedural digits keep painting, like the PlaySkin fonts).
-#[must_use]
-fn result_digit_font(figures: &HashMap<String, AvatarFigure>) -> Option<DigitFont> {
-    let figure = figures.get(RESULT_NUM_FONT_SPRITE)?;
-    let frames = (0..10usize)
-        .filter_map(|index| figure.layer(index))
-        .map(|layer| SkinSprite::new(layer.image.clone(), layer.colorkey))
-        .collect();
-    DigitFont::from_frames(frames)
-}
+/// Sprites whose frames the result painter selects one of (the
+/// verdict banner plus the grade plate): kept out of the whole-stack
+/// backdrop pass so unused frames never bleed through, then painted
+/// at the exe-selected frame only.
+const RESULT_FRAME_BODIES: [&str; 2] = [RESULT_WINLOSE_SPRITE, RESULT_RANK_SPRITE];
 
 /// Sprites the result builder `FUN_004c2390` (file `0xc2390`) mounts,
 /// in load order: top, bottom, then the win/lose verdict.
@@ -1205,149 +1198,280 @@ pub fn battle_verdict(teams: &RoomTeams, self_team: Option<u8>) -> Option<Battle
     }
 }
 
-/// Verdict caption standing in for the staged `Winner_image.ojs` /
-/// `Result_WinLose.ojs` bodies until those figures bind.
-fn verdict_text(verdict: BattleVerdict) -> &'static str {
+/// Result verdict state the banner painter maps to a WinLose frame
+/// (`FUN_004c3120`): solo plays take the solo banner, battles the
+/// win-flag frames.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResultVerdict {
+    /// Solo play (the exe's player-count branch): frame 4, the solo
+    /// banner image.
+    Solo,
+    /// Team battle with the resolved rank-1 verdict, if any (`None`
+    /// while the winner or the local team is unknown — no banner,
+    /// the exe's observer frame-0 arm being OPEN, dossier note 10).
+    Battle(Option<BattleVerdict>),
+}
+
+/// WinLose frame for one verdict (`FUN_004c3120`, dossier
+/// `ev_38f32576…`): solo draws frame 4; a battle win-flag byte of 1
+/// draws frame 1 and 2 draws frame 2, anything else frame 3. The
+/// shell's verdict model only resolves rank-1 (flag 1) or not, so
+/// the flag-2 arm stays unreachable here; frame 4 clamps to the
+/// fourth image at draw time like the exe setter.
+#[must_use]
+pub fn winlose_frame(verdict: ResultVerdict) -> Option<u8> {
     match verdict {
-        BattleVerdict::Win => "WIN",
-        BattleVerdict::Lose => "LOSE",
+        ResultVerdict::Solo => Some(4),
+        ResultVerdict::Battle(Some(BattleVerdict::Win)) => Some(1),
+        ResultVerdict::Battle(Some(BattleVerdict::Lose)) => Some(3),
+        ResultVerdict::Battle(None) => None,
     }
 }
 
-/// Verdict ink: gold for a win, dim gray for a loss.
-fn verdict_ink(verdict: BattleVerdict) -> u32 {
-    match verdict {
-        BattleVerdict::Win => pack_xrgb(0xFF, 0xD0, 0x20),
-        BattleVerdict::Lose => pack_xrgb(0x90, 0x90, 0x90),
-    }
-}
+/// Pinned grade thresholds (grade chooser `FUN_004c4dd0`, dossier
+/// `ev_615e034c…`): score ≥ max × t lifts the plate to the paired
+/// frame, compared in this order. The f64 constants sit at
+/// `0x64a500/0x644888/0x64a4f8/0x64a4f0/0x64a4e8/0x64a4e0`.
+const GRADE_THRESHOLDS: [(f64, u8); 6] = [
+    (0.30, 1),
+    (0.50, 2),
+    (0.70, 3),
+    (0.80, 4),
+    (0.90, 5),
+    (0.95, 6),
+];
 
-/// Paint the rank-1 verdict line under the score digits; nothing
-/// while the verdict is unknown.
-fn paint_battle_verdict(frame: &mut Frame<'_>, verdict: Option<BattleVerdict>) {
-    let Some(known) = verdict else {
-        return;
-    };
-    draw_text(frame, 16, 48, verdict_text(known), verdict_ink(known));
-}
-
-/// Readout column of both result digit rows (frame pixels; the
-/// staged digits anchor here exactly like the procedural glyphs).
-const RESULT_DIGITS_X: i32 = 16;
-/// Row of the points readout.
-const RESULT_POINTS_ROW: i32 = 16;
-/// Row of the max-combo readout.
-const RESULT_COMBO_ROW: i32 = 32;
-/// Procedural points ink (replaced by the staged font when bound).
-const RESULT_POINTS_INK: u32 = pack_xrgb(0xFF, 0xFF, 0xFF);
-/// Procedural max-combo ink (replaced by the staged font when bound).
-const RESULT_COMBO_INK: u32 = pack_xrgb(0xFF, 0xFF, 0x40);
-
-/// One result digit readout: the staged [`RESULT_NUM_FONT_SPRITE`]
-/// font when bound, procedural glyphs otherwise (same origin and
-/// anchor, so the fallback is a pure glyph swap).
-fn paint_result_digits(
-    frame: &mut Frame<'_>,
-    digits: Option<&DigitFont>,
-    row: i32,
-    value: u32,
-    procedural_ink: u32,
-) {
-    match digits {
-        Some(font) => font.paint(frame, RESULT_DIGITS_X, row, value),
-        None => {
-            draw_number(frame, RESULT_DIGITS_X, row, value, procedural_ink);
+/// Grade plate frame 1..=8 for one finished play (`FUN_004c4dd0`):
+/// `ratio` climbs the pinned threshold table; a max combo one under
+/// the note count promotes grade 6 to 7; a score equal to the max
+/// reference gives 8. The exe ratio reads score global `0x77ee60`
+/// against reference `this+0x10d14` — neither settleable from the
+/// pinned evidence (dossier OPEN 3/9), so callers feed the shell's
+/// documented stand-in ratio and the plate stays one step behind the
+/// open question.
+#[must_use]
+pub fn grade_frame(ratio: f64, combo_at_top: bool, score_at_max: bool) -> u8 {
+    let mut grade = 0;
+    for (threshold, frame) in GRADE_THRESHOLDS {
+        if ratio >= threshold {
+            grade = grade.max(frame);
         }
     }
+    if grade == 6 && combo_at_top {
+        grade = 7;
+    }
+    if score_at_max {
+        grade = 8;
+    }
+    grade
 }
 
-/// Score, best combo, verdict, and avatar figure (no background
-/// fill: shared by the flat fallback and the art scene). A dark
-/// scrim sits behind the digits so they read over staged art. Both
-/// digit readouts paint through the staged [`RESULT_NUM_FONT_SPRITE`]
-/// font when the scene carries it; `STATE_RESULT` itself names no
-/// number font (verified decl `0x07`), so without the staged body the
-/// score stays procedural UI ink painted last, after the staged
-/// panels. Grade letters stay out (mapping OPEN).
+/// White ink of the pinned result fields (the exe text helper runs
+/// at color `0xffffff`, Arial).
+fn result_number_ink() -> u32 {
+    pack_xrgb(0xFF, 0xFF, 0xFF)
+}
+
+/// True while `frame` is the exe's native canvas: the pinned result
+/// anchors live on the 800×600 surface the exe ran on, and the
+/// fixed-size glyph text must not scatter over smaller frames (the
+/// window and shot pipeline compose at native and scale once at
+/// present time).
+#[must_use]
+fn frame_is_native(frame: &Frame<'_>) -> bool {
+    frame.w == usize::try_from(NATIVE_WIDTH).unwrap_or(0)
+        && frame.h == usize::try_from(NATIVE_HEIGHT).unwrap_or(0)
+}
+
+/// Played points clamped into the exe's 32-bit score field (the
+/// `%8d` read; our u64 accumulator saturates instead of wrapping).
+#[must_use]
+fn result_score_field(score: &o2jam_game::Score) -> u32 {
+    u32::try_from(score.points).unwrap_or(u32::MAX)
+}
+
+/// Paint the pinned result numbers from the live `Score`
+/// (docs/cresult-anchors.md, top-panel painter `FUN_004c38a0`):
+/// COOL/GOOD/BAD/MISS at y=125, MAX/JAM COMBO at y=130, total score
+/// at (605,533) — white GDI text under the baked `StateResult_Top`
+/// headers, never digit sprites. Each field draws its decimal from
+/// the anchor's left edge: the exe printf widths (`%5d`/`%3d`/
+/// `%4d`/`%8d`) ride a text helper whose left/right anchoring is
+/// OPEN (dossier note 5), so the verified passed x is kept as the
+/// left edge. JAM COMBO reads the jam level chain (the wire's u16
+/// `jam` field; mapping OPEN 3); non-native frames paint nothing.
+fn paint_result_numbers(frame: &mut Frame<'_>, score: &o2jam_game::Score) {
+    if !frame_is_native(frame) {
+        return;
+    }
+    let ink = result_number_ink();
+    draw_number(frame, RESULT_COOL_X, RESULT_COUNT_Y, score.counts[0], ink);
+    draw_number(frame, RESULT_GOOD_X, RESULT_COUNT_Y, score.counts[1], ink);
+    draw_number(frame, RESULT_BAD_X, RESULT_COUNT_Y, score.counts[2], ink);
+    draw_number(frame, RESULT_MISS_X, RESULT_COUNT_Y, score.counts[3], ink);
+    draw_number(
+        frame,
+        RESULT_MAX_COMBO_X,
+        RESULT_COMBO_Y,
+        score.max_combo,
+        ink,
+    );
+    draw_number(
+        frame,
+        RESULT_JAM_COMBO_X,
+        RESULT_COMBO_Y,
+        score.jam.level(),
+        ink,
+    );
+    draw_number(
+        frame,
+        RESULT_SCORE_X,
+        RESULT_SCORE_Y,
+        result_score_field(score),
+        ink,
+    );
+}
+
+/// Pinned result number anchors (docs/cresult-anchors.md, top-panel
+/// painter `FUN_004c38a0`): the judgement counts share row y=125,
+/// the combo fields sit at y=130, and the total score reads `%8d`
+/// at (605,533).
+const RESULT_COOL_X: i32 = 151;
+/// GOOD column x.
+const RESULT_GOOD_X: i32 = 240;
+/// BAD column x.
+const RESULT_BAD_X: i32 = 337;
+/// MISS column x.
+const RESULT_MISS_X: i32 = 426;
+/// Judgement-count row y.
+const RESULT_COUNT_Y: i32 = 125;
+/// MAX COMBO column x.
+const RESULT_MAX_COMBO_X: i32 = 505;
+/// JAM COMBO column x.
+const RESULT_JAM_COMBO_X: i32 = 596;
+/// Combo row y.
+const RESULT_COMBO_Y: i32 = 130;
+/// Total score column x.
+const RESULT_SCORE_X: i32 = 605;
+/// Total score row y.
+const RESULT_SCORE_Y: i32 = 533;
+
+/// Paint one selected frame of a result body (the verdict banner or
+/// the grade plate): frame *n* paints image *n−1* through the
+/// saturating [`icon_frame_layer`], blitted 1:1 at the layer's
+/// record anchor scaled into the frame — both pinned bodies anchor
+/// every frame themselves (banner images at y=190 with their own x;
+/// plate frames at (395,531)), so the anchor alone positions them
+/// exactly where the exe draws (`docs/cresult-anchors.md`). A
+/// missing body, frame, or layer paints nothing.
+fn paint_result_body_frame(
+    frame: &mut Frame<'_>,
+    figures: &HashMap<String, AvatarFigure>,
+    sprite: &str,
+    body_frame: Option<u8>,
+) {
+    let Some(body_frame) = body_frame else {
+        return;
+    };
+    let Some(figure) = figures.get(sprite) else {
+        return;
+    };
+    let Some(layer_index) = icon_frame_layer(body_frame, figure.len()) else {
+        return;
+    };
+    let Some(layer) = figure.layer(layer_index) else {
+        return;
+    };
+    let (x, y) = anchor_in_frame(layer.dx, layer.dy, frame.w, frame.h);
+    blit_rgb555(frame, &layer.image.view(), x, y, Some(layer.colorkey));
+}
+
+/// Paint the result backdrop: the staged scene minus the frame
+/// bodies ([`RESULT_FRAME_BODIES`]) in file order, so their unused
+/// frames never stack through the whole-layer pass. Empty art falls
+/// back to the flat background; placements without a loaded figure
+/// are skipped.
+fn paint_result_backdrop(frame: &mut Frame<'_>, art: &SceneArt) {
+    if !art.has_figures() {
+        fill_background(frame, Screen::Result);
+        return;
+    }
+    let stacked: Vec<ScenePlacement> = art
+        .placements
+        .iter()
+        .filter(|placed| {
+            placed
+                .sprite
+                .as_deref()
+                .is_none_or(|sprite| !RESULT_FRAME_BODIES.contains(&sprite))
+        })
+        .cloned()
+        .collect();
+    paint_scene_figures(frame, &stacked, &art.figures);
+}
+
+/// Paint the avatar figure and the pinned result numbers (shared by
+/// the flat fallback and the staged scene; the numbers are GDI text
+/// the exe paints regardless of the art).
 fn paint_result_content(
     frame: &mut Frame<'_>,
     avatar: Option<&AvatarFigure>,
     score: &o2jam_game::Score,
-    verdict: Option<BattleVerdict>,
-    digits: Option<&DigitFont>,
 ) {
-    paint_digits_scrim(frame);
     if let Some(figure) = avatar {
         figure.paint(frame, frame.w as i32 / 2 - 32, frame.h as i32 / 2 - 32);
     }
-    let points = u32::try_from(score.points).unwrap_or(u32::MAX);
-    paint_result_digits(frame, digits, RESULT_POINTS_ROW, points, RESULT_POINTS_INK);
-    paint_result_digits(
-        frame,
-        digits,
-        RESULT_COMBO_ROW,
-        score.max_combo,
-        RESULT_COMBO_INK,
-    );
-    paint_battle_verdict(frame, verdict);
+    paint_result_numbers(frame, score);
 }
 
-/// Dark sheet behind the result digits and verdict line so the
-/// score ink stays readable over staged result panels.
-fn paint_digits_scrim(frame: &mut Frame<'_>) {
-    if frame.w == 0 || frame.h == 0 {
-        return;
-    }
-    fill_rect(
-        frame,
-        &Rect {
-            x: 8,
-            y: 8,
-            w: 64,
-            h: 52,
-        },
-        scrim_color(),
-    );
-}
-
-/// Paint the results scene: score, best combo, rank-1 verdict, and a
-/// loaded avatar figure over the card. Grade letters stay out
-/// (mapping OPEN).
+/// Paint the flat results fallback: card, avatar figure, and the
+/// pinned result numbers. The retired text verdict stays gone — the
+/// banner is a sprite frame of the staged art.
 pub(crate) fn paint_result(
     frame: &mut Frame<'_>,
     avatar: Option<&AvatarFigure>,
     score: &o2jam_game::Score,
-    verdict: Option<BattleVerdict>,
 ) {
     paint_card(
         frame,
         pack_xrgb(0x10, 0x10, 0x08),
         pack_xrgb(0xC0, 0xA0, 0x20),
     );
-    paint_result_content(frame, avatar, score, verdict, None);
+    paint_result_content(frame, avatar, score);
 }
 
-/// Paint staged result art (`StateResult_Top/Bottom.ojs` plus
-/// `Result_WinLose.ojs` via `FUN_004c2390`, file `0xc2390`) with the
-/// avatar figure, live digits, and the `Winner_image.ojs` /
-/// `Result_WinLose.ojs` verdict on top. The digits paint through the
-/// staged [`RESULT_NUM_FONT_SPRITE`] font when the scene figures
-/// carry it (see [`result_digit_font`]).
+/// Paint the staged result scene (`docs/cresult-anchors.md`): the
+/// `.bnd`-bound block art first (minus the frame bodies), then the
+/// exe-selected verdict banner and grade plate frames, then the
+/// avatar figure and the pinned GDI numbers on top — the fill order
+/// of `FUN_004c3120` (banner, then top-panel painter, then rows).
 pub fn paint_result_scene(
     frame: &mut Frame<'_>,
     avatar: Option<&AvatarFigure>,
     score: &o2jam_game::Score,
     art: &SceneArt,
-    verdict: Option<BattleVerdict>,
+    verdict: ResultVerdict,
+    grade: Option<u8>,
 ) {
-    art.paint_backdrop(frame, Screen::Result);
-    let digits = result_digit_font(&art.figures);
-    paint_result_content(frame, avatar, score, verdict, digits.as_ref());
+    paint_result_backdrop(frame, art);
+    paint_result_body_frame(
+        frame,
+        &art.figures,
+        RESULT_WINLOSE_SPRITE,
+        winlose_frame(verdict),
+    );
+    paint_result_body_frame(
+        frame,
+        &art.figures,
+        RESULT_RANK_SPRITE,
+        grade.filter(|g| *g >= 1),
+    );
+    paint_result_content(frame, avatar, score);
 }
 
 /// Score digits anchor top-left (`LivePlay` draws points at
 /// `(16, 16)` and combo at `(16, 32)`): the behind scene stays out
-/// of the same digits box the result scrim uses, in frame pixels.
+/// of that digits box, in frame pixels.
 /// Frame-space zones the behind-highway scene never paints: the lane
 /// columns only. The exe paints the stage backdrop first of all
 /// (applier `0x4e7850`, file order `BACK1` before `BACK2`/`BACK3`),
@@ -1372,7 +1496,9 @@ pub fn paint_playing_backdrop(frame: &mut Frame<'_>, art: &SceneArt) {
 
 /// Paint staged gameplay art around the highway: the behind-highway
 /// scene first (`Playing_BG<stage>.ojs` plus the `Note_BG` siblings —
-/// see `avatar::PLAYING_BEHIND_SPRITES`), clipped only around the
+/// see `avatar::PLAYING_BEHIND_SPRITES`; `Note_BG.ojs` rides its
+/// exe-selected frame only, `avatar::playing_member_frame`), clipped
+/// only around the
 /// lane columns per the exe paint order (the backdrop sits at the
 /// bottom; staged gauges, captions, and the tally strip paint over
 /// it), then the static backdrop panels (`Playing_Menu.ojs`, the
@@ -1459,7 +1585,7 @@ pub fn paint_screen(frame: &mut Frame<'_>, screen: Screen) {
         Screen::Playing => {
             PlayingView::default().paint(frame, &HighwayGeometry::centered(frame.w, frame.h));
         }
-        Screen::Result => paint_result(frame, None, &o2jam_game::Score::default(), None),
+        Screen::Result => paint_result(frame, None, &o2jam_game::Score::default()),
     }
 }
 
@@ -1521,9 +1647,14 @@ mod paint_tests {
                 paint_screen(&mut frame, screen);
                 paint_playing_overlay(&mut frame, art);
             }
-            Screen::Result => {
-                paint_result_scene(&mut frame, None, &o2jam_game::Score::default(), art, None)
-            }
+            Screen::Result => paint_result_scene(
+                &mut frame,
+                None,
+                &o2jam_game::Score::default(),
+                art,
+                ResultVerdict::Solo,
+                None,
+            ),
         }
         buf
     }
@@ -2334,7 +2465,10 @@ mod paint_tests {
     }
 
     #[test]
-    fn result_scene_layers_digits_and_avatar_over_art() {
+    fn result_scene_keeps_small_frames_number_free() {
+        // 64x48 is not the exe's native canvas, so the pinned GDI
+        // numbers wait (frame_is_native): the staged art and the
+        // avatar paint, no white digit ink anywhere.
         let art = corner_art();
         let score = o2jam_game::Score {
             points: 200,
@@ -2351,13 +2485,13 @@ mod paint_tests {
             Some(&red_figure()),
             &score,
             &art,
+            ResultVerdict::Solo,
             None,
         );
-        // Logo pixel at the origin, avatar red inside the frame, and
-        // the white score digits top-left.
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert!(buf.contains(&pack_xrgb(255, 0, 0)));
-        assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+        assert!(!buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+        assert!(!buf.contains(&pack_xrgb(0xFF, 0xFF, 0x40)));
     }
 
     #[test]
@@ -2409,96 +2543,7 @@ mod paint_tests {
         );
         assert_eq!(RESULT_WINLOSE_SPRITE, "Result_WinLose.ojs");
         assert_eq!(WINNER_IMAGE_SPRITE, "Winner_image.ojs");
-        assert_eq!(RESULT_NUM_FONT_SPRITE, "Result_NumFont_Blue.ojs");
-    }
-
-    /// One digit-font figure: digit `d`'s layer is a solid 2x2 frame
-    /// of `0x0001 << (d + 1)` (black colorkey), so every digit paints
-    /// a distinct ink at the readout origin.
-    fn font_figure(digits: usize) -> AvatarFigure {
-        let mut figure = AvatarFigure::default();
-        for digit in 0..digits.min(10) {
-            figure.push_layer(FigureLayer {
-                image: Rgb555Image {
-                    w: 2,
-                    h: 2,
-                    words: vec![0x0001u16 << (digit + 1); 4],
-                },
-                dx: 0,
-                dy: 0,
-                colorkey: 0x0000,
-            });
-        }
-        figure
-    }
-
-    /// Solid ink of synthetic digit `d` (see [`font_figure`]).
-    fn digit_ink(digit: u8) -> u32 {
-        let (r, g, b) = o2jam_render::expand_rgb555(0x0001u16 << (digit + 1));
-        pack_xrgb(r, g, b)
-    }
-
-    /// Readout score for the result-digit tests: 200 points, best
-    /// combo 7 (both open with a distinct synthetic digit).
-    fn readout_score() -> o2jam_game::Score {
-        o2jam_game::Score {
-            points: 200,
-            max_combo: 7,
-            ..o2jam_game::Score::default()
-        }
-    }
-
-    /// Paint one result scene over a 64x48 frame.
-    fn painted_result_scene(art: &SceneArt) -> Vec<u32> {
-        let mut buf = vec![0u32; 64 * 48];
-        paint_result_scene(
-            &mut Frame {
-                buf: &mut buf,
-                w: 64,
-                h: 48,
-            },
-            None,
-            &readout_score(),
-            art,
-            None,
-        );
-        buf
-    }
-
-    #[test]
-    fn result_scene_paints_digits_through_the_staged_numfont() {
-        // Ten synthetic digit frames: both readouts open with their
-        // first staged digit (points "200" digit 2, combo "7" digit
-        // 7), not the procedural inks.
-        let art = SceneArt {
-            placements: Vec::new(),
-            figures: HashMap::from([(RESULT_NUM_FONT_SPRITE.to_owned(), font_figure(10))]),
-        };
-        let buf = painted_result_scene(&art);
-        assert_eq!(buf[16 * 64 + 16], digit_ink(2));
-        assert_eq!(buf[32 * 64 + 16], digit_ink(7));
-    }
-
-    #[test]
-    fn result_scene_keeps_procedural_digits_without_the_numfont() {
-        // No font body staged: the procedural inks keep the same
-        // anchors (points white, combo amber).
-        let buf = painted_result_scene(&SceneArt::default());
-        assert_eq!(buf[16 * 64 + 16], pack_xrgb(0xFF, 0xFF, 0xFF));
-        assert_eq!(buf[32 * 64 + 16], pack_xrgb(0xFF, 0xFF, 0x40));
-    }
-
-    #[test]
-    fn result_scene_rejects_an_incomplete_numfont() {
-        // Nine frames never bind (a compressed frame would misalign
-        // the digit index): the readouts stay procedural.
-        let art = SceneArt {
-            placements: Vec::new(),
-            figures: HashMap::from([(RESULT_NUM_FONT_SPRITE.to_owned(), font_figure(9))]),
-        };
-        let buf = painted_result_scene(&art);
-        assert_eq!(buf[16 * 64 + 16], pack_xrgb(0xFF, 0xFF, 0xFF));
-        assert_eq!(buf[32 * 64 + 16], pack_xrgb(0xFF, 0xFF, 0x40));
+        assert_eq!(RESULT_RANK_SPRITE, "Result_Imgs_Rank.ojs");
     }
 
     #[test]
@@ -2517,57 +2562,353 @@ mod paint_tests {
         assert_eq!(battle_verdict(&teams, None), None);
     }
 
-    #[test]
-    fn result_win_paints_gold_caption() {
-        let mut buf = vec![0u32; 64 * 64];
+    /// Flat native result for `score`, exactly as the no-art
+    /// fallback paints it.
+    fn flat_native_result(score: &o2jam_game::Score) -> Vec<u32> {
+        let mut buf = vec![0u32; 800 * 600];
         paint_result(
             &mut Frame {
                 buf: &mut buf,
-                w: 64,
-                h: 64,
+                w: 800,
+                h: 600,
+            },
+            None,
+            score,
+        );
+        buf
+    }
+
+    /// Staged native result scene for one verdict and grade.
+    fn painted_native_scene(art: &SceneArt, verdict: ResultVerdict, grade: Option<u8>) -> Vec<u32> {
+        let mut buf = vec![0u32; 800 * 600];
+        paint_result_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
             },
             None,
             &o2jam_game::Score::default(),
-            Some(BattleVerdict::Win),
+            art,
+            verdict,
+            grade,
         );
-        assert!(buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
+        buf
+    }
+
+    /// Frame body with one opaque 2x2 layer per `anchors` entry, each
+    /// a distinct solid RGB555 ink (black colorkey) — the pinned
+    /// banner/plate bodies, shrunk to probe pixels.
+    fn frame_body(anchors: &[(i32, i32)]) -> AvatarFigure {
+        let mut figure = AvatarFigure::default();
+        for (index, (dx, dy)) in anchors.iter().enumerate() {
+            figure.push_layer(FigureLayer {
+                image: Rgb555Image {
+                    w: 2,
+                    h: 2,
+                    words: vec![0x0001u16 << (index + 1); 4],
+                },
+                dx: *dx,
+                dy: *dy,
+                colorkey: 0x0000,
+            });
+        }
+        figure
+    }
+
+    /// Solid ink of frame-body layer `index` (see [`frame_body`]).
+    fn frame_ink(index: usize) -> u32 {
+        let (r, g, b) = o2jam_render::expand_rgb555(0x0001u16 << (index + 1));
+        pack_xrgb(r, g, b)
+    }
+
+    /// Score with every pinned field set to a distinct full-top-row
+    /// digit (the 3x5 glyphs of 8/9/3/2/7/5 all carry a lit
+    /// top-left pixel).
+    fn full_score() -> o2jam_game::Score {
+        let mut score = o2jam_game::Score {
+            points: 87_654_321,
+            max_combo: 77,
+            counts: [800, 900, 300, 200],
+            ..o2jam_game::Score::default()
+        };
+        for _ in 0..50 {
+            score.jam.note(o2jam_game::Judgement::Cool);
+        }
+        score
+    }
+
+    /// One pinned field: the glyph pixel at `(x, y)` must light and
+    /// the pixel left of the anchor must stay flat (the decimal
+    /// starts exactly at the pinned x).
+    fn assert_field(buf: &[u32], x: i32, y: i32) {
+        let at = |x: i32, y: i32| buf[y as usize * 800 + x as usize];
+        assert_eq!(at(x, y), result_number_ink(), "field at ({x},{y})");
+        assert_ne!(at(x - 1, y), result_number_ink(), "left of ({x},{y})");
     }
 
     #[test]
-    fn result_lose_paints_gray_caption() {
-        let mut buf = vec![0u32; 64 * 64];
+    fn cool_field_paints_at_its_pinned_anchor() {
+        assert_field(
+            &flat_native_result(&full_score()),
+            RESULT_COOL_X,
+            RESULT_COUNT_Y,
+        );
+    }
+
+    #[test]
+    fn good_field_paints_at_its_pinned_anchor() {
+        assert_field(
+            &flat_native_result(&full_score()),
+            RESULT_GOOD_X,
+            RESULT_COUNT_Y,
+        );
+    }
+
+    #[test]
+    fn bad_field_paints_at_its_pinned_anchor() {
+        assert_field(
+            &flat_native_result(&full_score()),
+            RESULT_BAD_X,
+            RESULT_COUNT_Y,
+        );
+    }
+
+    #[test]
+    fn miss_field_paints_at_its_pinned_anchor() {
+        assert_field(
+            &flat_native_result(&full_score()),
+            RESULT_MISS_X,
+            RESULT_COUNT_Y,
+        );
+    }
+
+    #[test]
+    fn max_combo_field_paints_at_its_pinned_anchor() {
+        assert_field(
+            &flat_native_result(&full_score()),
+            RESULT_MAX_COMBO_X,
+            RESULT_COMBO_Y,
+        );
+    }
+
+    #[test]
+    fn jam_combo_field_paints_the_jam_level_chain() {
+        // 50 Cools climb the jam to level 2 (progress 100 over the
+        // level-2 threshold): the JAM COMBO field shows the chain,
+        // the wire's u16 `jam` field.
+        assert_eq!(full_score().jam.level(), 2);
+        assert_field(
+            &flat_native_result(&full_score()),
+            RESULT_JAM_COMBO_X,
+            RESULT_COMBO_Y,
+        );
+    }
+
+    #[test]
+    fn total_score_field_paints_at_its_pinned_anchor() {
+        assert_field(
+            &flat_native_result(&full_score()),
+            RESULT_SCORE_X,
+            RESULT_SCORE_Y,
+        );
+    }
+
+    #[test]
+    fn result_numbers_clamp_at_the_32_bit_field() {
+        // The `%8d` read is the exe's 32-bit field: an oversized u64
+        // accumulator saturates instead of wrapping.
+        let score = o2jam_game::Score {
+            points: u64::from(u32::MAX) + 5,
+            ..o2jam_game::Score::default()
+        };
+        let expected = flat_native_result(&o2jam_game::Score {
+            points: u64::from(u32::MAX),
+            ..o2jam_game::Score::default()
+        });
+        let actual = flat_native_result(&score);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn result_numbers_wait_for_the_native_canvas() {
+        // 70x60 is not the exe canvas: no field paints, matching the
+        // small-frame contract of tests/scenes.rs.
+        let mut buf = vec![0u32; 70 * 60];
         paint_result(
             &mut Frame {
                 buf: &mut buf,
-                w: 64,
-                h: 64,
+                w: 70,
+                h: 60,
             },
             None,
-            &o2jam_game::Score::default(),
-            Some(BattleVerdict::Lose),
+            &full_score(),
         );
-        assert!(buf.contains(&pack_xrgb(0x90, 0x90, 0x90)));
+        assert!(!buf.contains(&result_number_ink()));
     }
 
     #[test]
-    fn result_without_verdict_paints_no_caption() {
-        let mut buf = vec![0u32; 64 * 64];
-        paint_result(
-            &mut Frame {
-                buf: &mut buf,
-                w: 64,
-                h: 64,
-            },
-            None,
-            &o2jam_game::Score::default(),
-            None,
+    fn winlose_frames_follow_the_pinned_rule() {
+        // `FUN_004c3120`: solo 4; battle flag 1 -> 1, flag 2 -> 2,
+        // else 3. The shell resolves flag 1 (rank 1) or not; the
+        // flag-2 arm stays unreachable (dossier OPEN 10).
+        assert_eq!(winlose_frame(ResultVerdict::Solo), Some(4));
+        assert_eq!(
+            winlose_frame(ResultVerdict::Battle(Some(BattleVerdict::Win))),
+            Some(1)
         );
-        assert!(!buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
-        assert!(!buf.contains(&pack_xrgb(0x90, 0x90, 0x90)));
+        assert_eq!(
+            winlose_frame(ResultVerdict::Battle(Some(BattleVerdict::Lose))),
+            Some(3)
+        );
+        assert_eq!(winlose_frame(ResultVerdict::Battle(None)), None);
+    }
+
+    /// Banner art at the pinned image anchors: images 0/1 at (100,
+    /// 190), image 2 at (151,190), image 3 at (126,190).
+    fn banner_art() -> SceneArt {
+        SceneArt {
+            placements: Vec::new(),
+            figures: HashMap::from([(
+                RESULT_WINLOSE_SPRITE.to_owned(),
+                frame_body(&[(100, 190), (100, 190), (151, 190), (126, 190)]),
+            )]),
+        }
     }
 
     #[test]
-    fn result_scene_layers_verdict_over_staged_art() {
+    fn solo_result_paints_the_fourth_banner_image() {
+        // Frame 4 clamps to image 3, the solo banner at (126,190);
+        // the battle images never paint.
+        let buf = painted_native_scene(&banner_art(), ResultVerdict::Solo, None);
+        let at = |x: i32, y: i32| buf[y as usize * 800 + x as usize];
+        assert_eq!(at(126, 190), frame_ink(3));
+        assert_ne!(at(100, 190), frame_ink(0));
+        assert_ne!(at(151, 190), frame_ink(2));
+    }
+
+    #[test]
+    fn battle_win_paints_the_first_banner_image() {
+        let buf = painted_native_scene(
+            &banner_art(),
+            ResultVerdict::Battle(Some(BattleVerdict::Win)),
+            None,
+        );
+        let at = |x: i32, y: i32| buf[y as usize * 800 + x as usize];
+        assert_eq!(at(100, 190), frame_ink(0));
+        assert_ne!(at(126, 190), frame_ink(3));
+        assert_ne!(at(151, 190), frame_ink(2));
+    }
+
+    #[test]
+    fn battle_lose_paints_the_third_banner_image() {
+        let buf = painted_native_scene(
+            &banner_art(),
+            ResultVerdict::Battle(Some(BattleVerdict::Lose)),
+            None,
+        );
+        let at = |x: i32, y: i32| buf[y as usize * 800 + x as usize];
+        assert_eq!(at(151, 190), frame_ink(2));
+        assert_ne!(at(100, 190), frame_ink(0));
+        assert_ne!(at(126, 190), frame_ink(3));
+    }
+
+    #[test]
+    fn unresolved_battle_paints_no_banner() {
+        let buf = painted_native_scene(&banner_art(), ResultVerdict::Battle(None), None);
+        for ink in [frame_ink(0), frame_ink(1), frame_ink(2), frame_ink(3)] {
+            assert!(!buf.contains(&ink));
+        }
+    }
+
+    /// Grade plate art: eight frames all anchored (395,531), each a
+    /// distinct solid ink.
+    fn rank_art() -> SceneArt {
+        SceneArt {
+            placements: vec![ScenePlacement {
+                id: "IDC_IMAGE_SRESULT_RANKINGFIELD".to_owned(),
+                code: 0x1750_0007,
+                sprite: Some(RESULT_RANK_SPRITE.to_owned()),
+                rect: Rect {
+                    x: 395,
+                    y: 531,
+                    w: 79,
+                    h: 41,
+                },
+            }],
+            figures: HashMap::from([(RESULT_RANK_SPRITE.to_owned(), frame_body(&[(395, 531); 8]))]),
+        }
+    }
+
+    #[test]
+    fn grade_thresholds_climb_the_pinned_table() {
+        // `FUN_004c4dd0` f64 compares at 0.30/0.50/0.70/0.80/0.90/
+        // 0.95, each lifting the plate one frame.
+        let cases = [
+            (0.29, 0u8),
+            (0.30, 1),
+            (0.49, 1),
+            (0.50, 2),
+            (0.69, 2),
+            (0.70, 3),
+            (0.79, 3),
+            (0.80, 4),
+            (0.89, 4),
+            (0.90, 5),
+            (0.949, 5),
+            (0.95, 6),
+            (1.0, 6),
+        ];
+        for (ratio, frame) in cases {
+            assert_eq!(grade_frame(ratio, false, false), frame, "ratio {ratio}");
+        }
+    }
+
+    #[test]
+    fn grade_promotes_combo_top_and_max_score() {
+        // Max combo == note count - 1 promotes grade 6 only; a score
+        // equal to the max reference gives 8 outright.
+        assert_eq!(grade_frame(0.95, true, false), 7);
+        assert_eq!(grade_frame(0.90, true, false), 5);
+        assert_eq!(grade_frame(0.30, false, true), 8);
+    }
+
+    #[test]
+    fn grade_plate_paints_the_selected_frame_at_its_pinned_anchor() {
+        // Grade 3 paints image 2 at (395,531); the wider max-score
+        // image stays out.
+        let buf = painted_native_scene(&rank_art(), ResultVerdict::Solo, Some(3));
+        let at = |x: i32, y: i32| buf[y as usize * 800 + x as usize];
+        assert_eq!(at(395, 531), frame_ink(2));
+        assert_ne!(at(395, 531), frame_ink(7));
+    }
+
+    #[test]
+    fn sub_threshold_grades_keep_the_plate_off() {
+        // Grade 0 (ratio under 0.30) and no ratio at all paint no
+        // letter: the enter painter's frame 0 stays the empty state.
+        for grade in [None, Some(0)] {
+            let buf = painted_native_scene(&rank_art(), ResultVerdict::Solo, grade);
+            for index in 0..8 {
+                assert!(!buf.contains(&frame_ink(index)));
+            }
+        }
+    }
+
+    #[test]
+    fn frame_bodies_never_stack_through_the_backdrop() {
+        // The rank placement binds rect 7 like the real block: the
+        // whole-layer backdrop pass must skip the body (its last
+        // layer would win the stack), leaving only the selected
+        // frame.
+        let buf = painted_native_scene(&rank_art(), ResultVerdict::Solo, Some(1));
+        let at = |x: i32, y: i32| buf[y as usize * 800 + x as usize];
+        assert_eq!(at(395, 531), frame_ink(0), "grade 1 paints image 0");
+        assert_ne!(at(395, 531), frame_ink(7), "the stack's last layer");
+    }
+
+    #[test]
+    fn result_scene_paints_staged_art_without_the_invented_verdict() {
         let art = corner_art();
         let mut buf = vec![0u32; 64 * 64];
         paint_result_scene(
@@ -2579,10 +2920,14 @@ mod paint_tests {
             None,
             &o2jam_game::Score::default(),
             &art,
-            Some(BattleVerdict::Win),
+            ResultVerdict::Battle(Some(BattleVerdict::Win)),
+            None,
         );
+        // The staged art paints (the corner banner body rides frame 1
+        // onto its clamped layer); the retired amber caption ink
+        // never comes back.
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
-        assert!(buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
+        assert!(!buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
     }
 
     /// Ten-layer number font: layer `i` paints digit `i`.

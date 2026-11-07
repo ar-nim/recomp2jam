@@ -256,7 +256,7 @@ fn playing_places_struck_note_on_highway() {
 }
 
 #[test]
-fn finished_song_reports_score_on_result() {
+fn finished_song_lands_on_result_without_invented_score_digits() {
     let mut game = ScreenGame::new();
     game.load_chart(vec![(2, 5000, 7)]);
     walk_to_playing(&mut game);
@@ -264,7 +264,10 @@ fn finished_song_reports_score_on_result() {
     let buf = painted_game(&mut game, 70, 60, 7000);
     assert_eq!(game.screen(), Screen::Result);
     assert_eq!(buf[0], result_background());
-    assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+    // The invented (16,16) score anchor stays UNPAINTED (anchors
+    // pending REA, docs/cresult-anchors.md).
+    assert_ne!(buf[16 * 70 + 16], pack_xrgb(0xFF, 0xFF, 0xFF));
+    assert!(!buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
 }
 
 #[test]
@@ -531,7 +534,7 @@ fn playing_layers_notes_over_staged_gauges() {
 }
 
 #[test]
-fn result_layers_digits_over_staged_art() {
+fn result_layers_staged_art_without_invented_digits() {
     let mut game = ScreenGame::new();
     game.load_chart(vec![(2, 5000, 7)]);
     stage_screen_art(&mut game, Screen::Result, "Result_WinLose.ojs");
@@ -539,5 +542,9 @@ fn result_layers_digits_over_staged_art() {
     game.strike_at(2, 5000);
     let buf = painted_game(&mut game, 70, 60, 7000);
     assert_eq!(game.screen(), Screen::Result);
-    assert_composed(&buf, &[pack_xrgb(0xFF, 0xFF, 0xFF)]);
+    assert_composed(&buf, &[]);
+    // The invented (16,16) score anchor stays UNPAINTED over the
+    // staged art (anchors pending REA, docs/cresult-anchors.md).
+    assert_ne!(buf[16 * 70 + 16], pack_xrgb(0xFF, 0xFF, 0xFF));
+    assert!(!buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
 }
