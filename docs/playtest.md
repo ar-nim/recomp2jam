@@ -2203,3 +2203,45 @@ the committed twins-head sweep log.
   `arena_echo_mismatch_fails_the_flow`), all other targets unchanged,
   0 failures). No lint findings. No commits, no pushes.** This sweep
   touched only `docs/playtest.md`.
+
+## Regression sweep — 2026-11-08 00:18 UTC+8 (HEAD `9b42aaf`, tree clean)
+
+Live re-proof on the venue-head. Covers the single commit landed after the
+arena-head baseline `e277f9a`: solo composition stage-two venue pin
+(`9b42aaf`: `shots.rs` playing-shot builder hardening, staged screenshots,
+`stage-bga.md` notes).
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1301 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 7, file 149, game 92, net 360,
+  render 73, shell 472, real_art 7, scenes 22, recomp2jam 100
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, 0 warning
+  lines.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.59 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`00:18:43 +08:00`):
+  `Create room: songflow` →
+  `Update room [000] music settings: [HX / X10 / o2ma757]` →
+  `Update room [000] arena: [1] (0)` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Update #1 - Jam: 3 (Bonus: 0)` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  connection-lost WARNs on session close; a second session walked
+  `Authorize session` → `Get channel list: [0]` →
+  `Enter channel: [0/00]` → `Get room list: [0/00]` →
+  `Get character info: [tester]`).
+- **Verdict: no regression — suite is green on the venue-head (1301
+  passed; +1 vs the 1300 arena-head baseline, all recomp2jam 99 → 100
+  from the new shots test
+  `playing_shot_pins_solo_composition_despite_live_room`, all other
+  targets unchanged, 0 failures). No lint findings. No commits, no
+  pushes.** This sweep touched only `docs/playtest.md`.
