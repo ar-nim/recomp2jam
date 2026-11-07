@@ -16,7 +16,7 @@ use o2jam_file::OJN_LEVEL_COUNT;
 use o2jam_file::{AvatarItemRow, AvatarItemTable, Bnd, ControlBlock, ControlList, OjnListEntry};
 use o2jam_net::play::{MusicListAnswer, SetRoomMusic};
 use o2jam_net::{CharacterInfo, Difficulty, GameSpeed, GameStatsUpdate};
-use o2jam_render::Frame;
+use o2jam_render::{pack_xrgb, Frame, Rect};
 
 /// Item-shop block (`CStateShop`, 164 decl entries).
 pub const SHOP_BLOCK: &str = "STATE_SHOP";
@@ -303,6 +303,295 @@ pub const SELECT_MUSIC_BIND_FILE: &str = "Dialog_SelectMusic.bnd";
 pub fn select_music_sprite_names(list: &ControlList) -> Vec<String> {
     block_sprite_names(list, SELECT_MUSIC_DIALOG_BLOCK)
 }
+
+// --- Song-select dialog structure (`reference-musicselect-4x3.png`) ---
+//
+// Anchors below measure the open `DAILOG_SELECTMUSIC` dialog on the
+// 800x600 native canvas (the 4:3 reference PNG at 2.4 px per native
+// pixel). Painters scale them through `scale_rect_to_frame`, so the
+// structure keeps its reference proportions at any frame size over
+// the staged dialog art.
+
+/// Difficulty-slot letters for the search-result icon column:
+/// `Ex`/`Nx`/`Hx` map to `E`/`N`/`H` (the Easy/Normal/Hard order the
+/// life-bar deltas already use).
+pub const SELECT_DIFFICULTY_LETTERS: [&str; OJN_LEVEL_COUNT] = ["E", "N", "H"];
+
+/// Song-level band captions, top to bottom. The exe bands are
+/// `초급 1–8` / `중급 8–19` / `고급 19–27` / `최고급 27+` (gameplay
+/// level gating, file `0x24578e`, dossier `ev_68760cac…`); the CP949
+/// captions draw as ASCII stand-ins (the micro-font has no hangul).
+pub const SELECT_LEVEL_FILTERS: [&str; 5] = ["ALL", "EASY", "MID", "HIGH", "TOP"];
+
+/// Wheel-bucket captions, top to bottom: the exe key-name table
+/// GOLD/BLACK/BLUE/RED/SILVER (`docs/dialog-strings.md`, filter path
+/// pinned) plus the ALL lead-in.
+pub const SELECT_WHEEL_FILTERS: [&str; 6] = ["ALL", "GOLD", "BLACK", "BLUE", "RED", "SILVER"];
+
+/// Genre captions, top to bottom (reference column 발라드/락/댄스/
+/// 힙합,R&B/재즈,펑크/클래식/기타). No exe genre-name table is
+/// pinned, so these are reference-transcribed stand-ins.
+pub const SELECT_GENRE_FILTERS: [&str; 8] = [
+    "ALL",
+    "BALLAD",
+    "ROCK",
+    "DANCE",
+    "HIPHOP/R&B",
+    "JAZZ/FUNK",
+    "CLASSIC",
+    "ETC",
+];
+
+/// Search-result column captions (reference 라벨/노트/곡명/작곡가/
+/// 레벨/다운/듣기/정보/성적; ASCII stand-ins).
+pub const SELECT_TABLE_HEADERS: [&str; 9] = [
+    "LABEL", "NOTE", "TITLE", "ARTIST", "LVL", "DL", "PLAY", "INFO", "GRADE",
+];
+
+/// Staged catalog song: the identity fields the search table names
+/// (`OJNList.dat` record; owned copies so the catalog outlives the
+/// parse borrow).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SelectMusicSong {
+    /// Song id (matches the `o2ma###` file number).
+    pub song_id: u32,
+    /// Song title.
+    pub title: String,
+    /// Song artist.
+    pub artist: String,
+}
+
+/// Catalog songs in file order, dead slots filtered out exactly like
+/// [`music_shop_songs`]; empty without catalog data.
+#[must_use]
+pub fn select_music_songs(entries: &[OjnListEntry<'_>]) -> Vec<SelectMusicSong> {
+    entries
+        .iter()
+        .filter(|entry| entry.is_song())
+        .map(|entry| SelectMusicSong {
+            song_id: entry.song_id,
+            title: entry.title.clone(),
+            artist: entry.artist.clone(),
+        })
+        .collect()
+}
+
+/// One search-result row: one song at one difficulty slot. The
+/// reference table repeats the song per chart (`H`/`N`/`E` letters);
+/// the staged catalog carries [`OJN_LEVEL_COUNT`] level slots per
+/// record.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SelectMusicRow<'a> {
+    /// Catalog song this row plays.
+    pub song: &'a SelectMusicSong,
+    /// Difficulty slot (`0..OJN_LEVEL_COUNT`).
+    pub slot: usize,
+}
+
+impl SelectMusicRow<'_> {
+    /// Icon-column letter ([`SELECT_DIFFICULTY_LETTERS`]).
+    #[must_use]
+    pub fn letter(self) -> &'static str {
+        SELECT_DIFFICULTY_LETTERS[self.slot]
+    }
+
+    /// Per-chart level: never staged. The catalog's level word is
+    /// range-shaped (`level_flags`, both halves 1..38), not per-chart,
+    /// so the cell draws blank rather than an invented number.
+    #[must_use]
+    pub fn level(self) -> Option<u8> {
+        None
+    }
+
+    /// Personal grade: never staged (no score table ships with the
+    /// client), so the cell draws blank.
+    #[must_use]
+    pub fn grade(self) -> Option<u8> {
+        None
+    }
+}
+
+/// Search-result rows in catalog order, easy-first; empty without
+/// songs. The reference client drops charts the install lacks; the
+/// staged data has no availability source, so every slot draws
+/// (documented gap).
+#[must_use]
+pub fn select_music_rows(songs: &[SelectMusicSong]) -> Vec<SelectMusicRow<'_>> {
+    let mut rows = Vec::with_capacity(songs.len().saturating_mul(OJN_LEVEL_COUNT));
+    for song in songs {
+        for slot in 0..OJN_LEVEL_COUNT {
+            rows.push(SelectMusicRow { song, slot });
+        }
+    }
+    rows
+}
+
+/// Search-tab caption for the row count (reference `검색결과 (1608곡)`).
+#[must_use]
+pub fn select_search_caption(row_count: usize) -> String {
+    format!("SEARCH RESULTS ({row_count})")
+}
+
+/// Picked-tab caption (reference `선곡결과 (0곡)`): no picked list is
+/// staged, so the count stays zero.
+#[must_use]
+pub fn select_picked_caption() -> &'static str {
+    "SELECTED (0)"
+}
+
+/// Status line under the rows: the exe's `%s -> %s 검색 결과입니다.`
+/// banner format (VA `0x645a50` family, `docs/dialog-strings.md`) with
+/// both filters at the ALL default — nothing stages narrower filters.
+#[must_use]
+pub fn select_status_line() -> &'static str {
+    "ALL -> ALL SEARCH RESULT."
+}
+
+/// Pager caption `page/pages` (reference `3/161`): ten rows per page,
+/// page 1 while no paging input is staged; an empty table still names
+/// page 1.
+#[must_use]
+pub fn select_pager_caption(row_count: usize) -> String {
+    let pages = row_count.div_ceil(SELECT_VISIBLE_ROWS).max(1);
+    format!("1/{pages}")
+}
+
+/// Chosung search cells in reference order: 14 jamo, `A`..`Z`, then
+/// the 숫자/기타 words (42 cells over two rows). Hangul and word
+/// cells are `None` — the micro-font has no CP949 glyphs — and keep
+/// their grid slots so the letters land at their reference positions.
+#[must_use]
+pub fn select_chosung_cells() -> Vec<Option<u8>> {
+    let mut cells = vec![None; SELECT_CHO_SUNG_JAMO];
+    cells.extend((b'A'..=b'Z').map(Some));
+    for _ in 0..SELECT_CHO_SUNG_WORDS {
+        cells.push(None);
+    }
+    cells
+}
+
+/// Difficulty-slot ink: easy green, normal yellow, hard red (the
+/// reference letter colors).
+#[must_use]
+pub const fn select_difficulty_ink(slot: usize) -> u32 {
+    match slot {
+        0 => pack_xrgb(0x30, 0xE0, 0x30),
+        1 => pack_xrgb(0xFF, 0xD0, 0x20),
+        _ => pack_xrgb(0xFF, 0x50, 0x50),
+    }
+}
+
+/// Filter-column panels (native pixels): song-level, wheel, and genre
+/// columns left to right, each spanning its button run.
+pub const SELECT_FILTER_COLUMNS: [Rect; 3] = [
+    Rect {
+        x: 28,
+        y: 95,
+        w: 96,
+        h: 300,
+    },
+    Rect {
+        x: 130,
+        y: 95,
+        w: 92,
+        h: 300,
+    },
+    Rect {
+        x: 230,
+        y: 95,
+        w: 100,
+        h: 300,
+    },
+];
+
+/// First filter button top (native y), its vertical pitch, and button
+/// height (reference column buttons).
+pub const SELECT_FILTER_BUTTON_TOP: i32 = 129;
+pub const SELECT_FILTER_BUTTON_PITCH: i32 = 33;
+pub const SELECT_FILTER_BUTTON_H: u32 = 26;
+
+/// Search-result tabs (native pixels): active search tab, picked tab.
+pub const SELECT_RESULT_TABS: [Rect; 2] = [
+    Rect {
+        x: 352,
+        y: 93,
+        w: 140,
+        h: 24,
+    },
+    Rect {
+        x: 494,
+        y: 93,
+        w: 127,
+        h: 24,
+    },
+];
+
+/// Search-table geometry (native pixels): header top, first row top,
+/// row pitch, visible rows (the reference shows ten full rows), and
+/// the horizontal band all rows share (left edge, width).
+pub const SELECT_HEADER_Y: i32 = 127;
+pub const SELECT_ROW_TOP: i32 = 150;
+pub const SELECT_ROW_PITCH: i32 = 23;
+pub const SELECT_VISIBLE_ROWS: usize = 10;
+pub const SELECT_TABLE_LEFT: i32 = 344;
+pub const SELECT_TABLE_WIDTH: u32 = 437;
+
+/// Header column lefts (native x): the check box plus the nine
+/// [`SELECT_TABLE_HEADERS`] captions.
+pub const SELECT_HEADER_COLUMNS: [i32; 10] = [344, 360, 392, 417, 565, 627, 650, 673, 692, 715];
+
+/// Status line top and strip height (native pixels), plus the pager
+/// text's right edge.
+pub const SELECT_STATUS_Y: i32 = 394;
+pub const SELECT_STATUS_H: i32 = 18;
+pub const SELECT_PAGER_RIGHT: i32 = 756;
+
+/// Search row (native pixels): title/artist radio dots, edit box,
+/// search button, all below [`SELECT_SEARCH_Y`].
+pub const SELECT_SEARCH_Y: i32 = 417;
+pub const SELECT_TITLE_RADIO: Rect = Rect {
+    x: 352,
+    y: 423,
+    w: 8,
+    h: 8,
+};
+pub const SELECT_ARTIST_RADIO: Rect = Rect {
+    x: 410,
+    y: 423,
+    w: 8,
+    h: 8,
+};
+pub const SELECT_SEARCH_BOX: Rect = Rect {
+    x: 475,
+    y: 417,
+    w: 212,
+    h: 25,
+};
+pub const SELECT_SEARCH_BUTTON: Rect = Rect {
+    x: 694,
+    y: 417,
+    w: 38,
+    h: 25,
+};
+
+/// Chosung grid (native pixels): row tops, left edge, cell pitch, and
+/// the cell counts (row 1: 14 jamo + 13 letters; row 2: 13 letters +
+/// 2 word cells).
+pub const SELECT_CHO_SUNG_Y: [i32; 2] = [444, 462];
+pub const SELECT_CHO_SUNG_LEFT: i32 = 352;
+pub const SELECT_CHO_SUNG_PITCH: i32 = 15;
+pub const SELECT_CHO_SUNG_JAMO: usize = 14;
+pub const SELECT_CHO_SUNG_WORDS: usize = 2;
+pub const SELECT_CHO_SUNG_ROW_CELLS: [usize; 2] =
+    [SELECT_CHO_SUNG_JAMO + 13, 13 + SELECT_CHO_SUNG_WORDS];
+
+/// OK button (native pixels; the reference bottom-center pill).
+pub const SELECT_OK_BUTTON: Rect = Rect {
+    x: 342,
+    y: 506,
+    w: 113,
+    h: 40,
+};
 
 /// Catalog title for one song id (`None` for dead slots and unknown ids).
 /// Dead-slot filtering matches [`music_shop_songs`]: only song entries resolve.
@@ -1056,6 +1345,159 @@ mod side_tests {
     fn select_music_dialog_stays_empty_without_block() {
         let list = o2jam_file::parse_control_list(&side_control_text()).unwrap();
         assert!(select_music_sprite_names(&list).is_empty());
+    }
+
+    #[test]
+    fn select_filters_name_three_columns() {
+        assert_eq!(SELECT_LEVEL_FILTERS, ["ALL", "EASY", "MID", "HIGH", "TOP"]);
+        assert_eq!(
+            SELECT_WHEEL_FILTERS,
+            ["ALL", "GOLD", "BLACK", "BLUE", "RED", "SILVER"]
+        );
+        assert_eq!(
+            SELECT_GENRE_FILTERS,
+            [
+                "ALL",
+                "BALLAD",
+                "ROCK",
+                "DANCE",
+                "HIPHOP/R&B",
+                "JAZZ/FUNK",
+                "CLASSIC",
+                "ETC"
+            ]
+        );
+    }
+
+    #[test]
+    fn select_table_headers_name_nine_columns() {
+        assert_eq!(
+            SELECT_TABLE_HEADERS,
+            ["LABEL", "NOTE", "TITLE", "ARTIST", "LVL", "DL", "PLAY", "INFO", "GRADE"]
+        );
+    }
+
+    #[test]
+    fn select_songs_walk_catalog_skipping_dead_slots() {
+        let blob = side_catalog();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        let songs = select_music_songs(&entries);
+        assert_eq!(songs.len(), 2);
+        assert_eq!(songs[0].song_id, 757);
+        assert_eq!(songs[0].title, "First");
+        assert_eq!(songs[0].artist, "Band");
+        assert_eq!(songs[1].song_id, 770);
+        assert_eq!(songs[1].artist, "Band");
+        assert!(select_music_songs(&[]).is_empty());
+    }
+
+    #[test]
+    fn select_rows_repeat_each_song_per_difficulty_slot() {
+        let blob = side_catalog();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        let songs = select_music_songs(&entries);
+        let rows = select_music_rows(&songs);
+        assert_eq!(rows.len(), 6);
+        assert_eq!(rows[0].song.song_id, 757);
+        assert_eq!(rows[0].slot, 0);
+        assert_eq!(rows[0].letter(), "E");
+        assert_eq!(rows[2].slot, 2);
+        assert_eq!(rows[2].letter(), "H");
+        assert_eq!(rows[3].song.song_id, 770);
+        assert_eq!(rows[3].slot, 0);
+        assert_eq!(rows[5].slot, 2);
+        assert!(select_music_rows(&[]).is_empty());
+    }
+
+    #[test]
+    fn select_rows_leave_levels_and_grades_undrawn() {
+        let blob = side_catalog();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        let songs = select_music_songs(&entries);
+        let rows = select_music_rows(&songs);
+        assert!(rows.iter().all(|row| row.level().is_none()));
+        assert!(rows.iter().all(|row| row.grade().is_none()));
+    }
+
+    #[test]
+    fn select_captions_count_rows_and_pages() {
+        assert_eq!(select_search_caption(1608), "SEARCH RESULTS (1608)");
+        assert_eq!(select_picked_caption(), "SELECTED (0)");
+        assert_eq!(select_pager_caption(1608), "1/161");
+        assert_eq!(select_pager_caption(0), "1/1");
+        assert_eq!(select_pager_caption(10), "1/1");
+        assert_eq!(select_pager_caption(11), "1/2");
+    }
+
+    #[test]
+    fn select_status_line_names_the_all_filter_path() {
+        assert_eq!(select_status_line(), "ALL -> ALL SEARCH RESULT.");
+    }
+
+    #[test]
+    fn select_chosung_cells_span_jamo_letters_and_words() {
+        let cells = select_chosung_cells();
+        assert_eq!(cells.len(), 42);
+        assert!(cells[..SELECT_CHO_SUNG_JAMO].iter().all(Option::is_none));
+        let letters: Vec<u8> = cells.iter().filter_map(|cell| *cell).collect();
+        assert_eq!(letters, (b'A'..=b'Z').collect::<Vec<_>>());
+        assert_eq!(cells[40], None);
+        assert_eq!(cells[41], None);
+    }
+
+    #[test]
+    fn select_inks_follow_the_reference_letters() {
+        assert_eq!(SELECT_DIFFICULTY_LETTERS, ["E", "N", "H"]);
+        assert_eq!(select_difficulty_ink(0), pack_xrgb(0x30, 0xE0, 0x30));
+        assert_eq!(select_difficulty_ink(1), pack_xrgb(0xFF, 0xD0, 0x20));
+        assert_eq!(select_difficulty_ink(2), pack_xrgb(0xFF, 0x50, 0x50));
+    }
+
+    #[test]
+    fn select_layout_pins_reference_anchors() {
+        // Native 800x600 measurements of reference-musicselect-4x3.png:
+        // three filter columns, ten 23 px rows under a 127-top header,
+        // and the bottom-center OK pill.
+        assert_eq!(
+            SELECT_FILTER_COLUMNS,
+            [
+                Rect {
+                    x: 28,
+                    y: 95,
+                    w: 96,
+                    h: 300
+                },
+                Rect {
+                    x: 130,
+                    y: 95,
+                    w: 92,
+                    h: 300
+                },
+                Rect {
+                    x: 230,
+                    y: 95,
+                    w: 100,
+                    h: 300
+                }
+            ]
+        );
+        assert_eq!(SELECT_FILTER_BUTTON_TOP, 129);
+        assert_eq!(SELECT_FILTER_BUTTON_PITCH, 33);
+        assert_eq!(SELECT_ROW_TOP, 150);
+        assert_eq!(SELECT_ROW_PITCH, 23);
+        assert_eq!(SELECT_VISIBLE_ROWS, 10);
+        assert_eq!(SELECT_HEADER_COLUMNS[3], 417);
+        assert_eq!(SELECT_CHO_SUNG_LEFT, 352);
+        assert_eq!(SELECT_CHO_SUNG_PITCH, 15);
+        assert_eq!(
+            SELECT_OK_BUTTON,
+            Rect {
+                x: 342,
+                y: 506,
+                w: 113,
+                h: 40
+            }
+        );
     }
 
     #[test]
