@@ -29,8 +29,8 @@ use std::collections::HashMap;
 use super::super::avatar::{
     anchor_in_frame, paint_behind_placements, paint_foreground_placements, paint_scene_figures,
     scene_block, scene_sprite_names, AvatarFigure, ScenePlacement, AVI_BLOCK, AVI_LOGO_SPRITE,
-    CHANNEL_BLOCK, LOADING_SPRITE, RESULT_BLOCK, ROOM_BLOCK, WAITING_BLOCK, WAIT_COVER_SPRITE,
-    WAIT_TEAM_SPRITES,
+    CHANNEL_BLOCK, LOADING_BLOCK, LOADING_SPRITE, RESULT_BLOCK, ROOM_BLOCK, WAITING_BLOCK,
+    WAIT_COVER_SPRITE, WAIT_TEAM_SPRITES,
 };
 use super::super::playing::{HighwayGeometry, PlayingView};
 use super::super::screen::Screen;
@@ -146,7 +146,7 @@ pub fn main_scene_sprites(list: &ControlList, screen: Screen) -> Vec<String> {
         Screen::Channel => block_sprites(list, CHANNEL_BLOCK),
         Screen::Room => block_sprites(list, ROOM_BLOCK),
         Screen::Waiting => block_sprites(list, WAITING_BLOCK),
-        Screen::Loading => block_or_single(list, "STATE_LOADING", LOADING_SPRITE),
+        Screen::Loading => block_or_single(list, LOADING_BLOCK, LOADING_SPRITE),
         Screen::Playing => block_sprites(list, PLAYING_BLOCK),
         Screen::Result => block_sprites(list, RESULT_BLOCK),
     }
@@ -1416,30 +1416,127 @@ fn paint_lobby(frame: &mut Frame<'_>, background: u32) {
     paint_card(frame, background, pack_xrgb(0xD0, 0xD0, 0xD0));
 }
 
+/// Loading gate state staged while the song table walks (exe
+/// `0x4e47a0`, file `0xe47a0`, ev `68d920c2…`): the song-table
+/// fraction plus the song title/artist being loaded. The exe sets
+/// `Trebuchet MS`/`Arial` fonts there; the shell micro-font stands
+/// in (typography gap) and the track rect below stays a documented
+/// placeholder — no verified `MusicLoading.ojs` bar geometry exists
+/// (bnd-audit 35) — so only the fraction and the caption are live.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LoadingStatus {
+    /// Song-table walk fraction (`0.0`..=`1.0`, clamped at paint).
+    pub progress: f32,
+    /// Song title being loaded (OJN header / `OJNList.dat` record).
+    pub title: String,
+    /// Song artist being loaded.
+    pub artist: String,
+}
+
+impl LoadingStatus {
+    /// Walk fraction clamped to `0.0`..=`1.0` (NaN saturates to
+    /// `0.0`): never `==`-compares floats (PERF-25).
+    #[must_use]
+    pub fn clamped_progress(&self) -> f32 {
+        if self.progress.is_nan() {
+            0.0
+        } else {
+            self.progress.clamp(0.0, 1.0)
+        }
+    }
+
+    /// `TITLE - ARTIST` caption (`None` while both are blank:
+    /// nothing paints rather than a wrong line).
+    #[must_use]
+    pub fn caption(&self) -> Option<String> {
+        let title = self.title.trim();
+        let artist = self.artist.trim();
+        match (title.is_empty(), artist.is_empty()) {
+            (true, true) => None,
+            (false, true) => Some(title.to_owned()),
+            (true, false) => Some(artist.to_owned()),
+            (false, false) => Some(format!("{title} - {artist}")),
+        }
+    }
+}
+
+/// Width of the live fill inside a `track_w` track at `progress`:
+/// clamped, then narrowed via `TryFrom`, never `as` (PERF-07).
+#[must_use]
+fn loading_fill_width(track_w: u32, progress: f32) -> u32 {
+    let clamped = if progress.is_nan() {
+        0.0
+    } else {
+        progress.clamp(0.0, 1.0)
+    };
+    let scaled = f64::from(track_w) * f64::from(clamped);
+    let rounded = scaled.round() as u64;
+    u32::try_from(rounded).unwrap_or(u32::MAX).min(track_w)
+}
+
+/// Track origin of the placeholder bar (documented placeholder:
+/// no verified `MusicLoading.ojs` bar rect, bnd-audit 35).
+fn loading_track_origin(frame: &Frame<'_>) -> (i32, i32) {
+    (frame.w as i32 / 4, frame.h as i32 / 2 - 8)
+}
+
+/// Inner width of the placeholder track on this frame.
+fn loading_track_width(frame: &Frame<'_>) -> u32 {
+    u32::try_from(frame.w as i32 / 2).unwrap_or(0)
+}
+
+/// Song-caption origin: one row below the placeholder bar
+/// (documented placeholder — no verified caption rect).
+fn loading_song_origin(frame: &Frame<'_>) -> (i32, i32) {
+    (frame.w as i32 / 4, frame.h as i32 / 2 + 12)
+}
+
 /// Loading progress bar over a dark track (no background fill:
-/// shared by the flat fallback and the art scene).
+/// shared by the flat fallback and the art scene). The track rect
+/// is a documented placeholder; only the fill fraction is live.
 fn paint_loading_bar(frame: &mut Frame<'_>) {
-    let (w, h) = (frame.w as i32, frame.h as i32);
+    paint_loading_bar_with_progress(frame, 1.0);
+}
+
+/// Loading bar with the live song-table walk fraction: the track
+/// stays put, the green fill spans `progress` of it.
+fn paint_loading_bar_with_progress(frame: &mut Frame<'_>, progress: f32) {
+    let (track_x, track_y) = loading_track_origin(frame);
+    let track_w = loading_track_width(frame);
     fill_rect(
         frame,
         &Rect {
-            x: w / 4 - 2,
-            y: h / 2 - 10,
-            w: (w / 2 + 4).max(0) as u32,
+            x: track_x - 2,
+            y: track_y - 2,
+            w: track_w.saturating_add(4),
             h: 20,
         },
         scrim_color(),
     );
-    fill_rect(
-        frame,
-        &Rect {
-            x: w / 4,
-            y: h / 2 - 8,
-            w: (w / 2) as u32,
-            h: 16,
-        },
-        pack_xrgb(0x30, 0xB0, 0x30),
-    );
+    let fill_w = loading_fill_width(track_w, progress);
+    if fill_w > 0 {
+        fill_rect(
+            frame,
+            &Rect {
+                x: track_x,
+                y: track_y,
+                w: fill_w,
+                h: 16,
+            },
+            pack_xrgb(0x30, 0xB0, 0x30),
+        );
+    }
+}
+
+/// Song title/artist line below the bar (placeholder row): dark
+/// scrim plus white ink, like the lobby detail lines. Blank
+/// captions paint nothing.
+fn paint_loading_song(frame: &mut Frame<'_>, status: &LoadingStatus) {
+    let Some(caption) = status.caption() else {
+        return;
+    };
+    let (x, y) = loading_song_origin(frame);
+    paint_room_detail_line(frame, x, y, &caption, art_title_ink());
 }
 
 /// Paint the loading gate scene.
@@ -1448,11 +1545,35 @@ fn paint_loading(frame: &mut Frame<'_>) {
     paint_loading_bar(frame);
 }
 
-/// Paint staged loading art (`MusicLoading.ojs`) with the live
-/// progress bar on top.
-pub fn paint_loading_scene(frame: &mut Frame<'_>, art: &SceneArt) {
+/// Paint the loading gate with its live state: staged genuine
+/// `MusicLoading.ojs` art at its authored (record-anchor) geometry
+/// first, then the fractional bar plus the song title/artist.
+/// Unpainted while the shell carries no walk state: the exe
+/// Trebuchet/Arial fonts and the OJN/Vorbis path stay gaps.
+pub fn paint_loading_scene_with_status(
+    frame: &mut Frame<'_>,
+    art: &SceneArt,
+    status: &LoadingStatus,
+) {
     art.paint_backdrop(frame, Screen::Loading);
-    paint_loading_bar(frame);
+    paint_loading_bar_with_progress(frame, status.clamped_progress());
+    paint_loading_song(frame, status);
+}
+
+/// Paint staged loading art (`MusicLoading.ojs`) with the live
+/// progress bar on top. Legacy indeterminate form (full bar, no
+/// caption): `game.rs` carries no walk fraction or song names yet,
+/// so callers with live state use [`paint_loading_scene_with_status`].
+pub fn paint_loading_scene(frame: &mut Frame<'_>, art: &SceneArt) {
+    paint_loading_scene_with_status(
+        frame,
+        art,
+        &LoadingStatus {
+            progress: 1.0,
+            title: String::new(),
+            artist: String::new(),
+        },
+    );
 }
 
 /// Battle verdict art mounted by the result builder `FUN_004c2390`
@@ -4383,6 +4504,101 @@ mod paint_tests {
             }
         }
         assert_eq!(buf[4], 0, "nothing past the body's own extent");
+    }
+
+    #[test]
+    fn loading_fill_spans_the_walk_fraction() {
+        // Fractional bar: the track stays put, the green fill spans
+        // `progress` of the `w/2` inner width (32x24 frame: track
+        // x8 w16, half fill x8..16 at 0.5).
+        let art = SceneArt::default();
+        let status = LoadingStatus {
+            progress: 0.5,
+            title: String::new(),
+            artist: String::new(),
+        };
+        let mut buf = vec![0u32; 32 * 24];
+        paint_loading_scene_with_status(
+            &mut Frame {
+                buf: &mut buf,
+                w: 32,
+                h: 24,
+            },
+            &art,
+            &status,
+        );
+        let green = pack_xrgb(0x30, 0xB0, 0x30);
+        assert_eq!(buf[4 * 32 + 8], green, "fill starts at the track");
+        assert_eq!(buf[4 * 32 + 15], green, "half fill reaches x15");
+        assert_ne!(buf[4 * 32 + 16], green, "nothing past the fraction");
+    }
+
+    #[test]
+    fn loading_fill_clamps_out_of_range_progress() {
+        // NaN/negative/over-one fractions saturate to empty/full —
+        // never a wrapped or inverted fill (PERF-25: no `==`).
+        assert_eq!(loading_fill_width(16, f32::NAN), 0);
+        assert_eq!(loading_fill_width(16, -0.5), 0);
+        assert_eq!(loading_fill_width(16, 0.0), 0);
+        assert_eq!(loading_fill_width(16, 2.0), 16);
+        assert_eq!(loading_fill_width(16, 1.0), 16);
+    }
+
+    #[test]
+    fn loading_caption_joins_title_and_artist() {
+        // Song-table walk names the song: both halves join, one
+        // half alone still names itself, blank paints nothing.
+        let both = LoadingStatus {
+            progress: 0.0,
+            title: "Title".to_owned(),
+            artist: "Artist".to_owned(),
+        };
+        assert_eq!(both.caption(), Some("Title - Artist".to_owned()));
+        let title_only = LoadingStatus {
+            title: "Title".to_owned(),
+            ..LoadingStatus::default()
+        };
+        assert_eq!(title_only.caption(), Some("Title".to_owned()));
+        assert_eq!(LoadingStatus::default().caption(), None);
+    }
+
+    #[test]
+    fn loading_scene_paints_the_song_caption() {
+        // Caption row below the bar (placeholder row 32x24: x8,
+        // y24 clipped — so use 64x48: song at y36, scrim behind).
+        let art = SceneArt::default();
+        let status = LoadingStatus {
+            progress: 1.0,
+            title: "Title".to_owned(),
+            artist: "Artist".to_owned(),
+        };
+        let mut buf = vec![0u32; 64 * 48];
+        paint_loading_scene_with_status(
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 48,
+            },
+            &art,
+            &status,
+        );
+        assert!(buf.contains(&art_title_ink()), "caption ink paints");
+        assert!(buf.contains(&scrim_color()), "caption scrim paints");
+        let blank = vec![0u32; 64 * 48];
+        let mut probe = blank.clone();
+        paint_loading_scene_with_status(
+            &mut Frame {
+                buf: &mut probe,
+                w: 64,
+                h: 48,
+            },
+            &art,
+            &LoadingStatus::default(),
+        );
+        assert!(
+            !probe.contains(&art_title_ink()),
+            "blank caption paints no white ink"
+        );
     }
 
     #[test]

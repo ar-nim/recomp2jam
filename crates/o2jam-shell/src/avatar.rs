@@ -429,6 +429,10 @@ pub const WAIT_TEAM_SPRITES: [&str; 8] = [
     "Wait_TeamG.ojs",
     "Wait_TeamH.ojs",
 ];
+/// Loading-gate block probed before the single-sprite fallback: no
+/// 7.55 `ControlList` carries it, so the scene stages the genuine
+/// `MusicLoading.ojs` body through the fallback.
+pub const LOADING_BLOCK: &str = "STATE_LOADING";
 /// Loading-gate art shown while the song table stages.
 pub const LOADING_SPRITE: &str = "MusicLoading.ojs";
 /// Results block (`Result_WinLose.ojs`, number fonts, avatar).
