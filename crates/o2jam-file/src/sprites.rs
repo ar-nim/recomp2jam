@@ -266,10 +266,11 @@ pub fn rgb555_to_rgb888(pixel: u16) -> (u8, u8, u8) {
 /// One layout rectangle inside a `.bnd` bind section.
 ///
 /// Corners in absolute coordinates: `(x1, y1)` top-left,
-/// `(x2, y2)` bottom-right. Record `i` lays out the `i+1`-th
-/// `IDC_` entry of the matching `ControlList` block in file order
-/// (entry 0 is the dialog/state itself); verified on all 38
-/// Interface blocks (docs/file-formats/opi.md).
+/// `(x2, y2)` bottom-right. A record is claimed not by file
+/// position but by code ordinal: the entry whose control code low
+/// word is `i + 1` (`(code & 0xFFF) − 1`) copies this record, and
+/// an out-of-range ordinal yields the all-zero rect instead (exe
+/// `0x548640`, dossier `ev_3a869bb7…`; docs/file-formats/opi.md).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BndRect {
     /// Left edge.
