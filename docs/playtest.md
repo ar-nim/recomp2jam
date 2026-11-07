@@ -1798,3 +1798,35 @@ new tests were expected.
   above ran before that save, so every count above is the clean-HEAD
   result. Per the sweep rules (touch only `docs/playtest.md`, fix only
   my own lint findings) the peer's file was left alone.
+
+## Regression sweep — 2026-11-07 22:27 UTC+8 (HEAD `a3473fc`, tree clean)
+
+Live re-proof on the strings-head. Covers only the docs-log commit landed
+after the setter-head baseline `2bc5c1a` (`a3473fc`: string-flows notes in
+`channel-fill.md` plus the sweep log) — no code changed, so no new tests
+were expected.
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1266 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 7, file 149, game 92, net 346,
+  render 73, shell 455, real_art 7, scenes 22, recomp2jam 96
+  (6 doc-test targets, 0 each) — identical to the baseline, as
+  expected for a docs-only HEAD.
+- `cargo build --workspace --release`: clean, `exit=0`, 0 warning
+  lines (touched-`main.rs` rebuild check; mtime only, no content
+  change).
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.59 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`22:27:14 +08:00`):
+  `Authorize session` → `Create room: songflow` →
+  `Get music list: [0/00] 562 music` → `Start game: [000]` →
+  `Game [000] Submit score: 2210`.
+- **Verdict: no regression — suite is green on the strings-head (1266
+  passed; identical to the setter-head baseline, docs-only delta,
+  0 failures). No lint findings. No commits, no pushes.** This sweep
+  touched only `docs/playtest.md`.
