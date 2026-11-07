@@ -130,6 +130,15 @@ flows above are its TCP counterpart.
   `crates/o2jam-net/src/message.rs`.
 - Coupon redemption itself: web-only (`coupon.phtml`), OPEN.
 
+## Shell display (`crates/o2jam-shell/src/screens/side.rs`)
+
+`WalletState` feeds the payment/result gem displays from decoded wire
+words only: 5029 `SyncCashPointResponse` (`gem`, `cash_point`) and
+the 5001 purchase words (`SyncItemPurchasePrefix` gem/point/O2-cash/
+cash-point plus `SyncItemPurchaseWallets` music/item cash). Every
+amount starts `None`; the TOTAL GEM bar and wallet rows render `"--"`
+until the matching words arrive, so no value shows without data.
+
 ## Tests (`crates/o2jam-net/src/message.rs`)
 
 Bare-frame vectors for 5015/5016/5017/5025/5028; single-word

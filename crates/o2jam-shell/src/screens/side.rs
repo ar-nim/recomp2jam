@@ -15,6 +15,8 @@ use super::super::screen::Screen;
 use o2jam_file::OJN_LEVEL_COUNT;
 use o2jam_file::{AvatarItemRow, AvatarItemTable, Bnd, ControlBlock, ControlList, OjnListEntry};
 use o2jam_net::play::{MusicListAnswer, SetRoomMusic};
+use o2jam_net::shop::{SyncItemPurchasePrefix, SyncItemPurchaseWallets};
+use o2jam_net::wallet::SyncCashPointResponse;
 use o2jam_net::{CharacterInfo, Difficulty, GameSpeed, GameStatsUpdate};
 use o2jam_render::{pack_xrgb, Frame, Rect};
 
@@ -983,6 +985,122 @@ pub fn payment_view_caption(label: &PaymentLabel) -> String {
     format!("{} {}", label.block, label.url_path())
 }
 
+/// Live wallet balances for the payment/result displays, fed only by
+/// decoded wire data: the 5029 two-word refresh (`SyncCashPointResponse`)
+/// and the 5001 purchase words (`SyncItemPurchasePrefix` plus
+/// `SyncItemPurchaseWallets`). Every amount starts unknown so the
+/// screen never shows a value without data.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WalletState {
+    /// Gem balance (5029 word 1, 5001 prefix word 1).
+    pub gem: Option<i32>,
+    /// Cash points (5029 word 2, 5001 prefix word 4).
+    pub cash_point: Option<i32>,
+    /// Distribution points (5001 prefix word 2).
+    pub point: Option<i32>,
+    /// Premium cash baseline (5001 prefix word 3).
+    pub o2_cash: Option<i32>,
+    /// Music-shop cash (5001 wallet word 1).
+    pub music_cash: Option<i32>,
+    /// Item-shop cash (5001 wallet word 2).
+    pub item_cash: Option<i32>,
+}
+
+impl WalletState {
+    /// Fold a 5029 wallet refresh into the wallet.
+    pub fn apply_cash_point(&mut self, response: &SyncCashPointResponse) {
+        self.gem = Some(response.gem);
+        self.cash_point = Some(response.cash_point);
+    }
+
+    /// Fold the 5001 purchase prefix words into the wallet.
+    pub fn apply_purchase_prefix(&mut self, prefix: &SyncItemPurchasePrefix) {
+        self.gem = Some(prefix.gem);
+        self.point = Some(prefix.point);
+        self.o2_cash = Some(prefix.o2_cash);
+        self.cash_point = Some(prefix.cash_point);
+    }
+
+    /// Fold the 5001 post-list wallet pair into the wallet.
+    pub fn apply_purchase_wallets(&mut self, wallets: &SyncItemPurchaseWallets) {
+        self.music_cash = Some(wallets.music_cash);
+        self.item_cash = Some(wallets.item_cash);
+    }
+
+    /// Wallet rows in display order: gem first, then cash lines.
+    #[must_use]
+    pub fn rows(self) -> [WalletRow; WALLET_ROW_COUNT] {
+        [
+            WalletRow::named(GEM_LABEL, self.gem),
+            WalletRow::named(CASH_POINT_LABEL, self.cash_point),
+            WalletRow::named(POINT_LABEL, self.point),
+            WalletRow::named(O2_CASH_LABEL, self.o2_cash),
+            WalletRow::named(MUSIC_CASH_LABEL, self.music_cash),
+            WalletRow::named(ITEM_CASH_LABEL, self.item_cash),
+        ]
+    }
+}
+
+/// One wallet row: a label plus its live amount (`None` until the
+/// matching wire words arrive).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WalletRow {
+    /// Row label (a `*_LABEL` constant below).
+    pub label: &'static str,
+    /// Live amount; `None` means no wire data yet.
+    pub amount: Option<i32>,
+}
+
+impl WalletRow {
+    /// Pair a label with its amount.
+    #[must_use]
+    pub const fn named(label: &'static str, amount: Option<i32>) -> Self {
+        Self { label, amount }
+    }
+}
+
+/// Wallet rows behind the payment/result displays, in order.
+pub const WALLET_ROW_COUNT: usize = 6;
+/// Gem row label (TOTAL GEM bar and first wallet row).
+pub const GEM_LABEL: &str = "GEM";
+/// Cash-point row label.
+pub const CASH_POINT_LABEL: &str = "CASH POINT";
+/// Distribution-point row label.
+pub const POINT_LABEL: &str = "POINT";
+/// Premium-cash row label.
+pub const O2_CASH_LABEL: &str = "O2 CASH";
+/// Music-shop cash row label.
+pub const MUSIC_CASH_LABEL: &str = "MUSIC CASH";
+/// Item-shop cash row label.
+pub const ITEM_CASH_LABEL: &str = "ITEM CASH";
+/// Placeholder where no wire data arrived yet (never a zero).
+pub const UNKNOWN_AMOUNT: &str = "--";
+
+/// Format one amount: digits from wire data, placeholder otherwise.
+#[must_use]
+pub fn wallet_amount_caption(amount: Option<i32>) -> String {
+    amount.map_or_else(|| UNKNOWN_AMOUNT.to_owned(), |value| value.to_string())
+}
+
+/// TOTAL GEM bar caption (`TOTAL GEM 1200`); unknown until a gem
+/// word arrives.
+#[must_use]
+pub fn total_gem_caption(state: &WalletState) -> String {
+    format!("TOTAL {} {}", GEM_LABEL, wallet_amount_caption(state.gem))
+}
+
+/// One wallet row caption (`GEM 1200`); unknown amounts stay blank.
+#[must_use]
+pub fn wallet_row_caption(row: &WalletRow) -> String {
+    format!("{} {}", row.label, wallet_amount_caption(row.amount))
+}
+
+/// Every wallet row caption in display order.
+#[must_use]
+pub fn wallet_row_captions(state: &WalletState) -> Vec<String> {
+    state.rows().iter().map(wallet_row_caption).collect()
+}
+
 /// Tutorial backdrop figure from the archive (`Playing1.opi` art for
 /// the stub-only `CStateTutorial` block). `None` when the entry is
 /// missing or undecodable: the screen still paints, just without rows.
@@ -1830,6 +1948,139 @@ mod side_tests {
             payment_view_caption(&labels[1]),
             "STATE_PAYMENT2 billing/gift/gift_input.aspx"
         );
+    }
+
+    #[test]
+    fn wallet_starts_empty_without_wire_data() {
+        let state = WalletState::default();
+        assert_eq!(state.gem, None);
+        assert!(state.rows().iter().all(|row| row.amount.is_none()));
+        assert_eq!(
+            wallet_row_captions(&state),
+            vec![
+                "GEM --".to_owned(),
+                "CASH POINT --".to_owned(),
+                "POINT --".to_owned(),
+                "O2 CASH --".to_owned(),
+                "MUSIC CASH --".to_owned(),
+                "ITEM CASH --".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn wallet_applies_cash_point_refresh_words() {
+        let mut state = WalletState::default();
+        state.apply_cash_point(&SyncCashPointResponse {
+            gem: 1200,
+            cash_point: 30,
+        });
+        assert_eq!(state.gem, Some(1200));
+        assert_eq!(state.cash_point, Some(30));
+        assert_eq!(state.point, None);
+    }
+
+    #[test]
+    fn wallet_applies_purchase_prefix_words() {
+        let mut state = WalletState::default();
+        state.apply_purchase_prefix(&SyncItemPurchasePrefix {
+            gem: 1200,
+            point: 7,
+            o2_cash: 450,
+            cash_point: 30,
+        });
+        assert_eq!(state.gem, Some(1200));
+        assert_eq!(state.point, Some(7));
+        assert_eq!(state.o2_cash, Some(450));
+        assert_eq!(state.cash_point, Some(30));
+        assert_eq!(state.music_cash, None);
+    }
+
+    #[test]
+    fn wallet_applies_purchase_wallet_pair() {
+        let mut state = WalletState::default();
+        state.apply_purchase_wallets(&SyncItemPurchaseWallets {
+            music_cash: 450,
+            item_cash: 125,
+        });
+        assert_eq!(state.music_cash, Some(450));
+        assert_eq!(state.item_cash, Some(125));
+        assert_eq!(state.gem, None);
+    }
+
+    #[test]
+    fn wallet_keeps_latest_wire_words() {
+        let mut state = WalletState::default();
+        state.apply_cash_point(&SyncCashPointResponse {
+            gem: 1200,
+            cash_point: 30,
+        });
+        state.apply_purchase_prefix(&SyncItemPurchasePrefix {
+            gem: 900,
+            point: 7,
+            o2_cash: 450,
+            cash_point: 25,
+        });
+        assert_eq!(state.gem, Some(900));
+        assert_eq!(state.cash_point, Some(25));
+    }
+
+    #[test]
+    fn total_gem_bar_names_live_gem() {
+        let mut state = WalletState::default();
+        assert_eq!(total_gem_caption(&state), "TOTAL GEM --");
+        state.apply_cash_point(&SyncCashPointResponse {
+            gem: 1200,
+            cash_point: 30,
+        });
+        assert_eq!(total_gem_caption(&state), "TOTAL GEM 1200");
+    }
+
+    #[test]
+    fn wallet_rows_follow_display_order() {
+        let mut state = WalletState::default();
+        state.apply_purchase_prefix(&SyncItemPurchasePrefix {
+            gem: 1200,
+            point: 7,
+            o2_cash: 450,
+            cash_point: 30,
+        });
+        state.apply_purchase_wallets(&SyncItemPurchaseWallets {
+            music_cash: 450,
+            item_cash: 125,
+        });
+        let rows = state.rows();
+        assert_eq!(rows.len(), WALLET_ROW_COUNT);
+        assert_eq!(
+            rows.map(|row| row.label),
+            [
+                GEM_LABEL,
+                CASH_POINT_LABEL,
+                POINT_LABEL,
+                O2_CASH_LABEL,
+                MUSIC_CASH_LABEL,
+                ITEM_CASH_LABEL
+            ]
+        );
+        assert_eq!(
+            wallet_row_captions(&state),
+            vec![
+                "GEM 1200".to_owned(),
+                "CASH POINT 30".to_owned(),
+                "POINT 7".to_owned(),
+                "O2 CASH 450".to_owned(),
+                "MUSIC CASH 450".to_owned(),
+                "ITEM CASH 125".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn wallet_row_caption_hides_unknown_amounts() {
+        let row = WalletRow::named(GEM_LABEL, None);
+        assert_eq!(wallet_row_caption(&row), "GEM --");
+        let funded = WalletRow::named(GEM_LABEL, Some(1200));
+        assert_eq!(wallet_row_caption(&funded), "GEM 1200");
     }
 
     #[test]
