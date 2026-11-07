@@ -1020,11 +1020,16 @@ pub(crate) fn paint_waiting_members(frame: &mut Frame<'_>, room: &JoinedRoom) {
 /// while the flat fallback below keeps the invented grid. Without
 /// staged cover placements the legacy rows keep their slot so the
 /// bare scene still reads.
-pub fn paint_waiting_scene(frame: &mut Frame<'_>, room: &JoinedRoom, art: &SceneArt) {
+pub fn paint_waiting_scene(
+    frame: &mut Frame<'_>,
+    room: &JoinedRoom,
+    art: &SceneArt,
+    song_title: Option<&str>,
+) {
     art.paint_backdrop(frame, Screen::Waiting);
     paint_title_over_art(frame, Screen::Waiting);
     if waiting_has_staged_covers(&art.placements) {
-        paint_waiting_staged(frame, room, &art.placements);
+        paint_waiting_staged(frame, room, &art.placements, song_title);
     } else {
         paint_waiting_rows(frame, room);
     }
@@ -1212,15 +1217,22 @@ fn waiting_has_staged_covers(placements: &[ScenePlacement]) -> bool {
 }
 
 /// Staged waiting regions, each at its verbatim `.bnd` rect: seat
-/// covers, team highlight, title, wins, speed, skills, and song.
-fn paint_waiting_staged(frame: &mut Frame<'_>, room: &JoinedRoom, placements: &[ScenePlacement]) {
+/// covers, team highlight, title, wins, speed, skills, and song (the
+/// song caption resolves through the staged catalog, `M{id}` while
+/// it names no such song).
+fn paint_waiting_staged(
+    frame: &mut Frame<'_>,
+    room: &JoinedRoom,
+    placements: &[ScenePlacement],
+    song_title: Option<&str>,
+) {
     paint_waiting_title(frame, room, placements);
     paint_waiting_covers(frame, room, placements);
     paint_waiting_team_highlight(frame, room, placements);
     paint_waiting_wins(frame, room, placements);
     paint_waiting_speed(frame, room, placements);
     paint_waiting_skills(frame, room, placements);
-    paint_waiting_music(frame, room, placements);
+    paint_waiting_music(frame, room, placements, song_title);
 }
 
 /// Room title at the `ROOMNAME` rect (top bar, rect 21).
@@ -1325,7 +1337,9 @@ fn paint_waiting_skills(frame: &mut Frame<'_>, room: &JoinedRoom, placements: &[
 }
 
 /// Selected-song label at the `MUSICNAME` rect (rect 22, top bar):
-/// song id only (the song table lives server-side, as in the lobby).
+/// the staged catalog title for the room's song when it names one
+/// (room-fill string flow, `docs/channel-fill.md`), else the bare
+/// song id (the song table lives server-side, as in the lobby).
 /// The `COVERMUSIC` button, the select arrow, the `Random` cards, and
 /// BACK stay staged art — recorded negatives, not gaps (chat now has a
 /// live source: [`paint_waiting_chat`]):
@@ -1337,15 +1351,32 @@ fn paint_waiting_skills(frame: &mut Frame<'_>, room: &JoinedRoom, placements: &[
 ///   `SelectMusic_Random*.ojs` bodies belong to `DAILOG_SELECTMUSIC`
 ///   filter buttons, not to waiting cards, and no wire struct carries
 ///   card picks — so the painter stages art only.
-fn paint_waiting_music(frame: &mut Frame<'_>, room: &JoinedRoom, placements: &[ScenePlacement]) {
+fn paint_waiting_music(
+    frame: &mut Frame<'_>,
+    room: &JoinedRoom,
+    placements: &[ScenePlacement],
+    song_title: Option<&str>,
+) {
     if let Some((x, y)) = waiting_bnd_origin(placements, WAITING_MUSICNAME_ID, frame) {
         paint_room_detail_line(
             frame,
             x,
             y,
-            &room_music_label(room.music_id),
+            &waiting_music_caption(room.music_id, song_title),
             art_title_ink(),
         );
+    }
+}
+
+/// `MUSICNAME` caption for one room song: the staged catalog title
+/// when it names the song, else the bare `M{id}` id (never an
+/// invented title — `MAPNAME`/`INSTNAME` stay unpainted for the same
+/// reason: no staged source names them).
+#[must_use]
+fn waiting_music_caption(music_id: u16, song_title: Option<&str>) -> String {
+    match song_title {
+        Some(title) if !title.is_empty() => title.to_owned(),
+        _ => room_music_label(music_id),
     }
 }
 
@@ -3327,6 +3358,7 @@ mod paint_tests {
             },
             &room,
             &art,
+            None,
         );
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert!(buf.contains(&pack_xrgb(0x30, 0xE0, 0x30)));
@@ -4839,6 +4871,7 @@ mod paint_tests {
             },
             &waiting_room(),
             &art,
+            None,
         );
         let red = pack_xrgb(255, 0, 0);
         // Empty seat 2 keeps its staged art pixel: no live line.
@@ -5051,8 +5084,9 @@ mod paint_tests {
 
     #[test]
     fn song_title_anchors_to_the_musicname_rect() {
-        // `MUSICNAME` rect 22 `(573,15,773,38)`: song id only (the
-        // song table lives server-side, as in the lobby).
+        // `MUSICNAME` rect 22 `(573,15,773,38)`: bare song id while
+        // the staged catalog names no such song (the song table
+        // lives server-side, as in the lobby).
         let placements = vec![waiting_probe(
             "IDC_TEXT_SWAIT_MUSICNAME",
             None,
@@ -5067,9 +5101,83 @@ mod paint_tests {
             },
             &champion_room(),
             &placements,
+            None,
         );
         assert_eq!(buf[13 * 800 + 569], scrim_color());
         assert!(buf.contains(&art_title_ink()));
+    }
+
+    #[test]
+    fn waiting_music_caption_prefers_the_catalog_title() {
+        // Room-fill string flow: the staged catalog names the
+        // room's song, so `MUSICNAME` carries the title.
+        assert_eq!(waiting_music_caption(757, Some("First")), "First");
+    }
+
+    #[test]
+    fn waiting_music_caption_falls_back_to_song_id() {
+        // No staged title (or a blank one): the bare id, never an
+        // invented name.
+        assert_eq!(waiting_music_caption(757, None), "M757");
+        assert_eq!(waiting_music_caption(757, Some("")), "M757");
+        assert_eq!(waiting_music_caption(0, None), "M0");
+    }
+
+    #[test]
+    fn waiting_musicname_paints_the_catalog_title() {
+        // Same rect as the id fallback, but the staged title ink:
+        // the two captions share the anchor, the source differs.
+        let placements = vec![waiting_probe(
+            "IDC_TEXT_SWAIT_MUSICNAME",
+            None,
+            (573, 15, 773, 38),
+        )];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_music(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &champion_room(),
+            &placements,
+            Some("First"),
+        );
+        assert_eq!(buf[13 * 800 + 569], scrim_color());
+        assert!(buf.contains(&art_title_ink()));
+    }
+
+    #[test]
+    fn staged_seat_text_shows_level_and_name() {
+        // Room-fill `Lv.%d:%s` flow: role prefix, team letter, wire
+        // level, nickname, ready flag.
+        let champion = StagedSeat {
+            name: "host".to_owned(),
+            level: Some(9),
+            team: 0,
+            ready: true,
+            present: true,
+            locked: false,
+            champion: true,
+        };
+        assert_eq!(
+            staged_seat_text(&champion, Some("CHAMPION")),
+            "CHAMPION A Lv:9 host R"
+        );
+        assert_eq!(staged_seat_text(&champion, None), "A Lv:9 host R");
+        let challenger = StagedSeat {
+            name: "YOU".to_owned(),
+            level: None,
+            team: 1,
+            ready: false,
+            present: true,
+            locked: false,
+            champion: false,
+        };
+        assert_eq!(
+            staged_seat_text(&challenger, Some("CHALLENGER")),
+            "CHALLENGER B Lv:- YOU -"
+        );
     }
 
     #[test]
@@ -5093,6 +5201,7 @@ mod paint_tests {
             },
             &champion_room(),
             &placements,
+            None,
         );
         assert!(buf.iter().all(|pixel| *pixel == 0));
     }
@@ -5263,6 +5372,7 @@ mod paint_tests {
             },
             &champion_room(),
             &placements,
+            None,
         );
         assert!(buf.iter().all(|pixel| *pixel == 0));
     }
@@ -5302,6 +5412,7 @@ mod paint_tests {
             },
             &champion_room(),
             &empty,
+            None,
         );
         assert!(buf.iter().all(|pixel| *pixel == 0));
     }
@@ -5329,6 +5440,7 @@ mod paint_tests {
             },
             &waiting_room(),
             &art,
+            None,
         );
         assert_eq!(buf[51 * 800 + 24], scrim_color());
         assert_eq!(buf[150 * 800 + 100], 0);

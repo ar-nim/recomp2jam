@@ -445,14 +445,28 @@ impl ScreenGame {
         &self.catalog_songs
     }
 
-    /// Catalog title for the chosen song, if staged.
-    fn selected_song_title(&self) -> Option<&str> {
-        let selection = self.selected_music.as_ref()?;
-        let wanted = u32::from(selection.music_id);
+    /// Catalog title for one song id, if staged.
+    fn catalog_song_title(&self, music_id: u16) -> Option<&str> {
+        let wanted = u32::from(music_id);
         self.catalog_songs
             .iter()
             .find(|song| song.song_id == wanted)
             .map(|song| song.title.as_str())
+    }
+
+    /// Catalog title for the chosen song, if staged.
+    fn selected_song_title(&self) -> Option<&str> {
+        let selection = self.selected_music.as_ref()?;
+        self.catalog_song_title(selection.music_id)
+    }
+
+    /// Catalog title for the joined room's song, if staged: the
+    /// `MUSICNAME` caption source (room-fill string flow,
+    /// `docs/channel-fill.md`); `None` paints the bare `M{id}`
+    /// fallback.
+    fn room_song_title(&self) -> Option<&str> {
+        let room = self.waiting.as_ref()?;
+        self.catalog_song_title(room.music_id)
     }
 
     /// Waiting song panel rows: title row plus difficulty row.
@@ -744,7 +758,7 @@ impl ScreenGame {
     fn paint_waiting(&self, frame: &mut Frame<'_>) {
         match (self.scene_art(Screen::Waiting), &self.waiting) {
             (Some(art), Some(room)) => {
-                paint_waiting_scene(frame, room, art);
+                paint_waiting_scene(frame, room, art, self.room_song_title());
                 paint_waiting_chat(frame, &self.waiting_chat, &self.chat_input, &art.placements);
             }
             (Some(art), None) => paint_lobby_backdrop(frame, Screen::Waiting, art),
@@ -1813,6 +1827,75 @@ mod game_tests {
         assert_eq!(buf[56 * 80 + 10], pack_xrgb(0xFF, 0xFF, 0xFF));
         // Seats keep painting under the panel.
         assert!(buf.contains(&pack_xrgb(0x30, 0xE0, 0x30)));
+    }
+
+    /// Staged waiting covers plus the `MUSICNAME` top-bar rect
+    /// (rects 60 and 22), no figures: TEXT-only stage for the song
+    /// caption tests.
+    fn musicname_scene() -> (Vec<ScenePlacement>, HashMap<String, AvatarFigure>) {
+        (
+            vec![
+                ScenePlacement {
+                    id: "IDC_IMAGE_SWAIT_COVERAVATAR1".to_owned(),
+                    code: 0,
+                    sprite: None,
+                    rect: Rect {
+                        x: 28,
+                        y: 53,
+                        w: 141,
+                        h: 175,
+                    },
+                },
+                ScenePlacement {
+                    id: "IDC_TEXT_SWAIT_MUSICNAME".to_owned(),
+                    code: 0,
+                    sprite: None,
+                    rect: Rect {
+                        x: 573,
+                        y: 15,
+                        w: 200,
+                        h: 23,
+                    },
+                },
+            ],
+            HashMap::new(),
+        )
+    }
+
+    /// Waiting game on the staged TEXT scene with the room naming
+    /// song 757, catalog optional.
+    fn musicname_game(with_catalog: bool) -> ScreenGame {
+        let mut game = ScreenGame::new();
+        let mut room = waiting_room();
+        room.music_id = 757;
+        game.set_joined_room(room);
+        walk_to_waiting(&mut game);
+        if with_catalog {
+            let blob = waiting_song_catalog_blob();
+            let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+            game.set_song_catalog(&entries);
+        }
+        let (placements, figures) = musicname_scene();
+        game.load_scene(Screen::Waiting, placements, figures);
+        game
+    }
+
+    #[test]
+    fn waiting_musicname_resolves_the_catalog_title() {
+        // Room-fill string flow end to end: the staged catalog names
+        // the room's song, so `MUSICNAME` inks the title scrim plus
+        // white ink — and the same scene without a catalog inks a
+        // different frame (the bare id), never an invented name.
+        let mut titled = musicname_game(true);
+        let mut bare = musicname_game(false);
+        let hit = paint_waiting_frame(&mut titled, 800, 600);
+        let miss = paint_waiting_frame(&mut bare, 800, 600);
+        // Both ink the caption row white; the title and the bare id
+        // differ, so the frames differ (paint.rs pins the exact
+        // strings and the rect scrim).
+        assert!(hit.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+        assert!(miss.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+        assert_ne!(hit, miss);
     }
 
     #[test]
