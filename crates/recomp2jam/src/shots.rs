@@ -1290,6 +1290,39 @@ mod tests {
         assert_pixels_came_from_font(&actual, &expected, "pinned result digits");
     }
 
+    /// Rank-row columns the shot pins (mirror the painter's
+    /// anchors in `o2jam-shell/src/screens/paint.rs`: name x=128
+    /// y=318, judgements x=230 y=317, score x=530 y=317).
+    const RANK_ROW_NAME: (i32, i32, &str) = (128, 318, "YOU");
+    /// Combined judgement text (`%5d /%5d /%3d /%3d`) for the
+    /// scripted one-Cool walk.
+    const RANK_ROW_JUDGEMENTS: (i32, i32, &str) = (230, 317, "    1 /    0 /  0 /  0");
+    /// Row score text (`%8d`) for the scripted 200-point walk.
+    const RANK_ROW_SCORE: (i32, i32, &str) = (530, 317, "     200");
+
+    #[test]
+    fn result_shot_paints_the_rank_table_row() {
+        // The rank table (`FUN_004c3b40`) paints row 0 from the local
+        // tally: name `YOU`, one Cool strike (counts 1/0/0/0, 200
+        // points) at the pinned columns. A stale shot from before the
+        // rank-row wiring leaves this band empty; the re-shoot must
+        // carry ink there.
+        let mut game = seeded_game();
+        walk_to_playing(&mut game);
+        game.strike_at(2, 5_000);
+        let mut actual = native_probe();
+        paint_probe(&mut actual, |frame| game.paint_at(frame, 7_000));
+        assert_eq!(game.screen(), Screen::Result);
+        let mut expected = native_probe();
+        paint_probe(&mut expected, |frame| {
+            let ink = o2jam_render::pack_xrgb(0xFF, 0xFF, 0xFF);
+            for (x, y, text) in [RANK_ROW_NAME, RANK_ROW_JUDGEMENTS, RANK_ROW_SCORE] {
+                o2jam_render::draw_text(frame, x, y, text, ink);
+            }
+        });
+        assert_pixels_came_from_font(&actual, &expected, "rank row");
+    }
+
     #[test]
     fn result_shot_paints_the_solo_verdict_frame() {
         let Some(archive) = read_archive(INTERFACE_ARCHIVE) else {

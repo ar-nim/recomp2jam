@@ -84,7 +84,7 @@ invented placement remains (cited per cell), never for lack of art.
 
 | Dimension | 7.55 expectation (evidence) | Shell status | Verdict |
 |---|---|---|---|
-| Composition | Decl `0x07`, 8 entries: `Result_WinLose.ojs`, `Result_NumFont_*.ojs`, Top/Bottom, Retry; builder `FUN_004c2390` (file `0xc2390`, ev `d6de3a7f…`) | Soak stages genuine panels — `result.png` shows real COOL/GOOD/BAD + music-name art with digits on top. Still FAIL: avatar/digits/verdict sit at fixed-pixel anchors `(16,16)`/`(16,32)`/`(16,48)` behind a 64×52 scrim (audit 13), ignoring the 7 `State_Result.bnd` rects; no WinLose art, grade letters out (mapping OPEN) | FAIL |
+| Composition | Decl `0x07`, 8 entries: `Result_WinLose.ojs`, `Result_NumFont_*.ojs`, Top/Bottom, Retry; builder `FUN_004c2390` (file `0xc2390`, ev `d6de3a7f…`) | Soak stages genuine panels — `result.png` shows real COOL/GOOD/BAD + music-name art with digits on top. Re-shot 2026-11-07 post-`04e2462`: the rank table now paints row 0 (`YOU`, `1/0/0/0`, `200`) at the pinned columns (guard: `result_shot_paints_the_rank_table_row`). Still FAIL: avatar/digits/verdict sit at fixed-pixel anchors `(16,16)`/`(16,32)`/`(16,48)` behind a 64×52 scrim (audit 13), ignoring the 7 `State_Result.bnd` rects; no WinLose art, grade letters out (mapping OPEN) | FAIL |
 | Input | Retry → waiting loading; leave → room/channel; event-ticket web call (file `0x24a338`) | Confirm → Waiting, Back → Room | OPEN (no ticket call) |
 | Timing | None documented | Paint-driven, immediate | PASS (vacuous) |
 | Transitions | `Result → Waiting`, `Result → Room` | Implemented + tested | PASS |
@@ -105,7 +105,31 @@ pass is ever claimed):
 - `STATE_DRUM_PLAYING` / `STATE_EXIT` (stubs `0x00`; drum never wired,
   no `CStateDrum*` class; exit is teardown, not a screen).
 
+## Reference-photo verify pass (2026-11-07 re-shoot)
+
+All six PNGs regenerated via `cargo run -q -p recomp2jam -- shots`
+(`cargo test -p recomp2jam` 72/72 green, incl. the new
+`result_shot_paints_the_rank_table_row` guard). Per-region read is
+ink-presence per band (shot std vs photo std — content differs by
+scenario, so structure, not pixels, is compared):
+
+| Shot vs photo | Region verdicts |
+|---|---|
+| `playing.png` vs `reference-4x3.png` | HOLD, byte-identical to the e9fd95f bytes (no pipeline drift). Highway panel (59.5 vs 78.7), edge gauges (40.8 vs 64.9), avatar scene (67.6 vs 41.5), bottom strip (75.3 vs 54.0) — every band carries staged ink on both sides. Residuals unchanged: stage-5 studio stands for the unshipped rooftop, `Note_BG` red panel at (570,458)–(774,478) with no exe cover, blue-metallic strip vs the photo's dark strip, BO/EA05 labels unpainted |
+| `waiting.png` vs `reference-waiting-4x3.png` | HOLD, byte-identical (no drift). Top panel (59.6 vs 65.6), seat grid (55.5 vs 53.0), right column (59.4 vs 61.4), bottom chat/song (71.5 vs 70.2). Residuals unchanged: invented 2-col x 4-row seat grid, no team buttons/covers, no song dialog |
+| `result.png` vs `reference-result-4x3.png` | REFRESHED (was stale). Score dome (48.6 vs 50.7), verdict banner (46.5 vs 48.7), rank table (85.3 vs 48.5), footer (59.1 vs 51.2). The checked-in PNG predated the rank-row wiring (`04e2462`) — its row band was empty; the re-shoot carries row 0 (`YOU`, `1/0/0/0`, `200`) at the pinned columns, guarded by `result_shot_paints_the_rank_table_row` (proven to fail on wrong text). Scenario deltas vs the photo stay: GOOD! solo arm vs LOSE, one local row vs two wire rows, P plate vs C |
+| `reference-musicselect-4x3.png` | UNCOVERED — no shell music-select scene exists, so no shot maps to it. The photo's dialog (level/label/genre filters, 1608-song table, OK/BACK) has no staged counterpart; the waiting song panel stays unimplemented (see `STATE_WAITING` composition). OPEN |
+| `channel.png`, `room.png`, `loading.png` | HOLD, byte-identical (no drift). No reference photo covers them; channel still reads as fallback paint (bar staged full-canvas, rect is one panel — audit 15) |
+
+No pipeline regressions: five of six shots byte-identical, the sixth
+differs by exactly 129 pixels of newly-wired rank-row ink.
+
 ## Scoreboard
+
+Verify pass 2026-11-07: 3 HOLD (playing/waiting + channel/room/loading
+byte-identical), 1 REFRESHED (result rank rows), 1 UNCOVERED
+(musicselect — no shell scene). Detail in "Reference-photo verify
+pass" above.
 
 - Scenes covered: 7 main + loading gate + 9 side states.
 - PASS: boot-into-splash, 800×600 default (`SetWindowPos` file
