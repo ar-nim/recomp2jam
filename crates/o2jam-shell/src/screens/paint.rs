@@ -1014,22 +1014,39 @@ pub(crate) fn paint_waiting_members(frame: &mut Frame<'_>, room: &JoinedRoom) {
     paint_waiting_rows(frame, room);
 }
 
+/// Live caption sources for the staged waiting rects. Every field
+/// has a pinned shell source (`docs/caption-sources.md`): the map
+/// name rides the room word, the BPM rides the staged catalog
+/// column for the room's song, and the counts ride the staged
+/// inventory. `Default` is the no-source state (mismatch `-0-`,
+/// zeroed counts, no title) — the exe paints exactly this without
+/// a staged record.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct WaitingCaptions<'a> {
+    /// Staged catalog title for the room's song, if it names one.
+    pub song_title: Option<&'a str>,
+    /// Staged catalog BPM of the room's song, if it names one.
+    pub song_bpm: Option<f32>,
+    /// Staged inventory counts, one per skill slot.
+    pub skill_counts: [u32; 3],
+}
+
 /// Paint staged waiting art (team buttons, avatar covers) with the
-/// live seats and ready dots on top: staged placements anchor every
-/// region (covers, team grid, READY, skills, speed, music, wins),
-/// while the flat fallback below keeps the invented grid. Without
-/// staged cover placements the legacy rows keep their slot so the
-/// bare scene still reads.
+/// live seats, ready dots, and pinned captions on top: staged
+/// placements anchor every region (covers, team grid, READY, skills,
+/// counts, map, BPM, speed, music, wins), while the flat fallback
+/// below keeps the invented grid. Without staged cover placements
+/// the legacy rows keep their slot so the bare scene still reads.
 pub fn paint_waiting_scene(
     frame: &mut Frame<'_>,
     room: &JoinedRoom,
     art: &SceneArt,
-    song_title: Option<&str>,
+    captions: &WaitingCaptions<'_>,
 ) {
     art.paint_backdrop(frame, Screen::Waiting);
     paint_title_over_art(frame, Screen::Waiting);
     if waiting_has_staged_covers(&art.placements) {
-        paint_waiting_staged(frame, room, &art.placements, song_title);
+        paint_waiting_staged(frame, room, &art.placements, captions);
     } else {
         paint_waiting_rows(frame, room);
     }
@@ -1076,6 +1093,18 @@ const WAITING_SKILL_IDS: [&str; 3] = [
     "IDC_IMAGE_SWAIT_1SKILL",
     "IDC_IMAGE_SWAIT_2SKILL",
     "IDC_IMAGE_SWAIT_3SKILL",
+];
+/// Map-name text (`TEXT_SWAIT_MAPNAME`, code `0x16400018` →
+/// rect 23: `(code & 0xFFF) − 1`, beside the title).
+const WAITING_MAPNAME_ID: &str = "IDC_TEXT_SWAIT_MAPNAME";
+/// BPM text (`TEXT_SWAIT_BPM`, code `0x16400069` → rect 104).
+const WAITING_BPM_ID: &str = "IDC_TEXT_SWAIT_BPM";
+/// Skill-count texts (`TEXT_SWAIT_1/2/3SKILLCOUNT`, codes
+/// `0x1640005E..60` → rects 93..95, beside the X boxes).
+const WAITING_SKILLCOUNT_IDS: [&str; 3] = [
+    "IDC_TEXT_SWAIT_1SKILLCOUNT",
+    "IDC_TEXT_SWAIT_2SKILLCOUNT",
+    "IDC_TEXT_SWAIT_3SKILLCOUNT",
 ];
 
 /// One staged seat view: the wire member plus the champion mark; the
@@ -1217,14 +1246,20 @@ fn waiting_has_staged_covers(placements: &[ScenePlacement]) -> bool {
 }
 
 /// Staged waiting regions, each at its verbatim `.bnd` rect: seat
-/// covers, team highlight, title, wins, speed, skills, and song (the
-/// song caption resolves through the staged catalog, `M{id}` while
-/// it names no such song).
+/// covers, team highlight, title, wins, speed, skills, skill counts,
+/// map name, BPM, and song (the song caption resolves through the
+/// staged catalog, `M{id}` while it names no such song; the BPM
+/// caption resolves through its BPM column, `-0-` on mismatch).
+/// `INSTNAME` (`TEXT_SWAIT_INSTNAME`, `0x16400019`) stays unpainted:
+/// zero code immediates name it (OPEN 1), so no shell source reaches
+/// its rect. `NOTICE_TEXT`/`NOTICEBOARD` (`0x16500062/63`) stay
+/// unpainted: the text body is imageless and its dialog `+0x46c`
+/// fill is untraced (OPEN 2).
 fn paint_waiting_staged(
     frame: &mut Frame<'_>,
     room: &JoinedRoom,
     placements: &[ScenePlacement],
-    song_title: Option<&str>,
+    captions: &WaitingCaptions<'_>,
 ) {
     paint_waiting_title(frame, room, placements);
     paint_waiting_covers(frame, room, placements);
@@ -1232,7 +1267,10 @@ fn paint_waiting_staged(
     paint_waiting_wins(frame, room, placements);
     paint_waiting_speed(frame, room, placements);
     paint_waiting_skills(frame, room, placements);
-    paint_waiting_music(frame, room, placements, song_title);
+    paint_waiting_skillcounts(frame, &captions.skill_counts, placements);
+    paint_waiting_mapname(frame, room, placements);
+    paint_waiting_bpm(frame, captions.song_bpm, placements);
+    paint_waiting_music(frame, room, placements, captions.song_title);
 }
 
 /// Room title at the `ROOMNAME` rect (top bar, rect 21).
@@ -1326,12 +1364,119 @@ fn paint_waiting_speed(frame: &mut Frame<'_>, room: &JoinedRoom, placements: &[S
 }
 
 /// Skill-ring ids at the `1/2/3SKILL` rects (rects 87..89, the X
-/// boxes): empty slots stay untouched so the staged X art shows;
-/// counts have no wire field (`JoinedRoom` carries ids only).
+/// boxes): empty slots stay untouched so the staged X art shows.
+/// The counts paint beside them at the `SKILLCOUNT` rects from the
+/// staged inventory ([`paint_waiting_skillcounts`]).
 fn paint_waiting_skills(frame: &mut Frame<'_>, room: &JoinedRoom, placements: &[ScenePlacement]) {
     for (slot, skill_id) in WAITING_SKILL_IDS.iter().zip(room.skills.iter()) {
         if let Some((x, y)) = waiting_bnd_origin(placements, slot, frame) {
             paint_room_detail_line(frame, x, y, &skill_id.to_string(), art_title_ink());
+        }
+    }
+}
+
+/// Map-cycle names behind the `MAPNAME` caption, in room-word order
+/// (map-cycle path, rdata file `0x249990`): the exe centers entry
+/// `low == 0 ? 3 : low % 4` of (`None`, `한가한대전장의오후`,
+/// `패자의역습`, `원하지않은결말`). The micro-font carries no CP949
+/// glyphs (same gap as the chosung hangul cells), so the three
+/// Korean entries paint as ASCII stand-ins — same-slot translations,
+/// not new sources. The `0x4ad350` applier `Random`/`NoteFactory`
+/// arm stays OPEN (`docs/caption-sources.md` OPEN 3) and never paints.
+const WAITING_MAP_CYCLE_NAMES: [&str; 4] = [
+    "None",
+    "Leisurely Afternoon",
+    "Losers Counterattack",
+    "Unwanted Ending",
+];
+
+/// Map-cycle slot for one room word (files `0xb3cc6`–`0xb3ce3`):
+/// the low word, with word 0 selecting slot 3. Byte access keeps
+/// the low word without a narrowing cast (PERF-07).
+#[must_use]
+fn waiting_map_cycle_slot(arena: i32) -> usize {
+    let bytes = arena.to_le_bytes();
+    let low = u16::from_le_bytes([bytes[0], bytes[1]]);
+    if low == 0 {
+        WAITING_MAP_CYCLE_NAMES.len() - 1
+    } else {
+        usize::from(low) % WAITING_MAP_CYCLE_NAMES.len()
+    }
+}
+
+/// `MAPNAME` caption for one room word: the map-cycle table entry
+/// (pinned path only).
+#[must_use]
+pub fn waiting_map_name(arena: i32) -> &'static str {
+    WAITING_MAP_CYCLE_NAMES
+        .get(waiting_map_cycle_slot(arena))
+        .copied()
+        .unwrap_or(WAITING_MAP_CYCLE_NAMES[0])
+}
+
+/// Map name at the `MAPNAME` rect: the map-cycle entry of the room
+/// word. An unstaged rect stays untouched.
+fn paint_waiting_mapname(frame: &mut Frame<'_>, room: &JoinedRoom, placements: &[ScenePlacement]) {
+    if let Some((x, y)) = waiting_bnd_origin(placements, WAITING_MAPNAME_ID, frame) {
+        paint_room_detail_line(frame, x, y, waiting_map_name(room.arena), art_title_ink());
+    }
+}
+
+/// Mismatch BPM caption (rdata file `0x24a1d0`): the exe stores
+/// `-0-` when no song record matches the room song.
+const WAITING_BPM_MISMATCH: &str = "-0-";
+
+/// `BPM` caption for one staged catalog lookup: the `OJNList.dat`
+/// row +20 BPM column formatted with `%0.f` (rdata file `0x24a1d4`,
+/// store file `0xbe1d5`); a missing or non-finite lookup falls back
+/// to the pinned mismatch default, never an invented tempo.
+#[must_use]
+pub fn waiting_bpm_caption(song_bpm: Option<f32>) -> String {
+    match song_bpm {
+        Some(bpm) if bpm.is_finite() => format!("{bpm:.0}"),
+        _ => WAITING_BPM_MISMATCH.to_owned(),
+    }
+}
+
+/// BPM at the `BPM` rect: the catalog column or `-0-`. An unstaged
+/// rect stays untouched.
+fn paint_waiting_bpm(frame: &mut Frame<'_>, song_bpm: Option<f32>, placements: &[ScenePlacement]) {
+    if let Some((x, y)) = waiting_bnd_origin(placements, WAITING_BPM_ID, frame) {
+        paint_room_detail_line(frame, x, y, &waiting_bpm_caption(song_bpm), art_title_ink());
+    }
+}
+
+/// `SKILLCOUNT` caption for one inventory slot: the count word at
+/// owned-item vector `+8` as decimal, space-padded to width 3
+/// (helper `0x62c109`); slots 2–3 additionally clamp at 999, so
+/// wider counts show `999` there.
+#[must_use]
+pub fn waiting_skillcount_text(count: u32, cap_at_999: bool) -> String {
+    let shown = if cap_at_999 && count > 999 {
+        999
+    } else {
+        count
+    };
+    format!("{shown:>3}")
+}
+
+/// Skill counts at the `1/2/3SKILLCOUNT` rects: the staged inventory
+/// counts beside the rings (slot 1 uncapped, slots 2–3 capped at
+/// 999). An unstaged rect stays untouched.
+fn paint_waiting_skillcounts(
+    frame: &mut Frame<'_>,
+    counts: &[u32; 3],
+    placements: &[ScenePlacement],
+) {
+    for (slot, (id, count)) in WAITING_SKILLCOUNT_IDS.iter().zip(counts.iter()).enumerate() {
+        if let Some((x, y)) = waiting_bnd_origin(placements, id, frame) {
+            paint_room_detail_line(
+                frame,
+                x,
+                y,
+                &waiting_skillcount_text(*count, slot > 0),
+                art_title_ink(),
+            );
         }
     }
 }
@@ -1370,8 +1515,8 @@ fn paint_waiting_music(
 
 /// `MUSICNAME` caption for one room song: the staged catalog title
 /// when it names the song, else the bare `M{id}` id (never an
-/// invented title — `MAPNAME`/`INSTNAME` stay unpainted for the same
-/// reason: no staged source names them).
+/// invented title — `INSTNAME` stays unpainted for the same reason:
+/// no staged source names it).
 #[must_use]
 fn waiting_music_caption(music_id: u16, song_title: Option<&str>) -> String {
     match song_title {
@@ -3358,7 +3503,7 @@ mod paint_tests {
             },
             &room,
             &art,
-            None,
+            &WaitingCaptions::default(),
         );
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert!(buf.contains(&pack_xrgb(0x30, 0xE0, 0x30)));
@@ -4871,7 +5016,7 @@ mod paint_tests {
             },
             &waiting_room(),
             &art,
-            None,
+            &WaitingCaptions::default(),
         );
         let red = pack_xrgb(255, 0, 0);
         // Empty seat 2 keeps its staged art pixel: no live line.
@@ -5201,7 +5346,7 @@ mod paint_tests {
             },
             &champion_room(),
             &placements,
-            None,
+            &WaitingCaptions::default(),
         );
         assert!(buf.iter().all(|pixel| *pixel == 0));
     }
@@ -5372,7 +5517,7 @@ mod paint_tests {
             },
             &champion_room(),
             &placements,
-            None,
+            &WaitingCaptions::default(),
         );
         assert!(buf.iter().all(|pixel| *pixel == 0));
     }
@@ -5412,7 +5557,7 @@ mod paint_tests {
             },
             &champion_room(),
             &empty,
-            None,
+            &WaitingCaptions::default(),
         );
         assert!(buf.iter().all(|pixel| *pixel == 0));
     }
@@ -5440,7 +5585,7 @@ mod paint_tests {
             },
             &waiting_room(),
             &art,
-            None,
+            &WaitingCaptions::default(),
         );
         assert_eq!(buf[51 * 800 + 24], scrim_color());
         assert_eq!(buf[150 * 800 + 100], 0);
@@ -5562,5 +5707,184 @@ mod paint_tests {
         assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
         assert!(buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
         assert!(!buf.contains(&background_of(Screen::Channel)));
+    }
+
+    #[test]
+    fn waiting_caption_ids_name_the_pinned_controls() {
+        // Codes from `docs/caption-sources.md`: MAPNAME `0x16400018`,
+        // BPM `0x16400069`, skill counts `0x1640005E..60`.
+        assert_eq!(WAITING_MAPNAME_ID, "IDC_TEXT_SWAIT_MAPNAME");
+        assert_eq!(WAITING_BPM_ID, "IDC_TEXT_SWAIT_BPM");
+        assert_eq!(
+            WAITING_SKILLCOUNT_IDS,
+            [
+                "IDC_TEXT_SWAIT_1SKILLCOUNT",
+                "IDC_TEXT_SWAIT_2SKILLCOUNT",
+                "IDC_TEXT_SWAIT_3SKILLCOUNT",
+            ]
+        );
+    }
+
+    #[test]
+    fn waiting_mapname_cycles_the_room_word_table() {
+        // Map-cycle path: word 0 selects slot 3, otherwise the low
+        // word modulo 4 (files `0xb3cc6`–`0xb3ce3`).
+        assert_eq!(waiting_map_name(0), "Unwanted Ending");
+        assert_eq!(waiting_map_name(1), "Leisurely Afternoon");
+        assert_eq!(waiting_map_name(2), "Losers Counterattack");
+        assert_eq!(waiting_map_name(3), "Unwanted Ending");
+        assert_eq!(waiting_map_name(4), "None");
+    }
+
+    #[test]
+    fn waiting_mapname_paints_at_the_staged_rect() {
+        // MAPNAME probe `(480,15,570,38)`: room word 1 names slot 1,
+        // so the scrim opens at (476,13) with white glyph ink.
+        let placements = vec![waiting_probe(
+            "IDC_TEXT_SWAIT_MAPNAME",
+            None,
+            (480, 15, 570, 38),
+        )];
+        let mut room = champion_room();
+        room.arena = 1;
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_mapname(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &room,
+            &placements,
+        );
+        assert_eq!(buf[13 * 800 + 476], scrim_color());
+        assert!(buf.contains(&art_title_ink()));
+    }
+
+    #[test]
+    fn waiting_bpm_formats_whole_tempos() {
+        // `%0.f` over the catalog column (store file `0xbe1d5`).
+        assert_eq!(waiting_bpm_caption(Some(124.0)), "124");
+        assert_eq!(waiting_bpm_caption(Some(124.4)), "124");
+        assert_eq!(waiting_bpm_caption(Some(168.8)), "169");
+    }
+
+    #[test]
+    fn waiting_bpm_defaults_to_mismatch_without_a_record() {
+        // Mismatch default `-0-` (rdata file `0x24a1d0`): no staged
+        // record, a blank lookup, or a non-finite tempo.
+        assert_eq!(waiting_bpm_caption(None), "-0-");
+        assert_eq!(waiting_bpm_caption(Some(f32::NAN)), "-0-");
+        assert_eq!(waiting_bpm_caption(Some(f32::INFINITY)), "-0-");
+    }
+
+    #[test]
+    fn waiting_bpm_paints_at_the_staged_rect() {
+        // BPM probe `(620,60,680,80)`: staged 124 BPM inks the rect.
+        let placements = vec![waiting_probe(
+            "IDC_TEXT_SWAIT_BPM",
+            None,
+            (620, 60, 680, 80),
+        )];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_bpm(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            Some(124.0),
+            &placements,
+        );
+        assert_eq!(buf[58 * 800 + 616], scrim_color());
+        assert!(buf.contains(&art_title_ink()));
+    }
+
+    #[test]
+    fn waiting_bpm_paints_the_mismatch_default() {
+        // Same rect without a staged record: `-0-` inks it, never a
+        // blank or an invented tempo.
+        let placements = vec![waiting_probe(
+            "IDC_TEXT_SWAIT_BPM",
+            None,
+            (620, 60, 680, 80),
+        )];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_bpm(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            None,
+            &placements,
+        );
+        assert_eq!(buf[58 * 800 + 616], scrim_color());
+        assert!(buf.contains(&art_title_ink()));
+    }
+
+    #[test]
+    fn waiting_skillcounts_pad_and_cap_late_slots() {
+        // Width-3 decimal (helper `0x62c109`); slots 2–3 clamp at
+        // 999 while slot 1 shows the full count.
+        assert_eq!(waiting_skillcount_text(7, false), "  7");
+        assert_eq!(waiting_skillcount_text(42, true), " 42");
+        assert_eq!(waiting_skillcount_text(1500, false), "1500");
+        assert_eq!(waiting_skillcount_text(1500, true), "999");
+    }
+
+    #[test]
+    fn waiting_skillcounts_paint_at_their_staged_rects() {
+        // Count probes below the ring rects: `[7, 42, 1500]` inks
+        // all three, the late slots through the 999 cap.
+        let placements = vec![
+            waiting_probe("IDC_TEXT_SWAIT_1SKILLCOUNT", None, (740, 208, 780, 238)),
+            waiting_probe("IDC_TEXT_SWAIT_2SKILLCOUNT", None, (740, 246, 780, 276)),
+            waiting_probe("IDC_TEXT_SWAIT_3SKILLCOUNT", None, (740, 284, 780, 314)),
+        ];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_skillcounts(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &[7, 42, 1500],
+            &placements,
+        );
+        assert_eq!(buf[206 * 800 + 736], scrim_color());
+        assert_eq!(buf[244 * 800 + 736], scrim_color());
+        assert_eq!(buf[282 * 800 + 736], scrim_color());
+        assert!(buf.contains(&art_title_ink()));
+    }
+
+    #[test]
+    fn waiting_leaves_instname_and_notice_rects_unpainted() {
+        // `INSTNAME` names zero code immediates (OPEN 1) and the
+        // NOTICE dialog `+0x46c` fill is untraced (OPEN 2): their
+        // rects stay untouched while the pinned MAPNAME rect inks.
+        let placements = vec![
+            waiting_probe("IDC_TEXT_SWAIT_MAPNAME", None, (480, 15, 570, 38)),
+            waiting_probe("IDC_TEXT_SWAIT_INSTNAME", None, (480, 40, 570, 60)),
+            waiting_probe("IDC_IMAGE_SWAIT_NOTICE_TEXT", None, (100, 455, 400, 475)),
+            waiting_probe("IDC_IMAGE_SWAIT_NOTICEBOARD", None, (100, 480, 400, 530)),
+        ];
+        let mut room = champion_room();
+        room.arena = 1;
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_staged(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &room,
+            &placements,
+            &WaitingCaptions::default(),
+        );
+        assert_eq!(buf[13 * 800 + 476], scrim_color(), "mapname inks");
+        assert_eq!(buf[40 * 800 + 480], 0, "instname untouched");
+        assert_eq!(buf[455 * 800 + 100], 0, "notice text untouched");
+        assert_eq!(buf[480 * 800 + 100], 0, "notice board untouched");
     }
 }

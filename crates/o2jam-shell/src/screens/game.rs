@@ -12,7 +12,8 @@ use super::paint::{
     paint_loading_scene, paint_loading_scene_with_status, paint_lobby_backdrop,
     paint_playing_overlay, paint_result, paint_result_scene, paint_room_list, paint_room_scene,
     paint_screen, paint_waiting_chat, paint_waiting_members, paint_waiting_scene, scene_index,
-    BattleVerdict, LoadingStatus, ResultRankRow, ResultVerdict, SceneArt, WaitingChatMessage,
+    BattleVerdict, LoadingStatus, ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions,
+    WaitingChatMessage,
 };
 use super::side::{
     can_return_side, can_visit_side, paint_side_scene, select_chosung_cells, select_difficulty_ink,
@@ -82,6 +83,14 @@ pub struct ScreenGame {
     /// Staged select-music catalog (`OJNList.dat` order, owned copies;
     /// see [`Self::set_song_catalog`]).
     catalog_songs: Vec<SelectMusicSong>,
+    /// Staged catalog tempos by song id (`OJNList.dat` row +20 BPM
+    /// column, the waiting `BPM` caption source; the title table
+    /// above drops the column).
+    catalog_bpm: HashMap<u32, f32>,
+    /// Staged inventory counts, one per skill slot (the waiting
+    /// `SKILLCOUNT` source; `JoinedRoom.skills` carries the ring ids
+    /// only). Zeroed until staged.
+    skill_counts: [u32; 3],
     select_music_art: Option<SceneArt>,
     battle_teams: RoomTeams,
     battle_self_team: Option<u8>,
@@ -136,6 +145,8 @@ impl ScreenGame {
             loading_status: None,
             arena_stage: DEFAULT_ARENA_STAGE,
             catalog_songs: Vec::new(),
+            catalog_bpm: HashMap::new(),
+            skill_counts: [0, 0, 0],
             select_music_art: None,
             battle_teams: RoomTeams::new(),
             battle_self_team: None,
@@ -418,8 +429,14 @@ impl ScreenGame {
     /// Stage the song catalog (`OJNList.dat` order, owned copies) for
     /// the select-music table and the chosen-song caption. Dead slots
     /// stay out; a missing catalog paints dialog art without rows.
+    /// The BPM column stages alongside for the waiting `BPM` caption.
     pub fn set_song_catalog(&mut self, entries: &[OjnListEntry<'_>]) -> &mut Self {
         self.catalog_songs = select_music_songs(entries);
+        self.catalog_bpm = entries
+            .iter()
+            .filter(|entry| entry.is_song())
+            .map(|entry| (entry.song_id, entry.bpm))
+            .collect();
         self
     }
 
@@ -467,6 +484,34 @@ impl ScreenGame {
     fn room_song_title(&self) -> Option<&str> {
         let room = self.waiting.as_ref()?;
         self.catalog_song_title(room.music_id)
+    }
+
+    /// Catalog BPM for one song id, if a live song record stages it.
+    fn catalog_song_bpm(&self, music_id: u16) -> Option<f32> {
+        self.catalog_bpm.get(&u32::from(music_id)).copied()
+    }
+
+    /// Catalog BPM for the joined room's song, if staged: the `BPM`
+    /// caption source (`OJNList.dat` row +20 column); `None` paints
+    /// the pinned `-0-` mismatch default.
+    fn room_song_bpm(&self) -> Option<f32> {
+        let room = self.waiting.as_ref()?;
+        self.catalog_song_bpm(room.music_id)
+    }
+
+    /// Stage the owned-item inventory counts, one per skill slot (the
+    /// waiting `SKILLCOUNT` caption source; `JoinedRoom.skills`
+    /// carries the ring ids only).
+    pub fn set_skill_counts(&mut self, counts: [u32; 3]) -> &mut Self {
+        self.skill_counts = counts;
+        self
+    }
+
+    /// Staged inventory counts, one per skill slot (zeroed until
+    /// staged).
+    #[must_use]
+    pub fn skill_counts(&self) -> [u32; 3] {
+        self.skill_counts
     }
 
     /// Waiting song panel rows: title row plus difficulty row.
@@ -742,7 +787,9 @@ impl ScreenGame {
     /// Waiting: staged art behind the live seats, flat card fallback,
     /// then the live chat box, then the staged song-select dialog: art,
     /// its structure overlay (catalog-driven table), and the
-    /// chosen-song panel.
+    /// chosen-song panel. The staged MAPNAME/BPM/SKILLCOUNT captions
+    /// paint from the room word, the catalog BPM column, and the
+    /// staged inventory (`INSTNAME`/`NOTICE` stay unpainted, OPEN 1/2).
     ///
     /// Chat rows come from live 3012/3013 packets only
     /// ([`Self::push_waiting_user_message`]/[`Self::push_waiting_admin_message`])
@@ -756,9 +803,14 @@ impl ScreenGame {
     /// `paint_waiting_staged` never paints those rects (see the
     /// `paint_waiting_music` docs and the chat/cards absence tests).
     fn paint_waiting(&self, frame: &mut Frame<'_>) {
+        let captions = WaitingCaptions {
+            song_title: self.room_song_title(),
+            song_bpm: self.room_song_bpm(),
+            skill_counts: self.skill_counts,
+        };
         match (self.scene_art(Screen::Waiting), &self.waiting) {
             (Some(art), Some(room)) => {
-                paint_waiting_scene(frame, room, art, self.room_song_title());
+                paint_waiting_scene(frame, room, art, &captions);
                 paint_waiting_chat(frame, &self.waiting_chat, &self.chat_input, &art.placements);
             }
             (Some(art), None) => paint_lobby_backdrop(frame, Screen::Waiting, art),
@@ -1947,6 +1999,99 @@ mod game_tests {
         assert_eq!(game.select_songs()[0].song_id, 757);
         assert_eq!(game.select_songs()[0].title, "First");
         assert_eq!(game.select_songs()[0].artist, "Band");
+    }
+
+    #[test]
+    fn waiting_captions_carry_catalog_bpm_and_inventory_counts() {
+        // Room song 757 stages the catalog BPM column (124.0); the
+        // inventory stages alongside, zeroed until set.
+        let mut game = ScreenGame::new();
+        assert_eq!(game.skill_counts(), [0, 0, 0]);
+        let mut room = waiting_room();
+        room.music_id = 757;
+        game.set_joined_room(room);
+        assert_eq!(game.room_song_bpm(), None);
+        let blob = waiting_song_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_song_catalog(&entries);
+        game.set_skill_counts([7, 42, 1500]);
+        assert_eq!(game.room_song_bpm(), Some(124.0));
+        assert_eq!(game.catalog_song_bpm(757), Some(124.0));
+        assert_eq!(game.catalog_song_bpm(999), None);
+        assert_eq!(game.skill_counts(), [7, 42, 1500]);
+    }
+
+    #[test]
+    fn waiting_staged_captions_ink_their_rects() {
+        // Staged waiting covers plus three caption rects: the map
+        // name (room word 1), the catalog BPM (124), and the first
+        // inventory count ink their rects.
+        let mut game = ScreenGame::new();
+        let mut room = waiting_room();
+        room.music_id = 757;
+        room.arena = 1;
+        game.set_joined_room(room);
+        walk_to_waiting(&mut game);
+        let blob = waiting_song_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_song_catalog(&entries);
+        game.set_skill_counts([7, 42, 1500]);
+        game.load_scene(
+            Screen::Waiting,
+            vec![
+                ScenePlacement {
+                    id: "IDC_IMAGE_SWAIT_COVERAVATAR1".to_owned(),
+                    code: 0,
+                    sprite: None,
+                    rect: Rect {
+                        x: 28,
+                        y: 53,
+                        w: 141,
+                        h: 175,
+                    },
+                },
+                ScenePlacement {
+                    id: "IDC_TEXT_SWAIT_MAPNAME".to_owned(),
+                    code: 0,
+                    sprite: None,
+                    rect: Rect {
+                        x: 480,
+                        y: 15,
+                        w: 90,
+                        h: 23,
+                    },
+                },
+                ScenePlacement {
+                    id: "IDC_TEXT_SWAIT_BPM".to_owned(),
+                    code: 0,
+                    sprite: None,
+                    rect: Rect {
+                        x: 620,
+                        y: 60,
+                        w: 60,
+                        h: 20,
+                    },
+                },
+                ScenePlacement {
+                    id: "IDC_TEXT_SWAIT_1SKILLCOUNT".to_owned(),
+                    code: 0,
+                    sprite: None,
+                    rect: Rect {
+                        x: 740,
+                        y: 208,
+                        w: 40,
+                        h: 30,
+                    },
+                },
+            ],
+            HashMap::new(),
+        );
+        let buf = paint_waiting_frame(&mut game, 800, 600);
+        let scrim = pack_xrgb(0x08, 0x08, 0x10);
+        assert_eq!(buf[13 * 800 + 476], scrim, "mapname scrim");
+        assert_eq!(buf[58 * 800 + 616], scrim, "bpm scrim");
+        assert_eq!(buf[206 * 800 + 736], scrim, "skillcount scrim");
+        assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
     }
 
     /// Waiting game with dialog art and the one-song catalog staged:
