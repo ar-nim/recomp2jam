@@ -1987,3 +1987,46 @@ fixture in `shots.rs`, waiting-shot caption verify, `waiting.png` refresh,
   markdown edit, and `cargo fmt --check` was re-run clean after both
   files settled. Per the sweep rules (touch only `docs/playtest.md`,
   fix only my own lint findings) the peer's file was left alone.
+
+## Regression sweep — 2026-11-07 23:18 UTC+8 (HEAD `4bd3d3a`, tree clean)
+
+Live re-proof on the zorder-head. Covers only the docs-log commit landed
+after the captions2-head baseline `4a2e306` (`4bd3d3a`: z-order twin
+appliers pins in `stage-bga.md`/`stage-twins.md` plus the sweep log) — no
+code changed, so no new tests were expected.
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1284 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 7, file 149, game 92, net 346,
+  render 73, shell 472, real_art 7, scenes 22, recomp2jam 97
+  (6 doc-test targets, 0 each) — identical to the baseline, as
+  expected for a docs-only HEAD.
+- `cargo build --workspace --release`: clean, `exit=0`, no warnings.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.60 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`23:17:54 +08:00`):
+  `Authorize session` → `Get channel list: [0]` →
+  `Enter channel: [0/00]` → `Get character info: [tester]` →
+  `Create room: songflow` →
+  `Update room [000] music settings: [HX / X10 / o2ma757]` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Update #1 - Jam: 3 (Bonus: 0)` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure WARNs on room delete; a second session walked
+  `Get channel list` → `Enter channel` → `Get room list` →
+  `Get character info`).
+- **Verdict: no regression — suite is green on the zorder-head (1284
+  passed; identical to the captions2-head baseline, docs-only delta,
+  0 failures). No lint findings. No commits, no pushes.** This sweep
+  touched only `docs/playtest.md`.
+- Tree note: nine untracked scratch files present (`tmp-scan1.py`
+  through `tmp-scan9.py`, not mine, left alone); no tracked file
+  modified.

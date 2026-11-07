@@ -35,8 +35,13 @@ so the backdrop always shows.
   `IDC_IMAGE_SPLAY_BACK2` `Note_BG.ojs` (2 frames, anchors `(20,0)` and
   `(567,0)`, 213x484 — the highway back strips) and `IDC_IMAGE_SPLAY_BACK3`
   `Playing_Menu.ojs` (`(204,558)`, 596x42 — bottom-right menu strip).
-- `Playing_BG19Ani.ojs` (slot 66): 4-frame animation 498x289 at `(286,0)`,
-  colorkey `0x7D5F` — the only animated stage variant found.
+- `Playing_BG19Ani.ojs` (slot 66, 1151464 B at data offset 18418794):
+  4-frame animation 498x289 at `(286,0)`, colorkey `0x7D5F` (header words
+  `(1, 1365, 4, 0x7D5F, 286, 0, 498, 289)`) — the only animated stage
+  variant found, and an archive orphan in 7.55: no exe literal names it
+  (byte search finds no `BG19Ani`, `BG19`, `Playing_BG`, or `BG_Ani`), no
+  `.txt` in either archive references it, and no traced builder can form
+  its name (close-out in OPEN 1).
 - Stage-numbered effect kits share the same key: `Note_{Miss,Bad,Good,Cool,
   Combo,ComboNum}<1..36>.ojt`, `Note_Click<1..36>_<1|2>.ojt`,
   `Playing_Effect_Jam<1..36>.ojt` — the whole visual kit is stage-keyed.
@@ -55,7 +60,8 @@ so the backdrop always shows.
   (file `0xbe0d2`) matches only when the overlay is clear.
 - Picker `0x4bb2c0`: reads the waiting-room preview control `0x1650001A`
   (`IDC_IMAGE_SWAIT_MAP` = `Wait_Map.ojs` in `State_Waiting`), returns a stage
-  value. The normal path rolls a random stage (seeded `rand`, mod the
+  value with bit 31 (`0x80000000`) always set (close-out in OPEN 4).
+  The normal path rolls a random stage (seeded `rand`, mod the
   control count, plus one) and re-rolls past a 4-entry avoid list at VA
   `0x649ac4` (file `0x249ac4`). Songs 654/655 bypass the roll: two
   immediate compares on the selected-song id (files `0xbb324`/`0xbb330`)
@@ -77,11 +83,16 @@ so the backdrop always shows.
   advance/change stage).
 - The stage change rides protocol **4002** (`0xFA2` pushed before a vtable
   slot `+0x5c` call at `0x4bb600`/`0x4bb64d`) — a server-visible room state.
-- Applier `0x4ad350(arg)` stores `arg` to `0x7789dc` (file `0x4ad413`), then
-  branches on `arg >> 16`: set → control `0x16500072`
-  (`IDC_IMAGE_SWAIT_P2P_MAP` = `Wait_Map_P2P.ojs`, file `0x4ad42d`); clear →
-  `0x1650004F` + parity frames (file `0x4ad554`: `stage % 2`, 0 → 2).
-  Callers `0x4aacfc`/`0x4ab272`/`0x4ab63a`.
+- Applier `0x4ad350(arg)` stores `arg` to `0x7789dc` (file `0x4ad413`), after
+  range-checking the low word (`& 0xFFFF`, must be `≤ 0x24` = 36, files
+  `0xad3db`–`0xad3ea`; above exits). It then branches on `arg >> 16`: set →
+  control `0x16500072` (`IDC_IMAGE_SWAIT_P2P_MAP` = `Wait_Map_P2P.ojs`,
+  file `0x4ad42d`); clear → `0x1650004F` + parity frames (file `0x4ad554`:
+  `stage % 2`, 0 → 2). The high word is a room-display flag (waiting-room
+  preview branch selector), not an animated-stage marker (close-out in
+  OPEN 4). Callers `0x4aacfc` (forwards the flagged picker-issued global),
+  `0x4ab272` (forwards the global as-is), `0x4ab63a` (forwards a
+  caller-supplied plain stage, so the clear path stays reachable).
 
 ## `_` runtime resolution (applier `0x4e7850`)
 
@@ -154,11 +165,21 @@ bytes `0x4e85d4`), the rest the generic path at `0x4e7fde`:
 
 ## OPEN
 
-1. `Playing_BG19Ani.ojs` consumer: no literal exists in the exe; the name is
-   presumably built via `%s%d%s` (refs `0x45c969`/`0x4f82c7`/`0x4f846d`/
-   `0x52159a`) or `%s%d_%d%s` (`0x45c941`/`0x4f829f`/`0x521572`). The
-   high-word-set branch of the room setter (`0x4ad42d`) is the likely trigger
-   path; the exact builder and frame schedule are untraced.
+1. CLOSED — `Playing_BG19Ani.ojs` has no consumer in 7.55 (archive orphan,
+   no frame schedule). The `%s%d%s` sites build `SMI_`-family and music-temp
+   names, never stage names: the format lives at file `0x24656c` beside
+   `SMI_NoImage.ojs`, and the four call sites push stems `SMI_`
+   (VA `0x646580`; files `0x5c969`, `0x12159a`) and `o2ma` (VA `0x64ba00`;
+   files `0xf82c7`, `0xf846d`, suffixes `.ojn`/`.ojm`); the three
+   `%s%d_%d%s` sites (files `0x5c941`/`0xf829f`/`0x121572`, format file
+   `0x246574`) push the same stems. The three stage appliers build only
+   `%s%d.ojs`, `%s%d.%s`, `%s%d_%d.ojt`, and bare arms (files `0xe8143`/
+   `0xe81fa`/`0xe81cf` and twins) — no `Ani`-suffix arm exists, and no `Ani`
+   stem literal exists outside `Guide_Ani.ojs`/`Notice_Ani.ojs` (files
+   `0x24b5a2`/`0x24c093`). The only Playing control list names
+   `_Playing_BG.ojs` (`BACK1`); no `.txt` in either archive names `BG19Ani`
+   or `BG_Ani`. The 4 frames are never staged, so the standard frame advance
+   (`0x42f040`) never runs on them — there is no schedule to trace.
 2. CLOSED — stage paints first, avatar paints second. The venue
    `BACK1` (`IDC_IMAGE_SPLAY_BACK1`, code `0x1B500071`, ordinal 113)
    stages through the `_` applier `FUN_004e7850` (VA `0x4e7850`,
@@ -183,9 +204,17 @@ bytes `0x4e85d4`), the rest the generic path at `0x4e7fde`:
 3. Who calls the three twin appliers (`0x4e7850` and the `0x4ee8f5`/`0x4f2c73`
    clusters): addresses sit adjacently in `.rdata` at `0x64ae48`–`0x64ae50`,
    suggesting a state-vtable dispatch (solo/P2P/tutorial variants unattributed).
-4. The stage value's high word (animated-stage flag vs room flag): the picker
-   returns the stage with `0x80000000` set (file `0xbb3cf`) and the room
-   setter (`0x4ad350`) plus the `_` resolver branch on it, but which meaning
-   the flag carries stays untraced.
+4. CLOSED — the stage high word is a room-display flag, not an
+   animated-stage marker. The picker sets bit 31 (`0x80000000`) on every
+   return: defaults `0x80000001` (files `0xbb31a`/`0xbb3bc`/`0xbb3c5`: null
+   preview control, null art, zero frames) and `or` at file `0xbb3cf` for
+   the random path and the event-song path (stage 4 → `0x80000004`) alike —
+   so the flag rides all stages 1..36 plus the defaults, uncorrelated with
+   the stage-19-only `Ani` file. The setter range-checks the low word
+   (`& 0xFFFF`, `≤ 0x24`, files `0xad3db`–`0xad3ea`) and uses the high word
+   only to pick the waiting-room preview branch (set → `0x16500072` P2P-map
+   art at file `0xad42d`; clear → `0x1650004F` plus parity/SMI art at file
+   `0xad554`). The `_` resolver likewise strips it to recover the low-word
+   stage for the static `%s%d.ojs` build (files `0xe78df`–`0xe78f8`).
 5. Protocol 4002's exact packet layout (stage id width, who may change it) —
    `docs/net-protocol.md` cross-check pending.
