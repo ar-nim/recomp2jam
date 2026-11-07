@@ -1438,9 +1438,12 @@ fn paint_lobby(frame: &mut Frame<'_>, background: u32) {
 /// `0x4e47a0`, file `0xe47a0`, ev `68d920c2…`): the song-table
 /// fraction plus the song title/artist being loaded. The exe sets
 /// `Trebuchet MS`/`Arial` fonts there; the shell micro-font stands
-/// in (typography gap) and the track rect below stays a documented
-/// placeholder — no verified `MusicLoading.ojs` bar geometry exists
-/// (bnd-audit 35) — so only the fraction and the caption are live.
+/// in (typography gap). Track and caption rects below stay OPEN
+/// placeholders: `MusicLoading.ojs` is one 800x600 body at (0,0)
+/// with no bar/caption sub-rect, the `0x4e47a0` dossier carries
+/// fonts plus the overlay mount plus the song-table walk with no
+/// literal bar/caption rect, and adjacent bar bodies belong to
+/// other dialogs — so only the fraction and the caption are live.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct LoadingStatus {
     /// Song-table walk fraction (`0.0`..=`1.0`, clamped at paint).
@@ -1492,26 +1495,29 @@ fn loading_fill_width(track_w: u32, progress: f32) -> u32 {
     u32::try_from(rounded).unwrap_or(u32::MAX).min(track_w)
 }
 
-/// Track origin of the placeholder bar (documented placeholder:
-/// no verified `MusicLoading.ojs` bar rect, bnd-audit 35).
+/// Track origin of the OPEN placeholder bar: centered `w / 4,
+/// h / 2 - 8` with no exe-grounded rect (`MusicLoading.ojs` is a
+/// single 800x600 body, `0x4e47a0` names no rect, adjacent bar art
+/// belongs to other dialogs; bnd-audit 35).
 fn loading_track_origin(frame: &Frame<'_>) -> (i32, i32) {
     (frame.w as i32 / 4, frame.h as i32 / 2 - 8)
 }
 
-/// Inner width of the placeholder track on this frame.
+/// Inner width of the OPEN placeholder track on this frame
+/// (`w / 2`: centered placeholder, no exe-grounded width).
 fn loading_track_width(frame: &Frame<'_>) -> u32 {
     u32::try_from(frame.w as i32 / 2).unwrap_or(0)
 }
 
-/// Song-caption origin: one row below the placeholder bar
-/// (documented placeholder — no verified caption rect).
+/// Song-caption origin: one row below the OPEN placeholder bar
+/// (`w / 4, h / 2 + 12` — no verified caption rect).
 fn loading_song_origin(frame: &Frame<'_>) -> (i32, i32) {
     (frame.w as i32 / 4, frame.h as i32 / 2 + 12)
 }
 
 /// Loading progress bar over a dark track (no background fill:
 /// shared by the flat fallback and the art scene). The track rect
-/// is a documented placeholder; only the fill fraction is live.
+/// is an OPEN placeholder; only the fill fraction is live.
 fn paint_loading_bar(frame: &mut Frame<'_>) {
     paint_loading_bar_with_progress(frame, 1.0);
 }
@@ -1546,8 +1552,8 @@ fn paint_loading_bar_with_progress(frame: &mut Frame<'_>, progress: f32) {
     }
 }
 
-/// Song title/artist line below the bar (placeholder row): dark
-/// scrim plus white ink, like the lobby detail lines. Blank
+/// Song title/artist line below the bar (OPEN placeholder row):
+/// dark scrim plus white ink, like the lobby detail lines. Blank
 /// captions paint nothing.
 fn paint_loading_song(frame: &mut Frame<'_>, status: &LoadingStatus) {
     let Some(caption) = status.caption() else {
@@ -4628,6 +4634,23 @@ mod paint_tests {
             !probe.contains(&art_title_ink()),
             "blank caption paints no white ink"
         );
+    }
+
+    #[test]
+    fn loading_bar_geometry_stays_open_placeholder() {
+        // OPEN placeholder guard: the centered track/caption math
+        // below is not exe-grounded (`MusicLoading.ojs` is a single
+        // 800x600 body, `0x4e47a0` names no rect, adjacent bars are
+        // other dialogs), so this test pins the placeholder formula
+        // and fails loudly if anyone "grounds" it without evidence.
+        let frame = Frame {
+            buf: &mut vec![0u32; 64 * 48],
+            w: 64,
+            h: 48,
+        };
+        assert_eq!(loading_track_origin(&frame), (16, 16));
+        assert_eq!(loading_track_width(&frame), 32);
+        assert_eq!(loading_song_origin(&frame), (16, 36));
     }
 
     #[test]
