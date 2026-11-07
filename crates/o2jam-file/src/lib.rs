@@ -22,6 +22,9 @@ pub enum FileError {
     /// Recognised but not yet implemented — tracks RE progress honestly.
     #[error("not yet implemented: {0}")]
     NotImplemented(&'static str),
+    /// JPEG body failed to decode (corrupt tables or entropy data).
+    #[error("jpeg decode failed: {0}")]
+    JpegDecode(String),
     /// Recognised header claims a length the buffer cannot satisfy.
     #[error("truncated: need {need} bytes, have {have}")]
     Truncated {
@@ -194,6 +197,7 @@ fn read_i16le(bytes: &[u8], off: usize) -> Result<i16, FileError> {
 }
 
 pub mod control;
+pub mod jpeg;
 pub mod loading;
 pub mod ojm;
 pub mod ojn;
@@ -203,6 +207,7 @@ pub mod sprites;
 pub mod tables;
 
 pub use control::*;
+pub use jpeg::*;
 pub use loading::*;
 pub use ojm::*;
 pub use ojn::*;

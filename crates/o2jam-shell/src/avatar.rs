@@ -2,17 +2,19 @@
 //!
 //! One parsed body becomes one figure: every raw-RGB555 image is
 //! decoded at its record anchor, strided atlases contribute their
-//! animation frames (see [`AvatarFigure::from_sprite55_strided`]), and
-//! anything else (compressed/outlier frames) is skipped — their codecs
-//! are still TBD in `o2jam-file`. Equipped parts stack on as extra
-//! layers; which filenames those are comes from [`pick_wear_sprites`].
+//! animation frames (see [`AvatarFigure::from_sprite55_strided`]),
+//! prefixed `.oji` bodies compose their row spans onto full frames
+//! (see [`AvatarFigure::from_sprite55_prefixed`]), and anything else
+//! (compressed frames) is skipped — their codecs are still TBD in
+//! `o2jam-file`. Equipped parts stack on as extra layers; which
+//! filenames those are comes from [`pick_wear_sprites`].
 
 use std::collections::HashMap;
 
 use o2jam_file::{
     classify_sprite, find_opi_entry, opi_entry_body, pair_entries_with_rects, resolve_sprite_entry,
     AvatarItemTable, Bnd, BndRect, ControlBlock, ControlEntry, ControlList, OpiEntry,
-    PlacedControl, Sprite55, Sprite55Strided, SpriteResolution,
+    PlacedControl, Sprite55, Sprite55Prefixed, Sprite55Strided, SpriteResolution,
 };
 use o2jam_net::CharacterInfo;
 use o2jam_render::{
@@ -104,6 +106,44 @@ impl AvatarFigure {
                 }
             }
         }
+        Self { layers }
+    }
+
+    /// Decode every image of a prefixed body onto its full `w*h`
+    /// canvas: the container colour key clears the canvas, then each
+    /// row span pastes at its `(x, y)` — the parser guarantees spans
+    /// stay inside their rows, and pixels no span covers stay
+    /// colour-key (`Playing_Loding_Lankview.oji` trims both sides of
+    /// its bottom rows for rounded corners; nothing is invented). One
+    /// layer per image (a frame is one surface) at its record anchor
+    /// under the container colour key.
+    #[must_use]
+    pub fn from_sprite55_prefixed(sprite: &Sprite55Prefixed<'_>) -> Self {
+        let layers = sprite
+            .images
+            .iter()
+            .zip(&sprite.rows)
+            .map(|(image, rows)| {
+                let mut words = vec![sprite.colorkey; image.w as usize * image.h as usize];
+                for span in rows {
+                    let base = span.y as usize * image.w as usize + span.x as usize;
+                    let (pairs, _) = span.pixels.as_chunks::<2>();
+                    for (index, pair) in pairs.iter().enumerate() {
+                        words[base + index] = u16::from_le_bytes(*pair);
+                    }
+                }
+                FigureLayer {
+                    image: Rgb555Image {
+                        w: image.w as usize,
+                        h: image.h as usize,
+                        words,
+                    },
+                    dx: i32::from(image.x),
+                    dy: i32::from(image.y),
+                    colorkey: sprite.colorkey,
+                }
+            })
+            .collect();
         Self { layers }
     }
 
@@ -307,12 +347,20 @@ pub(crate) fn strided_sprite55(body: &[u8]) -> Option<Sprite55Strided<'_>> {
 }
 
 /// Decode one archive body as a figure: the plain sprite-55 layout
-/// first, then the strided-atlas layout (the combo glow atlases;
-/// exact blob accounting separates the two). `None` when neither
-/// decodes — unknown bodies keep their codec gap.
+/// first, then — when the accounting holds but no frame decodes raw —
+/// the prefixed `.oji` row layout (codec gap ③), and the strided-atlas
+/// layout for plain-miss bodies (the combo glow atlases; exact blob
+/// accounting separates all three). `None` when no layout decodes —
+/// unknown bodies (the compressed `.oji` frames) keep their codec gap.
 fn sprite55_figure(body: &[u8]) -> Option<AvatarFigure> {
     if let Ok(sprite) = o2jam_file::parse_sprite55(body) {
-        return Some(AvatarFigure::from_sprite55(&sprite));
+        let figure = AvatarFigure::from_sprite55(&sprite);
+        if !figure.is_empty() {
+            return Some(figure);
+        }
+        let prefixed = o2jam_file::parse_sprite55_prefixed(body).ok()?;
+        let figure = AvatarFigure::from_sprite55_prefixed(&prefixed);
+        return (!figure.is_empty()).then_some(figure);
     }
     strided_sprite55(body).map(|atlas| AvatarFigure::from_sprite55_strided(&atlas))
 }
@@ -1591,6 +1639,145 @@ mod avatar_figure_tests {
         assert!(strided_sprite55(truncated).is_none());
         let archive = opa_blob(&[("Truncated.ojt", truncated)]);
         assert!(load_archive_sprite(&archive, "Truncated.ojt").is_none());
+    }
+
+    /// Prefixed sprite-55 body (the `.oji` row-group layout):
+    /// header + one record per image, each image storing row groups
+    /// `[u16 width][u16 x][u16 y]` + pixels plus a zero terminator
+    /// word (the `SelectAlbum_Bar.oji` shape).
+    fn prefixed_row_group(width: u16, x: u16, y: u16, words: &[u16]) -> Vec<u8> {
+        assert_eq!(words.len(), width as usize);
+        let mut group = Vec::new();
+        group.extend_from_slice(&width.to_le_bytes());
+        group.extend_from_slice(&x.to_le_bytes());
+        group.extend_from_slice(&y.to_le_bytes());
+        for word in words {
+            group.extend_from_slice(&word.to_le_bytes());
+        }
+        group
+    }
+
+    fn prefixed_frame(row0: &[u16], row1: &[u16]) -> Vec<u8> {
+        let mut data = prefixed_row_group(4, 0, 0, row0);
+        data.extend_from_slice(&prefixed_row_group(2, 1, 1, row1));
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data
+    }
+
+    fn prefixed55_body(images: &[(u16, u16, u16, u16, Vec<u8>)]) -> Vec<u8> {
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&1u16.to_le_bytes());
+        blob.extend_from_slice(&o2jam_file::SPRITE55_MAGIC.to_le_bytes());
+        blob.extend_from_slice(&(images.len() as u16).to_le_bytes());
+        blob.extend_from_slice(&0x0000u16.to_le_bytes());
+        let mut run = 0u32;
+        for (x, y, w, h, data) in images {
+            blob.extend_from_slice(&x.to_le_bytes());
+            blob.extend_from_slice(&y.to_le_bytes());
+            blob.extend_from_slice(&w.to_le_bytes());
+            blob.extend_from_slice(&h.to_le_bytes());
+            blob.extend_from_slice(&run.to_le_bytes());
+            blob.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            blob.extend_from_slice(&0u32.to_le_bytes());
+            run += data.len() as u32;
+        }
+        for (_, _, _, _, data) in images {
+            blob.extend_from_slice(data);
+        }
+        blob
+    }
+
+    /// Codec gap ③: a prefixed `.oji` body routes through the archive
+    /// loader into composed layers — the plain layout decodes none of
+    /// its frames, and before the gap it dropped the body whole.
+    /// Each layer pastes the row spans onto its `w×h` canvas; the
+    /// trimmed-row gaps stay colour-key (never invented pixels).
+    #[test]
+    fn prefixed_oji_body_routes_to_composed_layers() {
+        let body = prefixed55_body(&[
+            (
+                0,
+                0,
+                4,
+                2,
+                prefixed_frame(&[0x7C00, 0x7C01, 0x7C02, 0x7C03], &[0x7C04, 0x7C05]),
+            ),
+            (
+                1,
+                0,
+                4,
+                2,
+                prefixed_frame(&[0x03E0, 0x03E1, 0x03E2, 0x03E3], &[0x03E4, 0x03E5]),
+            ),
+        ]);
+        let archive = opa_blob(&[("SelectAlbum_Bar.oji", &body)]);
+        let figure = load_archive_sprite(&archive, "SelectAlbum_Bar.oji").unwrap();
+        assert_eq!(figure.len(), 2, "one composed layer per stored frame");
+        let layer = figure.layer(0).unwrap();
+        assert_eq!((layer.dx, layer.dy), (0, 0));
+        assert_eq!(layer.colorkey, 0x0000);
+        assert_eq!(
+            layer.image.words,
+            vec![0x7C00, 0x7C01, 0x7C02, 0x7C03, 0x0000, 0x7C04, 0x7C05, 0x0000]
+        );
+        let layer = figure.layer(1).unwrap();
+        assert_eq!((layer.dx, layer.dy), (1, 0));
+        assert_eq!(layer.image.words[0], 0x03E0);
+    }
+
+    /// All seven 7.55 prefixed `.oji` bodies load and render (skips
+    /// without `install-root`): one composed layer per stored frame —
+    /// `SelectAlbum_Bar` 15, `SelectMusic_Bar` 10, the notice boards
+    /// and loading rank view one each, plus the four `BG_Ani`
+    /// background frames and the shadow. The full-row bodies ride the
+    /// positive deltas codec-coverage pinned (+92..+902);
+    /// `BG_Ani`/`Avatar_Shadow` walk the same row groups with narrower
+    /// spans (transparent margins skipped, negative deltas).
+    #[test]
+    fn oji_prefixed_bodies_render_from_the_archives() {
+        let Some(interface) = install_archive("Interface1.opi") else {
+            return;
+        };
+        let Some(playing) = install_archive("Playing1.opi") else {
+            return;
+        };
+        for (archive, name, frames) in [
+            (&interface, "SelectAlbum_Bar.oji", 15),
+            (&interface, "SelectMusic_Bar.oji", 10),
+            (&interface, "Lanking_NoticeBoard.oji", 1),
+            (&playing, "Lanking_NoticeBoard_Playing.oji", 1),
+            (&playing, "Playing_Loding_Lankview.oji", 1),
+            (&playing, "BG_Ani.oji", 4),
+            (&playing, "Avatar_Shadow.oji", 1),
+        ] {
+            let figure = load_archive_sprite(archive, name)
+                .unwrap_or_else(|| panic!("{name} must route to a figure"));
+            assert_eq!(figure.len(), frames, "{name} stored frames");
+        }
+    }
+
+    /// The remaining unmapped `.oji` frames (codec gap ④) stay
+    /// dropped: their stored bytes repeat y words mid-image and walk
+    /// as neither row groups nor any other layout (skips without
+    /// `install-root`).
+    #[test]
+    fn oji_unmapped_bodies_stay_dropped() {
+        let Some(interface) = install_archive("Interface1.opi") else {
+            return;
+        };
+        let Some(playing) = install_archive("Playing1.opi") else {
+            return;
+        };
+        for (archive, name) in [
+            (&playing, "Playing_ChatWindow.oji"),
+            (&interface, "Myroom_MybagSelect.oji"),
+            (&interface, "Shop_MybagSelect.oji"),
+        ] {
+            assert!(
+                load_archive_sprite(archive, name).is_none(),
+                "{name} has no codec yet"
+            );
+        }
     }
 
     #[test]

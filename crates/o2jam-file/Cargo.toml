@@ -7,5 +7,12 @@ license.workspace = true
 [dependencies]
 encoding_rs = "0.8.44"
 thiserror.workspace = true
+# Pure-Rust JPEG decoder (baseline + progressive), the one behind
+# `image` >= 0.25. The 7.55 album-art bodies are 21 baseline SOF0 + 26
+# progressive SOF2, so a baseline-only path is not enough. Default
+# features off: without `x86`/`neon` the crate `forbid(unsafe_code)`s
+# its scalar path, which is fast enough for 47 load-time bodies.
+zune-jpeg = { version = "0.5", default-features = false, features = ["std"] }
 
 [dev-dependencies]
+o2jam-render = { path = "../o2jam-render" }

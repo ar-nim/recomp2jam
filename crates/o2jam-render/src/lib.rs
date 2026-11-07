@@ -925,6 +925,107 @@ fn write_anchored_pixel(frame: &mut Frame<'_>, dest_x: i32, dest_y: i32, rgb: u3
     }
 }
 
+/// Owned RGB888 image: the decoded form of one JPEG album-art body
+/// (`o2jam_file::decode_jpeg_body`). JPEG has no alpha, so blits are
+/// opaque; pixels pack into XRGB8888 frames through [`pack_xrgb`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rgb888Image {
+    /// Width in pixels.
+    pub w: usize,
+    /// Height in pixels.
+    pub h: usize,
+    /// Row-major RGB bytes, 3 per pixel, `w * h * 3` long.
+    pub pixels: Vec<u8>,
+}
+
+/// Bytes per RGB888 pixel.
+const RGB888_BYTES_PER_PIXEL: usize = 3;
+
+impl Rgb888Image {
+    /// Adopt `w*h*3` RGB bytes; `None` on size mismatch.
+    #[must_use]
+    pub fn from_rgb888(bytes: &[u8], w: usize, h: usize) -> Option<Self> {
+        let expected = w
+            .checked_mul(h)
+            .and_then(|pixels| pixels.checked_mul(RGB888_BYTES_PER_PIXEL))?;
+        (bytes.len() == expected).then(|| Self {
+            w,
+            h,
+            pixels: bytes.to_vec(),
+        })
+    }
+
+    /// 8-bit channels of the pixel at `(x, y)`; `(0, 0, 0)` when the
+    /// coordinates fall outside the image.
+    #[must_use]
+    pub fn rgb(&self, x: usize, y: usize) -> (u8, u8, u8) {
+        let base = match y
+            .checked_mul(self.w)
+            .and_then(|row| row.checked_add(x))
+            .and_then(|pixel| pixel.checked_mul(RGB888_BYTES_PER_PIXEL))
+        {
+            Some(base) => base,
+            None => return (0, 0, 0),
+        };
+        match [
+            self.pixels.get(base),
+            self.pixels.get(base + 1),
+            self.pixels.get(base + 2),
+        ] {
+            [Some(&r), Some(&g), Some(&b)] => (r, g, b),
+            _ => (0, 0, 0),
+        }
+    }
+}
+
+/// Whether an RGB888 blit has geometry and backing stores.
+fn rgb888_blit_ready(frame: &Frame<'_>, image: &Rgb888Image) -> bool {
+    image.w > 0
+        && image.h > 0
+        && frame.buf.len() >= frame.w.saturating_mul(frame.h)
+        && image.pixels.len()
+            >= image
+                .w
+                .saturating_mul(image.h)
+                .saturating_mul(RGB888_BYTES_PER_PIXEL)
+}
+
+/// Blit an RGB888 image 1:1 with its top-left at `(dx, dy)`, opaque,
+/// frame-clipped. The JPEG album-art panels are 800x600 bodies, so an
+/// anchor at `(0, 0)` covers the native canvas exactly.
+pub fn blit_rgb888(frame: &mut Frame<'_>, image: &Rgb888Image, dx: i32, dy: i32) {
+    if !rgb888_blit_ready(frame, image) {
+        return;
+    }
+    for row in 0..image.h {
+        for col in 0..image.w {
+            paint_rgb888_pixel(frame, image, dx, dy, row, col);
+        }
+    }
+}
+
+/// Blit one RGB888 pixel when it lands inside the frame.
+fn paint_rgb888_pixel(
+    frame: &mut Frame<'_>,
+    image: &Rgb888Image,
+    dx: i32,
+    dy: i32,
+    row: usize,
+    col: usize,
+) {
+    let Some(dest_x) = dx.checked_add(i32::try_from(col).unwrap_or(i32::MAX)) else {
+        return;
+    };
+    let Some(dest_y) = dy.checked_add(i32::try_from(row).unwrap_or(i32::MAX)) else {
+        return;
+    };
+    if !dest_in_frame(frame, dest_x, dest_y) {
+        return;
+    }
+    let (r, g, b) = image.rgb(col, row);
+    write_anchored_pixel(frame, dest_x, dest_y, pack_xrgb(r, g, b));
+}
+
 /// Fill `background`, then paint `layers` back to front in file order
 /// over the native 800x600 canvas (recipe step 8): the fullscreen back
 /// art enters first, so later layers cover it. Each layer blits 1:1 at
@@ -2603,6 +2704,47 @@ mod tests {
             Rgb555Image::decode(&[], 0, 0).unwrap().words,
             Vec::<u16>::new()
         );
+    }
+
+    #[test]
+    fn rgb888_image_requires_exact_byte_count() {
+        assert!(Rgb888Image::from_rgb888(&[1, 2, 3, 4, 5], 2, 1).is_none());
+        let image = Rgb888Image::from_rgb888(&[10, 20, 30, 40, 50, 60], 2, 1).unwrap();
+        assert_eq!(image.rgb(0, 0), (10, 20, 30));
+        assert_eq!(image.rgb(1, 0), (40, 50, 60));
+        assert_eq!(image.rgb(9, 9), (0, 0, 0));
+    }
+
+    #[test]
+    fn rgb888_blit_lands_and_clips() {
+        // 2x1: red, green — blitted at (1, 0) over a 3x1 frame.
+        let image = Rgb888Image::from_rgb888(&[0xFF, 0, 0, 0, 0xFF, 0], 2, 1).unwrap();
+        let mut buf = vec![0x123456u32; 3];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 3,
+            h: 1,
+        };
+        blit_rgb888(&mut frame, &image, 1, 0);
+        assert_eq!(
+            buf,
+            vec![0x123456, pack_xrgb(255, 0, 0), pack_xrgb(0, 255, 0)]
+        );
+    }
+
+    #[test]
+    fn rgb888_blit_ignores_empty_geometry() {
+        let image = Rgb888Image::from_rgb888(&[1, 2, 3], 1, 1).unwrap();
+        let mut buf = vec![0x123456u32; 4];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 2,
+            h: 2,
+        };
+        blit_rgb888(&mut frame, &image, 5, 5);
+        let empty = Rgb888Image::from_rgb888(&[], 0, 0).unwrap();
+        blit_rgb888(&mut frame, &empty, 0, 0);
+        assert_eq!(buf, vec![0x123456u32; 4]);
     }
 
     #[test]
