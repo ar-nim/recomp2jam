@@ -171,13 +171,16 @@ const PLAYING_LIST: &str = "ControlList_Playing.txt";
 /// Channel. The art-less state paints nothing; only the live list,
 /// title, and cursor layer on top (pinned no-fill rule per
 /// `docs/channel-fill.md`).
-/// Room arena value the playing shot joins with: stage 5, whose
-/// `Playing_BG5.ojs` stages the warm wooden-deck floor the avatar
-/// stands on — the closest staged match to the reference rooftop
-/// photo (`docs/playing-reference.md`; the exact 3D rooftop is not
-/// among the 36 stages). Rides the room's arena word so the shot
-/// exercises the room-entry stage wiring end to end.
-const PLAYING_ARENA_STAGE: i32 = 5;
+/// Room arena value the playing shot joins with: stage 2, whose
+/// `Playing_BG2.ojs` stages an open grassy rise sloping to a lake
+/// with a distant high-rise skyline under a bright blue sky — the
+/// closest staged match to the reference rooftop overlook photo
+/// (`docs/playing-reference.md`; the exact sunset 3D rooftop is not
+/// among the 36 stages). Residual delta: grass for the wooden plank
+/// deck, noon-blue for the sunset-orange sky, no parapet railing or
+/// blimps. Rides the room's arena word so the shot exercises the
+/// room-entry stage wiring end to end.
+const PLAYING_ARENA_STAGE: i32 = 2;
 
 /// Repository-local `install-root` (git-ignored game data).
 fn install_root() -> PathBuf {
@@ -317,10 +320,14 @@ fn stage_result_block(game: &mut ScreenGame, archive: &[u8], list: &ControlList)
 }
 
 /// Stage Playing-archive scenes (Loading gate plus Playing gauges)
-/// through the game's room arena stage and room mode: the venue
+/// through the game's room arena stage and key mode: the venue
 /// `_Playing_BG.ojs` and the stage-keyed kits resolve their numbered
-/// siblings, and the note-background/life-gauge/ buffer-bar families
-/// stage only the member the joined room selects.
+/// siblings, and the note-background/life-gauge/buffer-bar families
+/// stage only the solo member the reference photo pins (lanes left
+/// panel, venue right, avatar center-right). The walk room stays a
+/// Live duo for the battle verdict, whose P2P family would paint its
+/// VS panel over the center while emptying the solo slots — so the
+/// shot pins `team_play: false` instead of the room's Live word.
 fn stage_playing_archive(game: &mut ScreenGame, archive: &[u8]) {
     if let Some((placements, figures)) = stage_single_sprite(archive, LOADING_SPRITE) {
         game.load_scene(Screen::Loading, placements, figures);
@@ -331,7 +338,7 @@ fn stage_playing_archive(game: &mut ScreenGame, archive: &[u8]) {
     let arena_stage = game.arena_stage();
     let mode = PlayingArtMode {
         key_mode: game.room_key_mode(),
-        team_play: game.room_team_play(),
+        team_play: false,
     };
     let Some((placements, figures)) = stage_bound_block(
         archive,
@@ -1090,16 +1097,16 @@ mod tests {
 
     #[test]
     fn playing_venue_stages_the_room_arena_backdrop() {
-        // The joined room's arena word (stage 5) drives the venue
+        // The joined room's arena word (stage 2) drives the venue
         // resolution: the staged `_Playing_BG.ojs` figure is the
-        // `Playing_BG5.ojs` body, not the bare stem's.
+        // `Playing_BG2.ojs` body, not the bare stem's.
         let Some(archive) = read_archive(PLAYING_ARCHIVE) else {
             println!("skip: missing {PLAYING_ARCHIVE}");
             return;
         };
         let list = control_list(&archive, PLAYING_LIST).expect("control list parses");
         let game = seeded_game();
-        assert_eq!(game.arena_stage(), 5);
+        assert_eq!(game.arena_stage(), 2);
         let mode = PlayingArtMode {
             key_mode: game.room_key_mode(),
             team_play: game.room_team_play(),
@@ -1120,7 +1127,7 @@ mod tests {
             .expect("the venue runtime ref stages a figure");
         assert_eq!(
             venue,
-            &load_archive_sprite(&archive, "Playing_BG5.ojs").expect("stage 5 body decodes"),
+            &load_archive_sprite(&archive, "Playing_BG2.ojs").expect("stage 2 body decodes"),
             "venue must load the arena stage's numbered body"
         );
         assert_ne!(
@@ -1148,7 +1155,7 @@ mod tests {
             key_mode: 2,
             team_play: false,
         };
-        let figures = load_scene_figures_for_room(&archive, &names, Some(5), &mode);
+        let figures = load_scene_figures_for_room(&archive, &names, Some(2), &mode);
         for staged in ["_Playing_BG.ojs", "Note_BG.ojs", "Life_gauge_left_bar.ojs"] {
             assert!(
                 figures.contains_key(staged),
@@ -1163,6 +1170,75 @@ mod tests {
         }
         assert!(!figures.contains_key("BpPoint_Right_bar.ojs"));
         assert!(!figures.contains_key("Life_gauge_back.ojs"));
+    }
+
+    #[test]
+    fn playing_shot_pins_solo_composition_despite_live_room() {
+        // The walk room stays a Live duo (the battle Lose verdict),
+        // but the playing shot pins the solo reference composition
+        // (lanes left panel, venue right, avatar center-right, tally
+        // bottom): re-staging the Playing scene with the solo family
+        // must be a no-op. A Live-family staging selects the P2P
+        // note background, right buffer, and gauge-back shell, whose
+        // VS panel paints over the center while the solo slots
+        // (Note_BG, left bars) sit empty.
+        let Some(archive) = read_archive(PLAYING_ARCHIVE) else {
+            println!("skip: missing {PLAYING_ARCHIVE}");
+            return;
+        };
+        let list = control_list(&archive, PLAYING_LIST).expect("control list parses");
+        let walk = seeded_game();
+        assert!(
+            walk.room_team_play(),
+            "the walk stays Live for the battle verdict"
+        );
+        let solo = PlayingArtMode {
+            key_mode: walk.room_key_mode(),
+            team_play: false,
+        };
+        let Some((placements, figures)) = stage_bound_block(
+            &archive,
+            &list,
+            PLAYING_BLOCK,
+            Some(walk.arena_stage()),
+            Some(&solo),
+        ) else {
+            panic!("playing: STATE_PLAYING staged no solo figures");
+        };
+        assert!(figures.contains_key("Note_BG.ojs"));
+        assert!(figures.contains_key("Life_gauge_left_bar.ojs"));
+        assert!(!figures.contains_key("P2P7KeyNote_BG.ojs"));
+        assert!(!figures.contains_key("BpPoint_Right_bar.ojs"));
+        assert!(!figures.contains_key("Life_gauge_back.ojs"));
+        let paint_native = |game: &mut ScreenGame| {
+            game.lane_key(3, true);
+            for _ in 0..4 {
+                game.menu_key(MenuKey::Confirm, true);
+            }
+            stage_playing_scene(game);
+            game.strike_at(2, 5_000);
+            let (w, h) = native_size();
+            let mut buf = vec![0u32; w * h];
+            game.paint_at(
+                &mut Frame {
+                    buf: &mut buf,
+                    w,
+                    h,
+                },
+                5_100,
+            );
+            assert_eq!(game.screen(), Screen::Playing);
+            buf
+        };
+        let mut seeded = seeded_game();
+        let seeded_frame = paint_native(&mut seeded);
+        let mut solo_game = seeded_game();
+        solo_game.load_scene(Screen::Playing, placements, figures);
+        let solo_frame = paint_native(&mut solo_game);
+        assert_eq!(
+            seeded_frame, solo_frame,
+            "playing must stage solo members despite the Live room"
+        );
     }
 
     #[test]
@@ -1991,7 +2067,7 @@ mod tests {
     fn waiting_shot_paints_mapname_bpm_skillcount_captions() {
         // The staged caption sources ink their verbatim `.bnd`
         // rects on real 7.55 art: the map-cycle entry of the room
-        // word (arena stage 5), the catalog BPM column of the room
+        // word (arena stage 2), the catalog BPM column of the room
         // song (757), and the staged inventory counts (slot 1
         // uncapped, slots 2-3 capped at 999). Each caption's scrim
         // pixel plus every font pixel of its exact text must land

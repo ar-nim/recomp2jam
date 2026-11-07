@@ -163,6 +163,26 @@ bytes `0x4e85d4`), the rest the generic path at `0x4e7fde`:
   default-stage fallback image; the unnumbered `Playing_BG.ojs` is reachable
   only through the bit-clear bare-name arm.
 
+## Shot arena pick (rooftop reference)
+
+The walk in `crates/recomp2jam/src/shots.rs` joins its room at arena
+stage 2 (`PLAYING_ARENA_STAGE`), so `playing.png`/`playing-native.png`
+paint `Playing_BG2.ojs` behind the avatar. Picked by decoding all 37
+`Playing_BG.ojs` + `Playing_BG<1..36>.ojs` bodies (each one 596x558 raw
+RGB555 frame, anchor `(204,0)`) from `Playing1.opi` and comparing them
+against the rooftop sunset venue in `docs/screenshots/reference-4x3.png`:
+stage 2 is the closest compositional match — an open foreground ground
+plane sloping to water, a distant high-rise skyline across it, and open
+sky above, mirroring the rooftop's deck → parapet → towers → sky stack.
+No stage reproduces the venue: the 3D rooftop (plank deck, railing,
+sunset-orange sky, blimps) is not among the painted 2D stages.
+
+Residual delta, documented honestly: grass foreground for the wooden
+plank deck; noon-blue sky for the sunset-orange clouds; no parapet
+railing, no blimps, lake for the rocky hill. The waiting `MAPNAME`
+caption for arena 2 reads `Losers Counterattack` (map-cycle table,
+low word mod table length).
+
 ## OPEN
 
 1. CLOSED — `Playing_BG19Ani.ojs` has no consumer in 7.55 (archive orphan,

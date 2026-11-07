@@ -2155,3 +2155,51 @@ new tests were expected.
   moving dirty state was taken (the peer appears to still be editing).
   Per the sweep rules (touch only `docs/playtest.md`, fix only my own
   lint findings) the peer's files were left alone.
+
+## Regression sweep — 2026-11-07 23:57 UTC+8 (HEAD `e277f9a`, tree clean)
+
+Live re-proof on the arena-head. Covers the cli feat commit landed after the
+twins-head baseline `a0bceec`: drive arena stage through live song flow
+(`e277f9a`: `--arena-id` CLI plumbing, `SongFlowOptions::arena_id`,
+report-side `song.arena_echo.arena` line in `connect.rs`/`main.rs`), plus
+the committed twins-head sweep log.
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1300 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 7, file 149, game 92, net 360,
+  render 73, shell 472, real_art 7, scenes 22, recomp2jam 99
+  (6 doc-test targets, 0 each). Ran twice, identical counts.
+- `cargo build --workspace --release`: clean, `exit=0`, 0 warning
+  lines (touched-`main.rs` rebuild check). The twins-head note about
+  `field arena_echo is never read` (`connect.rs:214`) is gone: the
+  arena-stage drive now reads the field, so the forced rebuild is
+  warning-free.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.59 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`23:57:01 +08:00`):
+  `Authorize session` → `Get channel list: [0]` →
+  `Enter channel: [0/00]` → `Get character info: [tester]` →
+  `Create room: songflow` →
+  `Update room [000] music settings: [HX / X10 / o2ma757]` →
+  `Update room [000] arena: [1]` (new — the arena-stage drive) →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Update #1 - Jam: 3 (Bonus: 0)` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure WARN on room delete; a second session walked
+  `Get channel list` → `Enter channel` → `Get room list` →
+  `Get character info`).
+- **Verdict: no regression — suite is green on the arena-head (1300
+  passed; +2 vs the 1298 twins-head baseline, all recomp2jam 97 → 99
+  from the new arena-stage flow tests
+  (`arena_stage_sends_word_and_asserts_echo`,
+  `arena_echo_mismatch_fails_the_flow`), all other targets unchanged,
+  0 failures). No lint findings. No commits, no pushes.** This sweep
+  touched only `docs/playtest.md`.
