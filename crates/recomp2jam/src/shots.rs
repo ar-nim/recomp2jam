@@ -11,9 +11,9 @@ use o2jam_net::play::SetRoomMusic;
 use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
 use o2jam_render::{Frame, Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
 use o2jam_shell::avatar::{
-    bind_scene_rects, load_avi_logo, load_scene_figures, load_scene_figures_for_stage, scene_block,
-    scene_sprite_names, AvatarFigure, ScenePlacement, AVI_BLOCK, LOADING_SPRITE, RESULT_BLOCK,
-    ROOM_BLOCK, WAITING_BLOCK,
+    bind_scene_rects, load_avi_logo, load_scene_figures, load_scene_figures_for_room,
+    load_scene_figures_for_stage, scene_block, scene_sprite_names, AvatarFigure, PlayingArtMode,
+    ScenePlacement, AVI_BLOCK, LOADING_SPRITE, RESULT_BLOCK, ROOM_BLOCK, WAITING_BLOCK,
 };
 use o2jam_shell::screens::paint::PLAYING_BLOCK;
 use o2jam_shell::{GameLoop, MenuKey, PlaySkin, Screen, ScreenGame};
@@ -115,10 +115,6 @@ const PLAYING_LIST: &str = "ControlList_Playing.txt";
 /// `STATE_CHANNEL` names zero sprites, so shots stage the real
 /// channel dialog bar full-canvas instead.
 const CHANNEL_FALLBACK_SPRITE: &str = "Dialog_ChannelSelectBar.ojs";
-/// The Playing bound window stages no decodable art, so shots pin
-/// this corner life gauge full-canvas; its native anchor sits clear
-/// of the note lane.
-const PLAYING_GAUGE_SPRITE: &str = "Avatar_Info_LifeGauge.ojs";
 /// Room arena value the playing shot joins with: stage 5, whose
 /// `Playing_BG5.ojs` stages the warm wooden-deck floor the avatar
 /// stands on — the closest staged match to the reference rooftop
@@ -180,19 +176,26 @@ fn full_canvas(names: &[String]) -> Vec<ScenePlacement> {
 /// Stage a bound block: named figures plus `.bnd` placements. The
 /// room arena stage rides along so `_` runtime refs resolve their
 /// stage-numbered siblings (`None` keeps the bare arm; Interface
-/// blocks name no `_` refs).
+/// blocks name no `_` refs). The room mode, when given, selects the
+/// Playing family members (note backgrounds, life gauges, BP buffer
+/// bars — `avatar::playing_member_selected`); unselected members
+/// leave empty slots that paint nothing.
 fn stage_bound_block(
     archive: &[u8],
     list: &ControlList,
     block_name: &str,
     arena_stage: Option<u16>,
+    mode: Option<&PlayingArtMode>,
 ) -> Option<(Vec<ScenePlacement>, HashMap<String, AvatarFigure>)> {
     let block = scene_block(list, block_name)?;
     let names = scene_sprite_names(block);
     if names.is_empty() {
         return None;
     }
-    let figures = load_scene_figures_for_stage(archive, &names, arena_stage);
+    let figures = match mode {
+        Some(mode) => load_scene_figures_for_room(archive, &names, arena_stage, mode),
+        None => load_scene_figures_for_stage(archive, &names, arena_stage),
+    };
     if figures.is_empty() {
         return None;
     }
@@ -235,15 +238,17 @@ fn stage_interface_archive(game: &mut ScreenGame, archive: &[u8]) {
         (Screen::Waiting, WAITING_BLOCK),
         (Screen::Result, RESULT_BLOCK),
     ] {
-        if let Some((placements, figures)) = stage_bound_block(archive, &list, block, None) {
+        if let Some((placements, figures)) = stage_bound_block(archive, &list, block, None, None) {
             game.load_scene(screen, placements, figures);
         }
     }
 }
 
 /// Stage Playing-archive scenes (Loading gate plus Playing gauges)
-/// through the game's room arena stage: the venue `_Playing_BG.ojs`
-/// and the stage-keyed kits resolve their numbered siblings.
+/// through the game's room arena stage and room mode: the venue
+/// `_Playing_BG.ojs` and the stage-keyed kits resolve their numbered
+/// siblings, and the note-background/life-gauge/ buffer-bar families
+/// stage only the member the joined room selects.
 fn stage_playing_archive(game: &mut ScreenGame, archive: &[u8]) {
     if let Some((placements, figures)) = stage_single_sprite(archive, LOADING_SPRITE) {
         game.load_scene(Screen::Loading, placements, figures);
@@ -252,20 +257,19 @@ fn stage_playing_archive(game: &mut ScreenGame, archive: &[u8]) {
         return;
     };
     let arena_stage = game.arena_stage();
-    let Some((mut placements, mut figures)) =
-        stage_bound_block(archive, &list, PLAYING_BLOCK, Some(arena_stage))
-    else {
+    let mode = PlayingArtMode {
+        key_mode: game.room_key_mode(),
+        team_play: game.room_team_play(),
+    };
+    let Some((placements, figures)) = stage_bound_block(
+        archive,
+        &list,
+        PLAYING_BLOCK,
+        Some(arena_stage),
+        Some(&mode),
+    ) else {
         return;
     };
-    if !figures.contains_key(PLAYING_GAUGE_SPRITE) {
-        figures.extend(load_scene_figures(
-            archive,
-            &[PLAYING_GAUGE_SPRITE.to_owned()],
-        ));
-    }
-    if figures.contains_key(PLAYING_GAUGE_SPRITE) {
-        placements.extend(full_canvas(&[PLAYING_GAUGE_SPRITE.to_owned()]));
-    }
     game.load_scene(Screen::Playing, placements, figures);
     if let Some(skin) = PlaySkin::from_archive(archive) {
         game.set_play_skin(skin);
@@ -453,18 +457,54 @@ fn shoot_result(game: &mut ScreenGame, now_ms: u64) -> anyhow::Result<Shot> {
     })
 }
 
-/// Paint the current screen into a fresh RGB buffer.
+/// Paint the current screen at the native 800x600 canvas — the exe
+/// frame every staged record anchor lives on — and box-downscale to
+/// the shot size, exactly how the reference photo photographs the
+/// native screen (a 4:3 view of one 800x600 frame, never a stretch
+/// or a partial blit).
 fn frame_rgb(game: &mut ScreenGame, now_ms: u64) -> Vec<u8> {
-    let mut buf = vec![0u32; SHOT_W * SHOT_H];
+    let (w, h) = (
+        usize::try_from(NATIVE_WIDTH).unwrap_or(1),
+        usize::try_from(NATIVE_HEIGHT).unwrap_or(1),
+    );
+    let mut buf = vec![0u32; w * h];
     game.paint_at(
         &mut Frame {
             buf: &mut buf,
-            w: SHOT_W,
-            h: SHOT_H,
+            w,
+            h,
         },
         now_ms,
     );
-    to_rgb(&buf)
+    to_rgb(&downscale_even(&buf, w, h))
+}
+
+/// 2x2 box average of XRGB words: width and height must be even
+/// (native 800x600 over shot 400x300). Channels average without
+/// carrying the transparent-black colorkey — the shot shows what the
+/// native frame shows.
+fn downscale_even(buf: &[u32], w: usize, h: usize) -> Vec<u32> {
+    let (ow, oh) = (w / 2, h / 2);
+    let mut out = Vec::with_capacity(ow * oh);
+    for row in 0..oh {
+        for col in 0..ow {
+            let mut sum = [0u64; 3];
+            for pixel in [
+                buf[row * 2 * w + col * 2],
+                buf[row * 2 * w + col * 2 + 1],
+                buf[(row * 2 + 1) * w + col * 2],
+                buf[(row * 2 + 1) * w + col * 2 + 1],
+            ] {
+                sum[0] += u64::from(pixel >> 16 & 0xFF);
+                sum[1] += u64::from(pixel >> 8 & 0xFF);
+                sum[2] += u64::from(pixel & 0xFF);
+            }
+            let mixed =
+                ((sum[0] / 4) as u32) << 16 | ((sum[1] / 4) as u32) << 8 | (sum[2] / 4) as u32;
+            out.push(mixed);
+        }
+    }
+    out
 }
 
 /// Strip XRGB words down to RGB triplets.
@@ -562,9 +602,38 @@ fn adler32(data: &[u8]) -> u32 {
 mod tests {
     use super::*;
     use o2jam_shell::avatar::{
-        load_archive_sprite, paint_foreground_placements, paint_scene_figures,
-        placement_origin_in_frame,
+        anchor_in_frame, load_archive_sprite, paint_foreground_placements, paint_scene_figures,
+        playing_member_selected,
     };
+
+    #[test]
+    fn downscale_even_averages_two_by_two_blocks() {
+        // A 2x2 field of red/green/blue/white quarters halves to one
+        // mixed pixel; a flat field halves to itself.
+        let px = |r: u64, g: u64, b: u64| (r << 16 | g << 8 | b) as u32;
+        let buf = vec![
+            px(255, 0, 0),
+            px(0, 255, 0),
+            px(0, 0, 255),
+            px(255, 255, 255),
+        ];
+        assert_eq!(downscale_even(&buf, 2, 2), vec![px(127, 127, 127)]);
+        let flat = vec![px(10, 20, 30); 16];
+        assert_eq!(downscale_even(&flat, 4, 4), vec![px(10, 20, 30); 4]);
+    }
+
+    #[test]
+    fn frame_rgb_paints_the_native_canvas_downscaled() {
+        // The playing shot rasterizes at 800x600 (where every staged
+        // record anchor is exact) and arrives at the shot size 2:1.
+        let mut game = seeded_game();
+        game.lane_key(3, true);
+        for _ in 0..4 {
+            game.menu_key(MenuKey::Confirm, true);
+        }
+        let rgb = frame_rgb(&mut game, 100);
+        assert_eq!(rgb.len(), SHOT_W * SHOT_H * 3);
+    }
 
     #[test]
     fn pinned_equipment_stacks_a_worn_figure() {
@@ -591,9 +660,19 @@ mod tests {
         let list = control_list(&archive, PLAYING_LIST).expect("control list parses");
         let game = seeded_game();
         assert_eq!(game.arena_stage(), 5);
-        let Some((_, figures)) =
-            stage_bound_block(&archive, &list, PLAYING_BLOCK, Some(game.arena_stage()))
-        else {
+        let mode = PlayingArtMode {
+            key_mode: game.room_key_mode(),
+            team_play: game.room_team_play(),
+        };
+        assert_eq!(mode.key_mode, 2, "the shot's room plays 7 keys");
+        assert!(!mode.team_play, "the shot's room is solo");
+        let Some((_, figures)) = stage_bound_block(
+            &archive,
+            &list,
+            PLAYING_BLOCK,
+            Some(game.arena_stage()),
+            Some(&mode),
+        ) else {
             panic!("playing: STATE_PLAYING staged no figures");
         };
         let venue = figures
@@ -609,6 +688,41 @@ mod tests {
             load_archive_sprite(&archive, "Playing_BG.ojs").as_ref(),
             "stage-less bare stem must not win while a stage is set"
         );
+    }
+
+    #[test]
+    fn playing_art_stages_only_the_solo_seven_key_members() {
+        // The room mode selects the family members (applier case
+        // table; solo set verified against the reference photo): the
+        // 7-key note background, the left life gauge and BP buffer
+        // stage; the 3-key/P2P note backgrounds, the right buffer,
+        // and the unused gauge-back shell leave empty slots.
+        let Some(archive) = read_archive(PLAYING_ARCHIVE) else {
+            println!("skip: missing {PLAYING_ARCHIVE}");
+            return;
+        };
+        let list = control_list(&archive, PLAYING_LIST).expect("control list parses");
+        let block = scene_block(&list, PLAYING_BLOCK).expect("STATE_PLAYING stages");
+        let names = scene_sprite_names(block);
+        let mode = PlayingArtMode {
+            key_mode: 2,
+            team_play: false,
+        };
+        let figures = load_scene_figures_for_room(&archive, &names, Some(5), &mode);
+        for staged in ["_Playing_BG.ojs", "Note_BG.ojs", "Life_gauge_left_bar.ojs"] {
+            assert!(
+                figures.contains_key(staged),
+                "{staged} must stage in a solo 7-key room"
+            );
+        }
+        for name in names {
+            assert!(
+                playing_member_selected(&name, &mode) || !figures.contains_key(&name),
+                "unselected member {name} must leave an empty slot"
+            );
+        }
+        assert!(!figures.contains_key("BpPoint_Right_bar.ojs"));
+        assert!(!figures.contains_key("Life_gauge_back.ojs"));
     }
 
     #[test]
@@ -752,7 +866,13 @@ mod tests {
             let Some((px, py, ink)) = first_opaque_probe(figure) else {
                 continue;
             };
-            let (origin_x, origin_y) = placement_origin_in_frame(placed, frame_w, frame_h);
+            // Verified draw chain: art lands on its record anchor
+            // (frame-scaled), never on the `.bnd` rect — the anchor
+            // duplicates the rect for most bound bodies, and the
+            // reference photo pins the disagreeing pair
+            // (`BpPoint_Left_bar.ojs` (2,266) vs rect[3] (200,3)).
+            let layer = figure.layer(0).expect("probed figure has a layer");
+            let (anchor_x, anchor_y) = anchor_in_frame(layer.dx, layer.dy, frame_w, frame_h);
             let mut buf = vec![0u32; frame_w * frame_h];
             paint_scene_figures(
                 &mut Frame {
@@ -763,10 +883,10 @@ mod tests {
                 std::slice::from_ref(placed),
                 &figures,
             );
-            let at = (origin_y + py) as usize * frame_w + (origin_x + px) as usize;
+            let at = (anchor_y + py) as usize * frame_w + (anchor_x + px) as usize;
             assert_eq!(
                 buf[at], ink,
-                "{block_name}:{name} must paint on its own rect origin"
+                "{block_name}:{name} must paint on its record anchor"
             );
             checked += 1;
         }
@@ -774,15 +894,16 @@ mod tests {
     }
 
     #[test]
-    fn every_bound_entry_paints_on_its_rect_origin() {
+    fn every_bound_entry_paints_on_its_record_anchor() {
         // Multi-entry proof of the shared rule on real 7.55 bytes:
         // ordinal pairing feeds every bound entry its own rect, and
-        // the painter places each body at that rect origin — record
-        // anchors duplicate bound rects (TimeBar (489,556), EXIT
-        // (751,554), Hottime (710,21), ...) and must never add. The
-        // same loop runs the Playing bound run (Playing1.opi) and the
-        // Room block (Interface1.opi), so the correction holds per
-        // scene and per entry, not for one sprite.
+        // the painter places each body at its record anchor — which
+        // duplicates the bound rect for TimeBar (489,556), EXIT
+        // (751,554), Hottime (710,21), ... and disagrees (and wins)
+        // for the BP buffer bars. The same loop runs the Playing
+        // bound run (Playing1.opi) and the Room block (Interface1.opi),
+        // so the correction holds per scene and per entry, not for
+        // one sprite.
         let mut checked = 0;
         if let Some(archive) = read_archive(PLAYING_ARCHIVE) {
             checked += bound_entries_paint_on_rects(&archive, PLAYING_LIST, PLAYING_BLOCK);

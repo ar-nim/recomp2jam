@@ -109,6 +109,58 @@ impl AvatarFigure {
         (w, h)
     }
 
+    /// Anchored-extent top-left: the smallest layer anchor per axis
+    /// (`(0, 0)` for an empty figure). Together with [`Self::extent`]
+    /// this is the on-canvas box the layered body covers, so seat-
+    /// based painters can center the whole figure, not its first
+    /// layer.
+    #[must_use]
+    pub fn extent_origin(&self) -> (i32, i32) {
+        let (mut x, mut y) = (0, 0);
+        for layer in &self.layers {
+            x = x.min(layer.dx);
+            y = y.min(layer.dy);
+        }
+        (x, y)
+    }
+
+    /// Paint so the anchored-extent box centers in `seat`: the box
+    /// ([`Self::extent_origin`]..[`Self::extent`]) centers per axis on
+    /// the native canvas, the center scales into the frame like every
+    /// record anchor, and every layer blits 1:1 at its anchor offset
+    /// from the extent origin. Empty figures paint nothing. The
+    /// Playing seat painter uses this — the worn figure's layers
+    /// carry `avatar.opa` canvas anchors, so the extent, not the
+    /// first layer, is what must land in the seat.
+    pub fn paint_extent_centered(
+        &self,
+        frame: &mut Frame<'_>,
+        seat: &Rect,
+        frame_w: usize,
+        frame_h: usize,
+    ) {
+        if self.layers.is_empty() {
+            return;
+        }
+        let (extent_w, extent_h) = self.extent();
+        let (origin_x, origin_y) = self.extent_origin();
+        // Extent box centered in the seat, on the native canvas.
+        let center_native = |offset: u64, span: u32, start: i32| -> i32 {
+            i32::try_from(i64::from(start) + (i64::from(span) - offset as i64) / 2).unwrap_or(0)
+        };
+        let left = center_native(u64::try_from(extent_w).unwrap_or(0), seat.w, seat.x);
+        let top = center_native(u64::try_from(extent_h).unwrap_or(0), seat.h, seat.y);
+        for layer in &self.layers {
+            let (dx, dy) = anchor_in_frame(
+                left.saturating_add(layer.dx.saturating_sub(origin_x)),
+                top.saturating_add(layer.dy.saturating_sub(origin_y)),
+                frame_w,
+                frame_h,
+            );
+            blit_rgb555(frame, &layer.image.view(), dx, dy, Some(layer.colorkey));
+        }
+    }
+
     /// Paint every layer with its top-left at `(x, y)` plus anchor,
     /// each under its own source colorkey.
     pub fn paint(&self, frame: &mut Frame<'_>, x: i32, y: i32) {
@@ -123,32 +175,14 @@ impl AvatarFigure {
         }
     }
 
-    /// Paint every layer with its top-left exactly at `(x, y)`, under
-    /// its own source colorkey, ignoring the record anchors. For
-    /// `.bnd`-claimed placements: 7.55 sprite records store absolute
-    /// canvas anchors that duplicate their bound rect origins
-    /// byte-exact (`Normal_TimeBar.ojs` (489,556) ==
-    /// `State_Playing.bnd` rect[2], `Playing_Exit.ojs` (751,554) ==
-    /// rect[0], `Wait_TeamA.ojs` (652,65) == `State_Waiting.bnd`
-    /// rect[3]), so adding both doubles the origin and throws the art
-    /// off-canvas. BpPoint bars differ (`BpPoint_Left_bar.ojs` anchor
-    /// `(2,266)` vs rect `(200,3)`), so the rect — the verified draw
-    /// origin (`docs/bnd-semantics.md`) — wins, and the anchor rides
-    /// only unbound placements via [`Self::paint`] (native frames) or
-    /// [`Self::paint_scaled_anchors`] (scaled frames).
-    pub fn paint_without_anchors(&self, frame: &mut Frame<'_>, x: i32, y: i32) {
-        for layer in &self.layers {
-            blit_rgb555(frame, &layer.image.view(), x, y, Some(layer.colorkey));
-        }
-    }
-
     /// Paint every layer with its top-left at `(x, y)` plus its
     /// record anchor scaled into the frame, each under its own source
-    /// colorkey. For unbound placements: the exe canvas is native
-    /// 800x600, so native anchors scale with the frame exactly like
-    /// `.bnd` origins (`placement_origin_in_frame`), keeping the art's
-    /// exe proportions at any frame size instead of drawing the raw
-    /// native corner on a scaled frame.
+    /// colorkey. The verified draw path for every placement: the exe
+    /// blit adds the per-frame anchor to the view position and `.bnd`
+    /// rects are not read at draw time (`docs/ui-draw.md` via
+    /// `docs/stage-bga.md`); the exe canvas is native 800x600, so
+    /// native anchors scale with the frame, keeping the art's exe
+    /// proportions at any frame size.
     pub fn paint_scaled_anchors(
         &self,
         frame: &mut Frame<'_>,
@@ -172,10 +206,11 @@ impl AvatarFigure {
 
 /// Frame-space offset of one record anchor: native anchors scale
 /// with the frame through the same ratios [`scale_rect_to_frame`]
-/// applies to `.bnd` origins, so unbound art keeps its exe
-/// proportions at any frame size (a zero-size rect moves the
-/// origin without sizing anything).
-fn anchor_in_frame(dx: i32, dy: i32, frame_w: usize, frame_h: usize) -> (i32, i32) {
+/// applies to `.bnd` origins, so art keeps its exe proportions at
+/// any frame size (a zero-size rect moves the origin without sizing
+/// anything).
+#[must_use]
+pub fn anchor_in_frame(dx: i32, dy: i32, frame_w: usize, frame_h: usize) -> (i32, i32) {
     let moved = scale_rect_to_frame(
         &Rect {
             x: dx,
@@ -541,6 +576,67 @@ pub fn is_playing_behind_sprite(sprite: &str) -> bool {
             .is_some_and(|stem| PLAYING_BEHIND_SPRITES.contains(&stem))
 }
 
+/// Room mode the Playing art families select through: the Playing
+/// applier (`0x4e7850`'s case table) loads only the family member the
+/// joined room names, and the reference photo pins the solo 7-key set
+/// (`docs/stage-bga.md`, `docs/playing-reference.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlayingArtMode {
+    /// Wire key mode (`0` 3-key, `1` 5-key, `2` 7-key;
+    /// `o2jam_net::KeyMode`). Non-3-key rooms take the 7-key family
+    /// member — the wider art — where the family splits by key mode.
+    pub key_mode: u8,
+    /// Team/versus room (`Live`); solo rooms stage the left/single
+    /// member of every mirrored pair.
+    pub team_play: bool,
+}
+
+/// True while a Playing sprite names the family member the room mode
+/// selects; unselected members leave empty slots (the exe slot loader
+/// loads nothing on a miss and an empty slot paints nothing).
+/// Families (`ControlList_Playing.txt` entries + archive anchors;
+/// solo set verified against the reference photo):
+/// - note backgrounds: solo `Note_BG.ojs` (3-key rooms take
+///   `3Key_Note_BG.ojs`), team `P2P{3,7}KeyNote_BG.ojs`;
+/// - life gauges: `Life_gauge_left_bar.ojs` always, the
+///   `Life_gauge_back.ojs` shell team-only (the photo hides it);
+/// - BP buffer bars: `BpPoint_Left_bar.ojs` solo (the photo's
+///   far-left edge gauge), `BpPoint_Right_bar.ojs` team-only.
+///
+/// Every other sprite stages regardless.
+#[must_use]
+pub fn playing_member_selected(sprite: &str, mode: &PlayingArtMode) -> bool {
+    let three_key = o2jam_net::KeyMode::from_u8(mode.key_mode)
+        .is_ok_and(|key| key == o2jam_net::KeyMode::ThreeKeys);
+    match sprite {
+        "Note_BG.ojs" => !mode.team_play && !three_key,
+        "3Key_Note_BG.ojs" => !mode.team_play && three_key,
+        "P2P3KeyNote_BG.ojs" => mode.team_play && three_key,
+        "P2P7KeyNote_BG.ojs" => mode.team_play && !three_key,
+        "BpPoint_Left_bar.ojs" | "Life_gauge_left_bar.ojs" => !mode.team_play,
+        "BpPoint_Right_bar.ojs" | "Life_gauge_back.ojs" => mode.team_play,
+        _ => true,
+    }
+}
+
+/// [`load_scene_figures_for_stage`] through the room mode: family
+/// members the room does not select (see [`playing_member_selected`])
+/// never load, leaving their slots empty.
+#[must_use]
+pub fn load_scene_figures_for_room(
+    archive: &[u8],
+    names: &[String],
+    arena_stage: Option<u16>,
+    mode: &PlayingArtMode,
+) -> HashMap<String, AvatarFigure> {
+    let selected: Vec<String> = names
+        .iter()
+        .filter(|name| playing_member_selected(name, mode))
+        .cloned()
+        .collect();
+    load_scene_figures_for_stage(archive, &selected, arena_stage)
+}
+
 /// Anchor placement for one static backdrop entry: no `.bnd` rect
 /// covers entries 0–212, so the sprite paints 1:1 at its own
 /// record anchor (all-zero rect, never full-bleed).
@@ -636,8 +732,8 @@ fn entry_placement(placed: PlacedControl<'_>) -> ScenePlacement {
 }
 
 /// Playing subset: behind-highway scene first (entries 0–212,
-/// anchor-placed, clipped clear of lanes and HUD at paint), then the
-/// static backdrop panels, then the bound run (entries 213–229)
+/// anchor-placed, clipped clear of the lane columns at paint), then
+/// the static backdrop panels, then the bound run (entries 213–229)
 /// paired with the 17 rects by code ordinal (`EXIT` = ordinal 1 →
 /// rect 0; the run is capped at the rect count, so the tail past
 /// `VOLUME` rides unloaded). Backdrops paint first so the bound
@@ -709,32 +805,19 @@ pub fn load_avi_logo(archive: &[u8]) -> Option<AvatarFigure> {
     load_archive_sprite(archive, AVI_LOGO_SPRITE)
 }
 
-/// Frame-space origin of a placement: the native `.bnd` rect origin
-/// scaled to the frame (the rect itself stays native 800x600; the
-/// scale is the one present-tense stand-in). Bound placements paint
-/// at this origin alone; unbound (all-zero rect) placements anchor
-/// at the frame origin, so the record anchor — scaled by
-/// [`anchor_in_frame`] — positions the art.
-#[must_use]
-pub fn placement_origin_in_frame(
-    placement: &ScenePlacement,
-    frame_w: usize,
-    frame_h: usize,
-) -> (i32, i32) {
-    let scaled = scale_rect_to_frame(&placement.rect, frame_w, frame_h);
-    (scaled.x, scaled.y)
-}
-
 /// Paint every placed figure in file order (verified step 8: the
 /// background lands first and later entries cover it). Each layer
-/// blits 1:1 at the frame-scaled rect origin — record anchors join
-/// only on unbound placements, whose records carry absolute canvas
-/// anchors (verified: `Playing_Menu.ojs` `(204,558)`) scaled to the
-/// frame like bound origins ([`anchor_in_frame`]), while bound
-/// bodies' anchors duplicate their rect origins byte-exact —
-/// unclipped; the rect positions the blit and never clips (verified
-/// draw path). Placements without a loaded figure are skipped, and
-/// live UI ink paints on top in the callers.
+/// blits 1:1 at its record anchor scaled into the frame — the
+/// verified draw path: the blit adds the per-frame anchor to the
+/// view position and `.bnd` rects are never read at draw
+/// (`docs/ui-draw.md` via `docs/stage-bga.md`; the reference photo
+/// pins the disagreeing pair too: `BpPoint_Left_bar.ojs` anchor
+/// `(2,266)` shows at the far-left edge while its bound rect is
+/// `(200,3)`). Most bound bodies duplicate their rect origins
+/// byte-exact (`Normal_TimeBar.ojs` (489,556) == rect[2]), so rect-
+/// bound art lands where its rect bounds it anyway. Placements
+/// without a loaded figure are skipped, and live UI ink paints on
+/// top in the callers.
 pub fn paint_scene_figures(
     frame: &mut Frame<'_>,
     placements: &[ScenePlacement],
@@ -747,10 +830,8 @@ pub fn paint_scene_figures(
 }
 
 /// Paint one placed figure, if its sprite loaded: every layer blits
-/// 1:1 at the frame-scaled rect origin — plus its record anchor,
-/// scaled to the frame, only while no rect claims the entry (bound
-/// bodies' anchors duplicate their rect origins, so adding both
-/// doubles them), unclipped.
+/// 1:1 at its record anchor scaled into the frame (see
+/// [`paint_scene_figures`] for the verified draw chain), unclipped.
 fn paint_placed_figure(
     frame: &mut Frame<'_>,
     placement: &ScenePlacement,
@@ -764,12 +845,7 @@ fn paint_placed_figure(
     let Some(figure) = figures.get(name) else {
         return;
     };
-    let (origin_x, origin_y) = placement_origin_in_frame(placement, frame_w, frame_h);
-    if placement.rect.w != 0 || placement.rect.h != 0 {
-        figure.paint_without_anchors(frame, origin_x, origin_y);
-    } else {
-        figure.paint_scaled_anchors(frame, origin_x, origin_y, frame_w, frame_h);
-    }
+    figure.paint_scaled_anchors(frame, 0, 0, frame_w, frame_h);
 }
 
 /// True for a behind-highway placement: its sprite names the venue
@@ -820,9 +896,9 @@ pub fn paint_foreground_placements(
 }
 
 /// Paint one behind-highway figure, if its sprite loaded: each layer
-/// blits 1:1 at its rect origin plus its record anchor (an all-zero
-/// rect leaves the origin at the frame corner), clipped to the
-/// fragments outside `exclusions`.
+/// blits 1:1 at its record anchor (scaled into the frame — the same
+/// verified draw chain as every painter), clipped to the fragments
+/// outside `exclusions`.
 fn paint_behind_placement(
     frame: &mut Frame<'_>,
     placement: &ScenePlacement,
@@ -835,12 +911,11 @@ fn paint_behind_placement(
     let Some(figure) = figures.get(name) else {
         return;
     };
-    let (origin_x, origin_y) = placement_origin_in_frame(placement, frame.w, frame.h);
-    paint_behind_layers(frame, figure, origin_x, origin_y, exclusions);
+    paint_behind_layers(frame, figure, 0, 0, exclusions);
 }
 
 /// Paint every layer of one figure through its visible fragments:
-/// the layer box (rect origin plus frame-scaled anchor) minus the
+/// the layer box (view origin plus frame-scaled anchor) minus the
 /// exclusion zones.
 fn paint_behind_layers(
     frame: &mut Frame<'_>,
@@ -1297,15 +1372,54 @@ mod avatar_figure_tests {
         }
     }
 
+    /// One red pixel at a native anchor plus a bound placement whose
+    /// rect DISAGREES with the anchor (`BpPoint_Left_bar.ojs`: anchor
+    /// `(2,266)` vs `State_Playing.bnd` rect[3] `(200,3)`), so the
+    /// draw chain is observable: art lands on the record anchor alone
+    /// (verified draw path: the blit adds the per-frame anchor to the
+    /// view position; `.bnd` rects are input bounds, never read at
+    /// draw), and the reference photo pins it — the BP gauge shows at
+    /// the far-left edge (2,266), not mid-screen (200,3).
     #[test]
-    fn bound_placements_paint_at_rect_origin_without_anchors() {
+    fn bound_art_paints_at_its_record_anchor_not_its_rect() {
+        let figure = anchored_red_figure(2, 266);
+        let figures = HashMap::from([("BpPoint_Left_bar.ojs".to_owned(), figure)]);
+        let placement = ScenePlacement {
+            id: "IDC_IMAGE_SPLAY_BUFFER1".to_owned(),
+            code: 0x1B5_0004,
+            sprite: Some("BpPoint_Left_bar.ojs".to_owned()),
+            rect: Rect {
+                x: 200,
+                y: 3,
+                w: 28,
+                h: 28,
+            },
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_placed_figure(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placement,
+            &figures,
+            800,
+            600,
+        );
+        let ink = o2jam_render::pack_xrgb(255, 0, 0);
+        assert_eq!(buf[266 * 800 + 2], ink, "art lands on the record anchor");
+        assert_ne!(buf[3 * 800 + 200], ink, "the rect never positions art");
+    }
+
+    #[test]
+    fn duplicated_anchor_and_rect_agree_on_one_pixel() {
         // Verified duplication on 7.55: bound bodies carry absolute
         // record anchors equal to their rect origins
         // (`Normal_TimeBar.ojs` (489,556) == `State_Playing.bnd`
         // rect[2], `Playing_Exit.ojs` (751,554) == rect[0],
         // `Wait_TeamA.ojs` (652,65) == `State_Waiting.bnd` rect[3]),
-        // so the painter must not add the anchor again — the red
-        // pixel lands on the rect origin, not rect + anchor.
+        // so anchor-drawn art sits exactly where the rect bounds it.
         let figure = anchored_red_figure(489, 556);
         let figures = HashMap::from([("Normal_TimeBar.ojs".to_owned(), figure)]);
         let placement = timebar_like_placement(Rect {
@@ -1387,6 +1501,75 @@ mod avatar_figure_tests {
         assert_eq!(buf[0], 0);
         assert_eq!(anchor_in_frame(204, 0, 400, 300), (102, 0));
         assert_eq!(anchor_in_frame(204, 558, 800, 600), (204, 558));
+    }
+
+    /// The three room modes the photo and the wire name: solo 7-key
+    /// (the reference photo), solo 3-key, team 7-key.
+    #[test]
+    fn playing_members_select_by_room_mode() {
+        let solo7 = PlayingArtMode {
+            key_mode: 2,
+            team_play: false,
+        };
+        // Solo 7-key set, verified against the reference photo: the
+        // 7-key note background, the left life gauge, the left BP
+        // buffer — never the 3-key/P2P note backgrounds, the right
+        // buffer, or the unused gauge back shell.
+        assert!(playing_member_selected("Note_BG.ojs", &solo7));
+        assert!(playing_member_selected("BpPoint_Left_bar.ojs", &solo7));
+        assert!(playing_member_selected("Life_gauge_left_bar.ojs", &solo7));
+        assert!(!playing_member_selected("3Key_Note_BG.ojs", &solo7));
+        assert!(!playing_member_selected("P2P3KeyNote_BG.ojs", &solo7));
+        assert!(!playing_member_selected("P2P7KeyNote_BG.ojs", &solo7));
+        assert!(!playing_member_selected("BpPoint_Right_bar.ojs", &solo7));
+        assert!(!playing_member_selected("Life_gauge_back.ojs", &solo7));
+        // The stage body and every non-family sprite stage regardless.
+        assert!(playing_member_selected("_Playing_BG.ojs", &solo7));
+        assert!(playing_member_selected("Playing_Menu.ojs", &solo7));
+        assert!(playing_member_selected("Normal_TimeBar.ojs", &solo7));
+        // Team play flips the family to the P2P members.
+        let team7 = PlayingArtMode {
+            key_mode: 2,
+            team_play: true,
+        };
+        assert!(playing_member_selected("P2P7KeyNote_BG.ojs", &team7));
+        assert!(playing_member_selected("BpPoint_Right_bar.ojs", &team7));
+        assert!(playing_member_selected("Life_gauge_back.ojs", &team7));
+        assert!(!playing_member_selected("Note_BG.ojs", &team7));
+        assert!(!playing_member_selected("BpPoint_Left_bar.ojs", &team7));
+        // Solo 3-key rooms take the 3-key note background.
+        let solo3 = PlayingArtMode {
+            key_mode: 0,
+            team_play: false,
+        };
+        assert!(playing_member_selected("3Key_Note_BG.ojs", &solo3));
+        assert!(!playing_member_selected("Note_BG.ojs", &solo3));
+    }
+
+    /// Loading through the room mode leaves the unselected members'
+    /// slots empty (the exe slot-loader rule: a miss loads nothing and
+    /// an empty slot paints nothing).
+    #[test]
+    fn room_mode_loads_leave_unselected_slots_empty() {
+        let red = sprite55_blob(1, 0xFFFF, 1, 1, &[0x00, 0x7C]);
+        let archive = opa_blob(&[
+            ("Note_BG.ojs", &red),
+            ("P2P7KeyNote_BG.ojs", &red),
+            ("Playing_BG.ojs", &red),
+        ]);
+        let solo7 = PlayingArtMode {
+            key_mode: 2,
+            team_play: false,
+        };
+        let names = [
+            "_Playing_BG.ojs".to_owned(),
+            "Note_BG.ojs".to_owned(),
+            "P2P7KeyNote_BG.ojs".to_owned(),
+        ];
+        let figures = load_scene_figures_for_room(&archive, &names, None, &solo7);
+        assert!(figures.contains_key("Note_BG.ojs"));
+        assert!(figures.contains_key("_Playing_BG.ojs"));
+        assert!(!figures.contains_key("P2P7KeyNote_BG.ojs"));
     }
 
     fn room_control_text() -> String {
@@ -1852,10 +2035,12 @@ mod avatar_figure_tests {
     }
 
     #[test]
-    fn scene_figures_paint_at_verbatim_origins() {
-        // Native `.bnd` rects stay verbatim: x 400 paints at x 400
-        // on the native canvas, scaled to x 40 only at present on
-        // an 80-wide frame.
+    fn scene_figures_paint_at_verbatim_anchors() {
+        // The verified draw chain on a synthetic room: the body's
+        // record anchor (0,0) positions it on the native canvas and
+        // scales with the frame (x 0 stays x 0 on an 80-wide frame);
+        // the bound rect (400,0,800,600) rides along as input-bound
+        // data without steering the blit.
         let red = sprite55_blob(1, 0xFFFF, 1, 1, &[0x00, 0x7C]);
         let archive = opa_blob(&[("Room_List.ojs", &red)]);
         let figures = load_scene_figures(&archive, &["Room_List.ojs".to_owned()]);
@@ -1863,8 +2048,16 @@ mod avatar_figure_tests {
         let block = scene_block(&list, ROOM_BLOCK).unwrap();
         let bnd = o2jam_file::parse_bnd(&bnd_blob(&[(400, 0, 800, 600), (0, 0, 8, 8)])).unwrap();
         let placed = bind_scene_rects(block, &bnd);
-        assert_eq!(placement_origin_in_frame(&placed[0], 800, 600), (400, 0));
-        assert_eq!(placement_origin_in_frame(&placed[0], 80, 60), (40, 0));
+        assert_eq!(
+            (
+                placed[0].rect.x,
+                placed[0].rect.y,
+                placed[0].rect.w,
+                placed[0].rect.h
+            ),
+            (400, 0, 400, 600),
+            "ordinal pairing still binds the rect"
+        );
         let mut buf = vec![0u32; 80 * 60];
         paint_scene_figures(
             &mut Frame {
@@ -1875,8 +2068,7 @@ mod avatar_figure_tests {
             &placed,
             &figures,
         );
-        assert_eq!(buf[40], o2jam_render::pack_xrgb(255, 0, 0));
-        assert_eq!(buf[0], 0);
+        assert_eq!(buf[0], o2jam_render::pack_xrgb(255, 0, 0));
     }
 
     #[test]
@@ -1976,17 +2168,13 @@ mod avatar_figure_tests {
     }
 
     #[test]
-    fn bound_layers_paint_at_rect_origin_alone() {
-        // Corrected draw math (corpus anchor audit): 7.55 sprite
-        // records store absolute canvas anchors that duplicate their
-        // bound rect origins (`Normal_TimeBar.ojs` (489,556) ==
-        // `State_Playing.bnd` rect[2], `Wait_TeamA.ojs` (652,65) ==
-        // `State_Waiting.bnd` rect[3]), so a bound body paints at the
-        // rect origin alone — never rect + anchor, which doubles the
-        // origin and lands off-canvas. The 2-wide body over the
-        // 1-wide rect (10,20,11,21) paints both pixels; the button
-        // pixel lands at its rect origin (40,30), its stale record
-        // anchor (2,3) ignored.
+    fn bound_layers_paint_at_their_record_anchors() {
+        // Verified draw math (draw-chain audit): each layer blits at
+        // its own record anchor scaled into the frame — the rect
+        // (10,20,11,21)/(40,30,44,34) rides along as bound data and
+        // never steers the blit. The 2-wide list body (anchor 0,0)
+        // paints both pixels at the frame origin; the button pixel
+        // lands at its record anchor (2,3).
         let wide = sprite55_blob(1, 0xFFFF, 2, 1, &[0x00, 0x7C, 0x00, 0x7C]);
         let archive = opa_blob(&[("Room_List.ojs", &wide)]);
         let mut figures = load_scene_figures(&archive, &["Room_List.ojs".to_owned()]);
@@ -2014,12 +2202,11 @@ mod avatar_figure_tests {
         );
         let red_ink = o2jam_render::pack_xrgb(255, 0, 0);
         let blue_ink = o2jam_render::pack_xrgb(0, 0, 255);
-        assert_eq!(buf[20 * 800 + 10], red_ink);
-        assert_eq!(buf[20 * 800 + 11], red_ink);
-        assert_eq!(buf[21 * 800 + 10], 0);
-        assert_eq!(buf[30 * 800 + 40], blue_ink);
-        assert_eq!(buf[33 * 800 + 42], 0);
-        assert_eq!(buf[0], 0);
+        assert_eq!(buf[0], red_ink);
+        assert_eq!(buf[1], red_ink);
+        assert_eq!(buf[20 * 800 + 10], 0);
+        assert_eq!(buf[3 * 800 + 2], blue_ink);
+        assert_eq!(buf[30 * 800 + 40], 0);
     }
 
     #[test]
@@ -2138,15 +2325,33 @@ mod avatar_figure_tests {
         o2jam_file::parse_bnd(body).ok()
     }
 
+    /// First opaque pixel of one layer plus its decoded color
+    /// (colorkey-transparent pixels skipped). `None` when the layer is
+    /// fully transparent.
+    fn first_opaque_pixel(layer: &FigureLayer) -> Option<(i32, i32, u32)> {
+        let at = (0..layer.image.w * layer.image.h)
+            .find(|at| layer.image.words[*at] != layer.colorkey)?;
+        let ink = layer.image.words[at];
+        let (r, g, b) = o2jam_file::rgb555_to_rgb888(ink);
+        Some((
+            (at % layer.image.w) as i32,
+            (at / layer.image.w) as i32,
+            o2jam_render::pack_xrgb(r, g, b),
+        ))
+    }
+
     #[test]
-    fn every_bound_entry_paints_on_its_rect_origin() {
+    fn every_bound_body_paints_on_its_record_anchor() {
         // Multi-entry proof of the shared placement rule on real 7.55
         // bytes (skips without `install-root`): every decodable
         // `.bnd`-claimed placement of `STATE_PLAYING` and `STATE_ROOM`
-        // lands a pixel inside its own rect. Bound bodies' record
-        // anchors duplicate their rect origins byte-exact
+        // lands its first opaque pixel on its own record anchor — the
+        // verified draw chain (blit adds the anchor to the view
+        // position; rects are never read at draw). Most bound anchors
+        // duplicate their rect origins byte-exact
         // (docs/bnd-semantics.md; pairing `0x548640`, ev `3a869bb7…`),
-        // so the painter paints at the rect origin alone.
+        // and the reference photo pins the disagreeing pair
+        // (`BpPoint_Left_bar.ojs` (2,266) vs rect[3] (200,3)).
         let Some(interface) = install_archive("Interface1.opi") else {
             return;
         };
@@ -2169,7 +2374,6 @@ mod avatar_figure_tests {
                 "State_Playing.bnd",
             ),
         ];
-        let background = 0x11_1111;
         let mut proven = 0usize;
         for (archive, list, block_name, bind_name) in scenes {
             let Some(block) = scene_block(list, block_name) else {
@@ -2196,6 +2400,13 @@ mod avatar_figure_tests {
                 if width == 0 || height == 0 {
                     continue;
                 }
+                let Some(layer) = figure.layer(0) else {
+                    continue;
+                };
+                let Some((px, py, ink)) = first_opaque_pixel(layer) else {
+                    continue;
+                };
+                let anchor = (layer.dx, layer.dy);
                 let placement = ScenePlacement {
                     id: placed.entry.id.clone(),
                     code: placed.entry.code,
@@ -2207,7 +2418,7 @@ mod avatar_figure_tests {
                         h: height,
                     },
                 };
-                let mut buf = vec![background; 800 * 600];
+                let mut buf = vec![0u32; 800 * 600];
                 paint_placed_figure(
                     &mut Frame {
                         buf: &mut buf,
@@ -2219,29 +2430,12 @@ mod avatar_figure_tests {
                     800,
                     600,
                 );
-                let painted = (rect.y1..rect.y2)
-                    .flat_map(|y| {
-                        (rect.x1..rect.x2).map(move |x| {
-                            (
-                                i32::try_from(x).unwrap_or(-1),
-                                i32::try_from(y).unwrap_or(-1),
-                            )
-                        })
-                    })
-                    .any(|(x, y)| {
-                        if x < 0 || y < 0 {
-                            return false;
-                        }
-                        let (ux, uy) = (
-                            usize::try_from(x).unwrap_or(0),
-                            usize::try_from(y).unwrap_or(0),
-                        );
-                        buf.get(uy * 800 + ux).copied().unwrap_or(background) != background
-                    });
-                assert!(
-                    painted,
-                    "{} ({sprite}) painted nothing inside its rect {:?}",
-                    placed.entry.id, placement.rect
+                let (ax, ay) = anchor_in_frame(anchor.0, anchor.1, 800, 600);
+                let at = (ay + py) as usize * 800 + (ax + px) as usize;
+                assert_eq!(
+                    buf[at], ink,
+                    "{} ({sprite}) must paint on its record anchor",
+                    placed.entry.id
                 );
                 proven += 1;
             }
