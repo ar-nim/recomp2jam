@@ -47,8 +47,8 @@ pub use message::{
 };
 pub use play::{
     ConfirmMusicLoaded, ExitPlaying, FinalizeRank, GameStatsUpdate, GetMusicList,
-    SetDownloadProgress, SetRoomMusic, StartGame, StatKind, SubmitScore, SyncMemberMusicState,
-    UpdateGameStats,
+    SetDownloadProgress, SetRoomArena, SetRoomMusic, StartGame, StatKind, SubmitScore,
+    SyncMemberMusicState, UpdateGameStats,
 };
 pub use relay::{
     ComboBroken, ComboStarted, ConnectionEndpoint, CreateRelaySession, DeleteRelaySession,

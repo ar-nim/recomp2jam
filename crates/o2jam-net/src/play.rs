@@ -125,6 +125,62 @@ impl WireMessage for SetRoomMusic {
     }
 }
 
+/// `SetRoomArena` 4002: host picks the room stage.
+///
+/// Single little-endian `i32` carrying the room word the client
+/// keeps in global `0x7789dc`: the stage number with the picker's
+/// high-word flag (file `0xbb3cf`), read by the waiting map cycle
+/// (files `0xb3cc6`-`0xb3ce3`). Width follows the dword store
+/// (applier `0x4ad350`, file `0x4ad413`) and `JoinedRoom::arena`
+/// (`i32`); Memoryer corroboration, exe handler open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SetRoomArena {
+    /// Room arena word (stage + high-word flag).
+    pub arena: i32,
+}
+
+/// Body length of [`SetRoomArena`]: one `i32`.
+const SET_ROOM_ARENA_BODY_LEN: usize = 4;
+
+impl SetRoomArena {
+    /// Send builder: stage word for command 4002.
+    #[must_use]
+    pub fn new(arena: i32) -> Self {
+        Self { arena }
+    }
+
+    /// Receive handler: store the word (applier `0x4ad350` keeps it
+    /// in global `0x7789dc`, file `0x4ad413`).
+    pub fn apply_to_store(&self, arena_word: &mut i32) {
+        *arena_word = self.arena;
+    }
+}
+
+impl WireMessage for SetRoomArena {
+    const COMMAND: u16 = 4002;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = Vec::with_capacity(SET_ROOM_ARENA_BODY_LEN);
+        body.extend_from_slice(&self.arena.to_le_bytes());
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < SET_ROOM_ARENA_BODY_LEN {
+            return Err(Error::TruncatedMessage {
+                need: SET_ROOM_ARENA_BODY_LEN,
+                have: body.len(),
+            });
+        }
+        if body.len() > SET_ROOM_ARENA_BODY_LEN {
+            return Err(Error::TrailingBytes(body.len() - SET_ROOM_ARENA_BODY_LEN));
+        }
+        Ok(Self::new(i32::from_le_bytes([
+            body[0], body[1], body[2], body[3],
+        ])))
+    }
+}
+
 /// `ConfirmMusicLoaded` 4012: client finished loading the chart.
 ///
 /// Fields per `docs/net-protocol.md` §4c (`i32` power-skill id, then
@@ -646,6 +702,53 @@ mod song_sync_tests {
         assert_eq!(
             SetRoomMusic::decode_body(&[0xF5, 0x02, 0x02]),
             Err(Error::TruncatedMessage { need: 4, have: 3 })
+        );
+    }
+
+    #[test]
+    fn set_room_arena_command_is_4002() {
+        assert_eq!(SetRoomArena::COMMAND, 4002);
+    }
+
+    #[test]
+    fn set_room_arena_encodes_stage_word() {
+        let arena = SetRoomArena::new(7);
+        assert_eq!(arena.encode_body(), vec![0x07, 0x00, 0x00, 0x00]);
+        let frame = decode_frame(&arena.encode()).unwrap();
+        assert_eq!(frame.id, 4002);
+        assert_eq!(SetRoomArena::decode_frame(&frame), Ok(arena));
+    }
+
+    #[test]
+    fn set_room_arena_round_trips_high_word_flag() {
+        let arena = SetRoomArena::new(i32::MIN + 4);
+        assert_eq!(arena.encode_body(), vec![0x04, 0x00, 0x00, 0x80]);
+        let frame = decode_frame(&arena.encode()).unwrap();
+        assert_eq!(SetRoomArena::decode_frame(&frame), Ok(arena));
+    }
+
+    #[test]
+    fn set_room_arena_applies_to_store() {
+        let mut store = 0;
+        SetRoomArena::new(5).apply_to_store(&mut store);
+        assert_eq!(store, 5);
+    }
+
+    #[test]
+    fn set_room_arena_rejects_short_body() {
+        assert_eq!(
+            SetRoomArena::decode_body(&[0x07, 0x00, 0x00]),
+            Err(Error::TruncatedMessage { need: 4, have: 3 })
+        );
+    }
+
+    #[test]
+    fn set_room_arena_rejects_trailing_bytes() {
+        let mut body = SetRoomArena::new(7).encode_body();
+        body.push(0x00);
+        assert_eq!(
+            SetRoomArena::decode_body(&body),
+            Err(Error::TrailingBytes(1))
         );
     }
 
