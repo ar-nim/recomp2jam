@@ -399,6 +399,10 @@ pub const AVI_BLOCK: &str = "STATE_AVI";
 /// Splash logo sprite bound by `STATE_AVI` (`IDC_BACK_LOGO`).
 pub const AVI_LOGO_SPRITE: &str = "O2mediaLogo.ojs";
 /// Channel-select block (no `.bnd` bind file: bare `BOUND` line).
+/// `STATE_CHANNEL` names zero sprites on 7.55, so the shared
+/// [`anchor_placements`] path stages nothing for it: sprite-less entries
+/// draw no art (recipe step 6) and the scene keeps its flat background
+/// plus the live channel list.
 pub const CHANNEL_BLOCK: &str = "STATE_CHANNEL";
 /// Multiplayer-lobby block laid out by `State_Room.bnd`.
 pub const ROOM_BLOCK: &str = "STATE_ROOM";
@@ -2586,6 +2590,33 @@ mod avatar_figure_tests {
         let placed = anchor_placements(&block);
         assert_eq!(placed.len(), 1);
         assert_eq!(placed[0].sprite.as_deref(), Some("_Playing_BG.ojs"));
+    }
+
+    #[test]
+    fn spriteless_channel_block_stages_no_placements() {
+        // Structural parity: the real 7.55 `STATE_CHANNEL` shape (bare
+        // `BOUND`, zero quoted sprites) stages nothing through the shared
+        // anchor path — the scene is flat background plus live rows.
+        let block = o2jam_file::parse_control_list(
+            &[
+                "NUMBER_OF_STATE 0x01",
+                "STATE_CHANNEL 0x27",
+                "{",
+                "BOUND",
+                "IDC_STATE_CHANNEL 0X12000000",
+                "IDC_BACK_SCHANNEL_1 0X12100001",
+                "IDC_BUTTON_SCHANNEL_BACK 0X12200002",
+                "}",
+                "",
+            ]
+            .join("\n"),
+        )
+        .unwrap()
+        .blocks
+        .pop()
+        .unwrap();
+        assert!(scene_sprite_names(&block).is_empty());
+        assert!(anchor_placements(&block).is_empty());
     }
 
     #[test]
