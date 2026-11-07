@@ -11,13 +11,16 @@ use std::net::SocketAddr;
 use crate::live_stats::{apply_peer_update, jam_tick_for_score, life_tick_for_score};
 use anyhow::{bail, Context, Result};
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery};
-use o2jam_net::{play::MusicListAnswer, Frame};
+use o2jam_net::{
+    play::{MusicListAnswer, RoomArenaEcho},
+    Frame,
+};
 use o2jam_net::{
     AuthResponse, AuthResult, AuthorizeRequest, ChannelList, ChannelLogin, ChannelLoginResponse,
     ChannelState, CharacterInfo, ConfirmMusicLoaded, ExitPlaying, FinalizeRank, GameStatsUpdate,
     GatewayConnection, Gender, Generic, GetMusicList, JoinRoom, JoinRoomResponse, Request,
-    RoomList, RoomListEntry, SetDownloadProgress, SetRoomMusic, StartGame, StatKind, SubmitScore,
-    SyncMemberMusicState, UpdateGameStats, WireMessage,
+    RoomList, RoomListEntry, SetDownloadProgress, SetRoomArena, SetRoomMusic, StartGame, StatKind,
+    SubmitScore, SyncMemberMusicState, UpdateGameStats, WireMessage,
 };
 
 /// Login options (see `recomp2jam connect --help`).
@@ -98,9 +101,9 @@ pub fn parse_stat_kind(word: &str) -> Result<StatKind> {
 /// Host song-flow tunables (plan Phases 3–4).
 ///
 /// Every field maps to one documented `play.rs` wire field; the flow
-/// runs select → list → sync → start → loaded → tick → submit →
-/// rank → exit. Needs channel membership plus a room the gateway
-/// lets us host (host-only steps reject outsiders).
+/// runs select → arena → list → sync → start → loaded → tick →
+/// submit → rank → exit. Needs channel membership plus a room the
+/// gateway lets us host (host-only steps reject outsiders).
 #[derive(Debug, Clone)]
 pub struct SongFlowOptions {
     /// Room song id (`SetRoomMusic` 4000).
@@ -109,6 +112,8 @@ pub struct SongFlowOptions {
     pub difficulty: u8,
     /// Scroll-speed code (`SetRoomMusic` + `ConfirmMusicLoaded`).
     pub speed: u8,
+    /// Room stage word (`SetRoomArena` 4002, echoed as 4003).
+    pub arena_id: i32,
     /// Room slot the sync steps belong to.
     pub member_id: u8,
     /// Power skill-ring id (`ConfirmMusicLoaded` 4012).
@@ -154,6 +159,7 @@ impl SongFlowOptions {
             music_id,
             difficulty: 2,
             speed: 1,
+            arena_id: 0,
             member_id: 0,
             power_skill_id: 0,
             stat_kind: StatKind::Jam,
@@ -204,6 +210,8 @@ pub struct SongFlowReport {
     pub music_entries: usize,
     /// Gateway `FreeMusic` flag from the 4031 answer.
     pub free_music: bool,
+    /// Stage word the gateway echoed for our arena select.
+    pub arena_echo: RoomArenaEcho,
     /// Peer lifebar echo after our tick (`None` on quiet rooms).
     pub peer_bar: Option<GameStatsUpdate>,
     /// Mirror after applying the echo (untouched on quiet rooms).
@@ -245,15 +253,17 @@ fn await_lenient(
 
 /// Run the host song flow over an authorized, room-joined gateway.
 ///
-/// Fire-and-forget sends carry the play steps; only the music list
-/// (4030 → 4031) and the peer-bar echo (4015, best effort) await
-/// replies. Returns what the list step learned.
+/// Fire-and-forget sends carry the play steps; only the arena echo
+/// (4002 → 4003) and the music list (4030 → 4031) plus the peer-bar
+/// echo (4015, best effort) await replies. Returns what the list
+/// step learned.
 pub fn run_song_flow(
     gateway: &mut GatewayConnection,
     options: &SongFlowOptions,
 ) -> Result<SongFlowReport> {
     let mut skipped = Vec::new();
     send_select(gateway, options)?;
+    let arena_echo = select_arena(gateway, options, &mut skipped)?;
     let listed = fetch_music_list(gateway, &mut skipped)?;
     send_sync(gateway, options)?;
     send_start(gateway, options)?;
@@ -267,6 +277,7 @@ pub fn run_song_flow(
     Ok(SongFlowReport {
         music_entries: listed.entries.len(),
         free_music: listed.free_music,
+        arena_echo,
         peer_bar,
         peers,
         peer_queue,
@@ -284,6 +295,32 @@ fn send_select(gateway: &mut GatewayConnection, options: &SongFlowOptions) -> Re
     gateway
         .send_frame(Request::SetRoomMusic.id(), &select.encode_body())
         .map_err(|source| anyhow::anyhow!("{source}"))
+}
+
+/// Send the stage word and assert the gateway echoes it back.
+///
+/// A mismatched echo means the room stage did not take, so the
+/// flow fails instead of playing on the wrong stage.
+fn select_arena(
+    gateway: &mut GatewayConnection,
+    options: &SongFlowOptions,
+    skipped: &mut Vec<u16>,
+) -> Result<RoomArenaEcho> {
+    let stage = SetRoomArena::new(options.arena_id);
+    gateway
+        .send_frame(Request::SetRoomArena.id(), &stage.encode_body())
+        .map_err(|source| anyhow::anyhow!("{source}"))?;
+    let frame = await_lenient(gateway, RoomArenaEcho::COMMAND, skipped)
+        .map_err(|source| anyhow::anyhow!("{source}"))?;
+    let echo = RoomArenaEcho::decode_frame(&frame).map_err(|source| anyhow::anyhow!("{source}"))?;
+    if echo.arena != options.arena_id {
+        bail!(
+            "arena echo mismatch: sent {} but got {}",
+            options.arena_id,
+            echo.arena
+        );
+    }
+    Ok(echo)
 }
 
 fn fetch_music_list(
@@ -1193,10 +1230,10 @@ mod song_flow_tests {
 
     use o2jam_net::{
         frame::{decode_frame, encode_frame},
-        play::MusicListAnswer,
+        play::{MusicListAnswer, RoomArenaEcho},
         ConfirmMusicLoaded, Frame, GameStatsUpdate, GatewayConnection, Request,
-        SetDownloadProgress, SetRoomMusic, StatKind, SubmitScore, SyncMemberMusicState,
-        UpdateGameStats, WireMessage, HEADER_LEN,
+        SetDownloadProgress, SetRoomArena, SetRoomMusic, StatKind, SubmitScore,
+        SyncMemberMusicState, UpdateGameStats, WireMessage, HEADER_LEN,
     };
 
     use super::{run_song_flow, SongFlowOptions};
@@ -1260,10 +1297,18 @@ mod song_flow_tests {
                     speed: 1,
                 }
             );
-            // A room broadcast lands before the list answer (as live:
+            // A room broadcast lands before the arena echo (as live:
             // the gateway emits `RoomParamsChanged` on select).
-            assert_eq!(read_frame(&mut stream).id, Request::GetMusicList.id());
             stream.write_all(&encode_frame(4001, &[])).unwrap();
+            let stage = read_frame(&mut stream);
+            assert_eq!(stage.id, Request::SetRoomArena.id());
+            assert_eq!(
+                SetRoomArena::decode_body(&stage.payload).unwrap(),
+                SetRoomArena::new(0)
+            );
+            let echoed = RoomArenaEcho::new(0);
+            stream.write_all(&echoed.encode()).unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetMusicList.id());
             stream.write_all(&list_answer().encode()).unwrap();
             let sync = read_frame(&mut stream);
             assert_eq!(sync.id, Request::SyncMemberMusicState.id());
@@ -1315,6 +1360,7 @@ mod song_flow_tests {
         server.join().unwrap();
         assert_eq!(report.music_entries, 1);
         assert!(report.free_music);
+        assert_eq!(report.arena_echo.arena, 0);
         assert_eq!(report.skipped, vec![4001]);
         let peer = report.peer_bar.unwrap();
         assert_eq!(peer.member_id, 0);
@@ -1339,6 +1385,14 @@ mod song_flow_tests {
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
             assert_eq!(read_frame(&mut stream).id, Request::SetRoomMusic.id());
+            let stage = read_frame(&mut stream);
+            assert_eq!(stage.id, Request::SetRoomArena.id());
+            assert_eq!(
+                SetRoomArena::decode_body(&stage.payload).unwrap(),
+                SetRoomArena::new(0)
+            );
+            let echoed = RoomArenaEcho::new(0);
+            stream.write_all(&echoed.encode()).unwrap();
             assert_eq!(read_frame(&mut stream).id, Request::GetMusicList.id());
             stream.write_all(&list_answer().encode()).unwrap();
             assert_eq!(
@@ -1361,6 +1415,7 @@ mod song_flow_tests {
         let report = run_song_flow(&mut gateway, &flow_options()).unwrap();
         server.join().unwrap();
         assert_eq!(report.music_entries, 1);
+        assert_eq!(report.arena_echo.arena, 0);
         assert!(report.peer_bar.is_none());
         assert!(report.skipped.is_empty());
         assert_eq!(report.peers.life_levels(), [0; 8]);
@@ -1369,8 +1424,13 @@ mod song_flow_tests {
     }
 
     /// Drive the standard flow against a fake gateway, answering the
-    /// peer-bar window with `echo` (`None` stays quiet).
-    fn run_flow_with_echo(echo: Option<GameStatsUpdate>) -> super::SongFlowReport {
+    /// arena select with `arena_echoed` and the peer-bar window with
+    /// `peer_echo` (`None` stays quiet).
+    fn run_flow_with_arena_and_echo(
+        arena_sent: i32,
+        arena_echoed: i32,
+        peer_echo: Option<GameStatsUpdate>,
+    ) -> anyhow::Result<super::SongFlowReport> {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let server = thread::spawn(move || {
@@ -1379,6 +1439,14 @@ mod song_flow_tests {
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
             assert_eq!(read_frame(&mut stream).id, Request::SetRoomMusic.id());
+            let stage = read_frame(&mut stream);
+            assert_eq!(stage.id, Request::SetRoomArena.id());
+            assert_eq!(
+                SetRoomArena::decode_body(&stage.payload).unwrap(),
+                SetRoomArena::new(arena_sent)
+            );
+            let echoed = RoomArenaEcho::new(arena_echoed);
+            stream.write_all(&echoed.encode()).unwrap();
             assert_eq!(read_frame(&mut stream).id, Request::GetMusicList.id());
             stream.write_all(&list_answer().encode()).unwrap();
             assert_eq!(
@@ -1397,7 +1465,7 @@ mod song_flow_tests {
                 UpdateGameStats::decode_body(&tick.payload).unwrap(),
                 flow_options().tick()
             );
-            if let Some(echo) = echo {
+            if let Some(echo) = peer_echo {
                 stream.write_all(&echo.encode()).unwrap();
             }
             assert_eq!(read_frame(&mut stream).id, Request::SubmitScore.id());
@@ -1405,9 +1473,17 @@ mod song_flow_tests {
             assert_eq!(read_frame(&mut stream).id, Request::ExitPlaying.id());
         });
         let mut gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
-        let report = run_song_flow(&mut gateway, &flow_options()).unwrap();
+        let mut options = flow_options();
+        options.arena_id = arena_sent;
+        let report = run_song_flow(&mut gateway, &options);
         server.join().unwrap();
         report
+    }
+
+    /// Drive the standard flow against a fake gateway, answering the
+    /// peer-bar window with `echo` (`None` stays quiet).
+    fn run_flow_with_echo(echo: Option<GameStatsUpdate>) -> super::SongFlowReport {
+        run_flow_with_arena_and_echo(0, 0, echo).unwrap()
     }
 
     #[test]
@@ -1442,6 +1518,36 @@ mod song_flow_tests {
         assert_eq!(report.peers.jam(1), Some(0));
         assert_eq!(report.peer_ranks.len(), 8);
         assert_eq!(report.peers.rank_row(0), Some(0));
+    }
+
+    #[test]
+    fn arena_stage_sends_word_and_asserts_echo() {
+        let report = run_flow_with_arena_and_echo(7, 7, None).unwrap();
+        assert_eq!(report.arena_echo.arena, 7);
+    }
+
+    #[test]
+    fn arena_echo_mismatch_fails_the_flow() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::SetRoomMusic.id());
+            let stage = read_frame(&mut stream);
+            assert_eq!(stage.id, Request::SetRoomArena.id());
+            let echoed = RoomArenaEcho::new(8);
+            stream.write_all(&echoed.encode()).unwrap();
+        });
+        let mut options = flow_options();
+        options.arena_id = 7;
+        let mut gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let outcome = run_song_flow(&mut gateway, &options);
+        server.join().unwrap();
+        let message = format!("{:?}", outcome.unwrap_err());
+        assert!(message.contains("arena echo mismatch"), "{message}");
     }
 
     #[test]
@@ -1563,7 +1669,8 @@ mod song_flow_tests {
         assert_eq!(created.result.as_i32(), 0, "live room created");
         assert!(created.info.is_some(), "live room snapshot");
 
-        let flow = SongFlowOptions::new(757);
+        let mut flow = SongFlowOptions::new(757);
+        flow.arena_id = 1;
         let report = run_song_flow(&mut gateway, &flow).unwrap();
         assert!(
             report.music_entries > 0,
@@ -1571,6 +1678,10 @@ mod song_flow_tests {
             report.music_entries
         );
         assert!(report.free_music, "live gateway runs FreeMusic");
+        assert_eq!(
+            report.arena_echo.arena, 1,
+            "live gateway echoes the arena stage"
+        );
         assert!(
             report.peer_bar.is_some(),
             "live tracker echoes the tick (skipped={:?})",

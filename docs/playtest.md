@@ -2107,3 +2107,51 @@ labels (`9a75951`: `play.rs` arena-echo decode + live label pins,
   from the arena-echo decode tests, all other targets unchanged,
   0 failures). No lint findings. No commits, no pushes.** This sweep
   touched only `docs/playtest.md`.
+
+## Regression sweep — 2026-11-07 23:52 UTC+8 (HEAD `a0bceec`, tree clean at start, dirtied mid-sweep)
+
+Live re-proof on the twins-head. Covers only the docs-log commit landed
+after the echo-head baseline `d559acd` (`a0bceec`: twin divergence close
+notes in `stage-twins.md` plus the sweep log) — no code changed, so no
+new tests were expected.
+
+- `cargo fmt --check`: clean, `exit=0` (on clean HEAD at sweep start;
+  re-run clean on the dirty state after).
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1298 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 7, file 149, game 92, net 360,
+  render 73, shell 472, real_art 7, scenes 22, recomp2jam 97
+  (6 doc-test targets, 0 each) — identical to the baseline, as
+  expected for a docs-only HEAD. Ran twice, identical counts.
+- `cargo build --workspace --release`: `exit=0` with 1 pre-existing
+  warning (not mine, left alone per the sweep rules):
+  `field arena_echo is never read` (`connect.rs:214`, `SongFlowReport`;
+  read only under test cfg, from the arena-echo commits `9a75951` +
+  `d559acd`). Surfaces only on a forced (`touch main.rs`) rebuild;
+  cached rebuilds print no warnings.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **NOT RUN
+  GREEN — blocked, no pass claimed.** A peer saved uncommitted
+  in-flight work (`connect.rs` +150ish, `main.rs` +20, saved
+  23:51:35/40 +08:00, after every clean-HEAD gate above had finished:
+  `--arena-id` CLI plumbing, `SongFlowOptions::arena_id`, report-side
+  `song.arena_echo.arena` line) that does not compile: 2× `error[E0063]:
+  missing field arena_echo in initializer of SongFlowReport`
+  (`main.rs:1232` + `main.rs:1313`, `bin "recomp2jam" test` target).
+  The suite/fmt/clippy/build gates above all compiled and passed
+  before those saves (1298 counts impossible on the dirty state, which
+  fails to build the test target), so every count above is the
+  clean-HEAD result.
+- **Verdict: no regression on clean HEAD (1298 passed; identical to
+  the echo-head baseline, docs-only delta, 0 failures) — but the live
+  flow has no green run on this HEAD: the dirty tree does not compile,
+  so no live pass is recorded.** No lint findings of mine. No commits,
+  no pushes. This sweep touched only `docs/playtest.md`.
+- Tree note: on the dirty state `cargo fmt --check` stays clean
+  (the peer's new lines are fmt-clean); no suite/clippy re-run on the
+  moving dirty state was taken (the peer appears to still be editing).
+  Per the sweep rules (touch only `docs/playtest.md`, fix only my own
+  lint findings) the peer's files were left alone.

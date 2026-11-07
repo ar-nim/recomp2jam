@@ -83,6 +83,10 @@ enum Command {
         /// Scroll-speed code (select + loaded + tally).
         #[arg(long, default_value_t = 1, requires = "music_id")]
         game_speed: u8,
+        /// Room stage word: sent as `SetRoomArena` 4002 after the
+        /// song select (needs --music-id; the gateway echoes 4003).
+        #[arg(long, default_value_t = 0, requires = "music_id")]
+        arena_id: i32,
         /// Room slot the sync steps belong to.
         #[arg(long, default_value_t = 0, requires = "music_id")]
         member_id: u8,
@@ -216,12 +220,13 @@ fn run_info() {
 /// CLI fields that assemble one host song flow (`connect --music-id ...`).
 ///
 /// Parameter object (clean-code §2/§6): one named bundle instead of a
-/// 19-argument builder, moved out of `run_command` for unit tests.
+/// 20-argument builder, moved out of `run_command` for unit tests.
 #[derive(Debug, Clone)]
 struct SongFlowParams {
     music_id: Option<u16>,
     difficulty: u8,
     game_speed: u8,
+    arena_id: i32,
     member_id: u8,
     power_skill: i32,
     stat_kind: String,
@@ -253,6 +258,7 @@ impl SongFlowParams {
         let mut flow = connect::SongFlowOptions::new(music_id);
         flow.difficulty = self.difficulty;
         flow.speed = self.game_speed;
+        flow.arena_id = self.arena_id;
         flow.member_id = self.member_id;
         flow.power_skill_id = self.power_skill;
         flow.stat_kind = connect::parse_stat_kind(&self.stat_kind)?;
@@ -383,6 +389,7 @@ fn run_command(command: Command) -> Result<()> {
             music_id,
             difficulty,
             game_speed,
+            arena_id,
             member_id,
             power_skill,
             stat_kind,
@@ -404,6 +411,7 @@ fn run_command(command: Command) -> Result<()> {
                 music_id,
                 difficulty,
                 game_speed,
+                arena_id,
                 member_id,
                 power_skill,
                 stat_kind,
@@ -701,6 +709,7 @@ fn format_connect_report(report: &connect::ConnectReport) -> String {
             song.music_entries,
             if song.free_music { "yes" } else { "no" },
         ));
+        text.push_str(&format!("arena: {}\n", song.arena_echo.arena));
         match &song.peer_bar {
             Some(peer) => text.push_str(&format!(
                 "tick: member {} {:?} = {}\n",
@@ -973,6 +982,8 @@ mod cli_build_tests {
         JoinRoomResponse, JoinedRoom, RoomListEntry, RoomSlot, StatKind,
     };
 
+    use o2jam_net::play::RoomArenaEcho;
+
     use super::*;
 
     fn song_params(music_id: Option<u16>) -> SongFlowParams {
@@ -980,6 +991,7 @@ mod cli_build_tests {
             music_id,
             difficulty: 2,
             game_speed: 1,
+            arena_id: 0,
             member_id: 0,
             power_skill: 0,
             stat_kind: "jam".to_owned(),
@@ -1029,6 +1041,7 @@ mod cli_build_tests {
             music_id: Some(757),
             difficulty: 3,
             game_speed: 2,
+            arena_id: 7,
             member_id: 4,
             power_skill: 11,
             stat_kind: "life".to_owned(),
@@ -1050,6 +1063,7 @@ mod cli_build_tests {
         assert_eq!(flow.music_id, 757);
         assert_eq!(flow.difficulty, 3);
         assert_eq!(flow.speed, 2);
+        assert_eq!(flow.arena_id, 7);
         assert_eq!(flow.member_id, 4);
         assert_eq!(flow.power_skill_id, 11);
         assert_eq!(flow.stat_kind, StatKind::Life);
@@ -1232,6 +1246,7 @@ mod cli_build_tests {
             song: Some(connect::SongFlowReport {
                 music_entries: 4,
                 free_music: true,
+                arena_echo: RoomArenaEcho::new(3),
                 peer_bar: Some(GameStatsUpdate {
                     member_id: 0,
                     kind_code: 0,
@@ -1271,6 +1286,7 @@ mod cli_build_tests {
             "channel: Success (0) (unrestricted)\n",
             "room: 7 seats, 3 in (Lobby)\n",
             "music: 4 entries (free music: yes)\n",
+            "arena: 3\n",
             "tick: member 0 Some(Life) = 1000\n",
             "mirror: slot 0 channel 0 queued, 2 ranks, life[0]=1000\n",
             "skipped broadcasts: [4001]\n",
@@ -1313,6 +1329,7 @@ mod cli_build_tests {
             song: Some(connect::SongFlowReport {
                 music_entries: 0,
                 free_music: false,
+                arena_echo: RoomArenaEcho::new(0),
                 peer_bar: None,
                 peers: PeerBars::new(),
                 peer_queue: None,
@@ -1327,6 +1344,7 @@ mod cli_build_tests {
             "channel: Success (0) (restriction unknown)\n",
             "room: joined without snapshot\n",
             "music: 0 entries (free music: no)\n",
+            "arena: 0\n",
             "tick: no peer echo\n",
             "mirror: no queue forward (0 ranks)\n",
         );
