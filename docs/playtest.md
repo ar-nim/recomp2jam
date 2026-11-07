@@ -673,3 +673,47 @@ life-bar drain paint (`b32ea82`), and audit rows flipped to exe evidence
   test compile, so every gate above ran on the dirty state; fmt, clippy,
   and the full suite were re-run after and stayed green with identical
   counts.
+
+## Regression sweep — 2026-11-07 08:48 UTC+8 (HEAD `2ed7b97`, tree dirty mid-sweep)
+
+Live re-proof on the hold-head. Covers the net difficulty-icon pins
+(`51a4759`), the shell holds-expiry fix (`c2702fc`), and the docs log
+(`2ed7b97`) landed after the life-head baseline `8886d32`.
+
+- `cargo fmt --check`: clean, `exit=0` (re-run on the dirty state:
+  clean, `exit=0`).
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched. A peer
+  landed uncommitted edits mid-sweep (`o2jam-render/src/lib.rs`,
+  `o2jam-shell/src/avatar.rs`, 08:45:24/08:45:37 +08:00); clippy was
+  re-run fresh after them and re-checked the dirty `o2jam-shell` +
+  `recomp2jam`, still clean.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1010 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`,
+  identical on the clean start state and re-run on the dirty state.
+  Per target: audio 19, dump 0, file 141, game 81, net 333,
+  render 72, shell 278, real_art 7, scenes 22, recomp2jam 57
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, 0 warning
+  lines (touched-`main.rs` rebuild check, re-run on the dirty state:
+  same).
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.61 s, re-run on the dirty state) against
+  local Memoryer 7.2.0 (`Mode=Full`). Server log for the re-run
+  (`08:48:13 +08:00`): `Create room: songflow` →
+  `Update room [000] music settings: [HX / X10 / o2ma757]` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Update #1 - Jam: 3 (Bonus: 0)` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure WARN on room delete; a first run at
+  `08:45:39 +08:00` logged the same flow).
+- **Verdict: no regression — suite is green on the hold-head (1010
+  passed; +6 vs the 1004 baseline: game +2, shell +4, all other
+  targets unchanged, 0 failures). No commits, no pushes.** This sweep
+  touched only `docs/playtest.md`; the two dirty files are the peer's
+  uncommitted work, not mine.
