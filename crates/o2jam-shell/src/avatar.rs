@@ -5,8 +5,9 @@
 //! animation frames (see [`AvatarFigure::from_sprite55_strided`]),
 //! prefixed `.oji` bodies compose their row spans onto full frames
 //! (see [`AvatarFigure::from_sprite55_prefixed`]), `.oja` effect
-//! animations decode their row-group planes per frame (see
-//! [`AvatarFigure::from_oja55`]), and anything else (the compressed
+//! animations decode their row-group planes per frame — tabulated
+//! records plus the recordless trailing frames (see
+//! [`AvatarFigure::from_oja55`]) — and anything else (the compressed
 //! `.oji` outlier frames) is skipped — their codec is still TBD in
 //! `o2jam-file`. Equipped parts stack on as extra layers; which
 //! filenames those are comes from [`pick_wear_sprites`].
@@ -16,7 +17,8 @@ use std::collections::HashMap;
 use o2jam_file::{
     classify_sprite, find_opi_entry, opi_entry_body, pair_entries_with_rects, resolve_sprite_entry,
     AvatarItemTable, Bnd, BndRect, ControlBlock, ControlEntry, ControlList, Oja55, Oja55Frame,
-    OpiEntry, PlacedControl, Sprite55, Sprite55Prefixed, Sprite55Strided, SpriteResolution,
+    Oja55TrailingFrame, OpiEntry, PlacedControl, Sprite55, Sprite55Prefixed, Sprite55RowSpan,
+    Sprite55Strided, SpriteResolution,
 };
 use o2jam_net::CharacterInfo;
 use o2jam_render::{
@@ -49,9 +51,9 @@ pub struct FigureLayer {
 impl FigureLayer {
     /// One `.oja` animation frame pasted onto its full `w*h` canvas:
     /// the stored transparent word 0 clears the canvas (`.oja`
-    /// headers carry no colour-key word; claims A12 key `0x0000`) and
-    /// each pixel-plane row span pastes at its `(x, y)` — the plane
-    /// layout chains through the container parser
+    /// headers carry no colour-key word; claims A12 key `0x0000`),
+    /// and each pixel-plane row span pastes at its `(x, y)` — the
+    /// plane layout chains through the container parser
     /// ([`o2jam_file::parse_oja55`]). The record anchor becomes the
     /// layer anchor (negative anchors mark centred effects). The
     /// per-pixel alpha plane (claims C7: read straight after the
@@ -61,24 +63,51 @@ impl FigureLayer {
     /// [`o2jam_file::Oja55Frame::alpha`] for a blended paint.
     #[must_use]
     pub(crate) fn from_oja_frame(frame: &Oja55Frame<'_>) -> Self {
-        let mut words = vec![0u16; frame.w as usize * frame.h as usize];
-        for span in &frame.rows {
-            let base = span.y as usize * frame.w as usize + span.x as usize;
-            let (pairs, _) = span.pixels.as_chunks::<2>();
-            for (index, pair) in pairs.iter().enumerate() {
-                words[base + index] = u16::from_le_bytes(*pair);
-            }
-        }
         Self {
-            image: Rgb555Image {
-                w: frame.w as usize,
-                h: frame.h as usize,
-                words,
-            },
+            image: oja_canvas(frame.w, frame.h, &frame.rows),
             dx: i32::from(frame.x),
             dy: i32::from(frame.y),
             colorkey: 0x0000,
         }
+    }
+
+    /// One recordless `.oja` trailing frame (frames past the record
+    /// table; `Playing_Effect_Jam.oja` frames 10..15) pasted like a
+    /// tabulated frame. No record exists, so the layer anchor is the
+    /// body-wide `(0, 0)` every tabulated Jam record carries —
+    /// inherited, never invented. The canvas-row mask plane rides
+    /// [`o2jam_file::Oja55TrailingFrame::alpha`] unblended, like the
+    /// tabulated alpha.
+    #[must_use]
+    pub(crate) fn from_oja_trailing_frame(frame: &Oja55TrailingFrame<'_>) -> Self {
+        Self {
+            image: oja_canvas(frame.w, frame.h, &frame.rows),
+            dx: 0,
+            dy: 0,
+            colorkey: 0x0000,
+        }
+    }
+}
+
+/// Paste `.oja` row spans onto a zero-cleared `w*h` canvas: the
+/// stored transparent word 0 clears the canvas (`.oja` headers carry
+/// no colour-key word; claims A12 key `0x0000`) and each row span
+/// pastes at its `(x, y)`. The parser guarantees spans stay inside
+/// their row, so uncovered pixels stay transparent — nothing is
+/// invented.
+fn oja_canvas(w: u16, h: u16, rows: &[Sprite55RowSpan<'_>]) -> Rgb555Image {
+    let mut words = vec![0u16; usize::from(w) * usize::from(h)];
+    for span in rows {
+        let base = usize::from(span.y) * usize::from(w) + usize::from(span.x);
+        let (pairs, _) = span.pixels.as_chunks::<2>();
+        for (index, pair) in pairs.iter().enumerate() {
+            words[base + index] = u16::from_le_bytes(*pair);
+        }
+    }
+    Rgb555Image {
+        w: usize::from(w),
+        h: usize::from(h),
+        words,
     }
 }
 
@@ -148,17 +177,28 @@ impl AvatarFigure {
     }
 
     /// Decode every frame of a `.oja` effect animation (codec gap ⑤):
-    /// one layer per frame at its record anchor — the tap/hold/jam
-    /// frames chain through the container's plane layout
-    /// ([`o2jam_file::parse_oja55`]); [`FigureLayer::from_oja_frame`]
-    /// carries the canvas paste and the alpha-plane caveat.
+    /// one layer per tabulated frame at its record anchor, then one
+    /// layer per recordless trailing frame at the body-wide `(0, 0)`
+    /// anchor — the tap/hold/jam frames chain through the container's
+    /// plane layout ([`o2jam_file::parse_oja55`]); the paste helpers
+    /// carry the canvas and the alpha caveats. For
+    /// `Playing_Effect_Jam.oja` this yields all sixteen stored
+    /// frames (ten tabulated + six recordless); gameplay consumers
+    /// that stage the record table only (the Playing skin) keep the
+    /// ten exe-visible frames.
     #[must_use]
     pub fn from_oja55(animation: &Oja55<'_>) -> Self {
-        let layers = animation
+        let mut layers: Vec<FigureLayer> = animation
             .frames
             .iter()
             .map(FigureLayer::from_oja_frame)
             .collect();
+        layers.extend(
+            animation
+                .trailing_frames
+                .iter()
+                .map(FigureLayer::from_oja_trailing_frame),
+        );
         Self { layers }
     }
 
@@ -1851,8 +1891,10 @@ mod avatar_figure_tests {
 
     /// All three 7.55 `.oja` bodies load and render (skips without
     /// `install-root`): the tap and long-note click rings decode six
-    /// shrinking centred frames each, the jam flash ten 300x300
-    /// frames. Their alpha planes ride the parser for a future
+    /// shrinking centred frames each, the jam flash all sixteen
+    /// stored frames — ten tabulated 300x300 flash frames plus the
+    /// six recordless trailing frames at the inherited `(0, 0)`
+    /// anchor. Their alpha/mask planes ride the parser for a future
     /// blended paint; the figures paste the pixel planes opaque.
     #[test]
     fn oja_bodies_render_from_the_archive() {
@@ -1862,7 +1904,7 @@ mod avatar_figure_tests {
         for (name, frames) in [
             ("Note_Click.oja", 6),
             ("LongNote_Effect.oja", 6),
-            ("Playing_Effect_Jam.oja", 10),
+            ("Playing_Effect_Jam.oja", 16),
         ] {
             let figure = load_archive_sprite(&archive, name)
                 .unwrap_or_else(|| panic!("{name} must route to a figure"));
@@ -1870,6 +1912,10 @@ mod avatar_figure_tests {
             let layer = figure.layer(0).unwrap();
             assert!(layer.image.w > 0 && layer.image.h > 0, "{name} frame size");
         }
+        let jam = load_archive_sprite(&archive, "Playing_Effect_Jam.oja").unwrap();
+        let tail = jam.layer(15).expect("recordless trailing frame");
+        assert_eq!((tail.dx, tail.dy), (0, 0), "inherited body anchor");
+        assert_eq!((tail.image.w, tail.image.h), (300, 300));
     }
 
     /// All ten 7.55 prefixed `.oji` bodies load and render (skips

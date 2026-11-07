@@ -20,8 +20,8 @@ Body-level render coverage: `Interface1.opi` 100% (1532/1532),
 since gap ⑤), `avatar.opa` 100% — 9284/9284 bodies (100%).
 Image-record level: all 63,796 records decode — 63,760 raw (99.94%)
 plus the 36 non-raw records inside the 10 `.oji` bodies (prefixed
-walk, gaps ③+④) and the 16 plane frames inside the 3 `.oja` bodies
-(gap ⑤). The "compressed `.ojs`/`.ojt` frame" class is empty: no
+walk, gaps ③+④) and the 22 plane frames inside the 3 `.oja` bodies
+(16 tabulated + 6 recordless trailing, gap ⑤). The "compressed `.ojs`/`.ojt` frame" class is empty: no
 plain sprite body carries a single non-raw image, so every formerly
 lost frame sat in an `.oji` or a `.oja` envelope — the strided
 atlases (gap ①), the 47 JPEG album-art bodies (6.8 MB, gap ②), all
@@ -115,12 +115,14 @@ invented. Shapes by stored delta (`size − w·h·2` per image):
 
 ## `.oja` bodies: fully mapped (gap ⑤, frame planes)
 
-All 16 frames across the three `.oja` bodies decode
+All 22 frames across the three `.oja` bodies decode
 (`parse_oja55` in `crates/o2jam-file/src/sprites.rs`, routed in
-`o2jam-shell/src/avatar.rs` via `AvatarFigure::from_oja55`). The
-reference toolkit throws on these bodies; the exe reads per frame a
-pixel plane then a byte plane with no codec between (claims C7) —
-the actual stored bytes are compacted, not fixed-size:
+`o2jam-shell/src/avatar.rs` via `AvatarFigure::from_oja55`): the
+ten tabulated Jam frames, the six click/long frames, and the six
+recordless Jam trailing frames (below). The reference toolkit
+throws on these bodies; the exe reads per frame a pixel plane then
+a byte plane with no codec between (claims C7) — the actual stored
+bytes are compacted, not fixed-size:
 
 - Each 20-byte frame record carries `x y w h` plus the three raw
   words, now read as: `a` = byte offset of the frame's data from the
@@ -144,21 +146,47 @@ the actual stored bytes are compacted, not fixed-size:
   it beside the pixels; the exact blend role stays open (claims C7
   OPEN), and the shell's figures paste the pixel planes opaque for
   now — the alpha rides `Oja55Frame::alpha` for a blended paint.
-- `Playing_Effect_Jam.oja` opens its blob with an 80-byte unexplained
-  block — byte-for-byte the serialization of frame records 6..9 —
-  before the first plane; the parser finds the plane base as the
-  smallest 20-byte shift where every walk lands. `Note_Click.oja`
-  stores planes straight after the table (shift 0).
-- Honest negatives: the Jam blob carries 1,623,039 untabulated
-  trailing bytes — one rows-25..299 partial frame and five full
-  300x300 row-group frames (300 spans each, terminator-walks land
-  cleanly) plus alpha-sized regions (89,694/89,700 B) — with no
-  record-table entries and no anchors. They are exposed as
-  `Oja55::trailing`, not decoded: placing them would mean inventing
-  anchors. The 80-byte record-copy block and this trailing strip
-  keep the exe-reading question (C7) open: the exe's fixed
-  `w*h*2 + w*h` per-frame read cannot consume the compacted planes,
-  matching claims C9's "the exe cannot decode these either".
+- The planes chain straight after the record table on all three
+  real bodies (smallest plane-base shift 0; `a[n + 1] == a[n] +
+  b[n] + c[n]` on every container). An earlier revision of this
+  note claimed an 80-byte record-copy block before the Jam's first
+  plane — that was a misread: the bytes at the blob start are
+  frame 0's first row groups (spans `(154, 24, 1)`, `(143, 25, 3)`,
+  …), and frame 0's walk lands exactly at `a + b` from shift 0.
+- The Jam blob's 1,623,039 untabulated trailing bytes decode as six
+  recordless frames (`Oja55::trailing_frames`): no records exist,
+  so the parser scans the block for bottom-anchored plane walks —
+  a candidate is a plane only when its row-group walk lands on a
+  terminator at the canvas's bottom row (all six real walks do;
+  mask bytes only ever produce walks that stop high). Geometry
+  stays the tabulated canvas (300x300): every span sits inside it,
+  and each real frame spans it fully (`max(x + width) == 300`,
+  `max(y) == 299`), so no anchor or size is invented. Frame 10 is
+  a rows-25..299 partial top (281 spans, 166,676 B plane), frames
+  11..15 are full canvases (300 spans, 181,802 B each); each plane
+  is followed by a mask slice running to the next plane (the last
+  to the blob end): 89,694 B then 89,700 B ×5 — 299 rows of 300
+  alpha bytes per mask (canvas-row maps, zero past the glow rim,
+  values rising with pixel luminance), not the tabulated records'
+  byte-per-covered-pixel alpha; the first mask is six bytes short
+  of the 299x300 grid. Content check: each mask's nonzero rows
+  track its paired plane's pixel rows (plane 10 stores rows 25..181
+  and mask 0 glows rows 0..182; plane 11 stores rows 0..233 and
+  mask 1 glows rows 0..234 — the mask rim extends a row or two
+  past the stored pixels). The shell routes them as
+  layers 10..15 at the body-wide `(0, 0)` anchor every tabulated
+  Jam record carries; gameplay consumers that stage the record
+  table only (the Playing skin) keep the ten exe-visible frames.
+- Honest negatives: the trailing block opens with a 9,159-byte
+  alpha-profile orphan (`Oja55::trailing`) — 30 full 300-byte rows
+  plus one partial row 30, value 0 below row 30, but no pixel
+  plane anywhere follows or precedes it; its frame is missing from
+  the blob and stays raw. The accounting is exact: 9,159 +
+  (166,676 + 89,694) + 5 × (181,802 + 89,700) = 1,623,039, zero
+  leftover. The trailing strip keeps the exe-reading question (C7)
+  open: the exe's fixed `w*h*2 + w*h` per-frame read cannot
+  consume the compacted planes, matching claims C9's "the exe
+  cannot decode these either".
 
 ## JPEG album-art bodies: decoded (codec gap ②)
 
@@ -224,12 +252,13 @@ outside {0xC0, 0xC2} occurs in the 47; classes the crate rejects
 5. ~~**`.oja` frame data + `a`/`b`/`c` words** (3 bodies)~~ —
    **DONE**: `o2jam-file` `parse_oja55` decodes every frame
    (row-group pixel plane landing on its zero terminator exactly at
-   `a + b`, alpha plane sliced at `c`; plane-base scan over the
-   80-byte unexplained block in the Jam body), and
+   `a + b`, alpha plane sliced at `c`; plane-base scan over any
+   leading block — shift 0 on all three real bodies), and
    `o2jam-shell/src/avatar.rs` routes them
    (`AvatarFigure::from_oja55`, one layer per frame at its record
-   anchor). The Jam trailing 1,623,039 B stay untabulated — see the
-   `.oja` section above.
+   anchor). The Jam trailing block decodes too: six recordless
+   frames plus a 9,159-B orphan mask block — see the `.oja`
+   section above.
 
 ## Method and version pin
 
