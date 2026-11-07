@@ -86,6 +86,27 @@ rides the device-side path inside the display wrapper. Which device
 call consumes the key is OPEN. Flag `0x10` vs `0x11` selects the
 clipped variant, not colorkeying.
 
+## Entry-code draw arms: position, not blend — VERIFIED
+
+The `0x50000000`/`0xA0000000` tests on the draw-call argument are
+staging-position selectors, not blend modes (full decode and site
+list in `docs/blend-arms.md`): bits 30/28 stage the sprite at the
+view origin `(0, 0)`; bits 31/29 stage it at record rect 0's corner
+(helper `0x548640` with low word 1); neither stages anything. Both
+arms are opaque source draws — no alpha constant, no blend helper, no
+fill. This resolves OPEN 3 below: the rect arm is the pinned case of
+a control staging a non-zero view position.
+
+The decode also extends step 2: `CCImageBox::Draw` matches four stems
+— `%s.ojs` (layer 1), `oji` (layer 2), `oja` (layer 5, new), and
+`ojt` (a 60h-byte object staged by `0x42fcd0`, registered with
+manager `0x76816c`). It refines `docs/claims-render.md` verdict 1:
+codes `0x21100001`/`0x21200002` carry bit 29 and take the rect arm,
+so the anchor==rect probes hold because the staged position is the
+rect corner itself. Renderer consequence: opaque colorkey blits
+(`paint_native_scene`) stay faithful; alpha compositing has no
+consumer on this path.
+
 ## Clipping
 
 Two variants exist per image (layer callbacks, step 3). `DrawClip`
