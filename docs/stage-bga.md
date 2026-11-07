@@ -159,11 +159,27 @@ bytes `0x4e85d4`), the rest the generic path at `0x4e7fde`:
    `0x52159a`) or `%s%d_%d%s` (`0x45c941`/`0x4f829f`/`0x521572`). The
    high-word-set branch of the room setter (`0x4ad42d`) is the likely trigger
    path; the exact builder and frame schedule are untraced.
-2. Z-order of the stage vs the avatar figures: the avatar seats are type-`0x70`
-   controls with no sprite (runtime-resolved from `avatar.opa`), and the photo
-   (`docs/playing-reference.md`) shows figures over the backdrop, but the
-   avatar pass that draws them is not traced here; file order alone would put
-   `BACK1` above the shadow sprites.
+2. CLOSED — stage paints first, avatar paints second. The venue
+   `BACK1` (`IDC_IMAGE_SPLAY_BACK1`, code `0x1B500071`, ordinal 113)
+   stages through the `_` applier `FUN_004e7850` (VA `0x4e7850`,
+   41-entry walk, bound `0x29` at file `0xe7958`) into the
+   behind-highway set (entries 113–114, 209–212, file order
+   back-to-front), and the list render loop `0x5dec30`
+   (`ev_ff581cfa…`, `docs/ui-draw.md`) paints file order with the
+   full-screen entry first. The avatar seats are type-`0x70` controls
+   with no sprite (runtime-resolved from `avatar.opa`); the shell
+   avatar pass `LivePlay::paint_avatar_scene`
+   (`crates/o2jam-shell/src/playing.rs`) paints over the highway and
+   all staged art, and `AvatarScene::paint` draws the `Lv` plate plus
+   life bar, then `figure.paint_extent_centered` in the
+   `Map_Avatar.bnd` seat (307,161)-(607,461), then the tally strip.
+   The photo avatar-scene box (`docs/playing-reference.md`) pins the
+   same stack: figure over backdrop. Layering confirms it: `.ojs`
+   rides layer 1 and `.oji` rides layer 2 (`SetLayer` `0x424100`,
+   `ev_015a885f…`), so the `Avatar_Shadow.oji` seats composite above
+   the `.ojs` stage even though file order alone would put `BACK1`
+   (ordinal 113) above the low-ordinal shadows. Rule: stage never
+   occludes avatar; avatar occludes stage inside the seat box.
 3. Who calls the three twin appliers (`0x4e7850` and the `0x4ee8f5`/`0x4f2c73`
    clusters): addresses sit adjacently in `.rdata` at `0x64ae48`–`0x64ae50`,
    suggesting a state-vtable dispatch (solo/P2P/tutorial variants unattributed).

@@ -1944,3 +1944,46 @@ strings2-head baseline `434c002`: paint mapname/bpm/skillcount captions
   from the mapname/bpm/skillcount caption tests, all other targets
   unchanged, 0 failures). No lint findings. No commits, no pushes.**
   This sweep touched only `docs/playtest.md`.
+
+## Regression sweep — 2026-11-07 23:12 UTC+8 (HEAD `4a2e306`, tree clean)
+
+Live re-proof on the captions2-head. Covers the feat commit landed after the
+captions-head baseline `9caee7a`: verify waiting captions settle stage
+override (`4a2e306`: `stage_waiting_captions` helper + `staged_catalog_bpm`
+fixture in `shots.rs`, waiting-shot caption verify, `waiting.png` refresh,
+`parity.md`/`stage-bga.md` notes).
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1284 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 7, file 149, game 92, net 346,
+  render 73, shell 472, real_art 7, scenes 22, recomp2jam 97
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, 0 warning
+  lines.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.59 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`23:11:32 +08:00`):
+  `Authorize session` → `Create room: songflow` →
+  `Get music list: [0/00] 562 music` → `Start game: [000]` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure stack on room delete; a second session walked
+  `Get channel list` → `Enter channel` → `Get room list` →
+  `Get character info`).
+- **Verdict: no regression — suite is green on the captions2-head (1284
+  passed; +1 vs the 1283 captions-head baseline, recomp2jam 96 → 97
+  from the waiting-caption settle verify test (`shots::tests::
+  waiting_shot_paints_mapname_bpm_skillcount_captions`, new in this
+  HEAD), all other targets unchanged, 0 failures). No lint findings.
+  No commits, no pushes.** This sweep touched only `docs/playtest.md`.
+- Tree note: a peer saved uncommitted docs edits mid-sweep
+  (`docs/stage-bga.md`, saved 23:11:31 +08:00 — stage/avatar z-order
+  CLOSED verdict, docs-only, no code impact). The tree was clean at
+  sweep start; every gate above ran against HEAD code unaffected by a
+  markdown edit, and `cargo fmt --check` was re-run clean after both
+  files settled. Per the sweep rules (touch only `docs/playtest.md`,
+  fix only my own lint findings) the peer's file was left alone.
