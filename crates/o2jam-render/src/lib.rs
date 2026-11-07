@@ -2701,6 +2701,27 @@ mod tests {
     }
 
     #[test]
+    fn present_native_frame_preserves_stale_pixels_verbatim() {
+        // Pinned presenter policy (`docs/channel-fill.md`): the exe
+        // issues no backbuffer clear, so a stale frame stays visible
+        // and present must copy it exactly instead of clearing it.
+        let native_w = usize::try_from(NATIVE_WIDTH).unwrap();
+        let native_h = usize::try_from(NATIVE_HEIGHT).unwrap();
+        let native: Vec<u32> = (0..native_w * native_h)
+            .map(|index| u32::try_from(index).unwrap_or(u32::MAX) | 0x00C0_C0C0)
+            .collect();
+        let mut window = vec![0x00DE_AD00u32; native_w * native_h];
+        assert!(present_native_frame(
+            &mut window,
+            native_w,
+            native_h,
+            &native,
+            0x000000
+        ));
+        assert_eq!(window, native);
+    }
+
+    #[test]
     fn center_places_box_mid_frame() {
         assert_eq!(
             center_rect(4, 2, 10, 8),

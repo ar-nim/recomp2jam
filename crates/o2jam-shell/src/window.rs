@@ -349,6 +349,42 @@ mod tests {
     }
 
     #[test]
+    fn present_clears_only_bars_over_stale_pixels() {
+        // Pinned presenter policy (`docs/channel-fill.md`): the native
+        // backbuffer is never cleared, so present fills only the
+        // letterbox bars and scales the stale image verbatim over a
+        // stale window buffer.
+        const STALE_WINDOW: u32 = 0x00DE_AD00;
+        let backbuffer: Vec<u32> = (0..backbuffer_words())
+            .map(|index| u32::try_from(index).unwrap_or(u32::MAX) | 0x00C0_C0C0)
+            .collect();
+        let layout =
+            present_layout(1600, 900, 1600 * 900, backbuffer.len()).expect("wide window presents");
+        let window_w = usize::try_from(layout.window_w).unwrap();
+        let bar_end = usize::try_from(layout.offset_x).unwrap();
+        let mut window = vec![STALE_WINDOW; 1600 * 900];
+        let presented = o2jam_render::present_native_frame(
+            &mut window,
+            window_w,
+            usize::try_from(layout.window_h).unwrap(),
+            &backbuffer,
+            LETTERBOX,
+        );
+        assert!(presented);
+        assert_eq!(window[0], LETTERBOX);
+        assert_eq!(window[bar_end - 1], LETTERBOX);
+        // Image corners copy the stale frame verbatim: top-left is
+        // native (0,0), bottom-right is the last native pixel.
+        assert_eq!(window[bar_end], backbuffer[0]);
+        let last_image = usize::try_from(layout.draw_h - 1).unwrap() * window_w
+            + bar_end
+            + usize::try_from(layout.draw_w - 1).unwrap();
+        assert_eq!(window[last_image], backbuffer[backbuffer_words() - 1]);
+        // No stale window pixel survives: bars cleared, image scaled over.
+        assert!(window.iter().all(|pixel| *pixel != STALE_WINDOW));
+    }
+
+    #[test]
     fn present_paints_letterbox_bars_black() {
         let backbuffer = vec![7u32; backbuffer_words()];
         let layout =
