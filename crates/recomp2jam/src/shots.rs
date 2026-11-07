@@ -55,9 +55,10 @@ pub struct Shot {
 /// The musicselect shot repaints Waiting with the
 /// staged `DAILOG_SELECTMUSIC` dialog on top (host song flow: catalog
 /// plus pick), and the playing shot paints a mid-song state: the 5 s
-/// note is struck first (combo 1) and the paint lands 100 ms later,
-/// while the judgement word, hit burst, tally counts, and TIME
-/// progress show.
+/// tap is struck, then the long-note head (combo 2), and the paint
+/// lands 100 ms later while the held beam, hit burst, judgement
+/// word, tally counts, and TIME progress show; the scripted key-up
+/// on the tail then spends the chart for Result.
 ///
 /// # Errors
 ///
@@ -79,6 +80,7 @@ pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
     stage_playing_scene(&mut game);
     game.menu_key(MenuKey::Confirm, true);
     game.strike_at(2, 5_000);
+    game.strike_at(0, SCRIPTED_HOLD_STRIKE_MS);
     shots.push(shoot_checked(&mut game, "playing", Screen::Playing, 5_100)?);
     shots.push(shoot_checked_native(
         &mut game,
@@ -86,6 +88,7 @@ pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
         Screen::Playing,
         5_100,
     )?);
+    game.release_at(0, SCRIPTED_HOLD_RELEASE_MS);
     shots.push(shoot_result_named(&mut game, "result", 7_000)?);
     shots.push(shoot_result_native_named(
         &mut game,
@@ -392,11 +395,33 @@ fn seed_lobby_lists(game: &mut ScreenGame) {
     ]);
 }
 
-/// Shared chart: one note at 5 s (visible in Playing, spent by
-/// Result). The solo walk strikes the same onset, so its top-panel
+/// Scripted long-note fixture (fixture, not wire data): the lane-0
+/// hold head shares the tap's 5 s onset and the tail sits 400 ms
+/// later. The head strike arms the hold, so the playing paints show
+/// the held beam; the verified hold machine ticks the bonus per
+/// advance while the span stays open.
+const SCRIPTED_HOLD: (u8, u64, u64, u32) = (0, 5_000, 5_400, 7);
+/// Scripted hold-head strike clock (fixture): the tap instant, so
+/// the playing paints land 100 ms into the armed span.
+const SCRIPTED_HOLD_STRIKE_MS: u64 = 5_000;
+/// Scripted key-up clock (fixture): exactly on the tail — the
+/// verified release model rates the armed tail with the shared
+/// windows, so the walked tail is a Cool and the span closes for
+/// Result.
+const SCRIPTED_HOLD_RELEASE_MS: u64 = 5_400;
+/// Shared chart (fixture, not wire data): the lane-2 tap and the
+/// lane-0 hold above, one key-sound sample each. A tail equal to its
+/// head degrades to a tap (`LivePlay::new_holds`), so the hold row
+/// is the only spanned record.
+const SCRIPTED_CHART: [(u8, u64, u64, u32); 2] = [(2, 5_000, 5_000, 7), SCRIPTED_HOLD];
+
+/// Shared chart: the 5 s tap and the held long note over it (the
+/// hold beams while its span is open in Playing; both records are
+/// spent by Result through the scripted key-up, which rates the tail
+/// Cool). The solo walk strikes the same onsets, so its top-panel
 /// numbers and grade plate match the battle walk's play data.
 fn seed_chart(game: &mut ScreenGame) {
-    game.load_chart(vec![(2, 5_000, 7)]);
+    game.load_chart_holds(SCRIPTED_CHART.to_vec());
 }
 
 /// Art-less `STATE_CHANNEL`: stage the empty scene so the walk takes
@@ -409,8 +434,9 @@ fn stage_empty_channel_scene(game: &mut ScreenGame) {
 /// Game preloaded with list rows, a Live waiting duo, the duo's
 /// battle scoreboard, scripted waiting chat (one 3012 user row plus
 /// one 3013 admin row, so `waiting.png` shows live rows), and a
-/// chart whose note lands at 5 s (visible in Playing, spent by
-/// Result). The waiting captions stage here — catalog plus
+/// chart whose tap and hold head land at 5 s (the hold beams in
+/// Playing; both records are spent by Result through the scripted
+/// key-up, which rates the tail Cool). The waiting captions stage here — catalog plus
 /// inventory — so the waiting shot inks MAPNAME/BPM/SKILLCOUNT
 /// while later shots keep their own staging. Genuine archive art
 /// stages underneath when `install-root`
@@ -482,6 +508,8 @@ fn drive_solo_to_result() -> ScreenGame {
     stage_playing_scene(&mut game);
     game.menu_key(MenuKey::Confirm, true);
     game.strike_at(2, 5_000);
+    game.strike_at(0, SCRIPTED_HOLD_STRIKE_MS);
+    game.release_at(0, SCRIPTED_HOLD_RELEASE_MS);
     game
 }
 
@@ -1264,7 +1292,9 @@ mod tests {
         walk_to_playing(&mut staged);
         stage_playing_scene(&mut staged);
         staged.strike_at(2, 5_000);
+        staged.strike_at(0, SCRIPTED_HOLD_STRIKE_MS);
         let staged_rgb = frame_rgb(&mut staged, 5_100);
+        staged.release_at(0, SCRIPTED_HOLD_RELEASE_MS);
         assert_eq!(staged.screen(), Screen::Playing);
         assert_ne!(
             staged_rgb,
@@ -1764,16 +1794,17 @@ mod tests {
         let span = geom.highway_rect();
         let center_x = span.x + i32::try_from(span.w).expect("span width fits i32") / 2;
         let row = geom.line_y - 24;
-        // The exact staged digits the shot paints (one Cool strike:
-        // combo 1, judged 100 ms before the paint lands).
+        // The exact staged digits the shot paints (tap Cool then hold
+        // head Cool: combo 2, judged 100 ms before the paint lands).
         let mut expected = native_probe();
         paint_probe(&mut expected, |frame| {
-            font.paint_centered(frame, center_x, row, 1)
+            font.paint_centered(frame, center_x, row, 2)
         });
         // The playing shot's frame at the same instant.
         let mut game = seeded_game();
         walk_to_playing(&mut game);
         game.strike_at(2, 5_000);
+        game.strike_at(0, SCRIPTED_HOLD_STRIKE_MS);
         let mut actual = native_probe();
         paint_probe(&mut actual, |frame| game.paint_at(frame, 5_100));
         assert_eq!(game.screen(), Screen::Playing);
@@ -1814,27 +1845,93 @@ mod tests {
     }
 
     #[test]
+    fn playing_shot_paints_the_held_long_note_beam() {
+        // The reference highway's held beam (reference-4x3.png): the
+        // head strike inside the window arms the hold, so the playing
+        // instant beams lane 0 down to the judgement line — the
+        // staged `LongNote_Effect` art with the hit burst — while the
+        // untouched twin leaves that band bare below its scrolling
+        // head-to-tail beam.
+        use o2jam_shell::playing::{HighwayGeometry, NATIVE_LINE_Y};
+        let paint_instant = |game: &mut ScreenGame| {
+            game.strike_at(2, 5_000);
+            paint_native_frame(game, 5_100)
+        };
+        let mut idle = seeded_game();
+        walk_to_playing(&mut idle);
+        let idle_frame = paint_instant(&mut idle);
+        let mut held = seeded_game();
+        walk_to_playing(&mut held);
+        held.strike_at(0, SCRIPTED_HOLD_STRIKE_MS);
+        let held_frame = paint_instant(&mut held);
+        assert_ne!(held_frame, idle_frame, "the armed hold changed no pixels");
+        // Lane 0's column just above the judgement line: the held
+        // beam runs to the line; the untouched hold's beam stops at
+        // its scrolling head, rows above.
+        let (w, h) = native_size();
+        let lane0 = HighwayGeometry::centered(w, h).lane_rect(0);
+        let x0 = usize::try_from(lane0.x + 1).unwrap_or(0);
+        let width = usize::try_from(lane0.w.saturating_sub(2)).unwrap_or(0);
+        let band = (NATIVE_LINE_Y - 16..NATIVE_LINE_Y).any(|y| {
+            let Ok(row) = usize::try_from(y) else {
+                return false;
+            };
+            (0..width).any(|dx| {
+                let at = row * w + x0 + dx;
+                at < held_frame.len() && held_frame[at] != idle_frame[at]
+            })
+        });
+        assert!(band, "no held-beam ink reached the judgement line");
+    }
+
+    #[test]
+    fn scripted_hold_keyup_spends_the_chart_into_result() {
+        // The verified release path closes the walked hold: the
+        // key-up on the tail rates the armed tail Cool and marks it
+        // judged, so the chart finishes and the walked rows carry the
+        // zero bonus the paint-free walk accumulates.
+        let mut game = seeded_game();
+        walk_to_playing(&mut game);
+        game.strike_at(2, 5_000);
+        game.strike_at(0, SCRIPTED_HOLD_STRIKE_MS);
+        game.release_at(0, SCRIPTED_HOLD_RELEASE_MS);
+        let mut probe = native_probe();
+        paint_probe(&mut probe, |frame| game.paint_at(frame, 7_000));
+        assert_eq!(
+            game.screen(),
+            Screen::Result,
+            "the key-up missed the chart spend"
+        );
+        let rows = game.result_rank_rows();
+        assert_eq!(rows[0].judgements, Some([3, 0, 0, 0]));
+        assert_eq!(rows[0].bonus, Some(0));
+    }
+
+    #[test]
     fn result_shot_paints_the_pinned_digits() {
         // The digits are GDI text (no staged body): the scripted walk
-        // spends the one-note chart with one Cool — counts 1/0/0/0,
-        // combo 1, jam level 0, 200 points — at the seven pinned
+        // spends the two-record chart all-Cool — the tap, the hold
+        // head, and the held tail all rate Cool: counts 3/0/0/0,
+        // max combo 3, jam level 0, 600 points — at the seven pinned
         // fields (docs/cresult-anchors.md).
         let mut game = seeded_game();
         walk_to_playing(&mut game);
         game.strike_at(2, 5_000);
+        game.strike_at(0, SCRIPTED_HOLD_STRIKE_MS);
+        game.release_at(0, SCRIPTED_HOLD_RELEASE_MS);
         let mut actual = native_probe();
         paint_probe(&mut actual, |frame| game.paint_at(frame, 7_000));
         assert_eq!(game.screen(), Screen::Result);
         let mut expected = native_probe();
         paint_probe(&mut expected, |frame| {
             let ink = o2jam_render::pack_xrgb(0xFF, 0xFF, 0xFF);
-            o2jam_render::draw_number(frame, 151, 125, 1, ink);
+            o2jam_render::draw_number(frame, 151, 125, 3, ink);
             o2jam_render::draw_number(frame, 240, 125, 0, ink);
             o2jam_render::draw_number(frame, 337, 125, 0, ink);
             o2jam_render::draw_number(frame, 426, 125, 0, ink);
-            o2jam_render::draw_number(frame, 505, 130, 1, ink);
+            o2jam_render::draw_number(frame, 505, 130, 3, ink);
             o2jam_render::draw_number(frame, 596, 130, 0, ink);
-            o2jam_render::draw_number(frame, 605, 533, 200, ink);
+            o2jam_render::draw_number(frame, 605, 533, 600, ink);
         });
         assert_pixels_came_from_font(&actual, &expected, "pinned result digits");
     }
@@ -1847,20 +1944,27 @@ mod tests {
     /// per-member tallies stay server-side).
     const RANK_ROW_NAME: (i32, i32, &str) = (128, 318, "YOU");
     /// Combined judgement text (`%5d /%5d /%3d /%3d`) for the
-    /// scripted one-Cool walk.
-    const RANK_ROW_JUDGEMENTS: (i32, i32, &str) = (230, 317, "    1 /    0 /  0 /  0");
-    /// Row score text (`%8d`) for the scripted 200-point walk.
-    const RANK_ROW_SCORE: (i32, i32, &str) = (530, 317, "     200");
+    /// scripted all-Cool walk: tap, hold head, and tail plus the
+    /// follow-up tap all rate Cool.
+    const RANK_ROW_JUDGEMENTS: (i32, i32, &str) = (230, 317, "    3 /    0 /  0 /  0");
+    /// Row score text (`%8d`) for the scripted 600-point walk.
+    const RANK_ROW_SCORE: (i32, i32, &str) = (530, 317, "     600");
     /// Peer name text on row 1 (name column, one 22 px pitch down).
     const RANK_ROW_PEER: (i32, i32, &str) = (128, 340, RESULT_PEER_NAME);
     /// Scripted rank numbers (`%d` at x=91): local rank 1 on row 0,
     /// peer rank 2 on row 1 — the reference photo's row values.
     const RANK_ROW_RANK_LOCAL: (i32, i32, &str) = (91, 317, "1");
     const RANK_ROW_RANK_PEER: (i32, i32, &str) = (91, 339, "2");
-    /// GEM bonus text (`+ %d`) for the walked hold bonus: the tap
-    /// chart arms no holds, so the accumulator stays zero — a walked
-    /// zero, never a blank.
-    const RANK_ROW_BONUS: (i32, i32, &str) = (626, 317, "+ 0");
+    /// GEM bonus text (`+ %d`) for the walked hold bonus on the
+    /// battle walk: the accumulator ticks +10 per advance while the
+    /// armed span is open, and the battle walk advances twice through
+    /// it (the two playing paints) — the key-up advance lands past
+    /// the tail, so it adds nothing. A walked total, never a blank.
+    const RANK_ROW_BONUS: (i32, i32, &str) = (626, 317, "+ 20");
+    /// GEM bonus text on the solo single row: the solo walk paints no
+    /// playing frames before its key-up, so the accumulator stays
+    /// zero — a walked zero, never a blank.
+    const SOLO_ROW_BONUS: (i32, i32, &str) = (626, 317, "+ 0");
     /// Shared room speed text on both rows (the room's X1 code).
     const RANK_ROW_SPEED_LOCAL: (i32, i32, &str) = (685, 317, "X1");
     const RANK_ROW_SPEED_PEER: (i32, i32, &str) = (685, 339, "X1");
@@ -1868,15 +1972,23 @@ mod tests {
     #[test]
     fn result_shot_paints_the_rank_table_rows() {
         // The rank table (`FUN_004c3b40`) paints row 0 from the local
-        // tally: rank 1, name `YOU`, one Cool strike (counts 1/0/0/0,
-        // 200 points, `+ 0` walked hold bonus, shared X1 speed) at
-        // the pinned columns, plus the wire peer's rank 2, name, and
-        // shared speed on row 1. A stale shot from before the duo
+        // tally: rank 1, name `YOU`, the all-Cool walk (counts
+        // 3/0/0/0, 600 points, `+ 20` walked hold bonus from the two
+        // playing paints, shared X1 speed) at the pinned
+        // columns, plus the wire peer's rank 2, name, and shared
+        // speed on row 1. A stale shot from before the duo
         // walk leaves the peer band empty; the re-shoot must carry
         // ink there.
         let mut game = seeded_game();
         walk_to_playing(&mut game);
         game.strike_at(2, 5_000);
+        game.strike_at(0, SCRIPTED_HOLD_STRIKE_MS);
+        // The walked bonus counts the advances through the open span,
+        // so the walk replays the two playing paints (+10 each),
+        // exactly as `capture_all` paints them, before the key-up.
+        let _ = paint_native_frame(&mut game, 5_100);
+        let _ = paint_native_frame(&mut game, 5_100);
+        game.release_at(0, SCRIPTED_HOLD_RELEASE_MS);
         let mut actual = native_probe();
         paint_probe(&mut actual, |frame| game.paint_at(frame, 7_000));
         assert_eq!(game.screen(), Screen::Result);
@@ -1910,13 +2022,17 @@ mod tests {
         let mut game = seeded_game();
         walk_to_playing(&mut game);
         game.strike_at(2, 5_000);
+        game.strike_at(0, SCRIPTED_HOLD_STRIKE_MS);
+        let _ = paint_native_frame(&mut game, 5_100);
+        let _ = paint_native_frame(&mut game, 5_100);
+        game.release_at(0, SCRIPTED_HOLD_RELEASE_MS);
         let rows = game.result_rank_rows();
         assert_eq!(rows.len(), 2, "the duo must build two rows");
         assert_eq!(rows[0].name.as_deref(), Some("YOU"));
         assert_eq!(rows[0].rank, Some(1));
-        assert_eq!(rows[0].judgements, Some([1, 0, 0, 0]));
-        assert_eq!(rows[0].score, Some(200));
-        assert_eq!(rows[0].bonus, Some(0));
+        assert_eq!(rows[0].judgements, Some([3, 0, 0, 0]));
+        assert_eq!(rows[0].score, Some(600));
+        assert_eq!(rows[0].bonus, Some(20));
         assert_eq!(rows[0].speed, Some(1));
         assert_eq!(rows[1].name.as_deref(), Some(RESULT_PEER_NAME));
         assert_eq!(rows[1].rank, Some(2));
@@ -2215,6 +2331,8 @@ mod tests {
         let mut game = seeded_game();
         walk_to_playing(&mut game);
         game.strike_at(2, 5_000);
+        game.strike_at(0, SCRIPTED_HOLD_STRIKE_MS);
+        game.release_at(0, SCRIPTED_HOLD_RELEASE_MS);
         assert_eq!(
             game.result_verdict(),
             o2jam_shell::screens::paint::ResultVerdict::Battle(Some(
@@ -2234,21 +2352,24 @@ mod tests {
             println!("skip: missing {INTERFACE_ARCHIVE}");
             return;
         };
-        // One Cool equals the all-Cool max, so the pinned
-        // equal-to-max arm gives grade 8: image 7, the 79x41 frame
-        // anchored (395,531).
+        // Three Cools across the two records (the hold tail rates as
+        // its own judgement, overshooting the stand-in all-Cool
+        // denominator), so the walked grade is the 0.95 band's
+        // frame 6: image 5 on the plate body.
         let plate = load_archive_sprite(&archive, o2jam_shell::screens::paint::RESULT_RANK_SPRITE)
             .expect("the block's grade plate decodes");
         assert_eq!(plate.len(), 8, "eight stored frames");
         let mut expected = native_probe();
         paint_probe(&mut expected, |frame| {
-            let layer = plate.layer(7).expect("image 7 decodes");
+            let layer = plate.layer(5).expect("image 5 decodes");
             let (x, y) = anchor_in_frame(layer.dx, layer.dy, 800, 600);
             o2jam_render::blit_rgb555(frame, &layer.image.view(), x, y, Some(layer.colorkey));
         });
         let mut game = seeded_game();
         walk_to_playing(&mut game);
         game.strike_at(2, 5_000);
+        game.strike_at(0, SCRIPTED_HOLD_STRIKE_MS);
+        game.release_at(0, SCRIPTED_HOLD_RELEASE_MS);
         let mut actual = native_probe();
         paint_probe(&mut actual, |frame| game.paint_at(frame, 7_000));
         assert_eq!(game.screen(), Screen::Result);
@@ -2273,9 +2394,9 @@ mod tests {
         assert_eq!(rows.len(), 1, "solo must build one row");
         assert_eq!(rows[0].name.as_deref(), Some("YOU"));
         assert_eq!(rows[0].rank, None);
-        assert_eq!(rows[0].judgements, Some([1, 0, 0, 0]));
-        assert_eq!(rows[0].combos, Some((1, 0)));
-        assert_eq!(rows[0].score, Some(200));
+        assert_eq!(rows[0].judgements, Some([3, 0, 0, 0]));
+        assert_eq!(rows[0].combos, Some((3, 0)));
+        assert_eq!(rows[0].score, Some(600));
         assert_eq!(rows[0].bonus, Some(0));
         assert_eq!(rows[0].speed, Some(1));
     }
@@ -2330,7 +2451,7 @@ mod tests {
                 RANK_ROW_NAME,
                 RANK_ROW_JUDGEMENTS,
                 RANK_ROW_SCORE,
-                RANK_ROW_BONUS,
+                SOLO_ROW_BONUS,
                 RANK_ROW_SPEED_LOCAL,
             ] {
                 o2jam_render::draw_text(frame, x, y, text, ink);
@@ -2345,14 +2466,15 @@ mod tests {
             println!("skip: missing {INTERFACE_ARCHIVE}");
             return;
         };
-        // Same struck note as the battle walk, same play data: one
-        // Cool equals the all-Cool max, so the pinned equal-to-max
-        // arm gives grade 8 (image 7) on the solo walk too.
+        // Same struck records as the battle walk, same play data:
+        // three Cools across the two records overshoot the stand-in
+        // all-Cool denominator, so the walked grade is frame 6
+        // (image 5) on the solo walk too.
         let plate = load_archive_sprite(&archive, o2jam_shell::screens::paint::RESULT_RANK_SPRITE)
             .expect("the block's grade plate decodes");
         let mut expected = native_probe();
         paint_probe(&mut expected, |frame| {
-            let layer = plate.layer(7).expect("image 7 decodes");
+            let layer = plate.layer(5).expect("image 5 decodes");
             let (x, y) = anchor_in_frame(layer.dx, layer.dy, 800, 600);
             o2jam_render::blit_rgb555(frame, &layer.image.view(), x, y, Some(layer.colorkey));
         });

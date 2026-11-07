@@ -171,7 +171,9 @@ pub const TAIL_BEAM: u32 = pack_xrgb(0x20, 0x80, 0xE0);
 pub const RECEPTOR_DIM: u32 = pack_xrgb(0x2A, 0x2A, 0x38);
 /// Judgement-line receptor pad flash on a struck lane.
 pub const RECEPTOR_LIT: u32 = pack_xrgb(0xC0, 0xE8, 0xFF);
-/// Hit-burst column rising above the line after a strike.
+/// Procedural hit-burst column rising above the line after a strike
+/// (the stand-in while neither the staged [`HIT_BURST_SPRITE`]
+/// explosion nor the `Keyeffect.ojs` beam column is present).
 pub const HIT_BURST: u32 = pack_xrgb(0xFF, 0xFF, 0xFF);
 /// Hit-burst lifetime in song ms (visual only; timing untouched).
 pub const BURST_MS: u64 = 150;
@@ -195,6 +197,18 @@ pub const NOTE_FRAMES_PER_LANE: usize = 3;
 pub const TUTORIAL_FRAMES_PER_LANE: usize = 5;
 /// Receptor animation step in song ms (visual only; timing untouched).
 pub const RECEPTOR_FRAME_MS: u64 = 45;
+/// Staged hit-burst body: the playing screen's explosion art. The
+/// `STATE_PLAYING` control list carries `IDC_IMAGE_SPLAY_NOTECLICK1..7`
+/// entries (`0x1B500093`–`0x1B500099`, Korean comment "폭발이미지" =
+/// explosion image) naming `_Note_Click.ojt`; the playing applier
+/// resolves that stem through `%s%d_%d.ojt` (`0x64b154`, site
+/// `0x4e814e`, `docs/stage-bga.md`) to `Note_Click<stage>_<variant>.ojt`
+/// — 36 stages × 2 variants staged in `Playing1.opi`, each a square
+/// multi-frame explosion (stage 1 variant 1: eight raw 128x128 frames,
+/// all anchors `(0,0)`, hundreds of distinct colors). The exe picks
+/// the variant with `rand()%2+1`; this pins the deterministic stage 1
+/// variant 1 body.
+pub const HIT_BURST_SPRITE: &str = "Note_Click1_1.ojt";
 /// Staged score-digit body: `Scroe.ojs` (archive spelling), ten raw
 /// ~11x21 frames in digit order 0..=9 (verified on 7.55
 /// `Playing1.opi`, archive slot 557; every frame anchors at (0,0)).
@@ -274,6 +288,20 @@ impl SkinSprite {
             top_y,
             Some(self.colorkey),
         );
+    }
+
+    /// Paint centered on the lane at `center_y` (square explosion
+    /// frames ride the receptor-pad center; wide art overhangs the
+    /// lane and the blit clips to the frame, like the original overlap).
+    fn paint_centered_on(
+        &self,
+        frame: &mut Frame<'_>,
+        geom: &HighwayGeometry,
+        lane: u8,
+        center_y: i32,
+    ) {
+        let height = i32::try_from(self.image.h).unwrap_or(0);
+        self.paint_note_at(frame, geom, lane, center_y - height / 2);
     }
 
     /// Paint with its top-left at `(x, y)` (blits clip to the frame).
@@ -439,12 +467,12 @@ fn padded_digits(value: u32, places: usize) -> Vec<u8> {
 }
 
 /// Staged highway art: per-lane note heads, press-down keys, release
-/// beams, receptor frames, the long-note effect, and the HUD number
-/// fonts ([`SCORE_FONT_SPRITE`], [`COMBO_FONT_SPRITE`],
-/// [`PLAY_TIME_FONT_SPRITE`]). Empty while nothing is staged: every
-/// paint path falls back to the procedural highway and digits (the
-/// `real_art.rs` Playing row keys on the fallback inks, so staged
-/// lanes only replace their own art).
+/// beams, receptor frames, the long-note effect, the hit-burst
+/// animation, and the HUD number fonts ([`SCORE_FONT_SPRITE`],
+/// [`COMBO_FONT_SPRITE`], [`PLAY_TIME_FONT_SPRITE`]). Empty while
+/// nothing is staged: every paint path falls back to the procedural
+/// highway and digits (the `real_art.rs` Playing row keys on the
+/// fallback inks, so staged lanes only replace their own art).
 #[derive(Debug, Clone, Default)]
 pub struct PlaySkin {
     note_heads: [Option<SkinSprite>; HIGHWAY_LANES as usize],
@@ -452,6 +480,7 @@ pub struct PlaySkin {
     release_beams: [Option<SkinSprite>; HIGHWAY_LANES as usize],
     receptors: [Vec<SkinSprite>; HIGHWAY_LANES as usize],
     long_effect: Option<SkinSprite>,
+    hit_bursts: Vec<SkinSprite>,
     score_font: Option<DigitFont>,
     combo_font: Option<DigitFont>,
     play_time_font: Option<DigitFont>,
@@ -463,6 +492,7 @@ impl PlaySkin {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.long_effect.is_none()
+            && self.hit_bursts.is_empty()
             && self.score_font.is_none()
             && self.combo_font.is_none()
             && self.play_time_font.is_none()
@@ -501,6 +531,23 @@ impl PlaySkin {
     #[must_use]
     pub fn long_effect(&self) -> Option<&SkinSprite> {
         self.long_effect.as_ref()
+    }
+
+    /// Hit-burst frame count ([`HIT_BURST_SPRITE`] bodies stage one
+    /// shared animation, not per-lane art).
+    #[must_use]
+    pub fn hit_burst_frame_count(&self) -> usize {
+        self.hit_bursts.len()
+    }
+
+    /// Hit-burst frame for a flash age: one step per
+    /// [`RECEPTOR_FRAME_MS`], clamped to the last frame (`None` while
+    /// the body is unstaged).
+    #[must_use]
+    pub fn hit_burst_frame(&self, flash_age_ms: u64) -> Option<&SkinSprite> {
+        let last = self.hit_bursts.len().saturating_sub(1);
+        let step = usize::try_from(flash_age_ms / RECEPTOR_FRAME_MS).unwrap_or(last);
+        self.hit_bursts.get(step.min(last))
     }
 
     /// Staged score-digit font ([`SCORE_FONT_SPRITE`]).
@@ -592,6 +639,13 @@ impl PlaySkin {
         self
     }
 
+    /// Stage the hit-burst animation frames.
+    #[must_use]
+    pub fn with_hit_bursts(mut self, frames: Vec<SkinSprite>) -> Self {
+        self.hit_bursts = frames;
+        self
+    }
+
     /// Stage the score-digit font.
     #[must_use]
     pub fn with_score_font(mut self, font: DigitFont) -> Self {
@@ -621,7 +675,7 @@ impl PlaySkin {
     }
 
     /// Decode every staged body from a read-only archive slice; `None`
-    /// when no lane yields art (entries missing or undecodable).
+    /// when nothing stages (entries missing or undecodable).
     #[must_use]
     pub fn from_archive(archive: &[u8]) -> Option<Self> {
         let mut skin = Self::default();
@@ -658,6 +712,9 @@ impl PlaySkin {
         if let Some(body) = archive_body(archive, LONG_NOTE_EFFECT_SPRITE) {
             skin.long_effect = lane_sprite(body, 0);
         }
+        skin.hit_bursts = archive_body(archive, HIT_BURST_SPRITE)
+            .map(skin_frames)
+            .unwrap_or_default();
         skin.score_font = digit_font(archive, SCORE_FONT_SPRITE);
         skin.combo_font = digit_font(archive, COMBO_FONT_SPRITE);
         skin.play_time_font = digit_font(archive, PLAY_TIME_FONT_SPRITE);
@@ -1786,10 +1843,10 @@ impl LivePlay {
             .any(|span| y >= span.y && y < span.y + span.h as i32)
     }
 
-    /// Lit receptor pads plus burst columns on flashed lanes (staged
-    /// `KeyEffect_Tutorial_%d` receptors, `KeydownImage` press art, and
-    /// `Keyeffect` beams when present; procedural pad and column
-    /// otherwise).
+    /// Lit receptor pads plus burst art on flashed lanes (staged
+    /// `Note_Click` bursts over `KeyEffect_Tutorial_%d` receptors,
+    /// `KeydownImage` press art, and `Keyeffect` beams when present;
+    /// procedural pad and column otherwise).
     fn paint_hit_bursts(&self, frame: &mut Frame<'_>, geom: &HighwayGeometry, now_ms: u64) {
         for lane in 0..HIGHWAY_LANES {
             let Some(age) = self.flash_age(lane, now_ms) else {
@@ -1799,8 +1856,9 @@ impl LivePlay {
         }
     }
 
-    /// One flashed lane: staged beam, animated receptor, and press art
-    /// (each falls back to its procedural ink when unstaged).
+    /// One flashed lane: staged beam column, animated receptor, press
+    /// art, and the staged hit burst over them (each stage falls back
+    /// to its procedural ink when unstaged).
     fn paint_lane_flash(
         &self,
         frame: &mut Frame<'_>,
@@ -1808,17 +1866,51 @@ impl LivePlay {
         lane: u8,
         age_ms: u64,
     ) {
-        let burst = geom.burst_rect(lane);
-        if let Some(beam) = self.view.skin.release_beam(lane) {
-            beam.paint_clipped_to(frame, geom, lane, geom.line_y, &burst);
-        } else {
-            fill_rect(frame, &geom.burst_rect(lane), HIT_BURST);
-        }
+        self.paint_burst_column(frame, geom, lane, age_ms);
         self.view
             .paint_receptor(frame, geom, lane, RECEPTOR_LIT, Some(age_ms));
         if let Some(press) = self.view.skin.press_key(lane) {
             press.paint_bottom_anchored(frame, geom, lane, geom.line_y);
         }
+        self.paint_staged_burst(frame, geom, lane, age_ms);
+    }
+
+    /// The lane column under the flash: the staged `Keyeffect` beam
+    /// slice, else the procedural [`HIT_BURST`] column (skipped when
+    /// the staged burst art already covers the lane).
+    fn paint_burst_column(
+        &self,
+        frame: &mut Frame<'_>,
+        geom: &HighwayGeometry,
+        lane: u8,
+        age_ms: u64,
+    ) {
+        if let Some(beam) = self.view.skin.release_beam(lane) {
+            let burst = geom.burst_rect(lane);
+            beam.paint_clipped_to(frame, geom, lane, geom.line_y, &burst);
+        } else if self.view.skin.hit_burst_frame(age_ms).is_none() {
+            fill_rect(frame, &geom.burst_rect(lane), HIT_BURST);
+        }
+    }
+
+    /// The staged hit burst ([`HIT_BURST_SPRITE`]) centered on the
+    /// receptor pad. Staged-only: without the body nothing paints (the
+    /// column fallback covers the flash). Painted last like the exe's
+    /// file order — the `NOTECLICK` entries follow `KEYDOWN` in the
+    /// control list (`docs/ui-draw.md`, per-hit effect entries).
+    fn paint_staged_burst(
+        &self,
+        frame: &mut Frame<'_>,
+        geom: &HighwayGeometry,
+        lane: u8,
+        age_ms: u64,
+    ) {
+        let Some(burst_frame) = self.view.skin.hit_burst_frame(age_ms) else {
+            return;
+        };
+        let pad = geom.receptor_pad(lane);
+        let pad_center_y = pad.y + i32::try_from(pad.h).unwrap_or(0) / 2;
+        burst_frame.paint_centered_on(frame, geom, lane, pad_center_y);
     }
 
     /// Center x of the staged lane columns: the draw point the
@@ -3199,6 +3291,65 @@ mod live_play_tests {
     }
 
     #[test]
+    fn staged_burst_replaces_the_white_column() {
+        let mut live = LivePlay::new(&[(3, 1000, 7)]);
+        live.set_skin(PlaySkin::default().with_hit_bursts(vec![solid_sprite(10, 10, 0x7FE0)]));
+        assert!(live.has_skin());
+        live.strike_lane(3, 1000);
+        let mut buf = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            1050,
+        );
+        // The burst art centers on the lane-3 pad (rows 44..48, so its
+        // center row 46 carries the ink); the burst-slice rows above it
+        // keep the white column out (pure white still rides the score
+        // and word ink elsewhere).
+        assert!(buf.contains(&solid_ink(0x7FE0)));
+        assert_eq!(buf[46 * 70 + 7], solid_ink(0x7FE0));
+        assert_ne!(buf[42 * 70 + 7], HIT_BURST);
+    }
+
+    #[test]
+    fn staged_burst_animates_across_flash_frames() {
+        let mut live = LivePlay::new(&[(3, 1000, 7)]);
+        live.set_skin(PlaySkin::default().with_hit_bursts(vec![
+            solid_sprite(10, 10, 0x7FE0),
+            solid_sprite(10, 10, 0x03E0),
+        ]));
+        live.strike_lane(3, 1000);
+        let mut first = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut first,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            1000,
+        );
+        assert!(first.contains(&solid_ink(0x7FE0)));
+        assert!(!first.contains(&solid_ink(0x03E0)));
+        let mut second = vec![0u32; 70 * 60];
+        live.paint(
+            &mut Frame {
+                buf: &mut second,
+                w: 70,
+                h: 60,
+            },
+            &geom(),
+            1050,
+        );
+        assert!(second.contains(&solid_ink(0x03E0)));
+        assert!(!second.contains(&solid_ink(0x7FE0)));
+    }
+
+    #[test]
     fn judgement_word_stacks_combo_beneath() {
         let mut live = LivePlay::new(&[(0, 1000, 7)]);
         live.strike_lane(0, 1000);
@@ -3569,6 +3720,19 @@ mod live_play_tests {
             assert!(w <= 33 && h <= 51, "combo digit {digit} {w}x{h}");
         }
         assert_eq!(combo.digit(9).expect("digit frame").extent(), (31, 51));
+    }
+
+    #[test]
+    fn from_archive_binds_the_note_click_burst() {
+        let Some(skin) = staged_skin() else {
+            println!("skip: missing Playing1.opi");
+            return;
+        };
+        // Verified 7.55 `Note_Click1_1.ojt`: eight raw 128x128
+        // explosion frames, all anchors (0,0).
+        assert_eq!(skin.hit_burst_frame_count(), 8);
+        let first = skin.hit_burst_frame(0).expect("first burst frame");
+        assert_eq!(first.extent(), (128, 128));
     }
 
     /// Read the pinned archive and stage the full skin (`None` test

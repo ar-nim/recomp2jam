@@ -106,6 +106,59 @@ sprites ride layer 1, `.oji` sprites layer 2 through the clipped
 callback, so overlay-class art composites above the sprite layer
 regardless of file position.
 
+## Per-hit effect entries (playing scene burst art)
+
+The `0x5dec30` render loop's playing-scene entries come from
+`ControlList_Playing.txt` `STATE_PLAYING` (read-only archive body,
+read with the verified control-text decoder). Two per-hit families
+ride the entry array:
+
+- `IDC_IMAGE_SPLAY_KEYEFFECT1..7` (codes `0x1B500074`–`0x1B50007A`,
+  rect ordinals 116–122) name `Keyeffect1..7.ojs`, Korean comment
+  "7개의 긴 바" (seven long bars): the staged lane beams, one body per
+  lane, five raw frames each (rising fill from the bottom quarter),
+  full 480-row columns 28/22/28/32/28/22/28 wide anchored at the lane
+  x (5/33/55/83/115/143/165, 0) — the lane-geometry pins used by
+  `crates/o2jam-shell/src/playing.rs` `NATIVE_LANES`.
+- `IDC_IMAGE_SPLAY_NOTECLICK1..7` (codes `0x1B500093`–`0x1B500099`,
+  rect ordinals 147–153) name `_Note_Click.ojt`, comment "폭발이미지"
+  (explosion image): the per-hit burst. The playing applier resolves
+  the stem through `%s%d_%d.ojt` (`0x64b154`, site `0x4e814e`,
+  `docs/stage-bga.md`) to `Note_Click<stage>_<variant>.ojt`;
+  `Playing1.opi` stages 36 stages × 2 variants, each a square
+  multi-frame explosion (e.g. `Note_Click1_1.ojt`: eight raw 128x128
+  frames, `Note_Click7_2.ojt`: ten 256x256 frames; all anchors `(0,0)`,
+  hundreds of distinct RGB555 colors per frame — the colorful star
+  flash). All seven entries share one body per song.
+
+Version pin: `AngelO2Jam.exe` 5,029,888 B, SHA-256 `83a04541…72c823b`
+(the header hash). Method: read-only byte walks with the same tools as
+the header (Python 3.14 byte survey). Negative findings:
+
+- The exe carries no literal `"Keyeffect"`/`"KeydownImage"` strings;
+  control-list names resolve through the `%s.ojs` stem (file
+  `0x24b0ec`). `Keyeffect.ojs` (slot 34, one static 7-lane beam body)
+  is absent from the control list — the exe never names it, so the
+  shell's `KeyEffect` release-beam binding stays a stand-in.
+- The per-skin receptor-flash bodies are real but another scene's
+  staging: format strings `KeyEffect_7Key%d_%d.ojs`,
+  `KeyEffect_Black_*_%d.ojs`, `KeyEffect_{3,7}Key_{Left,Right}%d_%d.ojs`
+  (file `0x24abdc`–`0x24ad00`) are referenced only from stage functions
+  `0x4dc750` (file `0xdc750`, NormalBG/P2PBG kit) and `0x4dcab0`, and
+  `KeyEffect_Tutorial_%d.ojs` from `0x4dd290` (Tutorial, file
+  `0xdd3e6`). They are 5-frame full-column stems, not the explosion.
+- The burst draw point is unbound: rect ordinals 147–153 sit past the
+  17 `State_Playing.bnd` rects (same shape as the long-combo plate),
+  so the exe places the explosion at the struck receptor at runtime
+  (photo: "key flashes on the line", `docs/playing-reference.md`).
+
+Binding: `playing.rs` stages `Note_Click1_1.ojt` (`HIT_BURST_SPRITE`,
+deterministic stage 1 variant 1; the exe variant is `rand()%2+1`) and
+paints one frame per `RECEPTOR_FRAME_MS` of flash age, centered on the
+receptor pad, over the beam column — the exe's file order puts the
+`NOTECLICK` entries after `KEYDOWN`. The procedural white column
+(`HIT_BURST`) stays the no-body fallback.
+
 ## Verdicts on recipe claims (`docs/opi-pattern.md`)
 
 - Step 5 pair + step 7 anchor==rect: **VERIFIED in code** — dest is

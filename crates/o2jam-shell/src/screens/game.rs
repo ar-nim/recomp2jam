@@ -249,6 +249,25 @@ impl ScreenGame {
         self.pump_sounds();
     }
 
+    /// Release a lane (key-up) at an explicit clock, judging the
+    /// armed hold tail through the verified release path. Tests use
+    /// this; live key-ups read the wall clock.
+    pub fn release_at(&mut self, lane: usize, now_ms: u64) {
+        self.playing.release_lane(lane as u8, now_ms);
+        self.pump_sounds();
+    }
+
+    /// Load a chart with long-note spans: `(lane, head ms, tail ms,
+    /// sample)` — a tail at or before its head degrades to a tap
+    /// ([`LivePlay::new_holds`]). The chart's difficulty re-applies
+    /// and the note count feeds the grade ratio, like
+    /// [`Self::load_chart`].
+    pub fn load_chart_holds(&mut self, entries: Vec<(u8, u64, u64, u32)>) {
+        self.chart_notes = u32::try_from(entries.len()).unwrap_or(u32::MAX);
+        self.playing = LivePlay::new_holds(&entries);
+        self.apply_life_difficulty();
+    }
+
     /// Screen currently shown.
     #[must_use]
     pub fn screen(&self) -> Screen {
