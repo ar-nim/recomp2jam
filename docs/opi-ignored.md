@@ -68,7 +68,8 @@ pixel. Parser sites live in `o2jam-file` (`opi.rs`, `control.rs`, `sprites.rs`,
   scenes read `.bnd` at all — the avatar dialog (`0x4da683`/`0x4da854`) and
   the network-playing builder (`0x4e4f21`/`0x4e4f57`), the loader
   `0x548450`'s only call sites — so per-scene hardcoded stems mirror the
-  exe, which reads no `BOUND` line beyond those literals.
+  exe, which reads no `BOUND` line beyond those literals. Call-site bytes
+  re-verified 2026-11-07 (relcall VA `0x4da683` → `0x548450`).
 - Unbound blocks (`CHANNEL`, splash, loading) — `paint.rs`
   `unbound_scene_placements` emits `id=""`, `code=0`, empty `Rect`; true
   layout (if any) is discarded and art pins at the native origin.

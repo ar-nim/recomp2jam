@@ -1032,3 +1032,33 @@ sweep log (`15ff02e`).
   test target, shell +12 from the side-content tests, all other
   targets unchanged, 0 failures). No lint findings. No commits, no
   pushes.** This sweep touched only `docs/playtest.md`.
+
+## Regression sweep — 2026-11-07 19:32 UTC+8 (HEAD `c5a5015`, tree clean)
+
+Live re-proof on the channel-head. Covers the fix commit landed after the
+dump-head baseline `15ff02e`: stage nothing for spriteless channel
+(`a9ade5c`), plus the sweep log (`c5a5015`).
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1157 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 7, file 149, game 92, net 337,
+  render 72, shell 381, real_art 7, scenes 22, recomp2jam 71
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, 0 warning
+  lines.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.60 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`19:32:13 +08:00`):
+  `Authorize session` → `Create room: songflow` →
+  `Get music list: [0/00] 562 music` → `Start game: [000]` →
+  `Game [000] Submit score: 2210`.
+- **Verdict: no regression — suite is green on the channel-head (1157
+  passed; +1 vs the 1156 baseline, shell +1 from the spriteless-channel
+  fix tests, all other targets unchanged, 0 failures). No lint
+  findings. No commits, no pushes.** This sweep touched only
+  `docs/playtest.md`.
