@@ -11,11 +11,12 @@ use o2jam_net::play::SetRoomMusic;
 use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
 use o2jam_render::{Frame, Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
 use o2jam_shell::avatar::{
-    bind_scene_rects, load_avi_logo, load_scene_figures, load_scene_figures_for_room,
-    load_scene_figures_for_stage, scene_block, scene_sprite_names, AvatarFigure, PlayingArtMode,
-    ScenePlacement, AVI_BLOCK, LOADING_SPRITE, RESULT_BLOCK, ROOM_BLOCK, WAITING_BLOCK,
+    bind_scene_rects, load_archive_sprite, load_avi_logo, load_scene_figures,
+    load_scene_figures_for_room, load_scene_figures_for_stage, scene_block, scene_sprite_names,
+    AvatarFigure, PlayingArtMode, ScenePlacement, AVI_BLOCK, LOADING_SPRITE, RESULT_BLOCK,
+    ROOM_BLOCK, WAITING_BLOCK,
 };
-use o2jam_shell::screens::paint::PLAYING_BLOCK;
+use o2jam_shell::screens::paint::{PLAYING_BLOCK, RESULT_NUM_FONT_SPRITE};
 use o2jam_shell::{GameLoop, MenuKey, PlaySkin, Screen, ScreenGame};
 
 use crate::connect::stack_worn_figure;
@@ -100,6 +101,10 @@ const AVATAR_ARCHIVE: &str = "O2Jam/Image/avatar.opa";
 const PLAYING_EQUIPMENT: [i32; 5] = [16, 30, 376, 383, 389];
 /// Player caption staged for the playing shot.
 const PLAYING_PLAYER: (u32, &str) = (43, "TESTER");
+/// Volume readout staged for the playing shot: the reference photo's
+/// strip shows `VOL 58%` (`docs/playing-reference.md`); the shell
+/// paints `VOL <n>` at the bound `IDC_TEXT_SPLAY_VLOLUME` rect.
+const PLAYING_VOLUME: u8 = 58;
 /// Host song pick the playing shot captions (catalog id 757, Hard
 /// chart, speed X3.5 — the paint re-syncs the song line from this).
 const PLAYING_SONG: SetRoomMusic = SetRoomMusic {
@@ -236,12 +241,29 @@ fn stage_interface_archive(game: &mut ScreenGame, archive: &[u8]) {
         (Screen::Avi, AVI_BLOCK),
         (Screen::Room, ROOM_BLOCK),
         (Screen::Waiting, WAITING_BLOCK),
-        (Screen::Result, RESULT_BLOCK),
     ] {
         if let Some((placements, figures)) = stage_bound_block(archive, &list, block, None, None) {
             game.load_scene(screen, placements, figures);
         }
     }
+    stage_result_block(game, archive, &list);
+}
+
+/// Stage the result scene: the `STATE_RESULT` block art plus the
+/// builder's digit font body (`Result_NumFont_Blue.ojs`, lifecycle
+/// §11 — the block itself names no digit font), so the scene figures
+/// carry it beside the panels and the digits paint through it. A
+/// missing body keeps the scene font-less (procedural digits stay).
+fn stage_result_block(game: &mut ScreenGame, archive: &[u8], list: &ControlList) {
+    let Some((placements, mut figures)) =
+        stage_bound_block(archive, list, RESULT_BLOCK, None, None)
+    else {
+        return;
+    };
+    if let Some(font) = load_archive_sprite(archive, RESULT_NUM_FONT_SPRITE) {
+        figures.insert(RESULT_NUM_FONT_SPRITE.to_owned(), font);
+    }
+    game.load_scene(Screen::Result, placements, figures);
 }
 
 /// Stage Playing-archive scenes (Loading gate plus Playing gauges)
@@ -322,12 +344,14 @@ fn seeded_game() -> ScreenGame {
 
 /// Stage the playing shot's mid-song scene: the player caption, the
 /// worn figure (`avatar.opa`; a missing or unstackable archive keeps
-/// no figure), and the host song pick whose caption the Playing paint
-/// re-syncs into the scene and tally strip. Staged after the loading
-/// shot so earlier shots stay untouched; never fails.
+/// no figure), the host song pick whose caption the Playing paint
+/// re-syncs into the scene and tally strip, and the volume readout
+/// (`VOL 58`, the reference photo's strip readout). Staged after the
+/// loading shot so earlier shots stay untouched; never fails.
 fn stage_playing_scene(game: &mut ScreenGame) {
     let (level, name) = PLAYING_PLAYER;
     game.set_player(level, name);
+    game.set_volume(PLAYING_VOLUME);
     if let Some(archive) = read_archive(AVATAR_ARCHIVE) {
         if let Ok(figure) = stack_worn_figure(&archive, &PLAYING_EQUIPMENT, true) {
             if !figure.is_empty() {
@@ -768,6 +792,62 @@ mod tests {
     }
 
     #[test]
+    fn playing_shot_paints_the_staged_volume_readout() {
+        // The reference photo's tally strip carries a `VOL 58%` readout;
+        // the shot stages the same volume so `playing.png` shows the
+        // shell's `VOL <n>` ink at the bound VOLUME rect (705,579).
+        let walk_to_playing = |game: &mut ScreenGame| {
+            game.lane_key(3, true);
+            for _ in 0..4 {
+                game.menu_key(MenuKey::Confirm, true);
+            }
+        };
+        let mut plain = seeded_game();
+        walk_to_playing(&mut plain);
+        let mut staged = seeded_game();
+        walk_to_playing(&mut staged);
+        stage_playing_scene(&mut staged);
+        staged.strike_at(2, 5_000);
+        let (w, h) = (
+            usize::try_from(NATIVE_WIDTH).expect("native width fits usize"),
+            usize::try_from(NATIVE_HEIGHT).expect("native height fits usize"),
+        );
+        let frame = |game: &mut ScreenGame| {
+            let mut buf = vec![0u32; w * h];
+            game.paint_at(
+                &mut Frame {
+                    buf: &mut buf,
+                    w,
+                    h,
+                },
+                5_100,
+            );
+            buf
+        };
+        // The bound VOLUME rect (705,579) 44x9 isolates the readout:
+        // nearest other strip ink is the title line (ends x 666) and
+        // the EXIT button art (starts x 751). The staged strip art is
+        // identical in both frames, so only the `VOL <n>` ink may
+        // differ inside the box.
+        const VOLUME_BOX: (usize, usize, usize, usize) = (703, 577, 751, 589);
+        let box_bytes = |buf: &[u32]| {
+            let (x0, y0, x1, y1) = VOLUME_BOX;
+            (y0..y1)
+                .flat_map(|y| (x0..x1).map(move |x| y * w + x))
+                .map(|at| buf[at])
+                .collect::<Vec<u32>>()
+        };
+        let (plain_box, staged_box) = (
+            box_bytes(&frame(&mut plain)),
+            box_bytes(&frame(&mut staged)),
+        );
+        assert_ne!(
+            plain_box, staged_box,
+            "staged volume must paint VOL ink into the strip box"
+        );
+    }
+
+    #[test]
     fn png_carries_signature_and_dimensions() {
         let rgb = vec![255u8; 2 * 3];
         let png = encode_png(2, 1, &rgb);
@@ -1069,6 +1149,120 @@ mod tests {
         assert_ne!(plain, staged, "skin changed no pixels");
         assert!(!staged.contains(&NOTE_BLUE), "procedural core under skin");
         assert!(is_varied(&to_rgb(&staged)), "skinned frame is flat");
+    }
+
+    /// Backdrop of a probe frame: no staged digit ink can equal it,
+    /// so non-backdrop probe pixels are exactly the font pixels.
+    const PROBE_BACKDROP: u32 = 0x020202;
+
+    /// Native-size probe buffer filled with [`PROBE_BACKDROP`].
+    fn native_probe() -> Vec<u32> {
+        let (w, h) = (
+            usize::try_from(NATIVE_WIDTH).expect("native width fits usize"),
+            usize::try_from(NATIVE_HEIGHT).expect("native height fits usize"),
+        );
+        vec![PROBE_BACKDROP; w * h]
+    }
+
+    /// Paint into a native-size probe buffer.
+    fn paint_probe(buf: &mut Vec<u32>, paint: impl FnOnce(&mut Frame<'_>)) {
+        paint(&mut Frame {
+            buf,
+            w: usize::try_from(NATIVE_WIDTH).expect("native width fits usize"),
+            h: usize::try_from(NATIVE_HEIGHT).expect("native height fits usize"),
+        });
+    }
+
+    /// Every font pixel of `probe` must land unchanged in `actual`
+    /// (the staged font painted there, and nothing painted over it).
+    fn assert_pixels_came_from_font(actual: &[u32], probe: &[u32], what: &str) {
+        assert_eq!(actual.len(), probe.len());
+        for (at, pixel) in probe.iter().enumerate() {
+            if *pixel != PROBE_BACKDROP {
+                assert_eq!(actual[at], *pixel, "{what} pixel {at}");
+            }
+        }
+    }
+
+    /// The scripted walk from splash into Playing, as `capture_all`
+    /// drives it.
+    fn walk_to_playing(game: &mut ScreenGame) {
+        game.lane_key(3, true);
+        for _ in 0..4 {
+            game.menu_key(MenuKey::Confirm, true);
+        }
+    }
+
+    #[test]
+    fn playing_shot_paints_the_staged_combo_digit() {
+        use o2jam_shell::playing::HighwayGeometry;
+        let Some(archive) = read_archive(PLAYING_ARCHIVE) else {
+            println!("skip: missing {PLAYING_ARCHIVE}");
+            return;
+        };
+        let Some(skin) = PlaySkin::from_archive(&archive) else {
+            panic!("playing: PlaySkin decoded no lanes");
+        };
+        let font = skin.combo_font().expect("Note_ComboNum.ojs font");
+        // Judgement-word combo anchor on the native canvas: centered
+        // on the staged lane span, 24 rows above the judgement line
+        // (LivePlay::paint_judgement_word).
+        let geom = HighwayGeometry::centered(
+            usize::try_from(NATIVE_WIDTH).expect("native width fits usize"),
+            usize::try_from(NATIVE_HEIGHT).expect("native height fits usize"),
+        );
+        let span = geom.highway_rect();
+        let center_x = span.x + i32::try_from(span.w).expect("span width fits i32") / 2;
+        let row = geom.line_y - 24;
+        // The exact staged digits the shot paints (one Cool strike:
+        // combo 1, judged 100 ms before the paint lands).
+        let mut expected = native_probe();
+        paint_probe(&mut expected, |frame| {
+            font.paint_centered(frame, center_x, row, 1)
+        });
+        // The playing shot's frame at the same instant.
+        let mut game = seeded_game();
+        walk_to_playing(&mut game);
+        game.strike_at(2, 5_000);
+        let mut actual = native_probe();
+        paint_probe(&mut actual, |frame| game.paint_at(frame, 5_100));
+        assert_eq!(game.screen(), Screen::Playing);
+        assert_pixels_came_from_font(&actual, &expected, "combo digit");
+    }
+
+    #[test]
+    fn result_shot_paints_digits_through_the_staged_numfont() {
+        use o2jam_shell::playing::{DigitFont, SkinSprite};
+        let Some(archive) = read_archive(INTERFACE_ARCHIVE) else {
+            println!("skip: missing {INTERFACE_ARCHIVE}");
+            return;
+        };
+        let figure = load_archive_sprite(&archive, RESULT_NUM_FONT_SPRITE)
+            .expect("the builder's digit font body decodes");
+        assert_eq!(figure.len(), 10, "ten stored digit frames 0..=9");
+        let font = DigitFont::from_frames(
+            (0..10usize)
+                .filter_map(|index| figure.layer(index))
+                .map(|layer| SkinSprite::new(layer.image.clone(), layer.colorkey))
+                .collect(),
+        )
+        .expect("ten frames bind one font");
+        // The shot's result readouts at their fixed anchors (16,16)
+        // and (16,32): one Cool strike leaves 200 points, combo 1.
+        let mut expected = native_probe();
+        paint_probe(&mut expected, |frame| {
+            font.paint(frame, 16, 16, 200);
+            font.paint(frame, 16, 32, 1);
+        });
+        // The walk spends the chart into Result with the font staged
+        // beside the block art (stage_result_block).
+        let mut game = seeded_game();
+        walk_to_playing(&mut game);
+        game.strike_at(2, 5_000);
+        let mut actual = native_probe();
+        paint_probe(&mut actual, |frame| game.paint_at(frame, 7_000));
+        assert_eq!(game.screen(), Screen::Result);
+        assert_pixels_came_from_font(&actual, &expected, "result digits");
     }
 
     #[test]
