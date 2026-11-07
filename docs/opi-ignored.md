@@ -18,7 +18,9 @@ pixel. Parser sites live in `o2jam-file` (`opi.rs`, `control.rs`, `sprites.rs`,
   `from_sprite55` → `dx/dy`) does use them.
 - Non-raw `Sprite55` images — `avatar.rs` `from_sprite55` filters on
   `is_raw_rgb555`; `playing.rs` `lane_sprite` returns `None` otherwise.
-  Compressed / outlier `.oji` frames vanish instead of decoding.
+  Compressed / outlier `.oji` frames vanish instead of decoding. The exe
+  fails them identically: every format compare in `.text` accepts only
+  `0x555`/`0x555a` (claims C9).
 - `Sprite55Strided` (`Note_Combo4/5/6.ojt`, `sprites.rs`
   `parse_sprite55_strided`, `frames_per_image`, `frame_data`) — never called
   in shell; combo glow animation paints as one static frame or not at all.
@@ -62,7 +64,11 @@ pixel. Parser sites live in `o2jam-file` (`opi.rs`, `control.rs`, `sprites.rs`,
   unloaded) are hardcoded in `avatar.rs` `PLAYING_SUBSET_FIRST_ENTRY` instead.
 - `ControlBlock.bound_file` — shell hardcodes `ROOM_BIND_FILE`,
   `PLAYING_BIND_FILE`, etc. (`avatar.rs`, `paint.rs`, `side.rs`) instead of
-  reading the block's `BOUND "..."` line.
+  reading the block's `BOUND "..."` line. Exe side *(offset-only)*: only two
+  scenes read `.bnd` at all — the avatar dialog (`0x4da683`/`0x4da854`) and
+  the network-playing builder (`0x4e4f21`/`0x4e4f57`), the loader
+  `0x548450`'s only call sites — so per-scene hardcoded stems mirror the
+  exe, which reads no `BOUND` line beyond those literals.
 - Unbound blocks (`CHANNEL`, splash, loading) — `paint.rs`
   `unbound_scene_placements` emits `id=""`, `code=0`, empty `Rect`; true
   layout (if any) is discarded and art pins at the native origin.
@@ -74,7 +80,9 @@ pixel. Parser sites live in `o2jam-file` (`opi.rs`, `control.rs`, `sprites.rs`,
   (wrapper VA `0x48b09c`, gated on the block stem byte, into the pairing
   getter `0x548640`), and an out-of-range ordinal gets an all-zero rect
   instead of a silent drop; the full 4-dword rect reaches the control setter
-  `0x50dc90`.
+  `0x50dc90`. SET children bind only when their masked key `code & 0xFF000`
+  matches the set key (VA `0x48b0e1`, compare `0x48b122`); unmatched set
+  children stay unbound.
 - Synthetic origins — `paint.rs` `seat_origin`, `song_panel_origin`,
   `room_detail_fallback_origin`, result digits at `(16,16)` / verdict at
   `(16,48)` ignore `Dialog_SelectMusic.bnd` / `State_Waiting.bnd` rects; only
