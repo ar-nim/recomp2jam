@@ -139,6 +139,14 @@ cash-point plus `SyncItemPurchaseWallets` music/item cash). Every
 amount starts `None`; the TOTAL GEM bar and wallet rows render `"--"`
 until the matching words arrive, so no value shows without data.
 
+`FreePassState` surfaces the decoded 5026 body on the same payment
+screen: the `SyncFreePassResult` verdict plus the pass kind and
+expiry seconds when the body carries a snapshot (`UserFreePassInfo`
+`free_pass_type`, `expiry_secs`). Every field starts `None`; a
+result-only body clears kind/expiry back to unknown, and unknown
+result codes render `"--"` (never guessed). The tail stays
+exe-ignored: nothing beyond these decoded fields reaches the screen.
+
 ## Tests (`crates/o2jam-net/src/message.rs`)
 
 Bare-frame vectors for 5015/5016/5017/5025/5028; single-word

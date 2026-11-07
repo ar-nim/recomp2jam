@@ -15,8 +15,10 @@ use super::super::screen::Screen;
 use o2jam_file::OJN_LEVEL_COUNT;
 use o2jam_file::{AvatarItemRow, AvatarItemTable, Bnd, ControlBlock, ControlList, OjnListEntry};
 use o2jam_net::play::{MusicListAnswer, SetRoomMusic};
-use o2jam_net::shop::{SyncItemPurchasePrefix, SyncItemPurchaseWallets};
-use o2jam_net::wallet::SyncCashPointResponse;
+use o2jam_net::shop::{SellItemResponse, SyncItemPurchasePrefix, SyncItemPurchaseWallets};
+use o2jam_net::wallet::{
+    FreePassType, SyncCashPointResponse, SyncFreePassResponse, SyncFreePassResult,
+};
 use o2jam_net::{CharacterInfo, Difficulty, GameSpeed, GameStatsUpdate};
 use o2jam_render::{pack_xrgb, Frame, Rect};
 
@@ -1013,6 +1015,15 @@ impl WalletState {
         self.cash_point = Some(response.cash_point);
     }
 
+    /// Fold a 5003 sell refund into the wallet: the success gem word
+    /// shares the gem slot the 5029/5001 words update. Error verdicts
+    /// carry no gem word, so the balance stays untouched.
+    pub fn apply_sell_response(&mut self, response: &SellItemResponse) {
+        if let Some(gem) = response.gem {
+            self.gem = Some(gem);
+        }
+    }
+
     /// Fold the 5001 purchase prefix words into the wallet.
     pub fn apply_purchase_prefix(&mut self, prefix: &SyncItemPurchasePrefix) {
         self.gem = Some(prefix.gem);
@@ -1099,6 +1110,113 @@ pub fn wallet_row_caption(row: &WalletRow) -> String {
 #[must_use]
 pub fn wallet_row_captions(state: &WalletState) -> Vec<String> {
     state.rows().iter().map(wallet_row_caption).collect()
+}
+
+/// Live free-pass status for the payment display, fed only by the
+/// decoded 5026 body (`SyncFreePassResponse`): the result code plus
+/// the pass kind and expiry seconds when the body carries a snapshot.
+/// Every field starts unknown so the screen never shows a value
+/// without data; nothing beyond these decoded fields reaches the
+/// screen (the tail stays exe-ignored per `docs/gifts.md`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FreePassState {
+    /// Decoded result code (`None`: no 5026 yet, or an unknown code).
+    pub result: Option<SyncFreePassResult>,
+    /// Active pass kind (only when the body carries a snapshot).
+    pub kind: Option<FreePassType>,
+    /// Pass seconds remaining (only when the body carries a snapshot).
+    pub expiry_secs: Option<i32>,
+}
+
+impl FreePassState {
+    /// Fold a 5026 response into the display state. A result-only body
+    /// carries no snapshot, so kind and expiry clear back to unknown.
+    pub fn apply_free_pass_response(&mut self, response: &SyncFreePassResponse) {
+        self.result = SyncFreePassResult::from_u32(response.result_code);
+        let snapshot = response.info.as_ref();
+        self.kind = snapshot.map(|info| info.free_pass_type);
+        self.expiry_secs = snapshot.map(|info| info.expiry_secs);
+    }
+}
+
+/// Free-pass result row label.
+pub const FREE_PASS_RESULT_LABEL: &str = "FREE PASS RESULT";
+/// Free-pass kind row label.
+pub const FREE_PASS_KIND_LABEL: &str = "FREE PASS";
+/// Free-pass expiry row label.
+pub const FREE_PASS_EXPIRY_LABEL: &str = "EXPIRY";
+/// Free-pass rows behind the payment display, in order.
+pub const FREE_PASS_ROW_COUNT: usize = 3;
+
+/// Display name for one decoded pass kind: every known
+/// `FreePassType` flag names itself, never a wire guess.
+#[must_use]
+pub const fn free_pass_kind_label(kind: FreePassType) -> &'static str {
+    match kind {
+        FreePassType::None => "NONE",
+        FreePassType::AllMusic => "ALL MUSIC",
+        FreePassType::UnusedFreePlay1 => "UNUSED",
+        FreePassType::NewMusic => "NEW MUSIC",
+        FreePassType::FreePlay => "FREE PLAY",
+        FreePassType::FreePlayAlt1 => "FREE PLAY",
+        FreePassType::Top100 => "TOP 100",
+        FreePassType::PremiumTime => "PREMIUM TIME",
+        FreePassType::UnusedFreePlay2 => "UNUSED",
+        FreePassType::Top100Extended => "TOP 100 EXTENDED",
+        FreePassType::FreePlayAlt2 => "FREE PLAY",
+        FreePassType::UnusedFreePlay3 => "UNUSED",
+        FreePassType::FreePlayAlt3 => "FREE PLAY",
+    }
+}
+
+/// Format one decoded result: known verdicts name themselves,
+/// unknown codes stay at the placeholder (never guessed).
+#[must_use]
+pub fn free_pass_result_caption(result: Option<SyncFreePassResult>) -> String {
+    match result {
+        Some(SyncFreePassResult::Success) => "SUCCESS".to_owned(),
+        Some(SyncFreePassResult::Unknown) => "UNKNOWN".to_owned(),
+        None => UNKNOWN_AMOUNT.to_owned(),
+    }
+}
+
+/// Format one decoded pass kind, placeholder until a snapshot arrives.
+#[must_use]
+pub fn free_pass_kind_caption(kind: Option<FreePassType>) -> String {
+    kind.map_or_else(
+        || UNKNOWN_AMOUNT.to_owned(),
+        |pass| free_pass_kind_label(pass).to_owned(),
+    )
+}
+
+/// Format one decoded expiry: seconds digits from wire data,
+/// placeholder otherwise (reuses the wallet unknown rule).
+#[must_use]
+pub fn free_pass_expiry_caption(expiry_secs: Option<i32>) -> String {
+    wallet_amount_caption(expiry_secs)
+}
+
+/// One free-pass row caption (`FREE PASS PREMIUM TIME`); unknown
+/// fields stay at the placeholder.
+#[must_use]
+pub fn free_pass_row_caption(label: &str, caption: &str) -> String {
+    format!("{label} {caption}")
+}
+
+/// Every free-pass row caption in display order: result, kind, expiry.
+#[must_use]
+pub fn free_pass_row_captions(state: &FreePassState) -> Vec<String> {
+    vec![
+        free_pass_row_caption(
+            FREE_PASS_RESULT_LABEL,
+            &free_pass_result_caption(state.result),
+        ),
+        free_pass_row_caption(FREE_PASS_KIND_LABEL, &free_pass_kind_caption(state.kind)),
+        free_pass_row_caption(
+            FREE_PASS_EXPIRY_LABEL,
+            &free_pass_expiry_caption(state.expiry_secs),
+        ),
+    ]
 }
 
 /// Tutorial backdrop figure from the archive (`Playing1.opi` art for
@@ -1981,6 +2099,37 @@ mod side_tests {
     }
 
     #[test]
+    fn wallet_applies_sell_success_gem_word() {
+        let mut state = WalletState::default();
+        state.apply_cash_point(&SyncCashPointResponse {
+            gem: 1200,
+            cash_point: 30,
+        });
+        state.apply_sell_response(&SellItemResponse {
+            result: 0,
+            gem: Some(1500),
+        });
+        assert_eq!(state.gem, Some(1500));
+        assert_eq!(state.cash_point, Some(30));
+        assert_eq!(state.point, None);
+    }
+
+    #[test]
+    fn wallet_keeps_gem_on_sell_error() {
+        let mut state = WalletState::default();
+        state.apply_cash_point(&SyncCashPointResponse {
+            gem: 1200,
+            cash_point: 30,
+        });
+        state.apply_sell_response(&SellItemResponse {
+            result: -96,
+            gem: None,
+        });
+        assert_eq!(state.gem, Some(1200));
+        assert_eq!(state.cash_point, Some(30));
+    }
+
+    #[test]
     fn wallet_applies_purchase_prefix_words() {
         let mut state = WalletState::default();
         state.apply_purchase_prefix(&SyncItemPurchasePrefix {
@@ -2081,6 +2230,137 @@ mod side_tests {
         assert_eq!(wallet_row_caption(&row), "GEM --");
         let funded = WalletRow::named(GEM_LABEL, Some(1200));
         assert_eq!(wallet_row_caption(&funded), "GEM 1200");
+    }
+
+    fn side_free_pass_info(kind: FreePassType, expiry_secs: i32) -> SyncFreePassResponse {
+        use o2jam_net::wallet::UserFreePassInfo;
+        SyncFreePassResponse {
+            result_code: 0,
+            info: Some(UserFreePassInfo {
+                gem: 1,
+                point: 2,
+                o2_cash: 3,
+                music_cash: 4,
+                item_cash: 5,
+                free_pass_type: kind,
+                cash_point: 6,
+                duration: String::new(),
+                expiry_secs,
+            }),
+        }
+    }
+
+    #[test]
+    fn free_pass_starts_unknown_without_wire_data() {
+        let state = FreePassState::default();
+        assert_eq!(state.result, None);
+        assert_eq!(state.kind, None);
+        assert_eq!(state.expiry_secs, None);
+        assert_eq!(
+            free_pass_row_captions(&state),
+            vec![
+                "FREE PASS RESULT --".to_owned(),
+                "FREE PASS --".to_owned(),
+                "EXPIRY --".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn free_pass_applies_result_only_body_without_snapshot() {
+        let mut state = FreePassState::default();
+        state.apply_free_pass_response(&SyncFreePassResponse {
+            result_code: 0,
+            info: None,
+        });
+        assert_eq!(state.result, Some(SyncFreePassResult::Success));
+        assert_eq!(state.kind, None);
+        assert_eq!(state.expiry_secs, None);
+        assert_eq!(
+            free_pass_row_captions(&state),
+            vec![
+                "FREE PASS RESULT SUCCESS".to_owned(),
+                "FREE PASS --".to_owned(),
+                "EXPIRY --".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn free_pass_applies_snapshot_kind_and_expiry() {
+        let mut state = FreePassState::default();
+        state.apply_free_pass_response(&side_free_pass_info(FreePassType::PremiumTime, 3600));
+        assert_eq!(state.result, Some(SyncFreePassResult::Success));
+        assert_eq!(state.kind, Some(FreePassType::PremiumTime));
+        assert_eq!(state.expiry_secs, Some(3600));
+        assert_eq!(
+            free_pass_row_captions(&state),
+            vec![
+                "FREE PASS RESULT SUCCESS".to_owned(),
+                "FREE PASS PREMIUM TIME".to_owned(),
+                "EXPIRY 3600".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn free_pass_clears_snapshot_on_result_only_follow_up() {
+        let mut state = FreePassState::default();
+        state.apply_free_pass_response(&side_free_pass_info(FreePassType::Top100, 60));
+        state.apply_free_pass_response(&SyncFreePassResponse {
+            result_code: 0,
+            info: None,
+        });
+        assert_eq!(state.kind, None);
+        assert_eq!(state.expiry_secs, None);
+        assert_eq!(free_pass_kind_caption(state.kind), "--");
+        assert_eq!(free_pass_expiry_caption(state.expiry_secs), "--");
+    }
+
+    #[test]
+    fn free_pass_renders_placeholder_on_unknown_result_code() {
+        let mut state = FreePassState::default();
+        state.apply_free_pass_response(&SyncFreePassResponse {
+            result_code: 7,
+            info: None,
+        });
+        assert_eq!(state.result, None);
+        assert_eq!(free_pass_result_caption(state.result), "--");
+        assert_eq!(
+            free_pass_row_captions(&state)[0],
+            "FREE PASS RESULT --".to_owned()
+        );
+    }
+
+    #[test]
+    fn free_pass_names_unknown_verdict_without_guessing() {
+        let mut state = FreePassState::default();
+        state.apply_free_pass_response(&SyncFreePassResponse {
+            result_code: 0xFFFF_FFA2,
+            info: None,
+        });
+        assert_eq!(state.result, Some(SyncFreePassResult::Unknown));
+        assert_eq!(free_pass_result_caption(state.result), "UNKNOWN");
+    }
+
+    #[test]
+    fn free_pass_kind_labels_name_every_flag() {
+        assert_eq!(free_pass_kind_label(FreePassType::None), "NONE");
+        assert_eq!(free_pass_kind_label(FreePassType::AllMusic), "ALL MUSIC");
+        assert_eq!(free_pass_kind_label(FreePassType::NewMusic), "NEW MUSIC");
+        assert_eq!(
+            free_pass_kind_label(FreePassType::Top100Extended),
+            "TOP 100 EXTENDED"
+        );
+        assert_eq!(
+            free_pass_kind_label(FreePassType::PremiumTime),
+            "PREMIUM TIME"
+        );
+        assert_eq!(free_pass_kind_caption(None), "--");
+        assert_eq!(
+            free_pass_kind_caption(Some(FreePassType::Top100)),
+            "TOP 100"
+        );
     }
 
     #[test]

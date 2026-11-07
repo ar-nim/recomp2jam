@@ -88,7 +88,9 @@ default — they are C→S requests with no S→C handler.)
   gem slot). So: result always, gem iff result `0` (Memoryer's
   `SellItemResponse`: `Invalid` + nullable `Gem`). The
   shop-context case (VA `0x4a5c76`, file `0xa5c76`) treats `0`
-  as success and `0xffffffa0` as failure.
+  as success and `0xffffffa0` as failure. The success gem word feeds
+  the same shared gem slot (`WalletState::apply_sell_response` folds
+  it; error verdicts carry no word, so the balance stays untouched).
 - index 2 (5005) → handler VA `0x560cf0` (file `0x160cf0`;
   stub VA `0x558853`, file `0x158853`): reads the result word
   via the fixed-size reader (`0x555d20`), returns at once unless
