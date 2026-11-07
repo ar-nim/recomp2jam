@@ -2,8 +2,9 @@
 //!
 //! Layouts mirror Memoryer's `Source/Memoryer` field orders
 //! (clean-room C#); each type notes its exe anchor, and
-//! Memoryer-only shapes stay labeled corroboration — the exe's
-//! per-opcode handlers in this family are still open.
+//! Memoryer-only shapes stay labeled corroboration — most exe
+//! per-opcode handlers in this family are still open, except the
+//! 4003 arena echo (see [`RoomArenaEcho`]).
 
 use super::error::Error;
 use super::message::WireMessage;
@@ -178,6 +179,53 @@ impl WireMessage for SetRoomArena {
         Ok(Self::new(i32::from_le_bytes([
             body[0], body[1], body[2], body[3],
         ])))
+    }
+}
+
+/// `RoomArenaEcho` 4003: server echo of the room stage.
+///
+/// Same one-word little-endian `i32` body as [`SetRoomArena`]: the
+/// stage number with the picker's high-word flag. Exe-verified
+/// handler at VA `0x55f3c0` (file `0x15f3c0`, 48 B): it reads exactly
+/// 4 bytes straight into the arena global `0x7789dc` through the
+/// packet-reader helper (`0x555d20`, size push at file `0x15f3c3`,
+/// dest push at file `0x15f3c5`), then forwards
+/// (`0x12`, 4003, the stored word, 0) into the UI event queue
+/// (`0x478d50`, opcode push at file `0x15f3da`). No member slot, no
+/// result code, no slot guard — the member-broadcast and
+/// result-code shapes are ruled out. Reached from the central
+/// dispatcher (file `0x158080`) through the 4003-base subtract slot:
+/// table index 0 → case at file `0x158655` → the only image-wide
+/// relative call into the handler (site file `0x158659`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RoomArenaEcho {
+    /// Room arena word (stage + high-word flag).
+    pub arena: i32,
+}
+
+impl RoomArenaEcho {
+    /// Echo builder: stage word for command 4003.
+    #[must_use]
+    pub fn new(arena: i32) -> Self {
+        Self { arena }
+    }
+
+    /// Receive handler: store the word (handler `0x55f3c0` keeps it
+    /// in global `0x7789dc`, read size 4 at file `0x15f3c3`).
+    pub fn apply_to_store(&self, arena_word: &mut i32) {
+        *arena_word = self.arena;
+    }
+}
+
+impl WireMessage for RoomArenaEcho {
+    const COMMAND: u16 = 4003;
+
+    fn encode_body(&self) -> Vec<u8> {
+        SetRoomArena::new(self.arena).encode_body()
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        SetRoomArena::decode_body(body).map(|request| Self::new(request.arena))
     }
 }
 
@@ -749,6 +797,77 @@ mod song_sync_tests {
         assert_eq!(
             SetRoomArena::decode_body(&body),
             Err(Error::TrailingBytes(1))
+        );
+    }
+
+    #[test]
+    fn room_arena_echo_command_is_4003() {
+        assert_eq!(RoomArenaEcho::COMMAND, 4003);
+    }
+
+    #[test]
+    fn room_arena_echo_encodes_plain_stage() {
+        let echo = RoomArenaEcho::new(7);
+        assert_eq!(echo.encode_body(), vec![0x07, 0x00, 0x00, 0x00]);
+        let frame = decode_frame(&echo.encode()).unwrap();
+        assert_eq!(frame.id, 4003);
+        assert_eq!(RoomArenaEcho::decode_frame(&frame), Ok(echo));
+    }
+
+    #[test]
+    fn room_arena_echo_round_trips_high_word_flag() {
+        let echo = RoomArenaEcho::new(i32::MIN + 4);
+        assert_eq!(echo.encode_body(), vec![0x04, 0x00, 0x00, 0x80]);
+        let frame = decode_frame(&echo.encode()).unwrap();
+        assert_eq!(RoomArenaEcho::decode_frame(&frame), Ok(echo));
+    }
+
+    #[test]
+    fn room_arena_echo_shares_the_request_word() {
+        for word in [1, 7, 36, i32::MIN + 4] {
+            assert_eq!(
+                RoomArenaEcho::new(word).encode_body(),
+                SetRoomArena::new(word).encode_body()
+            );
+        }
+    }
+
+    #[test]
+    fn room_arena_echo_applies_to_store() {
+        let mut store = 0;
+        RoomArenaEcho::new(9).apply_to_store(&mut store);
+        assert_eq!(store, 9);
+    }
+
+    #[test]
+    fn room_arena_echo_rejects_short_body() {
+        assert_eq!(
+            RoomArenaEcho::decode_body(&[0x07, 0x00, 0x00]),
+            Err(Error::TruncatedMessage { need: 4, have: 3 })
+        );
+    }
+
+    #[test]
+    fn room_arena_echo_rejects_trailing_bytes() {
+        let mut body = RoomArenaEcho::new(7).encode_body();
+        body.push(0x00);
+        assert_eq!(
+            RoomArenaEcho::decode_body(&body),
+            Err(Error::TrailingBytes(1))
+        );
+    }
+
+    #[test]
+    fn room_arena_echo_rejects_foreign_frame() {
+        let request_frame = decode_frame(&SetRoomArena::new(7).encode()).unwrap();
+        assert_eq!(
+            RoomArenaEcho::decode_frame(&request_frame),
+            Err(Error::UnknownCommand(4002))
+        );
+        let echo_frame = decode_frame(&RoomArenaEcho::new(7).encode()).unwrap();
+        assert_eq!(
+            SetRoomArena::decode_frame(&echo_frame),
+            Err(Error::UnknownCommand(4003))
         );
     }
 
