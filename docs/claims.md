@@ -25,9 +25,9 @@ pin for all EXE rows: `AngelO2Jam.exe` 5,029,888 B, SHA-256
 
 | Level | Claims |
 |---|---|
-| EXE | 87 |
-| DATA | 31 |
-| ASSUMED | 21 |
+| EXE | 92 |
+| DATA | 27 |
+| ASSUMED | 20 |
 | Total | 139 |
 
 ## The pairing-rule family (known mistake + siblings)
@@ -83,7 +83,7 @@ index (all-zero rect, slot 0, default arm).
 | A8 | Avatar-dialog rects are screen-absolute; dialog origin subtracted at apply | EXE | `0x4DA630`, ev `9e526b62…` | R | |
 | A9 | All 27 dialogs share the screen-absolute origin rule | ASSUMED | `0x4ED650` traced *(offset-only)* and is NOT the shared dialog applier: a single-block scene builder (stem lookup `0x4795a0` ← `0x4ed689`, into-record loader `0x547DB0` ← `0x4ed6a3`, synthetic entries `0x1B200001`/`0x1B300006` through factory `0x48B2D0` ← `0x4ed6e9` and wrapper `0x48A620` ← `0x4ed729`, 4-dword rect getter `0x50DC60` reading control `+0x3c` ← `0x4ed760`) — the 27-dialog origin rule stays untraced (`ui-loader.md` OPEN 2–3) | R | |
 | A10 | Single-image sprites land at their rect: dest = view position + per-frame sprite anchor, byte-exact == rect (3 probes); the rect is unread at blit | EXE | anchor math `0x41DF80` (anchor words at frame-record `+0`/`+2`, stride `0x14`), ev `7418d033…`; equality probed on `Dialog_Information`/`Info_OK`/`Playing_Exit` | R | |
-| A11 | Raw frames: `size == w*h*2`, little-endian RGB555 | DATA | 63,742 images across archives | R | |
+| A11 | Raw frames: `size == w*h*2`, little-endian RGB555 | DATA | 63,742 images across archives; negative *(offset-only)*: no `0x555` immediate in `.text` (C5) and the shipped image decoders are only `CDXImageBase`/`BMP`/`JPG` (RTTI VAs `0x67d584`–`0x67d5d8`) | R | |
 | A12 | Colorkey `0x0000`/`0x7D5F` pixels are transparent | DATA | 3,444/5,787 bodies + byte-exact probes; honest limit: the draw path never compares the key on CPU — consumption is device-side (OPEN, `ui-draw.md` Colorkey) | R | |
 | A13 | Sprite lookup is ASCII-case-insensitive (3 case-only stems) | EXE | *(offset-only)* archive slot walk `0x40A9C0` (0x98-stride records, count at `+0x110`) compares each name via the CRT case-fold compare — fast path folds A–Z by `+0x20` at `0x5F33F7`, called through `0x5F34FF` ← lookup `0x4797D0` ← open `0x4795E0`; stems: `opi-pattern.md` 6 | R | |
 | A14 | `O2_SBS_VERT`/`O2_SBS_HORZ` with numeric args are scrollbar params, not files | EXE | strings `0x24c190` | R | |
@@ -106,10 +106,10 @@ index (all-zero rect, slot 0, default arm).
 | A31 | Jam bars at `(23,536)`/`(570,536)` 206x16; peer bars 46x8 | DATA | staged `Jamgauge` shell anchors; exe side builds the gauge shells as synthetic `0x11c` entries through the factory (loader VA `0x4e7850`: zeroed `0x11c` allocs, vtable words `0x64b258`/`0x64b244`), so placement still resolves through bind rects — the pixel numbers stay data-side | R | |
 | A32 | Judgement/combo/jam digit anchors, 600 ms fade, score digits at fixed pixels | ASSUMED | `bnd-audit.md` 31; rects unbound | R | |
 | A33 | Linear scroll, 2000 ms lookahead | ASSUMED | `bnd-audit.md` 32; scroll shape unobserved | R+G | |
-| A34 | Curtain bands are integer fifths, clipped to a frame box | ASSUMED | `bnd-audit.md` 20/30; exe clip math open | R | |
+| A34 | Curtain bands are integer fifths, clipped to a frame box | ASSUMED | `bnd-audit.md` 20/30; exe clip math open — the static visibility table VA `0x680038` (file `0x280038`) holds integer runs (`3, 33, 63, 124, 115, 143, 165` then `3, 33, 57, 87, 124, 154, 178`), not fifths; semantics untraced | R | |
 | A35 | Procedural receptor pad 5 px, note 8 px + cap, burst 24 px | ASSUMED | `bnd-audit.md` 6/7/29 | R | |
 | A36 | Micro-font metrics + hardcoded placeholder labels (`CHANNEL`, `M{id}`, …) | ASSUMED | `dialog-strings.md` §2/§5: captions missing by design; exe label sources are sprite art + runtime strings (`Lv.%d:%s` fill, song-select fonts), so our placeholders replace runtime text, not archived captions | R | |
-| A37 | 47 `.ojs` bodies are raw JPEG album art (`FF D8 … FF D9`) | DATA | `is_jpeg_body` 47/47 | R | unused in shell |
+| A37 | 47 `.ojs` bodies are raw JPEG album art (`FF D8 … FF D9`) | DATA | `is_jpeg_body` 47/47; the exe ships a JPEG decoder (RTTI `CDXImageJPG` VA `0x67d5d8`, IJG strings VA `0x75f9fc`, *(offset-only)*), so the bodies are consumable in-exe | R | unused in shell |
 | A38 | Present letterboxes 4:3, never stretches | ASSUMED | `playing-reference.md` photo | R | |
 | A39 | CDX/DirectDraw blit path: DirectDraw init, CDX surface blits, D3D texture upload | EXE | import verified `DDRAW.dll!DirectDrawCreateEx`, IAT VA `0x63F01C` (descriptor file `0x27AF2C`, *(offset-only)*); consumer chain pinned in `ui-draw.md`: display init `0x413030`, `CDXSurface::Draw` `0x42B4D0` ev `867ac248…`, `DrawClip` `0x42B5E0` ev `85764b28…`, page dispatch `0x42B450` ev `08a33fe4…`, page upload `0x42A580`, D3D variant `0x423390`; colorkey-consuming device call + `Flip` site stay open | R | |
 
@@ -132,17 +132,17 @@ index (all-zero rect, slot 0, default arm).
 | B13 | Hold-active flag at `+0x9f8`, written gated on payload hold-bit tests | EXE | writes `0x17617b`/`0x176c78`/`0x17726b`; tests `0x1766cb`… | G | |
 | B14 | Chart payload bit 25/26 = hold head/span-tail semantics | EXE | bit-25 head test `(payload & 0x3000000) == 0x2000000` at VAs `0x576105` (second judge, ev `3d707204…`), `0x576c42` (judge keyup, ev `14992eb2…`), `0x5771f5` (auto judge, ev `d6802fde…`); bit-26 span mark `and $0x4000000` at `0x573061` (parser fix-up `0x572f50`, *(offset-only)*); paired tails carry bit 24 and are excluded from walk candidacy (`0x576837`, ev `14992eb2…`) | G | |
 | B15 | Kinds 2–8 are the seven lane channels, lane = `map[kind − 2]` (identity ⇒ `kind − 2`); shipped-chart usage (`{0,2,3}`/all seven) stays data-side | EXE | loader kind gate VA `0x572732`–`0x57275a` (`kind ≥ 2 ∧ kind < [+0x82c]+2`; width 7 ⇒ 2..8; ev `8659c2d0…`); lane index read from the u16 map at `0x572791` (map filled by lane setup `0x571c30` via the out-array call `0x571e42`, ev `41695a9b…`), lane list `+0x42c + idx*0xC` at `0x572853`; kinds ≥ 0x22 fail the load (`0x5723b9`) | G | |
-| B16 | Note value = `(flags << 16) \| (sample_id + 1)`; ids land in the `.ojm` set (one dangling) | DATA | 12/13 new-format charts walk | G | |
+| B16 | Note value = `(flags << 16) \| (sample_id + 1)`; ids land in the `.ojm` set (one dangling) | EXE | the loader stores each lane-event dword verbatim into the record (VA `0x572828`–`0x57282f`, insert `0x5728c3`, *(offset-only)*); BGM channels decode `value & 0xFFF` as the sample id (`0x572a64`, *(offset-only)*); playable strikes consume `(payload & 0xFFF) − 1` plus `0x3E8` on bit 26 (B17, `0x1703f0`) and hold semantics read bits 24–26 (B14); the id-membership numbers stay the data walk (12/13 charts, one dangling) | G | |
 | B17 | Strike slot = `(payload & 0xFFF) − 1`, plus `0x3E8` on bit 26 | EXE | `0x1703f0` | G | |
 | B18 | Timing: 192 ticks/beat, ms via `240000 / BPM`, per-event float rounding | EXE | loader `0x571d60` (ev `8659c2d0…`): doubles `192.0` (VA `0x64b540`, × at `0x57221f`) and `240000.0` (VA `0x64dc80`, ÷ at `0x5720dc`/`0x572225`/`0x57233a`/`0x5725b8`); 0xC0 subdivision bounds `0x572273`/`0x572411`/`0x572444`; round-half-up `+0.5` (constant VA `0x644888`, site `0x572491`) into truncating `fistp` under control-word `0xC00` (`0x57211b`–`0x572132` et al.) | G | |
 | B19 | Kind-0 single float = beats per measure (a stored zero dword defaults to 1.0) | EXE | loader branch `0x572453` (`test kind`), float read `0x572462`–`0x572475` with `fld1` default `0x57247d`, measure tick length = beats × 192 (+0.5 round) stored `0x572485`–`0x5724d6`; ev `8659c2d0…`; the lone o2ma769 `0.75` observation stays corroboration | G | |
 | B20 | Kind-1 per-subdivision floats = BPM changes applied mid-measure | EXE | loader branch `0x5724e2` (`cmp $0x1`, ev `8659c2d0…`): count floats copied `0x5724f2`–`0x57250b`, each non-zero float applied to the BPM word `0x57259f`–`0x5725a6`, tick ms recomputed `0x5725b2`–`0x5725be`, BPM events inserted via `0x579f00` (`0x572639`); the o2ma765/769/770 cross-checks stay corroboration | G | |
-| B21 | Kind-1 per-subdivision `0.0` = keep; `999.0` = terminator | ASSUMED | exe half *(offset-only)*: the `0.0`-keep skip is pinned (compare vs `0.0f` VA `0x643fa8`, skip branch `0x572592`); the `999.0` terminator is refuted as an exe mechanism — the run is bounded by the u16 count (≤ 192, `0x572411`) with a synthetic `0.0` appended (`fldz` `0x57251a`), and no 999 test exists in the parse (the sole `999.0f` constant VA `0x657ca8` is read only at `0x5d5f1a`, outside the loader); a literal 999.0 would load as BPM 999 | G | |
+| B21 | Kind-1 per-subdivision `0.0` = keep; the run is count-bounded, not `999.0`-terminated | EXE | *(offset-only, re-verified from bytes)* kind-1 branch `0x5724e2`–`0x5724ec`; floats copied `0x5724f2`–`0x57250b`, synthetic `0.0` appended `fldz` `0x57251a`; loop bounded by the u16 count `0x572573`; `0.0`-keep = `fcomp` vs the `0.0f` constant VA `0x643fa8` (`0x572587`) with the skip branch `0x572592`, else BPM store + tick-ms recompute `0x572598`–`0x5725be`; the `999.0` terminator is refuted — the sole `999.0f` reader is `0x5d5f1a` (outside the loader), so a literal 999.0 loads as BPM 999 | G | |
 | B22 | Kinds 9+ are autoplay BGM channels, same value encoding | DATA | 13-chart sample-id membership; exe structure *(offset-only)*: kinds ≥ 9 (capped `< 0x22`, `0x5723b9`) take the BGM branch `0x5728e9`, channel = `kind − 9` (`0x572913`–`0x57291d`, max tracked at `+0x838` `0x572931`–`0x572946`), per-channel lists `+0x504 + ch*0xC` (`0x5729bc`–`0x5729cc`), value words carry bit-26 + 12-bit sample id (`0x572a4f`–`0x572a6a`); autoplay consumption of these lists stays data-side | G | |
 | B23 | Lane shuffle: mirror = full reversal; byte 2 = N-lane `rand()%width`; byte 0 = 3-lane `rand()%3`; rebuilt per plain measure + per hold span | EXE | `0x171c30`/`0x173940`/`0x173a10`/`0x174330` dossiers | G | |
 | B24 | Item-text "whole chart vs every measure" distinction is false: both rebuild per measure | EXE | planner `0x174330` behavior | G | |
 | B25 | Which ring item selects which modifier byte | ASSUMED | room-side translation open | G | |
-| B26 | Curtain geometry: hidden top 80%, sudden bottom 20%, dark middle 20%, reverse-dark 40+40 | ASSUMED | item text; exe clip math open | R+G | |
+| B26 | Curtain geometry: hidden top 80%, sudden bottom 20%, dark middle 20%, reverse-dark 40+40 | ASSUMED | item text; exe clip math open — the visibility table VA `0x680038` integer runs (A34) do not encode the fifths directly | R+G | |
 | B27 | Team buttons `0x16201004..0xB` → teams 0..7; press sends 4004 then 4008(0) when ungated | EXE | `0xb22d0`/`0x48c810`/`0x556680`; ev `2c8d3964…` set | G | |
 | B28 | Team scoring is server-side; client renders winner art only | EXE | no team-total arithmetic; `0x24b014`/`0x24a35c` | G | |
 | B29 | 4007 team-change handler refreshes the 8-slot UI, `< 8` guarded | EXE | `0x15f470`, ev `1ff324b4…` | G | |
@@ -165,21 +165,21 @@ index (all-zero rect, slot 0, default arm).
 
 | ID | Claim | Level | Anchor / evidence | Drives | Sibling |
 |---|---|---|---|---|---|
-| C1 | OPI layout: 16 B header, blobs from +16, trailing 152 B table | DATA | 3-archive walk; exe slot-table reader *(offset-only)*: count × 0x98 records (imul VA `0x40a9ff`, read stride push `$0x98` `0x40aa39`) with count at archive object `+0x110` — header/blob layout stays data-side | R | |
-| C2 | Slice bodies by `size`, never `reserved_size`; slack is stale | DATA | stride tiling + nonzero slack | R | |
-| C3 | Kind-0 slots are deleted-entry reservations, never bodies | DATA | free-slot survey | — | |
+| C1 | OPI layout: 16 B header, blobs from +16, trailing 152 B table | DATA | 3-archive walk; exe slot-table reader *(offset-only)*: count × 0x98 records (imul VA `0x40a9ff`, read stride push `$0x98` `0x40aa39`) with count at archive object `+0x110`, table seeked from EOF by `−count × 0x98` (`push` SEEK_END + `neg` VA `0x40a9fa`–`0x40aa14`) — header/blob layout stays data-side | R | |
+| C2 | Slice bodies by `size`, never `reserved_size`; slack is stale | DATA | stride tiling + nonzero slack; exe opens entries as streams *(offset-only)*: body open `0x479790` selects one of three `0x220`-stride open slots at archive `+0x19c` into `0x40a8a0`, chunked `ReadFile` wrapper `0x4069b0` (IAT `0x63f2e0`); the size-field read that bounds the slice stays unlocated | R | |
+| C3 | Kind-0 slots are deleted-entry reservations, never bodies | EXE | the name→slot find `0x40a9c0` walks the `0x98` records and accepts only records whose first dword == 1 (`cmp` VA `0x40aa64`–`0x40aa6a`, *(offset-only)*); any other slot ends the search unfound, so kind-0 entries never resolve a body; the deleted-reservation reading of those slots stays the data survey | — | |
 | C4 | Archive inventories: 1596/633/7149 slots; 9231 sprite bodies; class table | DATA | body-class cross-check | R | |
-| C5 | Sprite-55 envelope: `tag + 0x0555 + count + colorkey`, exact accounting | DATA | 9231/9231 bodies | R | |
-| C6 | `.bnd` envelope: magic `FFFFFFFF`, `6 + 16*count` | DATA | 53/53 sections | R | |
+| C5 | Sprite-55 envelope: `tag + 0x0555 + count + colorkey`, exact accounting | DATA | 9231/9231 bodies; negative *(offset-only)*: no `0x555` immediate anywhere in `.text` — no exe-side marker test located | R | |
+| C6 | `.bnd` envelope: magic `FFFFFFFF`, `6 + 16*count` | EXE | loader `0x548450` (called per stem, e.g. `Avatar_Info.bnd` VA `0x4da847`, `State_Playing_network.bnd` `0x4e5dce`, *(offset-only)*): body opened `0x548501`–`0x548519`, magic dword tested vs `0xFFFFFFFF` at `0x548532` (mismatch → fail), u16 count read `0x548562`–`0x548571`, `count × 0x10` allocated `0x5485a9`–`0x5485c1` and read `0x5485da`–`0x5485f1`; the 53/53 section walk stays data-side | R | |
 | C7 | `.oja` envelope `tag + 0x555A + count`; frame codec TBD | DATA | 3/3 envelopes; pixels unknown | R | codec ASSUMED |
 | C8 | Strided combo atlases: ×4 stride, 4 glow frames per record | DATA | `Note_Combo4/5/6.ojt` exact 196,736 B | R | |
 | C9 | Outlier `.oji`/compressed pixel codecs | ASSUMED | parsed, never decoded | R | |
 | C10 | ControlList/word-list text is CP949 | DATA | decode rejection study | R | |
 | C11 | Old OJN 300-byte header map, field-complete | DATA | byte-exact reads off `Tutorial.ojn` | G | |
 | C12 | New-format decrypt: byte-reversal + 3-key period XOR from the tail | EXE | `0x12180`, ev `011eab73…`; round-trip test | G | |
-| C13 | Per-level segmentation: counts +64/+68/+72, slice ends +284..+296 | DATA | 14/14 walk-exact; exe side *(offset-only)*: the loader bounds each difficulty's event walk by the count table game `+0x738[difficulty]` (read VA `0x571ee9`, difficulty selector `+0x830` at `0x571eb8`, ev `8659c2d0…`) and the validator enforces the 300-byte header (`cmpl $0x12c` VA `0x5718cb`, ev `66e60d16…`); the header-word copy site into `+0x738` stays unlocated | G | |
+| C13 | Per-level segmentation: counts +64/+68/+72, slice ends +284..+296 | DATA | 14/14 walk-exact; exe side *(offset-only)*: the loader bounds each difficulty's event walk by the count table game `+0x738[difficulty]` (read VA `0x571ee9`, difficulty selector `+0x830` at `0x571eb8`, ev `8659c2d0…`) and the validator enforces the 300-byte header (`cmpl $0x12c` VA `0x5718cb`, ev `66e60d16…`); the header-word copy site into `+0x738` stays unlocated — whole-image sweep finds no other `+0x738` displacement, so the counts must arrive via a bulk header copy | G | |
 | C14 | OJNList: 562 x 300 B records + middle + patch sections, exact sum | DATA | section-sum check | G | |
-| C15 | Mid-region tables 1–5 shapes decoded | DATA | 7-part exact split | G | |
+| C15 | Mid-region tables 1–5 shapes decoded | DATA | 7-part exact split; exe reads the file by path *(offset-only)*: `%s\\Image\\OJNList.dat` built at VA `0x47a03a` and opened (IAT `0x63f2c4`), archive fallback `0x478c90` sized `0xffe` at `0x47a066`–`0x47a078`; the mid-table readers stay untraced | G | |
 | C16 | Table 5 category (1..5) = wheel bucket; `song+0x194` → `entry+0x4`; STEP2 buttons 1..5 = GOLD..SILVER | EXE | jump tables `0xbfa5c`/`0x93409`; builder pin `0x4422e` | R | |
 | C17 | Patch index + `;HD` section shape (561 + truncated 562nd) | DATA | layout walk | — | |
 | C18 | Key-name table = 65 VA pointers to CP949 filter names | EXE | 15 code refs, `0x448c2` et al. | R | corrects `xTd` guess |
@@ -187,7 +187,7 @@ index (all-zero rect, slot 0, default arm).
 | C20 | STEP2 banner off-by-one: entry-50 row has 7 names, `실버` unreachable | EXE | pinned mismatch; interpretation open | R | |
 | C21 | Doublable-initial arms (ㄲㄸㅃㅆㅉ) pair base jamo from indexed rows | EXE | `0x44962`…`0x44ce6` | R | |
 | C22 | GameSpeed 0–11 labels `X 0.5`…`X R` from the label chain | EXE | `0xc4137`…`0xc4371`, ev `f2fa3e80…` | R | |
-| C23 | OJM M30/OMC/OJM containers: entry walks + OggS/EOS to EOF | DATA | 21-file walk | G | |
+| C23 | OJM M30/OMC/OJM containers: entry walks + OggS/EOS to EOF | DATA | 21-file walk; exe per-entry dispatch *(offset-only)*: descriptor flag bits at `+0x110` gate the body transforms per entry (`&4`/`&8`/`&0x10` tests `0x54f11c`–`0x54f17d`, calls `0x54f14b`/`0x54f16f`/`0x54f193`); container envelope and OggS/EOS tail stay data-side | G | |
 | C24 | M30 sample-id roles: drums 0–12, music tracks 980–991 | DATA | entry names + chart refs | G | |
 | C25 | Loader descriptor from per-song version float: 2.9→17-way, 2.7→16-way, ≤2.4→plain | EXE | `0x54e930` flag bits | G | |
 | C26 | 16/17-way interleave tables are exact permutations | EXE | the exe consumes both tables as u16 permutation lookups: VA `0x67f1d0` read at `0x54f8ac` (de-interleave fn `0x54f860`), VA `0x67f3d0` read at `0x54f972` (fn `0x54f920`), beside the C27 transforms *(offset-only)*; the permutation-exactness numbers stay the data walk (file `0x27f1d0`/`0x27f3d0`) | G | |
@@ -195,12 +195,12 @@ index (all-zero rect, slot 0, default arm).
 | C28 | Id-less banks: new-variant entries register at slot 0 (last wins); only M30 carries ids | EXE | `strncpy`-only fetch, load/play path survey | G | **S4** context |
 | C29 | OJM selection is id-keyed end to end; no order lookup exists (id-less entries all land at slot 0); `resolve_order_slot` is ours, not exe behavior | EXE | *(offset-only)* `0x1703f0` chain `0x170418`–`0x170431`, loader `0x173625`/`0x17364a`, fetch `0x14ee4a`/`0x14ef21` | G | corrects S4 |
 | C30 | DialogBGM odd-stripe byte-swap is an encoder-side file anomaly; no exe compensates | DATA | correlation study + EXE negative sweep | G | |
-| C31 | `JamTable.dat`: 54 u16 thresholds 25..4800; consumer unknown | DATA | envelope only | — | |
-| C32 | `Itemdata_Korea.dat` 1541 rows / `SetInfodata.ojs` 209 rows mapped | DATA | walks land exact at EOF | R | |
+| C31 | `JamTable.dat`: 54 u16 thresholds 25..4800; consumer unknown | DATA | envelope only; negative *(offset-only)*: zero `JamTable` string hits in the whole image (strings sweep) — the exe never opens it by name, so it is likely dead data | — | |
+| C32 | `Itemdata_Korea.dat` 1541 rows / `SetInfodata.ojs` 209 rows mapped | EXE | *(offset-only)* both files open through the Image archive (`Itemdata_Korea.dat` push VA `0x52d095`; `SetInfodata.ojs` `0x52fa54`/`0x52fa6a`): each body leads with a u32 count (read via `0x406af0`), the exe reserves that many 388 B (`0x184`) / 80 B (`0x50`) rows (`0x532a30` at `0x52d101`–`0x52d139` into `+0x4`; `0x532fc0` at `0x52faf6`–`0x52fb2b` into `+0x16a4`), then parses rows by sequential field reads `0x4069b0` (`0x52d1cf`…, `0x52fbc1`…); the 1541/209 row counts stay the data walks | R | |
 | C33 | Avatar sprite-slot parity: even male, odd female, fallback, slot order kept | ASSUMED | pattern heuristic; exe part logic open | R | |
 | C34 | Difficulty mapping: +20 lo=Easy/hi=Normal, +24=Hard (ascending triple) | EXE | builder read `0x44268` ev `b5c3094a…`; order pinned by switch `0x170fa2`, ev `feebe490…` | G | corrects S5 |
 | C35 | `+24` completes the Hard-level triple | EXE | same 3-slot read `0x44268` ev `b5c3094a…` (`u16[2]` = rec +28 = header +24); switch `0x170fa2` ev `feebe490…` | G | corrects S5 |
-| C36 | `+12` genre bits feed the song-select bitmask (`song+0x15c`) | ASSUMED | bitmask-shaped tests; transfer unpinned | R | |
+| C36 | `+12` genre bits feed the song-select bitmask (`song+0x15c`) | ASSUMED | bitmask-shaped tests; transfer unpinned — negative *(offset-only)*: no `+0x15c`/`+0x194` displacement anywhere in the builder region VA `0x44000`–`0x45000` | R | |
 | C37 | First embedded JPEG bounds the last level slice on every chart | DATA | 14/14 `end == jpeg0` | G | |
 
 ## D. Net (lighter — offsets already pinned in `net-protocol.md`/`relay.md`)

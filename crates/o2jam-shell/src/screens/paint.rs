@@ -29,7 +29,7 @@ use super::super::avatar::{
     scene_sprite_names, AvatarFigure, ScenePlacement, AVI_BLOCK, AVI_LOGO_SPRITE, CHANNEL_BLOCK,
     LOADING_SPRITE, RESULT_BLOCK, ROOM_BLOCK, WAITING_BLOCK,
 };
-use super::super::playing::{HighwayGeometry, PlayingView};
+use super::super::playing::{DigitFont, HighwayGeometry, PlayingView, SkinSprite};
 use super::super::screen::Screen;
 use o2jam_file::ControlList;
 use o2jam_game::RoomTeams;
@@ -1148,6 +1148,27 @@ pub const RESULT_WINLOSE_SPRITE: &str = "Result_WinLose.ojs";
 /// Winner banner from `STATE_PLAYING` (file `0x24b014`), surfaced on
 /// the result scene as the same rank-1 verdict.
 pub const WINNER_IMAGE_SPRITE: &str = "Winner_image.ojs";
+/// Staged result digit font: the builder's `Result_NumFont_Blue.ojs`
+/// body (art block file `0x24a338`–`0x24a38d`, lifecycle §11; the
+/// `STATE_RESULT` block itself names no digit font — verified decl
+/// `0x07`). Ten stored digit frames 0..=9, all raw RGB555 at (0,0)
+/// anchors (frames 17x13 … 19x14). The scene figures carry the body;
+/// [`result_digit_font`] binds it through the shared [`DigitFont`].
+pub const RESULT_NUM_FONT_SPRITE: &str = "Result_NumFont_Blue.ojs";
+
+/// The result digit font staged among `figures` (`None` without the
+/// body or with fewer than ten decoded frames — a compressed frame
+/// would misalign the digit index, so the font stays out and the
+/// procedural digits keep painting, like the PlaySkin fonts).
+#[must_use]
+fn result_digit_font(figures: &HashMap<String, AvatarFigure>) -> Option<DigitFont> {
+    let figure = figures.get(RESULT_NUM_FONT_SPRITE)?;
+    let frames = (0..10usize)
+        .filter_map(|index| figure.layer(index))
+        .map(|layer| SkinSprite::new(layer.image.clone(), layer.colorkey))
+        .collect();
+    DigitFont::from_frames(frames)
+}
 
 /// Sprites the result builder `FUN_004c2390` (file `0xc2390`) mounts,
 /// in load order: top, bottom, then the win/lose verdict.
@@ -1210,26 +1231,64 @@ fn paint_battle_verdict(frame: &mut Frame<'_>, verdict: Option<BattleVerdict>) {
     draw_text(frame, 16, 48, verdict_text(known), verdict_ink(known));
 }
 
+/// Readout column of both result digit rows (frame pixels; the
+/// staged digits anchor here exactly like the procedural glyphs).
+const RESULT_DIGITS_X: i32 = 16;
+/// Row of the points readout.
+const RESULT_POINTS_ROW: i32 = 16;
+/// Row of the max-combo readout.
+const RESULT_COMBO_ROW: i32 = 32;
+/// Procedural points ink (replaced by the staged font when bound).
+const RESULT_POINTS_INK: u32 = pack_xrgb(0xFF, 0xFF, 0xFF);
+/// Procedural max-combo ink (replaced by the staged font when bound).
+const RESULT_COMBO_INK: u32 = pack_xrgb(0xFF, 0xFF, 0x40);
+
+/// One result digit readout: the staged [`RESULT_NUM_FONT_SPRITE`]
+/// font when bound, procedural glyphs otherwise (same origin and
+/// anchor, so the fallback is a pure glyph swap).
+fn paint_result_digits(
+    frame: &mut Frame<'_>,
+    digits: Option<&DigitFont>,
+    row: i32,
+    value: u32,
+    procedural_ink: u32,
+) {
+    match digits {
+        Some(font) => font.paint(frame, RESULT_DIGITS_X, row, value),
+        None => {
+            draw_number(frame, RESULT_DIGITS_X, row, value, procedural_ink);
+        }
+    }
+}
+
 /// Score, best combo, verdict, and avatar figure (no background
 /// fill: shared by the flat fallback and the art scene). A dark
-/// scrim sits behind the digits so they read over staged art.
-/// `STATE_RESULT` names no number font (verified decl `0x07`: the
-/// block carries art, tap fields, and buttons but no digit places),
-/// so the live score stays procedural UI ink painted last, after
-/// the staged panels. Grade letters stay out (mapping OPEN).
+/// scrim sits behind the digits so they read over staged art. Both
+/// digit readouts paint through the staged [`RESULT_NUM_FONT_SPRITE`]
+/// font when the scene carries it; `STATE_RESULT` itself names no
+/// number font (verified decl `0x07`), so without the staged body the
+/// score stays procedural UI ink painted last, after the staged
+/// panels. Grade letters stay out (mapping OPEN).
 fn paint_result_content(
     frame: &mut Frame<'_>,
     avatar: Option<&AvatarFigure>,
     score: &o2jam_game::Score,
     verdict: Option<BattleVerdict>,
+    digits: Option<&DigitFont>,
 ) {
     paint_digits_scrim(frame);
     if let Some(figure) = avatar {
         figure.paint(frame, frame.w as i32 / 2 - 32, frame.h as i32 / 2 - 32);
     }
     let points = u32::try_from(score.points).unwrap_or(u32::MAX);
-    draw_number(frame, 16, 16, points, pack_xrgb(0xFF, 0xFF, 0xFF));
-    draw_number(frame, 16, 32, score.max_combo, pack_xrgb(0xFF, 0xFF, 0x40));
+    paint_result_digits(frame, digits, RESULT_POINTS_ROW, points, RESULT_POINTS_INK);
+    paint_result_digits(
+        frame,
+        digits,
+        RESULT_COMBO_ROW,
+        score.max_combo,
+        RESULT_COMBO_INK,
+    );
     paint_battle_verdict(frame, verdict);
 }
 
@@ -1265,13 +1324,15 @@ pub(crate) fn paint_result(
         pack_xrgb(0x10, 0x10, 0x08),
         pack_xrgb(0xC0, 0xA0, 0x20),
     );
-    paint_result_content(frame, avatar, score, verdict);
+    paint_result_content(frame, avatar, score, verdict, None);
 }
 
 /// Paint staged result art (`StateResult_Top/Bottom.ojs` plus
 /// `Result_WinLose.ojs` via `FUN_004c2390`, file `0xc2390`) with the
 /// avatar figure, live digits, and the `Winner_image.ojs` /
-/// `Result_WinLose.ojs` verdict on top.
+/// `Result_WinLose.ojs` verdict on top. The digits paint through the
+/// staged [`RESULT_NUM_FONT_SPRITE`] font when the scene figures
+/// carry it (see [`result_digit_font`]).
 pub fn paint_result_scene(
     frame: &mut Frame<'_>,
     avatar: Option<&AvatarFigure>,
@@ -1280,7 +1341,8 @@ pub fn paint_result_scene(
     verdict: Option<BattleVerdict>,
 ) {
     art.paint_backdrop(frame, Screen::Result);
-    paint_result_content(frame, avatar, score, verdict);
+    let digits = result_digit_font(&art.figures);
+    paint_result_content(frame, avatar, score, verdict, digits.as_ref());
 }
 
 /// Score digits anchor top-left (`LivePlay` draws points at
@@ -2347,6 +2409,96 @@ mod paint_tests {
         );
         assert_eq!(RESULT_WINLOSE_SPRITE, "Result_WinLose.ojs");
         assert_eq!(WINNER_IMAGE_SPRITE, "Winner_image.ojs");
+        assert_eq!(RESULT_NUM_FONT_SPRITE, "Result_NumFont_Blue.ojs");
+    }
+
+    /// One digit-font figure: digit `d`'s layer is a solid 2x2 frame
+    /// of `0x0001 << (d + 1)` (black colorkey), so every digit paints
+    /// a distinct ink at the readout origin.
+    fn font_figure(digits: usize) -> AvatarFigure {
+        let mut figure = AvatarFigure::default();
+        for digit in 0..digits.min(10) {
+            figure.push_layer(FigureLayer {
+                image: Rgb555Image {
+                    w: 2,
+                    h: 2,
+                    words: vec![0x0001u16 << (digit + 1); 4],
+                },
+                dx: 0,
+                dy: 0,
+                colorkey: 0x0000,
+            });
+        }
+        figure
+    }
+
+    /// Solid ink of synthetic digit `d` (see [`font_figure`]).
+    fn digit_ink(digit: u8) -> u32 {
+        let (r, g, b) = o2jam_render::expand_rgb555(0x0001u16 << (digit + 1));
+        pack_xrgb(r, g, b)
+    }
+
+    /// Readout score for the result-digit tests: 200 points, best
+    /// combo 7 (both open with a distinct synthetic digit).
+    fn readout_score() -> o2jam_game::Score {
+        o2jam_game::Score {
+            points: 200,
+            max_combo: 7,
+            ..o2jam_game::Score::default()
+        }
+    }
+
+    /// Paint one result scene over a 64x48 frame.
+    fn painted_result_scene(art: &SceneArt) -> Vec<u32> {
+        let mut buf = vec![0u32; 64 * 48];
+        paint_result_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 48,
+            },
+            None,
+            &readout_score(),
+            art,
+            None,
+        );
+        buf
+    }
+
+    #[test]
+    fn result_scene_paints_digits_through_the_staged_numfont() {
+        // Ten synthetic digit frames: both readouts open with their
+        // first staged digit (points "200" digit 2, combo "7" digit
+        // 7), not the procedural inks.
+        let art = SceneArt {
+            placements: Vec::new(),
+            figures: HashMap::from([(RESULT_NUM_FONT_SPRITE.to_owned(), font_figure(10))]),
+        };
+        let buf = painted_result_scene(&art);
+        assert_eq!(buf[16 * 64 + 16], digit_ink(2));
+        assert_eq!(buf[32 * 64 + 16], digit_ink(7));
+    }
+
+    #[test]
+    fn result_scene_keeps_procedural_digits_without_the_numfont() {
+        // No font body staged: the procedural inks keep the same
+        // anchors (points white, combo amber).
+        let buf = painted_result_scene(&SceneArt::default());
+        assert_eq!(buf[16 * 64 + 16], pack_xrgb(0xFF, 0xFF, 0xFF));
+        assert_eq!(buf[32 * 64 + 16], pack_xrgb(0xFF, 0xFF, 0x40));
+    }
+
+    #[test]
+    fn result_scene_rejects_an_incomplete_numfont() {
+        // Nine frames never bind (a compressed frame would misalign
+        // the digit index): the readouts stay procedural.
+        let art = SceneArt {
+            placements: Vec::new(),
+            figures: HashMap::from([(RESULT_NUM_FONT_SPRITE.to_owned(), font_figure(9))]),
+        };
+        let buf = painted_result_scene(&art);
+        assert_eq!(buf[16 * 64 + 16], pack_xrgb(0xFF, 0xFF, 0xFF));
+        assert_eq!(buf[32 * 64 + 16], pack_xrgb(0xFF, 0xFF, 0x40));
     }
 
     #[test]
