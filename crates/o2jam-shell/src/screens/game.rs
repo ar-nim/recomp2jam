@@ -642,6 +642,18 @@ impl ScreenGame {
     /// Waiting: staged art behind the live seats, flat card fallback,
     /// then the staged song-select dialog: art, its structure overlay
     /// (catalog-driven table), and the chosen-song panel.
+    ///
+    /// Recorded negatives (no source to feed, so nothing is wired): the
+    /// chat box (`EDIT_SWAIT_CHAT 0x16300014` → rect 19, `LIST_SWAIT_CHAT
+    /// 0x1680002B` → rect 42, row template `TEXT_SWAIT_CHAT 0x1640003C`)
+    /// has no text source — waiting-room chat rides 3011/3012/3013
+    /// (opcode numbers only), `o2jam-net` decodes none, and `JoinedRoom`
+    /// carries no chat field. The `Random` `?` cards name no per-card
+    /// entries (big card on `RANDMAP 0x1650004F` → rect 78, small cards
+    /// on spriteless `EFFECT_1/2` rects 68/69); `SelectMusic_Random*.ojs`
+    /// bodies belong to `DAILOG_SELECTMUSIC` filter buttons. Both stay
+    /// staged art: `paint_waiting_staged` never paints those rects (see
+    /// the `paint_waiting_music` docs and the chat/cards absence tests).
     fn paint_waiting(&self, frame: &mut Frame<'_>) {
         match (self.scene_art(Screen::Waiting), &self.waiting) {
             (Some(art), Some(room)) => paint_waiting_scene(frame, room, art),

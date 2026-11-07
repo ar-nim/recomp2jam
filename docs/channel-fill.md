@@ -118,43 +118,69 @@ missing-archive fallbacks).
    (`o2jam-render`), `present_clears_only_bars_over_stale_pixels`
    (`o2jam-shell`). The exact `Flip` call site stays open
    (claims-render OPEN 1).
-2. Sprite-less control paint — TRACED but UNPINNED (stays OPEN):
+2. Sprite-less control paint — PART-PINNED, caption source OPEN:
    `STATE_CHANNEL` stages 49 art-less controls (self `0x12000000` gates
    out at `0x48A134`, ev `9e526b62…`; bare `BOUND` skips the bind so
    rects are all-zero, but Draw ignores rects — anchor-based per
    ui-draw/claims-render). Factory `0x48B2D0` (mask `0x48B30A`,
    ev `1be2d784…`) covers all five channel second-bytes
    (`0x10` image ×1, `0x20` button ×9, `0x01` toggle ×10,
-   `0x50` number/image-family ×20, `0x40` text ×10). Class→Draw
-   join is offset-only (vftable slot 4 = base+`0x10`, COL→TD names
-   at file `0x27e3a8`–`0x27e8e0`, no new dossier): `CCImageBox`
-   `0x50a890` (vft `0x64bf54`, ev `cc0942ba…`), `CCButton`
-   `0x4f60c0` (vft `0x64b95c`), `CCTextBox` `0x50f280` (vft
-   `0x64c1b4`), `CCListBox` `0x50bbe0`, scroll `0x50e320`, plus
-   `CCBtn*` Draws (`0x52a0e0`/`0x526ed0`/`0x520f70`/`0x523990`/
-   `0x524430`/`0x5297a0`/`0x51ebe0`). Sprite-driven Draws call
-   stagers `0x42fc70`/`0x42fc10`, rect getter `0x548640`, frame
-   `0x42f5a0`, with zero GDI imports in range — art-less means
-   zero pixels. No default box: `Rectangle` (IAT `0x63f058`,
-   sites file `0x114daa`/`0x115274`/`0x1158f9`/`0x11625b`) and
-   the `CreateSolidBrush`/`DrawTextA` cluster sit only in the
+   `0x50` number/image-family ×20, `0x40` text ×10), and the
+   `0x01`/`0x50` arms are now ctor-pinned by offset-only call-site
+   join (no new dossier): toggle group `0x010000`, sub
+   `code & 0xF000 == 0x1000` (compare file `0x8b6f7` → branch VA
+   `0x48b797` → call file `0x8b7ba) → ctor `0x51e350` (alloc
+   `0x70`); sibling `0x2000` (compare file `0x8b707` → VA
+   `0x48b7ec` → call file `0x8b80f`) → ctor `0x524dd0` (alloc
+   `0x70`); number `0x50` (compare `0x500000` file `0x8b3c6` →
+   call file `0x8b577`) → ctor `0x50a820` (alloc `0x60`); text
+   `0x40` (compare `0x400000` file `0x8b3b6` → call file
+   `0x8b522`) → ctor `0x50f160` (alloc `0x198`), whose body
+   stores vftable `0x64c1b4` (files `0x10f174`/`0x10f26c`);
+   image `0x100000` → `0x4f5d00`, button `0x200000` → `0x4f6040`.
+   Class→Draw join is offset-only (vftable slot 4 = base+`0x10`,
+   COL→TD names at file `0x27e3a8`–`0x27e8e0`, no new dossier):
+   `CCImageBox` `0x50a890` (vft `0x64bf54`, ev `cc0942ba…`),
+   `CCButton` `0x4f60c0` (vft `0x64b95c`), `CCTextBox` slot 4
+   `0x50f280` (vft `0x64c1b4`), `CCListBox` `0x50bbe0`, scroll
+   `0x50e320`, plus `CCBtn*` Draws (`0x52a0e0`/`0x526ed0`/
+   `0x520f70`/`0x523990`/`0x524430`/`0x5297a0`/`0x51ebe0`).
+   Sprite-driven Draws call stagers `0x42fc70`/`0x42fc10`, rect
+   getter `0x548640`, frame `0x42f5a0`, with zero GDI imports in
+   range — art-less means zero pixels. No default box: `Rectangle`
+   (IAT `0x63f058`, sites file
+   `0x114daa`/`0x115274`/`0x1158f9`/`0x11625b`) and the
+   `CreateSolidBrush`/`DrawTextA` cluster sit only in the
    tooltip/message region (file `0x1137b0`–`0x1167b0` around
    `CCToolTip::Draw` `0x5137b0`), unreachable from the channel
-   arms. Text Draw exists — `CCTextBox::Draw` `0x50f280` calls
-   font helpers `0x42c360`/`0x42c650`/`0x42c730`/`0x42c8a0`
-   (owners of the `TextOutA` IAT `0x63f074` sites file
-   `0x2c532`/`0x2c7df`/`0x2c854` and `DrawTextA` IAT `0x63f468`
-   sites file `0x2c6ec`+) — but the caption source for the 10
-   `TITLE` entries (`0x1240001E`–27) is unpinned: the entry-`+0x04`
-   string consumer is untraced (ui-loader OPEN 4), and the
-   grade-string precedent (zero refs, claims B4) shows exe text can
-   be unbound. Render loop `0x5dec30` (ev `ff581cfa…`) plus the
-   child-array paint (`0x50dea0`/`0x50ddf0` → vtable `+0x24`,
-   claims-render verdict 3) draw stored controls only. So:
+   arms. Text paint corrected: slot 4 `0x50f280` (file `0x10f280`,
+   96 B to next prologue `0x10f2e0`) is a stager, not the painter
+   — it calls base `0x50da40` (file `0x10f292`), `0x409c30`
+   (`0x10f2b1`), and font-create `0x41c860` (`0x10f2c4`, format
+   VA `0x64407c`), tests control `+0x4c`, stores control `+0x164`,
+   with no entry-`+0x04` read and no `0x42cxxx` call. The real
+   painter is slot 9 (vft+`0x24`) `0x50f320` (file `0x10f320`): it
+   calls all four font helpers `0x42c8a0` (file `0x10f452`),
+   `0x42c730` (`0x10f49d`), `0x42c360` (`0x10f4d2`), `0x42c650`
+   (`0x10f509`) — the owners of the `TextOutA` IAT `0x63f074`
+   sites file `0x2c532`/`0x2c7df`/`0x2c854` and `DrawTextA` IAT
+   `0x63f468` sites file `0x2c6ec`+ — over the field set control
+   `+0x164`/`+0x174`/`+0x178`/`+0x180`/`+0x184` (reads files
+   `0x10f415`–`0x10f4f4`). The caption source for the 10 `TITLE`
+   entries (`0x1240001E`–27) stays unpinned: the factory/wrapper
+   tail passes the entry only to slot-4 Draw, and neither the ctor
+   (no entry argument) nor Draw copies entry `+0x04` — the
+   `+0x164`-family fields are written at runtime elsewhere, and
+   ControlList carries no caption literals by design (dialog-strings
+   §2); the grade-string precedent (zero refs, claims B4) shows exe
+   text can be unbound. Render loop `0x5dec30` (ev `ff581cfa…`)
+   plus the child-array paint (`0x50dea0`/`0x50ddf0` → vtable
+   `+0x24`, claims-render verdict 3) draw stored controls only. So:
    imageless image/button/toggle/number paint nothing; TEXT paints
-   its bound runtime string or nothing — unpinned. To pin: trace
-   the wrapper first half (entry `+0x04` → control text field) and
-   the string-field read inside `0x50f280`.
+   its stored runtime field or nothing — source OPEN. To pin: trace
+   the runtime writer of the `+0x164`-family fields (candidates: base
+   Draw `0x50da40` entry path, slot-1 `0x50f2e0`, or dialog/net
+   writers per dialog-strings §3 channel bridge).
 3. Dialog host mounting the code-fetched select bar
    (`DIALOG_CHANNEL_INFO`/`CDChannelInfo` index path; `0x4ED650` excluded
    as the fetch site but its own behavior is unread — ui-loader OPEN 2).
@@ -178,3 +204,4 @@ missing-archive fallbacks).
    walk fraction and the `TITLE - ARTIST` caption are live. Test:
    `loading_bar_geometry_stays_open_placeholder` pins the placeholder
    formula so any future grounding must update it with evidence.
+

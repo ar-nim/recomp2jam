@@ -1327,8 +1327,23 @@ fn paint_waiting_skills(frame: &mut Frame<'_>, room: &JoinedRoom, placements: &[
 /// Selected-song label at the `MUSICNAME` rect (rect 22, top bar):
 /// song id only (the song table lives server-side, as in the lobby).
 /// The `COVERMUSIC` button, the select arrow, the `Random` cards, the
-/// chat box, and BACK stay staged art: no chat history, card data, or
-/// navigation state rides the joined-room snapshot.
+/// chat box, and BACK stay staged art — recorded negatives, not gaps:
+///
+/// - Chat: `EDIT_SWAIT_CHAT` (`0x16300014` → rect 19) plus
+///   `LIST_SWAIT_CHAT` (`0x1680002B` → rect 42) and the `TEXT_SWAIT_CHAT`
+///   row template (`0x1640003C`, `SET 0x00031000`) name the history view,
+///   but its text source is untraced: waiting-room chat rides
+///   3011/3012/3013 (opcode numbers only, `docs/net-protocol.md`),
+///   `o2jam-net` decodes none of them, and `JoinedRoom` carries no chat
+///   field — so the snapshot feeds nothing and the painter invents no
+///   history.
+/// - Random cards: the 117-entry `STATE_WAITING` block names no per-card
+///   entries; the big `?` card sits on `RANDMAP` (`0x1650004F` → rect 78)
+///   while the small `?` cards sit on the spriteless `EFFECT_1/2` rects
+///   (68/69) — caption and frames baked into the staged backdrop.
+///   `SelectMusic_Random*.ojs` bodies belong to `DAILOG_SELECTMUSIC`
+///   filter buttons, not to waiting cards, and no wire struct carries
+///   card picks — so the painter stages art only.
 fn paint_waiting_music(frame: &mut Frame<'_>, room: &JoinedRoom, placements: &[ScenePlacement]) {
     if let Some((x, y)) = waiting_bnd_origin(placements, WAITING_MUSICNAME_ID, frame) {
         paint_room_detail_line(
@@ -4919,6 +4934,55 @@ mod paint_tests {
         );
         assert_eq!(buf[13 * 800 + 569], scrim_color());
         assert!(buf.contains(&art_title_ink()));
+    }
+
+    #[test]
+    fn waiting_chat_box_paints_no_history_without_a_source() {
+        // Chat controls (`EDIT_SWAIT_CHAT` rect 19 `(20,563,460,583)`,
+        // `LIST_SWAIT_CHAT` rect 42 `(24,455,511,553)`) name the history
+        // view, but no text source reaches the painter: waiting-room chat
+        // rides 3011/3012/3013 (opcode numbers only), `o2jam-net` decodes
+        // none, and `JoinedRoom` carries no chat field — so staged chat
+        // rects stay untouched instead of invented.
+        let placements = vec![
+            waiting_probe("IDC_LIST_SWAIT_CHAT", None, (24, 455, 511, 553)),
+            waiting_probe("IDC_EDIT_SWAIT_CHAT", None, (20, 563, 460, 583)),
+        ];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_staged(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &champion_room(),
+            &placements,
+        );
+        assert!(buf.iter().all(|pixel| *pixel == 0));
+    }
+
+    #[test]
+    fn waiting_random_cards_carry_no_card_data() {
+        // The `?` cards name no per-card data: the big card sits on
+        // `RANDMAP` (rect 78 `(619,468,708,533)`) and the small cards on
+        // the spriteless `EFFECT_1/2` rects (68/69) — caption and frames
+        // baked into the staged backdrop, no wire field behind them.
+        let placements = vec![
+            waiting_probe("IDC_IMAGE_SWAIT_RANDMAP", None, (619, 468, 708, 533)),
+            waiting_probe("IDC_IMAGE_SWAIT_EFFECT_1", None, (719, 450, 779, 498)),
+            waiting_probe("IDC_IMAGE_SWAIT_EFFECT_2", None, (719, 507, 779, 555)),
+        ];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_staged(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &champion_room(),
+            &placements,
+        );
+        assert!(buf.iter().all(|pixel| *pixel == 0));
     }
 
     #[test]
