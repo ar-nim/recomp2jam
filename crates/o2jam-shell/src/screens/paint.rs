@@ -136,9 +136,10 @@ fn block_or_single(list: &ControlList, block: &str, single: &str) -> Vec<String>
 /// §5–11). Splash and loading resolve to their single art sprites
 /// (code-mounted, not block-named); channel, room, waiting,
 /// playing, and result name their block entries for `bind_scene_rects`
-/// (`STATE_CHANNEL` names zero sprites on 7.55, so the channel scene
-/// stages nothing — sprite-less entries draw no art per recipe step 6
-/// and the scene keeps its flat background plus the live list).
+/// (`STATE_CHANNEL` names zero sprites on 7.55 — verified byte walk
+/// in `docs/channel-fill.md` — so the channel scene stages nothing:
+/// sprite-less entries draw no art per recipe step 6 and the scene
+/// keeps its flat background plus the live list).
 #[must_use]
 pub fn main_scene_sprites(list: &ControlList, screen: Screen) -> Vec<String> {
     match screen {
@@ -311,6 +312,9 @@ pub(crate) fn paint_channel_list(
 }
 
 /// Paint staged channel art with the live list and cursor on top.
+/// With empty art the flat navy is a documented placeholder, not a
+/// verdict: the exe fill behind spriteless blocks stays OPEN
+/// (`docs/channel-fill.md`).
 pub fn paint_channel_scene(
     frame: &mut Frame<'_>,
     channels: &[ChannelState],
@@ -4945,18 +4949,28 @@ mod paint_tests {
     }
 
     #[test]
-    fn channel_with_zero_sprites_stages_no_scene_art() {
-        // `STATE_CHANNEL` names zero sprites on 7.55: the scene stages
-        // nothing (sprite-less entries draw no art, recipe step 6), so
-        // the painter keeps its flat background plus the live list.
+    fn spriteless_channel_block_stages_no_scene_art() {
+        // Shape-faithful `STATE_CHANNEL` skeleton (bare `BOUND`, the
+        // real image/button/text/`SET` code classes, zero quoted
+        // sprites — `docs/channel-fill.md`): no block entry names art,
+        // so the scene stages nothing and the painter keeps its flat
+        // background plus the live list.
         let list = o2jam_file::parse_control_list(
             &[
                 "NUMBER_OF_STATE 0x01",
-                "STATE_CHANNEL 0x27",
+                "STATE_CHANNEL 0x04",
                 "{",
                 "BOUND",
                 "IDC_STATE_CHANNEL 0X12000000",
-                "IDC_BACK 0X12100001",
+                "IDC_BACK_SCHANNEL_1 0X12100001",
+                "IDC_BUTTON_SCHANNEL_BACK 0X12200002",
+                "IDC_BUTTON_SCHANNEL_EXBUTTON1 0X12011007",
+                "SET 0X02 0X00011000",
+                "{",
+                "IDC_IMAGE_SCHANNEL_ANI 0X12500011",
+                "IDC_IMAGE_SCHANNEL_NUMBER1 0X12500012",
+                "}",
+                "IDC_TEXT_SCHANNEL_TITLE1 0X1240001E",
                 "}",
                 "",
             ]
@@ -4964,5 +4978,25 @@ mod paint_tests {
         )
         .unwrap();
         assert!(main_scene_sprites(&list, Screen::Channel).is_empty());
+    }
+
+    #[test]
+    fn empty_channel_art_keeps_the_documented_placeholder_fill() {
+        // No staged figures means no staged ink: the bare scene keeps
+        // the flat navy corner behind the list (placeholder per
+        // `docs/channel-fill.md`, not an exe verdict).
+        let art = SceneArt::default();
+        let mut buf = vec![0u32; 64 * 48];
+        paint_channel_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 48,
+            },
+            &[],
+            0,
+            &art,
+        );
+        assert_eq!(buf[0], background_of(Screen::Channel));
     }
 }

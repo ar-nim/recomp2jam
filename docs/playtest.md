@@ -1412,3 +1412,39 @@ notes), plus the docs log (`1619301`).
   rank-byte tests, shell 423 → 427 from the loading-gate caption
   tests, all other targets unchanged, 0 failures). No lint findings.
   No commits, no pushes.** This sweep touched only `docs/playtest.md`.
+
+## Regression sweep — 2026-11-07 21:07 UTC+8 (HEAD `91bcff1`, tracked tree clean)
+
+Live re-proof on the solo-head. Covers the feat commit landed after the
+ranks-head baseline `1619301`: solo result walk live loading progress
+(`91bcff1`), plus the ranks sweep log (`1619301`).
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1231 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 7, file 149, game 92, net 338,
+  render 72, shell 433, real_art 7, scenes 22, recomp2jam 92
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, no warnings.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.59 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`21:07:08 +08:00`):
+  `Authorize session` → `Create room: songflow` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Update #1 - Jam: 3 (Bonus: 0)` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure WARNs on room delete).
+- **Verdict: no regression — suite is green on the solo-head (1231
+  passed; +18 vs the 1213 baseline: shell 427 → 433, recomp2jam
+  80 → 92 from the solo result-walk/loading-progress tests, all other
+  targets unchanged, 0 failures). No lint findings. No commits, no
+  pushes.** This sweep touched only `docs/playtest.md`.
+- Tree note: one untracked scratch file present (`check_solo.py`, not
+  mine, left alone); no tracked file modified.
