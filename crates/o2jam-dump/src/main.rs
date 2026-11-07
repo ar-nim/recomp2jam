@@ -1,6 +1,9 @@
 //! `o2jam-dump` — inspect O2Jam asset files: magic sniffing, OJM
 //! sample lists, OPI/OPA entry lists, bounded hexdumps.
 
+mod dump_ojm;
+mod dump_ojn;
+
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -37,6 +40,16 @@ enum Command {
         #[arg(long, default_value = "64")]
         len: usize,
     },
+    /// Pretty-print an `.ojm` container: variant, entry table, streams.
+    DumpOjm {
+        /// Container file to inspect.
+        file: PathBuf,
+    },
+    /// Pretty-print an `.ojn` chart: header map, levels, kinds, notes.
+    DumpOjn {
+        /// Chart file to inspect.
+        file: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -46,6 +59,8 @@ fn main() -> Result<()> {
         Command::Samples { file } => run_samples(&file),
         Command::Opi { file } => run_opi(&file),
         Command::Hex { file, len } => run_hex(&file, len),
+        Command::DumpOjm { file } => run_dump_ojm(&file),
+        Command::DumpOjn { file } => run_dump_ojn(&file),
     }
 }
 
@@ -104,6 +119,22 @@ fn run_opi(file: &PathBuf) -> Result<()> {
             );
         }
     }
+    Ok(())
+}
+
+/// Pretty-print an `.ojm` container via the verified parsers.
+fn run_dump_ojm(file: &PathBuf) -> Result<()> {
+    let bytes = read_input(file)?;
+    let report = dump_ojm::format_ojm_report(&file.display().to_string(), &bytes)?;
+    print!("{report}");
+    Ok(())
+}
+
+/// Pretty-print an `.ojn` chart via the verified parsers.
+fn run_dump_ojn(file: &PathBuf) -> Result<()> {
+    let bytes = read_input(file)?;
+    let report = dump_ojn::format_ojn_report(&file.display().to_string(), &bytes)?;
+    print!("{report}");
     Ok(())
 }
 
