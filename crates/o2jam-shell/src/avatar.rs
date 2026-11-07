@@ -4,8 +4,10 @@
 //! decoded at its record anchor, strided atlases contribute their
 //! animation frames (see [`AvatarFigure::from_sprite55_strided`]),
 //! prefixed `.oji` bodies compose their row spans onto full frames
-//! (see [`AvatarFigure::from_sprite55_prefixed`]), and anything else
-//! (compressed frames) is skipped — their codecs are still TBD in
+//! (see [`AvatarFigure::from_sprite55_prefixed`]), `.oja` effect
+//! animations decode their row-group planes per frame (see
+//! [`AvatarFigure::from_oja55`]), and anything else (the compressed
+//! `.oji` outlier frames) is skipped — their codec is still TBD in
 //! `o2jam-file`. Equipped parts stack on as extra layers; which
 //! filenames those are comes from [`pick_wear_sprites`].
 
@@ -13,7 +15,7 @@ use std::collections::HashMap;
 
 use o2jam_file::{
     classify_sprite, find_opi_entry, opi_entry_body, pair_entries_with_rects, resolve_sprite_entry,
-    AvatarItemTable, Bnd, BndRect, ControlBlock, ControlEntry, ControlList, OpiEntry,
+    AvatarItemTable, Bnd, BndRect, ControlBlock, ControlEntry, ControlList, Oja55, OpiEntry,
     PlacedControl, Sprite55, Sprite55Prefixed, Sprite55Strided, SpriteResolution,
 };
 use o2jam_net::CharacterInfo;
@@ -106,6 +108,46 @@ impl AvatarFigure {
                 }
             }
         }
+        Self { layers }
+    }
+
+    /// Decode every frame of a `.oja` effect animation (codec gap ⑤)
+    /// onto its full `w*h` canvas: the stored transparent word 0
+    /// clears the canvas (`.oja` headers carry no colour-key word;
+    /// claims A12 key `0x0000`), each pixel-plane row span pastes at
+    /// its `(x, y)`, and one layer per frame sits at the record
+    /// anchor — the tap/hold/jam frames chain through the container's
+    /// plane layout ([`o2jam_file::parse_oja55`]). The frames also
+    /// carry a per-pixel alpha plane (claims C7: read straight after
+    /// the pixels, uploaded raw); the figure model has no alpha
+    /// channel yet, so frames paste opaque like the prefixed bodies
+    /// and the intensity pass is left for a blended paint.
+    #[must_use]
+    pub fn from_oja55(animation: &Oja55<'_>) -> Self {
+        let layers = animation
+            .frames
+            .iter()
+            .map(|frame| {
+                let mut words = vec![0u16; frame.w as usize * frame.h as usize];
+                for span in &frame.rows {
+                    let base = span.y as usize * frame.w as usize + span.x as usize;
+                    let (pairs, _) = span.pixels.as_chunks::<2>();
+                    for (index, pair) in pairs.iter().enumerate() {
+                        words[base + index] = u16::from_le_bytes(*pair);
+                    }
+                }
+                FigureLayer {
+                    image: Rgb555Image {
+                        w: frame.w as usize,
+                        h: frame.h as usize,
+                        words,
+                    },
+                    dx: i32::from(frame.x),
+                    dy: i32::from(frame.y),
+                    colorkey: 0x0000,
+                }
+            })
+            .collect();
         Self { layers }
     }
 
@@ -350,8 +392,10 @@ pub(crate) fn strided_sprite55(body: &[u8]) -> Option<Sprite55Strided<'_>> {
 /// first, then — when the accounting holds but no frame decodes raw —
 /// the prefixed `.oji` row layout (codec gap ③), and the strided-atlas
 /// layout for plain-miss bodies (the combo glow atlases; exact blob
-/// accounting separates all three). `None` when no layout decodes —
-/// unknown bodies (the compressed `.oji` frames) keep their codec gap.
+/// accounting separates all three). `.oja` effect animations decode
+/// through the frame-plane reader (codec gap ⑤). `None` when no
+/// layout decodes — unknown bodies (the compressed `.oji` outlier
+/// frames) keep their codec gap.
 fn sprite55_figure(body: &[u8]) -> Option<AvatarFigure> {
     if let Ok(sprite) = o2jam_file::parse_sprite55(body) {
         let figure = AvatarFigure::from_sprite55(&sprite);
@@ -360,6 +404,10 @@ fn sprite55_figure(body: &[u8]) -> Option<AvatarFigure> {
         }
         let prefixed = o2jam_file::parse_sprite55_prefixed(body).ok()?;
         let figure = AvatarFigure::from_sprite55_prefixed(&prefixed);
+        return (!figure.is_empty()).then_some(figure);
+    }
+    if let Ok(animation) = o2jam_file::parse_oja55(body) {
+        let figure = AvatarFigure::from_oja55(&animation);
         return (!figure.is_empty()).then_some(figure);
     }
     strided_sprite55(body).map(|atlas| AvatarFigure::from_sprite55_strided(&atlas))
@@ -1723,6 +1771,94 @@ mod avatar_figure_tests {
         let layer = figure.layer(1).unwrap();
         assert_eq!((layer.dx, layer.dy), (1, 0));
         assert_eq!(layer.image.words[0], 0x03E0);
+    }
+
+    /// Codec gap ⑤: a `.oja` effect animation routes through the
+    /// archive loader into one layer per stored frame — each layer
+    /// pastes its row-group pixel plane onto the colour-key-cleared
+    /// canvas at the record anchor (stored word 0 is the transparent
+    /// colour; `.oja` headers carry no colour key).
+    #[test]
+    fn oja_animation_routes_to_frame_layers() {
+        // Frame 0: full 4x1 row of two words at anchor (0, 0); its
+        // plane is one row group plus the zero terminator (16 B),
+        // alpha one byte per covered pixel. Frame 1: a trimmed row at
+        // anchor (2, 1). Frame 1's record `a` chains a0 + b0 + c0.
+        let mut plane0 = 4u16.to_le_bytes().to_vec();
+        plane0.extend_from_slice(&0u16.to_le_bytes());
+        plane0.extend_from_slice(&0u16.to_le_bytes());
+        plane0.extend_from_slice(&0x7C00u16.to_le_bytes());
+        plane0.extend_from_slice(&0x03E0u16.to_le_bytes());
+        plane0.extend_from_slice(&0x7C02u16.to_le_bytes());
+        plane0.extend_from_slice(&0x7C03u16.to_le_bytes());
+        plane0.extend_from_slice(&0u16.to_le_bytes());
+        let mut plane1 = 2u16.to_le_bytes().to_vec();
+        plane1.extend_from_slice(&1u16.to_le_bytes());
+        plane1.extend_from_slice(&1u16.to_le_bytes());
+        plane1.extend_from_slice(&0x001Fu16.to_le_bytes());
+        plane1.extend_from_slice(&0x7C01u16.to_le_bytes());
+        plane1.extend_from_slice(&0u16.to_le_bytes());
+        let mut body = Vec::new();
+        body.extend_from_slice(&1u16.to_le_bytes());
+        body.extend_from_slice(&0x555Au16.to_le_bytes());
+        body.extend_from_slice(&2u16.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
+        for (frame, (a, b, c)) in [
+            ((0i16, 0i16, 4u16, 3u16), (0u32, 16u32, 4u32)),
+            ((2, 1, 4, 3), (20, 12, 2)),
+        ] {
+            body.extend_from_slice(&frame.0.to_le_bytes());
+            body.extend_from_slice(&frame.1.to_le_bytes());
+            body.extend_from_slice(&frame.2.to_le_bytes());
+            body.extend_from_slice(&frame.3.to_le_bytes());
+            body.extend_from_slice(&a.to_le_bytes());
+            body.extend_from_slice(&b.to_le_bytes());
+            body.extend_from_slice(&c.to_le_bytes());
+        }
+        body.extend_from_slice(&plane0);
+        body.extend_from_slice(&[0x40, 0x80, 0xFF, 0x40]);
+        body.extend_from_slice(&plane1);
+        body.extend_from_slice(&[0xFF, 0xFF]);
+        let archive = opa_blob(&[("Note_Click.oja", &body)]);
+        let figure = load_archive_sprite(&archive, "Note_Click.oja").unwrap();
+        assert_eq!(figure.len(), 2, "one layer per stored frame");
+        let layer = figure.layer(0).unwrap();
+        assert_eq!((layer.dx, layer.dy), (0, 0));
+        assert_eq!(layer.colorkey, 0x0000);
+        assert_eq!(
+            layer.image.words,
+            vec![
+                0x7C00, 0x03E0, 0x7C02, 0x7C03, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000
+            ]
+        );
+        let layer = figure.layer(1).unwrap();
+        assert_eq!((layer.dx, layer.dy), (2, 1));
+        assert_eq!(layer.image.words[5], 0x001F);
+        assert_eq!(layer.image.words[6], 0x7C01);
+    }
+
+    /// All three 7.55 `.oja` bodies load and render (skips without
+    /// `install-root`): the tap and long-note click rings decode six
+    /// shrinking centred frames each, the jam flash ten 300x300
+    /// frames. Their alpha planes ride the parser for a future
+    /// blended paint; the figures paste the pixel planes opaque.
+    #[test]
+    fn oja_bodies_render_from_the_archive() {
+        let Some(archive) = install_archive("Playing1.opi") else {
+            return;
+        };
+        for (name, frames) in [
+            ("Note_Click.oja", 6),
+            ("LongNote_Effect.oja", 6),
+            ("Playing_Effect_Jam.oja", 10),
+        ] {
+            let figure = load_archive_sprite(&archive, name)
+                .unwrap_or_else(|| panic!("{name} must route to a figure"));
+            assert_eq!(figure.len(), frames, "{name} stored frames");
+            let layer = figure.layer(0).unwrap();
+            assert!(layer.image.w > 0 && layer.image.h > 0, "{name} frame size");
+        }
     }
 
     /// All ten 7.55 prefixed `.oji` bodies load and render (skips

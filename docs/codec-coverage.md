@@ -8,7 +8,7 @@ the repo. Numbers come from the real bytes, not estimates.
 
 ## Answer: counts per archive per codec
 
-| Archive | Named | Sprite bodies | raw-RGB555 (render) | .oji raster (prefixed render) | strided atlas (render) | .oja anim (skip) | JPEG (render) | data/`.bnd`/`.txt` |
+| Archive | Named | Sprite bodies | raw-RGB555 (render) | .oji raster (prefixed render) | strided atlas (render) | .oja anim (render) | JPEG (render) | data/`.bnd`/`.txt` |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `Interface1.opi` | 1587 | 1532 | 1480 | 5 | 0 | 0 | 47 | 55 |
 | `Playing1.opi` | 627 | 621 | 610 | 5 | 3 | 3 | 0 | 6 |
@@ -16,17 +16,19 @@ the repo. Numbers come from the real bytes, not estimates.
 | **Total** | **9347** | **9284** | **9221 (99.3%)** | **10** | **3** | **3** | **47** | **63** |
 
 Body-level render coverage: `Interface1.opi` 100% (1532/1532),
-`Playing1.opi` 99.5% (618/621 — only the 3 `.oja` effect envelopes
-still drop their frame data), `avatar.opa` 100% — 9281/9284 bodies
-(99.97%). Image-record level: all 63,796 records decode — 63,760 raw
-(99.94%) plus the 36 non-raw records inside the 10 `.oji` bodies
-(prefixed walk, gaps ③+④). The "compressed `.ojs`/`.ojt` frame" class
-is empty: no plain sprite body carries a single non-raw image, so
-every formerly lost frame sat in an `.oji` or a `.oja` envelope — the
-strided atlases (gap ①), the 47 JPEG album-art bodies (6.8 MB, gap ②)
-and all 10 `.oji` bodies (gaps ③+④) render now. Lost bytes: only the
-3 `.oja` frame blobs in `Playing1.opi` (2,891,152 B total); none in
-`Interface1.opi`, none in `avatar.opa`.
+`Playing1.opi` 100% (621/621 — the 3 `.oja` effect envelopes decode
+since gap ⑤), `avatar.opa` 100% — 9284/9284 bodies (100%).
+Image-record level: all 63,796 records decode — 63,760 raw (99.94%)
+plus the 36 non-raw records inside the 10 `.oji` bodies (prefixed
+walk, gaps ③+④) and the 16 plane frames inside the 3 `.oja` bodies
+(gap ⑤). The "compressed `.ojs`/`.ojt` frame" class is empty: no
+plain sprite body carries a single non-raw image, so every formerly
+lost frame sat in an `.oji` or a `.oja` envelope — the strided
+atlases (gap ①), the 47 JPEG album-art bodies (6.8 MB, gap ②), all
+10 `.oji` bodies (gaps ③+④) and all 3 `.oja` bodies (gap ⑤) render
+now. Lost bytes: none in any archive — `Interface1.opi`,
+`avatar.opa`, and the formerly lost 2,891,152 B of `.oja` blobs in
+`Playing1.opi` all decode (see the `.oja` section below).
 
 ## Lost bodies and the scene elements they belong to
 
@@ -51,7 +53,7 @@ now — see "JPEG album-art bodies" below.
 - `SelectAlbum_Bar.oji` (15 frames) / `SelectMusic_Bar.oji` (10
   frames) — music-select list bars (code-drawn; render since gap ③).
 
-### `Playing1.opi` — formerly 11 lost bodies; 8 render, 3 `.oja` remain
+### `Playing1.opi` — all 11 formerly lost bodies render
 
 - `Note_Combo4/5/6.ojt` — combo milestone glow animation, referenced
   by `IDC_IMAGE_SPLAY_NOTECOMBO` through runtime `_Note_Combo.ojt`
@@ -65,10 +67,12 @@ now — see "JPEG album-art bodies" below.
   `Lanking_NoticeBoard_Playing.oji`, `Playing_Loding_Lankview.oji` —
   code-drawn (no `ControlList` reference; render since gap ③).
 - `Note_Click.oja`, `LongNote_Effect.oja`, `Playing_Effect_Jam.oja` —
-  tap / hold / jam effect animation envelopes; their frame data is
-  the only sprite loss left (gap ⑤). Their raw `.ojt`
-  siblings (`_Note_Click.ojt`, `_Playing_Effect_Jam.ojt`,
-  `LongNote_Effect.ojt`) do render.
+  tap / long-note / jam effect animations; decode through the
+  `.oja` frame-plane reader since gap ⑤ (see the section below).
+  `Note_Click.oja` and `LongNote_Effect.oja` are byte-identical
+  (87,875 B each); their raw `.ojt` siblings (`_Note_Click.ojt`,
+  `_Playing_Effect_Jam.ojt`, `LongNote_Effect.ojt`) keep rendering
+  alongside.
 
 ### `avatar.opa` — no losses
 
@@ -108,6 +112,53 @@ invented. Shapes by stored delta (`size − w·h·2` per image):
   repeat the `y` word. The strict order walk (in-order rows, each
   carried at least once, ending on row `h − 1`) accepts all 36
   images; skipped, dropped, or reordered rows still reject.
+
+## `.oja` bodies: fully mapped (gap ⑤, frame planes)
+
+All 16 frames across the three `.oja` bodies decode
+(`parse_oja55` in `crates/o2jam-file/src/sprites.rs`, routed in
+`o2jam-shell/src/avatar.rs` via `AvatarFigure::from_oja55`). The
+reference toolkit throws on these bodies; the exe reads per frame a
+pixel plane then a byte plane with no codec between (claims C7) —
+the actual stored bytes are compacted, not fixed-size:
+
+- Each 20-byte frame record carries `x y w h` plus the three raw
+  words, now read as: `a` = byte offset of the frame's data from the
+  blob start (the planes chain exactly, `a[n+1] == a[n] + b[n] +
+  c[n]` on every container), `b` = stored byte length of the frame's
+  row-group pixel plane, `c` = stored byte length of the alpha plane
+  that follows it.
+- Each pixel plane is the same prefixed row-group walk as the `.oji`
+  bodies — `[u16 width][u16 x][u16 y]` + `width` RGB555 words, one
+  zero terminator — except rows move forward only and may start and
+  end above rows `0`/`h-1` (the ring circles and flash fan only
+  cover the rows they reach; the jam flash's first frame paints
+  rows 24..102 of 300). Every walk's terminator lands exactly on
+  `a + b`; the walk plus the exact chain is the layout proof.
+- The alpha plane (`c` bytes) tracks the covered-pixel count: exact
+  on all ten `Playing_Effect_Jam.oja` frames (`c == Σ span widths`),
+  up to 3 bytes short on the click pair (1/2/1/3/2/0 per frame —
+  the packer's alpha pass dropped edge pixels; pinned in tests,
+  not assumed away). Its values rise with pixel luminance (dim ring
+  edge ≈ 0–9, bright core ≈ 255): an intensity map. The exe uploads
+  it beside the pixels; the exact blend role stays open (claims C7
+  OPEN), and the shell's figures paste the pixel planes opaque for
+  now — the alpha rides `Oja55Frame::alpha` for a blended paint.
+- `Playing_Effect_Jam.oja` opens its blob with an 80-byte unexplained
+  block — byte-for-byte the serialization of frame records 6..9 —
+  before the first plane; the parser finds the plane base as the
+  smallest 20-byte shift where every walk lands. `Note_Click.oja`
+  stores planes straight after the table (shift 0).
+- Honest negatives: the Jam blob carries 1,623,039 untabulated
+  trailing bytes — one rows-25..299 partial frame and five full
+  300x300 row-group frames (300 spans each, terminator-walks land
+  cleanly) plus alpha-sized regions (89,694/89,700 B) — with no
+  record-table entries and no anchors. They are exposed as
+  `Oja55::trailing`, not decoded: placing them would mean inventing
+  anchors. The 80-byte record-copy block and this trailing strip
+  keep the exe-reading question (C7) open: the exe's fixed
+  `w*h*2 + w*h` per-frame read cannot consume the compacted planes,
+  matching claims C9's "the exe cannot decode these either".
 
 ## JPEG album-art bodies: decoded (codec gap ②)
 
@@ -170,8 +221,15 @@ outside {0xC0, 0xC2} occurs in the 47; classes the crate rejects
    the decode: `oji_repeated_y_bodies_render_from_the_archives`
    renders the three bodies, and
    `oji_prefixed_bodies_render_from_the_archives` sweeps all ten.
-5. **`.oja` frame data + `a`/`b`/`c` words** (3 bodies) — biggest RE
-   unknown; envelopes parse today (`parse_oja`), frames do not.
+5. ~~**`.oja` frame data + `a`/`b`/`c` words** (3 bodies)~~ —
+   **DONE**: `o2jam-file` `parse_oja55` decodes every frame
+   (row-group pixel plane landing on its zero terminator exactly at
+   `a + b`, alpha plane sliced at `c`; plane-base scan over the
+   80-byte unexplained block in the Jam body), and
+   `o2jam-shell/src/avatar.rs` routes them
+   (`AvatarFigure::from_oja55`, one layer per frame at its record
+   anchor). The Jam trailing 1,623,039 B stay untabulated — see the
+   `.oja` section above.
 
 ## Method and version pin
 

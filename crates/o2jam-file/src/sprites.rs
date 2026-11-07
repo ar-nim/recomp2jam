@@ -1,7 +1,9 @@
 //! Sprite bodies: sprite-55 containers (plain, strided, and
-//! prefixed), BND rects, and OJA animation tables.
+//! prefixed), BND rects, and OJA animation tables (envelope plus
+//! decoded frame planes).
 //!
-//! Verified on real 7.55 files (docs/file-formats/opi.md).
+//! Verified on real 7.55 files (docs/file-formats/opi.md,
+//! docs/codec-coverage.md).
 
 use super::{dir_end, read_i16le, read_u16le, read_u32le, unknown_format, FileError};
 
@@ -23,10 +25,11 @@ pub const SPRITE55_RECORD_LEN: usize = 20;
 /// Sprite55 header length: `tag + magic + count + colorkey`.
 pub const SPRITE55_HEADER_LEN: usize = 8;
 
-/// Magic of the animation container (`.oja` bodies, tag + `0x555A`
-/// + count): `count` 20-byte frame records follow the header.
-///
-/// Frame-data codec TBD; only the header and frame table are verified.
+/// Magic of the animation container (`.oja` bodies):
+/// `tag + 0x555A + count + reserved`, then `count` 20-byte frame
+/// records and one concatenated `[pixel plane][alpha plane]` blob
+/// per frame. See [`parse_oja55`] for the decoded layout (codec gap
+/// ⑤); this envelope reader covers the header and frame table only.
 pub const OJA_MAGIC: u16 = 0x555A;
 
 /// Oja header length: `tag + magic + count + reserved`.
@@ -339,18 +342,21 @@ pub struct OjaFrame {
     pub w: u16,
     /// Frame height, pixels.
     pub h: u16,
-    /// Trailing word 1 (semantics TBD).
+    /// Trailing word `a`: byte offset of the frame's row-group pixel
+    /// plane from the blob start ([`parse_oja55`] steps a container
+    /// -specific plane base first).
     pub a: u32,
-    /// Trailing word 2 (semantics TBD).
+    /// Trailing word `b`: stored byte length of the pixel plane.
     pub b: u32,
-    /// Trailing word 3 (semantics TBD).
+    /// Trailing word `c`: stored byte length of the alpha plane that
+    /// follows the pixels.
     pub c: u32,
 }
 
-/// A parsed `.oja` header + frame table. Only the envelope is
-/// verified (magic, count, coherent frame geometry on real 7.55
-/// `Note_Click.oja`: shrinking centred frames); the frame-data
-/// codec and the `a`/`b`/`c` words are TBD.
+/// A parsed `.oja` header + frame table — the envelope only. The
+/// decoded planes live in [`Oja55`] (codec gap ⑤). Verified on real
+/// 7.55 `Note_Click.oja` (shrinking centred frames) and
+/// `Playing_Effect_Jam.oja` (ten 300x300 flash frames).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Oja {
     /// Container tag (observed: 1).
@@ -374,7 +380,7 @@ pub fn parse_oja(bytes: &[u8]) -> Result<Oja, FileError> {
         return Err(unknown_format(bytes));
     }
     let count = read_u16le(bytes, 4)? as usize;
-    // Frame data stays unsliced (codec TBD); only the table must fit.
+    // Frame data stays unsliced here; decode planes via parse_oja55.
     let _ = dir_end(count, OJA_RECORD_LEN, OJA_HEADER_LEN, bytes.len())?;
     let mut frames = Vec::with_capacity(count.min(1024));
     for i in 0..count {
@@ -390,6 +396,262 @@ pub fn parse_oja(bytes: &[u8]) -> Result<Oja, FileError> {
         });
     }
     Ok(Oja { tag, frames })
+}
+
+/// One decoded `.oja` animation frame: record geometry, the frame's
+/// row-group pixel plane, and its alpha plane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Oja55Frame<'a> {
+    /// Placement anchor, pixels (negative: centred effects).
+    pub x: i16,
+    /// Placement anchor, pixels.
+    pub y: i16,
+    /// Frame width, pixels.
+    pub w: u16,
+    /// Frame height, pixels.
+    pub h: u16,
+    /// Record word `a`: byte offset of this frame's pixel plane from
+    /// the record-table end. The real containers keep the planes
+    /// chained (`a[n + 1] == a[n] + b[n] + c[n]`); some open the blob
+    /// with an unexplained block of serialized record copies before
+    /// the first plane (observed: the last four records, 80 B,
+    /// `Playing_Effect_Jam.oja`), which the plane-base scan steps
+    /// over in 20-byte record strides.
+    pub a: u32,
+    /// Record word `b`: stored byte length of the row-group pixel
+    /// plane, including its zero terminator word.
+    pub b: u32,
+    /// Record word `c`: stored byte length of the alpha plane.
+    pub c: u32,
+    /// Pixel-plane row spans in stored order.
+    pub rows: Vec<Sprite55RowSpan<'a>>,
+    /// Alpha/intensity plane, sliced verbatim. Its byte count tracks
+    /// the covered-pixel count (exact on all ten
+    /// `Playing_Effect_Jam.oja` frames; up to 3 bytes short on the
+    /// click pair — the packer's alpha pass dropped edge pixels), and
+    /// its values rise with pixel luminance (dim ring edge ≈ 0–9,
+    /// bright core ≈ 255): an intensity map for the effect. The exe
+    /// reads it right after the pixels and uploads it with no codec
+    /// between (claims C7); the exact blend role stays open
+    /// (docs/claims.md C7, docs/ref-opi-divergences.md H5).
+    pub alpha: &'a [u8],
+}
+
+/// A decoded `.oja` container (codec gap ⑤): header, per-frame
+/// row-group pixel planes, and alpha planes. Pixel words store 0 as
+/// the transparent colour (the header carries no colour-key word;
+/// claims A12 key `0x0000`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Oja55<'a> {
+    /// Container tag (observed: 1).
+    pub tag: u16,
+    /// Header word after the count (observed: 0; role unknown).
+    pub reserved: u16,
+    /// Decoded frames in stored order.
+    pub frames: Vec<Oja55Frame<'a>>,
+    /// Blob bytes after the last frame's planes that no record
+    /// accounts for. `Playing_Effect_Jam.oja` carries 1,623,039 B of
+    /// them: one rows-25..299 partial frame and five full 300x300
+    /// row-group frames plus alpha-sized regions, with no record
+    /// entries and no anchors — recorded as unexplained extra data,
+    /// not decoded (placing them would mean inventing anchors).
+    pub trailing: &'a [u8],
+}
+
+/// Parse a decoded `.oja` container: magic, chained frame records
+/// (`a[n + 1] == a[n] + b[n] + c[n]`), then per frame a row-group
+/// pixel plane (`[u16 width][u16 x][u16 y]` + `width` RGB555 words,
+/// closed by one zero terminator that must land exactly on `a + b`)
+/// and the alpha slice of `c` bytes that follows it. Rows move
+/// forward only and spans stay inside their row; effect frames may
+/// start and end above rows `0`/`h - 1` (the ring circles only cover
+/// the rows they reach, unlike the full-height `.oji` walks).
+/// Verified on all three real 7.55 bodies (`Note_Click.oja`,
+/// `LongNote_Effect.oja` — byte-identical — and
+/// `Playing_Effect_Jam.oja`, docs/codec-coverage.md).
+///
+/// # Errors
+///
+/// `FileError::TooShort` when the record table overruns the buffer,
+/// `FileError::UnknownFormat` on a broken chain or a plane walk that
+/// does not match the layout.
+pub fn parse_oja55(bytes: &[u8]) -> Result<Oja55<'_>, FileError> {
+    if bytes.len() < OJA_HEADER_LEN {
+        return Err(FileError::TooShort(bytes.len()));
+    }
+    let tag = read_u16le(bytes, 0)?;
+    if read_u16le(bytes, 2)? != OJA_MAGIC {
+        return Err(unknown_format(bytes));
+    }
+    let count = read_u16le(bytes, 4)? as usize;
+    let reserved = read_u16le(bytes, 6)?;
+    let blob_start = dir_end(count, OJA_RECORD_LEN, OJA_HEADER_LEN, bytes.len())?;
+    let mut records = Vec::with_capacity(count.min(1024));
+    for i in 0..count {
+        let off = OJA_HEADER_LEN + i * OJA_RECORD_LEN;
+        records.push((
+            read_i16le(bytes, off)?,
+            read_i16le(bytes, off + 2)?,
+            read_u16le(bytes, off + 4)?,
+            read_u16le(bytes, off + 6)?,
+            read_u32le(bytes, off + 8)?,
+            read_u32le(bytes, off + 12)?,
+            read_u32le(bytes, off + 16)?,
+        ));
+    }
+    // The planes chain: each frame's data follows the previous one,
+    // so `a[n + 1] == a[n] + b[n] + c[n]` on every real container.
+    for pair in records.windows(2) {
+        let (_, _, _, _, a, b, c) = pair[0];
+        let (_, _, _, _, a_next, _, _) = pair[1];
+        let end = a
+            .checked_add(b)
+            .and_then(|end| end.checked_add(c))
+            .ok_or_else(|| unknown_format(bytes))?;
+        if a_next != end {
+            return Err(unknown_format(bytes));
+        }
+    }
+    // Empty tables have no real-body precedent; the plane layout is
+    // meaningless without frames.
+    if count == 0 {
+        return Err(unknown_format(bytes));
+    }
+    // Plane base: the smallest record-stride shift where every
+    // frame's walk lands exactly on `a + b`. `Note_Click.oja` stores
+    // planes straight after the table (shift 0); `Playing_Effect_Jam.oja`
+    // opens the blob with an unexplained 80-byte block of serialized
+    // record copies (shift 4 records) that the scan steps over. The
+    // scan stops once the first frame's planes would run past the
+    // blob.
+    let (_, _, _, _, a0, b0, c0) = records[0];
+    let first_end = a0
+        .checked_add(b0)
+        .and_then(|end| end.checked_add(c0))
+        .ok_or_else(|| unknown_format(bytes))?;
+    let mut k = 0usize;
+    loop {
+        let shift = k * OJA_RECORD_LEN;
+        let scan_floor = usize::try_from(first_end)
+            .ok()
+            .and_then(|end| end.checked_add(blob_start))
+            .and_then(|end| end.checked_add(shift));
+        let Some(scan_floor) = scan_floor else {
+            return Err(unknown_format(bytes));
+        };
+        if scan_floor > bytes.len() {
+            return Err(unknown_format(bytes));
+        }
+        let mut frames = Vec::with_capacity(count);
+        let mut laid_out = true;
+        for &(x, y, w, h, a, b, c) in &records {
+            let Some(base) = usize::try_from(a)
+                .ok()
+                .and_then(|a| a.checked_add(shift))
+                .and_then(|a| a.checked_add(blob_start))
+            else {
+                laid_out = false;
+                break;
+            };
+            let pixel_len = usize::try_from(b).unwrap_or(usize::MAX);
+            let alpha_len = usize::try_from(c).unwrap_or(usize::MAX);
+            let Some(pixels_end) = base.checked_add(pixel_len) else {
+                laid_out = false;
+                break;
+            };
+            let Some(alpha_end) = pixels_end.checked_add(alpha_len) else {
+                laid_out = false;
+                break;
+            };
+            if alpha_end > bytes.len() {
+                laid_out = false;
+                break;
+            }
+            match parse_oja_plane_rows(bytes, base, pixels_end, w, h) {
+                Some(rows) => frames.push(Oja55Frame {
+                    x,
+                    y,
+                    w,
+                    h,
+                    a,
+                    b,
+                    c,
+                    rows,
+                    alpha: &bytes[pixels_end..alpha_end],
+                }),
+                None => {
+                    laid_out = false;
+                    break;
+                }
+            }
+        }
+        if laid_out {
+            let last = records[count - 1];
+            let planes_end = usize::try_from(last.4)
+                .ok()
+                .and_then(|a| a.checked_add(usize::try_from(last.5).unwrap_or(usize::MAX)))
+                .and_then(|a| a.checked_add(usize::try_from(last.6).unwrap_or(usize::MAX)))
+                .and_then(|a| a.checked_add(shift))
+                .and_then(|a| a.checked_add(blob_start))
+                .ok_or_else(|| unknown_format(bytes))?;
+            return Ok(Oja55 {
+                tag,
+                reserved,
+                frames,
+                trailing: bytes
+                    .get(planes_end..)
+                    .ok_or_else(|| unknown_format(bytes))?,
+            });
+        }
+        // No base matched at this stride: try the next record step.
+        k += 1;
+    }
+}
+
+/// Walk one `.oja` pixel plane: consecutive `[u16 width][u16 x][u16 y]`
+/// row groups followed by `width` RGB555 pixel words, closed by one
+/// zero terminator word that must land exactly on `end`. Rows move
+/// forward only; effect frames may start and end above rows `0` and
+/// `h - 1` (the ring circles only reach the rows they cover — the
+/// jam flash's early frames paint rows 12..146 of 300). Any span
+/// outside its row, any backward row step, a missing or misplaced
+/// terminator is not a plane.
+fn parse_oja_plane_rows<'a>(
+    blob: &'a [u8],
+    start: usize,
+    end: usize,
+    w: u16,
+    h: u16,
+) -> Option<Vec<Sprite55RowSpan<'a>>> {
+    let mut spans = Vec::new();
+    let mut off = start;
+    let mut last_y: Option<u16> = None;
+    while off + SPRITE55_ROW_TAIL_LEN <= end {
+        let width = usize::from(read_u16le(blob, off).ok()?);
+        if width == 0 {
+            return (off + SPRITE55_ROW_TAIL_LEN == end).then_some(spans);
+        }
+        let pixels_end = off + SPRITE55_ROW_HEADER_LEN + width * 2;
+        if pixels_end > end {
+            return None;
+        }
+        let x = read_u16le(blob, off + 2).ok()?;
+        let y = read_u16le(blob, off + 4).ok()?;
+        if usize::from(x) + width > usize::from(w)
+            || usize::from(y) >= usize::from(h)
+            || last_y.is_some_and(|row| y < row)
+        {
+            return None;
+        }
+        spans.push(Sprite55RowSpan {
+            x,
+            y,
+            pixels: &blob[off + SPRITE55_ROW_HEADER_LEN..pixels_end],
+        });
+        last_y = Some(y);
+        off = pixels_end;
+    }
+    None
 }
 
 /// One prefixed row span as the 7.55 bodies store it.
@@ -814,5 +1076,338 @@ mod sprite55_prefixed_tests {
             parse_sprite55_prefixed(b"short"),
             Err(FileError::TooShort(_))
         ));
+    }
+}
+
+#[cfg(test)]
+mod oja55_tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::parse_opi;
+
+    /// One `.oja` pixel-plane row group: `[u16 width][u16 x][u16 y]`
+    /// plus `width` little-endian RGB555 words.
+    fn oja_row_group(width: u16, x: u16, y: u16, words: &[u16]) -> Vec<u8> {
+        assert_eq!(usize::from(width), words.len());
+        let mut group = Vec::new();
+        group.extend_from_slice(&width.to_le_bytes());
+        group.extend_from_slice(&x.to_le_bytes());
+        group.extend_from_slice(&y.to_le_bytes());
+        for word in words {
+            group.extend_from_slice(&word.to_le_bytes());
+        }
+        group
+    }
+
+    /// One decoded frame's stored planes: the row-group walk (with
+    /// its zero terminator) followed by the alpha bytes.
+    fn oja_plane(groups: &[Vec<u8>], alpha: &[u8]) -> (Vec<u8>, Vec<u8>) {
+        let mut pixels = Vec::new();
+        for group in groups {
+            pixels.extend_from_slice(group);
+        }
+        pixels.extend_from_slice(&0u16.to_le_bytes());
+        (pixels, alpha.to_vec())
+    }
+
+    /// An `.oja` body in the real layout: header, records whose `a`
+    /// words chain through the plane sizes, an optional unexplained
+    /// leading block before the first plane, then the concatenated
+    /// `[pixel plane][alpha plane]` per frame. `extra` appends
+    /// untalphabet trailing bytes after the last plane (the
+    /// `Playing_Effect_Jam.oja` shape).
+    #[allow(clippy::type_complexity)]
+    fn oja55_body(
+        leading: &[u8],
+        extra: &[u8],
+        frames: &[((i16, i16, u16, u16), (Vec<u8>, Vec<u8>))],
+    ) -> Vec<u8> {
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&1u16.to_le_bytes());
+        blob.extend_from_slice(&OJA_MAGIC.to_le_bytes());
+        blob.extend_from_slice(&(frames.len() as u16).to_le_bytes());
+        blob.extend_from_slice(&0u16.to_le_bytes());
+        let mut run = 0u32;
+        for ((x, y, w, h), (pixels, alpha)) in frames {
+            blob.extend_from_slice(&x.to_le_bytes());
+            blob.extend_from_slice(&y.to_le_bytes());
+            blob.extend_from_slice(&w.to_le_bytes());
+            blob.extend_from_slice(&h.to_le_bytes());
+            blob.extend_from_slice(&run.to_le_bytes());
+            blob.extend_from_slice(&(pixels.len() as u32).to_le_bytes());
+            blob.extend_from_slice(&(alpha.len() as u32).to_le_bytes());
+            run += (pixels.len() + alpha.len()) as u32;
+        }
+        blob.extend_from_slice(leading);
+        for (_, (pixels, alpha)) in frames {
+            blob.extend_from_slice(pixels);
+            blob.extend_from_slice(alpha);
+        }
+        blob.extend_from_slice(extra);
+        blob
+    }
+
+    /// Two 4x3 frames: frame 0 paints its full first row (a red-green
+    /// run), frame 1 paints a trimmed row — the ring shape.
+    fn two_frame_body() -> Vec<u8> {
+        let (p0, a0) = oja_plane(
+            &[oja_row_group(4, 0, 0, &[0x7C00, 0x03E0, 0x001F, 0x7C01])],
+            &[0x40, 0x80, 0xFF, 0x40],
+        );
+        let (p1, a1) = oja_plane(&[oja_row_group(2, 1, 1, &[0x03E0, 0x001F])], &[0xFF, 0xFF]);
+        oja55_body(
+            &[],
+            &[],
+            &[((0, 0, 4, 3), (p0, a0)), ((2, 1, 4, 3), (p1, a1))],
+        )
+    }
+
+    #[test]
+    fn oja55_walks_planes_and_slices_alpha() {
+        let body = two_frame_body();
+        let oja = parse_oja55(&body).unwrap();
+        assert_eq!(oja.tag, 1);
+        assert_eq!(oja.reserved, 0);
+        assert_eq!(oja.trailing, b"");
+        assert_eq!(oja.frames.len(), 2);
+        let frame = &oja.frames[0];
+        assert_eq!((frame.x, frame.y, frame.w, frame.h), (0, 0, 4, 3));
+        assert_eq!((frame.a, frame.b, frame.c), (0, 16, 4));
+        assert_eq!(frame.rows.len(), 1);
+        assert_eq!((frame.rows[0].x, frame.rows[0].y), (0, 0));
+        assert_eq!(
+            frame.rows[0].pixels,
+            &[0x00, 0x7C, 0xE0, 0x03, 0x1F, 0x00, 0x01, 0x7C]
+        );
+        assert_eq!(frame.alpha, &[0x40, 0x80, 0xFF, 0x40]);
+        let frame = &oja.frames[1];
+        assert_eq!((frame.x, frame.y, frame.w, frame.h), (2, 1, 4, 3));
+        assert_eq!((frame.a, frame.b, frame.c), (20, 12, 2));
+        assert_eq!((frame.rows[0].x, frame.rows[0].y), (1, 1));
+        assert_eq!(frame.alpha, &[0xFF, 0xFF]);
+    }
+
+    /// `Playing_Effect_Jam.oja` opens its blob with an 80-byte block
+    /// of serialized record copies before the first plane; the base
+    /// scan steps over it in record strides and decodes every frame.
+    #[test]
+    fn oja55_scans_the_plane_base_past_a_leading_block() {
+        let (p0, a0) = oja_plane(&[oja_row_group(4, 0, 0, &[0x7C00; 4])], &[0x40]);
+        let (p1, a1) = oja_plane(&[oja_row_group(2, 1, 1, &[0x03E0; 2])], &[0x80]);
+        let leading = [0xA5u8; 80];
+        let body = oja55_body(
+            &leading,
+            &[],
+            &[((0, 0, 4, 3), (p0, a0)), ((2, 1, 4, 3), (p1, a1))],
+        );
+        let oja = parse_oja55(&body).unwrap();
+        assert_eq!(oja.frames.len(), 2);
+        assert_eq!((oja.frames[0].a, oja.frames[0].b), (0, 16));
+        assert_eq!(oja.frames[0].rows[0].pixels, &[0x00, 0x7C].repeat(4));
+        assert_eq!((oja.frames[1].a, oja.frames[1].b), (17, 12));
+        assert_eq!(oja.trailing, b"");
+    }
+
+    /// Untalphabet trailing bytes ride along untouched: the Jam body
+    /// carries 1,623,039 B of them after the last record's planes.
+    #[test]
+    fn oja55_keeps_untabulated_trailing_bytes() {
+        let (p0, a0) = oja_plane(&[oja_row_group(4, 0, 0, &[0x7C00; 4])], &[0x40]);
+        let body = oja55_body(&[], &[0x99; 10], &[((0, 0, 4, 3), (p0, a0))]);
+        let oja = parse_oja55(&body).unwrap();
+        assert_eq!(oja.frames.len(), 1);
+        assert_eq!(oja.trailing, &[0x99; 10]);
+    }
+
+    #[test]
+    fn oja55_rejects_broken_layouts() {
+        // Broken chain: frame 1's `a` must equal a0 + b0 + c0.
+        let (p0, a0) = oja_plane(&[oja_row_group(4, 0, 0, &[0x7C00; 4])], &[0x40]);
+        let (p1, a1) = oja_plane(&[oja_row_group(2, 1, 1, &[0x03E0; 2])], &[0x80]);
+        let mut body = oja55_body(
+            &[],
+            &[],
+            &[
+                ((0, 0, 4, 3), (p0.clone(), a0.clone())),
+                ((2, 1, 4, 3), (p1, a1)),
+            ],
+        );
+        let a1_off = OJA_HEADER_LEN + OJA_RECORD_LEN + 8;
+        body[a1_off..a1_off + 4].copy_from_slice(&21u32.to_le_bytes());
+        assert!(parse_oja55(&body).is_err());
+
+        // Misplaced plane length: shrinking `b` by the terminator
+        // leaves the walk without its zero word at `a + b`.
+        let body = oja55_body(&[], &[], &[((0, 0, 4, 3), (p0.clone(), a0.clone()))]);
+        let b_off = OJA_HEADER_LEN + 12;
+        let mut short = body.clone();
+        let b = u32::from_le_bytes(short[b_off..b_off + 4].try_into().unwrap()) - 2;
+        short[b_off..b_off + 4].copy_from_slice(&b.to_le_bytes());
+        assert!(parse_oja55(&short).is_err());
+
+        // A backward row step is not a plane walk.
+        let (backward, alpha) = oja_plane(
+            &[
+                oja_row_group(2, 0, 1, &[0x7C00; 2]),
+                oja_row_group(2, 0, 0, &[0x03E0; 2]),
+            ],
+            &[0x40],
+        );
+        let body = oja55_body(&[], &[], &[((0, 0, 4, 3), (backward, alpha))]);
+        assert!(parse_oja55(&body).is_err());
+
+        // A span past the row edge breaks the containment.
+        let (wide, alpha) = oja_plane(&[oja_row_group(4, 1, 0, &[0x7C00; 4])], &[0x40]);
+        let body = oja55_body(&[], &[], &[((0, 0, 4, 3), (wide, alpha))]);
+        assert!(parse_oja55(&body).is_err());
+
+        // An alpha length overrunning the blob rejects every base:
+        // bump the record's `c` past the bytes the builder stored.
+        let mut body = oja55_body(&[], &[], &[((0, 0, 4, 3), (p0, vec![0x40; 64]))]);
+        let c_off = OJA_HEADER_LEN + 16;
+        let c = u32::from_le_bytes(body[c_off..c_off + 4].try_into().unwrap()) + 1;
+        body[c_off..c_off + 4].copy_from_slice(&c.to_le_bytes());
+        assert!(parse_oja55(&body).is_err());
+
+        // Container-level guards: bad magic and a short header.
+        let mut magic = two_frame_body();
+        magic[2..4].copy_from_slice(&0x0555u16.to_le_bytes());
+        assert!(parse_oja55(&magic).is_err());
+        assert!(matches!(parse_oja55(b"short"), Err(FileError::TooShort(_))));
+    }
+
+    /// Repository-local `install-root` (git-ignored game data).
+    fn install_archive(name: &str) -> Option<Vec<u8>> {
+        std::fs::read(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../install-root/O2Jam/Image")
+                .join(name),
+        )
+        .ok()
+    }
+
+    /// Archive body bytes by exact name.
+    fn archive_body(archive: &[u8], name: &str) -> Vec<u8> {
+        let entries = parse_opi(archive).expect("archive table parses");
+        let entry = entries
+            .iter()
+            .find(|entry| entry.name == name)
+            .unwrap_or_else(|| panic!("{name} in archive"));
+        archive[entry.data_offset..entry.data_offset + entry.size as usize].to_vec()
+    }
+
+    /// The tap and long-note effect envelopes (codec gap ⑤, real
+    /// 7.55 bytes): six shrinking ring frames with centred anchors,
+    /// pixel planes ending in a terminator exactly at `a + b`, and
+    /// alpha planes sliced at `c`. `LongNote_Effect.oja` is
+    /// byte-identical to `Note_Click.oja`. The covered-pixel count
+    /// runs 1-3 bytes over `c` (the packer's alpha pass dropped edge
+    /// pixels) — pinned here per frame, not assumed away. Skips
+    /// when `install-root` is absent.
+    #[test]
+    fn oja_click_bodies_decode_from_the_archive() {
+        let Some(archive) = install_archive("Playing1.opi") else {
+            return;
+        };
+        let click = archive_body(&archive, "Note_Click.oja");
+        let long = archive_body(&archive, "LongNote_Effect.oja");
+        assert_eq!(click, long, "the two shipped click bodies are identical");
+        let oja = parse_oja55(&click).unwrap();
+        assert_eq!(oja.tag, 1);
+        assert_eq!(oja.reserved, 0);
+        assert_eq!(oja.trailing, b"");
+        let dims = [
+            (144, 143),
+            (113, 113),
+            (97, 96),
+            (77, 77),
+            (59, 59),
+            (39, 39),
+        ];
+        let anchors = [
+            (-72, -72),
+            (-56, -57),
+            (-48, -49),
+            (-38, -39),
+            (-29, -30),
+            (-19, -20),
+        ];
+        let first_spans = [
+            (125, 0, 2),
+            (94, 0, 2),
+            (77, 0, 2),
+            (57, 0, 3),
+            (39, 0, 2),
+            (19, 0, 1),
+        ];
+        let shortfalls = [1usize, 2, 1, 3, 2, 0];
+        assert_eq!(oja.frames.len(), 6);
+        for (i, frame) in oja.frames.iter().enumerate() {
+            assert_eq!((frame.w, frame.h), dims[i], "frame {i} dims");
+            assert_eq!((frame.x, frame.y), anchors[i], "frame {i} anchor");
+            let span = &frame.rows[0];
+            assert_eq!(
+                (span.x, span.y, span.pixels.len() / 2),
+                first_spans[i],
+                "frame {i} first span"
+            );
+            let covered: usize = frame.rows.iter().map(|row| row.pixels.len() / 2).sum();
+            assert_eq!(
+                covered - frame.alpha.len(),
+                shortfalls[i],
+                "frame {i} alpha shortfall"
+            );
+            assert_eq!(frame.alpha.len(), frame.c as usize, "frame {i} alpha len");
+        }
+    }
+
+    /// The jam effect envelope (codec gap ⑤, real 7.55 bytes): ten
+    /// 300x300 flash frames at anchor (0, 0) behind an 80-byte
+    /// unexplained block; every frame's alpha plane covers its
+    /// pixels exactly (`c == covered`), and the blob carries
+    /// 1,623,039 untabulated trailing bytes — five more full frames
+    /// and a partial one with no records, pinned as the honest
+    /// negative. Skips when `install-root` is absent.
+    #[test]
+    fn oja_jam_body_decodes_from_the_archive() {
+        let Some(archive) = install_archive("Playing1.opi") else {
+            return;
+        };
+        let body = archive_body(&archive, "Playing_Effect_Jam.oja");
+        let oja = parse_oja55(&body).unwrap();
+        assert_eq!(oja.frames.len(), 10);
+        assert_eq!(oja.trailing.len(), 1_623_039);
+        let spans = [136, 135, 157, 210, 439, 774, 1095, 1231, 1218, 1204];
+        let first_spans = [
+            (154, 24, 1),
+            (154, 12, 2),
+            (137, 1, 12),
+            (103, 1, 103),
+            (54, 1, 25),
+            (5, 1, 202),
+            (6, 1, 233),
+            (5, 1, 74),
+            (5, 1, 73),
+            (4, 1, 75),
+        ];
+        for (i, frame) in oja.frames.iter().enumerate() {
+            assert_eq!((frame.w, frame.h), (300, 300), "frame {i} dims");
+            assert_eq!((frame.x, frame.y), (0, 0), "frame {i} anchor");
+            assert_eq!(frame.rows.len(), spans[i], "frame {i} span count");
+            let span = &frame.rows[0];
+            assert_eq!(
+                (span.x, span.y, span.pixels.len() / 2),
+                first_spans[i],
+                "frame {i} first span"
+            );
+            let covered: usize = frame.rows.iter().map(|row| row.pixels.len() / 2).sum();
+            assert_eq!(
+                covered,
+                usize::try_from(frame.c).unwrap(),
+                "frame {i} alpha exact"
+            );
+            assert_eq!(frame.alpha.len(), usize::try_from(frame.c).unwrap());
+        }
     }
 }
