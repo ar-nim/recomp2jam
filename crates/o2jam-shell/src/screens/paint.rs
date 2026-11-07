@@ -107,11 +107,11 @@ pub const fn scene_index(screen: Screen) -> usize {
     }
 }
 
-/// Channel dialog bar: `STATE_CHANNEL` names zero sprites (verified
-/// on 7.55), so the channel scene stages this code-mounted bar
-/// instead — the same fallback the real-art soak uses. The bar
-/// carries no block entry, so it stages with an empty id and paints
-/// at its record anchor.
+/// Channel dialog art: code-mounted (`Dialog_ChannelSelectBar.ojs` is a
+/// real archive body no block names), so it is never part of the
+/// `STATE_CHANNEL` scene — entry-less mounted art stages through
+/// [`unbound_scene_placements`] with an empty id and paints at its
+/// record anchor.
 pub const DIALOG_BAR_SPRITE: &str = "Dialog_ChannelSelectBar.ojs";
 
 /// Sprite bodies one `ControlList` block names, in file order (empty
@@ -134,22 +134,16 @@ fn block_or_single(list: &ControlList, block: &str, single: &str) -> Vec<String>
 
 /// Sprite bodies one main scene needs, in block order (lifecycle
 /// §5–11). Splash and loading resolve to their single art sprites
-/// (code-mounted, not block-named); channel falls back to the
-/// code-mounted dialog bar (`STATE_CHANNEL` names zero sprites);
-/// room, waiting, playing, and result name their block entries for
-/// `bind_scene_rects`.
+/// (code-mounted, not block-named); channel, room, waiting,
+/// playing, and result name their block entries for `bind_scene_rects`
+/// (`STATE_CHANNEL` names zero sprites on 7.55, so the channel scene
+/// stages nothing — sprite-less entries draw no art per recipe step 6
+/// and the scene keeps its flat background plus the live list).
 #[must_use]
 pub fn main_scene_sprites(list: &ControlList, screen: Screen) -> Vec<String> {
     match screen {
         Screen::Avi => block_or_single(list, AVI_BLOCK, AVI_LOGO_SPRITE),
-        Screen::Channel => {
-            let names = block_sprites(list, CHANNEL_BLOCK);
-            if names.is_empty() {
-                vec![DIALOG_BAR_SPRITE.to_owned()]
-            } else {
-                names
-            }
-        }
+        Screen::Channel => block_sprites(list, CHANNEL_BLOCK),
         Screen::Room => block_sprites(list, ROOM_BLOCK),
         Screen::Waiting => block_sprites(list, WAITING_BLOCK),
         Screen::Loading => block_or_single(list, "STATE_LOADING", LOADING_SPRITE),
@@ -159,7 +153,7 @@ pub fn main_scene_sprites(list: &ControlList, screen: Screen) -> Vec<String> {
 }
 
 /// Placements for code-mounted sprites without a block entry
-/// (channel dialog bar, loading gate): no entry means no id, code,
+/// (loading gate): no entry means no id, code,
 /// or layout to claim, so each sprite paints 1:1 at its own record
 /// anchor with an empty rect — never full-bleed. Entries of bare-
 /// `BOUND` blocks keep their real id and code through
@@ -3825,10 +3819,12 @@ mod paint_tests {
     }
 
     #[test]
-    fn channel_bar_paints_at_its_authored_anchor_not_the_canvas() {
-        // `Dialog_ChannelSelectBar.ojs` anchors at `(0, 0)` (347x41 on
-        // 7.55): staged unbound it paints 1:1 at that authored anchor —
-        // never stretched over the canvas.
+    fn entry_less_mounted_art_paints_at_its_authored_anchor_not_the_canvas() {
+        // Entry-less mounted art (`Dialog_ChannelSelectBar.ojs` anchors at
+        // `(0, 0)`, 347x41 on 7.55) paints 1:1 at that authored anchor —
+        // never stretched over the canvas. It is dialog art, not part of
+        // the `STATE_CHANNEL` scene (which names zero sprites and stages
+        // nothing).
         let art = SceneArt {
             placements: unbound_scene_placements(&[DIALOG_BAR_SPRITE.to_owned()]),
             figures: HashMap::from([(DIALOG_BAR_SPRITE.to_owned(), red_figure())]),
@@ -4227,9 +4223,10 @@ mod paint_tests {
     }
 
     #[test]
-    fn channel_falls_back_to_the_dialog_bar() {
-        // `STATE_CHANNEL` names zero sprites on 7.55: the scene
-        // stages the code-mounted dialog bar instead.
+    fn channel_with_zero_sprites_stages_no_scene_art() {
+        // `STATE_CHANNEL` names zero sprites on 7.55: the scene stages
+        // nothing (sprite-less entries draw no art, recipe step 6), so
+        // the painter keeps its flat background plus the live list.
         let list = o2jam_file::parse_control_list(
             &[
                 "NUMBER_OF_STATE 0x01",
@@ -4244,9 +4241,6 @@ mod paint_tests {
             .join("\n"),
         )
         .unwrap();
-        assert_eq!(
-            main_scene_sprites(&list, Screen::Channel),
-            vec![DIALOG_BAR_SPRITE.to_owned()]
-        );
+        assert!(main_scene_sprites(&list, Screen::Channel).is_empty());
     }
 }
