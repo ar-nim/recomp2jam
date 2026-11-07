@@ -1482,6 +1482,17 @@ impl LivePlay {
         self.peers.apply_rank_broadcast(packet)
     }
 
+    /// Seed the rank-mirror holder bytes (scripted walk fixtures
+    /// only): the song path never sets these — only a real 4015
+    /// population (unwired) or fixture code does — so ranks stay
+    /// hidden until a broadcast with matching holders delivers.
+    pub fn set_rank_holders(&mut self, global: u8, stored: [u8; PEER_SLOT_COUNT]) {
+        self.peers.set_global_rank(global);
+        for (slot, rank) in stored.iter().enumerate() {
+            self.peers.set_stored_rank(slot, *rank);
+        }
+    }
+
     /// Move the song clock; unjudged heads and taps past the bad
     /// window rate Miss. Held tails never expire: the verified 7.55
     /// expiry scan never advances its per-lane cursors, so its Miss is
@@ -3001,6 +3012,21 @@ mod live_play_tests {
         assert_eq!(deliveries.len(), PEER_SLOT_COUNT);
         assert!(deliveries.iter().all(|found| found.slot.is_none()));
         assert_eq!(live.peers().rank_row(0), Some(0));
+    }
+
+    #[test]
+    fn seeded_holders_resolve_a_broadcast_onto_their_slots() {
+        // Fixture seeding (the only non-4015 writer): the local seat
+        // holds 1, the peer 2, empties the no-holder sentinel — the
+        // broadcast then delivers positions 0/1 and leaves the rest
+        // zeroed and hidden.
+        let mut live = LivePlay::new(&[(0, 1000, 7)]);
+        live.set_rank_holders(0xFF, [1, 2, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
+        let deliveries = live.apply_peer_ranks([1, 2, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(deliveries.len(), 2);
+        assert_eq!(live.peers().rank_row(0), Some(1));
+        assert_eq!(live.peers().rank_row(1), Some(2));
+        assert_eq!(live.peers().rank_row(2), Some(0));
     }
 
     #[test]
