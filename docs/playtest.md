@@ -1635,3 +1635,45 @@ and the `channel-fill.md` rework, plus the sweep log (`9e12282`).
   from the chat/cards absence tests, all other targets unchanged,
   0 failures). No lint findings. No commits, no pushes.** This sweep
   touched only `docs/playtest.md`.
+
+## Regression sweep — 2026-11-07 21:58 UTC+8 (HEAD `08911d5`, tree clean at start)
+
+Live re-proof on the chat-head. Covers the net feat commit landed after
+the negatives-head baseline `9e12282`: decode waiting chat packets
+(`b94db55`), plus the docs log (`08911d5`).
+
+- `cargo fmt --check`: clean, `exit=0` (on clean HEAD at sweep start).
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1248 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 7, file 149, game 92, net 346,
+  render 73, shell 440, real_art 7, scenes 22, recomp2jam 93
+  (6 doc-test targets, 0 each). Identical counts across 3 runs.
+- `cargo build --workspace --release`: clean, `exit=0`, 0 warning
+  lines.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.62 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`21:58:55 +08:00`):
+  `Authorize session` → `Create room: songflow` →
+  `Get music list: [0/00] 562 music` → `Start game: [000]` →
+  `Game [000] Submit score: 2210`.
+- **Verdict: no regression — suite is green on the chat-head (1248
+  passed; +8 vs the 1240 negatives-head baseline, all net 338 → 346
+  from the waiting-chat packet decode tests, all other targets
+  unchanged, 0 failures). No lint findings of mine. No commits, no
+  pushes.** This sweep touched only `docs/playtest.md`.
+- Tree note: a peer landed uncommitted in-flight work mid/late-sweep
+  in `crates/o2jam-shell/src/screens/paint.rs` (grew from +13 to +294
+  lines between checks: new `paint_waiting_chat` /
+  `waiting_chat_visible_messages` chat-paint code + tests; HEAD carries
+  none of it). Every count above matches clean HEAD. Re-run on the
+  dirty state: `cargo clippy --workspace --all-targets -- -D warnings`
+  stays clean, but `cargo fmt --check` FAILS on one of the peer's new
+  lines (long `waiting_chat_visible_messages` signature, needs
+  rewrapping). None of that is mine: per the sweep rules (touch only
+  `docs/playtest.md`, fix only my own lint findings) the peer's file
+  was left alone, and the peer was still editing when this log was
+  written, so no suite re-run on the moving dirty state was taken.
