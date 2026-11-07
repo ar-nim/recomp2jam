@@ -75,12 +75,20 @@ impl SceneArt {
     }
 
     /// Paint staged figures at their verbatim native origins with no
-    /// flat fill, so the OPI art keeps its `.bnd` layout. Empty art falls
-    /// back to the flat background; placements without a loaded
-    /// figure are skipped.
-    pub fn paint_backdrop(&self, frame: &mut Frame<'_>, screen: Screen) {
+    /// flat fill: art-less states contribute zero staged pixels (an
+    /// art-less block stages no controls with art and the render loop
+    /// draws stored controls only), and no backbuffer fill is evidenced
+    /// in the exe (no `FillRect` import or `Fill`/`Paint`/`Clear` fill
+    /// vocabulary; `CWindow`/`CDialogBase` survive only as RTTI names),
+    /// so an empty stage leaves the frame untouched and the live ink
+    /// layers on top. Callers without any staged art keep the flat
+    /// `paint_screen` card fallback.
+    pub fn paint_backdrop(&self, frame: &mut Frame<'_>, _screen: Screen) {
         if !self.has_figures() {
-            fill_background(frame, screen);
+            // Pinned no-fill rule (`docs/channel-fill.md`): the exe
+            // contributes zero pixels behind art-less states and no
+            // fill call is evidenced, so the shell paints nothing and
+            // leaves the backbuffer to the presenter.
             return;
         }
         self.paint_overlay(frame);
@@ -107,9 +115,14 @@ pub const fn scene_index(screen: Screen) -> usize {
     }
 }
 
-/// Channel dialog art: code-mounted (`Dialog_ChannelSelectBar.ojs` is a
-/// real archive body no block names), so it is never part of the
-/// `STATE_CHANNEL` scene — entry-less mounted art stages through
+/// Channel dialog art: code-fetched (`Dialog_ChannelSelectBar.ojs` is a
+/// real archive body named by no block), so it is never part of the
+/// `STATE_CHANNEL` scene. The single code fetch sits at file `0x8de84`
+/// (VA `0x48de84`) inside the builder at file `0x8dd10` (VA `0x48dd10`),
+/// beside `ControlList`-parent (`0x762B44`) traffic and ~63 KB below the
+/// dialog-open path (`0x4ED650`, file `0xed650`) — the bar is not mounted
+/// by `0x4ED650`, and with no `DIALOG_` literal in the image its dialog
+/// host stays unpinned. Entry-less mounted art stages through
 /// [`unbound_scene_placements`] with an empty id and paints at its
 /// record anchor.
 pub const DIALOG_BAR_SPRITE: &str = "Dialog_ChannelSelectBar.ojs";
@@ -312,9 +325,10 @@ pub(crate) fn paint_channel_list(
 }
 
 /// Paint staged channel art with the live list and cursor on top.
-/// With empty art the flat navy is a documented placeholder, not a
-/// verdict: the exe fill behind spriteless blocks stays OPEN
-/// (`docs/channel-fill.md`).
+/// With empty art the shell paints no fill (pinned no-fill rule per
+/// `docs/channel-fill.md`: the exe stages zero pixels behind art-less
+/// states and no fill call is evidenced) and layers only the live
+/// list, title, and cursor.
 pub fn paint_channel_scene(
     frame: &mut Frame<'_>,
     channels: &[ChannelState],
@@ -3208,23 +3222,34 @@ mod paint_tests {
 
     #[test]
     fn empty_art_falls_back_to_flat() {
-        // No figures staged: the backdrop keeps the flat fallback
-        // so a bare frame never shows garbage. Staged scenes (see
-        // `every_art_scene_hides_flat_fill`) never take this path.
+        // No figures staged anywhere: Avi paints nothing at all (no
+        // logo, no stamp); lobbies keep only the readable title over
+        // the untouched frame; loading keeps only the live bar; the
+        // highway and result scenes keep their own painters. No staged
+        // path invents a fill (`docs/channel-fill.md` no-fill rule).
         let art = SceneArt::default();
-        for screen in [
-            Screen::Avi,
-            Screen::Channel,
-            Screen::Room,
-            Screen::Waiting,
-            Screen::Loading,
-            Screen::Playing,
-            Screen::Result,
-        ] {
-            assert!(!art.has_figures());
+        assert!(!art.has_figures());
+        let avi = paint_art(Screen::Avi, &art, 16, 12);
+        assert!(avi.iter().all(|pixel| *pixel == 0));
+        for screen in [Screen::Channel, Screen::Room, Screen::Waiting] {
             let buf = paint_art(screen, &art, 16, 12);
-            assert_eq!(buf[0], background_of(screen), "{screen:?}");
+            assert_eq!(buf[0], 0, "{screen:?} paints no fill");
+            assert!(
+                !buf.iter().all(|pixel| *pixel == background_of(screen)),
+                "{screen:?} paints no flat fill"
+            );
+            assert!(
+                buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)),
+                "{screen:?} keeps title ink"
+            );
         }
+        let loading = paint_art(Screen::Loading, &art, 16, 12);
+        assert!(!loading.contains(&background_of(Screen::Loading)));
+        assert!(loading.contains(&pack_xrgb(0x30, 0xB0, 0x30)));
+        let playing = paint_art(Screen::Playing, &art, 16, 12);
+        assert_eq!(playing[0], background_of(Screen::Playing));
+        let result = paint_art(Screen::Result, &art, 16, 12);
+        assert_eq!(result[0], background_of(Screen::Result));
     }
 
     fn battle_room() -> RoomTeams {
@@ -4915,7 +4940,8 @@ mod paint_tests {
     #[test]
     fn staged_scene_prefers_bnd_anchors_over_the_legacy_grid() {
         // Covers staged: the seat line anchors to the cover rect
-        // and the legacy grid slot `(100,150)` stays background.
+        // and the legacy grid slot `(100,150)` stays untouched — an
+        // empty stage paints no fill (`docs/channel-fill.md`).
         let placements = vec![waiting_probe(
             "IDC_IMAGE_SWAIT_COVERAVATAR1",
             None,
@@ -4936,7 +4962,7 @@ mod paint_tests {
             &art,
         );
         assert_eq!(buf[51 * 800 + 24], scrim_color());
-        assert_eq!(buf[150 * 800 + 100], background_of(Screen::Waiting));
+        assert_eq!(buf[150 * 800 + 100], 0);
     }
 
     #[test]
@@ -4981,10 +5007,10 @@ mod paint_tests {
     }
 
     #[test]
-    fn empty_channel_art_keeps_the_documented_placeholder_fill() {
-        // No staged figures means no staged ink: the bare scene keeps
-        // the flat navy corner behind the list (placeholder per
-        // `docs/channel-fill.md`, not an exe verdict).
+    fn empty_channel_art_paints_no_fill() {
+        // Pinned no-fill rule (`docs/channel-fill.md`): no staged
+        // figures means no staged ink and no invented fill — the bare
+        // corner stays untouched while the live title still paints.
         let art = SceneArt::default();
         let mut buf = vec![0u32; 64 * 48];
         paint_channel_scene(
@@ -4997,6 +5023,63 @@ mod paint_tests {
             0,
             &art,
         );
-        assert_eq!(buf[0], background_of(Screen::Channel));
+        assert_eq!(buf[0], 0);
+        assert!(!buf.contains(&background_of(Screen::Channel)));
+        assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+    }
+
+    #[test]
+    fn staged_empty_backdrop_leaves_every_frame_untouched() {
+        // The exe contributes zero pixels behind art-less states, so
+        // an empty stage paints nothing on any screen: a patterned
+        // backbuffer survives `paint_backdrop` verbatim.
+        let art = SceneArt::default();
+        assert!(!art.has_figures());
+        for screen in [
+            Screen::Avi,
+            Screen::Channel,
+            Screen::Room,
+            Screen::Waiting,
+            Screen::Loading,
+            Screen::Playing,
+            Screen::Result,
+        ] {
+            let mut buf = vec![0x123456u32; 16 * 12];
+            art.paint_backdrop(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 16,
+                    h: 12,
+                },
+                screen,
+            );
+            assert_eq!(buf, vec![0x123456u32; 16 * 12], "{screen:?}");
+        }
+    }
+
+    #[test]
+    fn channel_bar_art_layers_behind_the_live_list() {
+        // The code-fetched channel bar (`DIALOG_BAR_SPRITE`, never a
+        // `STATE_CHANNEL` entry) stages entry-less at its record anchor:
+        // bar ink at the origin, live list and cursor on top, no fill.
+        let art = SceneArt {
+            placements: unbound_scene_placements(&[DIALOG_BAR_SPRITE.to_owned()]),
+            figures: HashMap::from([(DIALOG_BAR_SPRITE.to_owned(), red_figure())]),
+        };
+        let mut buf = vec![0u32; 64 * 48];
+        paint_channel_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 48,
+            },
+            &two_channels(),
+            0,
+            &art,
+        );
+        assert_eq!(buf[0], pack_xrgb(255, 0, 0));
+        assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+        assert!(buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
+        assert!(!buf.contains(&background_of(Screen::Channel)));
     }
 }

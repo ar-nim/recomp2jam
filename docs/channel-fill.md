@@ -1,10 +1,12 @@
-# Spriteless-block fill: `STATE_CHANNEL` (7.55) — mechanism VERIFIED, color OPEN
+# Spriteless-block fill: `STATE_CHANNEL` (7.55) — no-fill rule PINNED
 
 Which of dialog-default / parent-background / window-clear / first-child-art
-paints behind a block that names zero sprites. Short answer: **none is
-evidenced — the fill color stays OPEN.** What *is* pinned: the block stages
-no art at all, and no dedicated class hosts it. No disassembly is reproduced;
-offsets are file offsets unless marked VA (VA = file + `0x400000`).
+paints behind a block that names zero sprites. Short answer: **none — the
+exe stages zero pixels behind art-less states and no fill call is
+evidenced, so the shell paints nothing and leaves the frame untouched.**
+No disassembly is reproduced; offsets are file offsets unless marked VA
+(VA = file + `0x400000`). New offsets below are offset-only byte-scan
+findings (no new REA dossier filed).
 
 ## The block (byte walk, read-only)
 
@@ -29,35 +31,75 @@ miss to all-zero), one control per entry gated on `code & 0xFF0000 ≠ 0`
 (`0x48A134`). Self entry `0x12000000` gates out; the other 49 stage
 art-less controls. The render loop `0x5DEC30` (file `0x1DEC30`,
 `ev_ff581cfa…`) draws stored controls only — the state contributes zero
-pixels. Visible ink rides code-mounted art outside the block
-(`Dialog_ChannelSelectBar.ojs` sits in the archive, named by no block;
-`DIALOG_CHANNEL_INFO`/`CDChannelInfo` + `CCBtnChannel` per lifecycle
-§6) through the unpinned dialog-open path (`0x4ED650`, ui-loader OPEN
-2–3).
+pixels. Visible ink rides code-mounted art outside the block (see "The
+bar fetch" below; `DIALOG_CHANNEL_INFO`/`CDChannelInfo` + `CCBtnChannel`
+per lifecycle §6).
 
-## Fill candidates — all unpinned
+## The bar fetch (code-mounted, host unpinned)
 
-- **Dialog default color**: `CDialogBase` (`0x67d7e0`) / `CWindow`
-  (`0x6448bc`) unexamined (ui-draw OPEN 3). No default-fill call traced.
+`Dialog_ChannelSelectBar.ojs` is stored at file `0x247b84`
+(VA `0x647b84`) in a sprite-name table, and exactly one `LE32` reference
+to that VA exists in the image: file `0x8de84` (VA `0x48de84`). The
+reference sits inside the builder starting at file `0x8dd10`
+(VA `0x48dd10`, nearest function prologue below; next prologue above at
+file `0x8dfc0`), amid `ControlList`-parent (`0x762B44`) traffic at files
+`0x8de76`/`0x8dea1` — a state/dialog builder fetching the bar body by
+code alongside parent-array work. It is ~63 KB below the dialog-open path
+(`0x4ED650`, file `0xed650`), so the bar is **not** mounted by `0x4ED650`.
+No `DIALOG_`-prefixed literal exists anywhere in the image (0 hits), and
+`DIALOG_CHANNEL_INFO` is absent as a string while `CDChannelInfo` survives
+only as one RTTI name (file `0x27dc10`) — dialog lookup is index-driven,
+so the bar's dialog host (`DIALOG_CHANNEL_INFO`/`CDChannelInfo` per
+lifecycle §6) stays unpinned and the shell stages no bar body.
+
+## Fill candidates — no-fill pinned, hosts stay OPEN
+
+- **Dialog default color**: `CDialogBase` / `CWindow` survive only as
+  single RTTI names (files `0x27d7f4`/`0x27d7d8`); no `Window.cpp`,
+  `Dialog.cpp`, `CWindow::`, or `CDialogBase::` strings exist (0 hits
+  each), and ui-draw OPEN 3 (dialog-relative rects) is untouched. No
+  default-fill call evidenced — stays OPEN.
 - **Parent background**: state-open mounts no parent fill; the screen-level
   consumer of the child array is unpinned (claims-render OPEN 2).
-- **Window clear color**: no backbuffer-clear call traced; display init
-  (`0x413030`) pins mode/Flip vocabulary only, clear color stays OPEN.
+  Stays OPEN.
+- **Window clear color — PINNED to no-fill**: no backbuffer-clear call is
+evidenced. Byte scans return 0 hits for `FillRect`, `fill`, `Fill`,
+  `Paint`, `OnDraw`, `BackBuffer`, and `Clear`; `GetDC`/`ReleaseDC`/`SetRect`
+  appear once each in the import region (file `0x27b92`–`0x27ba8`, window
+  setup alongside `SetWindowPos`) and `BitBlt`/`BltFast`/`Flip` only as
+  DirectDraw/Direct3DX error strings (files `0x24f032`–`0x250b43`) — no
+  paint-time fill vocabulary. Display init (`0x413030`) pins mode/Flip
+  vocabulary only (claims A38/A39, `ev_c7d5a15f…`). Combined with the
+  zero-pixel staging above, the rule is: the exe contributes no fill
+  behind art-less states; whether the device shows a stale frame or a
+  presenter clear is presenter behavior, and the shell paints nothing.
 - **First-child art**: refuted above (no sprite, no rect).
 
 ## Shell rule (`crates/o2jam-shell/src/screens/paint.rs`)
 
-`main_scene_sprites(Channel)` returns `[]`; the scene stages nothing and
-`paint_backdrop` keeps the flat navy `background_of(Channel)` plus the
-live list. That navy is a **documented placeholder, not a verdict** (the
-flat fills stay invented per bnd-audit 35/158). Tests:
+`main_scene_sprites(Channel)` returns `[]` (the block names no art);
+`SceneArt::paint_backdrop` with no figures paints nothing — the frame is
+left untouched and only the live list, title, and cursor layer on top.
+The old flat navy is gone: it was a documented placeholder, and the
+pinned no-fill rule replaces it. Tests:
 `spriteless_channel_block_stages_no_scene_art` (shape-faithful bare-`BOUND`
 block: image/button/text/`SET` code classes, zero sprites → no scene art),
-`empty_channel_art_keeps_the_documented_placeholder_fill`.
+`empty_channel_art_paints_no_fill` (empty stage: untouched corner, no
+navy, live title ink), `staged_empty_backdrop_leaves_every_frame_untouched`
+(patterned backbuffer survives `paint_backdrop` on every screen),
+`channel_bar_art_layers_behind_the_live_list` (entry-less
+`DIALOG_BAR_SPRITE` art at its record anchor under list and cursor, no
+fill), `empty_art_falls_back_to_flat` (staged-empty scenes carry no fill;
+bare `paint_screen` cards and the result backdrop keep their own
+missing-archive fallbacks).
 
 ## OPEN
 
-1. Backbuffer content under art-less states (stale frame vs clear color).
+1. Presenter backbuffer policy behind art-less states (stale frame vs
+   presenter clear): the shell contributes zero pixels; the device side
+   is unpinned.
 2. Sprite-less control paint (text/button/image with no art or rect).
-3. Dialog-open `0x4ED650` + `DIALOG_CHANNEL_INFO` mount of the select bar.
-4. `CWindow`/`CDialogBase` default fill, if any.
+3. Dialog host mounting the code-fetched select bar
+   (`DIALOG_CHANNEL_INFO`/`CDChannelInfo` index path; `0x4ED650` excluded
+   as the fetch site but its own behavior is unread — ui-loader OPEN 2).
+4. `CWindow`/`CDialogBase` default fill, if any (ui-draw OPEN 3).
