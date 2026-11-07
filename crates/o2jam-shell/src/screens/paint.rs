@@ -1378,17 +1378,13 @@ fn paint_waiting_skills(frame: &mut Frame<'_>, room: &JoinedRoom, placements: &[
 /// Map-cycle names behind the `MAPNAME` caption, in room-word order
 /// (map-cycle path, rdata file `0x249990`): the exe centers entry
 /// `low == 0 ? 3 : low % 4` of (`None`, `한가한대전장의오후`,
-/// `패자의역습`, `원하지않은결말`). The micro-font carries no CP949
-/// glyphs (same gap as the chosung hangul cells), so the three
-/// Korean entries paint as ASCII stand-ins — same-slot translations,
-/// not new sources. The `0x4ad350` applier `Random`/`NoteFactory`
-/// arm stays OPEN (`docs/caption-sources.md` OPEN 3) and never paints.
-const WAITING_MAP_CYCLE_NAMES: [&str; 4] = [
-    "None",
-    "Leisurely Afternoon",
-    "Losers Counterattack",
-    "Unwanted Ending",
-];
+/// `패자의역습`, `원하지않은결말`). The CP949-sourced Korean entries
+/// paint their real glyphs now that the embedded Noto Sans KR subset
+/// carries Hangul (formerly ASCII stand-ins — the micro-font had no
+/// CP949 glyphs). The `0x4ad350` applier `Random`/`NoteFactory` arm
+/// stays OPEN (`docs/caption-sources.md` OPEN 3) and never paints.
+const WAITING_MAP_CYCLE_NAMES: [&str; 4] =
+    ["None", "한가한대전장의오후", "패자의역습", "원하지않은결말"];
 
 /// Map-cycle slot for one room word (files `0xb3cc6`–`0xb3ce3`):
 /// the low word, with word 0 selecting slot 3. Byte access keeps
@@ -2604,6 +2600,7 @@ mod paint_tests {
     use crate::avatar::FigureLayer;
     use crate::screen::Screen;
     use o2jam_net::{JoinedRoom, RoomMember, RoomSlot};
+    use o2jam_render::{has_ink_near, near_xrgb};
     use o2jam_render::{pack_xrgb, Frame, Rgb555Image};
 
     fn painted(screen: Screen, w: usize, h: usize) -> Vec<u32> {
@@ -2676,7 +2673,7 @@ mod paint_tests {
         let buf = paint_art(Screen::Avi, &corner_art(), 32, 24);
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert!(!buf.contains(&pack_xrgb(0x20, 0x60, 0xC0)));
-        assert!(!buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+        assert!(!has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
     }
 
     #[test]
@@ -3161,7 +3158,7 @@ mod paint_tests {
         let buf = paint_art(Screen::Avi, &corner_art(), 32, 24);
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert_eq!(buf[10 * 32 + 11], 0);
-        assert!(!buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+        assert!(!has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
     }
 
     fn two_channels() -> Vec<ChannelState> {
@@ -3198,8 +3195,8 @@ mod paint_tests {
             &art,
         );
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
-        assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
-        assert!(buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
+        assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
+        assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xD0, 0x20)));
     }
 
     #[test]
@@ -3238,9 +3235,9 @@ mod paint_tests {
             &two_channels(),
             1,
         );
-        assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+        assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
         assert!(buf.contains(&pack_xrgb(0x70, 0x70, 0x70)));
-        assert!(buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
+        assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xD0, 0x20)));
     }
 
     fn two_rooms() -> Vec<RoomListEntry> {
@@ -3279,8 +3276,8 @@ mod paint_tests {
             &art,
         );
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
-        assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
-        assert!(buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
+        assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
+        assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xD0, 0x20)));
     }
 
     /// Room fixture with every detail field set to a distinct value.
@@ -3445,7 +3442,7 @@ mod paint_tests {
             Some(&detail_placements()),
         );
         assert_eq!(buf[13 * 200 + 16], scrim_color());
-        assert!(buf.contains(&art_title_ink()));
+        assert!(has_ink_near(&buf, art_title_ink()));
     }
 
     #[test]
@@ -3466,10 +3463,10 @@ mod paint_tests {
         );
         assert_eq!(buf[47 * 200 + 46], scrim_color());
         // List plus cursor keep working under the panel.
-        assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
-        assert!(buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
+        assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
+        assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xD0, 0x20)));
         // Locked room paints the red lock line.
-        assert!(buf.contains(&pack_xrgb(0xFF, 0x50, 0x50)));
+        assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0x50, 0x50)));
     }
 
     #[test]
@@ -3543,7 +3540,7 @@ mod paint_tests {
         );
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert!(buf.contains(&pack_xrgb(255, 0, 0)));
-        assert!(!buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+        assert!(!has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
         assert!(!buf.contains(&pack_xrgb(0xFF, 0xFF, 0x40)));
     }
 
@@ -3573,7 +3570,7 @@ mod paint_tests {
                 "{screen:?} paints no flat fill"
             );
             assert!(
-                buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)),
+                has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)),
                 "{screen:?} keeps title ink"
             );
         }
@@ -3745,8 +3742,8 @@ mod paint_tests {
     }
 
     /// Score with every pinned field set to a distinct full-top-row
-    /// digit (the 3x5 glyphs of 8/9/3/2/7/5 all carry a lit
-    /// top-left pixel).
+    /// digit (the bitmap glyphs of 8/9/3/2/7/5 all carry a lit
+    /// top-left pixel; the TTF glyphs anchor the same left edge).
     fn full_score() -> o2jam_game::Score {
         let mut score = o2jam_game::Score {
             points: 87_654_321,
@@ -3760,13 +3757,21 @@ mod paint_tests {
         score
     }
 
-    /// One pinned field: the glyph pixel at `(x, y)` must light and
-    /// the pixel left of the anchor must stay flat (the decimal
-    /// starts exactly at the pinned x).
+    /// One pinned field: ink must light inside the anchor's cell box
+    /// (the TTF rasterizes within the cell, antialiased) and the
+    /// column left of the anchor must stay flat (the decimal starts
+    /// exactly at the pinned x).
     fn assert_field(buf: &[u32], x: i32, y: i32) {
         let at = |x: i32, y: i32| buf[y as usize * 800 + x as usize];
-        assert_eq!(at(x, y), result_number_ink(), "field at ({x},{y})");
-        assert_ne!(at(x - 1, y), result_number_ink(), "left of ({x},{y})");
+        let ink = result_number_ink();
+        let cell_lit = (x..x + 10).any(|px| (y..y + 18).any(|py| near_xrgb(at(px, py), ink)));
+        assert!(cell_lit, "field at ({x},{y}) must light ink");
+        for py in y..y + 16 {
+            assert!(
+                !near_xrgb(at(x - 1, py), ink),
+                "left of ({x},{py}) must stay flat"
+            );
+        }
     }
 
     #[test]
@@ -3925,12 +3930,12 @@ mod paint_tests {
     /// boxes keep neighbor columns out of absence checks).
     fn row_ink_near(buf: &[u32], origin: (i32, i32), width: i32) -> bool {
         let (ox, oy) = origin;
-        for row in oy..oy + 7 {
+        for row in oy..oy + 16 {
             for col in ox..ox + width {
                 let (Ok(r), Ok(c)) = (usize::try_from(row), usize::try_from(col)) else {
                     continue;
                 };
-                if r < 600 && c < 800 && buf[r * 800 + c] == result_number_ink() {
+                if r < 600 && c < 800 && near_xrgb(buf[r * 800 + c], result_number_ink()) {
                     return true;
                 }
             }
@@ -4396,7 +4401,7 @@ mod paint_tests {
         // onto its clamped layer); the retired amber caption ink
         // never comes back.
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
-        assert!(!buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
+        assert!(!has_ink_near(&buf, pack_xrgb(0xFF, 0xD0, 0x20)));
     }
 
     /// Ten-layer number font: layer `i` paints digit `i`.
@@ -4945,7 +4950,7 @@ mod paint_tests {
             &art,
             &status,
         );
-        assert!(buf.contains(&art_title_ink()), "caption ink paints");
+        assert!(has_ink_near(&buf, art_title_ink()), "caption ink paints");
         assert!(buf.contains(&scrim_color()), "caption scrim paints");
         let blank = vec![0u32; 64 * 48];
         let mut probe = blank.clone();
@@ -5025,7 +5030,7 @@ mod paint_tests {
         // (10 − 4, 200 − 2), covering the art pixel.
         assert_eq!(buf[198 * 800 + 6], scrim_color(), "seat line scrim");
         assert_ne!(buf[200 * 800 + 10], red, "live line covers art");
-        assert!(buf.contains(&art_title_ink()));
+        assert!(has_ink_near(&buf, art_title_ink()));
         assert_eq!(buf[0], 0, "covers no longer stack at the frame corner");
     }
 
@@ -5078,7 +5083,7 @@ mod paint_tests {
         );
         assert_eq!(buf[51 * 800 + 166], scrim_color(), "champion scrim");
         assert_eq!(buf[51 * 800 + 24], scrim_color(), "challenger scrim");
-        assert!(buf.contains(&art_title_ink()));
+        assert!(has_ink_near(&buf, art_title_ink()));
         // Ready dots ride the cover lines: host ready green, self dim.
         assert_eq!(buf[55 * 800 + 165], pack_xrgb(0x30, 0xE0, 0x30));
         assert_eq!(buf[55 * 800 + 23], pack_xrgb(0x50, 0x50, 0x50));
@@ -5159,7 +5164,7 @@ mod paint_tests {
             &placements,
         );
         assert_eq!(buf[93 * 800 + 186], scrim_color());
-        assert!(buf.contains(&art_title_ink()));
+        assert!(has_ink_near(&buf, art_title_ink()));
     }
 
     #[test]
@@ -5202,7 +5207,7 @@ mod paint_tests {
             &placements,
         );
         assert_eq!(buf[376 * 800 + 677], scrim_color());
-        assert!(buf.contains(&art_title_ink()));
+        assert!(has_ink_near(&buf, art_title_ink()));
     }
 
     #[test]
@@ -5249,7 +5254,7 @@ mod paint_tests {
             None,
         );
         assert_eq!(buf[13 * 800 + 569], scrim_color());
-        assert!(buf.contains(&art_title_ink()));
+        assert!(has_ink_near(&buf, art_title_ink()));
     }
 
     #[test]
@@ -5289,7 +5294,7 @@ mod paint_tests {
             Some("First"),
         );
         assert_eq!(buf[13 * 800 + 569], scrim_color());
-        assert!(buf.contains(&art_title_ink()));
+        assert!(has_ink_near(&buf, art_title_ink()));
     }
 
     #[test]
@@ -5403,7 +5408,7 @@ mod paint_tests {
             &placements,
         );
         assert_eq!(buf[453 * 800 + 20], scrim_color());
-        assert!(buf.contains(&art_title_ink()));
+        assert!(has_ink_near(&buf, art_title_ink()));
     }
 
     #[test]
@@ -5426,7 +5431,7 @@ mod paint_tests {
             &placements,
         );
         assert_eq!(buf[453 * 800 + 20], scrim_color());
-        assert!(buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
+        assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xD0, 0x20)));
     }
 
     #[test]
@@ -5476,7 +5481,7 @@ mod paint_tests {
             &placements,
         );
         assert_eq!(buf[561 * 800 + 16], scrim_color());
-        assert!(buf.contains(&art_title_ink()));
+        assert!(has_ink_near(&buf, art_title_ink()));
     }
 
     #[test]
@@ -5651,7 +5656,7 @@ mod paint_tests {
         );
         assert_eq!(buf[0], 0);
         assert!(!buf.contains(&background_of(Screen::Channel)));
-        assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+        assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
     }
 
     #[test]
@@ -5704,8 +5709,8 @@ mod paint_tests {
             &art,
         );
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
-        assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
-        assert!(buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
+        assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
+        assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xD0, 0x20)));
         assert!(!buf.contains(&background_of(Screen::Channel)));
     }
 
@@ -5728,11 +5733,12 @@ mod paint_tests {
     #[test]
     fn waiting_mapname_cycles_the_room_word_table() {
         // Map-cycle path: word 0 selects slot 3, otherwise the low
-        // word modulo 4 (files `0xb3cc6`–`0xb3ce3`).
-        assert_eq!(waiting_map_name(0), "Unwanted Ending");
-        assert_eq!(waiting_map_name(1), "Leisurely Afternoon");
-        assert_eq!(waiting_map_name(2), "Losers Counterattack");
-        assert_eq!(waiting_map_name(3), "Unwanted Ending");
+        // word modulo 4 (files `0xb3cc6`–`0xb3ce3`). The three
+        // CP949-sourced Korean names ride the embedded TTF.
+        assert_eq!(waiting_map_name(0), "원하지않은결말");
+        assert_eq!(waiting_map_name(1), "한가한대전장의오후");
+        assert_eq!(waiting_map_name(2), "패자의역습");
+        assert_eq!(waiting_map_name(3), "원하지않은결말");
         assert_eq!(waiting_map_name(4), "None");
     }
 
@@ -5758,7 +5764,7 @@ mod paint_tests {
             &placements,
         );
         assert_eq!(buf[13 * 800 + 476], scrim_color());
-        assert!(buf.contains(&art_title_ink()));
+        assert!(has_ink_near(&buf, art_title_ink()));
     }
 
     #[test]
@@ -5797,7 +5803,7 @@ mod paint_tests {
             &placements,
         );
         assert_eq!(buf[58 * 800 + 616], scrim_color());
-        assert!(buf.contains(&art_title_ink()));
+        assert!(has_ink_near(&buf, art_title_ink()));
     }
 
     #[test]
@@ -5820,7 +5826,7 @@ mod paint_tests {
             &placements,
         );
         assert_eq!(buf[58 * 800 + 616], scrim_color());
-        assert!(buf.contains(&art_title_ink()));
+        assert!(has_ink_near(&buf, art_title_ink()));
     }
 
     #[test]
@@ -5855,7 +5861,7 @@ mod paint_tests {
         assert_eq!(buf[206 * 800 + 736], scrim_color());
         assert_eq!(buf[244 * 800 + 736], scrim_color());
         assert_eq!(buf[282 * 800 + 736], scrim_color());
-        assert!(buf.contains(&art_title_ink()));
+        assert!(has_ink_near(&buf, art_title_ink()));
     }
 
     #[test]

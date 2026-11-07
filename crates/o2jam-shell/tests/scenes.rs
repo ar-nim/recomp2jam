@@ -14,7 +14,9 @@
 use std::collections::HashMap;
 
 use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
-use o2jam_render::{pack_xrgb, Frame, Rect, Rgb555Image, NATIVE_HEIGHT, NATIVE_WIDTH};
+use o2jam_render::{
+    has_ink_near, pack_xrgb, Frame, Rect, Rgb555Image, NATIVE_HEIGHT, NATIVE_WIDTH,
+};
 use o2jam_shell::avatar::ScenePlacement;
 use o2jam_shell::{
     can_enter, paint_screen, AvatarFigure, FigureLayer, GameLoop, MenuKey, Screen, ScreenFlow,
@@ -191,7 +193,7 @@ fn splash_paints_logo_card_over_background() {
     assert_eq!(buf[0], splash_background());
     let card = pack_xrgb(0x20, 0x60, 0xC0);
     assert!(buf.contains(&card));
-    assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+    assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
 }
 
 #[test]
@@ -202,12 +204,15 @@ fn channel_lists_entries_with_highlight_cursor() {
     assert_eq!(game.screen(), Screen::Channel);
     let buf = painted_game(&mut game, 64, 48, 0);
     assert_eq!(buf[0], channel_background());
-    assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+    assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
     assert!(buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
 }
 
 #[test]
 fn room_marks_locked_room_row() {
+    // The row line is 96 px wide here: the proportional TTF run is
+    // wider than the old bitmap run, so the `!` mark must stay on
+    // frame for the open/locked rows to differ.
     let mut open_game = ScreenGame::new();
     open_game.set_rooms(vec![room_row(false)]);
     open_game.lane_key(3, true);
@@ -216,10 +221,12 @@ fn room_marks_locked_room_row() {
     locked_game.set_rooms(vec![room_row(true)]);
     locked_game.lane_key(3, true);
     locked_game.menu_key(MenuKey::Confirm, true);
-    let open = painted_game(&mut open_game, 64, 48, 0);
-    let locked = painted_game(&mut locked_game, 64, 48, 0);
+    let open = painted_game(&mut open_game, 96, 48, 0);
+    let locked = painted_game(&mut locked_game, 96, 48, 0);
     assert_eq!(open[0], room_background());
     assert!(open.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
+    // Locked rows suffix `!` on the room line; open rows do not —
+    // the two frames differ in text ink.
     assert_ne!(open, locked);
 }
 
@@ -267,7 +274,7 @@ fn finished_song_lands_on_result_without_invented_score_digits() {
     // The invented (16,16) score anchor stays UNPAINTED (anchors
     // pending REA, docs/cresult-anchors.md).
     assert_ne!(buf[16 * 70 + 16], pack_xrgb(0xFF, 0xFF, 0xFF));
-    assert!(!buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+    assert!(!has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
 }
 
 #[test]
@@ -446,7 +453,9 @@ fn stage_screen_art(game: &mut ScreenGame, screen: Screen, name: &str) {
 fn assert_composed(buf: &[u32], ui_inks: &[u32]) {
     assert!(buf.contains(&staged_ink()));
     for ink in ui_inks {
-        assert!(buf.contains(ink));
+        // Text inks antialias through the TTF: probe the near-ink
+        // band instead of exact pixels.
+        assert!(has_ink_near(buf, *ink));
     }
     assert!(buf.iter().any(|pixel| *pixel != buf[0]));
 }
@@ -546,5 +555,5 @@ fn result_layers_staged_art_without_invented_digits() {
     // The invented (16,16) score anchor stays UNPAINTED over the
     // staged art (anchors pending REA, docs/cresult-anchors.md).
     assert_ne!(buf[16 * 70 + 16], pack_xrgb(0xFF, 0xFF, 0xFF));
-    assert!(!buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+    assert!(!has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
 }

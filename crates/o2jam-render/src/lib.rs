@@ -2,7 +2,11 @@
 //!
 //! Pure pixel math, no GPU: RGB555 sprites (see `o2jam-file`) blit
 //! into XRGB8888 frames that a backend (later: wgpu) uploads.
-//! Everything here is headless-testable with synthetic pixels.
+//! Everything here is headless-testable with synthetic pixels. Text
+//! rasterizes through the embedded TTF in [`font`], with the bitmap
+//! faces here as the missing-font fallback.
+
+pub mod font;
 
 /// Expand one little-endian RGB555 pixel to 24-bit RGB.
 #[must_use]
@@ -281,9 +285,8 @@ pub fn visible_spans(curtain: LaneCurtain, highway: &Rect) -> Vec<Rect> {
     }
 }
 
-/// Micro-font glyph width in pixels (digits only for now; the combo
-/// counters, scores, and version stamps need no letters yet).
-/// Glyphs are hand-authored below — no font assets involved.
+/// Micro-font glyph width in pixels (the bitmap fallback face; live
+/// text rasterizes through the embedded TTF in [`font`]).
 pub const GLYPH_W: usize = 3;
 /// Micro-font glyph height in pixels.
 pub const GLYPH_H: usize = 5;
@@ -388,61 +391,85 @@ pub fn draw_digit(frame: &mut Frame<'_>, x: i32, y: i32, digit: u8, color: u32) 
     draw_rows(frame, x, y, rows, color);
 }
 
-/// Draw one ASCII character (`glyph_for` coverage) at `(x, y)`;
-/// undrawable bytes leave a blank advance so layout stays stable.
+/// Draw one ASCII character of the bitmap micro face (`glyph_for`
+/// coverage) at `(x, y)`; undrawable bytes leave a blank advance so
+/// layout stays stable. This is the missing-font fallback face —
+/// live text goes through [`draw_text`]/[`font::draw_text_cell`].
 pub fn draw_char(frame: &mut Frame<'_>, x: i32, y: i32, ch: u8, color: u32) {
     if let Some(rows) = glyph_for(ch) {
         draw_rows(frame, x, y, rows, color);
     }
 }
 
-/// Pixel width of `text` in bytes (no trailing spacing).
+/// Decimal digit count of `value` (`0` counts as one digit).
 #[must_use]
-pub fn text_width(text: &str) -> usize {
+fn digit_count(mut value: u32) -> usize {
+    let mut digits = 1;
+    while value >= 10 {
+        value /= 10;
+        digits += 1;
+    }
+    digits
+}
+
+/// Pixel width of `text` in the bitmap micro face (no trailing
+/// spacing): the missing-font fallback of [`text_width`].
+#[must_use]
+pub(crate) fn bitmap_micro_text_width(text: &str) -> usize {
     if text.is_empty() {
         return 0;
     }
     text.len() * GLYPH_ADVANCE - 1
 }
 
-/// Draw ASCII `text` from `x` (top-left), [`GLYPH_ADVANCE`] spacing;
-/// returns the x edge after the last byte.
-pub fn draw_text(frame: &mut Frame<'_>, x: i32, y: i32, text: &str, color: u32) -> i32 {
+/// Draw ASCII `text` in the bitmap micro face — the missing-font
+/// fallback body of [`draw_text`] — and return the x edge after it.
+pub(crate) fn draw_bitmap_micro_line(
+    frame: &mut Frame<'_>,
+    x: i32,
+    y: i32,
+    text: &str,
+    color: u32,
+) -> i32 {
     for (i, byte) in text.bytes().enumerate() {
         draw_char(frame, x + (i * GLYPH_ADVANCE) as i32, y, byte, color);
     }
     x + (text.len() * GLYPH_ADVANCE) as i32
 }
 
-/// Pixel width of `value` in digits (no trailing spacing).
+/// Pixel width of `value` in bitmap micro digits (no trailing
+/// spacing): the missing-font fallback of [`number_width`].
 #[must_use]
-pub fn number_width(mut value: u32) -> usize {
-    let mut digits = 1;
-    while value >= 10 {
-        value /= 10;
-        digits += 1;
-    }
-    digits * GLYPH_ADVANCE - 1
+pub(crate) fn bitmap_micro_number_width(value: u32) -> usize {
+    digit_count(value) * GLYPH_ADVANCE - 1
 }
 
-/// Draw `value` in decimal from `x` (top-left), digits spaced by
-/// [`GLYPH_ADVANCE`]; returns the x edge after the last digit.
+/// Pixel width of `text` with the embedded TTF at
+/// [`font::Cell::Box`] (the exe's Gulimche 6x12 box cell), the
+/// bitmap micro width when the font asset is missing.
+#[must_use]
+pub fn text_width(text: &str) -> usize {
+    font::text_width_cell(text, font::Cell::Box)
+}
+
+/// Draw `text` from `x` (top-left) with the embedded TTF at
+/// [`font::Cell::Box`], bitmap micro fallback when the font asset is
+/// missing; returns the x edge after the last glyph.
+pub fn draw_text(frame: &mut Frame<'_>, x: i32, y: i32, text: &str, color: u32) -> i32 {
+    font::draw_text_cell(frame, x, y, text, color, font::Cell::Box)
+}
+
+/// Pixel width of `value` in decimal at [`font::Cell::Box`] (bitmap
+/// micro width when the font asset is missing).
+#[must_use]
+pub fn number_width(value: u32) -> usize {
+    font::number_width_cell(value, font::Cell::Box)
+}
+
+/// Draw `value` in decimal from `x` (top-left) with the embedded TTF
+/// at [`font::Cell::Box`]; returns the x edge after the last digit.
 pub fn draw_number(frame: &mut Frame<'_>, x: i32, y: i32, value: u32, color: u32) -> i32 {
-    let mut digits = [0u8; 10];
-    let mut count = 0;
-    let mut rest = value;
-    loop {
-        digits[count] = (rest % 10) as u8;
-        count += 1;
-        rest /= 10;
-        if rest == 0 {
-            break;
-        }
-    }
-    for (i, digit) in digits[..count].iter().rev().enumerate() {
-        draw_digit(frame, x + (i * GLYPH_ADVANCE) as i32, y, *digit, color);
-    }
-    x + (count * GLYPH_ADVANCE) as i32
+    font::draw_number_cell(frame, x, y, value, color, font::Cell::Box)
 }
 
 /// Native 7.55 canvas every `.bnd` rect addresses (see
@@ -1004,6 +1031,31 @@ pub fn blend_xrgb(src: u32, dst: u32, alpha: u8) -> u32 {
     )
 }
 
+/// Per-channel tolerance of [`near_xrgb`]: a pixel whose channels all
+/// sit within `NEAR_INK_TOLERANCE` of the ink counts as glyph ink.
+/// Glyph-edge coverage blends ink into the backdrop (the bitmap face
+/// painted 1-bit ink), so ink-presence probes need a band.
+const NEAR_INK_TOLERANCE: u8 = 64;
+
+/// Whether every channel of `pixel` sits within
+/// [`NEAR_INK_TOLERANCE`] of `ink`: the ink-presence probe for
+/// antialiased text (for tests and HUD checks).
+#[must_use]
+pub fn near_xrgb(pixel: u32, ink: u32) -> bool {
+    let (pr, pg, pb) = unpack_xrgb(pixel);
+    let (ir, ig, ib) = unpack_xrgb(ink);
+    pr.abs_diff(ir) <= NEAR_INK_TOLERANCE
+        && pg.abs_diff(ig) <= NEAR_INK_TOLERANCE
+        && pb.abs_diff(ib) <= NEAR_INK_TOLERANCE
+}
+
+/// Whether any pixel of `buf` is [`near_xrgb`] ink: glyph ink
+/// presence on an antialiased draw.
+#[must_use]
+pub fn has_ink_near(buf: &[u32], ink: u32) -> bool {
+    buf.iter().any(|pixel| near_xrgb(*pixel, ink))
+}
+
 /// Fill a clipped rectangle with a translucent color.
 /// Alpha 0 paints nothing; 255 is a solid fill_rect.
 pub fn fill_rect_alpha(frame: &mut Frame<'_>, rect: &Rect, color: u32, alpha: u8) {
@@ -1217,7 +1269,9 @@ pub fn blit_image_in_rect_alpha(
     }
 }
 
-/// Large glyph width in pixels: 5-wide titles and HUD digits.
+/// Large glyph width in pixels: 5-wide titles and HUD digits (the
+/// bitmap fallback face; live text rasterizes through the embedded
+/// TTF in [`font`]).
 pub const BIG_GLYPH_W: usize = 5;
 /// Large glyph height in pixels.
 pub const BIG_GLYPH_H: usize = 7;
@@ -1400,7 +1454,8 @@ fn draw_big_rows(frame: &mut Frame<'_>, x: i32, y: i32, rows: [u8; BIG_GLYPH_H],
     }
 }
 
-/// Draw one large digit; out-of-range digits draw nothing.
+/// Draw one large digit of the bitmap fallback face; out-of-range
+/// digits draw nothing.
 pub fn draw_big_digit(frame: &mut Frame<'_>, x: i32, y: i32, digit: u8, color: u32) {
     let Some(rows) = big_digit_glyph(digit) else {
         return;
@@ -1408,24 +1463,33 @@ pub fn draw_big_digit(frame: &mut Frame<'_>, x: i32, y: i32, digit: u8, color: u
     draw_big_rows(frame, x, y, rows, color);
 }
 
-/// Draw one large ASCII character (big_glyph_for coverage).
+/// Draw one large ASCII character of the bitmap fallback face
+/// (`big_glyph_for` coverage).
 pub fn draw_big_char(frame: &mut Frame<'_>, x: i32, y: i32, ch: u8, color: u32) {
     if let Some(rows) = big_glyph_for(ch) {
         draw_big_rows(frame, x, y, rows, color);
     }
 }
 
-/// Pixel width of text in the large face (no trailing spacing).
+/// Pixel width of `text` in the bitmap large face (no trailing
+/// spacing): the missing-font fallback of [`big_text_width`].
 #[must_use]
-pub fn big_text_width(text: &str) -> usize {
+pub(crate) fn bitmap_big_text_width(text: &str) -> usize {
     if text.is_empty() {
         return 0;
     }
     text.len() * BIG_GLYPH_ADVANCE - 1
 }
 
-/// Draw ASCII text in the large face; returns the x edge after it.
-pub fn draw_big_text(frame: &mut Frame<'_>, x: i32, y: i32, text: &str, color: u32) -> i32 {
+/// Draw ASCII `text` in the bitmap large face — the missing-font
+/// fallback body of [`draw_big_text`] — and return the x edge.
+pub(crate) fn draw_bitmap_big_line(
+    frame: &mut Frame<'_>,
+    x: i32,
+    y: i32,
+    text: &str,
+    color: u32,
+) -> i32 {
     for (i, byte) in text.bytes().enumerate() {
         let Some(dx) = x.checked_add(i32::try_from(i * BIG_GLYPH_ADVANCE).unwrap_or(i32::MAX))
         else {
@@ -1437,39 +1501,39 @@ pub fn draw_big_text(frame: &mut Frame<'_>, x: i32, y: i32, text: &str, color: u
         .unwrap_or(i32::MAX)
 }
 
-/// Pixel width of value in large digits (no trailing spacing).
+/// Pixel width of `value` in bitmap large digits (no trailing
+/// spacing): the missing-font fallback of [`big_number_width`].
 #[must_use]
-pub fn big_number_width(mut value: u32) -> usize {
-    let mut digits = 1;
-    while value >= 10 {
-        value /= 10;
-        digits += 1;
-    }
-    digits * BIG_GLYPH_ADVANCE - 1
+pub(crate) fn bitmap_big_number_width(value: u32) -> usize {
+    digit_count(value) * BIG_GLYPH_ADVANCE - 1
 }
 
-/// Draw value in decimal in the large face; returns the x edge.
+/// Pixel width of `text` with the embedded TTF at
+/// [`font::Cell::Result`] (the exe's 8x16 result cell), the bitmap
+/// large width when the font asset is missing.
+#[must_use]
+pub fn big_text_width(text: &str) -> usize {
+    font::text_width_cell(text, font::Cell::Result)
+}
+
+/// Draw `text` with the embedded TTF at [`font::Cell::Result`],
+/// bitmap large fallback when the font asset is missing; returns the
+/// x edge after it.
+pub fn draw_big_text(frame: &mut Frame<'_>, x: i32, y: i32, text: &str, color: u32) -> i32 {
+    font::draw_text_cell(frame, x, y, text, color, font::Cell::Result)
+}
+
+/// Pixel width of `value` in decimal at [`font::Cell::Result`] (bitmap
+/// large width when the font asset is missing).
+#[must_use]
+pub fn big_number_width(value: u32) -> usize {
+    font::number_width_cell(value, font::Cell::Result)
+}
+
+/// Draw `value` in decimal with the embedded TTF at
+/// [`font::Cell::Result`]; returns the x edge after the last digit.
 pub fn draw_big_number(frame: &mut Frame<'_>, x: i32, y: i32, value: u32, color: u32) -> i32 {
-    let mut digits = [0u8; 10];
-    let mut count = 0;
-    let mut rest = value;
-    loop {
-        digits[count] = u8::try_from(rest % 10).unwrap_or(0);
-        count += 1;
-        rest /= 10;
-        if rest == 0 {
-            break;
-        }
-    }
-    for (i, digit) in digits[..count].iter().rev().enumerate() {
-        let Some(dx) = x.checked_add(i32::try_from(i * BIG_GLYPH_ADVANCE).unwrap_or(i32::MAX))
-        else {
-            break;
-        };
-        draw_big_digit(frame, dx, y, *digit, color);
-    }
-    x.checked_add(i32::try_from(count * BIG_GLYPH_ADVANCE).unwrap_or(i32::MAX))
-        .unwrap_or(i32::MAX)
+    font::draw_number_cell(frame, x, y, value, color, font::Cell::Result)
 }
 
 /// Interior of a panel: rect inset by border_width on every side.
@@ -1596,6 +1660,32 @@ mod fidelity_tests {
         let dst = pack_xrgb(0x00, 0x00, 0xFF);
         assert_eq!(blend_xrgb(src, dst, 0), dst);
         assert_eq!(blend_xrgb(src, dst, 255), src);
+    }
+
+    #[test]
+    fn near_ink_bands_antialiased_coverage() {
+        let ink = pack_xrgb(0xFF, 0xFF, 0xFF);
+        assert!(near_xrgb(ink, ink));
+        assert!(
+            near_xrgb(pack_xrgb(0xC0, 0xC0, 0xC0), ink),
+            "75% coverage counts"
+        );
+        assert!(near_xrgb(pack_xrgb(0xBF, 0xBF, 0xBF), ink));
+        assert!(
+            !near_xrgb(pack_xrgb(0x80, 0x80, 0x80), ink),
+            "half coverage is outside the band"
+        );
+        assert!(
+            !near_xrgb(pack_xrgb(0x00, 0x00, 0x00), ink),
+            "black vs white"
+        );
+        assert!(
+            !near_xrgb(pack_xrgb(0xFF, 0x00, 0xFF), ink),
+            "channel mismatch"
+        );
+        let buf = [0u32, 0x0040_4040, pack_xrgb(0xC0, 0xC0, 0xC0)];
+        assert!(has_ink_near(&buf, ink));
+        assert!(!has_ink_near(&[0u32, 0x0010_2010], ink));
     }
 
     #[test]
@@ -1877,16 +1967,17 @@ mod fidelity_tests {
 
     #[test]
     fn big_text_lays_out_with_spacing() {
+        // Bitmap large face: the missing-font fallback layout.
         let hi = [72u8, 73u8, 33u8];
         let text = core::str::from_utf8(&hi).unwrap();
-        assert_eq!(big_text_width(text), 3 * BIG_GLYPH_ADVANCE - 1);
+        assert_eq!(bitmap_big_text_width(text), 3 * BIG_GLYPH_ADVANCE - 1);
         let mut buf = vec![0u32; 20 * BIG_GLYPH_H];
         let mut frame = Frame {
             buf: &mut buf,
             w: 20,
             h: BIG_GLYPH_H,
         };
-        let end = draw_big_text(&mut frame, 0, 0, text, 0xFFFFFF);
+        let end = font::draw_text_with(None, &mut frame, 0, 0, text, 0xFFFFFF, font::Cell::Result);
         assert_eq!(end, 18);
         assert_eq!(frame.buf[0], 0xFFFFFF);
         assert_eq!(big_glyph_for(97), big_glyph_for(65));
@@ -1895,15 +1986,15 @@ mod fidelity_tests {
 
     #[test]
     fn big_number_renders_without_leading_zeros() {
-        assert_eq!(big_number_width(0), BIG_GLYPH_W);
-        assert_eq!(big_number_width(507), 3 * BIG_GLYPH_ADVANCE - 1);
+        assert_eq!(bitmap_big_number_width(0), BIG_GLYPH_W);
+        assert_eq!(bitmap_big_number_width(507), 3 * BIG_GLYPH_ADVANCE - 1);
         let mut buf = vec![0u32; 20 * BIG_GLYPH_H];
         let mut frame = Frame {
             buf: &mut buf,
             w: 20,
             h: BIG_GLYPH_H,
         };
-        let end = draw_big_number(&mut frame, 0, 0, 507, 0xFFFFFF);
+        let end = font::draw_number_with(None, &mut frame, 0, 0, 507, 0xFFFFFF, font::Cell::Result);
         assert_eq!(end, 18);
         assert_eq!(frame.buf[0], 0xFFFFFF);
     }
@@ -2393,16 +2484,17 @@ mod tests {
 
     #[test]
     fn number_renders_decimal_without_leading_zeros() {
+        // Bitmap micro face: the missing-font fallback layout.
         let mut buf = vec![0u32; 12 * GLYPH_H];
         let mut frame = Frame {
             buf: &mut buf,
             w: 12,
             h: GLYPH_H,
         };
-        let end = draw_number(&mut frame, 0, 0, 507, 0xFFFFFF);
+        let end = font::draw_number_with(None, &mut frame, 0, 0, 507, 0xFFFFFF, font::Cell::Box);
         assert_eq!(end, 12);
-        assert_eq!(number_width(507), 11);
-        assert_eq!(number_width(0), GLYPH_W);
+        assert_eq!(bitmap_micro_number_width(507), 11);
+        assert_eq!(bitmap_micro_number_width(0), GLYPH_W);
         // '5' top bar, gap column, '0' top-left pixel.
         assert_eq!(frame.buf[0], 0xFFFFFF);
         assert_eq!(frame.buf[3], 0);
@@ -2440,22 +2532,39 @@ mod tests {
 
     #[test]
     fn text_lays_out_with_spacing() {
+        // Bitmap micro face: the missing-font fallback layout.
         let mut buf = vec![0u32; 16 * GLYPH_H];
         let mut frame = Frame {
             buf: &mut buf,
             w: 16,
             h: GLYPH_H,
         };
-        let end = draw_text(&mut frame, 0, 0, "HI!", 0xFFFFFF);
+        let end = font::draw_text_with(None, &mut frame, 0, 0, "HI!", 0xFFFFFF, font::Cell::Box);
         assert_eq!(end, 12);
-        assert_eq!(text_width("HI!"), 11);
-        assert_eq!(text_width(""), 0);
+        assert_eq!(bitmap_micro_text_width("HI!"), 11);
+        assert_eq!(bitmap_micro_text_width(""), 0);
         // 'H' stems, gap column, 'I' top bar.
         assert_eq!(frame.buf[0], 0xFFFFFF);
         assert_eq!(frame.buf[3], 0);
         assert_eq!(frame.buf[4], 0xFFFFFF);
         assert_eq!(frame.buf[5], 0xFFFFFF);
         assert_eq!(frame.buf[6], 0xFFFFFF);
+    }
+
+    #[test]
+    fn text_draws_through_the_embedded_ttf() {
+        let mut buf = vec![0u32; 32 * 24];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 32,
+            h: 24,
+        };
+        let end = draw_text(&mut frame, 0, 0, "OK", 0xFFFFFF);
+        assert_eq!(
+            end,
+            i32::try_from(font::text_width_cell("OK", font::Cell::Box)).unwrap_or(0)
+        );
+        assert!(buf.iter().any(|pixel| *pixel != 0));
     }
 
     #[test]
@@ -2466,7 +2575,7 @@ mod tests {
             w: 8,
             h: GLYPH_H,
         };
-        draw_text(&mut frame, 0, 0, "A@", 0xFFFFFF);
+        font::draw_text_with(None, &mut frame, 0, 0, "A@", 0xFFFFFF, font::Cell::Box);
         assert_eq!(frame.buf[0], 0);
         assert_eq!(frame.buf[1], 0xFFFFFF);
         assert!(frame.buf[4..8].iter().all(|pixel| *pixel == 0));
@@ -2534,7 +2643,7 @@ mod tests {
             w: GLYPH_W,
             h: GLYPH_H,
         };
-        draw_number(&mut frame, 0, 0, 0, 0xFFFFFF);
+        font::draw_number_with(None, &mut frame, 0, 0, 0, 0xFFFFFF, font::Cell::Box);
         assert_eq!(frame.buf[0], 0xFFFFFF);
         assert_eq!(frame.buf[1], 0xFFFFFF);
         assert_eq!(frame.buf[2], 0xFFFFFF);

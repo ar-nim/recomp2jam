@@ -461,13 +461,20 @@ pub fn select_pager_caption(row_count: usize) -> String {
 }
 
 /// Chosung search cells in reference order: 14 jamo, `A`..`Z`, then
-/// the 숫자/기타 words (42 cells over two rows). Hangul and word
-/// cells are `None` — the micro-font has no CP949 glyphs — and keep
-/// their grid slots so the letters land at their reference positions.
+/// the 숫자/기타 words (42 cells over two rows). The jamo are the
+/// 14 simple initial consonants of the CP949 sort set (clusters
+/// ㄲ/ㄸ/ㅃ/ㅆ/ㅉ excluded — they sort under their base). Word cells
+/// stay `None` (no caption source) and keep their grid slots so the
+/// letters land at their reference positions; every `Some` cell
+/// rasterizes through the embedded TTF (the micro-font had no
+/// CP949 glyphs — that documented gap is closed).
 #[must_use]
-pub fn select_chosung_cells() -> Vec<Option<u8>> {
-    let mut cells = vec![None; SELECT_CHO_SUNG_JAMO];
-    cells.extend((b'A'..=b'Z').map(Some));
+pub fn select_chosung_cells() -> Vec<Option<char>> {
+    const SORT_JAMO: [char; 14] = [
+        'ㄱ', 'ㄴ', 'ㄷ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅅ', 'ㅇ', 'ㅈ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ',
+    ];
+    let mut cells: Vec<Option<char>> = SORT_JAMO.iter().copied().map(Some).collect();
+    cells.extend(('A'..='Z').map(Some));
     for _ in 0..SELECT_CHO_SUNG_WORDS {
         cells.push(None);
     }
@@ -1788,9 +1795,19 @@ mod side_tests {
     fn select_chosung_cells_span_jamo_letters_and_words() {
         let cells = select_chosung_cells();
         assert_eq!(cells.len(), 42);
-        assert!(cells[..SELECT_CHO_SUNG_JAMO].iter().all(Option::is_none));
-        let letters: Vec<u8> = cells.iter().filter_map(|cell| *cell).collect();
-        assert_eq!(letters, (b'A'..=b'Z').collect::<Vec<_>>());
+        let jamo: Vec<char> = cells[..SELECT_CHO_SUNG_JAMO]
+            .iter()
+            .filter_map(|cell| *cell)
+            .collect();
+        assert_eq!(
+            jamo,
+            [
+                'ㄱ', 'ㄴ', 'ㄷ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅅ', 'ㅇ', 'ㅈ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ'
+            ],
+            "the 14 simple initial jamo must fill the sort grid"
+        );
+        let letters: Vec<char> = cells.iter().filter_map(|cell| *cell).skip(14).collect();
+        assert_eq!(letters, ('A'..='Z').collect::<Vec<_>>());
         assert_eq!(cells[40], None);
         assert_eq!(cells[41], None);
     }

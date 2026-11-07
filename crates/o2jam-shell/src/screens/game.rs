@@ -35,10 +35,8 @@ use o2jam_game::{PeerBars, RankDelivery, RoomTeams, PEER_SLOT_COUNT};
 use o2jam_net::play::SetRoomMusic;
 use o2jam_net::rooms::{SendWaitingMessage, WaitingAdminMessage, WaitingUserMessage};
 use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry};
-use o2jam_render::{
-    draw_char, draw_text, fill_rect, pack_xrgb, scale_rect_to_frame, text_width, Frame, Rect,
-    GLYPH_H,
-};
+use o2jam_render::font::{draw_text_cell, Cell};
+use o2jam_render::{draw_text, fill_rect, pack_xrgb, scale_rect_to_frame, text_width, Frame, Rect};
 
 /// Stage the Playing backdrop defaults to before a room names one:
 /// the exe's room entry replaces a zero stage with a real one (the
@@ -1271,9 +1269,10 @@ fn paint_select_search_row(frame: &mut Frame<'_>) {
     paint_select_caption(frame, SELECT_SEARCH_BUTTON, "SEARCH", select_ink());
 }
 
-/// Chosung grid rows: hangul and word cells stay blank (no CP949
-/// glyphs in the micro-font — documented gap); the A–Z letters draw
-/// at their grid slots.
+/// Chosung grid rows: the 14 initial jamo plus the A–Z letters draw
+/// at their grid slots through the embedded TTF (`Cell::Box`, the
+/// 6x12 box cell); the two word cells stay blank (no caption
+/// source).
 fn paint_select_chosung_rows(frame: &mut Frame<'_>) {
     let cells = select_chosung_cells();
     let mut first = 0;
@@ -1283,15 +1282,17 @@ fn paint_select_chosung_rows(frame: &mut Frame<'_>) {
             let Some(letter) = cells.get(first + cell).copied().flatten() else {
                 continue;
             };
-            draw_char(
+            let caption = letter.to_string();
+            draw_text_cell(
                 frame,
                 select_x(
                     SELECT_CHO_SUNG_LEFT + select_step(cell, SELECT_CHO_SUNG_PITCH),
                     frame,
                 ),
                 y,
-                letter,
+                &caption,
                 select_ink(),
+                Cell::Box,
             );
         }
         first += count;
@@ -1303,7 +1304,7 @@ fn paint_select_ok(frame: &mut Frame<'_>) {
     let button = select_anchor(SELECT_OK_BUTTON, frame);
     fill_rect(frame, &button, select_scrim());
     let width = i32::try_from(text_width("OK")).unwrap_or(0);
-    let height = i32::try_from(GLYPH_H).unwrap_or(0);
+    let height = i32::try_from(Cell::Box.size().1).unwrap_or(0);
     draw_text(
         frame,
         button.x + (button.w as i32 - width) / 2,
@@ -1382,6 +1383,7 @@ mod game_tests {
     use crate::screen::Screen;
     use crate::{GameLoop, MenuKey};
     use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
+    use o2jam_render::{has_ink_near, near_xrgb};
     use o2jam_render::{pack_xrgb, Frame};
 
     #[test]
@@ -1641,7 +1643,9 @@ mod game_tests {
             },
             0,
         );
-        assert_eq!(buf[12 * 64 + 16], pack_xrgb(0xFF, 0xFF, 0xFF));
+        // 64x48 list: rows from y 12, text x 16; the row text inks
+        // near its origin, the amber cursor fills solid at x 10.
+        assert!(white_near(&buf, 64, 48, (16, 12)));
         assert_eq!(buf[12 * 64 + 10], pack_xrgb(0xFF, 0xD0, 0x20));
         assert_eq!(buf[0], background_of(Screen::Channel));
     }
@@ -1719,8 +1723,8 @@ mod game_tests {
             },
             0,
         );
-        assert!(buf.contains(&pack_xrgb(0x90, 0x90, 0x90)));
-        assert!(!buf.contains(&pack_xrgb(0xFF, 0x50, 0x50)));
+        assert!(has_ink_near(&buf, pack_xrgb(0x90, 0x90, 0x90)));
+        assert!(!has_ink_near(&buf, pack_xrgb(0xFF, 0x50, 0x50)));
         game.menu_key(super::MenuKey::Down, true);
         let mut buf = vec![0u32; 200 * 150];
         game.paint_at(
@@ -1731,9 +1735,9 @@ mod game_tests {
             },
             0,
         );
-        assert!(buf.contains(&pack_xrgb(0xFF, 0x50, 0x50)));
+        assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0x50, 0x50)));
         // List plus cursor keep working under the panel.
-        assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+        assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
         assert!(buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
     }
 
@@ -1753,7 +1757,9 @@ mod game_tests {
             },
             0,
         );
-        assert_eq!(buf[12 * 64 + 16], pack_xrgb(0xFF, 0xFF, 0xFF));
+        // 64x48 list: rows from y 12, text x 16; the row text inks
+        // near its origin, the amber cursor fills solid at x 10.
+        assert!(white_near(&buf, 64, 48, (16, 12)));
         assert_eq!(buf[12 * 64 + 10], pack_xrgb(0xFF, 0xD0, 0x20));
         assert_eq!(buf[0], background_of(Screen::Room));
     }
@@ -1893,9 +1899,23 @@ mod game_tests {
         stage_waiting_song(&mut game);
         let buf = paint_waiting_frame(&mut game, 80, 64);
         // Panel sits below the seats: title `M...` at (10, 48),
-        // detail `H...` at (10, 56); both glyphs light their origin.
-        assert_eq!(buf[48 * 80 + 10], pack_xrgb(0xFF, 0xFF, 0xFF));
-        assert_eq!(buf[56 * 80 + 10], pack_xrgb(0xFF, 0xFF, 0xFF));
+        // detail `H...` at (10, 56); each line inks inside its row.
+        assert!(ink_near(
+            &buf,
+            80,
+            64,
+            (10, 48),
+            (20, 8),
+            pack_xrgb(0xFF, 0xFF, 0xFF)
+        ));
+        assert!(ink_near(
+            &buf,
+            80,
+            64,
+            (10, 56),
+            (20, 8),
+            pack_xrgb(0xFF, 0xFF, 0xFF)
+        ));
         // Seats keep painting under the panel.
         assert!(buf.contains(&pack_xrgb(0x30, 0xE0, 0x30)));
     }
@@ -1964,8 +1984,8 @@ mod game_tests {
         // Both ink the caption row white; the title and the bare id
         // differ, so the frames differ (paint.rs pins the exact
         // strings and the rect scrim).
-        assert!(hit.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
-        assert!(miss.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+        assert!(has_ink_near(&hit, pack_xrgb(0xFF, 0xFF, 0xFF)));
+        assert!(has_ink_near(&miss, pack_xrgb(0xFF, 0xFF, 0xFF)));
         assert_ne!(hit, miss);
     }
 
@@ -1998,7 +2018,7 @@ mod game_tests {
         stage_waiting_song(&mut game);
         let buf = paint_waiting_frame(&mut game, 80, 64);
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
-        assert_eq!(buf[48 * 80 + 10], pack_xrgb(0xFF, 0xFF, 0xFF));
+        assert!(white_near(&buf, 80, 64, (10, 48)));
         let (x, y) = seat_origin(1, 80, 64);
         assert_eq!(
             buf[(y + 1) as usize * 80 + (x - 6 + 1) as usize],
@@ -2110,7 +2130,10 @@ mod game_tests {
         assert_eq!(buf[13 * 800 + 476], scrim, "mapname scrim");
         assert_eq!(buf[58 * 800 + 616], scrim, "bpm scrim");
         assert_eq!(buf[206 * 800 + 736], scrim, "skillcount scrim");
-        assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+        assert!(
+            has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)),
+            "caption ink paints"
+        );
     }
 
     /// Waiting game with dialog art and the one-song catalog staged:
@@ -2143,21 +2166,49 @@ mod game_tests {
         // reference pitch (129 + 33).
         assert_eq!(buf[95 * 800 + 30], select_scrim());
         assert_eq!(buf[162 * 800 + 30], select_scrim());
-        // Row one: green E letter at the icon column (text sits two
-        // px into the band), white title ink at the TITLE column,
+        // Row one: green E letter at the icon column (text inks
+        // inside the band), white title ink at the TITLE column,
         // unknown dashes at LVL and GRADE.
-        assert_eq!(buf[152 * 800 + 392], pack_xrgb(0x30, 0xE0, 0x30));
+        assert!(ink_near(
+            &buf,
+            800,
+            600,
+            (392, 150),
+            (10, 16),
+            pack_xrgb(0x30, 0xE0, 0x30)
+        ));
         assert!(white_near(&buf, 800, 600, (417, 150)));
-        assert_eq!(buf[154 * 800 + 628], select_dim_ink());
-        assert_eq!(buf[154 * 800 + 716], select_dim_ink());
+        assert!(ink_near(
+            &buf,
+            800,
+            600,
+            (628, 152),
+            (12, 16),
+            select_dim_ink()
+        ));
+        assert!(ink_near(
+            &buf,
+            800,
+            600,
+            (716, 152),
+            (12, 16),
+            select_dim_ink()
+        ));
         // Search tab (amber caption), status banner, pager, and the
         // centered OK caption.
-        assert_eq!(buf[95 * 800 + 355], select_active_ink());
+        assert!(ink_near(
+            &buf,
+            800,
+            600,
+            (355, 95),
+            (40, 16),
+            select_active_ink()
+        ));
         assert!(white_near(&buf, 800, 600, (346, 398)));
         assert!(white_near(&buf, 800, 600, (744, 398)));
         assert!(white_near(&buf, 800, 600, (380, 523)));
         // Chosung letter A (row 1, cell 14) at its grid slot.
-        assert_eq!(buf[446 * 800 + 563], pack_xrgb(0xFF, 0xFF, 0xFF));
+        assert!(white_near(&buf, 800, 600, (563, 444)));
     }
 
     #[test]
@@ -2179,7 +2230,14 @@ mod game_tests {
         // The zero-row search tab still counts (amber ink); no row
         // band paints, so the row area keeps the waiting backdrop.
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
-        assert_eq!(buf[95 * 800 + 355], select_active_ink());
+        assert!(ink_near(
+            &buf,
+            800,
+            600,
+            (355, 95),
+            (40, 16),
+            select_active_ink()
+        ));
         assert_eq!(
             buf[160 * 800 + 400],
             super::super::paint::background_of(Screen::Waiting)
@@ -2399,7 +2457,7 @@ mod game_tests {
             0,
         );
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
-        assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+        assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
         assert!(buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
     }
 
@@ -2785,14 +2843,30 @@ mod game_tests {
 
     /// True while white text ink lands near a caption origin (glyph
     /// top-left cells are often blank, so scan the scrim box).
+    /// True while glyph ink lights in a 64x9 box at `origin`: the
+    /// TTF rasterizes inside the cell with antialiased coverage, so
+    /// probes band the ink color instead of one exact pixel.
     fn white_near(buf: &[u32], w: usize, h: usize, origin: (i32, i32)) -> bool {
+        ink_near(buf, w, h, origin, (64, 9), pack_xrgb(0xFF, 0xFF, 0xFF))
+    }
+
+    /// True while ink nears `ink` inside the `probe` box at `origin`.
+    fn ink_near(
+        buf: &[u32],
+        w: usize,
+        h: usize,
+        origin: (i32, i32),
+        probe: (i32, i32),
+        ink: u32,
+    ) -> bool {
         let (ox, oy) = origin;
-        for row in oy..oy + 9 {
-            for col in ox..ox + 64 {
+        let (pw, ph) = probe;
+        for row in oy..oy + ph {
+            for col in ox..ox + pw {
                 let (Ok(r), Ok(c)) = (usize::try_from(row), usize::try_from(col)) else {
                     continue;
                 };
-                if r < h && c < w && buf[r * w + c] == pack_xrgb(0xFF, 0xFF, 0xFF) {
+                if r < h && c < w && near_xrgb(buf[r * w + c], ink) {
                     return true;
                 }
             }

@@ -2712,9 +2712,36 @@ impl AvatarScene {
 mod live_play_tests {
     use super::*;
     use o2jam_game::{HOLD_TICK_BONUS_POINTS, STAT_JAM, STAT_LIFE};
+    use o2jam_render::{has_ink_near, near_xrgb};
 
     fn geom() -> HighwayGeometry {
         HighwayGeometry::centered(70, 60)
+    }
+
+    /// True while ink nears `ink` inside the `probe` box at `origin`
+    /// (glyph-edge coverage blends into the backdrop, so probes band
+    /// the ink instead of one exact pixel).
+    fn ink_near(
+        buf: &[u32],
+        w: usize,
+        h: usize,
+        origin: (i32, i32),
+        probe: (i32, i32),
+        ink: u32,
+    ) -> bool {
+        let (ox, oy) = origin;
+        let (pw, ph) = probe;
+        for row in oy..oy + ph {
+            for col in ox..ox + pw {
+                let (Ok(r), Ok(c)) = (usize::try_from(row), usize::try_from(col)) else {
+                    continue;
+                };
+                if r < h && c < w && near_xrgb(buf[r * w + c], ink) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     #[test]
@@ -2819,9 +2846,30 @@ mod live_play_tests {
         // Score "200" centered over the staged bottom jam bar (probe
         // bar x 0..16 → center 8, strip row 55), combo "1" at the
         // bar's left edge, "COOL" centered over the highway (center 8).
-        assert_eq!(buf[55 * 70 + 3], pack_xrgb(0xFF, 0xFF, 0xFF));
-        assert_eq!(buf[55 * 70 + 1], pack_xrgb(0xFF, 0xFF, 0x40));
-        assert_eq!(buf[8 * 70 + 3], pack_xrgb(0xFF, 0xFF, 0xFF));
+        assert!(ink_near(
+            &buf,
+            70,
+            60,
+            (0, 53),
+            (18, 8),
+            pack_xrgb(0xFF, 0xFF, 0xFF)
+        ));
+        assert!(ink_near(
+            &buf,
+            70,
+            60,
+            (0, 52),
+            (10, 10),
+            pack_xrgb(0xFF, 0xFF, 0x40)
+        ));
+        assert!(ink_near(
+            &buf,
+            70,
+            60,
+            (0, 6),
+            (18, 9),
+            pack_xrgb(0xFF, 0xFF, 0xFF)
+        ));
     }
 
     #[test]
@@ -2913,10 +2961,11 @@ mod live_play_tests {
             3400,
         );
         let jam_ink = pack_xrgb(0xFF, 0xC0, 0x40);
-        // Level 1 glyph top row is 0b010: x 34 rides the flat
-        // backdrop (the staged lane span ends at x 16), x 35 inks.
-        assert_eq!(buf[4 * 70 + 34], pack_xrgb(0x0A, 0x0A, 0x0A));
-        assert_eq!(buf[4 * 70 + 35], jam_ink);
+        // The lane span left of the level line stays flat; the line's
+        // digits ink from x 35 on (the staged lane span ends at x 16,
+        // the level line starts at x 35).
+        assert_eq!(buf[4 * 70 + 20], pack_xrgb(0x0A, 0x0A, 0x0A));
+        assert!(ink_near(&buf, 70, 60, (33, 1), (8, 10), jam_ink));
         assert_eq!(buf[53 * 70 + 2], pack_xrgb(0x10, 0x10, 0x30));
     }
 
@@ -3653,9 +3702,16 @@ mod live_play_tests {
         );
         let amber = pack_xrgb(0xFF, 0xFF, 0x40);
         // Word centers on the highway (center 8, draw x 1); combo
-        // digits "1" beneath at rows 24..28, centered on the same x.
-        assert_eq!(buf[8 * 70 + 3], pack_xrgb(0xFF, 0xFF, 0xFF));
-        assert_eq!(buf[24 * 70 + 8], amber);
+        // digits "1" beneath, centered on the same x.
+        assert!(ink_near(
+            &buf,
+            70,
+            60,
+            (0, 6),
+            (18, 9),
+            pack_xrgb(0xFF, 0xFF, 0xFF)
+        ));
+        assert!(ink_near(&buf, 70, 60, (4, 22), (10, 10), amber));
     }
 
     /// Codec gap ①: the strided combo-glow atlas (`Note_Combo4/5/6.ojt`)
@@ -3749,8 +3805,22 @@ mod live_play_tests {
             &geom(),
             1005,
         );
-        assert_eq!(first[20 * 70 + 4], solid_ink(0x7FE0));
-        assert_eq!(first[24 * 70 + 8], pack_xrgb(0xFF, 0xFF, 0x40));
+        assert!(ink_near(
+            &first,
+            70,
+            60,
+            (0, 18),
+            (18, 9),
+            solid_ink(0x7FE0)
+        ));
+        assert!(ink_near(
+            &first,
+            70,
+            60,
+            (4, 22),
+            (10, 10),
+            pack_xrgb(0xFF, 0xFF, 0x40)
+        ));
         let mut second = vec![0u32; 70 * 60];
         live.paint(
             &mut Frame {
@@ -4052,9 +4122,17 @@ mod live_play_tests {
         assert_eq!(buf[554 * 800 + 87], digit_ink(2));
         assert_eq!(buf[554 * 800 + 95], digit_ink(0));
         assert_eq!(buf[554 * 800 + 103], digit_ink(0));
-        // The strip combo keeps its procedural amber glyph (digit 1
-        // inks one column in from its advance, as in the probe test).
-        assert_eq!(buf[554 * 800 + 5], pack_xrgb(0xFF, 0xFF, 0x40));
+        // The strip combo keeps its procedural amber glyph: the TTF
+        // rasterizes it with antialiased coverage near the bar's
+        // left edge (x 0..16 on the strip row).
+        assert!(ink_near(
+            &buf,
+            800,
+            600,
+            (0, 552),
+            (16, 16),
+            pack_xrgb(0xFF, 0xFF, 0x40)
+        ));
     }
 
     #[test]
@@ -4073,10 +4151,20 @@ mod live_play_tests {
             1050,
         );
         // Combo "1" centered on the highway center x 99: 8 px wide →
-        // x 95..103 on rows 463..467 (line_y − 24).
+        // x 95..103 on rows 463..467 (line_y − 24), the staged
+        // sprite blit keeps exact pixels.
         assert_eq!(buf[465 * 800 + 97], digit_ink(1));
-        // The strip combo keeps its procedural amber glyph.
-        assert_eq!(buf[554 * 800 + 5], pack_xrgb(0xFF, 0xFF, 0x40));
+        // The strip combo keeps its procedural amber glyph: the TTF
+        // rasterizes it with antialiased coverage around (5,554).
+        assert!(
+            (0..16)
+                .flat_map(|row| (0..16).map(move |col| (col, row)))
+                .any(|(col, row)| near_xrgb(
+                    buf[(548 + row) * 800 + col],
+                    pack_xrgb(0xFF, 0xFF, 0x40)
+                )),
+            "strip combo amber must ink near (0,548)"
+        );
     }
 
     #[test]
@@ -4128,8 +4216,8 @@ mod live_play_tests {
         };
         live.paint(&mut frame, &HighwayGeometry::centered(800, 600), 1050);
         live.paint_avatar_scene(&mut frame, None, 1050);
-        assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF))); // score + word
-        assert!(buf.contains(&pack_xrgb(0xFF, 0xFF, 0x40))); // combo
+        assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF))); // score + word
+        assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0x40))); // combo
         assert!(buf.contains(&pack_xrgb(0x20, 0x20, 0x20))); // TIME shell
     }
 
@@ -4613,6 +4701,7 @@ mod highway_tests {
 mod avatar_scene_tests {
     use super::*;
     use crate::avatar::FigureLayer;
+    use o2jam_render::near_xrgb;
 
     const WHITE: u32 = pack_xrgb(0xFF, 0xFF, 0xFF);
     /// The staged `Avatar_Info_LifeGauge.ojs` amber the photo shows.
@@ -4633,13 +4722,28 @@ mod avatar_scene_tests {
     /// show the scrim; the scrim box spans one row above through eight
     /// below the origin).
     fn white_near(buf: &[u32], w: usize, h: usize, origin: (i32, i32)) -> bool {
+        ink_near(buf, w, h, origin, (64, 16), WHITE)
+    }
+
+    /// True while ink nears `ink` inside the `probe` box at `origin`
+    /// (glyph-edge coverage blends into the backdrop, so probes band
+    /// the ink instead of one exact pixel).
+    fn ink_near(
+        buf: &[u32],
+        w: usize,
+        h: usize,
+        origin: (i32, i32),
+        probe: (i32, i32),
+        ink: u32,
+    ) -> bool {
         let (ox, oy) = origin;
-        for row in oy..oy + 9 {
-            for col in ox..ox + 64 {
+        let (pw, ph) = probe;
+        for row in oy..oy + ph {
+            for col in ox..ox + pw {
                 let (Ok(r), Ok(c)) = (usize::try_from(row), usize::try_from(col)) else {
                     continue;
                 };
-                if r < h && c < w && buf[r * w + c] == WHITE {
+                if r < h && c < w && near_xrgb(buf[r * w + c], ink) {
                     return true;
                 }
             }
@@ -4906,7 +5010,10 @@ mod avatar_scene_tests {
         let buf = paint_scene(&captioned_scene(), None, 800, 600);
         assert_eq!(buf[310 * 800 + 456], 0);
         let (x, y) = layout.level_origin;
-        assert_eq!(buf[y as usize * 800 + x as usize], WHITE);
+        assert!(
+            white_near(&buf, 800, 600, (x, y)),
+            "level line must ink near its origin"
+        );
     }
 
     #[test]
