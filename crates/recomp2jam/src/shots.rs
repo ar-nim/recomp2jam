@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use o2jam_file::{Bnd, ControlList};
-use o2jam_game::RoomTeams;
+use o2jam_game::{RankDelivery, RoomTeams, PEER_SLOT_COUNT};
 use o2jam_net::play::SetRoomMusic;
 use o2jam_net::{ChannelState, GameMode, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
 use o2jam_render::{Frame, Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
@@ -41,7 +41,11 @@ pub struct Shot {
 }
 
 /// Capture avi, channel, room, waiting, musicselect, loading,
-/// playing, result. The musicselect shot repaints Waiting with the
+/// playing, playing-native, result, result-native. The native
+/// companions re-emit the playing and result instants at the full
+/// 800x600 exe canvas so pinned details (combo font, 3x5 result
+/// digits, rank rows) stay provable instead of downscale smudges.
+/// The musicselect shot repaints Waiting with the
 /// staged `DAILOG_SELECTMUSIC` dialog on top (host song flow: catalog
 /// plus pick), and the playing shot paints a mid-song state: the 5 s
 /// note is struck first (combo 1) and the paint lands 100 ms later,
@@ -53,7 +57,7 @@ pub struct Shot {
 /// When the scripted walk leaves the expected screen.
 pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
     let mut game = seeded_game();
-    let mut shots = Vec::with_capacity(8);
+    let mut shots = Vec::with_capacity(10);
     shots.push(shoot(&mut game, "avi", 0)?);
     game.lane_key(3, true);
     shots.push(shoot_checked(&mut game, "channel", Screen::Channel, 0)?);
@@ -69,7 +73,14 @@ pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
     game.menu_key(MenuKey::Confirm, true);
     game.strike_at(2, 5_000);
     shots.push(shoot_checked(&mut game, "playing", Screen::Playing, 5_100)?);
+    shots.push(shoot_checked_native(
+        &mut game,
+        "playing-native",
+        Screen::Playing,
+        5_100,
+    )?);
     shots.push(shoot_result(&mut game, 7_000)?);
+    shots.push(shoot_result_native(&mut game, 7_000)?);
     Ok(shots)
 }
 
@@ -361,6 +372,7 @@ fn seeded_game() -> ScreenGame {
     game.set_battle_teams(result_battle_teams());
     game.set_battle_self_team(Some(RESULT_SELF_TEAM));
     game.load_chart(vec![(2, 5_000, 7)]);
+    stage_result_ranks(&mut game);
     stage_real_art(&mut game);
     game
 }
@@ -541,6 +553,34 @@ const RESULT_PEER_TEAM: u8 = 1;
 const RESULT_SELF_TOTAL: u64 = 100;
 /// Synthetic server-side total on the peer seat.
 const RESULT_PEER_TOTAL: u64 = 300;
+/// Scripted 4015 global holder byte (fixture, not wire data): the
+/// no-holder sentinel, so no packet byte takes the global arm and
+/// every delivery resolves through a member holder below.
+const SCRIPTED_RANK_GLOBAL: u8 = 0xFF;
+/// Scripted holder bytes per seat: the local seat holds rank 1, the
+/// wire peer rank 2 — the reference photo's first/second row values
+/// (`reference-result-4x3.png`; local-first ordering gap documented
+/// on [`ScreenGame::result_rank_rows`]). Empty seats hold the
+/// no-holder sentinel, so the zero convention keeps them blank.
+const SCRIPTED_RANK_STORED: [u8; PEER_SLOT_COUNT] = [1, 2, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+/// Scripted 8-byte rank broadcast: local rank at position 0, peer
+/// rank at 1. Trailing zeros match no holder, so those rows stay
+/// zeroed and hidden — no invented standings beyond the duo.
+const SCRIPTED_RANK_PACKET: [u8; PEER_SLOT_COUNT] = [1, 2, 0, 0, 0, 0, 0, 0];
+
+/// Deliver the scripted rank fixture through the peer mirror:
+/// holder bytes first, then the broadcast through the verified
+/// rank-remap rule. Staged after the chart load — `load_chart`
+/// rebuilds the play state (wiping the mirror) — so earlier shots
+/// stay untouched; never fails. Playing never paints these bytes
+/// (no rank table there), only Result does.
+fn stage_result_ranks(game: &mut ScreenGame) -> Vec<RankDelivery> {
+    game.stage_scripted_ranks(
+        SCRIPTED_RANK_GLOBAL,
+        SCRIPTED_RANK_STORED,
+        SCRIPTED_RANK_PACKET,
+    )
+}
 
 /// Battle scoreboard behind the result verdict: rank 1 by team
 /// total wins, so the peer takes it and the claim below resolves
@@ -555,8 +595,8 @@ fn result_battle_teams() -> RoomTeams {
 }
 
 /// Waiting room for the result walk: a Live duo so Result takes
-/// the battle path — self on team A beside the wire peer `Xter` on
-/// team B, joined at the reference-matching arena stage (see
+/// the battle path — self on team A beside the wire peer `Lujia`
+/// on team B, joined at the reference-matching arena stage (see
 /// [`PLAYING_ARENA_STAGE`]). The peer sits ready: the walk spends
 /// the chart straight through.
 fn waiting_room() -> JoinedRoom {
@@ -623,7 +663,7 @@ fn shoot_checked(
     shoot(game, name, now_ms)
 }
 
-/// Rasterize Result, failing unless the chart end advanced the flow.
+/// Rasterize, failing when the walk missed its screen.
 fn shoot_result(game: &mut ScreenGame, now_ms: u64) -> anyhow::Result<Shot> {
     let rgb = frame_rgb(game, now_ms);
     if game.screen() != Screen::Result {
@@ -637,16 +677,59 @@ fn shoot_result(game: &mut ScreenGame, now_ms: u64) -> anyhow::Result<Shot> {
     })
 }
 
-/// Paint the current screen at the native 800x600 canvas — the exe
-/// frame every staged record anchor lives on — and box-downscale to
-/// the shot size, exactly how the reference photo photographs the
-/// native screen (a 4:3 view of one 800x600 frame, never a stretch
-/// or a partial blit).
-fn frame_rgb(game: &mut ScreenGame, now_ms: u64) -> Vec<u8> {
-    let (w, h) = (
+/// Rasterize the full native canvas, failing unless the chart end
+/// advanced the flow.
+fn shoot_result_native(game: &mut ScreenGame, now_ms: u64) -> anyhow::Result<Shot> {
+    let rgb = frame_native_rgb(game, now_ms);
+    if game.screen() != Screen::Result {
+        anyhow::bail!("shot result-native: still at {:?}", game.screen());
+    }
+    let (w, h) = native_size();
+    Ok(Shot {
+        name: "result-native",
+        w,
+        h,
+        rgb,
+    })
+}
+
+/// Rasterize the full native canvas without checking the screen.
+fn shoot_native(game: &mut ScreenGame, name: &'static str, now_ms: u64) -> Shot {
+    let (w, h) = native_size();
+    Shot {
+        name,
+        w,
+        h,
+        rgb: frame_native_rgb(game, now_ms),
+    }
+}
+
+/// Rasterize the full native canvas, failing when the walk missed
+/// its screen.
+fn shoot_checked_native(
+    game: &mut ScreenGame,
+    name: &'static str,
+    screen: Screen,
+    now_ms: u64,
+) -> anyhow::Result<Shot> {
+    if game.screen() != screen {
+        anyhow::bail!("shot {name}: at {:?}, want {screen:?}", game.screen());
+    }
+    Ok(shoot_native(game, name, now_ms))
+}
+
+/// Native canvas dimensions behind every shot.
+fn native_size() -> (usize, usize) {
+    (
         usize::try_from(NATIVE_WIDTH).unwrap_or(1),
         usize::try_from(NATIVE_HEIGHT).unwrap_or(1),
-    );
+    )
+}
+
+/// Paint one native 800x600 XRGB frame: the single source both the
+/// preview and the native shots encode.
+fn paint_native_frame(game: &mut ScreenGame, now_ms: u64) -> Vec<u32> {
+    let (w, h) = native_size();
     let mut buf = vec![0u32; w * h];
     game.paint_at(
         &mut Frame {
@@ -656,7 +739,23 @@ fn frame_rgb(game: &mut ScreenGame, now_ms: u64) -> Vec<u8> {
         },
         now_ms,
     );
-    to_rgb(&downscale_even(&buf, w, h))
+    buf
+}
+
+/// Native-canvas RGB triplets: no downscale, same painter.
+fn frame_native_rgb(game: &mut ScreenGame, now_ms: u64) -> Vec<u8> {
+    to_rgb(&paint_native_frame(game, now_ms))
+}
+
+/// Paint the current screen at the native 800x600 canvas — the exe
+/// frame every staged record anchor lives on — and box-downscale to
+/// the shot size, exactly how the reference photo photographs the
+/// native screen (a 4:3 view of one 800x600 frame, never a stretch
+/// or a partial blit).
+fn frame_rgb(game: &mut ScreenGame, now_ms: u64) -> Vec<u8> {
+    let native = paint_native_frame(game, now_ms);
+    let (w, h) = native_size();
+    to_rgb(&downscale_even(&native, w, h))
 }
 
 /// 2x2 box average of XRGB words: width and height must be even
@@ -1040,11 +1139,19 @@ mod tests {
                 "musicselect",
                 "loading",
                 "playing",
-                "result"
+                "playing-native",
+                "result",
+                "result-native"
             ]
         );
         for shot in &shots {
-            assert_eq!((shot.w, shot.h), (SHOT_W, SHOT_H));
+            let expected = if shot.name.ends_with("-native") {
+                (800, 600)
+            } else {
+                (SHOT_W, SHOT_H)
+            };
+            assert_eq!((shot.w, shot.h), expected);
+            assert_eq!(shot.rgb.len(), shot.w * shot.h * 3);
             assert!(is_varied(&shot.rgb), "{} paints a flat frame", shot.name);
         }
     }
@@ -1468,6 +1575,10 @@ mod tests {
     const RANK_ROW_SCORE: (i32, i32, &str) = (530, 317, "     200");
     /// Peer name text on row 1 (name column, one 22 px pitch down).
     const RANK_ROW_PEER: (i32, i32, &str) = (128, 340, RESULT_PEER_NAME);
+    /// Scripted rank numbers (`%d` at x=91): local rank 1 on row 0,
+    /// peer rank 2 on row 1 — the reference photo's row values.
+    const RANK_ROW_RANK_LOCAL: (i32, i32, &str) = (91, 317, "1");
+    const RANK_ROW_RANK_PEER: (i32, i32, &str) = (91, 339, "2");
     /// GEM bonus text (`+ %d`) for the walked hold bonus: the tap
     /// chart arms no holds, so the accumulator stays zero — a walked
     /// zero, never a blank.
@@ -1479,11 +1590,12 @@ mod tests {
     #[test]
     fn result_shot_paints_the_rank_table_rows() {
         // The rank table (`FUN_004c3b40`) paints row 0 from the local
-        // tally: name `YOU`, one Cool strike (counts 1/0/0/0, 200
-        // points, `+ 0` walked hold bonus, shared X1 speed) at the
-        // pinned columns, plus the wire peer's name and shared speed
-        // on row 1. A stale shot from before the duo walk leaves the
-        // peer band empty; the re-shoot must carry ink there.
+        // tally: rank 1, name `YOU`, one Cool strike (counts 1/0/0/0,
+        // 200 points, `+ 0` walked hold bonus, shared X1 speed) at
+        // the pinned columns, plus the wire peer's rank 2, name, and
+        // shared speed on row 1. A stale shot from before the duo
+        // walk leaves the peer band empty; the re-shoot must carry
+        // ink there.
         let mut game = seeded_game();
         walk_to_playing(&mut game);
         game.strike_at(2, 5_000);
@@ -1494,9 +1606,11 @@ mod tests {
         paint_probe(&mut expected, |frame| {
             let ink = o2jam_render::pack_xrgb(0xFF, 0xFF, 0xFF);
             for (x, y, text) in [
+                RANK_ROW_RANK_LOCAL,
                 RANK_ROW_NAME,
                 RANK_ROW_JUDGEMENTS,
                 RANK_ROW_SCORE,
+                RANK_ROW_RANK_PEER,
                 RANK_ROW_PEER,
                 RANK_ROW_BONUS,
                 RANK_ROW_SPEED_LOCAL,
@@ -1509,30 +1623,77 @@ mod tests {
     }
 
     #[test]
-    fn result_walk_names_the_duo_and_hides_unbroadcast_ranks() {
+    fn result_walk_names_the_duo_and_paints_scripted_ranks() {
         // The Live duo builds two rank rows: local numbers on row 0
-        // (`YOU`), the peer name on row 1. Rank bytes stay hidden —
-        // no 4015 broadcast reaches `ScreenGame`'s mirror, so the
-        // zero-byte convention keeps both rank cells unpainted rather
-        // than inventing a standing.
+        // (`YOU`), the peer name on row 1. The scripted rank fixture
+        // delivers rank 1 to the local seat and rank 2 to the peer —
+        // the reference photo's row values — while peer numbers stay
+        // unpainted (per-member tallies stay server-side).
         let mut game = seeded_game();
         walk_to_playing(&mut game);
         game.strike_at(2, 5_000);
         let rows = game.result_rank_rows();
         assert_eq!(rows.len(), 2, "the duo must build two rows");
         assert_eq!(rows[0].name.as_deref(), Some("YOU"));
-        assert_eq!(rows[0].rank, None);
+        assert_eq!(rows[0].rank, Some(1));
         assert_eq!(rows[0].judgements, Some([1, 0, 0, 0]));
         assert_eq!(rows[0].score, Some(200));
         assert_eq!(rows[0].bonus, Some(0));
         assert_eq!(rows[0].speed, Some(1));
         assert_eq!(rows[1].name.as_deref(), Some(RESULT_PEER_NAME));
-        assert_eq!(rows[1].rank, None);
+        assert_eq!(rows[1].rank, Some(2));
         assert_eq!(rows[1].judgements, None);
         assert_eq!(rows[1].combos, None);
         assert_eq!(rows[1].score, None);
         assert_eq!(rows[1].bonus, None);
         assert_eq!(rows[1].speed, Some(1));
+    }
+
+    #[test]
+    fn scripted_rank_fixture_maps_local_one_peer_two() {
+        // The fixture through the remap rule: each scripted byte
+        // reaches its holder's slot, and trailing zeros match no
+        // holder — their rows stay zeroed and hidden (never
+        // invented), pinning the exact walked standing.
+        use o2jam_game::PeerBars;
+        let mut peers = PeerBars::new();
+        peers.set_global_rank(SCRIPTED_RANK_GLOBAL);
+        for (slot, rank) in SCRIPTED_RANK_STORED.iter().enumerate() {
+            peers.set_stored_rank(slot, *rank);
+        }
+        let deliveries = peers.apply_rank_broadcast(SCRIPTED_RANK_PACKET);
+        assert_eq!(
+            deliveries,
+            vec![
+                RankDelivery {
+                    position: 0,
+                    rank: 1,
+                    slot: Some(0),
+                },
+                RankDelivery {
+                    position: 1,
+                    rank: 2,
+                    slot: Some(1),
+                },
+            ]
+        );
+        assert_eq!(peers.rank_row(0), Some(1));
+        assert_eq!(peers.rank_row(1), Some(2));
+        assert_eq!(peers.rank_row(2), Some(0));
+        assert_eq!(peers.rank_row(7), Some(0));
+    }
+
+    #[test]
+    fn result_walk_without_staged_ranks_hides_rank_cells() {
+        // Zero convention unchanged outside the fixture: an unstaged
+        // duo seeds no holders, so both rank cells stay hidden rather
+        // than inventing a standing.
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        let rows = game.result_rank_rows();
+        assert_eq!(rows.len(), 2, "the duo must build two rows");
+        assert_eq!(rows[0].rank, None);
+        assert_eq!(rows[1].rank, None);
     }
 
     #[test]
@@ -1640,7 +1801,7 @@ mod tests {
     #[test]
     fn staging_attempt_never_breaks_the_walk() {
         let shots = capture_all().unwrap();
-        assert_eq!(shots.len(), 8);
+        assert_eq!(shots.len(), 10);
         for shot in &shots {
             assert!(is_varied(&shot.rgb), "{} paints a flat frame", shot.name);
         }
@@ -1650,10 +1811,40 @@ mod tests {
     fn writer_saves_seven_scenes_and_keeps_avi() {
         let dir = std::env::temp_dir().join(format!("recomp2jam-shots-{}", std::process::id()));
         let written = write_shots(&dir).unwrap();
-        assert_eq!(written.len(), 7);
+        assert_eq!(written.len(), 9);
         assert!(!dir.join("avi.png").exists());
         assert!(dir.join("musicselect.png").exists());
+        assert!(dir.join("playing-native.png").exists());
+        assert!(dir.join("result-native.png").exists());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn native_shots_share_the_walked_source_frame() {
+        // Same walked instant, same painter: downscaling each native
+        // XRGB frame must reproduce its preview RGB byte-exact, and
+        // each native must carry full 800x600 detail.
+        let shots = capture_all().unwrap();
+        let by_name = |name: &str| {
+            shots
+                .iter()
+                .find(|shot| shot.name == name)
+                .unwrap_or_else(|| panic!("missing shot {name}"))
+        };
+        for (preview, native) in [("playing", "playing-native"), ("result", "result-native")] {
+            let (small, full) = (by_name(preview), by_name(native));
+            assert_eq!((full.w, full.h), (800, 600));
+            assert_eq!(full.rgb.len(), 800 * 600 * 3);
+            assert!(is_varied(&full.rgb), "{native} paints a flat frame");
+            let mut words = Vec::with_capacity(full.w * full.h);
+            let (chunks, _) = full.rgb.as_chunks::<3>();
+            for pixel in chunks {
+                words.push(
+                    u32::from(pixel[0]) << 16 | u32::from(pixel[1]) << 8 | u32::from(pixel[2]),
+                );
+            }
+            assert_eq!(to_rgb(&downscale_even(&words, full.w, full.h)), small.rgb);
+        }
     }
 
     #[test]

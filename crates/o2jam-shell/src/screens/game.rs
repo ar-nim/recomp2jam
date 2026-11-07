@@ -29,7 +29,7 @@ use super::side::{
 use crate::MenuKey;
 use o2jam_audio::{AudioBackend, PcmSamples};
 use o2jam_file::OjnListEntry;
-use o2jam_game::{PeerBars, RoomTeams};
+use o2jam_game::{PeerBars, RankDelivery, RoomTeams, PEER_SLOT_COUNT};
 use o2jam_net::play::SetRoomMusic;
 use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry};
 use o2jam_render::{
@@ -369,6 +369,22 @@ impl ScreenGame {
     pub fn set_battle_self_team(&mut self, team: Option<u8>) -> &mut Self {
         self.battle_self_team = team;
         self
+    }
+
+    /// Deliver scripted rank bytes through the peer mirror (shot-walk
+    /// fixture only — same honesty as the duo nicknames): seeds the
+    /// holder bytes, then broadcasts the packet through the verified
+    /// rank-remap rule (`PeerBars::apply_rank_broadcast`). Returns the
+    /// per-position deliveries. Zero convention unchanged: unmatched
+    /// bytes leave their rows zeroed and hidden.
+    pub fn stage_scripted_ranks(
+        &mut self,
+        global: u8,
+        stored: [u8; PEER_SLOT_COUNT],
+        packet: [u8; PEER_SLOT_COUNT],
+    ) -> Vec<RankDelivery> {
+        self.playing.set_rank_holders(global, stored);
+        self.playing.apply_peer_ranks(packet)
     }
 
     /// Rank-1 battle verdict for the claimed local team, if known.
@@ -2205,6 +2221,25 @@ mod game_tests {
         let rows = game.result_rank_rows();
         assert_eq!(rows[0].rank, None);
         assert_eq!(rows[1].rank, None);
+    }
+
+    #[test]
+    fn result_rows_show_scripted_ranks_after_a_staged_broadcast() {
+        // Scripted walk fixture: the local seat holds rank 1, the
+        // wire peer rank 2 — the broadcast delivers each byte to its
+        // holder through the rank-remap rule, and only those rows
+        // paint (trailing zeros stay hidden).
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        let deliveries = game.stage_scripted_ranks(
+            0xFF,
+            [1, 2, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
+            [1, 2, 0, 0, 0, 0, 0, 0],
+        );
+        assert_eq!(deliveries.len(), 2);
+        let rows = game.result_rank_rows();
+        assert_eq!(rows[0].rank, Some(1));
+        assert_eq!(rows[1].rank, Some(2));
     }
 
     #[test]
