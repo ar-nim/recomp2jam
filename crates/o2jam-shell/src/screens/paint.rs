@@ -1326,17 +1326,10 @@ fn paint_waiting_skills(frame: &mut Frame<'_>, room: &JoinedRoom, placements: &[
 
 /// Selected-song label at the `MUSICNAME` rect (rect 22, top bar):
 /// song id only (the song table lives server-side, as in the lobby).
-/// The `COVERMUSIC` button, the select arrow, the `Random` cards, the
-/// chat box, and BACK stay staged art — recorded negatives, not gaps:
+/// The `COVERMUSIC` button, the select arrow, the `Random` cards, and
+/// BACK stay staged art — recorded negatives, not gaps (chat now has a
+/// live source: [`paint_waiting_chat`]):
 ///
-/// - Chat: `EDIT_SWAIT_CHAT` (`0x16300014` → rect 19) plus
-///   `LIST_SWAIT_CHAT` (`0x1680002B` → rect 42) and the `TEXT_SWAIT_CHAT`
-///   row template (`0x1640003C`, `SET 0x00031000`) name the history view,
-///   but its text source is untraced: waiting-room chat rides
-///   3011/3012/3013 (opcode numbers only, `docs/net-protocol.md`),
-///   `o2jam-net` decodes none of them, and `JoinedRoom` carries no chat
-///   field — so the snapshot feeds nothing and the painter invents no
-///   history.
 /// - Random cards: the 117-entry `STATE_WAITING` block names no per-card
 ///   entries; the big `?` card sits on `RANDMAP` (`0x1650004F` → rect 78)
 ///   while the small `?` cards sit on the spriteless `EFFECT_1/2` rects
@@ -1353,6 +1346,149 @@ fn paint_waiting_music(frame: &mut Frame<'_>, room: &JoinedRoom, placements: &[S
             &room_music_label(room.music_id),
             art_title_ink(),
         );
+    }
+}
+
+/// Chat history view (`EDIT_SWAIT_CHAT 0x16300014` → rect 19,
+/// `LIST_SWAIT_CHAT 0x1680002B` → rect 42, row template
+/// `TEXT_SWAIT_CHAT 0x1640003C` under `SET 0x00031000`): one live row
+/// per decoded 3012/3013 packet, fed through [`paint_waiting_chat`].
+/// Rows come from live packets only — no history is invented.
+const WAITING_CHAT_LIST_ID: &str = "IDC_LIST_SWAIT_CHAT";
+/// Chat input line (`EDIT_SWAIT_CHAT` → rect 19).
+const WAITING_CHAT_EDIT_ID: &str = "IDC_EDIT_SWAIT_CHAT";
+/// Native history rect while no staged art names it
+/// (`LIST_SWAIT_CHAT` rect 42 `(24,455,511,553)`).
+const WAITING_CHAT_LIST_RECT: Rect = Rect {
+    x: 24,
+    y: 455,
+    w: 487,
+    h: 98,
+};
+/// Native input rect while no staged art names it
+/// (`EDIT_SWAIT_CHAT` rect 19 `(20,563,460,583)`).
+const WAITING_CHAT_EDIT_RECT: Rect = Rect {
+    x: 20,
+    y: 563,
+    w: 440,
+    h: 20,
+};
+/// Rows visible in the history box: list height 98 over the 8 px row
+/// pitch (the `TEXT_SWAIT_CHAT` template carries no per-row staged
+/// rect — rows stack from the list origin, so the exact row-feed call
+/// stays OPEN).
+const WAITING_CHAT_VISIBLE_ROWS: usize = 12;
+
+/// One waiting-room chat row from a live 3012/3013 packet
+/// (`ScreenGame` converts `WaitingUserMessage`/`WaitingAdminMessage`
+/// into this display form; the painter never decodes the wire).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WaitingChatMessage {
+    /// Chatter nickname.
+    pub sender: String,
+    /// Chat text (UTF-8, lossy-decoded from the raw wire bytes).
+    pub text: String,
+    /// True for 3013 administrator lines.
+    pub admin: bool,
+}
+
+impl WaitingChatMessage {
+    /// Player chat row (3012).
+    #[must_use]
+    pub fn user(sender: &str, text: &str) -> Self {
+        Self {
+            sender: sender.to_owned(),
+            text: text.to_owned(),
+            admin: false,
+        }
+    }
+
+    /// Administrator chat row (3013).
+    #[must_use]
+    pub fn admin(sender: &str, text: &str) -> Self {
+        Self {
+            sender: sender.to_owned(),
+            text: text.to_owned(),
+            admin: true,
+        }
+    }
+}
+
+/// Display text of one chat row: `sender: text`, administrator rows
+/// prefixed `[ADMIN]` (prefix and colors are stand-ins — the exact
+/// row-feed call stays OPEN).
+#[must_use]
+pub fn waiting_chat_row_text(message: &WaitingChatMessage) -> String {
+    if message.admin {
+        format!("[ADMIN] {}: {}", message.sender, message.text)
+    } else {
+        format!("{}: {}", message.sender, message.text)
+    }
+}
+
+/// Rows the history box shows: the newest [`WAITING_CHAT_VISIBLE_ROWS`].
+#[must_use]
+pub fn waiting_chat_visible_messages(messages: &[WaitingChatMessage]) -> &[WaitingChatMessage] {
+    let skip = messages.len().saturating_sub(WAITING_CHAT_VISIBLE_ROWS);
+    messages.get(skip..).unwrap_or(&[])
+}
+
+/// Row ink: amber for administrator rows, white otherwise.
+fn waiting_chat_ink(admin: bool) -> u32 {
+    if admin {
+        pack_xrgb(0xFF, 0xD0, 0x20)
+    } else {
+        art_title_ink()
+    }
+}
+
+/// Frame origin of the history box: the staged `LIST` rect while bound,
+/// else the scaled native rect 42.
+fn waiting_chat_list_origin(frame: &Frame<'_>, placements: &[ScenePlacement]) -> (i32, i32) {
+    if let Some(origin) = waiting_bnd_origin(placements, WAITING_CHAT_LIST_ID, frame) {
+        return origin;
+    }
+    let scaled = scale_rect_to_frame(&WAITING_CHAT_LIST_RECT, frame.w, frame.h);
+    (scaled.x, scaled.y)
+}
+
+/// Frame origin of the input line: the staged `EDIT` rect while bound,
+/// else the scaled native rect 19.
+fn waiting_chat_edit_origin(frame: &Frame<'_>, placements: &[ScenePlacement]) -> (i32, i32) {
+    if let Some(origin) = waiting_bnd_origin(placements, WAITING_CHAT_EDIT_ID, frame) {
+        return origin;
+    }
+    let scaled = scale_rect_to_frame(&WAITING_CHAT_EDIT_RECT, frame.w, frame.h);
+    (scaled.x, scaled.y)
+}
+
+/// Paint live chat rows plus the input line: the newest visible rows
+/// stack from the history origin at the lobby row pitch, the draft
+/// paints at the input origin. Empty histories and empty drafts paint
+/// nothing — no history without packets, no invented input.
+/// Missing placements fall back to the scaled native rects so the
+/// flat fallback still reads.
+pub fn paint_waiting_chat(
+    frame: &mut Frame<'_>,
+    messages: &[WaitingChatMessage],
+    input: &str,
+    placements: &[ScenePlacement],
+) {
+    let (list_x, list_y) = waiting_chat_list_origin(frame, placements);
+    for (offset, message) in waiting_chat_visible_messages(messages).iter().enumerate() {
+        let step = i32::try_from(offset).unwrap_or(i32::MAX);
+        let y = list_y.saturating_add(step.saturating_mul(WAITING_ROW_H));
+        paint_room_detail_line(
+            frame,
+            list_x,
+            y,
+            &waiting_chat_row_text(message),
+            waiting_chat_ink(message.admin),
+        );
+    }
+    if !input.is_empty() {
+        let (edit_x, edit_y) = waiting_chat_edit_origin(frame, placements);
+        paint_room_detail_line(frame, edit_x, edit_y, input, art_title_ink());
     }
 }
 
@@ -4959,6 +5095,152 @@ mod paint_tests {
             &placements,
         );
         assert!(buf.iter().all(|pixel| *pixel == 0));
+    }
+
+    #[test]
+    fn waiting_chat_row_text_names_sender_and_text() {
+        let row = WaitingChatMessage::user("host", "hello");
+        assert_eq!(waiting_chat_row_text(&row), "host: hello");
+    }
+
+    #[test]
+    fn waiting_chat_row_text_prefixes_admin_rows() {
+        let row = WaitingChatMessage::admin("host", "hello");
+        assert_eq!(waiting_chat_row_text(&row), "[ADMIN] host: hello");
+    }
+
+    #[test]
+    fn waiting_chat_paints_nothing_without_live_rows() {
+        let placements = vec![
+            waiting_probe("IDC_LIST_SWAIT_CHAT", None, (24, 455, 511, 553)),
+            waiting_probe("IDC_EDIT_SWAIT_CHAT", None, (20, 563, 460, 583)),
+        ];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_chat(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &[],
+            "",
+            &placements,
+        );
+        assert!(buf.iter().all(|pixel| *pixel == 0));
+    }
+
+    #[test]
+    fn waiting_chat_paints_user_rows_at_the_list_rect() {
+        let placements = vec![waiting_probe(
+            "IDC_LIST_SWAIT_CHAT",
+            None,
+            (24, 455, 511, 553),
+        )];
+        let rows = vec![WaitingChatMessage::user("host", "hello")];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_chat(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &rows,
+            "",
+            &placements,
+        );
+        assert_eq!(buf[453 * 800 + 20], scrim_color());
+        assert!(buf.contains(&art_title_ink()));
+    }
+
+    #[test]
+    fn waiting_chat_paints_admin_rows_in_amber() {
+        let placements = vec![waiting_probe(
+            "IDC_LIST_SWAIT_CHAT",
+            None,
+            (24, 455, 511, 553),
+        )];
+        let rows = vec![WaitingChatMessage::admin("op", "quiet")];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_chat(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &rows,
+            "",
+            &placements,
+        );
+        assert_eq!(buf[453 * 800 + 20], scrim_color());
+        assert!(buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
+    }
+
+    #[test]
+    fn waiting_chat_shows_only_the_newest_rows() {
+        let placements = vec![waiting_probe(
+            "IDC_LIST_SWAIT_CHAT",
+            None,
+            (24, 455, 511, 553),
+        )];
+        let mut rows = Vec::new();
+        for index in 0..WAITING_CHAT_VISIBLE_ROWS + 2 {
+            rows.push(WaitingChatMessage::user("host", &format!("line{index}")));
+        }
+        let visible = waiting_chat_visible_messages(&rows);
+        assert_eq!(visible.len(), WAITING_CHAT_VISIBLE_ROWS);
+        assert_eq!(visible[0].text, "line2");
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_chat(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &rows,
+            "",
+            &placements,
+        );
+        assert!(buf.contains(&scrim_color()));
+    }
+
+    #[test]
+    fn waiting_chat_paints_the_input_line_at_the_edit_rect() {
+        let placements = vec![waiting_probe(
+            "IDC_EDIT_SWAIT_CHAT",
+            None,
+            (20, 563, 460, 583),
+        )];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_chat(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &[],
+            "go",
+            &placements,
+        );
+        assert_eq!(buf[561 * 800 + 16], scrim_color());
+        assert!(buf.contains(&art_title_ink()));
+    }
+
+    #[test]
+    fn waiting_chat_falls_back_to_native_rects_without_staged_art() {
+        let rows = vec![WaitingChatMessage::user("host", "hello")];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_chat(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &rows,
+            "go",
+            &[],
+        );
+        assert_eq!(buf[453 * 800 + 20], scrim_color());
+        assert_eq!(buf[561 * 800 + 16], scrim_color());
     }
 
     #[test]

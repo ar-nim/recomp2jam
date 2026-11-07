@@ -11,8 +11,8 @@ use super::paint::{
     battle_verdict, grade_frame, paint_avi_scene, paint_channel_list, paint_channel_scene,
     paint_loading_scene, paint_loading_scene_with_status, paint_lobby_backdrop,
     paint_playing_overlay, paint_result, paint_result_scene, paint_room_list, paint_room_scene,
-    paint_screen, paint_waiting_members, paint_waiting_scene, scene_index, BattleVerdict,
-    LoadingStatus, ResultRankRow, ResultVerdict, SceneArt,
+    paint_screen, paint_waiting_chat, paint_waiting_members, paint_waiting_scene, scene_index,
+    BattleVerdict, LoadingStatus, ResultRankRow, ResultVerdict, SceneArt, WaitingChatMessage,
 };
 use super::side::{
     can_return_side, can_visit_side, paint_side_scene, select_chosung_cells, select_difficulty_ink,
@@ -32,6 +32,7 @@ use o2jam_audio::{AudioBackend, PcmSamples};
 use o2jam_file::OjnListEntry;
 use o2jam_game::{PeerBars, RankDelivery, RoomTeams, PEER_SLOT_COUNT};
 use o2jam_net::play::SetRoomMusic;
+use o2jam_net::rooms::{SendWaitingMessage, WaitingAdminMessage, WaitingUserMessage};
 use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry};
 use o2jam_render::{
     draw_char, draw_text, fill_rect, pack_xrgb, scale_rect_to_frame, text_width, Frame, Rect,
@@ -44,6 +45,11 @@ use o2jam_render::{
 /// so the composer never carries stage 0; the first stage stands in
 /// for the picker's pick (exact default untraced).
 const DEFAULT_ARENA_STAGE: u16 = 1;
+
+/// Live waiting-room chat rows kept per room (oldest first): enough for
+/// the 12-row history box plus scrollback, bounded so a loud room
+/// cannot grow memory without limit (PERF-07: `usize`, never `as`).
+const MAX_WAITING_CHAT_ROWS: usize = 50;
 
 /// Game loop that shows each screen's scene and walks the flow.
 ///
@@ -61,6 +67,10 @@ pub struct ScreenGame {
     rooms: Vec<RoomListEntry>,
     room_highlight: usize,
     waiting: Option<JoinedRoom>,
+    /// Live waiting-room chat rows (3012/3013 packets only, oldest first).
+    waiting_chat: Vec<WaitingChatMessage>,
+    /// Unsent chat draft for the input line (3011 source).
+    chat_input: String,
     selected_music: Option<SetRoomMusic>,
     /// Live loading status (walk fraction + title–artist, lifecycle
     /// §9): `None` paints the indeterminate full bar.
@@ -120,6 +130,8 @@ impl ScreenGame {
             rooms: Vec::new(),
             room_highlight: 0,
             waiting: None,
+            waiting_chat: Vec::new(),
+            chat_input: String::new(),
             selected_music: None,
             loading_status: None,
             arena_stage: DEFAULT_ARENA_STAGE,
@@ -251,13 +263,87 @@ impl ScreenGame {
     /// Remember the joined room; Waiting paints its eight seats, and
     /// the room's arena word sets the Playing backdrop stage (zero or
     /// negative words keep the current stage: the exe replaces a zero
-    /// stage on room entry, it never stores one).
+    /// stage on room entry, it never stores one). Joining a new room
+    /// clears the chat history and draft: rows come from that room's
+    /// 3012/3013 packets only, never carried across rooms.
     pub fn set_joined_room(&mut self, room: JoinedRoom) -> &mut Self {
         if let Some(stage) = arena_stage_word(room.arena) {
             self.arena_stage = stage;
         }
         self.waiting = Some(room);
+        self.waiting_chat.clear();
+        self.chat_input.clear();
         self
+    }
+
+    /// Append one player chat line (3012) to the waiting history.
+    pub fn push_waiting_user_message(&mut self, message: &WaitingUserMessage) -> &mut Self {
+        self.push_chat_row(&message.sender, &message.content_text(), false);
+        self
+    }
+
+    /// Append one administrator chat line (3013) to the waiting history.
+    pub fn push_waiting_admin_message(&mut self, message: &WaitingAdminMessage) -> &mut Self {
+        self.push_chat_row(&message.sender, &message.content_text(), true);
+        self
+    }
+
+    /// Live waiting-room chat rows, oldest first (empty until a
+    /// 3012/3013 packet arrives).
+    #[must_use]
+    pub fn waiting_chat(&self) -> &[WaitingChatMessage] {
+        &self.waiting_chat
+    }
+
+    /// Stage the unsent input line (the 3011 source on send).
+    pub fn set_chat_input(&mut self, line: &str) -> &mut Self {
+        self.chat_input = line.to_owned();
+        self
+    }
+
+    /// Unsent chat draft (`""` while nothing is typed).
+    #[must_use]
+    pub fn chat_input(&self) -> &str {
+        &self.chat_input
+    }
+
+    /// Outgoing chat packet for the draft (`None` while the input
+    /// line is empty, so no empty send is invented). Callers send
+    /// the returned body, then [`Self::clear_chat_input`].
+    #[must_use]
+    pub fn chat_send_message(&self) -> Option<SendWaitingMessage> {
+        if self.chat_input.is_empty() {
+            return None;
+        }
+        Some(SendWaitingMessage {
+            content: self.chat_input.as_bytes().to_vec(),
+        })
+    }
+
+    /// Forget the unsent input line.
+    pub fn clear_chat_input(&mut self) -> &mut Self {
+        self.chat_input.clear();
+        self
+    }
+
+    /// Append one chat row and bound the history to
+    /// [`MAX_WAITING_CHAT_ROWS`] (oldest rows drop first).
+    fn push_chat_row(&mut self, sender: &str, text: &str, admin: bool) {
+        self.waiting_chat.push(WaitingChatMessage {
+            sender: sender.to_owned(),
+            text: text.to_owned(),
+            admin,
+        });
+        self.truncate_waiting_chat();
+    }
+
+    /// Drop the oldest rows past the history cap.
+    fn truncate_waiting_chat(&mut self) {
+        let overflow = self
+            .waiting_chat
+            .len()
+            .saturating_sub(MAX_WAITING_CHAT_ROWS);
+        self.waiting_chat.drain(..overflow);
     }
 
     /// Room arena stage the Playing `_` sprites resolve through: the
@@ -640,25 +726,32 @@ impl ScreenGame {
     }
 
     /// Waiting: staged art behind the live seats, flat card fallback,
-    /// then the staged song-select dialog: art, its structure overlay
-    /// (catalog-driven table), and the chosen-song panel.
+    /// then the live chat box, then the staged song-select dialog: art,
+    /// its structure overlay (catalog-driven table), and the
+    /// chosen-song panel.
     ///
-    /// Recorded negatives (no source to feed, so nothing is wired): the
-    /// chat box (`EDIT_SWAIT_CHAT 0x16300014` → rect 19, `LIST_SWAIT_CHAT
-    /// 0x1680002B` → rect 42, row template `TEXT_SWAIT_CHAT 0x1640003C`)
-    /// has no text source — waiting-room chat rides 3011/3012/3013
-    /// (opcode numbers only), `o2jam-net` decodes none, and `JoinedRoom`
-    /// carries no chat field. The `Random` `?` cards name no per-card
-    /// entries (big card on `RANDMAP 0x1650004F` → rect 78, small cards
-    /// on spriteless `EFFECT_1/2` rects 68/69); `SelectMusic_Random*.ojs`
-    /// bodies belong to `DAILOG_SELECTMUSIC` filter buttons. Both stay
-    /// staged art: `paint_waiting_staged` never paints those rects (see
-    /// the `paint_waiting_music` docs and the chat/cards absence tests).
+    /// Chat rows come from live 3012/3013 packets only
+    /// ([`Self::push_waiting_user_message`]/[`Self::push_waiting_admin_message`])
+    /// and paint at the `EDIT_SWAIT_CHAT 0x16300014`/`LIST_SWAIT_CHAT
+    /// 0x1680002B` rects through the `TEXT_SWAIT_CHAT 0x1640003C`
+    /// template stacking ([`paint_waiting_chat`]); empty histories paint
+    /// nothing. The `Random` `?` cards name no per-card entries (big card
+    /// on `RANDMAP 0x1650004F` → rect 78, small cards on spriteless
+    /// `EFFECT_1/2` rects 68/69); `SelectMusic_Random*.ojs` bodies belong
+    /// to `DAILOG_SELECTMUSIC` filter buttons. Cards stay staged art:
+    /// `paint_waiting_staged` never paints those rects (see the
+    /// `paint_waiting_music` docs and the chat/cards absence tests).
     fn paint_waiting(&self, frame: &mut Frame<'_>) {
         match (self.scene_art(Screen::Waiting), &self.waiting) {
-            (Some(art), Some(room)) => paint_waiting_scene(frame, room, art),
+            (Some(art), Some(room)) => {
+                paint_waiting_scene(frame, room, art);
+                paint_waiting_chat(frame, &self.waiting_chat, &self.chat_input, &art.placements);
+            }
             (Some(art), None) => paint_lobby_backdrop(frame, Screen::Waiting, art),
-            (None, Some(room)) => paint_waiting_members(frame, room),
+            (None, Some(room)) => {
+                paint_waiting_members(frame, room);
+                paint_waiting_chat(frame, &self.waiting_chat, &self.chat_input, &[]);
+            }
             (None, None) => paint_screen(frame, Screen::Waiting),
         }
         self.paint_select_music_art(frame);
@@ -2754,5 +2847,89 @@ mod game_tests {
         );
         assert_eq!(game.loading_status(), None);
         assert_eq!(buf[16 * 64 + 47], pack_xrgb(0x30, 0xB0, 0x30));
+    }
+
+    fn chat_user(sender: &str, text: &str) -> o2jam_net::rooms::WaitingUserMessage {
+        o2jam_net::rooms::WaitingUserMessage {
+            sender: sender.to_owned(),
+            content: text.as_bytes().to_vec(),
+            member_id: 1,
+        }
+    }
+
+    fn chat_admin(sender: &str, text: &str) -> o2jam_net::rooms::WaitingAdminMessage {
+        o2jam_net::rooms::WaitingAdminMessage {
+            sender: sender.to_owned(),
+            content: text.as_bytes().to_vec(),
+            member_id: 7,
+        }
+    }
+
+    #[test]
+    fn waiting_chat_starts_empty() {
+        let game = ScreenGame::new();
+        assert!(game.waiting_chat().is_empty());
+        assert_eq!(game.chat_input(), "");
+        assert_eq!(game.chat_send_message(), None);
+    }
+
+    #[test]
+    fn pushing_a_user_message_stages_one_chat_row() {
+        let mut game = ScreenGame::new();
+        game.push_waiting_user_message(&chat_user("host", "hello"));
+        assert_eq!(game.waiting_chat().len(), 1);
+        assert_eq!(game.waiting_chat()[0].sender, "host");
+        assert_eq!(game.waiting_chat()[0].text, "hello");
+        assert!(!game.waiting_chat()[0].admin);
+    }
+
+    #[test]
+    fn pushing_an_admin_message_marks_the_row() {
+        let mut game = ScreenGame::new();
+        game.push_waiting_admin_message(&chat_admin("op", "quiet"));
+        assert_eq!(game.waiting_chat().len(), 1);
+        assert!(game.waiting_chat()[0].admin);
+    }
+
+    #[test]
+    fn joining_a_room_clears_chat_history_and_draft() {
+        let mut game = ScreenGame::new();
+        game.push_waiting_user_message(&chat_user("host", "hello"));
+        game.set_chat_input("draft");
+        game.set_joined_room(waiting_room());
+        assert!(game.waiting_chat().is_empty());
+        assert_eq!(game.chat_input(), "");
+    }
+
+    #[test]
+    fn chat_send_builds_a_3011_body_from_the_input_line() {
+        let mut game = ScreenGame::new();
+        game.set_chat_input("go");
+        assert_eq!(game.chat_input(), "go");
+        let send = game.chat_send_message().unwrap();
+        assert_eq!(send.content, b"go".to_vec());
+        game.clear_chat_input();
+        assert_eq!(game.chat_input(), "");
+        assert_eq!(game.chat_send_message(), None);
+    }
+
+    #[test]
+    fn waiting_paints_live_chat_rows_without_staged_art() {
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        let calm = paint_waiting_frame(&mut game, 80, 64);
+        game.push_waiting_user_message(&chat_user("host", "hello"));
+        let live = paint_waiting_frame(&mut game, 80, 64);
+        assert_ne!(calm, live);
+        assert!(live.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+    }
+
+    #[test]
+    fn waiting_without_packets_paints_no_chat_history() {
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        assert!(game.waiting_chat().is_empty());
     }
 }

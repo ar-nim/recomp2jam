@@ -199,8 +199,24 @@ missing-archive fallbacks).
    `+0x24`, claims-render verdict 3) draw stored controls only. So:
    imageless image/button/toggle/number paint nothing; TEXT paints
    its stored runtime field or nothing — source PART-PINNED (setters
-   + dialog path pinned, channel-TITLE join OPEN). Remaining: join one
-   channel `TITLE` entry (`0x1240001E`–27) to a setter call site.
+   + dialog path pinned, channel-TITLE join OPEN). Remaining (sweep
+   2026-11-07, still OPEN): join one channel `TITLE` entry
+   (`0x1240001E`–27) to a setter call site. Full-image LE32 scan
+   returns 0 hits for each of the ten `TITLE` codes and for every
+   other `0x12` channel code probed (buttons `0x12200002`/`0x1220001B`,
+   image `0x12500028`, toggle `0x12011007`); the only `0x12` LE32 hits
+   are the generic self-gate `0x12000000` (41 hits, rdata-range files
+   `0x248591`–`0x2613a0`, not code). Neither control-lookup caller set
+   (`0x48BCF0`: 644 E8 sites; `0x4337C0`: 452 E8 sites) carries a
+   `0x12` push or mov immediate, so no channel control is looked up by
+   code. Grouping every trio E8 site (96/37/38) by enclosing prologue
+   finds no `0x12` push in any trio-calling function and exactly one
+   SelectBar reference: bar builder `0x48DD10` (file `0x8DD10`), whose
+   two `0x50F680` calls (files `0x8DF10`/`0x8DF1F`) sit in the
+   `0x19400007`–0B TEXT loop of `STATE_PLANET` (planet, not channel
+   `TITLE`) beside the SelectBar fetch (file `0x8DE84`). Channel
+   `TITLE` targets are never code-addressed; captions, if any, must
+   arrive via cached pointers or array iteration, both untraced.
 3. Dialog host mounting the code-fetched select bar
    (`DIALOG_CHANNEL_INFO`/`CDChannelInfo` index path; `0x4ED650` excluded
    as the fetch site but its own behavior is unread — ui-loader OPEN 2).
