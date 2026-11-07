@@ -1677,3 +1677,45 @@ the negatives-head baseline `9e12282`: decode waiting chat packets
   `docs/playtest.md`, fix only my own lint findings) the peer's file
   was left alone, and the peer was still editing when this log was
   written, so no suite re-run on the moving dirty state was taken.
+
+## Regression sweep — 2026-11-07 22:08 UTC+8 (HEAD `27d67a0`, tree clean at start, dirtied mid-sweep)
+
+Live re-proof on the chat-head, one feat later: covers the shell commit
+landed after the chat-head baseline `08911d5` (wire live waiting chat
+into the waiting scene, `31f14fb`), plus the sweep log (`27d67a0`).
+
+- `cargo fmt --check`: clean, `exit=0` (on clean HEAD at sweep start).
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1263 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 7, file 149, game 92, net 346,
+  render 73, shell 455, real_art 7, scenes 22, recomp2jam 93
+  (6 doc-test targets, 0 each). Ran twice, identical counts.
+- `cargo build --workspace --release`: clean, `exit=0` (plus a
+  touched-`main.rs` rebuild check: 0 warning lines).
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **NOT RUN
+  GREEN — blocked, no pass claimed.** A peer saved uncommitted
+  in-flight work in `crates/recomp2jam/src/shots.rs` (22:07 +08:00,
+after every clean-HEAD gate above had finished: scripted 3012/3013
+  chat fixture via `stage_waiting_chat`, +41/-6) that does not
+  compile: `error[E0432]: unresolved imports
+  o2jam_net::WaitingAdminMessage, o2jam_net::WaitingUserMessage`
+  (`bin "recomp2jam" test` target; HEAD exports neither name at the
+  `o2jam_net` root). The suite gates above all compiled and passed
+  before that save, so every count above is the clean-HEAD result.
+- **Verdict: no regression on clean HEAD (1263 passed; +15 vs the
+  1248 chat-head baseline, all shell 440 → 455 from the wire-live-chat
+  tests, all other targets unchanged, 0 failures) — but the live flow
+  has no green run on this HEAD: the dirty tree does not compile, so
+  no live pass is recorded.** No lint findings of mine. No commits, no
+  pushes. This sweep touched only `docs/playtest.md`.
+- Tree note: on the dirty state `cargo fmt --check` also shows a diff
+  on one of the peer's new lines (the long two-name `use o2jam_net`
+  import, needs rewrapping). Untracked peer scratch files present
+  (`.tmp-*.py`, left alone). None of that is mine: per the sweep rules
+  (touch only `docs/playtest.md`, fix only my own lint findings) the
+  peer's files were left alone, and the peer appears to still be
+  editing, so no suite re-run on the moving dirty state was taken.
