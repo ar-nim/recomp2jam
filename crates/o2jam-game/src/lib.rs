@@ -318,7 +318,11 @@ impl HoldSpan {
     /// grace-breaks on the list-head node itself (its payload+8 field is
     /// a link pointer, far above any song time, files `0x1773bf`–
     /// `0x1773c5`), so this Miss store is unreachable on shipped cursors
-    /// and a held tail can never be expired; see `docs/gameplay.md`.
+    /// and a held tail can never be expired. The walk's own stop-marker
+    /// `*(header+4)` is the lane's earliest real note — insert-before-
+    /// tail pins it there and no terminator record exists (fourth
+    /// trace, `docs/gameplay.md`) — and every walk breaks on the bound
+    /// before reading that node; see `docs/gameplay.md`.
     #[must_use]
     pub fn is_expired(record_ms: u64, now_ms: u64, windows: &TimingWindows) -> bool {
         record_ms.saturating_add(windows.bad) < now_ms
@@ -381,7 +385,13 @@ impl HoldSpan {
 ///    pointer far above any song time, so the grace test breaks the
 ///    walk at once (files `0x1773bf`–`0x1773c5`); the Miss store (file
 ///    `0x17740f`) and the paired-tail marking (files `0x177478`–
-///    `0x1774e2`) are unreachable on shipped cursors. In assist modes
+///    `0x1774e2`) are unreachable on shipped cursors. The scan's walk
+///    bound `current == *(header+4)` targets the lane's earliest real
+///    note — insert-before-tail (`FUN_00578990`, file `0x178990`)
+///    pins the first-inserted note in that slot and no terminator
+///    record exists (fourth trace, `docs/gameplay.md`) — and the walk
+///    breaks on the bound before dereferencing it (bound file
+///    `0x177393`, deref file `0x1773b1`). In assist modes
 ///    the auto judges instead rate every due record — tails included,
 ///    no bit-24 exclusion — Cool `0x10` (`FUN_00577090`/`FUN_00575fa0`,
 ///    evidence `ev_d6802fde…`/`ev_b83c2c24…`).
@@ -1777,5 +1787,60 @@ mod tests {
         assert_eq!(pills.count(), 0);
         assert_eq!((score.life.life(), score.combo), (106, 1));
         assert_eq!(score.counts, [1, 0, 1, 18]);
+    }
+
+    /// Parity model of the exe's per-lane note-list discipline (fourth
+    /// trace, `docs/gameplay.md` item 6): `FUN_00578990` (file
+    /// `0x178990`) links every record immediately before the current
+    /// `*(header+4)` slot, and the loader walks chart events in
+    /// ascending measure order — so the first-inserted record of a lane
+    /// (its earliest note) is pinned in the tail slot forever, the
+    /// remaining records keep chart order in front of it, and iteration
+    /// from the header runs ascending in time ending at that pinned
+    /// note. The slot vector stores records in walk order; its last
+    /// element mirrors `*(header+4)`. No terminator record exists.
+    #[derive(Default)]
+    struct LaneListParity {
+        walk_order: Vec<u64>,
+    }
+
+    impl LaneListParity {
+        /// `FUN_00578990`: link one record in front of the tail slot;
+        /// the first insert into an empty list takes the tail slot.
+        fn insert_before_tail(&mut self, record_ms: u64) {
+            let tail_slot = self.walk_order.len().saturating_sub(1);
+            self.walk_order.insert(tail_slot, record_ms);
+        }
+
+        /// A candidate walk (`FUN_00576540` loop bound at file
+        /// `0x1767e5`, expiry scan bound at file `0x177393`): both test
+        /// `cursor == *(header+4)` before their first dereference, so
+        /// the tail-slot record is never visited.
+        fn walked_records(&self) -> &[u64] {
+            let bound_slot = self.walk_order.len().saturating_sub(1);
+            &self.walk_order[..bound_slot]
+        }
+    }
+
+    #[test]
+    fn lane_list_walk_bound_excludes_the_first_inserted_note() {
+        // The stop-marker *(header+4) is the lane's earliest real note,
+        // not a terminator: inserting 4000/8000/12000 in chart order
+        // pins 4000 in the tail slot and the walk visits only 8000 and
+        // 12000, in ascending time order.
+        let mut lane = LaneListParity::default();
+        lane.insert_before_tail(4_000);
+        lane.insert_before_tail(8_000);
+        lane.insert_before_tail(12_000);
+        assert_eq!(lane.walked_records(), [8_000, 12_000]);
+    }
+
+    #[test]
+    fn lane_list_single_note_lives_only_in_the_excluded_tail_slot() {
+        // A one-note lane: the sole record is the bound slot itself, so
+        // a candidate walk visits nothing rather than reading it.
+        let mut lane = LaneListParity::default();
+        lane.insert_before_tail(2_000);
+        assert_eq!(lane.walked_records(), [] as [u64; 0]);
     }
 }

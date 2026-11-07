@@ -656,12 +656,44 @@ hold-bonus scan `FUN_00578110` (file `0x178110`, dossier
    inserts before `*(sentinel+4)`, evidence `ev_690d8393…`/
    `ev_c17d173f…`; loader `FUN_00571d60` evidence `ev_8659c2d0…`),
    and both directions cover the same records. OPEN refinements: (a)
-   the walk stop-marker is `*(sentinel+4)` = the first-inserted
-   element, so either a terminator record is inserted before each
-   lane's earliest note (insert site not located) or the earliest
-   note of each lane is excluded from walk candidacy — needs dynamic
-   evidence; (b) RESOLVED — press/release polarity settled statically
-   (third trace, no runtime needed). The queue drained by
+   RESOLVED statically (fourth trace, no runtime needed): no terminator
+   record exists — the stop-marker `*(sentinel+4)` is that lane's
+   earliest real note, pinned there by the list discipline, and every
+   walk excludes it structurally. The lane-list insert `FUN_00578990`
+   (file `0x178990`, dossier `ev_40f34b57…`; node builder
+   `FUN_00578ea0` file `0x178ea0`, `ev_8d4fea5e…`) links each record
+   immediately before its position argument, and the only callers that
+   pass a lane list pass `*(header+4)` as that position: the loader
+   note loop reads it at file `0x172866` for its callsite `0x1728c3`
+   (dossier `ev_4b4ccad8…`; insert xrefs `ev_44c16d41…`), the measure
+   planner at files `0x174d4c`/`0x174fe2`/`0x1752e2`/`0x1755b9`/
+   `0x17581a` — and that planner (`FUN_00574330`) is dead code: its
+   whole body gates on `param == 3` (files `0x174374`–`0x174378`,
+   `ev_1601e127…`) while its only caller, the loader tail at file
+   `0x172c3d`, passes the difficulty index 0–2 (xrefs `ev_995dd46c…`);
+   its splice helper `FUN_00579970` (file `0x179970`, `ev_63631c18…`)
+   is reached only from that dead tail through `FUN_005782e0` (xrefs
+   `ev_422d2542…`), and the load-end pairing sweep `FUN_00573b30`
+   (`ev_edc4cc84…`) only reads. The loader — walking the OJN event
+   stream in ascending measure order — is therefore the only lane-list
+   writer: every insert lands immediately before the current
+   `*(header+4)`, so the first insert (the lane's earliest note) takes
+   the tail slot, stays there forever, and iteration from the header
+   runs ascending in time, ending at that pinned earliest note — the
+   walks' own end marker is a real note. Both walk consumers stop before reading that node:
+   the judge candidate walks and the expiry scan test
+   `current == *(header+4)` ahead of their first dereference (judge
+   seed files `0x17674e`–`0x176762`, bound `0x1767e5` before deref
+   `0x176805`, dossier `ev_14992eb2…`; scan cursors `0x17732f`/
+   `0x177336`, seed `0x17736d`, bound `0x177393` before deref
+   `0x1773b1`, dossier `ev_0ece39cb…`), and the iterator primitives
+   refuse the tail node outright — `FUN_00578db0`/`FUN_00579590` fail
+   their `current == *(container+4)` check at files `0x178dd6`–
+   `0x178de6` and `0x1795b8`–`0x1795c8` (dossiers `ev_87bd7178…`/
+   `ev_7c82f55b…`). So the earliest note of each lane is excluded from
+   walk candidacy, and a held tail still cannot be expired; (b)
+   RESOLVED — press/release polarity settled statically (third trace,
+   no runtime needed). The queue drained by
    `FUN_004e15f0` carries {lane, kind, time}: kind 1 (press) reaches
    the forward as pressed argument 1 (push sites files `0xe17ae`/
    `0xe185f`, kept to the in-play states {5,6}) and kind 2 (release)
