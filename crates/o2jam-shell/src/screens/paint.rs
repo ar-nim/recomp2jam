@@ -29,7 +29,8 @@ use std::collections::HashMap;
 use super::super::avatar::{
     anchor_in_frame, paint_behind_placements, paint_foreground_placements, paint_scene_figures,
     scene_block, scene_sprite_names, AvatarFigure, ScenePlacement, AVI_BLOCK, AVI_LOGO_SPRITE,
-    CHANNEL_BLOCK, LOADING_SPRITE, RESULT_BLOCK, ROOM_BLOCK, WAITING_BLOCK,
+    CHANNEL_BLOCK, LOADING_SPRITE, RESULT_BLOCK, ROOM_BLOCK, WAITING_BLOCK, WAIT_COVER_SPRITE,
+    WAIT_TEAM_SPRITES,
 };
 use super::super::playing::{HighwayGeometry, PlayingView};
 use super::super::screen::Screen;
@@ -995,11 +996,330 @@ pub(crate) fn paint_waiting_members(frame: &mut Frame<'_>, room: &JoinedRoom) {
 }
 
 /// Paint staged waiting art (team buttons, avatar covers) with the
-/// live seats and ready dots on top.
+/// live seats and ready dots on top: staged placements anchor every
+/// region (covers, team grid, READY, skills, speed, music, wins),
+/// while the flat fallback below keeps the invented grid. Without
+/// staged cover placements the legacy rows keep their slot so the
+/// bare scene still reads.
 pub fn paint_waiting_scene(frame: &mut Frame<'_>, room: &JoinedRoom, art: &SceneArt) {
     art.paint_backdrop(frame, Screen::Waiting);
     paint_title_over_art(frame, Screen::Waiting);
-    paint_waiting_rows(frame, room);
+    if waiting_has_staged_covers(&art.placements) {
+        paint_waiting_staged(frame, room, &art.placements);
+    } else {
+        paint_waiting_rows(frame, room);
+    }
+}
+
+/// Seat-cover control ids in seat order (`COVERAVATAR1..8`, codes
+/// `0x1650003D..44` → `.bnd` rects 60..67): each cover rect positions
+/// its own seat, anchor-free bodies included (the placement lesson).
+const WAITING_COVER_IDS: [&str; 8] = [
+    "IDC_IMAGE_SWAIT_COVERAVATAR1",
+    "IDC_IMAGE_SWAIT_COVERAVATAR2",
+    "IDC_IMAGE_SWAIT_COVERAVATAR3",
+    "IDC_IMAGE_SWAIT_COVERAVATAR4",
+    "IDC_IMAGE_SWAIT_COVERAVATAR5",
+    "IDC_IMAGE_SWAIT_COVERAVATAR6",
+    "IDC_IMAGE_SWAIT_COVERAVATAR7",
+    "IDC_IMAGE_SWAIT_COVERAVATAR8",
+];
+/// Team-button control ids in team order (`TEAMA..H`, codes
+/// `0x16201004..0B` → `.bnd` rects 3..10).
+const WAITING_TEAM_IDS: [&str; 8] = [
+    "IDC_BUTTON_SWAIT_TEAMA",
+    "IDC_BUTTON_SWAIT_TEAMB",
+    "IDC_BUTTON_SWAIT_TEAMC",
+    "IDC_BUTTON_SWAIT_TEAMD",
+    "IDC_BUTTON_SWAIT_TEAME",
+    "IDC_BUTTON_SWAIT_TEAMF",
+    "IDC_BUTTON_SWAIT_TEAMG",
+    "IDC_BUTTON_SWAIT_TEAMH",
+];
+/// Room-title text (`TEXT_SWAIT_ROOMNAME`, code `0x16400016` → rect 21).
+const WAITING_ROOMNAME_ID: &str = "IDC_TEXT_SWAIT_ROOMNAME";
+/// Selected-song text (`TEXT_SWAIT_MUSICNAME`, code `0x16400017` →
+/// rect 22, top bar beside the title).
+const WAITING_MUSICNAME_ID: &str = "IDC_TEXT_SWAIT_MUSICNAME";
+/// Champion win-count text (`TEXT_SWAIT_WINNERSCROE`, code `0x1640006D`
+/// → rect 108, the Wins box inside the champion card).
+const WAITING_WINNERSCORE_ID: &str = "IDC_TEXT_SWAIT_WINNERSCROE";
+/// Scroll-speed value art (`SPEED_NUM`, code `0x16500066` → rect 101).
+const WAITING_SPEED_NUM_ID: &str = "IDC_IMAGE_SWAIT_SPEED_NUM";
+/// Skill-slot art ids top to bottom (`1/2/3SKILL`, codes
+/// `0x16500058..5A` → rects 87..89, the X boxes of the SKILL panel).
+const WAITING_SKILL_IDS: [&str; 3] = [
+    "IDC_IMAGE_SWAIT_1SKILL",
+    "IDC_IMAGE_SWAIT_2SKILL",
+    "IDC_IMAGE_SWAIT_3SKILL",
+];
+
+/// One staged seat view: the wire member plus the champion mark; the
+/// self seat carries no level (the wire sends no self nickname or
+/// level — `self_seat` documents the local-only name).
+struct StagedSeat {
+    name: String,
+    level: Option<i32>,
+    team: u8,
+    ready: bool,
+    present: bool,
+    locked: bool,
+    champion: bool,
+}
+
+/// Staged seats in cover order: self first, then the seven wire slots
+/// (`JoinedRoom.slots`), padded empty — the same eight seats as
+/// [`waiting_seats`], with levels and the champion mark kept.
+fn staged_seats(room: &JoinedRoom) -> Vec<StagedSeat> {
+    let mut seats = Vec::with_capacity(WAITING_SEATS);
+    seats.push(StagedSeat {
+        name: "YOU".to_owned(),
+        level: None,
+        team: room.team,
+        ready: false,
+        present: true,
+        locked: false,
+        champion: room.champion == Some(0),
+    });
+    for (offset, slot) in room.slots.iter().take(WAITING_PEERS).enumerate() {
+        let index = u8::try_from(offset + 1).unwrap_or(u8::MAX);
+        seats.push(staged_peer_seat(slot, room.champion == Some(index)));
+    }
+    while seats.len() < WAITING_SEATS {
+        seats.push(empty_staged_seat());
+    }
+    seats
+}
+
+/// Staged view of one wire slot.
+fn staged_peer_seat(slot: &RoomSlot, champion: bool) -> StagedSeat {
+    match &slot.member {
+        Some(member) => StagedSeat {
+            name: member.nickname.clone(),
+            level: Some(member.level),
+            team: member.team,
+            ready: member.ready,
+            present: true,
+            locked: false,
+            champion,
+        },
+        None if slot.state_code == RoomSlotState::Locked as i32 => StagedSeat {
+            name: String::new(),
+            level: None,
+            team: 0,
+            ready: false,
+            present: false,
+            locked: true,
+            champion: false,
+        },
+        None => empty_staged_seat(),
+    }
+}
+
+/// Vacant staged seat.
+fn empty_staged_seat() -> StagedSeat {
+    StagedSeat {
+        name: String::new(),
+        level: None,
+        team: 0,
+        ready: false,
+        present: false,
+        locked: false,
+        champion: false,
+    }
+}
+
+/// Role prefix of one seat: the champion seat names `CHAMPION`, every
+/// other occupied seat `CHALLENGER` (the reference 1v1 pair); rooms
+/// without a champion mark name no roles (normal rooms carry none).
+fn staged_role(has_champion: bool, seat: &StagedSeat) -> Option<&'static str> {
+    if !has_champion || !seat.present {
+        return None;
+    }
+    Some(if seat.champion {
+        "CHAMPION"
+    } else {
+        "CHALLENGER"
+    })
+}
+
+/// One staged seat line: role plus team plus `Lv` (unknown levels
+/// show `-`: the self seat carries no wire level) plus name plus the
+/// ready flag — the legacy row shape, role-prefixed.
+fn staged_seat_text(seat: &StagedSeat, role: Option<&str>) -> String {
+    let flag = if seat.ready { 'R' } else { '-' };
+    let level = seat.level.map_or("-".to_owned(), |level| level.to_string());
+    let team = team_letter(seat.team);
+    match role {
+        Some(role) => format!("{role} {team} Lv:{level} {} {flag}", seat.name),
+        None => format!("{team} Lv:{level} {} {flag}", seat.name),
+    }
+}
+
+/// Scaled frame origin of one waiting control (`None` while the staged
+/// art names no such control — the exe leaves untouched icons alone).
+fn waiting_bnd_origin(
+    placements: &[ScenePlacement],
+    id: &str,
+    frame: &Frame<'_>,
+) -> Option<(i32, i32)> {
+    let placement = placements.iter().find(|placed| placed.id == id)?;
+    let scaled = scale_rect_to_frame(&placement.rect, frame.w, frame.h);
+    Some((scaled.x, scaled.y))
+}
+
+/// True while one cover binds the staged cover body (or a
+/// sprite-less slot, as in synthetic probes): any other body on the
+/// cover id stays untouched, like the exe's unmatched icons.
+fn cover_stages_body(placements: &[ScenePlacement], cover_id: &str) -> bool {
+    placements
+        .iter()
+        .find(|placed| placed.id == cover_id)
+        .is_none_or(|placed| {
+            placed
+                .sprite
+                .as_deref()
+                .is_none_or(|sprite| sprite == WAIT_COVER_SPRITE)
+        })
+}
+
+/// True while staged art binds at least one seat cover: the staged
+/// path anchors to verbatim `.bnd` rects, otherwise the legacy grid
+/// keeps the bare scene readable.
+fn waiting_has_staged_covers(placements: &[ScenePlacement]) -> bool {
+    WAITING_COVER_IDS
+        .iter()
+        .any(|id| placements.iter().any(|placed| &placed.id == id))
+}
+
+/// Staged waiting regions, each at its verbatim `.bnd` rect: seat
+/// covers, team highlight, title, wins, speed, skills, and song.
+fn paint_waiting_staged(frame: &mut Frame<'_>, room: &JoinedRoom, placements: &[ScenePlacement]) {
+    paint_waiting_title(frame, room, placements);
+    paint_waiting_covers(frame, room, placements);
+    paint_waiting_team_highlight(frame, room, placements);
+    paint_waiting_wins(frame, room, placements);
+    paint_waiting_speed(frame, room, placements);
+    paint_waiting_skills(frame, room, placements);
+    paint_waiting_music(frame, room, placements);
+}
+
+/// Room title at the `ROOMNAME` rect (top bar, rect 21).
+fn paint_waiting_title(frame: &mut Frame<'_>, room: &JoinedRoom, placements: &[ScenePlacement]) {
+    if let Some((x, y)) = waiting_bnd_origin(placements, WAITING_ROOMNAME_ID, frame) {
+        paint_room_detail_line(frame, x, y, &room.title, art_title_ink());
+    }
+}
+
+/// Seat lines at the cover rects (rects 60..67): champion names its
+/// role and wins box, the challenger its role; empty covers stay
+/// untouched so the staged empty panels show (reference bottom row).
+/// Locked covers name `LOCK` (their art carries no lock body).
+fn paint_waiting_covers(frame: &mut Frame<'_>, room: &JoinedRoom, placements: &[ScenePlacement]) {
+    let has_champion = room.champion.is_some();
+    for (cover_id, seat) in WAITING_COVER_IDS.iter().zip(staged_seats(room)) {
+        if !cover_stages_body(placements, cover_id) {
+            continue;
+        }
+        let Some((x, y)) = waiting_bnd_origin(placements, cover_id, frame) else {
+            continue;
+        };
+        if seat.locked {
+            paint_room_detail_line(frame, x, y, "LOCK", art_title_ink());
+        } else if seat.present {
+            let role = staged_role(has_champion, &seat);
+            paint_room_detail_line(frame, x, y, &staged_seat_text(&seat, role), art_title_ink());
+            paint_cover_ready_dot(frame, x, y, seat.ready);
+        }
+    }
+}
+
+/// Ready dot beside one cover line (the `Wait_ReadyText.ojs` plate is
+/// staged art; the dot is the live flag, same inks as the lobby).
+fn paint_cover_ready_dot(frame: &mut Frame<'_>, x: i32, y: i32, ready: bool) {
+    fill_rect(
+        frame,
+        &Rect {
+            x: x - 6,
+            y,
+            w: 3,
+            h: 5,
+        },
+        ready_dot_color(ready),
+    );
+}
+
+/// Team highlight at our team button rect (rects 3..10): the exe
+/// highlight arm (`FUN_0048c810`) lights exactly the pressed button;
+/// the amber bar is the live mark over the staged `Wait_Team?.ojs`.
+fn paint_waiting_team_highlight(
+    frame: &mut Frame<'_>,
+    room: &JoinedRoom,
+    placements: &[ScenePlacement],
+) {
+    let index = usize::from(room.team);
+    let (Some(button), Some(expected)) =
+        (WAITING_TEAM_IDS.get(index), WAIT_TEAM_SPRITES.get(index))
+    else {
+        return;
+    };
+    let staged = placements.iter().find(|placed| &placed.id == button);
+    if staged.is_none_or(|placed| placed.sprite.as_deref() == Some(*expected)) {
+        if let Some((x, y)) = waiting_bnd_origin(placements, button, frame) {
+            paint_cursor(frame, x + 6, y);
+        }
+    }
+}
+
+/// Champion win count at the `WINNERSCORE` rect (rect 108, the Wins
+/// box): the wire streak only (`JoinedRoom.champion_streak`); past
+/// it nothing paints (per-member tallies stay server-side).
+fn paint_waiting_wins(frame: &mut Frame<'_>, room: &JoinedRoom, placements: &[ScenePlacement]) {
+    let Some(streak) = room.champion_streak else {
+        return;
+    };
+    if room.champion.is_none() {
+        return;
+    }
+    if let Some((x, y)) = waiting_bnd_origin(placements, WAITING_WINNERSCORE_ID, frame) {
+        paint_room_detail_line(frame, x, y, &streak.to_string(), art_title_ink());
+    }
+}
+
+/// Scroll-speed label at the `SPEED_NUM` rect (rect 101): the shared
+/// `X0.5`..`XR` chain (`room-enums.md`, codes 0..11).
+fn paint_waiting_speed(frame: &mut Frame<'_>, room: &JoinedRoom, placements: &[ScenePlacement]) {
+    if let Some((x, y)) = waiting_bnd_origin(placements, WAITING_SPEED_NUM_ID, frame) {
+        paint_room_detail_line(frame, x, y, &room_speed_label(room.speed), art_title_ink());
+    }
+}
+
+/// Skill-ring ids at the `1/2/3SKILL` rects (rects 87..89, the X
+/// boxes): empty slots stay untouched so the staged X art shows;
+/// counts have no wire field (`JoinedRoom` carries ids only).
+fn paint_waiting_skills(frame: &mut Frame<'_>, room: &JoinedRoom, placements: &[ScenePlacement]) {
+    for (slot, skill_id) in WAITING_SKILL_IDS.iter().zip(room.skills.iter()) {
+        if let Some((x, y)) = waiting_bnd_origin(placements, slot, frame) {
+            paint_room_detail_line(frame, x, y, &skill_id.to_string(), art_title_ink());
+        }
+    }
+}
+
+/// Selected-song label at the `MUSICNAME` rect (rect 22, top bar):
+/// song id only (the song table lives server-side, as in the lobby).
+/// The `COVERMUSIC` button, the select arrow, the `Random` cards, the
+/// chat box, and BACK stay staged art: no chat history, card data, or
+/// navigation state rides the joined-room snapshot.
+fn paint_waiting_music(frame: &mut Frame<'_>, room: &JoinedRoom, placements: &[ScenePlacement]) {
+    if let Some((x, y)) = waiting_bnd_origin(placements, WAITING_MUSICNAME_ID, frame) {
+        paint_room_detail_line(
+            frame,
+            x,
+            y,
+            &room_music_label(room.music_id),
+            art_title_ink(),
+        );
+    }
 }
 
 /// Dark strip behind one seat row so seat ink stays readable over
@@ -3404,7 +3724,9 @@ mod paint_tests {
         // bound placements (COVERAVATAR1..8, codes 0x1650003D..44)
         // each paint at their own rect origin — the view-from-rect
         // case ui-draw.md leaves open, resolved for anchor-free
-        // bodies.
+        // bodies. Occupied covers then take the live seat line (the
+        // scrim covers the art pixel); empty covers stay untouched
+        // so the staged empty panels show.
         let placements = (0..8)
             .map(|seat| ScenePlacement {
                 id: format!("IDC_IMAGE_SWAIT_COVERAVATAR{}", seat + 1),
@@ -3433,16 +3755,310 @@ mod paint_tests {
             &art,
         );
         let red = pack_xrgb(255, 0, 0);
-        for seat in 0..8u32 {
-            let x = 10 + seat * 60;
-            let y = 200 + seat * 45;
-            assert_eq!(
-                buf[y as usize * 800 + x as usize],
-                red,
-                "cover {seat} at its seat rect"
-            );
-        }
+        // Empty seat 2 keeps its staged art pixel: no live line.
+        assert_eq!(buf[290 * 800 + 130], red, "empty cover stays art-only");
+        // Occupied seat 0 takes the live line: scrim opens at
+        // (10 − 4, 200 − 2), covering the art pixel.
+        assert_eq!(buf[198 * 800 + 6], scrim_color(), "seat line scrim");
+        assert_ne!(buf[200 * 800 + 10], red, "live line covers art");
+        assert!(buf.contains(&art_title_ink()));
         assert_eq!(buf[0], 0, "covers no longer stack at the frame corner");
+    }
+
+    /// Verbatim `State_Waiting.bnd` rects for one region probe (local
+    /// 116-rect walk; ordinal = `(code & 0xFFF) − 1`).
+    fn waiting_probe(id: &str, sprite: Option<&str>, rect: (i32, i32, i32, i32)) -> ScenePlacement {
+        ScenePlacement {
+            id: id.to_owned(),
+            code: 0,
+            sprite: sprite.map(str::to_owned),
+            rect: Rect {
+                x: rect.0,
+                y: rect.1,
+                w: u32::try_from(rect.2 - rect.0).unwrap_or(0),
+                h: u32::try_from(rect.3 - rect.1).unwrap_or(0),
+            },
+        }
+    }
+
+    /// Waiting room with every staged field set: champion seat 1,
+    /// streak 3, song 757, speed code 5 (`X3`), one skill ring.
+    fn champion_room() -> JoinedRoom {
+        let mut room = waiting_room();
+        room.champion = Some(1);
+        room.champion_streak = Some(3);
+        room.music_id = 757;
+        room.speed = 5;
+        room.skills = vec![2101];
+        room
+    }
+
+    #[test]
+    fn staged_covers_name_champion_and_challenger() {
+        // Cover rects 60/61 `(28,53,169,228)`/`(170,53,311,228)`:
+        // seat 1 (wire host) names CHAMPION with its wire level,
+        // seat 0 (self, no wire level) names CHALLENGER with `-`.
+        let placements = vec![
+            waiting_probe("IDC_IMAGE_SWAIT_COVERAVATAR1", None, (28, 53, 169, 228)),
+            waiting_probe("IDC_IMAGE_SWAIT_COVERAVATAR2", None, (170, 53, 311, 228)),
+        ];
+        let mut buf = vec![background_of(Screen::Waiting); 800 * 600];
+        paint_waiting_covers(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &champion_room(),
+            &placements,
+        );
+        assert_eq!(buf[51 * 800 + 166], scrim_color(), "champion scrim");
+        assert_eq!(buf[51 * 800 + 24], scrim_color(), "challenger scrim");
+        assert!(buf.contains(&art_title_ink()));
+        // Ready dots ride the cover lines: host ready green, self dim.
+        assert_eq!(buf[55 * 800 + 165], pack_xrgb(0x30, 0xE0, 0x30));
+        assert_eq!(buf[55 * 800 + 23], pack_xrgb(0x50, 0x50, 0x50));
+    }
+
+    #[test]
+    fn empty_covers_leave_the_staged_panels_untouched() {
+        // Cover rect 62 `(312,53,453,228)` is seat 2 (empty wire
+        // slot): no scrim, no dot — the staged empty panel shows.
+        let placements = vec![waiting_probe(
+            "IDC_IMAGE_SWAIT_COVERAVATAR3",
+            None,
+            (312, 53, 453, 228),
+        )];
+        let calm = background_of(Screen::Waiting);
+        let mut buf = vec![calm; 800 * 600];
+        paint_waiting_covers(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &champion_room(),
+            &placements,
+        );
+        assert_eq!(buf[53 * 800 + 312], calm);
+        assert!(!buf.contains(&scrim_color()));
+    }
+
+    #[test]
+    fn team_highlight_marks_our_team_button() {
+        // Team rects 3/4 `(652,65,676,89)`/`(682,65,706,89)` with
+        // their staged `Wait_Team?.ojs` bodies: our team (1 = B)
+        // takes the amber bar, A stays art-only.
+        let placements = vec![
+            waiting_probe(
+                "IDC_BUTTON_SWAIT_TEAMA",
+                Some("Wait_TeamA.ojs"),
+                (652, 65, 676, 89),
+            ),
+            waiting_probe(
+                "IDC_BUTTON_SWAIT_TEAMB",
+                Some("Wait_TeamB.ojs"),
+                (682, 65, 706, 89),
+            ),
+        ];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_team_highlight(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &champion_room(),
+            &placements,
+        );
+        assert_eq!(buf[65 * 800 + 682], pack_xrgb(0xFF, 0xD0, 0x20));
+        assert_eq!(buf[65 * 800 + 652], 0);
+    }
+
+    #[test]
+    fn wins_box_shows_the_champion_streak() {
+        // `WINNERSCORE` rect 108 `(190,95,240,115)`: the wire
+        // streak only; per-member tallies stay server-side.
+        let placements = vec![waiting_probe(
+            "IDC_TEXT_SWAIT_WINNERSCROE",
+            None,
+            (190, 95, 240, 115),
+        )];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_wins(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &champion_room(),
+            &placements,
+        );
+        assert_eq!(buf[93 * 800 + 186], scrim_color());
+        assert!(buf.contains(&art_title_ink()));
+    }
+
+    #[test]
+    fn wins_box_stays_empty_without_a_champion() {
+        let placements = vec![waiting_probe(
+            "IDC_TEXT_SWAIT_WINNERSCROE",
+            None,
+            (190, 95, 240, 115),
+        )];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_wins(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &waiting_room(),
+            &placements,
+        );
+        assert!(!buf.contains(&scrim_color()));
+    }
+
+    #[test]
+    fn speed_value_anchors_to_the_speed_num_rect() {
+        // `SPEED_NUM` rect 101 `(681,378,735,413)`: speed code 5
+        // reads `X3` through the shared label chain (reference row).
+        let placements = vec![waiting_probe(
+            "IDC_IMAGE_SWAIT_SPEED_NUM",
+            None,
+            (681, 378, 735, 413),
+        )];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_speed(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &champion_room(),
+            &placements,
+        );
+        assert_eq!(buf[376 * 800 + 677], scrim_color());
+        assert!(buf.contains(&art_title_ink()));
+    }
+
+    #[test]
+    fn skill_slots_show_staged_ring_ids_only() {
+        // `1SKILL` rect 87 `(701,208,731,238)`: the staged ring id;
+        // `2SKILL` (no second ring) stays untouched X art.
+        let placements = vec![
+            waiting_probe("IDC_IMAGE_SWAIT_1SKILL", None, (701, 208, 731, 238)),
+            waiting_probe("IDC_IMAGE_SWAIT_2SKILL", None, (701, 246, 731, 276)),
+        ];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_skills(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &champion_room(),
+            &placements,
+        );
+        assert_eq!(buf[206 * 800 + 697], scrim_color());
+        assert_eq!(buf[246 * 800 + 701], 0);
+    }
+
+    #[test]
+    fn song_title_anchors_to_the_musicname_rect() {
+        // `MUSICNAME` rect 22 `(573,15,773,38)`: song id only (the
+        // song table lives server-side, as in the lobby).
+        let placements = vec![waiting_probe(
+            "IDC_TEXT_SWAIT_MUSICNAME",
+            None,
+            (573, 15, 773, 38),
+        )];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_music(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &champion_room(),
+            &placements,
+        );
+        assert_eq!(buf[13 * 800 + 569], scrim_color());
+        assert!(buf.contains(&art_title_ink()));
+    }
+
+    #[test]
+    fn room_title_anchors_to_the_roomname_rect() {
+        // `ROOMNAME` rect 21 `(274,15,466,38)`: the joined-room title.
+        let placements = vec![waiting_probe(
+            "IDC_TEXT_SWAIT_ROOMNAME",
+            None,
+            (274, 15, 466, 38),
+        )];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_title(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &champion_room(),
+            &placements,
+        );
+        assert_eq!(buf[13 * 800 + 270], scrim_color());
+    }
+
+    #[test]
+    fn unstaged_regions_paint_nothing() {
+        // Missing placements paint nothing: the exe leaves untouched
+        // icons alone — no invented coordinates anywhere.
+        let empty: Vec<ScenePlacement> = Vec::new();
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_staged(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &champion_room(),
+            &empty,
+        );
+        assert!(buf.iter().all(|pixel| *pixel == 0));
+    }
+
+    #[test]
+    fn staged_scene_prefers_bnd_anchors_over_the_legacy_grid() {
+        // Covers staged: the seat line anchors to the cover rect
+        // and the legacy grid slot `(100,150)` stays background.
+        let placements = vec![waiting_probe(
+            "IDC_IMAGE_SWAIT_COVERAVATAR1",
+            None,
+            (28, 53, 169, 228),
+        )];
+        let art = SceneArt {
+            placements,
+            figures: HashMap::new(),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &waiting_room(),
+            &art,
+        );
+        assert_eq!(buf[51 * 800 + 24], scrim_color());
+        assert_eq!(buf[150 * 800 + 100], background_of(Screen::Waiting));
+    }
+
+    #[test]
+    fn waiting_control_ids_match_their_staged_bodies() {
+        // The seat covers stage one named body; the team grid stages
+        // one body per team in order (`ControlList_Interface.txt`).
+        assert_eq!(WAIT_COVER_SPRITE, "Wait_Cover_Avatar.ojs");
+        assert_eq!(WAIT_TEAM_SPRITES[0], "Wait_TeamA.ojs");
+        assert_eq!(WAIT_TEAM_SPRITES[7], "Wait_TeamH.ojs");
     }
 
     #[test]
