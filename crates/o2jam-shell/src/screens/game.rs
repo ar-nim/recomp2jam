@@ -11,7 +11,7 @@ use super::paint::{
     battle_verdict, grade_frame, paint_avi_scene, paint_channel_list, paint_channel_scene,
     paint_loading_scene, paint_lobby_backdrop, paint_playing_overlay, paint_result,
     paint_result_scene, paint_room_list, paint_room_scene, paint_screen, paint_waiting_members,
-    paint_waiting_scene, scene_index, BattleVerdict, ResultVerdict, SceneArt,
+    paint_waiting_scene, scene_index, BattleVerdict, ResultRankRow, ResultVerdict, SceneArt,
 };
 use super::side::{
     can_return_side, can_visit_side, paint_side_scene, select_chosung_cells, select_difficulty_ink,
@@ -29,7 +29,7 @@ use super::side::{
 use crate::MenuKey;
 use o2jam_audio::{AudioBackend, PcmSamples};
 use o2jam_file::OjnListEntry;
-use o2jam_game::RoomTeams;
+use o2jam_game::{PeerBars, RoomTeams};
 use o2jam_net::play::SetRoomMusic;
 use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry};
 use o2jam_render::{
@@ -389,6 +389,72 @@ impl ScreenGame {
         }
     }
 
+    /// Saturated local points for the rank row's `%8d` field (the
+    /// exe's 32-bit read; the u64 accumulator saturates — PERF-07:
+    /// `TryFrom`, never `as`).
+    fn saturate_rank_score(points: u64) -> u32 {
+        u32::try_from(points).unwrap_or(u32::MAX)
+    }
+
+    /// Rank number for display row `position`: the `PeerBars` byte
+    /// there, hidden solo (the exe draws `%d` at x=91 only with 2+
+    /// players) and skipped while zero (empty seats ride zero bytes
+    /// — the `live_rank_rows` convention in `side.rs`). Zero means
+    /// no broadcast delivered a rank there yet: the song path never
+    /// seeds stored ranks, so only a real 4015 broadcast with
+    /// matching members fills this in.
+    fn result_row_rank(peers: &PeerBars, position: usize, row_count: usize) -> Option<u8> {
+        if row_count < 2 {
+            return None;
+        }
+        let rank = peers.rank_row(position)?;
+        (rank != 0).then_some(rank)
+    }
+
+    /// Live result rank rows: the local `Score`/`LongNoteBonus` on
+    /// row 0, `PeerBars` rank bytes per position, joined-room member
+    /// names in seat order (self `YOU` first — local-only, the wire
+    /// sends no self nickname — then the occupied wire slots, capped
+    /// at eight seats). Peer rows carry no
+    /// judgements/combos/score/bonus (per-member 4014/4016 tallies
+    /// stay server-side, so those columns stay unpainted there);
+    /// speed is the shared room code on every named row, absent
+    /// offline.
+    #[must_use]
+    pub fn result_rank_rows(&self) -> Vec<ResultRankRow> {
+        let score = self.playing.score();
+        let bonus_points = self.playing.bonus().points();
+        let peers = self.playing.peers();
+        let room = self.waiting.as_ref();
+        let speed = room.map(|joined| joined.speed);
+        let mut names = vec!["YOU".to_owned()];
+        if let Some(joined) = room {
+            for slot in joined.slots.iter().take(7) {
+                if let Some(member) = slot.member.as_ref() {
+                    names.push(member.nickname.clone());
+                }
+            }
+        }
+        let row_count = names.len().min(8);
+        names
+            .into_iter()
+            .take(8)
+            .enumerate()
+            .map(|(position, name)| {
+                let local = position == 0;
+                ResultRankRow {
+                    rank: Self::result_row_rank(peers, position, row_count),
+                    name: Some(name),
+                    judgements: local.then_some(score.counts),
+                    combos: local.then_some((score.max_combo, score.jam.level())),
+                    score: local.then_some(Self::saturate_rank_score(score.points)),
+                    bonus: local.then_some(bonus_points),
+                    speed,
+                }
+            })
+            .collect()
+    }
+
     /// Grade plate frame for the finished play, if a chart loaded.
     /// The exe compares its score global against a max-score
     /// reference with no located write site (docs/cresult-anchors.md
@@ -657,18 +723,25 @@ impl ScreenGame {
     /// Results: staged art (`StateResult_Top/Bottom.ojs` plus
     /// `Result_WinLose.ojs` via `FUN_004c2390`, file `0xc2390`) behind
     /// the exe-selected verdict banner and grade plate frames, the
-    /// avatar figure, and the pinned GDI numbers from the live score.
+    /// avatar figure, the pinned GDI numbers from the live score,
+    /// and the rank rows from live peers plus room names.
     fn paint_result(&self, frame: &mut Frame<'_>) {
         match self.scene_art(Screen::Result) {
             Some(art) => paint_result_scene(
                 frame,
                 self.avatar.as_ref(),
                 self.playing.score(),
+                &self.result_rank_rows(),
                 art,
                 self.result_verdict(),
                 self.grade(),
             ),
-            None => paint_result(frame, self.avatar.as_ref(), self.playing.score()),
+            None => paint_result(
+                frame,
+                self.avatar.as_ref(),
+                self.playing.score(),
+                &self.result_rank_rows(),
+            ),
         }
     }
 }
@@ -2067,6 +2140,109 @@ mod game_tests {
             game.result_verdict(),
             ResultVerdict::Battle(Some(BattleVerdict::Lose))
         );
+    }
+
+    #[test]
+    fn result_rows_carry_local_score_solo_without_rank_or_speed() {
+        // Solo offline: one local row only. The rank hides (2+
+        // players only) and speed waits for a room; the numbers
+        // ride the live score, the bonus the live hold
+        // accumulator (zero with no holds — live, not invented).
+        let mut game = ScreenGame::new();
+        game.load_chart(vec![(2, 5000, 7)]);
+        walk_to_playing(&mut game);
+        game.strike_at(2, 5000);
+        let rows = game.result_rank_rows();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, Some("YOU".to_owned()));
+        assert_eq!(rows[0].rank, None);
+        assert_eq!(rows[0].speed, None);
+        assert_eq!(rows[0].judgements, Some([1, 0, 0, 0]));
+        assert_eq!(rows[0].combos, Some((1, 0)));
+        assert_eq!(rows[0].score, Some(200));
+        assert_eq!(rows[0].bonus, Some(0));
+    }
+
+    #[test]
+    fn result_rows_name_peers_and_share_the_room_speed() {
+        // Joined room with the host seated: self plus the wire
+        // member, both naming the shared room speed code.
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        let rows = game.result_rank_rows();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].name, Some("YOU".to_owned()));
+        assert_eq!(rows[1].name, Some("host".to_owned()));
+        assert_eq!(rows[0].speed, Some(1));
+        assert_eq!(rows[1].speed, Some(1));
+    }
+
+    #[test]
+    fn result_rows_leave_peer_numbers_unpainted() {
+        // Per-member 4014/4016 tallies stay server-side: only the
+        // local row carries numbers; the peer row paints its name
+        // (and speed/rank when live) with every number unpainted.
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        let rows = game.result_rank_rows();
+        assert!(rows[0].judgements.is_some());
+        assert!(rows[0].combos.is_some());
+        assert!(rows[0].score.is_some());
+        assert!(rows[0].bonus.is_some());
+        assert_eq!(rows[1].judgements, None);
+        assert_eq!(rows[1].combos, None);
+        assert_eq!(rows[1].score, None);
+        assert_eq!(rows[1].bonus, None);
+    }
+
+    #[test]
+    fn result_rows_hide_ranks_until_a_broadcast_lands() {
+        // The song path never seeds stored ranks, so the mirror
+        // holds zeros and both rows stay rank-less (the zero-byte
+        // convention) — never a fabricated standing.
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        let rows = game.result_rank_rows();
+        assert_eq!(rows[0].rank, None);
+        assert_eq!(rows[1].rank, None);
+    }
+
+    #[test]
+    fn result_rows_skip_vacant_seats_and_cap_at_eight() {
+        // The fixture seats one member beside two vacant slots, so
+        // only two rows build; seven occupied wire slots cap the
+        // table at eight (self plus seven).
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        assert_eq!(game.result_rank_rows().len(), 2);
+        let mut full = waiting_room();
+        full.slots = (0..7)
+            .map(|index| RoomSlot {
+                index,
+                state_code: 1,
+                member: Some(RoomMember {
+                    nickname: format!("peer{index}"),
+                    level: 1,
+                    gender: 0,
+                    gem: 0,
+                    master: false,
+                    team: 0,
+                    ready: true,
+                    music_state: 0,
+                    equipment: [0; 17],
+                    music_ids: Vec::new(),
+                    cash_point: 0,
+                    free_pass: 0,
+                    playing_state: 0,
+                    administrator: false,
+                    super_manager: false,
+                }),
+            })
+            .collect();
+        game.set_joined_room(full);
+        let rows = game.result_rank_rows();
+        assert_eq!(rows.len(), 8);
+        assert_eq!(rows[7].name, Some("peer6".to_owned()));
     }
 
     #[test]

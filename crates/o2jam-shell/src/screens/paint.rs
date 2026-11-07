@@ -1673,6 +1673,173 @@ const RESULT_SCORE_X: i32 = 605;
 /// Total score row y.
 const RESULT_SCORE_Y: i32 = 533;
 
+/// Rank number column x (`%d` at x=91, drawn only with 2+ players).
+const RESULT_RANK_X: i32 = 91;
+/// Nickname column x (at 318+22·row, truncates over 100 chars).
+const RESULT_ROW_NAME_X: i32 = 128;
+/// Judgements column x (`%5d /%5d /%3d /%3d` at 317+22·row).
+const RESULT_ROW_JUDGE_X: i32 = 230;
+/// Combo-pair column x (`%4d /%4d`: MAX then JAM COMBO).
+const RESULT_ROW_COMBO_X: i32 = 416;
+/// Row score column x (`%8d`).
+const RESULT_ROW_SCORE_X: i32 = 530;
+/// Bonus column x (`+ %d`).
+const RESULT_ROW_BONUS_X: i32 = 626;
+/// Speed column x (`X 0.5`…`X R`).
+const RESULT_ROW_SPEED_X: i32 = 685;
+/// Row text y for every column but the nickname (317+22·row: only
+/// the judgement and nickname heights are pinned, so the other
+/// columns share the judgement line).
+const RESULT_ROW_TEXT_Y: i32 = 317;
+/// Nickname text y (318+22·row).
+const RESULT_ROW_NAME_Y: i32 = 318;
+/// Row pitch (row base y = 320+22·row).
+const RESULT_ROW_PITCH: i32 = 22;
+/// Seats on the member table: rows never exceed eight.
+const RESULT_RANK_ROWS_MAX: usize = 8;
+/// Nickname display limit (the exe truncates over 100 chars).
+const RESULT_ROW_NAME_LIMIT: usize = 100;
+
+/// One result rank-table row from live data (row painter
+/// `FUN_004c3b40`, file `0xc3b40`): every column is `Option` — rows
+/// without data stay unpainted with documented reasons, never
+/// invented values. Rank bytes ride `PeerBars` (nonzero deliveries
+/// only); names ride the joined room (`YOU` is local-only, the wire
+/// sends no self nickname); judgements/combos/score/bonus ride the
+/// local `Score`/`LongNoteBonus` (per-member 4014/4016 tallies stay
+/// server-side, so those columns stay unpainted on peer rows); speed
+/// rides the shared room speed code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResultRankRow {
+    /// Rank number (`%d` at x=91, 2+ players only).
+    pub rank: Option<u8>,
+    /// Nickname at x=128 (truncated past 100 display chars).
+    pub name: Option<String>,
+    /// COOL/GOOD/BAD/MISS at x=230 (local row only).
+    pub judgements: Option<[u32; 4]>,
+    /// MAX then JAM combo at x=416 (local row only).
+    pub combos: Option<(u32, u32)>,
+    /// Score at x=530 (local row only).
+    pub score: Option<u32>,
+    /// Hold bonus at x=626 (local row only).
+    pub bonus: Option<u64>,
+    /// Room speed code at x=685 (every named row shares it).
+    pub speed: Option<u8>,
+}
+
+/// Nickname as shown: first 100 display chars (the exe truncates
+/// over 100 chars of CP949; the shell counts chars).
+#[must_use]
+fn truncate_result_name(name: &str) -> String {
+    if name.chars().count() > RESULT_ROW_NAME_LIMIT {
+        name.chars().take(RESULT_ROW_NAME_LIMIT).collect()
+    } else {
+        name.to_owned()
+    }
+}
+
+/// Combined judgement text (`%5d /%5d /%3d /%3d`).
+#[must_use]
+fn result_judgements_text(counts: [u32; 4]) -> String {
+    format!(
+        "{:>5} /{:>5} /{:>3} /{:>3}",
+        counts[0], counts[1], counts[2], counts[3]
+    )
+}
+
+/// Combined combo text (`%4d /%4d`: MAX then JAM).
+#[must_use]
+fn result_combos_text(combos: (u32, u32)) -> String {
+    format!("{:>4} /{:>4}", combos.0, combos.1)
+}
+
+/// Row score text (`%8d`).
+#[must_use]
+fn result_score_text(score: u32) -> String {
+    format!("{score:>8}")
+}
+
+/// Row bonus text (`+ %d`).
+#[must_use]
+fn result_bonus_text(bonus: u64) -> String {
+    format!("+ {bonus}")
+}
+
+/// Text-line y of display row `row` (`None` on overflow).
+#[must_use]
+fn result_rank_text_y(row: usize) -> Option<i32> {
+    let step = i32::try_from(row).ok()?;
+    let offset = step.checked_mul(RESULT_ROW_PITCH)?;
+    RESULT_ROW_TEXT_Y.checked_add(offset)
+}
+
+/// Nickname-line y of display row `row` (`None` on overflow).
+#[must_use]
+fn result_rank_name_y(row: usize) -> Option<i32> {
+    let step = i32::try_from(row).ok()?;
+    let offset = step.checked_mul(RESULT_ROW_PITCH)?;
+    RESULT_ROW_NAME_Y.checked_add(offset)
+}
+
+/// Paint one rank row: each `Some` column draws white GDI text from
+/// its pinned left edge, each `None` column stays untouched.
+fn paint_result_rank_row(frame: &mut Frame<'_>, row: usize, entry: &ResultRankRow, ink: u32) {
+    let Some(y) = result_rank_text_y(row) else {
+        return;
+    };
+    if let Some(rank) = entry.rank {
+        draw_text(frame, RESULT_RANK_X, y, &rank.to_string(), ink);
+    }
+    if let Some(name) = entry.name.as_ref() {
+        if let Some(name_y) = result_rank_name_y(row) {
+            let shown = truncate_result_name(name);
+            if !shown.is_empty() {
+                draw_text(frame, RESULT_ROW_NAME_X, name_y, &shown, ink);
+            }
+        }
+    }
+    if let Some(counts) = entry.judgements {
+        draw_text(
+            frame,
+            RESULT_ROW_JUDGE_X,
+            y,
+            &result_judgements_text(counts),
+            ink,
+        );
+    }
+    if let Some(combos) = entry.combos {
+        draw_text(
+            frame,
+            RESULT_ROW_COMBO_X,
+            y,
+            &result_combos_text(combos),
+            ink,
+        );
+    }
+    if let Some(score) = entry.score {
+        draw_text(frame, RESULT_ROW_SCORE_X, y, &result_score_text(score), ink);
+    }
+    if let Some(bonus) = entry.bonus {
+        draw_text(frame, RESULT_ROW_BONUS_X, y, &result_bonus_text(bonus), ink);
+    }
+    if let Some(speed) = entry.speed {
+        draw_text(frame, RESULT_ROW_SPEED_X, y, &room_speed_label(speed), ink);
+    }
+}
+
+/// Paint the rank table (row painter `FUN_004c3b40`): up to eight
+/// rows from live data, native canvas only. Empty models paint
+/// nothing — the row band keeps its backdrop.
+fn paint_result_rank_rows(frame: &mut Frame<'_>, rows: &[ResultRankRow]) {
+    if !frame_is_native(frame) {
+        return;
+    }
+    let ink = result_number_ink();
+    for (row, entry) in rows.iter().enumerate().take(RESULT_RANK_ROWS_MAX) {
+        paint_result_rank_row(frame, row, entry, ink);
+    }
+}
+
 /// Paint one selected frame of a result body (the verdict banner or
 /// the grade plate): frame *n* paints image *n−1* through the
 /// saturating [`icon_frame_layer`], blitted 1:1 at the layer's
@@ -1734,45 +1901,50 @@ fn paint_result_backdrop(frame: &mut Frame<'_>, art: &SceneArt) {
     paint_scene_figures(frame, &stacked, &art.figures);
 }
 
-/// Paint the avatar figure and the pinned result numbers (shared by
-/// the flat fallback and the staged scene; the numbers are GDI text
-/// the exe paints regardless of the art).
+/// Paint the avatar figure, the pinned result numbers, and the rank
+/// rows (shared by the flat fallback and the staged scene; the
+/// numbers and rows are GDI text the exe paints regardless of art).
 fn paint_result_content(
     frame: &mut Frame<'_>,
     avatar: Option<&AvatarFigure>,
     score: &o2jam_game::Score,
+    rows: &[ResultRankRow],
 ) {
     if let Some(figure) = avatar {
         figure.paint(frame, frame.w as i32 / 2 - 32, frame.h as i32 / 2 - 32);
     }
     paint_result_numbers(frame, score);
+    paint_result_rank_rows(frame, rows);
 }
 
-/// Paint the flat results fallback: card, avatar figure, and the
-/// pinned result numbers. The retired text verdict stays gone — the
-/// banner is a sprite frame of the staged art.
+/// Paint the flat results fallback: card, avatar figure, the pinned
+/// result numbers, and the rank rows. The retired text verdict stays
+/// gone — the banner is a sprite frame of the staged art.
 pub(crate) fn paint_result(
     frame: &mut Frame<'_>,
     avatar: Option<&AvatarFigure>,
     score: &o2jam_game::Score,
+    rows: &[ResultRankRow],
 ) {
     paint_card(
         frame,
         pack_xrgb(0x10, 0x10, 0x08),
         pack_xrgb(0xC0, 0xA0, 0x20),
     );
-    paint_result_content(frame, avatar, score);
+    paint_result_content(frame, avatar, score, rows);
 }
 
 /// Paint the staged result scene (`docs/cresult-anchors.md`): the
 /// `.bnd`-bound block art first (minus the frame bodies), then the
 /// exe-selected verdict banner and grade plate frames, then the
-/// avatar figure and the pinned GDI numbers on top — the fill order
-/// of `FUN_004c3120` (banner, then top-panel painter, then rows).
+/// avatar figure, the pinned GDI numbers, and the rank rows on top —
+/// the fill order of `FUN_004c3120` (banner, then top-panel painter,
+/// then rows).
 pub fn paint_result_scene(
     frame: &mut Frame<'_>,
     avatar: Option<&AvatarFigure>,
     score: &o2jam_game::Score,
+    rows: &[ResultRankRow],
     art: &SceneArt,
     verdict: ResultVerdict,
     grade: Option<u8>,
@@ -1790,7 +1962,7 @@ pub fn paint_result_scene(
         RESULT_RANK_SPRITE,
         grade.filter(|g| *g >= 1),
     );
-    paint_result_content(frame, avatar, score);
+    paint_result_content(frame, avatar, score, rows);
 }
 
 /// Score digits anchor top-left (`LivePlay` draws points at
@@ -1909,7 +2081,7 @@ pub fn paint_screen(frame: &mut Frame<'_>, screen: Screen) {
         Screen::Playing => {
             PlayingView::default().paint(frame, &HighwayGeometry::centered(frame.w, frame.h));
         }
-        Screen::Result => paint_result(frame, None, &o2jam_game::Score::default()),
+        Screen::Result => paint_result(frame, None, &o2jam_game::Score::default(), &[]),
     }
 }
 
@@ -1975,6 +2147,7 @@ mod paint_tests {
                 &mut frame,
                 None,
                 &o2jam_game::Score::default(),
+                &[],
                 art,
                 ResultVerdict::Solo,
                 None,
@@ -2808,6 +2981,7 @@ mod paint_tests {
             },
             Some(&red_figure()),
             &score,
+            &[],
             &art,
             ResultVerdict::Solo,
             None,
@@ -2904,22 +3078,11 @@ mod paint_tests {
     const RESULT_DIGIT_PITCH: i32 = 24;
     const RESULT_DIGIT_CELLS: usize = 8;
 
-    /// Pinned but unpainted member-row columns (row painter
-    /// `FUN_004c3b40`, file `0xc3b40`; dossier OPEN 4/7): row base
-    /// y = 320 + 22·row, combined `"%5d /%5d /%3d /%3d"` at x=230,
-    /// `"%4d /%4d"` at x=416, `"%8d"` at x=530, `"+ %d"` at x=626
-    /// (semantic OPEN), `X 0.5`…`X R` at x=685, nickname at x=128,
-    /// rank at x=91 (2+ players only). No member-row model exists, so
-    /// no row paints.
+    /// Row geometry (row painter `FUN_004c3b40`, file `0xc3b40`;
+    /// dossier OPEN 4/7): row base y = 320 + 22·row. Column x values
+    /// now live beside the row model; only the base stays here for
+    /// the empty-band check.
     const RESULT_ROW_BASE_Y: i32 = 320;
-    const RESULT_ROW_PITCH: i32 = 22;
-    const RESULT_RANK_X: i32 = 91;
-    const RESULT_ROW_NAME_X: i32 = 128;
-    const RESULT_ROW_JUDGE_X: i32 = 230;
-    const RESULT_ROW_COMBO_X: i32 = 416;
-    const RESULT_ROW_SCORE_X: i32 = 530;
-    const RESULT_ROW_BONUS_X: i32 = 626;
-    const RESULT_ROW_SPEED_X: i32 = 685;
 
     /// Cell x values of one eight-cell digit field, rightmost last.
     fn digit_cell_xs(last_x: i32) -> [i32; RESULT_DIGIT_CELLS] {
@@ -2933,9 +3096,9 @@ mod paint_tests {
         xs
     }
 
-    /// Flat native result for `score`, exactly as the no-art
-    /// fallback paints it.
-    fn flat_native_result(score: &o2jam_game::Score) -> Vec<u32> {
+    /// Flat native result for `score` plus `rows`, exactly as the
+    /// no-art fallback paints it.
+    fn flat_native_rows(score: &o2jam_game::Score, rows: &[ResultRankRow]) -> Vec<u32> {
         let mut buf = vec![0u32; 800 * 600];
         paint_result(
             &mut Frame {
@@ -2945,8 +3108,15 @@ mod paint_tests {
             },
             None,
             score,
+            rows,
         );
         buf
+    }
+
+    /// Flat native result for `score` with no rank rows, exactly as
+    /// the no-art fallback paints it.
+    fn flat_native_result(score: &o2jam_game::Score) -> Vec<u32> {
+        flat_native_rows(score, &[])
     }
 
     /// Staged native result scene for one verdict and grade.
@@ -2960,6 +3130,7 @@ mod paint_tests {
             },
             None,
             &o2jam_game::Score::default(),
+            &[],
             art,
             verdict,
             grade,
@@ -3114,6 +3285,7 @@ mod paint_tests {
             },
             None,
             &full_score(),
+            &[],
         );
         assert!(!buf.contains(&result_number_ink()));
     }
@@ -3139,28 +3311,246 @@ mod paint_tests {
         assert_eq!(digit_cell_xs(RESULT_BOTTOM_LAST_X)[0], 8);
     }
 
+    /// One blank row (every column `None`): the row band keeps its
+    /// backdrop, whatever the score carries.
+    fn blank_row() -> ResultRankRow {
+        ResultRankRow {
+            rank: None,
+            name: None,
+            judgements: None,
+            combos: None,
+            score: None,
+            bonus: None,
+            speed: None,
+        }
+    }
+
+    /// One fully live row: rank 8, HOST, 825/20/0/2, MAX 320 JAM 5,
+    /// 110371 points, +50 bonus, `X2` speed.
+    fn live_row() -> ResultRankRow {
+        ResultRankRow {
+            rank: Some(8),
+            name: Some("HOST".to_owned()),
+            judgements: Some([825, 20, 0, 2]),
+            combos: Some((320, 5)),
+            score: Some(110_371),
+            bonus: Some(50),
+            speed: Some(3),
+        }
+    }
+
+    /// True while white result ink lands in the `width`-wide text
+    /// box at a rank-cell origin (glyph top-left cells are often
+    /// blank, so scan right and below the pinned left edge; narrow
+    /// boxes keep neighbor columns out of absence checks).
+    fn row_ink_near(buf: &[u32], origin: (i32, i32), width: i32) -> bool {
+        let (ox, oy) = origin;
+        for row in oy..oy + 7 {
+            for col in ox..ox + width {
+                let (Ok(r), Ok(c)) = (usize::try_from(row), usize::try_from(col)) else {
+                    continue;
+                };
+                if r < 600 && c < 800 && buf[r * 800 + c] == result_number_ink() {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// True while white result ink lands near a rank-cell origin.
+    fn row_white_near(buf: &[u32], origin: (i32, i32)) -> bool {
+        row_ink_near(buf, origin, 72)
+    }
+
     #[test]
-    fn member_rows_stay_unpainted_without_a_row_model() {
-        // Dossier OPEN 4/7: the shell carries no member-row model,
-        // so the row band keeps the flat card — none of the pinned
-        // row columns (rank 91, name 128, judge 230, combo 416,
-        // score 530, bonus 626, speed 685) take GDI ink.
-        let buf = flat_native_result(&full_score());
-        let ink = result_number_ink();
-        let row_y = RESULT_ROW_BASE_Y - 3;
-        for x in [
-            RESULT_RANK_X,
-            RESULT_ROW_NAME_X,
-            RESULT_ROW_JUDGE_X,
-            RESULT_ROW_COMBO_X,
-            RESULT_ROW_SCORE_X,
-            RESULT_ROW_BONUS_X,
-            RESULT_ROW_SPEED_X,
-        ] {
-            let pixel = buf[row_y as usize * 800 + x as usize];
-            assert_ne!(pixel, ink, "row column x={x}");
+    fn empty_rank_rows_leave_the_row_band_unpainted() {
+        // No row data, no row ink: the band keeps the flat card —
+        // none of the pinned row columns (rank 91, name 128, judge
+        // 230, combo 416, score 530, bonus 626, speed 685) take GDI
+        // ink, even with a full top-panel score behind them.
+        for rows in [&[][..], &[blank_row()][..]] {
+            let buf = flat_native_rows(&full_score(), rows);
+            for origin in [
+                (RESULT_RANK_X, RESULT_ROW_TEXT_Y),
+                (RESULT_ROW_NAME_X, RESULT_ROW_NAME_Y),
+                (RESULT_ROW_JUDGE_X, RESULT_ROW_TEXT_Y),
+                (RESULT_ROW_COMBO_X, RESULT_ROW_TEXT_Y),
+                (RESULT_ROW_SCORE_X, RESULT_ROW_TEXT_Y),
+                (RESULT_ROW_BONUS_X, RESULT_ROW_TEXT_Y),
+                (RESULT_ROW_SPEED_X, RESULT_ROW_TEXT_Y),
+            ] {
+                assert!(!row_white_near(&buf, origin), "row cell {origin:?}");
+            }
         }
         assert_eq!(RESULT_ROW_PITCH, 22);
+        assert_eq!(RESULT_ROW_BASE_Y, 320);
+    }
+
+    #[test]
+    fn rank_column_paints_the_live_rank_byte() {
+        let buf = flat_native_rows(&o2jam_game::Score::default(), &[live_row()]);
+        assert!(row_white_near(&buf, (RESULT_RANK_X, RESULT_ROW_TEXT_Y)));
+    }
+
+    #[test]
+    fn name_column_paints_the_member_nickname() {
+        let buf = flat_native_rows(&o2jam_game::Score::default(), &[live_row()]);
+        assert!(row_white_near(&buf, (RESULT_ROW_NAME_X, RESULT_ROW_NAME_Y)));
+    }
+
+    #[test]
+    fn judgements_column_paints_the_combined_counts() {
+        // Combined `"%5d /%5d /%3d /%3d"` text, like the exe row
+        // painter passes it.
+        assert_eq!(
+            result_judgements_text([825, 20, 0, 2]),
+            "  825 /   20 /  0 /  2"
+        );
+        let buf = flat_native_rows(&o2jam_game::Score::default(), &[live_row()]);
+        assert!(row_white_near(
+            &buf,
+            (RESULT_ROW_JUDGE_X, RESULT_ROW_TEXT_Y)
+        ));
+    }
+
+    #[test]
+    fn combos_column_paints_max_then_jam() {
+        // Combined `"%4d /%4d"`: MAX COMBO then JAM COMBO order.
+        assert_eq!(result_combos_text((320, 5)), " 320 /   5");
+        let buf = flat_native_rows(&o2jam_game::Score::default(), &[live_row()]);
+        assert!(row_white_near(
+            &buf,
+            (RESULT_ROW_COMBO_X, RESULT_ROW_TEXT_Y)
+        ));
+    }
+
+    #[test]
+    fn score_column_paints_the_live_points() {
+        assert_eq!(result_score_text(110_371), "  110371");
+        let buf = flat_native_rows(&o2jam_game::Score::default(), &[live_row()]);
+        assert!(row_white_near(
+            &buf,
+            (RESULT_ROW_SCORE_X, RESULT_ROW_TEXT_Y)
+        ));
+    }
+
+    #[test]
+    fn bonus_column_paints_the_hold_bonus() {
+        // `"+ %d"` of the live hold accumulator (dossier OPEN 7
+        // leaves the semantic open; the value itself is live).
+        assert_eq!(result_bonus_text(50), "+ 50");
+        let buf = flat_native_rows(&o2jam_game::Score::default(), &[live_row()]);
+        assert!(row_white_near(
+            &buf,
+            (RESULT_ROW_BONUS_X, RESULT_ROW_TEXT_Y)
+        ));
+    }
+
+    #[test]
+    fn speed_column_paints_the_shared_speed_label() {
+        // Speed code 3 reads `X2` through the shared label chain.
+        assert_eq!(room_speed_label(3), "X2");
+        let buf = flat_native_rows(&o2jam_game::Score::default(), &[live_row()]);
+        assert!(row_white_near(
+            &buf,
+            (RESULT_ROW_SPEED_X, RESULT_ROW_TEXT_Y)
+        ));
+    }
+
+    #[test]
+    fn long_nicknames_truncate_past_one_hundred_chars() {
+        assert_eq!(
+            truncate_result_name(&"HOST".repeat(30)).chars().count(),
+            100
+        );
+        assert_eq!(truncate_result_name("HOST"), "HOST");
+        let mut row = blank_row();
+        row.name = Some("HOST".repeat(30));
+        let buf = flat_native_rows(&o2jam_game::Score::default(), &[row]);
+        assert!(row_white_near(&buf, (RESULT_ROW_NAME_X, RESULT_ROW_NAME_Y)));
+    }
+
+    #[test]
+    fn peer_rows_paint_names_without_invented_numbers() {
+        // Per-member 4014/4016 tallies stay server-side: a peer row
+        // carries its name (and speed) while every number column
+        // stays unpainted — never zero-filled.
+        let peer = ResultRankRow {
+            name: Some("HOST".to_owned()),
+            speed: Some(3),
+            ..blank_row()
+        };
+        let buf = flat_native_rows(&o2jam_game::Score::default(), &[peer]);
+        assert!(row_white_near(&buf, (RESULT_ROW_NAME_X, RESULT_ROW_NAME_Y)));
+        assert!(row_white_near(
+            &buf,
+            (RESULT_ROW_SPEED_X, RESULT_ROW_TEXT_Y)
+        ));
+        // Narrow boxes: the nickname opens at x=128 inside the
+        // rank box, and the speed label opens at x=685 inside the
+        // bonus box.
+        assert!(!row_ink_near(&buf, (RESULT_RANK_X, RESULT_ROW_TEXT_Y), 37));
+        assert!(!row_ink_near(
+            &buf,
+            (RESULT_ROW_BONUS_X, RESULT_ROW_TEXT_Y),
+            58
+        ));
+        for origin in [
+            (RESULT_ROW_JUDGE_X, RESULT_ROW_TEXT_Y),
+            (RESULT_ROW_COMBO_X, RESULT_ROW_TEXT_Y),
+            (RESULT_ROW_SCORE_X, RESULT_ROW_TEXT_Y),
+        ] {
+            assert!(!row_white_near(&buf, origin), "peer cell {origin:?}");
+        }
+    }
+
+    #[test]
+    fn rank_rows_stack_at_the_22px_pitch() {
+        // Row 1 starts 22 px below row 0 on both text lines.
+        let buf = flat_native_rows(&o2jam_game::Score::default(), &[blank_row(), live_row()]);
+        assert!(!row_white_near(&buf, (RESULT_RANK_X, RESULT_ROW_TEXT_Y)));
+        assert!(row_white_near(
+            &buf,
+            (RESULT_RANK_X, RESULT_ROW_TEXT_Y + 22)
+        ));
+        assert!(row_white_near(
+            &buf,
+            (RESULT_ROW_NAME_X, RESULT_ROW_NAME_Y + 22)
+        ));
+    }
+
+    #[test]
+    fn rank_rows_wait_for_the_native_canvas() {
+        // Small frames paint no row ink, like the top-panel fields.
+        let mut buf = vec![0u32; 70 * 60];
+        paint_result(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            None,
+            &o2jam_game::Score::default(),
+            &[live_row()],
+        );
+        assert!(!buf.contains(&result_number_ink()));
+    }
+
+    #[test]
+    fn rank_rows_cap_at_eight_seats() {
+        // Nine live rows in, eight paint: row 8 (y 493) stays
+        // backdrop while row 7 (y 471) inks.
+        let rows = vec![live_row(); 9];
+        let buf = flat_native_rows(&o2jam_game::Score::default(), &rows);
+        assert!(row_white_near(
+            &buf,
+            (RESULT_RANK_X, RESULT_ROW_TEXT_Y + 7 * 22)
+        ));
+        assert!(!row_white_near(
+            &buf,
+            (RESULT_RANK_X, RESULT_ROW_TEXT_Y + 8 * 22)
+        ));
     }
 
     #[test]
@@ -3398,6 +3788,7 @@ mod paint_tests {
             },
             None,
             &o2jam_game::Score::default(),
+            &[],
             &art,
             ResultVerdict::Battle(Some(BattleVerdict::Win)),
             None,
