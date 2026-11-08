@@ -812,7 +812,7 @@ fn setup_chart_audio(
         tracing::info!(hits = level_chart.hit_count(), "chart loaded");
         if let Some(bank_path) = ojm {
             let bank_bytes = std::fs::read(bank_path)?;
-            let bank = load_sound_bank(&bank_bytes, format_version);
+            let bank = loading::load_sound_bank(&bank_bytes, format_version);
             let backend: Box<dyn o2jam_audio::AudioBackend> =
                 match o2jam_audio::CpalBackend::try_new() {
                     Ok(backend) => Box::new(backend),
@@ -939,121 +939,8 @@ fn print_connect_report(report: &connect::ConnectReport) {
     print!("{}", format_connect_report(report));
 }
 
-/// Build the strike-slot -> decoded-PCM bank for autoplay.
-///
-/// M30 entries key by their sample id (verified exe behavior). Banks
-/// whose entries carry no id (old-variant OMC streams, new-variant
-/// mode-2/mode-3 entries) key by fetch order via
-/// [`o2jam_file::OjmTables::resolve_order_slot`] — the documented
-/// reconstruction fallback (`docs/file-formats/ojm.md`): in-exe all
-/// such entries collapse onto slot 0, so order is the only key that
-/// lets autoplay sound them. `format_version` is the chart's `+8`
-/// float: it selects the new-variant lane count
-/// ([`o2jam_file::ojm_descriptor_for_version`]); OGG bodies (mode-3
-/// splits) decode with Vorbis, encrypted bodies with
-/// [`o2jam_file::decode_new_variant_pcm`] into the entry header's
-/// rate/channels.
-/// Decode one OGG body into the bank, skipping undecodable streams.
-///
-/// Loading gate 4 (`0x54d460`): only mono/stereo decodes enter the bank.
-fn insert_ogg(
-    bank: &mut std::collections::HashMap<u32, o2jam_audio::PcmSamples>,
-    slot: u32,
-    ogg: &[u8],
-) {
-    if let Ok(pcm) = o2jam_audio::decode_vorbis(ogg) {
-        if o2jam_file::validate_decoded_channels(pcm.channels).is_ok() {
-            bank.insert(slot, pcm);
-        }
-    }
-}
-
-/// Wrap decoded PCM frames with the entry header's rate/channels.
-///
-/// Loading gate 4 (`0x54d460`): only mono/stereo streams enter the bank.
-fn insert_pcm(
-    bank: &mut std::collections::HashMap<u32, o2jam_audio::PcmSamples>,
-    slot: u32,
-    entry: &o2jam_file::OjmEntry,
-    samples: Vec<i16>,
-) {
-    if o2jam_file::validate_decoded_channels(entry.num_channels as u8).is_err() {
-        return;
-    }
-    if entry.sample_rate > 0 && entry.num_channels > 0 && !samples.is_empty() {
-        bank.insert(
-            slot,
-            o2jam_audio::PcmSamples {
-                samples,
-                sample_rate: entry.sample_rate,
-                channels: entry.num_channels as u8,
-            },
-        );
-    }
-}
-
-fn load_sound_bank(
-    bank_bytes: &[u8],
-    format_version: f32,
-) -> std::collections::HashMap<u32, o2jam_audio::PcmSamples> {
-    use o2jam_file::{OjmEntry, NEW_VARIANT_HIGH_BANK};
-    let mut bank = std::collections::HashMap::new();
-    if bank_bytes.starts_with(b"M30") {
-        if let Ok(samples) = o2jam_file::parse_m30(bank_bytes) {
-            for sample in samples {
-                if let Some(id) = sample.sample_id {
-                    insert_ogg(&mut bank, id, sample.data);
-                }
-            }
-        }
-        return bank;
-    }
-    // New-variant first: its entry walk is bounds-checked, and each
-    // body must decode (OGG checksum or PCM frames), so garbage
-    // headers fall through to the old-variant walk below.
-    if let Ok(tables) = o2jam_file::parse_new_variant_entries(bank_bytes) {
-        let descriptor = o2jam_file::ojm_descriptor_for_version(format_version);
-        let flat: Vec<&OjmEntry> = tables.mode2.iter().chain(tables.mode3.iter()).collect();
-        let mut decoded_any = false;
-        for (order, entry) in flat.iter().enumerate() {
-            // Codec gate (`0x54d460`): mode-2 entries carry header
-            // WAV params, so reject bad shapes before decode;
-            // mode-3 splits carry none and gate post-decode instead.
-            if order < tables.mode2.len() && loading::check_bank_entry(entry).is_err() {
-                continue;
-            }
-            let Ok(body) = entry.sample_bytes(bank_bytes) else {
-                continue;
-            };
-            let slot = order as u32;
-            if body.starts_with(b"OggS") {
-                insert_ogg(&mut bank, slot, body);
-            } else if let Ok(frames) = o2jam_file::decode_new_variant_pcm(body, descriptor) {
-                insert_pcm(&mut bank, slot, entry, frames);
-            }
-            decoded_any = decoded_any || bank.contains_key(&slot);
-        }
-        if decoded_any {
-            // High-bank aliases serve bit26-origin strikes, which name
-            // the same fetch-order entries (see `resolve_order_slot`).
-            let slots: Vec<u32> = bank.keys().copied().collect();
-            for slot in slots {
-                if let Some(pcm) = bank.get(&slot).cloned() {
-                    bank.insert(NEW_VARIANT_HIGH_BANK + slot, pcm);
-                }
-            }
-            return bank;
-        }
-    }
-    if let Ok(samples) = o2jam_file::parse_omc(bank_bytes) {
-        for (order, sample) in samples.iter().enumerate() {
-            insert_ogg(&mut bank, order as u32, sample.data);
-        }
-    }
-    bank
-}
-
 /// Load one chart level from disk into the game (chart + slice checks
+/// plus the shared [`loading::load_sound_bank`] key-sound decode)
 /// shared by autoplay and the windowed game).
 ///
 /// Runs the lifecycle §9 loading gate: select validation is the
@@ -1102,7 +989,7 @@ fn run_autoplay(chart_path: &str, ojm_path: Option<&str>, level: usize, sound: b
     let mut bank = std::collections::HashMap::new();
     if let Some(path) = ojm_path {
         let bank_bytes = std::fs::read(path).with_context(|| format!("reading bank {path}"))?;
-        bank = load_sound_bank(&bank_bytes, format_version);
+        bank = loading::load_sound_bank(&bank_bytes, format_version);
         tracing::info!(samples = bank.len(), "bank decoded");
     }
     let mut backend: Box<dyn o2jam_audio::AudioBackend> = if sound {

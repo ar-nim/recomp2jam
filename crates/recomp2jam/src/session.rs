@@ -143,7 +143,7 @@ use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
 
 use crate::live_stats::{apply_peer_update, jam_tick_for_score, life_tick_for_live_play};
 use crate::loading::{
-    check_bank_entry, loading_phase_status, prepare_chart, stage_loading_cover, PreparedChart,
+    load_sound_bank, loading_phase_status, prepare_chart, stage_loading_cover, PreparedChart,
     LOADING_GATE_STEPS,
 };
 
@@ -611,9 +611,10 @@ impl OnlineSession {
 
     /// Fetch the staged catalog's chart for one song id from the
     /// install `Music` folder and stage it into the highway
-    /// ([`Self::stage_chart_bytes`]). The bank fetch is best-effort:
-    /// its entries probe the codec gate and log, but key-sound attach
-    /// stays manual (`--ojm`) — the session owns no audio backend.
+    /// ([`Self::stage_chart_bytes`]), then attach its key-sound bank
+    /// from the catalog container token through the loading gate
+    /// ([`Self::attach_bank_for_song`]). The bank leg is best-effort:
+    /// a miss stages silent, never failing the chart.
     ///
     /// # Errors
     ///
@@ -629,14 +630,16 @@ impl OnlineSession {
             .with_context(|| format!("no catalog chart file for song {music_id}"))?;
         let chart_bytes = std::fs::read(&chart_path)
             .with_context(|| format!("reading chart {}", chart_path.display()))?;
-        self.probe_bank(music_id);
-        self.stage_chart_bytes(&chart_bytes, level)
+        let prepared = self
+            .stage_chart_bytes(&chart_bytes, level)
             .with_context(|| {
                 format!(
                     "loading gate rejected {} level {level}",
                     chart_path.display()
                 )
-            })
+            })?;
+        self.attach_bank_for_song(music_id, prepared.format_version);
+        Ok(prepared)
     }
 
     /// Install chart path for one staged song id (`None` while the
@@ -656,22 +659,43 @@ impl OnlineSession {
         install_music_path(&row.ojm_file, "ojm")
     }
 
-    /// Probe one bank through the codec gate: valid entries log,
-    /// unreadable or unknown shapes log and stage silent (the offline
-    /// `--ojm`-less play shape).
-    fn probe_bank(&self, music_id: u16) {
+    /// Decode the installed bank for one staged song id through the
+    /// loading gate ([`load_sound_bank`]): the catalog container token
+    /// names the `Music/o2ma###.ojm` image. Misses (no catalog row, no
+    /// `.ojm` suffix, unreadable bytes, undecodable image) decode to
+    /// an empty bank — silent, never invented.
+    pub fn bank_for_song(
+        &self,
+        music_id: u16,
+        format_version: f32,
+    ) -> std::collections::HashMap<u32, o2jam_audio::PcmSamples> {
         let Some(bank_path) = self.bank_path_for_song(music_id) else {
-            return;
+            return std::collections::HashMap::new();
         };
         let Ok(bank_bytes) = std::fs::read(&bank_path) else {
-            tracing::debug!(path = %bank_path.display(), "bank unreadable; chart stages silent");
-            return;
+            return std::collections::HashMap::new();
         };
-        tracing::info!(
-            entries = valid_bank_entries(&bank_bytes),
-            path = %bank_path.display(),
-            "bank probed (key-sound attach stays manual --ojm)"
-        );
+        load_sound_bank(&bank_bytes, format_version)
+    }
+
+    /// Attach one song's key-sound bank to the game backend so struck
+    /// notes emit their samples: live hardware plays through
+    /// `CpalBackend`, headless falls back to `NullBackend` (the
+    /// `main.rs` windowed shape). Best-effort: an empty bank keeps
+    /// the silent play shape, never failing the staged chart.
+    pub fn attach_bank_for_song(&mut self, music_id: u16, format_version: f32) {
+        let bank = self.bank_for_song(music_id, format_version);
+        if bank.is_empty() {
+            return;
+        }
+        let entries = bank.len();
+        let backend: Box<dyn o2jam_audio::AudioBackend> = match o2jam_audio::CpalBackend::try_new()
+        {
+            Ok(backend) => Box::new(backend),
+            Err(_) => Box::new(o2jam_audio::NullBackend::new()),
+        };
+        self.game.with_audio(backend, bank);
+        tracing::info!(entries, "key sounds attached");
     }
 
     /// Stage the clock-armed loading caption for one chart song id
@@ -1772,21 +1796,6 @@ fn install_music_path(token: &str, extension: &str) -> Option<PathBuf> {
     Some(install_music_dir().join(format!("{stem}.{extension}")))
 }
 
-/// Codec-gated new-variant entries in one bank image (unknown shapes
-/// probe zero: their gate is post-decode, like the offline bank
-/// walk — see `main.rs` `load_sound_bank`).
-fn valid_bank_entries(bank_bytes: &[u8]) -> usize {
-    let Ok(tables) = o2jam_file::parse_new_variant_entries(bank_bytes) else {
-        return 0;
-    };
-    tables
-        .mode2
-        .iter()
-        .filter(|entry| check_bank_entry(entry).is_ok())
-        .count()
-        + tables.mode3.len()
-}
-
 /// Chart level slot for one difficulty code (EX/NX/HX map onto the
 /// three OJN slots; RX and unknown codes clamp onto Hard).
 /// PERF-07: `from`, never `as`.
@@ -2122,6 +2131,25 @@ mod session_tests {
         session.menu_key(MenuKey::Confirm, true);
         server.join().unwrap();
         assert_eq!(session.game.screen(), Screen::Room);
+    }
+
+    #[test]
+    fn bank_for_unnamed_song_stages_silent() {
+        let (session, server) = channel_session(|mut stream| {
+            assert_quiet(&mut stream);
+        });
+        assert!(session.bank_for_song(757, 2.9).is_empty());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn attach_with_no_bank_keeps_silent_play() {
+        let (mut session, server) = channel_session(|mut stream| {
+            assert_quiet(&mut stream);
+        });
+        session.attach_bank_for_song(757, 2.9);
+        session.game.strike_at(2, 5_100);
+        server.join().unwrap();
     }
 
     #[test]

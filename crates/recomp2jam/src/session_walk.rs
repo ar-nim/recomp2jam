@@ -883,6 +883,52 @@ mod session_walk_tests {
         assert_eq!(to_rgb(&[0x12_34_56]), vec![0x12, 0x34, 0x56]);
     }
 
+    #[test]
+    fn walk_bank_decode_rejects_garbage() {
+        assert!(crate::loading::load_sound_bank(b"garbage", 2.9).is_empty());
+        assert!(crate::loading::load_sound_bank(&[], 2.9).is_empty());
+    }
+
+    #[test]
+    fn null_backend_counts_an_emitted_walk_note() {
+        use o2jam_audio::{AudioBackend, NullBackend};
+        let mut backend = NullBackend::new();
+        let pcm = o2jam_audio::PcmSamples {
+            samples: vec![1000i16; 88],
+            sample_rate: 44100,
+            channels: 2,
+        };
+        backend.play_pcm(&pcm).unwrap();
+        assert_eq!(backend.samples_played(), 44);
+    }
+
+    #[test]
+    fn struck_walk_notes_emit_through_the_bank() {
+        // The walk strikes banked onsets at the paint instant: the
+        // strike judges Cool (combo 1) and the pump drains the queued
+        // key sound into the backend (silent here — `NullBackend`).
+        use o2jam_audio::NullBackend;
+        use std::collections::HashMap;
+        let mut game = ScreenGame::new();
+        let bank = HashMap::from([(
+            7u32,
+            o2jam_audio::PcmSamples {
+                samples: vec![0i16; 88],
+                sample_rate: 44100,
+                channels: 2,
+            },
+        )]);
+        game.with_audio(Box::new(NullBackend::new()), bank);
+        game.load_chart(vec![(2, PLAYING_NOW_MS, 7)]);
+        game.lane_key(3, true);
+        for _ in 0..4 {
+            game.menu_key(MenuKey::Confirm, true);
+        }
+        assert_eq!(game.screen(), Screen::Playing);
+        game.strike_at(2, PLAYING_NOW_MS);
+        assert_eq!(game.live_play().score().combo, 1);
+    }
+
     /// Guarded: runs only with `O2JAM_LIVE_GATEWAY=host:port` and
     /// `O2JAM_LIVE_TOKEN=session-guid`. Drives the whole
     /// windowed-session walk and asserts one PNG per stage.

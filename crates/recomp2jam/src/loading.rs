@@ -13,7 +13,10 @@
 //! `.ojs`-driven with no rank-comparison arithmetic located in-exe.
 //! See [`RESULT_GRADES_VERIFIED`].
 
+use std::collections::HashMap;
+
 use anyhow::Result;
+use o2jam_audio::PcmSamples;
 use o2jam_file::{FileError, OjmEntry};
 use o2jam_shell::avatar::{ojn_cover_figure, AvatarFigure};
 use o2jam_shell::screens::paint::LoadingStatus;
@@ -152,6 +155,112 @@ pub fn prepare_chart(chart_bytes: &[u8], level: usize) -> Result<PreparedChart, 
 /// exe's `1/2`-channel, `8/16`-bit checks.
 pub fn check_bank_entry(entry: &OjmEntry) -> Result<(), FileError> {
     o2jam_file::validate_sample_format(entry)
+}
+
+/// Decode one OGG body into the bank, skipping undecodable streams.
+///
+/// Loading gate 4 (`0x54d460`): only mono/stereo decodes enter the bank.
+fn insert_ogg(bank: &mut HashMap<u32, PcmSamples>, slot: u32, ogg: &[u8]) {
+    if let Ok(pcm) = o2jam_audio::decode_vorbis(ogg) {
+        if o2jam_file::validate_decoded_channels(pcm.channels).is_ok() {
+            bank.insert(slot, pcm);
+        }
+    }
+}
+
+/// Wrap decoded PCM frames with the entry header's rate/channels.
+///
+/// Loading gate 4 (`0x54d460`): only mono/stereo streams enter the bank.
+fn insert_pcm(bank: &mut HashMap<u32, PcmSamples>, slot: u32, entry: &OjmEntry, samples: Vec<i16>) {
+    let Ok(channels) = u8::try_from(entry.num_channels) else {
+        return;
+    };
+    if o2jam_file::validate_decoded_channels(channels).is_err() {
+        return;
+    }
+    if entry.sample_rate > 0 && entry.num_channels > 0 && !samples.is_empty() {
+        bank.insert(
+            slot,
+            PcmSamples {
+                samples,
+                sample_rate: entry.sample_rate,
+                channels,
+            },
+        );
+    }
+}
+
+/// Build the strike-slot -> decoded-PCM bank for one OJM image.
+///
+/// Shared by offline autoplay (`main.rs`) and online play
+/// (`session.rs`): M30 entries key by their sample id (verified exe
+/// behavior); id-less entries (old-variant OMC streams, new-variant
+/// mode-2/mode-3 entries) key by fetch order via
+/// [`o2jam_file::OjmTables::resolve_order_slot`] — the documented
+/// reconstruction fallback (`docs/file-formats/ojm.md`).
+/// `format_version` is the chart's `+8` float: it selects the
+/// new-variant lane count ([`o2jam_file::ojm_descriptor_for_version`]);
+/// OGG bodies (mode-3 splits) decode with Vorbis, encrypted bodies
+/// with [`o2jam_file::decode_new_variant_pcm`] into the entry
+/// header's rate/channels. Garbage decodes to an empty bank — silent,
+/// never invented.
+#[must_use]
+pub fn load_sound_bank(bank_bytes: &[u8], format_version: f32) -> HashMap<u32, PcmSamples> {
+    use o2jam_file::{OjmEntry, NEW_VARIANT_HIGH_BANK};
+    let mut bank = HashMap::new();
+    if bank_bytes.starts_with(b"M30") {
+        if let Ok(samples) = o2jam_file::parse_m30(bank_bytes) {
+            for sample in samples {
+                if let Some(id) = sample.sample_id {
+                    insert_ogg(&mut bank, id, sample.data);
+                }
+            }
+        }
+        return bank;
+    }
+    // New-variant first: its entry walk is bounds-checked, and each
+    // body must decode (OGG checksum or PCM frames), so garbage
+    // headers fall through to the old-variant walk below.
+    if let Ok(tables) = o2jam_file::parse_new_variant_entries(bank_bytes) {
+        let descriptor = o2jam_file::ojm_descriptor_for_version(format_version);
+        let flat: Vec<&OjmEntry> = tables.mode2.iter().chain(tables.mode3.iter()).collect();
+        let mut decoded_any = false;
+        for (order, entry) in flat.iter().enumerate() {
+            // Codec gate (`0x54d460`): mode-2 entries carry header
+            // WAV params, so reject bad shapes before decode;
+            // mode-3 splits carry none and gate post-decode instead.
+            if order < tables.mode2.len() && check_bank_entry(entry).is_err() {
+                continue;
+            }
+            let Ok(body) = entry.sample_bytes(bank_bytes) else {
+                continue;
+            };
+            let slot = order as u32;
+            if body.starts_with(b"OggS") {
+                insert_ogg(&mut bank, slot, body);
+            } else if let Ok(frames) = o2jam_file::decode_new_variant_pcm(body, descriptor) {
+                insert_pcm(&mut bank, slot, entry, frames);
+            }
+            decoded_any = decoded_any || bank.contains_key(&slot);
+        }
+        if decoded_any {
+            // High-bank aliases serve bit26-origin strikes, which name
+            // the same fetch-order entries (see `resolve_order_slot`).
+            let slots: Vec<u32> = bank.keys().copied().collect();
+            for slot in slots {
+                if let Some(pcm) = bank.get(&slot).cloned() {
+                    bank.insert(NEW_VARIANT_HIGH_BANK + slot, pcm);
+                }
+            }
+            return bank;
+        }
+    }
+    if let Ok(samples) = o2jam_file::parse_omc(bank_bytes) {
+        for (order, sample) in samples.iter().enumerate() {
+            insert_ogg(&mut bank, order as u32, sample.data);
+        }
+    }
+    bank
 }
 
 /// Decode the walked chart's OJN cover section as the loading-gate song
@@ -382,5 +491,40 @@ mod tests {
         let mut game = ScreenGame::new();
         assert!(!stage_loading_cover(&mut game, b"garbage"));
         assert!(!game.has_loading_cover());
+    }
+
+    #[test]
+    fn bank_decode_rejects_garbage() {
+        assert!(load_sound_bank(b"garbage", 2.9).is_empty());
+        assert!(load_sound_bank(&[], 2.9).is_empty());
+        assert!(load_sound_bank(&[0xFFu8; 64], 2.9).is_empty());
+    }
+
+    #[test]
+    fn null_backend_emits_banked_sample() {
+        use o2jam_audio::{AudioBackend, NullBackend};
+        let mut backend = NullBackend::new();
+        let pcm = PcmSamples {
+            samples: vec![1000i16; 100],
+            sample_rate: 44100,
+            channels: 2,
+        };
+        backend.play_pcm(&pcm).unwrap();
+        assert_eq!(backend.samples_played(), 50);
+    }
+
+    #[test]
+    fn null_backend_silent_gain_leaves_the_clock() {
+        use o2jam_audio::{AudioBackend, NullBackend};
+        let mut backend = NullBackend::new();
+        let pcm = PcmSamples {
+            samples: vec![1000i16; 100],
+            sample_rate: 44100,
+            channels: 2,
+        };
+        backend.play_key(&pcm, 0.0).unwrap();
+        assert_eq!(backend.samples_played(), 0);
+        backend.play_key(&pcm, 1.0).unwrap();
+        assert_eq!(backend.samples_played(), 50);
     }
 }
