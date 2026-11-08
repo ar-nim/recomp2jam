@@ -2148,11 +2148,11 @@ mod tests {
         let rows = staged.waiting_chat();
         assert_eq!(
             waiting_chat_row_text(&rows[0]),
-            format!("[ADMIN] {SCRIPTED_CHAT_ADMIN_SENDER}: {SCRIPTED_CHAT_ADMIN_TEXT}")
+            format!("[{SCRIPTED_CHAT_ADMIN_SENDER:>12}] {SCRIPTED_CHAT_ADMIN_TEXT}")
         );
         assert_eq!(
             waiting_chat_row_text(&rows[1]),
-            format!("[{SCRIPTED_CHAT_USER_SENDER:>13}] {SCRIPTED_CHAT_USER_TEXT}")
+            format!("[{SCRIPTED_CHAT_USER_SENDER:>12}] {SCRIPTED_CHAT_USER_TEXT}")
         );
     }
 
