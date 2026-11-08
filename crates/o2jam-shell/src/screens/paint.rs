@@ -1721,6 +1721,109 @@ pub fn paint_waiting_chat(
     );
 }
 
+/// Rows visible in the channel history box: the newest
+/// [`CHANNEL_CHAT_VISIBLE_ROWS`], mirroring the waiting box.
+const CHANNEL_CHAT_VISIBLE_ROWS: usize = 6;
+/// Channel chat rows share the lobby list pitch (8 px).
+const CHANNEL_CHAT_ROW_H: i32 = 8;
+
+/// One channel chat row from a live 2013/2014/2019 packet
+/// (`ScreenGame` converts the wire message into this display form;
+/// the painter never decodes the wire).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChannelChatMessage {
+    /// Chatter nickname.
+    pub sender: String,
+    /// Chat text (UTF-8, lossy-decoded from the raw wire bytes).
+    pub text: String,
+    /// True for 2014 administrator lines (the 3013 `0x71e6` ink).
+    pub admin: bool,
+    /// Whisper addressee for 2019 rows (`None` for channel lines).
+    pub whisper_recipient: Option<String>,
+}
+
+impl ChannelChatMessage {
+    /// Player chat row (2013).
+    #[must_use]
+    pub fn user(sender: &str, text: &str) -> Self {
+        Self {
+            sender: sender.to_owned(),
+            text: text.to_owned(),
+            admin: false,
+            whisper_recipient: None,
+        }
+    }
+
+    /// Administrator chat row (2014).
+    #[must_use]
+    pub fn admin(sender: &str, text: &str) -> Self {
+        Self {
+            sender: sender.to_owned(),
+            text: text.to_owned(),
+            admin: true,
+            whisper_recipient: None,
+        }
+    }
+
+    /// Incoming whisper row (2019): the recipient is the local
+    /// addressee, kept so the row names both ends.
+    #[must_use]
+    pub fn whisper(sender: &str, recipient: &str, text: &str) -> Self {
+        Self {
+            sender: sender.to_owned(),
+            text: text.to_owned(),
+            admin: false,
+            whisper_recipient: Some(recipient.to_owned()),
+        }
+    }
+}
+
+/// Display text of one channel row: the waiting `[%12s] %s` bracket
+/// line for channel rows; whisper rows name both ends as
+/// `[sender -> recipient] text` so the addressee stays visible.
+#[must_use]
+pub fn channel_chat_row_text(message: &ChannelChatMessage) -> String {
+    match message.whisper_recipient.as_deref() {
+        Some(recipient) => format!(
+            "[{:>12} -> {:>12}] {}",
+            message.sender, recipient, message.text
+        ),
+        None => format!("[{:>12}] {}", message.sender, message.text),
+    }
+}
+
+/// Rows the channel history shows: the newest [`CHANNEL_CHAT_VISIBLE_ROWS`].
+#[must_use]
+pub fn channel_chat_visible_messages(messages: &[ChannelChatMessage]) -> &[ChannelChatMessage] {
+    let skip = messages.len().saturating_sub(CHANNEL_CHAT_VISIBLE_ROWS);
+    messages.get(skip..).unwrap_or(&[])
+}
+
+/// Paint live channel rows below the channel list: the newest visible
+/// rows stack at the lobby 8 px pitch, straight on the scene (no scrim
+/// band), each in its appended ink — 2014 admin rows amber, every
+/// other row user gray ([`chat_row_ink`]). Rows come only from live
+/// packets; empty histories paint nothing.
+pub fn paint_channel_chat(
+    frame: &mut Frame<'_>,
+    messages: &[ChannelChatMessage],
+    channel_rows: usize,
+) {
+    for (offset, message) in channel_chat_visible_messages(messages).iter().enumerate() {
+        let step = i32::try_from(offset).unwrap_or(i32::MAX);
+        let y = index_as_row(channel_rows, frame.h as i32)
+            .saturating_add(CHANNEL_ROW_H)
+            .saturating_add(step.saturating_mul(CHANNEL_CHAT_ROW_H));
+        draw_text(
+            frame,
+            frame.w as i32 / 4,
+            y,
+            &channel_chat_row_text(message),
+            chat_row_ink(message.admin),
+        );
+    }
+}
+
 /// Dark strip behind one seat row so seat ink stays readable over
 /// staged art (vacant rows get one too: the placeholder must read).
 fn paint_seat_scrim(frame: &mut Frame<'_>, x: i32, y: i32, text: &str) {
@@ -5877,6 +5980,81 @@ mod paint_tests {
             "user gray ink on the row"
         );
         assert!(has_ink_near(&buf, art_title_ink()));
+    }
+
+    #[test]
+    fn channel_chat_row_text_brackets_like_the_waiting_box() {
+        let row = ChannelChatMessage::user("host", "hello");
+        assert_eq!(channel_chat_row_text(&row), "[        host] hello");
+        let admin = ChannelChatMessage::admin("op", "quiet");
+        assert_eq!(channel_chat_row_text(&admin), "[          op] quiet");
+    }
+
+    #[test]
+    fn channel_whisper_row_names_both_ends() {
+        let row = ChannelChatMessage::whisper("host", "me", "psst");
+        assert_eq!(
+            channel_chat_row_text(&row),
+            "[        host ->           me] psst"
+        );
+    }
+
+    #[test]
+    fn channel_chat_shows_only_the_newest_rows() {
+        let mut rows = Vec::new();
+        for index in 0..CHANNEL_CHAT_VISIBLE_ROWS + 2 {
+            rows.push(ChannelChatMessage::user("host", &format!("line{index}")));
+        }
+        let visible = channel_chat_visible_messages(&rows);
+        assert_eq!(visible.len(), CHANNEL_CHAT_VISIBLE_ROWS);
+        assert_eq!(visible[0].text, "line2");
+    }
+
+    #[test]
+    fn channel_chat_without_rows_paints_nothing() {
+        let mut buf = vec![0u32; 64 * 48];
+        paint_channel_chat(
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 48,
+            },
+            &[],
+            2,
+        );
+        assert!(buf.iter().all(|pixel| *pixel == 0));
+    }
+
+    #[test]
+    fn channel_chat_paints_user_rows_in_the_exe_gray() {
+        let rows = vec![ChannelChatMessage::user("host", "hello")];
+        let mut buf = vec![0u32; 64 * 48];
+        paint_channel_chat(
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 48,
+            },
+            &rows,
+            0,
+        );
+        assert!(has_ink_near(&buf, pack_xrgb(0xDE, 0xDE, 0xDE)));
+    }
+
+    #[test]
+    fn channel_chat_paints_admin_rows_in_the_exe_amber() {
+        let rows = vec![ChannelChatMessage::admin("op", "quiet")];
+        let mut buf = vec![0u32; 64 * 48];
+        paint_channel_chat(
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 48,
+            },
+            &rows,
+            0,
+        );
+        assert!(has_ink_near(&buf, pack_xrgb(0xE6, 0x71, 0x00)));
     }
 
     #[test]

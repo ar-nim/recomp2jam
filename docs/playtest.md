@@ -3108,3 +3108,46 @@ expected.
   passed; identical to the guest-head baseline, docs-only delta,
   0 failures). No lint findings. No commits, no pushes.** This sweep
   touched only `docs/playtest.md`.
+
+## Regression sweep — 2026-11-08 11:47 UTC+8 (HEAD `e525f24`, tree clean)
+
+Live re-proof on the lobby-head. Covers the net commit landed after
+the f2-head baseline `0f084d4` (`e525f24`: decode lobby chat and
+whispers).
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1441 passed, 0 failed, 0 ignored**, `exit=0`.
+  Per target: audio 20, dump 7, file 177, game 94, net 375,
+  render 89, shell 528, real_art 7, scenes 22, recomp2jam 122
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, no warnings.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 121 filtered out, 0.61 s) against local
+  Memoryer 7.2.0 (`Mode=Full`). Server log for this run
+  (`11:47:06 +08:00`): `Authorize session` →
+  `Get channel list: [0]` → `Enter channel: [0/00]` →
+  `Get character info: [tester]` → `Create room: songflow` →
+  `Update room [000] music settings: [HX / X10 / o2ma757]` →
+  `Update room [000] arena: [1] (0)` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Update #1 - Jam: 3 (Bonus: 0)` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure stack on room delete; a trailing session walked
+  `Authorize session` → `Get channel list` → `Enter channel` →
+  `Get room list` → `Get character info`).
+- **Verdict: no regression — suite is green on the lobby-head (1441
+  passed; +15 vs the 1426 f2-head baseline, all net +15 from the
+  lobby-chat/whisper decode tests, 0 failures). No lint findings.
+  No commits, no pushes.** This sweep touched only `docs/playtest.md`.
+- Tree note: all gates above ran on a clean tree (HEAD `e525f24`);
+  a peer landed uncommitted edits to
+  `crates/o2jam-shell/src/screens/game.rs` at ~11:47:21 +08:00,
+  after the last gate finished. Left alone per the sweep rules;

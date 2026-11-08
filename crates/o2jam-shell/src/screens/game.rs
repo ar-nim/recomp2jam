@@ -8,12 +8,12 @@ use super::super::playing::{HighwayGeometry, LivePlay, PlaySkin};
 use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
-    battle_verdict, grade_frame, paint_avi_scene, paint_channel_list, paint_channel_scene,
-    paint_loading_scene, paint_loading_scene_with_status, paint_lobby_backdrop,
-    paint_playing_overlay, paint_result, paint_result_scene, paint_room_list, paint_room_scene,
-    paint_screen, paint_waiting_chat, paint_waiting_members, paint_waiting_scene, scene_index,
-    BattleVerdict, LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt,
-    WaitingCaptions, WaitingChatMessage,
+    battle_verdict, grade_frame, paint_avi_scene, paint_channel_chat, paint_channel_list,
+    paint_channel_scene, paint_loading_scene, paint_loading_scene_with_status,
+    paint_lobby_backdrop, paint_playing_overlay, paint_result, paint_result_scene, paint_room_list,
+    paint_room_scene, paint_screen, paint_waiting_chat, paint_waiting_members, paint_waiting_scene,
+    scene_index, BattleVerdict, ChannelChatMessage, LoadingStatus, ResultPaint, ResultRankRow,
+    ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage,
 };
 use super::side::{
     can_return_side, can_visit_side, paint_side_scene, select_chosung_cells, select_difficulty_ink,
@@ -33,7 +33,10 @@ use o2jam_audio::{AudioBackend, PcmSamples};
 use o2jam_file::OjnListEntry;
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams, PEER_SLOT_COUNT};
 use o2jam_net::play::SetRoomMusic;
-use o2jam_net::rooms::{SendWaitingMessage, WaitingAdminMessage, WaitingUserMessage};
+use o2jam_net::rooms::{
+    MainRoomAdminMessage, MainRoomUserMessage, ReceiveWhisper, SendWaitingMessage,
+    WaitingAdminMessage, WaitingUserMessage,
+};
 use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry};
 use o2jam_render::font::{draw_text_cell, Cell};
 use o2jam_render::{
@@ -52,6 +55,11 @@ const DEFAULT_ARENA_STAGE: u16 = 1;
 /// cannot grow memory without limit (PERF-07: `usize`, never `as`).
 const MAX_WAITING_CHAT_ROWS: usize = 50;
 
+/// Live channel chat rows kept per channel list (oldest first): the
+/// waiting-box bound, reused so a loud channel cannot grow memory
+/// without limit (PERF-07: `usize`, never `as`).
+const MAX_CHANNEL_CHAT_ROWS: usize = 50;
+
 /// Unsent chat draft cap (characters, not bytes: multibyte input
 /// counts once per character so no slice ever splits UTF-8).
 const MAX_CHAT_INPUT_CHARS: usize = 50;
@@ -69,6 +77,8 @@ pub struct ScreenGame {
     splash: Option<AvatarFigure>,
     channels: Vec<ChannelState>,
     highlight: usize,
+    /// Live channel chat rows (2013/2014/2019 packets only, oldest first).
+    channel_chat: Vec<ChannelChatMessage>,
     rooms: Vec<RoomListEntry>,
     room_highlight: usize,
     waiting: Option<JoinedRoom>,
@@ -193,6 +203,7 @@ impl ScreenGame {
             splash: None,
             channels: Vec::new(),
             highlight: 0,
+            channel_chat: Vec::new(),
             rooms: Vec::new(),
             room_highlight: 0,
             waiting: None,
@@ -333,10 +344,13 @@ impl ScreenGame {
         self.flow.current()
     }
 
-    /// Channels from the last online list (empty offline).
+    /// Channels from the last online list (empty offline). Refreshing
+    /// the list clears the channel chat history: rows come from that
+    /// list's 2013/2014/2019 packets only, never carried across lists.
     pub fn set_channels(&mut self, channels: Vec<ChannelState>) -> &mut Self {
         self.channels = channels;
         self.highlight = 0;
+        self.channel_chat.clear();
         self
     }
 
@@ -382,6 +396,43 @@ impl ScreenGame {
     #[must_use]
     pub fn waiting_chat(&self) -> &[WaitingChatMessage] {
         &self.waiting_chat
+    }
+
+    /// Append one player chat line (2013) to the channel history.
+    pub fn push_channel_user_message(&mut self, message: &MainRoomUserMessage) -> &mut Self {
+        self.push_channel_row(ChannelChatMessage::user(
+            &message.sender,
+            &message.content_text(),
+        ));
+        self
+    }
+
+    /// Append one administrator chat line (2014) to the channel history.
+    pub fn push_channel_admin_message(&mut self, message: &MainRoomAdminMessage) -> &mut Self {
+        self.push_channel_row(ChannelChatMessage::admin(
+            &message.sender,
+            &message.content_text(),
+        ));
+        self
+    }
+
+    /// Append one incoming whisper (2019) to the channel history.
+    /// `recipient` names the local addressee (the wire event carries
+    /// only the sender), so the row keeps its whisper context.
+    pub fn push_channel_whisper(&mut self, message: &ReceiveWhisper, recipient: &str) -> &mut Self {
+        self.push_channel_row(ChannelChatMessage::whisper(
+            &message.sender,
+            recipient,
+            &message.content,
+        ));
+        self
+    }
+
+    /// Live channel chat rows, oldest first (empty until a
+    /// 2013/2014/2019 packet arrives).
+    #[must_use]
+    pub fn channel_chat(&self) -> &[ChannelChatMessage] {
+        &self.channel_chat
     }
 
     /// Stage the unsent input line (the 3011 source on send).
@@ -465,6 +516,22 @@ impl ScreenGame {
             .len()
             .saturating_sub(MAX_WAITING_CHAT_ROWS);
         self.waiting_chat.drain(..overflow);
+    }
+
+    /// Append one channel row and bound the history to
+    /// [`MAX_CHANNEL_CHAT_ROWS`] (oldest rows drop first).
+    fn push_channel_row(&mut self, row: ChannelChatMessage) {
+        self.channel_chat.push(row);
+        self.truncate_channel_chat();
+    }
+
+    /// Drop the oldest channel rows past the history cap.
+    fn truncate_channel_chat(&mut self) {
+        let overflow = self
+            .channel_chat
+            .len()
+            .saturating_sub(MAX_CHANNEL_CHAT_ROWS);
+        self.channel_chat.drain(..overflow);
     }
 
     /// Room arena stage the Playing `_` sprites resolve through: the
@@ -999,6 +1066,8 @@ impl ScreenGame {
     }
 
     /// Channel: staged art behind the live list, flat card fallback.
+    /// Live 2013/2014/2019 rows paint below the list in both cases;
+    /// empty histories paint nothing.
     fn paint_channel(&self, frame: &mut Frame<'_>) {
         match (self.scene_art(Screen::Channel), self.channels.is_empty()) {
             (Some(art), false) => {
@@ -1008,6 +1077,7 @@ impl ScreenGame {
             (None, false) => paint_channel_list(frame, &self.channels, self.highlight),
             (None, true) => paint_screen(frame, Screen::Channel),
         }
+        paint_channel_chat(frame, &self.channel_chat, self.channels.len());
     }
 
     /// Room lobby: staged art behind the live list, flat card fallback.
@@ -3589,6 +3659,27 @@ mod game_tests {
         }
     }
 
+    fn channel_user(sender: &str, text: &str) -> o2jam_net::rooms::MainRoomUserMessage {
+        o2jam_net::rooms::MainRoomUserMessage {
+            sender: sender.to_owned(),
+            content: text.as_bytes().to_vec(),
+        }
+    }
+
+    fn channel_admin(sender: &str, text: &str) -> o2jam_net::rooms::MainRoomAdminMessage {
+        o2jam_net::rooms::MainRoomAdminMessage {
+            sender: sender.to_owned(),
+            content: text.as_bytes().to_vec(),
+        }
+    }
+
+    fn channel_whisper(sender: &str, text: &str) -> o2jam_net::rooms::ReceiveWhisper {
+        o2jam_net::rooms::ReceiveWhisper {
+            sender: sender.to_owned(),
+            content: text.to_owned(),
+        }
+    }
+
     #[test]
     fn waiting_chat_starts_empty() {
         let game = ScreenGame::new();
@@ -3623,6 +3714,62 @@ mod game_tests {
         game.set_joined_room(waiting_room());
         assert!(game.waiting_chat().is_empty());
         assert_eq!(game.chat_input(), "");
+    }
+
+    #[test]
+    fn channel_chat_starts_empty() {
+        let game = ScreenGame::new();
+        assert!(game.channel_chat().is_empty());
+    }
+
+    #[test]
+    fn pushing_a_channel_user_message_stages_one_row() {
+        let mut game = ScreenGame::new();
+        game.push_channel_user_message(&channel_user("host", "hello"));
+        assert_eq!(game.channel_chat().len(), 1);
+        assert_eq!(game.channel_chat()[0].sender, "host");
+        assert_eq!(game.channel_chat()[0].text, "hello");
+        assert!(!game.channel_chat()[0].admin);
+        assert_eq!(game.channel_chat()[0].whisper_recipient, None);
+    }
+
+    #[test]
+    fn pushing_a_channel_admin_message_marks_the_row() {
+        let mut game = ScreenGame::new();
+        game.push_channel_admin_message(&channel_admin("op", "quiet"));
+        assert_eq!(game.channel_chat().len(), 1);
+        assert!(game.channel_chat()[0].admin);
+    }
+
+    #[test]
+    fn pushing_a_channel_whisper_keeps_the_recipient() {
+        let mut game = ScreenGame::new();
+        game.push_channel_whisper(&channel_whisper("host", "psst"), "me");
+        assert_eq!(game.channel_chat().len(), 1);
+        assert_eq!(game.channel_chat()[0].sender, "host");
+        assert_eq!(game.channel_chat()[0].text, "psst");
+        assert_eq!(
+            game.channel_chat()[0].whisper_recipient.as_deref(),
+            Some("me")
+        );
+    }
+
+    #[test]
+    fn refreshing_channels_clears_the_channel_history() {
+        let mut game = ScreenGame::new();
+        game.push_channel_user_message(&channel_user("host", "hello"));
+        game.set_channels(two_channels());
+        assert!(game.channel_chat().is_empty());
+    }
+
+    #[test]
+    fn channel_history_bounds_to_fifty_rows() {
+        let mut game = ScreenGame::new();
+        for index in 0..55 {
+            game.push_channel_user_message(&channel_user("host", &format!("line{index}")));
+        }
+        assert_eq!(game.channel_chat().len(), 50);
+        assert_eq!(game.channel_chat()[0].text, "line5");
     }
 
     #[test]
