@@ -17,18 +17,27 @@ pixel. Parser sites live in `o2jam-file` (`opi.rs`, `control.rs`, `sprites.rs`,
   judgement line, never adding record `x/y`. Avatar path (`avatar.rs`
   `from_sprite55` → `dx/dy`) does use them.
 - Non-raw `Sprite55` images — `avatar.rs` `from_sprite55` filters on
-  `is_raw_rgb555`; `playing.rs` `lane_sprite` returns `None` otherwise.
-  Compressed / outlier `.oji` frames vanish instead of decoding. The exe
-  fails them identically: every format compare in `.text` accepts only
-  `0x555`/`0x555a` (claims C9).
+  `is_raw_rgb555`; `playing.rs` `lane_sprite` returns `None` otherwise on
+  the plain path. Correction (codec-coverage.md DONE 3): prefixed `.oji`
+  bodies no longer vanish — `parse_sprite55_prefixed` walks the row
+  groups and 33/36 frames render (the two negative-delta bodies
+  included). The exe still fails them identically: every format compare
+  in `.text` accepts only `0x555`/`0x555a` (claims C9).
 - `Sprite55Strided` (`Note_Combo4/5/6.ojt`, `sprites.rs`
-  `parse_sprite55_strided`, `frames_per_image`, `frame_data`) — never called
-  in shell; combo glow animation paints as one static frame or not at all.
+  `parse_sprite55_strided`, `frames_per_image`, `frame_data`) — correction
+  (codec-coverage.md DONE 1): routed now; `avatar.rs` (`strided_sprite55`
+  + `AvatarFigure::from_sprite55_strided`) loads them and `playing.rs`
+  stages the combo glow from `parse_sprite55_strided` only.
 - `Oja` envelope (`sprites.rs` `parse_oja`, `OjaFrame{x,y,w,h,a,b,c}`) —
-  no shell call site. `Note_Click.oja` centred shrinking frames and the
-  `a/b/c` words never animate.
-- JPEG `.ojs` bodies (`opi.rs` `is_jpeg_body`: `ATI*` album art) — never
-  called in shell; select-music / album panels paint dialog art without rows.
+  correction (codec-coverage.md): `parse_oja55` routes through
+  `AvatarFigure::from_oja55`; all 22 frames decode — the stored planes
+  are compacted row-group walks (`a/b/c` = offset / pixel-length /
+  alpha-length, alpha plane an intensity map; the 9,159-byte trailing
+  strip stays raw) — and `playing.rs` stages the oja effect frames.
+- JPEG `.ojs` bodies (`opi.rs` `is_jpeg_body`: `ATI*` album art) —
+  correction (codec-coverage.md DONE 2): decoded now (`o2jam-file`
+  `decode_jpeg_body` on `zune-jpeg`, 47/47 to RGB888, 21 SOF0 +
+  26 SOF2) and painted 1:1 by `o2jam-render` `blit_rgb888`.
 - Number-sprite `SET` groups — `paint.rs` `paint_result_content` calls
   procedural `draw_number` at fixed `(16,16)` / `(16,32)` instead of the
   block's number-font sprites.
@@ -75,6 +84,10 @@ pixel. Parser sites live in `o2jam-file` (`opi.rs`, `control.rs`, `sprites.rs`,
   layout (if any) is discarded and art pins at the native origin.
   Exe side re-verified 2026-11-07: the blit arms push origin x/y only
   (VA `0x50aa32`–`0x50aa36`), so no full-bleed rect consumer exists.
+  Correction (channel-fill.md, PINNED): behind art-less states the exe
+  stages zero pixels and no fill call exists, and the presenter preserves
+  the stale frame — the shell paints nothing (no flat navy, no backdrop
+  fill), guarded by the `paint.rs`/`o2jam-render` no-fill tests.
 - Rect/entry count mismatch — `avatar.rs` `bind_verbatim_entries` zips and
   stops at the shorter side: entries past the last rect stay unplaced (Playing
   tail past `VOLUME`, surplus room entries), rects past the last entry are
