@@ -1973,6 +1973,16 @@ impl LivePlay {
         &self.score
     }
 
+    /// Live life word (`0..=LIFE_MAX`) behind the avatar gauge: the
+    /// public shell read for the Life channel (the rank snapshot row
+    /// 0 carries points, jam level, and bonus — never life). Reads
+    /// the verified bar directly, so the session tick always
+    /// matches the painted gauge.
+    #[must_use]
+    pub fn life(&self) -> u16 {
+        self.score.life.life()
+    }
+
     /// Verified hold-bonus accumulator (game `+0x3978`; the lead
     /// `longNoteScore` candidate for 4016): one +10 tick per held span
     /// per advance while armed and the span window is open.
@@ -2959,6 +2969,19 @@ mod live_play_tests {
         live.set_life_difficulty(3); // Rx: switch selects nothing (0x170fb4)
         live.advance_to(1000 + 25 + 1);
         assert_eq!(live.score().life.life(), LIFE_MAX - 50);
+    }
+
+    #[test]
+    fn life_read_reports_the_painted_bar_word() {
+        // Public Life-channel seam: starts full, drains on Miss,
+        // refills on Cool — always the bar word itself, never a copy.
+        let mut live = LivePlay::new(&[(0, 1000, 7), (0, 2000, 7)]);
+        live.set_life_difficulty(1); // Normal: Miss -40, Cool +2
+        assert_eq!(live.life(), LIFE_MAX);
+        live.advance_to(1000 + 25 + 1);
+        assert_eq!(live.life(), LIFE_MAX - 40);
+        live.strike_lane(0, 2000);
+        assert_eq!(live.life(), LIFE_MAX - 40 + 2);
     }
 
     #[test]

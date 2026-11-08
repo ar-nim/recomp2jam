@@ -9,19 +9,17 @@
 //!
 //! Stats bridge (Phase 4 play loop): every paint in `Playing` polls the
 //! live score snapshot (row 0 of [`ScreenGame::result_rank_rows`] carries
-//! the local points, jam level, and hold bonus) and sends one 4014 jam
-//! tick through [`live_stats::jam_tick_for_score`] when the snapshot moved
+//! the local points, jam level, and hold bonus, plus [`ScreenGame::life`]
+//! for the life word row 0 never carries) and sends one 4014 jam tick
+//! through [`live_stats::jam_tick_for_score`] plus one 4014 life tick
+//! through [`live_stats::life_tick_for_live_play`] when the snapshot moved
 //! since the last send — the per-hit shape: the wire only moves when play
 //! does. The same paint then drains waiting 4015 echoes under a short
 //! timeout ([`connect::run_song_flow`]'s peer-bar window shape) and folds
 //! each into the owned [`PeerBars`] through
-//! [`live_stats::apply_peer_update`]. Chat stays send-on-action, as-is.
-//!
-//! Only the Jam channel flows here: the life word has no public shell
-//! read (row 0 exposes points, jam level, and bonus — never life), so
-//! life ticks wait on a one-line shell getter, deliberately out of scope.
-//! The life funnel ([`live_stats::life_tick_for_live_play`]) stays covered
-//! by the live-stats tests for that windowed path.
+//! [`live_stats::apply_peer_update`] and into the shell through
+//! [`ScreenGame::apply_peer_echo`], so the Playing paint shows the live
+//! gauges. Chat stays send-on-action, as-is.
 
 use std::time::Duration;
 
@@ -30,7 +28,7 @@ use o2jam_net::rooms::SendWaitingMessage;
 use o2jam_net::{Frame, GameStatsUpdate, GatewayConnection, Generic, Request, WireMessage};
 use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
 
-use crate::live_stats::{apply_peer_update, jam_tick_for_score};
+use crate::live_stats::{apply_peer_update, jam_tick_for_score, life_tick_for_live_play};
 
 /// Short socket window for the per-frame stats section (one tick send
 /// plus the echo drain): a paint must never stall the frame loop on a
@@ -49,6 +47,7 @@ struct TickSnapshot {
     points: u32,
     jam_level: u32,
     bonus: u64,
+    life: u16,
 }
 
 /// Waiting-room session: shell game plus its gateway transport.
@@ -57,9 +56,9 @@ struct TickSnapshot {
 /// both live here, never shared), so no lock ordering applies.
 ///
 /// The stats mirror (`peers`, `peer_queue`, `peer_ranks`) is session-owned:
-/// 4015 echoes fold in through [`apply_peer_update`] every `Playing` paint.
-/// The shell still paints its own peer bars; wiring the mirror into paint
-/// needs a shell-side apply, out of scope here.
+/// 4015 echoes fold in through [`apply_peer_update`] every `Playing` paint
+/// and forward into the shell through [`ScreenGame::apply_peer_echo`], so
+/// the Playing paint shows the live gauges and result rows.
 pub struct OnlineSession {
     game: ScreenGame,
     gateway: GatewayConnection,
@@ -156,9 +155,11 @@ impl OnlineSession {
         }
     }
 
-    /// Live score snapshot behind the tick: row 0 of the live rank rows
+    /// Live score snapshot behind the ticks: row 0 of the live rank rows
     /// carries the local points, jam level, and hold bonus (`None` only
-    /// while the rows cannot name the local seat, never in practice).
+    /// while the rows cannot name the local seat, never in practice);
+    /// the life word rides [`ScreenGame::life`], which row 0 never
+    /// carries. Any moved field resends both channels together.
     fn stats_snapshot(&self) -> Option<TickSnapshot> {
         let rows = self.game.result_rank_rows();
         let row = rows.first()?;
@@ -166,12 +167,17 @@ impl OnlineSession {
             points: row.score?,
             jam_level: row.combos?.1,
             bonus: row.bonus?,
+            life: self.game.life(),
         })
     }
 
-    /// Send one 4014 jam tick when the live snapshot moved since the
-    /// last send. A failed send keeps the snapshot unsent, so the next
-    /// paint retries it (same keep-on-failure shape as [`flush_chat`]).
+    /// Send one 4014 jam tick plus one 4014 life tick when the live
+    /// snapshot moved since the last send (jam first on the current
+    /// sequence, life on the next — one sequence step per channel).
+    /// A failed send keeps the snapshot unsent, so the next paint
+    /// retries it (same keep-on-failure shape as [`flush_chat`]): a
+    /// life failure after a sent jam resends the jam once, which the
+    /// per-hit dedupe tolerates.
     fn maybe_send_tick(&mut self) {
         let Some(snapshot) = self.stats_snapshot() else {
             return;
@@ -179,19 +185,31 @@ impl OnlineSession {
         if self.last_tick == Some(snapshot) {
             return;
         }
-        let tick = jam_tick_for_score(
+        let jam = jam_tick_for_score(
             u64::from(snapshot.points),
             snapshot.jam_level,
             self.stats_sequence,
             saturate_bonus(snapshot.bonus),
         );
+        let life = life_tick_for_live_play(
+            self.game.live_play(),
+            snapshot.life,
+            self.stats_sequence.saturating_add(1),
+        );
+        if let Err(source) = self
+            .gateway
+            .send_frame(Request::UpdateGameStats.id(), &jam.encode_body())
+        {
+            tracing::debug!(%source, "stats tick send failed; retrying next paint");
+            return;
+        }
         match self
             .gateway
-            .send_frame(Request::UpdateGameStats.id(), &tick.encode_body())
+            .send_frame(Request::UpdateGameStats.id(), &life.encode_body())
         {
             Ok(()) => {
                 self.last_tick = Some(snapshot);
-                self.stats_sequence = self.stats_sequence.saturating_add(1);
+                self.stats_sequence = self.stats_sequence.saturating_add(2);
             }
             Err(source) => {
                 tracing::debug!(%source, "stats tick send failed; retrying next paint");
@@ -219,7 +237,9 @@ impl OnlineSession {
     }
 
     /// Fold one 4015 frame into the mirror (undecodable bodies drop with
-    /// a trace; the socket position is already past them).
+    /// a trace; the socket position is already past them) and forward
+    /// it into the shell, so the Playing paint shows the live gauges
+    /// and result rows from the same echo.
     fn apply_echo(&mut self, frame: &Frame) {
         let Ok(update) = GameStatsUpdate::decode_frame(frame) else {
             tracing::debug!(id = frame.id, "dropping undecodable peer echo");
@@ -228,6 +248,12 @@ impl OnlineSession {
         let applied = apply_peer_update(&mut self.peers, update);
         self.peer_queue = applied.queue;
         self.peer_ranks = applied.ranks;
+        let _ = self.game.apply_peer_echo(
+            update.member_id,
+            update.kind_code,
+            update.value,
+            update.rank_packet(),
+        );
     }
 }
 
@@ -448,16 +474,22 @@ mod session_tests {
     #[test]
     fn tick_sends_jam_channel_with_live_score() {
         let (mut session, server) = playing_session(|mut stream| {
-            let tick = read_tick(&mut stream);
-            assert_eq!(tick.kind, StatKind::Jam);
-            assert_eq!(tick.score, 200);
-            assert_eq!(tick.sequence, 0);
+            let jam = read_tick(&mut stream);
+            assert_eq!(jam.kind, StatKind::Jam);
+            assert_eq!(jam.score, 200);
+            assert_eq!(jam.sequence, 0);
+            let life = read_tick(&mut stream);
+            assert_eq!(life.kind, StatKind::Life);
+            assert_eq!(life.value, 1000);
+            assert_eq!(life.score, 200);
+            assert_eq!(life.sequence, 1);
             assert_quiet(&mut stream);
         });
         session.game.load_chart(vec![(0, 1000, 7)]);
         session.game.strike_at(0, 1000);
         paint_frame(&mut session);
         server.join().unwrap();
+        assert_eq!(session.game.life(), 1000);
         assert!(session.peer_queue().is_none());
         assert_eq!(session.peers().life_levels(), [0; PEER_SLOT_COUNT]);
     }
@@ -465,6 +497,7 @@ mod session_tests {
     #[test]
     fn tick_skips_repeat_snapshots() {
         let (mut session, server) = playing_session(|mut stream| {
+            read_tick(&mut stream);
             read_tick(&mut stream);
             assert_quiet(&mut stream);
         });
@@ -478,17 +511,47 @@ mod session_tests {
     #[test]
     fn tick_resends_after_score_changes() {
         let (mut session, server) = playing_session(|mut stream| {
-            let first = read_tick(&mut stream);
-            assert_eq!(first.score, 200);
-            assert_eq!(first.sequence, 0);
-            let second = read_tick(&mut stream);
-            assert_eq!(second.score, 400);
-            assert_eq!(second.sequence, 1);
+            let first_jam = read_tick(&mut stream);
+            assert_eq!(first_jam.kind, StatKind::Jam);
+            assert_eq!(first_jam.score, 200);
+            assert_eq!(first_jam.sequence, 0);
+            let first_life = read_tick(&mut stream);
+            assert_eq!(first_life.kind, StatKind::Life);
+            assert_eq!(first_life.value, 1000);
+            assert_eq!(first_life.sequence, 1);
+            let second_jam = read_tick(&mut stream);
+            assert_eq!(second_jam.score, 400);
+            assert_eq!(second_jam.sequence, 2);
+            let second_life = read_tick(&mut stream);
+            assert_eq!(second_life.kind, StatKind::Life);
+            assert_eq!(second_life.score, 400);
+            assert_eq!(second_life.sequence, 3);
         });
         session.game.load_chart(vec![(0, 1000, 7), (0, 2000, 7)]);
         session.game.strike_at(0, 1000);
         paint_frame(&mut session);
         session.game.strike_at(0, 2000);
+        paint_frame(&mut session);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn life_tick_follows_a_life_drain() {
+        // A Miss drains the Easy bar 1000 -> 950; the moved snapshot
+        // resends both channels, and the Life tick carries the bar
+        // word the avatar gauge paints.
+        let (mut session, server) = playing_session(|mut stream| {
+            let jam = read_tick(&mut stream);
+            assert_eq!(jam.kind, StatKind::Jam);
+            assert_eq!(jam.score, 0);
+            let life = read_tick(&mut stream);
+            assert_eq!(life.kind, StatKind::Life);
+            assert_eq!(life.value, 950);
+            assert_eq!(life.score, 0);
+        });
+        session.game.load_chart(vec![(0, 1000, 7)]);
+        session.game.strike_at(0, 1000 + 25 + 1);
+        assert_eq!(session.game.life(), 950);
         paint_frame(&mut session);
         server.join().unwrap();
     }
@@ -515,8 +578,10 @@ mod session_tests {
         };
         let (mut session, server) = playing_session(move |mut stream| {
             stream.write_all(&echo.encode()).unwrap();
-            let tick = read_tick(&mut stream);
-            assert_eq!(tick.kind, StatKind::Jam);
+            let jam = read_tick(&mut stream);
+            assert_eq!(jam.kind, StatKind::Jam);
+            let life = read_tick(&mut stream);
+            assert_eq!(life.kind, StatKind::Life);
         });
         paint_frame(&mut session);
         server.join().unwrap();
@@ -532,6 +597,19 @@ mod session_tests {
         // verified remap rule in `PeerBars::apply_rank_broadcast`).
         assert!(session.peer_ranks().is_empty());
         assert_eq!(session.peers().rank_row(0), Some(0));
+        // The same echo seats the shell gauge: slot 2 paints its
+        // full green fill in the Playing mirror.
+        assert_eq!(session.game.live_play().peers().life(2), Some(1000));
+        let mut buf = vec![0u32; 70 * 60];
+        session.game.paint_at(
+            &mut o2jam_render::Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            0,
+        );
+        assert_eq!(buf[2 * 70 + 65], o2jam_render::pack_xrgb(0x20, 0xE0, 0x20));
     }
 
     #[test]
@@ -545,6 +623,7 @@ mod session_tests {
         let (mut session, server) = playing_session(move |mut stream| {
             stream.write_all(&echo.encode()).unwrap();
             read_tick(&mut stream);
+            read_tick(&mut stream);
         });
         paint_frame(&mut session);
         server.join().unwrap();
@@ -552,6 +631,10 @@ mod session_tests {
         assert_eq!(session.peers().life(1), Some(0));
         assert_eq!(session.peers().jam(1), Some(0));
         assert_eq!(session.peer_ranks().len(), PEER_SLOT_COUNT);
+        // The shell mirror follows the same rule: no stats write, no
+        // seated gauge — but the all-zero broadcast still resolves.
+        assert_eq!(session.game.live_play().peers().life(1), Some(0));
+        assert_eq!(session.game.live_play().peers().rank_row(0), Some(0));
     }
 
     #[test]
@@ -566,12 +649,14 @@ mod session_tests {
             stream.write_all(&encode_frame(6001, &[])).unwrap();
             stream.write_all(&echo.encode()).unwrap();
             read_tick(&mut stream);
+            read_tick(&mut stream);
         });
         session.game.load_chart(vec![(0, 1000, 7)]);
         session.game.strike_at(0, 1000);
         paint_frame(&mut session);
         server.join().unwrap();
         assert_eq!(session.peers().jam(0), Some(3));
+        assert_eq!(session.game.live_play().peers().jam(0), Some(3));
         // All-zero packet matches the fresh mirror's zero holders, so
         // every position delivers (same shape `run_song_flow` proves).
         assert_eq!(session.peer_ranks().len(), PEER_SLOT_COUNT);

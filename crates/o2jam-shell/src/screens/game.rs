@@ -31,7 +31,7 @@ use super::side::{
 use crate::MenuKey;
 use o2jam_audio::{AudioBackend, PcmSamples};
 use o2jam_file::OjnListEntry;
-use o2jam_game::{PeerBars, RankDelivery, RoomTeams, PEER_SLOT_COUNT};
+use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams, PEER_SLOT_COUNT};
 use o2jam_net::play::SetRoomMusic;
 use o2jam_net::rooms::{SendWaitingMessage, WaitingAdminMessage, WaitingUserMessage};
 use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry};
@@ -715,6 +715,39 @@ impl ScreenGame {
     ) -> Vec<RankDelivery> {
         self.playing.set_rank_holders(global, stored);
         self.playing.apply_peer_ranks(packet)
+    }
+
+    /// Live play behind the highway: the session's tick source
+    /// (Life/Jam channels read score, life, and bonus through it).
+    #[must_use]
+    pub fn live_play(&self) -> &LivePlay {
+        &self.playing
+    }
+
+    /// Live life word for the session Life channel: the avatar
+    /// gauge's bar value (row 0 of [`Self::result_rank_rows`]
+    /// carries points, jam level, and bonus — never life).
+    #[must_use]
+    pub fn life(&self) -> u16 {
+        self.playing.life()
+    }
+
+    /// Fold one live 4015 echo into the Playing peer mirror: the
+    /// stats write first (seating its gauge), then the 8-byte rank
+    /// broadcast (filling result rows under the remap rule) — the
+    /// same order the session bridge applies, so the session mirror
+    /// and the painted bars never diverge. Returns the queue forward
+    /// plus the rank deliveries.
+    pub fn apply_peer_echo(
+        &mut self,
+        slot: u8,
+        kind: u16,
+        value: u16,
+        packet: [u8; PEER_SLOT_COUNT],
+    ) -> (Option<QueueEvent>, Vec<RankDelivery>) {
+        let queue = self.playing.apply_peer_stats(slot, kind, value);
+        let ranks = self.playing.apply_peer_ranks(packet);
+        (queue, ranks)
     }
 
     /// Rank-1 battle verdict for the claimed local team, if known.
@@ -1731,6 +1764,42 @@ mod game_tests {
             4995,
         );
         assert_eq!(game.screen(), Screen::Playing);
+    }
+
+    #[test]
+    fn life_read_reports_the_avatar_gauge_word() {
+        // Life-channel seam: full until play moves it, always the
+        // bar word behind the gauge (rank row 0 never carries it).
+        let mut game = ScreenGame::new();
+        assert_eq!(game.life(), o2jam_game::LIFE_MAX);
+        game.load_chart(vec![(0, 1000, 7), (0, 2000, 7)]);
+        game.strike_at(0, 1000);
+        assert_eq!(game.life(), game.live_play().score().life.life());
+    }
+
+    #[test]
+    fn peer_echo_seats_a_gauge_in_playing_paint() {
+        // Session-mirror wiring: one Life echo seats slot 0 (queue
+        // forward plus the all-zero rank broadcast), and the Playing
+        // paint fills its top-right gauge green.
+        let mut game = ScreenGame::new();
+        game.load_chart(vec![(0, 5000, 7)]);
+        walk_to_playing(&mut game);
+        let (queue, ranks) =
+            game.apply_peer_echo(0, o2jam_game::STAT_LIFE, o2jam_game::LIFE_MAX, [0; 8]);
+        assert!(queue.is_some());
+        assert_eq!(ranks.len(), 8);
+        assert_eq!(game.live_play().peers().life(0), Some(o2jam_game::LIFE_MAX));
+        let mut buf = vec![0u32; 70 * 60];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            0,
+        );
+        assert_eq!(buf[65], pack_xrgb(0x20, 0xE0, 0x20));
     }
 
     fn two_channels() -> Vec<ChannelState> {

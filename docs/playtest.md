@@ -2820,3 +2820,58 @@ transport (`b9b604b`: `session.rs` online-session chat bridge,
   recomp2jam 104 → 109 from the chat-bridge work, all other targets
   unchanged, 0 failures). No lint findings. No commits, no pushes.**
   This sweep touched only `docs/playtest.md`.
+
+## Regression sweep — 2026-11-08 10:46 UTC+8 (HEAD `5499e17`, tree dirty mid-sweep)
+
+Live re-proof on the stats-head. Covers the feat commit landed after the
+bridge-head baseline `b9b604b`: send live stats over session bridge
+(`5499e17`: `crates/recomp2jam/src/session.rs` +424/-25 plus the sweep
+log in this file).
+
+- `cargo fmt --check`: clean, `exit=0`, and re-run clean on the dirty
+  state below.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`, and re-run clean on the dirty state below. No lint
+  findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1414 passed, 0 failed, 0 ignored**, `exit=0`.
+  Per target: audio 20, dump 7, file 177, game 94, net 360,
+  render 89, shell 521, real_art 7, scenes 22, recomp2jam 117
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, 0 warning
+  lines (touched-`main.rs` rebuild check).
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.59 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`10:44:48 +08:00`):
+  `Create room: songflow` →
+  `Update room [000] music settings: [HX / X10 / o2ma757]` →
+  `Update room [000] arena: [1] (0)` →
+  `Get music list: [0/00] 562 music` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` →
+  `Game [000] Update #1 - Jam: 3 (Bonus: 0)` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  connection-lost WARNs on room delete; a second session walked
+  `Authorize session` → `Get channel list: [0]` →
+  `Enter channel: [0/00]` → `Get room list: [0/00]`).
+  Re-run on the dirty state (`10:45:58 +08:00`): **ok**
+  (1 passed, 0 failed, 0.61 s; 117 filtered out, i.e. the peer's
+  +1 in-flight session test compiled in and the flow still passes).
+- **Verdict: no regression — suite is green on the stats-head (1414
+  passed; +8 vs the 1406 bridge-head baseline, all recomp2jam
+  109 → 117 from the stats-commit's session-bridge tests — `git show
+  HEAD` confirms exactly 8 added `#[test]` — all other targets
+  unchanged, 0 failures). No lint findings. No commits, no pushes.**
+  This sweep touched only `docs/playtest.md`.
+- Tree note: a peer saved uncommitted in-flight work three times
+  mid-sweep (`o2jam-shell/src/playing.rs` 10:44:11, `screens/game.rs`
+  10:44:32, `recomp2jam/src/session.rs` 10:45:02 +08:00; +212/-35
+  overall, 4 added `#[test]` with none removed). The workspace-test
+  counts above pin to HEAD — the peer's 4 tests are absent from them
+  (shell 521 = baseline, recomp2jam 117 = 109 + the stats commit's 8).
+  fmt, clippy, and the live flow were each re-run after the saves and
+  stayed green on the dirty state. Per the sweep rules (touch only
+  `docs/playtest.md`, fix only my own lint findings) the peer's files
+  were left alone.
