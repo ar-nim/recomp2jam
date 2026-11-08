@@ -23,6 +23,7 @@ use o2jam_shell::screens::side::SELECT_MUSIC_DIALOG_BLOCK;
 use o2jam_shell::{GameLoop, MenuKey, PlaySkin, Screen, ScreenGame};
 
 use crate::connect::stack_worn_figure;
+use crate::loading::{loading_phase_status, LOADING_GATE_STEPS};
 
 /// Screenshot width in pixels.
 pub const SHOT_W: usize = 400;
@@ -54,7 +55,9 @@ pub struct Shot {
 /// digits, rank rows) stay provable instead of downscale smudges.
 /// The musicselect shot repaints Waiting with the
 /// staged `DAILOG_SELECTMUSIC` dialog on top (host song flow: catalog
-/// plus pick), and the playing shot paints a mid-song state: the 5 s
+/// plus pick), and the loading shot threads the gate phases to the
+/// clock-armed full fraction with the staged catalog title/artist
+/// (see `stage_loading_status`), and the playing shot paints a mid-song state: the 5 s
 /// tap is struck, then the long-note head (combo 2), and the paint
 /// lands 100 ms later while the held beam, hit burst, judgement
 /// word, tally counts, and TIME progress show; the scripted key-up
@@ -76,6 +79,7 @@ pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
     stage_select_music_scene(&mut game);
     shots.push(shoot_checked(&mut game, "musicselect", Screen::Waiting, 0)?);
     game.menu_key(MenuKey::Confirm, true);
+    stage_loading_status(&mut game);
     shots.push(shoot_checked(&mut game, "loading", Screen::Loading, 0)?);
     stage_playing_scene(&mut game);
     game.menu_key(MenuKey::Confirm, true);
@@ -576,6 +580,35 @@ fn stage_select_music_art(game: &mut ScreenGame) {
         return;
     }
     game.load_select_music_scene(placements, figures);
+}
+
+/// Catalog title/artist for the host pick: the loading caption
+/// source (staged `OJNList.dat` order). `None` while the staged
+/// catalog names no such song — the walk keeps its indeterminate
+/// bar rather than inventing a caption.
+fn loading_song_caption(game: &ScreenGame) -> Option<(String, String)> {
+    let wanted = u32::from(PLAYING_SONG.music_id);
+    game.select_songs()
+        .iter()
+        .find(|song| song.song_id == wanted)
+        .map(|song| (song.title.clone(), song.artist.clone()))
+}
+
+/// Stage the loading shot's live walk status: thread the gate
+/// phases (entry plus the four staging/decrypt/decode/arm steps)
+/// through `loading_phase_status` with the staged catalog caption,
+/// holding the clock-armed full fraction for the paint. Staged
+/// after the Waiting→Loading edge so earlier shots stay untouched;
+/// keeps the indeterminate bar while the catalog names no song.
+fn stage_loading_status(game: &mut ScreenGame) {
+    let Some((title, artist)) = loading_song_caption(game) else {
+        return;
+    };
+    for phase in 0..=LOADING_GATE_STEPS {
+        if let Some(status) = loading_phase_status(phase, &title, &artist) {
+            game.set_loading_status(status);
+        }
+    }
 }
 
 /// Synthetic fallback catalog: the 7.55 `OJNList.dat` record shape
@@ -2269,6 +2302,76 @@ mod tests {
             });
             assert_pixels_came_from_font(&actual, &expected, text);
         }
+    }
+
+    #[test]
+    fn loading_stage_drives_all_gate_phases_with_catalog_caption() {
+        // The loading shot's wiring: every gate phase (entry plus
+        // the four staging/decrypt/decode/arm steps) holds a real
+        // fraction with the staged catalog title/artist, the step
+        // past the gate stays indeterminate, and the staged walk
+        // holds the clock-armed full fraction with its caption.
+        use crate::loading::{loading_phase_status, LOADING_GATE_STEPS};
+        use std::cmp::Ordering;
+        let mut game = seeded_game();
+        walk_to_waiting(&mut game);
+        stage_select_music_scene(&mut game);
+        let wanted = u32::from(PLAYING_SONG.music_id);
+        let (title, artist) = game
+            .select_songs()
+            .iter()
+            .find(|song| song.song_id == wanted)
+            .map(|song| (song.title.clone(), song.artist.clone()))
+            .expect("staged catalog names the host pick");
+        for phase in 0..=LOADING_GATE_STEPS {
+            let status = loading_phase_status(phase, &title, &artist)
+                .expect("gate phase holds a real fraction");
+            assert_eq!(status.title, title);
+            assert_eq!(status.artist, artist);
+        }
+        assert!(
+            loading_phase_status(LOADING_GATE_STEPS + 1, &title, &artist).is_none(),
+            "the step past the gate stays indeterminate"
+        );
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Loading);
+        stage_loading_status(&mut game);
+        let status = game
+            .loading_status()
+            .expect("loading holds the armed status");
+        assert_eq!(
+            status.clamped_progress().total_cmp(&1.0),
+            Ordering::Equal,
+            "the armed clock reads full"
+        );
+        let caption = status
+            .caption()
+            .expect("armed status captions the staged song");
+        assert!(
+            caption.contains(&title) && caption.contains(&artist),
+            "caption `{caption}` names the staged song"
+        );
+    }
+
+    #[test]
+    fn loading_shot_paints_staged_fraction_and_caption() {
+        // The staged walk status reaches the paint: the captioned
+        // frame differs from the cleared indeterminate frame, so
+        // `loading.png` proves the `with_status` path, not the bare
+        // full bar.
+        let mut game = seeded_game();
+        walk_to_waiting(&mut game);
+        stage_select_music_scene(&mut game);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Loading);
+        stage_loading_status(&mut game);
+        assert!(game.loading_status().is_some());
+        let mut staged = native_probe();
+        paint_probe(&mut staged, |frame| game.paint_at(frame, 0));
+        game.clear_loading();
+        let mut bare = native_probe();
+        paint_probe(&mut bare, |frame| game.paint_at(frame, 0));
+        assert_ne!(staged, bare, "staged caption changed no pixels");
     }
 
     #[test]

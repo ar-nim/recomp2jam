@@ -2581,3 +2581,104 @@ pins (`8891811`) and the stale-claims audit docs log (`1480651`).
   92 → 94 from the lane end-marker tests (`8891811`), all other
   targets unchanged, 0 failures). No lint findings. No commits,
   no pushes.** This sweep touched only `docs/playtest.md`.
+
+## Regression sweep — 2026-11-08 08:58 UTC+8 (HEAD `1efaf71`, tree clean)
+
+Live re-proof on the consistency-head. Covers the docs-only commit
+`1efaf71` (claims table consistency pass log re-proof) landed after the
+endmarker-head baseline `1480651`.
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1386 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 7, file 177, game 94, net 360,
+  render 89, shell 509, real_art 7, scenes 22, recomp2jam 102
+  (6 doc-test targets, 0 each) — identical to the `1480651` baseline.
+- `cargo build --workspace --release`: clean, `exit=0`, 0 warning
+  lines.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.61 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`08:57:16 +08:00`, session
+  `127.0.0.1:43034`): `Authorize session` → `Get channel list: [0]` →
+  `Enter channel: [0/00]` → `Get character info: [tester]` →
+  `Create room: songflow` →
+  `Update room [000] music settings: [HX / X10 / o2ma757]` →
+  `Update room [000] arena: [1] (0)` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Update #1 - Jam: 3 (Bonus: 0)` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  `ScoreTracker::OnGameCompleted` broadcast WARNs on room delete; no
+  `Finalize rank`/`Leave game` flushed before session close; a second
+  session `127.0.0.1:43038` walked `Authorize session` →
+  `Get channel list: [0]` → `Enter channel: [0/00]` →
+  `Get room list: [0/00]` → `Get character info: [tester]`).
+- **Verdict: no regression — suite is green on the consistency-head
+  (1386 passed, identical to the `1480651` endmarker-head baseline;
+  the delta commit is docs-only, 0 failures). No lint findings. No
+  commits, no pushes.** This sweep touched only `docs/playtest.md`.
+
+## Regression sweep — 2026-11-08 09:57 UTC+8 (HEAD `1efaf71`, tree dirty — peer editing throughout)
+
+Live re-proof on the consistency-head, re-taken: HEAD is unchanged
+(`1efaf71`, docs-only over the endmarker baseline `1480651`), but a
+peer kept uncommitted in-flight work landing all through this sweep
+(`crates/recomp2jam/src/shots.rs` +106/-1, `docs/parity.md`,
+`docs/screenshots/loading.png`, plus the earlier uncommitted 08:58
+sweep section in this file). Every gate below ran while the peer was
+saving; code affecting the gates is HEAD unless noted.
+
+- `cargo fmt --check`: clean, `exit=0`, on HEAD code at sweep start.
+  Re-run on the dirty state: FAILS (`exit=1`) on three of the peer's
+  new `shots.rs` hunks (import ordering `loading::{...}` x2, one
+  over-long `game.select_songs()` chain). Not mine — left alone per
+  the sweep rules (touch only `docs/playtest.md`, fix only my own
+  lint findings), so no fmt fix was applied.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`, on HEAD code and re-run clean on the dirty state. No
+  lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1386 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0` —
+  ran twice, identical counts, both on HEAD code (the peer's
+  `shots.rs` edit was reverted between the runs; `git status` showed
+  no code files dirty either time). Per target: audio 19, dump 7,
+  file 177, game 94, net 360, render 89, shell 509, real_art 7,
+  scenes 22, recomp2jam 102 (6 doc-test targets, 0 each) — identical
+  to the `1480651` baseline, as expected for a docs-only HEAD.
+- `cargo build --workspace --release`: clean, `exit=0`, on HEAD code.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.59 s, run twice green) against local
+  Memoryer 7.2.0 (`Mode=Full`). First attempt at `09:54:36 +08:00`
+  did NOT compile: it raced a peer save carrying a broken
+  intermediate (`E0502` borrow in `shots.rs` test code); the peer
+  fixed it within the minute and both re-runs passed. Server log for
+  the confirming run (`09:56:07 +08:00`, session `127.0.0.1:51870`):
+  `Authorize session` → `Create room: songflow` →
+  `Update room [000] music settings: [HX / X10 / o2ma757]` →
+  `Update room [000] arena: [1] (0)` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure stack on room delete; a second session
+  `127.0.0.1:51872` walked `Authorize session` →
+  `Get channel list: [0]` → `Enter channel: [0/00]` →
+  `Get room list: [0/00]` → `Get character info: [tester]`).
+  The live path (`connect.rs`) is HEAD code; the peer's dirty files
+  (`shots.rs`, `parity.md`, `loading.png`) do not touch it.
+- **Verdict: no regression — suite is green on the consistency-head
+  (1386 passed, identical to the endmarker-head baseline; docs-only
+  delta, 0 failures) and the live song flow is green (Submit score
+  2210 server-logged). The only red is `cargo fmt --check` on the
+  current dirty state, caused solely by the peer's uncommitted
+  `shots.rs` hunks — not fixed per the sweep rules. No commits, no
+  pushes.** This sweep touched only `docs/playtest.md`.

@@ -65,7 +65,7 @@ invented placement remains (cited per cell), never for lack of art.
 
 | Dimension | 7.55 expectation (evidence) | Shell status | Verdict |
 |---|---|---|---|
-| Composition | `MusicLoading.ojs`, Trebuchet/Arial fonts, song-table walk + clock arm (`FUN_004e47a0` file `0xe47a0`, ev `68d920c2…`); OJN decrypt + Vorbis init precede it (lifecycle §9) | Soak stages genuine planet art full-canvas (`loading.png`); bare `BOUND` makes full-bleed the documented fallback, but per-sprite native sizes are ignored (audit 23). Still FAIL: bar is an unbound centered placeholder track/fill (audit 35) with no progress fraction, no fonts, no OJN/Vorbis path | FAIL |
+| Composition | `MusicLoading.ojs`, Trebuchet/Arial fonts, song-table walk + clock arm (`FUN_004e47a0` file `0xe47a0`, ev `68d920c2…`); OJN decrypt + Vorbis init precede it (lifecycle §9) | Soak stages genuine planet art full-canvas (`loading.png`); bare `BOUND` makes full-bleed the documented fallback, but per-sprite native sizes are ignored (audit 23). Re-shot 2026-11-08: the walk threads the gate phases (entry plus staging/decrypt/decode/arm) through `loading_phase_status` with the staged catalog title/artist (song 757, `OJNList.dat` row through the lossy UTF-8 decode — CP949 bytes render as replacements around the ASCII `(O2 Ver.)[3K]` tag) and holds the clock-armed full fraction, so the frame proves the `with_status` path (252 px of new caption ink at the placeholder row, bar unchanged full). Guarded by `loading_stage_drives_all_gate_phases_with_catalog_caption` and `loading_shot_paints_staged_fraction_and_caption`. Still FAIL: bar and caption row are unbound centered placeholders (audit 35), no fonts, no OJN/Vorbis path | FAIL |
 | Input | Host start triggers gate | Confirm → Playing, Back → Waiting | OPEN (no validation/staging) |
 | Timing | Select validation `0x5718b0` → staging `0x4f8b80` → decrypt `0x412180` → codec `0x54db40` → load screen | Instant on Confirm | OPEN |
 | Transitions | `Waiting → Loading → Playing`, `Loading → Waiting` | Implemented + tested | PASS |
@@ -121,7 +121,8 @@ scenario, so structure, not pixels, is compared):
 | `result.png` vs `reference-result-4x3.png` | REFRESHED (was stale). Score dome (48.6 vs 50.7), verdict banner (46.5 vs 48.7), rank table (85.3 vs 48.5), footer (59.1 vs 51.2). The checked-in PNG predated the rank-row wiring (`04e2462`) — its row band was empty; the re-shoot carries row 0 (`YOU`, `1/0/0/0`, `200`) at the pinned columns, guarded by `result_shot_paints_the_rank_table_row` (proven to fail on wrong text). Scenario deltas vs the photo stay: GOOD! solo arm vs LOSE, one local row vs two wire rows, P plate vs C |
 | `musicselect.png` vs `reference-musicselect-4x3.png` | NEW (was UNCOVERED — no shot mapped to it). The walk now repaints Waiting through the host song flow (installed 7.55 562-song catalog, pick id 757 Hard X3.5; 4-song synthetic fallback without game data) under genuine `DAILOG_SELECTMUSIC` art, and the staged structure paints over it: filter columns (75.0 vs 183.4), search table (61.3 vs 83.2), status + search row (76.4 vs 114.7), chosung + OK (84.3 vs 128.1) — staged ink in every band on both sides. Still FAIL: per-chart level and grade cells draw the unknown dash (never staged), the 다운/듣기/정보 icon cells stay blank (no staged art), chosung hangul + word cells stay blank (no CP949 glyphs), the dialog bind pairing is unproven (the every-bound-entry proof covers Playing + Room only), and pager/search/chosung are display-only. Guarded by `musicselect_shot_repaints_waiting_with_song_panel`, `musicselect_fallback_catalog_lists_four_synthetic_songs`, `musicselect_dialog_structure_paints_search_tab_over_waiting` |
 | `channel.png` | REFRESHED (was stale). Re-shot 2026-11-07 after the no-fill pin: the staged full-canvas bar is gone (audit 15 — rect is one panel, never the canvas), the shot now stages the empty scene, and the frame reads as art-less black + scrim + list + `CHANNEL` stamp + cursor (corner `(0,0)` untouched, navy count 0, 2170 inked px of 120000). No reference photo covers it; list rows stay at invented `h/4 + i*8` (audit 10–11), no bar body (host unpinned) |
-| `room.png`, `loading.png` | HOLD, byte-identical (no drift). No reference photo covers them; loading keeps staged `MusicLoading.ojs` art + green bar (1600 px) + bright caption ink under the no-fill rule (empty stage would paint nothing, staged art is unaffected) |
+| `room.png` | HOLD, byte-identical (no drift). No reference photo covers it |
+| `loading.png` | REFRESHED 2026-11-08: the walk holds the clock-armed full fraction with the staged catalog caption (song 757) — 252 px of new caption ink at the placeholder row, bar unchanged full; guarded by the two loading-stage tests. No reference photo covers it; staged `MusicLoading.ojs` art + green bar under the no-fill rule (empty stage would paint nothing, staged art is unaffected) |
 
 Chat refresh 2026-11-07: only `waiting.png` changed (1104 bytes
 of two chat rows at the list origin); every other shot byte-identical
@@ -200,12 +201,12 @@ Dialog stays FAIL (blank level/grade/icon/chosung cells, unproven bind pairing, 
 
 Verify pass 2026-11-08 (chat-box verify on top of the
 2026-11-07 passes: post no-fill, chat refresh, caption refresh):
-2 HOLD (playing + room/loading byte-identical at their last
+2 HOLD (playing + room byte-identical at their last
 verified pass; the 2026-11-08 regen carries pre-existing
-`playing.png` drift — see the chat-box verify note), 4 REFRESHED
+`playing.png` drift — see the chat-box verify note), 5 REFRESHED
 (result rank rows; channel art-less re-shoot; waiting scripted
 chat rows + staged captions; waiting chat band re-verified and
-corrected), 1 NEW (musicselect song dialog). Detail in "Reference-photo verify
+corrected; loading live fraction + caption), 1 NEW (musicselect song dialog). Detail in "Reference-photo verify
 pass" above.
 
 - Scenes covered: 7 main + musicselect dialog + loading gate + 9 side states.
