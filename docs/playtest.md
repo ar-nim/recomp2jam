@@ -3867,3 +3867,35 @@ narrow unscored (`5610f55`).
   (0 warnings) under the dirty state. The 3 failures belong to the
   peer's uncommitted work, not to HEAD `5610f55`. This sweep touched
   only `docs/playtest.md`.
+
+## Regression sweep — 2026-11-08 07:38 UTC (HEAD `72ea4ca`, tree clean)
+
+Live re-proof on the boot-head. Covers the grade-base fix commit landed
+above the unscored-head baseline `5610f55`: wine boot proof (`72ea4ca`:
+game grade-base rework, shell paint alignment, `docs/wine-boot.md`).
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1616 passed, 0 failed, 0 ignored**, `exit=0`.
+  Per target: audio 20, dump 7, file 180, game 108, net 420,
+  render 89, shell 585, real_art 7, scenes 22, recomp2jam 178
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, no warnings.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 177 filtered out, 0.61 s) against local
+  Memoryer 7.2.0 (`Mode=Full`). Server log for this run
+  (`15:38:25 +08:00`): `Authorize session` →
+  `Create room: songflow` → `Get music list: [0/00] 562 music` →
+  `Start game: [000]` → `Game [000] Submit score: 2210`
+  (followed by the known benign broadcast-failure stack on room
+  delete; a second session walked `Get channel list` →
+  `Enter channel` → `Get character info`).
+- **Verdict: no regression — suite is green on the boot-head (1616
+  passed; +1 vs the 1615 unscored-head baseline, game +1 from the
+  grade-base fix, all other targets unchanged, 0 failures). No lint
+  findings. No commits, no pushes.** This sweep touched only
+  `docs/playtest.md`.

@@ -108,7 +108,17 @@ Pre-gate sequence from the same trace (function near `0x5AD080`):
 `NoteScreen/BlendHalf=1` from (missing) `option.ini` — defaults apply,
 matching the key table in `docs/lifecycle.md` — then the gate box.
 The gate check itself makes no further API calls (pure command-line
-validation), so the exact argv format is still unknown.
+validation). The pinned argv shape is `OTwo.exe <blob> (|test|??|<addr>|<port>)
+x5`: one RSA-encrypted `AuthParameters` blob (19 two-digit-length-prefixed
+fields; cipher P=251 Q=269 E=20891 D=68711, six hex chars per block) plus five
+identical gateway mirrors. Exe side, the `IDENTIFICATION` key reads (`USER_ID1`
+file `0x1ab47a`, `PASSWORD1` file `0x1ab4c5`, `USER_ID` file `0x1ab535`,
+`PASSWORD` file `0x1ab580`, `USER_INDEX_ID` files `0x1ab5cb`/`0x1ab5d0`), the
+5-bounded `IP%d`/`PORT%d` loop (bound file `0x1ab5f5`), `PCROOM_USER` (file
+`0x1ab80b`), `MEMBERSHIP` vs `NULL` (file `0x1ab878`), and the five-tag channel
+chain (files `0x1ab8a9`–`0x1ab939`, result into global `0x768b7c`) match that
+shape. Still OPEN: the in-exe blob-decrypt site, and a live blob+mirrors
+probe past the dialog.
 
 Second instance while one is alive — `GetLastError()=0xB7`
 (`ERROR_ALREADY_EXISTS`) → different box:
@@ -129,7 +139,9 @@ writes `AngelO2Jam <date>.dmp` + `.log` on a crash. Two crashes observed
 2. `2026-11-08 15-29-35` — after passing dummy session argv
    (`USER_ID=testuser PASSWORD=testpass USER_INDEX_ID=1`), thread `0x140`
    faulted at `0x5F2893` (game RVA `0x1F2893`, file offset `0x1F2893`).
-   Dummy argv gets past the gate dialog into deeper init, then AVs.
+   That bare `KEY=value` shape is not the pinned blob+mirrors shape, so its
+   pass past the dialog proves only that the dialog is satisfiable, not that
+   the fields validated; then it AVs in deeper init.
 
 Suspicious: `0xFFBC11B0` killed a winedbg helper thread too (see below).
 Identical fault address in two processes points at a Wine/wow64 mapping
@@ -156,18 +168,154 @@ A later launch with leftover `.dmp` files present shows a third box:
   captures, prefer launch-under-debugger plus `thread <id>` before `bt`;
   plain `bt` may run against the helper thread.
 
+## Attempt 4 — real `game:start` blob, past the gate (2026-11-08)
+
+First live probe of the pinned launcher argv shape. No gate dialog
+appears with a valid blob: the client boots straight into a rendered
+in-game notice/event carousel (see below). No crash, no game screen
+beyond the carousel, no network yet.
+
+### Blob mint (read-only, no Memoryer edits)
+
+`Memoryer.Encore game:start` was NOT invoked (it would `Process.Start`
+the exe itself). Instead `/tmp/mint_blob.py` ports
+`AuthParameterRsaCipher.cs` + `AuthParameters.cs` to Python exactly
+(P=251 Q=269 E=20891 D=68711, lookup-table + `ModExp` fallback,
+6-hex-chars per block) and rebuilds the 19-field plaintext + 5 mirrors.
+Zero writes: the tester session token comes from a read-only SQLite
+query (`mode=ro`) of `~/memoryer-local/O2JAM.db`, and `CreateSession`
+would have returned the existing session anyway.
+
+Field values used: `UserIndexId=1`, `Username=61dcb457-…` (existing
+tester session token from `t_o2jam_login`), `Level=2`, `Gender=1`,
+`Nickname=tester`, `Rank=0` (all from `t_o2jam_charinfo` +
+`t_o2jam_user_ranking`), `GatewayAddress=127.0.0.1`,
+`GatewayPort=15010` (local Memoryer gateway), Memoryer defaults for
+the rest (`GameVersion=8.05`, `Password=1234567890`,
+`FtpAddresses=127.0.0.1|127.0.0.1`, `Membership=O2JAM`, …).
+Result: 239-char plaintext → 720-char blob (120 blocks), Python
+encrypt→decrypt roundtrip OK. Argv: `OTwo.exe <blob>` +
+`|test|??|127.0.0.1|15010` ×5 (kept in `/tmp/o2jam-blob.txt`,
+`/tmp/o2jam-argv.txt`, outside the repo).
+
+### What happens past the gate
+
+Recipe (`/tmp/o2jam-gamestart.fish`): `DISPLAY=:98`,
+`WINEPREFIX=$HOME/o2jam-prefix`, virtual desktop 800x600, audio to
+void sink (see below), `timeout -s KILL 100`.
+
+- No gate dialog. The client shows a full-screen notice carousel:
+  top tabs H/M/G/QUEST/TUTORIAL, center rotating promo pages
+  (`NEW ITEM` costume-avatar page, `NEW MUSIC` October package page,
+  Halloween pumpkin-candy page), bottom `MENU` bar with back-arrow,
+  pager (`< ■ >`), gear + power buttons. Screenshots
+  `/tmp/o2jam-shot{2,4,5,6,7}.png` (190–237 KB — real rendered
+  frames, not a static dialog).
+- Process runs hot (~128% CPU: live render loop), audio stream
+  `OTwo.exe` appears on the sound server, `ieframe`/`urlmon` init
+  (notice content path), no `.dmp`/`.log` crash files written.
+- No TCP to `127.0.0.1:15010` (`ss` empty, no new `Authorize` lines
+  in `server-live.log`): the client does not contact the gateway
+  while the notice is up.
+- Stage: pre-`STATE_AVI` notice overlay. Its state mapping
+  (dialog class? shell state?) is OPEN — it is not in
+  `docs/lifecycle.md`.
+
+### Input probes (python-xlib XTEST on :98, new capability)
+
+`xdotool` is absent but `python-xlib` (0.33) is installed: key and
+mouse injection works (`/tmp/xtest_key.py`, `/tmp/xtest_click.py`).
+Tried on the carousel: Escape advances the page (or the carousel
+auto-rotates — ambiguous), MENU-bar back-arrow click (143,566) =
+previous page, Enter inconclusive (run reaped by its timeout mid
+probe). The notice dismissal path stays OPEN; no input ever touched
+the real display.
+
+### Audio containment (per owner request)
+
+Game audio reached the speakers on every fresh run: muting one run
+with `pactl` did NOT stick (PipeWire stream-restore did not re-mute
+new `OTwo.exe` streams). Permanent fix: a void null sink
+(`pactl load-module module-null-sink sink_name=wine_null`) +
+`PULSE_SINK=wine_null` in every launcher script. Verified: new
+runs are born on sink `wine_null` (`Sink Input` shows `Sink: 4118`,
+the null sink) — silence by construction, game behavior unchanged
+(audio still initializes). Muted-forever, restart-proof.
+
+### Process hygiene finding
+
+`timeout -s KILL` does NOT reap Wine children: the game is a child
+of wineserver, not of the timed-out process, so it outlives the
+timeout. Always follow with `pkill -9 -x OTwo.exe` /
+`AngelO2Jam.exe` (+ `wineserver -k`); several runs here needed
+explicit kills (verified zero remain afterwards).
+
+One misconfigured launcher revision omitted `DISPLAY`, so one run
+rendered on `:0` (XWayland real display) instead of Xvfb `:98`.
+Killed immediately; all launcher scripts now pin `DISPLAY=:98` and
+later runs were verified on `:98` only (`xwininfo`-style window
+count via xlib). No game bytes changed anywhere.
+
+## Attempt 5 — Korean prefix, mojibake fixed (2026-11-08)
+
+Per owner direction (dedicated Korean-language prefix; winetricks
+suggested but no binary installed — script fetched from upstream
+instead). Prefix: `cp -a $HOME/o2jam-prefix $HOME/o2jam-prefix-ko`
+(380 MB clone, no 8-minute `wineboot`).
+
+Recipe that works:
+
+1. Locale: user-local `localedef -i ko_KR -f UTF-8` into
+   `~/.local/share/wine-locales`, run everything with
+   `LOCPATH=… LANG=ko_KR.UTF-8`. Wine reports
+   `HKCU\Software\Wine\Fonts Codepages = 949,949` — the ANSI
+   codepage is CP949, so bytes decode to the right codepoints.
+2. Fonts: `/tmp/winetricks --unattended baekmuk` (Baekmuk
+   Batang/Gulim/Dotum — the era-correct Korean faces) + a copy of
+   system `NotoSansCJK-Regular.ttc` into `drive_c/windows/Fonts`.
+   Both register fine (`Baekmuk Gulim`, `Noto Sans CJK KR` visible
+   in `HKLM\…\Fonts`).
+3. Fallback that actually works: `FontLink\SystemLink` entries for
+   `Tahoma` / `Microsoft Sans Serif` / `MS Shell Dlg` →
+   `gulim.ttf,Baekmuk Gulim` + Noto CJK KR. What did NOT work:
+   `Fonts\Replacements` (silently skipped for available fonts —
+   `+font` trace: `L"Tahoma" is available. Skip this
+   replacement`), and overriding the `Tahoma (TrueType)` file path
+   in `HKLM\…\Fonts` (bundled
+   `/usr/share/wine/fonts/tahoma.ttf` still wins).
+4. Import-encoding trap: Wine's `regedit` widens every `hex(7)`
+   byte to WCHAR, so the `.reg` payload must be single-byte chars
+   (`67,75,6c,…`), NOT pre-encoded UTF-16 (`67,00,75,00,…` stores
+garbage — confirmed via `regedit /E` roundtrip). Generator:
+`/tmp/gen_fontlink.py` (v2).
+
+Proof: bare-launch gate dialog now reads `정보` /
+`홈페이지에서 로그인 후 GameStart을 실행하세요!` — byte-exact
+against the `+relay`-decoded CP949 string (`/tmp/o2jam-shot15.png`).
+And the `game:start` run under the ko prefix
+(`/tmp/o2jam-gamestart-ko.fish`, same blob) renders the notice
+carousel in fully readable Korean (`10월 신곡 패키지 예약 판매`,
+`기간: 10월 21일 ~ 10월 27일`, tab labels —
+`/tmp/o2jam-shot19.png`). Korean text inside game rendering (not
+just MessageBox) is confirmed working.
+
+Still true under ko prefix: no gateway TCP while the notice is up
+(no new `server-live.log` lines), no crash dumps.
+
 ## Boot stage reached and blockers
 
-Reached (maps to `docs/lifecycle.md` stages 0–3, never 4+):
+Reached (maps to `docs/lifecycle.md` stages 0–3, never 4+, plus an unmapped pre-AVI notice overlay):
 CRT entry → exception-filter install → cwd/`*.dmp` scan → single-instance
-mutex → `option.ini` defaults → session/argv validation → gate dialog.
-No `STATE_AVI`, no DirectDraw mode-set, no archive reads observed.
+mutex → `option.ini` defaults → session/argv validation → gate dialog (bare launch) or notice carousel (valid blob+mirrors).
+No `STATE_AVI`, no DirectDraw mode-set, no archive reads, no gateway TCP observed.
 
 Blockers, in order:
 
-1. Unknown launcher argv format (the gate). `USER_ID`/`USER_INDEX_ID`/
-   `PASSWORD`/`PCROOM_USER` strings sit near `0x251400`; the check is pure
-   game code after `SetCurrentDirectoryA` restore.
+1. Notice-carousel dismissal, untested to completion (the pinned argv shape itself is now probed live — see Attempt 4). Reads use section
+   `IDENTIFICATION` keys near `0x251400` (`USER_ID`/`USER_INDEX_ID`/
+   `PASSWORD`/`PCROOM_USER` plus `IP%d`/`PORT%d` pairs and the channel tags);
+   the check is pure game code after `SetCurrentDirectoryA` restore. Next: fire
+   one real `game:start` blob+mirrors launch and record the dialog result.
 2. Init-time `ACCESS_VIOLATION`s (game RVA `0x1F2893` with session argv;
    wild jump to `0xFFBC11B0` in one bare run with media DLLs loaded).
 3. Possible Wine/wow64 contribution to (2): identical wild address in an
@@ -180,5 +328,7 @@ Blockers, in order:
   `~/wine-argv.log`, `~/wine-dbg*.log`, `~/xvfb.log`.
 - `/tmp/o2jam-reports/`: both `.dmp`+`.log` pairs; `/tmp/mdmp_parse.py`:
   minidump stream parser used here.
-- Scratch only: `/tmp/o2jam-run/`, `$HOME/o2jam-prefix`, Xvfb `:99`
-  (left running). Repo change: this file only. Not committed (per task).
+- Scratch only: `/tmp/o2jam-run/`, `$HOME/o2jam-prefix`, `$HOME/o2jam-prefix-ko` (Korean), Xvfb `:98`/`:99`
+  (left running). Launchers/minters: `/tmp/mint_blob.py`, `/tmp/o2jam-gamestart*.fish`,
+  `/tmp/xtest_key.py`, `/tmp/xtest_click.py`, `/tmp/gen_fontlink.py`. Shots `/tmp/o2jam-shot*.png`.
+  Repo change: this file only. Not committed (per task).

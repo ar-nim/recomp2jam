@@ -13,13 +13,23 @@ Behavior is described in our own words; no disassembly is reproduced.
 |---|---|---|
 | Web login page + `NowSmartLauncher.ocx` (MFC ActiveX, `CNowSmartLauncherCtrl`, 462,848 B) | Auth, version check (`launcher_version` / `patcher_version` / `directx_version` props), patch download | URL templates `http://%s/O2Jam/pub/O2Jam/%s/%s%2.1f.zip`, `%s\%s%2.1f.zip`, `NowcomPatcher.exe`, all in-ocx strings |
 | `NowcomPatcher.exe` | Applies the downloaded patch | Referenced by name in the OCX |
-| Game-find web page | Server/channel/planet pick; passes `My_channel`, `My_planet`, `CTuser_*` table into the client script bridge | `http://game1.o2jam.com/gamefind_new/gamefine_main.asp?USER_INDEX_ID=` (file `0x248398`); `var My_channel = "%d";` / `var My_planet = "%d";` / `CTuser_id[%d] = "%s";` (files `0x24df70`–`0x24e024`) |
-| `AngelO2Jam.exe` / `OTwo.exe` (project name `OTwo`) | Everything below: archives, states, gameplay, netcode | `GetCommandLineA` import (launcher session args); `CCommandLineParser` RTTI (file `0x27d068`) |
+| Game-find web page | Server/channel/planet pick; passes `My_channel`, `My_planet`, `CTuser_*` table into the client script bridge (never argv) | `http://game1.o2jam.com/gamefind_new/gamefine_main.asp?USER_INDEX_ID=` (file `0x248398`); `var My_channel = "%d";` / `var My_planet = "%d";` / `CTuser_id[%d] = "%s";` (files `0x24df70`–`0x24e024`) |
+| `AngelO2Jam.exe` / `OTwo.exe` (project name `OTwo`) | Everything below: archives, states, gameplay, netcode | `GetCommandLineA` import (stored to global `0x796be8`, call site file `0x1fb2e5`); `CCommandLineParser` RTTI (file `0x27d068`); startup gate reads section `IDENTIFICATION` keys (files `0x1ab47a`–`0x1ab939`) |
 
 There is **no in-client login screen**: no `CStateLogin`/`CStateLogo` class,
-no login strings in the exe. Session identity arrives via the launcher
-command line (`USER_ID`, `USER_INDEX_ID`, `PASSWORD`, `PCROOM_USER` strings,
-file `0x2513ce` region) and the `CTuser_*` script bridge.
+no login strings in the exe. Session identity arrives as one RSA-encrypted
+blob plus five gateway mirrors on the command line
+(`OTwo.exe <blob> (|test|??|<addr>|<port>) x5`, Memoryer `game:start` model,
+exe-cross-checked). The blob holds 19 two-digit-length-prefixed fields
+(`AuthParameters`: FTP hosts/port/paths, game version, `USER_INDEX_ID`, username
+token, password, level, gender, nickname, email, gateway address/port, PC room,
+home URL, rank, notice URL, `MEMBERSHIP`). The gate resolves the
+`IDENTIFICATION` keys `USER_ID1` / `PASSWORD1` / `USER_ID` / `PASSWORD` /
+`USER_INDEX_ID` (files `0x1ab47a`–`0x1ab5d4`), five `IP%d` / `PORT%d` pairs
+(file `0x1ab5f5` bounds the loop at 5), `PCROOM_USER`, and `MEMBERSHIP`
+against the MONAWA / GAMEANGEL / NATEON / PDBOX / O2JAM tag chain
+(files `0x1ab8a9`–`0x1ab939`). Channel and planet arrive only through the
+`CTuser_*` / `My_channel` / `My_planet` script bridge, never argv.
 
 ## Ordered stage list
 
