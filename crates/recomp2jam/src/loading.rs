@@ -175,9 +175,9 @@ pub fn loading_cover_figure(chart_bytes: &[u8]) -> Option<AvatarFigure> {
 /// overlay. `true` while a cover staged; any miss leaves the planet
 /// fallback in place (see [`ScreenGame::stage_loading_cover`]).
 ///
-/// Staged for the windowed loader wiring (the `session`/`main` gate
-/// follow-up calls it with the walked bytes): allowed dead until then.
-#[allow(dead_code)]
+/// Called by the chart load paths (`session::stage_chart_bytes`,
+/// `main::load_level_chart`) with the walked bytes, so real loads paint
+/// the cover.
 pub fn stage_loading_cover(game: &mut ScreenGame, chart_bytes: &[u8]) -> bool {
     game.stage_loading_cover(chart_bytes)
 }

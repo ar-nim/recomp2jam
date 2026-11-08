@@ -143,7 +143,8 @@ use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
 
 use crate::live_stats::{apply_peer_update, jam_tick_for_score, life_tick_for_live_play};
 use crate::loading::{
-    check_bank_entry, loading_phase_status, prepare_chart, PreparedChart, LOADING_GATE_STEPS,
+    check_bank_entry, loading_phase_status, prepare_chart, stage_loading_cover, PreparedChart,
+    LOADING_GATE_STEPS,
 };
 
 /// Short socket window for the per-frame stats section (one tick send
@@ -446,9 +447,10 @@ impl OnlineSession {
 
     /// Run the loading gate over one chart buffer and stage it into
     /// the highway: OJN open plus level walk ([`prepare_chart`]),
-    /// onset build, [`ScreenGame::load_chart`], and the clock-armed
-    /// loading caption when the staged catalog names the song
-    /// (indeterminate otherwise — the shots `stage_loading_status`
+    /// onset build, [`ScreenGame::load_chart`], the walked cover into
+    /// the Loading art (a miss keeps the planet fallback), and the
+    /// clock-armed loading caption when the staged catalog names the
+    /// song (indeterminate otherwise — the shots `stage_loading_status`
     /// honesty rule).
     ///
     /// # Errors
@@ -463,6 +465,7 @@ impl OnlineSession {
         let events = o2jam_file::parse_ojn_level_events(chart_bytes, level)?;
         let chart = o2jam_game::build_level_chart(prepared.bpm, &events);
         self.game.load_chart(chart.hit_onsets_ms());
+        stage_loading_cover(&mut self.game, chart_bytes);
         self.stage_loading_caption(prepared.song_id);
         Ok(prepared)
     }
@@ -3361,6 +3364,45 @@ mod session_tests {
         assert!(session.stage_chart_bytes(&chart_blob(), 9).is_err());
         server.join().unwrap();
         assert!(session.game.loading_status().is_none());
+    }
+
+    #[test]
+    fn stage_chart_bytes_without_cover_keeps_the_planet_fallback() {
+        let (mut session, server) = catalog_session(|mut stream| {
+            assert_quiet(&mut stream);
+        });
+        let chart = session.stage_chart_bytes(&chart_blob(), 0).unwrap();
+        server.join().unwrap();
+        assert_eq!(chart.song_id, 757);
+        assert!(!session.game.has_loading_cover());
+    }
+
+    #[test]
+    fn stage_chart_bytes_reject_stages_no_cover() {
+        let (mut session, server) = waiting_session(|mut stream| {
+            assert_quiet(&mut stream);
+        });
+        assert!(session.stage_chart_bytes(b"garbage", 0).is_err());
+        server.join().unwrap();
+        assert!(!session.game.has_loading_cover());
+    }
+
+    #[test]
+    fn walked_cover_paints_the_session_loading_scene() {
+        // Install-guarded: song 757's OJN cover section stages into
+        // the Loading art. Skips when `install-root` is absent.
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Music/o2ma757.ojn");
+        let Ok(bytes) = std::fs::read(&path) else {
+            return;
+        };
+        let (mut session, server) = waiting_session(|mut stream| {
+            assert_quiet(&mut stream);
+        });
+        let chart = session.stage_chart_bytes(&bytes, 0).unwrap();
+        server.join().unwrap();
+        assert_eq!(chart.song_id, 757);
+        assert!(session.game.has_loading_cover());
     }
 
     #[test]

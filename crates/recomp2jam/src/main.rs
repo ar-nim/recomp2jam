@@ -764,7 +764,7 @@ fn setup_chart_audio(
     level: usize,
 ) -> Result<()> {
     if let Some(path) = chart {
-        let (level_chart, format_version) = load_level_chart(path, level)?;
+        let (level_chart, format_version) = load_level_chart(game, path, level)?;
         game.load_chart(level_chart.hit_onsets_ms());
         tracing::info!(hits = level_chart.hit_count(), "chart loaded");
         if let Some(bank_path) = ojm {
@@ -1010,15 +1010,20 @@ fn load_sound_bank(
     bank
 }
 
-/// Load one chart level from disk (chart + slice checks shared by
-/// autoplay and the windowed game).
+/// Load one chart level from disk into the game (chart + slice checks
+/// shared by autoplay and the windowed game).
 ///
 /// Runs the lifecycle §9 loading gate: select validation is the
 /// level-slot range check (`0x5718b0`), staging logs the
 /// `MUSIC\Temp\%s%d_%d` extract name (`0x4f8b80`), the open goes
-/// through `loading::load_gated_level` (`0x412180`), and the return
-/// arms the song clock downstream (`0x4e47a0`).
-fn load_level_chart(chart_path: &str, level: usize) -> Result<(o2jam_game::LevelChart, f32)> {
+/// through `loading::load_gated_level` (`0x412180`), the walked cover
+/// paints the Loading art (a miss keeps the planet fallback), and the
+/// return arms the song clock downstream (`0x4e47a0`).
+fn load_level_chart(
+    game: &mut o2jam_shell::ScreenGame,
+    chart_path: &str,
+    level: usize,
+) -> Result<(o2jam_game::LevelChart, f32)> {
     use anyhow::Context;
     let chart_bytes =
         std::fs::read(chart_path).with_context(|| format!("reading chart {chart_path}"))?;
@@ -1026,6 +1031,7 @@ fn load_level_chart(chart_path: &str, level: usize) -> Result<(o2jam_game::Level
         .with_context(|| format!("loading gate rejected {chart_path} level {level}"))?;
     let events = o2jam_file::parse_ojn_level_events(&chart_bytes, level)?;
     let chart = o2jam_game::build_level_chart(prepared.bpm, &events);
+    loading::stage_loading_cover(game, &chart_bytes);
     let stem = std::path::Path::new(chart_path)
         .file_stem()
         .and_then(|stem| stem.to_str())
@@ -1045,7 +1051,10 @@ fn load_level_chart(chart_path: &str, level: usize) -> Result<(o2jam_game::Level
 fn run_autoplay(chart_path: &str, ojm_path: Option<&str>, level: usize, sound: bool) -> Result<()> {
     use anyhow::Context;
     use o2jam_game::{Judgement, Score, Sequencer};
-    let (chart, format_version) = load_level_chart(chart_path, level)?;
+    // Headless keeps no Loading scene: the staged cover drops with
+    // this temp game, while the highway chart below still autoplays.
+    let mut loading_game = o2jam_shell::ScreenGame::new();
+    let (chart, format_version) = load_level_chart(&mut loading_game, chart_path, level)?;
     tracing::info!(hits = chart.hit_count(), "chart loaded");
     let mut bank = std::collections::HashMap::new();
     if let Some(path) = ojm_path {
@@ -1338,6 +1347,71 @@ mod cli_build_tests {
             ..OnlineParams::default()
         };
         assert_eq!(params.pending_song_choice(), None);
+    }
+
+    /// Synthetic chart blob (the 7.55 OJN header shape, mirroring the
+    /// loading-gate tests): song 757 with an empty level slice and no
+    /// cover section, so the gate passes while the planet fallback stays.
+    fn coverless_chart_blob() -> Vec<u8> {
+        let mut blob = vec![0u8; 300];
+        blob[0..4].copy_from_slice(&757u32.to_le_bytes());
+        blob[4..8].copy_from_slice(b"ojn\0");
+        blob[8..12].copy_from_slice(&2.9f32.to_le_bytes());
+        blob[16..20].copy_from_slice(&124f32.to_le_bytes());
+        blob[64..68].copy_from_slice(&0u32.to_le_bytes());
+        blob[68..72].copy_from_slice(&0u32.to_le_bytes());
+        blob[72..76].copy_from_slice(&0u32.to_le_bytes());
+        blob[284..288].copy_from_slice(&300u32.to_le_bytes());
+        blob[288..292].copy_from_slice(&300u32.to_le_bytes());
+        blob[292..296].copy_from_slice(&300u32.to_le_bytes());
+        blob[296..300].copy_from_slice(&300u32.to_le_bytes());
+        blob
+    }
+
+    /// Spill `bytes` into a scratch `.ojn` file for [`load_level_chart`].
+    fn scratch_chart_file(name: &str, bytes: &[u8]) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "recomp2jam-cover-{name}-{}.ojn",
+            std::process::id()
+        ));
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    #[test]
+    fn level_chart_without_cover_keeps_the_planet_fallback() {
+        let path = scratch_chart_file("coverless", &coverless_chart_blob());
+        let mut game = o2jam_shell::ScreenGame::new();
+        let outcome = load_level_chart(&mut game, path.to_str().unwrap(), 0);
+        std::fs::remove_file(&path).ok();
+        let (chart, _) = outcome.unwrap();
+        assert_eq!(chart.hit_count(), 0);
+        assert!(!game.has_loading_cover());
+    }
+
+    #[test]
+    fn level_chart_rejects_garbage_without_staging() {
+        let path = scratch_chart_file("garbage", b"garbage");
+        let mut game = o2jam_shell::ScreenGame::new();
+        let outcome = load_level_chart(&mut game, path.to_str().unwrap(), 0);
+        std::fs::remove_file(&path).ok();
+        assert!(outcome.is_err());
+        assert!(!game.has_loading_cover());
+    }
+
+    #[test]
+    fn walked_cover_paints_the_windowed_loading_scene() {
+        // Install-guarded: song 757's OJN cover section stages into
+        // the Loading art. Skips when `install-root` is absent.
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Music/o2ma757.ojn");
+        if !path.is_file() {
+            return;
+        }
+        let mut game = o2jam_shell::ScreenGame::new();
+        let (chart, _) = load_level_chart(&mut game, path.to_str().unwrap(), 0).unwrap();
+        assert!(chart.hit_count() > 0);
+        assert!(game.has_loading_cover());
     }
 
     #[test]
