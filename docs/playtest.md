@@ -2778,3 +2778,45 @@ in `window.rs`, wiring in `lib.rs`).
   `docs/playtest.md`, fix only my own lint findings) the peer's files
   were left alone, and no suite re-run on the moving dirty state was
   taken.
+
+## Regression sweep — 2026-11-08 10:34 UTC+8 (HEAD `b9b604b`, tree clean)
+
+Live re-proof on the bridge-head. Covers the feat commit landed after the
+chatinput-head baseline `0d0ad3a`: bridge shell chat draft to gateway
+transport (`b9b604b`: `session.rs` online-session chat bridge,
+`connect.rs`/`main.rs` wiring, `game.rs` draft-take rename).
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1406 passed, 0 failed, 0 ignored**, `exit=0`.
+  Per target: audio 20, dump 7, file 177, game 94, net 360,
+  render 89, shell 521, real_art 7, scenes 22, recomp2jam 109
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, 0 warning
+  lines.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.61 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`10:34:03 +08:00`):
+  `Authorize session` → `Get channel list: [0]` →
+  `Enter channel: [0/00]` → `Get character info: [tester]` →
+  `Create room: songflow` →
+  `Update room [000] music settings: [HX / X10 / o2ma757]` →
+  `Update room [000] arena: [1] (0)` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Update #1 - Jam: 3 (Bonus: 0)` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure WARNs on room delete; a second session walked
+  `Authorize session` → `Get channel list` → `Enter channel` →
+  `Get room list` → `Get character info`).
+- **Verdict: no regression — suite is green on the bridge-head (1406
+  passed; +6 vs the 1400 chatinput-head baseline: shell 520 → 521,
+  recomp2jam 104 → 109 from the chat-bridge work, all other targets
+  unchanged, 0 failures). No lint findings. No commits, no pushes.**
+  This sweep touched only `docs/playtest.md`.
