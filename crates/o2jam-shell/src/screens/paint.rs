@@ -29,8 +29,8 @@ use std::collections::HashMap;
 use super::super::avatar::{
     anchor_in_frame, paint_behind_placements, paint_foreground_placements, paint_scene_figures,
     scene_block, scene_sprite_names, AvatarFigure, ScenePlacement, AVI_BLOCK, AVI_LOGO_SPRITE,
-    CHANNEL_BLOCK, LOADING_BLOCK, LOADING_SPRITE, RESULT_BLOCK, ROOM_BLOCK, WAITING_BLOCK,
-    WAIT_COVER_SPRITE, WAIT_TEAM_SPRITES,
+    CHANNEL_BLOCK, LOADING_BLOCK, LOADING_COVER_SPRITE, LOADING_SPRITE, RESULT_BLOCK, ROOM_BLOCK,
+    WAITING_BLOCK, WAIT_COVER_SPRITE, WAIT_TEAM_SPRITES,
 };
 use super::super::playing::{HighwayGeometry, PlayingView};
 use super::super::screen::Screen;
@@ -2188,17 +2188,58 @@ fn paint_loading(frame: &mut Frame<'_>) {
     paint_loading_bar(frame);
 }
 
-/// Paint the loading gate with its live state: staged genuine
-/// `MusicLoading.ojs` art at its authored (record-anchor) geometry
-/// first, then the fractional bar plus the song title/artist.
-/// Unpainted while the shell carries no walk state: the exe
-/// Trebuchet/Arial fonts and the OJN/Vorbis path stay gaps.
+/// Per-song illustration behind the loading bar/caption: the staged
+/// [`LOADING_COVER_SPRITE`] figure (see
+/// [`crate::avatar::ojn_cover_figure`]) stretched opaque over the
+/// whole frame — the OJN cover is a full-bleed 800x600 body with no
+/// colour key, so the verified opaque album path paints it, never
+/// the keyed scene pass. `true` while a cover staged (the caller
+/// skips the planet fallback then); `false` without one, leaving the
+/// genuine `MusicLoading.ojs` fallback path alone. Staging recipe:
+/// insert the decoded cover figure under [`LOADING_COVER_SPRITE`]
+/// beside the planet art — no placement needed, this lookup reads
+/// the figure directly and no scene pass paints it twice.
+fn paint_loading_cover(frame: &mut Frame<'_>, art: &SceneArt) -> bool {
+    let Some(layer) = art
+        .figures
+        .get(LOADING_COVER_SPRITE)
+        .and_then(|figure| figure.layer(0))
+    else {
+        return false;
+    };
+    if layer.image.w == 0 || layer.image.h == 0 {
+        return false;
+    }
+    let dest = Rect {
+        x: 0,
+        y: 0,
+        w: u32::try_from(frame.w).unwrap_or(u32::MAX),
+        h: u32::try_from(frame.h).unwrap_or(u32::MAX),
+    };
+    if dest.w == 0 || dest.h == 0 {
+        return false;
+    }
+    paint_album_cover(frame, &layer.image, dest);
+    true
+}
+
+/// Paint the loading gate with its live state: the staged song
+/// illustration ([`LOADING_COVER_SPRITE`], the walked chart's OJN
+/// cover section) full-bleed first when one staged, else the genuine
+/// `MusicLoading.ojs` planet fallback — the exe mounts that overlay
+/// only when the song load returns 0 (file `0xe47a0`, ev
+/// `68d920c2…`), so a present cover (the load succeeded) replaces
+/// it. Then the fractional bar plus the song title/artist. Unpainted
+/// while the shell carries no walk state: the exe Trebuchet/Arial
+/// fonts and the OJN/Vorbis path stay gaps.
 pub fn paint_loading_scene_with_status(
     frame: &mut Frame<'_>,
     art: &SceneArt,
     status: &LoadingStatus,
 ) {
-    art.paint_backdrop(frame, Screen::Loading);
+    if !paint_loading_cover(frame, art) {
+        art.paint_backdrop(frame, Screen::Loading);
+    }
     paint_loading_bar_with_progress(frame, status.clamped_progress());
     paint_loading_song(frame, status);
 }
@@ -5603,6 +5644,98 @@ mod paint_tests {
             }
         }
         assert_eq!(buf[4], 0, "nothing past the body's own extent");
+    }
+
+    #[test]
+    fn loading_cover_paints_full_bleed_behind_bar_and_caption() {
+        // Staged OJN cover (2x2 opaque stand-in, distinct corners —
+        // geometry only, never real art) stretches over the whole
+        // frame while the live bar and caption ink on top.
+        let art = SceneArt {
+            placements: Vec::new(),
+            figures: HashMap::from([(LOADING_COVER_SPRITE.to_owned(), cover_figure())]),
+        };
+        let status = LoadingStatus {
+            progress: 1.0,
+            title: "Title".to_owned(),
+            artist: "Artist".to_owned(),
+        };
+        let mut buf = vec![0u32; 64 * 48];
+        paint_loading_scene_with_status(
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 48,
+            },
+            &art,
+            &status,
+        );
+        assert_eq!(buf[0], pack_xrgb(255, 0, 0), "cover top-left");
+        assert_eq!(buf[63], pack_xrgb(0, 255, 0), "cover top-right");
+        assert_eq!(buf[47 * 64], pack_xrgb(0, 0, 255), "cover bottom-left");
+        assert_eq!(
+            buf[47 * 64 + 63],
+            pack_xrgb(255, 255, 255),
+            "cover bottom-right"
+        );
+        assert!(
+            buf.contains(&pack_xrgb(0x30, 0xB0, 0x30)),
+            "bar fill survives over the cover"
+        );
+        assert!(
+            buf.contains(&art_title_ink()),
+            "caption survives over the cover"
+        );
+    }
+
+    #[test]
+    fn loading_cover_wins_over_planet_art() {
+        // Cover present means the song load succeeded, so the exe
+        // `MusicLoading.ojs` fallback (mounted only when the load
+        // returns 0) stays out: no planet pixel survives.
+        let mut planet = AvatarFigure::default();
+        planet.push_layer(FigureLayer {
+            image: Rgb555Image::decode(&[0x1F, 0x7C], 1, 1).unwrap(),
+            dx: 0,
+            dy: 0,
+            colorkey: 0xFFFF,
+        });
+        let art = SceneArt {
+            placements: unbound_scene_placements(&[LOADING_SPRITE.to_owned()]),
+            figures: HashMap::from([
+                (LOADING_SPRITE.to_owned(), planet),
+                (LOADING_COVER_SPRITE.to_owned(), cover_figure()),
+            ]),
+        };
+        let mut buf = vec![0u32; 64 * 48];
+        paint_loading_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 48,
+            },
+            &art,
+        );
+        let magenta = pack_xrgb(255, 0, 255);
+        assert!(!buf.contains(&magenta), "planet fallback stays out");
+        assert_eq!(buf[0], pack_xrgb(255, 0, 0), "cover owns the frame");
+    }
+
+    /// 2x2 opaque stand-in for a decoded OJN cover (distinct corners;
+    /// never real art — geometry only).
+    fn cover_figure() -> AvatarFigure {
+        let mut figure = AvatarFigure::default();
+        figure.push_layer(FigureLayer {
+            image: Rgb555Image {
+                w: 2,
+                h: 2,
+                words: vec![0x7C00, 0x03E0, 0x001F, 0x7FFF],
+            },
+            dx: 0,
+            dy: 0,
+            colorkey: 0x0000,
+        });
+        figure
     }
 
     #[test]

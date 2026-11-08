@@ -644,6 +644,16 @@ pub const WAIT_TEAM_SPRITES: [&str; 8] = [
 pub const LOADING_BLOCK: &str = "STATE_LOADING";
 /// Loading-gate art shown while the song table stages.
 pub const LOADING_SPRITE: &str = "MusicLoading.ojs";
+/// Loading-gate song illustration slot: the walked chart's OJN cover
+/// section (`o2jam_file::ojn_cover_jpeg`, docs/file-formats/ojn.md),
+/// staged under this synthetic name — never an archive body, named by
+/// no `ControlList` block. The Wine loading capture pins it: the
+/// full-bleed woman/beads illustration with the baked `3-KEY` badge
+/// and Artist/Remix/Pattern credits is byte-composition-identical to
+/// the decoded OJN cover (`extracted/cover757-view.jpg`, 800x600),
+/// while `MusicLoading.ojs` is the planet fallback the exe mounts only
+/// when the song load returns 0 (file `0xe47a0`, ev `68d920c2…`).
+pub const LOADING_COVER_SPRITE: &str = "OJN_COVER";
 /// Results block (`Result_WinLose.ojs`, number fonts, avatar).
 pub const RESULT_BLOCK: &str = "STATE_RESULT";
 
@@ -1108,6 +1118,60 @@ pub fn load_scene_figures_for_stage(
 #[must_use]
 pub fn load_avi_logo(archive: &[u8]) -> Option<AvatarFigure> {
     load_archive_sprite(archive, AVI_LOGO_SPRITE)
+}
+
+/// Decode the walked chart's OJN cover section as the loading-gate
+/// song illustration, staged under [`LOADING_COVER_SPRITE`]. The JPEG
+/// stream runs from the last level slice end to end of file with no
+/// EOI marker on every shipped 7.55 chart (14/14 decode 800x600 per
+/// `o2jam_file`'s `real_ojn_covers_extract_and_decode`); extraction
+/// plus decode plus the RGB888→RGB555 fold all flow through the
+/// verified `o2jam_file` readers. One opaque layer at anchor `(0,0)`:
+/// the loading painter stretches it full-frame with no colour key
+/// (the JPEG carries none — every pixel is art). `None` on any miss
+/// — non-chart bytes, unknown magic, undecodable stream — and the
+/// loading gate keeps its planet fallback then; nothing is invented.
+#[must_use]
+pub fn ojn_cover_figure(ojn_bytes: &[u8]) -> Option<AvatarFigure> {
+    let stream = o2jam_file::ojn_cover_jpeg(ojn_bytes).ok()?;
+    let decoded = o2jam_file::decode_ojn_cover(&stream).ok()?;
+    let image = rgb888_to_rgb555(&decoded)?;
+    let mut figure = AvatarFigure::default();
+    figure.push_layer(FigureLayer {
+        image,
+        dx: 0,
+        dy: 0,
+        // Ignored by the opaque loading-cover paint; kept only so
+        // the layer stays a well-formed figure member.
+        colorkey: 0x0000,
+    });
+    Some(figure)
+}
+
+/// Fold one decoded OJN cover to RGB555 words (5-bit channels; the
+/// frame blit composes in RGB555 words). `None` when the pixel
+/// buffer does not tile the claimed dimensions.
+#[must_use]
+fn rgb888_to_rgb555(decoded: &o2jam_file::JpegRgbImage) -> Option<Rgb555Image> {
+    let pixels = decoded.width.checked_mul(decoded.height)?.checked_mul(3)?;
+    if decoded.pixels.len() != pixels {
+        return None;
+    }
+    let words = decoded
+        .pixels
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|pixel| {
+            let [r, g, b] = *pixel;
+            (u16::from(r) >> 3) << 10 | (u16::from(g) >> 3) << 5 | u16::from(b) >> 3
+        })
+        .collect();
+    Some(Rgb555Image {
+        w: decoded.width,
+        h: decoded.height,
+        words,
+    })
 }
 
 /// Staged view position of one placement (`docs/ui-draw.md`): the
@@ -1652,6 +1716,31 @@ mod avatar_figure_tests {
         assert_eq!(figure.len(), 1);
         assert!(load_archive_sprite(&archive, "Missing.ojs").is_none());
         assert!(load_archive_sprite(b"garbage", "Logo.ojs").is_none());
+    }
+
+    #[test]
+    fn ojn_cover_rejects_non_chart_bytes() {
+        assert!(ojn_cover_figure(b"garbage").is_none());
+        assert!(ojn_cover_figure(&[]).is_none());
+        assert!(ojn_cover_figure(b"OJM\0payload").is_none());
+    }
+
+    #[test]
+    fn ojn_cover_stage_names_the_song_illustration() {
+        // Install-guarded: the 7.55 `Music` folder carries the song
+        // whose cover the loading capture shows (song 757). Skips
+        // when `install-root` is absent.
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Music/o2ma757.ojn");
+        let Ok(bytes) = std::fs::read(&path) else {
+            return;
+        };
+        let figure =
+            ojn_cover_figure(&bytes).unwrap_or_else(|| panic!("{}: cover decodes", path.display()));
+        assert_eq!(figure.len(), 1);
+        let layer = figure.layer(0).unwrap();
+        assert_eq!((layer.image.w, layer.image.h), (800, 600));
+        assert_eq!((layer.dx, layer.dy), (0, 0));
     }
 
     /// Strided sprite-55 atlas body: one 20-byte record per entry,
