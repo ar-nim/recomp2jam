@@ -645,7 +645,7 @@ fn run_play(
             online_arena,
         )?;
         setup_avatar(&mut game, &avatar_opa, &equip, avatar_male)?;
-        setup_chart_audio(&mut game, &chart, &ojm, level)?;
+        setup_chart_audio(&mut game, &chart, &ojm, level, sound)?;
         let event_loop = winit::event_loop::EventLoop::new()
             .map_err(|e| anyhow::anyhow!("event loop failed: {e:?}"))?;
         match gateway {
@@ -826,12 +826,30 @@ fn setup_avatar(
     Ok(())
 }
 
+/// Output backend honoring the `--sound` flag: live hardware only on
+/// request, the silent null sink otherwise (automated runs must never
+/// reach the speakers; CI has no audio device). Mirrors `run_autoplay`.
+fn audio_backend(sound: bool) -> Box<dyn o2jam_audio::AudioBackend> {
+    if sound {
+        match o2jam_audio::CpalBackend::try_new() {
+            Ok(backend) => Box::new(backend),
+            Err(e) => {
+                eprintln!("audio unavailable ({e}); continuing silent");
+                Box::new(o2jam_audio::NullBackend::new())
+            }
+        }
+    } else {
+        Box::new(o2jam_audio::NullBackend::new())
+    }
+}
+
 /// Load a chart plus its key sounds into a windowed game, if requested.
 fn setup_chart_audio(
     game: &mut o2jam_shell::ScreenGame,
     chart: &Option<String>,
     ojm: &Option<String>,
     level: usize,
+    sound: bool,
 ) -> Result<()> {
     if let Some(path) = chart {
         let (level_chart, format_version) = load_level_chart(game, path, level)?;
@@ -840,15 +858,7 @@ fn setup_chart_audio(
         if let Some(bank_path) = ojm {
             let bank_bytes = std::fs::read(bank_path)?;
             let bank = loading::load_sound_bank(&bank_bytes, format_version);
-            let backend: Box<dyn o2jam_audio::AudioBackend> =
-                match o2jam_audio::CpalBackend::try_new() {
-                    Ok(backend) => Box::new(backend),
-                    Err(e) => {
-                        eprintln!("audio unavailable ({e}); continuing silent");
-                        Box::new(o2jam_audio::NullBackend::new())
-                    }
-                };
-            game.with_audio(backend, bank);
+            game.with_audio(audio_backend(sound), bank);
             tracing::info!("key sounds attached");
         }
     }
@@ -1028,17 +1038,7 @@ fn run_autoplay(chart_path: &str, ojm_path: Option<&str>, level: usize, sound: b
         bank = loading::load_sound_bank(&bank_bytes, format_version);
         tracing::info!(samples = bank.len(), "bank decoded");
     }
-    let mut backend: Box<dyn o2jam_audio::AudioBackend> = if sound {
-        match o2jam_audio::CpalBackend::try_new() {
-            Ok(backend) => Box::new(backend),
-            Err(e) => {
-                eprintln!("audio unavailable ({e}); continuing silent");
-                Box::new(o2jam_audio::NullBackend::new())
-            }
-        }
-    } else {
-        Box::new(o2jam_audio::NullBackend::new())
-    };
+    let mut backend: Box<dyn o2jam_audio::AudioBackend> = audio_backend(sound);
     let mut sequencer = Sequencer::new(&chart);
     let mut score = Score::default();
     let mut pills = o2jam_game::PillStock::default();
@@ -1160,6 +1160,23 @@ mod cli_build_tests {
     fn song_flow_absent_without_music_id() {
         let song = song_params(None).into_song_flow().unwrap();
         assert!(song.is_none());
+    }
+
+    #[test]
+    fn audio_backend_off_queues_silently_without_hardware() {
+        // Windowed runs without `--sound` must never touch audio
+        // hardware: the silent sink counts queued frames with no device
+        // open, so this stays green on headless CI. A live backend
+        // reports its own playhead instead of the queued count.
+        use o2jam_audio::{AudioBackend, PcmSamples};
+        let mut backend = audio_backend(false);
+        let pcm = PcmSamples {
+            samples: vec![1000i16; 100],
+            sample_rate: 44100,
+            channels: 2,
+        };
+        backend.play_pcm(&pcm).unwrap();
+        assert_eq!(backend.samples_played(), 50);
     }
 
     #[test]
