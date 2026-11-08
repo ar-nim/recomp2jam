@@ -921,6 +921,27 @@ impl ScreenGame {
         self.is_room_master() && self.all_peers_ready()
     }
 
+    /// Advance a joined guest to Loading on the 4011 start broadcast.
+    /// The `START 0x16202012` gate passes masters only (file
+    /// `0xb5560`), so a guest Confirm can never satisfy
+    /// [`Self::can_start_game`]; the session calls this on 4011
+    /// instead of Confirm. Masters never advance here — they keep
+    /// the readiness rule through Confirm — and neither do the
+    /// offline walk (no joined room), other screens, or a pending
+    /// draft (peek-only, so typed text is never eaten). `true`
+    /// entered Loading.
+    pub fn force_advance_to_loading(&mut self) -> bool {
+        if self.flow.current() != Screen::Waiting
+            || self.waiting.is_none()
+            || self.is_room_master()
+            || self.chat_slash_command() != SlashCommand::Empty
+        {
+            return false;
+        }
+        self.enter(Screen::Loading);
+        true
+    }
+
     /// Remember the host song choice (`SetRoomMusic` 4000 body);
     /// Waiting paints its title and difficulty panel, and the chosen
     /// chart's difficulty byte selects the playing life-bar deltas.
@@ -4671,6 +4692,72 @@ mod game_tests {
         assert!(!game.can_start_game());
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Waiting);
+    }
+
+    #[test]
+    fn guest_force_advance_reaches_loading_on_broadcast() {
+        // Guests never pass the Confirm gate (no `START` arm for
+        // them, file `0xae805`), so the 4011 broadcast advances them
+        // through the force path instead.
+        let mut game = ScreenGame::new();
+        game.set_joined_room(guest_room());
+        walk_to_waiting(&mut game);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+        assert!(game.force_advance_to_loading());
+        assert_eq!(game.screen(), Screen::Loading);
+    }
+
+    #[test]
+    fn force_advance_refuses_master_who_keeps_the_confirm_gate() {
+        // Masters keep the readiness rule through Confirm: the force
+        // path never advances them, even with every peer ready.
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        assert!(game.can_start_game());
+        assert!(!game.force_advance_to_loading());
+        assert_eq!(game.screen(), Screen::Waiting);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Loading);
+    }
+
+    #[test]
+    fn force_advance_refuses_the_offline_walk() {
+        // With no joined room the offline walk advances through
+        // Confirm, never through the force path.
+        let mut game = ScreenGame::new();
+        walk_to_waiting(&mut game);
+        assert!(!game.force_advance_to_loading());
+        assert_eq!(game.screen(), Screen::Waiting);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Loading);
+    }
+
+    #[test]
+    fn force_advance_holds_while_a_draft_is_pending() {
+        // A pending draft holds the advance (peek-only): the text
+        // survives, and clearing it unblocks the next broadcast.
+        let mut game = ScreenGame::new();
+        game.set_joined_room(guest_room());
+        walk_to_waiting(&mut game);
+        game.set_chat_input("hi");
+        assert!(!game.force_advance_to_loading());
+        assert_eq!(game.screen(), Screen::Waiting);
+        assert_eq!(game.chat_input(), "hi");
+        game.clear_chat_input();
+        assert!(game.force_advance_to_loading());
+        assert_eq!(game.screen(), Screen::Loading);
+    }
+
+    #[test]
+    fn force_advance_refuses_other_screens() {
+        // Off Waiting there is nothing to advance: the call stays a
+        // no-op instead of teleporting the flow.
+        let mut game = ScreenGame::new();
+        game.set_joined_room(guest_room());
+        assert!(!game.force_advance_to_loading());
+        assert_ne!(game.screen(), Screen::Loading);
     }
 
     #[test]

@@ -683,6 +683,88 @@ impl WireMessage for SetDownloadProgress {
     }
 }
 
+// `Ready` 4008: the joined-guest readiness toggle (C->S). Empty body:
+// all five exe send sites push a zero word then the opcode and send
+// indirectly (`push 0; push 0xfa8`, files `0xacebe`, `0xb24f6`,
+// `0xb36a0`, `0xb8450`, `0xb871f`) — no flag byte rides the wire.
+// Memoryer agrees (`WaitingController.Ready()` takes no request).
+song_empty!(Ready, 4008);
+
+/// `MemberReadyStateChanged` 4009 event: one member flipped readiness.
+///
+/// Two bytes: `u8` member id, then the ready flag as one `0`/`1` byte.
+/// Memoryer (`Messages/Events/Waiting/
+/// `MemberReadyStateChangedEventData.cs`): byte `MemberId` (order 0),
+/// bool `Ready` (order 1). Exe-verified handler at file `0x15f5b0`:
+/// one size-1 member read through the packet-reader helper (`0x555d20`,
+/// size pushed at file `0x15f5b4`), member guard `< 8` (compare at file
+/// `0x15f5c6`, drop past it), then the ready byte reads straight into
+/// the member table at slot `+0x32` (size-1 read at file `0x140d77`,
+/// dest slot base `+0x32` at file `0x140d7c`) — self base `0x77cd00`
+/// when the packet member matches the local id at `0x77cd04`, else
+/// slot base `0x77ee90 + member * 0x2190` — then forwards
+/// `(0x12, 4009, member, 0)` into the UI event queue (`0x478d50`,
+/// pushes at files `0x15f60b`-`0x15f61f`). The same `+0x32` byte gates
+/// the host START path (file `0xb5560`: nonzero means ready). Observed
+/// with GNU objdump 2.47 slices plus Python byte scans over the
+/// read-only 7.55 copy; no new REA dossier filed. Memoryer shapes are
+/// corroboration; the two one-byte reads are the byte-verified part.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemberReadyStateChanged {
+    /// Member slot (`< 8`; the exe drops wider values).
+    pub member_id: u8,
+    /// New readiness.
+    pub ready: bool,
+}
+
+/// Body length of [`MemberReadyStateChanged`]: 1 + 1.
+const MEMBER_READY_STATE_CHANGED_BODY_LEN: usize = 2;
+
+/// Seat count behind the 4009 member guard (`cmp 8`, file `0x15f5c6`).
+const READY_GUARD_SEAT_COUNT: u8 = 8;
+
+impl WireMessage for MemberReadyStateChanged {
+    const COMMAND: u16 = 4009;
+
+    fn encode_body(&self) -> Vec<u8> {
+        vec![self.member_id, u8::from(self.ready)]
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < MEMBER_READY_STATE_CHANGED_BODY_LEN {
+            return Err(Error::TruncatedMessage {
+                need: MEMBER_READY_STATE_CHANGED_BODY_LEN,
+                have: body.len(),
+            });
+        }
+        if body.len() > MEMBER_READY_STATE_CHANGED_BODY_LEN {
+            return Err(Error::TrailingBytes(
+                body.len() - MEMBER_READY_STATE_CHANGED_BODY_LEN,
+            ));
+        }
+        if body[0] >= READY_GUARD_SEAT_COUNT {
+            return Err(Error::InvalidField {
+                field: "ready member",
+                reason: "not below 8",
+            });
+        }
+        let ready = match body[1] {
+            0 => false,
+            1 => true,
+            _ => {
+                return Err(Error::InvalidField {
+                    field: "ready flag",
+                    reason: "not 0 or 1",
+                });
+            }
+        };
+        Ok(Self {
+            member_id: body[0],
+            ready,
+        })
+    }
+}
+
 #[cfg(test)]
 mod song_sync_tests {
     use super::*;
@@ -692,6 +774,7 @@ mod song_sync_tests {
     #[test]
     fn command_ids_match_song_types() {
         assert_eq!(SetRoomMusic::COMMAND, Request::SetRoomMusic as u16);
+        assert_eq!(Ready::COMMAND, Request::Ready as u16);
         assert_eq!(StartGame::COMMAND, Request::StartGame as u16);
         assert_eq!(
             ConfirmMusicLoaded::COMMAND,
@@ -700,6 +783,10 @@ mod song_sync_tests {
         assert_eq!(UpdateGameStats::COMMAND, Request::UpdateGameStats as u16);
         assert_eq!(GameStatsUpdate::COMMAND, Event::GameStatsUpdate as u16);
         assert_eq!(SubmitScore::COMMAND, Request::SubmitScore as u16);
+        assert_eq!(
+            MemberReadyStateChanged::COMMAND,
+            Event::UserReadyStateChanged as u16
+        );
         assert_eq!(ExitPlaying::COMMAND, Request::ExitPlaying as u16);
         assert_eq!(GetMusicList::COMMAND, Request::GetMusicList as u16);
         assert_eq!(
@@ -1194,5 +1281,77 @@ mod song_sync_tests {
         let frame = decode_frame(&progress.encode()).unwrap();
         assert_eq!(frame.id, 4038);
         assert_eq!(SetDownloadProgress::decode_frame(&frame), Ok(progress));
+    }
+
+    #[test]
+    fn ready_sends_an_empty_body() {
+        assert!(Ready.encode_body().is_empty());
+        assert_eq!(Ready.encode(), vec![0x04, 0x00, 0xA8, 0x0F]);
+        let frame = decode_frame(&Ready.encode()).unwrap();
+        assert_eq!(frame.id, 4008);
+        assert_eq!(Ready::decode_frame(&frame), Ok(Ready));
+    }
+
+    #[test]
+    fn ready_rejects_payload() {
+        assert_eq!(Ready::decode_body(&[0x01]), Err(Error::TrailingBytes(1)));
+    }
+
+    #[test]
+    fn member_ready_state_changed_encodes_member_then_flag() {
+        let ready = MemberReadyStateChanged {
+            member_id: 1,
+            ready: true,
+        };
+        assert_eq!(ready.encode_body(), vec![0x01, 0x01]);
+        let frame = decode_frame(&ready.encode()).unwrap();
+        assert_eq!(frame.id, 4009);
+        assert_eq!(frame.id, Event::UserReadyStateChanged as u16);
+        assert_eq!(MemberReadyStateChanged::decode_frame(&frame), Ok(ready));
+    }
+
+    #[test]
+    fn member_ready_state_changed_decodes_cleared_flag() {
+        let cleared = MemberReadyStateChanged::decode_body(&[0x02, 0x00]).unwrap();
+        assert_eq!(cleared.member_id, 2);
+        assert!(!cleared.ready);
+    }
+
+    #[test]
+    fn member_ready_state_changed_rejects_short_body() {
+        assert_eq!(
+            MemberReadyStateChanged::decode_body(&[0x01]),
+            Err(Error::TruncatedMessage { need: 2, have: 1 })
+        );
+    }
+
+    #[test]
+    fn member_ready_state_changed_rejects_trailing_bytes() {
+        assert_eq!(
+            MemberReadyStateChanged::decode_body(&[0x01, 0x01, 0x00]),
+            Err(Error::TrailingBytes(1))
+        );
+    }
+
+    #[test]
+    fn member_ready_state_changed_rejects_wide_member() {
+        assert_eq!(
+            MemberReadyStateChanged::decode_body(&[0x08, 0x01]),
+            Err(Error::InvalidField {
+                field: "ready member",
+                reason: "not below 8"
+            })
+        );
+    }
+
+    #[test]
+    fn member_ready_state_changed_rejects_bad_flag() {
+        assert_eq!(
+            MemberReadyStateChanged::decode_body(&[0x01, 0x02]),
+            Err(Error::InvalidField {
+                field: "ready flag",
+                reason: "not 0 or 1"
+            })
+        );
     }
 }

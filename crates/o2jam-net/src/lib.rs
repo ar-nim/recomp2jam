@@ -47,8 +47,8 @@ pub use message::{
 };
 pub use play::{
     ConfirmMusicLoaded, ExitPlaying, FinalizeRank, GameStatsUpdate, GetMusicList,
-    SetDownloadProgress, SetRoomArena, SetRoomMusic, StartGame, StatKind, SubmitScore,
-    SyncMemberMusicState, UpdateGameStats,
+    MemberReadyStateChanged, Ready, SetDownloadProgress, SetRoomArena, SetRoomMusic, StartGame,
+    StatKind, SubmitScore, SyncMemberMusicState, UpdateGameStats,
 };
 pub use relay::{
     ComboBroken, ComboStarted, ConnectionEndpoint, CreateRelaySession, DeleteRelaySession,
@@ -58,7 +58,8 @@ pub use relay::{
 pub use rooms::{
     Announce, Announcement, Difficulty, GameSpeed, JoinResult, JoinRoom, JoinRoomResponse,
     JoinedRoom, MainRoomAdminMessage, MainRoomChatLine, MainRoomUserMessage, RankNotification,
-    ReceiveWhisper, RoomList, RoomListEntry, RoomMember, RoomSlot, RoomSlotState, RoomState,
-    SendMainRoomMessage, SendWhisper, SendWhisperResponse, ROOM_TITLE_LEN,
+    ReceiveWhisper, RoomList, RoomListEntry, RoomMember, RoomSlot, RoomSlotAction, RoomSlotState,
+    RoomSlotUpdate, RoomState, SendMainRoomMessage, SendWhisper, SendWhisperResponse,
+    ROOM_TITLE_LEN,
 };
 pub use strings::{decode_null_terminated, encode_null_terminated, MAX_STRING_LEN};

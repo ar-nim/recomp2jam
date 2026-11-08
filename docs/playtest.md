@@ -3438,3 +3438,59 @@ audit online-loop docs log (`1065680`).
   142 → 154 from the join-drain chat tests, all other targets
   unchanged, 0 failures). No lint findings on HEAD. No commits, no
   pushes.** This sweep touched only `docs/playtest.md`.
+
+## Regression sweep — 2026-11-08 13:01 UTC+8 (HEAD `da7477b`, tree dirty mid-sweep)
+
+Live re-proof on the p2-head. Covers the cli commit landed after the
+p1-head baseline `b2c8c20`: ready start and 4011 advance online
+(`da7477b`: `crates/recomp2jam/src/session.rs` +301 ready-start gating
+and 4011 start-broadcast advance, plus the sweep log in this file).
+
+- `cargo fmt --check`: clean, `exit=0` (run at sweep start and re-run
+  clean on the dirty state below).
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0` (run at sweep start and re-run clean on the dirty state
+  below). No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1541 passed, 0 failed, 0 ignored**, `exit=0`.
+  Per target: audio 20, dump 7, file 177, game 94, net 388,
+  render 89, shell 578, real_art 7, scenes 22, recomp2jam 159
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, 0 warning
+  lines.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 158 filtered out, 0.60 s) against local
+  Memoryer 7.2.0 (`Mode=Full`). Server log for this run
+  (`12:59:16 +08:00`, session `127.0.0.1:57116`):
+  `Authorize session` → `Get channel list: [0]` →
+  `Enter channel: [0/00]` → `Get character info: [tester]` →
+  `Create room: songflow` →
+  `Update room [000] music settings: [HX / X10 / o2ma757]` →
+  `Update room [000] arena: [1] (0)` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Update #1 - Jam: 3 (Bonus: 0)` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure stack on room delete; a trailing session
+  `127.0.0.1:57118` walked `Authorize session` →
+  `Get channel list` → `Enter channel` → `Get room list` →
+  `Get character info`).
+- **Verdict: no regression — suite is green (1541 passed; +10 vs the
+  1531 `b2c8c20` baseline: recomp2jam 154 → 159 from the commit's 5
+  new ready-start/4011 session tests, shell 573 → 578 from the
+  peer's 5 uncommitted `force_advance` tests below, all other targets
+  unchanged, 0 failures). No lint findings of mine. No commits, no
+  pushes.** This sweep touched only `docs/playtest.md`.
+- Tree note: the tree was clean at sweep start, but a peer saved
+  uncommitted work mid-sweep (`crates/o2jam-shell/src/screens/game.rs`
+  +87, saved 12:58:12 +08:00: `force_advance_to_loading` guest-4011
+  advance plus 5 tests). The pinned full-suite counts above ran on
+  that dirty state — shell 578 = 573 HEAD + the peer's 5 tests, all
+  passing — and fmt, clippy, build, and the live flow were each
+  (re-)run green with it present. Per the sweep rules (touch only
+  `docs/playtest.md`, fix only my own lint findings) the peer's file
+  was left alone.

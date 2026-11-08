@@ -1543,6 +1543,112 @@ impl WireMessage for WaitingAdminMessage {
     }
 }
 
+/// Slot action (`Encore.Metadata.Room.RoomSlotActionType`, byte).
+///
+/// The 7.55 client branches exactly these three values (handler entry
+/// file `0x15e120`: compare at files `0x15e166`/`0x15e16f`/`0x15e178`);
+/// code 1 has no branch and drops like any other unknown value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum RoomSlotAction {
+    /// Seat opened.
+    SlotUnlocked = 0,
+    /// Seat locked.
+    SlotLocked = 2,
+    /// Occupant kicked.
+    PlayerKicked = 3,
+}
+
+impl RoomSlotAction {
+    /// Interpret a raw action byte. `None` means unknown.
+    #[must_use]
+    pub fn from_code(code: u8) -> Option<Self> {
+        match code {
+            0 => Some(Self::SlotUnlocked),
+            2 => Some(Self::SlotLocked),
+            3 => Some(Self::PlayerKicked),
+            _ => None,
+        }
+    }
+}
+
+/// `RoomSlotUpdate` 3009 event: one waiting-room seat changed.
+///
+/// Two bytes: `u8` seat index, then the [`RoomSlotAction`] byte.
+/// Memoryer (`Messages/Events/Waiting/RoomSlotUpdateEventData.cs`):
+/// byte `Index` (order 0), `RoomSlotActionType` (order 1). Exe-verified
+/// handler at file `0x15e120`: two size-1 reads through the
+/// packet-reader helper (`0x555d20`, sizes pushed at files
+/// `0x15e133`/`0x15e141`), index guard `< 8` (compare at file
+/// `0x15e153`, drop past file `0x15e158`), then the 0/2/3 action
+/// switch — unlock stamps the seat flag `0`, lock stamps `2`
+/// (decrementing the open-seat count at `0x7789f4`), kick refreshes
+/// the member table — each arm forwarding `(0x12, 3009, index,
+/// action)` into the UI event queue (`0x478d50`, pushes at files
+/// `0x15e1aa`/`0x15e1e5`/`0x15e2af`). Observed with GNU objdump 2.47
+/// slices plus Python byte scans over the read-only 7.55 copy; no new
+/// REA dossier filed. Memoryer shapes are corroboration until the
+/// per-field exe builder proof lands (the S→C read side above is the
+/// byte-verified part).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RoomSlotUpdate {
+    /// Seat index (`< 8`; the exe drops wider values).
+    pub index: u8,
+    /// Raw action byte; see [`RoomSlotAction::from_code`].
+    pub action_code: u8,
+}
+
+/// Body length of [`RoomSlotUpdate`]: 1 + 1.
+const ROOM_SLOT_UPDATE_BODY_LEN: usize = 2;
+
+/// Highest seat index the exe handler accepts (`cmp 8`, file
+/// `0x15e153`).
+const MAX_SLOT_INDEX: u8 = 7;
+
+impl RoomSlotUpdate {
+    /// Interpret the action byte. `None` means unknown.
+    #[must_use]
+    pub fn action(self) -> Option<RoomSlotAction> {
+        RoomSlotAction::from_code(self.action_code)
+    }
+}
+
+impl WireMessage for RoomSlotUpdate {
+    const COMMAND: u16 = 3009;
+
+    fn encode_body(&self) -> Vec<u8> {
+        vec![self.index, self.action_code]
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < ROOM_SLOT_UPDATE_BODY_LEN {
+            return Err(Error::TruncatedMessage {
+                need: ROOM_SLOT_UPDATE_BODY_LEN,
+                have: body.len(),
+            });
+        }
+        if body.len() > ROOM_SLOT_UPDATE_BODY_LEN {
+            return Err(Error::TrailingBytes(body.len() - ROOM_SLOT_UPDATE_BODY_LEN));
+        }
+        if body[0] > MAX_SLOT_INDEX {
+            return Err(Error::InvalidField {
+                field: "slot index",
+                reason: "not below 8",
+            });
+        }
+        if RoomSlotAction::from_code(body[1]).is_none() {
+            return Err(Error::InvalidField {
+                field: "slot action",
+                reason: "not 0, 2, or 3",
+            });
+        }
+        Ok(Self {
+            index: body[0],
+            action_code: body[1],
+        })
+    }
+}
+
 #[cfg(test)]
 mod room_list_tests {
     use super::*;
@@ -1974,6 +2080,84 @@ mod waiting_chat_tests {
             content: vec![0xC7, 0xD1],
         };
         assert_eq!(message.content_text(), "\u{FFFD}\u{FFFD}");
+    }
+}
+
+#[cfg(test)]
+mod slot_update_tests {
+    use super::*;
+    use crate::command::Event;
+    use crate::frame::decode_frame;
+
+    #[test]
+    fn lock_encodes_index_then_action() {
+        let update = RoomSlotUpdate {
+            index: 2,
+            action_code: 2,
+        };
+        assert_eq!(update.encode_body(), vec![0x02, 0x02]);
+        assert_eq!(update.action(), Some(RoomSlotAction::SlotLocked));
+        let frame = decode_frame(&update.encode()).unwrap();
+        assert_eq!(frame.id, 3009);
+        assert_eq!(frame.id, Event::RoomSlotUpdate as u16);
+        assert_eq!(RoomSlotUpdate::decode_frame(&frame), Ok(update));
+    }
+
+    #[test]
+    fn unlock_and_kick_name_their_actions() {
+        assert_eq!(
+            RoomSlotUpdate::decode_body(&[0x00, 0x00]),
+            Ok(RoomSlotUpdate {
+                index: 0,
+                action_code: 0,
+            })
+        );
+        let kick = RoomSlotUpdate::decode_body(&[0x07, 0x03]).unwrap();
+        assert_eq!(kick.action(), Some(RoomSlotAction::PlayerKicked));
+        assert_eq!(
+            RoomSlotAction::from_code(0),
+            Some(RoomSlotAction::SlotUnlocked)
+        );
+        assert_eq!(RoomSlotAction::from_code(1), None);
+        assert_eq!(RoomSlotAction::from_code(4), None);
+    }
+
+    #[test]
+    fn rejects_short_body() {
+        assert_eq!(
+            RoomSlotUpdate::decode_body(&[0x02]),
+            Err(Error::TruncatedMessage { need: 2, have: 1 })
+        );
+    }
+
+    #[test]
+    fn rejects_trailing_bytes() {
+        assert_eq!(
+            RoomSlotUpdate::decode_body(&[0x02, 0x02, 0x00]),
+            Err(Error::TrailingBytes(1))
+        );
+    }
+
+    #[test]
+    fn rejects_wide_index() {
+        assert_eq!(
+            RoomSlotUpdate::decode_body(&[0x08, 0x02]),
+            Err(Error::InvalidField {
+                field: "slot index",
+                reason: "not below 8"
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_action() {
+        assert_eq!(
+            RoomSlotUpdate::decode_body(&[0x02, 0x01]),
+            Err(Error::InvalidField {
+                field: "slot action",
+                reason: "not 0, 2, or 3"
+            })
+        );
     }
 }
 
