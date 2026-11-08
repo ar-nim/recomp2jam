@@ -154,7 +154,7 @@ impl Response {
 }
 
 /// Server-to-client broadcasts (Phase 2 rooms plus the 4015
-/// in-play stats echo).
+/// in-play stats echo and the 4017/4018/4040 tally answers).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum Event {
@@ -165,6 +165,9 @@ pub enum Event {
     RoomArenaEcho = 4003,
     UserReadyStateChanged = 4009,
     GameStatsUpdate = 4015,
+    ScoreSubmission = 4017,
+    ScoreCompleted = 4018,
+    GameRankUpdate = 4040,
 }
 
 impl Event {
@@ -185,6 +188,9 @@ impl Event {
             4003 => Some(Self::RoomArenaEcho),
             4009 => Some(Self::UserReadyStateChanged),
             4015 => Some(Self::GameStatsUpdate),
+            4017 => Some(Self::ScoreSubmission),
+            4018 => Some(Self::ScoreCompleted),
+            4040 => Some(Self::GameRankUpdate),
             _ => None,
         }
     }
@@ -268,6 +274,15 @@ mod tests {
         assert_eq!(Event::from_id(4009), Some(Event::UserReadyStateChanged));
         assert_eq!(Event::from_id(4015), Some(Event::GameStatsUpdate));
         assert_eq!(Event::from_id(4014), None);
+    }
+
+    #[test]
+    fn resolves_tally_answer_events() {
+        assert_eq!(Event::from_id(4017), Some(Event::ScoreSubmission));
+        assert_eq!(Event::from_id(4018), Some(Event::ScoreCompleted));
+        assert_eq!(Event::from_id(4040), Some(Event::GameRankUpdate));
+        assert_eq!(Event::from_id(4016), None);
+        assert_eq!(Event::from_id(4041), None);
     }
 
     #[test]

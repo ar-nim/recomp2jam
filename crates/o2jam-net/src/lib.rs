@@ -46,9 +46,10 @@ pub use message::{
     SubscriptionAlert, Terminate, WireMessage, MEMORYER_CLIENT_ID,
 };
 pub use play::{
-    ConfirmMusicLoaded, ExitPlaying, FinalizeRank, GameStatsUpdate, GetMusicList,
-    MemberReadyStateChanged, Ready, SetDownloadProgress, SetRoomArena, SetRoomMusic, StartGame,
-    StatKind, SubmitScore, SyncMemberMusicState, UpdateGameStats,
+    ConfirmMusicLoaded, ExitPlaying, FinalizeRank, GameRankUpdate, GameStatsUpdate, GetMusicList,
+    MatchResult, MemberReadyStateChanged, Ready, ScoreCompleted, ScoreEntry, ScoreSubmission,
+    SetDownloadProgress, SetRoomArena, SetRoomMusic, StartGame, StatKind, SubmitScore,
+    SyncMemberMusicState, UpdateGameStats,
 };
 pub use relay::{
     ComboBroken, ComboStarted, ConnectionEndpoint, CreateRelaySession, DeleteRelaySession,

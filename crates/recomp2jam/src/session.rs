@@ -70,11 +70,14 @@
 //! seats (teams per occupied slot, the local total on our seat, our
 //! team claimed) through `ScreenGame::set_battle_teams`. A failed
 //! send retries on the next paint; later paints send nothing, and
-//! leaving Result clears the latch. The shell's own Result
-//! Confirm/Back edges (Waiting for retry, Room for leave) stay
-//! untouched — no server answer decoder exists yet (4017/4018/4040
-//! stay unsent shapes here), so peer totals stay server-side and
-//! only the local total stages.
+//! leaving Result clears the latch. Every Result paint then drains
+//! the tally answers — 4017 submissions (traced per member), the
+//! 4018 ranked table (each entry total re-staged onto its seat, so
+//! the verdict turns on server-authoritative peer totals), and 4040
+//! rank places (decoded and validated; the gateway never emits it —
+//! the `FinalizeRank` broadcast stays commented out server-side).
+//! The shell's own Result Confirm/Back edges (Waiting for retry,
+//! Room for leave) stay untouched.
 //!
 //! Host song select (Waiting scene): `--online-music-id` stages a
 //! pending pick plus the installed `OJNList.dat` catalog; the next
@@ -121,7 +124,9 @@ use std::time::Duration;
 use anyhow::Context;
 use o2jam_file::{OjnListEntry, OJN_LEVEL_COUNT};
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams};
-use o2jam_net::play::{MusicListAnswer, RoomArenaEcho};
+use o2jam_net::play::{
+    GameRankUpdate, MusicListAnswer, RoomArenaEcho, ScoreCompleted, ScoreSubmission,
+};
 use o2jam_net::rooms::{
     Announcement, MainRoomAdminMessage, MainRoomUserMessage, RankNotification, ReceiveWhisper,
     RoomSlotAction, RoomSlotUpdate, SendMainRoomMessage, SendWaitingMessage, SendWhisper,
@@ -155,6 +160,12 @@ const CHAT_IO_TIMEOUT: Duration = Duration::from_millis(1);
 /// drain): the same never-stall shape as the stats section — a missed
 /// notice window retries on the next paint.
 const NOTICE_IO_TIMEOUT: Duration = Duration::from_millis(1);
+/// Socket window for the per-frame tally section (the 4017/4018/4040
+/// answer drain): wider than the 1 ms chat/stats polls because the
+/// server computes rewards between our submit and its broadcast, but
+/// still never stalls the frame loop — a late table retries on the
+/// next paint while Result stays up.
+const TALLY_IO_TIMEOUT: Duration = Duration::from_millis(100);
 /// Resting gateway timeout outside the stats section: the transport
 /// default (`client.rs` `DEFAULT_IO_TIMEOUT`), restored after every
 /// stats section like `run_song_flow` restores `SONG_FLOW_IO_TIMEOUT`.
@@ -1070,26 +1081,102 @@ impl OnlineSession {
 
     /// Result tally section: the first paint in Result after a joined
     /// play submits the live tally triple and stages the battle
-    /// mirror. A failed send retries on the next paint (same
-    /// keep-on-failure shape as [`Self::maybe_send_tick`]); later
-    /// paints send nothing, and leaving Result clears the latch so
-    /// the next song tallies again. The offline walk never sends.
+    /// mirror, and every joined Result paint drains the tally answers.
+    /// A failed send retries on the next paint (same keep-on-failure
+    /// shape as [`Self::maybe_send_tick`]); leaving Result clears the
+    /// latch so the next song tallies again. The offline walk never
+    /// sends.
     fn poll_tally(&mut self) {
         if self.game.screen() != Screen::Result {
             self.tally_sent = false;
             return;
         }
-        if !self.joined_waiting || self.tally_sent {
+        if !self.joined_waiting {
             return;
         }
-        let Some(speed) = self.tally_speed() else {
-            tracing::warn!("tally blocked: no staged speed; retrying next paint");
+        if !self.tally_sent {
+            let Some(speed) = self.tally_speed() else {
+                tracing::warn!("tally blocked: no staged speed; retrying next paint");
+                return;
+            };
+            match self.send_tally(speed) {
+                Ok(()) => self.tally_sent = true,
+                Err(source) => {
+                    tracing::warn!(%source, "tally send failed; retrying next paint");
+                    return;
+                }
+            }
+        }
+        self.drain_tally_answers();
+    }
+
+    /// Drain waiting tally answers into the battle mirror until the
+    /// socket goes quiet — the 4015 echo drain's best-effort shape:
+    /// keepalives skip silently, foreign ids log and skip, undecodable
+    /// bodies drop with a trace (`ERRORS-19`: nothing is dropped
+    /// without a trace).
+    fn drain_tally_answers(&mut self) {
+        if let Err(source) = self.gateway.set_timeouts(Some(TALLY_IO_TIMEOUT)) {
+            tracing::debug!(%source, "tally section skipped: timeout rejected");
+            return;
+        }
+        loop {
+            match self.gateway.next_frame() {
+                Ok(frame) if frame.id == ScoreSubmission::COMMAND => {
+                    self.apply_score_submission(&frame);
+                }
+                Ok(frame) if frame.id == ScoreCompleted::COMMAND => {
+                    self.apply_score_completed(&frame);
+                }
+                Ok(frame) if frame.id == GameRankUpdate::COMMAND => {
+                    self.apply_rank_update(&frame);
+                }
+                Ok(frame) if Generic::from_id(frame.id).is_some() => {}
+                Ok(frame) => {
+                    tracing::debug!(id = frame.id, "skipping non-tally frame in tally drain");
+                }
+                Err(_) => break,
+            }
+        }
+        if let Err(source) = self.gateway.set_timeouts(Some(SESSION_IO_TIMEOUT)) {
+            tracing::debug!(%source, "tally timeout restore failed");
+        }
+    }
+
+    /// Fold one 4017 frame: the submitting member is traced (no totals
+    /// ride this broadcast — those arrive with 4018).
+    fn apply_score_submission(&mut self, frame: &Frame) {
+        match ScoreSubmission::decode_frame(frame) {
+            Ok(submitted) => {
+                tracing::debug!(member = submitted.member_id, "tally submitted");
+            }
+            Err(source) => {
+                tracing::debug!(id = frame.id, %source, "dropping undecodable tally notice");
+            }
+        }
+    }
+
+    /// Fold one 4018 frame: every entry total re-stages onto its seat,
+    /// so the verdict turns on server-authoritative peer totals instead
+    /// of the local-only staging from the send (undecodable bodies
+    /// drop with a trace; the socket position is already past them).
+    fn apply_score_completed(&mut self, frame: &Frame) {
+        let Ok(completed) = ScoreCompleted::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable score table");
             return;
         };
-        match self.send_tally(speed) {
-            Ok(()) => self.tally_sent = true,
+        self.stage_server_totals(&completed);
+    }
+
+    /// Fold one 4040 frame: decoded and validated (the places mirror
+    /// the entry order the 4018 table already stages), then traced.
+    fn apply_rank_update(&mut self, frame: &Frame) {
+        match GameRankUpdate::decode_frame(frame) {
+            Ok(ranks) => {
+                tracing::debug!(?ranks.member_ranks, "rank places");
+            }
             Err(source) => {
-                tracing::warn!(%source, "tally send failed; retrying next paint");
+                tracing::debug!(id = frame.id, %source, "dropping undecodable rank places");
             }
         }
     }
@@ -1137,30 +1224,62 @@ impl OnlineSession {
         }
     }
 
-    /// Stage the battle mirror from the joined seats: teams per
-    /// occupied slot, the local total on our seat, our team claimed
-    /// for the verdict. Peer totals stay server-side (no 4017/4040
-    /// decoder exists), so only the local total stages — a solo or
-    /// seat-less room stages teams with no winner.
-    fn stage_battle_teams(&mut self, local_points: u64) {
-        let Some(room) = self.joined_room.as_ref() else {
-            return;
-        };
+    /// Battle mirror skeleton from the joined seats: teams per
+    /// occupied slot, no totals yet (`None` while seat-less).
+    fn battle_seats(&self) -> Option<RoomTeams> {
+        let room = self.joined_room.as_ref()?;
         let mut teams = RoomTeams::new();
         for slot in &room.slots {
             if let Some(member) = slot.member.as_ref() {
                 teams.set_team(usize::from(slot.index), member.team);
             }
         }
-        teams.submit(usize::from(room.member_id), local_points);
-        let self_team = room
-            .slots
+        Some(teams)
+    }
+
+    /// Our team behind the battle verdict (`None` while seat-less).
+    fn battle_self_team(&self) -> Option<u8> {
+        let room = self.joined_room.as_ref()?;
+        room.slots
             .iter()
             .find(|slot| slot.index == room.member_id)
             .and_then(|slot| slot.member.as_ref())
-            .map(|member| member.team);
+            .map(|member| member.team)
+    }
+
+    /// Stage one battle mirror into the shell.
+    fn stage_teams(&mut self, teams: RoomTeams) {
+        let self_team = self.battle_self_team();
         self.game.set_battle_teams(teams);
         self.game.set_battle_self_team(self_team);
+    }
+
+    /// Stage the battle mirror from the joined seats: teams per
+    /// occupied slot, the local total on our seat, our team claimed
+    /// for the verdict — a solo or seat-less room stages teams with
+    /// no winner. The 4018 drain restages server totals over this.
+    fn stage_battle_teams(&mut self, local_points: u64) {
+        let Some(mut teams) = self.battle_seats() else {
+            return;
+        };
+        if let Some(room) = self.joined_room.as_ref() {
+            teams.submit(usize::from(room.member_id), local_points);
+        }
+        self.stage_teams(teams);
+    }
+
+    /// Re-stage the battle mirror from the server-ranked 4018 table:
+    /// teams per occupied joined seat, every entry total on its seat.
+    /// Server-authoritative — replaces the local-only staging from
+    /// the send (a seat-less room stages nothing).
+    fn stage_server_totals(&mut self, completed: &ScoreCompleted) {
+        let Some(mut teams) = self.battle_seats() else {
+            return;
+        };
+        for entry in &completed.scores {
+            teams.submit(usize::from(entry.member_id), u64::from(entry.score));
+        }
+        self.stage_teams(teams);
     }
 
     /// Per-frame chat section in `Waiting`: drain inbound 3012/3013
@@ -2329,6 +2448,100 @@ mod session_tests {
         assert_eq!(session.game.screen(), Screen::Result);
         session.menu_key(MenuKey::Confirm, true);
         assert_eq!(session.game.screen(), Screen::Waiting);
+    }
+
+    #[test]
+    fn result_drain_folds_server_totals_into_battle_verdict() {
+        use o2jam_net::{GameRankUpdate, MatchResult, ScoreCompleted, ScoreEntry, ScoreSubmission};
+        let mut room = joined_snapshot();
+        room.slots[0].member = Some(member("host", true));
+        room.slots[1].member = Some(member("peer", true));
+        room.slots[1].member.as_mut().unwrap().team = 1;
+        let (mut session, server) = joined_waiting_session(room, |mut stream| {
+            assert_eq!(read_frame(&mut stream).id, 4010);
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::ConfirmMusicLoaded.id()
+            );
+            loop {
+                if read_frame(&mut stream).id == o2jam_net::Request::SubmitScore.id() {
+                    break;
+                }
+            }
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::FinalizeRank.id()
+            );
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::ExitPlaying.id()
+            );
+            // Tally answers: our 200 stands, the peer's 50000 takes
+            // team 1 past us — server-authoritative, like the live
+            // gateway's 4017/4018 pair.
+            let submitted = ScoreSubmission { member_id: 0 };
+            stream.write_all(&submitted.encode()).unwrap();
+            let completed = ScoreCompleted {
+                room_master: 1,
+                scores: vec![
+                    ScoreEntry {
+                        member_id: 1,
+                        active: true,
+                        cool: 50,
+                        good: 0,
+                        bad: 0,
+                        miss: 0,
+                        max_combo: 200,
+                        jam: 9,
+                        score: 50_000,
+                        reward: 300,
+                        level: 3,
+                        experience: 2000,
+                        result: MatchResult::Win,
+                        gem: 11000,
+                        cash_point: 0,
+                        speed: 1,
+                        long_note_score: 60,
+                    },
+                    ScoreEntry {
+                        member_id: 0,
+                        active: true,
+                        cool: 1,
+                        good: 0,
+                        bad: 0,
+                        miss: 0,
+                        max_combo: 1,
+                        jam: 0,
+                        score: 200,
+                        reward: 90,
+                        level: 2,
+                        experience: 1911,
+                        result: MatchResult::Lose,
+                        gem: 10133,
+                        cash_point: 0,
+                        speed: 1,
+                        long_note_score: 0,
+                    },
+                ],
+            };
+            stream.write_all(&completed.encode()).unwrap();
+            let ranks = GameRankUpdate {
+                member_ranks: [1, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
+            };
+            stream.write_all(&ranks.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        play_one_note_to_result(&mut session);
+        paint_frame(&mut session);
+        server.join().unwrap();
+        // Local-only staging said Win (200 vs empty); the 4018 table
+        // restages both seats, so our team-0 total loses to team 1.
+        assert_eq!(session.game.screen(), Screen::Result);
+        assert_eq!(
+            session.game.battle_verdict(),
+            Some(o2jam_shell::screens::paint::BattleVerdict::Lose)
+        );
     }
 
     #[test]

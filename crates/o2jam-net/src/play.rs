@@ -765,6 +765,332 @@ impl WireMessage for MemberReadyStateChanged {
     }
 }
 
+/// `ScoreSubmission` 4017: one member's tally reached the tracker.
+///
+/// Single `u8` member slot. Live-proven: the gateway broadcasts a
+/// 1-byte body naming the submitting slot (local Memoryer Full-mode
+/// song flow, `00` for the solo member). Exe shape corroboration:
+/// case file `0x1586cc` (dispatcher subtract-base slot: byte-table
+/// file `0x158a68` index `0x0e` holds slot `0x07`, address-table file
+/// `0x1589f4` slot 7 — shared edges `ev_c7b26aac`/`ev_9412e595` in
+/// `extracted/rea-4015-dossier.json`) calls handler VA `0x55fba0`
+/// (file `0x15fba0`), which performs one size-1 read through the
+/// packet-reader helper (`0x555d20`, size push at file `0x15fbad`).
+/// Observed with GNU objdump 2.47 slices plus Python 3.14.9 byte
+/// scans over the read-only 7.55 copy; no new REA dossier filed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScoreSubmission {
+    /// Room slot whose tally arrived.
+    pub member_id: u8,
+}
+
+/// Body length of [`ScoreSubmission`]: one member byte.
+const SCORE_SUBMISSION_BODY_LEN: usize = 1;
+
+impl WireMessage for ScoreSubmission {
+    const COMMAND: u16 = 4017;
+
+    fn encode_body(&self) -> Vec<u8> {
+        vec![self.member_id]
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < SCORE_SUBMISSION_BODY_LEN {
+            return Err(Error::TruncatedMessage {
+                need: SCORE_SUBMISSION_BODY_LEN,
+                have: body.len(),
+            });
+        }
+        if body.len() > SCORE_SUBMISSION_BODY_LEN {
+            return Err(Error::TrailingBytes(body.len() - SCORE_SUBMISSION_BODY_LEN));
+        }
+        Ok(Self { member_id: body[0] })
+    }
+}
+
+/// Per-member verdict inside [`ScoreCompleted`] (Memoryer
+/// `ScoreCompletedEventData.MatchResult`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum MatchResult {
+    /// Tied top score.
+    Draw = 0,
+    /// Sole top score.
+    Win = 1,
+    /// Beaten.
+    Lose = 2,
+}
+
+impl MatchResult {
+    /// Parse a wire byte; unknown verdicts are an error.
+    ///
+    /// # Errors
+    ///
+    /// `Error::InvalidField` outside 0–2.
+    pub fn from_u8(value: u8) -> Result<Self, Error> {
+        match value {
+            0 => Ok(Self::Draw),
+            1 => Ok(Self::Win),
+            2 => Ok(Self::Lose),
+            _ => Err(Error::InvalidField {
+                field: "match result",
+                reason: "not 0, 1, or 2",
+            }),
+        }
+    }
+}
+
+/// One ranked tally row inside [`ScoreCompleted`] (Memoryer
+/// `ScoreCompletedEventData.ScoreEntry`).
+///
+/// Every nullable field rides the wire as its raw value: the live
+/// gateway populates all of them (the publisher assigns every field
+/// and skips absent members instead of nulling fields), so a body
+/// that ends mid-row is truncated, never sparse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScoreEntry {
+    /// Room slot this row belongs to.
+    pub member_id: u8,
+    /// Tracker accepted the tally.
+    pub active: bool,
+    /// Cool hits.
+    pub cool: u16,
+    /// Good hits.
+    pub good: u16,
+    /// Bad hits.
+    pub bad: u16,
+    /// Misses.
+    pub miss: u16,
+    /// Best combo.
+    pub max_combo: u16,
+    /// Final jam level.
+    pub jam: u16,
+    /// Final score.
+    pub score: u32,
+    /// Server-computed reward.
+    pub reward: u16,
+    /// Member level after the game.
+    pub level: i32,
+    /// Member experience after the game.
+    pub experience: i32,
+    /// Draw/win/lose verdict.
+    pub result: MatchResult,
+    /// Member gem after the game.
+    pub gem: i32,
+    /// Member cash point after the game.
+    pub cash_point: i32,
+    /// Scroll-speed code.
+    pub speed: u8,
+    /// Long-note bonus total.
+    pub long_note_score: i32,
+}
+
+/// Wire size of one [`ScoreEntry`]:
+/// 1 + 4 + 6×2 + 4 + 2 + 4 + 4 + 1 + 4 + 4 + 1 + 4.
+const SCORE_ENTRY_LEN: usize = 45;
+/// Wire size of the [`ScoreCompleted`] head: `i32` count + `u8` master.
+const SCORE_COMPLETED_HEAD_LEN: usize = 5;
+/// Most rows one [`ScoreCompleted`] carries (Memoryer `maxCount: 8`).
+const SCORE_COMPLETED_MAX_ROWS: usize = 8;
+
+/// Read one little-endian `u32` at `at`.
+fn dword_at(body: &[u8], at: usize) -> u32 {
+    u32::from_le_bytes([body[at], body[at + 1], body[at + 2], body[at + 3]])
+}
+
+/// Read one little-endian `i32` at `at`.
+fn s32_at(body: &[u8], at: usize) -> i32 {
+    i32::from_le_bytes([body[at], body[at + 1], body[at + 2], body[at + 3]])
+}
+
+/// Parse one [`ScoreEntry`] from exactly [`SCORE_ENTRY_LEN`] bytes.
+fn decode_score_entry(chunk: &[u8]) -> Result<ScoreEntry, Error> {
+    debug_assert_eq!(chunk.len(), SCORE_ENTRY_LEN);
+    let active = match dword_at(chunk, 1) {
+        0 => false,
+        1 => true,
+        _ => {
+            return Err(Error::InvalidField {
+                field: "score active",
+                reason: "not 0 or 1",
+            });
+        }
+    };
+    Ok(ScoreEntry {
+        member_id: chunk[0],
+        active,
+        cool: word_at(chunk, 5),
+        good: word_at(chunk, 7),
+        bad: word_at(chunk, 9),
+        miss: word_at(chunk, 11),
+        max_combo: word_at(chunk, 13),
+        jam: word_at(chunk, 15),
+        score: dword_at(chunk, 17),
+        reward: word_at(chunk, 21),
+        level: s32_at(chunk, 23),
+        experience: s32_at(chunk, 27),
+        result: MatchResult::from_u8(chunk[31])?,
+        gem: s32_at(chunk, 32),
+        cash_point: s32_at(chunk, 36),
+        speed: chunk[40],
+        long_note_score: s32_at(chunk, 41),
+    })
+}
+
+/// Write one [`ScoreEntry`] in field order.
+fn encode_score_entry(entry: &ScoreEntry, body: &mut Vec<u8>) {
+    body.push(entry.member_id);
+    body.extend_from_slice(&i32::from(entry.active).to_le_bytes());
+    for tally in [
+        entry.cool,
+        entry.good,
+        entry.bad,
+        entry.miss,
+        entry.max_combo,
+        entry.jam,
+    ] {
+        body.extend_from_slice(&tally.to_le_bytes());
+    }
+    body.extend_from_slice(&entry.score.to_le_bytes());
+    body.extend_from_slice(&entry.reward.to_le_bytes());
+    body.extend_from_slice(&entry.level.to_le_bytes());
+    body.extend_from_slice(&entry.experience.to_le_bytes());
+    body.push(entry.result as u8);
+    body.extend_from_slice(&entry.gem.to_le_bytes());
+    body.extend_from_slice(&entry.cash_point.to_le_bytes());
+    body.push(entry.speed);
+    body.extend_from_slice(&entry.long_note_score.to_le_bytes());
+}
+
+/// `ScoreCompleted` 4018: final ranked tallies for the room.
+///
+/// `i32` row count, `u8` room-master slot, then that many fixed
+/// [`SCORE_ENTRY_LEN`]-byte rows. Live-proven: a solo submit against
+/// the local Memoryer Full-mode gateway broadcasts a 50-byte body
+/// (count 1, master 0, one full row echoing the 4016 tally plus
+/// server rewards/levels — see
+/// `score_completed_decodes_live_capture`). Exe shape
+/// corroboration: case file `0x1586dd` (byte-table file `0x158a68`
+/// index `0x0f` holds slot `0x08`, address-table file `0x1589f4`
+/// slot 8 — shared edges `ev_c7b26aac`/`ev_9412e595`) calls handler
+/// VA `0x55fbe0` (file `0x15fbe0`), which reads sizes 4/1/1/4 (count,
+/// master, member, active flag) then loops over the member table
+/// (stride `0x2190` onto base `0x77ee90`, immediates in range).
+/// Observed with GNU objdump 2.47 slices plus Python 3.14.9 byte
+/// scans over the read-only 7.55 copy; no new REA dossier filed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScoreCompleted {
+    /// Room-master slot.
+    pub room_master: u8,
+    /// Ranked tally rows (best score first).
+    pub scores: Vec<ScoreEntry>,
+}
+
+impl WireMessage for ScoreCompleted {
+    const COMMAND: u16 = 4018;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body =
+            Vec::with_capacity(SCORE_COMPLETED_HEAD_LEN + self.scores.len() * SCORE_ENTRY_LEN);
+        let count = i32::try_from(self.scores.len()).unwrap_or(i32::MAX);
+        body.extend_from_slice(&count.to_le_bytes());
+        body.push(self.room_master);
+        for entry in &self.scores {
+            encode_score_entry(entry, &mut body);
+        }
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < SCORE_COMPLETED_HEAD_LEN {
+            return Err(Error::TruncatedMessage {
+                need: SCORE_COMPLETED_HEAD_LEN,
+                have: body.len(),
+            });
+        }
+        let count = s32_at(body, 0);
+        let count = usize::try_from(count).map_err(|_| Error::InvalidField {
+            field: "score count",
+            reason: "negative entry count",
+        })?;
+        if count > SCORE_COMPLETED_MAX_ROWS {
+            return Err(Error::InvalidField {
+                field: "score count",
+                reason: "more than 8 entries",
+            });
+        }
+        let need = SCORE_COMPLETED_HEAD_LEN + count * SCORE_ENTRY_LEN;
+        if body.len() < need {
+            return Err(Error::TruncatedMessage {
+                need,
+                have: body.len(),
+            });
+        }
+        if body.len() > need {
+            return Err(Error::TrailingBytes(body.len() - need));
+        }
+        let mut scores = Vec::with_capacity(count);
+        for index in 0..count {
+            let at = SCORE_COMPLETED_HEAD_LEN + index * SCORE_ENTRY_LEN;
+            scores.push(decode_score_entry(&body[at..at + SCORE_ENTRY_LEN])?);
+        }
+        Ok(Self {
+            room_master: body[4],
+            scores,
+        })
+    }
+}
+
+/// `GameRankUpdate` 4040: leaderboard place per member.
+///
+/// Eight rank bytes; byte `i` holds the member id on leaderboard
+/// place `i` (`0xff` marks an empty place — the same
+/// member-ids-plus-`0xff`-pad shape as the 4015 rank bytes,
+/// live-proven there per `docs/relay.md` §12). Memoryer-only shape:
+/// the `FinalizeRank` broadcast stays commented out server-side, so
+/// no live bytes exist; the decoder is ready for the wire form when
+/// a gateway emits it. Exe shape corroboration: case file `0x158798`
+/// (byte-table file `0x158a68` index `0x25` holds slot `0x12`,
+/// address-table file `0x1589f4` slot `0x12` — shared edges
+/// `ev_c7b26aac`/`ev_9412e595`) calls handler VA `0x559a60` (file
+/// `0x159a60`), which reads byte-sized through the packet-reader
+/// helper (`0x555d20`, size push at file `0x159a8b`) and walks the
+/// member table (stride `0x2190`, self base `0x77cd00`, table base
+/// `0x77ee90`, immediates in range). Observed with GNU objdump 2.47
+/// slices plus Python 3.14.9 byte scans over the read-only 7.55 copy;
+/// no new REA dossier filed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GameRankUpdate {
+    /// Member id on each leaderboard place (`0xff` = empty).
+    pub member_ranks: [u8; 8],
+}
+
+/// Body length of [`GameRankUpdate`]: eight rank bytes.
+const GAME_RANK_UPDATE_BODY_LEN: usize = 8;
+
+impl WireMessage for GameRankUpdate {
+    const COMMAND: u16 = 4040;
+
+    fn encode_body(&self) -> Vec<u8> {
+        self.member_ranks.to_vec()
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < GAME_RANK_UPDATE_BODY_LEN {
+            return Err(Error::TruncatedMessage {
+                need: GAME_RANK_UPDATE_BODY_LEN,
+                have: body.len(),
+            });
+        }
+        if body.len() > GAME_RANK_UPDATE_BODY_LEN {
+            return Err(Error::TrailingBytes(body.len() - GAME_RANK_UPDATE_BODY_LEN));
+        }
+        let mut member_ranks = [0u8; GAME_RANK_UPDATE_BODY_LEN];
+        member_ranks.copy_from_slice(&body[..GAME_RANK_UPDATE_BODY_LEN]);
+        Ok(Self { member_ranks })
+    }
+}
+
 #[cfg(test)]
 mod song_sync_tests {
     use super::*;
@@ -798,6 +1124,202 @@ mod song_sync_tests {
             Request::SetDownloadProgress as u16
         );
         assert_eq!(FinalizeRank::COMMAND, Request::FinalizeRank as u16);
+    }
+
+    #[test]
+    fn command_ids_match_tally_answers() {
+        use crate::command::Event;
+        assert_eq!(ScoreSubmission::COMMAND, Event::ScoreSubmission as u16);
+        assert_eq!(ScoreCompleted::COMMAND, Event::ScoreCompleted as u16);
+        assert_eq!(GameRankUpdate::COMMAND, Event::GameRankUpdate as u16);
+        assert_eq!(ScoreSubmission::COMMAND, 4017);
+        assert_eq!(ScoreCompleted::COMMAND, 4018);
+        assert_eq!(GameRankUpdate::COMMAND, 4040);
+    }
+
+    #[test]
+    fn match_result_names_win_draw_lose() {
+        assert_eq!(MatchResult::from_u8(0), Ok(MatchResult::Draw));
+        assert_eq!(MatchResult::from_u8(1), Ok(MatchResult::Win));
+        assert_eq!(MatchResult::from_u8(2), Ok(MatchResult::Lose));
+        assert_eq!(
+            MatchResult::from_u8(3),
+            Err(Error::InvalidField {
+                field: "match result",
+                reason: "not 0, 1, or 2"
+            })
+        );
+    }
+
+    #[test]
+    fn score_submission_round_trips_member_byte() {
+        let submitted = ScoreSubmission { member_id: 2 };
+        assert_eq!(submitted.encode_body(), vec![0x02]);
+        let frame = decode_frame(&submitted.encode()).unwrap();
+        assert_eq!(frame.id, 4017);
+        assert_eq!(ScoreSubmission::decode_frame(&frame), Ok(submitted));
+    }
+
+    #[test]
+    fn score_submission_rejects_empty_body() {
+        assert_eq!(
+            ScoreSubmission::decode_body(&[]),
+            Err(Error::TruncatedMessage { need: 1, have: 0 })
+        );
+    }
+
+    #[test]
+    fn score_submission_rejects_trailing_bytes() {
+        assert_eq!(
+            ScoreSubmission::decode_body(&[0x00, 0x01]),
+            Err(Error::TrailingBytes(1))
+        );
+    }
+
+    fn live_score_entry() -> ScoreEntry {
+        ScoreEntry {
+            member_id: 0,
+            active: true,
+            cool: 10,
+            good: 20,
+            bad: 5,
+            miss: 3,
+            max_combo: 100,
+            jam: 9,
+            score: 123_456,
+            reward: 213,
+            level: 2,
+            experience: 1911,
+            result: MatchResult::Win,
+            gem: 10133,
+            cash_point: 0,
+            speed: 1,
+            long_note_score: 50,
+        }
+    }
+
+    fn live_completed_body() -> Vec<u8> {
+        vec![
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x14, 0x00,
+            0x05, 0x00, 0x03, 0x00, 0x64, 0x00, 0x09, 0x00, 0x40, 0xe2, 0x01, 0x00, 0xd5, 0x00,
+            0x02, 0x00, 0x00, 0x00, 0x77, 0x07, 0x00, 0x00, 0x01, 0x95, 0x27, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x01, 0x32, 0x00, 0x00, 0x00,
+        ]
+    }
+
+    #[test]
+    fn score_completed_decodes_live_capture() {
+        // Solo submit against the local Memoryer Full-mode gateway:
+        // count 1, master 0, one full row echoing the 4016 tally
+        // (10/20/5/3, combo 100, jam 9, 123456, life survived) plus
+        // server rewards and post-game levels.
+        let body = live_completed_body();
+        assert_eq!(body.len(), 50);
+        let completed = ScoreCompleted::decode_body(&body).unwrap();
+        assert_eq!(completed.room_master, 0);
+        assert_eq!(completed.scores, vec![live_score_entry()]);
+        assert_eq!(completed.encode_body(), body);
+        let frame = decode_frame(&completed.encode()).unwrap();
+        assert_eq!(frame.id, 4018);
+        assert_eq!(ScoreCompleted::decode_frame(&frame), Ok(completed));
+    }
+
+    #[test]
+    fn score_completed_rejects_negative_count() {
+        assert_eq!(
+            ScoreCompleted::decode_body(&[0xFF, 0xFF, 0xFF, 0xFF, 0x00]),
+            Err(Error::InvalidField {
+                field: "score count",
+                reason: "negative entry count"
+            })
+        );
+    }
+
+    #[test]
+    fn score_completed_rejects_overfull_count() {
+        assert_eq!(
+            ScoreCompleted::decode_body(&[0x09, 0x00, 0x00, 0x00, 0x00]),
+            Err(Error::InvalidField {
+                field: "score count",
+                reason: "more than 8 entries"
+            })
+        );
+    }
+
+    #[test]
+    fn score_completed_rejects_truncated_row() {
+        let mut body = live_completed_body();
+        body.pop();
+        assert_eq!(
+            ScoreCompleted::decode_body(&body),
+            Err(Error::TruncatedMessage { need: 50, have: 49 })
+        );
+    }
+
+    #[test]
+    fn score_completed_rejects_trailing_bytes() {
+        let mut body = live_completed_body();
+        body.push(0x00);
+        assert_eq!(
+            ScoreCompleted::decode_body(&body),
+            Err(Error::TrailingBytes(1))
+        );
+    }
+
+    #[test]
+    fn score_completed_rejects_bad_verdict() {
+        let mut body = live_completed_body();
+        body[5 + 31] = 0x09;
+        assert_eq!(
+            ScoreCompleted::decode_body(&body),
+            Err(Error::InvalidField {
+                field: "match result",
+                reason: "not 0, 1, or 2"
+            })
+        );
+    }
+
+    #[test]
+    fn score_completed_rejects_bad_active_flag() {
+        let mut body = live_completed_body();
+        body[5 + 1] = 0x09;
+        assert_eq!(
+            ScoreCompleted::decode_body(&body),
+            Err(Error::InvalidField {
+                field: "score active",
+                reason: "not 0 or 1"
+            })
+        );
+    }
+
+    #[test]
+    fn game_rank_update_round_trips_leader_places() {
+        let ranks = GameRankUpdate {
+            member_ranks: [1, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
+        };
+        assert_eq!(
+            ranks.encode_body(),
+            vec![0x01, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]
+        );
+        let frame = decode_frame(&ranks.encode()).unwrap();
+        assert_eq!(frame.id, 4040);
+        assert_eq!(GameRankUpdate::decode_frame(&frame), Ok(ranks));
+    }
+
+    #[test]
+    fn game_rank_update_rejects_short_body() {
+        assert_eq!(
+            GameRankUpdate::decode_body(&[0x01; 7]),
+            Err(Error::TruncatedMessage { need: 8, have: 7 })
+        );
+    }
+
+    #[test]
+    fn game_rank_update_rejects_trailing_bytes() {
+        assert_eq!(
+            GameRankUpdate::decode_body(&[0x01; 9]),
+            Err(Error::TrailingBytes(1))
+        );
     }
 
     #[test]
