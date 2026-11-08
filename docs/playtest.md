@@ -3191,3 +3191,42 @@ the sweep log in this file.
   `crates/o2jam-shell/src/screens/game.rs` and
   `crates/recomp2jam/src/session.rs` after the last gate finished.
   Left alone per the sweep rules.
+
+## Regression sweep — 2026-11-08 12:03 UTC+8 (HEAD `8884b91`, tree clean)
+
+Live re-proof on the lobbysend-head. Covers the send commit landed
+after the lobby-head baseline `7c81f96`: send lobby chat over session
+bridge (`8884b91`: lobby chat send path in `screens/game.rs` +
+`session.rs`), plus the sweep log in this file.
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1467 passed, 0 failed, 0 ignored**, `exit=0`.
+  Per target: audio 20, dump 7, file 177, game 94, net 375,
+  render 89, shell 548, real_art 7, scenes 22, recomp2jam 128
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, no warnings.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 127 filtered out, 0.60 s) against local
+  Memoryer 7.2.0 (`Mode=Full`). Server log for this run
+  (`12:02:42 +08:00`): `Create room: songflow` →
+  `Update room [000] music settings: [HX / X10 / o2ma757]` →
+  `Update room [000] arena: [1] (0)` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Update #1 - Jam: 3 (Bonus: 0)` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure stack on room delete; a trailing session walked
+  `Authorize session` → `Get channel list` → `Enter channel` →
+  `Get room list` → `Get character info`).
+- **Verdict: no regression — suite is green on the lobbysend-head
+  (1467 passed; +14 vs the 1453 `7c81f96` baseline: shell 540 → 548
+  and recomp2jam 122 → 128 from the lobby-chat send tests, all other
+  targets unchanged, 0 failures). No lint findings. No commits, no
+  pushes.** This sweep touched only `docs/playtest.md`.

@@ -82,6 +82,10 @@ pub struct ScreenGame {
     /// Unsent channel draft for the Channel input line (2012 source;
     /// whisper content source for [`Self::channel_whisper_message`]).
     channel_input: String,
+    /// Last whisper peer behind `/r` (the most recent incoming 2019
+    /// sender or outgoing 2017 recipient; `None` until a whisper
+    /// flows either way, so a reply with no peer falls back to chat).
+    last_whisper_peer: Option<String>,
     rooms: Vec<RoomListEntry>,
     room_highlight: usize,
     waiting: Option<JoinedRoom>,
@@ -193,6 +197,97 @@ fn cover_image(decoded: &o2jam_file::JpegRgbImage) -> Option<Rgb555Image> {
     })
 }
 
+/// Parsed chat draft behind the lobby/waiting slash grammar: the exe
+/// lobbies its 2017 whisper send behind `/w`, `/r`, `/h`, `/help`
+/// literals (VAs `0x647d60`+, send at file `0x8fa02`), and the waiting
+/// room sends 2017 the same way (files `0xb8ffc`/`0xb9369`). Unknown
+/// commands fall back to plain chat, so only these four tokens divert.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SlashCommand {
+    /// The draft is empty: nothing to send, so the scene may advance.
+    Empty,
+    /// Plain chat: the 2012 (Channel) or 3011 (waiting) body.
+    Chat(String),
+    /// Whisper: the 2017 recipient plus text.
+    Whisper {
+        /// Named addressee (`/w` name, or the last peer for `/r`).
+        recipient: String,
+        /// Whisper text (the words after the name).
+        content: String,
+    },
+    /// Help (`/h`, `/help`): local only, no packet.
+    Help,
+}
+
+/// Split a `/`-draft into its command token plus the rest
+/// (`/w bob hi` to `("w", " bob hi")`). `None` while the draft
+/// names no command at all.
+fn split_command_token(draft: &str) -> Option<(&str, &str)> {
+    let body = draft.strip_prefix('/')?;
+    let end = body.find(char::is_whitespace).unwrap_or(body.len());
+    Some((body.get(..end)?, body.get(end..).unwrap_or("")))
+}
+
+/// Split a `/w` tail into name plus text (`"  bob   hi there "` to
+/// `("bob", "hi there")`; extra gaps collapse, ends trim).
+/// `None` while the name or the text is missing — the draft then
+/// falls back to plain chat.
+fn parse_whisper_rest(rest: &str) -> Option<(String, String)> {
+    let name_start = rest.find(|c: char| !c.is_whitespace())?;
+    let unprefixed = rest.get(name_start..)?;
+    let name_end = unprefixed
+        .find(char::is_whitespace)
+        .unwrap_or(unprefixed.len());
+    let recipient = unprefixed.get(..name_end)?;
+    if recipient.is_empty() {
+        return None;
+    }
+    let content = unprefixed.get(name_end..)?.trim();
+    if content.is_empty() {
+        return None;
+    }
+    Some((recipient.to_owned(), content.to_owned()))
+}
+
+/// Split a `/r` tail against the last whisper peer (the tail is the
+/// whole text). `None` with no peer or no text — the draft then
+/// falls back to plain chat.
+fn parse_reply_text(rest: &str, reply_to: Option<&str>) -> Option<(String, String)> {
+    let peer = reply_to.filter(|peer| !peer.is_empty())?;
+    let content = rest.trim();
+    if content.is_empty() {
+        return None;
+    }
+    Some((peer.to_owned(), content.to_owned()))
+}
+
+/// Parse one draft through the slash grammar. The draft stays whole
+/// for `Chat` (unknown or incomplete commands send as-is); `Help`
+/// carries no packet; `Empty` names the empty draft.
+fn parse_slash_draft(draft: &str, reply_to: Option<&str>) -> SlashCommand {
+    if draft.is_empty() {
+        return SlashCommand::Empty;
+    }
+    if !draft.starts_with('/') {
+        return SlashCommand::Chat(draft.to_owned());
+    }
+    let Some((command, rest)) = split_command_token(draft) else {
+        return SlashCommand::Chat(draft.to_owned());
+    };
+    match command {
+        "w" => parse_whisper_rest(rest).map_or_else(
+            || SlashCommand::Chat(draft.to_owned()),
+            |(recipient, content)| SlashCommand::Whisper { recipient, content },
+        ),
+        "r" => parse_reply_text(rest, reply_to).map_or_else(
+            || SlashCommand::Chat(draft.to_owned()),
+            |(recipient, content)| SlashCommand::Whisper { recipient, content },
+        ),
+        "h" | "help" => SlashCommand::Help,
+        _ => SlashCommand::Chat(draft.to_owned()),
+    }
+}
+
 impl ScreenGame {
     /// Start at the splash screen.
     #[must_use]
@@ -208,6 +303,7 @@ impl ScreenGame {
             highlight: 0,
             channel_chat: Vec::new(),
             channel_input: String::new(),
+            last_whisper_peer: None,
             rooms: Vec::new(),
             room_highlight: 0,
             waiting: None,
@@ -430,6 +526,7 @@ impl ScreenGame {
             recipient,
             &message.content,
         ));
+        self.remember_whisper_peer(&message.sender);
         self
     }
 
@@ -585,11 +682,100 @@ impl ScreenGame {
 
     /// Take the 2017 body for the Channel draft to `recipient` and
     /// clear the input line so one action sends once (`None` while
-    /// the draft or the recipient is empty).
+    /// the draft or the recipient is empty). The recipient becomes
+    /// the `/r` peer, like an incoming whisper does.
     pub fn take_channel_whisper(&mut self, recipient: &str) -> Option<SendWhisper> {
         let message = self.channel_whisper_message(recipient)?;
         self.clear_channel_input();
+        self.remember_whisper_peer(recipient);
         Some(message)
+    }
+
+    /// Outgoing whisper packet for the waiting draft to `recipient`
+    /// (`None` while the draft or the recipient is empty, so no empty
+    /// send is invented). The draft carries the whisper text; the
+    /// recipient rides beside it (the wire 2017 shape, like the
+    /// Channel whisper — the exe sends 2017 from the waiting room too,
+    /// files `0xb8ffc`/`0xb9369`).
+    #[must_use]
+    pub fn chat_whisper_message(&self, recipient: &str) -> Option<SendWhisper> {
+        if self.chat_input.is_empty() || recipient.is_empty() {
+            return None;
+        }
+        Some(SendWhisper {
+            recipient: recipient.to_owned(),
+            content: self.chat_input.clone(),
+        })
+    }
+
+    /// Take the 2017 body for the waiting draft to `recipient` and
+    /// clear the input line so one action sends once (`None` while
+    /// the draft or the recipient is empty). The recipient becomes
+    /// the `/r` peer.
+    pub fn take_chat_whisper(&mut self, recipient: &str) -> Option<SendWhisper> {
+        let message = self.chat_whisper_message(recipient)?;
+        self.clear_chat_input();
+        self.remember_whisper_peer(recipient);
+        Some(message)
+    }
+
+    /// Last whisper peer behind `/r` (`None` until a whisper flows
+    /// either way).
+    #[must_use]
+    pub fn last_whisper_peer(&self) -> Option<&str> {
+        self.last_whisper_peer.as_deref()
+    }
+
+    /// Remember one whisper peer for `/r`: the newest incoming 2019
+    /// sender or outgoing 2017 recipient wins. Empty names never
+    /// become the peer (a reply to nobody falls back to chat).
+    pub fn remember_whisper_peer(&mut self, peer: &str) -> &mut Self {
+        if !peer.is_empty() {
+            self.last_whisper_peer = Some(peer.to_owned());
+        }
+        self
+    }
+
+    /// Peek the Channel draft through the slash grammar (the exe lobby
+    /// parser beside the 2017 send at file `0x8fa02`).
+    #[must_use]
+    pub fn channel_slash_command(&self) -> SlashCommand {
+        parse_slash_draft(&self.channel_input, self.last_whisper_peer.as_deref())
+    }
+
+    /// Peek the waiting draft through the same slash grammar (the exe
+    /// sends 2017 from the waiting room too, files `0xb8ffc`/`0xb9369`).
+    #[must_use]
+    pub fn chat_slash_command(&self) -> SlashCommand {
+        parse_slash_draft(&self.chat_input, self.last_whisper_peer.as_deref())
+    }
+
+    /// Take the Channel draft through the slash grammar and clear the
+    /// input line so one Enter acts once (`Empty` leaves the empty
+    /// draft alone). A whisper take remembers its recipient for `/r`.
+    pub fn take_channel_slash(&mut self) -> SlashCommand {
+        let command = self.channel_slash_command();
+        if command != SlashCommand::Empty {
+            self.clear_channel_input();
+        }
+        if let SlashCommand::Whisper { ref recipient, .. } = command {
+            self.remember_whisper_peer(recipient);
+        }
+        command
+    }
+
+    /// Take the waiting draft through the slash grammar and clear the
+    /// input line so one Enter acts once (`Empty` leaves the empty
+    /// draft alone). A whisper take remembers its recipient for `/r`.
+    pub fn take_chat_slash(&mut self) -> SlashCommand {
+        let command = self.chat_slash_command();
+        if command != SlashCommand::Empty {
+            self.clear_chat_input();
+        }
+        if let SlashCommand::Whisper { ref recipient, .. } = command {
+            self.remember_whisper_peer(recipient);
+        }
+        command
     }
 
     /// Append one chat row and bound the history to
@@ -1757,8 +1943,10 @@ impl GameLoop for ScreenGame {
             }
             (Screen::Loading, MenuKey::Confirm) => self.enter(Screen::Playing),
             (Screen::Room, MenuKey::Back) => self.enter(Screen::Channel),
-            (Screen::Channel, MenuKey::Confirm) if self.take_channel_message().is_none() => {
-                self.enter(Screen::Room);
+            (Screen::Channel, MenuKey::Confirm) => {
+                if self.take_channel_slash() == SlashCommand::Empty {
+                    self.enter(Screen::Room);
+                }
             }
             (Screen::Waiting, MenuKey::Back) | (Screen::Result, MenuKey::Back) => {
                 self.enter(Screen::Room);
@@ -1772,8 +1960,10 @@ impl GameLoop for ScreenGame {
             // (4008, owned by the session bridge), so their Confirm
             // stays in Waiting. With no joined room there is no
             // master state, and the offline walk keeps advancing.
+            // Slash drafts (`/w`, `/r`, `/h`, `/help`) consume the
+            // Enter without starting: only an empty draft advances.
             (Screen::Waiting, MenuKey::Confirm)
-                if self.take_chat_message().is_none()
+                if self.take_chat_slash() == SlashCommand::Empty
                     && (self.waiting.is_none() || self.can_start_game()) =>
             {
                 self.enter(Screen::Loading);
@@ -3949,6 +4139,208 @@ mod game_tests {
         assert_eq!(whisper.content, "psst");
         assert_eq!(game.channel_input(), "");
         assert_eq!(game.take_channel_whisper("host"), None);
+    }
+
+    #[test]
+    fn take_channel_whisper_remembers_the_peer_for_reply() {
+        let mut game = ScreenGame::new();
+        game.set_channel_input("psst");
+        game.take_channel_whisper("host");
+        assert_eq!(game.last_whisper_peer(), Some("host"));
+    }
+
+    #[test]
+    fn channel_whisper_draft_parses_name_and_text() {
+        let mut game = ScreenGame::new();
+        game.set_channel_input("/w host psst");
+        assert_eq!(
+            game.channel_slash_command(),
+            SlashCommand::Whisper {
+                recipient: "host".to_owned(),
+                content: "psst".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn channel_whisper_draft_collapses_extra_gaps() {
+        let mut game = ScreenGame::new();
+        game.set_channel_input("/w  host   hi there ");
+        assert_eq!(
+            game.channel_slash_command(),
+            SlashCommand::Whisper {
+                recipient: "host".to_owned(),
+                content: "hi there".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn waiting_draft_parses_whisper_the_same_way() {
+        let mut game = ScreenGame::new();
+        game.set_chat_input("/w host psst");
+        assert_eq!(
+            game.chat_slash_command(),
+            SlashCommand::Whisper {
+                recipient: "host".to_owned(),
+                content: "psst".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn whisper_draft_without_text_falls_back_to_plain_chat() {
+        let mut game = ScreenGame::new();
+        game.set_channel_input("/w host");
+        assert_eq!(
+            game.channel_slash_command(),
+            SlashCommand::Chat("/w host".to_owned())
+        );
+        game.set_channel_input("/w");
+        assert_eq!(
+            game.channel_slash_command(),
+            SlashCommand::Chat("/w".to_owned())
+        );
+    }
+
+    #[test]
+    fn reply_targets_the_last_whisper_sender() {
+        let mut game = ScreenGame::new();
+        game.push_channel_whisper(&channel_whisper("host", "psst"), "me");
+        assert_eq!(game.last_whisper_peer(), Some("host"));
+        game.set_channel_input("/r hello");
+        assert_eq!(
+            game.channel_slash_command(),
+            SlashCommand::Whisper {
+                recipient: "host".to_owned(),
+                content: "hello".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn reply_without_a_peer_falls_back_to_plain_chat() {
+        let mut game = ScreenGame::new();
+        assert_eq!(game.last_whisper_peer(), None);
+        game.set_channel_input("/r hello");
+        assert_eq!(
+            game.channel_slash_command(),
+            SlashCommand::Chat("/r hello".to_owned())
+        );
+    }
+
+    #[test]
+    fn reply_without_text_falls_back_to_plain_chat() {
+        let mut game = ScreenGame::new();
+        game.push_channel_whisper(&channel_whisper("host", "psst"), "me");
+        game.set_chat_input("/r");
+        assert_eq!(
+            game.chat_slash_command(),
+            SlashCommand::Chat("/r".to_owned())
+        );
+    }
+
+    #[test]
+    fn help_commands_parse_without_sending() {
+        let mut game = ScreenGame::new();
+        game.set_channel_input("/h");
+        assert_eq!(game.channel_slash_command(), SlashCommand::Help);
+        game.set_channel_input("/help");
+        assert_eq!(game.channel_slash_command(), SlashCommand::Help);
+        game.set_chat_input("/help");
+        assert_eq!(game.chat_slash_command(), SlashCommand::Help);
+    }
+
+    #[test]
+    fn unknown_slash_command_falls_back_to_plain_chat() {
+        let mut game = ScreenGame::new();
+        game.set_channel_input("/dance party");
+        assert_eq!(
+            game.channel_slash_command(),
+            SlashCommand::Chat("/dance party".to_owned())
+        );
+        game.set_chat_input("/dance party");
+        assert_eq!(
+            game.chat_slash_command(),
+            SlashCommand::Chat("/dance party".to_owned())
+        );
+    }
+
+    #[test]
+    fn empty_draft_parses_to_empty() {
+        let game = ScreenGame::new();
+        assert_eq!(game.channel_slash_command(), SlashCommand::Empty);
+        assert_eq!(game.chat_slash_command(), SlashCommand::Empty);
+    }
+
+    #[test]
+    fn take_channel_slash_consumes_a_whisper_and_remembers_the_peer() {
+        let mut game = ScreenGame::new();
+        game.set_channel_input("/w host psst");
+        assert_eq!(
+            game.take_channel_slash(),
+            SlashCommand::Whisper {
+                recipient: "host".to_owned(),
+                content: "psst".to_owned(),
+            }
+        );
+        assert_eq!(game.channel_input(), "");
+        assert_eq!(game.last_whisper_peer(), Some("host"));
+        assert_eq!(game.take_channel_slash(), SlashCommand::Empty);
+    }
+
+    #[test]
+    fn take_chat_slash_consumes_help_without_a_peer() {
+        let mut game = ScreenGame::new();
+        game.set_chat_input("/help");
+        assert_eq!(game.take_chat_slash(), SlashCommand::Help);
+        assert_eq!(game.chat_input(), "");
+        assert_eq!(game.last_whisper_peer(), None);
+    }
+
+    #[test]
+    fn chat_whisper_needs_both_draft_and_recipient() {
+        let mut game = ScreenGame::new();
+        assert_eq!(game.chat_whisper_message("host"), None);
+        game.set_chat_input("psst");
+        assert_eq!(game.chat_whisper_message(""), None);
+        let whisper = game.chat_whisper_message("host").unwrap();
+        assert_eq!(whisper.recipient, "host");
+        assert_eq!(whisper.content, "psst");
+    }
+
+    #[test]
+    fn take_chat_whisper_builds_and_clears_in_one_step() {
+        let mut game = ScreenGame::new();
+        game.set_chat_input("psst");
+        let whisper = game.take_chat_whisper("host").unwrap();
+        assert_eq!(whisper.recipient, "host");
+        assert_eq!(whisper.content, "psst");
+        assert_eq!(game.chat_input(), "");
+        assert_eq!(game.last_whisper_peer(), Some("host"));
+        assert_eq!(game.take_chat_whisper("host"), None);
+    }
+
+    #[test]
+    fn channel_confirm_with_a_whisper_draft_consumes_without_advancing() {
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        assert_eq!(game.screen(), Screen::Channel);
+        game.set_channel_input("/w host psst");
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Channel);
+        assert_eq!(game.channel_input(), "");
+        assert_eq!(game.last_whisper_peer(), Some("host"));
+    }
+
+    #[test]
+    fn waiting_confirm_with_a_help_draft_consumes_without_starting() {
+        let mut game = ScreenGame::new();
+        walk_to_waiting(&mut game);
+        game.set_chat_input("/help");
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+        assert_eq!(game.chat_input(), "");
     }
 
     #[test]
