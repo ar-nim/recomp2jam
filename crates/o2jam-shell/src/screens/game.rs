@@ -52,6 +52,10 @@ const DEFAULT_ARENA_STAGE: u16 = 1;
 /// cannot grow memory without limit (PERF-07: `usize`, never `as`).
 const MAX_WAITING_CHAT_ROWS: usize = 50;
 
+/// Unsent chat draft cap (characters, not bytes: multibyte input
+/// counts once per character so no slice ever splits UTF-8).
+const MAX_CHAT_INPUT_CHARS: usize = 50;
+
 /// Game loop that shows each screen's scene and walks the flow.
 ///
 /// Input wiring so far: any lane key dismisses the splash into the
@@ -381,12 +385,34 @@ impl ScreenGame {
     }
 
     /// Stage the unsent input line (the 3011 source on send).
+    /// Overlong lines truncate to [`MAX_CHAT_INPUT_CHARS`] characters.
     pub fn set_chat_input(&mut self, line: &str) -> &mut Self {
-        self.chat_input = line.to_owned();
+        self.chat_input = line.chars().take(MAX_CHAT_INPUT_CHARS).collect();
         self
     }
 
-    /// Unsent chat draft (`""` while nothing is typed).
+    /// Type one character into the waiting draft. Only the Waiting
+    /// scene accepts typing; control characters never enter the line
+    /// and the draft stops at [`MAX_CHAT_INPUT_CHARS`] characters.
+    pub fn push_chat_char(&mut self, typed: char) {
+        if self.flow.current() != Screen::Waiting || typed.is_control() {
+            return;
+        }
+        if self.chat_input.chars().count() >= MAX_CHAT_INPUT_CHARS {
+            return;
+        }
+        self.chat_input.push(typed);
+    }
+
+    /// Erase the last draft character (Backspace). Only the Waiting
+    /// scene accepts it; an empty draft stays empty (`String::pop`
+    /// removes one whole character, never half of a multibyte one).
+    pub fn delete_chat_char(&mut self) {
+        if self.flow.current() != Screen::Waiting {
+            return;
+        }
+        self.chat_input.pop();
+    }
     #[must_use]
     pub fn chat_input(&self) -> &str {
         &self.chat_input
@@ -409,6 +435,16 @@ impl ScreenGame {
     pub fn clear_chat_input(&mut self) -> &mut Self {
         self.chat_input.clear();
         self
+    }
+
+    /// Build the 3011 body for the draft and clear the input line so
+    /// one Enter sends once (`None` while the draft is empty). The
+    /// packet returns to the caller: the shell owns no transport yet,
+    /// so sending still means handing this body to the net layer.
+    fn send_chat_draft(&mut self) -> Option<SendWaitingMessage> {
+        let message = self.chat_send_message()?;
+        self.clear_chat_input();
+        Some(message)
     }
 
     /// Append one chat row and bound the history to
@@ -1479,9 +1515,21 @@ impl GameLoop for ScreenGame {
             (Screen::Room, MenuKey::Confirm)
             | (Screen::Loading, MenuKey::Back)
             | (Screen::Result, MenuKey::Confirm) => self.enter(Screen::Waiting),
-            (Screen::Waiting, MenuKey::Confirm) => self.enter(Screen::Loading),
+            (Screen::Waiting, MenuKey::Confirm) if self.send_chat_draft().is_none() => {
+                self.enter(Screen::Loading);
+            }
             _ => {}
         }
+    }
+
+    fn text_input(&mut self, text: &str) {
+        for typed in text.chars() {
+            self.push_chat_char(typed);
+        }
+    }
+
+    fn delete_text(&mut self) {
+        self.delete_chat_char();
     }
 
     fn paint(&mut self, frame: &mut Frame<'_>) {
@@ -3478,5 +3526,71 @@ mod game_tests {
         game.set_joined_room(waiting_room());
         walk_to_waiting(&mut game);
         assert!(game.waiting_chat().is_empty());
+    }
+
+    #[test]
+    fn typing_appends_to_the_draft_only_while_waiting() {
+        let mut game = ScreenGame::new();
+        game.text_input("hi");
+        assert_eq!(game.chat_input(), "");
+        walk_to_waiting(&mut game);
+        game.text_input("hi");
+        assert_eq!(game.chat_input(), "hi");
+    }
+
+    #[test]
+    fn typing_ignores_control_characters() {
+        let mut game = ScreenGame::new();
+        walk_to_waiting(&mut game);
+        game.text_input("a\u{0}b\n");
+        assert_eq!(game.chat_input(), "ab");
+    }
+
+    #[test]
+    fn typing_stops_at_fifty_characters() {
+        let mut game = ScreenGame::new();
+        walk_to_waiting(&mut game);
+        game.text_input(&"x".repeat(60));
+        assert_eq!(game.chat_input().chars().count(), 50);
+        game.text_input("y");
+        assert_eq!(game.chat_input().chars().count(), 50);
+    }
+
+    #[test]
+    fn staging_an_overlong_line_truncates_to_fifty_characters() {
+        let mut game = ScreenGame::new();
+        game.set_chat_input(&"x".repeat(60));
+        assert_eq!(game.chat_input().chars().count(), 50);
+    }
+
+    #[test]
+    fn backspace_erases_one_character_only_while_waiting() {
+        let mut game = ScreenGame::new();
+        game.delete_text();
+        assert_eq!(game.chat_input(), "");
+        walk_to_waiting(&mut game);
+        game.delete_text();
+        assert_eq!(game.chat_input(), "");
+        game.text_input("héllo");
+        game.delete_text();
+        assert_eq!(game.chat_input(), "héll");
+    }
+
+    #[test]
+    fn confirm_with_a_draft_sends_and_stays_in_waiting() {
+        let mut game = ScreenGame::new();
+        walk_to_waiting(&mut game);
+        game.text_input("go");
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+        assert_eq!(game.chat_input(), "");
+    }
+
+    #[test]
+    fn confirm_with_an_empty_draft_advances_to_loading() {
+        let mut game = ScreenGame::new();
+        walk_to_waiting(&mut game);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Loading);
     }
 }

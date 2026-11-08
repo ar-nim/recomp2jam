@@ -2682,3 +2682,43 @@ saving; code affecting the gates is HEAD unless noted.
   current dirty state, caused solely by the peer's uncommitted
   `shots.rs` hunks — not fixed per the sweep rules. No commits, no
   pushes.** This sweep touched only `docs/playtest.md`.
+
+## Regression sweep — 2026-11-08 10:13 UTC+8 (HEAD `86d05e7`, tree clean)
+
+Live re-proof on the guard-head. Covers the three commits landed after the
+consistency-head baseline `1efaf71`: drive loading status into the shot log
+(`ad4832b`), skip the staged loading test without archives (`b1cc51c`), and
+guard the real-BGM test skip cleanly in CI (`86d05e7`).
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1389 passed, 0 failed, 0 ignored**, `exit=0`.
+  Per target: audio 20, dump 7, file 177, game 94, net 360,
+  render 89, shell 509, real_art 7, scenes 22, recomp2jam 104
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, 0 warning
+  lines.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.62 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`10:13:03 +08:00`):
+  `Create room: songflow` →
+  `Update room [000] music settings: [HX / X10 / o2ma757]` →
+  `Update room [000] arena: [1] (0)` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Update #1 - Jam: 3 (Bonus: 0)` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure WARNs on room delete; a second session walked
+  `Authorize session` → `Get channel list: [0]` →
+  `Enter channel: [0/00]` → `Get room list` →
+  `Get character info: [tester]`).
+- **Verdict: no regression — suite is green on the guard-head (1389
+  passed; +3 vs the 1386 consistency-head baseline: audio 19+1 ignored
+  → 20 passed from the BGM-skip guard (`86d05e7`), recomp2jam
+  102 → 104 from the loading-status shot-log work (`ad4832b`),
+  all other targets unchanged, 0 failures). No lint findings. No
+  commits, no pushes.** This sweep touched only `docs/playtest.md`.

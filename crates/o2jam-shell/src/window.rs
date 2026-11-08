@@ -7,9 +7,9 @@
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, KeyEvent, WindowEvent};
+use winit::event::{ElementState, Ime, KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, OwnedDisplayHandle};
-use winit::keyboard::PhysicalKey;
+use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowAttributes};
 
 use super::{menu_of, Shell, DEFAULT_HEIGHT, DEFAULT_WIDTH};
@@ -142,6 +142,16 @@ impl WindowHandler {
         }
     }
 
+    /// Feed committed text into the game (winit `Ime::Commit`).
+    fn route_text(&mut self, text: &str) {
+        self.shell.game.text_input(text);
+    }
+
+    /// Erase one draft character (Backspace press).
+    fn route_erase(&mut self) {
+        self.shell.game.delete_text();
+    }
+
     /// Take a stored paint failure, if any.
     pub fn paint_error(&mut self) -> Option<anyhow::Error> {
         self.paint_error.take()
@@ -229,12 +239,22 @@ impl ApplicationHandler for WindowHandler {
             WindowEvent::KeyboardInput {
                 event:
                     KeyEvent {
+                        physical_key: PhysicalKey::Code(KeyCode::Backspace),
+                        state: ElementState::Pressed,
+                        ..
+                    },
+                ..
+            } => self.route_erase(),
+            WindowEvent::KeyboardInput {
+                event:
+                    KeyEvent {
                         physical_key: PhysicalKey::Code(code),
                         state,
                         ..
                     },
                 ..
             } => self.route_key(code, state == ElementState::Pressed),
+            WindowEvent::Ime(Ime::Commit(text)) => self.route_text(&text),
             WindowEvent::Resized(size) => {
                 self.resize_surface(size.width, size.height, event_loop);
             }
@@ -255,7 +275,72 @@ impl ApplicationHandler for WindowHandler {
 
 #[cfg(test)]
 mod tests {
+    use super::super::GameLoop;
     use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// Game probe recording routed input for headless key-event tests.
+    #[derive(Default)]
+    struct InputProbe {
+        texts: Vec<String>,
+        deletes: usize,
+        lanes: Vec<(usize, bool)>,
+    }
+
+    impl GameLoop for Rc<RefCell<InputProbe>> {
+        fn lane_key(&mut self, lane: usize, down: bool) {
+            self.borrow_mut().lanes.push((lane, down));
+        }
+
+        fn text_input(&mut self, text: &str) {
+            self.borrow_mut().texts.push(text.to_owned());
+        }
+
+        fn delete_text(&mut self) {
+            self.borrow_mut().deletes += 1;
+        }
+
+        fn paint(&mut self, _frame: &mut o2jam_render::Frame<'_>) {}
+    }
+
+    /// A handler plus a live handle on its recording game.
+    fn probed_handler() -> (WindowHandler, Rc<RefCell<InputProbe>>) {
+        let probe = Rc::new(RefCell::new(InputProbe::default()));
+        let shell = Shell::new(Box::new(probe.clone()));
+        (WindowHandler::new(shell), probe)
+    }
+
+    #[test]
+    fn committed_text_reaches_the_game() {
+        let (mut handler, probe) = probed_handler();
+        handler.route_text("hello");
+        assert_eq!(probe.borrow().texts, vec!["hello".to_owned()]);
+    }
+
+    #[test]
+    fn erase_reaches_the_game() {
+        let (mut handler, probe) = probed_handler();
+        handler.route_erase();
+        handler.route_erase();
+        assert_eq!(probe.borrow().deletes, 2);
+    }
+
+    #[test]
+    fn lane_keys_still_reach_their_lane() {
+        let (mut handler, probe) = probed_handler();
+        handler.route_key(KeyCode::KeyS, true);
+        handler.route_key(KeyCode::KeyS, false);
+        assert_eq!(probe.borrow().lanes, vec![(0, true), (0, false)]);
+    }
+
+    #[test]
+    fn backspace_release_routes_nowhere() {
+        let (mut handler, probe) = probed_handler();
+        handler.route_key(KeyCode::Backspace, false);
+        assert_eq!(probe.borrow().deletes, 0);
+        assert!(probe.borrow().lanes.is_empty());
+    }
 
     #[test]
     fn present_accepts_native_backbuffer_at_native_size() {

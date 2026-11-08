@@ -165,6 +165,10 @@ pub trait GameLoop {
     fn lane_key(&mut self, lane: usize, down: bool);
     /// A menu key changed state (`down` = press).
     fn menu_key(&mut self, _key: MenuKey, _down: bool) {}
+    /// Committed text arrived (winit `Ime::Commit`); chat drafts consume it.
+    fn text_input(&mut self, _text: &str) {}
+    /// The Backspace key went down; chat drafts consume it as erase.
+    fn delete_text(&mut self) {}
     /// Paint the current frame into the backbuffer view.
     fn paint(&mut self, frame: &mut o2jam_render::Frame<'_>);
 }
