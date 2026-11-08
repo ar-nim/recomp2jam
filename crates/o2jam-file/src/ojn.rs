@@ -902,6 +902,55 @@ pub fn ojn_sub_position(sub_index: usize, sub_count: usize) -> Option<u32> {
     Some(scaled / sub_count as u32)
 }
 
+/// Walked note totals for one level's event stream.
+///
+/// Counts nonzero payloads ([`decode_note_value`] is `Some`): kinds 2+
+/// are the header total triplet at +28/+32/+36, kinds 2..=8 the
+/// playable triplet at +40/+44/+48. Kinds 0/1 carry `f32` meter/tempo
+/// data and never count as notes. Shipped 7.55 walks land exactly on
+/// both triplets (39/39 levels); the total-minus-playable autoplay gap
+/// ranges 13..2160 across the 14 charts and never equals the grade
+/// reference's 26, so the unscored 26 are not a file-level event
+/// class (see `docs/cresult-anchors.md` OPEN 8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OjnLevelNoteCounts {
+    /// Nonzero payloads on kinds 2+ (header +28/+32/+36).
+    pub total_notes: usize,
+    /// Nonzero payloads on playable lanes 2..=8 (header +40/+44/+48).
+    pub playable_notes: usize,
+    /// Backing/autoplay notes: `total_notes - playable_notes`.
+    pub autoplay_notes: usize,
+}
+
+/// Count scored notes in a decoded level event slice.
+///
+/// Pure walk over [`parse_ojn_level_events`] output; empty and
+/// zero-slot payloads contribute nothing.
+#[must_use]
+pub fn count_level_notes(events: &[OjnEvent]) -> OjnLevelNoteCounts {
+    let mut total_notes = 0usize;
+    let mut playable_notes = 0usize;
+    for event in events {
+        if event.kind < OJN_LANE_KIND_FIRST {
+            continue;
+        }
+        for raw in &event.values {
+            if decode_note_value(*raw).is_none() {
+                continue;
+            }
+            total_notes = total_notes.saturating_add(1);
+            if ojn_lane_of_kind(event.kind).is_some() {
+                playable_notes = playable_notes.saturating_add(1);
+            }
+        }
+    }
+    OjnLevelNoteCounts {
+        total_notes,
+        playable_notes,
+        autoplay_notes: total_notes.saturating_sub(playable_notes),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1185,6 +1234,54 @@ mod tests {
         assert_eq!(ojn_sub_position(4, 16), Some(48));
         assert_eq!(ojn_sub_position(0, 0), None);
         assert_eq!(ojn_sub_position(1, 7), None);
+    }
+
+    #[test]
+    fn level_note_counts_split_lanes_from_backing() {
+        let events = vec![
+            OjnEvent {
+                measure: 0,
+                kind: 2,
+                values: vec![3, 0, 0x0200_0000],
+            },
+            OjnEvent {
+                measure: 1,
+                kind: 9,
+                values: vec![5, 7],
+            },
+            OjnEvent {
+                measure: 2,
+                kind: 1,
+                values: vec![150f32.to_bits()],
+            },
+        ];
+        let counts = count_level_notes(&events);
+        assert_eq!(counts.total_notes, 3);
+        assert_eq!(counts.playable_notes, 1);
+        assert_eq!(counts.autoplay_notes, 2);
+    }
+
+    #[test]
+    fn level_note_counts_empty_stream_is_zero() {
+        let counts = count_level_notes(&[]);
+        assert_eq!(
+            counts,
+            OjnLevelNoteCounts {
+                total_notes: 0,
+                playable_notes: 0,
+                autoplay_notes: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn level_note_counts_match_tutorial_shaped_blob() {
+        let blob = tutorial_shaped_blob();
+        let events = parse_ojn_level_events(&blob, 0).unwrap();
+        let counts = count_level_notes(&events);
+        assert_eq!(counts.total_notes, 3);
+        assert_eq!(counts.playable_notes, 2);
+        assert_eq!(counts.autoplay_notes, 1);
     }
 
     /// SOI-prefixed stand-in cover body: [`ojn_cover_jpeg`] frames the

@@ -3789,3 +3789,35 @@ after the dossiers-head baseline `ab8f52f`: score open-items close
   (1 passed, 0.59 s) vs local Memoryer 7.2.0.
 - **Verdict: no regression.** Grade numerator pinned as the live
   per-judgement total (`grade_numerator()`); ratio fully modeled.
+
+## Regression sweep — 2026-11-08 14:51 UTC+8 (HEAD `d7c3873`, tree clean)
+
+Live re-proof on the grade-head. Covers the three game commits landed
+above the scoreopen baseline `da5bdd8`: exe board sentence for rank
+rows (`0589b3a`), grade max-reference pin (`a98d89c`), live-total
+grade numerator (`2130d0e`), plus the ratio wiring that retires the
+stand-in tests (`d7c3873`: live `grade_numerator`/`grade_max_reference`
+ratio in `o2jam-game`, shell `game.rs`/`paint.rs` rank rows, `shots.rs`
+refresh).
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1612 passed, 0 failed, 0 ignored**, `exit=0`.
+  Per target: audio 20, dump 7, file 177, game 107, net 420,
+  render 89, shell 585, real_art 7, scenes 22, recomp2jam 178
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, no warnings.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 177 filtered out, 0.63 s) against local
+  Memoryer 7.2.0 (`Mode=Full`). Server log for this run
+  (`14:50:55 +08:00`): `Authorize session` →
+  `Create room: songflow` → `Get music list: [0/00] 562 music` →
+  `Start game: [000]` → `Game [000] Submit score: 2210`.
+- **Verdict: no regression — suite is green on the grade-head (1612
+  passed; +8 vs the 1604 numerator-head baseline, 0 failures). No
+  lint findings. No commits, no pushes.** This sweep touched only
+  `docs/playtest.md`.

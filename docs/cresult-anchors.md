@@ -285,7 +285,23 @@ VA `0x64a3a0`) while siblings are ready. The relay wraps
 8. Grade 6→7 promotion compares max combo to note count − 1
    (`0x77ee5c` == `0x778a00`−1); `0x778a00` feeds the max-reference as a
    record count including 26 unscored records (`FUN_004c22c0` subtracts
-   `0x1a`, file `0xc22e5`–`0xc2307`) — what those 26 are OPEN.
+   `0x1a`, file `0xc22e5`–`0xc2307`) — NARROWED, not closed. The setup
+   writers (files `0x4e4c82`/`0x4ebc64`) store `WORD [song+0x28+diff*4]`
+   with the difficulty byte `0x7789e7` as index, next to a level byte
+   `[song+0x14+diff*2]` (files `0x4e4cf1`/`0x4ebcd0`) — the OJN header
+   playable triplets +40/+44/+48 and level bytes +20/+22/+24 at the
+   same offsets — so `0x778a00` is the playable lane-note total for the
+   selected difficulty (every shipped playable fits the WORD). Stream
+   walk over all 14 shipped charts (`parse_ojn_levels` +
+   `count_level_notes` in `o2jam-file::ojn`): header totals and
+   playable triplets match the walked nonzero payloads 42/42; the
+   total-minus-playable autoplay gap ranges 13..2160, event counts
+   43..739, measure-0 setup events 0..1, kind-0/1 events 0..3 — no
+   slice shows a constant 26. So the 26 are not header events,
+   padding, or BGM markers in the file; they are a loader/runtime
+   constant taken off the playable total inside `FUN_004c22c0`.
+   Which 26 playable notes (edge holds/tails vs first-group padding)
+   stays OPEN.
 9. `0x10d14` (max-score reference next to the `PointNum.ojs` handle at
    `0x10d10`): PINNED — writer is the setup-path store at file `0xc1829`
    of the `FUN_004c22c0` return (pure all-Cool jam-climb over
