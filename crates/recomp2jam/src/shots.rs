@@ -2359,6 +2359,10 @@ mod tests {
         // frame differs from the cleared indeterminate frame, so
         // `loading.png` proves the `with_status` path, not the bare
         // full bar.
+        if read_archive(MUSICSELECT_CATALOG).is_none() {
+            println!("skip: missing {MUSICSELECT_CATALOG}");
+            return;
+        }
         let mut game = seeded_game();
         walk_to_waiting(&mut game);
         stage_select_music_scene(&mut game);
