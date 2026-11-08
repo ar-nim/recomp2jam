@@ -3712,3 +3712,41 @@ expected.
   (1590 passed; identical to the 1590 `66d782e` baseline, as expected
   for a docs-only head, 0 failures). No lint findings. No commits, no
   pushes.** This sweep touched only `docs/playtest.md`.
+
+## Regression sweep — 2026-11-08 06:05 UTC (HEAD `da5bdd8`, tree clean)
+
+Live re-proof on the scoreopen-head. Covers the code commit landed
+after the dossiers-head baseline `ab8f52f`: score open-items close
+(`da5bdd8`: `crates/o2jam-net/src/play.rs` + `docs/net-protocol.md`
+4017/4018 handler notes, plus the sweep log).
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1592 passed, 0 failed, 0 ignored**, `exit=0`.
+  Per target: audio 20, dump 7, file 177, game 94, net 420,
+  render 89, shell 578, real_art 7, scenes 22, recomp2jam 178
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, 0 warning
+  lines.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 177 filtered out, 0.61 s) against local
+  Memoryer 7.2.0 (`Mode=Full`). Server log for this run
+  (`14:04:56 +08:00`): `Authorize session` →
+  `Get channel list: [0]` → `Enter channel: [0/00]` →
+  `Create room: songflow` →
+  `Update room [000] music settings: [HX / X10 / o2ma757]` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  connection-lost WARN on session close; a trailing session walked
+  `Authorize session` → `Get channel list` → `Enter channel`).
+- **Verdict: no regression — suite is green on the scoreopen-head
+  (1592 passed; +2 vs the 1590 `ab8f52f` baseline: net 418 → 420
+  from the score open-items tests, all other targets unchanged,
+  0 failures). No lint findings. No commits, no pushes.** This sweep
+  touched only `docs/playtest.md`.
