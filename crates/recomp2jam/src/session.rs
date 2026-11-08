@@ -46,8 +46,10 @@
 //! (drained beside the chat lines, applied after). The 4010 send
 //! mirrors the headless [`connect::run_song_flow`] StartGame shape
 //! (empty body, no 4012 tail — Loading owns that). Member updates
-//! (3009 slot, 4009 ready echo) drain with a trace; the barrier
-//! proves through staged snapshots instead.
+//! (3009 slot, 4009 ready echo) decode beside the chat lines and fold
+//! into the session slot/ready mirrors below; the shell exposes no
+//! per-seat write yet, so the barrier still proves through staged
+//! snapshots.
 //!
 //! Lobby send (Channel scene): the shell stages a second draft
 //! ([`ScreenGame::take_channel_slash`]) beside the channel history
@@ -80,11 +82,12 @@ use std::time::Duration;
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery};
 use o2jam_net::rooms::{
     Announcement, MainRoomAdminMessage, MainRoomUserMessage, RankNotification, ReceiveWhisper,
-    SendMainRoomMessage, SendWaitingMessage, SendWhisper, WaitingAdminMessage, WaitingUserMessage,
+    RoomSlotAction, RoomSlotUpdate, SendMainRoomMessage, SendWaitingMessage, SendWhisper,
+    WaitingAdminMessage, WaitingUserMessage,
 };
 use o2jam_net::{
     Frame, GameStatsUpdate, GatewayConnection, Generic, JoinResult, JoinRoom, JoinRoomResponse,
-    Request, StartGame, WireMessage,
+    MemberReadyStateChanged, Ready, Request, StartGame, WireMessage,
 };
 use o2jam_shell::screens::game::SlashCommand;
 use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
@@ -109,21 +112,14 @@ const NOTICE_IO_TIMEOUT: Duration = Duration::from_millis(1);
 /// default (`client.rs` `DEFAULT_IO_TIMEOUT`), restored after every
 /// stats section like `run_song_flow` restores `SONG_FLOW_IO_TIMEOUT`.
 const SESSION_IO_TIMEOUT: Duration = Duration::from_secs(10);
-/// C->S ready toggle (4008): the joined-guest Confirm send. The S->C
-/// echo is 4009 (`docs/client-server-plan.md` Phase 3 pairs 4008/4009
-/// like 4000/4001); the toggle body is one flag byte — a documented
-/// guess (the ready slot byte is 1 B, `docs/relay.md` §10, and small
-/// protocol ints ride `u8`, e.g. 4038): live-gateway proof stays OPEN.
-const READY_COMMAND: u16 = 4008;
-/// S->C ready echo (4009): drained but unfolded — no decoder staged
-/// in this crate for P2, so it skips past with a trace like foreign
-/// chat frames.
-const READY_ECHO_COMMAND: u16 = 4009;
-/// S->C slot update (3009): answers `UpdateSlot` 3008
-/// (`docs/client-server-plan.md` Phase 3); drained but unfolded for
-/// the same reason — the start barrier proves through staged
-/// snapshots instead (see the master-barrier session test).
-const SLOT_UPDATE_COMMAND: u16 = 3009;
+/// C->S ready toggle (4008): the joined-guest Confirm send. Empty
+/// body — see [`Ready`]: all five exe send sites push a zero word
+/// then the opcode (`push 0; push 0xfa8`, files `0xacebe`, `0xb24f6`,
+/// `0xb36a0`, `0xb8450`, `0xb871f`). Memoryer agrees
+/// (`WaitingController.Ready()` takes no request). The S->C echo is
+/// 4009 (`docs/client-server-plan.md` Phase 3 pairs 4008/4009 like
+/// 4000/4001). The old one-flag-byte send was a documented guess —
+/// the exe sites refute it.
 /// S->C start broadcast (4011): answers the host `StartGame` 4010
 /// (`docs/client-server-plan.md` Phase 4 pairs 4010/4011). The id
 /// alone advances the shell — no body is staged here — so no decoder
@@ -177,6 +173,13 @@ pub struct OnlineSession {
     /// `true` once the 4011 start broadcast arrived: the next
     /// draft-free Waiting paint advances the shell to Loading.
     start_announced: bool,
+    /// Last slot action per seat, from 3009 updates (`None` while the
+    /// seat never changed). The shell exposes no per-seat write yet,
+    /// so this is the bridge query its paint follow-up will consume.
+    slot_actions: [Option<RoomSlotAction>; 8],
+    /// Last ready flag per seat, from 4009 echoes (`None` while the
+    /// seat never echoed) — same bridge shape as `slot_actions`.
+    ready_echoes: [Option<bool>; 8],
 }
 
 impl OnlineSession {
@@ -196,6 +199,8 @@ impl OnlineSession {
             joined_waiting: false,
             guest_ready: false,
             start_announced: false,
+            slot_actions: [None; 8],
+            ready_echoes: [None; 8],
         }
     }
 
@@ -249,6 +254,33 @@ impl OnlineSession {
     #[must_use]
     pub fn peer_ranks(&self) -> &[RankDelivery] {
         &self.peer_ranks
+    }
+
+    /// Last slot action for a seat, from 3009 updates (`None` while
+    /// the seat never changed). No production reader yet: shell paint
+    /// wiring follows separately.
+    #[allow(
+        dead_code,
+        reason = "bridge query for the shell paint follow-up; tested below"
+    )]
+    #[must_use]
+    pub fn slot_action(&self, index: u8) -> Option<RoomSlotAction> {
+        self.slot_actions.get(usize::from(index)).copied().flatten()
+    }
+
+    /// Last ready flag for a seat, from 4009 echoes (`None` while the
+    /// seat never echoed). No production reader yet: shell paint
+    /// wiring follows separately.
+    #[allow(
+        dead_code,
+        reason = "bridge query for the shell paint follow-up; tested below"
+    )]
+    #[must_use]
+    pub fn member_ready(&self, member_id: u8) -> Option<bool> {
+        self.ready_echoes
+            .get(usize::from(member_id))
+            .copied()
+            .flatten()
     }
 
     /// Transmit the pending chat draft as 3011.
@@ -502,16 +534,16 @@ impl OnlineSession {
         }
     }
 
-    /// Joined-guest Confirm: flip the local ready toggle and send
-    /// `Ready` 4008 with the new flag byte. A failed send flips the
-    /// toggle back (the keep-for-retry shape: the next Confirm sends
-    /// the same value again). The shell stays in Waiting either way —
-    /// Loading arrives on the 4011 broadcast.
+    /// Joined-guest Confirm: flip the local ready toggle and send the
+    /// empty `Ready` 4008 ping. A failed send flips the toggle back
+    /// (the keep-for-retry shape: the next Confirm sends again). The
+    /// shell stays in Waiting either way — Loading arrives on the
+    /// 4011 broadcast.
     fn confirm_guest_ready(&mut self) {
         self.guest_ready = !self.guest_ready;
         if let Err(source) = self
             .gateway
-            .send_frame(READY_COMMAND, &[u8::from(self.guest_ready)])
+            .send_frame(Request::Ready.id(), &Ready.encode_body())
         {
             self.guest_ready = !self.guest_ready;
             tracing::warn!(%source, "ready send failed; Confirm retries it");
@@ -698,11 +730,11 @@ impl OnlineSession {
                 Ok(frame) if frame.id == START_BROADCAST_COMMAND => {
                     self.start_announced = true;
                 }
-                Ok(frame) if frame.id == SLOT_UPDATE_COMMAND || frame.id == READY_ECHO_COMMAND => {
-                    tracing::debug!(
-                        id = frame.id,
-                        "skipping member-update frame in waiting drain"
-                    );
+                Ok(frame) if frame.id == RoomSlotUpdate::COMMAND => {
+                    self.apply_slot_update(&frame);
+                }
+                Ok(frame) if frame.id == MemberReadyStateChanged::COMMAND => {
+                    self.apply_ready_echo(&frame);
                 }
                 Ok(frame) if Generic::from_id(frame.id).is_some() => {}
                 Ok(frame) => {
@@ -711,6 +743,28 @@ impl OnlineSession {
                 Err(_) => break,
             }
         }
+    }
+
+    /// Fold one 3009 frame into the slot mirror (undecodable bodies
+    /// drop with a trace; the socket position is already past them).
+    /// The exe drops wide indexes and unknown actions at the handler,
+    /// so the decoder rejects both — a reject here is the same drop.
+    fn apply_slot_update(&mut self, frame: &Frame) {
+        let Ok(update) = RoomSlotUpdate::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable slot update");
+            return;
+        };
+        self.slot_actions[usize::from(update.index)] = update.action();
+    }
+
+    /// Fold one 4009 frame into the ready mirror (undecodable bodies
+    /// drop with a trace; the socket position is already past them).
+    fn apply_ready_echo(&mut self, frame: &Frame) {
+        let Ok(echo) = MemberReadyStateChanged::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable ready echo");
+            return;
+        };
+        self.ready_echoes[usize::from(echo.member_id)] = Some(echo.ready);
     }
 
     /// Fold one 3012 frame into the waiting history (undecodable
@@ -1447,12 +1501,15 @@ mod session_tests {
     #[test]
     fn guest_confirm_sends_ready_toggle_and_stays_waiting() {
         let (mut session, server) = joined_waiting_session(guest_snapshot(), |mut stream| {
+            // The 4008 toggle rides an empty body (exe send sites push
+            // a zero word then the opcode): both Confirms send bare
+            // frames while the toggle flips underneath.
             let first = read_frame(&mut stream);
             assert_eq!(first.id, 4008);
-            assert_eq!(first.payload, vec![1]);
+            assert!(first.payload.is_empty());
             let second = read_frame(&mut stream);
             assert_eq!(second.id, 4008);
-            assert_eq!(second.payload, vec![0]);
+            assert!(second.payload.is_empty());
             assert_quiet(&mut stream);
         });
         assert!(!session.game.is_room_master());
@@ -1601,6 +1658,62 @@ mod session_tests {
         assert_eq!(session.game.waiting_chat().len(), 1);
         assert_eq!(session.game.waiting_chat()[0].text, "quiet");
         assert!(session.game.waiting_chat()[0].admin);
+    }
+
+    #[test]
+    fn slot_update_drains_into_the_slot_mirror() {
+        use o2jam_net::{RoomSlotAction, RoomSlotUpdate};
+        let lock = RoomSlotUpdate {
+            index: 2,
+            action_code: 2,
+        };
+        let (mut session, server) = waiting_session(move |mut stream| {
+            stream.write_all(&lock.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        paint_frame(&mut session);
+        server.join().unwrap();
+        assert_eq!(session.slot_action(2), Some(RoomSlotAction::SlotLocked));
+        assert_eq!(session.slot_action(1), None);
+    }
+
+    #[test]
+    fn ready_echo_drains_into_the_ready_mirror() {
+        use o2jam_net::MemberReadyStateChanged;
+        let echo = MemberReadyStateChanged {
+            member_id: 1,
+            ready: true,
+        };
+        let (mut session, server) = waiting_session(move |mut stream| {
+            stream.write_all(&echo.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        paint_frame(&mut session);
+        server.join().unwrap();
+        assert_eq!(session.member_ready(1), Some(true));
+        assert_eq!(session.member_ready(0), None);
+    }
+
+    #[test]
+    fn undecodable_member_update_drops_and_drain_continues() {
+        use o2jam_net::{MemberReadyStateChanged, RoomSlotUpdate};
+        let echo = MemberReadyStateChanged {
+            member_id: 3,
+            ready: false,
+        };
+        let (mut session, server) = waiting_session(move |mut stream| {
+            // Wide index the exe handler drops: the drain rejects it
+            // the same way and keeps draining.
+            stream
+                .write_all(&encode_frame(RoomSlotUpdate::COMMAND, &[0x08, 0x02]))
+                .unwrap();
+            stream.write_all(&echo.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        paint_frame(&mut session);
+        server.join().unwrap();
+        assert_eq!(session.slot_action(7), None);
+        assert_eq!(session.member_ready(3), Some(false));
     }
 
     #[test]
