@@ -15,7 +15,9 @@
 
 use anyhow::Result;
 use o2jam_file::{FileError, OjmEntry};
+use o2jam_shell::avatar::{ojn_cover_figure, AvatarFigure};
 use o2jam_shell::screens::paint::LoadingStatus;
+use o2jam_shell::screens::ScreenGame;
 
 /// Whether result grade thresholds are exe-verified and implemented.
 ///
@@ -150,6 +152,34 @@ pub fn prepare_chart(chart_bytes: &[u8], level: usize) -> Result<PreparedChart, 
 /// exe's `1/2`-channel, `8/16`-bit checks.
 pub fn check_bank_entry(entry: &OjmEntry) -> Result<(), FileError> {
     o2jam_file::validate_sample_format(entry)
+}
+
+/// Decode the walked chart's OJN cover section as the loading-gate song
+/// illustration: one opaque 800x600 layer at anchor `(0, 0)`, staged under
+/// `OJN_COVER` — never an archive body. `None` on any miss — non-chart
+/// bytes, unknown magic, undecodable stream — and the loading gate keeps
+/// its planet fallback then; archives stay read-only and nothing is
+/// invented.
+///
+/// Staged for the windowed loader wiring (the `session`/`main` gate
+/// follow-up feeds walked bytes through [`stage_loading_cover`]):
+/// allowed dead until then.
+#[allow(dead_code)]
+#[must_use]
+pub fn loading_cover_figure(chart_bytes: &[u8]) -> Option<AvatarFigure> {
+    ojn_cover_figure(chart_bytes)
+}
+
+/// Feed walked OJN bytes into the loading scene staging: decode the chart's
+/// cover section and stage it into the shell's Loading art beside the planet
+/// overlay. `true` while a cover staged; any miss leaves the planet
+/// fallback in place (see [`ScreenGame::stage_loading_cover`]).
+///
+/// Staged for the windowed loader wiring (the `session`/`main` gate
+/// follow-up calls it with the walked bytes): allowed dead until then.
+#[allow(dead_code)]
+pub fn stage_loading_cover(game: &mut ScreenGame, chart_bytes: &[u8]) -> bool {
+    game.stage_loading_cover(chart_bytes)
 }
 
 /// Describe the loading-screen handoff for logs (gate 5).
@@ -308,5 +338,49 @@ mod tests {
     #[test]
     fn walk_status_needs_a_known_size() {
         assert_eq!(loading_status(0, 0, "First", "Band"), None);
+    }
+
+    #[test]
+    fn loading_cover_rejects_non_chart_bytes() {
+        assert!(loading_cover_figure(b"garbage").is_none());
+        assert!(loading_cover_figure(&[]).is_none());
+    }
+
+    #[test]
+    fn loading_cover_decodes_the_walked_chart() {
+        // Install-guarded: song 757's OJN cover section decodes to the
+        // 800x600 illustration the loading capture pins. Skips when
+        // `install-root` is absent.
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Music/o2ma757.ojn");
+        let Ok(bytes) = std::fs::read(&path) else {
+            return;
+        };
+        let figure = loading_cover_figure(&bytes).expect("the walked cover decodes");
+        assert_eq!(figure.len(), 1);
+        let layer = figure.layer(0).expect("one opaque layer");
+        assert_eq!((layer.image.w, layer.image.h), (800, 600));
+        assert_eq!((layer.dx, layer.dy), (0, 0));
+    }
+
+    #[test]
+    fn loading_cover_feed_reaches_the_shell_scene() {
+        // The gate step hands walked bytes to the shell staging.
+        // Skips when `install-root` is absent.
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Music/o2ma757.ojn");
+        let Ok(bytes) = std::fs::read(&path) else {
+            return;
+        };
+        let mut game = ScreenGame::new();
+        assert!(stage_loading_cover(&mut game, &bytes));
+        assert!(game.has_loading_cover());
+    }
+
+    #[test]
+    fn loading_cover_miss_keeps_the_planet_fallback() {
+        let mut game = ScreenGame::new();
+        assert!(!stage_loading_cover(&mut game, b"garbage"));
+        assert!(!game.has_loading_cover());
     }
 }

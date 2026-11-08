@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use super::super::avatar::{AvatarFigure, ScenePlacement};
+use super::super::avatar::{ojn_cover_figure, AvatarFigure, ScenePlacement, LOADING_COVER_SPRITE};
 use super::super::playing::{HighwayGeometry, LivePlay, PlaySkin};
 use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
@@ -982,6 +982,49 @@ impl ScreenGame {
         self.loading_status.as_ref()
     }
 
+    /// Stage the walked chart's OJN cover into the loading scene under
+    /// [`LOADING_COVER_SPRITE`]: the full-bleed song illustration the
+    /// loading painter stretches first, replacing the genuine
+    /// `MusicLoading.ojs` planet fallback (the exe mounts that overlay
+    /// only when the song load returns 0, file `0xe47a0`). `true` while
+    /// the bytes decode to a cover; any miss — non-chart bytes, unknown
+    /// magic, undecodable stream — drops a previously staged cover, so
+    /// the miss keeps the planet fallback. Archives stay read-only;
+    /// nothing is invented.
+    pub fn stage_loading_cover(&mut self, chart_bytes: &[u8]) -> bool {
+        match ojn_cover_figure(chart_bytes) {
+            Some(figure) => {
+                self.scene_art[scene_index(Screen::Loading)]
+                    .get_or_insert_with(SceneArt::default)
+                    .figures
+                    .insert(LOADING_COVER_SPRITE.to_owned(), figure);
+                true
+            }
+            None => {
+                self.clear_loading_cover();
+                false
+            }
+        }
+    }
+
+    /// Whether the walked chart's OJN cover is staged for the loading
+    /// gate (present means the chart load succeeded, so the painter
+    /// skips the planet fallback).
+    #[must_use]
+    pub fn has_loading_cover(&self) -> bool {
+        self.scene_art[scene_index(Screen::Loading)]
+            .as_ref()
+            .is_some_and(|art| art.figures.contains_key(LOADING_COVER_SPRITE))
+    }
+
+    /// Drop any staged loading cover so the next paint falls back to
+    /// the planet overlay.
+    fn clear_loading_cover(&mut self) {
+        if let Some(art) = self.scene_art[scene_index(Screen::Loading)].as_mut() {
+            art.figures.remove(LOADING_COVER_SPRITE);
+        }
+    }
+
     /// Seed the playing life bar from the selected chart's difficulty
     /// (Ex/Nx/Hx → Easy/Normal/Hard deltas per `FUN_00570f90`); codes
     /// without a verified arm (Rx, unknown) keep the current set. Runs
@@ -1029,6 +1072,7 @@ impl ScreenGame {
     /// staged music-name box paints as-is; nothing is invented.
     fn resolve_song_cover(&mut self) {
         self.song_cover = None;
+        self.clear_loading_cover();
         let Some(selection) = self.selected_music.as_ref() else {
             return;
         };
@@ -1048,6 +1092,9 @@ impl ScreenGame {
             return;
         };
         self.song_cover = cover_image(&decoded);
+        // The same walked bytes feed the loading scene: the cover the
+        // gate walked is the illustration the loading painter stretches.
+        self.stage_loading_cover(&bytes);
     }
 
     /// Stage real song-select dialog art (`DAILOG_SELECTMUSIC` placements
@@ -4000,6 +4047,87 @@ mod game_tests {
         );
         assert_eq!(game.loading_status(), None);
         assert_eq!(buf[16 * 64 + 47], pack_xrgb(0x30, 0xB0, 0x30));
+    }
+
+    #[test]
+    fn loading_cover_miss_keeps_the_planet_fallback() {
+        // Garbage bytes stage nothing: no cover flag, and the staged
+        // planet body survives for the fallback paint.
+        let (placements, figures) = corner_scene_art("MusicLoading.ojs");
+        let mut game = ScreenGame::new();
+        game.load_scene(Screen::Loading, placements, figures);
+        assert!(!game.stage_loading_cover(b"garbage"));
+        assert!(!game.stage_loading_cover(&[]));
+        assert!(!game.has_loading_cover());
+        let art = game.scene_art(Screen::Loading).expect("loading art staged");
+        assert!(art.figures.contains_key("MusicLoading.ojs"));
+        assert!(!art.figures.contains_key(LOADING_COVER_SPRITE));
+    }
+
+    #[test]
+    fn loading_cover_stages_the_walked_chart() {
+        // End to end on a real install: song 757's walked bytes decode
+        // to the 800x600 illustration, staged beside the planet body.
+        // Skips when `install-root` is absent.
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Music/o2ma757.ojn");
+        let Ok(bytes) = std::fs::read(&path) else {
+            return;
+        };
+        let (placements, figures) = corner_scene_art("MusicLoading.ojs");
+        let mut game = ScreenGame::new();
+        game.load_scene(Screen::Loading, placements, figures);
+        assert!(game.stage_loading_cover(&bytes));
+        assert!(game.has_loading_cover());
+        let art = game.scene_art(Screen::Loading).expect("loading art staged");
+        assert!(
+            art.figures.contains_key("MusicLoading.ojs"),
+            "planet fallback survives beside the cover"
+        );
+        let cover = art
+            .figures
+            .get(LOADING_COVER_SPRITE)
+            .expect("cover staged under its sprite name");
+        assert_eq!(cover.len(), 1);
+        let layer = cover.layer(0).expect("one opaque layer");
+        assert_eq!((layer.image.w, layer.image.h), (800, 600));
+    }
+
+    #[test]
+    fn loading_cover_miss_clears_a_staged_cover() {
+        // A later miss drops the earlier cover (stale art must never
+        // hide the planet fallback). Skips when `install-root` is absent.
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Music/o2ma757.ojn");
+        let Ok(bytes) = std::fs::read(&path) else {
+            return;
+        };
+        let (placements, figures) = corner_scene_art("MusicLoading.ojs");
+        let mut game = ScreenGame::new();
+        game.load_scene(Screen::Loading, placements, figures);
+        assert!(game.stage_loading_cover(&bytes));
+        assert!(!game.stage_loading_cover(b"garbage"));
+        assert!(!game.has_loading_cover());
+        let art = game.scene_art(Screen::Loading).expect("loading art staged");
+        assert!(art.figures.contains_key("MusicLoading.ojs"));
+        assert!(!art.figures.contains_key(LOADING_COVER_SPRITE));
+    }
+
+    #[test]
+    fn selecting_the_walked_song_stages_its_loading_cover() {
+        // Catalog + selection resolve reads the same walked bytes the
+        // gate walks, so real loads feed the loading scene with no
+        // extra call. Skips when `install-root` is absent.
+        let chart = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Music/o2ma757.ojn");
+        let Ok(_) = std::fs::read(&chart) else {
+            return;
+        };
+        let (placements, figures) = corner_scene_art("MusicLoading.ojs");
+        let mut game = ScreenGame::new();
+        game.load_scene(Screen::Loading, placements, figures);
+        stage_waiting_song(&mut game);
+        assert!(game.has_loading_cover());
     }
 
     fn chat_user(sender: &str, text: &str) -> o2jam_net::rooms::WaitingUserMessage {
