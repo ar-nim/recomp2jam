@@ -5,7 +5,9 @@
 //! plus jam level `X` VERIFIED (`FUN_00570510` / `FUN_00570260`);
 //! long-note hold machine traced in-exe (head hit arms the hold, bonus
 //! ticks over the span, the tail rates on the release strike through the
-//! armed per-lane cursor — [`HoldState`]).
+//! armed per-lane cursor — [`HoldState`]). The per-lane note list pins
+//! the walks' end-marker discipline: iteration ends at the
+//! first-inserted note, refused before read ([`LaneNoteList`]).
 //!
 //! Life bar VERIFIED end to end: the difficulty switch `FUN_00570f90`
 //! (files `0x170fa2`–`0x171056`, ev `feebe490…`) selects per-difficulty
@@ -515,6 +517,115 @@ impl HoldState {
         self.armed
             && now_ms.saturating_sub(self.span.head_ms) > 0
             && self.span.tail_ms.saturating_sub(now_ms) > 0
+    }
+}
+
+/// Per-lane note list with the exe's end-marker discipline, VERIFIED 7.55
+/// (fourth trace, `docs/gameplay.md` item 6(a); binary md5 `34b789ff…`).
+///
+/// The lane list is one circular doubly-linked list over an embedded
+/// sentinel `{first=+0, last=+4, size=+8}`, and its only writer is the
+/// loader's note loop: insert `FUN_00578990` (file `0x178990`, dossier
+/// `ev_40f34b57…`) links each record immediately before its position
+/// argument, and every lane-list caller passes the current `*(header+4)`
+/// — the loader reads it at file `0x172866` for callsite `0x1728c3`
+/// (dossier `ev_4b4ccad8…`, insert xrefs `ev_44c16d41…`). The loader
+/// walks the OJN event stream in ascending measure order, so the first
+/// insert — the lane's earliest note — takes the `*(header+4)` slot and
+/// stays pinned forever: no terminator record exists, and that real
+/// note IS the walks' end marker. Later inserts stack in front of it in
+/// chart order, so iteration from the header runs ascending in time and
+/// ends at the pinned note.
+///
+/// Every walk consumer honors the marker: the judge candidate walk and
+/// the expiry scan test `cursor == *(header+4)` ahead of their first
+/// dereference (judge seed files `0x17674e`–`0x176762`, bound
+/// `0x1767e5` before deref `0x176805`, dossier `ev_14992eb2…`; scan
+/// cursors `0x17732f`/`0x177336`, bound `0x177393` before deref
+/// `0x1773b1`, dossier `ev_0ece39cb…`), and the iterator primitives
+/// refuse the end node outright — `FUN_00578db0`/`FUN_00579590` fail
+/// their `current == *(container+4)` check at files
+/// `0x178dd6`–`0x178de6` and `0x1795b8`–`0x1795c8` (dossiers
+/// `ev_87bd7178…`/`ev_7c82f55b…`). The model pins both halves:
+/// [`LaneNoteList::insert_before_end_marker`] is the only write and
+/// always keeps the first-inserted record in the end slot, and
+/// [`LaneNoteList::walk`] yields the remaining records in insertion
+/// (ascending) order without ever reading the end marker.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LaneNoteList {
+    /// Records in walk order from the header; the final slot mirrors
+    /// `*(header+4)` — the first-inserted note, the walks' end marker.
+    walk_order: Vec<u64>,
+}
+
+impl LaneNoteList {
+    /// Empty lane list: the sentinel loops to itself, so a seed cursor
+    /// already sits on the end marker and a walk reads nothing.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The exe's only lane-list write (`FUN_00578990`): link one record
+    /// immediately before the end-marker slot. The first insert into an
+    /// empty list takes that slot itself and is pinned there forever;
+    /// every later insert lands in front of it, after all earlier
+    /// records.
+    pub fn insert_before_end_marker(&mut self, record_ms: u64) {
+        let end_marker_slot = self.walk_order.len().saturating_sub(1);
+        self.walk_order.insert(end_marker_slot, record_ms);
+    }
+
+    /// The end-marker record `*(header+4)` — the lane's first-inserted
+    /// (earliest) note, the bound every walk stops at; `None` while the
+    /// list is empty and the slot is the sentinel itself.
+    #[must_use]
+    pub fn end_marker_record(&self) -> Option<u64> {
+        self.walk_order.last().copied()
+    }
+
+    /// A candidate walk from the header (the `FUN_00576540` judge walk,
+    /// the expiry scan), honoring the end-marker refusal.
+    #[must_use]
+    pub fn walk(&self) -> LaneWalk<'_> {
+        LaneWalk {
+            list: self,
+            next_slot: 0,
+        }
+    }
+}
+
+/// Walking cursor over one [`LaneNoteList`], mirroring the exe's walk
+/// primitives (`FUN_00578db0`/`FUN_00579590`).
+///
+/// [`LaneWalk::next`] refuses before it reads: once the cursor sits on
+/// the end-marker slot (`current == *(container+4)`, the check at files
+/// `0x178dd6`–`0x178de6`), it returns `None` without touching that
+/// record, so the lane's first-inserted note is excluded structurally.
+/// An empty list refuses at the seed — there `*(header+4)` is the
+/// sentinel itself, exactly the exe's empty-list self-loop.
+#[derive(Debug, Clone)]
+pub struct LaneWalk<'a> {
+    list: &'a LaneNoteList,
+    /// Slot the cursor stands on: a walkable record, or the end-marker
+    /// slot once every record in front of it was visited.
+    next_slot: usize,
+}
+
+impl Iterator for LaneWalk<'_> {
+    type Item = u64;
+
+    /// Next record the walk may judge, in ascending time order; `None`
+    /// once the cursor reaches the end marker — the first-inserted note
+    /// — which is checked (and refused) before any record read.
+    fn next(&mut self) -> Option<u64> {
+        let end_marker_slot = self.list.walk_order.len().saturating_sub(1);
+        if self.next_slot == end_marker_slot {
+            return None;
+        }
+        let record_ms = self.list.walk_order[self.next_slot];
+        self.next_slot += 1;
+        Some(record_ms)
     }
 }
 
@@ -1908,58 +2019,59 @@ mod tests {
         assert_eq!(score.counts, [1, 0, 1, 18]);
     }
 
-    /// Parity model of the exe's per-lane note-list discipline (fourth
-    /// trace, `docs/gameplay.md` item 6): `FUN_00578990` (file
-    /// `0x178990`) links every record immediately before the current
-    /// `*(header+4)` slot, and the loader walks chart events in
-    /// ascending measure order — so the first-inserted record of a lane
-    /// (its earliest note) is pinned in the tail slot forever, the
-    /// remaining records keep chart order in front of it, and iteration
-    /// from the header runs ascending in time ending at that pinned
-    /// note. The slot vector stores records in walk order; its last
-    /// element mirrors `*(header+4)`. No terminator record exists.
-    #[derive(Default)]
-    struct LaneListParity {
-        walk_order: Vec<u64>,
-    }
-
-    impl LaneListParity {
-        /// `FUN_00578990`: link one record in front of the tail slot;
-        /// the first insert into an empty list takes the tail slot.
-        fn insert_before_tail(&mut self, record_ms: u64) {
-            let tail_slot = self.walk_order.len().saturating_sub(1);
-            self.walk_order.insert(tail_slot, record_ms);
-        }
-
-        /// A candidate walk (`FUN_00576540` loop bound at file
-        /// `0x1767e5`, expiry scan bound at file `0x177393`): both test
-        /// `cursor == *(header+4)` before their first dereference, so
-        /// the tail-slot record is never visited.
-        fn walked_records(&self) -> &[u64] {
-            let bound_slot = self.walk_order.len().saturating_sub(1);
-            &self.walk_order[..bound_slot]
-        }
+    #[test]
+    fn first_insert_becomes_the_end_marker_and_stays_pinned() {
+        // Loader parity (fourth trace): chart order 4000/8000/12000
+        // inserts ascending; the earliest note takes *(header+4) and
+        // later inserts stack in front of it, so the walk visits 8000
+        // and 12000 in ascending order and ends at 4000 — a real note,
+        // not a terminator record.
+        let mut lane = LaneNoteList::new();
+        lane.insert_before_end_marker(4_000);
+        assert_eq!(lane.end_marker_record(), Some(4_000));
+        lane.insert_before_end_marker(8_000);
+        lane.insert_before_end_marker(12_000);
+        assert_eq!(lane.end_marker_record(), Some(4_000));
+        assert_eq!(lane.walk().collect::<Vec<_>>(), [8_000, 12_000]);
     }
 
     #[test]
-    fn lane_list_walk_bound_excludes_the_first_inserted_note() {
-        // The stop-marker *(header+4) is the lane's earliest real note,
-        // not a terminator: inserting 4000/8000/12000 in chart order
-        // pins 4000 in the tail slot and the walk visits only 8000 and
-        // 12000, in ascending time order.
-        let mut lane = LaneListParity::default();
-        lane.insert_before_tail(4_000);
-        lane.insert_before_tail(8_000);
-        lane.insert_before_tail(12_000);
-        assert_eq!(lane.walked_records(), [8_000, 12_000]);
+    fn walk_ends_at_the_end_marker_without_ever_reading_it() {
+        // The refusal runs before the dereference (files
+        // 0x178dd6–0x178de6): once the cursor lands on the
+        // first-inserted note, next() yields None and that record's
+        // value never comes out. The model never sorts: each insert
+        // lands immediately before the end marker, so the walked order
+        // is insertion order minus the first insert (the loader's
+        // ascending chart order is what makes it ascending in time).
+        let mut lane = LaneNoteList::new();
+        lane.insert_before_end_marker(9_000);
+        lane.insert_before_end_marker(3_000);
+        lane.insert_before_end_marker(6_000);
+        let mut walk = lane.walk();
+        assert_eq!(walk.next(), Some(3_000));
+        assert_eq!(walk.next(), Some(6_000));
+        assert_eq!(walk.next(), None);
+        assert_eq!(walk.next(), None);
+        assert_eq!(lane.end_marker_record(), Some(9_000));
     }
 
     #[test]
-    fn lane_list_single_note_lives_only_in_the_excluded_tail_slot() {
+    fn single_note_lane_sits_only_in_the_refused_end_marker_slot() {
         // A one-note lane: the sole record is the bound slot itself, so
         // a candidate walk visits nothing rather than reading it.
-        let mut lane = LaneListParity::default();
-        lane.insert_before_tail(2_000);
-        assert_eq!(lane.walked_records(), [] as [u64; 0]);
+        let mut lane = LaneNoteList::new();
+        lane.insert_before_end_marker(2_000);
+        assert_eq!(lane.end_marker_record(), Some(2_000));
+        assert_eq!(lane.walk().next(), None);
+    }
+
+    #[test]
+    fn empty_lane_refuses_the_walk_at_the_seed() {
+        // Empty exe list: *(header+4) is the sentinel itself, so the
+        // seed cursor already sits on the end marker and reads nothing.
+        let lane = LaneNoteList::new();
+        assert_eq!(lane.end_marker_record(), None);
+        assert_eq!(lane.walk().next(), None);
     }
 }

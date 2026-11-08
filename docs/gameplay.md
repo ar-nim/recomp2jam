@@ -770,7 +770,14 @@ Modeled as `o2jam-game::HoldSpan` + `o2jam-game::HoldState`
 (tested on the shipped flag words `0x200`/`0x300`); the deprecated
 `LongTail` release model lacks the verified arming gate and one-shot
 cursor semantics and stays deprecated in favor of
-`HoldState::judge_tail`.
+`HoldState::judge_tail`. The list-insert ordering discipline itself is
+pinned as `o2jam-game::LaneNoteList` + `LaneNoteList::walk`: the only
+write is insert-before-end-marker (`FUN_00578990` links each record
+immediately before the current `*(header+4)`, loader callsite
+`0x1728c3`), so the first-inserted note stays the walks' end marker
+forever, and the walk cursor refuses that slot before any read (files
+`0x178dd6`–`0x178de6`) — iteration structurally ends at the earliest
+note, tested on three-note, single-note and empty lanes.
 
 ## Long-note hold bonus — VERIFIED (+10 per tick, +1 combo)
 
