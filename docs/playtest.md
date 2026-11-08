@@ -4326,3 +4326,25 @@ stripped): user desktop and speakers never touched.
   previously any OJM run opened the default ALSA device. Pinned by
   `audio_backend_off_queues_silently_without_hardware` (fails red
   without the fix: playhead 0 vs queued 50).
+
+## Windowed live host loop — 2026-11-09 02:10 +08:00 (HEAD `cdf3024`, tree clean)
+
+Isolated rigs only (own Xvfb `:92/:93/:97`, null sink, Wayland
+stripped). `--online-create-room` + `--online-music-id 757` on the
+windowed client, keyboard Enter/Escape only, focus verified.
+
+- Channel → Room → Waiting (live song dialog, real catalog rows) →
+  song select → master START accepted solo → Loading (full bar,
+  stable) → Confirm → Playing (animated frames, MISS 12 → 34) →
+  stable Result (SCORE, GOOD! grade, tallies, RETRY/BACK).
+  Captures in `~/scratch/smoke-loop/` + `~/scratch/smoke-finish/`
+  with event traces.
+- Score broadcast by composition: `poll_stats` → `maybe_send_tick`
+  runs every Playing paint (code-read) and the snapshot moves with
+  the visible tallies; sends log at DEBUG only, so an INFO client
+  log shows no 4014 lines (expected, not a gap). Unit pin
+  `tick_sends_jam_channel_with_live_score` stays green.
+- Room numbers: reference server assigns first-free-slot ids, so a
+  first room is number 0; the old `number != 0` filter ate our own
+  rooms. Corrected to `number != 0 || !title.is_empty()` with the
+  7.55 display rule OPEN. Panel-0 click then enters Waiting live.
