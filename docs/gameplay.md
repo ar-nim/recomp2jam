@@ -177,6 +177,22 @@ with synthetic tests.
 - RTTI has no team classes — only `CLiveWaiting` / `CNormalWaiting`
   and `CStateLivePlaying`; ASCII `TEAM`/`MISSION` appear solely as
   CRT false positives. Team identity is numeric (0..7) everywhere.
+- F2 auto-select — REFUTED (no first-unused-team scan, no F2→4004
+  path in 7.55). Team choice is manual button press only
+  (`button − 0x16201004` → 4004). Evidence: zero `cmp`/`push`
+  against VK_F2 `0x71` as a key (whole-image scan finds two code
+  `push $0x71` sites, both unrelated — file `0xb072c`
+  (`push 0x71` + vtable `+0x50` in waiting-entry highlight
+  `FUN_004b06a0`) and file `0x1a6979` (`LoadAcceleratorsA`
+  resource 113)); `GetKeyState`/`GetAsyncKeyState` consumers check
+  only `VK_SHIFT`/`VK_CONTROL` (`0x10`/`0x11` at files `0x11984b`/
+  `0x1198b6`/`0x119b10`); the DirectInput scancode table
+  (file `0x173290`, dossier `ev_fc65241f…`) feeds in-play lanes
+  via `FUN_00544b50`, not waiting; all four true `push $0xfa4`
+  (4004) sites are the manual paths — files `0xb2465`/`0xb24c0`
+  (button dispatch, team = mapper result) and `0xb4de0`/`0xae447`
+  (waiting setup, team 0 default under the `0x77cd31` gate) —
+  with no 8-wide occupancy loop feeding any of them.
 
 ## Level-up missions — NOT in the 7.55 client
 

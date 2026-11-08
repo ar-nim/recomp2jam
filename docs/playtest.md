@@ -3028,3 +3028,43 @@ sweep log in this file.
   yet staged to `Screen::Waiting` and the writer/scene-count pins still
   expect eleven scenes. Per the sweep rules (touch only `docs/playtest.md`,
   fix only my own lint findings) the peer's file was left alone.
+
+## Regression sweep — 2026-11-08 03:28 UTC (HEAD `1336284`, tracked tree dirty)
+
+Live re-proof on the guest-head. Covers the guest waiting-view commit
+(`1336284`: `shoot_guest_waiting` + select-gate in
+`crates/recomp2jam/src/shots.rs`, new `waiting-guest.png`, room-enums
+docs) over the peer-bars baseline `dff765d`.
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1426 passed, 0 failed, 0 ignored**, `exit=0`.
+  Per target: audio 20, dump 7, file 177, game 94, net 360,
+  render 89, shell 528, real_art 7, scenes 22, recomp2jam 122
+  (doc-test targets, 0 each). The 4 dirty-state `shots::tests`
+  failures from the last sweep are resolved on this HEAD, including
+  `guest_capture_matches_master_waiting_but_not_select_view`.
+- `cargo build --workspace --release`: clean, `exit=0`, no warnings.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.62 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`11:27:47 +08:00`):
+  `Authorize session` → `Create room: songflow` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Update #1 - Jam: 3 (Bonus: 0)` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure stack on room delete; a trailing session walked
+  `Authorize session` → `Get channel list` → `Enter channel` →
+  `Get room list` → `Get character info`).
+- **Verdict: no regression — suite is green on the guest-head (1426
+  passed; +3 vs the 1423 peer-bars baseline, 0 failures). No lint
+  findings. No commits, no pushes.** This sweep touched only
+  `docs/playtest.md`.
+- Tree note: `docs/gameplay.md` holds uncommitted peer edits (16
+  insertions); left alone per the sweep rules.
