@@ -1311,6 +1311,38 @@ impl Score {
     pub fn grade_numerator(&self) -> u64 {
         self.points
     }
+
+    /// Live grade ratio the chooser thresholds (PINNED `FUN_004c4dd0`,
+    /// dossier `ev_615e034c…`): [`Score::grade_numerator`] over
+    /// [`crate::grade_max_reference`]. Zero while the reference is zero
+    /// (26 or fewer records: nothing scored), so the plate stays off.
+    /// `note_count` is the u16 word at `0x778a00` (reference word,
+    /// unscored 26 included).
+    #[must_use]
+    pub fn grade_ratio(&self, note_count: u16) -> f64 {
+        let max = crate::grade_max_reference(note_count);
+        if max == 0 {
+            return 0.0;
+        }
+        self.grade_numerator() as f64 / max as f64
+    }
+
+    /// Grade 6→7 promotion arm (PINNED `FUN_004c4dd0`, dossier
+    /// `ev_615e034c…`): max combo one under the note-count word
+    /// (`0x77ee5c == 0x778a00 − 1`).
+    #[must_use]
+    pub fn is_combo_at_top(&self, note_count: u16) -> bool {
+        u64::from(self.max_combo) + 1 == u64::from(note_count)
+    }
+
+    /// Grade 8 arm (PINNED `FUN_004c4dd0`, dossier `ev_615e034c…`):
+    /// the live total equals the max reference. Never armed while the
+    /// reference is zero, so an empty chart cannot read as perfect.
+    #[must_use]
+    pub fn is_score_at_max(&self, note_count: u16) -> bool {
+        let max = crate::grade_max_reference(note_count);
+        max != 0 && self.grade_numerator() == max
+    }
 }
 
 /// Records in the note-count word the grade reference leaves unscored,
@@ -2135,6 +2167,63 @@ mod tests {
         assert_eq!(score.grade_numerator(), 5_010 + 210);
         score.apply(Judgement::Good);
         assert_eq!(score.grade_numerator(), 5_010 + 210 + 105);
+    }
+
+    #[test]
+    fn grade_ratio_divides_live_total_by_the_reference() {
+        // Word 51 = 25 scored notes: reference 5_250 (files
+        // 0xc2347-0xc2356); a 1_575 live total reads exactly 0.30.
+        let score = Score {
+            points: 1_575,
+            ..Score::default()
+        };
+        assert_eq!(score.grade_ratio(51), 0.30);
+        assert_eq!(grade_max_reference(51), 5_250);
+    }
+
+    #[test]
+    fn grade_ratio_stays_zero_without_a_reference() {
+        // 26 or fewer records score nothing (files 0xc22e5-0xc2307):
+        // no denominator, no ratio, never a divide-by-zero.
+        let score = Score {
+            points: 200,
+            ..Score::default()
+        };
+        assert_eq!(score.grade_ratio(26), 0.0);
+        assert_eq!(score.grade_ratio(0), 0.0);
+    }
+
+    #[test]
+    fn combo_at_top_arms_only_one_under_the_word() {
+        // Promotion arm `0x77ee5c == 0x778a00 - 1` (dossier
+        // `ev_615e034c…`): word 51 arms at combo 50 only.
+        let armed = Score {
+            max_combo: 50,
+            ..Score::default()
+        };
+        assert!(armed.is_combo_at_top(51));
+        let short = Score {
+            max_combo: 49,
+            ..Score::default()
+        };
+        assert!(!short.is_combo_at_top(51));
+    }
+
+    #[test]
+    fn score_at_max_arms_only_on_an_exact_nonzero_match() {
+        // Equal-to-max gives grade 8; an empty chart (reference 0)
+        // never arms, so zeroes cannot read as perfect.
+        let perfect = Score {
+            points: grade_max_reference(51),
+            ..Score::default()
+        };
+        assert!(perfect.is_score_at_max(51));
+        let short = Score {
+            points: grade_max_reference(51) - 1,
+            ..Score::default()
+        };
+        assert!(!short.is_score_at_max(51));
+        assert!(!Score::default().is_score_at_max(26));
     }
 
     #[test]

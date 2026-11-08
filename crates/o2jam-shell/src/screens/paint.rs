@@ -2294,12 +2294,12 @@ const GRADE_THRESHOLDS: [(f64, u8); 6] = [
 
 /// Grade plate frame 1..=8 for one finished play (`FUN_004c4dd0`):
 /// `ratio` climbs the pinned threshold table; a max combo one under
-/// the note count promotes grade 6 to 7; a score equal to the max
-/// reference gives 8. The exe ratio reads score global `0x77ee60`
-/// against reference `this+0x10d14` — neither settleable from the
-/// pinned evidence (dossier OPEN 3/9), so callers feed the shell's
-/// documented stand-in ratio and the plate stays one step behind the
-/// open question.
+/// the note-count word promotes grade 6 to 7; a score equal to the
+/// max reference gives 8. The live wiring is [`result_grade_frame`]:
+/// it reads the ratio from [`o2jam_game::Score::grade_ratio`] (live
+/// [`o2jam_game::Score::grade_numerator`] over pinned
+/// [`o2jam_game::grade_max_reference`]) and selects through this
+/// table at Result paint.
 #[must_use]
 pub fn grade_frame(ratio: f64, combo_at_top: bool, score_at_max: bool) -> u8 {
     let mut grade = 0;
@@ -2315,6 +2315,25 @@ pub fn grade_frame(ratio: f64, combo_at_top: bool, score_at_max: bool) -> u8 {
         grade = 8;
     }
     grade
+}
+
+/// Live grade plate for one finished play (`FUN_004c4dd0`, computed at
+/// Result paint): the ratio comes from the live [`o2jam_game::Score`]
+/// over the pinned reference word, selected through [`grade_frame`].
+/// `None` paints no plate — no chart word, or the ratio sits under
+/// the lowest threshold. The staged frame paints at (395,531)
+/// through [`paint_result_scene`].
+#[must_use]
+pub fn result_grade_frame(score: &o2jam_game::Score, note_count: u16) -> Option<u8> {
+    if note_count == 0 {
+        return None;
+    }
+    let frame = grade_frame(
+        score.grade_ratio(note_count),
+        score.is_combo_at_top(note_count),
+        score.is_score_at_max(note_count),
+    );
+    (frame >= 1).then_some(frame)
 }
 
 /// White ink of the pinned result fields (the exe text helper runs
@@ -4674,6 +4693,68 @@ mod paint_tests {
         assert_eq!(grade_frame(0.95, true, false), 7);
         assert_eq!(grade_frame(0.90, true, false), 5);
         assert_eq!(grade_frame(0.30, false, true), 8);
+    }
+
+    /// Score with a fixed live total behind the plate selector.
+    fn scored_plate(points: u64, max_combo: u32) -> o2jam_game::Score {
+        o2jam_game::Score {
+            points,
+            max_combo,
+            ..o2jam_game::Score::default()
+        }
+    }
+
+    #[test]
+    fn live_plate_climbs_one_frame_per_band() {
+        // Word 51 pins the reference at 5_250, so each point total
+        // below lands its band's frame through the live ratio.
+        let cases = [
+            (1_574, 0u8),
+            (1_575, 1),
+            (2_625, 2),
+            (3_675, 3),
+            (4_200, 4),
+            (4_725, 5),
+            (4_988, 6),
+        ];
+        for (points, frame) in cases {
+            let grade = result_grade_frame(&scored_plate(points, 0), 51);
+            assert_eq!(grade, (frame >= 1).then_some(frame), "{points} points");
+        }
+    }
+
+    #[test]
+    fn live_plate_promotes_combo_top_and_max_score() {
+        // 4_988 points read past 0.95 (frame 6): combo 50 (word 51 −
+        // 1) promotes to 7, combo 49 stays at 6, and an exact-max
+        // total gives 8 outright.
+        assert_eq!(result_grade_frame(&scored_plate(4_988, 50), 51), Some(7));
+        assert_eq!(result_grade_frame(&scored_plate(4_988, 49), 51), Some(6));
+        assert_eq!(result_grade_frame(&scored_plate(4_725, 50), 51), Some(5));
+        assert_eq!(result_grade_frame(&scored_plate(5_250, 0), 51), Some(8));
+    }
+
+    #[test]
+    fn live_plate_stays_off_without_chart_or_ratio() {
+        // No word, or a word with no reference (26 unscored records),
+        // or a ratio under 0.30: the enter painter's frame 0 stays.
+        assert_eq!(result_grade_frame(&scored_plate(5_250, 0), 0), None);
+        assert_eq!(result_grade_frame(&scored_plate(0, 0), 26), None);
+        assert_eq!(result_grade_frame(&scored_plate(1_574, 0), 51), None);
+    }
+
+    #[test]
+    fn live_plate_paints_its_frame_at_the_pinned_anchor() {
+        // End-to-end wiring: the live ratio selects the frame and the
+        // staged plate paints it at (395,531) — band 1 paints image
+        // 0, the promoted band paints image 6.
+        let at = |buf: &[u32], x: i32, y: i32| buf[y as usize * 800 + x as usize];
+        let low = result_grade_frame(&scored_plate(1_575, 0), 51);
+        let buf = painted_native_scene(&rank_art(), ResultVerdict::Solo, low);
+        assert_eq!(at(&buf, 395, 531), frame_ink(0));
+        let top = result_grade_frame(&scored_plate(4_988, 50), 51);
+        let buf = painted_native_scene(&rank_art(), ResultVerdict::Solo, top);
+        assert_eq!(at(&buf, 395, 531), frame_ink(6));
     }
 
     #[test]

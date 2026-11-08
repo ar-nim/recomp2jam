@@ -8,12 +8,12 @@ use super::super::playing::{HighwayGeometry, LivePlay, PlaySkin};
 use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
-    battle_verdict, grade_frame, paint_avi_scene, paint_channel_chat, paint_channel_list,
-    paint_channel_scene, paint_loading_scene, paint_loading_scene_with_status,
-    paint_lobby_backdrop, paint_playing_overlay, paint_result, paint_result_scene, paint_room_list,
-    paint_room_scene, paint_screen, paint_waiting_chat, paint_waiting_members, paint_waiting_scene,
-    scene_index, BattleVerdict, ChannelChatMessage, LoadingStatus, ResultPaint, ResultRankRow,
-    ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage,
+    battle_verdict, paint_avi_scene, paint_channel_chat, paint_channel_list, paint_channel_scene,
+    paint_loading_scene, paint_loading_scene_with_status, paint_lobby_backdrop,
+    paint_playing_overlay, paint_result, paint_result_scene, paint_room_list, paint_room_scene,
+    paint_screen, paint_waiting_chat, paint_waiting_members, paint_waiting_scene, scene_index,
+    BattleVerdict, ChannelChatMessage, LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict,
+    SceneArt, WaitingCaptions, WaitingChatMessage,
 };
 use super::side::{
     can_return_side, can_visit_side, paint_side_scene, select_chosung_cells, select_difficulty_ink,
@@ -1291,26 +1291,15 @@ impl ScreenGame {
     }
 
     /// Grade plate frame for the finished play, if a chart loaded.
-    /// The exe compares its score global against a max-score
-    /// reference with no located write site (docs/cresult-anchors.md
-    /// OPEN 9), so the ratio runs the played points against the
-    /// verified scorer's all-Cool total for the loaded chart — the
-    /// documented stand-in — through the pinned table
-    /// [`grade_frame`].
+    /// The ratio runs the live scorer total against the pinned
+    /// `grade_max_reference` denominator for the chart's note word
+    /// (docs/cresult-anchors.md) through the pinned table
+    /// [`result_grade_frame`]. The word counts chart onsets; the
+    /// exe's 26 unscored records are a documented gap.
     #[must_use]
-    fn grade(&self) -> Option<u8> {
-        let notes = self.chart_notes;
-        if notes == 0 {
-            return None;
-        }
-        let max = o2jam_game::Score::all_cool_total(notes);
-        let score = self.playing.score();
-        let ratio = score.points as f64 / max as f64;
-        Some(grade_frame(
-            ratio,
-            u64::from(score.max_combo) + 1 == u64::from(notes),
-            score.points == max,
-        ))
+    pub fn grade(&self) -> Option<u8> {
+        let word = u16::try_from(self.chart_notes).unwrap_or(u16::MAX);
+        super::paint::result_grade_frame(self.playing.score(), word)
     }
 
     /// Stage real main-flow art for one screen: `.bnd` placements
@@ -3579,13 +3568,15 @@ mod game_tests {
 
     #[test]
     fn grade_runs_the_pinned_table_on_the_chart() {
-        // One-note chart fully Cool: points equal the all-Cool max,
-        // the pinned equal-to-max arm gives grade 8.
+        // One-note chart fully Cool: the reference word holds a single
+        // record, so `grade_max_reference` is zero and the plate stays
+        // off — no chart can read as graded below 27 records
+        // (PINNED `FUN_004c22c0` minus 26).
         let mut game = ScreenGame::new();
         game.load_chart(vec![(2, 5000, 7)]);
         walk_to_playing(&mut game);
         game.strike_at(2, 5000);
-        assert_eq!(game.grade(), Some(8));
+        assert_eq!(game.grade(), None);
         assert_eq!(game.playing.score().points, 200);
     }
 
@@ -3608,7 +3599,7 @@ mod game_tests {
         paint_result_frame(&mut game);
         assert_eq!(game.screen(), Screen::Result);
         assert_eq!(game.playing.score().counts[3], 1);
-        assert_eq!(game.grade(), Some(0));
+        assert_eq!(game.grade(), None);
     }
 
     #[test]

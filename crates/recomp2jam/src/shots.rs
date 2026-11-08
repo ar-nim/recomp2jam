@@ -2584,28 +2584,24 @@ mod tests {
             println!("skip: missing {INTERFACE_ARCHIVE}");
             return;
         };
-        // Three Cools across the two records (the hold tail rates as
-        // its own judgement, overshooting the stand-in all-Cool
-        // denominator), so the walked grade is the 0.95 band's
-        // frame 6: image 5 on the plate body.
+        // The walked chart holds a handful of records, far below the
+        // 27-record floor of `grade_max_reference` — so the walked
+        // grade is honestly `None` and no plate paints (a tiny walk
+        // cannot grade; plate painting itself is proven at paint
+        // level). This test pins the absence, not the plate.
         let plate = load_archive_sprite(&archive, o2jam_shell::screens::paint::RESULT_RANK_SPRITE)
             .expect("the block's grade plate decodes");
         assert_eq!(plate.len(), 8, "eight stored frames");
-        let mut expected = native_probe();
-        paint_probe(&mut expected, |frame| {
-            let layer = plate.layer(5).expect("image 5 decodes");
-            let (x, y) = anchor_in_frame(layer.dx, layer.dy, 800, 600);
-            o2jam_render::blit_rgb555(frame, &layer.image.view(), x, y, Some(layer.colorkey));
-        });
         let mut game = seeded_game();
         walk_to_playing(&mut game);
         game.strike_at(2, 5_000);
         game.strike_at(0, SCRIPTED_HOLD_STRIKE_MS);
         game.release_at(0, SCRIPTED_HOLD_RELEASE_MS);
+        assert_eq!(game.screen(), Screen::Playing);
+        assert_eq!(game.grade(), None, "tiny walk charts cannot grade");
         let mut actual = native_probe();
         paint_probe(&mut actual, |frame| game.paint_at(frame, 7_000));
         assert_eq!(game.screen(), Screen::Result);
-        assert_pixels_came_from_font(&actual, &expected, "grade plate");
     }
 
     #[test]
@@ -2694,27 +2690,15 @@ mod tests {
 
     #[test]
     fn solo_shot_paints_the_walked_grade_plate() {
-        let Some(archive) = read_archive(INTERFACE_ARCHIVE) else {
-            println!("skip: missing {INTERFACE_ARCHIVE}");
-            return;
-        };
-        // Same struck records as the battle walk, same play data:
-        // three Cools across the two records overshoot the stand-in
-        // all-Cool denominator, so the walked grade is frame 6
-        // (image 5) on the solo walk too.
-        let plate = load_archive_sprite(&archive, o2jam_shell::screens::paint::RESULT_RANK_SPRITE)
-            .expect("the block's grade plate decodes");
-        let mut expected = native_probe();
-        paint_probe(&mut expected, |frame| {
-            let layer = plate.layer(5).expect("image 5 decodes");
-            let (x, y) = anchor_in_frame(layer.dx, layer.dy, 800, 600);
-            o2jam_render::blit_rgb555(frame, &layer.image.view(), x, y, Some(layer.colorkey));
-        });
+        // Same struck records as the battle walk on a tiny chart:
+        // below the 27-record floor, so the walked grade is honestly
+        // `None` and no plate paints (plate painting itself is proven
+        // at paint level).
         let mut game = drive_solo_to_result();
+        assert_eq!(game.grade(), None, "tiny walk charts cannot grade");
         let mut actual = native_probe();
         paint_probe(&mut actual, |frame| game.paint_at(frame, 7_000));
         assert_eq!(game.screen(), Screen::Result);
-        assert_pixels_came_from_font(&actual, &expected, "solo grade plate");
     }
 
     #[test]
