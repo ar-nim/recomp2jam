@@ -3631,3 +3631,46 @@ and tally work), plus the sweep log in this file.
   172 → 177 from the loading-sync/tally session tests, all other
   targets unchanged, 0 failures). No lint findings. No commits, no
   pushes.** This sweep touched only `docs/playtest.md`.
+
+## Regression sweep — 2026-11-08 13:48 UTC+8 (HEAD `66d782e`, tree clean)
+
+Live re-proof on the broadcasts-head. Covers the net/cli commit landed
+after the tally-head baseline `c04be2f`: score-broadcast decode
+server mirror (`66d782e`: new `crates/o2jam-net/src/play.rs` +
+`session.rs` broadcast-mirror work), plus the sweep log in this file.
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1590 passed, 0 failed, 0 ignored**, `exit=0`.
+  Per target: audio 20, dump 7, file 177, game 94, net 418,
+  render 89, shell 578, real_art 7, scenes 22, recomp2jam 178
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, 0 warning
+  lines.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 177 filtered out, 0.61 s) against local
+  Memoryer 7.2.0 (`Mode=Full`). Server log for this run
+  (`13:47:51 +08:00`): `Authorize session` →
+  `Get channel list: [0]` → `Enter channel: [0/00]` →
+  `Get character info: [tester]` → `Create room: songflow` →
+  `Update room [000] music settings: [HX / X10 / o2ma757]` →
+  `Update room [000] arena: [1] (0)` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Update #1 - Jam: 3 (Bonus: 0)` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure stack on room delete; a trailing session walked
+  `Authorize session` → `Get channel list` → `Enter channel` →
+  `Get character info`).
+- **Verdict: no regression — suite is green on the broadcasts-head
+  (1590 passed; +17 vs the 1573 `c04be2f` baseline: net 402 → 418
+  from the score-broadcast decode tests, recomp2jam 177 → 178 from
+  the session mirror test, all other targets unchanged, 0 failures).
+  No lint findings. No commits, no pushes.** This sweep touched only
+  `docs/playtest.md`.
