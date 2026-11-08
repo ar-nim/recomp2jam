@@ -51,6 +51,19 @@
 //! per-seat write yet, so the barrier still proves through staged
 //! snapshots.
 //!
+//! Host song select (Waiting scene): `--online-music-id` stages a
+//! pending pick plus the installed `OJNList.dat` catalog; the next
+//! master Waiting Confirm sends `SetRoomMusic` 4000, `SetRoomArena`
+//! 4002 (awaiting the 4003 echo like the headless song flow), and
+//! `GetMusicList` 4030, stages the pick through
+//! [`ScreenGame::set_selected_music`] (driving the dialog rows and
+//! the waiting song panel), then fetches the chart from the catalog
+//! container (`Music/o2ma###.ojn` through the loading gate) into the
+//! highway via [`ScreenGame::load_chart`]. The room still launches on
+//! a later Confirm (START 4010 behind the all-peers-ready gate), so
+//! the host sees the staged pick first. Guests keep the READY path,
+//! and a failed select keeps the pick for the next Confirm.
+//!
 //! Lobby send (Channel scene): the shell stages a second draft
 //! ([`ScreenGame::take_channel_slash`]) beside the channel history
 //! and transmits it on Confirm through
@@ -77,22 +90,30 @@
 //! a trace. Empty notices and invalid ranks stage no row (the shell
 //! push rules), so the drain never invents one.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
+use anyhow::Context;
+use o2jam_file::{OjnListEntry, OJN_LEVEL_COUNT};
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery};
+use o2jam_net::play::{MusicListAnswer, RoomArenaEcho};
 use o2jam_net::rooms::{
     Announcement, MainRoomAdminMessage, MainRoomUserMessage, RankNotification, ReceiveWhisper,
     RoomSlotAction, RoomSlotUpdate, SendMainRoomMessage, SendWaitingMessage, SendWhisper,
     WaitingAdminMessage, WaitingUserMessage,
 };
 use o2jam_net::{
-    Frame, GameStatsUpdate, GatewayConnection, Generic, JoinResult, JoinRoom, JoinRoomResponse,
-    MemberReadyStateChanged, Ready, Request, StartGame, WireMessage,
+    Frame, GameStatsUpdate, GatewayConnection, Generic, GetMusicList, JoinResult, JoinRoom,
+    JoinRoomResponse, MemberReadyStateChanged, Ready, Request, SetRoomArena, SetRoomMusic,
+    StartGame, WireMessage,
 };
 use o2jam_shell::screens::game::SlashCommand;
 use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
 
 use crate::live_stats::{apply_peer_update, jam_tick_for_score, life_tick_for_live_play};
+use crate::loading::{
+    check_bank_entry, loading_phase_status, prepare_chart, PreparedChart, LOADING_GATE_STEPS,
+};
 
 /// Short socket window for the per-frame stats section (one tick send
 /// plus the echo drain): a paint must never stall the frame loop on a
@@ -146,6 +167,35 @@ struct PendingRoomJoin {
     password: String,
 }
 
+/// Host song pick (`--online-music-id` plus difficulty/speed/arena):
+/// the song id plus difficulty and speed ride `SetRoomMusic` 4000,
+/// the stage word rides `SetRoomArena` 4002 — the headless
+/// [`crate::connect::run_song_flow`] select shapes. The shell owns
+/// the dialog walk but exposes no pick query, so the choice rides
+/// explicit CLI intent like the room join.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SongChoice {
+    /// Song id (`SetRoomMusic` music id).
+    pub music_id: u16,
+    /// Chart difficulty code (`Difficulty::from_code`).
+    pub difficulty: u8,
+    /// Scroll-speed code (`GameSpeed` ordinal).
+    pub speed: u8,
+    /// Room stage word (`SetRoomArena` arena).
+    pub arena_id: i32,
+}
+
+/// Owned catalog row behind the chart fetch: the container token
+/// names the `Music/o2ma###.ojn` chart (the shell cover path's token
+/// swap); the title and artist feed the loading caption.
+#[derive(Debug, Clone, PartialEq)]
+struct CatalogRow {
+    song_id: u32,
+    ojm_file: String,
+    title: String,
+    artist: String,
+}
+
 /// Waiting-room session: shell game plus its gateway transport.
 ///
 /// Single-threaded by construction (the blocking gateway and the game
@@ -164,6 +214,13 @@ pub struct OnlineSession {
     stats_sequence: i32,
     last_tick: Option<TickSnapshot>,
     pending_room: Option<PendingRoomJoin>,
+    pending_song: Option<SongChoice>,
+    /// Container tokens plus captions behind the chart fetch
+    /// (`OJNList.dat` order, owned copies; see [`Self::set_song_catalog`]).
+    catalog: Vec<CatalogRow>,
+    /// Last staged host pick (`None` until a select exchange stages
+    /// one; the shell exposes no selection read-back).
+    last_selection: Option<SetRoomMusic>,
     local_user: String,
     /// `true` once a Room Confirm join staged a snapshot: Waiting
     /// Confirm then means START/READY instead of the offline walk.
@@ -195,6 +252,9 @@ impl OnlineSession {
             stats_sequence: 0,
             last_tick: None,
             pending_room: None,
+            pending_song: None,
+            catalog: Vec::new(),
+            last_selection: None,
             local_user: String::new(),
             joined_waiting: false,
             guest_ready: false,
@@ -221,6 +281,223 @@ impl OnlineSession {
     pub fn set_local_user(&mut self, name: &str) -> &mut Self {
         self.local_user = name.to_owned();
         self
+    }
+
+    /// Remember the host pick (`--online-music-id` plus
+    /// difficulty/speed/arena): the next master Waiting Confirm
+    /// exchanges it ([`Self::select_song`]).
+    pub fn set_pending_song(&mut self, choice: SongChoice) -> &mut Self {
+        self.pending_song = Some(choice);
+        self
+    }
+
+    /// Stage the song catalog (`OJNList.dat` order) into the
+    /// select-music dialog and remember its container tokens for the
+    /// chart fetch. Dead slots stay out, exactly like the shell
+    /// staging — a missing catalog paints dialog art without rows,
+    /// and the chart fetch then warns instead of inventing a path.
+    pub fn set_song_catalog(&mut self, entries: &[OjnListEntry<'_>]) -> &mut Self {
+        self.game.set_song_catalog(entries);
+        self.catalog = entries
+            .iter()
+            .filter(|entry| entry.is_song())
+            .map(catalog_row)
+            .collect();
+        self
+    }
+
+    /// Last staged host pick (`None` until a select exchange stages
+    /// one). No production reader yet: the Loading chart fetch stages
+    /// from it.
+    #[allow(
+        dead_code,
+        reason = "bridge query for the loading follow-up; tested below"
+    )]
+    #[must_use]
+    pub fn selected_song(&self) -> Option<SetRoomMusic> {
+        self.last_selection
+    }
+
+    /// Run the host select exchange over a joined room: `SetRoomMusic`
+    /// 4000, `SetRoomArena` 4002 with the 4003 echo assertion, then
+    /// `GetMusicList` 4030 with the 4031 answer — the headless
+    /// [`crate::connect::run_song_flow`] select shapes — and stage the
+    /// pick through [`ScreenGame::set_selected_music`], driving the
+    /// dialog rows and the waiting song panel. Returns the music-list
+    /// answer. Runs under the resting session timeout: the exchange is
+    /// Confirm-paced, never per-frame, so it may block like the Room
+    /// Confirm join.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the gateway transport reports, or an arena echo that
+    /// does not repeat the sent stage word (the room stage did not
+    /// take, so nothing is staged).
+    pub fn select_song(&mut self, choice: SongChoice) -> anyhow::Result<MusicListAnswer> {
+        let select = SetRoomMusic {
+            music_id: choice.music_id,
+            difficulty: choice.difficulty,
+            speed: choice.speed,
+        };
+        self.gateway
+            .send_frame(Request::SetRoomMusic.id(), &select.encode_body())
+            .map_err(|source| anyhow::anyhow!("{source}"))?;
+        let stage = SetRoomArena::new(choice.arena_id);
+        self.gateway
+            .send_frame(Request::SetRoomArena.id(), &stage.encode_body())
+            .map_err(|source| anyhow::anyhow!("{source}"))?;
+        let mut skipped = Vec::new();
+        let echo_frame = self
+            .await_select_frame(RoomArenaEcho::COMMAND, &mut skipped)
+            .map_err(|source| anyhow::anyhow!("{source}"))?;
+        let echo = RoomArenaEcho::decode_frame(&echo_frame)
+            .map_err(|source| anyhow::anyhow!("{source}"))?;
+        if echo.arena != choice.arena_id {
+            anyhow::bail!(
+                "arena echo mismatch: sent {} but got {}",
+                choice.arena_id,
+                echo.arena
+            );
+        }
+        self.gateway
+            .send_frame(Request::GetMusicList.id(), &GetMusicList.encode_body())
+            .map_err(|source| anyhow::anyhow!("{source}"))?;
+        let list_frame = self
+            .await_select_frame(MusicListAnswer::COMMAND, &mut skipped)
+            .map_err(|source| anyhow::anyhow!("{source}"))?;
+        let answer = MusicListAnswer::decode_frame(&list_frame)
+            .map_err(|source| anyhow::anyhow!("{source}"))?;
+        if !skipped.is_empty() {
+            tracing::debug!(?skipped, "select skipped broadcasts");
+        }
+        self.game.set_selected_music(select);
+        self.last_selection = Some(select);
+        Ok(answer)
+    }
+
+    /// Read until `expected` arrives (the headless `await_lenient`
+    /// shape): keepalives stay silent; every other skipped id lands in
+    /// `skipped`, never dropped quietly.
+    fn await_select_frame(
+        &mut self,
+        expected: u16,
+        skipped: &mut Vec<u16>,
+    ) -> Result<Frame, o2jam_net::Error> {
+        loop {
+            let frame = self.gateway.next_frame()?;
+            if frame.id == expected {
+                return Ok(frame);
+            }
+            if Generic::from_id(frame.id).is_none() {
+                skipped.push(frame.id);
+            }
+        }
+    }
+
+    /// Run the loading gate over one chart buffer and stage it into
+    /// the highway: OJN open plus level walk ([`prepare_chart`]),
+    /// onset build, [`ScreenGame::load_chart`], and the clock-armed
+    /// loading caption when the staged catalog names the song
+    /// (indeterminate otherwise — the shots `stage_loading_status`
+    /// honesty rule).
+    ///
+    /// # Errors
+    ///
+    /// `FileError` on bad magic, truncation, or an out-of-range level.
+    pub fn stage_chart_bytes(
+        &mut self,
+        chart_bytes: &[u8],
+        level: usize,
+    ) -> Result<PreparedChart, o2jam_file::FileError> {
+        let prepared = prepare_chart(chart_bytes, level)?;
+        let events = o2jam_file::parse_ojn_level_events(chart_bytes, level)?;
+        let chart = o2jam_game::build_level_chart(prepared.bpm, &events);
+        self.game.load_chart(chart.hit_onsets_ms());
+        self.stage_loading_caption(prepared.song_id);
+        Ok(prepared)
+    }
+
+    /// Fetch the staged catalog's chart for one song id from the
+    /// install `Music` folder and stage it into the highway
+    /// ([`Self::stage_chart_bytes`]). The bank fetch is best-effort:
+    /// its entries probe the codec gate and log, but key-sound attach
+    /// stays manual (`--ojm`) — the session owns no audio backend.
+    ///
+    /// # Errors
+    ///
+    /// A song the staged catalog does not name, unreadable chart
+    /// bytes, or a chart the loading gate rejects.
+    pub fn fetch_and_stage_chart(
+        &mut self,
+        music_id: u16,
+        level: usize,
+    ) -> anyhow::Result<PreparedChart> {
+        let chart_path = self
+            .chart_path_for_song(music_id)
+            .with_context(|| format!("no catalog chart file for song {music_id}"))?;
+        let chart_bytes = std::fs::read(&chart_path)
+            .with_context(|| format!("reading chart {}", chart_path.display()))?;
+        self.probe_bank(music_id);
+        self.stage_chart_bytes(&chart_bytes, level)
+            .with_context(|| {
+                format!(
+                    "loading gate rejected {} level {level}",
+                    chart_path.display()
+                )
+            })
+    }
+
+    /// Install chart path for one staged song id (`None` while the
+    /// catalog names no such song or its token carries no `.ojm`
+    /// suffix — never an invented path).
+    fn chart_path_for_song(&self, music_id: u16) -> Option<PathBuf> {
+        let wanted = u32::from(music_id);
+        let row = self.catalog.iter().find(|row| row.song_id == wanted)?;
+        install_music_path(&row.ojm_file, "ojn")
+    }
+
+    /// Install bank path for one staged song id (same `None` rule as
+    /// [`Self::chart_path_for_song`]).
+    fn bank_path_for_song(&self, music_id: u16) -> Option<PathBuf> {
+        let wanted = u32::from(music_id);
+        let row = self.catalog.iter().find(|row| row.song_id == wanted)?;
+        install_music_path(&row.ojm_file, "ojm")
+    }
+
+    /// Probe one bank through the codec gate: valid entries log,
+    /// unreadable or unknown shapes log and stage silent (the offline
+    /// `--ojm`-less play shape).
+    fn probe_bank(&self, music_id: u16) {
+        let Some(bank_path) = self.bank_path_for_song(music_id) else {
+            return;
+        };
+        let Ok(bank_bytes) = std::fs::read(&bank_path) else {
+            tracing::debug!(path = %bank_path.display(), "bank unreadable; chart stages silent");
+            return;
+        };
+        tracing::info!(
+            entries = valid_bank_entries(&bank_bytes),
+            path = %bank_path.display(),
+            "bank probed (key-sound attach stays manual --ojm)"
+        );
+    }
+
+    /// Stage the clock-armed loading caption for one chart song id
+    /// from the staged catalog (`None` match keeps the indeterminate
+    /// bar — never an invented caption).
+    fn stage_loading_caption(&mut self, song_id: u32) {
+        let caption = self
+            .game
+            .select_songs()
+            .iter()
+            .find(|song| song.song_id == song_id)
+            .map(|song| (song.title.clone(), song.artist.clone()));
+        let Some((title, artist)) = caption else {
+            return;
+        };
+        if let Some(status) = loading_phase_status(LOADING_GATE_STEPS, &title, &artist) {
+            self.game.set_loading_status(status);
+        }
     }
 
     /// Peer mirror fed by 4015 echoes (empty until the tracker speaks).
@@ -507,10 +784,47 @@ impl OnlineSession {
             self.game.menu_key(MenuKey::Confirm, true);
             return;
         }
+        if self.pending_song.is_some() && self.game.is_room_master() {
+            self.confirm_song_select();
+            return;
+        }
         if self.game.is_room_master() {
             self.confirm_master_start();
         } else {
             self.confirm_guest_ready();
+        }
+    }
+
+    /// Master Waiting Confirm with a pending host pick: run the
+    /// 4000/4002/4030 select exchange, then fetch the chart from the
+    /// staged catalog, and stay in Waiting — the next Confirm sends
+    /// START through the all-peers-ready gate, so the host sees the
+    /// staged pick first. A failed select keeps the pick (the next
+    /// Confirm retries it); a failed chart fetch warns past a staged
+    /// pick (missing install files warn, manual `--chart`/`--ojm`
+    /// still stages).
+    fn confirm_song_select(&mut self) {
+        let Some(choice) = self.pending_song else {
+            return;
+        };
+        match self.select_song(choice) {
+            Ok(answer) => {
+                self.pending_song = None;
+                tracing::info!(
+                    music_id = choice.music_id,
+                    entries = answer.entries.len(),
+                    free_music = answer.free_music,
+                    "song staged"
+                );
+                if let Err(source) = self
+                    .fetch_and_stage_chart(choice.music_id, level_for_difficulty(choice.difficulty))
+                {
+                    tracing::warn!(%source, "chart fetch failed; pick stays staged");
+                }
+            }
+            Err(source) => {
+                tracing::warn!(%source, "song select failed; Confirm retries it");
+            }
         }
     }
 
@@ -956,6 +1270,58 @@ fn saturate_bonus(bonus: u64) -> i32 {
     i32::try_from(bonus).unwrap_or(i32::MAX)
 }
 
+/// Borrow one catalog entry as an owned chart-fetch row.
+fn catalog_row(entry: &OjnListEntry<'_>) -> CatalogRow {
+    CatalogRow {
+        song_id: entry.song_id,
+        ojm_file: entry.ojm_file.clone(),
+        title: entry.title.clone(),
+        artist: entry.artist.clone(),
+    }
+}
+
+/// Install `Music` folder under the repository-local `install-root`
+/// (git-ignored game data; the same layout `shots.rs` reads the
+/// catalog and the shell reads covers from).
+fn install_music_dir() -> PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../install-root/O2Jam/Music")
+}
+
+/// Chart/bank file for one catalog container token (`o2ma757.ojm` ->
+/// `Music/o2ma757.ojn` / `Music/o2ma757.ojm`): the shell cover path's
+/// token swap, generalized over the extension. `None` when the token
+/// carries no `.ojm` suffix — no invented fallback path.
+fn install_music_path(token: &str, extension: &str) -> Option<PathBuf> {
+    let stem_len = token.len().checked_sub(".ojm".len())?;
+    let (stem, suffix) = token.split_at(stem_len);
+    if !suffix.eq_ignore_ascii_case(".ojm") {
+        return None;
+    }
+    Some(install_music_dir().join(format!("{stem}.{extension}")))
+}
+
+/// Codec-gated new-variant entries in one bank image (unknown shapes
+/// probe zero: their gate is post-decode, like the offline bank
+/// walk — see `main.rs` `load_sound_bank`).
+fn valid_bank_entries(bank_bytes: &[u8]) -> usize {
+    let Ok(tables) = o2jam_file::parse_new_variant_entries(bank_bytes) else {
+        return 0;
+    };
+    tables
+        .mode2
+        .iter()
+        .filter(|entry| check_bank_entry(entry).is_ok())
+        .count()
+        + tables.mode3.len()
+}
+
+/// Chart level slot for one difficulty code (EX/NX/HX map onto the
+/// three OJN slots; RX and unknown codes clamp onto Hard).
+/// PERF-07: `from`, never `as`.
+fn level_for_difficulty(difficulty: u8) -> usize {
+    usize::from(difficulty).min(OJN_LEVEL_COUNT - 1)
+}
+
 #[cfg(test)]
 mod session_tests {
     use std::io::{Read, Write};
@@ -971,7 +1337,7 @@ mod session_tests {
     };
     use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
 
-    use super::{saturate_bonus, OnlineSession};
+    use super::{level_for_difficulty, saturate_bonus, OnlineSession, SongChoice};
 
     /// One whole frame off the fake server's socket.
     fn read_frame(stream: &mut TcpStream) -> Frame {
@@ -2141,5 +2507,235 @@ mod session_tests {
     fn bonus_saturates_instead_of_wrapping() {
         assert_eq!(saturate_bonus(u64::from(u32::MAX) + 1), i32::MAX);
         assert_eq!(saturate_bonus(12), 12);
+    }
+
+    /// Synthetic one-song catalog blob (the 7.55 `OJNList.dat` record
+    /// shape, mirroring the loading-gate tests): song 757 backed by
+    /// `o2ma757.ojm`, plus one dead zero slot the staging filters out.
+    fn select_catalog_blob() -> Vec<u8> {
+        let mut record = vec![0u8; 300];
+        record[4..8].copy_from_slice(&757u32.to_le_bytes());
+        record[8..11].copy_from_slice(b"ojn");
+        record[20..24].copy_from_slice(&124f32.to_le_bytes());
+        record[112..117].copy_from_slice(b"First");
+        record[176..180].copy_from_slice(b"Band");
+        record[240..251].copy_from_slice(b"o2ma757.ojm");
+        let mut blob = record;
+        blob.extend_from_slice(&vec![0u8; 300]);
+        blob
+    }
+
+    /// Synthetic chart blob (the 7.55 OJN header shape, mirroring the
+    /// loading-gate tests): song 757 with an empty level slice.
+    fn chart_blob() -> Vec<u8> {
+        let mut blob = vec![0u8; 300];
+        blob[0..4].copy_from_slice(&757u32.to_le_bytes());
+        blob[4..8].copy_from_slice(b"ojn\0");
+        blob[8..12].copy_from_slice(&2.9f32.to_le_bytes());
+        blob[16..20].copy_from_slice(&124f32.to_le_bytes());
+        blob[64..68].copy_from_slice(&0u32.to_le_bytes());
+        blob[68..72].copy_from_slice(&0u32.to_le_bytes());
+        blob[72..76].copy_from_slice(&0u32.to_le_bytes());
+        blob[284..288].copy_from_slice(&300u32.to_le_bytes());
+        blob[288..292].copy_from_slice(&300u32.to_le_bytes());
+        blob[292..296].copy_from_slice(&300u32.to_le_bytes());
+        blob[296..300].copy_from_slice(&300u32.to_le_bytes());
+        blob
+    }
+
+    /// Session in Waiting with the synthetic catalog staged (dialog
+    /// rows plus chart-fetch tokens, no gateway traffic yet).
+    fn catalog_session(
+        with_server: impl FnOnce(TcpStream) + Send + 'static,
+    ) -> (OnlineSession, thread::JoinHandle<()>) {
+        let (mut session, server) = waiting_session(with_server);
+        let blob = select_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        session.set_song_catalog(&entries);
+        (session, server)
+    }
+
+    /// Host pick behind the select tests (song 757, HX, X1, arena 0).
+    fn host_choice() -> SongChoice {
+        SongChoice {
+            music_id: 757,
+            difficulty: 2,
+            speed: 1,
+            arena_id: 0,
+        }
+    }
+
+    /// Fake-gateway host select script: asserts the 4000 pick body,
+    /// skips one 4001 broadcast past the arena wait (the live
+    /// room-broadcast shape), asserts the 4002 stage, echoes
+    /// `arena_echo` back as 4003, asserts the 4030 list ask, and
+    /// answers 4031 with song 757.
+    fn answer_select(stream: &mut TcpStream, arena_echo: i32) {
+        use o2jam_net::play::{MusicListAnswer, MusicListEntry, RoomArenaEcho};
+        use o2jam_net::{Request, SetRoomArena, SetRoomMusic};
+        let select = read_frame(stream);
+        assert_eq!(select.id, Request::SetRoomMusic.id());
+        assert_eq!(
+            SetRoomMusic::decode_body(&select.payload).unwrap(),
+            SetRoomMusic {
+                music_id: 757,
+                difficulty: 2,
+                speed: 1,
+            }
+        );
+        stream.write_all(&encode_frame(4001, &[])).unwrap();
+        let stage = read_frame(stream);
+        assert_eq!(stage.id, Request::SetRoomArena.id());
+        assert_eq!(
+            SetRoomArena::decode_body(&stage.payload).unwrap(),
+            SetRoomArena::new(0)
+        );
+        stream
+            .write_all(&RoomArenaEcho::new(arena_echo).encode())
+            .unwrap();
+        assert_eq!(read_frame(stream).id, Request::GetMusicList.id());
+        let listed = MusicListAnswer {
+            entries: vec![MusicListEntry {
+                id: 757,
+                notes_ex: 100,
+                notes_nx: 200,
+                notes_hx: 300,
+            }],
+            free_music: true,
+        };
+        stream.write_all(&listed.encode()).unwrap();
+    }
+
+    #[test]
+    fn catalog_stages_dialog_rows_and_tokens() {
+        let (mut session, server) = waiting_session(|mut stream| {
+            assert_quiet(&mut stream);
+        });
+        let blob = select_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        session.set_song_catalog(&entries);
+        server.join().unwrap();
+        assert_eq!(session.game.select_songs().len(), 1);
+        assert_eq!(session.game.select_songs()[0].song_id, 757);
+        assert_eq!(session.game.select_songs()[0].title, "First");
+        let chart = session.chart_path_for_song(757).unwrap();
+        assert_eq!(chart.file_name().unwrap(), "o2ma757.ojn");
+        assert!(session.chart_path_for_song(9999).is_none());
+    }
+
+    #[test]
+    fn select_song_sends_4000_4002_4030_and_stages_pick() {
+        let (mut session, server) = joined_waiting_session(joined_snapshot(), |mut stream| {
+            answer_select(&mut stream, 0);
+            assert_quiet(&mut stream);
+        });
+        let answer = session.select_song(host_choice()).unwrap();
+        server.join().unwrap();
+        assert_eq!(answer.entries.len(), 1);
+        assert!(answer.free_music);
+        assert_eq!(
+            session.selected_song(),
+            Some(o2jam_net::SetRoomMusic {
+                music_id: 757,
+                difficulty: 2,
+                speed: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn select_song_rejects_arena_mismatch_without_staging() {
+        let (mut session, server) = joined_waiting_session(joined_snapshot(), |mut stream| {
+            use o2jam_net::play::RoomArenaEcho;
+            use o2jam_net::{Request, SetRoomArena, SetRoomMusic};
+            let select = read_frame(&mut stream);
+            assert_eq!(select.id, Request::SetRoomMusic.id());
+            assert!(SetRoomMusic::decode_body(&select.payload).is_ok());
+            stream.write_all(&encode_frame(4001, &[])).unwrap();
+            let stage = read_frame(&mut stream);
+            assert_eq!(stage.id, Request::SetRoomArena.id());
+            assert_eq!(
+                SetRoomArena::decode_body(&stage.payload).unwrap(),
+                SetRoomArena::new(0)
+            );
+            stream.write_all(&RoomArenaEcho::new(7).encode()).unwrap();
+            // The client bails on the mismatch: no 4030 follows.
+            assert_quiet(&mut stream);
+        });
+        let outcome = session.select_song(host_choice());
+        server.join().unwrap();
+        let message = format!("{:?}", outcome.unwrap_err());
+        assert!(message.contains("arena echo mismatch"), "{message}");
+        assert_eq!(session.selected_song(), None);
+    }
+
+    #[test]
+    fn guest_confirm_with_pending_pick_sends_ready_not_select() {
+        let (mut session, server) = joined_waiting_session(guest_snapshot(), |mut stream| {
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, 4008);
+            assert_quiet(&mut stream);
+        });
+        session.set_pending_song(host_choice());
+        session.menu_key(MenuKey::Confirm, true);
+        server.join().unwrap();
+        assert_eq!(session.game.screen(), Screen::Waiting);
+        assert_eq!(session.selected_song(), None);
+        assert!(session.pending_song.is_some());
+    }
+
+    #[test]
+    fn master_confirm_selects_pending_song_then_starts_next_press() {
+        let (mut session, server) = joined_waiting_session(joined_snapshot(), |mut stream| {
+            answer_select(&mut stream, 0);
+            let start = read_frame(&mut stream);
+            assert_eq!(start.id, 4010);
+            assert_quiet(&mut stream);
+        });
+        session.set_pending_song(host_choice());
+        session.menu_key(MenuKey::Confirm, true);
+        assert_eq!(session.game.screen(), Screen::Waiting);
+        assert!(session.pending_song.is_none());
+        session.menu_key(MenuKey::Confirm, true);
+        server.join().unwrap();
+        assert_eq!(session.game.screen(), Screen::Waiting);
+        assert_eq!(
+            session.selected_song().map(|select| select.music_id),
+            Some(757)
+        );
+    }
+
+    #[test]
+    fn stage_chart_bytes_gates_and_loads_highway() {
+        let (mut session, server) = catalog_session(|mut stream| {
+            assert_quiet(&mut stream);
+        });
+        let chart = session.stage_chart_bytes(&chart_blob(), 0).unwrap();
+        server.join().unwrap();
+        assert_eq!(chart.song_id, 757);
+        assert_eq!(chart.event_count, 0);
+        let status = session.game.loading_status().unwrap();
+        assert_eq!(status.progress, 1.0);
+        assert_eq!(status.title, "First");
+        assert_eq!(status.artist, "Band");
+    }
+
+    #[test]
+    fn stage_chart_bytes_rejects_bad_level() {
+        let (mut session, server) = catalog_session(|mut stream| {
+            assert_quiet(&mut stream);
+        });
+        assert!(session.stage_chart_bytes(&chart_blob(), 9).is_err());
+        server.join().unwrap();
+        assert!(session.game.loading_status().is_none());
+    }
+
+    #[test]
+    fn level_maps_difficulty_codes_onto_slots() {
+        assert_eq!(level_for_difficulty(0), 0);
+        assert_eq!(level_for_difficulty(1), 1);
+        assert_eq!(level_for_difficulty(2), 2);
+        assert_eq!(level_for_difficulty(3), 2);
+        assert_eq!(level_for_difficulty(9), 2);
     }
 }

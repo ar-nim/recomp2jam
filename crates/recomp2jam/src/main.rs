@@ -201,6 +201,19 @@ enum Command {
         /// Password for `--online-join-room` (empty when unlocked).
         #[arg(long, default_value = "", requires = "online")]
         online_room_password: String,
+        /// Host song pick for `--online` (the session sends it on
+        /// Waiting Confirm: 4000/4002/4030 plus the catalog chart fetch).
+        #[arg(long, requires = "online")]
+        online_music_id: Option<u16>,
+        /// Difficulty code for `--online-music-id` (0 EX, 1 NX, 2 HX, 3 RX).
+        #[arg(long, default_value_t = 2, requires = "online")]
+        online_difficulty: u8,
+        /// Scroll-speed code for `--online-music-id`.
+        #[arg(long, default_value_t = 1, requires = "online")]
+        online_speed: u8,
+        /// Room stage word for `--online-music-id` (`SetRoomArena` 4002).
+        #[arg(long, default_value_t = 0, requires = "online")]
+        online_arena: i32,
     },
 }
 
@@ -349,6 +362,10 @@ struct OnlineParams {
     online_channel_id: Option<i16>,
     join_room: Option<i32>,
     room_password: String,
+    music_id: Option<u16>,
+    difficulty: u8,
+    speed: u8,
+    arena_id: i32,
 }
 
 impl OnlineParams {
@@ -380,6 +397,18 @@ impl OnlineParams {
     fn pending_room_join(&self) -> Option<(i32, String)> {
         self.join_room
             .map(|number| (number, self.room_password.clone()))
+    }
+
+    /// Host pick for the session: the `--online-music-id` song plus
+    /// difficulty/speed/arena (`None` without a music id keeps Waiting
+    /// Confirm on the START/READY path).
+    fn pending_song_choice(&self) -> Option<session::SongChoice> {
+        self.music_id.map(|music_id| session::SongChoice {
+            music_id,
+            difficulty: self.difficulty,
+            speed: self.speed,
+            arena_id: self.arena_id,
+        })
     }
 }
 
@@ -497,6 +526,10 @@ fn run_command(command: Command) -> Result<()> {
             online_channel_id,
             online_join_room,
             online_room_password,
+            online_music_id,
+            online_difficulty,
+            online_speed,
+            online_arena,
         } => run_play(
             chart,
             ojm,
@@ -516,6 +549,10 @@ fn run_command(command: Command) -> Result<()> {
             online_channel_id,
             online_join_room,
             online_room_password,
+            online_music_id,
+            online_difficulty,
+            online_speed,
+            online_arena,
         ),
     }
 }
@@ -545,6 +582,10 @@ fn run_play(
     online_channel_id: Option<i16>,
     online_join_room: Option<i32>,
     online_room_password: String,
+    online_music_id: Option<u16>,
+    online_difficulty: u8,
+    online_speed: u8,
+    online_arena: i32,
 ) -> Result<()> {
     tracing::info!(?chart, ?window, "play stub");
     if window {
@@ -561,13 +602,17 @@ fn run_play(
             online_channel_id,
             online_join_room,
             &online_room_password,
+            online_music_id,
+            online_difficulty,
+            online_speed,
+            online_arena,
         )?;
         setup_avatar(&mut game, &avatar_opa, &equip, avatar_male)?;
         setup_chart_audio(&mut game, &chart, &ojm, level)?;
         let event_loop = winit::event_loop::EventLoop::new()
             .map_err(|e| anyhow::anyhow!("event loop failed: {e:?}"))?;
         match gateway {
-            Some((transport, pending_room)) => {
+            Some((transport, pending_room, pending_song)) => {
                 let mut session = session::OnlineSession::new(game, transport);
                 if let Some(name) = token.as_deref().filter(|name| !name.is_empty()) {
                     session.set_local_user(name);
@@ -575,6 +620,10 @@ fn run_play(
                 if let Some((number, password)) = pending_room {
                     session.set_pending_room_join(number, &password);
                 }
+                if let Some(choice) = pending_song {
+                    session.set_pending_song(choice);
+                }
+                stage_session_catalog(&mut session);
                 o2jam_shell::Shell::new(Box::new(session)).run(event_loop)?;
             }
             None => {
@@ -600,8 +649,12 @@ fn setup_splash(game: &mut o2jam_shell::ScreenGame, interface: &Option<String>) 
 }
 
 /// Live gateway plus the Room Confirm join intent (room number and
-/// password) for the windowed session.
-type OnlineTransport = (o2jam_net::GatewayConnection, Option<(i32, String)>);
+/// password) and the host song pick for the windowed session.
+type OnlineTransport = (
+    o2jam_net::GatewayConnection,
+    Option<(i32, String)>,
+    Option<session::SongChoice>,
+);
 
 /// Authenticate and list channels/rooms into a windowed game.
 ///
@@ -622,6 +675,10 @@ fn setup_online(
     online_channel_id: Option<i16>,
     online_join_room: Option<i32>,
     online_room_password: &str,
+    online_music_id: Option<u16>,
+    online_difficulty: u8,
+    online_speed: u8,
+    online_arena: i32,
 ) -> Result<Option<OnlineTransport>> {
     if !online {
         return Ok(None);
@@ -635,8 +692,13 @@ fn setup_online(
         online_channel_id,
         join_room: online_join_room,
         room_password: online_room_password.to_owned(),
+        music_id: online_music_id,
+        difficulty: online_difficulty,
+        speed: online_speed,
+        arena_id: online_arena,
     };
     let pending_room = params.pending_room_join();
+    let pending_song = params.pending_song_choice();
     let options = params.into_connect_options();
     let (report, gateway) = connect::connect_and_login_with_transport(&options)?;
     tracing::info!(channels = report.channels.len(), "channels listed");
@@ -645,7 +707,37 @@ fn setup_online(
         tracing::info!(rooms = report.rooms.len(), "rooms listed");
         game.set_rooms(report.rooms);
     }
-    Ok(Some((gateway, pending_room)))
+    Ok(Some((gateway, pending_room, pending_song)))
+}
+
+/// Song index under `install-root` (the 7.55 catalog the select-music
+/// dialog lists; read-only like the archives).
+const SESSION_CATALOG: &str = "O2Jam/Image/OJNList.dat";
+
+/// Stage the installed song catalog into the windowed session's
+/// select-music dialog. A missing or unparsable catalog keeps the
+/// dialog row-less (no fallback rows: invented songs must never reach
+/// the host pick); the chart fetch then warns instead of staging.
+fn stage_session_catalog(session: &mut session::OnlineSession) {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../install-root")
+        .join(SESSION_CATALOG);
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            tracing::debug!("song catalog missing; dialog stages row-less");
+            return;
+        }
+    };
+    match o2jam_file::parse_ojn_list(&bytes) {
+        Ok(entries) => {
+            session.set_song_catalog(&entries);
+            tracing::info!("song catalog staged");
+        }
+        Err(source) => {
+            tracing::debug!(%source, "song catalog unparsable; dialog stages row-less");
+        }
+    }
 }
 
 /// Stack the worn avatar figure into a windowed game, if requested.
@@ -1216,6 +1308,36 @@ mod cli_build_tests {
         // Startup stays list-only: the session exchanges the pending
         // join on Room Confirm instead.
         assert!(params.into_connect_options().join_room.is_none());
+    }
+
+    #[test]
+    fn online_pending_song_maps_cli_choice() {
+        let params = OnlineParams {
+            port: 15010,
+            music_id: Some(757),
+            difficulty: 2,
+            speed: 1,
+            arena_id: 0,
+            ..OnlineParams::default()
+        };
+        assert_eq!(
+            params.pending_song_choice(),
+            Some(session::SongChoice {
+                music_id: 757,
+                difficulty: 2,
+                speed: 1,
+                arena_id: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn online_pending_song_absent_without_music_id() {
+        let params = OnlineParams {
+            port: 15010,
+            ..OnlineParams::default()
+        };
+        assert_eq!(params.pending_song_choice(), None);
     }
 
     #[test]
