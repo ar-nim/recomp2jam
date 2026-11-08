@@ -40,6 +40,7 @@ use o2jam_net::{
     rooms::om_icon_frame, ChannelState, Difficulty, GameMode, GameSpeed, JoinedRoom, KeyMode,
     RoomListEntry, RoomSlot, RoomSlotState,
 };
+use o2jam_render::font::{draw_text_cell, text_width_cell, Cell};
 use o2jam_render::{
     blit_rgb555, draw_number, draw_text, fill_rect, number_width, pack_xrgb, scale_rect_to_frame,
     text_width, Frame, Rect, Rgb555Image, NATIVE_HEIGHT, NATIVE_WIDTH,
@@ -2181,14 +2182,29 @@ fn paint_loading_bar_with_progress(frame: &mut Frame<'_>, progress: f32) {
 }
 
 /// Song title/artist line below the bar (OPEN placeholder row):
-/// dark scrim plus white ink, like the lobby detail lines. Blank
-/// captions paint nothing.
+/// dark scrim plus white ink at the gate display face
+/// (`Cell::Loading`, Trebuchet MS 27x65 per `docs/loading-type.md`).
+/// Which caption takes the display face is the spec's
+/// recommendation, not an exe pin. Blank captions paint nothing.
 fn paint_loading_song(frame: &mut Frame<'_>, status: &LoadingStatus) {
     let Some(caption) = status.caption() else {
         return;
     };
     let (x, y) = loading_song_origin(frame);
-    paint_room_detail_line(frame, x, y, &caption, art_title_ink());
+    let advance = text_width_cell(&caption, Cell::Loading);
+    let scrim_w = u32::try_from(advance).unwrap_or(u32::MAX).saturating_add(8);
+    let scrim_h = Cell::Loading.size().1.saturating_add(4);
+    fill_rect(
+        frame,
+        &Rect {
+            x: x - 4,
+            y: y - 2,
+            w: scrim_w,
+            h: scrim_h,
+        },
+        scrim_color(),
+    );
+    draw_text_cell(frame, x, y, &caption, art_title_ink(), Cell::Loading);
 }
 
 /// Paint the loading gate scene.
@@ -2238,9 +2254,11 @@ fn paint_loading_cover(frame: &mut Frame<'_>, art: &SceneArt) -> bool {
 /// `MusicLoading.ojs` planet fallback — the exe mounts that overlay
 /// only when the song load returns 0 (file `0xe47a0`, ev
 /// `68d920c2…`), so a present cover (the load succeeded) replaces
-/// it. Then the fractional bar plus the song title/artist. Unpainted
-/// while the shell carries no walk state: the exe Trebuchet/Arial
-/// fonts and the OJN/Vorbis path stay gaps.
+/// it. Then the fractional bar plus the song title/artist. The caption
+/// now routes through `Cell::Loading` (the gate Trebuchet 27x65
+/// recommendation per `docs/loading-type.md`); Arial 7x14 still has
+/// no cell and the OJN/Vorbis path stays a gap. Unpainted while the
+/// shell carries no walk state.
 pub fn paint_loading_scene_with_status(
     frame: &mut Frame<'_>,
     art: &SceneArt,
@@ -5684,8 +5702,8 @@ mod paint_tests {
         assert_eq!(buf[47 * 64], pack_xrgb(0, 0, 255), "cover bottom-left");
         assert_eq!(
             buf[47 * 64 + 63],
-            pack_xrgb(255, 255, 255),
-            "cover bottom-right"
+            scrim_color(),
+            "69-row Loading scrim covers the bottom-right on 64x48"
         );
         assert!(
             buf.contains(&pack_xrgb(0x30, 0xB0, 0x30)),
@@ -5695,6 +5713,17 @@ mod paint_tests {
             buf.contains(&art_title_ink()),
             "caption survives over the cover"
         );
+    }
+
+    #[test]
+    fn loading_caption_routes_through_the_display_cell() {
+        // `docs/loading-type.md` routing: the `TITLE - ARTIST`
+        // caption lays out through `Cell::Loading`, whose advance
+        // exceeds the shared `Cell::Box` face for the same text.
+        let caption = "Title - Artist";
+        let box_w = text_width_cell(caption, Cell::Box);
+        let loading_w = text_width_cell(caption, Cell::Loading);
+        assert!(loading_w > box_w, "{loading_w} must exceed {box_w}");
     }
 
     #[test]

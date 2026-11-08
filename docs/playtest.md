@@ -4109,3 +4109,41 @@ paint cover on real chart loads (`7646ce4`).
   `cargo test --workspace --no-fail-fast` **1639 passed, 0 failed**
   (render 90, shell 597 — the peer's in-progress additions passing).
   The 1636-passed verdict above is the clean-HEAD result.
+
+## Regression sweep — 2026-11-08 14:09 UTC (HEAD `3af901f`, tree clean at start)
+
+Live re-proof on the type-head. Covers the loading-bar exclusion
+trebuchet-cell work (`3af901f`: render `font.rs` + shell `paint.rs` +
+`docs/loading-type.md`) landed above the cover-head baseline `7646ce4`.
+
+- `cargo fmt --check`: **FAIL on clean HEAD**, `exit=1`. Two diffs,
+  both in `crates/o2jam-shell/src/screens/paint.rs` as committed by
+  this head: the `use o2jam_render::font::{...}` import sorts after
+  the `use o2jam_render::{...}` group, and one multi-line `assert!`
+  collapses to one line. Not fixed — this sweep touches only
+  `docs/playtest.md`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1638 passed, 0 failed, 0 ignored**, `exit=0` (two identical runs).
+  Per target: audio 20, dump 7, file 180, game 108, net 420,
+  render 90, shell 596, real_art 7, scenes 22, recomp2jam 188
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, 0 warnings.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 187 filtered out, 0.62 s) against local
+  Memoryer 7.2.0 (`Mode=Full`). Server log for this run
+  (`22:09:17 +08:00`): `Authorize session` → `Create room` →
+  `Get music list` → `Start game` → `Game [000] Submit score: 2210`.
+- **Verdict: REGRESSION — suite is green on the type-head (1638
+  passed; +2 vs the 1636 cover-head baseline: render +1, shell +1
+  from the trebuchet-cell tests, 0 failures) but `cargo fmt --check`
+  is red on committed HEAD. No commits, no pushes.** This sweep
+  touched only `docs/playtest.md`.
+- Tree note: a peer landed uncommitted edits mid-sweep
+  (`crates/o2jam-shell/src/screens/paint.rs`: 37 insertions,
+  8 deletions). A `cargo fmt --check` re-run on the dirty state is
+  clean (`exit=0`); no other gate was re-run after the peer edit, so
+  the counts above are the clean-HEAD result.
