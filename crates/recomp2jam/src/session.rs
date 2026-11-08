@@ -21,6 +21,23 @@
 //! [`ScreenGame::apply_peer_echo`], so the Playing paint shows the live
 //! gauges. Chat stays send-on-action, as-is.
 //!
+//! Room join (Room scene): with `--online-join-room` the session
+//! exchanges `JoinWaiting` (3002) on Room Confirm and stages the
+//! joined snapshot through [`ScreenGame::set_joined_room`] — the
+//! `connect --join-room` shape — before the local Room → Waiting
+//! enter. Without a join target Confirm stays a local enter (the
+//! offline walk), and a failed or rejected join keeps the Room
+//! scene with a warning, so the next Confirm retries it.
+//!
+//! Waiting chat (Waiting scene): every paint drains inbound 3012
+//! player lines and 3013 administrator lines under the same short
+//! timeout as the notice window and folds each into the waiting
+//! history through [`ScreenGame::push_waiting_user_message`] and
+//! [`ScreenGame::push_waiting_admin_message`] — the same
+//! best-effort shape as the 4015 echo drain: keepalives skip
+//! silently, foreign ids log and skip, undecodable bodies drop with
+//! a trace.
+//!
 //! Lobby send (Channel scene): the shell stages a second draft
 //! ([`ScreenGame::take_channel_slash`]) beside the channel history
 //! and transmits it on Confirm through
@@ -29,6 +46,13 @@
 //! [`OnlineSession::flush_channel_whisper`], `/h`/`/help` with no
 //! packet — the same peek-send-clear bridge as the waiting 3011 path
 //! ([`OnlineSession::flush_chat_action`]).
+//!
+//! Lobby inbox (Channel scene): every paint drains inbound 2013
+//! player lines, 2014 administrator lines, and 2019 whispers beside
+//! the 2016/2029 notices, folding each into the channel history
+//! through its [`ScreenGame`] push — the same best-effort shape as
+//! the 4015 echo drain (undecodable bodies drop with a trace; the
+//! shell push rules decide which rows stage).
 //!
 //! Lobby notices (Channel scene): every paint drains waiting 2016
 //! announcements and 2029 rank notices under the same short timeout
@@ -44,9 +68,13 @@ use std::time::Duration;
 
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery};
 use o2jam_net::rooms::{
-    Announcement, RankNotification, SendMainRoomMessage, SendWaitingMessage, SendWhisper,
+    Announcement, MainRoomAdminMessage, MainRoomUserMessage, RankNotification, ReceiveWhisper,
+    SendMainRoomMessage, SendWaitingMessage, SendWhisper, WaitingAdminMessage, WaitingUserMessage,
 };
-use o2jam_net::{Frame, GameStatsUpdate, GatewayConnection, Generic, Request, WireMessage};
+use o2jam_net::{
+    Frame, GameStatsUpdate, GatewayConnection, Generic, JoinResult, JoinRoom, JoinRoomResponse,
+    Request, WireMessage,
+};
 use o2jam_shell::screens::game::SlashCommand;
 use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
 
@@ -57,6 +85,11 @@ use crate::live_stats::{apply_peer_update, jam_tick_for_score, life_tick_for_liv
 /// quiet or laggy gateway. A dropped tick retries on the next moved
 /// snapshot; a missed echo window retries on the next paint.
 const STATS_IO_TIMEOUT: Duration = Duration::from_millis(1);
+/// Short socket window for the per-frame chat sections (the
+/// 3012/3013 and 2013/2014/2019 drains): the same never-stall shape
+/// as the stats section — a missed chat window retries on the next
+/// paint.
+const CHAT_IO_TIMEOUT: Duration = Duration::from_millis(1);
 /// Short socket window for the per-frame notice section (the 2016/2029
 /// drain): the same never-stall shape as the stats section — a missed
 /// notice window retries on the next paint.
@@ -76,6 +109,16 @@ struct TickSnapshot {
     life: u16,
 }
 
+/// Room Confirm join intent (`--online-join-room`): the room number
+/// plus password the session exchanges on Room Confirm. The shell
+/// owns the highlight walk but exposes no room-number query, so the
+/// join target rides explicit CLI intent instead of the highlight.
+#[derive(Debug, Clone)]
+struct PendingRoomJoin {
+    number: i32,
+    password: String,
+}
+
 /// Waiting-room session: shell game plus its gateway transport.
 ///
 /// Single-threaded by construction (the blocking gateway and the game
@@ -93,6 +136,8 @@ pub struct OnlineSession {
     peer_ranks: Vec<RankDelivery>,
     stats_sequence: i32,
     last_tick: Option<TickSnapshot>,
+    pending_room: Option<PendingRoomJoin>,
+    local_user: String,
 }
 
 impl OnlineSession {
@@ -107,7 +152,28 @@ impl OnlineSession {
             peer_ranks: Vec::new(),
             stats_sequence: 0,
             last_tick: None,
+            pending_room: None,
+            local_user: String::new(),
         }
+    }
+
+    /// Remember the Room Confirm join target: the `--online-join-room`
+    /// number plus password, exchanged on the next Room Confirm
+    /// ([`Self::join_pending_room`]).
+    pub fn set_pending_room_join(&mut self, number: i32, password: &str) -> &mut Self {
+        self.pending_room = Some(PendingRoomJoin {
+            number,
+            password: password.to_owned(),
+        });
+        self
+    }
+
+    /// Remember the local username (`--token`): the addressee inbound
+    /// 2019 whisper rows name, since the wire event carries only the
+    /// sender.
+    pub fn set_local_user(&mut self, name: &str) -> &mut Self {
+        self.local_user = name.to_owned();
+        self
     }
 
     /// Peer mirror fed by 4015 echoes (empty until the tracker speaks).
@@ -295,6 +361,59 @@ impl OnlineSession {
         }
     }
 
+    /// Exchange the pending Room Confirm join and stage the joined
+    /// snapshot: `JoinWaiting` (3002, the `connect --join-room`
+    /// request shape) for the pending number and password, then the
+    /// 3003 answer's room through [`ScreenGame::set_joined_room`].
+    /// `true` staged one room; `false` keeps the Room scene — a
+    /// failed exchange, a rejected code, or an unstaged snapshot
+    /// every path warns, so no outcome is silent and the next Confirm
+    /// retries the join.
+    fn join_pending_room(&mut self) -> bool {
+        let Some(pending) = self.pending_room.clone() else {
+            return false;
+        };
+        let request = JoinRoom {
+            number: pending.number,
+            music_state: 0,
+            password: pending.password,
+        };
+        let frame = match self.gateway.exchange(
+            Request::JoinWaiting.id(),
+            &request.encode_body(),
+            JoinRoomResponse::COMMAND,
+        ) {
+            Ok(frame) => frame,
+            Err(source) => {
+                tracing::warn!(%source, "room join failed; staying in Room");
+                return false;
+            }
+        };
+        let response = match JoinRoomResponse::decode_frame(&frame) {
+            Ok(response) => response,
+            Err(source) => {
+                tracing::debug!(id = frame.id, %source, "dropping undecodable join answer");
+                return false;
+            }
+        };
+        if !matches!(
+            JoinResult::from_code(response.result_code),
+            Some(JoinResult::Success)
+        ) {
+            tracing::warn!(
+                code = response.result_code,
+                "room join rejected; staying in Room"
+            );
+            return false;
+        }
+        let Some(room) = response.room else {
+            tracing::warn!("room join answered without a snapshot; staying in Room");
+            return false;
+        };
+        self.game.set_joined_room(room);
+        true
+    }
+
     /// Per-frame stats section in `Playing`: one change-gated 4014 jam
     /// tick, then the 4015 echo drain — both under the short stats
     /// timeout so a quiet gateway never stalls the frame loop.
@@ -414,11 +533,74 @@ impl OnlineSession {
         );
     }
 
+    /// Per-frame chat section in `Waiting`: drain inbound 3012/3013
+    /// lines under the short chat timeout so a quiet gateway never
+    /// stalls the frame loop — the same timeout-restore shape as
+    /// [`Self::poll_channel_chat`].
+    fn poll_waiting_chat(&mut self) {
+        if self.game.screen() != Screen::Waiting {
+            return;
+        }
+        if let Err(source) = self.gateway.set_timeouts(Some(CHAT_IO_TIMEOUT)) {
+            tracing::debug!(%source, "waiting chat section skipped: timeout rejected");
+            return;
+        }
+        self.drain_waiting_chat();
+        if let Err(source) = self.gateway.set_timeouts(Some(SESSION_IO_TIMEOUT)) {
+            tracing::debug!(%source, "waiting chat timeout restore failed");
+        }
+    }
+
+    /// Drain inbound 3012 player lines and 3013 administrator lines
+    /// into the waiting history until the socket goes quiet — the
+    /// 4015 echo drain's best-effort shape: keepalives skip silently,
+    /// foreign ids log and skip (`ERRORS-19`: nothing is dropped
+    /// without a trace).
+    fn drain_waiting_chat(&mut self) {
+        loop {
+            match self.gateway.next_frame() {
+                Ok(frame) if frame.id == WaitingUserMessage::COMMAND => {
+                    self.apply_waiting_user_message(&frame);
+                }
+                Ok(frame) if frame.id == WaitingAdminMessage::COMMAND => {
+                    self.apply_waiting_admin_message(&frame);
+                }
+                Ok(frame) if Generic::from_id(frame.id).is_some() => {}
+                Ok(frame) => {
+                    tracing::debug!(id = frame.id, "skipping non-chat frame in waiting drain");
+                }
+                Err(_) => break,
+            }
+        }
+    }
+
+    /// Fold one 3012 frame into the waiting history (undecodable
+    /// bodies drop with a trace; the socket position is already past
+    /// them).
+    fn apply_waiting_user_message(&mut self, frame: &Frame) {
+        let Ok(message) = WaitingUserMessage::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable waiting line");
+            return;
+        };
+        self.game.push_waiting_user_message(&message);
+    }
+
+    /// Fold one 3013 frame into the waiting history (undecodable
+    /// bodies drop with a trace; the socket position is already past
+    /// them).
+    fn apply_waiting_admin_message(&mut self, frame: &Frame) {
+        let Ok(message) = WaitingAdminMessage::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable waiting line");
+            return;
+        };
+        self.game.push_waiting_admin_message(&message);
+    }
+
     /// Per-frame notice section in `Channel`: drain waiting 2016/2029
     /// frames under the short notice timeout so a quiet gateway never
     /// stalls the frame loop — the same timeout-restore shape as
     /// [`Self::poll_stats`].
-    fn poll_channel_notices(&mut self) {
+    fn poll_channel_chat(&mut self) {
         if self.game.screen() != Screen::Channel {
             return;
         }
@@ -426,21 +608,31 @@ impl OnlineSession {
             tracing::debug!(%source, "notice section skipped: timeout rejected");
             return;
         }
-        self.drain_channel_notices();
+        self.drain_channel_chat();
         if let Err(source) = self.gateway.set_timeouts(Some(SESSION_IO_TIMEOUT)) {
             tracing::debug!(%source, "notice timeout restore failed");
         }
     }
 
-    /// Drain waiting 2016 announcements and 2029 rank notices into the
+    /// Drain waiting channel lines (2013/2014), incoming whispers
+    /// (2019), announcements (2016), and rank notices (2029) into the
     /// channel history until the socket goes quiet — the 4015 echo
     /// drain's best-effort shape, minus the peer mirror: each frame
     /// applies through its shell push, keepalives skip silently,
     /// foreign ids log and skip (`ERRORS-19`: nothing is dropped
     /// without a trace).
-    fn drain_channel_notices(&mut self) {
+    fn drain_channel_chat(&mut self) {
         loop {
             match self.gateway.next_frame() {
+                Ok(frame) if frame.id == MainRoomUserMessage::COMMAND => {
+                    self.apply_channel_user_message(&frame);
+                }
+                Ok(frame) if frame.id == MainRoomAdminMessage::COMMAND => {
+                    self.apply_channel_admin_message(&frame);
+                }
+                Ok(frame) if frame.id == ReceiveWhisper::COMMAND => {
+                    self.apply_channel_whisper(&frame);
+                }
                 Ok(frame) if frame.id == Announcement::COMMAND => {
                     self.apply_announcement(&frame);
                 }
@@ -449,11 +641,47 @@ impl OnlineSession {
                 }
                 Ok(frame) if Generic::from_id(frame.id).is_some() => {}
                 Ok(frame) => {
-                    tracing::debug!(id = frame.id, "skipping non-notice frame in notice drain");
+                    tracing::debug!(id = frame.id, "skipping non-chat frame in channel drain");
                 }
                 Err(_) => break,
             }
         }
+    }
+
+    /// Fold one 2013 frame into the channel history (undecodable
+    /// bodies drop with a trace; the socket position is already past
+    /// them).
+    fn apply_channel_user_message(&mut self, frame: &Frame) {
+        let Ok(message) = MainRoomUserMessage::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable channel line");
+            return;
+        };
+        self.game.push_channel_user_message(&message);
+    }
+
+    /// Fold one 2014 frame into the channel history (undecodable
+    /// bodies drop with a trace; the socket position is already past
+    /// them).
+    fn apply_channel_admin_message(&mut self, frame: &Frame) {
+        let Ok(message) = MainRoomAdminMessage::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable channel line");
+            return;
+        };
+        self.game.push_channel_admin_message(&message);
+    }
+
+    /// Fold one 2019 frame into the channel history (undecodable
+    /// bodies drop with a trace; the socket position is already past
+    /// them). The wire event carries only the sender, so the row
+    /// names the remembered local user as the addressee — and the
+    /// push remembers the sender for `/r`.
+    fn apply_channel_whisper(&mut self, frame: &Frame) {
+        let Ok(message) = ReceiveWhisper::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable whisper");
+            return;
+        };
+        let recipient = self.local_user.clone();
+        self.game.push_channel_whisper(&message, &recipient);
     }
 
     /// Fold one 2016 frame into the channel history (undecodable bodies
@@ -510,6 +738,12 @@ impl GameLoop for OnlineSession {
             }
             return;
         }
+        if key == MenuKey::Confirm && self.game.screen() == Screen::Room {
+            if self.pending_room.is_none() || self.join_pending_room() {
+                self.game.menu_key(key, down);
+            }
+            return;
+        }
         self.game.menu_key(key, down);
     }
 
@@ -524,7 +758,8 @@ impl GameLoop for OnlineSession {
     fn paint(&mut self, frame: &mut o2jam_render::Frame<'_>) {
         self.game.paint(frame);
         self.poll_stats();
-        self.poll_channel_notices();
+        self.poll_channel_chat();
+        self.poll_waiting_chat();
     }
 }
 
@@ -607,6 +842,51 @@ mod session_tests {
         let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
         (OnlineSession::new(game, gateway), server)
     }
+    /// Game walked Avi → Channel → Room, paired with a live fake
+    /// gateway; the server end runs `with_server`.
+    fn room_session(
+        with_server: impl FnOnce(TcpStream) + Send + 'static,
+    ) -> (OnlineSession, thread::JoinHandle<()>) {
+        let (port, server) = fake_gateway(with_server);
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        (OnlineSession::new(game, gateway), server)
+    }
+
+    /// Minimal joined snapshot: master seat of a 7-key room titled
+    /// Lobby (the `connect --join-room` answer shape).
+    fn joined_snapshot() -> o2jam_net::JoinedRoom {
+        let mut slots = Vec::new();
+        for index in 0..7u8 {
+            slots.push(o2jam_net::RoomSlot {
+                index,
+                state_code: 0,
+                member: None,
+            });
+        }
+        o2jam_net::JoinedRoom {
+            member_id: 0,
+            team: 0,
+            title: "Lobby".to_owned(),
+            music_id: 0,
+            arena: 0,
+            key_mode: 2,
+            game_mode: 0,
+            difficulty: 0,
+            speed: 1,
+            has_super_manager: false,
+            user_count: 1,
+            slots,
+            skills: Vec::new(),
+            premium: false,
+            champion: None,
+            champion_streak: None,
+        }
+    }
+
     /// gateway; the server end runs `with_server`.
     fn playing_session(
         with_server: impl FnOnce(TcpStream) + Send + 'static,
@@ -898,6 +1178,242 @@ mod session_tests {
         session.menu_key(MenuKey::Confirm, true);
         server.join().unwrap();
         assert_eq!(session.game.chat_input(), "");
+    }
+
+    #[test]
+    fn room_confirm_joins_pending_room_and_enters_waiting() {
+        use o2jam_net::{JoinRoom, JoinRoomResponse};
+        let (mut session, server) = room_session(|mut stream| {
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, JoinRoom::COMMAND);
+            let asked = JoinRoom::decode_body(&frame.payload).unwrap();
+            assert_eq!(asked.number, 3);
+            assert!(asked.password.is_empty());
+            let answered = JoinRoomResponse {
+                result_code: 0,
+                room: Some(joined_snapshot()),
+            };
+            stream.write_all(&answered.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        session.set_pending_room_join(3, "");
+        assert!(!session.game.is_room_master());
+        session.menu_key(MenuKey::Confirm, true);
+        server.join().unwrap();
+        assert_eq!(session.game.screen(), Screen::Waiting);
+        assert!(session.game.is_room_master());
+        assert_eq!(session.game.room_key_mode(), 2);
+    }
+
+    #[test]
+    fn room_confirm_rejected_stays_in_room() {
+        use o2jam_net::{JoinRoom, JoinRoomResponse};
+        let (mut session, server) = room_session(|mut stream| {
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, JoinRoom::COMMAND);
+            let answered = JoinRoomResponse {
+                result_code: 0xFFFF_FFFD,
+                room: None,
+            };
+            stream.write_all(&answered.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        session.set_pending_room_join(3, "wrong");
+        session.menu_key(MenuKey::Confirm, true);
+        server.join().unwrap();
+        assert_eq!(session.game.screen(), Screen::Room);
+        assert!(!session.game.is_room_master());
+    }
+
+    #[test]
+    fn room_confirm_foreign_frame_stays_in_room() {
+        use o2jam_net::{JoinRoom, MainRoomUserMessage};
+        let (mut session, server) = room_session(|mut stream| {
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, JoinRoom::COMMAND);
+            let stray = MainRoomUserMessage {
+                sender: "host".to_owned(),
+                content: b"hi".to_vec(),
+            };
+            stream.write_all(&stray.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        session.set_pending_room_join(3, "");
+        session.menu_key(MenuKey::Confirm, true);
+        server.join().unwrap();
+        assert_eq!(session.game.screen(), Screen::Room);
+        assert!(!session.game.is_room_master());
+    }
+
+    #[test]
+    fn room_confirm_without_pending_advances_locally() {
+        let (mut session, server) = room_session(|mut stream| {
+            assert_quiet(&mut stream);
+        });
+        session.menu_key(MenuKey::Confirm, true);
+        server.join().unwrap();
+        assert_eq!(session.game.screen(), Screen::Waiting);
+        assert!(!session.game.is_room_master());
+    }
+
+    #[test]
+    fn waiting_user_message_drains_into_waiting_history() {
+        use o2jam_net::rooms::WaitingUserMessage;
+        let line = WaitingUserMessage {
+            sender: "host".to_owned(),
+            content: b"hello".to_vec(),
+            member_id: 1,
+        };
+        let (mut session, server) = waiting_session(move |mut stream| {
+            stream.write_all(&line.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        paint_frame(&mut session);
+        server.join().unwrap();
+        assert_eq!(session.game.waiting_chat().len(), 1);
+        assert_eq!(session.game.waiting_chat()[0].sender, "host");
+        assert_eq!(session.game.waiting_chat()[0].text, "hello");
+        assert!(!session.game.waiting_chat()[0].admin);
+    }
+
+    #[test]
+    fn waiting_admin_message_drains_into_waiting_history() {
+        use o2jam_net::rooms::WaitingAdminMessage;
+        let line = WaitingAdminMessage {
+            sender: "op".to_owned(),
+            content: b"quiet".to_vec(),
+            member_id: 0,
+        };
+        let (mut session, server) = waiting_session(move |mut stream| {
+            stream.write_all(&line.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        paint_frame(&mut session);
+        server.join().unwrap();
+        assert_eq!(session.game.waiting_chat().len(), 1);
+        assert_eq!(session.game.waiting_chat()[0].sender, "op");
+        assert_eq!(session.game.waiting_chat()[0].text, "quiet");
+        assert!(session.game.waiting_chat()[0].admin);
+    }
+
+    #[test]
+    fn undecodable_waiting_line_drops_and_drain_continues() {
+        use o2jam_net::rooms::{WaitingAdminMessage, WaitingUserMessage};
+        let line = WaitingAdminMessage {
+            sender: "op".to_owned(),
+            content: b"quiet".to_vec(),
+            member_id: 0,
+        };
+        let (mut session, server) = waiting_session(move |mut stream| {
+            stream
+                .write_all(&encode_frame(WaitingUserMessage::COMMAND, &[]))
+                .unwrap();
+            stream.write_all(&line.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        paint_frame(&mut session);
+        server.join().unwrap();
+        assert_eq!(session.game.waiting_chat().len(), 1);
+        assert_eq!(session.game.waiting_chat()[0].text, "quiet");
+        assert!(session.game.waiting_chat()[0].admin);
+    }
+
+    #[test]
+    fn keepalive_and_foreign_frames_skip_during_waiting_drain() {
+        use o2jam_net::rooms::{MainRoomUserMessage, WaitingUserMessage};
+        let line = WaitingUserMessage {
+            sender: "host".to_owned(),
+            content: b"hello".to_vec(),
+            member_id: 1,
+        };
+        let stray = MainRoomUserMessage {
+            sender: "host".to_owned(),
+            content: b"lobby".to_vec(),
+        };
+        let (mut session, server) = waiting_session(move |mut stream| {
+            stream.write_all(&encode_frame(6001, &[])).unwrap();
+            stream.write_all(&stray.encode()).unwrap();
+            stream.write_all(&line.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        paint_frame(&mut session);
+        server.join().unwrap();
+        assert_eq!(session.game.waiting_chat().len(), 1);
+        assert_eq!(session.game.waiting_chat()[0].text, "hello");
+        assert!(session.game.channel_chat().is_empty());
+    }
+
+    #[test]
+    fn channel_user_and_admin_messages_drain_into_history() {
+        use o2jam_net::rooms::{MainRoomAdminMessage, MainRoomUserMessage};
+        let player = MainRoomUserMessage {
+            sender: "host".to_owned(),
+            content: b"hello".to_vec(),
+        };
+        let admin = MainRoomAdminMessage {
+            sender: "op".to_owned(),
+            content: b"quiet".to_vec(),
+        };
+        let (mut session, server) = channel_session(move |mut stream| {
+            stream.write_all(&player.encode()).unwrap();
+            stream.write_all(&admin.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        paint_frame(&mut session);
+        server.join().unwrap();
+        assert_eq!(session.game.channel_chat().len(), 2);
+        assert_eq!(session.game.channel_chat()[0].sender, "host");
+        assert_eq!(session.game.channel_chat()[0].text, "hello");
+        assert!(!session.game.channel_chat()[0].admin);
+        assert_eq!(session.game.channel_chat()[1].sender, "op");
+        assert_eq!(session.game.channel_chat()[1].text, "quiet");
+        assert!(session.game.channel_chat()[1].admin);
+    }
+
+    #[test]
+    fn incoming_whisper_drains_into_history() {
+        use o2jam_net::rooms::ReceiveWhisper;
+        let whisper = ReceiveWhisper {
+            sender: "host".to_owned(),
+            content: "psst".to_owned(),
+        };
+        let (mut session, server) = channel_session(move |mut stream| {
+            stream.write_all(&whisper.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        session.set_local_user("me");
+        paint_frame(&mut session);
+        server.join().unwrap();
+        assert_eq!(session.game.channel_chat().len(), 1);
+        assert_eq!(session.game.channel_chat()[0].sender, "host");
+        assert_eq!(session.game.channel_chat()[0].text, "psst");
+        assert_eq!(
+            session.game.channel_chat()[0].whisper_recipient,
+            Some("me".to_owned())
+        );
+        assert_eq!(session.game.last_whisper_peer(), Some("host"));
+    }
+
+    #[test]
+    fn undecodable_channel_line_drops_and_drain_continues() {
+        use o2jam_net::rooms::{MainRoomAdminMessage, MainRoomUserMessage};
+        let admin = MainRoomAdminMessage {
+            sender: "op".to_owned(),
+            content: b"quiet".to_vec(),
+        };
+        let (mut session, server) = channel_session(move |mut stream| {
+            // Invalid UTF-8 sender: the line drops instead of staging.
+            stream
+                .write_all(&encode_frame(MainRoomUserMessage::COMMAND, &[0xFF, 0x00]))
+                .unwrap();
+            stream.write_all(&admin.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        paint_frame(&mut session);
+        server.join().unwrap();
+        assert_eq!(session.game.channel_chat().len(), 1);
+        assert_eq!(session.game.channel_chat()[0].text, "quiet");
+        assert!(session.game.channel_chat()[0].admin);
     }
 
     #[test]

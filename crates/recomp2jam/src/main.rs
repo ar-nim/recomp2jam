@@ -194,6 +194,13 @@ enum Command {
         /// Channel id to enter for `--online` (needs --online-gateway-id too).
         #[arg(long, requires = "online_gateway_id")]
         online_channel_id: Option<i16>,
+        /// Room number to join on Room Confirm for `--online`
+        /// (the session exchanges `JoinWaiting` for it).
+        #[arg(long, requires = "online")]
+        online_join_room: Option<i32>,
+        /// Password for `--online-join-room` (empty when unlocked).
+        #[arg(long, default_value = "", requires = "online")]
+        online_room_password: String,
     },
 }
 
@@ -328,8 +335,10 @@ impl ConnectParams {
 }
 
 /// CLI fields that assemble [`connect::ConnectOptions`] for
-/// `play --online` (list-only: no channel entry, character, avatar,
-/// room, or song).
+/// `play --online` (list-only at startup: no channel entry,
+/// character, avatar, or song; the room join rides
+/// [`OnlineParams::pending_room_join`] into the session, which
+/// exchanges it on Room Confirm).
 #[derive(Debug, Clone, Default)]
 struct OnlineParams {
     host: Option<String>,
@@ -338,11 +347,15 @@ struct OnlineParams {
     port: u16,
     online_gateway_id: Option<i16>,
     online_channel_id: Option<i16>,
+    join_room: Option<i32>,
+    room_password: String,
 }
 
 impl OnlineParams {
     /// Assemble list-only login options (infallible: every field has a
-    /// CLI default or an empty fallback).
+    /// CLI default or an empty fallback). The room join stays out:
+    /// startup only lists, and the session exchanges the pending
+    /// join on Room Confirm (see [`OnlineParams::pending_room_join`]).
     fn into_connect_options(self) -> connect::ConnectOptions {
         connect::ConnectOptions {
             host: self.host.unwrap_or_default(),
@@ -359,6 +372,14 @@ impl OnlineParams {
             room_password: String::new(),
             song: None,
         }
+    }
+
+    /// Room Confirm join intent for the session: the
+    /// `--online-join-room` number plus password (`None` keeps Room
+    /// Confirm a local enter, the offline walk).
+    fn pending_room_join(&self) -> Option<(i32, String)> {
+        self.join_room
+            .map(|number| (number, self.room_password.clone()))
     }
 }
 
@@ -474,6 +495,8 @@ fn run_command(command: Command) -> Result<()> {
             port,
             online_gateway_id,
             online_channel_id,
+            online_join_room,
+            online_room_password,
         } => run_play(
             chart,
             ojm,
@@ -491,6 +514,8 @@ fn run_command(command: Command) -> Result<()> {
             port,
             online_gateway_id,
             online_channel_id,
+            online_join_room,
+            online_room_password,
         ),
     }
 }
@@ -518,6 +543,8 @@ fn run_play(
     port: u16,
     online_gateway_id: Option<i16>,
     online_channel_id: Option<i16>,
+    online_join_room: Option<i32>,
+    online_room_password: String,
 ) -> Result<()> {
     tracing::info!(?chart, ?window, "play stub");
     if window {
@@ -532,14 +559,22 @@ fn run_play(
             port,
             online_gateway_id,
             online_channel_id,
+            online_join_room,
+            &online_room_password,
         )?;
         setup_avatar(&mut game, &avatar_opa, &equip, avatar_male)?;
         setup_chart_audio(&mut game, &chart, &ojm, level)?;
         let event_loop = winit::event_loop::EventLoop::new()
             .map_err(|e| anyhow::anyhow!("event loop failed: {e:?}"))?;
         match gateway {
-            Some(transport) => {
-                let session = session::OnlineSession::new(game, transport);
+            Some((transport, pending_room)) => {
+                let mut session = session::OnlineSession::new(game, transport);
+                if let Some(name) = token.as_deref().filter(|name| !name.is_empty()) {
+                    session.set_local_user(name);
+                }
+                if let Some((number, password)) = pending_room {
+                    session.set_pending_room_join(number, &password);
+                }
                 o2jam_shell::Shell::new(Box::new(session)).run(event_loop)?;
             }
             None => {
@@ -564,10 +599,17 @@ fn setup_splash(game: &mut o2jam_shell::ScreenGame, interface: &Option<String>) 
     Ok(())
 }
 
+/// Live gateway plus the Room Confirm join intent (room number and
+/// password) for the windowed session.
+type OnlineTransport = (o2jam_net::GatewayConnection, Option<(i32, String)>);
+
 /// Authenticate and list channels/rooms into a windowed game.
 ///
-/// Returns the live gateway when online: the caller wraps it with the
-/// game in an [`session::OnlineSession`] so chat reaches the server.
+/// Returns the live gateway plus the Room Confirm join intent when
+/// online: the caller wraps the transport with the game in an
+/// [`session::OnlineSession`] so chat reaches the server, staging the
+/// local username and the pending join on it. Startup stays
+/// list-only — the session exchanges the join on Room Confirm.
 #[allow(clippy::too_many_arguments, reason = "CLI fields pass through once")]
 fn setup_online(
     game: &mut o2jam_shell::ScreenGame,
@@ -578,19 +620,24 @@ fn setup_online(
     port: u16,
     online_gateway_id: Option<i16>,
     online_channel_id: Option<i16>,
-) -> Result<Option<o2jam_net::GatewayConnection>> {
+    online_join_room: Option<i32>,
+    online_room_password: &str,
+) -> Result<Option<OnlineTransport>> {
     if !online {
         return Ok(None);
     }
-    let options = OnlineParams {
+    let params = OnlineParams {
         host: host.clone(),
         user_id,
         token: token.clone(),
         port,
         online_gateway_id,
         online_channel_id,
-    }
-    .into_connect_options();
+        join_room: online_join_room,
+        room_password: online_room_password.to_owned(),
+    };
+    let pending_room = params.pending_room_join();
+    let options = params.into_connect_options();
     let (report, gateway) = connect::connect_and_login_with_transport(&options)?;
     tracing::info!(channels = report.channels.len(), "channels listed");
     game.set_channels(report.channels);
@@ -598,7 +645,7 @@ fn setup_online(
         tracing::info!(rooms = report.rooms.len(), "rooms listed");
         game.set_rooms(report.rooms);
     }
-    Ok(Some(gateway))
+    Ok(Some((gateway, pending_room)))
 }
 
 /// Stack the worn avatar figure into a windowed game, if requested.
@@ -1140,11 +1187,12 @@ mod cli_build_tests {
 
     #[test]
     fn online_defaults_without_ids() {
-        let options = OnlineParams {
+        let params = OnlineParams {
             port: 15010,
             ..OnlineParams::default()
-        }
-        .into_connect_options();
+        };
+        assert_eq!(params.pending_room_join(), None);
+        let options = params.into_connect_options();
         assert_eq!(options.host, "");
         assert_eq!(options.user_id, 0);
         assert_eq!(options.token, "");
@@ -1157,6 +1205,20 @@ mod cli_build_tests {
     }
 
     #[test]
+    fn online_pending_join_carries_number_and_password() {
+        let params = OnlineParams {
+            port: 15010,
+            join_room: Some(3),
+            room_password: "secret".to_owned(),
+            ..OnlineParams::default()
+        };
+        assert_eq!(params.pending_room_join(), Some((3, "secret".to_owned())));
+        // Startup stays list-only: the session exchanges the pending
+        // join on Room Confirm instead.
+        assert!(params.into_connect_options().join_room.is_none());
+    }
+
+    #[test]
     fn online_pairs_online_ids() {
         let options = OnlineParams {
             host: Some("127.0.0.1".to_owned()),
@@ -1165,6 +1227,7 @@ mod cli_build_tests {
             port: 15010,
             online_gateway_id: Some(0),
             online_channel_id: Some(0),
+            ..OnlineParams::default()
         }
         .into_connect_options();
         assert_eq!(options.host, "127.0.0.1");
