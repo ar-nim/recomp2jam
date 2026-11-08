@@ -3695,6 +3695,35 @@ mod game_tests {
     }
 
     #[test]
+    fn empty_channel_art_clears_stale_splash_pixels() {
+        // Live Channel stages no art (`stage_empty_channel_scene`), so
+        // entering from the splash must not leave logo pixels behind:
+        // the list paints over device black, matching the pinned
+        // art-less shot (`docs/screenshots/channel.png`).
+        const STALE_SPLASH: u32 = pack_xrgb(0xEB, 0xE3, 0xE4);
+        let mut game = ScreenGame::new();
+        game.load_scene(Screen::Channel, Vec::new(), HashMap::new());
+        game.set_channels(two_channels());
+        game.lane_key(3, true);
+        assert_eq!(game.screen(), Screen::Channel);
+        let mut buf = vec![STALE_SPLASH; 64 * 48];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 48,
+            },
+            0,
+        );
+        assert!(
+            !buf.contains(&STALE_SPLASH),
+            "live channel keeps splash pixels"
+        );
+        assert_eq!(buf[0], 0, "live channel clears to device black");
+        assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
+    }
+
+    #[test]
     fn scene_art_backs_waiting_seats() {
         let (placements, figures) = corner_scene_art("Wait_TeamA.ojs");
         let mut game = ScreenGame::new();

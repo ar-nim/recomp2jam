@@ -374,16 +374,21 @@ pub(crate) fn paint_channel_list(
 }
 
 /// Paint staged channel art with the live list and cursor on top.
-/// With empty art the shell paints no fill (pinned no-fill rule per
-/// `docs/channel-fill.md`: the exe stages zero pixels behind art-less
-/// states and no fill call is evidenced) and layers only the live
-/// list, title, and cursor.
+/// With empty art the shell stages zero pixels (pinned no-fill rule per
+/// `docs/channel-fill.md`: no fill call is evidenced) but still starts
+/// from device black: the live loop reuses one backbuffer across screens
+/// while the exe rebuilds every frame, so without this the previous
+/// screen (e.g. the splash logo) would linger behind the list.
+/// Black matches the pinned art-less shot, not invented art.
 pub fn paint_channel_scene(
     frame: &mut Frame<'_>,
     channels: &[ChannelState],
     highlight: usize,
     art: &SceneArt,
 ) {
+    if !art.has_figures() {
+        frame.buf.fill(0);
+    }
     art.paint_backdrop(frame, Screen::Channel);
     paint_title_over_art(frame, Screen::Channel);
     paint_channel_rows(frame, channels, highlight);
