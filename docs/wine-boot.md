@@ -863,6 +863,116 @@ is still alive and ESTAB (`127.0.0.1:55508 → 15010`).
   pixel-identical, the canvas edit ignores all key pumps and the OK
   gate must be probed separately.
 
+## Attempt 12 — UNICODE confirmatory test: GLYPH APPEARS (2026-11-08)
+
+Verdict: GLYPH. One `SendInput` `KEYEVENTF_UNICODE` (`wScan` `0x41`) into the CREATE ROOM title field replaced the selected default title with `A`. Field-rect crop diff (280,125)–(500,165): bbox 70×17 px exactly over the text, 1155/8800 px changed. Delivery was genuine (`fg=0x10088`, `n=1/1`, `err=0` down and up). The vkey→IME translation layer is guilty. Fix = a UNICODE pump path for canvas edits.
+
+### Method (one test datum)
+
+Fresh scratch copy (`OTwo.exe` hash `83a04541…` pinned), ko prefix, Xvfb `:98`, null sink, pinned blob+mirrors argv, cwd `/tmp/o2jam-run`. Path: notice → H-tab XTEST (145,105) → fallback OK XTEST (400,362) → Channel → `입장` SendInput (526,248) → `03EC` → room list → `방만들기` SendInput (555,388) inside the ~40 s fuse → CREATE ROOM open. Focus click at (335,143) left the default title selected. Before-shot, ONE `siuni` down/up, after-shot 3 s later, crop-diff. No `07D4` was emitted (OK never pressed); no gameplay followed.
+
+### What this proves
+
+Keys reach the queue (Attempt 10) but vkey chars die in IME/vkey translation for the canvas edit; UNICODE bypasses that layer and renders. Title-empty gating is not the whole story: this run pre-fills a default title (`신나는 음악을 즐겨라!`; `니들이 리듬을 알아?!` seen once) — never empty — yet no `07D4` exists in any Wine run. CREATE OK enablement stays OPEN.
+
+### Side findings (setup observations, zero extra test inputs)
+
+- cwd must be the game dir: 4 consecutive +2 s init `EXCEPTION_ACCESS_VIOLATION`s (game's own `.log`) with cwd at the repo root; every boot with cwd `/tmp/o2jam-run` survives init. Same bytes, reproducible pattern.
+- Init/transition AVs stay flaky: +2 s crashes (18:06/18:09/18:11/18:16), a winedbg-caught crash on room entry (17:51), silent deaths in the H-tab→channel black transition with opcodes still flowing (18:24/18:29, no dump).
+- Client timers confirmed: auto channel-enter (~100 s after H-tab) and auto room-join (`0BBA Join room [000]`, ~72 s later) with zero input (18:01 and 18:24 cycles).
+- Corrects Attempt 10: the title field is NOT always empty — it pre-fills a selected default title when the dialog opens.
+- Multiplayer note: a second agent drives a same-identity client on `:99` (own prefix/display/copy, contained). Same-user sessions churn (`FFF0` 18:44:56 mid-CREATE, client unaffected — CREATE is fuse-immune, matching Attempt 10 round 3). A `/tmp` purge mid-task deleted all scratch launchers, `o2jam-run`, and reports; everything was rebuilt from repo + DB (hashes re-pinned).
+- Shots: `/tmp/uni-before.png`, `/tmp/uni-after.png`, `/tmp/uni-f-before.png`, `/tmp/uni-f-after.png`, `/tmp/uni-m1.png` (CREATE open), `/tmp/uni-field-m2.png` (selected default title). New helper `/tmp/siuni.c` (+`winegcc` build).
+
+## Attempt 12 — host-driven 4010 reaches the loading screen (2026-11-08)
+
+Goal: from the CLI-hosted waiting room, ready the bot if needed and send
+`4010 StartGame`, then observe loading/playing. Result: GAMEPLAY STAGE
+REACHED — the client rendered the song loading screen and sent `4012
+ConfirmMusicLoaded`. Active note-play was not observed: the scratch host
+bot never sends `4012` itself, so the server's 60 s `MusicLoadTimeout`
+(`~/memoryer-local/config.ini`) closed the host session while the client
+waited on the loading screen. That last gap is bot tooling, not a client
+wall. Helpers, launchers, shots, and logs are scratch-only in
+`~/scratch` (`host_wait.py`, `host_flap.py`, `o2jam-ws.fish`,
+`warp99.py`, `xclick99.py`, `sesc.c`, `siclick{3,D}.c`, `killer.py`,
+`ws-*.png`, `w*.png`, `host_*.log`). Memoryer unmodified (server use
+only). No commit.
+
+### Path walked (Xvfb `:99`, private prefix copy, null sink)
+
+A private prefix (`~/scratch/prefix-ws`, clone of `o2jam-prefix-ko`)
+and full game copy (`~/scratch/run-full`) on `:99` isolate this drive
+from the parallel `:98` session (an exe-only dir crashes in init with
+`EXCEPTION_ACCESS_VIOLATION` at game RVA `0x77a8f`, media DLLs loaded —
+cwd must be the game dir). Boot with the pinned blob+mirrors argv:
+notice carousel → H-tab XTEST (145,105) → fallback OK (400,362) →
+channel list (`03E8`/`03EA`) → warp + `SendInput` single on the Ch.01
+입장 rect (526,248) → `03EC → 0FBE → 07D0 → 07D2 → 13A4`.
+
+### The room-list fuse and its suppression
+
+Every idle room-list entry grows a `서버로 부터 응답이 없습니다`
+("no response from server") modal ~+37–44 s after `03EC` (row paint
+rides the `07DA`/`07E8` poll at +36 s, so the join window is ~3 s) and
+self-sends `FFF0` ~+55–60 s. Modal-up row double-clicks never emit
+`0BBA` (4 drained attempts). Suppression that reproduces: a host
+room-recreate pulse (disconnect + re-create → `2007`/`2005` channel
+events) completing before the modal fires keeps the list live and
+modal-free past +54 s; entries landing on fresh `2005` data paint
+with same-second `07DA`/`07E8`. Proven twice (joins `0BBA` 19:02:53
+and 19:32:43, both with screenshot-verified pre-warped double-clicks
+at (175,150)). Arena-flap keepalive (`4002` alternating 0/1) does NOT
+suppress the fuse.
+
+### Arena flaps cause the DXSurface error (false 4010 failure first)
+
+With flaps on, the waiting room grew `인터페이스 정보를 로딩하지
+못했습니다 … : 660, .\Display\DXSurface.cpp` ("failed to load
+interface information") — first seen right after `4010` (music 757)
+and misread as a StartGame failure, then reproduced with no `4010` at
+all. With flaps off the same waiting room sat clean 90 s+ (both READY).
+Reading: an in-room `4002`/`4003` arena change makes the client reload
+stage art and trip `DXSurface.cpp:660` under Wine. Keepalive flapping
+stays off for play.
+
+### The start (music 757, flaps off, room 000)
+
+Join `0BBA` 19:32:43 (host-side `0BBC` join event confirms one room);
+guest not auto-ready this round, so a tip-verified `SendInput` single
+on the READY pill (680,143) sent `4008` (`0FA8` 19:33:49) and lit both
+badges (tester2 red, tester orange). Host `4010` (empty body) 19:34:19
+→ server `0FAA` → `4011` (`01000000`) → client `0FAC` (`4012`
+`ConfirmMusicLoaded` 19:34:19.552) + full-screen song loading art
+(`미쳤어`, 3KEY VERSION badge, U1/U2 load dots, BPM 124). No `4014`/
+`4016` score flow followed: the bot host never confirms music load,
+and the server closed it at the 60 s `MusicLoadTimeout`; the client
+was still on the loading screen at last shot, then reaped to zero.
+
+### Opcode census (tester unless noted)
+
+Per entry: `03E8`/`03EA`/`03EC → 0FBE → 07D0 → 07D2 → 13A4` +
+`07DA`/`07E8` (+36 s, or same-second on fresh `2005`). Joins: `0BBA`
+→ host `0BBC`. Starts: guest `4008` (`0FA8`), host `4010` (`0FAA`)
+→ `4011` (`01000000`) → guest `4012` (`0FAC`) + host-side `4049`
+bursts. Exits: `0BBD` never needed; `FFF0` on every modal dismissal
+(Return, Escape, and XTEST-OK all end the session) and on error-modal
+dismissal (clean client exit, no dump).
+
+### Hygiene notes
+
+- `pkill -f <name>` matches its own `fish -c` line (exit 143/137
+  twice); killer is now a `/proc`-scanning `killer.py` (exact marker,
+  self-PID excluded). One over-broad `OTwo` sweep killed the parallel
+  session's client once (theirs relaunches from its own launcher).
+- Post-`FFF0` H-tab re-walk re-authenticates with no reboot
+  (`03EA` in ~10 s); BACK is inert in the waiting room and in a
+  masterless room every input is inert (BACK/Return/H-tab) — kill +
+  reboot is the only exit.
+- A host recreate renumbers the room (lowest free; seen 000 and 001)
+  and a recreate between join and `4010` orphans the guest in a ghost
+  room (join first, freeze the room, then start).
+
 ## Logs and artifacts (kept outside the repo)
 
 - `~/wineboot2.log`, `~/wine-game*.log`, `~/wine-relay*.log` (217 MB
