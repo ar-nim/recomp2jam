@@ -3151,3 +3151,43 @@ whispers).
   a peer landed uncommitted edits to
   `crates/o2jam-shell/src/screens/game.rs` at ~11:47:21 +08:00,
   after the last gate finished. Left alone per the sweep rules;
+  (note: the sentence above is where the prior sweep stopped writing;
+  left as-is, not mine to finish).
+
+## Regression sweep — 2026-11-08 11:55 UTC+8 (HEAD `7c81f96`, tree clean at gates)
+
+Live re-proof on the lobby-head. Covers the shell commit landed after
+the lobby-head baseline `e525f24`: paint lobby chat rows (`7c81f96`:
+lobby chat-row paint in `screens/game.rs` + `screens/paint.rs`), plus
+the sweep log in this file.
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1453 passed, 0 failed, 0 ignored**, `exit=0`.
+  Per target: audio 20, dump 7, file 177, game 94, net 375,
+  render 89, shell 540, real_art 7, scenes 22, recomp2jam 122
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: `exit=0` with 1 pre-existing
+  `dead_code` warning (`recomp2jam` bin: `flush_channel_whisper` never
+  used in `session.rs`; HEAD code, not mine — left alone per the
+  sweep rules, which allow fixing only my own lint findings).
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 121 filtered out, 0.59 s) against local
+  Memoryer 7.2.0 (`Mode=Full`). Server log for this run
+  (`11:54:48 +08:00`): `Create room: songflow` →
+  `Game [000] Submit score: 2210` (a trailing session walked
+  `Authorize session` → connection-lost close).
+- **Verdict: no regression — suite is green on the lobby-head (1453
+  passed; +12 vs the 1441 `e525f24` baseline, all shell 528 → 540
+  from the lobby chat-row paint tests, all other targets unchanged,
+  0 failures). No lint findings of mine. No commits, no pushes.**
+  This sweep touched only `docs/playtest.md`.
+- Tree note: all gates above ran on a clean tree (HEAD `7c81f96`);
+  a peer saved uncommitted edits to
+  `crates/o2jam-shell/src/screens/game.rs` and
+  `crates/recomp2jam/src/session.rs` after the last gate finished.
+  Left alone per the sweep rules.

@@ -20,11 +20,17 @@
 //! [`live_stats::apply_peer_update`] and into the shell through
 //! [`ScreenGame::apply_peer_echo`], so the Playing paint shows the live
 //! gauges. Chat stays send-on-action, as-is.
+//!
+//! Lobby send (Channel scene): the shell stages a second draft
+//! ([`ScreenGame::take_channel_message`]) beside the channel history
+//! and transmits it as 2012 on Confirm, or as a 2017 whisper through
+//! [`OnlineSession::flush_channel_whisper`] when a recipient is named
+//! — the same peek-send-clear bridge as the waiting 3011 path.
 
 use std::time::Duration;
 
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery};
-use o2jam_net::rooms::SendWaitingMessage;
+use o2jam_net::rooms::{SendMainRoomMessage, SendWaitingMessage, SendWhisper};
 use o2jam_net::{Frame, GameStatsUpdate, GatewayConnection, Generic, Request, WireMessage};
 use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
 
@@ -134,6 +140,54 @@ impl OnlineSession {
         self.gateway
             .send_frame(SendWaitingMessage::COMMAND, &draft.encode_body())?;
         self.game.clear_chat_input();
+        Ok(true)
+    }
+
+    /// Transmit the pending Channel draft as 2012.
+    ///
+    /// `Ok(true)` sent one packet; `Ok(false)` means the draft was
+    /// empty and the socket stayed untouched. A failed send keeps the
+    /// draft, so the next send retries it (same shape as [`flush_chat`]).
+    ///
+    /// # Errors
+    ///
+    /// Whatever the gateway transport reports (ERRORS-01/02: `Result`,
+    /// propagated with `?`, never unwrapped per ERRORS-06).
+    pub fn flush_channel(&mut self) -> Result<bool, o2jam_net::Error> {
+        let Some(draft) = self.game.channel_send_message() else {
+            return Ok(false);
+        };
+        self.gateway
+            .send_frame(SendMainRoomMessage::COMMAND, &draft.encode_body())?;
+        self.game.clear_channel_input();
+        Ok(true)
+    }
+
+    /// Transmit the pending Channel draft as a 2017 whisper to
+    /// `recipient`.
+    ///
+    /// `Ok(true)` sent one packet; `Ok(false)` means the draft or the
+    /// recipient was empty and the socket stayed untouched. A failed
+    /// send keeps the draft, so the next send retries it.
+    ///
+    /// No GameLoop action names a recipient yet (the whisper-target
+    /// picker lands separately); the bridge is tested below.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the gateway transport reports (ERRORS-01/02: `Result`,
+    /// propagated with `?`, never unwrapped per ERRORS-06).
+    #[allow(
+        dead_code,
+        reason = "bridge send for the whisper-target picker follow-up; tested below"
+    )]
+    pub fn flush_channel_whisper(&mut self, recipient: &str) -> Result<bool, o2jam_net::Error> {
+        let Some(draft) = self.game.channel_whisper_message(recipient) else {
+            return Ok(false);
+        };
+        self.gateway
+            .send_frame(SendWhisper::COMMAND, &draft.encode_body())?;
+        self.game.clear_channel_input();
         Ok(true)
     }
 
@@ -276,6 +330,16 @@ impl GameLoop for OnlineSession {
             }
             return;
         }
+        if key == MenuKey::Confirm && self.game.screen() == Screen::Channel {
+            match self.flush_channel() {
+                Ok(sent) if !sent => self.game.menu_key(key, down),
+                Ok(_) => {}
+                Err(source) => {
+                    tracing::warn!(%source, "lobby send failed; draft kept");
+                }
+            }
+            return;
+        }
         self.game.menu_key(key, down);
     }
 
@@ -360,7 +424,18 @@ mod session_tests {
         (OnlineSession::new(game, gateway), server)
     }
 
-    /// Game walked through Loading into Playing, paired with a live fake
+    /// Game walked Avi → Channel, paired with a live fake gateway; the
+    /// server end runs `with_server`.
+    fn channel_session(
+        with_server: impl FnOnce(TcpStream) + Send + 'static,
+    ) -> (OnlineSession, thread::JoinHandle<()>) {
+        let (port, server) = fake_gateway(with_server);
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        assert_eq!(game.screen(), Screen::Channel);
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        (OnlineSession::new(game, gateway), server)
+    }
     /// gateway; the server end runs `with_server`.
     fn playing_session(
         with_server: impl FnOnce(TcpStream) + Send + 'static,
@@ -469,6 +544,80 @@ mod session_tests {
         session.menu_key(MenuKey::Confirm, true);
         server.join().unwrap();
         assert_eq!(session.game.chat_input(), "typed early");
+    }
+
+    #[test]
+    fn flush_channel_sends_pending_draft_as_2012() {
+        let (mut session, server) = channel_session(|mut stream| {
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, 2012);
+            assert_eq!(frame.payload, b"go".to_vec());
+        });
+        session.game.set_channel_input("go");
+        assert!(session.flush_channel().unwrap());
+        assert_eq!(session.game.channel_input(), "");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn flush_channel_sends_nothing_while_the_draft_is_empty() {
+        let (mut session, server) = channel_session(|mut stream| {
+            assert_quiet(&mut stream);
+        });
+        assert!(!session.flush_channel().unwrap());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn channel_confirm_sends_the_draft_and_stays_in_channel() {
+        let (mut session, server) = channel_session(|mut stream| {
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, 2012);
+            assert_eq!(frame.payload, b"hi".to_vec());
+        });
+        session.game.set_channel_input("hi");
+        session.menu_key(MenuKey::Confirm, true);
+        server.join().unwrap();
+        assert_eq!(session.game.screen(), Screen::Channel);
+        assert_eq!(session.game.channel_input(), "");
+    }
+
+    #[test]
+    fn channel_confirm_without_a_draft_advances_to_room() {
+        let (mut session, server) = channel_session(|mut stream| {
+            assert_quiet(&mut stream);
+        });
+        session.menu_key(MenuKey::Confirm, true);
+        server.join().unwrap();
+        assert_eq!(session.game.screen(), Screen::Room);
+    }
+
+    #[test]
+    fn flush_whisper_sends_pending_draft_as_2017() {
+        use o2jam_net::rooms::SendWhisper;
+        let (mut session, server) = channel_session(|mut stream| {
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, 2017);
+            let whisper = SendWhisper::decode_body(&frame.payload).unwrap();
+            assert_eq!(whisper.recipient, "host");
+            assert_eq!(whisper.content, "psst");
+        });
+        session.game.set_channel_input("psst");
+        assert!(session.flush_channel_whisper("host").unwrap());
+        assert_eq!(session.game.channel_input(), "");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn flush_whisper_sends_nothing_without_draft_or_recipient() {
+        let (mut session, server) = channel_session(|mut stream| {
+            assert_quiet(&mut stream);
+        });
+        assert!(!session.flush_channel_whisper("host").unwrap());
+        session.game.set_channel_input("psst");
+        assert!(!session.flush_channel_whisper("").unwrap());
+        assert_eq!(session.game.channel_input(), "psst");
+        server.join().unwrap();
     }
 
     #[test]

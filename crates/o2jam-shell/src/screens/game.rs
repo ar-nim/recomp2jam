@@ -34,8 +34,8 @@ use o2jam_file::OjnListEntry;
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams, PEER_SLOT_COUNT};
 use o2jam_net::play::SetRoomMusic;
 use o2jam_net::rooms::{
-    MainRoomAdminMessage, MainRoomUserMessage, ReceiveWhisper, SendWaitingMessage,
-    WaitingAdminMessage, WaitingUserMessage,
+    MainRoomAdminMessage, MainRoomUserMessage, ReceiveWhisper, SendMainRoomMessage,
+    SendWaitingMessage, SendWhisper, WaitingAdminMessage, WaitingUserMessage,
 };
 use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry};
 use o2jam_render::font::{draw_text_cell, Cell};
@@ -79,6 +79,9 @@ pub struct ScreenGame {
     highlight: usize,
     /// Live channel chat rows (2013/2014/2019 packets only, oldest first).
     channel_chat: Vec<ChannelChatMessage>,
+    /// Unsent channel draft for the Channel input line (2012 source;
+    /// whisper content source for [`Self::channel_whisper_message`]).
+    channel_input: String,
     rooms: Vec<RoomListEntry>,
     room_highlight: usize,
     waiting: Option<JoinedRoom>,
@@ -204,6 +207,7 @@ impl ScreenGame {
             channels: Vec::new(),
             highlight: 0,
             channel_chat: Vec::new(),
+            channel_input: String::new(),
             rooms: Vec::new(),
             room_highlight: 0,
             waiting: None,
@@ -351,6 +355,7 @@ impl ScreenGame {
         self.channels = channels;
         self.highlight = 0;
         self.channel_chat.clear();
+        self.channel_input.clear();
         self
     }
 
@@ -455,6 +460,19 @@ impl ScreenGame {
         self.chat_input.push(typed);
     }
 
+    /// Type one character into the Channel draft. Only the Channel
+    /// scene accepts typing; control characters never enter the line
+    /// and the draft stops at [`MAX_CHAT_INPUT_CHARS`] characters.
+    pub fn push_channel_char(&mut self, typed: char) {
+        if self.flow.current() != Screen::Channel || typed.is_control() {
+            return;
+        }
+        if self.channel_input.chars().count() >= MAX_CHAT_INPUT_CHARS {
+            return;
+        }
+        self.channel_input.push(typed);
+    }
+
     /// Erase the last draft character (Backspace). Only the Waiting
     /// scene accepts it; an empty draft stays empty (`String::pop`
     /// removes one whole character, never half of a multibyte one).
@@ -463,6 +481,15 @@ impl ScreenGame {
             return;
         }
         self.chat_input.pop();
+    }
+
+    /// Erase the last Channel draft character (Backspace). Only the
+    /// Channel scene accepts it; an empty draft stays empty.
+    pub fn delete_channel_char(&mut self) {
+        if self.flow.current() != Screen::Channel {
+            return;
+        }
+        self.channel_input.pop();
     }
     #[must_use]
     pub fn chat_input(&self) -> &str {
@@ -495,6 +522,73 @@ impl ScreenGame {
     pub fn take_chat_message(&mut self) -> Option<SendWaitingMessage> {
         let message = self.chat_send_message()?;
         self.clear_chat_input();
+        Some(message)
+    }
+
+    /// Stage the unsent Channel input line (the 2012 source on send).
+    /// Overlong lines truncate to [`MAX_CHAT_INPUT_CHARS`] characters.
+    pub fn set_channel_input(&mut self, line: &str) -> &mut Self {
+        self.channel_input = line.chars().take(MAX_CHAT_INPUT_CHARS).collect();
+        self
+    }
+
+    /// Live Channel input line.
+    #[must_use]
+    pub fn channel_input(&self) -> &str {
+        &self.channel_input
+    }
+
+    /// Outgoing lobby chat packet for the Channel draft (`None` while
+    /// the input line is empty, so no empty send is invented).
+    /// Callers send the returned body, then [`Self::clear_channel_input`].
+    #[must_use]
+    pub fn channel_send_message(&self) -> Option<SendMainRoomMessage> {
+        if self.channel_input.is_empty() {
+            return None;
+        }
+        Some(SendMainRoomMessage {
+            content: self.channel_input.as_bytes().to_vec(),
+        })
+    }
+
+    /// Outgoing whisper packet for the Channel draft to `recipient`
+    /// (`None` while the draft or the recipient is empty, so no empty
+    /// send is invented). The draft carries the whisper text; the
+    /// recipient rides beside it (the wire 2017 shape).
+    #[must_use]
+    pub fn channel_whisper_message(&self, recipient: &str) -> Option<SendWhisper> {
+        if self.channel_input.is_empty() || recipient.is_empty() {
+            return None;
+        }
+        Some(SendWhisper {
+            recipient: recipient.to_owned(),
+            content: self.channel_input.clone(),
+        })
+    }
+
+    /// Forget the unsent Channel input line.
+    pub fn clear_channel_input(&mut self) -> &mut Self {
+        self.channel_input.clear();
+        self
+    }
+
+    /// Take the 2012 body for the Channel draft and clear the input
+    /// line so one Enter sends once (`None` while the draft is
+    /// empty). The online session transmits the packet (see
+    /// `recomp2jam::session`); the shell owns no transport, so
+    /// offline takes still drop it here.
+    pub fn take_channel_message(&mut self) -> Option<SendMainRoomMessage> {
+        let message = self.channel_send_message()?;
+        self.clear_channel_input();
+        Some(message)
+    }
+
+    /// Take the 2017 body for the Channel draft to `recipient` and
+    /// clear the input line so one action sends once (`None` while
+    /// the draft or the recipient is empty).
+    pub fn take_channel_whisper(&mut self, recipient: &str) -> Option<SendWhisper> {
+        let message = self.channel_whisper_message(recipient)?;
+        self.clear_channel_input();
         Some(message)
     }
 
@@ -1663,9 +1757,12 @@ impl GameLoop for ScreenGame {
             }
             (Screen::Loading, MenuKey::Confirm) => self.enter(Screen::Playing),
             (Screen::Room, MenuKey::Back) => self.enter(Screen::Channel),
-            (Screen::Channel, MenuKey::Confirm)
-            | (Screen::Waiting, MenuKey::Back)
-            | (Screen::Result, MenuKey::Back) => self.enter(Screen::Room),
+            (Screen::Channel, MenuKey::Confirm) if self.take_channel_message().is_none() => {
+                self.enter(Screen::Room);
+            }
+            (Screen::Waiting, MenuKey::Back) | (Screen::Result, MenuKey::Back) => {
+                self.enter(Screen::Room);
+            }
             (Screen::Room, MenuKey::Confirm)
             | (Screen::Loading, MenuKey::Back)
             | (Screen::Result, MenuKey::Confirm) => self.enter(Screen::Waiting),
@@ -1686,13 +1783,27 @@ impl GameLoop for ScreenGame {
     }
 
     fn text_input(&mut self, text: &str) {
-        for typed in text.chars() {
-            self.push_chat_char(typed);
+        match self.flow.current() {
+            Screen::Waiting => {
+                for typed in text.chars() {
+                    self.push_chat_char(typed);
+                }
+            }
+            Screen::Channel => {
+                for typed in text.chars() {
+                    self.push_channel_char(typed);
+                }
+            }
+            _ => {}
         }
     }
 
     fn delete_text(&mut self) {
-        self.delete_chat_char();
+        match self.flow.current() {
+            Screen::Waiting => self.delete_chat_char(),
+            Screen::Channel => self.delete_channel_char(),
+            _ => {}
+        }
     }
 
     fn paint(&mut self, frame: &mut Frame<'_>) {
@@ -3793,6 +3904,98 @@ mod game_tests {
         assert_eq!(send.content, b"go".to_vec());
         assert_eq!(game.chat_input(), "");
         assert_eq!(game.take_chat_message(), None);
+    }
+
+    #[test]
+    fn channel_send_builds_a_2012_body_from_the_input_line() {
+        let mut game = ScreenGame::new();
+        game.set_channel_input("go");
+        assert_eq!(game.channel_input(), "go");
+        let send = game.channel_send_message().unwrap();
+        assert_eq!(send.content, b"go".to_vec());
+        game.clear_channel_input();
+        assert_eq!(game.channel_input(), "");
+        assert_eq!(game.channel_send_message(), None);
+    }
+
+    #[test]
+    fn take_channel_message_builds_and_clears_in_one_step() {
+        let mut game = ScreenGame::new();
+        assert_eq!(game.take_channel_message(), None);
+        game.set_channel_input("go");
+        let send = game.take_channel_message().unwrap();
+        assert_eq!(send.content, b"go".to_vec());
+        assert_eq!(game.channel_input(), "");
+        assert_eq!(game.take_channel_message(), None);
+    }
+
+    #[test]
+    fn channel_whisper_needs_both_draft_and_recipient() {
+        let mut game = ScreenGame::new();
+        assert_eq!(game.channel_whisper_message("host"), None);
+        game.set_channel_input("psst");
+        assert_eq!(game.channel_whisper_message(""), None);
+        let whisper = game.channel_whisper_message("host").unwrap();
+        assert_eq!(whisper.recipient, "host");
+        assert_eq!(whisper.content, "psst");
+    }
+
+    #[test]
+    fn take_channel_whisper_builds_and_clears_in_one_step() {
+        let mut game = ScreenGame::new();
+        game.set_channel_input("psst");
+        let whisper = game.take_channel_whisper("host").unwrap();
+        assert_eq!(whisper.recipient, "host");
+        assert_eq!(whisper.content, "psst");
+        assert_eq!(game.channel_input(), "");
+        assert_eq!(game.take_channel_whisper("host"), None);
+    }
+
+    #[test]
+    fn typing_appends_to_the_channel_draft_only_while_there() {
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        assert_eq!(game.screen(), Screen::Channel);
+        game.text_input("hi");
+        assert_eq!(game.channel_input(), "hi");
+        assert_eq!(game.chat_input(), "");
+        game.take_channel_message();
+        walk_to_waiting(&mut game);
+        game.text_input("yo");
+        assert_eq!(game.channel_input(), "");
+        assert_eq!(game.chat_input(), "yo");
+    }
+
+    #[test]
+    fn channel_backspace_erases_one_character_only_while_there() {
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        game.text_input("héllo");
+        game.delete_text();
+        assert_eq!(game.channel_input(), "héll");
+        game.clear_channel_input();
+        walk_to_waiting(&mut game);
+        game.delete_text();
+        assert_eq!(game.channel_input(), "");
+        assert_eq!(game.chat_input(), "");
+    }
+
+    #[test]
+    fn channel_confirm_with_a_draft_sends_and_stays_in_channel() {
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        game.set_channel_input("go");
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Channel);
+        assert_eq!(game.channel_input(), "");
+    }
+
+    #[test]
+    fn refreshing_channels_clears_the_channel_draft() {
+        let mut game = ScreenGame::new();
+        game.set_channel_input("draft");
+        game.set_channels(two_channels());
+        assert_eq!(game.channel_input(), "");
     }
 
     #[test]
