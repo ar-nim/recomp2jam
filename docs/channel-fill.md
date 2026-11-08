@@ -515,7 +515,20 @@ by other docs/code and untouched here).
 5. Loading bar/caption geometry — OPEN, negative result (placeholders
    kept): `MusicLoading.ojs` (`Playing1.opi` slot 39, 960,028 B) is
    one sprite-55 body, single 800x600 layer at anchor (0,0),
-   colorkey `0x0` — no bar/caption sub-rect exists in the art.
+   colorkey `0x0`, raw 960000 B (`8+20+Σsize` exact) — no
+   bar/caption sub-rect exists in the art. Re-walked read-only
+   2026-11-08: `Loading_Sign.ojs` (slot 37, 29816 B) is three 134x37
+   layers at (0,0) (`colorkey 0x7D5F`, animation frames, not a
+   shell); `Wait_Downloding_Bar.ojs` (Interface slot 1196, 938 B)
+   is one 65x7 layer at (0,0) (`colorkey 0x0`); its host
+   `Wait_Downloding.ojs` (slot 1195) is 100x45 at (0,0);
+   `Payment_BackLoading.ojs` (Interface slot 362, 38466 B) is seven
+   119x23 layers at (619,529) (`colorkey 0x0`, payment dialog);
+   `AlbumLoading_Panel.ojs` (Playing slot 0, 70554 B) is one 197x179
+   layer at (410,210) (`colorkey 0x7D5F`, album dialog). The OJN
+   cover (`extracted/cover757-view.jpg`, 800x600 JPEG) is a
+   full-bleed photo with no bead-pill rows or bar shell. Cover art
+   carries no progress-fill anchors.
    The `0x4e47a0` dossier (`ev_68d920c2…`, file `0xe47a0`) carries
    three font creations (`Trebuchet MS` at VA `0x64ae78`, `Arial`
    at `0x64a320`, Korean face at `0x64407c`), the overlay mount
@@ -528,9 +541,12 @@ by other docs/code and untouched here).
    loading-gate fill. Shell rule: `loading_track_origin` (`w/4, h/2-8`),
    `loading_track_width` (`w/2`), `loading_song_origin` (`w/4, h/2+12`)
    stay honestly labeled OPEN placeholders (bnd-audit 35); only the
-   walk fraction and the `TITLE - ARTIST` caption are live. Test:
+   walk fraction and the `TITLE - ARTIST` caption are live. Tests:
    `loading_bar_geometry_stays_open_placeholder` pins the placeholder
-   formula so any future grounding must update it with evidence.
+   formula so any future grounding must update it with evidence;
+   `loading_placeholders_clear_every_measured_bar_body` pins the
+   negative (native 800x600 track (200,292,400x16), caption (200,312)
+   match none of the measured bodies above).
 6. Chat row feed (`TEXT_SWAIT_CHAT`) — CLOSED to the list mutation:
    live rows enqueue into the parent's string queue at parent+`0x17c`
    through `0x479010` (the level-0/level-5 sites files `0x15f1a7`/

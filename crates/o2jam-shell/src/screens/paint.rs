@@ -2057,8 +2057,7 @@ fn paint_lobby(frame: &mut Frame<'_>, background: u32) {
 /// `0x4e47a0`, file `0xe47a0`, ev `68d920c2…`): the song-table
 /// fraction plus the song title/artist being loaded. The exe sets
 /// `Trebuchet MS`/`Arial` fonts there; the shell micro-font stands
-/// in (typography gap). Track and caption rects below stay OPEN
-/// placeholders: `MusicLoading.ojs` is one 800x600 body at (0,0)
+/// in (typography gap). Track and caption rects below stay OPEN placeholders: `MusicLoading.ojs` is one 800x600 body at (0,0)
 /// with no bar/caption sub-rect, the `0x4e47a0` dossier carries
 /// fonts plus the overlay mount plus the song-table walk with no
 /// literal bar/caption rect, and adjacent bar bodies belong to
@@ -2115,21 +2114,31 @@ fn loading_fill_width(track_w: u32, progress: f32) -> u32 {
 }
 
 /// Track origin of the OPEN placeholder bar: centered `w / 4,
-/// h / 2 - 8` with no exe-grounded rect (`MusicLoading.ojs` is a
-/// single 800x600 body, `0x4e47a0` names no rect, adjacent bar art
-/// belongs to other dialogs; bnd-audit 35).
+/// h / 2 - 8` with no exe-grounded rect. Measured 7.55
+/// exclusion table (read-only sprite-55 walks, 2026-11-08):
+/// `MusicLoading.ojs` is one 800x600 layer at (0,0) (`colorkey 0x0`,
+/// raw 960000 B) — no sub-rect; `Loading_Sign.ojs` is three 134x37
+/// frames at (0,0) (`colorkey 0x7D5F`); `Wait_Downloding_Bar.ojs`
+/// is one 65x7 layer at (0,0); `Payment_BackLoading.ojs` is seven
+/// 119x23 layers at (619,529); `AlbumLoading_Panel.ojs` is one
+/// 197x179 layer at (410,210); the OJN cover is a full-bleed
+/// 800x600 photo with no bead-pill rows or bar shell. `0x4e47a0`
+/// names no rect (fonts plus overlay mount plus song-table walk
+/// only); bnd-audit 35 (no `.bnd` for loading).
 fn loading_track_origin(frame: &Frame<'_>) -> (i32, i32) {
     (frame.w as i32 / 4, frame.h as i32 / 2 - 8)
 }
 
 /// Inner width of the OPEN placeholder track on this frame
-/// (`w / 2`: centered placeholder, no exe-grounded width).
+/// (`w / 2`: centered placeholder, no exe-grounded width — none
+/// of the measured bar bodies above is the loading fill).
 fn loading_track_width(frame: &Frame<'_>) -> u32 {
     u32::try_from(frame.w as i32 / 2).unwrap_or(0)
 }
 
 /// Song-caption origin: one row below the OPEN placeholder bar
-/// (`w / 4, h / 2 + 12` — no verified caption rect).
+/// (`w / 4, h / 2 + 12` — no verified caption rect; the cover art
+/// carries baked credits, not a caption sub-rect).
 fn loading_song_origin(frame: &Frame<'_>) -> (i32, i32) {
     (frame.w as i32 / 4, frame.h as i32 / 2 + 12)
 }
@@ -5848,6 +5857,32 @@ mod paint_tests {
         assert_eq!(loading_track_origin(&frame), (16, 16));
         assert_eq!(loading_track_width(&frame), 32);
         assert_eq!(loading_song_origin(&frame), (16, 36));
+    }
+
+    #[test]
+    fn loading_placeholders_clear_every_measured_bar_body() {
+        // Honest-OPEN negative pin (read-only 7.55 sprite-55 walks):
+        // the centered placeholder track/caption match none of the
+        // measured bar/panel bodies, so none can ground them.
+        let frame = Frame {
+            buf: &mut vec![0u32; 800 * 600],
+            w: 800,
+            h: 600,
+        };
+        let track = loading_track_origin(&frame);
+        let width = loading_track_width(&frame);
+        let song = loading_song_origin(&frame);
+        assert_eq!((track, width, song), ((200, 292), 400, (200, 312)));
+        for measured in [
+            ((0, 0), (134, 37)),
+            ((0, 0), (65, 7)),
+            ((0, 0), (100, 45)),
+            ((619, 529), (119, 23)),
+            ((410, 210), (197, 179)),
+        ] {
+            assert_ne!((track, (width, 16)), measured);
+            assert_ne!(song, measured.0);
+        }
     }
 
     #[test]

@@ -4062,3 +4062,50 @@ test expected.
   passed; +1 vs the 1616 wedge-head baseline, shell +1 from the seat-grid
   fix tests, all other targets unchanged, 0 failures). No lint findings.
   No commits, no pushes.** This sweep touched only `docs/playtest.md`.
+
+## Regression sweep — 2026-11-08 14:03 UTC (HEAD `7646ce4`, tree clean at start)
+
+Live re-proof on the cover-head. Covers the three cover commits landed
+above the seatgrid-head baseline `c4c0317`: stage ojn cover illustration
+loading (`9970dd1`), feed walked ojn into loading cover (`2aba6b8`), and
+paint cover on real chart loads (`7646ce4`).
+
+- `cargo fmt --check`: clean, `exit=0` on the clean start state.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1636 passed, 0 failed, 0 ignored**, `exit=0` (two identical runs).
+  Per target: audio 20, dump 7, file 180, game 108, net 420,
+  render 89, shell 595, real_art 7, scenes 22, recomp2jam 188
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, 0 warning
+  lines.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 187 filtered out, 0.61 s) against local
+  Memoryer 7.2.0 (`Mode=Full`). Server log for this run
+  (`22:02:03 +08:00`): `Authorize session` →
+  `Create room: songflow` →
+  `Update room [000] music settings: [HX / X10 / o2ma757]` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Submit score: 2210`.
+- **Verdict: no regression — suite is green on the cover-head (1636
+  passed; +19 vs the 1617 seatgrid-head baseline: shell +9,
+  recomp2jam +10 from the cover-illustration tests, all other targets
+  unchanged, 0 failures). No lint findings. No commits, no pushes.**
+  This sweep touched only `docs/playtest.md`.
+- Tree note: a peer landed uncommitted edits mid-sweep
+  (`crates/o2jam-render/src/font.rs`,
+  `crates/o2jam-shell/src/screens/paint.rs`, `docs/channel-fill.md`;
+  143 insertions, 26 deletions). Mid-edit states briefly showed a
+  `cargo fmt` import-order diff and one failing shell cover test
+  (`loading_cover_paints_full_bleed_behind_bar_and_caption`, caption
+  scrim bottom-left); the peer kept editing and the final dirty-state
+  re-run is green: `cargo fmt --check` clean, `cargo clippy` clean,
+  `cargo test --workspace --no-fail-fast` **1639 passed, 0 failed**
+  (render 90, shell 597 — the peer's in-progress additions passing).
+  The 1636-passed verdict above is the clean-HEAD result.

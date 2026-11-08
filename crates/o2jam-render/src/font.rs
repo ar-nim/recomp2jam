@@ -81,11 +81,18 @@ pub fn embedded() -> Option<&'static RasterFont> {
 /// proportional `TextOutA`/`DrawTextA` runs, not fixed-pitch cells).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cell {
-    /// Gulimche 6x12: TEXT controls, lists, chat, captions.
+    /// Gulimche 6x12 w400: TEXT controls, lists, chat, captions
+    /// (`0x50f280`, control `+0x164`); also the loading gate's small
+    /// face (gate `+0x52c`, `0x4e47e8`-`0x4e483a`, `docs/gdi-text.md`).
     Box,
-    /// Gulimche/Arial 8x16: result readouts and rank rows.
+    /// Gulimche/Arial 8x16 w400: result readouts and rank rows
+    /// (builder `+0x64`/`+0x68`, `0x4c2871`-`0x4c289b`).
     Result,
-    /// Trebuchet MS 27x65: loading-gate display text.
+    /// Trebuchet MS 27x65 w400: loading-gate display text (gate
+    /// `+0x524`, `0x4e47e8`-`0x4e483a`); `CreateFontA` width 27,
+    /// height 65 maps to this cell's `(27, 65)` one-to-one. The
+    /// gate's Arial 7x14 (`+0x528`) has no dedicated cell and its
+    /// Gulimche 6x12 (`+0x52c`) shares [`Cell::Box`].
     Loading,
 }
 
@@ -101,7 +108,9 @@ impl Cell {
     }
 
     /// Bitmap fallback face for this cell: the micro 3x5 glyphs for
-    /// the small box cell, the 5x7 glyphs for the larger cells.
+    /// the small box cell, the 5x7 glyphs for the larger cells (the
+    /// Loading 27x65 Trebuchet face falls back to the 5x7 bitmap —
+    /// an approximation only while the TTF asset is missing).
     #[must_use]
     pub const fn bitmap_micro(self) -> bool {
         matches!(self, Cell::Box)
@@ -521,6 +530,18 @@ mod tests {
             number_width_with(None, 507, Cell::Box),
             3 * crate::GLYPH_ADVANCE - 1
         );
+    }
+
+    #[test]
+    fn loading_cell_pins_the_gate_trebuchet_face() {
+        // Gate `0x4e47a0` (`0x4e47e8`-`0x4e483a`, `docs/gdi-text.md`):
+        // Trebuchet MS 27x65 w400 at `+0x524` maps one-to-one to
+        // this cell; Arial 7x14 (`+0x528`) has no dedicated cell and
+        // Gulimche 6x12 (`+0x52c`) shares Box.
+        assert_eq!(Cell::Loading.size(), (27, 65));
+        assert_eq!(Cell::Box.size(), (6, 12));
+        assert!(!Cell::Loading.bitmap_micro());
+        assert!(Cell::Box.bitmap_micro());
     }
 
     #[test]
