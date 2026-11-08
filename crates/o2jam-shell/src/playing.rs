@@ -1674,18 +1674,21 @@ impl LivePlay {
         &mut self.scene
     }
 
-    /// Paint the right-side avatar scene plus bottom tally strip over
-    /// the highway and staged art — this is the over-art layer, so the
-    /// LONGNOTE COMBO caption plate rides here too (staged scene art
-    /// paints after [`Self::paint`], and the caption must cover it,
-    /// like the strip readouts). Counts feed from the live [`Score`];
-    /// state is untouched (shared `&self` like a query).
+    /// Paint the peer gauges plus the right-side avatar scene and bottom
+    /// tally strip over the highway and staged art — this is the over-art
+    /// layer, so the LONGNOTE COMBO caption plate rides here too (staged
+    /// scene art paints after [`Self::paint`], and the caption must cover
+    /// it, like the strip readouts). The peer gauges sit on the staged
+    /// venue art, so file order puts them here, after the overlay.
+    /// Counts feed from the live [`Score`]; state is untouched (shared
+    /// `&self` like a query).
     pub fn paint_avatar_scene(
         &self,
         frame: &mut Frame<'_>,
         avatar: Option<&AvatarFigure>,
         now_ms: u64,
     ) {
+        self.paint_peer_bars(frame);
         self.scene
             .paint(frame, avatar, &self.score, now_ms, self.song_end_ms());
         self.paint_long_combo_caption(frame);
@@ -2454,15 +2457,15 @@ impl LivePlay {
         }
     }
 
-    /// Paint highway, notes, tails, peer bars, jam gauge, panel-strip
-    /// score/combo, bursts, and word.
+    /// Paint highway, notes, tails, jam gauge, panel-strip score/combo,
+    /// bursts, and word. Peer bars stay out: they ride the over-art layer
+    /// ([`Self::paint_avatar_scene`], after the staged overlay).
     pub fn paint(&mut self, frame: &mut Frame<'_>, geom: &HighwayGeometry, now_ms: u64) {
         self.advance_to(now_ms);
         self.view.paint_curtained(frame, geom, self.curtain);
         self.paint_hold_tails(frame, geom);
         self.paint_hit_bursts(frame, geom, now_ms);
         self.paint_jam_flash(frame, geom, now_ms);
-        self.paint_peer_bars(frame);
         self.paint_jam_gauge(frame);
         self.paint_panel_strip(frame);
         self.paint_judgement_word(frame, geom, now_ms);
@@ -3897,6 +3900,15 @@ mod live_play_tests {
             &geom(),
             0,
         );
+        live.paint_avatar_scene(
+            &mut Frame {
+                buf: &mut bare,
+                w: 70,
+                h: 60,
+            },
+            None,
+            0,
+        );
         assert_ne!(bare[65], empty_red);
         live.apply_peer_stats(0, STAT_LIFE, 0);
         let mut shell = vec![0u32; 70 * 60];
@@ -3907,6 +3919,15 @@ mod live_play_tests {
                 h: 60,
             },
             &geom(),
+            0,
+        );
+        live.paint_avatar_scene(
+            &mut Frame {
+                buf: &mut shell,
+                w: 70,
+                h: 60,
+            },
+            None,
             0,
         );
         assert_eq!(shell[65], empty_red);
@@ -3921,7 +3942,79 @@ mod live_play_tests {
             &geom(),
             0,
         );
+        live.paint_avatar_scene(
+            &mut Frame {
+                buf: &mut filled,
+                w: 70,
+                h: 60,
+            },
+            None,
+            0,
+        );
         assert_eq!(filled[65], full_green);
+    }
+
+    #[test]
+    fn peer_bars_paint_over_staged_venue_art() {
+        // File-order rule: the peer gauges sit on the staged venue
+        // art, so the over-art layer must cover it — slot 0 stays
+        // green where the venue pixel overlaps the bar.
+        use crate::avatar::{AvatarFigure, FigureLayer, ScenePlacement};
+        use crate::screens::paint::{paint_playing_overlay, SceneArt};
+        use o2jam_render::Rgb555Image;
+        use std::collections::HashMap;
+        let mut venue = AvatarFigure::default();
+        venue.push_layer(FigureLayer {
+            image: Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap(),
+            dx: 760,
+            dy: 4,
+            colorkey: 0xFFFF,
+        });
+        let art = SceneArt {
+            placements: vec![ScenePlacement {
+                id: "IDC_IMAGE_SPLAY_BACK1".to_owned(),
+                code: 0,
+                sprite: Some("Playing_BG.ojs".to_owned()),
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 0,
+                    h: 0,
+                },
+            }],
+            figures: HashMap::from([("Playing_BG.ojs".to_owned(), venue)]),
+        };
+        let mut live = LivePlay::new(&[]);
+        live.apply_peer_stats(0, STAT_LIFE, LIFE_MAX);
+        let mut buf = vec![0u32; 800 * 600];
+        let geom = HighwayGeometry::centered(800, 600);
+        live.paint(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &geom,
+            0,
+        );
+        paint_playing_overlay(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &art,
+        );
+        live.paint_avatar_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            None,
+            0,
+        );
+        assert_eq!(buf[4 * 800 + 760], pack_xrgb(0x20, 0xE0, 0x20));
     }
 
     #[test]

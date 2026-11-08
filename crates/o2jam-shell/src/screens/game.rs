@@ -496,6 +496,50 @@ impl ScreenGame {
             .is_some_and(|mode| mode == o2jam_net::GameMode::Live)
     }
 
+    /// Self room-master state: the joined room's seat id names our
+    /// seat, and seat 0 is the creator — the 4043 header derives the
+    /// local `+0x30` flag as 1 exactly when the requesting member id
+    /// is 0 (files `0x159bdf`/`0x159c1b`/`0x159c4d`, `docs/relay.md`
+    /// §10). The waiting setup swaps START/READY on this flag (file
+    /// `0xae38e`: the master arm enables `START 0x16202012` and hides
+    /// `READY 0x16202013`; the non-master arm at file `0xae805`
+    /// reverses them), and the `MUSELECT 0x16200003` click handler
+    /// drops non-master clicks (file `0xb2622`, `je 0xb268d`).
+    #[must_use]
+    pub fn is_room_master(&self) -> bool {
+        self.waiting
+            .as_ref()
+            .is_some_and(|room| room.member_id == 0)
+    }
+
+    /// Every occupied peer seat ready: the `START 0x16202012` click
+    /// path runs this check (file `0xb5560`) — it skips our own seat
+    /// (member id at `0x77cd04`), requires each occupied seat
+    /// (`[i + 0x778a16] == 1`) to carry a nonzero ready byte
+    /// (`[i * 0x2190 + 0x77eec2]`, slot base `0x77ee90` + `0x32`),
+    /// and returns -1 while any occupied peer is unready, so START
+    /// errors instead of emitting. Vacant/locked seats (`None`)
+    /// never block.
+    #[must_use]
+    pub fn all_peers_ready(&self) -> bool {
+        let Some(room) = self.waiting.as_ref() else {
+            return false;
+        };
+        room.slots.iter().all(|slot| {
+            slot.member
+                .as_ref()
+                .is_none_or(|member| slot.index == room.member_id || member.ready)
+        })
+    }
+
+    /// The master may start only with every peer ready; non-masters
+    /// never start — they ready up (4008, owned by the session
+    /// bridge), so their Confirm stays in Waiting.
+    #[must_use]
+    pub fn can_start_game(&self) -> bool {
+        self.is_room_master() && self.all_peers_ready()
+    }
+
     /// Remember the host song choice (`SetRoomMusic` 4000 body);
     /// Waiting paints its title and difficulty panel, and the chosen
     /// chart's difficulty byte selects the playing life-bar deltas.
@@ -1014,9 +1058,16 @@ impl ScreenGame {
             }
             (None, None) => paint_screen(frame, Screen::Waiting),
         }
-        self.paint_select_music_art(frame);
-        self.paint_select_music_structure(frame);
-        self.paint_selected_song_panel(frame);
+        // Song selection is the room master's alone (the `MUSELECT
+        // 0x16200003` click handler drops non-master clicks, file
+        // `0xb2622`): only a master self sees the dialog and the
+        // chosen-song panel. The staged `BPM` caption stays for
+        // everyone (non-masters pick speed from it).
+        if self.is_room_master() {
+            self.paint_select_music_art(frame);
+            self.paint_select_music_structure(frame);
+            self.paint_selected_song_panel(frame);
+        }
     }
 
     /// Paint the song-select dialog structure over the staged art:
@@ -1548,7 +1599,16 @@ impl GameLoop for ScreenGame {
             (Screen::Room, MenuKey::Confirm)
             | (Screen::Loading, MenuKey::Back)
             | (Screen::Result, MenuKey::Confirm) => self.enter(Screen::Waiting),
-            (Screen::Waiting, MenuKey::Confirm) if self.take_chat_message().is_none() => {
+            // `START 0x16202012` runs the all-ready check (file
+            // `0xb5560`): the master starts only with every occupied
+            // peer ready, and non-masters never start — they ready up
+            // (4008, owned by the session bridge), so their Confirm
+            // stays in Waiting. With no joined room there is no
+            // master state, and the offline walk keeps advancing.
+            (Screen::Waiting, MenuKey::Confirm)
+                if self.take_chat_message().is_none()
+                    && (self.waiting.is_none() || self.can_start_game()) =>
+            {
                 self.enter(Screen::Loading);
             }
             _ => {}
@@ -3670,6 +3730,119 @@ mod game_tests {
     fn confirm_with_an_empty_draft_advances_to_loading() {
         let mut game = ScreenGame::new();
         walk_to_waiting(&mut game);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Loading);
+    }
+
+    /// Seat of a non-master self: the creator keeps seat 0, so any
+    /// other seat id is a guest (`+0x30` derives from id 0,
+    /// `docs/relay.md` §10).
+    fn guest_room() -> JoinedRoom {
+        let mut room = waiting_room();
+        room.member_id = 5;
+        room.slots[0].index = 1;
+        room
+    }
+
+    #[test]
+    fn waiting_non_master_hides_select_but_keeps_bpm() {
+        // Only the master opens music selection (file `0xb2622`
+        // drops non-master `MUSELECT` clicks): a guest self sees no
+        // dialog art, no structure, and no chosen-song panel — but
+        // the staged `BPM` caption stays (guests pick speed from it).
+        let (placements, figures) = corner_scene_art("AlbumList.ojs");
+        let mut game = ScreenGame::new();
+        let mut room = guest_room();
+        room.music_id = 757;
+        game.set_joined_room(room);
+        walk_to_waiting(&mut game);
+        game.load_select_music_scene(placements, figures);
+        stage_waiting_song(&mut game);
+        let blob = waiting_song_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_song_catalog(&entries);
+        game.load_scene(
+            Screen::Waiting,
+            vec![
+                ScenePlacement {
+                    id: "IDC_IMAGE_SWAIT_COVERAVATAR1".to_owned(),
+                    code: 0,
+                    sprite: None,
+                    rect: Rect {
+                        x: 28,
+                        y: 53,
+                        w: 141,
+                        h: 175,
+                    },
+                },
+                ScenePlacement {
+                    id: "IDC_TEXT_SWAIT_BPM".to_owned(),
+                    code: 0,
+                    sprite: None,
+                    rect: Rect {
+                        x: 620,
+                        y: 60,
+                        w: 60,
+                        h: 20,
+                    },
+                },
+            ],
+            HashMap::new(),
+        );
+        assert!(!game.is_room_master());
+        let buf = paint_waiting_frame(&mut game, 800, 600);
+        // No dialog art at the origin, no structure scrims, no
+        // chosen-song panel rows below the seats (staged art without
+        // figures leaves the frame untouched, so absence reads 0) —
+        // but the BPM scrim inks its rect.
+        assert_eq!(buf[0], 0);
+        assert_eq!(buf[95 * 800 + 30], 0);
+        assert_eq!(buf[450 * 800 + 100], 0);
+        assert_eq!(buf[458 * 800 + 100], 0);
+        assert_eq!(buf[58 * 800 + 616], pack_xrgb(0x08, 0x08, 0x10));
+    }
+
+    #[test]
+    fn waiting_non_master_confirm_stays_in_waiting() {
+        // Guests never start (no `START` arm for them, file
+        // `0xae805`): their Confirm readies up through the session
+        // bridge instead, so the shell stays in Waiting.
+        let mut game = ScreenGame::new();
+        game.set_joined_room(guest_room());
+        walk_to_waiting(&mut game);
+        assert!(!game.is_room_master());
+        assert!(game.all_peers_ready());
+        assert!(!game.can_start_game());
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+    }
+
+    #[test]
+    fn waiting_master_start_needs_every_peer_ready() {
+        // `START 0x16202012` runs the all-ready check (file
+        // `0xb5560`): an unready occupied peer blocks the master,
+        // and the start fires once every peer is ready.
+        let mut game = ScreenGame::new();
+        let mut room = waiting_room();
+        room.slots[0].index = 1;
+        room.slots[0]
+            .member
+            .as_mut()
+            .expect("fixture seats a peer")
+            .ready = false;
+        game.set_joined_room(room);
+        walk_to_waiting(&mut game);
+        assert!(game.is_room_master());
+        assert!(!game.all_peers_ready());
+        assert!(!game.can_start_game());
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+        game.waiting.as_mut().expect("room joined").slots[0]
+            .member
+            .as_mut()
+            .expect("fixture seats a peer")
+            .ready = true;
+        assert!(game.can_start_game());
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Loading);
     }

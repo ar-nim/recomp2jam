@@ -2671,7 +2671,9 @@ pub fn paint_playing_backdrop(frame: &mut Frame<'_>, art: &SceneArt) {
 /// it), then the static backdrop panels (`Playing_Menu.ojs`, the
 /// life/jam edge gauges, the level plate) and the bound gauges and
 /// buttons (`State_Playing.bnd` ordinals 1–17) on top. Lanes stay
-/// uncovered and notes keep their top slot.
+/// uncovered and notes keep their top slot. Procedural peer gauges sit
+/// above this overlay: `LivePlay::paint_avatar_scene` paints them after,
+/// in file order over the venue art they cover.
 pub fn paint_playing_overlay(frame: &mut Frame<'_>, art: &SceneArt) {
     let exclusions = playing_lane_exclusions(frame.w, frame.h);
     paint_behind_placements(frame, &art.placements, &art.figures, &exclusions);

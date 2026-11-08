@@ -229,3 +229,51 @@ compare-shaped scan can see. Superseded by the Difficulty rows in
   `rooms.rs` per-value tests do not depend on them.
 - `relay_enum_value_tests` still locks the value sets on the Rust side;
   `rooms.rs` per-value tests below mirror them.
+
+## Waiting master gate (7.55 static map)
+
+Static only over the local install-root copy (read-only, VA = file +
+`0x400000`); behavior described in own words with file offsets plus
+local-static record ids (sha256 of the record tag, truncated to 32
+hex). Tools: `python3` byte scans plus Capstone disassembly; no
+disassembly is reproduced.
+
+The local `+0x30` flag is the gate: the waiting dialog setup (func
+file `0xae350`) reads byte `[0x77cd30]` at file `0xae38e` and
+branches (`ev_4e9784550b1e5c943d601df12e9f0988`, observed). The
+master arm enables `START 0x16202012` (fetch at file `0xae3b4`, arm
+`1` at file `0xae3d3`) and disables `READY 0x16202013` (fetch at
+file `0xae3e1`, arm `0` at file `0xae3ff` plus the frame reset through
+`0x42f870`); the non-master arm at file `0xae805` sets the READY
+frame and disables START (arm `0` at file `0xae859`). The
+`MUSELECT 0x16200003` music-select button has no non-master setup
+arm at all — and its click handler drops non-master clicks outright:
+the dispatch case at file `0xb2622` reads `[0x77cd30]`, tests it, and
+`je 0xb268d` skips the dialog open (master path calls the dialog
+opener `0x4bd2e0` and forwards UI event 7 through `0x478c90`)
+(`ev_451db8ca6908ca2f2e8a812bdb3080a8`, observed). So only the
+master opens music selection; non-masters keep the staged `BPM`
+caption (their speed picker) with no select control.
+
+The START click itself (dispatch compare at file `0xb2315`) runs the
+all-ready check first: it calls the readiness function at file
+`0xb5560` (`ev_de3fc543dcc420684f7bbdc6698ff87f`, observed), which
+loops the 8 seats, skips our own (member id at `0x77cd04`), requires
+each occupied seat (`[i + 0x778a16] == 1`) to carry a nonzero ready
+byte (`[i * 0x2190 + 0x77eec2]` — slot base `0x77ee90` + `0x32`, the
+`MEMBER_OFF_ROOM_MASTER`-family slot map in `docs/relay.md` §10),
+and returns -1 while any occupied peer is unready. The click path
+then emits an error instead of the start event: `> 0` → error `0xfaa`,
+`-1` → start emit (`0x16202012` + `0x6497ec`), `-2` → error `0xfc2`,
+`-5` → alternate emit (`0x6497bc`). The master starts only with
+every peer ready; non-masters ready up (4008) instead of starting.
+
+Shell mirror (`crates/o2jam-shell/src/screens/game.rs`):
+`is_room_master` (seat id 0, the creator — the 4043 header derives
+`+0x30 = 1` exactly when the requesting member id is 0,
+`docs/relay.md` §10), `all_peers_ready` (occupied non-self slots
+ready), `can_start_game` (both). The waiting song panel plus the
+select dialog art/structure/OK pill paint only for the master; the
+staged `BPM` caption paints for everyone. Waiting Confirm advances
+to Loading only with no joined room (offline walk) or
+`can_start_game`; a non-master or unready Confirm stays in Waiting.
