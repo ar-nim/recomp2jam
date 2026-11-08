@@ -541,6 +541,76 @@ remain, gateway logged the close, no `.dmp`). Containment held: Xvfb
 (`/tmp/siclickD.c`, `/tmp/siclickH.c`, `/tmp/warp_only.py`) and shots
 (`/tmp/click2-*.png`) are scratch-only, outside the repo.
 
+## Attempt 10 — room stage → CREATE ROOM dialog, wall at CREATE OK (2026-11-08)
+
+Goal: from the live room list, click through room join/create to waiting
+room, song select, song start. Result: reached the CREATE ROOM dialog
+twice (방만들기 → NORMAL → 3KEY DRUM selected), but its OK button
+ignores every stimulus and no room-create opcode is ever emitted. No
+waiting room, no song select, no gameplay. The room stage carries a
+~40 s server-timeout fuse ("no response" modal) whose only exit is a
+disconnect. Helpers, launchers, and shots are scratch-only in `/tmp`
+(`j10-*.png`, `sikey/siret/stype/sspy` sources + `winegcc` builds).
+
+### Path re-walked (two full round trips, same containment)
+
+Boot: `/tmp/o2jam-j10.fish` (3600 s launcher, Xvfb `:98`, ko prefix,
+`PULSE_SINK=wine_null`). Notice → H-tab XTEST (145,105) → fallback OK
+XTEST (400,362) → channel list (`03E8`/`03EA`) → warp 입장 (526,248),
+blob-verify, `SendInput` single → `03EC → 0FBE → 07D0 → 07D2 → 13A4`
+(+ `07DA`/`07E8`) → room list, twice (17:22:23, 17:23:59). 입장 aim
+uses closed-loop screenshots now: warp, shoot, locate the orange cursor
+by warm-pixel blobs (`/tmp/findcursor.py`, connected components; tip
+≈ 13×21 px, n≈131), re-warp by delta. Tracking is exactly 1:1
+(warp Δ moves the tip by Δ, pixel-verified); one warp fired during a
+stage transition never moved the sprite, so every aim is re-verified
+before firing. Button rects measured in framebuffer pixels: Ch.01 입장
+face x 502–550 / y 236–260; 방만들기 green fill (511,374)–(599,402)
+center (555,388); CREATE OK glyph centroid (397,465); NORMAL panel
+(285,260); 3KEY DRUM (336,345); title field x 287–500 / y ~130–160.
+
+### CREATE ROOM opens, OK never fires
+
+방만들기 click (single round 1, double round 3) opens CREATE ROOM
+(title `CREATE ROOM`, 방제목 field, NORMAL/LIVE/GHOST panels, 3KEY
+DRUM/7KEY MIX, 비밀번호 field, OK pill). NORMAL click selects (orange
+border, 3KEY/7KEY light up); 3KEY click selects (own border). Then OK,
+sprite tip verified on the glyph centroid before every fire: single ×3,
+double ×2, 1.5 s long-press ×1, `SendInput` Return ×2, Space ×1, XTEST
+×1 — all genuine (`fg=0x10088`, `n=1`, `err=0`), zero visual change,
+zero new `server-live.log` lines across all of them.
+
+### Room-name attempt fails: keystrokes never reach the canvas edit
+
+Per owner direction the title field was tried: it renders empty with a
+blinking caret. Focus click + double-click on the field (tip verified
+inside), then `/tmp/stype.exe.so` (`winegcc` `SendInput` typer)
+`o2test` / `o2test2` — 13 characters, field pixel-identical before and
+after. `/tmp/sspy.exe.so` (in-desktop window census) explains why: the
+game window has NO child windows (title field is canvas-drawn, not an
+EDIT), `GetFocus()=NULL`, `GetActiveWindow()=NULL`, and a `Wine IME`
+window is present — the canvas edit's key pump takes nothing, likely
+IME-related. Typing Latin into the room title is a second, independent
+blocker on the same dialog.
+
+### Side findings
+
+- Room-stage fuse: ~40 s after entry a modal `서버로 부터 응답이
+  없습니다` ("no response from server") notice appears (rounds 1–2;
+  the late `07DA`/`07E8` pair precedes it by seconds). Its OK ignores
+  all three mouse variants but `SendInput` Return (alone — `siret`)
+dismisses it straight into `FFF0` disconnect + return to the notice
+  carousel. Round 3 (CREATE open the whole time) ran 4+ min with no
+  popup: the fuse belongs to the bare room list, not a global timer.
+- Launcher hygiene gotcha: the 600 s `/tmp/o2jam-click.fish` timeout
+  expired mid-attempt (17:20:28, `opendesktop=(nil)`, black desktop,
+  no `.dmp` — kill, not crash). Re-ran under a 3600 s launcher;
+  reaped at the end (`pkill -9 -x OTwo.exe`, zero remain, session
+  close logged, no dumps, `install-root` untouched).
+- Opcode census for the session: `03E8`/`03EA`/`03EC`/`0FBE`/`07D0`/
+  `07D2`/`07DA`/`07E8`/`13A4` ×2 chains + one `FFF0`; nothing else.
+  No room-create/join opcode exists in any Wine run to date.
+
 ## Boot stage reached and blockers
 
 Reached (maps to `docs/lifecycle.md` stages 0–3, never 4+, plus an unmapped pre-AVI notice overlay; Attempt 9 adds the room list past `STATE_CHANNEL`):
@@ -568,7 +638,15 @@ button rect (row bar, not 입장). Position-verified `SendInput` clicks
 channel on all three variants: single, double, and 1.5 s long-press
 all yield `03EC → 0FBE → 07D0 → 07D2 → 13A4` and the room stage.
 Next: drive past the room stage (room create/join), M/G/QUEST/TUTORIAL
-tabs.
+tabs. Update 2026-11-08 (Attempt 10): 입장 wall stays breached — the
+new wall is the CREATE ROOM OK button (8 distinct stimuli fail with
+the tip verified on-rect: single x3, double x2, long-press, Return x2,
+Space, XTEST) plus canvas title-entry (13 SendInput chars, zero pixels;
+no child windows, no focus, IME present). No waiting room, song select,
+or gameplay reached. The bare room list also carries a ~40 s
+server-timeout fuse whose notice exits only via disconnect (Return →
+FFF0 → carousel). Next: an IME-aware key path (scancode/Unicode sends,
+Han/Eng toggle) for the title, or evidence for what enables CREATE OK.
 2. Init-time `ACCESS_VIOLATION`s (game RVA `0x1F2893` with session argv;
    wild jump to `0xFFBC11B0` in one bare run with media DLLs loaded).
 3. Possible Wine/wow64 contribution to (2): identical wild address in an
