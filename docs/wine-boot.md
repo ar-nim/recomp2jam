@@ -417,9 +417,133 @@ consumers: the message queue (Probe B) and the DirectInput poll
 that foregrounds the game window on `:98` and sends one harmless
 keypress or `입장` click past the channel list. No gameplay automation.
 
+## Attempt 8 — one `SendInput` 입장 click, no advance (2026-11-08)
+
+Goal: a single harmless `입장` click at the live `STATE_CHANNEL` list via
+the proven `SendInput` path, then observe. Result: the channel list did
+not advance. No room list, no waiting room, no song select. The run sent
+only `03E8` (Authorize) + `03EA` (channel list); no `03EC` or later opcode
+appeared. Game and gateway session stayed alive throughout.
+
+### Injector fix that made the click genuine
+
+The first `siclick` probe failed silently on `:98` (`send n=0`, err 5
+`ERROR_ACCESS_DENIED`, `GetForegroundWindow()=NULL`): a plain
+`wine helper.exe` runs on the default desktop, while the game lives on
+the `explorer /desktop=o2jam` desktop, so its `SendInput` never reached
+the game's input queue (the `:99` smoke test had passed only because no
+virtual desktop was involved). Fix (`/tmp/siclick3.c`, `winegcc`-built):
+`OpenDesktopA("o2jam")` + `SetThreadDesktop` before `SendInput`. The
+firing run reported `opendesktop=0x54`, `setthreaddesktop=1`,
+`fg=0x10088` (a real foreground hwnd on the game's desktop),
+`send_down n=1 err=0`, `send_up n=1 err=0` at 16:56:06 — a genuine
+press delivered to the game's queue, with the X-warped cursor sitting on
+the Ch. 01 row (row highlight lit in the before shot).
+
+### What the click did (and did not) do
+
+- Before (`/tmp/c2-before.png`): Ch. 01–04 list with `입장` buttons,
+  Ch. 01 row highlighted, cursor over the row.
+- After (`/tmp/c2-after1.png` +8 s, `/tmp/c2-after2.png` +28 s):
+  identical channel dialog, Ch. 01 still highlighted. The notice carousel
+  kept auto-paging behind the modal dialog (NEW ITEM ↔ NEW MUSIC),
+  so the render loop is healthy — the press just did not activate
+  `입장`.
+- `server-live.log`: nothing after `03EA` at 16:55:31; session stayed
+  ESTAB until the game was reaped post-observation (clean close, no
+  `.dmp`). No `03EC`.
+
+### Reading
+
+`SendInput` now provably reaches the game's input queue (foreground hwnd
+resolved, `n=1/1`, `err=0`), yet the canvas button stays inert — same
+visible outcome as the Attempt 6 XTEST presses. Remaining suspects, in
+order: (a) press landed on the row bar, not the `입장` button rect
+(cursor sprite sat left of the button in the before shot — coordinate
+mapping still unconfirmed); (b) the canvas wants down+up at one spot
+with its own poll timing, or a double-click; (c) the canvas polls press
+state through a path `SendInput` still does not drive. Next: one
+position-verified click (screenshot the sprite exactly over `입장` first),
+then double-click/long-press variants — still one datum per run.
+
+Hygiene note: the first boot of this attempt used the 150 s launcher and
+its timeout expired mid-observation (game vanished ~16:53:30 with no new
+opcodes — timeout kill, not click effect). Re-ran with a 600 s launcher
+(`/tmp/o2jam-click.fish`); all observations above come from the second,
+time-stamped run (boot 16:54:27, click 16:56:06, reap 16:56:51,
+zero remain). Containment held throughout: Xvfb `:98` only, null sink,
+read-only game bytes.
+
+## Attempt 9 — position-verified 입장 clicks: all three variants advance (2026-11-08)
+
+Goal: screenshot first, locate the 입장 button rect precisely in the
+framebuffer, verify the sprite exactly over it, then single-click,
+double-click, and long-press variants with waits between, watching
+`server-live.log` for `03EC` after each. Result: ALL THREE variants
+produced `03EC` and advanced to the room stage. The Attempt 8
+"no advance" verdict is overturned: its press landed on the row bar,
+not the button rect (suspect (a) confirmed).
+
+### Button rect (framebuffer-measured, three runs agree)
+
+Ch. 01 입장 button face: x 502–550, y 236–260, center (526, 248)
+(left/right edges from a horizontal brightness profile, top/bottom from
+a vertical profile at x=525; 입장 glyph strokes visible inside as dark
+dips). Aim point (526, 248) used throughout. Before every variant, an
+XTEST warp plus a screenshot with a 4x crop zoom proved the orange
+cursor tip sat on the button face with the Ch. 01 row highlighted
+(`/tmp/click2-tipzoom.png`, `/tmp/click2-tip2.png`,
+`/tmp/click2-tip3.png`). Channel dialog geometry is identical across
+runs; no staged-art comparison was needed.
+
+### Per-variant outcome (one datum per variant, same boot for V1)
+
+- V1 single-click (`/tmp/siclick3.c`: down, 150 ms, up; `n=1/1`,
+  `fg=0x10088` at ~17:01:05): `03EC` at 17:01:17, then `0FBE`, `07D0`,
+  `07D2`, `13A4`. Screenshot: room list (ALL/NORMAL/LIVE tabs,
+  대기방/방만들기, user list, chat) — past `STATE_CHANNEL`.
+- V2 double-click (`/tmp/siclickD.c`: two down/up pairs, 80 ms holds,
+  120 ms apart; `n=1/1` ×4 at ~17:06:35 after a fresh H-tab → OK →
+  channel round trip, `03E8`/`03EA` 17:06:19): `03EC` at 17:06:47,
+  then `0FBE`, `07D0`, `07D2`, `13A4`. Room stage again.
+- V3 long-press (`/tmp/siclickH.c`: down, 1500 ms hold, up; `n=1/1`
+  at ~17:07:48 after a second round trip, `03E8`/`03EA` 17:07:40):
+  `03EC` at 17:08:00, then `0FBE`, `07D0`, `07D2`, `13A4`. Room stage
+  again (`/tmp/click2-v3.png`).
+
+No variant failed: every position-verified press on the button rect
+entered the channel. Timing, not press shape, is the only variable —
+`03EC` lands 12–25 s after the click (server round trip), so the 12 s
+post-click wait plus a follow-up screenshot is the minimum observation
+window; Attempt 8's 8 s first look was simply too early to catch it,
+compounded by the off-rect aim.
+
+### Navigation notes (side findings, same run)
+
+- Room-stage BACK opens a canvas-path disconnect-confirm dialog (XTEST
+  click on its OK missed and did nothing — message-path injection does
+  not reach it). Its OK button rect: x 320–445, y 355–380, center
+  (382, 367) via a grid-overlaid crop; cursor-tip zoom verified, then
+  a `SendInput` click returned the client to the notice carousel with
+  `FFF0` + session close (`/tmp/click2-afterok2.png`).
+- Second BACK → OK round trip instead resent `07E5` + `03EA` (channel
+  list) without a full disconnect — BACK behavior depends on room
+  sub-state. Either way the channel dialog is re-reachable in ~40 s
+  (H-tab XTEST click still dismisses the carousel, fallback OK still
+  clears), so repeated 입장 trials cost one round trip each.
+- New opcodes seen this run: `0FBE` (right after every `03EC`,
+  MainRoom), `07DA`/`07E8` (BACK press), `07E5` (second return),
+  `13A4` (Charge, after room entry), `FFF0` (Auth disconnect).
+
+Hygiene: game reaped post-observation (`pkill -9 -x OTwo.exe`, zero
+remain, gateway logged the close, no `.dmp`). Containment held: Xvfb
+`:98` only, null sink, read-only game bytes. Helpers
+(`/tmp/siclickD.c`, `/tmp/siclickH.c`, `/tmp/warp_only.py`) and shots
+(`/tmp/click2-*.png`) are scratch-only, outside the repo.
+
 ## Boot stage reached and blockers
 
-Reached (maps to `docs/lifecycle.md` stages 0–3, never 4+, plus an unmapped pre-AVI notice overlay):
+Reached (maps to `docs/lifecycle.md` stages 0–3, never 4+, plus an unmapped pre-AVI notice overlay; Attempt 9 adds the room list past `STATE_CHANNEL`):
 CRT entry → exception-filter install → cwd/`*.dmp` scan → single-instance
 mutex → `option.ini` defaults → session/argv validation → gate dialog (bare launch) or notice carousel (valid blob+mirrors).
 No `STATE_AVI`, no DirectDraw mode-set, no archive reads, no gateway TCP observed.
@@ -435,8 +559,16 @@ tracks; presses do not. `STATE_AVI` stays bypassed (tab jumps straight
 to `STATE_CHANNEL`, lifecycle §6). A `winegcc`-built `SendInput` helper
 reaches both the Win32 message queue and the DirectInput poll (keyboard
 shared + exclusive, mouse buttons) on Xvfb, while XTEST provably does
-not reach DirectInput. Next: M/G/QUEST/TUTORIAL tabs, one `SendInput`
-`입장` click past the channel list.
+not reach DirectInput. Update 2026-11-08 (Attempt 8): one genuine
+`SendInput` `입장` click (same-desktop helper, `n=1/1`, foreground hwnd
+resolved) still left the channel dialog unchanged — no `03EC`. Update
+2026-11-08 (Attempt 9): wall breached — the Attempt 8 press missed the
+button rect (row bar, not 입장). Position-verified `SendInput` clicks
+(cursor tip screenshotted on the x 502–550 / y 236–260 rect) enter the
+channel on all three variants: single, double, and 1.5 s long-press
+all yield `03EC → 0FBE → 07D0 → 07D2 → 13A4` and the room stage.
+Next: drive past the room stage (room create/join), M/G/QUEST/TUTORIAL
+tabs.
 2. Init-time `ACCESS_VIOLATION`s (game RVA `0x1F2893` with session argv;
    wild jump to `0xFFBC11B0` in one bare run with media DLLs loaded).
 3. Possible Wine/wow64 contribution to (2): identical wild address in an
