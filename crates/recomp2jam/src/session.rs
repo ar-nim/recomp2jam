@@ -29,11 +29,23 @@
 //! [`OnlineSession::flush_channel_whisper`], `/h`/`/help` with no
 //! packet — the same peek-send-clear bridge as the waiting 3011 path
 //! ([`OnlineSession::flush_chat_action`]).
+//!
+//! Lobby notices (Channel scene): every paint drains waiting 2016
+//! announcements and 2029 rank notices under the same short timeout
+//! as the stats echo window and folds each into the channel history
+//! through [`ScreenGame::push_channel_announcement`] and
+//! [`ScreenGame::push_channel_rank_notification`] — the same
+//! best-effort shape as the 4015 echo drain: keepalives skip
+//! silently, foreign ids log and skip, undecodable bodies drop with
+//! a trace. Empty notices and invalid ranks stage no row (the shell
+//! push rules), so the drain never invents one.
 
 use std::time::Duration;
 
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery};
-use o2jam_net::rooms::{SendMainRoomMessage, SendWaitingMessage, SendWhisper};
+use o2jam_net::rooms::{
+    Announcement, RankNotification, SendMainRoomMessage, SendWaitingMessage, SendWhisper,
+};
 use o2jam_net::{Frame, GameStatsUpdate, GatewayConnection, Generic, Request, WireMessage};
 use o2jam_shell::screens::game::SlashCommand;
 use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
@@ -45,6 +57,10 @@ use crate::live_stats::{apply_peer_update, jam_tick_for_score, life_tick_for_liv
 /// quiet or laggy gateway. A dropped tick retries on the next moved
 /// snapshot; a missed echo window retries on the next paint.
 const STATS_IO_TIMEOUT: Duration = Duration::from_millis(1);
+/// Short socket window for the per-frame notice section (the 2016/2029
+/// drain): the same never-stall shape as the stats section — a missed
+/// notice window retries on the next paint.
+const NOTICE_IO_TIMEOUT: Duration = Duration::from_millis(1);
 /// Resting gateway timeout outside the stats section: the transport
 /// default (`client.rs` `DEFAULT_IO_TIMEOUT`), restored after every
 /// stats section like `run_song_flow` restores `SONG_FLOW_IO_TIMEOUT`.
@@ -397,6 +413,72 @@ impl OnlineSession {
             update.rank_packet(),
         );
     }
+
+    /// Per-frame notice section in `Channel`: drain waiting 2016/2029
+    /// frames under the short notice timeout so a quiet gateway never
+    /// stalls the frame loop — the same timeout-restore shape as
+    /// [`Self::poll_stats`].
+    fn poll_channel_notices(&mut self) {
+        if self.game.screen() != Screen::Channel {
+            return;
+        }
+        if let Err(source) = self.gateway.set_timeouts(Some(NOTICE_IO_TIMEOUT)) {
+            tracing::debug!(%source, "notice section skipped: timeout rejected");
+            return;
+        }
+        self.drain_channel_notices();
+        if let Err(source) = self.gateway.set_timeouts(Some(SESSION_IO_TIMEOUT)) {
+            tracing::debug!(%source, "notice timeout restore failed");
+        }
+    }
+
+    /// Drain waiting 2016 announcements and 2029 rank notices into the
+    /// channel history until the socket goes quiet — the 4015 echo
+    /// drain's best-effort shape, minus the peer mirror: each frame
+    /// applies through its shell push, keepalives skip silently,
+    /// foreign ids log and skip (`ERRORS-19`: nothing is dropped
+    /// without a trace).
+    fn drain_channel_notices(&mut self) {
+        loop {
+            match self.gateway.next_frame() {
+                Ok(frame) if frame.id == Announcement::COMMAND => {
+                    self.apply_announcement(&frame);
+                }
+                Ok(frame) if frame.id == RankNotification::COMMAND => {
+                    self.apply_rank_notice(&frame);
+                }
+                Ok(frame) if Generic::from_id(frame.id).is_some() => {}
+                Ok(frame) => {
+                    tracing::debug!(id = frame.id, "skipping non-notice frame in notice drain");
+                }
+                Err(_) => break,
+            }
+        }
+    }
+
+    /// Fold one 2016 frame into the channel history (undecodable bodies
+    /// drop with a trace; the socket position is already past them).
+    /// Empty notices stage no row — the [`ScreenGame`] push rule — so
+    /// the drain never consumes a visible slot for one.
+    fn apply_announcement(&mut self, frame: &Frame) {
+        let Ok(notice) = Announcement::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable announcement");
+            return;
+        };
+        self.game.push_channel_announcement(&notice);
+    }
+
+    /// Fold one 2029 frame into the channel history (undecodable bodies
+    /// drop with a trace; the socket position is already past them).
+    /// Invalid packets stage no row — the [`ScreenGame`] push rule —
+    /// so the drain never invents a rank.
+    fn apply_rank_notice(&mut self, frame: &Frame) {
+        let Ok(notice) = RankNotification::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable rank notice");
+            return;
+        };
+        self.game.push_channel_rank_notification(&notice);
+    }
 }
 
 impl GameLoop for OnlineSession {
@@ -442,6 +524,7 @@ impl GameLoop for OnlineSession {
     fn paint(&mut self, frame: &mut o2jam_render::Frame<'_>) {
         self.game.paint(frame);
         self.poll_stats();
+        self.poll_channel_notices();
     }
 }
 
@@ -815,6 +898,137 @@ mod session_tests {
         session.menu_key(MenuKey::Confirm, true);
         server.join().unwrap();
         assert_eq!(session.game.chat_input(), "");
+    }
+
+    #[test]
+    fn announcement_drains_into_channel_history() {
+        use o2jam_net::rooms::Announcement;
+        let notice = Announcement {
+            content: "hello".to_owned(),
+        };
+        let (mut session, server) = channel_session(move |mut stream| {
+            stream.write_all(&notice.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        paint_frame(&mut session);
+        server.join().unwrap();
+        assert_eq!(session.game.channel_chat().len(), 1);
+        assert_eq!(session.game.channel_chat()[0].text, "hello");
+        assert!(session.game.channel_chat()[0].admin);
+    }
+
+    #[test]
+    fn rank_notice_drains_into_channel_history() {
+        use o2jam_net::rooms::RankNotification;
+        let notice = RankNotification {
+            invalid: false,
+            music_id: 757,
+            nickname: "host".to_owned(),
+            ranking: 1,
+        };
+        let (mut session, server) = channel_session(move |mut stream| {
+            stream.write_all(&notice.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        paint_frame(&mut session);
+        server.join().unwrap();
+        assert_eq!(session.game.channel_chat().len(), 1);
+        assert_eq!(session.game.channel_chat()[0].sender, "host");
+        assert_eq!(session.game.channel_chat()[0].text, "M757 1");
+    }
+
+    #[test]
+    fn invalid_rank_notice_stages_no_row_over_the_wire() {
+        use o2jam_net::rooms::RankNotification;
+        let notice = RankNotification {
+            invalid: true,
+            music_id: 757,
+            nickname: "host".to_owned(),
+            ranking: 1,
+        };
+        let (mut session, server) = channel_session(move |mut stream| {
+            stream.write_all(&notice.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        paint_frame(&mut session);
+        server.join().unwrap();
+        assert!(session.game.channel_chat().is_empty());
+    }
+
+    #[test]
+    fn empty_announcement_stages_no_row_over_the_wire() {
+        use o2jam_net::rooms::Announcement;
+        let notice = Announcement {
+            content: String::new(),
+        };
+        let (mut session, server) = channel_session(move |mut stream| {
+            stream.write_all(&notice.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        paint_frame(&mut session);
+        server.join().unwrap();
+        assert!(session.game.channel_chat().is_empty());
+    }
+
+    #[test]
+    fn keepalive_and_foreign_frames_skip_silently_during_notice_drain() {
+        use o2jam_net::rooms::Announcement;
+        let echo = GameStatsUpdate {
+            member_id: 2,
+            kind_code: StatKind::Life.as_u16(),
+            value: 1000,
+            ranks: [10, 11, 12, 13, 14, 15, 16, 17],
+        };
+        let notice = Announcement {
+            content: "hello".to_owned(),
+        };
+        let (mut session, server) = channel_session(move |mut stream| {
+            stream.write_all(&encode_frame(6001, &[])).unwrap();
+            stream.write_all(&echo.encode()).unwrap();
+            stream.write_all(&notice.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        paint_frame(&mut session);
+        server.join().unwrap();
+        // The 4015 echo skipped past the notice drain, so slot 2 keeps
+        // its default zero instead of the echo's 1000.
+        assert_eq!(session.peers().life(2), Some(0));
+        assert_eq!(session.game.channel_chat().len(), 1);
+        assert_eq!(session.game.channel_chat()[0].text, "hello");
+    }
+
+    #[test]
+    fn undecodable_rank_notice_drops_and_drain_continues() {
+        use o2jam_net::rooms::{Announcement, RankNotification};
+        let notice = Announcement {
+            content: "hello".to_owned(),
+        };
+        let (mut session, server) = channel_session(move |mut stream| {
+            stream
+                .write_all(&encode_frame(RankNotification::COMMAND, &[0u8; 3]))
+                .unwrap();
+            stream.write_all(&notice.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        paint_frame(&mut session);
+        server.join().unwrap();
+        assert_eq!(session.game.channel_chat().len(), 1);
+        assert_eq!(session.game.channel_chat()[0].text, "hello");
+    }
+
+    #[test]
+    fn notices_stay_undrained_outside_channel() {
+        use o2jam_net::rooms::Announcement;
+        let notice = Announcement {
+            content: "hello".to_owned(),
+        };
+        let (mut session, server) = waiting_session(move |mut stream| {
+            stream.write_all(&notice.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        paint_frame(&mut session);
+        server.join().unwrap();
+        assert!(session.game.channel_chat().is_empty());
     }
 
     #[test]

@@ -34,8 +34,8 @@ use o2jam_file::OjnListEntry;
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams, PEER_SLOT_COUNT};
 use o2jam_net::play::SetRoomMusic;
 use o2jam_net::rooms::{
-    MainRoomAdminMessage, MainRoomUserMessage, ReceiveWhisper, SendMainRoomMessage,
-    SendWaitingMessage, SendWhisper, WaitingAdminMessage, WaitingUserMessage,
+    Announcement, MainRoomAdminMessage, MainRoomUserMessage, RankNotification, ReceiveWhisper,
+    SendMainRoomMessage, SendWaitingMessage, SendWhisper, WaitingAdminMessage, WaitingUserMessage,
 };
 use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry};
 use o2jam_render::font::{draw_text_cell, Cell};
@@ -446,7 +446,8 @@ impl ScreenGame {
 
     /// Channels from the last online list (empty offline). Refreshing
     /// the list clears the channel chat history: rows come from that
-    /// list's 2013/2014/2019 packets only, never carried across lists.
+    /// list's 2013/2014/2016/2019/2029 packets only, never carried
+    /// across lists.
     pub fn set_channels(&mut self, channels: Vec<ChannelState>) -> &mut Self {
         self.channels = channels;
         self.highlight = 0;
@@ -530,8 +531,41 @@ impl ScreenGame {
         self
     }
 
+    /// Append one lobby announcement (2016) to the channel history:
+    /// the exe fans the notice text out as `0x7de` admin-message rows
+    /// (`docs/net-protocol.md`), so the row paints bare in the admin
+    /// amber — no sender brackets a sender-less notice. Empty notices
+    /// stage no row, so they never consume a visible slot.
+    pub fn push_channel_announcement(&mut self, message: &Announcement) -> &mut Self {
+        if message.content.is_empty() {
+            return self;
+        }
+        self.push_channel_row(ChannelChatMessage::announcement(&message.content));
+        self
+    }
+
+    /// Append one rank notice (2029) to the channel history, unless the
+    /// packet carries no rank: the exe drops the packet when the
+    /// invalid word is nonzero (`docs/net-protocol.md`). The row
+    /// brackets the ranked nickname and names song plus rank in the
+    /// admin amber — the exact notice-board wording stays OPEN (the
+    /// exe forwards the triple as a UI-queue event, not a bracket
+    /// line), so the text joins the three wire fields with no
+    /// invention beyond the join.
+    pub fn push_channel_rank_notification(&mut self, message: &RankNotification) -> &mut Self {
+        if message.invalid {
+            return self;
+        }
+        self.push_channel_row(ChannelChatMessage::rank(
+            &message.nickname,
+            message.music_id,
+            message.ranking,
+        ));
+        self
+    }
+
     /// Live channel chat rows, oldest first (empty until a
-    /// 2013/2014/2019 packet arrives).
+    /// 2013/2014/2016/2019/2029 packet arrives).
     #[must_use]
     pub fn channel_chat(&self) -> &[ChannelChatMessage] {
         &self.channel_chat
@@ -2004,7 +2038,9 @@ impl GameLoop for ScreenGame {
 
 #[cfg(test)]
 mod game_tests {
-    use super::super::paint::{background_of, seat_origin, RESULT_MUSIC_BOX};
+    use super::super::paint::{
+        background_of, channel_chat_row_text, seat_origin, RESULT_MUSIC_BOX,
+    };
     use super::*;
     use crate::avatar::AvatarFigure;
     use crate::screen::Screen;
@@ -3981,6 +4017,25 @@ mod game_tests {
         }
     }
 
+    fn channel_announcement(text: &str) -> o2jam_net::rooms::Announcement {
+        o2jam_net::rooms::Announcement {
+            content: text.to_owned(),
+        }
+    }
+
+    fn channel_rank(
+        nickname: &str,
+        music_id: i32,
+        ranking: i32,
+    ) -> o2jam_net::rooms::RankNotification {
+        o2jam_net::rooms::RankNotification {
+            invalid: false,
+            music_id,
+            nickname: nickname.to_owned(),
+            ranking,
+        }
+    }
+
     #[test]
     fn waiting_chat_starts_empty() {
         let game = ScreenGame::new();
@@ -4053,6 +4108,65 @@ mod game_tests {
             game.channel_chat()[0].whisper_recipient.as_deref(),
             Some("me")
         );
+    }
+
+    #[test]
+    fn pushing_a_channel_announcement_stages_a_bare_admin_row() {
+        let mut game = ScreenGame::new();
+        game.push_channel_announcement(&channel_announcement("hello"));
+        assert_eq!(game.channel_chat().len(), 1);
+        assert!(game.channel_chat()[0].admin);
+        assert_eq!(channel_chat_row_text(&game.channel_chat()[0]), "hello");
+    }
+
+    #[test]
+    fn empty_announcement_stages_no_row() {
+        let mut game = ScreenGame::new();
+        game.push_channel_announcement(&channel_announcement(""));
+        assert!(game.channel_chat().is_empty());
+    }
+
+    #[test]
+    fn pushing_a_channel_rank_notification_names_music_nickname_and_rank() {
+        let mut game = ScreenGame::new();
+        game.push_channel_rank_notification(&channel_rank("host", 757, 1));
+        assert_eq!(game.channel_chat().len(), 1);
+        assert!(game.channel_chat()[0].admin);
+        assert_eq!(
+            channel_chat_row_text(&game.channel_chat()[0]),
+            "[        host] M757 1"
+        );
+    }
+
+    #[test]
+    fn invalid_rank_notification_stages_no_row() {
+        let mut game = ScreenGame::new();
+        game.push_channel_rank_notification(&o2jam_net::rooms::RankNotification {
+            invalid: true,
+            music_id: 757,
+            nickname: "host".to_owned(),
+            ranking: 1,
+        });
+        assert!(game.channel_chat().is_empty());
+    }
+
+    #[test]
+    fn refreshing_channels_clears_notice_rows() {
+        let mut game = ScreenGame::new();
+        game.push_channel_announcement(&channel_announcement("hello"));
+        game.push_channel_rank_notification(&channel_rank("host", 757, 1));
+        game.set_channels(two_channels());
+        assert!(game.channel_chat().is_empty());
+    }
+
+    #[test]
+    fn channel_notices_share_the_fifty_row_bound() {
+        let mut game = ScreenGame::new();
+        for index in 0..55 {
+            game.push_channel_announcement(&channel_announcement(&format!("line{index}")));
+        }
+        assert_eq!(game.channel_chat().len(), 50);
+        assert_eq!(game.channel_chat()[0].text, "line5");
     }
 
     #[test]

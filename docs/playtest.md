@@ -3268,3 +3268,58 @@ commands route 2017 (`c9e94ed`), plus the sweep log in this file.
   and recomp2jam 128 → 135 from the whisper slash-command tests, all
   other targets unchanged, 0 failures). No lint findings. No commits,
   no pushes.** This sweep touched only `docs/playtest.md`.
+
+## Regression sweep — 2026-11-08 12:21 UTC+8 (HEAD `5bb1c5b`, tree dirty mid-sweep)
+
+Live re-proof on the notice-head. Covers the notice commit landed
+after the whisper-head baseline `c9e94ed`: decode announce and rank
+notices (`5bb1c5b`: `command.rs` + `message.rs` notice variants,
+`rooms.rs` announce/rank decode, `net-protocol.md` notes), plus the
+sweep log in this file.
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1503 passed, 0 failed, 0 ignored**, `exit=0`.
+  Per target: audio 20, dump 7, file 177, game 94, net 387,
+  render 89, shell 565, real_art 7, scenes 22, recomp2jam 135
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, no warnings.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 134 filtered out, 0.59 s) against local
+  Memoryer 7.2.0 (`Mode=Full`). Server log for this run
+  (`12:21:00 +08:00`): `Authorize session` →
+  `Get channel list: [0]` → `Enter channel: [0/00]` →
+  `Get character info: [tester]` → `Create room: songflow` →
+  `Update room [000] music settings: [HX / X10 / o2ma757]` →
+  `Update room [000] arena: [1] (0)` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Update #1 - Jam: 3 (Bonus: 0)` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure stack on room delete; a trailing session walked
+  `Authorize session` → `Get channel list` → `Enter channel` →
+  `Get room list` → `Get character info`).
+- **Verdict: no regression on HEAD — suite is green on the notice-head
+  (1503 passed; +12 vs the 1491 `c9e94ed` baseline: net 375 → 387
+  from the announce/rank notice decode tests, all other targets
+  unchanged, 0 failures). No lint findings on HEAD. No commits, no
+  pushes.** This sweep touched only `docs/playtest.md`.
+- Tree note: a peer landed uncommitted notice follow-up work after the
+  first gate pass (`crates/o2jam-shell/src/screens/paint.rs`: 2016
+  announcement + 2029 rank-notice chat rows, `rank_notice_text`,
+  bare-text bracket rule; then `screens/game.rs`: `channel_announcement`
+  / `channel_rank` constructors). Re-ran on the dirty state: fmt now
+  reports 3 diffs, all in the peer's `game.rs`; clippy `-- -D warnings`
+  fails with 2 dead-code errors (`channel_announcement`, `channel_rank`
+  never used); `cargo test --workspace` stays green at **1511 passed,
+  0 failed** (shell 565 → 573 from the peer's +8 tests, all else
+  unchanged); `cargo build --workspace --release` clean, `exit=0`.
+  Every remaining finding sits inside the peer's uncommitted files —
+  left alone per the sweep rules (this sweep fixed nothing and touched
+  only `docs/playtest.md`).

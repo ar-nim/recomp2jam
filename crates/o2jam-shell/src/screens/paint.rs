@@ -1727,9 +1727,12 @@ const CHANNEL_CHAT_VISIBLE_ROWS: usize = 6;
 /// Channel chat rows share the lobby list pitch (8 px).
 const CHANNEL_CHAT_ROW_H: i32 = 8;
 
-/// One channel chat row from a live 2013/2014/2019 packet
+/// One channel chat row from a live 2013/2014/2016/2019/2029 packet
 /// (`ScreenGame` converts the wire message into this display form;
-/// the painter never decodes the wire).
+/// the painter never decodes the wire). Announcements (2016) carry
+/// notice text with no sender; rank notices (2029) bracket the
+/// ranked nickname around the song-plus-rank text; both ride the
+/// admin amber like 2014 rows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChannelChatMessage {
     /// Chatter nickname.
@@ -1776,20 +1779,65 @@ impl ChannelChatMessage {
             whisper_recipient: Some(recipient.to_owned()),
         }
     }
+
+    /// Lobby announcement row (2016): sender-less notice text in the
+    /// admin amber — the exe fans the string out as `0x7de`
+    /// admin-message rows (`docs/net-protocol.md`), so the painter
+    /// inks it like a 2014 row and prints it bare (no bracket
+    /// without a sender).
+    #[must_use]
+    pub fn announcement(text: &str) -> Self {
+        Self {
+            sender: String::new(),
+            text: text.to_owned(),
+            admin: true,
+            whisper_recipient: None,
+        }
+    }
+
+    /// Rank-notice row (2029): the ranked nickname bracketed, song
+    /// id plus rank as the text, in the admin amber (the same `0x7de`
+    /// family as the announcement rows).
+    #[must_use]
+    pub fn rank(nickname: &str, music_id: i32, ranking: i32) -> Self {
+        Self {
+            sender: nickname.to_owned(),
+            text: rank_notice_text(music_id, ranking),
+            admin: true,
+            whisper_recipient: None,
+        }
+    }
+}
+
+/// Display text of one rank notice (2029): the song id in the lobby
+/// `M{id}` shape plus the raw rank value (`M757 1`). The exe stages
+/// music id, nickname, and ranking in `.data` slots and forwards a
+/// UI-queue event (`0, 0, 0x7ed, 0x12`) rather than a bracket line
+/// (`docs/net-protocol.md`), so the exact notice-board wording stays
+/// OPEN — this names all three wire fields, joined with no invention
+/// beyond the join.
+#[must_use]
+pub fn rank_notice_text(music_id: i32, ranking: i32) -> String {
+    format!("M{music_id} {ranking}")
 }
 
 /// Display text of one channel row: the waiting `[%12s] %s` bracket
 /// line for channel rows; whisper rows name both ends as
-/// `[sender -> recipient] text` so the addressee stays visible.
+/// `[sender -> recipient] text` so the addressee stays visible;
+/// sender-less announcement rows paint their text bare (no bracket
+/// without a sender).
 #[must_use]
 pub fn channel_chat_row_text(message: &ChannelChatMessage) -> String {
-    match message.whisper_recipient.as_deref() {
-        Some(recipient) => format!(
+    if let Some(recipient) = message.whisper_recipient.as_deref() {
+        return format!(
             "[{:>12} -> {:>12}] {}",
             message.sender, recipient, message.text
-        ),
-        None => format!("[{:>12}] {}", message.sender, message.text),
+        );
     }
+    if message.sender.is_empty() {
+        return message.text.clone();
+    }
+    format!("[{:>12}] {}", message.sender, message.text)
 }
 
 /// Rows the channel history shows: the newest [`CHANNEL_CHAT_VISIBLE_ROWS`].
@@ -1801,9 +1849,10 @@ pub fn channel_chat_visible_messages(messages: &[ChannelChatMessage]) -> &[Chann
 
 /// Paint live channel rows below the channel list: the newest visible
 /// rows stack at the lobby 8 px pitch, straight on the scene (no scrim
-/// band), each in its appended ink — 2014 admin rows amber, every
-/// other row user gray ([`chat_row_ink`]). Rows come only from live
-/// packets; empty histories paint nothing.
+/// band), each in its appended ink — 2014 admin rows, 2016
+/// announcements, and 2029 rank notices amber, every other row user
+/// gray ([`chat_row_ink`]). Rows come only from live packets; empty
+/// histories paint nothing.
 pub fn paint_channel_chat(
     frame: &mut Frame<'_>,
     messages: &[ChannelChatMessage],
@@ -6055,6 +6104,31 @@ mod paint_tests {
             0,
         );
         assert!(has_ink_near(&buf, pack_xrgb(0xE6, 0x71, 0x00)));
+    }
+
+    #[test]
+    fn announcement_row_paints_bare_text_in_admin_amber() {
+        let row = ChannelChatMessage::announcement("hello");
+        assert!(row.admin);
+        assert_eq!(channel_chat_row_text(&row), "hello");
+        let mut buf = vec![0u32; 64 * 48];
+        paint_channel_chat(
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 48,
+            },
+            &[row],
+            0,
+        );
+        assert!(has_ink_near(&buf, pack_xrgb(0xE6, 0x71, 0x00)));
+    }
+
+    #[test]
+    fn rank_row_brackets_nickname_and_names_song_and_rank() {
+        let row = ChannelChatMessage::rank("host", 757, 1);
+        assert!(row.admin);
+        assert_eq!(channel_chat_row_text(&row), "[        host] M757 1");
     }
 
     #[test]
