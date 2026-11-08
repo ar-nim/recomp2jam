@@ -3536,3 +3536,57 @@ mirrors (`f6d4f21`), plus the sweep log in this file.
   the session-mirrors drain tests, all other targets unchanged,
   0 failures). No lint findings. No commits, no pushes.** This sweep
   touched only `docs/playtest.md`.
+
+## Regression sweep — 2026-11-08 13:26 UTC+8 (HEAD `6dddd6c`, tree clean at gates)
+
+Live re-proof on the p3-head. Covers the cli commit landed after the
+mirrors-head baseline `f6d4f21`: windowed song select with chart fetch
+(`6dddd6c`), plus the sweep log in this file.
+
+- `cargo fmt --check`: clean, `exit=0` (on clean HEAD at sweep start).
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1568 passed, 0 failed, 0 ignored**, `exit=0`.
+  Per target: audio 20, dump 7, file 177, game 94, net 402,
+  render 89, shell 578, real_art 7, scenes 22, recomp2jam 172
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, no warnings.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 171 filtered out, 0.61 s) against local
+  Memoryer 7.2.0 (`Mode=Full`). Server log for this run
+  (`13:25:02 +08:00`): `Authorize session` →
+  `Get channel list: [0]` → `Enter channel: [0/00]` →
+  `Get character info: [tester]` → `Create room: songflow` →
+  `Update room [000] music settings: [HX / X10 / o2ma757]` →
+  `Update room [000] arena: [1] (0)` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Update #1 - Jam: 3 (Bonus: 0)` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure stack on room delete; a trailing session walked
+  `Authorize session` → `Get channel list` → `Enter channel` →
+  `Get room list` → `Get character info`).
+- **Verdict: no regression — suite is green on the p3-head (1568
+  passed; +10 vs the 1558 `f6d4f21` baseline, all recomp2jam
+  162 → 172 from the windowed song-select chart-fetch tests, all
+  other targets unchanged, 0 failures). No lint findings. No commits,
+  no pushes.** This sweep touched only `docs/playtest.md`.
+- Tree note: a peer saved uncommitted in-flight work after every
+  clean-HEAD gate above had finished
+  (`crates/recomp2jam/src/session.rs` +426/-15, saved 13:25:16 +08:00).
+  Every count above is the clean-HEAD result. Re-run on the dirty
+  state: `cargo fmt --check` FAILS (`exit=1`, 2 diff hunks, both in
+  the peer's `session.rs`: a `send_frame` chain wrap and a test
+  assert); `cargo clippy --workspace --all-targets -- -D warnings`
+  stays clean; `cargo test -p recomp2jam` → **177 passed, 0 failed**
+  (+5 from the peer's new session tests, all passing); the live flow
+  re-run on the dirty state → **ok** (1 passed, 176 filtered out,
+  0.59 s; server-logged `Submit score: 2210` at `13:26:04 +08:00`).
+  None of the fmt diffs are mine: per the sweep rules (touch only
+  `docs/playtest.md`, fix only my own lint findings) the peer's file
+  was left alone.

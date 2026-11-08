@@ -51,6 +51,31 @@
 //! per-seat write yet, so the barrier still proves through staged
 //! snapshots.
 //!
+//! Loading confirm (Loading scene): a joined Confirm sends
+//! `ConfirmMusicLoaded` 4012 (power-skill id 0 — no CLI or wire
+//! source names one — plus the staged pick's speed, else the joined
+//! room's) and enters Playing; a failed send keeps Loading, so the
+//! next Confirm retries it. The offline walk keeps its local
+//! Loading → Playing enter with no packet. Guests reach Loading on
+//! the same 4011 broadcast through
+//! `ScreenGame::force_advance_to_loading` — the START Confirm gate
+//! passes masters only, so a guest Confirm could never satisfy it.
+//!
+//! Result tally (Result scene): the first paint in Result after a
+//! joined play sends `SubmitScore` 4016 built from the live play
+//! score (counts, best combo, jam level and peak, saturated points,
+//! life, and hold bonus — the headless `connect::run_song_flow`
+//! tally shape), then `FinalizeRank` 4041 and `ExitPlaying` 4021 in
+//! the same order, and stages the battle mirror from the joined
+//! seats (teams per occupied slot, the local total on our seat, our
+//! team claimed) through `ScreenGame::set_battle_teams`. A failed
+//! send retries on the next paint; later paints send nothing, and
+//! leaving Result clears the latch. The shell's own Result
+//! Confirm/Back edges (Waiting for retry, Room for leave) stay
+//! untouched — no server answer decoder exists yet (4017/4018/4040
+//! stay unsent shapes here), so peer totals stay server-side and
+//! only the local total stages.
+//!
 //! Host song select (Waiting scene): `--online-music-id` stages a
 //! pending pick plus the installed `OJNList.dat` catalog; the next
 //! master Waiting Confirm sends `SetRoomMusic` 4000, `SetRoomArena`
@@ -95,7 +120,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use o2jam_file::{OjnListEntry, OJN_LEVEL_COUNT};
-use o2jam_game::{PeerBars, QueueEvent, RankDelivery};
+use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams};
 use o2jam_net::play::{MusicListAnswer, RoomArenaEcho};
 use o2jam_net::rooms::{
     Announcement, MainRoomAdminMessage, MainRoomUserMessage, RankNotification, ReceiveWhisper,
@@ -103,9 +128,10 @@ use o2jam_net::rooms::{
     WaitingAdminMessage, WaitingUserMessage,
 };
 use o2jam_net::{
-    Frame, GameStatsUpdate, GatewayConnection, Generic, GetMusicList, JoinResult, JoinRoom,
-    JoinRoomResponse, MemberReadyStateChanged, Ready, Request, SetRoomArena, SetRoomMusic,
-    StartGame, WireMessage,
+    ConfirmMusicLoaded, ExitPlaying, FinalizeRank, Frame, GameStatsUpdate, GatewayConnection,
+    Generic, GetMusicList, JoinResult, JoinRoom, JoinRoomResponse, JoinedRoom,
+    MemberReadyStateChanged, Ready, Request, SetRoomArena, SetRoomMusic, StartGame, SubmitScore,
+    WireMessage,
 };
 use o2jam_shell::screens::game::SlashCommand;
 use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
@@ -225,11 +251,21 @@ pub struct OnlineSession {
     /// `true` once a Room Confirm join staged a snapshot: Waiting
     /// Confirm then means START/READY instead of the offline walk.
     joined_waiting: bool,
+    /// Joined snapshot mirrored from the 3003 answer: the speed
+    /// behind the 4012/4016 sends plus the seats behind the battle
+    /// mirror (`None` until a join stages one).
+    joined_room: Option<JoinedRoom>,
     /// Guest ready toggle behind `Ready` 4008 (flips per Confirm).
     guest_ready: bool,
     /// `true` once the 4011 start broadcast arrived: the next
     /// draft-free Waiting paint advances the shell to Loading.
     start_announced: bool,
+    /// `true` once this Loading visit sent 4012 (cleared on
+    /// leaving Loading, so the next song confirms again).
+    loaded_sent: bool,
+    /// `true` once this Result visit sent the tally triple
+    /// (cleared on leaving Result, so the next song tallies again).
+    tally_sent: bool,
     /// Last slot action per seat, from 3009 updates (`None` while the
     /// seat never changed). The shell exposes no per-seat write yet,
     /// so this is the bridge query its paint follow-up will consume.
@@ -257,8 +293,11 @@ impl OnlineSession {
             last_selection: None,
             local_user: String::new(),
             joined_waiting: false,
+            joined_room: None,
             guest_ready: false,
             start_announced: false,
+            loaded_sent: false,
+            tally_sent: false,
             slot_actions: [None; 8],
             ready_echoes: [None; 8],
         }
@@ -761,6 +800,7 @@ impl OnlineSession {
             tracing::warn!("room join answered without a snapshot; staying in Room");
             return false;
         };
+        self.joined_room = Some(room.clone());
         self.game.set_joined_room(room);
         self.joined_waiting = true;
         true
@@ -862,6 +902,51 @@ impl OnlineSession {
             self.guest_ready = !self.guest_ready;
             tracing::warn!(%source, "ready send failed; Confirm retries it");
         }
+    }
+
+    /// Joined Loading Confirm: send `ConfirmMusicLoaded` 4012 (the
+    /// `run_song_flow` loaded shape, minus the headless tick tail)
+    /// and enter Playing. The chart staged earlier (host select
+    /// fetch, or manual `--chart`/`--ojm`), so the send runs at
+    /// Playing entry — after staging, never before. A failed send
+    /// keeps Loading, so the next Confirm retries it; an unknown
+    /// speed waits too (never an invented one). Without a join the
+    /// offline walk keeps its local enter with no packet.
+    fn confirm_loading(&mut self) {
+        if !self.joined_waiting {
+            self.game.menu_key(MenuKey::Confirm, true);
+            return;
+        }
+        if self.loaded_sent {
+            self.game.menu_key(MenuKey::Confirm, true);
+            return;
+        }
+        let Some(speed) = self.tally_speed() else {
+            tracing::warn!("loaded send blocked: no staged speed; Confirm retries it");
+            return;
+        };
+        let loaded = ConfirmMusicLoaded {
+            power_skill_id: 0,
+            speed,
+        };
+        if let Err(source) = self
+            .gateway
+            .send_frame(Request::ConfirmMusicLoaded.id(), &loaded.encode_body())
+        {
+            tracing::warn!(%source, "loaded send failed; Confirm retries it");
+            return;
+        }
+        self.loaded_sent = true;
+        self.game.menu_key(MenuKey::Confirm, true);
+    }
+
+    /// Speed behind the 4012/4016 sends: the staged pick first, else
+    /// the joined room's (`None` until a select or join stages one).
+    fn tally_speed(&self) -> Option<u8> {
+        if let Some(select) = self.last_selection {
+            return Some(select.speed);
+        }
+        self.joined_room.as_ref().map(|room| room.speed)
     }
 
     /// Per-frame stats section in `Playing`: one change-gated 4014 jam
@@ -983,6 +1068,101 @@ impl OnlineSession {
         );
     }
 
+    /// Result tally section: the first paint in Result after a joined
+    /// play submits the live tally triple and stages the battle
+    /// mirror. A failed send retries on the next paint (same
+    /// keep-on-failure shape as [`Self::maybe_send_tick`]); later
+    /// paints send nothing, and leaving Result clears the latch so
+    /// the next song tallies again. The offline walk never sends.
+    fn poll_tally(&mut self) {
+        if self.game.screen() != Screen::Result {
+            self.tally_sent = false;
+            return;
+        }
+        if !self.joined_waiting || self.tally_sent {
+            return;
+        }
+        let Some(speed) = self.tally_speed() else {
+            tracing::warn!("tally blocked: no staged speed; retrying next paint");
+            return;
+        };
+        match self.send_tally(speed) {
+            Ok(()) => self.tally_sent = true,
+            Err(source) => {
+                tracing::warn!(%source, "tally send failed; retrying next paint");
+            }
+        }
+    }
+
+    /// Send the end-of-song triple in the headless `run_song_flow`
+    /// order — `SubmitScore` 4016, `FinalizeRank` 4041, `ExitPlaying`
+    /// 4021 — then stage the battle mirror. Any failed send aborts
+    /// the rest, so the next paint retries the whole triple.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the gateway transport reports (ERRORS-01/02:
+    /// `Result`, propagated with `?`, never unwrapped per ERRORS-06).
+    fn send_tally(&mut self, speed: u8) -> Result<(), o2jam_net::Error> {
+        let tally = self.tally_packet(speed);
+        self.gateway
+            .send_frame(Request::SubmitScore.id(), &tally.encode_body())?;
+        self.gateway
+            .send_frame(Request::FinalizeRank.id(), &FinalizeRank.encode_body())?;
+        self.gateway
+            .send_frame(Request::ExitPlaying.id(), &ExitPlaying.encode_body())?;
+        self.stage_battle_teams(u64::from(tally.score));
+        Ok(())
+    }
+
+    /// Outgoing 4016 tally for the live play: judgement counts, best
+    /// combo, jam level and peak, saturated points, life, and hold
+    /// bonus — every narrowing conversion saturates (PERF-07:
+    /// `TryFrom`, never `as`).
+    fn tally_packet(&self, speed: u8) -> SubmitScore {
+        let play = self.game.live_play();
+        let score = play.score();
+        SubmitScore {
+            cool: saturate_u16(score.counts[0]),
+            good: saturate_u16(score.counts[1]),
+            bad: saturate_u16(score.counts[2]),
+            miss: saturate_u16(score.counts[3]),
+            max_combo: saturate_u16(score.max_combo),
+            jam: saturate_u16(score.jam.level()),
+            max_jam: saturate_u16(score.jam.max_level()),
+            score: saturate_u32(score.points),
+            life: saturate_u8(self.game.life()),
+            speed,
+            long_note_score: saturate_bonus(play.bonus().points()),
+        }
+    }
+
+    /// Stage the battle mirror from the joined seats: teams per
+    /// occupied slot, the local total on our seat, our team claimed
+    /// for the verdict. Peer totals stay server-side (no 4017/4040
+    /// decoder exists), so only the local total stages — a solo or
+    /// seat-less room stages teams with no winner.
+    fn stage_battle_teams(&mut self, local_points: u64) {
+        let Some(room) = self.joined_room.as_ref() else {
+            return;
+        };
+        let mut teams = RoomTeams::new();
+        for slot in &room.slots {
+            if let Some(member) = slot.member.as_ref() {
+                teams.set_team(usize::from(slot.index), member.team);
+            }
+        }
+        teams.submit(usize::from(room.member_id), local_points);
+        let self_team = room
+            .slots
+            .iter()
+            .find(|slot| slot.index == room.member_id)
+            .and_then(|slot| slot.member.as_ref())
+            .map(|member| member.team);
+        self.game.set_battle_teams(teams);
+        self.game.set_battle_self_team(self_team);
+    }
+
     /// Per-frame chat section in `Waiting`: drain inbound 3012/3013
     /// lines under the short chat timeout so a quiet gateway never
     /// stalls the frame loop — the same timeout-restore shape as
@@ -1006,10 +1186,11 @@ impl OnlineSession {
     /// `start_announced`, and an announced start advances the shell
     /// to Loading through its own Confirm gate — a pending chat draft
     /// holds the advance (peek-only, never eaten) so typed text is
-    /// never lost to the transition. The gate passes for the host and
-    /// the offline walk; a joined guest stays in Waiting — the shell
-    /// exposes no force-advance past its master gate (noted gap).
-    /// Leaving Waiting clears the announcement either way.
+    /// never lost to the transition. Masters advance through Confirm
+    /// (the readiness rule still holds them); joined guests advance
+    /// through `ScreenGame::force_advance_to_loading`, since the
+    /// START gate passes masters only and a guest Confirm could never
+    /// satisfy it. Leaving Waiting clears the announcement either way.
     fn poll_start(&mut self) {
         if self.game.screen() != Screen::Waiting {
             self.start_announced = false;
@@ -1021,7 +1202,11 @@ impl OnlineSession {
         if self.game.chat_slash_command() != SlashCommand::Empty {
             return;
         }
-        self.game.menu_key(MenuKey::Confirm, true);
+        if self.joined_waiting && !self.game.is_room_master() {
+            self.game.force_advance_to_loading();
+        } else {
+            self.game.menu_key(MenuKey::Confirm, true);
+        }
         if self.game.screen() != Screen::Waiting {
             self.start_announced = false;
         }
@@ -1245,6 +1430,10 @@ impl GameLoop for OnlineSession {
             }
             return;
         }
+        if key == MenuKey::Confirm && self.game.screen() == Screen::Loading {
+            self.confirm_loading();
+            return;
+        }
         self.game.menu_key(key, down);
     }
 
@@ -1258,9 +1447,13 @@ impl GameLoop for OnlineSession {
 
     fn paint(&mut self, frame: &mut o2jam_render::Frame<'_>) {
         self.game.paint(frame);
+        if self.game.screen() != Screen::Loading {
+            self.loaded_sent = false;
+        }
         self.poll_stats();
         self.poll_channel_chat();
         self.poll_waiting_chat();
+        self.poll_tally();
     }
 }
 
@@ -1268,6 +1461,24 @@ impl GameLoop for OnlineSession {
 /// `TryFrom`, never `as`).
 fn saturate_bonus(bonus: u64) -> i32 {
     i32::try_from(bonus).unwrap_or(i32::MAX)
+}
+
+/// Saturate one tally count onto the 4016 `u16` fields (PERF-07:
+/// `TryFrom`, never `as`).
+fn saturate_u16(count: u32) -> u16 {
+    u16::try_from(count).unwrap_or(u16::MAX)
+}
+
+/// Saturated local points for the 4016 score field (the shell reads
+/// the same word for its rank row; PERF-07: `TryFrom`, never `as`).
+fn saturate_u32(points: u64) -> u32 {
+    u32::try_from(points).unwrap_or(u32::MAX)
+}
+
+/// Saturated life word for the 4016 life byte (the avatar gauge
+/// reads `u16`; PERF-07: `TryFrom`, never `as`).
+fn saturate_u8(life: u16) -> u8 {
+    u8::try_from(life).unwrap_or(u8::MAX)
 }
 
 /// Borrow one catalog entry as an owned chart-fetch row.
@@ -1488,7 +1699,8 @@ mod session_tests {
         assert_eq!(game.screen(), Screen::Room);
         let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
         let mut session = OnlineSession::new(game, gateway);
-        session.game.set_joined_room(room);
+        session.game.set_joined_room(room.clone());
+        session.joined_room = Some(room);
         session.joined_waiting = true;
         session.game.menu_key(MenuKey::Confirm, true);
         assert_eq!(session.game.screen(), Screen::Waiting);
@@ -1949,19 +2161,224 @@ mod session_tests {
     }
 
     #[test]
-    fn guest_start_broadcast_stays_waiting_without_force_advance() {
+    fn guest_start_broadcast_advances_to_loading() {
         let (mut session, server) = joined_waiting_session(guest_snapshot(), |mut stream| {
             stream.write_all(&encode_frame(4011, &[])).unwrap();
             assert_quiet(&mut stream);
         });
-        for _ in 0..5 {
+        assert!(!session.game.is_room_master());
+        // No Confirm is pressed: the START gate passes masters
+        // only, so the guest reaches Loading on the broadcast
+        // through the force-advance path.
+        for _ in 0..50 {
+            if session.game.screen() == Screen::Loading {
+                break;
+            }
             paint_frame(&mut session);
         }
         server.join().unwrap();
-        // Gap: the shell Confirm gate passes masters only, and the
-        // shell exposes no force-advance — the guest waits here until
-        // that shell API lands.
+        assert_eq!(session.game.screen(), Screen::Loading);
+    }
+
+    #[test]
+    fn loading_confirm_sends_4012_then_enters_playing() {
+        use o2jam_net::{ConfirmMusicLoaded, Request};
+        let mut room = joined_snapshot();
+        room.slots[1].member = Some(member("peer", true));
+        let (mut session, server) = joined_waiting_session(room, |mut stream| {
+            let start = read_frame(&mut stream);
+            assert_eq!(start.id, 4010);
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            let loaded = read_frame(&mut stream);
+            assert_eq!(loaded.id, Request::ConfirmMusicLoaded.id());
+            assert_eq!(
+                ConfirmMusicLoaded::decode_body(&loaded.payload).unwrap(),
+                ConfirmMusicLoaded {
+                    power_skill_id: 0,
+                    speed: 1,
+                }
+            );
+            assert_quiet(&mut stream);
+        });
+        session.menu_key(MenuKey::Confirm, true);
+        for _ in 0..50 {
+            if session.game.screen() == Screen::Loading {
+                break;
+            }
+            paint_frame(&mut session);
+        }
+        assert_eq!(session.game.screen(), Screen::Loading);
+        session.menu_key(MenuKey::Confirm, true);
+        server.join().unwrap();
+        assert_eq!(session.game.screen(), Screen::Playing);
+    }
+
+    #[test]
+    fn loading_confirm_offline_sends_nothing() {
+        let (mut session, server) = waiting_session(|mut stream| {
+            assert_quiet(&mut stream);
+        });
+        session.menu_key(MenuKey::Confirm, true);
+        assert_eq!(session.game.screen(), Screen::Loading);
+        session.menu_key(MenuKey::Confirm, true);
+        server.join().unwrap();
+        assert_eq!(session.game.screen(), Screen::Playing);
+    }
+
+    #[test]
+    fn guest_loading_confirm_sends_room_speed_as_4012() {
+        use o2jam_net::{ConfirmMusicLoaded, Request};
+        let (mut session, server) = joined_waiting_session(guest_snapshot(), |mut stream| {
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            let loaded = read_frame(&mut stream);
+            assert_eq!(loaded.id, Request::ConfirmMusicLoaded.id());
+            assert_eq!(
+                ConfirmMusicLoaded::decode_body(&loaded.payload).unwrap(),
+                ConfirmMusicLoaded {
+                    power_skill_id: 0,
+                    speed: 1,
+                }
+            );
+            assert_quiet(&mut stream);
+        });
+        for _ in 0..50 {
+            if session.game.screen() == Screen::Loading {
+                break;
+            }
+            paint_frame(&mut session);
+        }
+        assert_eq!(session.game.screen(), Screen::Loading);
+        session.menu_key(MenuKey::Confirm, true);
+        server.join().unwrap();
+        assert_eq!(session.game.screen(), Screen::Playing);
+    }
+
+    /// Walk a joined host from Waiting to Result: START, 4011,
+    /// Loading Confirm (4012), one struck note, then the finished
+    /// chart auto-advances to Result on an explicit clock.
+    fn play_one_note_to_result(session: &mut OnlineSession) {
+        session.menu_key(MenuKey::Confirm, true);
+        for _ in 0..50 {
+            if session.game.screen() == Screen::Loading {
+                break;
+            }
+            paint_frame(session);
+        }
+        assert_eq!(session.game.screen(), Screen::Loading);
+        session.menu_key(MenuKey::Confirm, true);
+        assert_eq!(session.game.screen(), Screen::Playing);
+        session.game.load_chart(vec![(0, 1000, 7)]);
+        session.game.strike_at(0, 1000);
+        let mut buf = vec![0u32; 800 * 600];
+        session.game.paint_at(
+            &mut o2jam_render::Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            1_000_000,
+        );
+        assert_eq!(session.game.screen(), Screen::Result);
+    }
+
+    #[test]
+    fn result_entry_submits_live_tally_then_finalizes_and_exits() {
+        use o2jam_net::{ConfirmMusicLoaded, Request, SubmitScore};
+        let mut room = joined_snapshot();
+        room.slots[1].member = Some(member("peer", true));
+        let (mut session, server) = joined_waiting_session(room, |mut stream| {
+            assert_eq!(read_frame(&mut stream).id, 4010);
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            let loaded = read_frame(&mut stream);
+            assert_eq!(loaded.id, Request::ConfirmMusicLoaded.id());
+            assert_eq!(
+                ConfirmMusicLoaded::decode_body(&loaded.payload).unwrap(),
+                ConfirmMusicLoaded {
+                    power_skill_id: 0,
+                    speed: 1,
+                }
+            );
+            let tally = read_frame(&mut stream);
+            assert_eq!(tally.id, Request::SubmitScore.id());
+            assert_eq!(
+                SubmitScore::decode_body(&tally.payload).unwrap(),
+                SubmitScore {
+                    cool: 1,
+                    good: 0,
+                    bad: 0,
+                    miss: 0,
+                    max_combo: 1,
+                    jam: 0,
+                    max_jam: 0,
+                    score: 200,
+                    life: 255,
+                    speed: 1,
+                    long_note_score: 0,
+                }
+            );
+            assert_eq!(read_frame(&mut stream).id, Request::FinalizeRank.id());
+            assert_eq!(read_frame(&mut stream).id, Request::ExitPlaying.id());
+            assert_quiet(&mut stream);
+        });
+        play_one_note_to_result(&mut session);
+        paint_frame(&mut session);
+        paint_frame(&mut session);
+        server.join().unwrap();
+        // One triple total (the second paint resends nothing), and
+        // the shell still owns the retry edge back to Waiting.
+        assert_eq!(session.game.screen(), Screen::Result);
+        session.menu_key(MenuKey::Confirm, true);
         assert_eq!(session.game.screen(), Screen::Waiting);
+    }
+
+    #[test]
+    fn guest_tally_stages_winning_teams_and_leaves_to_room() {
+        let (mut session, server) = joined_waiting_session(guest_snapshot(), |mut stream| {
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            let loaded = read_frame(&mut stream);
+            assert_eq!(loaded.id, o2jam_net::Request::ConfirmMusicLoaded.id());
+            let tally = read_frame(&mut stream);
+            assert_eq!(tally.id, o2jam_net::Request::SubmitScore.id());
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::FinalizeRank.id()
+            );
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::ExitPlaying.id()
+            );
+            assert_quiet(&mut stream);
+        });
+        for _ in 0..50 {
+            if session.game.screen() == Screen::Loading {
+                break;
+            }
+            paint_frame(&mut session);
+        }
+        session.menu_key(MenuKey::Confirm, true);
+        assert_eq!(session.game.screen(), Screen::Playing);
+        session.game.load_chart(vec![(0, 1000, 7)]);
+        session.game.strike_at(0, 1000);
+        let mut buf = vec![0u32; 800 * 600];
+        session.game.paint_at(
+            &mut o2jam_render::Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            1_000_000,
+        );
+        paint_frame(&mut session);
+        // Both seats ride team 0 with only the local total staged,
+        // so the claimed local team takes rank 1.
+        assert_eq!(
+            session.game.battle_verdict(),
+            Some(o2jam_shell::screens::paint::BattleVerdict::Win)
+        );
+        // The shell still owns the leave edge back to Room.
+        session.menu_key(MenuKey::Back, true);
+        server.join().unwrap();
+        assert_eq!(session.game.screen(), Screen::Room);
     }
 
     #[test]
