@@ -1168,7 +1168,7 @@ mod cli_build_tests {
         // hardware: the silent sink counts queued frames with no device
         // open, so this stays green on headless CI. A live backend
         // reports its own playhead instead of the queued count.
-        use o2jam_audio::{AudioBackend, PcmSamples};
+        use o2jam_audio::PcmSamples;
         let mut backend = audio_backend(false);
         let pcm = PcmSamples {
             samples: vec![1000i16; 100],
