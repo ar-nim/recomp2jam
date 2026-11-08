@@ -7,6 +7,8 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 mod connect;
+#[cfg(test)]
+mod live_guard;
 mod live_stats;
 mod loading;
 mod session;

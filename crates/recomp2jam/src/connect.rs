@@ -1601,6 +1601,7 @@ mod song_flow_tests {
             CreateRoom, CreateRoomResponse, GameMode, Gender, KeyMode,
         };
 
+        let _live = crate::live_guard::hold_live_gateway();
         let address = std::env::var("O2JAM_LIVE_GATEWAY").unwrap_or_default();
         if address.is_empty() {
             eprintln!("skipping live song flow (set O2JAM_LIVE_GATEWAY=host:port)");

@@ -98,7 +98,10 @@
   `/tmp/mozart/Build/Release`.
 - Server config: `~/memoryer-local/config.ini` (relay at 127.0.0.1,
   Sqlite). Test account `tester` (any password works after
-  `user:authorize`; last token `61dcb457-5da9-4e22-af4b-5a4c5658f239`,
+  `user:authorize`; tokens rotate — current
+  `eebaccee-fde9-4c50-b941-fda6c7004376` since 2026-11-08, backup at
+  `~/scratch/o2jam-backup-20261108.db`; server stdin is `/dev/null`
+  so mint via SQL while it runs, or restart for console minting),
   `SessionExpiry=0` so it persists). Gateway `127.0.0.1:15010`,
   `Mode=Full`, `FreeMusic=true`, 562 musics.
 - **Never pipe a long-lived client into `head`**: SIGPIPE kills it when

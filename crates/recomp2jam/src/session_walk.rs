@@ -795,6 +795,89 @@ fn to_rgb(buf: &[u32]) -> Vec<u8> {
 #[cfg(test)]
 mod session_walk_tests {
     use super::*;
+    use std::sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    };
+
+    /// Shared strike-to-emission probe: one counter pair behind the
+    /// attached backend, so the walk test observes emission itself —
+    /// frames out plus nonzero samples out — not per-leg proofs.
+    #[derive(Debug, Clone, Default)]
+    struct EmissionProbe {
+        frames: Arc<AtomicU64>,
+        nonzero: Arc<AtomicU64>,
+    }
+
+    /// Counting backend over the real decoded bank: every struck key
+    /// sound lands here through `ScreenGame::pump_sounds`.
+    struct ProbeBackend {
+        probe: EmissionProbe,
+    }
+
+    impl o2jam_audio::AudioBackend for ProbeBackend {
+        fn play_pcm(
+            &mut self,
+            pcm: &o2jam_audio::PcmSamples,
+        ) -> Result<(), o2jam_audio::AudioError> {
+            let channels = u64::from(pcm.channels.max(1));
+            self.probe
+                .frames
+                .fetch_add(pcm.samples.len() as u64 / channels, Ordering::Relaxed);
+            let audible = pcm.samples.iter().filter(|sample| **sample != 0).count() as u64;
+            self.probe.nonzero.fetch_add(audible, Ordering::Relaxed);
+            Ok(())
+        }
+
+        fn samples_played(&self) -> u64 {
+            self.probe.frames.load(Ordering::Relaxed)
+        }
+    }
+
+    /// Live-plus-install guard: the walk config plus the chart path
+    /// for one installed song, or `None` (after a skip note) without
+    /// gateway credentials or without its chart and bank files.
+    fn guard_live_song_paths(music_id: u16) -> Option<(WalkConfig, PathBuf)> {
+        let address = std::env::var("O2JAM_LIVE_GATEWAY").unwrap_or_default();
+        if address.is_empty() {
+            eprintln!("skipping audible walk (set O2JAM_LIVE_GATEWAY=host:port)");
+            return None;
+        }
+        let token =
+            std::env::var("O2JAM_LIVE_TOKEN").expect("O2JAM_LIVE_TOKEN must hold a session guid");
+        let music =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root/O2Jam/Music");
+        let stem = format!("o2ma{music_id}");
+        let chart = music.join(format!("{stem}.ojn"));
+        let bank = music.join(format!("{stem}.ojm"));
+        for path in [&chart, &bank] {
+            if !path.is_file() {
+                eprintln!("skipping audible walk (missing {})", path.display());
+                return None;
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("walk-audible-{}", std::process::id()));
+        Some((WalkConfig::local(dir, token), chart))
+    }
+
+    /// Drive the live session walk to Playing (connect, host, select,
+    /// START, loaded confirm) without screenshots or the result tail.
+    fn walk_live_session_to_playing(config: &WalkConfig) -> Result<OnlineSession> {
+        let (report, gateway) = connect_transport(config)?;
+        let mut session = build_session(config, gateway)?;
+        stage_lobby_art(session.game_mut());
+        stage_live_lists(&mut session, &report);
+        session.lane_key(3, true);
+        session.menu_key(MenuKey::Confirm, true);
+        host_walk_room(&mut session)?;
+        session.menu_key(MenuKey::Confirm, true);
+        require_screen(&session, Screen::Waiting, "room enter")?;
+        run_song_select(&mut session, config)?;
+        stage_performance_art(session.game_mut());
+        send_start_and_drain(&mut session)?;
+        confirm_loaded(&mut session)?;
+        Ok(session)
+    }
 
     #[test]
     fn stage_names_cover_every_windowed_step() {
@@ -929,11 +1012,66 @@ mod session_walk_tests {
         assert_eq!(game.live_play().score().combo, 1);
     }
 
+    /// Guarded: needs `O2JAM_LIVE_GATEWAY` plus `O2JAM_LIVE_TOKEN`
+    /// and installed song 757 (`o2ma757.ojn`/`.ojm`). Walks the live
+    /// session to Playing, swaps a frame-counting backend over the
+    /// real decoded bank, strikes the first chart onset, and asserts
+    /// one observed counter moved with nonzero PCM — strike to
+    /// emission, not per-leg proofs.
+    #[test]
+    fn struck_live_notes_emit_audible_frames_through_real_bank() {
+        let _live = crate::live_guard::hold_live_gateway();
+        let Some((config, chart_path)) = guard_live_song_paths(757) else {
+            return;
+        };
+        let mut session =
+            walk_live_session_to_playing(&config).expect("live session walk to Playing");
+        let level = usize::from(config.difficulty).min(o2jam_file::OJN_LEVEL_COUNT - 1);
+        let prepared = session
+            .fetch_and_stage_chart(config.music_id, level)
+            .expect("live chart fetch stages");
+        let bank = session.bank_for_song(config.music_id, prepared.format_version);
+        assert!(!bank.is_empty(), "real bank decodes entries");
+        assert!(
+            bank.values()
+                .any(|pcm| pcm.samples.iter().any(|sample| *sample != 0)),
+            "bank carries nonzero PCM"
+        );
+        let chart_bytes = std::fs::read(&chart_path).expect("walk chart reads");
+        let events =
+            o2jam_file::parse_ojn_level_events(&chart_bytes, level).expect("walk level walks");
+        let chart = o2jam_game::build_level_chart(prepared.bpm, &events);
+        let (lane, at_ms, _) = chart
+            .hit_onsets_ms()
+            .first()
+            .copied()
+            .expect("walk chart taps a note");
+        let probe = EmissionProbe::default();
+        session.game_mut().with_audio(
+            Box::new(ProbeBackend {
+                probe: probe.clone(),
+            }),
+            bank,
+        );
+        let game = session.game_mut();
+        game.strike_at(usize::from(lane), at_ms);
+        assert_eq!(game.live_play().score().combo, 1);
+        assert!(
+            probe.frames.load(Ordering::Relaxed) > 0,
+            "struck note emits frames"
+        );
+        assert!(
+            probe.nonzero.load(Ordering::Relaxed) > 0,
+            "emitted frames carry nonzero PCM"
+        );
+    }
+
     /// Guarded: runs only with `O2JAM_LIVE_GATEWAY=host:port` and
     /// `O2JAM_LIVE_TOKEN=session-guid`. Drives the whole
     /// windowed-session walk and asserts one PNG per stage.
     #[test]
     fn walk_reaches_result_against_local_gateway() {
+        let _live = crate::live_guard::hold_live_gateway();
         let address = std::env::var("O2JAM_LIVE_GATEWAY").unwrap_or_default();
         if address.is_empty() {
             eprintln!("skipping session walk (set O2JAM_LIVE_GATEWAY=host:port)");

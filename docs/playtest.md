@@ -4221,3 +4221,36 @@ type-head baseline, plus the `session-walk` stage-art commit
   shell +4, recomp2jam +3 from the staged session-walk work,
   0 failures). No commits, no pushes.** This sweep touched only
   `docs/playtest.md`.
+
+## Regression sweep — 2026-11-08 22:58 UTC+8 (HEAD `ebd2adb`, tree clean)
+
+Live re-proof on the audio-head. Covers the key-sounds session-walk
+commit (`ebd2adb`: attach key sounds in session walk) landed after the
+session-head baseline `de98e62`.
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1655 passed, 0 failed, 0 ignored**, `exit=0`.
+  Per target: audio 20, dump 7, file 180, game 108, net 420,
+  render 90, shell 597, real_art 7, scenes 22, recomp2jam 204
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, 0 warning
+  lines.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 203 filtered out, 0.61 s) against local
+  Memoryer 7.2.0 (`Mode=Full`). Server log for this run
+  (`22:57:36 +08:00`): `Create room: songflow` →
+  `Get music list: [0/00] 562 music` → `Start game: [000]` →
+  `Game [000] Update #1 - Jam: 3 (Bonus: 0)` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure WARNs on room delete; a second session walked
+  `Get channel list: [0]` → `Enter channel` → `Get character info`).
+- **Verdict: no regression — suite is green on the audio-head (1655
+  passed; +8 vs the 1647 baseline, all recomp2jam +8 from the
+  key-sounds session-walk tests, all other targets unchanged,
+  0 failures). No lint findings. No commits, no pushes.** This sweep
+  touched only `docs/playtest.md`.
