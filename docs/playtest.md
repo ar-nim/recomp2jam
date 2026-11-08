@@ -4348,3 +4348,11 @@ windowed client, keyboard Enter/Escape only, focus verified.
   first room is number 0; the old `number != 0` filter ate our own
   rooms. Corrected to `number != 0 || !title.is_empty()` with the
   7.55 display rule OPEN. Panel-0 click then enters Waiting live.
+
+## Waiting dialog OK is display-only — 2026-11-09 02:35 +08:00 (HEAD `17e95cd`)
+
+Isolated live host walk (`smoke103`): dialog OK click at (390,545)
+changed 0.0% of pixels — no dismiss, no select. Esc still returns to
+Room (94.3%). Seats stay behind the dialog in the live client; the
+soak suite covers the seats underneath. Captures in
+`~/scratch/smoke-dialog/`.
