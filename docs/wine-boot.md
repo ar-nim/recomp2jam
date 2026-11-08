@@ -362,6 +362,61 @@ Shots `/tmp/chan-stage{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16}-*.png`
 (notice → fallback OK → Ch. 01–04 list → inert `입장`/X/pager/keys).
 Game ran clean throughout: render loop hot, TCP ESTAB, no `.dmp`.
 
+## Attempt 7 — `SendInput`-level injection probe (2026-11-08)
+
+Question: does Win32 `SendInput` (not XTEST) reach the path the canvas
+polls, and what injector tooling exists here? Result: yes for both the
+message queue and DirectInput, in shared and exclusive mode. `SendInput`
+is the viable path. The game was never driven; all probes ran on the
+idle Xvfb `:99` with scratch exes in `/tmp`.
+
+### Tooling and permission state
+
+- `xdotool`, `xte`, `xvkbd`: absent. `python-xlib` 0.33: present
+  (the Attempt 6 injector). `evdev`/`uinput` modules: absent, and `pip`
+  is externally managed, so no install was tried.
+- `winegcc` works; `dinput.h`/`winuser.h` and `libdinput8.a` ship with
+  the system Wine. Scratch probes compiled cleanly.
+- `sudo -n true` fails, so no installs or permission changes were
+  attempted. None are needed: `/dev/uinput` opens read-write as this
+  user (ACL `user:arnim:rw-`), and so does `/dev/input/event3`.
+  A `uinput` virtual device stays available as a fallback.
+- `sudo` self-match caution: `pkill -f <name>` matches its own
+  `fish -c` command line and kills the shell (exit 143). Prefer
+  `timeout -s KILL` wrappers (they already reap the probes) plus
+  bracketed `grep` checks.
+
+### Probes (all on `:99`, `WINEPREFIX=$HOME/o2jam-prefix`)
+
+- `simsg`: scratch window, foreground, `SendInput` `0x41` down/up,
+  2 s pump. Got `WM_KEYDOWN` and `WM_CHAR`. PASS: `SendInput` reaches
+  Win32 messages (`send_down n=1`, `got_keydown=1`).
+- `sipoll`: no window, `DISCL_BACKGROUND`, no pump. `before=0`,
+  `held=0`, `after=0`. INCONCLUSIVE: harness artifact, not a Wine
+  limit (fixed by the next probe).
+- `sipump`: foreground window with pump,
+  `DISCL_FOREGROUND | DISCL_NONEXCLUSIVE`. `before=0`, `held=1`,
+  `after=0`. PASS: `SendInput` reaches `GetDeviceState` (`DIK_A`).
+- `siexcl`: same with `DISCL_EXCLUSIVE`. `0/1/0`. PASS: exclusive
+  mode still sees `SendInput` under Wine 11.21 here.
+- `simouse`: `GUID_SysMouse` + `SendInput` left down/up. `0/1/0` on
+  button 0. PASS: clicks reach the DirectInput mouse poll.
+- `diwatch` + synced XTEST hold: foreground poller samples `DIK_A`
+  40 times while `python-xlib` holds keycode 38 (`a`) 1.5 s. All 40
+  samples `0`, twice. Control (`xnative99.py`): the same hold
+  delivers 10 presses to a native X11 window. So XTEST reaches X
+  clients but not Wine's DirectInput. This matches Attempt 6 exactly:
+  hover and message-path controls respond, canvas buttons stay inert.
+
+### Reading
+
+Wine 11.21's DirectInput reads the Wine input queue (fed by
+`SendInput`), not the X keymap (fed by XTEST). `SendInput` covers both
+consumers: the message queue (Probe B) and the DirectInput poll
+(Probes C–E, shared and exclusive). Next: a small `winegcc` sender
+that foregrounds the game window on `:98` and sends one harmless
+keypress or `입장` click past the channel list. No gameplay automation.
+
 ## Boot stage reached and blockers
 
 Reached (maps to `docs/lifecycle.md` stages 0–3, never 4+, plus an unmapped pre-AVI notice overlay):
@@ -371,14 +426,17 @@ No `STATE_AVI`, no DirectDraw mode-set, no archive reads, no gateway TCP observe
 
 Blockers, in order:
 
-1. Canvas input wall, reached 2026-11-08 (Attempt 6): the notice
-carousel still dismisses to the Channel dialog (H-tab click → live
-`03E8`/`03EA`), but no canvas button can be pressed — `입장`, pager,
-dialog X all ignore XTEST presses, double-clicks, long-press, and keys
-with focus fixed. Motion/hover tracks; presses do not. `STATE_AVI` stays
-bypassed (tab jumps straight to `STATE_CHANNEL`, lifecycle §6). Next:
-M/G/QUEST/TUTORIAL tabs, a `SendInput`-level injector, one `입장` click
-past the channel list.
+1. Canvas input wall, reached 2026-11-08 (Attempt 6), viable path found
+2026-11-08 (Attempt 7): the notice carousel still dismisses to the
+Channel dialog (H-tab click → live `03E8`/`03EA`), but no canvas button
+can be pressed — `입장`, pager, dialog X all ignore XTEST presses,
+double-clicks, long-press, and keys with focus fixed. Motion/hover
+tracks; presses do not. `STATE_AVI` stays bypassed (tab jumps straight
+to `STATE_CHANNEL`, lifecycle §6). A `winegcc`-built `SendInput` helper
+reaches both the Win32 message queue and the DirectInput poll (keyboard
+shared + exclusive, mouse buttons) on Xvfb, while XTEST provably does
+not reach DirectInput. Next: M/G/QUEST/TUTORIAL tabs, one `SendInput`
+`입장` click past the channel list.
 2. Init-time `ACCESS_VIOLATION`s (game RVA `0x1F2893` with session argv;
    wild jump to `0xFFBC11B0` in one bare run with media DLLs loaded).
 3. Possible Wine/wow64 contribution to (2): identical wild address in an

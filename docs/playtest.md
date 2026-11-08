@@ -3961,3 +3961,34 @@ no code change expected.
   passed; +0 vs the 1616 argv-head baseline, as expected for two
   docs-only commits, 0 failures). No lint findings. No commits, no
   pushes.** This sweep touched only `docs/playtest.md`.
+
+## Regression sweep — 2026-11-08 08:46 UTC (HEAD `f3f1a94`, tree clean)
+
+Live re-proof on the handoff-head. Covers the docs-only commit landed
+above the wine-head baseline `398d5ee`: handoff log refresh (`f3f1a94`);
+no code change expected.
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1616 passed, 0 failed, 0 ignored**, `exit=0`.
+  Per target: audio 20, dump 7, file 180, game 108, net 420,
+  render 89, shell 585, real_art 7, scenes 22, recomp2jam 178
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, 0 warning
+  lines (touched-`main.rs` rebuild check).
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 177 filtered out, 0.61 s) against local
+  Memoryer 7.2.0 (`Mode=Full`). Server log for this run
+  (`16:46:46 +08:00`): `Create room: songflow` →
+  `Start game: [000]` → `Game [000] Submit score: 2210` (followed by
+  the known benign broadcast-failure stack on room delete; a second
+  session walked `Authorize session` → `Get channel list` →
+  `Enter channel` → `Get room list` → `Get character info`).
+- **Verdict: no regression — suite is green on the handoff-head (1616
+  passed; +0 vs the 1616 wine-head baseline, as expected for a
+  docs-only commit, 0 failures). No lint findings. No commits, no
+  pushes.** This sweep touched only `docs/playtest.md`.
