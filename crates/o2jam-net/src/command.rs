@@ -16,6 +16,8 @@ pub enum Request {
     GetCharacterInfo = 2000,
     GetChannelInfo = 2002,
     CreateRoom = 2004,
+    SendMainRoomMessage = 2012,
+    SendWhisper = 2017,
     JoinWaiting = 3002,
     SetRoomMusic = 4000,
     SetRoomArena = 4002,
@@ -49,6 +51,8 @@ impl Request {
             2000 => Some(Self::GetCharacterInfo),
             2002 => Some(Self::GetChannelInfo),
             2004 => Some(Self::CreateRoom),
+            2012 => Some(Self::SendMainRoomMessage),
+            2017 => Some(Self::SendWhisper),
             3002 => Some(Self::JoinWaiting),
             4000 => Some(Self::SetRoomMusic),
             4002 => Some(Self::SetRoomArena),
@@ -107,6 +111,9 @@ pub enum Response {
     GetCharacterInfo = 2001,
     RoomList = 2003,
     CreateRoom = 2006,
+    MainRoomUserMessage = 2013,
+    MainRoomAdminMessage = 2014,
+    SendWhisper = 2018,
     JoinRoom = 3003,
 }
 
@@ -131,6 +138,9 @@ impl Response {
             2001 => Some(Self::GetCharacterInfo),
             2003 => Some(Self::RoomList),
             2006 => Some(Self::CreateRoom),
+            2013 => Some(Self::MainRoomUserMessage),
+            2014 => Some(Self::MainRoomAdminMessage),
+            2018 => Some(Self::SendWhisper),
             3003 => Some(Self::JoinRoom),
             _ => None,
         }
@@ -143,6 +153,7 @@ impl Response {
 #[repr(u16)]
 pub enum Event {
     RoomCreated = 2007,
+    ReceiveWhisper = 2019,
     RoomArenaEcho = 4003,
     GameStatsUpdate = 4015,
 }
@@ -159,6 +170,7 @@ impl Event {
     pub fn from_id(id: u16) -> Option<Self> {
         match id {
             2007 => Some(Self::RoomCreated),
+            2019 => Some(Self::ReceiveWhisper),
             4003 => Some(Self::RoomArenaEcho),
             4015 => Some(Self::GameStatsUpdate),
             _ => None,
@@ -219,8 +231,17 @@ mod tests {
     #[test]
     fn resolves_room_ids() {
         assert_eq!(Request::from_id(2004), Some(Request::CreateRoom));
+        assert_eq!(Request::from_id(2012), Some(Request::SendMainRoomMessage));
+        assert_eq!(Request::from_id(2017), Some(Request::SendWhisper));
         assert_eq!(Response::from_id(2006), Some(Response::CreateRoom));
+        assert_eq!(Response::from_id(2013), Some(Response::MainRoomUserMessage));
+        assert_eq!(
+            Response::from_id(2014),
+            Some(Response::MainRoomAdminMessage)
+        );
+        assert_eq!(Response::from_id(2018), Some(Response::SendWhisper));
         assert_eq!(Event::from_id(2007), Some(Event::RoomCreated));
+        assert_eq!(Event::from_id(2019), Some(Event::ReceiveWhisper));
         assert_eq!(Event::from_id(2006), None);
     }
 

@@ -1158,6 +1158,30 @@ mod command_consistency_tests {
         assert_eq!(CreateRoomResponse::COMMAND, Response::CreateRoom as u16);
         assert_eq!(RoomCreated::COMMAND, Event::RoomCreated as u16);
         assert_eq!(
+            crate::rooms::SendMainRoomMessage::COMMAND,
+            Request::SendMainRoomMessage as u16
+        );
+        assert_eq!(
+            crate::rooms::MainRoomUserMessage::COMMAND,
+            Response::MainRoomUserMessage as u16
+        );
+        assert_eq!(
+            crate::rooms::MainRoomAdminMessage::COMMAND,
+            Response::MainRoomAdminMessage as u16
+        );
+        assert_eq!(
+            crate::rooms::SendWhisper::COMMAND,
+            Request::SendWhisper as u16
+        );
+        assert_eq!(
+            crate::rooms::SendWhisperResponse::COMMAND,
+            Response::SendWhisper as u16
+        );
+        assert_eq!(
+            crate::rooms::ReceiveWhisper::COMMAND,
+            Event::ReceiveWhisper as u16
+        );
+        assert_eq!(
             crate::character::CharacterInfo::COMMAND,
             Response::GetCharacterInfo as u16
         );

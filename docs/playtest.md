@@ -3068,3 +3068,43 @@ docs) over the peer-bars baseline `dff765d`.
   `docs/playtest.md`.
 - Tree note: `docs/gameplay.md` holds uncommitted peer edits (16
   insertions); left alone per the sweep rules.
+
+## Regression sweep — 2026-11-08 11:36 UTC+8 (HEAD `0f084d4`, tree clean)
+
+Live re-proof on the f2-head. Covers only the docs-log commit landed after
+the guest-head baseline `1336284` (`0f084d4`: f2 team-pick refutation in
+`gameplay.md` plus the sweep log) — no code changed, so no new tests were
+expected.
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1426 passed, 0 failed, 0 ignored**, `exit=0`.
+  Per target: audio 20, dump 7, file 177, game 94, net 360,
+  render 89, shell 528, real_art 7, scenes 22, recomp2jam 122
+  (6 doc-test targets, 0 each) — identical to the baseline, as
+  expected for a docs-only HEAD.
+- `cargo build --workspace --release`: clean, `exit=0`, 0 warning
+  lines.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 121 filtered out, 0.59 s) against local
+  Memoryer 7.2.0 (`Mode=Full`). Server log for this run
+  (`11:35:34 +08:00`): `Create room: songflow` →
+  `Update room [000] music settings: [HX / X10 / o2ma757]` →
+  `Update room [000] arena: [1] (0)` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Update #1 - Jam: 3 (Bonus: 0)` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure stack on room delete; a trailing session walked
+  `Authorize session` → `Get channel list` → `Enter channel` →
+  `Get room list` → `Get character info`).
+- **Verdict: no regression — suite is green on the f2-head (1426
+  passed; identical to the guest-head baseline, docs-only delta,
+  0 failures). No lint findings. No commits, no pushes.** This sweep
+  touched only `docs/playtest.md`.

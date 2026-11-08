@@ -861,6 +861,318 @@ impl WireMessage for JoinRoomResponse {
     }
 }
 
+/// `SendMainRoomMessage` 2012 request: raw chat bytes fill the whole
+/// body — no length prefix, no terminator, and an empty body sends an
+/// empty line. Same layout as [`SendWaitingMessage`], one opcode apart.
+/// Memoryer (`Messages/Requests/Messaging/
+/// `SendMainRoomMessageRequest.cs`) carries one
+/// `CollectionMessageField(order: 0)` byte array, broadcast back as
+/// 2013/2014 by `Controllers/MessagingController.cs` (admins take the
+/// 2014 fan-out, everyone else 2013). Exe send site: file `0x8fa1e`
+/// (`push 0; push 0x7dc`, indirect send call), in the lobby
+/// slash-command parser beside the 2017 whisper send at file `0x8fa02`
+/// (`/w`, `/r`, `/h`, `/help` literals at VAs `0x647d60`+; observed with
+/// GNU objdump 2.47 slices over the read-only 7.55 copy, no new REA
+/// dossier filed — Memoryer shape is corroboration).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SendMainRoomMessage {
+    /// Chat text bytes (client encoding; opaque on the wire).
+    pub content: Vec<u8>,
+}
+
+impl SendMainRoomMessage {
+    /// Chat text as UTF-8 with invalid sequences replaced.
+    #[must_use]
+    pub fn content_text(&self) -> Cow<'_, str> {
+        String::from_utf8_lossy(&self.content)
+    }
+}
+
+impl WireMessage for SendMainRoomMessage {
+    const COMMAND: u16 = 2012;
+
+    fn encode_body(&self) -> Vec<u8> {
+        self.content.clone()
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        Ok(Self {
+            content: body.to_vec(),
+        })
+    }
+}
+
+/// One main-room chat line: null-terminated sender plus raw content
+/// bytes running to end of body. Unlike [`WaitingChatLine`] there is no
+/// trailing seat id — the content length rides out-of-band
+/// (`body.len - sender_used`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MainRoomChatLine {
+    /// Chatter nickname (UTF-8, null-terminated on the wire).
+    pub sender: String,
+    /// Chat text bytes (client encoding; opaque on the wire).
+    pub content: Vec<u8>,
+}
+
+impl MainRoomChatLine {
+    /// Chat text as UTF-8 with invalid sequences replaced.
+    #[must_use]
+    pub fn content_text(&self) -> Cow<'_, str> {
+        String::from_utf8_lossy(&self.content)
+    }
+}
+
+fn encode_main_room_line(line: &MainRoomChatLine) -> Vec<u8> {
+    let mut body = encode_null_terminated(&line.sender, MAX_STRING_LEN);
+    body.extend_from_slice(&line.content);
+    body
+}
+
+fn decode_main_room_line_body(body: &[u8]) -> Result<MainRoomChatLine, Error> {
+    let (sender, used) = decode_null_terminated(body, MAX_STRING_LEN)?;
+    Ok(MainRoomChatLine {
+        sender,
+        content: body[used..].to_vec(),
+    })
+}
+
+/// `MainRoomUserMessage` 2013 broadcast: a channel line from a player.
+/// Memoryer (`Messages/Responses/Messaging/
+/// `MainRoomUserMessageResponse.cs`): string sender (order 0), byte-array
+/// content (order 1, trailing, so raw to end of stream). Exe receive
+/// handler: file `0x15bfa0` reads sender + content through the
+/// packet-reader helper, formats `[%12s] %s` (VA `0x64d8d4`), and feeds
+/// the ControlList parent global `0x762B44` (opcode push at file
+/// `0x15bff5`; observed with GNU objdump 2.47, no new REA dossier
+/// filed — Memoryer shape is corroboration).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MainRoomUserMessage {
+    /// Chatter nickname.
+    pub sender: String,
+    /// Chat text bytes.
+    pub content: Vec<u8>,
+}
+
+impl MainRoomUserMessage {
+    /// Chat text as UTF-8 with invalid sequences replaced.
+    #[must_use]
+    pub fn content_text(&self) -> Cow<'_, str> {
+        String::from_utf8_lossy(&self.content)
+    }
+
+    fn line(&self) -> MainRoomChatLine {
+        MainRoomChatLine {
+            sender: self.sender.clone(),
+            content: self.content.clone(),
+        }
+    }
+
+    fn from_line(line: MainRoomChatLine) -> Self {
+        Self {
+            sender: line.sender,
+            content: line.content,
+        }
+    }
+}
+
+impl WireMessage for MainRoomUserMessage {
+    const COMMAND: u16 = 2013;
+
+    fn encode_body(&self) -> Vec<u8> {
+        encode_main_room_line(&self.line())
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        decode_main_room_line_body(body).map(Self::from_line)
+    }
+}
+
+/// `MainRoomAdminMessage` 2014 broadcast: a channel line from an
+/// administrator. Same layout as 2013 (`Messages/Responses/Messaging/
+/// `MainRoomAdminMessageResponse.cs`). Exe receive sites push 2014
+/// beside the ControlList parent global `0x762B44` at files `0x15c075`,
+/// `0x15c11a`, `0x15c151` (observed with GNU objdump 2.47, no new REA
+/// dossier filed — Memoryer shape is corroboration).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MainRoomAdminMessage {
+    /// Chatter nickname.
+    pub sender: String,
+    /// Chat text bytes.
+    pub content: Vec<u8>,
+}
+
+impl MainRoomAdminMessage {
+    /// Chat text as UTF-8 with invalid sequences replaced.
+    #[must_use]
+    pub fn content_text(&self) -> Cow<'_, str> {
+        String::from_utf8_lossy(&self.content)
+    }
+
+    fn line(&self) -> MainRoomChatLine {
+        MainRoomChatLine {
+            sender: self.sender.clone(),
+            content: self.content.clone(),
+        }
+    }
+
+    fn from_line(line: MainRoomChatLine) -> Self {
+        Self {
+            sender: line.sender,
+            content: line.content,
+        }
+    }
+}
+
+impl WireMessage for MainRoomAdminMessage {
+    const COMMAND: u16 = 2014;
+
+    fn encode_body(&self) -> Vec<u8> {
+        encode_main_room_line(&self.line())
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        decode_main_room_line_body(body).map(Self::from_line)
+    }
+}
+
+/// `SendWhisper` 2017 request: null-terminated recipient plus
+/// null-terminated content. Memoryer (`Messages/Requests/Messaging/
+/// `SendWhisperMessageRequest.cs`): string recipient (order 0), string
+/// content (order 1). The server delivers a 2019 event to the named
+/// recipient and answers 2018 (`Controllers/MessagingController.cs`).
+/// Exe send sites (`push 0; push 0x7e1`, indirect send call): files
+/// `0x8f757`/`0x8fa02` (lobby `/w` branch), `0xb8ffc`/`0xb9369`
+/// (waiting room), `0xe1a85`/`0xe1fd3` (beside the 3011 room-chat sends;
+/// observed with GNU objdump 2.47, no new REA dossier filed — Memoryer
+/// shape is corroboration).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SendWhisper {
+    /// Recipient nickname (UTF-8, null-terminated on the wire).
+    pub recipient: String,
+    /// Whisper text (UTF-8, null-terminated on the wire).
+    pub content: String,
+}
+
+impl WireMessage for SendWhisper {
+    const COMMAND: u16 = 2017;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = encode_null_terminated(&self.recipient, MAX_STRING_LEN);
+        body.extend_from_slice(&encode_null_terminated(&self.content, MAX_STRING_LEN));
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        let (recipient, used) = decode_null_terminated(body, MAX_STRING_LEN)?;
+        let tail = &body[used..];
+        let (content, used) = decode_null_terminated(tail, MAX_STRING_LEN)?;
+        if !tail[used..].is_empty() {
+            return Err(Error::TrailingBytes(tail.len() - used));
+        }
+        Ok(Self { recipient, content })
+    }
+}
+
+/// `SendWhisper` 2018 response: delivery report for a 2017 request.
+/// Memoryer (`Messages/Responses/Messaging/SendWhisperResponse.cs`):
+/// bool `Invalid` as little-endian `i32` (order 0, non-zero reads true),
+/// string recipient (order 1), trailing-nullable string content
+/// (order 2 — absent when nobody heard the whisper). Exe receive site:
+/// file `0x15c20b` feeds the ControlList parent global `0x762B44`
+/// (observed with GNU objdump 2.47, no new REA dossier filed —
+/// Memoryer shape is corroboration).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SendWhisperResponse {
+    /// True when no session carried the recipient nickname.
+    pub invalid: bool,
+    /// Recipient nickname the request named.
+    pub recipient: String,
+    /// Echoed whisper text (`None` when undelivered).
+    pub content: Option<String>,
+}
+
+impl WireMessage for SendWhisperResponse {
+    const COMMAND: u16 = 2018;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = Vec::with_capacity(4);
+        body.extend_from_slice(&i32::from(self.invalid).to_le_bytes());
+        body.extend_from_slice(&encode_null_terminated(&self.recipient, MAX_STRING_LEN));
+        if let Some(content) = &self.content {
+            body.extend_from_slice(&encode_null_terminated(content, MAX_STRING_LEN));
+        }
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < 4 {
+            return Err(Error::TruncatedMessage {
+                need: 4,
+                have: body.len(),
+            });
+        }
+        let invalid = i32::from_le_bytes([body[0], body[1], body[2], body[3]]) != 0;
+        let (recipient, used) = decode_null_terminated(&body[4..], MAX_STRING_LEN)?;
+        let tail = &body[4 + used..];
+        let content = if tail.is_empty() {
+            None
+        } else {
+            let (content, used) = decode_null_terminated(tail, MAX_STRING_LEN)?;
+            if !tail[used..].is_empty() {
+                return Err(Error::TrailingBytes(tail.len() - used));
+            }
+            Some(content)
+        };
+        Ok(Self {
+            invalid,
+            recipient,
+            content,
+        })
+    }
+}
+
+/// `ReceiveWhisper` 2019 event: an incoming whisper. Memoryer
+/// (`Messages/Events/Common/WhisperEventData.cs`): string sender
+/// (order 0), string content (order 1, default empty). The content
+/// always rides the wire (even empty content writes its terminator);
+/// a body ending right after the sender terminator still decodes to
+/// empty content, mirroring the trailing-default. Exe receive site:
+/// file `0x15c5b0` feeds the ControlList parent global `0x762B44`
+/// (observed with GNU objdump 2.47, no new REA dossier filed —
+/// Memoryer shape is corroboration).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReceiveWhisper {
+    /// Sender nickname.
+    pub sender: String,
+    /// Whisper text.
+    pub content: String,
+}
+
+impl WireMessage for ReceiveWhisper {
+    const COMMAND: u16 = 2019;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = encode_null_terminated(&self.sender, MAX_STRING_LEN);
+        body.extend_from_slice(&encode_null_terminated(&self.content, MAX_STRING_LEN));
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        let (sender, used) = decode_null_terminated(body, MAX_STRING_LEN)?;
+        let tail = &body[used..];
+        let content = if tail.is_empty() {
+            String::new()
+        } else {
+            let (content, used) = decode_null_terminated(tail, MAX_STRING_LEN)?;
+            if !tail[used..].is_empty() {
+                return Err(Error::TrailingBytes(tail.len() - used));
+            }
+            content
+        };
+        Ok(Self { sender, content })
+    }
+}
+
 /// `SendWaitingMessage` 3011 request: raw chat bytes fill the whole
 /// body — no length prefix, no terminator, and an empty body sends an
 /// empty line. Memoryer (`Messages/Requests/Messaging/
@@ -1496,5 +1808,181 @@ mod waiting_chat_tests {
             content: vec![0xC7, 0xD1],
         };
         assert_eq!(message.content_text(), "\u{FFFD}\u{FFFD}");
+    }
+}
+
+#[cfg(test)]
+mod main_room_chat_tests {
+    use super::*;
+    use crate::frame::decode_frame;
+
+    #[test]
+    fn send_carries_raw_bytes_verbatim() {
+        let message = SendMainRoomMessage {
+            content: vec![0xC7, 0xD1, 0xB1, 0xDB],
+        };
+        assert_eq!(message.encode_body(), vec![0xC7, 0xD1, 0xB1, 0xDB]);
+        let frame = decode_frame(&message.encode()).unwrap();
+        assert_eq!(frame.id, 2012);
+        assert_eq!(SendMainRoomMessage::decode_frame(&frame), Ok(message));
+    }
+
+    #[test]
+    fn send_empty_body_is_an_empty_line() {
+        let message = SendMainRoomMessage {
+            content: Vec::new(),
+        };
+        assert_eq!(message.encode(), vec![0x04, 0x00, 0xDC, 0x07]);
+        assert_eq!(SendMainRoomMessage::decode_body(&[]), Ok(message));
+    }
+
+    #[test]
+    fn user_message_carries_sender_plus_raw_content() {
+        let message = MainRoomUserMessage {
+            sender: "ab".to_owned(),
+            content: vec![0x61, 0x62, 0x63],
+        };
+        assert_eq!(
+            message.encode_body(),
+            vec![0x61, 0x62, 0x00, 0x61, 0x62, 0x63]
+        );
+        let frame = decode_frame(&message.encode()).unwrap();
+        assert_eq!(frame.id, 2013);
+        assert_eq!(MainRoomUserMessage::decode_frame(&frame), Ok(message));
+    }
+
+    #[test]
+    fn admin_message_carries_sender_plus_raw_content() {
+        let message = MainRoomAdminMessage {
+            sender: "ab".to_owned(),
+            content: vec![0x61],
+        };
+        assert_eq!(message.encode_body(), vec![0x61, 0x62, 0x00, 0x61]);
+        let frame = decode_frame(&message.encode()).unwrap();
+        assert_eq!(frame.id, 2014);
+        assert_eq!(MainRoomAdminMessage::decode_frame(&frame), Ok(message));
+    }
+
+    #[test]
+    fn empty_line_decodes_sender_with_empty_content() {
+        let message = MainRoomUserMessage::decode_body(&[0x00]).unwrap();
+        assert_eq!(message.sender, String::new());
+        assert!(message.content.is_empty());
+    }
+
+    #[test]
+    fn unterminated_sender_decodes_to_end_of_body() {
+        // Null-string codec: no terminator in range means the field
+        // fills its cap, so the bytes become the sender.
+        let message = MainRoomAdminMessage::decode_body(&[0x61, 0x62]).unwrap();
+        assert_eq!(message.sender, "ab");
+        assert!(message.content.is_empty());
+    }
+
+    #[test]
+    fn whisper_request_carries_two_terminated_strings() {
+        let message = SendWhisper {
+            recipient: "ab".to_owned(),
+            content: "cd".to_owned(),
+        };
+        assert_eq!(
+            message.encode_body(),
+            vec![0x61, 0x62, 0x00, 0x63, 0x64, 0x00]
+        );
+        let frame = decode_frame(&message.encode()).unwrap();
+        assert_eq!(frame.id, 2017);
+        assert_eq!(SendWhisper::decode_frame(&frame), Ok(message));
+    }
+
+    #[test]
+    fn unterminated_content_decodes_to_end_of_body() {
+        // Null-string codec: no terminator in range means the field
+        // fills its cap, so the bytes become the content.
+        let message = SendWhisper::decode_body(&[0x61, 0x62, 0x00, 0x63, 0x64]).unwrap();
+        assert_eq!(message.recipient, "ab");
+        assert_eq!(message.content, "cd");
+    }
+
+    #[test]
+    fn whisper_request_rejects_trailing_bytes() {
+        assert_eq!(
+            SendWhisper::decode_body(&[0x61, 0x00, 0x62, 0x00, 0xFF]),
+            Err(Error::TrailingBytes(1))
+        );
+    }
+
+    #[test]
+    fn whisper_answer_reports_invalid_without_content() {
+        // Undelivered whisper: result word plus recipient only.
+        let message = SendWhisperResponse {
+            invalid: true,
+            recipient: "ab".to_owned(),
+            content: None,
+        };
+        assert_eq!(
+            message.encode_body(),
+            vec![0x01, 0x00, 0x00, 0x00, 0x61, 0x62, 0x00]
+        );
+        let frame = decode_frame(&message.encode()).unwrap();
+        assert_eq!(frame.id, 2018);
+        assert_eq!(SendWhisperResponse::decode_frame(&frame), Ok(message));
+    }
+
+    #[test]
+    fn whisper_answer_echoes_content_when_delivered() {
+        let message = SendWhisperResponse {
+            invalid: false,
+            recipient: "ab".to_owned(),
+            content: Some("cd".to_owned()),
+        };
+        assert_eq!(
+            message.encode_body(),
+            vec![0x00, 0x00, 0x00, 0x00, 0x61, 0x62, 0x00, 0x63, 0x64, 0x00]
+        );
+        let back = SendWhisperResponse::decode_body(&message.encode_body()).unwrap();
+        assert_eq!(back, message);
+    }
+
+    #[test]
+    fn whisper_answer_rejects_short_body() {
+        assert_eq!(
+            SendWhisperResponse::decode_body(&[0x01, 0x00]),
+            Err(Error::TruncatedMessage { need: 4, have: 2 })
+        );
+    }
+
+    #[test]
+    fn receive_whisper_carries_sender_plus_text() {
+        let message = ReceiveWhisper {
+            sender: "ab".to_owned(),
+            content: "cd".to_owned(),
+        };
+        assert_eq!(
+            message.encode_body(),
+            vec![0x61, 0x62, 0x00, 0x63, 0x64, 0x00]
+        );
+        let frame = decode_frame(&message.encode()).unwrap();
+        assert_eq!(frame.id, 2019);
+        assert_eq!(ReceiveWhisper::decode_frame(&frame), Ok(message));
+    }
+
+    #[test]
+    fn receive_whisper_defaults_missing_content_to_empty() {
+        let message = ReceiveWhisper::decode_body(&[0x61, 0x62, 0x00]).unwrap();
+        assert_eq!(message.sender, "ab");
+        assert_eq!(message.content, String::new());
+    }
+
+    #[test]
+    fn main_room_content_text_replaces_invalid_utf8() {
+        let message = MainRoomUserMessage {
+            sender: "ab".to_owned(),
+            content: vec![0xC7, 0xD1],
+        };
+        assert_eq!(message.content_text(), "\u{FFFD}\u{FFFD}");
+        let send = SendMainRoomMessage {
+            content: vec![0xC7],
+        };
+        assert_eq!(send.content_text(), "\u{FFFD}");
     }
 }
