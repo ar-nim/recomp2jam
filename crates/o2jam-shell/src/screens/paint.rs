@@ -352,9 +352,87 @@ fn room_row_text(room: &RoomListEntry) -> String {
     text
 }
 
+/// Room panel buttons in `ControlList_Interface.txt` file order:
+/// `EXBUTTON1,2,3` then `5,4,6` — the file lists 5 before 4, so file
+/// order reads the left column top-to-bottom then the right column
+/// top-to-bottom. Ordinals `0x1B..0x20` pair `.bnd` rects 26..31
+/// (`(26,82)-(314,173)` through `(317,272)-(605,363)`), the verified
+/// 2-column x 3-row grid (left `x=26`, right `x=317`; rows `y=82`,
+/// `177`, `272`).
+const ROOM_PANEL_IDS: [&str; 6] = [
+    "IDC_BUTTON_SROOM_EXBUTTON1",
+    "IDC_BUTTON_SROOM_EXBUTTON2",
+    "IDC_BUTTON_SROOM_EXBUTTON3",
+    "IDC_BUTTON_SROOM_EXBUTTON5",
+    "IDC_BUTTON_SROOM_EXBUTTON4",
+    "IDC_BUTTON_SROOM_EXBUTTON6",
+];
+
+/// Scaled frame origins of the staged room panels in file order
+/// (skips panels the staged art does not name; empty while no
+/// staged art names any panel).
+fn room_panel_origins(placements: &[ScenePlacement], frame: &Frame<'_>) -> Vec<(i32, i32)> {
+    ROOM_PANEL_IDS
+        .iter()
+        .filter_map(|id| {
+            placements
+                .iter()
+                .find(|placed| placed.id == *id)
+                .map(|placed| {
+                    let scaled = scale_rect_to_frame(&placed.rect, frame.w, frame.h);
+                    (scaled.x, scaled.y)
+                })
+        })
+        .collect()
+}
+
 /// Room rows plus highlight cursor (no background fill: shared by
 /// the flat fallback and the art scene).
-fn paint_room_rows(frame: &mut Frame<'_>, rooms: &[RoomListEntry], highlight: usize) {
+fn paint_room_rows(
+    frame: &mut Frame<'_>,
+    rooms: &[RoomListEntry],
+    highlight: usize,
+    placements: &[ScenePlacement],
+) {
+    let origins = room_panel_origins(placements, frame);
+    if origins.is_empty() {
+        paint_room_fallback_rows(frame, rooms, highlight);
+    } else {
+        paint_room_panel_rows(frame, rooms, highlight, &origins);
+    }
+}
+
+/// Room rows at their staged `.bnd` panel origins, bare on the
+/// panel art (no scrim: the panels carry their own chrome). Rooms
+/// past the staged panels stay off-page (the Left/Right pager is
+/// untraced); the highlight cursor rides the selected panel.
+fn paint_room_panel_rows(
+    frame: &mut Frame<'_>,
+    rooms: &[RoomListEntry],
+    highlight: usize,
+    origins: &[(i32, i32)],
+) {
+    for (index, room) in rooms.iter().enumerate() {
+        let Some((text_x, row)) = origins.get(index).copied() else {
+            break;
+        };
+        draw_text(
+            frame,
+            text_x,
+            row,
+            &room_row_text(room),
+            pack_xrgb(0xFF, 0xFF, 0xFF),
+        );
+        if index == highlight {
+            paint_cursor(frame, text_x, row);
+        }
+    }
+}
+
+/// Room rows at the legacy quarter-frame anchor (flat fallback and
+/// art-less staged scenes only; the staged path above owns layout
+/// while panels are bound).
+fn paint_room_fallback_rows(frame: &mut Frame<'_>, rooms: &[RoomListEntry], highlight: usize) {
     paint_list_scrim(frame, rooms.len());
     let w = frame.w as i32;
     let h = frame.h as i32;
@@ -838,7 +916,7 @@ fn paint_room_details(
 pub(crate) fn paint_room_list(frame: &mut Frame<'_>, rooms: &[RoomListEntry], highlight: usize) {
     fill_background(frame, Screen::Room);
     paint_title(frame, "ROOM");
-    paint_room_rows(frame, rooms, highlight);
+    paint_room_rows(frame, rooms, highlight, &[]);
     paint_room_details(frame, rooms, highlight, None);
 }
 
@@ -851,10 +929,15 @@ pub fn paint_room_scene(
 ) {
     art.paint_backdrop(frame, Screen::Room);
     paint_title_over_art(frame, Screen::Room);
-    paint_room_rows(frame, rooms, highlight);
     paint_room_row_icons(frame, art, rooms, highlight);
     paint_room_details(frame, rooms, highlight, Some(&art.placements));
     paint_room_number(frame, art, rooms, highlight);
+    // Rows paint last so the live list and highlight cursor stay
+    // visible over the staged template bodies (UI ink on top): the
+    // `SET 0x11` icon/detail rects are first-row-absolute while rows
+    // ride per-panel rects, so the template art overlaps the first
+    // panel — the exe's per-row template clone offsets are untraced.
+    paint_room_rows(frame, rooms, highlight, &art.placements);
 }
 
 /// Seats shown on the waiting screen: self plus the seven wire slots.
@@ -3616,6 +3699,123 @@ mod paint_tests {
             premium: false,
             room_type: 0,
         }]
+    }
+
+    #[test]
+    fn room_rows_anchor_to_staged_panels_in_two_columns() {
+        // Staged `EXBUTTON` panels (`State_Room.bnd` rects 26/27, the
+        // left column top two) position the rows; the legacy
+        // quarter-frame anchor paints nowhere on the staged path.
+        use o2jam_render::Rect;
+        let placements = vec![
+            ScenePlacement {
+                id: "IDC_BUTTON_SROOM_EXBUTTON1".to_owned(),
+                code: 0x1301_201B,
+                sprite: None,
+                rect: Rect {
+                    x: 26,
+                    y: 82,
+                    w: 288,
+                    h: 91,
+                },
+            },
+            ScenePlacement {
+                id: "IDC_BUTTON_SROOM_EXBUTTON2".to_owned(),
+                code: 0x1301_201C,
+                sprite: None,
+                rect: Rect {
+                    x: 26,
+                    y: 177,
+                    w: 286,
+                    h: 91,
+                },
+            },
+        ];
+        let art = SceneArt {
+            placements,
+            figures: HashMap::new(),
+        };
+        let rooms = vec![
+            RoomListEntry {
+                number: 1,
+                state_code: 1,
+                title: "Alpha".to_owned(),
+                has_password: false,
+                music_id: 0,
+                difficulty: 0,
+                key_mode: 0,
+                game_mode: 0,
+                speed: 1,
+                capacity: 8,
+                user_count: 1,
+                min_level: 0,
+                max_level: 0,
+                skills: vec![],
+                premium: false,
+                room_type: 0,
+            },
+            RoomListEntry {
+                number: 2,
+                state_code: 1,
+                title: "Beta".to_owned(),
+                has_password: false,
+                music_id: 0,
+                difficulty: 0,
+                key_mode: 0,
+                game_mode: 0,
+                speed: 1,
+                capacity: 8,
+                user_count: 2,
+                min_level: 0,
+                max_level: 0,
+                skills: vec![],
+                premium: false,
+                room_type: 0,
+            },
+        ];
+        let w: usize = 800;
+        let h: usize = 600;
+        let mut buf = vec![0u32; w * h];
+        paint_room_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w,
+                h,
+            },
+            &rooms,
+            1,
+            &art,
+        );
+        let window_has_ink = |x: i32, y: i32, ww: i32, hh: i32, ink: u32| -> bool {
+            for dy in 0..hh {
+                for dx in 0..ww {
+                    let px = x + dx;
+                    let py = y + dy;
+                    let (Some(px), Some(py)) = (usize::try_from(px).ok(), usize::try_from(py).ok())
+                    else {
+                        continue;
+                    };
+                    if px < w && py < h && buf[py * w + px] == ink {
+                        return true;
+                    }
+                }
+            }
+            false
+        };
+        let white = pack_xrgb(0xFF, 0xFF, 0xFF);
+        let amber = pack_xrgb(0xFF, 0xD0, 0x20);
+        assert!(
+            window_has_ink(26, 82, 90, 10, white),
+            "first room inks its staged left-top panel"
+        );
+        assert!(
+            window_has_ink(20, 177, 90, 10, amber),
+            "highlight cursor rides the staged second panel"
+        );
+        assert!(
+            !window_has_ink(200, 150, 60, 6, white),
+            "legacy quarter-frame anchor paints nothing staged"
+        );
     }
 
     #[test]

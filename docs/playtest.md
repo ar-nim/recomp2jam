@@ -4028,3 +4028,37 @@ log (`b908833`); no code change expected.
   passed; +0 vs the 1616 handoff-head baseline, as expected for seven
   docs-only commits, 0 failures). No lint findings. No commits, no
   pushes.** This sweep touched only `docs/playtest.md`.
+
+## Regression sweep — 2026-11-08 13:33 UTC (HEAD `c4c0317`, tree clean)
+
+Live re-proof on the seatgrid-head. Covers the shell fix commit landed
+above the wedge-head baseline `b908833`: four-column seat grid
+(`c4c0317`, `screens/paint.rs` + parity/playtest logs); one new shell
+test expected.
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1617 passed, 0 failed, 0 ignored**, `exit=0`.
+  Per target: audio 20, dump 7, file 180, game 108, net 420,
+  render 89, shell 586, real_art 7, scenes 22, recomp2jam 178
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, 0 warning
+  lines.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 177 filtered out, 0.61 s) against local
+  Memoryer 7.2.0 (`Mode=Full`). Server log for this run
+  (`21:33:07 +08:00`): `Authorize session` →
+  `Create room: songflow` → `Update room [000] music settings` →
+  `Get music list: [0/00] 562 music` → `Start game: [000]` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure stack on room delete; a second session walked
+  `Authorize session` → `Get channel list` → `Enter channel` →
+  `Get room list` → `Get character info`).
+- **Verdict: no regression — suite is green on the seatgrid-head (1617
+  passed; +1 vs the 1616 wedge-head baseline, shell +1 from the seat-grid
+  fix tests, all other targets unchanged, 0 failures). No lint findings.
+  No commits, no pushes.** This sweep touched only `docs/playtest.md`.
