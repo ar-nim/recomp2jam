@@ -810,6 +810,11 @@ impl WireMessage for ScoreSubmission {
 
 /// Per-member verdict inside [`ScoreCompleted`] (Memoryer
 /// `ScoreCompletedEventData.MatchResult`).
+///
+/// Exe-side the verdict byte lands at member slot `+0x2166` (row-reader
+/// size-1 read, push file `0x14126a`, call file `0x141279`, wire row
+/// offset 31 — `ev_cbd5ca48…`); the Draw/Win/Lose labels are
+/// Memoryer-corroborated against that one stored byte.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum MatchResult {
@@ -890,8 +895,6 @@ pub struct ScoreEntry {
 const SCORE_ENTRY_LEN: usize = 45;
 /// Wire size of the [`ScoreCompleted`] head: `i32` count + `u8` master.
 const SCORE_COMPLETED_HEAD_LEN: usize = 5;
-/// Most rows one [`ScoreCompleted`] carries (Memoryer `maxCount: 8`).
-const SCORE_COMPLETED_MAX_ROWS: usize = 8;
 
 /// Read one little-endian `u32` at `at`.
 fn dword_at(body: &[u8], at: usize) -> u32 {
@@ -969,15 +972,59 @@ fn encode_score_entry(entry: &ScoreEntry, body: &mut Vec<u8>) {
 /// the local Memoryer Full-mode gateway broadcasts a 50-byte body
 /// (count 1, master 0, one full row echoing the 4016 tally plus
 /// server rewards/levels — see
-/// `score_completed_decodes_live_capture`). Exe shape
-/// corroboration: case file `0x1586dd` (byte-table file `0x158a68`
-/// index `0x0f` holds slot `0x08`, address-table file `0x1589f4`
-/// slot 8 — shared edges `ev_c7b26aac`/`ev_9412e595`) calls handler
-/// VA `0x55fbe0` (file `0x15fbe0`), which reads sizes 4/1/1/4 (count,
-/// master, member, active flag) then loops over the member table
-/// (stride `0x2190` onto base `0x77ee90`, immediates in range).
-/// Observed with GNU objdump 2.47 slices plus Python 3.14.9 byte
-/// scans over the read-only 7.55 copy; no new REA dossier filed.
+/// `score_completed_decodes_live_capture`). Exe-verified handler
+/// VA `0x55fbe0` (file `0x15fbe0`, 797 B): count size-4 read (push file
+/// `0x15fc28`, call `0x15fc31`) plus master size-1 read (push file
+/// `0x15fc36`, call `0x15fc3f`); per-row member size-1 (push file
+/// `0x15fd34`, call `0x15fd3d`) plus active size-4 (push file `0x15fd42`,
+/// call `0x15fd4b`), guard member `< 8` (compare file `0x15fd54`) with a
+/// scratch-drain path that still consumes the row (row-reader call file
+/// `0x15fd75`), admit only active `== 1` (compare file `0x15fd8e`).
+/// The row reader VA `0x5411a0` (file `0x1411a0`, 316 B) then performs
+/// the remaining 15 sized reads in fixed wire order — six u16 (slot +
+/// `0x2142`/`44`/`46`/`48`/`5C`/`4C`), u32 score via a local into slot +
+/// `0x2160`, u16 reward (+`0x2164`), two u32 (+`0x20`/`0x24`), u8 result
+/// (+`0x2166`), two u32 (+`0x2C`/`0x2128`), u8 speed (+`0x2168`), u32
+/// long-note (+`0x2158`) — committing into the member slot (`0x77ee90` +
+/// member × `0x2190`, self base `0x77cd00`, self arm copies `0x2190`
+/// bytes into the table slot). Tail counts the 8 place flags at
+/// `0x778a1e` into global `0x7789fc` and forwards (`0x12`, 4018, 0, 0).
+/// Dispatcher edge: index `0x0F` holds entry 8 → case file `0x1586dd` →
+/// single caller (site file `0x1586e1`). Dossier (`ev_476a9085…`,
+/// `ev_e5954df4…`, `ev_cbd5ca48…`, `ev_6902875a…`, `ev_5308dcbd…`,
+/// `ev_d19ae823…`; open items `ev_bab8aa66…`, now closed below except
+/// the global labels). Observed with GNU objdump 2.47 slices plus
+/// Python 3.14.9 byte scans over the read-only 7.55 copy; no new REA
+/// dossier filed.
+///
+/// Closed verdicts. No count clamp: the only `push 8` in the handler is
+/// the flag-array memset length (file `0x15fc17`) and the only compare
+/// against 8 is the per-row member guard (file `0x15fd54`); all three loop
+/// exits compare the index against the count word (files `0x15fc80`,
+/// `0x15fce2`, `0x15fd28`, signed `jge`), so any non-negative count runs
+/// and a negative count trips zero rows. The old decoder 8-cap was
+/// Memoryer `maxCount: 8`, never exe behavior, so any funded count
+/// decodes (unfunded counts report `TruncatedMessage`). Slot `+0x30` is
+/// the room-master marker: the head splits on master byte == local id
+/// (`0x77cd04`, compare files `0x55fc5b`/`0x55fcc1`) and the one-byte
+/// writer VA `0x5400b0` (store at slot `+0x30`, file `0x1400bd`) sets
+/// self `+0x30 = 1` when we are master (call file `0x15fc66`, clearing
+/// table mirrors over the first-count slots via the `0x77eec0` read at
+/// file `0x15fc8e`, clear call file `0x15fcb6`) versus self `+0x30 = 0`
+/// plus table master slot `+0x30 = 1` (calls files `0x15fcc8`/`0x15fcf8`/
+/// `0x15fd11`) otherwise. The row reader's 15 stores never touch `+0x30`,
+/// so the flags survive the commits (self and table objects are
+/// distinct: `0x77cd00` vs `0x77ee90 + member × 0x2190`). Self-arm
+/// globals keep pinned sources but OPEN labels: `0x768b68` takes self
+/// `+0x24` (files `0x15fe01`–`0x15fe13`), `0x768b44` accumulates the word
+/// at absolute `0x77ee64` (files `0x15fe19`–`0x15fe33`), `0x768b70` takes
+/// absolute `0x77ee74` (files `0x15fe39`–`0x15fe4b`); the same triple
+/// recurs in the sibling handler at files `0x160060`/`0x160081`/`0x160098`,
+/// and a bulk-load handler at VA `0x55a350` (case file `0x158424`) reads
+/// eight dwords straight into `0x768b44`–`0x768b70` plus one byte into
+/// `0x768b6c`. Self `+0x24` is the experience slot (row-reader dest
+/// `+0x24` ← wire row offset 27), which is corroboration, not a label
+/// for the globals.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScoreCompleted {
     /// Room-master slot.
@@ -1013,13 +1060,21 @@ impl WireMessage for ScoreCompleted {
             field: "score count",
             reason: "negative entry count",
         })?;
-        if count > SCORE_COMPLETED_MAX_ROWS {
-            return Err(Error::InvalidField {
+        // No row cap: the exe bounds every 4018 loop by the count word
+        // alone, so any non-negative count that fits the body decodes.
+        // Checked math keeps a hostile count from wrapping the need.
+        let rows_len = count
+            .checked_mul(SCORE_ENTRY_LEN)
+            .ok_or(Error::InvalidField {
                 field: "score count",
-                reason: "more than 8 entries",
-            });
-        }
-        let need = SCORE_COMPLETED_HEAD_LEN + count * SCORE_ENTRY_LEN;
+                reason: "row bytes overflow address space",
+            })?;
+        let need = SCORE_COMPLETED_HEAD_LEN
+            .checked_add(rows_len)
+            .ok_or(Error::InvalidField {
+                field: "score count",
+                reason: "row bytes overflow address space",
+            })?;
         if body.len() < need {
             return Err(Error::TruncatedMessage {
                 need,
@@ -1056,7 +1111,15 @@ impl WireMessage for ScoreCompleted {
 /// `0x159a60`), which reads byte-sized through the packet-reader
 /// helper (`0x555d20`, size push at file `0x159a8b`) and walks the
 /// member table (stride `0x2190`, self base `0x77cd00`, table base
-/// `0x77ee90`, immediates in range). Observed with GNU objdump 2.47
+/// `0x77ee90`, immediates in range). Each delivered place index lands in
+/// the member slot at `+0x217d` through the notify writer VA `0x5414a0`
+/// (single store, file `0x1414ad`; self arm on `0x77cd00` at file
+/// `0x159acf`, table arm at file `0x159b1a`, gated on the `0x77cd05`
+/// byte plus the local id at `0x77cd04` — `ev_4684b913…`). The places
+/// reset to `0xff` in the slot-reset routine (`mov [reg+0x217d], 0xff`
+/// at file `0x13fccb`), matching the wire `0xff` empty-place pad, so the
+/// stored verdict is the leaderboard place index and nothing wider is
+/// claimed: gameplay use of the places stays OPEN. Observed with GNU objdump 2.47
 /// slices plus Python 3.14.9 byte scans over the read-only 7.55 copy;
 /// no new REA dossier filed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1236,12 +1299,40 @@ mod song_sync_tests {
     }
 
     #[test]
-    fn score_completed_rejects_overfull_count() {
+    fn score_completed_decodes_empty_count() {
+        let completed = ScoreCompleted::decode_body(&[0x00, 0x00, 0x00, 0x00, 0x03]).unwrap();
+        assert_eq!(completed.room_master, 3);
+        assert!(completed.scores.is_empty());
+    }
+
+    #[test]
+    fn score_completed_decodes_more_than_eight_rows() {
+        // The exe caps nothing: nine funded rows decode (Memoryer's
+        // `maxCount: 8` was never exe behavior).
+        let entry = live_score_entry();
+        let completed = ScoreCompleted {
+            room_master: 0,
+            scores: vec![entry; 9],
+        };
+        let body = completed.encode_body();
+        assert_eq!(body.len(), SCORE_COMPLETED_HEAD_LEN + 9 * SCORE_ENTRY_LEN);
+        let back = ScoreCompleted::decode_body(&body).unwrap();
+        assert_eq!(back.scores.len(), 9);
+        assert_eq!(back, completed);
+    }
+
+    #[test]
+    fn score_completed_reports_unfunded_count_without_capping() {
+        // A huge count is a truncation report, not a range error, and
+        // the need is computed before any row allocation.
+        let count: i32 = 100_000;
+        let mut body = Vec::from(count.to_le_bytes());
+        body.push(0x00);
         assert_eq!(
-            ScoreCompleted::decode_body(&[0x09, 0x00, 0x00, 0x00, 0x00]),
-            Err(Error::InvalidField {
-                field: "score count",
-                reason: "more than 8 entries"
+            ScoreCompleted::decode_body(&body),
+            Err(Error::TruncatedMessage {
+                need: SCORE_COMPLETED_HEAD_LEN + 100_000 * SCORE_ENTRY_LEN,
+                have: body.len(),
             })
         );
     }
