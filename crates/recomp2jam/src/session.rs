@@ -129,14 +129,14 @@ use o2jam_net::play::{
 };
 use o2jam_net::rooms::{
     Announcement, MainRoomAdminMessage, MainRoomUserMessage, RankNotification, ReceiveWhisper,
-    RoomSlotAction, RoomSlotUpdate, SendMainRoomMessage, SendWaitingMessage, SendWhisper,
+    RoomList, RoomSlotAction, RoomSlotUpdate, SendMainRoomMessage, SendWaitingMessage, SendWhisper,
     WaitingAdminMessage, WaitingUserMessage,
 };
 use o2jam_net::{
-    ConfirmMusicLoaded, ExitPlaying, FinalizeRank, Frame, GameStatsUpdate, GatewayConnection,
-    Generic, GetMusicList, JoinResult, JoinRoom, JoinRoomResponse, JoinedRoom,
-    MemberReadyStateChanged, Ready, Request, SetRoomArena, SetRoomMusic, StartGame, SubmitScore,
-    WireMessage,
+    ConfirmMusicLoaded, CreateResult, CreateRoom, CreateRoomResponse, ExitPlaying, FinalizeRank,
+    Frame, GameMode, GameStatsUpdate, GatewayConnection, Generic, GetMusicList, JoinResult,
+    JoinRoom, JoinRoomResponse, JoinedRoom, KeyMode, MemberReadyStateChanged, Ready, Request,
+    SetRoomArena, SetRoomMusic, StartGame, SubmitScore, WireMessage,
 };
 use o2jam_shell::screens::game::SlashCommand;
 use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
@@ -357,6 +357,143 @@ impl OnlineSession {
         self
     }
 
+    /// Send one room-setup request and wait for its answer past
+    /// foreign broadcasts (the headless `await_lenient` shape):
+    /// keepalives stay silent, every other skipped id traces,
+    /// never dropped quietly.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the gateway transport reports.
+    fn exchange_room_frame(
+        &mut self,
+        request_id: u16,
+        body: &[u8],
+        expected: u16,
+    ) -> anyhow::Result<Frame> {
+        self.gateway
+            .send_frame(request_id, body)
+            .map_err(|source| anyhow::anyhow!("{source}"))?;
+        loop {
+            let frame = self
+                .gateway
+                .next_frame()
+                .map_err(|source| anyhow::anyhow!("{source}"))?;
+            if frame.id == expected {
+                return Ok(frame);
+            }
+            if Generic::from_id(frame.id).is_none() {
+                tracing::debug!(id = frame.id, "skipping foreign frame during room setup");
+            }
+        }
+    }
+
+    /// Create a room on the live gateway and stage its snapshot
+    /// (the host path): `CreateRoom` 2004 names the number, then the
+    /// `GetChannelInfo` room list sources the row the creator already
+    /// occupies — seat 0, no peers — staged through
+    /// [`Self::stage_hosted_room`]. No `JoinWaiting`: re-joining our
+    /// own room breaks the server master check (`SetRoomMusic` 4000
+    /// then rejects us). The arena word stays 0 until the select
+    /// exchange proves one ([`Self::note_arena_selected`]). Foreign
+    /// broadcasts skip past like [`Self::await_select_frame`], never
+    /// failing the exchange.
+    ///
+    /// # Errors
+    ///
+    /// A rejected create, a missing room row, or whatever the
+    /// gateway transport reports.
+    pub fn create_and_join_room(&mut self, title: &str) -> anyhow::Result<JoinedRoom> {
+        let create = CreateRoom {
+            title: title.to_owned(),
+            key_mode: KeyMode::FiveKeys,
+            game_mode: GameMode::Normal,
+            has_password: false,
+            password: String::new(),
+            min_level: 1,
+            max_level: 99,
+            premium: false,
+        };
+        let created = self.exchange_room_frame(
+            Request::CreateRoom.id(),
+            &create.encode_body(),
+            CreateRoomResponse::COMMAND,
+        )?;
+        let created = CreateRoomResponse::decode_frame(&created)
+            .map_err(|source| anyhow::anyhow!("{source}"))?;
+        if created.result != CreateResult::Success {
+            anyhow::bail!("room create rejected: {:?}", created.result);
+        }
+        let number = created
+            .info
+            .as_ref()
+            .map(|info| info.number)
+            .with_context(|| "room create answered without a snapshot")?;
+        let listed =
+            self.exchange_room_frame(Request::GetChannelInfo.id(), &[], RoomList::COMMAND)?;
+        let listed =
+            RoomList::decode_frame(&listed).map_err(|source| anyhow::anyhow!("{source}"))?;
+        let entry = listed
+            .rooms
+            .iter()
+            .find(|room| room.number == number)
+            .with_context(|| format!("created room {number} missing from the room list"))?;
+        let room = JoinedRoom {
+            member_id: 0,
+            team: 0,
+            title: entry.title.clone(),
+            music_id: entry.music_id,
+            arena: 0,
+            key_mode: entry.key_mode,
+            game_mode: entry.game_mode,
+            difficulty: entry.difficulty,
+            speed: entry.speed,
+            has_super_manager: false,
+            user_count: i32::from(entry.user_count),
+            slots: Vec::new(),
+            skills: Vec::new(),
+            premium: entry.premium,
+            champion: None,
+            champion_streak: None,
+        };
+        self.stage_hosted_room(room.clone());
+        Ok(room)
+    }
+
+    /// Record the echo-verified stage word into the joined snapshot:
+    /// the 4003 answer already proved it took, so both mirrors (the
+    /// session tally source and the shell venue reader) move together.
+    pub fn note_arena_selected(&mut self, arena: i32) -> &mut Self {
+        if let Some(room) = self.joined_room.as_mut() {
+            room.arena = arena;
+            self.game.set_joined_room(room.clone());
+        }
+        self
+    }
+
+    /// Stage a hosted room snapshot (the `CreateRoom` path): the
+    /// join exchange is unnecessary for the host, so this marks the
+    /// session joined directly and mirrors the waiting-room shape
+    /// `join_pending_room` stages for guests.
+    pub fn stage_hosted_room(&mut self, room: JoinedRoom) -> &mut Self {
+        self.joined_room = Some(room.clone());
+        self.game.set_joined_room(room);
+        self.joined_waiting = true;
+        self
+    }
+
+    /// Mutable game behind the session: the walk stages live lists
+    /// and paints deterministic `paint_at` instants through it.
+    pub fn game_mut(&mut self) -> &mut ScreenGame {
+        &mut self.game
+    }
+
+    /// Current shell screen behind the session.
+    #[must_use]
+    pub fn screen(&self) -> Screen {
+        self.game.screen()
+    }
+
     /// Last staged host pick (`None` until a select exchange stages
     /// one). No production reader yet: the Loading chart fetch stages
     /// from it.
@@ -374,8 +511,9 @@ impl OnlineSession {
     /// `GetMusicList` 4030 with the 4031 answer — the headless
     /// [`crate::connect::run_song_flow`] select shapes — and stage the
     /// pick through [`ScreenGame::set_selected_music`], driving the
-    /// dialog rows and the waiting song panel. Returns the music-list
-    /// answer. Runs under the resting session timeout: the exchange is
+    /// dialog rows and the waiting song panel. A successful exchange
+    /// consumes the pending pick, so the next master Confirm means
+    /// START instead of another select. Returns the music-list answer. Runs under the resting session timeout: the exchange is
     /// Confirm-paced, never per-frame, so it may block like the Room
     /// Confirm join.
     ///
@@ -423,6 +561,7 @@ impl OnlineSession {
         }
         self.game.set_selected_music(select);
         self.last_selection = Some(select);
+        self.pending_song = None;
         Ok(answer)
     }
 

@@ -4147,3 +4147,46 @@ trebuchet-cell work (`3af901f`: render `font.rs` + shell `paint.rs` +
   8 deletions). A `cargo fmt --check` re-run on the dirty state is
   clean (`exit=0`); no other gate was re-run after the peer edit, so
   the counts above are the clean-HEAD result.
+
+## Windowed session walk — PASS (2026-11-08 22:31 +08:00, HEAD dirty)
+
+`cargo run -p recomp2jam -- session-walk
+--token 61dcb457-5da9-4e22-af4b-5a4c5658f239
+--out-dir docs/screenshots/session` → **exit=0**, 11 PNGs, one per
+stage (`docs/screenshots/session/01-connect-avi.png` … `11-result.png`,
+400x300 each). New code (uncommitted, no pushes):
+`crates/recomp2jam/src/session_walk.rs` (headless `OnlineSession`
+walk + PNG writer), `session.rs` (`stage_hosted_room`,
+`create_and_join_room`, `note_arena_selected`, `select_song` now
+consumes the pending pick), `main.rs` (`session-walk` subcommand).
+Headless `paint_at` framebuffers only; audio never attached (silent).
+
+Server log for this run (room `walk173`, song 757 HX, arena 1):
+
+- `03E8` Authorize → `03EA` Get channel list →
+  `03EC` Enter channel [0/00] → `07D2` Get room list
+- `07D4` Create room → `07D2` room list (snapshot rows)
+- `0FA0` Update room music [HX/o2ma757] → `0FA2` arena [1] →
+  `0FBE` Get music list (562) → `0FAA` Start game →
+  `0FAC` User music loaded → `0FAE` Game Update Jam + Life →
+  `0FB0` Submit score: **144964** → `0FC9` Finalize rank →
+  `0FB5` Leave game
+
+505 chart onsets struck at their own clocks (exact-onset Cools), so
+the tally is the honestly played sheet, not a fixture. Two
+findings, both handled: re-joining our own room breaks the server
+master check (the walk maps the room list instead of `JoinWaiting`);
+the 4011 broadcast trails the 1 ms paint drain (the walk polls with
+rests, then bails loudly instead of faking the stage).
+
+Honest gaps: 05/06 share the Waiting screen (pick vs chart staged —
+placeholder art renders them identically); 09/10/11 share the Result
+screen (submit landed, 4018 table folded, final — identical pixels at
+this size). Per-stage opcodes are in the walk stdout
+(`~/scratch/walk.log`).
+
+Gates for the touched files: `cargo test -p recomp2jam`
+**193 passed, 0 failed** (incl. live-guarded
+`walk_reaches_result_against_local_gateway`); `cargo fmt --check`
+clean; `cargo clippy -p recomp2jam --all-targets -- -D warnings`
+clean. No commits, no pushes.

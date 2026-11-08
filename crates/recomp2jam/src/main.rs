@@ -10,6 +10,7 @@ mod connect;
 mod live_stats;
 mod loading;
 mod session;
+mod session_walk;
 mod shots;
 
 #[derive(Debug, Parser)]
@@ -141,6 +142,24 @@ enum Command {
     Shots {
         /// Directory for `<scene>.png` files.
         #[arg(long, default_value = "docs/screenshots")]
+        out_dir: String,
+    },
+    /// Windowed-session walk: live online play per stage with PNGs.
+    SessionWalk {
+        /// Gateway host (local Memoryer).
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        /// Gateway TCP port.
+        #[arg(long, default_value_t = o2jam_net::DEFAULT_GATEWAY_PORT)]
+        port: u16,
+        /// Account id.
+        #[arg(long, default_value_t = 1)]
+        user_id: i32,
+        /// Session token (gateway session guid).
+        #[arg(long)]
+        token: String,
+        /// Directory for `<stage>.png` files.
+        #[arg(long, default_value = "docs/screenshots/session")]
         out_dir: String,
     },
     /// Stub gameplay entry point (autoplay with null backend for now).
@@ -507,6 +526,13 @@ fn run_command(command: Command) -> Result<()> {
             }
             Ok(())
         }
+        Command::SessionWalk {
+            host,
+            port,
+            user_id,
+            token,
+            out_dir,
+        } => run_session_walk(&host, port, user_id, &token, &out_dir),
         Command::Play {
             chart,
             ojm,
@@ -636,6 +662,23 @@ fn run_play(
         anyhow::anyhow!("--chart FILE.ojn is required (add --window for the empty shell)")
     })?;
     run_autoplay(&chart_path, ojm.as_deref(), level, sound)
+}
+
+/// `session-walk` subcommand: live windowed-session walk with PNGs.
+///
+/// # Errors
+///
+/// Whatever the walk transport, loading gate, or filesystem reports.
+fn run_session_walk(host: &str, port: u16, user_id: i32, token: &str, out_dir: &str) -> Result<()> {
+    let mut config =
+        session_walk::WalkConfig::local(std::path::PathBuf::from(out_dir), token.to_owned());
+    config.host = host.to_owned();
+    config.port = port;
+    config.user_id = user_id;
+    for stage in session_walk::drive_walk(&config)? {
+        println!("staged {} ({:?})", stage.name, stage.opcodes);
+    }
+    Ok(())
 }
 
 /// Load the splash backdrop into a windowed game, if requested.
