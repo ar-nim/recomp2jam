@@ -1173,6 +1173,172 @@ impl WireMessage for ReceiveWhisper {
     }
 }
 
+/// Lobby notice text: one null-terminated UTF-8 string, no prefix.
+/// Shared layout of [`Announce`] and [`Announcement`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NoticeText {
+    /// Notice text (UTF-8, null-terminated on the wire).
+    content: String,
+}
+
+fn encode_notice_text(notice: &NoticeText) -> Vec<u8> {
+    encode_null_terminated(&notice.content, MAX_STRING_LEN)
+}
+
+fn decode_notice_text_body(body: &[u8]) -> Result<NoticeText, Error> {
+    let (content, used) = decode_null_terminated(body, MAX_STRING_LEN)?;
+    if !body[used..].is_empty() {
+        return Err(Error::TrailingBytes(body.len() - used));
+    }
+    Ok(NoticeText { content })
+}
+
+/// `Announce` 2015 request: an administrator notice for every channel.
+/// Memoryer (`Messages/Requests/Messaging/AnnouncementRequest.cs`):
+/// one `StringMessageField(order: 0)`; the server fans it out as 2016
+/// (`Controllers/MessagingController.cs`). Exe send sites: files
+/// `0x8f585`/`0x8f5dc` (`push 0; push 0x7df`, indirect `+0x5c` send
+/// call), in the lobby slash-command parser beside the 2017 whisper
+/// send — both take the `/n ` branch (prefix at VA `0x647d68`, length
+/// 3 at file `0x8f556` / 4 at file `0x8f5ad`) and both sit behind a
+/// nonzero gate on byte global `0x768b6c` (file `0x8f53e`). Observed
+/// with GNU objdump 2.47 slices plus Python byte scans over the
+/// read-only 7.55 copy; no new REA dossier filed — the single-string
+/// shape is Memoryer corroboration, byte-confirmed on the 2016 read
+/// side below.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Announce {
+    /// Notice text.
+    pub content: String,
+}
+
+impl WireMessage for Announce {
+    const COMMAND: u16 = 2015;
+
+    fn encode_body(&self) -> Vec<u8> {
+        encode_notice_text(&NoticeText {
+            content: self.content.clone(),
+        })
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        decode_notice_text_body(body).map(|notice| Self {
+            content: notice.content,
+        })
+    }
+}
+
+/// `Announcement` 2016 response: the fanned-out notice every client
+/// paints on the lobby notice displays. Same single-string layout as
+/// [`Announce`] (`Messages/Responses/Messaging/
+/// `AnnouncementResponse.cs`). Exe receive: dispatch subtracts base
+/// `0x7d3` (file `0x1582ec`), bounds `0x20` (file `0x1582f8`), and
+/// indexes the address table at file `0x158940`; index `0x0d` (2016)
+/// lands case file `0x1584df`, which calls handler VA `0x55c0a0`
+/// (file `0x15c0a0`). The handler reads exactly one string through
+/// the string-reader helper (`0x555ea0`) into a `0x408`-byte stack
+/// buffer, then feeds the ControlList parent global `0x762B44`:
+/// count `0xa` redraws via `0x4793a0`, else the text fans out as
+/// `0x7de` (admin-message) rows `(2, text)` / `(5, text)` via
+/// `0x479010` (files `0x15c11a`/`0x15c151`). Observed with GNU
+/// objdump 2.47 slices plus Python byte scans over the read-only
+/// 7.55 copy; no new REA dossier filed. The one-string read
+/// byte-verifies the wire shape; the `0x408` buffer hints a practical
+/// text cap (Memoryer sets none) — OPEN until a long notice is fed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Announcement {
+    /// Notice text.
+    pub content: String,
+}
+
+impl WireMessage for Announcement {
+    const COMMAND: u16 = 2016;
+
+    fn encode_body(&self) -> Vec<u8> {
+        encode_notice_text(&NoticeText {
+            content: self.content.clone(),
+        })
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        decode_notice_text_body(body).map(|notice| Self {
+            content: notice.content,
+        })
+    }
+}
+
+/// `RankNotification` 2029 event: a rank-up notice for the lobby
+/// displays. Memoryer (`Messages/Events/MainRoom/
+/// `RankNotificationEventData.cs`): bool `Invalid` as little-endian
+/// `i32` (order 0, nonzero reads true), `i32` music id (order 1),
+/// string nickname (order 2), `i32` ranking (order 4 — order 3 was
+/// dropped upstream, so the wire order is invalid, music, name,
+/// rank). Exe receive: dispatch index `0x1a` (2029) lands case file
+/// `0x158556`, which calls handler VA `0x55b4d0` (file `0x15b4d0`).
+/// The handler reads the invalid word through the packet-reader
+/// helper (`0x555d20`) and drops the packet when nonzero (`cmp` at
+/// file `0x15b527`); else it stages music id, nickname, and ranking
+/// through `.data` slots `0x77969c`/`0x7796a8`/`0x7796a0` and forwards
+/// `(0, 0, 0x7ed, 0x12)` into the ControlList UI queue (`0x478d50`,
+/// file `0x15b575`). Observed with GNU objdump 2.47 slices plus
+/// Python byte scans over the read-only 7.55 copy; no new REA dossier
+/// filed — the field order is Memoryer corroboration against an
+/// exe-verified read sequence. (2015 C→S has no client handler: the
+/// same table maps index `0x0c` to the default case file `0x158937`.)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RankNotification {
+    /// True when the notice carries no rank (client drops it).
+    pub invalid: bool,
+    /// Ranked song id.
+    pub music_id: i32,
+    /// Ranked player nickname.
+    pub nickname: String,
+    /// New rank value.
+    pub ranking: i32,
+}
+
+impl WireMessage for RankNotification {
+    const COMMAND: u16 = 2029;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = Vec::with_capacity(4 + 4 + self.nickname.len() + 1 + 4);
+        body.extend_from_slice(&i32::from(self.invalid).to_le_bytes());
+        body.extend_from_slice(&self.music_id.to_le_bytes());
+        body.extend_from_slice(&encode_null_terminated(&self.nickname, MAX_STRING_LEN));
+        body.extend_from_slice(&self.ranking.to_le_bytes());
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < 8 {
+            return Err(Error::TruncatedMessage {
+                need: 8,
+                have: body.len(),
+            });
+        }
+        let invalid = i32::from_le_bytes([body[0], body[1], body[2], body[3]]) != 0;
+        let music_id = i32::from_le_bytes([body[4], body[5], body[6], body[7]]);
+        let (nickname, used) = decode_null_terminated(&body[8..], MAX_STRING_LEN)?;
+        let tail = &body[8 + used..];
+        if tail.len() < 4 {
+            return Err(Error::TruncatedMessage {
+                need: 8 + used + 4,
+                have: body.len(),
+            });
+        }
+        if tail.len() > 4 {
+            return Err(Error::TrailingBytes(tail.len() - 4));
+        }
+        let ranking = i32::from_le_bytes([tail[0], tail[1], tail[2], tail[3]]);
+        Ok(Self {
+            invalid,
+            music_id,
+            nickname,
+            ranking,
+        })
+    }
+}
+
 /// `SendWaitingMessage` 3011 request: raw chat bytes fill the whole
 /// body — no length prefix, no terminator, and an empty body sends an
 /// empty line. Memoryer (`Messages/Requests/Messaging/
@@ -1984,5 +2150,161 @@ mod main_room_chat_tests {
             content: vec![0xC7],
         };
         assert_eq!(send.content_text(), "\u{FFFD}");
+    }
+}
+
+#[cfg(test)]
+mod notice_tests {
+    use super::*;
+    use crate::frame::decode_frame;
+
+    #[test]
+    fn announce_carries_one_terminated_string() {
+        let message = Announce {
+            content: "abc".to_owned(),
+        };
+        assert_eq!(message.encode_body(), vec![0x61, 0x62, 0x63, 0x00]);
+        let frame = decode_frame(&message.encode()).unwrap();
+        assert_eq!(frame.id, 2015);
+        assert_eq!(Announce::decode_frame(&frame), Ok(message));
+    }
+
+    #[test]
+    fn announce_encodes_full_frame_bytes() {
+        let message = Announce {
+            content: "abc".to_owned(),
+        };
+        assert_eq!(
+            message.encode(),
+            vec![0x08, 0x00, 0xDF, 0x07, 0x61, 0x62, 0x63, 0x00]
+        );
+    }
+
+    #[test]
+    fn announce_empty_body_is_empty_notice() {
+        let message = Announce::decode_body(&[]).unwrap();
+        assert_eq!(message.content, String::new());
+        assert_eq!(message.encode_body(), vec![0x00]);
+    }
+
+    #[test]
+    fn announce_rejects_trailing_bytes() {
+        assert_eq!(
+            Announce::decode_body(&[0x61, 0x00, 0xFF]),
+            Err(Error::TrailingBytes(1))
+        );
+    }
+
+    #[test]
+    fn announcement_matches_announce_layout() {
+        // Same Content string; the server fans 2015 out as 2016.
+        let message = Announcement {
+            content: "abc".to_owned(),
+        };
+        assert_eq!(message.encode_body(), vec![0x61, 0x62, 0x63, 0x00]);
+        let frame = decode_frame(&message.encode()).unwrap();
+        assert_eq!(frame.id, 2016);
+        assert_eq!(Announcement::decode_frame(&frame), Ok(message));
+    }
+
+    #[test]
+    fn announcement_rejects_foreign_command() {
+        let frame = decode_frame(
+            &Announce {
+                content: "abc".to_owned(),
+            }
+            .encode(),
+        )
+        .unwrap();
+        assert_eq!(
+            Announcement::decode_frame(&frame),
+            Err(Error::UnknownCommand(2015))
+        );
+    }
+
+    #[test]
+    fn rank_notification_matches_wire_order() {
+        // invalid i32, music id i32, nickname string, ranking i32.
+        let message = RankNotification {
+            invalid: false,
+            music_id: 757,
+            nickname: "ab".to_owned(),
+            ranking: 3,
+        };
+        assert_eq!(
+            message.encode_body(),
+            vec![
+                0x00, 0x00, 0x00, 0x00, 0xF5, 0x02, 0x00, 0x00, 0x61, 0x62, 0x00, 0x03, 0x00, 0x00,
+                0x00
+            ]
+        );
+        let frame = decode_frame(&message.encode()).unwrap();
+        assert_eq!(frame.id, 2029);
+        assert_eq!(RankNotification::decode_frame(&frame), Ok(message));
+    }
+
+    #[test]
+    fn rank_notification_reports_invalid_without_rank() {
+        // The exe drops nonzero-invalid packets before the UI forward.
+        let message = RankNotification {
+            invalid: true,
+            music_id: 757,
+            nickname: "ab".to_owned(),
+            ranking: 0,
+        };
+        assert_eq!(&message.encode_body()[..4], &[0x01, 0x00, 0x00, 0x00]);
+        let back = RankNotification::decode_body(&message.encode_body()).unwrap();
+        assert_eq!(back, message);
+        assert!(back.invalid);
+    }
+
+    #[test]
+    fn rank_notification_treats_any_nonzero_word_as_invalid() {
+        // Mirrors the exe `cmp ..., 0` / `jne skip` gate.
+        let mut body = RankNotification {
+            invalid: false,
+            music_id: 757,
+            nickname: "ab".to_owned(),
+            ranking: 3,
+        }
+        .encode_body();
+        body[0] = 0x02;
+        assert!(RankNotification::decode_body(&body).unwrap().invalid);
+    }
+
+    #[test]
+    fn rank_notification_rejects_short_body() {
+        assert_eq!(
+            RankNotification::decode_body(&[0x00, 0x00, 0x00]),
+            Err(Error::TruncatedMessage { need: 8, have: 3 })
+        );
+    }
+
+    #[test]
+    fn rank_notification_rejects_missing_rank() {
+        // invalid + music id + nickname, no ranking word.
+        let body = vec![
+            0x00, 0x00, 0x00, 0x00, 0xF5, 0x02, 0x00, 0x00, 0x61, 0x62, 0x00,
+        ];
+        assert_eq!(
+            RankNotification::decode_body(&body),
+            Err(Error::TruncatedMessage { need: 15, have: 11 })
+        );
+    }
+
+    #[test]
+    fn rank_notification_rejects_trailing_bytes() {
+        let mut body = RankNotification {
+            invalid: false,
+            music_id: 757,
+            nickname: "ab".to_owned(),
+            ranking: 3,
+        }
+        .encode_body();
+        body.push(0xFF);
+        assert_eq!(
+            RankNotification::decode_body(&body),
+            Err(Error::TrailingBytes(1))
+        );
     }
 }

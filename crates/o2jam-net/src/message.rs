@@ -1173,6 +1173,15 @@ mod command_consistency_tests {
             crate::rooms::SendWhisper::COMMAND,
             Request::SendWhisper as u16
         );
+        assert_eq!(crate::rooms::Announce::COMMAND, Request::Announce as u16);
+        assert_eq!(
+            crate::rooms::Announcement::COMMAND,
+            Response::Announcement as u16
+        );
+        assert_eq!(
+            crate::rooms::RankNotification::COMMAND,
+            Event::RankNotification as u16
+        );
         assert_eq!(
             crate::rooms::SendWhisperResponse::COMMAND,
             Response::SendWhisper as u16

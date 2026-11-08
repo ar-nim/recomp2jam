@@ -17,6 +17,7 @@ pub enum Request {
     GetChannelInfo = 2002,
     CreateRoom = 2004,
     SendMainRoomMessage = 2012,
+    Announce = 2015,
     SendWhisper = 2017,
     JoinWaiting = 3002,
     SetRoomMusic = 4000,
@@ -52,6 +53,7 @@ impl Request {
             2002 => Some(Self::GetChannelInfo),
             2004 => Some(Self::CreateRoom),
             2012 => Some(Self::SendMainRoomMessage),
+            2015 => Some(Self::Announce),
             2017 => Some(Self::SendWhisper),
             3002 => Some(Self::JoinWaiting),
             4000 => Some(Self::SetRoomMusic),
@@ -113,6 +115,7 @@ pub enum Response {
     CreateRoom = 2006,
     MainRoomUserMessage = 2013,
     MainRoomAdminMessage = 2014,
+    Announcement = 2016,
     SendWhisper = 2018,
     JoinRoom = 3003,
 }
@@ -140,6 +143,7 @@ impl Response {
             2006 => Some(Self::CreateRoom),
             2013 => Some(Self::MainRoomUserMessage),
             2014 => Some(Self::MainRoomAdminMessage),
+            2016 => Some(Self::Announcement),
             2018 => Some(Self::SendWhisper),
             3003 => Some(Self::JoinRoom),
             _ => None,
@@ -154,6 +158,7 @@ impl Response {
 pub enum Event {
     RoomCreated = 2007,
     ReceiveWhisper = 2019,
+    RankNotification = 2029,
     RoomArenaEcho = 4003,
     GameStatsUpdate = 4015,
 }
@@ -171,6 +176,7 @@ impl Event {
         match id {
             2007 => Some(Self::RoomCreated),
             2019 => Some(Self::ReceiveWhisper),
+            2029 => Some(Self::RankNotification),
             4003 => Some(Self::RoomArenaEcho),
             4015 => Some(Self::GameStatsUpdate),
             _ => None,
@@ -232,6 +238,7 @@ mod tests {
     fn resolves_room_ids() {
         assert_eq!(Request::from_id(2004), Some(Request::CreateRoom));
         assert_eq!(Request::from_id(2012), Some(Request::SendMainRoomMessage));
+        assert_eq!(Request::from_id(2015), Some(Request::Announce));
         assert_eq!(Request::from_id(2017), Some(Request::SendWhisper));
         assert_eq!(Response::from_id(2006), Some(Response::CreateRoom));
         assert_eq!(Response::from_id(2013), Some(Response::MainRoomUserMessage));
@@ -239,9 +246,11 @@ mod tests {
             Response::from_id(2014),
             Some(Response::MainRoomAdminMessage)
         );
+        assert_eq!(Response::from_id(2016), Some(Response::Announcement));
         assert_eq!(Response::from_id(2018), Some(Response::SendWhisper));
         assert_eq!(Event::from_id(2007), Some(Event::RoomCreated));
         assert_eq!(Event::from_id(2019), Some(Event::ReceiveWhisper));
+        assert_eq!(Event::from_id(2029), Some(Event::RankNotification));
         assert_eq!(Event::from_id(2006), None);
     }
 

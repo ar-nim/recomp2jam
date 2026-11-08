@@ -3230,3 +3230,41 @@ bridge (`8884b91`: lobby chat send path in `screens/game.rs` +
   and recomp2jam 122 → 128 from the lobby-chat send tests, all other
   targets unchanged, 0 failures). No lint findings. No commits, no
   pushes.** This sweep touched only `docs/playtest.md`.
+
+## Regression sweep — 2026-11-08 12:12 UTC+8 (HEAD `c9e94ed`, tree clean)
+
+Live re-proof on the whisper-head. Covers the whisper commit landed
+after the lobbysend-head baseline `8884b91`: parse whisper slash
+commands route 2017 (`c9e94ed`), plus the sweep log in this file.
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1491 passed, 0 failed, 0 ignored**, `exit=0`.
+  Per target: audio 20, dump 7, file 177, game 94, net 375,
+  render 89, shell 565, real_art 7, scenes 22, recomp2jam 135
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, no warnings.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 134 filtered out, 0.59 s) against local
+  Memoryer 7.2.0 (`Mode=Full`). Server log for this run
+  (`12:11:51 +08:00`): `Authorize session` →
+  `Create room: songflow` →
+  `Update room [000] music settings: [HX / X10 / o2ma757]` →
+  `Update room [000] arena: [1] (0)` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure stack on room delete; a trailing session walked
+  `Authorize session` → `Get channel list` → `Enter channel` →
+  `Get room list` → `Get character info`).
+- **Verdict: no regression — suite is green on the whisper-head
+  (1491 passed; +24 vs the 1467 `8884b91` baseline: shell 548 → 565
+  and recomp2jam 128 → 135 from the whisper slash-command tests, all
+  other targets unchanged, 0 failures). No lint findings. No commits,
+  no pushes.** This sweep touched only `docs/playtest.md`.
