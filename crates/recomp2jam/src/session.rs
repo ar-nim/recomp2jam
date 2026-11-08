@@ -38,6 +38,17 @@
 //! silently, foreign ids log and skip, undecodable bodies drop with
 //! a trace.
 //!
+//! Ready and START (Waiting scene): an empty-draft Confirm with a
+//! joined room means readiness, not chat — a guest flips its Ready
+//! 4008 toggle, a master sends START 4010 only while
+//! [`ScreenGame::can_start_game`] holds the all-peers-ready gate,
+//! and the shell reaches Loading on the 4011 start broadcast
+//! (drained beside the chat lines, applied after). The 4010 send
+//! mirrors the headless [`connect::run_song_flow`] StartGame shape
+//! (empty body, no 4012 tail — Loading owns that). Member updates
+//! (3009 slot, 4009 ready echo) drain with a trace; the barrier
+//! proves through staged snapshots instead.
+//!
 //! Lobby send (Channel scene): the shell stages a second draft
 //! ([`ScreenGame::take_channel_slash`]) beside the channel history
 //! and transmits it on Confirm through
@@ -73,7 +84,7 @@ use o2jam_net::rooms::{
 };
 use o2jam_net::{
     Frame, GameStatsUpdate, GatewayConnection, Generic, JoinResult, JoinRoom, JoinRoomResponse,
-    Request, WireMessage,
+    Request, StartGame, WireMessage,
 };
 use o2jam_shell::screens::game::SlashCommand;
 use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
@@ -98,6 +109,26 @@ const NOTICE_IO_TIMEOUT: Duration = Duration::from_millis(1);
 /// default (`client.rs` `DEFAULT_IO_TIMEOUT`), restored after every
 /// stats section like `run_song_flow` restores `SONG_FLOW_IO_TIMEOUT`.
 const SESSION_IO_TIMEOUT: Duration = Duration::from_secs(10);
+/// C->S ready toggle (4008): the joined-guest Confirm send. The S->C
+/// echo is 4009 (`docs/client-server-plan.md` Phase 3 pairs 4008/4009
+/// like 4000/4001); the toggle body is one flag byte — a documented
+/// guess (the ready slot byte is 1 B, `docs/relay.md` §10, and small
+/// protocol ints ride `u8`, e.g. 4038): live-gateway proof stays OPEN.
+const READY_COMMAND: u16 = 4008;
+/// S->C ready echo (4009): drained but unfolded — no decoder staged
+/// in this crate for P2, so it skips past with a trace like foreign
+/// chat frames.
+const READY_ECHO_COMMAND: u16 = 4009;
+/// S->C slot update (3009): answers `UpdateSlot` 3008
+/// (`docs/client-server-plan.md` Phase 3); drained but unfolded for
+/// the same reason — the start barrier proves through staged
+/// snapshots instead (see the master-barrier session test).
+const SLOT_UPDATE_COMMAND: u16 = 3009;
+/// S->C start broadcast (4011): answers the host `StartGame` 4010
+/// (`docs/client-server-plan.md` Phase 4 pairs 4010/4011). The id
+/// alone advances the shell — no body is staged here — so no decoder
+/// is needed.
+const START_BROADCAST_COMMAND: u16 = 4011;
 
 /// Sent-tick dedupe key: the wire moves only when play does (per-hit
 /// shape — identical snapshots between judgements send nothing).
@@ -138,6 +169,14 @@ pub struct OnlineSession {
     last_tick: Option<TickSnapshot>,
     pending_room: Option<PendingRoomJoin>,
     local_user: String,
+    /// `true` once a Room Confirm join staged a snapshot: Waiting
+    /// Confirm then means START/READY instead of the offline walk.
+    joined_waiting: bool,
+    /// Guest ready toggle behind `Ready` 4008 (flips per Confirm).
+    guest_ready: bool,
+    /// `true` once the 4011 start broadcast arrived: the next
+    /// draft-free Waiting paint advances the shell to Loading.
+    start_announced: bool,
 }
 
 impl OnlineSession {
@@ -154,6 +193,9 @@ impl OnlineSession {
             last_tick: None,
             pending_room: None,
             local_user: String::new(),
+            joined_waiting: false,
+            guest_ready: false,
+            start_announced: false,
         }
     }
 
@@ -411,7 +453,69 @@ impl OnlineSession {
             return false;
         };
         self.game.set_joined_room(room);
+        self.joined_waiting = true;
         true
+    }
+
+    /// Waiting Confirm with an empty draft: slash drafts route through
+    /// [`Self::flush_chat_action`] first (chat/whisper/help — no
+    /// readiness change); with no joined room the offline walk keeps
+    /// its local Waiting → Loading enter; a joined master sends
+    /// `StartGame` 4010 while the all-peers-ready gate holds; a joined
+    /// guest flips its `Ready` 4008 toggle. START/READY failures warn
+    /// and keep state, so the next Confirm retries the same send.
+    fn confirm_waiting(&mut self) {
+        if self.game.chat_slash_command() != SlashCommand::Empty {
+            if let Err(source) = self.flush_chat_action() {
+                tracing::warn!(%source, "chat send failed; draft kept");
+            }
+            return;
+        }
+        if !self.joined_waiting {
+            self.game.menu_key(MenuKey::Confirm, true);
+            return;
+        }
+        if self.game.is_room_master() {
+            self.confirm_master_start();
+        } else {
+            self.confirm_guest_ready();
+        }
+    }
+
+    /// Joined-master Confirm: send `StartGame` 4010 ([`Request::StartGame`]
+    /// with the [`StartGame`] empty body — the `run_song_flow` send
+    /// shape, minus the `ConfirmMusicLoaded` tail, which the Loading
+    /// section owns). Blocked while any occupied peer is unready — the
+    /// shell [`ScreenGame::can_start_game`] gate — with a warning and
+    /// no packet. Loading waits on the 4011 broadcast
+    /// ([`Self::poll_start`]), never on this send.
+    fn confirm_master_start(&mut self) {
+        if !self.game.can_start_game() {
+            tracing::warn!("start blocked: every occupied peer must be ready");
+            return;
+        }
+        if let Err(source) = self
+            .gateway
+            .send_frame(Request::StartGame.id(), &StartGame.encode_body())
+        {
+            tracing::warn!(%source, "start send failed; Confirm retries it");
+        }
+    }
+
+    /// Joined-guest Confirm: flip the local ready toggle and send
+    /// `Ready` 4008 with the new flag byte. A failed send flips the
+    /// toggle back (the keep-for-retry shape: the next Confirm sends
+    /// the same value again). The shell stays in Waiting either way —
+    /// Loading arrives on the 4011 broadcast.
+    fn confirm_guest_ready(&mut self) {
+        self.guest_ready = !self.guest_ready;
+        if let Err(source) = self
+            .gateway
+            .send_frame(READY_COMMAND, &[u8::from(self.guest_ready)])
+        {
+            self.guest_ready = !self.guest_ready;
+            tracing::warn!(%source, "ready send failed; Confirm retries it");
+        }
     }
 
     /// Per-frame stats section in `Playing`: one change-gated 4014 jam
@@ -549,6 +653,32 @@ impl OnlineSession {
         if let Err(source) = self.gateway.set_timeouts(Some(SESSION_IO_TIMEOUT)) {
             tracing::debug!(%source, "waiting chat timeout restore failed");
         }
+        self.poll_start();
+    }
+
+    /// Start-broadcast section in `Waiting`: the 4011 drain sets
+    /// `start_announced`, and an announced start advances the shell
+    /// to Loading through its own Confirm gate — a pending chat draft
+    /// holds the advance (peek-only, never eaten) so typed text is
+    /// never lost to the transition. The gate passes for the host and
+    /// the offline walk; a joined guest stays in Waiting — the shell
+    /// exposes no force-advance past its master gate (noted gap).
+    /// Leaving Waiting clears the announcement either way.
+    fn poll_start(&mut self) {
+        if self.game.screen() != Screen::Waiting {
+            self.start_announced = false;
+            return;
+        }
+        if !self.start_announced {
+            return;
+        }
+        if self.game.chat_slash_command() != SlashCommand::Empty {
+            return;
+        }
+        self.game.menu_key(MenuKey::Confirm, true);
+        if self.game.screen() != Screen::Waiting {
+            self.start_announced = false;
+        }
     }
 
     /// Drain inbound 3012 player lines and 3013 administrator lines
@@ -564,6 +694,15 @@ impl OnlineSession {
                 }
                 Ok(frame) if frame.id == WaitingAdminMessage::COMMAND => {
                     self.apply_waiting_admin_message(&frame);
+                }
+                Ok(frame) if frame.id == START_BROADCAST_COMMAND => {
+                    self.start_announced = true;
+                }
+                Ok(frame) if frame.id == SLOT_UPDATE_COMMAND || frame.id == READY_ECHO_COMMAND => {
+                    tracing::debug!(
+                        id = frame.id,
+                        "skipping member-update frame in waiting drain"
+                    );
                 }
                 Ok(frame) if Generic::from_id(frame.id).is_some() => {}
                 Ok(frame) => {
@@ -719,13 +858,7 @@ impl GameLoop for OnlineSession {
             return;
         }
         if key == MenuKey::Confirm && self.game.screen() == Screen::Waiting {
-            match self.flush_chat_action() {
-                Ok(sent) if !sent => self.game.menu_key(key, down),
-                Ok(_) => {}
-                Err(source) => {
-                    tracing::warn!(%source, "chat send failed; draft kept");
-                }
-            }
+            self.confirm_waiting();
             return;
         }
         if key == MenuKey::Confirm && self.game.screen() == Screen::Channel {
@@ -885,6 +1018,61 @@ mod session_tests {
             champion: None,
             champion_streak: None,
         }
+    }
+
+    /// One seated member for staged snapshots (level/gender/gem
+    /// zeros — only nickname and readiness matter to the gate).
+    fn member(nickname: &str, ready: bool) -> o2jam_net::RoomMember {
+        o2jam_net::RoomMember {
+            nickname: nickname.to_owned(),
+            level: 1,
+            gender: 0,
+            gem: 0,
+            master: false,
+            team: 0,
+            ready,
+            music_state: 0,
+            equipment: [0; 17],
+            music_ids: Vec::new(),
+            cash_point: 0,
+            free_pass: 0,
+            playing_state: 0,
+            administrator: false,
+            super_manager: false,
+        }
+    }
+
+    /// Guest snapshot: our seat is 1 under a ready master at seat 0.
+    fn guest_snapshot() -> o2jam_net::JoinedRoom {
+        let mut room = joined_snapshot();
+        room.member_id = 1;
+        room.user_count = 2;
+        room.slots[0].member = Some(member("host", true));
+        room.slots[1].member = Some(member("guest", false));
+        room
+    }
+
+    /// Game in Waiting with a staged joined snapshot, paired with a
+    /// live fake gateway; the server end runs `with_server`. Stages
+    /// the snapshot the Room Confirm join would have staged (that
+    /// exchange is covered above) and marks the session joined, so
+    /// Waiting Confirm means START/READY instead of the offline walk.
+    fn joined_waiting_session(
+        room: o2jam_net::JoinedRoom,
+        with_server: impl FnOnce(TcpStream) + Send + 'static,
+    ) -> (OnlineSession, thread::JoinHandle<()>) {
+        let (port, server) = fake_gateway(with_server);
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        session.game.set_joined_room(room);
+        session.joined_waiting = true;
+        session.game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(session.game.screen(), Screen::Waiting);
+        (session, server)
     }
 
     /// gateway; the server end runs `with_server`.
@@ -1254,6 +1442,103 @@ mod session_tests {
         server.join().unwrap();
         assert_eq!(session.game.screen(), Screen::Waiting);
         assert!(!session.game.is_room_master());
+    }
+
+    #[test]
+    fn guest_confirm_sends_ready_toggle_and_stays_waiting() {
+        let (mut session, server) = joined_waiting_session(guest_snapshot(), |mut stream| {
+            let first = read_frame(&mut stream);
+            assert_eq!(first.id, 4008);
+            assert_eq!(first.payload, vec![1]);
+            let second = read_frame(&mut stream);
+            assert_eq!(second.id, 4008);
+            assert_eq!(second.payload, vec![0]);
+            assert_quiet(&mut stream);
+        });
+        assert!(!session.game.is_room_master());
+        session.menu_key(MenuKey::Confirm, true);
+        assert_eq!(session.game.screen(), Screen::Waiting);
+        session.menu_key(MenuKey::Confirm, true);
+        server.join().unwrap();
+        assert_eq!(session.game.screen(), Screen::Waiting);
+    }
+
+    #[test]
+    fn guest_chat_draft_sends_chat_not_ready() {
+        let (mut session, server) = joined_waiting_session(guest_snapshot(), |mut stream| {
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, 3011);
+            assert_eq!(frame.payload, b"hi".to_vec());
+            assert_quiet(&mut stream);
+        });
+        session.game.set_chat_input("hi");
+        session.menu_key(MenuKey::Confirm, true);
+        server.join().unwrap();
+        assert_eq!(session.game.screen(), Screen::Waiting);
+        assert_eq!(session.game.chat_input(), "");
+    }
+
+    #[test]
+    fn master_blocked_until_every_peer_ready() {
+        let mut room = joined_snapshot();
+        room.slots[1].member = Some(member("peer", false));
+        let (mut session, server) = joined_waiting_session(room, |mut stream| {
+            // The blocked first Confirm sends nothing: the first
+            // frame on the wire is the gated START below.
+            let start = read_frame(&mut stream);
+            assert_eq!(start.id, 4010);
+            assert!(start.payload.is_empty());
+            assert_quiet(&mut stream);
+        });
+        assert!(session.game.is_room_master());
+        assert!(!session.game.can_start_game());
+        session.menu_key(MenuKey::Confirm, true);
+        assert_eq!(session.game.screen(), Screen::Waiting);
+        let mut ready_room = joined_snapshot();
+        ready_room.slots[1].member = Some(member("peer", true));
+        session.game.set_joined_room(ready_room);
+        assert!(session.game.can_start_game());
+        session.menu_key(MenuKey::Confirm, true);
+        server.join().unwrap();
+        assert_eq!(session.game.screen(), Screen::Waiting);
+    }
+
+    #[test]
+    fn start_broadcast_advances_host_to_loading() {
+        let mut room = joined_snapshot();
+        room.slots[1].member = Some(member("peer", true));
+        let (mut session, server) = joined_waiting_session(room, |mut stream| {
+            let start = read_frame(&mut stream);
+            assert_eq!(start.id, 4010);
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            assert_quiet(&mut stream);
+        });
+        session.menu_key(MenuKey::Confirm, true);
+        assert_eq!(session.game.screen(), Screen::Waiting);
+        for _ in 0..50 {
+            if session.game.screen() == Screen::Loading {
+                break;
+            }
+            paint_frame(&mut session);
+        }
+        server.join().unwrap();
+        assert_eq!(session.game.screen(), Screen::Loading);
+    }
+
+    #[test]
+    fn guest_start_broadcast_stays_waiting_without_force_advance() {
+        let (mut session, server) = joined_waiting_session(guest_snapshot(), |mut stream| {
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            assert_quiet(&mut stream);
+        });
+        for _ in 0..5 {
+            paint_frame(&mut session);
+        }
+        server.join().unwrap();
+        // Gap: the shell Confirm gate passes masters only, and the
+        // shell exposes no force-advance — the guest waits here until
+        // that shell API lands.
+        assert_eq!(session.game.screen(), Screen::Waiting);
     }
 
     #[test]
