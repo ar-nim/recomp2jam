@@ -984,3 +984,121 @@ dismissal (clean client exit, no dump).
   (left running). Launchers/minters: `/tmp/mint_blob.py`, `/tmp/o2jam-gamestart*.fish`,
   `/tmp/xtest_key.py`, `/tmp/xtest_click.py`, `/tmp/gen_fontlink.py`. Shots `/tmp/o2jam-shot*.png`.
   Repo change: this file only. Not committed (per task).
+
+## Attempt 13 — bot 4012 + full song-flow: loading reached, play wedged (2026-11-08)
+
+Goal: fix the scratch host bot to send its own 4012, keep flaps off,
+freeze the room before 4010, then observe 4014 ticks, 4016 submit,
+result screen. Result: the bot fix works end to end — both 4012s flow,
+the server runs the whole song (bot 4014 x10, 4016, 4041, 4017 naming
+the master), but the Wine guest never leaves the song loading screen:
+no guest 4014/4016, no 4018, no result screen. New wall is client-side
+(Wine), not protocol. Helpers, launchers, shots, logs scratch-only in
+`~/scratch` (`host_play.py`, `siclickwait.c`/`siclickwait.exe.so`,
+`refocus.py`, `race.py`/`joinspam.py`/`gridspam.py`/`hotspotspam.py`,
+`paintpoll.py`/`bootpoll.py`/`track.py`, `o2jam-ws.fish`, `*-notice.png`,
+`*-chan*.png`, `*-room*.png`, `*-wait.png`, `*-load.png`, `*-play*.png`,
+`z-*.png`, `host_play.log`). Memoryer unmodified (server use only).
+No commit, no push.
+
+### Bot fix (the assigned gap)
+
+`host_play.py` (from `host_flap.py` lineage): on the `4010` trigger it
+sends 4010 StartGame (empty) then immediately 4012 ConfirmMusicLoaded
+`struct.pack("<iB", 0, 1)` (power 0, speed 1 — the room's own
+music/speed, matching the guest's `0FAC "0 / X10"` shape). Then the
+full CLI song-flow (`connect.rs run_song_flow` order): 4036 (member 0)
++ 4038 (100, member 0) with the start, ten 4014 Jam ticks from +10 s,
+4016 + 4041 at +45 s (non-blocking schedule inside the ping loop, so
+6001 keepalive never stalls). Flaps off (single 4002 arena 0 at create
+only). Recreate allowed until the 0BBC guest-join event, ignored after
+(room frozen before 4010 per task). Verified live: 0FAA then bot 0FAC
+at +0.002 s, guest 0FAC at +0.4 s, both 4013s (0FAD `0001` + `0101`),
+4048/4049 latency exchange (11 rounds), bot ticks as ten 0FAE, bot
+submit as 0FB0, bot 4041 as 0FC9, server 4017 (0FB1 slot 00).
+
+### Walk (Xvfb `:99`, prefix-ws, null sink, music 757, room 000)
+
+Notice (shot) → H-tab XTEST (148,81) → `03E8`/`03EA` (~15-40 s) →
+fallback-OK XTEST at detected pill (401,360) → channel list → 입장
+single at detected button (520,246) → `03EC → 0FBE → 07D0 → 07D2 →
+13A4` (12-25 s) → room list → row double-click → `0BBA` → WAITING
+(both READY after guest `4008` at 677,143 → `0FA8`) → host `4010` →
+`0FAA`/`4011` → both `0FAC`/`4012` + guest `0FD7` → song loading art
+(shot: `미쳤어`, 3KEY VERSION, U1/U2 dots, BPM 124). Stages reached:
+notice, channel, room list, waiting room, loading. Never: active play,
+submit, result.
+
+### Join aiming (wall broken this attempt)
+
+All earlier row double-clicks aimed at the panel middle (175,160 — the
+green-bar/badge zone) and failed ~30 times across cycles. Grid probing
+found the hot zone: the row TITLE bar (`000 WINEJOIN`), e.g. (100,100)
+joins first try; (200,108)/(250,150)/(175,160) never emit `0BBA`.
+Programmatic rule used throughout: never trust eyeballed pixels — every
+aim came from a detector (pill-profile, red-run, green-count baselines).
+X-warps land exactly 1:1 (two-shot diff proof); the visible orange
+arrow tracks warps, but eyeball reads of it err by ~100 px.
+
+### Fuse-modal timing + cache finding
+
+The `서버로 부터 응답이 없습니다` modal fires ~+35-44 s after 03EC,
+with the row paint on the +36 s `07DA`/`07E8` poll — a ~1-8 s join
+window per cycle. Two exceptions, both post-FFF0 re-auth entries:
+03EC and 07DA in the SAME second (20:40:26.9, 20:58:14.8) with instant
+paint — first entry per boot waits +36 s, later entries paint from
+cache. Reliable loop used twice: modal → Return (`siret`, sends FFF0)
+→ H-tab re-auth (~40 s, slower than boot-time) → walk → instant-paint
+entry → join at (100,100) pre-modal. Second Return is sometimes needed
+to dismiss the modal visually (first sends FFF0 but leaves it painted;
+modal loop eats all input while up). Post-FFF0 Escape paginates, so
+input is NOT dead — earlier "dead input" verdicts are retracted;
+re-auth just needs patience.
+
+### Focus pin (owner note) + loading wedge (new wall)
+
+Owner: losing window focus throws the client back to waiting/room.
+X focus here sat on the wrong window (`0xe00001`) for whole drives;
+probed chain is desktop `0xa00007` → container `0xe00001` → canvas
+`0xc0004e` (all 800x600 at 0,0 — no fullscreen/scale; mapping is 1:1).
+This drive pinned focus on `0xc0004e` before the join and kept it with
+a 5 s re-assert keeper (`refocus.py`): zero lapses during play, yet the
+guest still never leaves loading. So focus is necessary but not
+sufficient — the wedge is deeper (suspects: play-stage BGA/DXSurface
+under Wine, or a start barrier the silent bot never satisfies; the
+render loop spins hot at 228% presenting frozen frames, no files open,
+loading ignores click/Return/Escape, no crash dump).
+
+Server side of the wedge: with bot 4016 + 4041 in, the server emits
+4017 (naming the master) but never 4018 — it waits on the guest's own
+4016, which never comes. Guest 4014/4016 absent in every cycle.
+
+### Tooling notes (scratch only)
+
+- `siclickwait`: persistent `winegcc` SendInput single/double clicker
+  (pays Wine startup once; `Z:`-path file triggers). msvcrt `fopen`
+  silently misses the trigger file on the game desktop — kernel32
+  `CreateFileA`/`ReadFile` works. Trigger poll 200 ms; one instance
+  only (two racing instances caused a lost cycle).
+- `wineserver -k` (own prefix only) is REQUIRED before every client
+  relaunch — otherwise the new explorer dies in `X_CreateWindow`
+  `BadWindow` on the stale `0xa00007` id (seen 2/2 rapid relaunches).
+- `pkill -f` self-matches its own `fish -c` line; killer stays the
+  `/proc`-scanning `killer.py` with bracketed markers.
+- Host `-2` auth right after killing the old bot: the server holds the
+  dead tester2 session ~30-60 s; restart the bot after the reap.
+- Containment held: `:99` + null sink throughout; `install-root`
+  untouched (music files only READ: `o2ma757.ojm/.ojn` confirmed
+  present locally); parallel `:98` session never touched (own
+  prefix/display/copy); everything reaped to zero at the end.
+
+### Opcode census (tester guest unless noted)
+
+Per walk: `03E8/03EA/03EC → 0FBE → 07D0 → 07D2 → 13A4` (+`07DA`/`07E8`
+at +36 s or same-second post-FFF0). Joins: `0BBA`. Ready: `4008`
+(`0FA8`). Starts: host `4010` (`0FAA`) + host `4012` → guest `4012`
+(`0FAC` + `0FD7`) → `4011`/`4013` (`0FAB`/`0FAD` x2, host-observed).
+Play (host): ten `4014` (ten `0FAE`), `4016` (`0FB0`), `4041` (`0FC9`)
+→ `4017` (`0FB1` slot 00). Never from the guest in any cycle: `4014`,
+`4016`. Never from the server: `4018`. Exits: `FFF0` on every modal
+Return; `0BBD` never needed.
