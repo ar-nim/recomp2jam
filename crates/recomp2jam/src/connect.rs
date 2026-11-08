@@ -419,8 +419,19 @@ fn send_tally(gateway: &mut GatewayConnection, options: &SongFlowOptions) -> Res
         .map_err(|source| anyhow::anyhow!("{source}"))
 }
 
-/// Connect, authorize, list channels, and optionally log into one.
-pub fn connect_and_login(options: &ConnectOptions) -> Result<ConnectReport> {
+/// Connect, authorize, list channels, and optionally log into one,
+/// keeping the transport.
+///
+/// The windowed client wraps the pair in an online session (see
+/// `session::OnlineSession`); the headless `connect` command drops
+/// the transport via [`connect_and_login`].
+///
+/// # Errors
+///
+/// Whatever the gateway login flow reports.
+pub fn connect_and_login_with_transport(
+    options: &ConnectOptions,
+) -> Result<(ConnectReport, GatewayConnection)> {
     let address = format!("{}:{}", options.host, options.port);
     let mut gateway = GatewayConnection::connect(address.as_str())
         .with_context(|| format!("connecting to {address}"))?;
@@ -461,7 +472,7 @@ pub fn connect_and_login(options: &ConnectOptions) -> Result<ConnectReport> {
         (Some(path), Some(hero)) => fetch_avatar(path, hero).context("loading avatar")?.len(),
         _ => 0,
     };
-    Ok(ConnectReport {
+    let report = ConnectReport {
         auth_code,
         character,
         avatar_layers,
@@ -470,7 +481,20 @@ pub fn connect_and_login(options: &ConnectOptions) -> Result<ConnectReport> {
         join,
         rooms,
         song,
-    })
+    };
+    Ok((report, gateway))
+}
+
+/// Connect, authorize, list channels, and optionally log into one.
+///
+/// Drops the transport on return; windowed play keeps it via
+/// [`connect_and_login_with_transport`].
+///
+/// # Errors
+///
+/// Whatever the gateway login flow reports.
+pub fn connect_and_login(options: &ConnectOptions) -> Result<ConnectReport> {
+    connect_and_login_with_transport(options).map(|(report, _)| report)
 }
 
 fn join_room(

@@ -437,11 +437,11 @@ impl ScreenGame {
         self
     }
 
-    /// Build the 3011 body for the draft and clear the input line so
+    /// Take the 3011 body for the draft and clear the input line so
     /// one Enter sends once (`None` while the draft is empty). The
-    /// packet returns to the caller: the shell owns no transport yet,
-    /// so sending still means handing this body to the net layer.
-    fn send_chat_draft(&mut self) -> Option<SendWaitingMessage> {
+    /// online session transmits the packet (see `recomp2jam::session`);
+    /// the shell owns no transport, so offline takes still drop it here.
+    pub fn take_chat_message(&mut self) -> Option<SendWaitingMessage> {
         let message = self.chat_send_message()?;
         self.clear_chat_input();
         Some(message)
@@ -1515,7 +1515,7 @@ impl GameLoop for ScreenGame {
             (Screen::Room, MenuKey::Confirm)
             | (Screen::Loading, MenuKey::Back)
             | (Screen::Result, MenuKey::Confirm) => self.enter(Screen::Waiting),
-            (Screen::Waiting, MenuKey::Confirm) if self.send_chat_draft().is_none() => {
+            (Screen::Waiting, MenuKey::Confirm) if self.take_chat_message().is_none() => {
                 self.enter(Screen::Loading);
             }
             _ => {}
@@ -3506,6 +3506,17 @@ mod game_tests {
         game.clear_chat_input();
         assert_eq!(game.chat_input(), "");
         assert_eq!(game.chat_send_message(), None);
+    }
+
+    #[test]
+    fn take_chat_message_builds_and_clears_in_one_step() {
+        let mut game = ScreenGame::new();
+        assert_eq!(game.take_chat_message(), None);
+        game.set_chat_input("go");
+        let send = game.take_chat_message().unwrap();
+        assert_eq!(send.content, b"go".to_vec());
+        assert_eq!(game.chat_input(), "");
+        assert_eq!(game.take_chat_message(), None);
     }
 
     #[test]

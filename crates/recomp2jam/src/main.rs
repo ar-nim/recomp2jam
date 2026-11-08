@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand};
 mod connect;
 mod live_stats;
 mod loading;
+mod session;
 mod shots;
 
 #[derive(Debug, Parser)]
@@ -522,7 +523,7 @@ fn run_play(
     if window {
         let mut game = o2jam_shell::ScreenGame::new();
         setup_splash(&mut game, &interface)?;
-        setup_online(
+        let gateway = setup_online(
             &mut game,
             online,
             &host,
@@ -536,7 +537,15 @@ fn run_play(
         setup_chart_audio(&mut game, &chart, &ojm, level)?;
         let event_loop = winit::event_loop::EventLoop::new()
             .map_err(|e| anyhow::anyhow!("event loop failed: {e:?}"))?;
-        o2jam_shell::Shell::new(Box::new(game)).run(event_loop)?;
+        match gateway {
+            Some(transport) => {
+                let session = session::OnlineSession::new(game, transport);
+                o2jam_shell::Shell::new(Box::new(session)).run(event_loop)?;
+            }
+            None => {
+                o2jam_shell::Shell::new(Box::new(game)).run(event_loop)?;
+            }
+        }
         return Ok(());
     }
     let chart_path = chart.ok_or_else(|| {
@@ -556,6 +565,9 @@ fn setup_splash(game: &mut o2jam_shell::ScreenGame, interface: &Option<String>) 
 }
 
 /// Authenticate and list channels/rooms into a windowed game.
+///
+/// Returns the live gateway when online: the caller wraps it with the
+/// game in an [`session::OnlineSession`] so chat reaches the server.
 #[allow(clippy::too_many_arguments, reason = "CLI fields pass through once")]
 fn setup_online(
     game: &mut o2jam_shell::ScreenGame,
@@ -566,9 +578,9 @@ fn setup_online(
     port: u16,
     online_gateway_id: Option<i16>,
     online_channel_id: Option<i16>,
-) -> Result<()> {
+) -> Result<Option<o2jam_net::GatewayConnection>> {
     if !online {
-        return Ok(());
+        return Ok(None);
     }
     let options = OnlineParams {
         host: host.clone(),
@@ -579,14 +591,14 @@ fn setup_online(
         online_channel_id,
     }
     .into_connect_options();
-    let report = connect::connect_and_login(&options)?;
+    let (report, gateway) = connect::connect_and_login_with_transport(&options)?;
     tracing::info!(channels = report.channels.len(), "channels listed");
     game.set_channels(report.channels);
     if !report.rooms.is_empty() {
         tracing::info!(rooms = report.rooms.len(), "rooms listed");
         game.set_rooms(report.rooms);
     }
-    Ok(())
+    Ok(Some(gateway))
 }
 
 /// Stack the worn avatar figure into a windowed game, if requested.

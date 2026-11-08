@@ -2722,3 +2722,59 @@ guard the real-BGM test skip cleanly in CI (`86d05e7`).
   102 → 104 from the loading-status shot-log work (`ad4832b`),
   all other targets unchanged, 0 failures). No lint findings. No
   commits, no pushes.** This sweep touched only `docs/playtest.md`.
+
+## Regression sweep — 2026-11-08 10:26 UTC+8 (HEAD `0d0ad3a`, tree clean)
+
+Live re-proof on the chatinput-head. Covers the feat commit landed after
+the guard-head baseline `86d05e7`: type chat text into waiting draft
+(`0d0ad3a`: waiting-draft keystroke handling in `game.rs`, key plumbing
+in `window.rs`, wiring in `lib.rs`).
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1400 passed, 0 failed, 0 ignored**, `exit=0`.
+  Per target: audio 20, dump 7, file 177, game 94, net 360,
+  render 89, shell 520, real_art 7, scenes 22, recomp2jam 104
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, 0 warning
+  lines (touched-`main.rs` rebuild check).
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.61 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`10:25:29 +08:00`):
+  `Authorize session` → `Get channel list: [0]` →
+  `Enter channel: [0/00]` → `Get character info: [tester]` →
+  `Create room: songflow` →
+  `Update room [000] music settings: [HX / X10 / o2ma757]` →
+  `Update room [000] arena: [1] (0)` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Update #1 - Jam: 3 (Bonus: 0)` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure WARNs on room delete; a second session walked
+  `Authorize session` → `Get channel list` → `Enter channel` →
+  `Get room list` → `Get character info`).
+- **Verdict: no regression — suite is green on the chatinput-head
+  (1400 passed; +11 vs the 1389 guard-head baseline, all shell
+  509 → 520 from the waiting-draft typing tests, all other targets
+  unchanged, 0 failures). No lint findings. No commits, no pushes.**
+  This sweep touched only `docs/playtest.md`.
+- Tree note: a peer saved uncommitted in-flight work after every
+  clean-HEAD gate above had finished (`game.rs` saved 10:26:00 +08:00:
+  `send_chat_draft` → `pub take_chat_message` rename + doc rework;
+  new untracked `crates/recomp2jam/src/session.rs` plus a `mod session;`
+  line in `main.rs`, still being edited).
+  Every count above is the clean-HEAD result. Re-run on the dirty
+  state: `cargo fmt --check` stays clean, but `cargo clippy --workspace
+  --all-targets -- -D warnings` FAILS with 7 errors, all inside the
+  peer's new `session.rs` (dead `OnlineSession`/`into_parts`/`Write`
+  code plus `bool_assert_comparison` and needless-`mut` lints in its
+  tests). None of that is mine: per the sweep rules (touch only
+  `docs/playtest.md`, fix only my own lint findings) the peer's files
+  were left alone, and no suite re-run on the moving dirty state was
+  taken.
