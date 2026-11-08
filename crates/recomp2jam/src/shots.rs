@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use o2jam_file::{Bnd, ControlList};
-use o2jam_game::{RankDelivery, RoomTeams, PEER_SLOT_COUNT};
+use o2jam_game::{RankDelivery, RoomTeams, LIFE_MAX, PEER_SLOT_COUNT, STAT_LIFE};
 use o2jam_net::play::SetRoomMusic;
 use o2jam_net::rooms::{WaitingAdminMessage, WaitingUserMessage};
 use o2jam_net::{ChannelState, GameMode, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
@@ -436,7 +436,9 @@ fn stage_empty_channel_scene(game: &mut ScreenGame) {
 }
 
 /// Game preloaded with list rows, a Live waiting duo, the duo's
-/// battle scoreboard, scripted waiting chat (one 3012 user row plus
+/// battle scoreboard, the wire peer's seated Life gauge (slot 1,
+/// full — so `playing.png` shows the session-fed green fill),
+/// scripted waiting chat (one 3012 user row plus
 /// one 3013 admin row, so `waiting.png` shows live rows), and a
 /// chart whose tap and hold head land at 5 s (the hold beams in
 /// Playing; both records are spent by Result through the scripted
@@ -453,6 +455,7 @@ fn seeded_game() -> ScreenGame {
     game.set_battle_self_team(Some(RESULT_SELF_TEAM));
     seed_chart(&mut game);
     stage_result_ranks(&mut game);
+    stage_peer_gauge(&mut game);
     stage_waiting_captions(&mut game);
     stage_waiting_chat(&mut game);
     stage_real_art(&mut game);
@@ -741,14 +744,40 @@ const SCRIPTED_RANK_PACKET: [u8; PEER_SLOT_COUNT] = [1, 2, 0, 0, 0, 0, 0, 0];
 /// holder bytes first, then the broadcast through the verified
 /// rank-remap rule. Staged after the chart load — `load_chart`
 /// rebuilds the play state (wiping the mirror) — so earlier shots
-/// stay untouched; never fails. Playing never paints these bytes
-/// (no rank table there), only Result does.
+/// stay untouched; never fails. The rank bytes never paint in
+/// Playing (no rank table there), only Result does; the peer Life
+/// word that seats the Playing gauge rides [`stage_peer_gauge`].
 fn stage_result_ranks(game: &mut ScreenGame) -> Vec<RankDelivery> {
     game.stage_scripted_ranks(
         SCRIPTED_RANK_GLOBAL,
         SCRIPTED_RANK_STORED,
         SCRIPTED_RANK_PACKET,
     )
+}
+
+/// Scripted peer slot (fixture, not wire data): the wire peer's
+/// seat, matching its rank holder below ([`SCRIPTED_RANK_STORED`]
+/// position 1).
+const SCRIPTED_PEER_SLOT: u8 = 1;
+/// Scripted peer Life word (fixture, not wire data): full life, so
+/// the seated gauge reads all green.
+const SCRIPTED_PEER_LIFE: u16 = LIFE_MAX;
+
+/// Seat the wire peer's Playing gauge through the session bridge:
+/// the scripted 4015 Life echo writes first (seating slot 1), then
+/// the rank broadcast re-applies (idempotent — holders already
+/// staged above), the same stats-then-ranks order `OnlineSession`
+/// folds live echoes through [`ScreenGame::apply_peer_echo`].
+/// Staged after the chart load with the ranks, so earlier shots
+/// stay untouched; never fails. The local seat keeps no peer gauge;
+/// local life rides the avatar bar instead.
+fn stage_peer_gauge(game: &mut ScreenGame) {
+    game.apply_peer_echo(
+        SCRIPTED_PEER_SLOT,
+        STAT_LIFE,
+        SCRIPTED_PEER_LIFE,
+        SCRIPTED_RANK_PACKET,
+    );
 }
 
 /// Scripted 3012 user sender (fixture, not wire data): the wire
@@ -1400,6 +1429,54 @@ mod tests {
         assert_ne!(
             plain_box, staged_box,
             "staged volume must paint VOL ink into the strip box"
+        );
+    }
+
+    #[test]
+    fn playing_shot_paints_session_fed_peer_gauge() {
+        // The session bridge seats the wire peer's gauge: the
+        // scripted 4015 Life echo (slot 1, full) rides
+        // `apply_peer_echo` — the same stats-then-ranks order the
+        // live session folds echoes through — so the playing paint
+        // fills the slot-1 top-right gauge green. The walked strikes
+        // both rate Cool, whose Hard +1s saturate, so local life
+        // stays full behind the avatar bar.
+        use o2jam_shell::playing::NATIVE_PEER_BAR;
+
+        let mut game = seeded_game();
+        assert_eq!(
+            game.live_play()
+                .peers()
+                .life(usize::from(SCRIPTED_PEER_SLOT)),
+            Some(SCRIPTED_PEER_LIFE),
+            "the fixture must seat the peer gauge"
+        );
+        walk_to_playing(&mut game);
+        game.strike_at(2, 5_000);
+        game.strike_at(0, SCRIPTED_HOLD_STRIKE_MS);
+        assert_eq!(game.screen(), Screen::Playing);
+        assert_eq!(game.life(), LIFE_MAX, "walked Cools keep local life full");
+        let frame = paint_native_frame(&mut game, 5_100);
+        let (w, _) = native_size();
+        let slot_y = NATIVE_PEER_BAR.y + i32::from(SCRIPTED_PEER_SLOT) * NATIVE_PEER_BAR.h as i32;
+        let green = o2jam_render::pack_xrgb(0x20, 0xE0, 0x20);
+        let mut filled = 0usize;
+        let mut total = 0usize;
+        for row in 0..NATIVE_PEER_BAR.h {
+            for col in 0..NATIVE_PEER_BAR.w {
+                let x = NATIVE_PEER_BAR.x + i32::try_from(col).unwrap_or(0);
+                let y = slot_y + i32::try_from(row).unwrap_or(0);
+                let x = usize::try_from(x).unwrap_or(0);
+                let y = usize::try_from(y).unwrap_or(0);
+                total += 1;
+                if frame[y * w + x] == green {
+                    filled += 1;
+                }
+            }
+        }
+        assert!(
+            filled * 2 >= total,
+            "slot-1 peer gauge must read green ({filled}/{total})"
         );
     }
 

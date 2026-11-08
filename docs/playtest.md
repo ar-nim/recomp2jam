@@ -2875,3 +2875,42 @@ log in this file).
   stayed green on the dirty state. Per the sweep rules (touch only
   `docs/playtest.md`, fix only my own lint findings) the peer's files
   were left alone.
+
+## Regression sweep — 2026-11-08 10:51 UTC+8 (HEAD `c9083d6`, tree clean)
+
+Live re-proof on the life-mirror head. Covers the feat commit landed after
+the stats-head baseline `5499e17`: close life mirror over session bridge
+(`c9083d6`: `recomp2jam/src/session.rs` rework plus shell
+`playing.rs`/`screens/game.rs` life-mirror work, plus the sweep log in
+this file).
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1418 passed, 0 failed, 0 ignored**, `exit=0`.
+  Per target: audio 20, dump 7, file 177, game 94, net 360,
+  render 89, shell 524, real_art 7, scenes 22, recomp2jam 118
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, no warnings.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.59 s; 117 filtered out) against local
+  Memoryer 7.2.0 (`Mode=Full`). Server log for this run
+  (`10:50:54 +08:00`): `Create room: songflow` →
+  `Update room [000] music settings` → `Update room [000] arena` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] music state` →
+  `Update room member [000] download progress` →
+  `Start game: [000]` → `User music loaded: [000]` →
+  `Game [000] Update #1 - Jam: 3 (Bonus: 0)` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure stack on room delete; a second session walked
+  `Authorize session` → `Get channel list: [0]` →
+  `Enter channel: [0/00]` → `Get room list` → `Get character info`).
+- **Verdict: no regression — suite is green on the life-mirror head
+  (1418 passed; +4 vs the 1414 stats-head baseline: shell 521 → 524,
+  recomp2jam 117 → 118 from the life-mirror commit's tests, all other
+  targets unchanged, 0 failures). No lint findings. No commits, no
+  pushes.** This sweep touched only `docs/playtest.md`.
