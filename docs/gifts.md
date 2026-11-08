@@ -129,6 +129,24 @@ flows above are its TCP counterpart.
   server interop and labeled as such in
   `crates/o2jam-net/src/message.rs`.
 - Coupon redemption itself: web-only (`coupon.phtml`), OPEN.
+- 2029 rank notice-board wording: PINNED (offset-only byte scans over
+  the read-only 7.55 copy, no new REA dossier filed). The 2029 handler
+  stages music id, nickname, ranking in `.data` slots `0x77969c` /
+  `0x7796a8` / `0x7796a0` and forwards `(0, 0, 0x7ed, 0x12)` once
+  (sole image-wide `push 0x7ed` at file `0x15b568`, queue call file
+  `0x15b575`). Five board writers consume the staged triple (music-id
+  compares at files `0x90b45` / `0x9dbdc` / `0xa5856` / `0xb6864` /
+  `0xcbc2d` against a `0x1b4`-stride table, title at `+0x6c`; ranking
+  moves e.g. file `0x90bf6`; nickname pushes e.g. file `0x90c06`): each
+  formats through VA `0x647f98` (file `0x247f98`) via `0x5f2c4d`
+  (sites files `0x90c17` / `0x9dd10` / `0xa5958` / `0xb6998` /
+  `0xcbd61`) into writer `0x50b990`, in field order nickname, song
+  title, ranking with separators `" [%s] "` and `" [%d]"` —
+  `"%s 음악전사님께서 [%s] 곡에 새로운 랭킹 [%d]위가 되셨습니다~ "`.
+  Shell `rank_notice_board_text` mirrors that order with an `M{id}`
+  title fallback (no song table staged); the channel-history
+  `M{id} rank` row stays a shell stand-in until `game.rs` wires the
+  board text (out of scope here).
 
 ## Shell display (`crates/o2jam-shell/src/screens/side.rs`)
 

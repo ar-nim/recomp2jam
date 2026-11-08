@@ -1795,37 +1795,39 @@ impl ChannelChatMessage {
         }
     }
 
-    /// Rank-notice row (2029): the ranked nickname bracketed, song
-    /// id plus rank as the text, in the admin amber (the same `0x7de`
-    /// family as the announcement rows).
+    /// Rank-notice row (2029): the pinned notice-board sentence
+    /// ([`rank_notice_board_text`]) in the admin amber (the same
+    /// `0x7de` family as the announcement rows). The nickname rides
+    /// inside the sentence, so the row carries no sender and paints
+    /// bare; callers pass `M{id}` while the staged catalog names no
+    /// song.
     #[must_use]
-    pub fn rank(nickname: &str, music_id: i32, ranking: i32) -> Self {
+    pub fn rank(nickname: &str, song_title: &str, ranking: i32) -> Self {
         Self {
-            sender: nickname.to_owned(),
-            text: rank_notice_text(music_id, ranking),
+            sender: String::new(),
+            text: rank_notice_board_text(nickname, song_title, ranking),
             admin: true,
             whisper_recipient: None,
         }
     }
 }
 
-/// Display text of one rank notice (2029): the song id in the lobby
-/// `M{id}` shape plus the raw rank value (`M757 1`). The exe stages
-/// music id, nickname, and ranking in `.data` slots and forwards a
-/// UI-queue event (`0, 0, 0x7ed, 0x12`) rather than a bracket line
-/// (`docs/net-protocol.md`), so the exact notice-board wording stays
-/// OPEN — this names all three wire fields, joined with no invention
-/// beyond the join.
+/// Notice-board text of one rank notice (2029) in the exe field order:
+/// nickname, song title, ranking. The five board writers match the staged
+/// music id against the song table, then format nickname plus resolved
+/// title plus ranking through VA `0x647f98` (file `0x247f98`) — brackets
+/// around the title and the rank, Korean particles between. The shell
+/// stages no song table, so callers pass `M{id}` while it names no song.
 #[must_use]
-pub fn rank_notice_text(music_id: i32, ranking: i32) -> String {
-    format!("M{music_id} {ranking}")
+pub fn rank_notice_board_text(nickname: &str, song_title: &str, ranking: i32) -> String {
+    format!("{nickname} 음악전사님께서 [{song_title}] 곡에 새로운 랭킹 [{ranking}]위가 되셨습니다~")
 }
 
 /// Display text of one channel row: the waiting `[%12s] %s` bracket
 /// line for channel rows; whisper rows name both ends as
 /// `[sender -> recipient] text` so the addressee stays visible;
-/// sender-less announcement rows paint their text bare (no bracket
-/// without a sender).
+/// sender-less rows (announcements and rank notices) paint their text
+/// bare (no bracket without a sender).
 #[must_use]
 pub fn channel_chat_row_text(message: &ChannelChatMessage) -> String {
     if let Some(recipient) = message.whisper_recipient.as_deref() {
@@ -6125,10 +6127,30 @@ mod paint_tests {
     }
 
     #[test]
-    fn rank_row_brackets_nickname_and_names_song_and_rank() {
-        let row = ChannelChatMessage::rank("host", 757, 1);
+    fn rank_row_paints_the_notice_board_sentence_bare() {
+        let row = ChannelChatMessage::rank("host", "M757", 1);
         assert!(row.admin);
-        assert_eq!(channel_chat_row_text(&row), "[        host] M757 1");
+        assert!(row.sender.is_empty());
+        assert_eq!(row.text, rank_notice_board_text("host", "M757", 1));
+        assert_eq!(
+            channel_chat_row_text(&row),
+            "host 음악전사님께서 [M757] 곡에 새로운 랭킹 [1]위가 되셨습니다~"
+        );
+    }
+
+    #[test]
+    fn rank_notice_board_names_nickname_song_and_rank_in_exe_order() {
+        assert_eq!(
+            rank_notice_board_text("host", "M757", 1),
+            "host 음악전사님께서 [M757] 곡에 새로운 랭킹 [1]위가 되셨습니다~"
+        );
+    }
+
+    #[test]
+    fn rank_notice_board_brackets_song_and_rank_with_exe_separators() {
+        let text = rank_notice_board_text("host", "TITLE", 2);
+        assert!(text.starts_with("host 음악전사님께서 [TITLE]"));
+        assert!(text.contains("곡에 새로운 랭킹 [2]위가 되셨습니다~"));
     }
 
     #[test]

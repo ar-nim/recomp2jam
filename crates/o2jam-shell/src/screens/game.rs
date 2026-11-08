@@ -546,19 +546,29 @@ impl ScreenGame {
 
     /// Append one rank notice (2029) to the channel history, unless the
     /// packet carries no rank: the exe drops the packet when the
-    /// invalid word is nonzero (`docs/net-protocol.md`). The row
-    /// brackets the ranked nickname and names song plus rank in the
-    /// admin amber — the exact notice-board wording stays OPEN (the
-    /// exe forwards the triple as a UI-queue event, not a bracket
-    /// line), so the text joins the three wire fields with no
-    /// invention beyond the join.
+    /// invalid word is nonzero (`docs/net-protocol.md`). The row paints
+    /// the pinned notice-board sentence (`rank_notice_board_text` field
+    /// order nickname/title/rank, `docs/gifts.md`) in the admin amber;
+    /// the song title resolves through the staged catalog, `M{id}`
+    /// while it names no such song.
     pub fn push_channel_rank_notification(&mut self, message: &RankNotification) -> &mut Self {
         if message.invalid {
             return self;
         }
+        let catalog_title = u16::try_from(message.music_id)
+            .ok()
+            .and_then(|id| self.catalog_song_title(id));
+        let fallback;
+        let song_title = match catalog_title {
+            Some(title) => title,
+            None => {
+                fallback = format!("M{}", message.music_id);
+                fallback.as_str()
+            }
+        };
         self.push_channel_row(ChannelChatMessage::rank(
             &message.nickname,
-            message.music_id,
+            song_title,
             message.ranking,
         ));
         self
@@ -2060,7 +2070,7 @@ impl GameLoop for ScreenGame {
 #[cfg(test)]
 mod game_tests {
     use super::super::paint::{
-        background_of, channel_chat_row_text, seat_origin, RESULT_MUSIC_BOX,
+        background_of, channel_chat_row_text, rank_notice_board_text, seat_origin, RESULT_MUSIC_BOX,
     };
     use super::*;
     use crate::avatar::AvatarFigure;
@@ -4148,14 +4158,27 @@ mod game_tests {
     }
 
     #[test]
-    fn pushing_a_channel_rank_notification_names_music_nickname_and_rank() {
+    fn pushing_a_channel_rank_notification_paints_the_board_sentence() {
         let mut game = ScreenGame::new();
         game.push_channel_rank_notification(&channel_rank("host", 757, 1));
         assert_eq!(game.channel_chat().len(), 1);
         assert!(game.channel_chat()[0].admin);
         assert_eq!(
             channel_chat_row_text(&game.channel_chat()[0]),
-            "[        host] M757 1"
+            rank_notice_board_text("host", "M757", 1)
+        );
+    }
+
+    #[test]
+    fn channel_rank_notification_resolves_the_catalog_title() {
+        let mut game = ScreenGame::new();
+        let blob = waiting_song_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_song_catalog(&entries);
+        game.push_channel_rank_notification(&channel_rank("host", 757, 1));
+        assert_eq!(
+            channel_chat_row_text(&game.channel_chat()[0]),
+            rank_notice_board_text("host", "First", 1)
         );
     }
 

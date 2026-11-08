@@ -2843,8 +2843,11 @@ mod session_tests {
         paint_frame(&mut session);
         server.join().unwrap();
         assert_eq!(session.game.channel_chat().len(), 1);
-        assert_eq!(session.game.channel_chat()[0].sender, "host");
-        assert_eq!(session.game.channel_chat()[0].text, "M757 1");
+        assert_eq!(session.game.channel_chat()[0].sender, "");
+        assert_eq!(
+            session.game.channel_chat()[0].text,
+            "host 음악전사님께서 [M757] 곡에 새로운 랭킹 [1]위가 되셨습니다~"
+        );
     }
 
     #[test]
