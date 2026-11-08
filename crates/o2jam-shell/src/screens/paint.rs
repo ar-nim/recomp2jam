@@ -988,13 +988,15 @@ fn ready_dot_color(ready: bool) -> u32 {
     }
 }
 
-/// Top-left of seat `index`: two columns by four rows, relative to frame.
+/// Top-left of seat `index`: four columns by two rows, relative to frame
+/// (Wine `ab-wait.png` + siblings: four seats across the top row,
+/// four across the bottom — seat 4 opens the second row under seat 0).
 #[must_use]
 pub(crate) fn seat_origin(index: usize, w: usize, h: usize) -> (i32, i32) {
-    let col = (index % 2) as i32;
-    let row = (index / 2) as i32;
+    let col = (index % 4) as i32;
+    let row = (index / 4) as i32;
     (
-        w as i32 / 8 + col * (w as i32 / 2),
+        w as i32 / 16 + col * (w as i32 / 4),
         h as i32 / 4 + row * WAITING_ROW_H,
     )
 }
@@ -3200,8 +3202,9 @@ mod paint_tests {
         let ready_green = pack_xrgb(0x30, 0xE0, 0x30);
         let dim = pack_xrgb(0x50, 0x50, 0x50);
         assert_eq!(buf[0], waiting_bg);
-        // Seat 1 (ready host) sits in column 1, row 0: dot at (44, 16).
+        // Seat 1 (ready host) sits in column 1, row 0 of the 4x2 grid.
         let (host_x, host_y) = seat_origin(1, 80, 64);
+        assert_eq!((host_x, host_y), (25, 16));
         assert_eq!(
             buf[(host_y + 1) as usize * 80 + (host_x - 6 + 1) as usize],
             ready_green
@@ -3218,6 +3221,20 @@ mod paint_tests {
             buf[(empty_y + 1) as usize * 80 + (empty_x - 6 + 1) as usize],
             scrim_color()
         );
+    }
+
+    #[test]
+    fn waiting_seat_grid_is_four_columns_by_two_rows() {
+        // Wine `ab-wait.png` (+ `ad-wait.png`, `z-wait.png` siblings):
+        // seats 0..3 share the top row left to right, seats 4..7 share
+        // the bottom row. The old 2-column by 4-row fallback stacked
+        // seat 2 under seat 0; it must sit right of seat 1 instead.
+        let top: Vec<(i32, i32)> = (0..4).map(|i| seat_origin(i, 80, 64)).collect();
+        assert!(top[0].0 < top[1].0 && top[1].0 < top[2].0 && top[2].0 < top[3].0);
+        assert!(top.iter().all(|(_, y)| *y == top[0].1));
+        assert_eq!(seat_origin(4, 80, 64).0, seat_origin(0, 80, 64).0);
+        assert!(seat_origin(4, 80, 64).1 > top[0].1);
+        assert_eq!(seat_origin(7, 80, 64).0, seat_origin(3, 80, 64).0);
     }
 
     #[test]
