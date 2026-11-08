@@ -699,8 +699,23 @@ fn setup_splash(game: &mut o2jam_shell::ScreenGame, interface: &Option<String>) 
         let logo = connect::load_interface_sprite(opi_path, "O2mediaLogo.ojs")?;
         tracing::info!(layers = logo.len(), "splash art loaded");
         game.load_splash(logo);
+    } else if let Some(logo) = installed_splash_logo() {
+        tracing::info!("splash art loaded from install-root");
+        game.load_splash(logo);
     }
     Ok(())
+}
+
+/// Installed interface archive for the offline splash fallback.
+const INSTALLED_INTERFACE_OPI: &str = "../../install-root/O2Jam/Image/Interface1.opi";
+
+/// Genuine logo from the installed archive, if present (read-only;
+/// a missing archive keeps the flat card so CI stays green without
+/// game data).
+fn installed_splash_logo() -> Option<o2jam_shell::avatar::AvatarFigure> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(INSTALLED_INTERFACE_OPI);
+    let archive = std::fs::read(path).ok()?;
+    o2jam_shell::avatar::load_avi_logo(&archive)
 }
 
 /// Live gateway plus the Room Confirm join intent (room number and
@@ -1145,6 +1160,40 @@ mod cli_build_tests {
     fn song_flow_absent_without_music_id() {
         let song = song_params(None).into_song_flow().unwrap();
         assert!(song.is_none());
+    }
+
+    #[test]
+    fn setup_splash_defaults_to_installed_logo() {
+        // Offline splash without `--interface` stages the installed
+        // logo; a missing archive keeps the flat card (CI skip rule).
+        let archive = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Image/Interface1.opi");
+        if !archive.exists() {
+            println!("skip: missing install-root Interface1.opi");
+            return;
+        }
+        let mut staged = o2jam_shell::ScreenGame::new();
+        setup_splash(&mut staged, &None).unwrap();
+        let mut bare = o2jam_shell::ScreenGame::new();
+        let mut staged_buf = vec![0u32; 64 * 48];
+        let mut bare_buf = vec![0u32; 64 * 48];
+        staged.paint_at(
+            &mut o2jam_render::Frame {
+                buf: &mut staged_buf,
+                w: 64,
+                h: 48,
+            },
+            0,
+        );
+        bare.paint_at(
+            &mut o2jam_render::Frame {
+                buf: &mut bare_buf,
+                w: 64,
+                h: 48,
+            },
+            0,
+        );
+        assert_ne!(staged_buf, bare_buf, "installed logo paints nothing");
     }
 
     #[test]
