@@ -102,6 +102,7 @@
   `SessionExpiry=0` so it persists). Gateway `127.0.0.1:15010`,
   `Mode=Full`, `FreeMusic=true`, 562 musics.
 - **Never pipe a long-lived client into `head`**: SIGPIPE kills it when
+- **Scratch goes in `~/scratch`, never `/tmp`** (`/tmp` is tmpfs RAM; worker probes, screenshots, and helper builds pile up gigabytes).
   head exits — redirect to a file instead.
 - Memoryer reference layouts: `/tmp/mozart/Source/Memoryer/...`; Encore
   framework codec semantics verified from `SirusDoma/Encore` (string
