@@ -1,0 +1,29 @@
+{
+  "skill_name": "recomp2jam-reference-capture",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Give me a capture run sheet for the original STATE_WAITING screen under Wine and the Rust waiting screen.",
+      "expected_output": "A reproducible contained capture plan with reference identity, native geometry, scenario controls, sync, and metadata.",
+      "files": [],
+      "expectations": [
+        "Uses an isolated Wine prefix, display, and scratch game copy",
+        "Preserves native 800x600 reference frames and raw captures",
+        "Defines equivalent room scenario, input trace, and sync event",
+        "Keeps proprietary captures outside Git and records tool versions"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "I need reference audio from the Wine Xvfb rig, but the game must not play through my speakers.",
+      "expected_output": "An audio-capture procedure using a dedicated virtual or null sink monitor with explicit signal validation.",
+      "files": [],
+      "expectations": [
+        "Routes game audio away from the physical speakers",
+        "Explains that a completed ffmpeg command does not prove non-silent capture",
+        "Records sink or monitor, sample rate, channels, and resampling",
+        "Separates audio offset or drift evidence from loudness measurement"
+      ]
+    }
+  ]
+}

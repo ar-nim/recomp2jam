@@ -1,0 +1,29 @@
+{
+  "skill_name": "recomp2jam-av-compare",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "The Wine and Rust waiting-room clips have SSIM 0.96 after normalization. Can I mark the waiting composition PASS now?",
+      "expected_output": "An evidence-focused explanation and comparison plan that does not equate aggregate image similarity with 7.55 parity.",
+      "files": [],
+      "expectations": [
+        "Requires verified timeline alignment and inspection of mismatch regions",
+        "Keeps known OPEN or FAIL composition gaps despite a high SSIM average",
+        "Separates approved font presentation differences from geometry and layering",
+        "Requires scene-specific threshold rationale and inspectable evidence"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Create a strict batch comparison setup for waiting and result captures at native resolution, without VMAF on this machine.",
+      "expected_output": "A valid recomp2jam A/V batch configuration and commands with explicit no-VMAF behavior and strict remaining metrics.",
+      "files": [],
+      "expectations": [
+        "Uses schema_version recomp2jam-av-v1 and separate output directories",
+        "Uses native 800x600 dimensions without inventing frame-rate resampling",
+        "Disables VMAF while keeping strict checks for the other required metrics",
+        "Keeps capture and report artifacts in local-only storage"
+      ]
+    }
+  ]
+}

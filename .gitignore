@@ -50,6 +50,10 @@ _ISDEL.EXE
 _ISMP*/
 _ISTMP*/
 
+# Python helper tools
+__pycache__/
+*.py[cod]
+
 # Editors / OS
 .vscode/*
 !.vscode/extensions.json

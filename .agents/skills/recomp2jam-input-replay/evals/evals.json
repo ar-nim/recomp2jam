@@ -1,0 +1,29 @@
+{
+  "skill_name": "recomp2jam-input-replay",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Design a replay trace that catches early and late long-note releases and verifies the tail judgement.",
+      "expected_output": "A song-time press/release trace design with validation, applied-event logs, and 7.55-derived assertions.",
+      "files": [],
+      "expectations": [
+        "Includes both press and release events with explicit integer time units",
+        "Covers early, in-window, and late releases and hold state",
+        "Uses the inclusive 6/18/25 ms windows where applicable",
+        "Separates determinism checks from proof of 7.55 parity"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Make our input replay suite useful in CI where install-root and the Memoryer server do not exist.",
+      "expected_output": "A synthetic offline replay strategy with clean optional-data skips and separately enabled live tests.",
+      "files": [],
+      "expectations": [
+        "Uses synthetic charts and portable input API injection for ordinary tests",
+        "Requires clean early skips for real-data tests without install-root",
+        "Keeps live gateway tests opt-in and separately reported",
+        "Uses null or virtual audio for automated runs"
+      ]
+    }
+  ]
+}

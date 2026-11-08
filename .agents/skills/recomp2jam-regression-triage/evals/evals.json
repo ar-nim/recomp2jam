@@ -1,0 +1,29 @@
+{
+  "skill_name": "recomp2jam-regression-triage",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "The waiting screenshot changed only on my machine with the real OPI files. CI is green and another agent has uncommitted Rust edits. Triage this safely.",
+      "expected_output": "A minimal evidence-backed investigation that preserves concurrent work and distinguishes real-data drift from synthetic CI behavior.",
+      "files": [],
+      "expectations": [
+        "Records commit, dirty state, environment, and exact reproduction without stashing another worker's edits",
+        "Separates real-data local results from synthetic CI results",
+        "Proposes one discriminating hypothesis and a scenario-named regression test",
+        "Does not mark a parity cell PASS merely because the screenshot improved"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "A player says Bad should never reduce life, but the current Rust LifeBar subtracts 10 on Easy. Which side do I fix?",
+      "expected_output": "An evidence-first triage that checks the verified 7.55 delta table and treats the player report as a hypothesis.",
+      "files": [],
+      "expectations": [
+        "Checks docs/gameplay.md and the pinned 7.55 executable evidence before changing Rust",
+        "Recognizes the verified Easy Bad delta of minus 10",
+        "Does not paste disassembly or decompiled code into the report",
+        "Corrects documentation first only if new evidence disproves the existing reference claim"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "skill_name": "recomp2jam-batch-harness",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Design a nightly validation batch for waiting, playing, and result on Linux and Windows, with optional Wine reference captures.",
+      "expected_output": "A scene/platform matrix with reproducible manifests, isolated artifacts, honest gates, and contained reference runs.",
+      "files": [],
+      "expectations": [
+        "Uses scene and platform runs rather than a multi-title catalog",
+        "Separates synthetic, real-data, live, and Wine checks",
+        "Defines passed, failed, skipped, and needs_review without counting skips as passes",
+        "Includes isolated displays and audio paths, owned-process cleanup, and Cargo gates"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Write a manifest for a real-data playing comparison that must fail preflight if Interface1.opi or the aligned reference is missing.",
+      "expected_output": "A recomp2jam-batch-v1 manifest with explicit required inputs and failed-preflight semantics for required data.",
+      "files": [],
+      "expectations": [
+        "Uses schema_version recomp2jam-batch-v1 and a stable run ID",
+        "Pins the 7.55 reference identity and full local hash placeholder",
+        "Lists required install and reference capture inputs",
+        "Distinguishes required missing inputs from optional CI skips"
+      ]
+    }
+  ]
+}

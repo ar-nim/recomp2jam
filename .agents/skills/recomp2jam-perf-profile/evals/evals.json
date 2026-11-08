@@ -1,0 +1,29 @@
+{
+  "skill_name": "recomp2jam-perf-profile",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Playing stutters on Linux after the new skin loader landed. Plan a performance investigation that can actually locate it.",
+      "expected_output": "A repeatable release-build profiling plan with frame-time distributions, loading stages, raw samples, and subsystem attribution.",
+      "files": [],
+      "expectations": [
+        "Pins scenario, input trace, commit, platform, settings, and build profile",
+        "Measures median, tail, and maximum frame times rather than average FPS alone",
+        "Separates archive parsing, sprite decode, audio, game update, rendering, and presentation",
+        "Requires repeated trials, variance, and raw profiles"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Should we require native Rust CPU and GPU usage to match the original client running under Wine?",
+      "expected_output": "A fair baseline strategy that rejects direct Wine resource-equivalence gates while retaining observable timing comparisons.",
+      "files": [],
+      "expectations": [
+        "Uses previous native Rust builds on the same platform as performance baselines",
+        "Does not require CPU or GPU totals to match Wine",
+        "Allows observable frame pacing, loading, or audio behavior comparisons with overhead recorded",
+        "Maintains separate baselines for materially different platforms"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "skill_name": "recomp2jam-scope-plan",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Plan the parity work for waiting-room team buttons. I only have a player description of what they do so far.",
+      "expected_output": "A bounded 7.55 evidence and implementation plan that does not turn the player report into verified behavior.",
+      "files": [],
+      "expectations": [
+        "Pins O2Jam 7.55 and requires executable evidence before a behavior PASS",
+        "Maps validation to the appropriate Rust crates and synthetic tests",
+        "Labels player-only rules as hypotheses or OPEN",
+        "Includes clean-room data boundaries and the Cargo quality gates"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Define acceptance criteria for playing o2ma757 with long notes in the Rust client on Linux and Windows.",
+      "expected_output": "A measurable cross-platform gameplay validation matrix covering timing, input release, audio, scoring, data availability, and residuals.",
+      "files": [],
+      "expectations": [
+        "Uses song-time press and release stimuli and explicit timing tolerances",
+        "Separates native Linux and Windows acceptance results",
+        "Includes synthetic CI coverage and clean skipping without install-root",
+        "Does not claim parity from a successful harness run alone"
+      ]
+    }
+  ]
+}
