@@ -300,6 +300,54 @@ fn index_as_row(index: usize, h: i32) -> i32 {
     h / 4 + i32::try_from(index).unwrap_or(i32::MAX) * CHANNEL_ROW_H
 }
 
+/// True while native pixel (`x`, `y`) sits inside `rect`
+/// (right/bottom edges exclusive; zero-area rects never hit).
+#[must_use]
+pub(crate) fn rect_hit(rect: &Rect, x: i32, y: i32) -> bool {
+    let right = i64::from(rect.x).checked_add(i64::from(rect.w));
+    let bottom = i64::from(rect.y).checked_add(i64::from(rect.h));
+    let inside_x =
+        i64::from(x) >= i64::from(rect.x) && right.is_some_and(|edge| i64::from(x) < edge);
+    let inside_y =
+        i64::from(y) >= i64::from(rect.y) && bottom.is_some_and(|edge| i64::from(y) < edge);
+    inside_x && inside_y
+}
+
+/// True while staged art binds `id` and its `.bnd` rect contains
+/// native pixel (`x`, `y`) — verbatim-rect hit-testing for staged
+/// buttons, where the exe leaves untouched icons alone.
+#[must_use]
+pub(crate) fn staged_rect_hit(placements: &[ScenePlacement], id: &str, x: i32, y: i32) -> bool {
+    placements
+        .iter()
+        .find(|placed| placed.id == id)
+        .is_some_and(|placed| rect_hit(&placed.rect, x, y))
+}
+
+/// Row-band hit for the lobby lists: the inverse of
+/// [`index_as_row`] — row `index` spans
+/// `[h/4 + 8·index, h/4 + 8·index + 8)` inside the scrim strip
+/// (`[w/4 - 8, w/4 + w/2 + 16)`, mirroring [`paint_list_scrim`]).
+/// Native pixels in, list index out (`None` outside every band).
+#[must_use]
+pub(crate) fn list_row_hit(
+    frame_w: i32,
+    frame_h: i32,
+    row_count: usize,
+    x: i32,
+    y: i32,
+) -> Option<usize> {
+    if x < frame_w / 4 - 8 || x >= frame_w / 4 + frame_w / 2 + 16 {
+        return None;
+    }
+    let offset = y.checked_sub(frame_h / 4)?;
+    if offset < 0 {
+        return None;
+    }
+    let index = usize::try_from(offset / CHANNEL_ROW_H).ok()?;
+    (index < row_count).then_some(index)
+}
+
 /// Amber highlight cursor left of a list row.
 fn paint_cursor(frame: &mut Frame<'_>, text_x: i32, y: i32) {
     fill_rect(
@@ -385,6 +433,25 @@ fn room_panel_origins(placements: &[ScenePlacement], frame: &Frame<'_>) -> Vec<(
                 })
         })
         .collect()
+}
+
+/// Whether staged art binds any room panel (the panel path owns
+/// layout while one is bound; otherwise the legacy row bands do).
+#[must_use]
+pub(crate) fn has_room_panels(placements: &[ScenePlacement]) -> bool {
+    ROOM_PANEL_IDS
+        .iter()
+        .any(|id| placements.iter().any(|placed| placed.id == *id))
+}
+
+/// File-order index of the room panel whose staged `.bnd` rect
+/// contains native pixel (`x`, `y`) (`None` while no bound panel
+/// covers the point — stale panels past the list never hit).
+#[must_use]
+pub(crate) fn room_panel_hit(placements: &[ScenePlacement], x: i32, y: i32) -> Option<usize> {
+    ROOM_PANEL_IDS
+        .iter()
+        .position(|id| staged_rect_hit(placements, id, x, y))
 }
 
 /// Room rows plus highlight cursor (no background fill: shared by
@@ -2581,6 +2648,27 @@ const RESULT_COMBO_Y: i32 = 130;
 const RESULT_SCORE_X: i32 = 605;
 /// Total score row y.
 const RESULT_SCORE_Y: i32 = 533;
+/// Pinned RETRY button rect (`docs/cresult-anchors.md` rect 6,
+/// `IDC_BUTTON_SRESULT_RETRY`, (625,570)-(708,592)): the click
+/// fallback while staged art binds no such control.
+pub(crate) const RESULT_RETRY_RECT: Rect = Rect {
+    x: 625,
+    y: 570,
+    w: 83,
+    h: 22,
+};
+/// Pinned BACK button rect (rect 5, `IDC_BUTTON_SRESULT_BACK`,
+/// (711,569)-(794,593)): same fallback role.
+pub(crate) const RESULT_BACK_RECT: Rect = Rect {
+    x: 711,
+    y: 569,
+    w: 83,
+    h: 24,
+};
+/// Staged control id behind [`RESULT_RETRY_RECT`].
+pub(crate) const RESULT_RETRY_ID: &str = "IDC_BUTTON_SRESULT_RETRY";
+/// Staged control id behind [`RESULT_BACK_RECT`].
+pub(crate) const RESULT_BACK_ID: &str = "IDC_BUTTON_SRESULT_BACK";
 
 /// Rank number column x (`%d` at x=91, drawn only with 2+ players).
 const RESULT_RANK_X: i32 = 91;

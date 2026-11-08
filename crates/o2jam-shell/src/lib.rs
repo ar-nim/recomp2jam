@@ -169,6 +169,10 @@ pub trait GameLoop {
     fn text_input(&mut self, _text: &str) {}
     /// The Backspace key went down; chat drafts consume it as erase.
     fn delete_text(&mut self) {}
+    /// A left mouse click at native frame pixels (`x`, `y` in
+    /// 800x600 space; the shell maps window pixels before calling).
+    /// Default ignores clicks so existing implementors keep compiling.
+    fn mouse_click(&mut self, _x: i32, _y: i32) {}
     /// Paint the current frame into the backbuffer view.
     fn paint(&mut self, frame: &mut o2jam_render::Frame<'_>);
 }

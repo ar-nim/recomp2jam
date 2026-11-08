@@ -8,12 +8,13 @@ use super::super::playing::{HighwayGeometry, LivePlay, PlaySkin};
 use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
-    battle_verdict, paint_avi_scene, paint_channel_chat, paint_channel_list, paint_channel_scene,
-    paint_loading_scene, paint_loading_scene_with_status, paint_lobby_backdrop,
-    paint_playing_overlay, paint_result, paint_result_scene, paint_room_list, paint_room_scene,
-    paint_screen, paint_waiting_chat, paint_waiting_members, paint_waiting_scene, scene_index,
-    BattleVerdict, ChannelChatMessage, LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict,
-    SceneArt, WaitingCaptions, WaitingChatMessage,
+    battle_verdict, has_room_panels, list_row_hit, paint_avi_scene, paint_channel_chat,
+    paint_channel_list, paint_channel_scene, paint_loading_scene, paint_loading_scene_with_status,
+    paint_lobby_backdrop, paint_playing_overlay, paint_result, paint_result_scene, paint_room_list,
+    paint_room_scene, paint_screen, paint_waiting_chat, paint_waiting_members, paint_waiting_scene,
+    rect_hit, room_panel_hit, scene_index, staged_rect_hit, BattleVerdict, ChannelChatMessage,
+    LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions,
+    WaitingChatMessage, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::side::{
     can_return_side, can_visit_side, paint_side_scene, select_chosung_cells, select_difficulty_ink,
@@ -64,10 +65,32 @@ const MAX_CHANNEL_CHAT_ROWS: usize = 50;
 /// counts once per character so no slice ever splits UTF-8).
 const MAX_CHAT_INPUT_CHARS: usize = 50;
 
+/// Native click canvas width (the shell maps window pixels into
+/// 800x600 before calling [`GameLoop::mouse_click`]).
+const CLICK_W: i32 = 800;
+/// Native click canvas height (see [`CLICK_W`]).
+const CLICK_H: i32 = 600;
+
+/// Waiting confirm-button candidates under the `IDC_BUTTON_SWAIT_*`
+/// convention (the `START 0x16202012` / `READY 0x16202013` arms,
+/// `docs/room-enums.md`): the exact staged names stay untraced, so
+/// clicks only fire while staged art binds one of these ids.
+const WAITING_CONFIRM_IDS: [&str; 2] = ["IDC_BUTTON_SWAIT_START", "IDC_BUTTON_SWAIT_READY"];
+/// Waiting back-button candidates (same convention caveat as
+/// [`WAITING_CONFIRM_IDS`]).
+const WAITING_BACK_IDS: [&str; 2] = ["IDC_BUTTON_SWAIT_BACK", "IDC_BUTTON_SWAIT_EXIT"];
+
+/// Splash auto-advance delay in milliseconds: the exe leaves
+/// `STATE_AVI` on a timer (`docs/lifecycle.md` section 5), but the exact
+/// duration is not pinned by evidence, so this is an approximate
+/// stand-in (3 s) until the dispatch call is traced.
+const SPLASH_AUTO_ADVANCE_MS: u64 = 3_000;
+
 /// Game loop that shows each screen's scene and walks the flow.
 ///
 /// Input wiring so far: any lane key dismisses the splash into the
-/// channel screen. Room/waiting/loading inputs land with their UIs.
+/// channel screen, and the splash auto-advances there on its timer.
+/// Room/waiting/loading inputs land with their UIs.
 pub struct ScreenGame {
     flow: ScreenFlow,
     playing: LivePlay,
@@ -289,13 +312,15 @@ fn parse_slash_draft(draft: &str, reply_to: Option<&str>) -> SlashCommand {
 }
 
 impl ScreenGame {
-    /// Start at the splash screen.
+    /// Start at the splash screen. The song clock starts here as
+    /// the boot instant, so splash paints measure elapsed time since
+    /// construction; entering Playing re-arms it as the song clock.
     #[must_use]
     pub fn new() -> Self {
         Self {
             flow: ScreenFlow::new(),
             playing: LivePlay::new(&[]),
-            started_at: None,
+            started_at: Some(std::time::Instant::now()),
             audio: None,
             avatar: None,
             splash: None,
@@ -931,6 +956,18 @@ impl ScreenGame {
         self.is_room_master() && self.all_peers_ready()
     }
 
+    /// Run the waiting Confirm gate shared by Enter and clicks:
+    /// slash-free drafts advance offline walkers and ready masters;
+    /// guests and masters with unready peers stay put (see
+    /// [`Self::can_start_game`]).
+    fn confirm_waiting(&mut self) {
+        if self.take_chat_slash() == SlashCommand::Empty
+            && (self.waiting.is_none() || self.can_start_game())
+        {
+            self.enter(Screen::Loading);
+        }
+    }
+
     /// Advance a joined guest to Loading on the 4011 start broadcast.
     /// The `START 0x16202012` gate passes masters only (file
     /// `0xb5560`), so a guest Confirm can never satisfy
@@ -950,6 +987,87 @@ impl ScreenGame {
         }
         self.enter(Screen::Loading);
         true
+    }
+
+    /// Channel row click: highlight the band, then advance like
+    /// Confirm while the draft is action-free (slash drafts consume
+    /// the click instead of starting).
+    fn click_channel_row(&mut self, x: i32, y: i32) {
+        let Some(index) = list_row_hit(CLICK_W, CLICK_H, self.channels.len(), x, y) else {
+            return;
+        };
+        self.highlight = index;
+        if self.take_channel_slash() == SlashCommand::Empty {
+            self.enter(Screen::Room);
+        }
+    }
+
+    /// Room row click: staged panels first (verbatim `.bnd` rects in
+    /// file order), legacy row bands without them. Either path
+    /// highlights the row and advances like Confirm.
+    fn click_room_row(&mut self, x: i32, y: i32) {
+        let staged = self.room_panel_click(x, y);
+        let band = || list_row_hit(CLICK_W, CLICK_H, self.rooms.len(), x, y);
+        let Some(index) = staged
+            .or_else(band)
+            .filter(|index| *index < self.rooms.len())
+        else {
+            return;
+        };
+        self.room_highlight = index;
+        self.enter(Screen::Waiting);
+    }
+
+    /// Staged room-panel click: file-order panel index covering
+    /// (`x`, `y`) (`None` while no bound panel covers the point).
+    fn room_panel_click(&self, x: i32, y: i32) -> Option<usize> {
+        let placements = &self.scene_art(Screen::Room)?.placements;
+        if !has_room_panels(placements) {
+            return None;
+        }
+        room_panel_hit(placements, x, y)
+    }
+
+    /// Waiting button click: staged START/READY runs the Confirm
+    /// gate, staged BACK leaves for rooms. Art-less clicks land
+    /// nowhere — no pinned fallback geometry names these buttons.
+    fn click_waiting_button(&mut self, x: i32, y: i32) {
+        let Some(art) = self.scene_art(Screen::Waiting) else {
+            return;
+        };
+        let placements = &art.placements;
+        let back = WAITING_BACK_IDS
+            .iter()
+            .any(|id| staged_rect_hit(placements, id, x, y));
+        let confirm = WAITING_CONFIRM_IDS
+            .iter()
+            .any(|id| staged_rect_hit(placements, id, x, y));
+        if back {
+            self.enter(Screen::Room);
+        } else if confirm {
+            self.confirm_waiting();
+        }
+    }
+
+    /// Hit one result button: the staged `.bnd` rect verbatim where
+    /// bound, the pinned `docs/cresult-anchors.md` rect otherwise.
+    fn result_button_hit(&self, id: &str, fallback: &Rect, x: i32, y: i32) -> bool {
+        match self.scene_art(Screen::Result) {
+            Some(art) if art.placements.iter().any(|placed| placed.id == id) => {
+                staged_rect_hit(&art.placements, id, x, y)
+            }
+            _ => rect_hit(fallback, x, y),
+        }
+    }
+
+    /// Result button click: RETRY re-enters Waiting, BACK leaves
+    /// for rooms — the keyboard Confirm/Back arms on mouse.
+    fn click_result_button(&mut self, x: i32, y: i32) {
+        if self.result_button_hit(RESULT_RETRY_ID, &RESULT_RETRY_RECT, x, y) {
+            self.enter(Screen::Waiting);
+        } else if self.result_button_hit(RESULT_BACK_ID, &RESULT_BACK_RECT, x, y) {
+            self.enter(Screen::Room);
+        }
     }
 
     /// Remember the host song choice (`SetRoomMusic` 4000 body);
@@ -1419,6 +1537,9 @@ impl ScreenGame {
         if self.side.is_some() {
             paint_side_scene(frame, &self.side_placements, &self.side_figures);
             return;
+        }
+        if self.flow.current() == Screen::Avi && now_ms >= SPLASH_AUTO_ADVANCE_MS {
+            let _ = self.flow.go(Screen::Channel);
         }
         if self.flow.current() == Screen::Playing && self.playing.is_finished(now_ms) {
             let _ = self.flow.go(Screen::Result);
@@ -2063,12 +2184,7 @@ impl GameLoop for ScreenGame {
             // master state, and the offline walk keeps advancing.
             // Slash drafts (`/w`, `/r`, `/h`, `/help`) consume the
             // Enter without starting: only an empty draft advances.
-            (Screen::Waiting, MenuKey::Confirm)
-                if self.take_chat_slash() == SlashCommand::Empty
-                    && (self.waiting.is_none() || self.can_start_game()) =>
-            {
-                self.enter(Screen::Loading);
-            }
+            (Screen::Waiting, MenuKey::Confirm) => self.confirm_waiting(),
             _ => {}
         }
     }
@@ -2094,6 +2210,22 @@ impl GameLoop for ScreenGame {
             Screen::Waiting => self.delete_chat_char(),
             Screen::Channel => self.delete_channel_char(),
             _ => {}
+        }
+    }
+
+    fn mouse_click(&mut self, x: i32, y: i32) {
+        if self.side.is_some() {
+            return;
+        }
+        match self.flow.current() {
+            Screen::Avi => {
+                let _ = self.flow.go(Screen::Channel);
+            }
+            Screen::Channel => self.click_channel_row(x, y),
+            Screen::Room => self.click_room_row(x, y),
+            Screen::Waiting => self.click_waiting_button(x, y),
+            Screen::Result => self.click_result_button(x, y),
+            Screen::Loading | Screen::Playing => {}
         }
     }
 
@@ -2393,6 +2525,197 @@ mod game_tests {
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room);
         assert_eq!(game.highlight, 1);
+    }
+
+    fn waiting_game_with_button(id: &str, rect: Rect) -> ScreenGame {
+        use MenuKey;
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.set_rooms(two_rooms());
+        game.lane_key(3, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+        game.load_scene(
+            Screen::Waiting,
+            vec![ScenePlacement {
+                id: id.to_owned(),
+                code: 0,
+                sprite: None,
+                rect,
+            }],
+            HashMap::new(),
+        );
+        game
+    }
+
+    #[test]
+    fn click_dismisses_splash_into_channels() {
+        let mut game = ScreenGame::new();
+        assert_eq!(game.screen(), Screen::Avi);
+        game.mouse_click(400, 300);
+        assert_eq!(game.screen(), Screen::Channel);
+    }
+
+    #[test]
+    fn click_selects_channel_row_and_enters_rooms() {
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.lane_key(3, true);
+        // Second row band: y in [158, 166), x inside the scrim strip.
+        game.mouse_click(300, 162);
+        assert_eq!(game.highlight, 1);
+        assert_eq!(game.screen(), Screen::Room);
+    }
+
+    #[test]
+    fn click_outside_channel_rows_keeps_channel() {
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.lane_key(3, true);
+        game.mouse_click(10, 10);
+        game.mouse_click(700, 152);
+        assert_eq!(game.highlight, 0);
+        assert_eq!(game.screen(), Screen::Channel);
+    }
+
+    #[test]
+    fn click_with_slash_draft_consumes_without_advancing() {
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.lane_key(3, true);
+        game.set_channel_input("/w bob hi");
+        game.mouse_click(300, 152);
+        assert_eq!(game.screen(), Screen::Channel);
+        assert!(game.channel_input().is_empty());
+    }
+
+    #[test]
+    fn click_selects_room_row_and_enters_waiting() {
+        use MenuKey;
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.set_rooms(two_rooms());
+        game.lane_key(3, true);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        // First row band: y in [150, 158).
+        game.mouse_click(300, 154);
+        assert_eq!(game.room_highlight, 0);
+        assert_eq!(game.screen(), Screen::Waiting);
+    }
+
+    #[test]
+    fn click_selects_staged_room_panel() {
+        use MenuKey;
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.set_rooms(two_rooms());
+        game.lane_key(3, true);
+        game.menu_key(MenuKey::Confirm, true);
+        // Left-column second panel, file order index 1
+        // (`IDC_BUTTON_SROOM_EXBUTTON2`, (26,177)-(314,268)).
+        game.load_scene(
+            Screen::Room,
+            vec![ScenePlacement {
+                id: "IDC_BUTTON_SROOM_EXBUTTON2".to_owned(),
+                code: 0,
+                sprite: None,
+                rect: Rect {
+                    x: 26,
+                    y: 177,
+                    w: 288,
+                    h: 91,
+                },
+            }],
+            HashMap::new(),
+        );
+        game.mouse_click(100, 200);
+        assert_eq!(game.room_highlight, 1);
+        assert_eq!(game.screen(), Screen::Waiting);
+    }
+
+    #[test]
+    fn click_staged_ready_enters_loading() {
+        let mut game = waiting_game_with_button(
+            "IDC_BUTTON_SWAIT_READY",
+            Rect {
+                x: 600,
+                y: 100,
+                w: 80,
+                h: 30,
+            },
+        );
+        game.mouse_click(640, 115);
+        assert_eq!(game.screen(), Screen::Loading);
+    }
+
+    #[test]
+    fn click_staged_back_returns_to_rooms() {
+        let mut game = waiting_game_with_button(
+            "IDC_BUTTON_SWAIT_BACK",
+            Rect {
+                x: 20,
+                y: 560,
+                w: 80,
+                h: 30,
+            },
+        );
+        game.mouse_click(60, 575);
+        assert_eq!(game.screen(), Screen::Room);
+    }
+
+    #[test]
+    fn click_without_staged_buttons_ignores_waiting() {
+        use MenuKey;
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.set_rooms(two_rooms());
+        game.lane_key(3, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+        game.mouse_click(640, 115);
+        assert_eq!(game.screen(), Screen::Waiting);
+    }
+
+    fn result_game() -> ScreenGame {
+        let mut game = ScreenGame::new();
+        for next in [
+            Screen::Channel,
+            Screen::Room,
+            Screen::Waiting,
+            Screen::Loading,
+            Screen::Playing,
+            Screen::Result,
+        ] {
+            game.flow.go(next).unwrap();
+        }
+        assert_eq!(game.screen(), Screen::Result);
+        game
+    }
+
+    #[test]
+    fn click_retries_result_into_waiting() {
+        let mut game = result_game();
+        // Pinned RETRY rect (625,570)-(708,592).
+        game.mouse_click(666, 581);
+        assert_eq!(game.screen(), Screen::Waiting);
+    }
+
+    #[test]
+    fn click_leaves_result_into_rooms() {
+        let mut game = result_game();
+        // Pinned BACK rect (711,569)-(794,593).
+        game.mouse_click(752, 581);
+        assert_eq!(game.screen(), Screen::Room);
+    }
+
+    #[test]
+    fn click_outside_result_buttons_keeps_result() {
+        let mut game = result_game();
+        game.mouse_click(400, 300);
+        assert_eq!(game.screen(), Screen::Result);
     }
 
     #[test]
@@ -3181,6 +3504,39 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.lane_key(0, false);
         assert_eq!(game.screen(), Screen::Avi);
+    }
+
+    fn paint_splash_frame(game: &mut ScreenGame, now_ms: u64) {
+        let mut buf = vec![0u32; 16 * 12];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 16,
+                h: 12,
+            },
+            now_ms,
+        );
+    }
+
+    #[test]
+    fn splash_stays_before_timeout() {
+        let mut game = ScreenGame::new();
+        paint_splash_frame(&mut game, SPLASH_AUTO_ADVANCE_MS - 1);
+        assert_eq!(game.screen(), Screen::Avi);
+    }
+
+    #[test]
+    fn splash_auto_advances_at_timeout() {
+        let mut game = ScreenGame::new();
+        paint_splash_frame(&mut game, SPLASH_AUTO_ADVANCE_MS);
+        assert_eq!(game.screen(), Screen::Channel);
+    }
+
+    #[test]
+    fn splash_auto_advances_after_timeout() {
+        let mut game = ScreenGame::new();
+        paint_splash_frame(&mut game, SPLASH_AUTO_ADVANCE_MS + 1_000);
+        assert_eq!(game.screen(), Screen::Channel);
     }
 
     fn walk_to_lobby(game: &mut ScreenGame, lobby: Screen) {

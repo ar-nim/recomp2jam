@@ -7,6 +7,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 mod connect;
+mod live_art;
 #[cfg(test)]
 mod live_guard;
 mod live_stats;
@@ -660,6 +661,7 @@ fn run_play(
                     session.set_pending_song(choice);
                 }
                 stage_session_catalog(&mut session);
+                session.stage_live_art();
                 o2jam_shell::Shell::new(Box::new(session)).run(event_loop)?;
             }
             None => {

@@ -7,7 +7,7 @@
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, Ime, KeyEvent, WindowEvent};
+use winit::event::{ElementState, Ime, KeyEvent, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, OwnedDisplayHandle};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowAttributes};
@@ -20,6 +20,7 @@ pub struct WindowHandler {
     surface: Option<softbuffer::Surface<OwnedDisplayHandle, Arc<Window>>>,
     surface_size: Option<(u32, u32)>,
     paint_error: Option<anyhow::Error>,
+    cursor: Option<(f64, f64)>,
 }
 
 impl WindowHandler {
@@ -30,6 +31,7 @@ impl WindowHandler {
             surface: None,
             surface_size: None,
             paint_error: None,
+            cursor: None,
         }
     }
 
@@ -142,6 +144,17 @@ impl WindowHandler {
         }
     }
 
+    /// Route a left press at window pixels into a native-frame
+    /// click (letterbox bars never click through).
+    fn route_click(&mut self, cursor_x: f64, cursor_y: f64) {
+        let Some((window_w, window_h)) = self.surface_size else {
+            return;
+        };
+        if let Some((x, y)) = window_to_native(window_w, window_h, cursor_x, cursor_y) {
+            self.shell.game.mouse_click(x, y);
+        }
+    }
+
     /// Feed committed text into the game (winit `Ime::Commit`).
     fn route_text(&mut self, text: &str) {
         self.shell.game.text_input(text);
@@ -183,6 +196,36 @@ pub struct PresentLayout {
 #[must_use]
 pub fn backbuffer_words() -> usize {
     DEFAULT_WIDTH as usize * DEFAULT_HEIGHT as usize
+}
+
+/// Map a window physical-pixel cursor into native 800x600 frame
+/// pixels: inverts the aspect-fit present (`None` on degenerate
+/// geometry or outside the draw rect, so letterbox bars never
+/// click through).
+#[must_use]
+pub fn window_to_native(
+    window_w: u32,
+    window_h: u32,
+    cursor_x: f64,
+    cursor_y: f64,
+) -> Option<(i32, i32)> {
+    let fit = o2jam_render::native_present(
+        usize::try_from(window_w).ok()?,
+        usize::try_from(window_h).ok()?,
+    )?;
+    let draw_w = fit.draw_w as f64;
+    let draw_h = fit.draw_h as f64;
+    if draw_w <= 0.0 || draw_h <= 0.0 {
+        return None;
+    }
+    let native_w = f64::from(DEFAULT_WIDTH);
+    let native_h = f64::from(DEFAULT_HEIGHT);
+    let local_x = (cursor_x - fit.offset_x as f64) * native_w / draw_w;
+    let local_y = (cursor_y - fit.offset_y as f64) * native_h / draw_h;
+    if !(0.0..native_w).contains(&local_x) || !(0.0..native_h).contains(&local_y) {
+        return None;
+    }
+    Some((local_x.floor() as i32, local_y.floor() as i32))
 }
 
 /// Whether a backbuffer holds exactly one native frame.
@@ -255,6 +298,18 @@ impl ApplicationHandler for WindowHandler {
                 ..
             } => self.route_key(code, state == ElementState::Pressed),
             WindowEvent::Ime(Ime::Commit(text)) => self.route_text(&text),
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor = Some((position.x, position.y));
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } => {
+                if let Some((x, y)) = self.cursor {
+                    self.route_click(x, y);
+                }
+            }
             WindowEvent::Resized(size) => {
                 self.resize_surface(size.width, size.height, event_loop);
             }
@@ -286,6 +341,7 @@ mod tests {
         texts: Vec<String>,
         deletes: usize,
         lanes: Vec<(usize, bool)>,
+        clicks: Vec<(i32, i32)>,
     }
 
     impl GameLoop for Rc<RefCell<InputProbe>> {
@@ -299,6 +355,10 @@ mod tests {
 
         fn delete_text(&mut self) {
             self.borrow_mut().deletes += 1;
+        }
+
+        fn mouse_click(&mut self, x: i32, y: i32) {
+            self.borrow_mut().clicks.push((x, y));
         }
 
         fn paint(&mut self, _frame: &mut o2jam_render::Frame<'_>) {}
@@ -340,6 +400,36 @@ mod tests {
         handler.route_key(KeyCode::Backspace, false);
         assert_eq!(probe.borrow().deletes, 0);
         assert!(probe.borrow().lanes.is_empty());
+    }
+
+    #[test]
+    fn left_press_reaches_the_game_at_native_pixels() {
+        let (mut handler, probe) = probed_handler();
+        handler.surface_size = Some((800, 600));
+        handler.route_click(100.0, 200.0);
+        assert_eq!(probe.borrow().clicks, vec![(100, 200)]);
+    }
+
+    #[test]
+    fn clicks_need_a_sized_surface() {
+        let (mut handler, probe) = probed_handler();
+        handler.route_click(100.0, 200.0);
+        assert!(probe.borrow().clicks.is_empty());
+    }
+
+    #[test]
+    fn letterbox_bars_never_click_through() {
+        // 1600x900 centers 800x600 with 200 px side bars.
+        assert_eq!(window_to_native(1600, 900, 199.9, 450.0), None);
+        assert_eq!(window_to_native(1600, 900, 1400.0, 450.0), None);
+        assert_eq!(window_to_native(1600, 900, 200.0, 0.0), Some((0, 0)));
+        assert_eq!(window_to_native(1600, 900, 1399.9, 899.9), Some((799, 599)));
+    }
+
+    #[test]
+    fn window_mapping_rejects_degenerate_geometry() {
+        assert_eq!(window_to_native(0, 600, 0.0, 0.0), None);
+        assert_eq!(window_to_native(800, 0, 0.0, 0.0), None);
     }
 
     #[test]

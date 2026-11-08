@@ -141,6 +141,7 @@ use o2jam_net::{
 use o2jam_shell::screens::game::SlashCommand;
 use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
 
+use crate::live_art::restage_live_playing;
 use crate::live_stats::{apply_peer_update, jam_tick_for_score, life_tick_for_live_play};
 use crate::loading::{
     load_sound_bank, loading_phase_status, prepare_chart, stage_loading_cover, PreparedChart,
@@ -460,6 +461,15 @@ impl OnlineSession {
         Ok(room)
     }
 
+    /// Stage genuine 7.55 scene art under the live walk (the shots
+    /// `stage_real_art` pattern through [`crate::live_art`]): bound art
+    /// plus figures for the lobby and playing scenes, driven by the live
+    /// room state. Missing archives keep the fallback paint. Call after
+    /// the login lists land; later joins restage Playing on their own.
+    pub fn stage_live_art(&mut self) {
+        crate::live_art::stage_live_scenes(&mut self.game);
+    }
+
     /// Record the echo-verified stage word into the joined snapshot:
     /// the 4003 answer already proved it took, so both mirrors (the
     /// session tally source and the shell venue reader) move together.
@@ -467,6 +477,7 @@ impl OnlineSession {
         if let Some(room) = self.joined_room.as_mut() {
             room.arena = arena;
             self.game.set_joined_room(room.clone());
+            restage_live_playing(&mut self.game);
         }
         self
     }
@@ -479,6 +490,7 @@ impl OnlineSession {
         self.joined_room = Some(room.clone());
         self.game.set_joined_room(room);
         self.joined_waiting = true;
+        restage_live_playing(&mut self.game);
         self
     }
 
@@ -980,6 +992,7 @@ impl OnlineSession {
         self.joined_room = Some(room.clone());
         self.game.set_joined_room(room);
         self.joined_waiting = true;
+        restage_live_playing(&mut self.game);
         true
     }
 
