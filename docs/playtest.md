@@ -3776,3 +3776,16 @@ after the dossiers-head baseline `ab8f52f`: score open-items close
   (1 passed, 0.59 s) vs local Memoryer 7.2.0.
 - **Verdict: no regression.** Rank rows render the exe board
   sentence; the stale session shot test mirrors the new wording.
+
+## Regression sweep — grade numerator head (1604 passed)
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`.
+- `cargo test --workspace`: **1604 passed, 0 failed, 0 ignored**,
+  `exit=0`.
+- `cargo build --workspace --release`: clean, `exit=0`.
+- Live `live_host_song_flow_against_local_gateway`: **ok**
+  (1 passed, 0.59 s) vs local Memoryer 7.2.0.
+- **Verdict: no regression.** Grade numerator pinned as the live
+  per-judgement total (`grade_numerator()`); ratio fully modeled.

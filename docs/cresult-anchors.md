@@ -149,10 +149,23 @@ file `0xc22fc`, `imul 0xc8` file `0xc2319`, group bonus files
 `0xc234d`/`0xc2350`, remainder file `0xc2375`) — an all-Cool
 jam-climb simulation that scores each group with its level, so it sits
 above any live all-Cool total (see `grade_max_reference` in
-`o2jam-game`). Numerator `0x77ee60` writer still OPEN: an exhaustive
-LE32 scan finds 5 refs, all reads (files `0xc3928`, `0xc3afd`,
-`0xdda20`, `0xe9f78`, `0xea369`) — it is stored through a
-register-held pointer, never by absolute address. The grade byte lands in the
+`o2jam-game`). Numerator PINNED: the live played score accumulates per
+judgement in the scorer `FUN_00570510` (file `0x170510`) into the
+play-time word at game `+0x3980` (sub-object `+0x2160` at `this+0x1820`)
+through the adder `FUN_00540a50` (files `0x140a50`–`0x140a66`) — Cool
+`200 + 10*X` (files `0x17058f`–`0x1705ab`), Good `100 + 5*X` (files
+`0x170609`–`0x170623`), Bad-without-pill `+4` (files `0x17081b`–`0x170826`),
+Miss `-10` floored at zero (files `0x170888`–`0x170893`); the hold scan
+only feeds the separate bonus word at game `+0x3978` (sub `+0x2158`).
+The member sync copies game `+0x3980` into the member slot `+0x2160`
+through the setter `FUN_00540810` (files `0x4e0085`–`0x4e0095`); the
+global `0x77ee60` is the song-end snapshot of that total. An exhaustive
+LE32 scan finds 5 refs to `0x77ee60`, all reads (files `0xc3928`,
+`0xc3afd`, `0xdda20`, `0xe9f78`, `0xea369`) — the snapshot store runs
+through a register-held pointer, never by absolute address, which is why
+the absolute scan stays read-only. Modeled as
+`o2jam-game::Score::grade_numerator` (live `Score.points`); grade bands
+compare it against `o2jam-game::grade_max_reference`. The grade byte lands in the
 per-song/difficulty best table at `0x779814` and shows as the
 `Result_Imgs_Rank` frame: eight frames, all anchored (395,531) ==
 `State_Result.bnd` rect 7, sizes 35×41 ×2, 39×41 ×4, 38×41, 79×41;
@@ -225,14 +238,19 @@ VA `0x64a3a0`) while siblings are ready. The relay wraps
    on column order matching the baked headers (and the 4016 field
    order), not on a proven write site. `0x77ee58` is added to both the
    life readout and each row score; `0x77ee60` feeds the grade chooser
-   — exact semantics OPEN: an exhaustive LE32 scan of the image finds
-   5 refs to `0x77ee60` and all are reads (result life-sum file
-   `0xc3928`, grade-arg file `0xc3afd`, play-time files `0xdda20` /
-   `0xe9f78`, song-end submit-block file `0xea369` inside the
-   `0x4ea240` stat copy), so the accumulator is stored exclusively
-   through register-held pointers. Corroborated as the played score
-   (it ships in the submit block beside the counts/combo), but the
-   write site and per-judgement vs song-end timing stay OPEN.
+   — PINNED as the played-score snapshot: the scorer `FUN_00570510`
+   (file `0x170510`) accumulates per judgement into game `+0x3980`
+   (sub `+0x2160`) through the adder `FUN_00540a50` (files
+   `0x140a50`–`0x140a66`), the member sync copies game `+0x3980` into
+   the member slot `+0x2160` (setter `FUN_00540810`, files
+   `0x4e0085`–`0x4e0095`), and the 5 absolute refs to `0x77ee60` are
+   all reads (result life-sum file `0xc3928`, grade-arg file `0xc3afd`,
+   play-time files `0xdda20` / `0xe9f78`, song-end submit-block file
+   `0xea369` inside the `0x4ea240` stat copy) — the snapshot store runs
+   through a register-held pointer, so per-judgement accumulation with
+   a song-end snapshot (not per tick, not at-submit computation).
+   Modeled as `o2jam-game::Score::grade_numerator` with tests; the
+   tick only streams Jam/Life via 4014, never this word.
 4. Row-record fields `+0x2142`… are painter-relative; the record's
    stride bookkeeping inside the state (0x864×4 = 0x2190 in the call
    sites) is not normalized to a named layout. The row painter

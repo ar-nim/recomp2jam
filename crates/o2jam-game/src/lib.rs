@@ -1289,7 +1289,27 @@ impl Score {
         for _ in 0..note_count {
             score.apply(Judgement::Cool);
         }
-        score.points
+        score.grade_numerator()
+    }
+
+    /// Live played-score total the result numerator snapshots.
+    ///
+    /// VERIFIED 7.55: the scorer `FUN_00570510` (file `0x170510`)
+    /// accumulates per judgement into the play-time word at game `+0x3980`
+    /// (sub-object `+0x2160` at `this+0x1820`) through the adder
+    /// `FUN_00540a50` (files `0x140a50`-`0x140a66`): Cool `200 + 10 * X`
+    /// (files `0x17058f`-`0x1705ab`), Good `100 + 5 * X` (files
+    /// `0x170609`-`0x170623`), Bad-without-pill `+4` (files
+    /// `0x17081b`-`0x170826`), Miss `-10` floored at zero (files
+    /// `0x170888`-`0x170893`). The hold scan only feeds the separate
+    /// bonus word at game `+0x3978` (sub `+0x2158`), never this word.
+    /// The member sync copies game `+0x3980` into the member slot `+0x2160`
+    /// (setter `FUN_00540810`, files `0x4e0085`-`0x4e0095`); the submit
+    /// builder and result painters only read the snapshotted global
+    /// `0x77ee60` (files `0xc3928`/`0xc3afd`/`0xdda20`/`0xe9f78`/`0xea369`).
+    #[must_use]
+    pub fn grade_numerator(&self) -> u64 {
+        self.points
     }
 }
 
@@ -2084,6 +2104,50 @@ mod tests {
         // grants mid-group — so the denominator exceeds any played total
         // and the top band can stay out of reach.
         assert!(grade_max_reference(51) > Score::all_cool_total(25));
+    }
+
+    #[test]
+    fn grade_numerator_accumulates_per_judgement_at_zero_jam() {
+        // Scorer FUN_00570510 via adder FUN_00540a50 (files
+        // 0x1705ab/0x170623/0x170826/0x170893): Cool +200, Good +100,
+        // Bad-without-pill +4, Miss -10 floored at zero.
+        let mut score = Score::default();
+        score.apply(Judgement::Cool);
+        assert_eq!(score.grade_numerator(), 200);
+        score.apply(Judgement::Good);
+        assert_eq!(score.grade_numerator(), 300);
+        score.apply(Judgement::Bad);
+        assert_eq!(score.grade_numerator(), 304);
+        score.apply(Judgement::Miss);
+        assert_eq!(score.grade_numerator(), 294);
+    }
+
+    #[test]
+    fn grade_numerator_tracks_the_jam_multiplier() {
+        // 25 Cools grant level 1 first (progress 50), so note 25 scores
+        // 210 and the next Cool/Good score with X = 1.
+        let mut score = Score::default();
+        for _ in 0..25 {
+            score.apply(Judgement::Cool);
+        }
+        assert_eq!(score.grade_numerator(), 5_010);
+        score.apply(Judgement::Cool);
+        assert_eq!(score.grade_numerator(), 5_010 + 210);
+        score.apply(Judgement::Good);
+        assert_eq!(score.grade_numerator(), 5_010 + 210 + 105);
+    }
+
+    #[test]
+    fn grade_numerator_is_the_live_total_behind_the_snapshot() {
+        // The global 0x77ee60 only ever reads (files
+        // 0xc3928/0xc3afd/0xdda20/0xe9f78/0xea369); the exe accumulates
+        // per judgement in game +0x3980 and snapshots once at song end.
+        // The model keeps that live total as points.
+        let mut score = Score::default();
+        score.apply(Judgement::Cool);
+        score.apply(Judgement::Cool);
+        assert_eq!(score.grade_numerator(), score.points);
+        assert!(score.grade_numerator() < grade_max_reference(51));
     }
 
     #[test]
