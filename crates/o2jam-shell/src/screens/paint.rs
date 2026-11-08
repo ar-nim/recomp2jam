@@ -1572,7 +1572,8 @@ pub struct WaitingChatMessage {
     pub sender: String,
     /// Chat text (UTF-8, lossy-decoded from the raw wire bytes).
     pub text: String,
-    /// True for 3013 administrator lines.
+    /// True for 3013 administrator lines — selects the `0x71e6` ink
+    /// over the 3012 `0xdedede` (see [`chat_admin_ink`]).
     pub admin: bool,
 }
 
@@ -1598,23 +1599,18 @@ impl WaitingChatMessage {
     }
 }
 
-/// Display text of one chat row. User rows bracket the nickname
-/// right-aligned in a 13-wide field — the reference row shape
-/// `[        Lujia] YOOO!!!` (one photo sample pins the field width;
-/// wider and 2-byte names stay OPEN). Administrator rows keep the
-/// `[ADMIN]` prefix stand-in: the reference admin notice shows no
-/// sender at all, so the real admin row-feed stays OPEN.
+/// Display text of one chat row: the enqueue printf's `[%12s] %s`
+/// line (format VA `0x64d8d4`, call file `0x15f076`,
+/// `docs/channel-fill.md`) — bracket, sender right-aligned to width
+/// 12, bracket, space, text. User and administrator rows share the
+/// line; the kind only picks the appended ink. ASCII names pad the
+/// field exactly like the exe's C runtime; wider multibyte names ride
+/// the presentation stand-in (rasterizer owner decision). The former
+/// `[ADMIN]` prefix and the photo-guessed 13-wide field are replaced
+/// by this pinned format.
 #[must_use]
 pub fn waiting_chat_row_text(message: &WaitingChatMessage) -> String {
-    if message.admin {
-        format!("[ADMIN] {}: {}", message.sender, message.text)
-    } else {
-        format!(
-            "[{sender:>13}] {text}",
-            sender = message.sender,
-            text = message.text
-        )
-    }
+    format!("[{:>12}] {}", message.sender, message.text)
 }
 
 /// Rows the history box shows: the newest [`WAITING_CHAT_VISIBLE_ROWS`].
@@ -1624,13 +1620,29 @@ pub fn waiting_chat_visible_messages(messages: &[WaitingChatMessage]) -> &[Waiti
     messages.get(skip..).unwrap_or(&[])
 }
 
-/// Row ink: warm gold for every chat row. All three reference rows
-/// read warm (known-white ink in the same photo calibrates neutral),
-/// so user and administrator rows share one amber; distinct per-kind
-/// hues are unverifiable in the lossy photo (residual in
-/// `docs/parity.md`).
-fn chat_amber_ink() -> u32 {
-    pack_xrgb(0xFF, 0xD0, 0x20)
+/// Ink of 3012 user rows: the exe poller appends with color
+/// `0xdedede` (call file `0xb9f8c`, `docs/channel-fill.md`) through
+/// the GDI `SetTextColor` path (`docs/gdi-text.md`) — COLORREF
+/// `0x00BBGGRR`, symmetric here: light gray.
+fn chat_user_ink() -> u32 {
+    pack_xrgb(0xDE, 0xDE, 0xDE)
+}
+
+/// Ink of 3013 administrator rows: color `0x71e6` (call file
+/// `0xb9fbf`) as a COLORREF — red `0xe6`, green `0x71`, blue `0x00`,
+/// the warm amber every reference row reads as.
+fn chat_admin_ink() -> u32 {
+    pack_xrgb(0xE6, 0x71, 0x00)
+}
+
+/// Ink of one history row: the 3013 gate picks the admin amber,
+/// every other row the user gray.
+fn chat_row_ink(admin: bool) -> u32 {
+    if admin {
+        chat_admin_ink()
+    } else {
+        chat_user_ink()
+    }
 }
 
 /// Frame y of history row `offset`: the list origin plus
@@ -1667,12 +1679,13 @@ fn waiting_chat_edit_origin(frame: &Frame<'_>, placements: &[ScenePlacement]) ->
 /// Paint live chat rows plus the input line: the newest visible rows
 /// stack from the history origin at the photo-pinned 17 px pitch,
 /// straight on the box art (the reference rows carry no scrim band),
-/// the draft paints at the input origin and the focus caret rides
-/// the insertion point (inset plus typed width — the reference shows
-/// the caret on an empty input). Rows come only from live packets;
-/// the caret is the input-line state, not history. Missing
-/// placements fall back to the scaled native rects so the flat
-/// fallback still reads.
+/// each in its appended ink — 3012 user rows `0xdedede`, 3013 admin
+/// rows `0x71e6` ([`chat_row_ink`]) — the draft paints at the input
+/// origin and the focus caret rides the insertion point (inset plus
+/// typed width — the reference shows the caret on an empty input).
+/// Rows come only from live packets; the caret is the input-line
+/// state, not history. Missing placements fall back to the scaled
+/// native rects so the flat fallback still reads.
 pub fn paint_waiting_chat(
     frame: &mut Frame<'_>,
     messages: &[WaitingChatMessage],
@@ -1686,7 +1699,7 @@ pub fn paint_waiting_chat(
             list_x,
             waiting_chat_row_y(list_y, offset),
             &waiting_chat_row_text(message),
-            chat_amber_ink(),
+            chat_row_ink(message.admin),
         );
     }
     let (edit_x, edit_y) = waiting_chat_edit_origin(frame, placements);
@@ -5620,12 +5633,12 @@ mod paint_tests {
     }
 
     #[test]
-    fn waiting_chat_row_text_brackets_the_sender_field() {
-        // Reference row shape (`reference-waiting-4x3.png`):
-        // `[        Lujia] YOOO!!!` — the nickname right-aligned in a
-        // 13-wide bracket field, text after the bracket.
+    fn waiting_chat_row_text_right_aligns_the_sender_in_a_12_wide_field() {
+        // The enqueue printf formats `[%12s] %s` (format VA `0x64d8d4`,
+        // call file `0x15f076`, `docs/channel-fill.md`): bracket, sender
+        // right-aligned to width 12, bracket, space, text.
         let row = WaitingChatMessage::user("host", "hello");
-        assert_eq!(waiting_chat_row_text(&row), "[         host] hello");
+        assert_eq!(waiting_chat_row_text(&row), "[        host] hello");
     }
 
     #[test]
@@ -5639,9 +5652,12 @@ mod paint_tests {
     }
 
     #[test]
-    fn waiting_chat_row_text_prefixes_admin_rows() {
-        let row = WaitingChatMessage::admin("host", "hello");
-        assert_eq!(waiting_chat_row_text(&row), "[ADMIN] host: hello");
+    fn waiting_chat_row_text_brackets_admin_rows_like_user_rows() {
+        // The 3013 stub enqueues the same `[%12s] %s` line; only the
+        // appended ink differs (`0x71e6` vs `0xdedede`). The `[ADMIN]`
+        // stand-in prefix is gone.
+        let row = WaitingChatMessage::admin("op", "quiet");
+        assert_eq!(waiting_chat_row_text(&row), "[          op] quiet");
     }
 
     #[test]
@@ -5681,10 +5697,10 @@ mod paint_tests {
     }
 
     #[test]
-    fn waiting_chat_paints_user_rows_in_amber_at_the_list_rect() {
-        // Reference rows are warm-gold ink (known-white ink in the
-        // same photo calibrates neutral) and paint straight on the
-        // box art — no per-row scrim band.
+    fn waiting_chat_paints_user_rows_in_the_exe_gray_at_the_list_rect() {
+        // The 3012 append ink is COLORREF `0xdedede` (call file
+        // `0xb9f8c`, `docs/channel-fill.md`) — light gray, drawn
+        // straight on the box art (no per-row scrim band).
         let placements = vec![waiting_probe(
             "IDC_LIST_SWAIT_CHAT",
             None,
@@ -5703,20 +5719,30 @@ mod paint_tests {
             &placements,
         );
         assert_eq!(buf[453 * 800 + 20], 0, "no scrim band over the row");
-        assert!(has_ink_near(&buf, chat_amber_ink()));
-        // White belongs only to the input caret (below the list),
-        // never to a chat row: the reference rows are all warm.
+        // The probe rides the history band: the white caret below the
+        // list is near gray at the 64 ink tolerance and would mask the
+        // row ink.
         let row_band = &buf[440 * 800..555 * 800];
+        assert!(
+            row_band
+                .iter()
+                .any(|pixel| near_xrgb(*pixel, pack_xrgb(0xDE, 0xDE, 0xDE))),
+            "user gray ink on the row"
+        );
         assert!(
             !row_band
                 .iter()
-                .any(|pixel| near_xrgb(*pixel, art_title_ink())),
-            "no white row ink"
+                .any(|pixel| near_xrgb(*pixel, pack_xrgb(0xE6, 0x71, 0x00))),
+            "no admin ink on a user row"
         );
     }
 
     #[test]
-    fn waiting_chat_paints_admin_rows_in_amber() {
+    fn waiting_chat_paints_admin_rows_in_the_exe_amber() {
+        // The 3013 append ink is COLORREF `0x71e6` (call file
+        // `0xb9fbf`) — `0x00BBGGRR` through GDI `SetTextColor`, a warm
+        // amber (the reference rows all read warm; `docs/parity.md`
+        // carries the photo residual).
         let placements = vec![waiting_probe(
             "IDC_LIST_SWAIT_CHAT",
             None,
@@ -5735,7 +5761,15 @@ mod paint_tests {
             &placements,
         );
         assert_eq!(buf[453 * 800 + 20], 0, "no scrim band over the row");
-        assert!(has_ink_near(&buf, chat_amber_ink()));
+        assert!(has_ink_near(&buf, pack_xrgb(0xE6, 0x71, 0x00)));
+        // User gray belongs to 3012 rows only.
+        let row_band = &buf[440 * 800..555 * 800];
+        assert!(
+            !row_band
+                .iter()
+                .any(|pixel| near_xrgb(*pixel, pack_xrgb(0xDE, 0xDE, 0xDE))),
+            "no user ink on an admin row"
+        );
     }
 
     #[test]
@@ -5763,7 +5797,7 @@ mod paint_tests {
             "",
             &placements,
         );
-        assert!(buf.contains(&chat_amber_ink()));
+        assert!(buf.contains(&pack_xrgb(0xDE, 0xDE, 0xDE)));
         assert!(!buf.contains(&scrim_color()), "no scrim bands");
     }
 
@@ -5833,7 +5867,13 @@ mod paint_tests {
         );
         assert_eq!(buf[453 * 800 + 20], 0, "no scrim over the row");
         assert_eq!(buf[561 * 800 + 16], 0, "no scrim over the draft");
-        assert!(has_ink_near(&buf, chat_amber_ink()));
+        let row_band = &buf[440 * 800..555 * 800];
+        assert!(
+            row_band
+                .iter()
+                .any(|pixel| near_xrgb(*pixel, pack_xrgb(0xDE, 0xDE, 0xDE))),
+            "user gray ink on the row"
+        );
         assert!(has_ink_near(&buf, art_title_ink()));
     }
 
