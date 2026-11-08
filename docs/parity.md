@@ -47,7 +47,7 @@ invented placement remains (cited per cell), never for lack of art.
 | Dimension | 7.55 expectation (evidence) | Shell status | Verdict |
 |---|---|---|---|
 | Composition | Decl `0x36`, 76 entries, `State_Room.bnd` (75 rects); mode filters, `Room_ButtonRoom.ojs` (lifecycle §7) | Soak binds 75 rects verbatim (`bind_verbatim_entries`: rect `i` → entry `i + 1`) under genuine panels — `room.png` shows real Korean room art with list + `ROOM` stamp on top. Still FAIL: list scrim/rows/cursor sit at invented quarter-frame anchors (audit 10–11) and the nine `IDC_*` detail fields draw from rect corners with micro-font metrics, sizes discarded (audit 3, 24–25) | FAIL |
-| Input | Join/create room; `DIALOG_CREATEROOM`, password dialog | Confirm → Waiting, Back → Channel; no create/password UI | OPEN |
+| Input | Join/create room; `DIALOG_CREATEROOM`, password dialog | Confirm → Waiting, Back → Channel; no create/password UI. Live 2026-11-09: quiet server sends an all-`Number`-0 slot table, so the documented `set_rooms` empty-slot filter leaves blank panels (no rows to click — correct, painter proves rows with data) | OPEN |
 | Timing | None documented | n/a | PASS (vacuous) |
 | Transitions | `Room → Waiting`, `Room → Channel` | Implemented + tested | PASS |
 

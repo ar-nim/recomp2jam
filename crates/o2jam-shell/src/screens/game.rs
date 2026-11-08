@@ -3724,6 +3724,32 @@ mod game_tests {
     }
 
     #[test]
+    fn staged_room_art_paints_live_room_rows() {
+        // Live Room shows staged panels but no row ink: narrow whether
+        // the painter drops rows when art is staged (data present).
+        let (placements, figures) = corner_scene_art("Room_ButtonRoom.ojs");
+        let mut game = ScreenGame::new();
+        game.load_scene(Screen::Room, placements, figures);
+        game.set_rooms(two_rooms());
+        game.lane_key(3, true);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        let mut buf = vec![0u32; 64 * 48];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 48,
+            },
+            0,
+        );
+        assert!(
+            has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)),
+            "room rows missing under staged art"
+        );
+    }
+
+    #[test]
     fn scene_art_backs_waiting_seats() {
         let (placements, figures) = corner_scene_art("Wait_TeamA.ojs");
         let mut game = ScreenGame::new();
