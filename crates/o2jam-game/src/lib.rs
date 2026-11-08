@@ -1277,11 +1277,12 @@ impl Score {
 
     /// Points an all-Cool play of `note_count` notes earns through the
     /// verified scorer path above (jam feed, grant, then score with the
-    /// resulting `X`). The result grade compares the played score
-    /// against a max-score reference the exe never shows a write site
-    /// for (docs/cresult-anchors.md OPEN 9), so the shell runs this
-    /// simulation as the documented stand-in denominator — an
-    /// implementation choice, not an exe claim.
+    /// resulting `X`). The result grade does NOT use this as its
+    /// denominator: the exe compares the played score against the pinned
+    /// [`crate::grade_max_reference`] instead, which scores each 25-note
+    /// group with its jam level and so sits above any live all-Cool
+    /// total. The shell keeps this simulation for live-score estimates;
+    /// grade bands come from [`crate::grade_max_reference`].
     #[must_use]
     pub fn all_cool_total(note_count: u32) -> u64 {
         let mut score = Self::default();
@@ -1290,6 +1291,72 @@ impl Score {
         }
         score.points
     }
+}
+
+/// Records in the note-count word the grade reference leaves unscored,
+/// VERIFIED 7.55: `FUN_004c22c0` (file `0xc22c0`) subtracts `0x1a` from
+/// the u16 at `0x778a00` (file `0xc22e5`) before the climb simulation.
+/// What those 26 records are (headers? padding events?) stays OPEN.
+pub const GRADE_REFERENCE_UNSCORED_RECORDS: u64 = 26;
+/// Notes per jam level in the reference climb, VERIFIED 7.55: the same
+/// function divides by `0x19` (file `0xc22fc`) — one level per 25 Cools,
+/// matching the live `+2`-per-Cool feed over the 50-progress threshold.
+pub const GRADE_REFERENCE_NOTES_PER_LEVEL: u64 = 25;
+/// Base points per scored note in the reference climb, VERIFIED 7.55:
+/// the accumulator starts at `scored * 200` (`imul $0xc8`, file `0xc2319`).
+pub const GRADE_REFERENCE_COOL_BASE: u64 = 200;
+/// Bonus step per level in the reference climb, VERIFIED 7.55: full
+/// groups feed `(level + 1) * 10 * 25` (`imul $0xa` + `imul $0x19`,
+/// files `0xc234d`/`0xc2350`); the trailing group feeds
+/// `(groups + 1) * 10 * remainder` (file `0xc2375`).
+pub const GRADE_REFERENCE_LEVEL_STEP: u64 = 10;
+
+/// Max-score reference the result grade chooser scales by
+/// 0.30/0.50/0.70/0.80/0.90/0.95, VERIFIED 7.55.
+///
+/// Denominator half PINNED. Writer: the result-state setup path (call at
+/// file `0xc1821`, store `mov %eax,0x10d14(%edx)` at file `0xc1829`)
+/// keeps the return of `FUN_004c22c0` in `this+0x10d14` — once, before
+/// the builder mounts art (the builder later claims `+0x10d10`, which
+/// this path zeroes first), so not per judgement and not at song end.
+/// The computation reads only the u16 note-count word at `0x778a00`:
+/// it scores `note_count − 26` notes all-Cool, granting one jam level
+/// per 25 notes and scoring each full group with its level
+/// (`200 + 10 * level` per note), plus a pro-rated trailing group.
+/// Readers: the six threshold multiplies in the grade chooser
+/// (files `0xc50cc`–`0xc53ea`, `fmul` against the constants at
+/// `0x64a500`/`0x644888`/`0x64a4f8`/`0x64a4f0`/`0x64a4e8`/`0x64a4e0`;
+/// dossiers `ev_c61d99f8…`, `ev_615e034c…`).
+///
+/// The reference overestimates a live all-Cool play (compare
+/// [`Score::all_cool_total`]): the live scorer grants the level
+/// mid-group, while the reference scores the whole group with it —
+/// so the top grade band can sit above any played score.
+#[must_use]
+pub fn grade_max_reference(note_count: u16) -> u64 {
+    let scored = u64::from(note_count).saturating_sub(GRADE_REFERENCE_UNSCORED_RECORDS);
+    let full_groups = scored / GRADE_REFERENCE_NOTES_PER_LEVEL;
+    let remainder = scored % GRADE_REFERENCE_NOTES_PER_LEVEL;
+    scored * GRADE_REFERENCE_COOL_BASE
+        + full_group_bonus(full_groups)
+        + grade_remainder_bonus(full_groups, remainder)
+}
+
+/// Bonus of every full 25-note group: levels `1..=full_groups` each feed
+/// `10 * 25` per group (`250 * g * (g + 1) / 2`).
+fn full_group_bonus(full_groups: u64) -> u64 {
+    GRADE_REFERENCE_LEVEL_STEP * GRADE_REFERENCE_NOTES_PER_LEVEL * full_groups * (full_groups + 1)
+        / 2
+}
+
+/// Bonus of the trailing partial group: nothing when the scored notes
+/// split evenly (the exe skips the add on a zero remainder, files
+/// `0xc2366`–`0xc236a`), else the next level's step per leftover note.
+fn grade_remainder_bonus(full_groups: u64, remainder: u64) -> u64 {
+    if remainder == 0 {
+        return 0;
+    }
+    (full_groups + 1) * GRADE_REFERENCE_LEVEL_STEP * remainder
 }
 
 /// Song clock: elapsed time since song start.
@@ -1975,6 +2042,48 @@ mod tests {
         assert_eq!(Score::all_cool_total(25), 5_010);
         // Notes 26..50 sit at level 1 (210 each); note 50 grants level 2.
         assert_eq!(Score::all_cool_total(50), 10_270);
+    }
+
+    #[test]
+    fn grade_max_reference_ignores_the_26_unscored_records() {
+        assert_eq!(grade_max_reference(0), 0);
+        assert_eq!(grade_max_reference(26), 0);
+    }
+
+    #[test]
+    fn grade_max_reference_scores_a_lone_note_with_first_level_bonus() {
+        // 27 records = 1 scored note at 200 + 1 * 10: the trailing-group
+        // path with zero full groups (files 0xc235b-0xc237c).
+        assert_eq!(grade_max_reference(27), 210);
+    }
+
+    #[test]
+    fn grade_max_reference_scores_a_full_group_with_its_level() {
+        // 51 records = 25 scored notes at 200 + 25 * 10 (files
+        // 0xc2347-0xc2356): the whole first group scores at level 1.
+        assert_eq!(grade_max_reference(51), 5_250);
+    }
+
+    #[test]
+    fn grade_max_reference_pro_rates_the_trailing_partial_group() {
+        // 52 records = 26 scored: one full group (250) plus 1 leftover
+        // note at level 2 (20): 5200 + 250 + 20.
+        assert_eq!(grade_max_reference(52), 5_470);
+    }
+
+    #[test]
+    fn grade_max_reference_stacks_full_group_bonuses() {
+        // 76 records = 50 scored: groups at levels 1 and 2 (250 + 500):
+        // 10000 + 750.
+        assert_eq!(grade_max_reference(76), 10_750);
+    }
+
+    #[test]
+    fn grade_max_reference_sits_above_a_live_all_cool_play() {
+        // The reference scores each group with its level; the live scorer
+        // grants mid-group — so the denominator exceeds any played total
+        // and the top band can stay out of reach.
+        assert!(grade_max_reference(51) > Score::all_cool_total(25));
     }
 
     #[test]

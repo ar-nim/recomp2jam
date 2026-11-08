@@ -3751,6 +3751,19 @@ after the dossiers-head baseline `ab8f52f`: score open-items close
   0 failures). No lint findings. No commits, no pushes.** This sweep
   touched only `docs/playtest.md`.
 
+## Regression sweep — grade-ratio head (1601 passed)
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`.
+- `cargo test --workspace`: **1601 passed, 0 failed, 0 ignored**,
+  `exit=0`.
+- `cargo build --workspace --release`: clean, `exit=0`.
+- Live `live_host_song_flow_against_local_gateway`: **ok**
+  (1 passed, 0.62 s) vs local Memoryer 7.2.0.
+- **Verdict: no regression.** Grade denominator pinned
+  (`grade_max_reference`); numerator narrowed to pointer writes.
+
 ## Regression sweep — board-sentence head (1595 passed)
 
 - `cargo fmt --check`: clean, `exit=0`.

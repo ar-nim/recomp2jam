@@ -136,9 +136,23 @@ Total score: `%8d` ← `0x77cd2c` at (605, 533), Arial.
 
 Grade: `FUN_004c4dd0` compares score `0x77ee60` against
 `this+0x10d14` × 0.30/0.50/0.70/0.80/0.90/0.95 (f64 constants at
-`0x64a500/0x644888/0x64a4f8/0x64a4f0/0x64a4e8/0x64a4e0`); a max-combo
+`0x64a500/0x644888/0x64a4f8/0x64a4f0/0x64a4e8/0x64a4e0`, read sites
+files `0xc50cc`–`0xc53ea`); a max-combo
 == note-count−1 comparison (`0x77ee5c` == `0x778a00`−1) promotes grade
-6 to 7; equal-to-max scores give 8. The grade byte lands in the
+6 to 7; equal-to-max scores give 8. Denominator PINNED: the setup path
+(call at file `0xc1821`, store at file `0xc1829`) keeps the return of
+`FUN_004c22c0` (file `0xc22c0`) in `this+0x10d14` once, before the
+builder mounts art — a pure function of the u16 at `0x778a00` (file
+`0xc22e5`): `(count−26) × 200`, plus `(level+1) × 10` per note in
+25-note jam groups (`sub 0x1a` files `0xc22f2`/`0xc2307`, `div 0x19`
+file `0xc22fc`, `imul 0xc8` file `0xc2319`, group bonus files
+`0xc234d`/`0xc2350`, remainder file `0xc2375`) — an all-Cool
+jam-climb simulation that scores each group with its level, so it sits
+above any live all-Cool total (see `grade_max_reference` in
+`o2jam-game`). Numerator `0x77ee60` writer still OPEN: an exhaustive
+LE32 scan finds 5 refs, all reads (files `0xc3928`, `0xc3afd`,
+`0xdda20`, `0xe9f78`, `0xea369`) — it is stored through a
+register-held pointer, never by absolute address. The grade byte lands in the
 per-song/difficulty best table at `0x779814` and shows as the
 `Result_Imgs_Rank` frame: eight frames, all anchored (395,531) ==
 `State_Result.bnd` rect 7, sizes 35×41 ×2, 39×41 ×4, 38×41, 79×41;
@@ -211,7 +225,14 @@ VA `0x64a3a0`) while siblings are ready. The relay wraps
    on column order matching the baked headers (and the 4016 field
    order), not on a proven write site. `0x77ee58` is added to both the
    life readout and each row score; `0x77ee60` feeds the grade chooser
-   — exact semantics OPEN.
+   — exact semantics OPEN: an exhaustive LE32 scan of the image finds
+   5 refs to `0x77ee60` and all are reads (result life-sum file
+   `0xc3928`, grade-arg file `0xc3afd`, play-time files `0xdda20` /
+   `0xe9f78`, song-end submit-block file `0xea369` inside the
+   `0x4ea240` stat copy), so the accumulator is stored exclusively
+   through register-held pointers. Corroborated as the played score
+   (it ships in the submit block beside the counts/combo), but the
+   write site and per-judgement vs song-end timing stay OPEN.
 4. Row-record fields `+0x2142`… are painter-relative; the record's
    stride bookkeeping inside the state (0x864×4 = 0x2190 in the call
    sites) is not normalized to a named layout. The row painter
@@ -244,10 +265,16 @@ VA `0x64a3a0`) while siblings are ready. The relay wraps
    file `0xc3b40`) semantic (long-note bonus? per the 4016 field
    order) OPEN. Unpainted with the rows (see 4).
 8. Grade 6→7 promotion compares max combo to note count − 1
-   (`0x77ee5c` == `0x778a00`−1); what `0x778a00` counts (notes or
-   notes−1) OPEN.
+   (`0x77ee5c` == `0x778a00`−1); `0x778a00` feeds the max-reference as a
+   record count including 26 unscored records (`FUN_004c22c0` subtracts
+   `0x1a`, file `0xc22e5`–`0xc2307`) — what those 26 are OPEN.
 9. `0x10d14` (max-score reference next to the `PointNum.ojs` handle at
-   `0x10d10`): write site not located.
+   `0x10d10`): PINNED — writer is the setup-path store at file `0xc1829`
+   of the `FUN_004c22c0` return (pure all-Cool jam-climb over
+   `0x778a00`−26, files `0xc22c0`–`0xc2387`); modeled as
+   `o2jam-game::grade_max_reference` with tests. Residual: which named
+   setup function owns files `0xc1800`–`0xc185f` (it runs before the
+   builder, which re-claims `+0x10d10` after this path zeroes it).
 10. Role 3 (observer) draws the verdict banner at frame 0 (image 0);
     whether observers really see the rank-1 banner OPEN.
 
