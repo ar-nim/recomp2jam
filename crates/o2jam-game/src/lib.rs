@@ -1354,8 +1354,11 @@ pub const GRADE_REFERENCE_UNSCORED_RECORDS: u64 = 26;
 /// function divides by `0x19` (file `0xc22fc`) — one level per 25 Cools,
 /// matching the live `+2`-per-Cool feed over the 50-progress threshold.
 pub const GRADE_REFERENCE_NOTES_PER_LEVEL: u64 = 25;
-/// Base points per scored note in the reference climb, VERIFIED 7.55:
-/// the accumulator starts at `scored * 200` (`imul $0xc8`, file `0xc2319`).
+/// Base points per note in the reference climb, VERIFIED 7.55: the
+/// accumulator starts at the FULL word `count * 200` (`mov` from the
+/// parked full-count slot at file `0xc2316`, `imul $0xc8` at file
+/// `0xc2319`) — never the minus-26 scored split, so the base always
+/// runs 26 notes (`5_200` points) above a scored-only climb.
 pub const GRADE_REFERENCE_COOL_BASE: u64 = 200;
 /// Bonus step per level in the reference climb, VERIFIED 7.55: full
 /// groups feed `(level + 1) * 10 * 25` (`imul $0xa` + `imul $0x19`,
@@ -1372,24 +1375,33 @@ pub const GRADE_REFERENCE_LEVEL_STEP: u64 = 10;
 /// the builder mounts art (the builder later claims `+0x10d10`, which
 /// this path zeroes first), so not per judgement and not at song end.
 /// The computation reads only the u16 note-count word at `0x778a00`:
-/// it scores `note_count − 26` notes all-Cool, granting one jam level
-/// per 25 notes and scoring each full group with its level
-/// (`200 + 10 * level` per note), plus a pro-rated trailing group.
+/// the accumulator opens at the full word `note_count * 200` (the feed
+/// slot parked at file `0xc22ec` still holds the un-subtracted word when
+/// file `0xc2316` loads it into the `imul $0xc8` at file `0xc2319`),
+/// then climbs the scored `note_count − 26` split all-Cool, granting one
+/// jam level per 25 notes and scoring each full group with its level
+/// (`10 * level` bonus per note), plus a pro-rated trailing group.
 /// Readers: the six threshold multiplies in the grade chooser
 /// (files `0xc50cc`–`0xc53ea`, `fmul` against the constants at
 /// `0x64a500`/`0x644888`/`0x64a4f8`/`0x64a4f0`/`0x64a4e8`/`0x64a4e0`;
 /// dossiers `ev_c61d99f8…`, `ev_615e034c…`).
 ///
 /// The reference overestimates a live all-Cool play (compare
-/// [`Score::all_cool_total`]): the live scorer grants the level
-/// mid-group, while the reference scores the whole group with it —
-/// so the top grade band can sit above any played score.
+/// [`Score::all_cool_total`]): the base already scores the 26 unscored
+/// records at 200 each, and the live scorer grants the level mid-group
+/// while the reference scores the whole group with it — so the top
+/// grade band can sit above any played score.
 #[must_use]
 pub fn grade_max_reference(note_count: u16) -> u64 {
     let scored = u64::from(note_count).saturating_sub(GRADE_REFERENCE_UNSCORED_RECORDS);
+    if scored == 0 {
+        // Untraced below 27 records (the `sub 0x1a` wraps unsigned, files
+        // `0xc22f2`/`0xc2307`): no denominator, so the plate stays off.
+        return 0;
+    }
     let full_groups = scored / GRADE_REFERENCE_NOTES_PER_LEVEL;
     let remainder = scored % GRADE_REFERENCE_NOTES_PER_LEVEL;
-    scored * GRADE_REFERENCE_COOL_BASE
+    u64::from(note_count) * GRADE_REFERENCE_COOL_BASE
         + full_group_bonus(full_groups)
         + grade_remainder_bonus(full_groups, remainder)
 }
@@ -2104,30 +2116,43 @@ mod tests {
 
     #[test]
     fn grade_max_reference_scores_a_lone_note_with_first_level_bonus() {
-        // 27 records = 1 scored note at 200 + 1 * 10: the trailing-group
-        // path with zero full groups (files 0xc235b-0xc237c).
-        assert_eq!(grade_max_reference(27), 210);
+        // 27 records = full-word base 27 * 200 plus 1 leftover note at
+        // level 1 (+10): the trailing-group path with zero full groups
+        // (files 0xc235b-0xc237c).
+        assert_eq!(grade_max_reference(27), 5_410);
     }
 
     #[test]
     fn grade_max_reference_scores_a_full_group_with_its_level() {
-        // 51 records = 25 scored notes at 200 + 25 * 10 (files
-        // 0xc2347-0xc2356): the whole first group scores at level 1.
-        assert_eq!(grade_max_reference(51), 5_250);
+        // 51 records = full-word base 51 * 200 plus the first group at
+        // level 1 (+250, files 0xc2347-0xc2356): the whole first group
+        // scores at level 1.
+        assert_eq!(grade_max_reference(51), 10_450);
     }
 
     #[test]
     fn grade_max_reference_pro_rates_the_trailing_partial_group() {
-        // 52 records = 26 scored: one full group (250) plus 1 leftover
-        // note at level 2 (20): 5200 + 250 + 20.
-        assert_eq!(grade_max_reference(52), 5_470);
+        // 52 records = full-word base 52 * 200, one full group (250)
+        // plus 1 leftover note at level 2 (20): 10400 + 250 + 20.
+        assert_eq!(grade_max_reference(52), 10_670);
     }
 
     #[test]
     fn grade_max_reference_stacks_full_group_bonuses() {
-        // 76 records = 50 scored: groups at levels 1 and 2 (250 + 500):
-        // 10000 + 750.
-        assert_eq!(grade_max_reference(76), 10_750);
+        // 76 records = full-word base 76 * 200 plus groups at levels 1
+        // and 2 (250 + 500): 15200 + 750.
+        assert_eq!(grade_max_reference(76), 15_950);
+    }
+
+    #[test]
+    fn grade_max_reference_base_scores_the_full_word_not_the_scored_split() {
+        // Verdict pin: the accumulator feed (file 0xc2316) loads the
+        // parked full-count slot, so every reference sits exactly
+        // 26 * 200 above a scored-only climb — across the lone-note,
+        // full-group, and trailing-note shapes.
+        assert_eq!(grade_max_reference(27), 27 * 200 + 10);
+        assert_eq!(grade_max_reference(51), 51 * 200 + 250);
+        assert_eq!(grade_max_reference(52) - grade_max_reference(51), 200 + 20);
     }
 
     #[test]
@@ -2171,14 +2196,15 @@ mod tests {
 
     #[test]
     fn grade_ratio_divides_live_total_by_the_reference() {
-        // Word 51 = 25 scored notes: reference 5_250 (files
-        // 0xc2347-0xc2356); a 1_575 live total reads exactly 0.30.
+        // Word 51 = full-word base 51 * 200 plus the first-group bonus
+        // 250 (files 0xc2316-0xc2356), reference 10_450; a 3_135 live
+        // total reads exactly 0.30.
         let score = Score {
-            points: 1_575,
+            points: 3_135,
             ..Score::default()
         };
         assert_eq!(score.grade_ratio(51), 0.30);
-        assert_eq!(grade_max_reference(51), 5_250);
+        assert_eq!(grade_max_reference(51), 10_450);
     }
 
     #[test]

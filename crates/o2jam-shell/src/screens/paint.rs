@@ -4706,16 +4706,17 @@ mod paint_tests {
 
     #[test]
     fn live_plate_climbs_one_frame_per_band() {
-        // Word 51 pins the reference at 5_250, so each point total
-        // below lands its band's frame through the live ratio.
+        // Word 51 pins the reference at 10_450 (full-word base), so
+        // each point total below lands its band's frame through the
+        // live ratio.
         let cases = [
-            (1_574, 0u8),
-            (1_575, 1),
-            (2_625, 2),
-            (3_675, 3),
-            (4_200, 4),
-            (4_725, 5),
-            (4_988, 6),
+            (3_134, 0u8),
+            (3_135, 1),
+            (5_225, 2),
+            (7_315, 3),
+            (8_360, 4),
+            (9_405, 5),
+            (9_928, 6),
         ];
         for (points, frame) in cases {
             let grade = result_grade_frame(&scored_plate(points, 0), 51);
@@ -4725,13 +4726,13 @@ mod paint_tests {
 
     #[test]
     fn live_plate_promotes_combo_top_and_max_score() {
-        // 4_988 points read past 0.95 (frame 6): combo 50 (word 51 −
+        // 9_928 points read past 0.95 (frame 6): combo 50 (word 51 −
         // 1) promotes to 7, combo 49 stays at 6, and an exact-max
         // total gives 8 outright.
-        assert_eq!(result_grade_frame(&scored_plate(4_988, 50), 51), Some(7));
-        assert_eq!(result_grade_frame(&scored_plate(4_988, 49), 51), Some(6));
-        assert_eq!(result_grade_frame(&scored_plate(4_725, 50), 51), Some(5));
-        assert_eq!(result_grade_frame(&scored_plate(5_250, 0), 51), Some(8));
+        assert_eq!(result_grade_frame(&scored_plate(9_928, 50), 51), Some(7));
+        assert_eq!(result_grade_frame(&scored_plate(9_928, 49), 51), Some(6));
+        assert_eq!(result_grade_frame(&scored_plate(9_405, 50), 51), Some(5));
+        assert_eq!(result_grade_frame(&scored_plate(10_450, 0), 51), Some(8));
     }
 
     #[test]
@@ -4749,10 +4750,10 @@ mod paint_tests {
         // staged plate paints it at (395,531) — band 1 paints image
         // 0, the promoted band paints image 6.
         let at = |buf: &[u32], x: i32, y: i32| buf[y as usize * 800 + x as usize];
-        let low = result_grade_frame(&scored_plate(1_575, 0), 51);
+        let low = result_grade_frame(&scored_plate(3_135, 0), 51);
         let buf = painted_native_scene(&rank_art(), ResultVerdict::Solo, low);
         assert_eq!(at(&buf, 395, 531), frame_ink(0));
-        let top = result_grade_frame(&scored_plate(4_988, 50), 51);
+        let top = result_grade_frame(&scored_plate(9_928, 50), 51);
         let buf = painted_native_scene(&rank_art(), ResultVerdict::Solo, top);
         assert_eq!(at(&buf, 395, 531), frame_ink(6));
     }

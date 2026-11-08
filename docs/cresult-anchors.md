@@ -143,7 +143,10 @@ files `0xc50cc`–`0xc53ea`); a max-combo
 (call at file `0xc1821`, store at file `0xc1829`) keeps the return of
 `FUN_004c22c0` (file `0xc22c0`) in `this+0x10d14` once, before the
 builder mounts art — a pure function of the u16 at `0x778a00` (file
-`0xc22e5`): `(count−26) × 200`, plus `(level+1) × 10` per note in
+`0xc22e5`): `count × 200` base — the feed at files `0xc2316`–`0xc2321`
+loads the parked full-count slot (stored at file `0xc22ec`, never the
+minus-26 value) into the `imul $0xc8` at file `0xc2319` — plus
+`(level+1) × 10` per note over the scored `count−26` split in
 25-note jam groups (`sub 0x1a` files `0xc22f2`/`0xc2307`, `div 0x19`
 file `0xc22fc`, `imul 0xc8` file `0xc2319`, group bonus files
 `0xc234d`/`0xc2350`, remainder file `0xc2375`) — an all-Cool
@@ -304,8 +307,8 @@ VA `0x64a3a0`) while siblings are ready. The relay wraps
    stays OPEN.
 9. `0x10d14` (max-score reference next to the `PointNum.ojs` handle at
    `0x10d10`): PINNED — writer is the setup-path store at file `0xc1829`
-   of the `FUN_004c22c0` return (pure all-Cool jam-climb over
-   `0x778a00`−26, files `0xc22c0`–`0xc2387`); modeled as
+   of the `FUN_004c22c0` return (full-word `count × 200` base plus the
+   all-Cool jam-climb over the `0x778a00`−26 split, files `0xc22c0`–`0xc2387`); modeled as
    `o2jam-game::grade_max_reference` with tests. Residual: which named
    setup function owns files `0xc1800`–`0xc185f` (it runs before the
    builder, which re-claims `+0x10d10` after this path zeroes it).

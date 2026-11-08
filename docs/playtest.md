@@ -3821,3 +3821,49 @@ refresh).
   passed; +8 vs the 1604 numerator-head baseline, 0 failures). No
   lint findings. No commits, no pushes.** This sweep touched only
   `docs/playtest.md`.
+
+## Regression sweep — 2026-11-08 07:01 UTC (HEAD `5610f55`, clean at start)
+
+Live re-proof on the unscored-head. Covers the file commit landed
+above the grade-head baseline `d7c3873`: lane backing counts split
+narrow unscored (`5610f55`).
+
+- `cargo fmt --check`: clean, `exit=0` (also clean on the dirty
+  state below).
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0` (also clean on the dirty state below). No lint findings,
+  nothing fixed, no files touched.
+- `cargo test --workspace` on clean HEAD (no live env; the live test
+  self-skips): **1615 passed, 0 failed, 0 ignored**, `exit=0`.
+  Per target: audio 20, dump 7, file 180, game 107, net 420,
+  render 89, shell 585, real_art 7, scenes 22, recomp2jam 178
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, 0 warning
+  lines (also 0 warnings on the dirty state below).
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 177 filtered out, 0.61 s) against local
+  Memoryer 7.2.0 (`Mode=Full`). Server log for this run
+  (`15:00:17 +08:00`): `Authorize session` →
+  `Get channel list: [0]` → `Enter channel: [0/00]` →
+  `Get character info: [tester]` → `Create room: songflow` →
+  `Get music list: [0/00] 562 music` → `music state` →
+  `download progress` → `Start game: [000]` →
+  `Submit score: 2210`.
+- **Verdict: no regression — suite is green on the unscored-head
+  (1615 passed; +3 vs the 1612 grade-head baseline, all file +3 from
+  the lane-backing split, 0 failures). No lint findings. No commits,
+  no pushes.**
+- Tree note: a peer landed uncommitted edits mid-sweep
+  (`crates/o2jam-game/src/lib.rs`: `grade_max_reference` reworked to
+  a full-word `note_count * 200` base with an early `0` return below
+  27 records; `docs/cresult-anchors.md`: matching notes). Re-ran the
+  suite on that dirty state with `--no-fail-fast`: **1613 passed,
+  3 failed** (game 108 = +1 new peer test passing; shell 582 + 3
+  failures, all `live_plate_*` paint tests asserting the old
+  denominator — e.g. `live_plate_paints_its_frame_at_the_pinned_anchor`:
+  `left: 0, right: 16`). fmt, clippy, and the release build stay clean
+  (0 warnings) under the dirty state. The 3 failures belong to the
+  peer's uncommitted work, not to HEAD `5610f55`. This sweep touched
+  only `docs/playtest.md`.
