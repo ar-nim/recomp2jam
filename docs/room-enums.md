@@ -277,3 +277,20 @@ select dialog art/structure/OK pill paint only for the master; the
 staged `BPM` caption paints for everyone. Waiting Confirm advances
 to Loading only with no joined room (offline walk) or
 `can_start_game`; a non-master or unready Confirm stays in Waiting.
+
+Shot-walk verdict (guest view, `docs/screenshots/waiting-guest.png`):
+the shot walk replays the master waiting instant from seat 5 of the
+same Live duo (same arena word, room song 757, captions, and
+3012/3013 chat — `crates/recomp2jam/src/shots.rs` `guest_waiting_room` /
+`seeded_guest_game`). The guest frame is byte-identical to the master
+`waiting.png` (seat id paints nothing) and differs from
+`musicselect.png` in 330774 of 360300 raw bytes: no dialog art, no
+structure, no song panel (gate hides them even when staged), while
+the staged `BPM` caption stays (catalog column present, never `-0-`).
+Gate state on the walked guest: `is_room_master` false,
+`all_peers_ready` true, `can_start_game` false, Confirm stays in
+Waiting — the non-master arm (READY shown, START hidden;
+`START 0x16202012` never armed for guests). Three shot tests pin it:
+gate report, staged-select-hidden-but-BPM-sourced, and
+capture equality vs `waiting.png` with inequality vs
+`musicselect.png`.

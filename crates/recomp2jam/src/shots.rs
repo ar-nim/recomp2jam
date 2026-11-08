@@ -42,7 +42,7 @@ pub struct Shot {
     pub rgb: Vec<u8>,
 }
 
-/// Capture avi, channel, room, waiting, musicselect, loading,
+/// Capture avi, channel, room, waiting, waiting-guest, musicselect, loading,
 /// playing, playing-native, result, result-native, result-solo,
 /// result-solo-native. The waiting shot carries the staged song
 /// catalog plus inventory (so MAPNAME/BPM/SKILLCOUNT ink their
@@ -57,7 +57,10 @@ pub struct Shot {
 /// staged `DAILOG_SELECTMUSIC` dialog on top (host song flow: catalog
 /// plus pick), and the loading shot threads the gate phases to the
 /// clock-armed full fraction with the staged catalog title/artist
-/// (see `stage_loading_status`), and the playing shot paints a mid-song state: the 5 s
+/// (see `stage_loading_status`), the waiting-guest shot replays the same
+/// waiting instant from a non-master seat (no dialog, staged `BPM` kept;
+/// master-gate comparison in `docs/room-enums.md`), and the playing shot
+/// paints a mid-song state: the 5 s
 /// tap is struck, then the long-note head (combo 2), and the paint
 /// lands 100 ms later while the held beam, hit burst, judgement
 /// word, tally counts, and TIME progress show; the scripted key-up
@@ -68,7 +71,7 @@ pub struct Shot {
 /// When the scripted walk leaves the expected screen.
 pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
     let mut game = seeded_game();
-    let mut shots = Vec::with_capacity(12);
+    let mut shots = Vec::with_capacity(13);
     shots.push(shoot(&mut game, "avi", 0)?);
     game.lane_key(3, true);
     shots.push(shoot_checked(&mut game, "channel", Screen::Channel, 0)?);
@@ -76,6 +79,7 @@ pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
     shots.push(shoot_checked(&mut game, "room", Screen::Room, 0)?);
     game.menu_key(MenuKey::Confirm, true);
     shots.push(shoot_checked(&mut game, "waiting", Screen::Waiting, 0)?);
+    shots.push(shoot_guest_waiting()?);
     stage_select_music_scene(&mut game);
     shots.push(shoot_checked(&mut game, "musicselect", Screen::Waiting, 0)?);
     game.menu_key(MenuKey::Confirm, true);
@@ -448,9 +452,38 @@ fn stage_empty_channel_scene(game: &mut ScreenGame) {
 /// stages underneath when `install-root`
 /// holds it; otherwise the synthetic fallback paints.
 fn seeded_game() -> ScreenGame {
+    seeded_game_in(waiting_room())
+}
+
+/// Non-master self seat for the guest walk: the creator keeps seat 0,
+/// so this id names a guest (the shell's `guest_room` test uses the same
+/// seat to avoid colliding with the peer slot 1). Matches the battle
+/// duo otherwise, so the guest replays the master instant seat-for-seat.
+const GUEST_MEMBER_ID: u8 = 5;
+
+/// Waiting room as the guest sees it: the battle duo with a non-master
+/// self seat. Peer slot 1 still names the ready wire peer, so
+/// `all_peers_ready` stays true while `is_room_master` reads false —
+/// the exe's non-master arm (file `0xae805`: READY shown, START hidden).
+fn guest_waiting_room() -> JoinedRoom {
+    let mut room = waiting_room();
+    room.member_id = GUEST_MEMBER_ID;
+    room
+}
+
+/// Game preloaded like [`seeded_game`] but joined as the guest: the same
+/// lobby rows, battle duo, captions, and chat, so the guest shot differs
+/// from the master shot by seat alone (dialog gated off, `BPM` kept).
+fn seeded_guest_game() -> ScreenGame {
+    seeded_game_in(guest_waiting_room())
+}
+
+/// Shared seed: lobby rows, one joined room, the duo scoreboard, peer
+/// gauge, captions, chat, chart, and real art underneath when present.
+fn seeded_game_in(room: JoinedRoom) -> ScreenGame {
     let mut game = ScreenGame::new();
     seed_lobby_lists(&mut game);
-    game.set_joined_room(waiting_room());
+    game.set_joined_room(room);
     game.set_battle_teams(result_battle_teams());
     game.set_battle_self_team(Some(RESULT_SELF_TEAM));
     seed_chart(&mut game);
@@ -461,6 +494,18 @@ fn seeded_game() -> ScreenGame {
     stage_real_art(&mut game);
     stage_empty_channel_scene(&mut game);
     game
+}
+
+/// Guest waiting instant: the same lane/menu walk as the master shot,
+/// from a non-master seat with captions and chat staged but no song
+/// selection (the gate hides the dialog), rasterized without checking
+/// beyond the Waiting screen.
+fn shoot_guest_waiting() -> anyhow::Result<Shot> {
+    let mut guest = seeded_guest_game();
+    guest.lane_key(3, true);
+    guest.menu_key(MenuKey::Confirm, true);
+    guest.menu_key(MenuKey::Confirm, true);
+    shoot_checked(&mut guest, "waiting-guest", Screen::Waiting, 0)
 }
 
 /// Solo waiting room for the solo walk: the same arena, key mode,
@@ -1514,6 +1559,7 @@ mod tests {
                 "channel",
                 "room",
                 "waiting",
+                "waiting-guest",
                 "musicselect",
                 "loading",
                 "playing",
@@ -2674,7 +2720,7 @@ mod tests {
     #[test]
     fn staging_attempt_never_breaks_the_walk() {
         let shots = capture_all().unwrap();
-        assert_eq!(shots.len(), 12);
+        assert_eq!(shots.len(), 13);
         for shot in &shots {
             assert!(is_varied(&shot.rgb), "{} paints a flat frame", shot.name);
         }
@@ -2684,8 +2730,9 @@ mod tests {
     fn writer_saves_eleven_scenes_and_keeps_avi() {
         let dir = std::env::temp_dir().join(format!("recomp2jam-shots-{}", std::process::id()));
         let written = write_shots(&dir).unwrap();
-        assert_eq!(written.len(), 11);
+        assert_eq!(written.len(), 12);
         assert!(!dir.join("avi.png").exists());
+        assert!(dir.join("waiting-guest.png").exists());
         assert!(dir.join("musicselect.png").exists());
         assert!(dir.join("playing-native.png").exists());
         assert!(dir.join("result-native.png").exists());
@@ -2807,6 +2854,67 @@ mod tests {
             buf[95 * 800 + 355],
             amber,
             "search tab must ink over the waiting seats"
+        );
+    }
+
+    #[test]
+    fn guest_view_reports_non_master_gate() {
+        // Exe non-master arm (file `0xae805`: READY shown, START
+        // hidden): the guest seat holds no master flag, cannot start
+        // with every peer ready, and Confirm stays in Waiting.
+        let mut guest = seeded_guest_game();
+        walk_to_waiting(&mut guest);
+        assert_eq!(guest.screen(), Screen::Waiting);
+        assert!(!guest.is_room_master());
+        assert!(guest.all_peers_ready());
+        assert!(!guest.can_start_game());
+        guest.menu_key(MenuKey::Confirm, true);
+        assert_eq!(guest.screen(), Screen::Waiting);
+    }
+
+    #[test]
+    fn guest_view_hides_staged_select_but_keeps_bpm_source() {
+        // The gate hides dialog art, structure, and panel even when
+        // staged (shell `waiting_non_master_hides_select_but_keeps_bpm`):
+        // staging the host flow on the guest changes no pixels, while
+        // the catalog BPM source for the shared song stays present.
+        use o2jam_shell::screens::paint::waiting_bpm_caption;
+
+        let mut guest = seeded_guest_game();
+        walk_to_waiting(&mut guest);
+        let before = frame_rgb(&mut guest, 0);
+        stage_select_music_scene(&mut guest);
+        assert!(!guest.select_songs().is_empty());
+        let after = frame_rgb(&mut guest, 0);
+        assert_eq!(before, after, "guest staged no select pixels");
+        let song_id = u32::from(PLAYING_SONG.music_id);
+        let bpm = staged_catalog_bpm(song_id);
+        assert!(bpm.is_some(), "staged catalog must name the room song");
+        assert_ne!(waiting_bpm_caption(bpm), "-0-");
+    }
+
+    #[test]
+    fn guest_capture_matches_master_waiting_but_not_select_view() {
+        // Artifact verdict: the guest capture replays the master waiting
+        // instant seat-for-seat (same captions, chat, and seats — the
+        // seat id paints nothing), while the master select view carries
+        // the staged dialog and panel on top.
+        let shots = capture_all().unwrap();
+        let by_name = |name: &str| {
+            shots
+                .iter()
+                .find(|shot| shot.name == name)
+                .unwrap_or_else(|| panic!("missing shot {name}"))
+        };
+        assert_eq!(
+            by_name("waiting-guest").rgb,
+            by_name("waiting").rgb,
+            "guest must replay the master waiting instant"
+        );
+        assert_ne!(
+            by_name("waiting-guest").rgb,
+            by_name("musicselect").rgb,
+            "master select pixels must be absent from the guest view"
         );
     }
 

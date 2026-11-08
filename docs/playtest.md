@@ -2968,3 +2968,63 @@ plus the sweep log in this file.
   `cargo clippy --workspace --all-targets -- -D warnings` stays clean.
   Per the sweep rules (touch only `docs/playtest.md`, fix only my own
   lint findings) the peer's file was left alone.
+
+## Regression sweep — 2026-11-08 11:16 UTC+8 (HEAD `dff765d`, tree clean)
+
+Live re-proof on the peer-bars head. Covers the feat commit landed after
+the mirror-shot baseline `37081a0`: layer peer bars gate master start
+(`dff765d`: `playing.rs` +111, `screens/game.rs` +181 peer-bar layering
+with master-start gating, `paint.rs` +4, `room-enums.md` +48), plus the
+sweep log in this file.
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1423 passed, 0 failed, 0 ignored**, `exit=0`.
+  Per target: audio 20, dump 7, file 177, game 94, net 360,
+  render 89, shell 528, real_art 7, scenes 22, recomp2jam 119
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, no warnings.
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 118 filtered out, 0.61 s) against local
+  Memoryer 7.2.0 (`Mode=Full`). Server log for this run
+  (`11:15:59 +08:00`, session `127.0.0.1:35026`):
+  `Authorize session` → `Get channel list: [0]` →
+  `Enter channel: [0/00]` → `Get character info: [tester]` →
+  `Create room: songflow` →
+  `Update room [000] music settings: [HX / X10 / o2ma757]` →
+  `Update room [000] arena: [1] (0)` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Update #1 - Jam: 3 (Bonus: 0)` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  broadcast-failure stack on room delete; a second session
+  `127.0.0.1:35038` walked `Authorize session` →
+  `Get channel list: [0]` → `Enter channel: [0/00]` →
+  `Get room list: [0/00]` → `Get character info: [tester]`).
+- **Verdict: no regression — suite is green on the peer-bars head
+  (1423 passed; +4 vs the 1419 mirror-shot baseline, all shell
+  524 → 528 from the peer-bar layering tests, all other targets
+  unchanged, 0 failures). No lint findings. No commits, no pushes.**
+  This sweep touched only `docs/playtest.md`.
+- Tree note: a peer saved uncommitted in-flight waiting-guest work
+  after every HEAD gate above had finished
+  (`crates/recomp2jam/src/shots.rs`, doc comments + `shoot_guest_waiting()`
+  wired into `capture_all`, capacity 12 → 13). Every count above is the
+  clean-HEAD result. Re-run on the dirty state: `cargo fmt --check` clean,
+  `cargo clippy --workspace --all-targets -- -D warnings` clean (one
+  mid-save compile hit 2 transient errors while the peer was editing;
+  fresh re-run clean), `cargo test -p recomp2jam` **115 passed, 4 failed**
+  — all in `shots::tests` (`native_shots_share_the_walked_source_frame`:
+  `shot waiting-guest: at Room, want Waiting`; plus
+  `staging_attempt_never_breaks_the_walk`,
+  `walk_covers_all_scenes_plus_solo_result`,
+  `writer_saves_eleven_scenes_and_keeps_avi`), i.e. the guest walk is not
+  yet staged to `Screen::Waiting` and the writer/scene-count pins still
+  expect eleven scenes. Per the sweep rules (touch only `docs/playtest.md`,
+  fix only my own lint findings) the peer's file was left alone.
