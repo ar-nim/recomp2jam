@@ -4302,3 +4302,27 @@ through the real bank (`dc8128b`: `session_walk.rs` audible test +
   `cargo fmt --check`; the peer kept editing and every gate above
   ran green on the finished dirty state. No clean-HEAD-only run
   was taken (would require stashing the peer's work).
+
+## Windowed A/V proof — 2026-11-09 01:30 +08:00 (HEAD `6675c63`, tree clean)
+
+Isolated rigs only (own Xvfb `:94/:95/:96/:97`, null sink, Wayland
+stripped): user desktop and speakers never touched.
+
+- **Audible key sounds: PASS.** Offline `play --window --chart
+  o2ma757 --ojm o2ma757 --sound` with 18 rounds of S D F Space J K L
+  strikes in Playing, `PIPEWIRE_NODE=wine_null` routing proven first
+  (`PipeWire ALSA [recomp2jam]` → `WineNull`, nothing to hardware).
+  `parec` on `wine_null.monitor`: peak 0 dBFS, RMS −27.3 dBFS over
+  ~28 s — signal, not silence. Captures in `~/scratch/smoke-audible/`.
+  Residual: peak at full scale hints stacked voices clip; mixer
+  behavior is unverified in-exe, so no verdict (OPEN).
+- **Offline Result in the presenter: PASS.** Tutorial walked
+  splash → Playing with scripted Enters, then unattended ~3m45s to a
+  stable all-miss tally (`YOU 0/0/0/20`, gold banner). Life gate never
+  reappeared (life still unwired shell-side, OPEN). Captures in
+  `~/scratch/smoke-result/` with a 26-event trace.
+- **Containment fix shipped:** windowed runs without `--sound` now
+  attach `NullBackend` (`audio_backend`, shared with autoplay);
+  previously any OJM run opened the default ALSA device. Pinned by
+  `audio_backend_off_queues_silently_without_hardware` (fails red
+  without the fix: playhead 0 vs queued 50).
