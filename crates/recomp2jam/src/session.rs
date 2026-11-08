@@ -1743,6 +1743,15 @@ impl GameLoop for OnlineSession {
         self.game.delete_text();
     }
 
+    fn mouse_click(&mut self, x: i32, y: i32) {
+        // Forward canvas clicks like lane keys: Channel/Room clicks
+        // advance locally with no lobby send (Confirm on an empty draft
+        // sends nothing either). Waiting-confirm clicks ride the local
+        // advance without the 4008 exchange, so keyboard Confirm stays
+        // the verified path for starting games (OPEN).
+        self.game.mouse_click(x, y);
+    }
+
     fn paint(&mut self, frame: &mut o2jam_render::Frame<'_>) {
         self.game.paint(frame);
         if self.game.screen() != Screen::Loading {
@@ -2325,6 +2334,36 @@ mod session_tests {
         assert_eq!(session.game.screen(), Screen::Waiting);
         assert!(session.game.is_room_master());
         assert_eq!(session.game.room_key_mode(), 2);
+    }
+
+    #[test]
+    fn channel_click_advances_to_room_without_sends() {
+        // The windowed live path routes canvas clicks through the
+        // session wrapper: a channel-row click must reach the inner
+        // game exactly like keyboard Confirm (empty draft sends nothing).
+        use o2jam_net::ChannelState;
+        let (mut session, server) = channel_session(|mut stream| {
+            assert_quiet(&mut stream);
+        });
+        session.game_mut().set_channels(vec![
+            ChannelState {
+                gateway_id: 0,
+                channel_id: 2,
+                capacity: 100,
+                population: 5,
+                active: true,
+            },
+            ChannelState {
+                gateway_id: 0,
+                channel_id: 9,
+                capacity: 0,
+                population: 0,
+                active: false,
+            },
+        ]);
+        session.mouse_click(400, 154);
+        server.join().unwrap();
+        assert_eq!(session.game.screen(), Screen::Room);
     }
 
     #[test]
