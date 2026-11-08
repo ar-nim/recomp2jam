@@ -2208,6 +2208,27 @@ mod notice_tests {
     }
 
     #[test]
+    fn announcement_decodes_live_capture() {
+        // Live bytes 2026-11-08 via the relay.md §12 proxy method
+        // (127.0.0.1:15011 -> 15010, local Memoryer Full-mode):
+        // C->S 2015 `LIVE-PROBE-2016 hello` echoed as S->C 2016 with the
+        // identical NUL-terminated body. Channel enter itself sent no
+        // 2016 (1005/2001/2026/2003 only).
+        let frame = decode_frame(&[
+            0x1a, 0x00, 0xe0, 0x07, 0x4c, 0x49, 0x56, 0x45, 0x2d, 0x50, 0x52, 0x4f, 0x42, 0x45,
+            0x2d, 0x32, 0x30, 0x31, 0x36, 0x20, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x00,
+        ])
+        .unwrap();
+        assert_eq!(frame.id, 2016);
+        assert_eq!(
+            Announcement::decode_frame(&frame),
+            Ok(Announcement {
+                content: "LIVE-PROBE-2016 hello".to_owned(),
+            })
+        );
+    }
+
+    #[test]
     fn announcement_rejects_foreign_command() {
         let frame = decode_frame(
             &Announce {

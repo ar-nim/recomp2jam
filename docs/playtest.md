@@ -3323,3 +3323,43 @@ sweep log in this file.
   Every remaining finding sits inside the peer's uncommitted files —
   left alone per the sweep rules (this sweep fixed nothing and touched
   only `docs/playtest.md`).
+
+## Regression sweep — 2026-11-08 12:31 UTC+8 (HEAD `5556827`, tree clean)
+
+Live re-proof on the notices-head. Covers the notice paint/route commit
+landed after the notice-decode baseline `5bb1c5b`: paint and route live
+lobby notices (`5556827`: shell notice chat-row paint + routing), plus
+the sweep log in this file.
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1518 passed, 0 failed, 0 ignored**, `exit=0`.
+  Per target: audio 20, dump 7, file 177, game 94, net 387,
+  render 89, shell 573, real_art 7, scenes 22, recomp2jam 142
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, no warnings
+  (0 warning lines on a touched-`main.rs` rebuild check).
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 141 filtered out, 0.60 s) against local
+  Memoryer 7.2.0 (`Mode=Full`). Server log for this run
+  (`12:30:36 +08:00`): `Authorize session` →
+  `Get channel list: [0]` → `Enter channel: [0/00]` →
+  `Get character info: [tester]` → `Create room: songflow` →
+  `Update room [000] music settings: [HX / X10 / o2ma757]` →
+  `Update room [000] arena: [1] (0)` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Update #1 - Jam: 3 (Bonus: 0)` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  connection-lost WARNs on session close).
+- **Verdict: no regression on HEAD — suite is green on the notices-head
+  (1518 passed; +15 vs the 1503 `5bb1c5b` baseline: shell 565 → 573
+  and recomp2jam 135 → 142 from the notice paint/route tests, all
+  other targets unchanged, 0 failures). No lint findings on HEAD.
+  No commits, no pushes.** This sweep touched only `docs/playtest.md`.
