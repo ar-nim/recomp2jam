@@ -94,7 +94,7 @@ bare `paint_screen` cards and the result backdrop keep their own
 missing-archive fallbacks).
 
 ## Chat row feed (`TEXT_SWAIT_CHAT 0x1640003C`, `SET 0x00031000`) —
-TEMPLATE SIDE PINNED, LIVE DISPATCH OPEN
+TEMPLATE AND LIVE PATH PINNED
 
 The row template resolves only through the staged list object; the twin
 waiting-room feed functions name it by lookup, never by code immediate.
@@ -126,7 +126,9 @@ dwords `0x0`/`0x310` in `.data` — not code).
   base within `±0x1000` indexes into them (they float inside the
   CP949 string pool); nothing outside the cluster calls any listed
   handler; and `O2Net32.dll`/`Player.dll` carry no twin, adapter, or
-  array address. The packet path never reaches them.
+  array address. The packet path never reaches them. Correction
+  below: the arrays are state-class vftable interiors read by virtual
+  dispatch, which that scan shape cannot see.
 - **Packet side, pinned**: the receive stubs push a 4-dword record
   `(0x12, opcode, record, 0)` onto the parent global `0x762B44` into
   dispatcher `0x478d50` (file `0x78d50`, 160 B, 122 direct call/jmp
@@ -136,24 +138,86 @@ dwords `0x0`/`0x310` in `.data` — not code).
   number. Posts: 3012 at file `0x15e601` (`ev_aba36a3a…`, stub fn
   `0x15e430`..`0x15e740`), 3013 at file `0x15f051` inside the shared
   stub fn `0x15eca0`..`0x15f210` (reached from fn `0x158080`; it also
-  posts `0xbc4` at files `0x15ef4b`/`0x15f110`/`0x15f181`). The queue
-  consumer that would turn such records into row-store calls stays
-  unpinned — none of the store's six direct callers is reachable from
-  the dispatcher by any evidenced encoding, and the store has no
-  vftable presence either.
+  posts `0xbc4` at files `0x15ef4b`/`0x15f110`/`0x15f181`). The +0x3c
+  queue IS consumed — by the parent pump (vftable `0x647920` slot 5,
+  `0x476020`, file `0x76020`; vftable store file `0x75433` in ctor
+  `0x4753a0`): dequeue `0x478df0` (file `0x78df0`, call file
+  `0x76110`), subindex switch (file `0x7612b`), subindex `0x12`
+  making the virtual call `[[parent+0xf6c]+0x40]` (files
+  `0x7615b`–`0x76184`) over the four record dwords. That arm joins no
+  row store: `CStateWaiting`'s slot-16 target `0x4b7c60` (file
+  `0x249b18`) is the control-code notify switch (keyed at files
+  `0xb7cb8`–`0xb7d56`, no `0x12` case), and the row text rides the
+  +0x17c string queue pinned below. The store keeps no vftable
+  presence.
 - **Row composition, enqueue side**: inside the shared stub fn, an
   imported printf (IAT `0x63f440`) formats `[%12s] %s` (format VA
   `0x64d8d4`, file `0x24d8d4`; call file `0x15f076`) from a
   sender-shaped and a text-shaped local into an out-buffer — bracket,
-  sender right-aligned to width 12, bracket, space, text; the exact
-  record that consumes it stays OPEN. User-side strings are built by
+  sender right-aligned to width 12, bracket, space, text; the
+  consuming record is pinned below (the +0x17c string queue).
+  User-side strings are built by
   string helpers (files `0x1f1aa2`/`0x1f1bc0`/`0x1f34ff`/`0x1f3f0c`).
-  The parent getter `0x478a00` (on `0x762B44`) gates both branches:
-  a return of 5 selects a nine-entry table of CP949 emote words
-  (files `0x249dac`..`0x249dcc`: 사랑해, 미워, 꽃, `321`, `!!`, `~`,
-  `?`, `!`, `7`), a return of 0xa precedes the bracket format. The
-  trailing seat byte still has no evidenced consumer anywhere on the
-  path.
+  The parent getter `0x478a00` gates both branches: a return of 5
+  selects the emote-keyword branch (pinned in the emote-gate section
+  below), a return of 0xa precedes the bracket format. The trailing
+  seat byte rides only the +0x3c notification post (subindex
+  `<< 0x10` | seat, files `0x15e5ef`–`0x15e5f5`), never the row queue
+  below.
+- **Live row path — PINNED** (offset-only scan, no new dossier): the
+  bracket line is consumed through the parent's string queue at
+  parent+`0x17c`, not the 16-byte-record queue. Enqueue: the 3012
+  block (fn files `0x15e9e3`..`0x15ec97`, compose printf at file
+  `0x15eb28`) calls `0x479010(parent, &line, 0xbc4, flag)` at files
+  `0x15ec4d` (flag 0) and `0x15ec68` (flag 5); the 3013 stub fn calls
+  it with `0xbc5` at files `0x15f1a7`/`0x15f1c2` (the emote-gate
+  section's level-0/level-5 rows). Helper `0x479010` (file `0x79010`)
+  packs `(flag << 0x10) | opcode` (files `0x79053`–`0x7905c`),
+  string-copies via `0x408940` (file `0x7906c`), and pushes a
+  `0x10c`-stride record into parent+`0x17c` through `0x457f40` (file
+  `0x79084`); accessors `0x479350`/`0x4790d0` (files
+  `0x79350`/`0x790d0`) count and pull. Consume: the `CStateWaiting`
+  poller `0x4b9dc0` (file `0xb9dc0`; RTTI `.?AVCStateWaiting@@`, COL
+  VA `0x6673ec`, vftable VA `0x649ad8` with the tick at slot 10 =
+  vft+`0x28`, file `0x249b00`; ctor vftable stores files
+  `0xb5d65`/`0xb5e37`; direct callers files `0xaf8ea`/`0xb5b0a`
+  inside waiting drivers `0x4ad940`/`0x4b42d0`) counts (call file
+  `0xb9e82`), pulls one record plus out-line (call file `0xb9ea8`),
+  and switches on `packed & 0xffff` (files `0xb9ec8`–`0xb9f26`):
+  `0xbc4` gated on `packed >> 0x10 == this+0x10` (files
+  `0xb9f63`–`0xb9f78`) appends with color `0xdedede` (call file
+  `0xb9f8c`); `0xbc5` the same gate with `0x71e6` (file `0xb9fad`,
+  call file `0xb9fbf`); sibling arms take notices `0x7e3`/`0x7e2`/`0`
+  (files `0xb9f2b`/`0xb9f47`/`0xb9ff6`) — system and memo lines ride
+  the same queue (enqueue sites files `0x15abdd`..`0x15b1a9`,
+  `0x1633c2`..). Sibling states poll the same queue for their
+  screens (`0x4e9970` calls files `0xeaa6e`/`0xeaa92`). Write: the
+  append helper `0x4bb6c0` (file `0xbb6c0`) looks up
+  `LIST_SWAIT_CHAT 0x1680002B` through `0x48bcf0` (push file
+  `0xbb6c9`, call file `0xbb6d1`), null-guards (file `0xbb6d9`), and
+  calls the row writer `0x510730(list, &line, color)` (file
+  `0xbb6ea`). Mutation: `0x510730` (file `0x110730`, body to
+  `0x1173f`) walks the staged list's row vector (list+`0x198`,
+  stride `0x6a5c`, files `0x10752`–`0x10783`), takes the cursor row
+  at list+`0x1ac` (file `0x107c0`), addresses begin + cursor×
+  `0x6a5c` (files `0x10817`–`0x10826`), stores the color into the
+  row's color slots (row+`0x68b0` array, files `0x10895`–`0x108aa`),
+  and copies the line into the row's template text cells. The live
+  writer is this helper, NOT the twins' store: `0x50fcc0` keeps its
+  six pinned callers, none on this path, and `0x510730`'s only other
+  callers are files `0x665c4`/`0x8f38a`.
+- **Array-reader correction**: the three "isolated" handler arrays
+  (files `0x249710`/`0x2499f0`/`0x249b28`) are interior slots of
+  state-class vftables, not free-floating tables — `CStateWaiting`'s
+  vftable spans files `0x249ad8`–`0x249b4f` (COL pointer file
+  `0x249ad4`, VA `0x6673ec`), so the third base file `0x249b28` is
+  its slot 20, with the twins at slots 26/27 (files `0x249b40`/
+  `0x249b44`) and caption helper `0x4b9ab0` at slot 29 (file
+  `0x249b4c`). Such tables are read by object-pointer virtual
+  dispatch (`[obj]` then `[eax+slot*4]`), which a base-immediate
+  LE32 scan cannot see — the earlier "no reader exists" verdict was
+  a scan-shape limit, not a dead-code proof. The twins are still
+  bypassed by the live row path above.
 - **Sibling arms**: `0x62840`/`0x628d0` (codes `0x86021041`/
   `0x86022046`, cached list in `ecx+0x528`) and `0x90690`/`0x906f0`
   (`LIST` `0x13800014`) share the store and the same body shape, have
@@ -166,16 +230,95 @@ dwords `0x0`/`0x310` in `.data` — not code).
   guards) — the template is consumed through the staged list object.
   No channel/waiting row control is code-addressed by immediate.
 
+### Emote keyword gate (`/` prefix, parent dialog id 5) — PINNED
+
+Where: the shared stub fn `0x15eca0`..`0x15f210` (central S→C
+dispatcher `0x158080` dispatches into it at call site file `0x158626`;
+dossier `ev_fa0a499a…`). Preconditions, both required: the text-shaped
+local starts with `/` (helper `0x5f3f0c` file `0x1f3f0c` = CRT
+`strncmp`; literal `/` at file `0x24bd18`; compare file `0x15ed07`) and
+parent getter `0x478a00` returns 5 (call file `0x15ed21`; getter
+dossier `ev_931c9a4e…`). Getter semantics: reads the child pointer at
+`parent+0xf6c`, calls its vtable slot 3 (`+0xc`) id-getter, and echoes
+that id only when it equals `parent+0x50`, else 0. The 85 getter call
+sites compare ids 2..`0xd` — a UI-child id space disjoint from the
+`STATE_*` `0x12`+ code space, so 5 names the mounted dialog hosting
+this chat feed and 0xa the bracket-format dialog; which named dialog
+carries each id stays OPEN.
+
+Keywords — **twenty entries, not nine** (the earlier "nine-entry"
+range `0x249dac`..`0x249dcc` missed `반짝` at `0x249d9c` and the ten
+phrase strings): the stub builds a 20-slot stack pointer array at
+files `0x15ed2f`..`0x15edf4` in record-payload-index order. Offsets
+are file offsets of the CP949 string literals:
+
+| idx | file | word | idx | file | word |
+|-----|------|------|-----|------|------|
+| 0 | `0x249dcc` | `!` | 10 | `0x249d94` | 안녕 |
+| 1 | `0x249dc8` | `?` | 11 | `0x249d90` | 고 |
+| 2 | `0x249dc0` | 사랑해 | 12 | `0x249d88` | 레디 |
+| 3 | `0x249dbc` | `321` | 13 | `0x249d80` | 좋아 |
+| 4 | `0x249db8` | `~` | 14 | `0x249d78` | 싫어 |
+| 5 | `0x249db4` | `!!` | 15 | `0x249d70` | 흐흐 |
+| 6 | `0x249dac` | 미워 | 16 | `0x249d68` | 하하 |
+| 7 | `0x249da8` | `7` | 17 | `0x249d60` | 크크 |
+| 8 | `0x249da4` | 꽃 | 18 | `0x249d5c` | 윽 |
+| 9 | `0x249d9c` | 반짝 | 19 | `0x249d58` | `...` |
+
+Match behavior (loop bound `0x14` at file `0x15ee33`): helper
+`0x5f34ff` file `0x1f34ff` = CRT `strstr` — the keyword must appear
+anywhere in the text after the slash. On the first hit, index `i` is
+kept (file `0x15ee65`) and the sender's seat byte resolves: `strncmp`
+of the sender against the my-name global `0x77cd05` → byte `0x77cd04`
+(file `0x15eeb8`), else a scan of 8 room slots (stride `0x2190`, name
+fields at `0x77ee95+j×0x2190`) → the matched slot's first byte at
+`0x77ee94+j×0x2190` (file `0x15ef01`). Then exactly one record is
+enqueued via `0x478d50` (post file `0x15ef4b`): subindex `0x12`,
+opcode `0xbc4` (3012-shaped), payload `(i<<16)|seat`, arg 0 — an
+emote event carrying keyword index plus seat, **not** text. When a
+seat resolved, the fn exits (file `0x15ef6d`→`0x15f063`): no row post,
+no network send — the emote consumes the line. No seat match, or no
+keyword match (counter reaches 20), falls through to the generic row
+post at file `0x15f051`: opcode `0xbc5` (3013-shaped), payload
+`seat|0xffff0000`.
+
+Non-slash text (handler at file `0x15f068`): the pinned `[%12s] %s`
+bracket format runs first. Getter 0xa → admin branch: byte gates
+`0x7789e6`, `0x77cd04` vs the split target byte, `0x77cd33 >= 4`, and
+`0x780fc0+seat×0x2190 == 1`; posts 0xbc4 records with
+`0xff000000|target` (files `0x15f110`/`0x15f181`) and a level-0 row
+via `0x479010`. Otherwise a level-5 row via `0x479010`, and getter 5
+additionally calls classifier `0x55e430` (file `0x15f1f8`), which
+byte-walks the text (≤ `0xcb` bytes, jump table VA `0x55e62c`) and
+posts a 3012-shaped record (file `0x15e601`).
+
+Send-side twin (chat-view stager `0xb8d00`, which owns the three
+3011 send sites; dossier `ev_52712b4b…`): number keys 1..9,0 compose
+`/%s` lines (format file `0x249d54`) from the same keyword table,
+write them into the chat edit (`this+0x184`, fn `0x518000`) and send
+3011. Arm A (flag `[this+0x2a0]≠0` and `[this+0x29c]==0`; array fills
+files `0xb9464`..`0xb94c8`, digit format call file `0xb955e`) maps digits
+to indices 0..9; arm B (both flags ≠0; fills files `0xb95f2`..
+`0xb96b0`, format call file `0xb96ec`) maps digits to indices 10..19.
+
+OPEN: which named dialog carries id 5 / 0xa; what the slot-16 dialog
+dispatch renders from the emote record (avatar animation vs a chat
+row; the dispatch is pinned: parent pump `0x476020` subindex-`0x12`
+arm calls `[[parent+0xf6c]+0x40]`, files `0x7615b`–`0x76184`); which
+opcode(s) the dispatcher's map binds to the stub;
+the classifier's byte-class → payload encoding.
+
 Pin: `OTwo.exe` 5029888 B, sha256
 `83a04541…c823b`, offsets file-based, found by offset-only byte scan
 (Python 3.14.9, capstone 5.0.7, GNU objdump 2.47 — no new dossier).
 Shell rule unchanged: live 3012/3013 packets only, newest visible rows
-stack from the list origin. The pinned enqueue-side shape now grounds
-the admin row look — bracket plus right-aligned sender — while the
-shell's `[ADMIN]` prefix and row colors stay stand-ins until the queue
-consumer is pinned (the matching OPEN sentences in `net-protocol.md`,
-`rooms.rs`, and `paint.rs` are owned by other docs/code and untouched
-here).
+stack from the list origin. The pinned live path now grounds
+the row look — bracket plus right-aligned sender from the compose
+printf, user color `0xdedede`, admin color `0x71e6`, gate field
+`this+0x10` — while the shell's `[ADMIN]` prefix and row colors stay
+stand-ins until `0x510730`'s row layout is mirrored (the matching OPEN
+sentences in `net-protocol.md`, `rooms.rs`, and `paint.rs` are owned
+by other docs/code and untouched here).
 
 ## OPEN
 
@@ -388,14 +531,22 @@ here).
    walk fraction and the `TITLE - ARTIST` caption are live. Test:
    `loading_bar_geometry_stays_open_placeholder` pins the placeholder
    formula so any future grounding must update it with evidence.
-6. Chat row feed (`TEXT_SWAIT_CHAT`) — template side pinned, live
-   dispatch OPEN (sweep 2026-11-08): twin bodies, adapter arrays, the
-   `(0x12, opcode, record, 0)` dispatcher posts, and the enqueue-side
-   `[%12s] %s` admin format are pinned above; refuted is any runtime
-   path from the 3012/3013 stubs into the twins (no reader exists for
-   the handler arrays by any absolute encoding, direct call, or
-   cross-module reference). OPEN: the queue consumer that turns
-   enqueued records into row-store calls, the exact gate that selects
-   the bracket format, and the user-row separator. Shell stand-ins
-   (`[ADMIN]` prefix, row colors) stay open in their owning files.
+6. Chat row feed (`TEXT_SWAIT_CHAT`) — CLOSED to the list mutation:
+   live rows enqueue into the parent's string queue at parent+`0x17c`
+   through `0x479010` (the level-0/level-5 sites files `0x15f1a7`/
+   `0x15f1c2`, plus `0xbc4` sites `0x15ec4d`/`0x15ec68`), pull
+   through the `CStateWaiting` poller `0x4b9dc0` (vftable VA
+   `0x649ad8` slot 10, COL VA `0x6673ec`; called from waiting
+   drivers `0x4ad940`/`0x4b42d0` at files `0xaf8ea`/`0xb5b0a`), gate
+   on opcode `0xbc4`/`0xbc5` plus `packed >> 0x10 == this+0x10`, and
+   append through `0x4bb6c0` → `0x510730` into the staged
+   `LIST_SWAIT_CHAT` row vector (list+`0x198`, cursor list+`0x1ac`,
+   color slots row+`0x68b0`). The twins and `0x50fcc0` are bypassed.
+   Remaining OPEN, presentation-side only: which row offsets inside
+   the `0x6a5c` stride carry the line text, the cursor-advance/scroll
+   rule in `0x510730`'s tail, the flag split (0 vs 5) and the writer
+   of gate field `this+0x10`, and what the slot-16 dialog dispatch
+   renders from the emote record. Shell stand-ins (`[ADMIN]` prefix,
+   row colors) stay open in their owning files, now grounded by exe
+   colors `0xdedede`/`0x71e6`.
 

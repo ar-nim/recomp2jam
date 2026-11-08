@@ -2417,3 +2417,43 @@ after the oja-head baseline `887de12`: stage oja effects tap jam holds
   the jam-oja-tail tests (`69d3bf1`), all other targets unchanged,
   0 failures). No lint findings. No commits, no pushes.** This sweep
   touched only `docs/playtest.md`.
+
+## Regression sweep — 2026-11-08 07:48 UTC+8 (HEAD `756ae59`, tree clean)
+
+Live re-proof on the chatfmt-head. Covers the two commits landed after the
+chatrows-head baseline `69d3bf1`: match chat box reference format
+(`613eccc`) and the twin-chain-pin docs refutation (`756ae59`).
+
+- `cargo fmt --check`: clean, `exit=0`.
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live test self-skips):
+  **1384 passed, 0 failed, 1 ignored** (`o2jam_audio`), `exit=0`.
+  Per target: audio 19, dump 7, file 177, game 92, net 360,
+  render 89, shell 509, real_art 7, scenes 22, recomp2jam 102
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, 0 warning
+  lines (touched-`main.rs` rebuild check, `Compiling recomp2jam`
+  confirmed; mtime only, no content change; tree clean after).
+- Live flow `O2JAM_LIVE_GATEWAY=127.0.0.1:15010
+  O2JAM_LIVE_TOKEN=61dcb457-5da9-4e22-af4b-5a4c5658f239 cargo test
+  -p recomp2jam live_host_song_flow_against_local_gateway` → **ok**
+  (1 passed, 0 failed, 0.62 s) against local Memoryer 7.2.0
+  (`Mode=Full`). Server log for this run (`07:47:23 +08:00`, session
+  `127.0.0.1:46002`): `Authorize session` → `Get channel list: [0]` →
+  `Enter channel: [0/00]` → `Get character info: [tester]` →
+  `Create room: songflow` →
+  `Update room [000] music settings: [HX / X10 / o2ma757]` →
+  `Update room [000] arena: [1] (0)` →
+  `Get music list: [0/00] 562 music` →
+  `Sync room member [000] [0] music state` →
+  `Update room member [000] [0: 100%] download progress` →
+  `Start game: [000]` → `User music loaded: [000] - 0 / X10` →
+  `Game [000] Update #1 - Jam: 3 (Bonus: 0)` →
+  `Game [000] Submit score: 2210` (followed by the known benign
+  `ScoreTracker::OnGameCompleted` broadcast WARNs on room delete).
+- **Verdict: no regression — suite is green on the chatfmt-head (1384
+  passed; +2 vs the 1382 chatrows-head baseline: shell 507 → 509
+  from the chat-box-format tests (`613eccc`), all other targets
+  unchanged, 0 failures). No lint findings. No commits, no pushes.**
+  This sweep touched only `docs/playtest.md`.
