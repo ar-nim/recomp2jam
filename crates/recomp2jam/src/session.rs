@@ -458,6 +458,11 @@ impl OnlineSession {
             champion_streak: None,
         };
         self.stage_hosted_room(room.clone());
+        // Refresh the list too: the login-time snapshot predates the
+        // create, and empty slots filter out downstream, so the Room
+        // screen shows exactly the numbered rows.
+        tracing::info!(number, "room created with number");
+        self.game.set_rooms(listed.rooms.clone());
         Ok(room)
     }
 

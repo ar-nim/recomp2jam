@@ -481,13 +481,22 @@ impl ScreenGame {
         self
     }
 
-    /// Rooms from the last online list (empty offline). Empty slots
-    /// (`Number` 0, which the server sends for every free slot) are
-    /// not listed — display choice, the data stays unfiltered upstream.
+    /// Rooms from the last online list (empty offline). Free slots are
+    /// not listed: the server numbers rooms from the first free slot
+    /// (so a real first room is number 0) and marks free slots with
+    /// an empty title — filter on both, the data stays unfiltered
+    /// upstream. Corroborated against the reference server layout
+    /// (`AddRoom` first-free-slot ids, `GetRoomList` empty titles);
+    /// the 7.55 display rule itself stays OPEN.
     pub fn set_rooms(&mut self, rooms: Vec<RoomListEntry>) -> &mut Self {
-        self.rooms = rooms.into_iter().filter(|room| room.number != 0).collect();
+        self.rooms = rooms.into_iter().filter(Self::is_listed_room).collect();
         self.room_highlight = 0;
         self
+    }
+
+    /// Whether a room-list row names a real room (see [`Self::set_rooms`]).
+    fn is_listed_room(room: &RoomListEntry) -> bool {
+        room.number != 0 || !room.title.is_empty()
     }
 
     /// Remember the joined room; Waiting paints its eight seats, and
@@ -3747,6 +3756,52 @@ mod game_tests {
             has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)),
             "room rows missing under staged art"
         );
+    }
+
+    #[test]
+    fn listed_rooms_keep_titled_zero_numbered_first_room() {
+        // The server numbers rooms from the first free slot, so the
+        // first room is number 0; free slots share the number but
+        // carry an empty title.
+        let titled_first = RoomListEntry {
+            number: 0,
+            state_code: 1,
+            title: "smoke".to_owned(),
+            has_password: false,
+            music_id: 0,
+            difficulty: 0,
+            key_mode: 2,
+            game_mode: 0,
+            speed: 1,
+            capacity: 8,
+            user_count: 1,
+            min_level: 0,
+            max_level: 0,
+            skills: vec![],
+            premium: false,
+            room_type: 0,
+        };
+        let free_slot = RoomListEntry {
+            number: 0,
+            state_code: 0,
+            title: String::new(),
+            has_password: false,
+            music_id: 0,
+            difficulty: 0,
+            key_mode: 0,
+            game_mode: 0,
+            speed: 1,
+            capacity: 0,
+            user_count: 0,
+            min_level: 0,
+            max_level: 0,
+            skills: vec![],
+            premium: false,
+            room_type: 0,
+        };
+        assert!(ScreenGame::is_listed_room(&titled_first));
+        assert!(!ScreenGame::is_listed_room(&free_slot));
+        assert!(ScreenGame::is_listed_room(&two_rooms()[0]));
     }
 
     #[test]

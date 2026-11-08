@@ -226,6 +226,10 @@ enum Command {
         /// Password for `--online-join-room` (empty when unlocked).
         #[arg(long, default_value = "", requires = "online")]
         online_room_password: String,
+        /// Room title to create on `--online` startup (the session runs
+        /// the proven `CreateRoom` host exchange, then stages its snapshot).
+        #[arg(long, requires = "online")]
+        online_create_room: Option<String>,
         /// Host song pick for `--online` (the session sends it on
         /// Waiting Confirm: 4000/4002/4030 plus the catalog chart fetch).
         #[arg(long, requires = "online")]
@@ -563,6 +567,7 @@ fn run_command(command: Command) -> Result<()> {
             online_channel_id,
             online_join_room,
             online_room_password,
+            online_create_room,
             online_music_id,
             online_difficulty,
             online_speed,
@@ -586,6 +591,7 @@ fn run_command(command: Command) -> Result<()> {
             online_channel_id,
             online_join_room,
             online_room_password,
+            online_create_room,
             online_music_id,
             online_difficulty,
             online_speed,
@@ -619,6 +625,7 @@ fn run_play(
     online_channel_id: Option<i16>,
     online_join_room: Option<i32>,
     online_room_password: String,
+    online_create_room: Option<String>,
     online_music_id: Option<u16>,
     online_difficulty: u8,
     online_speed: u8,
@@ -662,6 +669,10 @@ fn run_play(
                 }
                 stage_session_catalog(&mut session);
                 session.stage_live_art();
+                if let Some(title) = online_create_room {
+                    let room = session.create_and_join_room(&title)?;
+                    tracing::info!(title = room.title, "room created");
+                }
                 o2jam_shell::Shell::new(Box::new(session)).run(event_loop)?;
             }
             None => {
