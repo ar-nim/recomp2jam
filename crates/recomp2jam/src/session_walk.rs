@@ -268,6 +268,7 @@ fn connect_transport(
         relay_key2: 0,
         channel: Some((config.gateway_id, config.channel_id)),
         character: false,
+        wallet: false,
         avatar_opa: None,
         join_room: None,
         room_password: String::new(),

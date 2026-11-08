@@ -4254,3 +4254,51 @@ session-head baseline `de98e62`.
   key-sounds session-walk tests, all other targets unchanged,
   0 failures). No lint findings. No commits, no pushes.** This sweep
   touched only `docs/playtest.md`.
+
+## Regression sweep — 2026-11-08 23:32 UTC+8 (HEAD `dc8128b`, tree dirty)
+
+Live re-proof on the audible-head. Covers the audible commit landed
+above the audio-head baseline `ebd2adb`: strike-to-emission probe
+through the real bank (`dc8128b`: `session_walk.rs` audible test +
+`live_guard` rig lock, token rotation; no walk-shape change).
+
+- `cargo fmt --check`: clean, `exit=0` (final state; was red
+  mid-sweep on the peer's unformatted intermediate edit).
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean,
+  `exit=0`. No lint findings, nothing fixed, no files touched.
+- `cargo test --workspace` (no live env; the live tests self-skip):
+  **1662 passed, 0 failed, 0 ignored**, `exit=0`.
+  Per target: audio 20, dump 7, file 180, game 108, net 420,
+  render 90, shell 597, real_art 7, scenes 22, recomp2jam 211
+  (6 doc-test targets, 0 each).
+- `cargo build --workspace --release`: clean, `exit=0`, 0 warnings.
+- Live flow with the rotated token
+  `O2JAM_LIVE_TOKEN=eebaccee-fde9-4c50-b941-fda6c7004376`
+  (handoff note; the old `61dcb457…` guid no longer authorizes):
+  `cargo test -p recomp2jam live_host_song_flow_against_local_gateway`
+  → **ok** (1 passed, 0 failed, 210 filtered out, 0.61 s) against
+  local Memoryer 7.2.0 (`Mode=Full`); `struck_live_notes_emit_audible_frames_through_real_bank`
+  → **ok** (1 passed, 0 failed, 210 filtered out, 11.06 s; walks
+  the live session to Playing on song 757, strikes the first chart
+  onset through the real decoded bank, probe observes frames out
+  plus nonzero PCM). Server log (`23:31:26 +08:00`): `Authorize
+  session` → `Create room: songflow` →
+  `Get music list: [0/00] 562 music` → `Start game: [000]` →
+  `User music loaded` → `Game [000] Update #1` →
+  `Game [000] Submit score: 2210`; audible run (`23:31:29 +08:00`):
+  `Authorize session` → `Create room: walk890` → `Get music list` →
+  `Start game` → `User music loaded` (followed in both runs by the
+  known benign broadcast-failure stack on room delete).
+- **Verdict: no regression on the dirty state (1662 passed; +7 vs
+  the 1655 baseline, all recomp2jam 204 → 211, all other targets
+  unchanged, 0 failures). No lint findings. No commits, no pushes.**
+  This sweep touched only `docs/playtest.md`.
+- Tree note: a peer holds uncommitted wallet WIP
+  (`crates/recomp2jam/src/connect.rs` +418: `WalletReport`,
+  `ConnectOptions.wallet`, 5029/5001 fetchers; `main.rs` +28;
+  `session_walk.rs` +1). Mid-sweep the intermediate state briefly
+  failed to compile the `recomp2jam` test target (`fetch_wallet`
+  not yet defined, initializers missing `wallet`) and tripped
+  `cargo fmt --check`; the peer kept editing and every gate above
+  ran green on the finished dirty state. No clean-HEAD-only run
+  was taken (would require stashing the peer's work).

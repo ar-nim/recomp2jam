@@ -67,6 +67,9 @@ enum Command {
         /// Fetch character info after channel login (needs --channel-id too).
         #[arg(long, requires = "channel_id")]
         character: bool,
+        /// Fetch wallet balances after character info (needs --character too).
+        #[arg(long, requires = "character")]
+        wallet: bool,
         /// Stack the worn avatar figure from this `avatar.opa`
         /// (needs --character too).
         #[arg(long, requires = "character")]
@@ -335,6 +338,7 @@ struct ConnectParams {
     gateway_id: Option<i16>,
     channel_id: Option<i16>,
     character: bool,
+    wallet: bool,
     avatar_opa: Option<String>,
     join_room: Option<i32>,
     room_password: String,
@@ -360,6 +364,7 @@ impl ConnectParams {
             relay_key2: self.relay_key2,
             channel: self.gateway_id.zip(self.channel_id),
             character: self.character,
+            wallet: self.wallet,
             avatar_opa: self.avatar_opa,
             join_room: self.join_room,
             room_password: self.room_password,
@@ -405,6 +410,7 @@ impl OnlineParams {
             relay_key2: 0,
             channel: self.online_gateway_id.zip(self.online_channel_id),
             character: false,
+            wallet: false,
             avatar_opa: None,
             join_room: None,
             room_password: String::new(),
@@ -455,6 +461,7 @@ fn run_command(command: Command) -> Result<()> {
             gateway_id,
             channel_id,
             character,
+            wallet,
             avatar_opa,
             join_room,
             room_password,
@@ -513,6 +520,7 @@ fn run_command(command: Command) -> Result<()> {
                 gateway_id,
                 channel_id,
                 character,
+                wallet,
                 avatar_opa,
                 join_room,
                 room_password,
@@ -850,6 +858,15 @@ fn format_connect_report(report: &connect::ConnectReport) -> String {
     if report.avatar_layers > 0 {
         text.push_str(&format!("avatar: {} layers worn\n", report.avatar_layers));
     }
+    if let Some(wallet) = &report.wallet {
+        text.push_str(&format!(
+            "wallet: gem {} cash_point {} point {} o2_cash {}\n",
+            wallet.gem, wallet.cash_point, wallet.point, wallet.o2_cash
+        ));
+        if !wallet.skipped.is_empty() {
+            text.push_str(&format!("skipped broadcasts: {:?}\n", wallet.skipped));
+        }
+    }
     text.push_str(&format!("channels: {}\n", report.channels.len()));
     for channel in &report.channels {
         text.push_str(&format!(
@@ -1115,6 +1132,7 @@ mod cli_build_tests {
             gateway_id: Some(1),
             channel_id: Some(2),
             character: false,
+            wallet: false,
             avatar_opa: None,
             join_room: None,
             room_password: String::new(),
@@ -1403,6 +1421,13 @@ mod cli_build_tests {
         connect::ConnectReport {
             auth_code: 0,
             character: Some(hero),
+            wallet: Some(connect::WalletReport {
+                gem: 5,
+                cash_point: 6,
+                point: 7,
+                o2_cash: 10,
+                skipped: Vec::new(),
+            }),
             avatar_layers: 2,
             channels: vec![
                 ChannelState {
@@ -1481,6 +1506,7 @@ mod cli_build_tests {
             "authorize: Success (0)\n",
             "character: tester (Lv 3, Male, 250 XP)\n",
             "avatar: 2 layers worn\n",
+            "wallet: gem 5 cash_point 6 point 7 o2_cash 10\n",
             "channels: 2\n",
             "  gateway 0 channel 1: 12/100 open\n",
             "  gateway 0 channel 2: 100/100 closed\n",
@@ -1502,6 +1528,7 @@ mod cli_build_tests {
         let report = connect::ConnectReport {
             auth_code: 99,
             character: None,
+            wallet: None,
             avatar_layers: 0,
             channels: Vec::new(),
             channel_login: None,
@@ -1518,6 +1545,7 @@ mod cli_build_tests {
         let report = connect::ConnectReport {
             auth_code: 0,
             character: None,
+            wallet: None,
             avatar_layers: 0,
             channels: Vec::new(),
             channel_login: Some(ChannelLoginResponse {

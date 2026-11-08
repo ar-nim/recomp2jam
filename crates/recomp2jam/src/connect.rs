@@ -13,7 +13,9 @@ use anyhow::{bail, Context, Result};
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery};
 use o2jam_net::{
     play::{MusicListAnswer, RoomArenaEcho},
-    Frame,
+    shop::SyncItemPurchasePrefix,
+    wallet::{SyncCashPoint, SyncCashPointResponse},
+    EmptyMessage, Frame,
 };
 use o2jam_net::{
     AuthResponse, AuthResult, AuthorizeRequest, ChannelList, ChannelLogin, ChannelLoginResponse,
@@ -44,6 +46,8 @@ pub struct ConnectOptions {
     pub channel: Option<(i16, i16)>,
     /// Fetch character info after authorizing.
     pub character: bool,
+    /// Fetch wallet balances after character info (needs `character`).
+    pub wallet: bool,
     /// `avatar.opa` path: stack the worn figure from the fetched
     /// equipment (`None` skips avatar work; needs `character`).
     pub avatar_opa: Option<String>,
@@ -64,6 +68,8 @@ pub struct ConnectReport {
     pub auth_code: u32,
     /// Character info, when requested.
     pub character: Option<CharacterInfo>,
+    /// Wallet balances, when requested with character info.
+    pub wallet: Option<WalletReport>,
     /// Worn figure layers stacked from `avatar.opa`, when requested.
     pub avatar_layers: usize,
     /// Channels the gateway listed.
@@ -220,6 +226,25 @@ pub struct SongFlowReport {
     pub peer_queue: Option<QueueEvent>,
     /// Rank deliveries from the echo (empty when quiet).
     pub peer_ranks: Vec<RankDelivery>,
+    /// Broadcast ids skipped while awaiting answers (kept, not lost).
+    pub skipped: Vec<u16>,
+}
+
+/// Wallet balances the login flow learned.
+///
+/// `gem`/`cash_point` come from the `SyncCashPoint` 5029 answer;
+/// `point`/`o2_cash` come from the `SyncItemPurchase` 5001 prefix
+/// words (the entry list after the prefix is not decoded).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WalletReport {
+    /// Gem balance (5029 first word).
+    pub gem: i32,
+    /// Cash points (5029 second word).
+    pub cash_point: i32,
+    /// Distribution points (5001 prefix second word).
+    pub point: i32,
+    /// Premium cash (5001 prefix third word).
+    pub o2_cash: i32,
     /// Broadcast ids skipped while awaiting answers (kept, not lost).
     pub skipped: Vec<u16>,
 }
@@ -472,9 +497,16 @@ pub fn connect_and_login_with_transport(
         (Some(path), Some(hero)) => fetch_avatar(path, hero).context("loading avatar")?.len(),
         _ => 0,
     };
+    // Wallet reads ride the channel session like character info, so
+    // they run after it and only when it was fetched.
+    let wallet = match (options.wallet, &character) {
+        (true, Some(_)) => Some(fetch_wallet(&mut gateway).context("fetching wallet")?),
+        _ => None,
+    };
     let report = ConnectReport {
         auth_code,
         character,
+        wallet,
         avatar_layers,
         channels,
         channel_login,
@@ -669,6 +701,75 @@ fn fetch_character(gateway: &mut GatewayConnection) -> Result<CharacterInfo> {
     Ok(info)
 }
 
+/// `SyncItemPurchase` 5001 answer id (prefix-only: no full message
+/// type, since the entry list is sized from GLOBAL `0x77cce4`).
+const SYNC_ITEM_PURCHASE_ANSWER: u16 = 5001;
+
+fn fetch_cash_sync(
+    gateway: &mut GatewayConnection,
+    skipped: &mut Vec<u16>,
+) -> Result<SyncCashPointResponse> {
+    let frame = exchange_wallet(
+        gateway,
+        SyncCashPoint::COMMAND,
+        SyncCashPointResponse::COMMAND,
+        skipped,
+    )?;
+    Ok(SyncCashPointResponse::decode_frame(&frame)?)
+}
+
+fn fetch_purchase_prefix(
+    gateway: &mut GatewayConnection,
+    skipped: &mut Vec<u16>,
+) -> Result<SyncItemPurchasePrefix> {
+    use o2jam_net::shop::SyncItemPurchase;
+    let frame = exchange_wallet(
+        gateway,
+        SyncItemPurchase::COMMAND,
+        SYNC_ITEM_PURCHASE_ANSWER,
+        skipped,
+    )?;
+    let (prefix, _rest) = SyncItemPurchasePrefix::decode_prefix(&frame.payload)?;
+    Ok(prefix)
+}
+
+/// Send one wallet read and await its answer, skipping channel
+/// broadcasts on the way (channel entry races 2026-style
+/// dispatches past the login steps, so strict `exchange` would
+/// fail the fetch on a live gateway; see [`await_lenient`]).
+///
+/// # Errors
+///
+/// Whatever sending or awaiting the answer reports.
+fn exchange_wallet(
+    gateway: &mut GatewayConnection,
+    request_id: u16,
+    response_id: u16,
+    skipped: &mut Vec<u16>,
+) -> Result<Frame, o2jam_net::Error> {
+    gateway.send_frame(request_id, &[])?;
+    await_lenient(gateway, response_id, skipped)
+}
+
+/// Read wallet balances: `SyncCashPoint` 5028/5029 plus the
+/// `SyncItemPurchase` 5000/5001 prefix words.
+///
+/// # Errors
+///
+/// Whatever the two wallet exchanges report.
+fn fetch_wallet(gateway: &mut GatewayConnection) -> Result<WalletReport> {
+    let mut skipped = Vec::new();
+    let cash = fetch_cash_sync(gateway, &mut skipped)?;
+    let prefix = fetch_purchase_prefix(gateway, &mut skipped)?;
+    Ok(WalletReport {
+        gem: cash.gem,
+        cash_point: cash.cash_point,
+        point: prefix.point,
+        o2_cash: prefix.o2_cash,
+        skipped,
+    })
+}
+
 fn fetch_channels(gateway: &mut GatewayConnection) -> Result<Vec<ChannelState>> {
     let frame = gateway.exchange(Request::GetChannelList.id(), &[], ChannelList::COMMAND)?;
     Ok(ChannelList::decode_frame(&frame)?.channels)
@@ -739,6 +840,7 @@ mod connect_flow_tests {
             relay_key2: 0,
             channel,
             character,
+            wallet: false,
             avatar_opa,
             join_room: None,
             room_password: String::new(),
@@ -1622,6 +1724,7 @@ mod song_flow_tests {
             relay_key2: 0,
             channel: Some((0, 0)),
             character: true,
+            wallet: false,
             avatar_opa: None,
             join_room: None,
             room_password: String::new(),
@@ -1731,5 +1834,318 @@ mod song_flow_tests {
             }
         }
         assert!(helper.is_ok(), "helper login still green: {helper:?}");
+    }
+}
+/// Wallet reads over real gateway frames (5028/5029 + 5000/5001).
+///
+/// Fake-gateway proofs for [`fetch_wallet`] plus the `connect`
+/// flag wiring: the fake server asserts both request ids, then
+/// answers the cash sync and the purchase prefix. One env-gated
+/// live test replays the same fetch against a local Memoryer
+/// gateway.
+#[cfg(test)]
+mod wallet_flow_tests {
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::thread;
+    use std::time::Duration;
+
+    use o2jam_net::{
+        frame::{decode_frame, encode_frame},
+        shop::{SyncItemPurchase, SyncItemPurchasePrefix},
+        wallet::{SyncCashPoint, SyncCashPointResponse},
+        AuthResponse, ChannelList, ChannelLoginResponse, CharacterInfo, EmptyMessage, Frame,
+        GatewayConnection, Gender, Request, RoomList, WireMessage, HEADER_LEN,
+    };
+
+    use super::{connect_and_login, fetch_wallet, ConnectOptions, WalletReport};
+
+    /// Read one whole frame off the fake server's socket.
+    fn read_frame(stream: &mut TcpStream) -> Frame {
+        let mut header = [0u8; 4];
+        stream.read_exact(&mut header).unwrap();
+        let body_len = u16::from_le_bytes([header[0], header[1]]) as usize;
+        let mut rest = vec![0u8; body_len - HEADER_LEN];
+        stream.read_exact(&mut rest).unwrap();
+        let mut bytes = header.to_vec();
+        bytes.extend_from_slice(&rest);
+        decode_frame(&bytes).unwrap()
+    }
+
+    fn wallet_options(port: u16) -> ConnectOptions {
+        ConnectOptions {
+            host: "127.0.0.1".to_owned(),
+            port,
+            user_id: 7,
+            token: "tester".to_owned(),
+            gender: Gender::Any,
+            relay_key1: 0,
+            relay_key2: 0,
+            channel: Some((1, 2)),
+            character: true,
+            wallet: true,
+            avatar_opa: None,
+            join_room: None,
+            room_password: String::new(),
+            song: None,
+        }
+    }
+
+    fn cash_answer() -> SyncCashPointResponse {
+        SyncCashPointResponse {
+            gem: 5,
+            cash_point: 6,
+        }
+    }
+
+    fn prefix_answer() -> SyncItemPurchasePrefix {
+        SyncItemPurchasePrefix {
+            gem: 5,
+            point: 7,
+            o2_cash: 10,
+            cash_point: 6,
+        }
+    }
+
+    fn answer_login(stream: &mut TcpStream) {
+        assert_eq!(read_frame(stream).id, Request::Authorize.id());
+        stream
+            .write_all(
+                &AuthResponse {
+                    result_code: 0,
+                    tail: vec![],
+                }
+                .encode(),
+            )
+            .unwrap();
+        assert_eq!(read_frame(stream).id, Request::GetChannelList.id());
+        stream
+            .write_all(&ChannelList { channels: vec![] }.encode())
+            .unwrap();
+        assert_eq!(read_frame(stream).id, Request::ChannelLogin.id());
+        stream
+            .write_all(
+                &ChannelLoginResponse {
+                    result_code: 0,
+                    restricted: Some(false),
+                }
+                .encode(),
+            )
+            .unwrap();
+        assert_eq!(read_frame(stream).id, Request::GetChannelInfo.id());
+        stream
+            .write_all(&RoomList { rooms: vec![] }.encode())
+            .unwrap();
+        assert_eq!(read_frame(stream).id, Request::GetCharacterInfo.id());
+        stream
+            .write_all(
+                &CharacterInfo {
+                    nickname: "tester".to_owned(),
+                    ..Default::default()
+                }
+                .encode(),
+            )
+            .unwrap();
+    }
+
+    fn answer_wallet(stream: &mut TcpStream) {
+        let cash = read_frame(stream);
+        assert_eq!(cash.id, SyncCashPoint::COMMAND);
+        assert!(cash.payload.is_empty());
+        stream.write_all(&cash_answer().encode()).unwrap();
+        let cart = read_frame(stream);
+        assert_eq!(cart.id, SyncItemPurchase::COMMAND);
+        assert!(cart.payload.is_empty());
+        let mut body = Vec::new();
+        prefix_answer().encode_inner(&mut body);
+        stream.write_all(&encode_frame(5001, &body)).unwrap();
+    }
+
+    #[test]
+    fn wallet_fetch_reads_cash_sync_then_purchase_prefix() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            answer_login(&mut stream);
+            answer_wallet(&mut stream);
+        });
+        let report = connect_and_login(&wallet_options(port)).unwrap();
+        server.join().unwrap();
+        assert_eq!(
+            report.wallet,
+            Some(WalletReport {
+                gem: 5,
+                cash_point: 6,
+                point: 7,
+                o2_cash: 10,
+                skipped: Vec::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn wallet_fetch_skips_a_channel_broadcast() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            answer_login(&mut stream);
+            let cash = read_frame(&mut stream);
+            assert_eq!(cash.id, SyncCashPoint::COMMAND);
+            // A channel-entry broadcast races the wallet answer
+            // (live: 2026 lands here); the fetch keeps it, not drops it.
+            stream.write_all(&encode_frame(2026, &[])).unwrap();
+            stream.write_all(&cash_answer().encode()).unwrap();
+            let cart = read_frame(&mut stream);
+            assert_eq!(cart.id, SyncItemPurchase::COMMAND);
+            let mut body = Vec::new();
+            prefix_answer().encode_inner(&mut body);
+            stream.write_all(&encode_frame(5001, &body)).unwrap();
+        });
+        let report = connect_and_login(&wallet_options(port)).unwrap();
+        server.join().unwrap();
+        assert_eq!(
+            report.wallet,
+            Some(WalletReport {
+                gem: 5,
+                cash_point: 6,
+                point: 7,
+                o2_cash: 10,
+                skipped: vec![2026],
+            })
+        );
+    }
+
+    #[test]
+    fn wallet_fetch_stays_quiet_without_the_flag() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            answer_login(&mut stream);
+        });
+        let mut options = wallet_options(port);
+        options.wallet = false;
+        let report = connect_and_login(&options).unwrap();
+        server.join().unwrap();
+        assert_eq!(report.wallet, None);
+    }
+
+    #[test]
+    fn wallet_fetch_needs_character_info() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::Authorize.id());
+            stream
+                .write_all(
+                    &AuthResponse {
+                        result_code: 0,
+                        tail: vec![],
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetChannelList.id());
+            stream
+                .write_all(&ChannelList { channels: vec![] }.encode())
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::ChannelLogin.id());
+            stream
+                .write_all(
+                    &ChannelLoginResponse {
+                        result_code: 0,
+                        restricted: Some(false),
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetChannelInfo.id());
+            stream
+                .write_all(&RoomList { rooms: vec![] }.encode())
+                .unwrap();
+        });
+        let mut options = wallet_options(port);
+        options.character = false;
+        let report = connect_and_login(&options).unwrap();
+        server.join().unwrap();
+        assert_eq!(report.wallet, None);
+    }
+
+    #[test]
+    fn wallet_reads_fail_loudly_on_short_prefix() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let cash = read_frame(&mut stream);
+            assert_eq!(cash.id, SyncCashPoint::COMMAND);
+            stream.write_all(&cash_answer().encode()).unwrap();
+            let cart = read_frame(&mut stream);
+            assert_eq!(cart.id, SyncItemPurchase::COMMAND);
+            stream.write_all(&encode_frame(5001, &[0x01; 15])).unwrap();
+        });
+        let mut gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let outcome = fetch_wallet(&mut gateway);
+        server.join().unwrap();
+        assert!(outcome.is_err());
+    }
+
+    /// Live proof against a local Memoryer gateway.
+    ///
+    /// Guarded: runs only with `O2JAM_LIVE_GATEWAY=host:port` and
+    /// `O2JAM_LIVE_TOKEN=session-guid`; otherwise skips like the
+    /// other live tests.
+    #[test]
+    fn live_wallet_fetch_against_local_gateway() {
+        let _live = crate::live_guard::hold_live_gateway();
+        let address = std::env::var("O2JAM_LIVE_GATEWAY").unwrap_or_default();
+        if address.is_empty() {
+            eprintln!("skipping live wallet fetch (set O2JAM_LIVE_GATEWAY=host:port)");
+            return;
+        }
+        let token = std::env::var("O2JAM_LIVE_TOKEN")
+            .expect("O2JAM_LIVE_TOKEN must hold a gateway session guid");
+        let (host, port) = address.rsplit_once(':').expect("host:port");
+        let port: u16 = port.parse().expect("numeric port");
+        let options = ConnectOptions {
+            host: host.to_owned(),
+            port,
+            user_id: 1,
+            token,
+            gender: Gender::Any,
+            relay_key1: 0,
+            relay_key2: 0,
+            channel: Some((0, 0)),
+            character: true,
+            wallet: true,
+            avatar_opa: None,
+            join_room: None,
+            room_password: String::new(),
+            song: None,
+        };
+        let report = connect_and_login(&options).unwrap();
+        let wallet = report.wallet.expect("live gateway returns wallet");
+        assert!(wallet.gem >= 0, "live gem balance");
+        assert!(wallet.cash_point >= 0, "live cash-point balance");
+        assert!(wallet.point >= 0, "live point balance");
+        assert!(wallet.o2_cash >= 0, "live o2-cash balance");
     }
 }
