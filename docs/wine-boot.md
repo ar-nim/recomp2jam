@@ -239,10 +239,11 @@ frame appears between carousel and channel: the tab jumps straight to
 `http://o2jam.nopp.co.kr/client/bbs_patch_notice_nopp.html`), `CStateAvi`
 + `O2mediaLogo.ojs` (lifecycle §5, bypassed here). Reached: Channel
 dialog with live gateway TCP (`03E8` Authorize + `03EA` channel list in
-`server-live.log`; one session also logged `03EC` enter + `07D2` rooms +
-`07D0` char info). No crash, no AVI. Still OPEN: M/G/QUEST/TUTORIAL
-tabs, `입장` past the list, timer auto-dismiss; no input ever touched
-the real display.
+`server-live.log`; the earlier `03EC`/`07D2`/`07D0` lines came from a
+scripted protocol bot, never from a client click — see Attempt 6). No
+crash, no AVI. Still OPEN: M/G/QUEST/TUTORIAL tabs, a working click
+injector for `입장` past the list, timer auto-dismiss; no input ever
+touched the real display.
 
 ### Audio containment (per owner request)
 
@@ -315,6 +316,52 @@ just MessageBox) is confirmed working.
 Still true under ko prefix: no gateway TCP while the notice is up
 (no new `server-live.log` lines), no crash dumps.
 
+## Attempt 6 — `입장` wall: motion reaches the canvas, clicks do not (2026-11-08)
+
+Goal: from the live `STATE_CHANNEL` list (Ch. 01–04), click `입장` to
+enter a channel, then follow room → waiting → song select. Result: the
+client never left the channel dialog. No room, waiting, or song-select
+stage was reached. The run sent only `03E8` (Authorize) + `03EA`
+(channel list); no `03EC` or later opcode appeared.
+
+Recipe (same containment as Attempt 4: Xvfb `:98`, ko prefix,
+`PULSE_SINK=wine_null`, `DISPLAY=:98`, `timeout -s KILL 600`): boot
+with the pinned blob+mirrors argv, H-tab click (145,105) dismisses the
+carousel, OK click (400,362) clears the network-fallback popup, live
+Ch. 01–04 list renders. Then every activation probe failed:
+
+- `입장` single clicks, fast double-click, and 1 s long-press on
+  Ch. 01 (510,267); double-click on the row bar (400,267).
+- Pager `>` arrow (428,515), dialog X button (557,195), with and
+  without a preceding warp; press-only click with the pointer
+  already on target.
+- `Return` (keycode 36) and `Space` (keycode 65), before and after
+  fixing X input focus (`0xa00007` `o2jam - Wine Desktop` now
+  focused; focus had been on `0xe00001`, so the first key probes
+  went nowhere).
+
+What the probes proved: pointer **motion** reaches the game canvas
+(the orange cursor tracks `warp_pointer` 1:1, verified by screenshot
+diff of the cursor at (510,267) vs (600,450); hover moves the row
+highlight Ch. 03 → Ch. 01). Button **presses** and **keys** never
+activate canvas controls: dialog X, pager, `입장` all inert, no new
+TCP to `127.0.0.1:15010` (`ss` queues stay 0, `server-live.log`
+gains nothing). Message-path controls still work (H tab, fallback OK),
+so injection itself is fine — the canvas reads presses through a path
+XTEST does not drive. Blocker: no working click injector for
+DirectDraw-canvas buttons. Next: a `SendInput`-level helper inside
+Wine, a uinput device, or evidence for how the canvas polls buttons.
+
+Correction to Attempt 4 notes: the 16:20:54 session that logged
+`03E8 → 03EA → 03EC → 07D0 → 07D4 → 0FA0 … → 0FB0` in 125 ms
+(room title `songflow`, `o2ma75`, score 2210) is a scripted protocol
+bot, not the Wine client — a human cannot click 20 ms after the list
+arrives. No Wine run has ever produced `03EC`.
+
+Shots `/tmp/chan-stage{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16}-*.png`
+(notice → fallback OK → Ch. 01–04 list → inert `입장`/X/pager/keys).
+Game ran clean throughout: render loop hot, TCP ESTAB, no `.dmp`.
+
 ## Boot stage reached and blockers
 
 Reached (maps to `docs/lifecycle.md` stages 0–3, never 4+, plus an unmapped pre-AVI notice overlay):
@@ -324,13 +371,14 @@ No `STATE_AVI`, no DirectDraw mode-set, no archive reads, no gateway TCP observe
 
 Blockers, in order:
 
-1. Notice-carousel dismissal, dismissed to Channel 2026-11-08 (H-tab click
-   → Channel dialog, live `03E8`/`03EA`; see Input probes). Reads use section
-   `IDENTIFICATION` keys near `0x251400` (`USER_ID`/`USER_INDEX_ID`/
-   `PASSWORD`/`PCROOM_USER` plus `IP%d`/`PORT%d` pairs and the channel tags);
-   the check is pure game code after `SetCurrentDirectoryA` restore. Next:
-   probe M/G/QUEST/TUTORIAL tabs, one `입장` click past the channel list,
-   and confirm whether `STATE_AVI` is bypassed or only hidden.
+1. Canvas input wall, reached 2026-11-08 (Attempt 6): the notice
+carousel still dismisses to the Channel dialog (H-tab click → live
+`03E8`/`03EA`), but no canvas button can be pressed — `입장`, pager,
+dialog X all ignore XTEST presses, double-clicks, long-press, and keys
+with focus fixed. Motion/hover tracks; presses do not. `STATE_AVI` stays
+bypassed (tab jumps straight to `STATE_CHANNEL`, lifecycle §6). Next:
+M/G/QUEST/TUTORIAL tabs, a `SendInput`-level injector, one `입장` click
+past the channel list.
 2. Init-time `ACCESS_VIOLATION`s (game RVA `0x1F2893` with session argv;
    wild jump to `0xFFBC11B0` in one bare run with media DLLs loaded).
 3. Possible Wine/wow64 contribution to (2): identical wild address in an
