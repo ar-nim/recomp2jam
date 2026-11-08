@@ -225,10 +225,23 @@ void sink (see below), `timeout -s KILL 100`.
 
 `xdotool` is absent but `python-xlib` (0.33) is installed: key and
 mouse injection works (`/tmp/xtest_key.py`, `/tmp/xtest_click.py`).
-Tried on the carousel: Escape advances the page (or the carousel
-auto-rotates — ambiguous), MENU-bar back-arrow click (143,566) =
-previous page, Enter inconclusive (run reaped by its timeout mid
-probe). The notice dismissal path stays OPEN; no input ever touched
+Dismissal path found 2026-11-08 (ko prefix, Xvfb `:98`, null sink): the
+top-row H tab click (145,105) dismisses the carousel into the Channel
+select dialog (`Ch. 01`–`04` + `입장`), past a network-fallback OK popup
+(NORMAL mode, no LIVE BATTLE). Escape paginates forward (NEW ITEM
+costume page → Halloween page), pager arrows step pages, MENU-bar
+back-arrow (143,566) steps back, Return/Space do nothing, gear opens
+the `옵션` dialog (Escape closes it). No `STATE_AVI`/`O2mediaLogo.ojs`
+frame appears between carousel and channel: the tab jumps straight to
+`STATE_CHANNEL` (lifecycle §6). Anchors: `AVCCNoticeBox` (file
+`0x27e766`), `NoticeBoard`/`Notice_Ani`/`Notice_Base.ojs`,
+`AVCCHtmlFile`/`CWebCtrlBase`/`IEFrame` (notice content path, blob field
+`http://o2jam.nopp.co.kr/client/bbs_patch_notice_nopp.html`), `CStateAvi`
++ `O2mediaLogo.ojs` (lifecycle §5, bypassed here). Reached: Channel
+dialog with live gateway TCP (`03E8` Authorize + `03EA` channel list in
+`server-live.log`; one session also logged `03EC` enter + `07D2` rooms +
+`07D0` char info). No crash, no AVI. Still OPEN: M/G/QUEST/TUTORIAL
+tabs, `입장` past the list, timer auto-dismiss; no input ever touched
 the real display.
 
 ### Audio containment (per owner request)
@@ -311,11 +324,13 @@ No `STATE_AVI`, no DirectDraw mode-set, no archive reads, no gateway TCP observe
 
 Blockers, in order:
 
-1. Notice-carousel dismissal, untested to completion (the pinned argv shape itself is now probed live — see Attempt 4). Reads use section
+1. Notice-carousel dismissal, dismissed to Channel 2026-11-08 (H-tab click
+   → Channel dialog, live `03E8`/`03EA`; see Input probes). Reads use section
    `IDENTIFICATION` keys near `0x251400` (`USER_ID`/`USER_INDEX_ID`/
    `PASSWORD`/`PCROOM_USER` plus `IP%d`/`PORT%d` pairs and the channel tags);
-   the check is pure game code after `SetCurrentDirectoryA` restore. Next: fire
-   one real `game:start` blob+mirrors launch and record the dialog result.
+   the check is pure game code after `SetCurrentDirectoryA` restore. Next:
+   probe M/G/QUEST/TUTORIAL tabs, one `입장` click past the channel list,
+   and confirm whether `STATE_AVI` is bypassed or only hidden.
 2. Init-time `ACCESS_VIOLATION`s (game RVA `0x1F2893` with session argv;
    wild jump to `0xFFBC11B0` in one bare run with media DLLs loaded).
 3. Possible Wine/wow64 contribution to (2): identical wild address in an
