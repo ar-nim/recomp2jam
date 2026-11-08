@@ -243,7 +243,14 @@ dialog with live gateway TCP (`03E8` Authorize + `03EA` channel list in
 scripted protocol bot, never from a client click — see Attempt 6). No
 crash, no AVI. Still OPEN: M/G/QUEST/TUTORIAL tabs, a working click
 injector for `입장` past the list, timer auto-dismiss; no input ever
-touched the real display.
+touched the real display. Update 2026-11-08 (Attempt 11, section
+above): the room JOIN wall is breached — a CLI-hosted `WINEJOIN`
+(2004 script as tester2, music 757 via 4000 or the row never paints)
+double-clicked from the live list sends `0BBA` and reaches the WAITING
+ROOM. New walls: no song select/gameplay (guest cannot start), a ~60 s
+self-`FFF0` fuse per idle stage with autonomous re-auth, one
+intermittent mid-`07D2` crash on a populated list. Next: host-driven
+`4010` start with the guest seated.
 
 ### Audio containment (per owner request)
 
@@ -611,6 +618,130 @@ dismisses it straight into `FFF0` disconnect + return to the notice
   `07D2`/`07DA`/`07E8`/`13A4` ×2 chains + one `FFF0`; nothing else.
   No room-create/join opcode exists in any Wine run to date.
 
+## Attempt 11 — CLI-hosted room joined from Wine: WAITING ROOM reached (2026-11-08)
+
+Goal: bypass the Attempt-10 CREATE-OK wall by hosting the room with our
+own tooling (2004 `CreateRoom` via a scratch script against the local
+Memoryer gateway), then click the listed room's join in the Wine client
+and record how far it goes. Result: the client listed the hosted room
+(`000 WINEJOIN (1/8)`, music set), a screenshot-verified double-click
+sent `0BBA` (`JoinWaiting`) with no rejection, and the client rendered
+the WAITING ROOM (both members seated, READY badges). No song select, no
+gameplay: a READY click was followed by a self-exit (`0BBD`) at ~+65 s,
+and the client has a ~60 s self-`FFF0` fuse in every idle room stage plus
+a crash mid-`07D2` on one populated-list entry. Helpers are scratch-only
+in `/tmp` (`host_room1{1,2,3}.py`, `o2jam-j11.fish`, `j11-*.png`,
+`host_room1*.out/.log`). Memoryer unmodified (server only); no commit.
+
+### Host path (no CLI create exists)
+
+`recomp2jam connect --join-room` only JOINS (`2004 CreateRoom` exists
+solely inside an env-gated live test). So the room was hosted by small
+scratch Python scripts speaking the wire directly (length-preframed
+`[u16 len][u16 id][body]`, null-terminated strings, `726PNA-…` client
+id): Authorize (1000, user 2 / tester2 token, zero relay keys) →
+GetChannelList (1002) → ChannelLogin (1004, 0/0) → CreateRoom (2004)
+→ hold with 6001 pings. tester2 hosts so the Wine client's tester
+session is never disturbed (same-account duplicates would kick).
+
+- `/tmp/host_room11.py` (45 s trial): `WINEJOIN` created, `2006`
+  result 0, room number 0, `07D4 Create room: WINEJOIN` in
+  `server-live.log`. Hold works; room deletes on disconnect (with the
+  known `RoomServiceEventPublisher.OnRoomDeleted` broadcast exception
+  — pre-existing server behavior, untouched).
+- `/tmp/host_room12.py`: tried PAD0 then `3005 ExitWaiting` (empty
+  body) then a second create. Empty-`3005` decodes fail server-side
+  (`MessageFieldCodec` length exception, no reply, session survives);
+  the second create is rejected (`RoomService.AddRoom` session
+  exception — already in a room). Lesson: `3005` has a non-empty body
+  (still unknown; `o2jam-net` does not model it) and room numbers are
+  reused lowest-free (first room is always number 0).
+- `/tmp/host_room13.py` (used for all Wine runs, 900/1800 s holds):
+  create `WINEJOIN` (number 0) → `4000 SetRoomMusic` 757/2/1 → `4002`
+  `SetRoomArena` 0 → self `2002` poll: `2003 RoomList` 2412 B = 100
+  entries, first holding `WINEJOIN` + `f5 02` (757). Server-side truth
+  confirmed live.
+
+Decisive display finding: the first Wine entry listed ZERO rows
+because the room had no music set. `RoomListEntry.music_id` 0 renders
+nothing; after `4000`, the row paints (`000 WINEJOIN (1/8)`, green
+song bar with Korean title, `HX1`, `3KEY`, `WAITING`). Room number 0
+displays fine — the `0 = empty slot` convention is decoder-side only.
+
+### Wine walk (same proven recipe, ko prefix, Xvfb `:98`, null sink)
+
+Boot (`/tmp/o2jam-j11.fish`, 900 s launcher) → error-report dialog on
+reboots (leftover game `.dmp`; Cancel via XTEST at (420,295) dismisses,
+no send) → notice carousel → H-tab XTEST (145,105) → `03E8`/`03EA` →
+fallback OK XTEST (400,362) → channel list → warp Ch.01 입장 (526,248),
+crop-zoom tip-verified on the glyph → `SendInput` single (`siclick3`,
+`n=1/1`) → `03EC` in 12–25 s → `0FBE→07D0→07D2→13A4` chain.
+
+Timing anatomy of the room stage (measured over 5 entries): `07DA`/
+`07E8` (user list + music report) at +36 s; the room ROW paints with
+that cycle (empty at +25 s, painted by +40 s); a `서버로 부터 응답이
+없습니다` modal fires ~+40–60 s; the client self-sends `FFF0` at
+~+60 s (`17:42:42→17:43:40`, `17:58:38→17:59:38` both +58–60 s) and
+AUTO-REAUTHORIZES ~+10 s later (`03E8`/`03EA` with zero input, then
+channel dialog + fallback popup again). The loop is autonomous: entry
+→ row → modal → self-`FFF0` → re-auth → channel. Manual `입장` clicks
+are still needed after each re-auth (one auto-`03EC` at 17:42:42 had no
+visible driver and never recurred when watched — treat as unattended).
+
+### The join (18:02, screenshot-verified)
+
+Entry `03EC` 18:01:28. After `07DA`/`07E8`, blind warp (175,165) +
+`SendInput` DOUBLE-click (`siclickD`, `n=1/1` ×4) on slot 1, post-hoc
+shot for aim. Server: `0BBA` (`JoinWaiting`) from tester, accepted
+(no reject code; old `0BBA` lines in the log are Nov-06/07). Client:
+full WAITING ROOM (`/tmp/j11-join2.png`): title bar `사람손 Ch. 01
+No. 000 HX1 WINEJOIN 방설정변경` + song bar, 8 slots with slot 1
+`Lv.2 tester2` (red, READY) and slot 2 `Lv.2 tester` (orange, READY),
+TEAM grid, orange READY pill at ~(680,143), SKILL grid, SPEED X1,
+BPM 124, song `?` panels, chat + piano keys. Reached: waiting room.
+Not reached: song select (panels stay `?` for the guest), gameplay
+(host script never sends `4010 StartGame`; guest cannot).
+
+READY pill single-click (`n=1/1`) → no new opcode within 25 s; at
++65 s the client self-exited the waiting room (`0BBD ExitWaiting`,
+18:03:42 — same ~60 s fuse shape) back to the room stage (`07D2`
+re-list, session alive). A CREATE ROOM dialog was open over the room
+stage afterwards (opener unknown: the only input in the window was the
+READY click at (680,143); possibly fuse behavior). Its X ignores the
+proven `SendInput` single, and a stacked fallback-OK popup ignores
+XTEST this time (channel-stage variant responded in Attempts 4/10) —
+the stack was left standing. Reap followed.
+
+### Crash (17:51 entry, populated list)
+
+`03EC → 0FBE → 07D0`, then nothing: no `07D2`/`13A4`. Wine crash
+box (`OTwo.exe has encountered a serious problem`, winedbg attached)
+over the room stage. The game wrote its own minidump
+(`/tmp/o2jam-run/OTwo 2026-11-08 17-55-29.dmp`, deleted after Cancel
+on the reboot send-prompt — hence the dialog). Same populated list
+survived twice, so the crash is intermittent, not deterministic on
+list content. No `install-root` write; prefix intact.
+
+### Opcode census (tester, this attempt)
+
+Per visit: `03E8/03EA/03EC → 0FBE → 07D0 → 07D2 → 13A4 → 07DA+07E8`
+(+36 s) → modal (~+40–60 s) → self-`FFF0` (~+60 s) → auto
+`03E8/03EA` (~+70 s). Once each: `0BBA` (join, accepted), `0BBD`
+(waiting exit). Never from Wine: `3005` body (unknown), `4008`
+Ready effect (click sent nothing observable), `4010+` play flow.
+Host (tester2): `07D4` create, `0FA0/0FA2` music/arena, `2003` polls.
+
+### Hygiene notes
+
+- `/tmp/o2jam-j11.fish` once vanished mid-attempt (rewritten, no
+explanation; prefix and game copy verified intact) and one `cd`
+failed transiently; later `ls` showed the dir present. No repo,
+Memoryer, or install-root file was touched for this.
+- `pkill -f <name>` self-match still bites: use bracketed patterns;
+one launcher died by it (exit 143), recovered.
+- Audio stayed on `wine_null` throughout; everything on Xvfb `:98`;
+reaped to zero (`OTwo`, wineserver, hosts); Xvfb left running.
+
 ## Boot stage reached and blockers
 
 Reached (maps to `docs/lifecycle.md` stages 0–3, never 4+, plus an unmapped pre-AVI notice overlay; Attempt 9 adds the room list past `STATE_CHANNEL`):
@@ -651,6 +782,86 @@ Han/Eng toggle) for the title, or evidence for what enables CREATE OK.
    wild jump to `0xFFBC11B0` in one bare run with media DLLs loaded).
 3. Possible Wine/wow64 contribution to (2): identical wild address in an
    unrelated winedbg helper thread.
+
+## Attempt 11 — CREATE ROOM Phase 1: investigation only, no fix (2026-11-08)
+
+Goal: explain two linked symptoms — CREATE OK ignores all input, title
+field takes no keys — without changing anything. No fix was attempted;
+no new injection was fired; all evidence is read-only observation of the
+live Attempt-10 session plus static doc cross-checks.
+
+### Reproduction (consistent, still live)
+
+- Wine client `OTwo.exe` (pid 1819201, booted 17:33 under
+  `/tmp/o2jam-j10.fish`: Xvfb `:98`, ko prefix, `PULSE_SINK=wine_null`)
+is still alive and ESTAB (`127.0.0.1:55508 → 15010`).
+- Current framebuffer (`/tmp/j11-now.png`, 17:40) shows the room stage
+  behind the `서버로 부터 응답이 없습니다` fuse modal + OK — i.e. the
+  bare-room-list ~40 s server-timeout path from Attempt 10, not a new
+  crash. The CREATE ROOM dialog is no longer on screen (fuse modal
+  covers the stage that owned it).
+- Server log for this exact Wine session (`tester`, ports
+  55508/32388): `03E8 → 03EA → 03EC → 0FBE → 07D0 → 07D2 → 13A4 →
+  07DA → 07E8`, zero `07D4` (2004) lines. Reproducible across all
+  Attempt-10 rounds: the Wine client NEVER emits CreateRoom.
+- Counter-proof the server accepts 2004: a bot session (`tester2`,
+  `python3` pid 1820111, port 51252) logged `07D4 Create room:
+  WINEJOIN` 1 s after Authorize at 17:39:56. Gate is client-side.
+
+### Recent changes (client unchanged, environment is the variable)
+
+- Client bytes unchanged: `sha256sum /tmp/o2jam-run/OTwo.exe` =
+  `83a04541…` prefix, matching the pinned hash in `docs/lifecycle.md`
+  and `install-root` copy (`md5` identical both sides). `git log`
+  since shows docs-only commits. Nothing changed in the client.
+- Environment that DID change today: fresh ko prefix clone
+  (`~/o2jam-prefix-ko`), `LOCALPATH/ko_KR.UTF-8` + CP949 + Baekmuk/Noto
+  fonts + `FontLink\SystemLink`, null-sink audio, 3600 s launcher,
+  local Memoryer gateway. All Attempt-10 stimuli ran inside this env.
+
+### Layer evidence
+
+- SendInput delivery CONFIRMED (Attempt 10): all 8 OK stimuli genuine
+  (`fg=0x10088`, `n=1`, `err=0`: single ×3, double ×2, long-press,
+  Return ×2, Space, XTEST) — yet zero pixels, zero `server-live.log`
+  lines. Delivery works; the dialog consumes nothing.
+- Focus state: fresh `sspy` census (this task, read-only) repeats
+  Attempt 10 exactly: `fg=0x10088`, `GetFocus()=NULL`,
+  `GetActiveWindow()=NULL`, NO child windows of the game hwnd
+  (title field is canvas-drawn, not an EDIT control).
+- IME state: `Wine IME` + `Default IME` windows present in the same
+  census. `stype` vkey typer (`o2test`/`o2test2`, 13 chars, tip verified
+  inside the field) left the field pixel-identical. Keys reach the
+  queue but never render — consistent with IME swallowing the vkey
+  path for a canvas edit with no focused EDIT.
+- Dialog validation logic (exe/docs side): `DIALOG_CREATEROOM`
+  (decl `0x09`, `docs/gameplay.md`; `CDCreateRoom`, `docs/lifecycle.md`
+  §7) carries title (max 22, `docs/net-protocol.md` §3b/4c: 2004
+  `CreateRoom` title-first wire layout). No in-exe OK-enable function
+  is pinned yet (OPEN) — but every observed CREATE ROOM frame shows
+  the title field EMPTY with blinking caret, and OK never fires while
+  it is empty. Title-empty gating fits all 8 failures with one cause.
+
+### Ranked hypotheses (Phase 1 verdict)
+
+1. Title-gated OK + IME-swallowed keys (BEST FIT): CREATE OK requires a
+   non-empty title; the canvas edit takes no vkey input under Wine
+   (no EDIT, no focus, Wine IME present), so the title stays empty and
+   OK stays disabled. Explains BOTH symptoms at once; server-side is
+   ruled out by the bot `07D4` success.
+2. OK hit-test/poll path broken under Wine independent of title —
+   explains OK but NOT the 13-char typing failure.
+3. Global focus loss disables the dialog — weaker: message-path
+   controls (H-tab, fallback OK) work with the same focus state.
+
+### Single minimal confirmatory test (NOT run — Phase 1 only)
+
+- One `SendInput` keystroke with `KEYEVENTF_UNICODE` (`wScan` = `A`)
+  into the title field, then a framebuffer pixel-diff of the field
+  rect. If one glyph appears, the vkey→IME translation is the failing
+  layer (hypothesis 1 confirmed at the key layer); if the field stays
+  pixel-identical, the canvas edit ignores all key pumps and the OK
+  gate must be probed separately.
 
 ## Logs and artifacts (kept outside the repo)
 
