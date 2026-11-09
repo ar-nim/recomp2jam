@@ -574,7 +574,6 @@ by other docs/code and untouched here).
    colors `0xdedede`/`0x71e6`.
 
 ## Builder-record map (2026-11-09, rdata scan)
-
 Every dialog builder VA resolves through exactly one `.rdata`
 record holding a class COL plus method VAs (offset-only LE32 scan
 of the full image; VA = file + `0x400000`):
@@ -599,6 +598,20 @@ ending in the stager call — so the BLOCK arrives as an argument,
 not an immediate, and no static scan can name which instance
 stages Channel. The host question mutates: which call passes the
 Channel block, and where does the bar land. No position invented.
+
+### Record diff: shared base vs state builders (2026-11-09)
+
+All eight records (planet/room/shop/myroom/waiting/payment/payment2/avi)
+share 5–6 method VAs (`0x4065a0`, `0x409860`, `0x409f30`, `0x489eb0`,
+`0x489ec0`, plus `0x409f20`/`0x48c570` in six) — the common state
+machinery — and carry 7–9 unique methods each. Every per-state
+builder sits at the SAME record position (index 5): the slot is a
+shared "stage my block" virtual, so any instance stages whichever
+block it receives as an argument. The Channel bar fetcher being
+`CStatePlanet`'s slot-5 builder is therefore consistent with a
+Planet (or shared-base) instance staging the Channel block — a
+hypothesis, not a finding. No record exists for Channel (no class),
+Result, MusicShop, or Lanking in this table region.
 
 Byte walk of files `0x8dd10`–`0x8e000` around the bar fetch looked
 for pushed mount coordinates (x, y, width, height immediates) and
