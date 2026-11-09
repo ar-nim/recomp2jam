@@ -628,7 +628,20 @@ no position invented. Next evidence path: dynamic rect reads under
 the Wine rig (pairing getter file `0x148640`), which needs no canvas
 input.
 
-## Reference-measured Channel geometry (2026-11-09, Wine capture)
+## Button view offsets −60/−90 (2026-11-09, operand sweep)
+
+Full-`.text` sweep (capstone 5.0.7, skipdata) for stores to control
+`+0x1e4`/`+0x1e8` (the A8 position fields): 59 writes. Avatar
+applier `0x4DA630` re-found (2 writes, method check). New: every
+button-region writer (files `0x129088`–`0x1295d3`, `0x12a6df`–`0x12a7bf`,
+`0x8c94b`/`0x8c95a`) stores `X − 0x3C` then `Y − 0x5A` (60/90
+decimal) — view positions derive from a source pair minus fixed
+chrome insets, never raw immediates. Result-region writers (files
+`0xc2148`/`0xc227a`) zero `+0x1e8` behind a `+0x80` gate instead.
+Value sources stay open (locals fed by args through helpers like
+`0x12b480`; virtual call `[eax+0x10]` precedes the wrapper-region
+site). Implication: button mount geometry rides dataflow, not
+immediates — consistent with every failed immediate hunt above.
 
 Live capture `/tmp/chan2-list.png` (local-only, 800x600, real client
 on the test server, Ch.01–04 with `입장`): pixel-measured anchors,
