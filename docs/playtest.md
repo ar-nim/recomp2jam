@@ -4356,3 +4356,11 @@ changed 0.0% of pixels — no dismiss, no select. Esc still returns to
 Room (94.3%). Seats stay behind the dialog in the live client; the
 soak suite covers the seats underneath. Captures in
 `~/scratch/smoke-dialog/`.
+
+## Live channel anchors exact — 2026-11-09 03:10 +08:00 (HEAD `1b3f891`)
+
+Fresh live capture (`~/scratch/smoke-host/live-channel.png`, 10
+channels): row text tops at exactly 232+50·i, plates at exactly
+236+50·i — pixel-identical to the Wine reference anchors. Residual:
+rows run off the bottom (10 shown, reference shows a 4-row viewport
+with scrollbar + pager); scrolling interaction stays OPEN.
