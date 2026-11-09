@@ -1,0 +1,54 @@
+# STATE_PLANET screen (7.55) — evidence log
+
+Solo-mission select (`CStatePlanet`, `0x11`). Read-only walks below;
+offsets are file offsets unless marked VA. Version pin for all EXE
+rows: `AngelO2Jam.exe` 5,029,888 B, SHA-256 `83a04541…72c823b`.
+
+## Block walk (2026-11-09, `ControlList_Interface.txt`)
+
+Slot 1595 (`Interface1.opi`, data offset 74438614, 90472 B, 1979
+CP949 lines), lines 785–809: header `STATE_PLANET 0X11`, `{`,
+`BOUND "State_Planet.bnd"`, then entries:
+
+| Code | Entry | Art |
+|---|---|---|
+| `0X19000000` | `IDC_STATE_PLANET` (self) | — |
+| `0X19100001` | `IDC_BACK_SPLANET_1` | `State_Planet.ojs` |
+| `0X19201002..06` | `IDC_BUTTON_SPLANET_{HARD,NORMAL,EASY,FREE,DRUM}` | `Planet_Btn_{Hard,Normal,Easy,Free,Drum}.ojs` |
+| `0X19400007..0B` | `IDC_TEXT_SPLANET_{HARD,NORMAL,EASY,FREE,DRUM}` | — (captions OPEN) |
+| `0X1950000C` | `IDC_IMAGE_SPLANET_PROMOTION` | `Planet_Promotion.ojs` |
+| `0X1920000D..0F` | promotion LEFT/RIGHT/PLAYSTOP | matching `.ojs` |
+| `0X19200010..11` | EXIT / OPTION | matching `.ojs` |
+
+Button comments (CP949): HARD `신의손`, NORMAL `고수손`, EASY
+`사람손`, FREE `튜토리얼(미정)`, DRUM `퀘스트(미정)` — FREE/DRUM
+backends never wired (gameplay level-up note, `ev_0ce27550…`).
+
+Cross-checks against existing dossiers: button codes match the
+planet dispatcher range `0x19201002..06` (file `0x8e280`); TEXT
+codes match the `0x19400007` base in the bar-builder region
+(files `0x8dec9`/`0x8dee4`/`0x8def0`). The Channel dialog reuses
+`Planet_Btn_Hard/Normal` (`IDC_BUTTON_CHANNEL_INFO_HARD/NORMAL`,
+lines 1962–63).
+
+## Bind file
+
+`State_Planet.bnd`: slot 1347, offset 61450578, 278 B body =
+`4 + 2 + 17×16` exact → magic `FFFFFFFF` + u16 count + 17 rects
+of 16 B (`docs/file-formats/opi.md` envelope). Rect contents
+unread (next step).
+
+## Assets present (install-root, git-ignored)
+
+- `Image/Interface1.opi`: `State_Planet.ojs` + buttons + `State_Planet.bnd`.
+- `Music/Planet.ojm` + `Music/O2PlanetNPC.ojm` (BGM/NPC).
+
+## OPEN
+
+1. Rect contents → placements (pairing getter `0x548640`).
+2. TEXT caption sources (`0X19400007..0B` never code-addressed yet).
+3. FREE/DRUM click behavior (no backend; clicks must stay unbound — P0).
+4. Promotion PLAYSTOP/LEFT/RIGHT semantics.
+5. EXIT/OPTION destinations.
+6. Entry path (Channel planet pick vs solo) and exit paths.
+7. BGM start trigger and NPC voice role.
