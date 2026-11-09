@@ -126,6 +126,44 @@ impl SideScreen {
             SideScreen::Tutorial => Some("CStateTutorial"),
         }
     }
+
+    /// Scene-BGM cue this side screen enters with: the `(id, repeat)`
+    /// its entry passes the exe's scene-music selector (file `0x151820`
+    /// = VA `0x551820`, forwards `(id, loop)` to the bank behind
+    /// `soundmgr[0x76832C] + 0x340C0`). The `id` is a one-based record
+    /// over `Music/BGM.ojm`; [`o2jam_audio::BGM_SILENCE_ID`] (`-1`)
+    /// stops the channel. Pinned per-scene table
+    /// (`docs/coverage-audit.md` "Fresh pins", re-read 2026-11-11):
+    ///
+    /// | Side screen | id | loop |
+    /// |---|---|---|
+    /// | Shop (`CStateShop`) | 4 | loop |
+    /// | MusicShop (`CStateMShop`) | 10 (decimal) | loop |
+    /// | MyRoom | 5 | loop |
+    /// | Planet (`CStatePlanet`) | 9 | loop |
+    /// | Payment / Payment2 (`CDPayment`) | 3 | loop |
+    /// | Lanking / Tutorial | silence `-1` | — |
+    ///
+    /// The music-shop entry pushes decimal `10` (record 10 names the
+    /// shop track); the audit's `0x10` shorthand is corrected the
+    /// same way [`Screen::bgm_cue`](super::super::screen::Screen::bgm_cue)
+    /// corrects it. Lanking has no state class and tutorial holds no
+    /// pinned cue (no selector caller names them), so they cue
+    /// silence. The launch client (`recomp2jam/src/main.rs`)
+    /// delegates its side hook here, so the pairs live in one place
+    /// and `ScreenGame` re-cues every side entry through this table.
+    #[must_use]
+    pub const fn bgm_cue(self) -> (i32, bool) {
+        use o2jam_audio::BGM_SILENCE_ID;
+        match self {
+            SideScreen::Shop => (4, true),
+            SideScreen::MusicShop => (10, true),
+            SideScreen::MyRoom => (5, true),
+            SideScreen::Planet => (9, true),
+            SideScreen::Payment => (3, true),
+            SideScreen::Lanking | SideScreen::Tutorial => (BGM_SILENCE_ID, false),
+        }
+    }
 }
 
 /// Whether a lobby may open a side screen: any lobby opens any side
@@ -1888,6 +1926,23 @@ mod side_tests {
         assert_eq!(SideScreen::Planet.block_name(), Some(PLANET_BLOCK));
         assert_eq!(SideScreen::Planet.bind_file(), Some(PLANET_BIND_FILE));
         assert_eq!(SideScreen::Planet.state_class(), Some("CStatePlanet"));
+    }
+
+    #[test]
+    fn side_bgm_cues_follow_the_pinned_table() {
+        assert_eq!(SideScreen::Shop.bgm_cue(), (4, true));
+        assert_eq!(SideScreen::MusicShop.bgm_cue(), (10, true));
+        assert_eq!(SideScreen::MyRoom.bgm_cue(), (5, true));
+        assert_eq!(SideScreen::Planet.bgm_cue(), (9, true));
+        assert_eq!(SideScreen::Payment.bgm_cue(), (3, true));
+        assert_eq!(
+            SideScreen::Lanking.bgm_cue(),
+            (o2jam_audio::BGM_SILENCE_ID, false)
+        );
+        assert_eq!(
+            SideScreen::Tutorial.bgm_cue(),
+            (o2jam_audio::BGM_SILENCE_ID, false)
+        );
     }
 
     #[test]

@@ -919,27 +919,16 @@ fn scene_bgm_cue(screen: o2jam_shell::Screen) -> (i32, bool) {
     screen.bgm_cue()
 }
 
-/// The cue one side screen enters with, same map as
-/// [`scene_bgm_cue`] (both payment views share the room track at
-/// id 3; lanking has no state class and tutorial holds no pinned
-/// cue, so they cue silence).
-///
-/// Staged for the shell-side scene-change seam: allowed dead
-/// until that follow-up calls it.
+/// The cue one side screen enters with: delegates to the shell's
+/// single-source table ([`o2jam_shell::screens::SideScreen::bgm_cue`],
+/// S0.2 pins re-read 2026-11-11: Shop 4, MusicShop 10, MyRoom 5,
+/// Planet 9, Payment/Payment2 3 loop, Lanking/Tutorial silence `-1`).
+/// Kept as the launch client's named side hook so every side entry
+/// cues through one call; `ScreenGame::visit_side` drives the same
+/// table in-process.
 #[allow(dead_code)]
 fn side_scene_bgm_cue(side: o2jam_shell::screens::SideScreen) -> (i32, bool) {
-    use o2jam_audio::BGM_SILENCE_ID;
-    use o2jam_shell::screens::SideScreen::{
-        Lanking, MusicShop, MyRoom, Payment, Planet, Shop, Tutorial,
-    };
-    match side {
-        Shop => (4, true),
-        MusicShop => (10, true),
-        MyRoom => (5, true),
-        Planet => (9, true),
-        Payment => (3, true),
-        Lanking | Tutorial => (BGM_SILENCE_ID, false),
-    }
+    side.bgm_cue()
 }
 
 /// Decode one bank record (a Vorbis split body) into PCM; blanks

@@ -449,14 +449,13 @@ impl ScreenGame {
         self
     }
 
-    /// Cue the current screen's scene music through the rig
-    /// (silence without one). The one entry hook every screen
-    /// change flows through — see [`Self::enter_screen`].
-    fn apply_scene_bgm(&mut self) {
+    /// Cue one scene-BGM pair through the rig (silence without one):
+    /// the one application every scene entry flows through.
+    fn apply_bgm_cue(&mut self, cue: (i32, bool)) {
         let Some(rig) = self.audio.as_mut() else {
             return;
         };
-        let (cue_id, cue_repeat) = self.flow.current().bgm_cue();
+        let (cue_id, cue_repeat) = cue;
         let AudioRig {
             backend,
             bgm,
@@ -465,6 +464,14 @@ impl ScreenGame {
         } = rig;
         let cue_pcm = bgm.play_scene_music(cue_id, cue_repeat, bgm_bank);
         let _ = backend.set_scene_bgm(cue_pcm, cue_repeat);
+    }
+
+    /// Cue the current screen's scene music through the rig
+    /// (silence without one). The one entry hook every screen
+    /// change flows through — see [`Self::enter_screen`].
+    fn apply_scene_bgm(&mut self) {
+        let cue = self.flow.current().bgm_cue();
+        self.apply_bgm_cue(cue);
     }
 
     /// Latched scene-BGM selection, if a track is playing (`None`
@@ -1831,17 +1838,22 @@ impl ScreenGame {
     }
 
     /// Open a side screen from a lobby; rejects other origins and
-    /// remembers the lobby to return to.
+    /// remembers the lobby to return to. Entry cues the side
+    /// screen's scene music (see [`SideScreen::bgm_cue`]); a
+    /// rejected visit cues nothing.
     pub fn visit_side(&mut self, side: SideScreen) -> bool {
         if self.side.is_some() || !can_visit_side(self.flow.current(), side) {
             return false;
         }
         self.side_origin = Some(self.flow.current());
         self.side = Some(side);
+        self.apply_bgm_cue(side.bgm_cue());
         true
     }
 
-    /// Return to the lobby that opened the side screen.
+    /// Return to the lobby that opened the side screen. The lobby
+    /// is a scene entry again, so it re-cues its own scene music
+    /// (see [`Screen::bgm_cue`]); a rejected return cues nothing.
     pub fn leave_side(&mut self) -> bool {
         let (Some(side), Some(origin)) = (self.side, self.side_origin) else {
             return false;
@@ -1851,6 +1863,7 @@ impl ScreenGame {
         }
         self.side = None;
         self.side_origin = None;
+        self.apply_bgm_cue(origin.bgm_cue());
         true
     }
 
@@ -1865,7 +1878,10 @@ impl ScreenGame {
             self.enter(Screen::Planet);
         }
         if self.flow.current() == Screen::Playing && self.playing.is_finished(now_ms) {
-            let _ = self.flow.go(Screen::Result);
+            // Song end enters Result through the entry hook, so
+            // its scene-music cue (`0x13`, once — silent on the
+            // 10-record bank, OPEN) fires like every other entry.
+            self.enter_screen(Screen::Result);
         }
         match self.flow.current() {
             Screen::Playing => self.paint_playing(frame, now_ms),
@@ -4722,6 +4738,93 @@ mod game_tests {
             game.scene_bgm_selection(),
             None,
             "loading cues silence (leave −1)"
+        );
+    }
+
+    #[test]
+    fn side_visit_and_leave_recue_through_the_single_table() {
+        // Null backend only (containment): shop track 4, channel
+        // track 9, room track 3, payment shares the room track.
+        use o2jam_audio::{NullBackend, PcmSamples};
+        let mut bank = vec![None; 10];
+        for record in [3, 4, 9] {
+            bank[record - 1] = Some(PcmSamples {
+                samples: vec![1000i16; 441],
+                sample_rate: 44100,
+                channels: 1,
+            });
+        }
+        let mut game = ScreenGame::new();
+        game.with_audio(Box::new(NullBackend::new()), HashMap::new());
+        game.stage_scene_bgm(bank);
+        dismiss_splash_to_dialog(&mut game);
+        assert_eq!(game.screen(), Screen::Channel);
+        assert_eq!(game.scene_bgm_selection().map(|sel| sel.record), Some(9));
+        assert!(game.visit_side(SideScreen::Shop));
+        assert_eq!(
+            game.scene_bgm_selection().map(|sel| sel.record),
+            Some(4),
+            "shop entry cues record 4"
+        );
+        // A second visit while open is rejected and cues nothing.
+        assert!(!game.visit_side(SideScreen::Payment));
+        assert_eq!(game.scene_bgm_selection().map(|sel| sel.record), Some(4));
+        assert!(game.leave_side());
+        assert_eq!(
+            game.scene_bgm_selection().map(|sel| sel.record),
+            Some(9),
+            "returning to the channel lobby re-cues record 9"
+        );
+        assert!(game.visit_side(SideScreen::Payment));
+        assert_eq!(
+            game.scene_bgm_selection().map(|sel| sel.record),
+            Some(3),
+            "payment shares the room track"
+        );
+        assert!(game.leave_side());
+        // Silence-side entry stops the channel; leaving restores it.
+        assert!(game.visit_side(SideScreen::Lanking));
+        assert_eq!(game.scene_bgm_selection(), None, "lanking cues silence");
+        assert!(game.leave_side());
+        assert_eq!(game.scene_bgm_selection().map(|sel| sel.record), Some(9));
+    }
+
+    #[test]
+    fn finished_song_enters_result_and_cues_silence_until_its_bank_is_found() {
+        // Null backend only (containment): playing track 3 cues
+        // while playing; result's `0x13` names no `BGM.ojm` record
+        // (10 records), so the song-end entry silences the channel.
+        // OPEN: identify which bank the worker holds when `0x4C1B90`
+        // cues it (`BGMwinter.ojm` candidate) — never invent a track.
+        use o2jam_audio::{NullBackend, PcmSamples};
+        let mut bank = vec![None; 10];
+        bank[2] = Some(PcmSamples {
+            samples: vec![1000i16; 441],
+            sample_rate: 44100,
+            channels: 1,
+        });
+        let mut game = ScreenGame::new();
+        game.with_audio(Box::new(NullBackend::new()), HashMap::new());
+        game.stage_scene_bgm(bank);
+        game.load_chart(vec![(2, 5000, 7)]);
+        walk_to_playing(&mut game);
+        assert_eq!(game.screen(), Screen::Playing);
+        assert_eq!(game.scene_bgm_selection(), None, "playing cues silence");
+        game.strike_at(2, 5000);
+        let mut buf = vec![0u32; 70 * 60];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            7000,
+        );
+        assert_eq!(game.screen(), Screen::Result);
+        assert_eq!(
+            game.scene_bgm_selection(),
+            None,
+            "result entry cues `0x13` once: silent on a 10-record bank"
         );
     }
 
