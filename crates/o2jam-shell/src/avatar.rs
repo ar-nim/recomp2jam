@@ -629,6 +629,8 @@ pub const PLANET_BIND_FILE: &str = "State_Planet.bnd";
 pub const LANKING_BLOCK: &str = "STATE_LANKING";
 /// Rankings bind file (73 rects, `docs/lanking.md`).
 pub const LANKING_BIND_FILE: &str = "State_Lanking.bnd";
+/// Avatar-room block (bind file declared but absent — anchor paint).
+pub const MYROOM_BLOCK: &str = "STATE_MYROOM";
 /// Waiting seat-cover body: one `Wait_Cover_Avatar.ojs` per seat
 /// (`IDC_IMAGE_SWAIT_COVERAVATAR1..8`, codes `0x1650003D..44`,
 /// `.bnd` rects 60..67), anchored at `(0,0)` so each bound rect

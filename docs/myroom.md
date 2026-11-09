@@ -42,7 +42,10 @@ portrait centers blind (audit 18–19).
 
 ## OPEN
 
-1. Anchor paint for each art body (per-frame `+0`/`+2` words).
+1. Anchor paint for each art body (per-frame `+0`/`+2` words) —
+   screen + paint + flow + live staging DONE (`Screen::Myroom`,
+   `paint_myroom_scene`, all-reject flow, anchor staging + soak
+   tests; clicks land nowhere per P0).
 2. Slot-button selection state + equip semantics.
 3. Bag pager + gift flows (server assists).
 4. TEXT caption sources.

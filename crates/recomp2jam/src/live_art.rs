@@ -24,8 +24,8 @@ use o2jam_render::{Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
 use o2jam_shell::avatar::{
     bind_scene_rects, load_archive_sprite, load_scene_figures, load_scene_figures_for_room,
     load_scene_figures_for_stage, scene_block, scene_sprite_names, AvatarFigure, PlayingArtMode,
-    ScenePlacement, AVI_BLOCK, LANKING_BLOCK, LOADING_SPRITE, PLANET_BLOCK, RESULT_BLOCK,
-    ROOM_BLOCK, WAITING_BLOCK,
+    ScenePlacement, AVI_BLOCK, LANKING_BLOCK, LOADING_SPRITE, MYROOM_BLOCK, PLANET_BLOCK,
+    RESULT_BLOCK, ROOM_BLOCK, WAITING_BLOCK,
 };
 use o2jam_shell::screens::paint::{PLAYING_BLOCK, RESULT_WINLOSE_SPRITE};
 use o2jam_shell::screens::side::SELECT_MUSIC_DIALOG_BLOCK;
@@ -172,6 +172,23 @@ fn stage_interface_scenes(game: &mut ScreenGame, archive: &[u8]) {
     }
     stage_result_scene(game, archive, &list);
     stage_select_dialog_art(game, archive, &list);
+    stage_anchor_scene(game, archive, &list);
+}
+
+/// Stage an unbound block: sprite art plus anchor placements (no
+/// `.bnd` bind file exists, so rects never enter the picture).
+fn stage_anchor_scene(game: &mut ScreenGame, archive: &[u8], list: &ControlList) {
+    use o2jam_shell::avatar::anchor_placements;
+    let Some(block) = scene_block(list, MYROOM_BLOCK) else {
+        return;
+    };
+    let names = scene_sprite_names(block);
+    if names.is_empty() {
+        return;
+    }
+    let figures = load_scene_figures(archive, &names);
+    let placements = anchor_placements(block);
+    game.load_scene(Screen::Myroom, placements, figures);
 }
 
 /// Stage the Result scene: the `STATE_RESULT` block art plus the
@@ -274,8 +291,8 @@ mod live_art_tests {
     use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
 
     use super::{
-        control_list, read_archive, restage_live_playing, stage_bound_block, stage_live_scenes,
-        INTERFACE_ARCHIVE, INTERFACE_LIST, PLAYING_ARCHIVE,
+        control_list, load_scene_figures, read_archive, restage_live_playing, stage_bound_block,
+        stage_live_scenes, INTERFACE_ARCHIVE, INTERFACE_LIST, PLAYING_ARCHIVE,
     };
     use o2jam_shell::avatar::{LANKING_BLOCK, PLANET_BLOCK};
 
@@ -538,6 +555,61 @@ mod live_art_tests {
         assert!(
             buf.iter().any(|pixel| *pixel != 0),
             "lanking staged art paints nothing"
+        );
+    }
+
+    #[test]
+    fn myroom_stages_anchor_art_when_archives_present() {
+        // No bind file exists, so placements carry sprite anchors
+        // instead of rects; the full-bleed state art grows.
+        if skip_without_archives() {
+            return;
+        }
+        let archive = read_archive(INTERFACE_ARCHIVE).expect("guarded archive");
+        let list = control_list(&archive, INTERFACE_LIST).expect("guarded list");
+        let block = o2jam_shell::avatar::scene_block(&list, o2jam_shell::avatar::MYROOM_BLOCK)
+            .expect("myroom block");
+        let names = o2jam_shell::avatar::scene_sprite_names(block);
+        assert!(!names.is_empty());
+        let figures = load_scene_figures(&archive, &names);
+        assert!(figures.contains_key("State_Myroom.ojs"));
+        let placements = o2jam_shell::avatar::anchor_placements(block);
+        assert!(!placements.is_empty());
+    }
+
+    #[test]
+    fn myroom_paints_real_art_when_archives_present() {
+        // Unreachable screens still paint through their scene function
+        // directly (see the planet twin).
+        use o2jam_render::Frame;
+        if skip_without_archives() {
+            return;
+        }
+        let archive = read_archive(INTERFACE_ARCHIVE).expect("guarded archive");
+        let list = control_list(&archive, INTERFACE_LIST).expect("guarded list");
+        let block = o2jam_shell::avatar::scene_block(&list, o2jam_shell::avatar::MYROOM_BLOCK)
+            .expect("myroom block");
+        let names = o2jam_shell::avatar::scene_sprite_names(block);
+        let figures = load_scene_figures(&archive, &names);
+        let placements = o2jam_shell::avatar::anchor_placements(block);
+        let art = o2jam_shell::screens::paint::SceneArt {
+            placements,
+            figures,
+        };
+        let width = usize::try_from(o2jam_render::NATIVE_WIDTH).unwrap_or(1);
+        let height = usize::try_from(o2jam_render::NATIVE_HEIGHT).unwrap_or(1);
+        let mut buf = vec![0u32; width * height];
+        o2jam_shell::screens::paint::paint_myroom_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: width,
+                h: height,
+            },
+            &art,
+        );
+        assert!(
+            buf.iter().any(|pixel| *pixel != 0),
+            "myroom staged art paints nothing"
         );
     }
 

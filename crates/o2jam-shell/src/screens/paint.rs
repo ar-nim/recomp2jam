@@ -30,7 +30,8 @@ use super::super::avatar::{
     anchor_in_frame, paint_behind_placements, paint_foreground_placements, paint_scene_figures,
     scene_block, scene_sprite_names, AvatarFigure, ScenePlacement, AVI_BLOCK, AVI_LOGO_SPRITE,
     CHANNEL_BLOCK, LANKING_BLOCK, LOADING_BLOCK, LOADING_COVER_SPRITE, LOADING_SPRITE,
-    PLANET_BLOCK, RESULT_BLOCK, ROOM_BLOCK, WAITING_BLOCK, WAIT_COVER_SPRITE, WAIT_TEAM_SPRITES,
+    MYROOM_BLOCK, PLANET_BLOCK, RESULT_BLOCK, ROOM_BLOCK, WAITING_BLOCK, WAIT_COVER_SPRITE,
+    WAIT_TEAM_SPRITES,
 };
 use super::super::playing::{HighwayGeometry, PlayingView};
 use super::super::screen::Screen;
@@ -115,6 +116,7 @@ pub const fn scene_index(screen: Screen) -> usize {
         Screen::Result => 6,
         Screen::Planet => 7,
         Screen::Lanking => 8,
+        Screen::Myroom => 9,
     }
 }
 
@@ -168,6 +170,7 @@ pub fn main_scene_sprites(list: &ControlList, screen: Screen) -> Vec<String> {
         Screen::Result => block_sprites(list, RESULT_BLOCK),
         Screen::Planet => block_sprites(list, PLANET_BLOCK),
         Screen::Lanking => block_sprites(list, LANKING_BLOCK),
+        Screen::Myroom => block_sprites(list, MYROOM_BLOCK),
     }
 }
 
@@ -518,6 +521,13 @@ fn paint_channel_pager(frame: &mut Frame<'_>, top: usize, shown: usize, len: usi
         &text,
         pack_xrgb(0xFF, 0xFF, 0xFF),
     );
+}
+
+/// Avatar room: staged art at sprite anchors, flat card fallback.
+/// Slot images name no bodies and captions join nowhere, so figures
+/// alone paint — no slot icons, captions, or selection state.
+pub fn paint_myroom_scene(frame: &mut Frame<'_>, art: &SceneArt) {
+    art.paint_backdrop(frame, Screen::Myroom);
 }
 
 /// Rankings: staged art behind an empty list-view, flat card
@@ -3441,6 +3451,7 @@ pub(crate) fn background_of(screen: Screen) -> u32 {
         Screen::Result => pack_xrgb(0x10, 0x10, 0x08),
         Screen::Planet => pack_xrgb(0x14, 0x0C, 0x1E),
         Screen::Lanking => pack_xrgb(0x0C, 0x14, 0x1E),
+        Screen::Myroom => pack_xrgb(0x10, 0x14, 0x1C),
     }
 }
 
@@ -3452,6 +3463,7 @@ fn title_of(screen: Screen) -> &'static str {
         Screen::Waiting => "WAITING",
         Screen::Planet => "PLANET",
         Screen::Lanking => "LANKING",
+        Screen::Myroom => "MYROOM",
         _ => "",
     }
 }
@@ -3460,7 +3472,12 @@ fn title_of(screen: Screen) -> &'static str {
 pub fn paint_screen(frame: &mut Frame<'_>, screen: Screen) {
     match screen {
         Screen::Avi => paint_avi(frame),
-        Screen::Channel | Screen::Room | Screen::Waiting | Screen::Planet | Screen::Lanking => {
+        Screen::Channel
+        | Screen::Room
+        | Screen::Waiting
+        | Screen::Planet
+        | Screen::Lanking
+        | Screen::Myroom => {
             paint_lobby(frame, background_of(screen));
             paint_title(frame, title_of(screen));
         }
@@ -3533,6 +3550,7 @@ mod paint_tests {
             }
             Screen::Planet => paint_lobby_backdrop(&mut frame, screen, art),
             Screen::Lanking => paint_lobby_backdrop(&mut frame, screen, art),
+            Screen::Myroom => paint_lobby_backdrop(&mut frame, screen, art),
             Screen::Result => paint_result_scene(
                 &mut frame,
                 &ResultPaint {
@@ -3547,6 +3565,24 @@ mod paint_tests {
             ),
         }
         buf
+    }
+
+    #[test]
+    fn myroom_staged_art_paints_at_anchor() {
+        // Synthetic staged figure (red pixel): anchor placements put
+        // art at sprite anchors without any `.bnd`. Unreachable screens
+        // still paint through their scene function directly.
+        let art = corner_art();
+        let mut buf = vec![0u32; 64 * 48];
+        paint_myroom_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 48,
+            },
+            &art,
+        );
+        assert_eq!(buf[0], pack_xrgb(255, 0, 0));
     }
 
     #[test]
@@ -3592,6 +3628,7 @@ mod paint_tests {
             Screen::Result,
             Screen::Planet,
             Screen::Lanking,
+            Screen::Myroom,
         ] {
             let buf = painted(screen, 16, 12);
             assert_eq!(buf[0], background_of(screen), "{screen:?}");
@@ -3633,10 +3670,11 @@ mod paint_tests {
             scene_index(Screen::Result),
             scene_index(Screen::Planet),
             scene_index(Screen::Lanking),
+            scene_index(Screen::Myroom),
         ];
         let mut sorted = indexes;
         sorted.sort_unstable();
-        assert_eq!(sorted, [0, 1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(sorted, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
     }
 
     #[test]

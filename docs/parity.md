@@ -96,7 +96,11 @@ pass is ever claimed):
 
 - `STATE_SHOP` / `STATE_MUSICSHOP` (`CStateShop`/`CStateMShop`,
   `0xA4`/`0x6B`; `Payment` back-ends, `CMyBag`/`CCart`).
-- `STATE_MYROOM` (`0x6A`; `CItemManager`, `CPlayerInfo`).
+- `STATE_MYROOM` (`0x6A`; `CItemManager`, `CPlayerInfo`). Screen,
+  paint (staged anchor art or flat card, no slots/captions), and
+  all-reject flow live; slot selection, equip, pager, gift flows,
+  captions, entry unwired (all OPEN). Bind file declared but absent:
+  art paints at sprite anchors, never rects.
 - `STATE_PLANET` (`CStatePlanet`, `0x11`; BGM `Music/Planet.ojm`;
   quest button commented undecided — no drum backend). Screen,
   paint (staged art or flat card, no captions/cursor/selection),

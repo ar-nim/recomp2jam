@@ -28,6 +28,9 @@ pub enum Screen {
     /// Rankings display (`STATE_LANKING`, `0x37`, no state class).
     /// Spelling follows the shipped block name.
     Lanking,
+    /// Avatar room (`CStateMyroom`, `0x6A`; bind file absent — paints
+    /// at sprite anchors, never rects).
+    Myroom,
 }
 
 /// Rejected screen change.
