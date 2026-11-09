@@ -3853,6 +3853,56 @@ mod game_tests {
     }
 
     #[test]
+    fn bound_room_panels_paint_numbered_rows() {
+        // Live Room stages bound panels yet shows no row ink: narrow
+        // whether the panel path drops rows when data is present.
+        let placements = vec![crate::avatar::ScenePlacement {
+            id: "IDC_BUTTON_SROOM_EXBUTTON1".to_owned(),
+            code: 0,
+            sprite: None,
+            rect: Rect {
+                x: 26,
+                y: 82,
+                w: 288,
+                h: 91,
+            },
+        }];
+        let mut game = ScreenGame::new();
+        game.load_scene(Screen::Room, placements, HashMap::new());
+        game.set_rooms(vec![RoomListEntry {
+            number: 0,
+            state_code: 1,
+            title: "smoke".to_owned(),
+            has_password: false,
+            music_id: 0,
+            difficulty: 0,
+            key_mode: 2,
+            game_mode: 0,
+            speed: 1,
+            capacity: 8,
+            user_count: 1,
+            min_level: 0,
+            max_level: 0,
+            skills: vec![],
+            premium: false,
+            room_type: 0,
+        }]);
+        game.lane_key(3, true);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert!(white_near(&buf, 800, 600, (26, 82)));
+    }
+
+    #[test]
     fn scene_art_backs_waiting_seats() {
         let (placements, figures) = corner_scene_art("Wait_TeamA.ojs");
         let mut game = ScreenGame::new();
