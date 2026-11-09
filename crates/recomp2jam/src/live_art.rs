@@ -24,7 +24,8 @@ use o2jam_render::{Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
 use o2jam_shell::avatar::{
     bind_scene_rects, load_archive_sprite, load_scene_figures, load_scene_figures_for_room,
     load_scene_figures_for_stage, scene_block, scene_sprite_names, AvatarFigure, PlayingArtMode,
-    ScenePlacement, AVI_BLOCK, LOADING_SPRITE, RESULT_BLOCK, ROOM_BLOCK, WAITING_BLOCK,
+    ScenePlacement, AVI_BLOCK, LOADING_SPRITE, PLANET_BLOCK, RESULT_BLOCK, ROOM_BLOCK,
+    WAITING_BLOCK,
 };
 use o2jam_shell::screens::paint::{PLAYING_BLOCK, RESULT_WINLOSE_SPRITE};
 use o2jam_shell::screens::side::SELECT_MUSIC_DIALOG_BLOCK;
@@ -162,6 +163,7 @@ fn stage_interface_scenes(game: &mut ScreenGame, archive: &[u8]) {
         (Screen::Avi, AVI_BLOCK),
         (Screen::Room, ROOM_BLOCK),
         (Screen::Waiting, WAITING_BLOCK),
+        (Screen::Planet, PLANET_BLOCK),
     ] {
         if let Some((placements, figures)) = stage_bound_block(archive, &list, block, None, None) {
             game.load_scene(screen, placements, figures);
@@ -270,7 +272,11 @@ mod live_art_tests {
     use o2jam_render::{Frame, NATIVE_HEIGHT, NATIVE_WIDTH};
     use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
 
-    use super::{read_archive, restage_live_playing, stage_live_scenes, PLAYING_ARCHIVE};
+    use super::{
+        control_list, read_archive, restage_live_playing, stage_bound_block, stage_live_scenes,
+        INTERFACE_ARCHIVE, INTERFACE_LIST, PLAYING_ARCHIVE,
+    };
+    use o2jam_shell::avatar::PLANET_BLOCK;
 
     /// Archives behind the staging (`true` while `install-root` holds
     /// the 7.55 interface art; the suite stays green without it).
@@ -418,6 +424,27 @@ mod live_art_tests {
         stage_live_scenes(&mut game);
         restage_live_playing(&mut game);
         assert_eq!(game.screen(), Screen::Avi);
+    }
+
+    #[test]
+    fn planet_stages_bound_art_when_archives_present() {
+        // Seventeen bound entries pair seventeen `.bnd` rects by code
+        // ordinal (self included, with the miss rect); the grown figures
+        // carry the full-bleed state art. Pixel cover rides the shell
+        // scene painter (covered there); the walk cannot reach Planet
+        // without invented input, so no pixels assert here.
+        if skip_without_archives() {
+            return;
+        }
+        let archive = read_archive(INTERFACE_ARCHIVE).expect("guarded archive");
+        let list = control_list(&archive, INTERFACE_LIST).expect("guarded list");
+        let Some((placements, figures)) =
+            stage_bound_block(&archive, &list, PLANET_BLOCK, None, None)
+        else {
+            panic!("planet: unstaged bound block");
+        };
+        assert_eq!(placements.len(), 17);
+        assert!(figures.contains_key("State_Planet.ojs"));
     }
 
     #[test]
