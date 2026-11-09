@@ -320,6 +320,18 @@ stand-ins until `0x510730`'s row layout is mirrored (the matching OPEN
 sentences in `net-protocol.md`, `rooms.rs`, and `paint.rs` are owned
 by other docs/code and untouched here).
 
+# Channel dialog is a modal over the planet board (2026-11-09 captures)
+
+Live captures (`~/scratch/button-unblock/`, recipe `walk_planet.py`)
+show the channel dialog opening **over the bare planet board** at boot
+and closing via its X button (native (557,195), inside the measured
+X zone x560-620 modulo button chrome) to reveal the emblem strip +
+promo carousel + MENU bar beneath (`docs/planet.md` "Real board
+structure"). The dialog sheet's baked top strip (H/M/C/QUEST/GAME
+icons) mirrors the board's own emblem buttons, which pair exactly to
+the pinned `State_Planet.bnd` rects — DRUM rect hosts the dimmed QUEST
+emblem, FREE rect the dimmed TUTORIAL one.
+
 # Live memory read (2026-11-09) — geometry and host EXE-PINNED
 
 Dynamic read of the live 7.55 process under Wine (winedbg stopped-state

@@ -60,6 +60,41 @@ left-to-right in file order (HARD sits center at x313).
 - `Image/Interface1.opi`: `State_Planet.ojs` + buttons + `State_Planet.bnd`.
 - `Music/Planet.ojm` + `Music/O2PlanetNPC.ojm` (BGM/NPC).
 
+## Real board structure (2026-11-09, live captures) — player report CORROBORATED
+
+Live Wine captures (local-only, `~/scratch/button-unblock/`:
+`planet-dialog.png`, `planet-bare-1/2.png`, `grid-top.png`,
+`w3-list0..19.png`, `exit-state*.png`; repeatable recipe in
+`walk_planet.py`) establish what the first interactive screen actually
+is:
+
+- **The screen is the planet board**: five emblem buttons in the top
+strip, the promotion carousel beneath, and the MENU bar. The channel
+channel-select dialog (`0x8C`, `Dialog_ChannelInfo.ojs` sheet) opens
+**on top** of it at boot (the launcher web bridge preselects
+`My_channel`/`My_planet`) and its X button (native (557,195) — inside
+the measured X zone) closes it to the bare board.
+- **Emblem ↔ `.bnd` rect live confirmation**: the five button rects
+pair to the captured emblems exactly — EASY `(87,32)-(186,144)` holds
+the lit **H badge** `사람손(초급)`; NORMAL `(206,32)-(305,144)` the lit
+**M badge** `고수손(중급)`; HARD `(313,32)-(459,144)` the lit winged
+**G badge** `신의손(고급)`; the DRUM rect `(510,32)-(609,144)` hosts
+the **dimmed QUEST emblem**; the FREE rect `(614,32)-(713,144)` hosts
+the **dimmed TUTORIAL emblem**. The block's CP949 authoring names
+(Hard/Normal/Easy/Free/Drum) are not what the shipped screen shows in
+the rightmost two slots — QUEST/TUTORIAL occupy them, grayed out,
+matching the `미정` (undecided) comments and the P0 unbound rule.
+- **Player report ("5 planets, first 3 active, then paginated
+channels")**: CORROBORATED as screen composition. Per-emblem behavior
+(does each lit emblem open/switch the channel list?) is verified
+separately (`~/scratch/planet-verify/`, report pending).
+- **Power button** (MENU bar, bottom right) opens a quit-confirm
+MESSAGE dialog `게임을 종료하시겠습니까?` with OK/CANCEL
+(`exit-state.png`). Gear (option) and back-arrow destinations stay
+OPEN.
+- **Promo carousel** auto-cycles banners (Halloween NEW ITEM ↔ October
+NEW MUSIC package) with the arrow cells at y511-535.
+
 ## OPEN
 
 1. ~~Rect contents → placements (pairing getter `0x548640`).~~ DONE above.

@@ -95,6 +95,14 @@ screen's dialog is hosted by a **`CStatePlanet`** object mounted at
 `CStateChannel` class because Planet's state object serves the channel
 screen. `DIALOG_CHANNEL_INFO` (`CDChannelInfo`) and `CCBtnChannel` serve
 popups.
+CORRECTION 2026-11-09 (live captures, `docs/planet.md`): the channel
+select presents **as a dialog over the planet emblem board** — the
+first interactive screen is the Planet board (five emblems + promo
+carousel + MENU bar) with the `0x8C` channel dialog mounted on top at
+boot; its X button (native (557,195)) closes to the bare board.
+Whether the state machine nominally marks `0x12` current while the
+dialog is up, or Planet stages the dialog directly, awaits the
+current-state field read (in flight).
 
 ### 7. `STATE_ROOM` — multiplayer lobby (`CStateRoom`)
 Decl `0x36`, 76 entries, `State_Room.bnd` (75 rects). Room list with
@@ -193,7 +201,8 @@ not a screen. Drum entry trigger and exact exit path are unknown.
 
 ```text
 launcher(web login+patch) --cmdline--> CRT entry --> archives --> CState init
-  --> option.ini --> net/session --> STATE_AVI(logo) --> STATE_CHANNEL
+  --> option.ini --> net/session --> STATE_AVI(logo) --> STATE_PLANET
+  board (emblems + promo) with the STATE_CHANNEL dialog mounted on top
   --> STATE_ROOM --create/join--> STATE_WAITING --host start--> LOADING GATE
   --> STATE_PLAYING --> STATE_RESULT --retry--> WAITING | --leave--> ROOM
 side: CHANNEL/ROOM/WAITING <-> SHOP | MYROOM | MUSICSHOP | PLANET | LANKING

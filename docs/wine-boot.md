@@ -1102,3 +1102,24 @@ Play (host): ten `4014` (ten `0FAE`), `4016` (`0FB0`), `4041` (`0FC9`)
 → `4017` (`0FB1` slot 00). Never from the guest in any cycle: `4014`,
 `4016`. Never from the server: `4018`. Exits: `FFF0` on every modal
 Return; `0BBD` never needed.
+
+## Attempt 12 — bare PLANET BOARD reached: channel dialog is a modal child (2026-11-09)
+
+Input was already unblocked (Attempts 9-11: position-verified SendInput
+clicks advance). This pass used the SendInput helper
+(`~/scratch/button-unblock/siclick3.exe.so`, winegcc-built, warps then
+clicks at the cursor) to walk past the channel list: the channel
+dialog's X button at native (557,195) closes the dialog and reveals the
+**bare STATE_PLANET board** underneath — five emblem buttons in the top
+strip, the promotion carousel (auto-cycling banners), and the MENU bar.
+Captures: `~/scratch/button-unblock/planet-{dialog,bare-1,bare-2}.png`,
+`grid-top.png` (emblem strip, 2x with coordinate grid), `w3-list*.png`
+(promo cycle), `exit-state*.png`. The MENU-bar power button opens a
+quit-confirm MESSAGE dialog (`게임을 종료하시겠습니까?`, OK/CANCEL).
+
+Findings land in `docs/planet.md` ("Real board structure"). Session
+notes: the supervisor/drive scripts (`supervisor2.log`, `drive_ui.py`,
+`walk_planet.py`) are repeatable; the winedbg stopped-state read of the
+CState current-state field was interrupted by the known helper-thread
+fault (c0000005 at 0xffbc11b0) and continues under
+`~/scratch/planet-verify/`.
