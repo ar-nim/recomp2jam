@@ -63,6 +63,9 @@ left-to-right in file order (HARD sits center at x313).
 ## OPEN
 
 1. ~~Rect contents → placements (pairing getter `0x548640`).~~ DONE above.
+2. Shell screen + paint + flow edges — DONE (`Screen::Planet`,
+   `paint_planet_scene`, `Channel→Planet`/`Planet→Room`; buttons
+   unwired, clicks land nowhere per P0).
 2. TEXT caption sources (`0X19400007..0B` never code-addressed yet).
 3. FREE/DRUM click behavior (no backend; clicks must stay unbound — P0).
 4. Promotion PLAYSTOP/LEFT/RIGHT semantics.

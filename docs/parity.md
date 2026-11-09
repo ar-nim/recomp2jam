@@ -98,7 +98,10 @@ pass is ever claimed):
   `0xA4`/`0x6B`; `Payment` back-ends, `CMyBag`/`CCart`).
 - `STATE_MYROOM` (`0x6A`; `CItemManager`, `CPlayerInfo`).
 - `STATE_PLANET` (`CStatePlanet`, `0x11`; BGM `Music/Planet.ojm`;
-  quest button commented undecided — no drum backend).
+  quest button commented undecided — no drum backend). Screen,
+  paint (staged art or flat card, no captions/cursor/selection),
+  and flow edges (`Channel→Planet`, `Planet→Room`) live; buttons
+  and BGM unwired, entry UI awaits tab semantics (all OPEN).
 - `STATE_LANKING` (`0x37`; display-only, no state class — like CHANNEL).
 - `STATE_PAYMENT` / `STATE_PAYMENT2` (web billing views).
 - `STATE_TUTORIAL` (stub `0x00`; entry path unknown).

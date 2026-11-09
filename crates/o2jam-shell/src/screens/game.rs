@@ -10,7 +10,7 @@ use super::super::GameLoop;
 use super::paint::{
     battle_verdict, channel_row_hit, channel_viewport, has_room_panels, list_row_hit,
     paint_avi_scene, paint_channel_chat, paint_channel_list, paint_channel_scene,
-    paint_loading_scene, paint_loading_scene_with_status, paint_lobby_backdrop,
+    paint_loading_scene, paint_loading_scene_with_status, paint_lobby_backdrop, paint_planet_scene,
     paint_playing_overlay, paint_result, paint_result_scene, paint_room_list, paint_room_scene,
     paint_screen, paint_waiting_chat, paint_waiting_members, paint_waiting_scene, rect_hit,
     room_panel_hit, scene_index, staged_rect_hit, BattleVerdict, ChannelChatMessage, LoadingStatus,
@@ -155,7 +155,7 @@ pub struct ScreenGame {
     side_origin: Option<Screen>,
     side_placements: Vec<ScenePlacement>,
     side_figures: HashMap<String, AvatarFigure>,
-    scene_art: [Option<SceneArt>; 7],
+    scene_art: [Option<SceneArt>; 8],
 }
 
 /// Key-sound bank plus backend for windowed play.
@@ -1595,6 +1595,17 @@ impl ScreenGame {
             Screen::Waiting => self.paint_waiting(frame),
             Screen::Loading => self.paint_loading(frame),
             Screen::Result => self.paint_result(frame),
+            Screen::Planet => self.paint_planet(frame),
+        }
+    }
+
+    /// Planet: staged art when present, else the flat card. Buttons
+    /// paint without captions, cursor, or selection state (all
+    /// unevidenced — see `paint_planet_scene`).
+    fn paint_planet(&self, frame: &mut Frame<'_>) {
+        match self.scene_art(Screen::Planet) {
+            Some(art) => paint_planet_scene(frame, art),
+            None => paint_screen(frame, Screen::Planet),
         }
     }
 
@@ -2268,6 +2279,9 @@ impl GameLoop for ScreenGame {
             Screen::Room => self.click_room_row(x, y),
             Screen::Waiting => self.click_waiting_button(x, y),
             Screen::Result => self.click_result_button(x, y),
+            // Planet clicks land nowhere: button captions, selection
+            // state, and FREE/DRUM backends are all unevidenced (P0).
+            Screen::Planet => {}
             Screen::Loading | Screen::Playing => {}
         }
     }
@@ -4047,6 +4061,46 @@ mod game_tests {
         );
         assert_eq!(buf[446 * 800], 0);
         assert!(white_near(&buf, 800, 600, (400, 446)));
+    }
+
+    #[test]
+    fn planet_paints_staged_art_at_anchor() {
+        // Synthetic staged figure (red pixel): art paints, nothing else.
+        let (placements, figures) = corner_scene_art("State_Planet.ojs");
+        let mut game = ScreenGame::new();
+        game.load_scene(Screen::Planet, placements, figures);
+        game.lane_key(3, true);
+        game.flow.go(Screen::Planet).unwrap();
+        assert_eq!(game.screen(), Screen::Planet);
+        let mut buf = vec![0u32; 64 * 48];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 48,
+            },
+            0,
+        );
+        assert_eq!(buf[0], pack_xrgb(255, 0, 0));
+    }
+
+    #[test]
+    fn planet_fallback_paints_card_and_title() {
+        // No staged art: flat card plus the placeholder title.
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        game.flow.go(Screen::Planet).unwrap();
+        let mut buf = vec![0u32; 64 * 48];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 48,
+            },
+            0,
+        );
+        assert_eq!(buf[0], background_of(Screen::Planet));
+        assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
     }
 
     #[test]

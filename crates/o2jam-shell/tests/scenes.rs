@@ -371,8 +371,11 @@ fn flow_rejects_jumps_the_client_never_makes() {
     let illegal = [
         (Screen::Avi, Screen::Playing),
         (Screen::Avi, Screen::Room),
+        (Screen::Avi, Screen::Planet),
         (Screen::Channel, Screen::Playing),
         (Screen::Room, Screen::Loading),
+        (Screen::Planet, Screen::Playing),
+        (Screen::Planet, Screen::Waiting),
         (Screen::Loading, Screen::Result),
         (Screen::Playing, Screen::Waiting),
         (Screen::Result, Screen::Loading),
@@ -391,8 +394,10 @@ fn flow_allows_every_documented_edge() {
     let journey = [
         (Screen::Avi, Screen::Channel),
         (Screen::Channel, Screen::Room),
+        (Screen::Channel, Screen::Planet),
         (Screen::Room, Screen::Waiting),
         (Screen::Room, Screen::Channel),
+        (Screen::Planet, Screen::Room),
         (Screen::Waiting, Screen::Loading),
         (Screen::Waiting, Screen::Room),
         (Screen::Loading, Screen::Playing),
@@ -401,7 +406,7 @@ fn flow_allows_every_documented_edge() {
         (Screen::Result, Screen::Waiting),
         (Screen::Result, Screen::Room),
     ];
-    assert_eq!(journey.len(), 11);
+    assert_eq!(journey.len(), 13);
     for (from, to) in journey {
         assert!(can_enter(from, to), "{from:?} -> {to:?}");
     }

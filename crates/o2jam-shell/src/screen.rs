@@ -23,6 +23,8 @@ pub enum Screen {
     Playing,
     /// Results (`CStateResult`).
     Result,
+    /// Solo missions (`CStatePlanet`, `0x11`).
+    Planet,
 }
 
 /// Rejected screen change.
@@ -43,13 +45,15 @@ pub struct BadTransition {
     reason = "source-grouped transition table"
 )]
 pub const fn can_enter(from: Screen, to: Screen) -> bool {
-    use Screen::{Avi, Channel, Loading, Playing, Result, Room, Waiting};
+    use Screen::{Avi, Channel, Loading, Planet, Playing, Result, Room, Waiting};
     matches!(
         (from, to),
         (Avi, Channel)
             | (Channel, Room)
+            | (Channel, Planet)
             | (Room, Waiting)
             | (Room, Channel)
+            | (Planet, Room)
             | (Waiting, Loading)
             | (Waiting, Room)
             | (Loading, Playing)

@@ -29,8 +29,8 @@ use std::collections::HashMap;
 use super::super::avatar::{
     anchor_in_frame, paint_behind_placements, paint_foreground_placements, paint_scene_figures,
     scene_block, scene_sprite_names, AvatarFigure, ScenePlacement, AVI_BLOCK, AVI_LOGO_SPRITE,
-    CHANNEL_BLOCK, LOADING_BLOCK, LOADING_COVER_SPRITE, LOADING_SPRITE, RESULT_BLOCK, ROOM_BLOCK,
-    WAITING_BLOCK, WAIT_COVER_SPRITE, WAIT_TEAM_SPRITES,
+    CHANNEL_BLOCK, LOADING_BLOCK, LOADING_COVER_SPRITE, LOADING_SPRITE, PLANET_BLOCK, RESULT_BLOCK,
+    ROOM_BLOCK, WAITING_BLOCK, WAIT_COVER_SPRITE, WAIT_TEAM_SPRITES,
 };
 use super::super::playing::{HighwayGeometry, PlayingView};
 use super::super::screen::Screen;
@@ -113,6 +113,7 @@ pub const fn scene_index(screen: Screen) -> usize {
         Screen::Loading => 4,
         Screen::Playing => 5,
         Screen::Result => 6,
+        Screen::Planet => 7,
     }
 }
 
@@ -164,6 +165,7 @@ pub fn main_scene_sprites(list: &ControlList, screen: Screen) -> Vec<String> {
         Screen::Loading => block_or_single(list, LOADING_BLOCK, LOADING_SPRITE),
         Screen::Playing => block_sprites(list, PLAYING_BLOCK),
         Screen::Result => block_sprites(list, RESULT_BLOCK),
+        Screen::Planet => block_sprites(list, PLANET_BLOCK),
     }
 }
 
@@ -514,6 +516,14 @@ fn paint_channel_pager(frame: &mut Frame<'_>, top: usize, shown: usize, len: usi
         &text,
         pack_xrgb(0xFF, 0xFF, 0xFF),
     );
+}
+
+/// Planet: staged solo-mission art behind uncaptioned buttons, flat
+/// card fallback. Difficulty/mode captions are unevidenced (the TEXT
+/// entries name no art and no setter join pins them), so no labels,
+/// no cursor, no selection state.
+pub fn paint_planet_scene(frame: &mut Frame<'_>, art: &SceneArt) {
+    art.paint_backdrop(frame, Screen::Planet);
 }
 
 /// One channel row: `gateway/channel population/capacity` (both ids
@@ -3420,6 +3430,7 @@ pub(crate) fn background_of(screen: Screen) -> u32 {
         Screen::Loading => pack_xrgb(0x18, 0x18, 0x18),
         Screen::Playing => pack_xrgb(0x0A, 0x0A, 0x0A),
         Screen::Result => pack_xrgb(0x10, 0x10, 0x08),
+        Screen::Planet => pack_xrgb(0x14, 0x0C, 0x1E),
     }
 }
 
@@ -3429,6 +3440,7 @@ fn title_of(screen: Screen) -> &'static str {
         Screen::Channel => "CHANNEL",
         Screen::Room => "ROOM",
         Screen::Waiting => "WAITING",
+        Screen::Planet => "PLANET",
         _ => "",
     }
 }
@@ -3437,7 +3449,7 @@ fn title_of(screen: Screen) -> &'static str {
 pub fn paint_screen(frame: &mut Frame<'_>, screen: Screen) {
     match screen {
         Screen::Avi => paint_avi(frame),
-        Screen::Channel | Screen::Room | Screen::Waiting => {
+        Screen::Channel | Screen::Room | Screen::Waiting | Screen::Planet => {
             paint_lobby(frame, background_of(screen));
             paint_title(frame, title_of(screen));
         }
@@ -3508,6 +3520,7 @@ mod paint_tests {
                 paint_screen(&mut frame, screen);
                 paint_playing_overlay(&mut frame, art);
             }
+            Screen::Planet => paint_lobby_backdrop(&mut frame, screen, art),
             Screen::Result => paint_result_scene(
                 &mut frame,
                 &ResultPaint {
@@ -3586,10 +3599,11 @@ mod paint_tests {
             scene_index(Screen::Loading),
             scene_index(Screen::Playing),
             scene_index(Screen::Result),
+            scene_index(Screen::Planet),
         ];
         let mut sorted = indexes;
         sorted.sort_unstable();
-        assert_eq!(sorted, [0, 1, 2, 3, 4, 5, 6]);
+        assert_eq!(sorted, [0, 1, 2, 3, 4, 5, 6, 7]);
     }
 
     #[test]
