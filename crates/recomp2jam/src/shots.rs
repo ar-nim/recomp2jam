@@ -18,11 +18,7 @@ use o2jam_shell::avatar::{
     AvatarFigure, PlayingArtMode, ScenePlacement, AVI_BLOCK, LOADING_SPRITE, PLANET_BLOCK,
     RESULT_BLOCK, ROOM_BLOCK, WAITING_BLOCK,
 };
-use o2jam_shell::screens::paint::{
-    CHANNEL_BAR_SPRITE, CHANNEL_COUNT_SPRITE, CHANNEL_DIALOG_SPRITE, CHANNEL_DIGIT_SPRITE,
-    CHANNEL_ENTER_SPRITE, CHANNEL_SCROLL_BAR_SPRITE, CHANNEL_SCROLL_DOWN_SPRITE,
-    CHANNEL_SCROLL_UP_SPRITE, DIALOG_BAR_SPRITE, PLAYING_BLOCK, RESULT_WINLOSE_SPRITE,
-};
+use o2jam_shell::screens::paint::{PLAYING_BLOCK, RESULT_WINLOSE_SPRITE};
 use o2jam_shell::screens::side::{
     SideScreen, PAYMENT2_BLOCK, PAYMENT_BLOCK, SELECT_MUSIC_DIALOG_BLOCK,
     TUTORIAL_BACKGROUND_SPRITE,
@@ -417,40 +413,11 @@ fn stage_single_sprite(
     Some((full_canvas(&names), figures))
 }
 
-/// Stage the code-mounted channel dialog art: the
-/// `Dialog_ChannelInfo.ojs` body at its record anchor (the
-/// reference-measured panel band falls inside the 800x466 body at
-/// (0,0)) plus the `ChannelInfo_CH_Enter.ojs` frames at the
-/// reference-measured faces. `STATE_CHANNEL` itself names zero
-/// sprites (verified), so no placements stage — the painter mounts
-/// the figures (pinned no-fill rule per `docs/channel-fill.md`).
-fn stage_channel_dialog(game: &mut ScreenGame, archive: &[u8]) {
-    // Code-mounted dialog art (`Dialog_ChannelInfo` block names the
-    // bodies; the block records zero rects because the bnd applies at
-    // dialog build — `docs/channel-fill.md` "METHOD CORRECTION
-    // 2026-11-10"). The painter mounts each figure at its bnd-derived
-    // origin (bar at row origin +1, bar-local children, scroll bodies
-    // on the track); absent figures fall back to today's stand-ins.
-    // The hover highlight bar (`Dialog_ChannelSelectBar.ojs`, 348x44)
-    // is code-mounted too — live-confirmed sprite record at
-    // dialog+0x8C (2026-11-09) — and paints at the hovered row's rect.
-    let names = vec![
-        CHANNEL_DIALOG_SPRITE.to_owned(),
-        DIALOG_BAR_SPRITE.to_owned(),
-        CHANNEL_ENTER_SPRITE.to_owned(),
-        CHANNEL_BAR_SPRITE.to_owned(),
-        CHANNEL_DIGIT_SPRITE.to_owned(),
-        CHANNEL_COUNT_SPRITE.to_owned(),
-        CHANNEL_SCROLL_BAR_SPRITE.to_owned(),
-        CHANNEL_SCROLL_UP_SPRITE.to_owned(),
-        CHANNEL_SCROLL_DOWN_SPRITE.to_owned(),
-    ];
-    let figures = load_scene_figures(archive, &names);
-    if figures.is_empty() {
-        return;
-    }
-    game.load_scene(Screen::Channel, Vec::new(), figures);
-}
+/// Stage the code-mounted channel dialog art (sheet, hover bar, row
+/// bar, digit/count plates, enter faces, scroll bodies) through the
+/// shared [`live_art::stage_channel_dialog`] — one implementation for
+/// the shots walk and the live window.
+pub(crate) use crate::live_art::stage_channel_dialog;
 
 /// Stage Interface-archive scenes; each scene stages independently
 /// so one bad block never blanks the rest. Channel stages no block

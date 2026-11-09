@@ -66,6 +66,14 @@ impl WindowHandler {
                 ) {
                     return;
                 }
+                // The framebuffer words are XRGB (alpha byte 0, see
+                // `pack_xrgb`); compositors that honor the alpha byte
+                // (Wayland ARGB shm) would blend the window with the
+                // desktop — white speckles, transparent letterbox bars.
+                // Force every presented pixel opaque.
+                for word in buffer.iter_mut() {
+                    *word |= 0xFF00_0000;
+                }
                 if let Err(error) = buffer.present() {
                     self.paint_error = Some(anyhow::anyhow!("present failed: {error:?}"));
                     event_loop.exit();

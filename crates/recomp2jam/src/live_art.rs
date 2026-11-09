@@ -27,7 +27,11 @@ use o2jam_shell::avatar::{
     ScenePlacement, AVI_BLOCK, LANKING_BLOCK, LOADING_SPRITE, MUSICSHOP_BLOCK, MYROOM_BLOCK,
     PLANET_BLOCK, RESULT_BLOCK, ROOM_BLOCK, SHOP_BLOCK, WAITING_BLOCK,
 };
-use o2jam_shell::screens::paint::{PLAYING_BLOCK, RESULT_WINLOSE_SPRITE};
+use o2jam_shell::screens::paint::{
+    CHANNEL_BAR_SPRITE, CHANNEL_COUNT_SPRITE, CHANNEL_DIALOG_SPRITE, CHANNEL_DIGIT_SPRITE,
+    CHANNEL_ENTER_SPRITE, CHANNEL_SCROLL_BAR_SPRITE, CHANNEL_SCROLL_DOWN_SPRITE,
+    CHANNEL_SCROLL_UP_SPRITE, DIALOG_BAR_SPRITE, PLAYING_BLOCK, RESULT_WINLOSE_SPRITE,
+};
 use o2jam_shell::screens::side::SELECT_MUSIC_DIALOG_BLOCK;
 use o2jam_shell::{PlaySkin, Screen, ScreenGame};
 
@@ -175,6 +179,35 @@ fn stage_interface_scenes(game: &mut ScreenGame, archive: &[u8]) {
     stage_result_scene(game, archive, &list);
     stage_select_dialog_art(game, archive, &list);
     stage_anchor_scene(game, archive, &list);
+    stage_channel_dialog(game, archive);
+}
+
+/// Stage the code-mounted channel dialog art (the 0x8C block names the
+/// bodies; the block records zero rects because the bnd applies at
+/// dialog build — `docs/channel-fill.md` "METHOD CORRECTION
+/// 2026-11-10"). The painter mounts each figure at its bnd-derived
+/// origin (bar at row origin +1, bar-local children, scroll bodies on
+/// the track); absent figures fall back to the labeled stand-ins.
+/// The hover highlight bar (`Dialog_ChannelSelectBar.ojs`, 348x44) is
+/// code-mounted too — live-confirmed sprite record at dialog+0x8C
+/// (2026-11-09) — and paints at the hovered row's rect.
+pub(crate) fn stage_channel_dialog(game: &mut ScreenGame, archive: &[u8]) {
+    let names = vec![
+        CHANNEL_DIALOG_SPRITE.to_owned(),
+        DIALOG_BAR_SPRITE.to_owned(),
+        CHANNEL_ENTER_SPRITE.to_owned(),
+        CHANNEL_BAR_SPRITE.to_owned(),
+        CHANNEL_DIGIT_SPRITE.to_owned(),
+        CHANNEL_COUNT_SPRITE.to_owned(),
+        CHANNEL_SCROLL_BAR_SPRITE.to_owned(),
+        CHANNEL_SCROLL_UP_SPRITE.to_owned(),
+        CHANNEL_SCROLL_DOWN_SPRITE.to_owned(),
+    ];
+    let figures = load_scene_figures(archive, &names);
+    if figures.is_empty() {
+        return;
+    }
+    game.load_scene(Screen::Channel, Vec::new(), figures);
 }
 
 /// Stage an unbound block: sprite art plus anchor placements (no
