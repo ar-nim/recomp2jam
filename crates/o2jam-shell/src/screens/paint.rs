@@ -3320,18 +3320,30 @@ pub fn paint_loading_scene(frame: &mut Frame<'_>, art: &SceneArt) {
 /// Battle verdict art mounted by the result builder `FUN_004c2390`
 /// (file `0xc2390`): `StateResult_Top.ojs` plus
 /// `StateResult_Bottom.ojs` plus `Result_WinLose.ojs` (file `0x24a35c`).
-/// The play-scene winner banner `Winner_image.ojs` (file `0x24b014`)
-/// names the same verdict; the result scene surfaces both verdict arts.
-/// Winner is rank 1 by team score only (`RoomTeams::winner`); team
-/// totals stay server-side (per-member 4014/4016). The grade plate
-/// runs on the pinned threshold table ([`grade_frame`]).
+/// The result scene paints the `Result_WinLose.ojs` banner only
+/// (frame from [`winlose_frame`], `FUN_004c3120`); the play-scene
+/// `Winner_image.ojs` banner is a separate art — never re-read in
+/// the result region (no rank or role visibility toggle exists on
+/// its controls) and its entry rides unloaded in `STATE_PLAYING`
+/// (decl `0xE6`, see [`WINNER_IMAGE_SPRITE`]). Winner is rank 1 by
+/// team score only (`RoomTeams::winner`); team totals stay
+/// server-side (per-member 4014/4016). The grade plate runs on the
+/// pinned threshold table ([`grade_frame`]).
 pub const RESULT_TOP_SPRITE: &str = "StateResult_Top.ojs";
 /// Bottom half mounted by `FUN_004c2390` (file `0xc2390`).
 pub const RESULT_BOTTOM_SPRITE: &str = "StateResult_Bottom.ojs";
 /// Win/lose verdict mounted by `FUN_004c2390` (file `0xc2390`).
 pub const RESULT_WINLOSE_SPRITE: &str = "Result_WinLose.ojs";
-/// Winner banner from `STATE_PLAYING` (file `0x24b014`), surfaced on
-/// the result scene as the same rank-1 verdict.
+/// Winner banner from `STATE_PLAYING` (file `0x24b014`): control
+/// `IDC_IMAGE_SPLAY_WINNER` (entry 230, code `0x1B500012`). The
+/// decl (`0xE6`) loads entries 0–229 only, so the entry rides
+/// unloaded and the sprite never stages in the Playing scene; its
+/// `State_Playing_network.bnd` rect 18 (`(265,472)-(389,482)`) is
+/// the exit-path variant's placement. Frames anchor `(264,454)`
+/// 80×13 (both images; `Challenger_image.ojs` mirrors at
+/// `(455,454)`). Kept as the documented-unstaged name — the
+/// shell paints it nowhere (a never-staged name is pinned so a
+/// future network-variant staging cannot collide silently).
 pub const WINNER_IMAGE_SPRITE: &str = "Winner_image.ojs";
 /// Grade plate bound by `STATE_RESULT` rect 7
 /// (`IDC_IMAGE_SRESULT_RANKINGFIELD`, `Result_Imgs_Rank.ojs`): eight
@@ -3483,6 +3495,15 @@ const GRADE_THRESHOLDS: [(f64, u8); 6] = [
 /// [`o2jam_game::Score::grade_numerator`] over pinned
 /// [`o2jam_game::grade_max_reference`]) and selects through this
 /// table at Result paint.
+///
+/// Grade LETTERS stay OPEN: the exe grade strings (`ALL COMBO`,
+/// `COOL 95%`, …) carry zero `.text` references (full-image LE32
+/// scan, `docs/dialog-strings.md`) — result grades are `.ojs`-driven
+/// (the plate frames above), so no letter mapping is painted and
+/// the select-music GRADE cell stays blank. Named next step: a
+/// live rig capture of the grade plate at controlled score bands
+/// (or a code consumer for the strings) before any letter is
+/// invented.
 #[must_use]
 pub fn grade_frame(ratio: f64, combo_at_top: bool, score_at_max: bool) -> u8 {
     let mut grade = 0;
@@ -3611,6 +3632,28 @@ const RESULT_COMBO_Y: i32 = 130;
 const RESULT_SCORE_X: i32 = 605;
 /// Total score row y.
 const RESULT_SCORE_Y: i32 = 533;
+/// `State_Result.bnd` (7 rects, parsed from 7.55 `Interface1.opi`;
+/// rect # + corners, paired by code ordinal `(code & 0xFFF) - 1`):
+///
+/// | # | corners | control |
+/// |---|---|---|
+/// | 1 | (0,0)-(800,600) | `IDC_BACK_SRESULT_1` `State_Result.ojs` |
+/// | 2 | (29,316)-(58,406) | `IDC_IMAGE_SRESULT_RANKTAPFIELD` |
+/// | 3 | (29,406)-(58,496) | `IDC_IMAGE_SRESULT_RESULTTAPFIELD` |
+/// | 4 | (0,0)-(800,600) | `IDC_IMAGE_SRESULT_RESULTTAP` `Result_EachResult.ojs` |
+/// | 5 | (711,569)-(794,593) | `IDC_BUTTON_SRESULT_BACK` |
+/// | 6 | (625,570)-(708,592) | `IDC_BUTTON_SRESULT_RETRY` |
+/// | 7 | (395,531)-(474,572) | `IDC_IMAGE_SRESULT_RANKINGFIELD` `Result_Imgs_Rank.ojs` |
+///
+/// Negative evidence: no rect covers any numeric readout — the
+/// counts/combos/score rows below are exe-written GDI text (top
+/// painter `FUN_004c38a0`, file `0xc38a0`: GDI word fields through
+/// the `%5d`/`%4d`/`%3d` width wrapper plus the `%8d` total, and
+/// the two 8-cell sprite fields through the 24 px-pitch digit
+/// painters with the digit-`1` +5 kern), all re-verified with the
+/// `rea` static pass (digit-writer calls with the constants
+/// above). So the `RESULT_*` anchors stay exe-pinned, never
+/// bnd-sourced; only the buttons and the grade plate have rects.
 /// Pinned RETRY button rect (`docs/cresult-anchors.md` rect 6,
 /// `IDC_BUTTON_SRESULT_RETRY`, (625,570)-(708,592)): the click
 /// fallback while staged art binds no such control.
@@ -6010,6 +6053,54 @@ mod paint_tests {
             Some(3)
         );
         assert_eq!(winlose_frame(ResultVerdict::Battle(None)), None);
+    }
+
+    #[test]
+    fn result_fallback_rects_equal_the_state_result_bind_rects() {
+        // The `State_Result.bnd` 7-rect walk (7.55 `Interface1.opi`;
+        // rect # + corners in the `RESULT_RETRY_RECT` doc): the
+        // button fallbacks are rects 5/6 verbatim.
+        assert_eq!(
+            RESULT_RETRY_RECT,
+            Rect {
+                x: 625,
+                y: 570,
+                w: 83,
+                h: 22
+            }
+        );
+        assert_eq!(
+            RESULT_BACK_RECT,
+            Rect {
+                x: 711,
+                y: 569,
+                w: 83,
+                h: 24
+            }
+        );
+        // The grade plate rides rect 7 (`IDC_IMAGE_SRESULT_RANKINGFIELD`):
+        // every frame anchors at its origin (395,531).
+        let plate = Rect {
+            x: 395,
+            y: 531,
+            w: 79,
+            h: 41,
+        };
+        assert_eq!((plate.x, plate.y), (395, 531));
+        assert_eq!(RESULT_RETRY_ID, "IDC_BUTTON_SRESULT_RETRY");
+        assert_eq!(RESULT_BACK_ID, "IDC_BUTTON_SRESULT_BACK");
+    }
+
+    #[test]
+    fn winner_image_never_joins_the_result_frame_bodies() {
+        // `Winner_image.ojs` is play-scene network-variant art (entry
+        // 230 rides unloaded; never re-read in the result region):
+        // only the verdict banner and the grade plate are frame
+        // bodies, so winner art cannot bleed through the backdrop.
+        assert!(RESULT_FRAME_BODIES.contains(&RESULT_WINLOSE_SPRITE));
+        assert!(RESULT_FRAME_BODIES.contains(&RESULT_RANK_SPRITE));
+        assert!(!RESULT_FRAME_BODIES.contains(&WINNER_IMAGE_SPRITE));
+        assert!(!result_loader_sprites().contains(&WINNER_IMAGE_SPRITE));
     }
 
     /// Banner art at the pinned image anchors: images 0/1 at (100,

@@ -9,7 +9,7 @@
 //! native 800x600 (`docs/bnd-semantics.md`, `docs/bnd-audit.md`), via
 //! the shared [`scale_rect_to_frame`] scaler.
 
-use crate::avatar::{strided_sprite55, AvatarFigure, FigureLayer};
+use crate::avatar::{strided_sprite55, AvatarFigure, FigureLayer, ScenePlacement};
 use o2jam_game::{
     lane_effect::{lane_map_for_modifier_byte, SkillRing},
     CoolStreak, HoldSpan, HoldState, Judgement, LaneMap, LifeBar, LongNoteBonus, MeasureReshuffle,
@@ -265,6 +265,17 @@ pub const COMBO_FONT_SPRITE: &str = "Note_ComboNum.ojs";
 pub const COMBO_GLOW_SPRITE: &str = "Note_Combo4.ojt";
 /// Combo-digit row above the judgement line: the big photo digits
 /// (`docs/playing-reference.md`) and their glow band center here.
+/// OPEN (geometry-audit 31): the combo and long-combo digit controls
+/// (`IDC_IMAGE_SPLAY_NOTECOMBONUM1..4` / `…_LNCOMBONUM1..4`, codes
+/// `0x1B500088`–`0x1B500091`) are ControlList entries 136–145 — past
+/// the 17 `State_Playing.bnd` rects, so no parsed `.bnd` rect pairs
+/// them (all-zero rect) — and every digit frame anchors `(0,0)`, so
+/// the exe draw point is code-driven. `Scroe.ojs` / `PlayTimeNum.ojs`
+/// are named by no entry at all (code-loaded through the playing
+/// applier). This offset is photo-placed, not file geometry.
+/// Named next step: a `rea` static trace of the digit-frame setters
+/// for codes `0x1B500088`–`0x1B500092` to recover the code constants
+/// before re-anchoring — never a literal.
 const COMBO_ROW_ABOVE_LINE: i32 = 24;
 /// Staged play-time-digit body: `PlayTimeNum.ojs`, ten raw 27x21
 /// frames in digit order 0..=9 (archive slot 96).
@@ -1697,9 +1708,27 @@ impl LivePlay {
         avatar: Option<&AvatarFigure>,
         now_ms: u64,
     ) {
+        self.paint_avatar_scene_with_placements(frame, avatar, now_ms, None);
+    }
+
+    /// [`paint_avatar_scene`](Self::paint_avatar_scene) with the
+    /// bound strip fields read from staged placements.
+    pub fn paint_avatar_scene_with_placements(
+        &self,
+        frame: &mut Frame<'_>,
+        avatar: Option<&AvatarFigure>,
+        now_ms: u64,
+        placements: Option<&[ScenePlacement]>,
+    ) {
         self.paint_peer_bars(frame);
-        self.scene
-            .paint(frame, avatar, &self.score, now_ms, self.song_end_ms());
+        self.scene.paint_with_placements(
+            frame,
+            avatar,
+            &self.score,
+            now_ms,
+            self.song_end_ms(),
+            placements,
+        );
         self.paint_long_combo_caption(frame);
     }
 
@@ -2540,17 +2569,245 @@ const TALLY_TIME_NATIVE: Rect = Rect {
 };
 /// Strip speed label origin: the bound `IDC_TEXT_SPLAY_SPEED` rect
 /// (487,579) 28x9 (`State_Playing.bnd` rect[15]; the photo's `X3.5`).
+/// No-archive fallback only — the painter prefers the parsed
+/// placement ([`PlayingBoundFields`]).
 const TALLY_SPEED_NATIVE: (i32, i32) = (487, 579);
 /// Strip song-title origin: the bound `IDC_TEXT_SPLAY_TITLE` rect
-/// (520,579) 146x9 (`State_Playing.bnd` rect[6]).
+/// (520,579) 146x9 (`State_Playing.bnd` rect[6]). No-archive
+/// fallback only (see above).
 const TALLY_TITLE_NATIVE: (i32, i32) = (520, 579);
 /// Strip volume origin: the bound `IDC_TEXT_SPLAY_VLOLUME` rect
 /// (705,579) 44x9 (`State_Playing.bnd` rect[16]; the photo's
-/// `VOL 58%`).
+/// `VOL 58%`). No-archive fallback only (see above).
 const TALLY_VOLUME_NATIVE: (i32, i32) = (705, 579);
 /// EXIT readout on the native canvas: staged `Playing_Exit.ojs`
 /// anchor `(751,554)` (archive slot 92, 42x42 button art).
+/// No-archive fallback only (see above).
 const TALLY_EXIT_NATIVE: (i32, i32) = (751, 554);
+/// Control ids of the `EXIT`..`VOLUME` run (`State_Playing.bnd`
+/// rects 1..=17). Lookup is by id, never by code: run codes
+/// collide after the subset window (both `IDC_TEXT_SPLAY_LEVEL1`
+/// and `IDC_TEXT_SPLAY_VLOLUME` carry ordinal 17), so only the
+/// verified positional window (entries 213–229) pairs them.
+const FIELD_EXIT_ID: &str = "IDC_BUTTON_SPLAY_EXIT";
+const FIELD_CHAT_WINDOW_ID: &str = "IDC_IMAGE_SPLAY_CHATWINDOW";
+const FIELD_TIMEBAR_ID: &str = "IDC_IMAGE_SPLAY_TIMEBAR";
+const FIELD_BUFFER1_ID: &str = "IDC_IMAGE_SPLAY_BUFFER1";
+const FIELD_BUFFER2_ID: &str = "IDC_IMAGE_SPLAY_BUFFER2";
+const FIELD_CHAT_EDIT_ID: &str = "IDC_EDIT_SPLAY_CHAT";
+const FIELD_TITLE_ID: &str = "IDC_TEXT_SPLAY_TITLE";
+const FIELD_WAITUSER_TEXT_IDS: [&str; 7] = [
+    "IDC_IMAGE_SPLAY_WAITUSER_TEXT1",
+    "IDC_IMAGE_SPLAY_WAITUSER_TEXT2",
+    "IDC_IMAGE_SPLAY_WAITUSER_TEXT3",
+    "IDC_IMAGE_SPLAY_WAITUSER_TEXT4",
+    "IDC_IMAGE_SPLAY_WAITUSER_TEXT5",
+    "IDC_IMAGE_SPLAY_WAITUSER_TEXT6",
+    "IDC_IMAGE_SPLAY_WAITUSER_TEXT7",
+];
+const FIELD_HOTTIME_ID: &str = "IDC_IMAGE_SPLAY_HOTTIME_ALRAM";
+const FIELD_SPEED_ID: &str = "IDC_TEXT_SPLAY_SPEED";
+const FIELD_VOLUME_ID: &str = "IDC_TEXT_SPLAY_VLOLUME";
+/// `State_Playing.bnd` rects of the `EXIT`..`VOLUME` run, exactly as
+/// parsed from 7.55 `Playing1.opi` (17 rects, corners `x1,y1`-`x2,y2`;
+/// paired by the positional window entries 213–229, per
+/// `docs/bnd-semantics.md`). This is the no-archive fallback table:
+/// staged art always prefers the parsed placements
+/// ([`PlayingBoundFields::from_placements`]), so these literals only
+/// pin the art-less layout (audit-DONE pattern). No digit-font
+/// control is in this run — the combo / word / long-note / jam /
+/// score / play-time digits are unbound (see
+/// [`COMBO_ROW_ABOVE_LINE`]), and the tier-count grid below is
+/// photo-measured, not file geometry (OPEN, `docs/playing-reference.md`).
+///
+/// | # | corners | control |
+/// |---|---|---|
+/// | 1 | (751,554)-(793,596) | `IDC_BUTTON_SPLAY_EXIT` |
+/// | 2 | (274,9)-(524,86) | `IDC_IMAGE_SPLAY_CHATWINDOW` |
+/// | 3 | (489,556)-(743,566) | `IDC_IMAGE_SPLAY_TIMEBAR` |
+/// | 4 | (200,3)-(228,31) | `IDC_IMAGE_SPLAY_BUFFER1` |
+/// | 5 | (200,34)-(227,61) | `IDC_IMAGE_SPLAY_BUFFER2` |
+/// | 6 | (270,87)-(518,97) | `IDC_EDIT_SPLAY_CHAT` |
+/// | 7 | (520,579)-(666,588) | `IDC_TEXT_SPLAY_TITLE` |
+/// | 8–14 | (660,11+15i)-(787,23+15i) | `IDC_IMAGE_SPLAY_WAITUSER_TEXT1..7` |
+/// | 15 | (710,21)-(776,87) | `IDC_IMAGE_SPLAY_HOTTIME_ALRAM` |
+/// | 16 | (487,579)-(515,588) | `IDC_TEXT_SPLAY_SPEED` |
+/// | 17 | (705,579)-(749,588) | `IDC_TEXT_SPLAY_VLOLUME` |
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlayingBoundFields {
+    /// EXIT button rect (rect 1).
+    pub exit: Rect,
+    /// Chat window rect (rect 2).
+    pub chat_window: Rect,
+    /// TIME progress bar rect (rect 3).
+    pub time_bar: Rect,
+    /// BP buffer gauge rects (rects 4–5).
+    pub buffer1: Rect,
+    /// BP buffer gauge rects (rects 4–5).
+    pub buffer2: Rect,
+    /// Chat edit rect (rect 6).
+    pub chat_edit: Rect,
+    /// Song-title text rect (rect 7).
+    pub title: Rect,
+    /// Member text rects (rects 8–14). Sprite-less controls: the
+    /// rects stage, the strings have no pinned wire source, so
+    /// nothing paints them (OPEN strings — never invented).
+    pub waituser_texts: [Rect; 7],
+    /// HotTime alarm art rect (rect 15).
+    pub hottime: Rect,
+    /// Speed text rect (rect 16).
+    pub speed: Rect,
+    /// Volume text rect (rect 17).
+    pub volume: Rect,
+}
+
+impl PlayingBoundFields {
+    /// No-archive fallback: the parsed `State_Playing.bnd` rects
+    /// verbatim (see the table above).
+    #[must_use]
+    pub fn fallback() -> Self {
+        Self {
+            exit: Rect {
+                x: TALLY_EXIT_NATIVE.0,
+                y: TALLY_EXIT_NATIVE.1,
+                w: 42,
+                h: 42,
+            },
+            chat_window: Rect {
+                x: 274,
+                y: 9,
+                w: 250,
+                h: 77,
+            },
+            time_bar: TALLY_TIME_NATIVE,
+            buffer1: Rect {
+                x: 200,
+                y: 3,
+                w: 28,
+                h: 28,
+            },
+            buffer2: Rect {
+                x: 200,
+                y: 34,
+                w: 27,
+                h: 27,
+            },
+            chat_edit: Rect {
+                x: 270,
+                y: 87,
+                w: 248,
+                h: 10,
+            },
+            title: Rect {
+                x: TALLY_TITLE_NATIVE.0,
+                y: TALLY_TITLE_NATIVE.1,
+                w: 146,
+                h: 9,
+            },
+            waituser_texts: [
+                Rect {
+                    x: 660,
+                    y: 11,
+                    w: 127,
+                    h: 12,
+                },
+                Rect {
+                    x: 660,
+                    y: 26,
+                    w: 127,
+                    h: 12,
+                },
+                Rect {
+                    x: 660,
+                    y: 41,
+                    w: 127,
+                    h: 12,
+                },
+                Rect {
+                    x: 660,
+                    y: 56,
+                    w: 127,
+                    h: 12,
+                },
+                Rect {
+                    x: 660,
+                    y: 71,
+                    w: 127,
+                    h: 12,
+                },
+                Rect {
+                    x: 660,
+                    y: 86,
+                    w: 127,
+                    h: 12,
+                },
+                Rect {
+                    x: 660,
+                    y: 101,
+                    w: 127,
+                    h: 12,
+                },
+            ],
+            hottime: Rect {
+                x: 710,
+                y: 21,
+                w: 66,
+                h: 66,
+            },
+            speed: Rect {
+                x: TALLY_SPEED_NATIVE.0,
+                y: TALLY_SPEED_NATIVE.1,
+                w: 28,
+                h: 9,
+            },
+            volume: Rect {
+                x: TALLY_VOLUME_NATIVE.0,
+                y: TALLY_VOLUME_NATIVE.1,
+                w: 44,
+                h: 9,
+            },
+        }
+    }
+
+    /// Field rects read from staged placements: each field takes
+    /// its placement's rect by control id when one staged (real
+    /// area only — a zero-area placement keeps the fallback), else
+    /// the fallback rect. Lookup is by id (codes collide in this
+    /// run); file order is irrelevant.
+    #[must_use]
+    pub fn from_placements(placements: &[ScenePlacement]) -> Self {
+        let fallback = Self::fallback();
+        let mut waits = fallback.waituser_texts;
+        for (slot, id) in waits.iter_mut().zip(FIELD_WAITUSER_TEXT_IDS) {
+            *slot = placed_rect(placements, id, *slot);
+        }
+        Self {
+            exit: placed_rect(placements, FIELD_EXIT_ID, fallback.exit),
+            chat_window: placed_rect(placements, FIELD_CHAT_WINDOW_ID, fallback.chat_window),
+            time_bar: placed_rect(placements, FIELD_TIMEBAR_ID, fallback.time_bar),
+            buffer1: placed_rect(placements, FIELD_BUFFER1_ID, fallback.buffer1),
+            buffer2: placed_rect(placements, FIELD_BUFFER2_ID, fallback.buffer2),
+            chat_edit: placed_rect(placements, FIELD_CHAT_EDIT_ID, fallback.chat_edit),
+            title: placed_rect(placements, FIELD_TITLE_ID, fallback.title),
+            waituser_texts: waits,
+            hottime: placed_rect(placements, FIELD_HOTTIME_ID, fallback.hottime),
+            speed: placed_rect(placements, FIELD_SPEED_ID, fallback.speed),
+            volume: placed_rect(placements, FIELD_VOLUME_ID, fallback.volume),
+        }
+    }
+}
+
+/// One field's staged rect, or `fallback` when no placement stages
+/// it with a real area.
+fn placed_rect(placements: &[ScenePlacement], id: &str, fallback: Rect) -> Rect {
+    placements
+        .iter()
+        .find_map(|placement| {
+            (placement.id == id && placement.rect.w > 0 && placement.rect.h > 0)
+                .then_some(placement.rect)
+        })
+        .unwrap_or(fallback)
+}
 /// Caption ink over staged art (white on the scrim).
 const AVATAR_TEXT: u32 = pack_xrgb(0xFF, 0xFF, 0xFF);
 /// Scrim ink behind caption lines (matches the lobby scrims).
@@ -2629,9 +2886,28 @@ pub(crate) struct AvatarLayout {
 
 impl AvatarLayout {
     /// Scale the native avatar layout into the frame (identity on
-    /// 800x600, proportional on headless probe frames).
+    /// 800x600, proportional on headless probe frames); the bound
+    /// strip fields use the no-archive fallbacks.
     #[must_use]
     pub(crate) fn for_frame(frame_w: usize, frame_h: usize) -> Self {
+        Self::for_frame_placed(frame_w, frame_h, None)
+    }
+
+    /// [`for_frame`](Self::for_frame) with the bound strip fields
+    /// read from staged placements ([`PlayingBoundFields`]): every
+    /// TIMEBAR/TITLE/SPEED/VOLUME/EXIT origin comes from its parsed
+    /// `.bnd` rect when staged (owner rule `f38f3`), else its
+    /// fallback. Avatar origins and the photo-measured counts grid
+    /// are shared verbatim.
+    #[must_use]
+    pub(crate) fn for_frame_placed(
+        frame_w: usize,
+        frame_h: usize,
+        placements: Option<&[ScenePlacement]>,
+    ) -> Self {
+        let fields = placements.map_or_else(PlayingBoundFields::fallback, |staged| {
+            PlayingBoundFields::from_placements(staged)
+        });
         let seat = scale_scene_rect(&AVATAR_SEAT_NATIVE, frame_w, frame_h);
         Self {
             level_origin: scale_scene_origin(seat_offset(AVATAR_LEVEL_OFFSET), frame_w, frame_h),
@@ -2652,11 +2928,11 @@ impl AvatarLayout {
             seat,
             counts_origins: TALLY_COUNT_GRID
                 .map(|origin| scale_scene_origin(origin, frame_w, frame_h)),
-            time_bar: scale_scene_rect(&TALLY_TIME_NATIVE, frame_w, frame_h),
-            speed_origin: scale_scene_origin(TALLY_SPEED_NATIVE, frame_w, frame_h),
-            title_origin: scale_scene_origin(TALLY_TITLE_NATIVE, frame_w, frame_h),
-            volume_origin: scale_scene_origin(TALLY_VOLUME_NATIVE, frame_w, frame_h),
-            exit_origin: scale_scene_origin(TALLY_EXIT_NATIVE, frame_w, frame_h),
+            time_bar: scale_scene_rect(&fields.time_bar, frame_w, frame_h),
+            speed_origin: scale_scene_origin((fields.speed.x, fields.speed.y), frame_w, frame_h),
+            title_origin: scale_scene_origin((fields.title.x, fields.title.y), frame_w, frame_h),
+            volume_origin: scale_scene_origin((fields.volume.x, fields.volume.y), frame_w, frame_h),
+            exit_origin: scale_scene_origin((fields.exit.x, fields.exit.y), frame_w, frame_h),
         }
     }
 }
@@ -2764,7 +3040,48 @@ impl AvatarScene {
         now_ms: u64,
         song_end_ms: Option<u64>,
     ) {
-        let layout = AvatarLayout::for_frame(frame.w, frame.h);
+        self.paint_layout(
+            frame,
+            avatar,
+            score,
+            now_ms,
+            song_end_ms,
+            AvatarLayout::for_frame(frame.w, frame.h),
+        );
+    }
+
+    /// [`paint`](Self::paint) with the bound strip fields read from
+    /// staged placements ([`PlayingBoundFields`]).
+    pub fn paint_with_placements(
+        &self,
+        frame: &mut Frame<'_>,
+        avatar: Option<&AvatarFigure>,
+        score: &Score,
+        now_ms: u64,
+        song_end_ms: Option<u64>,
+        placements: Option<&[ScenePlacement]>,
+    ) {
+        self.paint_layout(
+            frame,
+            avatar,
+            score,
+            now_ms,
+            song_end_ms,
+            AvatarLayout::for_frame_placed(frame.w, frame.h, placements),
+        );
+    }
+
+    /// Shared scene paint over one layout (the fallback and
+    /// placement-driven entries differ only in the strip origins).
+    fn paint_layout(
+        &self,
+        frame: &mut Frame<'_>,
+        avatar: Option<&AvatarFigure>,
+        score: &Score,
+        now_ms: u64,
+        song_end_ms: Option<u64>,
+        layout: AvatarLayout,
+    ) {
         Self::paint_caption_line(frame, layout.level_origin, &self.player_line());
         Self::paint_life_bar(frame, &layout.life_bar, score.life.life());
         if let Some(figure) = avatar {
@@ -5565,6 +5882,185 @@ mod avatar_scene_tests {
         assert!(white_near(&buf, 800, 600, layout.volume_origin));
         assert!(white_near(&buf, 800, 600, layout.exit_origin));
         assert_eq!(buf[556 * 800 + 489], TIME_EMPTY);
+    }
+
+    /// One staged bound-run placement (id + native rect).
+    fn field_placement(id: &str, rect: Rect) -> ScenePlacement {
+        ScenePlacement {
+            id: id.to_owned(),
+            code: 0,
+            sprite: None,
+            rect,
+        }
+    }
+
+    #[test]
+    fn fallback_fields_equal_the_parsed_playing_bind_rects() {
+        // The `State_Playing.bnd` 17-rect walk (7.55 `Playing1.opi`;
+        // rect # + corners in the [`PlayingBoundFields`] table).
+        let fields = PlayingBoundFields::fallback();
+        assert_eq!(
+            fields.exit,
+            Rect {
+                x: 751,
+                y: 554,
+                w: 42,
+                h: 42
+            }
+        );
+        assert_eq!(
+            fields.chat_window,
+            Rect {
+                x: 274,
+                y: 9,
+                w: 250,
+                h: 77
+            }
+        );
+        assert_eq!(
+            fields.time_bar,
+            Rect {
+                x: 489,
+                y: 556,
+                w: 254,
+                h: 10
+            }
+        );
+        assert_eq!(
+            fields.buffer1,
+            Rect {
+                x: 200,
+                y: 3,
+                w: 28,
+                h: 28
+            }
+        );
+        assert_eq!(
+            fields.buffer2,
+            Rect {
+                x: 200,
+                y: 34,
+                w: 27,
+                h: 27
+            }
+        );
+        assert_eq!(
+            fields.chat_edit,
+            Rect {
+                x: 270,
+                y: 87,
+                w: 248,
+                h: 10
+            }
+        );
+        assert_eq!(
+            fields.title,
+            Rect {
+                x: 520,
+                y: 579,
+                w: 146,
+                h: 9
+            }
+        );
+        assert_eq!(
+            fields.waituser_texts[0],
+            Rect {
+                x: 660,
+                y: 11,
+                w: 127,
+                h: 12
+            }
+        );
+        assert_eq!(
+            fields.waituser_texts[6],
+            Rect {
+                x: 660,
+                y: 101,
+                w: 127,
+                h: 12
+            }
+        );
+        assert_eq!(
+            fields.hottime,
+            Rect {
+                x: 710,
+                y: 21,
+                w: 66,
+                h: 66
+            }
+        );
+        assert_eq!(
+            fields.speed,
+            Rect {
+                x: 487,
+                y: 579,
+                w: 28,
+                h: 9
+            }
+        );
+        assert_eq!(
+            fields.volume,
+            Rect {
+                x: 705,
+                y: 579,
+                w: 44,
+                h: 9
+            }
+        );
+    }
+
+    #[test]
+    fn staged_bounds_win_and_zero_area_keeps_the_fallback() {
+        // Owner rule `f38f3`: staged rects own layout; a zero-area
+        // placement (ordinal miss) keeps the fallback and must not
+        // collapse the field.
+        let title_rect = Rect {
+            x: 100,
+            y: 100,
+            w: 50,
+            h: 10,
+        };
+        let staged = vec![
+            field_placement(FIELD_TITLE_ID, title_rect),
+            field_placement(
+                FIELD_SPEED_ID,
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: 0,
+                    h: 0,
+                },
+            ),
+        ];
+        let fields = PlayingBoundFields::from_placements(&staged);
+        assert_eq!(fields.title, title_rect);
+        assert_eq!(fields.speed, PlayingBoundFields::fallback().speed);
+        // Lookup is by id, so file order is irrelevant.
+        let mut reversed = staged.clone();
+        reversed.reverse();
+        assert_eq!(PlayingBoundFields::from_placements(&reversed), fields);
+        // An empty stage keeps every fallback.
+        assert_eq!(
+            PlayingBoundFields::from_placements(&[]),
+            PlayingBoundFields::fallback()
+        );
+    }
+
+    #[test]
+    fn staged_layout_matches_the_parsed_bind_origins() {
+        // A fully staged run (parsed rects verbatim) lays out the
+        // native fallback origins: placement and fallback agree.
+        let fallback = PlayingBoundFields::fallback();
+        let staged = vec![
+            field_placement(FIELD_EXIT_ID, fallback.exit),
+            field_placement(FIELD_TIMEBAR_ID, fallback.time_bar),
+            field_placement(FIELD_TITLE_ID, fallback.title),
+            field_placement(FIELD_SPEED_ID, fallback.speed),
+            field_placement(FIELD_VOLUME_ID, fallback.volume),
+        ];
+        let staged_layout = AvatarLayout::for_frame_placed(800, 600, Some(&staged));
+        let plain_layout = AvatarLayout::for_frame(800, 600);
+        assert_eq!(staged_layout, plain_layout);
     }
 
     #[test]

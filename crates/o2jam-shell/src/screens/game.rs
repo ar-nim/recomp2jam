@@ -2211,12 +2211,19 @@ impl ScreenGame {
     fn paint_playing(&mut self, frame: &mut Frame<'_>, now_ms: u64) {
         let geom = HighwayGeometry::centered(frame.w, frame.h);
         self.playing.paint(frame, &geom, now_ms);
+        let playing_placements = self
+            .scene_art(Screen::Playing)
+            .map(|art| art.placements.clone());
         if let Some(art) = self.scene_art(Screen::Playing) {
             paint_playing_overlay(frame, art);
         }
         self.sync_song_caption();
-        self.playing
-            .paint_avatar_scene(frame, self.avatar.as_ref(), now_ms);
+        self.playing.paint_avatar_scene_with_placements(
+            frame,
+            self.avatar.as_ref(),
+            now_ms,
+            playing_placements.as_deref(),
+        );
     }
 
     /// Re-caption the song line from the waiting choice while one is
