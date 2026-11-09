@@ -104,17 +104,19 @@ impl SceneArt {
     }
 }
 
-/// Reference-measured dialog X ("close") zone in native px
-/// (`/tmp/chan2-list.png`, measured x560-620 by y150-195, modulo
-/// button chrome — exe-OPEN): the native X button (557,195) reads
-/// inside it. Clicking it closes the channel dialog and returns to
-/// the bare planet board (`docs/planet.md` "Real board structure",
-/// 2026-11-09 captures).
+/// Exe-verified dialog X ("close") button rect in native px,
+/// `Dialog_ChannelInfo.bnd` rect 1 `(541,151)-(589,189)` (48x38,
+/// right/bottom exclusive). The bnd pairs to the `0x8C` block by
+/// code ordinal `(code & 0xFFF) - 1` and its rects 2-5 equal the
+/// exe-pinned row rects exactly (4/4), which verifies the pairing
+/// (`docs/channel-fill.md` "METHOD CORRECTION 2026-11-10"). A
+/// native click at (577,171) closes the dialog (verified live
+/// 2026-11-09); it lands inside this rect.
 pub(crate) const CHANNEL_DIALOG_X_RECT: Rect = Rect {
-    x: 557,
-    y: 150,
-    w: 63,
-    h: 46,
+    x: 541,
+    y: 151,
+    w: 48,
+    h: 38,
 };
 
 /// True while native pixel (`x`, `y`) sits inside the measured
@@ -167,11 +169,13 @@ pub const DIALOG_BAR_SPRITE: &str = "Dialog_ChannelSelectBar.ojs";
 pub const CHANNEL_DIALOG_SPRITE: &str = "Dialog_ChannelInfo.ojs";
 
 /// The join ("입장") button body (`ChannelInfo_CH_Enter.ojs`, three
-/// 44x21 frames at anchor (0,0)). Staged at the reference-measured
-/// face origins (502, 236+50i) of the visible rows (`/tmp/chan2-
-/// list.png`, reference-grade, exe-OPEN); frame 0 paints (no hover or
-/// press state is evidenced). The staged art replaces the procedural
-/// enter-button plates only while it covers the same measured faces.
+/// 44x21 frames at anchor (0,0)). Staged at the bnd-derived face
+/// origins: bar origin (row origin +1 inset) + bar-local (285,11),
+/// so row 0 face = (502,236) — exact against the reference capture
+/// (`docs/channel-fill.md` "METHOD CORRECTION 2026-11-10"); frame 0
+/// paints (no hover or press state is evidenced). The staged art
+/// replaces the procedural enter-button plates only while it covers
+/// the same measured faces.
 pub const CHANNEL_ENTER_SPRITE: &str = "ChannelInfo_CH_Enter.ojs";
 
 /// Sprite bodies one `ControlList` block names, in file order (empty
@@ -359,16 +363,63 @@ pub(crate) fn channel_row_hit(y: i32, row_count: usize) -> Option<usize> {
     (0..slots).find(|&i| (CHANNEL_ROW_RECTS[i].1..CHANNEL_ROW_RECTS[i].3).contains(&y))
 }
 
-/// Exe-pinned entry-face inset: the join (`입장`) button face tops sit
-/// 12 px below the pinned row tops (face Y 236 = row0 top 224 + 12,
-/// live memory read 2026-11-09; matches the reference capture's 236
-/// exactly). The face X origin (502) and size (48x24, button chrome
-/// around the 44x24 exe art) stay reference-measured (capture
-/// `/tmp/chan2-list.png`, exe-OPEN).
-const CHANNEL_ENTER_X: i32 = 502;
-const CHANNEL_ENTER_W: i32 = 48;
-const CHANNEL_ENTER_H: i32 = 24;
-const CHANNEL_ENTER_DY: i32 = 12;
+/// Bnd-pinned row-bar geometry (`Dialog_ChannelInfo.bnd`, pairing
+/// exe-verified by the exact row-rect match; `docs/channel-fill.md`
+/// "METHOD CORRECTION 2026-11-10"): the `CH_Back` bar mounts at the
+/// row origin +1 inset, and every bar child is bar-local. The enter
+/// face is bar-local (285,11) with size 44x21, so the face origin of
+/// row `i` is `(row.l+286, row.t+12)` — row 0 reads (502,236), exact
+/// against the exe-pinned face inset (face Y 236 = row0 top 224 + 12,
+/// live memory read 2026-11-09).
+const CHANNEL_BAR_INSET: i32 = 1;
+const CHANNEL_FACE_LOCAL_X: i32 = 285;
+const CHANNEL_FACE_LOCAL_Y: i32 = 11;
+const CHANNEL_FACE_W: i32 = 44;
+const CHANNEL_FACE_H: i32 = 21;
+
+/// Bar-local digit slots (13x18 each) and the count plate (185x19)
+/// — positions bnd-pinned (see above); the sizes ride the staged
+/// figures, so only the origins are constants.
+const CHANNEL_DIGIT_LOCALS: [(i32, i32); 2] = [(50, 11), (63, 11)];
+const CHANNEL_COUNT_LOCAL: (i32, i32) = (90, 12);
+
+/// Bnd-pinned scroll track `(573,213)-(594,429)` (21x216). The
+/// arrows are scroll-local (0,0) and (0,196) (21x20 each); the 21x45
+/// bar body rides between them — its exact body offset inside the
+/// arrow-bounded track is the one derived value here (mounted under
+/// the up arrow at (0,20)); every other value is bnd-pinned.
+const CHANNEL_SCROLL_TRACK: Rect = Rect {
+    x: 573,
+    y: 213,
+    w: 21,
+    h: 216,
+};
+const CHANNEL_SCROLL_UP_LOCAL: (i32, i32) = (0, 0);
+const CHANNEL_SCROLL_ARROW_H: i32 = 20;
+const CHANNEL_SCROLL_DOWN_LOCAL: (i32, i32) = (0, 196);
+
+/// Bar origin (native px) of viewport slot `slot`: the pinned row
+/// origin + the bnd +1 inset (row 0 bar at (217,225)).
+fn channel_bar_origin(slot: usize) -> (i32, i32) {
+    let row = CHANNEL_ROW_RECTS[slot.min(CHANNEL_SLOT_COUNT - 1)];
+    (
+        row.0.saturating_add(CHANNEL_BAR_INSET),
+        row.1.saturating_add(CHANNEL_BAR_INSET),
+    )
+}
+
+/// Face origin (native px) of viewport slot `slot`: the bar origin
+/// plus the bnd bar-local face offset (285,11) — row 0 reads
+/// (502,236), exact against both the exe-pinned face inset and the
+/// reference capture.
+#[must_use]
+pub(crate) fn channel_enter_origin(slot: usize) -> (i32, i32) {
+    let (bar_x, bar_y) = channel_bar_origin(slot);
+    (
+        bar_x.saturating_add(CHANNEL_FACE_LOCAL_X),
+        bar_y.saturating_add(CHANNEL_FACE_LOCAL_Y),
+    )
+}
 /// Reference-measured Channel row chrome in native px (`/tmp/chan2-list.png`;
 /// row 0 only, followers re-base on the pinned row tops, exe-OPEN):
 /// dark name pill behind the row text, hollow silver track with dark
@@ -471,19 +522,90 @@ fn paint_channel_row_chrome(frame: &mut Frame<'_>, slot: usize) {
 }
 const CHANNEL_ENTER_TONE: u32 = pack_xrgb(150, 148, 151);
 
+/// Staged row-bar art for viewport slot `slot`: the `CH_Back` body at
+/// the bnd bar origin (row origin +1) plus the digit plates and the
+/// count plate at their bnd bar-local slots. Returns `true` while the
+/// bar body staged — it then replaces the procedural pill/track
+/// chrome (same row-interior role); each plate paints only while its
+/// own figure staged (absent parts fall back to no plate, never a
+/// stand-in).
+fn paint_channel_bar_art(frame: &mut Frame<'_>, slot: usize, art: &SceneArt) -> bool {
+    let Some(bar) = art.figures.get(CHANNEL_BAR_SPRITE) else {
+        return false;
+    };
+    if frame.w == 0 || frame.h == 0 || bar.is_empty() {
+        return false;
+    }
+    let (bx, by) = channel_bar_origin(slot);
+    let (dx, dy) = anchor_in_frame(bx, by, frame.w, frame.h);
+    bar.paint_scaled_anchors(frame, dx, dy, frame.w, frame.h);
+    if let Some(digit) = art
+        .figures
+        .get(CHANNEL_DIGIT_SPRITE)
+        .filter(|figure| !figure.is_empty())
+    {
+        for &(local_x, local_y) in &CHANNEL_DIGIT_LOCALS {
+            let (dx, dy) = anchor_in_frame(bx + local_x, by + local_y, frame.w, frame.h);
+            digit.paint_scaled_anchors(frame, dx, dy, frame.w, frame.h);
+        }
+    }
+    if let Some(count) = art
+        .figures
+        .get(CHANNEL_COUNT_SPRITE)
+        .filter(|figure| !figure.is_empty())
+    {
+        let (dx, dy) = anchor_in_frame(
+            bx + CHANNEL_COUNT_LOCAL.0,
+            by + CHANNEL_COUNT_LOCAL.1,
+            frame.w,
+            frame.h,
+        );
+        count.paint_scaled_anchors(frame, dx, dy, frame.w, frame.h);
+    }
+    true
+}
+
+/// Staged scroll bodies riding the bnd track (573,213): the up/down
+/// arrows at scroll-local (0,0)/(0,196) with the bar body between
+/// them. Each part paints only while its own figure staged.
+fn paint_channel_scroll_art(frame: &mut Frame<'_>, art: &SceneArt) {
+    if frame.w == 0 || frame.h == 0 {
+        return;
+    }
+    let track = &CHANNEL_SCROLL_TRACK;
+    let paint_part = |frame: &mut Frame<'_>, figure_name: &str, local: (i32, i32)| {
+        let Some(figure) = art
+            .figures
+            .get(figure_name)
+            .filter(|figure| !figure.is_empty())
+        else {
+            return;
+        };
+        let (dx, dy) = anchor_in_frame(track.x + local.0, track.y + local.1, frame.w, frame.h);
+        figure.paint_scaled_anchors(frame, dx, dy, frame.w, frame.h);
+    };
+    paint_part(frame, CHANNEL_SCROLL_UP_SPRITE, CHANNEL_SCROLL_UP_LOCAL);
+    paint_part(
+        frame,
+        CHANNEL_SCROLL_BAR_SPRITE,
+        (0, CHANNEL_SCROLL_ARROW_H),
+    );
+    paint_part(frame, CHANNEL_SCROLL_DOWN_SPRITE, CHANNEL_SCROLL_DOWN_LOCAL);
+}
+
 /// Entry-button plate rect for viewport slot `slot`, scaled to the
-/// frame: the pinned row top plus the pinned face inset.
+/// frame: the bnd-derived face origin plus the bnd face size (44x21).
 fn channel_enter_rect(slot: usize, w: i32, h: i32) -> Rect {
     let wide = i64::from(w);
     let high = i64::from(h);
     let native_w = i64::from(NATIVE_WIDTH);
     let native_h = i64::from(NATIVE_HEIGHT);
-    let top = i64::from(channel_slot_top(slot)) + i64::from(CHANNEL_ENTER_DY);
+    let (face_x, face_y) = channel_enter_origin(slot);
     Rect {
-        x: i32::try_from(i64::from(CHANNEL_ENTER_X) * wide / native_w).unwrap_or(0),
-        y: i32::try_from(top * high / native_h).unwrap_or(0),
-        w: u32::try_from((i64::from(CHANNEL_ENTER_W) * wide / native_w).max(0)).unwrap_or(0),
-        h: u32::try_from((i64::from(CHANNEL_ENTER_H) * high / native_h).max(0)).unwrap_or(0),
+        x: i32::try_from(i64::from(face_x) * wide / native_w).unwrap_or(0),
+        y: i32::try_from(i64::from(face_y) * high / native_h).unwrap_or(0),
+        w: u32::try_from((i64::from(CHANNEL_FACE_W) * wide / native_w).max(0)).unwrap_or(0),
+        h: u32::try_from((i64::from(CHANNEL_FACE_H) * high / native_h).max(0)).unwrap_or(0),
     }
 }
 
@@ -504,10 +626,39 @@ fn paint_channel_buttons(frame: &mut Frame<'_>, shown: usize) {
     }
 }
 
+/// Row bar body (`ChannelInfo_CH_Back.ojs`, 347x41, 3 frames):
+/// mounted at the row origin +1 inset per `Dialog_ChannelInfo.bnd`
+/// rect 2+i (row 0 bar at (217,225); pairing exe-verified by the
+/// exact row-rect match, `docs/channel-fill.md` "METHOD CORRECTION
+/// 2026-11-10"). Replaces the procedural pill/track chrome while
+/// staged (same row-interior role).
+pub const CHANNEL_BAR_SPRITE: &str = "ChannelInfo_CH_Back.ojs";
+
+/// Channel number digit plate (`ChannelInfo_CH_Num.ojs`, 13x18),
+/// two slots per row bar at bar-local (50,11) and (63,11) (bnd-pinned).
+pub const CHANNEL_DIGIT_SPRITE: &str = "ChannelInfo_CH_Num.ojs";
+
+/// Population/capacity count plate (`ChannelInfo_CH_ConnectCount.ojs`,
+/// 185x19) at bar-local (90,12) (bnd-pinned).
+pub const CHANNEL_COUNT_SPRITE: &str = "ChannelInfo_CH_ConnectCount.ojs";
+
+/// Scroll bar body (`ChannelInfo_Scroll_Bar.ojs`, 21x45) riding the
+/// bnd scroll track (bnd-pinned).
+pub const CHANNEL_SCROLL_BAR_SPRITE: &str = "ChannelInfo_Scroll_Bar.ojs";
+
+/// Scroll up arrow (`Messenger_Main_Scroll_Up.ojs`, 21x20) at
+/// scroll-local (0,0) (bnd-pinned).
+pub const CHANNEL_SCROLL_UP_SPRITE: &str = "Messenger_Main_Scroll_Up.ojs";
+
+/// Scroll down arrow (`Messenger_Main_Scroll_Down.ojs`, 21x20) at
+/// scroll-local (0,196) (bnd-pinned).
+pub const CHANNEL_SCROLL_DOWN_SPRITE: &str = "Messenger_Main_Scroll_Down.ojs";
+
 /// Enter buttons for the viewport slice: staged
-/// [`CHANNEL_ENTER_SPRITE`] frame 0 at the reference-measured face
-/// origins (502, 236+50i, native) while the figure staged; the
-/// procedural plates ([`paint_channel_buttons`]) otherwise. The
+/// [`CHANNEL_ENTER_SPRITE`] frame 0 at the bnd-derived face origins
+/// (row origin +1 inset + bar-local (285,11); row 0 = (502,236),
+/// exact against the reference measurement) while the figure staged;
+/// the procedural plates ([`paint_channel_buttons`]) otherwise. The
 /// staged art covers the same measured rect the plates marked, so
 /// the replacement invents nothing.
 fn paint_channel_enter_art(frame: &mut Frame<'_>, shown: usize, art: &SceneArt) {
@@ -519,14 +670,10 @@ fn paint_channel_enter_art(frame: &mut Frame<'_>, shown: usize, art: &SceneArt) 
         return;
     }
     for slot in 0..shown {
-        // Face origin (native px): the pinned row top plus the pinned
-        // 12 px inset (face Y 236 = row0 top 224 + 12).
-        let (dx, dy) = anchor_in_frame(
-            CHANNEL_ENTER_X,
-            channel_slot_top(slot) + CHANNEL_ENTER_DY,
-            frame.w,
-            frame.h,
-        );
+        // Face origin (native px): the bnd-derived bar origin + the
+        // bnd bar-local face offset (285,11).
+        let (face_x, face_y) = channel_enter_origin(slot);
+        let (dx, dy) = anchor_in_frame(face_x, face_y, frame.w, frame.h);
         figure.paint_scaled_anchors(frame, dx, dy, frame.w, frame.h);
     }
 }
@@ -688,7 +835,12 @@ fn paint_channel_rows(
     let text_x = w / 4;
     for (slot, channel) in channels.iter().skip(top).take(shown).enumerate() {
         let row = channel_row_top(slot, h);
-        paint_channel_row_chrome(frame, slot);
+        // Staged CH_Back replaces the procedural pill/track chrome;
+        // no bar figure keeps today's stand-ins.
+        let staged_bar = art.is_some_and(|art| paint_channel_bar_art(frame, slot, art));
+        if !staged_bar {
+            paint_channel_row_chrome(frame, slot);
+        }
         let entry = channel_row_text(channel);
         let ink = if channel.active {
             pack_xrgb(0xFF, 0xFF, 0xFF)
@@ -699,6 +851,9 @@ fn paint_channel_rows(
         if top + slot == highlight {
             paint_cursor(frame, text_x, row);
         }
+    }
+    if let Some(art) = art {
+        paint_channel_scroll_art(frame, art);
     }
     paint_channel_pager(frame, top, shown, channels.len());
 }
@@ -7648,6 +7803,74 @@ mod paint_tests {
     }
 
     #[test]
+    fn channel_bar_art_covers_the_measured_pill_track_band() {
+        // Staged ChannelInfo_CH_Back at the bnd bar origin (row 0 bar
+        // at (217,225)) replaces the procedural pill/track chrome:
+        // measured band pixels carry staged ink, no pill or track
+        // tone paints.
+        let art = SceneArt {
+            placements: Vec::new(),
+            figures: HashMap::from([
+                (
+                    CHANNEL_BAR_SPRITE.to_owned(),
+                    solid_figure(347, 41, [0x1F, 0x00]), // solid blue
+                ),
+                (
+                    CHANNEL_ENTER_SPRITE.to_owned(),
+                    solid_figure(44, 21, [0x1F, 0x00]),
+                ),
+            ]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_channel_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &two_channels(),
+            0,
+            &art,
+            None,
+        );
+        let blue = pack_xrgb(0x00, 0x00, 0xFF);
+        // Measured pill band (205,227 94x35) and track band
+        // (297,228 203x33) both sit inside the staged 347x41 bar.
+        assert_eq!(buf[240 * 800 + 250], blue, "pill band");
+        assert_eq!(buf[240 * 800 + 350], blue, "track band");
+        assert!(!buf.contains(&CHANNEL_PILL_TONE));
+        assert!(!buf.contains(&CHANNEL_TRACK_TOP_TONE));
+        assert!(!buf.contains(&CHANNEL_TRACK_SIDE_TONE));
+    }
+
+    #[test]
+    fn channel_scene_without_bar_figure_keeps_procedural_chrome() {
+        // No staged bar art: the row-interior fallback stays the
+        // procedural pill/track chrome (today's behavior).
+        let art = SceneArt {
+            placements: Vec::new(),
+            figures: HashMap::from([(
+                CHANNEL_DIALOG_SPRITE.to_owned(),
+                solid_figure(8, 8, [0xE0, 0x03]),
+            )]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_channel_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &two_channels(),
+            0,
+            &art,
+            None,
+        );
+        assert!(buf.contains(&CHANNEL_PILL_TONE));
+        assert!(buf.contains(&CHANNEL_TRACK_TOP_TONE));
+    }
+
+    #[test]
     fn channel_scene_without_enter_figure_keeps_procedural_plates() {
         // No staged enter art: the art path falls back to the
         // procedural plates at the same measured faces.
@@ -7680,7 +7903,7 @@ mod paint_tests {
         // slot i; the band edges (top inclusive, bottom exclusive) and
         // pixels above the stack or past the last bottom hit nothing.
         for (slot, &(.., band_top, _, band_bottom)) in CHANNEL_ROW_RECTS.iter().enumerate() {
-            let face_y = band_top + CHANNEL_ENTER_DY + 5;
+            let face_y = channel_enter_origin(slot).1 + 5;
             assert_eq!(channel_row_hit(face_y, 4), Some(slot));
             assert_eq!(channel_row_hit(band_top, 4), Some(slot));
             assert_eq!(channel_row_hit(band_bottom - 1, 4), Some(slot));
@@ -7693,17 +7916,37 @@ mod paint_tests {
     }
 
     #[test]
-    fn channel_dialog_x_hit_uses_the_measured_zone() {
-        // Reference-measured X zone (x560-620 by y150-195 modulo
-        // chrome; `docs/channel-fill.md` 2026-11-09 addendum): the
-        // native X button (557,195) hits; row faces and the pager
-        // strip stay outside it.
-        assert!(channel_dialog_x_hit(557, 195), "the native X button");
-        assert!(channel_dialog_x_hit(590, 170));
-        assert!(!channel_dialog_x_hit(556, 195), "left of the zone");
-        assert!(!channel_dialog_x_hit(557, 196), "below the zone");
-        assert!(!channel_dialog_x_hit(620, 170), "right edge exclusive");
+    fn channel_dialog_x_hit_uses_the_bnd_rect() {
+        // Bnd-pinned X button (541,151)-(589,189), right/bottom
+        // exclusive (`docs/channel-fill.md` "METHOD CORRECTION
+        // 2026-11-10"): the verified native close click (577,171)
+        // hits; the rect edges read 541/151 inclusive, 589/189
+        // exclusive; row faces and the pager strip stay outside.
+        assert!(channel_dialog_x_hit(577, 171), "verified native X click");
+        assert!(channel_dialog_x_hit(541, 151), "left/top edge inclusive");
+        assert!(channel_dialog_x_hit(588, 188), "last inside pixel");
+        assert!(!channel_dialog_x_hit(589, 151), "right edge exclusive");
+        assert!(!channel_dialog_x_hit(541, 189), "bottom edge exclusive");
+        assert!(!channel_dialog_x_hit(540, 170), "left of the rect");
         assert!(!channel_dialog_x_hit(300, 240), "a row face");
+    }
+
+    #[test]
+    fn channel_enter_face_is_bar_local_per_row() {
+        // Bnd bar-local math: bar origin = row origin +1; face = bar +
+        // (285,11). Row 0 reads (502,236) — exact against the exe-
+        // pinned face inset and the reference capture.
+        assert_eq!(channel_enter_origin(0), (502, 236));
+        assert_eq!(channel_enter_origin(1), (502, 287));
+        assert_eq!(channel_enter_origin(2), (502, 336));
+        assert_eq!(channel_enter_origin(3), (502, 387));
+        for (slot, &(row_l, row_t, ..)) in CHANNEL_ROW_RECTS.iter().enumerate() {
+            assert_eq!(
+                channel_enter_origin(slot),
+                (row_l + 1 + 285, row_t + 1 + 11),
+                "face of row {slot} = bar + (285,11)"
+            );
+        }
     }
 
     #[test]

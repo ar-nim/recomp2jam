@@ -19,7 +19,9 @@ use o2jam_shell::avatar::{
     RESULT_BLOCK, ROOM_BLOCK, WAITING_BLOCK,
 };
 use o2jam_shell::screens::paint::{
-    CHANNEL_DIALOG_SPRITE, CHANNEL_ENTER_SPRITE, PLAYING_BLOCK, RESULT_WINLOSE_SPRITE,
+    CHANNEL_BAR_SPRITE, CHANNEL_COUNT_SPRITE, CHANNEL_DIALOG_SPRITE, CHANNEL_DIGIT_SPRITE,
+    CHANNEL_ENTER_SPRITE, CHANNEL_SCROLL_BAR_SPRITE, CHANNEL_SCROLL_DOWN_SPRITE,
+    CHANNEL_SCROLL_UP_SPRITE, PLAYING_BLOCK, RESULT_WINLOSE_SPRITE,
 };
 use o2jam_shell::screens::side::SELECT_MUSIC_DIALOG_BLOCK;
 use o2jam_shell::{GameLoop, MenuKey, PlaySkin, Screen, ScreenGame};
@@ -73,7 +75,7 @@ pub struct Shot {
 /// (bare board) → lit-emblem click → Channel (dialog again) → row
 /// confirm → Room → … The lit emblem reopening the dialog is
 /// player-report corroborated with per-emblem dynamic verification
-/// pending; the dialog X zone is reference-measured modulo chrome.
+/// pending; the dialog X button is bnd-pinned ((541,151)-(589,189)).
 ///
 /// # Errors
 ///
@@ -90,11 +92,11 @@ pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
     // + MENU bar) paints beneath the opaque 800x466 dialog sheet and
     // the MENU bar stays visible in the bottom strip.
     shots.push(shoot_checked(&mut game, "channel", Screen::Channel, 0)?);
-    // The dialog X button (native (557,195), inside the measured X
-    // zone x560-620 modulo chrome, reference-measured) closes the
+    // The dialog X button (bnd rect (541,151)-(589,189); a native
+    // click at (577,171) verified to close it, 2026-11-09) closes the
     // dialog → the bare planet board (five emblems, promo carousel,
     // MENU bar).
-    game.mouse_click(557, 195);
+    game.mouse_click(577, 171);
     assert_eq!(game.screen(), Screen::Planet, "dialog X → Planet edge");
     shots.push(shoot_checked(&mut game, "planet", Screen::Planet, 0)?);
     // A lit-emblem click (HARD through its pinned `.bnd` rect)
@@ -335,9 +337,21 @@ fn stage_single_sprite(
 /// sprites (verified), so no placements stage — the painter mounts
 /// the figures (pinned no-fill rule per `docs/channel-fill.md`).
 fn stage_channel_dialog(game: &mut ScreenGame, archive: &[u8]) {
+    // Code-mounted dialog art (`Dialog_ChannelInfo` block names the
+    // bodies; the block records zero rects because the bnd applies at
+    // dialog build — `docs/channel-fill.md` "METHOD CORRECTION
+    // 2026-11-10"). The painter mounts each figure at its bnd-derived
+    // origin (bar at row origin +1, bar-local children, scroll bodies
+    // on the track); absent figures fall back to today's stand-ins.
     let names = vec![
         CHANNEL_DIALOG_SPRITE.to_owned(),
         CHANNEL_ENTER_SPRITE.to_owned(),
+        CHANNEL_BAR_SPRITE.to_owned(),
+        CHANNEL_DIGIT_SPRITE.to_owned(),
+        CHANNEL_COUNT_SPRITE.to_owned(),
+        CHANNEL_SCROLL_BAR_SPRITE.to_owned(),
+        CHANNEL_SCROLL_UP_SPRITE.to_owned(),
+        CHANNEL_SCROLL_DOWN_SPRITE.to_owned(),
     ];
     let figures = load_scene_figures(archive, &names);
     if figures.is_empty() {
@@ -1985,7 +1999,7 @@ mod tests {
         // paints under the amber-cursor pick stand-in.
         let mut game = seeded_game();
         game.lane_key(3, true);
-        game.mouse_click(557, 195);
+        game.mouse_click(577, 171);
         assert_eq!(game.screen(), Screen::Planet, "dialog X → bare board");
         game.click_planet(386, 88);
         assert_eq!(
@@ -2017,7 +2031,7 @@ mod tests {
         // the dialog through the flow gate.
         let mut game = seeded_game();
         game.lane_key(3, true);
-        game.mouse_click(557, 195);
+        game.mouse_click(577, 171);
         assert_eq!(game.screen(), Screen::Planet);
         game.click_planet(386, 88);
         assert_eq!(
@@ -2034,10 +2048,10 @@ mod tests {
 
     #[test]
     fn dialog_x_closes_the_channel_dialog_to_the_bare_board() {
-        // The measured X zone (x560-620 by y150-195 modulo chrome)
-        // hit-tests the native X button (557,195): a click inside the
-        // zone backs out to Planet through the flow gate, a row face
-        // click does not.
+        // The bnd-pinned X rect (541,151)-(589,189) hit-tests the
+        // native X button: the verified close click (577,171) backs
+        // out to Planet through the flow gate, a row face click does
+        // not.
         let mut game = seeded_game();
         game.lane_key(3, true);
         assert_eq!(game.screen(), Screen::Channel);
@@ -2049,7 +2063,7 @@ mod tests {
         );
         let mut game = seeded_game();
         game.lane_key(3, true);
-        game.mouse_click(557, 195);
+        game.mouse_click(577, 171);
         assert_eq!(game.screen(), Screen::Planet, "dialog X → Planet");
     }
 
@@ -2066,7 +2080,7 @@ mod tests {
         ] {
             let mut game = seeded_game();
             game.lane_key(3, true);
-            game.mouse_click(557, 195);
+            game.mouse_click(577, 171);
             assert_eq!(game.screen(), Screen::Planet);
             game.click_planet(x, 88);
             assert_eq!(game.screen(), Screen::Channel, "lit emblem → dialog");
@@ -2074,7 +2088,7 @@ mod tests {
         }
         let mut game = seeded_game();
         game.lane_key(3, true);
-        game.mouse_click(557, 195);
+        game.mouse_click(577, 171);
         game.click_planet(663, 88);
         game.click_planet(559, 88);
         assert_eq!(game.planet_selection(), None);

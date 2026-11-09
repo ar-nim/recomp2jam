@@ -1028,9 +1028,10 @@ impl ScreenGame {
         true
     }
 
-    /// Channel dialog click: the measured X zone closes the dialog
-    /// back to the bare planet board (reference-measured, modulo
-    /// chrome; `docs/planet.md`), otherwise a row band highlights the
+    /// Channel dialog click: the bnd-pinned X button rect
+    /// (541,151)-(589,189) closes the dialog back to the bare planet
+    /// board (verified native close click (577,171); `docs/planet.md`),
+    /// otherwise a row band highlights the
     /// entry and advances like Confirm while the draft is action-free
     /// (slash drafts consume the click instead of starting).
     fn click_channel_row(&mut self, x: i32, y: i32) {

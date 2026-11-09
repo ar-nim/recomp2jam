@@ -17,7 +17,11 @@ use o2jam_shell::avatar::{
     scene_sprite_names, AvatarFigure, ScenePlacement, AVI_BLOCK, LOADING_SPRITE, PLANET_BLOCK,
     RESULT_BLOCK, ROOM_BLOCK, WAITING_BLOCK,
 };
-use o2jam_shell::screens::paint::{CHANNEL_DIALOG_SPRITE, CHANNEL_ENTER_SPRITE, PLAYING_BLOCK};
+use o2jam_shell::screens::paint::{
+    CHANNEL_BAR_SPRITE, CHANNEL_COUNT_SPRITE, CHANNEL_DIALOG_SPRITE, CHANNEL_DIGIT_SPRITE,
+    CHANNEL_ENTER_SPRITE, CHANNEL_SCROLL_BAR_SPRITE, CHANNEL_SCROLL_DOWN_SPRITE,
+    CHANNEL_SCROLL_UP_SPRITE, PLAYING_BLOCK,
+};
 use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
 
 /// Probe frame dimensions (matches the `shots.rs` aspect).
@@ -36,11 +40,13 @@ const PLAYING_LIST: &str = "ControlList_Playing.txt";
 
 /// `STATE_CHANNEL` names zero sprites (verified), so the soak stages
 /// the code-mounted channel dialog art instead: the dialog body at
-/// its record anchor plus the enter-button frames at the
-/// reference-measured faces (see `docs/channel-fill.md`). The channel
-/// dialog opens OVER the planet board (verified first screen,
-/// `docs/planet.md`), so the soak stages the bound `State_Planet`
-/// block beneath the dialog art too.
+/// its record anchor plus the bnd-part figures — enter-button faces,
+/// row bars, digit/count plates, scroll bodies — which the painter
+/// mounts at their bnd-derived origins (see `docs/channel-fill.md`
+/// "METHOD CORRECTION 2026-11-10"). The channel dialog opens OVER the
+/// planet board (verified first screen, `docs/planet.md`), so the
+/// soak stages the bound `State_Planet` block beneath the dialog art
+/// too.
 const CHANNEL_PROBE_W: usize = 800;
 /// Native probe height for the channel soak (record anchors exact).
 const CHANNEL_PROBE_H: usize = 600;
@@ -368,6 +374,12 @@ fn channel_layers_list_over_real_dialog_art() {
     let names = vec![
         CHANNEL_DIALOG_SPRITE.to_owned(),
         CHANNEL_ENTER_SPRITE.to_owned(),
+        CHANNEL_BAR_SPRITE.to_owned(),
+        CHANNEL_DIGIT_SPRITE.to_owned(),
+        CHANNEL_COUNT_SPRITE.to_owned(),
+        CHANNEL_SCROLL_BAR_SPRITE.to_owned(),
+        CHANNEL_SCROLL_UP_SPRITE.to_owned(),
+        CHANNEL_SCROLL_DOWN_SPRITE.to_owned(),
     ];
     let figures = load_scene_figures(&archive, &names);
     assert!(
