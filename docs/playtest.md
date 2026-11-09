@@ -4364,3 +4364,20 @@ channels): row text tops at exactly 232+50·i, plates at exactly
 236+50·i — pixel-identical to the Wine reference anchors. Residual:
 rows run off the bottom (10 shown, reference shows a 4-row viewport
 with scrollbar + pager); scrolling interaction stays OPEN.
+
+## Windowed guest join+ready on the wire — 2026-11-09 03:00 +08:00 (HEAD `1b3f891`)
+
+Two isolated windowed clients (own Xvfb, null sink) plus a local
+TCP tee (`~/scratch/tee.py`, read-only relay on :15011) watching
+the guest's wire. Prior duo attempts were inconclusive (empty
+server, unpassed join flag, display lifecycle); this run holds a
+hosted room first, then drives the guest with verified focus.
+
+- `C->S 3002` (6 B) → `S->C 3003` (180 B snapshot): pending join
+  succeeds through the click/keyboard session routing.
+- `C->S 4008` (empty): guest ready ping on Waiting Confirm.
+- Joining a missing room still hits the documented Memoryer wart
+  (throws, no reply, client timeout) — unchanged, server-side.
+- Local server had to be restarted once (stale `AlreadyConnected`
+  zombie after abrupt client kills); the restart itself is routine
+  (`~/memoryer-local`, `server-live.log`).
