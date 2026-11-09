@@ -23,7 +23,10 @@ use o2jam_shell::screens::paint::{
     CHANNEL_ENTER_SPRITE, CHANNEL_SCROLL_BAR_SPRITE, CHANNEL_SCROLL_DOWN_SPRITE,
     CHANNEL_SCROLL_UP_SPRITE, DIALOG_BAR_SPRITE, PLAYING_BLOCK, RESULT_WINLOSE_SPRITE,
 };
-use o2jam_shell::screens::side::SELECT_MUSIC_DIALOG_BLOCK;
+use o2jam_shell::screens::side::{
+    SideScreen, PAYMENT2_BLOCK, PAYMENT_BLOCK, SELECT_MUSIC_DIALOG_BLOCK,
+    TUTORIAL_BACKGROUND_SPRITE,
+};
 use o2jam_shell::{GameLoop, MenuKey, PlaySkin, Screen, ScreenGame};
 
 use crate::connect::stack_worn_figure;
@@ -118,6 +121,25 @@ pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
     game.menu_key(MenuKey::Confirm, true);
     shots.push(shoot_checked(&mut game, "waiting", Screen::Waiting, 0)?);
     shots.push(shoot_guest_waiting()?);
+    // Side states (lifecycle §12): every lobby opens every side
+    // screen, so the walk visits each from Waiting with its genuine
+    // bound art staged and shoots the placement-driven paint. Without
+    // install-root the shot stays skipped (clean skip, CI arm).
+    for side in [
+        SideScreen::Shop,
+        SideScreen::MusicShop,
+        SideScreen::MyRoom,
+        SideScreen::Lanking,
+        SideScreen::Payment,
+        SideScreen::Tutorial,
+    ] {
+        if !stage_side_art(&mut game, side) {
+            continue;
+        }
+        assert!(game.visit_side(side), "Waiting -> {side:?}");
+        shots.push(shoot_side(&mut game, side)?);
+        assert!(game.leave_side(), "{side:?} -> Waiting");
+    }
     stage_select_music_scene(&mut game);
     shots.push(shoot_checked(&mut game, "musicselect", Screen::Waiting, 0)?);
     game.menu_key(MenuKey::Confirm, true);
@@ -316,7 +338,73 @@ fn stage_bound_block(
     Some((placements, figures))
 }
 
-/// Stage one sprite full-canvas (Channel fallback, Loading gate).
+/// Side-screen stage data: the bound block placements plus figures
+/// (`visit_side` + `load_side_scene` paint these through
+/// `paint_side_scene`). Every side block declares a bind file —
+/// `State_Myroom.bnd` included (111 rects; the earlier "bind absent"
+/// note is corrected against the shipped archive, 2026-11-10).
+/// Payment merges both billing views. The tutorial is a stub block
+/// staging its `Playing1.opi` backdrop full-canvas. `None` keeps the
+/// walk's side shot skipped (no install-root).
+fn side_stage_data(
+    side: SideScreen,
+) -> Option<(Vec<ScenePlacement>, HashMap<String, AvatarFigure>)> {
+    if side == SideScreen::Tutorial {
+        let playing = read_archive(PLAYING_ARCHIVE)?;
+        return stage_single_sprite(&playing, TUTORIAL_BACKGROUND_SPRITE);
+    }
+    let interface = read_archive(INTERFACE_ARCHIVE)?;
+    let list = control_list(&interface, INTERFACE_LIST)?;
+    match side {
+        SideScreen::Payment => {
+            let mut placements = Vec::new();
+            let mut figures = HashMap::new();
+            for block_name in [PAYMENT_BLOCK, PAYMENT2_BLOCK] {
+                let Some((view_placements, view_figures)) =
+                    stage_bound_block(&interface, &list, block_name, None, None)
+                else {
+                    continue;
+                };
+                placements.extend(view_placements);
+                figures.extend(view_figures);
+            }
+            if placements.is_empty() {
+                return None;
+            }
+            Some((placements, figures))
+        }
+        _ => {
+            let block_name = side.block_name()?;
+            stage_bound_block(&interface, &list, block_name, None, None)
+        }
+    }
+}
+
+/// Load one side screen's stage data into the game; `false` when the
+/// archives hold no art (the walk skips the shot).
+fn stage_side_art(game: &mut ScreenGame, side: SideScreen) -> bool {
+    let Some((placements, figures)) = side_stage_data(side) else {
+        return false;
+    };
+    game.load_side_scene(placements, figures);
+    true
+}
+
+/// Shot file stem for one side screen.
+fn side_shot_name(side: SideScreen) -> &'static str {
+    match side {
+        SideScreen::Shop => "shop",
+        SideScreen::MusicShop => "musicshop",
+        SideScreen::MyRoom => "myroom",
+        SideScreen::Lanking => "lanking",
+        SideScreen::Payment => "payment",
+        SideScreen::Tutorial => "tutorial",
+        SideScreen::Planet => "planet",
+    }
+}
+
+/// Stage one sprite full-canvas (Channel fallback, Loading gate,
+/// Tutorial backdrop).
 fn stage_single_sprite(
     archive: &[u8],
     sprite_name: &str,
@@ -1043,6 +1131,16 @@ fn shoot_checked(
     shoot(game, name, now_ms)
 }
 
+/// Rasterize an open side screen: the flow stays on the lobby while
+/// the side overlay paints through `paint_side_scene`.
+fn shoot_side(game: &mut ScreenGame, side: SideScreen) -> anyhow::Result<Shot> {
+    let name = side_shot_name(side);
+    if game.side() != Some(side) {
+        anyhow::bail!("shot {name}: side {:?}, want {side:?}", game.side());
+    }
+    shoot(game, name, 0)
+}
+
 /// Rasterize a result instant under `name`, failing when the walk
 /// missed its screen.
 fn shoot_result_named(
@@ -1632,25 +1730,40 @@ mod tests {
     fn walk_covers_all_scenes_plus_solo_result() {
         let shots = capture_all().unwrap();
         let names: Vec<&str> = shots.iter().map(|shot| shot.name).collect();
-        assert_eq!(
-            names,
-            [
-                "avi",
-                "channel",
-                "planet",
-                "room",
-                "waiting",
-                "waiting-guest",
-                "musicselect",
-                "loading",
-                "playing",
-                "playing-native",
-                "result",
-                "result-native",
-                "result-solo",
-                "result-solo-native"
-            ]
-        );
+        // Side-state shots ride along only when install-root stages
+        // their art (clean skip otherwise — CI arm).
+        let side_names: Vec<&str> = [
+            SideScreen::Shop,
+            SideScreen::MusicShop,
+            SideScreen::MyRoom,
+            SideScreen::Lanking,
+            SideScreen::Payment,
+            SideScreen::Tutorial,
+        ]
+        .into_iter()
+        .filter(|side| side_stage_data(*side).is_some())
+        .map(side_shot_name)
+        .collect();
+        let mut expected = vec![
+            "avi",
+            "channel",
+            "planet",
+            "room",
+            "waiting",
+            "waiting-guest",
+        ];
+        expected.extend_from_slice(&side_names);
+        expected.extend_from_slice(&[
+            "musicselect",
+            "loading",
+            "playing",
+            "playing-native",
+            "result",
+            "result-native",
+            "result-solo",
+            "result-solo-native",
+        ]);
+        assert_eq!(names, expected);
         for shot in &shots {
             let expected = if shot.name.ends_with("-native") {
                 (800, 600)
@@ -1858,6 +1971,104 @@ mod tests {
             return;
         };
         assert!(stage_single_sprite(&playing, LOADING_SPRITE).is_some());
+        // Side states: every `.bnd`-backed screen stages its bound
+        // placements plus figures; Myroom's bind exists on the
+        // shipped archive (111 rects — the old "absent" note is
+        // corrected); the tutorial backdrop decodes.
+        let list = control_list(&interface, INTERFACE_LIST).expect("control list parses");
+        for (side, bind_file) in [
+            (SideScreen::Shop, "State_ItemShop.bnd"),
+            (SideScreen::MusicShop, "State_MShop.bnd"),
+            (SideScreen::MyRoom, "State_Myroom.bnd"),
+            (SideScreen::Lanking, "State_Lanking.bnd"),
+            (SideScreen::Payment, "State_Payment.bnd"),
+        ] {
+            let Some(block_name) = side.block_name() else {
+                panic!("{side:?} names a block");
+            };
+            let Some(bnd) = bind_data(&interface, bind_file) else {
+                panic!("{bind_file} parses");
+            };
+            let block = scene_block(&list, block_name).expect("block exists");
+            assert!(!bnd.rects.is_empty(), "{bind_file} holds rects");
+            assert!(
+                !scene_sprite_names(block).is_empty(),
+                "{block_name} names sprites"
+            );
+            let Some((placements, figures)) = side_stage_data(side) else {
+                panic!("{side:?} stages");
+            };
+            assert!(!placements.is_empty(), "{side:?} placements stage");
+            assert!(!figures.is_empty(), "{side:?} figures stage");
+        }
+        assert!(
+            side_stage_data(SideScreen::Tutorial).is_some(),
+            "tutorial backdrop stages"
+        );
+    }
+
+    #[test]
+    fn side_shot_paints_staged_placements_for_every_screen() {
+        // The visit_side paint path consumes the staged placements:
+        // every side screen inks staged pixels, and the frame stays
+        // byte-identical once the side is left (flow unchanged).
+        let Some(interface) = read_archive(INTERFACE_ARCHIVE) else {
+            println!("skip: missing {INTERFACE_ARCHIVE}");
+            return;
+        };
+        let Some(playing) = read_archive(PLAYING_ARCHIVE) else {
+            println!("skip: missing {PLAYING_ARCHIVE}");
+            return;
+        };
+        let _ = (interface, playing);
+        for side in [
+            SideScreen::Shop,
+            SideScreen::MusicShop,
+            SideScreen::MyRoom,
+            SideScreen::Lanking,
+            SideScreen::Payment,
+            SideScreen::Tutorial,
+        ] {
+            let mut game = seeded_game();
+            walk_to_waiting(&mut game);
+            let lobby_frame = paint_native_frame(&mut game, 0);
+            assert!(stage_side_art(&mut game, side), "{side:?} stages");
+            assert!(game.visit_side(side), "Waiting -> {side:?}");
+            let side_frame = paint_native_frame(&mut game, 0);
+            assert!(
+                side_frame.iter().any(|&pixel| pixel != 0),
+                "{side:?} paints no staged ink"
+            );
+            assert_ne!(
+                side_frame, lobby_frame,
+                "{side:?} changed no pixels over the lobby"
+            );
+            assert!(game.leave_side(), "{side:?} -> Waiting");
+            let back_frame = paint_native_frame(&mut game, 0);
+            assert_eq!(
+                back_frame, lobby_frame,
+                "leaving {side:?} must restore the lobby frame"
+            );
+        }
+    }
+
+    #[test]
+    fn musicselect_chosung_grid_matches_the_bind_inventory() {
+        // FILE wiring proof against the genuine bind: the staged
+        // DAILOG_SELECTMUSIC placements carry 27 + 15 INDEX buttons
+        // at the exact 15 px pitch (docs/geometry-audit.md).
+        let Some(interface) = read_archive(INTERFACE_ARCHIVE) else {
+            println!("skip: missing {INTERFACE_ARCHIVE}");
+            return;
+        };
+        let list = control_list(&interface, INTERFACE_LIST).expect("control list parses");
+        let block = scene_block(&list, SELECT_MUSIC_DIALOG_BLOCK).expect("dialog block exists");
+        let bnd = bind_data(&interface, "Dialog_SelectMusic.bnd").expect("bind parses");
+        let placements = bind_scene_rects(block, &bnd);
+        let layout = o2jam_shell::screens::side::select_chosung_layout(&placements)
+            .expect("INDEX buttons stage");
+        assert_eq!(layout.row_cells, vec![27, 15]);
+        assert_eq!(layout.pitch, 15);
     }
 
     /// Pinned 7.55 fact the channel soak relies on: `STATE_CHANNEL`
@@ -3006,7 +3217,18 @@ mod tests {
     #[test]
     fn staging_attempt_never_breaks_the_walk() {
         let shots = capture_all().unwrap();
-        assert_eq!(shots.len(), 14);
+        let side_count = [
+            SideScreen::Shop,
+            SideScreen::MusicShop,
+            SideScreen::MyRoom,
+            SideScreen::Lanking,
+            SideScreen::Payment,
+            SideScreen::Tutorial,
+        ]
+        .into_iter()
+        .filter(|side| side_stage_data(*side).is_some())
+        .count();
+        assert_eq!(shots.len(), 14 + side_count);
         for shot in &shots {
             assert!(is_varied(&shot.rgb), "{} paints a flat frame", shot.name);
         }
@@ -3016,7 +3238,18 @@ mod tests {
     fn writer_saves_eleven_scenes_and_keeps_avi() {
         let dir = std::env::temp_dir().join(format!("recomp2jam-shots-{}", std::process::id()));
         let written = write_shots(&dir).unwrap();
-        assert_eq!(written.len(), 13);
+        let side_count = [
+            SideScreen::Shop,
+            SideScreen::MusicShop,
+            SideScreen::MyRoom,
+            SideScreen::Lanking,
+            SideScreen::Payment,
+            SideScreen::Tutorial,
+        ]
+        .into_iter()
+        .filter(|side| side_stage_data(*side).is_some())
+        .count();
+        assert_eq!(written.len(), 13 + side_count);
         assert!(!dir.join("avi.png").exists());
         assert!(dir.join("planet.png").exists());
         assert!(dir.join("waiting-guest.png").exists());
@@ -3025,6 +3258,16 @@ mod tests {
         assert!(dir.join("result-native.png").exists());
         assert!(dir.join("result-solo.png").exists());
         assert!(dir.join("result-solo-native.png").exists());
+        for name in [
+            "shop",
+            "musicshop",
+            "myroom",
+            "lanking",
+            "payment",
+            "tutorial",
+        ] {
+            assert_eq!(dir.join(format!("{name}.png")).exists(), side_count == 6);
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

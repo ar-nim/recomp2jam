@@ -19,17 +19,17 @@ use super::paint::{
     WaitingChatMessage, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::side::{
-    can_return_side, can_visit_side, paint_side_scene, select_chosung_cells, select_difficulty_ink,
-    select_music_rows, select_music_songs, select_pager_caption, select_picked_caption,
-    select_search_caption, select_status_line, waiting_song_detail_line, waiting_song_title_line,
-    PlanetSelection, SelectMusicRow, SelectMusicSong, SideScreen, SELECT_ARTIST_RADIO,
-    SELECT_CHO_SUNG_LEFT, SELECT_CHO_SUNG_PITCH, SELECT_CHO_SUNG_ROW_CELLS, SELECT_CHO_SUNG_Y,
-    SELECT_FILTER_BUTTON_H, SELECT_FILTER_BUTTON_PITCH, SELECT_FILTER_BUTTON_TOP,
-    SELECT_FILTER_COLUMNS, SELECT_GENRE_FILTERS, SELECT_HEADER_COLUMNS, SELECT_HEADER_Y,
-    SELECT_LEVEL_FILTERS, SELECT_OK_BUTTON, SELECT_PAGER_RIGHT, SELECT_RESULT_TABS,
-    SELECT_ROW_PITCH, SELECT_ROW_TOP, SELECT_SEARCH_BOX, SELECT_SEARCH_BUTTON, SELECT_SEARCH_Y,
-    SELECT_STATUS_H, SELECT_STATUS_Y, SELECT_TABLE_HEADERS, SELECT_TABLE_LEFT, SELECT_TABLE_WIDTH,
-    SELECT_TITLE_RADIO, SELECT_VISIBLE_ROWS, SELECT_WHEEL_FILTERS,
+    can_return_side, can_visit_side, paint_side_scene, select_chosung_cells, select_chosung_layout,
+    select_difficulty_ink, select_music_rows, select_music_songs, select_pager_caption,
+    select_picked_caption, select_search_caption, select_status_line, waiting_song_detail_line,
+    waiting_song_title_line, PlanetSelection, SelectMusicRow, SelectMusicSong, SideScreen,
+    SELECT_ARTIST_RADIO, SELECT_CHO_SUNG_LEFT, SELECT_CHO_SUNG_PITCH, SELECT_CHO_SUNG_ROW_CELLS,
+    SELECT_CHO_SUNG_Y, SELECT_FILTER_BUTTON_H, SELECT_FILTER_BUTTON_PITCH,
+    SELECT_FILTER_BUTTON_TOP, SELECT_FILTER_COLUMNS, SELECT_GENRE_FILTERS, SELECT_HEADER_COLUMNS,
+    SELECT_HEADER_Y, SELECT_LEVEL_FILTERS, SELECT_OK_BUTTON, SELECT_PAGER_RIGHT,
+    SELECT_RESULT_TABS, SELECT_ROW_PITCH, SELECT_ROW_TOP, SELECT_SEARCH_BOX, SELECT_SEARCH_BUTTON,
+    SELECT_SEARCH_Y, SELECT_STATUS_H, SELECT_STATUS_Y, SELECT_TABLE_HEADERS, SELECT_TABLE_LEFT,
+    SELECT_TABLE_WIDTH, SELECT_TITLE_RADIO, SELECT_VISIBLE_ROWS, SELECT_WHEEL_FILTERS,
 };
 use crate::MenuKey;
 use o2jam_audio::{AudioBackend, PcmSamples};
@@ -1822,7 +1822,11 @@ impl ScreenGame {
         paint_select_table(frame, &rows);
         paint_select_status_row(frame, rows.len());
         paint_select_search_row(frame);
-        paint_select_chosung_rows(frame);
+        let placements: &[ScenePlacement] = self
+            .select_music_art
+            .as_ref()
+            .map_or(&[], |art| &art.placements);
+        paint_select_chosung_rows(frame, placements);
         paint_select_ok(frame);
     }
 
@@ -2244,12 +2248,25 @@ fn paint_select_search_row(frame: &mut Frame<'_>) {
 /// Chosung grid rows: the 14 initial jamo plus the A–Z letters draw
 /// at their grid slots through the embedded TTF (`Cell::Box`, the
 /// 6x12 box cell); the two word cells stay blank (no caption
-/// source).
-fn paint_select_chosung_rows(frame: &mut Frame<'_>) {
+/// source). Row cell counts and the x-pitch come from the staged
+/// INDEX-button inventory when the dialog art stages
+/// ([`select_chosung_layout`], FILE per `docs/geometry-audit.md`);
+/// without placements the audited constants drive the grid.
+fn paint_select_chosung_rows(frame: &mut Frame<'_>, placements: &[ScenePlacement]) {
+    let layout = select_chosung_layout(placements);
     let cells = select_chosung_cells();
     let mut first = 0;
-    for (row, count) in SELECT_CHO_SUNG_ROW_CELLS.iter().enumerate() {
-        let y = select_y(SELECT_CHO_SUNG_Y[row] + 2, frame);
+    let row_cells: &[usize] = layout
+        .as_ref()
+        .map_or(&SELECT_CHO_SUNG_ROW_CELLS, |layout| &layout.row_cells);
+    let pitch = layout
+        .as_ref()
+        .map_or(SELECT_CHO_SUNG_PITCH, |layout| layout.pitch);
+    for (row, count) in row_cells.iter().enumerate() {
+        let Some(y_native) = SELECT_CHO_SUNG_Y.get(row).copied() else {
+            break;
+        };
+        let y = select_y(y_native + 2, frame);
         for cell in 0..*count {
             let Some(letter) = cells.get(first + cell).copied().flatten() else {
                 continue;
@@ -2257,10 +2274,7 @@ fn paint_select_chosung_rows(frame: &mut Frame<'_>) {
             let caption = letter.to_string();
             draw_text_cell(
                 frame,
-                select_x(
-                    SELECT_CHO_SUNG_LEFT + select_step(cell, SELECT_CHO_SUNG_PITCH),
-                    frame,
-                ),
+                select_x(SELECT_CHO_SUNG_LEFT + select_step(cell, pitch), frame),
                 y,
                 &caption,
                 select_ink(),
@@ -2430,6 +2444,58 @@ mod game_tests {
     use o2jam_render::{has_ink_near, near_xrgb};
     use o2jam_render::{pack_xrgb, Frame};
     use std::path::PathBuf;
+
+    #[test]
+    fn select_chosung_rows_ride_the_staged_index_inventory() {
+        // FILE wiring (docs/geometry-audit.md): with the dialog's
+        // INDEX buttons staged, the letters land by the staged
+        // inventory pitch (20 here, deliberately not the constant
+        // 15); without them the audited constants drive the grid.
+        let mut staged = vec![0u32; 800 * 600];
+        let pitch20 = (0..42)
+            .map(|index| ScenePlacement {
+                id: String::new(),
+                code: 0x8C00_0000 | (88 + index as u32),
+                sprite: None,
+                rect: Rect {
+                    x: 345 + 20 * (index % 27),
+                    y: if index < 27 { 440 } else { 455 },
+                    w: 14,
+                    h: 14,
+                },
+            })
+            .collect::<Vec<_>>();
+        paint_select_chosung_rows(
+            &mut Frame {
+                buf: &mut staged,
+                w: 800,
+                h: 600,
+            },
+            &pitch20,
+        );
+        // Cell 14 is 'A': at pitch 20 it inks at x 632, and the
+        // pitch-15 spot (x 562) stays bare.
+        let band = |buf: &[u32], x: i32| {
+            (446..458)
+                .flat_map(|y| (x..x + 6).map(move |px| buf[y * 800 + px as usize]))
+                .any(|pixel| pixel != 0)
+        };
+        assert!(band(&staged, 632), "'A' must ride the staged pitch 20");
+        assert!(!band(&staged, 562), "pitch-15 spot must stay bare");
+        let mut fallback = vec![0u32; 800 * 600];
+        paint_select_chosung_rows(
+            &mut Frame {
+                buf: &mut fallback,
+                w: 800,
+                h: 600,
+            },
+            &[],
+        );
+        assert!(
+            band(&fallback, 562),
+            "without placements the constant pitch 15 drives 'A'"
+        );
+    }
 
     #[test]
     fn loaded_chart_scales_notes_down_the_highway() {

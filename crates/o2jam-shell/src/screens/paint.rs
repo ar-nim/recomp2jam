@@ -790,7 +790,7 @@ pub fn paint_music_shop_scene(frame: &mut Frame<'_>, art: &SceneArt) {
     art.paint_backdrop(frame, Screen::MusicShop);
 }
 
-/// Avatar room: staged art at sprite anchors, flat card fallback.
+/// Avatar room: staged bound art, flat card fallback.
 /// Slot images name no bodies and captions join nowhere, so figures
 /// alone paint — no slot icons, captions, or selection state.
 pub fn paint_myroom_scene(frame: &mut Frame<'_>, art: &SceneArt) {

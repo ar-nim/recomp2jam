@@ -585,16 +585,92 @@ pub const SELECT_SEARCH_BUTTON: Rect = Rect {
     h: 25,
 };
 
-/// Chosung grid (native pixels): row tops, left edge, cell pitch, and
-/// the cell counts (row 1: 14 jamo + 13 letters; row 2: 13 letters +
-/// 2 word cells).
+/// Chosung grid row tops and left edge (native pixels).
+/// CANDIDATE — `docs/geometry-audit.md` (offsets diverge from
+/// `Dialog_SelectMusic.bnd` r87–128: tops 444/462 vs file 440/455,
+/// left 352 vs file 345); rig follow-up, do not replace.
 pub const SELECT_CHO_SUNG_Y: [i32; 2] = [444, 462];
 pub const SELECT_CHO_SUNG_LEFT: i32 = 352;
+/// Chosung cell pitch (native pixels). FILE per the audit: the x-step
+/// of the INDEX button rects (r87–128) is exactly 15. Fallback for
+/// stages without dialog placements; the painter prefers
+/// [`select_chosung_layout`].
 pub const SELECT_CHO_SUNG_PITCH: i32 = 15;
+/// Chosung jamo/letter/word inventory. FILE per the audit: exactly
+/// the `Dialog_SelectMusic` INDEX-button inventory (14 jamo r87–100,
+/// 13+13 letters, 2 words r127–128).
 pub const SELECT_CHO_SUNG_JAMO: usize = 14;
 pub const SELECT_CHO_SUNG_WORDS: usize = 2;
+/// Chosung row cell counts derived from the jamo/letter/word
+/// inventory (FILE values; [`select_chosung_layout`] recounts them
+/// from staged placements at runtime).
 pub const SELECT_CHO_SUNG_ROW_CELLS: [usize; 2] =
     [SELECT_CHO_SUNG_JAMO + 13, 13 + SELECT_CHO_SUNG_WORDS];
+
+/// Chosung grid geometry counted from staged dialog placements: the
+/// INDEX-button inventory (`IDC_BUTTON_DSMUSIC_SERACH_INDEX*`,
+/// ordinals 87–128 of `Dialog_SelectMusic.bnd`) gives the row cell
+/// counts and the x-pitch — both FILE per `docs/geometry-audit.md`.
+/// `None` when no INDEX button stages: callers keep the audited
+/// constants above.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectChosungLayout {
+    /// Painted cells per grid row, top row first.
+    pub row_cells: Vec<usize>,
+    /// X pitch between adjacent cells (native pixels).
+    pub pitch: i32,
+}
+
+/// Count the chosung grid from the staged INDEX buttons: group them
+/// by rect top (row), sort each row left to right, and take the
+/// smallest positive x-step as the pitch.
+#[must_use]
+pub fn select_chosung_layout(placements: &[ScenePlacement]) -> Option<SelectChosungLayout> {
+    let index_rects = index_button_rects(placements);
+    if index_rects.is_empty() {
+        return None;
+    }
+    let rows = rows_by_top(index_rects);
+    let pitch = rows.iter().filter_map(|row| row_pitch(row)).min()?;
+    Some(SelectChosungLayout {
+        row_cells: rows.iter().map(Vec::len).collect(),
+        pitch,
+    })
+}
+
+/// Rects of the staged chosung INDEX buttons (ordinals 87–128).
+fn index_button_rects(placements: &[ScenePlacement]) -> Vec<Rect> {
+    placements
+        .iter()
+        .filter(|placement| {
+            let ordinal = (placement.code & 0xFFF).saturating_sub(1);
+            (87..=128).contains(&ordinal)
+        })
+        .map(|placement| placement.rect)
+        .collect()
+}
+
+/// Group row rects by their top edge, rows sorted top-to-bottom and
+/// each row's rects sorted left-to-right.
+fn rows_by_top(mut rects: Vec<Rect>) -> Vec<Vec<Rect>> {
+    rects.sort_by_key(|rect| (rect.y, rect.x));
+    let mut rows: Vec<Vec<Rect>> = Vec::new();
+    for rect in rects {
+        match rows.last_mut() {
+            Some(row) if row[0].y == rect.y => row.push(rect),
+            _ => rows.push(vec![rect]),
+        }
+    }
+    rows
+}
+
+/// Smallest positive x-step between adjacent cells of one row.
+fn row_pitch(row: &[Rect]) -> Option<i32> {
+    row.windows(2)
+        .map(|pair| pair[1].x - pair[0].x)
+        .filter(|step| *step > 0)
+        .min()
+}
 
 /// OK button (native pixels; the reference bottom-center pill).
 pub const SELECT_OK_BUTTON: Rect = Rect {
@@ -1987,6 +2063,70 @@ mod side_tests {
     #[test]
     fn select_status_line_names_the_all_filter_path() {
         assert_eq!(select_status_line(), "ALL -> ALL SEARCH RESULT.");
+    }
+
+    /// Synthetic INDEX-button placements in the audited file shape:
+    /// `counts` cells per row (top row first) at `pitch` x-step,
+    /// codes carrying ordinals 87.. like the genuine bind pairing.
+    fn index_button_placements(counts: &[usize], pitch: i32) -> Vec<ScenePlacement> {
+        let mut placements = Vec::new();
+        let mut ordinal = 87usize;
+        for (row, count) in counts.iter().enumerate() {
+            for cell in 0..*count {
+                let code = 0x8C00_0000u32 | (ordinal as u32 + 1);
+                placements.push(ScenePlacement {
+                    id: String::new(),
+                    code,
+                    sprite: None,
+                    rect: Rect {
+                        x: 345 + pitch * cell as i32,
+                        y: 440 + 15 * row as i32,
+                        w: 14,
+                        h: 14,
+                    },
+                });
+                ordinal += 1;
+            }
+        }
+        placements
+    }
+
+    #[test]
+    fn select_chosung_layout_counts_the_index_button_inventory() {
+        // FILE per the audit: the grid derives from the INDEX-button
+        // inventory (27 cells over 15 below) and the x-pitch is the
+        // exact 15 px file step.
+        let layout = select_chosung_layout(&index_button_placements(&[27, 15], 15))
+            .expect("INDEX buttons stage a layout");
+        assert_eq!(layout.row_cells, vec![27, 15]);
+        assert_eq!(layout.pitch, 15);
+    }
+
+    #[test]
+    fn select_chosung_layout_uses_the_smallest_row_pitch() {
+        // A divergent pitch must reach the painter: letters land by
+        // the staged file step, not the constant.
+        let layout = select_chosung_layout(&index_button_placements(&[27, 15], 20))
+            .expect("INDEX buttons stage a layout");
+        assert_eq!(layout.row_cells, vec![27, 15]);
+        assert_eq!(layout.pitch, 20);
+    }
+
+    #[test]
+    fn select_chosung_layout_falls_back_without_index_buttons() {
+        assert_eq!(select_chosung_layout(&[]), None);
+        let unrelated = vec![ScenePlacement {
+            id: String::new(),
+            code: 0x8C20_0002,
+            sprite: None,
+            rect: Rect {
+                x: 1,
+                y: 2,
+                w: 3,
+                h: 4,
+            },
+        }];
+        assert_eq!(select_chosung_layout(&unrelated), None);
     }
 
     #[test]

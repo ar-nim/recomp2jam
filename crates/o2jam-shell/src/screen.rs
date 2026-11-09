@@ -28,8 +28,9 @@ pub enum Screen {
     /// Rankings display (`STATE_LANKING`, `0x37`, no state class).
     /// Spelling follows the shipped block name.
     Lanking,
-    /// Avatar room (`CStateMyroom`, `0x6A`; bind file absent — paints
-    /// at sprite anchors, never rects).
+    /// Avatar room (`CStateMyroom`, `0x6A`; bound `State_Myroom.bnd`,
+    /// 111 rects — the bind exists on the shipped archive; the old
+    /// "absent" note is corrected 2026-11-10).
     Myroom,
     /// Item shop (`CStateShop`, `0xA4`; shared Payment backends).
     Shop,

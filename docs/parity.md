@@ -89,21 +89,35 @@ invented placement remains (cited per cell), never for lack of art.
 | Timing | None documented | Paint-driven, immediate | PASS (vacuous) |
 | Transitions | `Result → Waiting`, `Result → Room` | Implemented + tested | PASS |
 
-## Side states (reachable from lobbies; not in shell)
+## Side states (reachable from lobbies)
 
-All **OPEN** (no shell screen, no implementation — documented so no
-pass is ever claimed):
+All **OPEN** for data/input (no fetch opcodes, no buy/gift/cart/search
+flows — documented so no pass is ever claimed). Composition 2026-11-10:
+the walk now visits every side screen from Waiting through
+`visit_side` with its genuine bound art staged (`side_stage_data`:
+`.bnd` placements paired by code ordinal plus decoded figures, the
+painter consumes every placement through `paint_side_scene`), and
+shots `shop.png`, `musicshop.png`, `myroom.png`, `lanking.png`,
+`payment.png`, `tutorial.png` show the file-native frames. Without
+`install-root` the side shots stay skipped (clean skip, CI arm) and
+the walk list tests assert both arms. The musicselect chosung grid
+now counts its row cells and x-pitch from the staged INDEX-button
+inventory (`select_chosung_layout`, FILE per the audit; row tops and
+left edge stay CANDIDATE constants). Contradiction correction:
+`State_Myroom.bnd` **exists** on the shipped archive (111 rects,
+full-bleed r0) — the older "bind file declared but absent" note was
+wrong; Myroom stages bound like every other side screen.
 
 - `STATE_SHOP` / `STATE_MUSICSHOP` (`CStateShop`/`CStateMShop`,
-  `0xA4`/`0x6B`; `Payment` back-ends, `CMyBag`/`CCart`). Screens,
-  paint (staged art or flat card, no rows/data), and all-reject
-  flow live; buy/gift/cart/search/sort/pager flows and entry
-  unwired (all OPEN).
-- `STATE_MYROOM` (`0x6A`; `CItemManager`, `CPlayerInfo`). Screen,
-  paint (staged anchor art or flat card, no slots/captions), and
-  all-reject flow live; slot selection, equip, pager, gift flows,
-  captions, entry unwired (all OPEN). Bind file declared but absent:
-  art paints at sprite anchors, never rects.
+  `0xA4`/`0x6B`; `Payment` back-ends, `CMyBag`/`CCart`). Bound
+  placements stage (ItemShop 186 rects, MShop 138 rects); every
+  staged figure paints at its rect. Data rows (items, songs, prices,
+  pager cells) stay unpainted stand-ins: no data join exists and the
+  audit gives no FILE rows for these scenes. Buy/gift/cart/search/
+  sort/pager flows and entry unwired (all OPEN).
+- `STATE_MYROOM` (`0x6A`; `CItemManager`, `CPlayerInfo`). Bound
+  placements stage (111 rects). Slot selection, equip, pager, gift
+  flows, captions, entry unwired (all OPEN).
 - `STATE_PLANET` (`CStatePlanet`, `0x11`; BGM `Music/Planet.ojm`;
   quest button commented undecided — no drum backend). Screen,
   paint (staged art or flat card, no captions), and flow edges
@@ -118,11 +132,12 @@ pass is ever claimed):
   cell and EXIT/OPTION hit rects (geometry not fully pinned), BGM
   (closed as no-trigger).
 - `STATE_LANKING` (`0x37`; display-only, no state class — like CHANNEL).
-  Screen, paint (staged art or flat card, no rows/data), and
-  all-reject flow live; rank fetch, sorts, search, pagers, entry
-  unwired (all OPEN).
-- `STATE_PAYMENT` / `STATE_PAYMENT2` (web billing views).
-- `STATE_TUTORIAL` (stub `0x00`; entry path unknown).
+  Bound placements stage (73 rects). Rank rows, sorts, search, and
+  pagers stay unpainted (fetch opcode unknown — all OPEN).
+- `STATE_PAYMENT` / `STATE_PAYMENT2` (web billing views). Both
+  billing views stage and merge (9 + 12 rects); no web call wired.
+- `STATE_TUTORIAL` (stub `0x00`; entry path unknown). The
+  `Playing_TutorialBG.ojs` backdrop stages full-canvas from `Playing1`.
 - `STATE_DRUM_PLAYING` / `STATE_EXIT` (stubs `0x00`; drum never wired,
   no `CStateDrum*` class; exit is teardown, not a screen).
 
