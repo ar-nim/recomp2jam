@@ -1100,6 +1100,11 @@ impl OnlineSession {
             self.guest_ready = !self.guest_ready;
             tracing::warn!(%source, "ready send failed; Confirm retries it");
         }
+        // Fold the final toggle into the seats so the READY button and
+        // flags follow it (failures already flipped back above).
+        if let Some(id) = self.joined_room.as_ref().map(|room| room.member_id) {
+            self.game.set_member_ready(id, self.guest_ready);
+        }
     }
 
     /// Joined Loading Confirm: send `ConfirmMusicLoaded` 4012 (the

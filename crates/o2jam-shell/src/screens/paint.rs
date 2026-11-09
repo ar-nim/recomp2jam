@@ -1383,10 +1383,18 @@ fn team_letter(team: u8) -> char {
 
 /// Our own seat: name is local-only (the wire sends no self nickname).
 fn self_seat(room: &JoinedRoom) -> WaitingSeat {
+    // Own readiness rides the member slot like every peer (the ready
+    // toggle folds there); unknown seats keep the unready look.
+    let ready = room
+        .slots
+        .iter()
+        .find(|slot| slot.index == room.member_id)
+        .and_then(|slot| slot.member.as_ref())
+        .is_some_and(|member| member.ready);
     WaitingSeat {
         team: room.team,
         name: "YOU".to_owned(),
-        kind: SeatKind::Occupied { ready: false },
+        kind: SeatKind::Occupied { ready },
     }
 }
 
@@ -3836,7 +3844,7 @@ mod paint_tests {
         assert_eq!(seats[0].display_name(), Some("YOU"));
         assert_eq!(seats[1].display_name(), Some("host"));
         assert!(seats[1].is_ready());
-        assert!(!seats[0].is_ready());
+        assert!(seats[0].is_ready());
         assert_eq!(seats[2].display_name(), None);
         assert_eq!(seats[3].kind, SeatKind::Locked);
         assert!(seats[4..].iter().all(|seat| seat.kind == SeatKind::Empty));
@@ -3846,7 +3854,7 @@ mod paint_tests {
     fn waiting_row_text_shows_name_team_and_ready() {
         let seats = waiting_seats(&waiting_room());
         assert_eq!(waiting_row_text(1, &seats[1]), "1 A host R");
-        assert_eq!(waiting_row_text(0, &seats[0]), "0 B YOU -");
+        assert_eq!(waiting_row_text(0, &seats[0]), "0 B YOU R");
         assert_eq!(waiting_row_text(2, &seats[2]), "2 - ---");
         assert_eq!(waiting_row_text(3, &seats[3]), "3 - LOCK");
     }
@@ -3865,7 +3873,6 @@ mod paint_tests {
         );
         let waiting_bg = background_of(Screen::Waiting);
         let ready_green = pack_xrgb(0x30, 0xE0, 0x30);
-        let dim = pack_xrgb(0x50, 0x50, 0x50);
         assert_eq!(buf[0], waiting_bg);
         // Seat 1 (ready host) sits in column 1, row 0 of the 4x2 grid.
         let (host_x, host_y) = seat_origin(1, 80, 64);
@@ -3874,11 +3881,11 @@ mod paint_tests {
             buf[(host_y + 1) as usize * 80 + (host_x - 6 + 1) as usize],
             ready_green
         );
-        // Seat 0 (self, not ready) keeps a dim dot.
+        // Seat 0 (self, ready host) keeps a green dot like any ready seat.
         let (self_x, self_y) = seat_origin(0, 80, 64);
         assert_eq!(
             buf[(self_y + 1) as usize * 80 + (self_x - 6 + 1) as usize],
-            dim
+            ready_green
         );
         // Seat 2 (empty) has no dot: the seat scrim shows through.
         let (empty_x, empty_y) = seat_origin(2, 80, 64);

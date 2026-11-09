@@ -59,7 +59,7 @@ invented placement remains (cited per cell), never for lack of art.
 | Input | Team toggle → `SetRoomTeam` 4004 + `Ready` 4008(0); host start; back button (gameplay room-teams: `FUN_004b22d0` file `0xb22d0`, ev `2c8d3964…`) | Confirm → Loading, Back → Room; no team/send path | OPEN |
 | Timing | `MusicLoading.ojs` + song clock arming at load (lifecycle §9.5) | n/a (see Loading) | OPEN |
 | Transitions | `Waiting → Loading`, `Waiting → Room` | Implemented + tested | PASS |
-| Gameplay | 8 seats, team 0..7, winner art only (no per-team panel) | Seats + ready flags; no teams/winner art. Live fold gap (2026-11-09, wire-proven): guest `4008` send and `4009`/peer echoes never reach game slots, so the READY button and seat flags freeze at join-time values — paint supports them (soak), only the fold is missing | OPEN |
+| Gameplay | 8 seats, team 0..7, winner art only (no per-team panel) | Seats + ready flags; no teams/winner art. Live fold gap, narrowed 2026-11-09: the guest toggle folds into game slots and self-seat reads slot readiness, but live snapshots number members off the slot indices (wire: member 1, no slot 1), so the fold misses silently — paint proven, lookup convention OPEN | OPEN |
 
 ## Loading gate (song select → play)
 

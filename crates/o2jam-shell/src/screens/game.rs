@@ -517,6 +517,21 @@ impl ScreenGame {
         self
     }
 
+    /// Mark one member's ready flag in place (ready echoes and the
+    /// local toggle fold here — never rebuilds the room, so waiting
+    /// chat histories survive, unlike [`Self::set_joined_room`]).
+    /// Unknown members and no room are silent no-ops.
+    pub fn set_member_ready(&mut self, member_id: u8, ready: bool) -> &mut Self {
+        if let Some(room) = self.waiting.as_mut() {
+            if let Some(slot) = room.slots.iter_mut().find(|slot| slot.index == member_id) {
+                if let Some(member) = slot.member.as_mut() {
+                    member.ready = ready;
+                }
+            }
+        }
+        self
+    }
+
     /// Append one player chat line (3012) to the waiting history.
     pub fn push_waiting_user_message(&mut self, message: &WaitingUserMessage) -> &mut Self {
         self.push_chat_row(&message.sender, &message.content_text(), false);
@@ -4155,6 +4170,24 @@ mod game_tests {
         );
         assert_eq!(buf[0], background_of(Screen::Planet));
         assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
+    }
+
+    #[test]
+    fn set_member_ready_marks_seats_in_place() {
+        // Ready folds must not rebuild the room (which clears chat).
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        game.set_member_ready(0, false);
+        let room = game.waiting.as_ref().expect("joined room");
+        assert!(!room.slots[0].member.as_ref().expect("host").ready);
+        game.set_member_ready(0, true);
+        let room = game.waiting.as_ref().expect("joined room");
+        assert!(room.slots[0].member.as_ref().expect("host").ready);
+        // Unknown members and no room stay silent no-ops.
+        game.set_member_ready(7, true);
+        let mut bare = ScreenGame::new();
+        bare.set_member_ready(0, true);
+        assert!(bare.waiting.is_none());
     }
 
     #[test]
