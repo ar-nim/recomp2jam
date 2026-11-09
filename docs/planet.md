@@ -73,4 +73,11 @@ left-to-right in file order (HARD sits center at x313).
 4. Promotion PLAYSTOP/LEFT/RIGHT semantics.
 5. EXIT/OPTION destinations.
 6. Entry path (Channel planet pick vs solo) and exit paths.
-7. BGM start trigger and NPC voice role.
+7. BGM start trigger and NPC voice role — CLOSED as no-trigger (2026-11-09,
+   static scan): all 7 background tracks preload together at audio
+   init (function region file `0x1a5710`..`0x1a5fe0` via the index loop
+   file `0x150ae0` over the 7-entry table at file `0x27f730`,
+   `Music/Planet.ojm` at file `0x27f850` = index 4); no per-state
+   open and no Planet-entry/button caller exist, and track selection
+   among opened streams is unidentified. The shell starts no BGM —
+   correct absence, not a gap.
