@@ -36,7 +36,24 @@ lines 1962–63).
 `State_Planet.bnd`: slot 1347, offset 61450578, 278 B body =
 `4 + 2 + 17×16` exact → magic `FFFFFFFF` + u16 count + 17 rects
 of 16 B (`docs/file-formats/opi.md` envelope). Rect contents
-unread (next step).
+(2026-11-09, `4×i32` LE per rect):
+
+| Rect | Box | Pairs (ordinal) |
+|---|---|---|
+| 0 | (0,0)-(800,600) | BACK (ordinal 0, full-bleed) |
+| 1 | (313,32)-(459,144) | HARD button (1) |
+| 2 | (206,32)-(305,144) | NORMAL button (2) |
+| 3 | (87,32)-(186,144) | EASY button (3) |
+| 4 | (614,32)-(713,144) | FREE button (4) |
+| 5 | (510,32)-(609,144) | DRUM button (5) |
+| 6..10 | y125-138 strips under buttons | TEXT labels (6..10) |
+| 11 | (49,163)-(750,496) | PROMOTION image (11) |
+| 12..14 | y511-535 small cells | promotion LEFT/RIGHT/PLAYSTOP (12..14) |
+| 15..16 | (750,561)/(710,561) bottom-right | EXIT / OPTION (15..16) |
+
+Ordinal pairing (`(code & 0xFFF) − 1`, memory `[0c6c3]`) reproduces
+a coherent layout with no invention: note the buttons do NOT run
+left-to-right in file order (HARD sits center at x313).
 
 ## Assets present (install-root, git-ignored)
 
@@ -45,7 +62,7 @@ unread (next step).
 
 ## OPEN
 
-1. Rect contents → placements (pairing getter `0x548640`).
+1. ~~Rect contents → placements (pairing getter `0x548640`).~~ DONE above.
 2. TEXT caption sources (`0X19400007..0B` never code-addressed yet).
 3. FREE/DRUM click behavior (no backend; clicks must stay unbound — P0).
 4. Promotion PLAYSTOP/LEFT/RIGHT semantics.
