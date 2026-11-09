@@ -304,9 +304,23 @@ fn walk_to_loading(game: &mut ScreenGame) {
     assert_eq!(game.screen(), Screen::Loading);
 }
 
-/// Walk the menu journey from splash to gameplay.
+/// Walk the menu journey from splash to gameplay. The Loading
+/// Confirm runs the gate, so the walk stages the session shape
+/// first: a validated pick, the null audio rig, and the walk at
+/// the armed phase (decrypt and Vorbis init already staged).
 fn walk_to_playing(game: &mut ScreenGame) {
     walk_to_loading(game);
+    game.set_selected_music(o2jam_net::play::SetRoomMusic {
+        music_id: 757,
+        difficulty: 1,
+        speed: 0,
+    });
+    game.with_audio(Box::new(o2jam_audio::NullBackend::new()), HashMap::new());
+    game.set_loading_status(o2jam_shell::screens::paint::LoadingStatus {
+        progress: 1.0,
+        title: "First".to_owned(),
+        artist: "Band".to_owned(),
+    });
     game.menu_key(MenuKey::Confirm, true);
     assert_eq!(game.screen(), Screen::Playing);
 }

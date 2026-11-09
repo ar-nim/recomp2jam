@@ -1918,6 +1918,30 @@ mod session_tests {
         (port, server)
     }
 
+    /// Stage the S7 loading gate the way the live lane does
+    /// (`stage_chart_bytes` stages the armed caption on song prep):
+    /// a validated pick, the armed loading status, and a null rig —
+    /// so a following Loading Confirm is allowed to arm the clock.
+    fn stage_armed_loading(game: &mut ScreenGame) {
+        use crate::loading::{loading_phase_status, LOADING_GATE_STEPS};
+        use o2jam_audio::NullBackend;
+        use o2jam_net::SetRoomMusic;
+        use std::collections::HashMap;
+        // Easy (difficulty 0): the hosted defaults the cleared
+        // builders used before the gate existed (life drains
+        // 50 on a Miss); changing it here would retitle the
+        // tests' judgement economy.
+        game.set_selected_music(SetRoomMusic {
+            music_id: 757,
+            difficulty: 0,
+            speed: 0,
+        });
+        game.with_audio(Box::new(NullBackend::new()), HashMap::new());
+        if let Some(status) = loading_phase_status(LOADING_GATE_STEPS, "Song", "Band") {
+            game.set_loading_status(status);
+        }
+    }
+
     /// Game walked Avi → Channel → Room → Waiting, paired with a live
     /// fake gateway; the server end runs `with_server`.
     fn waiting_session(
@@ -1930,6 +1954,7 @@ mod session_tests {
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Waiting);
+        stage_armed_loading(&mut game);
         let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
         (OnlineSession::new(game, gateway), server)
     }
@@ -2047,6 +2072,7 @@ mod session_tests {
         session.joined_waiting = true;
         session.game.menu_key(MenuKey::Confirm, true);
         assert_eq!(session.game.screen(), Screen::Waiting);
+        stage_armed_loading(session.game_mut());
         (session, server)
     }
 
@@ -2061,6 +2087,9 @@ mod session_tests {
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
+        // The next Confirm is the Loading→Playing gate (S7): arm it
+        // the way the live lane stages song prep.
+        stage_armed_loading(&mut game);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Playing);
         let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
@@ -3729,6 +3758,10 @@ mod session_tests {
         let (mut session, server) = catalog_session(|mut stream| {
             assert_quiet(&mut stream);
         });
+        // Reset the builder-staged armed state to the unarmed
+        // baseline the assertion below assumes (the error path must
+        // stage nothing new).
+        session.game.clear_loading();
         assert!(session.stage_chart_bytes(&chart_blob(), 9).is_err());
         server.join().unwrap();
         assert!(session.game.loading_status().is_none());

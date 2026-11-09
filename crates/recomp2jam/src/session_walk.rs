@@ -1011,9 +1011,23 @@ mod session_walk_tests {
         game.load_chart(vec![(2, PLAYING_NOW_MS, 7)]);
         game.lane_key(3, true);
         game.click_planet(136, 88);
-        for _ in 0..4 {
+        for _ in 0..3 {
             game.menu_key(MenuKey::Confirm, true);
         }
+        // The Loading→Playing gate (S7): the rig is staged above, so
+        // only the validated pick and the armed status are missing.
+        // Easy (difficulty 0): the walk's judgement economy.
+        game.set_selected_music(o2jam_net::SetRoomMusic {
+            music_id: 757,
+            difficulty: 0,
+            speed: 0,
+        });
+        if let Some(status) =
+            crate::loading::loading_phase_status(crate::loading::LOADING_GATE_STEPS, "Song", "Band")
+        {
+            game.set_loading_status(status);
+        }
+        game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Playing);
         game.strike_at(2, PLAYING_NOW_MS);
         assert_eq!(game.live_play().score().combo, 1);

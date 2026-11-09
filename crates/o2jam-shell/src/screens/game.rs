@@ -45,13 +45,24 @@ use o2jam_net::rooms::{
     SendMainRoomMessage, SendWaitingMessage, SendWhisper, WaitingAdminMessage, WaitingUserMessage,
 };
 use o2jam_net::{
-    ChannelState, CreateRoom, JoinRoom, JoinedRoom, Ready, RoomListEntry, RoomTeamChanged,
-    SetRoomTeam,
+    ChannelState, CreateRoom, Difficulty, JoinRoom, JoinedRoom, Ready, RoomListEntry,
+    RoomTeamChanged, SetRoomTeam,
 };
 use o2jam_render::font::{draw_text_cell, Cell};
 use o2jam_render::{
     draw_text, fill_rect, pack_xrgb, scale_rect_to_frame, text_width, Frame, Rect, Rgb555Image,
 };
+
+/// Loading-gate phase capacity (lifecycle section 9, steps 2-5):
+/// staging `0x4f8b80` (ev `d2a69b45...`), OJN open/decrypt `0x412180`
+/// (ev `011eab73...`), codec init `0x54db40` plus sample decode init
+/// `0x54d460` (ev `0ee1373d...` / `3f154198...`), and the loading
+/// screen `0x4e47a0` (ev `68d920c2...`) arming the song clock. Phase
+/// 0 is gate entry (select validation `0x5718b0`, ev `66e60d16...`);
+/// reaching [`LOADING_GATE_PHASES`] is the armed fraction the shot
+/// walk holds. Decrypt and Vorbis init precede the arm: the gate
+/// never reaches the armed phase before both.
+pub const LOADING_GATE_PHASES: usize = 4;
 
 /// Stage the Playing backdrop defaults to before a room names one:
 /// the exe's room entry replaces a zero stage with a real one (the
@@ -154,6 +165,15 @@ pub struct ScreenGame {
     /// Live loading status (walk fraction + title–artist, lifecycle
     /// §9): `None` paints the indeterminate full bar.
     loading_status: Option<LoadingStatus>,
+    /// Loading-gate phase held by the walk (0 entry ..= 4 armed;
+    /// [`LOADING_GATE_PHASES`]): advances only through staged
+    /// [`ScreenGame::set_loading_status`] fractions, never on Confirm
+    /// alone, so an unstaged gate stays at entry and holds Loading.
+    loading_gate_phase: usize,
+    /// A failed loading leg (bad chart, undecryptable OJN, missing
+    /// audio): latched until [`ScreenGame::clear_loading`], holds
+    /// Loading against any later fraction.
+    loading_gate_failed: bool,
     /// Room arena stage the Playing `_` sprites resolve through
     /// (`Playing_BG<stage>.ojs` and the staged kits; see
     /// [`Self::arena_stage`]).
@@ -264,6 +284,26 @@ fn arena_stage_word(arena: i32) -> Option<u16> {
     let high = word >> 16;
     let stage = if high != 0 { word & 0xFFFF } else { word };
     u16::try_from(stage).ok().filter(|stage| *stage != 0)
+}
+
+/// Loading-gate phase named by one staged walk fraction: the
+/// fraction maps onto [`LOADING_GATE_PHASES`] (0 entry, 0.25
+/// staging, 0.5 OJN decrypt, 0.75 Vorbis decode, 1.0 clock arm),
+/// so callers thread phases through their staged statuses
+/// (`loading_phase_status` in the CLI layer) and the shell never
+/// invents a phase from the clock. NaN/negative fractions read as
+/// entry (the clamped paint rule); never `as` (PERF-07).
+#[must_use]
+fn loading_phase_for_progress(progress: f32) -> usize {
+    let clamped = if progress.is_nan() {
+        0.0_f32
+    } else {
+        progress.clamp(0.0, 1.0)
+    };
+    let scaled = clamped * LOADING_GATE_PHASES as f32;
+    usize::try_from(scaled.round() as i64)
+        .unwrap_or(0)
+        .min(LOADING_GATE_PHASES)
 }
 
 /// Install `Music` path of one catalog container token: the record's
@@ -430,6 +470,8 @@ impl ScreenGame {
             chat_input: String::new(),
             selected_music: None,
             loading_status: None,
+            loading_gate_phase: 0,
+            loading_gate_failed: false,
             arena_stage: DEFAULT_ARENA_STAGE,
             planet: PlanetSelection::new(),
             planet_modal: None,
@@ -620,14 +662,33 @@ impl ScreenGame {
 
     /// Step the flow through the verified edge gates (shot/test
     /// driver): `false` when `can_enter` rejects, so no transition is
-    /// invented. Re-anchors the song clock (backend samples played
-    /// at Playing entry) on Playing entry and re-cues the new
-    /// screen's scene music (see [`Self::stage_scene_bgm`]).
+    /// invented. The Loading-to-Playing edge is the gate: it holds
+    /// unless [`Self::loading_gate_ready`], so an unvalidated,
+    /// unstaged, undecrypted, or audio-less gate never invents the
+    /// transition and never arms the clock. Entering Loading seeds
+    /// the gate from any status the loader already staged (the
+    /// session stages the clock-armed caption before the 4011 edge),
+    /// else starts it at entry. On a held Playing entry the song
+    /// clock anchors to backend samples there and the new screen's
+    /// scene music re-cues.
     pub fn enter_screen(&mut self, next: Screen) -> bool {
+        if next == Screen::Playing
+            && self.flow.current() == Screen::Loading
+            && !self.loading_gate_ready()
+        {
+            return false;
+        }
         let entered = self.flow.go(next).is_ok();
         if entered {
             if next == Screen::Room {
                 self.room_dialog = None;
+            }
+            if next == Screen::Loading {
+                self.loading_gate_failed = false;
+                self.loading_gate_phase = self
+                    .loading_status
+                    .as_ref()
+                    .map_or(0, |status| loading_phase_for_progress(status.progress));
             }
             if next == Screen::Playing {
                 self.song_anchor_sample = self
@@ -1619,15 +1680,120 @@ impl ScreenGame {
 
     /// Stage a live loading status (real gate fractions only — see
     /// `recomp2jam::loading`; unknown stays `None`, never invented).
+    /// The fraction is the gate phase ([`LOADING_GATE_PHASES`]):
+    /// callers thread entry plus the staging/decrypt/decode/arm
+    /// steps through `loading_phase_status` (or the armed full
+    /// fraction straight from a completed chart stage), and reaching
+    /// the armed fraction is the only way the gate phase reaches the
+    /// arm — Confirm alone never advances it. A latched failure
+    /// still holds the phase back.
     pub fn set_loading_status(&mut self, status: LoadingStatus) -> &mut Self {
+        let phase = loading_phase_for_progress(status.progress);
+        if !self.loading_gate_failed {
+            self.loading_gate_phase = self.loading_gate_phase.max(phase);
+        }
         self.loading_status = Some(status);
         self
     }
 
-    /// Forget the walk state: Loading paints indeterminate again.
+    /// Forget the walk state: Loading paints indeterminate again;
+    /// the gate phase drops to entry and any latched failure clears,
+    /// so the next song re-walks the gate from validation.
     pub fn clear_loading(&mut self) -> &mut Self {
         self.loading_status = None;
+        self.loading_gate_phase = 0;
+        self.loading_gate_failed = false;
         self
+    }
+
+    /// The pick the song-select staged (`None` until a music is
+    /// picked): the loading gate validates it on the Loading edge.
+    #[must_use]
+    pub fn selected_music(&self) -> Option<SetRoomMusic> {
+        self.selected_music
+    }
+
+    /// Whether an audio rig is attached (the gate requires one: the
+    /// sample clock rides its backend).
+    #[must_use]
+    pub fn has_audio(&self) -> bool {
+        self.audio.is_some()
+    }
+
+    /// Gate phase held by the walk (0 entry, 1 staging, 2 OJN
+    /// decrypt, 3 Vorbis decode, 4 clock armed) — where the staged
+    /// fractions currently stand. Stays at entry while nothing
+    /// stages.
+    #[must_use]
+    pub fn loading_gate_phase(&self) -> usize {
+        self.loading_gate_phase
+    }
+
+    /// Whether the gate has latched a failure (bad chart,
+    /// undecryptable OJN, missing audio): the gate then holds
+    /// Loading until a fresh [`Self::clear_loading`] re-walks it.
+    #[must_use]
+    pub fn loading_gate_failed(&self) -> bool {
+        self.loading_gate_failed
+    }
+
+    /// Latch a loading failure (bad chart bytes, an OJN the decrypt
+    /// rejects, a bank leg that decoded nothing): the gate holds
+    /// Loading and never advances or arms on it, whatever fraction a
+    /// later status stages. The caller clears it with
+    /// [`Self::clear_loading`] when the song changes.
+    pub fn fail_loading_gate(&mut self) {
+        self.loading_gate_failed = true;
+    }
+
+    /// Select validation behind the Loading-to-Playing gate
+    /// (lifecycle section 9, step 1: `0x5718b0`, ev `66e60d16...`):
+    /// the picked song carries a nonzero id and a known difficulty
+    /// slot (`Difficulty::from_code`; Rx maps to the Hard slice
+    /// downstream, like the session's level map), and when the song
+    /// table is staged the id must name one of its songs. No pick or
+    /// no table match rejects before any file work matters.
+    ///
+    /// OPEN: with no catalog staged the table membership stays
+    /// unverifiable (the offline/manual chart paths stage no table),
+    /// so only the id/difficulty shape gates there — the table check
+    /// engages once the catalog stages.
+    #[must_use]
+    pub fn validate_loading_select(&self) -> bool {
+        let Some(selection) = self.selected_music.as_ref() else {
+            return false;
+        };
+        if selection.music_id == 0 {
+            return false;
+        }
+        if Difficulty::from_code(selection.difficulty).is_none() {
+            return false;
+        }
+        if !self.catalog_songs.is_empty()
+            && !self
+                .catalog_songs
+                .iter()
+                .any(|song| song.song_id == u32::from(selection.music_id))
+        {
+            return false;
+        }
+        true
+    }
+
+    /// Whether the gate stands ready to arm the song clock and hand
+    /// off to Playing: no latched failure, validation holds, the
+    /// walk reached the armed phase (staging, OJN decrypt, and
+    /// Vorbis init all staged before it), and an audio rig is
+    /// attached — missing audio never arms, so the sample clock
+    /// [`Self::now_ms`] always has a backend behind it. Confirm and
+    /// the test driver hold in Loading while this is `false`; the
+    /// scene stays honest.
+    #[must_use]
+    pub fn loading_gate_ready(&self) -> bool {
+        !self.loading_gate_failed
+            && self.loading_gate_phase >= LOADING_GATE_PHASES
+            && self.validate_loading_select()
+            && self.audio.is_some()
     }
 
     /// Live loading status, if a real gate walk staged one.
@@ -3039,6 +3205,11 @@ impl GameLoop for ScreenGame {
                 let last = self.rooms.len().saturating_sub(1);
                 self.room_highlight = (self.room_highlight + 1).min(last);
             }
+            // Loading Confirm runs the gate (`enter_screen` holds
+            // the edge while the gate is unready): validation,
+            // staging, OJN decrypt, and Vorbis init all staged, an
+            // audio rig attached, and no latched failure. Until
+            // then Confirm leaves the scene in Loading (honest).
             (Screen::Loading, MenuKey::Confirm) => self.enter(Screen::Playing),
             (Screen::Room, MenuKey::Back) => self.enter(Screen::Channel),
             (Screen::Channel, MenuKey::Confirm) => {
@@ -3325,12 +3496,44 @@ mod game_tests {
         game.click_planet(136, 88);
     }
 
+    /// Stage a gate-ready song before the Loading Confirm: the
+    /// session/shots shape — a validated pick staged against a
+    /// staged catalog, an audio rig attached (null sink where the
+    /// test brought none), and the walk walked to the armed phase
+    /// (decrypt and Vorbis init already staged). Fills only what
+    /// the test did not stage, so staged banks/captions survive.
+    fn stage_armed_loading_gate(game: &mut ScreenGame) {
+        if game.selected_music.is_none() {
+            game.selected_music = Some(SetRoomMusic {
+                music_id: 757,
+                difficulty: 1,
+                speed: 0,
+            });
+        }
+        if game.catalog_songs.is_empty() {
+            game.catalog_songs = vec![SelectMusicSong {
+                song_id: 757,
+                title: "First".to_owned(),
+                artist: "Band".to_owned(),
+            }];
+        }
+        if game.audio.is_none() {
+            game.with_audio(Box::new(o2jam_audio::NullBackend::new()), HashMap::new());
+        }
+        game.set_loading_status(LoadingStatus {
+            progress: 1.0,
+            title: "First".to_owned(),
+            artist: "Band".to_owned(),
+        });
+    }
+
     fn walk_to_playing(game: &mut ScreenGame) {
         use MenuKey;
         dismiss_splash_to_dialog(game);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
+        stage_armed_loading_gate(game);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Playing);
     }
@@ -3348,6 +3551,7 @@ mod game_tests {
         assert_eq!(game.screen(), Screen::Waiting);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Loading);
+        stage_armed_loading_gate(&mut game);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Playing);
         assert_eq!(game.song_anchor_sample, 0);
@@ -6075,6 +6279,144 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.set_loading_status(loading_status_at_half());
         assert_eq!(game.loading_status(), Some(&loading_status_at_half()));
+    }
+
+    #[test]
+    fn loading_phases_walk_entry_through_arm() {
+        // The staged fractions name the phases: entry, staging,
+        // OJN decrypt, Vorbis decode, clock arm (gate `LOADING_GATE_PHASES`).
+        let mut game = ScreenGame::new();
+        assert_eq!(game.loading_gate_phase(), 0);
+        for (progress, phase) in [(0.0, 0), (0.25, 1), (0.5, 2), (0.75, 3), (1.0, 4)] {
+            game.set_loading_status(LoadingStatus {
+                progress,
+                title: "First".to_owned(),
+                artist: "Band".to_owned(),
+            });
+            assert_eq!(game.loading_gate_phase(), phase, "progress {progress}");
+        }
+        // A later partial fraction never walks the gate backwards.
+        game.set_loading_status(loading_status_at_half());
+        assert_eq!(game.loading_gate_phase(), 4);
+    }
+
+    #[test]
+    fn loading_confirm_without_a_walk_stays_in_loading() {
+        use MenuKey;
+        // No validation, no phases, no audio: the gate holds the
+        // scene in Loading instead of inventing the handoff.
+        let mut game = ScreenGame::new();
+        walk_to_loading(&mut game);
+        assert!(!game.loading_gate_ready());
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Loading);
+        assert_eq!(game.song_anchor_sample, 0);
+        assert_eq!(game.now_ms(), 0);
+    }
+
+    #[test]
+    fn loading_confirm_without_audio_stays_in_loading() {
+        use MenuKey;
+        // Validated and armed, but no audio rig: missing audio
+        // never arms the sample clock, so Loading holds.
+        let mut game = ScreenGame::new();
+        game.selected_music = Some(SetRoomMusic {
+            music_id: 757,
+            difficulty: 1,
+            speed: 0,
+        });
+        walk_to_loading(&mut game);
+        assert!(!game.loading_gate_ready());
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Loading);
+    }
+
+    #[test]
+    fn loading_gate_rejects_an_unknown_song() {
+        use MenuKey;
+        // A pick the staged table does not name fails validation
+        // (`0x5718b0` table check): armed and audio-backed, yet the
+        // gate holds.
+        let mut game = ScreenGame::new();
+        stage_armed_loading_gate(&mut game);
+        game.selected_music = Some(SetRoomMusic {
+            music_id: 9999,
+            difficulty: 1,
+            speed: 0,
+        });
+        walk_to_loading(&mut game);
+        assert!(!game.validate_loading_select());
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Loading);
+    }
+
+    #[test]
+    fn loading_gate_rejects_an_unknown_difficulty() {
+        let mut game = ScreenGame::new();
+        stage_armed_loading_gate(&mut game);
+        game.selected_music = Some(SetRoomMusic {
+            music_id: 757,
+            difficulty: 9,
+            speed: 0,
+        });
+        assert!(!game.validate_loading_select());
+        // Rx (3) maps to the Hard slice downstream, so it validates.
+        game.selected_music = Some(SetRoomMusic {
+            music_id: 757,
+            difficulty: 3,
+            speed: 0,
+        });
+        assert!(game.validate_loading_select());
+        assert!(game.loading_gate_ready());
+    }
+
+    #[test]
+    fn latched_loading_failure_holds_loading() {
+        use MenuKey;
+        // Bad chart / undecryptable OJN: even an armed fraction
+        // cannot arm the clock past a latched failure.
+        let mut game = ScreenGame::new();
+        stage_armed_loading_gate(&mut game);
+        game.fail_loading_gate();
+        assert!(game.loading_gate_failed());
+        walk_to_loading(&mut game);
+        // Entering Loading clears the latch only for a fresh walk
+        // seeded from a staged status: this game staged none before
+        // the walk, so re-staging the armed fraction after entry
+        // still holds while the latch stands.
+        game.fail_loading_gate();
+        stage_armed_loading_gate(&mut game);
+        assert!(!game.loading_gate_ready());
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Loading);
+        game.clear_loading();
+        stage_armed_loading_gate(&mut game);
+        assert!(game.loading_gate_ready());
+    }
+
+    #[test]
+    fn armed_loading_handoff_anchors_the_sample_clock() {
+        use o2jam_audio::PcmSamples;
+        use MenuKey;
+        // Gate armed on the null sink: Playing entry anchors the
+        // backend sample already spent, so the song starts at 0.
+        let mut game = ScreenGame::new();
+        walk_to_loading(&mut game);
+        stage_armed_loading_gate(&mut game);
+        {
+            let rig = game.audio.as_mut().expect("rig");
+            rig.backend
+                .play_pcm(&PcmSamples {
+                    samples: vec![0i16; 44_100 * 2],
+                    sample_rate: 44_100,
+                    channels: 2,
+                })
+                .unwrap();
+            assert_eq!(rig.backend.samples_played(), 44_100);
+        }
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Playing);
+        assert_eq!(game.now_ms(), 0);
     }
 
     #[test]

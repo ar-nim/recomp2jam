@@ -461,6 +461,25 @@ mod live_art_tests {
         if target == Screen::Loading {
             return;
         }
+        // The last Confirm is the Loading→Playing gate (S7): arm it.
+        {
+            use crate::loading::{loading_phase_status, LOADING_GATE_STEPS};
+            use o2jam_audio::NullBackend;
+            use std::collections::HashMap;
+            if game.selected_music().is_none() {
+                game.set_selected_music(o2jam_net::SetRoomMusic {
+                    music_id: 757,
+                    difficulty: 0,
+                    speed: 0,
+                });
+            }
+            if !game.has_audio() {
+                game.with_audio(Box::new(NullBackend::new()), HashMap::new());
+            }
+            if let Some(status) = loading_phase_status(LOADING_GATE_STEPS, "Song", "Band") {
+                game.set_loading_status(status);
+            }
+        }
         game.menu_key(MenuKey::Confirm, true);
     }
 

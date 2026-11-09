@@ -139,6 +139,9 @@ pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
     stage_loading_status(&mut game);
     shots.push(shoot_checked(&mut game, "loading", Screen::Loading, 0)?);
     stage_playing_scene(&mut game);
+    // The Loading→Playing gate (S7): the pick and staged status
+    // above validate; only the rig is missing on this scripted walk.
+    arm_loading_gate(&mut game);
     game.menu_key(MenuKey::Confirm, true);
     game.strike_at(2, 5_000);
     game.strike_at(0, SCRIPTED_HOLD_STRIKE_MS);
@@ -685,6 +688,28 @@ fn seeded_solo_game() -> ScreenGame {
     game
 }
 
+/// Arm the S7 Loading→Playing gate the way the live lane stages
+/// song prep: a validated pick, a null rig, and the armed
+/// loading status. Idempotent — existing picks, rigs, and
+/// banks staged by the caller stay. Easy (difficulty 0):
+/// the walk tests' judgement economy assumes Easy drains.
+fn arm_loading_gate(game: &mut ScreenGame) {
+    use o2jam_audio::NullBackend;
+    use std::collections::HashMap;
+    if game.selected_music().is_none() {
+        game.set_selected_music(o2jam_net::SetRoomMusic {
+            music_id: 757,
+            difficulty: 0,
+            speed: 0,
+        });
+    }
+    if !game.has_audio() {
+        game.with_audio(Box::new(NullBackend::new()), HashMap::new());
+    }
+    if let Some(status) = loading_phase_status(LOADING_GATE_STEPS, "Song", "Band") {
+        game.set_loading_status(status);
+    }
+}
 /// Drive the solo walk from splash into Result: the same
 /// lane/menu/strike script as the battle walk, with the song-pick
 /// and playing captions staged at the same points.
@@ -697,6 +722,10 @@ fn drive_solo_to_result() -> ScreenGame {
     stage_select_music_scene(&mut game);
     game.menu_key(MenuKey::Confirm, true);
     stage_playing_scene(&mut game);
+    // The second Confirm is the Loading→Playing gate (S7): the pick
+    // above validates (757, catalog-staged); only the armed status
+    // and the rig are missing.
+    arm_loading_gate(&mut game);
     game.menu_key(MenuKey::Confirm, true);
     game.strike_at(2, 5_000);
     game.strike_at(0, SCRIPTED_HOLD_STRIKE_MS);
@@ -1361,9 +1390,11 @@ mod tests {
         let mut game = seeded_game();
         game.lane_key(3, true);
         game.click_planet(136, 88);
-        for _ in 0..4 {
+        for _ in 0..3 {
             game.menu_key(MenuKey::Confirm, true);
         }
+        arm_loading_gate(&mut game);
+        game.menu_key(MenuKey::Confirm, true);
         let rgb = frame_rgb(&mut game, 100);
         assert_eq!(rgb.len(), SHOT_W * SHOT_H * 3);
     }
@@ -1499,9 +1530,11 @@ mod tests {
         let paint_native = |game: &mut ScreenGame| {
             game.lane_key(3, true);
             game.click_planet(136, 88);
-            for _ in 0..4 {
+            for _ in 0..3 {
                 game.menu_key(MenuKey::Confirm, true);
             }
+            arm_loading_gate(game);
+            game.menu_key(MenuKey::Confirm, true);
             stage_playing_scene(game);
             game.strike_at(2, 5_000);
             let (w, h) = native_size();
@@ -1533,9 +1566,11 @@ mod tests {
         let walk_to_playing = |game: &mut ScreenGame| {
             game.lane_key(3, true);
             game.click_planet(136, 88);
-            for _ in 0..4 {
+            for _ in 0..3 {
                 game.menu_key(MenuKey::Confirm, true);
             }
+            arm_loading_gate(game);
+            game.menu_key(MenuKey::Confirm, true);
         };
         let mut plain = seeded_game();
         walk_to_playing(&mut plain);
@@ -1581,9 +1616,11 @@ mod tests {
         let walk_to_playing = |game: &mut ScreenGame| {
             game.lane_key(3, true);
             game.click_planet(136, 88);
-            for _ in 0..4 {
+            for _ in 0..3 {
                 game.menu_key(MenuKey::Confirm, true);
             }
+            arm_loading_gate(game);
+            game.menu_key(MenuKey::Confirm, true);
         };
         let mut plain = seeded_game();
         walk_to_playing(&mut plain);
@@ -2471,13 +2508,16 @@ mod tests {
     }
 
     /// The scripted walk from splash into Playing, as `capture_all`
-    /// drives it.
+    /// drives it. The last Confirm is the S7 Loading→Playing gate:
+    /// it is armed the way the live lane stages song prep.
     fn walk_to_playing(game: &mut ScreenGame) {
         game.lane_key(3, true);
         game.click_planet(136, 88);
-        for _ in 0..4 {
+        for _ in 0..3 {
             game.menu_key(MenuKey::Confirm, true);
         }
+        arm_loading_gate(game);
+        game.menu_key(MenuKey::Confirm, true);
     }
 
     /// The scripted walk from splash into Waiting, as `capture_all`
