@@ -106,9 +106,14 @@ pass is ever claimed):
   art paints at sprite anchors, never rects.
 - `STATE_PLANET` (`CStatePlanet`, `0x11`; BGM `Music/Planet.ojm`;
   quest button commented undecided — no drum backend). Screen,
-  paint (staged art or flat card, no captions/cursor/selection),
-  and flow edges (`Channel→Planet`, `Planet→Room`) live; buttons
-  and BGM unwired, entry UI awaits tab semantics (all OPEN).
+  paint (staged art or flat card, no captions), and flow edges
+  (`Channel→Planet`, `Planet→Room`) live; button clicks hit-test at
+  the five pinned `.bnd` button rects and HARD/NORMAL/EASY record a
+  difficulty pick (amber-cursor stand-in highlight — highlight
+  rendering is evidence-OPEN). FREE/DRUM clicks stay unbound (P0).
+  OPEN: captions, confirm action (solo entry), exe entry key, promo
+  cell and EXIT/OPTION hit rects (geometry not fully pinned), BGM
+  (closed as no-trigger).
 - `STATE_LANKING` (`0x37`; display-only, no state class — like CHANNEL).
   Screen, paint (staged art or flat card, no rows/data), and
   all-reject flow live; rank fetch, sorts, search, pagers, entry
@@ -135,6 +140,7 @@ scenario, so structure, not pixels, is compared):
 | `musicselect.png` vs `reference-musicselect-4x3.png` | NEW (was UNCOVERED — no shot mapped to it). The walk now repaints Waiting through the host song flow (installed 7.55 562-song catalog, pick id 757 Hard X3.5; 4-song synthetic fallback without game data) under genuine `DAILOG_SELECTMUSIC` art, and the staged structure paints over it: filter columns (75.0 vs 183.4), search table (61.3 vs 83.2), status + search row (76.4 vs 114.7), chosung + OK (84.3 vs 128.1) — staged ink in every band on both sides. Still FAIL: per-chart level and grade cells draw the unknown dash (never staged), the 다운/듣기/정보 icon cells stay blank (no staged art), chosung hangul + word cells stay blank (no CP949 glyphs), the dialog bind pairing is unproven (the every-bound-entry proof covers Playing + Room only), and pager/search/chosung are display-only. Guarded by `musicselect_shot_repaints_waiting_with_song_panel`, `musicselect_fallback_catalog_lists_four_synthetic_songs`, `musicselect_dialog_structure_paints_search_tab_over_waiting` |
 | `channel.png` | REFRESHED 2026-11-10: rows/hit-test/scrim now ride the exe-pinned slot rects (live memory read: CStatePlanet dialog+`0x94`) with the enter face at row-top + 12; dialog art staging unchanged from 2026-11-09 (800x466 parsed body at (0,0), 44x21 enter frames at the faces, live list/cursor/pager on top). Still FAIL: face X/chrome, interior chrome, and pager stay reference-measured; select-bar/back/close/num/count/scroll parts unmounded (sizes pinned, positions OPEN) |
 | `room.png` | HOLD, byte-identical (no drift). No reference photo covers it |
+| `planet.png` | NEW 2026-11-09: the walk reaches Planet through the verified `Channel→Planet` edge (the exe's own entry key is OPEN — `enter_screen` invents no input), clicks HARD through the pinned `.bnd` rect, and paints the staged 17-placement bound block (backdrop, five buttons, promotion image) under the amber-cursor pick stand-in; continues through `Planet→Room`. Still FAIL: no captions (TEXT sources OPEN), cursor is a stand-in (no evidenced highlight), FREE/DRUM stay unbound (P0), promo cells and EXIT/OPTION unwired (hit geometry not fully pinned), no reference photo covers it |
 | `loading.png` | REFRESHED 2026-11-08: the walk holds the clock-armed full fraction with the staged catalog caption (song 757) — 252 px of new caption ink at the placeholder row, bar unchanged full; guarded by the two loading-stage tests. No reference photo covers it; staged `MusicLoading.ojs` art + green bar under the no-fill rule (empty stage would paint nothing, staged art is unaffected) |
 
 Chat refresh 2026-11-07: only `waiting.png` changed (1104 bytes

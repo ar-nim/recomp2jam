@@ -15,8 +15,8 @@ use o2jam_render::{Frame, Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
 use o2jam_shell::avatar::{
     bind_scene_rects, load_archive_sprite, load_avi_logo, load_scene_figures,
     load_scene_figures_for_room, load_scene_figures_for_stage, scene_block, scene_sprite_names,
-    AvatarFigure, PlayingArtMode, ScenePlacement, AVI_BLOCK, LOADING_SPRITE, RESULT_BLOCK,
-    ROOM_BLOCK, WAITING_BLOCK,
+    AvatarFigure, PlayingArtMode, ScenePlacement, AVI_BLOCK, LOADING_SPRITE, PLANET_BLOCK,
+    RESULT_BLOCK, ROOM_BLOCK, WAITING_BLOCK,
 };
 use o2jam_shell::screens::paint::{
     CHANNEL_DIALOG_SPRITE, CHANNEL_ENTER_SPRITE, PLAYING_BLOCK, RESULT_WINLOSE_SPRITE,
@@ -73,11 +73,25 @@ pub struct Shot {
 /// When the scripted walk leaves the expected screen.
 pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
     let mut game = seeded_game();
-    let mut shots = Vec::with_capacity(13);
+    let mut shots = Vec::with_capacity(14);
     shots.push(shoot(&mut game, "avi", 0)?);
     game.lane_key(3, true);
     shots.push(shoot_checked(&mut game, "channel", Screen::Channel, 0)?);
-    game.menu_key(MenuKey::Confirm, true);
+    // The walk reaches Planet through the verified Channel→Planet
+    // edge via the flow-gate driver: the key/click path that opens
+    // Planet in the exe is evidence-OPEN (docs/planet.md OPEN 6), so
+    // no input is invented. A HARD-button click exercises the pinned
+    // `.bnd` hit-test and leaves the amber cursor stand-in in the
+    // shot; the walk then continues through the verified Planet→Room
+    // edge.
+    assert!(game.enter_screen(Screen::Planet), "Channel→Planet edge");
+    game.click_planet(386, 88);
+    assert_eq!(
+        game.planet_selection(),
+        Some(o2jam_shell::screens::side::PlanetBand::Hard)
+    );
+    shots.push(shoot_checked(&mut game, "planet", Screen::Planet, 0)?);
+    assert!(game.enter_screen(Screen::Room), "Planet→Room edge");
     shots.push(shoot_checked(&mut game, "room", Screen::Room, 0)?);
     game.menu_key(MenuKey::Confirm, true);
     shots.push(shoot_checked(&mut game, "waiting", Screen::Waiting, 0)?);
@@ -328,6 +342,7 @@ fn stage_interface_archive(game: &mut ScreenGame, archive: &[u8]) {
         (Screen::Avi, AVI_BLOCK),
         (Screen::Room, ROOM_BLOCK),
         (Screen::Waiting, WAITING_BLOCK),
+        (Screen::Planet, PLANET_BLOCK),
     ] {
         if let Some((placements, figures)) = stage_bound_block(archive, &list, block, None, None) {
             game.load_scene(screen, placements, figures);
@@ -1584,6 +1599,7 @@ mod tests {
             [
                 "avi",
                 "channel",
+                "planet",
                 "room",
                 "waiting",
                 "waiting-guest",
@@ -1887,6 +1903,71 @@ mod tests {
                 "channel shot: fill below the dialog body"
             );
         }
+    }
+
+    #[test]
+    fn planet_shot_stages_bound_art_with_the_picked_band() {
+        // Guarded: without the interface archive the flat-card path
+        // paints (no scene painter, no cursor) — covered unguarded in
+        // `planet_shot_records_the_picked_band_without_art`.
+        let Some(_interface) = read_archive(INTERFACE_ARCHIVE) else {
+            println!("skip: missing {INTERFACE_ARCHIVE}");
+            return;
+        };
+        // The walk reaches Planet through the verified Channel→Planet
+        // edge (no invented input — the exe's own entry key is OPEN),
+        // clicks HARD through the pinned `.bnd` rect, and paints the
+        // staged bound block with the amber cursor stand-in on top.
+        let mut game = seeded_game();
+        game.lane_key(3, true);
+        assert!(game.enter_screen(Screen::Planet));
+        game.click_planet(386, 88);
+        assert_eq!(
+            game.planet_selection(),
+            Some(o2jam_shell::screens::side::PlanetBand::Hard)
+        );
+        let frame = paint_native_frame(&mut game, 0);
+        assert!(
+            frame.iter().any(|&px| px != frame[0]),
+            "planet shot: frame is one flat fill"
+        );
+        assert!(
+            frame.contains(&o2jam_render::pack_xrgb(0xFF, 0xD0, 0x20)),
+            "planet shot: picked-band cursor missing"
+        );
+    }
+
+    #[test]
+    fn planet_shot_records_the_picked_band_without_art() {
+        // No archives: the flat card paints and the pinned-rect
+        // hit-test still records the pick (clean-skip parity without
+        // install-root).
+        let mut game = seeded_game();
+        game.lane_key(3, true);
+        assert!(game.enter_screen(Screen::Planet));
+        game.click_planet(386, 88);
+        assert_eq!(
+            game.planet_selection(),
+            Some(o2jam_shell::screens::side::PlanetBand::Hard)
+        );
+        let frame = paint_native_frame(&mut game, 0);
+        assert!(
+            frame.iter().any(|&px| px != frame[0]),
+            "planet shot: flat card painted nothing"
+        );
+    }
+
+    #[test]
+    fn planet_shot_rejects_free_and_drum_clicks() {
+        // P0 on the shot walk too: FREE/DRUM clicks hit their pinned
+        // rects but never select or advance anything.
+        let mut game = seeded_game();
+        game.lane_key(3, true);
+        assert!(game.enter_screen(Screen::Planet));
+        game.click_planet(663, 88);
+        game.click_planet(559, 88);
+        assert_eq!(game.planet_selection(), None);
+        assert_eq!(game.screen(), Screen::Planet);
     }
 
     #[test]
@@ -2783,7 +2864,7 @@ mod tests {
     #[test]
     fn staging_attempt_never_breaks_the_walk() {
         let shots = capture_all().unwrap();
-        assert_eq!(shots.len(), 13);
+        assert_eq!(shots.len(), 14);
         for shot in &shots {
             assert!(is_varied(&shot.rgb), "{} paints a flat frame", shot.name);
         }
@@ -2793,8 +2874,9 @@ mod tests {
     fn writer_saves_eleven_scenes_and_keeps_avi() {
         let dir = std::env::temp_dir().join(format!("recomp2jam-shots-{}", std::process::id()));
         let written = write_shots(&dir).unwrap();
-        assert_eq!(written.len(), 12);
+        assert_eq!(written.len(), 13);
         assert!(!dir.join("avi.png").exists());
+        assert!(dir.join("planet.png").exists());
         assert!(dir.join("waiting-guest.png").exists());
         assert!(dir.join("musicselect.png").exists());
         assert!(dir.join("playing-native.png").exists());

@@ -22,14 +22,14 @@ use super::side::{
     can_return_side, can_visit_side, paint_side_scene, select_chosung_cells, select_difficulty_ink,
     select_music_rows, select_music_songs, select_pager_caption, select_picked_caption,
     select_search_caption, select_status_line, waiting_song_detail_line, waiting_song_title_line,
-    SelectMusicRow, SelectMusicSong, SideScreen, SELECT_ARTIST_RADIO, SELECT_CHO_SUNG_LEFT,
-    SELECT_CHO_SUNG_PITCH, SELECT_CHO_SUNG_ROW_CELLS, SELECT_CHO_SUNG_Y, SELECT_FILTER_BUTTON_H,
-    SELECT_FILTER_BUTTON_PITCH, SELECT_FILTER_BUTTON_TOP, SELECT_FILTER_COLUMNS,
-    SELECT_GENRE_FILTERS, SELECT_HEADER_COLUMNS, SELECT_HEADER_Y, SELECT_LEVEL_FILTERS,
-    SELECT_OK_BUTTON, SELECT_PAGER_RIGHT, SELECT_RESULT_TABS, SELECT_ROW_PITCH, SELECT_ROW_TOP,
-    SELECT_SEARCH_BOX, SELECT_SEARCH_BUTTON, SELECT_SEARCH_Y, SELECT_STATUS_H, SELECT_STATUS_Y,
-    SELECT_TABLE_HEADERS, SELECT_TABLE_LEFT, SELECT_TABLE_WIDTH, SELECT_TITLE_RADIO,
-    SELECT_VISIBLE_ROWS, SELECT_WHEEL_FILTERS,
+    PlanetSelection, SelectMusicRow, SelectMusicSong, SideScreen, SELECT_ARTIST_RADIO,
+    SELECT_CHO_SUNG_LEFT, SELECT_CHO_SUNG_PITCH, SELECT_CHO_SUNG_ROW_CELLS, SELECT_CHO_SUNG_Y,
+    SELECT_FILTER_BUTTON_H, SELECT_FILTER_BUTTON_PITCH, SELECT_FILTER_BUTTON_TOP,
+    SELECT_FILTER_COLUMNS, SELECT_GENRE_FILTERS, SELECT_HEADER_COLUMNS, SELECT_HEADER_Y,
+    SELECT_LEVEL_FILTERS, SELECT_OK_BUTTON, SELECT_PAGER_RIGHT, SELECT_RESULT_TABS,
+    SELECT_ROW_PITCH, SELECT_ROW_TOP, SELECT_SEARCH_BOX, SELECT_SEARCH_BUTTON, SELECT_SEARCH_Y,
+    SELECT_STATUS_H, SELECT_STATUS_Y, SELECT_TABLE_HEADERS, SELECT_TABLE_LEFT, SELECT_TABLE_WIDTH,
+    SELECT_TITLE_RADIO, SELECT_VISIBLE_ROWS, SELECT_WHEEL_FILTERS,
 };
 use crate::MenuKey;
 use o2jam_audio::{AudioBackend, PcmSamples};
@@ -126,6 +126,9 @@ pub struct ScreenGame {
     /// (`Playing_BG<stage>.ojs` and the staged kits; see
     /// [`Self::arena_stage`]).
     arena_stage: u16,
+    /// Live planet-board difficulty pick (HARD/NORMAL/EASY; FREE/DRUM
+    /// stay unbound per P0).
+    planet: PlanetSelection,
     /// Staged select-music catalog (`OJNList.dat` order, owned copies;
     /// see [`Self::set_song_catalog`]).
     catalog_songs: Vec<SelectMusicSong>,
@@ -339,6 +342,7 @@ impl ScreenGame {
             selected_music: None,
             loading_status: None,
             arena_stage: DEFAULT_ARENA_STAGE,
+            planet: PlanetSelection::new(),
             catalog_songs: Vec::new(),
             catalog_bpm: HashMap::new(),
             catalog_chart_files: HashMap::new(),
@@ -434,9 +438,18 @@ impl ScreenGame {
 
     /// Step the flow, restarting the song clock on Playing entry.
     fn enter(&mut self, next: Screen) {
-        if self.flow.go(next).is_ok() && next == Screen::Playing {
+        self.enter_screen(next);
+    }
+
+    /// Step the flow through the verified edge gates (shot/test
+    /// driver): `false` when `can_enter` rejects, so no transition is
+    /// invented. Restarts the song clock on Playing entry.
+    pub fn enter_screen(&mut self, next: Screen) -> bool {
+        let entered = self.flow.go(next).is_ok();
+        if entered && next == Screen::Playing {
             self.started_at = Some(std::time::Instant::now());
         }
+        entered
     }
 
     /// Strike a lane at an explicit clock, playing its key sound.
@@ -1566,6 +1579,20 @@ impl ScreenGame {
         self
     }
 
+    /// Planet board click: record the difficulty pick at the pinned
+    /// `.bnd` button rects. FREE/DRUM hits change nothing (P0), and
+    /// the pick's confirm action is evidence-OPEN (docs/planet.md
+    /// OPEN 6), so this is a labeled no-op beyond the selection state.
+    pub fn click_planet(&mut self, x: i32, y: i32) {
+        let _hit = self.planet.click(x, y);
+    }
+
+    /// Picked planet difficulty band, if any (paint/hit-test driver).
+    #[must_use]
+    pub fn planet_selection(&self) -> Option<super::side::PlanetBand> {
+        self.planet.band()
+    }
+
     /// Open a side screen from a lobby; rejects other origins and
     /// remembers the lobby to return to.
     pub fn visit_side(&mut self, side: SideScreen) -> bool {
@@ -1659,12 +1686,13 @@ impl ScreenGame {
         }
     }
 
-    /// Planet: staged art when present, else the flat card. Buttons
-    /// paint without captions, cursor, or selection state (all
-    /// unevidenced — see `paint_planet_scene`).
+    /// Planet: staged art when present, else the flat card. A picked
+    /// band draws the amber cursor stand-in inside its pinned button
+    /// rect (highlight rendering is evidence-OPEN — see
+    /// [`paint_planet_scene`](super::paint::paint_planet_scene)).
     fn paint_planet(&self, frame: &mut Frame<'_>) {
         match self.scene_art(Screen::Planet) {
-            Some(art) => paint_planet_scene(frame, art),
+            Some(art) => paint_planet_scene(frame, art, self.planet.band()),
             None => paint_screen(frame, Screen::Planet),
         }
     }
@@ -2339,9 +2367,14 @@ impl GameLoop for ScreenGame {
             Screen::Room => self.click_room_row(x, y),
             Screen::Waiting => self.click_waiting_button(x, y),
             Screen::Result => self.click_result_button(x, y),
-            // Planet clicks land nowhere: button captions, selection
-            // state, and FREE/DRUM backends are all unevidenced (P0).
-            Screen::Planet => {}
+            // Planet board click: hit-test at the pinned `.bnd`
+            // button rects and record the difficulty pick. What a
+            // pick DOES on confirm is evidence-OPEN (docs/planet.md
+            // OPEN 6: solo entry), and the FREE/DRUM back ends were
+            // never wired (P0), so every outcome stays a no-op.
+            Screen::Planet => {
+                self.click_planet(x, y);
+            }
             // Ranking clicks land nowhere: sorts, search, pagers, and
             // row selection are all unevidenced (P0).
             Screen::Lanking => {}

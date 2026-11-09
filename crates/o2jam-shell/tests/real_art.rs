@@ -14,8 +14,8 @@ use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
 use o2jam_render::{pack_xrgb, Frame, Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
 use o2jam_shell::avatar::{
     bind_scene_rects, load_avi_logo, load_scene_figures, paint_scene_figures, scene_block,
-    scene_sprite_names, AvatarFigure, ScenePlacement, AVI_BLOCK, LOADING_SPRITE, RESULT_BLOCK,
-    ROOM_BLOCK, WAITING_BLOCK,
+    scene_sprite_names, AvatarFigure, ScenePlacement, AVI_BLOCK, LOADING_SPRITE, PLANET_BLOCK,
+    RESULT_BLOCK, ROOM_BLOCK, WAITING_BLOCK,
 };
 use o2jam_shell::screens::paint::{CHANNEL_DIALOG_SPRITE, CHANNEL_ENTER_SPRITE, PLAYING_BLOCK};
 use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
@@ -436,6 +436,66 @@ fn channel_layers_list_over_real_dialog_art() {
     for index in 466 * CHANNEL_PROBE_W..frame.len() {
         assert_eq!(frame[index], base[index], "channel: fill below the body");
     }
+}
+
+#[test]
+fn planet_layers_staged_art_under_the_live_cursor() {
+    // The bound planet block stages behind the live chrome: a FREE
+    // click stays unbound (P0), a HARD click records the pick, and
+    // the amber cursor stand-in plus the staged button art all ink
+    // the frame.
+    let path = archive_path(INTERFACE_ARCHIVE);
+    let Some((archive, list)) = interface_and_list() else {
+        println!("skip planet: missing {}", path.display());
+        return;
+    };
+    let Some((placements, figures)) = stage_bound_block(&archive, &list, PLANET_BLOCK) else {
+        panic!("planet: STATE_PLANET staged no figures");
+    };
+    let staged = staged_palette(&placements, &figures);
+    let mut game = ScreenGame::new();
+    game.load_scene(Screen::Planet, placements, figures);
+    game.lane_key(3, true);
+    assert!(game.enter_screen(Screen::Planet), "Channel→Planet edge");
+    game.click_planet(614 + 49, 32 + 56);
+    assert_eq!(
+        game.planet_selection(),
+        None,
+        "planet: FREE click must stay unbound (P0)"
+    );
+    game.click_planet(510 + 49, 32 + 56);
+    assert_eq!(
+        game.planet_selection(),
+        None,
+        "planet: DRUM click must stay unbound (P0)"
+    );
+    game.click_planet(313 + 73, 32 + 56);
+    assert_eq!(
+        game.planet_selection(),
+        Some(o2jam_shell::screens::side::PlanetBand::Hard)
+    );
+    let frame = painted(&mut game, 0);
+    assert_composed(&frame, &staged, &[AMBER_CURSOR], "planet");
+}
+
+#[test]
+fn planet_without_art_keeps_the_flat_card() {
+    // No staged art: the caller's flat-card fallback paints (the
+    // scene painter is never invoked), and a click still records
+    // the pick through the pinned rects.
+    let mut game = ScreenGame::new();
+    game.lane_key(3, true);
+    assert!(game.enter_screen(Screen::Planet));
+    game.click_planet(206 + 49, 32 + 56);
+    assert_eq!(
+        game.planet_selection(),
+        Some(o2jam_shell::screens::side::PlanetBand::Normal)
+    );
+    let frame = painted(&mut game, 0);
+    assert!(
+        frame.iter().any(|&px| px != frame[0]),
+        "planet: flat card painted nothing"
+    );
 }
 
 #[test]

@@ -35,6 +35,7 @@ use super::super::avatar::{
 };
 use super::super::playing::{HighwayGeometry, PlayingView};
 use super::super::screen::Screen;
+use super::side::{planet_band_rect, PlanetBand};
 use o2jam_file::ControlList;
 use o2jam_game::RoomTeams;
 use o2jam_net::{
@@ -624,10 +625,16 @@ pub fn paint_lanking_scene(frame: &mut Frame<'_>, art: &SceneArt) {
 
 /// Planet: staged solo-mission art behind uncaptioned buttons, flat
 /// card fallback. Difficulty/mode captions are unevidenced (the TEXT
-/// entries name no art and no setter join pins them), so no labels,
-/// no cursor, no selection state.
-pub fn paint_planet_scene(frame: &mut Frame<'_>, art: &SceneArt) {
+/// entries name no art and no setter join pins them), so no labels.
+/// A picked band draws the shared amber cursor inside its pinned
+/// `.bnd` button rect — highlight rendering is unevidenced, so this
+/// cursor is an OPEN stand-in (docs/planet.md), not exe parity.
+pub fn paint_planet_scene(frame: &mut Frame<'_>, art: &SceneArt, selection: Option<PlanetBand>) {
     art.paint_backdrop(frame, Screen::Planet);
+    if let Some(band) = selection {
+        let rect = planet_band_rect(band);
+        paint_cursor(frame, rect.x + 10, rect.y + rect.h as i32 / 2);
+    }
 }
 
 /// One channel row: `gateway/channel population/capacity` (both ids
@@ -6339,6 +6346,52 @@ mod paint_tests {
         let box_w = text_width_cell(caption, Cell::Box);
         let loading_w = text_width_cell(caption, Cell::Loading);
         assert!(loading_w > box_w, "{loading_w} must exceed {box_w}");
+    }
+
+    #[test]
+    fn planet_scene_without_art_paints_nothing() {
+        // Pinned no-fill rule: an empty stage contributes zero
+        // staged pixels and no selection means no cursor, so the
+        // frame stays untouched (the flat card path is the caller's
+        // fallback, never this painter).
+        let art = SceneArt::default();
+        let mut buf = vec![0u32; 800 * 600];
+        paint_planet_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &art,
+            None,
+        );
+        assert!(buf.iter().all(|pixel| *pixel == 0));
+    }
+
+    #[test]
+    fn planet_selection_paints_the_amber_cursor_stand_in() {
+        // Highlight rendering is evidence-OPEN, so a picked band
+        // draws only the shared amber cursor inside its pinned
+        // button rect: HARD's rect center-left, nothing elsewhere.
+        let art = SceneArt::default();
+        let mut buf = vec![0u32; 800 * 600];
+        paint_planet_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &art,
+            Some(PlanetBand::Hard),
+        );
+        let amber = pack_xrgb(0xFF, 0xD0, 0x20);
+        // paint_cursor draws at (x - 6, y): (313 + 10 - 6, 32 + 56).
+        assert_eq!(buf[88 * 800 + 317], amber);
+        assert_eq!(
+            buf.iter().filter(|pixel| **pixel == amber).count(),
+            3 * 5,
+            "only the 3x5 cursor inks"
+        );
     }
 
     #[test]

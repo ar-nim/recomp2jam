@@ -64,15 +64,27 @@ left-to-right in file order (HARD sits center at x313).
 
 1. ~~Rect contents → placements (pairing getter `0x548640`).~~ DONE above.
 2. Shell screen + paint + flow edges — DONE (`Screen::Planet`,
-   `paint_planet_scene`, `Channel→Planet`/`Planet→Room`; buttons
-   unwired, clicks land nowhere per P0).
+   `paint_planet_scene`, `Channel→Planet`/`Planet→Room`; walk cover in
+   `shots.rs` via the verified edges).
 3. Live staging — DONE (`stage_interface_scenes` mounts the bound
    block; 17 placements incl. self, `State_Planet.ojs` grown).
+4. Button hit-testing + difficulty selection — DONE (2026-11-09):
+   clicks hit-test at the five pinned `.bnd` button rects
+   (`planet_hit`/`PlanetSelection` in `side.rs`); HARD/NORMAL/EASY
+   record the pick; the picked band draws the shared amber cursor
+   inside its rect as an OPEN stand-in (no highlight rendering is
+   evidenced). FREE/DRUM clicks hit their rects but stay unbound and
+   change nothing (P0 preserved, soak- and shot-guarded).
 2. TEXT caption sources (`0X19400007..0B` never code-addressed yet).
-3. FREE/DRUM click behavior (no backend; clicks must stay unbound — P0).
-4. Promotion PLAYSTOP/LEFT/RIGHT semantics.
-5. EXIT/OPTION destinations.
-6. Entry path (Channel planet pick vs solo) and exit paths.
+3. ~~FREE/DRUM click behavior~~ DONE as permanent rejection (P0:
+   no backend ever existed); what they would do stays OPEN forever.
+4. Promotion PLAYSTOP/LEFT/RIGHT semantics — hit rects unwireable:
+   the `.bnd` walk pins their y band (511–535) but no x extents.
+5. EXIT/OPTION destinations — same: pinned origins (750,561)/(710,561)
+   only, no sizes, so no hit rect and no action.
+6. What a difficulty pick DOES on confirm (solo entry) and the exe's
+   own entry key into Planet — the shot walk uses the verified
+   flow edges via `enter_screen`, no input invented.
 7. BGM start trigger and NPC voice role — CLOSED as no-trigger (2026-11-09,
    static scan): all 7 background tracks preload together at audio
    init (function region file `0x1a5710`..`0x1a5fe0` via the index loop

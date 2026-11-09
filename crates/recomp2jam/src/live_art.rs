@@ -497,6 +497,7 @@ mod live_art_tests {
                 h: height,
             },
             &art,
+            None,
         );
         assert!(
             buf.iter().any(|pixel| *pixel != 0),

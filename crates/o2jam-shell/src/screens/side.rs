@@ -842,6 +842,140 @@ pub fn planet_free_caption(song_count: usize) -> String {
     format!("{PLANET_FREE_LABEL} ({song_count})")
 }
 
+/// One clickable board element of the planet scene. Only the five
+/// difficulty/mode buttons carry fully pinned `.bnd` geometry (the
+/// promotion cells and EXIT/OPTION have pinned tops or origins only,
+/// so their hit rects are evidence-OPEN and stay unhit-testable).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanetHit {
+    /// HARD button (`신의손`).
+    Hard,
+    /// NORMAL button (`고수손`).
+    Normal,
+    /// EASY button (`사람손`).
+    Easy,
+    /// FREE button (tutorial, backend never wired — P0).
+    Free,
+    /// DRUM button (quest, backend never wired — P0).
+    Drum,
+}
+
+impl PlanetHit {
+    /// Selectable difficulty band behind this hit (`FREE`/`DRUM` name
+    /// no band — their backends were never wired, P0).
+    #[must_use]
+    pub const fn band(self) -> Option<PlanetBand> {
+        match self {
+            Self::Hard => Some(PlanetBand::Hard),
+            Self::Normal => Some(PlanetBand::Normal),
+            Self::Easy => Some(PlanetBand::Easy),
+            Self::Free | Self::Drum => None,
+        }
+    }
+}
+
+/// HARD button rect, pinned by the `State_Planet.bnd` walk (rect 1:
+/// (313,32)-(459,144); `docs/planet.md`). The buttons do NOT run
+/// left-to-right in file order — HARD sits center.
+pub const PLANET_HARD_RECT: Rect = Rect {
+    x: 313,
+    y: 32,
+    w: 146,
+    h: 112,
+};
+/// NORMAL button rect, pinned by the `.bnd` walk (rect 2).
+pub const PLANET_NORMAL_RECT: Rect = Rect {
+    x: 206,
+    y: 32,
+    w: 99,
+    h: 112,
+};
+/// EASY button rect, pinned by the `.bnd` walk (rect 3).
+pub const PLANET_EASY_RECT: Rect = Rect {
+    x: 87,
+    y: 32,
+    w: 99,
+    h: 112,
+};
+/// FREE button rect, pinned by the `.bnd` walk (rect 4).
+pub const PLANET_FREE_RECT: Rect = Rect {
+    x: 614,
+    y: 32,
+    w: 99,
+    h: 112,
+};
+/// DRUM button rect, pinned by the `.bnd` walk (rect 5).
+pub const PLANET_DRUM_RECT: Rect = Rect {
+    x: 510,
+    y: 32,
+    w: 99,
+    h: 112,
+};
+
+/// Pinned button rect of one selectable band.
+#[must_use]
+pub const fn planet_band_rect(band: PlanetBand) -> Rect {
+    match band {
+        PlanetBand::Hard => PLANET_HARD_RECT,
+        PlanetBand::Normal => PLANET_NORMAL_RECT,
+        PlanetBand::Easy => PLANET_EASY_RECT,
+    }
+}
+
+/// Board element under native pixel (`x`, `y`): the pinned `.bnd`
+/// button rects, right/bottom edges exclusive (`rect_hit`). `None`
+/// everywhere else, including the promotion cells and EXIT/OPTION
+/// (their full geometry is evidence-OPEN).
+#[must_use]
+pub fn planet_hit(x: i32, y: i32) -> Option<PlanetHit> {
+    for (rect, hit) in [
+        (PLANET_HARD_RECT, PlanetHit::Hard),
+        (PLANET_NORMAL_RECT, PlanetHit::Normal),
+        (PLANET_EASY_RECT, PlanetHit::Easy),
+        (PLANET_FREE_RECT, PlanetHit::Free),
+        (PLANET_DRUM_RECT, PlanetHit::Drum),
+    ] {
+        if super::paint::rect_hit(&rect, x, y) {
+            return Some(hit);
+        }
+    }
+    None
+}
+
+/// Live difficulty selection on the planet board. `None` until the
+/// player picks a band; `FREE`/`DRUM` clicks never change it (their
+/// backends were never wired — P0 in `docs/parity.md`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PlanetSelection {
+    band: Option<PlanetBand>,
+}
+
+impl PlanetSelection {
+    /// No pick yet.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self { band: None }
+    }
+
+    /// Picked difficulty band, if any.
+    #[must_use]
+    pub const fn band(self) -> Option<PlanetBand> {
+        self.band
+    }
+
+    /// Board click at native pixel (`x`, `y`). HARD/NORMAL/EASY record
+    /// the pick; FREE/DRUM hit their pinned rects but stay unbound and
+    /// change nothing (P0). Returns the hit (`None` outside every
+    /// pinned rect).
+    pub fn click(&mut self, x: i32, y: i32) -> Option<PlanetHit> {
+        let hit = planet_hit(x, y)?;
+        if let Some(band) = hit.band() {
+            self.band = Some(band);
+        }
+        Some(hit)
+    }
+}
+
 /// One lanking board row: catalog position, not a score. No score
 /// table ships with the client, and the rank-notification path (the
 /// 2029/4029 family) has no `o2jam-net` decoder — no new opcode is
@@ -1380,6 +1514,70 @@ mod side_tests {
         assert_eq!(SideScreen::Planet.block_name(), Some(PLANET_BLOCK));
         assert_eq!(SideScreen::Planet.bind_file(), Some(PLANET_BIND_FILE));
         assert_eq!(SideScreen::Planet.state_class(), Some("CStatePlanet"));
+    }
+
+    #[test]
+    fn planet_button_hits_follow_the_pinned_bnd_rects() {
+        // Hit-test inverse of the pinned `State_Planet.bnd` rects
+        // (docs/planet.md bind walk): the buttons do NOT run
+        // left-to-right in file order — HARD sits center at x313.
+        let center = |rect: &Rect| (rect.x + rect.w as i32 / 2, rect.y + rect.h as i32 / 2);
+        let (hard_x, hard_y) = center(&PLANET_HARD_RECT);
+        let (normal_x, normal_y) = center(&PLANET_NORMAL_RECT);
+        let (easy_x, easy_y) = center(&PLANET_EASY_RECT);
+        let (free_x, free_y) = center(&PLANET_FREE_RECT);
+        let (drum_x, drum_y) = center(&PLANET_DRUM_RECT);
+        assert_eq!(planet_hit(hard_x, hard_y), Some(PlanetHit::Hard));
+        assert_eq!(planet_hit(normal_x, normal_y), Some(PlanetHit::Normal));
+        assert_eq!(planet_hit(easy_x, easy_y), Some(PlanetHit::Easy));
+        assert_eq!(planet_hit(free_x, free_y), Some(PlanetHit::Free));
+        assert_eq!(planet_hit(drum_x, drum_y), Some(PlanetHit::Drum));
+        // Buttons are disjoint bands across the same strip.
+        assert!(hard_x > normal_x && normal_x > easy_x);
+        assert!(free_x > drum_x && drum_x > hard_x);
+        let _ = (easy_y, drum_y);
+    }
+
+    #[test]
+    fn planet_button_hit_edges_are_exclusive() {
+        // Right/bottom edges exclusive, tops/lefts inclusive — the
+        // shared `rect_hit` convention the staged path already uses.
+        assert_eq!(planet_hit(313, 32), Some(PlanetHit::Hard));
+        assert_eq!(planet_hit(458, 143), Some(PlanetHit::Hard));
+        assert_eq!(planet_hit(459, 32), None);
+        assert_eq!(planet_hit(313, 144), None);
+        assert_eq!(planet_hit(86, 32), None);
+        // The strip between buttons and the promotion image hits
+        // nothing (rect 11 starts at y163).
+        assert_eq!(planet_hit(400, 150), None);
+    }
+
+    #[test]
+    fn planet_free_and_drum_clicks_stay_unbound() {
+        // P0: FREE (tutorial) and DRUM (quest) back ends were never
+        // wired; their clicks hit the pinned rects but must not
+        // select anything or advance any flow.
+        let mut selection = PlanetSelection::new();
+        assert_eq!(selection.band(), None);
+        let free = selection.click(614 + 49, 32 + 56).unwrap();
+        assert_eq!(free, PlanetHit::Free);
+        assert_eq!(free.band(), None);
+        assert_eq!(selection.band(), None, "FREE click must stay unbound");
+        let drum = selection.click(510 + 49, 32 + 56).unwrap();
+        assert_eq!(drum, PlanetHit::Drum);
+        assert_eq!(selection.band(), None, "DRUM click must stay unbound");
+        // HARD then records the pick; FREE again does not clear it.
+        selection.click(313 + 73, 32 + 56);
+        assert_eq!(selection.band(), Some(PlanetBand::Hard));
+        selection.click(614 + 49, 32 + 56);
+        assert_eq!(selection.band(), Some(PlanetBand::Hard));
+    }
+
+    #[test]
+    fn planet_band_rects_match_the_pinned_buttons() {
+        assert_eq!(planet_band_rect(PlanetBand::Hard), PLANET_HARD_RECT);
+        assert_eq!(planet_band_rect(PlanetBand::Normal), PLANET_NORMAL_RECT);
+        assert_eq!(planet_band_rect(PlanetBand::Easy), PLANET_EASY_RECT);
     }
 
     #[test]
