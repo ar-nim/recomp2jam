@@ -13,7 +13,10 @@
 //! (files `0x170fa2`–`0x171056`, ev `feebe490…`) selects per-difficulty
 //! deltas, and the scorer `FUN_00570510` applies them per judgement to
 //! the u16 life word at game `+0x3970` via adder `0x540a80` — modeled as
-//! [`LifeBar`]. The 4015 peer-life/rank mirror lives in [`PeerBars`]
+//! [`LifeBar`]. The jam gauge (threshold table fill `FUN_00570260`,
+//! scorer feeds and strict-greater grants `FUN_00570510`) is modeled
+//! as [`JamGauge`] over the level/progress counters [`JamState`].
+//! The 4015 peer-life/rank mirror lives in [`PeerBars`]
 //! (VERIFIED handler shape, dossier `rea-4015-ghidra`). VERIFIED anchors
 //! live in `docs/gameplay.md`: `Life_gauge_*_bar.ojs` art, per-hit Jam
 //! (4014 arg 1) vs tick-driven Life (4014 arg 0), `SubmitScore` (4016)
@@ -189,11 +192,17 @@ pub fn jam_threshold_for(level: u32) -> u64 {
 /// `PROGRESS` counter (`+0x396c`, sub `+0x214c`) — VERIFIED 7.55:
 /// Cool feeds +2, Good feeds +1 (both via adder `0x5409f0`);
 /// Bad/Miss reset progress to `0` (setter `0x540770` on the shared
-/// low-branch tail, file `0x1708dd`); crossing the threshold grants
-/// `X += 1` (adder `0x140a20`, no progress reset — cumulative) and
-/// `X` resets to `0` on Bad/Miss (file `0x170936`, after a maxJam
-/// snapshot). A pill-saved Bad takes the Cool path verbatim, so it
-/// feeds like a Cool.
+/// low-branch tail, file `0x1708dd`) and level to `0` (setter
+/// `0x540790`, file `0x170936`, after a maxJam snapshot to
+/// `+0x397e` via setter `0x5407f0`); crossing the threshold grants
+/// `X += 1` (adder `0x140a20`, no progress reset — cumulative) only
+/// when progress *strictly exceeds* the level's table entry
+/// (`threshold < progress` compare, files `0x1706f9`–`0x170727`): a
+/// bar sitting exactly on its threshold is full but ungranted until
+/// the next feed. The grant check runs once per Cool/Good;
+/// one level per feed is the most it can grant because a feed adds
+/// at most 2 against 50-step thresholds. A pill-saved Bad takes the
+/// Cool path verbatim, so it feeds like a Cool.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JamState {
     level: u32,
@@ -261,8 +270,10 @@ impl JamState {
     }
 
     fn grant_while_covered(&mut self) {
+        // The scorer grants only past the entry (strict greater);
+        // progress exactly on the threshold does not grant.
         while usize::try_from(self.level).unwrap_or(usize::MAX) < JAM_LEVEL_COUNT
-            && self.progress >= self.threshold()
+            && self.progress > self.threshold()
         {
             self.level += 1;
             self.max_level = self.max_level.max(self.level);
@@ -273,6 +284,106 @@ impl JamState {
         self.max_level = self.max_level.max(self.level);
         self.level = 0;
         self.progress = 0;
+    }
+}
+
+/// Local jam gauge, VERIFIED 7.55 end to end.
+///
+/// Counters: the level word `X` at game `+0x396e` (sub `+0x214e`) and
+/// the cumulative progress word at game `+0x396c` (sub `+0x214c`)
+/// of [`JamState`]. Fill: the position of progress inside the current
+/// level's 50-wide step — the threshold table the gauge fills toward
+/// is computed at game init by `FUN_00570260` (file `0x170260`,
+/// VA `0x570260`), which writes `(i + 1) * 50` into the 400 entries
+/// at `+0xb66` — identical for every difficulty. The scorer
+/// `FUN_00570510` (file `0x170510`) feeds progress per judgement
+/// (Cool +2 at file `0x1705b0`, Good +1 at file `0x170628`, both via
+/// adder `0x5409f0`) and grants one level per feed once progress
+/// strictly exceeds the current entry (files `0x1706f9`–`0x170727`,
+/// via adder `0x540a20`), never resetting progress on grant —
+/// crossing a threshold only advances the level while the remainder
+/// beyond the level base stays earned. Bad/Miss clear both counters
+/// (snapshot to maxJam, then level 0 and progress 0). A pill-saved
+/// Bad feeds like a Cool through the same path.
+///
+/// REA verification, 7.55 `AngelO2Jam.exe` (sha256
+/// `83a04541…72c823b`): threshold-fill dossier `ev_d54aa443…`
+/// (parent `ev_93dc76a2…`); scorer dossier `ev_f86dc2e2…`; progress
+/// adder `ev_4b5fd9d1…`; level adder `ev_730ad5ee…`; progress setter
+/// `ev_da5f9848…`; level setter `ev_e3a7464a…`; maxJam setter
+/// `ev_f020b3d8…`. The prior "30 per jam" report is refuted: no 30
+/// compare exists in the judgement range, and the fill step is 50.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JamGauge {
+    state: JamState,
+}
+
+impl JamGauge {
+    /// An empty gauge: level 0, no progress — the exe's init state
+    /// (threshold table filled, counters zeroed).
+    #[must_use]
+    pub fn starting() -> Self {
+        Self::default()
+    }
+
+    /// Current jam level `X` (the level the score multiplier reads).
+    #[must_use]
+    pub fn level(&self) -> u32 {
+        self.state.level()
+    }
+
+    /// Cumulative progress toward the next level (never reset on
+    /// grant, cleared on Bad/Miss).
+    #[must_use]
+    pub fn progress(&self) -> u64 {
+        self.state.progress()
+    }
+
+    /// Highest level reached (snapshot kept across Bad/Miss resets).
+    #[must_use]
+    pub fn max_level(&self) -> u32 {
+        self.state.max_level()
+    }
+
+    /// Cumulative progress the next level requires
+    /// (`(level + 1) * 50` from the threshold table).
+    #[must_use]
+    pub fn threshold(&self) -> u64 {
+        self.state.threshold()
+    }
+
+    /// Progress inside the current level (`0..=50`) — the bar fill.
+    #[must_use]
+    pub fn level_progress(&self) -> u64 {
+        self.state.level_progress()
+    }
+
+    /// Whether the bar sits exactly on its threshold: full, but the
+    /// strict-greater grant has not fired until the next feed.
+    #[must_use]
+    pub fn is_at_threshold(&self) -> bool {
+        self.progress() == self.threshold()
+    }
+
+    /// Bar fill in permille (`0..=1000`): in-level progress over the
+    /// verified [`JAM_PROGRESS_PER_LEVEL`] step.
+    #[must_use]
+    pub fn fill_milli(&self) -> u32 {
+        let scaled = self.level_progress() * 1000;
+        let millis = scaled / JAM_PROGRESS_PER_LEVEL;
+        u32::try_from(millis).unwrap_or(1000).min(1000)
+    }
+
+    /// Apply one judgement: feed on Cool/Good, clear on Bad/Miss.
+    /// A pill-saved Bad feeds like a Cool via
+    /// [`JamGauge::apply_pill_saved`].
+    pub fn apply(&mut self, judgement: Judgement) {
+        self.state.note(judgement);
+    }
+
+    /// A pill-saved Bad runs the Cool branch, so it feeds like a Cool.
+    pub fn apply_pill_saved(&mut self) {
+        self.state.note_pill_saved();
     }
 }
 
@@ -1728,11 +1839,18 @@ mod tests {
 
     #[test]
     fn jam_grants_level_without_resetting_progress() {
+        // 25 Cools park progress exactly on the first threshold:
+        // the strict-greater grant (files 0x1706f9-0x170727) has not
+        // fired yet, so the level is still 0 with a full bar.
         let mut jam = JamState::new();
         for _ in 0..25 {
             jam.note(Judgement::Cool);
         }
-        assert_eq!((jam.level(), jam.progress()), (1, 50));
+        assert_eq!((jam.level(), jam.progress()), (0, 50));
+        assert_eq!(jam.threshold(), 50);
+        // The 26th Cool crosses it: level 1, cumulative progress kept.
+        jam.note(Judgement::Cool);
+        assert_eq!((jam.level(), jam.progress()), (1, 52));
         assert_eq!(jam.threshold(), 100);
         assert_eq!(jam.max_level(), 1);
     }
@@ -1740,7 +1858,7 @@ mod tests {
     #[test]
     fn jam_resets_level_and_progress_on_bad() {
         let mut jam = JamState::new();
-        for _ in 0..25 {
+        for _ in 0..26 {
             jam.note(Judgement::Cool);
         }
         jam.note(Judgement::Bad);
@@ -1762,10 +1880,12 @@ mod tests {
         assert_eq!(jam.level_progress(), 0);
         jam.note(Judgement::Cool);
         assert_eq!(jam.level_progress(), JAM_PROGRESS_PER_COOL);
+        // 25 Cools fill the level exactly (50/50) without granting;
+        // the next Good crosses into level 1 with 1 of in-level fill.
         for _ in 0..24 {
             jam.note(Judgement::Cool);
         }
-        assert_eq!((jam.level(), jam.level_progress()), (1, 0));
+        assert_eq!((jam.level(), jam.level_progress()), (0, 50));
         jam.note(Judgement::Good);
         assert_eq!((jam.level(), jam.level_progress()), (1, 1));
     }
@@ -1777,10 +1897,73 @@ mod tests {
     }
 
     #[test]
+    fn jam_gauge_empty_shows_no_fill() {
+        let gauge = JamGauge::starting();
+        assert_eq!(gauge.level(), 0);
+        assert_eq!(gauge.progress(), 0);
+        assert_eq!(gauge.fill_milli(), 0);
+        assert!(!gauge.is_at_threshold());
+    }
+
+    #[test]
+    fn jam_gauge_cool_and_good_fill_toward_the_first_threshold() {
+        let mut gauge = JamGauge::starting();
+        gauge.apply(Judgement::Cool);
+        gauge.apply(Judgement::Good);
+        // Cool +2 and Good +1: 3 of 50 earned = 60 permille.
+        assert_eq!((gauge.level(), gauge.progress()), (0, 3));
+        assert_eq!(gauge.fill_milli(), 60);
+        assert_eq!(gauge.threshold(), 50);
+    }
+
+    #[test]
+    fn jam_gauge_full_bar_grants_only_past_the_threshold() {
+        let mut gauge = JamGauge::starting();
+        for _ in 0..25 {
+            gauge.apply(Judgement::Cool);
+        }
+        assert_eq!((gauge.level(), gauge.progress()), (0, 50));
+        assert_eq!(gauge.fill_milli(), 1000);
+        assert!(gauge.is_at_threshold());
+        // One more Cool crosses it: level 1, 2 of the next 50 earned.
+        gauge.apply(Judgement::Cool);
+        assert_eq!((gauge.level(), gauge.progress()), (1, 52));
+        assert_eq!(gauge.level_progress(), 2);
+        assert_eq!(gauge.fill_milli(), 40);
+        assert_eq!(gauge.threshold(), 100);
+    }
+
+    #[test]
+    fn jam_gauge_bad_and_miss_clear_level_and_progress() {
+        let mut bad = JamGauge::starting();
+        for _ in 0..26 {
+            bad.apply(Judgement::Cool);
+        }
+        assert_eq!(bad.level(), 1);
+        bad.apply(Judgement::Bad);
+        assert_eq!((bad.level(), bad.progress(), bad.max_level()), (0, 0, 1));
+        assert_eq!(bad.fill_milli(), 0);
+        let mut miss = JamGauge::starting();
+        miss.apply(Judgement::Cool);
+        miss.apply(Judgement::Miss);
+        assert_eq!((miss.level(), miss.progress()), (0, 0));
+    }
+
+    #[test]
+    fn jam_gauge_pill_saved_feeds_like_cool() {
+        let mut gauge = JamGauge::starting();
+        gauge.apply(Judgement::Cool);
+        gauge.apply_pill_saved();
+        assert_eq!((gauge.level(), gauge.progress()), (0, 4));
+    }
+
+    #[test]
     fn rated_scores_jam_multiplier_on_cool_and_good() {
+        // 25 Cools sit exactly on the threshold (strict-greater
+        // grant has not fired); the 26th grants level 1.
         let mut score = Score::default();
         let mut pills = PillStock::default();
-        for _ in 0..25 {
+        for _ in 0..26 {
             score.apply_rated(Judgement::Cool, &mut pills);
         }
         assert_eq!(score.jam.level(), 1);
@@ -2096,16 +2279,18 @@ mod tests {
 
     #[test]
     fn all_cool_total_tracks_the_jam_level_climb() {
-        // Notes 1..24 score Cool at jam level 0 (progress 2..48 stays
-        // under the 50 threshold); note 25 grants level 1 first, so it
-        // scores 210. Hand-computed from the verified feed/grant/score
-        // order — not from the code under test.
+        // Notes 1..25 score Cool at jam level 0: the 25th parks
+        // progress exactly on the 50 threshold, and the
+        // strict-greater grant (files 0x1706f9-0x170727) fires only
+        // on the 26th — so note 26 is the first that scores 210.
+        // Hand-computed from the verified feed/grant/score order —
+        // not from the code under test.
         assert_eq!(Score::all_cool_total(0), 0);
         assert_eq!(Score::all_cool_total(1), 200);
         assert_eq!(Score::all_cool_total(24), 4_800);
-        assert_eq!(Score::all_cool_total(25), 5_010);
-        // Notes 26..50 sit at level 1 (210 each); note 50 grants level 2.
-        assert_eq!(Score::all_cool_total(50), 10_270);
+        assert_eq!(Score::all_cool_total(25), 5_000);
+        // Notes 26..50 sit at level 1 (210 each); note 51 grants level 2.
+        assert_eq!(Score::all_cool_total(50), 10_250);
     }
 
     #[test]
@@ -2181,17 +2366,18 @@ mod tests {
 
     #[test]
     fn grade_numerator_tracks_the_jam_multiplier() {
-        // 25 Cools grant level 1 first (progress 50), so note 25 scores
-        // 210 and the next Cool/Good score with X = 1.
+        // 25 Cools park exactly on the threshold (progress 50): the
+        // strict-greater grant fires only on the 26th, so the first
+        // 25 all score 200 and note 26 scores 210 with X = 1.
         let mut score = Score::default();
         for _ in 0..25 {
             score.apply(Judgement::Cool);
         }
-        assert_eq!(score.grade_numerator(), 5_010);
+        assert_eq!(score.grade_numerator(), 5_000);
         score.apply(Judgement::Cool);
-        assert_eq!(score.grade_numerator(), 5_010 + 210);
+        assert_eq!(score.grade_numerator(), 5_000 + 210);
         score.apply(Judgement::Good);
-        assert_eq!(score.grade_numerator(), 5_010 + 210 + 105);
+        assert_eq!(score.grade_numerator(), 5_000 + 210 + 105);
     }
 
     #[test]

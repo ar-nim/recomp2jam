@@ -3185,23 +3185,24 @@ mod live_play_tests {
 
     #[test]
     fn jam_level_grant_flashes_the_staged_jam_effect() {
-        // A jam level grant (25 Cools fill the 50-progress level)
-        // plays the staged flash centered on the highway at the
-        // judgement line (highway center 8, line row 48 at 70x60):
+        // A jam level grant (26 Cools cross the 50-progress level:
+        // 25 fill it exactly, which the strict-greater grant does not
+        // fire on) plays the staged flash centered on the highway at
+        // the judgement line (highway center 8, line row 48 at 70x60):
         // the flash pixel covers the judgement line, and the flash
         // ends after the staged frame window.
-        let notes: Vec<(u8, u64, u32)> = (0..25u32)
+        let notes: Vec<(u8, u64, u32)> = (0..26u32)
             .map(|i| (0, 1000 + u64::from(i) * 100, 7))
             .collect();
         let mut live = LivePlay::new(&notes);
-        for i in 0..25u32 {
+        for i in 0..26u32 {
             assert_eq!(
                 live.strike_lane(0, 1000 + u64::from(i) * 100),
                 Some(Judgement::Cool)
             );
         }
-        // The 25 Cools fill the 50-progress level: the grant stamps
-        // the flash at the last strike.
+        // The 26th Cool crosses the threshold: the grant stamps the
+        // flash at the last strike (1000 + 25 * 100 = 3500).
         assert_eq!(live.score().jam.level(), 1);
         let mut baseline = vec![0u32; 70 * 60];
         live.paint(
@@ -3211,7 +3212,7 @@ mod live_play_tests {
                 h: 60,
             },
             &geom(),
-            3400,
+            3500,
         );
         assert_eq!(baseline[48 * 70 + 8], pack_xrgb(0xE0, 0xE0, 0xE0));
         let archive = opi_blob(&[("Playing_Effect_Jam.oja", &jam_oja_body())]);
@@ -3224,7 +3225,7 @@ mod live_play_tests {
                 h: 60,
             },
             &geom(),
-            3400,
+            3500,
         );
         assert_eq!(flashed[48 * 70 + 8], solid_ink(0x7FE0));
         let mut faded = vec![0u32; 70 * 60];
@@ -3235,7 +3236,7 @@ mod live_play_tests {
                 h: 60,
             },
             &geom(),
-            3400 + RECEPTOR_FRAME_MS * 3,
+            3500 + RECEPTOR_FRAME_MS * 3,
         );
         assert_eq!(faded[48 * 70 + 8], pack_xrgb(0xE0, 0xE0, 0xE0));
         assert!(!faded.contains(&solid_ink(0x03E0)));
@@ -3452,11 +3453,14 @@ mod live_play_tests {
 
     #[test]
     fn jam_gauge_grant_advances_level_digits_and_empties_fill() {
-        let notes: Vec<(u8, u64, u32)> = (0..25u32)
+        // 26 Cools: 25 fill the 50-progress level exactly (no grant
+        // on the strict-greater compare), the 26th crosses it and
+        // leaves 2 of in-level progress.
+        let notes: Vec<(u8, u64, u32)> = (0..26u32)
             .map(|i| (0, 1000 + u64::from(i) * 100, 7))
             .collect();
         let mut live = LivePlay::new(&notes);
-        for i in 0..25u32 {
+        for i in 0..26u32 {
             assert_eq!(
                 live.strike_lane(0, 1000 + u64::from(i) * 100),
                 Some(Judgement::Cool)
@@ -3464,7 +3468,7 @@ mod live_play_tests {
         }
         assert_eq!(
             (live.score().jam.level(), live.score().jam.level_progress()),
-            (1, 0)
+            (1, 2)
         );
         let mut buf = vec![0u32; 70 * 60];
         live.paint(
@@ -3474,7 +3478,7 @@ mod live_play_tests {
                 h: 60,
             },
             &geom(),
-            3400,
+            3500,
         );
         let jam_ink = pack_xrgb(0xFF, 0xC0, 0x40);
         // The lane span left of the level line stays flat; the line's

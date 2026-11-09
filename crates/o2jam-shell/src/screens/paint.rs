@@ -5231,7 +5231,7 @@ mod paint_tests {
             counts: [800, 900, 300, 200],
             ..o2jam_game::Score::default()
         };
-        for _ in 0..50 {
+        for _ in 0..51 {
             score.jam.note(o2jam_game::Judgement::Cool);
         }
         score
@@ -5301,9 +5301,10 @@ mod paint_tests {
 
     #[test]
     fn jam_combo_field_paints_the_jam_level_chain() {
-        // 50 Cools climb the jam to level 2 (progress 100 over the
-        // level-2 threshold): the JAM COMBO field shows the chain,
-        // the wire's u16 `jam` field.
+        // 51 Cools climb the jam to level 2 (progress 102 over the
+        // level-2 threshold; 50 Cools park at progress 100, which the
+        // strict-greater grant does not fire on): the JAM COMBO field
+        // shows the chain, the wire's u16 `jam` field.
         assert_eq!(full_score().jam.level(), 2);
         assert_field(
             &flat_native_result(&full_score()),
