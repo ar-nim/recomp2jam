@@ -48,9 +48,14 @@ code alongside parent-array work. It is ~63 KB below the dialog-open path
 (`0x4ED650`, file `0xed650`), so the bar is **not** mounted by `0x4ED650`.
 No `DIALOG_`-prefixed literal exists anywhere in the image (0 hits), and
 `DIALOG_CHANNEL_INFO` is absent as a string while `CDChannelInfo` survives
-only as one RTTI name (file `0x27dc10`) — dialog lookup is index-driven,
-so the bar's dialog host (`DIALOG_CHANNEL_INFO`/`CDChannelInfo` per
-lifecycle §6) stays unpinned and the shell stages no bar body.
+as an RTTI name (file `0x27dc10`; corrected 2026-11-11: the TD name at
+file `0x27dc04` is referenced by two vftable records, files
+`0x247150`/`0x247160`, so the class exists in code — see
+`docs/overnight-evidence/e1-channel-dialog-trigger.md`; the runtime
+allocator stays OPEN) — dialog staging is index-driven by the constant
+`0x1B` in the stage virtual, not by block code, so the bar's dialog
+host (`DIALOG_CHANNEL_INFO`/`CDChannelInfo` per lifecycle §6) stays
+unpinned and the shell stages no bar body.
 
 ## Fill candidates — no-fill pinned, hosts stay OPEN
 
@@ -416,7 +421,8 @@ shared-base stages Channel" hypothesis resolves to Planet).
 `0x12100001`-`0x1250002B`; every rect is **zero** - the bare-BOUND /
 zero-rect finding confirmed in the running process. The
 `DIALOG_CHANNEL_INFO` block (buffer `0x02A39A30`, code `0x8C`, in the
-parent's second descriptor table at `parent+0x2000`) holds 26 records
+parent's second descriptor table at `parent+0x1FE8` — corrected
+2026-11-11; `+0x2000` names only the table region) holds 26 records
 **with quoted sprite names** and zero rects; its art list matches the
 mounted bodies below (`Dialog_ChannelInfo.ojs`, `ChannelInfo_Btn_Close`,
 `CH_Back`, `CH_Num` x2, `CH_ConnectCount`, `CH_Enter`,
@@ -666,9 +672,10 @@ reference-measured `232+50i` anchors are retired.
 3. Dialog host — RESOLVED 2026-11-09: the mounted child at
    `parent+0xF6C` is a `CStatePlanet` object (live memory read; see the
    "Live memory read" section above). The select bar's exact mount
-   rect stays OPEN (button view fields blocked); `CDChannelInfo` never
-   materialized as a class — dialog lookup is index-driven through the
-   `0x8C` block.
+   rect stays OPEN (button view fields blocked); `CDChannelInfo` exists
+   as a class in code (two vftable records ref its RTTI name, E1
+   2026-11-11) — dialog staging is index-driven (`0x1B`) through the
+   `0x8C` block; which allocator creates the instance is OPEN.
 4. `CWindow`/`CDialogBase` default fill, if any (ui-draw OPEN 3).
 5. Loading bar/caption geometry — OPEN, negative result (placeholders
    kept): `MusicLoading.ojs` (`Playing1.opi` slot 39, 960,028 B) is
