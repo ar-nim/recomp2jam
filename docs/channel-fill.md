@@ -345,6 +345,28 @@ bar-local arrows/body; emblem re-statements (313/206/87/614/510,
 identical to `State_Planet.bnd`); TEXT strips (y125-138); board EXIT
 (750,561)-(788,599) 38x38.
 
+VERIFICATION PASS (2026-11-09 second session, `~/scratch/channel-geom2/`):
+- The code-fetched `Dialog_ChannelSelectBar.ojs` (348x44) is
+  LIVE-CONFIRMED mounted at dialog+`0x8C` (sprite record, 348/44 at
+  +`0x170`) and paints on the HOVERED row at the row rect — the list
+  highlight. Distinct from the per-row `CH_Back` bar (347x41).
+- Pixel measurement agreed with every bnd-pinned value within ±2 px
+  (brightness-run tolerance): face (501,row_top+10) vs bnd (502,+12);
+  X core (546,155,37x32) vs bnd (541,151,48x38); scroll (575,212)
+  vs bnd (573,213). Bnd values stand as authoritative.
+- Fallback chrome wells (live-measured, baked in the staged bar art):
+  number well (225,228) 71x32 (the old 205,227 pill was 20 px off);
+  track well (298,229) 195x32.
+- PAGER: the bottom strip (y~439-466) is dialog-sheet rim chrome,
+  live-confirmed in every state; whether pager text ever paints stays
+  CONTESTED (the 2026-11-07 capture read strip ink; this session none).
+- Bare-board reference-measured rects: promo nav cluster (345,509)
+  107x27; OPTION (712,562); EXIT (753,562); MENU back-arrow (130,562)
+  31x32 — all within 2-3 px of the bnd-pinned origins where both exist.
+- Control-array search MISS: no `0x8Cxxxxxx`/`0x12xxxxxx` records in
+  heap dumps; face/scroll positions are computed at paint time.
+  dialog+`0x1F8`..+`0x248` hold channel-server records (port 15010).
+
 Live captures (`~/scratch/button-unblock/`, recipe `walk_planet.py`)
 show the channel dialog opening **over the bare planet board** at boot
 and closing via its X button (native (557,195), inside the measured
