@@ -25,6 +25,9 @@ pub enum Screen {
     Result,
     /// Solo missions (`CStatePlanet`, `0x11`).
     Planet,
+    /// Rankings display (`STATE_LANKING`, `0x37`, no state class).
+    /// Spelling follows the shipped block name.
+    Lanking,
 }
 
 /// Rejected screen change.

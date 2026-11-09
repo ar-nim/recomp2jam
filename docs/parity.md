@@ -103,6 +103,9 @@ pass is ever claimed):
   and flow edges (`Channel→Planet`, `Planet→Room`) live; buttons
   and BGM unwired, entry UI awaits tab semantics (all OPEN).
 - `STATE_LANKING` (`0x37`; display-only, no state class — like CHANNEL).
+  Screen, paint (staged art or flat card, no rows/data), and
+  all-reject flow live; rank fetch, sorts, search, pagers, entry
+  unwired (all OPEN).
 - `STATE_PAYMENT` / `STATE_PAYMENT2` (web billing views).
 - `STATE_TUTORIAL` (stub `0x00`; entry path unknown).
 - `STATE_DRUM_PLAYING` / `STATE_EXIT` (stubs `0x00`; drum never wired,

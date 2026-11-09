@@ -42,7 +42,10 @@ stay OPEN like all TEXT entries.
 
 ## OPEN
 
-1. Rect contents → placements.
+1. Rect contents → placements — DONE (73 rects, ordinal pairing).
+2. Shell screen + paint + flow + live staging — DONE
+   (`Screen::Lanking`, `paint_lanking_scene`, all-reject flow,
+   `stage_interface_scenes` + soak tests; clicks land nowhere per P0).
 2. Rank fetch opcode + row fields.
 3. Category/sort/search/pager semantics (display-only candidates).
 4. Entry path (host class unknown, like CHANNEL) and exits.

@@ -10,12 +10,13 @@ use super::super::GameLoop;
 use super::paint::{
     battle_verdict, channel_row_hit, channel_viewport, has_room_panels, list_row_hit,
     paint_avi_scene, paint_channel_chat, paint_channel_list, paint_channel_scene,
-    paint_loading_scene, paint_loading_scene_with_status, paint_lobby_backdrop, paint_planet_scene,
-    paint_playing_overlay, paint_result, paint_result_scene, paint_room_list, paint_room_scene,
-    paint_screen, paint_waiting_chat, paint_waiting_members, paint_waiting_scene, rect_hit,
-    room_panel_hit, scene_index, staged_rect_hit, BattleVerdict, ChannelChatMessage, LoadingStatus,
-    ResultPaint, ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage,
-    RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
+    paint_lobby_backdrop, paint_planet_scene, paint_playing_overlay, paint_result,
+    paint_result_scene, paint_room_list, paint_room_scene, paint_screen, paint_waiting_chat,
+    paint_waiting_members, paint_waiting_scene, rect_hit, room_panel_hit, scene_index,
+    staged_rect_hit, BattleVerdict, ChannelChatMessage, LoadingStatus, ResultPaint, ResultRankRow,
+    ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage, RESULT_BACK_ID, RESULT_BACK_RECT,
+    RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::side::{
     can_return_side, can_visit_side, paint_side_scene, select_chosung_cells, select_difficulty_ink,
@@ -155,7 +156,7 @@ pub struct ScreenGame {
     side_origin: Option<Screen>,
     side_placements: Vec<ScenePlacement>,
     side_figures: HashMap<String, AvatarFigure>,
-    scene_art: [Option<SceneArt>; 8],
+    scene_art: [Option<SceneArt>; 9],
 }
 
 /// Key-sound bank plus backend for windowed play.
@@ -1596,6 +1597,17 @@ impl ScreenGame {
             Screen::Loading => self.paint_loading(frame),
             Screen::Result => self.paint_result(frame),
             Screen::Planet => self.paint_planet(frame),
+            Screen::Lanking => self.paint_lanking(frame),
+        }
+    }
+
+    /// Rankings: staged art when present, else the flat card. Rank
+    /// rows, sorts, search, and pagers are unevidenced (fetch opcode
+    /// unknown) — paint only, no data, no selection state.
+    fn paint_lanking(&self, frame: &mut Frame<'_>) {
+        match self.scene_art(Screen::Lanking) {
+            Some(art) => paint_lanking_scene(frame, art),
+            None => paint_screen(frame, Screen::Lanking),
         }
     }
 
@@ -2282,6 +2294,9 @@ impl GameLoop for ScreenGame {
             // Planet clicks land nowhere: button captions, selection
             // state, and FREE/DRUM backends are all unevidenced (P0).
             Screen::Planet => {}
+            // Ranking clicks land nowhere: sorts, search, pagers, and
+            // row selection are all unevidenced (P0).
+            Screen::Lanking => {}
             Screen::Loading | Screen::Playing => {}
         }
     }
