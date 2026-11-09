@@ -134,6 +134,26 @@ pub const fn scene_index(screen: Screen) -> usize {
 /// record anchor.
 pub const DIALOG_BAR_SPRITE: &str = "Dialog_ChannelSelectBar.ojs";
 
+/// The channel-list dialog body (`Dialog_ChannelInfo.ojs`, one raw
+/// 800x466 layer at its record anchor (0,0)). Staged at the record
+/// anchor: the reference capture's measured bands — panel approx
+/// x185-615 y150-464, title plate y150-195, row tops 232+50i, pager
+/// strip y439-464, X zone x560-620 — all fall inside the 800x466 body
+/// at (0,0) (live capture `/tmp/chan2-list.png`; method in
+/// `docs/channel-fill.md`), so the body's own anchor reproduces every
+/// measured band without inventing a position. Reference-measured,
+/// exe-OPEN; the `STATE_CHANNEL` block still names zero sprites (the
+/// dialog is code-mounted, host unpinned).
+pub const CHANNEL_DIALOG_SPRITE: &str = "Dialog_ChannelInfo.ojs";
+
+/// The join ("입장") button body (`ChannelInfo_CH_Enter.ojs`, three
+/// 44x21 frames at anchor (0,0)). Staged at the reference-measured
+/// face origins (502, 236+50i) of the visible rows (`/tmp/chan2-
+/// list.png`, reference-grade, exe-OPEN); frame 0 paints (no hover or
+/// press state is evidenced). The staged art replaces the procedural
+/// enter-button plates only while it covers the same measured faces.
+pub const CHANNEL_ENTER_SPRITE: &str = "ChannelInfo_CH_Enter.ojs";
+
 /// Sprite bodies one `ControlList` block names, in file order (empty
 /// for unknown blocks).
 fn block_sprites(list: &ControlList, block: &str) -> Vec<String> {
@@ -447,6 +467,33 @@ fn paint_channel_buttons(frame: &mut Frame<'_>, shown: usize) {
         fill_rect(frame, &channel_enter_rect(slot, w, h), CHANNEL_ENTER_TONE);
     }
 }
+
+/// Enter buttons for the viewport slice: staged
+/// [`CHANNEL_ENTER_SPRITE`] frame 0 at the reference-measured face
+/// origins (502, 236+50i, native) while the figure staged; the
+/// procedural plates ([`paint_channel_buttons`]) otherwise. The
+/// staged art covers the same measured rect the plates marked, so
+/// the replacement invents nothing.
+fn paint_channel_enter_art(frame: &mut Frame<'_>, shown: usize, art: &SceneArt) {
+    let Some(figure) = art.figures.get(CHANNEL_ENTER_SPRITE) else {
+        paint_channel_buttons(frame, shown);
+        return;
+    };
+    if shown == 0 || frame.w == 0 || frame.h == 0 || figure.is_empty() {
+        return;
+    }
+    for slot in 0..shown {
+        // Reference-measured face origin (native px): the row band top
+        // plus the measured 4 px inset (faces (502,236+50i,48,24)).
+        let (dx, dy) = anchor_in_frame(
+            CHANNEL_ENTER_X,
+            channel_row_top(slot, NATIVE_HEIGHT as i32) + CHANNEL_ENTER_DY,
+            frame.w,
+            frame.h,
+        );
+        figure.paint_scaled_anchors(frame, dx, dy, frame.w, frame.h);
+    }
+}
 /// Dark strip behind Channel rows, rescaled from the measured native
 /// stack: mirrors [`paint_list_scrim`] shape (2 px bleed) without
 /// sharing its invented anchors.
@@ -575,11 +622,21 @@ fn channel_row_text(channel: &ChannelState) -> String {
 
 /// Channel rows plus highlight cursor (no background fill: shared by
 /// the flat fallback and the art scene). Only the viewport around the
-/// highlight paints; the pager names the visible slice.
-fn paint_channel_rows(frame: &mut Frame<'_>, channels: &[ChannelState], highlight: usize) {
+/// highlight paints; the pager names the visible slice. `art` selects
+/// staged enter-button art over the procedural plates in the art path
+/// (`None` is the flat fallback).
+fn paint_channel_rows(
+    frame: &mut Frame<'_>,
+    channels: &[ChannelState],
+    highlight: usize,
+    art: Option<&SceneArt>,
+) {
     let (top, shown) = channel_viewport(highlight, channels.len());
     paint_channel_scrim(frame, top, shown);
-    paint_channel_buttons(frame, shown);
+    match art {
+        Some(art) => paint_channel_enter_art(frame, shown, art),
+        None => paint_channel_buttons(frame, shown),
+    }
     let w = frame.w as i32;
     let h = frame.h as i32;
     let text_x = w / 4;
@@ -675,7 +732,23 @@ pub(crate) fn paint_channel_list(
 ) {
     fill_background(frame, Screen::Channel);
     paint_title(frame, "CHANNEL");
-    paint_channel_rows(frame, channels, highlight);
+    paint_channel_rows(frame, channels, highlight, None);
+}
+
+/// Paint the staged channel dialog body ([`CHANNEL_DIALOG_SPRITE`]) at
+/// its record anchor (0,0), behind the live list ink. Reference-
+/// measured mount (panel band approx x185-615 y150-464 inside the
+/// 800x466 body; see the constant's doc). Returns `true` while a body
+/// painted; `false` without one (no-fill corner untouched).
+fn paint_channel_dialog_body(frame: &mut Frame<'_>, art: &SceneArt) -> bool {
+    let Some(figure) = art.figures.get(CHANNEL_DIALOG_SPRITE) else {
+        return false;
+    };
+    if figure.is_empty() || frame.w == 0 || frame.h == 0 {
+        return false;
+    }
+    figure.paint_scaled_anchors(frame, 0, 0, frame.w, frame.h);
+    true
 }
 
 /// Paint staged channel art with the live list and cursor on top.
@@ -694,9 +767,10 @@ pub fn paint_channel_scene(
     if !art.has_figures() {
         frame.buf.fill(0);
     }
+    paint_channel_dialog_body(frame, art);
     art.paint_backdrop(frame, Screen::Channel);
     paint_title_over_art(frame, Screen::Channel);
-    paint_channel_rows(frame, channels, highlight);
+    paint_channel_rows(frame, channels, highlight, Some(art));
 }
 
 /// One room row: `3 TITLE 5/8`, locked rooms suffixed `!`.
@@ -7380,6 +7454,128 @@ mod paint_tests {
         assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
         assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xD0, 0x20)));
         assert!(!buf.contains(&background_of(Screen::Channel)));
+    }
+
+    /// One solid-colour layer figure (`w` x `h` at (0,0), colorkey
+    /// white so every pixel paints).
+    fn solid_figure(w: usize, h: usize, word: [u8; 2]) -> AvatarFigure {
+        let mut pixels = vec![0u8; w * h * 2];
+        for px in pixels.as_chunks_mut::<2>().0 {
+            px.copy_from_slice(&word);
+        }
+        let mut figure = AvatarFigure::default();
+        figure.push_layer(FigureLayer {
+            image: Rgb555Image::decode(&pixels, w, h).unwrap(),
+            dx: 0,
+            dy: 0,
+            colorkey: 0xFFFF,
+        });
+        figure
+    }
+
+    #[test]
+    fn channel_dialog_body_stages_behind_the_live_list() {
+        // Reference-measured mount: the Dialog_ChannelInfo body paints
+        // at its record anchor (0,0), the live list and cursor ink on
+        // top, and the region the body never covers (bottom strip,
+        // native y 467..600) stays untouched — no invented fill.
+        let art = SceneArt {
+            placements: Vec::new(),
+            figures: HashMap::from([(
+                CHANNEL_DIALOG_SPRITE.to_owned(),
+                solid_figure(800, 466, [0xE0, 0x03]), // solid green
+            )]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_channel_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &two_channels(),
+            0,
+            &art,
+        );
+        let green = pack_xrgb(0x00, 0xFF, 0x00);
+        // Body ink inside the measured panel band, outside row chrome.
+        assert_eq!(buf[100 * 800 + 700], green);
+        assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
+        assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xD0, 0x20)));
+        // No-fill corner: below the 466-tall body nothing paints.
+        assert_eq!(buf[599 * 800 + 799], 0);
+        assert_eq!(buf[599 * 800], 0);
+    }
+
+    #[test]
+    fn channel_enter_art_covers_the_measured_faces() {
+        // Staged ChannelInfo_CH_Enter frame 0 replaces the procedural
+        // plates at the reference-measured faces (502,236+50i): face
+        // pixels carry staged ink, the plate tone paints nothing.
+        let art = SceneArt {
+            placements: Vec::new(),
+            figures: HashMap::from([(
+                CHANNEL_ENTER_SPRITE.to_owned(),
+                solid_figure(44, 21, [0x1F, 0x00]), // solid blue
+            )]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_channel_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &two_channels(),
+            0,
+            &art,
+        );
+        let blue = pack_xrgb(0x00, 0x00, 0xFF);
+        // Face of viewport slot 0 (native 502,236 + 44x21 art).
+        assert_eq!(buf[240 * 800 + 510], blue);
+        // Face of viewport slot 1.
+        assert_eq!(buf[290 * 800 + 510], blue);
+        assert!(!buf.contains(&CHANNEL_ENTER_TONE));
+    }
+
+    #[test]
+    fn channel_scene_without_enter_figure_keeps_procedural_plates() {
+        // No staged enter art: the art path falls back to the
+        // procedural plates at the same measured faces.
+        let art = SceneArt {
+            placements: Vec::new(),
+            figures: HashMap::from([(
+                CHANNEL_DIALOG_SPRITE.to_owned(),
+                solid_figure(8, 8, [0xE0, 0x03]),
+            )]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_channel_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &two_channels(),
+            0,
+            &art,
+        );
+        assert!(buf.contains(&CHANNEL_ENTER_TONE));
+    }
+
+    #[test]
+    fn channel_row_hit_mirrors_paint_inside_the_measured_faces() {
+        // Hit-test inverse of the measured stack: a pixel inside the
+        // face of row i maps back to row i; pixels above the stack or
+        // past the list hit nothing.
+        for slot in 0..CHANNEL_VISIBLE_ROWS {
+            let face_y = channel_row_top(slot, i32::try_from(NATIVE_HEIGHT).unwrap_or(0))
+                + CHANNEL_ENTER_DY
+                + 5;
+            assert_eq!(channel_row_hit(face_y, 4), Some(slot));
+        }
+        assert_eq!(channel_row_hit(100, 4), None);
+        assert_eq!(channel_row_hit(560, 4), None);
     }
 
     #[test]

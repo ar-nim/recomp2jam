@@ -18,7 +18,9 @@ use o2jam_shell::avatar::{
     AvatarFigure, PlayingArtMode, ScenePlacement, AVI_BLOCK, LOADING_SPRITE, RESULT_BLOCK,
     ROOM_BLOCK, WAITING_BLOCK,
 };
-use o2jam_shell::screens::paint::{PLAYING_BLOCK, RESULT_WINLOSE_SPRITE};
+use o2jam_shell::screens::paint::{
+    CHANNEL_DIALOG_SPRITE, CHANNEL_ENTER_SPRITE, PLAYING_BLOCK, RESULT_WINLOSE_SPRITE,
+};
 use o2jam_shell::screens::side::SELECT_MUSIC_DIALOG_BLOCK;
 use o2jam_shell::{GameLoop, MenuKey, PlaySkin, Screen, ScreenGame};
 
@@ -177,11 +179,12 @@ const INTERFACE_LIST: &str = "ControlList_Interface.txt";
 const PLAYING_LIST: &str = "ControlList_Playing.txt";
 
 /// `STATE_CHANNEL` names zero sprites on 7.55 (bare `BOUND`, no art),
-/// and the code-fetched channel bar (`Dialog_ChannelSelectBar.ojs`)
-/// has no pinned dialog host — so shots stage no scene art for
-/// Channel. The art-less state paints nothing; only the live list,
-/// title, and cursor layer on top (pinned no-fill rule per
-/// `docs/channel-fill.md`).
+/// so no block art stages for Channel; the code-mounted channel-list
+/// dialog (`Dialog_ChannelInfo.ojs` body at its record anchor plus the
+/// enter-button frames at the reference-measured faces) stages through
+/// `stage_channel_dialog`. The pinned no-fill rule still holds: the
+/// block contributes zero pixels and nothing paints beyond the staged
+/// art (`docs/channel-fill.md`).
 /// Room arena value the playing shot joins with: stage 2, whose
 /// `Playing_BG2.ojs` stages an open grassy rise sloping to a lake
 /// with a distant high-rise skyline under a bright blue sky — the
@@ -290,13 +293,34 @@ fn stage_single_sprite(
     Some((full_canvas(&names), figures))
 }
 
+/// Stage the code-mounted channel dialog art: the
+/// `Dialog_ChannelInfo.ojs` body at its record anchor (the
+/// reference-measured panel band falls inside the 800x466 body at
+/// (0,0)) plus the `ChannelInfo_CH_Enter.ojs` frames at the
+/// reference-measured faces. `STATE_CHANNEL` itself names zero
+/// sprites (verified), so no placements stage — the painter mounts
+/// the figures (pinned no-fill rule per `docs/channel-fill.md`).
+fn stage_channel_dialog(game: &mut ScreenGame, archive: &[u8]) {
+    let names = vec![
+        CHANNEL_DIALOG_SPRITE.to_owned(),
+        CHANNEL_ENTER_SPRITE.to_owned(),
+    ];
+    let figures = load_scene_figures(archive, &names);
+    if figures.is_empty() {
+        return;
+    }
+    game.load_scene(Screen::Channel, Vec::new(), figures);
+}
+
 /// Stage Interface-archive scenes; each scene stages independently
-/// so one bad block never blanks the rest. Channel stages nothing:
-/// the art-less state paints no fill under the live list.
+/// so one bad block never blanks the rest. Channel stages no block
+/// art (the block names zero sprites) — its code-mounted dialog art
+/// stages through `stage_channel_dialog`.
 fn stage_interface_archive(game: &mut ScreenGame, archive: &[u8]) {
     if let Some(logo) = load_avi_logo(archive) {
         game.load_splash(logo);
     }
+    stage_channel_dialog(game, archive);
     let Some(list) = control_list(archive, INTERFACE_LIST) else {
         return;
     };
@@ -432,9 +456,12 @@ fn seed_chart(game: &mut ScreenGame) {
     game.load_chart_holds(SCRIPTED_CHART.to_vec());
 }
 
-/// Art-less `STATE_CHANNEL`: stage the empty scene so the walk takes
-/// the staged path (`paint_channel_scene` paints no fill under the
-/// live list) instead of the flat `paint_channel_list` fallback.
+/// Art-less `STATE_CHANNEL` fallback: stage the empty scene so the
+/// walk takes the staged path (`paint_channel_scene` paints no fill
+/// under the live list) instead of the flat `paint_channel_list`
+/// fallback. Staged before `stage_real_art` in the seeded games: when
+/// genuine archives are present, the code-mounted channel dialog art
+/// overwrites this empty scene; without archives it stays empty.
 fn stage_empty_channel_scene(game: &mut ScreenGame) {
     game.load_scene(Screen::Channel, Vec::new(), HashMap::new());
 }
@@ -491,8 +518,8 @@ fn seeded_game_in(room: JoinedRoom) -> ScreenGame {
     stage_peer_gauge(&mut game);
     stage_waiting_captions(&mut game);
     stage_waiting_chat(&mut game);
-    stage_real_art(&mut game);
     stage_empty_channel_scene(&mut game);
+    stage_real_art(&mut game);
     game
 }
 
@@ -542,8 +569,8 @@ fn seeded_solo_game() -> ScreenGame {
     seed_lobby_lists(&mut game);
     game.set_joined_room(solo_waiting_room());
     seed_chart(&mut game);
-    stage_real_art(&mut game);
     stage_empty_channel_scene(&mut game);
+    stage_real_art(&mut game);
     game
 }
 
@@ -1795,8 +1822,12 @@ mod tests {
         // Pinned no-fill rule (`docs/channel-fill.md`): the art-less
         // channel stages nothing, so the native corner stays untouched
         // (no navy fill) while the live title and list rows still ink.
+        // The scene art is cleared explicitly: `seeded_game` stages the
+        // genuine dialog when `install-root` is present (guarded by
+        // `channel_shot_stages_dialog_art_inside_the_measured_bands`).
         let mut game = seeded_game();
         game.lane_key(3, true);
+        game.load_scene(Screen::Channel, Vec::new(), HashMap::new());
         assert_eq!(game.screen(), Screen::Channel);
         let frame = paint_native_frame(&mut game, 0);
         assert_eq!(frame[0], 0, "art-less channel paints no fill");
@@ -1808,6 +1839,54 @@ mod tests {
             frame.contains(&o2jam_render::pack_xrgb(0xFF, 0xFF, 0xFF)),
             "live title and list ink missing"
         );
+    }
+
+    #[test]
+    fn channel_shot_stages_dialog_art_inside_the_measured_bands() {
+        // With genuine art staged, the dialog body paints at its
+        // record anchor: new ink lands inside the 800x466 body (the
+        // reference-measured panel core x185-615 y150-464 among it)
+        // and the strip below native y466 stays byte-identical to the
+        // art-less frame (pinned no-fill beyond the art).
+        let Some(interface) = read_archive(INTERFACE_ARCHIVE) else {
+            println!("skip: missing {INTERFACE_ARCHIVE}");
+            return;
+        };
+        let mut staged = seeded_game();
+        stage_channel_dialog(&mut staged, &interface);
+        let mut base = seeded_game();
+        base.lane_key(3, true);
+        // Art-less baseline: same seed, channel scene art cleared.
+        base.load_scene(Screen::Channel, Vec::new(), HashMap::new());
+        let base_frame = paint_native_frame(&mut base, 0);
+        staged.lane_key(3, true);
+        assert_eq!(staged.screen(), Screen::Channel);
+        let frame = paint_native_frame(&mut staged, 0);
+        let mut inside_core = false;
+        for (index, (&now, &before)) in frame.iter().zip(base_frame.iter()).enumerate() {
+            if now == before {
+                continue;
+            }
+            let x = index % NATIVE_WIDTH as usize;
+            let y = index / NATIVE_WIDTH as usize;
+            assert!(
+                y < 466,
+                "channel shot: staged ink below the body at ({x},{y})"
+            );
+            if (185..=615).contains(&x) && (150..=464).contains(&y) {
+                inside_core = true;
+            }
+        }
+        assert!(
+            inside_core,
+            "channel shot: no staged ink inside the measured panel core"
+        );
+        for index in 466 * NATIVE_WIDTH as usize..frame.len() {
+            assert_eq!(
+                frame[index], base_frame[index],
+                "channel shot: fill below the dialog body"
+            );
+        }
     }
 
     #[test]

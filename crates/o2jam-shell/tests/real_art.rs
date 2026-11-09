@@ -17,7 +17,7 @@ use o2jam_shell::avatar::{
     scene_sprite_names, AvatarFigure, ScenePlacement, AVI_BLOCK, LOADING_SPRITE, RESULT_BLOCK,
     ROOM_BLOCK, WAITING_BLOCK,
 };
-use o2jam_shell::screens::paint::PLAYING_BLOCK;
+use o2jam_shell::screens::paint::{CHANNEL_DIALOG_SPRITE, CHANNEL_ENTER_SPRITE, PLAYING_BLOCK};
 use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
 
 /// Probe frame dimensions (matches the `shots.rs` aspect).
@@ -34,9 +34,13 @@ const INTERFACE_LIST: &str = "ControlList_Interface.txt";
 /// Playing control list entry.
 const PLAYING_LIST: &str = "ControlList_Playing.txt";
 
-/// `STATE_CHANNEL` names zero sprites (verified), so the soak stages the
-/// real channel dialog bar full-canvas instead.
-const CHANNEL_FALLBACK_SPRITE: &str = "Dialog_ChannelSelectBar.ojs";
+/// `STATE_CHANNEL` names zero sprites (verified), so the soak stages
+/// the code-mounted channel dialog art instead: the dialog body at
+/// its record anchor plus the enter-button frames at the
+/// reference-measured faces (see `docs/channel-fill.md`).
+const CHANNEL_PROBE_W: usize = 800;
+/// Native probe height for the channel soak (record anchors exact).
+const CHANNEL_PROBE_H: usize = 600;
 /// Small corner life gauge: the Playing bound window stages no decodable
 /// art (shadows only, TBD subset), and the block's full-bleed backdrops
 /// would blanket the highway, so the soak pins this gauge full-canvas.
@@ -358,17 +362,80 @@ fn channel_layers_list_over_real_dialog_art() {
         println!("skip channel: missing {}", path.display());
         return;
     };
-    let Some((placements, figures)) = stage_single_sprite(&archive, CHANNEL_FALLBACK_SPRITE) else {
-        panic!("channel: dialog bar staged no figures");
-    };
-    let staged = staged_palette(&placements, &figures);
+    let names = vec![
+        CHANNEL_DIALOG_SPRITE.to_owned(),
+        CHANNEL_ENTER_SPRITE.to_owned(),
+    ];
+    let figures = load_scene_figures(&archive, &names);
+    assert!(
+        !figures.is_empty(),
+        "channel: dialog body staged no figures"
+    );
+    // Art-less baseline: same channels, empty scene art.
+    let mut base_game = ScreenGame::new();
+    base_game.set_channels(two_channels());
+    base_game.load_scene(Screen::Channel, Vec::new(), HashMap::new());
+    base_game.lane_key(3, true);
+    let mut base = vec![0u32; CHANNEL_PROBE_W * CHANNEL_PROBE_H];
+    base_game.paint_at(
+        &mut Frame {
+            buf: &mut base,
+            w: CHANNEL_PROBE_W,
+            h: CHANNEL_PROBE_H,
+        },
+        0,
+    );
     let mut game = ScreenGame::new();
     game.set_channels(two_channels());
-    game.load_scene(Screen::Channel, placements, figures);
+    game.load_scene(Screen::Channel, Vec::new(), figures);
     game.lane_key(3, true);
     assert_eq!(game.screen(), Screen::Channel);
-    let frame = painted(&mut game, 0);
-    assert_composed(&frame, &staged, &[WHITE_TEXT, AMBER_CURSOR], "channel");
+    let mut frame = vec![0u32; CHANNEL_PROBE_W * CHANNEL_PROBE_H];
+    game.paint_at(
+        &mut Frame {
+            buf: &mut frame,
+            w: CHANNEL_PROBE_W,
+            h: CHANNEL_PROBE_H,
+        },
+        0,
+    );
+    // Staged dialog ink survives under the live list ink; the frame
+    // is never one flat fill.
+    assert!(
+        frame.iter().any(|&px| px != frame[0]),
+        "channel: frame is one flat fill"
+    );
+    for ink in [WHITE_TEXT, AMBER_CURSOR] {
+        assert!(frame.contains(&ink), "channel: UI ink {ink:#x} missing");
+    }
+    // Reference-measured mount proof: every pixel the staged art
+    // changes against the art-less baseline sits inside the mounted
+    // 800x466 dialog body (record anchor (0,0)); nothing paints at
+    // or below native y466 (no-fill corner), and some new ink lands
+    // inside the measured panel core (x185-615, y150-464).
+    let mut inside_core = false;
+    for (index, (&now, &before)) in frame.iter().zip(base.iter()).enumerate() {
+        if now == before {
+            continue;
+        }
+        let x = index % CHANNEL_PROBE_W;
+        let y = index / CHANNEL_PROBE_W;
+        assert!(
+            y < 466,
+            "channel: staged ink below the dialog body at ({x},{y})"
+        );
+        if (185..=615).contains(&x) && (150..=464).contains(&y) {
+            inside_core = true;
+        }
+    }
+    assert!(
+        inside_core,
+        "channel: no staged ink inside the measured panel core"
+    );
+    // Bottom strip untouched (pinned no-fill beyond the art).
+    for index in 466 * CHANNEL_PROBE_W..frame.len() {
+        assert_eq!(frame[index], base[index], "channel: fill below the body");
+    }
 }
 
 #[test]
