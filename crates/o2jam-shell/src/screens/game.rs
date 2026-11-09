@@ -4198,24 +4198,6 @@ mod game_tests {
     }
 
     #[test]
-    fn channel_pager_names_visible_slice() {
-        // Display-only readout: no clicks bind (P0).
-        let mut game = ScreenGame::new();
-        game.set_channels(six_channels());
-        game.lane_key(3, true);
-        let mut buf = vec![0u32; 800 * 600];
-        game.paint_at(
-            &mut Frame {
-                buf: &mut buf,
-                w: 800,
-                h: 600,
-            },
-            0,
-        );
-        assert!(white_near(&buf, 800, 600, (400, 446)));
-    }
-
-    #[test]
     fn channel_click_maps_through_viewport() {
         // Highlight on row 5 shows rows 2-5; the top visible band
         // selects row 2.
@@ -4241,29 +4223,6 @@ mod game_tests {
                 active: true,
             })
             .collect()
-    }
-
-    #[test]
-    fn channel_pager_clears_stale_text_on_scroll() {
-        // The pager redraws in place on a persistent backbuffer: stale
-        // glyphs outside the new text must clear.
-        let mut game = ScreenGame::new();
-        game.set_channels(six_channels());
-        game.lane_key(3, true);
-        for _ in 0..5 {
-            game.menu_key(MenuKey::Down, true);
-        }
-        let mut buf = vec![pack_xrgb(0xFF, 0xFF, 0xFF); 800 * 600];
-        game.paint_at(
-            &mut Frame {
-                buf: &mut buf,
-                w: 800,
-                h: 600,
-            },
-            0,
-        );
-        assert_eq!(buf[446 * 800], 0);
-        assert!(white_near(&buf, 800, 600, (400, 446)));
     }
 
     #[test]

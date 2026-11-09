@@ -357,9 +357,16 @@ VERIFICATION PASS (2026-11-09 second session, `~/scratch/channel-geom2/`):
 - Fallback chrome wells (live-measured, baked in the staged bar art):
   number well (225,228) 71x32 (the old 205,227 pill was 20 px off);
   track well (298,229) 195x32.
-- PAGER: the bottom strip (y~439-466) is dialog-sheet rim chrome,
-  live-confirmed in every state; whether pager text ever paints stays
-  CONTESTED (the 2026-11-07 capture read strip ink; this session none).
+- PAGER: RESOLVED NEGATIVE 2026-11-10. The bottom strip (y~439-466)
+is dialog-sheet rim chrome (brushed metal y439-461, groove 461-463,
+streaks below) + the scroll column's down arrow — the decoded sheet
+art (`Dialog_ChannelInfo.ojs` bottom band, colorkey 0x7D5F) bakes no
+pager glyphs, the bnd names no pager rects, and the block's
+`IDC_BUTTON_SCHANNEL_LEFT/RIGHT` (`0x12200005/06`) stage zero rects
+and are statically unreachable (dead authoring vocabulary). The 7.55
+channel dialog has NO pager; list navigation is the scroll column
+alone. The earlier "pager strip" capture measurement was rim-ink
+misread.
 - Bare-board reference-measured rects: promo nav cluster (345,509)
   107x27; OPTION (712,562); EXIT (753,562); MENU back-arrow (130,562)
   31x32 — all within 2-3 px of the bnd-pinned origins where both exist.

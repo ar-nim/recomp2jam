@@ -716,18 +716,13 @@ fn paint_channel_scrim(frame: &mut Frame<'_>, shown: usize) {
 /// four rows with the rest reachable by scroll (`/tmp/chan2-list.png`).
 /// Reference-grade, exe-OPEN; scroll interaction itself stays OPEN.
 pub(crate) const CHANNEL_VISIBLE_ROWS: usize = 4;
-/// Contested pager-strip origin in native px. Live-confirmed
-/// 2026-11-09: the bottom strip (y~439-466) is dialog-sheet rim
-/// chrome (brushed metal y439-461, groove 461-463, decorative
-/// streaks below) — no `<a-b/n>` readout or pager arrows in any
-/// state (idle, hover, after row click; 22 channels). Whether pager
-/// text ever paints is CONTESTED: one earlier capture showed strip
-/// ink, the 2026-11-09 session none. OPEN.
-const CHANNEL_PAGER_Y: i32 = 446;
 
 /// Visible Channel slice for `highlight`: viewport top plus shown
 /// count (the highlight always lands inside). Single source shared by
-/// paint and click mapping.
+/// paint and click mapping. NO PAGER: the 7.55 channel dialog has no
+/// pager readout or arrows (bnd has no rects; sheet art bottom is rim
+/// chrome + scroll down-arrow, decoded 2026-11-10; the block's
+/// LEFT/RIGHT buttons stage zero rects and are statically unreachable).
 #[must_use]
 pub(crate) fn channel_viewport(highlight: usize, len: usize) -> (usize, usize) {
     let top = viewport_top(highlight, len);
@@ -739,41 +734,6 @@ pub(crate) fn viewport_top(highlight: usize, len: usize) -> usize {
     highlight
         .saturating_sub(CHANNEL_VISIBLE_ROWS - 1)
         .min(max_top)
-}
-
-/// Pager readout under the rows (`< a-b/n >`, display-only: paging
-/// interaction is untraced, so arrows bind no clicks — P0).
-/// CONTESTED: the strip under the constant is live-confirmed rim
-/// chrome; whether pager text ever paints stays OPEN (see above).
-fn paint_channel_pager(frame: &mut Frame<'_>, top: usize, shown: usize, len: usize) {
-    if len == 0 {
-        return;
-    }
-    // The strip clears first: pager text redraws in place while the
-    // viewport scrolls, and the backbuffer persists across frames.
-    let h = i32::try_from(frame.h).unwrap_or(0);
-    let y = i32::try_from(i64::from(CHANNEL_PAGER_Y) * i64::from(h) / i64::from(NATIVE_HEIGHT))
-        .unwrap_or(0);
-    fill_rect(
-        frame,
-        &Rect {
-            x: 0,
-            y: y - 2,
-            w: u32::try_from(frame.w).unwrap_or(0),
-            h: 14,
-        },
-        0,
-    );
-    let text = format!("< {}-{} / {} >", top + 1, top + shown, len);
-    let w = i32::try_from(frame.w).unwrap_or(0);
-    let text_w = i32::try_from(text_width(&text)).unwrap_or(0);
-    draw_text(
-        frame,
-        w / 2 - text_w / 2,
-        y,
-        &text,
-        pack_xrgb(0xFF, 0xFF, 0xFF),
-    );
 }
 
 /// Item shop: staged art behind an empty catalogue, flat card
@@ -854,7 +814,8 @@ fn channel_row_text(channel: &ChannelState) -> String {
 
 /// Channel rows plus highlight cursor (no background fill: shared by
 /// the flat fallback and the art scene). Only the viewport around the
-/// highlight paints; the pager names the visible slice. `art` selects
+/// highlight paints (no pager: the 7.55 dialog has none — see
+/// [`channel_viewport`]). `art` selects
 /// staged enter-button art over the procedural plates in the art path
 /// (`None` is the flat fallback).
 fn paint_channel_rows(
@@ -894,7 +855,6 @@ fn paint_channel_rows(
     if let Some(art) = art {
         paint_channel_scroll_art(frame, art);
     }
-    paint_channel_pager(frame, top, shown, channels.len());
 }
 
 /// Row of list entry `index` (channel and room lists share the shape).
@@ -8151,7 +8111,7 @@ mod paint_tests {
         // exclusive (`docs/channel-fill.md` "METHOD CORRECTION
         // 2026-11-10"): the verified native close click (577,171)
         // hits; the rect edges read 541/151 inclusive, 589/189
-        // exclusive; row faces and the pager strip stay outside.
+        // exclusive; row faces stay outside.
         assert!(channel_dialog_x_hit(577, 171), "verified native X click");
         assert!(channel_dialog_x_hit(541, 151), "left/top edge inclusive");
         assert!(channel_dialog_x_hit(588, 188), "last inside pixel");
