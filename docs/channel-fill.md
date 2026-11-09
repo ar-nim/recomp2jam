@@ -496,7 +496,14 @@ by other docs/code and untouched here).
    other `0x12` channel code probed (buttons `0x12200002`/`0x1220001B`,
    image `0x12500028`, toggle `0x12011007`); the only `0x12` LE32 hits
    are the generic self-gate `0x12000000` (41 hits, rdata-range files
-   `0x248591`–`0x2613a0`, not code). Neither control-lookup caller set
+   `0x248591`–`0x2613a0`, not code). Button/pager/tab sweep 2026-11-09
+   (offset-only LE32 scan, no new dossier): `0` hits for BACK
+   `0x12200002`, RANK `0x12200003`, CONTESTRANK `0x12200004`, LEFT
+   `0x12200005`, RIGHT `0x12200006`, CHOBO/JUNGSU/GOSU
+   `0x1220001B..1D` — the full Channel button vocabulary is
+   statically unreachable (virtual dispatch or cached pointers, per
+   the array-reader correction above); pager/tab behavior needs
+   dynamic reads. Neither control-lookup caller set
    (`0x48BCF0`: 644 E8 sites; `0x4337C0`: 452 E8 sites) carries a
    `0x12` push or mov immediate, so no channel control is looked up by
    code. Grouping every trio E8 site (96/37/38) by enclosing prologue
