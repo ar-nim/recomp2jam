@@ -2370,16 +2370,22 @@ fn waiting_music_caption(music_id: u16, song_title: Option<&str>) -> String {
 const WAITING_CHAT_LIST_ID: &str = "IDC_LIST_SWAIT_CHAT";
 /// Chat input line (`EDIT_SWAIT_CHAT` → rect 19).
 const WAITING_CHAT_EDIT_ID: &str = "IDC_EDIT_SWAIT_CHAT";
-/// Native history rect while no staged art names it
-/// (`LIST_SWAIT_CHAT` rect 42 `(24,455,511,553)`).
+/// Native history rect while no staged art names it. File-traced:
+/// `State_Waiting.bnd` rect 42 `(24,455)-(511,553)` = `(24,455,487,98)`,
+/// paired to `IDC_LIST_SWAIT_CHAT 0x1680002B` by ControlList code
+/// ordinal (`code & 0xFFF` = 43 → ordinal 42) — geometry-audit.md
+/// Waiting row, verified against `Interface1.opi`.
 const WAITING_CHAT_LIST_RECT: Rect = Rect {
     x: 24,
     y: 455,
     w: 487,
     h: 98,
 };
-/// Native input rect while no staged art names it
-/// (`EDIT_SWAIT_CHAT` rect 19 `(20,563,460,583)`).
+/// Native input rect while no staged art names it. File-traced:
+/// `State_Waiting.bnd` rect 19 `(20,563)-(460,583)` = `(20,563,440,20)`,
+/// paired to `IDC_EDIT_SWAIT_CHAT 0x16300014` by ControlList code
+/// ordinal (`code & 0xFFF` = 20 → ordinal 19) — geometry-audit.md
+/// Waiting row, verified against `Interface1.opi`.
 const WAITING_CHAT_EDIT_RECT: Rect = Rect {
     x: 20,
     y: 563,
@@ -7426,6 +7432,33 @@ mod paint_tests {
         );
         assert_eq!(buf[568 * 800 + 25], art_title_ink());
         assert_eq!(buf[577 * 800 + 26], art_title_ink());
+    }
+
+    #[test]
+    fn waiting_chat_native_fallback_rects_match_the_state_waiting_bnd() {
+        // File-traced (geometry-audit.md Waiting rows): the no-art
+        // fallbacks must equal `State_Waiting.bnd` rect 42
+        // `(24,455)-(511,553)` and rect 19 `(20,563)-(460,583)`,
+        // paired to `IDC_LIST_SWAIT_CHAT 0x1680002B` (ordinal 42) and
+        // `IDC_EDIT_SWAIT_CHAT 0x16300014` (ordinal 19).
+        assert_eq!(
+            WAITING_CHAT_LIST_RECT,
+            Rect {
+                x: 24,
+                y: 455,
+                w: 487,
+                h: 98
+            }
+        );
+        assert_eq!(
+            WAITING_CHAT_EDIT_RECT,
+            Rect {
+                x: 20,
+                y: 563,
+                w: 440,
+                h: 20
+            }
+        );
     }
 
     #[test]

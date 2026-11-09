@@ -4,6 +4,14 @@ Clean-room recompilation of the O2Jam 7.55 client
 (C++/CDX/Boost/libvorbis/MSVC2005) in Rust. Re-implement behavior from
 docs, never from original bytes.
 
+Dual goal: a runnable modern-platform client **and the reference
+implementation of 7.55 behavior** — the executable spec that settles
+any "how did the original do X" question. Every behavior must trace to
+pinned evidence (version, hash, offsets, evidence IDs) or be explicitly
+labeled OPEN with the next evidence step. Where sources conflict, the
+exe is the behavior oracle; the contradiction is documented, never
+silently resolved.
+
 Pick one branch:
 
 - Code in `crates/` → crate map in `docs/architecture.md`.

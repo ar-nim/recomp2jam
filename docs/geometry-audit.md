@@ -94,8 +94,8 @@ row-rect match, `docs/channel-fill.md`).
 | paint.rs:1622 `WAITING_SEATS` | 8 | none | room protocol seat count | RUNTIME | Keep |
 | paint.rs:1624 `WAITING_PEERS` | 7 | none | same | RUNTIME | Keep |
 | paint.rs:1626 `WAITING_ROW_H` | 8 | none | lobby pitch; `seat_origin` is scaled-frame math | RUNTIME | Keep |
-| paint.rs:2305 `WAITING_CHAT_LIST_RECT` | (24,455,487,98) | `State_Waiting.bnd` r42 (24,455)-(511,553), exact | `IDC_LIST_SWAIT_CHAT 0x1680002b`, ord 42 | FILE | Read from bind at runtime; keep as no-art fallback only |
-| paint.rs:2313 `WAITING_CHAT_EDIT_RECT` | (20,563,440,20) | `State_Waiting.bnd` r19 (20,563)-(460,583), exact | `IDC_EDIT_SWAIT_CHAT 0x16300014`, ord 19 | FILE | same |
+| paint.rs:2375 `WAITING_CHAT_LIST_RECT` | (24,455,487,98) | `State_Waiting.bnd` r42 (24,455)-(511,553), exact | `IDC_LIST_SWAIT_CHAT 0x1680002b`, ord 42 | DONE (this commit) | Fallback pinned to bnd rect 42; painter reads the bind at runtime |
+| paint.rs:2383 `WAITING_CHAT_EDIT_RECT` | (20,563,440,20) | `State_Waiting.bnd` r19 (20,563)-(460,583), exact | `IDC_EDIT_SWAIT_CHAT 0x16300014`, ord 19 | DONE (this commit) | same |
 | paint.rs:2325 `WAITING_CHAT_ROW_H` | 17 | none: 98 px list / 6 rows ≈ 16.3; measured row tops 455.4/472.5/489.8 | reference photo only | OPEN | Rig: exe chat line pitch |
 | paint.rs:2328 `WAITING_CHAT_VISIBLE_ROWS` | 6 | derived (98/17 slots) | — | RUNTIME | Keep (re-derives once ROW_H is pinned) |
 | paint.rs:2333 `WAITING_CHAT_CARET_INSET` | (5,5) | none: caret chrome | reference photo (caret at (25,568)) | OPEN | Rig: exe caret placement |
@@ -210,9 +210,9 @@ verified bound run (entries 213–229 = ordinals 1–17,
 
 ## Counts per verdict
 
-- DONE: 66 (verified archive/exe source; no action)
-- FILE: 5 (`WAITING_CHAT_LIST_RECT`, `WAITING_CHAT_EDIT_RECT`,
-  `SELECT_CHO_SUNG_JAMO`, `SELECT_CHO_SUNG_WORDS`,
+- DONE: 68 (verified archive/exe source; no action)
+- FILE: 3 (`SELECT_CHO_SUNG_JAMO`,
+  `SELECT_CHO_SUNG_WORDS`,
   `SELECT_CHO_SUNG_PITCH`)
 - RUNTIME: 22 (exe-computed / server / scaled-frame / fallback)
 - CANDIDATE: 22 (all in the select-music dialog)
@@ -223,10 +223,11 @@ Total audited: 133 named constants.
 
 ## Highest-value FILE replacements (ranked)
 
-1. `WAITING_CHAT_LIST_RECT` + `WAITING_CHAT_EDIT_RECT`
-   (paint.rs:2305/2313) — exact `State_Waiting.bnd` rects with verified
-   ordinal pairing; the painter can read the bind directly and keep the
-   literal only as the no-archive fallback.
+1. ~~`WAITING_CHAT_LIST_RECT` + `WAITING_CHAT_EDIT_RECT`~~ — DONE
+   (this commit): values already equal `State_Waiting.bnd` rects 42/19
+   with verified ordinal pairing; fallback constants pinned by
+   `waiting_chat_native_fallback_rects_match_the_state_waiting_bnd`,
+   doc comments cite the pairing evidence.
 2. `SELECT_CHO_SUNG_JAMO`/`WORDS`/`PITCH` (side.rs:593–595) — exact
    `Dialog_SelectMusic` INDEX-button inventory and x-pitch; countable
    from staged placements at runtime.
