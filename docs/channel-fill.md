@@ -580,6 +580,21 @@ Button hosts `0x4f6040`/`0x524dd0` and text host `0x50f160` hold no
 rect immediates either. Select-bar x/y/width/height, title-bar,
 X-button, pager-arrow, MENU-bar, and planet-tab rects stay OPEN —
 no position invented. Next evidence path: dynamic rect reads under
-the Wine rig (pairing getter file `0x48640`), which needs no canvas
+the Wine rig (pairing getter file `0x148640`), which needs no canvas
 input.
+
+## Reference-measured Channel geometry (2026-11-09, Wine capture)
+
+Live capture `/tmp/chan2-list.png` (local-only, 800x600, real client
+on the test server, Ch.01–04 with `입장`): pixel-measured anchors,
+reference-grade only — no exe consumer pins them, so they stay OPEN
+and never count as exe evidence. Row text tops 232+50i (i 0..3,
+`Ch.` white text at x≈230); row pitch 50; `입장` faces
+(502,236+50i,48,24) (row 0 face 3-run agreement, followers by
+pitch); title plate y≈150–195 with text ≈158–179 and bright X zone
+x560–620; pager strip y≈439–464; dialog panel ≈x185–615. Method:
+column/row brightness runs in `~/scratch/chan2-measure.py` plus
+eyeball-checked zooms (`~/scratch/chan2-rows.png`). The shell's
+`h/4 + i*8` rows and rect-corner details stay invented (audit
+10–11) until painted at these anchors with passing guards.
 
