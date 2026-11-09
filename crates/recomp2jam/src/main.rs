@@ -676,6 +676,13 @@ fn run_play(
                 o2jam_shell::Shell::new(Box::new(session)).run(event_loop)?;
             }
             None => {
+                // Offline walk: stage the genuine scene art from the
+                // installed archives when present (infallible; without
+                // game data the flat fallbacks stay), then seed demo
+                // lobby lists so the staged rows render for hand
+                // verification.
+                live_art::stage_live_scenes(&mut game);
+                seed_offline_lobby(&mut game);
                 o2jam_shell::Shell::new(Box::new(game)).run(event_loop)?;
             }
         }
@@ -702,6 +709,47 @@ fn run_session_walk(host: &str, port: u16, user_id: i32, token: &str, out_dir: &
         println!("staged {} ({:?})", stage.name, stage.opcodes);
     }
     Ok(())
+}
+
+/// Demo lobby lists for the offline windowed walk: four channels
+/// (the dialog's visible slice) and three rooms, so the staged scene
+/// art renders rows without a server. Synthetic data only — no
+/// server semantics ride along.
+fn seed_offline_lobby(game: &mut o2jam_shell::ScreenGame) {
+    use o2jam_net::{ChannelState, RoomListEntry};
+    game.set_channels(
+        (0..4)
+            .map(|i| ChannelState {
+                gateway_id: 0,
+                channel_id: i,
+                capacity: 100,
+                population: if i < 2 { i32::from(80 + i) } else { 0 },
+                active: true,
+            })
+            .collect(),
+    );
+    game.set_rooms(
+        (1..=3)
+            .map(|n| RoomListEntry {
+                number: n,
+                state_code: 1,
+                title: format!("Demo Room {n}"),
+                has_password: false,
+                music_id: 0,
+                difficulty: 0,
+                key_mode: 2,
+                game_mode: 0,
+                speed: 1,
+                capacity: 8,
+                user_count: 1,
+                min_level: 0,
+                max_level: 0,
+                skills: vec![],
+                premium: false,
+                room_type: 0,
+            })
+            .collect(),
+    );
 }
 
 /// Load the splash backdrop into a windowed game, if requested.
