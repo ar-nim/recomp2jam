@@ -8,14 +8,14 @@ use super::super::playing::{HighwayGeometry, LivePlay, PlaySkin};
 use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
-    battle_verdict, channel_row_hit, has_room_panels, list_row_hit, paint_avi_scene,
-    paint_channel_chat, paint_channel_list, paint_channel_scene, paint_loading_scene,
-    paint_loading_scene_with_status, paint_lobby_backdrop, paint_playing_overlay, paint_result,
-    paint_result_scene, paint_room_list, paint_room_scene, paint_screen, paint_waiting_chat,
-    paint_waiting_members, paint_waiting_scene, rect_hit, room_panel_hit, scene_index,
-    staged_rect_hit, BattleVerdict, ChannelChatMessage, LoadingStatus, ResultPaint, ResultRankRow,
-    ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage, RESULT_BACK_ID, RESULT_BACK_RECT,
-    RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    battle_verdict, channel_row_hit, channel_viewport, has_room_panels, list_row_hit,
+    paint_avi_scene, paint_channel_chat, paint_channel_list, paint_channel_scene,
+    paint_loading_scene, paint_loading_scene_with_status, paint_lobby_backdrop,
+    paint_playing_overlay, paint_result, paint_result_scene, paint_room_list, paint_room_scene,
+    paint_screen, paint_waiting_chat, paint_waiting_members, paint_waiting_scene, rect_hit,
+    room_panel_hit, scene_index, staged_rect_hit, BattleVerdict, ChannelChatMessage, LoadingStatus,
+    ResultPaint, ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage,
+    RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::side::{
     can_return_side, can_visit_side, paint_side_scene, select_chosung_cells, select_difficulty_ink,
@@ -1003,9 +1003,13 @@ impl ScreenGame {
     /// Confirm while the draft is action-free (slash drafts consume
     /// the click instead of starting).
     fn click_channel_row(&mut self, _x: i32, y: i32) {
-        let Some(index) = channel_row_hit(y, self.channels.len()) else {
+        // Viewport-relative bands: the visible slot maps back through
+        // the highlight-following viewport (see `channel_viewport`).
+        let (top, shown) = channel_viewport(self.highlight, self.channels.len());
+        let Some(slot) = channel_row_hit(y, shown) else {
             return;
         };
+        let index = top + slot;
         self.highlight = index;
         if self.take_channel_slash() == SlashCommand::Empty {
             self.enter(Screen::Room);
@@ -3963,6 +3967,84 @@ mod game_tests {
             0,
         );
         assert!(white_near(&buf, 800, 600, (60, 83)));
+    }
+
+    #[test]
+    fn channel_viewport_follows_highlight() {
+        assert_eq!(channel_viewport(0, 10), (0, 4));
+        assert_eq!(channel_viewport(5, 10), (2, 4));
+        assert_eq!(channel_viewport(9, 10), (6, 4));
+        assert_eq!(channel_viewport(0, 2), (0, 2));
+        assert_eq!(channel_viewport(0, 0), (0, 0));
+    }
+
+    #[test]
+    fn channel_pager_names_visible_slice() {
+        // Display-only readout: no clicks bind (P0).
+        let mut game = ScreenGame::new();
+        game.set_channels(six_channels());
+        game.lane_key(3, true);
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert!(white_near(&buf, 800, 600, (400, 446)));
+    }
+
+    #[test]
+    fn channel_click_maps_through_viewport() {
+        // Highlight on row 5 shows rows 2-5; the top visible band
+        // selects row 2.
+        let mut game = ScreenGame::new();
+        game.set_channels(six_channels());
+        game.lane_key(3, true);
+        for _ in 0..5 {
+            game.menu_key(MenuKey::Down, true);
+        }
+        assert_eq!(game.highlight, 5);
+        game.mouse_click(400, 240);
+        assert_eq!(game.highlight, 2);
+        assert_eq!(game.screen(), Screen::Room);
+    }
+
+    fn six_channels() -> Vec<ChannelState> {
+        (0u16..6)
+            .map(|id| ChannelState {
+                gateway_id: 0,
+                channel_id: id,
+                capacity: 100,
+                population: 5,
+                active: true,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn channel_pager_clears_stale_text_on_scroll() {
+        // The pager redraws in place on a persistent backbuffer: stale
+        // glyphs outside the new text must clear.
+        let mut game = ScreenGame::new();
+        game.set_channels(six_channels());
+        game.lane_key(3, true);
+        for _ in 0..5 {
+            game.menu_key(MenuKey::Down, true);
+        }
+        let mut buf = vec![pack_xrgb(0xFF, 0xFF, 0xFF); 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert_eq!(buf[446 * 800], 0);
+        assert!(white_near(&buf, 800, 600, (400, 446)));
     }
 
     #[test]

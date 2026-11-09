@@ -297,20 +297,24 @@ pub(crate) fn channel_row_hit(y: i32, row_count: usize) -> Option<usize> {
 /// 48 wide, 24 tall, stepping with the row pitch (`/tmp/chan2-list.png`;
 /// row 0 face only — followers ride the pitch, exe-OPEN).
 const CHANNEL_ENTER_X: i32 = 502;
-const CHANNEL_ENTER_Y: i32 = 236;
 const CHANNEL_ENTER_W: i32 = 48;
 const CHANNEL_ENTER_H: i32 = 24;
+/// Button top offset inside a row band in native px (face top 236
+/// minus band top 232 on the live capture).
+const CHANNEL_ENTER_DY: i32 = 4;
 /// Measured face tone of the entry button (mid-gray pill).
 const CHANNEL_ENTER_TONE: u32 = pack_xrgb(150, 148, 151);
 
-/// Entry-button plate rect for row `index`, scaled to the frame.
-fn channel_enter_rect(index: usize, w: i32, h: i32) -> Rect {
+/// Entry-button plate rect for viewport slot `slot`, scaled to the
+/// frame: band top plus the measured face offset.
+fn channel_enter_rect(slot: usize, w: i32, h: i32) -> Rect {
     let wide = i64::from(w);
     let high = i64::from(h);
     let native_w = i64::from(NATIVE_WIDTH);
     let native_h = i64::from(NATIVE_HEIGHT);
-    let top = i64::from(CHANNEL_ENTER_Y)
-        + i64::from(CHANNEL_ROW_PITCH) * i64::try_from(index).unwrap_or(0);
+    let band = i64::from(CHANNEL_ROW_TOP)
+        + i64::from(CHANNEL_ROW_PITCH) * i64::try_from(slot).unwrap_or(0);
+    let top = band + i64::from(CHANNEL_ENTER_DY);
     Rect {
         x: i32::try_from(i64::from(CHANNEL_ENTER_X) * wide / native_w).unwrap_or(0),
         y: i32::try_from(top * high / native_h).unwrap_or(0),
@@ -322,39 +326,96 @@ fn channel_enter_rect(index: usize, w: i32, h: i32) -> Rect {
 /// Entry-button plates at the measured faces: face-tone boxes as
 /// position stand-ins. The exe button is staged art with baked glyphs
 /// (mount unpinned; the micro-font has no CP949 glyphs), so plates
-/// mark placement, never art.
-fn paint_channel_buttons(frame: &mut Frame<'_>, row_count: usize) {
-    if row_count == 0 || frame.w == 0 || frame.h == 0 {
+/// mark placement, never art. Only the viewport slice paints.
+fn paint_channel_buttons(frame: &mut Frame<'_>, shown: usize) {
+    if shown == 0 || frame.w == 0 || frame.h == 0 {
         return;
     }
     let (w, h) = (
         i32::try_from(frame.w).unwrap_or(0),
         i32::try_from(frame.h).unwrap_or(0),
     );
-    for index in 0..row_count {
-        fill_rect(frame, &channel_enter_rect(index, w, h), CHANNEL_ENTER_TONE);
+    for slot in 0..shown {
+        fill_rect(frame, &channel_enter_rect(slot, w, h), CHANNEL_ENTER_TONE);
     }
 }
 /// Dark strip behind Channel rows, rescaled from the measured native
 /// stack: mirrors [`paint_list_scrim`] shape (2 px bleed) without
 /// sharing its invented anchors.
-fn paint_channel_scrim(frame: &mut Frame<'_>, row_count: usize) {
-    if row_count == 0 || frame.w == 0 || frame.h == 0 {
+fn paint_channel_scrim(frame: &mut Frame<'_>, top: usize, shown: usize) {
+    if shown == 0 || frame.w == 0 || frame.h == 0 {
         return;
     }
     let w = i32::try_from(frame.w).unwrap_or(0);
     let h = i32::try_from(frame.h).unwrap_or(0);
-    let top = channel_row_top(0, h) - 2;
-    let bottom = channel_row_top(row_count, h) + 2;
+    let first = channel_row_top(top, h) - 2;
+    let bottom = channel_row_top(top + shown, h) + 2;
     fill_rect(
         frame,
         &Rect {
             x: w / 4 - 8,
-            y: top,
+            y: first,
             w: (w / 2 + 16).max(0) as u32,
-            h: (bottom - top).max(0) as u32,
+            h: (bottom - first).max(0) as u32,
         },
         scrim_color(),
+    );
+}
+
+/// Reference-measured visible Channel rows: the live dialog shows
+/// four rows with the rest reachable by scroll (`/tmp/chan2-list.png`).
+/// Reference-grade, exe-OPEN; scroll interaction itself stays OPEN.
+pub(crate) const CHANNEL_VISIBLE_ROWS: usize = 4;
+/// Measured pager strip origin in native px (see above).
+const CHANNEL_PAGER_Y: i32 = 446;
+
+/// Visible Channel slice for `highlight`: viewport top plus shown
+/// count (the highlight always lands inside). Single source shared by
+/// paint and click mapping.
+#[must_use]
+pub(crate) fn channel_viewport(highlight: usize, len: usize) -> (usize, usize) {
+    let top = viewport_top(highlight, len);
+    (top, len.saturating_sub(top).min(CHANNEL_VISIBLE_ROWS))
+}
+#[must_use]
+pub(crate) fn viewport_top(highlight: usize, len: usize) -> usize {
+    let max_top = len.saturating_sub(CHANNEL_VISIBLE_ROWS);
+    highlight
+        .saturating_sub(CHANNEL_VISIBLE_ROWS - 1)
+        .min(max_top)
+}
+
+/// Pager readout under the rows (`< a-b/n >`, display-only: paging
+/// interaction is untraced, so arrows bind no clicks — P0).
+/// Reference-measured strip, exe-OPEN like the rows.
+fn paint_channel_pager(frame: &mut Frame<'_>, top: usize, shown: usize, len: usize) {
+    if len == 0 {
+        return;
+    }
+    // The strip clears first: pager text redraws in place while the
+    // viewport scrolls, and the backbuffer persists across frames.
+    let h = i32::try_from(frame.h).unwrap_or(0);
+    let y = i32::try_from(i64::from(CHANNEL_PAGER_Y) * i64::from(h) / i64::from(NATIVE_HEIGHT))
+        .unwrap_or(0);
+    fill_rect(
+        frame,
+        &Rect {
+            x: 0,
+            y: y - 2,
+            w: u32::try_from(frame.w).unwrap_or(0),
+            h: 14,
+        },
+        0,
+    );
+    let text = format!("< {}-{} / {} >", top + 1, top + shown, len);
+    let w = i32::try_from(frame.w).unwrap_or(0);
+    let text_w = i32::try_from(text_width(&text)).unwrap_or(0);
+    draw_text(
+        frame,
+        w / 2 - text_w / 2,
+        y,
+        &text,
+        pack_xrgb(0xFF, 0xFF, 0xFF),
     );
 }
 
@@ -369,15 +430,17 @@ fn channel_row_text(channel: &ChannelState) -> String {
 }
 
 /// Channel rows plus highlight cursor (no background fill: shared by
-/// the flat fallback and the art scene).
+/// the flat fallback and the art scene). Only the viewport around the
+/// highlight paints; the pager names the visible slice.
 fn paint_channel_rows(frame: &mut Frame<'_>, channels: &[ChannelState], highlight: usize) {
-    paint_channel_scrim(frame, channels.len());
-    paint_channel_buttons(frame, channels.len());
+    let (top, shown) = channel_viewport(highlight, channels.len());
+    paint_channel_scrim(frame, top, shown);
+    paint_channel_buttons(frame, shown);
     let w = frame.w as i32;
     let h = frame.h as i32;
     let text_x = w / 4;
-    for (index, channel) in channels.iter().enumerate() {
-        let row = channel_row_top(index, h);
+    for (slot, channel) in channels.iter().skip(top).take(shown).enumerate() {
+        let row = channel_row_top(slot, h);
         let entry = channel_row_text(channel);
         let ink = if channel.active {
             pack_xrgb(0xFF, 0xFF, 0xFF)
@@ -385,10 +448,11 @@ fn paint_channel_rows(frame: &mut Frame<'_>, channels: &[ChannelState], highligh
             pack_xrgb(0x70, 0x70, 0x70)
         };
         draw_text(frame, text_x, row, &entry, ink);
-        if index == highlight {
+        if top + slot == highlight {
             paint_cursor(frame, text_x, row);
         }
     }
+    paint_channel_pager(frame, top, shown, channels.len());
 }
 
 /// Row of list entry `index` (channel and room lists share the shape).
