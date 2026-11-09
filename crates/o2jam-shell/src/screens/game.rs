@@ -35,7 +35,7 @@ use super::side::{
     SELECT_VISIBLE_ROWS, SELECT_WHEEL_FILTERS,
 };
 use crate::MenuKey;
-use o2jam_audio::{AudioBackend, BgmSelection, PcmSamples, SceneBgm};
+use o2jam_audio::{song_position_ms, AudioBackend, BgmSelection, PcmSamples, SceneBgm};
 use o2jam_file::OjnListEntry;
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams, PEER_SLOT_COUNT};
 use o2jam_net::play::SetRoomMusic;
@@ -113,7 +113,18 @@ const SPLASH_AUTO_ADVANCE_MS: u64 = 3_000;
 pub struct ScreenGame {
     flow: ScreenFlow,
     playing: LivePlay,
-    started_at: Option<std::time::Instant>,
+    /// Song-clock anchor: backend samples already played when
+    /// Playing was entered (`AudioBackend::samples_played` clock).
+    /// Re-based on every Playing entry; never the wall clock.
+    song_anchor_sample: u64,
+    /// Device samples per second for the song-clock conversion
+    /// ([`song_position_ms`]); 44100 default — the shipped chart
+    /// audio rate (VERIFIED `Music/BGM.ojm` decode, 44100 Hz, and
+    /// the null sink counts at the staged rate). Playing entries
+    /// auto-sync it from the backend's `sample_rate` (live devices
+    /// resample to their own rate); [`Self::set_song_rate`]
+    /// overrides for tests.
+    song_rate: u32,
     audio: Option<AudioRig>,
     avatar: Option<AvatarFigure>,
     splash: Option<AvatarFigure>,
@@ -357,15 +368,19 @@ fn parse_slash_draft(draft: &str, reply_to: Option<&str>) -> SlashCommand {
 }
 
 impl ScreenGame {
-    /// Start at the splash screen. The song clock starts here as
-    /// the boot instant, so splash paints measure elapsed time since
-    /// construction; entering Playing re-arms it as the song clock.
+    /// Start at the splash screen. The song clock is the audio
+    /// backend's sample counter anchored on Playing entry
+    /// (`song_anchor_sample`); splash paints until an audio device
+    /// proves otherwise (live splash auto-advance keys off the
+    /// same `now_ms`, so without audio it waits for input — tests
+    /// drive splash timing with explicit clocks).
     #[must_use]
     pub fn new() -> Self {
         Self {
             flow: ScreenFlow::new(),
             playing: LivePlay::new(&[]),
-            started_at: Some(std::time::Instant::now()),
+            song_anchor_sample: 0,
+            song_rate: 44_100,
             audio: None,
             avatar: None,
             splash: None,
@@ -527,43 +542,72 @@ impl ScreenGame {
         }
     }
 
-    /// Song position: wall clock since entering Playing (saturates).
-    fn now_ms(&mut self) -> u64 {
-        let start = *self.started_at.get_or_insert_with(std::time::Instant::now);
-        u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)
+    /// Set the device sample rate for the song-clock conversion
+    /// ([`song_position_ms`]). Playing entries auto-sync it from
+    /// the backend's [`AudioBackend::sample_rate`] (so a 48000 Hz
+    /// device runs at the right speed); this manual override is
+    /// for tests and forced rates (rate 0 parks the song at 0).
+    pub fn set_song_rate(&mut self, rate: u32) {
+        self.song_rate = rate;
     }
 
-    /// Step the flow, restarting the song clock on Playing entry.
+    /// Song position in ms from the audio backend's sample
+    /// counter, anchored at Playing entry
+    /// (`song_anchor_sample`) — strike timing, scroll, and gauge
+    /// advances all consume this, never the wall clock. Without
+    /// an audio rig the song parks at 0 (tests and headless runs
+    /// drive `now_ms` explicitly through `paint_at` / `strike_at`).
+    fn now_ms(&mut self) -> u64 {
+        let Some(rig) = self.audio.as_ref() else {
+            return 0;
+        };
+        song_position_ms(
+            rig.backend
+                .samples_played()
+                .saturating_sub(self.song_anchor_sample),
+            self.song_rate,
+        )
+    }
+
+    /// Step the flow, re-anchoring the song clock on Playing entry.
     fn enter(&mut self, next: Screen) {
         self.enter_screen(next);
     }
 
     /// Step the flow through the verified edge gates (shot/test
     /// driver): `false` when `can_enter` rejects, so no transition is
-    /// invented. Restarts the song clock on Playing entry and
-    /// re-cues the new screen's scene music (see
-    /// [`Self::stage_scene_bgm`]).
+    /// invented. Re-anchors the song clock (backend samples played
+    /// at Playing entry) on Playing entry and re-cues the new
+    /// screen's scene music (see [`Self::stage_scene_bgm`]).
     pub fn enter_screen(&mut self, next: Screen) -> bool {
         let entered = self.flow.go(next).is_ok();
         if entered {
             if next == Screen::Playing {
-                self.started_at = Some(std::time::Instant::now());
+                self.song_anchor_sample = self
+                    .audio
+                    .as_ref()
+                    .map_or(0, |rig| rig.backend.samples_played());
+                if let Some(rig) = self.audio.as_ref() {
+                    self.song_rate = rig.backend.sample_rate();
+                }
             }
             self.apply_scene_bgm();
         }
         entered
     }
 
-    /// Strike a lane at an explicit clock, playing its key sound.
-    /// Tests use this; live keys read the wall clock.
+    /// Strike a lane at an explicit song clock, playing its key
+    /// sound. Tests use this; live keys read the sample clock
+    /// ([`Self::now_ms`]).
     pub fn strike_at(&mut self, lane: usize, now_ms: u64) {
         self.playing.strike_lane(lane as u8, now_ms);
         self.pump_sounds();
     }
 
-    /// Release a lane (key-up) at an explicit clock, judging the
-    /// armed hold tail through the verified release path. Tests use
-    /// this; live key-ups read the wall clock.
+    /// Release a lane (key-up) at an explicit song clock, judging
+    /// the armed hold tail through the verified release path.
+    /// Tests use this; live key-ups are not yet routed (lane_key
+    /// ignores key-up — OPEN, own lane).
     pub fn release_at(&mut self, lane: usize, now_ms: u64) {
         self.playing.release_lane(lane as u8, now_ms);
         self.pump_sounds();
@@ -1867,8 +1911,8 @@ impl ScreenGame {
         true
     }
 
-    /// Paint with an explicit clock (tests use this; live paint reads
-    /// the wall clock).
+    /// Paint with an explicit song clock (tests use this; live
+    /// paint reads the sample clock, [`Self::now_ms`]).
     pub fn paint_at(&mut self, frame: &mut Frame<'_>, now_ms: u64) {
         if self.side.is_some() {
             paint_side_scene(frame, &self.side_placements, &self.side_figures);
@@ -2918,7 +2962,57 @@ mod game_tests {
         assert_eq!(game.screen(), Screen::Loading);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Playing);
-        assert!(game.started_at.is_some());
+        assert_eq!(game.song_anchor_sample, 0);
+    }
+
+    #[test]
+    fn song_clock_totals_backend_samples_not_wall_time() {
+        use o2jam_audio::{NullBackend, PcmSamples};
+        let mut game = ScreenGame::new();
+        // No audio rig yet: parked at 0, never wall time.
+        assert_eq!(game.now_ms(), 0);
+        game.with_audio(Box::new(NullBackend::new()), HashMap::new());
+        game.load_chart(vec![(2, 1000, 7)]);
+        walk_to_playing(&mut game);
+        // Entry anchors at 0 samples; 44100 played frames at
+        // 44100 Hz is one song second regardless of wall time.
+        {
+            let rig = game.audio.as_mut().expect("rig");
+            rig.backend
+                .play_pcm(&PcmSamples {
+                    samples: vec![0i16; 44_100 * 2],
+                    sample_rate: 44_100,
+                    channels: 2,
+                })
+                .unwrap();
+            assert_eq!(rig.backend.samples_played(), 44_100);
+        }
+        assert_eq!(game.now_ms(), 1000);
+        // The entry anchor moves: position restarts from here.
+        game.song_anchor_sample = 44_100;
+        assert_eq!(game.now_ms(), 0);
+    }
+
+    #[test]
+    fn live_lane_key_rates_on_the_sample_clock() {
+        use o2jam_audio::{NullBackend, PcmSamples};
+        let mut game = ScreenGame::new();
+        game.with_audio(Box::new(NullBackend::new()), HashMap::new());
+        game.load_chart(vec![(2, 1000, 7)]);
+        walk_to_playing(&mut game);
+        {
+            let rig = game.audio.as_mut().expect("rig");
+            rig.backend
+                .play_pcm(&PcmSamples {
+                    samples: vec![0i16; 44_100 * 2],
+                    sample_rate: 44_100,
+                    channels: 2,
+                })
+                .unwrap();
+        }
+        // Lane key down reads `now_ms` (1000) and rates the note.
+        game.lane_key(2, true);
+        assert_eq!(game.live_play().score().counts, [1, 0, 0, 0]);
     }
 
     #[test]

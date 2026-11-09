@@ -82,6 +82,16 @@ accounts (the `*5` term is real) and confirms their 200/4/−10
 figures; HP deltas partially corroborated (`[-10,-7,-5]` Bad
 row found exactly once in-shipped-bytes at file `0x35e844`).
 
+Per-judgement order VERIFIED (re-checked 2026-11-11, dossier
+`ev_ed3fbddbb6ac91c280b283895863db8bb043d925d6742217fd883b98241fed46`):
+the life adder runs first (calls at files `0x17057c`/`0x1705f6`),
+then the score adder reads the *current* `X` (Cool `200 + 10*X`
+at files `0x17058f`–`0x1705ab`, Good `100 + 5*X` at
+`0x170609`–`0x170623`), then the jam feed (+2/+1, files `0x1705b0`/
+`0x170628`), then the strict-greater grant check (files
+`0x1706f9`–`0x170727`). The granting note therefore scores at the
+OLD level — `o2jam-game::Score` now scores before it feeds.
+
 `X` (word at `+0x396e`) IS written — correction of an earlier
 "zero writes" claim that only grepped the `+0x396e` displacement
 spelling and missed the sub-object-offset writes (`+0x214e` of the

@@ -123,6 +123,13 @@ pub trait AudioBackend {
     }
     /// Song position in device frames (see trait docs).
     fn samples_played(&self) -> u64;
+    /// Device sample rate in Hz: the rate [`Self::samples_played`]
+    /// counts at. The song clock converts frames with this, so a
+    /// live device at (say) 48000 Hz runs at the right speed.
+    /// Sinks that count staged frames at their own rate return it.
+    fn sample_rate(&self) -> u32 {
+        44_100
+    }
     /// Queued-but-unplayed frames behind the playhead. Defaults to
     /// zero for clock-only sinks; live backends report real depth for
     /// [`LatencyProbe`].
@@ -513,6 +520,10 @@ impl AudioBackend for CpalBackend {
 
     fn samples_played(&self) -> u64 {
         self.queue.lock().map_or(0, |q| q.consumed_frames)
+    }
+
+    fn sample_rate(&self) -> u32 {
+        self.rate
     }
 
     fn pending_frames(&self) -> u64 {

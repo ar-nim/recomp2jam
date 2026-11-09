@@ -1503,6 +1503,15 @@ impl PendingNote {
 
 /// Live play: scrolling view plus verified judgement/scoring.
 ///
+/// The clock seam: every `now_ms` passed here is song position —
+/// `ScreenGame::now_ms` (audio backend `samples_played` through
+/// `song_position_ms`) on the live path and explicit song ms in
+/// tests. Strike timing (the 6/18/25 ms windows of
+/// `FUN_00576540`, file `0x176540`, `ev_f83fe4e4…`), scroll
+/// ([`PlayingView::visible`]), miss expiry, hold bonus ticks, and
+/// every [`Score`] judgement advance off that position, never the
+/// wall clock.
+///
 /// Key presses rate the nearest unjudged note in that lane inside
 /// the bad window; notes aging past it rate Miss on advance. Presses
 /// with no note nearby rate nothing (the original's empty-press
@@ -5612,6 +5621,26 @@ mod avatar_scene_tests {
         // 950/1000 fills 7 of the 8 shell rows: the top row empties.
         assert_eq!(buf[215 * 800 + 400], AVATAR_LIFE_EMPTY);
         assert_eq!(buf[216 * 800 + 400], LIFE_FILL);
+    }
+
+    #[test]
+    fn dead_gate_freezes_live_scoring_after_the_bar_empties() {
+        // Easy bar: 20 Misses empty it (the killing Miss still lands —
+        // the scorer entry gate); the 21st strike rates Cool on the
+        // windows but the dead gate freezes counts/points/life.
+        let notes: Vec<(u8, u64, u32)> = (0..21u32)
+            .map(|i| (0, 1000 + u64::from(i) * 100, 7))
+            .collect();
+        let mut live = LivePlay::new(&notes);
+        for i in 0..20u32 {
+            live.advance_to(1000 + u64::from(i) * 100 + 26);
+        }
+        assert!(live.score().life.is_dead());
+        assert_eq!(live.score().counts, [0, 0, 0, 20]);
+        assert_eq!(live.strike_lane(0, 1000 + 20 * 100), Some(Judgement::Cool));
+        assert_eq!(live.score().counts, [0, 0, 0, 20]);
+        assert_eq!(live.life(), 0);
+        assert_eq!(live.score().points, 0);
     }
 
     #[test]

@@ -1292,8 +1292,12 @@ impl Default for LifeBar {
 /// `FUN_00576540` file `0x176c86` `ev_63f07dfc…` / `0x176c8c` `ev_b7f03b4d…`
 /// vs Bad/Miss path `0x176d8b` `ev_55bfa19b…`; user-confirmed);
 /// pill-save freezes the combo (no combo write on that path).
-/// Jam feed/grant order (feed, grant, then score with the resulting
-/// `X`) is an implementation choice — the exe order is untraced.
+/// Per-judgement order VERIFIED in `FUN_00570510` (file `0x170510`,
+/// REA `ev_ed3fbddbb6ac91c280b283895863db8bb043d925d6742217fd883b98241fed46`):
+/// the life adder runs, then the score adder with the *current*
+/// (pre-feed) `X`, then the jam feed, then the strict-greater grant
+/// check — the granting note therefore scores at the old level.
+/// (`Score::apply` / `Score::apply_rated` follow this order.)
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Score {
     /// Accumulated points.
@@ -1322,7 +1326,9 @@ fn tier_index(judgement: Judgement) -> usize {
 
 impl Score {
     /// Score one tier with the current jam level (`200 + 10*X` /
-    /// `100 + 5*X` / `+4` / `−10` floored at zero).
+    /// `100 + 5*X` / `+4` / `−10` floored at zero): must run before
+    /// the jam feed so the granting note reads the pre-grant `X`
+    /// (scorer order, file `0x170510`).
     fn add_tier_points(&mut self, judgement: Judgement) {
         let level = u64::from(self.jam.level());
         match judgement {
@@ -1345,13 +1351,16 @@ impl Score {
             return;
         }
         self.counts[tier_index(j)] += 1;
+        // Exe order: life adder, score adder with the pre-feed `X`,
+        // jam feed, then the strict-greater grant check
+        // (`Score::add_tier_points` must run before `self.jam.note`).
         self.life.apply(j);
+        self.add_tier_points(j);
         self.jam.note(j);
         match j {
             Judgement::Cool | Judgement::Good => self.combo += 1,
             Judgement::Bad | Judgement::Miss => self.combo = 0,
         }
-        self.add_tier_points(j);
         self.max_combo = self.max_combo.max(self.combo);
     }
 
@@ -1376,27 +1385,31 @@ impl Score {
             return;
         }
         self.counts[tier_index(judgement)] += 1;
+        // Same exe order as `apply`: life, score with the pre-feed
+        // `X`, feed, grant. The pill-saved Bad runs the scorer's
+        // Cool branch verbatim (dispatch with tier arg 4).
         if judgement == Judgement::Bad && pills.consume_to_keep_combo() {
             self.life.apply(Judgement::Cool);
-            self.jam.note_pill_saved();
             let level = u64::from(self.jam.level());
             self.points += 200 + 10 * level;
+            self.jam.note_pill_saved();
             self.max_combo = self.max_combo.max(self.combo);
             return;
         }
+        self.life.apply(judgement);
+        self.add_tier_points(judgement);
         self.jam.note(judgement);
         match judgement {
             Judgement::Cool | Judgement::Good => self.combo += 1,
             Judgement::Bad | Judgement::Miss => self.combo = 0,
         }
-        self.add_tier_points(judgement);
-        self.life.apply(judgement);
         self.max_combo = self.max_combo.max(self.combo);
     }
 
     /// Points an all-Cool play of `note_count` notes earns through the
-    /// verified scorer path above (jam feed, grant, then score with the
-    /// resulting `X`). The result grade does NOT use this as its
+    /// verified scorer path above (score with the pre-feed `X`, then
+    /// jam feed and grant — the granting note scores at the old
+    /// level). The result grade does NOT use this as its
     /// denominator: the exe compares the played score against the pinned
     /// [`crate::grade_max_reference`] instead, which scores each 25-note
     /// group with its jam level and so sits above any live all-Cool
@@ -2290,15 +2303,35 @@ mod tests {
         // Notes 1..25 score Cool at jam level 0: the 25th parks
         // progress exactly on the 50 threshold, and the
         // strict-greater grant (files 0x1706f9-0x170727) fires only
-        // on the 26th — so note 26 is the first that scores 210.
-        // Hand-computed from the verified feed/grant/score order —
-        // not from the code under test.
+        // on the 26th — so note 26 still scores 200 (the grant lands
+        // after the score adder) and note 27 is the first that
+        // scores 210. Hand-computed from the verified score/feed/
+        // grant order — not from the code under test.
         assert_eq!(Score::all_cool_total(0), 0);
         assert_eq!(Score::all_cool_total(1), 200);
         assert_eq!(Score::all_cool_total(24), 4_800);
         assert_eq!(Score::all_cool_total(25), 5_000);
-        // Notes 26..50 sit at level 1 (210 each); note 51 grants level 2.
-        assert_eq!(Score::all_cool_total(50), 10_250);
+        // Notes 27..50 sit at level 1 (210 each); note 51 grants level 2.
+        assert_eq!(Score::all_cool_total(50), 10_240);
+    }
+
+    #[test]
+    fn scorer_scores_the_granting_note_at_the_old_level() {
+        // VERIFIED scorer order `FUN_00570510` (`0x170510`): the
+        // score adder reads `X` before the feed
+        // (`200 + 10*X` at `0x17058f`-`0x1705ab`, feed `+2` at
+        // `0x1705b0`), so the 26th consecutive Cool (progress 50 -> 52,
+        // past the entry) scores 200 and grants level 1 only for
+        // the NEXT note.
+        let mut score = Score::default();
+        for _ in 0..25 {
+            score.apply(Judgement::Cool);
+        }
+        assert_eq!((score.points, score.jam.level()), (5_000, 0));
+        score.apply(Judgement::Cool);
+        assert_eq!((score.points, score.jam.level()), (5_200, 1));
+        score.apply(Judgement::Cool);
+        assert_eq!(score.points, 5_200 + 210);
     }
 
     #[test]
@@ -2375,17 +2408,18 @@ mod tests {
     #[test]
     fn grade_numerator_tracks_the_jam_multiplier() {
         // 25 Cools park exactly on the threshold (progress 50): the
-        // strict-greater grant fires only on the 26th, so the first
-        // 25 all score 200 and note 26 scores 210 with X = 1.
+        // strict-greater grant fires only on the 26th, and the grant
+        // lands after that note's score adder, so note 26 still
+        // scores 200 with X = 0 and X = 1 applies from note 27.
         let mut score = Score::default();
         for _ in 0..25 {
             score.apply(Judgement::Cool);
         }
         assert_eq!(score.grade_numerator(), 5_000);
         score.apply(Judgement::Cool);
-        assert_eq!(score.grade_numerator(), 5_000 + 210);
+        assert_eq!(score.grade_numerator(), 5_000 + 200);
         score.apply(Judgement::Good);
-        assert_eq!(score.grade_numerator(), 5_000 + 210 + 105);
+        assert_eq!(score.grade_numerator(), 5_200 + 105);
     }
 
     #[test]
