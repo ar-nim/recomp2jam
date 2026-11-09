@@ -571,6 +571,14 @@ fn paint_room_rows(
     }
 }
 
+/// Reference-measured room row-text inset inside a panel: number text
+/// starts ~34 px right and ~1 px below the panel origin on the live
+/// Wine capture (`/tmp/aa-room.png`; panel 0 rect `(26,82)`, number top
+/// `y≈83`). Reference-grade only — no exe consumer pins it (OPEN).
+/// Scales to the frame like staged placements do.
+const ROOM_ROW_TEXT_DX: i32 = 34;
+const ROOM_ROW_TEXT_DY: i32 = 1;
+
 /// Room rows at their staged `.bnd` panel origins, bare on the
 /// panel art (no scrim: the panels carry their own chrome). Rooms
 /// past the staged panels stay off-page (the Left/Right pager is
@@ -582,9 +590,15 @@ fn paint_room_panel_rows(
     origins: &[(i32, i32)],
 ) {
     for (index, room) in rooms.iter().enumerate() {
-        let Some((text_x, row)) = origins.get(index).copied() else {
+        let Some((panel_x, panel_y)) = origins.get(index).copied() else {
             break;
         };
+        let wide = i32::try_from(frame.w).unwrap_or(0);
+        let high = i32::try_from(frame.h).unwrap_or(0);
+        let (text_x, row) = (
+            panel_x + ROOM_ROW_TEXT_DX * wide / NATIVE_WIDTH as i32,
+            panel_y + ROOM_ROW_TEXT_DY * high / NATIVE_HEIGHT as i32,
+        );
         draw_text(
             frame,
             text_x,

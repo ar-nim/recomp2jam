@@ -3856,6 +3856,8 @@ mod game_tests {
     fn bound_room_panels_paint_numbered_rows() {
         // Live Room stages bound panels yet shows no row ink: narrow
         // whether the panel path drops rows when data is present.
+        // Rows sit inside the panel at the reference-measured inset,
+        // not at the panel corner.
         let placements = vec![crate::avatar::ScenePlacement {
             id: "IDC_BUTTON_SROOM_EXBUTTON1".to_owned(),
             code: 0,
@@ -3899,7 +3901,7 @@ mod game_tests {
             },
             0,
         );
-        assert!(white_near(&buf, 800, 600, (26, 82)));
+        assert!(white_near(&buf, 800, 600, (60, 83)));
     }
 
     #[test]
