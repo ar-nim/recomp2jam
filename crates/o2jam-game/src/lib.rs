@@ -18,9 +18,10 @@
 //! as [`JamGauge`] over the level/progress counters [`JamState`].
 //! The 4015 peer-life/rank mirror lives in [`PeerBars`]
 //! (VERIFIED handler shape, dossier `rea-4015-ghidra`). VERIFIED anchors
-//! live in `docs/gameplay.md`: `Life_gauge_*_bar.ojs` art, per-hit Jam
-//! (4014 arg 1) vs tick-driven Life (4014 arg 0), `SubmitScore` (4016)
-//! field layout.
+//! live in `docs/gameplay.md`: `Life_gauge_*_bar.ojs` art, level-up Jam
+//! (4014 arg 1, scorer return 1) vs tick-driven Life (4014 arg 0),
+//! `SubmitScore` (4016) field layout. The rating-event sink dispatch
+//! lives in [`rating_sink`] (codes 1/9/14).
 
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
@@ -28,6 +29,7 @@ use std::time::{Duration, Instant};
 pub mod chart;
 pub mod lane_effect;
 pub mod peer;
+pub mod rating_sink;
 pub use chart::{
     build_level_chart, BackingNote, LevelChart, MeterChange, TempoChange, TempoMap, TimedHit,
 };
@@ -35,6 +37,12 @@ pub use lane_effect::{measure_index_of_tick, LaneMap, MeasureReshuffle};
 pub use peer::{
     PeerBars, QueueEvent, RankDelivery, LIFE_MAX, PEER_SLOT_COUNT, QUEUE_CATEGORY_PEER, STAT_JAM,
     STAT_LIFE,
+};
+pub use rating_sink::{
+    JamLocalQueue, JamReport, RatingClass, RatingOutcome, RatingSink, RelayComboState, RelayEdge,
+    SoundTrigger, HOLD_EVENT, JUDGEMENT_EVENT, RATING_BAD, RATING_COOL, RATING_GOOD, RATING_MISS,
+    RATING_TAIL_KILL, RELAY_SELECTOR_BAD, RELAY_SELECTOR_COOL, RELAY_SELECTOR_GOOD,
+    RELAY_SELECTOR_MISS, SOLO_PLAYER_COUNT, SOUND_EVENT,
 };
 
 /// One triggered sound: a lane hit or a backing note whose onset
