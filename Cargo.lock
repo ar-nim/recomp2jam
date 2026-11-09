@@ -1047,6 +1047,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "o2jam-text"
+version = "0.1.0"
+dependencies = [
+ "ab_glyph",
+ "encoding_rs",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "objc-sys"
 version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

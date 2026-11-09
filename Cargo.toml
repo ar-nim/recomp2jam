@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+  "crates/o2jam-text",
   "crates/o2jam-file",
   "crates/o2jam-audio",
   "crates/o2jam-game",
