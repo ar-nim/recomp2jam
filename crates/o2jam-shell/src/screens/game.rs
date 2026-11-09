@@ -8,13 +8,14 @@ use super::super::playing::{HighwayGeometry, LivePlay, PlaySkin};
 use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
-    battle_verdict, has_room_panels, list_row_hit, paint_avi_scene, paint_channel_chat,
-    paint_channel_list, paint_channel_scene, paint_loading_scene, paint_loading_scene_with_status,
-    paint_lobby_backdrop, paint_playing_overlay, paint_result, paint_result_scene, paint_room_list,
-    paint_room_scene, paint_screen, paint_waiting_chat, paint_waiting_members, paint_waiting_scene,
-    rect_hit, room_panel_hit, scene_index, staged_rect_hit, BattleVerdict, ChannelChatMessage,
-    LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions,
-    WaitingChatMessage, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    battle_verdict, channel_row_hit, has_room_panels, list_row_hit, paint_avi_scene,
+    paint_channel_chat, paint_channel_list, paint_channel_scene, paint_loading_scene,
+    paint_loading_scene_with_status, paint_lobby_backdrop, paint_playing_overlay, paint_result,
+    paint_result_scene, paint_room_list, paint_room_scene, paint_screen, paint_waiting_chat,
+    paint_waiting_members, paint_waiting_scene, rect_hit, room_panel_hit, scene_index,
+    staged_rect_hit, BattleVerdict, ChannelChatMessage, LoadingStatus, ResultPaint, ResultRankRow,
+    ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage, RESULT_BACK_ID, RESULT_BACK_RECT,
+    RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::side::{
     can_return_side, can_visit_side, paint_side_scene, select_chosung_cells, select_difficulty_ink,
@@ -1001,8 +1002,8 @@ impl ScreenGame {
     /// Channel row click: highlight the band, then advance like
     /// Confirm while the draft is action-free (slash drafts consume
     /// the click instead of starting).
-    fn click_channel_row(&mut self, x: i32, y: i32) {
-        let Some(index) = list_row_hit(CLICK_W, CLICK_H, self.channels.len(), x, y) else {
+    fn click_channel_row(&mut self, _x: i32, y: i32) {
+        let Some(index) = channel_row_hit(y, self.channels.len()) else {
             return;
         };
         self.highlight = index;
@@ -2571,8 +2572,8 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
         game.lane_key(3, true);
-        // Second row band: y in [158, 166), x inside the scrim strip.
-        game.mouse_click(300, 162);
+        // Second row band: y in [282, 332), x anywhere on the row.
+        game.mouse_click(300, 290);
         assert_eq!(game.highlight, 1);
         assert_eq!(game.screen(), Screen::Room);
     }
@@ -2594,7 +2595,7 @@ mod game_tests {
         game.set_channels(two_channels());
         game.lane_key(3, true);
         game.set_channel_input("/w bob hi");
-        game.mouse_click(300, 152);
+        game.mouse_click(300, 240);
         assert_eq!(game.screen(), Screen::Channel);
         assert!(game.channel_input().is_empty());
     }
@@ -2732,7 +2733,7 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
         game.lane_key(3, true);
-        // 64x48 list: rows from y 12, text x 16; '2' top bar first.
+        // 64x48 list: rows from y 18, text x 16; '2' top bar first.
         let mut buf = vec![0u32; 64 * 48];
         game.paint_at(
             &mut Frame {
@@ -2742,10 +2743,10 @@ mod game_tests {
             },
             0,
         );
-        // 64x48 list: rows from y 12, text x 16; the row text inks
+        // 64x48 list: rows from y 18, text x 16; the row text inks
         // near its origin, the amber cursor fills solid at x 10.
-        assert!(white_near(&buf, 64, 48, (16, 12)));
-        assert_eq!(buf[12 * 64 + 10], pack_xrgb(0xFF, 0xD0, 0x20));
+        assert!(white_near(&buf, 64, 48, (16, 18)));
+        assert_eq!(buf[18 * 64 + 10], pack_xrgb(0xFF, 0xD0, 0x20));
         assert_eq!(buf[0], background_of(Screen::Channel));
     }
 
@@ -3802,6 +3803,45 @@ mod game_tests {
         assert!(ScreenGame::is_listed_room(&titled_first));
         assert!(!ScreenGame::is_listed_room(&free_slot));
         assert!(ScreenGame::is_listed_room(&two_rooms()[0]));
+    }
+
+    #[test]
+    fn channel_rows_ink_at_measured_native_tops() {
+        // Reference-measured anchors (`/tmp/chan2-list.png`): row text
+        // tops at 232+50·index on a native frame, scaled like staged
+        // placements elsewhere.
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.lane_key(3, true);
+        assert_eq!(game.screen(), Screen::Channel);
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert!(white_near(&buf, 800, 600, (200, 232)));
+        assert!(ink_near(
+            &buf,
+            800,
+            600,
+            (200, 282),
+            (64, 9),
+            pack_xrgb(0x70, 0x70, 0x70)
+        ));
+    }
+
+    #[test]
+    fn channel_row_hit_maps_measured_bands() {
+        assert_eq!(channel_row_hit(240, 10), Some(0));
+        assert_eq!(channel_row_hit(281, 10), Some(0));
+        assert_eq!(channel_row_hit(282, 10), Some(1));
+        assert_eq!(channel_row_hit(100, 10), None);
+        assert_eq!(channel_row_hit(732, 10), None);
+        assert_eq!(channel_row_hit(240, 0), None);
     }
 
     #[test]

@@ -49,13 +49,16 @@ rect is an approximation.
    top-centered `Note_JamNum` digits. Ground truth: `Jamgauge_right_bar.ojs` /
    `Jamgauge_left_bar.ojs` shells (VAs `0x64b1b8`/`0x64b1d0`, loader `FUN_004e7850`) and
    the jam-number rects; width, height, top row, and digit anchor are assumed.
-10. `o2jam-shell/src/screens/paint.rs:201 paint_list_scrim` builds the list scrim at
+10. `o2jam-shell/src/screens/paint.rs:245 paint_list_scrim` builds the list scrim at
     `w / 4 - 8, h / 4 - 2, w / 2 + 16, rows * 8 + 4`. Ground truth: the `IDC_LIST` rect
     in `State_Room.bnd` (and the channel dialog-bar rect); quarter-frame anchoring is
-    invented.
-11. `o2jam-shell/src/screens/paint.rs:248 index_as_row` places row `i` at
+    invented. Channel no longer shares this (own measured scrim at :299); the item
+    stands for Room rows only.
+11. `o2jam-shell/src/screens/paint.rs:352 index_as_row` places row `i` at
     `h / 4 + i * 8` (`CHANNEL_ROW_H = 8`). Ground truth: `.bnd` row rects / font metrics;
-    the 8 px step and quarter-frame start are assumed for channel and room lists alike.
+    the 8 px step and quarter-frame start are assumed for room lists; Channel uses
+    reference-measured tops instead (`channel_row_top` at :276: 232+50·i native,
+    Wine capture, exe-OPEN — see channel-fill.md).
 12. `o2jam-shell/src/screens/paint.rs:680 seat_origin` lays out seats as 2 columns × 4
     rows at `w / 8 + col * (w / 2)`, `h / 4 + row * 8`. Ground truth: the eight seat /
     team-button / avatar-cover rects in `State_Waiting.bnd`; the grid fractions are

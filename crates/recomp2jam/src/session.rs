@@ -2366,7 +2366,7 @@ mod session_tests {
                 active: false,
             },
         ]);
-        session.mouse_click(400, 154);
+        session.mouse_click(400, 240);
         server.join().unwrap();
         assert_eq!(session.game.screen(), Screen::Room);
     }

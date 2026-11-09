@@ -263,6 +263,59 @@ fn paint_list_scrim(frame: &mut Frame<'_>, row_count: usize) {
 /// Row height of one channel entry.
 const CHANNEL_ROW_H: i32 = 8;
 
+/// Reference-measured Channel row geometry in native 800x600 px: row
+/// text tops sit at `232 + 50·index` on the live Wine capture
+/// (`/tmp/chan2-list.png`; method in channel-fill.md). Reference-grade
+/// only — no exe consumer pins these anchors, so they stay OPEN as
+/// exe evidence. Scales to the frame like staged placements do.
+const CHANNEL_ROW_TOP: i32 = 232;
+/// Reference-measured Channel row pitch in native px (see above).
+const CHANNEL_ROW_PITCH: i32 = 50;
+
+/// Row top of Channel entry `index` on a frame of height `h`.
+fn channel_row_top(index: usize, h: i32) -> i32 {
+    let native_top = i64::from(CHANNEL_ROW_TOP)
+        + i64::from(CHANNEL_ROW_PITCH) * i64::try_from(index).unwrap_or(0);
+    let scaled = native_top * i64::from(h) / i64::from(NATIVE_HEIGHT);
+    i32::try_from(scaled).unwrap_or(i32::MAX)
+}
+
+/// Channel row under a native-space `y` (`None` above the stack or
+/// past `row_count`). Inverse of [`channel_row_top`] at native size;
+/// mouse clicks arrive pre-mapped to native space, so no frame dims.
+#[must_use]
+pub(crate) fn channel_row_hit(y: i32, row_count: usize) -> Option<usize> {
+    let offset = y.checked_sub(CHANNEL_ROW_TOP)?;
+    if offset < 0 {
+        return None;
+    }
+    let index = usize::try_from(offset / CHANNEL_ROW_PITCH).ok()?;
+    (index < row_count).then_some(index)
+}
+
+/// Dark strip behind Channel rows, rescaled from the measured native
+/// stack: mirrors [`paint_list_scrim`] shape (2 px bleed) without
+/// sharing its invented anchors.
+fn paint_channel_scrim(frame: &mut Frame<'_>, row_count: usize) {
+    if row_count == 0 || frame.w == 0 || frame.h == 0 {
+        return;
+    }
+    let w = i32::try_from(frame.w).unwrap_or(0);
+    let h = i32::try_from(frame.h).unwrap_or(0);
+    let top = channel_row_top(0, h) - 2;
+    let bottom = channel_row_top(row_count, h) + 2;
+    fill_rect(
+        frame,
+        &Rect {
+            x: w / 4 - 8,
+            y: top,
+            w: (w / 2 + 16).max(0) as u32,
+            h: (bottom - top).max(0) as u32,
+        },
+        scrim_color(),
+    );
+}
+
 /// One channel row: `gateway/channel population/capacity` (both ids
 /// ride the `GetChannelList` 1003 row; population over capacity).
 #[must_use]
@@ -276,12 +329,12 @@ fn channel_row_text(channel: &ChannelState) -> String {
 /// Channel rows plus highlight cursor (no background fill: shared by
 /// the flat fallback and the art scene).
 fn paint_channel_rows(frame: &mut Frame<'_>, channels: &[ChannelState], highlight: usize) {
-    paint_list_scrim(frame, channels.len());
+    paint_channel_scrim(frame, channels.len());
     let w = frame.w as i32;
     let h = frame.h as i32;
     let text_x = w / 4;
     for (index, channel) in channels.iter().enumerate() {
-        let row = index_as_row(index, h);
+        let row = channel_row_top(index, h);
         let entry = channel_row_text(channel);
         let ink = if channel.active {
             pack_xrgb(0xFF, 0xFF, 0xFF)
@@ -5728,7 +5781,7 @@ mod paint_tests {
             &art,
         );
         assert_eq!(buf[0], pack_xrgb(255, 0, 0), "the authored anchor");
-        assert_eq!(buf[50 * 128 + 100], 0, "no canvas-wide stretch");
+        assert_eq!(buf[70 * 128 + 100], 0, "no canvas-wide stretch");
     }
 
     #[test]
