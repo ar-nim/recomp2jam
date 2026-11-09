@@ -68,6 +68,13 @@ pub struct Shot {
 /// word, tally counts, and TIME progress show; the scripted key-up
 /// on the tail then spends the chart for Result.
 ///
+/// First-screen walk (verified, `docs/planet.md` 2026-11-09): Avi →
+/// Channel (the dialog over the planet board) → dialog X → Planet
+/// (bare board) → lit-emblem click → Channel (dialog again) → row
+/// confirm → Room → … The lit emblem reopening the dialog is
+/// player-report corroborated with per-emblem dynamic verification
+/// pending; the dialog X zone is reference-measured modulo chrome.
+///
 /// # Errors
 ///
 /// When the scripted walk leaves the expected screen.
@@ -76,22 +83,35 @@ pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
     let mut shots = Vec::with_capacity(14);
     shots.push(shoot(&mut game, "avi", 0)?);
     game.lane_key(3, true);
+    // Verified first screen (docs/planet.md "Real board structure",
+    // 2026-11-09 captures): the channel dialog opens OVER the planet
+    // board at boot (launcher My_channel/My_planet preselection) —
+    // the staged bound State_Planet block (backdrop + emblems + promo
+    // + MENU bar) paints beneath the opaque 800x466 dialog sheet and
+    // the MENU bar stays visible in the bottom strip.
     shots.push(shoot_checked(&mut game, "channel", Screen::Channel, 0)?);
-    // The walk reaches Planet through the verified Channel→Planet
-    // edge via the flow-gate driver: the key/click path that opens
-    // Planet in the exe is evidence-OPEN (docs/planet.md OPEN 6), so
-    // no input is invented. A HARD-button click exercises the pinned
-    // `.bnd` hit-test and leaves the amber cursor stand-in in the
-    // shot; the walk then continues through the verified Planet→Room
-    // edge.
-    assert!(game.enter_screen(Screen::Planet), "Channel→Planet edge");
+    // The dialog X button (native (557,195), inside the measured X
+    // zone x560-620 modulo chrome, reference-measured) closes the
+    // dialog → the bare planet board (five emblems, promo carousel,
+    // MENU bar).
+    game.mouse_click(557, 195);
+    assert_eq!(game.screen(), Screen::Planet, "dialog X → Planet edge");
+    shots.push(shoot_checked(&mut game, "planet", Screen::Planet, 0)?);
+    // A lit-emblem click (HARD through its pinned `.bnd` rect)
+    // reopens the channel dialog (player-report corroborated,
+    // per-emblem dynamic verification pending — docs/planet.md) and
+    // records the pick; the amber cursor stand-in stays labeled OPEN.
     game.click_planet(386, 88);
+    assert_eq!(game.screen(), Screen::Channel, "lit emblem → Channel");
     assert_eq!(
         game.planet_selection(),
         Some(o2jam_shell::screens::side::PlanetBand::Hard)
     );
-    shots.push(shoot_checked(&mut game, "planet", Screen::Planet, 0)?);
-    assert!(game.enter_screen(Screen::Room), "Planet→Room edge");
+    // Room entry happens only through the channel dialog (entry-button
+    // faces; wine-boot.md Attempt 9 verified 입장 clicks advance to the
+    // room list): Confirm takes the highlighted row into Room.
+    game.menu_key(MenuKey::Confirm, true);
+    assert_eq!(game.screen(), Screen::Room, "row confirm → Room");
     shots.push(shoot_checked(&mut game, "room", Screen::Room, 0)?);
     game.menu_key(MenuKey::Confirm, true);
     shots.push(shoot_checked(&mut game, "waiting", Screen::Waiting, 0)?);
@@ -1844,6 +1864,11 @@ mod tests {
         let mut game = seeded_game();
         game.lane_key(3, true);
         game.load_scene(Screen::Channel, Vec::new(), HashMap::new());
+        // The board beneath the dialog is a separate scene slot: clear
+        // it too so the art-less frame is deterministic with and
+        // without `install-root` (the layered arm is guarded by
+        // `channel_shot_stages_dialog_art_inside_the_measured_bands`).
+        game.load_scene(Screen::Planet, Vec::new(), HashMap::new());
         assert_eq!(game.screen(), Screen::Channel);
         let frame = paint_native_frame(&mut game, 0);
         assert_eq!(frame[0], 0, "art-less channel paints no fill");
@@ -1860,26 +1885,34 @@ mod tests {
     #[test]
     fn channel_shot_stages_dialog_art_inside_the_measured_bands() {
         // With genuine art staged, the dialog body paints at its
-        // record anchor: new ink lands inside the 800x466 body (the
-        // reference-measured panel core x185-615 y150-464 among it)
-        // and the strip below native y466 stays byte-identical to the
-        // art-less frame (pinned no-fill beyond the art).
+        // record anchor OVER the planet board (verified first screen,
+        // `docs/planet.md`): new ink lands inside the 800x466 body
+        // (the reference-measured panel core x185-615 y150-464 among
+        // it). The pinned no-fill strip rule splits by staging:
+        // without board art the strip below native y466 stays
+        // byte-identical to the art-less frame; with the board staged
+        // the MENU bar band may differ — but only where the board
+        // itself paints.
         let Some(interface) = read_archive(INTERFACE_ARCHIVE) else {
             println!("skip: missing {INTERFACE_ARCHIVE}");
             return;
         };
-        let mut staged = seeded_game();
-        stage_channel_dialog(&mut staged, &interface);
+        // Art-less baseline: same seed, both scene slots cleared.
         let mut base = seeded_game();
         base.lane_key(3, true);
-        // Art-less baseline: same seed, channel scene art cleared.
         base.load_scene(Screen::Channel, Vec::new(), HashMap::new());
+        base.load_scene(Screen::Planet, Vec::new(), HashMap::new());
         let base_frame = paint_native_frame(&mut base, 0);
-        staged.lane_key(3, true);
-        assert_eq!(staged.screen(), Screen::Channel);
-        let frame = paint_native_frame(&mut staged, 0);
+        // Dialog-only arm (no board staged): the strip stays
+        // byte-identical to the art-less frame — nothing beneath.
+        let mut dialog_only = seeded_game();
+        stage_channel_dialog(&mut dialog_only, &interface);
+        dialog_only.load_scene(Screen::Planet, Vec::new(), HashMap::new());
+        dialog_only.lane_key(3, true);
+        assert_eq!(dialog_only.screen(), Screen::Channel);
+        let dialog_frame = paint_native_frame(&mut dialog_only, 0);
         let mut inside_core = false;
-        for (index, (&now, &before)) in frame.iter().zip(base_frame.iter()).enumerate() {
+        for (index, (&now, &before)) in dialog_frame.iter().zip(base_frame.iter()).enumerate() {
             if now == before {
                 continue;
             }
@@ -1897,12 +1930,40 @@ mod tests {
             inside_core,
             "channel shot: no staged ink inside the measured panel core"
         );
-        for index in 466 * NATIVE_WIDTH as usize..frame.len() {
+        for index in 466 * NATIVE_WIDTH as usize..dialog_frame.len() {
             assert_eq!(
-                frame[index], base_frame[index],
-                "channel shot: fill below the dialog body"
+                dialog_frame[index], base_frame[index],
+                "channel shot: fill below the dialog body without board art"
             );
         }
+        // Board arm: with the planet board staged (seeded_game), the
+        // board alone explains every strip pixel that differs from the
+        // art-less frame — the MENU bar band is board ink, not
+        // invented fill — and the staged board inks the strip at all.
+        let mut board_only = seeded_game();
+        board_only.load_scene(Screen::Channel, Vec::new(), HashMap::new());
+        board_only.lane_key(3, true);
+        let board_frame = paint_native_frame(&mut board_only, 0);
+        let mut staged = seeded_game();
+        stage_channel_dialog(&mut staged, &interface);
+        staged.lane_key(3, true);
+        assert_eq!(staged.screen(), Screen::Channel);
+        let frame = paint_native_frame(&mut staged, 0);
+        let mut strip_diff = false;
+        for index in 466 * NATIVE_WIDTH as usize..frame.len() {
+            if frame[index] == base_frame[index] {
+                continue;
+            }
+            strip_diff = true;
+            assert_eq!(
+                frame[index], board_frame[index],
+                "channel shot: strip ink unexplained by the board at pixel {index}"
+            );
+        }
+        assert!(
+            strip_diff,
+            "channel shot: staged board inked nothing in the MENU bar strip"
+        );
     }
 
     #[test]
@@ -1914,18 +1975,29 @@ mod tests {
             println!("skip: missing {INTERFACE_ARCHIVE}");
             return;
         };
-        // The walk reaches Planet through the verified Channel→Planet
-        // edge (no invented input — the exe's own entry key is OPEN),
-        // clicks HARD through the pinned `.bnd` rect, and paints the
-        // staged bound block with the amber cursor stand-in on top.
+        // The walk reaches the bare board through the dialog X (no
+        // invented input — the exe's own entry key stays OPEN), clicks
+        // HARD through the pinned `.bnd` rect, and the lit-emblem hit
+        // reopens the channel dialog while recording the pick
+        // (player-report corroborated, per-emblem verification
+        // pending). Back on the board the staged 17-placement bound
+        // block (backdrop, five emblems, promotion image, MENU bar)
+        // paints under the amber-cursor pick stand-in.
         let mut game = seeded_game();
         game.lane_key(3, true);
-        assert!(game.enter_screen(Screen::Planet));
+        game.mouse_click(557, 195);
+        assert_eq!(game.screen(), Screen::Planet, "dialog X → bare board");
         game.click_planet(386, 88);
         assert_eq!(
             game.planet_selection(),
             Some(o2jam_shell::screens::side::PlanetBand::Hard)
         );
+        assert_eq!(
+            game.screen(),
+            Screen::Channel,
+            "lit emblem reopens the channel dialog"
+        );
+        assert!(game.enter_screen(Screen::Planet), "dialog X → board again");
         let frame = paint_native_frame(&mut game, 0);
         assert!(
             frame.iter().any(|&px| px != frame[0]),
@@ -1939,22 +2011,74 @@ mod tests {
 
     #[test]
     fn planet_shot_records_the_picked_band_without_art() {
-        // No archives: the flat card paints and the pinned-rect
-        // hit-test still records the pick (clean-skip parity without
-        // install-root).
+        // No archives: the bare board shows the flat card and the
+        // pinned-rect hit-test still records the pick (clean-skip
+        // parity without install-root); the lit-emblem click reopens
+        // the dialog through the flow gate.
         let mut game = seeded_game();
         game.lane_key(3, true);
-        assert!(game.enter_screen(Screen::Planet));
+        game.mouse_click(557, 195);
+        assert_eq!(game.screen(), Screen::Planet);
         game.click_planet(386, 88);
         assert_eq!(
             game.planet_selection(),
             Some(o2jam_shell::screens::side::PlanetBand::Hard)
         );
+        assert_eq!(game.screen(), Screen::Channel);
         let frame = paint_native_frame(&mut game, 0);
         assert!(
-            frame.iter().any(|&px| px != frame[0]),
-            "planet shot: flat card painted nothing"
+            frame.iter().any(|&px| px != 0),
+            "planet shot: dialog-over-board frame painted nothing"
         );
+    }
+
+    #[test]
+    fn dialog_x_closes_the_channel_dialog_to_the_bare_board() {
+        // The measured X zone (x560-620 by y150-195 modulo chrome)
+        // hit-tests the native X button (557,195): a click inside the
+        // zone backs out to Planet through the flow gate, a row face
+        // click does not.
+        let mut game = seeded_game();
+        game.lane_key(3, true);
+        assert_eq!(game.screen(), Screen::Channel);
+        game.mouse_click(300, 240);
+        assert_eq!(
+            game.screen(),
+            Screen::Room,
+            "a row face click advances to the room list"
+        );
+        let mut game = seeded_game();
+        game.lane_key(3, true);
+        game.mouse_click(557, 195);
+        assert_eq!(game.screen(), Screen::Planet, "dialog X → Planet");
+    }
+
+    #[test]
+    fn lit_emblem_click_reopens_the_channel_dialog() {
+        // Player-report corroborated, per-emblem dynamic verification
+        // pending (docs/planet.md): HARD/NORMAL/EASY clicks reopen the
+        // channel dialog through the flow gate and record the pick;
+        // FREE/DRUM clicks stay on the bare board unbound (P0).
+        for (x, band) in [
+            (386, o2jam_shell::screens::side::PlanetBand::Hard),
+            (255, o2jam_shell::screens::side::PlanetBand::Normal),
+            (136, o2jam_shell::screens::side::PlanetBand::Easy),
+        ] {
+            let mut game = seeded_game();
+            game.lane_key(3, true);
+            game.mouse_click(557, 195);
+            assert_eq!(game.screen(), Screen::Planet);
+            game.click_planet(x, 88);
+            assert_eq!(game.screen(), Screen::Channel, "lit emblem → dialog");
+            assert_eq!(game.planet_selection(), Some(band));
+        }
+        let mut game = seeded_game();
+        game.lane_key(3, true);
+        game.mouse_click(557, 195);
+        game.click_planet(663, 88);
+        game.click_planet(559, 88);
+        assert_eq!(game.planet_selection(), None);
+        assert_eq!(game.screen(), Screen::Planet, "FREE/DRUM stay unbound");
     }
 
     #[test]

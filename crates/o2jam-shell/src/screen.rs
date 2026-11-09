@@ -63,7 +63,7 @@ pub const fn can_enter(from: Screen, to: Screen) -> bool {
             | (Channel, Planet)
             | (Room, Waiting)
             | (Room, Channel)
-            | (Planet, Room)
+            | (Planet, Channel)
             | (Waiting, Loading)
             | (Waiting, Room)
             | (Loading, Playing)

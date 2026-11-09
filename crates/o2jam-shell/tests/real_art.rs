@@ -37,7 +37,10 @@ const PLAYING_LIST: &str = "ControlList_Playing.txt";
 /// `STATE_CHANNEL` names zero sprites (verified), so the soak stages
 /// the code-mounted channel dialog art instead: the dialog body at
 /// its record anchor plus the enter-button frames at the
-/// reference-measured faces (see `docs/channel-fill.md`).
+/// reference-measured faces (see `docs/channel-fill.md`). The channel
+/// dialog opens OVER the planet board (verified first screen,
+/// `docs/planet.md`), so the soak stages the bound `State_Planet`
+/// block beneath the dialog art too.
 const CHANNEL_PROBE_W: usize = 800;
 /// Native probe height for the channel soak (record anchors exact).
 const CHANNEL_PROBE_H: usize = 600;
@@ -358,7 +361,7 @@ fn avi_layers_real_logo_over_bound_backdrop() {
 #[test]
 fn channel_layers_list_over_real_dialog_art() {
     let path = archive_path(INTERFACE_ARCHIVE);
-    let Some(archive) = read_archive(&path) else {
+    let Some((archive, list)) = interface_and_list() else {
         println!("skip channel: missing {}", path.display());
         return;
     };
@@ -371,10 +374,20 @@ fn channel_layers_list_over_real_dialog_art() {
         !figures.is_empty(),
         "channel: dialog body staged no figures"
     );
-    // Art-less baseline: same channels, empty scene art.
+    // Verified first screen (docs/planet.md, 2026-11-09): the channel
+    // dialog opens OVER the planet board, so the soak stages the bound
+    // State_Planet block (backdrop + emblems + promo + MENU bar)
+    // beneath the dialog art, exactly like the shots walk.
+    let Some((planet_placements, planet_figures)) =
+        stage_bound_block(&archive, &list, PLANET_BLOCK)
+    else {
+        panic!("channel: STATE_PLANET staged no board figures");
+    };
+    // Art-less baseline: same channels, both scene slots empty.
     let mut base_game = ScreenGame::new();
     base_game.set_channels(two_channels());
     base_game.load_scene(Screen::Channel, Vec::new(), HashMap::new());
+    base_game.load_scene(Screen::Planet, Vec::new(), HashMap::new());
     base_game.lane_key(3, true);
     let mut base = vec![0u32; CHANNEL_PROBE_W * CHANNEL_PROBE_H];
     base_game.paint_at(
@@ -385,9 +398,48 @@ fn channel_layers_list_over_real_dialog_art() {
         },
         0,
     );
+    // Dialog-only arm (no board staged): the strip below the 466-tall
+    // body stays byte-identical to the art-less frame (pinned no-fill
+    // corner, nothing beneath).
+    let mut dialog_game = ScreenGame::new();
+    dialog_game.set_channels(two_channels());
+    dialog_game.load_scene(Screen::Channel, Vec::new(), figures.clone());
+    dialog_game.load_scene(Screen::Planet, Vec::new(), HashMap::new());
+    dialog_game.lane_key(3, true);
+    assert_eq!(dialog_game.screen(), Screen::Channel);
+    let mut dialog_frame = vec![0u32; CHANNEL_PROBE_W * CHANNEL_PROBE_H];
+    dialog_game.paint_at(
+        &mut Frame {
+            buf: &mut dialog_frame,
+            w: CHANNEL_PROBE_W,
+            h: CHANNEL_PROBE_H,
+        },
+        0,
+    );
+    // Board-only arm: the staged board alone explains the MENU bar band.
+    let mut board_game = ScreenGame::new();
+    board_game.set_channels(two_channels());
+    board_game.load_scene(Screen::Channel, Vec::new(), HashMap::new());
+    board_game.load_scene(Screen::Planet, planet_placements.clone(), planet_figures);
+    board_game.lane_key(3, true);
+    let mut board_frame = vec![0u32; CHANNEL_PROBE_W * CHANNEL_PROBE_H];
+    board_game.paint_at(
+        &mut Frame {
+            buf: &mut board_frame,
+            w: CHANNEL_PROBE_W,
+            h: CHANNEL_PROBE_H,
+        },
+        0,
+    );
+    // Full composition: board beneath the opaque dialog sheet.
     let mut game = ScreenGame::new();
     game.set_channels(two_channels());
     game.load_scene(Screen::Channel, Vec::new(), figures);
+    game.load_scene(
+        Screen::Planet,
+        planet_placements,
+        planet_figures_full(&archive, &list),
+    );
     game.lane_key(3, true);
     assert_eq!(game.screen(), Screen::Channel);
     let mut frame = vec![0u32; CHANNEL_PROBE_W * CHANNEL_PROBE_H];
@@ -408,13 +460,13 @@ fn channel_layers_list_over_real_dialog_art() {
     for ink in [WHITE_TEXT, AMBER_CURSOR] {
         assert!(frame.contains(&ink), "channel: UI ink {ink:#x} missing");
     }
-    // Reference-measured mount proof: every pixel the staged art
-    // changes against the art-less baseline sits inside the mounted
-    // 800x466 dialog body (record anchor (0,0)); nothing paints at
-    // or below native y466 (no-fill corner), and some new ink lands
-    // inside the measured panel core (x185-615, y150-464).
+    // Reference-measured mount proof: every pixel the dialog-only
+    // stage changes against the art-less baseline sits inside the
+    // mounted 800x466 dialog body (record anchor (0,0)); nothing
+    // paints at or below native y466 without board art, and some new
+    // ink lands inside the measured panel core (x185-615, y150-464).
     let mut inside_core = false;
-    for (index, (&now, &before)) in frame.iter().zip(base.iter()).enumerate() {
+    for (index, (&now, &before)) in dialog_frame.iter().zip(base.iter()).enumerate() {
         if now == before {
             continue;
         }
@@ -432,18 +484,50 @@ fn channel_layers_list_over_real_dialog_art() {
         inside_core,
         "channel: no staged ink inside the measured panel core"
     );
-    // Bottom strip untouched (pinned no-fill beyond the art).
-    for index in 466 * CHANNEL_PROBE_W..frame.len() {
-        assert_eq!(frame[index], base[index], "channel: fill below the body");
+    // No-fill corner rule without board art: the strip below the body
+    // stays byte-identical to the art-less frame.
+    for index in 466 * CHANNEL_PROBE_W..dialog_frame.len() {
+        assert_eq!(
+            dialog_frame[index], base[index],
+            "channel: fill below the body without board art"
+        );
     }
+    // Layered rule with board art: every strip pixel that differs from
+    // the art-less frame must equal the board-only paint (the MENU bar
+    // band is board ink, not invented fill), and the board inks the
+    // strip at all — it stays visible beneath the dialog sheet.
+    let mut strip_diff = false;
+    for index in 466 * CHANNEL_PROBE_W..frame.len() {
+        if frame[index] == base[index] {
+            continue;
+        }
+        strip_diff = true;
+        assert_eq!(
+            frame[index], board_frame[index],
+            "channel: strip ink unexplained by the board at pixel {index}"
+        );
+    }
+    assert!(
+        strip_diff,
+        "channel: staged board inked nothing in the MENU bar strip"
+    );
+}
+
+/// Stage the full planet board figures for the layered channel soak:
+/// the bound `State_Planet` block art (backdrop + emblems + promo +
+/// MENU bar) the channel dialog opens over (`docs/planet.md`).
+fn planet_figures_full(archive: &[u8], list: &ControlList) -> HashMap<String, AvatarFigure> {
+    stage_bound_block(archive, list, PLANET_BLOCK).map_or_else(HashMap::new, |(_, figures)| figures)
 }
 
 #[test]
 fn planet_layers_staged_art_under_the_live_cursor() {
     // The bound planet block stages behind the live chrome: a FREE
-    // click stays unbound (P0), a HARD click records the pick, and
-    // the amber cursor stand-in plus the staged button art all ink
-    // the frame.
+    // click stays unbound (P0), a HARD click records the pick AND
+    // reopens the channel dialog (player-report corroborated,
+    // per-emblem verification pending — docs/planet.md); back on the
+    // board the amber cursor stand-in plus the staged button art all
+    // ink the frame.
     let path = archive_path(INTERFACE_ARCHIVE);
     let Some((archive, list)) = interface_and_list() else {
         println!("skip planet: missing {}", path.display());
@@ -469,11 +553,22 @@ fn planet_layers_staged_art_under_the_live_cursor() {
         None,
         "planet: DRUM click must stay unbound (P0)"
     );
+    assert_eq!(
+        game.screen(),
+        Screen::Planet,
+        "unbound clicks stay on the board"
+    );
     game.click_planet(313 + 73, 32 + 56);
     assert_eq!(
         game.planet_selection(),
         Some(o2jam_shell::screens::side::PlanetBand::Hard)
     );
+    assert_eq!(
+        game.screen(),
+        Screen::Channel,
+        "planet: lit emblem reopens the channel dialog"
+    );
+    assert!(game.enter_screen(Screen::Planet), "dialog X → board");
     let frame = painted(&mut game, 0);
     assert_composed(&frame, &staged, &[AMBER_CURSOR], "planet");
 }

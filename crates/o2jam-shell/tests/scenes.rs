@@ -409,7 +409,7 @@ fn flow_allows_every_documented_edge() {
         (Screen::Channel, Screen::Planet),
         (Screen::Room, Screen::Waiting),
         (Screen::Room, Screen::Channel),
-        (Screen::Planet, Screen::Room),
+        (Screen::Planet, Screen::Channel),
         (Screen::Waiting, Screen::Loading),
         (Screen::Waiting, Screen::Room),
         (Screen::Loading, Screen::Playing),

@@ -104,6 +104,25 @@ impl SceneArt {
     }
 }
 
+/// Reference-measured dialog X ("close") zone in native px
+/// (`/tmp/chan2-list.png`, measured x560-620 by y150-195, modulo
+/// button chrome — exe-OPEN): the native X button (557,195) reads
+/// inside it. Clicking it closes the channel dialog and returns to
+/// the bare planet board (`docs/planet.md` "Real board structure",
+/// 2026-11-09 captures).
+pub(crate) const CHANNEL_DIALOG_X_RECT: Rect = Rect {
+    x: 557,
+    y: 150,
+    w: 63,
+    h: 46,
+};
+
+/// True while native pixel (`x`, `y`) sits inside the measured
+/// channel-dialog X zone (see [`CHANNEL_DIALOG_X_RECT`]).
+pub(crate) fn channel_dialog_x_hit(x: i32, y: i32) -> bool {
+    rect_hit(&CHANNEL_DIALOG_X_RECT, x, y)
+}
+
 /// Slot of one screen in the per-scene art table.
 #[must_use]
 pub const fn scene_index(screen: Screen) -> usize {
@@ -778,21 +797,32 @@ fn paint_channel_dialog_body(frame: &mut Frame<'_>, art: &SceneArt) -> bool {
     true
 }
 
-/// Paint staged channel art with the live list and cursor on top.
-/// With empty art the shell stages zero pixels (pinned no-fill rule per
-/// `docs/channel-fill.md`: no fill call is evidenced) but still starts
-/// from device black: the live loop reuses one backbuffer across screens
-/// while the exe rebuilds every frame, so without this the previous
-/// screen (e.g. the splash logo) would linger behind the list.
-/// Black matches the pinned art-less shot, not invented art.
+/// Paint staged channel art with the live list and cursor on top,
+/// over the planet board beneath. Verified first screen (2026-11-09
+/// captures, `docs/planet.md` "Real board structure" + `docs/lifecycle.md`
+/// §6 correction): the channel dialog (opaque 800x466 sheet covering
+/// y0-468) opens OVER the planet board (launcher `My_channel`/
+/// `My_planet` preselection), so `board` — the bound `State_Planet`
+/// block placements when staged: backdrop + emblem buttons + promo +
+/// MENU bar — paints first and its MENU bar ink stays visible in the
+/// bottom strip (y>468) under the dialog. No-fill corner: without
+/// staged figures (board or dialog) nothing paints and the frame
+/// starts from device black (the live loop reuses one backbuffer
+/// across screens while the exe rebuilds every frame); pixels no art
+/// covers stay untouched, and without board art the strip below the
+/// dialog stays byte-identical to the art-less frame.
 pub fn paint_channel_scene(
     frame: &mut Frame<'_>,
     channels: &[ChannelState],
     highlight: usize,
     art: &SceneArt,
+    board: Option<&SceneArt>,
 ) {
-    if !art.has_figures() {
+    if !art.has_figures() && !board.is_some_and(|board| board.has_figures()) {
         frame.buf.fill(0);
+    }
+    if let Some(board) = board.filter(|board| board.has_figures()) {
+        board.paint_backdrop(frame, Screen::Planet);
     }
     paint_channel_dialog_body(frame, art);
     art.paint_backdrop(frame, Screen::Channel);
@@ -4323,6 +4353,7 @@ mod paint_tests {
             &two_channels(),
             0,
             &art,
+            None,
         );
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
@@ -6255,6 +6286,7 @@ mod paint_tests {
             &two_channels(),
             0,
             &art,
+            None,
         );
         assert_eq!(buf[0], pack_xrgb(255, 0, 0), "the authored anchor");
         assert_eq!(buf[70 * 128 + 100], 0, "no canvas-wide stretch");
@@ -7468,6 +7500,7 @@ mod paint_tests {
             &[],
             0,
             &art,
+            None,
         );
         assert_eq!(buf[0], 0);
         assert!(!buf.contains(&background_of(Screen::Channel)));
@@ -7522,6 +7555,7 @@ mod paint_tests {
             &two_channels(),
             0,
             &art,
+            None,
         );
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
@@ -7569,6 +7603,7 @@ mod paint_tests {
             &two_channels(),
             0,
             &art,
+            None,
         );
         let green = pack_xrgb(0x00, 0xFF, 0x00);
         // Body ink inside the measured panel band, outside row chrome.
@@ -7602,6 +7637,7 @@ mod paint_tests {
             &two_channels(),
             0,
             &art,
+            None,
         );
         let blue = pack_xrgb(0x00, 0x00, 0xFF);
         // Face of viewport slot 0 (native 502,236 + 44x21 art).
@@ -7632,6 +7668,7 @@ mod paint_tests {
             &two_channels(),
             0,
             &art,
+            None,
         );
         assert!(buf.contains(&CHANNEL_ENTER_TONE));
     }
@@ -7653,6 +7690,98 @@ mod paint_tests {
         assert_eq!(channel_row_hit(436, 4), None);
         assert_eq!(channel_row_hit(100, 4), None);
         assert_eq!(channel_row_hit(560, 4), None);
+    }
+
+    #[test]
+    fn channel_dialog_x_hit_uses_the_measured_zone() {
+        // Reference-measured X zone (x560-620 by y150-195 modulo
+        // chrome; `docs/channel-fill.md` 2026-11-09 addendum): the
+        // native X button (557,195) hits; row faces and the pager
+        // strip stay outside it.
+        assert!(channel_dialog_x_hit(557, 195), "the native X button");
+        assert!(channel_dialog_x_hit(590, 170));
+        assert!(!channel_dialog_x_hit(556, 195), "left of the zone");
+        assert!(!channel_dialog_x_hit(557, 196), "below the zone");
+        assert!(!channel_dialog_x_hit(620, 170), "right edge exclusive");
+        assert!(!channel_dialog_x_hit(300, 240), "a row face");
+    }
+
+    #[test]
+    fn channel_scene_paints_the_planet_board_under_the_dialog() {
+        // Verified first screen (docs/planet.md, 2026-11-09): the
+        // channel dialog opens OVER the planet board. The staged
+        // board (bound State_Planet placements: backdrop + emblems +
+        // promo + MENU bar) paints first — its MENU bar band stays
+        // visible in the bottom strip (y>468), under the opaque
+        // dialog sheet — and the no-fill corner rule keeps pixels no
+        // art covers untouched. Board emblem ink inside the dialog's
+        // covered band is replaced by the opaque sheet.
+        let art = SceneArt {
+            placements: Vec::new(),
+            figures: HashMap::from([(
+                CHANNEL_DIALOG_SPRITE.to_owned(),
+                solid_figure(800, 466, [0xE0, 0x03]), // solid green
+            )]),
+        };
+        let board = SceneArt {
+            placements: unbound_scene_placements(&["Board_Backdrop.ojs".to_owned()]),
+            figures: HashMap::from([(
+                "Board_Backdrop.ojs".to_owned(),
+                solid_figure(800, 600, [0x1F, 0x00]), // solid blue
+            )]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_channel_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &two_channels(),
+            0,
+            &art,
+            Some(&board),
+        );
+        let blue = pack_xrgb(0x00, 0x00, 0xFF);
+        let green = pack_xrgb(0x00, 0xFF, 0x00);
+        // The opaque dialog sheet covers y0-468 with its own ink.
+        assert_eq!(buf[100 * 800 + 700], green);
+        // The board's MENU bar band stays visible in the bottom strip.
+        assert_eq!(buf[599 * 800 + 799], blue);
+        assert_eq!(buf[599 * 800], blue);
+        // No-fill corner: with the full-bleed board nothing stays
+        // blank; a board-less corner keeps the rule (see the
+        // dialog-body test above).
+        assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
+        assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xD0, 0x20)));
+    }
+
+    #[test]
+    fn channel_scene_without_board_keeps_the_art_less_strip() {
+        // No board staged: the strip below the 466-tall dialog body
+        // stays untouched (pinned no-fill corner, unchanged rule for
+        // the nothing-beneath case).
+        let art = SceneArt {
+            placements: Vec::new(),
+            figures: HashMap::from([(
+                CHANNEL_DIALOG_SPRITE.to_owned(),
+                solid_figure(800, 466, [0xE0, 0x03]),
+            )]),
+        };
+        let empty_board = SceneArt::default();
+        let mut buf = vec![0u32; 800 * 600];
+        paint_channel_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &two_channels(),
+            0,
+            &art,
+            Some(&empty_board),
+        );
+        assert_eq!(buf[599 * 800 + 799], 0, "no-fill corner untouched");
     }
 
     #[test]

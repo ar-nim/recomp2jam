@@ -8,8 +8,8 @@ use super::super::playing::{HighwayGeometry, LivePlay, PlaySkin};
 use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
-    battle_verdict, channel_row_hit, channel_viewport, has_room_panels, list_row_hit,
-    paint_avi_scene, paint_channel_chat, paint_channel_list, paint_channel_scene,
+    battle_verdict, channel_dialog_x_hit, channel_row_hit, channel_viewport, has_room_panels,
+    list_row_hit, paint_avi_scene, paint_channel_chat, paint_channel_list, paint_channel_scene,
     paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
     paint_lobby_backdrop, paint_music_shop_scene, paint_myroom_scene, paint_planet_scene,
     paint_playing_overlay, paint_result, paint_result_scene, paint_room_list, paint_room_scene,
@@ -1028,10 +1028,16 @@ impl ScreenGame {
         true
     }
 
-    /// Channel row click: highlight the band, then advance like
-    /// Confirm while the draft is action-free (slash drafts consume
-    /// the click instead of starting).
-    fn click_channel_row(&mut self, _x: i32, y: i32) {
+    /// Channel dialog click: the measured X zone closes the dialog
+    /// back to the bare planet board (reference-measured, modulo
+    /// chrome; `docs/planet.md`), otherwise a row band highlights the
+    /// entry and advances like Confirm while the draft is action-free
+    /// (slash drafts consume the click instead of starting).
+    fn click_channel_row(&mut self, x: i32, y: i32) {
+        if channel_dialog_x_hit(x, y) {
+            self.enter(Screen::Planet);
+            return;
+        }
         // Viewport-relative bands: the visible slot maps back through
         // the highlight-following viewport (see `channel_viewport`).
         let (top, shown) = channel_viewport(self.highlight, self.channels.len());
@@ -1580,11 +1586,16 @@ impl ScreenGame {
     }
 
     /// Planet board click: record the difficulty pick at the pinned
-    /// `.bnd` button rects. FREE/DRUM hits change nothing (P0), and
-    /// the pick's confirm action is evidence-OPEN (docs/planet.md
-    /// OPEN 6), so this is a labeled no-op beyond the selection state.
+    /// `.bnd` button rects, then reopen the channel dialog through
+    /// the flow gate when a lit emblem (HARD/NORMAL/EASY) was hit —
+    /// player-report corroborated, per-emblem dynamic verification
+    /// pending (`docs/planet.md`). FREE/DRUM stay unbound (P0). The
+    /// amber-cursor stand-in stays labeled OPEN.
     pub fn click_planet(&mut self, x: i32, y: i32) {
-        let _hit = self.planet.click(x, y);
+        let hit = self.planet.click(x, y);
+        if hit.and_then(|hit| hit.band()).is_some() {
+            self.enter(Screen::Channel);
+        }
     }
 
     /// Picked planet difficulty band, if any (paint/hit-test driver).
@@ -1710,12 +1721,22 @@ impl ScreenGame {
     }
 
     /// Channel: staged art behind the live list, flat card fallback.
-    /// Live 2013/2014/2019 rows paint below the list in both cases;
-    /// empty histories paint nothing.
+    /// The channel dialog opens OVER the planet board (verified first
+    /// screen, `docs/planet.md`): the staged bound `State_Planet`
+    /// block (backdrop + emblems + promo + MENU bar) paints beneath
+    /// the opaque dialog sheet while the dialog art is staged. Live
+    /// 2013/2014/2019 rows paint below the list in both cases; empty
+    /// histories paint nothing.
     fn paint_channel(&self, frame: &mut Frame<'_>) {
         match (self.scene_art(Screen::Channel), self.channels.is_empty()) {
             (Some(art), false) => {
-                paint_channel_scene(frame, &self.channels, self.highlight, art);
+                paint_channel_scene(
+                    frame,
+                    &self.channels,
+                    self.highlight,
+                    art,
+                    self.scene_art(Screen::Planet),
+                );
             }
             (Some(art), true) => paint_lobby_backdrop(frame, Screen::Channel, art),
             (None, false) => paint_channel_list(frame, &self.channels, self.highlight),
