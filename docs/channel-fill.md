@@ -566,3 +566,20 @@ by other docs/code and untouched here).
    row colors) stay open in their owning files, now grounded by exe
    colors `0xdedede`/`0x71e6`.
 
+## Static mount-position scan (2026-11-09): negative
+
+Byte walk of files `0x8dd10`–`0x8e000` around the bar fetch looked
+for pushed mount coordinates (x, y, width, height immediates) and
+found none: flag pushes `0`/`1`, alloc `0x170`, count `9`, lookup
+argument `0x30E`, control codes, two style colors (`0xC3C3C3` at
+file `0x8df08`, `0x4F4F4F` at file `0x8df17`), a five-iteration loop
+(bound file `0x8debc`) over planet TEXT base `0x19400007` (files
+`0x8dec9`/`0x8dee4`/`0x8def0`), and lookups `0x1950000c`/
+`0x19201005`/`0x19201006` (files `0x8de2d`/`0x8df50`/`0x8df70`).
+Button hosts `0x4f6040`/`0x524dd0` and text host `0x50f160` hold no
+rect immediates either. Select-bar x/y/width/height, title-bar,
+X-button, pager-arrow, MENU-bar, and planet-tab rects stay OPEN —
+no position invented. Next evidence path: dynamic rect reads under
+the Wine rig (pairing getter file `0x48640`), which needs no canvas
+input.
+
