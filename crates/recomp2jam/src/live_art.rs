@@ -448,6 +448,43 @@ mod live_art_tests {
     }
 
     #[test]
+    fn planet_paints_real_art_when_archives_present() {
+        // The walk cannot reach Planet without invented input, so this
+        // paints the staged scene directly: real art must ink the frame
+        // beyond the flat card.
+        use o2jam_render::Frame;
+        if skip_without_archives() {
+            return;
+        }
+        let archive = read_archive(INTERFACE_ARCHIVE).expect("guarded archive");
+        let list = control_list(&archive, INTERFACE_LIST).expect("guarded list");
+        let Some((placements, figures)) =
+            stage_bound_block(&archive, &list, PLANET_BLOCK, None, None)
+        else {
+            panic!("planet: unstaged bound block");
+        };
+        let art = o2jam_shell::screens::paint::SceneArt {
+            placements,
+            figures,
+        };
+        let width = usize::try_from(o2jam_render::NATIVE_WIDTH).unwrap_or(1);
+        let height = usize::try_from(o2jam_render::NATIVE_HEIGHT).unwrap_or(1);
+        let mut buf = vec![0u32; width * height];
+        o2jam_shell::screens::paint::paint_planet_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: width,
+                h: height,
+            },
+            &art,
+        );
+        assert!(
+            buf.iter().any(|pixel| *pixel != 0),
+            "planet staged art paints nothing"
+        );
+    }
+
+    #[test]
     fn room_paint_uses_staged_bound_art_when_archives_present() {
         if skip_without_archives() {
             return;
