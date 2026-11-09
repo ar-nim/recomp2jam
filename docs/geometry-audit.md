@@ -241,13 +241,15 @@ Total audited: 133 named constants.
   paint.rs:429–439), `CHANNEL_VISIBLE_ROWS`, `CHANNEL_PAGER_Y` — read
   the hosting `CStatePlanet` dialog object the way the row rects were
   read (`docs/channel-fill.md`).
-- Room row-text inset `ROOM_ROW_TEXT_DX/DY` (paint.rs:1074–1075) — exe
-  GDI text offset.
-- Waiting chat pitch `WAITING_CHAT_ROW_H` and caret
-  `WAITING_CHAT_CARET_INSET/SIZE` (paint.rs:2325–2335).
 - Playing combo row `COMBO_ROW_ABOVE_LINE` (playing.rs:268) and avatar
   plate offsets `AVATAR_LEVEL_OFFSET`/`AVATAR_LIFE_OFFSET`
-  (playing.rs:2492–2496).
+  (playing.rs:2492–2496) — STILL OPEN 2026-11-10: blocked by the
+  Attempt-13 loading wedge under Wine (tee trace: full play handshake
+  completes, then silence + frozen loading art; relay refuted;
+  suspect DXSurface play-surface init). Next: winedbg stopped-state
+  read of the play-stage init (lesson 9e297) or a Windows rig.
+  (Room inset, waiting chat pitch, and caret were pinned in the
+  2026-11-09 rig session — see the DONE rows above.)
 
 ## Surprises
 

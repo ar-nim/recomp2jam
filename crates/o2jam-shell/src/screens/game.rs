@@ -4185,7 +4185,10 @@ mod game_tests {
             },
             0,
         );
-        assert!(white_near(&buf, 800, 600, (60, 83)));
+        // Exe-measured 2026-11-09 (rig session, ~/scratch/geom-open-close):
+        // the combined row string anchors at panel origin +12/+12 —
+        // panel 0 at (26,82) puts the number glyphs at (38,94).
+        assert!(white_near(&buf, 800, 600, (38, 94)));
     }
 
     #[test]

@@ -1096,13 +1096,15 @@ fn paint_room_rows(
     }
 }
 
-/// Reference-measured room row-text inset inside a panel: number text
-/// starts ~34 px right and ~1 px below the panel origin on the live
-/// Wine capture (`/tmp/aa-room.png`; panel 0 rect `(26,82)`, number top
-/// `y≈83`). Reference-grade only — no exe consumer pins it (OPEN).
-/// Scales to the frame like staged placements do.
-const ROOM_ROW_TEXT_DX: i32 = 34;
-const ROOM_ROW_TEXT_DY: i32 = 1;
+/// Exe-measured room row-text inset inside a panel (live rig session
+/// 2026-11-09, `~/scratch/geom-open-close/` `t2-room-stage.png`/
+/// `t2-grid.png`): the combined row string anchors at the number
+/// plate glyphs, panel origin +12/+12 — the old photo note (+34/+1,
+/// `/tmp/aa-room.png`) was a misread and is retired. Title text sits
+/// at (+64,+11), the count at (+194,+10); `State_Room.bnd` digit
+/// rects r45..47 (11x13) confirm the number origin on screen.
+const ROOM_ROW_TEXT_DX: i32 = 12;
+const ROOM_ROW_TEXT_DY: i32 = 12;
 
 /// Room rows at their staged `.bnd` panel origins, bare on the
 /// panel art (no scrim: the panels carry their own chrome). Rooms
@@ -2352,23 +2354,23 @@ const WAITING_CHAT_EDIT_RECT: Rect = Rect {
     w: 440,
     h: 20,
 };
-/// Row pitch of the history box: the reference rows sit 17 native px
-/// apart (row tops at native y 455.4/472.5/489.8 in
-/// `reference-waiting-4x3.png`), and six 17 px slots fill the 98 px
-/// `LIST` rect exactly. The `TEXT_SWAIT_CHAT` template carries no
-/// per-row staged rect — rows stack from the list origin, so the
-/// exact row-feed call stays OPEN while the pitch is photo-pinned.
+/// Row pitch of the history box, EXE-MEASURED 2026-11-09 (live rig
+/// session, six 3011 rows in `~/scratch/geom-open-close/t1-chat-box.png`):
+/// glyph tops at 456+17k, five 17 px intervals exact. (The earlier
+/// photo-derived pitch agreed at 17.) Only the newest 5 rows render.
 const WAITING_CHAT_ROW_H: i32 = 17;
-/// Rows visible in the history box: the [`WAITING_CHAT_ROW_H`] slots
-/// that fit the 98 px `LIST` rect.
-const WAITING_CHAT_VISIBLE_ROWS: usize = 6;
-/// Focus-caret inset inside the input rect: the reference shows the
-/// caret bar starting at native (25, 568) inside `EDIT_SWAIT_CHAT`
-/// rect 19 `(20,563,460,583)` (`reference-waiting-4x3.png`, empty
-/// input).
-const WAITING_CHAT_CARET_INSET: (i32, i32) = (5, 5);
-/// Focus-caret bar size: a 2x10 white bar in the same photo.
-const WAITING_CHAT_CARET_SIZE: (u32, u32) = (2, 10);
+/// Rows visible in the history box: EXE-OBSERVED 5 — the 98 px `LIST`
+/// rect fits five 17 px rows and the sixth slot stays empty (rig
+/// session 2026-11-09, `t1-chat-box.png`); was a 6-row derivation.
+const WAITING_CHAT_VISIBLE_ROWS: usize = 5;
+/// Focus-caret inset inside the input rect, EXE-MEASURED (rig session
+/// 2026-11-09, `t1-waiting-empty.png`; capture before any canvas click
+/// — the caret hides when the edit loses focus): caret ink bbox
+/// (23,570) inside `EDIT_SWAIT_CHAT` rect 19 `(20,563,460,583)`.
+const WAITING_CHAT_CARET_INSET: (i32, i32) = (3, 7);
+/// Focus-caret bar size, EXE-MEASURED: solid core 1 px at x=24, rows
+/// 570..578 (rig session 2026-11-09, same capture).
+const WAITING_CHAT_CARET_SIZE: (u32, u32) = (2, 9);
 
 /// One waiting-room chat row from a live 3012/3013 packet
 /// (`ScreenGame` converts `WaitingUserMessage`/`WaitingAdminMessage`
@@ -4716,13 +4718,15 @@ mod paint_tests {
         };
         let white = pack_xrgb(0xFF, 0xFF, 0xFF);
         let amber = pack_xrgb(0xFF, 0xD0, 0x20);
+        // Exe-measured 2026-11-09: the row string anchors at panel
+        // origin +12/+12 — panel 0 (26,82) puts the glyphs at (38,94).
         assert!(
-            window_has_ink(26, 82, 90, 10, white),
+            window_has_ink(38, 94, 90, 10, white),
             "first room inks its staged left-top panel"
         );
         assert!(
-            window_has_ink(20, 177, 90, 10, amber),
-            "highlight cursor rides the staged second panel"
+            window_has_ink(26, 189, 90, 10, amber),
+            "highlight cursor rides the staged second panel (+12/+12 anchor)"
         );
         assert!(
             !window_has_ink(200, 150, 60, 6, white),
@@ -7185,13 +7189,14 @@ mod paint_tests {
     }
 
     #[test]
-    fn waiting_chat_rows_stack_at_the_reference_pitch() {
-        // Reference rows sit 17 native px apart (rows at y 455.4,
-        // 472.5, 489.8 in `reference-waiting-4x3.png`); six 17 px
-        // slots fill the 98 px `LIST` rect exactly.
+    fn waiting_chat_rows_stack_at_the_exe_measured_pitch() {
+        // Exe-measured 2026-11-09 (rig session, six live 3011 rows in
+        // ~/scratch/geom-open-close/t1-chat-box.png): glyph tops at
+        // 456+17k; only the newest 5 rows render in the 98 px list.
         assert_eq!(waiting_chat_row_y(455, 0), 455);
         assert_eq!(waiting_chat_row_y(455, 1), 472);
-        assert_eq!(waiting_chat_row_y(455, WAITING_CHAT_VISIBLE_ROWS - 1), 540);
+        assert_eq!(waiting_chat_row_y(455, WAITING_CHAT_VISIBLE_ROWS - 1), 523);
+        assert_eq!(WAITING_CHAT_VISIBLE_ROWS, 5);
     }
 
     #[test]
@@ -7206,9 +7211,10 @@ mod paint_tests {
     #[test]
     fn waiting_chat_without_live_rows_paints_only_the_caret() {
         // No packets → no history (the no-invention pin); the input
-        // line still shows its focus caret (`reference-waiting-4x3.png`
-        // shows exactly this state: empty history-less rows, caret in
-        // the edit rect) — a 2x10 white bar inset (5,5) of rect 19.
+        // line still shows its focus caret (exe-measured 2026-11-09,
+        // ~/scratch/geom-open-close/t1-waiting-empty.png: empty
+        // history, caret ink bbox (23,570) 2x9 inside rect 19) — inset
+        // (3,7) of the edit rect.
         let placements = vec![
             waiting_probe("IDC_LIST_SWAIT_CHAT", None, (24, 455, 511, 553)),
             waiting_probe("IDC_EDIT_SWAIT_CHAT", None, (20, 563, 460, 583)),
@@ -7230,12 +7236,12 @@ mod paint_tests {
             .filter(|(_, pixel)| **pixel != 0)
             .map(|(index, _)| index)
             .collect();
-        assert_eq!(lit.len(), 20, "only the 2x10 caret may light");
+        assert_eq!(lit.len(), 18, "only the 2x9 caret may light");
         for index in lit {
             assert_eq!(buf[index], art_title_ink());
             let (x, y) = (index % 800, index / 800);
-            assert!((25..=26).contains(&x), "caret x {x}");
-            assert!((568..=577).contains(&y), "caret y {y}");
+            assert!((23..=24).contains(&x), "caret x {x}");
+            assert!((570..=578).contains(&y), "caret y {y}");
         }
     }
 
@@ -7365,11 +7371,12 @@ mod paint_tests {
         );
         assert_eq!(buf[561 * 800 + 16], 0, "no scrim band over the draft");
         assert!(has_ink_near(&buf, art_title_ink()));
-        // The caret rides the insertion point: inset (5,5) plus the
-        // typed width (empty-input case: `reference-waiting-4x3.png`).
-        let caret_x = 20 + 5 + text_width(input) as i32;
-        assert_eq!(buf[568 * 800 + caret_x as usize], art_title_ink());
-        assert_eq!(buf[577 * 800 + (caret_x + 1) as usize], art_title_ink());
+        // The caret rides the insertion point: exe-measured inset
+        // (3,7) plus the typed width (empty-input case, rig session
+        // 2026-11-09).
+        let caret_x = 20 + 3 + text_width(input) as i32;
+        assert_eq!(buf[570 * 800 + caret_x as usize], art_title_ink());
+        assert_eq!(buf[578 * 800 + (caret_x + 1) as usize], art_title_ink());
     }
 
     #[test]
@@ -7390,8 +7397,10 @@ mod paint_tests {
             "",
             &placements,
         );
-        assert_eq!(buf[568 * 800 + 25], art_title_ink());
-        assert_eq!(buf[577 * 800 + 26], art_title_ink());
+        // Exe-measured caret: inset (3,7) of rect 19, 2x9 bar —
+        // ink at (23,570) and (24,578) (rig session 2026-11-09).
+        assert_eq!(buf[570 * 800 + 23], art_title_ink());
+        assert_eq!(buf[578 * 800 + 24], art_title_ink());
     }
 
     #[test]
