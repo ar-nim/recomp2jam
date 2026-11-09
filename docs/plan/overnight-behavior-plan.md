@@ -31,15 +31,20 @@ touching `o2jam-shell` scenes run sequentially (shared files).
   control codes (owner rule `f38f3`: the `.bnd` controls, code only
   parses; hardcoded constants are scaffolding). New UI wiring uses a
   control-code → action dispatch table, not per-button literals.
-- **REA access**: preferred `mcp__rea__*` (after the owner runs
-  `/reload`); fallback is the `rea` CLI — same engine. Snapshot
-  profile mismatches are resolved with a fresh `rea analyze` (no stale
-  `--snapshot`).
+- **REA access**: `rea` CLI is primary here — Pi Pocket's core has no
+  MCP loader, so `mcp__rea__*` never appears in this environment
+  (the same MCP server is registered for the Pi CLI at
+  `~/.pi/agent/mcp.json`, where `/reload` makes it available;
+  same engine). Snapshot profile mismatches are resolved with a
+  fresh `rea analyze` (no stale `--snapshot`).
 - **Gates before every commit**: `cargo fmt --check`,
   `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace` — with `install-root` present AND hidden
-  (restore after). Agents run `cargo check -p <crate>` only (shared
-  tree); only the font sprint may add crates.io deps / touch root
+  (restore after). The hidden-install-root run is **controller-serial
+  at commit time, never by parallel sprint agents** — renaming
+  `install-root` races concurrent `cargo test` in other sprints.
+  Agents run `cargo check -p <crate>` only (shared tree); only the
+  font sprint may add crates.io deps / touch root
   `Cargo.toml`/`Cargo.lock`.
 - **No `ask`, no human gates.** A failed subagent gets one retry, then
   a documented blocker; the sprint moves on.
@@ -83,7 +88,9 @@ streams A (BGM) and C (font).
   MusicShop→0x10, Result→0x13, option preview→0. Records ONE-BASED
   over `Music/BGM.ojm`. Minimal BGM channel in `o2jam-audio`
   (cpal + lewton via existing decode; loop = repeat until replaced).
-  Files: `crates/o2jam-audio/**` + a minimal scene-change hook.
+  Files: `crates/o2jam-audio/**` + a minimal scene-change hook in
+  `crates/recomp2jam/src/main.rs` **only** (named here so wave-2
+  S0.3 edits to the same file cannot collide unnoticed).
 - **S0.3 planet pack** (`o2jam-shell` planet/channel parts):
   emblem captions (TEXT `0x19400007..0B` → `State_Planet.bnd` rects
   6..10; strings pinned `docs/planet.md`: 사람손 (초급) `0x247ae0`,
@@ -130,14 +137,17 @@ streams A (BGM) and C (font).
 - **E1 channel dialog-open trigger** (emblem → 0x8C mount): static
   writer-site hunt; if dynamic-only, the named next step is a memory
   watch on `parent+0xF6C` during an emblem click (stopped-state
-  winedbg). Writes to `~/scratch/overnight-evidence/`, controller
-  merges into `docs/channel-fill.md`.
+  winedbg). Writes draft evidence to `docs/overnight-evidence/`
+  **in-repo** (described behavior + offsets + evidence IDs only,
+  no original bytes), controller merges into `docs/channel-fill.md`.
 - **E2 Attempt-13 wedge** (playing never starts under Wine): one
   hypothesis per session on the play-stage init (DXSurface suspect;
   relay refuted), else documented blocker with the tee trace.
 
 ## Sequencing
 
+0. Controller creates `docs/overnight-evidence/` (in-repo evidence
+   drafts; committable) before Wave 1.
 1. Wave 1 (parallel): S0.1 (font), S0.2 (BGM), S2 (jam), E1, E2.
 2. Controller commits each landed unit (gates both ways, sequential),
    updates `parity.md`.
