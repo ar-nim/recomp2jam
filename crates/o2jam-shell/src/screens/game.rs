@@ -3889,6 +3889,8 @@ mod game_tests {
             0,
         );
         assert!(white_near(&buf, 800, 600, (200, 232)));
+        assert_eq!(buf[240 * 800 + 210], pack_xrgb(19, 20, 21));
+        assert_eq!(buf[228 * 800 + 350], pack_xrgb(230, 227, 230));
         assert!(ink_near(
             &buf,
             800,

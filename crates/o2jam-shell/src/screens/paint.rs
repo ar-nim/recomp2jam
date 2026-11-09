@@ -299,8 +299,105 @@ pub(crate) fn channel_row_hit(y: i32, row_count: usize) -> Option<usize> {
 const CHANNEL_ENTER_X: i32 = 502;
 const CHANNEL_ENTER_W: i32 = 48;
 const CHANNEL_ENTER_H: i32 = 24;
-/// Button top offset inside a row band in native px (face top 236
-/// minus band top 232 on the live capture).
+/// Reference-measured Channel row chrome in native px (`/tmp/chan2-list.png`;
+/// row 0 only, followers ride the pitch, exe-OPEN): dark name pill
+/// behind the row text, hollow silver track with dark segment bodies
+/// (all rows read empty on the quiet server, so no fill rule is
+/// evidenced — the interior stays whatever the backdrop painted).
+const CHANNEL_PILL_X: i32 = 205;
+const CHANNEL_PILL_Y: i32 = 227;
+const CHANNEL_PILL_W: i32 = 94;
+const CHANNEL_PILL_H: i32 = 35;
+/// Measured pill tone (near-black).
+const CHANNEL_PILL_TONE: u32 = pack_xrgb(19, 20, 21);
+/// Track chrome rect in native px (see above).
+const CHANNEL_TRACK_X: i32 = 297;
+const CHANNEL_TRACK_Y: i32 = 228;
+const CHANNEL_TRACK_W: i32 = 203;
+const CHANNEL_TRACK_H: i32 = 33;
+/// Measured track tones: bright top edge, mid sides and bottom.
+const CHANNEL_TRACK_TOP_TONE: u32 = pack_xrgb(230, 227, 230);
+const CHANNEL_TRACK_SIDE_TONE: u32 = pack_xrgb(150, 148, 150);
+
+/// Channel row chrome for viewport slot `slot`, scaled to the frame:
+/// name pill plus hollow track. Position stand-ins (see above).
+fn paint_channel_row_chrome(frame: &mut Frame<'_>, slot: usize) {
+    let step = i64::from(CHANNEL_ROW_PITCH) * i64::try_from(slot).unwrap_or(0);
+    let shift = i32::try_from(step).unwrap_or(i32::MAX);
+    let pill = scale_rect_to_frame(
+        &Rect {
+            x: CHANNEL_PILL_X,
+            y: CHANNEL_PILL_Y.saturating_add(shift),
+            w: CHANNEL_PILL_W as u32,
+            h: CHANNEL_PILL_H as u32,
+        },
+        frame.w,
+        frame.h,
+    );
+    fill_rect(frame, &pill, CHANNEL_PILL_TONE);
+    let track = scale_rect_to_frame(
+        &Rect {
+            x: CHANNEL_TRACK_X,
+            y: CHANNEL_TRACK_Y.saturating_add(shift),
+            w: CHANNEL_TRACK_W as u32,
+            h: CHANNEL_TRACK_H as u32,
+        },
+        frame.w,
+        frame.h,
+    );
+    let edge = scale_rect_to_frame(
+        &Rect {
+            x: 0,
+            y: 0,
+            w: 2,
+            h: 2,
+        },
+        frame.w,
+        frame.h,
+    );
+    let (ex, ey) = (edge.w as i32, edge.h as i32);
+    let (tx, ty, tw, th) = (track.x, track.y, track.w as i32, track.h as i32);
+    fill_rect(
+        frame,
+        &Rect {
+            x: tx,
+            y: ty,
+            w: track.w,
+            h: ey as u32,
+        },
+        CHANNEL_TRACK_TOP_TONE,
+    );
+    fill_rect(
+        frame,
+        &Rect {
+            x: tx,
+            y: ty + th - ey,
+            w: track.w,
+            h: ey as u32,
+        },
+        CHANNEL_TRACK_SIDE_TONE,
+    );
+    fill_rect(
+        frame,
+        &Rect {
+            x: tx,
+            y: ty,
+            w: ex as u32,
+            h: track.h,
+        },
+        CHANNEL_TRACK_SIDE_TONE,
+    );
+    fill_rect(
+        frame,
+        &Rect {
+            x: tx + tw - ex,
+            y: ty,
+            w: ex as u32,
+            h: track.h,
+        },
+        CHANNEL_TRACK_SIDE_TONE,
+    );
+}
 const CHANNEL_ENTER_DY: i32 = 4;
 /// Measured face tone of the entry button (mid-gray pill).
 const CHANNEL_ENTER_TONE: u32 = pack_xrgb(150, 148, 151);
@@ -441,6 +538,7 @@ fn paint_channel_rows(frame: &mut Frame<'_>, channels: &[ChannelState], highligh
     let text_x = w / 4;
     for (slot, channel) in channels.iter().skip(top).take(shown).enumerate() {
         let row = channel_row_top(slot, h);
+        paint_channel_row_chrome(frame, slot);
         let entry = channel_row_text(channel);
         let ink = if channel.active {
             pack_xrgb(0xFF, 0xFF, 0xFF)
