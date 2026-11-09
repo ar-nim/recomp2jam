@@ -573,7 +573,32 @@ by other docs/code and untouched here).
    row colors) stay open in their owning files, now grounded by exe
    colors `0xdedede`/`0x71e6`.
 
-## Static mount-position scan (2026-11-09): negative
+## Builder-record map (2026-11-09, rdata scan)
+
+Every dialog builder VA resolves through exactly one `.rdata`
+record holding a class COL plus method VAs (offset-only LE32 scan
+of the full image; VA = file + `0x400000`):
+
+| Builder (file) | Record (file) | Class (COL type name) |
+|---|---|---|
+| bar `0x8dd10` | `0x247b20` | `.?AVCStatePlanet@@` |
+| `0x8e990` | `0x247bc0` | `.?AVCStateRoom@@` |
+| `0x984d0` | `0x2485b8` | `.?AVCStateShop@@` |
+| `0xa3730` | `0x249150` | `.?AVCStateMyroom@@` |
+| `0xb6100` | `0x249ae8` | `.?AVCStateWaiting@@` |
+| `0xf3590` | `0x24b5c8` | `.?AVCStatePayment@@` |
+| `0xf4740` | `0x24b7b0` | `.?AVCStatePayment2@@` |
+| `0xf576f` | `0x24b8b8` | `.?AVCStateAvi@@` |
+
+The bar fetcher (`Dialog_ChannelSelectBar.ojs` name ref, sole
+image-wide hit at file `0x8de84`) sits inside `CStatePlanet`'s
+method cluster (same record also holds the planet dispatcher
+`0x48e280` and the `0x19400007` TEXT loop). All ten builders
+share one thiscall shape (this + two args from `[ebp+8]`/`[ebp+0xc]`)
+ending in the stager call — so the BLOCK arrives as an argument,
+not an immediate, and no static scan can name which instance
+stages Channel. The host question mutates: which call passes the
+Channel block, and where does the bar land. No position invented.
 
 Byte walk of files `0x8dd10`–`0x8e000` around the bar fetch looked
 for pushed mount coordinates (x, y, width, height immediates) and
