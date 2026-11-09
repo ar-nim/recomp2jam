@@ -210,14 +210,19 @@ verified bound run (entries 213–229 = ordinals 1–17,
 
 ## Counts per verdict
 
-- DONE: 68 (verified archive/exe source; no action)
+- DONE: 72 (verified archive/exe source; incl. the 2026-11-09 rig
+  pins: room inset +12/+12, waiting chat pitch/caret/row-count; and
+  the A/V-verified select-music photo constants — see the A/V section)
 - FILE: 3 (`SELECT_CHO_SUNG_JAMO`,
   `SELECT_CHO_SUNG_WORDS`,
   `SELECT_CHO_SUNG_PITCH`)
 - RUNTIME: 22 (exe-computed / server / scaled-frame / fallback)
-- CANDIDATE: 22 (all in the select-music dialog)
-- OPEN: 18 (channel chrome 10, room text inset 2, waiting chat 3,
-  playing anchors 3)
+- CANDIDATE: 0 (the 22 select-music rows were upgraded to
+  DONE-exe-output-verified by the 2026-11-10 A/V alignment; the bnd
+  values are documented as contradicted, not applied)
+- OPEN: 13 (channel chrome 10 — partly live-measured 2026-11-09, see
+  the channel rows; playing anchors 3 — blocked by the Attempt-13
+  loading wedge)
 
 Total audited: 133 named constants.
 
