@@ -19,7 +19,9 @@ use o2jam_net::shop::{SellItemResponse, SyncItemPurchasePrefix, SyncItemPurchase
 use o2jam_net::wallet::{
     FreePassType, SyncCashPointResponse, SyncFreePassResponse, SyncFreePassResult,
 };
-use o2jam_net::{CharacterInfo, Difficulty, GameSpeed, GameStatsUpdate};
+use o2jam_net::{
+    CharacterInfo, CreateRoom, Difficulty, GameMode, GameSpeed, GameStatsUpdate, KeyMode,
+};
 use o2jam_render::{pack_xrgb, Frame, Rect};
 
 /// Item-shop block (`CStateShop`, 164 decl entries).
@@ -1388,6 +1390,258 @@ pub const QUIT_MESSAGE_CP949: &[u8] = &[
     0xDA, 0xBD, 0xC0, 0xB4, 0xCF, 0xB1, 0xEE, 0x3F,
 ];
 
+/// Create-room dialog block (`CDCreateRoom`; `ControlList_Interface.txt`
+/// `DIALOG_CREATEROOM`, decl `0x09`/`docs/file-formats/opi.md`).
+pub const CREATE_ROOM_DIALOG_BLOCK: &str = "DIALOG_CREATEROOM";
+/// Create-room layout (`Dialog_CreateRoom.bnd`, 9 rects).
+pub const CREATE_ROOM_BIND_FILE: &str = "Dialog_CreateRoom.bnd";
+/// Password-entry dialog block (`CDInputPassword`; `DIALOG_INPUTPASSWORD`).
+pub const PASSWORD_DIALOG_BLOCK: &str = "DIALOG_INPUTPASSWORD";
+/// Password-entry layout (`Dialog_Password.bnd`, 5 rects).
+pub const PASSWORD_BIND_FILE: &str = "Dialog_Password.bnd";
+/// Create-room CREATE control code (`0X24200002`).
+pub const CREATE_ROOM_CREATE_CODE: u32 = 0x2420_0002;
+/// Create-room CANCEL control code (`0X24200003`).
+pub const CREATE_ROOM_CANCEL_CODE: u32 = 0x2420_0003;
+/// Normal-mode toggle code (`0X2420B004`).
+pub const CREATE_ROOM_NORMAL_MODE_CODE: u32 = 0x2420_B004;
+/// Live-battle-mode toggle code (`0X2420B005`).
+pub const CREATE_ROOM_LIVE_MODE_CODE: u32 = 0x2420_B005;
+/// 3-key toggle code (`0X2420B006`).
+pub const CREATE_ROOM_3KEY_MODE_CODE: u32 = 0x2420_B006;
+/// 7-key toggle code (`0X2420B007`).
+pub const CREATE_ROOM_7KEY_MODE_CODE: u32 = 0x2420_B007;
+/// Title edit code (`0X24300008`).
+pub const CREATE_ROOM_TITLE_CODE: u32 = 0x2430_0008;
+/// Password edit code (`0X24300009`).
+pub const CREATE_ROOM_PASSWORD_CODE: u32 = 0x2430_0009;
+/// Room-create button code (`IDC_BUTTON_SROOM_CREATE`, `0X13200007`).
+pub const ROOM_CREATE_BUTTON_CODE: u32 = 0x1320_0007;
+/// Password-dialog OK code (`0X28200004`, `Dialog_PasswordOK.ojs`).
+pub const PASSWORD_OK_CODE: u32 = 0x2820_0004;
+/// Password-dialog CANCEL code (`0X28200005`, `Dialog_PasswordNO.ojs`).
+pub const PASSWORD_CANCEL_CODE: u32 = 0x2820_0005;
+/// Password-dialog edit code (`0X28300003`).
+pub const PASSWORD_EDIT_CODE: u32 = 0x2830_0003;
+/// Waiting team-button run start (`IDC_BUTTON_SWAIT_TEAMA`, `0X16201004`).
+pub const WAITING_TEAM_FIRST_CODE: u32 = 0x1620_1004;
+/// Waiting team-button run end (`TEAMH`, `0X1620100B`).
+pub const WAITING_TEAM_LAST_CODE: u32 = 0x1620_100B;
+/// Sprite bodies the create-room dialog names, in block order.
+#[must_use]
+pub fn create_room_sprite_names(list: &ControlList) -> Vec<String> {
+    block_sprite_names(list, CREATE_ROOM_DIALOG_BLOCK)
+}
+/// Sprite bodies the password dialog names, in block order.
+#[must_use]
+pub fn password_sprite_names(list: &ControlList) -> Vec<String> {
+    block_sprite_names(list, PASSWORD_DIALOG_BLOCK)
+}
+/// Team index for one waiting team-button code (`TEAMA..H` to 0..7).
+/// Mirrors the dispatch range check `0x16201003 < code < 0x1620100c`
+/// (`FUN_004b22d0`, file `0xb22d0`) and the toggle mapper
+/// `FUN_0048c810` (file `0x8c810`): the press maps to
+/// `code - 0x16201004` and lights exactly that button. `None` outside
+/// the run.
+#[must_use]
+pub const fn waiting_team_for_code(code: u32) -> Option<u8> {
+    match code {
+        WAITING_TEAM_FIRST_CODE..=WAITING_TEAM_LAST_CODE => {
+            match code.wrapping_sub(WAITING_TEAM_FIRST_CODE) {
+                0 => Some(0),
+                1 => Some(1),
+                2 => Some(2),
+                3 => Some(3),
+                4 => Some(4),
+                5 => Some(5),
+                6 => Some(6),
+                _ => Some(7),
+            }
+        }
+        _ => None,
+    }
+}
+/// One create-room dialog action: the code-to-action dispatch output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CreateRoomAction {
+    /// CREATE pressed: commit the dialog (`None` while the title is empty).
+    Commit,
+    /// CANCEL pressed: close without a commit.
+    Cancel,
+    /// Normal-mode toggle.
+    NormalMode,
+    /// Live-battle-mode toggle.
+    LiveMode,
+    /// 3-key toggle.
+    ThreeKey,
+    /// 7-key toggle.
+    SevenKey,
+    /// Title edit focus.
+    FocusTitle,
+    /// Password edit focus.
+    FocusPassword,
+}
+/// Action for one create-room control code (`None` otherwise).
+#[must_use]
+pub const fn create_room_action_for_code(code: u32) -> Option<CreateRoomAction> {
+    match code {
+        CREATE_ROOM_CREATE_CODE => Some(CreateRoomAction::Commit),
+        CREATE_ROOM_CANCEL_CODE => Some(CreateRoomAction::Cancel),
+        CREATE_ROOM_NORMAL_MODE_CODE => Some(CreateRoomAction::NormalMode),
+        CREATE_ROOM_LIVE_MODE_CODE => Some(CreateRoomAction::LiveMode),
+        CREATE_ROOM_3KEY_MODE_CODE => Some(CreateRoomAction::ThreeKey),
+        CREATE_ROOM_7KEY_MODE_CODE => Some(CreateRoomAction::SevenKey),
+        CREATE_ROOM_TITLE_CODE => Some(CreateRoomAction::FocusTitle),
+        CREATE_ROOM_PASSWORD_CODE => Some(CreateRoomAction::FocusPassword),
+        _ => None,
+    }
+}
+/// Create-room action under native pixel (`x`, `y`): staged `.bnd`
+/// rects only — the placement whose code dispatches and whose rect
+/// contains the point (owner rule `f38f3`: geometry from parsed
+/// rects, never literals). `None` while no staged rect covers it.
+#[must_use]
+pub fn create_room_action_at(
+    placements: &[ScenePlacement],
+    x: i32,
+    y: i32,
+) -> Option<CreateRoomAction> {
+    placements.iter().find_map(|placed| {
+        create_room_action_for_code(placed.code)
+            .filter(|_| super::paint::rect_hit(&placed.rect, x, y))
+    })
+}
+/// One password-dialog action: the code-to-action dispatch output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PasswordAction {
+    /// OK pressed: commit the password.
+    Commit,
+    /// CANCEL pressed: close without a commit.
+    Cancel,
+}
+/// Action for one password-dialog control code (`None` otherwise).
+#[must_use]
+pub const fn password_action_for_code(code: u32) -> Option<PasswordAction> {
+    match code {
+        PASSWORD_OK_CODE => Some(PasswordAction::Commit),
+        PASSWORD_CANCEL_CODE => Some(PasswordAction::Cancel),
+        _ => None,
+    }
+}
+/// Password-dialog action under native pixel (`x`, `y`): staged `.bnd`
+/// rects only (see [`create_room_action_at`]).
+#[must_use]
+pub fn password_action_at(placements: &[ScenePlacement], x: i32, y: i32) -> Option<PasswordAction> {
+    placements.iter().find_map(|placed| {
+        password_action_for_code(placed.code).filter(|_| super::paint::rect_hit(&placed.rect, x, y))
+    })
+}
+/// Create-room form behind the dialog: title/password edits plus the
+/// two toggle pairs (Normal/Live battle, 3/7 keys). Caps follow the
+/// `CreateRoom` wire (`ROOM_TITLE_CAP` 22 / `ROOM_PASSWORD_CAP` 12).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CreateRoomForm {
+    /// Title edit (cap 22).
+    pub title: String,
+    /// Password edit (cap 12).
+    pub password: String,
+    /// Battle mode (Live) versus normal.
+    pub live_battle: bool,
+    /// 7-key arena versus 3-key.
+    pub seven_key: bool,
+}
+impl CreateRoomForm {
+    /// Empty form: normal mode, 7-key (the dialog defaults).
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+    /// Type one char into the title edit (cap 22, control chars refused).
+    pub fn push_title_char(&mut self, typed: char) {
+        if typed.is_control() || self.title.chars().count() >= 22 {
+            return;
+        }
+        self.title.push(typed);
+    }
+    /// Erase one title char.
+    pub fn pop_title(&mut self) {
+        self.title.pop();
+    }
+    /// Type one char into the password edit (cap 12, control chars refused).
+    pub fn push_password_char(&mut self, typed: char) {
+        if typed.is_control() || self.password.chars().count() >= 12 {
+            return;
+        }
+        self.password.push(typed);
+    }
+    /// Erase one password char.
+    pub fn pop_password(&mut self) {
+        self.password.pop();
+    }
+    /// Commit body for `CreateRoom` 2004 (`None` while the title is empty:
+    /// every observed CREATE ROOM frame holds the title empty with OK
+    /// never firing, `docs/wine-boot.md`). An empty password means no lock.
+    #[must_use]
+    pub fn commit(&self) -> Option<CreateRoom> {
+        if self.title.is_empty() {
+            return None;
+        }
+        Some(CreateRoom {
+            title: self.title.clone(),
+            key_mode: if self.seven_key {
+                KeyMode::SevenKeys
+            } else {
+                KeyMode::ThreeKeys
+            },
+            game_mode: if self.live_battle {
+                GameMode::Live
+            } else {
+                GameMode::Normal
+            },
+            has_password: !self.password.is_empty(),
+            password: self.password.clone(),
+            min_level: 0,
+            max_level: 99,
+            premium: false,
+        })
+    }
+}
+/// Password-entry form behind the join dialog (cap 12, control chars refused).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PasswordForm {
+    /// Password edit (cap 12).
+    pub password: String,
+}
+impl PasswordForm {
+    /// Empty form.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+    /// Type one char (cap 12, control chars refused).
+    pub fn push_char(&mut self, typed: char) {
+        if typed.is_control() || self.password.chars().count() >= 12 {
+            return;
+        }
+        self.password.push(typed);
+    }
+    /// Erase one char.
+    pub fn pop(&mut self) {
+        self.password.pop();
+    }
+}
+/// Room-dialog modal over the Room lobby (create-room or password entry).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoomDialog {
+    /// Create-room dialog (`DIALOG_CREATEROOM`).
+    CreateRoom,
+    /// Password dialog for one locked room number.
+    Password {
+        /// Room number the password gates.
+        number: i32,
+    },
+}
+
 /// One lanking board row: catalog position, not a score. No score
 /// table ships with the client, and the rank-notification path (the
 /// 2029/4029 family) has no `o2jam-net` decoder — no new opcode is
@@ -2211,6 +2465,98 @@ mod side_tests {
                 assert!(!can_return_side(side, screen), "{side:?} -> {screen:?}");
             }
         }
+    }
+
+    #[test]
+    fn waiting_team_codes_map_run_to_zero_through_seven() {
+        assert_eq!(waiting_team_for_code(WAITING_TEAM_FIRST_CODE), Some(0));
+        assert_eq!(waiting_team_for_code(0x1620_1005), Some(1));
+        assert_eq!(waiting_team_for_code(WAITING_TEAM_LAST_CODE), Some(7));
+        assert_eq!(waiting_team_for_code(0x1620_1003), None);
+        assert_eq!(waiting_team_for_code(0x1620_100C), None);
+    }
+
+    #[test]
+    fn create_room_dialog_dispatch_names_every_control() {
+        assert_eq!(
+            create_room_action_for_code(CREATE_ROOM_CREATE_CODE),
+            Some(CreateRoomAction::Commit)
+        );
+        assert_eq!(
+            create_room_action_for_code(CREATE_ROOM_CANCEL_CODE),
+            Some(CreateRoomAction::Cancel)
+        );
+        assert_eq!(
+            create_room_action_for_code(CREATE_ROOM_NORMAL_MODE_CODE),
+            Some(CreateRoomAction::NormalMode)
+        );
+        assert_eq!(
+            create_room_action_for_code(CREATE_ROOM_LIVE_MODE_CODE),
+            Some(CreateRoomAction::LiveMode)
+        );
+        assert_eq!(
+            create_room_action_for_code(CREATE_ROOM_3KEY_MODE_CODE),
+            Some(CreateRoomAction::ThreeKey)
+        );
+        assert_eq!(
+            create_room_action_for_code(CREATE_ROOM_7KEY_MODE_CODE),
+            Some(CreateRoomAction::SevenKey)
+        );
+        assert_eq!(
+            create_room_action_for_code(CREATE_ROOM_TITLE_CODE),
+            Some(CreateRoomAction::FocusTitle)
+        );
+        assert_eq!(
+            create_room_action_for_code(CREATE_ROOM_PASSWORD_CODE),
+            Some(CreateRoomAction::FocusPassword)
+        );
+        assert_eq!(create_room_action_for_code(0x2400_0000), None);
+        assert_eq!(
+            password_action_for_code(PASSWORD_OK_CODE),
+            Some(PasswordAction::Commit)
+        );
+        assert_eq!(
+            password_action_for_code(PASSWORD_CANCEL_CODE),
+            Some(PasswordAction::Cancel)
+        );
+    }
+
+    #[test]
+    fn create_room_form_commit_gates_title_and_locks_password() {
+        let mut form = CreateRoomForm::new();
+        assert!(form.commit().is_none());
+        for ch in "Jam Room".chars() {
+            form.push_title_char(ch);
+        }
+        let open = form.commit().expect("titled form commits");
+        assert_eq!(open.title, "Jam Room");
+        assert!(!open.has_password);
+        form.push_password_char('x');
+        let locked = form.commit().expect("titled form commits");
+        assert!(locked.has_password);
+        assert_eq!(locked.password, "x");
+    }
+
+    #[test]
+    fn room_dialog_forms_bound_text_at_caps() {
+        let mut form = CreateRoomForm::new();
+        for _ in 0..30 {
+            form.push_title_char('a');
+        }
+        assert_eq!(form.title.chars().count(), 22);
+        for _ in 0..20 {
+            form.push_password_char('b');
+        }
+        assert_eq!(form.password.chars().count(), 12);
+        form.pop_title();
+        assert_eq!(form.title.chars().count(), 21);
+        let mut password = PasswordForm::new();
+        for _ in 0..20 {
+            password.push_char('c');
+        }
+        assert_eq!(password.password.chars().count(), 12);
+        password.pop();
+        assert_eq!(password.password.chars().count(), 11);
     }
 
     #[test]

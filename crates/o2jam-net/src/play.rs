@@ -690,6 +690,127 @@ impl WireMessage for SetDownloadProgress {
 // Memoryer agrees (`WaitingController.Ready()` takes no request).
 song_empty!(Ready, 4008);
 
+/// `SetRoomTeam` 4004: join a waiting-room team (C->S).
+///
+/// One `u8` team index (team 0..7): the toggle-select result
+/// (`pressed - 0x16201004`, the eight `TEAMA..TEAMH` buttons
+/// `0x16201004..0B`). The waiting dispatch `FUN_004b22d0` maps the
+/// pressed button through the toggle helper `FUN_0048c810` (file
+/// `0x8c810`, REA `ev_0f6bbde1...`; also the E1 planet-emblem
+/// toggle) and sends opcode `0xfa4` with that index; when the room-mode
+/// bytes permit it also sends `Ready` 4008 with 0 (ready cleared on a
+/// team switch). Team identity is numeric everywhere — no team RTTI
+/// class — and travels as `u8` in the room frames
+/// (`JoinedRoom::team`, `RoomMember::team`, A-H as 0..7), so the
+/// request repeats that byte.
+///
+/// OPEN: the per-opcode builder case behind the virtual send takes an
+/// `int` argument; byte-width of the encoded team is evidence-pinned
+/// only by the `u8` room fields. Next step — builder-switch dossier
+/// for opcode `0xfa4` (byte vs dword case) plus a live gateway probe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SetRoomTeam {
+    /// Team index (0..7, `TEAMA`..`TEAMH`).
+    pub team: u8,
+}
+
+/// Body length of [`SetRoomTeam`]: one team byte.
+const SET_ROOM_TEAM_BODY_LEN: usize = 1;
+
+/// Team count behind the 4004 toggle (`TEAMA..TEAMH`, 8-wide run).
+const TEAM_COUNT: u8 = 8;
+
+impl WireMessage for SetRoomTeam {
+    const COMMAND: u16 = 4004;
+
+    fn encode_body(&self) -> Vec<u8> {
+        vec![self.team]
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < SET_ROOM_TEAM_BODY_LEN {
+            return Err(Error::TruncatedMessage {
+                need: SET_ROOM_TEAM_BODY_LEN,
+                have: body.len(),
+            });
+        }
+        if body.len() > SET_ROOM_TEAM_BODY_LEN {
+            return Err(Error::TrailingBytes(body.len() - SET_ROOM_TEAM_BODY_LEN));
+        }
+        if body[0] >= TEAM_COUNT {
+            return Err(Error::InvalidField {
+                field: "room team",
+                reason: "not below 8",
+            });
+        }
+        Ok(Self { team: body[0] })
+    }
+}
+
+/// `RoomTeamChanged` 4007: team-change broadcast (S->C).
+///
+/// Five bytes: `u8` member slot (`< 8`) plus the `i32` member key.
+/// Handler `FUN_0055f470` (file `0x15f470`, REA `ev_71e3467...`)
+/// reads the slot size-1 then the key size-4 through the packet-reader
+/// helper `0x555d20`, drops wider slots, refreshes the 8-slot waiting
+/// UI through the stride-`0x2190` member table, and forwards
+/// (`0x12`, 4007, slot, 0) into the UI event queue `0x478d50`.
+/// The new team is NOT on the wire: the handler resolves it from the
+/// member record behind the key (lookup byte at record `+4`, via
+/// `0x540500`/`0x540520`). Shells therefore refresh the slot and
+/// never decode the key itself as a team.
+///
+/// OPEN: the guest slot-fold lookup convention turning the member key
+/// into a team byte (`docs/live-fold gap`) — do not touch here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RoomTeamChanged {
+    /// Member slot (`< 8`; the exe drops wider values).
+    pub slot: u8,
+    /// Member lookup key (resolved to a team via the member record).
+    pub member_key: i32,
+}
+
+/// Body length of [`RoomTeamChanged`]: 1 + 4.
+const ROOM_TEAM_CHANGED_BODY_LEN: usize = 5;
+
+/// Seat count behind the 4007 slot guard (`cmp 8`, file `0x15f470`).
+const TEAM_GUARD_SEAT_COUNT: u8 = 8;
+
+impl WireMessage for RoomTeamChanged {
+    const COMMAND: u16 = 4007;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = Vec::with_capacity(ROOM_TEAM_CHANGED_BODY_LEN);
+        body.push(self.slot);
+        body.extend_from_slice(&self.member_key.to_le_bytes());
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < ROOM_TEAM_CHANGED_BODY_LEN {
+            return Err(Error::TruncatedMessage {
+                need: ROOM_TEAM_CHANGED_BODY_LEN,
+                have: body.len(),
+            });
+        }
+        if body.len() > ROOM_TEAM_CHANGED_BODY_LEN {
+            return Err(Error::TrailingBytes(
+                body.len() - ROOM_TEAM_CHANGED_BODY_LEN,
+            ));
+        }
+        if body[0] >= TEAM_GUARD_SEAT_COUNT {
+            return Err(Error::InvalidField {
+                field: "team slot",
+                reason: "not below 8",
+            });
+        }
+        Ok(Self {
+            slot: body[0],
+            member_key: i32::from_le_bytes([body[1], body[2], body[3], body[4]]),
+        })
+    }
+}
+
 /// `MemberReadyStateChanged` 4009 event: one member flipped readiness.
 ///
 /// Two bytes: `u8` member id, then the ready flag as one `0`/`1` byte.
@@ -1163,6 +1284,8 @@ mod song_sync_tests {
     #[test]
     fn command_ids_match_song_types() {
         assert_eq!(SetRoomMusic::COMMAND, Request::SetRoomMusic as u16);
+        assert_eq!(SetRoomTeam::COMMAND, Request::SetRoomTeam as u16);
+        assert_eq!(RoomTeamChanged::COMMAND, Event::RoomTeamChanged as u16);
         assert_eq!(Ready::COMMAND, Request::Ready as u16);
         assert_eq!(StartGame::COMMAND, Request::StartGame as u16);
         assert_eq!(
@@ -1894,6 +2017,51 @@ mod song_sync_tests {
         let frame = decode_frame(&progress.encode()).unwrap();
         assert_eq!(frame.id, 4038);
         assert_eq!(SetDownloadProgress::decode_frame(&frame), Ok(progress));
+    }
+
+    #[test]
+    fn set_room_team_round_trips_team_byte() {
+        let team = SetRoomTeam { team: 3 };
+        assert_eq!(team.encode_body(), vec![0x03]);
+        let frame = decode_frame(&team.encode()).unwrap();
+        assert_eq!(frame.id, 4004);
+        assert_eq!(SetRoomTeam::decode_frame(&frame), Ok(team));
+    }
+
+    #[test]
+    fn set_room_team_rejects_wide_team() {
+        assert_eq!(
+            SetRoomTeam::decode_body(&[0x08]),
+            Err(Error::InvalidField {
+                field: "room team",
+                reason: "not below 8",
+            })
+        );
+    }
+
+    #[test]
+    fn room_team_changed_round_trips_slot_and_key() {
+        let changed = RoomTeamChanged {
+            slot: 2,
+            member_key: -7,
+        };
+        assert_eq!(changed.encode_body(), vec![0x02, 0xF9, 0xFF, 0xFF, 0xFF]);
+        let frame = decode_frame(&changed.encode()).unwrap();
+        assert_eq!(frame.id, 4007);
+        assert_eq!(RoomTeamChanged::decode_frame(&frame), Ok(changed));
+    }
+
+    #[test]
+    fn room_team_changed_rejects_wide_slot() {
+        let mut body = Vec::from([0x08]);
+        body.extend_from_slice(&0i32.to_le_bytes());
+        assert_eq!(
+            RoomTeamChanged::decode_body(&body),
+            Err(Error::InvalidField {
+                field: "team slot",
+                reason: "not below 8",
+            })
+        );
     }
 
     #[test]

@@ -22,6 +22,7 @@ pub enum Request {
     JoinWaiting = 3002,
     SetRoomMusic = 4000,
     SetRoomArena = 4002,
+    SetRoomTeam = 4004,
     Ready = 4008,
     StartGame = 4010,
     ConfirmMusicLoaded = 4012,
@@ -59,6 +60,7 @@ impl Request {
             3002 => Some(Self::JoinWaiting),
             4000 => Some(Self::SetRoomMusic),
             4002 => Some(Self::SetRoomArena),
+            4004 => Some(Self::SetRoomTeam),
             4008 => Some(Self::Ready),
             4010 => Some(Self::StartGame),
             4012 => Some(Self::ConfirmMusicLoaded),
@@ -163,6 +165,7 @@ pub enum Event {
     RankNotification = 2029,
     RoomSlotUpdate = 3009,
     RoomArenaEcho = 4003,
+    RoomTeamChanged = 4007,
     UserReadyStateChanged = 4009,
     GameStatsUpdate = 4015,
     ScoreSubmission = 4017,
@@ -186,6 +189,7 @@ impl Event {
             2029 => Some(Self::RankNotification),
             3009 => Some(Self::RoomSlotUpdate),
             4003 => Some(Self::RoomArenaEcho),
+            4007 => Some(Self::RoomTeamChanged),
             4009 => Some(Self::UserReadyStateChanged),
             4015 => Some(Self::GameStatsUpdate),
             4017 => Some(Self::ScoreSubmission),
@@ -220,6 +224,7 @@ mod tests {
     #[test]
     fn resolves_song_request_ids() {
         assert_eq!(Request::from_id(4000), Some(Request::SetRoomMusic));
+        assert_eq!(Request::from_id(4004), Some(Request::SetRoomTeam));
         assert_eq!(Request::from_id(4008), Some(Request::Ready));
         assert_eq!(Request::from_id(4010), Some(Request::StartGame));
         assert_eq!(Request::from_id(4012), Some(Request::ConfirmMusicLoaded));
@@ -271,6 +276,7 @@ mod tests {
     fn resolves_game_stats_update_event() {
         assert_eq!(Event::from_id(3009), Some(Event::RoomSlotUpdate));
         assert_eq!(Event::from_id(4003), Some(Event::RoomArenaEcho));
+        assert_eq!(Event::from_id(4007), Some(Event::RoomTeamChanged));
         assert_eq!(Event::from_id(4009), Some(Event::UserReadyStateChanged));
         assert_eq!(Event::from_id(4015), Some(Event::GameStatsUpdate));
         assert_eq!(Event::from_id(4014), None);

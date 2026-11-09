@@ -20,19 +20,20 @@ use super::paint::{
     RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::side::{
-    can_return_side, can_visit_side, paint_side_scene, planet_action_at, select_chosung_cells,
-    select_chosung_layout, select_difficulty_ink, select_music_rows, select_music_songs,
-    select_pager_caption, select_picked_caption, select_search_caption, select_status_line,
-    waiting_song_detail_line, waiting_song_title_line, PlanetAction, PlanetOptionTab,
-    PlanetSelection, SelectMusicRow, SelectMusicSong, SideScreen, PLANET_OPTION_FIRST_TAB,
-    QUIT_CANCEL_CODE, QUIT_OK_CODE, SELECT_ARTIST_RADIO, SELECT_CHO_SUNG_LEFT,
-    SELECT_CHO_SUNG_PITCH, SELECT_CHO_SUNG_ROW_CELLS, SELECT_CHO_SUNG_Y, SELECT_FILTER_BUTTON_H,
-    SELECT_FILTER_BUTTON_PITCH, SELECT_FILTER_BUTTON_TOP, SELECT_FILTER_COLUMNS,
-    SELECT_GENRE_FILTERS, SELECT_HEADER_COLUMNS, SELECT_HEADER_Y, SELECT_LEVEL_FILTERS,
-    SELECT_OK_BUTTON, SELECT_PAGER_RIGHT, SELECT_RESULT_TABS, SELECT_ROW_PITCH, SELECT_ROW_TOP,
-    SELECT_SEARCH_BOX, SELECT_SEARCH_BUTTON, SELECT_SEARCH_Y, SELECT_STATUS_H, SELECT_STATUS_Y,
-    SELECT_TABLE_HEADERS, SELECT_TABLE_LEFT, SELECT_TABLE_WIDTH, SELECT_TITLE_RADIO,
-    SELECT_VISIBLE_ROWS, SELECT_WHEEL_FILTERS,
+    can_return_side, can_visit_side, create_room_action_at, paint_side_scene, password_action_at,
+    planet_action_at, select_chosung_cells, select_chosung_layout, select_difficulty_ink,
+    select_music_rows, select_music_songs, select_pager_caption, select_picked_caption,
+    select_search_caption, select_status_line, waiting_song_detail_line, waiting_song_title_line,
+    waiting_team_for_code, CreateRoomAction, CreateRoomForm, PasswordAction, PasswordForm,
+    PlanetAction, PlanetOptionTab, PlanetSelection, RoomDialog, SelectMusicRow, SelectMusicSong,
+    SideScreen, PLANET_OPTION_FIRST_TAB, QUIT_CANCEL_CODE, QUIT_OK_CODE, SELECT_ARTIST_RADIO,
+    SELECT_CHO_SUNG_LEFT, SELECT_CHO_SUNG_PITCH, SELECT_CHO_SUNG_ROW_CELLS, SELECT_CHO_SUNG_Y,
+    SELECT_FILTER_BUTTON_H, SELECT_FILTER_BUTTON_PITCH, SELECT_FILTER_BUTTON_TOP,
+    SELECT_FILTER_COLUMNS, SELECT_GENRE_FILTERS, SELECT_HEADER_COLUMNS, SELECT_HEADER_Y,
+    SELECT_LEVEL_FILTERS, SELECT_OK_BUTTON, SELECT_PAGER_RIGHT, SELECT_RESULT_TABS,
+    SELECT_ROW_PITCH, SELECT_ROW_TOP, SELECT_SEARCH_BOX, SELECT_SEARCH_BUTTON, SELECT_SEARCH_Y,
+    SELECT_STATUS_H, SELECT_STATUS_Y, SELECT_TABLE_HEADERS, SELECT_TABLE_LEFT, SELECT_TABLE_WIDTH,
+    SELECT_TITLE_RADIO, SELECT_VISIBLE_ROWS, SELECT_WHEEL_FILTERS,
 };
 use crate::MenuKey;
 use o2jam_audio::{song_position_ms, AudioBackend, BgmSelection, PcmSamples, SceneBgm};
@@ -43,7 +44,10 @@ use o2jam_net::rooms::{
     Announcement, MainRoomAdminMessage, MainRoomUserMessage, RankNotification, ReceiveWhisper,
     SendMainRoomMessage, SendWaitingMessage, SendWhisper, WaitingAdminMessage, WaitingUserMessage,
 };
-use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry};
+use o2jam_net::{
+    ChannelState, CreateRoom, JoinRoom, JoinedRoom, Ready, RoomListEntry, RoomTeamChanged,
+    SetRoomTeam,
+};
 use o2jam_render::font::{draw_text_cell, Cell};
 use o2jam_render::{
     draw_text, fill_rect, pack_xrgb, scale_rect_to_frame, text_width, Frame, Rect, Rgb555Image,
@@ -195,6 +199,26 @@ pub struct ScreenGame {
     /// only). Zeroed until staged.
     skill_counts: [u32; 3],
     select_music_art: Option<SceneArt>,
+    /// Open room dialog, if any (create-room or password entry over Room).
+    room_dialog: Option<RoomDialog>,
+    /// Create-room form behind the dialog (cleared on open).
+    create_room_form: CreateRoomForm,
+    /// Password form behind the join dialog (cleared on open).
+    password_form: PasswordForm,
+    /// Staged create-room sheet (`DIALOG_CREATEROOM` placements+figures).
+    create_room_art: Option<SceneArt>,
+    /// Staged password sheet (`DIALOG_INPUTPASSWORD` placements+figures).
+    password_art: Option<SceneArt>,
+    /// Committed create-room body awaiting the session send (2004).
+    pending_create_room: Option<CreateRoom>,
+    /// Committed locked-room join awaiting the session send (3002).
+    pending_join: Option<JoinRoom>,
+    /// Queued team send awaiting the session (4004; the toggle owns it).
+    pending_room_team: Option<SetRoomTeam>,
+    /// Queued ready-clear awaiting the session (4008; the team switch owns it).
+    pending_team_ready: bool,
+    /// Create-room edit focus: title until the password EDIT is hit.
+    create_focus_password: bool,
     battle_teams: RoomTeams,
     battle_self_team: Option<u8>,
     /// Notes of the loaded chart, remembered for the grade plate's
@@ -219,6 +243,16 @@ struct AudioRig {
     bgm_bank: Vec<Option<PcmSamples>>,
 }
 
+/// Team index under native pixel (`x`, `y`): the staged team-button
+/// placement whose code maps through [`waiting_team_for_code`] and
+/// whose parsed `.bnd` rect contains the point (owner rule `f38f3`:
+/// geometry from parsed rects, never literals). `None` elsewhere.
+#[must_use]
+fn waiting_team_at(placements: &[ScenePlacement], x: i32, y: i32) -> Option<u8> {
+    placements.iter().find_map(|placed| {
+        waiting_team_for_code(placed.code).filter(|_| rect_hit(&placed.rect, x, y))
+    })
+}
 /// Stage word behind one room arena value (the Playing applier's
 /// seeding rule, exe `0x4e78db`, `docs/stage-bga.md`): the low 16
 /// bits when a high word is set, the full value otherwise. `None`
@@ -409,6 +443,16 @@ impl ScreenGame {
             song_cover: None,
             skill_counts: [0, 0, 0],
             select_music_art: None,
+            room_dialog: None,
+            create_room_form: CreateRoomForm::new(),
+            password_form: PasswordForm::new(),
+            create_room_art: None,
+            password_art: None,
+            pending_create_room: None,
+            pending_join: None,
+            pending_room_team: None,
+            pending_team_ready: false,
+            create_focus_password: false,
             battle_teams: RoomTeams::new(),
             battle_self_team: None,
             chart_notes: 0,
@@ -582,6 +626,9 @@ impl ScreenGame {
     pub fn enter_screen(&mut self, next: Screen) -> bool {
         let entered = self.flow.go(next).is_ok();
         if entered {
+            if next == Screen::Room {
+                self.room_dialog = None;
+            }
             if next == Screen::Playing {
                 self.song_anchor_sample = self
                     .audio
@@ -691,6 +738,242 @@ impl ScreenGame {
         self
     }
 
+    /// Toggle-select one waiting team button (the toggle-group map).
+    ///
+    /// The pressed `TEAMA..H` button maps to its team index with the
+    /// shared toggle helper `FUN_0048c810` (file `0x8c810`, REA
+    /// `ev_0f6bbde1...`; also the E1 planet-emblem toggle): the helper
+    /// lights exactly the pressed button and returns
+    /// `pressed - 0x16201004` (team 0..7). The highlight always moves
+    /// (`battle_self_team` + the joined room's self team, so the
+    /// staged `Wait_Team?.ojs` highlight follows).
+    ///
+    /// The send follows the dispatch `FUN_004b22d0` (file `0xb22d0`):
+    /// the gate helper `FUN_00556680` (file `0x16680`, opcode-id scan)
+    /// plus the room-mode bytes (`0x77cd30..32`) decide whether the
+    /// press sends. Gated presses only refresh the highlight; ungated
+    /// presses queue `SetRoomTeam` 4004 (team index) then `Ready` 4008
+    /// (ready cleared on a team switch) for the session bridge.
+    ///
+    /// OPEN: the handler-table contents behind the gate helper and the
+    /// room-mode byte meanings are untraced; the shell treats "no
+    /// joined room" as gated (highlight only) and joined as sendable.
+    pub fn select_team(&mut self, team: u8) {
+        // Toggle-group map (FUN_0048c810): exactly the pressed team
+        // lights; the room mirror follows so the staged highlight
+        // tracks the selection.
+        self.battle_self_team = Some(team);
+        if let Some(room) = self.waiting.as_mut() {
+            room.team = team;
+        }
+        // Ungated join sends the pair in exe order (4004 then 4008).
+        // Without a joined room there is no send target (gated arm).
+        if self.waiting.is_some() {
+            self.pending_room_team = Some(SetRoomTeam { team });
+            self.pending_team_ready = true;
+        }
+    }
+    /// Queued team send for the session bridge, if any (4004). One
+    /// take sends once; the next press replaces the queued team.
+    pub fn take_room_team(&mut self) -> Option<SetRoomTeam> {
+        self.pending_room_team.take()
+    }
+    /// Queued ready-clear for the session bridge, if any (4008).
+    /// The team switch queues it directly behind its 4004.
+    pub fn take_team_ready(&mut self) -> Option<Ready> {
+        if self.pending_team_ready {
+            self.pending_team_ready = false;
+            Some(Ready)
+        } else {
+            None
+        }
+    }
+    /// Whether a team-button pair is queued for the session bridge.
+    #[must_use]
+    pub fn has_pending_team_send(&self) -> bool {
+        self.pending_room_team.is_some() || self.pending_team_ready
+    }
+    /// Team broadcast slot-refresh path (4007).
+    ///
+    /// Handler `FUN_0055f470` (file `0x15f470`, REA `ev_71e3467...`)
+    /// guards the slot with `< 8` and forwards `(0x12, 4007, slot, 0)`
+    /// into the UI event queue. This mirrors that forward: `Some(slot)`
+    /// while the slot is accepted (the repaint key), `None` past it.
+    ///
+    /// OPEN: the member-key lookup turning the broadcast key into a
+    /// team byte (guest slot-fold, live-fold gap) — the shell never
+    /// decodes the key as a team; the caller repaints the slot.
+    pub fn apply_room_team_changed(&self, broadcast: &RoomTeamChanged) -> Option<usize> {
+        if broadcast.slot >= 8 {
+            return None;
+        }
+        Some(usize::from(broadcast.slot))
+    }
+    /// Stage the create-room sheet (`DIALOG_CREATEROOM` placements plus
+    /// figures through `bind_scene_rects` on `Dialog_CreateRoom.bnd`).
+    /// Staging never moves the flow.
+    pub fn load_create_room_scene(
+        &mut self,
+        placements: Vec<ScenePlacement>,
+        figures: HashMap<String, AvatarFigure>,
+    ) -> &mut Self {
+        self.create_room_art = Some(SceneArt {
+            placements,
+            figures,
+        });
+        self
+    }
+    /// Stage the password sheet (`DIALOG_INPUTPASSWORD` placements plus
+    /// figures through `bind_scene_rects` on `Dialog_Password.bnd`).
+    /// Staging never moves the flow.
+    pub fn load_password_scene(
+        &mut self,
+        placements: Vec<ScenePlacement>,
+        figures: HashMap<String, AvatarFigure>,
+    ) -> &mut Self {
+        self.password_art = Some(SceneArt {
+            placements,
+            figures,
+        });
+        self
+    }
+    /// Open room dialog, if any.
+    #[must_use]
+    pub fn room_dialog(&self) -> Option<RoomDialog> {
+        self.room_dialog
+    }
+    /// Open the create-room dialog over Room with a cleared form.
+    pub fn open_create_room_dialog(&mut self) {
+        self.create_room_form = CreateRoomForm::new();
+        self.create_focus_password = false;
+        self.room_dialog = Some(RoomDialog::CreateRoom);
+    }
+    /// Open the password dialog for one locked room number.
+    pub fn open_password_dialog(&mut self, number: i32) {
+        self.password_form = PasswordForm::new();
+        self.room_dialog = Some(RoomDialog::Password { number });
+    }
+    /// Committed create-room body awaiting the session send (2004).
+    pub fn take_create_room(&mut self) -> Option<CreateRoom> {
+        self.pending_create_room.take()
+    }
+    /// Committed locked-room join awaiting the session send (3002).
+    pub fn take_join(&mut self) -> Option<JoinRoom> {
+        self.pending_join.take()
+    }
+    /// `CreateRoom` form behind the open dialog.
+    #[must_use]
+    pub fn create_room_form(&self) -> &CreateRoomForm {
+        &self.create_room_form
+    }
+    /// `Password` form behind the open dialog.
+    #[must_use]
+    pub fn password_form(&self) -> &PasswordForm {
+        &self.password_form
+    }
+    /// Room dialog click: the CREATE/CANCEL/mode/edit actions on the
+    /// staged `Dialog_CreateRoom.bnd` rects, or OK/CANCEL on the
+    /// staged `Dialog_Password.bnd` rects. The modal owns Room while
+    /// open; unstaged clicks land nowhere (geometry from parsed
+    /// rects only, owner rule `f38f3`).
+    pub fn click_room_dialog(&mut self, x: i32, y: i32) {
+        match self.room_dialog {
+            Some(RoomDialog::CreateRoom) => {
+                let placements: &[ScenePlacement] = self
+                    .create_room_art
+                    .as_ref()
+                    .map_or(&[], |art| &art.placements);
+                match create_room_action_at(placements, x, y) {
+                    Some(CreateRoomAction::NormalMode) => {
+                        self.create_room_form.live_battle = false;
+                    }
+                    Some(CreateRoomAction::LiveMode) => {
+                        self.create_room_form.live_battle = true;
+                    }
+                    Some(CreateRoomAction::ThreeKey) => {
+                        self.create_room_form.seven_key = false;
+                    }
+                    Some(CreateRoomAction::SevenKey) => {
+                        self.create_room_form.seven_key = true;
+                    }
+                    Some(CreateRoomAction::FocusTitle) => {
+                        self.create_focus_password = false;
+                    }
+                    Some(CreateRoomAction::FocusPassword) => {
+                        self.create_focus_password = true;
+                    }
+                    Some(CreateRoomAction::Commit) => {
+                        if let Some(body) = self.create_room_form.commit() {
+                            self.pending_create_room = Some(body);
+                            self.room_dialog = None;
+                        }
+                    }
+                    Some(CreateRoomAction::Cancel) => {
+                        self.room_dialog = None;
+                    }
+                    None => {}
+                }
+            }
+            Some(RoomDialog::Password { number }) => {
+                let placements: &[ScenePlacement] = self
+                    .password_art
+                    .as_ref()
+                    .map_or(&[], |art| &art.placements);
+                match password_action_at(placements, x, y) {
+                    Some(PasswordAction::Commit) => {
+                        self.pending_join = Some(JoinRoom {
+                            number,
+                            music_state: 0,
+                            password: self.password_form.password.clone(),
+                        });
+                        self.room_dialog = None;
+                        self.enter(Screen::Waiting);
+                    }
+                    Some(PasswordAction::Cancel) => {
+                        self.room_dialog = None;
+                    }
+                    None => {}
+                }
+            }
+            None => {}
+        }
+    }
+    /// Type one char into the open room dialog's focused edit (the last
+    /// EDIT click owns focus; the single password edit owns itself).
+    /// Only Room with a dialog open accepts typing; control chars and
+    /// overlong input never enter (form caps bound the line).
+    pub fn push_room_dialog_char(&mut self, typed: char) {
+        if self.flow.current() != Screen::Room || self.room_dialog.is_none() {
+            return;
+        }
+        match self.room_dialog {
+            Some(RoomDialog::Password { .. }) => self.password_form.push_char(typed),
+            _ => {
+                if self.create_focus_password {
+                    self.create_room_form.push_password_char(typed);
+                } else {
+                    self.create_room_form.push_title_char(typed);
+                }
+            }
+        }
+    }
+    /// Lease turn: no-op kept for symmetry with the chat draft driver.
+    /// Room-dialog deletion routes through [`Self::delete_room_dialog_char`].
+    pub fn delete_room_dialog_char(&mut self) {
+        if self.flow.current() != Screen::Room {
+            return;
+        }
+        match self.room_dialog {
+            Some(RoomDialog::Password { .. }) => self.password_form.pop(),
+            _ => {
+                if self.create_focus_password {
+                    self.create_room_form.pop_password();
+                } else {
+                    self.create_room_form.pop_title();
+                }
+            }
+        }
+    }
     /// Append one player chat line (3012) to the waiting history.
     pub fn push_waiting_user_message(&mut self, message: &WaitingUserMessage) -> &mut Self {
         self.push_chat_row(&message.sender, &message.content_text(), false);
@@ -1202,10 +1485,31 @@ impl ScreenGame {
     /// file order), legacy row bands without them. Either path
     /// highlights the row and advances like Confirm.
     fn click_room_row(&mut self, x: i32, y: i32) {
+        // The CREATE button opens the create-room dialog (lifecycle §7:
+        // `DIALOG_CREATEROOM` `CDCreateRoom`); geometry from the parsed
+        // staged rect only (owner rule `f38f3`).
+        let create_hit = self.scene_art(Screen::Room).is_some_and(|art| {
+            art.placements.iter().any(|placed| {
+                placed.code == super::side::ROOM_CREATE_BUTTON_CODE && rect_hit(&placed.rect, x, y)
+            })
+        });
+        if create_hit {
+            self.open_create_room_dialog();
+            return;
+        }
         let Some(index) = self.room_index_at(x, y) else {
             return;
         };
         self.room_highlight = index;
+        // Locked rooms gate through the password dialog (lifecycle §7:
+        // `DIALOG_INPUTPASSWORD` `CDInputPassword`); unlocked rows join
+        // straight to Waiting.
+        if let Some(room) = self.rooms.get(index) {
+            if room.has_password {
+                self.open_password_dialog(room.number);
+                return;
+            }
+        }
         self.enter(Screen::Waiting);
     }
 
@@ -1261,6 +1565,13 @@ impl ScreenGame {
             return;
         };
         let placements = &art.placements;
+        // Team buttons first: the toggle-group map (`FUN_0048c810`,
+        // `waiting_team_for_code`) lights the pressed team and queues
+        // the 4004+4008 send pair through `select_team`.
+        if let Some(team) = waiting_team_at(placements, x, y) {
+            self.select_team(team);
+            return;
+        }
         let back = WAITING_BACK_IDS
             .iter()
             .any(|id| staged_rect_hit(placements, id, x, y));
@@ -2062,6 +2373,66 @@ impl ScreenGame {
             (None, false) => paint_room_list(frame, &self.rooms, self.room_highlight),
             (None, true) => paint_screen(frame, Screen::Room),
         }
+        // The open room dialog layers over the lobby: staged sheet
+        // first, then the form texts at the parsed edit rects. Empty
+        // fields paint nothing (the staged plate shows through).
+        match self.room_dialog {
+            Some(RoomDialog::CreateRoom) => {
+                if let Some(art) = self.create_room_art.as_ref() {
+                    art.paint_overlay(frame);
+                    self.paint_create_room_texts(frame, &art.placements);
+                }
+            }
+            Some(RoomDialog::Password { .. }) => {
+                if let Some(art) = self.password_art.as_ref() {
+                    art.paint_overlay(frame);
+                    self.paint_password_text(frame, &art.placements);
+                }
+            }
+            None => {}
+        }
+    }
+    /// Create-room texts at the parsed title/password edit rects.
+    fn paint_create_room_texts(&self, frame: &mut Frame<'_>, placements: &[ScenePlacement]) {
+        for (code, text) in [
+            (
+                super::side::CREATE_ROOM_TITLE_CODE,
+                self.create_room_form.title.as_str(),
+            ),
+            (
+                super::side::CREATE_ROOM_PASSWORD_CODE,
+                self.create_room_form.password.as_str(),
+            ),
+        ] {
+            if text.is_empty() {
+                continue;
+            }
+            let Some(placed) = placements.iter().find(|placed| placed.code == code) else {
+                continue;
+            };
+            let scaled = scale_rect_to_frame(&placed.rect, frame.w, frame.h);
+            draw_text(frame, scaled.x, scaled.y, text, 0xFFFF_FFFF);
+        }
+    }
+    /// Password text at the parsed password edit rect.
+    fn paint_password_text(&self, frame: &mut Frame<'_>, placements: &[ScenePlacement]) {
+        if self.password_form.password.is_empty() {
+            return;
+        }
+        let Some(placed) = placements
+            .iter()
+            .find(|placed| placed.code == super::side::PASSWORD_EDIT_CODE)
+        else {
+            return;
+        };
+        let scaled = scale_rect_to_frame(&placed.rect, frame.w, frame.h);
+        draw_text(
+            frame,
+            scaled.x,
+            scaled.y,
+            &self.password_form.password,
+            0xFFFF_FFFF,
+        );
     }
 
     /// Waiting: staged art behind the live seats, flat card fallback,
@@ -2706,6 +3077,11 @@ impl GameLoop for ScreenGame {
                     self.push_channel_char(typed);
                 }
             }
+            Screen::Room => {
+                for typed in text.chars() {
+                    self.push_room_dialog_char(typed);
+                }
+            }
             _ => {}
         }
     }
@@ -2714,6 +3090,7 @@ impl GameLoop for ScreenGame {
         match self.flow.current() {
             Screen::Waiting => self.delete_chat_char(),
             Screen::Channel => self.delete_channel_char(),
+            Screen::Room => self.delete_room_dialog_char(),
             _ => {}
         }
     }
@@ -2724,6 +3101,10 @@ impl GameLoop for ScreenGame {
         }
         if self.planet_modal.is_some() {
             self.click_planet_modal(x, y);
+            return;
+        }
+        if self.flow.current() == Screen::Room && self.room_dialog.is_some() {
+            self.click_room_dialog(x, y);
             return;
         }
         match self.flow.current() {
@@ -3287,7 +3668,10 @@ mod game_tests {
         );
         game.mouse_click(100, 200);
         assert_eq!(game.room_highlight, 1);
-        assert_eq!(game.screen(), Screen::Waiting);
+        // Row 1 is the locked room: the click gates through the
+        // password dialog instead of joining straight to Waiting.
+        assert_eq!(game.room_dialog(), Some(RoomDialog::Password { number: 7 }));
+        assert_eq!(game.screen(), Screen::Room);
     }
 
     #[test]
@@ -4799,6 +5183,109 @@ mod game_tests {
         assert_eq!(game.planet_modal(), None, "Escape closes options");
         game.click_planet(386, 88);
         assert_eq!(game.screen(), Screen::Channel, "board is live again");
+    }
+
+    #[test]
+    fn team_select_lights_joined_and_queues_4004_then_4008() {
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        assert_eq!(game.waiting.as_ref().unwrap().team, 1);
+        game.select_team(5);
+        assert_eq!(game.waiting.as_ref().unwrap().team, 5);
+        assert_eq!(game.battle_self_team, Some(5));
+        assert!(game.has_pending_team_send());
+        assert_eq!(game.take_room_team(), Some(SetRoomTeam { team: 5 }));
+        assert_eq!(game.take_team_ready(), Some(Ready));
+        assert!(!game.has_pending_team_send());
+        assert_eq!(game.take_room_team(), None);
+    }
+
+    #[test]
+    fn team_select_without_room_lights_only() {
+        let mut game = ScreenGame::new();
+        game.select_team(2);
+        assert_eq!(game.battle_self_team, Some(2));
+        assert!(!game.has_pending_team_send());
+        assert_eq!(game.take_room_team(), None);
+    }
+
+    #[test]
+    fn team_broadcast_guards_slot_below_eight() {
+        let game = ScreenGame::new();
+        let accepted = RoomTeamChanged {
+            slot: 3,
+            member_key: 42,
+        };
+        assert_eq!(game.apply_room_team_changed(&accepted), Some(3));
+        let wide = RoomTeamChanged {
+            slot: 8,
+            member_key: 42,
+        };
+        assert_eq!(game.apply_room_team_changed(&wide), None);
+    }
+
+    #[test]
+    fn create_room_commit_needs_title_and_stages_2004() {
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        game.open_create_room_dialog();
+        assert_eq!(game.room_dialog(), Some(RoomDialog::CreateRoom));
+        // Empty title commits nothing; typed title proves the commit.
+        let placements = vec![ScenePlacement {
+            id: "IDC_BUTTON_DCROOM_CREATE".to_owned(),
+            code: crate::screens::side::CREATE_ROOM_CREATE_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 10,
+                y: 10,
+                w: 50,
+                h: 30,
+            },
+        }];
+        let figures = HashMap::new();
+        game.load_create_room_scene(placements, figures);
+        game.click_room_dialog(20, 20);
+        assert_eq!(game.room_dialog(), Some(RoomDialog::CreateRoom));
+        game.push_room_dialog_char('x');
+        game.click_room_dialog(20, 20);
+        assert_eq!(game.room_dialog(), None);
+        let body = game.take_create_room().expect("committed 2004");
+        assert_eq!(body.title, "x");
+        assert!(!body.has_password);
+    }
+
+    #[test]
+    fn password_dialog_commits_join_and_enters_waiting() {
+        let mut game = ScreenGame::new();
+        // Room screen needed for the dialog commit path to advance.
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        game.open_password_dialog(7);
+        let placements = vec![ScenePlacement {
+            id: "IDC_BUTTON_DPASSWORD_OK".to_owned(),
+            code: crate::screens::side::PASSWORD_OK_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 10,
+                y: 10,
+                w: 50,
+                h: 30,
+            },
+        }];
+        game.load_password_scene(placements, HashMap::new());
+        game.push_room_dialog_char('p');
+        game.push_room_dialog_char('w');
+        game.click_room_dialog(20, 20);
+        assert_eq!(game.room_dialog(), None);
+        assert_eq!(game.screen(), Screen::Waiting);
+        let joined = game.take_join().expect("committed 3002");
+        assert_eq!(joined.number, 7);
+        assert_eq!(joined.password, "pw");
     }
 
     #[test]
