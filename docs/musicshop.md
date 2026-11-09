@@ -60,6 +60,12 @@ Inbound `IDC_BUTTON_SROOM_MUSICSHOP 0X13200037`
 shop. EXIT/CASHFILLUP/TOP100/conference buttons on the shop side.
 No transition claimed from buttons alone; dispatch calls unknown.
 
+## Screens (implemented)
+
+Shell screen + paint + flow + live staging — DONE
+   (`Screen::MusicShop`, `paint_music_shop_scene`, all-reject flow,
+   `stage_interface_scenes` + soak tests; clicks land nowhere per P0).
+
 ## OPEN
 
 1. Rect contents → placements.

@@ -51,6 +51,12 @@ back/myroom targets; no `EXIT` id exists in-block. Room side
 `IDC_BUTTON_SROOM_ITEMSHOP 0X13200008` (`Room_ItemShop.ojs`)
 names the inbound button. Names only — no transition claimed.
 
+## Screens (implemented)
+
+Shell screen + paint + flow + live staging — DONE
+   (`Screen::Shop`, `paint_shop_scene`, all-reject flow,
+   `stage_interface_scenes` + soak tests; clicks land nowhere per P0).
+
 ## OPEN
 
 1. Entry/exit dispatch call sites.

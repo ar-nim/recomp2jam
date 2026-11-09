@@ -24,8 +24,8 @@ use o2jam_render::{Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
 use o2jam_shell::avatar::{
     bind_scene_rects, load_archive_sprite, load_scene_figures, load_scene_figures_for_room,
     load_scene_figures_for_stage, scene_block, scene_sprite_names, AvatarFigure, PlayingArtMode,
-    ScenePlacement, AVI_BLOCK, LANKING_BLOCK, LOADING_SPRITE, MYROOM_BLOCK, PLANET_BLOCK,
-    RESULT_BLOCK, ROOM_BLOCK, WAITING_BLOCK,
+    ScenePlacement, AVI_BLOCK, LANKING_BLOCK, LOADING_SPRITE, MUSICSHOP_BLOCK, MYROOM_BLOCK,
+    PLANET_BLOCK, RESULT_BLOCK, ROOM_BLOCK, SHOP_BLOCK, WAITING_BLOCK,
 };
 use o2jam_shell::screens::paint::{PLAYING_BLOCK, RESULT_WINLOSE_SPRITE};
 use o2jam_shell::screens::side::SELECT_MUSIC_DIALOG_BLOCK;
@@ -165,6 +165,8 @@ fn stage_interface_scenes(game: &mut ScreenGame, archive: &[u8]) {
         (Screen::Waiting, WAITING_BLOCK),
         (Screen::Planet, PLANET_BLOCK),
         (Screen::Lanking, LANKING_BLOCK),
+        (Screen::Shop, SHOP_BLOCK),
+        (Screen::MusicShop, MUSICSHOP_BLOCK),
     ] {
         if let Some((placements, figures)) = stage_bound_block(archive, &list, block, None, None) {
             game.load_scene(screen, placements, figures);
@@ -294,7 +296,7 @@ mod live_art_tests {
         control_list, load_scene_figures, read_archive, restage_live_playing, stage_bound_block,
         stage_live_scenes, INTERFACE_ARCHIVE, INTERFACE_LIST, PLAYING_ARCHIVE,
     };
-    use o2jam_shell::avatar::{LANKING_BLOCK, PLANET_BLOCK};
+    use o2jam_shell::avatar::{LANKING_BLOCK, MUSICSHOP_BLOCK, PLANET_BLOCK, SHOP_BLOCK};
 
     /// Archives behind the staging (`true` while `install-root` holds
     /// the 7.55 interface art; the suite stays green without it).
@@ -610,6 +612,114 @@ mod live_art_tests {
         assert!(
             buf.iter().any(|pixel| *pixel != 0),
             "myroom staged art paints nothing"
+        );
+    }
+
+    #[test]
+    fn shop_stages_bound_art_when_archives_present() {
+        // Catalogue rows need item data joins (OPEN); this pins the
+        // staging shape only (gapless ordinal pairing per docs/shop.md).
+        if skip_without_archives() {
+            return;
+        }
+        let archive = read_archive(INTERFACE_ARCHIVE).expect("guarded archive");
+        let list = control_list(&archive, INTERFACE_LIST).expect("guarded list");
+        let Some((placements, figures)) =
+            stage_bound_block(&archive, &list, SHOP_BLOCK, None, None)
+        else {
+            panic!("shop: unstaged bound block");
+        };
+        assert!(!placements.is_empty());
+        assert!(figures.contains_key("State_ItemShop.ojs"));
+    }
+
+    #[test]
+    fn shop_paints_real_art_when_archives_present() {
+        // Unreachable screens still paint through their scene function
+        // directly (see the planet twin).
+        use o2jam_render::Frame;
+        if skip_without_archives() {
+            return;
+        }
+        let archive = read_archive(INTERFACE_ARCHIVE).expect("guarded archive");
+        let list = control_list(&archive, INTERFACE_LIST).expect("guarded list");
+        let Some((placements, figures)) =
+            stage_bound_block(&archive, &list, SHOP_BLOCK, None, None)
+        else {
+            panic!("shop: unstaged bound block");
+        };
+        let art = o2jam_shell::screens::paint::SceneArt {
+            placements,
+            figures,
+        };
+        let width = usize::try_from(o2jam_render::NATIVE_WIDTH).unwrap_or(1);
+        let height = usize::try_from(o2jam_render::NATIVE_HEIGHT).unwrap_or(1);
+        let mut buf = vec![0u32; width * height];
+        o2jam_shell::screens::paint::paint_shop_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: width,
+                h: height,
+            },
+            &art,
+        );
+        assert!(
+            buf.iter().any(|pixel| *pixel != 0),
+            "shop staged art paints nothing"
+        );
+    }
+
+    #[test]
+    fn music_shop_stages_bound_art_when_archives_present() {
+        // Catalogue rows need the song index join (OPEN); this pins
+        // the staging shape only.
+        if skip_without_archives() {
+            return;
+        }
+        let archive = read_archive(INTERFACE_ARCHIVE).expect("guarded archive");
+        let list = control_list(&archive, INTERFACE_LIST).expect("guarded list");
+        let Some((placements, figures)) =
+            stage_bound_block(&archive, &list, MUSICSHOP_BLOCK, None, None)
+        else {
+            panic!("music shop: unstaged bound block");
+        };
+        assert!(!placements.is_empty());
+        assert!(figures.contains_key("State_MShop.ojs"));
+    }
+
+    #[test]
+    fn music_shop_paints_real_art_when_archives_present() {
+        // Unreachable screens still paint through their scene function
+        // directly (see the planet twin).
+        use o2jam_render::Frame;
+        if skip_without_archives() {
+            return;
+        }
+        let archive = read_archive(INTERFACE_ARCHIVE).expect("guarded archive");
+        let list = control_list(&archive, INTERFACE_LIST).expect("guarded list");
+        let Some((placements, figures)) =
+            stage_bound_block(&archive, &list, MUSICSHOP_BLOCK, None, None)
+        else {
+            panic!("music shop: unstaged bound block");
+        };
+        let art = o2jam_shell::screens::paint::SceneArt {
+            placements,
+            figures,
+        };
+        let width = usize::try_from(o2jam_render::NATIVE_WIDTH).unwrap_or(1);
+        let height = usize::try_from(o2jam_render::NATIVE_HEIGHT).unwrap_or(1);
+        let mut buf = vec![0u32; width * height];
+        o2jam_shell::screens::paint::paint_music_shop_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: width,
+                h: height,
+            },
+            &art,
+        );
+        assert!(
+            buf.iter().any(|pixel| *pixel != 0),
+            "music shop staged art paints nothing"
         );
     }
 

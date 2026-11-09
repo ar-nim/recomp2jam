@@ -95,7 +95,10 @@ All **OPEN** (no shell screen, no implementation — documented so no
 pass is ever claimed):
 
 - `STATE_SHOP` / `STATE_MUSICSHOP` (`CStateShop`/`CStateMShop`,
-  `0xA4`/`0x6B`; `Payment` back-ends, `CMyBag`/`CCart`).
+  `0xA4`/`0x6B`; `Payment` back-ends, `CMyBag`/`CCart`). Screens,
+  paint (staged art or flat card, no rows/data), and all-reject
+  flow live; buy/gift/cart/search/sort/pager flows and entry
+  unwired (all OPEN).
 - `STATE_MYROOM` (`0x6A`; `CItemManager`, `CPlayerInfo`). Screen,
   paint (staged anchor art or flat card, no slots/captions), and
   all-reject flow live; slot selection, equip, pager, gift flows,

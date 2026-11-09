@@ -629,6 +629,14 @@ pub const PLANET_BIND_FILE: &str = "State_Planet.bnd";
 pub const LANKING_BLOCK: &str = "STATE_LANKING";
 /// Rankings bind file (73 rects, `docs/lanking.md`).
 pub const LANKING_BIND_FILE: &str = "State_Lanking.bnd";
+/// Item-shop block (gapless codes `0x01..0xBA`, 186 rects).
+pub const SHOP_BLOCK: &str = "STATE_SHOP";
+/// Item-shop bind file (186 rects, `docs/shop.md`).
+pub const SHOP_BIND_FILE: &str = "State_ItemShop.bnd";
+/// Song-shop block (shop/owned/cart row SETs).
+pub const MUSICSHOP_BLOCK: &str = "STATE_MUSICSHOP";
+/// Song-shop bind file (138 rects, `docs/musicshop.md`).
+pub const MUSICSHOP_BIND_FILE: &str = "State_MShop.bnd";
 /// Avatar-room block (bind file declared but absent — anchor paint).
 pub const MYROOM_BLOCK: &str = "STATE_MYROOM";
 /// Waiting seat-cover body: one `Wait_Cover_Avatar.ojs` per seat

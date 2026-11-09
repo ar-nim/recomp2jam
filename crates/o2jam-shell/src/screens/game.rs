@@ -11,12 +11,12 @@ use super::paint::{
     battle_verdict, channel_row_hit, channel_viewport, has_room_panels, list_row_hit,
     paint_avi_scene, paint_channel_chat, paint_channel_list, paint_channel_scene,
     paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
-    paint_lobby_backdrop, paint_myroom_scene, paint_planet_scene, paint_playing_overlay,
-    paint_result, paint_result_scene, paint_room_list, paint_room_scene, paint_screen,
-    paint_waiting_chat, paint_waiting_members, paint_waiting_scene, rect_hit, room_panel_hit,
-    scene_index, staged_rect_hit, BattleVerdict, ChannelChatMessage, LoadingStatus, ResultPaint,
-    ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage, RESULT_BACK_ID,
-    RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    paint_lobby_backdrop, paint_music_shop_scene, paint_myroom_scene, paint_planet_scene,
+    paint_playing_overlay, paint_result, paint_result_scene, paint_room_list, paint_room_scene,
+    paint_screen, paint_shop_scene, paint_waiting_chat, paint_waiting_members, paint_waiting_scene,
+    rect_hit, room_panel_hit, scene_index, staged_rect_hit, BattleVerdict, ChannelChatMessage,
+    LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions,
+    WaitingChatMessage, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::side::{
     can_return_side, can_visit_side, paint_side_scene, select_chosung_cells, select_difficulty_ink,
@@ -156,7 +156,7 @@ pub struct ScreenGame {
     side_origin: Option<Screen>,
     side_placements: Vec<ScenePlacement>,
     side_figures: HashMap<String, AvatarFigure>,
-    scene_art: [Option<SceneArt>; 10],
+    scene_art: [Option<SceneArt>; 12],
 }
 
 /// Key-sound bank plus backend for windowed play.
@@ -1599,6 +1599,28 @@ impl ScreenGame {
             Screen::Planet => self.paint_planet(frame),
             Screen::Lanking => self.paint_lanking(frame),
             Screen::Myroom => self.paint_myroom(frame),
+            Screen::Shop => self.paint_shop(frame),
+            Screen::MusicShop => self.paint_music_shop(frame),
+        }
+    }
+
+    /// Item shop: staged art when present, else the flat card. Buy,
+    /// gift, cart, and set-item flows stay unevidenced — paint only,
+    /// no selection state.
+    fn paint_shop(&self, frame: &mut Frame<'_>) {
+        match self.scene_art(Screen::Shop) {
+            Some(art) => paint_shop_scene(frame, art),
+            None => paint_screen(frame, Screen::Shop),
+        }
+    }
+
+    /// Song shop: staged art when present, else the flat card. Preview,
+    /// download, cart, and buy flows stay unevidenced — paint only,
+    /// no selection state.
+    fn paint_music_shop(&self, frame: &mut Frame<'_>) {
+        match self.scene_art(Screen::MusicShop) {
+            Some(art) => paint_music_shop_scene(frame, art),
+            None => paint_screen(frame, Screen::MusicShop),
         }
     }
 
@@ -2311,6 +2333,9 @@ impl GameLoop for ScreenGame {
             // Avatar-room clicks land nowhere: slot selection, equip,
             // pager, and gift semantics are all unevidenced (P0).
             Screen::Myroom => {}
+            // Shop clicks land nowhere: buy, gift, cart, filter, and
+            // pager semantics are all unevidenced (P0).
+            Screen::Shop | Screen::MusicShop => {}
             Screen::Loading | Screen::Playing => {}
         }
     }

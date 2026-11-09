@@ -31,6 +31,10 @@ pub enum Screen {
     /// Avatar room (`CStateMyroom`, `0x6A`; bind file absent — paints
     /// at sprite anchors, never rects).
     Myroom,
+    /// Item shop (`CStateShop`, `0xA4`; shared Payment backends).
+    Shop,
+    /// Song shop (`CStateMShop`, `0x6B`; `jsBuyMusic` bridge).
+    MusicShop,
 }
 
 /// Rejected screen change.
