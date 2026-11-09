@@ -135,7 +135,29 @@ Player report status: **VERIFIED** as screen composition and emblem
 behavior (family select), with the family-population caveat (only
 family `[0]` had channels on the test server).
 
-## OPEN
+## Emblem caption strings EXE-PINNED (2026-11-10)
+
+The five TEXT controls (`IDC_TEXT_SPLANET_{HARD,NORMAL,EASY,FREE,DRUM}`
+`0x19400007..0B`) paint at `State_Planet.bnd` rects 6..10 (94x13 strips
+at y125-138, ordinal pairing). Their runtime strings ship composed in
+the exe (offset-only scan):
+
+| Control | String | File offset | VA |
+|---|---|---|---|
+| TEXT EASY (`0x19400009`) | `사람손 (초급)` | `0x247ae0` | `0x647ae0` |
+| TEXT NORMAL (`0x19400008`) | `고수손 (중급)` | `0x247af0` | `0x647af0` |
+| TEXT HARD (`0x19400007`) | `신의손 (고급)` | `0x247b00` | `0x647b00` |
+| TEXT DRUM (`0x1940000B`) | `퀘스트` | `0x247acc` | `0x647acc` |
+| TEXT FREE (`0x1940000A`) | `튜토리얼` | `0x247ad4` | `0x647ad4` |
+
+The ControlList authoring comments (`//신의손` etc., lines 790-799) are
+the uncomposed hand names; the exe strings carry hand name + ` (` +
+level band + `)` already composed. Level bands `초급/중급/고급` also sit
+at `0x245414/0x24540c/0x2453fe` (beside `최고급/전체` — the music-select
+filter labels). Rendering follows the owner font decision (modern
+cross-platform rasterizer, decision e8d01); positions/sizes ride the
+bnd rects. Glyph rasterization is presentation; the strings and rects
+are gameplay-pinned as above.
 
 1. ~~Rect contents → placements (pairing getter `0x548640`).~~ DONE above.
 2. Shell screen + paint + flow edges — DONE (`Screen::Planet`,
