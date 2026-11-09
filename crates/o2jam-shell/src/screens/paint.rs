@@ -293,6 +293,48 @@ pub(crate) fn channel_row_hit(y: i32, row_count: usize) -> Option<usize> {
     (index < row_count).then_some(index)
 }
 
+/// Reference-measured entry-button face in native px: `(502, 236)`,
+/// 48 wide, 24 tall, stepping with the row pitch (`/tmp/chan2-list.png`;
+/// row 0 face only — followers ride the pitch, exe-OPEN).
+const CHANNEL_ENTER_X: i32 = 502;
+const CHANNEL_ENTER_Y: i32 = 236;
+const CHANNEL_ENTER_W: i32 = 48;
+const CHANNEL_ENTER_H: i32 = 24;
+/// Measured face tone of the entry button (mid-gray pill).
+const CHANNEL_ENTER_TONE: u32 = pack_xrgb(150, 148, 151);
+
+/// Entry-button plate rect for row `index`, scaled to the frame.
+fn channel_enter_rect(index: usize, w: i32, h: i32) -> Rect {
+    let wide = i64::from(w);
+    let high = i64::from(h);
+    let native_w = i64::from(NATIVE_WIDTH);
+    let native_h = i64::from(NATIVE_HEIGHT);
+    let top = i64::from(CHANNEL_ENTER_Y)
+        + i64::from(CHANNEL_ROW_PITCH) * i64::try_from(index).unwrap_or(0);
+    Rect {
+        x: i32::try_from(i64::from(CHANNEL_ENTER_X) * wide / native_w).unwrap_or(0),
+        y: i32::try_from(top * high / native_h).unwrap_or(0),
+        w: u32::try_from((i64::from(CHANNEL_ENTER_W) * wide / native_w).max(0)).unwrap_or(0),
+        h: u32::try_from((i64::from(CHANNEL_ENTER_H) * high / native_h).max(0)).unwrap_or(0),
+    }
+}
+
+/// Entry-button plates at the measured faces: face-tone boxes as
+/// position stand-ins. The exe button is staged art with baked glyphs
+/// (mount unpinned; the micro-font has no CP949 glyphs), so plates
+/// mark placement, never art.
+fn paint_channel_buttons(frame: &mut Frame<'_>, row_count: usize) {
+    if row_count == 0 || frame.w == 0 || frame.h == 0 {
+        return;
+    }
+    let (w, h) = (
+        i32::try_from(frame.w).unwrap_or(0),
+        i32::try_from(frame.h).unwrap_or(0),
+    );
+    for index in 0..row_count {
+        fill_rect(frame, &channel_enter_rect(index, w, h), CHANNEL_ENTER_TONE);
+    }
+}
 /// Dark strip behind Channel rows, rescaled from the measured native
 /// stack: mirrors [`paint_list_scrim`] shape (2 px bleed) without
 /// sharing its invented anchors.
@@ -330,6 +372,7 @@ fn channel_row_text(channel: &ChannelState) -> String {
 /// the flat fallback and the art scene).
 fn paint_channel_rows(frame: &mut Frame<'_>, channels: &[ChannelState], highlight: usize) {
     paint_channel_scrim(frame, channels.len());
+    paint_channel_buttons(frame, channels.len());
     let w = frame.w as i32;
     let h = frame.h as i32;
     let text_x = w / 4;
