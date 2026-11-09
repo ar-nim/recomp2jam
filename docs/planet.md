@@ -95,6 +95,46 @@ OPEN.
 - **Promo carousel** auto-cycles banners (Halloween NEW ITEM ↔ October
 NEW MUSIC package) with the arrow cells at y511-535.
 
+## Live verification (2026-11-09, `~/scratch/planet-verify/`) — behavior PINNED
+
+Dynamic verification on the real client (SendInput helper; full
+recipe and findings in `~/scratch/planet-verify/findings.md`):
+
+- **One state, one flag**: in BOTH phases (dialog up / bare board)
+the parent keeps the same `CStatePlanet` object mounted at
+`parent+0xF6C` and the descriptor table at `parent+0xF80` is unchanged.
+The dialog visibility is a phase flag at **`parent+0xF64`: 1 = dialog
+shown, 0 = bare board**. `STATE_CHANNEL (0x12)` is never the current
+state — the channel select is a mode of Planet. (The shell's
+`Screen::Channel` ↔ `Screen::Planet` edges model exactly this flag
+flip; the two enum values are phases of one state, not two states.)
+- **The emblems are server channel FAMILIES**, not solo-mission
+difficulties. The dialog auto-opens ~21 s after login with the EASY
+family (H badge) active; the title plate always reads `Channel`.
+  - EASY click (already-active family): no change.
+  - NORMAL click: family switch — M badge selects, rows go blank (the
+    test server lists only family `[0]` channels), a session reconnect
+    follows in 1-2 s.
+  - HARD click: blue popup `network problem, NORMAL mode only (LINE
+    BATTLE disabled)`; no switch. Server-gated, not client logic.
+  - From the bare board, an emblem click reopens the dialog;
+    re-selecting the active family reconnects without re-fetching, so
+    rows stay blank.
+  - QUEST/TUTORIAL untested (dimmed); P0 unbound stands.
+- **Room entry verified live**: one entry-face click (native (526,248))
+on a fresh populated dialog produces server tokens `03EC/0FBE/07D0/
+07D2/13A4` within 2 s and the screen becomes `STATE_ROOM`.
+- **Working click recipe**: boot explorer desktop; XTEST (145,105)
+  then (400,362); dialog up ~+21 s; clear the blue popup at (400,365)
+  before canvas clicks; helper = warp, 1.5 s settle, verify cursor,
+  SendInput; X-close (577,171); emblems (136,88)/(255,88)/(386,88).
+  Under winedbg: PTY, `\r` ends commands, Ctrl-C as `\x03`, one stop
+  only, queue all `x` reads.
+
+Player report status: **VERIFIED** as screen composition and emblem
+behavior (family select), with the family-population caveat (only
+family `[0]` had channels on the test server).
+
 ## OPEN
 
 1. ~~Rect contents → placements (pairing getter `0x548640`).~~ DONE above.
@@ -117,9 +157,10 @@ NEW MUSIC package) with the arrow cells at y511-535.
    the `.bnd` walk pins their y band (511–535) but no x extents.
 5. EXIT/OPTION destinations — same: pinned origins (750,561)/(710,561)
    only, no sizes, so no hit rect and no action.
-6. What a difficulty pick DOES on confirm (solo entry) and the exe's
-   own entry key into Planet — the shot walk uses the verified
-   flow edges via `enter_screen`, no input invented.
+6. What a family pick DOES — VERIFIED 2026-11-09 (live): the emblems
+   are server channel families (see "Live verification"); the exe's
+   own entry key into Planet is moot — Planet IS the boot board and
+the channel dialog auto-opens ~21 s after login.
 7. BGM start trigger and NPC voice role — CLOSED as no-trigger (2026-11-09,
    static scan): all 7 background tracks preload together at audio
    init (function region file `0x1a5710`..`0x1a5fe0` via the index loop

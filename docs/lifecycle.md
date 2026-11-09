@@ -100,9 +100,13 @@ select presents **as a dialog over the planet emblem board** — the
 first interactive screen is the Planet board (five emblems + promo
 carousel + MENU bar) with the `0x8C` channel dialog mounted on top at
 boot; its X button (native (557,195)) closes to the bare board.
-Whether the state machine nominally marks `0x12` current while the
-dialog is up, or Planet stages the dialog directly, awaits the
-current-state field read (in flight).
+VERIFIED 2026-11-09 (live memory reads, `docs/planet.md` "Live
+verification"): **both phases are `State_Planet`** — `CStatePlanet`
+stays mounted at `parent+0xF6C` throughout and a phase flag at
+`parent+0xF64` (1 = dialog, 0 = bare) replaces any state change;
+`0x12` is never the current state. Emblem clicks switch server channel
+families (test server: only family `[0]` populated; HARD is
+server-gated with a NORMAL-only popup).
 
 ### 7. `STATE_ROOM` — multiplayer lobby (`CStateRoom`)
 Decl `0x36`, 76 entries, `State_Room.bnd` (75 rects). Room list with

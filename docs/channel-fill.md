@@ -332,6 +332,18 @@ icons) mirrors the board's own emblem buttons, which pair exactly to
 the pinned `State_Planet.bnd` rects — DRUM rect hosts the dimmed QUEST
 emblem, FREE rect the dimmed TUTORIAL one.
 
+VERIFIED 2026-11-09 (`~/scratch/planet-verify/findings.md`): both
+dialog-up and bare-board phases keep `CStatePlanet` mounted at
+`parent+0xF6C`; the phase flag at **`parent+0xF64`** (1 = dialog, 0 =
+bare) replaces any state change — `0x12` is never current. Emblem
+clicks switch server channel families (EASY active at boot ~21 s
+after login; NORMAL switches with a 1-2 s reconnect; HARD is
+server-gated behind a NORMAL-only popup; re-selecting the active
+family reconnects without re-fetching, rows stay blank). A native
+X click at (577,171) closes the dialog. One entry-face click
+(526,248) on a populated dialog drives `03EC/0FBE/07D0/07D2/13A4`
+and enters `STATE_ROOM`.
+
 # Live memory read (2026-11-09) — geometry and host EXE-PINNED
 
 Dynamic read of the live 7.55 process under Wine (winedbg stopped-state

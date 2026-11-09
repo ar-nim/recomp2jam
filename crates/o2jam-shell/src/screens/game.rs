@@ -1585,11 +1585,12 @@ impl ScreenGame {
         self
     }
 
-    /// Planet board click: record the difficulty pick at the pinned
-    /// `.bnd` button rects, then reopen the channel dialog through
-    /// the flow gate when a lit emblem (HARD/NORMAL/EASY) was hit —
-    /// player-report corroborated, per-emblem dynamic verification
-    /// pending (`docs/planet.md`). FREE/DRUM stay unbound (P0). The
+    /// Planet board click: the emblems are server channel families
+    /// (live-verified 2026-11-09, `docs/planet.md` "Live
+    /// verification"). A lit-emblem hit (HARD/NORMAL/EASY pinned
+    /// `.bnd` rects) records the family pick and reopens the channel
+    /// dialog through the flow gate — the dialog-over-board phase flag
+    /// (`parent+0xF64` in the exe). FREE/DRUM stay unbound (P0). The
     /// amber-cursor stand-in stays labeled OPEN.
     pub fn click_planet(&mut self, x: i32, y: i32) {
         let hit = self.planet.click(x, y);
