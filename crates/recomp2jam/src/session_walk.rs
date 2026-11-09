@@ -126,6 +126,10 @@ pub fn drive_walk(config: &WalkConfig) -> Result<Vec<WalkStage>> {
         opcodes: vec![Request::Authorize as u16, Response::Authorize as u16],
     });
     session.lane_key(3, true);
+    // Emblem-gated dialog (S0.3 boot correction): the bare board
+    // needs a lit-emblem click before the channel list shows.
+    session.game_mut().click_planet(136, 88);
+    require_screen(&session, Screen::Channel, "emblem opens dialog")?;
     paint_stage(&mut session, STAGE_NAMES[1], 0, &config.out_dir)?;
     stages.push(WalkStage {
         name: STAGE_NAMES[1],
@@ -869,6 +873,7 @@ mod session_walk_tests {
         stage_lobby_art(session.game_mut());
         stage_live_lists(&mut session, &report);
         session.lane_key(3, true);
+        session.game_mut().click_planet(136, 88);
         session.menu_key(MenuKey::Confirm, true);
         host_walk_room(&mut session)?;
         session.menu_key(MenuKey::Confirm, true);
@@ -1005,6 +1010,7 @@ mod session_walk_tests {
         game.with_audio(Box::new(NullBackend::new()), bank);
         game.load_chart(vec![(2, PLAYING_NOW_MS, 7)]);
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         for _ in 0..4 {
             game.menu_key(MenuKey::Confirm, true);
         }

@@ -100,7 +100,7 @@ streams A (BGM) and C (font).
   click opens the channel dialog, X closes (the earlier boot auto-open
   observation came from launcher-preselected sessions — documented
   caveat; preselection handling stays OPEN); **dispatch table**
-  control-code → action: power (`IDC_BUTTON_SPLANET_EXIT`, bnd rect 26)
+  control-code → action: power (`IDC_BUTTON_SPLANET_EXIT`, bnd rect 15 — corrected: the file has 17 rects, so rect 26 cannot exist; OPTION is rect 16)
   → quit-confirm (rig-verified popup), gear (`IDC_BUTTON_SPLANET_OPTION`)
   → options dialog (`Dialog_Option_*` art; first-open tab OPEN);
   BGM hooks via S0.2 (Avi 8 once / Planet 9 loop / leave −1).

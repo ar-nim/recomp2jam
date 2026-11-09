@@ -1,9 +1,19 @@
 //! Screen state machine: the 7.55 client flow from launch to results.
 //!
-//! Transition map from `docs/lifecycle.md`: splash → channel → room
-//! → waiting → loading → playing → result, with retry/leave-back
+//! Transition map from `docs/lifecycle.md`: splash → planet (the
+//! bare board) → channel (the dialog over the board) → room →
+//! waiting → loading → playing → result, with retry/leave-back
 //! edges. Only transitions the original performs exist here; the UI
 //! of each screen comes later. Headless by design (no window needed).
+//!
+//! Boot correction (S0.3, owner): the splash dismiss lands on the
+//! bare planet board, and a lit-emblem click opens the channel
+//! dialog over it (the dialog X closes back). The earlier
+//! dialog-at-boot observation came from launcher-preselected
+//! sessions (`My_channel`/`My_planet`, `docs/planet.md`); that
+//! preselection handling stays OPEN and is not modeled — `Channel`
+//! and `Planet` are the dialog-up and bare-board phases of one
+//! state (`parent+0xF64` in the exe), not two boot orders.
 
 /// Visible client screens on the main flow (state IDs from
 /// `ControlList_Interface.txt`; see `docs/lifecycle.md`).
@@ -59,7 +69,7 @@ pub const fn can_enter(from: Screen, to: Screen) -> bool {
     use Screen::{Avi, Channel, Loading, Planet, Playing, Result, Room, Waiting};
     matches!(
         (from, to),
-        (Avi, Channel)
+        (Avi, Planet)
             | (Channel, Room)
             | (Channel, Planet)
             | (Room, Waiting)
@@ -82,6 +92,61 @@ pub struct ScreenFlow {
 }
 
 impl Screen {
+    /// Scene-BGM cue this screen enters with: the `(id, repeat)` its
+    /// entry passes the exe's scene-music selector (file `0x151820`
+    /// = VA `0x551820`, 35 B, forwards `(id, loop)` to the bank
+    /// behind `soundmgr[0x76832C] + 0x340C0`). The `id` is a
+    /// one-based record over `Music/BGM.ojm` (blank entries
+    /// included); [`o2jam_audio::BGM_SILENCE_ID`] (`-1`) stops the
+    /// channel; `repeat` is the exe's loop flag. Every pair was
+    /// re-read on our side (2026-11-11) at the caller's push site
+    /// (file offset = VA − `0x400000`):
+    ///
+    /// | Screen | id | loop | Call site (file offset) |
+    /// |---|---|---|---|
+    /// | Avi | 8 | once | `0xF57D4` |
+    /// | Channel / Planet | 9 | loop | `0x8DE28` |
+    /// | Room | 3 | loop | `0x8EB87` |
+    /// | Shop | 4 | loop | `0x987BE` |
+    /// | Myroom | 5 | loop | `0xA3911` |
+    /// | Waiting | 6 | loop | `0xB62C3` |
+    /// | MusicShop | 10 (decimal) | loop | `0xC6E51` |
+    /// | Result | `0x13` | once | `0xC1CAF` |
+    ///
+    /// On contradictions the exe arbitrates (`docs/coverage-audit.md`
+    /// disagrees twice): the result entry pushes loop `0` (once, not
+    /// loop) and the music-shop entry pushes decimal `10` (record 10
+    /// names the shop track, which is also the records' semantic
+    /// alignment). Result's id `0x13` names no `BGM.ojm` record (the
+    /// bank holds 10 records), so it stays silent here — OPEN:
+    /// identify which bank the worker holds when `0x4C1B90` cues it
+    /// (`BGMwinter.ojm` is the candidate). Loading, playing, and
+    /// lanking hold no pinned cue (no entry among the selector's
+    /// immediate callers names them), so they cue silence; the
+    /// option-preview cue `(0, 1)` exists in-exe but its PCM is
+    /// likewise unresolved. The channel dialog lives inside the
+    /// planet state (the `CStatePlanet` cue covers it).
+    ///
+    /// The windowed client drives every scene entry through this
+    /// table (the `ScreenGame` entry hook); the launch client
+    /// (`recomp2jam/src/main.rs`) delegates its table here so the
+    /// pairs live in one place.
+    #[must_use]
+    pub const fn bgm_cue(self) -> (i32, bool) {
+        use o2jam_audio::BGM_SILENCE_ID;
+        match self {
+            Screen::Avi => (8, false),
+            Screen::Channel | Screen::Planet => (9, true),
+            Screen::Room => (3, true),
+            Screen::Shop => (4, true),
+            Screen::Myroom => (5, true),
+            Screen::Waiting => (6, true),
+            Screen::MusicShop => (10, true),
+            Screen::Result => (0x13, false),
+            Screen::Loading | Screen::Playing | Screen::Lanking => (BGM_SILENCE_ID, false),
+        }
+    }
+
     /// Lobbies hosting the §12 side screens (channel/room/waiting).
     ///
     /// Side views (shop, planet, …) open from these screens and
@@ -143,6 +208,7 @@ mod screen_flow_tests {
     fn walks_full_session_to_results() {
         let mut flow = ScreenFlow::new();
         for next in [
+            Screen::Planet,
             Screen::Channel,
             Screen::Room,
             Screen::Waiting,
@@ -159,6 +225,7 @@ mod screen_flow_tests {
     fn retries_from_result_back_to_waiting() {
         let mut flow = ScreenFlow::new();
         for next in [
+            Screen::Planet,
             Screen::Channel,
             Screen::Room,
             Screen::Waiting,
@@ -175,6 +242,7 @@ mod screen_flow_tests {
     #[test]
     fn leaves_result_for_room_list() {
         let mut flow = ScreenFlow::default();
+        flow.go(Screen::Planet).unwrap();
         flow.go(Screen::Channel).unwrap();
         flow.go(Screen::Room).unwrap();
         flow.go(Screen::Waiting).unwrap();
@@ -188,6 +256,7 @@ mod screen_flow_tests {
     #[test]
     fn backs_out_of_waiting_to_room() {
         let mut flow = ScreenFlow::new();
+        flow.go(Screen::Planet).unwrap();
         flow.go(Screen::Channel).unwrap();
         flow.go(Screen::Room).unwrap();
         flow.go(Screen::Waiting).unwrap();
@@ -231,6 +300,7 @@ mod screen_flow_tests {
     fn rejects_reentering_loading_from_results() {
         let mut flow = ScreenFlow::new();
         for next in [
+            Screen::Planet,
             Screen::Channel,
             Screen::Room,
             Screen::Waiting,
@@ -242,5 +312,27 @@ mod screen_flow_tests {
         }
         assert!(flow.go(Screen::Loading).is_err());
         assert!(flow.go(Screen::Playing).is_err());
+    }
+
+    #[test]
+    fn splash_boots_into_the_bare_planet_board() {
+        // S0.3 owner correction: boot shows the bare board (Planet),
+        // never the dialog-up phase directly — the dialog opens only
+        // through the lit-emblem edge (Planet→Channel). Launcher
+        // preselection handling stays OPEN (see the module docs).
+        let mut flow = ScreenFlow::new();
+        assert!(flow.go(Screen::Channel).is_err());
+        flow.go(Screen::Planet).unwrap();
+        flow.go(Screen::Channel).unwrap();
+        assert_eq!(flow.current(), Screen::Channel);
+    }
+
+    #[test]
+    fn scene_bgm_cues_follow_the_pinned_table() {
+        assert_eq!(Screen::Avi.bgm_cue(), (8, false));
+        assert_eq!(Screen::Planet.bgm_cue(), (9, true));
+        assert_eq!(Screen::Channel.bgm_cue(), (9, true));
+        assert_eq!(Screen::Loading.bgm_cue(), (-1, false));
+        assert_eq!(Screen::Playing.bgm_cue(), (-1, false));
     }
 }

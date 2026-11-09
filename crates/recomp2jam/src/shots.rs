@@ -69,12 +69,14 @@ pub struct Shot {
 /// word, tally counts, and TIME progress show; the scripted key-up
 /// on the tail then spends the chart for Result.
 ///
-/// First-screen walk (verified, `docs/planet.md` 2026-11-09): Avi →
-/// Channel (the dialog over the planet board) → dialog X → Planet
-/// (bare board) → lit-emblem click → Channel (dialog again) → row
-/// confirm → Room → … The lit emblem reopening the dialog is
-/// player-report corroborated with per-emblem dynamic verification
-/// pending; the dialog X button is bnd-pinned ((541,151)-(589,189)).
+/// First-screen walk (verified, `docs/planet.md` 2026-11-09, S0.3
+/// boot correction): Avi → Planet (the bare board) → lit-emblem
+/// click → Channel (the dialog over the board) → row confirm →
+/// Room → … The lit emblem reopening the dialog is player-report
+/// corroborated with per-emblem dynamic verification done (family
+/// select, live 2026-11-09); the dialog X button is bnd-pinned
+/// ((541,151)-(589,189)). Launcher preselection handling stays
+/// OPEN (its boot auto-open is not modeled).
 ///
 /// # Errors
 ///
@@ -84,30 +86,25 @@ pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
     let mut shots = Vec::with_capacity(14);
     shots.push(shoot(&mut game, "avi", 0)?);
     game.lane_key(3, true);
-    // Verified first screen (docs/planet.md "Real board structure",
-    // 2026-11-09 captures): the channel dialog opens OVER the planet
-    // board at boot (launcher My_channel/My_planet preselection) —
-    // the staged bound State_Planet block (backdrop + emblems + promo
-    // + MENU bar) paints beneath the opaque 800x466 dialog sheet and
-    // the MENU bar stays visible in the bottom strip.
-    shots.push(shoot_checked(&mut game, "channel", Screen::Channel, 0)?);
-    // The dialog X button (bnd rect (541,151)-(589,189); a native
-    // click at (577,171) verified to close it, 2026-11-09) closes the
-    // dialog → the bare planet board (five emblems, promo carousel,
-    // MENU bar).
-    game.mouse_click(577, 171);
-    assert_eq!(game.screen(), Screen::Planet, "dialog X → Planet edge");
+    // Boot shows the bare board (S0.3 owner correction): the staged
+    // bound State_Planet block (backdrop + emblems + promo + MENU
+    // bar) with the exe-pinned emblem captions (the `TEXT` strings
+    // over their `.bnd` rects, `docs/planet.md`).
+    assert_eq!(game.screen(), Screen::Planet, "boot → bare board");
     shots.push(shoot_checked(&mut game, "planet", Screen::Planet, 0)?);
     // A lit-emblem click (HARD through its pinned `.bnd` rect)
-    // reopens the channel dialog (player-report corroborated,
-    // per-emblem dynamic verification pending — docs/planet.md) and
-    // records the pick; the amber cursor stand-in stays labeled OPEN.
+    // opens the channel dialog over the board (family select,
+    // live-verified 2026-11-09; the dialog-edge link stays OPEN per
+    // E1) and records the pick; the amber cursor stand-in stays
+    // labeled OPEN. The MENU bar stays visible in the bottom strip
+    // (y>468) beneath the opaque 800x466 dialog sheet.
     game.click_planet(386, 88);
     assert_eq!(game.screen(), Screen::Channel, "lit emblem → Channel");
     assert_eq!(
         game.planet_selection(),
         Some(o2jam_shell::screens::side::PlanetBand::Hard)
     );
+    shots.push(shoot_checked(&mut game, "channel", Screen::Channel, 0)?);
     // Room entry happens only through the channel dialog (entry-button
     // faces; wine-boot.md Attempt 9 verified 입장 clicks advance to the
     // room list): Confirm takes the highlighted row into Room.
@@ -418,6 +415,10 @@ fn stage_single_sprite(
 /// shared [`live_art::stage_channel_dialog`] — one implementation for
 /// the shots walk and the live window.
 pub(crate) use crate::live_art::stage_channel_dialog;
+/// Stage the planet modal sheets (first-open options tab plus the
+/// quit-confirm) through the shared
+/// [`live_art::stage_planet_dialogs`].
+pub(crate) use crate::live_art::stage_planet_dialogs;
 
 /// Stage Interface-archive scenes; each scene stages independently
 /// so one bad block never blanks the rest. Channel stages no block
@@ -442,6 +443,7 @@ fn stage_interface_archive(game: &mut ScreenGame, archive: &[u8]) {
         }
     }
     stage_result_block(game, archive, &list);
+    stage_planet_dialogs(game, archive, &list);
 }
 
 /// Stage the result scene: the `STATE_RESULT` block art plus the
@@ -638,6 +640,7 @@ fn seeded_game_in(room: JoinedRoom) -> ScreenGame {
 fn shoot_guest_waiting() -> anyhow::Result<Shot> {
     let mut guest = seeded_guest_game();
     guest.lane_key(3, true);
+    guest.click_planet(136, 88);
     guest.menu_key(MenuKey::Confirm, true);
     guest.menu_key(MenuKey::Confirm, true);
     shoot_checked(&mut guest, "waiting-guest", Screen::Waiting, 0)
@@ -688,6 +691,7 @@ fn seeded_solo_game() -> ScreenGame {
 fn drive_solo_to_result() -> ScreenGame {
     let mut game = seeded_solo_game();
     game.lane_key(3, true);
+    game.click_planet(136, 88);
     game.menu_key(MenuKey::Confirm, true);
     game.menu_key(MenuKey::Confirm, true);
     stage_select_music_scene(&mut game);
@@ -1356,6 +1360,7 @@ mod tests {
         // record anchor is exact) and arrives at the shot size 2:1.
         let mut game = seeded_game();
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         for _ in 0..4 {
             game.menu_key(MenuKey::Confirm, true);
         }
@@ -1493,6 +1498,7 @@ mod tests {
         assert!(!figures.contains_key("Life_gauge_back.ojs"));
         let paint_native = |game: &mut ScreenGame| {
             game.lane_key(3, true);
+            game.click_planet(136, 88);
             for _ in 0..4 {
                 game.menu_key(MenuKey::Confirm, true);
             }
@@ -1526,6 +1532,7 @@ mod tests {
     fn playing_shot_paints_staged_mid_song_state() {
         let walk_to_playing = |game: &mut ScreenGame| {
             game.lane_key(3, true);
+            game.click_planet(136, 88);
             for _ in 0..4 {
                 game.menu_key(MenuKey::Confirm, true);
             }
@@ -1573,6 +1580,7 @@ mod tests {
         // shell's `VOL <n>` ink at the bound VOLUME rect (705,579).
         let walk_to_playing = |game: &mut ScreenGame| {
             game.lane_key(3, true);
+            game.click_planet(136, 88);
             for _ in 0..4 {
                 game.menu_key(MenuKey::Confirm, true);
             }
@@ -1711,10 +1719,12 @@ mod tests {
         .filter(|side| side_stage_data(*side).is_some())
         .map(side_shot_name)
         .collect();
+        // Boot order (S0.3): the bare board shoots before the dialog
+        // opens over it.
         let mut expected = vec![
             "avi",
-            "channel",
             "planet",
+            "channel",
             "room",
             "waiting",
             "waiting-guest",
@@ -2059,6 +2069,7 @@ mod tests {
         // `channel_shot_stages_dialog_art_inside_the_measured_bands`).
         let mut game = seeded_game();
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         game.load_scene(Screen::Channel, Vec::new(), HashMap::new());
         // The board beneath the dialog is a separate scene slot: clear
         // it too so the art-less frame is deterministic with and
@@ -2096,6 +2107,7 @@ mod tests {
         // Art-less baseline: same seed, both scene slots cleared.
         let mut base = seeded_game();
         base.lane_key(3, true);
+        base.click_planet(136, 88);
         base.load_scene(Screen::Channel, Vec::new(), HashMap::new());
         base.load_scene(Screen::Planet, Vec::new(), HashMap::new());
         let base_frame = paint_native_frame(&mut base, 0);
@@ -2105,6 +2117,7 @@ mod tests {
         stage_channel_dialog(&mut dialog_only, &interface);
         dialog_only.load_scene(Screen::Planet, Vec::new(), HashMap::new());
         dialog_only.lane_key(3, true);
+        dialog_only.click_planet(136, 88);
         assert_eq!(dialog_only.screen(), Screen::Channel);
         let dialog_frame = paint_native_frame(&mut dialog_only, 0);
         let mut inside_core = false;
@@ -2139,10 +2152,12 @@ mod tests {
         let mut board_only = seeded_game();
         board_only.load_scene(Screen::Channel, Vec::new(), HashMap::new());
         board_only.lane_key(3, true);
+        board_only.click_planet(136, 88);
         let board_frame = paint_native_frame(&mut board_only, 0);
         let mut staged = seeded_game();
         stage_channel_dialog(&mut staged, &interface);
         staged.lane_key(3, true);
+        staged.click_planet(136, 88);
         assert_eq!(staged.screen(), Screen::Channel);
         let frame = paint_native_frame(&mut staged, 0);
         let mut strip_diff = false;
@@ -2236,6 +2251,7 @@ mod tests {
         // not.
         let mut game = seeded_game();
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         assert_eq!(game.screen(), Screen::Channel);
         game.mouse_click(300, 240);
         assert_eq!(
@@ -2283,11 +2299,73 @@ mod tests {
         // rects but never select or advance anything.
         let mut game = seeded_game();
         game.lane_key(3, true);
-        assert!(game.enter_screen(Screen::Planet));
         game.click_planet(663, 88);
         game.click_planet(559, 88);
         assert_eq!(game.planet_selection(), None);
         assert_eq!(game.screen(), Screen::Planet);
+    }
+
+    #[test]
+    fn planet_shot_paints_emblem_captions() {
+        // The `TEXT` captions ink their parsed `.bnd` strips
+        // (HARD strip (338,125)-(432,138) native): real art plus
+        // painter ink both count (the painter itself is proven by
+        // the shell's synthetic-caption test).
+        let Some(_interface) = read_archive(INTERFACE_ARCHIVE) else {
+            println!("skip: missing {INTERFACE_ARCHIVE}");
+            return;
+        };
+        let mut game = seeded_game();
+        game.lane_key(3, true);
+        assert_eq!(game.screen(), Screen::Planet, "boot → bare board");
+        let frame = paint_native_frame(&mut game, 0);
+        let mut lit = 0;
+        for row in 125..138 {
+            for col in 338..432 {
+                if frame[row * 800 + col] != frame[125 * 800 + 338] {
+                    lit += 1;
+                }
+            }
+        }
+        assert!(lit > 0, "planet caption strip painted nothing");
+    }
+
+    #[test]
+    fn planet_modals_stage_their_dialog_art() {
+        // Power opens the staged quit-confirm (OK quits through the
+        // dialog-relative hit); gear opens the staged options sheet
+        // and Escape closes it. Guarded: without archives the
+        // fallback popup/title paths are covered by the shell suite.
+        let Some(_interface) = read_archive(INTERFACE_ARCHIVE) else {
+            println!("skip: missing {INTERFACE_ARCHIVE}");
+            return;
+        };
+        let mut game = seeded_game();
+        game.lane_key(3, true);
+        assert_eq!(game.screen(), Screen::Planet);
+        let board = paint_native_frame(&mut game, 0);
+        game.click_planet(769, 580);
+        assert_eq!(
+            game.planet_modal(),
+            Some(o2jam_shell::screens::game::PlanetModal::QuitConfirm)
+        );
+        let popup = paint_native_frame(&mut game, 0);
+        assert_ne!(popup, board, "quit popup painted nothing");
+        // OK center through the dialog-relative rect: origin
+        // (240,189) + (52,181) + half of 107x26.
+        game.mouse_click(345, 383);
+        assert!(game.quit_confirmed(), "staged OK must quit");
+        let mut game = seeded_game();
+        game.lane_key(3, true);
+        game.click_planet(729, 580);
+        assert_eq!(
+            game.planet_modal(),
+            Some(o2jam_shell::screens::game::PlanetModal::Options)
+        );
+        let sheet = paint_native_frame(&mut game, 0);
+        assert_ne!(sheet, board, "options sheet painted nothing");
+        game.menu_key(MenuKey::Back, true);
+        assert_eq!(game.planet_modal(), None, "Escape closes options");
     }
 
     #[test]
@@ -2396,6 +2474,7 @@ mod tests {
     /// drives it.
     fn walk_to_playing(game: &mut ScreenGame) {
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         for _ in 0..4 {
             game.menu_key(MenuKey::Confirm, true);
         }
@@ -2405,6 +2484,7 @@ mod tests {
     /// drives it (the waiting shot's instant).
     fn walk_to_waiting(game: &mut ScreenGame) {
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         for _ in 0..2 {
             game.menu_key(MenuKey::Confirm, true);
         }
@@ -3277,6 +3357,7 @@ mod tests {
         // flow stays on Waiting for the dialog shot.
         let mut game = seeded_game();
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Waiting);
@@ -3329,6 +3410,7 @@ mod tests {
         }
         let mut game = seeded_game();
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
         stage_select_music_scene(&mut game);

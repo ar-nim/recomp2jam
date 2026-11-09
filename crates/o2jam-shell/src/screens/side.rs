@@ -1050,7 +1050,305 @@ impl PlanetSelection {
         }
         Some(hit)
     }
+
+    /// Record a family pick without hit-testing: the dispatch-table
+    /// path ([`planet_action_at`]) already resolved the control, so
+    /// the game records the band the action names. `FREE`/`DRUM`
+    /// never reach here (their action carries no band — P0).
+    pub fn select_band(&mut self, band: PlanetBand) {
+        self.band = Some(band);
+    }
 }
+
+/// Planet board control codes (`ControlList_Interface.txt`
+/// `STATE_PLANET`, lines 790–805): the five emblem buttons
+/// (`0X19201002..06`), the promotion cells (`0X1920000D..0F`,
+/// OPEN — never dispatched), and the MENU-bar EXIT/OPTION discs
+/// (`0X19200010`/`0X19200011`, art `Planet_Btn_Exit.ojs` /
+/// `Planet_Btn_Option.ojs`).
+pub const PLANET_BUTTON_HARD_CODE: u32 = 0x1920_1002;
+/// NORMAL emblem button code (above).
+pub const PLANET_BUTTON_NORMAL_CODE: u32 = 0x1920_1003;
+/// EASY emblem button code (above).
+pub const PLANET_BUTTON_EASY_CODE: u32 = 0x1920_1004;
+/// FREE emblem button code (tutorial, backend never wired — P0).
+pub const PLANET_BUTTON_FREE_CODE: u32 = 0x1920_1005;
+/// DRUM emblem button code (quest, backend never wired — P0).
+pub const PLANET_BUTTON_DRUM_CODE: u32 = 0x1920_1006;
+/// Power disc code: opens the quit-confirm popup (capture-pinned,
+/// `docs/planet.md` "Real board structure"; message + OK/CANCEL in
+/// [`QUIT_MESSAGE_CP949`]).
+pub const PLANET_EXIT_CODE: u32 = 0x1920_0010;
+/// Gear disc code: opens the options dialog (live-pinned: the gear
+/// opens the 옵션 dialog and Escape closes it, `docs/wine-boot.md`
+/// input probes; the first-open tab stays OPEN below).
+pub const PLANET_OPTION_CODE: u32 = 0x1920_0011;
+/// HARD caption code (`IDC_TEXT_SPLANET_HARD`).
+pub const PLANET_TEXT_HARD_CODE: u32 = 0x1940_0007;
+/// NORMAL caption code (`IDC_TEXT_SPLANET_NORMAL`).
+pub const PLANET_TEXT_NORMAL_CODE: u32 = 0x1940_0008;
+/// EASY caption code (`IDC_TEXT_SPLANET_EASY`).
+pub const PLANET_TEXT_EASY_CODE: u32 = 0x1940_0009;
+/// FREE caption code (`IDC_TEXT_SPLANET_FREE`).
+pub const PLANET_TEXT_FREE_CODE: u32 = 0x1940_000A;
+/// DRUM caption code (`IDC_TEXT_SPLANET_DRUM`).
+pub const PLANET_TEXT_DRUM_CODE: u32 = 0x1940_000B;
+
+/// One planet-board action: the control-code → action dispatch
+/// table's output ([`planet_action_for_code`]). Board input routes
+/// here, never through per-button literals at the call site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanetAction {
+    /// Emblem pressed: `Some(band)` for the lit families
+    /// (HARD/NORMAL/EASY — family pick), `None` for the dimmed
+    /// QUEST/TUTORIAL emblems (unbound, P0: no backend ever
+    /// existed, the pick changes nothing).
+    Emblem {
+        /// Family band, or `None` for the unbound emblems.
+        band: Option<PlanetBand>,
+    },
+    /// Power disc: open the quit-confirm popup.
+    QuitConfirm,
+    /// Gear disc: open the options dialog.
+    OptionsDialog,
+}
+
+/// Action for one planet control code (`None` for every other
+/// code: promotion cells, BACK, self — promotion semantics stay
+/// OPEN, `docs/planet.md` OPEN 4). The emblem arm is the
+/// family-select half of the exe handler (E1,
+/// `docs/overnight-evidence/e1-channel-dialog-trigger.md`:
+/// family-index write + reconnect); the dialog-open half is the
+/// shell's OPEN stand-in link (see `ScreenGame::click_planet`).
+#[must_use]
+pub const fn planet_action_for_code(code: u32) -> Option<PlanetAction> {
+    match code {
+        PLANET_BUTTON_HARD_CODE => Some(PlanetAction::Emblem {
+            band: Some(PlanetBand::Hard),
+        }),
+        PLANET_BUTTON_NORMAL_CODE => Some(PlanetAction::Emblem {
+            band: Some(PlanetBand::Normal),
+        }),
+        PLANET_BUTTON_EASY_CODE => Some(PlanetAction::Emblem {
+            band: Some(PlanetBand::Easy),
+        }),
+        PLANET_BUTTON_FREE_CODE | PLANET_BUTTON_DRUM_CODE => {
+            Some(PlanetAction::Emblem { band: None })
+        }
+        PLANET_EXIT_CODE => Some(PlanetAction::QuitConfirm),
+        PLANET_OPTION_CODE => Some(PlanetAction::OptionsDialog),
+        _ => None,
+    }
+}
+
+/// EXIT disc rect, pinned by the `State_Planet.bnd` walk (rect 15:
+/// (750,561)-(788,599); `docs/planet.md` ordinal pairing). The
+/// S0.3 plan's "bnd rect 26" cannot exist: the bind file carries
+/// 17 rects (0..16), and ordinal `(code & 0xFFF) − 1` pairs EXIT
+/// (`0X19200010`) to rect 15 and OPTION (`0X19200011`) to rect 16
+/// — both rects verified against the shipped bytes 2026-11-10.
+pub const PLANET_EXIT_RECT: Rect = Rect {
+    x: 750,
+    y: 561,
+    w: 38,
+    h: 38,
+};
+/// OPTION disc rect, pinned by the `.bnd` walk (rect 16:
+/// (710,561)-(748,599); `docs/planet.md`; see [`PLANET_EXIT_RECT`]
+/// for the rect-26 correction).
+pub const PLANET_OPTION_RECT: Rect = Rect {
+    x: 710,
+    y: 561,
+    w: 38,
+    h: 38,
+};
+
+/// Board action under native pixel (`x`, `y`): staged `.bnd`
+/// rects first (the placement whose code dispatches and whose
+/// rect contains the point), the pinned rect table when nothing
+/// is staged (art-less parity, like [`planet_hit`]). `None`
+/// everywhere else — promotion cells stay OPEN and land nowhere.
+#[must_use]
+pub fn planet_action_at(placements: &[ScenePlacement], x: i32, y: i32) -> Option<PlanetAction> {
+    placements
+        .iter()
+        .find_map(|placed| {
+            planet_action_for_code(placed.code)
+                .filter(|_| super::paint::rect_hit(&placed.rect, x, y))
+        })
+        .or_else(|| planet_action_fallback_at(x, y))
+}
+
+/// Fallback arm of [`planet_action_at`]: the pinned `.bnd` rects
+/// (buttons from [`PLANET_HARD_RECT`]/kin, discs from
+/// [`PLANET_EXIT_RECT`]/[`PLANET_OPTION_RECT`]) for stages without
+/// placements. The values are the parsed bind rects verbatim (the
+/// audit-DONE pattern); staged art always wins when present.
+fn planet_action_fallback_at(x: i32, y: i32) -> Option<PlanetAction> {
+    for (rect, code) in [
+        (PLANET_HARD_RECT, PLANET_BUTTON_HARD_CODE),
+        (PLANET_NORMAL_RECT, PLANET_BUTTON_NORMAL_CODE),
+        (PLANET_EASY_RECT, PLANET_BUTTON_EASY_CODE),
+        (PLANET_FREE_RECT, PLANET_BUTTON_FREE_CODE),
+        (PLANET_DRUM_RECT, PLANET_BUTTON_DRUM_CODE),
+        (PLANET_EXIT_RECT, PLANET_EXIT_CODE),
+        (PLANET_OPTION_RECT, PLANET_OPTION_CODE),
+    ] {
+        if super::paint::rect_hit(&rect, x, y) {
+            return planet_action_for_code(code);
+        }
+    }
+    None
+}
+
+/// One emblem caption: the `TEXT` control code plus its runtime
+/// string (CP949 bytes, decoded through `o2jam-text`). The five
+/// strings ship composed in the exe (`docs/planet.md` "Emblem
+/// caption strings EXE-PINNED"); positions ride the staged
+/// `.bnd` rects (ordinals 6..10), never literals here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlanetCaption {
+    /// `TEXT` control code (`0X19400007..0B`).
+    pub code: u32,
+    /// Runtime string, CP949 bytes.
+    pub cp949: &'static [u8],
+}
+
+/// Emblem captions in code order (HARD, NORMAL, EASY, FREE, DRUM):
+/// `신의손 (고급)` at file `0x247b00` (VA `0x647b00`),
+/// `고수손 (중급)` at `0x247af0`, `사람손 (초급)` at `0x247ae0`,
+/// `튜토리얼` at `0x247ad4`, `퀘스트` at `0x247acc` (all
+/// `docs/planet.md`). Bytes are the CP949 encodings of those
+/// strings (decoded and asserted in the side tests).
+pub const PLANET_CAPTIONS: [PlanetCaption; 5] = [
+    PlanetCaption {
+        code: PLANET_TEXT_HARD_CODE,
+        cp949: &[
+            0xBD, 0xC5, 0xC0, 0xC7, 0xBC, 0xD5, 0x20, 0x28, 0xB0, 0xED, 0xB1, 0xDE, 0x29,
+        ],
+    },
+    PlanetCaption {
+        code: PLANET_TEXT_NORMAL_CODE,
+        cp949: &[
+            0xB0, 0xED, 0xBC, 0xF6, 0xBC, 0xD5, 0x20, 0x28, 0xC1, 0xDF, 0xB1, 0xDE, 0x29,
+        ],
+    },
+    PlanetCaption {
+        code: PLANET_TEXT_EASY_CODE,
+        cp949: &[
+            0xBB, 0xE7, 0xB6, 0xF7, 0xBC, 0xD5, 0x20, 0x28, 0xC3, 0xCA, 0xB1, 0xDE, 0x29,
+        ],
+    },
+    PlanetCaption {
+        code: PLANET_TEXT_FREE_CODE,
+        cp949: &[0xC6, 0xA9, 0xC5, 0xE4, 0xB8, 0xAE, 0xBE, 0xF3],
+    },
+    PlanetCaption {
+        code: PLANET_TEXT_DRUM_CODE,
+        cp949: &[0xC4, 0xF9, 0xBD, 0xBA, 0xC6, 0xAE],
+    },
+];
+
+/// Caption for one `TEXT` control code (`None` for every other
+/// code). The painter looks the code up in the staged placements
+/// to find its `.bnd` rect — geometry only ever comes from the
+/// parsed bind file (owner rule `f38f3`).
+#[must_use]
+pub const fn planet_caption_for_code(code: u32) -> Option<PlanetCaption> {
+    let mut index = 0;
+    while index < PLANET_CAPTIONS.len() {
+        let caption = PLANET_CAPTIONS[index];
+        if caption.code == code {
+            return Some(caption);
+        }
+        index += 1;
+    }
+    None
+}
+
+/// Options-dialog tab: one per `Dialog_Option_*` block
+/// (`ControlList_Interface.txt`; the blocks name each other's
+/// tab buttons for switching). The gear opens the dialog
+/// (live-pinned, `docs/wine-boot.md`); which tab it opens on
+/// first stays OPEN (see [`PLANET_OPTION_FIRST_TAB`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanetOptionTab {
+    /// Key bindings (`DIALOG_OPTION_KEY`, line 1242).
+    Key,
+    /// Sound sliders (`DIALOG_OPTION_SOUND`, line 1281).
+    Sound,
+    /// Game effects (`DIALOG_OPTION_GAME`, line 1611).
+    Game,
+}
+
+impl PlanetOptionTab {
+    /// `ControlList` block for this tab.
+    #[must_use]
+    pub const fn block_name(self) -> &'static str {
+        match self {
+            Self::Key => "DIALOG_OPTION_KEY",
+            Self::Sound => "DIALOG_OPTION_SOUND",
+            Self::Game => "DIALOG_OPTION_GAME",
+        }
+    }
+
+    /// `.bnd` layout file for this tab.
+    #[must_use]
+    pub const fn bind_file(self) -> &'static str {
+        match self {
+            Self::Key => "Dialog_Option_Key.bnd",
+            Self::Sound => "Dialog_Option_Sound.bnd",
+            Self::Game => "Dialog_Option_Game.bnd",
+        }
+    }
+
+    /// Dialog EXIT code for this tab (`Option_Exit.ojs` buttons:
+    /// `0X25200017` / `0X26200012` / `0X2F20000F`, lines 1274 /
+    /// 1302 / 1629). Pressing it closes the dialog (Escape closes
+    /// it too — live-pinned, `docs/wine-boot.md`). Tab switching
+    /// (`SOUNDSET`/`GAMESET`/`KEYSET` buttons) stays OPEN and is
+    /// not dispatched.
+    #[must_use]
+    pub const fn exit_code(self) -> u32 {
+        match self {
+            Self::Key => 0x2520_0017,
+            Self::Sound => 0x2620_0012,
+            Self::Game => 0x2F20_000F,
+        }
+    }
+}
+
+/// First-open tab stand-in: the Key block (first in
+/// `ControlList_Interface.txt` file order). OPEN: no capture or
+/// static pin shows which tab the gear opens first. Named next
+/// step — rig capture of a gear click (`~/scratch/planet-verify/`
+/// recipe: boot explorer desktop, dismiss the notice, SendInput
+/// click the gear disc at native ~(729,580), capture the dialog).
+/// Tab switching stays unimplemented until then.
+pub const PLANET_OPTION_FIRST_TAB: PlanetOptionTab = PlanetOptionTab::Key;
+
+/// Quit-confirm dialog block: the `MESSAGE` popup the power disc
+/// opens (OK/CANCEL, `docs/planet.md` + capture `exit-state.png`).
+/// The block match (OK `0X22200002` / CANCEL `0X22200003` / message
+/// `0X22400004` over `Dialog_Question1.ojs`) is the best-effort
+/// art source; its mount mechanics stay exe-OPEN like the channel
+/// dialog's (reference-measured, `docs/channel-fill.md` method).
+pub const QUIT_DIALOG_BLOCK: &str = "DIALOG_QUESTION1";
+/// Quit-confirm layout (4 rects).
+pub const QUIT_DIALOG_BIND_FILE: &str = "Dialog_Question1.bnd";
+/// Quit popup OK code (quits the client).
+pub const QUIT_OK_CODE: u32 = 0x2220_0002;
+/// Quit popup CANCEL code (back to the bare board).
+pub const QUIT_CANCEL_CODE: u32 = 0x2220_0003;
+/// Quit popup message TEXT code.
+pub const QUIT_MESSAGE_CODE: u32 = 0x2240_0004;
+/// Quit message string (CP949 bytes): `게임을 종료하시겠습니까?`
+/// (capture `exit-state.png`, message plate; the exe string
+/// offset is not pinned — the capture is the pin).
+pub const QUIT_MESSAGE_CP949: &[u8] = &[
+    0xB0, 0xD4, 0xC0, 0xD3, 0xC0, 0xBB, 0x20, 0xC1, 0xBE, 0xB7, 0xE1, 0xC7, 0xCF, 0xBD, 0xC3, 0xB0,
+    0xDA, 0xBD, 0xC0, 0xB4, 0xCF, 0xB1, 0xEE, 0x3F,
+];
 
 /// One lanking board row: catalog position, not a score. No score
 /// table ships with the client, and the rank-notification path (the
@@ -1654,6 +1952,140 @@ mod side_tests {
         assert_eq!(planet_band_rect(PlanetBand::Hard), PLANET_HARD_RECT);
         assert_eq!(planet_band_rect(PlanetBand::Normal), PLANET_NORMAL_RECT);
         assert_eq!(planet_band_rect(PlanetBand::Easy), PLANET_EASY_RECT);
+    }
+
+    #[test]
+    fn planet_dispatch_table_maps_codes_to_actions() {
+        // One table, keyed by control code — the game never branches
+        // per-button. Emblems name their family band; the dimmed
+        // emblems name none (P0); power and gear name their dialogs.
+        assert_eq!(
+            planet_action_for_code(PLANET_BUTTON_HARD_CODE),
+            Some(PlanetAction::Emblem {
+                band: Some(PlanetBand::Hard)
+            })
+        );
+        assert_eq!(
+            planet_action_for_code(PLANET_BUTTON_NORMAL_CODE),
+            Some(PlanetAction::Emblem {
+                band: Some(PlanetBand::Normal)
+            })
+        );
+        assert_eq!(
+            planet_action_for_code(PLANET_BUTTON_EASY_CODE),
+            Some(PlanetAction::Emblem {
+                band: Some(PlanetBand::Easy)
+            })
+        );
+        assert_eq!(
+            planet_action_for_code(PLANET_BUTTON_FREE_CODE),
+            Some(PlanetAction::Emblem { band: None })
+        );
+        assert_eq!(
+            planet_action_for_code(PLANET_BUTTON_DRUM_CODE),
+            Some(PlanetAction::Emblem { band: None })
+        );
+        assert_eq!(
+            planet_action_for_code(PLANET_EXIT_CODE),
+            Some(PlanetAction::QuitConfirm)
+        );
+        assert_eq!(
+            planet_action_for_code(PLANET_OPTION_CODE),
+            Some(PlanetAction::OptionsDialog)
+        );
+        // Promotion cells and self/BACK codes never dispatch.
+        assert_eq!(planet_action_for_code(0x1920_000D), None);
+        assert_eq!(planet_action_for_code(0x1920_C00F), None);
+        assert_eq!(planet_action_for_code(0x1900_0000), None);
+    }
+
+    #[test]
+    fn planet_dispatch_hit_tests_the_staged_bnd_rects() {
+        // Staged placements win: the EXIT action resolves through
+        // the placement carrying the exit code and its parsed rect,
+        // wherever that rect sits (here deliberately off-fallback).
+        let staged = vec![ScenePlacement {
+            id: "IDC_BUTTON_SPLANET_EXIT".to_owned(),
+            code: PLANET_EXIT_CODE,
+            sprite: Some("Planet_Btn_Exit.ojs".to_owned()),
+            rect: Rect {
+                x: 10,
+                y: 10,
+                w: 20,
+                h: 20,
+            },
+        }];
+        assert_eq!(
+            planet_action_at(&staged, 15, 15),
+            Some(PlanetAction::QuitConfirm)
+        );
+        assert_eq!(planet_action_at(&staged, 15, 35), None);
+        // Without placements the pinned fallback still resolves the
+        // emblems and both MENU discs (art-less parity).
+        assert_eq!(
+            planet_action_at(&[], 386, 88),
+            Some(PlanetAction::Emblem {
+                band: Some(PlanetBand::Hard)
+            })
+        );
+        assert_eq!(
+            planet_action_at(&[], 769, 580),
+            Some(PlanetAction::QuitConfirm)
+        );
+        assert_eq!(
+            planet_action_at(&[], 729, 580),
+            Some(PlanetAction::OptionsDialog)
+        );
+        assert_eq!(planet_action_at(&[], 400, 300), None);
+    }
+
+    #[test]
+    fn planet_emblem_captions_decode_to_the_pinned_strings() {
+        // Each caption's CP949 bytes decode to its `docs/planet.md`
+        // runtime string (file offsets in the table doc above).
+        let pinned = [
+            (PLANET_TEXT_HARD_CODE, "신의손 (고급)"),
+            (PLANET_TEXT_NORMAL_CODE, "고수손 (중급)"),
+            (PLANET_TEXT_EASY_CODE, "사람손 (초급)"),
+            (PLANET_TEXT_FREE_CODE, "튜토리얼"),
+            (PLANET_TEXT_DRUM_CODE, "퀘스트"),
+        ];
+        assert_eq!(PLANET_CAPTIONS.len(), pinned.len());
+        for ((code, expected), caption) in pinned.iter().zip(PLANET_CAPTIONS.iter()) {
+            assert_eq!(caption.code, *code);
+            assert_eq!(
+                planet_caption_for_code(*code),
+                Some(*caption),
+                "caption lookup for {code:#x}"
+            );
+            assert_eq!(
+                o2jam_text::decode_cp949(caption.cp949).expect("pinned CP949"),
+                *expected
+            );
+        }
+        assert_eq!(planet_caption_for_code(0x1940_0006), None);
+        assert_eq!(
+            o2jam_text::decode_cp949(QUIT_MESSAGE_CP949).expect("quit CP949"),
+            "게임을 종료하시겠습니까?"
+        );
+    }
+
+    #[test]
+    fn planet_option_tabs_name_their_blocks_and_exits() {
+        assert_eq!(PlanetOptionTab::Key.block_name(), "DIALOG_OPTION_KEY");
+        assert_eq!(PlanetOptionTab::Sound.block_name(), "DIALOG_OPTION_SOUND");
+        assert_eq!(PlanetOptionTab::Game.block_name(), "DIALOG_OPTION_GAME");
+        assert_eq!(PlanetOptionTab::Key.bind_file(), "Dialog_Option_Key.bnd");
+        assert_eq!(
+            PlanetOptionTab::Sound.bind_file(),
+            "Dialog_Option_Sound.bnd"
+        );
+        assert_eq!(PlanetOptionTab::Game.bind_file(), "Dialog_Option_Game.bnd");
+        assert_eq!(PlanetOptionTab::Key.exit_code(), 0x2520_0017);
+        assert_eq!(PlanetOptionTab::Sound.exit_code(), 0x2620_0012);
+        assert_eq!(PlanetOptionTab::Game.exit_code(), 0x2F20_000F);
+        // First-open tab is an OPEN stand-in (file order), never a pin.
+        assert_eq!(PLANET_OPTION_FIRST_TAB, PlanetOptionTab::Key);
     }
 
     #[test]

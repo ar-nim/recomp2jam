@@ -8,31 +8,34 @@ use super::super::playing::{HighwayGeometry, LivePlay, PlaySkin};
 use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
-    battle_verdict, channel_dialog_x_hit, channel_row_hit, channel_viewport, has_room_panels,
-    list_row_hit, paint_avi_scene, paint_channel_chat, paint_channel_list, paint_channel_scene,
-    paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
-    paint_lobby_backdrop, paint_music_shop_scene, paint_myroom_scene, paint_planet_scene,
-    paint_playing_overlay, paint_result, paint_result_scene, paint_room_list, paint_room_scene,
-    paint_screen, paint_shop_scene, paint_waiting_chat, paint_waiting_members, paint_waiting_scene,
-    rect_hit, room_panel_hit, scene_index, staged_rect_hit, BattleVerdict, ChannelChatMessage,
-    LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions,
-    WaitingChatMessage, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    battle_verdict, channel_dialog_x_hit, channel_row_hit, channel_viewport, dialog_rect_hit,
+    has_room_panels, list_row_hit, paint_avi_scene, paint_channel_chat, paint_channel_list,
+    paint_channel_scene, paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
+    paint_lobby_backdrop, paint_music_shop_scene, paint_myroom_scene, paint_planet_options,
+    paint_planet_quit, paint_planet_scene, paint_playing_overlay, paint_result, paint_result_scene,
+    paint_room_list, paint_room_scene, paint_screen, paint_shop_scene, paint_waiting_chat,
+    paint_waiting_members, paint_waiting_scene, quit_fallback_rects, rect_hit, room_panel_hit,
+    scene_index, staged_rect_hit, BattleVerdict, ChannelChatMessage, LoadingStatus, ResultPaint,
+    ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage, RESULT_BACK_ID,
+    RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::side::{
-    can_return_side, can_visit_side, paint_side_scene, select_chosung_cells, select_chosung_layout,
-    select_difficulty_ink, select_music_rows, select_music_songs, select_pager_caption,
-    select_picked_caption, select_search_caption, select_status_line, waiting_song_detail_line,
-    waiting_song_title_line, PlanetSelection, SelectMusicRow, SelectMusicSong, SideScreen,
-    SELECT_ARTIST_RADIO, SELECT_CHO_SUNG_LEFT, SELECT_CHO_SUNG_PITCH, SELECT_CHO_SUNG_ROW_CELLS,
-    SELECT_CHO_SUNG_Y, SELECT_FILTER_BUTTON_H, SELECT_FILTER_BUTTON_PITCH,
-    SELECT_FILTER_BUTTON_TOP, SELECT_FILTER_COLUMNS, SELECT_GENRE_FILTERS, SELECT_HEADER_COLUMNS,
-    SELECT_HEADER_Y, SELECT_LEVEL_FILTERS, SELECT_OK_BUTTON, SELECT_PAGER_RIGHT,
-    SELECT_RESULT_TABS, SELECT_ROW_PITCH, SELECT_ROW_TOP, SELECT_SEARCH_BOX, SELECT_SEARCH_BUTTON,
-    SELECT_SEARCH_Y, SELECT_STATUS_H, SELECT_STATUS_Y, SELECT_TABLE_HEADERS, SELECT_TABLE_LEFT,
-    SELECT_TABLE_WIDTH, SELECT_TITLE_RADIO, SELECT_VISIBLE_ROWS, SELECT_WHEEL_FILTERS,
+    can_return_side, can_visit_side, paint_side_scene, planet_action_at, select_chosung_cells,
+    select_chosung_layout, select_difficulty_ink, select_music_rows, select_music_songs,
+    select_pager_caption, select_picked_caption, select_search_caption, select_status_line,
+    waiting_song_detail_line, waiting_song_title_line, PlanetAction, PlanetOptionTab,
+    PlanetSelection, SelectMusicRow, SelectMusicSong, SideScreen, PLANET_OPTION_FIRST_TAB,
+    QUIT_CANCEL_CODE, QUIT_OK_CODE, SELECT_ARTIST_RADIO, SELECT_CHO_SUNG_LEFT,
+    SELECT_CHO_SUNG_PITCH, SELECT_CHO_SUNG_ROW_CELLS, SELECT_CHO_SUNG_Y, SELECT_FILTER_BUTTON_H,
+    SELECT_FILTER_BUTTON_PITCH, SELECT_FILTER_BUTTON_TOP, SELECT_FILTER_COLUMNS,
+    SELECT_GENRE_FILTERS, SELECT_HEADER_COLUMNS, SELECT_HEADER_Y, SELECT_LEVEL_FILTERS,
+    SELECT_OK_BUTTON, SELECT_PAGER_RIGHT, SELECT_RESULT_TABS, SELECT_ROW_PITCH, SELECT_ROW_TOP,
+    SELECT_SEARCH_BOX, SELECT_SEARCH_BUTTON, SELECT_SEARCH_Y, SELECT_STATUS_H, SELECT_STATUS_Y,
+    SELECT_TABLE_HEADERS, SELECT_TABLE_LEFT, SELECT_TABLE_WIDTH, SELECT_TITLE_RADIO,
+    SELECT_VISIBLE_ROWS, SELECT_WHEEL_FILTERS,
 };
 use crate::MenuKey;
-use o2jam_audio::{AudioBackend, PcmSamples};
+use o2jam_audio::{AudioBackend, BgmSelection, PcmSamples, SceneBgm};
 use o2jam_file::OjnListEntry;
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams, PEER_SLOT_COUNT};
 use o2jam_net::play::SetRoomMusic;
@@ -66,6 +69,20 @@ const MAX_CHANNEL_CHAT_ROWS: usize = 50;
 /// Unsent chat draft cap (characters, not bytes: multibyte input
 /// counts once per character so no slice ever splits UTF-8).
 const MAX_CHAT_INPUT_CHARS: usize = 50;
+
+/// Planet-board modal dialog open over the bare board (the power
+/// quit-confirm or the gear options dialog). The board stays the
+/// current screen; the modal owns clicks until closed, like the
+/// channel dialog owns rows while `Screen::Channel` shows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanetModal {
+    /// Quit-confirm (`게임을 종료하시겠습니까?` + OK/CANCEL): OK
+    /// quits the client, CANCEL returns to the bare board.
+    QuitConfirm,
+    /// Options dialog (`Dialog_Option_*` sheet): the tab's EXIT
+    /// button or Escape closes it; tab switching stays OPEN.
+    Options,
+}
 
 /// Native click canvas width (the shell maps window pixels into
 /// 800x600 before calling [`GameLoop::mouse_click`]).
@@ -129,6 +146,23 @@ pub struct ScreenGame {
     /// Live planet-board difficulty pick (HARD/NORMAL/EASY; FREE/DRUM
     /// stay unbound per P0).
     planet: PlanetSelection,
+    /// Open planet-board modal, if any (quit-confirm or options).
+    planet_modal: Option<PlanetModal>,
+    /// Quit-confirm OK was pressed: the windowed shell exits the
+    /// event loop ([`GameLoop::quit_requested`]); headless walks
+    /// read the flag instead.
+    quit_requested: bool,
+    /// Staged options-dialog sheet (`Dialog_Option_*` placements
+    /// plus figures; `None` until staged, the fallback title then
+    /// paints instead).
+    planet_option_art: Option<SceneArt>,
+    /// Open options tab (first-open stand-in, OPEN — see
+    /// [`PLANET_OPTION_FIRST_TAB`]).
+    planet_option_tab: PlanetOptionTab,
+    /// Staged quit-confirm sheet (`Dialog_Question1` placements
+    /// plus figures; `None` until staged, the fallback popup then
+    /// paints instead).
+    planet_quit_art: Option<SceneArt>,
     /// Staged select-music catalog (`OJNList.dat` order, owned copies;
     /// see [`Self::set_song_catalog`]).
     catalog_songs: Vec<SelectMusicSong>,
@@ -162,10 +196,16 @@ pub struct ScreenGame {
     scene_art: [Option<SceneArt>; 12],
 }
 
-/// Key-sound bank plus backend for windowed play.
+/// Key-sound bank plus backend for windowed play, with the
+/// scene-BGM channel alongside: the bank holds one slot per
+/// `Music/BGM.ojm` record (blanks as `None`), and every screen
+/// entry re-cues through [`Screen::bgm_cue`] (silence until a
+/// bank stages).
 struct AudioRig {
     backend: Box<dyn AudioBackend>,
     bank: HashMap<u32, PcmSamples>,
+    bgm: SceneBgm,
+    bgm_bank: Vec<Option<PcmSamples>>,
 }
 
 /// Stage word behind one room arena value (the Playing applier's
@@ -343,6 +383,11 @@ impl ScreenGame {
             loading_status: None,
             arena_stage: DEFAULT_ARENA_STAGE,
             planet: PlanetSelection::new(),
+            planet_modal: None,
+            quit_requested: false,
+            planet_option_art: None,
+            planet_option_tab: PLANET_OPTION_FIRST_TAB,
+            planet_quit_art: None,
             catalog_songs: Vec::new(),
             catalog_bpm: HashMap::new(),
             catalog_chart_files: HashMap::new(),
@@ -374,14 +419,59 @@ impl ScreenGame {
     }
 
     /// Attach key sounds; struck notes play through the backend.
-    /// Missing samples stay silent (no bank entry, no sound).
+    /// Missing samples stay silent (no bank entry, no sound). The
+    /// scene-BGM bank stages separately ([`Self::stage_scene_bgm`]).
     pub fn with_audio(
         &mut self,
         backend: Box<dyn AudioBackend>,
         bank: HashMap<u32, PcmSamples>,
     ) -> &mut Self {
-        self.audio = Some(AudioRig { backend, bank });
+        self.audio = Some(AudioRig {
+            backend,
+            bank,
+            bgm: SceneBgm::new(),
+            bgm_bank: Vec::new(),
+        });
         self
+    }
+
+    /// Stage the scene-BGM bank (one slot per `Music/BGM.ojm`
+    /// record) and cue the current screen through it: boot cues
+    /// Avi (id 8, once), and every later [`Self::enter_screen`]
+    /// re-cues its own screen (Planet 9 loop, silence `-1` on
+    /// leave to cue-less screens). Without an audio rig the bank
+    /// drops (headless walks cue nothing).
+    pub fn stage_scene_bgm(&mut self, bank: Vec<Option<PcmSamples>>) -> &mut Self {
+        if let Some(rig) = self.audio.as_mut() {
+            rig.bgm_bank = bank;
+        }
+        self.apply_scene_bgm();
+        self
+    }
+
+    /// Cue the current screen's scene music through the rig
+    /// (silence without one). The one entry hook every screen
+    /// change flows through — see [`Self::enter_screen`].
+    fn apply_scene_bgm(&mut self) {
+        let Some(rig) = self.audio.as_mut() else {
+            return;
+        };
+        let (cue_id, cue_repeat) = self.flow.current().bgm_cue();
+        let AudioRig {
+            backend,
+            bgm,
+            bgm_bank,
+            ..
+        } = rig;
+        let cue_pcm = bgm.play_scene_music(cue_id, cue_repeat, bgm_bank);
+        let _ = backend.set_scene_bgm(cue_pcm, cue_repeat);
+    }
+
+    /// Latched scene-BGM selection, if a track is playing (`None`
+    /// silent, rig-less, or cue-less — headless walks cue nothing).
+    #[must_use]
+    pub fn scene_bgm_selection(&self) -> Option<BgmSelection> {
+        self.audio.as_ref().and_then(|rig| rig.bgm.current())
     }
 
     /// Load a chart's onsets (with key-sound ids) into the highway.
@@ -443,11 +533,16 @@ impl ScreenGame {
 
     /// Step the flow through the verified edge gates (shot/test
     /// driver): `false` when `can_enter` rejects, so no transition is
-    /// invented. Restarts the song clock on Playing entry.
+    /// invented. Restarts the song clock on Playing entry and
+    /// re-cues the new screen's scene music (see
+    /// [`Self::stage_scene_bgm`]).
     pub fn enter_screen(&mut self, next: Screen) -> bool {
         let entered = self.flow.go(next).is_ok();
-        if entered && next == Screen::Playing {
-            self.started_at = Some(std::time::Instant::now());
+        if entered {
+            if next == Screen::Playing {
+                self.started_at = Some(std::time::Instant::now());
+            }
+            self.apply_scene_bgm();
         }
         entered
     }
@@ -1586,17 +1681,146 @@ impl ScreenGame {
         self
     }
 
-    /// Planet board click: the emblems are server channel families
-    /// (live-verified 2026-11-09, `docs/planet.md` "Live
-    /// verification"). A lit-emblem hit (HARD/NORMAL/EASY pinned
-    /// `.bnd` rects) records the family pick and reopens the channel
-    /// dialog through the flow gate — the dialog-over-board phase flag
-    /// (`parent+0xF64` in the exe). FREE/DRUM stay unbound (P0). The
-    /// amber-cursor stand-in stays labeled OPEN.
+    /// Planet board click through the control-code → action
+    /// dispatch table ([`planet_action_at`]): lit-emblem presses
+    /// record the family pick and open the channel dialog through
+    /// the flow gate (`Planet`→`Channel`, the dialog-over-board
+    /// phase flag `parent+0xF64` in the exe); power opens the
+    /// quit-confirm modal, gear the options modal. The emblems are
+    /// server channel families (live-verified 2026-11-09,
+    /// `docs/planet.md` "Live verification"). FREE/DRUM stay
+    /// unbound (P0).
+    ///
+    /// OPEN links (never invented): the exe emblem handler ends at
+    /// family-select + reconnect (E1,
+    /// `docs/overnight-evidence/e1-channel-dialog-trigger.md`) —
+    /// the emblem → dialog-visibility edge is dynamic-only, with
+    /// the named next step a stopped-state winedbg memory watch on
+    /// the dialog flag during an emblem click. The same-family
+    /// blank-rows effect (re-selecting the active family reconnects
+    /// without re-fetching, live-verified) rides the session's
+    /// channel refetch, not this shell flag. Launcher preselection
+    /// (the boot auto-open observation) stays OPEN: the shell boots
+    /// the bare board and the dialog opens only here, never at boot.
+    /// The amber-cursor stand-in stays labeled OPEN.
     pub fn click_planet(&mut self, x: i32, y: i32) {
-        let hit = self.planet.click(x, y);
-        if hit.and_then(|hit| hit.band()).is_some() {
-            self.enter(Screen::Channel);
+        // Board clicks ride the bare board: elsewhere — and while a
+        // modal owns the board — they land nowhere (the mouse router
+        // already gates; this keeps the public driver honest too).
+        if self.flow.current() != Screen::Planet || self.planet_modal.is_some() {
+            return;
+        }
+        let placements: &[ScenePlacement] = self
+            .scene_art(Screen::Planet)
+            .map_or(&[], |art| &art.placements);
+        let action = planet_action_at(placements, x, y);
+        match action {
+            Some(PlanetAction::Emblem { band: Some(band) }) => {
+                self.planet.select_band(band);
+                self.enter(Screen::Channel);
+            }
+            Some(PlanetAction::Emblem { band: None }) => {}
+            Some(PlanetAction::QuitConfirm) => {
+                self.planet_modal = Some(PlanetModal::QuitConfirm);
+            }
+            Some(PlanetAction::OptionsDialog) => {
+                self.planet_modal = Some(PlanetModal::Options);
+            }
+            None => {}
+        }
+    }
+
+    /// Open planet-board modal, if any (paint/click driver).
+    #[must_use]
+    pub fn planet_modal(&self) -> Option<PlanetModal> {
+        self.planet_modal
+    }
+
+    /// Whether the quit-confirm OK was pressed (the windowed shell
+    /// exits on it via [`GameLoop::quit_requested`]).
+    #[must_use]
+    pub fn quit_confirmed(&self) -> bool {
+        self.quit_requested
+    }
+
+    /// Stage the options-dialog sheet (`Dialog_Option_*` placements
+    /// plus figures for the first-open tab, OPEN — see
+    /// [`PLANET_OPTION_FIRST_TAB`]). The gear modal paints it
+    /// dialog-relative when open; empty art keeps the fallback
+    /// title. Staging never moves the flow.
+    pub fn load_planet_option_scene(
+        &mut self,
+        placements: Vec<ScenePlacement>,
+        figures: HashMap<String, AvatarFigure>,
+    ) -> &mut Self {
+        self.planet_option_art = Some(SceneArt {
+            placements,
+            figures,
+        });
+        self.planet_option_tab = PLANET_OPTION_FIRST_TAB;
+        self
+    }
+
+    /// Stage the quit-confirm sheet (`Dialog_Question1` placements
+    /// plus figures). The power modal paints it dialog-relative
+    /// when open; empty art keeps the fallback popup. Staging never
+    /// moves the flow.
+    pub fn load_planet_quit_scene(
+        &mut self,
+        placements: Vec<ScenePlacement>,
+        figures: HashMap<String, AvatarFigure>,
+    ) -> &mut Self {
+        self.planet_quit_art = Some(SceneArt {
+            placements,
+            figures,
+        });
+        self
+    }
+
+    /// Modal click: the quit popup's OK/CANCEL (staged dialog
+    /// rects when art is staged, the fallback boxes otherwise) or
+    /// the options tab's EXIT (staged rects only — Escape closes
+    /// the unstaged dialog). Other clicks land nowhere: the modal
+    /// owns the board while open.
+    fn click_planet_modal(&mut self, x: i32, y: i32) {
+        match self.planet_modal {
+            Some(PlanetModal::QuitConfirm) => {
+                let (ok_hit, cancel_hit) = self.quit_button_hits(x, y);
+                if ok_hit {
+                    self.quit_requested = true;
+                    self.planet_modal = None;
+                } else if cancel_hit {
+                    self.planet_modal = None;
+                }
+            }
+            Some(PlanetModal::Options) => {
+                let exit_hit = self.planet_option_art.as_ref().is_some_and(|art| {
+                    dialog_rect_hit(&art.placements, self.planet_option_tab.exit_code(), x, y)
+                });
+                if exit_hit {
+                    self.planet_modal = None;
+                }
+            }
+            None => {}
+        }
+    }
+
+    /// Quit-popup OK/CANCEL hits: staged dialog rects when art is
+    /// staged ([`dialog_rect_hit`]), the native fallback boxes
+    /// otherwise ([`quit_fallback_rects`]).
+    fn quit_button_hits(&self, x: i32, y: i32) -> (bool, bool) {
+        let staged = self
+            .planet_quit_art
+            .as_ref()
+            .filter(|art| art.has_figures());
+        if let Some(art) = staged {
+            (
+                dialog_rect_hit(&art.placements, QUIT_OK_CODE, x, y),
+                dialog_rect_hit(&art.placements, QUIT_CANCEL_CODE, x, y),
+            )
+        } else {
+            let (_, ok, cancel) = quit_fallback_rects();
+            (rect_hit(&ok, x, y), rect_hit(&cancel, x, y))
         }
     }
 
@@ -1638,7 +1862,7 @@ impl ScreenGame {
             return;
         }
         if self.flow.current() == Screen::Avi && now_ms >= SPLASH_AUTO_ADVANCE_MS {
-            let _ = self.flow.go(Screen::Channel);
+            self.enter(Screen::Planet);
         }
         if self.flow.current() == Screen::Playing && self.playing.is_finished(now_ms) {
             let _ = self.flow.go(Screen::Result);
@@ -1699,14 +1923,35 @@ impl ScreenGame {
         }
     }
 
-    /// Planet: staged art when present, else the flat card. A picked
-    /// band draws the amber cursor stand-in inside its pinned button
-    /// rect (highlight rendering is evidence-OPEN — see
-    /// [`paint_planet_scene`](super::paint::paint_planet_scene)).
+    /// Planet: staged art with emblem captions when present, else
+    /// the flat card. A picked band draws the amber cursor stand-in
+    /// inside its pinned button rect (highlight rendering is
+    /// evidence-OPEN — see
+    /// [`paint_planet_scene`](super::paint::paint_planet_scene)),
+    /// then any open modal (quit-confirm or options) layers over
+    /// the bare board.
     fn paint_planet(&self, frame: &mut Frame<'_>) {
         match self.scene_art(Screen::Planet) {
             Some(art) => paint_planet_scene(frame, art, self.planet.band()),
             None => paint_screen(frame, Screen::Planet),
+        }
+        self.paint_planet_modal(frame);
+    }
+
+    /// Open planet-board modal over the bare board, if any.
+    fn paint_planet_modal(&self, frame: &mut Frame<'_>) {
+        match self.planet_modal {
+            Some(PlanetModal::QuitConfirm) => {
+                paint_planet_quit(frame, self.planet_quit_art.as_ref());
+            }
+            Some(PlanetModal::Options) => {
+                paint_planet_options(
+                    frame,
+                    self.planet_option_art.as_ref(),
+                    self.planet_option_tab,
+                );
+            }
+            None => {}
         }
     }
 
@@ -2307,7 +2552,7 @@ impl GameLoop for ScreenGame {
         }
         match self.flow.current() {
             Screen::Avi => {
-                let _ = self.flow.go(Screen::Channel);
+                self.enter(Screen::Planet);
             }
             Screen::Playing => {
                 let now = self.now_ms();
@@ -2327,7 +2572,21 @@ impl GameLoop for ScreenGame {
             }
             return;
         }
+        if self.planet_modal.is_some() {
+            // Back cancels the quit-confirm and closes options
+            // (Escape closes the options dialog, live-pinned).
+            // Confirm stays inert so the quit needs the explicit OK.
+            if key == MenuKey::Back {
+                self.planet_modal = None;
+            }
+            return;
+        }
         match (self.flow.current(), key) {
+            // Keyboard activation of the already-active emblem:
+            // Confirm opens the dialog like the mouse emblem click
+            // (the mouse edge is the pinned one; this is the
+            // keyboard stand-in the session walks drive).
+            (Screen::Planet, MenuKey::Confirm) => self.enter(Screen::Channel),
             (Screen::Channel, MenuKey::Up) => {
                 self.highlight = self.highlight.saturating_sub(1);
             }
@@ -2396,9 +2655,13 @@ impl GameLoop for ScreenGame {
         if self.side.is_some() {
             return;
         }
+        if self.planet_modal.is_some() {
+            self.click_planet_modal(x, y);
+            return;
+        }
         match self.flow.current() {
             Screen::Avi => {
-                let _ = self.flow.go(Screen::Channel);
+                self.enter(Screen::Planet);
             }
             Screen::Channel => self.click_channel_row(x, y),
             Screen::Room => self.click_room_row(x, y),
@@ -2423,6 +2686,10 @@ impl GameLoop for ScreenGame {
             Screen::Shop | Screen::MusicShop => {}
             Screen::Loading | Screen::Playing => {}
         }
+    }
+
+    fn quit_requested(&self) -> bool {
+        self.quit_requested
     }
 
     fn paint(&mut self, frame: &mut Frame<'_>) {
@@ -2502,6 +2769,7 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.load_chart(vec![(2, 1500, 7)]);
         for next in [
+            Screen::Planet,
             Screen::Channel,
             Screen::Room,
             Screen::Waiting,
@@ -2541,6 +2809,7 @@ mod game_tests {
         game.with_audio(Box::new(NullBackend::new()), bank);
         game.load_chart(vec![(2, 5000, 7), (2, 6000, 999)]);
         for next in [
+            Screen::Planet,
             Screen::Channel,
             Screen::Room,
             Screen::Waiting,
@@ -2574,6 +2843,7 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.load_avatar(AvatarFigure::from_sprite55(&sprite));
         for next in [
+            Screen::Planet,
             Screen::Channel,
             Screen::Room,
             Screen::Waiting,
@@ -2599,9 +2869,17 @@ mod game_tests {
         assert_eq!(buf[96 * 256 + 96], pack_xrgb(0xC0, 0xA0, 0x20));
     }
 
+    /// Dismiss the splash onto the bare board, then open the dialog
+    /// through a lit-emblem click (EASY center): the S0.3 boot walk
+    /// every test driver shares.
+    fn dismiss_splash_to_dialog(game: &mut ScreenGame) {
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+    }
+
     fn walk_to_playing(game: &mut ScreenGame) {
         use MenuKey;
-        game.lane_key(3, true);
+        dismiss_splash_to_dialog(game);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
@@ -2614,6 +2892,7 @@ mod game_tests {
         use MenuKey;
         let mut game = ScreenGame::new();
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         assert_eq!(game.screen(), Screen::Channel);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room);
@@ -2631,6 +2910,7 @@ mod game_tests {
         use MenuKey;
         let mut game = ScreenGame::new();
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Back, true);
@@ -2741,6 +3021,7 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         game.menu_key(MenuKey::Down, true);
         game.menu_key(MenuKey::Down, true);
         game.menu_key(MenuKey::Up, true);
@@ -2750,6 +3031,7 @@ mod game_tests {
         let mut probe = ScreenGame::new();
         probe.set_channels(two_channels());
         probe.lane_key(0, true);
+        probe.click_planet(136, 88);
         probe.menu_key(MenuKey::Down, true);
         probe.menu_key(MenuKey::Down, true);
         assert_eq!(game.highlight, 0);
@@ -2757,6 +3039,7 @@ mod game_tests {
         // Empty list never moves.
         let mut bare = ScreenGame::new();
         bare.lane_key(0, true);
+        bare.click_planet(136, 88);
         bare.menu_key(MenuKey::Down, true);
         assert_eq!(bare.highlight, 0);
     }
@@ -2767,6 +3050,7 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         assert_eq!(game.screen(), Screen::Channel);
         game.menu_key(MenuKey::Down, true);
         assert_eq!(game.highlight, 1);
@@ -2781,6 +3065,7 @@ mod game_tests {
         game.set_channels(two_channels());
         game.set_rooms(two_rooms());
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Waiting);
@@ -2798,11 +3083,11 @@ mod game_tests {
     }
 
     #[test]
-    fn click_dismisses_splash_into_channels() {
+    fn click_dismisses_splash_into_planet_board() {
         let mut game = ScreenGame::new();
         assert_eq!(game.screen(), Screen::Avi);
         game.mouse_click(400, 300);
-        assert_eq!(game.screen(), Screen::Channel);
+        assert_eq!(game.screen(), Screen::Planet);
     }
 
     #[test]
@@ -2810,6 +3095,7 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         // Second row band: y in [282, 332), x anywhere on the row.
         game.mouse_click(300, 290);
         assert_eq!(game.highlight, 1);
@@ -2821,6 +3107,7 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         game.mouse_click(10, 10);
         game.mouse_click(700, 152);
         assert_eq!(game.highlight, 0);
@@ -2832,6 +3119,7 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         game.set_channel_input("/w bob hi");
         game.mouse_click(300, 240);
         assert_eq!(game.screen(), Screen::Channel);
@@ -2845,6 +3133,7 @@ mod game_tests {
         game.set_channels(two_channels());
         game.set_rooms(two_rooms());
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room);
         // First row band: y in [150, 158).
@@ -2860,6 +3149,7 @@ mod game_tests {
         game.set_channels(two_channels());
         game.set_rooms(two_rooms());
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         // Left-column second panel, file order index 1
         // (`IDC_BUTTON_SROOM_EXBUTTON2`, (26,177)-(314,268)).
@@ -2920,6 +3210,7 @@ mod game_tests {
         game.set_channels(two_channels());
         game.set_rooms(two_rooms());
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Waiting);
@@ -2930,6 +3221,7 @@ mod game_tests {
     fn result_game() -> ScreenGame {
         let mut game = ScreenGame::new();
         for next in [
+            Screen::Planet,
             Screen::Channel,
             Screen::Room,
             Screen::Waiting,
@@ -2971,6 +3263,7 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         // 64x48 list: rows from y 18, text x 16; '2' top bar first.
         let mut buf = vec![0u32; 64 * 48];
         game.paint_at(
@@ -3035,6 +3328,7 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.set_rooms(two_rooms());
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room);
         game.menu_key(MenuKey::Down, true);
@@ -3051,6 +3345,7 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.set_rooms(two_rooms());
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         game.menu_key(super::MenuKey::Confirm, true);
         let mut buf = vec![0u32; 200 * 150];
         game.paint_at(
@@ -3084,6 +3379,7 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.set_rooms(two_rooms());
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         game.menu_key(super::MenuKey::Confirm, true);
         // 64x48 list: rows from y 12, text x 16; '3' top bar first.
         let mut buf = vec![0u32; 64 * 48];
@@ -3145,7 +3441,7 @@ mod game_tests {
     }
 
     fn walk_to_waiting(game: &mut ScreenGame) {
-        game.lane_key(3, true);
+        dismiss_splash_to_dialog(game);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Waiting);
@@ -3733,18 +4029,18 @@ mod game_tests {
     }
 
     #[test]
-    fn lane_key_dismisses_splash_into_channel() {
+    fn lane_key_dismisses_splash_into_planet_board() {
         let mut game = ScreenGame::new();
         assert_eq!(game.screen(), Screen::Avi);
         game.lane_key(3, true);
-        assert_eq!(game.screen(), Screen::Channel);
+        assert_eq!(game.screen(), Screen::Planet);
         let mut buf = vec![0u32; 16 * 12];
         game.paint(&mut Frame {
             buf: &mut buf,
             w: 16,
             h: 12,
         });
-        assert_eq!(buf[0], background_of(Screen::Channel));
+        assert_eq!(buf[0], background_of(Screen::Planet));
     }
 
     #[test]
@@ -3777,18 +4073,18 @@ mod game_tests {
     fn splash_auto_advances_at_timeout() {
         let mut game = ScreenGame::new();
         paint_splash_frame(&mut game, SPLASH_AUTO_ADVANCE_MS);
-        assert_eq!(game.screen(), Screen::Channel);
+        assert_eq!(game.screen(), Screen::Planet);
     }
 
     #[test]
     fn splash_auto_advances_after_timeout() {
         let mut game = ScreenGame::new();
         paint_splash_frame(&mut game, SPLASH_AUTO_ADVANCE_MS + 1_000);
-        assert_eq!(game.screen(), Screen::Channel);
+        assert_eq!(game.screen(), Screen::Planet);
     }
 
     fn walk_to_lobby(game: &mut ScreenGame, lobby: Screen) {
-        game.lane_key(3, true);
+        dismiss_splash_to_dialog(game);
         if lobby == Screen::Channel {
             return;
         }
@@ -3928,6 +4224,7 @@ mod game_tests {
         game.load_scene(Screen::Channel, placements, figures);
         game.set_channels(two_channels());
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         let mut buf = vec![0u32; 64 * 48];
         game.paint_at(
             &mut Frame {
@@ -3957,6 +4254,7 @@ mod game_tests {
         game.load_scene(Screen::Channel, Vec::new(), HashMap::new());
         game.set_channels(two_channels());
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         assert_eq!(game.screen(), Screen::Channel);
         let mut buf = vec![STALE_SPLASH; 64 * 48];
         game.paint_at(
@@ -3984,6 +4282,7 @@ mod game_tests {
         game.load_scene(Screen::Room, placements, figures);
         game.set_rooms(two_rooms());
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room);
         let mut buf = vec![0u32; 64 * 48];
@@ -4087,6 +4386,7 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         assert_eq!(game.screen(), Screen::Channel);
         let mut buf = vec![0u32; 800 * 600];
         game.paint_at(
@@ -4174,6 +4474,7 @@ mod game_tests {
             room_type: 0,
         }]);
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room);
         let mut buf = vec![0u32; 800 * 600];
@@ -4207,6 +4508,7 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.set_channels(six_channels());
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         for _ in 0..5 {
             game.menu_key(MenuKey::Down, true);
         }
@@ -4235,7 +4537,6 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.load_scene(Screen::Planet, placements, figures);
         game.lane_key(3, true);
-        game.flow.go(Screen::Planet).unwrap();
         assert_eq!(game.screen(), Screen::Planet);
         let mut buf = vec![0u32; 64 * 48];
         game.paint_at(
@@ -4254,7 +4555,6 @@ mod game_tests {
         // No staged art: flat card plus the placeholder title.
         let mut game = ScreenGame::new();
         game.lane_key(3, true);
-        game.flow.go(Screen::Planet).unwrap();
         let mut buf = vec![0u32; 64 * 48];
         game.paint_at(
             &mut Frame {
@@ -4266,6 +4566,163 @@ mod game_tests {
         );
         assert_eq!(buf[0], background_of(Screen::Planet));
         assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
+    }
+
+    #[test]
+    fn planet_captions_paint_into_their_bnd_rects() {
+        // Synthetic TEXT placements at the parsed bind positions
+        // (ordinals 6..10): each caption inks only its own rect,
+        // and no placement paints nothing (never literals).
+        use super::super::side::PLANET_CAPTIONS;
+        let placements: Vec<ScenePlacement> = [(10, 10), (120, 10)]
+            .into_iter()
+            .zip(PLANET_CAPTIONS.iter())
+            .map(|((x, y), caption)| ScenePlacement {
+                id: String::new(),
+                code: caption.code,
+                sprite: None,
+                rect: Rect { x, y, w: 94, h: 13 },
+            })
+            .collect();
+        let mut game = ScreenGame::new();
+        game.load_scene(Screen::Planet, placements, HashMap::new());
+        game.lane_key(3, true);
+        assert_eq!(game.screen(), Screen::Planet);
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        let in_rect = |buf: &[u32], x: i32, y: i32| -> bool {
+            (y..y + 13)
+                .any(|row| ((row * 800 + x)..(row * 800 + x + 94)).any(|at| buf[at as usize] != 0))
+        };
+        assert!(in_rect(&buf, 10, 10), "first caption rect stays blank");
+        assert!(in_rect(&buf, 120, 10), "second caption rect stays blank");
+        // Ink stays inside the two rects: a pixel far below them
+        // keeps the frame black.
+        assert_eq!(buf[500 * 800 + 400], 0, "caption ink leaked");
+        // Without placements no caption paints (no fallback geometry).
+        let mut bare = ScreenGame::new();
+        bare.load_scene(Screen::Planet, Vec::new(), HashMap::new());
+        bare.lane_key(3, true);
+        let mut bare_buf = vec![0u32; 800 * 600];
+        bare.paint_at(
+            &mut Frame {
+                buf: &mut bare_buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert!(bare_buf.iter().all(|pixel| *pixel == 0));
+    }
+
+    #[test]
+    fn power_disc_opens_quit_confirm_and_ok_quits() {
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        assert_eq!(game.screen(), Screen::Planet);
+        game.click_planet(769, 580);
+        assert_eq!(
+            game.planet_modal(),
+            Some(PlanetModal::QuitConfirm),
+            "power disc must open the quit-confirm"
+        );
+        assert!(!game.quit_confirmed());
+        // The fallback popup paints its message (frame is varied).
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert!(buf.iter().any(|pixel| *pixel != buf[0]));
+        // OK (fallback box center) quits and closes; CANCEL instead
+        // closes without quitting (fresh game below).
+        game.mouse_click(350, 253);
+        assert!(game.quit_confirmed(), "OK must quit");
+        assert_eq!(game.planet_modal(), None);
+    }
+
+    #[test]
+    fn quit_confirm_cancel_closes_without_quitting() {
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        game.click_planet(769, 580);
+        assert_eq!(game.planet_modal(), Some(PlanetModal::QuitConfirm));
+        // CANCEL fallback box center (native 450,253).
+        game.mouse_click(450, 253);
+        assert!(!game.quit_confirmed());
+        assert_eq!(game.planet_modal(), None);
+        assert_eq!(game.screen(), Screen::Planet);
+    }
+
+    #[test]
+    fn gear_disc_opens_options_and_escape_closes_it() {
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        game.click_planet(729, 580);
+        assert_eq!(
+            game.planet_modal(),
+            Some(PlanetModal::Options),
+            "gear disc must open the options dialog"
+        );
+        // Board clicks ride the modal now (the emblem stays put).
+        game.click_planet(386, 88);
+        assert_eq!(game.screen(), Screen::Planet);
+        game.menu_key(MenuKey::Back, true);
+        assert_eq!(game.planet_modal(), None, "Escape closes options");
+        game.click_planet(386, 88);
+        assert_eq!(game.screen(), Screen::Channel, "board is live again");
+    }
+
+    #[test]
+    fn scene_bgm_recues_on_every_screen_entry() {
+        // Null backend only (containment): a 10-slot bank with
+        // tracks at 8 (Avi), 9 (Planet/Channel), and 3 (Room).
+        use o2jam_audio::{NullBackend, PcmSamples};
+        let mut bank = vec![None; 10];
+        for record in [3, 8, 9] {
+            bank[record - 1] = Some(PcmSamples {
+                samples: vec![1000i16; 441],
+                sample_rate: 44100,
+                channels: 1,
+            });
+        }
+        let mut game = ScreenGame::new();
+        game.with_audio(Box::new(NullBackend::new()), HashMap::new());
+        game.stage_scene_bgm(bank);
+        assert_eq!(game.scene_bgm_selection().map(|sel| sel.record), Some(8));
+        game.lane_key(3, true);
+        assert_eq!(game.screen(), Screen::Planet);
+        assert_eq!(game.scene_bgm_selection().map(|sel| sel.record), Some(9));
+        assert!(game.scene_bgm_selection().is_some_and(|sel| sel.repeat));
+        game.click_planet(136, 88);
+        assert_eq!(game.screen(), Screen::Channel);
+        assert_eq!(
+            game.scene_bgm_selection().map(|sel| sel.record),
+            Some(9),
+            "dialog shares the planet track"
+        );
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        assert_eq!(game.scene_bgm_selection().map(|sel| sel.record), Some(3));
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Loading);
+        assert_eq!(
+            game.scene_bgm_selection(),
+            None,
+            "loading cues silence (leave −1)"
+        );
     }
 
     #[test]
@@ -4358,6 +4815,7 @@ mod game_tests {
         let mut game = ScreenGame::new();
         game.load_scene(Screen::Loading, placements, figures);
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
@@ -4909,7 +5367,7 @@ mod game_tests {
 
     fn walk_to_loading(game: &mut ScreenGame) {
         use MenuKey;
-        game.lane_key(3, true);
+        dismiss_splash_to_dialog(game);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
@@ -5550,6 +6008,7 @@ mod game_tests {
     fn channel_confirm_with_a_whisper_draft_consumes_without_advancing() {
         let mut game = ScreenGame::new();
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         assert_eq!(game.screen(), Screen::Channel);
         game.set_channel_input("/w host psst");
         game.menu_key(MenuKey::Confirm, true);
@@ -5572,6 +6031,7 @@ mod game_tests {
     fn typing_appends_to_the_channel_draft_only_while_there() {
         let mut game = ScreenGame::new();
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         assert_eq!(game.screen(), Screen::Channel);
         game.text_input("hi");
         assert_eq!(game.channel_input(), "hi");
@@ -5587,6 +6047,7 @@ mod game_tests {
     fn channel_backspace_erases_one_character_only_while_there() {
         let mut game = ScreenGame::new();
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         game.text_input("héllo");
         game.delete_text();
         assert_eq!(game.channel_input(), "héll");
@@ -5601,6 +6062,7 @@ mod game_tests {
     fn channel_confirm_with_a_draft_sends_and_stays_in_channel() {
         let mut game = ScreenGame::new();
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         game.set_channel_input("go");
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Channel);

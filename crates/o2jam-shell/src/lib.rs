@@ -173,6 +173,13 @@ pub trait GameLoop {
     /// 800x600 space; the shell maps window pixels before calling).
     /// Default ignores clicks so existing implementors keep compiling.
     fn mouse_click(&mut self, _x: i32, _y: i32) {}
+    /// Whether the game asked to quit (the planet quit-confirm OK).
+    /// The windowed shell exits the event loop on it; headless walks
+    /// read the flag instead. Default never quits so existing
+    /// implementors keep compiling.
+    fn quit_requested(&self) -> bool {
+        false
+    }
     /// Paint the current frame into the backbuffer view.
     fn paint(&mut self, frame: &mut o2jam_render::Frame<'_>);
 }

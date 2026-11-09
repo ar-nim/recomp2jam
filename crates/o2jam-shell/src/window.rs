@@ -324,6 +324,11 @@ impl ApplicationHandler for WindowHandler {
             WindowEvent::RedrawRequested => {
                 self.shell.paint_backbuffer();
                 self.present(event_loop);
+                // Planet quit-confirm OK (`GameLoop::quit_requested`):
+                // the game asked to leave, so the loop exits.
+                if self.shell.game.quit_requested() {
+                    event_loop.exit();
+                }
             }
             _ => {}
         }

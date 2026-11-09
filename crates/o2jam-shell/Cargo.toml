@@ -11,6 +11,7 @@ o2jam-file = { version = "0.1.0", path = "../o2jam-file" }
 o2jam-game = { version = "0.1.0", path = "../o2jam-game" }
 o2jam-net = { version = "0.1.0", path = "../o2jam-net" }
 o2jam-render = { version = "0.1.0", path = "../o2jam-render" }
+o2jam-text = { version = "0.1.0", path = "../o2jam-text" }
 softbuffer = "0.4"
 winit.workspace = true
 

@@ -1042,6 +1042,7 @@ dependencies = [
  "o2jam-game",
  "o2jam-net",
  "o2jam-render",
+ "o2jam-text",
  "softbuffer",
  "winit",
 ]

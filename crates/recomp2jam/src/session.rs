@@ -712,6 +712,10 @@ impl OnlineSession {
             Err(_) => Box::new(o2jam_audio::NullBackend::new()),
         };
         self.game.with_audio(backend, bank);
+        // Scene BGM stages with the key bank: boot already cued
+        // Avi in the windowed setup, and the song attach re-cues
+        // the current screen through the same table.
+        self.game.stage_scene_bgm(crate::load_scene_bgm_bank());
         tracing::info!(entries, "key sounds attached");
     }
 
@@ -1791,6 +1795,10 @@ impl GameLoop for OnlineSession {
         self.game.mouse_click(x, y);
     }
 
+    fn quit_requested(&self) -> bool {
+        self.game.quit_requested()
+    }
+
     fn paint(&mut self, frame: &mut o2jam_render::Frame<'_>) {
         self.game.paint(frame);
         if self.game.screen() != Screen::Loading {
@@ -1918,6 +1926,7 @@ mod session_tests {
         let (port, server) = fake_gateway(with_server);
         let mut game = ScreenGame::new();
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Waiting);
@@ -1933,6 +1942,7 @@ mod session_tests {
         let (port, server) = fake_gateway(with_server);
         let mut game = ScreenGame::new();
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         assert_eq!(game.screen(), Screen::Channel);
         let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
         (OnlineSession::new(game, gateway), server)
@@ -1945,6 +1955,7 @@ mod session_tests {
         let (port, server) = fake_gateway(with_server);
         let mut game = ScreenGame::new();
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room);
         let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
@@ -2026,6 +2037,7 @@ mod session_tests {
         let (port, server) = fake_gateway(with_server);
         let mut game = ScreenGame::new();
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room);
         let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
@@ -2045,6 +2057,7 @@ mod session_tests {
         let (port, server) = fake_gateway(with_server);
         let mut game = ScreenGame::new();
         game.lane_key(3, true);
+        game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);

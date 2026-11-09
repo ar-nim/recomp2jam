@@ -35,7 +35,9 @@ use super::super::avatar::{
 };
 use super::super::playing::{HighwayGeometry, PlayingView};
 use super::super::screen::Screen;
-use super::side::{planet_band_rect, PlanetBand};
+use super::side::{
+    planet_band_rect, planet_caption_for_code, PlanetBand, PlanetOptionTab, QUIT_MESSAGE_CP949,
+};
 use o2jam_file::ControlList;
 use o2jam_game::RoomTeams;
 use o2jam_net::{
@@ -764,18 +766,323 @@ pub fn paint_lanking_scene(frame: &mut Frame<'_>, art: &SceneArt) {
     art.paint_backdrop(frame, Screen::Lanking);
 }
 
-/// Planet: staged solo-mission art behind uncaptioned buttons, flat
-/// card fallback. Difficulty/mode captions are unevidenced (the TEXT
-/// entries name no art and no setter join pins them), so no labels.
-/// A picked band draws the shared amber cursor inside its pinned
-/// `.bnd` button rect — highlight rendering is unevidenced, so this
-/// cursor is an OPEN stand-in (docs/planet.md), not exe parity.
+/// Ink for CP949 caption and message text: white. Presentation
+/// choice (owner decision `e8d01` — glyph rasterization is
+/// presentation, not gameplay); the exe ink for these `TEXT`
+/// controls is unpinned, the rects and strings are.
+const CP949_INK: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
+
+/// Em extent fitting `text` into a `w`×`h` rect: the smaller of the
+/// height cap and the width-fit scale (advances scale linearly, so
+/// one measure at 1 px/em fixes both). The font-absent stand-in
+/// measures through the same fit, so layout survives without the
+/// system face.
+fn cp949_fit_scale(text: &str, w: f32, h: f32) -> f32 {
+    if w <= 0.0 || h <= 0.0 || text.is_empty() {
+        return h.max(0.0);
+    }
+    let width_per_em = match o2jam_text::system_font() {
+        Some(font) => o2jam_text::measure_text(font, text, 1.0),
+        None => o2jam_text::font::measure_text_stand_in(text, 1.0),
+    };
+    let width_fit = if width_per_em > 0.0 {
+        w / width_per_em
+    } else {
+        h
+    };
+    h.min(width_fit).max(0.0)
+}
+
+/// Paint the composited text image over the frame at `rect`.
+fn composite_text_image(frame: &mut Frame<'_>, rect: &Rect, image: &o2jam_text::Image) {
+    let (frame_w, frame_h) = (frame.w as i32, frame.h as i32);
+    for row in 0..rect.h as i32 {
+        let dest_y = rect.y + row;
+        if dest_y < 0 || dest_y >= frame_h {
+            continue;
+        }
+        for col in 0..rect.w as i32 {
+            let dest_x = rect.x + col;
+            if dest_x < 0 || dest_x >= frame_w {
+                continue;
+            }
+            let Some(src) = image
+                .rgba
+                .get(((row as usize) * (image.width as usize) + col as usize) * 4..)
+            else {
+                continue;
+            };
+            let alpha = u32::from(src[3]);
+            if alpha == 0 {
+                continue;
+            }
+            let at = dest_y as usize * frame.w + dest_x as usize;
+            let Some(dest) = frame.buf.get_mut(at) else {
+                continue;
+            };
+            // Stored rgb is pre-multiplied (`ink * alpha / 255`), so
+            // alpha-over is add the un-inked back portion, per channel.
+            let blend = |ink: u8, back: u32| -> u32 { u32::from(ink) + back * (255 - alpha) / 255 };
+            let red = blend(src[0], (*dest >> 16) & 0xFF);
+            let green = blend(src[1], (*dest >> 8) & 0xFF);
+            let blue = blend(src[2], *dest & 0xFF);
+            *dest = (red << 16) | (green << 8) | blue;
+        }
+    }
+}
+
+/// Paint one CP949 string into its native rect (scaled to the
+/// frame), left-anchored at the rect origin (the same `TEXT` rule
+/// as the waiting captions) and size-fit to the rect. Geometry
+/// always comes from the caller (staged `.bnd` rects or the
+/// dialog-relative message rect) — never from literals here.
+fn paint_cp949_into_rect(frame: &mut Frame<'_>, native_rect: Rect, cp949_bytes: &[u8]) {
+    if frame.w == 0 || frame.h == 0 || native_rect.w == 0 || native_rect.h == 0 {
+        return;
+    }
+    let rect = scale_rect_to_frame(&native_rect, frame.w, frame.h);
+    if rect.w == 0 || rect.h == 0 {
+        return;
+    }
+    let text = o2jam_text::decode_cp949_lossy(cp949_bytes);
+    let scale = cp949_fit_scale(&text, rect.w as f32, rect.h as f32);
+    if scale <= 0.0 {
+        return;
+    }
+    let mut image = o2jam_text::Image::blank(rect.w, rect.h);
+    o2jam_text::draw_text_cp949(
+        &mut image,
+        o2jam_text::system_font(),
+        0,
+        0,
+        cp949_bytes,
+        CP949_INK,
+        scale,
+    );
+    composite_text_image(frame, &rect, &image);
+}
+
+/// Emblem captions over the staged board: each `TEXT` placement
+/// paints its runtime string into its own `.bnd` rect (ordinals
+/// 6..10, `docs/planet.md`). No placement, no caption — geometry
+/// comes from the parsed bind file only (owner rule `f38f3`).
+fn paint_planet_captions(frame: &mut Frame<'_>, placements: &[ScenePlacement]) {
+    for placement in placements {
+        if let Some(caption) = planet_caption_for_code(placement.code) {
+            paint_cp949_into_rect(frame, placement.rect, caption.cp949);
+        }
+    }
+}
+
+/// Planet: staged solo-mission art with the exe-pinned emblem
+/// captions, flat card fallback. The captions ride the `TEXT`
+/// placements' `.bnd` rects (ordinals 6..10) with their
+/// `docs/planet.md`-pinned strings, rasterized through `o2jam-text`
+/// (owner decision `e8d01`); without staged placements no caption
+/// paints (no fallback geometry is invented). A picked band draws
+/// the shared amber cursor inside its pinned `.bnd` button rect —
+/// highlight rendering is unevidenced, so this cursor is an OPEN
+/// stand-in (docs/planet.md), not exe parity.
 pub fn paint_planet_scene(frame: &mut Frame<'_>, art: &SceneArt, selection: Option<PlanetBand>) {
     art.paint_backdrop(frame, Screen::Planet);
+    paint_planet_captions(frame, &art.placements);
     if let Some(band) = selection {
         let rect = planet_band_rect(band);
         paint_cursor(frame, rect.x + 10, rect.y + rect.h as i32 / 2);
     }
+}
+
+/// Dialog origin (native px) of a staged `DIALOG_*` block: the
+/// `BACK` placement's rect origin (the backdrop sprite anchor —
+/// e.g. `Dialog_Question1.ojs` at (240,189), `Dialog_Option_*.ojs`
+/// at (217,42)). Dialog children author dialog-local anchors
+/// (verify: `Question1_OK.ojs` at (52,181) must land at absolute
+/// (292,370) inside the backdrop, matching capture `exit-state.png`;
+/// `Option_Save.ojs` at (160,477) lands at (377,519) inside its
+/// backdrop), so children paint and hit-test at origin + local.
+/// `(0,0)` without a staged backdrop (select-music-like sheets
+/// then paint absolute, correct for their near-origin backdrops).
+#[must_use]
+pub(crate) fn dialog_origin(placements: &[ScenePlacement]) -> (i32, i32) {
+    placements
+        .iter()
+        .find(|placement| {
+            placement
+                .sprite
+                .as_deref()
+                .is_some_and(|sprite| sprite.starts_with("Dialog_"))
+        })
+        .map_or((0, 0), |placement| (placement.rect.x, placement.rect.y))
+}
+
+/// Paint one dialog placement at its dialog-relative origin: the
+/// backdrop (`Dialog_*.ojs`) at its absolute anchor (its anchor
+/// *is* the origin), every child at origin + anchor.
+fn paint_dialog_figure(
+    frame: &mut Frame<'_>,
+    placement: &ScenePlacement,
+    figure: &AvatarFigure,
+    origin: (i32, i32),
+) {
+    let is_backdrop = placement
+        .sprite
+        .as_deref()
+        .is_some_and(|sprite| sprite.starts_with("Dialog_"));
+    let (view_x, view_y) = if is_backdrop {
+        (0, 0)
+    } else {
+        anchor_in_frame(origin.0, origin.1, frame.w, frame.h)
+    };
+    figure.paint_scaled_anchors(frame, view_x, view_y, frame.w, frame.h);
+}
+
+/// Paint a staged dialog scene dialog-relative (options and
+/// quit-confirm sheets; one back-to-front pass in file order).
+/// Placements without a loaded figure paint nothing.
+pub fn paint_dialog_scene(frame: &mut Frame<'_>, art: &SceneArt) {
+    if !art.has_figures() {
+        return;
+    }
+    let origin = dialog_origin(&art.placements);
+    for placement in &art.placements {
+        let Some(name) = placement.sprite.as_ref() else {
+            continue;
+        };
+        let Some(figure) = art.figures.get(name) else {
+            continue;
+        };
+        if figure.is_empty() {
+            continue;
+        }
+        paint_dialog_figure(frame, placement, figure, origin);
+    }
+}
+
+/// Dialog-relative hit for `code`: origin + parsed `.bnd` rect,
+/// right/bottom exclusive (`rect_hit`). `false` without a staged
+/// placement (un-staged dialogs hit nothing — Escape still
+/// closes them).
+#[must_use]
+pub(crate) fn dialog_rect_hit(placements: &[ScenePlacement], code: u32, x: i32, y: i32) -> bool {
+    let (origin_x, origin_y) = dialog_origin(placements);
+    placements
+        .iter()
+        .find(|placement| placement.code == code)
+        .is_some_and(|placement| {
+            rect_hit(
+                &Rect {
+                    x: placement.rect.x + origin_x,
+                    y: placement.rect.y + origin_y,
+                    w: placement.rect.w,
+                    h: placement.rect.h,
+                },
+                x,
+                y,
+            )
+        })
+}
+
+/// Frame-centered quit-fallback boxes (native 800x600 space): used
+/// only while no dialog art is staged, so the popup still shows
+/// and clicks without archives. Returns (message, OK, CANCEL)
+/// rects as fractions of the canvas — never staged geometry.
+/// With [`paint_dialog_scene`] present the bnd rects own layout
+/// (see [`dialog_rect_hit`]) and these boxes never paint.
+#[must_use]
+pub(crate) fn quit_fallback_rects() -> (Rect, Rect, Rect) {
+    const W: i32 = 800;
+    const H: i32 = 600;
+    let message = Rect {
+        x: W / 4,
+        y: H / 3,
+        w: (W / 2) as u32,
+        h: 26,
+    };
+    let ok = Rect {
+        x: W / 2 - 90,
+        y: H / 3 + 40,
+        w: 80,
+        h: 26,
+    };
+    let cancel = Rect {
+        x: W / 2 + 10,
+        y: H / 3 + 40,
+        w: 80,
+        h: 26,
+    };
+    (message, ok, cancel)
+}
+
+/// Quit-confirm popup over the bare board: the staged
+/// `Dialog_Question1` sheet (dialog-relative) with the
+/// capture-pinned message in its `TEXT` rect, or the frame-centered
+/// fallback (message + OK/CANCEL words) without staged art.
+/// OK quits, CANCEL closes (the game routes the clicks through
+/// [`dialog_rect_hit`], fallback [`quit_fallback_rects`]).
+pub fn paint_planet_quit(frame: &mut Frame<'_>, art: Option<&SceneArt>) {
+    if let Some(art) = art.filter(|art| art.has_figures()) {
+        paint_dialog_scene(frame, art);
+        let origin = dialog_origin(&art.placements);
+        for placement in &art.placements {
+            if placement.code == super::side::QUIT_MESSAGE_CODE {
+                paint_cp949_into_rect(
+                    frame,
+                    Rect {
+                        x: placement.rect.x + origin.0,
+                        y: placement.rect.y + origin.1,
+                        w: placement.rect.w,
+                        h: placement.rect.h,
+                    },
+                    QUIT_MESSAGE_CP949,
+                );
+            }
+        }
+        return;
+    }
+    fill_rect(
+        frame,
+        &Rect {
+            x: 0,
+            y: 0,
+            w: frame.w as u32,
+            h: frame.h as u32,
+        },
+        scrim_color(),
+    );
+    let (message, ok, cancel) = quit_fallback_rects();
+    paint_cp949_into_rect(frame, message, QUIT_MESSAGE_CP949);
+    for (button, word) in [(ok, "OK"), (cancel, "CANCEL")] {
+        let scaled = scale_rect_to_frame(&button, frame.w, frame.h);
+        fill_rect(frame, &scaled, CHANNEL_ENTER_TONE);
+        draw_text(frame, scaled.x + 8, scaled.y + 8, word, art_title_ink());
+    }
+}
+
+/// Options dialog over the bare board: the staged
+/// `Dialog_Option_*` sheet for `tab` (dialog-relative), or a
+/// title-only fallback without staged art (tab choice and mount
+/// stay OPEN — see [`PLANET_OPTION_FIRST_TAB`](super::side::PLANET_OPTION_FIRST_TAB)/// ). Escape (and the tab's `Option_Exit` button, when staged)
+/// closes it.
+pub fn paint_planet_options(frame: &mut Frame<'_>, art: Option<&SceneArt>, tab: PlanetOptionTab) {
+    if let Some(art) = art.filter(|art| art.has_figures()) {
+        paint_dialog_scene(frame, art);
+        return;
+    }
+    let _ = tab;
+    let title = "OPTIONS";
+    let (x, y) = title_origin(frame, title);
+    let text_w = text_width(title) as i32;
+    fill_rect(
+        frame,
+        &Rect {
+            x: x - 4,
+            y: y - 2,
+            w: (text_w + 8).max(0) as u32,
+            h: 9,
+        },
+        scrim_color(),
+    );
+    draw_text(frame, x, y, title, art_title_ink());
 }
 
 /// Reference-measured bare-board geometry (planet scene, native px;

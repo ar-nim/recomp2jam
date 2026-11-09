@@ -297,6 +297,7 @@ fn seated_room() -> JoinedRoom {
 /// Walk the menu journey from splash to the loading gate.
 fn walk_to_loading(game: &mut ScreenGame) {
     game.lane_key(3, true);
+    game.click_planet(136, 88);
     game.menu_key(MenuKey::Confirm, true);
     game.menu_key(MenuKey::Confirm, true);
     game.menu_key(MenuKey::Confirm, true);
@@ -401,6 +402,7 @@ fn channel_layers_list_over_real_dialog_art() {
     base_game.load_scene(Screen::Channel, Vec::new(), HashMap::new());
     base_game.load_scene(Screen::Planet, Vec::new(), HashMap::new());
     base_game.lane_key(3, true);
+    base_game.click_planet(136, 88);
     let mut base = vec![0u32; CHANNEL_PROBE_W * CHANNEL_PROBE_H];
     base_game.paint_at(
         &mut Frame {
@@ -418,6 +420,7 @@ fn channel_layers_list_over_real_dialog_art() {
     dialog_game.load_scene(Screen::Channel, Vec::new(), figures.clone());
     dialog_game.load_scene(Screen::Planet, Vec::new(), HashMap::new());
     dialog_game.lane_key(3, true);
+    dialog_game.click_planet(136, 88);
     assert_eq!(dialog_game.screen(), Screen::Channel);
     let mut dialog_frame = vec![0u32; CHANNEL_PROBE_W * CHANNEL_PROBE_H];
     dialog_game.paint_at(
@@ -434,6 +437,7 @@ fn channel_layers_list_over_real_dialog_art() {
     board_game.load_scene(Screen::Channel, Vec::new(), HashMap::new());
     board_game.load_scene(Screen::Planet, planet_placements.clone(), planet_figures);
     board_game.lane_key(3, true);
+    board_game.click_planet(136, 88);
     let mut board_frame = vec![0u32; CHANNEL_PROBE_W * CHANNEL_PROBE_H];
     board_game.paint_at(
         &mut Frame {
@@ -453,6 +457,7 @@ fn channel_layers_list_over_real_dialog_art() {
         planet_figures_full(&archive, &list),
     );
     game.lane_key(3, true);
+    game.click_planet(136, 88);
     assert_eq!(game.screen(), Screen::Channel);
     let mut frame = vec![0u32; CHANNEL_PROBE_W * CHANNEL_PROBE_H];
     game.paint_at(
@@ -552,7 +557,7 @@ fn planet_layers_staged_art_under_the_live_cursor() {
     let mut game = ScreenGame::new();
     game.load_scene(Screen::Planet, placements, figures);
     game.lane_key(3, true);
-    assert!(game.enter_screen(Screen::Planet), "Channel→Planet edge");
+    assert_eq!(game.screen(), Screen::Planet, "boot → bare board");
     game.click_planet(614 + 49, 32 + 56);
     assert_eq!(
         game.planet_selection(),
@@ -592,7 +597,7 @@ fn planet_without_art_keeps_the_flat_card() {
     // the pick through the pinned rects.
     let mut game = ScreenGame::new();
     game.lane_key(3, true);
-    assert!(game.enter_screen(Screen::Planet));
+    assert_eq!(game.screen(), Screen::Planet);
     game.click_planet(206 + 49, 32 + 56);
     assert_eq!(
         game.planet_selection(),
@@ -620,6 +625,7 @@ fn room_layers_rows_over_bound_room_art() {
     game.set_rooms(vec![one_room()]);
     game.load_scene(Screen::Room, placements, figures);
     game.lane_key(3, true);
+    game.click_planet(136, 88);
     game.menu_key(MenuKey::Confirm, true);
     assert_eq!(game.screen(), Screen::Room);
     let frame = painted(&mut game, 0);
@@ -641,6 +647,7 @@ fn waiting_layers_seats_over_bound_waiting_art() {
     game.set_joined_room(seated_room());
     game.load_scene(Screen::Waiting, placements, figures);
     game.lane_key(3, true);
+    game.click_planet(136, 88);
     game.menu_key(MenuKey::Confirm, true);
     game.menu_key(MenuKey::Confirm, true);
     assert_eq!(game.screen(), Screen::Waiting);

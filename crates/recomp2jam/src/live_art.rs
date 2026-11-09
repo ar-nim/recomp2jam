@@ -32,7 +32,9 @@ use o2jam_shell::screens::paint::{
     CHANNEL_ENTER_SPRITE, CHANNEL_SCROLL_BAR_SPRITE, CHANNEL_SCROLL_DOWN_SPRITE,
     CHANNEL_SCROLL_UP_SPRITE, DIALOG_BAR_SPRITE, PLAYING_BLOCK, RESULT_WINLOSE_SPRITE,
 };
-use o2jam_shell::screens::side::SELECT_MUSIC_DIALOG_BLOCK;
+use o2jam_shell::screens::side::{
+    PLANET_OPTION_FIRST_TAB, QUIT_DIALOG_BLOCK, SELECT_MUSIC_DIALOG_BLOCK,
+};
 use o2jam_shell::{PlaySkin, Screen, ScreenGame};
 
 /// Interface archive under `install-root` (Avi/Room/Waiting/Result art).
@@ -180,6 +182,30 @@ fn stage_interface_scenes(game: &mut ScreenGame, archive: &[u8]) {
     stage_select_dialog_art(game, archive, &list);
     stage_anchor_scene(game, archive, &list);
     stage_channel_dialog(game, archive);
+    stage_planet_dialogs(game, archive, &list);
+}
+
+/// Stage the planet-board modal sheets: the first-open options tab
+/// (`Dialog_Option_*`; tab choice OPEN) and the quit-confirm
+/// (`Dialog_Question1`). Both stay modal art (the game paints them
+/// dialog-relative only while open), never scene slots. Each block
+/// stages independently; a miss keeps the fallback popup/title.
+/// Shared with the shots walk (one implementation for both).
+pub(crate) fn stage_planet_dialogs(game: &mut ScreenGame, archive: &[u8], list: &ControlList) {
+    if let Some((placements, figures)) = stage_bound_block(
+        archive,
+        list,
+        PLANET_OPTION_FIRST_TAB.block_name(),
+        None,
+        None,
+    ) {
+        game.load_planet_option_scene(placements, figures);
+    }
+    if let Some((placements, figures)) =
+        stage_bound_block(archive, list, QUIT_DIALOG_BLOCK, None, None)
+    {
+        game.load_planet_quit_scene(placements, figures);
+    }
 }
 
 /// Stage the code-mounted channel dialog art (the 0x8C block names the
@@ -411,10 +437,15 @@ mod live_art_tests {
         game
     }
 
-    /// Walk the offline flow to one screen (lane dismisses the splash,
-    /// then one Confirm per edge).
+    /// Walk the offline flow to one screen (lane dismisses the splash
+    /// onto the bare board, then one Confirm per edge: emblem →
+    /// dialog → room → waiting → loading).
     fn walk_to(game: &mut ScreenGame, target: Screen) {
         game.lane_key(3, true);
+        if target == Screen::Planet {
+            return;
+        }
+        game.menu_key(MenuKey::Confirm, true);
         if target == Screen::Channel {
             return;
         }
