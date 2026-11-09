@@ -183,11 +183,12 @@ are gameplay-pinned as above.
    are server channel families (see "Live verification"); the exe's
    own entry key into Planet is moot — Planet IS the boot board and
 the channel dialog auto-opens ~21 s after login.
-7. BGM start trigger and NPC voice role — CLOSED as no-trigger (2026-11-09,
-   static scan): all 7 background tracks preload together at audio
-   init (function region file `0x1a5710`..`0x1a5fe0` via the index loop
-   file `0x150ae0` over the 7-entry table at file `0x27f730`,
-   `Music/Planet.ojm` at file `0x27f850` = index 4); no per-state
-   open and no Planet-entry/button caller exist, and track selection
-   among opened streams is unidentified. The shell starts no BGM —
-   correct absence, not a gap.
+7. BGM start trigger — SUPERSEDED 2026-11-10 (the earlier "no-trigger"
+   static-scan verdict was a scan-shape miss, not a negative): the
+   selector `0x151820(id, loop)` (VA `0x551820`) is called from every
+   state's v4 entry with immediate ids — Avi→8 (once), Planet→9
+   (loop), Room/Payment/Payment2→3, Shop→4, Myroom→5, Waiting→6,
+   MusicShop→0x10, Result→0x13, option preview→0, transitions→−1
+   (silence); bank `soundmgr[0x76832c]+0x340c0`; `Music/BGM.ojm`
+   one-based records. NPC voice role stays OPEN. See
+   `~/scratch/bgm-evidence/findings.md` and `docs/coverage-audit.md`.
