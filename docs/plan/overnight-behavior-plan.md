@@ -156,6 +156,16 @@ streams A (BGM) and C (font).
 4. Continue while budget remains; stop with a summary: done /
    blocked-with-next-step / remaining budget.
 
+## Supersession
+
+The gap-closure sprints (S0–S7) completed 2026-11-10 (all landed,
+`docs/parity.md` updated). Gameplay-scene parity stays deferred on the
+E2 wedge. Further application work continues under
+`docs/plan/usable-client-plan.md` — its **interactive-verifiable**
+standing rule (window path + OS-boundary trace + smoke note) governs
+every later sprint, per the owner directive that interactive
+verification is the whole point.
+
 ## Definition of done
 
 Every subsystem row in `docs/parity.md` reaches PASS (exe evidence +
