@@ -111,7 +111,9 @@ impl SceneArt {
 /// exe-pinned row rects exactly (4/4), which verifies the pairing
 /// (`docs/channel-fill.md` "METHOD CORRECTION 2026-11-10"). A
 /// native click at (577,171) closes the dialog (verified live
-/// 2026-11-09); it lands inside this rect.
+/// 2026-11-09); it lands inside this rect. Live measurement agreed
+/// within ±2 px (brightness-run tolerance, live 2026-11-09: visible
+/// plate (546,155)-(583,187)).
 pub(crate) const CHANNEL_DIALOG_X_RECT: Rect = Rect {
     x: 541,
     y: 151,
@@ -144,16 +146,16 @@ pub const fn scene_index(screen: Screen) -> usize {
     }
 }
 
-/// Channel dialog art: code-fetched (`Dialog_ChannelSelectBar.ojs` is a
-/// real archive body named by no block), so it is never part of the
-/// `STATE_CHANNEL` scene. The single code fetch sits at file `0x8de84`
-/// (VA `0x48de84`) inside the builder at file `0x8dd10` (VA `0x48dd10`),
-/// beside `ControlList`-parent (`0x762B44`) traffic and ~63 KB below the
-/// dialog-open path (`0x4ED650`, file `0xed650`) — the bar is not mounted
-/// by `0x4ED650`, and with no `DIALOG_` literal in the image its dialog
-/// host stays unpinned. Entry-less mounted art stages through
-/// [`unbound_scene_placements`] with an empty id and paints at its
-/// record anchor.
+/// Channel-list hover highlight bar: the code-mounted
+/// `Dialog_ChannelSelectBar.ojs` body (one 348x44 body). Live-confirmed
+/// mount: the sprite record sits at dialog+`0x8C` of the hosting dialog
+/// object (mounted record h/w/pitch 44/348/696 at +0x170/+0x174/+0x178;
+/// stopped-state winedbg read, live 2026-11-09). It is code-fetched
+/// (named by no block), so it is never part of the `STATE_CHANNEL`
+/// scene. The painter paints it at the hovered row's rect
+/// ((216, row_top), 348x44 — live pixel-measured, follows the hovered
+/// row; hover responds to mouse motion alone). Hover-driven, exe-
+/// confirmed (live 2026-11-09).
 pub const DIALOG_BAR_SPRITE: &str = "Dialog_ChannelSelectBar.ojs";
 
 /// The channel-list dialog body (`Dialog_ChannelInfo.ojs`, one raw
@@ -365,7 +367,9 @@ pub(crate) fn channel_row_hit(y: i32, row_count: usize) -> Option<usize> {
 
 /// Bnd-pinned row-bar geometry (`Dialog_ChannelInfo.bnd`, pairing
 /// exe-verified by the exact row-rect match; `docs/channel-fill.md`
-/// "METHOD CORRECTION 2026-11-10"): the `CH_Back` bar mounts at the
+/// "METHOD CORRECTION 2026-11-10"). Live measurement agreed within ±2
+/// px (brightness-run tolerance, live 2026-11-09: face art measured
+/// (501,row_top+10) 44x21 vs the bnd-derived (502,row.t+12)): the `CH_Back` bar mounts at the
 /// row origin +1 inset, and every bar child is bar-local. The enter
 /// face is bar-local (285,11) with size 44x21, so the face origin of
 /// row `i` is `(row.l+286, row.t+12)` — row 0 reads (502,236), exact
@@ -383,7 +387,9 @@ const CHANNEL_FACE_H: i32 = 21;
 const CHANNEL_DIGIT_LOCALS: [(i32, i32); 2] = [(50, 11), (63, 11)];
 const CHANNEL_COUNT_LOCAL: (i32, i32) = (90, 12);
 
-/// Bnd-pinned scroll track `(573,213)-(594,429)` (21x216). The
+/// Bnd-pinned scroll track `(573,213)-(594,429)` (21x216). Live
+/// measurement agreed within ±2 px (brightness-run tolerance, live
+/// 2026-11-09: visible plate column x575-595, track y231-414). The
 /// arrows are scroll-local (0,0) and (0,196) (21x20 each); the 21x45
 /// bar body rides between them — its exact body offset inside the
 /// arrow-bounded track is the one derived value here (mounted under
@@ -420,23 +426,25 @@ pub(crate) fn channel_enter_origin(slot: usize) -> (i32, i32) {
         bar_y.saturating_add(CHANNEL_FACE_LOCAL_Y),
     )
 }
-/// Reference-measured Channel row chrome in native px (`/tmp/chan2-list.png`;
-/// row 0 only, followers re-base on the pinned row tops, exe-OPEN):
-/// dark name pill behind the row text, hollow silver track with dark
-/// segment bodies (all rows read empty on the quiet server, so no
-/// fill rule is evidenced — the interior stays whatever the backdrop
-/// painted).
-const CHANNEL_PILL_X: i32 = 205;
-const CHANNEL_PILL_Y: i32 = 227;
-const CHANNEL_PILL_W: i32 = 94;
-const CHANNEL_PILL_H: i32 = 35;
+/// Live-measured fallback row chrome (native px, live Wine capture
+/// 2026-11-09, row 0; followers re-base on the pinned row tops). The
+/// wells are baked into the staged `ChannelInfo_CH_Back.ojs` bar art
+/// when present — these constants drive the no-archive fallback only.
+/// Measured rects: number well (225,228) 71x32 ("Ch. 0N" well; the
+/// old (205,227) 94x35 pill was 20 px off); track well (298,229)
+/// 195x32 (10 segments, pitch 18).
+const CHANNEL_PILL_X: i32 = 225;
+const CHANNEL_PILL_Y: i32 = 228;
+const CHANNEL_PILL_W: i32 = 71;
+const CHANNEL_PILL_H: i32 = 32;
 /// Measured pill tone (near-black).
 const CHANNEL_PILL_TONE: u32 = pack_xrgb(19, 20, 21);
-/// Track chrome rect in native px (see above).
-const CHANNEL_TRACK_X: i32 = 297;
-const CHANNEL_TRACK_Y: i32 = 228;
-const CHANNEL_TRACK_W: i32 = 203;
-const CHANNEL_TRACK_H: i32 = 33;
+/// Track chrome rect in native px (see above: live-measured
+/// (298,229) 195x32).
+const CHANNEL_TRACK_X: i32 = 298;
+const CHANNEL_TRACK_Y: i32 = 229;
+const CHANNEL_TRACK_W: i32 = 195;
+const CHANNEL_TRACK_H: i32 = 32;
 /// Measured track tones: bright top edge, mid sides and bottom.
 const CHANNEL_TRACK_TOP_TONE: u32 = pack_xrgb(230, 227, 230);
 const CHANNEL_TRACK_SIDE_TONE: u32 = pack_xrgb(150, 148, 150);
@@ -708,7 +716,13 @@ fn paint_channel_scrim(frame: &mut Frame<'_>, shown: usize) {
 /// four rows with the rest reachable by scroll (`/tmp/chan2-list.png`).
 /// Reference-grade, exe-OPEN; scroll interaction itself stays OPEN.
 pub(crate) const CHANNEL_VISIBLE_ROWS: usize = 4;
-/// Measured pager strip origin in native px (see above).
+/// Contested pager-strip origin in native px. Live-confirmed
+/// 2026-11-09: the bottom strip (y~439-466) is dialog-sheet rim
+/// chrome (brushed metal y439-461, groove 461-463, decorative
+/// streaks below) — no `<a-b/n>` readout or pager arrows in any
+/// state (idle, hover, after row click; 22 channels). Whether pager
+/// text ever paints is CONTESTED: one earlier capture showed strip
+/// ink, the 2026-11-09 session none. OPEN.
 const CHANNEL_PAGER_Y: i32 = 446;
 
 /// Visible Channel slice for `highlight`: viewport top plus shown
@@ -729,7 +743,8 @@ pub(crate) fn viewport_top(highlight: usize, len: usize) -> usize {
 
 /// Pager readout under the rows (`< a-b/n >`, display-only: paging
 /// interaction is untraced, so arrows bind no clicks — P0).
-/// Reference-measured strip, exe-OPEN like the rows.
+/// CONTESTED: the strip under the constant is live-confirmed rim
+/// chrome; whether pager text ever paints stays OPEN (see above).
 fn paint_channel_pager(frame: &mut Frame<'_>, top: usize, shown: usize, len: usize) {
     if len == 0 {
         return;
@@ -803,6 +818,30 @@ pub fn paint_planet_scene(frame: &mut Frame<'_>, art: &SceneArt, selection: Opti
     }
 }
 
+/// Reference-measured bare-board geometry (planet scene, native px;
+/// 2026-11-09 capture `cap-1.png`, quiet server). Documented for
+/// future wiring — no hit-testing binds these yet (only the pinning
+/// test reads them, so the dead-code allowance rides along).
+/// Promo pager nav cluster (left arrow / play-stop / right arrow
+/// cells ride inside).
+pub const PLANET_BOARD_PROMO_NAV_RECT: Rect = Rect {
+    x: 345,
+    y: 509,
+    w: 107,
+    h: 27,
+};
+/// OPTION disc (gear, exe art 40x40) origin.
+pub const PLANET_BOARD_OPTION_ORIGIN: (i32, i32) = (712, 562);
+/// EXIT disc (power, exe art 40x40) origin.
+pub const PLANET_BOARD_EXIT_ORIGIN: (i32, i32) = (753, 562);
+/// MENU back-arrow circle (center ~(145,578)).
+pub const PLANET_BOARD_MENU_BACK_RECT: Rect = Rect {
+    x: 130,
+    y: 562,
+    w: 31,
+    h: 32,
+};
+
 /// One channel row: `gateway/channel population/capacity` (both ids
 /// ride the `GetChannelList` 1003 row; population over capacity).
 #[must_use]
@@ -849,7 +888,7 @@ fn paint_channel_rows(
         };
         draw_text(frame, text_x, row, &entry, ink);
         if top + slot == highlight {
-            paint_cursor(frame, text_x, row);
+            paint_channel_highlight(frame, slot, text_x, row, art);
         }
     }
     if let Some(art) = art {
@@ -923,6 +962,37 @@ fn paint_cursor(frame: &mut Frame<'_>, text_x: i32, y: i32) {
         },
         pack_xrgb(0xFF, 0xD0, 0x20),
     );
+}
+
+/// Native geometry of the hover highlight bar (`Dialog_ChannelSelectBar`,
+/// 348x44 — the size rides the staged figure, so only the left edge
+/// is a constant): left edge and size pinned by the live measurement
+/// (bar border (216,row_top)-(561,row_top+41), live 2026-11-09); the
+/// row top comes from the exe-pinned [`CHANNEL_ROW_RECTS`] table.
+const CHANNEL_SELECT_BAR_X: i32 = 216;
+
+/// Channel-list highlight: the code-mounted select-bar body at the
+/// hovered row's rect (216,row_top,348x44, scaled to the frame) while
+/// the figure stages — the exe paints the bar on the hovered row
+/// (hover-driven, live-confirmed 2026-11-09); the amber cursor
+/// stand-in paints otherwise (no figure staged).
+fn paint_channel_highlight(
+    frame: &mut Frame<'_>,
+    slot: usize,
+    text_x: i32,
+    row: i32,
+    art: Option<&SceneArt>,
+) {
+    if let Some(figure) = art
+        .and_then(|art| art.figures.get(DIALOG_BAR_SPRITE))
+        .filter(|figure| !figure.is_empty())
+    {
+        let row_top = CHANNEL_ROW_RECTS[slot.min(CHANNEL_SLOT_COUNT - 1)].1;
+        let (dx, dy) = anchor_in_frame(CHANNEL_SELECT_BAR_X, row_top, frame.w, frame.h);
+        figure.paint_scaled_anchors(frame, dx, dy, frame.w, frame.h);
+        return;
+    }
+    paint_cursor(frame, text_x, row);
 }
 
 /// Paint the online channel list with a highlight cursor.
@@ -7693,9 +7763,11 @@ mod paint_tests {
 
     #[test]
     fn channel_bar_art_layers_behind_the_live_list() {
-        // The code-fetched channel bar (`DIALOG_BAR_SPRITE`, never a
-        // `STATE_CHANNEL` entry) stages entry-less at its record anchor:
-        // bar ink at the origin, live list and cursor on top, no fill.
+        // The code-fetched hover bar (`DIALOG_BAR_SPRITE`, never a
+        // `STATE_CHANNEL` entry) stages entry-less and paints as the
+        // list highlight at the highlighted row's rect (scaled
+        // (216,row_top)): bar ink lands there, the live list on top,
+        // the amber cursor stand-in paints nothing, no fill.
         let art = SceneArt {
             placements: unbound_scene_placements(&[DIALOG_BAR_SPRITE.to_owned()]),
             figures: HashMap::from([(DIALOG_BAR_SPRITE.to_owned(), red_figure())]),
@@ -7712,9 +7784,9 @@ mod paint_tests {
             &art,
             None,
         );
-        assert_eq!(buf[0], pack_xrgb(255, 0, 0));
+        assert_eq!(buf[17 * 64 + 17], pack_xrgb(255, 0, 0));
         assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
-        assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xD0, 0x20)));
+        assert!(!buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
         assert!(!buf.contains(&background_of(Screen::Channel)));
     }
 
@@ -7868,6 +7940,131 @@ mod paint_tests {
         );
         assert!(buf.contains(&CHANNEL_PILL_TONE));
         assert!(buf.contains(&CHANNEL_TRACK_TOP_TONE));
+    }
+
+    #[test]
+    fn channel_select_bar_paints_at_the_highlighted_row() {
+        // Staged Dialog_ChannelSelectBar (348x44) is the list
+        // highlight: it paints at the highlighted row's rect
+        // ((216,row_top), live-measured 2026-11-09) and the amber
+        // cursor stand-in paints nothing.
+        let art = SceneArt {
+            placements: Vec::new(),
+            figures: HashMap::from([(
+                DIALOG_BAR_SPRITE.to_owned(),
+                solid_figure(348, 44, [0x1F, 0x00]), // solid blue
+            )]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_channel_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &two_channels(),
+            1,
+            &art,
+            None,
+        );
+        let blue = pack_xrgb(0x00, 0x00, 0xFF);
+        // Highlight 1 → viewport slot 1, row top 275: bar at (216,275).
+        assert_eq!(buf[280 * 800 + 220], blue, "select bar at row 1");
+        assert_eq!(buf[300 * 800 + 500], blue, "select bar bottom-right");
+        // Row 0 (top 224) carries no bar: above the bar nothing blue.
+        assert_ne!(buf[230 * 800 + 220], blue, "no bar on row 0");
+        assert!(
+            !buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)),
+            "amber cursor paints with the select bar staged"
+        );
+    }
+
+    #[test]
+    fn channel_highlight_falls_back_to_the_cursor_without_select_bar() {
+        // Without the staged select bar the highlight is the amber
+        // cursor (fallback), even with other dialog figures staged.
+        let art = SceneArt {
+            placements: Vec::new(),
+            figures: HashMap::from([(
+                CHANNEL_DIALOG_SPRITE.to_owned(),
+                solid_figure(8, 8, [0xE0, 0x03]),
+            )]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_channel_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &two_channels(),
+            0,
+            &art,
+            None,
+        );
+        assert!(
+            buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)),
+            "amber cursor paints without the select bar"
+        );
+    }
+
+    #[test]
+    fn channel_fallback_chrome_uses_live_measured_wells() {
+        // No-archive fallback: the number well (225,228) 71x32 and the
+        // track well (298,229) 195x32 paint at the 2026-11-09
+        // live-measured rects (row 0; followers re-base on the row
+        // tops).
+        let mut buf = vec![0u32; 800 * 600];
+        paint_channel_list(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &two_channels(),
+            0,
+        );
+        // Number well interior.
+        assert_eq!(buf[250 * 800 + 250], CHANNEL_PILL_TONE, "number well");
+        assert_ne!(buf[250 * 800 + 220], CHANNEL_PILL_TONE, "left of the well");
+        assert_ne!(buf[250 * 800 + 300], CHANNEL_PILL_TONE, "right of the well");
+        // Track well: bright top edge, hollow interior (backdrop only).
+        assert_eq!(
+            buf[229 * 800 + 300],
+            CHANNEL_TRACK_TOP_TONE,
+            "track top edge"
+        );
+        assert_eq!(
+            buf[240 * 800 + 350],
+            scrim_color(),
+            "track interior stays hollow"
+        );
+    }
+
+    #[test]
+    fn planet_board_reference_geometry_is_pinned() {
+        // Bare-board constants (2026-11-09 reference measurement) stay
+        // pinned for future wiring.
+        assert_eq!(
+            PLANET_BOARD_PROMO_NAV_RECT,
+            Rect {
+                x: 345,
+                y: 509,
+                w: 107,
+                h: 27
+            }
+        );
+        assert_eq!(PLANET_BOARD_OPTION_ORIGIN, (712, 562));
+        assert_eq!(PLANET_BOARD_EXIT_ORIGIN, (753, 562));
+        assert_eq!(
+            PLANET_BOARD_MENU_BACK_RECT,
+            Rect {
+                x: 130,
+                y: 562,
+                w: 31,
+                h: 32
+            }
+        );
     }
 
     #[test]

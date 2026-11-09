@@ -503,10 +503,12 @@ fn channel_layers_list_over_staged_art() {
     game.lane_key(3, true);
     assert_eq!(game.screen(), Screen::Channel);
     let buf = painted_game(&mut game, 64, 48, 0);
-    assert_composed(
-        &buf,
-        &[pack_xrgb(0xFF, 0xFF, 0xFF), pack_xrgb(0xFF, 0xD0, 0x20)],
-    );
+    // The staged select bar is the highlight: it paints at the
+    // highlighted row's rect (scaled (216,row_top) ≈ (17,17)), the
+    // live list inks on top, and the amber cursor stand-in is gone.
+    assert_eq!(buf[17 * 64 + 17], staged_ink());
+    assert_composed(&buf, &[pack_xrgb(0xFF, 0xFF, 0xFF)]);
+    assert!(!buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
 }
 
 #[test]

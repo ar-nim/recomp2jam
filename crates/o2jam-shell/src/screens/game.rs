@@ -3871,9 +3871,13 @@ mod game_tests {
             },
             0,
         );
-        assert_eq!(buf[0], pack_xrgb(255, 0, 0));
+        // The staged select bar is the highlight: it paints at the
+        // highlighted row's rect (scaled (216,row_top)), so bar ink
+        // lands near (17,17) — not the frame origin — and the amber
+        // cursor stand-in paints nothing.
+        assert_eq!(buf[17 * 64 + 17], pack_xrgb(255, 0, 0));
         assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
-        assert!(buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
+        assert!(!buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
     }
 
     #[test]
@@ -4028,8 +4032,8 @@ mod game_tests {
             0,
         );
         assert!(white_near(&buf, 800, 600, (200, 232)));
-        assert_eq!(buf[240 * 800 + 210], pack_xrgb(19, 20, 21));
-        assert_eq!(buf[228 * 800 + 350], pack_xrgb(230, 227, 230));
+        assert_eq!(buf[240 * 800 + 230], pack_xrgb(19, 20, 21));
+        assert_eq!(buf[229 * 800 + 350], pack_xrgb(230, 227, 230));
         assert!(ink_near(
             &buf,
             800,

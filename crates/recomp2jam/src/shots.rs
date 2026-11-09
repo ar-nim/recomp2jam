@@ -21,7 +21,7 @@ use o2jam_shell::avatar::{
 use o2jam_shell::screens::paint::{
     CHANNEL_BAR_SPRITE, CHANNEL_COUNT_SPRITE, CHANNEL_DIALOG_SPRITE, CHANNEL_DIGIT_SPRITE,
     CHANNEL_ENTER_SPRITE, CHANNEL_SCROLL_BAR_SPRITE, CHANNEL_SCROLL_DOWN_SPRITE,
-    CHANNEL_SCROLL_UP_SPRITE, PLAYING_BLOCK, RESULT_WINLOSE_SPRITE,
+    CHANNEL_SCROLL_UP_SPRITE, DIALOG_BAR_SPRITE, PLAYING_BLOCK, RESULT_WINLOSE_SPRITE,
 };
 use o2jam_shell::screens::side::SELECT_MUSIC_DIALOG_BLOCK;
 use o2jam_shell::{GameLoop, MenuKey, PlaySkin, Screen, ScreenGame};
@@ -343,8 +343,12 @@ fn stage_channel_dialog(game: &mut ScreenGame, archive: &[u8]) {
     // 2026-11-10"). The painter mounts each figure at its bnd-derived
     // origin (bar at row origin +1, bar-local children, scroll bodies
     // on the track); absent figures fall back to today's stand-ins.
+    // The hover highlight bar (`Dialog_ChannelSelectBar.ojs`, 348x44)
+    // is code-mounted too — live-confirmed sprite record at
+    // dialog+0x8C (2026-11-09) — and paints at the hovered row's rect.
     let names = vec![
         CHANNEL_DIALOG_SPRITE.to_owned(),
+        DIALOG_BAR_SPRITE.to_owned(),
         CHANNEL_ENTER_SPRITE.to_owned(),
         CHANNEL_BAR_SPRITE.to_owned(),
         CHANNEL_DIGIT_SPRITE.to_owned(),
