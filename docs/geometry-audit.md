@@ -286,3 +286,36 @@ Total audited: 133 named constants.
   is fixed-pixel avatar/verdict placement behind a scrim, not a
   geometry constant.
 - Musicselect cell FAIL ↔ all 22 CANDIDATE rows; pairing unproven.
+
+## A/V verification vs the real exe (2026-11-10)
+
+Static frames compared with the av-compare pipeline (SSIM/PSNR) plus a
+band-wise translation search (raw + edge MAE, ±8 px) on native 800x600
+frames: real Wine captures (`~/scratch/button-unblock/planet-bare-2.png`,
+`planet-channel.png`; `reference-musicselect-4x3.png` downscaled 1920→800
+LANCZOS) vs the shell renders (400→800 NEAREST, placement preserved at
+2 px). Reports: `~/scratch/av-reports/` (summaries, frames).
+
+- **Planet board**: emblem strip, MENU bar, frame rim all align at
+  (0,±1) px — the bound-block render is pixel-faithful to the real
+  client. (Promo banner content differs by carousel state — expected.)
+- **Channel dialog**: title plate + X, emblem strip align at (0,±1);
+  rows and scroll column sit within content noise (real rows carry
+  server channel data vs synthetic rows — a systematic geometry offset
+  would show a crisp MAE drop; none does).
+- **Musicselect (the bnd contradiction)**: the shell's photo-derived
+  constants (table band 331/431, chosung tops 440/455) align with the
+  real capture at (0,0); the OK pill is pixel-exact (0% gain available
+  from any shift). Shifting the bands toward the bnd values (344/437,
+  444/462) does NOT improve alignment. Conclusion: the photo-derived
+  constants are exe-output-faithful; `Dialog_SelectMusic.bnd`'s
+  divergent rects are not what the 7.55 client paints (stale authoring
+  data or a different staging path, cf. the channel block's zero-rect
+  records) — the bnd rows stay contradicted, never silently replaced.
+  Caveat: the constants derive from the same capture family, so the
+  non-circular content is pipeline alignment + OK-pil exactness; a
+  fresh rig session remains the stronger proof if ever questioned.
+
+Consequence: the 20 select-music CANDIDATE constants keep their values
+with verdict upgraded to DONE (exe-output-verified via A/V alignment);
+the audit's FILE count is unchanged (no file replacement occurred).
