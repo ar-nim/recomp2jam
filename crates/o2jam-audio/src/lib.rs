@@ -3,6 +3,10 @@
 //! [`NullBackend`] (silent, deterministic), [`decode_vorbis`] via
 //! `lewton`, and [`CpalBackend`] for live output.
 
+mod bgm;
+
+pub use bgm::{BgmSelection, SceneBgm, BGM_SILENCE_ID};
+
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use thiserror::Error;
 
@@ -95,6 +99,27 @@ pub trait AudioBackend {
             return Ok(());
         }
         self.play_pcm(pcm)
+    }
+    /// Start (repeat) or stop (`None`) the scene BGM behind the
+    /// queued audio (the exe's `play_scene_music` contract, see
+    /// [`SceneBgm`]): a selection replaces the playing one.
+    ///
+    /// The default counts the cue once through
+    /// [`AudioBackend::play_pcm`] (clock-only sinks stay silent and
+    /// deterministic); a live tail that actually repeats is a
+    /// [`CpalBackend`] feature. `repeat` is the cue's loop flag:
+    /// `true` repeats the record until a new selection replaces
+    /// it, `false` plays it once.
+    ///
+    /// # Errors
+    ///
+    /// `AudioError::Backend` when the backend rejects the voice.
+    fn set_scene_bgm(&mut self, pcm: Option<&PcmSamples>, repeat: bool) -> Result<(), AudioError> {
+        let _ = repeat;
+        if let Some(pcm) = pcm {
+            self.play_pcm(pcm)?;
+        }
+        Ok(())
     }
     /// Song position in device frames (see trait docs).
     fn samples_played(&self) -> u64;
@@ -194,12 +219,24 @@ fn voice_frames(pcm: &PcmSamples, out_channels: usize, out_rate: u32) -> Vec<f32
     frames
 }
 
+/// A scene-BGM voice behind the queued audio: device-rate frames
+/// converted once at selection time, pulled by the realtime
+/// callback only when the queue is dry. `repeat` wraps the voice
+/// when it ends; a once-voice clears itself when played out.
+#[derive(Debug)]
+struct LoopVoice {
+    frames: Vec<f32>,
+    pos: usize,
+    repeat: bool,
+}
+
 /// Device-side sample queue: converted/resampled frames plus the
 /// consumed-frame counter that anchors the song clock.
 #[derive(Debug, Default)]
 struct PcmQueue {
     buf: std::collections::VecDeque<f32>,
     consumed_frames: u64,
+    bgm: Option<LoopVoice>,
 }
 
 impl PcmQueue {
@@ -232,14 +269,61 @@ impl PcmQueue {
         self.buf.len()
     }
 
-    /// Pop one pending sample; silence when the queue is dry.
+    /// Pop one pending sample; the BGM voice sounds only when the
+    /// queue is dry; silence when both are dry.
     fn pop_sample(&mut self) -> f32 {
-        self.buf.pop_front().unwrap_or(0.0)
+        if let Some(sample) = self.buf.pop_front() {
+            sample
+        } else {
+            self.next_bgm_sample().unwrap_or(0.0)
+        }
     }
 
     /// Note one fully served device frame (realtime side only).
     fn mark_frame_consumed(&mut self) {
         self.consumed_frames = self.consumed_frames.saturating_add(1);
+    }
+
+    /// Start a scene-BGM voice (the one at a time): a selection
+    /// replaces the playing voice. Empty audio starts no voice.
+    fn start_bgm(&mut self, pcm: &PcmSamples, out_channels: usize, out_rate: u32, repeat: bool) {
+        let frames = voice_frames(pcm, out_channels, out_rate);
+        if frames.is_empty() {
+            self.stop_bgm();
+            return;
+        }
+        self.bgm = Some(LoopVoice {
+            frames,
+            pos: 0,
+            repeat,
+        });
+    }
+
+    /// Stop the scene-BGM voice.
+    fn stop_bgm(&mut self) {
+        self.bgm = None;
+    }
+
+    /// Whether a BGM voice is installed (the queue never runs dry
+    /// while one plays).
+    fn has_bgm(&self) -> bool {
+        self.bgm.is_some()
+    }
+
+    /// Next BGM sample, wrapping on `repeat`; a played-out
+    /// once-voice clears itself. `None` with no voice installed.
+    fn next_bgm_sample(&mut self) -> Option<f32> {
+        let voice = self.bgm.as_mut()?;
+        if voice.frames.is_empty() {
+            return None;
+        }
+        let sample = voice.frames[voice.pos];
+        let at_end = voice.pos + 1 >= voice.frames.len();
+        voice.pos = if at_end { 0 } else { voice.pos + 1 };
+        if at_end && !voice.repeat {
+            self.bgm = None;
+        }
+        Some(sample)
     }
 }
 
@@ -309,7 +393,7 @@ impl CpalBackend {
                         return;
                     };
                     for frame in data.chunks_mut(channels.max(1)) {
-                        if guard.buffered_samples() < frame.len() {
+                        if guard.buffered_samples() < frame.len() && !guard.has_bgm() {
                             for slot in frame.iter_mut() {
                                 *slot = T::from_sample(0.0);
                             }
@@ -367,7 +451,32 @@ impl CpalBackend {
         Ok(())
     }
 
-    /// Queued-but-unplayed device frames behind the playhead.
+    /// Start (repeat) or stop (`None`) the scene BGM behind the
+    /// queued audio: the voice converts once here (never in the
+    /// callback) and sounds once the queue drains.
+    ///
+    /// # Errors
+    ///
+    /// `AudioError::Backend` when the queue lock is poisoned.
+    pub fn set_scene_bgm(
+        &mut self,
+        pcm: Option<&PcmSamples>,
+        repeat: bool,
+    ) -> Result<(), AudioError> {
+        let mut guard = self
+            .queue
+            .lock()
+            .map_err(|_| AudioError::Backend("audio queue poisoned".into()))?;
+        match pcm {
+            Some(pcm) => guard.start_bgm(pcm, usize::from(self.channels.max(1)), self.rate, repeat),
+            None => guard.stop_bgm(),
+        }
+        Ok(())
+    }
+
+    /// Queued-but-unplayed device frames behind the playhead — the
+    /// BGM tail is not counted: it is the (possibly endless) voice
+    /// behind the queue, not queue depth.
     #[must_use]
     pub fn pending_frames(&self) -> u64 {
         let channels = u64::from(self.channels.max(1));
@@ -396,6 +505,10 @@ impl AudioBackend for CpalBackend {
 
     fn play_key(&mut self, pcm: &PcmSamples, gain: f32) -> Result<(), AudioError> {
         CpalBackend::play_key(self, pcm, gain)
+    }
+
+    fn set_scene_bgm(&mut self, pcm: Option<&PcmSamples>, repeat: bool) -> Result<(), AudioError> {
+        CpalBackend::set_scene_bgm(self, pcm, repeat)
     }
 
     fn samples_played(&self) -> u64 {
@@ -748,6 +861,59 @@ mod tests {
         let mut out = [0.0f32; 1];
         assert_eq!(drain_frames(&mut queue, 1, &mut out), 1);
         assert!((out[0] - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn looping_bgm_repeats_until_replaced() {
+        let mut queue = PcmQueue::default();
+        queue.start_bgm(&mono_pcm(&[16384, -16384]), 1, 44100, true);
+        let mut out = [0.0f32; 6];
+        for slot in &mut out {
+            *slot = queue.pop_sample();
+        }
+        assert_eq!(out, [0.5, -0.5, 0.5, -0.5, 0.5, -0.5]);
+        assert!(queue.has_bgm());
+        queue.stop_bgm();
+        assert_eq!(queue.pop_sample(), 0.0);
+    }
+
+    #[test]
+    fn once_bgm_plays_the_track_once_then_stops() {
+        let mut queue = PcmQueue::default();
+        queue.start_bgm(&mono_pcm(&[16384]), 1, 44100, false);
+        assert_eq!(queue.pop_sample(), 0.5);
+        assert!(!queue.has_bgm());
+        assert_eq!(queue.pop_sample(), 0.0);
+    }
+
+    #[test]
+    fn new_bgm_selection_replaces_the_looping_voice() {
+        let mut queue = PcmQueue::default();
+        queue.start_bgm(&mono_pcm(&[16384]), 1, 44100, true);
+        queue.start_bgm(&mono_pcm(&[-16384]), 1, 44100, true);
+        assert_eq!(queue.pop_sample(), -0.5);
+        assert_eq!(queue.pop_sample(), -0.5);
+    }
+
+    #[test]
+    fn queued_audio_sounds_before_the_bgm_tail() {
+        let mut queue = PcmQueue::default();
+        queue.push_pcm(&mono_pcm(&[8192]), 1, 44100);
+        queue.start_bgm(&mono_pcm(&[16384]), 1, 44100, true);
+        assert_eq!(queue.pop_sample(), 0.25);
+        assert_eq!(queue.pop_sample(), 0.5);
+    }
+
+    #[test]
+    fn empty_bgm_starts_no_voice() {
+        let mut queue = PcmQueue::default();
+        let empty = PcmSamples {
+            samples: vec![],
+            sample_rate: 44100,
+            channels: 1,
+        };
+        queue.start_bgm(&empty, 1, 44100, true);
+        assert!(!queue.has_bgm());
     }
 
     #[test]

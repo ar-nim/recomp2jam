@@ -902,7 +902,137 @@ fn audio_backend(sound: bool) -> Box<dyn o2jam_audio::AudioBackend> {
     }
 }
 
+/// Installed scene-BGM bank the launch cue plays (`Music/BGM.ojm`,
+/// read-only like the other archives below).
+const SCENE_BGM_BANK: &str = "../../install-root/O2Jam/Music/BGM.ojm";
+
+/// The cue one screen enters with: the `(id, repeat)` its entry
+/// passes the exe's scene-music selector (file `0x151820` = VA
+/// `0x551820`, 35 B, forwards `(id, loop)` to the bank behind
+/// `soundmgr[0x76832C] + 0x340C0`
+/// — `crates/o2jam-audio/src/bgm.rs`). The `id` is a one-based
+/// record over `Music/BGM.ojm` (blank entries included);
+/// `BGM_SILENCE_ID` (`-1`) stops the channel. `repeat` is the
+/// exe's loop flag (`loop` → `true`, `once` → `false`). Every pair
+/// was re-read on our side with rea + Ghidra (2026-11-11) at the
+/// caller's push site (file offset = VA − `0x400000`):
+///
+/// | Screen | id | loop | Call site (file offset) |
+/// |---|---|---|---|
+/// | Avi | 8 | once | `0xF57D4` |
+/// | Channel / Planet | 9 | loop | `0x8DE28` |
+/// | Room | 3 | loop | `0x8EB87` |
+/// | Shop | 4 | loop | `0x987BE` |
+/// | Myroom | 5 | loop | `0xA3911` |
+/// | Waiting | 6 | loop | `0xB62C3` |
+/// | MusicShop | 10 (decimal) | loop | `0xC6E51` |
+/// | Result | `0x13` | once | `0xC1CAF` |
+///
+/// On contradictions the exe arbitrates (docs/coverage-audit.md
+/// disagrees twice): the result entry pushes loop `0` (once, not
+/// loop) and the music-shop entry pushes decimal `10` (the audit's
+/// `0x10` mislabels it, and record 10 names the shop track, which
+/// is also the records' semantic alignment). Result's id `0x13`
+/// names no `BGM.ojm` record (the bank holds 10 records), so it
+/// stays silent here — OPEN: identify which bank the worker holds
+/// when `0x4C1B90` cues it (`BGMwinter.ojm` is the candidate).
+/// Loading, playing, and lanking hold no pinned cue (no entry
+/// among the selector's immediate callers names them), so they
+/// cue silence; the option-preview cue `(0, 1)` exists in-exe but
+/// its PCM is likewise unresolved.
+fn scene_bgm_cue(screen: o2jam_shell::Screen) -> (i32, bool) {
+    use o2jam_audio::BGM_SILENCE_ID;
+    use o2jam_shell::Screen::{
+        Avi, Channel, Lanking, Loading, MusicShop, Myroom, Planet, Playing, Result, Room, Shop,
+        Waiting,
+    };
+    match screen {
+        Avi => (8, false),
+        // The channel dialog lives inside the planet state (the
+        // `CStatePlanet` cue covers it — see `docs/channel-fill.md`).
+        Channel | Planet => (9, true),
+        Room => (3, true),
+        Shop => (4, true),
+        Myroom => (5, true),
+        Waiting => (6, true),
+        MusicShop => (10, true),
+        Result => (0x13, false),
+        Loading | Playing | Lanking => (BGM_SILENCE_ID, false),
+    }
+}
+
+/// The cue one side screen enters with, same map as
+/// [`scene_bgm_cue`] (both payment views share the room track at
+/// id 3; lanking has no state class and tutorial holds no pinned
+/// cue, so they cue silence).
+///
+/// Staged for the shell-side scene-change seam: allowed dead
+/// until that follow-up calls it.
+#[allow(dead_code)]
+fn side_scene_bgm_cue(side: o2jam_shell::screens::SideScreen) -> (i32, bool) {
+    use o2jam_audio::BGM_SILENCE_ID;
+    use o2jam_shell::screens::SideScreen::{
+        Lanking, MusicShop, MyRoom, Payment, Planet, Shop, Tutorial,
+    };
+    match side {
+        Shop => (4, true),
+        MusicShop => (10, true),
+        MyRoom => (5, true),
+        Planet => (9, true),
+        Payment => (3, true),
+        Lanking | Tutorial => (BGM_SILENCE_ID, false),
+    }
+}
+
+/// Decode one bank record (a Vorbis split body) into PCM; blanks
+/// and non-Vorbis bodies stay silent. Mode-2 encrypted bodies do
+/// not decode in this slice (the shipped `BGM.ojm` holds none).
+fn decode_bgm_record(
+    bytes: &[u8],
+    entry: &o2jam_file::OjmEntry,
+) -> Option<o2jam_audio::PcmSamples> {
+    let body = entry.sample_bytes(bytes).ok()?;
+    if !body.starts_with(b"OggS") {
+        return None;
+    }
+    o2jam_audio::decode_vorbis(body).ok()
+}
+
+/// Decode `Music/BGM.ojm` into one [`None`]-kept slot per record
+/// (fetch order = one-based record order) for
+/// [`o2jam_audio::SceneBgm`]. A missing or unparsable bank yields
+/// an empty one (no fallback tracks: only the shipped records
+/// ever sound), so CI stays green without game data.
+fn load_scene_bgm_bank() -> Vec<Option<o2jam_audio::PcmSamples>> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(SCENE_BGM_BANK);
+    let Ok(bytes) = std::fs::read(&path) else {
+        tracing::debug!("scene BGM bank missing; BGM stays silent");
+        return Vec::new();
+    };
+    let Ok(tables) = o2jam_file::parse_new_variant_entries(&bytes) else {
+        tracing::debug!("scene BGM bank unparsable; BGM stays silent");
+        return Vec::new();
+    };
+    tables
+        .mode2
+        .iter()
+        .chain(tables.mode3.iter())
+        .map(|entry| decode_bgm_record(&bytes, entry))
+        .collect()
+}
+
 /// Load a chart plus its key sounds into a windowed game, if requested.
+///
+/// The audio rig is also attached without a chart so the launch
+/// BGM cue sounds on the plain windowed start: the client boots
+/// into the splash screen, whose entry cues the logo track once
+/// ([`scene_bgm_cue`]). Per-transition re-cues wait on a
+/// shell-side scene-change seam (a later slice; the online
+/// session swaps backends in `session.rs` regardless).
+///
+/// # Errors
+///
+/// Whatever chart/bank loading or the BGM cue reports.
 fn setup_chart_audio(
     game: &mut o2jam_shell::ScreenGame,
     chart: &Option<String>,
@@ -910,17 +1040,28 @@ fn setup_chart_audio(
     level: usize,
     sound: bool,
 ) -> Result<()> {
+    use o2jam_audio::SceneBgm;
+    let mut bank = std::collections::HashMap::new();
     if let Some(path) = chart {
         let (level_chart, format_version) = load_level_chart(game, path, level)?;
         game.load_chart(level_chart.hit_onsets_ms());
         tracing::info!(hits = level_chart.hit_count(), "chart loaded");
         if let Some(bank_path) = ojm {
             let bank_bytes = std::fs::read(bank_path)?;
-            let bank = loading::load_sound_bank(&bank_bytes, format_version);
-            game.with_audio(audio_backend(sound), bank);
+            bank = loading::load_sound_bank(&bank_bytes, format_version);
             tracing::info!("key sounds attached");
         }
     }
+    // Null/silent unless `--sound` (audio containment): the cue
+    // through the null sink only counts frames.
+    let mut backend = audio_backend(sound);
+    let bgm_bank = load_scene_bgm_bank();
+    let mut scene_bgm = SceneBgm::new();
+    let (cue_id, cue_repeat) = scene_bgm_cue(o2jam_shell::Screen::Avi);
+    let cue_pcm = scene_bgm.play_scene_music(cue_id, cue_repeat, &bgm_bank);
+    backend.set_scene_bgm(cue_pcm, cue_repeat)?;
+    tracing::info!(?cue_id, ?cue_repeat, "launch BGM cued");
+    game.with_audio(backend, bank);
     Ok(())
 }
 
@@ -1707,5 +1848,153 @@ mod cli_build_tests {
             "mirror: no queue forward (0 ranks)\n",
         );
         assert_eq!(format_connect_report(&report), expected);
+    }
+}
+
+/// Scene-BGM hook tests: the cue table against itself and the
+/// shipped `BGM.ojm`. Containment: the null audio path only.
+#[cfg(test)]
+mod scene_bgm_tests {
+    use o2jam_audio::{AudioBackend, NullBackend, PcmSamples, SceneBgm};
+    use o2jam_shell::screens::SideScreen;
+    use o2jam_shell::Screen;
+
+    use super::{load_scene_bgm_bank, scene_bgm_cue, side_scene_bgm_cue, SCENE_BGM_BANK};
+
+    /// Ten-slot bank (records 1..=10) holding one synthetic track in
+    /// `record` and blanks elsewhere — the shipped bank's shape
+    /// (10 fetch-order records, blanks at 1, 2, and 7).
+    fn bank_with_track(record: usize) -> Vec<Option<PcmSamples>> {
+        let mut bank = vec![None; 10];
+        bank[record - 1] = Some(PcmSamples {
+            samples: vec![1000i16; 441],
+            sample_rate: 44100,
+            channels: 1,
+        });
+        bank
+    }
+
+    /// Cue a screen through a silent (null) backend: the selection
+    /// latches and the cue counts its frames.
+    fn cue_through_null_backend(screen: Screen, bank: &[Option<PcmSamples>]) -> SceneBgm {
+        let mut bgm = SceneBgm::new();
+        let mut backend = NullBackend::new();
+        let (id, repeat) = scene_bgm_cue(screen);
+        let pcm = bgm.play_scene_music(id, repeat, bank);
+        backend.set_scene_bgm(pcm, repeat).unwrap();
+        if pcm.is_some() {
+            assert_eq!(backend.samples_played(), 441);
+        }
+        bgm
+    }
+
+    #[test]
+    fn avi_launch_cue_selects_the_logo_record_once() {
+        let bank = bank_with_track(8);
+        assert_eq!(scene_bgm_cue(Screen::Avi), (8, false));
+        let bgm = cue_through_null_backend(Screen::Avi, &bank);
+        assert_eq!(bgm.current().map(|sel| sel.record), Some(8));
+    }
+
+    #[test]
+    fn planet_cue_loops_the_main_room_record() {
+        let bank = bank_with_track(9);
+        assert_eq!(scene_bgm_cue(Screen::Planet), (9, true));
+        let bgm = cue_through_null_backend(Screen::Planet, &bank);
+        assert_eq!(bgm.current().map(|sel| sel.record), Some(9));
+    }
+
+    #[test]
+    fn channel_cue_reuses_the_planet_dialog_track() {
+        let bank = bank_with_track(9);
+        assert_eq!(scene_bgm_cue(Screen::Channel), (9, true));
+        let bgm = cue_through_null_backend(Screen::Channel, &bank);
+        assert_eq!(bgm.current().map(|sel| sel.record), Some(9));
+    }
+
+    #[test]
+    fn room_shop_myroom_waiting_cues_loop_their_records() {
+        let cases = [
+            (Screen::Room, 3),
+            (Screen::Shop, 4),
+            (Screen::Myroom, 5),
+            (Screen::Waiting, 6),
+        ];
+        for (screen, record) in cases {
+            let bank = bank_with_track(record);
+            let id = i32::try_from(record).unwrap();
+            assert_eq!(scene_bgm_cue(screen), (id, true));
+            let bgm = cue_through_null_backend(screen, &bank);
+            assert_eq!(bgm.current().map(|sel| sel.record), Some(record));
+        }
+    }
+
+    #[test]
+    fn music_shop_cue_loops_record_ten() {
+        let bank = bank_with_track(10);
+        assert_eq!(scene_bgm_cue(Screen::MusicShop), (10, true));
+        let bgm = cue_through_null_backend(Screen::MusicShop, &bank);
+        assert_eq!(bgm.current().map(|sel| sel.record), Some(10));
+    }
+
+    #[test]
+    fn side_screens_cue_their_pinned_records() {
+        let cases = [
+            (SideScreen::Shop, 4),
+            (SideScreen::MusicShop, 10),
+            (SideScreen::MyRoom, 5),
+            (SideScreen::Planet, 9),
+            (SideScreen::Payment, 3),
+        ];
+        for (side, record) in cases {
+            assert_eq!(side_scene_bgm_cue(side), (record, true));
+        }
+    }
+
+    #[test]
+    fn unpinned_screens_stay_silent() {
+        for screen in [Screen::Loading, Screen::Playing, Screen::Lanking] {
+            assert_eq!(scene_bgm_cue(screen).0, o2jam_audio::BGM_SILENCE_ID);
+        }
+        assert_eq!(
+            side_scene_bgm_cue(SideScreen::Lanking).0,
+            o2jam_audio::BGM_SILENCE_ID
+        );
+        assert_eq!(
+            side_scene_bgm_cue(SideScreen::Tutorial).0,
+            o2jam_audio::BGM_SILENCE_ID
+        );
+    }
+
+    #[test]
+    fn result_cue_leaves_scene_bgm_silent_until_its_bank_is_found() {
+        // OPEN: result cues no `BGM.ojm` record (id `0x13` past its
+        // 10 records), so the channel silences. Next step: identify
+        // which bank the worker holds when `0x4C1B90` cues it.
+        let bank = bank_with_track(3);
+        assert_eq!(scene_bgm_cue(Screen::Result), (0x13, false));
+        let bgm = cue_through_null_backend(Screen::Result, &bank);
+        assert!(!bgm.is_playing());
+    }
+
+    #[test]
+    fn shipped_bank_records_select_the_shipped_tracks() {
+        // Record 3 names the room track on the installed bank;
+        // skipping cleanly without game data (CI rule).
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(SCENE_BGM_BANK);
+        if !path.exists() {
+            println!("skip: missing {}", path.display());
+            return;
+        }
+        let bank = load_scene_bgm_bank();
+        assert_eq!(bank.len(), 10, "BGM.ojm: 0 mode-2 + 10 mode-3 records");
+        assert!(bank[0].is_none() && bank[1].is_none() && bank[6].is_none());
+        let mut bgm = SceneBgm::new();
+        for record in [3, 4, 5, 6, 8, 9, 10] {
+            let pcm = bgm.play_scene_music(record, true, &bank);
+            assert!(pcm.is_some(), "record {record} decodes");
+            assert!(!pcm.unwrap().samples.is_empty());
+        }
+        assert_eq!(bgm.play_scene_music(19, false, &bank), None);
     }
 }
