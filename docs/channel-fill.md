@@ -322,6 +322,29 @@ by other docs/code and untouched here).
 
 # Channel dialog is a modal over the planet board (2026-11-09 captures)
 
+METHOD CORRECTION (2026-11-10): the channel dialog's placement was in
+the archive all along. `Dialog_ChannelInfo.bnd` (Interface1.opi slot,
+27 rects, `FFFFFFFF`+`6+16·27` exact) pairs to the `0x8C` block
+entries by code ordinal `(code & 0xFFF) − 1` — every entry pairs, and
+its rects 2-5 equal the exe-pinned row rects from the live memory read
+EXACTLY (4/4), which proves the pairing. Rule going forward: for every
+dialog, try the stem-named `.bnd` by ordinal FIRST; the block records
+stage zero rects because the bnd is applied at dialog build, not
+copied into the block. The rig (pixel measurement / memory reads) is
+reserved for what no file answers: the pager (absent from this bnd),
+runtime flags, and interaction semantics.
+
+Key dialog geometry (bnd-pinned, row match exe-verified): sheet
+(0,0)-(800,466); X button (541,151)-(589,189); row bar `CH_Back`
+347x41 mounted at row origin +1 inset (row 0 → (217,225); its bar-
+local children: digit slots (50,11)-(63,29)/(63,11)-(76,29), count
+plate (90,12)-(275,31) 185x19, enter face (285,11)-(329,32) 44x21 —
+face X 502 = 217+285 and face Y 236 = 225+11 both exact against the
+reference measurements); scroll track (573,213)-(594,429) 21x216 with
+bar-local arrows/body; emblem re-statements (313/206/87/614/510,
+identical to `State_Planet.bnd`); TEXT strips (y125-138); board EXIT
+(750,561)-(788,599) 38x38.
+
 Live captures (`~/scratch/button-unblock/`, recipe `walk_planet.py`)
 show the channel dialog opening **over the bare planet board** at boot
 and closing via its X button (native (557,195), inside the measured
