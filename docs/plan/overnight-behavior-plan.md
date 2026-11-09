@@ -1,150 +1,154 @@
-# Overnight autonomous plan — behavior pack + ranked delta
+# Gap-closure program — subsystem parity with the 7.55 exe
 
-Goal: close the owner-visible delta from `docs/coverage-audit.md`
-autonomously. Evidence-first, data-driven, clean-room. The controller
-(main agent, driven by `/goal-loop`) sequences streams; subagents do
-the work and NEVER commit (the controller reviews and commits per
-stream). Gates before every commit: `cargo fmt --check`,
-`cargo clippy --workspace --all-targets -- -D warnings`,
-`cargo test --workspace` — with `install-root` present AND hidden
-(restore after). Conventional Commits, pushed to `main`.
+Goal: close the gap between the clean-room Rust client and every
+subsystem of the original exe until the application functions
+identically. Owner directives (2026-11-10):
 
-## Standing rules (all streams)
+1. **When in doubt, static analysis and REA; the exe is the source of
+   truth.** A static miss (zero LE32 hits, no dossier) means "go
+   dynamic" (Wine rig), never "negative".
+2. Close the gap subsystem by subsystem, ranked by owner-visible value
+   (`docs/coverage-audit.md`'s delta list), each sprint verified
+   against the oracle.
 
-- Clean-room: behavior from our docs/evidence, never original bytes;
-  no disassembly or decompiled code in the repo. The exe arbitrates.
-  decomp2jam (`~/Projects/open3jam/decomp2jam`) is roadmap/corroboration
-  only — any claim it inspires gets exe-verified on our side first.
-- Every constant/behavior carries a doc comment tracing to its
-  evidence (doc + offset/VA or capture). Anything unverifiable stays
-  labeled OPEN with a named next step — never invented.
-- No `ask` tool. No human gates. Blockers get one retry, then a
-  documented blocker and the stream moves on.
-- Agents run `cargo check -p <their crate>` while working (the
-  controller runs full gates at commit time, sequentially, to avoid
-  Cargo.lock contention). Only Stream C may add dependencies.
-- File ownership is exclusive per stream; do not touch other streams'
-  files. Docs owned by the controller (`channel-fill.md`, `planet.md`,
-  `lifecycle.md`, `parity.md`, this file).
+The controller (main agent) sequences sprints; subagents do the work
+and NEVER commit — the controller reviews, runs gates, commits
+(Conventional Commits), pushes, and updates `docs/parity.md`.
+Backend sprints (audio/game crates) may run in parallel; sprints
+touching `o2jam-shell` scenes run sequentially (shared files).
 
-## Stream A — Scene BGM + mixer (owner: crates/o2jam-audio)
+## Standing rules (all sprints)
 
-Pinned contract (`~/scratch/bgm-evidence/findings.md`, corroborated by
-decomp2jam `SceneMusic`, cross-checked 5/5 in `docs/coverage-audit.md`):
+- **Evidence-first**: every behavior constant/doc comment traces to a
+  pin (doc + file offset/VA, REA evidence ID, or capture path). Claims
+  inspired by decomp2jam (`~/Projects/open3jam/decomp2jam`) get exe
+  verification on our side before coding. Unverifiable items stay
+  labeled OPEN with a named next evidence step — never invented.
+- **Clean-room**: behavior described in our own words; no original
+  bytes, disassembly, or decompiled code in the repo. Data-byte reads
+  (tables) are allowed; describe values in words with offsets.
+- **Data-driven**: geometry/behavior wiring rides parsed archives and
+  control codes (owner rule `f38f3`: the `.bnd` controls, code only
+  parses; hardcoded constants are scaffolding). New UI wiring uses a
+  control-code → action dispatch table, not per-button literals.
+- **REA access**: preferred `mcp__rea__*` (after the owner runs
+  `/reload`); fallback is the `rea` CLI — same engine. Snapshot
+  profile mismatches are resolved with a fresh `rea analyze` (no stale
+  `--snapshot`).
+- **Gates before every commit**: `cargo fmt --check`,
+  `cargo clippy --workspace --all-targets -- -D warnings`,
+  `cargo test --workspace` — with `install-root` present AND hidden
+  (restore after). Agents run `cargo check -p <crate>` only (shared
+  tree); only the font sprint may add crates.io deps / touch root
+  `Cargo.toml`/`Cargo.lock`.
+- **No `ask`, no human gates.** A failed subagent gets one retry, then
+  a documented blocker; the sprint moves on.
+- **Audio containment** (memory `979fb`): rig sessions and tests use
+  the null audio path; the user-invoked desktop run may use speakers.
+- Docs owned by the controller: `channel-fill.md`, `planet.md`,
+  `lifecycle.md`, `parity.md`, `progress.md`, this file.
 
-- Selector semantics: `scene_music(id, loop)`; `id = -1` = silence;
-  bank model: one BGM stream at a time (a new selection replaces the
-  old — CXO2's mixer agrees: Play detaches the source from all other
-  groups).
-- Per-state id table (immediate-id callers of file `0x151820`):
-  Avi→8 (once), Planet→9 (loop), Room/Payment/Payment2→3, Shop→4,
-  Myroom→5, Waiting→6, MusicShop→0x10, Result→0x13, option preview→0,
-  transitions→−1. Record indexing is ONE-BASED over `Music/BGM.ojm`
-  records; empty records preserved.
-- Work: minimal BGM channel in `o2jam-audio` (reuse cpal backend +
-  lewton via existing decode; loop flag = stream repeat); a
-  `SceneMusic`-shaped API owned by the shell: `play_scene_music(id,
-  loop)`, `stop_scene_music()`; wire Avi (on splash enter → id 8, no
-  loop) and Planet (on board enter → id 9, loop; on leave → silence).
-  Wire Room/Waiting/Result ids only if their scene-entry hooks are
-  trivially reachable without touching Stream B/F files; otherwise
-  leave for later streams.
-- Audio output: cpal default device; this is user-initiated desktop
-  software — speakers are fine. Tests: null backend only; every test
-  skips cleanly without install-root (BGM.ojm absent → no-op + log).
-- Files: `crates/o2jam-audio/**`; shell glue ONLY in
-  `crates/o2jam-shell/src/audio*` if a new module is needed (coordinate:
-  prefer adding the call in `recomp2jam/src/main.rs` windowed setup and
-  `ScreenGame` scene-change hook — see Stream B boundary below).
+## Sprint shape (fixed, all sprints)
 
-## Stream C — Hangul text rasterizer (owner: new `crates/o2jam-text`)
+1. **REA static pass** — dossier/decompile the pinned VAs and data
+   tables; record behavior in our own words with offsets.
+2. **Implement** — Rust, evidence-cited doc comments, consuming parsed
+   data; owner rules (`f38f3`, `e8d01`, clean-room) hold.
+3. **Tests** — scenario-named; real-data paths skip cleanly without
+   `install-root`; suites green both ways.
+4. **Live verify** — Wine rig (recipe: `~/scratch/planet-verify/
+   findings.md`; SendInput helper; winedbg stopped-state discipline)
+   where the state is reachable.
+5. **A/V compare** — `recomp2jam-av-compare` scripts vs real captures
+   where frames exist (`~/scratch/av-reports/` conventions).
+6. **Parity row** — controller updates `docs/parity.md` with verdict +
+   evidence citations.
 
-Owner decision (memory `e8d01`): modern cross-platform rasterizer,
-exe pins positions/sizes. Work:
+## Sprint 0 — planet behavior pack (owner corrections, all pinned)
 
-- New crate `o2jam-text`: CP949 decode (bytes → Unicode) + rasterize
-  via `ab_glyph` + system Noto Sans CJK KR
-  (`/usr/share/fonts/noto-cjk/NotoSansCJK-*.ttc`, OFL); measure
-  (advance widths) for `text_width` parity. Load font at runtime from
-  system paths; WITHOUT the font (CI) every API degrades to the
-  current ASCII stand-in behavior — no test may fail for a missing
-  font. No font binary is vendored into the repo.
-- Ship a `TextPainter` the shell can ask for `draw(text, x, y)` and
-  `width(text)` with CP949 input; keep the existing micro-font path as
-  fallback.
-- The ONLY stream allowed to add crates.io deps (`ab_glyph`) and touch
-  the workspace `Cargo.toml`/`Cargo.lock`.
-- Files: `crates/o2jam-text/**`, root `Cargo.toml`, `Cargo.lock`.
+The four owner corrections plus captions; absorbs the halted plan's
+streams A (BGM) and C (font).
 
-## Stream B — Planet behavior pack (owner: crates/o2jam-shell planet
-  parts + `crates/recomp2jam/src/main.rs`; starts AFTER Stream C lands)
+- **S0.1 font** (owner `e8d01`): new `crates/o2jam-text` — CP949
+  decode + `ab_glyph` + system Noto Sans CJK KR
+  (`/usr/share/fonts/noto-cjk/NotoSansCJK-*.ttc`, OFL; no vendored
+  font). Font-absent degrades to the ASCII stand-in; no test may fail
+  for a missing font. Files: `crates/o2jam-text/**`, root
+  `Cargo.toml`, `Cargo.lock`.
+- **S0.2 scene BGM**: selector contract `play_scene_music(id, loop)`,
+  `id = -1` silence, one BGM at a time (new selection replaces).
+  Pinned id table (immediate callers of file `0x151820`; double-sourced
+  in `docs/coverage-audit.md`): Avi→8 once, Planet→9 loop,
+  Room/Payment/Payment2→3, Shop→4, Myroom→5, Waiting→6,
+  MusicShop→0x10, Result→0x13, option preview→0. Records ONE-BASED
+  over `Music/BGM.ojm`. Minimal BGM channel in `o2jam-audio`
+  (cpal + lewton via existing decode; loop = repeat until replaced).
+  Files: `crates/o2jam-audio/**` + a minimal scene-change hook.
+- **S0.3 planet pack** (`o2jam-shell` planet/channel parts):
+  emblem captions (TEXT `0x19400007..0B` → `State_Planet.bnd` rects
+  6..10; strings pinned `docs/planet.md`: 사람손 (초급) `0x247ae0`,
+  고수손 (중급) `0x247af0`, 신의손 (고급) `0x247b00`, 퀘스트
+  `0x247acc`, 튜토리얼 `0x247ad4`) via the S0.1 rasterizer;
+  **emblem-gated dialog** — boot shows the bare board, a lit-emblem
+  click opens the channel dialog, X closes (the earlier boot auto-open
+  observation came from launcher-preselected sessions — documented
+  caveat; preselection handling stays OPEN); **dispatch table**
+  control-code → action: power (`IDC_BUTTON_SPLANET_EXIT`, bnd rect 26)
+  → quit-confirm (rig-verified popup), gear (`IDC_BUTTON_SPLANET_OPTION`)
+  → options dialog (`Dialog_Option_*` art; first-open tab OPEN);
+  BGM hooks via S0.2 (Avi 8 once / Planet 9 loop / leave −1).
+  Files: `crates/o2jam-shell/src/screens/{paint,side,game}.rs`
+  (planet/channel parts), `crates/recomp2jam/src/{main,shots}.rs`.
 
-- Emblem captions: TEXT controls `0x19400007..0B` → `State_Planet.bnd`
-  rects 6..10 (94x13, y125-138); strings pinned in `docs/planet.md`
-  (사람손 (초급) 0x247ae0, 고수손 (중급) 0x247af0, 신의손 (고급)
-  0x247b00, 퀘스트 0x247acc, 튜토리얼 0x247ad4) via Stream C rasterizer.
-- Emblem-gated dialog: boot shows the BARE board; a lit-emblem click
-  (HARD/NORMAL/EASY pinned rects) opens the channel dialog (existing
-  `Planet→Channel` edge); X closes back. The earlier "auto-open at
-  boot" observation (launcher-preselected sessions only) is documented
-  in the code comment as a caveat; preselection handling stays OPEN.
-- Dispatch table: control-code → action wiring lives in a data table
-  (e.g. `PLANET_ACTIONS: &[(code, rect, action)]`) — no per-button
-  literals in handlers. Power (`IDC_BUTTON_SPLANET_EXIT`, bnd rect 26)
-  → quit-confirm dialog (rig-verified popup); gear
-  (`IDC_BUTTON_SPLANET_OPTION`) → opens the options dialog
-  (`Dialog_Option_*` art stages; which tab opens first stays OPEN).
-- BGM hook: scene-entry calls Stream A's `play_scene_music` (Avi 8
-  once / Planet 9 loop / leave −1).
-- Files: `crates/o2jam-shell/src/screens/{paint,side,game}.rs`
-  (planet/channel parts only), `crates/recomp2jam/src/{main,shots}.rs`
-  (window/shot wiring), planet caption constants. NOT
-  `docs/{channel-fill,planet,lifecycle,parity}.md` (controller owns).
+## Sprints 1–7 — ranked delta (`docs/coverage-audit.md`)
 
-## Stream D — Jam gauge (owner: crates/o2jam-game)
+- **S1 Scene BGM playback** — covered by S0.2; this sprint finishes the
+  remaining state hooks (Room/Waiting/Result ids at their scene
+  entries) once S0.3 lands.
+- **S2 Jam gauge** (`crates/o2jam-game`): verify the threshold table
+  bytes at file `0x170260` (VA `0x570260`) on our side, plus the
+  scorer call sites; implement `JamGauge` mirroring `LifeBar`.
+  Prior hypothesis: Cool +2 / Good +1, 30 per jam, overflow carries,
+  Bad/Miss feed nothing — verify, don't assume.
+- **S3 Shell clock wiring**: `LifeBar`/`JamGauge`/`HoldState` and the
+  6/18/25 ms windows into the Playing scene on the sample clock
+  (currently wall clock; dead-at-0 gate invisible).
+- **S4 Playing/result digits + WinLose + grade**: bnd-pinned rects
+  (result 7, playing EXIT…VOLUME run); grade strings are provably
+  code-unreferenced (mission-side) — pin the mapping before painting.
+- **S5 Waiting/room completion**: team buttons + covers
+  (`Wait_TeamA..H.ojs`, 4004/4008 send path, `0x48C810` map), create/
+  password dialogs (`Dialog_CreateRoom`/`Dialog_Password` bnds), 4007
+  slot refresh, result SubmitScore/FinalizeRank.
+- **S6 Rating-event sink** (`+0xa14`, attach `0x56E170`, codes 1/9/14):
+  unlocks jam/life server sync truths.
+- **S7 Loading-gate validation** (`0x5718B0` → `0x4F8B80` → `0x412180`
+  → `0x54DB40`): honest loading screen behavior.
 
-- Exe-verify first (charter): read the jam threshold table at file
-  `0x170260` (VA `0x570260`; decomp2jam has it `matched` as
-  `jam_threshold_table` — verify the raw bytes + the scorer call sites
-  on our side: Cool +2 / Good +1, `30` per jam, overflow carries; the
-  table read is data, allowed). Confirm Bad/Miss feed nothing.
-- Implement `JamGauge` in `o2jam-game` mirroring `LifeBar`'s shape:
-  difficulty-independent per the verified data; scenario-named tests
-  including the table-byte pin.
-- Files: `crates/o2jam-game/**`.
+## Evidence closes (parallel, any wave)
 
-## Stream E — Evidence closes (owner: ~/scratch + docs drafts to the
-  controller; no repo edits)
-
-- Dialog-open trigger: who mounts the 0x8C dialog on emblem click.
-  Static-only attempt first (byte scans around the emblem handler
-  region + the vftable slot-5 builders); if dynamic-only, document the
-  exact next dynamic step (memory watch on `parent+0xF6C` during an
-  emblem click under the Wine rig, stopped-state reads). Deliverable:
-  a findings note the controller merges into `docs/channel-fill.md`.
-- Playing combo/avatar anchors: attempt the named next step for the
-  Attempt-13 wedge (winedbg stopped-state read of the play-stage init;
-  if the wedge persists, document the blocker with the tee trace and
-  stop — no guessing).
-- Files: `~/scratch/overnight-evidence/**` only.
-
-## Stream F — Waiting/room interactions (owner: crates/o2jam-shell
-  waiting/room parts; starts AFTER Stream B lands)
-
-- Team buttons 4004 + ready 4008 wiring per `docs/gameplay.md` (the
-  fold gap: member numbering off slot indices — fix or document),
-  create-room + password dialogs (stage `Dialog_CreateRoom`/
-  `Dialog_Password` art at their bnds; form behavior stays OPEN where
-  unevidenced).
-- Files: `crates/o2jam-shell/src/screens/{paint,side,game}.rs`
-  (waiting/room parts), `crates/recomp2jam/src/shots.rs`.
+- **E1 channel dialog-open trigger** (emblem → 0x8C mount): static
+  writer-site hunt; if dynamic-only, the named next step is a memory
+  watch on `parent+0xF6C` during an emblem click (stopped-state
+  winedbg). Writes to `~/scratch/overnight-evidence/`, controller
+  merges into `docs/channel-fill.md`.
+- **E2 Attempt-13 wedge** (playing never starts under Wine): one
+  hypothesis per session on the play-stage init (DXSurface suspect;
+  relay refuted), else documented blocker with the tee trace.
 
 ## Sequencing
 
-1. Wave 1 (parallel): A, C, D, E.
-2. Controller commits each landed stream (gates both ways, sequential
-   to avoid Cargo.lock contention), updates `docs/parity.md` rows.
-3. Wave 2: B (needs C). Then wave 3: F (needs B).
-4. Continue down `docs/coverage-audit.md`'s ranked delta while budget
-   remains; otherwise stop with a summary: done / blocked-with-next-
-   step / remaining budget.
+1. Wave 1 (parallel): S0.1 (font), S0.2 (BGM), S2 (jam), E1, E2.
+2. Controller commits each landed unit (gates both ways, sequential),
+   updates `parity.md`.
+3. Wave 2: S0.3 (planet pack; needs S0.1+S0.2). Then S1 completion,
+   S3 (needs S0.2+S2), then S4–S7 sequentially (shared shell files).
+4. Continue while budget remains; stop with a summary: done /
+   blocked-with-next-step / remaining budget.
+
+## Definition of done
+
+Every subsystem row in `docs/parity.md` reaches PASS (exe evidence +
+implementation + passing test together), or stays OPEN with a named
+next evidence step. That checkpoint is the "identical functioning
+application" claim.
