@@ -89,8 +89,12 @@ line — the only full state without one) and **no `CStateChannel` class**
 in RTTI. Visible controls: `Dialog_ChannelSelectBar.ojs`,
 `IDC_BUTTON_SCHANNEL_BACK/RANK/CONTESTRANK`. Entry: from AVI.
 Exit: pick channel/planet → `STATE_ROOM` (or `STATE_PLANET` for solo).
-How a stateless block is hosted (base class? web page?) is an open question;
-`DIALOG_CHANNEL_INFO` (`CDChannelInfo`) and `CCBtnChannel` serve popups.
+RESOLVED 2026-11-09 (live memory read, `docs/channel-fill.md`): the
+screen's dialog is hosted by a **`CStatePlanet`** object mounted at
+`parent+0xF6C` under the `CState` singleton — there is no
+`CStateChannel` class because Planet's state object serves the channel
+screen. `DIALOG_CHANNEL_INFO` (`CDChannelInfo`) and `CCBtnChannel` serve
+popups.
 
 ### 7. `STATE_ROOM` — multiplayer lobby (`CStateRoom`)
 Decl `0x36`, 76 entries, `State_Room.bnd` (75 rects). Room list with
@@ -200,7 +204,9 @@ Login has no box: web page → command line → `CTuser_*`/`My_channel` bridge.
 
 ## Unknowns (marked, not guessed)
 1. `WinMain` address and the exact first-state assignment call (no dossier).
-2. Which class hosts `STATE_CHANNEL` / `STATE_LANKING` (no `CState*` match).
+2. Which class hosts `STATE_LANKING` (no `CState*` match). Channel's
+   host is RESOLVED: a `CStatePlanet` object at `parent+0xF6C`
+   (live memory read 2026-11-09, `docs/channel-fill.md`).
 3. `DRUM_PLAYING` trigger — likely dead; no class, stub-only block.
 4. Option keys beyond the §3 table (key binds, volumes, resolution).
 5. Playing `State_Playing.bnd` 17-rect ↔ 235-entry subset rule (see `opi.md`).

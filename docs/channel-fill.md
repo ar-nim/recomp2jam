@@ -320,6 +320,79 @@ stand-ins until `0x510730`'s row layout is mirrored (the matching OPEN
 sentences in `net-protocol.md`, `rooms.rs`, and `paint.rs` are owned
 by other docs/code and untouched here).
 
+# Live memory read (2026-11-09) — geometry and host EXE-PINNED
+
+Dynamic read of the live 7.55 process under Wine (winedbg stopped-state
+memory reads; no input needed). Full method, dumps, and session log in
+`~/scratch/channel-rects/` (`findings.md`). Pins below supersede the
+reference-measured stack anchors wherever they differ; the capture
+measurements stand corroborated.
+
+- **Host ANSWERED**: the parent global `0x762B44` holds the `CState`
+singleton (vtable `0x647920`). Its mounted child at `parent+0xF6C` is a
+**`CStatePlanet`** object (vtable `0x647B24`, RTTI `.?AVCStatePlanet@@`)
+— the Channel dialog host. The dialog carries the string
+`State_Planet`. Which call passes the Channel block stays untraced, but
+the hosting object is now pinned (this doc's earlier "Planet or
+shared-base stages Channel" hypothesis resolves to Planet).
+- **Block staging, live-confirmed**: the `STATE_CHANNEL` block (buffer
+`0x029E2428`, code `0x12`) holds 33 records of stride `0x11C`, codes
+`0x12100001`-`0x1250002B`; every rect is **zero** - the bare-BOUND /
+zero-rect finding confirmed in the running process. The
+`DIALOG_CHANNEL_INFO` block (buffer `0x02A39A30`, code `0x8C`, in the
+parent's second descriptor table at `parent+0x2000`) holds 26 records
+**with quoted sprite names** and zero rects; its art list matches the
+mounted bodies below (`Dialog_ChannelInfo.ojs`, `ChannelInfo_Btn_Close`,
+`CH_Back`, `CH_Num` x2, `CH_ConnectCount`, `CH_Enter`,
+`Messenger_Main_Scroll_Up/Down`, `ChannelInfo_Scroll_Bar`, plus
+`Planet_Btn_*` promo bodies - the same dialog object carries the planet
+promo side at `dialog+0x84`, channel side at `dialog+0x8C`).
+- **Row rects EXE-PINNED** (`CStatePlanet` dialog object at `0x018E7E20`,
+array at `dialog+0x94`, format left/top/right/bottom):
+  - row 0: (216, 224, 572, 275)
+  - row 1: (216, 275, 572, 324)
+  - row 2: (216, 324, 572, 375)
+  - row 3: (216, 375, 572, 436)
+  The four rects are the visible viewport slots (scrolled rows reuse
+  them cyclically); the reference capture's `232+50i` text tops read the
+  interior of these rects (+8 px text inset, pitch 50.3 average).
+  Related scalars: `dialog+0xE8 = 0x16` (22 = server channel count),
+  `+0x1EC = 0x1F` (31).
+- **Entry-face inset EXE-PINNED**: the join face tops sit 12 px below
+the row tops (face Y 236 = 224 + 12), matching the capture's 236
+exactly. The face X origin (502) and the 48x24 face (4 px button chrome
+around the 44x24 exe art) stay reference-measured - button view fields
+not read (see BLOCKED).
+- **Mounted art, exe-pinned sizes** (live sprite records, array
+`0x02996B20`, stride `0x260`; height/width at +`0x170`/`+0x174`):
+`Dialog_ChannelSelectBar.ojs` 348x44 (parse: 347x41),
+`Dialog_ChannelInfo.ojs` 800x468 (parse: one 800x466 layer - the 2 px
+delta is a runtime-surface difference, recorded, uncompensated),
+`ChannelInfo_Btn_Close.ojs` 48x40, `ChannelInfo_CH_Back.ojs` 348x44,
+`ChannelInfo_CH_Num.ojs` 16x20, `ChannelInfo_CH_ConnectCount.ojs`
+188x20, `ChannelInfo_CH_Enter.ojs` 44x24 (parse: three 44x21 frames),
+`Messenger_Main_Scroll_Up/Down.ojs` 24x20, `ChannelInfo_Scroll_Bar.ojs`
+24x48.
+- **BLOCKED**: button view fields `+0x1E4`/`+0x1E8` - no `CCButton`-
+family objects located in heap dumps, and winedbg `cont`/breakpoints are
+non-functional in this wow64 state, so the per-frame writers (file
+`0x129088`..) and the pairing getter `0x548640` could not be
+intercepted. Next path: repair `cont` (`pass`, 32-bit winedbg, or
+`winedbg --gdb`), or locate the control-array consumer statically.
+
+## Shell rule update (2026-11-10)
+
+`crates/o2jam-shell/src/screens/paint.rs` now paints the Channel scene
+on the pinned rects: `CHANNEL_ROW_RECTS` (the dialog+`0x94` table),
+hit-testing against the same bands (tops inclusive, bottoms exclusive),
+the enter face at row-top + 12, and the scrim spanning the pinned slot
+bands. The interior chrome (name pill, hollow track) stays
+reference-measured but re-bases on the pinned row tops (pill +3, track
++4). Face X/48x24 chrome stays reference-measured. Guards:
+`channel_row_hit_maps_the_exe_pinned_bands` (game.rs),
+`channel_row_hit_mirrors_the_pinned_row_rects` (paint.rs). The
+reference-measured `232+50i` anchors are retired.
+
 ## OPEN
 
 1. Presenter backbuffer policy behind art-less states — PINNED to
@@ -514,10 +587,12 @@ by other docs/code and untouched here).
    `TITLE`) beside the SelectBar fetch (file `0x8DE84`). Channel
    `TITLE` targets are never code-addressed; captions, if any, must
    arrive via cached pointers or array iteration, both untraced.
-3. Dialog host mounting the code-fetched select bar
-   (`DIALOG_CHANNEL_INFO`/`CDChannelInfo` index path; `0x4ED650` is since
-   read — a playing-screen builder, not a dialog host candidate — see the
-   OPEN 2 join; `ui-loader.md` OPEN 2 itself untouched).
+3. Dialog host — RESOLVED 2026-11-09: the mounted child at
+   `parent+0xF6C` is a `CStatePlanet` object (live memory read; see the
+   "Live memory read" section above). The select bar's exact mount
+   rect stays OPEN (button view fields blocked); `CDChannelInfo` never
+   materialized as a class — dialog lookup is index-driven through the
+   `0x8C` block.
 4. `CWindow`/`CDialogBase` default fill, if any (ui-draw OPEN 3).
 5. Loading bar/caption geometry — OPEN, negative result (placeholders
    kept): `MusicLoading.ojs` (`Playing1.opi` slot 39, 960,028 B) is

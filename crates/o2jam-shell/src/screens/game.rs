@@ -3993,10 +3993,18 @@ mod game_tests {
     }
 
     #[test]
-    fn channel_row_hit_maps_measured_bands() {
+    fn channel_row_hit_maps_the_exe_pinned_bands() {
+        // Exe-pinned slot rects (CStatePlanet dialog+0x94):
+        // (216,224,572,275), (216,275,572,324), (216,324,572,375),
+        // (216,375,572,436) — tops inclusive, bottoms exclusive.
+        assert_eq!(channel_row_hit(224, 10), Some(0));
         assert_eq!(channel_row_hit(240, 10), Some(0));
-        assert_eq!(channel_row_hit(281, 10), Some(0));
+        assert_eq!(channel_row_hit(274, 10), Some(0));
+        assert_eq!(channel_row_hit(275, 10), Some(1));
         assert_eq!(channel_row_hit(282, 10), Some(1));
+        assert_eq!(channel_row_hit(375, 10), Some(3));
+        assert_eq!(channel_row_hit(435, 10), Some(3));
+        assert_eq!(channel_row_hit(436, 10), None);
         assert_eq!(channel_row_hit(100, 10), None);
         assert_eq!(channel_row_hit(732, 10), None);
         assert_eq!(channel_row_hit(240, 0), None);

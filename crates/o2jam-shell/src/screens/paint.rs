@@ -294,47 +294,67 @@ fn paint_list_scrim(frame: &mut Frame<'_>, row_count: usize) {
 /// Row height of one channel entry.
 const CHANNEL_ROW_H: i32 = 8;
 
-/// Reference-measured Channel row geometry in native 800x600 px: row
-/// text tops sit at `232 + 50·index` on the live Wine capture
-/// (`/tmp/chan2-list.png`; method in channel-fill.md). Reference-grade
-/// only — no exe consumer pins these anchors, so they stay OPEN as
-/// exe evidence. Scales to the frame like staged placements do.
-const CHANNEL_ROW_TOP: i32 = 232;
-/// Reference-measured Channel row pitch in native px (see above).
-const CHANNEL_ROW_PITCH: i32 = 50;
+/// Exe-pinned Channel row rects `(left, top, right, bottom)` in
+/// native 800x600 px, read from the hosting `CStatePlanet` dialog
+/// object at dialog+`0x94` (live Wine memory read 2026-11-09; method,
+/// hashes, and session artifacts in `docs/channel-fill.md`). The four
+/// rects are the dialog's visible viewport slots; scrolled rows reuse
+/// them cyclically. The last visible bottom (436) sits just above the
+/// measured pager strip (439) — the capture's `232+50i` text tops
+/// were these rects' interior (+8 px text inset, pitch 50.3 avg).
+const CHANNEL_ROW_RECTS: [(i32, i32, i32, i32); 4] = [
+    (216, 224, 572, 275),
+    (216, 275, 572, 324),
+    (216, 324, 572, 375),
+    (216, 375, 572, 436),
+];
 
-/// Row top of Channel entry `index` on a frame of height `h`.
+/// Viewport slot count of the pinned row table.
+const CHANNEL_SLOT_COUNT: usize = CHANNEL_ROW_RECTS.len();
+
+/// Native top of Channel viewport slot `index`. Slots past the table
+/// extrapolate at the last measured pitch (51).
+fn channel_slot_top(index: usize) -> i32 {
+    if index < CHANNEL_SLOT_COUNT {
+        return CHANNEL_ROW_RECTS[index].1;
+    }
+    let last = i64::from(CHANNEL_ROW_RECTS[CHANNEL_SLOT_COUNT - 1].1);
+    let extra = 51_i64.saturating_mul(i64::try_from(index + 1 - CHANNEL_SLOT_COUNT).unwrap_or(0));
+    i32::try_from(last + extra).unwrap_or(i32::MAX)
+}
+
+/// Row top of Channel viewport slot `index` on a frame of height `h`.
 fn channel_row_top(index: usize, h: i32) -> i32 {
-    let native_top = i64::from(CHANNEL_ROW_TOP)
-        + i64::from(CHANNEL_ROW_PITCH) * i64::try_from(index).unwrap_or(0);
-    let scaled = native_top * i64::from(h) / i64::from(NATIVE_HEIGHT);
+    let scaled = i64::from(channel_slot_top(index)) * i64::from(h) / i64::from(NATIVE_HEIGHT);
     i32::try_from(scaled).unwrap_or(i32::MAX)
 }
 
-/// Channel row under a native-space `y` (`None` above the stack or
-/// past `row_count`). Inverse of [`channel_row_top`] at native size;
-/// mouse clicks arrive pre-mapped to native space, so no frame dims.
+/// Channel viewport slot under a native-space `y` (`None` above the
+/// slots or below every band). Inverse of the pinned
+/// [`CHANNEL_ROW_RECTS`] bands; mouse clicks arrive pre-mapped to
+/// native space, so no frame dims.
 #[must_use]
 pub(crate) fn channel_row_hit(y: i32, row_count: usize) -> Option<usize> {
-    let offset = y.checked_sub(CHANNEL_ROW_TOP)?;
-    if offset < 0 {
-        return None;
-    }
-    let index = usize::try_from(offset / CHANNEL_ROW_PITCH).ok()?;
-    (index < row_count).then_some(index)
+    let slots = row_count.min(CHANNEL_SLOT_COUNT);
+    (0..slots).find(|&i| (CHANNEL_ROW_RECTS[i].1..CHANNEL_ROW_RECTS[i].3).contains(&y))
 }
 
-/// Reference-measured entry-button face in native px: `(502, 236)`,
-/// 48 wide, 24 tall, stepping with the row pitch (`/tmp/chan2-list.png`;
-/// row 0 face only — followers ride the pitch, exe-OPEN).
+/// Exe-pinned entry-face inset: the join (`입장`) button face tops sit
+/// 12 px below the pinned row tops (face Y 236 = row0 top 224 + 12,
+/// live memory read 2026-11-09; matches the reference capture's 236
+/// exactly). The face X origin (502) and size (48x24, button chrome
+/// around the 44x24 exe art) stay reference-measured (capture
+/// `/tmp/chan2-list.png`, exe-OPEN).
 const CHANNEL_ENTER_X: i32 = 502;
 const CHANNEL_ENTER_W: i32 = 48;
 const CHANNEL_ENTER_H: i32 = 24;
+const CHANNEL_ENTER_DY: i32 = 12;
 /// Reference-measured Channel row chrome in native px (`/tmp/chan2-list.png`;
-/// row 0 only, followers ride the pitch, exe-OPEN): dark name pill
-/// behind the row text, hollow silver track with dark segment bodies
-/// (all rows read empty on the quiet server, so no fill rule is
-/// evidenced — the interior stays whatever the backdrop painted).
+/// row 0 only, followers re-base on the pinned row tops, exe-OPEN):
+/// dark name pill behind the row text, hollow silver track with dark
+/// segment bodies (all rows read empty on the quiet server, so no
+/// fill rule is evidenced — the interior stays whatever the backdrop
+/// painted).
 const CHANNEL_PILL_X: i32 = 205;
 const CHANNEL_PILL_Y: i32 = 227;
 const CHANNEL_PILL_W: i32 = 94;
@@ -353,8 +373,8 @@ const CHANNEL_TRACK_SIDE_TONE: u32 = pack_xrgb(150, 148, 150);
 /// Channel row chrome for viewport slot `slot`, scaled to the frame:
 /// name pill plus hollow track. Position stand-ins (see above).
 fn paint_channel_row_chrome(frame: &mut Frame<'_>, slot: usize) {
-    let step = i64::from(CHANNEL_ROW_PITCH) * i64::try_from(slot).unwrap_or(0);
-    let shift = i32::try_from(step).unwrap_or(i32::MAX);
+    // Re-base the measured slot-0 chrome on the pinned row tops.
+    let shift = channel_slot_top(slot).saturating_sub(CHANNEL_ROW_RECTS[0].1);
     let pill = scale_rect_to_frame(
         &Rect {
             x: CHANNEL_PILL_X,
@@ -429,20 +449,16 @@ fn paint_channel_row_chrome(frame: &mut Frame<'_>, slot: usize) {
         CHANNEL_TRACK_SIDE_TONE,
     );
 }
-const CHANNEL_ENTER_DY: i32 = 4;
-/// Measured face tone of the entry button (mid-gray pill).
 const CHANNEL_ENTER_TONE: u32 = pack_xrgb(150, 148, 151);
 
 /// Entry-button plate rect for viewport slot `slot`, scaled to the
-/// frame: band top plus the measured face offset.
+/// frame: the pinned row top plus the pinned face inset.
 fn channel_enter_rect(slot: usize, w: i32, h: i32) -> Rect {
     let wide = i64::from(w);
     let high = i64::from(h);
     let native_w = i64::from(NATIVE_WIDTH);
     let native_h = i64::from(NATIVE_HEIGHT);
-    let band = i64::from(CHANNEL_ROW_TOP)
-        + i64::from(CHANNEL_ROW_PITCH) * i64::try_from(slot).unwrap_or(0);
-    let top = band + i64::from(CHANNEL_ENTER_DY);
+    let top = i64::from(channel_slot_top(slot)) + i64::from(CHANNEL_ENTER_DY);
     Rect {
         x: i32::try_from(i64::from(CHANNEL_ENTER_X) * wide / native_w).unwrap_or(0),
         y: i32::try_from(top * high / native_h).unwrap_or(0),
@@ -483,28 +499,32 @@ fn paint_channel_enter_art(frame: &mut Frame<'_>, shown: usize, art: &SceneArt) 
         return;
     }
     for slot in 0..shown {
-        // Reference-measured face origin (native px): the row band top
-        // plus the measured 4 px inset (faces (502,236+50i,48,24)).
+        // Face origin (native px): the pinned row top plus the pinned
+        // 12 px inset (face Y 236 = row0 top 224 + 12).
         let (dx, dy) = anchor_in_frame(
             CHANNEL_ENTER_X,
-            channel_row_top(slot, NATIVE_HEIGHT as i32) + CHANNEL_ENTER_DY,
+            channel_slot_top(slot) + CHANNEL_ENTER_DY,
             frame.w,
             frame.h,
         );
         figure.paint_scaled_anchors(frame, dx, dy, frame.w, frame.h);
     }
 }
-/// Dark strip behind Channel rows, rescaled from the measured native
-/// stack: mirrors [`paint_list_scrim`] shape (2 px bleed) without
-/// sharing its invented anchors.
-fn paint_channel_scrim(frame: &mut Frame<'_>, top: usize, shown: usize) {
+/// Dark strip behind Channel rows over the pinned viewport slots
+/// (2 px bleed past the first top and last bottom).
+fn paint_channel_scrim(frame: &mut Frame<'_>, shown: usize) {
     if shown == 0 || frame.w == 0 || frame.h == 0 {
         return;
     }
     let w = i32::try_from(frame.w).unwrap_or(0);
     let h = i32::try_from(frame.h).unwrap_or(0);
-    let first = channel_row_top(top, h) - 2;
-    let bottom = channel_row_top(top + shown, h) + 2;
+    let first = channel_row_top(0, h) - 2;
+    let last_index = (shown - 1).min(CHANNEL_SLOT_COUNT - 1);
+    let bottom = i32::try_from(
+        i64::from(CHANNEL_ROW_RECTS[last_index].3) * i64::from(h) / i64::from(NATIVE_HEIGHT),
+    )
+    .unwrap_or(i32::MAX)
+        + 2;
     fill_rect(
         frame,
         &Rect {
@@ -632,7 +652,7 @@ fn paint_channel_rows(
     art: Option<&SceneArt>,
 ) {
     let (top, shown) = channel_viewport(highlight, channels.len());
-    paint_channel_scrim(frame, top, shown);
+    paint_channel_scrim(frame, shown);
     match art {
         Some(art) => paint_channel_enter_art(frame, shown, art),
         None => paint_channel_buttons(frame, shown),
@@ -7564,16 +7584,20 @@ mod paint_tests {
     }
 
     #[test]
-    fn channel_row_hit_mirrors_paint_inside_the_measured_faces() {
-        // Hit-test inverse of the measured stack: a pixel inside the
-        // face of row i maps back to row i; pixels above the stack or
-        // past the list hit nothing.
-        for slot in 0..CHANNEL_VISIBLE_ROWS {
-            let face_y = channel_row_top(slot, i32::try_from(NATIVE_HEIGHT).unwrap_or(0))
-                + CHANNEL_ENTER_DY
-                + 5;
+    fn channel_row_hit_mirrors_the_pinned_row_rects() {
+        // Hit-test inverse of the exe-pinned slot bands (CStatePlanet
+        // dialog+0x94): a pixel inside the face of slot i maps back to
+        // slot i; the band edges (top inclusive, bottom exclusive) and
+        // pixels above the stack or past the last bottom hit nothing.
+        for (slot, &(.., band_top, _, band_bottom)) in CHANNEL_ROW_RECTS.iter().enumerate() {
+            let face_y = band_top + CHANNEL_ENTER_DY + 5;
             assert_eq!(channel_row_hit(face_y, 4), Some(slot));
+            assert_eq!(channel_row_hit(band_top, 4), Some(slot));
+            assert_eq!(channel_row_hit(band_bottom - 1, 4), Some(slot));
         }
+        // Bottom edge is exclusive: the last band ends at 436.
+        assert_eq!(channel_row_hit(435, 4), Some(3));
+        assert_eq!(channel_row_hit(436, 4), None);
         assert_eq!(channel_row_hit(100, 4), None);
         assert_eq!(channel_row_hit(560, 4), None);
     }
