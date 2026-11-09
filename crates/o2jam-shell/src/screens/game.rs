@@ -1016,16 +1016,31 @@ impl ScreenGame {
     /// file order), legacy row bands without them. Either path
     /// highlights the row and advances like Confirm.
     fn click_room_row(&mut self, x: i32, y: i32) {
-        let staged = self.room_panel_click(x, y);
-        let band = || list_row_hit(CLICK_W, CLICK_H, self.rooms.len(), x, y);
-        let Some(index) = staged
-            .or_else(band)
-            .filter(|index| *index < self.rooms.len())
-        else {
+        let Some(index) = self.room_index_at(x, y) else {
             return;
         };
         self.room_highlight = index;
         self.enter(Screen::Waiting);
+    }
+
+    /// Room row index under a click, staged panels first (see
+    /// [`Self::click_room_row`]).
+    fn room_index_at(&self, x: i32, y: i32) -> Option<usize> {
+        let staged = self.room_panel_click(x, y);
+        let band = || list_row_hit(CLICK_W, CLICK_H, self.rooms.len(), x, y);
+        staged
+            .or_else(band)
+            .filter(|index| *index < self.rooms.len())
+    }
+
+    /// Room number under a click (`None` while no listed room covers
+    /// the point). The session bridge joins it before advancing, so a
+    /// click sends what Confirm sends.
+    #[must_use]
+    pub fn room_number_at(&self, x: i32, y: i32) -> Option<i32> {
+        self.room_index_at(x, y)
+            .and_then(|index| self.rooms.get(index))
+            .map(|room| room.number)
     }
 
     /// Staged room-panel click: file-order panel index covering
@@ -1036,6 +1051,20 @@ impl ScreenGame {
             return None;
         }
         room_panel_hit(placements, x, y)
+    }
+
+    /// Whether a click hits a staged Waiting confirm button
+    /// (START/READY ids only; art-less clicks land nowhere — no pinned
+    /// fallback geometry names these buttons). The session bridge runs
+    /// its networked Confirm gate on a hit instead of the local one.
+    #[must_use]
+    pub fn waiting_confirm_hit(&self, x: i32, y: i32) -> bool {
+        let Some(art) = self.scene_art(Screen::Waiting) else {
+            return false;
+        };
+        WAITING_CONFIRM_IDS
+            .iter()
+            .any(|id| staged_rect_hit(&art.placements, id, x, y))
     }
 
     /// Waiting button click: staged START/READY runs the Confirm
@@ -3803,6 +3832,38 @@ mod game_tests {
         assert!(ScreenGame::is_listed_room(&titled_first));
         assert!(!ScreenGame::is_listed_room(&free_slot));
         assert!(ScreenGame::is_listed_room(&two_rooms()[0]));
+    }
+
+    #[test]
+    fn room_number_at_names_clicked_rows() {
+        // Band fallback needs no staged art: native bands resolve the
+        // row whose number the session bridge joins before advancing.
+        let mut game = ScreenGame::new();
+        game.set_rooms(two_rooms());
+        assert_eq!(game.room_number_at(400, 154), Some(3));
+        assert_eq!(game.room_number_at(400, 162), Some(7));
+        assert_eq!(game.room_number_at(400, 100), None);
+    }
+
+    #[test]
+    fn waiting_confirm_hit_needs_staged_buttons() {
+        // Art-less clicks land nowhere (no pinned fallback geometry).
+        let mut game = ScreenGame::new();
+        assert!(!game.waiting_confirm_hit(150, 130));
+        let placements = vec![crate::avatar::ScenePlacement {
+            id: "IDC_BUTTON_SWAIT_READY".to_owned(),
+            code: 0,
+            sprite: None,
+            rect: Rect {
+                x: 100,
+                y: 100,
+                w: 200,
+                h: 60,
+            },
+        }];
+        game.load_scene(Screen::Waiting, placements, HashMap::new());
+        assert!(game.waiting_confirm_hit(150, 130));
+        assert!(!game.waiting_confirm_hit(10, 10));
     }
 
     #[test]

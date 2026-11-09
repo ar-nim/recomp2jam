@@ -962,7 +962,10 @@ impl OnlineSession {
             music_state: 0,
             password: pending.password,
         };
-        let frame = match self.gateway.exchange(
+        // Skip-loop, not the strict transport exchange: live broadcasts
+        // (our own RoomCreated echo included) routinely interleave the
+        // answer, and no consumer folds them mid-join.
+        let frame = match self.exchange_room_frame(
             Request::JoinWaiting.id(),
             &request.encode_body(),
             JoinRoomResponse::COMMAND,
@@ -1749,6 +1752,32 @@ impl GameLoop for OnlineSession {
     }
 
     fn mouse_click(&mut self, x: i32, y: i32) {
+        // Click evidence states (P0: every path labeled, OPEN stays open):
+        // Channel rows ride reference-measured bands (exe-OPEN) but send
+        // nothing either way, matching Confirm on an empty draft.
+        // Room clicks mirror Confirm: join first, advance on success.
+        if self.game.screen() == Screen::Room {
+            if let Some(number) = self.game.room_number_at(x, y) {
+                self.set_pending_room_join(number, "");
+                if self.join_pending_room() {
+                    self.game.mouse_click(x, y);
+                }
+                return;
+            }
+            // A click that hits no room never sends: only Confirm (with
+            // an explicit `--online-join-room`) retries a pending join.
+            if self.pending_room.is_none() {
+                self.game.mouse_click(x, y);
+            }
+            return;
+        }
+        // Waiting confirm rides the networked Confirm gate (4008/4010
+        // with the song-select/START exchange behind it); other Waiting
+        // clicks stay local exactly like their menu equivalents.
+        if self.game.screen() == Screen::Waiting && self.game.waiting_confirm_hit(x, y) {
+            self.confirm_waiting();
+            return;
+        }
         // Forward canvas clicks like lane keys: Channel/Room clicks
         // advance locally with no lobby send (Confirm on an empty draft
         // sends nothing either). Waiting-confirm clicks ride the local
@@ -2369,6 +2398,103 @@ mod session_tests {
         session.mouse_click(400, 240);
         server.join().unwrap();
         assert_eq!(session.game.screen(), Screen::Room);
+    }
+
+    #[test]
+    fn room_click_joins_numbered_room_and_enters_waiting() {
+        // Clicks mirror Confirm: the clicked row's number joins first,
+        // and the screen advances only on a staged snapshot.
+        use o2jam_net::{JoinRoom, JoinRoomResponse, RoomListEntry};
+        fn room_row(number: i32, title: &str) -> RoomListEntry {
+            RoomListEntry {
+                number,
+                state_code: 1,
+                title: title.to_owned(),
+                has_password: false,
+                music_id: 0,
+                difficulty: 0,
+                key_mode: 2,
+                game_mode: 0,
+                speed: 1,
+                capacity: 8,
+                user_count: 5,
+                min_level: 0,
+                max_level: 0,
+                skills: vec![],
+                premium: false,
+                room_type: 0,
+            }
+        }
+        let (mut session, server) = room_session(|mut stream| {
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, JoinRoom::COMMAND);
+            let asked = JoinRoom::decode_body(&frame.payload).unwrap();
+            assert_eq!(asked.number, 3);
+            assert!(asked.password.is_empty());
+            let answered = JoinRoomResponse {
+                result_code: 0,
+                room: Some(joined_snapshot()),
+            };
+            stream.write_all(&answered.encode()).unwrap();
+        });
+        session
+            .game_mut()
+            .set_rooms(vec![room_row(3, "Jam"), room_row(7, "Locked")]);
+        session.mouse_click(400, 154);
+        server.join().unwrap();
+        assert_eq!(session.game.screen(), Screen::Waiting);
+    }
+
+    #[test]
+    fn pending_join_skips_interleaved_broadcasts() {
+        // Live servers interleave broadcasts (our own RoomCreated echo
+        // included) ahead of the 3003 answer; the join must skip them
+        // instead of failing the exchange.
+        use o2jam_net::{JoinRoom, JoinRoomResponse};
+        let (mut session, server) = room_session(|mut stream| {
+            let broadcast = o2jam_net::frame::encode_frame(2007, &[]);
+            stream.write_all(&broadcast).unwrap();
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, JoinRoom::COMMAND);
+            let answered = JoinRoomResponse {
+                result_code: 0,
+                room: Some(joined_snapshot()),
+            };
+            stream.write_all(&answered.encode()).unwrap();
+        });
+        session.set_pending_room_join(3, "");
+        assert!(session.join_pending_room());
+        server.join().unwrap();
+        assert_eq!(session.game.screen(), Screen::Room);
+    }
+
+    #[test]
+    fn waiting_confirm_click_sends_ready_and_stays() {
+        // Staged confirm buttons ride the networked Confirm gate (4008
+        // for guests); the shell stays in Waiting for the broadcast.
+        use o2jam_net::Ready;
+        let (mut session, server) = joined_waiting_session(guest_snapshot(), |mut stream| {
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, Ready::COMMAND);
+        });
+        session.game_mut().load_scene(
+            Screen::Waiting,
+            vec![o2jam_shell::avatar::ScenePlacement {
+                id: "IDC_BUTTON_SWAIT_READY".to_owned(),
+                code: 0,
+                sprite: None,
+                rect: o2jam_render::Rect {
+                    x: 100,
+                    y: 100,
+                    w: 200,
+                    h: 60,
+                },
+            }],
+            std::collections::HashMap::new(),
+        );
+        session.mouse_click(150, 130);
+        server.join().unwrap();
+        assert_eq!(session.game.screen(), Screen::Waiting);
     }
 
     #[test]
