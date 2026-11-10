@@ -9,14 +9,15 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use o2jam_file::{Bnd, ControlList};
+use o2jam_render::{Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
 
 use crate::avatar::{
     bind_scene_rects, load_archive_sprite_for_stage, load_scene_figures_for_room,
     playing_member_selected, scene_block, scene_sprite_names, AvatarFigure, PlayingArtMode,
-    ScenePlacement,
+    ScenePlacement, LOADING_SPRITE,
 };
 use crate::screen::Screen;
-use crate::screens::side::SideScreen;
+use crate::screens::side::{SideScreen, TUTORIAL_BACKGROUND_SPRITE};
 
 /// State value keyed by its `STATE_*` Block name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -32,6 +33,9 @@ pub enum State {
     Payment,
     Payment2,
     Playing,
+    Avi,
+    Loading,
+    Tutorial,
 }
 
 impl State {
@@ -50,18 +54,21 @@ impl State {
             State::Payment => "STATE_PAYMENT",
             State::Payment2 => "STATE_PAYMENT2",
             State::Playing => "STATE_PLAYING",
+            State::Avi => "STATE_AVI",
+            State::Loading => "STATE_LOADING",
+            State::Tutorial => "STATE_TUTORIAL",
         }
     }
 
-    /// State for a Block name, if the declaration stages it.
-    /// Later tickets extend this with the full-canvas and Dialog
-    /// rows; unlisted Blocks stay `None`.
+    /// State for a Block name, if the declaration keys one. Every
+    /// State answers its own name, even the block-less full-canvas
+    /// rows; Dialog Blocks and unknown names stay `None`.
     #[must_use]
     pub fn from_block(name: &str) -> Option<State> {
-        STAGE_TABLE
+        ALL_STATES
             .iter()
-            .find(|row| row.block == name)
-            .map(|row| row.state)
+            .copied()
+            .find(|state| state.block_name() == name)
     }
 }
 
@@ -71,123 +78,189 @@ impl std::fmt::Display for State {
     }
 }
 
-/// Placement arm one row stages through: the bound `.bnd` pairing,
-/// or the Playing subset (behind-highway scene, static backdrops,
-/// then the bound run, with figures through the room mode in the
-/// context). Full-canvas (ticket #4) extends this enum.
+/// Every State the declaration keys, in table order.
+const ALL_STATES: &[State] = &[
+    State::Room,
+    State::Waiting,
+    State::Shop,
+    State::MusicShop,
+    State::MyRoom,
+    State::Planet,
+    State::Lanking,
+    State::Result,
+    State::Payment,
+    State::Payment2,
+    State::Playing,
+    State::Avi,
+    State::Loading,
+    State::Tutorial,
+];
+
+/// Which placement rule stages a row: the bound `.bnd` pairing, or
+/// one full-canvas placement per staged sprite (art without a
+/// `.bnd`: the Avi logo, the Loading gate, the Tutorial backdrop).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlacementArm {
     /// Block entries paired with the `.bnd` by code ordinal.
     Bound,
+    /// One full-canvas placement per staged sprite (art without
+    /// a `.bnd`: the Avi logo, the Loading gate, the Tutorial
+    /// backdrop).
+    FullCanvas,
     /// Playing subset: behind entries, backdrops, then the bound
     /// run (see `bind_scene_rects`); figures follow the context.
     PlayingSubset,
 }
 
-/// One declaration row per State: the Block to stage plus extra
-/// sprite bodies merged in by name. Result carries the exe-mounted
-/// verdict banner (`Result_WinLose.ojs`, file `0xc2390`) because its
-/// Block names only the backdrop and plates.
+/// Which archive a row stages from: the Interface art or the
+/// Playing art under `O2Jam/Image/`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StagingArchive {
+    Interface,
+    Playing,
+}
+
+impl StagingArchive {
+    /// `ControlList` entry holding this archive's Blocks.
+    #[must_use]
+    pub const fn list_file(self) -> &'static str {
+        match self {
+            StagingArchive::Interface => INTERFACE_LIST,
+            StagingArchive::Playing => PLAYING_LIST,
+        }
+    }
+}
+
+/// One declaration row per State: the Block to stage (absent for
+/// the block-less full-canvas rows), the archive it stages from,
+/// the placement arm, plus extra sprite bodies merged in by name.
+/// Result carries the exe-mounted verdict banner (`Result_WinLose.ojs`,
+/// file `0xc2390`) because its Block names only the backdrop and
+/// plates; Loading and Tutorial carry their single bodies by name
+/// because no 7.55 list names them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StageRow {
     /// State this row stages.
     pub state: State,
-    /// `ControlList` Block to pair with its `.bnd`.
-    pub block: &'static str,
-    /// Control-list entry holding the Block.
-    pub list: &'static str,
-    /// Placement arm this row stages through.
+    /// `ControlList` Block to stage, if any list carries art for
+    /// this State.
+    pub block: Option<&'static str>,
+    /// Archive holding the Block and the bodies.
+    pub archive: StagingArchive,
+    /// Placement rule: bound `.bnd` pairing or full canvas.
     pub arm: PlacementArm,
     /// Bodies merged by name after the bound run.
     pub extra_sprites: &'static [&'static str],
 }
 
-/// The staging declaration, read as data: one row per staged State.
-/// Full-canvas (ticket #4) and Dialog (ticket #5) rows extend this
-/// table.
+/// The staging declaration, read as data: one row per State. The
+/// bound rows pair their Block with its `.bnd`; Avi, Loading, and
+/// Tutorial stage full-canvas; Playing stages the subset through
+/// the context. Dialog (ticket #5) rows extend this table.
 pub const STAGE_TABLE: &[StageRow] = &[
     StageRow {
         state: State::Room,
-        block: "STATE_ROOM",
-        list: INTERFACE_LIST,
+        block: Some("STATE_ROOM"),
+        archive: StagingArchive::Interface,
         arm: PlacementArm::Bound,
         extra_sprites: &[],
     },
     StageRow {
         state: State::Waiting,
-        block: "STATE_WAITING",
-        list: INTERFACE_LIST,
+        block: Some("STATE_WAITING"),
+        archive: StagingArchive::Interface,
         arm: PlacementArm::Bound,
         extra_sprites: &[],
     },
     StageRow {
         state: State::Shop,
-        block: "STATE_SHOP",
-        list: INTERFACE_LIST,
+        block: Some("STATE_SHOP"),
+        archive: StagingArchive::Interface,
         arm: PlacementArm::Bound,
         extra_sprites: &[],
     },
     StageRow {
         state: State::MusicShop,
-        block: "STATE_MUSICSHOP",
-        list: INTERFACE_LIST,
+        block: Some("STATE_MUSICSHOP"),
+        archive: StagingArchive::Interface,
         arm: PlacementArm::Bound,
         extra_sprites: &[],
     },
     StageRow {
         state: State::MyRoom,
-        block: "STATE_MYROOM",
-        list: INTERFACE_LIST,
+        block: Some("STATE_MYROOM"),
+        archive: StagingArchive::Interface,
         arm: PlacementArm::Bound,
         extra_sprites: &[],
     },
     StageRow {
         state: State::Planet,
-        block: "STATE_PLANET",
-        list: INTERFACE_LIST,
+        block: Some("STATE_PLANET"),
+        archive: StagingArchive::Interface,
         arm: PlacementArm::Bound,
         extra_sprites: &[],
     },
     StageRow {
         state: State::Lanking,
-        block: "STATE_LANKING",
-        list: INTERFACE_LIST,
+        block: Some("STATE_LANKING"),
+        archive: StagingArchive::Interface,
         arm: PlacementArm::Bound,
         extra_sprites: &[],
     },
     StageRow {
         state: State::Result,
-        block: "STATE_RESULT",
-        list: INTERFACE_LIST,
+        block: Some("STATE_RESULT"),
+        archive: StagingArchive::Interface,
         arm: PlacementArm::Bound,
         extra_sprites: &["Result_WinLose.ojs"],
     },
     StageRow {
         state: State::Payment,
-        block: "STATE_PAYMENT",
-        list: INTERFACE_LIST,
+        block: Some("STATE_PAYMENT"),
+        archive: StagingArchive::Interface,
         arm: PlacementArm::Bound,
         extra_sprites: &[],
     },
     StageRow {
         state: State::Payment2,
-        block: "STATE_PAYMENT2",
-        list: INTERFACE_LIST,
+        block: Some("STATE_PAYMENT2"),
+        archive: StagingArchive::Interface,
         arm: PlacementArm::Bound,
         extra_sprites: &[],
     },
     StageRow {
         state: State::Playing,
-        block: "STATE_PLAYING",
-        list: PLAYING_LIST,
+        block: Some("STATE_PLAYING"),
+        archive: StagingArchive::Playing,
         arm: PlacementArm::PlayingSubset,
         extra_sprites: &[],
     },
+    StageRow {
+        state: State::Avi,
+        block: Some("STATE_AVI"),
+        archive: StagingArchive::Interface,
+        arm: PlacementArm::FullCanvas,
+        extra_sprites: &[],
+    },
+    StageRow {
+        state: State::Loading,
+        block: None,
+        archive: StagingArchive::Playing,
+        arm: PlacementArm::FullCanvas,
+        extra_sprites: &[LOADING_SPRITE],
+    },
+    StageRow {
+        state: State::Tutorial,
+        block: None,
+        archive: StagingArchive::Playing,
+        arm: PlacementArm::FullCanvas,
+        extra_sprites: &[TUTORIAL_BACKGROUND_SPRITE],
+    },
 ];
 
-/// Control-list entry holding every ticket #3 Block.
+/// Control-list entry holding every Interface Block.
 const INTERFACE_LIST: &str = "ControlList_Interface.txt";
-/// Control-list entry holding the Playing subset Block.
+/// Control-list entry holding every Playing Block.
 const PLAYING_LIST: &str = "ControlList_Playing.txt";
 
 /// Stage-side inputs for one staging call. Playing is the only
@@ -209,7 +282,8 @@ pub struct StageContext {
 /// holds the game.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StagedArt {
-    /// `.bnd` placements in block file order.
+    /// Placements in block file order: `.bnd` rects on the bound
+    /// arm, one full-canvas placement per staged sprite otherwise.
     pub placements: Vec<ScenePlacement>,
     /// Decoded bodies by archive name; a missed body leaves its
     /// slot empty while its placement survives.
@@ -233,71 +307,71 @@ pub struct StageMiss {
 /// miss also logs a `tracing` warning with the same three names.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StageReport {
-    /// Staged art, if the Block and its `.bnd` both resolved.
+    /// Staged art, if the row resolved to at least one placement.
+    /// A missing Block or `.bnd` stages nothing.
     pub art: Option<StagedArt>,
     /// One entry per miss, in stage order.
     pub misses: Vec<StageMiss>,
 }
 
-/// Stage one State from archive bytes through the row's placement arm:
-/// the bound Block paired with its `.bnd` (the avatar kit's pairing),
-/// or the Playing subset (behind entries, backdrops, then the bound
-/// run, with figures through the context's room mode) — plus the row's
-/// extra bodies merged by name. Returns the art with the miss ledger;
-/// each miss logs a warning. Never fails a Scene: a missing Block
-/// or `.bnd` contributes nothing, a missing body keeps its
-/// placement with an empty figure slot.
+/// Stage one State from archive bytes through its row's arm: the
+/// bound Block paired with its `.bnd` (the avatar kit's pairing),
+/// one full-canvas placement per staged sprite, or the Playing
+/// subset (behind entries, backdrops, then the bound run, with
+/// figures through the context's room mode) — plus the row's
+/// extra bodies merged by name. Returns the art with the miss
+/// ledger; each miss logs a warning. Never fails a Scene: a
+/// missing Block or `.bnd` contributes nothing, a missing body
+/// keeps its placement with an empty figure slot.
 #[must_use]
 pub fn stage_state(archive: &[u8], state: State, ctx: StageContext) -> StageReport {
-    let mut report = StageReport::default();
     let Some(row) = STAGE_TABLE.iter().find(|row| row.state == state) else {
+        return StageReport::default();
+    };
+    match row.arm {
+        PlacementArm::Bound => stage_bound_row(archive, row, ctx),
+        PlacementArm::FullCanvas => stage_full_canvas_row(archive, row, ctx),
+        PlacementArm::PlayingSubset => stage_playing_row(archive, row, ctx),
+    }
+}
+
+/// Stage one bound row: the Block paired with its `.bnd`, plus the
+/// row's extra bodies merged by name.
+fn stage_bound_row(archive: &[u8], row: &StageRow, ctx: StageContext) -> StageReport {
+    let mut report = StageReport::default();
+    let Some(block_name) = row.block else {
         return report;
     };
-    let Some(list) = read_control_list(archive, row.list) else {
-        push_miss(&mut report, state, row.block, row.list);
+    let list_file = row.archive.list_file();
+    let Some(list) = read_control_list(archive, list_file) else {
+        push_miss(&mut report, row.state, block_name, list_file);
         return report;
     };
-    let Some(block) = scene_block(&list, row.block) else {
-        push_miss(&mut report, state, row.block, row.block);
+    let Some(block) = scene_block(&list, block_name) else {
+        push_miss(&mut report, row.state, block_name, block_name);
         return report;
     };
     let names = scene_sprite_names(block);
     let Some(bind_name) = block.bound_file.clone() else {
-        push_miss(&mut report, state, row.block, "(no BOUND line)");
+        push_miss(&mut report, row.state, block_name, "(no BOUND line)");
         return report;
     };
     let Some(bind) = read_bind(archive, &bind_name) else {
-        push_miss(&mut report, state, row.block, &bind_name);
+        push_miss(&mut report, row.state, block_name, &bind_name);
         return report;
     };
     let mut art = StagedArt {
         placements: bind_scene_rects(block, &bind),
         figures: HashMap::new(),
     };
-    match row.arm {
-        PlacementArm::Bound => {
-            load_bound_figures(
-                archive,
-                &names,
-                ctx,
-                &mut report,
-                state,
-                row,
-                &mut art.figures,
-            );
-        }
-        PlacementArm::PlayingSubset => {
-            art.figures = load_playing_figures(archive, &names, ctx, &mut report, state, row.block);
-        }
-    }
-    for extra in row.extra_sprites {
-        match load_archive_sprite_for_stage(archive, extra, ctx.arena_stage) {
-            Some(figure) => {
-                art.figures.insert((*extra).to_owned(), figure);
-            }
-            None => push_miss(&mut report, state, row.block, extra),
-        }
-    }
+    load_figures(
+        archive,
+        row,
+        ctx,
+        &staged_names(&names, row.extra_sprites),
+        &mut art,
+        &mut report,
+    );
     if art.placements.is_empty() {
         return report;
     }
@@ -305,28 +379,83 @@ pub fn stage_state(archive: &[u8], state: State, ctx: StageContext) -> StageRepo
     report
 }
 
-/// Bound-arm figures: every named body verbatim through the arena
-/// stage; a missing body leaves its slot empty with a miss.
-fn load_bound_figures(
-    archive: &[u8],
-    names: &[String],
-    ctx: StageContext,
-    report: &mut StageReport,
-    state: State,
-    row: &StageRow,
-    figures: &mut HashMap<String, AvatarFigure>,
-) {
-    for name in names {
-        if is_scrollbar_params(name) {
-            continue;
-        }
-        match load_archive_sprite_for_stage(archive, name, ctx.arena_stage) {
+/// Stage one full-canvas row: the Block's sprite names (when a
+/// list carries the Block) plus the row's extra bodies, each on
+/// its own full-canvas placement. Block-less rows skip the list
+/// lookup with no miss: no 7.55 list carries their art.
+fn stage_full_canvas_row(archive: &[u8], row: &StageRow, ctx: StageContext) -> StageReport {
+    let mut report = StageReport::default();
+    let block_names: Vec<String> = if let Some(block_name) = row.block {
+        let list_file = row.archive.list_file();
+        let Some(list) = read_control_list(archive, list_file) else {
+            push_miss(&mut report, row.state, block_name, list_file);
+            return report;
+        };
+        let Some(block) = scene_block(&list, block_name) else {
+            push_miss(&mut report, row.state, block_name, block_name);
+            return report;
+        };
+        scene_sprite_names(block)
+    } else {
+        Vec::new()
+    };
+    let names = staged_names(&block_names, row.extra_sprites);
+    let mut art = StagedArt {
+        placements: full_canvas_placements(&names),
+        figures: HashMap::new(),
+    };
+    load_figures(archive, row, ctx, &names, &mut art, &mut report);
+    if art.placements.is_empty() {
+        return report;
+    }
+    report.art = Some(art);
+    report
+}
+
+/// Stage one Playing-subset row: behind entries, backdrops, then
+/// the bound run, with figures through the context's room mode
+/// (unselected family members leave empty slots with no miss),
+/// plus the row's extra bodies merged by name.
+fn stage_playing_row(archive: &[u8], row: &StageRow, ctx: StageContext) -> StageReport {
+    let mut report = StageReport::default();
+    let Some(block_name) = row.block else {
+        return report;
+    };
+    let list_file = row.archive.list_file();
+    let Some(list) = read_control_list(archive, list_file) else {
+        push_miss(&mut report, row.state, block_name, list_file);
+        return report;
+    };
+    let Some(block) = scene_block(&list, block_name) else {
+        push_miss(&mut report, row.state, block_name, block_name);
+        return report;
+    };
+    let names = scene_sprite_names(block);
+    let Some(bind_name) = block.bound_file.clone() else {
+        push_miss(&mut report, row.state, block_name, "(no BOUND line)");
+        return report;
+    };
+    let Some(bind) = read_bind(archive, &bind_name) else {
+        push_miss(&mut report, row.state, block_name, &bind_name);
+        return report;
+    };
+    let mut art = StagedArt {
+        placements: bind_scene_rects(block, &bind),
+        figures: load_playing_figures(archive, &names, ctx, &mut report, row.state, block_name),
+    };
+    for extra in row.extra_sprites {
+        match load_archive_sprite_for_stage(archive, extra, ctx.arena_stage) {
             Some(figure) => {
-                figures.insert(name.clone(), figure);
+                art.figures.insert((*extra).to_owned(), figure);
             }
-            None => push_miss(report, state, row.block, name),
+            None => push_miss(&mut report, row.state, block_name, extra),
         }
     }
+    if art.placements.is_empty() {
+        return report;
+    }
+    report.art = Some(art);
+    report
 }
 
 /// Playing-subset figures through the room mode in the context: only
@@ -356,6 +485,63 @@ fn load_playing_figures(
         }
     }
     figures
+}
+
+/// Block sprite names plus the row's extras merged in by name,
+/// without repeats: one entry per staged body.
+fn staged_names(block_names: &[String], extras: &[&str]) -> Vec<String> {
+    let mut names: Vec<String> = block_names.to_vec();
+    for extra in extras {
+        if !names.iter().any(|name| name == extra) {
+            names.push((*extra).to_owned());
+        }
+    }
+    names
+}
+
+/// One full-canvas placement per staged sprite on the native
+/// canvas: art without a `.bnd` fills the frame.
+fn full_canvas_placements(names: &[String]) -> Vec<ScenePlacement> {
+    names
+        .iter()
+        .map(|name| ScenePlacement {
+            id: String::new(),
+            code: 0,
+            sprite: Some(name.clone()),
+            rect: Rect {
+                x: 0,
+                y: 0,
+                w: NATIVE_WIDTH,
+                h: NATIVE_HEIGHT,
+            },
+        })
+        .collect()
+}
+
+/// Decode every staged body through the room arena stage, skipping
+/// scrollbar parameters (never files). A missing or undecodable
+/// body logs its miss and leaves its slot empty while its
+/// placement survives.
+fn load_figures(
+    archive: &[u8],
+    row: &StageRow,
+    ctx: StageContext,
+    names: &[String],
+    art: &mut StagedArt,
+    report: &mut StageReport,
+) {
+    let block = row.block.unwrap_or(row.state.block_name());
+    for name in names {
+        if is_scrollbar_params(name) {
+            continue;
+        }
+        match load_archive_sprite_for_stage(archive, name, ctx.arena_stage) {
+            Some(figure) => {
+                art.figures.insert(name.clone(), figure);
+            }
+            None => push_miss(report, row.state, block, name),
+        }
+    }
 }
 
 /// Record one miss and log its warning with the State, the Block,
@@ -393,8 +579,7 @@ fn read_bind(archive: &[u8], name: &str) -> Option<Bnd> {
 }
 
 /// State behind a main-flow Screen, if the declaration stages it.
-/// Channel has no State class of its own; Avi and Loading keep
-/// their rows for ticket #4.
+/// Channel has no State class of its own.
 #[must_use]
 pub const fn state_of_screen(screen: Screen) -> Option<State> {
     match screen {
@@ -406,14 +591,15 @@ pub const fn state_of_screen(screen: Screen) -> Option<State> {
         Screen::MusicShop => Some(State::MusicShop),
         Screen::Myroom => Some(State::MyRoom),
         Screen::Lanking => Some(State::Lanking),
+        Screen::Avi => Some(State::Avi),
+        Screen::Loading => Some(State::Loading),
         Screen::Playing => Some(State::Playing),
-        Screen::Avi | Screen::Channel | Screen::Loading => None,
+        Screen::Channel => None,
     }
 }
 
 /// State behind a side Screen, if the declaration stages it.
 /// Payment names the billing view; its gift twin merges caller-side.
-/// Tutorial rides the full-canvas arm (ticket #4).
 #[must_use]
 pub const fn state_of_side(side: SideScreen) -> Option<State> {
     match side {
@@ -423,7 +609,7 @@ pub const fn state_of_side(side: SideScreen) -> Option<State> {
         SideScreen::Planet => Some(State::Planet),
         SideScreen::Lanking => Some(State::Lanking),
         SideScreen::Payment => Some(State::Payment),
-        SideScreen::Tutorial => None,
+        SideScreen::Tutorial => Some(State::Tutorial),
     }
 }
 
@@ -476,6 +662,9 @@ mod staging_tests {
         assert_eq!(State::Payment.block_name(), "STATE_PAYMENT");
         assert_eq!(State::Payment2.block_name(), "STATE_PAYMENT2");
         assert_eq!(State::Playing.block_name(), "STATE_PLAYING");
+        assert_eq!(State::Avi.block_name(), "STATE_AVI");
+        assert_eq!(State::Loading.block_name(), "STATE_LOADING");
+        assert_eq!(State::Tutorial.block_name(), "STATE_TUTORIAL");
     }
 
     #[test]
@@ -492,6 +681,9 @@ mod staging_tests {
             State::Payment,
             State::Payment2,
             State::Playing,
+            State::Avi,
+            State::Loading,
+            State::Tutorial,
         ] {
             assert_eq!(State::from_block(state.block_name()), Some(state));
         }
@@ -499,17 +691,70 @@ mod staging_tests {
 
     #[test]
     fn from_block_rejects_unknown_names() {
-        assert_eq!(State::from_block("STATE_AVI"), None);
         assert_eq!(State::from_block("DIALOG_CHANNEL_INFO"), None);
         assert_eq!(State::from_block(""), None);
     }
 
     #[test]
-    fn declaration_holds_one_bound_row_per_state() {
-        assert_eq!(STAGE_TABLE.len(), 11);
+    fn declaration_holds_expected_rows_per_state() {
+        assert_eq!(STAGE_TABLE.len(), 14);
         for row in STAGE_TABLE {
-            assert_eq!(row.block, row.state.block_name());
+            if let Some(block) = row.block {
+                assert_eq!(block, row.state.block_name());
+            }
         }
+        let bound = STAGE_TABLE
+            .iter()
+            .filter(|row| row.arm == PlacementArm::Bound)
+            .count();
+        assert_eq!(bound, 10, "ticket #3 rows stay bound");
+        let playing = STAGE_TABLE
+            .iter()
+            .find(|row| row.state == State::Playing)
+            .expect("playing row staged");
+        assert_eq!(playing.arm, PlacementArm::PlayingSubset);
+        for state in [State::Avi, State::Loading, State::Tutorial] {
+            let row = STAGE_TABLE
+                .iter()
+                .find(|row| row.state == state)
+                .expect("full-canvas row staged");
+            assert_eq!(row.arm, PlacementArm::FullCanvas);
+        }
+    }
+
+    #[test]
+    fn rows_read_their_own_control_list() {
+        for row in STAGE_TABLE {
+            if row.archive == StagingArchive::Playing {
+                assert_eq!(
+                    row.archive.list_file(),
+                    "ControlList_Playing.txt",
+                    "the Playing archive holds {:?}",
+                    row.state
+                );
+            } else {
+                assert_eq!(
+                    row.archive.list_file(),
+                    "ControlList_Interface.txt",
+                    "{:?} stages an interface Block",
+                    row.state
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn playing_row_carries_no_extras() {
+        let row = STAGE_TABLE
+            .iter()
+            .find(|row| row.state == State::Playing)
+            .expect("playing row staged");
+        assert_eq!(row.block, Some("STATE_PLAYING"));
+        assert_eq!(row.archive, StagingArchive::Playing);
+        assert!(
+            row.extra_sprites.is_empty(),
+            "the subset stages the block alone; the skin rides caller-side"
+        );
     }
 
     #[test]
@@ -540,31 +785,33 @@ mod staging_tests {
     }
 
     #[test]
-    fn rows_read_their_own_control_list() {
-        for row in STAGE_TABLE {
-            if row.state == State::Playing {
-                assert_eq!(
-                    row.list, "ControlList_Playing.txt",
-                    "the Playing subset lives in the Playing archive"
-                );
-            } else {
-                assert_eq!(
-                    row.list, "ControlList_Interface.txt",
-                    "ticket #3 stages interface Blocks only"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn playing_row_carries_no_extras() {
-        let row = STAGE_TABLE
+    fn full_canvas_rows_name_their_archive_and_extras() {
+        let avi = STAGE_TABLE
             .iter()
-            .find(|row| row.state == State::Playing)
-            .expect("playing row staged");
-        assert!(
-            row.extra_sprites.is_empty(),
-            "the subset stages the block alone; the skin rides caller-side"
+            .find(|row| row.state == State::Avi)
+            .expect("avi row staged");
+        assert_eq!(avi.block, Some("STATE_AVI"));
+        assert_eq!(avi.archive, StagingArchive::Interface);
+        assert!(avi.extra_sprites.is_empty());
+        let loading = STAGE_TABLE
+            .iter()
+            .find(|row| row.state == State::Loading)
+            .expect("loading row staged");
+        assert_eq!(loading.block, None, "no 7.55 list carries loading art");
+        assert_eq!(loading.archive, StagingArchive::Playing);
+        assert_eq!(loading.extra_sprites, &["MusicLoading.ojs"] as &[&str]);
+        let tutorial = STAGE_TABLE
+            .iter()
+            .find(|row| row.state == State::Tutorial)
+            .expect("tutorial row staged");
+        assert_eq!(
+            tutorial.block, None,
+            "the interface stub names no bodies; the backdrop ships in Playing1"
+        );
+        assert_eq!(tutorial.archive, StagingArchive::Playing);
+        assert_eq!(
+            tutorial.extra_sprites,
+            &["Playing_TutorialBG.ojs"] as &[&str]
         );
     }
 
@@ -628,6 +875,84 @@ mod staging_tests {
             ("Room_List.ojs", &sprite55_blob(2, 2, &[1; 8])),
             ("Room_Button.ojs", &sprite55_blob(2, 2, &[2; 8])),
         ])
+    }
+
+    #[test]
+    fn avi_stages_its_logo_full_canvas_without_a_bind_file() {
+        let list = [
+            "NUMBER_OF_STATE 0x01",
+            "STATE_AVI 0x01",
+            "{",
+            "BOUND \"State_Avi.bnd\"",
+            "IDC_STATE_AVI 0X18000000",
+            "IDC_BACK_LOGO 0X18100001 \"O2mediaLogo.ojs\"",
+            "}",
+            "",
+        ]
+        .join("\n");
+        let archive = o2jam_file::test_archive::build_archive(&[
+            ("ControlList_Interface.txt", list.as_bytes()),
+            ("O2mediaLogo.ojs", &sprite55_blob(2, 2, &[1; 8])),
+        ]);
+        let report = stage_state(&archive, State::Avi, StageContext::default());
+        assert!(report.misses.is_empty());
+        let art = report.art.expect("avi stages with synthetic bytes");
+        assert_eq!(art.placements.len(), 1, "one sprite, one canvas");
+        assert_eq!(art.placements[0].sprite.as_deref(), Some("O2mediaLogo.ojs"));
+        assert_eq!(art.placements[0].rect.x, 0);
+        assert_eq!(art.placements[0].rect.y, 0);
+        assert_eq!(art.placements[0].rect.w, 800, "native canvas width");
+        assert_eq!(art.placements[0].rect.h, 600, "native canvas height");
+        assert!(art.figures.contains_key("O2mediaLogo.ojs"));
+    }
+
+    #[test]
+    fn loading_stages_its_named_body_with_no_block() {
+        let archive = o2jam_file::test_archive::build_archive(&[(
+            "MusicLoading.ojs",
+            &sprite55_blob(2, 2, &[2; 8]),
+        )]);
+        let report = stage_state(&archive, State::Loading, StageContext::default());
+        assert!(report.misses.is_empty(), "no block, no bind, no miss");
+        let art = report.art.expect("loading stages with synthetic bytes");
+        assert_eq!(art.placements.len(), 1);
+        assert_eq!(
+            art.placements[0].sprite.as_deref(),
+            Some("MusicLoading.ojs")
+        );
+        assert_eq!(art.placements[0].rect.w, 800);
+        assert_eq!(art.placements[0].rect.h, 600);
+        assert!(art.figures.contains_key("MusicLoading.ojs"));
+    }
+
+    #[test]
+    fn tutorial_stages_its_named_body_with_no_block() {
+        let archive = o2jam_file::test_archive::build_archive(&[(
+            "Playing_TutorialBG.ojs",
+            &sprite55_blob(2, 2, &[3; 8]),
+        )]);
+        let report = stage_state(&archive, State::Tutorial, StageContext::default());
+        assert!(report.misses.is_empty(), "no block, no bind, no miss");
+        let art = report.art.expect("tutorial stages with synthetic bytes");
+        assert_eq!(art.placements.len(), 1);
+        assert_eq!(
+            art.placements[0].sprite.as_deref(),
+            Some("Playing_TutorialBG.ojs")
+        );
+        assert!(art.figures.contains_key("Playing_TutorialBG.ojs"));
+    }
+
+    #[test]
+    fn full_canvas_miss_keeps_placement_with_empty_slot() {
+        let archive = o2jam_file::test_archive::build_archive(&[]);
+        let report = stage_state(&archive, State::Loading, StageContext::default());
+        let art = report.art.expect("placements survive the miss");
+        assert_eq!(art.placements.len(), 1);
+        assert!(art.figures.is_empty());
+        assert_eq!(report.misses.len(), 1);
+        assert_eq!(report.misses[0].state, State::Loading);
+        assert_eq!(report.misses[0].block, "STATE_LOADING");
+        assert_eq!(report.misses[0].entry, "MusicLoading.ojs");
     }
 
     #[test]
@@ -987,6 +1312,17 @@ mod staging_tests {
         );
     }
 
+    #[test]
+    fn screen_view_maps_full_canvas_scenes_to_states() {
+        assert_eq!(state_of_screen(Screen::Avi), Some(State::Avi));
+        assert_eq!(state_of_screen(Screen::Loading), Some(State::Loading));
+    }
+
+    #[test]
+    fn screen_view_leaves_future_arms_unmapped() {
+        assert_eq!(state_of_screen(Screen::Channel), None, "no State class");
+    }
+
     /// Synthetic `ControlList_Playing.txt` text: the self row, four
     /// behind-highway scene entries, one backdrop panel, fillers to
     /// index 213, then the bound `EXIT`..`VOL` run. Mirrors the exe
@@ -1158,13 +1494,6 @@ mod staging_tests {
     }
 
     #[test]
-    fn screen_view_leaves_future_arms_unmapped() {
-        assert_eq!(state_of_screen(Screen::Channel), None, "no State class");
-        assert_eq!(state_of_screen(Screen::Avi), None, "ticket #4");
-        assert_eq!(state_of_screen(Screen::Loading), None, "ticket #4");
-    }
-
-    #[test]
     fn side_view_maps_bound_sides_to_states() {
         assert_eq!(state_of_side(SideScreen::Shop), Some(State::Shop));
         assert_eq!(state_of_side(SideScreen::MusicShop), Some(State::MusicShop));
@@ -1178,7 +1507,7 @@ mod staging_tests {
         );
         assert_eq!(
             state_of_side(SideScreen::Tutorial),
-            None,
+            Some(State::Tutorial),
             "full-canvas arm, ticket #4"
         );
     }

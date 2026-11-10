@@ -11,15 +11,12 @@ use o2jam_game::{RankDelivery, RoomTeams, LIFE_MAX, PEER_SLOT_COUNT, STAT_LIFE};
 use o2jam_net::play::SetRoomMusic;
 use o2jam_net::rooms::{WaitingAdminMessage, WaitingUserMessage};
 use o2jam_net::{ChannelState, GameMode, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
-use o2jam_render::{Frame, Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
+use o2jam_render::{Frame, NATIVE_HEIGHT, NATIVE_WIDTH};
 use o2jam_shell::avatar::{
-    bind_scene_rects, load_avi_logo, load_scene_figures, load_scene_figures_for_room,
-    load_scene_figures_for_stage, scene_block, scene_sprite_names, AvatarFigure, PlayingArtMode,
-    ScenePlacement, AVI_BLOCK, LOADING_SPRITE,
+    bind_scene_rects, load_scene_figures, scene_block, scene_sprite_names, AvatarFigure,
+    ScenePlacement,
 };
-use o2jam_shell::screens::side::{
-    SideScreen, SELECT_MUSIC_DIALOG_BLOCK, TUTORIAL_BACKGROUND_SPRITE,
-};
+use o2jam_shell::screens::side::{SideScreen, SELECT_MUSIC_DIALOG_BLOCK};
 use o2jam_shell::staging::{
     read_install_archives, stage_state, state_of_screen, state_of_side, StageContext, State,
 };
@@ -194,8 +191,6 @@ pub fn write_shots(out_dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
 
 /// Interface archive under `install-root` (Avi/Channel/Room/Waiting/Result art).
 const INTERFACE_ARCHIVE: &str = "O2Jam/Image/Interface1.opi";
-/// Playing archive under `install-root` (Loading/Playing art).
-const PLAYING_ARCHIVE: &str = "O2Jam/Image/Playing1.opi";
 /// Worn-figure archive under `install-root` (avatar item art + table).
 const AVATAR_ARCHIVE: &str = "O2Jam/Image/avatar.opa";
 /// Equipment the playing shot wears, verified to resolve against 7.55
@@ -280,70 +275,20 @@ fn bind_data(archive: &[u8], bound_file: &str) -> Option<Bnd> {
     o2jam_file::parse_bnd(body).ok()
 }
 
-/// Full-canvas placements for art without a `.bnd`.
-fn full_canvas(names: &[String]) -> Vec<ScenePlacement> {
-    names
-        .iter()
-        .map(|name| ScenePlacement {
-            id: String::new(),
-            code: 0,
-            sprite: Some(name.clone()),
-            rect: Rect {
-                x: 0,
-                y: 0,
-                w: NATIVE_WIDTH,
-                h: NATIVE_HEIGHT,
-            },
-        })
-        .collect()
-}
-
-/// Stage a bound block: named figures plus `.bnd` placements. The
-/// room arena stage rides along so `_` runtime refs resolve their
-/// stage-numbered siblings (`None` keeps the bare arm; Interface
-/// blocks name no `_` refs). The room mode, when given, selects the
-/// Playing family members (note backgrounds, life gauges, BP buffer
-/// bars — `avatar::playing_member_selected`); unselected members
-/// leave empty slots that paint nothing.
-fn stage_bound_block(
-    archive: &[u8],
-    list: &ControlList,
-    block_name: &str,
-    arena_stage: Option<u16>,
-    mode: Option<&PlayingArtMode>,
-) -> Option<(Vec<ScenePlacement>, HashMap<String, AvatarFigure>)> {
-    let block = scene_block(list, block_name)?;
-    let names = scene_sprite_names(block);
-    if names.is_empty() {
-        return None;
-    }
-    let figures = match mode {
-        Some(mode) => load_scene_figures_for_room(archive, &names, arena_stage, mode),
-        None => load_scene_figures_for_stage(archive, &names, arena_stage),
-    };
-    if figures.is_empty() {
-        return None;
-    }
-    let bnd = bind_data(archive, block.bound_file.as_ref()?)?;
-    let placements = bind_scene_rects(block, &bnd);
-    if placements.is_empty() {
-        return None;
-    }
-    Some((placements, figures))
-}
-
 /// Side-screen stage data through the staging declaration: one
-/// bound State per side screen (`visit_side` + `load_side_scene`
-/// paint these through `paint_side_scene`). Payment merges both
-/// billing views. The tutorial keeps its local full-canvas staging
-/// until ticket #4. `None` keeps the walk's side shot skipped (no
-/// install-root).
+/// full-canvas or bound State per side screen (`visit_side` +
+/// `load_side_scene` paint these through `paint_side_scene`).
+/// Payment merges both billing views, and Tutorial stages its
+/// Playing-archive backdrop. `None` keeps the walk's side shot
+/// skipped (no install-root).
 fn side_stage_data(
     side: SideScreen,
 ) -> Option<(Vec<ScenePlacement>, HashMap<String, AvatarFigure>)> {
     if side == SideScreen::Tutorial {
-        let playing = read_archive(PLAYING_ARCHIVE)?;
-        return stage_single_sprite(&playing, TUTORIAL_BACKGROUND_SPRITE);
+        let installed = read_install_archives(&install_root());
+        let playing = installed.playing?;
+        let art = stage_state(&playing, State::Tutorial, StageContext::default()).art?;
+        return Some((art.placements, art.figures));
     }
     let installed = read_install_archives(&install_root());
     let interface = installed.interface?;
@@ -391,20 +336,6 @@ fn side_shot_name(side: SideScreen) -> &'static str {
     }
 }
 
-/// Stage one sprite full-canvas (Channel fallback, Loading gate,
-/// Tutorial backdrop).
-fn stage_single_sprite(
-    archive: &[u8],
-    sprite_name: &str,
-) -> Option<(Vec<ScenePlacement>, HashMap<String, AvatarFigure>)> {
-    let names = vec![sprite_name.to_owned()];
-    let figures = load_scene_figures(archive, &names);
-    if figures.is_empty() {
-        return None;
-    }
-    Some((full_canvas(&names), figures))
-}
-
 /// Stage the code-mounted channel dialog art (sheet, hover bar, row
 /// bar, digit/count plates, enter faces, scroll bodies) through the
 /// shared [`live_art::stage_channel_dialog`] — one implementation for
@@ -419,18 +350,16 @@ pub(crate) use crate::live_art::stage_planet_dialogs;
 /// each scene stages independently so one bad block never blanks
 /// the rest. Channel stages no block art (the block names zero
 /// sprites) — its code-mounted dialog art stages through
-/// `stage_channel_dialog`. Avi keeps its local bound staging until
-/// ticket #4 gives it a declaration row.
+/// `stage_channel_dialog`. Avi stages its full-canvas logo once
+/// through the declaration: the splash slot stays empty because
+/// the scene slot already paints the same sprite.
 fn stage_interface_archive(game: &mut ScreenGame, archive: &[u8]) {
-    if let Some(logo) = load_avi_logo(archive) {
-        game.load_splash(logo);
-    }
     stage_channel_dialog(game, archive);
     let Some(list) = control_list(archive, INTERFACE_LIST) else {
         return;
     };
-    if let Some((placements, figures)) = stage_bound_block(archive, &list, AVI_BLOCK, None, None) {
-        game.load_scene(Screen::Avi, placements, figures);
+    if let Some(art) = stage_state(archive, State::Avi, StageContext::default()).art {
+        game.load_scene(Screen::Avi, art.placements, art.figures);
     }
     for screen in [Screen::Room, Screen::Waiting, Screen::Planet] {
         let Some(state) = state_of_screen(screen) else {
@@ -457,8 +386,8 @@ fn stage_interface_archive(game: &mut ScreenGame, archive: &[u8]) {
 /// context carries an explicit solo flag instead of the room's Live
 /// word.
 fn stage_playing_archive(game: &mut ScreenGame, archive: &[u8]) {
-    if let Some((placements, figures)) = stage_single_sprite(archive, LOADING_SPRITE) {
-        game.load_scene(Screen::Loading, placements, figures);
+    if let Some(art) = stage_state(archive, State::Loading, StageContext::default()).art {
+        game.load_scene(Screen::Loading, art.placements, art.figures);
     }
     let ctx = StageContext {
         arena_stage: Some(game.arena_stage()),
@@ -1261,9 +1190,11 @@ mod tests {
     use super::*;
     use o2jam_shell::avatar::{
         anchor_in_frame, load_archive_sprite, paint_foreground_placements, paint_scene_figures,
-        playing_member_selected, ROOM_BLOCK, WAITING_BLOCK,
+        playing_member_selected, PlayingArtMode, ROOM_BLOCK, WAITING_BLOCK,
     };
     use o2jam_shell::screens::paint::{PLAYING_BLOCK, RESULT_WINLOSE_SPRITE};
+    /// Playing archive under `install-root` (Loading/Playing art).
+    const PLAYING_ARCHIVE: &str = "O2Jam/Image/Playing1.opi";
     /// Playing control list entry (test-only: production stages
     /// Playing through the declaration).
     const PLAYING_LIST: &str = "ControlList_Playing.txt";
@@ -1840,25 +1771,40 @@ mod tests {
     #[test]
     fn missing_archives_stage_nothing() {
         assert!(read_archive("No/Such.opi").is_none());
-        assert!(entry_body(&[], LOADING_SPRITE).is_none());
+        assert!(entry_body(&[], "MusicLoading.ojs").is_none());
         assert!(control_list(&[], INTERFACE_LIST).is_none());
         assert!(bind_data(&[], "State_Room.bnd").is_none());
-        assert!(stage_single_sprite(&[], LOADING_SPRITE).is_none());
+        for state in [State::Avi, State::Loading, State::Tutorial] {
+            let report = stage_state(&[], state, StageContext::default());
+            if let Some(art) = report.art {
+                assert!(
+                    art.figures.is_empty(),
+                    "{state:?} stages no figures without game data"
+                );
+            }
+        }
     }
 
     #[test]
     fn present_archives_stage_key_scenes() {
+        let ctx = StageContext::default();
         let Some(interface) = read_archive(INTERFACE_ARCHIVE) else {
             println!("skip: missing {INTERFACE_ARCHIVE}");
             return;
         };
         assert_channel_block_names_no_sprites(&interface);
-        assert!(load_avi_logo(&interface).is_some());
+        assert!(
+            stage_state(&interface, State::Avi, ctx).art.is_some(),
+            "avi stages its logo through the declaration"
+        );
         let Some(playing) = read_archive(PLAYING_ARCHIVE) else {
             println!("skip: missing {PLAYING_ARCHIVE}");
             return;
         };
-        assert!(stage_single_sprite(&playing, LOADING_SPRITE).is_some());
+        assert!(
+            stage_state(&playing, State::Loading, ctx).art.is_some(),
+            "loading stages its gate through the declaration"
+        );
         // Side states: every `.bnd`-backed screen stages its bound
         // placements plus figures; Myroom's bind exists on the
         // shipped archive (111 rects — the old "absent" note is
