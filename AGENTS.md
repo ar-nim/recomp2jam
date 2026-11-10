@@ -20,7 +20,9 @@ Pick one branch:
   gameplay behavior in `docs/gameplay.md`.
 - Game data → local-only under `install-root/` + `extracted/`
   (git-ignored); layout in `docs/install-layout.md`, status in
-  `docs/progress.md`.
+  `docs/progress.md`. Fresh worktree? Symlink `install-root/` first:
+  archives resolve from the build dir, so without it the client
+  silently paints fallbacks (guard: `scripts/verify-shots.sh`).
 - Implementing → invoke `/skill:clean-code` and hold its 10/10:
   intent-revealing names, small functions, scenario-named tests.
 
