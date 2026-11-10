@@ -14,7 +14,7 @@ use o2jam_render::{pack_xrgb, Frame};
 use o2jam_shell::avatar::{load_avi_logo, paint_scene_figures, AvatarFigure, ScenePlacement};
 use o2jam_shell::screens::paint::RESULT_WINLOSE_SPRITE;
 use o2jam_shell::staging::{
-    read_install_archives, stage_dialog, stage_state, Dialog, StageContext, State,
+    read_install_archives, stage_dialog, stage_state, Dialog, InstallArchives, StageContext, State,
 };
 use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
 
@@ -67,14 +67,10 @@ fn archive_path(name: &str) -> PathBuf {
     install_root().join(name)
 }
 
-/// Read the Interface archive, if present (`None` means skip the test).
-fn interface_archive() -> Option<Vec<u8>> {
-    read_install_archives(&install_root()).interface
-}
-
-/// Read the Playing archive, if present (`None` means skip the test).
-fn playing_archive() -> Option<Vec<u8>> {
-    read_install_archives(&install_root()).playing
+/// Archives read once per test (`None` per missing file means skip
+/// the test).
+fn install_archives() -> InstallArchives {
+    read_install_archives(&install_root())
 }
 
 /// Distinct staged pixels painted alone on a blank frame.
@@ -245,7 +241,7 @@ fn walk_to_playing(game: &mut ScreenGame) {
 #[test]
 fn avi_layers_real_logo_over_bound_backdrop() {
     let path = archive_path(INTERFACE_ARCHIVE);
-    let Some(archive) = interface_archive() else {
+    let Some(archive) = install_archives().interface else {
         println!("skip avi: missing {}", path.display());
         return;
     };
@@ -284,7 +280,7 @@ fn avi_layers_real_logo_over_bound_backdrop() {
 #[test]
 fn channel_layers_list_over_real_dialog_art() {
     let path = archive_path(INTERFACE_ARCHIVE);
-    let Some(archive) = interface_archive() else {
+    let Some(archive) = install_archives().interface else {
         println!("skip channel: missing {}", path.display());
         return;
     };
@@ -461,7 +457,7 @@ fn planet_layers_staged_art_under_the_live_cursor() {
     // board the amber cursor stand-in plus the staged button art all
     // ink the frame.
     let path = archive_path(INTERFACE_ARCHIVE);
-    let Some(archive) = interface_archive() else {
+    let Some(archive) = install_archives().interface else {
         println!("skip planet: missing {}", path.display());
         return;
     };
@@ -529,7 +525,7 @@ fn planet_without_art_keeps_the_flat_card() {
 #[test]
 fn room_layers_rows_over_bound_room_art() {
     let path = archive_path(INTERFACE_ARCHIVE);
-    let Some(archive) = interface_archive() else {
+    let Some(archive) = install_archives().interface else {
         println!("skip room: missing {}", path.display());
         return;
     };
@@ -552,7 +548,7 @@ fn room_layers_rows_over_bound_room_art() {
 #[test]
 fn waiting_layers_seats_over_bound_waiting_art() {
     let path = archive_path(INTERFACE_ARCHIVE);
-    let Some(archive) = interface_archive() else {
+    let Some(archive) = install_archives().interface else {
         println!("skip waiting: missing {}", path.display());
         return;
     };
@@ -576,7 +572,7 @@ fn waiting_layers_seats_over_bound_waiting_art() {
 #[test]
 fn loading_layers_bar_over_real_loading_gate() {
     let path = archive_path(PLAYING_ARCHIVE);
-    let Some(archive) = playing_archive() else {
+    let Some(archive) = install_archives().playing else {
         println!("skip loading: missing {}", path.display());
         return;
     };
@@ -595,7 +591,7 @@ fn loading_layers_bar_over_real_loading_gate() {
 #[test]
 fn playing_layers_notes_over_bound_gauges() {
     let path = archive_path(PLAYING_ARCHIVE);
-    let Some(archive) = playing_archive() else {
+    let Some(archive) = install_archives().playing else {
         println!("skip playing: missing {}", path.display());
         return;
     };
@@ -628,7 +624,7 @@ fn playing_layers_notes_over_bound_gauges() {
 #[test]
 fn result_layers_digits_over_bound_result_art() {
     let path = archive_path(INTERFACE_ARCHIVE);
-    let Some(archive) = interface_archive() else {
+    let Some(archive) = install_archives().interface else {
         println!("skip result: missing {}", path.display());
         return;
     };
