@@ -1039,6 +1039,21 @@ pub fn paint_lanking_scene(frame: &mut Frame<'_>, art: &SceneArt) {
     art.paint_backdrop(frame, Screen::Lanking);
 }
 
+/// Billing-unwired notice over the Payment side screen: the notice
+/// inks the largest staged placement rect (geometry rides staged
+/// `.bnd` rects, never literals), so the billing stall reads
+/// instead of painting art alone. No staged rect paints nothing.
+pub fn paint_payment_notice(frame: &mut Frame<'_>, placements: &[ScenePlacement], notice: &str) {
+    let Some(rect) = placements
+        .iter()
+        .map(|placed| placed.rect)
+        .max_by_key(|rect| rect.w.saturating_mul(rect.h))
+    else {
+        return;
+    };
+    paint_text_into_rect(frame, rect, notice, CP949_INK);
+}
+
 /// Lanking board overlay over the staged side art: left-list song
 /// rows (TITLE/ARTIST/EDITOR/GENRE/BPM/DIFF) tiled over the staged
 /// `LVIEW_EX` slots, right-list fetched rank rows

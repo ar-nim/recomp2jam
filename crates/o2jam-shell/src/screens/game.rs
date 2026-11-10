@@ -15,26 +15,26 @@ use super::paint::{
     has_room_panels, list_row_hit, paint_avi_scene, paint_channel_chat, paint_channel_list,
     paint_channel_scene, paint_lanking_board, paint_lanking_scene, paint_loading_scene,
     paint_loading_scene_with_status, paint_lobby_backdrop, paint_music_shop_scene,
-    paint_myroom_data, paint_myroom_scene, paint_planet_options, paint_planet_quit,
-    paint_planet_scene, paint_playing_overlay, paint_result, paint_result_scene, paint_room_list,
-    paint_room_scene, paint_screen, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
-    paint_waiting_scene, quit_fallback_rects, rect_hit, room_panel_hit, scene_index,
-    staged_rect_hit, BattleVerdict, ChannelChatMessage, LoadingStatus, ResultPaint, ResultRankRow,
-    ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage, RESULT_BACK_ID, RESULT_BACK_RECT,
-    RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    paint_myroom_data, paint_myroom_scene, paint_payment_notice, paint_planet_options,
+    paint_planet_quit, paint_planet_scene, paint_playing_overlay, paint_result, paint_result_scene,
+    paint_room_list, paint_room_scene, paint_screen, paint_shop_scene, paint_waiting_chat,
+    paint_waiting_members, paint_waiting_scene, quit_fallback_rects, rect_hit, room_panel_hit,
+    scene_index, staged_rect_hit, BattleVerdict, ChannelChatMessage, LoadingStatus, ResultPaint,
+    ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage, RESULT_BACK_ID,
+    RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::side::{
     can_return_side, can_visit_side, create_room_action_at, lanking_action_at, lanking_page_window,
     lanking_songs, myroom_action_at, myroom_bag_pages, myroom_bag_rows, myroom_equip_slot,
     myroom_gift_captions, myroom_gift_page, myroom_gift_pages, myroom_gift_views,
     myroom_identity_captions, myroom_record_slot, paint_side_scene, password_action_at,
-    planet_action_at, select_chosung_cells, select_chosung_layout, select_difficulty_ink,
-    select_music_rows, select_music_songs, select_pager_caption, select_picked_caption,
-    select_row_hit, select_search_caption, select_status_line, sort_lanking_songs,
-    waiting_song_detail_line, waiting_song_title_line, waiting_team_for_code, CreateRoomAction,
-    CreateRoomForm, LankingAction, LankingSong, LankingSort, MyRoomAction, MyRoomState,
-    PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo, PlanetSelection,
-    RoomDialog, SelectMusicRow, SelectMusicSong, SideScreen, LANKING_LVIEW_ROWS,
+    payment_side_notice, planet_action_at, select_chosung_cells, select_chosung_layout,
+    select_difficulty_ink, select_music_rows, select_music_songs, select_pager_caption,
+    select_picked_caption, select_row_hit, select_search_caption, select_status_line,
+    sort_lanking_songs, waiting_song_detail_line, waiting_song_title_line, waiting_team_for_code,
+    CreateRoomAction, CreateRoomForm, LankingAction, LankingSong, LankingSort, MyRoomAction,
+    MyRoomState, PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo,
+    PlanetSelection, RoomDialog, SelectMusicRow, SelectMusicSong, SideScreen, LANKING_LVIEW_ROWS,
     LANKING_RVIEW_ROWS, OPTION_GAME_BLEND_NO, OPTION_GAME_BLEND_YES, OPTION_GAME_EFFECT_HIGH,
     OPTION_GAME_EFFECT_LOW, OPTION_GAME_EFFECT_NORMAL, OPTION_GAME_GUIDE_LONG,
     OPTION_GAME_GUIDE_MIDDLE, OPTION_GAME_GUIDE_NOUSE, OPTION_GAME_GUIDE_SHORT,
@@ -3196,6 +3196,13 @@ impl ScreenGame {
     pub fn paint_at(&mut self, frame: &mut Frame<'_>, now_ms: u64) {
         if self.side.is_some() {
             paint_side_scene(frame, &self.side_placements, &self.side_figures);
+            // The billing views complete no web call, so the
+            // Payment overlay inks the unwired notice over the
+            // staged art (miss path paints nothing); every other
+            // side screen paints art alone.
+            if self.side == Some(SideScreen::Payment) {
+                paint_payment_notice(frame, &self.side_placements, &payment_side_notice());
+            }
             // The lanking overlay inks rows, ranks, and the picked
             // caption into staged TEXT rects over the bound art;
             // without staged rows it paints nothing (art-only).
@@ -5936,6 +5943,135 @@ mod game_tests {
             0,
         );
         assert!(bare_buf.iter().all(|pixel| *pixel == 0));
+    }
+
+    fn payment_hit_placement(code: u32, x: i32, y: i32, w: u32, h: u32) -> ScenePlacement {
+        ScenePlacement {
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect { x, y, w, h },
+        }
+    }
+
+    fn payment_open_overlay() -> ScreenGame {
+        // Two staged billing rects: the notice must ink the
+        // larger one and leave the small one blank.
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        game.load_side_scene(
+            vec![
+                payment_hit_placement(0x0010_0001, 10, 10, 40, 20),
+                payment_hit_placement(0x0010_0002, 100, 100, 200, 60),
+            ],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::Payment));
+        game
+    }
+
+    fn region_has_ink(buf: &[u32], frame_w: usize, x: i32, y: i32, w: i32, h: i32) -> bool {
+        buf.chunks(frame_w)
+            .skip(y as usize)
+            .take(h as usize)
+            .any(|row| {
+                row.iter()
+                    .skip(x as usize)
+                    .take(w as usize)
+                    .any(|pixel| *pixel != 0)
+            })
+    }
+
+    #[test]
+    fn payment_side_paints_the_unwired_billing_notice() {
+        // The billing views complete no web call, so the side
+        // screen inks the unwired notice into its largest staged
+        // rect instead of painting art alone.
+        let mut game = payment_open_overlay();
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert!(
+            region_has_ink(&buf, 800, 100, 100, 200, 60),
+            "notice missing from the largest staged rect"
+        );
+        assert!(
+            !region_has_ink(&buf, 800, 10, 10, 40, 20),
+            "notice leaked outside the largest staged rect"
+        );
+    }
+
+    #[test]
+    fn payment_side_without_staged_rects_paints_no_notice() {
+        // No staged geometry: the miss path paints nothing
+        // (ADR-0003 — never a literal fallback rect).
+        let mut bare = ScreenGame::new();
+        walk_to_lobby(&mut bare, Screen::Waiting);
+        bare.load_side_scene(Vec::new(), HashMap::new());
+        assert!(bare.visit_side(SideScreen::Payment));
+        let mut bare_buf = vec![0u32; 800 * 600];
+        bare.paint_at(
+            &mut Frame {
+                buf: &mut bare_buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert!(bare_buf.iter().all(|pixel| *pixel == 0));
+    }
+
+    #[test]
+    fn payment_entry_queues_no_wire_call() {
+        // Billing completes no calls: visiting either billing view
+        // stages nothing on any send seam (the run stays silent).
+        let mut game = payment_open_overlay();
+        assert!(game.take_equip_send().is_none());
+        assert!(game.take_gift_claim().is_none());
+        assert!(game.take_gift_list_request().is_none());
+        assert!(game.take_create_room().is_none());
+        assert!(game.take_join().is_none());
+        assert!(game.take_music_send().is_none());
+        assert!(game.take_room_team().is_none());
+        assert!(game.take_team_ready().is_none());
+    }
+
+    #[test]
+    fn payment_tutorial_hand_session_visits_both_and_returns() {
+        // Hand-driven billing/tutorial pass (trace
+        // `fixtures/input-trace/payment-tutorial-hand-session.json`,
+        // smoke note `docs/smoke/payment-tutorial-hand-session.md`):
+        // Waiting opens the Payment overlay (notice ink proven by
+        // `payment_side_paints_the_unwired_billing_notice`, silence
+        // by `payment_entry_queues_no_wire_call`), BACK returns to
+        // the lobby, then the Tutorial overlay opens over its
+        // staged backdrop and BACK returns again.
+        let mut game = payment_open_overlay();
+        assert_eq!(game.side(), Some(SideScreen::Payment));
+        assert!(game.leave_side());
+        assert_eq!(game.side(), None);
+        assert_eq!(game.screen(), Screen::Waiting);
+        game.load_side_scene(Vec::new(), HashMap::new());
+        assert!(game.visit_side(SideScreen::Tutorial));
+        assert_eq!(game.side(), Some(SideScreen::Tutorial));
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert!(game.leave_side());
+        assert_eq!(game.side(), None);
+        assert_eq!(game.screen(), Screen::Waiting);
     }
 
     #[test]

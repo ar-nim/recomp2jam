@@ -237,10 +237,35 @@ wrong; Myroom stages bound like every other side screen.
   song-to-board fetch join — next step: live gateway replay;
   per-song 2031 bests on song rows — next step: join
   `MusicScoreListAnswer` 2031 against the catalog).
-- `STATE_PAYMENT` / `STATE_PAYMENT2` (web billing views). Both
-  billing views stage and merge (9 + 12 rects); no web call wired.
-- `STATE_TUTORIAL` (stub `0x00`; entry path unknown). The
-  `Playing_TutorialBG.ojs` backdrop stages full-canvas from `Playing1`.
+- `STATE_PAYMENT` / `STATE_PAYMENT2` (`CDPayment` web billing views).
+  Bound placements stage and merge (9 + 12 rects); the overlay inks
+  the unwired-billing notice (`BILLING UNWIRED` plus both
+  lifecycle-verified pages) into the largest staged rect, so neither
+  view stays a silent dead screen. Ticket #22 (2026-11-10): entry
+  queues no wire call on any send seam (negative guard
+  `payment_entry_queues_no_wire_call`); hand session
+  (`payment_tutorial_hand_session_visits_both_and_returns`, trace
+  `fixtures/input-trace/payment-tutorial-hand-session.json`, smoke
+  `docs/smoke/payment-tutorial-hand-session.md`). Guards:
+  `payment_side_states_the_unwired_billing_notice`,
+  `payment_side_paints_the_unwired_billing_notice`,
+  `payment_side_without_staged_rects_paints_no_notice` (miss path
+  paints nothing — ADR-0003). Shots oracle holds with only the
+  intended `payment.png` delta (notice ink). PASS (stall stated;
+  wallet rows stay data-gated) / OPEN (real billing: the web bridge
+  plus a live gateway replay naming the host/session join — next
+  step: gateway replay through the billing endpoints).
+- `STATE_TUTORIAL` (`CStateTutorial`, stub `0x00`). The
+  `Playing_TutorialBG.ojs` backdrop stages full-canvas from
+  `Playing1` and keeps passing (shots `tutorial.png` byte-identical).
+  Ticket #22 (2026-11-10): the entry path stays OPEN — no dossier
+  offset names the entry dispatch — and `TUTORIAL_ENTRY_NEXT_STEP`
+  names the rig next step (SendInput sweep of the lobby emblem
+  buttons per the `~/scratch/planet-verify/` recipe plus a REA trace
+  of the `CStateTutorial` entry dispatch). Guard:
+  `tutorial_entry_path_names_its_next_step`; side-visit entry and
+  return keep passing (`payment_tutorial_hand_session_visits_both_and_returns`).
+  PASS (backdrop staging) / OPEN (entry path with named next step).
 - `STATE_DRUM_PLAYING` / `STATE_EXIT` (stubs `0x00`; drum never wired,
   no `CStateDrum*` class; exit is teardown, not a screen).
 

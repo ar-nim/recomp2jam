@@ -2910,6 +2910,25 @@ pub fn payment_view_caption(label: &PaymentLabel) -> String {
     format!("{} {}", label.block, label.url_path())
 }
 
+/// Plain stall label painted over the Payment side screen: the exe
+/// opens web billing views here (lifecycle §12) and this client
+/// queues no web call, so the screen names the stall instead of
+/// staying a silent dead view.
+pub const PAYMENT_UNWIRED_NOTICE: &str = "BILLING UNWIRED";
+
+/// Notice text shown on the Payment side screen: the stall label
+/// plus both lifecycle-verified billing pages, so neither view
+/// reads as a working shop.
+#[must_use]
+pub fn payment_side_notice() -> String {
+    format!("{PAYMENT_UNWIRED_NOTICE} {PAYMENT_PAGE} {GIFT_PAGE}")
+}
+
+/// Next evidence step for the untraced tutorial entry path (no
+/// dossier offset names the `CStateTutorial` entry dispatch): the
+/// path stays OPEN until the rig names the button that opens it.
+pub const TUTORIAL_ENTRY_NEXT_STEP: &str = "SendInput sweep of the lobby emblem buttons per the ~/scratch/planet-verify/ recipe plus a REA trace of the CStateTutorial entry dispatch";
+
 /// Live wallet balances for the payment/result displays, fed only by
 /// decoded wire data: the 5029 two-word refresh (`SyncCashPointResponse`)
 /// and the 5001 purchase words (`SyncItemPurchasePrefix` plus
@@ -4868,6 +4887,28 @@ mod side_tests {
         assert_eq!(
             payment_view_caption(&labels[1]),
             "STATE_PAYMENT2 billing/gift/gift_input.aspx"
+        );
+    }
+
+    #[test]
+    fn payment_side_states_the_unwired_billing_notice() {
+        // The billing views complete no web call, so the side
+        // screen must name the stall instead of painting art
+        // alone: the notice cites both lifecycle-verified pages.
+        let notice = payment_side_notice();
+        assert!(notice.contains(PAYMENT_UNWIRED_NOTICE), "{notice}");
+        assert!(notice.contains(PAYMENT_PAGE), "{notice}");
+        assert!(notice.contains(GIFT_PAGE), "{notice}");
+    }
+
+    #[test]
+    fn tutorial_entry_path_names_its_next_step() {
+        // No dossier offset names the `CStateTutorial` entry, so
+        // the path stays OPEN with a named rig next step.
+        assert!(!TUTORIAL_ENTRY_NEXT_STEP.is_empty());
+        assert!(
+            TUTORIAL_ENTRY_NEXT_STEP.contains("SendInput"),
+            "{TUTORIAL_ENTRY_NEXT_STEP}"
         );
     }
 
