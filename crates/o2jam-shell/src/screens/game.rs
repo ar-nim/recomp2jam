@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 
 use super::super::avatar::{ojn_cover_figure, AvatarFigure, ScenePlacement, LOADING_COVER_SPRITE};
+use super::super::options::OptionsSettings;
 use super::super::playing::{HighwayGeometry, LivePlay, PlaySkin};
 use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
@@ -29,16 +30,25 @@ use super::side::{
     waiting_team_for_code, CreateRoomAction, CreateRoomForm, LankingAction, LankingSong,
     LankingSort, PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo,
     PlanetSelection, RoomDialog, SelectMusicRow, SelectMusicSong, SideScreen, LANKING_LVIEW_ROWS,
-    LANKING_RVIEW_ROWS, PLANET_OPTION_FIRST_TAB, QUIT_CANCEL_CODE, QUIT_OK_CODE,
-    SELECT_ARTIST_RADIO, SELECT_CHO_SUNG_LEFT, SELECT_CHO_SUNG_PITCH, SELECT_CHO_SUNG_ROW_CELLS,
-    SELECT_CHO_SUNG_Y, SELECT_FILTER_BUTTON_H, SELECT_FILTER_BUTTON_PITCH,
-    SELECT_FILTER_BUTTON_TOP, SELECT_FILTER_COLUMNS, SELECT_GENRE_FILTERS, SELECT_HEADER_COLUMNS,
-    SELECT_HEADER_Y, SELECT_LEVEL_FILTERS, SELECT_OK_BUTTON, SELECT_PAGER_RIGHT,
-    SELECT_RESULT_TABS, SELECT_ROW_PITCH, SELECT_ROW_TOP, SELECT_SEARCH_BOX, SELECT_SEARCH_BUTTON,
-    SELECT_SEARCH_Y, SELECT_STATUS_H, SELECT_STATUS_Y, SELECT_TABLE_HEADERS, SELECT_TABLE_LEFT,
-    SELECT_TABLE_WIDTH, SELECT_TITLE_RADIO, SELECT_VISIBLE_ROWS, SELECT_WHEEL_FILTERS,
+    LANKING_RVIEW_ROWS, OPTION_GAME_BLEND_NO, OPTION_GAME_BLEND_YES, OPTION_GAME_EFFECT_HIGH,
+    OPTION_GAME_EFFECT_LOW, OPTION_GAME_EFFECT_NORMAL, OPTION_GAME_GUIDE_LONG,
+    OPTION_GAME_GUIDE_MIDDLE, OPTION_GAME_GUIDE_NOUSE, OPTION_GAME_GUIDE_SHORT,
+    OPTION_GAME_LONGNOTE_NONE, OPTION_GAME_LONGNOTE_USED, OPTION_GAME_MODE_FULL,
+    OPTION_GAME_MODE_WIN, OPTION_GAME_NOTETYPE1, OPTION_GAME_NOTETYPE2, OPTION_KEY_3KEY_FIRST,
+    OPTION_KEY_3KEY_MODE, OPTION_KEY_7KEY_MODE, OPTION_KEY_LANE_FIRST, OPTION_KEY_TEST,
+    OPTION_SOUND_BG_EFFECT_DOWN, OPTION_SOUND_BG_EFFECT_UP, OPTION_SOUND_BG_MUSIC_DOWN,
+    OPTION_SOUND_BG_MUSIC_UP, OPTION_SOUND_GAME_EFFECT_DOWN, OPTION_SOUND_GAME_EFFECT_UP,
+    OPTION_SOUND_GAME_MUSIC_DOWN, OPTION_SOUND_GAME_MUSIC_UP, PLANET_OPTION_FIRST_TAB,
+    QUIT_CANCEL_CODE, QUIT_OK_CODE, SELECT_ARTIST_RADIO, SELECT_CHO_SUNG_LEFT,
+    SELECT_CHO_SUNG_PITCH, SELECT_CHO_SUNG_ROW_CELLS, SELECT_CHO_SUNG_Y, SELECT_FILTER_BUTTON_H,
+    SELECT_FILTER_BUTTON_PITCH, SELECT_FILTER_BUTTON_TOP, SELECT_FILTER_COLUMNS,
+    SELECT_GENRE_FILTERS, SELECT_HEADER_COLUMNS, SELECT_HEADER_Y, SELECT_LEVEL_FILTERS,
+    SELECT_OK_BUTTON, SELECT_PAGER_RIGHT, SELECT_RESULT_TABS, SELECT_ROW_PITCH, SELECT_ROW_TOP,
+    SELECT_SEARCH_BOX, SELECT_SEARCH_BUTTON, SELECT_SEARCH_Y, SELECT_STATUS_H, SELECT_STATUS_Y,
+    SELECT_TABLE_HEADERS, SELECT_TABLE_LEFT, SELECT_TABLE_WIDTH, SELECT_TITLE_RADIO,
+    SELECT_VISIBLE_ROWS, SELECT_WHEEL_FILTERS,
 };
-use crate::MenuKey;
+use crate::{menu_of, MenuKey};
 use o2jam_audio::{song_position_ms, AudioBackend, BgmSelection, PcmSamples, SceneBgm};
 use o2jam_file::OjnListEntry;
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams, PEER_SLOT_COUNT};
@@ -56,6 +66,7 @@ use o2jam_render::font::{draw_text_cell, Cell};
 use o2jam_render::{
     draw_text, fill_rect, pack_xrgb, scale_rect_to_frame, text_width, Frame, Rect, Rgb555Image,
 };
+use winit::keyboard::KeyCode;
 
 /// Loading-gate phase capacity (lifecycle section 9, steps 2-5):
 /// staging `0x4f8b80` (ev `d2a69b45...`), OJN open/decrypt `0x412180`
@@ -212,13 +223,28 @@ pub struct ScreenGame {
     /// event loop ([`GameLoop::quit_requested`]); headless walks
     /// read the flag instead.
     quit_requested: bool,
-    /// Staged options-dialog sheet (`Dialog_Option_*` placements
-    /// plus figures; `None` until staged, the fallback title then
-    /// paints instead).
-    planet_option_art: Option<SceneArt>,
+    /// Staged options-dialog sheets, one per `Dialog_Option_*` tab
+    /// (`None` until staged; the fallback title paints instead).
+    /// Tab order follows [`PlanetOptionTab`] declaration order
+    /// (Key, Sound, Game) — see [`Self::option_tab_slot`].
+    planet_option_art: [Option<SceneArt>; 3],
     /// Open options tab (first-open stand-in, OPEN — see
     /// [`PLANET_OPTION_FIRST_TAB`]).
     planet_option_tab: PlanetOptionTab,
+    /// Options-dialog values (`option.ini` beside the install root;
+    /// loaded at boot, written back on the tab SAVE commit).
+    options: OptionsSettings,
+    /// Install root the options load from and save beside (`None`
+    /// until [`Self::load_options`]: SAVE then warns and keeps the
+    /// settings in memory, never failing the scene).
+    options_root: Option<std::path::PathBuf>,
+    /// Lane armed for rebind by a Key-tab `KEY1..KEY7` click (`None`
+    /// idle): the next mapped key press becomes that lane's key.
+    option_rebind: Option<usize>,
+    /// Long-note switch snapshotted at song setup (the exe caches
+    /// `LongnoteMode` into the play object at `+0x17d8` instead of
+    /// re-reading mid-play): `None` until the first Playing entry.
+    play_longnote: Option<i32>,
     /// Staged quit-confirm sheet (`Dialog_Question1` placements
     /// plus figures; `None` until staged, the fallback popup then
     /// paints instead).
@@ -324,6 +350,26 @@ fn waiting_team_at(placements: &[ScenePlacement], x: i32, y: i32) -> Option<u8> 
 /// names no stage — a zero stage (room entry replaces zero with a
 /// real one, store `0x4aacea`) or a negative word.
 #[must_use]
+/// Scale one scene-BGM cue by a linear gain: i16 samples scaled
+/// with saturation toward silence. Unity gain is bit-exact (every
+/// i16 value survives the f32 round trip), so a full-volume cue
+/// keeps the bank bytes.
+fn scale_scene_bgm(pcm: &PcmSamples, gain: f32) -> PcmSamples {
+    let samples = pcm
+        .samples
+        .iter()
+        .map(|sample| {
+            let scaled = (f32::from(*sample) * gain).round();
+            scaled.clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16
+        })
+        .collect();
+    PcmSamples {
+        samples,
+        sample_rate: pcm.sample_rate,
+        channels: pcm.channels,
+    }
+}
+
 fn arena_stage_word(arena: i32) -> Option<u16> {
     let word = u32::try_from(arena).ok()?;
     let high = word >> 16;
@@ -523,8 +569,12 @@ impl ScreenGame {
             planet_promo: None,
             planet_modal: None,
             quit_requested: false,
-            planet_option_art: None,
+            planet_option_art: [None, None, None],
             planet_option_tab: PLANET_OPTION_FIRST_TAB,
+            options: OptionsSettings::default(),
+            options_root: None,
+            option_rebind: None,
+            play_longnote: None,
             planet_quit_art: None,
             catalog_songs: Vec::new(),
             catalog_bpm: HashMap::new(),
@@ -610,8 +660,19 @@ impl ScreenGame {
             bgm_bank,
             ..
         } = rig;
-        let cue_pcm = bgm.play_scene_music(cue_id, cue_repeat, bgm_bank);
-        let _ = backend.set_scene_bgm(cue_pcm, cue_repeat);
+        // The BGMusic volume (`Sound`/`GameBGVolume`, default 255 is
+        // unity) scales the lobby cue: the Sound tab moves the live
+        // scene mix. The in-song mix path stays OPEN.
+        let gain = self.options.bgm_gain();
+        match bgm.play_scene_music(cue_id, cue_repeat, bgm_bank) {
+            Some(pcm) => {
+                let scaled = scale_scene_bgm(pcm, gain);
+                let _ = backend.set_scene_bgm(Some(&scaled), cue_repeat);
+            }
+            None => {
+                let _ = backend.set_scene_bgm(None, cue_repeat);
+            }
+        }
     }
 
     /// Cue the current screen's scene music through the rig
@@ -662,15 +723,18 @@ impl ScreenGame {
         self.playing.scene_mut().set_volume(volume);
     }
 
-    /// Play every queued key sound through the attached backend.
+    /// Play every queued key sound through the attached backend at
+    /// the GameEffect volume (`Sound`/`NoteKeyVolume`, default 255
+    /// is unity): the Sound tab moves the live key mix.
     fn pump_sounds(&mut self) {
+        let gain = self.options.key_gain();
         let Some(rig) = self.audio.as_mut() else {
             self.playing.drain_sounds();
             return;
         };
         for sample in self.playing.drain_sounds() {
             if let Some(pcm) = rig.bank.get(&sample) {
-                let _ = rig.backend.play_pcm(pcm);
+                let _ = rig.backend.play_key(pcm, gain);
             }
         }
     }
@@ -762,6 +826,11 @@ impl ScreenGame {
                 if let Some(rig) = self.audio.as_ref() {
                     self.song_rate = rig.backend.sample_rate();
                 }
+                // Song setup snapshots the long-note switch (the exe
+                // caches `LongnoteMode` at play `+0x17d8`, file
+                // `0x16fb06`): later dialog edits never reach the
+                // running song.
+                self.play_longnote = Some(self.options.longnote_mode());
             }
             self.apply_scene_bgm();
         }
@@ -2405,22 +2474,102 @@ impl ScreenGame {
         self.quit_requested
     }
 
-    /// Stage the options-dialog sheet (`Dialog_Option_*` placements
-    /// plus figures for the first-open tab, OPEN — see
-    /// [`PLANET_OPTION_FIRST_TAB`]). The gear modal paints it
-    /// dialog-relative when open; empty art keeps the fallback
-    /// title. Staging never moves the flow.
+    /// Stage the options-dialog sheet for the first-open tab
+    /// (`Dialog_Option_*` placements plus figures, OPEN — see
+    /// [`PLANET_OPTION_FIRST_TAB`]). The gear modal paints the
+    /// open tab's sheet dialog-relative; empty art keeps the
+    /// fallback title. Staging never moves the flow.
     pub fn load_planet_option_scene(
         &mut self,
         placements: Vec<ScenePlacement>,
         figures: HashMap<String, AvatarFigure>,
     ) -> &mut Self {
-        self.planet_option_art = Some(SceneArt {
+        self.load_planet_option_tab(PLANET_OPTION_FIRST_TAB, placements, figures)
+    }
+
+    /// Stage one options-dialog tab sheet. The dialog paints the
+    /// open tab's sheet when staged; tab switches flip between
+    /// staged sheets, unstaged tabs keep the fallback title.
+    /// Staging never moves the flow.
+    pub fn load_planet_option_tab(
+        &mut self,
+        tab: PlanetOptionTab,
+        placements: Vec<ScenePlacement>,
+        figures: HashMap<String, AvatarFigure>,
+    ) -> &mut Self {
+        self.planet_option_art[Self::option_tab_slot(tab)] = Some(SceneArt {
             placements,
             figures,
         });
-        self.planet_option_tab = PLANET_OPTION_FIRST_TAB;
         self
+    }
+
+    /// Storage slot for one options tab (declaration order: Key,
+    /// Sound, Game).
+    const fn option_tab_slot(tab: PlanetOptionTab) -> usize {
+        match tab {
+            PlanetOptionTab::Key => 0,
+            PlanetOptionTab::Sound => 1,
+            PlanetOptionTab::Game => 2,
+        }
+    }
+
+    /// Open options tab (the dialog paints this tab's staged sheet).
+    #[must_use]
+    pub const fn planet_option_tab(&self) -> PlanetOptionTab {
+        self.planet_option_tab
+    }
+
+    /// Switch the open options tab (the `KEYSET`/`SOUNDSET`/
+    /// `GAMESET` buttons): flips the painted sheet, keeps the
+    /// dialog open, and disarms any pending rebind.
+    pub fn switch_option_tab(&mut self, tab: PlanetOptionTab) {
+        self.planet_option_tab = tab;
+        self.option_rebind = None;
+    }
+
+    /// Options-dialog values (every tab's settings).
+    #[must_use]
+    pub const fn options(&self) -> &OptionsSettings {
+        &self.options
+    }
+
+    /// Lane armed for rebind by a Key-tab click (`None` idle).
+    #[must_use]
+    pub const fn option_rebind_armed(&self) -> Option<usize> {
+        self.option_rebind
+    }
+
+    /// Long-note switch snapshotted at the last song setup (`None`
+    /// until the first Playing entry — the exe caches
+    /// `LongnoteMode` at play `+0x17d8`, never re-reads mid-play).
+    #[must_use]
+    pub const fn play_longnote_mode(&self) -> Option<i32> {
+        self.play_longnote
+    }
+
+    /// Load `option.ini` beside `install_root` at boot and remember
+    /// the root for SAVE commits: a missing or unreadable file
+    /// keeps the exe defaults (misses warn, never fail the scene).
+    pub fn load_options(&mut self, install_root: &std::path::Path) -> &mut Self {
+        self.options = OptionsSettings::load_from_dir(install_root);
+        self.options_root = Some(install_root.to_owned());
+        self
+    }
+
+    /// Persist the settings beside the remembered install root (the
+    /// tab SAVE commit path). Without a root the settings stay in
+    /// memory with a warning — the scene never fails.
+    ///
+    /// # Errors
+    ///
+    /// `std::io::Error` when the profile write or rename fails.
+    pub fn save_options(&self) -> std::io::Result<()> {
+        let Some(root) = self.options_root.as_ref() else {
+            tracing::warn!("options SAVE without an install root; settings stay in memory");
+            return Ok(());
+        };
+        self.options.save_to_dir(root)
     }
 
     /// Stage the quit-confirm sheet (`Dialog_Question1` placements
@@ -2441,9 +2590,12 @@ impl ScreenGame {
 
     /// Modal click: the quit popup's OK/CANCEL (staged dialog
     /// rects when art is staged, the fallback boxes otherwise) or
-    /// the options tab's EXIT (staged rects only — Escape closes
-    /// the unstaged dialog). Other clicks land nowhere: the modal
-    /// owns the board while open.
+    /// the options dialog's staged buttons (EXIT closes without
+    /// saving, SAVE commits to `option.ini`, DEFAULT restores the
+    /// tab's exe defaults, tab switches flip the sheet, and the
+    /// Key/Sound/Game buttons edit the settings — staged rects
+    /// only, Escape closes the unstaged dialog). Other clicks land
+    /// nowhere: the modal owns the board while open.
     fn click_planet_modal(&mut self, x: i32, y: i32) {
         match self.planet_modal {
             Some(PlanetModal::QuitConfirm) => {
@@ -2456,14 +2608,159 @@ impl ScreenGame {
                 }
             }
             Some(PlanetModal::Options) => {
-                let exit_hit = self.planet_option_art.as_ref().is_some_and(|art| {
-                    dialog_rect_hit(&art.placements, self.planet_option_tab.exit_code(), x, y)
-                });
-                if exit_hit {
-                    self.planet_modal = None;
-                }
+                self.click_options_dialog(x, y);
             }
             None => {}
+        }
+    }
+
+    /// Staged hit for one options-dialog code on the open tab
+    /// (`false` while the tab's sheet is unstaged — unstaged
+    /// dialogs answer no button, Escape still closes them).
+    fn options_hit(&self, code: u32, x: i32, y: i32) -> bool {
+        self.planet_option_art[Self::option_tab_slot(self.planet_option_tab)]
+            .as_ref()
+            .filter(|art| art.has_figures())
+            .is_some_and(|art| dialog_rect_hit(&art.placements, code, x, y))
+    }
+
+    /// One click inside the open options tab: EXIT/SAVE/DEFAULT,
+    /// tab switches, then the tab's value buttons. SAVE persists
+    /// beside the install root and stays open; EXIT closes without
+    /// saving; a failed write warns and stays open (never fails
+    /// the scene).
+    fn click_options_dialog(&mut self, x: i32, y: i32) {
+        let tab = self.planet_option_tab;
+        if self.options_hit(tab.exit_code(), x, y) {
+            self.planet_modal = None;
+            self.option_rebind = None;
+            return;
+        }
+        if self.options_hit(tab.save_code(), x, y) {
+            if let Err(source) = self.save_options() {
+                tracing::warn!(%source, "options SAVE failed; settings stay in memory");
+            }
+            self.option_rebind = None;
+            return;
+        }
+        if self.options_hit(tab.default_code(), x, y) {
+            match tab {
+                PlanetOptionTab::Key => self.options.reset_binds(),
+                PlanetOptionTab::Sound => self.options.reset_volumes(),
+                PlanetOptionTab::Game => self.options.reset_game(),
+            }
+            self.option_rebind = None;
+            return;
+        }
+        for code in [
+            super::side::OPTION_KEY_SOUNDSET,
+            super::side::OPTION_KEY_GAMESET,
+            super::side::OPTION_SOUND_KEYSET,
+            super::side::OPTION_SOUND_GAMESET,
+            super::side::OPTION_GAME_KEYSET,
+            super::side::OPTION_GAME_SOUNDSET,
+        ] {
+            if self.options_hit(code, x, y) {
+                if let Some(next) = tab.switch_tab(code) {
+                    self.switch_option_tab(next);
+                }
+                return;
+            }
+        }
+        match tab {
+            PlanetOptionTab::Key => self.click_option_key_tab(x, y),
+            PlanetOptionTab::Sound => self.click_option_sound_tab(x, y),
+            PlanetOptionTab::Game => self.click_option_game_tab(x, y),
+        }
+    }
+
+    /// Key-tab value buttons: `KEY1..KEY7` arm their lane for
+    /// rebind (the next mapped key press sticks), `3KEY_1..4` arm
+    /// lanes 0..3 the same way (the 3-key lane mapping stays
+    /// OPEN), `3KEY`/`7KEY` record the key-count selection, and
+    /// `KEYTEST` flips its checkbox (both selection-only, OPEN).
+    fn click_option_key_tab(&mut self, x: i32, y: i32) {
+        for lane in 0..7 {
+            if self.options_hit(OPTION_KEY_LANE_FIRST + lane as u32, x, y) {
+                self.option_rebind = Some(lane);
+                return;
+            }
+        }
+        for lane in 0..4 {
+            if self.options_hit(OPTION_KEY_3KEY_FIRST + lane as u32, x, y) {
+                self.option_rebind = Some(lane);
+                return;
+            }
+        }
+        if self.options_hit(OPTION_KEY_3KEY_MODE, x, y) {
+            self.options.set_three_key(true);
+        } else if self.options_hit(OPTION_KEY_7KEY_MODE, x, y) {
+            self.options.set_three_key(false);
+        } else if self.options_hit(OPTION_KEY_TEST, x, y) {
+            let tested = self.options.key_test();
+            self.options.set_key_test(!tested);
+        }
+    }
+
+    /// Sound-tab slider buttons: each Down/Up pair steps its volume
+    /// by the ours-by-design step inside the 0–255 domain (which
+    /// slider writes which `Sound` key is ours-by-design, OPEN).
+    fn click_option_sound_tab(&mut self, x: i32, y: i32) {
+        if self.options_hit(OPTION_SOUND_BG_MUSIC_DOWN, x, y) {
+            self.options.step_bgm_music(false);
+        } else if self.options_hit(OPTION_SOUND_BG_MUSIC_UP, x, y) {
+            self.options.step_bgm_music(true);
+        } else if self.options_hit(OPTION_SOUND_BG_EFFECT_DOWN, x, y) {
+            self.options.step_bg_effect(false);
+        } else if self.options_hit(OPTION_SOUND_BG_EFFECT_UP, x, y) {
+            self.options.step_bg_effect(true);
+        } else if self.options_hit(OPTION_SOUND_GAME_MUSIC_DOWN, x, y) {
+            self.options.step_game_music(false);
+        } else if self.options_hit(OPTION_SOUND_GAME_MUSIC_UP, x, y) {
+            self.options.step_game_music(true);
+        } else if self.options_hit(OPTION_SOUND_GAME_EFFECT_DOWN, x, y) {
+            self.options.step_game_effect(false);
+        } else if self.options_hit(OPTION_SOUND_GAME_EFFECT_UP, x, y) {
+            self.options.step_game_effect(true);
+        }
+    }
+
+    /// Game-tab buttons: effect arms (in-memory — no ini key was
+    /// found), EQ Yes/No → 1/0, NoteType1/2 → 0/1, guides →
+    /// 3/2/1/0, ModeFull/Win → 1/2, Longnote Used/None → 1/0.
+    /// Button→value orders are ours-by-design (OPEN, see the
+    /// options module docs).
+    fn click_option_game_tab(&mut self, x: i32, y: i32) {
+        if self.options_hit(OPTION_GAME_EFFECT_HIGH, x, y) {
+            self.options.set_effect_level(0);
+        } else if self.options_hit(OPTION_GAME_EFFECT_NORMAL, x, y) {
+            self.options.set_effect_level(1);
+        } else if self.options_hit(OPTION_GAME_EFFECT_LOW, x, y) {
+            self.options.set_effect_level(2);
+        } else if self.options_hit(OPTION_GAME_BLEND_YES, x, y) {
+            self.options.set_blend_half(1);
+        } else if self.options_hit(OPTION_GAME_BLEND_NO, x, y) {
+            self.options.set_blend_half(0);
+        } else if self.options_hit(OPTION_GAME_NOTETYPE1, x, y) {
+            self.options.set_note_type(0);
+        } else if self.options_hit(OPTION_GAME_NOTETYPE2, x, y) {
+            self.options.set_note_type(1);
+        } else if self.options_hit(OPTION_GAME_GUIDE_LONG, x, y) {
+            self.options.set_note_tail(3);
+        } else if self.options_hit(OPTION_GAME_GUIDE_MIDDLE, x, y) {
+            self.options.set_note_tail(2);
+        } else if self.options_hit(OPTION_GAME_GUIDE_SHORT, x, y) {
+            self.options.set_note_tail(1);
+        } else if self.options_hit(OPTION_GAME_GUIDE_NOUSE, x, y) {
+            self.options.set_note_tail(0);
+        } else if self.options_hit(OPTION_GAME_MODE_FULL, x, y) {
+            self.options.set_mode(1);
+        } else if self.options_hit(OPTION_GAME_MODE_WIN, x, y) {
+            self.options.set_mode(2);
+        } else if self.options_hit(OPTION_GAME_LONGNOTE_USED, x, y) {
+            self.options.set_longnote_mode(1);
+        } else if self.options_hit(OPTION_GAME_LONGNOTE_NONE, x, y) {
+            self.options.set_longnote_mode(0);
         }
     }
 
@@ -2774,7 +3071,7 @@ impl ScreenGame {
             Some(PlanetModal::Options) => {
                 paint_planet_options(
                     frame,
-                    self.planet_option_art.as_ref(),
+                    self.planet_option_art[Self::option_tab_slot(self.planet_option_tab)].as_ref(),
                     self.planet_option_tab,
                 );
             }
@@ -3468,6 +3765,35 @@ fn paint_select_ok(frame: &mut Frame<'_>) {
 }
 
 impl GameLoop for ScreenGame {
+    fn capture_raw_key(&mut self, code: KeyCode, down: bool) -> bool {
+        // Key-tab rebind capture: while a lane is armed, the next
+        // mapped non-menu key press becomes that lane's key and the
+        // press is consumed (menu keys keep their routing so Escape
+        // still closes and disarms).
+        if !down
+            || self.planet_modal != Some(PlanetModal::Options)
+            || self.planet_option_tab != PlanetOptionTab::Key
+        {
+            return false;
+        }
+        let Some(lane) = self.option_rebind else {
+            return false;
+        };
+        if menu_of(code).is_some() {
+            return false;
+        }
+        if self.options.rebind_lane(lane, code) {
+            self.option_rebind = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn lane_bindings(&self) -> Option<[KeyCode; 7]> {
+        Some(self.options.lane_keys())
+    }
+
     fn lane_key(&mut self, lane: usize, down: bool) {
         if !down {
             return;
@@ -3500,6 +3826,7 @@ impl GameLoop for ScreenGame {
             // Confirm stays inert so the quit needs the explicit OK.
             if key == MenuKey::Back {
                 self.planet_modal = None;
+                self.option_rebind = None;
             }
             return;
         }
@@ -6100,6 +6427,415 @@ mod game_tests {
         assert_eq!(game.planet_modal(), None, "Escape closes options");
         game.click_planet(386, 88);
         assert_eq!(game.screen(), Screen::Channel, "board is live again");
+    }
+
+    /// Synthetic options sheet: a `Dialog_*` backdrop (the
+    /// dialog-relative origin) plus one 36x20 button placement per
+    /// `(code, x, y)`, with a figure so the staged path answers.
+    fn stage_option_buttons(
+        game: &mut ScreenGame,
+        tab: PlanetOptionTab,
+        buttons: &[(u32, i32, i32)],
+    ) {
+        use crate::avatar::FigureLayer;
+        let backdrop = match tab {
+            PlanetOptionTab::Key => "Dialog_Option_Key.ojs",
+            PlanetOptionTab::Sound => "Dialog_Option_Sound.ojs",
+            PlanetOptionTab::Game => "Dialog_Option_Game.ojs",
+        };
+        let mut figure = AvatarFigure::default();
+        figure.push_layer(FigureLayer {
+            image: o2jam_render::Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap(),
+            dx: 0,
+            dy: 0,
+            colorkey: 0x0000,
+        });
+        let mut placements = vec![ScenePlacement {
+            id: "IDC_DIALOG".to_owned(),
+            code: 0,
+            sprite: Some(backdrop.to_owned()),
+            rect: Rect {
+                x: 0,
+                y: 0,
+                w: 800,
+                h: 600,
+            },
+        }];
+        for (index, (code, x, y)) in buttons.iter().enumerate() {
+            placements.push(ScenePlacement {
+                id: format!("IDC_BUTTON_{index}"),
+                code: *code,
+                sprite: None,
+                rect: Rect {
+                    x: *x,
+                    y: *y,
+                    w: 36,
+                    h: 20,
+                },
+            });
+        }
+        game.load_planet_option_tab(
+            tab,
+            placements,
+            HashMap::from([(backdrop.to_owned(), figure)]),
+        );
+    }
+
+    /// Open the options dialog on the planet board (gear disc
+    /// fallback rect, no staged board art needed).
+    fn open_options(game: &mut ScreenGame) {
+        game.lane_key(3, true);
+        game.click_planet(729, 580);
+        assert_eq!(game.planet_modal(), Some(PlanetModal::Options));
+    }
+
+    /// Click the center of a synthetic 36x20 button at `(x, y)`.
+    fn click_button(game: &mut ScreenGame, x: i32, y: i32) {
+        game.mouse_click(x + 18, y + 10);
+    }
+
+    #[test]
+    fn options_key_tab_rebind_answers_on_the_new_lane() {
+        use winit::keyboard::KeyCode;
+        let mut game = ScreenGame::new();
+        stage_option_buttons(
+            &mut game,
+            PlanetOptionTab::Key,
+            &[(OPTION_KEY_LANE_FIRST, 100, 100)],
+        );
+        open_options(&mut game);
+        click_button(&mut game, 100, 100);
+        assert_eq!(game.option_rebind_armed(), Some(0));
+        assert!(game.capture_raw_key(KeyCode::KeyA, true));
+        assert_eq!(game.option_rebind_armed(), None);
+        assert_eq!(game.options().lane_keys()[0], KeyCode::KeyA);
+        assert_eq!(
+            game.lane_bindings().map(|binds| binds[0]),
+            Some(KeyCode::KeyA),
+            "the window syncs the rebound lane"
+        );
+    }
+
+    #[test]
+    fn options_key_tab_rebind_refuses_unmappable_keys() {
+        use winit::keyboard::KeyCode;
+        let mut game = ScreenGame::new();
+        stage_option_buttons(
+            &mut game,
+            PlanetOptionTab::Key,
+            &[(OPTION_KEY_LANE_FIRST + 1, 140, 100)],
+        );
+        open_options(&mut game);
+        click_button(&mut game, 140, 100);
+        assert_eq!(game.option_rebind_armed(), Some(1));
+        assert!(
+            !game.capture_raw_key(KeyCode::F1, true),
+            "keys without a DirectInput code never persist"
+        );
+        assert_eq!(game.option_rebind_armed(), Some(1));
+        assert_eq!(game.options().lane_keys()[1], KeyCode::KeyD);
+        assert!(
+            !game.capture_raw_key(KeyCode::Escape, true),
+            "menu keys keep their routing while armed"
+        );
+    }
+
+    #[test]
+    fn options_sound_tab_steps_move_volumes_with_exe_bounds() {
+        let mut game = ScreenGame::new();
+        stage_option_buttons(
+            &mut game,
+            PlanetOptionTab::Sound,
+            &[
+                (OPTION_SOUND_GAME_EFFECT_DOWN, 100, 100),
+                (OPTION_SOUND_GAME_EFFECT_UP, 140, 100),
+            ],
+        );
+        open_options(&mut game);
+        game.switch_option_tab(PlanetOptionTab::Sound);
+        click_button(&mut game, 100, 100);
+        assert_eq!(
+            game.options().game_effect(),
+            255 - crate::options::SOUND_SLIDER_STEP
+        );
+        click_button(&mut game, 140, 100);
+        assert_eq!(game.options().game_effect(), 255);
+        click_button(&mut game, 140, 100);
+        assert_eq!(
+            game.options().game_effect(),
+            255,
+            "steps saturate at the byte ceiling"
+        );
+    }
+
+    #[test]
+    fn options_game_tab_buttons_map_to_the_pinned_ini_values() {
+        let mut game = ScreenGame::new();
+        stage_option_buttons(
+            &mut game,
+            PlanetOptionTab::Game,
+            &[
+                (OPTION_GAME_NOTETYPE2, 100, 100),
+                (OPTION_GAME_GUIDE_LONG, 140, 100),
+                (OPTION_GAME_BLEND_NO, 180, 100),
+                (OPTION_GAME_MODE_WIN, 220, 100),
+                (OPTION_GAME_LONGNOTE_USED, 260, 100),
+                (OPTION_GAME_EFFECT_LOW, 300, 100),
+            ],
+        );
+        open_options(&mut game);
+        game.switch_option_tab(PlanetOptionTab::Game);
+        click_button(&mut game, 100, 100);
+        click_button(&mut game, 140, 100);
+        click_button(&mut game, 180, 100);
+        click_button(&mut game, 220, 100);
+        click_button(&mut game, 260, 100);
+        click_button(&mut game, 300, 100);
+        assert_eq!(game.options().note_type(), 1);
+        assert_eq!(game.options().note_tail(), 3);
+        assert_eq!(game.options().blend_half(), 0);
+        assert_eq!(game.options().mode(), 2);
+        assert!(game.options().longnote_used());
+        assert_eq!(game.options().effect_level(), 2);
+    }
+
+    #[test]
+    fn options_tab_switches_ride_the_staged_codes() {
+        let mut game = ScreenGame::new();
+        stage_option_buttons(
+            &mut game,
+            PlanetOptionTab::Key,
+            &[(super::super::side::OPTION_KEY_SOUNDSET, 100, 100)],
+        );
+        stage_option_buttons(&mut game, PlanetOptionTab::Sound, &[]);
+        open_options(&mut game);
+        assert_eq!(game.planet_option_tab(), PlanetOptionTab::Key);
+        click_button(&mut game, 100, 100);
+        assert_eq!(game.planet_option_tab(), PlanetOptionTab::Sound);
+        assert_eq!(
+            game.option_rebind_armed(),
+            None,
+            "switching tabs disarms a pending rebind"
+        );
+    }
+
+    #[test]
+    fn options_save_commits_beside_the_install_root() {
+        let root = std::env::temp_dir().join(format!("recomp2jam-options-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut game = ScreenGame::new();
+        game.load_options(&root);
+        stage_option_buttons(
+            &mut game,
+            PlanetOptionTab::Key,
+            &[(OPTION_KEY_LANE_FIRST, 100, 100)],
+        );
+        stage_option_buttons(
+            &mut game,
+            PlanetOptionTab::Sound,
+            &[(PlanetOptionTab::Sound.save_code(), 100, 100)],
+        );
+        open_options(&mut game);
+        click_button(&mut game, 100, 100);
+        assert!(game.capture_raw_key(winit::keyboard::KeyCode::KeyA, true));
+        game.switch_option_tab(PlanetOptionTab::Sound);
+        click_button(&mut game, 100, 100);
+        let text = std::fs::read_to_string(root.join("option.ini")).unwrap();
+        assert!(
+            text.contains("KEY_1=30"),
+            "rebound A persists as its DirectInput code: {text}"
+        );
+        let reloaded = crate::options::OptionsSettings::load_from_dir(&root);
+        assert_eq!(reloaded, *game.options(), "a restart keeps them");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn options_exit_closes_without_saving() {
+        let root =
+            std::env::temp_dir().join(format!("recomp2jam-options-exit-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut game = ScreenGame::new();
+        game.load_options(&root);
+        let exit = PlanetOptionTab::Key.exit_code();
+        stage_option_buttons(
+            &mut game,
+            PlanetOptionTab::Key,
+            &[(OPTION_GAME_NOTETYPE2, 100, 100), (exit, 200, 100)],
+        );
+        open_options(&mut game);
+        game.switch_option_tab(PlanetOptionTab::Game);
+        // The Game sheet is unstaged: no button answers, and the
+        // Key-tab EXIT rect belongs to the other sheet.
+        click_button(&mut game, 200, 100);
+        assert_eq!(
+            game.planet_modal(),
+            Some(PlanetModal::Options),
+            "unstaged tabs answer nothing"
+        );
+        game.switch_option_tab(PlanetOptionTab::Key);
+        click_button(&mut game, 200, 100);
+        assert_eq!(game.planet_modal(), None, "EXIT closes");
+        assert!(
+            !root.join("option.ini").exists(),
+            "EXIT abandons: only SAVE commits"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn options_default_restores_the_exe_defaults_per_tab() {
+        let mut game = ScreenGame::new();
+        let default = PlanetOptionTab::Key.default_code();
+        stage_option_buttons(
+            &mut game,
+            PlanetOptionTab::Game,
+            &[
+                (OPTION_GAME_NOTETYPE2, 100, 100),
+                (OPTION_GAME_GUIDE_LONG, 140, 100),
+                (default, 180, 100),
+            ],
+        );
+        open_options(&mut game);
+        game.switch_option_tab(PlanetOptionTab::Game);
+        click_button(&mut game, 100, 100);
+        click_button(&mut game, 140, 100);
+        assert_eq!(game.options().note_type(), 1);
+        // DEFAULT belongs to the Key tab sheet here, so the Game
+        // values stand; staging it on the open tab restores them.
+        click_button(&mut game, 180, 100);
+        assert_eq!(game.options().note_type(), 1);
+        stage_option_buttons(
+            &mut game,
+            PlanetOptionTab::Game,
+            &[(PlanetOptionTab::Game.default_code(), 180, 100)],
+        );
+        click_button(&mut game, 180, 100);
+        assert_eq!(game.options().note_type(), 0);
+        assert_eq!(game.options().note_tail(), 2);
+    }
+
+    #[test]
+    fn longnote_mode_snapshots_at_playing_entry() {
+        let mut game = ScreenGame::new();
+        assert_eq!(game.play_longnote_mode(), None);
+        game.options.set_longnote_mode(1);
+        walk_to_playing(&mut game);
+        assert_eq!(game.play_longnote_mode(), Some(1));
+        game.options.set_longnote_mode(0);
+        assert_eq!(
+            game.play_longnote_mode(),
+            Some(1),
+            "later dialog edits never reach the running song"
+        );
+    }
+
+    #[test]
+    fn key_strikes_play_at_the_game_effect_gain() {
+        use o2jam_audio::{AudioBackend, AudioError, PcmSamples};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        struct GainProbe {
+            gains: Rc<RefCell<Vec<f32>>>,
+        }
+        impl AudioBackend for GainProbe {
+            fn play_pcm(&mut self, _pcm: &PcmSamples) -> Result<(), AudioError> {
+                Ok(())
+            }
+            fn play_key(&mut self, _pcm: &PcmSamples, gain: f32) -> Result<(), AudioError> {
+                self.gains.borrow_mut().push(gain);
+                Ok(())
+            }
+            fn samples_played(&self) -> u64 {
+                0
+            }
+        }
+        let gains = Rc::new(RefCell::new(Vec::new()));
+        let probe = GainProbe {
+            gains: Rc::clone(&gains),
+        };
+        let bank = HashMap::from([(
+            7u32,
+            PcmSamples {
+                samples: vec![1000i16; 8],
+                sample_rate: 8000,
+                channels: 1,
+            },
+        )]);
+        let mut game = ScreenGame::new();
+        game.with_audio(Box::new(probe), bank);
+        game.load_chart(vec![(2, 5000, 7), (2, 6000, 7)]);
+        for next in [
+            Screen::Planet,
+            Screen::Channel,
+            Screen::Room,
+            Screen::Waiting,
+            Screen::Loading,
+            Screen::Playing,
+        ] {
+            game.flow.go(next).unwrap();
+        }
+        game.strike_at(2, 5000);
+        assert_eq!(gains.borrow().len(), 1);
+        assert!((gains.borrow()[0] - 1.0).abs() < 1e-6);
+        for _ in 0..64 {
+            game.options.step_game_effect(false);
+        }
+        game.strike_at(2, 6000);
+        assert_eq!(gains.borrow().len(), 2);
+        assert!(gains.borrow()[1].abs() < 1e-6, "muted effect stays silent");
+    }
+
+    #[test]
+    fn scene_bgm_cue_scales_with_the_bgmusic_volume() {
+        use o2jam_audio::{AudioBackend, AudioError, PcmSamples};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        struct PeakProbe {
+            peaks: Rc<RefCell<Vec<i32>>>,
+        }
+        impl AudioBackend for PeakProbe {
+            fn play_pcm(&mut self, _pcm: &PcmSamples) -> Result<(), AudioError> {
+                Ok(())
+            }
+            fn set_scene_bgm(
+                &mut self,
+                pcm: Option<&PcmSamples>,
+                _repeat: bool,
+            ) -> Result<(), AudioError> {
+                let peak = pcm.map_or(0, |pcm| {
+                    pcm.samples
+                        .iter()
+                        .map(|s| i32::from(*s).abs())
+                        .max()
+                        .unwrap_or(0)
+                });
+                self.peaks.borrow_mut().push(peak);
+                Ok(())
+            }
+            fn samples_played(&self) -> u64 {
+                0
+            }
+        }
+        let peaks = Rc::new(RefCell::new(Vec::new()));
+        let probe = PeakProbe {
+            peaks: Rc::clone(&peaks),
+        };
+        let mut bank = vec![None; 10];
+        bank[8] = Some(PcmSamples {
+            samples: vec![1000i16; 441],
+            sample_rate: 44100,
+            channels: 1,
+        });
+        let mut game = ScreenGame::new();
+        game.with_audio(Box::new(probe), HashMap::new());
+        game.stage_scene_bgm(bank);
+        game.enter(Screen::Planet);
+        assert_eq!(peaks.borrow().last(), Some(&1000));
+        game.options.step_bgm_music(false);
+        game.enter(Screen::Channel);
+        // 1000 * 247 / 255 = 968.6, rounds to 969.
+        assert_eq!(peaks.borrow().last(), Some(&969));
     }
 
     #[test]

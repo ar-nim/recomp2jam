@@ -38,7 +38,7 @@ extracted/
 installer-out/
 game-data/
 original/
-install-root/
+install-root
 dumps/
 *.cab
 *.hdr

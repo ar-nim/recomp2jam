@@ -1411,10 +1411,9 @@ impl PlanetOptionTab {
 
     /// Dialog EXIT code for this tab (`Option_Exit.ojs` buttons:
     /// `0X25200017` / `0X26200012` / `0X2F20000F`, lines 1274 /
-    /// 1302 / 1629). Pressing it closes the dialog (Escape closes
-    /// it too — live-pinned, `docs/wine-boot.md`). Tab switching
-    /// (`SOUNDSET`/`GAMESET`/`KEYSET` buttons) stays OPEN and is
-    /// not dispatched.
+    /// 1302 / 1629). Pressing it closes the dialog without saving
+    /// (Escape closes it too — live-pinned, `docs/wine-boot.md`);
+    /// the tab SAVE button commits to `option.ini`.
     #[must_use]
     pub const fn exit_code(self) -> u32 {
         match self {
@@ -1423,7 +1422,137 @@ impl PlanetOptionTab {
             Self::Game => 0x2F20_000F,
         }
     }
+
+    /// Dialog SAVE code for this tab (`Option_Save.ojs` buttons:
+    /// `0X25200016` / `0X26200011` / `0X2F20000E`). Pressing it
+    /// persists the settings beside the install root (the write
+    /// path mirrors the exe `WritePrivateProfileStringA` writers —
+    /// same section/key/file names, decimal ints).
+    #[must_use]
+    pub const fn save_code(self) -> u32 {
+        match self {
+            Self::Key => 0x2520_0016,
+            Self::Sound => 0x2620_0011,
+            Self::Game => 0x2F20_000E,
+        }
+    }
+
+    /// Dialog DEFAULT code for this tab (`Option_Default.ojs`
+    /// buttons: `0X25200015` / `0X26200010` / `0X2F20000D`).
+    /// Pressing it restores the exe defaults for the tab's keys.
+    #[must_use]
+    pub const fn default_code(self) -> u32 {
+        match self {
+            Self::Key => 0x2520_0015,
+            Self::Sound => 0x2620_0010,
+            Self::Game => 0x2F20_000D,
+        }
+    }
+
+    /// Tab-switch code this tab answers (`SOUNDSET`/`GAMESET` /
+    /// `KEYSET` buttons, spriteless entries riding their `.bnd`
+    /// rects): the switched-to tab for `code`, if this tab owns it.
+    #[must_use]
+    pub const fn switch_tab(self, code: u32) -> Option<PlanetOptionTab> {
+        match (self, code) {
+            (Self::Key, OPTION_KEY_SOUNDSET) => Some(PlanetOptionTab::Sound),
+            (Self::Key, OPTION_KEY_GAMESET) => Some(PlanetOptionTab::Game),
+            (Self::Sound, OPTION_SOUND_KEYSET) => Some(PlanetOptionTab::Key),
+            (Self::Sound, OPTION_SOUND_GAMESET) => Some(PlanetOptionTab::Game),
+            (Self::Game, OPTION_GAME_KEYSET) => Some(PlanetOptionTab::Key),
+            (Self::Game, OPTION_GAME_SOUNDSET) => Some(PlanetOptionTab::Sound),
+            _ => None,
+        }
+    }
 }
+
+/// Key-tab `SOUNDSET` switch code (`IDC_BUTTON_DOPTION_SOUNDSET`).
+pub const OPTION_KEY_SOUNDSET: u32 = 0x2560_0018;
+/// Key-tab `GAMESET` switch code (`IDC_BUTTON_DOPTION_GAMESET`).
+pub const OPTION_KEY_GAMESET: u32 = 0x2560_0019;
+/// Sound-tab `KEYSET` switch code (`IDC_IMAGE_DOPTIONSOUND_KEYSET`).
+pub const OPTION_SOUND_KEYSET: u32 = 0x2660_000E;
+/// Sound-tab `GAMESET` switch code (`IDC_IMAGE_DOPTIONSOUND_GAMESET`).
+pub const OPTION_SOUND_GAMESET: u32 = 0x2660_000F;
+/// Game-tab `KEYSET` switch code (`IDC_BUTTON_DOPTIONGAME_KEYSET`).
+pub const OPTION_GAME_KEYSET: u32 = 0x2F60_0010;
+/// Game-tab `SOUNDSET` switch code (`IDC_BUTTON_DOPTIONGAME_SOUNDSET`).
+pub const OPTION_GAME_SOUNDSET: u32 = 0x2F60_0011;
+
+/// Key-tab lane buttons `KEY1..KEY7` (`IDC_BUTTON_DOPTION_KEY1..7`,
+/// codes `0X2520900C..12`): click arms the lane for rebind, the
+/// next mapped key press becomes the lane's key.
+pub const OPTION_KEY_LANE_FIRST: u32 = 0x2520_900C;
+/// Key-tab 3-key lane buttons (`IDC_BUTTON_DOPTION_3KEY_1..4`,
+/// codes `0X25209008..0B`): arm lanes 0..3 the same way
+/// (the 3-key lane mapping itself stays OPEN).
+pub const OPTION_KEY_3KEY_FIRST: u32 = 0x2520_9008;
+/// Key-tab 3-key button (`IDC_BUTTON_DOPTION_3KEY`).
+pub const OPTION_KEY_3KEY_MODE: u32 = 0x2520_1003;
+/// Key-tab 7-key button (`IDC_BUTTON_DOPTION_7KEY`).
+pub const OPTION_KEY_7KEY_MODE: u32 = 0x2520_1004;
+/// Key-tab key-test checkbox (`IDC_BUTTON_DOPTION_KEYTEST`).
+pub const OPTION_KEY_TEST: u32 = 0x2520_A005;
+
+/// Sound-tab slider codes (`IDC_BUTTON_DOPTIONSOUND_*`): each pair
+/// steps its volume down/up by the ours-by-design step.
+pub const OPTION_SOUND_BG_MUSIC_DOWN: u32 = 0x2620_0002;
+/// Sound-tab slider codes (see [`OPTION_SOUND_BG_MUSIC_DOWN`]).
+pub const OPTION_SOUND_BG_MUSIC_UP: u32 = 0x2620_0003;
+/// Sound-tab slider codes (see [`OPTION_SOUND_BG_MUSIC_DOWN`]).
+pub const OPTION_SOUND_BG_EFFECT_DOWN: u32 = 0x2620_0004;
+/// Sound-tab slider codes (see [`OPTION_SOUND_BG_MUSIC_DOWN`]).
+pub const OPTION_SOUND_BG_EFFECT_UP: u32 = 0x2620_0005;
+/// Sound-tab slider codes (see [`OPTION_SOUND_BG_MUSIC_DOWN`]).
+pub const OPTION_SOUND_GAME_MUSIC_DOWN: u32 = 0x2620_0006;
+/// Sound-tab slider codes (see [`OPTION_SOUND_BG_MUSIC_DOWN`]).
+pub const OPTION_SOUND_GAME_MUSIC_UP: u32 = 0x2620_0007;
+/// Sound-tab slider codes (see [`OPTION_SOUND_BG_MUSIC_DOWN`]).
+pub const OPTION_SOUND_GAME_EFFECT_DOWN: u32 = 0x2620_0008;
+/// Sound-tab slider codes (see [`OPTION_SOUND_BG_MUSIC_DOWN`]).
+pub const OPTION_SOUND_GAME_EFFECT_UP: u32 = 0x2620_0009;
+
+/// Game-tab effect arms (`IDC_BUTTON_DOPTIONGAME_EFFECTHIGH` /
+/// `EFFECTNORMAL` / `EFFECTLOW`, codes `0X2F209002..04`):
+/// in-memory selection, no ini key found (OPEN).
+pub const OPTION_GAME_EFFECT_HIGH: u32 = 0x2F20_9002;
+/// Game-tab effect arms (see [`OPTION_GAME_EFFECT_HIGH`]).
+pub const OPTION_GAME_EFFECT_NORMAL: u32 = 0x2F20_9003;
+/// Game-tab effect arms (see [`OPTION_GAME_EFFECT_LOW`]).
+pub const OPTION_GAME_EFFECT_LOW: u32 = 0x2F20_9004;
+/// Game-tab EQ Yes/No (`IDC_BUTTON_DOPTIONGAME_BLENDHALF_YES` /
+/// `_NO`): Yes writes 1, No writes 0 (order ours-by-design).
+pub const OPTION_GAME_BLEND_YES: u32 = 0x2F20_9005;
+/// Game-tab EQ Yes/No (see [`OPTION_GAME_BLEND_YES`]).
+pub const OPTION_GAME_BLEND_NO: u32 = 0x2F20_9006;
+/// Game-tab note-shape buttons (`IDC_BUTTON_DOPTIONGAME_NOTETYPE1` /
+/// `NOTETYPE2`): the dialog itself offers two arms only — value 2
+/// stays a dead alias. Button→value order is ours-by-design.
+pub const OPTION_GAME_NOTETYPE1: u32 = 0x2F20_9007;
+/// Game-tab note-shape buttons (see [`OPTION_GAME_NOTETYPE1`]).
+pub const OPTION_GAME_NOTETYPE2: u32 = 0x2F20_9008;
+/// Game-tab guide buttons (`IDC_BUTTON_DOPTIONGAME_NOTEGUIDELONG` /
+/// `MIDDLE` / `SHORT` / `NOUSE`): button→tail-value order is
+/// ours-by-design (Long→3, Middle→2, Short→1, NoUse→0).
+pub const OPTION_GAME_GUIDE_LONG: u32 = 0x2F20_9009;
+/// Game-tab guide buttons (see [`OPTION_GAME_GUIDE_LONG`]).
+pub const OPTION_GAME_GUIDE_MIDDLE: u32 = 0x2F20_900A;
+/// Game-tab guide buttons (see [`OPTION_GAME_GUIDE_LONG`]).
+pub const OPTION_GAME_GUIDE_SHORT: u32 = 0x2F20_900B;
+/// Game-tab guide buttons (see [`OPTION_GAME_GUIDE_LONG`]).
+pub const OPTION_GAME_GUIDE_NOUSE: u32 = 0x2F20_900C;
+/// Game-tab window buttons (`IDC_BUTTON_DOPTIONGAME_MODEFULL` /
+/// `MODEWIN`): Full→1, Win→2 (order ours-by-design; the `1`/`2`
+/// arms drive the window apply at file `0x3a06c`).
+pub const OPTION_GAME_MODE_FULL: u32 = 0x2F20_9014;
+/// Game-tab window buttons (see [`OPTION_GAME_MODE_FULL`]).
+pub const OPTION_GAME_MODE_WIN: u32 = 0x2F20_9015;
+/// Game-tab long-note buttons
+/// (`IDC_BUTTON_DOPTIONGAME_LONGNOTEMODE_USED` / `_NONE`):
+/// Used writes 1, None writes 0 (the consumer tests `== 1`).
+pub const OPTION_GAME_LONGNOTE_USED: u32 = 0x2F20_9016;
+/// Game-tab long-note buttons (see [`OPTION_GAME_LONGNOTE_USED`]).
+pub const OPTION_GAME_LONGNOTE_NONE: u32 = 0x2F20_9017;
 
 /// First-open tab stand-in: the Key block (first in
 /// `ControlList_Interface.txt` file order). OPEN: no capture or
@@ -1431,7 +1560,8 @@ impl PlanetOptionTab {
 /// step — rig capture of a gear click (`~/scratch/planet-verify/`
 /// recipe: boot explorer desktop, dismiss the notice, SendInput
 /// click the gear disc at native ~(729,580), capture the dialog).
-/// Tab switching stays unimplemented until then.
+/// Tab switching rides the staged `KEYSET`/`SOUNDSET`/`GAMESET`
+/// codes through their `.bnd` rects (no literals).
 pub const PLANET_OPTION_FIRST_TAB: PlanetOptionTab = PlanetOptionTab::Key;
 
 /// Channel-list dialog block (`CDChannelInfo`; `ControlList_Interface.txt`

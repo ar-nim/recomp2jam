@@ -18,8 +18,8 @@ use crate::avatar::{
 };
 use crate::screen::Screen;
 use crate::screens::side::{
-    SideScreen, CHANNEL_INFO_DIALOG_BLOCK, CREATE_ROOM_DIALOG_BLOCK, PASSWORD_DIALOG_BLOCK,
-    PLANET_OPTION_FIRST_TAB, QUIT_DIALOG_BLOCK, SELECT_MUSIC_DIALOG_BLOCK,
+    PlanetOptionTab, SideScreen, CHANNEL_INFO_DIALOG_BLOCK, CREATE_ROOM_DIALOG_BLOCK,
+    PASSWORD_DIALOG_BLOCK, PLANET_OPTION_FIRST_TAB, QUIT_DIALOG_BLOCK, SELECT_MUSIC_DIALOG_BLOCK,
     TUTORIAL_BACKGROUND_SPRITE,
 };
 
@@ -275,6 +275,12 @@ pub enum Dialog {
     /// First-open options tab (`DIALOG_OPTION_KEY`, which tab opens
     /// first stays OPEN) over Planet.
     PlanetOption,
+    /// Sound options tab (`DIALOG_OPTION_SOUND`) over Planet:
+    /// staged so the tab switches flip between genuine sheets.
+    PlanetOptionSound,
+    /// Game options tab (`DIALOG_OPTION_GAME`) over Planet: staged
+    /// so the tab switches flip between genuine sheets.
+    PlanetOptionGame,
     /// Quit confirm (`DIALOG_QUESTION1`) over Planet.
     PlanetQuit,
     /// Room create sheet (`DIALOG_CREATEROOM`) over Room: declared
@@ -293,6 +299,8 @@ impl Dialog {
             Dialog::SelectMusic => SELECT_MUSIC_DIALOG_BLOCK,
             Dialog::ChannelInfo => CHANNEL_INFO_DIALOG_BLOCK,
             Dialog::PlanetOption => PLANET_OPTION_FIRST_TAB.block_name(),
+            Dialog::PlanetOptionSound => PlanetOptionTab::Sound.block_name(),
+            Dialog::PlanetOptionGame => PlanetOptionTab::Game.block_name(),
             Dialog::PlanetQuit => QUIT_DIALOG_BLOCK,
             Dialog::CreateRoom => CREATE_ROOM_DIALOG_BLOCK,
             Dialog::InputPassword => PASSWORD_DIALOG_BLOCK,
@@ -304,7 +312,11 @@ impl Dialog {
     pub const fn host(self) -> State {
         match self {
             Dialog::SelectMusic => State::Waiting,
-            Dialog::ChannelInfo | Dialog::PlanetOption | Dialog::PlanetQuit => State::Planet,
+            Dialog::ChannelInfo
+            | Dialog::PlanetOption
+            | Dialog::PlanetOptionSound
+            | Dialog::PlanetOptionGame
+            | Dialog::PlanetQuit => State::Planet,
             Dialog::CreateRoom | Dialog::InputPassword => State::Room,
         }
     }
@@ -353,6 +365,16 @@ pub const DIALOG_TABLE: &[DialogRow] = &[
         dialog: Dialog::PlanetOption,
         host: State::Planet,
         block: PLANET_OPTION_FIRST_TAB.block_name(),
+    },
+    DialogRow {
+        dialog: Dialog::PlanetOptionSound,
+        host: State::Planet,
+        block: PlanetOptionTab::Sound.block_name(),
+    },
+    DialogRow {
+        dialog: Dialog::PlanetOptionGame,
+        host: State::Planet,
+        block: PlanetOptionTab::Game.block_name(),
     },
     DialogRow {
         dialog: Dialog::PlanetQuit,

@@ -146,6 +146,33 @@ wrong; Myroom stages bound like every other side screen.
   named next step in `docs/planet.md`; promo carousel semantics;
   bare-board → Room/solo path; exe entry key; BGM trigger
   superseded per `docs/planet.md` OPEN 7).
+  Options dialog (ticket #18, `docs/options.md`): all three tab
+  sheets stage through the declaration and the dialog edits real
+  settings — Key-tab rebinds answer in the lanes (mapped keys
+  only), Sound-tab sliders step the four `Sound` volumes
+  (GameEffect drives the live key mix, BGMusic scales the lobby
+  cue), Game-tab buttons write the pinned ini values (NoteType
+  0/1 with 2 a dead alias, NoteTail 0–3 by button, blend/mode/
+  long-note values), SAVE commits `option.ini` beside the install
+  root (EXIT/Escape abandon), DEFAULT restores per-tab exe
+  defaults, and `LongnoteMode` snapshots at Playing entry.
+  Guards: `options_key_tab_rebind_answers_on_the_new_lane`,
+  `options_key_tab_rebind_refuses_unmappable_keys`,
+  `options_sound_tab_steps_move_volumes_with_exe_bounds`,
+  `options_game_tab_buttons_map_to_the_pinned_ini_values`,
+  `options_tab_switches_ride_the_staged_codes`,
+  `options_save_commits_beside_the_install_root`,
+  `options_exit_closes_without_saving`,
+  `options_default_restores_the_exe_defaults_per_tab`,
+  `longnote_mode_snapshots_at_playing_entry`,
+  `key_strikes_play_at_the_game_effect_gain`,
+  `scene_bgm_cue_scales_with_the_bgmusic_volume`,
+  `option_tabs_stage_all_three_sheets_when_archives_present`
+  plus the 13 `options::tests`. PASS (dialog behavior) / OPEN
+  (highway pixel naming and slider/button→value orders — the
+  ticket's exact rig list is the named next step: one 0-vs-1 shape
+  capture, five tail captures, one mode 0-vs-1 A/B plus the
+  timing-vs-rendering call; in-song mix application).
 - `STATE_LANKING` (`0x37`; display-only, no state class — like CHANNEL).
   Bound placements stage (73 rects). Ticket #20 (2026-11-12): the
   board is two lists — five catalog songs per left page under the

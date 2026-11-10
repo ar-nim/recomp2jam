@@ -6,6 +6,7 @@
 //! hardware.
 
 pub mod avatar;
+pub mod options;
 pub mod playing;
 pub mod screen;
 pub mod screens;
@@ -49,10 +50,23 @@ pub const DEFAULT_WIDTH: u32 = 800;
 pub const DEFAULT_HEIGHT: u32 = 600;
 
 /// Maps physical keys to the seven play lanes (S D F Space J K L,
-/// the club-standard layout) plus menu keys.
-#[derive(Debug, Default)]
+/// the club-standard layout) plus menu keys. The binds are
+/// rebindable: the window syncs them from the game loop before
+/// every key event, so the options Key tab rebinds answer in the
+/// lanes without touching the default map.
+#[derive(Debug)]
 pub struct Keymap {
     held: HashSet<KeyCode>,
+    binds: [KeyCode; LANE_COUNT],
+}
+
+impl Default for Keymap {
+    fn default() -> Self {
+        Self {
+            held: HashSet::new(),
+            binds: default_lane_binds(),
+        }
+    }
 }
 
 impl Keymap {
@@ -62,23 +76,48 @@ impl Keymap {
         Self::default()
     }
 
+    /// Replace the lane binds (the options Key tab owns these;
+    /// the window syncs them from the game loop per key event).
+    pub fn set_binds(&mut self, binds: [KeyCode; LANE_COUNT]) {
+        self.binds = binds;
+    }
+
+    /// Lane index for a play key under the current binds, if any.
+    #[must_use]
+    pub fn lane_of_code(&self, code: KeyCode) -> Option<usize> {
+        self.binds.iter().position(|bind| *bind == code)
+    }
+
     /// Record a key press; returns the lane when a lane key goes down.
     pub fn press(&mut self, code: KeyCode) -> Option<usize> {
         self.held.insert(code);
-        lane_of(code)
+        self.lane_of_code(code)
     }
 
     /// Record a key release; returns the lane when a lane key goes up.
     pub fn release(&mut self, code: &KeyCode) -> Option<usize> {
         self.held.remove(code);
-        lane_of(*code)
+        self.lane_of_code(*code)
     }
 
     /// Whether a lane key is currently held.
     #[must_use]
     pub fn lane_held(&self, lane: usize) -> bool {
-        lane_key(lane).is_some_and(|code| self.held.contains(&code))
+        self.binds
+            .get(lane)
+            .is_some_and(|code| self.held.contains(code))
     }
+}
+
+/// Default lane binds (mirrors [`lane_key`]).
+fn default_lane_binds() -> [KeyCode; LANE_COUNT] {
+    let mut binds = [KeyCode::KeyS; LANE_COUNT];
+    for (lane, bind) in binds.iter_mut().enumerate() {
+        if let Some(code) = lane_key(lane) {
+            *bind = code;
+        }
+    }
+    binds
 }
 
 /// Lane index for a play key, if any.
@@ -164,6 +203,19 @@ pub const fn menu_of(code: KeyCode) -> Option<MenuKey> {
 /// input and paint requests. Paint targets an XRGB8888 `Frame`
 /// over the shell backbuffer; the shell presents it with softbuffer.
 pub trait GameLoop {
+    /// A raw physical key changed state before lane/menu routing:
+    /// `true` consumes the event (the options Key tab uses this to
+    /// capture the next press for a lane rebind). Defaults to no
+    /// capture so existing implementors keep compiling.
+    fn capture_raw_key(&mut self, _code: KeyCode, _down: bool) -> bool {
+        false
+    }
+    /// Current lane binds, when the game owns rebindable keys (the
+    /// window syncs its key map from these per key event). `None`
+    /// keeps the default S D F Space J K L map.
+    fn lane_bindings(&self) -> Option<[KeyCode; LANE_COUNT]> {
+        None
+    }
     /// A lane key changed state (`down` = press).
     fn lane_key(&mut self, lane: usize, down: bool);
     /// A menu key changed state (`down` = press).

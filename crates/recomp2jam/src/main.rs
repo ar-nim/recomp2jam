@@ -493,6 +493,7 @@ struct OnlineCli {
 /// Whatever login, room setup, or the window reports.
 fn run_online(opts: OnlineCli) -> Result<()> {
     let mut game = o2jam_shell::ScreenGame::new();
+    game.load_options(&install_root());
     setup_splash(&mut game, &opts.interface)?;
     let connect_options = connect::ConnectOptions {
         host: opts.host.clone(),
@@ -925,6 +926,7 @@ fn run_play(
     tracing::info!(?chart, ?window, "play stub");
     if window {
         let mut game = o2jam_shell::ScreenGame::new();
+        game.load_options(&install_root());
         setup_splash(&mut game, &interface)?;
         let gateway = setup_online(
             &mut game,
@@ -1071,6 +1073,14 @@ fn setup_splash(game: &mut o2jam_shell::ScreenGame, interface: &Option<String>) 
 
 /// Installed interface archive for the offline splash fallback.
 const INSTALLED_INTERFACE_OPI: &str = "../../install-root/O2Jam/Image/Interface1.opi";
+
+/// Repository-local install root (git-ignored game data): the edge
+/// that supplies game paths to the shell. `option.ini` loads from
+/// and saves beside this directory (a missing file keeps the exe
+/// defaults, so CI stays green without game data).
+fn install_root() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../install-root")
+}
 
 /// Genuine interface archive bytes, if present (read-only;
 /// a missing archive keeps the flat card so CI stays green without

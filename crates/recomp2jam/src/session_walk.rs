@@ -279,6 +279,7 @@ fn connect_transport(
 /// Pair the game with its gateway and remember the host pick.
 fn build_session(config: &WalkConfig, gateway: GatewayConnection) -> Result<OnlineSession> {
     let mut session = OnlineSession::new(ScreenGame::new(), gateway);
+    session.game_mut().load_options(&install_root());
     stage_catalog(&mut session);
     session.set_local_user(&config.token);
     session.set_pending_song(SongChoice {

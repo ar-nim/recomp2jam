@@ -489,8 +489,12 @@ fn seeded_guest_game() -> ScreenGame {
 
 /// Shared seed: lobby rows, one joined room, the duo scoreboard, peer
 /// gauge, captions, chat, chart, and real art underneath when present.
+/// Settings load from `option.ini` beside the install root (exe
+/// defaults while the file is absent, so the oracle stays
+/// byte-stable on a bare checkout).
 fn seeded_game_in(room: JoinedRoom) -> ScreenGame {
     let mut game = ScreenGame::new();
+    game.load_options(&install_root());
     seed_lobby_lists(&mut game);
     game.set_joined_room(room);
     game.set_battle_teams(result_battle_teams());

@@ -21,6 +21,7 @@ use std::path::PathBuf;
 use o2jam_shell::avatar::load_archive_sprite;
 use o2jam_shell::avatar::PlayingArtMode;
 use o2jam_shell::screens::paint::DIALOG_BAR_SPRITE;
+use o2jam_shell::screens::side::PlanetOptionTab;
 use o2jam_shell::staging::{
     read_install_archives, stage_dialog, stage_state, Dialog, StageContext, State,
 };
@@ -76,16 +77,23 @@ fn stage_interface_scenes(game: &mut ScreenGame, archive: &[u8]) {
     stage_planet_dialogs(game, archive);
 }
 
-/// Stage the planet-board modal sheets: the first-open options tab
-/// (`Dialog_Option_*`; tab choice OPEN) and the quit-confirm
-/// (`Dialog_Question1`). Both stay modal art (the game paints them
-/// dialog-relative only while open), never scene slots. Each block
-/// stages independently; a miss keeps the fallback popup/title.
-/// Shared with the shots walk (one implementation for both).
+/// Stage the planet-board modal sheets: all three options tabs
+/// (`DIALOG_OPTION_KEY/SOUND/GAME`; which tab opens first stays
+/// OPEN) and the quit-confirm (`Dialog_Question1`). Both stay modal
+/// art (the game paints them dialog-relative only while open),
+/// never scene slots. Each block stages independently; a miss keeps
+/// the fallback popup/title. Shared with the shots walk (one
+/// implementation for both).
 pub(crate) fn stage_planet_dialogs(game: &mut ScreenGame, archive: &[u8]) {
     let ctx = StageContext::default();
-    if let Some(art) = stage_dialog(archive, Dialog::PlanetOption, ctx).art {
-        game.load_planet_option_scene(art.placements, art.figures);
+    for (dialog, tab) in [
+        (Dialog::PlanetOption, PlanetOptionTab::Key),
+        (Dialog::PlanetOptionSound, PlanetOptionTab::Sound),
+        (Dialog::PlanetOptionGame, PlanetOptionTab::Game),
+    ] {
+        if let Some(art) = stage_dialog(archive, dialog, ctx).art {
+            game.load_planet_option_tab(tab, art.placements, art.figures);
+        }
     }
     if let Some(art) = stage_dialog(archive, Dialog::PlanetQuit, ctx).art {
         game.load_planet_quit_scene(art.placements, art.figures);
@@ -182,7 +190,9 @@ mod live_art_tests {
     use o2jam_render::{Frame, NATIVE_HEIGHT, NATIVE_WIDTH};
     use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
 
-    use super::{install_root, restage_live_playing, stage_live_scenes};
+    use super::{install_root, restage_live_playing, stage_live_scenes, stage_planet_dialogs};
+    use o2jam_shell::screens::game::PlanetModal;
+    use o2jam_shell::screens::side::PlanetOptionTab;
     use o2jam_shell::staging::{
         read_install_archives, stage_state, StageContext, StagedArt, State,
     };
@@ -391,6 +401,49 @@ mod live_art_tests {
     }
 
     #[test]
+    fn option_tabs_stage_all_three_sheets_when_archives_present() {
+        // All three `DIALOG_OPTION_*` sheets stage through the
+        // declaration; each open tab paints its own sheet (three
+        // distinct frames — an unstaged tab would paint the shared
+        // fallback title three times).
+        use o2jam_render::Frame;
+        if skip_without_archives() {
+            return;
+        }
+        let archive = read_install_archives(&install_root())
+            .interface
+            .expect("interface archive stages");
+        let mut game = live_game();
+        stage_planet_dialogs(&mut game, &archive);
+        game.lane_key(3, true);
+        game.click_planet(729, 580);
+        assert_eq!(game.planet_modal(), Some(PlanetModal::Options));
+        let width = usize::try_from(o2jam_render::NATIVE_WIDTH).unwrap_or(1);
+        let height = usize::try_from(o2jam_render::NATIVE_HEIGHT).unwrap_or(1);
+        let mut frames = Vec::new();
+        for tab in [
+            PlanetOptionTab::Key,
+            PlanetOptionTab::Sound,
+            PlanetOptionTab::Game,
+        ] {
+            game.switch_option_tab(tab);
+            let mut buf = vec![0u32; width * height];
+            game.paint_at(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: width,
+                    h: height,
+                },
+                0,
+            );
+            frames.push(buf);
+        }
+        assert_ne!(frames[0], frames[1], "sound sheet paints its own art");
+        assert_ne!(frames[1], frames[2], "game sheet paints its own art");
+        assert_ne!(frames[0], frames[2], "key sheet paints its own art");
+    }
+
+    #[test]
     fn planet_paints_real_art_when_archives_present() {
         // The walk cannot reach Planet without invented input, so this
         // paints the staged scene directly: real art must ink the frame
@@ -505,10 +558,14 @@ mod live_art_tests {
             channel_figures.insert(DIALOG_BAR_SPRITE.to_owned(), bar);
         }
         expected.load_scene(Screen::Channel, Vec::new(), channel_figures);
-        if let Some(art) =
-            stage_dialog(&interface, Dialog::PlanetOption, StageContext::default()).art
-        {
-            expected.load_planet_option_scene(art.placements, art.figures);
+        for (dialog, tab) in [
+            (Dialog::PlanetOption, PlanetOptionTab::Key),
+            (Dialog::PlanetOptionSound, PlanetOptionTab::Sound),
+            (Dialog::PlanetOptionGame, PlanetOptionTab::Game),
+        ] {
+            if let Some(art) = stage_dialog(&interface, dialog, StageContext::default()).art {
+                expected.load_planet_option_tab(tab, art.placements, art.figures);
+            }
         }
         if let Some(art) = stage_dialog(&interface, Dialog::PlanetQuit, StageContext::default()).art
         {

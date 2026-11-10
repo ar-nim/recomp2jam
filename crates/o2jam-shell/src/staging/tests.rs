@@ -960,7 +960,7 @@ fn scrollbar_params_never_warn() {
 }
 #[test]
 fn dialog_rows_name_host_state_and_block() {
-    assert_eq!(DIALOG_TABLE.len(), 6);
+    assert_eq!(DIALOG_TABLE.len(), 8);
     for row in DIALOG_TABLE {
         assert_eq!(row.block, row.dialog.block_name());
         assert_eq!(row.host, row.dialog.host());
@@ -972,6 +972,11 @@ fn dialogs_key_by_their_block_names() {
     assert_eq!(Dialog::SelectMusic.block_name(), "DAILOG_SELECTMUSIC");
     assert_eq!(Dialog::ChannelInfo.block_name(), "DIALOG_CHANNEL_INFO");
     assert_eq!(Dialog::PlanetOption.block_name(), "DIALOG_OPTION_KEY");
+    assert_eq!(
+        Dialog::PlanetOptionSound.block_name(),
+        "DIALOG_OPTION_SOUND"
+    );
+    assert_eq!(Dialog::PlanetOptionGame.block_name(), "DIALOG_OPTION_GAME");
     assert_eq!(Dialog::PlanetQuit.block_name(), "DIALOG_QUESTION1");
     assert_eq!(Dialog::CreateRoom.block_name(), "DIALOG_CREATEROOM");
     assert_eq!(Dialog::InputPassword.block_name(), "DIALOG_INPUTPASSWORD");
@@ -982,6 +987,8 @@ fn dialog_hosts_follow_the_mount() {
     assert_eq!(Dialog::SelectMusic.host(), State::Waiting);
     assert_eq!(Dialog::ChannelInfo.host(), State::Planet);
     assert_eq!(Dialog::PlanetOption.host(), State::Planet);
+    assert_eq!(Dialog::PlanetOptionSound.host(), State::Planet);
+    assert_eq!(Dialog::PlanetOptionGame.host(), State::Planet);
     assert_eq!(Dialog::PlanetQuit.host(), State::Planet);
     assert_eq!(Dialog::CreateRoom.host(), State::Room);
     assert_eq!(Dialog::InputPassword.host(), State::Room);
@@ -993,6 +1000,8 @@ fn dialog_block_name_round_trips_through_from_block() {
         Dialog::SelectMusic,
         Dialog::ChannelInfo,
         Dialog::PlanetOption,
+        Dialog::PlanetOptionSound,
+        Dialog::PlanetOptionGame,
         Dialog::PlanetQuit,
         Dialog::CreateRoom,
         Dialog::InputPassword,

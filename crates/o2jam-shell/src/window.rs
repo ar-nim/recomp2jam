@@ -158,12 +158,20 @@ impl WindowHandler {
         }
     }
 
-    /// Route one key event to a lane or menu hook.
+    /// Route one key event to a lane or menu hook. The game sees
+    /// the raw press first (rebind capture), then the key map —
+    /// synced from the game's current binds — resolves the lane.
     fn route_key(&mut self, code: winit::keyboard::KeyCode, down: bool) {
         self.log_event(&format!(
             "key-{} {code:?}",
             if down { "down" } else { "up" }
         ));
+        if self.shell.game.capture_raw_key(code, down) {
+            return;
+        }
+        if let Some(binds) = self.shell.game.lane_bindings() {
+            self.shell.keymap.set_binds(binds);
+        }
         let lane = if down {
             self.shell.keymap.press(code)
         } else {
