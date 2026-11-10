@@ -205,6 +205,7 @@ pub mod opi;
 pub mod resolve;
 pub mod sprites;
 pub mod tables;
+pub mod test_archive;
 
 pub use control::*;
 pub use jpeg::*;
