@@ -3,7 +3,9 @@
 
 use std::collections::HashMap;
 
-use super::super::avatar::{ojn_cover_figure, AvatarFigure, ScenePlacement, LOADING_COVER_SPRITE};
+use super::super::avatar::{
+    avatar_item_by_id, ojn_cover_figure, AvatarFigure, ScenePlacement, LOADING_COVER_SPRITE,
+};
 use super::super::options::OptionsSettings;
 use super::super::playing::{HighwayGeometry, LivePlay, PlaySkin};
 use super::super::screen::{Screen, ScreenFlow};
@@ -13,23 +15,26 @@ use super::paint::{
     has_room_panels, list_row_hit, paint_avi_scene, paint_channel_chat, paint_channel_list,
     paint_channel_scene, paint_lanking_board, paint_lanking_scene, paint_loading_scene,
     paint_loading_scene_with_status, paint_lobby_backdrop, paint_music_shop_scene,
-    paint_myroom_scene, paint_planet_options, paint_planet_quit, paint_planet_scene,
-    paint_playing_overlay, paint_result, paint_result_scene, paint_room_list, paint_room_scene,
-    paint_screen, paint_shop_scene, paint_waiting_chat, paint_waiting_members, paint_waiting_scene,
-    quit_fallback_rects, rect_hit, room_panel_hit, scene_index, staged_rect_hit, BattleVerdict,
-    ChannelChatMessage, LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt,
-    WaitingCaptions, WaitingChatMessage, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID,
-    RESULT_RETRY_RECT,
+    paint_myroom_data, paint_myroom_scene, paint_planet_options, paint_planet_quit,
+    paint_planet_scene, paint_playing_overlay, paint_result, paint_result_scene, paint_room_list,
+    paint_room_scene, paint_screen, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
+    paint_waiting_scene, quit_fallback_rects, rect_hit, room_panel_hit, scene_index,
+    staged_rect_hit, BattleVerdict, ChannelChatMessage, LoadingStatus, ResultPaint, ResultRankRow,
+    ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage, RESULT_BACK_ID, RESULT_BACK_RECT,
+    RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::side::{
     can_return_side, can_visit_side, create_room_action_at, lanking_action_at, lanking_page_window,
-    lanking_songs, paint_side_scene, password_action_at, planet_action_at, select_chosung_cells,
-    select_chosung_layout, select_difficulty_ink, select_music_rows, select_music_songs,
-    select_pager_caption, select_picked_caption, select_row_hit, select_search_caption,
-    select_status_line, sort_lanking_songs, waiting_song_detail_line, waiting_song_title_line,
-    waiting_team_for_code, CreateRoomAction, CreateRoomForm, LankingAction, LankingSong,
-    LankingSort, PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo,
-    PlanetSelection, RoomDialog, SelectMusicRow, SelectMusicSong, SideScreen, LANKING_LVIEW_ROWS,
+    lanking_songs, myroom_action_at, myroom_bag_pages, myroom_bag_rows, myroom_equip_slot,
+    myroom_gift_captions, myroom_gift_page, myroom_gift_pages, myroom_gift_views,
+    myroom_identity_captions, myroom_record_slot, paint_side_scene, password_action_at,
+    planet_action_at, select_chosung_cells, select_chosung_layout, select_difficulty_ink,
+    select_music_rows, select_music_songs, select_pager_caption, select_picked_caption,
+    select_row_hit, select_search_caption, select_status_line, sort_lanking_songs,
+    waiting_song_detail_line, waiting_song_title_line, waiting_team_for_code, CreateRoomAction,
+    CreateRoomForm, LankingAction, LankingSong, LankingSort, MyRoomAction, MyRoomState,
+    PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo, PlanetSelection,
+    RoomDialog, SelectMusicRow, SelectMusicSong, SideScreen, LANKING_LVIEW_ROWS,
     LANKING_RVIEW_ROWS, OPTION_GAME_BLEND_NO, OPTION_GAME_BLEND_YES, OPTION_GAME_EFFECT_HIGH,
     OPTION_GAME_EFFECT_LOW, OPTION_GAME_EFFECT_NORMAL, OPTION_GAME_GUIDE_LONG,
     OPTION_GAME_GUIDE_MIDDLE, OPTION_GAME_GUIDE_NOUSE, OPTION_GAME_GUIDE_SHORT,
@@ -50,17 +55,19 @@ use super::side::{
 };
 use crate::{menu_of, MenuKey};
 use o2jam_audio::{song_position_ms, AudioBackend, BgmSelection, PcmSamples, SceneBgm};
-use o2jam_file::OjnListEntry;
+use o2jam_file::{AvatarItemTable, OjnListEntry};
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams, PEER_SLOT_COUNT};
+use o2jam_net::gift::{ClaimGift, GetGiftMessageList, GiftType};
 use o2jam_net::play::SetRoomMusic;
 use o2jam_net::rooms::{
     Announcement, MainRoomAdminMessage, MainRoomUserMessage, MusicPlayRankingAnswer, RankEntry,
     RankNotification, ReceiveWhisper, SendMainRoomMessage, SendWaitingMessage, SendWhisper,
     WaitingAdminMessage, WaitingUserMessage,
 };
+use o2jam_net::shop::EquipItem;
 use o2jam_net::{
-    ChannelState, CreateRoom, Difficulty, JoinRoom, JoinedRoom, Ready, RoomListEntry,
-    RoomTeamChanged, SetRoomTeam,
+    ChannelState, CharacterInfo, CreateRoom, Difficulty, JoinRoom, JoinedRoom, Ready,
+    RoomListEntry, RoomTeamChanged, SetRoomTeam,
 };
 use o2jam_render::font::{draw_text_cell, Cell};
 use o2jam_render::{
@@ -319,6 +326,23 @@ pub struct ScreenGame {
     lanking_selected: Option<u32>,
     side_placements: Vec<ScenePlacement>,
     side_figures: HashMap<String, AvatarFigure>,
+    /// Live avatar-room selection (slot pick, bag/gift pages+cursors).
+    myroom: MyRoomState,
+    /// Staged avatar-item table (`Itemdata_Korea.dat`): bag, equip
+    /// and gift name source (`None` until staged — rows and captions
+    /// then stay unpainted).
+    myroom_items: Option<AvatarItemTable>,
+    /// Staged character data (`GetCharacterInfo` 2001): equipment,
+    /// inventory, gifts, identity and cash captions (`None` until the
+    /// session stages it).
+    myroom_character: Option<CharacterInfo>,
+    /// Committed equip send awaiting the session (5004; the apply
+    /// button owns it).
+    pending_equip: Option<EquipItem>,
+    /// Committed gift claim awaiting the session (5023; MOVE owns it).
+    pending_gift_claim: Option<ClaimGift>,
+    /// Gift-list fetch awaiting the session (5017; queued on entry).
+    pending_gift_list: bool,
     scene_art: [Option<SceneArt>; 12],
 }
 
@@ -606,6 +630,12 @@ impl ScreenGame {
             lanking_selected: None,
             side_placements: Vec::new(),
             side_figures: HashMap::new(),
+            myroom: MyRoomState::new(),
+            myroom_items: None,
+            myroom_character: None,
+            pending_equip: None,
+            pending_gift_claim: None,
+            pending_gift_list: false,
             scene_art: std::array::from_fn(|_| None),
         }
     }
@@ -2796,6 +2826,199 @@ impl ScreenGame {
         self.planet_promo
     }
 
+    /// Stage the avatar-item table (`Itemdata_Korea.dat`): bag, equip
+    /// and gift name source. Staging never moves the flow.
+    pub fn set_myroom_items(&mut self, table: AvatarItemTable) -> &mut Self {
+        self.myroom_items = Some(table);
+        self
+    }
+
+    /// Stage fetched character data (`GetCharacterInfo` 2001):
+    /// equipment, inventory, gifts, identity and cash captions.
+    /// Staging never moves the flow.
+    pub fn set_myroom_character(&mut self, character: CharacterInfo) -> &mut Self {
+        self.myroom_character = Some(character);
+        self
+    }
+
+    /// Live avatar-room selection (slot pick, bag/gift pages+cursors).
+    #[must_use]
+    pub const fn myroom(&self) -> MyRoomState {
+        self.myroom
+    }
+
+    /// Committed equip send for the session bridge, if any (5004).
+    /// One take sends once; the next apply replaces the queued send.
+    pub fn take_equip_send(&mut self) -> Option<EquipItem> {
+        self.pending_equip.take()
+    }
+
+    /// Whether an equip send is queued for the session bridge.
+    #[must_use]
+    pub fn has_pending_equip_send(&self) -> bool {
+        self.pending_equip.is_some()
+    }
+
+    /// Committed gift claim for the session bridge, if any (5023).
+    /// One take sends once; the next MOVE replaces the queued claim.
+    pub fn take_gift_claim(&mut self) -> Option<ClaimGift> {
+        self.pending_gift_claim.take()
+    }
+
+    /// Gift-list fetch for the session bridge, if any (5017; queued
+    /// on avatar-room entry). One take sends once.
+    pub fn take_gift_list_request(&mut self) -> Option<GetGiftMessageList> {
+        if self.pending_gift_list {
+            self.pending_gift_list = false;
+            Some(GetGiftMessageList)
+        } else {
+            None
+        }
+    }
+
+    /// Bag pages over the staged inventory (page 0 without data).
+    #[must_use]
+    fn myroom_bag_page_count(&self) -> usize {
+        match (&self.myroom_items, &self.myroom_character) {
+            (Some(table), Some(character)) => myroom_bag_pages(&character.inventory, table),
+            _ => 1,
+        }
+    }
+
+    /// Gift-box pages over the staged box run (page 0 without data).
+    #[must_use]
+    fn myroom_gift_page_count(&self) -> usize {
+        match (&self.myroom_items, &self.myroom_character) {
+            (Some(table), Some(character)) => {
+                let views = myroom_gift_views(table, &self.catalog_songs, character);
+                myroom_gift_pages(&views)
+            }
+            _ => 1,
+        }
+    }
+
+    /// Avatar-room click over the side overlay: the staged `.bnd`
+    /// placement whose code dispatches and whose rect contains the
+    /// point drives one [`MyRoomAction`]. BACK returns to the
+    /// opening lobby; other clicks land on the selection state.
+    /// The flow screen shares no dispatch: the transition map has
+    /// no lobby edge into it, so only the overlay routes here.
+    pub fn click_myroom_side(&mut self, x: i32, y: i32) {
+        if self.side != Some(SideScreen::MyRoom) {
+            return;
+        }
+        let action = myroom_action_at(&self.side_placements, x, y);
+        match action {
+            Some(MyRoomAction::BackToLobby) => {
+                self.leave_side();
+            }
+            Some(action) => self.apply_myroom_action(action),
+            None => {}
+        }
+    }
+
+    /// Apply one avatar-room action to the selection state (BACK
+    /// aside: callers own the leave). Equip and claim resolve
+    /// against staged data and queue their exe-pinned wire bodies
+    /// for the session bridge; without staged rows the press
+    /// records nothing. Server-driven proofs ride a scripted stub
+    /// behind this seam and stay labeled ASSUMED, never exe proof.
+    fn apply_myroom_action(&mut self, action: MyRoomAction) {
+        match action {
+            MyRoomAction::SelectSlot(slot) => self.myroom.select_slot(slot),
+            MyRoomAction::BagPage(step) => {
+                let pages = self.myroom_bag_page_count();
+                self.myroom.turn_bag_page(step, pages);
+            }
+            MyRoomAction::PickBagCell(cell) => self.myroom.pick_bag_cell(Some(cell)),
+            MyRoomAction::GiftPage(step) => {
+                let pages = self.myroom_gift_page_count();
+                self.myroom.turn_gift_page(step, pages);
+            }
+            MyRoomAction::PickGiftCell(cell) => self.myroom.pick_gift_cell(Some(cell)),
+            MyRoomAction::ApplyEquip => self.apply_myroom_equip(),
+            MyRoomAction::ClaimGift => self.apply_myroom_claim(),
+            MyRoomAction::VacateSlot | MyRoomAction::OpenShop | MyRoomAction::BackToLobby => {}
+        }
+    }
+
+    /// Equip the selected bag cell: the slot derives from the item
+    /// record exactly like the exe derives it (`docs/equip.md` —
+    /// type 5 forces slot 11, else the record slot byte, below 17),
+    /// then the 5004 body queues for the session bridge and the
+    /// staged worn set mirrors it. Without a picked cell, staged
+    /// rows, or a derivable slot the press records nothing.
+    fn apply_myroom_equip(&mut self) {
+        let Some(cell) = self.myroom.bag_cell() else {
+            return;
+        };
+        let page = self.myroom.bag_page();
+        let staged = self.myroom_items.as_ref().and_then(|table| {
+            self.myroom_character.as_ref().and_then(|character| {
+                let rows = myroom_bag_rows(table, &character.inventory, page);
+                rows.get(cell).map(|row| row.item_id)
+            })
+        });
+        let Some(item_id) = staged else {
+            return;
+        };
+        let record = self
+            .myroom_items
+            .as_ref()
+            .and_then(|table| avatar_item_by_id(table, item_id))
+            .map(|row| (row.item_type, myroom_record_slot(row)));
+        let Some((item_type, record_slot)) = record else {
+            return;
+        };
+        let Some(slot) = myroom_equip_slot(item_type, record_slot) else {
+            return;
+        };
+        let Ok(item_word) = i32::try_from(item_id) else {
+            return;
+        };
+        self.pending_equip = Some(EquipItem {
+            slot: i32::from(slot),
+            item_id: item_word,
+        });
+        if let Some(character) = self.myroom_character.as_mut() {
+            character.equipment[usize::from(slot)] = item_word;
+        }
+    }
+
+    /// Claim the selected gift cell: the 5023 body queues for the
+    /// session bridge (`GiftType` follows the picked run — item or
+    /// song — while `is_attributive` stays false: countable stacks
+    /// are unpinned on this path). Without a picked cell or staged
+    /// box rows the press records nothing.
+    fn apply_myroom_claim(&mut self) {
+        let Some(cell) = self.myroom.gift_cell() else {
+            return;
+        };
+        let page = self.myroom.gift_page();
+        let picked = self.myroom_items.as_ref().and_then(|table| {
+            self.myroom_character
+                .as_ref()
+                .map(|character| myroom_gift_views(table, &self.catalog_songs, character))
+        });
+        let Some(views) = picked else {
+            return;
+        };
+        let Some(view) = myroom_gift_page(&views, page).get(cell) else {
+            return;
+        };
+        let gift_type = if view.is_music {
+            GiftType::Music
+        } else {
+            GiftType::Item
+        };
+        self.pending_gift_claim = Some(ClaimGift {
+            gift_type,
+            gift_id: view.gift_id,
+            resource_id: view.resource_id,
+            is_attributive: false,
+        });
+    }
+
     /// Open a side screen from a lobby; rejects other origins and
     /// remembers the lobby to return to. Entry cues the side
     /// screen's scene music (see [`SideScreen::bgm_cue`]); a
@@ -2807,6 +3030,13 @@ impl ScreenGame {
         self.side_origin = Some(self.flow.current());
         self.side = Some(side);
         self.apply_bgm_cue(side.bgm_cue());
+        if side == SideScreen::MyRoom {
+            // Entry gift-list fetch (5017): the wire shape is
+            // exe-pinned (`docs/gifts.md`); queueing it on entry is
+            // ours-by-design — the exe entry path is unpinned — and
+            // stays labeled until the rig names the entry fetch.
+            self.pending_gift_list = true;
+        }
         true
     }
 
@@ -2979,6 +3209,9 @@ impl ScreenGame {
                     self.lanking_selected_title().as_deref(),
                 );
             }
+            if self.side == Some(SideScreen::MyRoom) {
+                self.paint_myroom_overlay(frame, &self.side_placements);
+            }
             return;
         }
         if self.flow.current() == Screen::Avi && now_ms >= SPLASH_AUTO_ADVANCE_MS {
@@ -3026,14 +3259,48 @@ impl ScreenGame {
         }
     }
 
-    /// Avatar room: staged art at sprite anchors when present, else
-    /// the flat card. Slots, captions, pager, and gift flows stay
-    /// unevidenced — paint only, no selection state.
+    /// Avatar room: staged art when present, else the flat card.
+    /// Staged character and item rows paint the bag names, gift
+    /// names, and identity captions into their staged `.bnd` rects;
+    /// without staged data the art paints alone (oracle-neutral).
+    /// Slot selection, equip commit, bag/gift pagers, and gift claim
+    /// ride [`Self::click_myroom_side`]; vacate/goshop/shop-hop send
+    /// nothing (OPEN, `docs/myroom.md`).
     fn paint_myroom(&self, frame: &mut Frame<'_>) {
         match self.scene_art(Screen::Myroom) {
-            Some(art) => paint_myroom_scene(frame, art),
+            Some(art) => {
+                paint_myroom_scene(frame, art);
+                self.paint_myroom_overlay(frame, &art.placements);
+            }
             None => paint_screen(frame, Screen::Myroom),
         }
+    }
+
+    /// Avatar-room rows and captions over staged placements: the
+    /// visible bag names, gift names, and identity/gift captions.
+    /// Reads staged data only — without a staged item table and
+    /// character nothing paints (no fallback geometry is invented).
+    fn paint_myroom_overlay(&self, frame: &mut Frame<'_>, placements: &[ScenePlacement]) {
+        let Some(table) = self.myroom_items.as_ref() else {
+            return;
+        };
+        let Some(character) = self.myroom_character.as_ref() else {
+            return;
+        };
+        let bag: Vec<String> = myroom_bag_rows(table, &character.inventory, self.myroom.bag_page())
+            .iter()
+            .map(|row| row.name.to_string())
+            .collect();
+        let views = myroom_gift_views(table, &self.catalog_songs, character);
+        let page_gifts = myroom_gift_page(&views, self.myroom.gift_page());
+        let gifts: Vec<String> = page_gifts.iter().map(|view| view.name.clone()).collect();
+        let mut captions = myroom_identity_captions(character);
+        captions.extend(myroom_gift_captions(
+            &views,
+            self.myroom.gift_page(),
+            self.myroom.gift_cell(),
+        ));
+        paint_myroom_data(frame, placements, self.myroom, &bag, &gifts, &captions);
     }
 
     /// Rankings: staged art when present, else the flat card. The
@@ -3921,6 +4188,9 @@ impl GameLoop for ScreenGame {
             return;
         }
         if self.side.is_some() {
+            if self.side == Some(SideScreen::MyRoom) {
+                self.click_myroom_side(x, y);
+            }
             return;
         }
         if self.planet_modal.is_some() {
@@ -3955,8 +4225,10 @@ impl GameLoop for ScreenGame {
             // live board answers through the side-screen path
             // (`click_lanking` over staged `side_placements`).
             Screen::Lanking => {}
-            // Avatar-room clicks land nowhere: slot selection, equip,
-            // pager, and gift semantics are all unevidenced (P0).
+            // Avatar-room flow clicks land nowhere: the flow screen
+            // is not side-entered (the transition map has no lobby
+            // edge into it) — the side overlay owns the dispatch
+            // (`click_myroom_side`).
             Screen::Myroom => {}
             // Shop clicks land nowhere: buy, gift, cart, filter, and
             // pager semantics are all unevidenced (P0).
@@ -5480,6 +5752,244 @@ mod game_tests {
             buf[10 * 80 + 2],
             super::super::paint::background_of(Screen::Waiting)
         );
+    }
+
+    fn myroom_test_table() -> o2jam_file::AvatarItemTable {
+        let row = |item_id: u32, item_type: u32, slot_byte: u8| o2jam_file::AvatarItemRow {
+            item_id,
+            item_type,
+            price: 100,
+            params: [0, 0, u32::from(slot_byte) << 24, 0],
+            flags: (0, 0),
+            name: format!("Gear{item_id}"),
+            description: String::new(),
+            sprites: Vec::new(),
+        };
+        // Type 2 rows ride record slots 0..11; the type-5 row pins
+        // the exe's force-slot-11 arm (`docs/equip.md`).
+        let mut rows: Vec<o2jam_file::AvatarItemRow> = (1..=12)
+            .map(|id| row(id, 2, u8::try_from(id - 1).expect("twelve rows")))
+            .collect();
+        rows.push(row(13, 5, 0));
+        o2jam_file::AvatarItemTable { rows }
+    }
+
+    fn myroom_test_character(inventory: Vec<i32>) -> CharacterInfo {
+        CharacterInfo {
+            nickname: "Tester".to_owned(),
+            level: 12,
+            experience: 3450,
+            inventory,
+            ..CharacterInfo::default()
+        }
+    }
+
+    fn myroom_hit_placement(code: u32, x: i32, y: i32) -> ScenePlacement {
+        ScenePlacement {
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect { x, y, w: 40, h: 20 },
+        }
+    }
+
+    fn myroom_open_overlay() -> ScreenGame {
+        use super::super::side::{
+            MYROOM_APPLY_CODE, MYROOM_BACK_CODE, MYROOM_BAG_FIRST_CODE, MYROOM_BAG_LEFT_CODE,
+            MYROOM_BAG_RIGHT_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_GIFT_LEFT_CODE,
+            MYROOM_GIFT_RIGHT_CODE, MYROOM_MOVE_CODE, MYROOM_NICKNAME_CODE, MYROOM_SLOT_FIRST_CODE,
+        };
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        let table = myroom_test_table();
+        game.set_myroom_items(table);
+        game.set_myroom_character(myroom_test_character((1..=12).collect()));
+        let placements = vec![
+            myroom_hit_placement(MYROOM_SLOT_FIRST_CODE + 3, 10, 10),
+            myroom_hit_placement(MYROOM_BAG_LEFT_CODE, 100, 10),
+            myroom_hit_placement(MYROOM_BAG_RIGHT_CODE, 150, 10),
+            myroom_hit_placement(MYROOM_BAG_FIRST_CODE, 200, 10),
+            myroom_hit_placement(MYROOM_BAG_FIRST_CODE + 1, 250, 10),
+            myroom_hit_placement(MYROOM_GIFT_LEFT_CODE, 300, 10),
+            myroom_hit_placement(MYROOM_GIFT_RIGHT_CODE, 350, 10),
+            myroom_hit_placement(MYROOM_GIFT_FIRST_CODE, 400, 10),
+            myroom_hit_placement(MYROOM_APPLY_CODE, 450, 10),
+            myroom_hit_placement(MYROOM_MOVE_CODE, 500, 10),
+            myroom_hit_placement(MYROOM_NICKNAME_CODE, 10, 100),
+            myroom_hit_placement(MYROOM_BACK_CODE, 550, 10),
+        ];
+        game.load_side_scene(placements, HashMap::new());
+        assert!(game.visit_side(SideScreen::MyRoom));
+        game
+    }
+
+    #[test]
+    fn myroom_slot_click_selects_through_staged_rect() {
+        let mut game = myroom_open_overlay();
+        assert_eq!(game.myroom().selected_slot(), 0);
+        game.mouse_click(11, 11);
+        assert_eq!(game.myroom().selected_slot(), 3);
+        // Outside every staged placement the selection holds.
+        game.mouse_click(0, 500);
+        assert_eq!(game.myroom().selected_slot(), 3);
+    }
+
+    #[test]
+    fn myroom_bag_pager_turns_over_staged_inventory() {
+        let mut game = myroom_open_overlay();
+        assert_eq!(game.myroom().bag_page(), 0);
+        game.mouse_click(151, 11);
+        assert_eq!(game.myroom().bag_page(), 1);
+        game.mouse_click(151, 11);
+        assert_eq!(game.myroom().bag_page(), 1);
+        game.mouse_click(101, 11);
+        assert_eq!(game.myroom().bag_page(), 0);
+        game.mouse_click(101, 11);
+        assert_eq!(game.myroom().bag_page(), 0);
+    }
+
+    #[test]
+    fn myroom_equip_queues_5004_with_derived_slot() {
+        use super::super::side::MYROOM_BAG_FIRST_CODE;
+        let mut game = myroom_open_overlay();
+        // Pick the first bag cell (item 1, type 2, record slot 0).
+        game.mouse_click(201, 11);
+        assert_eq!(game.myroom().bag_cell(), Some(0));
+        game.mouse_click(451, 11);
+        let send = game.take_equip_send().expect("apply queues the equip send");
+        assert_eq!((send.slot, send.item_id), (0, 1));
+        assert!(game.take_equip_send().is_none());
+        // The staged worn set mirrors the commit (slot 0 wears 1).
+        game.mouse_click(251, 11);
+        game.mouse_click(451, 11);
+        let second = game.take_equip_send().expect("second apply queues");
+        assert_eq!((second.slot, second.item_id), (1, 2));
+        let _ = MYROOM_BAG_FIRST_CODE;
+    }
+
+    #[test]
+    fn myroom_gift_claim_queues_5023_for_the_picked_cell() {
+        use super::super::side::MYROOM_GIFT_FIRST_CODE;
+        use o2jam_net::gift::GiftType;
+        let mut game = myroom_open_overlay();
+        let gift = o2jam_net::GiftItemInfo {
+            gift_id: 7,
+            item_id: 1,
+            sender: "Giver".to_owned(),
+        };
+        game.myroom_character
+            .as_mut()
+            .expect("staged character")
+            .item_gifts
+            .push(gift);
+        game.mouse_click(401, 11);
+        assert_eq!(game.myroom().gift_cell(), Some(0));
+        game.mouse_click(501, 11);
+        let claim = game.take_gift_claim().expect("MOVE queues the gift claim");
+        assert_eq!(claim.gift_type, GiftType::Item);
+        assert_eq!((claim.gift_id, claim.resource_id), (7, 1));
+        assert!(game.take_gift_claim().is_none());
+        let _ = MYROOM_GIFT_FIRST_CODE;
+    }
+
+    #[test]
+    fn myroom_entry_queues_gift_list_fetch() {
+        let mut game = myroom_open_overlay();
+        assert!(game.take_gift_list_request().is_some());
+        assert!(game.take_gift_list_request().is_none());
+    }
+
+    #[test]
+    fn myroom_captions_paint_into_their_bnd_rects() {
+        // The nickname TEXT placement inks its own rect; the beside
+        // rect stays blank; without staged data nothing paints.
+        let mut game = myroom_open_overlay();
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        let inks = |buf: &[u32], x: i32, y: i32, w: i32| -> bool {
+            // Single-row span (no row-boundary wrap): ink inside the
+            // rect reads back, the beside span stays black.
+            buf[(y * 800 + x) as usize..(y * 800 + x + w) as usize]
+                .iter()
+                .any(|pixel| *pixel != 0)
+        };
+        assert!(inks(&buf, 10, 100, 40), "nickname rect stays blank");
+        assert!(!inks(&buf, 60, 100, 40), "caption ink leaked");
+        let mut bare = ScreenGame::new();
+        walk_to_lobby(&mut bare, Screen::Waiting);
+        bare.load_side_scene(Vec::new(), HashMap::new());
+        assert!(bare.visit_side(SideScreen::MyRoom));
+        let mut bare_buf = vec![0u32; 800 * 600];
+        bare.paint_at(
+            &mut Frame {
+                buf: &mut bare_buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert!(bare_buf.iter().all(|pixel| *pixel == 0));
+    }
+
+    #[test]
+    fn myroom_hand_session_walks_slots_bag_and_gifts() {
+        // Hand-driven avatar-room pass (trace
+        // `fixtures/input-trace/myroom-hand-session.json`, smoke note
+        // `docs/smoke/myroom-hand-session.md`): one overlay visit
+        // walks slot selection, bag paging, equip commit, gift paging
+        // and gift claim, then BACK returns to the lobby. Server
+        // round trips ride a scripted stub behind the take-seam and
+        // stay labeled ASSUMED, never exe proof.
+        use o2jam_net::gift::GiftType;
+        let mut game = myroom_open_overlay();
+        game.myroom_character
+            .as_mut()
+            .expect("staged character")
+            .item_gifts
+            .push(o2jam_net::GiftItemInfo {
+                gift_id: 7,
+                item_id: 1,
+                sender: "Giver".to_owned(),
+            });
+        // Slot pick: the staged slot button (code ordinal 3) at its
+        // staged rect records the selection.
+        game.mouse_click(11, 11);
+        assert_eq!(game.myroom().selected_slot(), 3);
+        // Bag pager: 12 owned rows turn exactly one page.
+        game.mouse_click(151, 11);
+        assert_eq!(game.myroom().bag_page(), 1);
+        game.mouse_click(101, 11);
+        assert_eq!(game.myroom().bag_page(), 0);
+        // Equip: first bag cell (item 1, record slot 0) applies.
+        game.mouse_click(201, 11);
+        game.mouse_click(451, 11);
+        let equip = game.take_equip_send().expect("equip queued");
+        assert_eq!((equip.slot, equip.item_id), (0, 1));
+        // Gift: first box cell claims item gift 7 from Giver.
+        game.mouse_click(401, 11);
+        game.mouse_click(501, 11);
+        let claim = game.take_gift_claim().expect("claim queued");
+        assert_eq!(claim.gift_type, GiftType::Item);
+        assert_eq!((claim.gift_id, claim.resource_id), (7, 1));
+        // BACK returns to the lobby that opened the room.
+        game.mouse_click(551, 11);
+        assert_eq!(game.side(), None);
+        assert_eq!(game.screen(), Screen::Waiting);
+    }
+
+    #[test]
+    fn myroom_back_click_returns_to_the_lobby() {
+        let mut game = myroom_open_overlay();
+        game.mouse_click(551, 11);
+        assert_eq!(game.side(), None);
+        assert_eq!(game.screen(), Screen::Waiting);
     }
 
     #[test]

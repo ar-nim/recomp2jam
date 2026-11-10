@@ -37,9 +37,10 @@ use super::super::playing::{HighwayGeometry, PlayingView};
 use super::super::screen::Screen;
 use super::side::{
     lanking_bpm_caption, lanking_diff_caption, lanking_genre_caption, lanking_lview_slots,
-    lanking_rank_cells, lanking_rview_slots, lanking_tiled_rect, planet_band_rect,
-    planet_caption_for_code, LankingSong, PlanetBand, PlanetOptionTab, LANKING_LVIEW_TEXT_CODES,
-    LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES, QUIT_MESSAGE_CP949,
+    lanking_rank_cells, lanking_rview_slots, lanking_tiled_rect, myroom_action_for_code,
+    planet_band_rect, planet_caption_for_code, LankingSong, MyRoomAction, MyRoomState, PlanetBand,
+    PlanetOptionTab, LANKING_LVIEW_TEXT_CODES, LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES,
+    MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_SLOT_FIRST_CODE, QUIT_MESSAGE_CP949,
 };
 use o2jam_file::ControlList;
 use o2jam_game::RoomTeams;
@@ -915,6 +916,120 @@ pub fn paint_music_shop_scene(frame: &mut Frame<'_>, art: &SceneArt) {
 /// alone paint — no slot icons, captions, or selection state.
 pub fn paint_myroom_scene(frame: &mut Frame<'_>, art: &SceneArt) {
     art.paint_backdrop(frame, Screen::Myroom);
+}
+
+/// Avatar-room rows and captions over staged placements: bag names
+/// into the `MYBAGITEM` rects, gift names into the `GIFTBOX_EX`
+/// rects, identity/gift strings into their TEXT rects, and the
+/// amber stand-in cursor at the selected slot, bag cell, and gift
+/// cell (highlight rendering is unevidenced — the cursor is an OPEN
+/// stand-in like the planet band cursor, never exe parity).
+/// Everything rides staged `.bnd` rects in file order; without
+/// staged rows nothing paints (no fallback geometry is invented).
+#[allow(clippy::too_many_arguments)]
+pub fn paint_myroom_data(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    state: MyRoomState,
+    bag_names: &[String],
+    gift_names: &[String],
+    captions: &[(u32, String)],
+) {
+    for (code, text) in captions {
+        if text.is_empty() {
+            continue;
+        }
+        if let Some(placed) = placements.iter().find(|placed| placed.code == *code) {
+            paint_text_into_rect(frame, placed.rect, text, CP949_INK);
+        }
+    }
+    paint_myroom_cells(frame, placements, bag_names, MYROOM_BAG_FIRST_CODE);
+    paint_myroom_cells(frame, placements, gift_names, MYROOM_GIFT_FIRST_CODE);
+    if let Some(placed) =
+        myroom_family_placement(placements, MYROOM_SLOT_FIRST_CODE, state.selected_slot())
+    {
+        paint_cursor(frame, placed.rect.x + 10, myroom_rect_mid_y(&placed.rect));
+    }
+    if let Some(cell) = state.bag_cell() {
+        if let Some(placed) = myroom_cell_placement(placements, MYROOM_BAG_FIRST_CODE, cell) {
+            paint_cursor(frame, placed.rect.x + 10, myroom_rect_mid_y(&placed.rect));
+        }
+    }
+    if let Some(cell) = state.gift_cell() {
+        if let Some(placed) = myroom_cell_placement(placements, MYROOM_GIFT_FIRST_CODE, cell) {
+            paint_cursor(frame, placed.rect.x + 10, myroom_rect_mid_y(&placed.rect));
+        }
+    }
+}
+
+/// Vertical middle of one staged rect (native pixels): the amber
+/// stand-in cursor's anchor, matching the planet band cursor rule.
+fn myroom_rect_mid_y(rect: &Rect) -> i32 {
+    let half = i32::try_from(rect.h).unwrap_or(0) / 2;
+    rect.y + half
+}
+
+/// One family member by ordinal within its code run: the staged
+/// placement whose code is `first + index` (slot buttons) — `None`
+/// past the run or when the rect never staged.
+fn myroom_family_placement(
+    placements: &[ScenePlacement],
+    first: u32,
+    index: u8,
+) -> Option<&ScenePlacement> {
+    let code = first.checked_add(u32::from(index))?;
+    placements.iter().find(|placed| placed.code == code)
+}
+
+/// One row cell by position within its staged family run (bag and
+/// gift cells count in staged file order, the same order the click
+/// dispatch counts — painter and clicker share the cells).
+fn myroom_cell_placement(
+    placements: &[ScenePlacement],
+    first: u32,
+    index: usize,
+) -> Option<&ScenePlacement> {
+    let mut seen = 0usize;
+    for placed in placements {
+        let is_cell = myroom_action_for_code(placed.code).is_some_and(|action| match action {
+            MyRoomAction::PickBagCell(_) => first == MYROOM_BAG_FIRST_CODE,
+            MyRoomAction::PickGiftCell(_) => first == MYROOM_GIFT_FIRST_CODE,
+            _ => false,
+        });
+        if !is_cell {
+            continue;
+        }
+        if seen == index {
+            return Some(placed);
+        }
+        seen += 1;
+    }
+    None
+}
+
+/// Row strings into one staged cell family in file order: the
+/// `n`th string paints the `n`th staged cell rect. Extra strings
+/// paint nowhere; missing strings leave later cells blank.
+fn paint_myroom_cells(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    names: &[String],
+    first: u32,
+) {
+    let cells: Vec<&ScenePlacement> = {
+        let mut cells = Vec::new();
+        let mut index = 0usize;
+        while let Some(placed) = myroom_cell_placement(placements, first, index) {
+            cells.push(placed);
+            index += 1;
+        }
+        cells
+    };
+    for (placed, name) in cells.iter().zip(names.iter()) {
+        if !name.is_empty() {
+            paint_text_into_rect(frame, placed.rect, name, CP949_INK);
+        }
+    }
 }
 
 /// Rankings: staged art behind an empty list-view, flat card

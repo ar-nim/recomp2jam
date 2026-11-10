@@ -115,8 +115,33 @@ wrong; Myroom stages bound like every other side screen.
   audit gives no FILE rows for these scenes. Buy/gift/cart/search/
   sort/pager flows and entry unwired (all OPEN).
 - `STATE_MYROOM` (`0x6A`; `CItemManager`, `CPlayerInfo`). Bound
-  placements stage (111 rects). Slot selection, equip, pager, gift
-  flows, captions, entry unwired (all OPEN).
+  placements stage (111 rects). Ticket #19 (2026-11-10): slot
+  selection records through staged `.bnd` rects; equip commits
+  the picked bag cell through `EquipItem` 5004 with the exe's
+  slot derivation (type 5 → 11, else record slot byte, < 17 —
+  send shape + rule exe-pinned static, `docs/equip.md`); the bag
+  pager turns 10-cell pages over owned inventory with parsed
+  names painted; the gift pager + pick run over staged box rows
+  and MOVE queues `ClaimGift` 5023 (shape exe-pinned); entry
+  queues `GetGiftMessageList` 5017; identity/gift captions paint
+  their TEXT rects by name identity. Guards: slot/action/pager/
+  slot-rule/row/caption/queue tests in `side.rs` + `game.rs`, hand
+  session (`myroom_hand_session_walks_slots_bag_and_gifts`, trace
+  `fixtures/input-trace/myroom-hand-session.json`, smoke
+  `docs/smoke/myroom-hand-session.md` — driven through the
+  `ScreenGame` seam, no window binding stages sides). Side-visit
+  entry and return keep passing (BACK returns to the lobby).
+  Shots oracle holds with no `myroom.png` delta (all new ink is
+  staged-data-gated and the walk stages none). Still OPEN with
+  named next steps (`docs/myroom.md` OPEN 1–8): slot-selection
+  semantics; apply/MOVE/entry-timing control choices
+  (ours-by-design); unmapped caption fields (money mappings,
+  rank/guild/win-rate/skills/notice); the file→record slot-byte
+  join (ASSUMED); vacate/goshop/webavatar/sell/bagsort/
+  messenger/conference (P0, send nothing); gift run order +
+  round trip (stub-only ASSUMED); amber-cursor highlight
+  stand-in. PASS (slot/equip/pager/gift/caption flows) / OPEN
+  (the no-ticket-call arms above).
 - `STATE_PLANET` (`CStatePlanet`, `0x11`; BGM `Music/Planet.ojm`;
   quest button commented undecided — no drum backend). Screen,
   paint (staged art or flat card, exe-pinned captions in real

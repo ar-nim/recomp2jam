@@ -20,8 +20,8 @@ use o2jam_net::wallet::{
     FreePassType, SyncCashPointResponse, SyncFreePassResponse, SyncFreePassResult,
 };
 use o2jam_net::{
-    CharacterInfo, CreateRoom, Difficulty, GameMode, GameSpeed, GameStatsUpdate, KeyMode,
-    RankDelta, RankEntry,
+    CharacterInfo, CreateRoom, Difficulty, GameMode, GameSpeed, GameStatsUpdate, GiftItemInfo,
+    GiftMusicInfo, KeyMode, RankDelta, RankEntry,
 };
 use o2jam_render::{pack_xrgb, Frame, Rect};
 
@@ -835,6 +835,537 @@ pub fn my_room_equipment_from_character<'a>(
     character: &CharacterInfo,
 ) -> Vec<ShopItemView<'a>> {
     my_room_equipment(table, &character.equipment)
+}
+
+// --- Avatar-room (MyRoom) interaction ---
+//
+// Control codes from the shipped `STATE_MYROOM` block dump (file
+// order, `docs/myroom.md`): 11 art-less slot selectors
+// (`0X15200005..0F`), 10 bag images (`0X15600023..2C`), the bag
+// pager pair, the gift pager pair plus 5 gift-box cells, and the
+// BACK/GOSHOP/VACATE/INVENTORY buttons. Caption codes are the
+// `0X1540xxxx` TEXT controls of the same block.
+
+/// First slot-selector button code (`IDC_BUTTON_SMYROOM_INSTRUMENT`).
+pub const MYROOM_SLOT_FIRST_CODE: u32 = 0x1520_0005;
+/// Slot-selector button count (instrument through shoes).
+pub const MYROOM_SLOT_BUTTONS: usize = 11;
+/// Slot count as `u32` for code arithmetic without casts.
+pub const MYROOM_SLOT_BUTTONS_U32: u32 = 11;
+/// Slot button names in code order (ASCII stand-ins from the IDC
+/// ids; the exe's Korean slot comments have no pinned string source).
+pub const MYROOM_SLOT_NAMES: [&str; MYROOM_SLOT_BUTTONS] = [
+    "INSTRUMENT",
+    "HAIR",
+    "ARTICLE",
+    "GLOVES",
+    "NECKLACE",
+    "JACKET",
+    "PANTS",
+    "GLASSES",
+    "EARRING",
+    "CLOTHINGART",
+    "SHOES",
+];
+/// First bag-cell image code (`IDC_IMAGE_SMYROOM_MYBAGITEM1`).
+pub const MYROOM_BAG_FIRST_CODE: u32 = 0x1560_0023;
+/// Bag cells per page (10 `MYBAGITEM` images).
+pub const MYROOM_BAG_CELLS: usize = 10;
+/// Bag pager LEFT button (`Shop_Btn_BagLeft.ojs`).
+pub const MYROOM_BAG_LEFT_CODE: u32 = 0x1520_002D;
+/// Bag pager RIGHT button (`Shop_Btn_BagRight.ojs`).
+pub const MYROOM_BAG_RIGHT_CODE: u32 = 0x1520_002E;
+/// First gift-box cell code (`IDC_BUTTON_SMYROOM_GIFTBOX_EX1`).
+pub const MYROOM_GIFT_FIRST_CODE: u32 = 0x1501_C04A;
+/// Gift-box cells per page (5 `GIFTBOX_EX` buttons).
+pub const MYROOM_GIFT_CELLS: usize = 5;
+/// Gift pager LEFT button (`Myroom_Btn_GiftLeft.ojs`).
+pub const MYROOM_GIFT_LEFT_CODE: u32 = 0x1520_0048;
+/// Gift pager RIGHT button (`Myroom_Btn_GiftRight.ojs`).
+pub const MYROOM_GIFT_RIGHT_CODE: u32 = 0x1520_0049;
+/// Gift claim button (`Myroom_Btn_GiftMove.ojs`: moves the
+/// selected gift into the bag). The control choice is
+/// ours-by-design — no exe click sequence is pinned — while the
+/// queued `ClaimGift` 5023 shape is exe-pinned (`docs/gifts.md`);
+/// next step: rig walk of the gift-box claim gesture.
+pub const MYROOM_MOVE_CODE: u32 = 0x1550_0053;
+/// BACK button (`Myroom_Back.ojs`): returns to the opening lobby.
+pub const MYROOM_BACK_CODE: u32 = 0x1520_0002;
+/// GOSHOP button (`Myroom_GoShop.ojs`): opens the item shop.
+/// Records only — nested sides stay rejected, so the hop is OPEN
+/// with a leave-then-visit hand step.
+pub const MYROOM_GOSHOP_CODE: u32 = 0x1520_0003;
+/// Vacate button (`MyRoom_Btn_Vacate.ojs`): clears the slot.
+/// Records only — the vacate send shape is unpinned (OPEN).
+pub const MYROOM_VACATE_CODE: u32 = 0x1520_0004;
+/// INVENTORY button (`Myroom_Inventory.ojs`): commits the
+/// selected bag cell (equip-apply). The control choice is
+/// ours-by-design — the exe send sites (`0xa4af4` shop-control,
+/// `0xa4bcb` apply, `docs/equip.md`) name no control — while the
+/// queued `EquipItem` 5004 shape and slot derivation are
+/// exe-pinned; next step: rig walk of the myroom apply gesture.
+pub const MYROOM_APPLY_CODE: u32 = 0x1520_3034;
+/// Nickname caption (`IDC_TEXT_SMYROOM_NICKNAME`).
+pub const MYROOM_NICKNAME_CODE: u32 = 0x1540_0037;
+/// Level caption (`IDC_TEXT_SMYROOM_LEVEL`).
+pub const MYROOM_LEVEL_CODE: u32 = 0x1540_0038;
+/// Bonus-point caption (`IDC_TEXT_SMYROOM_BONUSPOINT`).
+pub const MYROOM_BONUS_CODE: u32 = 0x1540_0039;
+/// Experience caption (`IDC_TEXT_SMYROOM_EXP`).
+pub const MYROOM_EXP_CODE: u32 = 0x1540_003A;
+/// Penalty-count caption (`IDC_TEXT_SMYROOM_PENALTYCOUNT`).
+pub const MYROOM_PENALTY_COUNT_CODE: u32 = 0x1540_0066;
+/// Penalty-level caption (`IDC_TEXT_SMYROOM_PENALTYLEVEL`).
+pub const MYROOM_PENALTY_LEVEL_CODE: u32 = 0x1540_0067;
+/// O2-cash caption (`IDC_TEXT_SMYROOM_O2CASH`).
+pub const MYROOM_O2CASH_CODE: u32 = 0x1540_0059;
+/// Music-cash caption (`IDC_TEXT_SMYROOM_MUSICCASH`).
+pub const MYROOM_MUSICCASH_CODE: u32 = 0x1540_005A;
+/// Item-cash caption (`IDC_TEXT_SMYROOM_ITEMCASH`).
+pub const MYROOM_ITEMCASH_CODE: u32 = 0x1540_005B;
+/// Gift-count caption (`IDC_TEXT_GIFT_NUM`).
+pub const MYROOM_GIFT_NUM_CODE: u32 = 0x1540_004F;
+/// Gift resource-name caption (`IDC_TEXT_GIFT_ITEMNAME`).
+pub const MYROOM_GIFT_ITEMNAME_CODE: u32 = 0x1540_0051;
+/// Gift sender caption (`IDC_TEXT_GIFT_SENDER`).
+pub const MYROOM_GIFT_SENDER_CODE: u32 = 0x1540_0052;
+
+/// One pager step: which end of the row run the press moves toward.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MyRoomStep {
+    /// LEFT pager button: toward the first rows.
+    Previous,
+    /// RIGHT pager button: toward the last rows.
+    Next,
+}
+
+/// One avatar-room control press: the code → action dispatch output.
+/// Board input routes here, never through per-button literals at
+/// the call site. Geometry never lives here: it rides the staged
+/// `.bnd` placements (owner rule `f38f3`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MyRoomAction {
+    /// Slot-selector button pressed: button ordinal `0..11`.
+    /// What the selection filters stays OPEN (`docs/myroom.md`).
+    SelectSlot(u8),
+    /// Bag pager pressed: turn the owned-item page.
+    BagPage(MyRoomStep),
+    /// Bag cell pressed: cell index within the page `0..10`.
+    PickBagCell(usize),
+    /// Gift pager pressed: turn the gift-box page.
+    GiftPage(MyRoomStep),
+    /// Gift cell pressed: cell index within the page `0..5`.
+    PickGiftCell(usize),
+    /// INVENTORY pressed: equip the selected bag cell.
+    ApplyEquip,
+    /// Vacate pressed: records only (send shape OPEN).
+    VacateSlot,
+    /// BACK pressed: return to the opening lobby.
+    BackToLobby,
+    /// GOSHOP pressed: records only (nested sides rejected).
+    OpenShop,
+    /// Gift MOVE pressed: claim the selected gift cell.
+    ClaimGift,
+}
+
+/// Action for one avatar-room control code (`None` for caption and
+/// image codes: text and slot art are not buttons).
+#[must_use]
+pub fn myroom_action_for_code(code: u32) -> Option<MyRoomAction> {
+    if (MYROOM_SLOT_FIRST_CODE..MYROOM_SLOT_FIRST_CODE + MYROOM_SLOT_BUTTONS_U32).contains(&code) {
+        let slot = u8::try_from(code - MYROOM_SLOT_FIRST_CODE).ok()?;
+        return Some(MyRoomAction::SelectSlot(slot));
+    }
+    if (MYROOM_BAG_FIRST_CODE..MYROOM_BAG_FIRST_CODE + MYROOM_BAG_CELLS_U32).contains(&code) {
+        let cell = usize::try_from(code - MYROOM_BAG_FIRST_CODE).ok()?;
+        return Some(MyRoomAction::PickBagCell(cell));
+    }
+    if (MYROOM_GIFT_FIRST_CODE..MYROOM_GIFT_FIRST_CODE + MYROOM_GIFT_CELLS_U32).contains(&code) {
+        let cell = usize::try_from(code - MYROOM_GIFT_FIRST_CODE).ok()?;
+        return Some(MyRoomAction::PickGiftCell(cell));
+    }
+    match code {
+        MYROOM_BAG_LEFT_CODE => Some(MyRoomAction::BagPage(MyRoomStep::Previous)),
+        MYROOM_BAG_RIGHT_CODE => Some(MyRoomAction::BagPage(MyRoomStep::Next)),
+        MYROOM_GIFT_LEFT_CODE => Some(MyRoomAction::GiftPage(MyRoomStep::Previous)),
+        MYROOM_GIFT_RIGHT_CODE => Some(MyRoomAction::GiftPage(MyRoomStep::Next)),
+        MYROOM_APPLY_CODE => Some(MyRoomAction::ApplyEquip),
+        MYROOM_VACATE_CODE => Some(MyRoomAction::VacateSlot),
+        MYROOM_BACK_CODE => Some(MyRoomAction::BackToLobby),
+        MYROOM_GOSHOP_CODE => Some(MyRoomAction::OpenShop),
+        MYROOM_MOVE_CODE => Some(MyRoomAction::ClaimGift),
+        _ => None,
+    }
+}
+
+/// Bag-cell count as `u32` for code arithmetic without casts.
+const MYROOM_BAG_CELLS_U32: u32 = 10;
+/// Gift-cell count as `u32` for code arithmetic without casts.
+const MYROOM_GIFT_CELLS_U32: u32 = 5;
+
+/// Avatar-room action under native pixel (`x`, `y`): the staged
+/// `.bnd` placement whose code dispatches and whose rect contains
+/// the point. Cell indices count the hit placement among its own
+/// family in staged order (file order on staged art), so the painter
+/// and the clicker share the same cells with no literals. `None`
+/// outside every dispatching placement — unstaged clicks land
+/// nowhere (no fallback literals, ADR-0003).
+#[must_use]
+pub fn myroom_action_at(placements: &[ScenePlacement], x: i32, y: i32) -> Option<MyRoomAction> {
+    let mut bag_seen = 0usize;
+    let mut gift_seen = 0usize;
+    for placed in placements {
+        let Some(action) = myroom_action_for_code(placed.code) else {
+            continue;
+        };
+        let indexed = match action {
+            MyRoomAction::PickBagCell(_) => {
+                let index = bag_seen;
+                bag_seen += 1;
+                MyRoomAction::PickBagCell(index)
+            }
+            MyRoomAction::PickGiftCell(_) => {
+                let index = gift_seen;
+                gift_seen += 1;
+                MyRoomAction::PickGiftCell(index)
+            }
+            _ => action,
+        };
+        if super::paint::rect_hit(&placed.rect, x, y) {
+            return Some(indexed);
+        }
+    }
+    None
+}
+
+/// Equipment slot for one item record (`docs/equip.md` VERIFIED
+/// static sites: send-builder file `0xa4ec8`, derivation files
+/// `0xa3cc9`/`0xa3cf0`/`0xa3cfd`, range check files
+/// `0xa4baa..0xa4bb4`): type 5 forces slot 11, otherwise the record
+/// slot byte holds, and the final slot must land below 17.
+#[must_use]
+pub const fn myroom_equip_slot(item_type: u32, record_slot: u8) -> Option<u8> {
+    let slot = if (item_type & 0xFF) == 5 {
+        11
+    } else {
+        record_slot
+    };
+    if slot < 17 {
+        Some(slot)
+    } else {
+        None
+    }
+}
+
+/// Record slot byte behind one parsed item row: `Itemdata_Korea.dat`
+/// file byte +0x18, the top byte of the third param word (file bytes
+/// 21..24 of the 30-byte prefix). The file → in-memory record layout
+/// join is ASSUMED — the exe reads come from the looked-up record
+/// (`0x52dba0`, `docs/equip.md`) — while the pure rule above is
+/// exe-pinned; next step: REA trace of the lookup showing the record
+/// layout.
+#[must_use]
+pub fn myroom_record_slot(row: &AvatarItemRow) -> u8 {
+    let word = row.params[2];
+    u8::try_from((word >> 24) & 0xFF).unwrap_or(0)
+}
+
+/// Live avatar-room selection: slot pick, bag page/cursor, gift
+/// page/cursor. Slot semantics stay OPEN; the state only records
+/// and clamps so painter and clicker share one selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MyRoomState {
+    /// Selected slot-selector button ordinal `0..11`.
+    selected_slot: u8,
+    /// Visible bag page (clamped to the staged page count).
+    bag_page: usize,
+    /// Selected bag cell within the page (`None` until picked).
+    bag_cell: Option<usize>,
+    /// Visible gift page (clamped to the staged page count).
+    gift_page: usize,
+    /// Selected gift cell within the page (`None` until picked).
+    gift_cell: Option<usize>,
+}
+
+impl Default for MyRoomState {
+    /// Cleared selection (same as [`MyRoomState::new`]).
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MyRoomState {
+    /// Cleared selection: first slot, first pages, no cursors.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            selected_slot: 0,
+            bag_page: 0,
+            bag_cell: None,
+            gift_page: 0,
+            gift_cell: None,
+        }
+    }
+
+    /// Selected slot-selector button ordinal.
+    #[must_use]
+    pub const fn selected_slot(self) -> u8 {
+        self.selected_slot
+    }
+
+    /// Visible bag page.
+    #[must_use]
+    pub const fn bag_page(self) -> usize {
+        self.bag_page
+    }
+
+    /// Selected bag cell within the page, if any.
+    #[must_use]
+    pub const fn bag_cell(self) -> Option<usize> {
+        self.bag_cell
+    }
+
+    /// Visible gift page.
+    #[must_use]
+    pub const fn gift_page(self) -> usize {
+        self.gift_page
+    }
+
+    /// Selected gift cell within the page, if any.
+    #[must_use]
+    pub const fn gift_cell(self) -> Option<usize> {
+        self.gift_cell
+    }
+
+    /// Record a slot-button press; past the eleventh button the
+    /// press lands nowhere (button ordinals are `0..11`).
+    pub fn select_slot(&mut self, slot: u8) {
+        if usize::from(slot) < MYROOM_SLOT_BUTTONS {
+            self.selected_slot = slot;
+        }
+    }
+
+    /// Turn the bag page one step, clamped to `pages` (at least the
+    /// first page paints, so an empty count still holds page 0).
+    /// Turning clears the cell cursor: rows change under it.
+    pub fn turn_bag_page(&mut self, step: MyRoomStep, pages: usize) {
+        let last = pages.saturating_sub(1);
+        match step {
+            MyRoomStep::Previous => {
+                self.bag_page = self.bag_page.saturating_sub(1);
+            }
+            MyRoomStep::Next => {
+                self.bag_page = self.bag_page.saturating_add(1).min(last);
+            }
+        }
+        self.bag_cell = None;
+    }
+
+    /// Record a bag-cell pick (`None` clears the cursor).
+    pub fn pick_bag_cell(&mut self, cell: Option<usize>) {
+        if cell.is_none_or(|index| index < MYROOM_BAG_CELLS) {
+            self.bag_cell = cell;
+        }
+    }
+
+    /// Turn the gift page one step, clamped like the bag pager.
+    /// Turning clears the gift cursor.
+    pub fn turn_gift_page(&mut self, step: MyRoomStep, pages: usize) {
+        let last = pages.saturating_sub(1);
+        match step {
+            MyRoomStep::Previous => {
+                self.gift_page = self.gift_page.saturating_sub(1);
+            }
+            MyRoomStep::Next => {
+                self.gift_page = self.gift_page.saturating_add(1).min(last);
+            }
+        }
+        self.gift_cell = None;
+    }
+
+    /// Record a gift-cell pick (`None` clears the cursor).
+    pub fn pick_gift_cell(&mut self, cell: Option<usize>) {
+        if cell.is_none_or(|index| index < MYROOM_GIFT_CELLS) {
+            self.gift_cell = cell;
+        }
+    }
+}
+
+/// Bag pages over owned rows: at least page 0 paints, so an empty
+/// bag still holds its first (blank) page.
+#[must_use]
+pub fn myroom_bag_pages(inventory: &[i32], table: &AvatarItemTable) -> usize {
+    myroom_owned_rows(table, inventory)
+        .len()
+        .div_ceil(MYROOM_BAG_CELLS)
+        .max(1)
+}
+
+/// Owned bag rows in inventory order, skipping zero and unknown ids
+/// exactly like [`my_room_equipment`]: one bad id never blanks the bag.
+fn myroom_owned_rows<'a>(table: &'a AvatarItemTable, inventory: &[i32]) -> Vec<ShopItemView<'a>> {
+    inventory
+        .iter()
+        .filter_map(|id| equipped_item_view(table, *id))
+        .collect()
+}
+
+/// Visible bag rows: the owned run sliced to one page of
+/// [`MYROOM_BAG_CELLS`] cells. Past the last page paints nothing.
+#[must_use]
+pub fn myroom_bag_rows<'a>(
+    table: &'a AvatarItemTable,
+    inventory: &[i32],
+    page: usize,
+) -> Vec<ShopItemView<'a>> {
+    let owned = myroom_owned_rows(table, inventory);
+    let start = page.saturating_mul(MYROOM_BAG_CELLS);
+    owned
+        .into_iter()
+        .skip(start)
+        .take(MYROOM_BAG_CELLS)
+        .collect()
+}
+
+/// One gift-box row: item and song gifts share the page run (items
+/// first — order is ours-by-design, no exe sequence is pinned).
+/// Names resolve from parsed data (item table, song catalog);
+/// unknown ids skip exactly like the equipment rows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MyRoomGiftView {
+    /// Gift id (`GiftItemInfo`/`GiftMusicInfo`).
+    pub gift_id: i32,
+    /// Item id or song id being claimed.
+    pub resource_id: i32,
+    /// Resolved resource name (owned: item table and song catalog
+    /// are different sources with different borrows).
+    pub name: String,
+    /// Gifter nickname.
+    pub sender: String,
+    /// True for song gifts, false for item gifts.
+    pub is_music: bool,
+}
+
+/// Gift-box rows in box order (item gifts first, then song gifts)
+/// from fetched character data (`GetCharacterInfo` 2001).
+#[must_use]
+pub fn myroom_gift_views(
+    table: &AvatarItemTable,
+    songs: &[SelectMusicSong],
+    character: &CharacterInfo,
+) -> Vec<MyRoomGiftView> {
+    let mut views = Vec::new();
+    for gift in &character.item_gifts {
+        if let Some(view) = gift_item_view(table, gift) {
+            views.push(view);
+        }
+    }
+    for gift in &character.music_gifts {
+        if let Some(view) = gift_music_view(songs, gift) {
+            views.push(view);
+        }
+    }
+    views
+}
+
+/// One item gift resolved against the item table (`None` for
+/// unknown ids — one bad id never blanks the box).
+fn gift_item_view(table: &AvatarItemTable, gift: &GiftItemInfo) -> Option<MyRoomGiftView> {
+    let item_id = u32::try_from(gift.item_id).ok()?;
+    if item_id == 0 {
+        return None;
+    }
+    let row = avatar_item_by_id(table, item_id)?;
+    Some(MyRoomGiftView {
+        gift_id: gift.gift_id,
+        resource_id: gift.item_id,
+        name: row.name.clone(),
+        sender: gift.sender.clone(),
+        is_music: false,
+    })
+}
+
+/// One song gift resolved against the staged song catalog (`None`
+/// for unlisted songs).
+fn gift_music_view(songs: &[SelectMusicSong], gift: &GiftMusicInfo) -> Option<MyRoomGiftView> {
+    let wanted = u32::try_from(gift.music_id).ok()?;
+    let song = songs.iter().find(|song| song.song_id == wanted)?;
+    Some(MyRoomGiftView {
+        gift_id: gift.gift_id,
+        resource_id: gift.music_id,
+        name: song.title.clone(),
+        sender: gift.sender.clone(),
+        is_music: true,
+    })
+}
+
+/// Gift-box pages over the staged box run (first page paints even
+/// when the box is empty).
+#[must_use]
+pub fn myroom_gift_pages(views: &[MyRoomGiftView]) -> usize {
+    views.len().div_ceil(MYROOM_GIFT_CELLS).max(1)
+}
+
+/// Visible gift-box rows: the box run sliced to one page of
+/// [`MYROOM_GIFT_CELLS`] cells.
+#[must_use]
+pub fn myroom_gift_page(views: &[MyRoomGiftView], page: usize) -> &[MyRoomGiftView] {
+    let start = page.saturating_mul(MYROOM_GIFT_CELLS);
+    let rows = views.get(start..).unwrap_or(&[]);
+    rows.get(..rows.len().min(MYROOM_GIFT_CELLS)).unwrap_or(&[])
+}
+
+/// Identity captions from fetched character data: every field maps
+/// by name identity to its TEXT control (nickname, level,
+/// bonus point, experience, penalties, cash wallets). Money
+/// controls without a name-identical field (`MGAME_MONEY`,
+/// `O2JAM_MONEY`, `O2MONEY`, `CHARGEMONEY`), rank, guild, win-rate
+/// and skill counts stay unpainted — their mapping is OPEN
+/// (`docs/myroom.md`).
+#[must_use]
+pub fn myroom_identity_captions(character: &CharacterInfo) -> Vec<(u32, String)> {
+    vec![
+        (MYROOM_NICKNAME_CODE, character.nickname.clone()),
+        (MYROOM_LEVEL_CODE, character.level.to_string()),
+        (MYROOM_BONUS_CODE, character.bonus_point.to_string()),
+        (MYROOM_EXP_CODE, character.experience.to_string()),
+        (
+            MYROOM_PENALTY_COUNT_CODE,
+            character.penalty_count.to_string(),
+        ),
+        (
+            MYROOM_PENALTY_LEVEL_CODE,
+            character.penalty_level.to_string(),
+        ),
+        (MYROOM_O2CASH_CODE, character.o2_cash.to_string()),
+        (MYROOM_MUSICCASH_CODE, character.music_cash.to_string()),
+        (MYROOM_ITEMCASH_CODE, character.item_cash.to_string()),
+    ]
+}
+
+/// Gift captions for the staged box run: the gift count plus the
+/// selected cell's resource name and sender (blank until picked).
+/// The cell counts within the visible `page`, matching the painted
+/// cells. The count format is ours-by-design (no exe caption bytes
+/// pinned).
+#[must_use]
+pub fn myroom_gift_captions(
+    views: &[MyRoomGiftView],
+    page: usize,
+    cell: Option<usize>,
+) -> Vec<(u32, String)> {
+    let picked = cell.and_then(|index| myroom_gift_page(views, page).get(index));
+    vec![
+        (MYROOM_GIFT_NUM_CODE, views.len().to_string()),
+        (
+            MYROOM_GIFT_ITEMNAME_CODE,
+            picked.map_or_else(String::new, |view| view.name.clone()),
+        ),
+        (
+            MYROOM_GIFT_SENDER_CODE,
+            picked.map_or_else(String::new, |view| view.sender.clone()),
+        ),
+    ]
 }
 
 /// Solo-mission difficulty band: one per `.ojn` level slot (the
@@ -3292,8 +3823,8 @@ mod side_tests {
         assert_eq!(buf[0], o2jam_render::pack_xrgb(255, 0, 0));
     }
 
-    fn side_item_table() -> o2jam_file::AvatarItemTable {
-        let row = |item_id: u32, name: &str, price: u32| o2jam_file::AvatarItemRow {
+    fn side_item_row(item_id: u32, name: &str, price: u32) -> o2jam_file::AvatarItemRow {
+        o2jam_file::AvatarItemRow {
             item_id,
             item_type: 0,
             price,
@@ -3302,10 +3833,31 @@ mod side_tests {
             name: name.to_owned(),
             description: String::new(),
             sprites: Vec::new(),
-        };
-        o2jam_file::AvatarItemTable {
-            rows: vec![row(1, "Hair", 1000), row(2, "Boots", 2500)],
         }
+    }
+
+    fn side_item_table() -> o2jam_file::AvatarItemTable {
+        o2jam_file::AvatarItemTable {
+            rows: vec![
+                side_item_row(1, "Hair", 1000),
+                side_item_row(2, "Boots", 2500),
+            ],
+        }
+    }
+
+    fn myroom_twelve_item_table() -> o2jam_file::AvatarItemTable {
+        o2jam_file::AvatarItemTable {
+            rows: (1..=12)
+                .map(|id| side_item_row(id, &format!("Item{id}"), id * 100))
+                .collect(),
+        }
+    }
+
+    fn caption_text(captions: &[(u32, String)], code: u32) -> Option<&str> {
+        captions
+            .iter()
+            .find(|(at, _)| *at == code)
+            .map(|(_, text)| text.as_str())
     }
 
     fn side_song_record(song_id: u32, bpm: f32, title: &str, ojm_file: &str) -> Vec<u8> {
@@ -3401,6 +3953,215 @@ mod side_tests {
             my_room_equipment_from_character(&table, &side_character(side_equipment(&[999])))
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn myroom_slot_codes_cover_eleven_buttons_in_order() {
+        // The shipped `STATE_MYROOM` block carries 11 art-less slot
+        // selectors (`0X15200005..0F`): each code picks its button
+        // ordinal, and the next code is no slot at all.
+        for (index, name) in MYROOM_SLOT_NAMES.iter().enumerate() {
+            let slot = u8::try_from(index).expect("eleven slots fit");
+            let code = MYROOM_SLOT_FIRST_CODE + u32::try_from(index).expect("small index");
+            assert_eq!(
+                myroom_action_for_code(code),
+                Some(MyRoomAction::SelectSlot(slot)),
+                "slot button {name}"
+            );
+        }
+        assert_ne!(
+            myroom_action_for_code(MYROOM_SLOT_FIRST_CODE + MYROOM_SLOT_BUTTONS_U32),
+            Some(MyRoomAction::SelectSlot(0))
+        );
+    }
+
+    #[test]
+    fn myroom_dispatch_names_bag_gift_and_chrome_codes() {
+        assert_eq!(
+            myroom_action_for_code(MYROOM_BAG_LEFT_CODE),
+            Some(MyRoomAction::BagPage(MyRoomStep::Previous))
+        );
+        assert_eq!(
+            myroom_action_for_code(MYROOM_BAG_RIGHT_CODE),
+            Some(MyRoomAction::BagPage(MyRoomStep::Next))
+        );
+        assert_eq!(
+            myroom_action_for_code(MYROOM_GIFT_LEFT_CODE),
+            Some(MyRoomAction::GiftPage(MyRoomStep::Previous))
+        );
+        assert_eq!(
+            myroom_action_for_code(MYROOM_GIFT_RIGHT_CODE),
+            Some(MyRoomAction::GiftPage(MyRoomStep::Next))
+        );
+        assert_eq!(
+            myroom_action_for_code(MYROOM_APPLY_CODE),
+            Some(MyRoomAction::ApplyEquip)
+        );
+        assert_eq!(
+            myroom_action_for_code(MYROOM_VACATE_CODE),
+            Some(MyRoomAction::VacateSlot)
+        );
+        assert_eq!(
+            myroom_action_for_code(MYROOM_BACK_CODE),
+            Some(MyRoomAction::BackToLobby)
+        );
+        assert_eq!(
+            myroom_action_for_code(MYROOM_GOSHOP_CODE),
+            Some(MyRoomAction::OpenShop)
+        );
+        // Caption bodies never dispatch: text controls are not buttons.
+        assert_eq!(myroom_action_for_code(MYROOM_NICKNAME_CODE), None);
+    }
+
+    fn myroom_hit_placement(code: u32, x: i32, y: i32) -> ScenePlacement {
+        ScenePlacement {
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect { x, y, w: 40, h: 20 },
+        }
+    }
+
+    #[test]
+    fn myroom_action_hit_rides_staged_rects() {
+        // Hit-testing reads staged `.bnd` placements only (owner rule
+        // `f38f3`): no fallback literals, unstaged clicks land nowhere.
+        let placements = vec![
+            myroom_hit_placement(MYROOM_SLOT_FIRST_CODE + 2, 10, 10),
+            myroom_hit_placement(MYROOM_BAG_FIRST_CODE + 4, 100, 10),
+            myroom_hit_placement(MYROOM_GIFT_FIRST_CODE + 1, 200, 10),
+            myroom_hit_placement(MYROOM_BAG_RIGHT_CODE, 300, 10),
+        ];
+        assert_eq!(
+            myroom_action_at(&placements, 11, 11),
+            Some(MyRoomAction::SelectSlot(2))
+        );
+        assert_eq!(
+            myroom_action_at(&placements, 101, 11),
+            Some(MyRoomAction::PickBagCell(0))
+        );
+        assert_eq!(
+            myroom_action_at(&placements, 201, 11),
+            Some(MyRoomAction::PickGiftCell(0))
+        );
+        assert_eq!(
+            myroom_action_at(&placements, 301, 11),
+            Some(MyRoomAction::BagPage(MyRoomStep::Next))
+        );
+        assert_eq!(myroom_action_at(&placements, 0, 0), None);
+        assert_eq!(myroom_action_at(&[], 11, 11), None);
+    }
+
+    #[test]
+    fn myroom_equip_slot_follows_the_exe_derivation() {
+        // `docs/equip.md`: type 5 forces slot 11, otherwise the
+        // record slot byte holds, range-checked below 17.
+        assert_eq!(myroom_equip_slot(1, 3), Some(3));
+        assert_eq!(myroom_equip_slot(5, 3), Some(11));
+        assert_eq!(myroom_equip_slot(5, 0), Some(11));
+        assert_eq!(myroom_equip_slot(1, 17), None);
+        assert_eq!(myroom_equip_slot(1, 255), None);
+    }
+
+    #[test]
+    fn myroom_record_slot_reads_file_byte_0x18() {
+        // The slot byte is file byte +0x18: the top byte of the
+        // third param word (bytes 21..24 of the 30-byte prefix).
+        let mut row = side_item_row(1, "Hair", 1000);
+        row.params = [0, 0, 0x0300_0000, 0];
+        assert_eq!(myroom_record_slot(&row), 3);
+    }
+
+    #[test]
+    fn myroom_selection_starts_cleared_and_clamps() {
+        let mut state = MyRoomState::new();
+        assert_eq!(state.selected_slot(), 0);
+        assert_eq!(state.bag_page(), 0);
+        assert_eq!(state.bag_cell(), None);
+        state.select_slot(3);
+        assert_eq!(state.selected_slot(), 3);
+        // Past the eleventh button the press lands nowhere.
+        state.select_slot(11);
+        assert_eq!(state.selected_slot(), 3);
+        // Page turns clamp to the staged page count.
+        state.turn_bag_page(MyRoomStep::Next, 3);
+        assert_eq!(state.bag_page(), 1);
+        state.turn_bag_page(MyRoomStep::Previous, 3);
+        assert_eq!(state.bag_page(), 0);
+        state.turn_bag_page(MyRoomStep::Previous, 3);
+        assert_eq!(state.bag_page(), 0);
+        state.pick_bag_cell(Some(4));
+        assert_eq!(state.bag_cell(), Some(4));
+        state.turn_bag_page(MyRoomStep::Next, 3);
+        assert_eq!(state.bag_cell(), None);
+    }
+
+    #[test]
+    fn myroom_bag_pages_hold_ten_owned_rows() {
+        let table = myroom_twelve_item_table();
+        let inventory: Vec<i32> = (1..=12).collect();
+        assert_eq!(myroom_bag_pages(&inventory, &table), 2);
+        let first = myroom_bag_rows(&table, &inventory, 0);
+        assert_eq!(first.len(), 10);
+        assert_eq!(first[0].item_id, 1);
+        let second = myroom_bag_rows(&table, &inventory, 1);
+        assert_eq!(second.len(), 2);
+        assert_eq!(second[0].item_id, 11);
+        // Zero and unknown ids never occupy a bag cell.
+        let sparse = myroom_bag_rows(&table, &[0, 999, 1], 0);
+        assert_eq!(sparse.len(), 1);
+        assert_eq!(sparse[0].item_id, 1);
+        assert!(myroom_bag_rows(&table, &[], 0).is_empty());
+        assert!(myroom_bag_rows(&table, &inventory, 7).is_empty());
+    }
+
+    #[test]
+    fn myroom_gift_views_resolve_names_and_senders() {
+        let table = side_item_table();
+        let songs = vec![SelectMusicSong {
+            song_id: 757,
+            title: "First".to_owned(),
+            artist: "Band".to_owned(),
+        }];
+        let mut character = CharacterInfo::default();
+        character.item_gifts.push(GiftItemInfo {
+            gift_id: 7,
+            item_id: 1,
+            sender: "Giver".to_owned(),
+        });
+        character.music_gifts.push(GiftMusicInfo {
+            gift_id: 9,
+            music_id: 757,
+            sender: "DJ".to_owned(),
+        });
+        let views = myroom_gift_views(&table, &songs, &character);
+        assert_eq!(views.len(), 2);
+        assert_eq!(views[0].name, "Hair");
+        assert_eq!(views[0].sender, "Giver");
+        assert!(!views[0].is_music);
+        assert_eq!(views[1].name, "First");
+        assert_eq!(views[1].sender, "DJ");
+        assert!(views[1].is_music);
+        assert_eq!(myroom_gift_pages(&views), 1);
+    }
+
+    #[test]
+    fn myroom_identity_captions_carry_character_fields() {
+        let character = CharacterInfo {
+            nickname: "Tester".to_owned(),
+            level: 12,
+            experience: 3450,
+            o2_cash: 500,
+            ..CharacterInfo::default()
+        };
+        let captions = myroom_identity_captions(&character);
+        assert_eq!(
+            caption_text(&captions, MYROOM_NICKNAME_CODE),
+            Some("Tester")
+        );
+        assert_eq!(caption_text(&captions, MYROOM_LEVEL_CODE), Some("12"));
+        assert_eq!(caption_text(&captions, MYROOM_EXP_CODE), Some("3450"));
+        assert_eq!(caption_text(&captions, MYROOM_O2CASH_CODE), Some("500"));
     }
 
     fn side_music_answer(free_music: bool) -> MusicListAnswer {
