@@ -17,7 +17,11 @@ use crate::avatar::{
     ScenePlacement, LOADING_SPRITE,
 };
 use crate::screen::Screen;
-use crate::screens::side::{SideScreen, TUTORIAL_BACKGROUND_SPRITE};
+use crate::screens::side::{
+    SideScreen, CHANNEL_INFO_DIALOG_BLOCK, CREATE_ROOM_DIALOG_BLOCK, PASSWORD_DIALOG_BLOCK,
+    PLANET_OPTION_FIRST_TAB, QUIT_DIALOG_BLOCK, SELECT_MUSIC_DIALOG_BLOCK,
+    TUTORIAL_BACKGROUND_SPRITE,
+};
 
 /// State value keyed by its `STATE_*` Block name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -258,6 +262,114 @@ pub const STAGE_TABLE: &[StageRow] = &[
     },
 ];
 
+/// A popup sheet mounted over a host State: one value per dialog row.
+/// The key is the `DIALOG_*` Block name the archive already uses, so a
+/// sheet cannot drift onto another Scene — each row names its host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Dialog {
+    /// Song pick (`DAILOG_SELECTMUSIC`, archive typo kept) over Waiting.
+    SelectMusic,
+    /// Channel list (`DIALOG_CHANNEL_INFO`) over the planet board.
+    ChannelInfo,
+    /// First-open options tab (`DIALOG_OPTION_KEY`, which tab opens
+    /// first stays OPEN) over Planet.
+    PlanetOption,
+    /// Quit confirm (`DIALOG_QUESTION1`) over Planet.
+    PlanetQuit,
+    /// Room create sheet (`DIALOG_CREATEROOM`) over Room: declared
+    /// and tested only, no caller stages it yet.
+    CreateRoom,
+    /// Room password sheet (`DIALOG_INPUTPASSWORD`) over Room: declared
+    /// and tested only, no caller stages it yet.
+    InputPassword,
+}
+
+impl Dialog {
+    /// `ControlList` Block this dialog stages.
+    #[must_use]
+    pub const fn block_name(self) -> &'static str {
+        match self {
+            Dialog::SelectMusic => SELECT_MUSIC_DIALOG_BLOCK,
+            Dialog::ChannelInfo => CHANNEL_INFO_DIALOG_BLOCK,
+            Dialog::PlanetOption => PLANET_OPTION_FIRST_TAB.block_name(),
+            Dialog::PlanetQuit => QUIT_DIALOG_BLOCK,
+            Dialog::CreateRoom => CREATE_ROOM_DIALOG_BLOCK,
+            Dialog::InputPassword => PASSWORD_DIALOG_BLOCK,
+        }
+    }
+
+    /// State this dialog mounts over.
+    #[must_use]
+    pub const fn host(self) -> State {
+        match self {
+            Dialog::SelectMusic => State::Waiting,
+            Dialog::ChannelInfo | Dialog::PlanetOption | Dialog::PlanetQuit => State::Planet,
+            Dialog::CreateRoom | Dialog::InputPassword => State::Room,
+        }
+    }
+
+    /// Dialog for a Block name, if the dialog table stages it.
+    /// State Blocks stay `None` here; they resolve through
+    /// [`State::from_block`].
+    #[must_use]
+    pub fn from_block(name: &str) -> Option<Dialog> {
+        DIALOG_TABLE
+            .iter()
+            .find(|row| row.block == name)
+            .map(|row| row.dialog)
+    }
+}
+
+/// One declaration row per dialog: the sheet to stage plus the host
+/// State it mounts over. Every sheet stages from the Interface
+/// archive on the bound arm; the Channel select bar has no row —
+/// the exe mounts it at the Dialog object, not from the table (OPEN).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DialogRow {
+    /// Dialog this row stages.
+    pub dialog: Dialog,
+    /// State this dialog mounts over.
+    pub host: State,
+    /// `ControlList` Block to pair with its `.bnd`.
+    pub block: &'static str,
+}
+
+/// The dialog declaration, read as data: one row per sheet the client
+/// stages. The 2 room rows are declared and tested only until a caller
+/// stages them; the select bar stays hand-staged and OPEN.
+pub const DIALOG_TABLE: &[DialogRow] = &[
+    DialogRow {
+        dialog: Dialog::SelectMusic,
+        host: State::Waiting,
+        block: SELECT_MUSIC_DIALOG_BLOCK,
+    },
+    DialogRow {
+        dialog: Dialog::ChannelInfo,
+        host: State::Planet,
+        block: CHANNEL_INFO_DIALOG_BLOCK,
+    },
+    DialogRow {
+        dialog: Dialog::PlanetOption,
+        host: State::Planet,
+        block: PLANET_OPTION_FIRST_TAB.block_name(),
+    },
+    DialogRow {
+        dialog: Dialog::PlanetQuit,
+        host: State::Planet,
+        block: QUIT_DIALOG_BLOCK,
+    },
+    DialogRow {
+        dialog: Dialog::CreateRoom,
+        host: State::Room,
+        block: CREATE_ROOM_DIALOG_BLOCK,
+    },
+    DialogRow {
+        dialog: Dialog::InputPassword,
+        host: State::Room,
+        block: PASSWORD_DIALOG_BLOCK,
+    },
+];
+
 /// Control-list entry holding every Interface Block.
 const INTERFACE_LIST: &str = "ControlList_Interface.txt";
 /// Control-list entry holding every Playing Block.
@@ -333,6 +445,30 @@ pub fn stage_state(archive: &[u8], state: State, ctx: StageContext) -> StageRepo
         PlacementArm::FullCanvas => stage_full_canvas_row(archive, row, ctx),
         PlacementArm::PlayingSubset => stage_playing_row(archive, row, ctx),
     }
+}
+
+/// Stage one dialog from archive bytes through the bound arm: the
+/// Block paired with its `.bnd`, like [`stage_state`] dispatches for
+/// [`PlacementArm::Bound`]. Returns the art with the miss ledger;
+/// each miss logs a warning naming the host State. The Channel select
+/// bar is not in the table, so callers hand-stage it on top of this
+/// art. Never fails a Scene.
+#[must_use]
+pub fn stage_dialog(archive: &[u8], dialog: Dialog, ctx: StageContext) -> StageReport {
+    let Some(row) = DIALOG_TABLE.iter().find(|row| row.dialog == dialog) else {
+        return StageReport::default();
+    };
+    stage_bound_row(
+        archive,
+        &StageRow {
+            state: row.host,
+            block: Some(row.block),
+            archive: StagingArchive::Interface,
+            arm: PlacementArm::Bound,
+            extra_sprites: &[],
+        },
+        ctx,
+    )
 }
 
 /// Stage one bound row: the Block paired with its `.bnd`, plus the
@@ -1572,6 +1708,190 @@ mod staging_tests {
             report.misses.is_empty(),
             "scrollbar params are never files: {:?}",
             report.misses
+        );
+    }
+    #[test]
+    fn dialog_rows_name_host_state_and_block() {
+        assert_eq!(DIALOG_TABLE.len(), 6);
+        for row in DIALOG_TABLE {
+            assert_eq!(row.block, row.dialog.block_name());
+            assert_eq!(row.host, row.dialog.host());
+        }
+    }
+
+    #[test]
+    fn dialogs_key_by_their_block_names() {
+        assert_eq!(Dialog::SelectMusic.block_name(), "DAILOG_SELECTMUSIC");
+        assert_eq!(Dialog::ChannelInfo.block_name(), "DIALOG_CHANNEL_INFO");
+        assert_eq!(Dialog::PlanetOption.block_name(), "DIALOG_OPTION_KEY");
+        assert_eq!(Dialog::PlanetQuit.block_name(), "DIALOG_QUESTION1");
+        assert_eq!(Dialog::CreateRoom.block_name(), "DIALOG_CREATEROOM");
+        assert_eq!(Dialog::InputPassword.block_name(), "DIALOG_INPUTPASSWORD");
+    }
+
+    #[test]
+    fn dialog_hosts_follow_the_mount() {
+        assert_eq!(Dialog::SelectMusic.host(), State::Waiting);
+        assert_eq!(Dialog::ChannelInfo.host(), State::Planet);
+        assert_eq!(Dialog::PlanetOption.host(), State::Planet);
+        assert_eq!(Dialog::PlanetQuit.host(), State::Planet);
+        assert_eq!(Dialog::CreateRoom.host(), State::Room);
+        assert_eq!(Dialog::InputPassword.host(), State::Room);
+    }
+
+    #[test]
+    fn dialog_block_name_round_trips_through_from_block() {
+        for dialog in [
+            Dialog::SelectMusic,
+            Dialog::ChannelInfo,
+            Dialog::PlanetOption,
+            Dialog::PlanetQuit,
+            Dialog::CreateRoom,
+            Dialog::InputPassword,
+        ] {
+            assert_eq!(Dialog::from_block(dialog.block_name()), Some(dialog));
+        }
+        assert_eq!(Dialog::from_block("STATE_ROOM"), None);
+        assert_eq!(Dialog::from_block("Dialog_ChannelSelectBar.ojs"), None);
+    }
+
+    /// Synthetic archive holding one dialog block: `named` bodies are
+    /// block entries (table-driven), `unnamed` bodies sit in the archive
+    /// with no block entry (never staged, like the code-mounted bar).
+    fn dialog_archive(block: &str, bind: &str, named: &[&str], unnamed: &[&str]) -> Vec<u8> {
+        let entries = named
+            .iter()
+            .enumerate()
+            .map(|(index, body)| format!("IDC_ROW{index} 0X8C10000{} \"{body}\"", index + 1))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let list = [
+            "NUMBER_OF_DIALOG 0x01".to_owned(),
+            format!("{block} 0x02"),
+            "{".to_owned(),
+            format!("BOUND \"{bind}\""),
+            "IDC_DIALOG 0X8C000000".to_owned(),
+            entries,
+            "}".to_owned(),
+            String::new(),
+        ]
+        .join("\n");
+        let bind_blob = bnd_blob(&[(10, 20, 30, 40), (50, 60, 70, 80)]);
+        let owned: Vec<Vec<u8>> = named
+            .iter()
+            .chain(unnamed.iter())
+            .map(|_| sprite55_blob(2, 2, &[1; 8]))
+            .collect();
+        let mut files: Vec<(&str, &[u8])> = vec![
+            ("ControlList_Interface.txt", list.as_bytes()),
+            (bind, &bind_blob),
+        ];
+        for (name, blob) in named.iter().chain(unnamed.iter()).zip(owned.iter()) {
+            files.push((name, blob));
+        }
+        o2jam_file::test_archive::build_archive(&files)
+    }
+
+    #[test]
+    fn select_music_stages_over_waiting() {
+        let archive = dialog_archive(
+            "DAILOG_SELECTMUSIC",
+            "Dialog_SelectMusic.bnd",
+            &["Select_Song.ojs", "Select_Artist.ojs"],
+            &[],
+        );
+        let report = stage_dialog(&archive, Dialog::SelectMusic, StageContext::default());
+        assert!(report.misses.is_empty(), "{:?}", report.misses);
+        let art = report
+            .art
+            .expect("select-music stages with synthetic bytes");
+        assert_eq!(art.placements.len(), 2);
+        assert!(art.figures.contains_key("Select_Song.ojs"));
+        assert!(art.figures.contains_key("Select_Artist.ojs"));
+    }
+
+    #[test]
+    fn channel_info_stages_over_planet() {
+        let archive = dialog_archive(
+            "DIALOG_CHANNEL_INFO",
+            "Dialog_ChannelInfo.bnd",
+            &["Dialog_ChannelInfo.ojs", "ChannelInfo_CH_Back.ojs"],
+            &[],
+        );
+        let report = stage_dialog(&archive, Dialog::ChannelInfo, StageContext::default());
+        assert!(report.misses.is_empty(), "{:?}", report.misses);
+        let art = report
+            .art
+            .expect("channel info stages with synthetic bytes");
+        assert_eq!(art.placements.len(), 2);
+        assert!(art.figures.contains_key("Dialog_ChannelInfo.ojs"));
+    }
+
+    #[test]
+    fn planet_sheets_stage_over_planet() {
+        let option = dialog_archive(
+            "DIALOG_OPTION_KEY",
+            "Dialog_Option_Key.bnd",
+            &["Dialog_Option_Key.ojs"],
+            &[],
+        );
+        let quit = dialog_archive(
+            "DIALOG_QUESTION1",
+            "Dialog_Question1.bnd",
+            &["Dialog_Question1.ojs"],
+            &[],
+        );
+        let ctx = StageContext::default();
+        let option_art = stage_dialog(&option, Dialog::PlanetOption, ctx)
+            .art
+            .expect("option sheet stages");
+        let quit_art = stage_dialog(&quit, Dialog::PlanetQuit, ctx)
+            .art
+            .expect("quit sheet stages");
+        assert!(option_art.figures.contains_key("Dialog_Option_Key.ojs"));
+        assert!(quit_art.figures.contains_key("Dialog_Question1.ojs"));
+    }
+
+    #[test]
+    fn room_dialogs_stage_without_a_caller() {
+        let create = dialog_archive(
+            "DIALOG_CREATEROOM",
+            "Dialog_CreateRoom.bnd",
+            &["Dialog_CreateRoom.ojs"],
+            &[],
+        );
+        let password = dialog_archive(
+            "DIALOG_INPUTPASSWORD",
+            "Dialog_Password.bnd",
+            &["Dialog_Password.ojs"],
+            &[],
+        );
+        let ctx = StageContext::default();
+        let create_art = stage_dialog(&create, Dialog::CreateRoom, ctx)
+            .art
+            .expect("create-room stages");
+        let password_art = stage_dialog(&password, Dialog::InputPassword, ctx)
+            .art
+            .expect("input-password stages");
+        assert!(create_art.figures.contains_key("Dialog_CreateRoom.ojs"));
+        assert!(password_art.figures.contains_key("Dialog_Password.ojs"));
+    }
+
+    #[test]
+    fn table_driven_bodies_leave_the_select_bar_to_the_caller() {
+        let archive = dialog_archive(
+            "DIALOG_CHANNEL_INFO",
+            "Dialog_ChannelInfo.bnd",
+            &["Dialog_ChannelInfo.ojs"],
+            &["Dialog_ChannelSelectBar.ojs"],
+        );
+        let report = stage_dialog(&archive, Dialog::ChannelInfo, StageContext::default());
+        let art = report
+            .art
+            .expect("channel info stages with synthetic bytes");
+        assert!(
+            !art.figures.contains_key("Dialog_ChannelSelectBar.ojs"),
+            "the bar is code-mounted at the Dialog object, never table-driven"
         );
     }
 }

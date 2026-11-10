@@ -1367,6 +1367,13 @@ impl PlanetOptionTab {
 /// Tab switching stays unimplemented until then.
 pub const PLANET_OPTION_FIRST_TAB: PlanetOptionTab = PlanetOptionTab::Key;
 
+/// Channel-list dialog block (`CDChannelInfo`; `ControlList_Interface.txt`
+/// `DIALOG_CHANNEL_INFO`). Host State is Planet: the sheet opens over the
+/// planet board. The hover bar (`Dialog_ChannelSelectBar.ojs`) is not a
+/// block entry — the exe mounts it at the Dialog object (`+0x8C`) — so it
+/// stays hand-staged and OPEN while this row stages the bound sheet.
+/// Spelling keeps the in-archive `DIALOG_` prefix verbatim.
+pub const CHANNEL_INFO_DIALOG_BLOCK: &str = "DIALOG_CHANNEL_INFO";
 /// Quit-confirm dialog block: the `MESSAGE` popup the power disc
 /// opens (OK/CANCEL, `docs/planet.md` + capture `exit-state.png`).
 /// The block match (OK `0X22200002` / CANCEL `0X22200003` / message

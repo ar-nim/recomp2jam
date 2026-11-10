@@ -27,14 +27,8 @@ use o2jam_shell::avatar::{
     ScenePlacement, AVI_BLOCK, LANKING_BLOCK, LOADING_SPRITE, MUSICSHOP_BLOCK, MYROOM_BLOCK,
     PLANET_BLOCK, RESULT_BLOCK, ROOM_BLOCK, SHOP_BLOCK, WAITING_BLOCK,
 };
-use o2jam_shell::screens::paint::{
-    CHANNEL_BAR_SPRITE, CHANNEL_COUNT_SPRITE, CHANNEL_DIALOG_SPRITE, CHANNEL_DIGIT_SPRITE,
-    CHANNEL_ENTER_SPRITE, CHANNEL_SCROLL_BAR_SPRITE, CHANNEL_SCROLL_DOWN_SPRITE,
-    CHANNEL_SCROLL_UP_SPRITE, DIALOG_BAR_SPRITE, PLAYING_BLOCK, RESULT_WINLOSE_SPRITE,
-};
-use o2jam_shell::screens::side::{
-    PLANET_OPTION_FIRST_TAB, QUIT_DIALOG_BLOCK, SELECT_MUSIC_DIALOG_BLOCK,
-};
+use o2jam_shell::screens::paint::{DIALOG_BAR_SPRITE, PLAYING_BLOCK, RESULT_WINLOSE_SPRITE};
+use o2jam_shell::staging::{stage_dialog, Dialog, StageContext};
 use o2jam_shell::{PlaySkin, Screen, ScreenGame};
 
 /// Interface archive under `install-root` (Avi/Room/Waiting/Result art).
@@ -179,10 +173,10 @@ fn stage_interface_scenes(game: &mut ScreenGame, archive: &[u8]) {
         }
     }
     stage_result_scene(game, archive, &list);
-    stage_select_dialog_art(game, archive, &list);
+    stage_select_dialog_art(game, archive);
     stage_anchor_scene(game, archive, &list);
     stage_channel_dialog(game, archive);
-    stage_planet_dialogs(game, archive, &list);
+    stage_planet_dialogs(game, archive);
 }
 
 /// Stage the planet-board modal sheets: the first-open options tab
@@ -191,48 +185,37 @@ fn stage_interface_scenes(game: &mut ScreenGame, archive: &[u8]) {
 /// dialog-relative only while open), never scene slots. Each block
 /// stages independently; a miss keeps the fallback popup/title.
 /// Shared with the shots walk (one implementation for both).
-pub(crate) fn stage_planet_dialogs(game: &mut ScreenGame, archive: &[u8], list: &ControlList) {
-    if let Some((placements, figures)) = stage_bound_block(
-        archive,
-        list,
-        PLANET_OPTION_FIRST_TAB.block_name(),
-        None,
-        None,
-    ) {
-        game.load_planet_option_scene(placements, figures);
+pub(crate) fn stage_planet_dialogs(game: &mut ScreenGame, archive: &[u8]) {
+    let ctx = StageContext::default();
+    if let Some(art) = stage_dialog(archive, Dialog::PlanetOption, ctx).art {
+        game.load_planet_option_scene(art.placements, art.figures);
     }
-    if let Some((placements, figures)) =
-        stage_bound_block(archive, list, QUIT_DIALOG_BLOCK, None, None)
-    {
-        game.load_planet_quit_scene(placements, figures);
+    if let Some(art) = stage_dialog(archive, Dialog::PlanetQuit, ctx).art {
+        game.load_planet_quit_scene(art.placements, art.figures);
     }
 }
 
-/// Stage the code-mounted channel dialog art (the 0x8C block names the
-/// bodies; the block records zero rects because the bnd applies at
-/// dialog build — `docs/channel-fill.md` "METHOD CORRECTION
-/// 2026-11-10"). The painter mounts each figure at its bnd-derived
-/// origin (bar at row origin +1, bar-local children, scroll bodies on
-/// the track); absent figures fall back to the labeled stand-ins.
-/// The hover highlight bar (`Dialog_ChannelSelectBar.ojs`, 348x44) is
-/// code-mounted too — live-confirmed sprite record at dialog+0x8C
+/// Stage the channel dialog art through the declaration: the bound
+/// `DIALOG_CHANNEL_INFO` bodies, plus the hand-staged hover bar. The
+/// painter mounts each figure at its bnd-derived origin (bar at row
+/// origin +1, bar-local children, scroll bodies on the track);
+/// absent figures fall back to the labeled stand-ins. The hover
+/// highlight bar (`Dialog_ChannelSelectBar.ojs`, 348x44) stays
+/// code-mounted — live-confirmed sprite record at dialog+0x8C
 /// (2026-11-09) — and paints at the hovered row's rect.
 pub(crate) fn stage_channel_dialog(game: &mut ScreenGame, archive: &[u8]) {
-    let names = vec![
-        CHANNEL_DIALOG_SPRITE.to_owned(),
-        DIALOG_BAR_SPRITE.to_owned(),
-        CHANNEL_ENTER_SPRITE.to_owned(),
-        CHANNEL_BAR_SPRITE.to_owned(),
-        CHANNEL_DIGIT_SPRITE.to_owned(),
-        CHANNEL_COUNT_SPRITE.to_owned(),
-        CHANNEL_SCROLL_BAR_SPRITE.to_owned(),
-        CHANNEL_SCROLL_UP_SPRITE.to_owned(),
-        CHANNEL_SCROLL_DOWN_SPRITE.to_owned(),
-    ];
-    let figures = load_scene_figures(archive, &names);
+    let staged = stage_dialog(archive, Dialog::ChannelInfo, StageContext::default());
+    let mut figures = staged.art.map(|art| art.figures).unwrap_or_default();
+    // The hover bar stays hand-staged: the exe mounts it at the Dialog
+    // object (`+0x8C`), not from the table (OPEN).
+    if let Some(bar) = load_archive_sprite(archive, DIALOG_BAR_SPRITE) {
+        figures.insert(DIALOG_BAR_SPRITE.to_owned(), bar);
+    }
     if figures.is_empty() {
         return;
     }
+    // Placements stay empty: the Channel painter mounts dialog art at
+    // its anchors (exe-verified), never at `.bnd` rects.
     game.load_scene(Screen::Channel, Vec::new(), figures);
 }
 
@@ -269,29 +252,14 @@ fn stage_result_scene(game: &mut ScreenGame, archive: &[u8], list: &ControlList)
 
 /// Stage real song-select dialog art over the Waiting seats; empty art
 /// paints nothing extra.
-fn stage_select_dialog_art(game: &mut ScreenGame, archive: &[u8], list: &ControlList) {
-    let Some(block) = scene_block(list, SELECT_MUSIC_DIALOG_BLOCK) else {
+fn stage_select_dialog_art(game: &mut ScreenGame, archive: &[u8]) {
+    let Some(art) = stage_dialog(archive, Dialog::SelectMusic, StageContext::default()).art else {
         return;
     };
-    let names = scene_sprite_names(block);
-    if names.is_empty() {
+    if art.figures.is_empty() {
         return;
     }
-    let figures = load_scene_figures(archive, &names);
-    if figures.is_empty() {
-        return;
-    }
-    let Some(bound_file) = block.bound_file.as_ref() else {
-        return;
-    };
-    let Some(bnd) = bind_data(archive, bound_file) else {
-        return;
-    };
-    let placements = bind_scene_rects(block, &bnd);
-    if placements.is_empty() {
-        return;
-    }
-    game.load_select_music_scene(placements, figures);
+    game.load_select_music_scene(art.placements, art.figures);
 }
 
 /// Stage Playing-archive scenes through the live room: the Loading gate

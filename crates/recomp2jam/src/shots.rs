@@ -6,19 +6,16 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use o2jam_file::{Bnd, ControlList};
 use o2jam_game::{RankDelivery, RoomTeams, LIFE_MAX, PEER_SLOT_COUNT, STAT_LIFE};
 use o2jam_net::play::SetRoomMusic;
 use o2jam_net::rooms::{WaitingAdminMessage, WaitingUserMessage};
 use o2jam_net::{ChannelState, GameMode, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
 use o2jam_render::{Frame, NATIVE_HEIGHT, NATIVE_WIDTH};
-use o2jam_shell::avatar::{
-    bind_scene_rects, load_scene_figures, scene_block, scene_sprite_names, AvatarFigure,
-    ScenePlacement,
-};
-use o2jam_shell::screens::side::{SideScreen, SELECT_MUSIC_DIALOG_BLOCK};
+use o2jam_shell::avatar::{AvatarFigure, ScenePlacement};
+use o2jam_shell::screens::side::SideScreen;
 use o2jam_shell::staging::{
-    read_install_archives, stage_state, state_of_screen, state_of_side, StageContext, State,
+    read_install_archives, stage_dialog, stage_state, state_of_screen, state_of_side, Dialog,
+    StageContext, State,
 };
 use o2jam_shell::{GameLoop, MenuKey, PlaySkin, Screen, ScreenGame};
 
@@ -222,9 +219,6 @@ const MUSICSELECT_FALLBACK_SONGS: [(u32, &str, &str); 4] = [
     (763, "Third", "Band"),
     (765, "Fourth", "Band"),
 ];
-/// Interface control list entry.
-const INTERFACE_LIST: &str = "ControlList_Interface.txt";
-
 /// `STATE_CHANNEL` names zero sprites on 7.55 (bare `BOUND`, no art),
 /// so no block art stages for Channel; the code-mounted channel-list
 /// dialog (`Dialog_ChannelInfo.ojs` body at its record anchor plus the
@@ -251,28 +245,6 @@ fn install_root() -> PathBuf {
 /// Read one archive read-only, if present (`None` keeps synthetic staging).
 fn read_archive(relative: &str) -> Option<Vec<u8>> {
     std::fs::read(install_root().join(relative)).ok()
-}
-
-/// Borrow one entry body by its stored size (never the reserved stride).
-fn entry_body<'a>(archive: &'a [u8], entry_name: &str) -> Option<&'a [u8]> {
-    let entries = o2jam_file::parse_opi(archive).ok()?;
-    let entry = entries.iter().find(|entry| entry.name == entry_name)?;
-    let size = usize::try_from(entry.size).ok()?;
-    let end = entry.data_offset.checked_add(size)?;
-    archive.get(entry.data_offset..end)
-}
-
-/// Parse a `ControlList_*.txt` entry from an archive.
-fn control_list(archive: &[u8], entry_name: &str) -> Option<ControlList> {
-    let body = entry_body(archive, entry_name)?;
-    let text = o2jam_file::decode_control_text(body).ok()?;
-    o2jam_file::parse_control_list(&text).ok()
-}
-
-/// Parse a `.bnd` layout entry from an archive.
-fn bind_data(archive: &[u8], bound_file: &str) -> Option<Bnd> {
-    let body = entry_body(archive, bound_file)?;
-    o2jam_file::parse_bnd(body).ok()
 }
 
 /// Side-screen stage data through the staging declaration: one
@@ -355,9 +327,6 @@ pub(crate) use crate::live_art::stage_planet_dialogs;
 /// the scene slot already paints the same sprite.
 fn stage_interface_archive(game: &mut ScreenGame, archive: &[u8]) {
     stage_channel_dialog(game, archive);
-    let Some(list) = control_list(archive, INTERFACE_LIST) else {
-        return;
-    };
     if let Some(art) = stage_state(archive, State::Avi, StageContext::default()).art {
         game.load_scene(Screen::Avi, art.placements, art.figures);
     }
@@ -372,7 +341,7 @@ fn stage_interface_archive(game: &mut ScreenGame, archive: &[u8]) {
     if let Some(art) = stage_state(archive, State::Result, StageContext::default()).art {
         game.load_scene(Screen::Result, art.placements, art.figures);
     }
-    stage_planet_dialogs(game, archive, &list);
+    stage_planet_dialogs(game, archive);
 }
 
 /// Stage Playing-archive scenes (Loading gate plus Playing gauges)
@@ -666,37 +635,20 @@ fn stage_select_music_catalog(game: &mut ScreenGame) {
     }
 }
 
-/// Stage real song-select dialog art (`DAILOG_SELECTMUSIC` placements
-/// plus figures) over the waiting seats; empty art paints nothing.
+/// Stage real song-select dialog art through the declaration
+/// (`DAILOG_SELECTMUSIC` over Waiting) over the waiting seats;
+/// empty art paints nothing.
 fn stage_select_music_art(game: &mut ScreenGame) {
     let Some(archive) = read_archive(INTERFACE_ARCHIVE) else {
         return;
     };
-    let Some(list) = control_list(&archive, INTERFACE_LIST) else {
+    let Some(art) = stage_dialog(&archive, Dialog::SelectMusic, StageContext::default()).art else {
         return;
     };
-    let Some(block) = scene_block(&list, SELECT_MUSIC_DIALOG_BLOCK) else {
-        return;
-    };
-    let names = scene_sprite_names(block);
-    if names.is_empty() {
+    if art.figures.is_empty() {
         return;
     }
-    let figures = load_scene_figures(&archive, &names);
-    if figures.is_empty() {
-        return;
-    }
-    let Some(bound_file) = block.bound_file.as_ref() else {
-        return;
-    };
-    let Some(bnd) = bind_data(&archive, bound_file) else {
-        return;
-    };
-    let placements = bind_scene_rects(block, &bnd);
-    if placements.is_empty() {
-        return;
-    }
-    game.load_select_music_scene(placements, figures);
+    game.load_select_music_scene(art.placements, art.figures);
 }
 
 /// Catalog title/artist for the host pick: the loading caption
@@ -1188,11 +1140,42 @@ pub use o2jam_render::png::encode_png;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use o2jam_file::{Bnd, ControlList};
     use o2jam_shell::avatar::{
         anchor_in_frame, load_archive_sprite, paint_foreground_placements, paint_scene_figures,
         playing_member_selected, PlayingArtMode, ROOM_BLOCK, WAITING_BLOCK,
     };
+    use o2jam_shell::avatar::{
+        bind_scene_rects, load_scene_figures, scene_block, scene_sprite_names,
+    };
     use o2jam_shell::screens::paint::{PLAYING_BLOCK, RESULT_WINLOSE_SPRITE};
+    use o2jam_shell::screens::side::SELECT_MUSIC_DIALOG_BLOCK;
+
+    /// Interface control list entry (test-only: production stages
+    /// Interface Blocks through the declaration).
+    const INTERFACE_LIST: &str = "ControlList_Interface.txt";
+
+    /// Borrow one entry body by its stored size (never the reserved stride).
+    fn entry_body<'a>(archive: &'a [u8], entry_name: &str) -> Option<&'a [u8]> {
+        let entries = o2jam_file::parse_opi(archive).ok()?;
+        let entry = entries.iter().find(|entry| entry.name == entry_name)?;
+        let size = usize::try_from(entry.size).ok()?;
+        let end = entry.data_offset.checked_add(size)?;
+        archive.get(entry.data_offset..end)
+    }
+
+    /// Parse a `ControlList_*.txt` entry from an archive.
+    fn control_list(archive: &[u8], entry_name: &str) -> Option<ControlList> {
+        let body = entry_body(archive, entry_name)?;
+        let text = o2jam_file::decode_control_text(body).ok()?;
+        o2jam_file::parse_control_list(&text).ok()
+    }
+
+    /// Parse a `.bnd` layout entry from an archive.
+    fn bind_data(archive: &[u8], bound_file: &str) -> Option<Bnd> {
+        let body = entry_body(archive, bound_file)?;
+        o2jam_file::parse_bnd(body).ok()
+    }
     /// Playing archive under `install-root` (Loading/Playing art).
     const PLAYING_ARCHIVE: &str = "O2Jam/Image/Playing1.opi";
     /// Playing control list entry (test-only: production stages
