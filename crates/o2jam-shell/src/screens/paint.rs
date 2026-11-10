@@ -594,15 +594,21 @@ fn channel_fill_width(channel: &ChannelState) -> usize {
     usize::try_from(filled.clamp(0, CHANNEL_COUNT_W)).unwrap_or(0)
 }
 
-/// Channel number the digit slots show: the wire `channel_id`
-/// (the gateway/channel pair is the row's identity — the entry-face
-/// click joins on it). The tens slot shows (id/10)%10, the ones
-/// slot id%10; ids past 99 show their low two digits. List-ordinal
-/// display stays OPEN (next step: gateway replay with non-sequential
-/// ids plus a capture of the wells).
+/// Channel number the digit slots show: the wire `channel_id` **plus
+/// one**, pinned by the 2026-11-10 rig capture (`docs/channel-fill.md`,
+/// "Channel row digits — EXE-PINNED to `channel_id + 1`"): a proxy
+/// rewrote the 1003 ids under the exe, and the wells followed the id
+/// (runs `+5`, `+10` read `Ch.06 07 08 09` / `Ch.11 12 13 14`), which
+/// refutes the list-ordinal reading. Slot order stays the wire list
+/// order. The tens slot shows `(id+1)/10 % 10`, the ones slot
+/// `(id+1) % 10`; ids past 98 wrap to their low two digits.
+///
+/// The value is presentation only: the entry face still sends the raw
+/// `channel_id` (capture run 1: the row painted `Ch.10` entered
+/// channel `09`).
 fn channel_digit(channel: &ChannelState, tens: bool) -> usize {
-    let id = u32::from(channel.channel_id);
-    let digit = if tens { id / 10 % 10 } else { id % 10 };
+    let shown = u32::from(channel.channel_id).saturating_add(1);
+    let digit = if tens { shown / 10 % 10 } else { shown % 10 };
     usize::try_from(digit).unwrap_or(0)
 }
 
@@ -10178,9 +10184,10 @@ mod paint_tests {
     #[test]
     fn channel_digits_select_tens_and_ones_frames() {
         // `CH_Num` decodes one layer per digit in stored order
-        // (0-9, Interface1.opi): the tens slot shows (id/10)%10 and
-        // the ones slot id%10. Painting the whole figure at both
-        // slots would smear every digit into each well.
+        // (0-9, Interface1.opi): the tens slot shows `(id+1)/10 % 10`
+        // and the ones slot `(id+1) % 10` (the rig-pinned one-based
+        // number). Painting the whole figure at both slots would
+        // smear every digit into each well.
         let art = SceneArt {
             placements: Vec::new(),
             figures: HashMap::from([
@@ -10212,8 +10219,36 @@ mod paint_tests {
         );
         // Bar-local (50,11)/(63,11) over the row-0 bar origin
         // (217,225): tens well centre (273,245), ones (286,245).
+        // The wells show `channel_id + 1` (rig-pinned), so id 27
+        // reads `Ch.28`.
         assert_eq!(buf[245 * 800 + 273], digit_ink(2), "tens slot");
-        assert_eq!(buf[245 * 800 + 286], digit_ink(7), "ones slot");
+        assert_eq!(buf[245 * 800 + 286], digit_ink(8), "ones slot");
+    }
+
+    #[test]
+    fn channel_digits_read_one_based_off_the_wire_id() {
+        // Rig-pinned rule (`docs/channel-fill.md` 2026-11-10 capture,
+        // proxy rewrote the 1003 ids): the wells show `channel_id + 1`
+        // and slot order follows the wire list. Ids 9 and 10 carry
+        // across the tens digit, so `Ch.10` and `Ch.11`.
+        let ten = ChannelState {
+            gateway_id: 0,
+            channel_id: 9,
+            capacity: 100,
+            population: 0,
+            active: true,
+        };
+        let eleven = ChannelState {
+            gateway_id: 0,
+            channel_id: 10,
+            capacity: 100,
+            population: 0,
+            active: true,
+        };
+        assert_eq!(channel_digit(&ten, true), 1, "id 9 tens → 1");
+        assert_eq!(channel_digit(&ten, false), 0, "id 9 ones → 0");
+        assert_eq!(channel_digit(&eleven, true), 1, "id 10 tens → 1");
+        assert_eq!(channel_digit(&eleven, false), 1, "id 10 ones → 1");
     }
 
     #[test]
