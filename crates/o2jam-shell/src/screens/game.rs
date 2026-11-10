@@ -7201,6 +7201,43 @@ mod game_tests {
     }
 
     #[test]
+    fn loading_hand_session_holds_then_arms_and_hands_off() {
+        // Hand-driven loading passage through the real window
+        // seam: Confirm with no staged walk holds Loading (gate
+        // unready, clock unanchored), then the staged walk
+        // (validation, staging/decrypt/decode/arm phases, audio
+        // rig) arms the gate and Confirm hands off to Playing. A
+        // twin driven the same way ends on the same state hash:
+        // the passage is a trace, not a one-off. Smoke: screen
+        // path loading→loading→playing.
+        use MenuKey;
+        let mut game = ScreenGame::new();
+        walk_to_loading(&mut game);
+        let mut path = vec![game.screen_name().to_owned()];
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Loading);
+        assert!(!game.loading_gate_ready());
+        path.push(game.screen_name().to_owned());
+        stage_armed_loading_gate(&mut game);
+        assert!(game.loading_gate_ready());
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Playing);
+        path.push(game.screen_name().to_owned());
+        assert_eq!(path, ["loading", "loading", "playing"]);
+        let mut twin = ScreenGame::new();
+        walk_to_loading(&mut twin);
+        twin.menu_key(MenuKey::Confirm, true);
+        stage_armed_loading_gate(&mut twin);
+        twin.menu_key(MenuKey::Confirm, true);
+        assert_eq!(twin.screen(), Screen::Playing);
+        assert_eq!(
+            twin.state_hash(),
+            game.state_hash(),
+            "same stimuli reach the same hashed state"
+        );
+    }
+
+    #[test]
     fn clear_loading_restores_the_indeterminate_bar() {
         let mut game = ScreenGame::new();
         game.set_loading_status(loading_status_at_half());

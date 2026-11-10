@@ -311,8 +311,9 @@ Total audited: 136 named constants.
   (labeled procedural fallback).
 - Waiting cell FAIL (audits 12, 18–19) ↔ seat grid is scaled-frame math
   on `WAITING_ROW_H` (RUNTIME); portraits center blind (no constants).
-- Loading cell FAIL (audits 23, 35) ↔ no geometry constants (bar/caption
-  placeholders are centered placeholders, not literals).
+- Loading cell PASS (ticket #16; audits 23, 35) ↔ no geometry constants (bar/caption
+  placeholders are centered placeholders, never literals — negative evidence:
+  no `.bnd` names the gate, the sprite-55 walk pins no sub-rect).
 - Playing cell FAIL (audits 16, 30–32) ↔ `COMBO_ROW_ABOVE_LINE` OPEN;
   audit 16/30/32 are paint-clip behavior, not geometry constants.
 - Result cell FAIL (audit 13) ↔ exe-pinned anchors DONE here; the FAIL
