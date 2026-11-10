@@ -27,10 +27,11 @@ Short forms live in `GLOSSARY.md`. Normative forms:
 
 | Level | Claims |
 |---|---|
-| EXE | 108 |
+| EXE | 109 |
 | DATA | 19 |
 | ASSUMED | 12 |
-| Total | 139 |
+| OPEN | 4 |
+| Total | 144 |
 
 ## The pairing-rule family (known mistake + siblings)
 
@@ -114,6 +115,10 @@ index (all-zero rect, slot 0, default arm).
 | A37 | 47 `.ojs` bodies are raw JPEG album art (`FF D8 … FF D9`) | DATA | `is_jpeg_body` 47/47; the exe ships a JPEG decoder (RTTI `CDXImageJPG` VA `0x67d5d8`, IJG strings VA `0x75f9fc`, *(offset-only)*), so the bodies are consumable in-exe; the loader-to-decoder call chain stays open (re-verified 2026-11-07: RTTI `CDXImageJPG` file `0x27d5d8`, IJG region VA `0x75f9f0`+ holding `scanlines` / `Invalid SOS parameters`, `Not a JPEG file` at file `0x3604b0`, JFIF family at file `0x35fa7c`+); unflippable — no call site ties the loader to the decoder, so the body-meaning fact stays data-side; decoded shell-side (`codec-coverage.md` DONE 2): all 47 decode to 800x600 RGB888 on `zune-jpeg` (21 SOF0 + 26 SOF2) and paint 1:1 via `blit_rgb888` | R | decoded in shell (codec-coverage.md) |
 | A38 | Present letterboxes 4:3, never stretches | EXE | display init pins one fixed video mode 800×600×16: mode args pushed (800 VA `0x414b63`, 600 `0x414b5e`, bpp `0x10` `0x414b5c`) into both display wrappers (call `0x413be0` at `0x414b72`, call `0x413030` at `0x414b91`), ev `c7d5a15f…`; matching `SetWindowPos` 800/600 sites `0x414b33`–`0x414b4c`/`0x414b96`–`0x414baf` (IAT `0x63f3a0`); the verified blit chain draws 1:1 (`ui-draw.md` — `Draw`/`DrawClip` carry no scaling transform), so no stretch path exists; letterboxing is monitor presentation, not exe behavior; mode bytes re-verified 2026-11-07 (objdump VA `0x414b30`–`0x414bbf`: `push $0x320`/`$0x258`/`$0x10` on both arms, `SetWindowPos` pair via IAT `0x63f3a0`) | R | |
 | A39 | CDX/DirectDraw blit path: DirectDraw init, CDX surface blits, D3D texture upload | EXE | import verified `DDRAW.dll!DirectDrawCreateEx`, IAT VA `0x63F01C` (descriptor file `0x27AF2C`, *(offset-only)*); consumer chain pinned in `ui-draw.md`: display init `0x413030`, `CDXSurface::Draw` `0x42B4D0` ev `867ac248…`, `DrawClip` `0x42B5E0` ev `85764b28…`, page dispatch `0x42B450` ev `08a33fe4…`, page upload `0x42A580`, D3D variant `0x423390`; colorkey-consuming device call + `Flip` site stay open | R | |
+| A40 | Sprite slot loader: a miss leaves the slot empty and the Block keeps the rest | EXE | applier `0x4e7850` via `o2jam-shell/src/avatar.rs:484–491` doc comments (`load_archive_sprite_for_stage`: numbered sibling on a hit, empty slot on a miss); records the ADR-0005 miss rule | R | |
+| A41 | Corrupt body: behaves as a miss (slot empty), exe proof open | OPEN | next step: feed a truncated / bad-envelope body through the applier `0x4e7850` slot path and observe whether the slot stays empty or the load fails (ADR-0005 evidence hook) | R | |
+| A42 | Missing Block: contributes nothing for that State | OPEN | next step: trace the state applier with a Block name absent from the ControlList and observe the staged set (ADR-0005 evidence hook) | R | |
+| A43 | Missing `.bnd`: contributes nothing for that Block | OPEN | next step: observe the `.bnd` loader `0x548450` failure path with an absent stem and watch the bind (ADR-0005 evidence hook) | R | |
 
 ## B. Gameplay
 
@@ -204,6 +209,7 @@ index (all-zero rect, slot 0, default arm).
 | C35 | `+24` completes the Hard-level triple | EXE | same 3-slot read `0x44268` ev `b5c3094a…` (`u16[2]` = rec +28 = header +24); switch `0x170fa2` ev `feebe490…` | G | corrects S5 |
 | C36 | `+12` genre bits feed the song-select bitmask (`song+0x15c`) | ASSUMED | bitmask-shaped tests; transfer unpinned — negative *(offset-only)*, re-verified 2026-11-07: no `0x15c(`/`0x194(` displacement in file `0x44000`–`0x45000` (VA `0x444000`–`0x445000`); the one `0x19c` hit is a stack slot (VA `0x444228`), not a game field; re-verified 2026-11-07 (VA `0x444000`–`0x445000` sweep: no `0x15c(`/`0x194(` game-field displacements); unflippable — the bitmask transfer has no pinned writer | R | |
 | C37 | First embedded JPEG bounds the last level slice on every chart | DATA | 14/14 `end == jpeg0`; negative *(offset-only)*, re-verified 2026-11-07: no `FFD8` scan in loader range VA `0x571e00`–`0x573000`, slice ends come from header count words (C13); unflippable — the JPEG bound is a layout consequence with no consumer | G | |
+| C38 | Exe install base directory: `Image\...` resolves against the executable's directory vs the process working directory | OPEN | next step: launch 7.55 with CWD set away from the exe directory (or trace the `Image\` open) and observe which root the archive open uses; until then `docs/install-layout.md` records the rule as open (ADR-0006) | — | |
 
 ## D. Net (lighter — offsets already pinned in `net-protocol.md`/`relay.md`)
 

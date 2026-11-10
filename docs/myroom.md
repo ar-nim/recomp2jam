@@ -25,13 +25,15 @@ top-level `IDC_` entries plus gift `SET`s:
 | `0X15400037..44` | nickname/level/exp/rank/guild/money texts | — (captions OPEN) |
 | giftbox + gift `SET` | gift UI + 5 gift cells | `Myroom_Gift*.ojs` |
 
-## Missing bind file
+## Bind file (corrected 2026-11-10 — the absent line is retired)
 
-`State_Myroom.bnd` is declared but ABSENT from `Interface1.opi`
-(no entry) and from `install-root/` — so the block paints the
-unbound path: art at signed-i16 anchors, never rects (claims A10
-family; memory `[0c6c3]`). No ordinal pairing applies. The avatar
-portrait centers blind (audit 18–19).
+`State_Myroom.bnd` is PRESENT in `Interface1.opi` (slot 1340,
+kind 1, magic `FFFFFFFF`, 111 rects, `6 + 16×111` = 1782 B;
+the stem hits twice image-wide, like `State_Lanking.bnd`).
+The old "declared but absent" line was wrong. The block paints
+the bound path: art at ordinal-paired rects (claims A1/A27
+family), never anchor origins. The avatar portrait resolves
+through the `.bnd` like every other bound scene.
 
 ## Data side (owned systems)
 
@@ -42,9 +44,9 @@ portrait centers blind (audit 18–19).
 
 ## OPEN
 
-1. Anchor paint for each art body (per-frame `+0`/`+2` words) —
+1. Rect paint for each art body through the 111-rect `.bnd` —
    screen + paint + flow + live staging DONE (`Screen::Myroom`,
-   `paint_myroom_scene`, all-reject flow, anchor staging + soak
+   `paint_myroom_scene`, all-reject flow, bound staging + soak
    tests; clicks land nowhere per P0).
 2. Slot-button selection state + equip semantics.
 3. Bag pager + gift flows (server assists).
