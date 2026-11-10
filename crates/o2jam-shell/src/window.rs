@@ -12,7 +12,17 @@ use winit::event_loop::{ActiveEventLoop, OwnedDisplayHandle};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowAttributes};
 
-use super::{menu_of, Shell, DEFAULT_HEIGHT, DEFAULT_WIDTH};
+use super::{menu_of, CaptureState, Shell, DEFAULT_HEIGHT, DEFAULT_WIDTH};
+
+/// Trace-capture state owned by the handler: paint counting, last
+/// screen/content fingerprints, and the last dumped paint.
+struct CaptureSink {
+    state: CaptureState,
+    paint: u64,
+    last_screen: &'static str,
+    last_content_hash: u64,
+    last_dump_paint: u64,
+}
 
 /// Event-loop state: shell plus its softbuffer surface.
 pub struct WindowHandler {
@@ -21,17 +31,27 @@ pub struct WindowHandler {
     surface_size: Option<(u32, u32)>,
     paint_error: Option<anyhow::Error>,
     cursor: Option<(f64, f64)>,
+    capture: Option<CaptureSink>,
 }
 
 impl WindowHandler {
-    /// Wrap a shell; no window or surface yet.
-    pub fn new(shell: Shell) -> Self {
+    /// Wrap a shell; no window or surface yet. A capture plan on the
+    /// shell becomes the trace sink (frame dumps + applied-event log).
+    pub fn new(mut shell: Shell) -> Self {
+        let capture = shell.capture.take().map(|state| CaptureSink {
+            state,
+            paint: 0,
+            last_screen: "",
+            last_content_hash: 0,
+            last_dump_paint: 0,
+        });
         Self {
             shell,
             surface: None,
             surface_size: None,
             paint_error: None,
             cursor: None,
+            capture,
         }
     }
 
@@ -140,6 +160,10 @@ impl WindowHandler {
 
     /// Route one key event to a lane or menu hook.
     fn route_key(&mut self, code: winit::keyboard::KeyCode, down: bool) {
+        self.log_event(&format!(
+            "key-{} {code:?}",
+            if down { "down" } else { "up" }
+        ));
         let lane = if down {
             self.shell.keymap.press(code)
         } else {
@@ -159,18 +183,100 @@ impl WindowHandler {
             return;
         };
         if let Some((x, y)) = window_to_native(window_w, window_h, cursor_x, cursor_y) {
+            self.log_event(&format!("click {x} {y}"));
             self.shell.game.mouse_click(x, y);
         }
     }
 
-    /// Feed committed text into the game (winit `Ime::Commit`).
+    /// Feed committed text into the game (winit `Ime::Commit`, or a
+    /// pressed key's produced text when no input method owns the
+    /// key — Xvfb rigs have no XIM, so chat typing arrives this way).
+    /// Control characters never reach the log or the game: Enter's
+    /// produced `\r` would poison the capture log's line format.
     fn route_text(&mut self, text: &str) {
-        self.shell.game.text_input(text);
+        let clean: String = text.chars().filter(|ch| !ch.is_control()).collect();
+        if clean.is_empty() {
+            return;
+        }
+        for ch in clean.chars() {
+            self.log_event(&format!("text {ch}"));
+        }
+        self.shell.game.text_input(&clean);
     }
 
     /// Erase one draft character (Backspace press).
     fn route_erase(&mut self) {
+        self.log_event("erase");
         self.shell.game.delete_text();
+    }
+
+    /// Append one applied-event line to the capture log (no-op
+    /// without a log): the trace harness matches these against the
+    /// injected trace events.
+    fn log_event(&mut self, event: &str) {
+        let Some(capture) = self.capture.as_mut() else {
+            return;
+        };
+        let wall_ms = capture.state.started.elapsed().as_millis();
+        if let Some(log) = capture.state.log.as_mut() {
+            use std::io::Write;
+            let _ = writeln!(log, "event {wall_ms} {event}");
+        }
+    }
+
+    /// FNV-1a over the backbuffer words: the content fingerprint
+    /// gating frame dumps.
+    fn content_hash(pixels: &[u32]) -> u64 {
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        for word in pixels {
+            for shift in (0..32).step_by(8) {
+                hash ^= u64::from((*word >> shift) as u8);
+                hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
+            }
+        }
+        hash
+    }
+
+    /// Record one painted frame in the capture log and dump it when
+    /// the plan says so: on a screen change or content change after
+    /// `min_paint_gap` paints, or on the heartbeat interval either
+    /// way. Evidence volume stays bounded during Playing scroll.
+    fn capture_frame(&mut self) {
+        let Some(capture) = self.capture.as_mut() else {
+            return;
+        };
+        capture.paint = capture.paint.saturating_add(1);
+        let content = Self::content_hash(&self.shell.pixels);
+        let screen = self.shell.game.screen_name();
+        let wall_ms = capture.state.started.elapsed().as_millis();
+        let state = self.shell.game.state_hash();
+        if let Some(log) = capture.state.log.as_mut() {
+            use std::io::Write;
+            let _ = writeln!(
+                log,
+                "frame {0} wall_ms={wall_ms} screen={screen} state={state:016x} content={content:016x}",
+                capture.paint
+            );
+        }
+        let since_dump = capture.paint.saturating_sub(capture.last_dump_paint);
+        let screen_changed = screen != capture.last_screen;
+        let content_changed = content != capture.last_content_hash;
+        let due = (screen_changed
+            || (content_changed && since_dump >= capture.state.min_paint_gap))
+            || since_dump >= capture.state.heartbeat_paints;
+        capture.last_screen = screen;
+        capture.last_content_hash = content;
+        if !due {
+            return;
+        }
+        capture.last_dump_paint = capture.paint;
+        let rgb = xrgb_to_rgb(&self.shell.pixels);
+        let png = o2jam_render::png::encode_png(DEFAULT_WIDTH, DEFAULT_HEIGHT, &rgb);
+        let name = format!("frame-{:06}-{screen}.png", capture.paint);
+        let path = capture.state.dir.join(name);
+        if let Err(source) = std::fs::write(&path, png) {
+            tracing::warn!(%source, "frame dump failed");
+        }
     }
 
     /// Take a stored paint failure, if any.
@@ -181,6 +287,17 @@ impl WindowHandler {
 
 /// Letterbox bar color: black bars around the aspect-fit image.
 pub const LETTERBOX: u32 = 0x000000;
+
+/// Strip XRGB backbuffer words down to RGB triplets for PNG dumps.
+fn xrgb_to_rgb(buf: &[u32]) -> Vec<u8> {
+    let mut rgb = Vec::with_capacity(buf.len() * 3);
+    for pixel in buf {
+        rgb.push((pixel >> 16) as u8);
+        rgb.push((pixel >> 8) as u8);
+        rgb.push(*pixel as u8);
+    }
+    rgb
+}
 
 /// Validated present geometry: the centered uniform-scale draw rect
 /// of the native backbuffer inside the window buffer.
@@ -301,10 +418,22 @@ impl ApplicationHandler for WindowHandler {
                     KeyEvent {
                         physical_key: PhysicalKey::Code(code),
                         state,
+                        text,
                         ..
                     },
                 ..
-            } => self.route_key(code, state == ElementState::Pressed),
+            } => {
+                // Typed characters reach the chat drafts through the
+                // key's produced text when no input method owns the
+                // key (Xvfb rigs have no XIM; real IMEs commit through
+                // `Ime::Commit` above and never double-feed here).
+                if state == ElementState::Pressed {
+                    if let Some(text) = text.filter(|text| !text.is_empty()) {
+                        self.route_text(&text);
+                    }
+                }
+                self.route_key(code, state == ElementState::Pressed);
+            }
             WindowEvent::Ime(Ime::Commit(text)) => self.route_text(&text),
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = Some((position.x, position.y));
@@ -324,6 +453,7 @@ impl ApplicationHandler for WindowHandler {
             WindowEvent::RedrawRequested => {
                 self.shell.paint_backbuffer();
                 self.present(event_loop);
+                self.capture_frame();
                 // Planet quit-confirm OK (`GameLoop::quit_requested`):
                 // the game asked to leave, so the loop exits.
                 if self.shell.game.quit_requested() {
@@ -389,6 +519,51 @@ mod tests {
         let (mut handler, probe) = probed_handler();
         handler.route_text("hello");
         assert_eq!(probe.borrow().texts, vec!["hello".to_owned()]);
+    }
+
+    #[test]
+    fn capture_log_records_events_frames_and_dumps() {
+        let dir = std::env::temp_dir().join(format!("recomp2jam-capture-{}", std::process::id()));
+        // The caller owns the output root (the replay driver creates
+        // --out first); the shell only creates the frames directory.
+        std::fs::create_dir_all(&dir).expect("output root");
+        let log_path = dir.join("input.log");
+        let probe = Rc::new(RefCell::new(InputProbe::default()));
+        let shell = Shell::new(Box::new(probe.clone())).with_capture(super::super::CapturePlan {
+            dir: dir.join("frames"),
+            min_paint_gap: 1,
+            heartbeat_paints: 2,
+            input_log: Some(log_path.clone()),
+        });
+        let mut handler = WindowHandler::new(shell);
+        handler.route_key(KeyCode::KeyS, true);
+        handler.route_click(100.0, 200.0);
+        handler.shell.paint_backbuffer();
+        handler.capture_frame();
+        handler.shell.paint_backbuffer();
+        handler.capture_frame();
+        // Flush the log by dropping the handler, then read it back.
+        let frames_dir = dir.join("frames");
+        drop(handler);
+        let text = std::fs::read_to_string(&log_path).expect("input log written");
+        assert!(
+            text.contains("key-down KeyS"),
+            "log has the routed key: {text}"
+        );
+        assert!(text.contains("frame 1 "), "log has the first paint: {text}");
+        assert!(
+            text.contains("frame 2 "),
+            "log has the second paint: {text}"
+        );
+        let dumps: Vec<_> = std::fs::read_dir(&frames_dir)
+            .expect("frames dumped")
+            .flatten()
+            .collect();
+        assert!(!dumps.is_empty(), "at least one frame captured");
+        for dump in &dumps {
+            assert!(dump.file_name().to_string_lossy().ends_with("-unknown.png"));
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

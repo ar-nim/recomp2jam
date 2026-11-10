@@ -7,6 +7,7 @@
 //! faces here as the missing-font fallback.
 
 pub mod font;
+pub mod png;
 
 /// Expand one little-endian RGB555 pixel to 24-bit RGB.
 #[must_use]

@@ -180,8 +180,54 @@ pub trait GameLoop {
     fn quit_requested(&self) -> bool {
         false
     }
+    /// Name of the screen currently shown (`"unknown"` by default):
+    /// the capture log's transition marker, so input traces replayed
+    /// through the real window can sync on scene changes. Test
+    /// affordance, not gameplay.
+    fn screen_name(&self) -> &'static str {
+        "unknown"
+    }
+    /// Hash of the observable game state (screen, drafts, histories,
+    /// live score): the trace harness's final-state evidence. Default
+    /// zero (no observable state) so existing implementors keep
+    /// compiling. Test affordance, not gameplay.
+    fn state_hash(&self) -> u64 {
+        0
+    }
     /// Paint the current frame into the backbuffer view.
     fn paint(&mut self, frame: &mut o2jam_render::Frame<'_>);
+}
+
+/// Trace-harness capture plan for a windowed run (test affordance):
+/// per-paint input/screen/hash lines plus gated frame dumps.
+#[derive(Debug, Clone)]
+pub struct CapturePlan {
+    /// Directory for `frame-NNNNNN-<screen>.png` captures.
+    pub dir: std::path::PathBuf,
+    /// Minimum paints between dumps while the frame keeps changing
+    /// (bounds Playing-scroll capture volume).
+    pub min_paint_gap: u64,
+    /// Force a dump when no content change happened for this many
+    /// paints (menus at rest still leave a heartbeat trail).
+    pub heartbeat_paints: u64,
+    /// Optional input log path: one line per routed event, one
+    /// `frame` line per paint (applied wall ms, screen, state hash,
+    /// content hash).
+    pub input_log: Option<std::path::PathBuf>,
+}
+
+/// Prepared capture state: the plan plus its opened log and clock.
+pub(crate) struct CaptureState {
+    /// Frame-dump directory (created at attach time).
+    pub dir: std::path::PathBuf,
+    /// Minimum paints between content-change dumps.
+    pub min_paint_gap: u64,
+    /// Force-dump interval in paints.
+    pub heartbeat_paints: u64,
+    /// Opened applied-event log (`None` when the file refused).
+    pub log: Option<std::io::BufWriter<std::fs::File>>,
+    /// Wall-clock anchor for the log's `wall_ms` stamps.
+    pub started: std::time::Instant,
 }
 
 /// Backbuffer words (`DEFAULT_WIDTH` x `DEFAULT_HEIGHT` XRGB8888).
@@ -196,6 +242,7 @@ pub struct Shell {
     pub(crate) window: Option<Arc<Window>>,
     pub(crate) game: Box<dyn GameLoop>,
     pub(crate) pixels: Vec<u32>,
+    pub(crate) capture: Option<CaptureState>,
 }
 
 impl Shell {
@@ -206,7 +253,31 @@ impl Shell {
             window: None,
             game,
             pixels: vec![0; BACKBUFFER_WORDS],
+            capture: None,
         }
+    }
+
+    /// Attach a trace-harness capture plan (frame dumps plus an
+    /// applied-event log); consumed by the window handler. Failures
+    /// to create the directory or open the log degrade to no-capture
+    /// (the game loop never depends on evidence plumbing).
+    pub fn with_capture(mut self, plan: CapturePlan) -> Self {
+        if let Err(source) = std::fs::create_dir_all(&plan.dir) {
+            tracing::warn!(%source, "frame-dump directory unusable; dumps disabled");
+        }
+        let log = plan
+            .input_log
+            .as_ref()
+            .and_then(|path| std::fs::File::create(path).ok())
+            .map(std::io::BufWriter::new);
+        self.capture = Some(CaptureState {
+            dir: plan.dir,
+            min_paint_gap: plan.min_paint_gap.max(1),
+            heartbeat_paints: plan.heartbeat_paints.max(1),
+            log,
+            started: std::time::Instant::now(),
+        });
+        self
     }
 
     /// Run the game painter over a caller buffer (headless-safe).

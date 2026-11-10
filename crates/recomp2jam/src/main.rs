@@ -15,6 +15,7 @@ mod loading;
 mod session;
 mod session_walk;
 mod shots;
+mod trace;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -167,6 +168,84 @@ enum Command {
         /// Directory for `<stage>.png` files.
         #[arg(long, default_value = "docs/screenshots/session")]
         out_dir: String,
+    },
+    /// Windowed online mode: log in, then walk the real window
+    /// (U1): the login flow runs from CLI args (ours-by-design — the
+    /// exe takes launcher cmdline), the lobby walk rides real window
+    /// input.
+    Online {
+        /// Gateway host (local Memoryer).
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        /// Gateway TCP port.
+        #[arg(long, default_value_t = o2jam_net::DEFAULT_GATEWAY_PORT)]
+        port: u16,
+        /// Account id.
+        #[arg(long, default_value_t = 1)]
+        user_id: i32,
+        /// Session token (gateway session guid).
+        #[arg(long)]
+        token: String,
+        /// Account gender (male, female, any).
+        #[arg(long, default_value = "any")]
+        gender: String,
+        /// Gateway id to enter (needs --channel-id too).
+        #[arg(long, requires = "channel_id")]
+        gateway_id: Option<i16>,
+        /// Channel id to enter (needs --gateway-id too).
+        #[arg(long, requires = "gateway_id")]
+        channel_id: Option<i16>,
+        /// Create this room on startup and host it (the U1 walk:
+        /// a fresh local Memoryer lists no rooms, so the trace hosts).
+        #[arg(long)]
+        create_room: Option<String>,
+        /// Join this room on Room Confirm instead (needs the room to
+        /// exist; alternative to --create-room).
+        #[arg(long, conflicts_with = "create_room")]
+        join_room: Option<i32>,
+        /// Password for `--join-room`.
+        #[arg(long, default_value = "")]
+        room_password: String,
+        /// Host song pick: sent on Waiting Confirm (4000/4002/4030
+        /// plus the catalog chart fetch).
+        #[arg(long)]
+        music_id: Option<u16>,
+        /// Chart difficulty code (0 EX, 1 NX, 2 HX, 3 RX).
+        #[arg(long, default_value_t = 2)]
+        difficulty: u8,
+        /// Scroll-speed code (select + loaded + tally).
+        #[arg(long, default_value_t = 1)]
+        speed: u8,
+        /// Room stage word (`SetRoomArena` 4002).
+        #[arg(long, default_value_t = 0)]
+        arena: i32,
+        /// Load the splash backdrop from this `.opi` archive.
+        #[arg(long)]
+        interface: Option<String>,
+        /// Play sound through the default output (default: null
+        /// sink, so rigs never reach the speakers).
+        #[arg(long)]
+        sound: bool,
+        /// Fixed-clock test affordance: advance the virtual clock by
+        /// this many ms per painted frame (deterministic windowed
+        /// traces without an audio device).
+        #[arg(long)]
+        fixed_clock: Option<u64>,
+        /// Frame-capture directory: one PNG per gated paint (screen
+        /// change or content change, heartbeat-bounded).
+        #[arg(long, requires = "input_log")]
+        frame_dump: Option<String>,
+        /// Applied-event log (one line per routed event plus one
+        /// `frame` line per paint). Test affordance.
+        #[arg(long)]
+        input_log: Option<String>,
+    },
+    /// Validate one recomp2jam-input-v1 trace (schema, ordering,
+    /// pairs, bounds) without running it.
+    ValidateTrace {
+        /// Trace JSON path.
+        #[arg(long)]
+        trace: String,
     },
     /// Stub gameplay entry point (autoplay with null backend for now).
     Play {
@@ -378,6 +457,166 @@ impl ConnectParams {
     }
 }
 
+/// `online` subcommand fields (one named bundle, no flag-argument
+/// soup): the U1 windowed online walk — CLI login, then real-window
+/// lobby navigation driven by the trace harness.
+#[derive(Debug, Clone)]
+struct OnlineCli {
+    host: String,
+    port: u16,
+    user_id: i32,
+    token: String,
+    gender: String,
+    gateway_id: Option<i16>,
+    channel_id: Option<i16>,
+    create_room: Option<String>,
+    join_room: Option<i32>,
+    room_password: String,
+    music_id: Option<u16>,
+    difficulty: u8,
+    speed: u8,
+    arena: i32,
+    interface: Option<String>,
+    sound: bool,
+    fixed_clock: Option<u64>,
+    frame_dump: Option<String>,
+    input_log: Option<String>,
+}
+
+/// `online` subcommand: run the pinned login flow
+/// ([`connect::connect_and_login_with_transport`], docs/net-protocol.md
+/// §4c), assemble the windowed [`session::OnlineSession`], and run it
+/// in the winit loop with the trace-harness capture affordances.
+///
+/// # Errors
+///
+/// Whatever login, room setup, or the window reports.
+fn run_online(opts: OnlineCli) -> Result<()> {
+    let mut game = o2jam_shell::ScreenGame::new();
+    setup_splash(&mut game, &opts.interface)?;
+    let connect_options = connect::ConnectOptions {
+        host: opts.host.clone(),
+        port: opts.port,
+        user_id: opts.user_id,
+        token: opts.token.clone(),
+        gender: connect::parse_gender(&opts.gender)?,
+        relay_key1: 0,
+        relay_key2: 0,
+        channel: opts.gateway_id.zip(opts.channel_id),
+        character: false,
+        wallet: false,
+        avatar_opa: None,
+        join_room: None,
+        room_password: String::new(),
+        song: None,
+    };
+    let (report, gateway) = connect::connect_and_login_with_transport(&connect_options)?;
+    tracing::info!(channels = report.channels.len(), "channels listed");
+    game.set_channels(report.channels);
+    if !report.rooms.is_empty() {
+        tracing::info!(rooms = report.rooms.len(), "rooms listed");
+        game.set_rooms(report.rooms);
+    }
+    let pending_room = opts
+        .join_room
+        .map(|number| (number, opts.room_password.clone()));
+    let pending_song = opts.music_id.map(|music_id| session::SongChoice {
+        music_id,
+        difficulty: opts.difficulty,
+        speed: opts.speed,
+        arena_id: opts.arena,
+    });
+    let mut session = assemble_online_session(
+        game,
+        gateway,
+        Some(&opts.token),
+        pending_room,
+        pending_song,
+        opts.create_room.as_deref(),
+    )?;
+    // Audio containment (memory 979fb): rigs and CI never reach the
+    // speakers unless a human passes --sound.
+    session.set_silent_audio(!opts.sound);
+    if let Some(step_ms) = opts.fixed_clock {
+        session.game_mut().enable_fixed_clock(step_ms);
+    }
+    session.attach_initial_audio(opts.sound);
+    run_windowed_session(session, capture_plan(opts.frame_dump, opts.input_log))
+}
+
+/// Assemble the windowed online session shared by `play --window
+/// --online` and `online`: pair the transport with the game, stage
+/// the local username, the Room Confirm join intent, the host song
+/// pick, the song catalog, the live scene art, and — when named — a
+/// hosted room created through the proven `CreateRoom` exchange.
+///
+/// # Errors
+///
+/// A rejected create, a missing room row, or whatever the gateway
+/// transport reports.
+fn assemble_online_session(
+    game: o2jam_shell::ScreenGame,
+    transport: o2jam_net::GatewayConnection,
+    local_user: Option<&str>,
+    pending_room: Option<(i32, String)>,
+    pending_song: Option<session::SongChoice>,
+    create_room: Option<&str>,
+) -> Result<session::OnlineSession> {
+    let mut session = session::OnlineSession::new(game, transport);
+    if let Some(name) = local_user.filter(|name| !name.is_empty()) {
+        session.set_local_user(name);
+    }
+    if let Some((number, password)) = pending_room {
+        session.set_pending_room_join(number, &password);
+    }
+    if let Some(choice) = pending_song {
+        session.set_pending_song(choice);
+    }
+    stage_session_catalog(&mut session);
+    session.stage_live_art();
+    if let Some(title) = create_room {
+        let room = session.create_and_join_room(title)?;
+        tracing::info!(title = room.title, "room created");
+    }
+    Ok(session)
+}
+
+/// Wrap a session in the winit shell and run it, attaching the
+/// trace-harness capture plan when requested (frame dumps + the
+/// applied-event log; test affordances, never gameplay input).
+///
+/// # Errors
+///
+/// Whatever the event loop or the paint backend reports.
+fn run_windowed_session(
+    session: session::OnlineSession,
+    capture: Option<o2jam_shell::CapturePlan>,
+) -> Result<()> {
+    let event_loop = winit::event_loop::EventLoop::new()
+        .map_err(|e| anyhow::anyhow!("event loop failed: {e:?}"))?;
+    let shell = o2jam_shell::Shell::new(Box::new(session));
+    let shell = match capture {
+        Some(plan) => shell.with_capture(plan),
+        None => shell,
+    };
+    shell.run(event_loop)
+}
+
+/// Build the capture plan from the `--frame-dump`/`--input-log` pair
+/// (`None` without a dump directory; the plan's gates bound capture
+/// volume during Playing scroll).
+fn capture_plan(
+    frame_dump: Option<String>,
+    input_log: Option<String>,
+) -> Option<o2jam_shell::CapturePlan> {
+    frame_dump.map(|dir| o2jam_shell::CapturePlan {
+        dir: std::path::PathBuf::from(dir),
+        min_paint_gap: 25,
+        heartbeat_paints: 600,
+        input_log: input_log.map(std::path::PathBuf::from),
+    })
+}
+
 /// CLI fields that assemble [`connect::ConnectOptions`] for
 /// `play --online` (list-only at startup: no channel entry,
 /// character, avatar, or song; the room join rides
@@ -548,6 +787,58 @@ fn run_command(command: Command) -> Result<()> {
             token,
             out_dir,
         } => run_session_walk(&host, port, user_id, &token, &out_dir),
+        Command::Online {
+            host,
+            port,
+            user_id,
+            token,
+            gender,
+            gateway_id,
+            channel_id,
+            create_room,
+            join_room,
+            room_password,
+            music_id,
+            difficulty,
+            speed,
+            arena,
+            interface,
+            sound,
+            fixed_clock,
+            frame_dump,
+            input_log,
+        } => run_online(OnlineCli {
+            host,
+            port,
+            user_id,
+            token,
+            gender,
+            gateway_id,
+            channel_id,
+            create_room,
+            join_room,
+            room_password,
+            music_id,
+            difficulty,
+            speed,
+            arena,
+            interface,
+            sound,
+            fixed_clock,
+            frame_dump,
+            input_log,
+        }),
+        Command::ValidateTrace { trace } => {
+            let loaded = trace::load_validated(std::path::Path::new(&trace))?;
+            println!(
+                "trace ok: {} ({} events, clock {} {})",
+                loaded.scenario,
+                loaded.events.len(),
+                loaded.time_base.name,
+                loaded.time_base.unit
+            );
+            Ok(())
+        }
         Command::Play {
             chart,
             ojm,
@@ -653,27 +944,20 @@ fn run_play(
         )?;
         setup_avatar(&mut game, &avatar_opa, &equip, avatar_male)?;
         setup_chart_audio(&mut game, &chart, &ojm, level, sound)?;
-        let event_loop = winit::event_loop::EventLoop::new()
-            .map_err(|e| anyhow::anyhow!("event loop failed: {e:?}"))?;
         match gateway {
             Some((transport, pending_room, pending_song)) => {
-                let mut session = session::OnlineSession::new(game, transport);
-                if let Some(name) = token.as_deref().filter(|name| !name.is_empty()) {
-                    session.set_local_user(name);
-                }
-                if let Some((number, password)) = pending_room {
-                    session.set_pending_room_join(number, &password);
-                }
-                if let Some(choice) = pending_song {
-                    session.set_pending_song(choice);
-                }
-                stage_session_catalog(&mut session);
-                session.stage_live_art();
-                if let Some(title) = online_create_room {
-                    let room = session.create_and_join_room(&title)?;
-                    tracing::info!(title = room.title, "room created");
-                }
-                o2jam_shell::Shell::new(Box::new(session)).run(event_loop)?;
+                let mut session = assemble_online_session(
+                    game,
+                    transport,
+                    token.as_deref(),
+                    pending_room,
+                    pending_song,
+                    online_create_room.as_deref(),
+                )?;
+                // Audio containment: without --sound every bank attach
+                // stays on the null sink even when hardware exists.
+                session.set_silent_audio(!sound);
+                run_windowed_session(session, None)?;
             }
             None => {
                 // Offline walk: stage the genuine scene art from the
@@ -683,6 +967,8 @@ fn run_play(
                 // verification.
                 live_art::stage_live_scenes(&mut game);
                 seed_offline_lobby(&mut game);
+                let event_loop = winit::event_loop::EventLoop::new()
+                    .map_err(|e| anyhow::anyhow!("event loop failed: {e:?}"))?;
                 o2jam_shell::Shell::new(Box::new(game)).run(event_loop)?;
             }
         }

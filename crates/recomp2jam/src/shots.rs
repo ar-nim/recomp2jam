@@ -1279,85 +1279,10 @@ fn to_rgb(buf: &[u32]) -> Vec<u8> {
     rgb
 }
 
-/// PNG signature.
-const PNG_SIG: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
-
-/// Encode 8-bit RGB pixels as a PNG (none filter, stored deflate).
-pub fn encode_png(width: u32, height: u32, rgb: &[u8]) -> Vec<u8> {
-    let stride = width as usize * 3;
-    let mut raw = Vec::with_capacity(height as usize * (stride + 1));
-    for row in 0..height as usize {
-        raw.push(0);
-        raw.extend_from_slice(&rgb[row * stride..(row + 1) * stride]);
-    }
-    let mut out = Vec::with_capacity(raw.len() + 64);
-    out.extend_from_slice(&PNG_SIG);
-    let mut ihdr = [0u8; 13];
-    ihdr[0..4].copy_from_slice(&width.to_be_bytes());
-    ihdr[4..8].copy_from_slice(&height.to_be_bytes());
-    ihdr[8] = 8;
-    ihdr[9] = 2;
-    push_chunk(&mut out, b"IHDR", &ihdr);
-    push_chunk(&mut out, b"IDAT", &zlib_stored(&raw));
-    push_chunk(&mut out, b"IEND", &[]);
-    out
-}
-
-/// Wrap raw scanlines in a zlib stream of uncompressed deflate blocks.
-fn zlib_stored(raw: &[u8]) -> Vec<u8> {
-    let blocks: Vec<&[u8]> = raw.chunks(65_535).collect();
-    let mut out = Vec::with_capacity(raw.len() + 2 + 5 * blocks.len() + 4);
-    out.extend_from_slice(&[0x78, 0x01]);
-    for (index, block) in blocks.iter().enumerate() {
-        let last = index + 1 == blocks.len();
-        out.push(u8::from(last));
-        let len = block.len() as u16;
-        out.extend_from_slice(&len.to_le_bytes());
-        out.extend_from_slice(&(!len).to_le_bytes());
-        out.extend_from_slice(block);
-    }
-    out.extend_from_slice(&adler32(raw).to_be_bytes());
-    out
-}
-
-/// Append one chunk (length, tag, data, CRC over tag + data).
-fn push_chunk(out: &mut Vec<u8>, tag: &[u8; 4], data: &[u8]) {
-    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
-    out.extend_from_slice(tag);
-    out.extend_from_slice(data);
-    let mut tagged = Vec::with_capacity(4 + data.len());
-    tagged.extend_from_slice(tag);
-    tagged.extend_from_slice(data);
-    out.extend_from_slice(&crc32(&tagged).to_be_bytes());
-}
-
-/// IEEE CRC-32, table-free.
-fn crc32(data: &[u8]) -> u32 {
-    let mut crc = 0xFFFF_FFFFu32;
-    for &byte in data {
-        crc ^= u32::from(byte);
-        for _ in 0..8 {
-            if crc & 1 == 1 {
-                crc = (crc >> 1) ^ 0xEDB8_8320;
-            } else {
-                crc >>= 1;
-            }
-        }
-    }
-    !crc
-}
-
-/// Adler-32 checksum.
-fn adler32(data: &[u8]) -> u32 {
-    const MOD: u32 = 65_521;
-    let mut low = 1u32;
-    let mut high = 0u32;
-    for &byte in data {
-        low = (low + u32::from(byte)) % MOD;
-        high = (high + low) % MOD;
-    }
-    (high << 16) | low
-}
+/// PNG encoding for scene captures lives in the render crate
+/// ([`o2jam_render::png`]); re-exported here for the existing
+/// screenshot/walk call sites.
+pub use o2jam_render::png::encode_png;
 
 #[cfg(test)]
 mod tests {
@@ -1713,29 +1638,6 @@ mod tests {
             filled * 2 >= total,
             "slot-1 peer gauge must read green ({filled}/{total})"
         );
-    }
-
-    #[test]
-    fn png_carries_signature_and_dimensions() {
-        let rgb = vec![255u8; 2 * 3];
-        let png = encode_png(2, 1, &rgb);
-        assert_eq!(&png[0..8], &PNG_SIG);
-        assert_eq!(&png[12..16], b"IHDR");
-        assert_eq!(&png[16..20], [0, 0, 0, 2]);
-        assert_eq!(&png[20..24], [0, 0, 0, 1]);
-        assert_eq!(&png[png.len() - 8..png.len() - 4], b"IEND");
-    }
-
-    #[test]
-    fn png_stored_blocks_round_trip() {
-        let mut rgb = vec![0u8; 3 * 2 * 3];
-        rgb[0] = 255;
-        let png = encode_png(3, 2, &rgb);
-        let (w, h, raw) = decode_stored_png(&png);
-        assert_eq!((w, h), (3, 2));
-        assert_eq!(raw.len(), 2 * (3 * 3 + 1));
-        assert_eq!(raw[0], 0);
-        assert_eq!(&raw[1..4], &[255, 0, 0]);
     }
 
     #[test]
@@ -3541,48 +3443,5 @@ mod tests {
     fn is_varied(rgb: &[u8]) -> bool {
         let first = rgb[0];
         rgb.iter().any(|byte| *byte != first)
-    }
-
-    /// Minimal reader for our own stored-block PNGs (tests only).
-    fn decode_stored_png(png: &[u8]) -> (u32, u32, Vec<u8>) {
-        assert_eq!(&png[0..8], &PNG_SIG);
-        let mut pos = 8;
-        let mut dims = (0, 0);
-        let mut idat = Vec::new();
-        while pos < png.len() {
-            let len = u32::from_be_bytes(png[pos..pos + 4].try_into().unwrap()) as usize;
-            let tag = &png[pos + 4..pos + 8];
-            let data = &png[pos + 8..pos + 8 + len];
-            if tag == b"IHDR" {
-                dims = (
-                    u32::from_be_bytes(data[0..4].try_into().unwrap()),
-                    u32::from_be_bytes(data[4..8].try_into().unwrap()),
-                );
-            } else if tag == b"IDAT" {
-                idat.extend_from_slice(data);
-            } else if tag == b"IEND" {
-                break;
-            }
-            pos += 12 + len;
-        }
-        assert_eq!(&idat[0..2], &[0x78, 0x01]);
-        let mut raw = Vec::new();
-        let mut at = 2;
-        loop {
-            let last = idat[at] == 1;
-            let len = u16::from_le_bytes(idat[at + 1..at + 3].try_into().unwrap()) as usize;
-            assert_eq!(
-                u16::from_le_bytes(idat[at + 3..at + 5].try_into().unwrap()),
-                !len as u16
-            );
-            raw.extend_from_slice(&idat[at + 5..at + 5 + len]);
-            at += 5 + len;
-            if last {
-                break;
-            }
-        }
-        let adler = u32::from_be_bytes(idat[at..at + 4].try_into().unwrap());
-        assert_eq!(adler, adler32(&raw));
-        (dims.0, dims.1, raw)
     }
 }

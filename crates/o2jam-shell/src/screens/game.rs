@@ -140,6 +140,15 @@ pub struct ScreenGame {
     /// resample to their own rate); [`Self::set_song_rate`]
     /// overrides for tests.
     song_rate: u32,
+    /// Fixed-clock test affordance: when set, [`Self::now_ms`] serves
+    /// this virtual clock (advanced by `fixed_clock_step_ms` per
+    /// `paint`) instead of the audio sample clock — trace replays
+    /// through the real window stay deterministic without an audio
+    /// device. `None` in production runs (the sample clock rules).
+    fixed_clock_step_ms: Option<u64>,
+    /// Virtual clock position while the fixed clock is enabled
+    /// (paints × step; menus and Playing share it).
+    fixed_now_ms: u64,
     audio: Option<AudioRig>,
     avatar: Option<AvatarFigure>,
     splash: Option<AvatarFigure>,
@@ -455,6 +464,8 @@ impl ScreenGame {
             playing: LivePlay::new(&[]),
             song_anchor_sample: 0,
             song_rate: 44_100,
+            fixed_clock_step_ms: None,
+            fixed_now_ms: 0,
             audio: None,
             avatar: None,
             splash: None,
@@ -637,13 +648,30 @@ impl ScreenGame {
         self.song_rate = rate;
     }
 
+    /// Enable the fixed-clock test affordance: every `paint`
+    /// advances the virtual clock by `step_ms` and [`Self::now_ms`]
+    /// serves it instead of the audio sample clock. Trace replays
+    /// through the real window use this (null audio would otherwise
+    /// park the song at 0 forever). Production runs never call this —
+    /// the sample clock rules there.
+    pub fn enable_fixed_clock(&mut self, step_ms: u64) -> &mut Self {
+        self.fixed_clock_step_ms = Some(step_ms);
+        self
+    }
+
     /// Song position in ms from the audio backend's sample
     /// counter, anchored at Playing entry
     /// (`song_anchor_sample`) — strike timing, scroll, and gauge
     /// advances all consume this, never the wall clock. Without
     /// an audio rig the song parks at 0 (tests and headless runs
     /// drive `now_ms` explicitly through `paint_at` / `strike_at`).
+    /// The fixed-clock test affordance overrides everything: the
+    /// virtual clock serves menus (splash auto-advance) and Playing
+    /// alike so trace replays stay deterministic without audio.
     fn now_ms(&mut self) -> u64 {
+        if self.fixed_clock_step_ms.is_some() {
+            return self.fixed_now_ms;
+        }
         let Some(rig) = self.audio.as_ref() else {
             return 0;
         };
@@ -3311,10 +3339,87 @@ impl GameLoop for ScreenGame {
         self.quit_requested
     }
 
+    fn screen_name(&self) -> &'static str {
+        match self.flow.current() {
+            Screen::Avi => "avi",
+            Screen::Planet => "planet",
+            Screen::Channel => "channel",
+            Screen::Room => "room",
+            Screen::Waiting => "waiting",
+            Screen::Loading => "loading",
+            Screen::Playing => "playing",
+            Screen::Result => "result",
+            Screen::Shop => "shop",
+            Screen::MusicShop => "musicshop",
+            Screen::Myroom => "myroom",
+            Screen::Lanking => "lanking",
+        }
+    }
+
+    fn state_hash(&self) -> u64 {
+        observable_state_hash(self)
+    }
+
     fn paint(&mut self, frame: &mut Frame<'_>) {
         let now = self.now_ms();
         self.paint_at(frame, now);
+        if let Some(step_ms) = self.fixed_clock_step_ms {
+            self.fixed_now_ms = self.fixed_now_ms.saturating_add(step_ms);
+        }
     }
+}
+
+/// FNV-1a over one string (length-prefixed, UTF-8 bytes).
+fn hash_str(hash: &mut u64, text: &str) {
+    hash_u64(hash, u64::try_from(text.len()).unwrap_or(u64::MAX));
+    for byte in text.as_bytes() {
+        hash_byte(hash, *byte);
+    }
+}
+
+/// FNV-1a over one byte.
+fn hash_byte(hash: &mut u64, byte: u8) {
+    *hash ^= u64::from(byte);
+    *hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
+}
+
+/// FNV-1a over one `u64` word (little-endian bytes).
+fn hash_u64(hash: &mut u64, word: u64) {
+    for shift in (0..64).step_by(8) {
+        hash_byte(hash, (word >> shift) as u8);
+    }
+}
+
+/// Hash of everything a player can observe without pixels: the
+/// screen, both chat drafts and histories, the staged selection, the
+/// loading gate, and the live score/life. The trace harness compares
+/// this across replays (same stimuli → same final state hash); it is
+/// a test affordance, never gameplay input.
+fn observable_state_hash(game: &ScreenGame) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    hash_str(&mut hash, game.screen_name());
+    hash_str(&mut hash, &game.chat_input);
+    hash_str(&mut hash, &game.channel_input);
+    for row in &game.waiting_chat {
+        hash_str(&mut hash, &row.text);
+    }
+    for row in &game.channel_chat {
+        hash_str(&mut hash, &row.text);
+    }
+    if let Some(selection) = &game.selected_music {
+        hash_u64(&mut hash, u64::from(selection.music_id));
+        hash_u64(&mut hash, u64::from(selection.difficulty));
+        hash_u64(&mut hash, u64::from(selection.speed));
+    }
+    hash_u64(&mut hash, game.loading_gate_phase as u64);
+    let score = game.playing.score();
+    hash_u64(&mut hash, score.points);
+    hash_u64(&mut hash, u64::from(score.max_combo));
+    for count in score.counts {
+        hash_u64(&mut hash, u64::from(count));
+    }
+    hash_u64(&mut hash, u64::from(game.playing.life()));
+    hash
 }
 
 #[cfg(test)]
@@ -6258,6 +6363,85 @@ mod game_tests {
             title: "First".to_owned(),
             artist: "Band".to_owned(),
         }
+    }
+
+    /// One native-frame paint through the `GameLoop` path (the
+    /// fixed-clock advance rides this, never `paint_at`).
+    fn paint_game_frame(game: &mut ScreenGame) {
+        let mut buf = vec![0u32; 800 * 600];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 800,
+            h: 600,
+        };
+        game.paint(&mut frame);
+    }
+
+    #[test]
+    fn fixed_clock_advances_the_splash_without_input() {
+        // Trace-rig affordance: with the virtual clock enabled, the
+        // splash auto-advances on painted frames alone (null audio
+        // would otherwise park `now_ms` at 0 forever).
+        let mut game = ScreenGame::new();
+        game.enable_fixed_clock(25);
+        for _ in 0..(SPLASH_AUTO_ADVANCE_MS / 25 + 2) {
+            paint_game_frame(&mut game);
+        }
+        assert_eq!(game.screen(), Screen::Planet);
+    }
+
+    #[test]
+    fn fixed_clock_runs_a_loaded_song_to_result() {
+        // The same affordance drives Playing: notes auto-miss on the
+        // virtual clock and the finish edge (last tail + 1.5 s) fires
+        // without an audio device.
+        let mut game = ScreenGame::new();
+        game.enable_fixed_clock(25);
+        dismiss_splash_to_dialog(&mut game);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Loading);
+        game.load_chart(vec![(0, 1000, 1), (3, 2000, 2)]);
+        stage_armed_loading_gate(&mut game);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Playing);
+        for _ in 0..((2000 + 1500) / 25 + 10) {
+            paint_game_frame(&mut game);
+        }
+        assert_eq!(game.screen(), Screen::Result);
+    }
+
+    #[test]
+    fn screen_name_tracks_the_flow() {
+        let mut game = ScreenGame::new();
+        assert_eq!(game.screen_name(), "avi");
+        dismiss_splash_to_dialog(&mut game);
+        assert_eq!(game.screen_name(), "channel");
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen_name(), "room");
+    }
+
+    #[test]
+    fn state_hash_moves_with_state_and_copies_it() {
+        let mut game = ScreenGame::new();
+        let boot = game.state_hash();
+        dismiss_splash_to_dialog(&mut game);
+        assert_ne!(game.state_hash(), boot, "screen change moves the hash");
+        let in_channel = game.state_hash();
+        game.set_channel_input("hello");
+        assert_ne!(game.state_hash(), in_channel, "draft change moves the hash");
+        game.set_channel_input("");
+        assert_eq!(
+            game.state_hash(),
+            in_channel,
+            "restored state restores the hash"
+        );
+        // A second game walked the same way hashes the same: the
+        // trace harness compares replays through this.
+        let mut twin = ScreenGame::new();
+        dismiss_splash_to_dialog(&mut twin);
+        assert_eq!(twin.state_hash(), in_channel);
     }
 
     fn walk_to_loading(game: &mut ScreenGame) {
