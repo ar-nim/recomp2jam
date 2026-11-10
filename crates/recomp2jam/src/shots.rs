@@ -3477,11 +3477,12 @@ mod tests {
     }
 
     #[test]
-    fn guest_capture_matches_master_waiting_but_not_select_view() {
-        // Artifact verdict: the guest capture replays the master waiting
-        // instant seat-for-seat (same captions, chat, and seats — the
-        // seat id paints nothing), while the master select view carries
-        // the staged dialog and panel on top.
+    fn guest_capture_carries_its_own_seats_but_no_select_view() {
+        // The seat template paints from live flags (`SeatIndicator`:
+        // master star, ready plate, no-song mark), so the guest view
+        // differs from the master view in its own seat — the guest is
+        // not the room master and sees READY instead of START. The
+        // select-music dialog and panel stay master-only either way.
         let shots = capture_all().unwrap();
         let by_name = |name: &str| {
             shots
@@ -3489,10 +3490,10 @@ mod tests {
                 .find(|shot| shot.name == name)
                 .unwrap_or_else(|| panic!("missing shot {name}"))
         };
-        assert_eq!(
+        assert_ne!(
             by_name("waiting-guest").rgb,
             by_name("waiting").rgb,
-            "guest must replay the master waiting instant"
+            "seat indicators must carry the viewer's own flags"
         );
         assert_ne!(
             by_name("waiting-guest").rgb,

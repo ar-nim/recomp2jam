@@ -2917,7 +2917,11 @@ fn peer_seat(slot: &RoomSlot) -> WaitingSeat {
 /// Eight seat views: our seat first, then the wire slots, padded empty.
 ///
 /// The wire carries seven peer slots beside self (`JoinedRoom.slots`);
-/// together they are the eight waiting-room seats.
+/// together they are the eight waiting-room seats. OPEN: `slots`
+/// includes our own index (`member_id`), so this view paints our
+/// member twice — the seat-to-cover mapping needs evidence (next step:
+/// a 7.55 waiting capture with two players seated in known slots, then
+/// compare which cover each name lands on).
 #[must_use]
 pub(crate) fn waiting_seats(room: &JoinedRoom) -> Vec<WaitingSeat> {
     let mut seats = Vec::with_capacity(WAITING_SEATS);
@@ -3016,7 +3020,11 @@ pub fn paint_waiting_scene(
     art: &SceneArt,
     captions: &WaitingCaptions<'_>,
 ) {
-    art.paint_backdrop(frame, Screen::Waiting);
+    let seats = staged_seats(room);
+    art.paint_backdrop_live(frame, Screen::Waiting, |placed| {
+        waiting_seat_clone_live(placed, &seats)
+    });
+    paint_waiting_seat_marks(frame, &seats, art);
     if waiting_has_staged_covers(&art.placements) {
         paint_waiting_staged(frame, room, &art.placements, captions);
     } else {
@@ -3090,6 +3098,163 @@ struct StagedSeat {
     present: bool,
     locked: bool,
     champion: bool,
+    /// `RoomMember.master`: the room creator's seat.
+    master: bool,
+    /// `RoomMember.playing_state` nonzero (the member is playing).
+    playing: bool,
+    /// The room names a song (`JoinedRoom.music_id` nonzero).
+    has_song: bool,
+}
+
+/// Seat parents of the `SET 0x0C 0x00015000` seat template, in seat
+/// order: `IDC_BUTTON_SWAIT_EXTEND1..8` (`0x16015022..29`) carry the
+/// eight seat rects, and each one hosts one clone of the template's
+/// 12 members (`docs/ui-loader.md` step 8: the group key is
+/// `code & 0xFF000` = `0x15000`).
+const WAITING_SEAT_PARENT_IDS: [&str; WAITING_SEATS] = [
+    "IDC_BUTTON_SWAIT_EXTEND1",
+    "IDC_BUTTON_SWAIT_EXTEND2",
+    "IDC_BUTTON_SWAIT_EXTEND3",
+    "IDC_BUTTON_SWAIT_EXTEND4",
+    "IDC_BUTTON_SWAIT_EXTEND5",
+    "IDC_BUTTON_SWAIT_EXTEND6",
+    "IDC_BUTTON_SWAIT_EXTEND7",
+    "IDC_BUTTON_SWAIT_EXTEND8",
+];
+
+/// A seat indicator body of the seat template and the live flag that
+/// arms it. Bodies with no pinned flag stay dark (see
+/// [`seat_indicator`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SeatIndicator {
+    /// `Wait_ReadyWindow.ojs`: the seat's name plate, one frame per
+    /// team colour (eight layers = teams A–H).
+    TeamPlate,
+    /// `Wait_BossMark.ojs`: the master's star.
+    MasterStar,
+    /// `Wait_ReadyText.ojs`: the ready plate.
+    ReadyPlate,
+    /// `Wait_NoMusicImage.ojs`: the room names no song yet.
+    NoSong,
+    /// `Wait_Playing.ojs`: the member is playing.
+    Playing,
+}
+
+impl SeatIndicator {
+    /// Body name of this indicator.
+    const fn sprite(self) -> &'static str {
+        match self {
+            SeatIndicator::TeamPlate => "Wait_ReadyWindow.ojs",
+            SeatIndicator::MasterStar => "Wait_BossMark.ojs",
+            SeatIndicator::ReadyPlate => "Wait_ReadyText.ojs",
+            SeatIndicator::NoSong => "Wait_NoMusicImage.ojs",
+            SeatIndicator::Playing => "Wait_Playing.ojs",
+        }
+    }
+
+    /// Icon-control frame for this seat (frame *n* paints layer *n−1*;
+    /// the setter clamps, see [`icon_frame_layer`]).
+    fn frame(self, seat: &StagedSeat) -> Option<u8> {
+        if !seat.present {
+            return None;
+        }
+        match self {
+            SeatIndicator::TeamPlate => Some(seat.team.saturating_add(1)),
+            SeatIndicator::MasterStar => seat.master.then_some(1),
+            SeatIndicator::ReadyPlate => seat.ready.then_some(1),
+            SeatIndicator::NoSong => (!seat.has_song).then_some(1),
+            SeatIndicator::Playing => seat.playing.then_some(1),
+        }
+    }
+}
+
+/// Indicator body behind one seat-template sprite name. Bodies with no
+/// pinned flag return `None` and stay dark:
+///
+/// - `Wait_PCRoomMark.ojs` — PC-room badge; the wire carries no
+///   matching field (OPEN: find the flag the exe reads).
+/// - `Wait_Downloding.ojs` / `Wait_Downloding_Bar.ojs` — song download
+///   progress; the shell models no download (OPEN).
+/// - `Waiting_P2P_Image.ojs` — P2P versus banner; needs the room's
+///   venue class (OPEN).
+/// - `Wait_NoGemImage.ojs` — gem-less marker; `RoomMember.gem` exists,
+///   but which value arms the plate is untraced (OPEN).
+fn seat_indicator(sprite: &str) -> Option<SeatIndicator> {
+    [
+        SeatIndicator::TeamPlate,
+        SeatIndicator::MasterStar,
+        SeatIndicator::ReadyPlate,
+        SeatIndicator::NoSong,
+        SeatIndicator::Playing,
+    ]
+    .into_iter()
+    .find(|indicator| indicator.sprite() == sprite)
+}
+
+/// Seat index owning one staged clone (`None` for other placements).
+fn seat_clone_index(placed: &ScenePlacement) -> Option<usize> {
+    if placed.role != PlacementRole::Clone {
+        return None;
+    }
+    WAITING_SEAT_PARENT_IDS
+        .iter()
+        .position(|id| *id == placed.id)
+}
+
+/// Whether one seat-template clone reaches the frame: occupied seats
+/// show the armed indicators, vacant and locked seats keep their bare
+/// cover plate (the exe clones the template per seated player only).
+fn waiting_seat_clone_live(placed: &ScenePlacement, seats: &[StagedSeat]) -> bool {
+    let Some(index) = seat_clone_index(placed) else {
+        return true;
+    };
+    let Some(seat) = seats.get(index) else {
+        return false;
+    };
+    if !seat.present {
+        return false;
+    }
+    let Some(indicator) = placed.sprite.as_deref().and_then(seat_indicator) else {
+        return false;
+    };
+    indicator.frame(seat).is_some()
+}
+
+/// Paint every armed seat indicator at its clone rect with the seat's
+/// frame. The clone base pass already painted frame 0 there, so this
+/// pass owns the live frame; unarmed bodies were filtered out above.
+fn paint_waiting_seat_marks(frame: &mut Frame<'_>, seats: &[StagedSeat], art: &SceneArt) {
+    for placed in &art.placements {
+        let Some(index) = seat_clone_index(placed) else {
+            continue;
+        };
+        let Some(seat) = seats.get(index) else {
+            continue;
+        };
+        let Some(indicator) = placed.sprite.as_deref().and_then(seat_indicator) else {
+            continue;
+        };
+        let (Some(figure_name), Some(icon_frame)) =
+            (placed.sprite.as_deref(), indicator.frame(seat))
+        else {
+            continue;
+        };
+        let Some(figure) = art.figures.get(figure_name) else {
+            continue;
+        };
+        let Some(layer) = icon_frame_layer(icon_frame, figure.len()).and_then(|i| figure.layer(i))
+        else {
+            continue;
+        };
+        let dest = scale_rect_to_frame(&placed.rect, frame.w, frame.h);
+        blit_rgb555(
+            frame,
+            &layer.image.view(),
+            dest.x + layer.dx,
+            dest.y + layer.dy,
+            Some(layer.colorkey),
+        );
+    }
 }
 
 /// Staged seats in cover order: self first, then the seven wire slots
@@ -3097,14 +3262,22 @@ struct StagedSeat {
 /// [`waiting_seats`], with levels and the champion mark kept.
 fn staged_seats(room: &JoinedRoom) -> Vec<StagedSeat> {
     let mut seats = Vec::with_capacity(WAITING_SEATS);
+    let own = room.slots.iter().find(|slot| slot.index == room.member_id);
     seats.push(StagedSeat {
         name: "YOU".to_owned(),
         level: None,
         team: room.team,
-        ready: false,
+        ready: own
+            .and_then(|slot| slot.member.as_ref())
+            .is_some_and(|member| member.ready),
         present: true,
         locked: false,
         champion: room.champion == Some(0),
+        master: room.member_id == 0,
+        playing: own
+            .and_then(|slot| slot.member.as_ref())
+            .is_some_and(|member| member.playing_state != 0),
+        has_song: room.music_id != 0,
     });
     for (offset, slot) in room.slots.iter().take(WAITING_PEERS).enumerate() {
         let index = u8::try_from(offset + 1).unwrap_or(u8::MAX);
@@ -3127,6 +3300,9 @@ fn staged_peer_seat(slot: &RoomSlot, champion: bool) -> StagedSeat {
             present: true,
             locked: false,
             champion,
+            master: member.master,
+            playing: member.playing_state != 0,
+            has_song: !member.music_ids.is_empty(),
         },
         None if slot.state_code == RoomSlotState::Locked as i32 => StagedSeat {
             name: String::new(),
@@ -3136,6 +3312,9 @@ fn staged_peer_seat(slot: &RoomSlot, champion: bool) -> StagedSeat {
             present: false,
             locked: true,
             champion: false,
+            master: false,
+            playing: false,
+            has_song: false,
         },
         None => empty_staged_seat(),
     }
@@ -3151,6 +3330,9 @@ fn empty_staged_seat() -> StagedSeat {
         present: false,
         locked: false,
         champion: false,
+        master: false,
+        playing: false,
+        has_song: false,
     }
 }
 
@@ -8565,9 +8747,11 @@ mod paint_tests {
         assert_eq!(buf[51 * 800 + 166], scrim_color(), "champion scrim");
         assert_eq!(buf[51 * 800 + 24], scrim_color(), "challenger scrim");
         assert!(has_ink_near(&buf, art_title_ink()));
-        // Ready dots ride the cover lines: host ready green, self dim.
+        // Ready dots ride the cover lines: both seats carry their own
+        // wire ready flag (the self seat reads `slots[member_id]`, the
+        // same source the flat fallback and the READY toggle use).
         assert_eq!(buf[55 * 800 + 165], pack_xrgb(0x30, 0xE0, 0x30));
-        assert_eq!(buf[55 * 800 + 23], pack_xrgb(0x50, 0x50, 0x50));
+        assert_eq!(buf[55 * 800 + 23], pack_xrgb(0x30, 0xE0, 0x30));
     }
 
     #[test]
@@ -8790,6 +8974,9 @@ mod paint_tests {
             present: true,
             locked: false,
             champion: true,
+            master: true,
+            playing: false,
+            has_song: true,
         };
         assert_eq!(
             staged_seat_text(&champion, Some("CHAMPION")),
@@ -8804,6 +8991,9 @@ mod paint_tests {
             present: true,
             locked: false,
             champion: false,
+            master: false,
+            playing: false,
+            has_song: false,
         };
         assert_eq!(
             staged_seat_text(&challenger, Some("CHALLENGER")),
