@@ -57,10 +57,11 @@ pub use relay::{
     RelayPing, RelayRouting, RelayStats, UdpPacketType, UdpRelayFrame,
 };
 pub use rooms::{
-    Announce, Announcement, Difficulty, GameSpeed, JoinResult, JoinRoom, JoinRoomResponse,
-    JoinedRoom, MainRoomAdminMessage, MainRoomChatLine, MainRoomUserMessage, RankNotification,
-    ReceiveWhisper, RoomList, RoomListEntry, RoomMember, RoomSlot, RoomSlotAction, RoomSlotState,
-    RoomSlotUpdate, RoomState, SendMainRoomMessage, SendWhisper, SendWhisperResponse,
-    ROOM_TITLE_LEN,
+    Announce, Announcement, Difficulty, GameSpeed, GetMusicMaxScore, GetMusicPlayRanking,
+    GetMusicScoreList, JoinResult, JoinRoom, JoinRoomResponse, JoinedRoom, MainRoomAdminMessage,
+    MainRoomChatLine, MainRoomUserMessage, MusicMaxScoreAnswer, MusicPlayRankingAnswer,
+    MusicScoreListAnswer, MusicScoreRow, RankDelta, RankEntry, RankNotification, ReceiveWhisper,
+    RoomList, RoomListEntry, RoomMember, RoomSlot, RoomSlotAction, RoomSlotState, RoomSlotUpdate,
+    RoomState, SendMainRoomMessage, SendWhisper, SendWhisperResponse, ROOM_TITLE_LEN,
 };
 pub use strings::{decode_null_terminated, encode_null_terminated, MAX_STRING_LEN};

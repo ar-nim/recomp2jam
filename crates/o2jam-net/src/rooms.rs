@@ -1339,6 +1339,445 @@ impl WireMessage for RankNotification {
     }
 }
 
+/// Rank movement arrow on a `MusicPlayRankingAnswer` row
+/// (`Mozart.Metadata.RankDeltaType`, byte-backed: `Up = 0x00`,
+/// `Down = 0x01`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum RankDelta {
+    /// Rank improved (or unchanged) since last time.
+    Up = 0,
+    /// Rank fell.
+    Down = 1,
+}
+
+impl RankDelta {
+    /// Interpret a raw delta byte. `None` means unknown.
+    #[must_use]
+    pub fn from_code(code: u8) -> Option<Self> {
+        match code {
+            0 => Some(Self::Up),
+            1 => Some(Self::Down),
+            _ => None,
+        }
+    }
+}
+
+/// One row of the `MusicPlayRankingAnswer` 2028 answer: a ranked
+/// player's lanking line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RankEntry {
+    /// Leaderboard place (`0` marks a blank row: the exe pushes a
+    /// zeroed row and reads no further fields for it).
+    pub rank: i32,
+    /// Ranked player nickname (UTF-8, null-terminated on the wire).
+    pub nickname: String,
+    /// Battles fought.
+    pub battles: i32,
+    /// Battles won.
+    pub wins: i32,
+    /// Win rate (Memoryer computes `win / battle`, truncated).
+    pub win_rate: i32,
+    /// Rank movement since last time.
+    pub delta: RankDelta,
+    /// Rank movement magnitude.
+    pub rank_delta: i32,
+}
+
+impl Default for RankEntry {
+    fn default() -> Self {
+        Self {
+            rank: 0,
+            nickname: String::new(),
+            battles: 0,
+            wins: 0,
+            win_rate: 0,
+            delta: RankDelta::Up,
+            rank_delta: 0,
+        }
+    }
+}
+
+/// Wire width of one [`RankEntry`] past a nonzero rank word:
+/// null-terminated nickname + three `i32` + `u8` delta + `i32`.
+fn encode_rank_entry(entry: &RankEntry) -> Vec<u8> {
+    let mut body = entry.rank.to_le_bytes().to_vec();
+    if entry.rank != 0 {
+        body.extend_from_slice(&encode_null_terminated(&entry.nickname, MAX_STRING_LEN));
+        body.extend_from_slice(&entry.battles.to_le_bytes());
+        body.extend_from_slice(&entry.wins.to_le_bytes());
+        body.extend_from_slice(&entry.win_rate.to_le_bytes());
+        body.push(entry.delta as u8);
+        body.extend_from_slice(&entry.rank_delta.to_le_bytes());
+    }
+    body
+}
+
+/// Cursor over a 2028 body; every read bounds-checks. Returns the
+/// entry plus bytes consumed (`rank == 0` rows carry no further
+/// fields, matching the exe's zeroed-row arm).
+fn decode_rank_entry(body: &[u8]) -> Result<(RankEntry, usize), Error> {
+    if body.len() < 4 {
+        return Err(Error::TruncatedMessage {
+            need: 4,
+            have: body.len(),
+        });
+    }
+    let rank = i32::from_le_bytes([body[0], body[1], body[2], body[3]]);
+    if rank == 0 {
+        return Ok((RankEntry::default(), 4));
+    }
+    let (nickname, name_used) = decode_null_terminated(&body[4..], MAX_STRING_LEN)?;
+    let tail = &body[4 + name_used..];
+    if tail.len() < 13 {
+        return Err(Error::TruncatedMessage {
+            need: 4 + name_used + 13,
+            have: body.len(),
+        });
+    }
+    let delta = RankDelta::from_code(tail[12]).ok_or(Error::InvalidField {
+        field: "rank delta type",
+        reason: "not 0 (Up) or 1 (Down)",
+    })?;
+    Ok((
+        RankEntry {
+            rank,
+            nickname,
+            battles: i32::from_le_bytes([tail[0], tail[1], tail[2], tail[3]]),
+            wins: i32::from_le_bytes([tail[4], tail[5], tail[6], tail[7]]),
+            win_rate: i32::from_le_bytes([tail[8], tail[9], tail[10], tail[11]]),
+            delta,
+            rank_delta: i32::from_le_bytes([tail[13], tail[14], tail[15], tail[16]]),
+        },
+        4 + name_used + 17,
+    ))
+}
+
+/// `GetMusicPlayRanking` 2027 request: fetch the lanking board.
+/// Empty body: the exe never sends this opcode (no `0x7eb` push or
+/// dword anywhere in `OTwo.exe`, `O2Net32.dll`, `Player.dll`, or
+/// `SendWebData.dll`), and Memoryer's `RankingController` handler
+/// reads no request fields — the client fetch carries nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GetMusicPlayRanking;
+
+impl WireMessage for GetMusicPlayRanking {
+    const COMMAND: u16 = 2027;
+
+    fn encode_body(&self) -> Vec<u8> {
+        Vec::new()
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.is_empty() {
+            Ok(Self)
+        } else {
+            Err(Error::TrailingBytes(body.len()))
+        }
+    }
+}
+
+/// `MusicPlayRankingAnswer` 2028 response: the lanking board.
+///
+/// Exe-verified handler VA `0x55b230` (file `0x15b230`, REA
+/// `ev_7f09b7fa…`): one `i32` rank word, then — only when the word is
+/// nonzero — a nickname string through the string-reader helper
+/// (`0x555ea0`) plus three `i32` reads, one `u8` read, and one `i32`
+/// read through the packet-reader helper (`0x555d20`; pushes at files
+/// `0x15b302`/`0x15b30e`/`0x15b31a`/`0x15b326`/`0x15b335`), each row
+/// staged into the rank-row vector at `0x77968c`; then an `i32` count
+/// word, and — only when positive — that many rows in the same shape
+/// (zero/negative counts paint no rows; a zero count paints ten blank
+/// rows, a display fill the decoder reports as an empty list).
+/// Dispatcher: base `0x7d3` index `0x19` holds entry `0x558545`
+/// (address table file `0x158940`), whose stub relative-calls the
+/// handler. Memoryer (`Messages/Responses/Ranking/
+/// `MusicPlayRankingResponse.cs`): rank `int`, nickname string,
+/// battles/wins/win-rate `int`s, `RankDeltaType` byte, rank-delta
+/// `int`, with a leading self entry plus an `i32`-counted list — the
+/// field order corroborates the exe read sequence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MusicPlayRankingAnswer {
+    /// The viewer's own line (default when its rank word is zero).
+    pub self_entry: RankEntry,
+    /// Board lines in wire order.
+    pub entries: Vec<RankEntry>,
+}
+
+impl WireMessage for MusicPlayRankingAnswer {
+    const COMMAND: u16 = 2028;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = encode_rank_entry(&self.self_entry);
+        let count = i32::try_from(self.entries.len()).unwrap_or(i32::MAX);
+        body.extend_from_slice(&count.to_le_bytes());
+        for entry in &self.entries {
+            body.extend_from_slice(&encode_rank_entry(entry));
+        }
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        let (self_entry, mut at) = decode_rank_entry(body)?;
+        let rest = body.get(at..).ok_or(Error::TruncatedMessage {
+            need: at.saturating_add(4),
+            have: body.len(),
+        })?;
+        if rest.len() < 4 {
+            return Err(Error::TruncatedMessage {
+                need: at + 4,
+                have: body.len(),
+            });
+        }
+        let count = i32::from_le_bytes([rest[0], rest[1], rest[2], rest[3]]);
+        at += 4;
+        let mut entries = Vec::new();
+        if count > 0 {
+            let count = usize::try_from(count).unwrap_or(usize::MAX);
+            entries.reserve(count.min(1024));
+            for _ in 0..count {
+                let (entry, used) = decode_rank_entry(&body[at..])?;
+                entries.push(entry);
+                at += used;
+            }
+        }
+        Ok(Self {
+            self_entry,
+            entries,
+        })
+    }
+}
+
+/// `GetMusicScoreList` 2030 request: fetch per-song best ranks.
+/// Empty body: both exe send sites (`push 0; push 0x7ee`, files
+/// `0xac427` and `0xb2644`, indirect `+0x5c` send calls) stage no
+/// fields — the first gates on the menu-state word at `0x77ee86`
+/// being `2` (load + compare files `0xac402`/`0xac417`), the second on
+/// the seat byte at `0x77cd30` being nonzero (load file `0xb2622`),
+/// both additionally gated on dword `0x779964` being zero (compares
+/// files `0xac41c`/`0xb2639`). Memoryer's `RankingController`
+/// handler reads no request fields either. The gate globals stay
+/// OPEN (no labels pinned).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GetMusicScoreList;
+
+impl WireMessage for GetMusicScoreList {
+    const COMMAND: u16 = 2030;
+
+    fn encode_body(&self) -> Vec<u8> {
+        Vec::new()
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.is_empty() {
+            Ok(Self)
+        } else {
+            Err(Error::TrailingBytes(body.len()))
+        }
+    }
+}
+
+/// One song's best ranks in the `MusicScoreListAnswer` 2031 answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MusicScoreRow {
+    /// Song id (`u16`, as selected per room).
+    pub music_id: u16,
+    /// Best rank marks per difficulty in `Difficulty` order
+    /// (EX/NX/HX/RX; `Mozart.Metadata.Rank`: 0 none, 1 F … 7 S,
+    /// 8 Perfect).
+    pub difficulty_ranks: [u8; 4],
+}
+
+/// Wire size of one [`MusicScoreRow`]: `u16` id + four rank bytes.
+const MUSIC_SCORE_ROW_LEN: usize = 6;
+
+/// `MusicScoreListAnswer` 2031 response: per-song best ranks.
+///
+/// Exe-verified handler VA `0x55b590` (file `0x15b590`, REA
+/// `ev_299779a2…`): one `i32` result word — negative results skip
+/// the rows and still forward — else a `u16` row count, then that many
+/// 6-byte rows (`push 6` at file `0x15b5fa`, call `0x15b603`) pushed
+/// into the per-song/difficulty best table at `0x779814` through
+/// `FUN_004c5700` (which divides the vector span by 6), then forward
+/// (`0x12`, 2031, 0, 0). So count and row width are exe-pinned; the
+/// row split (`u16` music id + four rank bytes) is Memoryer shape
+/// (`Messages/Responses/Ranking/MusicScoreEntry`: `ushort MusicId`
+/// plus a `Difficulty → Rank` map, both byte-backed, with an
+/// `Empty`-prefix collection = no length word, exactly four inline
+/// values in `Enum.GetValues<Difficulty>()` order) against an
+/// exe-verified width. The paint-path read that would pin the
+/// per-byte difficulty order stays OPEN (next step: the result-screen
+/// lookup over `0x779814`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MusicScoreListAnswer {
+    /// Server result word (negative = no rows, still refresh).
+    pub result: i32,
+    /// Best-rank rows in wire order.
+    pub rows: Vec<MusicScoreRow>,
+}
+
+impl WireMessage for MusicScoreListAnswer {
+    const COMMAND: u16 = 2031;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = Vec::with_capacity(4 + 2 + self.rows.len() * MUSIC_SCORE_ROW_LEN);
+        body.extend_from_slice(&self.result.to_le_bytes());
+        let count = u16::try_from(self.rows.len()).unwrap_or(u16::MAX);
+        body.extend_from_slice(&count.to_le_bytes());
+        for row in &self.rows {
+            body.extend_from_slice(&row.music_id.to_le_bytes());
+            body.extend_from_slice(&row.difficulty_ranks);
+        }
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < 4 {
+            return Err(Error::TruncatedMessage {
+                need: 4,
+                have: body.len(),
+            });
+        }
+        let result = i32::from_le_bytes([body[0], body[1], body[2], body[3]]);
+        if result < 0 {
+            return Ok(Self {
+                result,
+                rows: Vec::new(),
+            });
+        }
+        if body.len() < 6 {
+            return Err(Error::TruncatedMessage {
+                need: 6,
+                have: body.len(),
+            });
+        }
+        let count = usize::from(u16::from_le_bytes([body[4], body[5]]));
+        let need = 6 + count * MUSIC_SCORE_ROW_LEN;
+        if body.len() < need {
+            return Err(Error::TruncatedMessage {
+                need,
+                have: body.len(),
+            });
+        }
+        let mut rows = Vec::with_capacity(count);
+        for index in 0..count {
+            let at = 6 + index * MUSIC_SCORE_ROW_LEN;
+            rows.push(MusicScoreRow {
+                music_id: u16::from_le_bytes([body[at], body[at + 1]]),
+                difficulty_ranks: [body[at + 2], body[at + 3], body[at + 4], body[at + 5]],
+            });
+        }
+        Ok(Self { result, rows })
+    }
+}
+
+/// `GetMusicMaxScore` 2032 request: fetch one song's best score.
+///
+/// The exe send (file `0x4151c`, in `FUN_0043e9b0`, REA
+/// `ev_2e7c7bc9…`) pushes only the opcode (`push 0; push 0x7f0`,
+/// indirect `+0x64` slot call) once the entry passes the music-list
+/// membership predicate — no body bytes are staged at the site. The
+/// two parameter words sit in adjacent globals by then: the selected
+/// music id at `0x7797c0` (store file `0x41472`) and its note-count
+/// word at `0x7797c2` (store file `0x414f2`). Memoryer
+/// (`Messages/Requests/Ranking/MusicMaxScoreRequest.cs`) decodes
+/// `ushort MusicId` + `ushort NoteCount`, which matches those two
+/// staged words — so the request encodes them, but the wire transfer
+/// of the globals through the `+0x64` send slot is unobserved and
+/// stays OPEN (next step: trace the `+0x64` slot helper's body
+/// mechanism, e.g. at the Authorize site file `0x74529`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GetMusicMaxScore {
+    /// Song id to look up.
+    pub music_id: u16,
+    /// Note count selecting the difficulty (EX/NX/HX match).
+    pub note_count: u16,
+}
+
+/// Body length of [`GetMusicMaxScore`]: `u16` + `u16`.
+const GET_MUSIC_MAX_SCORE_BODY_LEN: usize = 4;
+
+impl WireMessage for GetMusicMaxScore {
+    const COMMAND: u16 = 2032;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = Vec::with_capacity(GET_MUSIC_MAX_SCORE_BODY_LEN);
+        body.extend_from_slice(&self.music_id.to_le_bytes());
+        body.extend_from_slice(&self.note_count.to_le_bytes());
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < GET_MUSIC_MAX_SCORE_BODY_LEN {
+            return Err(Error::TruncatedMessage {
+                need: GET_MUSIC_MAX_SCORE_BODY_LEN,
+                have: body.len(),
+            });
+        }
+        if body.len() > GET_MUSIC_MAX_SCORE_BODY_LEN {
+            return Err(Error::TrailingBytes(
+                body.len() - GET_MUSIC_MAX_SCORE_BODY_LEN,
+            ));
+        }
+        Ok(Self {
+            music_id: u16::from_le_bytes([body[0], body[1]]),
+            note_count: u16::from_le_bytes([body[2], body[3]]),
+        })
+    }
+}
+
+/// `MusicMaxScoreAnswer` 2033 response: one song's best score.
+///
+/// Exe-verified handler VA `0x55b640` (file `0x15b640`, REA
+/// `ev_45b5f508…`): one `i32` invalid word — nonzero skips the
+/// packet — else one `u32` max-score read straight into `0x7797c8`
+/// (push file `0x15b668`, call `0x15b672`), then the dialog-7 gate:
+/// forward (`0x11`, 2033, 0, 0) only while the ControlList parent
+/// (`0x762b44`) shows dialog kind 7. Dispatcher index `0x1e` holds
+/// entry `0x558578`, whose stub relative-calls the handler. Memoryer
+/// (`Messages/Responses/Ranking/MusicMaxScoreResponse.cs`): bool
+/// `Invalid` as `i32` + `u32 MaxScore` — corroborates the two-word
+/// shape against the exe-verified read sequence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MusicMaxScoreAnswer {
+    /// True when the score carries no value (client drops it).
+    pub invalid: bool,
+    /// Best score on the song.
+    pub max_score: u32,
+}
+
+/// Body length of [`MusicMaxScoreAnswer`]: `i32` + `u32`.
+const MUSIC_MAX_SCORE_ANSWER_BODY_LEN: usize = 8;
+
+impl WireMessage for MusicMaxScoreAnswer {
+    const COMMAND: u16 = 2033;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = Vec::with_capacity(MUSIC_MAX_SCORE_ANSWER_BODY_LEN);
+        body.extend_from_slice(&i32::from(self.invalid).to_le_bytes());
+        body.extend_from_slice(&self.max_score.to_le_bytes());
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < MUSIC_MAX_SCORE_ANSWER_BODY_LEN {
+            return Err(Error::TruncatedMessage {
+                need: MUSIC_MAX_SCORE_ANSWER_BODY_LEN,
+                have: body.len(),
+            });
+        }
+        if body.len() > MUSIC_MAX_SCORE_ANSWER_BODY_LEN {
+            return Err(Error::TrailingBytes(
+                body.len() - MUSIC_MAX_SCORE_ANSWER_BODY_LEN,
+            ));
+        }
+        Ok(Self {
+            invalid: i32::from_le_bytes([body[0], body[1], body[2], body[3]]) != 0,
+            max_score: u32::from_le_bytes([body[4], body[5], body[6], body[7]]),
+        })
+    }
+}
+
 /// `SendWaitingMessage` 3011 request: raw chat bytes fill the whole
 /// body — no length prefix, no terminator, and an empty body sends an
 /// empty line. Memoryer (`Messages/Requests/Messaging/
@@ -2509,6 +2948,301 @@ mod notice_tests {
         body.push(0xFF);
         assert_eq!(
             RankNotification::decode_body(&body),
+            Err(Error::TrailingBytes(1))
+        );
+    }
+
+    fn sample_rank_entry() -> RankEntry {
+        RankEntry {
+            rank: 1,
+            nickname: "ab".to_owned(),
+            battles: 10,
+            wins: 7,
+            win_rate: 0,
+            delta: RankDelta::Up,
+            rank_delta: 2,
+        }
+    }
+
+    #[test]
+    fn play_ranking_request_encodes_empty_frame() {
+        // The exe never sends 2027; the fetch carries no fields.
+        let frame = decode_frame(&GetMusicPlayRanking.encode()).unwrap();
+        assert_eq!(frame.id, 2027);
+        assert!(frame.payload.is_empty());
+        assert_eq!(
+            GetMusicPlayRanking::decode_frame(&frame),
+            Ok(GetMusicPlayRanking)
+        );
+    }
+
+    #[test]
+    fn play_ranking_request_rejects_any_body() {
+        assert_eq!(
+            GetMusicPlayRanking::decode_body(&[0x00]),
+            Err(Error::TrailingBytes(1))
+        );
+    }
+
+    #[test]
+    fn play_ranking_answer_decodes_self_and_entries() {
+        // Self line plus two board rows: a named row and a blank
+        // (rank-zero) row that carries no further fields.
+        let answer = MusicPlayRankingAnswer {
+            self_entry: sample_rank_entry(),
+            entries: vec![
+                RankEntry {
+                    rank: 2,
+                    nickname: "cd".to_owned(),
+                    battles: 5,
+                    wins: 5,
+                    win_rate: 1,
+                    delta: RankDelta::Down,
+                    rank_delta: 1,
+                },
+                RankEntry::default(),
+            ],
+        };
+        let frame = decode_frame(&answer.encode()).unwrap();
+        assert_eq!(frame.id, 2028);
+        assert_eq!(MusicPlayRankingAnswer::decode_frame(&frame), Ok(answer));
+    }
+
+    #[test]
+    fn play_ranking_answer_matches_wire_order() {
+        // rank i32, nickname string, battles/wins/win-rate i32s,
+        // delta u8, rank-delta i32; then count i32 plus rows.
+        let body = vec![
+            0x01, 0x00, 0x00, 0x00, 0x61, 0x62, 0x00, 0x0A, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
+        let answer = MusicPlayRankingAnswer::decode_body(&body).unwrap();
+        assert_eq!(answer.self_entry, sample_rank_entry());
+        assert!(answer.entries.is_empty());
+    }
+
+    #[test]
+    fn play_ranking_answer_treats_rank_zero_as_default_row() {
+        // Rank-zero rows carry no fields: the exe pushes a zeroed row.
+        let answer = MusicPlayRankingAnswer::decode_body(&[
+            0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ])
+        .unwrap();
+        assert_eq!(answer.self_entry, RankEntry::default());
+        assert_eq!(answer.entries, vec![RankEntry::default()]);
+    }
+
+    #[test]
+    fn play_ranking_answer_reads_zero_count_as_empty_list() {
+        // A zero count paints ten blank rows; the wire carries none.
+        let answer =
+            MusicPlayRankingAnswer::decode_body(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+                .unwrap();
+        assert!(answer.entries.is_empty());
+    }
+
+    #[test]
+    fn play_ranking_answer_reads_negative_count_as_empty() {
+        // The exe loop tests the index against the count with a signed
+        // compare, so negative counts paint no rows.
+        let answer =
+            MusicPlayRankingAnswer::decode_body(&[0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF])
+                .unwrap();
+        assert!(answer.entries.is_empty());
+    }
+
+    #[test]
+    fn play_ranking_answer_rejects_truncated_row() {
+        // Rank word plus an unterminated nickname, no stat words: the
+        // codec reads the nickname to end of body, then misses the 13
+        // trailing stat bytes (4 + 2 + 13 = 19 needed).
+        assert_eq!(
+            MusicPlayRankingAnswer::decode_body(&[0x01, 0x00, 0x00, 0x00, 0x61, 0x62]),
+            Err(Error::TruncatedMessage { need: 19, have: 6 })
+        );
+    }
+
+    #[test]
+    fn play_ranking_answer_rejects_bad_nickname_encoding() {
+        // Rank word, invalid-UTF-8 nickname, terminator, no stats.
+        assert_eq!(
+            MusicPlayRankingAnswer::decode_body(&[0x01, 0x00, 0x00, 0x00, 0xFF, 0x00]),
+            Err(Error::InvalidField {
+                field: "string field",
+                reason: "not valid UTF-8",
+            })
+        );
+    }
+
+    #[test]
+    fn play_ranking_answer_rejects_bad_delta() {
+        let mut body = encode_rank_entry(&sample_rank_entry());
+        body.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+        let delta_at = 4 + 3 + 12;
+        body[delta_at] = 0x02;
+        assert_eq!(
+            MusicPlayRankingAnswer::decode_body(&body),
+            Err(Error::InvalidField {
+                field: "rank delta type",
+                reason: "not 0 (Up) or 1 (Down)",
+            })
+        );
+    }
+
+    #[test]
+    fn score_list_request_encodes_empty_frame() {
+        // Both exe send sites push only the opcode.
+        let frame = decode_frame(&GetMusicScoreList.encode()).unwrap();
+        assert_eq!(frame.id, 2030);
+        assert!(frame.payload.is_empty());
+        assert_eq!(
+            GetMusicScoreList::decode_frame(&frame),
+            Ok(GetMusicScoreList)
+        );
+    }
+
+    #[test]
+    fn score_list_request_rejects_any_body() {
+        assert_eq!(
+            GetMusicScoreList::decode_body(&[0x00]),
+            Err(Error::TrailingBytes(1))
+        );
+    }
+
+    #[test]
+    fn score_list_answer_decodes_rows() {
+        let answer = MusicScoreListAnswer {
+            result: 0,
+            rows: vec![
+                MusicScoreRow {
+                    music_id: 757,
+                    difficulty_ranks: [8, 7, 6, 0],
+                },
+                MusicScoreRow {
+                    music_id: 758,
+                    difficulty_ranks: [0, 0, 0, 0],
+                },
+            ],
+        };
+        assert_eq!(
+            answer.encode_body(),
+            vec![
+                0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0xF5, 0x02, 0x08, 0x07, 0x06, 0x00, 0xF6, 0x02,
+                0x00, 0x00, 0x00, 0x00,
+            ]
+        );
+        let frame = decode_frame(&answer.encode()).unwrap();
+        assert_eq!(frame.id, 2031);
+        assert_eq!(MusicScoreListAnswer::decode_frame(&frame), Ok(answer));
+    }
+
+    #[test]
+    fn score_list_answer_treats_negative_result_as_empty() {
+        // Negative results skip the rows but still refresh the UI.
+        let answer = MusicScoreListAnswer::decode_body(&[0xFF, 0xFF, 0xFF, 0xFF]).unwrap();
+        assert_eq!(answer.result, -1);
+        assert!(answer.rows.is_empty());
+    }
+
+    #[test]
+    fn score_list_answer_rejects_truncated_count() {
+        assert_eq!(
+            MusicScoreListAnswer::decode_body(&[0x00, 0x00, 0x00, 0x00, 0x02]),
+            Err(Error::TruncatedMessage { need: 6, have: 5 })
+        );
+    }
+
+    #[test]
+    fn score_list_answer_rejects_truncated_row() {
+        // result 0, count 1, only three of six row bytes.
+        assert_eq!(
+            MusicScoreListAnswer::decode_body(&[
+                0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0xF5, 0x02, 0x08,
+            ]),
+            Err(Error::TruncatedMessage { need: 12, have: 9 })
+        );
+    }
+
+    #[test]
+    fn max_score_request_carries_music_and_note_count() {
+        let message = GetMusicMaxScore {
+            music_id: 757,
+            note_count: 486,
+        };
+        assert_eq!(message.encode_body(), vec![0xF5, 0x02, 0xE6, 0x01]);
+        let frame = decode_frame(&message.encode()).unwrap();
+        assert_eq!(frame.id, 2032);
+        assert_eq!(GetMusicMaxScore::decode_frame(&frame), Ok(message));
+    }
+
+    #[test]
+    fn max_score_request_rejects_short_body() {
+        assert_eq!(
+            GetMusicMaxScore::decode_body(&[0xF5, 0x02]),
+            Err(Error::TruncatedMessage { need: 4, have: 2 })
+        );
+    }
+
+    #[test]
+    fn max_score_request_rejects_trailing_bytes() {
+        let mut body = GetMusicMaxScore {
+            music_id: 757,
+            note_count: 486,
+        }
+        .encode_body();
+        body.push(0xFF);
+        assert_eq!(
+            GetMusicMaxScore::decode_body(&body),
+            Err(Error::TrailingBytes(1))
+        );
+    }
+
+    #[test]
+    fn max_score_answer_decodes_score() {
+        let message = MusicMaxScoreAnswer {
+            invalid: false,
+            max_score: 1_234_567,
+        };
+        assert_eq!(
+            message.encode_body(),
+            vec![0x00, 0x00, 0x00, 0x00, 0x87, 0xD6, 0x12, 0x00]
+        );
+        let frame = decode_frame(&message.encode()).unwrap();
+        assert_eq!(frame.id, 2033);
+        assert_eq!(MusicMaxScoreAnswer::decode_frame(&frame), Ok(message));
+    }
+
+    #[test]
+    fn max_score_answer_reports_invalid_without_score() {
+        // Nonzero invalid words drop the packet client-side.
+        let message = MusicMaxScoreAnswer {
+            invalid: true,
+            max_score: 0,
+        };
+        assert_eq!(&message.encode_body()[..4], &[0x01, 0x00, 0x00, 0x00]);
+        let back = MusicMaxScoreAnswer::decode_body(&message.encode_body()).unwrap();
+        assert_eq!(back, message);
+        assert!(back.invalid);
+    }
+
+    #[test]
+    fn max_score_answer_rejects_short_body() {
+        assert_eq!(
+            MusicMaxScoreAnswer::decode_body(&[0x00, 0x00, 0x00]),
+            Err(Error::TruncatedMessage { need: 8, have: 3 })
+        );
+    }
+
+    #[test]
+    fn max_score_answer_rejects_trailing_bytes() {
+        let mut body = MusicMaxScoreAnswer {
+            invalid: false,
+            max_score: 42,
+        }
+        .encode_body();
+        body.push(0xFF);
+        assert_eq!(
+            MusicMaxScoreAnswer::decode_body(&body),
             Err(Error::TrailingBytes(1))
         );
     }

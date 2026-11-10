@@ -19,6 +19,9 @@ pub enum Request {
     SendMainRoomMessage = 2012,
     Announce = 2015,
     SendWhisper = 2017,
+    GetMusicPlayRanking = 2027,
+    GetMusicScoreList = 2030,
+    GetMusicMaxScore = 2032,
     JoinWaiting = 3002,
     SetRoomMusic = 4000,
     SetRoomArena = 4002,
@@ -57,6 +60,9 @@ impl Request {
             2012 => Some(Self::SendMainRoomMessage),
             2015 => Some(Self::Announce),
             2017 => Some(Self::SendWhisper),
+            2027 => Some(Self::GetMusicPlayRanking),
+            2030 => Some(Self::GetMusicScoreList),
+            2032 => Some(Self::GetMusicMaxScore),
             3002 => Some(Self::JoinWaiting),
             4000 => Some(Self::SetRoomMusic),
             4002 => Some(Self::SetRoomArena),
@@ -121,6 +127,9 @@ pub enum Response {
     MainRoomAdminMessage = 2014,
     Announcement = 2016,
     SendWhisper = 2018,
+    GetMusicPlayRanking = 2028,
+    GetMusicScoreList = 2031,
+    GetMusicMaxScore = 2033,
     JoinRoom = 3003,
 }
 
@@ -149,6 +158,9 @@ impl Response {
             2014 => Some(Self::MainRoomAdminMessage),
             2016 => Some(Self::Announcement),
             2018 => Some(Self::SendWhisper),
+            2028 => Some(Self::GetMusicPlayRanking),
+            2031 => Some(Self::GetMusicScoreList),
+            2033 => Some(Self::GetMusicMaxScore),
             3003 => Some(Self::JoinRoom),
             _ => None,
         }
@@ -289,6 +301,18 @@ mod tests {
         assert_eq!(Event::from_id(4040), Some(Event::GameRankUpdate));
         assert_eq!(Event::from_id(4016), None);
         assert_eq!(Event::from_id(4041), None);
+    }
+
+    #[test]
+    fn resolves_ranking_ids() {
+        assert_eq!(Request::from_id(2027), Some(Request::GetMusicPlayRanking));
+        assert_eq!(Request::from_id(2030), Some(Request::GetMusicScoreList));
+        assert_eq!(Request::from_id(2032), Some(Request::GetMusicMaxScore));
+        assert_eq!(Response::from_id(2028), Some(Response::GetMusicPlayRanking));
+        assert_eq!(Response::from_id(2031), Some(Response::GetMusicScoreList));
+        assert_eq!(Response::from_id(2033), Some(Response::GetMusicMaxScore));
+        assert_eq!(Request::from_id(2028), None);
+        assert_eq!(Response::from_id(2027), None);
     }
 
     #[test]
