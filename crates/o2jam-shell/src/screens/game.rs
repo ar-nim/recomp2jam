@@ -1789,6 +1789,18 @@ impl ScreenGame {
     /// file order), legacy row bands without them. Either path
     /// highlights the row and advances like Confirm.
     fn click_room_row(&mut self, x: i32, y: i32) {
+        // The BACK button leaves for the channel scene (lifecycle §7:
+        // the same edge the Back key rides); geometry from the parsed
+        // staged rect only (owner rule `f38f3`).
+        let back_hit = self.scene_art(Screen::Room).is_some_and(|art| {
+            art.placements.iter().any(|placed| {
+                placed.code == super::side::ROOM_BACK_BUTTON_CODE && rect_hit(&placed.rect, x, y)
+            })
+        });
+        if back_hit {
+            self.enter(Screen::Channel);
+            return;
+        }
         // The CREATE button opens the create-room dialog (lifecycle §7:
         // `DIALOG_CREATEROOM` `CDCreateRoom`); geometry from the parsed
         // staged rect only (owner rule `f38f3`).
@@ -4829,11 +4841,12 @@ mod game_tests {
         MSHOP_CART_BUY_CODE, MSHOP_CART_LEFT_CODE, MSHOP_CART_RIGHT_CODE, MSHOP_DIFF_SORT_CODE,
         MSHOP_EX_FIRST_CODE, MSHOP_GEM_BUY_CODE, MSHOP_MSALL_LEFT_CODE, MSHOP_MSALL_RIGHT_CODE,
         MSHOP_PAGE_CUR_ONES_CODE, MSHOP_PAGE_CUR_TENS_CODE, MSHOP_PAGE_TOT_ONES_CODE,
-        MSHOP_PAGE_TOT_TENS_CODE, MSHOP_TITLE_SORT_CODE, MSHOP_WON_BUY_CODE, SHOP_BUYITEM_CODE,
-        SHOP_CART_LEFT_CODE, SHOP_CART_PAGE_CUR_ONES_CODE, SHOP_CART_PAGE_CUR_TENS_CODE,
-        SHOP_CART_PAGE_TOT_ONES_CODE, SHOP_CART_PAGE_TOT_TENS_CODE, SHOP_CART_RIGHT_CODE,
-        SHOP_GEMMONEY_CODE, SHOP_ITEMBUY_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE,
-        SHOP_ITEMWON_FIRST_CODE, SHOP_SCROLL_CODE, SHOP_SCROLL_LEFT_CODE, SHOP_SCROLL_RIGHT_CODE,
+        MSHOP_PAGE_TOT_TENS_CODE, MSHOP_TITLE_SORT_CODE, MSHOP_WON_BUY_CODE, ROOM_BACK_BUTTON_CODE,
+        ROOM_BACK_BUTTON_ID, SHOP_BUYITEM_CODE, SHOP_CART_LEFT_CODE, SHOP_CART_PAGE_CUR_ONES_CODE,
+        SHOP_CART_PAGE_CUR_TENS_CODE, SHOP_CART_PAGE_TOT_ONES_CODE, SHOP_CART_PAGE_TOT_TENS_CODE,
+        SHOP_CART_RIGHT_CODE, SHOP_GEMMONEY_CODE, SHOP_ITEMBUY_FIRST_CODE,
+        SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_SCROLL_CODE, SHOP_SCROLL_LEFT_CODE,
+        SHOP_SCROLL_RIGHT_CODE,
     };
     use super::*;
     use crate::avatar::AvatarFigure;
@@ -5441,6 +5454,50 @@ mod game_tests {
             },
         );
         game.mouse_click(60, 575);
+        assert_eq!(game.screen(), Screen::Room);
+    }
+
+    /// Room walked to with the pinned back button staged:
+    /// `IDC_BUTTON_SROOM_BACK` (`0X13200002`) at the `State_Room.bnd`
+    /// rect 1 (711,569)-(794,593) it pairs with by code ordinal.
+    fn room_back_game() -> ScreenGame {
+        use MenuKey;
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.set_rooms(two_rooms());
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        game.load_scene(
+            Screen::Room,
+            vec![ScenePlacement {
+                id: ROOM_BACK_BUTTON_ID.to_owned(),
+                code: ROOM_BACK_BUTTON_CODE,
+                sprite: None,
+                rect: Rect {
+                    x: 711,
+                    y: 569,
+                    w: 83,
+                    h: 24,
+                },
+            }],
+            HashMap::new(),
+        );
+        game
+    }
+
+    #[test]
+    fn click_staged_room_back_returns_to_channel() {
+        let mut game = room_back_game();
+        game.mouse_click(752, 581);
+        assert_eq!(game.screen(), Screen::Channel);
+    }
+
+    #[test]
+    fn click_outside_room_back_keeps_room() {
+        let mut game = room_back_game();
+        game.mouse_click(10, 10);
         assert_eq!(game.screen(), Screen::Room);
     }
 

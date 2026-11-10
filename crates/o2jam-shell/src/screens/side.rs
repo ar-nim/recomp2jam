@@ -2727,6 +2727,13 @@ pub const CREATE_ROOM_TITLE_CODE: u32 = 0x2430_0008;
 pub const CREATE_ROOM_PASSWORD_CODE: u32 = 0x2430_0009;
 /// Room-create button code (`IDC_BUTTON_SROOM_CREATE`, `0X13200007`).
 pub const ROOM_CREATE_BUTTON_CODE: u32 = 0x1320_0007;
+/// Room-back button code (`IDC_BUTTON_SROOM_BACK`, `0X13200002`,
+/// `Room_Back.ojs`): low word `0x002` pairs with `State_Room.bnd`
+/// rect 1 (711,569)-(794,593) by code ordinal (never file order),
+/// the backdrop `IDC_BACK_SROOM_1` taking rect 0.
+pub const ROOM_BACK_BUTTON_CODE: u32 = 0x1320_0002;
+/// Room-back button control id (`IDC_BUTTON_SROOM_BACK`).
+pub const ROOM_BACK_BUTTON_ID: &str = "IDC_BUTTON_SROOM_BACK";
 /// Password-dialog OK code (`0X28200004`, `Dialog_PasswordOK.ojs`).
 pub const PASSWORD_OK_CODE: u32 = 0x2820_0004;
 /// Password-dialog CANCEL code (`0X28200005`, `Dialog_PasswordNO.ojs`).
