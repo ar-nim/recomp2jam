@@ -1764,7 +1764,7 @@ impl ScreenGame {
     /// Channel dialog click: the bnd-pinned X button rect
     /// (541,151)-(589,189) closes the dialog back to the bare planet
     /// board (verified native close click (577,171); `docs/planet.md`),
-    /// otherwise a row band highlights the
+    /// otherwise a click inside a pinned row rect highlights the
     /// entry and advances like Confirm while the draft is action-free
     /// (slash drafts consume the click instead of starting).
     fn click_channel_row(&mut self, x: i32, y: i32) {
@@ -1775,7 +1775,7 @@ impl ScreenGame {
         // Viewport-relative bands: the visible slot maps back through
         // the highlight-following viewport (see `channel_viewport`).
         let (top, shown) = channel_viewport(self.highlight, self.channels.len());
-        let Some(slot) = channel_row_hit(y, shown) else {
+        let Some(slot) = channel_row_hit(x, y, shown) else {
             return;
         };
         let index = top + slot;
@@ -5332,6 +5332,27 @@ mod game_tests {
     }
 
     #[test]
+    fn click_scrollbar_column_and_row_margins_keep_channel() {
+        // Issue #29: the scroll track (x573-593) and the dialog
+        // margins share the row bands' y range; the router must
+        // read the pinned row rect (both axes), not the y band.
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        // y = 240 sits inside row 0's band (224-275).
+        game.mouse_click(583, 240);
+        assert_eq!(game.highlight, 0);
+        assert_eq!(game.screen(), Screen::Channel);
+        game.mouse_click(100, 240);
+        assert_eq!(game.highlight, 0);
+        assert_eq!(game.screen(), Screen::Channel);
+        game.mouse_click(700, 290);
+        assert_eq!(game.highlight, 0);
+        assert_eq!(game.screen(), Screen::Channel);
+    }
+
+    #[test]
     fn click_with_slash_draft_consumes_without_advancing() {
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
@@ -7169,21 +7190,31 @@ mod game_tests {
     }
 
     #[test]
-    fn channel_row_hit_maps_the_exe_pinned_bands() {
+    fn channel_row_hit_maps_the_exe_pinned_rects() {
         // Exe-pinned slot rects (CStatePlanet dialog+0x94):
         // (216,224,572,275), (216,275,572,324), (216,324,572,375),
-        // (216,375,572,436) — tops inclusive, bottoms exclusive.
-        assert_eq!(channel_row_hit(224, 10), Some(0));
-        assert_eq!(channel_row_hit(240, 10), Some(0));
-        assert_eq!(channel_row_hit(274, 10), Some(0));
-        assert_eq!(channel_row_hit(275, 10), Some(1));
-        assert_eq!(channel_row_hit(282, 10), Some(1));
-        assert_eq!(channel_row_hit(375, 10), Some(3));
-        assert_eq!(channel_row_hit(435, 10), Some(3));
-        assert_eq!(channel_row_hit(436, 10), None);
-        assert_eq!(channel_row_hit(100, 10), None);
-        assert_eq!(channel_row_hit(732, 10), None);
-        assert_eq!(channel_row_hit(240, 0), None);
+        // (216,375,572,436) — left/top inclusive, right/bottom
+        // exclusive. x = 300 sits inside every band's x range.
+        assert_eq!(channel_row_hit(300, 224, 10), Some(0));
+        assert_eq!(channel_row_hit(300, 240, 10), Some(0));
+        assert_eq!(channel_row_hit(300, 274, 10), Some(0));
+        assert_eq!(channel_row_hit(300, 275, 10), Some(1));
+        assert_eq!(channel_row_hit(300, 282, 10), Some(1));
+        assert_eq!(channel_row_hit(300, 375, 10), Some(3));
+        assert_eq!(channel_row_hit(300, 435, 10), Some(3));
+        assert_eq!(channel_row_hit(300, 436, 10), None);
+        assert_eq!(channel_row_hit(300, 100, 10), None);
+        assert_eq!(channel_row_hit(300, 732, 10), None);
+        assert_eq!(channel_row_hit(300, 240, 0), None);
+        // Issue #29: the y band alone is not a hit — x must sit
+        // inside the pinned rect too. The scroll track (x573-593)
+        // and the dialog margins share the bands' y range.
+        assert_eq!(channel_row_hit(583, 240, 10), None);
+        assert_eq!(channel_row_hit(100, 240, 10), None);
+        assert_eq!(channel_row_hit(700, 290, 10), None);
+        assert_eq!(channel_row_hit(216, 240, 10), Some(0));
+        assert_eq!(channel_row_hit(571, 240, 10), Some(0));
+        assert_eq!(channel_row_hit(572, 240, 10), None);
     }
 
     #[test]

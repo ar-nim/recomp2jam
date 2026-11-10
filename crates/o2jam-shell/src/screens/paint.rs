@@ -369,14 +369,18 @@ fn channel_row_top(index: usize, h: i32) -> i32 {
     i32::try_from(scaled).unwrap_or(i32::MAX)
 }
 
-/// Channel viewport slot under a native-space `y` (`None` above the
-/// slots or below every band). Inverse of the pinned
-/// [`CHANNEL_ROW_RECTS`] bands; mouse clicks arrive pre-mapped to
-/// native space, so no frame dims.
+/// Channel viewport slot under a native-space (`x`, `y`) (`None` outside
+/// every pinned slot or below the shown count). Inverse of the pinned
+/// [`CHANNEL_ROW_RECTS`] rects (both axes: the scroll track and the
+/// dialog margins share the bands' y range); mouse clicks arrive
+/// pre-mapped to native space, so no frame dims.
 #[must_use]
-pub(crate) fn channel_row_hit(y: i32, row_count: usize) -> Option<usize> {
+pub(crate) fn channel_row_hit(x: i32, y: i32, row_count: usize) -> Option<usize> {
     let slots = row_count.min(CHANNEL_SLOT_COUNT);
-    (0..slots).find(|&i| (CHANNEL_ROW_RECTS[i].1..CHANNEL_ROW_RECTS[i].3).contains(&y))
+    (0..slots).find(|&i| {
+        let (left, top, right, bottom) = CHANNEL_ROW_RECTS[i];
+        (left..right).contains(&x) && (top..bottom).contains(&y)
+    })
 }
 
 /// Bnd-pinned row-bar geometry (`Dialog_ChannelInfo.bnd`, pairing
@@ -10106,21 +10110,28 @@ mod paint_tests {
 
     #[test]
     fn channel_row_hit_mirrors_the_pinned_row_rects() {
-        // Hit-test inverse of the exe-pinned slot bands (CStatePlanet
+        // Hit-test inverse of the exe-pinned slot rects (CStatePlanet
         // dialog+0x94): a pixel inside the face of slot i maps back to
-        // slot i; the band edges (top inclusive, bottom exclusive) and
-        // pixels above the stack or past the last bottom hit nothing.
-        for (slot, &(.., band_top, _, band_bottom)) in CHANNEL_ROW_RECTS.iter().enumerate() {
+        // slot i; the rect edges (left/top inclusive, right/bottom
+        // exclusive) and pixels outside the rect hit nothing.
+        for (slot, &(left, band_top, right, band_bottom)) in CHANNEL_ROW_RECTS.iter().enumerate() {
             let face_y = channel_enter_origin(slot).1 + 5;
-            assert_eq!(channel_row_hit(face_y, 4), Some(slot));
-            assert_eq!(channel_row_hit(band_top, 4), Some(slot));
-            assert_eq!(channel_row_hit(band_bottom - 1, 4), Some(slot));
+            assert_eq!(channel_row_hit(300, face_y, 4), Some(slot));
+            assert_eq!(channel_row_hit(300, band_top, 4), Some(slot));
+            assert_eq!(channel_row_hit(300, band_bottom - 1, 4), Some(slot));
+            assert_eq!(channel_row_hit(left, band_top, 4), Some(slot));
+            assert_eq!(channel_row_hit(right - 1, band_bottom - 1, 4), Some(slot));
+            assert_eq!(channel_row_hit(right, band_top, 4), None);
         }
         // Bottom edge is exclusive: the last band ends at 436.
-        assert_eq!(channel_row_hit(435, 4), Some(3));
-        assert_eq!(channel_row_hit(436, 4), None);
-        assert_eq!(channel_row_hit(100, 4), None);
-        assert_eq!(channel_row_hit(560, 4), None);
+        assert_eq!(channel_row_hit(300, 435, 4), Some(3));
+        assert_eq!(channel_row_hit(300, 436, 4), None);
+        assert_eq!(channel_row_hit(300, 100, 4), None);
+        assert_eq!(channel_row_hit(300, 560, 4), None);
+        // Issue #29: the scroll track and margins share the bands'
+        // y range but sit outside the pinned x range.
+        assert_eq!(channel_row_hit(583, 240, 4), None);
+        assert_eq!(channel_row_hit(100, 240, 4), None);
     }
 
     #[test]
