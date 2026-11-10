@@ -5,7 +5,7 @@
 
 mod bgm;
 
-pub use bgm::{BgmSelection, SceneBgm, BGM_SILENCE_ID};
+pub use bgm::{BgmSelection, CueOutcome, SceneBgm, SceneCue, BGM_SILENCE_ID};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use thiserror::Error;
@@ -121,6 +121,18 @@ pub trait AudioBackend {
         }
         Ok(())
     }
+    /// Whether the scene-BGM voice is still sounding: `true` while
+    /// a cued track plays, `false` once it stopped (a once-voice
+    /// that played out, or a stop cue). The shell's cue policy asks
+    /// this before it keeps a running track instead of restarting it
+    /// (see [`SceneBgm::cue`]).
+    ///
+    /// The default answers `false`: a sink that models no BGM voice
+    /// cannot confirm playback, so every cue re-applies (the exe's
+    /// unconditional push).
+    fn scene_bgm_playing(&self) -> bool {
+        false
+    }
     /// Song position in device frames (see trait docs).
     fn samples_played(&self) -> u64;
     /// Device sample rate in Hz: the rate [`Self::samples_played`]
@@ -142,6 +154,15 @@ pub trait AudioBackend {
 #[derive(Debug, Default)]
 pub struct NullBackend {
     played: u64,
+    bgm: Option<NullBgmVoice>,
+}
+
+/// The scene-BGM voice a [`NullBackend`] holds: a clock-only sink
+/// takes every pushed frame at once, so only a repeating track stays
+/// installed (a once track plays out inside its own push).
+#[derive(Debug, Clone, Copy)]
+struct NullBgmVoice {
+    repeat: bool,
 }
 
 impl NullBackend {
@@ -156,6 +177,18 @@ impl AudioBackend for NullBackend {
     fn play_pcm(&mut self, pcm: &PcmSamples) -> Result<(), AudioError> {
         self.played += pcm.samples.len() as u64 / pcm.channels.max(1) as u64;
         Ok(())
+    }
+
+    fn set_scene_bgm(&mut self, pcm: Option<&PcmSamples>, repeat: bool) -> Result<(), AudioError> {
+        self.bgm = pcm.map(|_| NullBgmVoice { repeat });
+        match pcm {
+            Some(pcm) => self.play_pcm(pcm),
+            None => Ok(()),
+        }
+    }
+
+    fn scene_bgm_playing(&self) -> bool {
+        self.bgm.is_some_and(|voice| voice.repeat)
     }
 
     fn samples_played(&self) -> u64 {
@@ -516,6 +549,10 @@ impl AudioBackend for CpalBackend {
 
     fn set_scene_bgm(&mut self, pcm: Option<&PcmSamples>, repeat: bool) -> Result<(), AudioError> {
         CpalBackend::set_scene_bgm(self, pcm, repeat)
+    }
+
+    fn scene_bgm_playing(&self) -> bool {
+        self.queue.lock().is_ok_and(|queue| queue.has_bgm())
     }
 
     fn samples_played(&self) -> u64 {

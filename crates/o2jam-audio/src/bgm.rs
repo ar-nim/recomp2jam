@@ -21,6 +21,14 @@
 //!   music-shop track) — the alignment this one-based contract
 //!   encodes, verified by `o2jam-dump dump-ojm` on the installed
 //!   `BGM.ojm`.
+//! - Scene entries re-cue their own cue (each state entry pushes the
+//!   pair), so this channel keeps a sounding track when an incoming
+//!   cue names the record already latched: Planet and its channel
+//!   dialog both cue record 9, and the exe's dialog lives inside
+//!   `CStatePlanet` — restarting the track on every emblem click was
+//!   our own defect (ticket #27). The exe's own push stays
+//!   unconditional ([`SceneBgm::play_scene_music`]); the keep-running
+//!   policy is [`SceneBgm::cue`].
 //! - Two of our earlier (audit) numbers move toward the exe: the
 //!   result cue is `(0x13, once)` (the exe pushes `0x0` for loop)
 //!   and the music-shop cue is decimal `10` (the exe pushes `0xA`),
@@ -36,6 +44,10 @@ use crate::PcmSamples;
 /// `0xFFFFFFFF`; any negative id silences, only `-1` is pinned).
 pub const BGM_SILENCE_ID: i32 = -1;
 
+/// Linear gain that applies no scaling (`1.0`): the volume a caller
+/// that scales nothing (the launch client's path) cues with.
+const UNITY_GAIN: f32 = 1.0;
+
 /// One latched scene-BGM selection: a one-based record over the
 /// bank plus the cue's loop flag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,11 +60,45 @@ pub struct BgmSelection {
     pub repeat: bool,
 }
 
+/// One cue as a caller asks it: the exe's `(id, loop)` pair plus the
+/// linear volume the caller scales the PCM with (`1.0` for no
+/// scaling).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SceneCue {
+    /// One-based record over the bank; negative ids silence.
+    pub id: i32,
+    /// The cue's loop flag (the exe's `loop` argument).
+    pub repeat: bool,
+    /// Linear volume the caller scales the cued PCM with.
+    pub gain: f32,
+}
+
+/// What a cue asks the backend to do — the keep-running policy of
+/// [`SceneBgm::cue`].
+#[derive(Debug, Clone, Copy)]
+pub enum CueOutcome<'a> {
+    /// The same record in the same repeat mode already sounds at the
+    /// same volume: leave the running track untouched.
+    KeepRunning,
+    /// Start this PCM from its beginning.
+    Restart(&'a PcmSamples),
+    /// The cue names no record: stop the channel.
+    Stop,
+}
+
+/// One cue in effect: the latched selection plus the volume its PCM
+/// was scaled with.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct LatchedCue {
+    selection: BgmSelection,
+    gain: f32,
+}
+
 /// Single-track scene-BGM channel: a new selection replaces the old
 /// one; nothing else ever sounds.
 #[derive(Debug, Default)]
 pub struct SceneBgm {
-    current: Option<BgmSelection>,
+    latched: Option<LatchedCue>,
 }
 
 impl SceneBgm {
@@ -65,18 +111,19 @@ impl SceneBgm {
     /// The latched selection, if a track is playing.
     #[must_use]
     pub fn current(&self) -> Option<BgmSelection> {
-        self.current
+        self.latched.map(|latched| latched.selection)
     }
 
     /// Whether a selection is playing.
     #[must_use]
     pub fn is_playing(&self) -> bool {
-        self.current.is_some()
+        self.latched.is_some()
     }
 
     /// Play one `Music/BGM.ojm` record as the scene BGM: a negative
     /// id silences, a new selection replaces the playing track, and
-    /// `repeat` asks the backend to loop it until replaced.
+    /// `repeat` asks the backend to loop it until replaced. The push
+    /// is unconditional, as the exe's own call is.
     ///
     /// The bank holds one slot per record in bank order (blank
     /// records as `None`); `id` is the one-based record number.
@@ -89,23 +136,99 @@ impl SceneBgm {
         repeat: bool,
         bank: &'a [Option<PcmSamples>],
     ) -> Option<&'a PcmSamples> {
-        let slot = usize::try_from(id).ok().and_then(|id| id.checked_sub(1));
-        let pcm = slot
-            .and_then(|slot| bank.get(slot))
-            .and_then(|entry| entry.as_ref());
-        self.current = match (slot, pcm) {
-            (Some(slot), Some(_)) => Some(BgmSelection {
-                record: slot + 1,
+        self.latch(
+            SceneCue {
+                id,
                 repeat,
-            }),
-            _ => None,
-        };
-        pcm
+                gain: UNITY_GAIN,
+            },
+            bank,
+        )
+    }
+
+    /// Cue the channel and say what the backend must do — the policy
+    /// that keeps a shared track running across scene entries.
+    ///
+    /// A cue that names the latched record in the same repeat mode at
+    /// the same volume while `sounding` reports the backend still
+    /// playing it keeps the running track
+    /// ([`CueOutcome::KeepRunning`]); a different record, a different
+    /// volume, or stopped playback restarts it. Silence over an
+    /// already silent channel changes nothing either.
+    pub fn cue<'a>(
+        &mut self,
+        request: SceneCue,
+        bank: &'a [Option<PcmSamples>],
+        sounding: bool,
+    ) -> CueOutcome<'a> {
+        if self.keeps_running(request, bank, sounding) {
+            return CueOutcome::KeepRunning;
+        }
+        self.latch(request, bank)
+            .map_or(CueOutcome::Stop, CueOutcome::Restart)
     }
 
     /// Silence the BGM channel.
     pub fn silence(&mut self) {
-        self.current = None;
+        self.latched = None;
+    }
+
+    /// Whether `request` leaves what sounds untouched (see
+    /// [`Self::cue`]).
+    fn keeps_running(
+        &self,
+        request: SceneCue,
+        bank: &[Option<PcmSamples>],
+        sounding: bool,
+    ) -> bool {
+        let Some(latched) = self.latched else {
+            // A silent channel stays silent on another silence cue.
+            return Self::resolve(request.id, request.repeat, bank).is_none();
+        };
+        let incoming =
+            Self::resolve(request.id, request.repeat, bank).map(|(selection, _pcm)| selection);
+        incoming == Some(latched.selection) && latched.gain == request.gain && sounding
+    }
+
+    /// Latch `request` over `bank` and return its PCM (`None` latches
+    /// silence).
+    fn latch<'a>(
+        &mut self,
+        request: SceneCue,
+        bank: &'a [Option<PcmSamples>],
+    ) -> Option<&'a PcmSamples> {
+        match Self::resolve(request.id, request.repeat, bank) {
+            Some((selection, pcm)) => {
+                self.latched = Some(LatchedCue {
+                    selection,
+                    gain: request.gain,
+                });
+                Some(pcm)
+            }
+            None => {
+                self.latched = None;
+                None
+            }
+        }
+    }
+
+    /// The selection `id` names over `bank` and its PCM, `None` when
+    /// the cue silences (negative, `0`, past the end, or a blank
+    /// slot).
+    fn resolve(
+        id: i32,
+        repeat: bool,
+        bank: &[Option<PcmSamples>],
+    ) -> Option<(BgmSelection, &PcmSamples)> {
+        let slot = usize::try_from(id).ok().and_then(|id| id.checked_sub(1))?;
+        let pcm = bank.get(slot)?.as_ref()?;
+        Some((
+            BgmSelection {
+                record: slot + 1,
+                repeat,
+            },
+            pcm,
+        ))
     }
 }
 
@@ -113,6 +236,12 @@ impl SceneBgm {
 mod tests {
     use super::*;
     use crate::{AudioBackend, NullBackend};
+
+    const BOARD_CUE: SceneCue = SceneCue {
+        id: 9,
+        repeat: true,
+        gain: UNITY_GAIN,
+    };
 
     fn silent_bank(slots: usize) -> Vec<Option<PcmSamples>> {
         vec![None; slots]
@@ -207,5 +336,110 @@ mod tests {
         bgm.play_scene_music(3, true, &bank);
         bgm.silence();
         assert_eq!(bgm.current(), None);
+    }
+
+    #[test]
+    fn play_scene_music_pushes_the_same_record_every_call() {
+        // The exe's own push is unconditional; the keep-running
+        // policy belongs to the shell's cue seam, not to this call.
+        let bank = bank_with_track(10, 9);
+        let mut bgm = SceneBgm::new();
+        assert!(bgm.play_scene_music(9, true, &bank).is_some());
+        assert!(bgm.play_scene_music(9, true, &bank).is_some());
+    }
+
+    #[test]
+    fn same_record_cue_keeps_the_running_track() {
+        let bank = bank_with_track(10, 9);
+        let mut bgm = SceneBgm::new();
+        assert!(matches!(
+            bgm.cue(BOARD_CUE, &bank, false),
+            CueOutcome::Restart(_)
+        ));
+        assert!(bgm.keeps_running(BOARD_CUE, &bank, true));
+        assert!(matches!(
+            bgm.cue(BOARD_CUE, &bank, true),
+            CueOutcome::KeepRunning
+        ));
+    }
+
+    #[test]
+    fn cue_restarts_when_the_backend_stopped_playing() {
+        let bank = bank_with_track(10, 9);
+        let mut bgm = SceneBgm::new();
+        bgm.cue(BOARD_CUE, &bank, false);
+        // A played-out voice is no longer running, so the same cue
+        // must start the record again.
+        assert!(matches!(
+            bgm.cue(BOARD_CUE, &bank, false),
+            CueOutcome::Restart(_)
+        ));
+    }
+
+    #[test]
+    fn cue_switches_on_a_different_record() {
+        let mut bank = bank_with_track(10, 9);
+        bank[2] = Some(PcmSamples {
+            samples: vec![3000i16; 441],
+            sample_rate: 44_100,
+            channels: 1,
+        });
+        let mut bgm = SceneBgm::new();
+        bgm.cue(BOARD_CUE, &bank, true);
+        let room = SceneCue {
+            id: 3,
+            repeat: true,
+            gain: UNITY_GAIN,
+        };
+        assert!(matches!(bgm.cue(room, &bank, true), CueOutcome::Restart(_)));
+        assert_eq!(bgm.current().map(|selection| selection.record), Some(3));
+    }
+
+    #[test]
+    fn cue_switches_on_a_repeat_mode_change() {
+        let bank = bank_with_track(10, 9);
+        let mut bgm = SceneBgm::new();
+        bgm.cue(BOARD_CUE, &bank, true);
+        let once = SceneCue {
+            repeat: false,
+            ..BOARD_CUE
+        };
+        assert!(matches!(bgm.cue(once, &bank, true), CueOutcome::Restart(_)));
+    }
+
+    #[test]
+    fn cue_restarts_on_a_volume_change() {
+        // The live volume only reaches the mixer with the cued PCM,
+        // so a gain change must re-cue the same record.
+        let bank = bank_with_track(10, 9);
+        let mut bgm = SceneBgm::new();
+        bgm.cue(BOARD_CUE, &bank, true);
+        let quieter = SceneCue {
+            gain: 0.5,
+            ..BOARD_CUE
+        };
+        assert!(matches!(
+            bgm.cue(quieter, &bank, true),
+            CueOutcome::Restart(_)
+        ));
+    }
+
+    #[test]
+    fn cue_silences_a_playing_track_and_keeps_a_silent_channel() {
+        let bank = bank_with_track(10, 9);
+        let mut bgm = SceneBgm::new();
+        bgm.cue(BOARD_CUE, &bank, true);
+        let silence = SceneCue {
+            id: BGM_SILENCE_ID,
+            repeat: false,
+            gain: UNITY_GAIN,
+        };
+        assert!(matches!(bgm.cue(silence, &bank, true), CueOutcome::Stop));
+        assert!(!bgm.is_playing());
+        // Silence over an already silent channel changes nothing.
+        assert!(matches!(
+            bgm.cue(silence, &bank, false),
+            CueOutcome::KeepRunning
+        ));
     }
 }

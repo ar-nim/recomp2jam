@@ -57,7 +57,9 @@ use super::side::{
     SELECT_TITLE_RADIO, SELECT_VISIBLE_ROWS, SELECT_WHEEL_FILTERS, SHOP_CART_ROWS, SHOP_ITEM_ROWS,
 };
 use crate::{menu_of, MenuKey};
-use o2jam_audio::{song_position_ms, AudioBackend, BgmSelection, PcmSamples, SceneBgm};
+use o2jam_audio::{
+    song_position_ms, AudioBackend, BgmSelection, CueOutcome, PcmSamples, SceneBgm, SceneCue,
+};
 use o2jam_file::{AvatarItemTable, OjnListEntry};
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams, PEER_SLOT_COUNT};
 use o2jam_net::gift::{ClaimGift, GetGiftMessageList, GiftType};
@@ -747,8 +749,9 @@ impl ScreenGame {
     /// record) and cue the current screen through it: boot cues
     /// Avi (id 8, once), and every later [`Self::enter_screen`]
     /// re-cues its own screen (Planet 9 loop, silence `-1` on
-    /// leave to cue-less screens). Without an audio rig the bank
-    /// drops (headless walks cue nothing).
+    /// leave to cue-less screens) — a re-cue that repeats the
+    /// sounding record leaves the running track alone. Without an
+    /// audio rig the bank drops (headless walks cue nothing).
     pub fn stage_scene_bgm(&mut self, bank: Vec<Option<PcmSamples>>) -> &mut Self {
         if let Some(rig) = self.audio.as_mut() {
             rig.bgm_bank = bank;
@@ -759,6 +762,12 @@ impl ScreenGame {
 
     /// Cue one scene-BGM pair through the rig (silence without one):
     /// the one application every scene entry flows through.
+    ///
+    /// The channel keeps the running track when the cue names the
+    /// record already latched in the same repeat mode at the same
+    /// volume (see [`SceneBgm::cue`]): Planet and its channel dialog
+    /// share record 9, and a shared track must not restart from
+    /// sample 0 on every emblem click.
     fn apply_bgm_cue(&mut self, cue: (i32, bool)) {
         let Some(rig) = self.audio.as_mut() else {
             return;
@@ -772,14 +781,23 @@ impl ScreenGame {
         } = rig;
         // The BGMusic volume (`Sound`/`GameBGVolume`, default 255 is
         // unity) scales the lobby cue: the Sound tab moves the live
-        // scene mix. The in-song mix path stays OPEN.
+        // scene mix (a gain change re-cues, the only path that
+        // carries the level to the mixer). The in-song mix path stays
+        // OPEN.
         let gain = self.options.bgm_gain();
-        match bgm.play_scene_music(cue_id, cue_repeat, bgm_bank) {
-            Some(pcm) => {
+        let request = SceneCue {
+            id: cue_id,
+            repeat: cue_repeat,
+            gain,
+        };
+        let sounding = backend.scene_bgm_playing();
+        match bgm.cue(request, bgm_bank, sounding) {
+            CueOutcome::KeepRunning => {}
+            CueOutcome::Restart(pcm) => {
                 let scaled = scale_scene_bgm(pcm, gain);
                 let _ = backend.set_scene_bgm(Some(&scaled), cue_repeat);
             }
-            None => {
+            CueOutcome::Stop => {
                 let _ = backend.set_scene_bgm(None, cue_repeat);
             }
         }
@@ -4897,7 +4915,9 @@ mod game_tests {
     use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
     use o2jam_render::{has_ink_near, near_xrgb};
     use o2jam_render::{pack_xrgb, Frame};
+    use std::cell::RefCell;
     use std::path::PathBuf;
+    use std::rc::Rc;
 
     #[test]
     fn select_chosung_rows_ride_the_staged_index_inventory() {
@@ -8458,8 +8478,109 @@ mod game_tests {
         assert_eq!(joined.password, "pw");
     }
 
+    /// Ten-slot scene-BGM bank whose records carry their own number
+    /// as the constant sample, so a cue log reads the record off the
+    /// pushed PCM. Made-up audio only: tests stay contained.
+    fn marker_bank(records: &[i16]) -> Vec<Option<PcmSamples>> {
+        let mut bank = vec![None; 10];
+        for record in records {
+            bank[usize::try_from(*record).expect("record fits a slot") - 1] = Some(PcmSamples {
+                samples: vec![*record; 441],
+                sample_rate: 44_100,
+                channels: 1,
+            });
+        }
+        bank
+    }
+
+    /// Null sink that logs each scene-BGM push as its marker sample
+    /// (`-1` for a stop), so a test can see which records the shell
+    /// cued and when.
+    struct CueLog {
+        inner: o2jam_audio::NullBackend,
+        pushes: Rc<RefCell<Vec<i16>>>,
+    }
+
+    impl AudioBackend for CueLog {
+        fn play_pcm(&mut self, pcm: &PcmSamples) -> Result<(), o2jam_audio::AudioError> {
+            self.inner.play_pcm(pcm)
+        }
+
+        fn set_scene_bgm(
+            &mut self,
+            pcm: Option<&PcmSamples>,
+            repeat: bool,
+        ) -> Result<(), o2jam_audio::AudioError> {
+            let marker = pcm
+                .and_then(|pcm| pcm.samples.first().copied())
+                .unwrap_or(-1);
+            self.pushes.borrow_mut().push(marker);
+            self.inner.set_scene_bgm(pcm, repeat)
+        }
+
+        fn scene_bgm_playing(&self) -> bool {
+            self.inner.scene_bgm_playing()
+        }
+
+        fn samples_played(&self) -> u64 {
+            self.inner.samples_played()
+        }
+    }
+
+    /// Boot a rig-bound game onto the planet board through the splash.
+    fn game_on_the_board(pushes: &Rc<RefCell<Vec<i16>>>) -> ScreenGame {
+        let mut game = ScreenGame::new();
+        game.with_audio(
+            Box::new(CueLog {
+                inner: o2jam_audio::NullBackend::new(),
+                pushes: Rc::clone(pushes),
+            }),
+            HashMap::new(),
+        );
+        game.stage_scene_bgm(marker_bank(&[3, 8, 9]));
+        game.lane_key(3, true);
+        assert_eq!(game.screen(), Screen::Planet);
+        game
+    }
+
     #[test]
-    fn scene_bgm_recues_on_every_screen_entry() {
+    fn emblem_round_trip_keeps_the_shared_board_track_running() {
+        // Planet and the channel dialog it opens share cue record 9
+        // (`Screen::bgm_cue`): mounting the dialog over the board must
+        // not restart the track (ticket #27, null sink only).
+        let pushes = Rc::new(RefCell::new(Vec::new()));
+        let mut game = game_on_the_board(&pushes);
+        assert_eq!(*pushes.borrow(), vec![8, 9], "boot then planet");
+        game.click_planet(136, 88);
+        assert_eq!(game.screen(), Screen::Channel);
+        game.menu_key(MenuKey::Back, true);
+        assert_eq!(game.screen(), Screen::Planet);
+        assert_eq!(
+            *pushes.borrow(),
+            vec![8, 9],
+            "the emblem round trip re-pushes nothing"
+        );
+    }
+
+    #[test]
+    fn different_track_and_silence_still_cue_on_the_scene_change() {
+        // The keep-running policy never swallows a genuine cue change:
+        // Room is record 3, Loading cues silence.
+        let pushes = Rc::new(RefCell::new(Vec::new()));
+        let mut game = game_on_the_board(&pushes);
+        game.click_planet(136, 88);
+        assert_eq!(game.screen(), Screen::Channel);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        assert_eq!(*pushes.borrow(), vec![8, 9, 3], "room switches to 3");
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Loading);
+        assert_eq!(*pushes.borrow(), vec![8, 9, 3, -1], "loading silences");
+    }
+
+    #[test]
+    fn scene_bgm_selection_follows_every_screen_entry() {
         // Null backend only (containment): a 10-slot bank with
         // tracks at 8 (Avi), 9 (Planet/Channel), and 3 (Room).
         use o2jam_audio::{NullBackend, PcmSamples};
