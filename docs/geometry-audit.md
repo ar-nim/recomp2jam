@@ -79,13 +79,22 @@ row-rect match, `docs/channel-fill.md`).
 | paint.rs:710 `CHANNEL_VISIBLE_ROWS` | 4 | none (reference photo `/tmp/chan2-list.png`) | — | OPEN | Rig: exe viewport count |
 | paint.rs:712 `CHANNEL_PAGER_Y` | 446 | none: absent from `Dialog_ChannelInfo.bnd` | — | OPEN | Rig: exe pager origin |
 
-## Room list (paint.rs:1074–1154)
+## Room list (paint.rs:1611–1627)
+
+Scene note: the `SET 0x11` row template (`State_Room.bnd` rects 33–49)
+clones per row panel — the 2026-11-09 rig pins the clone's live
+content (`~/scratch/geom-open-close/findings.md` §2), so the row
+fields ride pinned panel-relative offsets while the template rects
+supply sizes only.
 
 | Constant | Value | Candidate | Pairing evidence | Verdict | Proposed action |
 |---|---|---|---|---|---|
-| paint.rs:1074 `ROOM_ROW_TEXT_DX` | 34 | none: GDI text inset, exe-computed | reference capture `/tmp/aa-room.png` only | OPEN | Rig: exe text offset (parity.md room cell, audit 10–11) |
-| paint.rs:1075 `ROOM_ROW_TEXT_DY` | 1 | none | same | OPEN | same |
-| paint.rs:1154 `ROOM_DETAIL_LINES` | 9 | none | field count (title + 8) | RUNTIME | Keep |
+| paint.rs:1611 `ROOM_ROW_DIGIT_PITCH` | 11 | `State_Room.bnd` r45..47 width 11 | digits at 38/49/60 on panel 0 (findings §2) | DONE | None |
+| paint.rs:1615 `ROOM_ROW_NUMBER_ORIGIN` | (12,12) | panel-relative pin | digit origin 38/94 = panel (26,82)+(12,12) (findings §2) | DONE | None |
+| paint.rs:1619 `ROOM_ROW_TITLE_ORIGIN` | (64,11) | panel-relative pin | title ink x≈90 core 94, y 93 (findings §2; `ROOMNAME` rect at +66, 2 px GDI margin) | DONE | None |
+| paint.rs:1623 `ROOM_ROW_COUNT_ORIGIN` | (194,10) | panel-relative pin | count ink x 220..264, y 91..115 (findings §2; `ROOM_USER` rect paints background) | DONE | None |
+| paint.rs:1627 `TEXT_CAP_FRACTION` | 0.7 | exe-measured GDI cap share (not a geometry rect) | title ~11 px in 16 px rect, music ~14 px in 19 px (`t2-room-stage.png`) | DONE (presentation) | None — rasterization is owner-decided; the fraction pins the size |
+| paint.rs `ROOM_DETAIL_LINES` | 9 | none | field count (title + 8) | RUNTIME | Keep |
 
 ## Waiting (paint.rs:1622–2335)
 
@@ -210,9 +219,11 @@ verified bound run (entries 213–229 = ordinals 1–17,
 
 ## Counts per verdict
 
-- DONE: 72 (verified archive/exe source; incl. the 2026-11-09 rig
-  pins: room inset +12/+12, waiting chat pitch/caret/row-count; and
-  the A/V-verified select-music photo constants — see the A/V section)
+- DONE: 77 (verified archive/exe source; incl. the 2026-11-09 rig
+  pins: room inset +12/+12, waiting chat pitch/caret/row-count;
+  2026-11-11 room splits: number/title/count origins + digit pitch
+  + TEXT cap fraction; and the A/V-verified select-music photo
+  constants — see the A/V section)
 - FILE: 3 (`SELECT_CHO_SUNG_JAMO`,
   `SELECT_CHO_SUNG_WORDS`,
   `SELECT_CHO_SUNG_PITCH`)
@@ -220,11 +231,11 @@ verified bound run (entries 213–229 = ordinals 1–17,
 - CANDIDATE: 0 (the 22 select-music rows were upgraded to
   DONE-exe-output-verified by the 2026-11-10 A/V alignment; the bnd
   values are documented as contradicted, not applied)
-- OPEN: 13 (channel chrome 10 — partly live-measured 2026-11-09, see
+- OPEN: 11 (channel chrome 10 — partly live-measured 2026-11-09, see
   the channel rows; playing anchors 3 — blocked by the Attempt-13
-  loading wedge)
+  loading wedge; minus the 2 retired room inset rows, now DONE)
 
-Total audited: 133 named constants.
+Total audited: 136 named constants.
 
 ## Highest-value FILE replacements (ranked)
 
@@ -242,6 +253,13 @@ Total audited: 133 named constants.
 
 ## OPEN list (rig follow-up)
 
+- Room row-template clone (ticket #13 residue): digit places land
+  within −4/−2 px panel-relative and `ROOM_USER` paints background —
+  read the per-row clone offset with a SendInput highlight sweep
+  plus a memory read of the row template clone (per the
+  `~/scratch/geom-open-close/` recipe); a 2+ room gateway replay
+  plus a capture settles non-highlighted panels and the 3-digit
+  reading order.
 - Channel row-interior pill/track chrome (8 constants,
   paint.rs:429–439), `CHANNEL_VISIBLE_ROWS`, `CHANNEL_PAGER_Y` — read
   the hosting `CStatePlanet` dialog object the way the row rects were
@@ -281,8 +299,11 @@ Total audited: 133 named constants.
 
 - Channel cell FAIL ↔ OPEN pill/track/pager rows here (pager y446,
   plate stand-ins).
-- Room cell FAIL (audits 3, 10–11, 24–25) ↔ `ROOM_ROW_TEXT_DX/DY`
-  OPEN; detail fields draw from rect corners (no literals).
+- Room cell PASS (ticket #13) ↔ `ROOM_ROW_*` origins + digit pitch
+  + `TEXT_CAP_FRACTION` DONE here; the per-row template clone offset
+  past the pins stays OPEN (digit residual −4/−2 px, next: SendInput
+  highlight sweep + clone memory read); fallback bands stay RUNTIME
+  (labeled procedural fallback).
 - Waiting cell FAIL (audits 12, 18–19) ↔ seat grid is scaled-frame math
   on `WAITING_ROW_H` (RUNTIME); portraits center blind (no constants).
 - Loading cell FAIL (audits 23, 35) ↔ no geometry constants (bar/caption

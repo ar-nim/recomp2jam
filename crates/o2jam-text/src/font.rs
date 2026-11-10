@@ -75,6 +75,13 @@ impl RasterFont {
     pub fn face(&self) -> &FontArc {
         &self.face
     }
+
+    /// Cap height in em: the `H` advance the shaped-text baseline
+    /// and the room row fitter size from.
+    #[must_use]
+    pub fn cap_height_em(&self) -> f32 {
+        self.cap_height_em
+    }
 }
 
 /// Lazily loaded system face: `None` only when the Noto Sans CJK

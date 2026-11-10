@@ -986,35 +986,50 @@ fn composite_text_image(frame: &mut Frame<'_>, rect: &Rect, image: &o2jam_text::
     }
 }
 
-/// Paint one CP949 string into its native rect (scaled to the
-/// frame), left-anchored at the rect origin (the same `TEXT` rule
-/// as the waiting captions) and size-fit to the rect. Geometry
-/// always comes from the caller (staged `.bnd` rects or the
-/// dialog-relative message rect) — never from literals here.
-fn paint_cp949_into_rect(frame: &mut Frame<'_>, native_rect: Rect, cp949_bytes: &[u8]) {
-    if frame.w == 0 || frame.h == 0 || native_rect.w == 0 || native_rect.h == 0 {
+/// Paint one string into its native rect (scaled to the frame),
+/// left-anchored at the rect origin and size-fit to the rect (the
+/// same `TEXT` rule as the planet captions). Geometry always comes
+/// from the caller (staged `.bnd` rects) — never from literals
+/// here. Bare ink, no scrim: the string fits the rect by
+/// construction.
+fn paint_text_into_rect(frame: &mut Frame<'_>, native_rect: Rect, text: &str, ink: [u8; 4]) {
+    if frame.w == 0 || frame.h == 0 || native_rect.w == 0 || native_rect.h == 0 || text.is_empty() {
         return;
     }
     let rect = scale_rect_to_frame(&native_rect, frame.w, frame.h);
     if rect.w == 0 || rect.h == 0 {
         return;
     }
-    let text = o2jam_text::decode_cp949_lossy(cp949_bytes);
-    let scale = cp949_fit_scale(&text, rect.w as f32, rect.h as f32);
+    let scale = cp949_fit_scale(text, rect.w as f32, rect.h as f32);
     if scale <= 0.0 {
         return;
     }
     let mut image = o2jam_text::Image::blank(rect.w, rect.h);
-    o2jam_text::draw_text_cp949(
+    o2jam_text::draw_text(
         &mut image,
         o2jam_text::system_font(),
         0,
         0,
-        cp949_bytes,
-        CP949_INK,
+        text,
+        ink,
         scale,
     );
     composite_text_image(frame, &rect, &image);
+}
+
+/// Packed lobby ink as composited caption RGBA (opaque).
+fn caption_ink(ink: u32) -> [u8; 4] {
+    [(ink >> 16) as u8, (ink >> 8) as u8, ink as u8, 0xFF]
+}
+
+/// Paint one CP949 string into its native rect (scaled to the
+/// frame), left-anchored at the rect origin (the same `TEXT` rule
+/// as the waiting captions) and size-fit to the rect. Geometry
+/// always comes from the caller (staged `.bnd` rects or the
+/// dialog-relative message rect) — never from literals here.
+fn paint_cp949_into_rect(frame: &mut Frame<'_>, native_rect: Rect, cp949_bytes: &[u8]) {
+    let text = o2jam_text::decode_cp949_lossy(cp949_bytes);
+    paint_text_into_rect(frame, native_rect, &text, CP949_INK);
 }
 
 /// Emblem captions over the staged board: each `TEXT` placement
@@ -1524,20 +1539,18 @@ const ROOM_PANEL_IDS: [&str; 6] = [
     "IDC_BUTTON_SROOM_EXBUTTON6",
 ];
 
-/// Scaled frame origins of the staged room panels in file order
-/// (skips panels the staged art does not name; empty while no
-/// staged art names any panel).
-fn room_panel_origins(placements: &[ScenePlacement], frame: &Frame<'_>) -> Vec<(i32, i32)> {
+/// Native origins of the staged room panels in file order (the
+/// panel path positions fields panel-relatively; each field rect
+/// scales to the frame on paint. Skips panels the staged art does
+/// not name; empty while no staged art names any panel).
+fn room_panel_origins(placements: &[ScenePlacement]) -> Vec<(i32, i32)> {
     ROOM_PANEL_IDS
         .iter()
         .filter_map(|id| {
             placements
                 .iter()
                 .find(|placed| placed.id == *id)
-                .map(|placed| {
-                    let scaled = scale_rect_to_frame(&placed.rect, frame.w, frame.h);
-                    (scaled.x, scaled.y)
-                })
+                .map(|placed| (placed.rect.x, placed.rect.y))
         })
         .collect()
 }
@@ -1562,60 +1575,277 @@ pub(crate) fn room_panel_hit(placements: &[ScenePlacement], x: i32, y: i32) -> O
 }
 
 /// Room rows plus highlight cursor (no background fill: shared by
-/// the flat fallback and the art scene).
+/// the flat fallback and the art scene). `None` art (or art binding
+/// no panel) takes the legacy quarter-frame bands; staged panels
+/// take the pinned per-panel fields.
 fn paint_room_rows(
     frame: &mut Frame<'_>,
     rooms: &[RoomListEntry],
     highlight: usize,
-    placements: &[ScenePlacement],
+    art: Option<&SceneArt>,
 ) {
-    let origins = room_panel_origins(placements, frame);
-    if origins.is_empty() {
-        paint_room_fallback_rows(frame, rooms, highlight);
-    } else {
-        paint_room_panel_rows(frame, rooms, highlight, &origins);
+    match art {
+        Some(art) => {
+            let origins = room_panel_origins(&art.placements);
+            if origins.is_empty() {
+                paint_room_fallback_rows(frame, rooms, highlight);
+            } else {
+                paint_room_panel_rows(frame, rooms, highlight, art, &origins);
+            }
+        }
+        None => paint_room_fallback_rows(frame, rooms, highlight),
     }
 }
 
-/// Exe-measured room row-text inset inside a panel (live rig session
-/// 2026-11-09, `~/scratch/geom-open-close/` `t2-room-stage.png`/
-/// `t2-grid.png`): the combined row string anchors at the number
-/// plate glyphs, panel origin +12/+12 — the old photo note (+34/+1,
-/// `/tmp/aa-room.png`) was a misread and is retired. Title text sits
-/// at (+64,+11), the count at (+194,+10); `State_Room.bnd` digit
-/// rects r45..47 (11x13) confirm the number origin on screen.
-const ROOM_ROW_TEXT_DX: i32 = 12;
-const ROOM_ROW_TEXT_DY: i32 = 12;
+/// Exe-measured room row field origins (native px, panel-relative;
+/// rig 2026-11-09 `t2-room-stage.png`,
+/// `~/scratch/geom-open-close/findings.md` §2): the number plate at
+/// panel +(12,12), the title at +(64,+11), the seat count at
+/// +(194,+10). Title/count splits of the old combined row string ride
+/// these instead of the photo-era single anchor (+34/+1,
+/// `/tmp/aa-room.png` — retired as a misread).
+///
+/// Digit pitch of the number plate (native px): the pinned on-screen
+/// digits sit 11 px apart (38/49/60 on panel 0), the `ROOMNO` place
+/// width (`State_Room.bnd` r45..47).
+const ROOM_ROW_DIGIT_PITCH: i32 = 11;
+/// Panel-relative origin of the number plate (native px): panel
+/// origin +12/+12 (rig pin above). Hundreds, tens, ones run
+/// left-to-right at the digit pitch.
+const ROOM_ROW_NUMBER_ORIGIN: (i32, i32) = (12, 12);
+/// Panel-relative origin of the title field (native px): panel
+/// origin +64/+11 (rig pin above; the `ROOMNAME` rect sits at +66 —
+/// the 2 px run-in is the GDI left margin).
+const ROOM_ROW_TITLE_ORIGIN: (i32, i32) = (64, 11);
+/// Panel-relative origin of the seat-count field (native px): panel
+/// origin +194/+10 (rig pin above — the count rides the row, not
+/// the `ROOM_USER` rect, which the capture shows as background).
+const ROOM_ROW_COUNT_ORIGIN: (i32, i32) = (194, 10);
+/// GDI cap-height share of a TEXT control rect: the live room title
+/// spans ~11 px in its 16 px rect, the music line ~14 px in 19 px
+/// (`t2-room-stage.png`); text sizes to 70% of the rect height.
+const TEXT_CAP_FRACTION: f32 = 0.7;
 
-/// Room rows at their staged `.bnd` panel origins, bare on the
-/// panel art (no scrim: the panels carry their own chrome). Rooms
-/// past the staged panels stay off-page (the Left/Right pager is
-/// untraced); the highlight cursor rides the selected panel.
+/// Em extent fitting `text` to a `w`×`h` rect at the exe's GDI cap
+/// share: cap height fills [`TEXT_CAP_FRACTION`] of the rect height
+/// (the full-height [`cp949_fit_scale`] would undershoot the live
+/// glyphs by half). Width still clamps long strings into the rect.
+fn room_text_scale(text: &str, w: f32, h: f32) -> f32 {
+    if w <= 0.0 || h <= 0.0 || text.is_empty() {
+        return 0.0;
+    }
+    let (width_per_em, cap_em) = match o2jam_text::system_font() {
+        Some(font) => (
+            o2jam_text::measure_text(font, text, 1.0),
+            font.cap_height_em(),
+        ),
+        None => (o2jam_text::font::measure_text_stand_in(text, 1.0), 1.0),
+    };
+    if width_per_em <= 0.0 || cap_em <= 0.0 {
+        return 0.0;
+    }
+    let height_fit = TEXT_CAP_FRACTION * h / cap_em;
+    height_fit.min(w / width_per_em).max(0.0)
+}
+
+/// Paint one room row string into its field rect (native, usually
+/// panel-relative): the field origin is the pinned row offset while
+/// the size rides the staged template rect — the exe's GDI text
+/// fills the TEXT control at its cap share. Bare ink, no scrim.
+fn paint_room_text_into_rect(frame: &mut Frame<'_>, native_rect: Rect, text: &str, ink: [u8; 4]) {
+    if frame.w == 0 || frame.h == 0 || native_rect.w == 0 || native_rect.h == 0 || text.is_empty() {
+        return;
+    }
+    let rect = scale_rect_to_frame(&native_rect, frame.w, frame.h);
+    if rect.w == 0 || rect.h == 0 {
+        return;
+    }
+    let scale = room_text_scale(text, rect.w as f32, rect.h as f32);
+    if scale <= 0.0 {
+        return;
+    }
+    let mut image = o2jam_text::Image::blank(rect.w, rect.h);
+    o2jam_text::draw_text(
+        &mut image,
+        o2jam_text::system_font(),
+        0,
+        0,
+        text,
+        ink,
+        scale,
+    );
+    composite_text_image(frame, &rect, &image);
+}
+
+/// Native rect of one staged template control (`None` while the
+/// staged art names no such control — the row field then stays
+/// unpainted, like the exe's untouched icons).
+#[must_use]
+fn staged_field_rect(placements: &[ScenePlacement], id: &str) -> Option<Rect> {
+    placements
+        .iter()
+        .find(|placed| placed.id == id)
+        .map(|placed| placed.rect)
+}
+
+/// One font digit blitted 1:1 at `dest` (frame pixels): layer
+/// `digit` of `font` plus its record anchor. Missing figures and
+/// short fonts paint nothing; every other staged body is untouched.
+fn paint_font_digit_at(
+    frame: &mut Frame<'_>,
+    figures: &HashMap<String, AvatarFigure>,
+    font: &str,
+    digit: u32,
+    dest: (i32, i32),
+) {
+    let Some(index) = usize::try_from(digit).ok() else {
+        return;
+    };
+    let Some(layer) = figures.get(font).and_then(|figure| figure.layer(index)) else {
+        return;
+    };
+    blit_rgb555(
+        frame,
+        &layer.image.view(),
+        dest.0 + layer.dx,
+        dest.1 + layer.dy,
+        Some(layer.colorkey),
+    );
+}
+
+/// Digit places relocated to the pinned plate origin (native):
+/// hundreds, tens, ones left-to-right at the digit pitch, sizes
+/// riding the staged `ROOMNO` places — the template places name the
+/// font and the glyph boxes, positions ride the pinned origin (the
+/// per-row clone offset stays OPEN past the pins in `findings.md`
+/// §2). Missing staged places paint nothing.
+fn pinned_digit_places(
+    placements: &[ScenePlacement],
+    font: &str,
+    origin: (i32, i32),
+) -> Vec<ScenePlacement> {
+    let staged = font_places(placements, font);
+    [100u32, 10, 1]
+        .iter()
+        .enumerate()
+        .filter_map(|(slot, weight)| {
+            let (_, place) = staged.iter().find(|(w, _)| *w == *weight)?;
+            let slot = i32::try_from(slot).ok()?;
+            Some(ScenePlacement {
+                id: format!("IDC_IMAGE_SROOM_ROOMNO{weight}"),
+                code: 0,
+                sprite: Some(font.to_owned()),
+                rect: Rect {
+                    x: origin.0 + slot * ROOM_ROW_DIGIT_PITCH,
+                    y: origin.1,
+                    w: place.w,
+                    h: place.h,
+                },
+            })
+        })
+        .collect()
+}
+
+/// Room number at the pinned plate origin (native, panel-relative):
+/// hundreds, tens, ones left-to-right at the digit pitch through
+/// the staged number font; GDI number text (sized to the title band)
+/// while the digit font stages no figure. Missing fonts and short
+/// fonts paint nothing on the art arm; nothing staged paints
+/// nothing.
+fn paint_room_row_number(
+    frame: &mut Frame<'_>,
+    art: &SceneArt,
+    room: &RoomListEntry,
+    panel: (i32, i32),
+) {
+    let value = u32::try_from(room.number.max(0)).unwrap_or(0);
+    let origin = (
+        panel.0 + ROOM_ROW_NUMBER_ORIGIN.0,
+        panel.1 + ROOM_ROW_NUMBER_ORIGIN.1,
+    );
+    let staged = staged_number_fonts(&art.placements)
+        .into_iter()
+        .find(|font| art.figures.contains_key(*font));
+    match staged {
+        Some(font) => {
+            let places = pinned_digit_places(&art.placements, font, origin);
+            paint_font_number(frame, &places, &art.figures, font, value);
+        }
+        None => {
+            // GDI number text in the title band (same live line as
+            // the title) while the digit font stages no figure;
+            // nothing staged means nothing painted.
+            let band =
+                staged_field_rect(&art.placements, ROOM_DETAIL_TITLE_ID).map_or(0, |rect| rect.h);
+            paint_room_text_into_rect(
+                frame,
+                Rect {
+                    x: origin.0,
+                    y: origin.1,
+                    w: (u32::try_from(ROOM_ROW_DIGIT_PITCH).unwrap_or(0)).saturating_mul(3),
+                    h: band,
+                },
+                &value.to_string(),
+                caption_ink(art_title_ink()),
+            );
+        }
+    }
+}
+
+/// Room rows at their staged `.bnd` panel origins, one live room per
+/// panel: the number at its pinned plate origin, the title and the
+/// seat count at theirs, each sized to its template rect — the live
+/// splits (`findings.md` §2) replace the old combined string. Bare
+/// on the panel art (no scrim: the panels carry their own chrome).
+/// Rooms past the staged panels stay off-page (the Left/Right pager
+/// is untraced); the highlight cursor rides the selected panel.
 fn paint_room_panel_rows(
     frame: &mut Frame<'_>,
     rooms: &[RoomListEntry],
     highlight: usize,
+    art: &SceneArt,
     origins: &[(i32, i32)],
 ) {
+    let ink = caption_ink(art_title_ink());
     for (index, room) in rooms.iter().enumerate() {
         let Some((panel_x, panel_y)) = origins.get(index).copied() else {
             break;
         };
-        let wide = i32::try_from(frame.w).unwrap_or(0);
-        let high = i32::try_from(frame.h).unwrap_or(0);
-        let (text_x, row) = (
-            panel_x + ROOM_ROW_TEXT_DX * wide / NATIVE_WIDTH as i32,
-            panel_y + ROOM_ROW_TEXT_DY * high / NATIVE_HEIGHT as i32,
-        );
-        draw_text(
-            frame,
-            text_x,
-            row,
-            &room_row_text(room),
-            pack_xrgb(0xFF, 0xFF, 0xFF),
-        );
+        paint_room_row_number(frame, art, room, (panel_x, panel_y));
+        if let Some(title) = staged_field_rect(&art.placements, ROOM_DETAIL_TITLE_ID) {
+            paint_room_text_into_rect(
+                frame,
+                Rect {
+                    x: panel_x + ROOM_ROW_TITLE_ORIGIN.0,
+                    y: panel_y + ROOM_ROW_TITLE_ORIGIN.1,
+                    w: title.w,
+                    h: title.h,
+                },
+                &room.title,
+                ink,
+            );
+        }
+        if let Some(count) = staged_field_rect(&art.placements, ROOM_DETAIL_USERS_ID) {
+            paint_room_text_into_rect(
+                frame,
+                Rect {
+                    x: panel_x + ROOM_ROW_COUNT_ORIGIN.0,
+                    y: panel_y + ROOM_ROW_COUNT_ORIGIN.1,
+                    w: count.w,
+                    h: count.h,
+                },
+                &room_capacity_label(room),
+                ink,
+            );
+        }
         if index == highlight {
-            paint_cursor(frame, text_x, row);
+            let cursor = anchor_in_frame(
+                panel_x + ROOM_ROW_NUMBER_ORIGIN.0,
+                panel_y + ROOM_ROW_NUMBER_ORIGIN.1,
+                frame.w,
+                frame.h,
+            );
+            paint_cursor(frame, cursor.0, cursor.1);
         }
     }
 }
@@ -1779,19 +2009,6 @@ fn room_detail_entries(room: &RoomListEntry) -> [(&'static str, String); ROOM_DE
     ]
 }
 
-/// Scaled frame origin of one `State_Room.bnd` control (`None`
-/// while the staged art names no such control).
-#[must_use]
-fn room_detail_bnd_origin(
-    placements: &[ScenePlacement],
-    id: &str,
-    frame: &Frame<'_>,
-) -> Option<(i32, i32)> {
-    let placement = placements.iter().find(|placed| placed.id == id)?;
-    let scaled = scale_rect_to_frame(&placement.rect, frame.w, frame.h);
-    Some((scaled.x, scaled.y))
-}
-
 /// Fallback origin of detail line `slot` without staged art: stacked
 /// rows under the list so the list plus cursor keep their room.
 fn room_detail_fallback_origin(slot: usize, row_count: usize, frame: &Frame<'_>) -> (i32, i32) {
@@ -1876,24 +2093,12 @@ fn paint_font_number(
     font: &str,
     value: u32,
 ) {
-    let Some(figure) = figures.get(font) else {
+    if !figures.contains_key(font) {
         return;
-    };
+    }
     for (weight, rect) in font_places(placements, font) {
-        let digit = value / weight % 10;
-        let layer = usize::try_from(digit)
-            .ok()
-            .and_then(|index| figure.layer(index));
-        if let Some(shown) = layer {
-            let dest = scale_rect_to_frame(&rect, frame.w, frame.h);
-            blit_rgb555(
-                frame,
-                &shown.image.view(),
-                dest.x + shown.dx,
-                dest.y + shown.dy,
-                Some(shown.colorkey),
-            );
-        }
+        let dest = scale_rect_to_frame(&rect, frame.w, frame.h);
+        paint_font_digit_at(frame, figures, font, value / weight % 10, (dest.x, dest.y));
     }
 }
 
@@ -1912,25 +2117,6 @@ fn staged_number_fonts(placements: &[ScenePlacement]) -> Vec<&str> {
         }
     }
     fonts
-}
-
-/// Room number through the staged number fonts: `ROOMNO1/10/100`
-/// show the highlighted room's number digit by digit, each in its
-/// own `.bnd` rect. No staged font means no digits (the row text
-/// already names the number); nothing paints without a room.
-fn paint_room_number(
-    frame: &mut Frame<'_>,
-    art: &SceneArt,
-    rooms: &[RoomListEntry],
-    highlight: usize,
-) {
-    let Some(room) = rooms.get(highlight) else {
-        return;
-    };
-    let value = u32::try_from(room.number.max(0)).unwrap_or(u32::MAX);
-    for font in staged_number_fonts(&art.placements) {
-        paint_font_number(frame, &art.placements, &art.figures, font, value);
-    }
 }
 
 /// Lobby row-state icon body (`SET 0x11` row template, child 12):
@@ -1998,10 +2184,11 @@ fn icon_frame_layer(frame: u8, layers: usize) -> Option<usize> {
     Some(usize::from(frame.saturating_sub(1)).min(layers - 1))
 }
 
-/// Paint one frame of a staged icon body at its bound placement: the
-/// first placement naming `sprite` supplies the rect, the frame's
-/// layer blits 1:1 at the rect origin plus its record anchor (the
-/// same draw math as [`paint_font_number`]; the row icons anchor at
+/// Paint one frame of a staged icon body at its template placement
+/// plus the panel origin (native): the first placement naming
+/// `sprite` supplies the template rect, the frame's layer blits 1:1
+/// at the panel-relative origin plus its record anchor (the same
+/// draw math as [`paint_font_number`]; the row icons anchor at
 /// `(0,0)`, so the rect origin positions them). A missing placement,
 /// figure, frame, or layer paints nothing — the exe leaves an
 /// untouched icon exactly so.
@@ -2011,6 +2198,7 @@ fn paint_icon_frame(
     figures: &HashMap<String, AvatarFigure>,
     sprite: &str,
     icon_frame: Option<u8>,
+    panel: (i32, i32),
 ) {
     let Some(icon_frame) = icon_frame else {
         return;
@@ -2030,7 +2218,13 @@ fn paint_icon_frame(
     let Some(layer) = figure.layer(layer_index) else {
         return;
     };
-    let dest = scale_rect_to_frame(&placed.rect, frame.w, frame.h);
+    let template = Rect {
+        x: placed.rect.x + panel.0,
+        y: placed.rect.y + panel.1,
+        w: placed.rect.w,
+        h: placed.rect.h,
+    };
+    let dest = scale_rect_to_frame(&template, frame.w, frame.h);
     blit_rgb555(
         frame,
         &layer.image.view(),
@@ -2041,10 +2235,11 @@ fn paint_icon_frame(
 }
 
 /// Row icons of the highlighted room: state, key mode, and Om
-/// pudding count, each at its `State_Room.bnd` icon rect (the `SET
-/// 0x11` row template binds one copy per icon; the exe clones the
-/// template per row button). Missing art paints nothing; the detail
-/// text draws on top.
+/// pudding count, each at its `State_Room.bnd` icon rect offset by
+/// the highlighted panel's origin (the `SET 0x11` row template binds
+/// one copy per icon; the exe clones the template per row button —
+/// the clone offsets stay OPEN past the title/number/count pins).
+/// Missing art paints nothing; the detail text draws on top.
 fn paint_room_row_icons(
     frame: &mut Frame<'_>,
     art: &SceneArt,
@@ -2054,12 +2249,18 @@ fn paint_room_row_icons(
     let Some(room) = rooms.get(highlight) else {
         return;
     };
+    // No staged panel under the highlight (pager overflow): rows
+    // already stay off-page, and icons follow them.
+    let Some(panel) = room_panel_origins(&art.placements).get(highlight).copied() else {
+        return;
+    };
     paint_icon_frame(
         frame,
         &art.placements,
         &art.figures,
         ROOM_STATE_SPRITE,
         Some(room_state_icon_frame(room.state_code)),
+        panel,
     );
     paint_icon_frame(
         frame,
@@ -2067,6 +2268,7 @@ fn paint_room_row_icons(
         &art.figures,
         ROOM_MODE_SPRITE,
         room_key_icon_frame(room.key_mode),
+        panel,
     );
     paint_icon_frame(
         frame,
@@ -2074,32 +2276,91 @@ fn paint_room_row_icons(
         &art.figures,
         ROOM_OM_SPRITE,
         room_om_icon_frame(room.music_id, None),
+        panel,
     );
 }
 
-/// Details of the highlighted room: title, song, difficulty, key
-/// mode, game mode, speed, seats, level gate, lock. Lines anchor to
-/// their `State_Room.bnd` rects while staged art names them and
-/// stack under the list otherwise; nothing paints without a room.
+/// Icon body behind one icon-rect detail label (`None` for the
+/// text-only fields): the label stands in for the icon body, so a
+/// staged figure silences it and the icon pass owns the rect.
+fn room_icon_sprite_for_detail(id: &str) -> Option<&'static str> {
+    if id == ROOM_DETAIL_MODE_ID {
+        Some(ROOM_MODE_SPRITE)
+    } else if id == ROOM_DETAIL_KEY_ID {
+        Some(ROOM_OM_SPRITE)
+    } else {
+        None
+    }
+}
+
+/// Details of the highlighted room: song, difficulty, key mode,
+/// game mode, speed, level gate, lock — the template fields the row
+/// string does not carry (number, title, and seat count ride the
+/// pinned row fields instead; the count's `ROOM_USER` rect paints
+/// background in the live capture). Staged details paint at the
+/// highlighted panel's origin plus their `State_Room.bnd` rects, sized
+/// to the rects at real sizes (the TEXT rects are 16-20 px tall; the
+/// icon-rect labels ride the same fit); icon-rect labels stand down
+/// while their icon figure stages (the icon pass owns the rect).
+/// Without staged art the stacked fallback lines keep the list
+/// readable. Nothing paints without a room, or without a staged
+/// panel under the highlight.
 fn paint_room_details(
     frame: &mut Frame<'_>,
     rooms: &[RoomListEntry],
     highlight: usize,
-    placements: Option<&[ScenePlacement]>,
+    art: Option<&SceneArt>,
 ) {
     let Some(room) = rooms.get(highlight) else {
         return;
     };
-    for (slot, (id, text)) in room_detail_entries(room).iter().enumerate() {
-        let origin = placements
-            .and_then(|placed| room_detail_bnd_origin(placed, id, frame))
-            .unwrap_or_else(|| room_detail_fallback_origin(slot, rooms.len(), frame));
+    let Some(art) = art else {
+        for (slot, (id, text)) in room_detail_entries(room).iter().enumerate() {
+            let ink = if *id == ROOM_DETAIL_LOCK_ID {
+                room_lock_ink(room.has_password)
+            } else {
+                art_title_ink()
+            };
+            let (x, y) = room_detail_fallback_origin(slot, rooms.len(), frame);
+            paint_room_detail_line(frame, x, y, text, ink);
+        }
+        return;
+    };
+    let placements = &art.placements;
+    let Some((panel_x, panel_y)) = room_panel_origins(placements).get(highlight).copied() else {
+        return;
+    };
+    for (id, text) in room_detail_entries(room).iter() {
+        // Number, title, and seat count ride the pinned row fields
+        // instead of the template rects (the count's `ROOM_USER` rect
+        // paints background in the live capture).
+        if *id == ROOM_DETAIL_TITLE_ID || *id == ROOM_DETAIL_USERS_ID {
+            continue;
+        }
+        // A staged icon figure owns its rect; the text label stands
+        // down (it is the figure-less stand-in).
+        if room_icon_sprite_for_detail(id).is_some_and(|sprite| art.figures.contains_key(sprite)) {
+            continue;
+        }
+        let Some(placement) = placements.iter().find(|entry| entry.id == *id) else {
+            continue;
+        };
         let ink = if *id == ROOM_DETAIL_LOCK_ID {
             room_lock_ink(room.has_password)
         } else {
             art_title_ink()
         };
-        paint_room_detail_line(frame, origin.0, origin.1, text, ink);
+        paint_room_text_into_rect(
+            frame,
+            Rect {
+                x: placement.rect.x + panel_x,
+                y: placement.rect.y + panel_y,
+                w: placement.rect.w,
+                h: placement.rect.h,
+            },
+            text,
+            caption_ink(ink),
+        );
     }
 }
 
@@ -2107,7 +2368,7 @@ fn paint_room_details(
 pub(crate) fn paint_room_list(frame: &mut Frame<'_>, rooms: &[RoomListEntry], highlight: usize) {
     fill_background(frame, Screen::Room);
     paint_title(frame, "ROOM");
-    paint_room_rows(frame, rooms, highlight, &[]);
+    paint_room_rows(frame, rooms, highlight, None);
     paint_room_details(frame, rooms, highlight, None);
 }
 
@@ -2121,14 +2382,14 @@ pub fn paint_room_scene(
     art.paint_backdrop(frame, Screen::Room);
     paint_title_over_art(frame, Screen::Room);
     paint_room_row_icons(frame, art, rooms, highlight);
-    paint_room_details(frame, rooms, highlight, Some(&art.placements));
-    paint_room_number(frame, art, rooms, highlight);
+    paint_room_details(frame, rooms, highlight, Some(art));
     // Rows paint last so the live list and highlight cursor stay
     // visible over the staged template bodies (UI ink on top): the
-    // `SET 0x11` icon/detail rects are first-row-absolute while rows
-    // ride per-panel rects, so the template art overlaps the first
-    // panel — the exe's per-row template clone offsets are untraced.
-    paint_room_rows(frame, rooms, highlight, &art.placements);
+    // `SET 0x11` template rects are panel-relative while rows ride
+    // per-panel rects, so the template art overlaps its own panel —
+    // the exe's per-row template clone offsets stay OPEN past the
+    // title/number/count pins (`findings.md` §2).
+    paint_room_rows(frame, rooms, highlight, Some(art));
 }
 
 /// Seats shown on the waiting screen: self plus the seven wire slots.
@@ -5144,7 +5405,15 @@ mod paint_tests {
         // Staged `EXBUTTON` panels (`State_Room.bnd` rects 26/27, the
         // left column top two) position the rows; the legacy
         // quarter-frame anchor paints nowhere on the staged path.
+        // The `ROOMNAME`/`ROOM_USER` template rects size the split
+        // title and count fields (rows carry no combined string).
         use o2jam_render::Rect;
+        let template = |id: &str, code: u32, x: i32, y: i32, w: u32, h: u32| ScenePlacement {
+            id: id.to_owned(),
+            code,
+            sprite: None,
+            rect: Rect { x, y, w, h },
+        };
         let placements = vec![
             ScenePlacement {
                 id: "IDC_BUTTON_SROOM_EXBUTTON1".to_owned(),
@@ -5168,6 +5437,8 @@ mod paint_tests {
                     h: 91,
                 },
             },
+            template("IDC_TEXT_SROOM_ROOMNAME", 0x1340_0021, 66, 13, 158, 16),
+            template("IDC_TEXT_SROOM_ROOM_USER", 0x1340_0022, 226, 13, 32, 16),
         ];
         let art = SceneArt {
             placements,
@@ -5242,19 +5513,106 @@ mod paint_tests {
         };
         let white = pack_xrgb(0xFF, 0xFF, 0xFF);
         let amber = pack_xrgb(0xFF, 0xD0, 0x20);
-        // Exe-measured 2026-11-09: the row string anchors at panel
-        // origin +12/+12 — panel 0 (26,82) puts the glyphs at (38,94).
+        // Exe-measured 2026-11-09: the split row fields anchor at
+        // panel origin +12/+12 (number), +64/+11 (title), +194/+10
+        // (count) — panel 0 (26,82) puts the number glyphs at (38,94).
         assert!(
             window_has_ink(38, 94, 90, 10, white),
             "first room inks its staged left-top panel"
         );
         assert!(
             window_has_ink(26, 189, 90, 10, amber),
-            "highlight cursor rides the staged second panel (+12/+12 anchor)"
+            "highlight cursor rides the staged second panel (number origin)"
         );
         assert!(
             !window_has_ink(200, 150, 60, 6, white),
             "legacy quarter-frame anchor paints nothing staged"
+        );
+    }
+
+    #[test]
+    fn room_rows_split_number_title_and_count_to_pinned_offsets() {
+        // Pinned live splits (`~/scratch/geom-open-close/findings.md`
+        // §2): the number at panel +(12,12), the title at +(64,+11),
+        // the seat count at +(194,+10) — the old combined string
+        // spanned from the number origin, so the count zone stayed
+        // empty, title ink crowded the number, and caps stood 8 px
+        // tall instead of the live ~11 px.
+        use o2jam_render::Rect;
+        let placements = vec![
+            ScenePlacement {
+                id: "IDC_BUTTON_SROOM_EXBUTTON1".to_owned(),
+                code: 0x1301_201B,
+                sprite: None,
+                rect: Rect {
+                    x: 26,
+                    y: 82,
+                    w: 288,
+                    h: 91,
+                },
+            },
+            ScenePlacement {
+                id: "IDC_TEXT_SROOM_ROOMNAME".to_owned(),
+                code: 0x1340_0021,
+                sprite: None,
+                rect: Rect {
+                    x: 66,
+                    y: 13,
+                    w: 158,
+                    h: 16,
+                },
+            },
+            ScenePlacement {
+                id: "IDC_TEXT_SROOM_ROOM_USER".to_owned(),
+                code: 0x1340_0022,
+                sprite: None,
+                rect: Rect {
+                    x: 226,
+                    y: 13,
+                    w: 32,
+                    h: 16,
+                },
+            },
+        ];
+        let art = SceneArt {
+            placements,
+            figures: HashMap::new(),
+        };
+        let w: usize = 800;
+        let h: usize = 600;
+        let mut buf = vec![0u32; w * h];
+        paint_room_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w,
+                h,
+            },
+            &two_rooms(),
+            0,
+            &art,
+        );
+        let white = pack_xrgb(0xFF, 0xFF, 0xFF);
+        let window_has_ink = |x: i32, y: i32, ww: i32, hh: i32| -> bool {
+            (y..y + hh).any(|py| {
+                (x..x + ww).any(|px| {
+                    usize::try_from(px).is_ok_and(|px| {
+                        usize::try_from(py)
+                            .is_ok_and(|py| px < w && py < h && near_xrgb(buf[py * w + px], white))
+                    })
+                })
+            })
+        };
+        assert!(
+            window_has_ink(220, 92, 40, 16),
+            "seat count inks its pinned field (panel +194/+10)"
+        );
+        assert!(
+            !window_has_ink(56, 94, 30, 10),
+            "title vacates the number's run (combined string crowded here)"
+        );
+        assert!(
+            window_has_ink(90, 102, 22, 4),
+            "title caps reach past micro-font height at real size"
         );
     }
 
@@ -5423,23 +5781,73 @@ mod paint_tests {
 
     #[test]
     fn room_details_anchor_to_bnd_rects() {
-        // 200x150 frame: native (80, 60) scales to (20, 15), so the
-        // title scrim opens at (16, 13) — clear of the list scrim
-        // (x 42.., y 35..47) and the centered title.
+        // Native frame with the panel at the frame origin: the song
+        // field inks at panel + template offset — native (67, 35) —
+        // while the row-owned title paints nothing in the details
+        // (its template rect stays a row-field size).
+        let mut placements = vec![ScenePlacement {
+            id: "IDC_BUTTON_SROOM_EXBUTTON1".to_owned(),
+            code: 0,
+            sprite: None,
+            rect: Rect {
+                x: 0,
+                y: 0,
+                w: 288,
+                h: 91,
+            },
+        }];
+        // The song field rides its own template rect (the shared
+        // helper parks every other non-title line at (720, 540)) —
+        // staged first so the lookup finds it.
+        placements.push(ScenePlacement {
+            id: ROOM_DETAIL_MUSIC_ID.to_owned(),
+            code: 0,
+            sprite: None,
+            rect: Rect {
+                x: 67,
+                y: 35,
+                w: 205,
+                h: 19,
+            },
+        });
+        placements.extend(detail_placements());
         let rooms = vec![detailed_room()];
-        let mut buf = vec![0u32; 200 * 150];
+        let art = SceneArt {
+            placements,
+            figures: HashMap::new(),
+        };
+        let w: usize = 800;
+        let h: usize = 600;
+        let mut buf = vec![0u32; w * h];
         paint_room_details(
             &mut Frame {
                 buf: &mut buf,
-                w: 200,
-                h: 150,
+                w,
+                h,
             },
             &rooms,
             0,
-            Some(&detail_placements()),
+            Some(&art),
         );
-        assert_eq!(buf[13 * 200 + 16], scrim_color());
-        assert!(has_ink_near(&buf, art_title_ink()));
+        let white = art_title_ink();
+        let window_has_ink = |x: i32, y: i32, ww: i32, hh: i32| -> bool {
+            (y..y + hh).any(|py| {
+                (x..x + ww).any(|px| {
+                    usize::try_from(px).is_ok_and(|px| {
+                        usize::try_from(py)
+                            .is_ok_and(|py| px < w && py < h && near_xrgb(buf[py * w + px], white))
+                    })
+                })
+            })
+        };
+        assert!(
+            window_has_ink(67, 35, 70, 19),
+            "song field inks its panel-relative template rect"
+        );
+        assert!(
+            !window_has_ink(80, 60, 80, 10),
+            "row-owned title paints nothing in the details"
+        );
     }
 
     #[test]
@@ -6806,9 +7214,26 @@ mod paint_tests {
     }
 
     #[test]
-    fn room_scene_paints_room_number_through_staged_font() {
+    fn room_scene_paints_number_digits_at_the_pinned_plate_origin() {
+        // Panel 0 plus the staged `Room_Number.ojs` font: value 12
+        // paints hundreds/tens/ones left-to-right at the pinned plate
+        // origin (panel +12/+12) at the digit pitch — the template
+        // place rects only name the font, never the positions.
+        use o2jam_render::Rect;
+        let mut placements = vec![ScenePlacement {
+            id: "IDC_BUTTON_SROOM_EXBUTTON1".to_owned(),
+            code: 0x1301_201B,
+            sprite: None,
+            rect: Rect {
+                x: 26,
+                y: 82,
+                w: 288,
+                h: 91,
+            },
+        }];
+        placements.extend(room_number_placements());
         let art = SceneArt {
-            placements: room_number_placements(),
+            placements,
             figures: HashMap::from([("Room_Number.ojs".to_owned(), digit_font_figure())]),
         };
         let mut rooms = two_rooms();
@@ -6824,9 +7249,9 @@ mod paint_tests {
             0,
             &art,
         );
-        assert_eq!(buf[10 * 800 + 10], pack_xrgb(255, 0, 0));
-        assert_eq!(buf[10 * 800 + 20], pack_xrgb(0, 255, 0));
-        assert_eq!(buf[10 * 800 + 30], pack_xrgb(0, 0, 255));
+        assert_eq!(buf[94 * 800 + 38], pack_xrgb(255, 0, 0));
+        assert_eq!(buf[94 * 800 + 49], pack_xrgb(0, 255, 0));
+        assert_eq!(buf[94 * 800 + 60], pack_xrgb(0, 0, 255));
     }
 
     /// Multi-layer icon body: layer `i` paints one solid RGB555
@@ -6848,7 +7273,8 @@ mod paint_tests {
     /// The three lobby row-icon placements at their `State_Room.bnd`
     /// template rects, with a distinct-layer figure per icon (green,
     /// red, blue, white in frame order; last layers feed the backdrop
-    /// pass, selected frames the icon pass).
+    /// pass, selected frames the icon pass). The panel seats the
+    /// template: icons land at template + panel origin (26,82).
     fn room_icon_art() -> SceneArt {
         let placed = |id: &str, code: u32, sprite: &str, x: i32, y: i32| ScenePlacement {
             id: id.to_owned(),
@@ -6858,6 +7284,17 @@ mod paint_tests {
         };
         SceneArt {
             placements: vec![
+                ScenePlacement {
+                    id: "IDC_BUTTON_SROOM_EXBUTTON1".to_owned(),
+                    code: 0x1301_201B,
+                    sprite: None,
+                    rect: Rect {
+                        x: 26,
+                        y: 82,
+                        w: 288,
+                        h: 91,
+                    },
+                },
                 placed(
                     "IDC_IMAGE_SROOM_MODE",
                     0x1350_0028,
@@ -6963,8 +7400,9 @@ mod paint_tests {
     #[test]
     fn room_icons_paint_their_frames_at_the_rect_origins() {
         // State 2 (frame 2 → layer 1 red), key 2 (frame 2 → layer 1
-        // red), no song (frame 1 → layer 0 green): each at its own
-        // template rect origin, none at the frame corner.
+        // red), no song (frame 1 → layer 0 green): each at its
+        // template rect origin plus the panel origin, none at the
+        // frame corner.
         let art = room_icon_art();
         let rooms = vec![room_with(2, 2, 0)];
         let mut buf = vec![0u32; 800 * 600];
@@ -6980,17 +7418,19 @@ mod paint_tests {
         );
         let red = pack_xrgb(255, 0, 0);
         let green = pack_xrgb(0, 255, 0);
-        assert_eq!(buf[300 * 800 + 500], red, "state icon frame");
-        assert_eq!(buf[280 * 800 + 400], red, "key-mode icon frame");
-        assert_eq!(buf[280 * 800 + 450], green, "om icon frame");
+        assert_eq!(buf[382 * 800 + 526], red, "state icon frame");
+        assert_eq!(buf[362 * 800 + 426], red, "key-mode icon frame");
+        assert_eq!(buf[362 * 800 + 476], green, "om icon frame");
         assert_eq!(buf[0], 0);
     }
 
     #[test]
     fn room_icons_skip_untouched_frames_and_missing_art() {
-        // Key 1 leaves the mode icon untouched (the backdrop's last
-        // layer stays), a song without a staged level leaves the om
-        // icon untouched, and an unstaged body paints nothing.
+        // Key 1 leaves the mode icon untouched (no icon ink at the
+        // panel-offset rect), a song without a staged level leaves
+        // the om icon untouched, and an unstaged body paints nothing
+        // — while the backdrop still shows its own layers at the
+        // template rects.
         let mut art = room_icon_art();
         art.figures.remove(ROOM_STATE_SPRITE);
         let rooms = vec![room_with(1, 1, ROOM_MUSIC_FLOOR)];
@@ -7002,19 +7442,27 @@ mod paint_tests {
         };
         art.paint_overlay(&mut frame);
         paint_room_row_icons(&mut frame, &art, &rooms, 0);
-        let blue = pack_xrgb(0, 0, 255);
-        let yellow = pack_xrgb(255, 255, 0);
-        assert_eq!(buf[280 * 800 + 400], blue, "mode icon untouched");
-        assert_eq!(buf[280 * 800 + 450], yellow, "om icon untouched");
-        assert_eq!(buf[300 * 800 + 500], 0, "missing state body paints nothing");
+        assert_eq!(
+            buf[280 * 800 + 400],
+            pack_xrgb(0, 0, 255),
+            "backdrop mode layer"
+        );
+        assert_eq!(
+            buf[280 * 800 + 450],
+            pack_xrgb(255, 255, 0),
+            "backdrop om layer"
+        );
+        assert_eq!(buf[362 * 800 + 426], 0, "mode icon untouched without frame");
+        assert_eq!(buf[362 * 800 + 476], 0, "om icon untouched without level");
+        assert_eq!(buf[382 * 800 + 526], 0, "missing state body paints nothing");
     }
 
     #[test]
     fn room_scene_layers_icons_under_the_detail_ink() {
         // Full pipeline: the backdrop paints every layer, the icon
-        // pass overlays the selected frames, and the detail text
-        // draws last — the icon survives beside the small text scrim
-        // (asserted inside the icon box, clear of the scrim).
+        // pass overlays the selected frames at template + panel
+        // origin, and the detail text draws into its own template
+        // offsets — the icons survive clear of the detail ink.
         let art = room_icon_art();
         let rooms = vec![room_with(2, 2, 0)];
         let mut buf = vec![0u32; 800 * 600];
@@ -7029,8 +7477,12 @@ mod paint_tests {
             &art,
         );
         let red = pack_xrgb(255, 0, 0);
-        assert_eq!(buf[315 * 800 + 538], red, "state icon at its rect");
-        assert_eq!(buf[295 * 800 + 438], red, "key-mode icon at its rect");
+        assert_eq!(buf[382 * 800 + 526], red, "state icon at its panel offset");
+        assert_eq!(
+            buf[362 * 800 + 426],
+            red,
+            "key-mode icon at its panel offset"
+        );
     }
 
     #[test]

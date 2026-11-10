@@ -107,10 +107,12 @@ rect is an approximation.
     channel, and loading bodies the full native canvas. Ground truth: those states have
     a bare `BOUND` line (no `.bnd`), but "no bind file" does not prove "every body is
     full-bleed"; per-sprite native sizes are ignored.
-24. `o2jam-shell/src/screens/paint.rs:462 room_detail_bnd_origin` scales the
-    `State_Room.bnd` rect origin and ignores its size. Ground truth: the nine detail
-    `IDC_*` rects size their fields; text is drawn from the corner with micro-font
-    metrics instead of fitting the rect (see also 3).
+24. ~~`o2jam-shell/src/screens/paint.rs room_detail_bnd_origin`~~ — RESOLVED
+    (ticket #13, 2026-11-11): the staged detail arm now fits each
+    field to its `State_Room.bnd` rect at the exe-measured GDI cap
+    share (`TEXT_CAP_FRACTION`), panel-relative; the function is
+    removed and the row fields ride the pinned offsets. Ground truth
+    recorded in `~/scratch/geom-open-close/findings.md` §2.
 25. `o2jam-shell/src/screens/paint.rs:474 room_detail_fallback_origin` stacks detail
     lines under the list at `w / 4, h / 4 + rows * 8 + 4 + slot * 8`. Ground truth: only
     valid while no staged art names the `IDC_*` control; the stack fractions mirror 10–11.

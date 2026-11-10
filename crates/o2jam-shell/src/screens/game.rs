@@ -5274,6 +5274,80 @@ mod game_tests {
     }
 
     #[test]
+    fn quiet_server_slot_table_leaves_no_rows_to_click() {
+        // Live 2026-11-09: the quiet server sends an all-`Number`-0
+        // slot table, so the empty-slot filter leaves blank panels —
+        // no rows to click (correct: the painter proves rows with
+        // live data, never with free slots).
+        let free_slot = || RoomListEntry {
+            number: 0,
+            state_code: 0,
+            title: String::new(),
+            has_password: false,
+            music_id: 0,
+            difficulty: 0,
+            key_mode: 0,
+            game_mode: 0,
+            speed: 1,
+            capacity: 0,
+            user_count: 0,
+            min_level: 0,
+            max_level: 0,
+            skills: vec![],
+            premium: false,
+            room_type: 0,
+        };
+        let mut game = ScreenGame::new();
+        game.set_rooms(vec![
+            free_slot(),
+            free_slot(),
+            free_slot(),
+            free_slot(),
+            free_slot(),
+            free_slot(),
+        ]);
+        walk_to_lobby(&mut game, Screen::Room);
+        assert_eq!(game.room_number_at(38, 94), None);
+        assert_eq!(game.room_number_at(400, 154), None);
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert!(!white_near(&buf, 800, 600, (38, 94)));
+        assert!(!white_near(&buf, 800, 600, (90, 93)));
+    }
+
+    #[test]
+    fn room_lobby_session_replays_like_its_twin() {
+        // Hand-driven lobby session: seed rooms, walk Channel into
+        // Room, step the highlight down and back, confirm into
+        // Waiting — the twin game driven the same way hashes the
+        // same (the trace harness compares replays through
+        // `state_hash`).
+        use MenuKey;
+        let mut game = ScreenGame::new();
+        game.set_rooms(two_rooms());
+        walk_to_lobby(&mut game, Screen::Room);
+        game.menu_key(MenuKey::Down, true);
+        game.menu_key(MenuKey::Up, true);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+        let mut twin = ScreenGame::new();
+        twin.set_rooms(two_rooms());
+        walk_to_lobby(&mut twin, Screen::Room);
+        twin.menu_key(MenuKey::Down, true);
+        twin.menu_key(MenuKey::Up, true);
+        twin.menu_key(MenuKey::Confirm, true);
+        assert_eq!(twin.screen(), Screen::Waiting);
+        assert_eq!(game.state_hash(), twin.state_hash());
+    }
+
+    #[test]
     fn waiting_confirm_hit_needs_staged_buttons() {
         // Art-less clicks land nowhere (no pinned fallback geometry).
         let mut game = ScreenGame::new();
@@ -5356,19 +5430,33 @@ mod game_tests {
     fn bound_room_panels_paint_numbered_rows() {
         // Live Room stages bound panels yet shows no row ink: narrow
         // whether the panel path drops rows when data is present.
-        // Rows sit inside the panel at the reference-measured inset,
-        // not at the panel corner.
-        let placements = vec![crate::avatar::ScenePlacement {
-            id: "IDC_BUTTON_SROOM_EXBUTTON1".to_owned(),
-            code: 0,
-            sprite: None,
-            rect: Rect {
-                x: 26,
-                y: 82,
-                w: 288,
-                h: 91,
+        // Rows sit inside the panel at the reference-measured split
+        // offsets — the number at panel +12/+12, sized to the
+        // `ROOMNAME` band while the digit font stages no figure.
+        let placements = vec![
+            crate::avatar::ScenePlacement {
+                id: "IDC_BUTTON_SROOM_EXBUTTON1".to_owned(),
+                code: 0,
+                sprite: None,
+                rect: Rect {
+                    x: 26,
+                    y: 82,
+                    w: 288,
+                    h: 91,
+                },
             },
-        }];
+            crate::avatar::ScenePlacement {
+                id: "IDC_TEXT_SROOM_ROOMNAME".to_owned(),
+                code: 0,
+                sprite: None,
+                rect: Rect {
+                    x: 66,
+                    y: 13,
+                    w: 158,
+                    h: 16,
+                },
+            },
+        ];
         let mut game = ScreenGame::new();
         game.load_scene(Screen::Room, placements, HashMap::new());
         game.set_rooms(vec![RoomListEntry {
@@ -5403,8 +5491,8 @@ mod game_tests {
             0,
         );
         // Exe-measured 2026-11-09 (rig session, ~/scratch/geom-open-close):
-        // the combined row string anchors at panel origin +12/+12 —
-        // panel 0 at (26,82) puts the number glyphs at (38,94).
+        // the number field anchors at panel origin +12/+12 — panel 0
+        // at (26,82) puts the number glyphs at (38,94).
         assert!(white_near(&buf, 800, 600, (38, 94)));
     }
 
