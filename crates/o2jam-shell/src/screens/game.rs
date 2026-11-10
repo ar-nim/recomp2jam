@@ -5809,6 +5809,94 @@ mod game_tests {
     }
 
     #[test]
+    fn click_staged_team_button_queues_4004_then_4008() {
+        // Team buttons answer through their staged `.bnd` rects
+        // (rects 3/4, the `team_highlight` pins): a TEAMA click at
+        // the staged rect moves the highlight to team 0 and queues
+        // the `SetRoomTeam` 4004 + `Ready` 4008 send pair through
+        // `select_team` — the click path, not the direct call.
+        use super::super::side::WAITING_TEAM_FIRST_CODE;
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        assert_eq!(game.waiting.as_ref().unwrap().team, 1);
+        game.load_scene(
+            Screen::Waiting,
+            vec![
+                ScenePlacement {
+                    id: "IDC_BUTTON_SWAIT_TEAMA".to_owned(),
+                    code: WAITING_TEAM_FIRST_CODE,
+                    sprite: None,
+                    rect: Rect {
+                        x: 652,
+                        y: 65,
+                        w: 24,
+                        h: 24,
+                    },
+                },
+                ScenePlacement {
+                    id: "IDC_BUTTON_SWAIT_TEAMB".to_owned(),
+                    code: WAITING_TEAM_FIRST_CODE + 1,
+                    sprite: None,
+                    rect: Rect {
+                        x: 682,
+                        y: 65,
+                        w: 24,
+                        h: 24,
+                    },
+                },
+            ],
+            HashMap::new(),
+        );
+        walk_to_waiting(&mut game);
+        game.mouse_click(660, 75);
+        assert_eq!(game.waiting.as_ref().unwrap().team, 0);
+        assert_eq!(game.battle_self_team, Some(0));
+        assert!(game.has_pending_team_send());
+        assert_eq!(game.take_room_team(), Some(SetRoomTeam { team: 0 }));
+        assert_eq!(game.take_team_ready(), Some(Ready));
+        assert!(!game.has_pending_team_send());
+        // A click outside both staged buttons queues nothing.
+        game.mouse_click(10, 10);
+        assert!(!game.has_pending_team_send());
+    }
+
+    #[test]
+    fn waiting_hand_session_joins_team_readies_and_starts() {
+        // Hand-driven waiting session trace (join team, ready, host
+        // start — no gateway): the master clicks TEAMA through the
+        // staged rect, the 4004+4008 pair stages the session sends,
+        // and Confirm runs the START readiness gate into Loading.
+        // Smoke: one trace, team moved, sends drained, Loading held.
+        use super::super::side::WAITING_TEAM_FIRST_CODE;
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        game.load_scene(
+            Screen::Waiting,
+            vec![ScenePlacement {
+                id: "IDC_BUTTON_SWAIT_TEAMA".to_owned(),
+                code: WAITING_TEAM_FIRST_CODE,
+                sprite: None,
+                rect: Rect {
+                    x: 652,
+                    y: 65,
+                    w: 24,
+                    h: 24,
+                },
+            }],
+            HashMap::new(),
+        );
+        walk_to_waiting(&mut game);
+        assert!(game.is_room_master());
+        game.mouse_click(660, 75);
+        assert_eq!(game.waiting.as_ref().unwrap().team, 0);
+        assert!(game.take_room_team().is_some(), "4004 staged");
+        assert!(game.take_team_ready().is_some(), "4008 staged");
+        assert!(game.all_peers_ready());
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Loading);
+    }
+
+    #[test]
     fn team_select_without_room_lights_only() {
         let mut game = ScreenGame::new();
         game.select_team(2);
