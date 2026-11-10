@@ -19,7 +19,6 @@ use o2jam_net::{
     ScoreSubmission, WireMessage,
 };
 use o2jam_render::{Frame, NATIVE_HEIGHT, NATIVE_WIDTH};
-use o2jam_shell::avatar::load_avi_logo;
 use o2jam_shell::staging::{
     read_install_archives, stage_dialog, stage_state, Dialog, StageContext, State,
 };
@@ -318,13 +317,10 @@ fn install_root() -> PathBuf {
 /// Stage Interface-archive scenes through the declaration; each scene
 /// stages independently so one bad block never blanks the rest.
 /// Channel stages nothing: the art-less state paints no fill under
-/// the live list. The Avi splash stays caller-side (which slot paints
-/// the logo is the caller's business); the Result banner merges
+/// the live list. The Avi splash stages through the bound `STATE_AVI`
+/// record like every other scene; the Result banner merges
 /// through the declaration row.
 fn stage_interface_archive(game: &mut ScreenGame, archive: &[u8]) {
-    if let Some(logo) = load_avi_logo(archive) {
-        game.load_splash(logo);
-    }
     let ctx = StageContext::default();
     for (screen, state) in [
         (Screen::Avi, State::Avi),

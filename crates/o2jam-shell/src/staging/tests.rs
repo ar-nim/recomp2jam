@@ -58,13 +58,13 @@ fn declaration_holds_expected_rows_per_state() {
         .iter()
         .filter(|row| row.arm == PlacementArm::Bound)
         .count();
-    assert_eq!(bound, 10, "ticket #3 rows stay bound");
+    assert_eq!(bound, 11, "ticket #10 rows stay bound");
     let playing = STAGE_TABLE
         .iter()
         .find(|row| row.state == State::Playing)
         .expect("playing row staged");
     assert_eq!(playing.arm, PlacementArm::PlayingSubset);
-    for state in [State::Avi, State::Loading, State::Tutorial] {
+    for state in [State::Loading, State::Tutorial] {
         let row = STAGE_TABLE
             .iter()
             .find(|row| row.state == state)
@@ -143,6 +143,11 @@ fn full_canvas_rows_name_their_archive_and_extras() {
         .expect("avi row staged");
     assert_eq!(avi.block, Some("STATE_AVI"));
     assert_eq!(avi.archive, StagingArchive::Interface);
+    assert_eq!(
+        avi.arm,
+        PlacementArm::Bound,
+        "the logo pairs through its bound record, never full-canvas"
+    );
     assert!(avi.extra_sprites.is_empty());
     let loading = STAGE_TABLE
         .iter()
@@ -229,7 +234,7 @@ fn room_archive() -> Vec<u8> {
 }
 
 #[test]
-fn avi_stages_its_logo_full_canvas_without_a_bind_file() {
+fn avi_stages_its_logo_through_the_bound_pairing() {
     let list = [
         "NUMBER_OF_STATE 0x01",
         "STATE_AVI 0x01",
@@ -243,18 +248,49 @@ fn avi_stages_its_logo_full_canvas_without_a_bind_file() {
     .join("\n");
     let archive = o2jam_file::test_archive::build_archive(&[
         ("ControlList_Interface.txt", list.as_bytes()),
+        ("State_Avi.bnd", &bnd_blob(&[(0, 0, 800, 600)])),
         ("O2mediaLogo.ojs", &sprite55_blob(2, 2, &[1; 8])),
     ]);
     let report = stage_state(&archive, State::Avi, StageContext::default());
     assert!(report.misses.is_empty());
     let art = report.art.expect("avi stages with synthetic bytes");
-    assert_eq!(art.placements.len(), 1, "one sprite, one canvas");
+    assert_eq!(art.placements.len(), 1, "self plus one bound entry");
+    assert_eq!(art.placements[0].id, "IDC_BACK_LOGO");
     assert_eq!(art.placements[0].sprite.as_deref(), Some("O2mediaLogo.ojs"));
     assert_eq!(art.placements[0].rect.x, 0);
     assert_eq!(art.placements[0].rect.y, 0);
-    assert_eq!(art.placements[0].rect.w, 800, "native canvas width");
-    assert_eq!(art.placements[0].rect.h, 600, "native canvas height");
+    assert_eq!(
+        art.placements[0].rect.w, 800,
+        "sole bind rect is full-bleed"
+    );
+    assert_eq!(
+        art.placements[0].rect.h, 600,
+        "sole bind rect is full-bleed"
+    );
     assert!(art.figures.contains_key("O2mediaLogo.ojs"));
+}
+
+#[test]
+fn avi_missing_bind_file_stages_nothing_with_a_miss() {
+    let list = [
+        "NUMBER_OF_STATE 0x01",
+        "STATE_AVI 0x01",
+        "{",
+        "BOUND \"State_Avi.bnd\"",
+        "IDC_STATE_AVI 0X18000000",
+        "IDC_BACK_LOGO 0X18100001 \"O2mediaLogo.ojs\"",
+        "}",
+        "",
+    ]
+    .join("\n");
+    let archive =
+        o2jam_file::test_archive::build_archive(&[("ControlList_Interface.txt", list.as_bytes())]);
+    let report = stage_state(&archive, State::Avi, StageContext::default());
+    assert!(report.art.is_none(), "a missing bind stages nothing");
+    assert_eq!(report.misses.len(), 1);
+    assert_eq!(report.misses[0].state, State::Avi);
+    assert_eq!(report.misses[0].block, "STATE_AVI");
+    assert_eq!(report.misses[0].entry, "State_Avi.bnd");
 }
 
 #[test]

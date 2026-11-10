@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
 use o2jam_render::{pack_xrgb, Frame};
-use o2jam_shell::avatar::{load_avi_logo, paint_scene_figures, AvatarFigure, ScenePlacement};
+use o2jam_shell::avatar::{paint_scene_figures, AvatarFigure, ScenePlacement};
 use o2jam_shell::screens::paint::RESULT_WINLOSE_SPRITE;
 use o2jam_shell::staging::{
     read_install_archives, stage_dialog, stage_state, Dialog, InstallArchives, StageContext, State,
@@ -239,7 +239,7 @@ fn walk_to_playing(game: &mut ScreenGame) {
 }
 
 #[test]
-fn avi_layers_real_logo_over_bound_backdrop() {
+fn avi_paints_real_logo_through_the_bound_record() {
     let path = archive_path(INTERFACE_ARCHIVE);
     let Some(archive) = install_archives().interface else {
         println!("skip avi: missing {}", path.display());
@@ -249,11 +249,15 @@ fn avi_layers_real_logo_over_bound_backdrop() {
         panic!("avi: STATE_AVI staged no figures");
     };
     let (placements, figures) = (art.placements, art.figures);
-    let Some(logo) = load_avi_logo(&archive) else {
-        panic!("avi: O2mediaLogo.ojs decoded no figure");
-    };
+    assert!(
+        placements.iter().any(|placed| placed.id == "IDC_BACK_LOGO"),
+        "avi: the bound IDC_BACK_LOGO record stages the logo"
+    );
     let staged = staged_palette(&placements, &figures);
-    let splash_ink: HashSet<u32> = {
+    let logo_ink: HashSet<u32> = {
+        let Some(logo) = figures.get("O2mediaLogo.ojs") else {
+            panic!("avi: O2mediaLogo.ojs staged no figure");
+        };
         let mut buf = vec![0u32; PROBE_W * PROBE_H];
         logo.paint(
             &mut Frame {
@@ -268,12 +272,11 @@ fn avi_layers_real_logo_over_bound_backdrop() {
     };
     let mut game = ScreenGame::new();
     game.load_scene(Screen::Avi, placements, figures);
-    game.load_splash(logo);
     let frame = painted(&mut game, 0);
     assert_composed(&frame, &staged, &[], "avi");
     assert!(
-        frame.iter().any(|pixel| splash_ink.contains(pixel)),
-        "avi: splash logo ink missing"
+        frame.iter().any(|pixel| logo_ink.contains(pixel)),
+        "avi: staged logo ink missing"
     );
 }
 

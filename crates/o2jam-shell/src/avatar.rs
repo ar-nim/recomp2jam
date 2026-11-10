@@ -606,6 +606,9 @@ pub fn load_my_room_figure(
 /// ControlList block per lobby scene (see `docs/file-formats/opi.md`).
 pub const AVI_BLOCK: &str = "STATE_AVI";
 /// Splash logo sprite bound by `STATE_AVI` (`IDC_BACK_LOGO`).
+///
+/// Kept as the archive name the bound record carries; bodies load
+/// through the staging declaration, never through this const alone.
 pub const AVI_LOGO_SPRITE: &str = "O2mediaLogo.ojs";
 /// Channel-select block (no `.bnd` bind file: bare `BOUND` line).
 /// `STATE_CHANNEL` names zero sprites on 7.55, so the shared
@@ -1130,12 +1133,6 @@ pub fn load_scene_figures_for_stage(
         }
     }
     figures
-}
-
-/// Load the splash logo (`O2mediaLogo.ojs`) from the archive.
-#[must_use]
-pub fn load_avi_logo(archive: &[u8]) -> Option<AvatarFigure> {
-    load_archive_sprite(archive, AVI_LOGO_SPRITE)
 }
 
 /// Decode the walked chart's OJN cover section as the loading-gate
@@ -2968,14 +2965,6 @@ mod avatar_figure_tests {
             &[],
         );
         assert_eq!(behind_buf, vec![o2jam_render::pack_xrgb(255, 0, 0)]);
-    }
-
-    #[test]
-    fn avi_logo_loads_under_its_control_name() {
-        let red = sprite55_blob(1, 0x0000, 1, 1, &[0x00, 0x7C]);
-        let archive = opa_blob(&[(AVI_LOGO_SPRITE, &red)]);
-        assert_eq!(load_avi_logo(&archive).unwrap().len(), 1);
-        assert!(load_avi_logo(b"garbage").is_none());
     }
 
     #[test]

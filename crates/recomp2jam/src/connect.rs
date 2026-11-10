@@ -667,17 +667,6 @@ fn fetch_avatar(opa_path: &str, hero: &CharacterInfo) -> Result<o2jam_shell::Ava
     figure_for_character(&archive, hero)
 }
 
-/// Load one named sprite from an interface archive on disk.
-pub fn load_interface_sprite(
-    interface_path: &str,
-    entry_name: &str,
-) -> Result<o2jam_shell::AvatarFigure> {
-    let archive = std::fs::read(interface_path)
-        .with_context(|| format!("reading interface archive {interface_path}"))?;
-    o2jam_shell::load_archive_sprite(&archive, entry_name)
-        .with_context(|| format!("no decodable {entry_name} in {interface_path}"))
-}
-
 /// Parse `--equip` (`"1,5,9"`) into item ids; blank means none.
 pub fn parse_equipment(list: &str) -> Result<Vec<i32>> {
     if list.trim().is_empty() {
@@ -846,18 +835,6 @@ mod connect_flow_tests {
             room_password: String::new(),
             song: None,
         }
-    }
-
-    #[test]
-    fn loads_interface_sprite_from_disk() {
-        let archive = opa_blob(&[("Logo.ojs", &red_sprite())]);
-        let dir = std::env::temp_dir();
-        let path = dir.join("recomp2jam-test-interface.opi");
-        std::fs::write(&path, &archive).unwrap();
-        let figure = load_interface_sprite(&path.to_string_lossy(), "Logo.ojs").unwrap();
-        std::fs::remove_file(&path).ok();
-        assert_eq!(figure.len(), 1);
-        assert!(load_interface_sprite("nonexistent.opi", "Logo.ojs").is_err());
     }
 
     #[test]

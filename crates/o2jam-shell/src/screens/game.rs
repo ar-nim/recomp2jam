@@ -117,13 +117,21 @@ const WAITING_BACK_IDS: [&str; 2] = ["IDC_BUTTON_SWAIT_BACK", "IDC_BUTTON_SWAIT_
 /// Splash auto-advance delay in milliseconds: the exe leaves
 /// `STATE_AVI` on a timer (`docs/lifecycle.md` section 5), but the exact
 /// duration is not pinned by evidence, so this is an approximate
-/// stand-in (3 s) until the dispatch call is traced.
+/// stand-in (3 s) until the dispatch call is traced. OPEN: name the
+/// exe dispatch offset plus evidence id, then replace this value
+/// (next step: `rea` trace of the `CStateAvi` timer/dismiss arms —
+/// not in the dossier set — or a Wine null-sink measurement of the
+/// splash hold; guard: `splash_auto_advances_at_timeout`).
 const SPLASH_AUTO_ADVANCE_MS: u64 = 3_000;
 
 /// Game loop that shows each screen's scene and walks the flow.
 ///
-/// Input wiring so far: any lane key dismisses the splash into the
-/// channel screen, and the splash auto-advances there on its timer.
+/// Input wiring so far: any lane key or canvas click dismisses the
+/// splash onto the bare planet board, and the splash auto-advances
+/// there on its timer. OPEN: the exe's dismiss key is unpinned
+/// (next step: `rea` trace of the `CStateAvi` dispatch arms plus a
+/// Wine SendInput key sweep against the boot splash; guard:
+/// `lane_key_dismisses_splash_into_planet_board`).
 /// Room/waiting/loading inputs land with their UIs.
 pub struct ScreenGame {
     flow: ScreenFlow,
@@ -151,7 +159,6 @@ pub struct ScreenGame {
     fixed_now_ms: u64,
     audio: Option<AudioRig>,
     avatar: Option<AvatarFigure>,
-    splash: Option<AvatarFigure>,
     channels: Vec<ChannelState>,
     highlight: usize,
     /// Live channel chat rows (2013/2014/2019 packets only, oldest first).
@@ -468,7 +475,6 @@ impl ScreenGame {
             fixed_now_ms: 0,
             audio: None,
             avatar: None,
-            splash: None,
             channels: Vec::new(),
             highlight: 0,
             channel_chat: Vec::new(),
@@ -520,13 +526,6 @@ impl ScreenGame {
     /// Load the result-screen avatar figure.
     pub fn load_avatar(&mut self, figure: AvatarFigure) -> &mut Self {
         self.avatar = Some(figure);
-        self
-    }
-
-    /// Load real splash art (e.g. `O2mediaLogo.ojs`); the placeholder
-    /// shows while none is loaded.
-    pub fn load_splash(&mut self, figure: AvatarFigure) -> &mut Self {
-        self.splash = Some(figure);
         self
     }
 
@@ -2520,15 +2519,13 @@ impl ScreenGame {
         }
     }
 
-    /// Splash: staged logo art when present, else the flat card;
-    /// the separately loaded splash figure paints on top either way.
+    /// Splash: staged logo art when present, else the flat card. One
+    /// staging path serves the splash: the bound `STATE_AVI` record
+    /// (`IDC_BACK_LOGO` at its `.bnd` rect) through `load_scene`.
     fn paint_avi(&self, frame: &mut Frame<'_>) {
         match self.scene_art(Screen::Avi) {
             Some(art) => paint_avi_scene(frame, art),
             None => paint_screen(frame, Screen::Avi),
-        }
-        if let Some(logo) = &self.splash {
-            logo.paint(frame, 0, 0);
         }
     }
 
@@ -4814,8 +4811,11 @@ mod game_tests {
     }
 
     #[test]
-    fn splash_shows_loaded_art() {
-        use crate::avatar::{AvatarFigure, FigureLayer};
+    fn avi_paints_staged_logo_without_a_splash_slot() {
+        use crate::avatar::FigureLayer;
+        // One staging path: the bound `STATE_AVI` placement carries
+        // the logo (`IDC_BACK_LOGO` at its `.bnd` rect). No second
+        // splash slot paints on top.
         let mut logo = AvatarFigure::default();
         logo.push_layer(FigureLayer {
             image: o2jam_render::Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap(),
@@ -4824,7 +4824,21 @@ mod game_tests {
             colorkey: 0x0000,
         });
         let mut game = ScreenGame::new();
-        game.load_splash(logo);
+        game.load_scene(
+            Screen::Avi,
+            vec![ScenePlacement {
+                id: "IDC_BACK_LOGO".to_owned(),
+                code: 0x1810_0001,
+                sprite: Some("O2mediaLogo.ojs".to_owned()),
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 800,
+                    h: 600,
+                },
+            }],
+            HashMap::from([("O2mediaLogo.ojs".to_owned(), logo)]),
+        );
         let mut buf = vec![0u32; 8 * 8];
         game.paint_at(
             &mut Frame {
@@ -4835,7 +4849,10 @@ mod game_tests {
             0,
         );
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
-        assert_eq!(buf[63], pack_xrgb(0x08, 0x08, 0x10));
+        assert_eq!(
+            buf[63], 0,
+            "staged art paints no flat fill (pinned no-fill rule)"
+        );
     }
 
     #[test]
@@ -4891,6 +4908,59 @@ mod game_tests {
         let mut game = ScreenGame::new();
         paint_splash_frame(&mut game, SPLASH_AUTO_ADVANCE_MS + 1_000);
         assert_eq!(game.screen(), Screen::Planet);
+    }
+
+    #[test]
+    fn avi_boot_reaches_the_bare_planet_board_on_both_edges() {
+        use crate::avatar::FigureLayer;
+        fn staged_boot() -> ScreenGame {
+            let mut logo = AvatarFigure::default();
+            logo.push_layer(FigureLayer {
+                image: o2jam_render::Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap(),
+                dx: 0,
+                dy: 0,
+                colorkey: 0x0000,
+            });
+            let mut game = ScreenGame::new();
+            game.load_scene(
+                Screen::Avi,
+                vec![ScenePlacement {
+                    id: "IDC_BACK_LOGO".to_owned(),
+                    code: 0x1810_0001,
+                    sprite: Some("O2mediaLogo.ojs".to_owned()),
+                    rect: Rect {
+                        x: 0,
+                        y: 0,
+                        w: 800,
+                        h: 600,
+                    },
+                }],
+                HashMap::from([("O2mediaLogo.ojs".to_owned(), logo)]),
+            );
+            game
+        }
+        // Key edge: boot shows the staged splash, one lane key
+        // dismisses onto the bare board.
+        let mut keyed = staged_boot();
+        assert_eq!(keyed.screen(), Screen::Avi);
+        let boot_hash = keyed.state_hash();
+        keyed.lane_key(3, true);
+        assert_eq!(keyed.screen(), Screen::Planet);
+        assert_ne!(
+            keyed.state_hash(),
+            boot_hash,
+            "the trace moves with the screen"
+        );
+        // Timer edge: the same boot reaches the same board and the
+        // same hash without any input.
+        let mut timed = staged_boot();
+        paint_splash_frame(&mut timed, SPLASH_AUTO_ADVANCE_MS);
+        assert_eq!(timed.screen(), Screen::Planet);
+        assert_eq!(
+            timed.state_hash(),
+            keyed.state_hash(),
+            "both boot edges land the same board state"
+        );
     }
 
     fn walk_to_lobby(game: &mut ScreenGame, lobby: Screen) {

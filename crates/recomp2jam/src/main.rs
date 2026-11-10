@@ -3,7 +3,7 @@
 //! Day-0: CLI only (`--help`, `info`, `play --autoplay` stub). The windowed
 //! client (winit + wgpu + cpal) attaches here once file parsing is verified.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 mod connect;
@@ -1038,15 +1038,33 @@ fn seed_offline_lobby(game: &mut o2jam_shell::ScreenGame) {
     );
 }
 
-/// Load the splash backdrop into a windowed game, if requested.
+/// Stage the splash backdrop into a windowed game through the staging
+/// declaration: the bound `STATE_AVI` record pairs `IDC_BACK_LOGO` with
+/// its `.bnd` rect like every other scene. A missing archive keeps the
+/// flat card so CI stays green without game data.
 fn setup_splash(game: &mut o2jam_shell::ScreenGame, interface: &Option<String>) -> Result<()> {
-    if let Some(opi_path) = interface {
-        let logo = connect::load_interface_sprite(opi_path, "O2mediaLogo.ojs")?;
-        tracing::info!(layers = logo.len(), "splash art loaded");
-        game.load_splash(logo);
-    } else if let Some(logo) = installed_splash_logo() {
-        tracing::info!("splash art loaded from install-root");
-        game.load_splash(logo);
+    let bytes = match interface {
+        Some(opi_path) => std::fs::read(opi_path)
+            .with_context(|| format!("reading interface archive {opi_path}"))?,
+        None => {
+            let Some(bytes) = installed_interface_archive() else {
+                return Ok(());
+            };
+            bytes
+        }
+    };
+    let report = o2jam_shell::staging::stage_state(
+        &bytes,
+        o2jam_shell::staging::State::Avi,
+        o2jam_shell::staging::StageContext::default(),
+    );
+    if let Some(art) = report.art {
+        tracing::info!(
+            placements = art.placements.len(),
+            figures = art.figures.len(),
+            "splash art staged through the declaration"
+        );
+        game.load_scene(o2jam_shell::Screen::Avi, art.placements, art.figures);
     }
     Ok(())
 }
@@ -1054,13 +1072,12 @@ fn setup_splash(game: &mut o2jam_shell::ScreenGame, interface: &Option<String>) 
 /// Installed interface archive for the offline splash fallback.
 const INSTALLED_INTERFACE_OPI: &str = "../../install-root/O2Jam/Image/Interface1.opi";
 
-/// Genuine logo from the installed archive, if present (read-only;
+/// Genuine interface archive bytes, if present (read-only;
 /// a missing archive keeps the flat card so CI stays green without
 /// game data).
-fn installed_splash_logo() -> Option<o2jam_shell::avatar::AvatarFigure> {
+fn installed_interface_archive() -> Option<Vec<u8>> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(INSTALLED_INTERFACE_OPI);
-    let archive = std::fs::read(path).ok()?;
-    o2jam_shell::avatar::load_avi_logo(&archive)
+    std::fs::read(path).ok()
 }
 
 /// Live gateway plus the Room Confirm join intent (room number and

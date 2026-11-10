@@ -503,21 +503,14 @@ fn assert_composed(buf: &[u32], ui_inks: &[u32]) {
 }
 
 #[test]
-fn splash_layers_logo_over_staged_art() {
+fn splash_paints_logo_through_scene_art_only() {
+    // One staging path serves the splash: the bound `STATE_AVI`
+    // record stages the logo through `load_scene`; no second splash
+    // slot paints on top.
     let mut game = ScreenGame::new();
     stage_screen_art(&mut game, Screen::Avi, "O2mediaLogo.ojs");
-    // Splash UI is the logo itself: a green pixel offset so the
-    // staged scene figure stays visible underneath it.
-    let mut logo = AvatarFigure::default();
-    logo.push_layer(FigureLayer {
-        image: Rgb555Image::decode(&[0xE0, 0x03], 1, 1).unwrap(),
-        dx: 5,
-        dy: 0,
-        colorkey: 0xFFFF,
-    });
-    game.load_splash(logo);
     let buf = painted_game(&mut game, 32, 24, 0);
-    assert_composed(&buf, &[pack_xrgb(0, 255, 0)]);
+    assert_composed(&buf, &[]);
 }
 
 #[test]

@@ -102,14 +102,13 @@ const ALL_STATES: &[State] = &[
 
 /// Which placement rule stages a row: the bound `.bnd` pairing, or
 /// one full-canvas placement per staged sprite (art without a
-/// `.bnd`: the Avi logo, the Loading gate, the Tutorial backdrop).
+/// `.bnd`: the Loading gate, the Tutorial backdrop).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlacementArm {
     /// Block entries paired with the `.bnd` by code ordinal.
     Bound,
     /// One full-canvas placement per staged sprite (art without
-    /// a `.bnd`: the Avi logo, the Loading gate, the Tutorial
-    /// backdrop).
+    /// a `.bnd`: the Loading gate, the Tutorial backdrop).
     FullCanvas,
     /// Playing subset: behind entries, backdrops, then the bound
     /// run (see `bind_scene_rects`); figures follow the context.
@@ -141,7 +140,9 @@ impl StagingArchive {
 /// Result carries the exe-mounted verdict banner (`Result_WinLose.ojs`,
 /// file `0xc2390`) because its Block names only the backdrop and
 /// plates; Loading and Tutorial carry their single bodies by name
-/// because no 7.55 list names them.
+/// because no 7.55 list names them. Avi pairs its single
+/// `IDC_BACK_LOGO` entry through `State_Avi.bnd` like every other
+/// bound row (the sole rect is verbatim full-bleed).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StageRow {
     /// State this row stages.
@@ -158,7 +159,7 @@ pub struct StageRow {
 }
 
 /// The staging declaration, read as data: one row per State. The
-/// bound rows pair their Block with its `.bnd`; Avi, Loading, and
+/// bound rows pair their Block with its `.bnd`; Loading and
 /// Tutorial stage full-canvas; Playing stages the subset through
 /// the context. Dialog (ticket #5) rows extend this table.
 pub const STAGE_TABLE: &[StageRow] = &[
@@ -243,7 +244,7 @@ pub const STAGE_TABLE: &[StageRow] = &[
         state: State::Avi,
         block: Some("STATE_AVI"),
         archive: StagingArchive::Interface,
-        arm: PlacementArm::FullCanvas,
+        arm: PlacementArm::Bound,
         extra_sprites: &[],
     },
     StageRow {

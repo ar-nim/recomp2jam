@@ -26,10 +26,10 @@ invented placement remains (cited per cell), never for lack of art.
 
 | Dimension | 7.55 expectation (evidence) | Shell status | Verdict |
 |---|---|---|---|
-| Composition | First visible screen; one-entry block `IDC_BACK_LOGO` → `O2mediaLogo.ojs` (lifecycle §5) | Genuine logo stages via `load_splash` in soak (`present_archives_stage_key_scenes` asserts `load_avi_logo` is_some; `avi.png` shows the NowCOM window capture); sole `.bnd` rect `(0,0)-(800,600)` is verbatim full-bleed (bnd-semantics). Still FAIL: splash bypasses `bind_scene_rects`, so the `IDC_BACK_LOGO` bind is unproven | FAIL |
-| Input | Splash timer/dismiss → channel | Any lane-key press dismisses to Channel | OPEN (dismiss key/timer unconfirmed) |
-| Timing | Logo hold duration unknown (dispatch call not in dossier set) | Immediate on key press | OPEN |
-| Transitions | `Avi → Channel` only | `can_enter` allows exactly that; tested | PASS |
+| Composition | First visible screen; one-entry block `IDC_BACK_LOGO` → `O2mediaLogo.ojs` (lifecycle §5); sole `.bnd` rect `(0,0)-(800,600)` is verbatim full-bleed (bnd-semantics) | Logo stages through the bound `STATE_AVI` record — one staging path, no splash slot (`load_splash`/`load_avi_logo` removed; `setup_splash` stages the declaration). Guards: `avi_stages_its_logo_through_the_bound_pairing`, `avi_missing_bind_file_stages_nothing_with_a_miss`, `avi_paints_staged_logo_without_a_splash_slot`, `avi_paints_real_logo_through_the_bound_record` (asserts the `IDC_BACK_LOGO` placement), `splash_paints_logo_through_scene_art_only`; soak `present_archives_stage_key_scenes`; `avi.png` zero-diff in the shots oracle | PASS |
+| Input | Splash dismiss key (exe dispatch unpinned) | Any lane-key press or canvas click dismisses onto the bare board (ours-by-design stand-in) | OPEN (next step: `rea` trace of the `CStateAvi` dismiss dispatch arms — not in the dossier set — plus a Wine SendInput key sweep against the boot splash; guard: `lane_key_dismisses_splash_into_planet_board`) |
+| Timing | Logo hold duration (dispatch call not in dossier set) | 3 s stand-in (`SPLASH_AUTO_ADVANCE_MS`), then auto-advance onto the bare board | OPEN (next step: trace the splash timer dispatch or measure the hold under Wine with a null sink, then replace the stand-in; guard: `splash_auto_advances_at_timeout`) |
+| Transitions | `Avi → Planet` (bare board) only | `can_enter` allows exactly that; boot proven through the windowed walk harness (key edge plus timer edge, screen trace plus state hash) | PASS (guards: `splash_boots_into_the_bare_planet_board`, `avi_boot_reaches_the_bare_planet_board_on_both_edges`) |
 
 ## `STATE_CHANNEL` — channel select (no state class)
 

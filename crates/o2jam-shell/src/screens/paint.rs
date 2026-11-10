@@ -28,10 +28,10 @@ use std::collections::HashMap;
 
 use super::super::avatar::{
     anchor_in_frame, paint_behind_placements, paint_foreground_placements, paint_scene_figures,
-    scene_block, scene_sprite_names, AvatarFigure, ScenePlacement, AVI_BLOCK, AVI_LOGO_SPRITE,
-    CHANNEL_BLOCK, LANKING_BLOCK, LOADING_BLOCK, LOADING_COVER_SPRITE, LOADING_SPRITE,
-    MUSICSHOP_BLOCK, MYROOM_BLOCK, PLANET_BLOCK, RESULT_BLOCK, ROOM_BLOCK, SHOP_BLOCK,
-    WAITING_BLOCK, WAIT_COVER_SPRITE, WAIT_TEAM_SPRITES,
+    scene_block, scene_sprite_names, AvatarFigure, ScenePlacement, AVI_BLOCK, CHANNEL_BLOCK,
+    LANKING_BLOCK, LOADING_BLOCK, LOADING_COVER_SPRITE, LOADING_SPRITE, MUSICSHOP_BLOCK,
+    MYROOM_BLOCK, PLANET_BLOCK, RESULT_BLOCK, ROOM_BLOCK, SHOP_BLOCK, WAITING_BLOCK,
+    WAIT_COVER_SPRITE, WAIT_TEAM_SPRITES,
 };
 use super::super::playing::{HighwayGeometry, PlayingView};
 use super::super::screen::Screen;
@@ -201,9 +201,11 @@ fn block_or_single(list: &ControlList, block: &str, single: &str) -> Vec<String>
 }
 
 /// Sprite bodies one main scene needs, in block order (lifecycle
-/// §5–11). Splash and loading resolve to their single art sprites
-/// (code-mounted, not block-named); channel, room, waiting,
-/// playing, and result name their block entries for `bind_scene_rects`
+/// §5–11). Loading resolves to its single art sprite
+/// (code-mounted, not block-named); every other scene names its
+/// block entries for `bind_scene_rects`, including the splash
+/// (`STATE_AVI` names `O2mediaLogo.ojs` on 7.55 — no fallback:
+/// without the block nothing stages)
 /// (`STATE_CHANNEL` names zero sprites on 7.55 — verified byte walk
 /// in `docs/channel-fill.md` — so the channel scene stages nothing:
 /// sprite-less entries draw no art per recipe step 6 and the scene
@@ -211,7 +213,7 @@ fn block_or_single(list: &ControlList, block: &str, single: &str) -> Vec<String>
 #[must_use]
 pub fn main_scene_sprites(list: &ControlList, screen: Screen) -> Vec<String> {
     match screen {
-        Screen::Avi => block_or_single(list, AVI_BLOCK, AVI_LOGO_SPRITE),
+        Screen::Avi => block_sprites(list, AVI_BLOCK),
         Screen::Channel => block_sprites(list, CHANNEL_BLOCK),
         Screen::Room => block_sprites(list, ROOM_BLOCK),
         Screen::Waiting => block_sprites(list, WAITING_BLOCK),
@@ -4632,9 +4634,9 @@ mod paint_tests {
     #[test]
     fn main_sprites_fall_back_to_single_art() {
         let list = o2jam_file::parse_control_list(&scene_control_text()).unwrap();
-        assert_eq!(
-            main_scene_sprites(&list, Screen::Avi),
-            vec![AVI_LOGO_SPRITE.to_owned()]
+        assert!(
+            main_scene_sprites(&list, Screen::Avi).is_empty(),
+            "the splash names its block entries: no block, no art"
         );
         assert_eq!(
             main_scene_sprites(&list, Screen::Loading),
