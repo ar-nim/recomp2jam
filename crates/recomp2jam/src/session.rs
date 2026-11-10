@@ -92,31 +92,33 @@
 //! the host sees the staged pick first. Guests keep the READY path,
 //! and a failed select keeps the pick for the next Confirm.
 //!
-//! Lobby send (Channel scene): the shell stages a second draft
-//! ([`ScreenGame::take_channel_slash`]) beside the channel history
-//! and transmits it on Confirm through
-//! [`OnlineSession::flush_channel_action`] — plain chat as 2012, `/w
-//! <name> <text>` and `/r <text>` as a 2017 whisper through
-//! [`OnlineSession::flush_channel_whisper`], `/h`/`/help` with no
-//! packet — the same peek-send-clear bridge as the waiting 3011 path
-//! ([`OnlineSession::flush_chat_action`]).
+//! Lobby send (Channel scene and Room lobby): the shell stages one
+//! draft per lobby chat panel ([`ScreenGame::take_lobby_slash`]) beside
+//! the panel's history and transmits it on Confirm through
+//! [`OnlineSession::flush_channel_action`] (Channel) or
+//! [`OnlineSession::flush_room_chat_action`] (Room) — plain chat as
+//! 2012, `/w <name> <text>` and `/r <text>` as a 2017 whisper, `/h`
+//! and `/help` with no packet — the same peek-send-clear bridge as the
+//! waiting 3011 path ([`OnlineSession::flush_chat_action`]). The room
+//! lobby chat IS the main-room chat (ticket #37), so both lobbies ride
+//! the same opcode pair.
 //!
-//! Lobby inbox (Channel scene): every paint drains inbound 2013
-//! player lines, 2014 administrator lines, and 2019 whispers beside
-//! the 2016/2029 notices, folding each into the channel history
-//! through its [`ScreenGame`] push — the same best-effort shape as
-//! the 4015 echo drain (undecodable bodies drop with a trace; the
-//! shell push rules decide which rows stage).
+//! Lobby inbox (Channel scene and Room lobby): every paint drains
+//! inbound 2013 player lines, 2014 administrator lines, and 2019
+//! whispers beside the 2016/2029 notices, folding each into the panel
+//! of the lobby on screen through its [`ScreenGame`] push — the same
+//! best-effort shape as the 4015 echo drain (undecodable bodies drop
+//! with a trace; the shell push rules decide which rows stage).
 //!
-//! Lobby notices (Channel scene): every paint drains waiting 2016
-//! announcements and 2029 rank notices under the same short timeout
-//! as the stats echo window and folds each into the channel history
-//! through [`ScreenGame::push_channel_announcement`] and
-//! [`ScreenGame::push_channel_rank_notification`] — the same
-//! best-effort shape as the 4015 echo drain: keepalives skip
-//! silently, foreign ids log and skip, undecodable bodies drop with
-//! a trace. Empty notices and invalid ranks stage no row (the shell
-//! push rules), so the drain never invents one.
+//! Lobby notices (Channel scene and Room lobby): every paint drains
+//! 2016 announcements and 2029 rank notices under the same short
+//! timeout as the stats echo window and folds each into that lobby
+//! panel through [`ScreenGame::push_lobby_announcement`] and
+//! [`ScreenGame::push_lobby_rank_notification`] — the same best-effort
+//! shape as the 4015 echo drain: keepalives skip silently, foreign ids
+//! log and skip, undecodable bodies drop with a trace. Empty notices
+//! and invalid ranks stage no row (the shell push rules), so the drain
+//! never invents one.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -138,7 +140,7 @@ use o2jam_net::{
     JoinRoom, JoinRoomResponse, JoinedRoom, KeyMode, MemberReadyStateChanged, Ready, Request,
     SetRoomArena, SetRoomMusic, StartGame, SubmitScore, WireMessage,
 };
-use o2jam_shell::screens::game::SlashCommand;
+use o2jam_shell::screens::game::{LobbyChat, SlashCommand};
 use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
 
 use crate::live_art::restage_live_playing;
@@ -868,13 +870,26 @@ impl OnlineSession {
     ///
     /// Whatever the gateway transport reports (ERRORS-01/02: `Result`,
     /// propagated with `?`, never unwrapped per ERRORS-06).
+    #[allow(
+        dead_code,
+        reason = "direct send entry the Channel guards ride; the menu-key path routes through flush_channel_action"
+    )]
     pub fn flush_channel(&mut self) -> Result<bool, o2jam_net::Error> {
-        let Some(draft) = self.game.channel_send_message() else {
+        self.flush_lobby_chat(LobbyChat::Channel)
+    }
+
+    /// Transmit one lobby chat draft as 2012.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the gateway transport reports (see [`Self::flush_chat`]).
+    fn flush_lobby_chat(&mut self, chat: LobbyChat) -> Result<bool, o2jam_net::Error> {
+        let Some(draft) = self.game.lobby_send_message(chat) else {
             return Ok(false);
         };
         self.gateway
             .send_frame(SendMainRoomMessage::COMMAND, &draft.encode_body())?;
-        self.game.clear_channel_input();
+        self.game.clear_lobby_input(chat);
         Ok(true)
     }
 
@@ -894,13 +909,30 @@ impl OnlineSession {
     ///
     /// Whatever the gateway transport reports (ERRORS-01/02: `Result`,
     /// propagated with `?`, never unwrapped per ERRORS-06).
+    #[allow(
+        dead_code,
+        reason = "direct whisper entry the Channel guards ride; the menu-key path routes through flush_channel_action"
+    )]
     pub fn flush_channel_whisper(&mut self, recipient: &str) -> Result<bool, o2jam_net::Error> {
-        let Some(draft) = self.game.channel_whisper_message(recipient) else {
+        self.flush_lobby_whisper(LobbyChat::Channel, recipient)
+    }
+
+    /// Transmit one lobby chat draft as a 2017 whisper to `recipient`.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the gateway transport reports (see [`Self::flush_chat`]).
+    fn flush_lobby_whisper(
+        &mut self,
+        chat: LobbyChat,
+        recipient: &str,
+    ) -> Result<bool, o2jam_net::Error> {
+        let Some(draft) = self.game.lobby_whisper_message(chat, recipient) else {
             return Ok(false);
         };
         self.gateway
             .send_frame(SendWhisper::COMMAND, &draft.encode_body())?;
-        self.game.clear_channel_input();
+        self.game.clear_lobby_input(chat);
         self.game.remember_whisper_peer(recipient);
         Ok(true)
     }
@@ -947,16 +979,37 @@ impl OnlineSession {
     /// Whatever the gateway transport reports (ERRORS-01/02: `Result`,
     /// propagated with `?`, never unwrapped per ERRORS-06).
     pub fn flush_channel_action(&mut self) -> Result<bool, o2jam_net::Error> {
-        match self.game.channel_slash_command() {
+        self.flush_lobby_action(LobbyChat::Channel)
+    }
+
+    /// Transmit the pending Room-lobby draft through the slash grammar:
+    /// `/w <name> <text>` and `/r <text>` send 2017, `/h` and `/help`
+    /// consume the draft with no packet, anything else sends 2012 as
+    /// plain chat (ticket #37).
+    ///
+    /// # Errors
+    ///
+    /// Whatever the gateway transport reports (see [`Self::flush_chat`]).
+    pub fn flush_room_chat_action(&mut self) -> Result<bool, o2jam_net::Error> {
+        self.flush_lobby_action(LobbyChat::Room)
+    }
+
+    /// Transmit one lobby chat draft through the slash grammar.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the gateway transport reports (see [`Self::flush_chat`]).
+    fn flush_lobby_action(&mut self, chat: LobbyChat) -> Result<bool, o2jam_net::Error> {
+        match self.game.lobby_slash_command(chat) {
             SlashCommand::Empty => Ok(false),
             SlashCommand::Help => {
-                self.game.clear_channel_input();
+                self.game.clear_lobby_input(chat);
                 Ok(true)
             }
-            SlashCommand::Chat(_) => self.flush_channel(),
+            SlashCommand::Chat(_) => self.flush_lobby_chat(chat),
             SlashCommand::Whisper { recipient, content } => {
-                self.game.set_channel_input(&content);
-                self.flush_channel_whisper(&recipient)
+                self.game.set_lobby_input(chat, &content);
+                self.flush_lobby_whisper(chat, &recipient)
             }
         }
     }
@@ -1644,116 +1697,133 @@ impl OnlineSession {
         self.game.push_waiting_admin_message(&message);
     }
 
-    /// Per-frame notice section in `Channel`: drain waiting 2016/2029
-    /// frames under the short notice timeout so a quiet gateway never
-    /// stalls the frame loop — the same timeout-restore shape as
+    /// Per-frame lobby chat section in `Channel` and `Room`: drain the
+    /// main-room feed under the short notice timeout so a quiet gateway
+    /// never stalls the frame loop — the same timeout-restore shape as
     /// [`Self::poll_stats`].
-    fn poll_channel_chat(&mut self) {
-        if self.game.screen() != Screen::Channel {
+    fn poll_lobby_chat(&mut self) {
+        let Some(chat) = LobbyChat::of_screen(self.game.screen()) else {
             return;
-        }
+        };
         if let Err(source) = self.gateway.set_timeouts(Some(NOTICE_IO_TIMEOUT)) {
-            tracing::debug!(%source, "notice section skipped: timeout rejected");
+            tracing::debug!(%source, "lobby chat section skipped: timeout rejected");
             return;
         }
-        self.drain_channel_chat();
+        self.drain_lobby_chat(chat);
         if let Err(source) = self.gateway.set_timeouts(Some(SESSION_IO_TIMEOUT)) {
-            tracing::debug!(%source, "notice timeout restore failed");
+            tracing::debug!(%source, "lobby chat timeout restore failed");
         }
     }
 
-    /// Drain waiting channel lines (2013/2014), incoming whispers
-    /// (2019), announcements (2016), and rank notices (2029) into the
-    /// channel history until the socket goes quiet — the 4015 echo
+    /// Drain waiting lobby chat lines (2013/2014), incoming whispers
+    /// (2019), announcements (2016), and rank notices (2029) into
+    /// `chat`'s history until the socket goes quiet — the 4015 echo
     /// drain's best-effort shape, minus the peer mirror: each frame
     /// applies through its shell push, keepalives skip silently,
     /// foreign ids log and skip (`ERRORS-19`: nothing is dropped
     /// without a trace).
-    fn drain_channel_chat(&mut self) {
+    fn drain_lobby_chat(&mut self, chat: LobbyChat) {
         loop {
             match self.gateway.next_frame() {
                 Ok(frame) if frame.id == MainRoomUserMessage::COMMAND => {
-                    self.apply_channel_user_message(&frame);
+                    self.apply_lobby_user_message(chat, &frame);
                 }
                 Ok(frame) if frame.id == MainRoomAdminMessage::COMMAND => {
-                    self.apply_channel_admin_message(&frame);
+                    self.apply_lobby_admin_message(chat, &frame);
                 }
                 Ok(frame) if frame.id == ReceiveWhisper::COMMAND => {
-                    self.apply_channel_whisper(&frame);
+                    self.apply_lobby_whisper(chat, &frame);
                 }
                 Ok(frame) if frame.id == Announcement::COMMAND => {
-                    self.apply_announcement(&frame);
+                    self.apply_announcement(chat, &frame);
                 }
                 Ok(frame) if frame.id == RankNotification::COMMAND => {
-                    self.apply_rank_notice(&frame);
+                    self.apply_rank_notice(chat, &frame);
                 }
                 Ok(frame) if Generic::from_id(frame.id).is_some() => {}
                 Ok(frame) => {
-                    tracing::debug!(id = frame.id, "skipping non-chat frame in channel drain");
+                    tracing::debug!(id = frame.id, "skipping non-chat frame in lobby drain");
                 }
                 Err(_) => break,
             }
         }
     }
 
-    /// Fold one 2013 frame into the channel history (undecodable
-    /// bodies drop with a trace; the socket position is already past
-    /// them).
-    fn apply_channel_user_message(&mut self, frame: &Frame) {
+    /// Fold one 2013 frame into `chat`'s history (undecodable bodies
+    /// drop with a trace; the socket position is already past them).
+    fn apply_lobby_user_message(&mut self, chat: LobbyChat, frame: &Frame) {
         let Ok(message) = MainRoomUserMessage::decode_frame(frame) else {
-            tracing::debug!(id = frame.id, "dropping undecodable channel line");
+            tracing::debug!(id = frame.id, "dropping undecodable lobby line");
             return;
         };
-        self.game.push_channel_user_message(&message);
+        self.game.push_lobby_user_message(chat, &message);
     }
 
-    /// Fold one 2014 frame into the channel history (undecodable
-    /// bodies drop with a trace; the socket position is already past
-    /// them).
-    fn apply_channel_admin_message(&mut self, frame: &Frame) {
+    /// Fold one 2014 frame into `chat`'s history (undecodable bodies
+    /// drop with a trace; the socket position is already past them).
+    fn apply_lobby_admin_message(&mut self, chat: LobbyChat, frame: &Frame) {
         let Ok(message) = MainRoomAdminMessage::decode_frame(frame) else {
-            tracing::debug!(id = frame.id, "dropping undecodable channel line");
+            tracing::debug!(id = frame.id, "dropping undecodable lobby line");
             return;
         };
-        self.game.push_channel_admin_message(&message);
+        self.game.push_lobby_admin_message(chat, &message);
     }
 
-    /// Fold one 2019 frame into the channel history (undecodable
-    /// bodies drop with a trace; the socket position is already past
-    /// them). The wire event carries only the sender, so the row
-    /// names the remembered local user as the addressee — and the
-    /// push remembers the sender for `/r`.
-    fn apply_channel_whisper(&mut self, frame: &Frame) {
+    /// Fold one 2019 frame into `chat`'s history (undecodable bodies
+    /// drop with a trace; the socket position is already past them).
+    /// The wire event carries only the sender, so the row names the
+    /// remembered local user as the addressee — and the push remembers
+    /// the sender for `/r`.
+    fn apply_lobby_whisper(&mut self, chat: LobbyChat, frame: &Frame) {
         let Ok(message) = ReceiveWhisper::decode_frame(frame) else {
             tracing::debug!(id = frame.id, "dropping undecodable whisper");
             return;
         };
         let recipient = self.local_user.clone();
-        self.game.push_channel_whisper(&message, &recipient);
+        self.game.push_lobby_whisper(chat, &message, &recipient);
     }
 
-    /// Fold one 2016 frame into the channel history (undecodable bodies
+    /// Fold one 2016 frame into `chat`'s history (undecodable bodies
     /// drop with a trace; the socket position is already past them).
     /// Empty notices stage no row — the [`ScreenGame`] push rule — so
     /// the drain never consumes a visible slot for one.
-    fn apply_announcement(&mut self, frame: &Frame) {
+    fn apply_announcement(&mut self, chat: LobbyChat, frame: &Frame) {
         let Ok(notice) = Announcement::decode_frame(frame) else {
             tracing::debug!(id = frame.id, "dropping undecodable announcement");
             return;
         };
-        self.game.push_channel_announcement(&notice);
+        self.game.push_lobby_announcement(chat, &notice);
     }
 
-    /// Fold one 2029 frame into the channel history (undecodable bodies
+    /// Fold one 2029 frame into `chat`'s history (undecodable bodies
     /// drop with a trace; the socket position is already past them).
     /// Invalid packets stage no row — the [`ScreenGame`] push rule —
     /// so the drain never invents a rank.
-    fn apply_rank_notice(&mut self, frame: &Frame) {
+    fn apply_rank_notice(&mut self, chat: LobbyChat, frame: &Frame) {
         let Ok(notice) = RankNotification::decode_frame(frame) else {
             tracing::debug!(id = frame.id, "dropping undecodable rank notice");
             return;
         };
-        self.game.push_channel_rank_notification(&notice);
+        self.game.push_lobby_rank_notification(chat, &notice);
+    }
+}
+
+impl OnlineSession {
+    /// Room-lobby Enter: `true` when the chat draft consumed it (one
+    /// 2012/2017 send, or a send that failed and therefore kept the
+    /// draft). An open room dialog owns the keyboard and the join/advance
+    /// path, so the draft stays untouched then.
+    fn room_chat_took_enter(&mut self) -> bool {
+        if self.game.room_dialog().is_some() {
+            return false;
+        }
+        match self.flush_room_chat_action() {
+            Ok(sent) => sent,
+            Err(source) => {
+                tracing::warn!(%source, "room chat send failed; draft kept");
+                true
+            }
+        }
     }
 }
 
@@ -1781,6 +1851,12 @@ impl GameLoop for OnlineSession {
             return;
         }
         if key == MenuKey::Confirm && self.game.screen() == Screen::Room {
+            // A pending room chat draft consumes the Enter as one
+            // 2012 send (ticket #37); an empty draft keeps the
+            // join-then-advance path below.
+            if self.room_chat_took_enter() {
+                return;
+            }
             if self.pending_room.is_none() || self.join_pending_room() {
                 self.game.menu_key(key, down);
             }
@@ -1854,7 +1930,7 @@ impl GameLoop for OnlineSession {
             self.loaded_sent = false;
         }
         self.poll_stats();
-        self.poll_channel_chat();
+        self.poll_lobby_chat();
         self.poll_waiting_chat();
         self.poll_tally();
     }
@@ -1934,6 +2010,7 @@ mod session_tests {
         Frame, GameStatsUpdate, GatewayConnection, StatKind, UpdateGameStats, WireMessage,
         HEADER_LEN,
     };
+    use o2jam_shell::screens::game::LobbyChat;
     use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
 
     use super::{level_for_difficulty, saturate_bonus, OnlineSession, SongChoice};
@@ -2494,6 +2571,64 @@ mod session_tests {
         session.mouse_click(400, 240);
         server.join().unwrap();
         assert_eq!(session.game.screen(), Screen::Room);
+    }
+
+    #[test]
+    fn room_enter_sends_the_draft_as_one_2012() {
+        // Ticket #37: the room lobby chat is the main-room chat, so
+        // Enter sends the same 2012 body the Channel scene sends.
+        let (mut session, server) = room_session(|mut stream| {
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, 2012);
+            assert_eq!(frame.payload, b"hello".to_vec());
+            assert_quiet(&mut stream);
+        });
+        session.game_mut().set_lobby_input(LobbyChat::Room, "hello");
+        session.menu_key(MenuKey::Confirm, true);
+        server.join().unwrap();
+        assert_eq!(session.game.screen(), Screen::Room);
+        assert_eq!(session.game.lobby_chat(LobbyChat::Room).draft(), "");
+    }
+
+    #[test]
+    fn room_enter_without_a_draft_advances_to_waiting() {
+        let (mut session, server) = room_session(|mut stream| {
+            assert_quiet(&mut stream);
+        });
+        session.menu_key(MenuKey::Confirm, true);
+        server.join().unwrap();
+        assert_eq!(session.game.screen(), Screen::Waiting);
+    }
+
+    #[test]
+    fn room_dialog_keeps_the_leftover_draft_out_of_the_enter() {
+        let (mut session, server) = room_session(|mut stream| {
+            assert_quiet(&mut stream);
+        });
+        session.game_mut().open_create_room_dialog();
+        session.game_mut().set_lobby_input(LobbyChat::Room, "hello");
+        session.menu_key(MenuKey::Confirm, true);
+        server.join().unwrap();
+        assert_eq!(session.game.lobby_chat(LobbyChat::Room).draft(), "hello");
+    }
+
+    #[test]
+    fn room_lobby_folds_inbound_2013_into_the_room_history() {
+        use o2jam_net::rooms::MainRoomUserMessage;
+        let line = MainRoomUserMessage {
+            sender: "host".to_owned(),
+            content: b"hello".to_vec(),
+        };
+        let (mut session, server) = room_session(move |mut stream| {
+            stream.write_all(&line.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        paint_frame(&mut session);
+        server.join().unwrap();
+        assert_eq!(session.game.room_chat().len(), 1);
+        assert_eq!(session.game.room_chat()[0].sender, "host");
+        assert_eq!(session.game.room_chat()[0].text, "hello");
+        assert!(session.game.channel_chat().is_empty());
     }
 
     #[test]

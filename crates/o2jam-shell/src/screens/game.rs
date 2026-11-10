@@ -17,12 +17,12 @@ use super::paint::{
     paint_loading_scene_with_status, paint_lobby_backdrop, paint_music_shop_board,
     paint_music_shop_cart, paint_music_shop_scene, paint_myroom_data, paint_myroom_scene,
     paint_payment_notice, paint_planet_options, paint_planet_quit, paint_planet_scene,
-    paint_playing_overlay, paint_result, paint_result_scene, paint_room_list, paint_room_scene,
-    paint_screen, paint_shop_board, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
-    paint_waiting_scene, quit_fallback_rects, rect_hit, room_panel_hit, scene_index,
-    staged_rect_hit, BattleVerdict, ChannelChatMessage, LoadingStatus, ResultPaint, ResultRankRow,
-    ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage, RESULT_BACK_ID, RESULT_BACK_RECT,
-    RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    paint_playing_overlay, paint_result, paint_result_scene, paint_room_chat, paint_room_list,
+    paint_room_scene, paint_screen, paint_shop_board, paint_shop_scene, paint_waiting_chat,
+    paint_waiting_members, paint_waiting_scene, quit_fallback_rects, rect_hit, room_panel_hit,
+    scene_index, staged_rect_hit, BattleVerdict, ChannelChatMessage, LoadingStatus, ResultPaint,
+    ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage, RESULT_BACK_ID,
+    RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::side::{
     can_return_side, can_visit_side, create_room_action_at, lanking_action_at, lanking_page_window,
@@ -104,10 +104,240 @@ const DEFAULT_ARENA_STAGE: u16 = 1;
 /// cannot grow memory without limit (PERF-07: `usize`, never `as`).
 const MAX_WAITING_CHAT_ROWS: usize = 50;
 
-/// Live channel chat rows kept per channel list (oldest first): the
-/// waiting-box bound, reused so a loud channel cannot grow memory
-/// without limit (PERF-07: `usize`, never `as`).
-const MAX_CHANNEL_CHAT_ROWS: usize = 50;
+/// Live rows kept per lobby chat panel (oldest first): the
+/// waiting-box bound, reused so a loud channel or room cannot grow
+/// memory without limit (PERF-07: `usize`, never `as`).
+const MAX_MAIN_ROOM_CHAT_ROWS: usize = 50;
+
+/// One lobby chat panel that carries the main-room feed: the unsent
+/// draft line plus the live history, oldest first. The Channel scene
+/// and the Room lobby each own one (the room's chat IS the main-room
+/// chat, ticket #37: `SendMainRoomMessage` 2012 out, 2013/2014 in), so
+/// the row folding, the draft cap, and the history bound live here
+/// once.
+#[derive(Debug, Clone, Default)]
+pub struct LobbyChatPanel {
+    draft: String,
+    history: Vec<ChannelChatMessage>,
+}
+
+impl LobbyChatPanel {
+    /// Unsent draft line (the 2012 content source).
+    #[must_use]
+    pub fn draft(&self) -> &str {
+        &self.draft
+    }
+
+    /// Live history rows, oldest first (empty until a packet arrives).
+    #[must_use]
+    pub fn history(&self) -> &[ChannelChatMessage] {
+        &self.history
+    }
+
+    /// Type one character into the draft: control characters never
+    /// enter the line and the draft stops at [`MAX_CHAT_INPUT_CHARS`]
+    /// characters.
+    fn type_char(&mut self, typed: char) {
+        if typed.is_control() || self.draft.chars().count() >= MAX_CHAT_INPUT_CHARS {
+            return;
+        }
+        self.draft.push(typed);
+    }
+
+    /// Erase the last draft character (Backspace; one whole character,
+    /// never half of a multibyte one).
+    fn erase_char(&mut self) {
+        self.draft.pop();
+    }
+
+    /// Stage the draft line, truncated to [`MAX_CHAT_INPUT_CHARS`].
+    fn set_draft(&mut self, line: &str) {
+        self.draft = line.chars().take(MAX_CHAT_INPUT_CHARS).collect();
+    }
+
+    /// Forget the unsent draft.
+    fn clear_draft(&mut self) {
+        self.draft.clear();
+    }
+
+    /// Append one row and bound the history to
+    /// [`MAX_MAIN_ROOM_CHAT_ROWS`] (oldest rows drop first).
+    fn push_row(&mut self, row: ChannelChatMessage) {
+        self.history.push(row);
+        let overflow = self.history.len().saturating_sub(MAX_MAIN_ROOM_CHAT_ROWS);
+        self.history.drain(..overflow);
+    }
+
+    /// Outgoing 2012 body for the draft (`None` while the draft is
+    /// empty, so no empty send is invented).
+    #[must_use]
+    fn send_message(&self) -> Option<SendMainRoomMessage> {
+        if self.draft.is_empty() {
+            return None;
+        }
+        Some(SendMainRoomMessage {
+            content: self.draft.as_bytes().to_vec(),
+        })
+    }
+
+    /// Outgoing 2017 whisper body for the draft (`None` while the draft
+    /// or the recipient is empty, so no empty send is invented).
+    #[must_use]
+    fn whisper_message(&self, recipient: &str) -> Option<SendWhisper> {
+        if self.draft.is_empty() || recipient.is_empty() {
+            return None;
+        }
+        Some(SendWhisper {
+            recipient: recipient.to_owned(),
+            content: self.draft.clone(),
+        })
+    }
+}
+
+use RoomControlAction::{Back, Create, Options, Side};
+
+/// How the room lobby answers one staged `IDC_BUTTON_SROOM_*` control.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RoomControlAction {
+    /// Leave for the channel scene (the Back edge).
+    Back,
+    /// Open the create-room dialog.
+    Create,
+    /// Open the options dialog over the lobby.
+    Options,
+    /// Visit the side screen the control already names.
+    Side(SideScreen),
+    /// No evidenced target yet: the router records the press and the
+    /// evidence step that would wire it. Never a silent drop.
+    Unwired {
+        /// Next evidence step named by the click log.
+        next_step: &'static str,
+    },
+}
+
+/// One staged room chrome control: the bnd code, the `ControlList` id,
+/// and the behaviour the tree evidences.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RoomControl {
+    code: u32,
+    id: &'static str,
+    action: RoomControlAction,
+}
+
+/// Record of the last room chrome control that had no evidenced target
+/// ([`RoomControlAction::Unwired`]): a test affordance that proves the
+/// click was answered instead of dropped (tickets #32/#34).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RoomControlNoop {
+    /// Staged control id (`IDC_BUTTON_SROOM_*`).
+    pub id: &'static str,
+    /// Next evidence step that would wire the control.
+    pub next_step: &'static str,
+}
+
+/// Next evidence step for a staged room control whose click handler the
+/// tree has not traced yet: the exe `CStateRoom` click dispatch.
+const HANDLER_STEP: &str =
+    "rig click on the control in the live room plus a memory read of the CStateRoom click dispatch (docs/parity.md STATE_ROOM Input row)";
+/// Next evidence step for `IDC_BUTTON_SROOM_FIRSTSTEP` (ticket #34):
+/// `STATE_ROOM` carries no tutorial control, so the tutorial emblem's
+/// entry path owns the question.
+const TUTORIAL_STEP: &str =
+    "pin the tutorial entry path (docs/parity.md TUTORIAL_ENTRY_NEXT_STEP); STATE_ROOM itself carries no tutorial control";
+/// Next evidence step for the three mode filters.
+const MODE_FILTER_STEP: &str =
+    "rig click on each mode filter plus a capture of the filtered room list (the list filter rule is untraced)";
+/// Next evidence step for the four chat-tab buttons.
+const CHAT_TAB_STEP: &str =
+    "rig click on each chat tab plus a capture of the filtered chat panel (the tab filters are untraced)";
+
+/// Every staged `IDC_BUTTON_SROOM_*` control of `STATE_ROOM`, in the
+/// order the router tests them, with the behaviour this tree evidences
+/// (tickets #32/#34).
+///
+/// A control that already has a target keeps it (`BACK`, `CREATE`,
+/// `OPTION`, the four side visits cited below); every other staged
+/// button carries its named next evidence step. The codes pair with the
+/// `.bnd` rects by control ordinal (owner rule `f38f3`), so each arm is
+/// a rect lookup plus a dispatch — no geometry is invented here.
+///
+/// Not listed: the row templates (`IDC_BUTTON_SROOM_EXBUTTON1..6`, the
+/// `SET` clone parents) whose rects ARE the room rows and therefore
+/// fall through to the row hit test, the stage images (`0x135…`), and
+/// the scroll widgets (`0x13200017..1A`), whose behaviour belongs to the
+/// scrollbar ticket.
+#[rustfmt::skip]
+const ROOM_CONTROLS: &[RoomControl] = &[
+    routed(0x1320_0002, "IDC_BUTTON_SROOM_BACK", Back),
+    routed(0x1320_0007, "IDC_BUTTON_SROOM_CREATE", Create),
+    routed(0x1320_000B, "IDC_BUTTON_SROOM_OPTION", Options),
+    // The four controls whose target already ships in the shell.
+    routed(0x1320_0008, "IDC_BUTTON_SROOM_ITEMSHOP", Side(SideScreen::Shop)),
+    routed(0x1320_0009, "IDC_BUTTON_SROOM_MYROOM", Side(SideScreen::MyRoom)),
+    routed(0x1320_0037, "IDC_BUTTON_SROOM_MUSICSHOP", Side(SideScreen::MusicShop)),
+    // `MYBAND` opens the ranking board: the band standings board the tree
+    // ships is `SideScreen::Lanking` (the room has no band view).
+    routed(0x1320_003A, "IDC_BUTTON_SROOM_MYBAND", Side(SideScreen::Lanking)),
+    // No evidenced target yet: the press is recorded with its next step.
+    unwired(0x1320_0006, "IDC_BUTTON_SROOM_QUICKJOIN", HANDLER_STEP),
+    unwired(0x1320_000A, "IDC_BUTTON_SROOM_COUPON", HANDLER_STEP),
+    unwired(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP", TUTORIAL_STEP),
+    unwired(0x1320_0038, "IDC_BUTTON_SROOM_MYCAPSULE", HANDLER_STEP),
+    unwired(0x1320_0039, "IDC_BUTTON_SROOM_EVENT", HANDLER_STEP),
+    unwired(0x1320_003D, "IDC_BUTTON_SROOM_CONFERENCE", HANDLER_STEP),
+    unwired(0x1320_0048, "IDC_BUTTON_SROOM_MESSENGER", HANDLER_STEP),
+    // The block spells this code `0x1320C04B` (the `0xC0` nibble rides in
+    // the low word), unlike its neighbours.
+    unwired(0x1320_C04B, "IDC_BUTTON_SROOM_WATINGVIEW", HANDLER_STEP),
+    unwired(0x1320_000C, "IDC_BUTTON_SROOM_LEFT", HANDLER_STEP),
+    unwired(0x1320_000D, "IDC_BUTTON_SROOM_RIGHT", HANDLER_STEP),
+    unwired(0x1320_1003, "IDC_BUTTON_SROOM_SHOW_ALLMODE", MODE_FILTER_STEP),
+    unwired(0x1320_1004, "IDC_BUTTON_SROOM_SHOW_NORMALMODE", MODE_FILTER_STEP),
+    unwired(0x1320_1005, "IDC_BUTTON_SROOM_SHOW_BATTLEMODE", MODE_FILTER_STEP),
+    unwired(0x1320_100E, "IDC_BUTTON_SROOM_CHAT_ALL", CHAT_TAB_STEP),
+    unwired(0x1320_100F, "IDC_BUTTON_SROOM_CHAT_FRIEND", CHAT_TAB_STEP),
+    unwired(0x1320_1010, "IDC_BUTTON_SROOM_CHAT_GUILD", CHAT_TAB_STEP),
+    unwired(0x1320_1011, "IDC_BUTTON_SROOM_CHAT_WHISPER", CHAT_TAB_STEP),
+];
+
+/// One staged control with an evidenced behaviour.
+const fn routed(code: u32, id: &'static str, action: RoomControlAction) -> RoomControl {
+    RoomControl { code, id, action }
+}
+
+/// One staged control with no evidenced behaviour yet.
+const fn unwired(code: u32, id: &'static str, next_step: &'static str) -> RoomControl {
+    routed(code, id, RoomControlAction::Unwired { next_step })
+}
+
+/// True while the staged rect of `code` covers native pixel (`x`, `y`).
+fn staged_code_hit(placements: &[ScenePlacement], code: u32, x: i32, y: i32) -> bool {
+    placements
+        .iter()
+        .any(|placed| placed.code == code && rect_hit(&placed.rect, x, y))
+}
+
+/// Which lobby chat panel a call addresses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LobbyChat {
+    /// Channel scene panel.
+    Channel,
+    /// Room lobby panel (staged `IDC_LIST_SROOM_CHAT`).
+    Room,
+}
+
+impl LobbyChat {
+    /// Panel the on-screen scene owns (`None`: the scene shows no lobby
+    /// chat panel).
+    #[must_use]
+    pub fn of_screen(screen: Screen) -> Option<Self> {
+        match screen {
+            Screen::Channel => Some(Self::Channel),
+            Screen::Room => Some(Self::Room),
+            _ => None,
+        }
+    }
+}
 
 /// Unsent chat draft cap (characters, not bytes: multibyte input
 /// counts once per character so no slice ever splits UTF-8).
@@ -208,11 +438,16 @@ pub struct ScreenGame {
     avatar: Option<AvatarFigure>,
     channels: Vec<ChannelState>,
     highlight: usize,
-    /// Live channel chat rows (2013/2014/2019 packets only, oldest first).
-    channel_chat: Vec<ChannelChatMessage>,
-    /// Unsent channel draft for the Channel input line (2012 source;
-    /// whisper content source for [`Self::channel_whisper_message`]).
-    channel_input: String,
+    /// Channel-scene lobby chat panel (main-room 2013/2014/2016/2019/
+    /// 2029 rows plus the 2012 draft).
+    channel_chat: LobbyChatPanel,
+    /// Room-lobby chat panel: the same main-room feed, painted inside
+    /// the staged `IDC_LIST_SROOM_CHAT`/`IDC_EDIT_SROOM_CHAT` rects.
+    room_chat: LobbyChatPanel,
+    /// Last staged room chrome control the router answered without an
+    /// evidenced target (see [`RoomControlNoop`]); `None` until such a
+    /// press happens.
+    last_room_control_noop: Option<RoomControlNoop>,
     /// Last whisper peer behind `/r` (the most recent incoming 2019
     /// sender or outgoing 2017 recipient; `None` until a whisper
     /// flows either way, so a reply with no peer falls back to chat).
@@ -654,8 +889,9 @@ impl ScreenGame {
             avatar: None,
             channels: Vec::new(),
             highlight: 0,
-            channel_chat: Vec::new(),
-            channel_input: String::new(),
+            channel_chat: LobbyChatPanel::default(),
+            room_chat: LobbyChatPanel::default(),
+            last_room_control_noop: None,
             last_whisper_peer: None,
             rooms: Vec::new(),
             room_highlight: 0,
@@ -1015,8 +1251,7 @@ impl ScreenGame {
     pub fn set_channels(&mut self, channels: Vec<ChannelState>) -> &mut Self {
         self.channels = channels;
         self.highlight = 0;
-        self.channel_chat.clear();
-        self.channel_input.clear();
+        self.channel_chat = LobbyChatPanel::default();
         self
     }
 
@@ -1334,85 +1569,157 @@ impl ScreenGame {
         &self.waiting_chat
     }
 
-    /// Append one player chat line (2013) to the channel history.
-    pub fn push_channel_user_message(&mut self, message: &MainRoomUserMessage) -> &mut Self {
-        self.push_channel_row(ChannelChatMessage::user(
-            &message.sender,
-            &message.content_text(),
-        ));
+    /// The Channel scene's lobby chat panel.
+    #[must_use]
+    pub fn lobby_chat(&self, chat: LobbyChat) -> &LobbyChatPanel {
+        match chat {
+            LobbyChat::Channel => &self.channel_chat,
+            LobbyChat::Room => &self.room_chat,
+        }
+    }
+
+    /// Append one player chat line (2013) to `chat`'s history.
+    pub fn push_lobby_user_message(
+        &mut self,
+        chat: LobbyChat,
+        message: &MainRoomUserMessage,
+    ) -> &mut Self {
+        let row = ChannelChatMessage::user(&message.sender, &message.content_text());
+        self.lobby_panel_mut(chat).push_row(row);
         self
     }
 
-    /// Append one administrator chat line (2014) to the channel history.
-    pub fn push_channel_admin_message(&mut self, message: &MainRoomAdminMessage) -> &mut Self {
-        self.push_channel_row(ChannelChatMessage::admin(
-            &message.sender,
-            &message.content_text(),
-        ));
+    /// Append one administrator chat line (2014) to `chat`'s history.
+    pub fn push_lobby_admin_message(
+        &mut self,
+        chat: LobbyChat,
+        message: &MainRoomAdminMessage,
+    ) -> &mut Self {
+        let row = ChannelChatMessage::admin(&message.sender, &message.content_text());
+        self.lobby_panel_mut(chat).push_row(row);
         self
     }
 
-    /// Append one incoming whisper (2019) to the channel history.
+    /// Append one incoming whisper (2019) to `chat`'s history.
     /// `recipient` names the local addressee (the wire event carries
-    /// only the sender), so the row keeps its whisper context.
-    pub fn push_channel_whisper(&mut self, message: &ReceiveWhisper, recipient: &str) -> &mut Self {
-        self.push_channel_row(ChannelChatMessage::whisper(
-            &message.sender,
-            recipient,
-            &message.content,
-        ));
+    /// only the sender), so the row keeps its whisper context. The
+    /// sender becomes the `/r` peer.
+    pub fn push_lobby_whisper(
+        &mut self,
+        chat: LobbyChat,
+        message: &ReceiveWhisper,
+        recipient: &str,
+    ) -> &mut Self {
+        let row = ChannelChatMessage::whisper(&message.sender, recipient, &message.content);
+        self.lobby_panel_mut(chat).push_row(row);
         self.remember_whisper_peer(&message.sender);
         self
     }
 
-    /// Append one lobby announcement (2016) to the channel history:
-    /// the exe fans the notice text out as `0x7de` admin-message rows
+    /// Append one lobby announcement (2016) to `chat`'s history: the
+    /// exe fans the notice text out as `0x7de` admin-message rows
     /// (`docs/net-protocol.md`), so the row paints bare in the admin
     /// amber — no sender brackets a sender-less notice. Empty notices
     /// stage no row, so they never consume a visible slot.
-    pub fn push_channel_announcement(&mut self, message: &Announcement) -> &mut Self {
+    pub fn push_lobby_announcement(
+        &mut self,
+        chat: LobbyChat,
+        message: &Announcement,
+    ) -> &mut Self {
         if message.content.is_empty() {
             return self;
         }
-        self.push_channel_row(ChannelChatMessage::announcement(&message.content));
+        let row = ChannelChatMessage::announcement(&message.content);
+        self.lobby_panel_mut(chat).push_row(row);
         self
     }
 
-    /// Append one rank notice (2029) to the channel history, unless the
+    /// Append one rank notice (2029) to `chat`'s history, unless the
     /// packet carries no rank: the exe drops the packet when the
     /// invalid word is nonzero (`docs/net-protocol.md`). The row paints
     /// the pinned notice-board sentence (`rank_notice_board_text` field
     /// order nickname/title/rank, `docs/gifts.md`) in the admin amber;
     /// the song title resolves through the staged catalog, `M{id}`
     /// while it names no such song.
-    pub fn push_channel_rank_notification(&mut self, message: &RankNotification) -> &mut Self {
+    pub fn push_lobby_rank_notification(
+        &mut self,
+        chat: LobbyChat,
+        message: &RankNotification,
+    ) -> &mut Self {
         if message.invalid {
             return self;
         }
-        let catalog_title = u16::try_from(message.music_id)
-            .ok()
-            .and_then(|id| self.catalog_song_title(id));
-        let fallback;
-        let song_title = match catalog_title {
-            Some(title) => title,
-            None => {
-                fallback = format!("M{}", message.music_id);
-                fallback.as_str()
-            }
-        };
-        self.push_channel_row(ChannelChatMessage::rank(
-            &message.nickname,
-            song_title,
-            message.ranking,
-        ));
+        let song_title = self.rank_notice_song_title(message.music_id);
+        let row = ChannelChatMessage::rank(&message.nickname, &song_title, message.ranking);
+        self.lobby_panel_mut(chat).push_row(row);
         self
+    }
+
+    /// Append one player chat line (2013) to the channel history.
+    pub fn push_channel_user_message(&mut self, message: &MainRoomUserMessage) -> &mut Self {
+        self.push_lobby_user_message(LobbyChat::Channel, message)
+    }
+
+    /// Append one administrator chat line (2014) to the channel history.
+    pub fn push_channel_admin_message(&mut self, message: &MainRoomAdminMessage) -> &mut Self {
+        self.push_lobby_admin_message(LobbyChat::Channel, message)
+    }
+
+    /// Append one incoming whisper (2019) to the channel history.
+    pub fn push_channel_whisper(&mut self, message: &ReceiveWhisper, recipient: &str) -> &mut Self {
+        self.push_lobby_whisper(LobbyChat::Channel, message, recipient)
+    }
+
+    /// Append one lobby announcement (2016) to the channel history.
+    pub fn push_channel_announcement(&mut self, message: &Announcement) -> &mut Self {
+        self.push_lobby_announcement(LobbyChat::Channel, message)
+    }
+
+    /// Append one rank notice (2029) to the channel history.
+    pub fn push_channel_rank_notification(&mut self, message: &RankNotification) -> &mut Self {
+        self.push_lobby_rank_notification(LobbyChat::Channel, message)
+    }
+
+    /// Mutable panel behind [`Self::lobby_chat`].
+    fn lobby_panel_mut(&mut self, chat: LobbyChat) -> &mut LobbyChatPanel {
+        match chat {
+            LobbyChat::Channel => &mut self.channel_chat,
+            LobbyChat::Room => &mut self.room_chat,
+        }
+    }
+
+    /// Song title of one 2029 rank notice: the staged catalog's title,
+    /// `M{id}` while it names no such song.
+    fn rank_notice_song_title(&self, music_id: i32) -> String {
+        match u16::try_from(music_id)
+            .ok()
+            .and_then(|id| self.catalog_song_title(id))
+        {
+            Some(title) => title.to_owned(),
+            None => format!("M{music_id}"),
+        }
     }
 
     /// Live channel chat rows, oldest first (empty until a
     /// 2013/2014/2016/2019/2029 packet arrives).
     #[must_use]
     pub fn channel_chat(&self) -> &[ChannelChatMessage] {
-        &self.channel_chat
+        self.channel_chat.history()
+    }
+
+    /// Live room-lobby chat rows, oldest first (the same main-room
+    /// feed as [`Self::channel_chat`], painted in the room panel).
+    #[must_use]
+    pub fn room_chat(&self) -> &[ChannelChatMessage] {
+        self.room_chat.history()
+    }
+
+    /// Last staged room chrome control the router answered without an
+    /// evidenced target (tickets #32/#34): proves the click was
+    /// recorded instead of dropped.
+    #[must_use]
+    pub fn room_control_noop(&self) -> Option<RoomControlNoop> {
+        self.last_room_control_noop
     }
 
     /// Stage the unsent input line (the 3011 source on send).
@@ -1435,17 +1742,19 @@ impl ScreenGame {
         self.chat_input.push(typed);
     }
 
-    /// Type one character into the Channel draft. Only the Channel
-    /// scene accepts typing; control characters never enter the line
-    /// and the draft stops at [`MAX_CHAT_INPUT_CHARS`] characters.
-    pub fn push_channel_char(&mut self, typed: char) {
-        if self.flow.current() != Screen::Channel || typed.is_control() {
+    /// Type one character into the lobby chat draft the on-screen
+    /// scene owns: the Channel panel or the Room panel (every other
+    /// scene accepts no lobby typing). While a room dialog is open it
+    /// owns the keyboard, so the character feeds the dialog form
+    /// instead (ticket #37).
+    pub fn push_lobby_char(&mut self, typed: char) {
+        if self.room_dialog.is_some() {
+            self.push_room_dialog_char(typed);
             return;
         }
-        if self.channel_input.chars().count() >= MAX_CHAT_INPUT_CHARS {
-            return;
+        if let Some(chat) = LobbyChat::of_screen(self.flow.current()) {
+            self.lobby_panel_mut(chat).type_char(typed);
         }
-        self.channel_input.push(typed);
     }
 
     /// Erase the last draft character (Backspace). Only the Waiting
@@ -1458,13 +1767,17 @@ impl ScreenGame {
         self.chat_input.pop();
     }
 
-    /// Erase the last Channel draft character (Backspace). Only the
-    /// Channel scene accepts it; an empty draft stays empty.
-    pub fn delete_channel_char(&mut self) {
-        if self.flow.current() != Screen::Channel {
+    /// Erase the last character of the lobby chat draft the on-screen
+    /// scene owns (Backspace; an empty draft stays empty). The open
+    /// room dialog owns Backspace first.
+    pub fn delete_lobby_char(&mut self) {
+        if self.room_dialog.is_some() {
+            self.delete_room_dialog_char();
             return;
         }
-        self.channel_input.pop();
+        if let Some(chat) = LobbyChat::of_screen(self.flow.current()) {
+            self.lobby_panel_mut(chat).erase_char();
+        }
     }
     #[must_use]
     pub fn chat_input(&self) -> &str {
@@ -1500,51 +1813,62 @@ impl ScreenGame {
         Some(message)
     }
 
-    /// Stage the unsent Channel input line (the 2012 source on send).
-    /// Overlong lines truncate to [`MAX_CHAT_INPUT_CHARS`] characters.
-    pub fn set_channel_input(&mut self, line: &str) -> &mut Self {
-        self.channel_input = line.chars().take(MAX_CHAT_INPUT_CHARS).collect();
+    /// Stage one lobby chat draft (the 2012 source on send). Overlong
+    /// lines truncate to [`MAX_CHAT_INPUT_CHARS`] characters.
+    pub fn set_lobby_input(&mut self, chat: LobbyChat, line: &str) -> &mut Self {
+        self.lobby_panel_mut(chat).set_draft(line);
         self
+    }
+
+    /// Outgoing 2012 body for one lobby chat draft (`None` while the
+    /// draft is empty, so no empty send is invented). Callers send the
+    /// returned body, then [`Self::clear_lobby_input`].
+    #[must_use]
+    pub fn lobby_send_message(&self, chat: LobbyChat) -> Option<SendMainRoomMessage> {
+        self.lobby_chat(chat).send_message()
+    }
+
+    /// Outgoing 2017 body for one lobby chat draft to `recipient`
+    /// (`None` while the draft or the recipient is empty). The draft
+    /// carries the whisper text; the recipient rides beside it (the
+    /// wire 2017 shape).
+    #[must_use]
+    pub fn lobby_whisper_message(&self, chat: LobbyChat, recipient: &str) -> Option<SendWhisper> {
+        self.lobby_chat(chat).whisper_message(recipient)
+    }
+
+    /// Forget one lobby chat draft.
+    pub fn clear_lobby_input(&mut self, chat: LobbyChat) -> &mut Self {
+        self.lobby_panel_mut(chat).clear_draft();
+        self
+    }
+
+    /// Stage the unsent Channel input line (the 2012 source on send).
+    pub fn set_channel_input(&mut self, line: &str) -> &mut Self {
+        self.set_lobby_input(LobbyChat::Channel, line)
     }
 
     /// Live Channel input line.
     #[must_use]
     pub fn channel_input(&self) -> &str {
-        &self.channel_input
+        self.lobby_chat(LobbyChat::Channel).draft()
     }
 
-    /// Outgoing lobby chat packet for the Channel draft (`None` while
-    /// the input line is empty, so no empty send is invented).
-    /// Callers send the returned body, then [`Self::clear_channel_input`].
+    /// Outgoing 2012 body for the Channel draft.
     #[must_use]
     pub fn channel_send_message(&self) -> Option<SendMainRoomMessage> {
-        if self.channel_input.is_empty() {
-            return None;
-        }
-        Some(SendMainRoomMessage {
-            content: self.channel_input.as_bytes().to_vec(),
-        })
+        self.lobby_send_message(LobbyChat::Channel)
     }
 
-    /// Outgoing whisper packet for the Channel draft to `recipient`
-    /// (`None` while the draft or the recipient is empty, so no empty
-    /// send is invented). The draft carries the whisper text; the
-    /// recipient rides beside it (the wire 2017 shape).
+    /// Outgoing 2017 body for the Channel draft to `recipient`.
     #[must_use]
     pub fn channel_whisper_message(&self, recipient: &str) -> Option<SendWhisper> {
-        if self.channel_input.is_empty() || recipient.is_empty() {
-            return None;
-        }
-        Some(SendWhisper {
-            recipient: recipient.to_owned(),
-            content: self.channel_input.clone(),
-        })
+        self.lobby_whisper_message(LobbyChat::Channel, recipient)
     }
 
     /// Forget the unsent Channel input line.
     pub fn clear_channel_input(&mut self) -> &mut Self {
-        self.channel_input.clear();
-        self
+        self.clear_lobby_input(LobbyChat::Channel)
     }
 
     /// Take the 2012 body for the Channel draft and clear the input
@@ -1614,11 +1938,21 @@ impl ScreenGame {
         self
     }
 
-    /// Peek the Channel draft through the slash grammar (the exe lobby
-    /// parser beside the 2017 send at file `0x8fa02`).
+    /// Peek one lobby chat draft through the slash grammar (the exe
+    /// lobby parser beside the 2012 send at file `0x8fa1e` and the 2017
+    /// send at file `0x8fa02`).
+    #[must_use]
+    pub fn lobby_slash_command(&self, chat: LobbyChat) -> SlashCommand {
+        parse_slash_draft(
+            self.lobby_chat(chat).draft(),
+            self.last_whisper_peer.as_deref(),
+        )
+    }
+
+    /// Peek the Channel draft through the slash grammar.
     #[must_use]
     pub fn channel_slash_command(&self) -> SlashCommand {
-        parse_slash_draft(&self.channel_input, self.last_whisper_peer.as_deref())
+        self.lobby_slash_command(LobbyChat::Channel)
     }
 
     /// Peek the waiting draft through the same slash grammar (the exe
@@ -1628,18 +1962,28 @@ impl ScreenGame {
         parse_slash_draft(&self.chat_input, self.last_whisper_peer.as_deref())
     }
 
-    /// Take the Channel draft through the slash grammar and clear the
-    /// input line so one Enter acts once (`Empty` leaves the empty
+    /// Take one lobby chat draft through the slash grammar and clear
+    /// the input line so one Enter acts once (`Empty` leaves the empty
     /// draft alone). A whisper take remembers its recipient for `/r`.
-    pub fn take_channel_slash(&mut self) -> SlashCommand {
-        let command = self.channel_slash_command();
+    pub fn take_lobby_slash(&mut self, chat: LobbyChat) -> SlashCommand {
+        let command = self.lobby_slash_command(chat);
         if command != SlashCommand::Empty {
-            self.clear_channel_input();
+            self.clear_lobby_input(chat);
         }
         if let SlashCommand::Whisper { ref recipient, .. } = command {
             self.remember_whisper_peer(recipient);
         }
         command
+    }
+
+    /// Take the Channel draft through the slash grammar.
+    pub fn take_channel_slash(&mut self) -> SlashCommand {
+        self.take_lobby_slash(LobbyChat::Channel)
+    }
+
+    /// Take the Room-lobby draft through the slash grammar.
+    pub fn take_room_slash(&mut self) -> SlashCommand {
+        self.take_lobby_slash(LobbyChat::Room)
     }
 
     /// Take the waiting draft through the slash grammar and clear the
@@ -1674,22 +2018,6 @@ impl ScreenGame {
             .len()
             .saturating_sub(MAX_WAITING_CHAT_ROWS);
         self.waiting_chat.drain(..overflow);
-    }
-
-    /// Append one channel row and bound the history to
-    /// [`MAX_CHANNEL_CHAT_ROWS`] (oldest rows drop first).
-    fn push_channel_row(&mut self, row: ChannelChatMessage) {
-        self.channel_chat.push(row);
-        self.truncate_channel_chat();
-    }
-
-    /// Drop the oldest channel rows past the history cap.
-    fn truncate_channel_chat(&mut self) {
-        let overflow = self
-            .channel_chat
-            .len()
-            .saturating_sub(MAX_CHANNEL_CHAT_ROWS);
-        self.channel_chat.drain(..overflow);
     }
 
     /// Room arena stage the Playing `_` sprites resolve through: the
@@ -1822,51 +2150,12 @@ impl ScreenGame {
         }
     }
 
-    /// Room row click: staged panels first (verbatim `.bnd` rects in
-    /// file order), legacy row bands without them. Either path
+    /// Room click: a staged chrome button first ([`Self::click_room_control`]),
+    /// then the row hit test — staged panels (verbatim `.bnd` rects in
+    /// file order) ahead of the legacy row bands. Either row path
     /// highlights the row and advances like Confirm.
     fn click_room_row(&mut self, x: i32, y: i32) {
-        // The BACK button leaves for the channel scene (lifecycle §7:
-        // the same edge the Back key rides); geometry from the parsed
-        // staged rect only (owner rule `f38f3`).
-        let back_hit = self.scene_art(Screen::Room).is_some_and(|art| {
-            art.placements.iter().any(|placed| {
-                placed.code == super::side::ROOM_BACK_BUTTON_CODE && rect_hit(&placed.rect, x, y)
-            })
-        });
-        if back_hit {
-            self.enter(Screen::Channel);
-            return;
-        }
-        // The CREATE button opens the create-room dialog (lifecycle §7:
-        // `DIALOG_CREATEROOM` `CDCreateRoom`); geometry from the parsed
-        // staged rect only (owner rule `f38f3`).
-        let create_hit = self.scene_art(Screen::Room).is_some_and(|art| {
-            art.placements.iter().any(|placed| {
-                placed.code == super::side::ROOM_CREATE_BUTTON_CODE && rect_hit(&placed.rect, x, y)
-            })
-        });
-        if create_hit {
-            self.open_create_room_dialog();
-            return;
-        }
-        // The OPTION button opens the options dialog over the lobby
-        // (the same `Dialog_Option_*` sheet the Planet gear mounts:
-        // EXIT/Escape closes it back onto Room, the flow never
-        // moves). Geometry from the parsed staged rect only (owner
-        // rule `f38f3`). Other top-strip buttons (`ITEMSHOP`,
-        // `MYROOM`, `COUPON`, `MUSICSHOP`, `MYCAPSULE`, `EVENT`,
-        // `MYBAND`, `CONFERENCE`, `MESSENGER`, `WATINGVIEW`,
-        // `FIRSTSTEP`, mode filters, chat tabs, pagers) have no
-        // evidenced click behavior yet, so they stay OPEN and land
-        // nowhere — never invented here.
-        let option_hit = self.scene_art(Screen::Room).is_some_and(|art| {
-            art.placements.iter().any(|placed| {
-                placed.code == super::side::ROOM_OPTION_BUTTON_CODE && rect_hit(&placed.rect, x, y)
-            })
-        });
-        if option_hit {
-            self.planet_modal = Some(PlanetModal::Options);
+        if self.click_room_control(x, y) {
             return;
         }
         let Some(index) = self.room_index_at(x, y) else {
@@ -1885,7 +2174,63 @@ impl ScreenGame {
         self.enter(Screen::Waiting);
     }
 
-    /// Room row index under a click, staged panels first (see
+    /// Answer the staged room chrome control under the click (tickets
+    /// #32/#34): the behaviour comes from [`ROOM_CONTROLS`], and a
+    /// control with no evidenced target still records its press instead
+    /// of dropping it silently. `true` consumed the click, so the room
+    /// row hit test never sees a button press.
+    fn click_room_control(&mut self, x: i32, y: i32) -> bool {
+        let Some(control) = self.room_control_at(x, y) else {
+            return false;
+        };
+        match control.action {
+            // Leave for the channel scene (lifecycle §7: the same edge
+            // the Back key rides).
+            RoomControlAction::Back => {
+                self.enter(Screen::Channel);
+            }
+            // Open the create-room dialog (lifecycle §7:
+            // `DIALOG_CREATEROOM` `CDCreateRoom`).
+            RoomControlAction::Create => self.open_create_room_dialog(),
+            // Open the options dialog over the lobby (the same
+            // `Dialog_Option_*` sheet the Planet gear mounts:
+            // EXIT/Escape closes it back onto Room, the flow never
+            // moves).
+            RoomControlAction::Options => self.planet_modal = Some(PlanetModal::Options),
+            // Visit a side screen the tree already ships; the lobby
+            // gate is `can_visit_side`.
+            RoomControlAction::Side(side) => {
+                self.visit_side(side);
+            }
+            // No evidenced target: record the press and its next
+            // evidence step — never a silent drop.
+            RoomControlAction::Unwired { next_step } => {
+                tracing::debug!(
+                    control = control.id,
+                    code = format_args!("0x{:08X}", control.code),
+                    next_step,
+                    "room control has no evidenced behaviour yet; press recorded"
+                );
+                self.last_room_control_noop = Some(RoomControlNoop {
+                    id: control.id,
+                    next_step,
+                });
+            }
+        }
+        true
+    }
+
+    /// Staged room chrome control under the click, if the table names
+    /// its code. Geometry comes from the parsed staged rect only (owner
+    /// rule `f38f3`).
+    fn room_control_at(&self, x: i32, y: i32) -> Option<&'static RoomControl> {
+        let placements = &self.scene_art(Screen::Room)?.placements;
+        ROOM_CONTROLS
+            .iter()
+            .find(|control| staged_code_hit(placements, control.code, x, y))
+    }
+
+    /// Room-row index under a click, staged panels first (see
     /// [`Self::click_room_row`]).
     fn room_index_at(&self, x: i32, y: i32) -> Option<usize> {
         let staged = self.room_panel_click(x, y);
@@ -3895,7 +4240,7 @@ impl ScreenGame {
             (None, false) => paint_channel_list(frame, &self.channels, self.highlight),
             (None, true) => paint_screen(frame, Screen::Channel),
         }
-        paint_channel_chat(frame, &self.channel_chat, self.channels.len());
+        paint_channel_chat(frame, self.channel_chat.history(), self.channels.len());
     }
 
     /// Room lobby: staged art behind the live list, flat card fallback.
@@ -3907,6 +4252,17 @@ impl ScreenGame {
             (Some(art), true) => paint_lobby_backdrop(frame, Screen::Room, art),
             (None, false) => paint_room_list(frame, &self.rooms, self.room_highlight),
             (None, true) => paint_screen(frame, Screen::Room),
+        }
+        // The lobby chat panel: live main-room rows plus the draft at
+        // the staged `IDC_LIST_SROOM_CHAT`/`IDC_EDIT_SROOM_CHAT` rects
+        // (ticket #37). Dialogs layer over it below.
+        if let Some(art) = self.scene_art(Screen::Room) {
+            paint_room_chat(
+                frame,
+                self.room_chat.history(),
+                self.room_chat.draft(),
+                &art.placements,
+            );
         }
         // The open room dialog layers over the lobby: staged sheet
         // first, then the form texts at the parsed edit rects. Empty
@@ -4653,9 +5009,20 @@ impl GameLoop for ScreenGame {
             (Screen::Waiting, MenuKey::Back) | (Screen::Result, MenuKey::Back) => {
                 self.enter(Screen::Room);
             }
-            (Screen::Room, MenuKey::Confirm)
-            | (Screen::Loading, MenuKey::Back)
-            | (Screen::Result, MenuKey::Confirm) => self.enter(Screen::Waiting),
+            // The room lobby Enter rides the main-room chat first: a
+            // non-empty draft (plain chat or a slash command) consumes
+            // it, an empty draft advances to Waiting like the Channel
+            // Confirm does (ticket #37). An open room dialog owns the
+            // keyboard, so a leftover draft neither sends nor holds
+            // the Enter.
+            (Screen::Room, MenuKey::Confirm) => {
+                if self.room_dialog.is_some() || self.take_room_slash() == SlashCommand::Empty {
+                    self.enter(Screen::Waiting);
+                }
+            }
+            (Screen::Loading, MenuKey::Back) | (Screen::Result, MenuKey::Confirm) => {
+                self.enter(Screen::Waiting);
+            }
             // `START 0x16202012` runs the all-ready check (file
             // `0xb5560`): the master starts only with every occupied
             // peer ready, and non-masters never start — they ready up
@@ -4670,32 +5037,20 @@ impl GameLoop for ScreenGame {
     }
 
     fn text_input(&mut self, text: &str) {
-        match self.flow.current() {
-            Screen::Waiting => {
-                for typed in text.chars() {
-                    self.push_chat_char(typed);
-                }
+        for typed in text.chars() {
+            if self.flow.current() == Screen::Waiting {
+                self.push_chat_char(typed);
+            } else {
+                self.push_lobby_char(typed);
             }
-            Screen::Channel => {
-                for typed in text.chars() {
-                    self.push_channel_char(typed);
-                }
-            }
-            Screen::Room => {
-                for typed in text.chars() {
-                    self.push_room_dialog_char(typed);
-                }
-            }
-            _ => {}
         }
     }
 
     fn delete_text(&mut self) {
-        match self.flow.current() {
-            Screen::Waiting => self.delete_chat_char(),
-            Screen::Channel => self.delete_channel_char(),
-            Screen::Room => self.delete_room_dialog_char(),
-            _ => {}
+        if self.flow.current() == Screen::Waiting {
+            self.delete_chat_char();
+        } else {
+            self.delete_lobby_char();
         }
     }
 
@@ -4830,11 +5185,15 @@ fn observable_state_hash(game: &ScreenGame) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
     hash_str(&mut hash, game.screen_name());
     hash_str(&mut hash, &game.chat_input);
-    hash_str(&mut hash, &game.channel_input);
+    hash_str(&mut hash, game.channel_chat.draft());
+    hash_str(&mut hash, game.room_chat.draft());
     for row in &game.waiting_chat {
         hash_str(&mut hash, &row.text);
     }
-    for row in &game.channel_chat {
+    for row in game.channel_chat.history() {
+        hash_str(&mut hash, &row.text);
+    }
+    for row in game.room_chat.history() {
         hash_str(&mut hash, &row.text);
     }
     if let Some(selection) = &game.selected_music {
@@ -11248,5 +11607,268 @@ mod game_tests {
         assert!(game.can_start_game());
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Loading);
+    }
+    /// One room chrome control staged on its own test rect, on the
+    /// walked Avi → Channel → Room path.
+    fn room_lobby_with_control(code: u32, id: &str) -> ScreenGame {
+        room_lobby_with_controls(&[(code, id)])
+    }
+
+    /// Room lobby with the given staged room placements.
+    fn room_lobby_with_placements(placements: Vec<(u32, &str, Rect)>) -> ScreenGame {
+        use MenuKey;
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.set_rooms(two_rooms());
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        let placements = placements
+            .into_iter()
+            .map(|(code, id, rect)| ScenePlacement {
+                role: PlacementRole::Single,
+                id: id.to_owned(),
+                code,
+                sprite: None,
+                rect,
+            })
+            .collect();
+        game.load_scene(Screen::Room, placements, HashMap::new());
+        game
+    }
+
+    /// Room lobby with every given control staged on the shared test
+    /// rect: the point is the code dispatch, so the fixture claims no
+    /// geometry.
+    fn room_lobby_with_controls(controls: &[(u32, &str)]) -> ScreenGame {
+        room_lobby_with_placements(
+            controls
+                .iter()
+                .map(|(code, id)| (*code, *id, ROOM_CONTROL_TEST_RECT))
+                .collect(),
+        )
+    }
+
+    /// Test rect for one staged chrome control: clear of the room row
+    /// bands and of every other staged control.
+    const ROOM_CONTROL_TEST_RECT: Rect = Rect {
+        x: 400,
+        y: 380,
+        w: 40,
+        h: 20,
+    };
+    /// Click point inside [`ROOM_CONTROL_TEST_RECT`].
+    const ROOM_CONTROL_TEST_CLICK: (i32, i32) = (410, 385);
+
+    #[test]
+    fn staged_room_chrome_buttons_reach_their_side_views() {
+        // Ticket #32: every room chrome button with a target already in
+        // the tree answers on its staged rect and stays a lobby visit.
+        for (code, id, side) in [
+            (0x1320_0008, "IDC_BUTTON_SROOM_ITEMSHOP", SideScreen::Shop),
+            (0x1320_0009, "IDC_BUTTON_SROOM_MYROOM", SideScreen::MyRoom),
+            (
+                0x1320_0037,
+                "IDC_BUTTON_SROOM_MUSICSHOP",
+                SideScreen::MusicShop,
+            ),
+            (0x1320_003A, "IDC_BUTTON_SROOM_MYBAND", SideScreen::Lanking),
+        ] {
+            let mut game = room_lobby_with_control(code, id);
+            game.mouse_click(ROOM_CONTROL_TEST_CLICK.0, ROOM_CONTROL_TEST_CLICK.1);
+            assert_eq!(game.side(), Some(side), "{id}");
+            assert_eq!(game.screen(), Screen::Room, "{id}");
+            assert_eq!(game.room_control_noop(), None, "{id}");
+        }
+    }
+
+    #[test]
+    fn staged_room_control_without_a_target_records_a_labelled_noop() {
+        // Ticket #34: `FIRSTSTEP` is the closest staged control to a
+        // reported tutorial button, and `STATE_ROOM` carries no
+        // tutorial entry at all — the click must be recorded, never
+        // silently dropped.
+        let mut game = room_lobby_with_control(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP");
+        game.mouse_click(ROOM_CONTROL_TEST_CLICK.0, ROOM_CONTROL_TEST_CLICK.1);
+        assert_eq!(game.screen(), Screen::Room);
+        assert_eq!(game.side(), None);
+        assert_eq!(game.room_dialog(), None);
+        let noop = game.room_control_noop().expect("recorded press");
+        assert_eq!(noop.id, "IDC_BUTTON_SROOM_FIRSTSTEP");
+        assert!(!noop.next_step.is_empty());
+    }
+
+    #[test]
+    fn click_away_from_every_room_control_stays_in_the_lobby() {
+        let mut game = room_lobby_with_control(0x1320_0008, "IDC_BUTTON_SROOM_ITEMSHOP");
+        game.mouse_click(10, 10);
+        assert_eq!(game.screen(), Screen::Room);
+        assert_eq!(game.side(), None);
+        assert_eq!(game.room_control_noop(), None);
+    }
+
+    #[test]
+    fn unstaged_room_controls_stay_unanswered() {
+        // No staged rect names the code, so the click falls through to
+        // the row hit test exactly as before (nothing is invented).
+        let mut game = room_lobby_with_controls(&[]);
+        game.mouse_click(ROOM_CONTROL_TEST_CLICK.0, ROOM_CONTROL_TEST_CLICK.1);
+        assert_eq!(game.screen(), Screen::Room);
+        assert_eq!(game.side(), None);
+        assert_eq!(game.room_control_noop(), None);
+    }
+
+    #[test]
+    fn room_row_bands_still_answer_beside_the_control_table() {
+        let mut game = room_lobby_with_control(0x1320_0008, "IDC_BUTTON_SROOM_ITEMSHOP");
+        // First row band of the legacy list: y in [150, 158).
+        game.mouse_click(300, 154);
+        assert_eq!(game.room_highlight, 0);
+        assert_eq!(game.screen(), Screen::Waiting);
+    }
+
+    #[test]
+    fn typing_on_the_room_scene_fills_the_room_chat_draft() {
+        let mut game = room_lobby_with_controls(&[]);
+        game.text_input("hi");
+        assert_eq!(game.lobby_chat(LobbyChat::Room).draft(), "hi");
+        assert_eq!(game.channel_input(), "");
+    }
+
+    #[test]
+    fn room_typing_leaves_the_channel_draft_alone() {
+        let mut game = room_lobby_with_controls(&[]);
+        game.set_channel_input("chan");
+        game.text_input("hi");
+        assert_eq!(game.lobby_chat(LobbyChat::Room).draft(), "hi");
+        assert_eq!(game.channel_input(), "chan");
+    }
+
+    #[test]
+    fn channel_typing_leaves_the_room_draft_alone() {
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        assert_eq!(game.screen(), Screen::Channel);
+        game.set_lobby_input(LobbyChat::Room, "room");
+        game.text_input("hi");
+        assert_eq!(game.channel_input(), "hi");
+        assert_eq!(game.lobby_chat(LobbyChat::Room).draft(), "room");
+    }
+
+    #[test]
+    fn room_typing_feeds_the_open_create_dialog_instead() {
+        let mut game = room_lobby_with_controls(&[]);
+        game.open_create_room_dialog();
+        game.text_input("Jam");
+        assert_eq!(game.lobby_chat(LobbyChat::Room).draft(), "");
+        assert_eq!(game.create_room_form().title, "Jam");
+        game.delete_text();
+        assert_eq!(game.create_room_form().title, "Ja");
+        assert_eq!(game.lobby_chat(LobbyChat::Room).draft(), "");
+    }
+
+    #[test]
+    fn room_confirm_with_a_draft_stays_in_the_lobby_and_clears_it() {
+        let mut game = room_lobby_with_controls(&[]);
+        game.set_lobby_input(LobbyChat::Room, "hello");
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        assert!(game.lobby_chat(LobbyChat::Room).draft().is_empty());
+        assert_eq!(game.channel_input(), "");
+    }
+
+    #[test]
+    fn room_dialog_keeps_the_leftover_draft_out_of_the_enter() {
+        // The open dialog owns the keyboard, so a draft typed before it
+        // opened neither sends nor holds the Enter.
+        let mut game = room_lobby_with_controls(&[]);
+        game.set_lobby_input(LobbyChat::Room, "hello");
+        game.open_create_room_dialog();
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.lobby_chat(LobbyChat::Room).draft(), "hello");
+    }
+
+    #[test]
+    fn room_chat_history_bounds_to_fifty_rows() {
+        let mut game = ScreenGame::new();
+        for index in 0..MAX_MAIN_ROOM_CHAT_ROWS.saturating_add(5) {
+            game.push_lobby_user_message(
+                LobbyChat::Room,
+                &channel_user("host", &format!("line{index}")),
+            );
+        }
+        assert_eq!(game.room_chat().len(), MAX_MAIN_ROOM_CHAT_ROWS);
+        assert_eq!(game.room_chat()[0].text, "line5");
+    }
+
+    #[test]
+    fn room_chat_rows_paint_inside_the_staged_list_rect() {
+        // The `State_Room.bnd` chat rects the block pairs by code
+        // ordinal: `IDC_LIST_SROOM_CHAT 0x13800014` (171,432)-(583,551)
+        // and `IDC_EDIT_SROOM_CHAT 0x13300015` (167,561)-(502,580).
+        let list = Rect {
+            x: 171,
+            y: 432,
+            w: 412,
+            h: 119,
+        };
+        let mut game = room_lobby_with_placements(vec![
+            (0x1380_0014, "IDC_LIST_SROOM_CHAT", list),
+            (
+                0x1330_0015,
+                "IDC_EDIT_SROOM_CHAT",
+                Rect {
+                    x: 167,
+                    y: 561,
+                    w: 335,
+                    h: 19,
+                },
+            ),
+        ]);
+        // Differential paint: the row's ink is what the pushed line
+        // changes, so unrelated lobby ink cannot mask a stray row.
+        let mut empty = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut empty,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        game.push_lobby_user_message(LobbyChat::Room, &channel_user("host", "hello"));
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        let rows: Vec<usize> = (0..buf.len())
+            .filter(|index| buf[*index] != empty[*index])
+            .collect();
+        assert!(!rows.is_empty(), "the chat row paints");
+        // The embedded TTF cell may ink one pixel above or left of
+        // its origin (baseline rounding, `draw_ttf_text`), so the
+        // containment check carries a 1 px margin.
+        const GLYPH_OVERSHOOT: usize = 1;
+        let left = usize::try_from(list.x).unwrap_or(0) - GLYPH_OVERSHOOT;
+        let top = usize::try_from(list.y).unwrap_or(0) - GLYPH_OVERSHOOT;
+        let (right, bottom) = (
+            left + GLYPH_OVERSHOOT + usize::try_from(list.w).unwrap_or(0) + GLYPH_OVERSHOOT,
+            top + GLYPH_OVERSHOOT + usize::try_from(list.h).unwrap_or(0) + GLYPH_OVERSHOOT,
+        );
+        for index in rows {
+            let (x, y) = (index % 800, index / 800);
+            assert!(
+                (left..right).contains(&x) && (top..bottom).contains(&y),
+                "row ink at ({x},{y}) leaves the staged list rect"
+            );
+        }
     }
 }

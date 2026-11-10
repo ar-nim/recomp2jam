@@ -4035,6 +4035,79 @@ pub fn paint_channel_chat(
     }
 }
 
+/// Staged room-lobby chat list (`IDC_LIST_SROOM_CHAT 0x13800014`).
+const ROOM_CHAT_LIST_CODE: u32 = 0x1380_0014;
+/// Staged room-lobby chat input line (`IDC_EDIT_SROOM_CHAT 0x13300015`).
+const ROOM_CHAT_EDIT_CODE: u32 = 0x1330_0015;
+/// Row pitch of the room history box. The waiting box is exe-measured
+/// at 17 px for the same CListBox-plus-`TEXT_*_CHAT` widget pair
+/// ([`WAITING_CHAT_ROW_H`]); the room box is UNMEASURED, so this is a
+/// labelled borrow (next step: rig capture of a live room chat list,
+/// `~/scratch/planet-verify/` recipe).
+const ROOM_CHAT_ROW_H: i32 = 17;
+/// Focus-caret inset inside the room input rect: the waiting box's
+/// exe-measured inset ([`WAITING_CHAT_CARET_INSET`]) borrowed for the
+/// taller-by-one-pixel room edit (UNMEASURED, same next step).
+const ROOM_CHAT_CARET_INSET: (i32, i32) = WAITING_CHAT_CARET_INSET;
+
+/// Paint the room lobby chat panel (ticket #37): the newest history
+/// rows stack from the staged `IDC_LIST_SROOM_CHAT` origin at
+/// [`ROOM_CHAT_ROW_H`], each in its appended ink ([`chat_row_ink`]),
+/// and the draft line inks the staged `IDC_EDIT_SROOM_CHAT` origin with
+/// the focus caret at the borrowed inset. Both rects come from the
+/// parsed staged block (owner rule `f38f3`): without them the painter
+/// draws nothing (no fallback geometry is invented). Rows come only
+/// from live packets.
+pub fn paint_room_chat(
+    frame: &mut Frame<'_>,
+    messages: &[ChannelChatMessage],
+    input: &str,
+    placements: &[ScenePlacement],
+) {
+    let (frame_w, frame_h) = (frame.w, frame.h);
+    let staged = |code: u32| {
+        placements
+            .iter()
+            .find(|placed| placed.code == code)
+            .map(|placed| scale_rect_to_frame(&placed.rect, frame_w, frame_h))
+    };
+    if let Some(list) = staged(ROOM_CHAT_LIST_CODE) {
+        let pitch = u32::try_from(ROOM_CHAT_ROW_H).unwrap_or(1);
+        let rows = usize::try_from(list.h / pitch).unwrap_or(0);
+        let skip = messages.len().saturating_sub(rows);
+        for (offset, message) in messages.get(skip..).unwrap_or(&[]).iter().enumerate() {
+            let step = i32::try_from(offset).unwrap_or(i32::MAX);
+            draw_text(
+                frame,
+                list.x,
+                list.y.saturating_add(step.saturating_mul(ROOM_CHAT_ROW_H)),
+                &channel_chat_row_text(message),
+                chat_row_ink(message.admin),
+            );
+        }
+    }
+    let Some(edit) = staged(ROOM_CHAT_EDIT_CODE) else {
+        return;
+    };
+    if !input.is_empty() {
+        draw_text(frame, edit.x, edit.y, input, art_title_ink());
+    }
+    let caret_x = edit
+        .x
+        .saturating_add(ROOM_CHAT_CARET_INSET.0)
+        .saturating_add(i32::try_from(text_width(input)).unwrap_or(i32::MAX));
+    fill_rect(
+        frame,
+        &Rect {
+            x: caret_x,
+            y: edit.y.saturating_add(ROOM_CHAT_CARET_INSET.1),
+            w: WAITING_CHAT_CARET_SIZE.0,
+            h: WAITING_CHAT_CARET_SIZE.1,
+        },
+        art_title_ink(),
+    );
+}
+
 /// Dark strip behind one seat row so seat ink stays readable over
 /// staged art (vacant rows get one too: the placeholder must read).
 fn paint_seat_scrim(frame: &mut Frame<'_>, x: i32, y: i32, text: &str) {
