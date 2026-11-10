@@ -264,8 +264,10 @@ VA `0x64a3a0`) while siblings are ready. The relay wraps
    record `+0x2168` at x=685, nickname at x=128 (truncated past 100
    display chars), rank `%d` at x=91 only with 2+ players — so the
    columns are closed while the record layout stays OPEN. Shell
-   consequence: no member-row model exists, so `paint.rs` paints no
-   rows (new `member_rows_stay_unpainted_without_a_row_model` test).
+   consequence: the row model is `ResultRankRow` (local `Score` on
+   row 0, `PeerBars` rank bytes per position, joined-room names in
+   seat order; per-member 4014/4016 tallies stay server-side, so
+   peer rows paint no numbers — `result_rows_leave_peer_numbers_unpainted`).
 5. Text helper `FUN_0042c730` alignment (left vs right anchor of the x
    argument) not pinned: every call in the top painter (file
    `0xc38a0`), the row painter (file `0xc3b40`), and the width
@@ -331,8 +333,9 @@ change — all deltas below are fixture-data or by-design unpainted.
 | COOL/GOOD/BAD/MISS at (151/240/337/426, 125) | PASS | GDI numbers paint at the anchors (`result_shot_paints_the_pinned_digits`); values 1/0/0/0 vs 825/20/0/2 are the scripted walk's, not the photo's play. |
 | MAX/JAM COMBO at (505/596, 130) | PASS | Same anchor tests; 1/level-0 vs 320/563 by fixture data. |
 | SCORE readout, top center (digit-sprite life readout, y=77) | UNPAINTED, by design | Photo's 226750 is the OPEN 1 cell field; shell paints neither cell row (`life_and_bottom_digit_cells_stay_unpainted`). |
-| Verdict banner, y=190 band | PASS position | Solo walk paints image 3 at (126,190) ("GOOD!"), photo paints battle-lose "LOSE!" in the same band; frame differs by mode (`result_shot_paints_the_solo_verdict_frame`), not a regression. |
-| Rank table columns (91/128/230/416/530/626/685, 22 px pitch) | UNPAINTED, by design | Photo's two rows have no shell counterpart: no member-row model (OPEN 4, `member_rows_stay_unpainted_without_a_row_model`). |
+| Verdict banner, y=190 band | PASS position | Solo walk paints image 3 at (126,190) ("GOOD!"), photo paints battle-lose "LOSE!" in the same band; frame differs by mode (`solo_shot_paints_the_solo_banner_frame`), not a regression. |
+| Local avatar, row-0 slot (78,316) under the 652×22 clip | PASS position | Walked worn figure hangs its visible box at the slot (`result_avatar_paints_at_the_local_row_slot`, `result_avatar_hangs_its_visible_box_at_the_slot`); photo's battle-row portraits ride the member table (OPEN: no staged portrait source). |
+| Rank table columns (91/128/230/416/530/626/685, 22 px pitch) | PASS position, solo subset | Walked solo row paints (`YOU`, judgements, combos, score, speed at the pinned columns — `result_shot_paints_the_rank_table_rows`); photo's second wire row has no shell counterpart (per-member tallies stay server-side: `result_rows_leave_peer_numbers_unpainted`). | |
 | Grade plate (395,531) | PASS position | Frame 8 ("Perfect", all-Cool max) vs photo's C by play data (`result_shot_paints_the_perfect_grade_plate`). |
 | Total score `%8d` at (605,533) | PASS | Paints 200 at the anchor, visible at the left of the TOTAL GEM bar (`total_score_field_paints_at_its_pinned_anchor`). |
 | Bottom counter digit cells (y=536) | UNPAINTED, by design | OPEN 1, same test as the life readout. |

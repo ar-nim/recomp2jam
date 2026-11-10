@@ -316,9 +316,10 @@ Total audited: 136 named constants.
   no `.bnd` names the gate, the sprite-55 walk pins no sub-rect).
 - Playing cell FAIL (audits 16, 30–32) ↔ `COMBO_ROW_ABOVE_LINE` OPEN;
   audit 16/30/32 are paint-clip behavior, not geometry constants.
-- Result cell FAIL (audit 13) ↔ exe-pinned anchors DONE here; the FAIL
-  is fixed-pixel avatar/verdict placement behind a scrim, not a
-  geometry constant.
+- Result cell PASS (ticket #17; audit 13) ↔ exe-pinned anchors DONE here; the old FAIL
+  was fixed-pixel avatar/verdict placement, not a geometry constant — the avatar now
+  hangs its visible box at the row-0 slot (78,316) under the 652×22 band clip, peer
+  rows/portrait bodies staying OPEN (no staged source).
 - Musicselect cell (now PASS with OPENs, parity.md `STATE_WAITING`
   music-select row) ↔ all 22 CANDIDATE rows stay CANDIDATE: the
   ordinal pairing is proven (154-entry proof incl. the dialog), but

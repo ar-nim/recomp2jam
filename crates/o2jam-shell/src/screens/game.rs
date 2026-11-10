@@ -3667,7 +3667,7 @@ mod game_tests {
     }
 
     #[test]
-    fn result_paints_loaded_avatar_over_card() {
+    fn result_paints_loaded_avatar_at_the_row_slot() {
         use o2jam_file::{parse_sprite55, SPRITE55_MAGIC};
         // 2x1 sprite-55: transparent black, then red.
         let mut blob = Vec::new();
@@ -3696,9 +3696,9 @@ mod game_tests {
         ] {
             game.flow.go(next).unwrap();
         }
-        // 256x256 result: card spans 96..160 both ways and the
-        // figure paints at (96, 96); the red pixel lands at
-        // (97, 96), the transparent one keeps card gray.
+        // 256x256 result: the exe row-0 slot (78,316) scales to
+        // (24,134); the red pixel lands one right of the slot
+        // origin, the slot origin itself keeps the background.
         let mut buf = vec![0u32; 256 * 256];
         game.paint_at(
             &mut Frame {
@@ -3708,8 +3708,8 @@ mod game_tests {
             },
             0,
         );
-        assert_eq!(buf[96 * 256 + 97], pack_xrgb(255, 0, 0));
-        assert_eq!(buf[96 * 256 + 96], pack_xrgb(0xC0, 0xA0, 0x20));
+        assert_eq!(buf[134 * 256 + 25], pack_xrgb(255, 0, 0));
+        assert_eq!(buf[134 * 256 + 24], pack_xrgb(0x10, 0x10, 0x08));
     }
 
     /// Dismiss the splash onto the bare board, then open the dialog
@@ -6708,6 +6708,92 @@ mod game_tests {
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert!(!buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
         assert!(!buf.contains(&pack_xrgb(0xFF, 0xFF, 0xFF)));
+    }
+
+    /// Result scene with one staged button behind `id`: the bound
+    /// arm pairs the rect by code ordinal, so one placement stages
+    /// the hit-test without the archive.
+    fn stage_result_button(game: &mut ScreenGame, id: &str, rect: Rect) {
+        game.load_scene(
+            Screen::Result,
+            vec![ScenePlacement {
+                id: id.to_owned(),
+                code: 0,
+                sprite: None,
+                rect,
+            }],
+            HashMap::new(),
+        );
+    }
+
+    #[test]
+    fn staged_retry_click_returns_to_waiting() {
+        // RETRY (`IDC_BUTTON_SRESULT_RETRY`, rect 6
+        // (625,570)-(708,592)): the walk stages the button through
+        // the bound arm, the click hands back to Waiting — the
+        // exe's local arm (relay `0xfaa` stays unwired: OPEN).
+        let mut game = ScreenGame::new();
+        stage_result_button(&mut game, RESULT_RETRY_ID, RESULT_RETRY_RECT);
+        finish_song(&mut game);
+        paint_result_frame(&mut game);
+        assert_eq!(game.screen(), Screen::Result);
+        game.mouse_click(666, 581);
+        assert_eq!(game.screen(), Screen::Waiting);
+    }
+
+    #[test]
+    fn staged_back_click_returns_to_room() {
+        // BACK (`IDC_BUTTON_SRESULT_BACK`, rect 5
+        // (711,569)-(794,593)): the walk stages the button, the
+        // click leaves for the room list — the exe's local arm
+        // (relay `0xfb5` stays unwired: OPEN).
+        let mut game = ScreenGame::new();
+        stage_result_button(&mut game, RESULT_BACK_ID, RESULT_BACK_RECT);
+        finish_song(&mut game);
+        paint_result_frame(&mut game);
+        assert_eq!(game.screen(), Screen::Result);
+        game.mouse_click(752, 581);
+        assert_eq!(game.screen(), Screen::Room);
+    }
+
+    #[test]
+    fn result_keys_mirror_the_staged_buttons() {
+        // Confirm/Back are the keyboard arms of RETRY/BACK: the
+        // pinned fallback rects answer while the buttons stage
+        // nothing, and a miss lands nowhere.
+        use MenuKey;
+        let mut game = ScreenGame::new();
+        finish_song(&mut game);
+        paint_result_frame(&mut game);
+        assert_eq!(game.screen(), Screen::Result);
+        game.mouse_click(0, 0);
+        assert_eq!(game.screen(), Screen::Result);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+        let mut back = ScreenGame::new();
+        finish_song(&mut back);
+        paint_result_frame(&mut back);
+        back.menu_key(MenuKey::Back, true);
+        assert_eq!(back.screen(), Screen::Room);
+    }
+
+    #[test]
+    fn result_entry_stages_no_ticket_wire_call() {
+        // The solo enter painter fires the event-ticket web call
+        // (`docs/cresult-anchors.md`, `FUN_004c1b90`) and the battle
+        // fill posts net `0xfca`; the shell has no web seam, so
+        // staged entry must queue nothing — the call stays labeled
+        // OPEN until a gateway replay names its wire shape.
+        let mut game = ScreenGame::new();
+        stage_result_button(&mut game, RESULT_RETRY_ID, RESULT_RETRY_RECT);
+        finish_song(&mut game);
+        paint_result_frame(&mut game);
+        assert_eq!(game.screen(), Screen::Result);
+        assert!(game.take_room_team().is_none());
+        assert!(game.take_team_ready().is_none());
+        assert!(game.take_music_send().is_none());
+        assert!(game.take_create_room().is_none());
+        assert!(game.take_join().is_none());
     }
 
     fn paint_playing_frame(game: &mut ScreenGame, w: usize, h: usize) -> Vec<u32> {

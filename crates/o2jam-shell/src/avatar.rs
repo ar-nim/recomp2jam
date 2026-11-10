@@ -311,6 +311,23 @@ impl AvatarFigure {
     /// this is the on-canvas box the layered body covers, so seat-
     /// based painters can center the whole figure, not its first
     /// layer.
+    ///
+    /// Visible-box origin: the smallest layer anchor per axis with
+    /// no `(0, 0)` floor, so painters hanging the figure somewhere
+    /// new (the result row slot) land its drawn pixels, not the
+    /// canvas origin its layers were authored against. `(0, 0)` for
+    /// an empty figure.
+    #[must_use]
+    pub fn visible_origin(&self) -> (i32, i32) {
+        let mut origin: Option<(i32, i32)> = None;
+        for layer in &self.layers {
+            origin = Some(match origin {
+                Some((x, y)) => (x.min(layer.dx), y.min(layer.dy)),
+                None => (layer.dx, layer.dy),
+            });
+        }
+        origin.unwrap_or((0, 0))
+    }
     #[must_use]
     pub fn extent_origin(&self) -> (i32, i32) {
         let (mut x, mut y) = (0, 0);
@@ -368,6 +385,23 @@ impl AvatarFigure {
                 x + layer.dx,
                 y + layer.dy,
                 Some(layer.colorkey),
+            );
+        }
+    }
+
+    /// Paint every layer with its top-left at `(x, y)` plus anchor,
+    /// each under its own source colorkey, dropping pixels outside
+    /// `clip` — the result row-slot clip (652×22 at the row
+    /// origin); the frame clips every blit regardless.
+    pub fn paint_clipped(&self, frame: &mut Frame<'_>, x: i32, y: i32, clip: &Rect) {
+        for layer in &self.layers {
+            blit_rgb555_clipped(
+                frame,
+                &layer.image.view(),
+                x + layer.dx,
+                y + layer.dy,
+                Some(layer.colorkey),
+                Some(clip),
             );
         }
     }

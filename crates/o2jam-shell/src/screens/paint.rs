@@ -4419,11 +4419,50 @@ fn paint_result_content(
     album: Option<&Rgb555Image>,
 ) {
     paint_result_album(frame, album);
-    if let Some(figure) = avatar {
-        figure.paint(frame, frame.w as i32 / 2 - 32, frame.h as i32 / 2 - 32);
-    }
+    paint_result_avatar(frame, avatar);
     paint_result_numbers(frame, score);
     paint_result_rank_rows(frame, rows);
+}
+
+/// Local-row avatar slot (row painter `FUN_004c3b40`, file `0xc3b40`:
+/// member avatars sit at x=78, y=316+22·row under a 652×22 clip,
+/// `docs/cresult-anchors.md` `ev_88c3ca31…`). The shell stages one
+/// avatar — the local player's — so it paints the row-0 slot; peer
+/// rows keep no avatar source (the member-table avatar-id byte rides
+/// server-side, relay-adjacent: OPEN).
+const RESULT_AVATAR_X: i32 = 78;
+/// Top of the local row-0 avatar slot.
+const RESULT_AVATAR_ROW_TOP: i32 = 316;
+/// Clip over the local-row avatar slot, from the slot origin.
+const RESULT_AVATAR_CLIP: Rect = Rect {
+    x: RESULT_AVATAR_X,
+    y: RESULT_AVATAR_ROW_TOP,
+    w: 652,
+    h: 22,
+};
+
+/// Paint the local player's avatar in its exe row slot: the staged
+/// layers author `avatar.opa` canvas anchors, so the slot hangs the
+/// figure's visible box ([`AvatarFigure::visible_origin`]) with its
+/// drawn top-left at the slot — the same adaptation as the Playing
+/// extent-centered seats, without inventing a per-figure offset.
+/// The native anchor scales into the frame like every staged body,
+/// the figure blits 1:1 under the scaled row-band clip. `None`
+/// paints nothing — peer rows stay untouched (no member avatar
+/// source staged).
+fn paint_result_avatar(frame: &mut Frame<'_>, avatar: Option<&AvatarFigure>) {
+    let Some(figure) = avatar else {
+        return;
+    };
+    let (ox, oy) = figure.visible_origin();
+    let (x, y) = anchor_in_frame(
+        RESULT_AVATAR_X.saturating_sub(ox),
+        RESULT_AVATAR_ROW_TOP.saturating_sub(oy),
+        frame.w,
+        frame.h,
+    );
+    let clip = scale_rect_to_frame(&RESULT_AVATAR_CLIP, frame.w, frame.h);
+    figure.paint_clipped(frame, x, y, &clip);
 }
 
 /// Paint the flat results fallback: card, album cover, avatar figure,
@@ -4450,7 +4489,7 @@ pub(crate) fn paint_result(
 /// box).
 #[derive(Debug, Clone, Copy)]
 pub struct ResultPaint<'a> {
-    /// Avatar figure (center card slot; `None` paints without one).
+    /// Avatar figure (local row-0 slot; `None` paints without one).
     pub avatar: Option<&'a AvatarFigure>,
     /// Live score behind the pinned GDI numbers.
     pub score: &'a o2jam_game::Score,
@@ -6892,6 +6931,76 @@ mod paint_tests {
                 assert!(!buf.contains(&frame_ink(index)));
             }
         }
+    }
+
+    /// Native result scene with one avatar and no art: the flat
+    /// backdrop plus the row-slot avatar alone.
+    fn painted_avatar_scene(avatar: &AvatarFigure) -> Vec<u32> {
+        let art = SceneArt {
+            placements: Vec::new(),
+            figures: HashMap::new(),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_result_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &ResultPaint {
+                avatar: Some(avatar),
+                score: &o2jam_game::Score::default(),
+                rows: &[],
+                art: &art,
+                verdict: ResultVerdict::Solo,
+                grade: None,
+                album: None,
+            },
+        );
+        buf
+    }
+
+    #[test]
+    fn result_avatar_paints_at_the_local_row_slot() {
+        // Member avatars sit at x=78, y=316+22·row under a 652×22
+        // clip (`docs/cresult-anchors.md`, row painter
+        // `FUN_004c3b40`); the shell stages one avatar — the local
+        // player's — so it inks the row-0 slot, never the frame
+        // center.
+        let buf = painted_avatar_scene(&red_figure());
+        let at = |x: i32, y: i32| buf[y as usize * 800 + x as usize];
+        assert_eq!(at(78, 316), pack_xrgb(255, 0, 0));
+        assert_ne!(at(400, 300), pack_xrgb(255, 0, 0));
+    }
+
+    #[test]
+    fn result_avatar_clips_to_the_exe_row_band() {
+        // A figure taller than the 22 px row band inks the band and
+        // stops: the row below keeps the backdrop.
+        let buf = painted_avatar_scene(&solid_figure(10, 40, [0x00, 0x7C]));
+        let at = |x: i32, y: i32| buf[y as usize * 800 + x as usize];
+        assert_eq!(at(78, 337), pack_xrgb(255, 0, 0));
+        assert_ne!(at(78, 338), pack_xrgb(255, 0, 0));
+        assert_ne!(at(78, 315), pack_xrgb(255, 0, 0));
+    }
+
+    #[test]
+    fn result_avatar_hangs_its_visible_box_at_the_slot() {
+        // Staged layers author their own canvas anchors (the worn
+        // figure rides `avatar.opa` anchors near (119,78)); the row
+        // slot hangs the figure's visible box, not its first layer,
+        // so an offset figure still inks the slot origin.
+        let mut figure = AvatarFigure::default();
+        figure.push_layer(FigureLayer {
+            image: Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap(),
+            dx: 10,
+            dy: 5,
+            colorkey: 0xFFFF,
+        });
+        let buf = painted_avatar_scene(&figure);
+        let at = |x: i32, y: i32| buf[y as usize * 800 + x as usize];
+        assert_eq!(at(78, 316), pack_xrgb(255, 0, 0));
+        assert_ne!(at(88, 321), pack_xrgb(255, 0, 0));
     }
 
     #[test]
