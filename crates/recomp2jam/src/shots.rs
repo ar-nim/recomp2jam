@@ -3483,6 +3483,10 @@ mod tests {
         // differs from the master view in its own seat — the guest is
         // not the room master and sees READY instead of START. The
         // select-music dialog and panel stay master-only either way.
+        if read_install_archives(&install_root()).interface.is_none() {
+            println!("skip: missing {INTERFACE_ARCHIVE}");
+            return;
+        }
         let shots = capture_all().unwrap();
         let by_name = |name: &str| {
             shots
