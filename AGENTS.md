@@ -36,3 +36,17 @@ Rules:
 Done means: `cargo fmt --check`, `cargo clippy --workspace
 --all-targets -- -D warnings`, and `cargo test --workspace` are green,
 and the work is committed and pushed.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live in GitHub Issues for `ar-nim/recomp2jam` (via the `gh` CLI). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `GLOSSARY.md` plus `docs/adr/` at the repo root. See `docs/agents/domain.md`.
