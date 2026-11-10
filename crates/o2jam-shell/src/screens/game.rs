@@ -19,10 +19,11 @@ use super::paint::{
     paint_payment_notice, paint_planet_options, paint_planet_quit, paint_planet_scene,
     paint_playing_overlay, paint_result, paint_result_scene, paint_room_chat, paint_room_list,
     paint_room_scene, paint_room_user_panel, paint_screen, paint_shop_board, paint_shop_scene,
-    paint_waiting_chat, paint_waiting_members, paint_waiting_scene, quit_fallback_rects, rect_hit,
-    room_panel_hit, scene_index, staged_rect_hit, BattleVerdict, ChannelChatMessage, LoadingStatus,
-    ResultPaint, ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage,
-    RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    paint_waiting_chat, paint_waiting_members, paint_waiting_scene, paint_waiting_seat_avatar,
+    quit_fallback_rects, rect_hit, room_panel_hit, scene_index, staged_rect_hit, BattleVerdict,
+    ChannelChatMessage, LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt,
+    WaitingCaptions, WaitingChatMessage, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID,
+    RESULT_RETRY_RECT,
 };
 use super::side::{
     can_return_side, can_visit_side, create_room_action_at, lanking_action_at, lanking_page_window,
@@ -4380,6 +4381,7 @@ impl ScreenGame {
         match (self.scene_art(Screen::Waiting), &self.waiting) {
             (Some(art), Some(room)) => {
                 paint_waiting_scene(frame, room, art, &captions);
+                paint_waiting_seat_avatar(frame, &art.placements, self.room_avatar.as_ref());
                 paint_waiting_chat(frame, &self.waiting_chat, &self.chat_input, &art.placements);
             }
             (Some(art), None) => paint_lobby_backdrop(frame, Screen::Waiting, art),

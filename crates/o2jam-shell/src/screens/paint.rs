@@ -3147,6 +3147,55 @@ pub fn paint_waiting_scene(
     }
 }
 
+/// Seat avatar slot (`IDC_IMAGE_SWAIT_AVATAR`, code `0x1670002E`): a
+/// spriteless `SET 0x0C` member whose rect is seat-relative (the seat
+/// template's own origin), so the painter adds the seat parent's rect
+/// origin — the same write-back the clone expansion applies to the
+/// members that carry art.
+const WAITING_AVATAR_SLOT_ID: &str = "IDC_IMAGE_SWAIT_AVATAR";
+
+/// Paint the local player's worn figure into their own seat's avatar
+/// slot (seat 0, the `IDC_BUTTON_SWAIT_EXTEND1` instance the exe seats
+/// the room host on).
+///
+/// Only the local seat has a figure source in the shell: the worn stack
+/// comes from `avatar.opa` through the binary, exactly like the Result
+/// banner and the Room panel. Peers carry `RoomMember.equipment` on the
+/// wire, but the shell holds no avatar archive to stack them with —
+/// OPEN: stage the archive (or pre-stacked peer figures) and paint each
+/// occupied seat's slot the same way.
+pub fn paint_waiting_seat_avatar(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    figure: Option<&AvatarFigure>,
+) {
+    let Some(figure) = figure else {
+        return;
+    };
+    let Some(slot) = placements
+        .iter()
+        .find(|placed| placed.id == WAITING_AVATAR_SLOT_ID)
+        .map(|placed| placed.rect)
+    else {
+        return;
+    };
+    let Some(seat) = placements
+        .iter()
+        .find(|placed| placed.id == WAITING_SEAT_PARENT_IDS[0])
+        .map(|placed| placed.rect)
+    else {
+        return;
+    };
+    let native = Rect {
+        x: seat.x.saturating_add(slot.x),
+        y: seat.y.saturating_add(slot.y),
+        w: slot.w,
+        h: slot.h,
+    };
+    let scaled = scale_rect_to_frame(&native, frame.w, frame.h);
+    figure.paint_extent_centered(frame, &scaled, frame.w, frame.h);
+}
+
 /// Seat-cover control ids in seat order (`COVERAVATAR1..8`, codes
 /// `0x1650003D..44` → `.bnd` rects 60..67): each cover rect positions
 /// its own seat, anchor-free bodies included (the placement lesson).
@@ -9098,6 +9147,73 @@ mod paint_tests {
             ink_in_rect(&buf, 800, slot) > 0,
             "figure ink must land inside the staged slot"
         );
+    }
+
+    #[test]
+    fn waiting_seat_avatar_paints_the_local_figure_into_its_slot() {
+        // `IDC_IMAGE_SWAIT_AVATAR 0x1670002E` carries a seat-relative
+        // rect `(0,0,123,150)`; the painter adds seat 0's parent rect
+        // (`IDC_BUTTON_SWAIT_EXTEND1 (37,55)`) like the clone write-back.
+        let seat = |id: &str, code: u32, (x, y, w, h): (i32, i32, u32, u32)| ScenePlacement {
+            role: PlacementRole::Single,
+            id: id.to_owned(),
+            code,
+            sprite: None,
+            rect: Rect { x, y, w, h },
+        };
+        let placements = vec![
+            seat(WAITING_SEAT_PARENT_IDS[0], 0x1601_5022, (37, 55, 123, 150)),
+            seat(WAITING_AVATAR_SLOT_ID, 0x1670_002E, (0, 0, 123, 150)),
+        ];
+        let figure = icon_figure(&[0x7C00]);
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_seat_avatar(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            Some(&figure),
+        );
+        assert!(
+            ink_in_rect(
+                &buf,
+                800,
+                Rect {
+                    x: 37,
+                    y: 55,
+                    w: 123,
+                    h: 150
+                }
+            ) > 0,
+            "figure ink must land inside seat 0's slot"
+        );
+        assert_eq!(
+            ink_in_rect(
+                &buf,
+                800,
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: 20,
+                    h: 20
+                }
+            ),
+            0
+        );
+        // Without a staged figure the slot stays empty.
+        let mut empty = vec![0u32; 800 * 600];
+        paint_waiting_seat_avatar(
+            &mut Frame {
+                buf: &mut empty,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            None,
+        );
+        assert!(empty.iter().all(|pixel| *pixel == 0));
     }
 
     #[test]
