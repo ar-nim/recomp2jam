@@ -295,7 +295,12 @@ fn side_stage_data(
 
 /// Load one side screen's stage data into the game; `false` when the
 /// archives hold no art (the walk skips the shot).
-fn stage_side_art(game: &mut ScreenGame, side: SideScreen) -> bool {
+/// Stage one side screen's genuine bound art when `install-root` holds it.
+///
+/// `true` while placements staged (the walk paints file-native frames);
+/// `false` without game data (the walk keeps the flat fallback and the
+/// caller still visits — wiring never rides on art).
+pub(crate) fn stage_side_art(game: &mut ScreenGame, side: SideScreen) -> bool {
     let Some((placements, figures)) = side_stage_data(side) else {
         return false;
     };
@@ -383,7 +388,7 @@ fn stage_playing_archive(game: &mut ScreenGame, archive: &[u8]) {
 /// Layer genuine 7.55 archive art under every scene when
 /// `install-root` is present; missing or unreadable archives keep
 /// the synthetic staging. Archives stay read-only, never fail.
-fn stage_real_art(game: &mut ScreenGame) {
+pub(crate) fn stage_real_art(game: &mut ScreenGame) {
     let installed = read_install_archives(&install_root());
     if let Some(interface) = &installed.interface {
         stage_interface_archive(game, interface);

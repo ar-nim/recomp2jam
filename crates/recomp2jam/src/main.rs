@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 mod connect;
+mod e2e;
 mod live_art;
 #[cfg(test)]
 mod live_guard;
@@ -246,6 +247,14 @@ enum Command {
         /// Trace JSON path.
         #[arg(long)]
         trace: String,
+    },
+    /// End-to-end window walk: boot to Result through every landed
+    /// State with one PNG per step plus `trace.json` (headless: the
+    /// same `ScreenGame` seam the winit window runs, null audio).
+    E2e {
+        /// Evidence directory for `<seq>-<action>.png` plus `trace.json`.
+        #[arg(long, default_value = "/home/arnim/scratch/e2e-walk")]
+        out_dir: String,
     },
     /// Stub gameplay entry point (autoplay with null backend for now).
     Play {
@@ -840,6 +849,7 @@ fn run_command(command: Command) -> Result<()> {
             );
             Ok(())
         }
+        Command::E2e { out_dir } => run_e2e(&out_dir),
         Command::Play {
             chart,
             ojm,
@@ -980,6 +990,27 @@ fn run_play(
         anyhow::anyhow!("--chart FILE.ojn is required (add --window for the empty shell)")
     })?;
     run_autoplay(&chart_path, ojm.as_deref(), level, sound)
+}
+
+/// `e2e` subcommand: headless boot-to-Result walk with PNGs.
+///
+/// # Errors
+///
+/// Whatever the walk wiring or the filesystem reports.
+fn run_e2e(out_dir: &str) -> Result<()> {
+    let report = e2e::write_e2e_evidence(std::path::Path::new(out_dir))?;
+    for step in &report.steps {
+        println!(
+            "{:02} {:40} screen={:<8} hash={:016x}",
+            step.sequence, step.action, step.screen, step.state_hash
+        );
+    }
+    println!("result hash={:016x}", report.result_hash);
+    println!(
+        "final {} hash={:016x}",
+        report.final_screen, report.final_hash
+    );
+    Ok(())
 }
 
 /// `session-walk` subcommand: live windowed-session walk with PNGs.
