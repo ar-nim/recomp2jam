@@ -104,6 +104,7 @@ pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
     // room list): Confirm takes the highlighted row into Room.
     game.menu_key(MenuKey::Confirm, true);
     assert_eq!(game.screen(), Screen::Room, "row confirm → Room");
+    stage_room_identity(&mut game);
     shots.push(shoot_checked(&mut game, "room", Screen::Room, 0)?);
     game.menu_key(MenuKey::Confirm, true);
     shots.push(shoot_checked(&mut game, "waiting", Screen::Waiting, 0)?);
@@ -318,6 +319,28 @@ fn side_shot_name(side: SideScreen) -> &'static str {
         SideScreen::Payment => "payment",
         SideScreen::Tutorial => "tutorial",
         SideScreen::Planet => "planet",
+    }
+}
+
+/// Stage the room lobby's user panel before its shot: the identity
+/// readouts ride a scripted `CharacterInfo` (the values the 7.55 capture
+/// shows for the local tester: Lv 2, 2133 exp, zero penalty), and the
+/// avatar slot stacks the same worn figure the Result banner uses.
+/// Scripted fixture data only — no server record, no game bytes.
+fn stage_room_identity(game: &mut ScreenGame) {
+    let character = o2jam_net::CharacterInfo {
+        nickname: "tester".to_owned(),
+        level: 2,
+        experience: 2133,
+        ..o2jam_net::CharacterInfo::default()
+    };
+    game.set_myroom_character(character);
+    if let Ok(archive) = std::fs::read(install_root().join(AVATAR_ARCHIVE)) {
+        if let Ok(figure) = stack_worn_figure(&archive, &PLAYING_EQUIPMENT, true) {
+            if !figure.is_empty() {
+                game.load_room_avatar(figure);
+            }
+        }
     }
 }
 

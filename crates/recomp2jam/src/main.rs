@@ -1224,6 +1224,9 @@ fn setup_avatar(
         let ids = connect::parse_equipment(equip)?;
         let figure = connect::build_worn_figure(opa_path, &ids, avatar_male)?;
         tracing::info!(layers = figure.len(), "avatar stacked");
+        // The Result banner and the Room lobby both show the worn
+        // figure (the room's `IDC_IMAGE_SROOM_AVATA` slot, ticket #30).
+        game.load_room_avatar(figure.clone());
         game.load_avatar(figure);
     }
     Ok(())

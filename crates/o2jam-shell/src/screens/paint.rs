@@ -52,8 +52,8 @@ use super::side::{
 use o2jam_file::ControlList;
 use o2jam_game::RoomTeams;
 use o2jam_net::{
-    rooms::om_icon_frame, ChannelState, Difficulty, GameMode, GameSpeed, JoinedRoom, KeyMode,
-    RankEntry, RoomListEntry, RoomSlot, RoomSlotState,
+    rooms::om_icon_frame, ChannelState, CharacterInfo, Difficulty, GameMode, GameSpeed, JoinedRoom,
+    KeyMode, RankEntry, RoomListEntry, RoomSlot, RoomSlotState,
 };
 use o2jam_render::font::{draw_text_cell, text_width_cell, Cell};
 use o2jam_render::{
@@ -2818,6 +2818,121 @@ pub fn paint_room_scene(
     // the exe's per-row template clone offsets stay OPEN past the
     // title/number/count pins (`findings.md` §2).
     paint_room_rows(frame, rooms, highlight, Some(art));
+}
+
+/// Room user-panel control ids (`STATE_ROOM` text/image wells; the
+/// rects pair through the verified ordinal rule).
+const ROOM_NICKNAME_ID: &str = "IDC_TEXT_SROOM_NICKNAME";
+/// Level well (`Level` row).
+const ROOM_PANEL_LEVEL_ID: &str = "IDC_TEXT_SROOM_MYLEVEL";
+/// Experience well (`Exp.` row).
+const ROOM_PANEL_EXP_ID: &str = "IDC_TEXT_SROOM_EXP";
+/// Grade well (`정·직` row).
+const ROOM_PANEL_GRADE_ID: &str = "IDC_TEXT_SROOM_WINLOSE";
+/// Cash-point well (`Cash Point` row).
+const ROOM_PANEL_CASH_ID: &str = "IDC_TEXT_SROOM_BONUSPOINT";
+/// Penalty-count well (`패널티횟수` row).
+const ROOM_PANEL_PENALTY_COUNT_ID: &str = "IDC_TEXT_SROOM_PENALTYCOUNT";
+/// Penalty-level well (`패널티레벨` row).
+const ROOM_PANEL_PENALTY_LEVEL_ID: &str = "IDC_TEXT_SROOM_PENALTYLEVEL";
+/// Band well (`나의밴드` row).
+const ROOM_PANEL_BAND_ID: &str = "IDC_TEXT_SROOM_GUILD";
+/// Worn-figure slot (`IDC_IMAGE_SROOM_AVATA`, code `0x13700013`).
+const ROOM_AVATAR_ID: &str = "IDC_IMAGE_SROOM_AVATA";
+
+/// Placeholder the exe paints in the grade and band wells: the 7.55
+/// room capture (`/home/arnim/scratch/ac-room.png`, tester Lv 2) shows
+/// `준비중..` in both, beside real values in the other wells.
+const ROOM_PANEL_PLACEHOLDER: &str = "준비중..";
+
+/// Paint the room's user panel: the worn figure in its staged slot and
+/// the identity readouts in their staged text wells.
+///
+/// Wells come from the parsed `.bnd` rects (owner rule `f38f3`); a well
+/// the staged art does not name stays unpainted. Values ride
+/// `GetCharacterInfo` 2001 (`CharacterInfo`) — the same record the
+/// MyRoom scene reads — and the nickname line prefixes the level, as
+/// the 7.55 room capture shows (`Lv.2 tester`).
+///
+/// OPEN wells (nothing painted, next steps named):
+/// - `NEXTUPEXP`: needs the level-up experience table (not parsed).
+/// - `MYRANK` / `NOTICE_TEXT` / `DESC`: web-served text, no client
+///   source (the capture shows art text in `DESC`).
+pub fn paint_room_user_panel(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    character: Option<&CharacterInfo>,
+    figure: Option<&AvatarFigure>,
+) {
+    if let (Some(figure), Some(slot)) = (figure, staged_field_rect(placements, ROOM_AVATAR_ID)) {
+        let slot = scale_rect_to_frame(&slot, frame.w, frame.h);
+        figure.paint_extent_centered(frame, &slot, frame.w, frame.h);
+    }
+    if let Some(character) = character {
+        let ink = caption_ink(art_title_ink());
+        let nickname = format!("Lv.{} {}", character.level, character.nickname);
+        paint_room_panel_value(frame, placements, ROOM_NICKNAME_ID, &nickname, ink);
+        paint_room_panel_number(frame, placements, ROOM_PANEL_LEVEL_ID, character.level, ink);
+        paint_room_panel_number(
+            frame,
+            placements,
+            ROOM_PANEL_EXP_ID,
+            character.experience,
+            ink,
+        );
+        paint_room_panel_number(
+            frame,
+            placements,
+            ROOM_PANEL_CASH_ID,
+            character.bonus_point,
+            ink,
+        );
+        paint_room_panel_number(
+            frame,
+            placements,
+            ROOM_PANEL_PENALTY_COUNT_ID,
+            i32::from(character.penalty_count),
+            ink,
+        );
+        paint_room_panel_number(
+            frame,
+            placements,
+            ROOM_PANEL_PENALTY_LEVEL_ID,
+            i32::from(character.penalty_level),
+            ink,
+        );
+    }
+    // The grade and band wells carry the exe's own placeholder.
+    let ink = caption_ink(art_title_ink());
+    for id in [ROOM_PANEL_GRADE_ID, ROOM_PANEL_BAND_ID] {
+        paint_room_panel_value(frame, placements, id, ROOM_PANEL_PLACEHOLDER, ink);
+    }
+}
+
+/// One integer into its staged well.
+fn paint_room_panel_number(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    id: &str,
+    value: i32,
+    ink: [u8; 4],
+) {
+    paint_room_panel_value(frame, placements, id, &value.to_string(), ink);
+}
+
+/// One value into its staged well: left-anchored, sized to the rect at
+/// the exe's GDI cap share (the same fit the row fields use).
+fn paint_room_panel_value(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    id: &str,
+    text: &str,
+    ink: [u8; 4],
+) {
+    let Some(rect) = staged_field_rect(placements, id) else {
+        return;
+    };
+    paint_text_into_rect(frame, rect, text, ink);
 }
 
 /// Seats shown on the waiting screen: self plus the seven wire slots.
@@ -8825,6 +8940,164 @@ mod paint_tests {
         // same source the flat fallback and the READY toggle use).
         assert_eq!(buf[55 * 800 + 165], pack_xrgb(0x30, 0xE0, 0x30));
         assert_eq!(buf[55 * 800 + 23], pack_xrgb(0x30, 0xE0, 0x30));
+    }
+
+    /// The room panel's staged wells plus its avatar slot, at the rect
+    /// table the 7.55 `State_Room.bnd` pairs (`IDC_TEXT_SROOM_*`).
+    fn room_user_panel_placements() -> Vec<ScenePlacement> {
+        [
+            (ROOM_NICKNAME_ID, 0x1340_0012, (651, 92, 119, 17)),
+            (ROOM_PANEL_LEVEL_ID, 0x1340_003E, (688, 285, 89, 11)),
+            (ROOM_PANEL_EXP_ID, 0x1340_003F, (688, 308, 89, 11)),
+            (ROOM_PANEL_GRADE_ID, 0x1340_0040, (688, 331, 89, 11)),
+            (ROOM_PANEL_CASH_ID, 0x1340_0041, (714, 354, 63, 11)),
+            (ROOM_PANEL_PENALTY_COUNT_ID, 0x1340_0043, (714, 400, 63, 11)),
+            (ROOM_PANEL_PENALTY_LEVEL_ID, 0x1340_0044, (714, 423, 63, 11)),
+            (ROOM_PANEL_BAND_ID, 0x1340_0045, (705, 446, 72, 11)),
+            (ROOM_AVATAR_ID, 0x1370_0013, (649, 117, 123, 150)),
+        ]
+        .into_iter()
+        .map(|(id, code, (x, y, w, h))| ScenePlacement {
+            role: PlacementRole::Single,
+            id: id.to_owned(),
+            code,
+            sprite: None,
+            rect: Rect { x, y, w, h },
+        })
+        .collect()
+    }
+
+    /// Inked pixels inside one native rect.
+    fn ink_in_rect(buf: &[u32], w: usize, rect: Rect) -> usize {
+        let mut count = 0;
+        for y in rect.y..rect.y + i32::try_from(rect.h).expect("h fits") {
+            for x in rect.x..rect.x + i32::try_from(rect.w).expect("w fits") {
+                if buf[y as usize * w + x as usize] != 0 {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
+    #[test]
+    fn room_user_panel_paints_character_values_into_staged_wells() {
+        let placements = room_user_panel_placements();
+        let character = CharacterInfo {
+            nickname: "tester".to_owned(),
+            level: 2,
+            experience: 2133,
+            bonus_point: 7,
+            penalty_count: 1,
+            penalty_level: 3,
+            ..CharacterInfo::default()
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_room_user_panel(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            Some(&character),
+            None,
+        );
+        for id in [
+            ROOM_NICKNAME_ID,
+            ROOM_PANEL_LEVEL_ID,
+            ROOM_PANEL_EXP_ID,
+            ROOM_PANEL_CASH_ID,
+            ROOM_PANEL_PENALTY_COUNT_ID,
+            ROOM_PANEL_PENALTY_LEVEL_ID,
+        ] {
+            let rect = placements
+                .iter()
+                .find(|placed| placed.id == id)
+                .expect("well staged")
+                .rect;
+            assert!(
+                ink_in_rect(&buf, 800, rect) > 0,
+                "{id} must carry its value ink"
+            );
+        }
+        // The grade and band wells carry the exe's own placeholder.
+        for id in [ROOM_PANEL_GRADE_ID, ROOM_PANEL_BAND_ID] {
+            let rect = placements
+                .iter()
+                .find(|placed| placed.id == id)
+                .expect("well staged")
+                .rect;
+            assert!(ink_in_rect(&buf, 800, rect) > 0, "{id} shows 준비중..");
+        }
+    }
+
+    #[test]
+    fn room_user_panel_without_a_character_paints_only_the_placeholders() {
+        let placements = room_user_panel_placements();
+        let mut buf = vec![0u32; 800 * 600];
+        paint_room_user_panel(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            None,
+            None,
+        );
+        for id in [
+            ROOM_NICKNAME_ID,
+            ROOM_PANEL_LEVEL_ID,
+            ROOM_PANEL_EXP_ID,
+            ROOM_PANEL_CASH_ID,
+            ROOM_PANEL_PENALTY_COUNT_ID,
+            ROOM_PANEL_PENALTY_LEVEL_ID,
+        ] {
+            let rect = placements
+                .iter()
+                .find(|placed| placed.id == id)
+                .expect("well staged")
+                .rect;
+            assert_eq!(ink_in_rect(&buf, 800, rect), 0, "{id} stays empty");
+        }
+        assert!(
+            ink_in_rect(
+                &buf,
+                800,
+                placements
+                    .iter()
+                    .find(|placed| placed.id == ROOM_PANEL_GRADE_ID)
+                    .expect("grade well")
+                    .rect
+            ) > 0
+        );
+    }
+
+    #[test]
+    fn room_user_panel_paints_the_worn_figure_in_its_slot() {
+        let placements = room_user_panel_placements();
+        let slot = placements
+            .iter()
+            .find(|placed| placed.id == ROOM_AVATAR_ID)
+            .expect("slot staged")
+            .rect;
+        let figure = icon_figure(&[0x7C00]);
+        let mut buf = vec![0u32; 800 * 600];
+        paint_room_user_panel(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            None,
+            Some(&figure),
+        );
+        assert!(
+            ink_in_rect(&buf, 800, slot) > 0,
+            "figure ink must land inside the staged slot"
+        );
     }
 
     #[test]

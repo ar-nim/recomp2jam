@@ -18,11 +18,11 @@ use super::paint::{
     paint_music_shop_cart, paint_music_shop_scene, paint_myroom_data, paint_myroom_scene,
     paint_payment_notice, paint_planet_options, paint_planet_quit, paint_planet_scene,
     paint_playing_overlay, paint_result, paint_result_scene, paint_room_chat, paint_room_list,
-    paint_room_scene, paint_screen, paint_shop_board, paint_shop_scene, paint_waiting_chat,
-    paint_waiting_members, paint_waiting_scene, quit_fallback_rects, rect_hit, room_panel_hit,
-    scene_index, staged_rect_hit, BattleVerdict, ChannelChatMessage, LoadingStatus, ResultPaint,
-    ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage, RESULT_BACK_ID,
-    RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    paint_room_scene, paint_room_user_panel, paint_screen, paint_shop_board, paint_shop_scene,
+    paint_waiting_chat, paint_waiting_members, paint_waiting_scene, quit_fallback_rects, rect_hit,
+    room_panel_hit, scene_index, staged_rect_hit, BattleVerdict, ChannelChatMessage, LoadingStatus,
+    ResultPaint, ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage,
+    RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::side::{
     can_return_side, can_visit_side, create_room_action_at, lanking_action_at, lanking_page_window,
@@ -636,6 +636,10 @@ pub struct ScreenGame {
     /// inventory, gifts, identity and cash captions (`None` until the
     /// session stages it).
     myroom_character: Option<CharacterInfo>,
+    /// Worn figure the Room lobby paints in its avatar slot
+    /// (`IDC_IMAGE_SROOM_AVATA`): the same stack the binary builds from
+    /// `avatar.opa` for the Result screen. `None` paints no figure.
+    room_avatar: Option<AvatarFigure>,
     /// Committed equip send awaiting the session (5004; the apply
     /// button owns it).
     pending_equip: Option<EquipItem>,
@@ -960,6 +964,7 @@ impl ScreenGame {
             myroom: MyRoomState::new(),
             myroom_items: None,
             myroom_character: None,
+            room_avatar: None,
             pending_equip: None,
             pending_gift_claim: None,
             pending_gift_list: false,
@@ -3324,6 +3329,15 @@ impl ScreenGame {
         self
     }
 
+    /// Stage the worn figure the Room lobby paints in its avatar slot
+    /// (`IDC_IMAGE_SROOM_AVATA`, code `0x13700013`). The binary stacks it
+    /// from `avatar.opa` exactly like the Result figure; a missing
+    /// archive stages nothing and the slot stays empty.
+    pub fn load_room_avatar(&mut self, figure: AvatarFigure) -> &mut Self {
+        self.room_avatar = Some(figure);
+        self
+    }
+
     /// Live avatar-room selection (slot pick, bag/gift pages+cursors).
     #[must_use]
     pub const fn myroom(&self) -> MyRoomState {
@@ -4262,6 +4276,16 @@ impl ScreenGame {
                 self.room_chat.history(),
                 self.room_chat.draft(),
                 &art.placements,
+            );
+            // The user panel rides its staged wells: the worn figure in
+            // its slot and the identity readouts (ticket #30). Without a
+            // fetched character the values stay empty; without a staged
+            // figure the slot stays empty.
+            paint_room_user_panel(
+                frame,
+                &art.placements,
+                self.myroom_character.as_ref(),
+                self.room_avatar.as_ref(),
             );
         }
         // The open room dialog layers over the lobby: staged sheet
