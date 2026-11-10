@@ -110,10 +110,58 @@ wrong; Myroom stages bound like every other side screen.
 - `STATE_SHOP` / `STATE_MUSICSHOP` (`CStateShop`/`CStateMShop`,
   `0xA4`/`0x6B`; `Payment` back-ends, `CMyBag`/`CCart`). Bound
   placements stage (ItemShop 186 rects, MShop 138 rects); every
-  staged figure paints at its rect. Data rows (items, songs, prices,
-  pager cells) stay unpainted stand-ins: no data join exists and the
-  audit gives no FILE rows for these scenes. Buy/gift/cart/search/
-  sort/pager flows and entry unwired (all OPEN).
+  staged figure paints at its rect. Ticket #21 (2026-11-12): the
+  item board paints eight goods per page under the staged
+  `ITEMBUY1..8` hit areas (`0x14200018..0x1F`) — names from the
+  parsed `Itemdata_Korea.dat` table into the staged `ITEMNAME`
+  templates (`0x1440002C..0x33`), prices into the staged `ITEMWON`
+  templates (`0x14400054..0x5B`), the wallet gem word into
+  `GEMMONEY` (`0x28`, `--` until 5028/5001 words arrive), the
+  checked cart rows into the row-local `CART` templates tiled
+  over the staged `CART_EX` slots, and both pager readouts
+  (`SCROLL` children ride the staged scroll origin; cart digits
+  into the staged page-number unions). Row toggles check the
+  cart and the cart `BUYITEM` (`0x70`) queues the pinned empty
+  `SyncItemPurchase` 5000 send (file `0xf3fa8`). The song board
+  paints five catalog songs per page under the staged `MS_EX`
+  hit areas (`0x1A01802D..0x31`) — TITLE/ARTIST/EDITOR/GENRE/BPM
+  into the row-local `MMS` templates tiled per slot, ISBUY from
+  the staged 4031 flags (`FREE`/`OWNED`) — with TITLE/DIFF/BPM
+  sorts (`0x80..0x82`), the `MSALL` pager (`0x0A`/`0x0B`), the
+  staged cart rows plus both pager readouts. Per-row GEM_BUY/
+  WON_BUY (`0x41`/`0x46`) and the cart `BUYITEM` (`0x5D`) queue
+  the pinned empty `SyncMusicPurchase` 5010 send (send-switch
+  file `0xa4df0` index 8). Both wire rides stay ASSUMED behind
+  the scripted-stub seam and the take-seam (5001 undecodable
+  standalone, 5011 untraced). Guards:
+  `shop_buy_buttons_answer_contiguous_row_slots`,
+  `shop_scroll_pager_offsets_by_staged_scroll_origin`,
+  `shop_cart_buy_and_pager_answer_their_staged_buttons`,
+  `music_shop_row_slots_answer_the_ms_ex_hit_areas`,
+  `music_shop_buy_buttons_tile_per_row_slot`,
+  `music_shop_sort_and_pager_answer_their_staged_buttons`,
+  `shop_browse_toggles_cart_and_commits_5000`,
+  `shop_buyitem_without_cart_queues_nothing`,
+  `shop_pager_turns_eight_row_pages`,
+  `shop_wallet_gem_caption_waits_for_wire_data`,
+  `shop_unstaged_clicks_land_nowhere`,
+  `music_shop_sorts_pages_and_buys`,
+  `music_shop_row_pick_stages_the_cart_and_cart_buy_queues_5010`,
+  `music_shop_unstaged_clicks_land_nowhere`,
+  `shops_hand_session_browses_and_buys`,
+  `music_shop_hand_session_sorts_pages_and_buys`,
+  `shop_board_paints_names_prices_and_wallet_at_staged_rects`,
+  `music_shop_board_paints_catalog_cells_and_pager_at_staged_rects`;
+  smoke `docs/smoke/shops-hand-session.md`; shots oracle holds
+  with only the intended `shop.png` + `musicshop.png` deltas
+  (rows + pagers + wallet + cart paint). PASS (rows + pagers +
+  buys + picks + staged flags; sort directions + pager pairings
+  + cart joins ASSUMED with named rig next steps) / OPEN
+  (gem/song prices, song DIFF, money texts, filters, set-item,
+  bag, gift, MYALL pager, search, TOP100, preview, download —
+  next step: SendInput sweep on the live shops per the
+  `~/scratch/planet-verify/` recipe plus a gateway replay
+  pinning the price words).
 - `STATE_MYROOM` (`0x6A`; `CItemManager`, `CPlayerInfo`). Bound
   placements stage (111 rects). Ticket #19 (2026-11-10): slot
   selection records through staged `.bnd` rects; equip commits

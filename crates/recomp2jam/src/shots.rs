@@ -128,6 +128,15 @@ pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
         if side == SideScreen::Lanking {
             stage_lanking_walk_board(&mut game);
         }
+        // The shop shots prove goods, prices, and pager cells
+        // paint: stage the walk catalogs plus the scripted stubs
+        // before visiting.
+        if side == SideScreen::Shop {
+            stage_shop_walk_board(&mut game);
+        }
+        if side == SideScreen::MusicShop {
+            stage_music_shop_walk_board(&mut game);
+        }
         assert!(game.visit_side(side), "Waiting -> {side:?}");
         shots.push(shoot_side(&mut game, side)?);
         assert!(game.leave_side(), "{side:?} -> Waiting");
@@ -679,6 +688,107 @@ fn lanking_walk_stub_board() -> o2jam_net::MusicPlayRankingAnswer {
             RankEntry::default(),
             row(2, "WalkRival", RankDelta::Down),
         ],
+    }
+}
+
+/// Stage the item-shop walk board: the installed 7.55 avatar item
+/// table for the eight goods rows plus a scripted wallet stub and
+/// two checked cart rows, so the oracle proves names, prices, the
+/// gem cell, cart rows, and pager readouts paint. The wallet words
+/// are synthetic (no live gateway); the goods are real catalog
+/// data. Runs before the shop side shot.
+fn stage_shop_walk_board(game: &mut ScreenGame) {
+    use o2jam_net::wallet::SyncCashPointResponse;
+    let Ok(archive) = std::fs::read(install_root().join(AVATAR_ARCHIVE)) else {
+        return;
+    };
+    let Ok(list) = o2jam_file::parse_opi(&archive) else {
+        return;
+    };
+    let Some(entry) = list.iter().find(|entry| entry.name == "Itemdata_Korea.dat") else {
+        return;
+    };
+    let Some(bytes) = archive.get(entry.data_offset..entry.data_offset + entry.size as usize)
+    else {
+        return;
+    };
+    let Ok(table) = o2jam_file::parse_avatar_item_table(bytes) else {
+        return;
+    };
+    game.set_shop_catalog(&table);
+    if game.shop_visible_goods().is_empty() {
+        return;
+    }
+    game.apply_shop_cash_point(&SyncCashPointResponse {
+        gem: 1200,
+        cash_point: 50,
+    });
+    for good in game.shop_visible_goods().into_iter().take(2) {
+        let id = good.item_id;
+        if !game.shop_cart().contains(&id) {
+            // Cart checks ride the staged ITEMBUY hit areas when
+            // present; the direct push keeps the walk honest when
+            // a placement is missing. Both cross the same cart.
+            game.shop_cart_push(id);
+        }
+    }
+}
+
+/// Stage the song-shop walk board: the installed 7.55 song index
+/// (or the synthetic fallback) for the five song rows plus a
+/// scripted 4031 flag stub (two first-page songs owned) and two
+/// staged cart picks, so the oracle proves catalog cells, bought
+/// flags, cart rows, and pager readouts paint. The flag stub is
+/// synthetic (ASSUMED wire-side); the songs are real catalog data.
+/// Runs before the music-shop side shot.
+fn stage_music_shop_walk_board(game: &mut ScreenGame) {
+    if let Ok(archive) = std::fs::read(install_root().join(MUSICSELECT_CATALOG)) {
+        if let Ok(entries) = o2jam_file::parse_ojn_list(&archive) {
+            game.set_music_shop_catalog(&entries);
+            if !game.music_shop_visible_rows().is_empty() {
+                game.stage_music_shop_board(music_shop_walk_stub_flags(game));
+                stage_music_shop_walk_cart(game);
+                return;
+            }
+        }
+    }
+    if let Ok(entries) = o2jam_file::parse_ojn_list(&musicselect_fallback_catalog()) {
+        game.set_music_shop_catalog(&entries);
+        game.stage_music_shop_board(music_shop_walk_stub_flags(game));
+        stage_music_shop_walk_cart(game);
+    }
+}
+
+/// Scripted 4031 flag stub for the walk: the first and fourth
+/// visible songs read owned (synthetic presence — no live gateway).
+fn music_shop_walk_stub_flags(game: &ScreenGame) -> o2jam_net::play::MusicListAnswer {
+    use o2jam_net::play::MusicListEntry;
+    let entries = game
+        .music_shop_visible_rows()
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| *index == 0 || *index == 3)
+        .filter_map(|(_, row)| u16::try_from(row.song.song_id).ok())
+        .map(|id| MusicListEntry {
+            id,
+            notes_ex: 100,
+            notes_nx: 200,
+            notes_hx: 300,
+        })
+        .collect();
+    o2jam_net::play::MusicListAnswer {
+        entries,
+        free_music: false,
+    }
+}
+
+/// Check the first two visible song rows into the walk cart.
+fn stage_music_shop_walk_cart(game: &mut ScreenGame) {
+    for row in game.music_shop_visible_rows().into_iter().take(2) {
+        let id = row.song.song_id;
+        if !game.music_shop_cart().contains(&id) {
+            game.music_shop_cart_push(id);
+        }
     }
 }
 /// (`DAILOG_SELECTMUSIC` over Waiting) over the waiting seats;

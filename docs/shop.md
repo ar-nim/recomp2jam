@@ -55,11 +55,39 @@ names the inbound button. Names only — no transition claimed.
 
 Shell screen + paint + flow + live staging — DONE
    (`Screen::Shop`, `paint_shop_scene`, all-reject flow,
-   `stage_interface_scenes` + soak tests; clicks land nowhere per P0).
+   `stage_interface_scenes` + soak tests; side-screen clicks route
+   through `click_shop` since ticket #21).
+
+## Ticket #21 (2026-11-12)
+
+Eight goods per page under the staged `ITEMBUY1..8` hit areas
+(`0x14200018..0x1F`, two rows of four on the staged dump). Row
+names ink the staged `ITEMNAME1..8` TEXT templates
+(`0x1440002C..0x33`) from the parsed `Itemdata_Korea.dat` table
+and the parsed price inks the staged `ITEMWON1..8` TEXT templates
+(`0x14400054..0x5B`); the `ITEMGEM1..8` templates stay blank
+(the parsed row carries one price word and the entry `+0x18`
+gem-price join is unpinned — next step: file→entry price mapping
+plus a rig capture at known prices). The item-list pager is the
+staged scroll (`IDC_SCROLL_SSHOP_ITEM`, `0x14022047` at
+(221,374)): its LEFT/RIGHT children (`0x48`/`0x49`) stage
+scroll-relative, so hit-testing offsets by the staged scroll
+origin — geometry from parsed rects, never literals. The cart
+commits through `BUYITEM` (`0x70`) as the pinned empty
+`SyncItemPurchase` 5000 send (file `0xf3fa8`); the 5001 answer
+is undecodable standalone, so the wire ride stays ASSUMED behind
+the take-seam (`docs/shop-buy.md`). Sort/filter/set-item/bag/
+gift semantics stay display-only OPEN (next step: SendInput sweep
+on the live shop per the `~/scratch/planet-verify/` recipe).
 
 ## OPEN
 
 1. Entry/exit dispatch call sites.
-2. TEXT caption and icon staging sources.
-3. Buy/gift/cart/set-item click semantics (P0: unevidenced).
-4. Scroll, bag pager, planet pager, ext-menu filter behavior.
+2. TEXT caption and icon staging sources (GEM cell staged from
+   5028/5001 words since ticket #21; `MGASH` source unpinned).
+3. Buy/gift/cart/set-item click semantics — PARTIAL: `ITEMBUY`
+   checks the cart, `BUYITEM` commits 5000 (ASSUMED wire-side);
+   gift/set-item unevidenced.
+4. Scroll, bag pager, planet pager, ext-menu filter behavior —
+   PARTIAL: scroll pager steps and holds (origin-offset
+   read ASSUMED); bag/planet pagers and filters display-only.

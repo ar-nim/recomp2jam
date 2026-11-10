@@ -196,6 +196,14 @@ impl WireMessage for EquipItemResponse {
 // the common tail (VA `0x4f4051`, file `0xf4051`) transmits it unchanged.
 empty_message!(SyncItemPurchase, 5000);
 
+// `SyncMusicPurchase` 5010 (song-shop buy request) sends a bare header:
+// the `0x138a`-based send builder (file `0xa4df0`) case at index 8
+// (`0x138a` + 8 = `0x1392` = 5010) is the empty-send case — opcode
+// word plus a length word of 4, no appends (`docs/shop-buy.md`).
+// The name follows `docs/net-protocol.md` (Memoryer corroboration);
+// the 5011 answer shape is untraced, so no response type is claimed.
+empty_message!(SyncMusicPurchase, 5010);
+
 /// First 16 wire bytes of a `SyncItemPurchase` 5001 response: the
 /// four-word wallet prefix (`Gem`, `Point`, `O2Cash`, `CashPoint`).
 ///
@@ -1069,6 +1077,39 @@ mod tests {
         assert_eq!(
             SyncItemPurchase::decode_frame(&frame),
             Err(Error::UnknownCommand(5028))
+        );
+    }
+
+    #[test]
+    fn sync_music_purchase_encodes_bare_frame() {
+        assert_eq!(SyncMusicPurchase.encode(), vec![0x04, 0x00, 0x92, 0x13]);
+    }
+
+    #[test]
+    fn sync_music_purchase_round_trips_through_frame() {
+        let frame = decode_frame(&SyncMusicPurchase.encode()).unwrap();
+        assert_eq!(frame.id, 5010);
+        assert_eq!(
+            SyncMusicPurchase::decode_frame(&frame),
+            Ok(SyncMusicPurchase)
+        );
+    }
+
+    #[test]
+    fn sync_music_purchase_rejects_trailing_bytes() {
+        let frame = decode_frame(&[0x05, 0x00, 0x92, 0x13, 0x00]).unwrap();
+        assert_eq!(
+            SyncMusicPurchase::decode_frame(&frame),
+            Err(Error::TrailingBytes(1))
+        );
+    }
+
+    #[test]
+    fn sync_music_purchase_rejects_wrong_command() {
+        let frame = decode_frame(&SyncItemPurchase.encode()).unwrap();
+        assert_eq!(
+            SyncMusicPurchase::decode_frame(&frame),
+            Err(Error::UnknownCommand(5000))
         );
     }
 

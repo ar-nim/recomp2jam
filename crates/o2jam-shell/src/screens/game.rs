@@ -14,57 +14,61 @@ use super::paint::{
     battle_verdict, channel_dialog_x_hit, channel_row_hit, channel_viewport, dialog_rect_hit,
     has_room_panels, list_row_hit, paint_avi_scene, paint_channel_chat, paint_channel_list,
     paint_channel_scene, paint_lanking_board, paint_lanking_scene, paint_loading_scene,
-    paint_loading_scene_with_status, paint_lobby_backdrop, paint_music_shop_scene,
-    paint_myroom_data, paint_myroom_scene, paint_payment_notice, paint_planet_options,
-    paint_planet_quit, paint_planet_scene, paint_playing_overlay, paint_result, paint_result_scene,
-    paint_room_list, paint_room_scene, paint_screen, paint_shop_scene, paint_waiting_chat,
-    paint_waiting_members, paint_waiting_scene, quit_fallback_rects, rect_hit, room_panel_hit,
-    scene_index, staged_rect_hit, BattleVerdict, ChannelChatMessage, LoadingStatus, ResultPaint,
-    ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage, RESULT_BACK_ID,
-    RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    paint_loading_scene_with_status, paint_lobby_backdrop, paint_music_shop_board,
+    paint_music_shop_cart, paint_music_shop_scene, paint_myroom_data, paint_myroom_scene,
+    paint_payment_notice, paint_planet_options, paint_planet_quit, paint_planet_scene,
+    paint_playing_overlay, paint_result, paint_result_scene, paint_room_list, paint_room_scene,
+    paint_screen, paint_shop_board, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
+    paint_waiting_scene, quit_fallback_rects, rect_hit, room_panel_hit, scene_index,
+    staged_rect_hit, BattleVerdict, ChannelChatMessage, LoadingStatus, ResultPaint, ResultRankRow,
+    ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage, RESULT_BACK_ID, RESULT_BACK_RECT,
+    RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::side::{
     can_return_side, can_visit_side, create_room_action_at, lanking_action_at, lanking_page_window,
-    lanking_songs, myroom_action_at, myroom_bag_pages, myroom_bag_rows, myroom_equip_slot,
-    myroom_gift_captions, myroom_gift_page, myroom_gift_pages, myroom_gift_views,
-    myroom_identity_captions, myroom_record_slot, paint_side_scene, password_action_at,
-    payment_side_notice, planet_action_at, select_chosung_cells, select_chosung_layout,
-    select_difficulty_ink, select_music_rows, select_music_songs, select_pager_caption,
-    select_picked_caption, select_row_hit, select_search_caption, select_status_line,
-    sort_lanking_songs, waiting_song_detail_line, waiting_song_title_line, waiting_team_for_code,
-    CreateRoomAction, CreateRoomForm, LankingAction, LankingSong, LankingSort, MyRoomAction,
-    MyRoomState, PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo,
-    PlanetSelection, RoomDialog, SelectMusicRow, SelectMusicSong, SideScreen, LANKING_LVIEW_ROWS,
-    LANKING_RVIEW_ROWS, OPTION_GAME_BLEND_NO, OPTION_GAME_BLEND_YES, OPTION_GAME_EFFECT_HIGH,
-    OPTION_GAME_EFFECT_LOW, OPTION_GAME_EFFECT_NORMAL, OPTION_GAME_GUIDE_LONG,
-    OPTION_GAME_GUIDE_MIDDLE, OPTION_GAME_GUIDE_NOUSE, OPTION_GAME_GUIDE_SHORT,
-    OPTION_GAME_LONGNOTE_NONE, OPTION_GAME_LONGNOTE_USED, OPTION_GAME_MODE_FULL,
-    OPTION_GAME_MODE_WIN, OPTION_GAME_NOTETYPE1, OPTION_GAME_NOTETYPE2, OPTION_KEY_3KEY_FIRST,
-    OPTION_KEY_3KEY_MODE, OPTION_KEY_7KEY_MODE, OPTION_KEY_LANE_FIRST, OPTION_KEY_TEST,
-    OPTION_SOUND_BG_EFFECT_DOWN, OPTION_SOUND_BG_EFFECT_UP, OPTION_SOUND_BG_MUSIC_DOWN,
-    OPTION_SOUND_BG_MUSIC_UP, OPTION_SOUND_GAME_EFFECT_DOWN, OPTION_SOUND_GAME_EFFECT_UP,
-    OPTION_SOUND_GAME_MUSIC_DOWN, OPTION_SOUND_GAME_MUSIC_UP, PLANET_OPTION_FIRST_TAB,
-    QUIT_CANCEL_CODE, QUIT_OK_CODE, SELECT_ARTIST_RADIO, SELECT_CHO_SUNG_LEFT,
-    SELECT_CHO_SUNG_PITCH, SELECT_CHO_SUNG_ROW_CELLS, SELECT_CHO_SUNG_Y, SELECT_FILTER_BUTTON_H,
-    SELECT_FILTER_BUTTON_PITCH, SELECT_FILTER_BUTTON_TOP, SELECT_FILTER_COLUMNS,
-    SELECT_GENRE_FILTERS, SELECT_HEADER_COLUMNS, SELECT_HEADER_Y, SELECT_LEVEL_FILTERS,
-    SELECT_OK_BUTTON, SELECT_PAGER_RIGHT, SELECT_RESULT_TABS, SELECT_ROW_PITCH, SELECT_ROW_TOP,
-    SELECT_SEARCH_BOX, SELECT_SEARCH_BUTTON, SELECT_SEARCH_Y, SELECT_STATUS_H, SELECT_STATUS_Y,
-    SELECT_TABLE_HEADERS, SELECT_TABLE_LEFT, SELECT_TABLE_WIDTH, SELECT_TITLE_RADIO,
-    SELECT_VISIBLE_ROWS, SELECT_WHEEL_FILTERS,
+    lanking_songs, music_shop_action_at, music_shop_rows, myroom_action_at, myroom_bag_pages,
+    myroom_bag_rows, myroom_equip_slot, myroom_gift_captions, myroom_gift_page, myroom_gift_pages,
+    myroom_gift_views, myroom_identity_captions, myroom_record_slot, paint_side_scene,
+    password_action_at, payment_side_notice, planet_action_at, select_chosung_cells,
+    select_chosung_layout, select_difficulty_ink, select_music_rows, select_music_songs,
+    select_pager_caption, select_picked_caption, select_row_hit, select_search_caption,
+    select_status_line, shop_action_at, shop_goods, shop_page_count, sort_lanking_songs,
+    waiting_song_detail_line, waiting_song_title_line, waiting_team_for_code, wallet_row_caption,
+    CreateRoomAction, CreateRoomForm, LankingAction, LankingSong, LankingSort, MusicShopAction,
+    MusicShopRow, MyRoomAction, MyRoomState, PasswordAction, PasswordForm, PlanetAction,
+    PlanetOptionTab, PlanetPromo, PlanetSelection, RoomDialog, SelectMusicRow, SelectMusicSong,
+    ShopAction, ShopGood, SideScreen, WalletRow, WalletState, GEM_LABEL, LANKING_LVIEW_ROWS,
+    LANKING_RVIEW_ROWS, MSHOP_CART_ROWS, MSHOP_SONG_ROWS, OPTION_GAME_BLEND_NO,
+    OPTION_GAME_BLEND_YES, OPTION_GAME_EFFECT_HIGH, OPTION_GAME_EFFECT_LOW,
+    OPTION_GAME_EFFECT_NORMAL, OPTION_GAME_GUIDE_LONG, OPTION_GAME_GUIDE_MIDDLE,
+    OPTION_GAME_GUIDE_NOUSE, OPTION_GAME_GUIDE_SHORT, OPTION_GAME_LONGNOTE_NONE,
+    OPTION_GAME_LONGNOTE_USED, OPTION_GAME_MODE_FULL, OPTION_GAME_MODE_WIN, OPTION_GAME_NOTETYPE1,
+    OPTION_GAME_NOTETYPE2, OPTION_KEY_3KEY_FIRST, OPTION_KEY_3KEY_MODE, OPTION_KEY_7KEY_MODE,
+    OPTION_KEY_LANE_FIRST, OPTION_KEY_TEST, OPTION_SOUND_BG_EFFECT_DOWN, OPTION_SOUND_BG_EFFECT_UP,
+    OPTION_SOUND_BG_MUSIC_DOWN, OPTION_SOUND_BG_MUSIC_UP, OPTION_SOUND_GAME_EFFECT_DOWN,
+    OPTION_SOUND_GAME_EFFECT_UP, OPTION_SOUND_GAME_MUSIC_DOWN, OPTION_SOUND_GAME_MUSIC_UP,
+    PLANET_OPTION_FIRST_TAB, QUIT_CANCEL_CODE, QUIT_OK_CODE, SELECT_ARTIST_RADIO,
+    SELECT_CHO_SUNG_LEFT, SELECT_CHO_SUNG_PITCH, SELECT_CHO_SUNG_ROW_CELLS, SELECT_CHO_SUNG_Y,
+    SELECT_FILTER_BUTTON_H, SELECT_FILTER_BUTTON_PITCH, SELECT_FILTER_BUTTON_TOP,
+    SELECT_FILTER_COLUMNS, SELECT_GENRE_FILTERS, SELECT_HEADER_COLUMNS, SELECT_HEADER_Y,
+    SELECT_LEVEL_FILTERS, SELECT_OK_BUTTON, SELECT_PAGER_RIGHT, SELECT_RESULT_TABS,
+    SELECT_ROW_PITCH, SELECT_ROW_TOP, SELECT_SEARCH_BOX, SELECT_SEARCH_BUTTON, SELECT_SEARCH_Y,
+    SELECT_STATUS_H, SELECT_STATUS_Y, SELECT_TABLE_HEADERS, SELECT_TABLE_LEFT, SELECT_TABLE_WIDTH,
+    SELECT_TITLE_RADIO, SELECT_VISIBLE_ROWS, SELECT_WHEEL_FILTERS, SHOP_CART_ROWS, SHOP_ITEM_ROWS,
 };
 use crate::{menu_of, MenuKey};
 use o2jam_audio::{song_position_ms, AudioBackend, BgmSelection, PcmSamples, SceneBgm};
 use o2jam_file::{AvatarItemTable, OjnListEntry};
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams, PEER_SLOT_COUNT};
 use o2jam_net::gift::{ClaimGift, GetGiftMessageList, GiftType};
-use o2jam_net::play::SetRoomMusic;
+use o2jam_net::play::{MusicListAnswer, SetRoomMusic};
 use o2jam_net::rooms::{
     Announcement, MainRoomAdminMessage, MainRoomUserMessage, MusicPlayRankingAnswer, RankEntry,
     RankNotification, ReceiveWhisper, SendMainRoomMessage, SendWaitingMessage, SendWhisper,
     WaitingAdminMessage, WaitingUserMessage,
 };
-use o2jam_net::shop::EquipItem;
+use o2jam_net::shop::{EquipItem, SyncItemPurchase, SyncMusicPurchase};
+use o2jam_net::wallet::SyncCashPointResponse;
 use o2jam_net::{
     ChannelState, CharacterInfo, CreateRoom, Difficulty, JoinRoom, JoinedRoom, Ready,
     RoomListEntry, RoomTeamChanged, SetRoomTeam,
@@ -324,6 +328,46 @@ pub struct ScreenGame {
     /// the `MUSICNAME` caption. The song-to-board fetch join stays
     /// OPEN (no live gateway).
     lanking_selected: Option<u32>,
+    /// Item-shop goods (`Itemdata_Korea.dat` order, owned copies;
+    /// see [`Self::set_shop_catalog`]).
+    shop_goods: Vec<ShopGood>,
+    /// Item-list page (eight rows per page, the staged `ITEMBUY`
+    /// hit areas).
+    shop_page: usize,
+    /// Checked cart item ids in toggle order (the `ITEMBUY`
+    /// selection behind the cart `BUYITEM` commit).
+    shop_cart: Vec<u32>,
+    /// Cart-list page (five rows per page, the staged `CART_EX`
+    /// slots).
+    shop_cart_page: usize,
+    /// Live wallet words behind the shop gem cells (5028/5001/5003
+    /// folds; `--` until data).
+    wallet: WalletState,
+    /// Queued cart buy awaiting the session send (5000; the cart
+    /// `BUYITEM` owns it).
+    pending_shop_buy: Option<SyncItemPurchase>,
+    /// Song-shop catalog (`OJNList.dat` order, owned copies; see
+    /// [`Self::set_music_shop_catalog`]).
+    music_shop_songs: Vec<LankingSong>,
+    /// Active song-shop sort (`None`: catalog order until a sort
+    /// button answers; directions ASSUMED ascending).
+    music_shop_sort: Option<LankingSort>,
+    /// Song-list page (five rows per page, the staged `MS_EX` hit
+    /// areas).
+    music_shop_page: usize,
+    /// Fetched song flags (`GetMusicList` 4031 answer) staged
+    /// behind the scripted-stub seam: the shell proves the rows,
+    /// the wire ride stays ASSUMED until a live gateway replay.
+    music_shop_board: Option<MusicListAnswer>,
+    /// Checked song-shop cart ids in pick order (the `MS_EX` row
+    /// selection behind the cart `BUYITEM` commit).
+    music_shop_cart: Vec<u32>,
+    /// Cart-list page (five rows per page, the staged music-cart
+    /// `CART_EX` slots).
+    music_shop_cart_page: usize,
+    /// Queued song buy awaiting the session send (5010; the row
+    /// buy buttons and the cart `BUYITEM` own it).
+    pending_music_buy: Option<SyncMusicPurchase>,
     side_placements: Vec<ScenePlacement>,
     side_figures: HashMap<String, AvatarFigure>,
     /// Live avatar-room selection (slot pick, bag/gift pages+cursors).
@@ -628,6 +672,19 @@ impl ScreenGame {
             lanking_rpage: 0,
             lanking_board: None,
             lanking_selected: None,
+            shop_goods: Vec::new(),
+            shop_page: 0,
+            shop_cart: Vec::new(),
+            shop_cart_page: 0,
+            wallet: WalletState::default(),
+            pending_shop_buy: None,
+            music_shop_songs: Vec::new(),
+            music_shop_sort: None,
+            music_shop_page: 0,
+            music_shop_board: None,
+            music_shop_cart: Vec::new(),
+            music_shop_cart_page: 0,
+            pending_music_buy: None,
             side_placements: Vec::new(),
             side_figures: HashMap::new(),
             myroom: MyRoomState::new(),
@@ -3191,6 +3248,336 @@ impl ScreenGame {
         }
     }
 
+    /// Stage the item-shop catalog (`Itemdata_Korea.dat` order,
+    /// owned copies so the board outlives the parse borrow). Resets
+    /// the item page; the cart keeps its checks.
+    pub fn set_shop_catalog(&mut self, table: &o2jam_file::AvatarItemTable) -> &mut Self {
+        self.shop_goods = shop_goods(table);
+        self.shop_page = 0;
+        self
+    }
+
+    /// Item-list page (eight rows per page).
+    #[must_use]
+    pub fn shop_page(&self) -> usize {
+        self.shop_page
+    }
+
+    /// Checked cart item ids in toggle order.
+    #[must_use]
+    pub fn shop_cart(&self) -> Vec<u32> {
+        self.shop_cart.clone()
+    }
+
+    /// Check one catalog good into the cart (id must exist; the
+    /// click seam feeds the same cart — this stages restores).
+    pub fn shop_cart_push(&mut self, item_id: u32) {
+        if self.shop_goods.iter().any(|good| good.item_id == item_id)
+            && !self.shop_cart.contains(&item_id)
+        {
+            self.shop_cart.push(item_id);
+        }
+    }
+
+    /// Sorted catalog goods on the current item-list page (owned
+    /// page: small, eight rows at most). No sorts exist on the
+    /// item board: catalog order always.
+    #[must_use]
+    pub fn shop_visible_goods(&self) -> Vec<ShopGood> {
+        let (start, end) =
+            lanking_page_window(self.shop_goods.len(), SHOP_ITEM_ROWS, self.shop_page);
+        self.shop_goods[start..end].to_vec()
+    }
+
+    /// Checked cart goods on the current cart page (toggle order,
+    /// five rows at most; unknown ids drop out).
+    #[must_use]
+    pub fn shop_visible_cart(&self) -> Vec<ShopGood> {
+        let goods: Vec<ShopGood> = self
+            .shop_cart
+            .iter()
+            .filter_map(|item_id| {
+                self.shop_goods
+                    .iter()
+                    .find(|good| good.item_id == *item_id)
+                    .cloned()
+            })
+            .collect();
+        let (start, end) = lanking_page_window(goods.len(), SHOP_CART_ROWS, self.shop_cart_page);
+        goods[start..end].to_vec()
+    }
+
+    /// Cart page count (at least one: the pager paints `1/1` on an
+    /// empty cart, never `0/0`).
+    #[must_use]
+    pub fn shop_cart_pages(&self) -> usize {
+        shop_page_count(self.shop_cart.len(), SHOP_CART_ROWS)
+    }
+
+    /// Item-list page count (at least one, same empty-cart rule).
+    #[must_use]
+    pub fn shop_list_pages(&self) -> usize {
+        shop_page_count(self.shop_goods.len(), SHOP_ITEM_ROWS)
+    }
+
+    /// Wallet gem cell caption (`GEM 1200`); `--` until the 5028
+    /// refresh arrives.
+    #[must_use]
+    pub fn shop_gem_caption(&self) -> String {
+        wallet_row_caption(&WalletRow::named(GEM_LABEL, self.wallet.gem))
+    }
+
+    /// Fold a 5028 wallet refresh into the shop wallet.
+    pub fn apply_shop_cash_point(&mut self, response: &SyncCashPointResponse) {
+        self.wallet.apply_cash_point(response);
+    }
+
+    /// Fold a 5003 sell refund into the shop wallet.
+    pub fn apply_shop_sell(&mut self, response: &o2jam_net::shop::SellItemResponse) {
+        self.wallet.apply_sell_response(response);
+    }
+
+    /// Fold the 5001 purchase prefix words into the shop wallet.
+    pub fn apply_shop_purchase_prefix(&mut self, prefix: &o2jam_net::shop::SyncItemPurchasePrefix) {
+        self.wallet.apply_purchase_prefix(prefix);
+    }
+
+    /// Fold the 5001 post-list wallet pair into the shop wallet.
+    pub fn apply_shop_purchase_wallets(
+        &mut self,
+        wallets: &o2jam_net::shop::SyncItemPurchaseWallets,
+    ) {
+        self.wallet.apply_purchase_wallets(wallets);
+    }
+
+    /// Queued cart buy for the session bridge, if any (5000). One
+    /// body per `BUYITEM` commit; the seam drains it.
+    pub fn take_shop_buy(&mut self) -> Option<SyncItemPurchase> {
+        self.pending_shop_buy.take()
+    }
+
+    /// Item-shop click through the control-code dispatch
+    /// ([`shop_action_at`]): row toggles check the cart, `BUYITEM`
+    /// commits a non-empty cart through the pinned 5000 send, and
+    /// both pagers step and hold at the ends. Staged placements
+    /// only — unstaged clicks land nowhere. Only answers on the
+    /// open shop side screen.
+    pub fn click_shop(&mut self, x: i32, y: i32) {
+        if self.side != Some(SideScreen::Shop) {
+            return;
+        }
+        let Some(action) = shop_action_at(&self.side_placements, x, y) else {
+            return;
+        };
+        match action {
+            ShopAction::ToggleRow(slot) => {
+                if let Some(good) = self.shop_visible_goods().get(slot).cloned() {
+                    if let Some(held) = self.shop_cart.iter().position(|id| *id == good.item_id) {
+                        self.shop_cart.remove(held);
+                    } else {
+                        self.shop_cart.push(good.item_id);
+                    }
+                }
+            }
+            ShopAction::CartBuy => {
+                if !self.shop_cart.is_empty() {
+                    self.pending_shop_buy = Some(SyncItemPurchase);
+                }
+            }
+            ShopAction::ItemPrev => {
+                self.shop_page = self.shop_page.saturating_sub(1);
+            }
+            ShopAction::ItemNext => {
+                if self
+                    .shop_page
+                    .saturating_add(1)
+                    .saturating_mul(SHOP_ITEM_ROWS)
+                    < self.shop_goods.len()
+                {
+                    self.shop_page = self.shop_page.saturating_add(1);
+                }
+            }
+            ShopAction::CartPrev => {
+                self.shop_cart_page = self.shop_cart_page.saturating_sub(1);
+            }
+            ShopAction::CartNext => {
+                if self
+                    .shop_cart_page
+                    .saturating_add(1)
+                    .saturating_mul(SHOP_CART_ROWS)
+                    < self.shop_cart.len()
+                {
+                    self.shop_cart_page = self.shop_cart_page.saturating_add(1);
+                }
+            }
+        }
+    }
+
+    /// Stage the song-shop catalog (`OJNList.dat` order, owned
+    /// copies so the board outlives the parse borrow; mirrors
+    /// [`Self::set_lanking_catalog`]). Resets sort and pages.
+    pub fn set_music_shop_catalog(&mut self, entries: &[OjnListEntry<'_>]) -> &mut Self {
+        self.music_shop_songs = lanking_songs(entries);
+        self.music_shop_sort = None;
+        self.music_shop_page = 0;
+        self.music_shop_cart_page = 0;
+        self
+    }
+
+    /// Stage the fetched song flags (`GetMusicList` 4031 answer)
+    /// behind the scripted-stub seam: the shell proves the rows,
+    /// the wire ride stays ASSUMED until a live gateway replay.
+    /// Resets the song-list page.
+    pub fn stage_music_shop_board(&mut self, answer: MusicListAnswer) -> &mut Self {
+        self.music_shop_board = Some(answer);
+        self.music_shop_page = 0;
+        self
+    }
+
+    /// Active song-shop sort (`None`: catalog order).
+    #[must_use]
+    pub fn music_shop_sort(&self) -> Option<LankingSort> {
+        self.music_shop_sort
+    }
+
+    /// Song-list page (five rows per page).
+    #[must_use]
+    pub fn music_shop_page(&self) -> usize {
+        self.music_shop_page
+    }
+
+    /// Checked song-shop cart ids in pick order.
+    #[must_use]
+    pub fn music_shop_cart(&self) -> Vec<u32> {
+        self.music_shop_cart.clone()
+    }
+
+    /// Pick one catalog song into the cart (id must exist; the
+    /// click seam feeds the same cart — this stages restores).
+    pub fn music_shop_cart_push(&mut self, song_id: u32) {
+        if self
+            .music_shop_songs
+            .iter()
+            .any(|song| song.song_id == song_id)
+            && !self.music_shop_cart.contains(&song_id)
+        {
+            self.music_shop_cart.push(song_id);
+        }
+    }
+
+    /// Checked music-cart songs on the current cart page (pick
+    /// order, five rows at most; unknown ids drop out).
+    #[must_use]
+    pub fn music_shop_visible_cart(&self) -> Vec<LankingSong> {
+        let songs: Vec<LankingSong> = self
+            .music_shop_cart
+            .iter()
+            .filter_map(|song_id| {
+                self.music_shop_songs
+                    .iter()
+                    .find(|song| song.song_id == *song_id)
+                    .cloned()
+            })
+            .collect();
+        let (start, end) =
+            lanking_page_window(songs.len(), MSHOP_CART_ROWS, self.music_shop_cart_page);
+        songs[start..end].to_vec()
+    }
+
+    /// Music-cart page count (at least one, same empty-cart rule).
+    #[must_use]
+    pub fn music_shop_cart_pages(&self) -> usize {
+        shop_page_count(self.music_shop_cart.len(), MSHOP_CART_ROWS)
+    }
+
+    /// Song-list page count (at least one, same empty-cart rule).
+    #[must_use]
+    pub fn music_shop_list_pages(&self) -> usize {
+        shop_page_count(self.music_shop_songs.len(), MSHOP_SONG_ROWS)
+    }
+
+    /// Sorted song-shop rows with live flags on the current page
+    /// (owned page: small, five rows at most).
+    #[must_use]
+    pub fn music_shop_visible_rows(&self) -> Vec<MusicShopRow> {
+        let mut songs = self.music_shop_songs.clone();
+        if let Some(sort) = self.music_shop_sort {
+            sort_lanking_songs(&mut songs, sort);
+        }
+        let (start, end) = lanking_page_window(songs.len(), MSHOP_SONG_ROWS, self.music_shop_page);
+        music_shop_rows(&songs[start..end], self.music_shop_board.as_ref())
+    }
+
+    /// Queued song buy for the session bridge, if any (5010). One
+    /// body per row or cart commit; the seam drains it.
+    pub fn take_music_buy(&mut self) -> Option<SyncMusicPurchase> {
+        self.pending_music_buy.take()
+    }
+
+    /// Song-shop click through the control-code dispatch
+    /// ([`music_shop_action_at`]): row picks stage the cart, row
+    /// buy buttons and the cart `BUYITEM` queue the pinned 5010
+    /// send, sorts resort and reset the page, and the pager steps
+    /// and holds at the ends. Staged placements only — unstaged
+    /// clicks land nowhere. Only answers on the open song-shop
+    /// side screen.
+    pub fn click_music_shop(&mut self, x: i32, y: i32) {
+        if self.side != Some(SideScreen::MusicShop) {
+            return;
+        }
+        let Some(action) = music_shop_action_at(&self.side_placements, x, y) else {
+            return;
+        };
+        match action {
+            MusicShopAction::SelectRow(slot) => {
+                if let Some(row) = self.music_shop_visible_rows().get(slot) {
+                    let song_id = row.song.song_id;
+                    if !self.music_shop_cart.contains(&song_id) {
+                        self.music_shop_cart.push(song_id);
+                    }
+                }
+            }
+            MusicShopAction::BuyRow { slot, gem: _ } => {
+                if self.music_shop_visible_rows().get(slot).is_some() {
+                    self.pending_music_buy = Some(SyncMusicPurchase);
+                }
+            }
+            MusicShopAction::Sort(sort) => {
+                self.music_shop_sort = Some(sort);
+                self.music_shop_page = 0;
+            }
+            MusicShopAction::MsPrev => {
+                self.music_shop_page = self.music_shop_page.saturating_sub(1);
+            }
+            MusicShopAction::MsNext => {
+                if self
+                    .music_shop_page
+                    .saturating_add(1)
+                    .saturating_mul(MSHOP_SONG_ROWS)
+                    < self.music_shop_songs.len()
+                {
+                    self.music_shop_page = self.music_shop_page.saturating_add(1);
+                }
+            }
+            MusicShopAction::CartBuy => {
+                self.pending_music_buy = Some(SyncMusicPurchase);
+            }
+            MusicShopAction::CartPrev => {
+                self.music_shop_cart_page = self.music_shop_cart_page.saturating_sub(1);
+            }
+            MusicShopAction::CartNext => {
+                if self
+                    .music_shop_cart_page
+                    .saturating_add(1)
+                    .saturating_mul(MSHOP_CART_ROWS)
+                    < self.music_shop_cart.len()
+                {
+                    self.music_shop_cart_page = self.music_shop_cart_page.saturating_add(1);
+                }
+            }
+        }
+    }
+
     /// Paint with an explicit song clock (tests use this; live
     /// paint reads the sample clock, [`Self::now_ms`]).
     pub fn paint_at(&mut self, frame: &mut Frame<'_>, now_ms: u64) {
@@ -3214,6 +3601,39 @@ impl ScreenGame {
                     self.lanking_self_entry().as_ref(),
                     &self.lanking_visible_ranks(),
                     self.lanking_selected_title().as_deref(),
+                );
+            }
+            // The shop overlay inks goods, prices, the wallet cell,
+            // the cart, and both pager readouts into staged TEXT
+            // rects; without staged goods it paints nothing.
+            if self.side == Some(SideScreen::Shop) {
+                paint_shop_board(
+                    frame,
+                    &self.side_placements,
+                    &self.shop_visible_goods(),
+                    &self.wallet,
+                    &self.shop_visible_cart(),
+                    self.shop_cart_page,
+                    self.shop_cart_pages(),
+                );
+            }
+            // The song-shop overlay inks catalog rows with live
+            // flags plus the cart and both pager readouts; without
+            // staged songs it paints nothing.
+            if self.side == Some(SideScreen::MusicShop) {
+                paint_music_shop_board(
+                    frame,
+                    &self.side_placements,
+                    &self.music_shop_visible_rows(),
+                    self.music_shop_page,
+                    self.music_shop_list_pages(),
+                );
+                paint_music_shop_cart(
+                    frame,
+                    &self.side_placements,
+                    &self.music_shop_visible_cart(),
+                    self.music_shop_cart_page,
+                    self.music_shop_cart_pages(),
                 );
             }
             if self.side == Some(SideScreen::MyRoom) {
@@ -4188,10 +4608,19 @@ impl GameLoop for ScreenGame {
 
     fn mouse_click(&mut self, x: i32, y: i32) {
         // The open lanking board answers its named controls
-        // (sorts, pagers, row picks) at staged rects; every other
-        // side screen stays click-silent.
+        // (sorts, pagers, row picks) at staged rects; the shop
+        // boards answer theirs (row toggles, buys, pagers, sorts)
+        // the same way; every other side screen stays click-silent.
         if self.side == Some(SideScreen::Lanking) {
             self.click_lanking(x, y);
+            return;
+        }
+        if self.side == Some(SideScreen::Shop) {
+            self.click_shop(x, y);
+            return;
+        }
+        if self.side == Some(SideScreen::MusicShop) {
+            self.click_music_shop(x, y);
             return;
         }
         if self.side.is_some() {
@@ -4344,6 +4773,34 @@ fn observable_state_hash(game: &ScreenGame) -> u64 {
     if let Some(selected) = game.lanking_selected {
         hash_u64(&mut hash, u64::from(selected));
     }
+    hash_u64(&mut hash, game.shop_page as u64);
+    hash_u64(&mut hash, game.shop_cart_page as u64);
+    hash_u64(&mut hash, game.shop_goods.len() as u64);
+    for id in &game.shop_cart {
+        hash_u64(&mut hash, u64::from(*id));
+    }
+    hash_u64(
+        &mut hash,
+        game.wallet.gem.map_or(u64::MAX, |gem| gem as u64),
+    );
+    hash_u64(
+        &mut hash,
+        game.music_shop_sort.map_or(u64::MAX, |sort| sort as u64),
+    );
+    hash_u64(&mut hash, game.music_shop_page as u64);
+    hash_u64(&mut hash, game.music_shop_cart_page as u64);
+    hash_u64(&mut hash, game.music_shop_songs.len() as u64);
+    hash_u64(
+        &mut hash,
+        game.music_shop_board
+            .as_ref()
+            .map_or(0, |board| board.entries.len() as u64),
+    );
+    for id in &game.music_shop_cart {
+        hash_u64(&mut hash, u64::from(*id));
+    }
+    hash_u64(&mut hash, game.pending_shop_buy.map_or(0, |_| 5_000));
+    hash_u64(&mut hash, game.pending_music_buy.map_or(0, |_| 5_010));
     hash
 }
 
@@ -4355,7 +4812,15 @@ mod game_tests {
     use super::super::side::{
         LANKING_LPAGE_NEXT_CODE, LANKING_LPAGE_PREV_CODE, LANKING_LVIEW_TEXT_CODES,
         LANKING_LVIEW_TOGGLE_FIRST_CODE, LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES,
-        LANKING_RVIEW_TOGGLE_FIRST_CODE, LANKING_SORT_TITLE_CODE,
+        LANKING_RVIEW_TOGGLE_FIRST_CODE, LANKING_SORT_TITLE_CODE, MSHOP_BPM_SORT_CODE,
+        MSHOP_CART_BUY_CODE, MSHOP_CART_LEFT_CODE, MSHOP_CART_RIGHT_CODE, MSHOP_DIFF_SORT_CODE,
+        MSHOP_EX_FIRST_CODE, MSHOP_GEM_BUY_CODE, MSHOP_MSALL_LEFT_CODE, MSHOP_MSALL_RIGHT_CODE,
+        MSHOP_PAGE_CUR_ONES_CODE, MSHOP_PAGE_CUR_TENS_CODE, MSHOP_PAGE_TOT_ONES_CODE,
+        MSHOP_PAGE_TOT_TENS_CODE, MSHOP_TITLE_SORT_CODE, MSHOP_WON_BUY_CODE, SHOP_BUYITEM_CODE,
+        SHOP_CART_LEFT_CODE, SHOP_CART_PAGE_CUR_ONES_CODE, SHOP_CART_PAGE_CUR_TENS_CODE,
+        SHOP_CART_PAGE_TOT_ONES_CODE, SHOP_CART_PAGE_TOT_TENS_CODE, SHOP_CART_RIGHT_CODE,
+        SHOP_GEMMONEY_CODE, SHOP_ITEMBUY_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE,
+        SHOP_ITEMWON_FIRST_CODE, SHOP_SCROLL_CODE, SHOP_SCROLL_LEFT_CODE, SHOP_SCROLL_RIGHT_CODE,
     };
     use super::*;
     use crate::avatar::AvatarFigure;
@@ -8132,6 +8597,298 @@ mod game_tests {
         assert_ne!(boarded, picked, "board staging changed nothing");
         println!("lanking hand session: {entered:016x} -> {sorted:016x} -> {paged:016x} -> {picked:016x} -> {boarded:016x}");
         assert!(game.leave_side(), "board returns to Waiting");
+    }
+
+    fn open_shop_board(good_count: u32) -> ScreenGame {
+        let mut game = ScreenGame::new();
+        walk_to_waiting(&mut game);
+        let rows: Vec<o2jam_file::AvatarItemRow> = (1..=good_count)
+            .map(|item_id| o2jam_file::AvatarItemRow {
+                item_id,
+                item_type: 0,
+                price: item_id * 100,
+                params: [0; 4],
+                flags: (0, 0),
+                name: format!("Good{item_id:02}"),
+                description: String::new(),
+                sprites: Vec::new(),
+            })
+            .collect();
+        game.set_shop_catalog(&o2jam_file::AvatarItemTable { rows });
+        game.load_side_scene(shop_side_placements(), HashMap::new());
+        assert!(game.visit_side(SideScreen::Shop));
+        game
+    }
+
+    fn shop_side_placements() -> Vec<ScenePlacement> {
+        // Synthetic `STATE_SHOP` board: eight ITEMBUY hit areas, the
+        // scroll with its relative pager children, the cart buy and
+        // pagers, five cart slots, and the TEXT templates plus page
+        // and wallet cells the overlay inks (geometry under test
+        // rides staged rects, never literals).
+        let mut placements = Vec::new();
+        let area = |code: u32, x: i32, y: i32, w: u32, h: u32| ScenePlacement {
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect { x, y, w, h },
+        };
+        for slot in 0..8u32 {
+            placements.push(area(
+                SHOP_ITEMBUY_FIRST_CODE + slot,
+                220 + (slot % 4) as i32 * 141,
+                187 + (slot / 4) as i32 * 153,
+                81,
+                17,
+            ));
+            placements.push(area(SHOP_ITEMNAME_FIRST_CODE + slot, 231, 69, 100, 12));
+            placements.push(area(SHOP_ITEMWON_FIRST_CODE + slot, 247, 169, 38, 13));
+        }
+        placements.push(area(SHOP_SCROLL_CODE, 221, 374, 545, 18));
+        placements.push(area(SHOP_SCROLL_LEFT_CODE, 0, 0, 18, 18));
+        placements.push(area(SHOP_SCROLL_RIGHT_CODE, 527, 0, 18, 18));
+        placements.push(area(SHOP_BUYITEM_CODE, 17, 563, 49, 23));
+        placements.push(area(SHOP_CART_LEFT_CODE, 198, 564, 47, 22));
+        placements.push(area(SHOP_CART_RIGHT_CODE, 317, 564, 47, 22));
+        placements.push(area(SHOP_GEMMONEY_CODE, 82, 288, 95, 13));
+        placements.push(area(SHOP_CART_PAGE_CUR_TENS_CODE, 247, 567, 14, 17));
+        placements.push(area(SHOP_CART_PAGE_CUR_ONES_CODE, 261, 567, 14, 17));
+        placements.push(area(SHOP_CART_PAGE_TOT_TENS_CODE, 287, 567, 14, 17));
+        placements.push(area(SHOP_CART_PAGE_TOT_ONES_CODE, 301, 567, 14, 17));
+        placements
+    }
+
+    #[test]
+    fn shop_browse_toggles_cart_and_commits_5000() {
+        // Ten goods over eight slots: the first ITEMBUY checks row
+        // zero into the cart, the cart BUYITEM queues the pinned
+        // empty 5000 send, and the seam drains it once.
+        let mut game = open_shop_board(10);
+        assert!(game.shop_cart().is_empty());
+        game.click_shop(221, 188);
+        assert_eq!(game.shop_cart(), vec![1]);
+        game.click_shop(221, 188);
+        assert!(game.shop_cart().is_empty());
+        game.click_shop(221, 188);
+        game.click_shop(18, 564);
+        assert_eq!(game.take_shop_buy(), Some(SyncItemPurchase));
+        assert_eq!(game.take_shop_buy(), None);
+    }
+
+    #[test]
+    fn shop_buyitem_without_cart_queues_nothing() {
+        // An empty cart commits nothing: no body reaches the seam.
+        let mut game = open_shop_board(10);
+        game.click_shop(18, 564);
+        assert_eq!(game.take_shop_buy(), None);
+    }
+
+    #[test]
+    fn shop_pager_turns_eight_row_pages() {
+        // Ten goods paint eight per page; the scroll pager steps and
+        // holds at the ends.
+        let mut game = open_shop_board(10);
+        assert_eq!(game.shop_visible_goods().len(), 8);
+        game.click_shop(753, 379);
+        assert_eq!(game.shop_page(), 1);
+        assert_eq!(game.shop_visible_goods().len(), 2);
+        game.click_shop(753, 379);
+        assert_eq!(game.shop_page(), 1);
+        game.click_shop(226, 379);
+        assert_eq!(game.shop_page(), 0);
+        game.click_shop(226, 379);
+        assert_eq!(game.shop_page(), 0);
+    }
+
+    #[test]
+    fn shop_wallet_gem_caption_waits_for_wire_data() {
+        // The GEMMONEY cell reads the staged gem word: placeholder
+        // until the 5028 refresh arrives.
+        let mut game = open_shop_board(2);
+        assert_eq!(game.shop_gem_caption(), "GEM --");
+        game.apply_shop_cash_point(&SyncCashPointResponse {
+            gem: 1200,
+            cash_point: 50,
+        });
+        assert_eq!(game.shop_gem_caption(), "GEM 1200");
+    }
+
+    #[test]
+    fn shop_unstaged_clicks_land_nowhere() {
+        // No placements and no catalog: every click is a no-op.
+        let mut game = ScreenGame::new();
+        walk_to_waiting(&mut game);
+        assert!(game.visit_side(SideScreen::Shop));
+        game.click_shop(221, 188);
+        assert!(game.shop_cart().is_empty());
+        assert_eq!(game.shop_page(), 0);
+        assert!(game.shop_visible_goods().is_empty());
+        assert_eq!(game.take_shop_buy(), None);
+    }
+
+    fn open_music_shop_board(song_count: usize) -> ScreenGame {
+        let mut game = ScreenGame::new();
+        walk_to_waiting(&mut game);
+        let mut blob = Vec::new();
+        for index in 0..song_count {
+            let song_id = 757 + index as u32;
+            blob.extend_from_slice(&lanking_record(
+                song_id,
+                120.0,
+                &format!("Tune{index:03}"),
+                &format!("Band{index:03}"),
+            ));
+        }
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_music_shop_catalog(&entries);
+        game.load_side_scene(music_shop_side_placements(), HashMap::new());
+        assert!(game.visit_side(SideScreen::MusicShop));
+        game
+    }
+
+    fn music_shop_side_placements() -> Vec<ScenePlacement> {
+        // Synthetic `STATE_MUSICSHOP` board: five MS_EX slots, the
+        // row-local buy templates, sorts, the MSALL pager, the cart
+        // buy, and the page-number cells (geometry under test rides
+        // staged rects, never literals).
+        let mut placements = Vec::new();
+        let area = |code: u32, x: i32, y: i32, w: u32, h: u32| ScenePlacement {
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect { x, y, w, h },
+        };
+        for slot in 0..5u32 {
+            placements.push(area(
+                MSHOP_EX_FIRST_CODE + slot,
+                18,
+                104 + slot as i32 * 84,
+                353,
+                86,
+            ));
+        }
+        placements.push(area(MSHOP_GEM_BUY_CODE, 322, 51, 25, 16));
+        placements.push(area(MSHOP_WON_BUY_CODE, 322, 67, 25, 16));
+        placements.push(area(MSHOP_TITLE_SORT_CODE, 133, 84, 59, 21));
+        placements.push(area(MSHOP_DIFF_SORT_CODE, 192, 84, 60, 21));
+        placements.push(area(MSHOP_BPM_SORT_CODE, 252, 84, 58, 21));
+        placements.push(area(MSHOP_MSALL_LEFT_CODE, 198, 532, 45, 21));
+        placements.push(area(MSHOP_MSALL_RIGHT_CODE, 317, 532, 46, 21));
+        placements.push(area(MSHOP_CART_BUY_CODE, 423, 528, 49, 23));
+        placements.push(area(MSHOP_CART_LEFT_CODE, 542, 529, 47, 22));
+        placements.push(area(MSHOP_CART_RIGHT_CODE, 661, 529, 47, 22));
+        placements.push(area(MSHOP_PAGE_CUR_TENS_CODE, 246, 534, 14, 17));
+        placements.push(area(MSHOP_PAGE_CUR_ONES_CODE, 260, 534, 14, 17));
+        placements.push(area(MSHOP_PAGE_TOT_TENS_CODE, 286, 534, 14, 17));
+        placements.push(area(MSHOP_PAGE_TOT_ONES_CODE, 300, 534, 14, 17));
+        placements
+    }
+
+    #[test]
+    fn music_shop_sorts_pages_and_buys_5010() {
+        // Seven songs over five slots: TITLE sorts, the MSALL pager
+        // turns and holds, and the row GEM_BUY queues the pinned
+        // empty 5010 send through the seam exactly once.
+        let mut game = open_music_shop_board(7);
+        assert_eq!(game.music_shop_visible_rows().len(), 5);
+        game.click_music_shop(134, 85);
+        assert_eq!(game.music_shop_sort(), Some(LankingSort::Title));
+        assert_eq!(game.music_shop_page(), 0);
+        game.click_music_shop(318, 533);
+        assert_eq!(game.music_shop_page(), 1);
+        assert_eq!(game.music_shop_visible_rows().len(), 2);
+        game.click_music_shop(318, 533);
+        assert_eq!(game.music_shop_page(), 1);
+        game.click_music_shop(199, 533);
+        assert_eq!(game.music_shop_page(), 0);
+        game.click_music_shop(341, 156);
+        assert_eq!(game.take_music_buy(), Some(SyncMusicPurchase));
+        assert_eq!(game.take_music_buy(), None);
+    }
+
+    #[test]
+    fn music_shop_row_pick_stages_the_cart_and_cart_buy_queues_5010() {
+        // The MS_EX row stages the song into the cart; the cart
+        // BUYITEM commits it through the same pinned 5010 send.
+        let mut game = open_music_shop_board(7);
+        game.click_music_shop(19, 105);
+        assert_eq!(game.music_shop_cart(), vec![757]);
+        game.click_music_shop(424, 529);
+        assert_eq!(game.take_music_buy(), Some(SyncMusicPurchase));
+        assert_eq!(game.take_music_buy(), None);
+    }
+
+    #[test]
+    fn music_shop_unstaged_clicks_land_nowhere() {
+        // No placements and no catalog: every click is a no-op.
+        let mut game = ScreenGame::new();
+        walk_to_waiting(&mut game);
+        assert!(game.visit_side(SideScreen::MusicShop));
+        game.click_music_shop(19, 105);
+        assert_eq!(game.music_shop_sort(), None);
+        assert_eq!(game.music_shop_page(), 0);
+        assert!(game.music_shop_visible_rows().is_empty());
+        assert_eq!(game.take_music_buy(), None);
+    }
+
+    #[test]
+    fn shops_hand_session_browses_and_buys() {
+        // Offline hand-driven shop session (no gateway): the item
+        // board opens from Waiting, the pager turns, a row toggle
+        // checks the cart, and the cart BUYITEM queues the pinned
+        // 5000 send through the seam; the song board then sorts,
+        // pages, stages the cart, and queues the pinned 5010 send —
+        // every step through the public seams the windowed binary
+        // feeds, each mutation moving the observable hash.
+        let mut game = open_shop_board(10);
+        let entered = game.state_hash();
+        game.click_shop(753, 379);
+        let paged = game.state_hash();
+        assert_eq!(game.shop_page(), 1);
+        assert_ne!(paged, entered, "pager click changed nothing");
+        game.click_shop(226, 379);
+        game.click_shop(221, 188);
+        let checked = game.state_hash();
+        assert_eq!(game.shop_cart(), vec![1]);
+        assert_ne!(checked, paged, "row toggle changed nothing");
+        game.click_shop(18, 564);
+        let bought = game.state_hash();
+        use o2jam_net::shop::SyncItemPurchase;
+        assert_eq!(game.take_shop_buy(), Some(SyncItemPurchase));
+        assert_ne!(bought, checked, "buy commit changed nothing");
+        assert!(game.leave_side(), "shop returns to Waiting");
+        println!(
+            "shop hand session: {entered:016x} -> {paged:016x} -> {checked:016x} -> {bought:016x}"
+        );
+    }
+
+    #[test]
+    fn music_shop_hand_session_sorts_pages_and_buys() {
+        // Song-board half of the offline session: TITLE sorts, the
+        // MSALL pager turns, a row pick stages the cart, and the
+        // row GEM_BUY queues the pinned 5010 send through the seam.
+        let mut game = open_music_shop_board(7);
+        let entered = game.state_hash();
+        game.click_music_shop(134, 85);
+        let sorted = game.state_hash();
+        assert_eq!(game.music_shop_sort(), Some(LankingSort::Title));
+        assert_ne!(sorted, entered, "sort click changed nothing");
+        game.click_music_shop(318, 533);
+        let paged = game.state_hash();
+        assert_eq!(game.music_shop_page(), 1);
+        assert_ne!(paged, sorted, "pager click changed nothing");
+        game.click_music_shop(199, 533);
+        game.click_music_shop(19, 105);
+        let picked = game.state_hash();
+        assert_eq!(game.music_shop_cart(), vec![757]);
+        assert_ne!(picked, paged, "row pick changed nothing");
+        game.click_music_shop(341, 156);
+        let bought = game.state_hash();
+        use o2jam_net::shop::SyncMusicPurchase;
+        assert_eq!(game.take_music_buy(), Some(SyncMusicPurchase));
+        assert_ne!(bought, picked, "buy click changed nothing");
+        assert!(game.leave_side(), "song shop returns to Waiting");
+        println!("music shop hand session: {entered:016x} -> {sorted:016x} -> {paged:016x} -> {picked:016x} -> {bought:016x}");
     }
 
     #[test]

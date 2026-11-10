@@ -1110,7 +1110,7 @@ pub use super::gift::{
 pub use super::shop::{
     ChangeName, ChangeNameResponse, CheckName, CheckNameResponse, EquipItem, EquipItemResponse,
     EquipTail, SellItem, SellItemResponse, ShopRestockPair, SyncItemPurchase,
-    SyncItemPurchasePrefix, SyncItemPurchaseTail, SyncItemPurchaseWallets,
+    SyncItemPurchasePrefix, SyncItemPurchaseTail, SyncItemPurchaseWallets, SyncMusicPurchase,
 };
 pub use super::wallet::{
     FreePassType, StartPayment, StartPaymentResponse, SyncCashPoint, SyncCashPointResponse,

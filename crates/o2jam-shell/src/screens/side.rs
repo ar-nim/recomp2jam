@@ -251,6 +251,581 @@ pub fn shop_items(table: &AvatarItemTable) -> Vec<ShopItemView<'_>> {
     table.rows.iter().map(shop_item_view).collect()
 }
 
+// --- Item-shop board parity (ticket #21) ---
+//
+// Eight goods per page under the staged `ITEMBUY1..8` hit areas
+// (`0x18..0x1F`, two rows of four on the staged dump). Row names ink
+// the staged `ITEMNAME1..8` TEXT templates (`0x2C..0x33`) and the
+// parsed `Itemdata_Korea.dat` price inks the staged `ITEMWON1..8`
+// TEXT templates (`0x54..0x5B`); the `ITEMGEM1..8` templates stay
+// blank (the parsed row carries one price word and the entry `+0x18`
+// gem-price join is unpinned — next step: file→entry price mapping
+// plus a rig capture at known prices). The item-list pager is the
+// staged scroll (`IDC_SCROLL_SSHOP_ITEM`, `0x47`): its LEFT/RIGHT
+// children (`0x48`/`0x49`, `Shop_ItemScroll_Left/Right.ojs`) stage
+// scroll-relative, so hit-testing offsets them by the staged scroll
+// origin — geometry from parsed rects, never literals. The cart
+// commits through `BUYITEM` (`0x70`) as the pinned empty
+// `SyncItemPurchase` 5000 send (file `0xf3fa8`); the 5001 answer is
+// undecodable standalone, so the wire ride stays ASSUMED behind the
+// take-seam (`docs/shop-buy.md`). Filters, set-item, bag, and gift
+// semantics stay display-only OPEN (next step: SendInput sweep on
+// the live shop per the `~/scratch/planet-verify/` recipe).
+
+/// First per-row buy button (`IDC_BUTTON_SSHOP_ITEMBUY1`); eight run
+/// contiguously through `+7` (block walk + staged dump).
+pub const SHOP_ITEMBUY_FIRST_CODE: u32 = 0x1420_0018;
+/// Visible item rows per page (eight staged `ITEMBUY` hit areas).
+pub const SHOP_ITEM_ROWS: usize = 8;
+/// First row-name TEXT template (`IDC_TEXT_SSHOP_ITEMNAME1`); eight
+/// run contiguously through `+7`.
+pub const SHOP_ITEMNAME_FIRST_CODE: u32 = 0x1440_002C;
+/// First row cash-price TEXT template (`IDC_TEXT_SSHOP_ITEMWON1`);
+/// eight run contiguously through `+7`.
+pub const SHOP_ITEMWON_FIRST_CODE: u32 = 0x1440_0054;
+/// First row gem-price TEXT template (`IDC_TEXT_SSHOP_ITEMGEM1`);
+/// eight run contiguously through `+7` (blank: no pinned source).
+pub const SHOP_ITEMGEM_FIRST_CODE: u32 = 0x1440_005C;
+/// Item-list scroll (`IDC_SCROLL_SSHOP_ITEM`): pager children ride
+/// scroll-relative.
+pub const SHOP_SCROLL_CODE: u32 = 0x1402_2047;
+/// Scroll pager children (staged scroll-relative; hit-test offsets
+/// by the staged scroll origin).
+pub const SHOP_SCROLL_LEFT_CODE: u32 = 0x1420_0048;
+pub const SHOP_SCROLL_RIGHT_CODE: u32 = 0x1420_0049;
+/// Cart buy (`IDC_BUTTON_SSHOP_BUYITEM`): commits the cart through
+/// the pinned empty `SyncItemPurchase` 5000 send.
+pub const SHOP_BUYITEM_CODE: u32 = 0x1420_0070;
+/// Cart pager (`IDC_BUTTON_SSHOP_MYCART_LEFT/RIGHT`).
+pub const SHOP_CART_LEFT_CODE: u32 = 0x1420_0072;
+pub const SHOP_CART_RIGHT_CODE: u32 = 0x1420_0073;
+/// First cart-row hit area (`IDC_BUTTON_SSHOP_CART_EX1`); five run
+/// contiguously through `+4` (block walk + staged dump).
+pub const SHOP_CART_TOGGLE_FIRST_CODE: u32 = 0x1401_B076;
+/// Visible cart rows per page (five staged `CART_EX` hit areas).
+pub const SHOP_CART_ROWS: usize = 5;
+/// Cart-row TEXT templates (row-local, tiled over the staged
+/// `CART_EX` slots like the lanking templates).
+pub const SHOP_CART_NUM_CODE: u32 = 0x1440_007B;
+pub const SHOP_CART_ITEMNAME_CODE: u32 = 0x1440_007D;
+pub const SHOP_CART_PRICE_CODE: u32 = 0x1440_007E;
+/// Cart page-number IMAGEs (staged absolute, `Shop_CartPageNum.ojs`):
+/// current tens/ones plus total tens/ones.
+pub const SHOP_CART_PAGE_CUR_TENS_CODE: u32 = 0x1450_0081;
+pub const SHOP_CART_PAGE_CUR_ONES_CODE: u32 = 0x1450_0080;
+pub const SHOP_CART_PAGE_TOT_TENS_CODE: u32 = 0x1450_0083;
+pub const SHOP_CART_PAGE_TOT_ONES_CODE: u32 = 0x1450_0082;
+/// Wallet gem text (`IDC_TEXT_SSHOP_GEMMONEY`): the exe displays
+/// balances alongside gem (`docs/shop-buy.md`), so the staged gem
+/// word paints here (`--` until wire data). `MGASH` stays OPEN.
+pub const SHOP_GEMMONEY_CODE: u32 = 0x1440_0028;
+
+/// One staged shop good: owned copies so the board outlives the
+/// parse borrow (mirrors [`LankingSong`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShopGood {
+    /// Item id (1-based, table order).
+    pub item_id: u32,
+    /// Korean item name.
+    pub name: String,
+    /// Parsed price (inks the WON cell; the GEM join is OPEN).
+    pub price: u32,
+}
+
+/// Staged shop goods in table order; empty without catalog data.
+#[must_use]
+pub fn shop_goods(table: &AvatarItemTable) -> Vec<ShopGood> {
+    table
+        .rows
+        .iter()
+        .map(|row| ShopGood {
+            item_id: row.item_id,
+            name: row.name.clone(),
+            price: row.price,
+        })
+        .collect()
+}
+
+/// One item-shop click the exe codes name: row toggles, the cart
+/// buy, and both pagers. Everything else (filters, set-item, bag,
+/// gift) lands nowhere.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShopAction {
+    /// Row `ITEMBUY` button toggled (0-based on the page).
+    ToggleRow(usize),
+    /// Cart `BUYITEM` commits the cart.
+    CartBuy,
+    /// Item-list scroll pager stepped back.
+    ItemPrev,
+    /// Item-list scroll pager stepped forward.
+    ItemNext,
+    /// Cart-list pager stepped back.
+    CartPrev,
+    /// Cart-list pager stepped forward.
+    CartNext,
+}
+
+/// Board click under native pixel (`x`, `y`): the staged placement
+/// whose parsed `.bnd` rect contains the point and whose exe code
+/// names a row toggle, the cart buy, or a pager (`None` elsewhere).
+/// Scroll pager children stage scroll-relative, so they hit-test
+/// through the staged scroll origin — every rect stays parsed.
+#[must_use]
+pub fn shop_action_at(placements: &[ScenePlacement], x: i32, y: i32) -> Option<ShopAction> {
+    for placed in placements {
+        let rect = shop_click_rect(placements, placed);
+        if !super::paint::rect_hit(&rect, x, y) {
+            continue;
+        }
+        if let Some(action) = shop_action_for_code(placed.code) {
+            return Some(action);
+        }
+    }
+    None
+}
+
+/// Click rect for one staged placement: scroll pager children shift
+/// by the staged scroll origin; every other control answers at its
+/// own staged rect.
+fn shop_click_rect(placements: &[ScenePlacement], placed: &ScenePlacement) -> Rect {
+    if placed.code == SHOP_SCROLL_LEFT_CODE || placed.code == SHOP_SCROLL_RIGHT_CODE {
+        if let Some(origin) = shop_scroll_origin(placements) {
+            return Rect {
+                x: origin.x + placed.rect.x,
+                y: origin.y + placed.rect.y,
+                w: placed.rect.w,
+                h: placed.rect.h,
+            };
+        }
+    }
+    placed.rect
+}
+
+/// Native origin of the staged item-list scroll (`None` unstaged).
+fn shop_scroll_origin(placements: &[ScenePlacement]) -> Option<Rect> {
+    placements
+        .iter()
+        .find(|placed| placed.code == SHOP_SCROLL_CODE)
+        .map(|placed| placed.rect)
+}
+
+/// Action behind one hit control code (`None` for unnamed controls).
+fn shop_action_for_code(code: u32) -> Option<ShopAction> {
+    match code {
+        SHOP_BUYITEM_CODE => Some(ShopAction::CartBuy),
+        SHOP_SCROLL_LEFT_CODE => Some(ShopAction::ItemPrev),
+        SHOP_SCROLL_RIGHT_CODE => Some(ShopAction::ItemNext),
+        SHOP_CART_LEFT_CODE => Some(ShopAction::CartPrev),
+        SHOP_CART_RIGHT_CODE => Some(ShopAction::CartNext),
+        _ => shop_row_toggle(code),
+    }
+}
+
+/// Row toggle behind one `ITEMBUY` code (`None` outside the eight).
+fn shop_row_toggle(code: u32) -> Option<ShopAction> {
+    let slot = code.checked_sub(SHOP_ITEMBUY_FIRST_CODE)?;
+    let slot = usize::try_from(slot).ok()?;
+    (slot < SHOP_ITEM_ROWS).then_some(ShopAction::ToggleRow(slot))
+}
+
+/// Page count of a `per_page`-row list (at least one: an empty cart
+/// still paints `1/1`, never `0/0`).
+#[must_use]
+pub fn shop_page_count(len: usize, per_page: usize) -> usize {
+    len.div_ceil(per_page).max(1)
+}
+
+/// Staged cart-row hit areas in top-to-bottom order (the five
+/// `CART_EX` rects).
+#[must_use]
+pub fn shop_cart_slots(placements: &[ScenePlacement]) -> Vec<Rect> {
+    let mut slots: Vec<Rect> = placements
+        .iter()
+        .filter(|placed| {
+            placed
+                .code
+                .checked_sub(SHOP_CART_TOGGLE_FIRST_CODE)
+                .is_some_and(|slot| (slot as usize) < SHOP_CART_ROWS)
+        })
+        .map(|placed| placed.rect)
+        .collect();
+    slots.sort_by(|a, b| a.y.cmp(&b.y).then(a.x.cmp(&b.x)));
+    slots
+}
+
+/// Cart page-number rects: current-page tens+ones union, then total
+/// tens+ones union (`None` when any digit slot is unstaged).
+#[must_use]
+pub fn shop_cart_page_rects(placements: &[ScenePlacement]) -> Option<(Rect, Rect)> {
+    let digit = |code| {
+        placements
+            .iter()
+            .find(|placed| placed.code == code)
+            .map(|placed| placed.rect)
+    };
+    let (cur_tens, cur_ones, tot_tens, tot_ones) = (
+        digit(SHOP_CART_PAGE_CUR_TENS_CODE)?,
+        digit(SHOP_CART_PAGE_CUR_ONES_CODE)?,
+        digit(SHOP_CART_PAGE_TOT_TENS_CODE)?,
+        digit(SHOP_CART_PAGE_TOT_ONES_CODE)?,
+    );
+    Some((
+        rect_union(cur_tens, cur_ones),
+        rect_union(tot_tens, tot_ones),
+    ))
+}
+
+/// Bounding union of two rects (pager digit pairs).
+fn rect_union(first: Rect, second: Rect) -> Rect {
+    let x1 = first.x.min(second.x);
+    let y1 = first.y.min(second.y);
+    let x2 = (first.x + i32::try_from(first.w).unwrap_or(0))
+        .max(second.x + i32::try_from(second.w).unwrap_or(0));
+    let y2 = (first.y + i32::try_from(first.h).unwrap_or(0))
+        .max(second.y + i32::try_from(second.h).unwrap_or(0));
+    Rect {
+        x: x1,
+        y: y1,
+        w: u32::try_from((x2 - x1).max(0)).unwrap_or(0),
+        h: u32::try_from((y2 - y1).max(0)).unwrap_or(0),
+    }
+}
+
+// --- Song-shop board parity (ticket #21) ---
+//
+// Five songs per page under the staged `MS_EX_1..5` hit areas
+// (`0x2D..0x31`, 353x86 tiling the song box on the staged dump).
+// Row TITLE/ARTIST/EDITOR/GENRE/BPM cells ink the staged `MMS`
+// TEXT templates (`0x36`/`0x38..0x3B`, row-local, tiled over the
+// staged slots like the lanking templates); the ISBUY cell
+// (`0x37`) names the fetched 4031 flags (`FREE`/`OWNED`, format
+// ours-by-design, values DATA). GEM_PRICE/WON_PRICE cells
+// (`0x40`/`0x45`) and the DIFF cell (`0x3C`) stay blank: no price
+// or level→cell source is pinned (next step: gateway replay
+// pinning the price words plus a rig capture of the DIFF cell at
+// a known song). TITLE/DIFF/BPM sorts (`0x80..0x82`) reuse the
+// catalog sort keys with ASSUMED ascending directions (same named
+// next step as lanking); PRICE (`0x83`), 3KEY/7KEY filters, MYALL
+// owned-list pager, search, TOP100, cart rows, gift, and download
+// stay display-only OPEN (next step: SendInput sweep on the live
+// board per the `~/scratch/planet-verify/` recipe). Per-row
+// GEM_BUY/WON_BUY (`0x41`/`0x46`, row-local, tiled per slot) and
+// the cart BUYITEM (`0x5D`) queue the pinned empty
+// `SyncMusicPurchase` 5010 send; the 5011 answer shape is untraced,
+// so the wire ride stays ASSUMED behind the take-seam.
+
+/// First song-row hit area (`IDC_BUTTON_MS_EX_1`); five run
+/// contiguously through `+4` (block walk + staged dump).
+pub const MSHOP_EX_FIRST_CODE: u32 = 0x1A01_802D;
+/// Visible song rows per page (five staged `MS_EX` hit areas).
+pub const MSHOP_SONG_ROWS: usize = 5;
+/// Row-local TEXT templates, tiled over the staged `MS_EX` slots:
+/// title, bought flag, artist, editor, genre, tempo.
+pub const MSHOP_TITLE_CODE: u32 = 0x1A40_0036;
+pub const MSHOP_ISBUY_CODE: u32 = 0x1A40_0037;
+pub const MSHOP_ARTIST_CODE: u32 = 0x1A40_0038;
+pub const MSHOP_EDITOR_CODE: u32 = 0x1A40_0039;
+pub const MSHOP_GENRE_CODE: u32 = 0x1A40_003A;
+pub const MSHOP_BPM_CODE: u32 = 0x1A40_003B;
+/// Row-local buy buttons, tiled over the staged `MS_EX` slots:
+/// gem buy, won buy.
+pub const MSHOP_GEM_BUY_CODE: u32 = 0x1A20_0041;
+pub const MSHOP_WON_BUY_CODE: u32 = 0x1A20_0046;
+/// Shop-list pager (`IDC_BUTTON_MSHOP_MSALL_LEFT/RIGHT`): left
+/// steps back, right steps forward (ASSUMED pairing — same named
+/// next step as lanking).
+pub const MSHOP_MSALL_LEFT_CODE: u32 = 0x1A20_000A;
+pub const MSHOP_MSALL_RIGHT_CODE: u32 = 0x1A20_000B;
+/// Shop-list sort buttons (`IDC_BUTTON_MSHOP_MS_TITLE/DIFF/BPM`):
+/// directions ASSUMED ascending (same named next step as lanking).
+pub const MSHOP_TITLE_SORT_CODE: u32 = 0x1A20_0080;
+pub const MSHOP_DIFF_SORT_CODE: u32 = 0x1A20_0081;
+pub const MSHOP_BPM_SORT_CODE: u32 = 0x1A20_0082;
+/// Cart pager (`IDC_BUTTON_MSHOP_MYCART_LEFT/RIGHT`).
+pub const MSHOP_CART_LEFT_CODE: u32 = 0x1A20_005E;
+pub const MSHOP_CART_RIGHT_CODE: u32 = 0x1A20_005F;
+/// First cart-row hit area (`IDC_BUTTON_MSHOP_CART_EX1`); five run
+/// contiguously through `+4` (block walk + staged dump).
+pub const MSHOP_CART_TOGGLE_FIRST_CODE: u32 = 0x1A01_B060;
+/// Visible cart rows per page (five staged music-cart `CART_EX`
+/// hit areas).
+pub const MSHOP_CART_ROWS: usize = 5;
+/// Cart-row TEXT templates (row-local, tiled over the staged music
+/// `CART_EX` slots): position, song title, price (price stays blank
+/// — no price source, same OPEN as the list cells).
+pub const MSHOP_CART_NUM_CODE: u32 = 0x1A40_0065;
+pub const MSHOP_CART_ITEMNAME_CODE: u32 = 0x1A40_0067;
+pub const MSHOP_CART_PRICE_CODE: u32 = 0x1A40_0068;
+/// Cart page-number IMAGEs (staged absolute): current tens/ones
+/// plus total tens/ones.
+pub const MSHOP_CART_PAGE_CUR_TENS_CODE: u32 = 0x1A50_006A;
+pub const MSHOP_CART_PAGE_CUR_ONES_CODE: u32 = 0x1A50_006B;
+pub const MSHOP_CART_PAGE_TOT_TENS_CODE: u32 = 0x1A50_006C;
+pub const MSHOP_CART_PAGE_TOT_ONES_CODE: u32 = 0x1A50_006D;
+/// Cart buy (`IDC_BUTTON_MSHOP_BUYITEM`): queues the pinned empty
+/// `SyncMusicPurchase` 5010 send (the cart join stays ASSUMED).
+pub const MSHOP_CART_BUY_CODE: u32 = 0x1A20_005D;
+/// Shop-list page-number IMAGEs (staged absolute,
+/// `MShop_PageNumber.ojs`): current tens/ones plus total tens/ones
+/// (current/total pairing ASSUMED — same named next step).
+pub const MSHOP_PAGE_CUR_TENS_CODE: u32 = 0x1A50_0025;
+pub const MSHOP_PAGE_CUR_ONES_CODE: u32 = 0x1A50_0026;
+pub const MSHOP_PAGE_TOT_TENS_CODE: u32 = 0x1A50_0027;
+pub const MSHOP_PAGE_TOT_ONES_CODE: u32 = 0x1A50_0028;
+/// Row TEXT templates in cell order (title, bought flag, artist,
+/// editor, genre, tempo).
+pub const MSHOP_ROW_TEXT_CODES: [u32; 6] = [
+    MSHOP_TITLE_CODE,
+    MSHOP_ISBUY_CODE,
+    MSHOP_ARTIST_CODE,
+    MSHOP_EDITOR_CODE,
+    MSHOP_GENRE_CODE,
+    MSHOP_BPM_CODE,
+];
+
+/// One song-shop row: the catalog song plus its fetched 4031 flags
+/// (owned copies so the board outlives the parse borrow).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MusicShopRow {
+    /// Catalog song.
+    pub song: LankingSong,
+    /// `FreeMusic` server option: every song plays free.
+    pub free: bool,
+    /// Server catalog carries this song id (chart data present).
+    pub listed: bool,
+}
+
+/// Song-shop rows in catalog order with live flags; a missing
+/// answer clears both flags without dropping rows.
+#[must_use]
+pub fn music_shop_rows(
+    songs: &[LankingSong],
+    answer: Option<&MusicListAnswer>,
+) -> Vec<MusicShopRow> {
+    songs
+        .iter()
+        .cloned()
+        .map(|song| {
+            let (free, listed) = shop_flags_for(song.song_id, answer);
+            MusicShopRow { song, free, listed }
+        })
+        .collect()
+}
+
+/// Bought-flag cell text: the fetched flags in words (`FREE` when
+/// the server frees every song, `OWNED` when the server lists the
+/// song, else blank — the price cells that would name the cost stay
+/// OPEN). Format ours-by-design, values DATA.
+#[must_use]
+pub fn music_shop_buy_caption(row: &MusicShopRow) -> String {
+    if row.free {
+        return "FREE".to_owned();
+    }
+    if row.listed {
+        return "OWNED".to_owned();
+    }
+    String::new()
+}
+
+/// One song-shop click the exe codes name: row picks, per-row buys,
+/// sorts, the shop-list pager, and the cart buy. Everything else
+/// (PRICE sort, filters, MYALL pager, search, TOP100, cart rows,
+/// gift, download) lands nowhere.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MusicShopAction {
+    /// Song-row `MS_EX` hit area picked (0-based on the page).
+    SelectRow(usize),
+    /// Per-row buy button: slot on the page, gem (`true`) or won.
+    BuyRow { slot: usize, gem: bool },
+    /// A sort button answered.
+    Sort(LankingSort),
+    /// Shop-list pager stepped back.
+    MsPrev,
+    /// Shop-list pager stepped forward.
+    MsNext,
+    /// Cart `BUYITEM` commits the cart.
+    CartBuy,
+    /// Cart-list pager stepped back.
+    CartPrev,
+    /// Cart-list pager stepped forward.
+    CartNext,
+}
+
+/// Board click under native pixel (`x`, `y`): the staged placement
+/// whose parsed `.bnd` rect contains the point and whose exe code
+/// names a row, a buy, a sort, the pager, or the cart buy (`None`
+/// elsewhere). Row-local buy buttons tile over the staged `MS_EX`
+/// slots through the staged slot origins — geometry from parsed
+/// rects, never literals.
+#[must_use]
+pub fn music_shop_action_at(
+    placements: &[ScenePlacement],
+    x: i32,
+    y: i32,
+) -> Option<MusicShopAction> {
+    if let Some(buy) = music_shop_buy_slot(placements, x, y) {
+        return Some(buy);
+    }
+    placements.iter().find_map(|placed| {
+        if !super::paint::rect_hit(&placed.rect, x, y) {
+            return None;
+        }
+        music_shop_action_for_code(placed.code)
+    })
+}
+
+/// Action behind one hit control code (`None` for the row-local buy
+/// buttons — their slots resolve through the staged `MS_EX` slots
+/// in [`music_shop_buy_slot`] — and for every unnamed control).
+fn music_shop_action_for_code(code: u32) -> Option<MusicShopAction> {
+    if let Some(sort) = music_shop_sort_for_code(code) {
+        return Some(MusicShopAction::Sort(sort));
+    }
+    match code {
+        MSHOP_MSALL_LEFT_CODE => Some(MusicShopAction::MsPrev),
+        MSHOP_MSALL_RIGHT_CODE => Some(MusicShopAction::MsNext),
+        MSHOP_CART_BUY_CODE => Some(MusicShopAction::CartBuy),
+        MSHOP_CART_LEFT_CODE => Some(MusicShopAction::CartPrev),
+        MSHOP_CART_RIGHT_CODE => Some(MusicShopAction::CartNext),
+        _ => music_shop_row(code),
+    }
+}
+
+/// Sort behind one `MS_*` button code (`None` elsewhere — PRICE
+/// stays display-only with no price source).
+fn music_shop_sort_for_code(code: u32) -> Option<LankingSort> {
+    match code {
+        MSHOP_TITLE_SORT_CODE => Some(LankingSort::Title),
+        MSHOP_DIFF_SORT_CODE => Some(LankingSort::Diff),
+        MSHOP_BPM_SORT_CODE => Some(LankingSort::Bpm),
+        _ => None,
+    }
+}
+
+/// Row pick behind one `MS_EX` hit-area code (`None` outside the five).
+fn music_shop_row(code: u32) -> Option<MusicShopAction> {
+    let slot = code.checked_sub(MSHOP_EX_FIRST_CODE)?;
+    let slot = usize::try_from(slot).ok()?;
+    (slot < MSHOP_SONG_ROWS).then_some(MusicShopAction::SelectRow(slot))
+}
+
+/// Staged song-row hit areas in top-to-bottom order (the five
+/// `MS_EX` rects tiling the song box).
+#[must_use]
+pub fn music_shop_slots(placements: &[ScenePlacement]) -> Vec<Rect> {
+    let mut slots: Vec<Rect> = placements
+        .iter()
+        .filter(|placed| {
+            placed
+                .code
+                .checked_sub(MSHOP_EX_FIRST_CODE)
+                .is_some_and(|slot| (slot as usize) < MSHOP_SONG_ROWS)
+        })
+        .map(|placed| placed.rect)
+        .collect();
+    slots.sort_by(|a, b| a.y.cmp(&b.y).then(a.x.cmp(&b.x)));
+    slots
+}
+
+/// Song-shop cell rect on the canvas: the row-local template rides
+/// the staged slot origin (the `MMS` templates stage row-local —
+/// `MMS_BACK` at (0,0) — unlike the lanking templates, which stage
+/// at row-zero absolute and shift base-relative).
+#[must_use]
+pub fn music_shop_tiled_rect(template: Rect, slot: &Rect) -> Rect {
+    Rect {
+        x: template.x + slot.x,
+        y: template.y + slot.y,
+        w: template.w,
+        h: template.h,
+    }
+}
+
+/// Per-row buy behind the tiled row-local buy buttons: the staged
+/// template shifted by the staged slot origin — the same tiling the
+/// painter uses (`None` when the template or the slots are unstaged,
+/// or outside every slot).
+fn music_shop_buy_slot(placements: &[ScenePlacement], x: i32, y: i32) -> Option<MusicShopAction> {
+    let slots = music_shop_slots(placements);
+    if slots.is_empty() {
+        return None;
+    }
+    for (slot, area) in slots.iter().enumerate() {
+        for (code, gem) in [(MSHOP_GEM_BUY_CODE, true), (MSHOP_WON_BUY_CODE, false)] {
+            let Some(template) = placements.iter().find(|placed| placed.code == code) else {
+                continue;
+            };
+            let rect = music_shop_tiled_rect(template.rect, area);
+            if super::paint::rect_hit(&rect, x, y) {
+                return Some(MusicShopAction::BuyRow { slot, gem });
+            }
+        }
+    }
+    None
+}
+
+/// Shop-list page-number rects: current-page tens+ones union, then
+/// total tens+ones union (`None` when any digit slot is unstaged).
+#[must_use]
+pub fn music_shop_page_rects(placements: &[ScenePlacement]) -> Option<(Rect, Rect)> {
+    let digit = |code| {
+        placements
+            .iter()
+            .find(|placed| placed.code == code)
+            .map(|placed| placed.rect)
+    };
+    let (cur_tens, cur_ones, tot_tens, tot_ones) = (
+        digit(MSHOP_PAGE_CUR_TENS_CODE)?,
+        digit(MSHOP_PAGE_CUR_ONES_CODE)?,
+        digit(MSHOP_PAGE_TOT_TENS_CODE)?,
+        digit(MSHOP_PAGE_TOT_ONES_CODE)?,
+    );
+    Some((
+        rect_union(cur_tens, cur_ones),
+        rect_union(tot_tens, tot_ones),
+    ))
+}
+
+/// Staged music-cart row hit areas in top-to-bottom order (the five
+/// music-cart `CART_EX` rects).
+#[must_use]
+pub fn music_shop_cart_slots(placements: &[ScenePlacement]) -> Vec<Rect> {
+    let mut slots: Vec<Rect> = placements
+        .iter()
+        .filter(|placed| {
+            placed
+                .code
+                .checked_sub(MSHOP_CART_TOGGLE_FIRST_CODE)
+                .is_some_and(|slot| (slot as usize) < MSHOP_CART_ROWS)
+        })
+        .map(|placed| placed.rect)
+        .collect();
+    slots.sort_by(|a, b| a.y.cmp(&b.y).then(a.x.cmp(&b.x)));
+    slots
+}
+
+/// Music-cart page-number rects: current-page tens+ones union, then
+/// total tens+ones union (`None` when any digit slot is unstaged).
+#[must_use]
+pub fn music_shop_cart_page_rects(placements: &[ScenePlacement]) -> Option<(Rect, Rect)> {
+    let digit = |code| {
+        placements
+            .iter()
+            .find(|placed| placed.code == code)
+            .map(|placed| placed.rect)
+    };
+    let (cur_tens, cur_ones, tot_tens, tot_ones) = (
+        digit(MSHOP_CART_PAGE_CUR_TENS_CODE)?,
+        digit(MSHOP_CART_PAGE_CUR_ONES_CODE)?,
+        digit(MSHOP_CART_PAGE_TOT_TENS_CODE)?,
+        digit(MSHOP_CART_PAGE_TOT_ONES_CODE)?,
+    );
+    Some((
+        rect_union(cur_tens, cur_ones),
+        rect_union(tot_tens, tot_ones),
+    ))
+}
+
 /// One music-shop song (`OJNList.dat`): id, title, artist, genre, tempo.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MusicShopSong<'a> {
@@ -3898,6 +4473,209 @@ mod side_tests {
         blob.extend_from_slice(&dead);
         blob.extend_from_slice(&side_song_record(770, 168.0, "Second", "o2ma770.ojm"));
         blob
+    }
+
+    fn shop_board_placements() -> Vec<ScenePlacement> {
+        // Synthetic board mirroring the staged `STATE_SHOP` geometry:
+        // eight ITEMBUY hit areas, the scroll with its relative
+        // pager children, and the absolute cart controls.
+        let mut placements = Vec::new();
+        let area = |code: u32, x: i32, y: i32, w: u32, h: u32| ScenePlacement {
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect { x, y, w, h },
+        };
+        let buy = [
+            (220, 187),
+            (220, 340),
+            (361, 187),
+            (361, 340),
+            (502, 187),
+            (502, 340),
+            (643, 187),
+            (643, 340),
+        ];
+        for (slot, (x, y)) in buy.iter().enumerate() {
+            placements.push(area(SHOP_ITEMBUY_FIRST_CODE + slot as u32, *x, *y, 81, 17));
+        }
+        placements.push(area(SHOP_SCROLL_CODE, 221, 374, 545, 18));
+        placements.push(area(SHOP_SCROLL_LEFT_CODE, 0, 0, 18, 18));
+        placements.push(area(SHOP_SCROLL_RIGHT_CODE, 527, 0, 18, 18));
+        placements.push(area(SHOP_BUYITEM_CODE, 17, 563, 49, 23));
+        placements.push(area(SHOP_CART_LEFT_CODE, 198, 564, 47, 22));
+        placements.push(area(SHOP_CART_RIGHT_CODE, 317, 564, 47, 22));
+        placements
+    }
+
+    #[test]
+    fn shop_buy_buttons_answer_contiguous_row_slots() {
+        let placements = shop_board_placements();
+        // Eight staged ITEMBUY hit areas, top-left first.
+        assert_eq!(
+            shop_action_at(&placements, 221, 188),
+            Some(ShopAction::ToggleRow(0))
+        );
+        assert_eq!(
+            shop_action_at(&placements, 362, 188),
+            Some(ShopAction::ToggleRow(2))
+        );
+        assert_eq!(
+            shop_action_at(&placements, 221, 341),
+            Some(ShopAction::ToggleRow(1))
+        );
+        assert_eq!(
+            shop_action_at(&placements, 644, 341),
+            Some(ShopAction::ToggleRow(7))
+        );
+        assert_eq!(shop_action_at(&placements, 10, 10), None);
+    }
+
+    #[test]
+    fn shop_scroll_pager_offsets_by_staged_scroll_origin() {
+        let placements = shop_board_placements();
+        // Pager children stage scroll-relative; the staged scroll
+        // origin carries them onto the canvas pager.
+        assert_eq!(
+            shop_action_at(&placements, 225, 378),
+            Some(ShopAction::ItemPrev)
+        );
+        assert_eq!(
+            shop_action_at(&placements, 752, 378),
+            Some(ShopAction::ItemNext)
+        );
+        assert_eq!(shop_action_at(&placements, 9, 9), None);
+    }
+
+    #[test]
+    fn shop_cart_buy_and_pager_answer_their_staged_buttons() {
+        let placements = shop_board_placements();
+        assert_eq!(
+            shop_action_at(&placements, 18, 564),
+            Some(ShopAction::CartBuy)
+        );
+        assert_eq!(
+            shop_action_at(&placements, 199, 565),
+            Some(ShopAction::CartPrev)
+        );
+        assert_eq!(
+            shop_action_at(&placements, 318, 565),
+            Some(ShopAction::CartNext)
+        );
+    }
+
+    fn music_shop_board_placements() -> Vec<ScenePlacement> {
+        // Synthetic board mirroring the staged `STATE_MUSICSHOP`
+        // geometry: five MS_EX hit areas, row-local buy buttons, and
+        // the absolute sort/pager/cart-buy buttons.
+        let mut placements = Vec::new();
+        let area = |code: u32, x: i32, y: i32, w: u32, h: u32| ScenePlacement {
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect { x, y, w, h },
+        };
+        let slots = [104, 188, 272, 356, 440];
+        for (slot, top) in slots.iter().enumerate() {
+            placements.push(area(MSHOP_EX_FIRST_CODE + slot as u32, 18, *top, 353, 86));
+        }
+        // Row-local buy templates tile over the staged slots.
+        placements.push(area(MSHOP_GEM_BUY_CODE, 322, 51, 25, 16));
+        placements.push(area(MSHOP_WON_BUY_CODE, 322, 67, 25, 16));
+        placements.push(area(MSHOP_TITLE_SORT_CODE, 133, 84, 59, 21));
+        placements.push(area(MSHOP_DIFF_SORT_CODE, 192, 84, 60, 21));
+        placements.push(area(MSHOP_BPM_SORT_CODE, 252, 84, 58, 21));
+        placements.push(area(MSHOP_MSALL_LEFT_CODE, 198, 532, 45, 21));
+        placements.push(area(MSHOP_MSALL_RIGHT_CODE, 317, 532, 46, 21));
+        placements.push(area(MSHOP_CART_BUY_CODE, 423, 528, 49, 23));
+        placements.push(area(MSHOP_CART_LEFT_CODE, 542, 529, 47, 22));
+        placements.push(area(MSHOP_CART_RIGHT_CODE, 661, 529, 47, 22));
+        placements
+    }
+
+    #[test]
+    fn music_shop_row_slots_answer_the_ms_ex_hit_areas() {
+        let placements = music_shop_board_placements();
+        assert_eq!(
+            music_shop_action_at(&placements, 19, 105),
+            Some(MusicShopAction::SelectRow(0))
+        );
+        assert_eq!(
+            music_shop_action_at(&placements, 19, 357),
+            Some(MusicShopAction::SelectRow(2))
+        );
+        assert_eq!(
+            music_shop_action_at(&placements, 19, 400),
+            Some(MusicShopAction::SelectRow(3))
+        );
+        assert_eq!(
+            music_shop_action_at(&placements, 19, 450),
+            Some(MusicShopAction::SelectRow(4))
+        );
+        assert_eq!(music_shop_action_at(&placements, 400, 105), None);
+    }
+
+    #[test]
+    fn music_shop_buy_buttons_tile_per_row_slot() {
+        let placements = music_shop_board_placements();
+        // Row-local GEM_BUY/WON_BUY ride the staged slot origins.
+        assert_eq!(
+            music_shop_action_at(&placements, 341, 156),
+            Some(MusicShopAction::BuyRow { slot: 0, gem: true })
+        );
+        assert_eq!(
+            music_shop_action_at(&placements, 341, 172),
+            Some(MusicShopAction::BuyRow {
+                slot: 0,
+                gem: false
+            })
+        );
+        assert_eq!(
+            music_shop_action_at(&placements, 341, 324),
+            Some(MusicShopAction::BuyRow { slot: 2, gem: true })
+        );
+        assert_eq!(music_shop_action_at(&placements, 372, 156), None);
+    }
+
+    #[test]
+    fn music_shop_sort_and_pager_answer_their_staged_buttons() {
+        let placements = music_shop_board_placements();
+        assert_eq!(
+            music_shop_action_at(&placements, 134, 85),
+            Some(MusicShopAction::Sort(LankingSort::Title))
+        );
+        assert_eq!(
+            music_shop_action_at(&placements, 193, 85),
+            Some(MusicShopAction::Sort(LankingSort::Diff))
+        );
+        assert_eq!(
+            music_shop_action_at(&placements, 253, 85),
+            Some(MusicShopAction::Sort(LankingSort::Bpm))
+        );
+        assert_eq!(
+            music_shop_action_at(&placements, 199, 533),
+            Some(MusicShopAction::MsPrev)
+        );
+        assert_eq!(
+            music_shop_action_at(&placements, 318, 533),
+            Some(MusicShopAction::MsNext)
+        );
+        assert_eq!(
+            music_shop_action_at(&placements, 424, 529),
+            Some(MusicShopAction::CartBuy)
+        );
+        assert_eq!(
+            music_shop_action_at(&placements, 543, 530),
+            Some(MusicShopAction::CartPrev)
+        );
+        assert_eq!(
+            music_shop_action_at(&placements, 662, 530),
+            Some(MusicShopAction::CartNext)
+        );
+        // PRICE has no price source, MYALL pages an unpinned owned
+        // list, and search/TOP100 stay unevidenced: all land nowhere.
+        assert_eq!(music_shop_action_at(&placements, 311, 85), None);
+        assert_eq!(music_shop_action_at(&placements, 519, 315), None);
     }
 
     #[test]

@@ -37,10 +37,16 @@ use super::super::playing::{HighwayGeometry, PlayingView};
 use super::super::screen::Screen;
 use super::side::{
     lanking_bpm_caption, lanking_diff_caption, lanking_genre_caption, lanking_lview_slots,
-    lanking_rank_cells, lanking_rview_slots, lanking_tiled_rect, myroom_action_for_code,
-    planet_band_rect, planet_caption_for_code, LankingSong, MyRoomAction, MyRoomState, PlanetBand,
-    PlanetOptionTab, LANKING_LVIEW_TEXT_CODES, LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES,
+    lanking_rank_cells, lanking_rview_slots, lanking_tiled_rect, music_shop_buy_caption,
+    music_shop_cart_page_rects, music_shop_cart_slots, music_shop_page_rects, music_shop_slots,
+    music_shop_tiled_rect, myroom_action_for_code, planet_band_rect, planet_caption_for_code,
+    shop_cart_page_rects, shop_cart_slots, wallet_row_caption, LankingSong, MusicShopRow,
+    MyRoomAction, MyRoomState, PlanetBand, PlanetOptionTab, ShopGood, WalletRow, WalletState,
+    GEM_LABEL, LANKING_LVIEW_TEXT_CODES, LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES,
+    MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS, MSHOP_ROW_TEXT_CODES,
     MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_SLOT_FIRST_CODE, QUIT_MESSAGE_CP949,
+    SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS,
+    SHOP_GEMMONEY_CODE, SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS,
 };
 use o2jam_file::ControlList;
 use o2jam_game::RoomTeams;
@@ -1184,6 +1190,219 @@ fn paint_lanking_rank_row(
 fn paint_lanking_caption(frame: &mut Frame<'_>, placements: &[ScenePlacement], title: &str) {
     if let Some(rect) = lanking_template_rect(placements, LANKING_MUSICNAME_CODE) {
         paint_text_into_rect(frame, rect, title, CP949_INK);
+    }
+}
+
+/// Item-shop board overlay over the staged side art: the visible
+/// goods' names and cash prices into the staged `ITEMNAME`/`ITEMWON`
+/// TEXT rects (gem cells stay blank — no pinned source), the wallet
+/// gem cell, the checked cart rows, and both pager readouts — each
+/// inked into staged rects, never literals. Text renders through
+/// the system face (owner decision `e8d01`).
+pub fn paint_shop_board(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    goods: &[ShopGood],
+    wallet: &WalletState,
+    cart: &[ShopGood],
+    cart_page: usize,
+    cart_pages: usize,
+) {
+    paint_shop_rows(frame, placements, goods);
+    paint_shop_wallet(frame, placements, wallet);
+    paint_shop_cart(frame, placements, cart, cart_page, cart_pages);
+}
+
+/// Visible goods into the staged `ITEMNAME`/`ITEMWON` templates
+/// (`None` per missing template: paints nothing).
+fn paint_shop_rows(frame: &mut Frame<'_>, placements: &[ScenePlacement], goods: &[ShopGood]) {
+    for (slot, good) in goods.iter().enumerate().take(SHOP_ITEM_ROWS) {
+        let slot_u32 = u32::try_from(slot).unwrap_or(u32::MAX);
+        if let Some(rect) = shop_template_rect(placements, SHOP_ITEMNAME_FIRST_CODE + slot_u32) {
+            paint_text_into_rect(frame, rect, &good.name, CP949_INK);
+        }
+        if let Some(rect) = shop_template_rect(placements, SHOP_ITEMWON_FIRST_CODE + slot_u32) {
+            paint_text_into_rect(frame, rect, &good.price.to_string(), CP949_INK);
+        }
+    }
+}
+
+/// Wallet gem cell (`GEMMONEY`): `--` until the 5028 refresh folds
+/// a gem word.
+fn paint_shop_wallet(frame: &mut Frame<'_>, placements: &[ScenePlacement], wallet: &WalletState) {
+    if let Some(rect) = shop_template_rect(placements, SHOP_GEMMONEY_CODE) {
+        let row = WalletRow::named(GEM_LABEL, wallet.gem);
+        paint_text_into_rect(frame, rect, &wallet_row_caption(&row), CP949_INK);
+    }
+}
+
+/// Checked cart rows into the staged row-local `CART` templates
+/// riding the staged `CART_EX` slot origins (position, name, price;
+/// unstaged slots or templates: no rows), plus the cart pager
+/// readout (`cur/tot` into the staged digit-pair unions).
+fn paint_shop_cart(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    cart: &[ShopGood],
+    cart_page: usize,
+    cart_pages: usize,
+) {
+    let slots = shop_cart_slots(placements);
+    let num = shop_template_rect(placements, SHOP_CART_NUM_CODE);
+    let name = shop_template_rect(placements, SHOP_CART_ITEMNAME_CODE);
+    let price = shop_template_rect(placements, SHOP_CART_PRICE_CODE);
+    let (Some(num), Some(name), Some(price)) = (num, name, price) else {
+        return;
+    };
+    if slots.is_empty() {
+        return;
+    }
+    for (index, (slot, good)) in slots.iter().zip(cart.iter()).enumerate() {
+        paint_text_into_rect(
+            frame,
+            music_shop_tiled_rect(num, slot),
+            &shop_cart_position(cart_page, index),
+            CP949_INK,
+        );
+        paint_text_into_rect(
+            frame,
+            music_shop_tiled_rect(name, slot),
+            &good.name,
+            CP949_INK,
+        );
+        paint_text_into_rect(
+            frame,
+            music_shop_tiled_rect(price, slot),
+            &good.price.to_string(),
+            CP949_INK,
+        );
+    }
+    if let Some((cur, tot)) = shop_cart_page_rects(placements) {
+        paint_text_into_rect(frame, cur, &(cart_page + 1).to_string(), CP949_INK);
+        paint_text_into_rect(frame, tot, &cart_pages.to_string(), CP949_INK);
+    }
+}
+
+/// Cart-row position caption (`NUM` cell): the 1-based row order
+/// across cart pages, never the good id.
+fn shop_cart_position(cart_page: usize, index: usize) -> String {
+    (cart_page
+        .saturating_mul(SHOP_CART_ROWS)
+        .saturating_add(index)
+        .saturating_add(1))
+    .to_string()
+}
+
+/// Native rect of one staged shop template (`None` unstaged).
+fn shop_template_rect(placements: &[ScenePlacement], code: u32) -> Option<Rect> {
+    placements
+        .iter()
+        .find(|placed| placed.code == code)
+        .map(|placed| placed.rect)
+}
+
+/// Song-shop board overlay over the staged side art: the visible
+/// rows' catalog cells into the staged row-local `MMS` templates
+/// riding the staged `MS_EX` slot origins (title, bought flag,
+/// artist, editor, genre, tempo; price/diff cells stay blank — no
+/// pinned source), plus the list pager readout. Text renders
+/// through the system face (owner decision `e8d01`).
+pub fn paint_music_shop_board(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    rows: &[MusicShopRow],
+    list_page: usize,
+    list_pages: usize,
+) {
+    paint_music_shop_rows(frame, placements, rows);
+    if let Some((cur, tot)) = music_shop_page_rects(placements) {
+        paint_text_into_rect(frame, cur, &(list_page + 1).to_string(), CP949_INK);
+        paint_text_into_rect(frame, tot, &list_pages.to_string(), CP949_INK);
+    }
+}
+
+/// Visible rows into the six staged `MMS` templates at their slots
+/// (unstaged slots or templates: no rows).
+fn paint_music_shop_rows(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    rows: &[MusicShopRow],
+) {
+    let slots = music_shop_slots(placements);
+    if slots.is_empty() {
+        return;
+    }
+    let templates: Vec<Rect> = MSHOP_ROW_TEXT_CODES
+        .iter()
+        .filter_map(|code| shop_template_rect(placements, *code))
+        .collect();
+    if templates.len() != MSHOP_ROW_TEXT_CODES.len() {
+        return;
+    }
+    for (slot, row) in slots.iter().zip(rows.iter()) {
+        let cells = [
+            row.song.title.clone(),
+            music_shop_buy_caption(row),
+            row.song.artist.clone(),
+            row.song.editor.clone(),
+            lanking_genre_caption(row.song.genre),
+            lanking_bpm_caption(row.song.bpm),
+        ];
+        for (template, text) in templates.iter().zip(cells.iter()) {
+            if text.is_empty() {
+                continue;
+            }
+            paint_text_into_rect(
+                frame,
+                music_shop_tiled_rect(*template, slot),
+                text,
+                CP949_INK,
+            );
+        }
+    }
+}
+
+/// Checked music-cart rows into the staged row-local music `CART`
+/// templates (position, title; price stays blank — same OPEN as the
+/// list cells), plus the cart pager readout.
+pub fn paint_music_shop_cart(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    cart: &[LankingSong],
+    cart_page: usize,
+    cart_pages: usize,
+) {
+    let slots = music_shop_cart_slots(placements);
+    let num = shop_template_rect(placements, MSHOP_CART_NUM_CODE);
+    let name = shop_template_rect(placements, MSHOP_CART_ITEMNAME_CODE);
+    let (Some(num), Some(name)) = (num, name) else {
+        return;
+    };
+    if slots.is_empty() {
+        return;
+    }
+    for (index, (slot, song)) in slots.iter().zip(cart.iter()).enumerate() {
+        let position = cart_page
+            .saturating_mul(MSHOP_CART_ROWS)
+            .saturating_add(index)
+            .saturating_add(1)
+            .to_string();
+        paint_text_into_rect(
+            frame,
+            music_shop_tiled_rect(num, slot),
+            &position,
+            CP949_INK,
+        );
+        paint_text_into_rect(
+            frame,
+            music_shop_tiled_rect(name, slot),
+            &song.title,
+            CP949_INK,
+        );
+    }
+    if let Some((cur, tot)) = music_shop_cart_page_rects(placements) {
+        paint_text_into_rect(frame, cur, &(cart_page + 1).to_string(), CP949_INK);
+        paint_text_into_rect(frame, tot, &cart_pages.to_string(), CP949_INK);
     }
 }
 
@@ -4937,6 +5156,13 @@ pub fn paint_screen(frame: &mut Frame<'_>, screen: Screen) {
 
 #[cfg(test)]
 mod paint_tests {
+    use super::super::side::{
+        MSHOP_ARTIST_CODE, MSHOP_BPM_CODE, MSHOP_CART_TOGGLE_FIRST_CODE, MSHOP_EDITOR_CODE,
+        MSHOP_EX_FIRST_CODE, MSHOP_GENRE_CODE, MSHOP_ISBUY_CODE, MSHOP_PAGE_CUR_ONES_CODE,
+        MSHOP_PAGE_CUR_TENS_CODE, MSHOP_PAGE_TOT_ONES_CODE, MSHOP_PAGE_TOT_TENS_CODE,
+        MSHOP_TITLE_CODE, SHOP_CART_PAGE_CUR_ONES_CODE, SHOP_CART_PAGE_CUR_TENS_CODE,
+        SHOP_CART_PAGE_TOT_ONES_CODE, SHOP_CART_PAGE_TOT_TENS_CODE, SHOP_CART_TOGGLE_FIRST_CODE,
+    };
     use super::*;
     use crate::avatar::FigureLayer;
     use crate::screen::Screen;
@@ -5013,6 +5239,147 @@ mod paint_tests {
             ),
         }
         buf
+    }
+
+    #[test]
+    fn shop_board_paints_names_prices_and_wallet_at_staged_rects() {
+        // Synthetic `STATE_SHOP` board: two goods ink their names
+        // and prices into the staged ITEMNAME/ITEMWON rects, the
+        // wallet folds a gem word into GEMMONEY, and the pager
+        // unions carry the cart page — every cell white ink on
+        // black, so any lit pixel proves the overlay.
+        let placements = vec![
+            shop_placement(SHOP_ITEMNAME_FIRST_CODE, 231, 69, 100, 12),
+            shop_placement(SHOP_ITEMNAME_FIRST_CODE + 1, 231, 222, 100, 12),
+            shop_placement(SHOP_ITEMWON_FIRST_CODE, 247, 169, 38, 13),
+            shop_placement(SHOP_ITEMWON_FIRST_CODE + 1, 247, 322, 38, 13),
+            shop_placement(SHOP_GEMMONEY_CODE, 82, 288, 95, 13),
+            shop_placement(SHOP_CART_PAGE_CUR_TENS_CODE, 247, 567, 14, 17),
+            shop_placement(SHOP_CART_PAGE_CUR_ONES_CODE, 261, 567, 14, 17),
+            shop_placement(SHOP_CART_PAGE_TOT_TENS_CODE, 287, 567, 14, 17),
+            shop_placement(SHOP_CART_PAGE_TOT_ONES_CODE, 301, 567, 14, 17),
+            shop_placement(SHOP_CART_NUM_CODE, 0, 0, 14, 13),
+            shop_placement(SHOP_CART_ITEMNAME_CODE, 35, 0, 149, 15),
+            shop_placement(SHOP_CART_PRICE_CODE, 188, 0, 50, 13),
+            shop_placement(SHOP_CART_TOGGLE_FIRST_CODE, 137, 464, 282, 15),
+        ];
+        let goods = vec![
+            ShopGood {
+                item_id: 1,
+                name: "Hair".to_owned(),
+                price: 1000,
+            },
+            ShopGood {
+                item_id: 2,
+                name: "Boots".to_owned(),
+                price: 2500,
+            },
+        ];
+        let wallet = WalletState {
+            gem: Some(1200),
+            ..WalletState::default()
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_shop_board(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            &goods,
+            &wallet,
+            &goods[..1],
+            0,
+            1,
+        );
+        let lit = |x: i32, y: i32, w: u32, h: u32| -> bool { has_ink_in(&buf, 800, x, y, w, h) };
+        assert!(lit(231, 69, 100, 12), "row name paints");
+        assert!(lit(247, 169, 38, 13), "row price paints");
+        assert!(lit(82, 288, 95, 13), "wallet gem paints");
+        assert!(lit(247, 567, 28, 17), "cur page paints");
+        assert!(lit(287, 567, 28, 17), "tot page paints");
+        assert!(lit(137, 464, 149, 15), "cart row paints");
+        assert!(!lit(0, 0, 100, 12), "unstaged band stays dark");
+    }
+
+    #[test]
+    fn music_shop_board_paints_catalog_cells_and_pager_at_staged_rects() {
+        // Synthetic `STATE_MUSICSHOP` board: one catalog row inks
+        // its cells into the row-local MMS templates riding the
+        // staged MS_EX origin, and the pager unions carry the
+        // list page — blank ISBUY paints nothing (no flags staged).
+        let placements = vec![
+            shop_placement(MSHOP_EX_FIRST_CODE, 18, 104, 353, 86),
+            shop_placement(MSHOP_TITLE_CODE, 89, 5, 213, 11),
+            shop_placement(MSHOP_ISBUY_CODE, 281, 4, 66, 11),
+            shop_placement(MSHOP_ARTIST_CODE, 122, 23, 106, 11),
+            shop_placement(MSHOP_EDITOR_CODE, 265, 23, 82, 11),
+            shop_placement(MSHOP_GENRE_CODE, 122, 38, 65, 11),
+            shop_placement(MSHOP_BPM_CODE, 223, 38, 25, 11),
+            shop_placement(MSHOP_CART_NUM_CODE, 0, 0, 14, 13),
+            shop_placement(MSHOP_CART_ITEMNAME_CODE, 35, 0, 149, 15),
+            shop_placement(MSHOP_CART_TOGGLE_FIRST_CODE, 481, 429, 282, 15),
+            shop_placement(MSHOP_PAGE_CUR_TENS_CODE, 246, 534, 14, 17),
+            shop_placement(MSHOP_PAGE_CUR_ONES_CODE, 260, 534, 14, 17),
+            shop_placement(MSHOP_PAGE_TOT_TENS_CODE, 286, 534, 14, 17),
+            shop_placement(MSHOP_PAGE_TOT_ONES_CODE, 300, 534, 14, 17),
+        ];
+        let rows = vec![MusicShopRow {
+            song: LankingSong {
+                song_id: 757,
+                title: "First".to_owned(),
+                artist: "Band".to_owned(),
+                editor: "NoteFactory".to_owned(),
+                genre: 3,
+                bpm: 124.0,
+                levels: [5, 9, 14],
+            },
+            free: false,
+            listed: false,
+        }];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_music_shop_board(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            &rows,
+            0,
+            1,
+        );
+        let lit = |x: i32, y: i32, w: u32, h: u32| -> bool { has_ink_in(&buf, 800, x, y, w, h) };
+        assert!(lit(107, 109, 213, 11), "row title paints");
+        assert!(lit(140, 127, 106, 11), "row artist paints");
+        assert!(!lit(299, 108, 66, 11), "blank ISBUY paints nothing");
+        assert!(lit(246, 534, 28, 17), "cur page paints");
+        assert!(!lit(481, 429, 282, 15), "empty cart paints nothing");
+    }
+
+    fn shop_placement(code: u32, x: i32, y: i32, w: u32, h: u32) -> ScenePlacement {
+        ScenePlacement {
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect { x, y, w, h },
+        }
+    }
+
+    fn has_ink_in(buf: &[u32], w: usize, x: i32, y: i32, rw: u32, rh: u32) -> bool {
+        for row in y..y + rh as i32 {
+            for col in x..x + rw as i32 {
+                if row >= 0 && col >= 0 {
+                    if let Some(pixel) = buf.get(row as usize * w + col as usize) {
+                        if *pixel != 0 {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
     }
 
     #[test]

@@ -64,12 +64,47 @@ No transition claimed from buttons alone; dispatch calls unknown.
 
 Shell screen + paint + flow + live staging — DONE
    (`Screen::MusicShop`, `paint_music_shop_scene`, all-reject flow,
-   `stage_interface_scenes` + soak tests; clicks land nowhere per P0).
+   `stage_interface_scenes` + soak tests; side-screen clicks
+   route through `click_music_shop` since ticket #21).
+
+## Ticket #21 (2026-11-12)
+
+Five songs per page under the staged `MS_EX_1..5` hit areas
+(`0x1A01802D..0x31`, 353x86 tiling the song box on the staged
+dump). Row TITLE/ARTIST/EDITOR/GENRE/BPM cells ink the staged
+`MMS` TEXT templates (`0x36`/`0x38..0x3B`, row-local, tiled over
+the staged slots) from the parsed `OJNList.dat` catalog; the
+ISBUY cell (`0x37`) names the fetched 4031 flags (`FREE` when the
+server frees every song, `OWNED` when the server lists the song —
+format ours-by-design, values DATA). GEM_PRICE/WON_PRICE cells
+(`0x40`/`0x45`) and the DIFF cell (`0x3C`) stay blank: no price
+or level→cell source is pinned (next step: gateway replay
+pinning the price words plus a rig capture of the DIFF cell at a
+known song). TITLE/DIFF/BPM sorts (`0x80..0x82`) reuse the
+catalog sort keys with ASSUMED ascending directions (same named
+next step as lanking). PRICE (`0x83`), 3KEY/7KEY filters, MYALL
+owned-list pager, search, TOP100, gift, and download stay
+display-only OPEN (next step: SendInput sweep on the live board
+per the `~/scratch/planet-verify/` recipe). Per-row GEM_BUY/
+WON_BUY (`0x41`/`0x46`, row-local, tiled per slot) and the cart
+BUYITEM (`0x5D`) queue the pinned empty `SyncMusicPurchase`
+5010 send (send-switch file `0xa4df0` index 8); the 5011 answer
+shape is untraced, so the wire ride stays ASSUMED behind the
+take-seam.
 
 ## OPEN
 
-1. Rect contents → placements.
-2. Album-art source + GEM/WON buy semantics (`jsBuyMusic`/Payment).
-3. Preview, download progress, select, cart, gift, delete flows.
-4. Search/sort/filter/pager behavior; caption/money sources.
-5. Shell paint/flow/staging; entry/exit paths.
+1. Rect contents → placements — DONE (138 rects, ordinal pairing).
+2. Album-art source + GEM/WON buy semantics — PARTIAL: per-row
+   and cart buys queue the pinned 5010 send (ASSUMED wire-side);
+   `jsBuyMusic`/Payment web bridge unpinned.
+3. Preview, download progress, select, cart, gift, delete flows —
+   PARTIAL: `MS_EX` picks stage the cart, cart pagers step and
+   hold; preview/download/gift/delete unevidenced.
+4. Search/sort/filter/pager behavior — PARTIAL: TITLE/DIFF/BPM
+   sorts and the MSALL pager answer (directions + pairing
+   ASSUMED); PRICE sort, filters, search unevidenced.
+   Caption/money sources: ISBUY from 4031 flags; money texts
+   unpinned.
+5. Shell paint/flow/staging — DONE for rows + pagers + buys;
+   entry/exit paths still OPEN.
