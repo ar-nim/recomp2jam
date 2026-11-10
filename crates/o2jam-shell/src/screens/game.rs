@@ -1813,6 +1813,25 @@ impl ScreenGame {
             self.open_create_room_dialog();
             return;
         }
+        // The OPTION button opens the options dialog over the lobby
+        // (the same `Dialog_Option_*` sheet the Planet gear mounts:
+        // EXIT/Escape closes it back onto Room, the flow never
+        // moves). Geometry from the parsed staged rect only (owner
+        // rule `f38f3`). Other top-strip buttons (`ITEMSHOP`,
+        // `MYROOM`, `COUPON`, `MUSICSHOP`, `MYCAPSULE`, `EVENT`,
+        // `MYBAND`, `CONFERENCE`, `MESSENGER`, `WATINGVIEW`,
+        // `FIRSTSTEP`, mode filters, chat tabs, pagers) have no
+        // evidenced click behavior yet, so they stay OPEN and land
+        // nowhere — never invented here.
+        let option_hit = self.scene_art(Screen::Room).is_some_and(|art| {
+            art.placements.iter().any(|placed| {
+                placed.code == super::side::ROOM_OPTION_BUTTON_CODE && rect_hit(&placed.rect, x, y)
+            })
+        });
+        if option_hit {
+            self.planet_modal = Some(PlanetModal::Options);
+            return;
+        }
         let Some(index) = self.room_index_at(x, y) else {
             return;
         };
@@ -3861,6 +3880,9 @@ impl ScreenGame {
             }
             None => {}
         }
+        // The options dialog layers over the lobby exactly as over
+        // the Planet board (EXIT/Escape closes back onto Room).
+        self.paint_planet_modal(frame);
     }
     /// Create-room texts at the parsed title/password edit rects.
     fn paint_create_room_texts(&self, frame: &mut Frame<'_>, placements: &[ScenePlacement]) {
@@ -4842,11 +4864,11 @@ mod game_tests {
         MSHOP_EX_FIRST_CODE, MSHOP_GEM_BUY_CODE, MSHOP_MSALL_LEFT_CODE, MSHOP_MSALL_RIGHT_CODE,
         MSHOP_PAGE_CUR_ONES_CODE, MSHOP_PAGE_CUR_TENS_CODE, MSHOP_PAGE_TOT_ONES_CODE,
         MSHOP_PAGE_TOT_TENS_CODE, MSHOP_TITLE_SORT_CODE, MSHOP_WON_BUY_CODE, ROOM_BACK_BUTTON_CODE,
-        ROOM_BACK_BUTTON_ID, SHOP_BUYITEM_CODE, SHOP_CART_LEFT_CODE, SHOP_CART_PAGE_CUR_ONES_CODE,
-        SHOP_CART_PAGE_CUR_TENS_CODE, SHOP_CART_PAGE_TOT_ONES_CODE, SHOP_CART_PAGE_TOT_TENS_CODE,
-        SHOP_CART_RIGHT_CODE, SHOP_GEMMONEY_CODE, SHOP_ITEMBUY_FIRST_CODE,
-        SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_SCROLL_CODE, SHOP_SCROLL_LEFT_CODE,
-        SHOP_SCROLL_RIGHT_CODE,
+        ROOM_BACK_BUTTON_ID, ROOM_OPTION_BUTTON_CODE, ROOM_OPTION_BUTTON_ID, SHOP_BUYITEM_CODE,
+        SHOP_CART_LEFT_CODE, SHOP_CART_PAGE_CUR_ONES_CODE, SHOP_CART_PAGE_CUR_TENS_CODE,
+        SHOP_CART_PAGE_TOT_ONES_CODE, SHOP_CART_PAGE_TOT_TENS_CODE, SHOP_CART_RIGHT_CODE,
+        SHOP_GEMMONEY_CODE, SHOP_ITEMBUY_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE,
+        SHOP_ITEMWON_FIRST_CODE, SHOP_SCROLL_CODE, SHOP_SCROLL_LEFT_CODE, SHOP_SCROLL_RIGHT_CODE,
     };
     use super::*;
     use crate::avatar::AvatarFigure;
@@ -5498,6 +5520,45 @@ mod game_tests {
     fn click_outside_room_back_keeps_room() {
         let mut game = room_back_game();
         game.mouse_click(10, 10);
+        assert_eq!(game.screen(), Screen::Room);
+    }
+
+    #[test]
+    fn click_staged_room_option_opens_options_over_room() {
+        let mut game = room_back_game();
+        game.load_scene(
+            Screen::Room,
+            vec![
+                ScenePlacement {
+                    id: ROOM_BACK_BUTTON_ID.to_owned(),
+                    code: ROOM_BACK_BUTTON_CODE,
+                    sprite: None,
+                    rect: Rect {
+                        x: 711,
+                        y: 569,
+                        w: 83,
+                        h: 24,
+                    },
+                },
+                ScenePlacement {
+                    id: ROOM_OPTION_BUTTON_ID.to_owned(),
+                    code: ROOM_OPTION_BUTTON_CODE,
+                    sprite: None,
+                    rect: Rect {
+                        x: 727,
+                        y: 1,
+                        w: 60,
+                        h: 32,
+                    },
+                },
+            ],
+            HashMap::new(),
+        );
+        game.mouse_click(757, 17);
+        assert_eq!(game.planet_modal(), Some(PlanetModal::Options));
+        assert_eq!(game.screen(), Screen::Room);
+        game.menu_key(MenuKey::Back, true);
+        assert_eq!(game.planet_modal(), None);
         assert_eq!(game.screen(), Screen::Room);
     }
 

@@ -2734,6 +2734,15 @@ pub const ROOM_CREATE_BUTTON_CODE: u32 = 0x1320_0007;
 pub const ROOM_BACK_BUTTON_CODE: u32 = 0x1320_0002;
 /// Room-back button control id (`IDC_BUTTON_SROOM_BACK`).
 pub const ROOM_BACK_BUTTON_ID: &str = "IDC_BUTTON_SROOM_BACK";
+/// Room-option button code (`IDC_BUTTON_SROOM_OPTION`, `0X1320000B`,
+/// `Room_Option.ojs`): low word `0x00B` pairs with `State_Room.bnd`
+/// rect 10 (727,1)-(787,33) by code ordinal (never file order) —
+/// the top-strip rect the exe's `0x548640` pairing rule
+/// (dossier `ev_3a869bb7…`) assigns. `ControlList_Interface.txt`
+/// slot 1595, `State_Room.bnd` slot 1349 in 7.55 `Interface1.opi`.
+pub const ROOM_OPTION_BUTTON_CODE: u32 = 0x1320_000B;
+/// Room-option button control id (`IDC_BUTTON_SROOM_OPTION`).
+pub const ROOM_OPTION_BUTTON_ID: &str = "IDC_BUTTON_SROOM_OPTION";
 /// Password-dialog OK code (`0X28200004`, `Dialog_PasswordOK.ojs`).
 pub const PASSWORD_OK_CODE: u32 = 0x2820_0004;
 /// Password-dialog CANCEL code (`0X28200005`, `Dialog_PasswordNO.ojs`).

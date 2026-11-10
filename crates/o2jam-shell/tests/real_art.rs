@@ -13,7 +13,9 @@ use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
 use o2jam_render::{pack_xrgb, Frame};
 use o2jam_shell::avatar::{paint_scene_figures, AvatarFigure, ScenePlacement};
 use o2jam_shell::screens::paint::RESULT_WINLOSE_SPRITE;
-use o2jam_shell::screens::side::{ROOM_BACK_BUTTON_CODE, ROOM_BACK_BUTTON_ID};
+use o2jam_shell::screens::side::{
+    ROOM_BACK_BUTTON_CODE, ROOM_BACK_BUTTON_ID, ROOM_OPTION_BUTTON_CODE, ROOM_OPTION_BUTTON_ID,
+};
 use o2jam_shell::staging::{
     read_install_archives, stage_dialog, stage_state, Dialog, InstallArchives, StageContext, State,
 };
@@ -569,6 +571,28 @@ fn room_stages_pinned_back_button() {
     assert_eq!(placed.id, ROOM_BACK_BUTTON_ID);
     assert_eq!((placed.rect.x, placed.rect.y), (711, 569));
     assert_eq!((placed.rect.w, placed.rect.h), (83, 24));
+}
+
+#[test]
+fn room_stages_pinned_option_button() {
+    let path = archive_path(INTERFACE_ARCHIVE);
+    let Some(archive) = install_archives().interface else {
+        println!("skip room option: missing {}", path.display());
+        return;
+    };
+    let Some(art) = stage_state(&archive, State::Room, StageContext::default()).art else {
+        panic!("room option: STATE_ROOM staged no art");
+    };
+    let Some(placed) = art
+        .placements
+        .iter()
+        .find(|placed| placed.code == ROOM_OPTION_BUTTON_CODE)
+    else {
+        panic!("room option: IDC_BUTTON_SROOM_OPTION missing from staged STATE_ROOM");
+    };
+    assert_eq!(placed.id, ROOM_OPTION_BUTTON_ID);
+    assert_eq!((placed.rect.x, placed.rect.y), (727, 1));
+    assert_eq!((placed.rect.w, placed.rect.h), (60, 32));
 }
 
 #[test]
