@@ -1,12 +1,15 @@
 //! `o2jam-shell` — window, keyboard input, and the fixed-timestep
-//! frame loop for the game client. OS surface only: game logic lives
-//! in `o2jam-game`, audio time in `o2jam-audio`. Headless tests cover
-//! the key map and the timestep math; window creation needs hardware.
+//! frame loop for the game client. Scene staging and the OS surface:
+//! the staging declaration says what each State stages; game logic
+//! lives in `o2jam-game`, audio time in `o2jam-audio`. Headless tests
+//! cover the key map and the timestep math; window creation needs
+//! hardware.
 
 pub mod avatar;
 pub mod playing;
 pub mod screen;
 pub mod screens;
+pub mod staging;
 mod window;
 
 pub use avatar::{

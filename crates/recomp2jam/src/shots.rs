@@ -13,15 +13,16 @@ use o2jam_net::rooms::{WaitingAdminMessage, WaitingUserMessage};
 use o2jam_net::{ChannelState, GameMode, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
 use o2jam_render::{Frame, Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
 use o2jam_shell::avatar::{
-    bind_scene_rects, load_archive_sprite, load_avi_logo, load_scene_figures,
-    load_scene_figures_for_room, load_scene_figures_for_stage, scene_block, scene_sprite_names,
-    AvatarFigure, PlayingArtMode, ScenePlacement, AVI_BLOCK, LOADING_SPRITE, PLANET_BLOCK,
-    RESULT_BLOCK, ROOM_BLOCK, WAITING_BLOCK,
+    bind_scene_rects, load_avi_logo, load_scene_figures, load_scene_figures_for_room,
+    load_scene_figures_for_stage, scene_block, scene_sprite_names, AvatarFigure, PlayingArtMode,
+    ScenePlacement, AVI_BLOCK, LOADING_SPRITE,
 };
-use o2jam_shell::screens::paint::{PLAYING_BLOCK, RESULT_WINLOSE_SPRITE};
+use o2jam_shell::screens::paint::PLAYING_BLOCK;
 use o2jam_shell::screens::side::{
-    SideScreen, PAYMENT2_BLOCK, PAYMENT_BLOCK, SELECT_MUSIC_DIALOG_BLOCK,
-    TUTORIAL_BACKGROUND_SPRITE,
+    SideScreen, SELECT_MUSIC_DIALOG_BLOCK, TUTORIAL_BACKGROUND_SPRITE,
+};
+use o2jam_shell::staging::{
+    read_install_archives, stage_state, state_of_screen, state_of_side, StageContext, State,
 };
 use o2jam_shell::{GameLoop, MenuKey, PlaySkin, Screen, ScreenGame};
 
@@ -334,14 +335,12 @@ fn stage_bound_block(
     Some((placements, figures))
 }
 
-/// Side-screen stage data: the bound block placements plus figures
-/// (`visit_side` + `load_side_scene` paint these through
-/// `paint_side_scene`). Every side block declares a bind file —
-/// `State_Myroom.bnd` included (111 rects; the earlier "bind absent"
-/// note is corrected against the shipped archive, 2026-11-10).
-/// Payment merges both billing views. The tutorial is a stub block
-/// staging its `Playing1.opi` backdrop full-canvas. `None` keeps the
-/// walk's side shot skipped (no install-root).
+/// Side-screen stage data through the staging declaration: one
+/// bound State per side screen (`visit_side` + `load_side_scene`
+/// paint these through `paint_side_scene`). Payment merges both
+/// billing views. The tutorial keeps its local full-canvas staging
+/// until ticket #4. `None` keeps the walk's side shot skipped (no
+/// install-root).
 fn side_stage_data(
     side: SideScreen,
 ) -> Option<(Vec<ScenePlacement>, HashMap<String, AvatarFigure>)> {
@@ -349,31 +348,27 @@ fn side_stage_data(
         let playing = read_archive(PLAYING_ARCHIVE)?;
         return stage_single_sprite(&playing, TUTORIAL_BACKGROUND_SPRITE);
     }
-    let interface = read_archive(INTERFACE_ARCHIVE)?;
-    let list = control_list(&interface, INTERFACE_LIST)?;
-    match side {
-        SideScreen::Payment => {
-            let mut placements = Vec::new();
-            let mut figures = HashMap::new();
-            for block_name in [PAYMENT_BLOCK, PAYMENT2_BLOCK] {
-                let Some((view_placements, view_figures)) =
-                    stage_bound_block(&interface, &list, block_name, None, None)
-                else {
-                    continue;
-                };
-                placements.extend(view_placements);
-                figures.extend(view_figures);
-            }
-            if placements.is_empty() {
-                return None;
-            }
-            Some((placements, figures))
+    let installed = read_install_archives(&install_root());
+    let interface = installed.interface?;
+    let ctx = StageContext::default();
+    if side == SideScreen::Payment {
+        let mut placements = Vec::new();
+        let mut figures = HashMap::new();
+        for state in [State::Payment, State::Payment2] {
+            let Some(art) = stage_state(&interface, state, ctx).art else {
+                continue;
+            };
+            placements.extend(art.placements);
+            figures.extend(art.figures);
         }
-        _ => {
-            let block_name = side.block_name()?;
-            stage_bound_block(&interface, &list, block_name, None, None)
+        if placements.is_empty() {
+            return None;
         }
+        return Some((placements, figures));
     }
+    let state = state_of_side(side)?;
+    let art = stage_state(&interface, state, ctx).art?;
+    Some((art.placements, art.figures))
 }
 
 /// Load one side screen's stage data into the game; `false` when the
@@ -423,10 +418,12 @@ pub(crate) use crate::live_art::stage_channel_dialog;
 /// [`live_art::stage_planet_dialogs`].
 pub(crate) use crate::live_art::stage_planet_dialogs;
 
-/// Stage Interface-archive scenes; each scene stages independently
-/// so one bad block never blanks the rest. Channel stages no block
-/// art (the block names zero sprites) — its code-mounted dialog art
-/// stages through `stage_channel_dialog`.
+/// Stage Interface-archive scenes through the staging declaration;
+/// each scene stages independently so one bad block never blanks
+/// the rest. Channel stages no block art (the block names zero
+/// sprites) — its code-mounted dialog art stages through
+/// `stage_channel_dialog`. Avi keeps its local bound staging until
+/// ticket #4 gives it a declaration row.
 fn stage_interface_archive(game: &mut ScreenGame, archive: &[u8]) {
     if let Some(logo) = load_avi_logo(archive) {
         game.load_splash(logo);
@@ -435,36 +432,21 @@ fn stage_interface_archive(game: &mut ScreenGame, archive: &[u8]) {
     let Some(list) = control_list(archive, INTERFACE_LIST) else {
         return;
     };
-    for (screen, block) in [
-        (Screen::Avi, AVI_BLOCK),
-        (Screen::Room, ROOM_BLOCK),
-        (Screen::Waiting, WAITING_BLOCK),
-        (Screen::Planet, PLANET_BLOCK),
-    ] {
-        if let Some((placements, figures)) = stage_bound_block(archive, &list, block, None, None) {
-            game.load_scene(screen, placements, figures);
+    if let Some((placements, figures)) = stage_bound_block(archive, &list, AVI_BLOCK, None, None) {
+        game.load_scene(Screen::Avi, placements, figures);
+    }
+    for screen in [Screen::Room, Screen::Waiting, Screen::Planet] {
+        let Some(state) = state_of_screen(screen) else {
+            continue;
+        };
+        if let Some(art) = stage_state(archive, state, StageContext::default()).art {
+            game.load_scene(screen, art.placements, art.figures);
         }
     }
-    stage_result_block(game, archive, &list);
-    stage_planet_dialogs(game, archive, &list);
-}
-
-/// Stage the result scene: the `STATE_RESULT` block art plus the
-/// builder-mounted verdict banner body (`Result_WinLose.ojs`, file
-/// `0xc2390` — the block itself carries only the background, the
-/// each-result box, the buttons, and the grade plate), so the scene
-/// figures carry the banner and the painter selects its frame. A
-/// missing body keeps the scene banner-less.
-fn stage_result_block(game: &mut ScreenGame, archive: &[u8], list: &ControlList) {
-    let Some((placements, mut figures)) =
-        stage_bound_block(archive, list, RESULT_BLOCK, None, None)
-    else {
-        return;
-    };
-    if let Some(banner) = load_archive_sprite(archive, RESULT_WINLOSE_SPRITE) {
-        figures.insert(RESULT_WINLOSE_SPRITE.to_owned(), banner);
+    if let Some(art) = stage_state(archive, State::Result, StageContext::default()).art {
+        game.load_scene(Screen::Result, art.placements, art.figures);
     }
-    game.load_scene(Screen::Result, placements, figures);
+    stage_planet_dialogs(game, archive, &list);
 }
 
 /// Stage Playing-archive scenes (Loading gate plus Playing gauges)
@@ -507,11 +489,12 @@ fn stage_playing_archive(game: &mut ScreenGame, archive: &[u8]) {
 /// `install-root` is present; missing or unreadable archives keep
 /// the synthetic staging. Archives stay read-only, never fail.
 fn stage_real_art(game: &mut ScreenGame) {
-    if let Some(archive) = read_archive(INTERFACE_ARCHIVE) {
-        stage_interface_archive(game, &archive);
+    let installed = read_install_archives(&install_root());
+    if let Some(interface) = &installed.interface {
+        stage_interface_archive(game, interface);
     }
-    if let Some(archive) = read_archive(PLAYING_ARCHIVE) {
-        stage_playing_archive(game, &archive);
+    if let Some(playing) = &installed.playing {
+        stage_playing_archive(game, playing);
     }
 }
 
@@ -1289,8 +1272,9 @@ mod tests {
     use super::*;
     use o2jam_shell::avatar::{
         anchor_in_frame, load_archive_sprite, paint_foreground_placements, paint_scene_figures,
-        playing_member_selected,
+        playing_member_selected, ROOM_BLOCK, WAITING_BLOCK,
     };
+    use o2jam_shell::screens::paint::RESULT_WINLOSE_SPRITE;
 
     #[test]
     fn downscale_even_averages_two_by_two_blocks() {
