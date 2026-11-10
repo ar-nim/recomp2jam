@@ -196,6 +196,18 @@ impl WindowHandler {
         }
     }
 
+    /// Forward pointer motion to the game as native frame pixels (the
+    /// hover source). The capture log stays silent: motion floods it,
+    /// and no trace replays hover yet.
+    fn route_motion(&mut self, cursor_x: f64, cursor_y: f64) {
+        let Some((window_w, window_h)) = self.surface_size else {
+            return;
+        };
+        if let Some((x, y)) = window_to_native(window_w, window_h, cursor_x, cursor_y) {
+            self.shell.game.mouse_moved(x, y);
+        }
+    }
+
     /// Feed committed text into the game (winit `Ime::Commit`, or a
     /// pressed key's produced text when no input method owns the
     /// key — Xvfb rigs have no XIM, so chat typing arrives this way).
@@ -445,6 +457,7 @@ impl ApplicationHandler for WindowHandler {
             WindowEvent::Ime(Ime::Commit(text)) => self.route_text(&text),
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = Some((position.x, position.y));
+                self.route_motion(position.x, position.y);
             }
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,

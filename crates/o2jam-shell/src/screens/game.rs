@@ -439,6 +439,11 @@ pub struct ScreenGame {
     avatar: Option<AvatarFigure>,
     channels: Vec<ChannelState>,
     highlight: usize,
+    /// Native pointer position from the last motion event (`None` until
+    /// the pointer moves): the hover source for scenes with pinned hover
+    /// art (the channel select bar). Test affordance and live input both
+    /// feed it through [`GameLoop::mouse_moved`].
+    pointer: Option<(i32, i32)>,
     /// Channel-scene lobby chat panel (main-room 2013/2014/2016/2019/
     /// 2029 rows plus the 2012 draft).
     channel_chat: LobbyChatPanel,
@@ -894,6 +899,7 @@ impl ScreenGame {
             avatar: None,
             channels: Vec::new(),
             highlight: 0,
+            pointer: None,
             channel_chat: LobbyChatPanel::default(),
             room_chat: LobbyChatPanel::default(),
             last_room_control_noop: None,
@@ -2130,6 +2136,26 @@ impl ScreenGame {
         }
         self.enter(Screen::Loading);
         true
+    }
+
+    /// Native pointer position, when the pointer has moved this run.
+    #[must_use]
+    pub fn pointer(&self) -> Option<(i32, i32)> {
+        self.pointer
+    }
+
+    /// Channel row under the pointer, mapped back through the
+    /// highlight-following viewport (`None` off the rows, or while the
+    /// Channel dialog is not on screen).
+    #[must_use]
+    pub fn hovered_channel_row(&self) -> Option<usize> {
+        if self.flow.current() != Screen::Channel {
+            return None;
+        }
+        let (x, y) = self.pointer?;
+        let (top, shown) = channel_viewport(self.highlight, self.channels.len());
+        let slot = channel_row_hit(x, y, shown)?;
+        (top + slot < self.channels.len()).then_some(top + slot)
     }
 
     /// Channel dialog click: the bnd-pinned X button rect
@@ -4249,6 +4275,7 @@ impl ScreenGame {
                     self.highlight,
                     art,
                     self.scene_art(Screen::Planet),
+                    self.hovered_channel_row(),
                 );
             }
             (Some(art), true) => paint_lobby_backdrop(frame, Screen::Channel, art),
@@ -5080,7 +5107,14 @@ impl GameLoop for ScreenGame {
         }
     }
 
+    fn mouse_moved(&mut self, x: i32, y: i32) {
+        self.pointer = Some((x, y));
+    }
+
     fn mouse_click(&mut self, x: i32, y: i32) {
+        // A click lands where the pointer is, so hover and press agree
+        // even when no motion event preceded the press.
+        self.pointer = Some((x, y));
         // The open lanking board answers its named controls
         // (sorts, pagers, row picks) at staged rects; the shop
         // boards answer theirs (row toggles, buys, pagers, sorts)
@@ -7474,6 +7508,33 @@ mod game_tests {
         figure
     }
 
+    /// Three live channels (the hover test needs row 2 in view).
+    fn three_channels() -> Vec<ChannelState> {
+        (1..=3)
+            .map(|channel_id| ChannelState {
+                gateway_id: 0,
+                channel_id,
+                capacity: 100,
+                population: 5,
+                active: true,
+            })
+            .collect()
+    }
+
+    /// One solid RGB555 block of a given size (chair/plate fixtures).
+    fn solid_figure(w: usize, h: usize, word: u16) -> AvatarFigure {
+        use crate::avatar::FigureLayer;
+        let pixels = vec![word.to_le_bytes(); w * h].concat();
+        let mut figure = AvatarFigure::default();
+        figure.push_layer(FigureLayer {
+            image: o2jam_render::Rgb555Image::decode(&pixels, w, h).expect("solid block"),
+            dx: 0,
+            dy: 0,
+            colorkey: 0xFFFF,
+        });
+        figure
+    }
+
     /// Full-canvas placement pinning one sprite at the frame origin.
     fn corner_scene_art(name: &str) -> (Vec<ScenePlacement>, HashMap<String, AvatarFigure>) {
         use crate::screens::paint::{unbound_scene_placements, SceneArt};
@@ -7507,6 +7568,55 @@ mod game_tests {
         assert_eq!(buf[17 * 64 + 17], pack_xrgb(255, 0, 0));
         assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
         assert!(!buf.contains(&pack_xrgb(0xFF, 0xD0, 0x20)));
+    }
+
+    #[test]
+    fn hover_moves_the_channel_select_bar_off_the_highlight() {
+        // The exe arms the select bar on mouse motion alone
+        // (`Dialog_ChannelSelectBar.ojs` follows the row under the
+        // pointer, live-confirmed 2026-11-09), so with the keyboard
+        // highlight on row 0 the bar must follow the pointer down to
+        // row 2 — pinned row rect 2 `(216,324)-(572,375)`.
+        let mut game = ScreenGame::new();
+        // Three rows: the pinned viewport shows four slots, so row 2
+        // exists and the pointer can reach it.
+        game.set_channels(three_channels());
+        let figures = HashMap::from([(
+            "Dialog_ChannelSelectBar.ojs".to_owned(),
+            solid_figure(348, 44, 0x7C00),
+        )]);
+        game.load_scene(Screen::Planet, Vec::new(), figures.clone());
+        game.load_scene(Screen::Channel, Vec::new(), figures);
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        assert_eq!(game.screen(), Screen::Channel);
+        game.mouse_moved(300, 340);
+        assert_eq!(game.hovered_channel_row(), Some(2));
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        let bar = pack_xrgb(0xFF, 0x00, 0x00);
+        assert_eq!(buf[340 * 800 + 300], bar, "bar follows the pointer row");
+        assert_ne!(buf[250 * 800 + 300], bar, "row 0 lost the bar");
+        // Off the rows the bar returns to the keyboard highlight.
+        game.mouse_moved(20, 20);
+        assert_eq!(game.hovered_channel_row(), None);
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert_eq!(buf[250 * 800 + 300], bar, "highlight row keeps the bar");
     }
 
     #[test]

@@ -1809,6 +1809,7 @@ fn paint_channel_rows(
     channels: &[ChannelState],
     highlight: usize,
     art: Option<&SceneArt>,
+    hovered_row: Option<usize>,
 ) {
     let (top, shown) = channel_viewport(highlight, channels.len());
     paint_channel_scrim(frame, shown);
@@ -1853,7 +1854,11 @@ fn paint_channel_rows(
         if let Some(art) = art {
             paint_channel_face(frame, *slot, channel, art);
         }
-        if top + *slot == highlight {
+        // The select bar follows the row under the pointer (the exe
+        // arms it on mouse motion alone, live-confirmed 2026-11-09);
+        // with no hovered row it stays on the keyboard highlight.
+        let bar_row = hovered_row.unwrap_or(highlight);
+        if top + *slot == bar_row {
             paint_channel_highlight(frame, *slot, text_x, row, art);
         }
     }
@@ -1968,7 +1973,7 @@ pub(crate) fn paint_channel_list(
 ) {
     fill_background(frame, Screen::Channel);
     paint_title(frame, "CHANNEL");
-    paint_channel_rows(frame, channels, highlight, None);
+    paint_channel_rows(frame, channels, highlight, None, None);
 }
 
 /// Paint the staged channel dialog body ([`CHANNEL_DIALOG_SPRITE`]) at
@@ -2007,6 +2012,7 @@ pub fn paint_channel_scene(
     highlight: usize,
     art: &SceneArt,
     board: Option<&SceneArt>,
+    hovered_row: Option<usize>,
 ) {
     if !art.has_figures() && !board.is_some_and(|board| board.has_figures()) {
         frame.buf.fill(0);
@@ -2022,7 +2028,7 @@ pub fn paint_channel_scene(
     if !art.has_figures() && !board.is_some_and(|board| board.has_figures()) {
         paint_title_over_art(frame, Screen::Channel);
     }
-    paint_channel_rows(frame, channels, highlight, Some(art));
+    paint_channel_rows(frame, channels, highlight, Some(art), hovered_row);
 }
 
 /// One room row: `3 TITLE 5/8`, locked rooms suffixed `!`.
@@ -6370,6 +6376,7 @@ mod paint_tests {
             0,
             &art,
             None,
+            None,
         );
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
@@ -8557,6 +8564,7 @@ mod paint_tests {
             0,
             &art,
             None,
+            None,
         );
         assert_eq!(buf[0], pack_xrgb(255, 0, 0), "the authored anchor");
         assert_eq!(buf[70 * 128 + 100], 0, "no canvas-wide stretch");
@@ -10038,6 +10046,7 @@ mod paint_tests {
             0,
             &art,
             None,
+            None,
         );
         assert_eq!(buf[0], 0);
         assert!(!buf.contains(&background_of(Screen::Channel)));
@@ -10094,6 +10103,7 @@ mod paint_tests {
             &two_channels(),
             0,
             &art,
+            None,
             None,
         );
         assert_eq!(buf[17 * 64 + 17], pack_xrgb(255, 0, 0));
@@ -10198,6 +10208,7 @@ mod paint_tests {
             0,
             &art,
             None,
+            None,
         );
         // Bar-local (50,11)/(63,11) over the row-0 bar origin
         // (217,225): tens well centre (273,245), ones (286,245).
@@ -10237,6 +10248,7 @@ mod paint_tests {
                 &[channel],
                 0,
                 &art,
+                None,
                 None,
             );
             buf
@@ -10314,6 +10326,7 @@ mod paint_tests {
             0,
             &art,
             None,
+            None,
         );
         // Row 0 (full): baked FULL frame over bar and face well.
         assert_eq!(buf[240 * 800 + 250], red, "full bar frame");
@@ -10351,6 +10364,7 @@ mod paint_tests {
             0,
             &art,
             None,
+            None,
         );
         // The old ASCII anchor (text_x 200, row 0 top 224) sits
         // inside the staged bar: no white/gray text ink paints there.
@@ -10385,6 +10399,7 @@ mod paint_tests {
             0,
             &art,
             None,
+            None,
         );
         let green = pack_xrgb(0x00, 0xFF, 0x00);
         // Body ink inside the measured panel band, outside row chrome.
@@ -10418,6 +10433,7 @@ mod paint_tests {
             &two_channels(),
             0,
             &art,
+            None,
             None,
         );
         let blue = pack_xrgb(0x00, 0x00, 0xFF);
@@ -10458,6 +10474,7 @@ mod paint_tests {
             0,
             &art,
             None,
+            None,
         );
         let blue = pack_xrgb(0x00, 0x00, 0xFF);
         // Measured pill band (205,227 94x35) and track band
@@ -10491,6 +10508,7 @@ mod paint_tests {
             0,
             &art,
             None,
+            None,
         );
         assert!(buf.contains(&CHANNEL_PILL_TONE));
         assert!(buf.contains(&CHANNEL_TRACK_TOP_TONE));
@@ -10519,6 +10537,7 @@ mod paint_tests {
             &two_channels(),
             1,
             &art,
+            None,
             None,
         );
         let blue = pack_xrgb(0x00, 0x00, 0xFF);
@@ -10554,6 +10573,7 @@ mod paint_tests {
             &two_channels(),
             0,
             &art,
+            None,
             None,
         );
         assert!(
@@ -10642,6 +10662,7 @@ mod paint_tests {
             &two_channels(),
             0,
             &art,
+            None,
             None,
         );
         assert!(buf.contains(&CHANNEL_ENTER_TONE));
@@ -10742,6 +10763,7 @@ mod paint_tests {
             0,
             &art,
             Some(&board),
+            None,
         );
         let blue = pack_xrgb(0x00, 0x00, 0xFF);
         let green = pack_xrgb(0x00, 0xFF, 0x00);
@@ -10781,6 +10803,7 @@ mod paint_tests {
             0,
             &art,
             Some(&empty_board),
+            None,
         );
         assert_eq!(buf[599 * 800 + 799], 0, "no-fill corner untouched");
     }

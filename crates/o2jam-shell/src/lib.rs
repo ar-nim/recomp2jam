@@ -228,6 +228,13 @@ pub trait GameLoop {
     /// 800x600 space; the shell maps window pixels before calling).
     /// Default ignores clicks so existing implementors keep compiling.
     fn mouse_click(&mut self, _x: i32, _y: i32) {}
+    /// The pointer moved to native frame pixels (`x`, `y` in 800x600
+    /// space; the shell maps window pixels before calling). Hover
+    /// state rides this — the exe arms hover art on mouse motion alone
+    /// (`Dialog_ChannelSelectBar.ojs` follows the row under the
+    /// pointer, live-confirmed 2026-11-09). Default ignores motion so
+    /// existing implementors keep compiling.
+    fn mouse_moved(&mut self, _x: i32, _y: i32) {}
     /// Whether the game asked to quit (the planet quit-confirm OK).
     /// The windowed shell exits the event loop on it; headless walks
     /// read the flag instead. Default never quits so existing
