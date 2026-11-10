@@ -587,6 +587,25 @@ pub const SELECT_VISIBLE_ROWS: usize = 10;
 pub const SELECT_TABLE_LEFT: i32 = 344;
 pub const SELECT_TABLE_WIDTH: u32 = 437;
 
+/// Search-table row under a native-space click (`None` outside the
+/// table band or past the staged rows). Inverse of the
+/// [`SELECT_ROW_TOP`]/[`SELECT_ROW_PITCH`] bands; mouse clicks arrive
+/// pre-mapped to native space. Only the first [`SELECT_VISIBLE_ROWS`]
+/// rows paint, so only they answer.
+#[must_use]
+pub fn select_row_hit(x: i32, y: i32, row_count: usize) -> Option<usize> {
+    let width = i32::try_from(SELECT_TABLE_WIDTH).unwrap_or(0);
+    if !(SELECT_TABLE_LEFT..SELECT_TABLE_LEFT + width).contains(&x) {
+        return None;
+    }
+    let slot = y - SELECT_ROW_TOP;
+    if slot < 0 {
+        return None;
+    }
+    let index = usize::try_from(slot / SELECT_ROW_PITCH).unwrap_or(usize::MAX);
+    (index < row_count.min(SELECT_VISIBLE_ROWS)).then_some(index)
+}
+
 /// Header column lefts (native x): the check box plus the nine
 /// [`SELECT_TABLE_HEADERS`] captions.
 pub const SELECT_HEADER_COLUMNS: [i32; 10] = [344, 360, 392, 417, 565, 627, 650, 673, 692, 715];
@@ -3009,6 +3028,24 @@ mod side_tests {
         assert_eq!(rows[3].slot, 0);
         assert_eq!(rows[5].slot, 2);
         assert!(select_music_rows(&[]).is_empty());
+    }
+
+    #[test]
+    fn select_row_hit_maps_the_search_table_bands() {
+        // Row bands run at the audited pitch inside the table band;
+        // tops inclusive, past the staged rows never.
+        assert_eq!(select_row_hit(400, 150, 6), Some(0));
+        assert_eq!(select_row_hit(400, 172, 6), Some(0));
+        assert_eq!(select_row_hit(400, 173, 6), Some(1));
+        assert_eq!(select_row_hit(780, 196, 6), Some(2));
+        assert_eq!(select_row_hit(781, 160, 6), None);
+        assert_eq!(select_row_hit(343, 160, 6), None);
+        assert_eq!(select_row_hit(400, 149, 6), None);
+        assert_eq!(select_row_hit(400, 160, 1), Some(0));
+        assert_eq!(select_row_hit(400, 173, 1), None);
+        assert_eq!(select_row_hit(400, 160, 0), None);
+        assert_eq!(select_row_hit(400, 379, 30), Some(9));
+        assert_eq!(select_row_hit(400, 380, 30), None);
     }
 
     #[test]

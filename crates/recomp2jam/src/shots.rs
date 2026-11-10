@@ -1544,27 +1544,32 @@ mod tests {
     }
 
     /// First opaque pixel of a figure's first layer plus its decoded
+    /// Topmost inked layer, its first opaque pixel, and the probed
     /// color, via a 1x1 probe blit (only that pixel survives the
     /// clip). `None` when the body has no decodable layer or no
-    /// opaque pixel.
-    fn first_opaque_probe(figure: &AvatarFigure) -> Option<(i32, i32, u32)> {
-        let layer = figure.layer(0)?;
-        let at = (0..layer.image.w * layer.image.h)
-            .find(|at| layer.image.words[*at] != layer.colorkey)?;
-        let (px, py) = ((at % layer.image.w) as i32, (at / layer.image.w) as i32);
-        let mut probe = vec![0u32; 1];
-        o2jam_render::blit_rgb555(
-            &mut Frame {
-                buf: &mut probe,
-                w: 1,
-                h: 1,
-            },
-            &layer.image.view(),
-            -px,
-            -py,
-            Some(layer.colorkey),
-        );
-        (probe[0] != 0).then_some((px, py, probe[0]))
+    /// opaque pixel. Topmost first: the shared painter stacks every
+    /// layer back to front, so an early layer's ink may hide under a
+    /// later one — only the topmost ink must survive on the frame.
+    fn first_opaque_probe(figure: &AvatarFigure) -> Option<(usize, i32, i32, u32)> {
+        (0..figure.len()).rev().find_map(|index| {
+            let layer = figure.layer(index)?;
+            let at = (0..layer.image.w * layer.image.h)
+                .find(|at| layer.image.words[*at] != layer.colorkey)?;
+            let (px, py) = ((at % layer.image.w) as i32, (at / layer.image.w) as i32);
+            let mut probe = vec![0u32; 1];
+            o2jam_render::blit_rgb555(
+                &mut Frame {
+                    buf: &mut probe,
+                    w: 1,
+                    h: 1,
+                },
+                &layer.image.view(),
+                -px,
+                -py,
+                Some(layer.colorkey),
+            );
+            (probe[0] != 0).then_some((index, px, py, probe[0]))
+        })
     }
 
     /// Drive every claimed placement with a decodable body of one
@@ -1589,7 +1594,7 @@ mod tests {
             if !claimed {
                 continue;
             }
-            let Some((px, py, ink)) = first_opaque_probe(figure) else {
+            let Some((top, px, py, ink)) = first_opaque_probe(figure) else {
                 continue;
             };
             // Verified draw chain (avatar.rs `placement_view_origin`):
@@ -1597,9 +1602,11 @@ mod tests {
             // scaled); anchor-free bodies at their bound rect origins.
             // Most bound bodies duplicate their rect origins byte-exact;
             // `BpPoint_Left_bar.ojs` (2,266) is the photo-pinned
-            // disagreeing pair whose anchor wins.
+            // disagreeing pair whose anchor wins. The probed layer
+            // names its own anchor: layers stack at their own record
+            // anchors, so the topmost ink lands at the topmost anchor.
             let expected = if figure.has_anchor_offset() {
-                let layer = figure.layer(0).expect("probed figure has a layer");
+                let layer = figure.layer(top).expect("probed figure has a layer");
                 let (ax, ay) = anchor_in_frame(layer.dx, layer.dy, frame_w, frame_h);
                 (ax, ay)
             } else {
@@ -1634,9 +1641,11 @@ mod tests {
         // (TimeBar (489,556), EXIT (751,554), BpPoint (2,266) — the
         // photo-pinned disagreeing pair) and anchor-free bodies at
         // their rect origins. The same loop runs the declared Playing
-        // subset (Playing1.opi) and the declared Room State
-        // (Interface1.opi), so the rule holds per scene and per
-        // entry, not for one sprite.
+        // subset (Playing1.opi), the declared Room State, and the
+        // song-select dialog (DAILOG_SELECTMUSIC over Waiting — the
+        // ticket-#15 arm: its EXTEND rows land on the staged table
+        // bands), so the rule holds per scene and per entry, not for
+        // one sprite.
         let mut checked = 0;
         if let Some(archive) = read_install_archives(&install_root()).playing {
             let ctx = StageContext::default();
@@ -1649,6 +1658,11 @@ mod tests {
         if let Some(archive) = read_install_archives(&install_root()).interface {
             if let Some(art) = stage_state(&archive, State::Room, StageContext::default()).art {
                 checked += staged_entries_paint_on_origins(&art, "STATE_ROOM");
+            }
+            if let Some(art) =
+                stage_dialog(&archive, Dialog::SelectMusic, StageContext::default()).art
+            {
+                checked += staged_entries_paint_on_origins(&art, "DAILOG_SELECTMUSIC");
             }
         } else {
             println!("skip: missing {INTERFACE_ARCHIVE}");
@@ -1692,7 +1706,7 @@ mod tests {
         assert_eq!(placed.rect.w, 254);
         assert_eq!(placed.rect.h, 10);
         let figure = figures.get("Normal_TimeBar.ojs").expect("body decodes");
-        let (px, py, ink) = first_opaque_probe(figure).expect("body has opaque pixels");
+        let (_, px, py, ink) = first_opaque_probe(figure).expect("body has opaque pixels");
         let mut buf = vec![0u32; 800 * 600];
         paint_foreground_placements(
             &mut Frame {

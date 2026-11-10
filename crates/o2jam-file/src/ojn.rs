@@ -4,7 +4,9 @@
 //! Verified on real 7.55 files (docs/file-formats/ojn.md).
 
 use super::ojm::{parse_m30, parse_omc, OjmSample};
-use super::{detect_kind, read_f32le, read_str, read_u16le, read_u32le, AssetKind, FileError};
+use super::{
+    detect_kind, read_cp949_str, read_f32le, read_str, read_u16le, read_u32le, AssetKind, FileError,
+};
 use crate::jpeg::JPEG_SOI;
 
 /// Minimal parsed view of an `.ojn` chart file.
@@ -363,9 +365,9 @@ pub fn parse_ojn_list(bytes: &[u8]) -> Result<Vec<OjnListEntry<'_>>, FileError> 
             flag100: read_u32le(bytes, off + 100)?,
             const_a: read_u32le(bytes, off + 104)?,
             tune: read_f32le(bytes, off + 108)?,
-            title: read_str(bytes, off + 112, 64)?,
-            artist: read_str(bytes, off + 176, 32)?,
-            label: read_str(bytes, off + 208, 32)?,
+            title: read_cp949_str(bytes, off + 112, 64)?,
+            artist: read_cp949_str(bytes, off + 176, 32)?,
+            label: read_cp949_str(bytes, off + 208, 32)?,
             ojm_file: read_str(bytes, off + 240, 32)?,
             unknown1: read_u32le(bytes, off + 272)?,
             durations: [
@@ -482,9 +484,9 @@ pub fn parse_ojn(bytes: &[u8]) -> Result<OjnChartFile, FileError> {
                 flag96: read_u32le(&plain, OJN_FLAG96_OFF)?,
                 const100: read_u32le(&plain, OJN_CONST100_OFF)?,
                 tune: read_f32le(&plain, OJN_TUNE_OFF)?,
-                title: read_str(&plain, 108, 64)?,
-                artist: read_str(&plain, 172, 32)?,
-                label: read_str(&plain, 204, 32)?,
+                title: read_cp949_str(&plain, 108, 64)?,
+                artist: read_cp949_str(&plain, 172, 32)?,
+                label: read_cp949_str(&plain, 204, 32)?,
                 ojm_file: read_str(&plain, 236, 32)?,
                 unknown1: read_u32le(&plain, 268)?,
                 durations: [
@@ -1029,8 +1031,8 @@ mod tests {
         // Pinned from the real 7.55 `Tutorial.ojn` (118738 bytes;
         // header dumped byte-exact in docs/file-formats/ojn.md):
         // every numeric field plus the ASCII areas. The Korean
-        // title/artist areas hold CP949 bytes (lossy here), so they
-        // assert non-empty at their offsets.
+        // title/artist areas hold CP949 bytes, decoded like the
+        // song-select rows read them.
         let mut h = vec![0u8; OJN_HEADER_LEN];
         h[0..4].copy_from_slice(&8888u32.to_le_bytes());
         h[4..8].copy_from_slice(b"ojn\0");
@@ -1065,11 +1067,27 @@ mod tests {
         assert_eq!(chart.event_counts, [43, 0, 0]);
         assert_eq!(chart.key_hi(), 8888);
         assert_eq!(chart.key_lo(), 27);
-        assert!(!chart.title.is_empty());
-        assert!(!chart.artist.is_empty());
+        assert_eq!(chart.title, "\u{D29C}\u{D1A0}\u{B9AC}\u{C5BC}");
+        assert_eq!(chart.artist, "\u{BDF0}\u{D2F0}\u{D480}\u{B370}\u{C774}");
         assert_eq!(chart.label, "nao.paradigm");
         assert_eq!(chart.ojm_file, "Tutorial.ojm");
         assert_eq!(chart.durations, [247, 0, 0]);
+    }
+
+    #[test]
+    fn ojn_list_korean_title_decodes_cp949() {
+        // 7.55 text bodies are CP949 (the MSVC2005 Korean-locale
+        // codepage): EUC-KR bytes must decode to Korean glyphs,
+        // never to U+FFFD replacements — the song-select rows read
+        // these titles.
+        let mut rec = vec![0u8; 300];
+        rec[8..11].copy_from_slice(b"ojn");
+        rec[4..8].copy_from_slice(&757u32.to_le_bytes());
+        rec[20..24].copy_from_slice(&124.0f32.to_le_bytes());
+        rec[112..120].copy_from_slice(&[0xC6, 0xA9, 0xC5, 0xE4, 0xB8, 0xAE, 0xBE, 0xF3]);
+        rec[240..251].copy_from_slice(b"o2ma757.ojm");
+        let entries = parse_ojn_list(&rec).unwrap();
+        assert_eq!(entries[0].title, "\u{D29C}\u{D1A0}\u{B9AC}\u{C5BC}");
     }
 
     #[test]

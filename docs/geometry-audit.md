@@ -150,7 +150,9 @@ Scene note: bound to `Dialog_SelectMusic.bnd` (133 rects). The constants
 look file-traceable by role, but the file contradicts almost every
 value (see divergence column); only row tops, the two pitches, and the
 inventory counts match exactly. Conservative verdicts below; the dialog
-pairing itself is unproven (parity.md musicselect cell).
+pairing rides the shared ordinal rule now (ticket #15: the 154-entry
+paint proof covers `DAILOG_SELECTMUSIC`, so entries pair — the
+photo-vs-bnd value divergences stand, cited per row).
 
 | Constant | Value | Candidate (file rect / divergence) | Pairing evidence | Verdict | Proposed action |
 |---|---|---|---|---|---|
@@ -248,8 +250,11 @@ Total audited: 136 named constants.
    `Dialog_SelectMusic` INDEX-button inventory and x-pitch; countable
    from staged placements at runtime.
 3. `SELECT_ROW_TOP`/`SELECT_ROW_PITCH` (side.rs:544–545) — exact match
-   on the ten EXTEND button rects; promote to FILE once the dialog
-   pairing is proven on the rig (parity.md musicselect cell).
+   on the ten EXTEND button rects; the dialog pairing now rides the
+   proven shared rule (ticket #15, 154-entry proof). Promotion to
+   FILE still wants a fresh rig alignment session (AV report
+   `~/scratch/av-reports/` is capture-family-circular) — named next
+   step, parity.md music-select row.
 
 ## OPEN list (rig follow-up)
 
@@ -313,7 +318,11 @@ Total audited: 136 named constants.
 - Result cell FAIL (audit 13) ↔ exe-pinned anchors DONE here; the FAIL
   is fixed-pixel avatar/verdict placement behind a scrim, not a
   geometry constant.
-- Musicselect cell FAIL ↔ all 22 CANDIDATE rows; pairing unproven.
+- Musicselect cell (now PASS with OPENs, parity.md `STATE_WAITING`
+  music-select row) ↔ all 22 CANDIDATE rows stay CANDIDATE: the
+  ordinal pairing is proven (154-entry proof incl. the dialog), but
+  the photo-vs-bnd value divergences stand — FILE promotion per row
+  still wants a fresh rig alignment session.
 
 ## A/V verification vs the real exe (2026-11-10)
 

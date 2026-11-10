@@ -23,17 +23,18 @@ use super::side::{
     can_return_side, can_visit_side, create_room_action_at, paint_side_scene, password_action_at,
     planet_action_at, select_chosung_cells, select_chosung_layout, select_difficulty_ink,
     select_music_rows, select_music_songs, select_pager_caption, select_picked_caption,
-    select_search_caption, select_status_line, waiting_song_detail_line, waiting_song_title_line,
-    waiting_team_for_code, CreateRoomAction, CreateRoomForm, PasswordAction, PasswordForm,
-    PlanetAction, PlanetOptionTab, PlanetPromo, PlanetSelection, RoomDialog, SelectMusicRow,
-    SelectMusicSong, SideScreen, PLANET_OPTION_FIRST_TAB, QUIT_CANCEL_CODE, QUIT_OK_CODE,
-    SELECT_ARTIST_RADIO, SELECT_CHO_SUNG_LEFT, SELECT_CHO_SUNG_PITCH, SELECT_CHO_SUNG_ROW_CELLS,
-    SELECT_CHO_SUNG_Y, SELECT_FILTER_BUTTON_H, SELECT_FILTER_BUTTON_PITCH,
-    SELECT_FILTER_BUTTON_TOP, SELECT_FILTER_COLUMNS, SELECT_GENRE_FILTERS, SELECT_HEADER_COLUMNS,
-    SELECT_HEADER_Y, SELECT_LEVEL_FILTERS, SELECT_OK_BUTTON, SELECT_PAGER_RIGHT,
-    SELECT_RESULT_TABS, SELECT_ROW_PITCH, SELECT_ROW_TOP, SELECT_SEARCH_BOX, SELECT_SEARCH_BUTTON,
-    SELECT_SEARCH_Y, SELECT_STATUS_H, SELECT_STATUS_Y, SELECT_TABLE_HEADERS, SELECT_TABLE_LEFT,
-    SELECT_TABLE_WIDTH, SELECT_TITLE_RADIO, SELECT_VISIBLE_ROWS, SELECT_WHEEL_FILTERS,
+    select_row_hit, select_search_caption, select_status_line, waiting_song_detail_line,
+    waiting_song_title_line, waiting_team_for_code, CreateRoomAction, CreateRoomForm,
+    PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo, PlanetSelection,
+    RoomDialog, SelectMusicRow, SelectMusicSong, SideScreen, PLANET_OPTION_FIRST_TAB,
+    QUIT_CANCEL_CODE, QUIT_OK_CODE, SELECT_ARTIST_RADIO, SELECT_CHO_SUNG_LEFT,
+    SELECT_CHO_SUNG_PITCH, SELECT_CHO_SUNG_ROW_CELLS, SELECT_CHO_SUNG_Y, SELECT_FILTER_BUTTON_H,
+    SELECT_FILTER_BUTTON_PITCH, SELECT_FILTER_BUTTON_TOP, SELECT_FILTER_COLUMNS,
+    SELECT_GENRE_FILTERS, SELECT_HEADER_COLUMNS, SELECT_HEADER_Y, SELECT_LEVEL_FILTERS,
+    SELECT_OK_BUTTON, SELECT_PAGER_RIGHT, SELECT_RESULT_TABS, SELECT_ROW_PITCH, SELECT_ROW_TOP,
+    SELECT_SEARCH_BOX, SELECT_SEARCH_BUTTON, SELECT_SEARCH_Y, SELECT_STATUS_H, SELECT_STATUS_Y,
+    SELECT_TABLE_HEADERS, SELECT_TABLE_LEFT, SELECT_TABLE_WIDTH, SELECT_TITLE_RADIO,
+    SELECT_VISIBLE_ROWS, SELECT_WHEEL_FILTERS,
 };
 use crate::MenuKey;
 use o2jam_audio::{song_position_ms, AudioBackend, BgmSelection, PcmSamples, SceneBgm};
@@ -258,6 +259,8 @@ pub struct ScreenGame {
     pending_room_team: Option<SetRoomTeam>,
     /// Queued ready-clear awaiting the session (4008; the team switch owns it).
     pending_team_ready: bool,
+    /// Queued song pick awaiting the session (4000; the dialog row owns it).
+    pending_music_send: Option<SetRoomMusic>,
     /// Create-room edit focus: title until the password EDIT is hit.
     create_focus_password: bool,
     battle_teams: RoomTeams,
@@ -517,6 +520,7 @@ impl ScreenGame {
             pending_join: None,
             pending_room_team: None,
             pending_team_ready: false,
+            pending_music_send: None,
             create_focus_password: false,
             battle_teams: RoomTeams::new(),
             battle_self_team: None,
@@ -886,6 +890,16 @@ impl ScreenGame {
     #[must_use]
     pub fn has_pending_team_send(&self) -> bool {
         self.pending_room_team.is_some() || self.pending_team_ready
+    }
+    /// Queued song pick for the session bridge, if any (4000). One
+    /// take sends once; the next row press replaces the queued pick.
+    pub fn take_music_send(&mut self) -> Option<SetRoomMusic> {
+        self.pending_music_send.take()
+    }
+    /// Whether a dialog row pick is queued for the session bridge.
+    #[must_use]
+    pub fn has_pending_music_send(&self) -> bool {
+        self.pending_music_send.is_some()
     }
     /// Team broadcast slot-refresh path (4007).
     ///
@@ -1637,6 +1651,62 @@ impl ScreenGame {
         room_panel_hit(placements, x, y)
     }
 
+    /// `SetRoomMusic` body behind one dialog row: the row's song id
+    /// plus its difficulty slot (row slots repeat Easy/Normal/Hard,
+    /// the `Difficulty` code order), at the surviving speed. `None`
+    /// when the row, the slot code, the song id, or the speed has no
+    /// source — nothing is invented.
+    fn select_row_pick(&self, index: usize) -> Option<SetRoomMusic> {
+        let row = select_music_rows(&self.catalog_songs).get(index).copied()?;
+        let difficulty = u8::try_from(row.slot).ok()?;
+        Difficulty::from_code(difficulty)?;
+        Some(SetRoomMusic {
+            music_id: u16::try_from(row.song.song_id).ok()?,
+            difficulty,
+            speed: self.staged_pick_speed()?,
+        })
+    }
+    /// Speed surviving a dialog pick: the staged selection's speed
+    /// first, else the joined room's. `None` with no source.
+    fn staged_pick_speed(&self) -> Option<u8> {
+        self.selected_music
+            .map(|selection| selection.speed)
+            .or_else(|| self.waiting.as_ref().map(|room| room.speed))
+    }
+    /// Commit one dialog row as the room song: the room state takes
+    /// the pick at once (title/speed captions repaint) and the 4000
+    /// body queues for the session bridge. `false` stages nothing
+    /// (no joined room to commit to). The no-catalog path stays
+    /// display-only — empty rows never invent a song.
+    fn pick_select_music_row(&mut self, index: usize) -> bool {
+        if self.waiting.is_none() {
+            return false;
+        }
+        let Some(pick) = self.select_row_pick(index) else {
+            return false;
+        };
+        self.set_selected_music(pick);
+        self.pending_music_send = Some(pick);
+        true
+    }
+    /// Song-dialog click: a search-table row hit commits the row's
+    /// song through [`Self::pick_select_music_row`]. Only the room
+    /// master sees the dialog (paint gates it) and only masters pick
+    /// — the `MUSELECT 0x16200003` click handler drops non-master
+    /// clicks (file `0xb2622`). Anything else falls through to the
+    /// seat buttons below: the dialog chrome (filters, pager,
+    /// search, chosung, OK) has no evidenced click behavior, so it
+    /// stays display-only and BACK stays reachable. `true` consumed.
+    fn click_select_music(&mut self, x: i32, y: i32) -> bool {
+        if !self.is_room_master() || self.select_music_art.is_none() {
+            return false;
+        }
+        let rows = select_music_rows(&self.catalog_songs);
+        let Some(index) = select_row_hit(x, y, rows.len()) else {
+            return false;
+        };
+        self.pick_select_music_row(index)
+    }
     /// Whether a click hits a staged Waiting confirm button
     /// (START/READY ids only; art-less clicks land nowhere — no pinned
     /// fallback geometry names these buttons). The session bridge runs
@@ -2703,7 +2773,7 @@ impl ScreenGame {
         let rows = select_music_rows(&self.catalog_songs);
         paint_select_filter_columns(frame);
         paint_select_result_tabs(frame, rows.len());
-        paint_select_table(frame, &rows);
+        paint_select_table(frame, &rows, self.selected_music);
         paint_select_status_row(frame, rows.len());
         paint_select_search_row(frame);
         let placements: &[ScenePlacement] = self
@@ -2986,11 +3056,29 @@ fn paint_select_result_tabs(frame: &mut Frame<'_>, row_count: usize) {
 }
 
 /// Search table: header captions on a band, then up to
-/// [`SELECT_VISIBLE_ROWS`] catalog rows.
-fn paint_select_table(frame: &mut Frame<'_>, rows: &[SelectMusicRow<'_>]) {
+/// [`SELECT_VISIBLE_ROWS`] catalog rows. The picked row (if the room
+/// song names one) draws its difficulty letter in the active-tab
+/// orange — a stand-in highlight (the exe's picked-row rendering is
+/// unpinned, OPEN).
+/// Whether a search row is the room song: song id plus difficulty
+/// slot both match the staged pick. The slot codes repeat
+/// Easy/Normal/Hard in `Difficulty` code order, so a plain equality
+/// on the slot's code names the picked chart.
+fn is_picked_row(row: SelectMusicRow<'_>, picked: Option<SetRoomMusic>) -> bool {
+    picked.is_some_and(|song| {
+        u32::from(song.music_id) == row.song.song_id
+            && u8::try_from(row.slot).ok() == Some(song.difficulty)
+    })
+}
+
+fn paint_select_table(
+    frame: &mut Frame<'_>,
+    rows: &[SelectMusicRow<'_>],
+    picked: Option<SetRoomMusic>,
+) {
     paint_select_table_header(frame);
     for (index, row) in rows.iter().take(SELECT_VISIBLE_ROWS).enumerate() {
-        paint_select_table_row(frame, index, *row);
+        paint_select_table_row(frame, index, *row, picked);
     }
 }
 
@@ -3018,7 +3106,14 @@ fn paint_select_table_header(frame: &mut Frame<'_>) {
 /// One search row: scrim band, difficulty letter, catalog title and
 /// artist; the level and grade cells draw the unknown dash, and the
 /// 다운/듣기/정보 icon cells stay blank (no staged art for them).
-fn paint_select_table_row(frame: &mut Frame<'_>, index: usize, row: SelectMusicRow<'_>) {
+/// The picked row's letter inks active-orange (stand-in highlight,
+/// see [`paint_select_table`]).
+fn paint_select_table_row(
+    frame: &mut Frame<'_>,
+    index: usize,
+    row: SelectMusicRow<'_>,
+    picked: Option<SetRoomMusic>,
+) {
     let top = SELECT_ROW_TOP + select_step(index, SELECT_ROW_PITCH);
     let band = select_anchor(
         Rect {
@@ -3031,12 +3126,17 @@ fn paint_select_table_row(frame: &mut Frame<'_>, index: usize, row: SelectMusicR
     );
     fill_rect(frame, &band, select_scrim());
     let y = select_y(top + 2, frame);
+    let letter_ink = if is_picked_row(row, picked) {
+        select_active_ink()
+    } else {
+        select_difficulty_ink(row.slot)
+    };
     draw_text(
         frame,
         select_x(SELECT_HEADER_COLUMNS[2], frame),
         y,
         row.letter(),
-        select_difficulty_ink(row.slot),
+        letter_ink,
     );
     draw_text(
         frame,
@@ -3327,7 +3427,11 @@ impl GameLoop for ScreenGame {
             }
             Screen::Channel => self.click_channel_row(x, y),
             Screen::Room => self.click_room_row(x, y),
-            Screen::Waiting => self.click_waiting_button(x, y),
+            Screen::Waiting => {
+                if !self.click_select_music(x, y) {
+                    self.click_waiting_button(x, y);
+                }
+            }
             Screen::Result => self.click_result_button(x, y),
             // Planet board click: hit-test at the pinned `.bnd`
             // button rects and record the difficulty pick. What a
@@ -5918,6 +6022,112 @@ mod game_tests {
             member_key: 42,
         };
         assert_eq!(game.apply_room_team_changed(&wide), None);
+    }
+
+    #[test]
+    fn picked_select_row_highlights_its_letter() {
+        // The committed row reads back on the table: only its
+        // difficulty letter inks the active orange. Row 0 is the
+        // Easy slot (green unpicked), so the probe stays red without
+        // the highlight.
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        game.load_select_music_scene(Vec::new(), HashMap::new());
+        stage_waiting_song(&mut game);
+        walk_to_waiting(&mut game);
+        game.mouse_click(400, 150 + 11);
+        let buf = paint_waiting_frame(&mut game, 800, 600);
+        assert!(ink_near(
+            &buf,
+            800,
+            600,
+            (392, 150),
+            (12, 12),
+            pack_xrgb(0xFF, 0xA0, 0x20)
+        ));
+        assert!(!ink_near(
+            &buf,
+            800,
+            600,
+            (392, 196),
+            (12, 12),
+            pack_xrgb(0xFF, 0xA0, 0x20)
+        ));
+    }
+
+    #[test]
+    fn click_staged_select_row_commits_song_and_queues_4000() {
+        // The host song pick commits through the real dialog: a row
+        // click on the staged search table sets the room song (the
+        // row's song id plus its difficulty slot) and queues the
+        // `SetRoomMusic` 4000 send — the click path, not the direct
+        // call. Row 1 is song 757 at the Normal slot; the staged
+        // speed survives the pick.
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        game.load_select_music_scene(Vec::new(), HashMap::new());
+        stage_waiting_song(&mut game);
+        walk_to_waiting(&mut game);
+        assert!(game.is_room_master());
+        game.mouse_click(400, 150 + 23 + 11);
+        let picked = game.selected_music().expect("row click commits the song");
+        assert_eq!(picked.music_id, 757);
+        assert_eq!(picked.difficulty, 1);
+        assert_eq!(picked.speed, 3);
+        assert!(game.has_pending_music_send());
+        assert_eq!(game.take_music_send(), Some(picked));
+        assert!(!game.has_pending_music_send());
+        // A click outside the staged rows queues nothing.
+        game.mouse_click(10, 10);
+        assert!(!game.has_pending_music_send());
+    }
+
+    #[test]
+    fn select_row_click_without_master_or_art_commits_nothing() {
+        // `MUSELECT 0x16200003` drops non-master clicks, and an
+        // art-less master sees no dialog: both click nowhere.
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        game.load_select_music_scene(Vec::new(), HashMap::new());
+        stage_waiting_song(&mut game);
+        walk_to_waiting(&mut game);
+        game.waiting.as_mut().expect("joined room").member_id = 4;
+        assert!(!game.is_room_master());
+        game.mouse_click(400, 150 + 11);
+        assert!(!game.has_pending_music_send());
+        let mut bare = ScreenGame::new();
+        bare.set_joined_room(waiting_room());
+        walk_to_waiting(&mut bare);
+        bare.mouse_click(400, 150 + 11);
+        assert!(!bare.has_pending_music_send());
+    }
+
+    #[test]
+    fn waiting_hand_session_picks_song_then_starts() {
+        // Hand-driven song pick through the real window (no gateway):
+        // the master clicks row 1 (song 757, Normal slot) through
+        // the staged table, the 4000 send stages, and Confirm still
+        // runs the START readiness gate into Loading. Smoke: screen
+        // path waiting→waiting→loading, 4000 drained, Loading held.
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        game.load_select_music_scene(Vec::new(), HashMap::new());
+        stage_waiting_song(&mut game);
+        walk_to_waiting(&mut game);
+        assert!(game.is_room_master());
+        game.mouse_click(400, 150 + 23 + 11);
+        assert_eq!(
+            game.take_music_send(),
+            Some(o2jam_net::SetRoomMusic {
+                music_id: 757,
+                difficulty: 1,
+                speed: 3,
+            }),
+            "4000 staged"
+        );
+        assert!(game.all_peers_ready());
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Loading);
     }
 
     #[test]

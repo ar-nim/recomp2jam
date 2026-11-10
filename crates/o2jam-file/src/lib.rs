@@ -140,6 +140,21 @@ fn read_str(bytes: &[u8], off: usize, len: usize) -> Result<String, FileError> {
     Ok(String::from_utf8_lossy(&raw[..end]).trim().to_string())
 }
 
+/// Read Korean display text (song titles, artists, labels): NUL-cut
+/// like [`read_str`], decoded as CP949 like
+/// [`decode_control_text`], but lossy — an undecodable byte becomes
+/// `U+FFFD` instead of failing the record, because one bad byte
+/// must not hide the whole song table. ASCII filenames stay on
+/// [`read_str`].
+fn read_cp949_str(bytes: &[u8], off: usize, len: usize) -> Result<String, FileError> {
+    let raw = bytes.get(off..off + len).ok_or(FileError::Truncated {
+        need: off + len,
+        have: bytes.len(),
+    })?;
+    let end = raw.iter().position(|&b| b == 0).unwrap_or(len);
+    Ok(encoding_rs::EUC_KR.decode(&raw[..end]).0.trim().to_string())
+}
+
 /// Decode Korean client text (`.ojs` word lists, `ControlList_*.txt`).
 ///
 /// Real 7.55 bodies are CP949 (the MSVC2005 Korean-locale codepage):
