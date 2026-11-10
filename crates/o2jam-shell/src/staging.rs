@@ -11,7 +11,8 @@ use std::path::Path;
 use o2jam_file::{Bnd, ControlList};
 
 use crate::avatar::{
-    bind_scene_rects, load_archive_sprite_for_stage, scene_block, scene_sprite_names, AvatarFigure,
+    bind_scene_rects, load_archive_sprite_for_stage, load_scene_figures_for_room,
+    playing_member_selected, scene_block, scene_sprite_names, AvatarFigure, PlayingArtMode,
     ScenePlacement,
 };
 use crate::screen::Screen;
@@ -30,6 +31,7 @@ pub enum State {
     Result,
     Payment,
     Payment2,
+    Playing,
 }
 
 impl State {
@@ -47,12 +49,13 @@ impl State {
             State::Result => "STATE_RESULT",
             State::Payment => "STATE_PAYMENT",
             State::Payment2 => "STATE_PAYMENT2",
+            State::Playing => "STATE_PLAYING",
         }
     }
 
     /// State for a Block name, if the declaration stages it.
-    /// Later tickets extend this with the full-canvas, Dialog,
-    /// and Playing rows; unlisted Blocks stay `None`.
+    /// Later tickets extend this with the full-canvas and Dialog
+    /// rows; unlisted Blocks stay `None`.
     #[must_use]
     pub fn from_block(name: &str) -> Option<State> {
         STAGE_TABLE
@@ -68,6 +71,19 @@ impl std::fmt::Display for State {
     }
 }
 
+/// Placement arm one row stages through: the bound `.bnd` pairing,
+/// or the Playing subset (behind-highway scene, static backdrops,
+/// then the bound run, with figures through the room mode in the
+/// context). Full-canvas (ticket #4) extends this enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlacementArm {
+    /// Block entries paired with the `.bnd` by code ordinal.
+    Bound,
+    /// Playing subset: behind entries, backdrops, then the bound
+    /// run (see `bind_scene_rects`); figures follow the context.
+    PlayingSubset,
+}
+
 /// One declaration row per State: the Block to stage plus extra
 /// sprite bodies merged in by name. Result carries the exe-mounted
 /// verdict banner (`Result_WinLose.ojs`, file `0xc2390`) because its
@@ -80,83 +96,104 @@ pub struct StageRow {
     pub block: &'static str,
     /// Control-list entry holding the Block.
     pub list: &'static str,
+    /// Placement arm this row stages through.
+    pub arm: PlacementArm,
     /// Bodies merged by name after the bound run.
     pub extra_sprites: &'static [&'static str],
 }
 
-/// The staging declaration, read as data: one row per bound State.
-/// Full-canvas (ticket #4), Dialog (ticket #5), and Playing-subset
-/// (ticket #6) rows extend this table.
+/// The staging declaration, read as data: one row per staged State.
+/// Full-canvas (ticket #4) and Dialog (ticket #5) rows extend this
+/// table.
 pub const STAGE_TABLE: &[StageRow] = &[
     StageRow {
         state: State::Room,
         block: "STATE_ROOM",
         list: INTERFACE_LIST,
+        arm: PlacementArm::Bound,
         extra_sprites: &[],
     },
     StageRow {
         state: State::Waiting,
         block: "STATE_WAITING",
         list: INTERFACE_LIST,
+        arm: PlacementArm::Bound,
         extra_sprites: &[],
     },
     StageRow {
         state: State::Shop,
         block: "STATE_SHOP",
         list: INTERFACE_LIST,
+        arm: PlacementArm::Bound,
         extra_sprites: &[],
     },
     StageRow {
         state: State::MusicShop,
         block: "STATE_MUSICSHOP",
         list: INTERFACE_LIST,
+        arm: PlacementArm::Bound,
         extra_sprites: &[],
     },
     StageRow {
         state: State::MyRoom,
         block: "STATE_MYROOM",
         list: INTERFACE_LIST,
+        arm: PlacementArm::Bound,
         extra_sprites: &[],
     },
     StageRow {
         state: State::Planet,
         block: "STATE_PLANET",
         list: INTERFACE_LIST,
+        arm: PlacementArm::Bound,
         extra_sprites: &[],
     },
     StageRow {
         state: State::Lanking,
         block: "STATE_LANKING",
         list: INTERFACE_LIST,
+        arm: PlacementArm::Bound,
         extra_sprites: &[],
     },
     StageRow {
         state: State::Result,
         block: "STATE_RESULT",
         list: INTERFACE_LIST,
+        arm: PlacementArm::Bound,
         extra_sprites: &["Result_WinLose.ojs"],
     },
     StageRow {
         state: State::Payment,
         block: "STATE_PAYMENT",
         list: INTERFACE_LIST,
+        arm: PlacementArm::Bound,
         extra_sprites: &[],
     },
     StageRow {
         state: State::Payment2,
         block: "STATE_PAYMENT2",
         list: INTERFACE_LIST,
+        arm: PlacementArm::Bound,
+        extra_sprites: &[],
+    },
+    StageRow {
+        state: State::Playing,
+        block: "STATE_PLAYING",
+        list: PLAYING_LIST,
+        arm: PlacementArm::PlayingSubset,
         extra_sprites: &[],
     },
 ];
 
 /// Control-list entry holding every ticket #3 Block.
 const INTERFACE_LIST: &str = "ControlList_Interface.txt";
+/// Control-list entry holding the Playing subset Block.
+const PLAYING_LIST: &str = "ControlList_Playing.txt";
 
 /// Stage-side inputs for one staging call. Playing is the only
 /// consumer today (arena venue, key mode, team flag); the bound arm
-/// threads only the arena stage (`_` runtime refs), the rest ride
-/// for the ticket #6 Playing subset.
+/// threads only the arena stage (`_` runtime refs), while the Playing
+/// subset reads the whole context.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StageContext {
     /// Room arena stage for `_` runtime refs.
@@ -202,9 +239,11 @@ pub struct StageReport {
     pub misses: Vec<StageMiss>,
 }
 
-/// Stage one State from archive bytes: the bound Block paired with
-/// its `.bnd` (the avatar kit's pairing), plus the row's extra
-/// bodies merged by name. Returns the art with the miss ledger;
+/// Stage one State from archive bytes through the row's placement arm:
+/// the bound Block paired with its `.bnd` (the avatar kit's pairing),
+/// or the Playing subset (behind entries, backdrops, then the bound
+/// run, with figures through the context's room mode) — plus the row's
+/// extra bodies merged by name. Returns the art with the miss ledger;
 /// each miss logs a warning. Never fails a Scene: a missing Block
 /// or `.bnd` contributes nothing, a missing body keeps its
 /// placement with an empty figure slot.
@@ -235,15 +274,20 @@ pub fn stage_state(archive: &[u8], state: State, ctx: StageContext) -> StageRepo
         placements: bind_scene_rects(block, &bind),
         figures: HashMap::new(),
     };
-    for name in &names {
-        if is_scrollbar_params(name) {
-            continue;
+    match row.arm {
+        PlacementArm::Bound => {
+            load_bound_figures(
+                archive,
+                &names,
+                ctx,
+                &mut report,
+                state,
+                row,
+                &mut art.figures,
+            );
         }
-        match load_archive_sprite_for_stage(archive, name, ctx.arena_stage) {
-            Some(figure) => {
-                art.figures.insert(name.clone(), figure);
-            }
-            None => push_miss(&mut report, state, row.block, name),
+        PlacementArm::PlayingSubset => {
+            art.figures = load_playing_figures(archive, &names, ctx, &mut report, state, row.block);
         }
     }
     for extra in row.extra_sprites {
@@ -259,6 +303,59 @@ pub fn stage_state(archive: &[u8], state: State, ctx: StageContext) -> StageRepo
     }
     report.art = Some(art);
     report
+}
+
+/// Bound-arm figures: every named body verbatim through the arena
+/// stage; a missing body leaves its slot empty with a miss.
+fn load_bound_figures(
+    archive: &[u8],
+    names: &[String],
+    ctx: StageContext,
+    report: &mut StageReport,
+    state: State,
+    row: &StageRow,
+    figures: &mut HashMap<String, AvatarFigure>,
+) {
+    for name in names {
+        if is_scrollbar_params(name) {
+            continue;
+        }
+        match load_archive_sprite_for_stage(archive, name, ctx.arena_stage) {
+            Some(figure) => {
+                figures.insert(name.clone(), figure);
+            }
+            None => push_miss(report, state, row.block, name),
+        }
+    }
+}
+
+/// Playing-subset figures through the room mode in the context: only
+/// the family members the context selects load (the rest leave empty
+/// slots without a miss), and the selected note background loads its
+/// exe-selected frame only. A selected member that fails to decode
+/// leaves its slot empty with a miss, like the bound arm.
+fn load_playing_figures(
+    archive: &[u8],
+    names: &[String],
+    ctx: StageContext,
+    report: &mut StageReport,
+    state: State,
+    block: &'static str,
+) -> HashMap<String, AvatarFigure> {
+    let mode = PlayingArtMode {
+        key_mode: ctx.key_mode,
+        team_play: ctx.team_play,
+    };
+    let figures = load_scene_figures_for_room(archive, names, ctx.arena_stage, &mode);
+    for name in names {
+        if is_scrollbar_params(name) || !playing_member_selected(name, &mode) {
+            continue;
+        }
+        if !figures.contains_key(name) {
+            push_miss(report, state, block, name);
+        }
+    }
+    figures
 }
 
 /// Record one miss and log its warning with the State, the Block,
@@ -296,8 +393,8 @@ fn read_bind(archive: &[u8], name: &str) -> Option<Bnd> {
 }
 
 /// State behind a main-flow Screen, if the declaration stages it.
-/// Channel has no State class of its own; Avi, Loading, and Playing
-/// keep their rows for tickets #4 and #6.
+/// Channel has no State class of its own; Avi and Loading keep
+/// their rows for ticket #4.
 #[must_use]
 pub const fn state_of_screen(screen: Screen) -> Option<State> {
     match screen {
@@ -309,7 +406,8 @@ pub const fn state_of_screen(screen: Screen) -> Option<State> {
         Screen::MusicShop => Some(State::MusicShop),
         Screen::Myroom => Some(State::MyRoom),
         Screen::Lanking => Some(State::Lanking),
-        Screen::Avi | Screen::Channel | Screen::Loading | Screen::Playing => None,
+        Screen::Playing => Some(State::Playing),
+        Screen::Avi | Screen::Channel | Screen::Loading => None,
     }
 }
 
@@ -377,6 +475,7 @@ mod staging_tests {
         assert_eq!(State::Result.block_name(), "STATE_RESULT");
         assert_eq!(State::Payment.block_name(), "STATE_PAYMENT");
         assert_eq!(State::Payment2.block_name(), "STATE_PAYMENT2");
+        assert_eq!(State::Playing.block_name(), "STATE_PLAYING");
     }
 
     #[test]
@@ -392,6 +491,7 @@ mod staging_tests {
             State::Result,
             State::Payment,
             State::Payment2,
+            State::Playing,
         ] {
             assert_eq!(State::from_block(state.block_name()), Some(state));
         }
@@ -406,7 +506,7 @@ mod staging_tests {
 
     #[test]
     fn declaration_holds_one_bound_row_per_state() {
-        assert_eq!(STAGE_TABLE.len(), 10);
+        assert_eq!(STAGE_TABLE.len(), 11);
         for row in STAGE_TABLE {
             assert_eq!(row.block, row.state.block_name());
         }
@@ -440,13 +540,32 @@ mod staging_tests {
     }
 
     #[test]
-    fn rows_read_the_interface_control_list() {
+    fn rows_read_their_own_control_list() {
         for row in STAGE_TABLE {
-            assert_eq!(
-                row.list, "ControlList_Interface.txt",
-                "ticket #3 stages interface Blocks only"
-            );
+            if row.state == State::Playing {
+                assert_eq!(
+                    row.list, "ControlList_Playing.txt",
+                    "the Playing subset lives in the Playing archive"
+                );
+            } else {
+                assert_eq!(
+                    row.list, "ControlList_Interface.txt",
+                    "ticket #3 stages interface Blocks only"
+                );
+            }
         }
+    }
+
+    #[test]
+    fn playing_row_carries_no_extras() {
+        let row = STAGE_TABLE
+            .iter()
+            .find(|row| row.state == State::Playing)
+            .expect("playing row staged");
+        assert!(
+            row.extra_sprites.is_empty(),
+            "the subset stages the block alone; the skin rides caller-side"
+        );
     }
 
     #[test]
@@ -861,6 +980,181 @@ mod staging_tests {
         assert_eq!(state_of_screen(Screen::MusicShop), Some(State::MusicShop));
         assert_eq!(state_of_screen(Screen::Myroom), Some(State::MyRoom));
         assert_eq!(state_of_screen(Screen::Lanking), Some(State::Lanking));
+        assert_eq!(
+            state_of_screen(Screen::Playing),
+            Some(State::Playing),
+            "the Playing subset stages through the declaration"
+        );
+    }
+
+    /// Synthetic `ControlList_Playing.txt` text: the self row, four
+    /// behind-highway scene entries, one backdrop panel, fillers to
+    /// index 213, then the bound `EXIT`..`VOL` run. Mirrors the exe
+    /// window the 17-rect `.bnd` pairs by ordinal.
+    fn playing_list_text() -> String {
+        let mut lines = vec![
+            "NUMBER_OF_STATE 0x01".to_owned(),
+            "STATE_PLAYING 0x07".to_owned(),
+            "{".to_owned(),
+            "BOUND \"State_Playing.bnd\"".to_owned(),
+            "IDC_PLAYING 0X1B000000".to_owned(),
+            "IDC_BACK1 0X1B500071 \"_Playing_BG.ojs\"".to_owned(),
+            "IDC_BACK2 0X1B500072 \"Note_BG.ojs\"".to_owned(),
+            "IDC_BACK3 0X1B500073 \"P2P7KeyNote_BG.ojs\"".to_owned(),
+            "IDC_BACK4 0X1B500074 \"3Key_Note_BG.ojs\"".to_owned(),
+            "IDC_MENU 0X1B500075 \"Playing_Menu.ojs\"".to_owned(),
+        ];
+        for index in 6..213 {
+            lines.push(format!("IDC_FILL{index:03} 0X1B000000"));
+        }
+        lines.push("IDC_EXIT 0X1B000001".to_owned());
+        lines.push("IDC_VOL 0X1B000002 \"Vol_Mark.ojs\"".to_owned());
+        lines.push("}".to_owned());
+        lines.push(String::new());
+        lines.join("\n")
+    }
+
+    fn playing_archive_with(bodies: &[&str]) -> Vec<u8> {
+        let mut entries: Vec<(&str, Vec<u8>)> = vec![
+            ("ControlList_Playing.txt", playing_list_text().into_bytes()),
+            (
+                "State_Playing.bnd",
+                bnd_blob(&[(1, 2, 3, 4), (10, 20, 30, 40)]),
+            ),
+        ];
+        for body in bodies {
+            entries.push((*body, sprite55_blob(2, 2, &[1; 8])));
+        }
+        let refs: Vec<(&str, &[u8])> = entries
+            .iter()
+            .map(|(name, blob)| (*name, blob.as_slice()))
+            .collect();
+        o2jam_file::test_archive::build_archive(&refs)
+    }
+
+    fn full_playing_archive() -> Vec<u8> {
+        playing_archive_with(&[
+            "Playing_BG2.ojs",
+            "Note_BG.ojs",
+            "P2P7KeyNote_BG.ojs",
+            "3Key_Note_BG.ojs",
+            "Playing_Menu.ojs",
+            "Vol_Mark.ojs",
+        ])
+    }
+
+    fn solo_seven_key_context() -> StageContext {
+        StageContext {
+            arena_stage: Some(2),
+            key_mode: 2,
+            team_play: false,
+        }
+    }
+
+    #[test]
+    fn playing_subset_orders_behind_backdrops_then_bound_run() {
+        let report = stage_state(
+            &full_playing_archive(),
+            State::Playing,
+            solo_seven_key_context(),
+        );
+        assert!(report.misses.is_empty(), "misses: {:?}", report.misses);
+        let art = report.art.expect("playing stages with synthetic bytes");
+        let sprites: Vec<Option<&str>> = art
+            .placements
+            .iter()
+            .map(|placed| placed.sprite.as_deref())
+            .collect();
+        assert_eq!(
+            sprites,
+            vec![
+                Some("_Playing_BG.ojs"),
+                Some("Note_BG.ojs"),
+                Some("P2P7KeyNote_BG.ojs"),
+                Some("3Key_Note_BG.ojs"),
+                Some("Playing_Menu.ojs"),
+                None,
+                Some("Vol_Mark.ojs"),
+            ],
+            "behind entries, backdrops, then the bound run"
+        );
+        assert_eq!(art.placements[5].rect.x, 1, "EXIT takes ordinal 1");
+        assert_eq!(art.placements[6].rect.x, 10, "VOL takes ordinal 2");
+    }
+
+    #[test]
+    fn playing_context_selects_solo_family_members() {
+        let report = stage_state(
+            &full_playing_archive(),
+            State::Playing,
+            solo_seven_key_context(),
+        );
+        let art = report.art.expect("playing stages with synthetic bytes");
+        for staged in [
+            "_Playing_BG.ojs",
+            "Note_BG.ojs",
+            "Playing_Menu.ojs",
+            "Vol_Mark.ojs",
+        ] {
+            assert!(
+                art.figures.contains_key(staged),
+                "{staged} stages in a solo 7-key room"
+            );
+        }
+        for missing in ["P2P7KeyNote_BG.ojs", "3Key_Note_BG.ojs"] {
+            assert!(
+                !art.figures.contains_key(missing),
+                "unselected member {missing} leaves an empty slot"
+            );
+        }
+    }
+
+    #[test]
+    fn playing_context_selects_team_family_members() {
+        let ctx = StageContext {
+            arena_stage: Some(2),
+            key_mode: 2,
+            team_play: true,
+        };
+        let report = stage_state(&full_playing_archive(), State::Playing, ctx);
+        let art = report.art.expect("playing stages with synthetic bytes");
+        assert!(art.figures.contains_key("P2P7KeyNote_BG.ojs"));
+        assert!(!art.figures.contains_key("Note_BG.ojs"));
+        assert!(!art.figures.contains_key("3Key_Note_BG.ojs"));
+        assert_eq!(art.placements.len(), 7, "placements ignore the family");
+    }
+
+    #[test]
+    fn playing_key_mode_selects_note_background() {
+        let ctx = StageContext {
+            arena_stage: Some(2),
+            key_mode: 0,
+            team_play: false,
+        };
+        let report = stage_state(&full_playing_archive(), State::Playing, ctx);
+        let art = report.art.expect("playing stages with synthetic bytes");
+        assert!(art.figures.contains_key("3Key_Note_BG.ojs"));
+        assert!(!art.figures.contains_key("Note_BG.ojs"));
+        assert!(!art.figures.contains_key("P2P7KeyNote_BG.ojs"));
+    }
+
+    #[test]
+    fn playing_missing_body_keeps_placement_with_empty_slot() {
+        let archive = playing_archive_with(&[
+            "Playing_BG2.ojs",
+            "Note_BG.ojs",
+            "P2P7KeyNote_BG.ojs",
+            "3Key_Note_BG.ojs",
+            "Playing_Menu.ojs",
+        ]);
+        let report = stage_state(&archive, State::Playing, solo_seven_key_context());
+        let art = report.art.expect("a missing body never fails the scene");
+        assert_eq!(art.placements.len(), 7, "placements survive the miss");
+        assert!(!art.figures.contains_key("Vol_Mark.ojs"));
+        assert_eq!(report.misses.len(), 1);
+        assert_eq!(report.misses[0].state, State::Playing);
+        assert_eq!(report.misses[0].block, "STATE_PLAYING");
+        assert_eq!(report.misses[0].entry, "Vol_Mark.ojs");
     }
 
     #[test]
@@ -868,7 +1162,6 @@ mod staging_tests {
         assert_eq!(state_of_screen(Screen::Channel), None, "no State class");
         assert_eq!(state_of_screen(Screen::Avi), None, "ticket #4");
         assert_eq!(state_of_screen(Screen::Loading), None, "ticket #4");
-        assert_eq!(state_of_screen(Screen::Playing), None, "ticket #6");
     }
 
     #[test]

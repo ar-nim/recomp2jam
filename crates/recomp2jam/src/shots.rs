@@ -17,7 +17,6 @@ use o2jam_shell::avatar::{
     load_scene_figures_for_stage, scene_block, scene_sprite_names, AvatarFigure, PlayingArtMode,
     ScenePlacement, AVI_BLOCK, LOADING_SPRITE,
 };
-use o2jam_shell::screens::paint::PLAYING_BLOCK;
 use o2jam_shell::screens::side::{
     SideScreen, SELECT_MUSIC_DIALOG_BLOCK, TUTORIAL_BACKGROUND_SPRITE,
 };
@@ -230,8 +229,6 @@ const MUSICSELECT_FALLBACK_SONGS: [(u32, &str, &str); 4] = [
 ];
 /// Interface control list entry.
 const INTERFACE_LIST: &str = "ControlList_Interface.txt";
-/// Playing control list entry.
-const PLAYING_LIST: &str = "ControlList_Playing.txt";
 
 /// `STATE_CHANNEL` names zero sprites on 7.55 (bare `BOUND`, no art),
 /// so no block art stages for Channel; the code-mounted channel-list
@@ -457,29 +454,21 @@ fn stage_interface_archive(game: &mut ScreenGame, archive: &[u8]) {
 /// panel, venue right, avatar center-right). The walk room stays a
 /// Live duo for the battle verdict, whose P2P family would paint its
 /// VS panel over the center while emptying the solo slots — so the
-/// shot pins `team_play: false` instead of the room's Live word.
+/// context carries an explicit solo flag instead of the room's Live
+/// word.
 fn stage_playing_archive(game: &mut ScreenGame, archive: &[u8]) {
     if let Some((placements, figures)) = stage_single_sprite(archive, LOADING_SPRITE) {
         game.load_scene(Screen::Loading, placements, figures);
     }
-    let Some(list) = control_list(archive, PLAYING_LIST) else {
-        return;
-    };
-    let arena_stage = game.arena_stage();
-    let mode = PlayingArtMode {
+    let ctx = StageContext {
+        arena_stage: Some(game.arena_stage()),
         key_mode: game.room_key_mode(),
         team_play: false,
     };
-    let Some((placements, figures)) = stage_bound_block(
-        archive,
-        &list,
-        PLAYING_BLOCK,
-        Some(arena_stage),
-        Some(&mode),
-    ) else {
+    let Some(art) = stage_state(archive, State::Playing, ctx).art else {
         return;
     };
-    game.load_scene(Screen::Playing, placements, figures);
+    game.load_scene(Screen::Playing, art.placements, art.figures);
     if let Some(skin) = PlaySkin::from_archive(archive) {
         game.set_play_skin(skin);
     }
@@ -1274,7 +1263,10 @@ mod tests {
         anchor_in_frame, load_archive_sprite, paint_foreground_placements, paint_scene_figures,
         playing_member_selected, ROOM_BLOCK, WAITING_BLOCK,
     };
-    use o2jam_shell::screens::paint::RESULT_WINLOSE_SPRITE;
+    use o2jam_shell::screens::paint::{PLAYING_BLOCK, RESULT_WINLOSE_SPRITE};
+    /// Playing control list entry (test-only: production stages
+    /// Playing through the declaration).
+    const PLAYING_LIST: &str = "ControlList_Playing.txt";
 
     #[test]
     fn downscale_even_averages_two_by_two_blocks() {
@@ -1330,24 +1322,19 @@ mod tests {
             println!("skip: missing {PLAYING_ARCHIVE}");
             return;
         };
-        let list = control_list(&archive, PLAYING_LIST).expect("control list parses");
         let game = seeded_game();
         assert_eq!(game.arena_stage(), 2);
-        let mode = PlayingArtMode {
+        let ctx = StageContext {
+            arena_stage: Some(game.arena_stage()),
             key_mode: game.room_key_mode(),
             team_play: game.room_team_play(),
         };
-        assert_eq!(mode.key_mode, 2, "the shot's room plays 7 keys");
-        assert!(mode.team_play, "the shot's room is a Live duo");
-        let Some((_, figures)) = stage_bound_block(
-            &archive,
-            &list,
-            PLAYING_BLOCK,
-            Some(game.arena_stage()),
-            Some(&mode),
-        ) else {
-            panic!("playing: STATE_PLAYING staged no figures");
-        };
+        assert_eq!(ctx.key_mode, 2, "the shot's room plays 7 keys");
+        assert!(ctx.team_play, "the shot's room is a Live duo");
+        let figures = &stage_state(&archive, State::Playing, ctx)
+            .art
+            .expect("playing: STATE_PLAYING stages figures")
+            .figures;
         let venue = figures
             .get("_Playing_BG.ojs")
             .expect("the venue runtime ref stages a figure");
@@ -1374,24 +1361,30 @@ mod tests {
             println!("skip: missing {PLAYING_ARCHIVE}");
             return;
         };
-        let list = control_list(&archive, PLAYING_LIST).expect("control list parses");
-        let block = scene_block(&list, PLAYING_BLOCK).expect("STATE_PLAYING stages");
-        let names = scene_sprite_names(block);
-        let mode = PlayingArtMode {
+        let ctx = StageContext {
+            arena_stage: Some(2),
             key_mode: 2,
             team_play: false,
         };
-        let figures = load_scene_figures_for_room(&archive, &names, Some(2), &mode);
+        let report = stage_state(&archive, State::Playing, ctx);
+        let figures = &report
+            .art
+            .expect("playing: STATE_PLAYING stages figures")
+            .figures;
         for staged in ["_Playing_BG.ojs", "Note_BG.ojs", "Life_gauge_left_bar.ojs"] {
             assert!(
                 figures.contains_key(staged),
                 "{staged} must stage in a solo 7-key room"
             );
         }
-        for name in names {
+        let mode = PlayingArtMode {
+            key_mode: 2,
+            team_play: false,
+        };
+        for name in figures.keys() {
             assert!(
-                playing_member_selected(&name, &mode) || !figures.contains_key(&name),
-                "unselected member {name} must leave an empty slot"
+                playing_member_selected(name, &mode),
+                "staged member {name} must be solo-selected"
             );
         }
         assert!(!figures.contains_key("BpPoint_Right_bar.ojs"));
@@ -1412,25 +1405,20 @@ mod tests {
             println!("skip: missing {PLAYING_ARCHIVE}");
             return;
         };
-        let list = control_list(&archive, PLAYING_LIST).expect("control list parses");
         let walk = seeded_game();
         assert!(
             walk.room_team_play(),
             "the walk stays Live for the battle verdict"
         );
-        let solo = PlayingArtMode {
+        let solo = StageContext {
+            arena_stage: Some(walk.arena_stage()),
             key_mode: walk.room_key_mode(),
             team_play: false,
         };
-        let Some((placements, figures)) = stage_bound_block(
-            &archive,
-            &list,
-            PLAYING_BLOCK,
-            Some(walk.arena_stage()),
-            Some(&solo),
-        ) else {
-            panic!("playing: STATE_PLAYING staged no solo figures");
-        };
+        let art = stage_state(&archive, State::Playing, solo)
+            .art
+            .expect("playing: STATE_PLAYING stages solo figures");
+        let (placements, figures) = (art.placements, art.figures);
         assert!(figures.contains_key("Note_BG.ojs"));
         assert!(figures.contains_key("Life_gauge_left_bar.ojs"));
         assert!(!figures.contains_key("P2P7KeyNote_BG.ojs"));
