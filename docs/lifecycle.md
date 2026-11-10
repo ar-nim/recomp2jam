@@ -6,6 +6,7 @@ In-exe evidence below uses virtual addresses; file offset = VA − `0x400000`.
 REA snapshot: `extracted/rea-snapshot` (single-line JSON dossier bundle,
 Ghidra 12.1.2, analysis digest `88a37df4…130c8d`, target SHA matches the exe).
 Behavior is described in our own words; no disassembly is reproduced.
+Harvested claims live in `docs/claims.md` (the oracle).
 
 ## Launcher vs client responsibilities
 

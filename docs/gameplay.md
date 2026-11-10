@@ -4,7 +4,7 @@ How the client judges, combos, spends pills, and scores. File
 layouts live in `file-formats/ojn.md`; event encoding in
 `file-formats/ojn.md` (chart parser section). This doc is
 behavior only: every claim names the function, file offset, and
-REA evidence ID behind it.
+REA evidence ID behind it. Rows feed `docs/claims.md` (the oracle).
 
 ## Judgement windows — VERIFIED
 
@@ -352,7 +352,11 @@ Client memory fields — FOUND (re-verified from bytes 2026-11-07):
 - Next steps: locate the 4015 handler (peer-life store + probable
   local-life mirror), or the SubmitScore field reader.
 
-## Jam gauge — player-reported, UNVERIFIED in-exe (negative evidence recorded)
+## Jam gauge — SUPERSEDED (oracle: Scoring formulas above + `docs/claims.md` B9)
+
+The 30-progress model below is retained as the refuted report. Truth lives in
+Scoring formulas (Cool `+2` / Good `+1`, `(i+1)*50` cumulative, `X+=1`, resets
+on Bad/Miss) and in code (`JamState`/`JamGauge`, `jam_threshold_for`).
 
 UI anchors located: `Jamgauge_right_bar.ojs` /
 `Jamgauge_left_bar.ojs` (VAs `0x64b1b8`/`0x64b1d0`, search
@@ -364,14 +368,9 @@ UI anchors located: `Jamgauge_right_bar.ojs` /
 `Note_JamNum.ojs` (`0x64c0fc`, `ev_49a71dd5…`; xref
 `ev_bda08173…` → `0x50d0ae`), plus `JAM` shop/grade strings
 near `0x24745e`/`0x24762b`/`0x2476b3` and the `jamcard.asp` +
-`Itemdata_Korea.dat`/`ItemManager` shop leads. The gauge math
-below is player-reported (UNVERIFIED in-exe): Cool feeds 2,
-Good feeds 1, Bad/Miss feed nothing; 30 progress completes one
-jam combo with overflow carrying into the next cycle (31 → 1);
-pills (max 5 held) are spent instead of breaking the combo on
-Bad/Miss; higher jam combo scores more (direction confirmed,
-per-level size OPEN). No gauge model is implemented: unconfirmed
-behavior stays out of code; see `JamGauge`-free `apply_rated`.
+`Itemdata_Korea.dat`/`ItemManager` shop leads. The 30-progress math below is the refuted player report (kept so nobody
+re-adds it): Cool 2, Good 1, 30 completes one jam, overflow carries. Do not
+code from this section; code from Scoring formulas + B9 (`JamState`/`JamGauge`).
 
 Negative evidence (objdump static analysis, 7.55
 `AngelO2Jam.exe` = `OTwo.exe`, md5 `34b789ff…`): zero `cmp $0x1e`
@@ -383,7 +382,8 @@ loader/CRT regions (`0x5249a2`/`0x5249b7`/`0x52b7a0`,
 `+0x3974`, and display virtual calls). The `+0xa14` rating-event
 dispatcher (`0x56e170`, jump table `0x56ec5c`) clamps against
 `0x1e0` (480) with a `0xf` (15) compare — neither is the claimed
-30-combo threshold. Gauge numbers stay OPEN (player-reported only).
+30-combo threshold. Gauge numbers now live in Scoring formulas + B9. The scan below stays as
+negative evidence against the 30-model only.
 
 ## Skill-ring modifiers — VERIFIED storage + lane path, item-text visibility
 
