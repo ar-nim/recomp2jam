@@ -160,6 +160,15 @@ const WAITING_BACK_IDS: [&str; 2] = ["IDC_BUTTON_SWAIT_BACK", "IDC_BUTTON_SWAIT_
 /// (next step: `rea` trace of the `CStateAvi` timer/dismiss arms —
 /// not in the dossier set — or a Wine null-sink measurement of the
 /// splash hold; guard: `splash_auto_advances_at_timeout`).
+///
+/// Ticket #24 added the asset constraint: the Avi cue is record 8,
+/// `bgLogo.ogg`, 3.923 s (installed `Music/BGM.ojm`, `o2jam-dump
+/// dump-ojm` plus a decode timing), so this stand-in cuts the logo
+/// track 0.92 s short. The two boot captures on the rig recipe
+/// (`~/scratch/avi-hold/`) only reached a uniform white desktop
+/// (1.2 s → 66 s, then the board) and cannot see the logo or the
+/// `Avi` exit, so the hold stays OPEN with the frame-plus-state-id
+/// readout as the named next step (`docs/parity.md`).
 const SPLASH_AUTO_ADVANCE_MS: u64 = 3_000;
 
 /// Game loop that shows each screen's scene and walks the flow.

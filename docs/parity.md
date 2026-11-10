@@ -28,7 +28,7 @@ invented placement remains (cited per cell), never for lack of art.
 |---|---|---|---|
 | Composition | First visible screen; one-entry block `IDC_BACK_LOGO` → `O2mediaLogo.ojs` (lifecycle §5); sole `.bnd` rect `(0,0)-(800,600)` is verbatim full-bleed (bnd-semantics) | Logo stages through the bound `STATE_AVI` record — one staging path, no splash slot (`load_splash`/`load_avi_logo` removed; `setup_splash` stages the declaration). Guards: `avi_stages_its_logo_through_the_bound_pairing`, `avi_missing_bind_file_stages_nothing_with_a_miss`, `avi_paints_staged_logo_without_a_splash_slot`, `avi_paints_real_logo_through_the_bound_record` (asserts the `IDC_BACK_LOGO` placement), `splash_paints_logo_through_scene_art_only`; soak `present_archives_stage_key_scenes`; `avi.png` zero-diff in the shots oracle | PASS |
 | Input | Splash dismiss key (exe dispatch unpinned) | Any lane-key press or canvas click dismisses onto the bare board (ours-by-design stand-in) | OPEN (next step: `rea` trace of the `CStateAvi` dismiss dispatch arms — not in the dossier set — plus a Wine SendInput key sweep against the boot splash; guard: `lane_key_dismisses_splash_into_planet_board`) |
-| Timing | Logo hold duration (dispatch call not in dossier set) | 3 s stand-in (`SPLASH_AUTO_ADVANCE_MS`), then auto-advance onto the bare board | OPEN (next step: trace the splash timer dispatch or measure the hold under Wine with a null sink, then replace the stand-in; guard: `splash_auto_advances_at_timeout`) |
+| Timing | Logo hold duration (dispatch call not in dossier set) | 3 s stand-in (`SPLASH_AUTO_ADVANCE_MS`), then auto-advance onto the bare board | OPEN (next step: trace the splash timer dispatch or measure the hold under Wine with a null sink, then replace the stand-in; guard: `splash_auto_advances_at_timeout`). Ticket #24 (2026-11-10) narrowed it with two findings. **Asset:** the Avi cue is record 8 = `bgLogo.ogg`, 3.923 s (`o2jam-dump dump-ojm` on the installed `Music/BGM.ojm` names mode3 slot 7 `bgLogo.ogg` at offset 7400843, 145,123 B; an OGG decode of that stream times it at 3.9228 s), so the 3 s stand-in cuts the logo track 0.92 s short — the hold cannot be 3 s if the logo track is meant to finish. **Rig attempt failed to see the splash:** two no-input boot captures on the `~/scratch/avi-hold/` recipe (Xvfb `:98`, `PULSE_SINK=wine_null`, `wine explorer /desktop` at 800x600, ko prefix, pinned blob plus dead mirrors, 1 s frame log with timestamps) show a uniform white desktop for 1.2 s → 66.0 s and the planet board at 67.2 s (`run2-driver.log`, `run2/timeline.tsv`, 113 frames), and run 1 left the desktop empty at ~32 s after a 4.0 s → 35.1 s white span (`run1-driver.log`, `run1/`): the plateau varies between runs, the logo figure never appears, and the instant `STATE_AVI` ends is invisible to frame capture alone, so the plateau reads as the login/notice gate, not as a splash timer — it cannot pin the hold. Next step (named): boot with a reachable gateway (or a mode that skips the notice gate), log frames at ≥10 Hz, and read the live state id once per frame (the `winedbg` stopped-read recipe of `docs/wine-boot.md`) so the `Avi` exit frame is timestamped against the boot frame; the `rea` trace of the `CStateAvi` timer arm stays the alternative. Guard: `splash_auto_advances_at_timeout`) |
 | Transitions | `Avi → Planet` (bare board) only | `can_enter` allows exactly that; boot proven through the windowed walk harness (key edge plus timer edge, screen trace plus state hash) | PASS (guards: `splash_boots_into_the_bare_planet_board`, `avi_boot_reaches_the_bare_planet_board_on_both_edges`) |
 
 ## `STATE_CHANNEL` — channel select (no state class)
@@ -214,6 +214,18 @@ wrong; Myroom stages bound like every other side screen.
   `gear_disc_opens_options_and_escape_closes_it`, plus the window
   board session (`docs/smoke/planet-board-session.md`: 19/19 trace
   events, `avi → planet → channel → planet → channel`).
+  Ticket #27 (2026-11-10): the board track keeps playing across
+  emblem clicks — Planet and the channel dialog it opens share cue
+  record 9 (the exe's dialog lives inside `CStatePlanet`, so the exe
+  never re-pushes that cue), and the shell's scene entry now keeps a
+  sounding track when the cue repeats the latched record, repeat
+  mode and volume instead of restarting it from sample 0. Guards:
+  `emblem_round_trip_keeps_the_shared_board_track_running` (no
+  second `set_scene_bgm` for record 9 over Planet → Channel →
+  Planet), `different_track_and_silence_still_cue_on_the_scene_change`
+  (Room still switches to record 3, Loading still silences), plus the
+  `o2jam-audio` `bgm::tests::cue_*` family (record, repeat mode,
+  volume, stopped playback, silence over silence).
   PASS (board behavior) / OPEN (highlight rendering — exe orange
   select border capture-pinned, shell keeps the amber cursor with a
   named next step in `docs/planet.md`; promo carousel semantics;
