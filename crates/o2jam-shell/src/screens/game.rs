@@ -5069,7 +5069,12 @@ impl GameLoop for ScreenGame {
             // keyboard, so a leftover draft neither sends nor holds
             // the Enter.
             (Screen::Room, MenuKey::Confirm) => {
-                if self.room_dialog.is_some() || self.take_room_slash() == SlashCommand::Empty {
+                if self.room_dialog.is_some() {
+                    // The open sheet owns the keyboard: Enter neither
+                    // sends the lobby draft nor leaves the lobby. Its
+                    // own controls (create/join, password OK) commit
+                    // through their staged rects.
+                } else if self.take_room_slash() == SlashCommand::Empty {
                     self.enter(Screen::Waiting);
                 }
             }
@@ -11796,6 +11801,37 @@ mod game_tests {
     };
     /// Click point inside [`ROOM_CONTROL_TEST_RECT`].
     const ROOM_CONTROL_TEST_CLICK: (i32, i32) = (410, 385);
+
+    #[test]
+    fn room_enter_with_an_open_dialog_stays_in_the_lobby() {
+        // The open room sheet owns the keyboard: Enter must neither
+        // send the lobby draft nor leave for Waiting, and the draft
+        // survives for when the sheet closes.
+        let mut game = ScreenGame::new();
+        // Boot → Planet → Channel → Room (the documented walk).
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        game.open_create_room_dialog();
+        game.set_lobby_input(LobbyChat::Room, "hello");
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room, "dialog keeps the lobby");
+        assert_eq!(
+            game.lobby_chat(LobbyChat::Room).draft(),
+            "hello",
+            "the draft is untouched"
+        );
+        // Entering the lobby again drops the sheet (the flow's own
+        // room-entry reset); with an empty draft Enter leaves for
+        // Waiting as before.
+        game.menu_key(MenuKey::Back, true);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        game.set_lobby_input(LobbyChat::Room, "");
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+    }
 
     #[test]
     fn staged_room_chrome_buttons_reach_their_side_views() {
