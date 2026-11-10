@@ -823,8 +823,9 @@ data evidence only, joined against `~/scratch/t-chanlist.png` /
 
 - `ChannelInfo_CH_Num.ojs`: 10 raw 13x18 layers in stored order =
   digits 0–9. Block ids `IDC_IMAGE_CH10`/`CH01` name the tens/ones
-  wells (bar-local (50,11)/(63,11)); the digit value source
-  (wire `channel_id` vs list ordinal) stays OPEN.
+  wells (bar-local (50,11)/(63,11)); the digit value source is
+  PINNED to the wire `channel_id` + 1 by the 2026-11-10 rig capture
+  (section below), which refutes the list-ordinal reading.
 - `ChannelInfo_CH_ConnectCount.ojs`: one raw 185x19 layer = the
   orange 10-segment fill strip. The exe clips it to the population
   share (live Ch.01 shows one lit segment); the rounding/
@@ -841,12 +842,88 @@ data evidence only, joined against `~/scratch/t-chanlist.png` /
   painter leaves those slots untouched. Exe rows carry no text
   anywhere else: the shell's ASCII row string was an invention and
   now paints on the figure-less fallback only.
-- Inactive-row rendering stays OPEN (every live capture shows
-  active rows); the shell paints inactive rows like active ones,
-  never inventing a dim state.
+- Inactive-row rendering is PINNED by the same capture: a row the
+  gateway marks inactive paints the empty slot (baked `Ch.`, no
+  digits, CLOSE face) even when it sits inside the list. The shell
+  still paints inactive rows like active ones; `active=0` and
+  `capacity=0` co-occur in every capture, so which field gates the
+  paint stays OPEN.
 - Exe key dispatch for the dialog stays unpinned (no LE32/operand
   join found in this ticket's timebox); the shell wires the
   standard lobby set (Up/Down/Confirm/Back→Planet) with tests, and
   the rig next step is a SendInput arrows/Enter/Esc sweep on the
   live dialog per the `~/scratch/planet-verify/` recipe (highlight
   via dialog+`0x94`, phase flag at parent+`0xF64`).
+
+## Channel row digits — EXE-PINNED to `channel_id + 1` (2026-11-10 rig capture)
+
+Settles the OPEN half of issue #28: the "Ch.NN" wells show the wire
+`channel_id` one-based, never the row's list ordinal, and the entry
+face still sends the raw `channel_id`. No disassembly: three live
+captures with the numbers moved underneath the exe.
+
+**Rig (all contained, scratch only).** Xvfb `:97` 1024x768x24; own
+copy of the ko prefix (`~/scratch/prefix-digits`, removed afterwards)
+so the sibling session on `:98` was never touched; `PULSE_SINK=wine_null`
+throughout (no sound to the speakers); `OTwo.exe` 5,029,888 B sha256
+`83a045418b6219ba340681766b33de2bfbb5ff51b813ef4e2e9dd1def72c823b`
+run from the read-only copy `~/scratch/run-full`; launcher blob and the
+five mirrors exactly as pinned in `wine-boot.md`; Wine 11.21, Python
+3.14.9. Clicks: XTEST for the notice plate and the fallback popup, the
+winegcc `SendInput` helper for every canvas hit (notice → popup OK →
+dialog auto-opens; X-close and the scroll arrow respond the same way).
+Gateway: the local Memoryer 7.2.0 on `127.0.0.1:15010` (6 channel
+sections, ids 0–4 and 9; its 1003 reply pads the table to 10 rows, so
+ids 5–8 arrive closed).
+
+**How the numbers were moved.** A scratch TCP proxy
+(`~/scratch/digits-rig/proxy.py`) sat between the exe and the gateway.
+The stream is plaintext `[u16 len][u16 id][body]` framing
+(`o2jam-net/src/frame.rs`), so the proxy rewrote only the `channel_id`
+field of each 1003 row and forwarded everything else. Same row count,
+same open/closed pattern, different numbers — the exe cannot tell the
+difference from any other field.
+
+**What each row read** (captures in `~/scratch/digits-rig/`; every
+digit read off the zoomed row crops, every enter payload off the
+gateway log `~/memoryer-local/server-u1.log`):
+
+| run | wire rows in list order | first page | last page |
+| --- | --- | --- | --- |
+| 1 (no proxy) | ids 0,1,2,3,4 open; 5–8 closed; 9 open | `Ch.01 02 03 04` | empty ×3, `Ch.10` |
+| 2 (proxy +5) | ids 5,6,7,8,9 open; 0–3 closed; 4 open | `Ch.06 07 08 09` | empty ×3, `Ch.05` |
+| 3 (proxy +10) | ids 10–14 open; 15–18 closed; 19 open | `Ch.11 12 13 14` | empty ×3, `Ch.20` |
+
+Enter payloads of the rows that were clicked: run 1's `Ch.10` row sent
+`03EC` with channel `[0/09]`; run 2's `Ch.05` row sent `[0/04]`.
+
+**Rules pinned.**
+
+- Slot order is the wire list order: wire row *k* paints in slot *k*.
+  No id-keyed placement (run 2 puts the id-5 row first, and it paints
+  `06`, not `01`).
+- The digits are `channel_id + 1`: tens well `(id+1)/10`, ones well
+  `(id+1) mod 10`. Run 3 confirms the carry past 9 twice (id 10 →
+  `Ch.11`, id 19 → `Ch.20`), so the two wells are decimal digits of the
+  one-based number, not of the raw id.
+- The list ordinal is REFUTED: only in run 1 do ordinal and id+1
+  coincide (the padded table runs 0..9 in order). Runs 2 and 3 break
+  the tie on the first page.
+- Display and payload differ by one: the row painted `Ch.10` enters
+  channel `09`. The digit value is a presentation number; the
+  identity that travels to the gateway is the raw wire `channel_id`.
+- A row with `active = 0` paints the empty slot — baked `Ch.`, no
+  digits, CLOSE face — even inside the list, not only past its end
+  (4 such rows in each run). `active = 0` and `capacity = 0` co-occur
+  in all three runs, so which field gates the paint stays OPEN; the
+  next evidence step is a gateway sending `active = 0` with a non-zero
+  capacity.
+
+**Shell consequence (code fix still to land).**
+`channel_digit` in `crates/o2jam-shell/src/screens/paint.rs` currently
+paints the raw `channel_id` (`id/10 % 10`, `id % 10`) and its doc
+comment carries the old OPEN sentence. Pinned behaviour: paint
+`id + 1` in both wells (`(id+1)/10 % 10`, `(id+1) % 10`), keep the row
+order, and leave `active = 0` rows painting the empty slot. The value
+join and its guard test belong to the implementation ticket; the rig
+next step for the `active`/`capacity` question is named above.
