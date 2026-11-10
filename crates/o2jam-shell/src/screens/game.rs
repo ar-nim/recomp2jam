@@ -3254,6 +3254,7 @@ impl GameLoop for ScreenGame {
             // then Confirm leaves the scene in Loading (honest).
             (Screen::Loading, MenuKey::Confirm) => self.enter(Screen::Playing),
             (Screen::Room, MenuKey::Back) => self.enter(Screen::Channel),
+            (Screen::Channel, MenuKey::Back) => self.enter(Screen::Planet),
             (Screen::Channel, MenuKey::Confirm) => {
                 if self.take_channel_slash() == SlashCommand::Empty {
                     self.enter(Screen::Room);
@@ -3738,8 +3739,10 @@ mod game_tests {
         assert_eq!(game.screen(), Screen::Room);
         game.menu_key(MenuKey::Back, true);
         assert_eq!(game.screen(), Screen::Channel);
+        // Back on the dialog-up phase closes to the bare board
+        // (Esc symmetry with the verified X close).
         game.menu_key(MenuKey::Back, true);
-        assert_eq!(game.screen(), Screen::Channel);
+        assert_eq!(game.screen(), Screen::Planet);
     }
 
     #[test]
@@ -4080,6 +4083,22 @@ mod game_tests {
         let mut game = result_game();
         game.mouse_click(400, 300);
         assert_eq!(game.screen(), Screen::Result);
+    }
+
+    #[test]
+    fn channel_back_closes_to_the_planet_board() {
+        // Esc symmetry with the verified X close (bnd-pinned rect
+        // (541,151)-(589,189), verified native click (577,171)):
+        // Back on the dialog-up phase returns to the bare board.
+        // Exe key-code pin stays OPEN (rig next step in parity).
+        use MenuKey;
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        assert_eq!(game.screen(), Screen::Channel);
+        game.menu_key(MenuKey::Back, true);
+        assert_eq!(game.screen(), Screen::Planet);
     }
 
     #[test]

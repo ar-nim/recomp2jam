@@ -28,10 +28,10 @@ use std::collections::HashMap;
 
 use super::super::avatar::{
     anchor_in_frame, paint_behind_placements, paint_foreground_placements, paint_scene_figures,
-    scene_block, scene_sprite_names, AvatarFigure, ScenePlacement, AVI_BLOCK, CHANNEL_BLOCK,
-    LANKING_BLOCK, LOADING_BLOCK, LOADING_COVER_SPRITE, LOADING_SPRITE, MUSICSHOP_BLOCK,
-    MYROOM_BLOCK, PLANET_BLOCK, RESULT_BLOCK, ROOM_BLOCK, SHOP_BLOCK, WAITING_BLOCK,
-    WAIT_COVER_SPRITE, WAIT_TEAM_SPRITES,
+    scene_block, scene_sprite_names, AvatarFigure, FigureLayer, ScenePlacement, AVI_BLOCK,
+    CHANNEL_BLOCK, LANKING_BLOCK, LOADING_BLOCK, LOADING_COVER_SPRITE, LOADING_SPRITE,
+    MUSICSHOP_BLOCK, MYROOM_BLOCK, PLANET_BLOCK, RESULT_BLOCK, ROOM_BLOCK, SHOP_BLOCK,
+    WAITING_BLOCK, WAIT_COVER_SPRITE, WAIT_TEAM_SPRITES,
 };
 use super::super::playing::{HighwayGeometry, PlayingView};
 use super::super::screen::Screen;
@@ -534,31 +534,139 @@ fn paint_channel_row_chrome(frame: &mut Frame<'_>, slot: usize) {
 }
 const CHANNEL_ENTER_TONE: u32 = pack_xrgb(150, 148, 151);
 
+/// Whether a row shows the baked FULL bar: a live row at (or past)
+/// capacity shows the `CH_Back` frame-2 FULL face instead of the
+/// enter button. Zero capacity never reads full — the quiet-server
+/// all-zero rows paint an empty track, not FULL. Which capacity the
+/// exe compares (slot capacity vs channel cap) rides the wire row;
+/// the frame-1 bar state stays OPEN (no capture pins its trigger).
+fn channel_row_full(channel: &ChannelState) -> bool {
+    channel.active && channel.capacity > 0 && channel.population >= channel.capacity
+}
+
+/// Native width of the count strip art (`CH_ConnectCount` 185x19).
+const CHANNEL_COUNT_W: i64 = 185;
+
+/// Filled width of the count strip in native px: the live population
+/// share of capacity, clamped to the strip. Zero capacity or zero
+/// population fills nothing. Segment quantization stays OPEN: live
+/// captures pin one lit segment without pinning the rounding rule,
+/// so this floor rule is the labeled stand-in, not exe proof.
+fn channel_fill_width(channel: &ChannelState) -> usize {
+    if channel.capacity <= 0 || channel.population <= 0 {
+        return 0;
+    }
+    let filled = CHANNEL_COUNT_W * i64::from(channel.population) / i64::from(channel.capacity);
+    usize::try_from(filled.clamp(0, CHANNEL_COUNT_W)).unwrap_or(0)
+}
+
+/// Channel number the digit slots show: the wire `channel_id`
+/// (the gateway/channel pair is the row's identity — the entry-face
+/// click joins on it). The tens slot shows (id/10)%10, the ones
+/// slot id%10; ids past 99 show their low two digits. List-ordinal
+/// display stays OPEN (next step: gateway replay with non-sequential
+/// ids plus a capture of the wells).
+fn channel_digit(channel: &ChannelState, tens: bool) -> usize {
+    let id = u32::from(channel.channel_id);
+    let digit = if tens { id / 10 % 10 } else { id % 10 };
+    usize::try_from(digit).unwrap_or(0)
+}
+
+/// Left `width` px of one layer image (native px): the count strip
+/// clips to the population share instead of painting whole.
+fn crop_layer_width(layer: &FigureLayer, width: usize) -> Rgb555Image {
+    let take = width.min(layer.image.w);
+    let mut words = Vec::with_capacity(take * layer.image.h);
+    for row in 0..layer.image.h {
+        let start = row * layer.image.w;
+        words.extend_from_slice(&layer.image.words[start..start + take]);
+    }
+    Rgb555Image {
+        w: take,
+        h: layer.image.h,
+        words,
+    }
+}
+
+/// Paint one staged layer at a bar-local origin (native px): the
+/// digit/plate paint path — one frame per slot, never the stacked
+/// whole-figure paint (the loader stacks every frame as layers, so
+/// a whole-figure paint would smear all ten digits into each well).
+fn paint_bar_layer(
+    frame: &mut Frame<'_>,
+    layer: &FigureLayer,
+    bar_origin: (i32, i32),
+    local: (i32, i32),
+) {
+    let (dx, dy) = anchor_in_frame(
+        bar_origin.0 + local.0,
+        bar_origin.1 + local.1,
+        frame.w,
+        frame.h,
+    );
+    blit_rgb555(
+        frame,
+        &layer.image.view(),
+        dx + layer.dx,
+        dy + layer.dy,
+        Some(layer.colorkey),
+    );
+}
+
 /// Staged row-bar art for viewport slot `slot`: the `CH_Back` body at
 /// the bnd bar origin (row origin +1) plus the digit plates and the
 /// count plate at their bnd bar-local slots. Returns `true` while the
 /// bar body staged — it then replaces the procedural pill/track
 /// chrome (same row-interior role); each plate paints only while its
 /// own figure staged (absent parts fall back to no plate, never a
-/// stand-in).
-fn paint_channel_bar_art(frame: &mut Frame<'_>, slot: usize, art: &SceneArt) -> bool {
-    let Some(bar) = art.figures.get(CHANNEL_BAR_SPRITE) else {
+/// stand-in). The bar shows its status frame (FULL rows show the
+/// baked frame-2 face, every other row frame 0), the digit slots
+/// show the live channel number's tens/ones frames, and the count
+/// strip clips to the live population share.
+fn paint_channel_bar_art(
+    frame: &mut Frame<'_>,
+    slot: usize,
+    channel: &ChannelState,
+    art: &SceneArt,
+) -> bool {
+    let Some(bar) = art
+        .figures
+        .get(CHANNEL_BAR_SPRITE)
+        .filter(|figure| !figure.is_empty())
+    else {
         return false;
     };
-    if frame.w == 0 || frame.h == 0 || bar.is_empty() {
+    if frame.w == 0 || frame.h == 0 {
         return false;
     }
-    let (bx, by) = channel_bar_origin(slot);
-    let (dx, dy) = anchor_in_frame(bx, by, frame.w, frame.h);
-    bar.paint_scaled_anchors(frame, dx, dy, frame.w, frame.h);
-    if let Some(digit) = art
+    // Status frame first: FULL rows show the baked frame-2 face
+    // (which covers the enter well), every other row frame 0.
+    let full = channel_row_full(channel);
+    let frame_index = if full { 2 } else { 0 };
+    let Some(body) = bar.layer(frame_index).or(bar.layer(0)) else {
+        return false;
+    };
+    let bar_origin = channel_bar_origin(slot);
+    let (dx, dy) = anchor_in_frame(bar_origin.0, bar_origin.1, frame.w, frame.h);
+    blit_rgb555(
+        frame,
+        &body.image.view(),
+        dx + body.dx,
+        dy + body.dy,
+        Some(body.colorkey),
+    );
+    if let Some(digits) = art
         .figures
         .get(CHANNEL_DIGIT_SPRITE)
         .filter(|figure| !figure.is_empty())
     {
-        for &(local_x, local_y) in &CHANNEL_DIGIT_LOCALS {
-            let (dx, dy) = anchor_in_frame(bx + local_x, by + local_y, frame.w, frame.h);
-            digit.paint_scaled_anchors(frame, dx, dy, frame.w, frame.h);
+        for (tens, local) in [
+            (true, CHANNEL_DIGIT_LOCALS[0]),
+            (false, CHANNEL_DIGIT_LOCALS[1]),
+        ] {
+            if let Some(shown) = digits.layer(channel_digit(channel, tens)) {
+                paint_bar_layer(frame, shown, bar_origin, local);
+            }
         }
     }
     if let Some(count) = art
@@ -566,13 +674,25 @@ fn paint_channel_bar_art(frame: &mut Frame<'_>, slot: usize, art: &SceneArt) -> 
         .get(CHANNEL_COUNT_SPRITE)
         .filter(|figure| !figure.is_empty())
     {
-        let (dx, dy) = anchor_in_frame(
-            bx + CHANNEL_COUNT_LOCAL.0,
-            by + CHANNEL_COUNT_LOCAL.1,
-            frame.w,
-            frame.h,
-        );
-        count.paint_scaled_anchors(frame, dx, dy, frame.w, frame.h);
+        if let Some(strip) = count.layer(0) {
+            let width = channel_fill_width(channel);
+            if width > 0 {
+                let cropped = crop_layer_width(strip, width);
+                let (dx, dy) = anchor_in_frame(
+                    bar_origin.0 + CHANNEL_COUNT_LOCAL.0,
+                    bar_origin.1 + CHANNEL_COUNT_LOCAL.1,
+                    frame.w,
+                    frame.h,
+                );
+                blit_rgb555(
+                    frame,
+                    &cropped.view(),
+                    dx + strip.dx,
+                    dy + strip.dy,
+                    Some(strip.colorkey),
+                );
+            }
+        }
     }
     true
 }
@@ -605,8 +725,8 @@ fn paint_channel_scroll_art(frame: &mut Frame<'_>, art: &SceneArt) {
     paint_part(frame, CHANNEL_SCROLL_DOWN_SPRITE, CHANNEL_SCROLL_DOWN_LOCAL);
 }
 
-/// Entry-button plate rect for viewport slot `slot`, scaled to the
-/// frame: the bnd-derived face origin plus the bnd face size (44x21).
+/// Entry-button plate for one viewport slot, scaled to the frame:
+/// the bnd-derived face origin plus the bnd face size (44x21).
 fn channel_enter_rect(slot: usize, w: i32, h: i32) -> Rect {
     let wide = i64::from(w);
     let high = i64::from(h);
@@ -634,8 +754,53 @@ fn paint_channel_buttons(frame: &mut Frame<'_>, shown: usize) {
         i32::try_from(frame.h).unwrap_or(0),
     );
     for slot in 0..shown {
-        fill_rect(frame, &channel_enter_rect(slot, w, h), CHANNEL_ENTER_TONE);
+        paint_channel_button(frame, slot, w, h);
     }
+}
+
+/// One entry-button plate at its measured face (see
+/// [`paint_channel_buttons`]): the per-row fallback when no staged
+/// enter art covers the face. Faces paint after the bar — the bar
+/// frame's face well is opaque art, not a cutout — so this rides the
+/// same per-row slot as the staged face.
+fn paint_channel_button(frame: &mut Frame<'_>, slot: usize, w: i32, h: i32) {
+    fill_rect(frame, &channel_enter_rect(slot, w, h), CHANNEL_ENTER_TONE);
+}
+
+/// Per-row enter face after the bar: staged [`CHANNEL_ENTER_SPRITE`]
+/// frame 0 for joinable rows, nothing for FULL rows (the baked FULL
+/// bar covers the well), and the procedural plate where no enter art
+/// staged. Faces ride above the bar because the bar frame's face
+/// well is opaque art (decoded `CH_Back` frame 0 carries a gray
+/// well, not a cutout).
+fn paint_channel_face(frame: &mut Frame<'_>, slot: usize, channel: &ChannelState, art: &SceneArt) {
+    let w = i32::try_from(frame.w).unwrap_or(0);
+    let h = i32::try_from(frame.h).unwrap_or(0);
+    let Some(figure) = art
+        .figures
+        .get(CHANNEL_ENTER_SPRITE)
+        .filter(|figure| !figure.is_empty())
+    else {
+        paint_channel_button(frame, slot, w, h);
+        return;
+    };
+    if channel_row_full(channel) {
+        return;
+    }
+    let Some(face) = figure.layer(0) else {
+        return;
+    };
+    // Face origin (native px): the bnd-derived bar origin + the
+    // bnd bar-local face offset (285,11).
+    let (face_x, face_y) = channel_enter_origin(slot);
+    let (dx, dy) = anchor_in_frame(face_x, face_y, frame.w, frame.h);
+    blit_rgb555(
+        frame,
+        &face.image.view(),
+        dx + face.dx,
+        dy + face.dy,
+        Some(face.colorkey),
+    );
 }
 
 /// Row bar body (`ChannelInfo_CH_Back.ojs`, 347x41, 3 frames):
@@ -666,29 +831,17 @@ pub const CHANNEL_SCROLL_UP_SPRITE: &str = "Messenger_Main_Scroll_Up.ojs";
 /// scroll-local (0,196) (bnd-pinned).
 pub const CHANNEL_SCROLL_DOWN_SPRITE: &str = "Messenger_Main_Scroll_Down.ojs";
 
-/// Enter buttons for the viewport slice: staged
+/// Enter-button faces for the visible rows: staged
 /// [`CHANNEL_ENTER_SPRITE`] frame 0 at the bnd-derived face origins
 /// (row origin +1 inset + bar-local (285,11); row 0 = (502,236),
-/// exact against the reference measurement) while the figure staged;
-/// the procedural plates ([`paint_channel_buttons`]) otherwise. The
-/// staged art covers the same measured rect the plates marked, so
-/// the replacement invents nothing.
-fn paint_channel_enter_art(frame: &mut Frame<'_>, shown: usize, art: &SceneArt) {
-    let Some(figure) = art.figures.get(CHANNEL_ENTER_SPRITE) else {
-        paint_channel_buttons(frame, shown);
-        return;
-    };
-    if shown == 0 || frame.w == 0 || frame.h == 0 || figure.is_empty() {
-        return;
-    }
-    for slot in 0..shown {
-        // Face origin (native px): the bnd-derived bar origin + the
-        // bnd bar-local face offset (285,11).
-        let (face_x, face_y) = channel_enter_origin(slot);
-        let (dx, dy) = anchor_in_frame(face_x, face_y, frame.w, frame.h);
-        figure.paint_scaled_anchors(frame, dx, dy, frame.w, frame.h);
-    }
-}
+/// exact against the reference measurement) while the row stays
+/// joinable; FULL rows paint no face (the baked FULL bar covers the
+/// well). The staged art covers the same measured rect the plates
+/// marked, so the replacement invents nothing. One frame only: the
+/// loader stacks all three frames as layers, and a whole-figure
+/// paint would smear them. Faces paint per row after the bar (see
+/// [`paint_channel_face`): the bar frame's face well is opaque art,
+/// so a pre-row face layer would vanish under it.
 /// Dark strip behind Channel rows over the pinned viewport slots
 /// (2 px bleed past the first top and last bottom).
 fn paint_channel_scrim(frame: &mut Frame<'_>, shown: usize) {
@@ -1135,30 +1288,49 @@ fn paint_channel_rows(
 ) {
     let (top, shown) = channel_viewport(highlight, channels.len());
     paint_channel_scrim(frame, shown);
-    match art {
-        Some(art) => paint_channel_enter_art(frame, shown, art),
-        None => paint_channel_buttons(frame, shown),
-    }
-    let w = frame.w as i32;
-    let h = frame.h as i32;
+    let visible: Vec<(usize, &ChannelState)> =
+        channels.iter().skip(top).take(shown).enumerate().collect();
+    let w = i32::try_from(frame.w).unwrap_or(0);
+    let h = i32::try_from(frame.h).unwrap_or(0);
     let text_x = w / 4;
-    for (slot, channel) in channels.iter().skip(top).take(shown).enumerate() {
-        let row = channel_row_top(slot, h);
+    if art.is_none() {
+        paint_channel_buttons(frame, shown);
+    }
+    for (slot, channel) in &visible {
+        let row = channel_row_top(*slot, h);
         // Staged CH_Back replaces the procedural pill/track chrome;
         // no bar figure keeps today's stand-ins.
-        let staged_bar = art.is_some_and(|art| paint_channel_bar_art(frame, slot, art));
+        let staged_bar = art.is_some_and(|art| paint_channel_bar_art(frame, *slot, channel, art));
         if !staged_bar {
-            paint_channel_row_chrome(frame, slot);
+            paint_channel_row_chrome(frame, *slot);
         }
-        let entry = channel_row_text(channel);
-        let ink = if channel.active {
-            pack_xrgb(0xFF, 0xFF, 0xFF)
-        } else {
-            pack_xrgb(0x70, 0x70, 0x70)
-        };
-        draw_text(frame, text_x, row, &entry, ink);
-        if top + slot == highlight {
-            paint_channel_highlight(frame, slot, text_x, row, art);
+        // Staged digit plates name the row in art (tens/ones frames
+        // at their bnd slots); without them the ASCII row string
+        // stays the labeled fallback. The exe paints no row text —
+        // live captures show digits, segments, and the enter face
+        // only — so staged rows carry no `draw_text` overlay.
+        let digits_staged = art.is_some_and(|art| {
+            art.figures
+                .get(CHANNEL_DIGIT_SPRITE)
+                .is_some_and(|figure| !figure.is_empty())
+        });
+        if !digits_staged {
+            let entry = channel_row_text(channel);
+            let ink = if channel.active {
+                pack_xrgb(0xFF, 0xFF, 0xFF)
+            } else {
+                pack_xrgb(0x70, 0x70, 0x70)
+            };
+            draw_text(frame, text_x, row, &entry, ink);
+        }
+        // The face rides above the bar (opaque face well, see
+        // `paint_channel_face`); the plates mark the same faces
+        // where no enter art staged.
+        if let Some(art) = art {
+            paint_channel_face(frame, *slot, channel, art);
+        }
+        if top + *slot == highlight {
+            paint_channel_highlight(frame, *slot, text_x, row, art);
         }
     }
     if let Some(art) = art {
@@ -8208,6 +8380,248 @@ mod paint_tests {
             colorkey: 0xFFFF,
         });
         figure
+    }
+
+    /// Ten-layer digit figure: layer `i` is a solid 13x18 block in
+    /// its own colour (colorkey white, so every pixel paints) — a
+    /// stand-in for the ten `CH_Num` digit frames in stored order.
+    fn digit_figure() -> AvatarFigure {
+        let mut figure = AvatarFigure::default();
+        for digit in 0u16..10 {
+            // Distinct nonzero words: word 0 would read as
+            // transparent under a zero colorkey, and the decode is
+            // injective so each layer keeps its own colour.
+            let word = 0x0821_u16.wrapping_add(digit.wrapping_mul(0x1042));
+            let pixels = word.to_le_bytes().repeat(13 * 18);
+            figure.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&pixels, 13, 18).unwrap(),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+        }
+        figure
+    }
+
+    /// Decoded colour of one digit-figure layer (see
+    /// [`digit_figure`]): the assertion-side twin of the blit path.
+    fn digit_ink(digit: u16) -> u32 {
+        let word = 0x0821_u16.wrapping_add(digit.wrapping_mul(0x1042));
+        let (r, g, b) = o2jam_file::rgb555_to_rgb888(word);
+        pack_xrgb(r, g, b)
+    }
+
+    /// Three-layer status bar: layers 0-1 green, layer 2 red — a
+    /// stand-in for the `CH_Back` normal/FULL frames (frame 2 carries
+    /// the baked FULL face).
+    fn status_bar_figure() -> AvatarFigure {
+        let mut figure = AvatarFigure::default();
+        for word in [[0xE0, 0x03], [0xE0, 0x03], [0x00, 0x7C]] {
+            let pixels = word.repeat(347 * 41);
+            figure.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&pixels, 347, 41).unwrap(),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+        }
+        figure
+    }
+
+    #[test]
+    fn channel_digits_select_tens_and_ones_frames() {
+        // `CH_Num` decodes one layer per digit in stored order
+        // (0-9, Interface1.opi): the tens slot shows (id/10)%10 and
+        // the ones slot id%10. Painting the whole figure at both
+        // slots would smear every digit into each well.
+        let art = SceneArt {
+            placements: Vec::new(),
+            figures: HashMap::from([
+                (
+                    CHANNEL_BAR_SPRITE.to_owned(),
+                    solid_figure(347, 41, [0x1F, 0x00]), // solid blue
+                ),
+                (CHANNEL_DIGIT_SPRITE.to_owned(), digit_figure()),
+            ]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_channel_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &[ChannelState {
+                gateway_id: 0,
+                channel_id: 27,
+                capacity: 100,
+                population: 5,
+                active: true,
+            }],
+            0,
+            &art,
+            None,
+        );
+        // Bar-local (50,11)/(63,11) over the row-0 bar origin
+        // (217,225): tens well centre (273,245), ones (286,245).
+        assert_eq!(buf[245 * 800 + 273], digit_ink(2), "tens slot");
+        assert_eq!(buf[245 * 800 + 286], digit_ink(7), "ones slot");
+    }
+
+    #[test]
+    fn channel_fill_clips_to_population_share() {
+        // The count strip paints the live population share of its
+        // 185x19 plate: half-full fills the left half and leaves
+        // the right half bare; a full row fills the whole plate;
+        // zero capacity fills nothing.
+        let green = pack_xrgb(0x00, 0xFF, 0x00);
+        let blue = pack_xrgb(0x00, 0x00, 0xFF);
+        let art = SceneArt {
+            placements: Vec::new(),
+            figures: HashMap::from([
+                (
+                    CHANNEL_BAR_SPRITE.to_owned(),
+                    solid_figure(347, 41, [0x1F, 0x00]), // solid blue
+                ),
+                (
+                    CHANNEL_COUNT_SPRITE.to_owned(),
+                    solid_figure(185, 19, [0xE0, 0x03]), // solid green
+                ),
+            ]),
+        };
+        let paint_row = |channel: ChannelState| {
+            let mut buf = vec![0u32; 800 * 600];
+            paint_channel_scene(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                &[channel],
+                0,
+                &art,
+                None,
+            );
+            buf
+        };
+        // Row-0 strip at bar-local (90,12) over the bar origin
+        // (217,225): native (307,237)..(492,256).
+        let half = paint_row(ChannelState {
+            gateway_id: 0,
+            channel_id: 1,
+            capacity: 100,
+            population: 50,
+            active: true,
+        });
+        assert_eq!(half[245 * 800 + 310], green, "filled left half");
+        assert_eq!(half[245 * 800 + 450], blue, "bare right half");
+        let full = paint_row(ChannelState {
+            gateway_id: 0,
+            channel_id: 1,
+            capacity: 100,
+            population: 100,
+            active: true,
+        });
+        assert_eq!(full[245 * 800 + 490], green, "full row fills all");
+        let empty = paint_row(ChannelState {
+            gateway_id: 0,
+            channel_id: 1,
+            capacity: 0,
+            population: 0,
+            active: false,
+        });
+        assert_eq!(empty[245 * 800 + 310], blue, "zero cap fills none");
+    }
+
+    #[test]
+    fn channel_full_row_uses_full_frame_without_face() {
+        // A row at capacity shows the bar's baked FULL frame (layer
+        // 2) instead of the normal bar plus the enter face; a live
+        // row below capacity keeps frame 0 and its face.
+        let green = pack_xrgb(0x00, 0xFF, 0x00);
+        let red = pack_xrgb(0xFF, 0x00, 0x00);
+        let blue = pack_xrgb(0x00, 0x00, 0xFF);
+        let art = SceneArt {
+            placements: Vec::new(),
+            figures: HashMap::from([
+                (CHANNEL_BAR_SPRITE.to_owned(), status_bar_figure()),
+                (
+                    CHANNEL_ENTER_SPRITE.to_owned(),
+                    solid_figure(44, 21, [0x1F, 0x00]), // solid blue
+                ),
+            ]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_channel_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &[
+                ChannelState {
+                    gateway_id: 0,
+                    channel_id: 1,
+                    capacity: 100,
+                    population: 100,
+                    active: true,
+                },
+                ChannelState {
+                    gateway_id: 0,
+                    channel_id: 2,
+                    capacity: 100,
+                    population: 5,
+                    active: true,
+                },
+            ],
+            0,
+            &art,
+            None,
+        );
+        // Row 0 (full): baked FULL frame over bar and face well.
+        assert_eq!(buf[240 * 800 + 250], red, "full bar frame");
+        assert_eq!(buf[240 * 800 + 510], red, "no face on a full row");
+        // Row 1 (live): normal bar with the staged face on top.
+        assert_eq!(buf[290 * 800 + 250], green, "live bar frame");
+        assert_eq!(buf[290 * 800 + 510], blue, "face on a live row");
+    }
+
+    #[test]
+    fn channel_staged_digits_replace_ascii_text() {
+        // The exe paints no row text (captures show digits, segments,
+        // and the enter face only): staged digit plates suppress the
+        // ASCII fallback string, which stays for the figure-less
+        // fallback only.
+        let blue = pack_xrgb(0x00, 0x00, 0xFF);
+        let art = SceneArt {
+            placements: Vec::new(),
+            figures: HashMap::from([
+                (
+                    CHANNEL_BAR_SPRITE.to_owned(),
+                    solid_figure(347, 41, [0x1F, 0x00]), // solid blue
+                ),
+                (CHANNEL_DIGIT_SPRITE.to_owned(), digit_figure()),
+            ]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_channel_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &two_channels(),
+            0,
+            &art,
+            None,
+        );
+        // The old ASCII anchor (text_x 200, row 0 top 224) sits
+        // inside the staged bar: no white/gray text ink paints there.
+        assert_eq!(buf[226 * 800 + 250], blue, "bar ink, no text");
+        assert!(
+            !buf.contains(&pack_xrgb(0x70, 0x70, 0x70)),
+            "inactive gray text paints nowhere staged"
+        );
     }
 
     #[test]

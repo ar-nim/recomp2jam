@@ -814,3 +814,39 @@ eyeball-checked zooms (`~/scratch/chan2-rows.png`). The shell's
 `h/4 + i*8` rows and rect-corner details stay invented (audit
 10–11) until painted at these anchors with passing guards.
 
+
+## Ticket #12 row-art decode (2026-11-11, archive + capture join)
+
+Decoded the four row bodies from `Interface1.opi` (no exe bytes —
+data evidence only, joined against `~/scratch/t-chanlist.png` /
+`q-chan.png` / `z-row0.png`):
+
+- `ChannelInfo_CH_Num.ojs`: 10 raw 13x18 layers in stored order =
+  digits 0–9. Block ids `IDC_IMAGE_CH10`/`CH01` name the tens/ones
+  wells (bar-local (50,11)/(63,11)); the digit value source
+  (wire `channel_id` vs list ordinal) stays OPEN.
+- `ChannelInfo_CH_ConnectCount.ojs`: one raw 185x19 layer = the
+  orange 10-segment fill strip. The exe clips it to the population
+  share (live Ch.01 shows one lit segment); the rounding/
+  quantization rule stays OPEN, shell paints pixel-floor.
+- `ChannelInfo_CH_Back.ojs`: 3 raw 347x41 frames — frame 0 normal
+  bar (opaque gray face well, NOT a cutout: faces must paint after
+  the bar), frame 1 etched 입장 bar (trigger OPEN), frame 2 FULL
+  bar (baked FULL face for at-capacity rows).
+- `ChannelInfo_CH_Enter.ojs`: 3 raw 44x21 입장 frames (frame 0 =
+  normal; hover/pressed assignment OPEN).
+- Sheet body `Dialog_ChannelInfo.ojs` (one 800x466 layer) bakes four
+  empty row bars with `Ch.` (no digits), empty tracks, and CLOSE
+  wells — slots past the live list show CLOSE in exe art, and the
+  painter leaves those slots untouched. Exe rows carry no text
+  anywhere else: the shell's ASCII row string was an invention and
+  now paints on the figure-less fallback only.
+- Inactive-row rendering stays OPEN (every live capture shows
+  active rows); the shell paints inactive rows like active ones,
+  never inventing a dim state.
+- Exe key dispatch for the dialog stays unpinned (no LE32/operand
+  join found in this ticket's timebox); the shell wires the
+  standard lobby set (Up/Down/Confirm/Back→Planet) with tests, and
+  the rig next step is a SendInput arrows/Enter/Esc sweep on the
+  live dialog per the `~/scratch/planet-verify/` recipe (highlight
+  via dialog+`0x94`, phase flag at parent+`0xF64`).
