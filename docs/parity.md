@@ -118,17 +118,33 @@ wrong; Myroom stages bound like every other side screen.
   flows, captions, entry unwired (all OPEN).
 - `STATE_PLANET` (`CStatePlanet`, `0x11`; BGM `Music/Planet.ojm`;
   quest button commented undecided — no drum backend). Screen,
-  paint (staged art or flat card, no captions), and flow edges
-  (`Channel→Planet` via the dialog X, `Planet→Channel` via a lit
-  emblem — player-report corroborated, per-emblem dynamic
-  verification pending) live; no bare-board → Room path is evidenced.
-  Button clicks hit-test at the five pinned `.bnd` button rects and
-  HARD/NORMAL/EASY record a difficulty pick (amber-cursor stand-in
-  highlight — highlight rendering is evidence-OPEN). FREE/DRUM clicks
-  stay unbound (P0).
-  OPEN: captions, confirm action (solo entry), exe entry key, promo
-  cell and EXIT/OPTION hit rects (geometry not fully pinned), BGM
-  (closed as no-trigger).
+  paint (staged art or flat card, exe-pinned captions in real
+  glyphs), and flow edges (`Channel→Planet` via the dialog X,
+  `Planet→Channel` via a lit emblem or Confirm — live-verified
+  2026-11-09, `docs/planet.md`) live; no bare-board → Room path is
+  evidenced. Button clicks hit-test at the five pinned `.bnd`
+  button rects and HARD/NORMAL/EASY record a difficulty pick; the
+  promo `< ☐ >` cells answer clicks at their parsed rects (press
+  records, staged placements only — ADR-0003); EXIT/OPTION discs
+  dispatch at their pinned rects (quit-confirm / options dialog).
+  FREE/DRUM clicks stay unbound (P0). Guards:
+  `planet_emblem_captions_decode_to_the_pinned_strings`,
+  `planet_captions_have_real_glyphs_in_the_system_font`,
+  `planet_captions_paint_into_their_bnd_rects`,
+  `planet_dispatch_maps_promo_cells_to_carousel_presses`,
+  `planet_promo_cells_answer_clicks_at_their_staged_rects`,
+  `promo_press_records_the_cell_without_leaving_the_board`,
+  `lit_emblem_click_opens_the_channel_dialog_and_records_the_pick`,
+  `planet_confirm_opens_the_channel_dialog`,
+  `power_disc_opens_quit_confirm_and_ok_quits`,
+  `gear_disc_opens_options_and_escape_closes_it`, plus the window
+  board session (`docs/smoke/planet-board-session.md`: 19/19 trace
+  events, `avi → planet → channel → planet → channel`).
+  PASS (board behavior) / OPEN (highlight rendering — exe orange
+  select border capture-pinned, shell keeps the amber cursor with a
+  named next step in `docs/planet.md`; promo carousel semantics;
+  bare-board → Room/solo path; exe entry key; BGM trigger
+  superseded per `docs/planet.md` OPEN 7).
 - `STATE_LANKING` (`0x37`; display-only, no state class — like CHANNEL).
   Bound placements stage (73 rects). Rank rows, sorts, search, and
   pagers stay unpainted (fetch opcode unknown — all OPEN).
@@ -157,7 +173,7 @@ scenario, so structure, not pixels, is compared):
 | `channel.png` | REFRESHED 2026-11-10 (file-native geometry + hover bar): rows/X/face/scroll all bnd-pinned (pairing exe-verified), hover highlight is the code-mounted `Dialog_ChannelSelectBar` at the hovered row, fallback wells live-measured, dialog over the board with the MENU bar beneath. Pager removed — resolved negative (no pager in the 7.55 dialog; scroll column only). Still FAIL: plate stand-ins and row content text (ASCII, no CP949 glyphs) |
 | `room.png` | HOLD, byte-identical (no drift). No reference photo covers it |
 | `planet.png` | REFRESHED 2026-11-10 (re-scoped walk): now the BARE board — the walk shoots it after the dialog X (reference-measured zone, native (557,195) modulo chrome) closes the dialog; the staged 17-placement bound block (backdrop, five buttons, promotion image, MENU bar) paints with no dialog over it. A following lit-emblem (HARD) click reopens the channel dialog and records the pick (LIVE-VERIFIED 2026-11-09: the emblems are server
-channel families, EASY active at boot ~21 s after login; guarded by `lit_emblem_click_reopens_the_channel_dialog`); the amber-cursor stand-in is covered by returning to the board (`planet_shot_stages_bound_art_with_the_picked_band`). Still FAIL: no captions (TEXT sources OPEN), cursor is a stand-in (no evidenced highlight), FREE/DRUM stay unbound (P0), promo cells and EXIT/OPTION unwired (hit geometry not fully pinned), no reference photo covers it |
+channel families, EASY active at boot ~21 s after login; guarded by `lit_emblem_click_reopens_the_channel_dialog`); the amber-cursor stand-in is covered by returning to the board (`planet_shot_stages_bound_art_with_the_picked_band`). REFRESHED 2026-11-11: captions now paint (exe-pinned strings in real glyphs, guarded), the picked band keeps the amber-cursor stand-in (exe orange select border capture-pinned, shell OPEN with a named next step — `docs/planet.md` "Difficulty-pick highlight"), FREE/DRUM stay unbound (P0), promo cells answer clicks at parsed rects (press records, carousel semantics OPEN), EXIT/OPTION dispatch (quit-confirm / options dialog); no reference photo covers it |
 | `loading.png` | REFRESHED 2026-11-08: the walk holds the clock-armed full fraction with the staged catalog caption (song 757) — 252 px of new caption ink at the placeholder row, bar unchanged full; guarded by the two loading-stage tests. No reference photo covers it; staged `MusicLoading.ojs` art + green bar under the no-fill rule (empty stage would paint nothing, staged art is unaffected) |
 
 Chat refresh 2026-11-07: only `waiting.png` changed (1104 bytes

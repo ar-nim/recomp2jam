@@ -959,9 +959,9 @@ pub fn planet_free_caption(song_count: usize) -> String {
 }
 
 /// One clickable board element of the planet scene. Only the five
-/// difficulty/mode buttons carry fully pinned `.bnd` geometry (the
-/// promotion cells and EXIT/OPTION have pinned tops or origins only,
-/// so their hit rects are evidence-OPEN and stay unhit-testable).
+/// difficulty/mode buttons resolve here (fully pinned `.bnd`
+/// geometry); the MENU discs and promotion cells resolve through
+/// the control-code dispatch table ([`planet_action_at`]) instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanetHit {
     /// HARD button (`신의손`).
@@ -1040,8 +1040,8 @@ pub const fn planet_band_rect(band: PlanetBand) -> Rect {
 
 /// Board element under native pixel (`x`, `y`): the pinned `.bnd`
 /// button rects, right/bottom edges exclusive (`rect_hit`). `None`
-/// everywhere else, including the promotion cells and EXIT/OPTION
-/// (their full geometry is evidence-OPEN).
+/// everywhere else — MENU discs and promotion cells resolve through
+/// [`planet_action_at`], never here.
 #[must_use]
 pub fn planet_hit(x: i32, y: i32) -> Option<PlanetHit> {
     for (rect, hit) in [
@@ -1102,8 +1102,8 @@ impl PlanetSelection {
 
 /// Planet board control codes (`ControlList_Interface.txt`
 /// `STATE_PLANET`, lines 790–805): the five emblem buttons
-/// (`0X19201002..06`), the promotion cells (`0X1920000D..0F`,
-/// OPEN — never dispatched), and the MENU-bar EXIT/OPTION discs
+/// (`0X19201002..06`), the promotion cells (`0X1920000D..0F` —
+/// dispatch, carousel semantics OPEN), and the MENU-bar EXIT/OPTION discs
 /// (`0X19200010`/`0X19200011`, art `Planet_Btn_Exit.ojs` /
 /// `Planet_Btn_Option.ojs`).
 pub const PLANET_BUTTON_HARD_CODE: u32 = 0x1920_1002;
@@ -1115,6 +1115,20 @@ pub const PLANET_BUTTON_EASY_CODE: u32 = 0x1920_1004;
 pub const PLANET_BUTTON_FREE_CODE: u32 = 0x1920_1005;
 /// DRUM emblem button code (quest, backend never wired — P0).
 pub const PLANET_BUTTON_DRUM_CODE: u32 = 0x1920_1006;
+/// Promotion carousel LEFT cell code: steps the banner back (the
+/// press records; carousel semantics stay OPEN, `docs/planet.md`
+/// OPEN 4). Pinned rect rect 12 (353,511)-(379,535) via ordinal
+/// `(code & 0xFFF) − 1` — geometry rides staged placements only
+/// (ADR-0003: no fallback literals), never this constant.
+pub const PLANET_PROMO_LEFT_CODE: u32 = 0x1920_000D;
+/// Promotion carousel STOP cell code: halts the banner rotation
+/// (press records; semantics OPEN as above). Pinned rect rect 14
+/// (387,511)-(413,535); geometry rides staged placements only.
+pub const PLANET_PROMO_STOP_CODE: u32 = 0x1920_000E;
+/// Promotion carousel RIGHT cell code: steps the banner forward
+/// (press records; semantics OPEN as above). Pinned rect rect 13
+/// (421,511)-(447,535); geometry rides staged placements only.
+pub const PLANET_PROMO_RIGHT_CODE: u32 = 0x1920_000F;
 /// Power disc code: opens the quit-confirm popup (capture-pinned,
 /// `docs/planet.md` "Real board structure"; message + OK/CANCEL in
 /// [`QUIT_MESSAGE_CP949`]).
@@ -1134,6 +1148,22 @@ pub const PLANET_TEXT_FREE_CODE: u32 = 0x1940_000A;
 /// DRUM caption code (`IDC_TEXT_SPLANET_DRUM`).
 pub const PLANET_TEXT_DRUM_CODE: u32 = 0x1940_000B;
 
+/// One pressed promotion-carousel cell: which banner control
+/// answered the click (LEFT steps back, STOP halts rotation,
+/// RIGHT steps forward — what the exe does with the press stays
+/// OPEN, `docs/planet.md` OPEN 4; the shell records the press and
+/// holds the board). Geometry never lives here: it rides the
+/// staged `.bnd` placements (owner rule `f38f3`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanetPromo {
+    /// LEFT cell (`0X1920000D`, rect 12).
+    Left,
+    /// PLAYSTOP cell (`0X1920000E`, rect 14).
+    Stop,
+    /// RIGHT cell (`0X1920000F`, rect 13).
+    Right,
+}
+
 /// One planet-board action: the control-code → action dispatch
 /// table's output ([`planet_action_for_code`]). Board input routes
 /// here, never through per-button literals at the call site.
@@ -1147,6 +1177,12 @@ pub enum PlanetAction {
         /// Family band, or `None` for the unbound emblems.
         band: Option<PlanetBand>,
     },
+    /// Promotion-carousel cell pressed: the press records (see
+    /// [`PlanetPromo`]); carousel semantics stay OPEN.
+    Promo {
+        /// Which banner control answered the click.
+        cell: PlanetPromo,
+    },
     /// Power disc: open the quit-confirm popup.
     QuitConfirm,
     /// Gear disc: open the options dialog.
@@ -1154,8 +1190,8 @@ pub enum PlanetAction {
 }
 
 /// Action for one planet control code (`None` for every other
-/// code: promotion cells, BACK, self — promotion semantics stay
-/// OPEN, `docs/planet.md` OPEN 4). The emblem arm is the
+/// code: BACK, self — the promo arms name their cell while the
+/// carousel semantics stay OPEN, `docs/planet.md` OPEN 4). The emblem arm is the
 /// family-select half of the exe handler (E1,
 /// `docs/overnight-evidence/e1-channel-dialog-trigger.md`:
 /// family-index write + reconnect); the dialog-open half is the
@@ -1177,6 +1213,15 @@ pub const fn planet_action_for_code(code: u32) -> Option<PlanetAction> {
         }
         PLANET_EXIT_CODE => Some(PlanetAction::QuitConfirm),
         PLANET_OPTION_CODE => Some(PlanetAction::OptionsDialog),
+        PLANET_PROMO_LEFT_CODE => Some(PlanetAction::Promo {
+            cell: PlanetPromo::Left,
+        }),
+        PLANET_PROMO_STOP_CODE => Some(PlanetAction::Promo {
+            cell: PlanetPromo::Stop,
+        }),
+        PLANET_PROMO_RIGHT_CODE => Some(PlanetAction::Promo {
+            cell: PlanetPromo::Right,
+        }),
         _ => None,
     }
 }
@@ -1207,7 +1252,9 @@ pub const PLANET_OPTION_RECT: Rect = Rect {
 /// rects first (the placement whose code dispatches and whose
 /// rect contains the point), the pinned rect table when nothing
 /// is staged (art-less parity, like [`planet_hit`]). `None`
-/// everywhere else — promotion cells stay OPEN and land nowhere.
+/// everywhere else — promotion cells resolve through staged
+/// placements only (no fallback literals, ADR-0003), so unstaged
+/// promo clicks land nowhere.
 #[must_use]
 pub fn planet_action_at(placements: &[ScenePlacement], x: i32, y: i32) -> Option<PlanetAction> {
     placements
@@ -2309,10 +2356,94 @@ mod side_tests {
             planet_action_for_code(PLANET_OPTION_CODE),
             Some(PlanetAction::OptionsDialog)
         );
-        // Promotion cells and self/BACK codes never dispatch.
-        assert_eq!(planet_action_for_code(0x1920_000D), None);
-        assert_eq!(planet_action_for_code(0x1920_C00F), None);
+        assert_eq!(
+            planet_action_for_code(PLANET_PROMO_LEFT_CODE),
+            Some(PlanetAction::Promo {
+                cell: PlanetPromo::Left
+            })
+        );
+        assert_eq!(
+            planet_action_for_code(PLANET_PROMO_STOP_CODE),
+            Some(PlanetAction::Promo {
+                cell: PlanetPromo::Stop
+            })
+        );
+        assert_eq!(
+            planet_action_for_code(PLANET_PROMO_RIGHT_CODE),
+            Some(PlanetAction::Promo {
+                cell: PlanetPromo::Right
+            })
+        );
+        // Self/BACK codes never dispatch.
         assert_eq!(planet_action_for_code(0x1900_0000), None);
+    }
+
+    #[test]
+    fn planet_promo_cells_answer_clicks_at_their_staged_rects() {
+        // Staged placements carry the parsed `.bnd` rects verbatim
+        // (rects 12..14: LEFT (353,511)-(379,535), STOP
+        // (387,511)-(413,535), RIGHT (421,511)-(447,535) —
+        // `docs/planet.md` bind walk, ordinal pairing). Each cell
+        // answers inside its rect and stays silent outside it.
+        let staged = vec![
+            ScenePlacement {
+                id: "IDC_BUTTON_SPLANET_PROMOTION_LEFT".to_owned(),
+                code: PLANET_PROMO_LEFT_CODE,
+                sprite: None,
+                rect: Rect {
+                    x: 353,
+                    y: 511,
+                    w: 26,
+                    h: 24,
+                },
+            },
+            ScenePlacement {
+                id: "IDC_BUTTON_SPLANET_PROMOTION_PLAYSTOP".to_owned(),
+                code: PLANET_PROMO_STOP_CODE,
+                sprite: None,
+                rect: Rect {
+                    x: 387,
+                    y: 511,
+                    w: 26,
+                    h: 24,
+                },
+            },
+            ScenePlacement {
+                id: "IDC_BUTTON_SPLANET_PROMOTION_RIGHT".to_owned(),
+                code: PLANET_PROMO_RIGHT_CODE,
+                sprite: None,
+                rect: Rect {
+                    x: 421,
+                    y: 511,
+                    w: 26,
+                    h: 24,
+                },
+            },
+        ];
+        assert_eq!(
+            planet_action_at(&staged, 366, 523),
+            Some(PlanetAction::Promo {
+                cell: PlanetPromo::Left
+            })
+        );
+        assert_eq!(
+            planet_action_at(&staged, 400, 523),
+            Some(PlanetAction::Promo {
+                cell: PlanetPromo::Stop
+            })
+        );
+        assert_eq!(
+            planet_action_at(&staged, 434, 523),
+            Some(PlanetAction::Promo {
+                cell: PlanetPromo::Right
+            })
+        );
+        assert_eq!(planet_action_at(&staged, 400, 500), None);
+        // Without staged art the promo cells are unpinned: no
+        // fallback literals (ADR-0003), so clicks land nowhere.
+        assert_eq!(planet_action_at(&[], 366, 523), None);
+        assert_eq!(planet_action_at(&[], 400, 523), None);
+        assert_eq!(planet_action_at(&[], 434, 523), None);
     }
 
     #[test]

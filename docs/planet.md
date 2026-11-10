@@ -48,7 +48,9 @@ of 16 B (`docs/file-formats/opi.md` envelope). Rect contents
 | 5 | (510,32)-(609,144) | DRUM button (5) |
 | 6..10 | y125-138 strips under buttons | TEXT labels (6..10) |
 | 11 | (49,163)-(750,496) | PROMOTION image (11) |
-| 12..14 | y511-535 small cells | promotion LEFT/RIGHT/PLAYSTOP (12..14) |
+| 12 | (353,511)-(379,535) 26x24 | promotion LEFT (ordinal `(0xD & 0xFFF)−1 = 12`) |
+| 13 | (421,511)-(447,535) 26x24 | promotion RIGHT (ordinal 13) |
+| 14 | (387,511)-(413,535) 26x24 | promotion PLAYSTOP (ordinal 14) |
 | 15..16 | (750,561)/(710,561) bottom-right | EXIT / OPTION (15..16) |
 
 Ordinal pairing (`(code & 0xFFF) − 1`, memory `[0c6c3]`) reproduces
@@ -160,6 +162,25 @@ bnd rects. Glyph rasterization is presentation; the strings and rects
 are gameplay-pinned as above.
 
 1. ~~Rect contents → placements (pairing getter `0x548640`).~~ DONE above.
+
+## Difficulty-pick highlight — EXE-RENDERING PINNED, shell OPEN (2026-11-11)
+
+Live-capture diff (`~/scratch/planet-verify/s1-after-easy.png` vs
+`s1-after-normal.png`, native 800x600): the exe renders the pick as
+an **orange select border hugging the picked badge** — EASY-picked
+border bbox x102–191/y49–116 (button rect (87,32)-(186,144)),
+NORMAL-picked x221–290/y55–116 (button rect (206,32)-(305,144)).
+The border does NOT follow the button rect (EASY border max-x 191
+exceeds the rect edge 186); it hugs the badge art, whose extents are
+unpinned. The shell keeps the amber-cursor stand-in (painted at
+`(rect.x+10, rect.y+h/2)`, visible in the window capture as a small
+amber tick left of the picked badge).
+
+Next step: pin the border rule against the staged badge-art extents
+(`Planet_Btn_{Hard,Normal,Easy}.ojs` figure sizes at their rect
+origins) via capture alignment, then replace the cursor. Static
+handler offset for the highlight paint is unlocated (no dossier
+entry); do not invent border geometry meanwhile.
 2. Shell screen + paint + flow edges — DONE (`Screen::Planet`,
    `paint_planet_scene`, `Channel→Planet`/`Planet→Room`; walk cover in
    `shots.rs` via the verified edges).
@@ -168,17 +189,37 @@ are gameplay-pinned as above.
 4. Button hit-testing + difficulty selection — DONE (2026-11-09):
    clicks hit-test at the five pinned `.bnd` button rects
    (`planet_hit`/`PlanetSelection` in `side.rs`); HARD/NORMAL/EASY
-   record the pick; the picked band draws the shared amber cursor
-   inside its rect as an OPEN stand-in (no highlight rendering is
-   evidenced). FREE/DRUM clicks hit their rects but stay unbound and
+   record the pick; the picked band keeps the shared amber cursor
+   as an OPEN stand-in — the exe rendering (orange select border
+   hugging the picked badge) is capture-pinned with bbox evidence
+   in "Difficulty-pick highlight" above, next step named there.
+   FREE/DRUM clicks hit their rects but stay unbound and
    change nothing (P0 preserved, soak- and shot-guarded).
-2. TEXT caption sources (`0X19400007..0B` never code-addressed yet).
+2. ~~TEXT caption sources (`0X19400007..0B` never code-addressed yet).~~
+   DONE 2026-11-11: the five `PLANET_CAPTIONS` entries carry the
+   pinned CP949 bytes and paint through `o2jam-text` into their
+   staged `.bnd` rects (`paint_planet_captions`; no placement, no
+   caption); decode + paint + system-face glyph guards in the
+   shell, boot-board window capture carries real Hangul captions
+   (`docs/smoke/planet-board-session.md`).
 3. ~~FREE/DRUM click behavior~~ DONE as permanent rejection (P0:
    no backend ever existed); what they would do stays OPEN forever.
-4. Promotion PLAYSTOP/LEFT/RIGHT semantics — hit rects unwireable:
-   the `.bnd` walk pins their y band (511–535) but no x extents.
-5. EXIT/OPTION destinations — same: pinned origins (750,561)/(710,561)
-   only, no sizes, so no hit rect and no action.
+4. ~~Promotion PLAYSTOP/LEFT/RIGHT semantics — hit rects unwireable:
+   the `.bnd` walk pins their y band (511–535) but no x extents.~~
+   Hit rects PINNED 2026-11-11 (parsed bytes, ordinal pairing):
+   rect 12 LEFT (353,511)-(379,535), rect 13 RIGHT (421,511)-(447,535),
+   rect 14 PLAYSTOP (387,511)-(413,535) — the `< ☐ >` nav cluster
+   over the promo banner (window capture `docs/smoke/planet-board-session.md`).
+   The shell dispatches them through staged placements only
+   (`PlanetAction::Promo`, recorded press, ADR-0003: no fallback
+   literals); carousel semantics stay OPEN forever (no consumer
+   evidenced).
+5. ~~EXIT/OPTION destinations — same: pinned origins (750,561)/(710,561)
+   only, no sizes, so no hit rect and no action.~~ DONE: ordinal
+   pairing gives full rects — EXIT rect 15 (750,561)-(788,599),
+   OPTION rect 16 (710,561)-(748,599), verified against the shipped
+   bytes 2026-11-10; both dispatch (quit-confirm / options dialog)
+   with shell tests + window capture (`docs/smoke/planet-board-session.md`).
 6. What a family pick DOES — VERIFIED 2026-11-09 (live): the emblems
    are server channel families (see "Live verification"); the exe's
    own entry key into Planet is moot — Planet IS the boot board and

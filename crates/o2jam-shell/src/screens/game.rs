@@ -25,15 +25,15 @@ use super::side::{
     select_music_rows, select_music_songs, select_pager_caption, select_picked_caption,
     select_search_caption, select_status_line, waiting_song_detail_line, waiting_song_title_line,
     waiting_team_for_code, CreateRoomAction, CreateRoomForm, PasswordAction, PasswordForm,
-    PlanetAction, PlanetOptionTab, PlanetSelection, RoomDialog, SelectMusicRow, SelectMusicSong,
-    SideScreen, PLANET_OPTION_FIRST_TAB, QUIT_CANCEL_CODE, QUIT_OK_CODE, SELECT_ARTIST_RADIO,
-    SELECT_CHO_SUNG_LEFT, SELECT_CHO_SUNG_PITCH, SELECT_CHO_SUNG_ROW_CELLS, SELECT_CHO_SUNG_Y,
-    SELECT_FILTER_BUTTON_H, SELECT_FILTER_BUTTON_PITCH, SELECT_FILTER_BUTTON_TOP,
-    SELECT_FILTER_COLUMNS, SELECT_GENRE_FILTERS, SELECT_HEADER_COLUMNS, SELECT_HEADER_Y,
-    SELECT_LEVEL_FILTERS, SELECT_OK_BUTTON, SELECT_PAGER_RIGHT, SELECT_RESULT_TABS,
-    SELECT_ROW_PITCH, SELECT_ROW_TOP, SELECT_SEARCH_BOX, SELECT_SEARCH_BUTTON, SELECT_SEARCH_Y,
-    SELECT_STATUS_H, SELECT_STATUS_Y, SELECT_TABLE_HEADERS, SELECT_TABLE_LEFT, SELECT_TABLE_WIDTH,
-    SELECT_TITLE_RADIO, SELECT_VISIBLE_ROWS, SELECT_WHEEL_FILTERS,
+    PlanetAction, PlanetOptionTab, PlanetPromo, PlanetSelection, RoomDialog, SelectMusicRow,
+    SelectMusicSong, SideScreen, PLANET_OPTION_FIRST_TAB, QUIT_CANCEL_CODE, QUIT_OK_CODE,
+    SELECT_ARTIST_RADIO, SELECT_CHO_SUNG_LEFT, SELECT_CHO_SUNG_PITCH, SELECT_CHO_SUNG_ROW_CELLS,
+    SELECT_CHO_SUNG_Y, SELECT_FILTER_BUTTON_H, SELECT_FILTER_BUTTON_PITCH,
+    SELECT_FILTER_BUTTON_TOP, SELECT_FILTER_COLUMNS, SELECT_GENRE_FILTERS, SELECT_HEADER_COLUMNS,
+    SELECT_HEADER_Y, SELECT_LEVEL_FILTERS, SELECT_OK_BUTTON, SELECT_PAGER_RIGHT,
+    SELECT_RESULT_TABS, SELECT_ROW_PITCH, SELECT_ROW_TOP, SELECT_SEARCH_BOX, SELECT_SEARCH_BUTTON,
+    SELECT_SEARCH_Y, SELECT_STATUS_H, SELECT_STATUS_Y, SELECT_TABLE_HEADERS, SELECT_TABLE_LEFT,
+    SELECT_TABLE_WIDTH, SELECT_TITLE_RADIO, SELECT_VISIBLE_ROWS, SELECT_WHEEL_FILTERS,
 };
 use crate::MenuKey;
 use o2jam_audio::{song_position_ms, AudioBackend, BgmSelection, PcmSamples, SceneBgm};
@@ -197,6 +197,11 @@ pub struct ScreenGame {
     /// Live planet-board difficulty pick (HARD/NORMAL/EASY; FREE/DRUM
     /// stay unbound per P0).
     planet: PlanetSelection,
+    /// Last pressed promotion-carousel cell, if any (the press
+    /// records; carousel semantics stay OPEN, `docs/planet.md`
+    /// OPEN 4). Staged placements only — unstaged promo clicks
+    /// land nowhere (no fallback literals, ADR-0003).
+    planet_promo: Option<PlanetPromo>,
     /// Open planet-board modal, if any (quit-confirm or options).
     planet_modal: Option<PlanetModal>,
     /// Quit-confirm OK was pressed: the windowed shell exits the
@@ -491,6 +496,7 @@ impl ScreenGame {
             loading_gate_failed: false,
             arena_stage: DEFAULT_ARENA_STAGE,
             planet: PlanetSelection::new(),
+            planet_promo: None,
             planet_modal: None,
             quit_requested: false,
             planet_option_art: None,
@@ -2241,8 +2247,9 @@ impl ScreenGame {
     /// record the family pick and open the channel dialog through
     /// the flow gate (`Planet`→`Channel`, the dialog-over-board
     /// phase flag `parent+0xF64` in the exe); power opens the
-    /// quit-confirm modal, gear the options modal. The emblems are
-    /// server channel families (live-verified 2026-11-09,
+    /// quit-confirm modal, gear the options modal, promotion cells
+    /// record the press and hold the board (carousel semantics OPEN).
+    /// The emblems are server channel families (live-verified 2026-11-09,
     /// `docs/planet.md` "Live verification"). FREE/DRUM stay
     /// unbound (P0).
     ///
@@ -2275,6 +2282,9 @@ impl ScreenGame {
                 self.enter(Screen::Channel);
             }
             Some(PlanetAction::Emblem { band: None }) => {}
+            Some(PlanetAction::Promo { cell }) => {
+                self.planet_promo = Some(cell);
+            }
             Some(PlanetAction::QuitConfirm) => {
                 self.planet_modal = Some(PlanetModal::QuitConfirm);
             }
@@ -2383,6 +2393,13 @@ impl ScreenGame {
     #[must_use]
     pub fn planet_selection(&self) -> Option<super::side::PlanetBand> {
         self.planet.band()
+    }
+
+    /// Last pressed promotion-carousel cell, if any (paint/click
+    /// driver; `None` until a staged promo cell answers a click).
+    #[must_use]
+    pub fn planet_promo(&self) -> Option<PlanetPromo> {
+        self.planet_promo
     }
 
     /// Open a side screen from a lobby; rejects other origins and
@@ -5449,6 +5466,29 @@ mod game_tests {
     }
 
     #[test]
+    fn planet_captions_have_real_glyphs_in_the_system_font() {
+        // The painter routes captions through `o2jam-text` with the
+        // system face (owner decision `e8d01`); the ASCII stand-in
+        // only covers the font-absent fallback. Every caption char
+        // must exist in that face, or the board would paint tofu.
+        // No system face (bare CI) skips cleanly.
+        use super::super::side::PLANET_CAPTIONS;
+        let Some(font) = o2jam_text::system_font() else {
+            return;
+        };
+        for caption in PLANET_CAPTIONS {
+            let text = o2jam_text::decode_cp949(caption.cp949).expect("pinned CP949");
+            assert!(!text.is_empty());
+            for character in text.chars() {
+                assert!(
+                    font.has_glyph(character),
+                    "system face lacks {character:?} for caption {text:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn planet_captions_paint_into_their_bnd_rects() {
         // Synthetic TEXT placements at the parsed bind positions
         // (ordinals 6..10): each caption inks only its own rect,
@@ -5530,6 +5570,88 @@ mod game_tests {
         game.mouse_click(350, 253);
         assert!(game.quit_confirmed(), "OK must quit");
         assert_eq!(game.planet_modal(), None);
+    }
+
+    #[test]
+    fn lit_emblem_click_opens_the_channel_dialog_and_records_the_pick() {
+        use crate::screens::side::PlanetBand;
+        // Lit-emblem press (HARD badge through its pinned `.bnd`
+        // rect 1): records the family pick and opens the dialog
+        // over the board (live-verified 2026-11-09, `docs/planet.md`).
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        assert_eq!(game.screen(), Screen::Planet);
+        game.click_planet(386, 88);
+        assert_eq!(
+            game.screen(),
+            Screen::Channel,
+            "lit emblem opens the dialog-over-board phase"
+        );
+        assert_eq!(game.planet_selection(), Some(PlanetBand::Hard));
+    }
+
+    #[test]
+    fn planet_confirm_opens_the_channel_dialog() {
+        // Keyboard stand-in for the emblem press (the exe entry key
+        // stays OPEN): Confirm advances Planet → Channel exactly
+        // like the mouse emblem edge, so the board always goes
+        // somewhere. No bare-board → Room path is evidenced.
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        assert_eq!(game.screen(), Screen::Planet);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Channel);
+    }
+
+    #[test]
+    fn promo_press_records_the_cell_without_leaving_the_board() {
+        use crate::screens::side::{PlanetPromo, PLANET_PROMO_LEFT_CODE, PLANET_PROMO_STOP_CODE};
+        // Staged promo placements (parsed `.bnd` rects verbatim,
+        // rects 12/14): each press records its cell, the board
+        // stays, and no modal opens (carousel semantics OPEN).
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        game.load_scene(
+            Screen::Planet,
+            vec![
+                ScenePlacement {
+                    id: "promo-left".to_owned(),
+                    code: PLANET_PROMO_LEFT_CODE,
+                    sprite: None,
+                    rect: Rect {
+                        x: 353,
+                        y: 511,
+                        w: 26,
+                        h: 24,
+                    },
+                },
+                ScenePlacement {
+                    id: "promo-stop".to_owned(),
+                    code: PLANET_PROMO_STOP_CODE,
+                    sprite: None,
+                    rect: Rect {
+                        x: 387,
+                        y: 511,
+                        w: 26,
+                        h: 24,
+                    },
+                },
+            ],
+            HashMap::new(),
+        );
+        assert_eq!(game.screen(), Screen::Planet);
+        assert_eq!(game.planet_promo(), None);
+        game.click_planet(366, 523);
+        assert_eq!(game.planet_promo(), Some(PlanetPromo::Left));
+        assert_eq!(game.screen(), Screen::Planet);
+        assert_eq!(game.planet_modal(), None);
+        game.click_planet(400, 523);
+        assert_eq!(game.planet_promo(), Some(PlanetPromo::Stop));
+        assert_eq!(game.screen(), Screen::Planet);
+        // Outside every staged cell the press lands nowhere and
+        // the recorded cell stands.
+        game.click_planet(400, 500);
+        assert_eq!(game.planet_promo(), Some(PlanetPromo::Stop));
     }
 
     #[test]
