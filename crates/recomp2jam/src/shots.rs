@@ -187,7 +187,6 @@ pub fn write_shots(out_dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
 }
 
 /// Interface archive under `install-root` (Avi/Channel/Room/Waiting/Result art).
-const INTERFACE_ARCHIVE: &str = "O2Jam/Image/Interface1.opi";
 /// Worn-figure archive under `install-root` (avatar item art + table).
 const AVATAR_ARCHIVE: &str = "O2Jam/Image/avatar.opa";
 /// Equipment the playing shot wears, verified to resolve against 7.55
@@ -240,11 +239,6 @@ const PLAYING_ARENA_STAGE: i32 = 2;
 /// Repository-local `install-root` (git-ignored game data).
 fn install_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root")
-}
-
-/// Read one archive read-only, if present (`None` keeps synthetic staging).
-fn read_archive(relative: &str) -> Option<Vec<u8>> {
-    std::fs::read(install_root().join(relative)).ok()
 }
 
 /// Side-screen stage data through the staging declaration: one
@@ -622,7 +616,7 @@ fn stage_select_music_catalog(game: &mut ScreenGame) {
     if !game.select_songs().is_empty() {
         return;
     }
-    if let Some(archive) = read_archive(MUSICSELECT_CATALOG) {
+    if let Ok(archive) = std::fs::read(install_root().join(MUSICSELECT_CATALOG)) {
         if let Ok(entries) = o2jam_file::parse_ojn_list(&archive) {
             game.set_song_catalog(&entries);
             if !game.select_songs().is_empty() {
@@ -639,7 +633,7 @@ fn stage_select_music_catalog(game: &mut ScreenGame) {
 /// (`DAILOG_SELECTMUSIC` over Waiting) over the waiting seats;
 /// empty art paints nothing.
 fn stage_select_music_art(game: &mut ScreenGame) {
-    let Some(archive) = read_archive(INTERFACE_ARCHIVE) else {
+    let Some(archive) = read_install_archives(&install_root()).interface else {
         return;
     };
     let Some(art) = stage_dialog(&archive, Dialog::SelectMusic, StageContext::default()).art else {
@@ -728,7 +722,7 @@ fn stage_playing_scene(game: &mut ScreenGame) {
     let (level, name) = PLAYING_PLAYER;
     game.set_player(level, name);
     game.set_volume(PLAYING_VOLUME);
-    if let Some(archive) = read_archive(AVATAR_ARCHIVE) {
+    if let Ok(archive) = std::fs::read(install_root().join(AVATAR_ARCHIVE)) {
         if let Ok(figure) = stack_worn_figure(&archive, &PLAYING_EQUIPMENT, true) {
             if !figure.is_empty() {
                 game.load_avatar(figure);
@@ -1140,47 +1134,18 @@ pub use o2jam_render::png::encode_png;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use o2jam_file::{Bnd, ControlList};
     use o2jam_shell::avatar::{
         anchor_in_frame, load_archive_sprite, paint_foreground_placements, paint_scene_figures,
-        playing_member_selected, PlayingArtMode, ROOM_BLOCK, WAITING_BLOCK,
+        playing_member_selected, PlayingArtMode,
     };
-    use o2jam_shell::avatar::{
-        bind_scene_rects, load_scene_figures, scene_block, scene_sprite_names,
-    };
-    use o2jam_shell::screens::paint::{PLAYING_BLOCK, RESULT_WINLOSE_SPRITE};
-    use o2jam_shell::screens::side::SELECT_MUSIC_DIALOG_BLOCK;
+    use o2jam_shell::avatar::{scene_block, scene_sprite_names};
+    use o2jam_shell::screens::paint::RESULT_WINLOSE_SPRITE;
+    use o2jam_shell::staging::StagedArt;
 
-    /// Interface control list entry (test-only: production stages
-    /// Interface Blocks through the declaration).
-    const INTERFACE_LIST: &str = "ControlList_Interface.txt";
-
-    /// Borrow one entry body by its stored size (never the reserved stride).
-    fn entry_body<'a>(archive: &'a [u8], entry_name: &str) -> Option<&'a [u8]> {
-        let entries = o2jam_file::parse_opi(archive).ok()?;
-        let entry = entries.iter().find(|entry| entry.name == entry_name)?;
-        let size = usize::try_from(entry.size).ok()?;
-        let end = entry.data_offset.checked_add(size)?;
-        archive.get(entry.data_offset..end)
-    }
-
-    /// Parse a `ControlList_*.txt` entry from an archive.
-    fn control_list(archive: &[u8], entry_name: &str) -> Option<ControlList> {
-        let body = entry_body(archive, entry_name)?;
-        let text = o2jam_file::decode_control_text(body).ok()?;
-        o2jam_file::parse_control_list(&text).ok()
-    }
-
-    /// Parse a `.bnd` layout entry from an archive.
-    fn bind_data(archive: &[u8], bound_file: &str) -> Option<Bnd> {
-        let body = entry_body(archive, bound_file)?;
-        o2jam_file::parse_bnd(body).ok()
-    }
+    /// Interface archive under `install-root` (Avi/Channel/Room/Waiting/Result).
+    const INTERFACE_ARCHIVE: &str = "O2Jam/Image/Interface1.opi";
     /// Playing archive under `install-root` (Loading/Playing art).
     const PLAYING_ARCHIVE: &str = "O2Jam/Image/Playing1.opi";
-    /// Playing control list entry (test-only: production stages
-    /// Playing through the declaration).
-    const PLAYING_LIST: &str = "ControlList_Playing.txt";
 
     #[test]
     fn downscale_even_averages_two_by_two_blocks() {
@@ -1216,7 +1181,7 @@ mod tests {
 
     #[test]
     fn pinned_equipment_stacks_a_worn_figure() {
-        let Some(archive) = read_archive(AVATAR_ARCHIVE) else {
+        let Ok(archive) = std::fs::read(install_root().join(AVATAR_ARCHIVE)) else {
             println!("skip: missing {AVATAR_ARCHIVE}");
             return;
         };
@@ -1232,7 +1197,7 @@ mod tests {
         // The joined room's arena word (stage 2) drives the venue
         // resolution: the staged `_Playing_BG.ojs` figure is the
         // `Playing_BG2.ojs` body, not the bare stem's.
-        let Some(archive) = read_archive(PLAYING_ARCHIVE) else {
+        let Some(archive) = read_install_archives(&install_root()).playing else {
             println!("skip: missing {PLAYING_ARCHIVE}");
             return;
         };
@@ -1271,7 +1236,7 @@ mod tests {
         // 7-key note background, the left life gauge and BP buffer
         // stage; the 3-key/P2P note backgrounds, the right buffer,
         // and the unused gauge-back shell leave empty slots.
-        let Some(archive) = read_archive(PLAYING_ARCHIVE) else {
+        let Some(archive) = read_install_archives(&install_root()).playing else {
             println!("skip: missing {PLAYING_ARCHIVE}");
             return;
         };
@@ -1315,7 +1280,7 @@ mod tests {
         // note background, right buffer, and gauge-back shell, whose
         // VS panel paints over the center while the solo slots
         // (Note_BG, left bars) sit empty.
-        let Some(archive) = read_archive(PLAYING_ARCHIVE) else {
+        let Some(archive) = read_install_archives(&install_root()).playing else {
             println!("skip: missing {PLAYING_ARCHIVE}");
             return;
         };
@@ -1602,31 +1567,18 @@ mod tests {
         (probe[0] != 0).then_some((px, py, probe[0]))
     }
 
-    /// Drive every `.bnd`-claimed placement with a decodable body of
-    /// one real block through the shared painter, alone on a blank
+    /// Drive every claimed placement with a decodable body of one
+    /// staged State through the shared painter, alone on a blank
     /// native frame, and require its first opaque pixel to land at
     /// its own rect origin. Returns the number of entries proven.
-    fn bound_entries_paint_on_rects(archive: &[u8], list_entry: &str, block_name: &str) -> usize {
-        let Some(list) = control_list(archive, list_entry) else {
-            return 0;
-        };
-        let Some(block) = scene_block(&list, block_name) else {
-            return 0;
-        };
-        let Some(bind_file) = block.bound_file.clone() else {
-            return 0;
-        };
-        let Some(bnd) = bind_data(archive, &bind_file) else {
-            return 0;
-        };
-        let placements = bind_scene_rects(block, &bnd);
-        let figures = load_scene_figures(archive, &scene_sprite_names(block));
+    fn staged_entries_paint_on_origins(art: &StagedArt, label: &str) -> usize {
+        let (placements, figures) = (&art.placements, &art.figures);
         let (frame_w, frame_h) = (
             usize::try_from(NATIVE_WIDTH).expect("native width fits usize"),
             usize::try_from(NATIVE_HEIGHT).expect("native height fits usize"),
         );
         let mut checked = 0;
-        for placed in &placements {
+        for placed in placements {
             let claimed = placed.rect.w != 0 || placed.rect.h != 0;
             let Some(name) = placed.sprite.as_deref() else {
                 continue;
@@ -1662,12 +1614,12 @@ mod tests {
                     h: frame_h,
                 },
                 std::slice::from_ref(placed),
-                &figures,
+                figures,
             );
             let at = (expected.1 + py) as usize * frame_w + (expected.0 + px) as usize;
             assert_eq!(
                 buf[at], ink,
-                "{block_name}:{name} must paint at its placement origin"
+                "{label}:{name} must paint at its placement origin"
             );
             checked += 1;
         }
@@ -1681,17 +1633,23 @@ mod tests {
         // the painter places anchored bodies at their record anchors
         // (TimeBar (489,556), EXIT (751,554), BpPoint (2,266) — the
         // photo-pinned disagreeing pair) and anchor-free bodies at
-        // their rect origins. The same loop runs the Playing bound
-        // run (Playing1.opi) and the Room block (Interface1.opi), so
-        // the rule holds per scene and per entry, not for one sprite.
+        // their rect origins. The same loop runs the declared Playing
+        // subset (Playing1.opi) and the declared Room State
+        // (Interface1.opi), so the rule holds per scene and per
+        // entry, not for one sprite.
         let mut checked = 0;
-        if let Some(archive) = read_archive(PLAYING_ARCHIVE) {
-            checked += bound_entries_paint_on_rects(&archive, PLAYING_LIST, PLAYING_BLOCK);
+        if let Some(archive) = read_install_archives(&install_root()).playing {
+            let ctx = StageContext::default();
+            if let Some(art) = stage_state(&archive, State::Playing, ctx).art {
+                checked += staged_entries_paint_on_origins(&art, "STATE_PLAYING");
+            }
         } else {
             println!("skip: missing {PLAYING_ARCHIVE}");
         }
-        if let Some(archive) = read_archive(INTERFACE_ARCHIVE) {
-            checked += bound_entries_paint_on_rects(&archive, INTERFACE_LIST, ROOM_BLOCK);
+        if let Some(archive) = read_install_archives(&install_root()).interface {
+            if let Some(art) = stage_state(&archive, State::Room, StageContext::default()).art {
+                checked += staged_entries_paint_on_origins(&art, "STATE_ROOM");
+            }
         } else {
             println!("skip: missing {INTERFACE_ARCHIVE}");
         }
@@ -1715,14 +1673,16 @@ mod tests {
         // that origin byte-exact — so the overlay must paint the art
         // at (489,556), never at rect + anchor (which lands off-canvas
         // and hides the bar).
-        let Some(archive) = read_archive(PLAYING_ARCHIVE) else {
+        let Some(archive) = read_install_archives(&install_root()).playing else {
             println!("skip: missing {PLAYING_ARCHIVE}");
             return;
         };
-        let list = control_list(&archive, PLAYING_LIST).expect("control list parses");
-        let block = scene_block(&list, PLAYING_BLOCK).expect("STATE_PLAYING stages");
-        let bnd = bind_data(&archive, "State_Playing.bnd").expect("bind file parses");
-        let placements = bind_scene_rects(block, &bnd);
+        // The declared Playing subset carries the same bound run:
+        // placements pair by code ordinal, figures decode by name.
+        let art = stage_state(&archive, State::Playing, StageContext::default())
+            .art
+            .expect("STATE_PLAYING stages");
+        let (placements, figures) = (&art.placements, &art.figures);
         let placed = placements
             .iter()
             .find(|placed| placed.sprite.as_deref() == Some("Normal_TimeBar.ojs"))
@@ -1731,7 +1691,6 @@ mod tests {
         assert_eq!(placed.rect.y, 556);
         assert_eq!(placed.rect.w, 254);
         assert_eq!(placed.rect.h, 10);
-        let figures = load_scene_figures(&archive, &scene_sprite_names(block));
         let figure = figures.get("Normal_TimeBar.ojs").expect("body decodes");
         let (px, py, ink) = first_opaque_probe(figure).expect("body has opaque pixels");
         let mut buf = vec![0u32; 800 * 600];
@@ -1741,8 +1700,8 @@ mod tests {
                 w: 800,
                 h: 600,
             },
-            &placements,
-            &figures,
+            placements,
+            figures,
         );
         assert_eq!(
             buf[(556 + py as usize) * 800 + (489 + px as usize)],
@@ -1753,10 +1712,15 @@ mod tests {
 
     #[test]
     fn missing_archives_stage_nothing() {
-        assert!(read_archive("No/Such.opi").is_none());
-        assert!(entry_body(&[], "MusicLoading.ojs").is_none());
-        assert!(control_list(&[], INTERFACE_LIST).is_none());
-        assert!(bind_data(&[], "State_Room.bnd").is_none());
+        assert!(read_install_archives(&install_root().join("No/Such"))
+            .interface
+            .is_none());
+        assert!(read_install_archives(&install_root().join("No/Such"))
+            .playing
+            .is_none());
+        // Empty bytes miss every row: bound rows stage nothing with
+        // a miss in the ledger, block-less rows keep placements with
+        // empty slots.
         for state in [State::Avi, State::Loading, State::Tutorial] {
             let report = stage_state(&[], state, StageContext::default());
             if let Some(art) = report.art {
@@ -1771,7 +1735,7 @@ mod tests {
     #[test]
     fn present_archives_stage_key_scenes() {
         let ctx = StageContext::default();
-        let Some(interface) = read_archive(INTERFACE_ARCHIVE) else {
+        let Some(interface) = read_install_archives(&install_root()).interface else {
             println!("skip: missing {INTERFACE_ARCHIVE}");
             return;
         };
@@ -1780,7 +1744,7 @@ mod tests {
             stage_state(&interface, State::Avi, ctx).art.is_some(),
             "avi stages its logo through the declaration"
         );
-        let Some(playing) = read_archive(PLAYING_ARCHIVE) else {
+        let Some(playing) = read_install_archives(&install_root()).playing else {
             println!("skip: missing {PLAYING_ARCHIVE}");
             return;
         };
@@ -1788,30 +1752,16 @@ mod tests {
             stage_state(&playing, State::Loading, ctx).art.is_some(),
             "loading stages its gate through the declaration"
         );
-        // Side states: every `.bnd`-backed screen stages its bound
-        // placements plus figures; Myroom's bind exists on the
-        // shipped archive (111 rects — the old "absent" note is
-        // corrected); the tutorial backdrop decodes.
-        let list = control_list(&interface, INTERFACE_LIST).expect("control list parses");
-        for (side, bind_file) in [
-            (SideScreen::Shop, "State_ItemShop.bnd"),
-            (SideScreen::MusicShop, "State_MShop.bnd"),
-            (SideScreen::MyRoom, "State_Myroom.bnd"),
-            (SideScreen::Lanking, "State_Lanking.bnd"),
-            (SideScreen::Payment, "State_Payment.bnd"),
+        // Side states: every side screen stages its placements plus
+        // figures through the declaration; the tutorial backdrop
+        // decodes from the Playing archive.
+        for side in [
+            SideScreen::Shop,
+            SideScreen::MusicShop,
+            SideScreen::MyRoom,
+            SideScreen::Lanking,
+            SideScreen::Payment,
         ] {
-            let Some(block_name) = side.block_name() else {
-                panic!("{side:?} names a block");
-            };
-            let Some(bnd) = bind_data(&interface, bind_file) else {
-                panic!("{bind_file} parses");
-            };
-            let block = scene_block(&list, block_name).expect("block exists");
-            assert!(!bnd.rects.is_empty(), "{bind_file} holds rects");
-            assert!(
-                !scene_sprite_names(block).is_empty(),
-                "{block_name} names sprites"
-            );
             let Some((placements, figures)) = side_stage_data(side) else {
                 panic!("{side:?} stages");
             };
@@ -1829,11 +1779,11 @@ mod tests {
         // The visit_side paint path consumes the staged placements:
         // every side screen inks staged pixels, and the frame stays
         // byte-identical once the side is left (flow unchanged).
-        let Some(interface) = read_archive(INTERFACE_ARCHIVE) else {
+        let Some(interface) = read_install_archives(&install_root()).interface else {
             println!("skip: missing {INTERFACE_ARCHIVE}");
             return;
         };
-        let Some(playing) = read_archive(PLAYING_ARCHIVE) else {
+        let Some(playing) = read_install_archives(&install_root()).playing else {
             println!("skip: missing {PLAYING_ARCHIVE}");
             return;
         };
@@ -1874,24 +1824,30 @@ mod tests {
         // FILE wiring proof against the genuine bind: the staged
         // DAILOG_SELECTMUSIC placements carry 27 + 15 INDEX buttons
         // at the exact 15 px pitch (docs/geometry-audit.md).
-        let Some(interface) = read_archive(INTERFACE_ARCHIVE) else {
+        let Some(interface) = read_install_archives(&install_root()).interface else {
             println!("skip: missing {INTERFACE_ARCHIVE}");
             return;
         };
-        let list = control_list(&interface, INTERFACE_LIST).expect("control list parses");
-        let block = scene_block(&list, SELECT_MUSIC_DIALOG_BLOCK).expect("dialog block exists");
-        let bnd = bind_data(&interface, "Dialog_SelectMusic.bnd").expect("bind parses");
-        let placements = bind_scene_rects(block, &bnd);
-        let layout = o2jam_shell::screens::side::select_chosung_layout(&placements)
+        let art = stage_dialog(&interface, Dialog::SelectMusic, StageContext::default())
+            .art
+            .expect("dialog stages");
+        let layout = o2jam_shell::screens::side::select_chosung_layout(&art.placements)
             .expect("INDEX buttons stage");
         assert_eq!(layout.row_cells, vec![27, 15]);
         assert_eq!(layout.pitch, 15);
     }
 
     /// Pinned 7.55 fact the channel soak relies on: `STATE_CHANNEL`
-    /// names zero sprites, so shots stage no scene art for it.
+    /// names zero sprites, so shots stage no scene art for it. Read
+    /// through the public file readers (a file fact — scene staging
+    /// goes through the declaration).
     fn assert_channel_block_names_no_sprites(archive: &[u8]) {
-        let list = control_list(archive, INTERFACE_LIST).expect("control list parses");
+        let entries = o2jam_file::parse_opi(archive).expect("opi parses");
+        let entry = o2jam_file::find_opi_entry(&entries, "ControlList_Interface.txt")
+            .expect("control list exists");
+        let body = o2jam_file::opi_entry_body(archive, entry).expect("control list reads");
+        let text = o2jam_file::decode_control_text(body).expect("control list decodes");
+        let list = o2jam_file::parse_control_list(&text).expect("control list parses");
         let block = scene_block(&list, "STATE_CHANNEL").expect("STATE_CHANNEL exists");
         assert!(
             scene_sprite_names(block).is_empty(),
@@ -1940,7 +1896,7 @@ mod tests {
         // byte-identical to the art-less frame; with the board staged
         // the MENU bar band may differ — but only where the board
         // itself paints.
-        let Some(interface) = read_archive(INTERFACE_ARCHIVE) else {
+        let Some(interface) = read_install_archives(&install_root()).interface else {
             println!("skip: missing {INTERFACE_ARCHIVE}");
             return;
         };
@@ -2022,7 +1978,7 @@ mod tests {
         // Guarded: without the interface archive the flat-card path
         // paints (no scene painter, no cursor) — covered unguarded in
         // `planet_shot_records_the_picked_band_without_art`.
-        let Some(_interface) = read_archive(INTERFACE_ARCHIVE) else {
+        let Some(_interface) = read_install_archives(&install_root()).interface else {
             println!("skip: missing {INTERFACE_ARCHIVE}");
             return;
         };
@@ -2151,7 +2107,7 @@ mod tests {
         // (HARD strip (338,125)-(432,138) native): real art plus
         // painter ink both count (the painter itself is proven by
         // the shell's synthetic-caption test).
-        let Some(_interface) = read_archive(INTERFACE_ARCHIVE) else {
+        let Some(_interface) = read_install_archives(&install_root()).interface else {
             println!("skip: missing {INTERFACE_ARCHIVE}");
             return;
         };
@@ -2176,7 +2132,7 @@ mod tests {
         // dialog-relative hit); gear opens the staged options sheet
         // and Escape closes it. Guarded: without archives the
         // fallback popup/title paths are covered by the shell suite.
-        let Some(_interface) = read_archive(INTERFACE_ARCHIVE) else {
+        let Some(_interface) = read_install_archives(&install_root()).interface else {
             println!("skip: missing {INTERFACE_ARCHIVE}");
             return;
         };
@@ -2211,7 +2167,7 @@ mod tests {
     #[test]
     fn play_skin_decodes_every_lane_when_present() {
         use o2jam_shell::playing::PlaySkin;
-        let Some(archive) = read_archive(PLAYING_ARCHIVE) else {
+        let Some(archive) = read_install_archives(&install_root()).playing else {
             println!("skip: missing {PLAYING_ARCHIVE}");
             return;
         };
@@ -2234,7 +2190,9 @@ mod tests {
         use o2jam_shell::playing::PlaySkin;
         assert!(PlaySkin::from_archive(&[]).is_none());
         assert!(PlaySkin::from_archive(&[0u8; 64]).is_none());
-        assert!(read_archive("No/Such.opi").is_none());
+        assert!(read_install_archives(&install_root().join("No/Such"))
+            .interface
+            .is_none());
     }
 
     #[test]
@@ -2242,7 +2200,7 @@ mod tests {
         use o2jam_render::{pack_xrgb, Frame};
         use o2jam_shell::playing::{HighwayGeometry, LivePlay, PlaySkin};
         const NOTE_BLUE: u32 = pack_xrgb(0x40, 0xC0, 0xFF);
-        let Some(archive) = read_archive(PLAYING_ARCHIVE) else {
+        let Some(archive) = read_install_archives(&install_root()).playing else {
             println!("skip: missing {PLAYING_ARCHIVE}");
             return;
         };
@@ -2336,7 +2294,7 @@ mod tests {
     #[test]
     fn playing_shot_paints_the_staged_combo_digit() {
         use o2jam_shell::playing::HighwayGeometry;
-        let Some(archive) = read_archive(PLAYING_ARCHIVE) else {
+        let Some(archive) = read_install_archives(&install_root()).playing else {
             println!("skip: missing {PLAYING_ARCHIVE}");
             return;
         };
@@ -2379,7 +2337,7 @@ mod tests {
         // scene art: every plate ink pixel of a lone blit at the
         // pinned origin must appear in the playing shot's frame.
         use o2jam_shell::playing::long_combo_plate_origin;
-        let Some(archive) = read_archive(PLAYING_ARCHIVE) else {
+        let Some(archive) = read_install_archives(&install_root()).playing else {
             println!("skip: missing {PLAYING_ARCHIVE}");
             return;
         };
@@ -2721,7 +2679,7 @@ mod tests {
     /// fallback. `None` while no staged source names the song.
     fn staged_catalog_bpm(song_id: u32) -> Option<f32> {
         use o2jam_shell::screens::side::select_music_songs;
-        if let Some(archive) = read_archive(MUSICSELECT_CATALOG) {
+        if let Ok(archive) = std::fs::read(install_root().join(MUSICSELECT_CATALOG)) {
             if let Ok(entries) = o2jam_file::parse_ojn_list(&archive) {
                 if !select_music_songs(&entries).is_empty() {
                     return entries
@@ -2754,15 +2712,14 @@ mod tests {
         use o2jam_shell::screens::paint::{
             waiting_bpm_caption, waiting_map_name, waiting_skillcount_text,
         };
-        let Some(archive) = read_archive(INTERFACE_ARCHIVE) else {
+        let Some(archive) = read_install_archives(&install_root()).interface else {
             println!("skip: missing {INTERFACE_ARCHIVE}");
             return;
         };
-        let list = control_list(&archive, INTERFACE_LIST).expect("control list parses");
-        let block = scene_block(&list, WAITING_BLOCK).expect("STATE_WAITING stages");
-        let bound_file = block.bound_file.clone().expect("waiting binds a .bnd");
-        let bnd = bind_data(&archive, &bound_file).expect("waiting .bnd parses");
-        let placements = bind_scene_rects(block, &bnd);
+        let art = stage_state(&archive, State::Waiting, StageContext::default())
+            .art
+            .expect("STATE_WAITING stages");
+        let placements = &art.placements;
         let caption_origin = |id: &str| {
             let placed = placements
                 .iter()
@@ -2885,7 +2842,10 @@ mod tests {
         // frame differs from the cleared indeterminate frame, so
         // `loading.png` proves the `with_status` path, not the bare
         // full bar.
-        if read_archive(MUSICSELECT_CATALOG).is_none() {
+        if std::fs::read(install_root().join(MUSICSELECT_CATALOG))
+            .ok()
+            .is_none()
+        {
             println!("skip: missing {MUSICSELECT_CATALOG}");
             return;
         }
@@ -2937,7 +2897,7 @@ mod tests {
 
     #[test]
     fn result_shot_paints_the_battle_lose_frame() {
-        let Some(archive) = read_archive(INTERFACE_ARCHIVE) else {
+        let Some(archive) = read_install_archives(&install_root()).interface else {
             println!("skip: missing {INTERFACE_ARCHIVE}");
             return;
         };
@@ -2983,7 +2943,7 @@ mod tests {
 
     #[test]
     fn result_shot_paints_the_perfect_grade_plate() {
-        let Some(archive) = read_archive(INTERFACE_ARCHIVE) else {
+        let Some(archive) = read_install_archives(&install_root()).interface else {
             println!("skip: missing {INTERFACE_ARCHIVE}");
             return;
         };
@@ -3034,7 +2994,7 @@ mod tests {
 
     #[test]
     fn solo_shot_paints_the_solo_banner_frame() {
-        let Some(archive) = read_archive(INTERFACE_ARCHIVE) else {
+        let Some(archive) = read_install_archives(&install_root()).interface else {
             println!("skip: missing {INTERFACE_ARCHIVE}");
             return;
         };
@@ -3239,16 +3199,15 @@ mod tests {
         // tab inks over the waiting seats (pinned anchor from the
         // shell's own structure test); without archives the dialog
         // stays hidden and only the song panel stages.
-        let Some(archive) = read_archive(INTERFACE_ARCHIVE) else {
+        let Some(archive) = read_install_archives(&install_root()).interface else {
             println!("skip: missing {INTERFACE_ARCHIVE}");
             return;
         };
-        let Some(list) = control_list(&archive, INTERFACE_LIST) else {
-            println!("skip: {INTERFACE_ARCHIVE} has no control list");
-            return;
-        };
-        if scene_block(&list, SELECT_MUSIC_DIALOG_BLOCK).is_none() {
-            println!("skip: {SELECT_MUSIC_DIALOG_BLOCK} missing");
+        if stage_dialog(&archive, Dialog::SelectMusic, StageContext::default())
+            .art
+            .is_none()
+        {
+            println!("skip: select-music dialog missing");
             return;
         }
         let mut game = seeded_game();

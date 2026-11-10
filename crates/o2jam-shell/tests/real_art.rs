@@ -1,26 +1,20 @@
 //! Soak main scenes with genuine 7.55 archive art (local-only).
 //!
 //! Reads `install-root` archives read-only, stages each scene through
-//! `load_scene_figures` plus `bind_scene_rects` (bound blocks) plus
-//! `paint_scene_figures`, drives `ScreenGame` to that scene, and asserts
+//! the State-keyed staging declaration (`stage_state`/`stage_dialog`)
+//! plus `paint_scene_figures`, drives `ScreenGame` to that scene, and asserts
 //! staged ink survives under the live UI ink. Skips (passes) when the
 //! archives are absent. Never embeds asset bytes.
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use o2jam_file::{Bnd, ControlList};
 use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
-use o2jam_render::{pack_xrgb, Frame, Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
-use o2jam_shell::avatar::{
-    bind_scene_rects, load_avi_logo, load_scene_figures, paint_scene_figures, scene_block,
-    scene_sprite_names, AvatarFigure, ScenePlacement, AVI_BLOCK, LOADING_SPRITE, PLANET_BLOCK,
-    RESULT_BLOCK, ROOM_BLOCK, WAITING_BLOCK,
-};
-use o2jam_shell::screens::paint::{
-    CHANNEL_BAR_SPRITE, CHANNEL_COUNT_SPRITE, CHANNEL_DIALOG_SPRITE, CHANNEL_DIGIT_SPRITE,
-    CHANNEL_ENTER_SPRITE, CHANNEL_SCROLL_BAR_SPRITE, CHANNEL_SCROLL_DOWN_SPRITE,
-    CHANNEL_SCROLL_UP_SPRITE, PLAYING_BLOCK,
+use o2jam_render::{pack_xrgb, Frame};
+use o2jam_shell::avatar::{load_avi_logo, paint_scene_figures, AvatarFigure, ScenePlacement};
+use o2jam_shell::screens::paint::RESULT_WINLOSE_SPRITE;
+use o2jam_shell::staging::{
+    read_install_archives, stage_dialog, stage_state, Dialog, StageContext, State,
 };
 use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
 
@@ -33,10 +27,6 @@ const PROBE_H: usize = 300;
 const INTERFACE_ARCHIVE: &str = "O2Jam/Image/Interface1.opi";
 /// Playing archive under `install-root` (Playing/Loading).
 const PLAYING_ARCHIVE: &str = "O2Jam/Image/Playing1.opi";
-/// Interface control list entry.
-const INTERFACE_LIST: &str = "ControlList_Interface.txt";
-/// Playing control list entry.
-const PLAYING_LIST: &str = "ControlList_Playing.txt";
 
 /// `STATE_CHANNEL` names zero sprites (verified), so the soak stages
 /// the code-mounted channel dialog art instead: the dialog body at
@@ -77,87 +67,14 @@ fn archive_path(name: &str) -> PathBuf {
     install_root().join(name)
 }
 
-/// Read an archive, if present (`None` means skip the test).
-fn read_archive(path: &Path) -> Option<Vec<u8>> {
-    std::fs::read(path).ok()
+/// Read the Interface archive, if present (`None` means skip the test).
+fn interface_archive() -> Option<Vec<u8>> {
+    read_install_archives(&install_root()).interface
 }
 
-/// Slice one entry body by its stored size (never the reserved stride).
-fn entry_body(archive: &[u8], entry_name: &str) -> Option<Vec<u8>> {
-    let entries = o2jam_file::parse_opi(archive).ok()?;
-    let entry = entries.iter().find(|entry| entry.name == entry_name)?;
-    let size = usize::try_from(entry.size).ok()?;
-    let end = entry.data_offset.checked_add(size)?;
-    let body = archive.get(entry.data_offset..end)?;
-    Some(body.to_vec())
-}
-
-/// Parse a `ControlList_*.txt` entry from an archive.
-fn control_list(archive: &[u8], entry_name: &str) -> Option<ControlList> {
-    let body = entry_body(archive, entry_name)?;
-    let text = o2jam_file::decode_control_text(&body).ok()?;
-    o2jam_file::parse_control_list(&text).ok()
-}
-
-/// Parse a `.bnd` layout entry from an archive.
-fn bind_data(archive: &[u8], bound_file: &str) -> Option<Bnd> {
-    let body = entry_body(archive, bound_file)?;
-    o2jam_file::parse_bnd(&body).ok()
-}
-
-/// Full-canvas placements for blocks without a `.bnd`.
-fn full_canvas(names: &[String]) -> Vec<ScenePlacement> {
-    names
-        .iter()
-        .map(|name| ScenePlacement {
-            id: String::new(),
-            code: 0,
-            sprite: Some(name.clone()),
-            rect: Rect {
-                x: 0,
-                y: 0,
-                w: NATIVE_WIDTH,
-                h: NATIVE_HEIGHT,
-            },
-        })
-        .collect()
-}
-
-/// Stage a bound block: named figures plus `.bnd` placements.
-fn stage_bound_block(
-    archive: &[u8],
-    list: &ControlList,
-    block_name: &str,
-) -> Option<(Vec<ScenePlacement>, HashMap<String, AvatarFigure>)> {
-    let block = scene_block(list, block_name)?;
-    let names = scene_sprite_names(block);
-    if names.is_empty() {
-        return None;
-    }
-    let figures = load_scene_figures(archive, &names);
-    if figures.is_empty() {
-        return None;
-    }
-    let bound_file = block.bound_file.clone()?;
-    let bnd = bind_data(archive, &bound_file)?;
-    let placements = bind_scene_rects(block, &bnd);
-    if placements.is_empty() {
-        return None;
-    }
-    Some((placements, figures))
-}
-
-/// Stage one sprite full-canvas (Channel fallback, Loading gate).
-fn stage_single_sprite(
-    archive: &[u8],
-    sprite_name: &str,
-) -> Option<(Vec<ScenePlacement>, HashMap<String, AvatarFigure>)> {
-    let names = vec![sprite_name.to_owned()];
-    let figures = load_scene_figures(archive, &names);
-    if figures.is_empty() {
-        return None;
-    }
-    Some((full_canvas(&names), figures))
+/// Read the Playing archive, if present (`None` means skip the test).
+fn playing_archive() -> Option<Vec<u8>> {
+    read_install_archives(&install_root()).playing
 }
 
 /// Distinct staged pixels painted alone on a blank frame.
@@ -325,32 +242,17 @@ fn walk_to_playing(game: &mut ScreenGame) {
     assert_eq!(game.screen(), Screen::Playing);
 }
 
-/// Read the Interface archive and its control list, if present.
-fn interface_and_list() -> Option<(Vec<u8>, ControlList)> {
-    let path = archive_path(INTERFACE_ARCHIVE);
-    let archive = read_archive(&path)?;
-    let list = control_list(&archive, INTERFACE_LIST)?;
-    Some((archive, list))
-}
-
-/// Read the Playing archive and its control list, if present.
-fn playing_and_list() -> Option<(Vec<u8>, ControlList)> {
-    let path = archive_path(PLAYING_ARCHIVE);
-    let archive = read_archive(&path)?;
-    let list = control_list(&archive, PLAYING_LIST)?;
-    Some((archive, list))
-}
-
 #[test]
 fn avi_layers_real_logo_over_bound_backdrop() {
     let path = archive_path(INTERFACE_ARCHIVE);
-    let Some((archive, list)) = interface_and_list() else {
+    let Some(archive) = interface_archive() else {
         println!("skip avi: missing {}", path.display());
         return;
     };
-    let Some((placements, figures)) = stage_bound_block(&archive, &list, AVI_BLOCK) else {
+    let Some(art) = stage_state(&archive, State::Avi, StageContext::default()).art else {
         panic!("avi: STATE_AVI staged no figures");
     };
+    let (placements, figures) = (art.placements, art.figures);
     let Some(logo) = load_avi_logo(&archive) else {
         panic!("avi: O2mediaLogo.ojs decoded no figure");
     };
@@ -382,21 +284,19 @@ fn avi_layers_real_logo_over_bound_backdrop() {
 #[test]
 fn channel_layers_list_over_real_dialog_art() {
     let path = archive_path(INTERFACE_ARCHIVE);
-    let Some((archive, list)) = interface_and_list() else {
+    let Some(archive) = interface_archive() else {
         println!("skip channel: missing {}", path.display());
         return;
     };
-    let names = vec![
-        CHANNEL_DIALOG_SPRITE.to_owned(),
-        CHANNEL_ENTER_SPRITE.to_owned(),
-        CHANNEL_BAR_SPRITE.to_owned(),
-        CHANNEL_DIGIT_SPRITE.to_owned(),
-        CHANNEL_COUNT_SPRITE.to_owned(),
-        CHANNEL_SCROLL_BAR_SPRITE.to_owned(),
-        CHANNEL_SCROLL_UP_SPRITE.to_owned(),
-        CHANNEL_SCROLL_DOWN_SPRITE.to_owned(),
-    ];
-    let figures = load_scene_figures(&archive, &names);
+    // The channel dialog stages through the declaration (bound
+    // `DIALOG_CHANNEL_INFO` bodies). The hover bar stays out: the exe
+    // mounts it at the Dialog object, not from the table (OPEN), and
+    // only the live window hand-stages it — without it the amber
+    // cursor stand-in paints.
+    let figures = stage_dialog(&archive, Dialog::ChannelInfo, StageContext::default())
+        .art
+        .map(|art| art.figures)
+        .unwrap_or_default();
     assert!(
         !figures.is_empty(),
         "channel: dialog body staged no figures"
@@ -405,11 +305,10 @@ fn channel_layers_list_over_real_dialog_art() {
     // dialog opens OVER the planet board, so the soak stages the bound
     // State_Planet block (backdrop + emblems + promo + MENU bar)
     // beneath the dialog art, exactly like the shots walk.
-    let Some((planet_placements, planet_figures)) =
-        stage_bound_block(&archive, &list, PLANET_BLOCK)
-    else {
+    let Some(board) = stage_state(&archive, State::Planet, StageContext::default()).art else {
         panic!("channel: STATE_PLANET staged no board figures");
     };
+    let (planet_placements, planet_figures) = (board.placements, board.figures);
     // Art-less baseline: same channels, both scene slots empty.
     let mut base_game = ScreenGame::new();
     base_game.set_channels(two_channels());
@@ -468,7 +367,7 @@ fn channel_layers_list_over_real_dialog_art() {
     game.load_scene(
         Screen::Planet,
         planet_placements,
-        planet_figures_full(&archive, &list),
+        planet_figures_full(&archive),
     );
     game.lane_key(3, true);
     game.click_planet(136, 88);
@@ -547,8 +446,10 @@ fn channel_layers_list_over_real_dialog_art() {
 /// Stage the full planet board figures for the layered channel soak:
 /// the bound `State_Planet` block art (backdrop + emblems + promo +
 /// MENU bar) the channel dialog opens over (`docs/planet.md`).
-fn planet_figures_full(archive: &[u8], list: &ControlList) -> HashMap<String, AvatarFigure> {
-    stage_bound_block(archive, list, PLANET_BLOCK).map_or_else(HashMap::new, |(_, figures)| figures)
+fn planet_figures_full(archive: &[u8]) -> HashMap<String, AvatarFigure> {
+    stage_state(archive, State::Planet, StageContext::default())
+        .art
+        .map_or_else(HashMap::new, |art| art.figures)
 }
 
 #[test]
@@ -560,13 +461,14 @@ fn planet_layers_staged_art_under_the_live_cursor() {
     // board the amber cursor stand-in plus the staged button art all
     // ink the frame.
     let path = archive_path(INTERFACE_ARCHIVE);
-    let Some((archive, list)) = interface_and_list() else {
+    let Some(archive) = interface_archive() else {
         println!("skip planet: missing {}", path.display());
         return;
     };
-    let Some((placements, figures)) = stage_bound_block(&archive, &list, PLANET_BLOCK) else {
+    let Some(art) = stage_state(&archive, State::Planet, StageContext::default()).art else {
         panic!("planet: STATE_PLANET staged no figures");
     };
+    let (placements, figures) = (art.placements, art.figures);
     let staged = staged_palette(&placements, &figures);
     let mut game = ScreenGame::new();
     game.load_scene(Screen::Planet, placements, figures);
@@ -627,13 +529,14 @@ fn planet_without_art_keeps_the_flat_card() {
 #[test]
 fn room_layers_rows_over_bound_room_art() {
     let path = archive_path(INTERFACE_ARCHIVE);
-    let Some((archive, list)) = interface_and_list() else {
+    let Some(archive) = interface_archive() else {
         println!("skip room: missing {}", path.display());
         return;
     };
-    let Some((placements, figures)) = stage_bound_block(&archive, &list, ROOM_BLOCK) else {
+    let Some(art) = stage_state(&archive, State::Room, StageContext::default()).art else {
         panic!("room: STATE_ROOM staged no figures");
     };
+    let (placements, figures) = (art.placements, art.figures);
     let staged = staged_palette(&placements, &figures);
     let mut game = ScreenGame::new();
     game.set_rooms(vec![one_room()]);
@@ -649,13 +552,14 @@ fn room_layers_rows_over_bound_room_art() {
 #[test]
 fn waiting_layers_seats_over_bound_waiting_art() {
     let path = archive_path(INTERFACE_ARCHIVE);
-    let Some((archive, list)) = interface_and_list() else {
+    let Some(archive) = interface_archive() else {
         println!("skip waiting: missing {}", path.display());
         return;
     };
-    let Some((placements, figures)) = stage_bound_block(&archive, &list, WAITING_BLOCK) else {
+    let Some(art) = stage_state(&archive, State::Waiting, StageContext::default()).art else {
         panic!("waiting: STATE_WAITING staged no figures");
     };
+    let (placements, figures) = (art.placements, art.figures);
     let staged = staged_palette(&placements, &figures);
     let mut game = ScreenGame::new();
     game.set_joined_room(seated_room());
@@ -672,13 +576,14 @@ fn waiting_layers_seats_over_bound_waiting_art() {
 #[test]
 fn loading_layers_bar_over_real_loading_gate() {
     let path = archive_path(PLAYING_ARCHIVE);
-    let Some(archive) = read_archive(&path) else {
+    let Some(archive) = playing_archive() else {
         println!("skip loading: missing {}", path.display());
         return;
     };
-    let Some((placements, figures)) = stage_single_sprite(&archive, LOADING_SPRITE) else {
+    let Some(art) = stage_state(&archive, State::Loading, StageContext::default()).art else {
         panic!("loading: MusicLoading.ojs staged no figures");
     };
+    let (placements, figures) = (art.placements, art.figures);
     let staged = staged_palette(&placements, &figures);
     let mut game = ScreenGame::new();
     game.load_scene(Screen::Loading, placements, figures);
@@ -690,18 +595,27 @@ fn loading_layers_bar_over_real_loading_gate() {
 #[test]
 fn playing_layers_notes_over_bound_gauges() {
     let path = archive_path(PLAYING_ARCHIVE);
-    let Some((archive, list)) = playing_and_list() else {
+    let Some(archive) = playing_archive() else {
         println!("skip playing: missing {}", path.display());
         return;
     };
-    let Some((mut placements, figures)) = stage_bound_block(&archive, &list, PLAYING_BLOCK) else {
+    // The Playing subset stages through the room mode of a fresh
+    // game (7-key solo): the venue, the selected note background,
+    // and the gauge family, including the corner life gauge.
+    let probe = ScreenGame::new();
+    let ctx = StageContext {
+        arena_stage: Some(probe.arena_stage()),
+        key_mode: probe.room_key_mode(),
+        team_play: probe.room_team_play(),
+    };
+    let Some(art) = stage_state(&archive, State::Playing, ctx).art else {
         panic!("playing: STATE_PLAYING staged no figures");
     };
+    let (placements, figures) = (art.placements, art.figures);
     assert!(
         figures.contains_key(PLAYING_GAUGE_SPRITE),
         "playing: gauge sprite decoded nothing"
     );
-    placements.extend(full_canvas(&[PLAYING_GAUGE_SPRITE.to_owned()]));
     let staged = staged_palette(&placements, &figures);
     let mut game = ScreenGame::new();
     game.load_chart(vec![(2, 1500, 7)]);
@@ -714,13 +628,18 @@ fn playing_layers_notes_over_bound_gauges() {
 #[test]
 fn result_layers_digits_over_bound_result_art() {
     let path = archive_path(INTERFACE_ARCHIVE);
-    let Some((archive, list)) = interface_and_list() else {
+    let Some(archive) = interface_archive() else {
         println!("skip result: missing {}", path.display());
         return;
     };
-    let Some((placements, figures)) = stage_bound_block(&archive, &list, RESULT_BLOCK) else {
+    let Some(art) = stage_state(&archive, State::Result, StageContext::default()).art else {
         panic!("result: STATE_RESULT staged no figures");
     };
+    let (placements, figures) = (art.placements, art.figures);
+    assert!(
+        figures.contains_key(RESULT_WINLOSE_SPRITE),
+        "result: verdict banner stages through the declaration"
+    );
     let staged = staged_palette(&placements, &figures);
     let mut game = ScreenGame::new();
     game.load_chart(vec![(2, 5000, 7)]);

@@ -12,21 +12,17 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use o2jam_file::{Bnd, ControlList, OJN_LEVEL_COUNT};
+use o2jam_file::OJN_LEVEL_COUNT;
 use o2jam_net::play::{MusicListAnswer, RoomArenaEcho};
 use o2jam_net::{
     GameRankUpdate, GameStatsUpdate, GatewayConnection, Gender, Request, Response, ScoreCompleted,
     ScoreSubmission, WireMessage,
 };
-use o2jam_render::{Frame, Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
-use o2jam_shell::avatar::{
-    bind_scene_rects, load_archive_sprite, load_avi_logo, load_scene_figures,
-    load_scene_figures_for_room, load_scene_figures_for_stage, scene_block, scene_sprite_names,
-    AvatarFigure, PlayingArtMode, ScenePlacement, AVI_BLOCK, LOADING_SPRITE, RESULT_BLOCK,
-    ROOM_BLOCK, WAITING_BLOCK,
+use o2jam_render::{Frame, NATIVE_HEIGHT, NATIVE_WIDTH};
+use o2jam_shell::avatar::load_avi_logo;
+use o2jam_shell::staging::{
+    read_install_archives, stage_dialog, stage_state, Dialog, StageContext, State,
 };
-use o2jam_shell::screens::paint::{PLAYING_BLOCK, RESULT_WINLOSE_SPRITE};
-use o2jam_shell::screens::side::SELECT_MUSIC_DIALOG_BLOCK;
 use o2jam_shell::{GameLoop, MenuKey, PlaySkin, Screen, ScreenGame};
 
 use crate::connect::{connect_and_login_with_transport, ConnectOptions};
@@ -314,148 +310,32 @@ fn stage_catalog(session: &mut OnlineSession) {
     session.set_song_catalog(&entries);
 }
 
-/// Interface archive under `install-root` (Avi/Room/Waiting/Result art).
-const INTERFACE_ARCHIVE: &str = "O2Jam/Image/Interface1.opi";
-/// Playing archive under `install-root` (Loading/Playing art).
-const PLAYING_ARCHIVE: &str = "O2Jam/Image/Playing1.opi";
-/// Interface control list entry.
-const INTERFACE_LIST: &str = "ControlList_Interface.txt";
-/// Playing control list entry.
-const PLAYING_LIST: &str = "ControlList_Playing.txt";
-
 /// Repository-local `install-root` (git-ignored game data).
 fn install_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root")
 }
 
-/// Read one archive read-only, if present (`None` keeps bare paint).
-fn read_archive(relative: &str) -> Option<Vec<u8>> {
-    std::fs::read(install_root().join(relative)).ok()
-}
-
-/// Borrow one entry body by its stored size (never the reserved stride).
-fn entry_body<'a>(archive: &'a [u8], entry_name: &str) -> Option<&'a [u8]> {
-    let entries = o2jam_file::parse_opi(archive).ok()?;
-    let entry = entries.iter().find(|entry| entry.name == entry_name)?;
-    let size = usize::try_from(entry.size).ok()?;
-    let end = entry.data_offset.checked_add(size)?;
-    archive.get(entry.data_offset..end)
-}
-
-/// Parse a `ControlList_*.txt` entry from an archive.
-fn control_list(archive: &[u8], entry_name: &str) -> Option<ControlList> {
-    let body = entry_body(archive, entry_name)?;
-    let text = o2jam_file::decode_control_text(body).ok()?;
-    o2jam_file::parse_control_list(&text).ok()
-}
-
-/// Parse a `.bnd` layout entry from an archive.
-fn bind_data(archive: &[u8], bound_file: &str) -> Option<Bnd> {
-    let body = entry_body(archive, bound_file)?;
-    o2jam_file::parse_bnd(body).ok()
-}
-
-/// Full-canvas placements for art without a `.bnd`.
-fn full_canvas(names: &[String]) -> Vec<ScenePlacement> {
-    names
-        .iter()
-        .map(|name| ScenePlacement {
-            id: String::new(),
-            code: 0,
-            sprite: Some(name.clone()),
-            rect: Rect {
-                x: 0,
-                y: 0,
-                w: NATIVE_WIDTH,
-                h: NATIVE_HEIGHT,
-            },
-        })
-        .collect()
-}
-
-/// Stage a bound block: named figures plus `.bnd` placements. The room
-/// arena stage rides along so `_` runtime refs resolve their
-/// stage-numbered siblings (`None` keeps the bare arm). The room mode,
-/// when given, selects the Playing family members; unselected members
-/// leave empty slots that paint nothing.
-fn stage_bound_block(
-    archive: &[u8],
-    list: &ControlList,
-    block_name: &str,
-    arena_stage: Option<u16>,
-    mode: Option<&PlayingArtMode>,
-) -> Option<(Vec<ScenePlacement>, HashMap<String, AvatarFigure>)> {
-    let block = scene_block(list, block_name)?;
-    let names = scene_sprite_names(block);
-    if names.is_empty() {
-        return None;
-    }
-    let figures = match mode {
-        Some(mode) => load_scene_figures_for_room(archive, &names, arena_stage, mode),
-        None => load_scene_figures_for_stage(archive, &names, arena_stage),
-    };
-    if figures.is_empty() {
-        return None;
-    }
-    let bnd = bind_data(archive, block.bound_file.as_ref()?)?;
-    let placements = bind_scene_rects(block, &bnd);
-    if placements.is_empty() {
-        return None;
-    }
-    Some((placements, figures))
-}
-
-/// Stage one sprite full-canvas (the Loading gate).
-fn stage_single_sprite(
-    archive: &[u8],
-    sprite_name: &str,
-) -> Option<(Vec<ScenePlacement>, HashMap<String, AvatarFigure>)> {
-    let names = vec![sprite_name.to_owned()];
-    let figures = load_scene_figures(archive, &names);
-    if figures.is_empty() {
-        return None;
-    }
-    Some((full_canvas(&names), figures))
-}
-
-/// Stage Interface-archive scenes; each scene stages independently
-/// so one bad block never blanks the rest. Channel stages nothing:
-/// the art-less state paints no fill under the live list.
+/// Stage Interface-archive scenes through the declaration; each scene
+/// stages independently so one bad block never blanks the rest.
+/// Channel stages nothing: the art-less state paints no fill under
+/// the live list. The Avi splash stays caller-side (which slot paints
+/// the logo is the caller's business); the Result banner merges
+/// through the declaration row.
 fn stage_interface_archive(game: &mut ScreenGame, archive: &[u8]) {
     if let Some(logo) = load_avi_logo(archive) {
         game.load_splash(logo);
     }
-    let Some(list) = control_list(archive, INTERFACE_LIST) else {
-        return;
-    };
-    for (screen, block) in [
-        (Screen::Avi, AVI_BLOCK),
-        (Screen::Room, ROOM_BLOCK),
-        (Screen::Waiting, WAITING_BLOCK),
+    let ctx = StageContext::default();
+    for (screen, state) in [
+        (Screen::Avi, State::Avi),
+        (Screen::Room, State::Room),
+        (Screen::Waiting, State::Waiting),
+        (Screen::Result, State::Result),
     ] {
-        if let Some((placements, figures)) = stage_bound_block(archive, &list, block, None, None) {
-            game.load_scene(screen, placements, figures);
+        if let Some(art) = stage_state(archive, state, ctx).art {
+            game.load_scene(screen, art.placements, art.figures);
         }
     }
-    stage_result_block(game, archive, &list);
-}
-
-/// Stage the result scene: the `STATE_RESULT` block art plus the
-/// builder-mounted verdict banner body (`Result_WinLose.ojs` — the
-/// block itself carries only the background, the each-result box,
-/// the buttons, and the grade plate), so the scene figures carry
-/// the banner and the painter selects its frame. A missing body
-/// keeps the scene banner-less.
-fn stage_result_block(game: &mut ScreenGame, archive: &[u8], list: &ControlList) {
-    let Some((placements, mut figures)) =
-        stage_bound_block(archive, list, RESULT_BLOCK, None, None)
-    else {
-        return;
-    };
-    if let Some(banner) = load_archive_sprite(archive, RESULT_WINLOSE_SPRITE) {
-        figures.insert(RESULT_WINLOSE_SPRITE.to_owned(), banner);
-    }
-    game.load_scene(Screen::Result, placements, figures);
 }
 
 /// Stage Playing-archive scenes (Loading gate plus Playing gauges)
@@ -465,26 +345,18 @@ fn stage_result_block(game: &mut ScreenGame, archive: &[u8], list: &ControlList)
 /// stage the room mode's members. The walk rooms play solo, so the
 /// room's own team word selects the members.
 fn stage_playing_archive(game: &mut ScreenGame, archive: &[u8]) {
-    if let Some((placements, figures)) = stage_single_sprite(archive, LOADING_SPRITE) {
-        game.load_scene(Screen::Loading, placements, figures);
+    if let Some(art) = stage_state(archive, State::Loading, StageContext::default()).art {
+        game.load_scene(Screen::Loading, art.placements, art.figures);
     }
-    let Some(list) = control_list(archive, PLAYING_LIST) else {
-        return;
-    };
-    let mode = PlayingArtMode {
+    let ctx = StageContext {
+        arena_stage: Some(game.arena_stage()),
         key_mode: game.room_key_mode(),
         team_play: game.room_team_play(),
     };
-    let Some((placements, figures)) = stage_bound_block(
-        archive,
-        &list,
-        PLAYING_BLOCK,
-        Some(game.arena_stage()),
-        Some(&mode),
-    ) else {
+    let Some(art) = stage_state(archive, State::Playing, ctx).art else {
         return;
     };
-    game.load_scene(Screen::Playing, placements, figures);
+    game.load_scene(Screen::Playing, art.placements, art.figures);
     if let Some(skin) = PlaySkin::from_archive(archive) {
         game.set_play_skin(skin);
     }
@@ -501,7 +373,7 @@ fn stage_empty_channel_scene(game: &mut ScreenGame) {
 /// lobby shot layers live UI over genuine archive art. Missing or
 /// unreadable archives keep the bare paint; never fails.
 fn stage_lobby_art(game: &mut ScreenGame) {
-    if let Some(archive) = read_archive(INTERFACE_ARCHIVE) {
+    if let Some(archive) = read_install_archives(&install_root()).interface {
         stage_interface_archive(game, &archive);
     }
     stage_empty_channel_scene(game);
@@ -512,7 +384,7 @@ fn stage_lobby_art(game: &mut ScreenGame) {
 /// and gauge families resolve through the walk's own room word.
 /// Missing or unreadable archives keep the bare paint; never fails.
 fn stage_performance_art(game: &mut ScreenGame) {
-    if let Some(archive) = read_archive(PLAYING_ARCHIVE) {
+    if let Some(archive) = read_install_archives(&install_root()).playing {
         stage_playing_archive(game, &archive);
     }
 }
@@ -522,34 +394,16 @@ fn stage_performance_art(game: &mut ScreenGame) {
 /// empty art paints nothing. Missing archives keep the bare paint;
 /// never fails.
 fn stage_select_music_art(game: &mut ScreenGame) {
-    let Some(archive) = read_archive(INTERFACE_ARCHIVE) else {
+    let Some(archive) = read_install_archives(&install_root()).interface else {
         return;
     };
-    let Some(list) = control_list(&archive, INTERFACE_LIST) else {
+    let Some(art) = stage_dialog(&archive, Dialog::SelectMusic, StageContext::default()).art else {
         return;
     };
-    let Some(block) = scene_block(&list, SELECT_MUSIC_DIALOG_BLOCK) else {
-        return;
-    };
-    let names = scene_sprite_names(block);
-    if names.is_empty() {
+    if art.figures.is_empty() {
         return;
     }
-    let figures = load_scene_figures(&archive, &names);
-    if figures.is_empty() {
-        return;
-    }
-    let Some(bound_file) = block.bound_file.as_ref() else {
-        return;
-    };
-    let Some(bnd) = bind_data(&archive, bound_file) else {
-        return;
-    };
-    let placements = bind_scene_rects(block, &bnd);
-    if placements.is_empty() {
-        return;
-    }
-    game.load_select_music_scene(placements, figures);
+    game.load_select_music_scene(art.placements, art.figures);
 }
 
 /// Create a room and join it back for the full snapshot.
@@ -918,47 +772,89 @@ mod session_walk_tests {
 
     #[test]
     fn garbage_archive_bytes_stage_nothing() {
-        // Every fallback layer rejects undecodable bytes, so a
-        // corrupt archive keeps the bare paint, never partial art.
+        // Every staging call degrades without failing: bound rows
+        // stage nothing with a miss in the ledger, while the
+        // block-less Loading row keeps its placement with an empty
+        // slot and a miss.
         let garbage = vec![0xFFu8; 64];
-        assert!(entry_body(&garbage, "nope.ojs").is_none());
-        assert!(control_list(&garbage, INTERFACE_LIST).is_none());
-        assert!(bind_data(&garbage, "State_Waiting.bnd").is_none());
-        assert!(stage_single_sprite(&garbage, LOADING_SPRITE).is_none());
+        let ctx = StageContext::default();
+        for state in [
+            State::Avi,
+            State::Room,
+            State::Waiting,
+            State::Result,
+            State::Playing,
+        ] {
+            let report = stage_state(&garbage, state, ctx);
+            assert!(report.art.is_none(), "{state} stages art from garbage");
+            assert!(!report.misses.is_empty(), "{state} misses silently");
+        }
+        let loading = stage_state(&garbage, State::Loading, ctx);
+        let art = loading.art.expect("loading keeps its placement");
+        assert!(art.figures.is_empty());
+        assert!(!loading.misses.is_empty());
+        let dialog = stage_dialog(&garbage, Dialog::SelectMusic, ctx);
+        assert!(dialog.art.is_none());
+        assert!(!dialog.misses.is_empty());
     }
 
     #[test]
     fn walk_staging_resolves_bound_scenes_from_real_archives() {
-        let Some(interface) = read_archive(INTERFACE_ARCHIVE) else {
-            eprintln!("skipping walk staging (missing {INTERFACE_ARCHIVE})");
+        let archives = read_install_archives(&install_root());
+        let Some(interface) = archives.interface else {
+            eprintln!("skipping walk staging (missing interface archive)");
             return;
         };
-        let Some(playing) = read_archive(PLAYING_ARCHIVE) else {
-            eprintln!("skipping walk staging (missing {PLAYING_ARCHIVE})");
+        let Some(playing) = archives.playing else {
+            eprintln!("skipping walk staging (missing playing archive)");
             return;
         };
-        let list = control_list(&interface, INTERFACE_LIST).expect("interface list parses");
-        for block in [AVI_BLOCK, ROOM_BLOCK, WAITING_BLOCK, RESULT_BLOCK] {
-            let staged = stage_bound_block(&interface, &list, block, None, None);
+        let ctx = StageContext::default();
+        for state in [State::Avi, State::Room, State::Waiting, State::Result] {
+            let staged = stage_state(&interface, state, ctx);
             assert!(
-                staged.is_some_and(
-                    |(placements, figures)| !placements.is_empty() && !figures.is_empty()
-                ),
-                "{block} stages placements plus figures"
+                staged
+                    .art
+                    .is_some_and(|art| !art.placements.is_empty() && !art.figures.is_empty()),
+                "{state} stages placements plus figures"
             );
         }
-        let list = control_list(&playing, PLAYING_LIST).expect("playing list parses");
-        let mode = PlayingArtMode {
+        assert!(
+            stage_state(&interface, State::Result, ctx)
+                .art
+                .is_some_and(|art| art
+                    .figures
+                    .contains_key(o2jam_shell::screens::paint::RESULT_WINLOSE_SPRITE)),
+            "STATE_RESULT merges the verdict banner"
+        );
+        let ctx = StageContext {
+            arena_stage: Some(1),
             key_mode: 1,
             team_play: false,
         };
-        let staged = stage_bound_block(&playing, &list, PLAYING_BLOCK, Some(1), Some(&mode));
+        let staged = stage_state(&playing, State::Playing, ctx);
         assert!(
             staged
-                .is_some_and(|(placements, figures)| !placements.is_empty() && !figures.is_empty()),
+                .art
+                .is_some_and(|art| !art.placements.is_empty() && !art.figures.is_empty()),
             "STATE_PLAYING stages placements plus figures"
         );
-        assert!(stage_single_sprite(&playing, LOADING_SPRITE).is_some());
+        assert!(
+            stage_state(&playing, State::Loading, StageContext::default())
+                .art
+                .is_some()
+        );
+        assert!(
+            stage_dialog(&playing, Dialog::SelectMusic, StageContext::default())
+                .art
+                .is_none(),
+            "select-music stages from the interface archive, never playing"
+        );
+        assert!(
+            stage_dialog(&interface, Dialog::SelectMusic, StageContext::default())
+                .art
+                .is_some()
+        );
     }
 
     #[test]
