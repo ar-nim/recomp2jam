@@ -418,6 +418,19 @@ fn waiting_team_at(placements: &[ScenePlacement], x: i32, y: i32) -> Option<u8> 
 /// names no stage — a zero stage (room entry replaces zero with a
 /// real one, store `0x4aacea`) or a negative word.
 #[must_use]
+/// Saturating `f32` to `i16` for scaled scene-BGM samples.
+///
+/// PERF-07 prefers `TryFrom` over `as` for narrowing conversions,
+/// but `std` offers no `TryFrom<f32>` for integer types, so the
+/// float step keeps one `as`: the input is clamped to the `i16`
+/// range first, which makes the conversion exact — Rust's
+/// float-to-int `as` saturates, and a clamped finite input never
+/// reaches the saturation or NaN paths, so unity gain stays
+/// bit-exact.
+fn saturating_f32_to_i16(value: f32) -> i16 {
+    value.clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16
+}
+
 /// Scale one scene-BGM cue by a linear gain: i16 samples scaled
 /// with saturation toward silence. Unity gain is bit-exact (every
 /// i16 value survives the f32 round trip), so a full-volume cue
@@ -428,7 +441,7 @@ fn scale_scene_bgm(pcm: &PcmSamples, gain: f32) -> PcmSamples {
         .iter()
         .map(|sample| {
             let scaled = (f32::from(*sample) * gain).round();
-            scaled.clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16
+            saturating_f32_to_i16(scaled)
         })
         .collect();
     PcmSamples {
@@ -2767,15 +2780,15 @@ impl ScreenGame {
     /// OPEN), `3KEY`/`7KEY` record the key-count selection, and
     /// `KEYTEST` flips its checkbox (both selection-only, OPEN).
     fn click_option_key_tab(&mut self, x: i32, y: i32) {
-        for lane in 0..7 {
-            if self.options_hit(OPTION_KEY_LANE_FIRST + lane as u32, x, y) {
-                self.option_rebind = Some(lane);
+        for lane in 0..7u32 {
+            if self.options_hit(OPTION_KEY_LANE_FIRST + lane, x, y) {
+                self.option_rebind = usize::try_from(lane).ok();
                 return;
             }
         }
-        for lane in 0..4 {
-            if self.options_hit(OPTION_KEY_3KEY_FIRST + lane as u32, x, y) {
-                self.option_rebind = Some(lane);
+        for lane in 0..4u32 {
+            if self.options_hit(OPTION_KEY_3KEY_FIRST + lane, x, y) {
+                self.option_rebind = usize::try_from(lane).ok();
                 return;
             }
         }

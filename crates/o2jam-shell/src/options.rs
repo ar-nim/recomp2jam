@@ -305,7 +305,7 @@ fn parse_profile_int(text: &str) -> Option<i32> {
     for digit in prefix.chars() {
         value = value
             .checked_mul(10)?
-            .checked_add(i64::from(digit as u8 - b'0'))?;
+            .checked_add(i64::from(u32::from(digit) - u32::from(b'0')))?;
         if value > i64::from(i32::MAX) + 1 {
             return None;
         }
