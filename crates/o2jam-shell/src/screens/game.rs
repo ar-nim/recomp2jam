@@ -10,31 +10,33 @@ use super::super::GameLoop;
 use super::paint::{
     battle_verdict, channel_dialog_x_hit, channel_row_hit, channel_viewport, dialog_rect_hit,
     has_room_panels, list_row_hit, paint_avi_scene, paint_channel_chat, paint_channel_list,
-    paint_channel_scene, paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
-    paint_lobby_backdrop, paint_music_shop_scene, paint_myroom_scene, paint_planet_options,
-    paint_planet_quit, paint_planet_scene, paint_playing_overlay, paint_result, paint_result_scene,
-    paint_room_list, paint_room_scene, paint_screen, paint_shop_scene, paint_waiting_chat,
-    paint_waiting_members, paint_waiting_scene, quit_fallback_rects, rect_hit, room_panel_hit,
-    scene_index, staged_rect_hit, BattleVerdict, ChannelChatMessage, LoadingStatus, ResultPaint,
-    ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage, RESULT_BACK_ID,
-    RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    paint_channel_scene, paint_lanking_board, paint_lanking_scene, paint_loading_scene,
+    paint_loading_scene_with_status, paint_lobby_backdrop, paint_music_shop_scene,
+    paint_myroom_scene, paint_planet_options, paint_planet_quit, paint_planet_scene,
+    paint_playing_overlay, paint_result, paint_result_scene, paint_room_list, paint_room_scene,
+    paint_screen, paint_shop_scene, paint_waiting_chat, paint_waiting_members, paint_waiting_scene,
+    quit_fallback_rects, rect_hit, room_panel_hit, scene_index, staged_rect_hit, BattleVerdict,
+    ChannelChatMessage, LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt,
+    WaitingCaptions, WaitingChatMessage, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID,
+    RESULT_RETRY_RECT,
 };
 use super::side::{
-    can_return_side, can_visit_side, create_room_action_at, paint_side_scene, password_action_at,
-    planet_action_at, select_chosung_cells, select_chosung_layout, select_difficulty_ink,
-    select_music_rows, select_music_songs, select_pager_caption, select_picked_caption,
-    select_row_hit, select_search_caption, select_status_line, waiting_song_detail_line,
-    waiting_song_title_line, waiting_team_for_code, CreateRoomAction, CreateRoomForm,
-    PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo, PlanetSelection,
-    RoomDialog, SelectMusicRow, SelectMusicSong, SideScreen, PLANET_OPTION_FIRST_TAB,
-    QUIT_CANCEL_CODE, QUIT_OK_CODE, SELECT_ARTIST_RADIO, SELECT_CHO_SUNG_LEFT,
-    SELECT_CHO_SUNG_PITCH, SELECT_CHO_SUNG_ROW_CELLS, SELECT_CHO_SUNG_Y, SELECT_FILTER_BUTTON_H,
-    SELECT_FILTER_BUTTON_PITCH, SELECT_FILTER_BUTTON_TOP, SELECT_FILTER_COLUMNS,
-    SELECT_GENRE_FILTERS, SELECT_HEADER_COLUMNS, SELECT_HEADER_Y, SELECT_LEVEL_FILTERS,
-    SELECT_OK_BUTTON, SELECT_PAGER_RIGHT, SELECT_RESULT_TABS, SELECT_ROW_PITCH, SELECT_ROW_TOP,
-    SELECT_SEARCH_BOX, SELECT_SEARCH_BUTTON, SELECT_SEARCH_Y, SELECT_STATUS_H, SELECT_STATUS_Y,
-    SELECT_TABLE_HEADERS, SELECT_TABLE_LEFT, SELECT_TABLE_WIDTH, SELECT_TITLE_RADIO,
-    SELECT_VISIBLE_ROWS, SELECT_WHEEL_FILTERS,
+    can_return_side, can_visit_side, create_room_action_at, lanking_action_at, lanking_page_window,
+    lanking_songs, paint_side_scene, password_action_at, planet_action_at, select_chosung_cells,
+    select_chosung_layout, select_difficulty_ink, select_music_rows, select_music_songs,
+    select_pager_caption, select_picked_caption, select_row_hit, select_search_caption,
+    select_status_line, sort_lanking_songs, waiting_song_detail_line, waiting_song_title_line,
+    waiting_team_for_code, CreateRoomAction, CreateRoomForm, LankingAction, LankingSong,
+    LankingSort, PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo,
+    PlanetSelection, RoomDialog, SelectMusicRow, SelectMusicSong, SideScreen, LANKING_LVIEW_ROWS,
+    LANKING_RVIEW_ROWS, PLANET_OPTION_FIRST_TAB, QUIT_CANCEL_CODE, QUIT_OK_CODE,
+    SELECT_ARTIST_RADIO, SELECT_CHO_SUNG_LEFT, SELECT_CHO_SUNG_PITCH, SELECT_CHO_SUNG_ROW_CELLS,
+    SELECT_CHO_SUNG_Y, SELECT_FILTER_BUTTON_H, SELECT_FILTER_BUTTON_PITCH,
+    SELECT_FILTER_BUTTON_TOP, SELECT_FILTER_COLUMNS, SELECT_GENRE_FILTERS, SELECT_HEADER_COLUMNS,
+    SELECT_HEADER_Y, SELECT_LEVEL_FILTERS, SELECT_OK_BUTTON, SELECT_PAGER_RIGHT,
+    SELECT_RESULT_TABS, SELECT_ROW_PITCH, SELECT_ROW_TOP, SELECT_SEARCH_BOX, SELECT_SEARCH_BUTTON,
+    SELECT_SEARCH_Y, SELECT_STATUS_H, SELECT_STATUS_Y, SELECT_TABLE_HEADERS, SELECT_TABLE_LEFT,
+    SELECT_TABLE_WIDTH, SELECT_TITLE_RADIO, SELECT_VISIBLE_ROWS, SELECT_WHEEL_FILTERS,
 };
 use crate::MenuKey;
 use o2jam_audio::{song_position_ms, AudioBackend, BgmSelection, PcmSamples, SceneBgm};
@@ -42,8 +44,9 @@ use o2jam_file::OjnListEntry;
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams, PEER_SLOT_COUNT};
 use o2jam_net::play::SetRoomMusic;
 use o2jam_net::rooms::{
-    Announcement, MainRoomAdminMessage, MainRoomUserMessage, RankNotification, ReceiveWhisper,
-    SendMainRoomMessage, SendWaitingMessage, SendWhisper, WaitingAdminMessage, WaitingUserMessage,
+    Announcement, MainRoomAdminMessage, MainRoomUserMessage, MusicPlayRankingAnswer, RankEntry,
+    RankNotification, ReceiveWhisper, SendMainRoomMessage, SendWaitingMessage, SendWhisper,
+    WaitingAdminMessage, WaitingUserMessage,
 };
 use o2jam_net::{
     ChannelState, CreateRoom, Difficulty, JoinRoom, JoinedRoom, Ready, RoomListEntry,
@@ -270,6 +273,24 @@ pub struct ScreenGame {
     chart_notes: u32,
     side: Option<SideScreen>,
     side_origin: Option<Screen>,
+    /// Left-list songs behind the lanking board (`OJNList.dat`
+    /// order, owned copies; see [`Self::set_lanking_catalog`]).
+    lanking_songs: Vec<LankingSong>,
+    /// Active left-list sort (`None`: catalog order until a sort
+    /// button answers; directions ASSUMED ascending).
+    lanking_sort: Option<LankingSort>,
+    /// Left-list page (five rows per page, the staged `LVIEW_EX` hit areas).
+    lanking_page: usize,
+    /// Right-list page (ten board rows per page past the self line).
+    lanking_rpage: usize,
+    /// Fetched rank board (`2028 MusicPlayRankingAnswer`) staged
+    /// behind the scripted-stub seam: proven shell-side, ASSUMED
+    /// wire-side until a live gateway replay confirms it.
+    lanking_board: Option<MusicPlayRankingAnswer>,
+    /// Picked left-list song id (row toggle or LANK button); names
+    /// the `MUSICNAME` caption. The song-to-board fetch join stays
+    /// OPEN (no live gateway).
+    lanking_selected: Option<u32>,
     side_placements: Vec<ScenePlacement>,
     side_figures: HashMap<String, AvatarFigure>,
     scene_art: [Option<SceneArt>; 12],
@@ -527,6 +548,12 @@ impl ScreenGame {
             chart_notes: 0,
             side: None,
             side_origin: None,
+            lanking_songs: Vec::new(),
+            lanking_sort: None,
+            lanking_page: 0,
+            lanking_rpage: 0,
+            lanking_board: None,
+            lanking_selected: None,
             side_placements: Vec::new(),
             side_figures: HashMap::new(),
             scene_art: std::array::from_fn(|_| None),
@@ -2502,11 +2529,159 @@ impl ScreenGame {
         true
     }
 
+    /// Stage the lanking board catalog (`OJNList.dat` order, owned
+    /// copies so the board outlives the parse borrow; mirrors
+    /// [`Self::set_song_catalog`]). Resets sort and pages.
+    pub fn set_lanking_catalog(&mut self, entries: &[OjnListEntry<'_>]) -> &mut Self {
+        self.lanking_songs = lanking_songs(entries);
+        self.lanking_sort = None;
+        self.lanking_page = 0;
+        self.lanking_selected = None;
+        self
+    }
+
+    /// Stage one fetched rank board (`2028 MusicPlayRankingAnswer`)
+    /// behind the scripted-stub seam: the shell proves the rows,
+    /// the wire ride stays ASSUMED until a live gateway replay.
+    /// Resets the right-list page.
+    pub fn stage_lanking_board(&mut self, answer: MusicPlayRankingAnswer) -> &mut Self {
+        self.lanking_board = Some(answer);
+        self.lanking_rpage = 0;
+        self
+    }
+
+    /// Active left-list sort (`None`: catalog order).
+    #[must_use]
+    pub fn lanking_sort(&self) -> Option<LankingSort> {
+        self.lanking_sort
+    }
+
+    /// Left-list page (eleven rows per page).
+    #[must_use]
+    pub fn lanking_page(&self) -> usize {
+        self.lanking_page
+    }
+
+    /// Sorted left-list songs on the current page (owned page:
+    /// small, five rows at most).
+    #[must_use]
+    pub fn lanking_visible_songs(&self) -> Vec<LankingSong> {
+        let mut songs = self.lanking_songs.clone();
+        if let Some(sort) = self.lanking_sort {
+            sort_lanking_songs(&mut songs, sort);
+        }
+        let (start, end) = lanking_page_window(songs.len(), LANKING_LVIEW_ROWS, self.lanking_page);
+        songs[start..end].to_vec()
+    }
+
+    /// Fetched rank lines on the current right-list page (wire
+    /// order, ten rows at most past the self line; empty until
+    /// staged).
+    #[must_use]
+    pub fn lanking_visible_ranks(&self) -> Vec<RankEntry> {
+        let Some(board) = self.lanking_board.as_ref() else {
+            return Vec::new();
+        };
+        let (start, end) =
+            lanking_page_window(board.entries.len(), LANKING_RVIEW_ROWS, self.lanking_rpage);
+        board.entries[start..end].to_vec()
+    }
+
+    /// Viewer's own fetched rank line for the first right-list
+    /// slot (`None` until a board stages).
+    #[must_use]
+    pub fn lanking_self_entry(&self) -> Option<RankEntry> {
+        self.lanking_board
+            .as_ref()
+            .map(|board| board.self_entry.clone())
+    }
+
+    /// Picked song title for the `MUSICNAME` caption (`None` until
+    /// a row toggle or LANK button picks a visible row).
+    #[must_use]
+    pub fn lanking_selected_title(&self) -> Option<String> {
+        let picked = self.lanking_selected?;
+        self.lanking_songs
+            .iter()
+            .find(|song| song.song_id == picked)
+            .map(|song| song.title.clone())
+    }
+
+    /// Board click through the control-code dispatch
+    /// ([`lanking_action_at`]): sorts resort and reset the page,
+    /// pagers step and hold at the ends, row picks name the
+    /// caption song. Staged placements only — unstaged clicks land
+    /// nowhere (no fallback literals, ADR-0003). Only answers on
+    /// the open lanking side screen.
+    pub fn click_lanking(&mut self, x: i32, y: i32) {
+        if self.side != Some(SideScreen::Lanking) {
+            return;
+        }
+        let Some(action) = lanking_action_at(&self.side_placements, x, y) else {
+            return;
+        };
+        match action {
+            LankingAction::Sort(sort) => {
+                self.lanking_sort = Some(sort);
+                self.lanking_page = 0;
+            }
+            LankingAction::LViewPrev => {
+                self.lanking_page = self.lanking_page.saturating_sub(1);
+            }
+            LankingAction::LViewNext => {
+                if self
+                    .lanking_page
+                    .saturating_add(1)
+                    .saturating_mul(LANKING_LVIEW_ROWS)
+                    < self.lanking_songs.len()
+                {
+                    self.lanking_page = self.lanking_page.saturating_add(1);
+                }
+            }
+            LankingAction::RViewPrev => {
+                self.lanking_rpage = self.lanking_rpage.saturating_sub(1);
+            }
+            LankingAction::RViewNext => {
+                let rows = self
+                    .lanking_board
+                    .as_ref()
+                    .map_or(0, |board| board.entries.len());
+                if self
+                    .lanking_rpage
+                    .saturating_add(1)
+                    .saturating_mul(LANKING_RVIEW_ROWS)
+                    < rows
+                {
+                    self.lanking_rpage = self.lanking_rpage.saturating_add(1);
+                }
+            }
+            LankingAction::SelectRow(slot) => {
+                self.lanking_selected = self
+                    .lanking_visible_songs()
+                    .get(slot)
+                    .map(|song| song.song_id);
+            }
+        }
+    }
+
     /// Paint with an explicit song clock (tests use this; live
     /// paint reads the sample clock, [`Self::now_ms`]).
     pub fn paint_at(&mut self, frame: &mut Frame<'_>, now_ms: u64) {
         if self.side.is_some() {
             paint_side_scene(frame, &self.side_placements, &self.side_figures);
+            // The lanking overlay inks rows, ranks, and the picked
+            // caption into staged TEXT rects over the bound art;
+            // without staged rows it paints nothing (art-only).
+            if self.side == Some(SideScreen::Lanking) {
+                paint_lanking_board(
+                    frame,
+                    &self.side_placements,
+                    &self.lanking_visible_songs(),
+                    self.lanking_self_entry().as_ref(),
+                    &self.lanking_visible_ranks(),
+                    self.lanking_selected_title().as_deref(),
+                );
+            }
             return;
         }
         if self.flow.current() == Screen::Avi && now_ms >= SPLASH_AUTO_ADVANCE_MS {
@@ -2564,9 +2739,10 @@ impl ScreenGame {
         }
     }
 
-    /// Rankings: staged art when present, else the flat card. Rank
-    /// rows, sorts, search, and pagers are unevidenced (fetch opcode
-    /// unknown) — paint only, no data, no selection state.
+    /// Rankings: staged art when present, else the flat card. The
+    /// flow screen stays art-only; the live board (rows, sorts,
+    /// pagers, ranks) answers through the side-screen path, so its
+    /// overlay paints over `side_placements` instead of here.
     fn paint_lanking(&self, frame: &mut Frame<'_>) {
         match self.scene_art(Screen::Lanking) {
             Some(art) => paint_lanking_scene(frame, art),
@@ -3410,6 +3586,13 @@ impl GameLoop for ScreenGame {
     }
 
     fn mouse_click(&mut self, x: i32, y: i32) {
+        // The open lanking board answers its named controls
+        // (sorts, pagers, row picks) at staged rects; every other
+        // side screen stays click-silent.
+        if self.side == Some(SideScreen::Lanking) {
+            self.click_lanking(x, y);
+            return;
+        }
         if self.side.is_some() {
             return;
         }
@@ -3441,8 +3624,9 @@ impl GameLoop for ScreenGame {
             Screen::Planet => {
                 self.click_planet(x, y);
             }
-            // Ranking clicks land nowhere: sorts, search, pagers, and
-            // row selection are all unevidenced (P0).
+            // Ranking clicks on the flow screen land nowhere: the
+            // live board answers through the side-screen path
+            // (`click_lanking` over staged `side_placements`).
             Screen::Lanking => {}
             // Avatar-room clicks land nowhere: slot selection, equip,
             // pager, and gift semantics are all unevidenced (P0).
@@ -3538,6 +3722,22 @@ fn observable_state_hash(game: &ScreenGame) -> u64 {
         hash_u64(&mut hash, u64::from(count));
     }
     hash_u64(&mut hash, u64::from(game.playing.life()));
+    hash_u64(
+        &mut hash,
+        game.lanking_sort.map_or(u64::MAX, |sort| sort as u64),
+    );
+    hash_u64(&mut hash, game.lanking_page as u64);
+    hash_u64(&mut hash, game.lanking_rpage as u64);
+    hash_u64(&mut hash, game.lanking_songs.len() as u64);
+    hash_u64(
+        &mut hash,
+        game.lanking_board
+            .as_ref()
+            .map_or(0, |board| board.entries.len() as u64),
+    );
+    if let Some(selected) = game.lanking_selected {
+        hash_u64(&mut hash, u64::from(selected));
+    }
     hash
 }
 
@@ -3545,6 +3745,11 @@ fn observable_state_hash(game: &ScreenGame) -> u64 {
 mod game_tests {
     use super::super::paint::{
         background_of, channel_chat_row_text, rank_notice_board_text, seat_origin, RESULT_MUSIC_BOX,
+    };
+    use super::super::side::{
+        LANKING_LPAGE_NEXT_CODE, LANKING_LPAGE_PREV_CODE, LANKING_LVIEW_TEXT_CODES,
+        LANKING_LVIEW_TOGGLE_FIRST_CODE, LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES,
+        LANKING_RVIEW_TOGGLE_FIRST_CODE, LANKING_SORT_TITLE_CODE,
     };
     use super::*;
     use crate::avatar::AvatarFigure;
@@ -6281,6 +6486,285 @@ mod game_tests {
         assert_eq!(game.scene_bgm_selection(), None, "lanking cues silence");
         assert!(game.leave_side());
         assert_eq!(game.scene_bgm_selection().map(|sel| sel.record), Some(9));
+    }
+
+    fn lanking_record(song_id: u32, bpm: f32, title: &str, artist: &str) -> Vec<u8> {
+        let mut rec = vec![0u8; 300];
+        rec[8..11].copy_from_slice(b"ojn");
+        rec[4..8].copy_from_slice(&song_id.to_le_bytes());
+        rec[20..24].copy_from_slice(&bpm.to_le_bytes());
+        rec[112..112 + title.len()].copy_from_slice(title.as_bytes());
+        rec[176..176 + artist.len()].copy_from_slice(artist.as_bytes());
+        let token = format!("o2ma{song_id}.ojm");
+        rec[240..240 + token.len()].copy_from_slice(token.as_bytes());
+        rec
+    }
+
+    fn lanking_catalog_blob() -> Vec<u8> {
+        let mut blob = lanking_record(757, 124.0, "Zulu", "BandB");
+        blob.extend_from_slice(&lanking_record(770, 168.0, "Alpha", "BandA"));
+        blob
+    }
+
+    fn lanking_placement(code: u32, x: i32, y: i32, h: i32) -> ScenePlacement {
+        ScenePlacement {
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect {
+                x,
+                y,
+                w: 60,
+                h: h as u32,
+            },
+        }
+    }
+
+    fn lanking_side_placements() -> Vec<ScenePlacement> {
+        // Sort + pager buttons, five left-row hit areas at pitch
+        // 84, eleven right-row hit areas (self + ten), and the TEXT
+        // templates the overlay inks (all synthetic rects: geometry
+        // under test rides staged rects, never literals).
+        let mut placements = vec![
+            lanking_placement(LANKING_SORT_TITLE_CODE, 10, 10, 12),
+            lanking_placement(LANKING_LPAGE_NEXT_CODE, 80, 10, 12),
+            lanking_placement(LANKING_LPAGE_PREV_CODE, 150, 10, 12),
+        ];
+        for slot in 0i32..5 {
+            placements.push(lanking_placement(
+                LANKING_LVIEW_TOGGLE_FIRST_CODE + slot as u32,
+                700,
+                100 + slot * 84,
+                80,
+            ));
+        }
+        placements.push(lanking_placement(
+            LANKING_RVIEW_TOGGLE_FIRST_CODE,
+            500,
+            400,
+            12,
+        ));
+        for slot in 0i32..10 {
+            placements.push(lanking_placement(
+                LANKING_RVIEW_TOGGLE_FIRST_CODE + 1 + slot as u32,
+                500,
+                430 + slot * 20,
+                12,
+            ));
+        }
+        for (slot, code) in LANKING_LVIEW_TEXT_CODES.iter().enumerate() {
+            placements.push(lanking_placement(*code, 200 + slot as i32 * 70, 100, 12));
+        }
+        for (slot, code) in LANKING_RVIEW_TEXT_CODES.iter().enumerate() {
+            placements.push(lanking_placement(*code, 200 + slot as i32 * 70, 400, 12));
+        }
+        placements.push(lanking_placement(LANKING_MUSICNAME_CODE, 300, 360, 12));
+        placements
+    }
+
+    fn open_lanking_board(song_count: usize) -> ScreenGame {
+        let mut game = ScreenGame::new();
+        walk_to_waiting(&mut game);
+        let mut blob = Vec::new();
+        for index in 0..song_count {
+            let song_id = 757 + index as u32;
+            let title = format!("Song{index:03}");
+            let artist = format!("Band{index:03}");
+            blob.extend_from_slice(&lanking_record(song_id, 120.0, &title, &artist));
+        }
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_lanking_catalog(&entries);
+        game.load_side_scene(lanking_side_placements(), HashMap::new());
+        assert!(game.visit_side(SideScreen::Lanking));
+        game
+    }
+
+    #[test]
+    fn lanking_sort_click_resorts_the_staged_board() {
+        // Catalog order first (Zulu before Alpha); the TITLE sort
+        // button at its exe code reorders to Alpha first and the
+        // pager resets to the first page.
+        let mut game = open_lanking_board(2);
+        assert_eq!(game.lanking_visible_songs()[0].title, "Song000");
+        game.click_lanking(15, 12);
+        assert_eq!(game.lanking_sort(), Some(LankingSort::Title));
+        assert_eq!(game.lanking_page(), 0);
+        let visible = game.lanking_visible_songs();
+        let titles: Vec<&str> = visible.iter().map(|song| song.title.as_str()).collect();
+        assert_eq!(titles, vec!["Song000", "Song001"]);
+    }
+
+    #[test]
+    fn lanking_sort_title_orders_out_of_sequence_catalogs() {
+        let mut game = ScreenGame::new();
+        walk_to_waiting(&mut game);
+        let blob = lanking_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_lanking_catalog(&entries);
+        game.load_side_scene(lanking_side_placements(), HashMap::new());
+        assert!(game.visit_side(SideScreen::Lanking));
+        assert_eq!(game.lanking_visible_songs()[0].title, "Zulu");
+        game.click_lanking(15, 12);
+        let visible = game.lanking_visible_songs();
+        let titles: Vec<&str> = visible.iter().map(|song| song.title.as_str()).collect();
+        assert_eq!(titles, vec!["Alpha", "Zulu"]);
+    }
+
+    #[test]
+    fn lanking_pager_turns_five_row_pages() {
+        // Twelve songs: pages show 5/5/2, NEXT holds past the end,
+        // PREV steps back.
+        let mut game = open_lanking_board(12);
+        assert_eq!(game.lanking_visible_songs().len(), 5);
+        game.click_lanking(85, 12);
+        assert_eq!(game.lanking_page(), 1);
+        assert_eq!(game.lanking_visible_songs().len(), 5);
+        game.click_lanking(85, 12);
+        assert_eq!(game.lanking_page(), 2);
+        assert_eq!(game.lanking_visible_songs().len(), 2);
+        game.click_lanking(85, 12);
+        assert_eq!(game.lanking_page(), 2, "pager holds past the end");
+        game.click_lanking(155, 12);
+        assert_eq!(game.lanking_page(), 1);
+        assert_eq!(game.lanking_visible_songs().len(), 5);
+    }
+
+    #[test]
+    fn lanking_row_pick_names_the_musicname_caption() {
+        // The first-row hit area picks Song000; the overlay inks
+        // its title into the staged MUSICNAME rect only.
+        let mut game = open_lanking_board(2);
+        game.click_lanking(705, 125);
+        assert_eq!(game.lanking_selected_title(), Some("Song000".to_string()));
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        let inked = |x: i32, y: i32, w: i32, h: i32| -> bool {
+            (y..y + h)
+                .any(|row| ((row * 800 + x)..(row * 800 + x + w)).any(|at| buf[at as usize] != 0))
+        };
+        assert!(
+            inked(300, 360, 60, 12),
+            "picked title misses its staged rect"
+        );
+        assert!(
+            !inked(300, 300, 60, 12),
+            "caption ink leaked outside its rect"
+        );
+    }
+
+    #[test]
+    fn lanking_rview_renders_the_staged_2028_board() {
+        // The scripted 2028 stub answers the right list: nicknames
+        // ink the staged RVIEW rects; the zeroed fill row inks
+        // nothing anywhere.
+        use o2jam_net::{MusicPlayRankingAnswer, RankDelta, RankEntry};
+        let mut game = open_lanking_board(2);
+        let row = |rank: i32, nickname: &str| RankEntry {
+            rank,
+            nickname: nickname.to_string(),
+            battles: 10,
+            wins: 7,
+            win_rate: 70,
+            delta: RankDelta::Up,
+            rank_delta: 0,
+        };
+        game.stage_lanking_board(MusicPlayRankingAnswer {
+            self_entry: RankEntry::default(),
+            entries: vec![row(1, "Champ"), RankEntry::default(), row(2, "Rival")],
+        });
+        assert_eq!(game.lanking_visible_ranks().len(), 3);
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        let inked = |x: i32, y: i32, w: i32, h: i32| -> bool {
+            (y..y + h)
+                .any(|row| ((row * 800 + x)..(row * 800 + x + w)).any(|at| buf[at as usize] != 0))
+        };
+        assert!(
+            inked(270, 430, 60, 12),
+            "ranked nickname misses its staged rect"
+        );
+        assert!(
+            inked(270, 470, 60, 12),
+            "second ranked nickname misses its staged rect"
+        );
+        // The blank fill row tiles the middle slot: its NICKNAME
+        // rect stays empty.
+        assert!(
+            !inked(270, 450, 60, 12),
+            "zeroed fill row must paint no cells"
+        );
+    }
+
+    #[test]
+    fn lanking_hand_session_sorts_pages_picks_and_renders() {
+        // Offline hand-driven rankings session (no gateway): the
+        // board opens from Waiting, TITLE sorts, the pager turns,
+        // a row toggle picks the caption song, and the scripted
+        // 2028 stub answers the right list — every step through
+        // the public seams the windowed binary feeds, each
+        // mutation moving the observable hash.
+        use o2jam_net::{MusicPlayRankingAnswer, RankDelta, RankEntry};
+        let mut game = open_lanking_board(12);
+        let entered = game.state_hash();
+        game.click_lanking(15, 12);
+        let sorted = game.state_hash();
+        assert_ne!(sorted, entered, "sort click changed nothing");
+        game.click_lanking(85, 12);
+        let paged = game.state_hash();
+        assert_eq!(game.lanking_page(), 1);
+        assert_ne!(paged, sorted, "pager click changed nothing");
+        game.click_lanking(705, 105);
+        let picked = game.state_hash();
+        assert!(
+            game.lanking_selected_title().is_some(),
+            "row toggle picked nothing"
+        );
+        assert_ne!(picked, paged, "row pick changed nothing");
+        game.stage_lanking_board(MusicPlayRankingAnswer {
+            self_entry: RankEntry::default(),
+            entries: vec![RankEntry {
+                rank: 1,
+                nickname: "Champ".to_string(),
+                battles: 10,
+                wins: 7,
+                win_rate: 70,
+                delta: RankDelta::Up,
+                rank_delta: 0,
+            }],
+        });
+        let boarded = game.state_hash();
+        assert_ne!(boarded, picked, "board staging changed nothing");
+        println!("lanking hand session: {entered:016x} -> {sorted:016x} -> {paged:016x} -> {picked:016x} -> {boarded:016x}");
+        assert!(game.leave_side(), "board returns to Waiting");
+    }
+
+    #[test]
+    fn lanking_unstaged_clicks_land_nowhere() {
+        // No placements and no catalog: every click is a no-op and
+        // every view reads empty.
+        let mut game = ScreenGame::new();
+        walk_to_waiting(&mut game);
+        assert!(game.visit_side(SideScreen::Lanking));
+        game.click_lanking(15, 12);
+        assert_eq!(game.lanking_sort(), None);
+        assert_eq!(game.lanking_page(), 0);
+        assert!(game.lanking_visible_songs().is_empty());
+        assert!(game.lanking_visible_ranks().is_empty());
+        assert_eq!(game.lanking_selected_title(), None);
     }
 
     #[test]

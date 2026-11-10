@@ -45,8 +45,36 @@ stay OPEN like all TEXT entries.
 1. Rect contents → placements — DONE (73 rects, ordinal pairing).
 2. Shell screen + paint + flow + live staging — DONE
    (`Screen::Lanking`, `paint_lanking_scene`, all-reject flow,
-   `stage_interface_scenes` + soak tests; clicks land nowhere per P0).
-2. Rank fetch opcode + row fields.
-3. Category/sort/search/pager semantics (display-only candidates).
-4. Entry path (host class unknown, like CHANNEL) and exits.
-5. LVlEW_EX toggle views.
+   `stage_interface_scenes` + soak tests; side-screen clicks route
+   through `click_lanking` since ticket #20).
+3. Rank fetch opcode + row fields — DONE exe-side
+   (`docs/overnight-evidence/u4-ranking-packs.md`: 2028
+   `MusicPlayRankingAnswer` handler VA `0x55b230`, REA
+   `ev_7f09b7fa…`; `RankEntry` fields rank/nickname/battles/wins/
+   win-rate/delta/delta-mag). Wire ride stays ASSUMED (scripted
+   stub behind `stage_lanking_board` — next step: live gateway
+   replay confirming 2028 on the wire).
+4. Category/sort/search/pager semantics — PARTIAL (ticket #20,
+   2026-11-12): sorts TITLE/DIFF/BPM/ARTIST answer at
+   `0x5220000F`..`0x12`, `LPAGE` at `0x15`/`0x16`, `RPAGE` at
+   `0x17`/`0x18`; left rows tile the five staged `LVIEW_EX`
+   hit areas, right rows the eleven staged `RVIEW_EX` slots
+   (self line first, ASSUMED). Sort directions, pager
+   left/right pairing, and the self-line read stay ASSUMED —
+   next step: SendInput sweep on the live board per the
+   `~/scratch/planet-verify/` recipe plus captures. Still
+   display-only OPEN: BATTLE/TOP100 (`0x07`/`0x08`), tiers
+   (`0x09`..`0x0E`), search edit+button (`0x13`/`0x14`),
+   REFRESH (`0x33`), GEM/CASH texts (`0x21`/`0x22`), and the
+   `RVIEW_EX` toggles (no consumer pins them).
+5. Entry path (host class unknown, like CHANNEL) and exits — OPEN
+   (side-screen visit/return only).
+6. `LVIEW_EX` toggle views (`0x23`..`0x27`): these ARE the five
+   left-row hit areas (staged 353x86 tiling) — selection wired
+   since ticket #20; any further toggle semantics stay OPEN.
+7. Song-to-board fetch join: picking a song names the
+   `MUSICNAME` caption but fetches no board (2027 is never sent
+   by the exe — next step: live gateway replay).
+8. Per-song 2031 bests on the song rows: `MusicScoreListAnswer`
+   2031 parses (count + width pinned) but never joins the
+   catalog — next step: join against `OJNList.dat` by music id.

@@ -36,13 +36,16 @@ use super::super::avatar::{
 use super::super::playing::{HighwayGeometry, PlayingView};
 use super::super::screen::Screen;
 use super::side::{
-    planet_band_rect, planet_caption_for_code, PlanetBand, PlanetOptionTab, QUIT_MESSAGE_CP949,
+    lanking_bpm_caption, lanking_diff_caption, lanking_genre_caption, lanking_lview_slots,
+    lanking_rank_cells, lanking_rview_slots, lanking_tiled_rect, planet_band_rect,
+    planet_caption_for_code, LankingSong, PlanetBand, PlanetOptionTab, LANKING_LVIEW_TEXT_CODES,
+    LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES, QUIT_MESSAGE_CP949,
 };
 use o2jam_file::ControlList;
 use o2jam_game::RoomTeams;
 use o2jam_net::{
     rooms::om_icon_frame, ChannelState, Difficulty, GameMode, GameSpeed, JoinedRoom, KeyMode,
-    RoomListEntry, RoomSlot, RoomSlotState,
+    RankEntry, RoomListEntry, RoomSlot, RoomSlotState,
 };
 use o2jam_render::font::{draw_text_cell, text_width_cell, Cell};
 use o2jam_render::{
@@ -919,6 +922,139 @@ pub fn paint_myroom_scene(frame: &mut Frame<'_>, art: &SceneArt) {
 /// sorts, no selection state.
 pub fn paint_lanking_scene(frame: &mut Frame<'_>, art: &SceneArt) {
     art.paint_backdrop(frame, Screen::Lanking);
+}
+
+/// Lanking board overlay over the staged side art: left-list song
+/// rows (TITLE/ARTIST/EDITOR/GENRE/BPM/DIFF) tiled over the staged
+/// `LVIEW_EX` slots, right-list fetched rank rows
+/// (RANK/NICKNAME/BATTLES/WINS/WINRATE/ARROW — the viewer's own
+/// line on the first `RVIEW_EX` slot, the board page on the rest)
+/// tiled over the staged `RVIEW_EX` slots, and the picked-song
+/// caption — each inked into its staged TEXT template rect shifted
+/// by the staged slot origin (no staged slots or templates:
+/// paints nothing, art-only). Geometry always rides staged rects,
+/// never literals; text inks white through the system face (owner
+/// decision `e8d01` — rasterization is presentation).
+pub fn paint_lanking_board(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    songs: &[LankingSong],
+    self_entry: Option<&RankEntry>,
+    ranks: &[RankEntry],
+    selected_title: Option<&str>,
+) {
+    paint_lanking_songs(frame, placements, songs);
+    paint_lanking_ranks(frame, placements, self_entry, ranks);
+    if let Some(title) = selected_title {
+        paint_lanking_caption(frame, placements, title);
+    }
+}
+
+/// Native rect of one staged TEXT template (`None` when unstaged).
+fn lanking_template_rect(placements: &[ScenePlacement], code: u32) -> Option<Rect> {
+    placements
+        .iter()
+        .find(|placed| placed.code == code)
+        .map(|placed| placed.rect)
+}
+
+/// Left-list song rows into the six staged `LVIEW` TEXT templates,
+/// one row per staged `LVIEW_EX` slot (unstaged slots or templates:
+/// no rows).
+fn paint_lanking_songs(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    songs: &[LankingSong],
+) {
+    let slots = lanking_lview_slots(placements);
+    let Some(base) = slots.first() else {
+        return;
+    };
+    let templates: Vec<Rect> = LANKING_LVIEW_TEXT_CODES
+        .iter()
+        .filter_map(|code| lanking_template_rect(placements, *code))
+        .collect();
+    if templates.len() != LANKING_LVIEW_TEXT_CODES.len() {
+        return;
+    }
+    for (slot, song) in slots.iter().zip(songs.iter()) {
+        let cells = [
+            song.title.clone(),
+            song.artist.clone(),
+            song.editor.clone(),
+            lanking_genre_caption(song.genre),
+            lanking_bpm_caption(song.bpm),
+            lanking_diff_caption(song.levels),
+        ];
+        for (template, text) in templates.iter().zip(cells.iter()) {
+            paint_text_into_rect(
+                frame,
+                lanking_tiled_rect(*template, base, slot),
+                text,
+                CP949_INK,
+            );
+        }
+    }
+}
+
+/// Right-list fetched rank rows into the six staged `RVIEW` TEXT
+/// templates: the viewer's own line on the first staged `RVIEW_EX`
+/// slot, the board page on the rest (blank fill rows ink nothing;
+/// unstaged slots or templates: no rows).
+fn paint_lanking_ranks(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    self_entry: Option<&RankEntry>,
+    ranks: &[RankEntry],
+) {
+    let slots = lanking_rview_slots(placements);
+    let Some(base) = slots.first() else {
+        return;
+    };
+    let templates: Vec<Rect> = LANKING_RVIEW_TEXT_CODES
+        .iter()
+        .filter_map(|code| lanking_template_rect(placements, *code))
+        .collect();
+    if templates.len() != LANKING_RVIEW_TEXT_CODES.len() {
+        return;
+    }
+    // Slot zero is the viewer's own line (ASSUMED read — see
+    // `lanking_rview_slots`); a blank self line inks nothing.
+    if let Some(entry) = self_entry {
+        paint_lanking_rank_row(frame, &templates, base, base, entry);
+    }
+    for (slot, entry) in slots.iter().skip(1).zip(ranks.iter()) {
+        paint_lanking_rank_row(frame, &templates, base, slot, entry);
+    }
+}
+
+/// One rank line into the six staged `RVIEW` templates at its slot
+/// (blank fill rows ink nothing).
+fn paint_lanking_rank_row(
+    frame: &mut Frame<'_>,
+    templates: &[Rect],
+    base: &Rect,
+    slot: &Rect,
+    entry: &RankEntry,
+) {
+    for (template, text) in templates.iter().zip(lanking_rank_cells(entry).iter()) {
+        if text.is_empty() {
+            continue;
+        }
+        paint_text_into_rect(
+            frame,
+            lanking_tiled_rect(*template, base, slot),
+            text,
+            CP949_INK,
+        );
+    }
+}
+
+/// Picked-song title into the staged `MUSICNAME` rect.
+fn paint_lanking_caption(frame: &mut Frame<'_>, placements: &[ScenePlacement], title: &str) {
+    if let Some(rect) = lanking_template_rect(placements, LANKING_MUSICNAME_CODE) {
+        paint_text_into_rect(frame, rect, title, CP949_INK);
+    }
 }
 
 /// Ink for CP949 caption and message text: white. Presentation

@@ -21,6 +21,7 @@ use o2jam_net::wallet::{
 };
 use o2jam_net::{
     CharacterInfo, CreateRoom, Difficulty, GameMode, GameSpeed, GameStatsUpdate, KeyMode,
+    RankDelta, RankEntry,
 };
 use o2jam_render::{pack_xrgb, Frame, Rect};
 
@@ -1811,6 +1812,387 @@ pub fn lanking_row_for_song<'a>(
         .and_then(|(index, entry)| lanking_row(index, entry))
 }
 
+// --- Lanking board parity (ticket #20) ---
+//
+// The board is two lists (`docs/lanking.md` block walk, all codes
+// exe-pinned there, rects confirmed on the staged 73-placement
+// dump): the left `LVIEW` shows five catalog songs per page under
+// the `LVIEW_EX_1`..`_5` hit areas (`0x23`..`0x27`, 353x86 each
+// tiling the song box) with sort buttons TITLE/DIFF/BPM/ARTIST
+// (`0x0F`..`0x12`) and its `LPAGE` pager (`0x15`/`0x16`); the
+// right `RVIEW` shows the fetched `2028 MusicPlayRankingAnswer`
+// lines — the viewer's own line on `RVIEW_EX_1`, ten board lines
+// on `RVIEW_EX_2`..`_11` (`0x35`..`0x3F`, corroborated by the
+// answer's self-plus-ten shape and the zero-count ten-fill rule,
+// `docs/overnight-evidence/u4-ranking-packs.md`) — with
+// `RANK`/`NICKNAME`/`BATTLE_CONT`/`WIN_COUNT`/`WIN_PERSENT`/`UPDOWM`
+// texts under its `RPAGE` pager (`0x17`/`0x18`). The row LANK
+// button (`0x31`) and the `LVIEW_EX` hit areas pick the song row;
+// the picked title inks the `MUSICNAME` text (`0x34`). The
+// `RVIEW_EX` toggles stay display-only OPEN (no consumer pins
+// them — next step: live row-click capture): row picks ride the
+// left hit areas. Everything else on the screen (BATTLE/TOP100,
+// tier buttons, search, REFRESH, GEM/CASH texts) stays
+// display-only OPEN with the rig capture as its next step.
+//
+// Sort directions, the LPAGE/RPAGE left/right pairing, and the
+// self-line-on-`RVIEW_EX_1` read are ASSUMED (no live click
+// capture yet): the codes, hit areas, and counts are exe proof,
+// the rest names its next step (SendInput sweep on the live board
+// per the `~/scratch/planet-verify/` recipe).
+
+/// Sort-button codes (`IDC_BUTTON_LANKING_TITLE/DIFF/BPM/ARTIST`).
+pub const LANKING_SORT_TITLE_CODE: u32 = 0x5220_000F;
+pub const LANKING_SORT_DIFF_CODE: u32 = 0x5220_0010;
+pub const LANKING_SORT_BPM_CODE: u32 = 0x5220_0011;
+pub const LANKING_SORT_ARTIST_CODE: u32 = 0x5220_0012;
+/// Left pager codes (`IDC_BUTTON_LANKING_LPAGE_LEFT/RIGHT`):
+/// left steps back, right steps forward (ASSUMED pairing).
+pub const LANKING_LPAGE_PREV_CODE: u32 = 0x5220_0015;
+pub const LANKING_LPAGE_NEXT_CODE: u32 = 0x5220_0016;
+/// Right pager codes (`IDC_BUTTON_LANKING_RPAGE_LEFT/RIGHT`):
+/// same left/right read as the left pager (ASSUMED pairing).
+pub const LANKING_RPAGE_PREV_CODE: u32 = 0x5220_0017;
+pub const LANKING_RPAGE_NEXT_CODE: u32 = 0x5220_0018;
+/// Left-list TEXT template codes (`IDC_TEXT_LVIEW_TITLE` … `DIFF`).
+pub const LANKING_LVIEW_TEXT_CODES: [u32; 6] = [
+    0x5240_002B,
+    0x5240_002C,
+    0x5240_002D,
+    0x5240_002E,
+    0x5240_002F,
+    0x5240_0030,
+];
+/// Right-list TEXT template codes (`IDC_TEXT_RVIEW_LANK` … `UPDOWM`).
+pub const LANKING_RVIEW_TEXT_CODES: [u32; 6] = [
+    0x5240_0040,
+    0x5240_0041,
+    0x5240_0042,
+    0x5240_0043,
+    0x5240_0044,
+    0x5240_0045,
+];
+/// Picked-song caption (`IDC_TEXT_LANKING_MUSICNAME`).
+pub const LANKING_MUSICNAME_CODE: u32 = 0x5240_0034;
+/// Per-row LANK button (`IDC_IMAGE_LVIEW_LANK`): one staged
+/// template rect tiled over the staged left slots.
+pub const LANKING_ROW_LANK_CODE: u32 = 0x5220_0031;
+/// First left-row hit area (`IDC_BUTTON_LVIEW_EX_1`); the five run
+/// contiguously through `+4` (block walk + staged 353x86 tiling).
+pub const LANKING_LVIEW_TOGGLE_FIRST_CODE: u32 = 0x5204_1023;
+/// Left-row hit areas on the board (five staged `LVIEW_EX` rects).
+pub const LANKING_LVIEW_TOGGLE_COUNT: usize = 5;
+/// First right-row hit area (`IDC_BUTTON_RVIEW_EX_1`); the eleven
+/// run contiguously through `+10` (block walk + staged dump).
+pub const LANKING_RVIEW_TOGGLE_FIRST_CODE: u32 = 0x5204_2035;
+/// Right-row hit areas on the board (slot zero: the viewer's own
+/// line; slots 1..=10: the board page).
+pub const LANKING_RVIEW_TOGGLE_COUNT: usize = 11;
+/// Visible song rows (five staged `LVIEW_EX` hit areas).
+pub const LANKING_LVIEW_ROWS: usize = 5;
+/// Visible board rows past the self line (ten staged `RVIEW_EX`
+/// slots, corroborated by the answer's self-plus-ten shape and
+/// the zero-count ten-fill rule).
+pub const LANKING_RVIEW_ROWS: usize = 10;
+
+/// Left-list sort key, one per exe-named sort button. Sort
+/// directions are ASSUMED ascending (no live click capture yet).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LankingSort {
+    /// `IDC_BUTTON_LANKING_TITLE` (`0x0F`).
+    Title,
+    /// `IDC_BUTTON_LANKING_DIFF` (`0x10`): by chart levels.
+    Diff,
+    /// `IDC_BUTTON_LANKING_BPM` (`0x11`).
+    Bpm,
+    /// `IDC_BUTTON_LANKING_ARTIST` (`0x12`).
+    Artist,
+}
+
+impl LankingSort {
+    /// Sort key behind one staged control code (`None` elsewhere).
+    #[must_use]
+    pub const fn from_code(code: u32) -> Option<Self> {
+        match code {
+            LANKING_SORT_TITLE_CODE => Some(Self::Title),
+            LANKING_SORT_DIFF_CODE => Some(Self::Diff),
+            LANKING_SORT_BPM_CODE => Some(Self::Bpm),
+            LANKING_SORT_ARTIST_CODE => Some(Self::Artist),
+            _ => None,
+        }
+    }
+}
+
+/// One board click that the exe codes name: sorts, pagers, and row
+/// picks. Anything else (tiers, search, REFRESH, the `RVIEW_EX`
+/// toggles) lands nowhere.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LankingAction {
+    /// A sort button answered.
+    Sort(LankingSort),
+    /// Left pager stepped back.
+    LViewPrev,
+    /// Left pager stepped forward.
+    LViewNext,
+    /// Right pager stepped back.
+    RViewPrev,
+    /// Right pager stepped forward.
+    RViewNext,
+    /// Left-list visible slot picked (0-based on the page).
+    SelectRow(usize),
+}
+
+/// Board action under native pixel (`x`, `y`): the staged placement
+/// whose parsed `.bnd` rect contains the point and whose exe code
+/// names a sort, a pager, a left-row hit area, or the row LANK
+/// button (owner rule `f38f3`: geometry from parsed rects, never
+/// literals). `None` elsewhere — unnamed controls stay display-only.
+#[must_use]
+pub fn lanking_action_at(placements: &[ScenePlacement], x: i32, y: i32) -> Option<LankingAction> {
+    // The shared row LANK button tiles all eleven rows by the
+    // staged pitch, so its slots hit-test before the exact pass
+    // (the template rect alone only covers row zero).
+    if let Some(slot) = lanking_lank_slot(placements, x, y) {
+        return Some(LankingAction::SelectRow(slot));
+    }
+    placements.iter().find_map(|placed| {
+        if !super::paint::rect_hit(&placed.rect, x, y) {
+            return None;
+        }
+        lanking_action_for_code(placed.code)
+    })
+}
+
+/// Action behind one hit control code (`None` for the shared row
+/// LANK button — its slots resolve through the staged left slots
+/// in [`lanking_lank_slot`] — and for every unnamed control,
+/// including the `RVIEW_EX` toggles, which stay display-only OPEN).
+fn lanking_action_for_code(code: u32) -> Option<LankingAction> {
+    if let Some(sort) = LankingSort::from_code(code) {
+        return Some(LankingAction::Sort(sort));
+    }
+    match code {
+        LANKING_LPAGE_PREV_CODE => Some(LankingAction::LViewPrev),
+        LANKING_LPAGE_NEXT_CODE => Some(LankingAction::LViewNext),
+        LANKING_RPAGE_PREV_CODE => Some(LankingAction::RViewPrev),
+        LANKING_RPAGE_NEXT_CODE => Some(LankingAction::RViewNext),
+        _ => lanking_lview_row(code),
+    }
+}
+
+/// Left-list slot behind one `LVIEW_EX` hit-area code (`None`
+/// outside the five).
+fn lanking_lview_row(code: u32) -> Option<LankingAction> {
+    let slot = code.checked_sub(LANKING_LVIEW_TOGGLE_FIRST_CODE)?;
+    let slot = usize::try_from(slot).ok()?;
+    (slot < LANKING_LVIEW_TOGGLE_COUNT).then_some(LankingAction::SelectRow(slot))
+}
+
+/// Staged left-row hit areas in top-to-bottom order (the five
+/// `LVIEW_EX` rects tiling the song box).
+#[must_use]
+pub fn lanking_lview_slots(placements: &[ScenePlacement]) -> Vec<Rect> {
+    lanking_slot_rects(
+        placements,
+        LANKING_LVIEW_TOGGLE_FIRST_CODE,
+        LANKING_LVIEW_TOGGLE_COUNT,
+    )
+}
+
+/// Staged right-row hit areas in top-to-bottom order (slot zero:
+/// the viewer's own line; the rest: the board page).
+#[must_use]
+pub fn lanking_rview_slots(placements: &[ScenePlacement]) -> Vec<Rect> {
+    lanking_slot_rects(
+        placements,
+        LANKING_RVIEW_TOGGLE_FIRST_CODE,
+        LANKING_RVIEW_TOGGLE_COUNT,
+    )
+}
+
+/// Staged hit areas for one contiguous toggle run, top-to-bottom.
+fn lanking_slot_rects(placements: &[ScenePlacement], first: u32, count: usize) -> Vec<Rect> {
+    let mut slots: Vec<Rect> = placements
+        .iter()
+        .filter(|placed| {
+            placed
+                .code
+                .checked_sub(first)
+                .is_some_and(|slot| (slot as usize) < count)
+        })
+        .map(|placed| placed.rect)
+        .collect();
+    slots.sort_by(|a, b| a.y.cmp(&b.y).then(a.x.cmp(&b.x)));
+    slots
+}
+
+/// Left-list slot behind the shared row LANK button: the staged
+/// template tiled over the staged left slots — the same tiling the
+/// painter uses, so painted LANK art answers clicks (`None` when
+/// the template or the slots are unstaged, or outside the staged
+/// slots).
+fn lanking_lank_slot(placements: &[ScenePlacement], x: i32, y: i32) -> Option<usize> {
+    let template = placements
+        .iter()
+        .find(|placed| placed.code == LANKING_ROW_LANK_CODE)?;
+    let slots = lanking_lview_slots(placements);
+    let base = slots.first()?;
+    slots.iter().enumerate().find_map(|(slot, area)| {
+        let rect = lanking_tiled_rect(template.rect, base, area);
+        super::paint::rect_hit(&rect, x, y).then_some(slot)
+    })
+}
+
+/// One tiled slot rect: the template shifted by the staged slot
+/// origin off the staged base origin (no pitch inference — every
+/// slot rides its own staged rect).
+#[must_use]
+pub fn lanking_tiled_rect(template: Rect, base: &Rect, slot: &Rect) -> Rect {
+    Rect {
+        x: template.x + slot.x - base.x,
+        y: template.y + slot.y - base.y,
+        w: template.w,
+        h: template.h,
+    }
+}
+
+/// One left-list song: catalog identity the `LVIEW` texts name
+/// (owned copies so the board outlives the parse borrow).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LankingSong {
+    /// Song id (matches the `o2ma###` file number).
+    pub song_id: u32,
+    /// Song title (`TITLE` cell).
+    pub title: String,
+    /// Song artist (`ARTIST` cell).
+    pub artist: String,
+    /// Label area (`EDITOR` cell, e.g. `NoteFactory`).
+    pub editor: String,
+    /// Category id (`GENRE` cell; names unpinned — see
+    /// [`lanking_genre_caption`]).
+    pub genre: u32,
+    /// Tempo in BPM (`BPM` cell).
+    pub bpm: f32,
+    /// Chart levels Easy/Normal/Hard (`DIFF` cell and sort key;
+    /// the `level_flags` halves plus the `stable_minor` low word —
+    /// the chart-file read shape, ASSUMED on the list record).
+    pub levels: [u16; 3],
+}
+
+/// Left-list songs in catalog order, dead slots filtered out
+/// ([`OjnListEntry::is_song`]); empty without catalog data.
+#[must_use]
+pub fn lanking_songs(entries: &[OjnListEntry<'_>]) -> Vec<LankingSong> {
+    entries
+        .iter()
+        .filter(|entry| entry.is_song())
+        .map(|entry| LankingSong {
+            song_id: entry.song_id,
+            title: entry.title.clone(),
+            artist: entry.artist.clone(),
+            editor: entry.label.clone(),
+            genre: entry.genre,
+            bpm: entry.bpm,
+            levels: lanking_levels(entry),
+        })
+        .collect()
+}
+
+/// Chart levels off one list record: the `level_flags` halves read
+/// Easy/Normal and the `stable_minor` low word reads Hard on the
+/// chart file (`crates/o2jam-file/src/ojn.rs`); the same shape here
+/// is ASSUMED (values stay list-shaped 0..50, clamped by `u16`).
+fn lanking_levels(entry: &OjnListEntry<'_>) -> [u16; 3] {
+    let easy = u16::try_from(entry.level_flags & 0xFFFF).unwrap_or(u16::MAX);
+    let normal = u16::try_from(entry.level_flags >> 16).unwrap_or(u16::MAX);
+    let hard = u16::try_from(entry.stable_minor & 0xFFFF).unwrap_or(u16::MAX);
+    [easy, normal, hard]
+}
+
+/// Sort one board page in place (stable: ties keep catalog order).
+/// Directions are ASSUMED ascending — next step: live sort-click
+/// capture per the `~/scratch/planet-verify/` recipe.
+pub fn sort_lanking_songs(songs: &mut [LankingSong], sort: LankingSort) {
+    match sort {
+        LankingSort::Title => songs.sort_by(|a, b| a.title.cmp(&b.title)),
+        LankingSort::Artist => songs.sort_by(|a, b| a.artist.cmp(&b.artist)),
+        LankingSort::Bpm => songs.sort_by(|a, b| a.bpm.total_cmp(&b.bpm)),
+        LankingSort::Diff => songs.sort_by(|a, b| {
+            a.levels[2]
+                .cmp(&b.levels[2])
+                .then(a.levels[1].cmp(&b.levels[1]))
+                .then(a.levels[0].cmp(&b.levels[0]))
+        }),
+    }
+}
+
+/// Visible window of a `per_page`-row list on `page` (clamped:
+/// past-the-end pages read empty, never wrap).
+#[must_use]
+pub fn lanking_page_window(len: usize, per_page: usize, page: usize) -> (usize, usize) {
+    let start = page.saturating_mul(per_page).min(len);
+    let end = start.saturating_add(per_page).min(len);
+    (start, end)
+}
+
+/// Genre cell text: the reference-transcribed filter caption
+/// ([`SELECT_GENRE_FILTERS`]) when the id names one, else the raw
+/// id digits (genre names stay unpinned — stand-in, documented
+/// with the filters).
+#[must_use]
+pub fn lanking_genre_caption(genre: u32) -> String {
+    let index = usize::try_from(genre).unwrap_or(usize::MAX);
+    if (1..SELECT_GENRE_FILTERS.len()).contains(&index) {
+        return SELECT_GENRE_FILTERS[index].to_string();
+    }
+    genre.to_string()
+}
+
+/// Left-list `DIFF` cell text (`easy/normal/hard`; format
+/// ours-by-design, values catalog DATA).
+#[must_use]
+pub fn lanking_diff_caption(levels: [u16; 3]) -> String {
+    format!("{}/{}/{}", levels[0], levels[1], levels[2])
+}
+
+/// Left-list `BPM` cell text (tempo digits, no float compare).
+#[must_use]
+pub fn lanking_bpm_caption(bpm: f32) -> String {
+    format!("{bpm}")
+}
+
+/// Right-list row texts off one fetched 2028 rank line, in `RVIEW`
+/// text order: rank place, nickname, battles, wins, win rate,
+/// movement arrow (`UP`/`DOWN` ASCII stand-ins — arrow rendering
+/// unpinned). A zero-rank line is the exe's display fill (the
+/// zeroed-row arm, `docs/overnight-evidence/u4-ranking-packs.md`):
+/// every cell stays blank.
+#[must_use]
+pub fn lanking_rank_cells(entry: &RankEntry) -> [String; 6] {
+    if entry.rank == 0 {
+        return [
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+        ];
+    }
+    let arrow = match entry.delta {
+        RankDelta::Up => "UP",
+        RankDelta::Down => "DOWN",
+    };
+    [
+        entry.rank.to_string(),
+        entry.nickname.clone(),
+        entry.battles.to_string(),
+        entry.wins.to_string(),
+        entry.win_rate.to_string(),
+        arrow.to_string(),
+    ]
+}
+
 /// Billing page behind `STATE_PAYMENT` (lifecycle §12 `CDPayment` view).
 pub const PAYMENT_PAGE: &str = "payment_input.aspx";
 /// Billing page behind `STATE_PAYMENT2` (gift view).
@@ -3392,6 +3774,173 @@ mod side_tests {
     fn lanking_caption_counts_rows() {
         assert_eq!(lanking_caption(2), "RANKING (2)");
         assert_eq!(lanking_caption(0), "RANKING (0)");
+    }
+
+    fn lanking_button(code: u32, x: i32, y: i32) -> ScenePlacement {
+        ScenePlacement {
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect { x, y, w: 40, h: 16 },
+        }
+    }
+
+    #[test]
+    fn lanking_clicks_answer_the_exe_named_sort_and_pager_codes() {
+        // Every named control answers at its exe code; the tier
+        // button (unnamed for this ticket) lands nowhere.
+        let placements = vec![
+            lanking_button(LANKING_SORT_TITLE_CODE, 10, 10),
+            lanking_button(LANKING_SORT_DIFF_CODE, 60, 10),
+            lanking_button(LANKING_SORT_BPM_CODE, 110, 10),
+            lanking_button(LANKING_SORT_ARTIST_CODE, 160, 10),
+            lanking_button(LANKING_LPAGE_PREV_CODE, 10, 40),
+            lanking_button(LANKING_LPAGE_NEXT_CODE, 60, 40),
+            lanking_button(LANKING_RPAGE_PREV_CODE, 110, 40),
+            lanking_button(LANKING_RPAGE_NEXT_CODE, 160, 40),
+            lanking_button(0x5220_0009, 210, 10),
+        ];
+        assert_eq!(
+            lanking_action_at(&placements, 15, 15),
+            Some(LankingAction::Sort(LankingSort::Title))
+        );
+        assert_eq!(
+            lanking_action_at(&placements, 65, 15),
+            Some(LankingAction::Sort(LankingSort::Diff))
+        );
+        assert_eq!(
+            lanking_action_at(&placements, 115, 15),
+            Some(LankingAction::Sort(LankingSort::Bpm))
+        );
+        assert_eq!(
+            lanking_action_at(&placements, 165, 15),
+            Some(LankingAction::Sort(LankingSort::Artist))
+        );
+        assert_eq!(
+            lanking_action_at(&placements, 15, 45),
+            Some(LankingAction::LViewPrev)
+        );
+        assert_eq!(
+            lanking_action_at(&placements, 65, 45),
+            Some(LankingAction::LViewNext)
+        );
+        assert_eq!(
+            lanking_action_at(&placements, 115, 45),
+            Some(LankingAction::RViewPrev)
+        );
+        assert_eq!(
+            lanking_action_at(&placements, 165, 45),
+            Some(LankingAction::RViewNext)
+        );
+        assert_eq!(lanking_action_at(&placements, 215, 15), None);
+        assert_eq!(lanking_action_at(&placements, 500, 500), None);
+    }
+
+    #[test]
+    fn lanking_row_picks_answer_the_left_hit_areas() {
+        // Five staged `LVIEW_EX` hit areas name the five visible
+        // slots; the shared LANK template tiles over them; the
+        // `RVIEW_EX` toggles stay display-only (no consumer pins
+        // them) and land nowhere.
+        let mut placements: Vec<ScenePlacement> = (0i32..5)
+            .map(|slot| {
+                lanking_button(
+                    LANKING_LVIEW_TOGGLE_FIRST_CODE + slot as u32,
+                    700,
+                    100 + slot * 84,
+                )
+            })
+            .collect();
+        placements.push(lanking_button(LANKING_ROW_LANK_CODE, 600, 100));
+        placements.push(lanking_button(LANKING_RVIEW_TOGGLE_FIRST_CODE, 500, 400));
+        assert_eq!(
+            lanking_lview_slots(&placements).len(),
+            5,
+            "five staged hit areas"
+        );
+        assert_eq!(
+            lanking_action_at(&placements, 705, 105),
+            Some(LankingAction::SelectRow(0))
+        );
+        assert_eq!(
+            lanking_action_at(&placements, 705, 440),
+            Some(LankingAction::SelectRow(4))
+        );
+        assert_eq!(lanking_action_at(&placements, 705, 600), None);
+        // The shared LANK button resolves its slot through the
+        // staged left slots.
+        assert_eq!(
+            lanking_action_at(&placements, 605, 105),
+            Some(LankingAction::SelectRow(0))
+        );
+        assert_eq!(
+            lanking_action_at(&placements, 605, 275),
+            Some(LankingAction::SelectRow(2))
+        );
+        // The right-row toggle lands nowhere (display-only OPEN).
+        assert_eq!(lanking_action_at(&placements, 505, 405), None);
+        // No LANK template staged: its clicks land nowhere, while
+        // the hit areas still answer.
+        let bare: Vec<ScenePlacement> = placements[..5].to_vec();
+        assert_eq!(
+            lanking_action_at(&bare, 605, 105),
+            None,
+            "unstaged LANK template answers nothing"
+        );
+        assert_eq!(
+            lanking_action_at(&bare, 705, 105),
+            Some(LankingAction::SelectRow(0))
+        );
+    }
+
+    #[test]
+    fn lanking_songs_read_catalog_fields_and_sort_keys() {
+        let blob = side_catalog();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        let mut songs = lanking_songs(&entries);
+        assert_eq!(songs.len(), 2);
+        assert_eq!(songs[0].title, "First");
+        assert_eq!(songs[0].artist, "Band");
+        assert_eq!(songs[0].bpm, 124.0);
+        sort_lanking_songs(&mut songs, LankingSort::Bpm);
+        assert_eq!(songs[0].song_id, 757);
+        sort_lanking_songs(&mut songs, LankingSort::Title);
+        assert_eq!(songs[0].title, "First");
+        assert_eq!(songs[1].title, "Second");
+        let (start, end) = lanking_page_window(songs.len(), LANKING_LVIEW_ROWS, 0);
+        assert_eq!((start, end), (0, 2));
+        assert_eq!(
+            lanking_page_window(songs.len(), LANKING_LVIEW_ROWS, 1),
+            (2, 2)
+        );
+    }
+
+    #[test]
+    fn lanking_rank_cells_render_fetched_lines_and_blank_fill() {
+        let entry = RankEntry {
+            rank: 3,
+            nickname: "Rival".to_string(),
+            battles: 40,
+            wins: 25,
+            win_rate: 62,
+            delta: RankDelta::Down,
+            rank_delta: 2,
+        };
+        assert_eq!(
+            lanking_rank_cells(&entry),
+            [
+                "3".to_string(),
+                "Rival".to_string(),
+                "40".to_string(),
+                "25".to_string(),
+                "62".to_string(),
+                "DOWN".to_string(),
+            ]
+        );
+        // The exe's zeroed display-fill row paints no cells.
+        assert!(lanking_rank_cells(&RankEntry::default())
+            .iter()
+            .all(String::is_empty));
     }
 
     #[test]

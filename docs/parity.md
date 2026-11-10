@@ -147,8 +147,44 @@ wrong; Myroom stages bound like every other side screen.
   bare-board → Room/solo path; exe entry key; BGM trigger
   superseded per `docs/planet.md` OPEN 7).
 - `STATE_LANKING` (`0x37`; display-only, no state class — like CHANNEL).
-  Bound placements stage (73 rects). Rank rows, sorts, search, and
-  pagers stay unpainted (fetch opcode unknown — all OPEN).
+  Bound placements stage (73 rects). Ticket #20 (2026-11-12): the
+  board is two lists — five catalog songs per left page under the
+  staged `LVIEW_EX_1`..`_5` hit areas (353x86 tiling the song box)
+  with TITLE/DIFF/BPM/ARTIST sorts at `0x0F`..`0x12` and the `LPAGE`
+  pager at `0x15`/`0x16`; the fetched `2028 MusicPlayRankingAnswer`
+  lines on the right (self line on `RVIEW_EX_1`, ten board lines on
+  `RVIEW_EX_2`..`_11`, `0x35`..`0x3F`) with its `RPAGE` pager at
+  `0x17`/`0x18` (exe codes/names per `docs/lanking.md`; the
+  self-plus-ten shape and the zero-count ten-fill rule corroborate
+  the right slots per
+  `docs/overnight-evidence/u4-ranking-packs.md`). Row picks ride
+  the left hit areas and the tiled LANK button and name the
+  `MUSICNAME` caption (`0x34`); every row/rank cell inks its staged
+  TEXT template shifted by its staged slot origin — no geometry
+  literals. The 2028 board stages behind the scripted-stub seam
+  (proven shell-side, ASSUMED wire-side). Guards:
+  `lanking_clicks_answer_the_exe_named_sort_and_pager_codes`,
+  `lanking_row_picks_answer_the_left_hit_areas`,
+  `lanking_songs_read_catalog_fields_and_sort_keys`,
+  `lanking_rank_cells_render_fetched_lines_and_blank_fill`,
+  `lanking_sort_click_resorts_the_staged_board`,
+  `lanking_sort_title_orders_out_of_sequence_catalogs`,
+  `lanking_pager_turns_five_row_pages`,
+  `lanking_row_pick_names_the_musicname_caption`,
+  `lanking_rview_renders_the_staged_2028_board`,
+  `lanking_unstaged_clicks_land_nowhere`,
+  `lanking_hand_session_sorts_pages_picks_and_renders`; smoke
+  `docs/smoke/lanking-hand-session.md`; shots oracle holds with
+  only the intended `lanking.png` delta (rows + ranks paint).
+  PASS (rows + sorts + pagers + picks + staged ranks; sort
+  directions + pager left/right pairing + self-on-`RVIEW_EX_1`
+  ASSUMED with a named rig next step) / OPEN (BATTLE/TOP100,
+  tier buttons, search, REFRESH, GEM/CASH texts, `RVIEW_EX`
+  toggles, `LVIEW_EX` past five — next step: SendInput sweep on
+  the live board per the `~/scratch/planet-verify/` recipe;
+  song-to-board fetch join — next step: live gateway replay;
+  per-song 2031 bests on song rows — next step: join
+  `MusicScoreListAnswer` 2031 against the catalog).
 - `STATE_PAYMENT` / `STATE_PAYMENT2` (web billing views). Both
   billing views stage and merge (9 + 12 rects); no web call wired.
 - `STATE_TUTORIAL` (stub `0x00`; entry path unknown). The

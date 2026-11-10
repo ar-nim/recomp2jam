@@ -123,6 +123,11 @@ pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
         if !stage_side_art(&mut game, side) {
             continue;
         }
+        // The lanking shot proves rows and ranks paint: stage the
+        // walk catalog plus the scripted 2028 stub before visiting.
+        if side == SideScreen::Lanking {
+            stage_lanking_walk_board(&mut game);
+        }
         assert!(game.visit_side(side), "Waiting -> {side:?}");
         shots.push(shoot_side(&mut game, side)?);
         assert!(game.leave_side(), "{side:?} -> Waiting");
@@ -629,7 +634,49 @@ fn stage_select_music_catalog(game: &mut ScreenGame) {
     }
 }
 
-/// Stage real song-select dialog art through the declaration
+/// Stage the lanking walk board: the installed 7.55 song index
+/// (or the synthetic fallback) for the left list plus a scripted
+/// 2028 stub board for the right list (ASSUMED wire-side — the
+/// shell proves the rows, no live gateway). Runs before the
+/// lanking side shot so the oracle proves rows and ranks paint.
+fn stage_lanking_walk_board(game: &mut ScreenGame) {
+    if let Ok(archive) = std::fs::read(install_root().join(MUSICSELECT_CATALOG)) {
+        if let Ok(entries) = o2jam_file::parse_ojn_list(&archive) {
+            game.set_lanking_catalog(&entries);
+            if !game.lanking_visible_songs().is_empty() {
+                game.stage_lanking_board(lanking_walk_stub_board());
+                return;
+            }
+        }
+    }
+    if let Ok(entries) = o2jam_file::parse_ojn_list(&musicselect_fallback_catalog()) {
+        game.set_lanking_catalog(&entries);
+        game.stage_lanking_board(lanking_walk_stub_board());
+    }
+}
+
+/// Scripted 2028 stub board for the walk (synthetic nicknames —
+/// no game data; the middle zeroed row is the exe's display fill).
+fn lanking_walk_stub_board() -> o2jam_net::MusicPlayRankingAnswer {
+    use o2jam_net::{RankDelta, RankEntry};
+    let row = |rank: i32, nickname: &str, delta: RankDelta| RankEntry {
+        rank,
+        nickname: nickname.to_string(),
+        battles: 12,
+        wins: 9,
+        win_rate: 75,
+        delta,
+        rank_delta: 0,
+    };
+    o2jam_net::MusicPlayRankingAnswer {
+        self_entry: RankEntry::default(),
+        entries: vec![
+            row(1, "WalkChamp", RankDelta::Up),
+            RankEntry::default(),
+            row(2, "WalkRival", RankDelta::Down),
+        ],
+    }
+}
 /// (`DAILOG_SELECTMUSIC` over Waiting) over the waiting seats;
 /// empty art paints nothing.
 fn stage_select_music_art(game: &mut ScreenGame) {
