@@ -2576,6 +2576,7 @@ mod session_tests {
         session.game_mut().load_scene(
             Screen::Waiting,
             vec![o2jam_shell::avatar::ScenePlacement {
+                role: o2jam_shell::avatar::PlacementRole::Single,
                 id: "IDC_BUTTON_SWAIT_READY".to_owned(),
                 code: 0,
                 sprite: None,

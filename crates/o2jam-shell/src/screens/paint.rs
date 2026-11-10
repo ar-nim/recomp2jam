@@ -27,11 +27,12 @@
 use std::collections::HashMap;
 
 use super::super::avatar::{
-    anchor_in_frame, paint_behind_placements, paint_foreground_placements, paint_scene_figures,
-    scene_block, scene_sprite_names, AvatarFigure, FigureLayer, ScenePlacement, AVI_BLOCK,
-    CHANNEL_BLOCK, LANKING_BLOCK, LOADING_BLOCK, LOADING_COVER_SPRITE, LOADING_SPRITE,
-    MUSICSHOP_BLOCK, MYROOM_BLOCK, PLANET_BLOCK, RESULT_BLOCK, ROOM_BLOCK, SHOP_BLOCK,
-    WAITING_BLOCK, WAIT_COVER_SPRITE, WAIT_TEAM_SPRITES,
+    anchor_in_frame, clone_instance_live, paint_behind_placements, paint_foreground_placements,
+    paint_scene_figures, paint_scene_figures_live, scene_block, scene_sprite_names, AvatarFigure,
+    FigureLayer, PlacementRole, ScenePlacement, AVI_BLOCK, CHANNEL_BLOCK, LANKING_BLOCK,
+    LOADING_BLOCK, LOADING_COVER_SPRITE, LOADING_SPRITE, MUSICSHOP_BLOCK, MYROOM_BLOCK,
+    PLANET_BLOCK, RESULT_BLOCK, ROOM_BLOCK, SHOP_BLOCK, WAITING_BLOCK, WAIT_COVER_SPRITE,
+    WAIT_TEAM_SPRITES,
 };
 use super::super::playing::{HighwayGeometry, PlayingView};
 use super::super::screen::Screen;
@@ -113,6 +114,21 @@ impl SceneArt {
     /// and panels ring the highway; see [`paint_playing_overlay`]).
     pub fn paint_overlay(&self, frame: &mut Frame<'_>) {
         paint_scene_figures(frame, &self.placements, &self.figures);
+    }
+
+    /// [`Self::paint_backdrop`] behind a per-placement filter (the
+    /// `SET` clone model: scenes show only the clones of live rows
+    /// and seats; see [`clone_instance_live`]).
+    pub fn paint_backdrop_live(
+        &self,
+        frame: &mut Frame<'_>,
+        _screen: Screen,
+        keep: impl Fn(&ScenePlacement) -> bool,
+    ) {
+        if !self.has_figures() {
+            return;
+        }
+        paint_scene_figures_live(frame, &self.placements, &self.figures, keep);
     }
 }
 
@@ -250,6 +266,7 @@ pub fn unbound_scene_placements(names: &[String]) -> Vec<ScenePlacement> {
     names
         .iter()
         .map(|name| ScenePlacement {
+            role: PlacementRole::Single,
             id: String::new(),
             code: 0,
             sprite: Some(name.clone()),
@@ -288,8 +305,11 @@ fn title_origin(frame: &Frame<'_>, title: &str) -> (i32, i32) {
     )
 }
 
-/// Title over staged art: dark scrim plus white ink (the card title
-/// stays dark-on-light for the flat fallback).
+/// Scene label over an art-only lobby backdrop (dark scrim plus white
+/// ink): the empty-list staging path has no live ink, so the label
+/// keeps the scene readable. Genuine art never gets this stamp — the
+/// 7.55 room capture (`/home/arnim/scratch/ac-room.png`) carries no
+/// `ROOM` text and no scrim band, and the archive art labels itself.
 fn paint_title_over_art(frame: &mut Frame<'_>, screen: Screen) {
     let title = title_of(screen);
     if title.is_empty() {
@@ -1996,7 +2016,12 @@ pub fn paint_channel_scene(
     }
     paint_channel_dialog_body(frame, art);
     art.paint_backdrop(frame, Screen::Channel);
-    paint_title_over_art(frame, Screen::Channel);
+    // An art-less channel scene has no label ink of its own, so the
+    // shell title keeps it readable (the pinned no-fill test); staged
+    // art never gets the stamp (#36).
+    if !art.has_figures() && !board.is_some_and(|board| board.has_figures()) {
+        paint_title_over_art(frame, Screen::Channel);
+    }
     paint_channel_rows(frame, channels, highlight, Some(art));
 }
 
@@ -2027,6 +2052,19 @@ const ROOM_PANEL_IDS: [&str; 6] = [
     "IDC_BUTTON_SROOM_EXBUTTON4",
     "IDC_BUTTON_SROOM_EXBUTTON6",
 ];
+
+/// Control ids of the staged room panels that host the row
+/// template, in row order (the `SET` clone instances the painter may
+/// show; clones past the listed rooms stay hidden).
+#[must_use]
+pub(crate) fn room_panel_instances(placements: &[ScenePlacement]) -> Vec<&str> {
+    placements
+        .iter()
+        .filter(|placed| placed.role == PlacementRole::Single)
+        .filter(|placed| ROOM_PANEL_IDS.contains(&placed.id.as_str()))
+        .map(|placed| placed.id.as_str())
+        .collect()
+}
 
 /// Native origins of the staged room panels in file order (the
 /// panel path positions fields panel-relatively; each field rect
@@ -2098,6 +2136,12 @@ fn paint_room_rows(
 /// digits sit 11 px apart (38/49/60 on panel 0), the `ROOMNO` place
 /// width (`State_Room.bnd` r45..47).
 const ROOM_ROW_DIGIT_PITCH: i32 = 11;
+/// Place weights of the three room-number digit slots in control
+/// ordinal order (ones, tens, hundreds).
+const ROOM_ROW_DIGIT_WEIGHTS: [u32; 3] = [1, 10, 100];
+/// Staged room-number digit font (the `ROOMNO` places' shared body,
+/// `IDC_IMAGE_SROOM_ROOMNO1/10/100`).
+const ROOM_NUMBER_SPRITE: &str = "Room_Number.ojs";
 /// Panel-relative origin of the number plate (native px): panel
 /// origin +12/+12 (rig pin above). Hundreds, tens, ones run
 /// left-to-right at the digit pitch.
@@ -2177,108 +2221,90 @@ fn staged_field_rect(placements: &[ScenePlacement], id: &str) -> Option<Rect> {
         .map(|placed| placed.rect)
 }
 
-/// One font digit blitted 1:1 at `dest` (frame pixels): layer
-/// `digit` of `font` plus its record anchor. Missing figures and
-/// short fonts paint nothing; every other staged body is untouched.
-fn paint_font_digit_at(
-    frame: &mut Frame<'_>,
-    figures: &HashMap<String, AvatarFigure>,
-    font: &str,
-    digit: u32,
-    dest: (i32, i32),
-) {
-    let Some(index) = usize::try_from(digit).ok() else {
-        return;
-    };
-    let Some(layer) = figures.get(font).and_then(|figure| figure.layer(index)) else {
-        return;
-    };
-    blit_rgb555(
-        frame,
-        &layer.image.view(),
-        dest.0 + layer.dx,
-        dest.1 + layer.dy,
-        Some(layer.colorkey),
-    );
-}
-
-/// Digit places relocated to the pinned plate origin (native):
-/// hundreds, tens, ones left-to-right at the digit pitch, sizes
-/// riding the staged `ROOMNO` places — the template places name the
-/// font and the glyph boxes, positions ride the pinned origin (the
-/// per-row clone offset stays OPEN past the pins in `findings.md`
-/// §2). Missing staged places paint nothing.
-fn pinned_digit_places(
-    placements: &[ScenePlacement],
-    font: &str,
-    origin: (i32, i32),
-) -> Vec<ScenePlacement> {
-    let staged = font_places(placements, font);
-    [100u32, 10, 1]
-        .iter()
-        .enumerate()
-        .filter_map(|(slot, weight)| {
-            let (_, place) = staged.iter().find(|(w, _)| *w == *weight)?;
-            let slot = i32::try_from(slot).ok()?;
-            Some(ScenePlacement {
-                id: format!("IDC_IMAGE_SROOM_ROOMNO{weight}"),
-                code: 0,
-                sprite: Some(font.to_owned()),
-                rect: Rect {
-                    x: origin.0 + slot * ROOM_ROW_DIGIT_PITCH,
-                    y: origin.1,
-                    w: place.w,
-                    h: place.h,
-                },
-            })
-        })
-        .collect()
-}
-
-/// Room number at the pinned plate origin (native, panel-relative):
-/// hundreds, tens, ones left-to-right at the digit pitch through
-/// the staged number font; GDI number text (sized to the title band)
-/// while the digit font stages no figure. Missing fonts and short
-/// fonts paint nothing on the art arm; nothing staged paints
-/// nothing.
+/// Room number through the staged digit font: the row template's
+/// number places are `SET 0x11` clones under the row panel, ordered by
+/// control ordinal (ones, tens, hundreds — the authoring order
+/// `ROOMNO1 0x1350002E`, `ROOMNO10 0x1350002F`, `ROOMNO100 0x13500030`),
+/// each place painting the frame of its digit at its own clone rect.
+/// GDI number text (sized to the title band) while no clone stages.
 fn paint_room_row_number(
     frame: &mut Frame<'_>,
     art: &SceneArt,
     room: &RoomListEntry,
-    panel: (i32, i32),
+    panel_id: &str,
 ) {
     let value = u32::try_from(room.number.max(0)).unwrap_or(0);
-    let origin = (
-        panel.0 + ROOM_ROW_NUMBER_ORIGIN.0,
-        panel.1 + ROOM_ROW_NUMBER_ORIGIN.1,
-    );
-    let staged = staged_number_fonts(&art.placements)
-        .into_iter()
-        .find(|font| art.figures.contains_key(*font));
-    match staged {
-        Some(font) => {
-            let places = pinned_digit_places(&art.placements, font, origin);
-            paint_font_number(frame, &places, &art.figures, font, value);
-        }
-        None => {
-            // GDI number text in the title band (same live line as
-            // the title) while the digit font stages no figure;
-            // nothing staged means nothing painted.
-            let band =
-                staged_field_rect(&art.placements, ROOM_DETAIL_TITLE_ID).map_or(0, |rect| rect.h);
-            paint_room_text_into_rect(
-                frame,
-                Rect {
-                    x: origin.0,
-                    y: origin.1,
-                    w: (u32::try_from(ROOM_ROW_DIGIT_PITCH).unwrap_or(0)).saturating_mul(3),
-                    h: band,
-                },
-                &value.to_string(),
-                caption_ink(art_title_ink()),
-            );
-        }
+    let mut places: Vec<&ScenePlacement> = art
+        .placements
+        .iter()
+        .filter(|placed| placed.role == PlacementRole::Clone)
+        .filter(|placed| placed.id == panel_id)
+        .filter(|placed| placed.sprite.as_deref() == Some(ROOM_NUMBER_SPRITE))
+        .collect();
+    places.sort_by_key(|placed| placed.code & 0xFFF);
+    if places.is_empty() {
+        let Some(panel) = room_panel_origin(&art.placements, panel_id) else {
+            return;
+        };
+        let band =
+            staged_field_rect(&art.placements, ROOM_DETAIL_TITLE_ID).map_or(0, |rect| rect.h);
+        paint_room_text_into_rect(
+            frame,
+            Rect {
+                x: panel.0 + ROOM_ROW_NUMBER_ORIGIN.0,
+                y: panel.1 + ROOM_ROW_NUMBER_ORIGIN.1,
+                w: (u32::try_from(ROOM_ROW_DIGIT_PITCH).unwrap_or(0)).saturating_mul(3),
+                h: band,
+            },
+            &value.to_string(),
+            caption_ink(art_title_ink()),
+        );
+        return;
     }
+    for (rank, place) in places.iter().enumerate() {
+        let Some(weight) = ROOM_ROW_DIGIT_WEIGHTS.get(rank).copied() else {
+            break;
+        };
+        let digit = (value / weight) % 10;
+        paint_clone_digit(frame, &art.figures, place, digit);
+    }
+}
+
+/// One clone body painted at its rect with the layer index `frame`
+/// (digit frames are stored in digit order: layer *n* is glyph *n*,
+/// `Room_Number.ojs` decodes ten 11x13 digit layers).
+fn paint_clone_digit(
+    frame: &mut Frame<'_>,
+    figures: &HashMap<String, AvatarFigure>,
+    place: &ScenePlacement,
+    digit: u32,
+) {
+    let Some(sprite) = place.sprite.as_deref() else {
+        return;
+    };
+    let Some(layer) = figures
+        .get(sprite)
+        .and_then(|figure| figure.layer(usize::try_from(digit).unwrap_or(usize::MAX)))
+    else {
+        return;
+    };
+    let dest = scale_rect_to_frame(&place.rect, frame.w, frame.h);
+    blit_rgb555(
+        frame,
+        &layer.image.view(),
+        dest.x + layer.dx,
+        dest.y + layer.dy,
+        Some(layer.colorkey),
+    );
+}
+
+/// Native origin of one staged room panel (`None` when the staged art
+/// binds no such panel).
+fn room_panel_origin(placements: &[ScenePlacement], panel_id: &str) -> Option<(i32, i32)> {
+    placements
+        .iter()
+        .find(|placed| placed.id == panel_id)
+        .map(|placed| (placed.rect.x, placed.rect.y))
 }
 
 /// Room rows at their staged `.bnd` panel origins, one live room per
@@ -2296,11 +2322,15 @@ fn paint_room_panel_rows(
     origins: &[(i32, i32)],
 ) {
     let ink = caption_ink(art_title_ink());
+    let panels = room_panel_instances(&art.placements);
     for (index, room) in rooms.iter().enumerate() {
         let Some((panel_x, panel_y)) = origins.get(index).copied() else {
             break;
         };
-        paint_room_row_number(frame, art, room, (panel_x, panel_y));
+        let Some(panel_id) = panels.get(index).copied() else {
+            break;
+        };
+        paint_room_row_number(frame, art, room, panel_id);
         if let Some(title) = staged_field_rect(&art.placements, ROOM_DETAIL_TITLE_ID) {
             paint_room_text_into_rect(
                 frame,
@@ -2526,88 +2556,6 @@ fn paint_room_detail_line(frame: &mut Frame<'_>, x: i32, y: i32, text: &str, ink
     draw_text(frame, x, y, text, ink);
 }
 
-/// Decimal weight of a digit-place id: its trailing decimal run
-/// (`ROOMNO100` → 100, `RMNUM_010` → 10, `CHNUM_01` → 1). `None`
-/// without a trailing run: `SPEED_NUM` holds one value, not one
-/// digit per place.
-#[must_use]
-fn digit_place_weight(id: &str) -> Option<u32> {
-    let digits = id.bytes().rev().take_while(u8::is_ascii_digit).count();
-    if digits == 0 {
-        return None;
-    }
-    id[id.len() - digits..].parse().ok()
-}
-
-/// True for a digit-place weight: powers of ten only. Shared bodies
-/// with sequential suffixes (`SHADOW1`…`8`, `JAM_NUM1`…`8`) are frame
-/// lists, not digit places, so only 1/10/100/… group into a number.
-#[must_use]
-fn is_place_weight(mut weight: u32) -> bool {
-    if weight == 0 {
-        return false;
-    }
-    while weight.is_multiple_of(10) {
-        weight /= 10;
-    }
-    weight == 1
-}
-
-/// Digit places sharing one number-font body, in file order:
-/// `(weight, place rect)` per entry whose id carries a place weight
-/// (`ROOMNO1/10/100` share `Room_Number.ojs` on real 7.55 art).
-#[must_use]
-fn font_places(placements: &[ScenePlacement], font: &str) -> Vec<(u32, Rect)> {
-    placements
-        .iter()
-        .filter(|placed| placed.sprite.as_deref() == Some(font))
-        .filter_map(|placed| {
-            let weight = digit_place_weight(&placed.id)?;
-            is_place_weight(weight).then_some((weight, placed.rect))
-        })
-        .collect()
-}
-
-/// Paint `value` through a staged number font: the place of weight
-/// `w` shows digit `(value / w) % 10`, blitted 1:1 from the font
-/// figure's same-index layer at the place-rect origin plus the
-/// layer's record anchor (`Room_Number.ojs` decodes ten digit layers
-/// in stored order, each 11x13 over its own 11x13 place rect, so
-/// anchor and rect coincide on real art). Missing fonts and short
-/// fonts paint nothing; every other staged body is untouched.
-fn paint_font_number(
-    frame: &mut Frame<'_>,
-    placements: &[ScenePlacement],
-    figures: &HashMap<String, AvatarFigure>,
-    font: &str,
-    value: u32,
-) {
-    if !figures.contains_key(font) {
-        return;
-    }
-    for (weight, rect) in font_places(placements, font) {
-        let dest = scale_rect_to_frame(&rect, frame.w, frame.h);
-        paint_font_digit_at(frame, figures, font, value / weight % 10, (dest.x, dest.y));
-    }
-}
-
-/// Number-font bodies staged for this scene: every sprite with two
-/// or more digit places. `STATE_ROOM` carries exactly one
-/// (`Room_Number.ojs` over `ROOMNO1/10/100`, verified on 7.55).
-#[must_use]
-fn staged_number_fonts(placements: &[ScenePlacement]) -> Vec<&str> {
-    let mut fonts = Vec::new();
-    for placed in placements {
-        let Some(sprite) = placed.sprite.as_deref() else {
-            continue;
-        };
-        if !fonts.contains(&sprite) && font_places(placements, sprite).len() >= 2 {
-            fonts.push(sprite);
-        }
-    }
-    fonts
-}
-
 /// Lobby row-state icon body (`SET 0x11` row template, child 12):
 /// frame = the raw state byte (icon site `0x1268ae`), so frames 0/1/2
 /// drive its images (docs/room-enums.md).
@@ -2673,13 +2621,12 @@ fn icon_frame_layer(frame: u8, layers: usize) -> Option<usize> {
     Some(usize::from(frame.saturating_sub(1)).min(layers - 1))
 }
 
-/// Paint one frame of a staged icon body at its template placement
-/// plus the panel origin (native): the first placement naming
-/// `sprite` supplies the template rect, the frame's layer blits 1:1
-/// at the panel-relative origin plus its record anchor (the same
-/// draw math as [`paint_font_number`]; the row icons anchor at
-/// `(0,0)`, so the rect origin positions them). A missing placement,
-/// figure, frame, or layer paints nothing — the exe leaves an
+/// Paint one frame of a staged row-template icon under one panel
+/// instance: the `SET` clone owned by `panel_id` supplies the rect
+/// (parent origin already added by staging), and the selected frame
+/// blits 1:1 at that rect plus its record anchor (clones keep
+/// template-local anchors, see [`PlacementRole::Clone`]). A missing
+/// clone, figure, frame, or layer paints nothing — the exe leaves an
 /// untouched icon exactly so.
 fn paint_icon_frame(
     frame: &mut Frame<'_>,
@@ -2687,15 +2634,16 @@ fn paint_icon_frame(
     figures: &HashMap<String, AvatarFigure>,
     sprite: &str,
     icon_frame: Option<u8>,
-    panel: (i32, i32),
+    panel_id: &str,
 ) {
     let Some(icon_frame) = icon_frame else {
         return;
     };
-    let Some(placed) = placements
-        .iter()
-        .find(|placed| placed.sprite.as_deref() == Some(sprite))
-    else {
+    let Some(placed) = placements.iter().find(|placed| {
+        placed.id == panel_id
+            && placed.role == PlacementRole::Clone
+            && placed.sprite.as_deref() == Some(sprite)
+    }) else {
         return;
     };
     let Some(figure) = figures.get(sprite) else {
@@ -2707,13 +2655,7 @@ fn paint_icon_frame(
     let Some(layer) = figure.layer(layer_index) else {
         return;
     };
-    let template = Rect {
-        x: placed.rect.x + panel.0,
-        y: placed.rect.y + panel.1,
-        w: placed.rect.w,
-        h: placed.rect.h,
-    };
-    let dest = scale_rect_to_frame(&template, frame.w, frame.h);
+    let dest = scale_rect_to_frame(&placed.rect, frame.w, frame.h);
     blit_rgb555(
         frame,
         &layer.image.view(),
@@ -2723,50 +2665,45 @@ fn paint_icon_frame(
     );
 }
 
-/// Row icons of the highlighted room: state, key mode, and Om
-/// pudding count, each at its `State_Room.bnd` icon rect offset by
-/// the highlighted panel's origin (the `SET 0x11` row template binds
-/// one copy per icon; the exe clones the template per row button —
-/// the clone offsets stay OPEN past the title/number/count pins).
-/// Missing art paints nothing; the detail text draws on top.
-fn paint_room_row_icons(
-    frame: &mut Frame<'_>,
-    art: &SceneArt,
-    rooms: &[RoomListEntry],
-    highlight: usize,
-) {
-    let Some(room) = rooms.get(highlight) else {
-        return;
-    };
-    // No staged panel under the highlight (pager overflow): rows
-    // already stay off-page, and icons follow them.
-    let Some(panel) = room_panel_origins(&art.placements).get(highlight).copied() else {
-        return;
-    };
-    paint_icon_frame(
-        frame,
-        &art.placements,
-        &art.figures,
-        ROOM_STATE_SPRITE,
-        Some(room_state_icon_frame(room.state_code)),
-        panel,
-    );
-    paint_icon_frame(
-        frame,
-        &art.placements,
-        &art.figures,
-        ROOM_MODE_SPRITE,
-        room_key_icon_frame(room.key_mode),
-        panel,
-    );
-    paint_icon_frame(
-        frame,
-        &art.placements,
-        &art.figures,
-        ROOM_OM_SPRITE,
-        room_om_icon_frame(room.music_id, None),
-        panel,
-    );
+/// Row icons of every populated room: state, key mode, and Om
+/// pudding count, painted from that row's wire fields into the
+/// `SET 0x11` clone staged under its panel (`Room_State.ojs`
+/// `(203,63)`, `Room_Mode.ojs` `(9,62)`, `Room_Om.ojs` `(56,62)` —
+/// panel `(26,82)` + rect in the 7.55 room capture,
+/// `/home/arnim/scratch/ac-room.png`). Panels past the list keep
+/// their bare plate: the exe clones the template only for populated
+/// rows. Missing art paints nothing; the detail text draws on top.
+fn paint_room_row_icons(frame: &mut Frame<'_>, art: &SceneArt, rooms: &[RoomListEntry]) {
+    let panel_ids = room_panel_instances(&art.placements);
+    for (index, room) in rooms.iter().enumerate() {
+        let Some(panel_id) = panel_ids.get(index) else {
+            break;
+        };
+        paint_icon_frame(
+            frame,
+            &art.placements,
+            &art.figures,
+            ROOM_STATE_SPRITE,
+            Some(room_state_icon_frame(room.state_code)),
+            panel_id,
+        );
+        paint_icon_frame(
+            frame,
+            &art.placements,
+            &art.figures,
+            ROOM_MODE_SPRITE,
+            room_key_icon_frame(room.key_mode),
+            panel_id,
+        );
+        paint_icon_frame(
+            frame,
+            &art.placements,
+            &art.figures,
+            ROOM_OM_SPRITE,
+            room_om_icon_frame(room.music_id, None),
+            panel_id,
+        );
+    }
 }
 
 /// Icon body behind one icon-rect detail label (`None` for the
@@ -2868,9 +2805,11 @@ pub fn paint_room_scene(
     highlight: usize,
     art: &SceneArt,
 ) {
-    art.paint_backdrop(frame, Screen::Room);
-    paint_title_over_art(frame, Screen::Room);
-    paint_room_row_icons(frame, art, rooms, highlight);
+    let panels = room_panel_instances(&art.placements);
+    art.paint_backdrop_live(frame, Screen::Room, |placed| {
+        clone_instance_live(placed, &panels, rooms.len())
+    });
+    paint_room_row_icons(frame, art, rooms);
     paint_room_details(frame, rooms, highlight, Some(art));
     // Rows paint last so the live list and highlight cursor stay
     // visible over the staged template bodies (UI ink on top): the
@@ -3078,7 +3017,6 @@ pub fn paint_waiting_scene(
     captions: &WaitingCaptions<'_>,
 ) {
     art.paint_backdrop(frame, Screen::Waiting);
-    paint_title_over_art(frame, Screen::Waiting);
     if waiting_has_staged_covers(&art.placements) {
         paint_waiting_staged(frame, room, &art.placements, captions);
     } else {
@@ -5364,6 +5302,7 @@ mod paint_tests {
 
     fn shop_placement(code: u32, x: i32, y: i32, w: u32, h: u32) -> ScenePlacement {
         ScenePlacement {
+            role: PlacementRole::Single,
             id: String::new(),
             code,
             sprite: None,
@@ -5784,6 +5723,7 @@ mod paint_tests {
         let art = SceneArt {
             placements: vec![
                 ScenePlacement {
+                    role: PlacementRole::Single,
                     id: "IDC_IMAGE_SPLAY_BACK3".to_owned(),
                     code: 0,
                     sprite: Some("Playing_Menu.ojs".to_owned()),
@@ -5795,6 +5735,7 @@ mod paint_tests {
                     },
                 },
                 ScenePlacement {
+                    role: PlacementRole::Single,
                     id: "IDC_BUTTON_SPLAY_EXIT".to_owned(),
                     code: 0,
                     sprite: Some("Playing_Exit.ojs".to_owned()),
@@ -5864,6 +5805,7 @@ mod paint_tests {
         }
         SceneArt {
             placements: vec![ScenePlacement {
+                role: PlacementRole::Single,
                 id: "IDC_IMAGE_SPLAY_BACK1".to_owned(),
                 code: 0,
                 sprite: Some("Playing_BG.ojs".to_owned()),
@@ -5938,6 +5880,7 @@ mod paint_tests {
         // shows the gauge ink while the scene survives beside it.
         let mut art = venue_backdrop_art();
         art.placements.push(ScenePlacement {
+            role: PlacementRole::Single,
             id: "IDC_BUTTON_SPLAY_EXIT".to_owned(),
             code: 0,
             sprite: Some("Playing_Exit.ojs".to_owned()),
@@ -6085,6 +6028,7 @@ mod paint_tests {
         // title and count fields (rows carry no combined string).
         use o2jam_render::Rect;
         let template = |id: &str, code: u32, x: i32, y: i32, w: u32, h: u32| ScenePlacement {
+            role: PlacementRole::Single,
             id: id.to_owned(),
             code,
             sprite: None,
@@ -6092,6 +6036,7 @@ mod paint_tests {
         };
         let placements = vec![
             ScenePlacement {
+                role: PlacementRole::Single,
                 id: "IDC_BUTTON_SROOM_EXBUTTON1".to_owned(),
                 code: 0x1301_201B,
                 sprite: None,
@@ -6103,6 +6048,7 @@ mod paint_tests {
                 },
             },
             ScenePlacement {
+                role: PlacementRole::Single,
                 id: "IDC_BUTTON_SROOM_EXBUTTON2".to_owned(),
                 code: 0x1301_201C,
                 sprite: None,
@@ -6217,6 +6163,7 @@ mod paint_tests {
         use o2jam_render::Rect;
         let placements = vec![
             ScenePlacement {
+                role: PlacementRole::Single,
                 id: "IDC_BUTTON_SROOM_EXBUTTON1".to_owned(),
                 code: 0x1301_201B,
                 sprite: None,
@@ -6228,6 +6175,7 @@ mod paint_tests {
                 },
             },
             ScenePlacement {
+                role: PlacementRole::Single,
                 id: "IDC_TEXT_SROOM_ROOMNAME".to_owned(),
                 code: 0x1340_0021,
                 sprite: None,
@@ -6239,6 +6187,7 @@ mod paint_tests {
                 },
             },
             ScenePlacement {
+                role: PlacementRole::Single,
                 id: "IDC_TEXT_SROOM_ROOM_USER".to_owned(),
                 code: 0x1340_0022,
                 sprite: None,
@@ -6427,6 +6376,7 @@ mod paint_tests {
     /// (720, 540).
     fn detail_placements() -> Vec<ScenePlacement> {
         let title = ScenePlacement {
+            role: PlacementRole::Single,
             id: ROOM_DETAIL_TITLE_ID.to_owned(),
             code: 0,
             sprite: None,
@@ -6441,6 +6391,7 @@ mod paint_tests {
             .iter()
             .filter(|(id, _)| *id != ROOM_DETAIL_TITLE_ID)
             .map(|(id, _)| ScenePlacement {
+                role: PlacementRole::Single,
                 id: (*id).to_owned(),
                 code: 0,
                 sprite: None,
@@ -6462,6 +6413,7 @@ mod paint_tests {
         // while the row-owned title paints nothing in the details
         // (its template rect stays a row-field size).
         let mut placements = vec![ScenePlacement {
+            role: PlacementRole::Single,
             id: "IDC_BUTTON_SROOM_EXBUTTON1".to_owned(),
             code: 0,
             sprite: None,
@@ -6476,6 +6428,7 @@ mod paint_tests {
         // helper parks every other non-title line at (720, 540)) —
         // staged first so the lookup finds it.
         placements.push(ScenePlacement {
+            role: PlacementRole::Single,
             id: ROOM_DETAIL_MUSIC_ID.to_owned(),
             code: 0,
             sprite: None,
@@ -7238,6 +7191,7 @@ mod paint_tests {
         let art = SceneArt {
             placements: vec![
                 ScenePlacement {
+                    role: PlacementRole::Single,
                     id: "IDC_TOP".to_owned(),
                     code: 0,
                     sprite: Some(RESULT_TOP_SPRITE.to_owned()),
@@ -7249,6 +7203,7 @@ mod paint_tests {
                     },
                 },
                 ScenePlacement {
+                    role: PlacementRole::Single,
                     id: "IDC_BOTTOM".to_owned(),
                     code: 0,
                     sprite: Some(RESULT_BOTTOM_SPRITE.to_owned()),
@@ -7260,6 +7215,7 @@ mod paint_tests {
                     },
                 },
                 ScenePlacement {
+                    role: PlacementRole::Single,
                     id: "IDC_VERDICT".to_owned(),
                     code: 0,
                     sprite: Some(RESULT_WINLOSE_SPRITE.to_owned()),
@@ -7438,6 +7394,7 @@ mod paint_tests {
     fn rank_art() -> SceneArt {
         SceneArt {
             placements: vec![ScenePlacement {
+                role: PlacementRole::Single,
                 id: "IDC_IMAGE_SRESULT_RANKINGFIELD".to_owned(),
                 code: 0x1750_0007,
                 sprite: Some(RESULT_RANK_SPRITE.to_owned()),
@@ -7795,178 +7752,101 @@ mod paint_tests {
         figure
     }
 
-    /// `ROOMNO` digit places in real file order (ones first).
-    fn room_number_placements() -> Vec<ScenePlacement> {
-        [
-            ("IDC_IMAGE_SROOM_ROOMNO1", 30),
-            ("IDC_IMAGE_SROOM_ROOMNO10", 20),
-            ("IDC_IMAGE_SROOM_ROOMNO100", 10),
-        ]
-        .into_iter()
-        .map(|(id, x)| ScenePlacement {
-            id: id.to_owned(),
-            code: 0x1350_0001,
-            sprite: Some("Room_Number.ojs".to_owned()),
-            rect: Rect {
-                x,
-                y: 10,
-                w: 4,
-                h: 4,
-            },
-        })
-        .collect()
+    /// `ROOMNO` digit places as `SET 0x11` clones under panel 1, at
+    /// the cloned rects (ones, tens, hundreds left to right — the
+    /// authoring ordinal order).
+    fn room_number_clones() -> Vec<ScenePlacement> {
+        [(0x1350_002E, 30), (0x1350_002F, 20), (0x1350_0030, 10)]
+            .into_iter()
+            .map(|(code, x)| ScenePlacement {
+                role: PlacementRole::Clone,
+                id: "IDC_BUTTON_SROOM_EXBUTTON1".to_owned(),
+                code,
+                sprite: Some(ROOM_NUMBER_SPRITE.to_owned()),
+                rect: Rect {
+                    x,
+                    y: 10,
+                    w: 4,
+                    h: 4,
+                },
+            })
+            .collect()
     }
 
     #[test]
-    fn digit_place_weights_read_trailing_runs() {
-        assert_eq!(digit_place_weight("IDC_IMAGE_SROOM_ROOMNO1"), Some(1));
-        assert_eq!(digit_place_weight("IDC_IMAGE_SROOM_ROOMNO10"), Some(10));
-        assert_eq!(digit_place_weight("IDC_IMAGE_SROOM_ROOMNO100"), Some(100));
-        assert_eq!(digit_place_weight("IDC_IMAGE_SWAIT_CHNUM_01"), Some(1));
-        assert_eq!(digit_place_weight("IDC_IMAGE_SWAIT_RMNUM_010"), Some(10));
-        assert_eq!(digit_place_weight("IDC_IMAGE_SWAIT_SPEED_NUM"), None);
-        assert!(is_place_weight(1));
-        assert!(is_place_weight(10));
-        assert!(is_place_weight(100));
-        assert!(!is_place_weight(0));
-        assert!(!is_place_weight(8));
-        assert!(!is_place_weight(20));
-    }
-
-    #[test]
-    fn font_numbers_blits_weighted_digits_into_place_rects() {
-        // Value 12 over ones-first places: weight picks the digit,
-        // not file order — hundreds red (0), tens green (1), ones
-        // blue (2).
-        let placements = room_number_placements();
-        let figures = HashMap::from([("Room_Number.ojs".to_owned(), digit_font_figure())]);
+    fn room_number_clones_paint_their_digit_frames_in_place() {
+        // Value 12 over ones-first clones: the control ordinal picks
+        // the digit — ones blue (2), tens green (1), hundreds red (0)
+        // — and every digit lands at its own clone rect.
+        let art = SceneArt {
+            placements: room_number_clones(),
+            figures: HashMap::from([(ROOM_NUMBER_SPRITE.to_owned(), digit_font_figure())]),
+        };
+        let mut rooms = two_rooms();
+        rooms[0].number = 12;
         let mut buf = vec![0u32; 800 * 600];
-        paint_font_number(
+        paint_room_row_number(
             &mut Frame {
                 buf: &mut buf,
                 w: 800,
                 h: 600,
             },
-            &placements,
-            &figures,
-            "Room_Number.ojs",
-            12,
+            &art,
+            &rooms[0],
+            "IDC_BUTTON_SROOM_EXBUTTON1",
         );
-        assert_eq!(buf[10 * 800 + 10], pack_xrgb(255, 0, 0));
-        assert_eq!(buf[10 * 800 + 20], pack_xrgb(0, 255, 0));
-        assert_eq!(buf[10 * 800 + 30], pack_xrgb(0, 0, 255));
+        assert_eq!(buf[10 * 800 + 10], pack_xrgb(255, 0, 0), "hundreds");
+        assert_eq!(buf[10 * 800 + 20], pack_xrgb(0, 255, 0), "tens");
+        assert_eq!(buf[10 * 800 + 30], pack_xrgb(0, 0, 255), "ones");
         assert_eq!(buf[0], 0);
     }
 
     #[test]
-    fn font_digits_add_their_anchor_to_the_place_rect() {
-        // Verified draw math at the font painter too: the place rect
-        // positions and the digit layer's anchor adds — anchor (2,1)
-        // moves the digit off the rect corner, and nothing clips.
+    fn room_number_clones_add_their_record_anchor() {
+        // Verified draw math carries into clones: the clone rect
+        // positions and the digit layer's anchor adds (clone anchors
+        // stay template-local).
         let mut figure = AvatarFigure::default();
-        figure.push_layer(FigureLayer {
-            image: Rgb555Image::decode(&0x7C00u16.to_le_bytes(), 1, 1).unwrap(),
-            dx: 2,
-            dy: 1,
-            colorkey: 0xFFFF,
-        });
-        let placements = vec![ScenePlacement {
-            id: "IDC_IMAGE_SROOM_ROOMNO100".to_owned(),
-            code: 0x1350_0001,
-            sprite: Some("Room_Number.ojs".to_owned()),
-            rect: Rect {
-                x: 10,
-                y: 10,
-                w: 4,
-                h: 4,
-            },
-        }];
-        let figures = HashMap::from([("Room_Number.ojs".to_owned(), figure)]);
+        for _ in 0..10 {
+            figure.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&0x7C00u16.to_le_bytes(), 1, 1).unwrap(),
+                dx: 2,
+                dy: 1,
+                colorkey: 0xFFFF,
+            });
+        }
+        let art = SceneArt {
+            placements: room_number_clones(),
+            figures: HashMap::from([(ROOM_NUMBER_SPRITE.to_owned(), figure)]),
+        };
+        let mut rooms = two_rooms();
+        rooms[0].number = 5;
         let mut buf = vec![0u32; 800 * 600];
-        paint_font_number(
+        paint_room_row_number(
             &mut Frame {
                 buf: &mut buf,
                 w: 800,
                 h: 600,
             },
-            &placements,
-            &figures,
-            "Room_Number.ojs",
-            5,
+            &art,
+            &rooms[0],
+            "IDC_BUTTON_SROOM_EXBUTTON1",
         );
-        assert_eq!(buf[11 * 800 + 12], pack_xrgb(255, 0, 0));
-        assert_eq!(buf[10 * 800 + 10], 0);
+        // Only the ones clone has layer 0 in a one-layer body: the
+        // glyph lands at (30 + 2, 10 + 1).
+        assert_eq!(buf[11 * 800 + 32], pack_xrgb(255, 0, 0));
+        assert_eq!(buf[10 * 800 + 30], 0);
     }
 
     #[test]
-    fn font_numbers_skip_missing_fonts_and_layers() {
-        let placements = room_number_placements();
-        let mut buf = vec![0x123456u32; 64 * 48];
-        paint_font_number(
-            &mut Frame {
-                buf: &mut buf,
-                w: 64,
-                h: 48,
-            },
-            &placements,
-            &HashMap::new(),
-            "Room_Number.ojs",
-            12,
-        );
-        // Missing font paints nothing at all.
-        assert_eq!(buf, vec![0x123456u32; 64 * 48]);
-        // Short font (one layer): only the hundreds digit (layer 0)
-        // paints — the tens and ones places need layers 1 and 2 and
-        // stay untouched. The place rects scale to zero width on the
-        // small frame, so the origin lands at the frame corner.
-        let short = HashMap::from([("Room_Number.ojs".to_owned(), red_figure())]);
-        paint_font_number(
-            &mut Frame {
-                buf: &mut buf,
-                w: 64,
-                h: 48,
-            },
-            &placements,
-            &short,
-            "Room_Number.ojs",
-            12,
-        );
-        assert_eq!(buf[0], pack_xrgb(255, 0, 0));
-        assert_eq!(buf[1], 0x123456);
-        assert_eq!(buf[2], 0x123456);
-    }
-
-    #[test]
-    fn sequential_suffixes_are_frames_not_fonts() {
-        // `SHADOW1`…`8` share one body but never form a number.
-        let placements: Vec<ScenePlacement> = (1..=8)
-            .map(|n| ScenePlacement {
-                id: format!("IDC_IMAGE_SPLAY_SHADOW{n}"),
-                code: 0x1B50_0000 + n,
-                sprite: Some("Avatar_Shadow.oji".to_owned()),
-                rect: Rect {
-                    x: 0,
-                    y: 0,
-                    w: 8,
-                    h: 8,
-                },
-            })
-            .collect();
-        assert!(staged_number_fonts(&placements).is_empty());
-        assert_eq!(
-            staged_number_fonts(&room_number_placements()),
-            vec!["Room_Number.ojs"]
-        );
-    }
-
-    #[test]
-    fn room_scene_paints_number_digits_at_the_pinned_plate_origin() {
-        // Panel 0 plus the staged `Room_Number.ojs` font: value 12
-        // paints hundreds/tens/ones left-to-right at the pinned plate
-        // origin (panel +12/+12) at the digit pitch — the template
-        // place rects only name the font, never the positions.
+    fn room_scene_paints_number_digits_at_the_cloned_places() {
+        // Panel 0 plus the staged `Room_Number.ojs` clones: value 12
+        // paints hundreds/tens/ones into the three cloned place rects
+        // (the exe's parent-offset write-back), never at the authored
+        // template rects.
         use o2jam_render::Rect;
-        let mut placements = vec![ScenePlacement {
+        let panel = ScenePlacement {
+            role: PlacementRole::Single,
             id: "IDC_BUTTON_SROOM_EXBUTTON1".to_owned(),
             code: 0x1301_201B,
             sprite: None,
@@ -7976,11 +7856,12 @@ mod paint_tests {
                 w: 288,
                 h: 91,
             },
-        }];
-        placements.extend(room_number_placements());
+        };
+        let mut placements = vec![panel];
+        placements.extend(room_number_clones());
         let art = SceneArt {
             placements,
-            figures: HashMap::from([("Room_Number.ojs".to_owned(), digit_font_figure())]),
+            figures: HashMap::from([(ROOM_NUMBER_SPRITE.to_owned(), digit_font_figure())]),
         };
         let mut rooms = two_rooms();
         rooms[0].number = 12;
@@ -7995,9 +7876,9 @@ mod paint_tests {
             0,
             &art,
         );
-        assert_eq!(buf[94 * 800 + 38], pack_xrgb(255, 0, 0));
-        assert_eq!(buf[94 * 800 + 49], pack_xrgb(0, 255, 0));
-        assert_eq!(buf[94 * 800 + 60], pack_xrgb(0, 0, 255));
+        assert_eq!(buf[10 * 800 + 10], pack_xrgb(255, 0, 0));
+        assert_eq!(buf[10 * 800 + 20], pack_xrgb(0, 255, 0));
+        assert_eq!(buf[10 * 800 + 30], pack_xrgb(0, 0, 255));
     }
 
     /// Multi-layer icon body: layer `i` paints one solid RGB555
@@ -8022,8 +7903,12 @@ mod paint_tests {
     /// pass, selected frames the icon pass). The panel seats the
     /// template: icons land at template + panel origin (26,82).
     fn room_icon_art() -> SceneArt {
-        let placed = |id: &str, code: u32, sprite: &str, x: i32, y: i32| ScenePlacement {
-            id: id.to_owned(),
+        // Icons are `SET 0x11` clones of panel 1 at their cloned rects
+        // (parent origin already added by staging, see
+        // `avatar::expand_set_clones`).
+        let cloned = |code: u32, sprite: &str, x: i32, y: i32| ScenePlacement {
+            role: PlacementRole::Clone,
+            id: "IDC_BUTTON_SROOM_EXBUTTON1".to_owned(),
             code,
             sprite: Some(sprite.to_owned()),
             rect: Rect { x, y, w: 40, h: 20 },
@@ -8031,6 +7916,7 @@ mod paint_tests {
         SceneArt {
             placements: vec![
                 ScenePlacement {
+                    role: PlacementRole::Single,
                     id: "IDC_BUTTON_SROOM_EXBUTTON1".to_owned(),
                     code: 0x1301_201B,
                     sprite: None,
@@ -8041,21 +7927,9 @@ mod paint_tests {
                         h: 91,
                     },
                 },
-                placed(
-                    "IDC_IMAGE_SROOM_MODE",
-                    0x1350_0028,
-                    ROOM_MODE_SPRITE,
-                    400,
-                    280,
-                ),
-                placed("IDC_IMAGE_SROOM_OM", 0x1350_0029, ROOM_OM_SPRITE, 450, 280),
-                placed(
-                    "IDC_IMAGE_SROOM_STATE",
-                    0x1350_002D,
-                    ROOM_STATE_SPRITE,
-                    500,
-                    300,
-                ),
+                cloned(0x1350_0028, ROOM_MODE_SPRITE, 426, 362),
+                cloned(0x1350_0029, ROOM_OM_SPRITE, 476, 362),
+                cloned(0x1350_002D, ROOM_STATE_SPRITE, 526, 382),
             ],
             figures: HashMap::from([
                 (
@@ -8160,7 +8034,6 @@ mod paint_tests {
             },
             &art,
             &rooms,
-            0,
         );
         let red = pack_xrgb(255, 0, 0);
         let green = pack_xrgb(0, 255, 0);
@@ -8187,19 +8060,31 @@ mod paint_tests {
             h: 600,
         };
         art.paint_overlay(&mut frame);
-        paint_room_row_icons(&mut frame, &art, &rooms, 0);
+        paint_room_row_icons(&mut frame, &art, &rooms);
+        // The clone base pass paints each icon's frame-0 layer.
         assert_eq!(
-            buf[280 * 800 + 400],
-            pack_xrgb(0, 0, 255),
+            buf[362 * 800 + 426],
+            pack_xrgb(0, 255, 0),
             "backdrop mode layer"
         );
         assert_eq!(
-            buf[280 * 800 + 450],
-            pack_xrgb(255, 255, 0),
+            buf[362 * 800 + 476],
+            pack_xrgb(0, 255, 0),
             "backdrop om layer"
         );
-        assert_eq!(buf[362 * 800 + 426], 0, "mode icon untouched without frame");
-        assert_eq!(buf[362 * 800 + 476], 0, "om icon untouched without level");
+        // An untouched icon keeps its clone's frame-0 layer in the base
+        // pass (no live frame selects another one); a body that never
+        // decoded paints nothing at all.
+        assert_eq!(
+            buf[362 * 800 + 426],
+            pack_xrgb(0, 255, 0),
+            "mode icon keeps frame 0 without a live frame"
+        );
+        assert_eq!(
+            buf[362 * 800 + 476],
+            pack_xrgb(0, 255, 0),
+            "om icon keeps frame 0 without a level"
+        );
         assert_eq!(buf[382 * 800 + 526], 0, "missing state body paints nothing");
     }
 
@@ -8591,6 +8476,7 @@ mod paint_tests {
         // so the staged empty panels show.
         let placements = (0..8)
             .map(|seat| ScenePlacement {
+                role: PlacementRole::Single,
                 id: format!("IDC_IMAGE_SWAIT_COVERAVATAR{}", seat + 1),
                 code: 0x1650_003D + seat as u32,
                 sprite: Some("Wait_Cover_Avatar.ojs".to_owned()),
@@ -8632,6 +8518,7 @@ mod paint_tests {
     /// 116-rect walk; ordinal = `(code & 0xFFF) − 1`).
     fn waiting_probe(id: &str, sprite: Option<&str>, rect: (i32, i32, i32, i32)) -> ScenePlacement {
         ScenePlacement {
+            role: PlacementRole::Single,
             id: id.to_owned(),
             code: 0,
             sprite: sprite.map(str::to_owned),

@@ -131,6 +131,16 @@ const CLICK_W: i32 = 800;
 /// Native click canvas height (see [`CLICK_W`]).
 const CLICK_H: i32 = 600;
 
+/// Frame clear colour: device black, the exe backbuffer state.
+///
+/// Pinned by the 7.55 planet capture
+/// (`/home/arnim/scratch/planet-shot.png`): every pixel the staged
+/// `STATE_PLANET` art leaves uncovered — 30,725 px, 6.40 % of the
+/// canvas — is pure black there (mean RGB `0,0,0`, 100 % of the hole
+/// mask). The exe therefore starts each frame on black; scenes still
+/// contribute no fill of their own (`docs/channel-fill.md`).
+const FRAME_CLEAR_COLOR: u32 = 0;
+
 /// Waiting confirm-button candidates under the `IDC_BUTTON_SWAIT_*`
 /// convention (the `START 0x16202012` / `READY 0x16202013` arms,
 /// `docs/room-enums.md`): the exact staged names stay untraced, so
@@ -3624,7 +3634,16 @@ impl ScreenGame {
 
     /// Paint with an explicit song clock (tests use this; live
     /// paint reads the sample clock, [`Self::now_ms`]).
+    ///
+    /// Every frame starts on device black: the exe's backbuffer is
+    /// black wherever a scene paints no pixel (7.55 planet capture
+    /// `/home/arnim/scratch/planet-shot.png` is black in exactly the
+    /// 30,725 px the staged `STATE_PLANET` art leaves uncovered, 100 %
+    /// agreement), so a stale frame can never leak through staged
+    /// art's transparent pixels. Scene painters still contribute no
+    /// fill of their own (`docs/channel-fill.md`).
     pub fn paint_at(&mut self, frame: &mut Frame<'_>, now_ms: u64) {
+        frame.buf.fill(FRAME_CLEAR_COLOR);
         if self.side.is_some() {
             paint_side_scene(frame, &self.side_placements, &self.side_figures);
             // The billing views complete no web call, so the
@@ -4872,6 +4891,7 @@ mod game_tests {
     };
     use super::*;
     use crate::avatar::AvatarFigure;
+    use crate::avatar::PlacementRole;
     use crate::screen::Screen;
     use crate::{GameLoop, MenuKey};
     use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
@@ -4888,6 +4908,7 @@ mod game_tests {
         let mut staged = vec![0u32; 800 * 600];
         let pitch20 = (0..42)
             .map(|index| ScenePlacement {
+                role: PlacementRole::Single,
                 id: String::new(),
                 code: 0x8C00_0000 | (88 + index as u32),
                 sprite: None,
@@ -5324,6 +5345,7 @@ mod game_tests {
         game.load_scene(
             Screen::Waiting,
             vec![ScenePlacement {
+                role: PlacementRole::Single,
                 id: id.to_owned(),
                 code: 0,
                 sprite: None,
@@ -5429,6 +5451,7 @@ mod game_tests {
         game.load_scene(
             Screen::Room,
             vec![ScenePlacement {
+                role: PlacementRole::Single,
                 id: "IDC_BUTTON_SROOM_EXBUTTON2".to_owned(),
                 code: 0,
                 sprite: None,
@@ -5494,6 +5517,7 @@ mod game_tests {
         game.load_scene(
             Screen::Room,
             vec![ScenePlacement {
+                role: PlacementRole::Single,
                 id: ROOM_BACK_BUTTON_ID.to_owned(),
                 code: ROOM_BACK_BUTTON_CODE,
                 sprite: None,
@@ -5530,6 +5554,7 @@ mod game_tests {
             Screen::Room,
             vec![
                 ScenePlacement {
+                    role: PlacementRole::Single,
                     id: ROOM_BACK_BUTTON_ID.to_owned(),
                     code: ROOM_BACK_BUTTON_CODE,
                     sprite: None,
@@ -5541,6 +5566,7 @@ mod game_tests {
                     },
                 },
                 ScenePlacement {
+                    role: PlacementRole::Single,
                     id: ROOM_OPTION_BUTTON_ID.to_owned(),
                     code: ROOM_OPTION_BUTTON_CODE,
                     sprite: None,
@@ -6046,6 +6072,7 @@ mod game_tests {
         (
             vec![
                 ScenePlacement {
+                    role: PlacementRole::Single,
                     id: "IDC_IMAGE_SWAIT_COVERAVATAR1".to_owned(),
                     code: 0,
                     sprite: None,
@@ -6057,6 +6084,7 @@ mod game_tests {
                     },
                 },
                 ScenePlacement {
+                    role: PlacementRole::Single,
                     id: "IDC_TEXT_SWAIT_MUSICNAME".to_owned(),
                     code: 0,
                     sprite: None,
@@ -6198,6 +6226,7 @@ mod game_tests {
             Screen::Waiting,
             vec![
                 ScenePlacement {
+                    role: PlacementRole::Single,
                     id: "IDC_IMAGE_SWAIT_COVERAVATAR1".to_owned(),
                     code: 0,
                     sprite: None,
@@ -6209,6 +6238,7 @@ mod game_tests {
                     },
                 },
                 ScenePlacement {
+                    role: PlacementRole::Single,
                     id: "IDC_TEXT_SWAIT_MAPNAME".to_owned(),
                     code: 0,
                     sprite: None,
@@ -6220,6 +6250,7 @@ mod game_tests {
                     },
                 },
                 ScenePlacement {
+                    role: PlacementRole::Single,
                     id: "IDC_TEXT_SWAIT_BPM".to_owned(),
                     code: 0,
                     sprite: None,
@@ -6231,6 +6262,7 @@ mod game_tests {
                     },
                 },
                 ScenePlacement {
+                    role: PlacementRole::Single,
                     id: "IDC_TEXT_SWAIT_1SKILLCOUNT".to_owned(),
                     code: 0,
                     sprite: None,
@@ -6410,6 +6442,7 @@ mod game_tests {
 
     fn myroom_hit_placement(code: u32, x: i32, y: i32) -> ScenePlacement {
         ScenePlacement {
+            role: PlacementRole::Single,
             id: String::new(),
             code,
             sprite: None,
@@ -6564,6 +6597,7 @@ mod game_tests {
 
     fn payment_hit_placement(code: u32, x: i32, y: i32, w: u32, h: u32) -> ScenePlacement {
         ScenePlacement {
+            role: PlacementRole::Single,
             id: String::new(),
             code,
             sprite: None,
@@ -6762,6 +6796,7 @@ mod game_tests {
         game.load_scene(
             Screen::Avi,
             vec![ScenePlacement {
+                role: PlacementRole::Single,
                 id: "IDC_BACK_LOGO".to_owned(),
                 code: 0x1810_0001,
                 sprite: Some("O2mediaLogo.ojs".to_owned()),
@@ -6860,6 +6895,7 @@ mod game_tests {
             game.load_scene(
                 Screen::Avi,
                 vec![ScenePlacement {
+                    role: PlacementRole::Single,
                     id: "IDC_BACK_LOGO".to_owned(),
                     code: 0x1810_0001,
                     sprite: Some("O2mediaLogo.ojs".to_owned()),
@@ -6984,6 +7020,7 @@ mod game_tests {
         walk_to_lobby(&mut game, Screen::Channel);
         game.load_side_scene(
             vec![ScenePlacement {
+                role: PlacementRole::Single,
                 id: "IDC_SHOP".to_owned(),
                 code: 0,
                 sprite: Some("Shop_Item.ojs".to_owned()),
@@ -7252,6 +7289,7 @@ mod game_tests {
         let mut game = ScreenGame::new();
         assert!(!game.waiting_confirm_hit(150, 130));
         let placements = vec![crate::avatar::ScenePlacement {
+            role: PlacementRole::Single,
             id: "IDC_BUTTON_SWAIT_READY".to_owned(),
             code: 0,
             sprite: None,
@@ -7344,6 +7382,7 @@ mod game_tests {
         // `ROOMNAME` band while the digit font stages no figure.
         let placements = vec![
             crate::avatar::ScenePlacement {
+                role: PlacementRole::Single,
                 id: "IDC_BUTTON_SROOM_EXBUTTON1".to_owned(),
                 code: 0,
                 sprite: None,
@@ -7355,6 +7394,7 @@ mod game_tests {
                 },
             },
             crate::avatar::ScenePlacement {
+                role: PlacementRole::Single,
                 id: "IDC_TEXT_SROOM_ROOMNAME".to_owned(),
                 code: 0,
                 sprite: None,
@@ -7514,6 +7554,7 @@ mod game_tests {
             .into_iter()
             .zip(PLANET_CAPTIONS.iter())
             .map(|((x, y), caption)| ScenePlacement {
+                role: PlacementRole::Single,
                 id: String::new(),
                 code: caption.code,
                 sprite: None,
@@ -7631,6 +7672,7 @@ mod game_tests {
             Screen::Planet,
             vec![
                 ScenePlacement {
+                    role: PlacementRole::Single,
                     id: "promo-left".to_owned(),
                     code: PLANET_PROMO_LEFT_CODE,
                     sprite: None,
@@ -7642,6 +7684,7 @@ mod game_tests {
                     },
                 },
                 ScenePlacement {
+                    role: PlacementRole::Single,
                     id: "promo-stop".to_owned(),
                     code: PLANET_PROMO_STOP_CODE,
                     sprite: None,
@@ -7724,6 +7767,7 @@ mod game_tests {
             colorkey: 0x0000,
         });
         let mut placements = vec![ScenePlacement {
+            role: PlacementRole::Single,
             id: "IDC_DIALOG".to_owned(),
             code: 0,
             sprite: Some(backdrop.to_owned()),
@@ -7736,6 +7780,7 @@ mod game_tests {
         }];
         for (index, (code, x, y)) in buttons.iter().enumerate() {
             placements.push(ScenePlacement {
+                role: PlacementRole::Single,
                 id: format!("IDC_BUTTON_{index}"),
                 code: *code,
                 sprite: None,
@@ -8141,6 +8186,7 @@ mod game_tests {
             Screen::Waiting,
             vec![
                 ScenePlacement {
+                    role: PlacementRole::Single,
                     id: "IDC_BUTTON_SWAIT_TEAMA".to_owned(),
                     code: WAITING_TEAM_FIRST_CODE,
                     sprite: None,
@@ -8152,6 +8198,7 @@ mod game_tests {
                     },
                 },
                 ScenePlacement {
+                    role: PlacementRole::Single,
                     id: "IDC_BUTTON_SWAIT_TEAMB".to_owned(),
                     code: WAITING_TEAM_FIRST_CODE + 1,
                     sprite: None,
@@ -8191,6 +8238,7 @@ mod game_tests {
         game.load_scene(
             Screen::Waiting,
             vec![ScenePlacement {
+                role: PlacementRole::Single,
                 id: "IDC_BUTTON_SWAIT_TEAMA".to_owned(),
                 code: WAITING_TEAM_FIRST_CODE,
                 sprite: None,
@@ -8355,6 +8403,7 @@ mod game_tests {
         assert_eq!(game.room_dialog(), Some(RoomDialog::CreateRoom));
         // Empty title commits nothing; typed title proves the commit.
         let placements = vec![ScenePlacement {
+            role: PlacementRole::Single,
             id: "IDC_BUTTON_DCROOM_CREATE".to_owned(),
             code: crate::screens::side::CREATE_ROOM_CREATE_CODE,
             sprite: None,
@@ -8387,6 +8436,7 @@ mod game_tests {
         assert_eq!(game.screen(), Screen::Room);
         game.open_password_dialog(7);
         let placements = vec![ScenePlacement {
+            role: PlacementRole::Single,
             id: "IDC_BUTTON_DPASSWORD_OK".to_owned(),
             code: crate::screens::side::PASSWORD_OK_CODE,
             sprite: None,
@@ -8517,6 +8567,7 @@ mod game_tests {
 
     fn lanking_placement(code: u32, x: i32, y: i32, h: i32) -> ScenePlacement {
         ScenePlacement {
+            role: PlacementRole::Single,
             id: String::new(),
             code,
             sprite: None,
@@ -8790,6 +8841,7 @@ mod game_tests {
         // rides staged rects, never literals).
         let mut placements = Vec::new();
         let area = |code: u32, x: i32, y: i32, w: u32, h: u32| ScenePlacement {
+            role: PlacementRole::Single,
             id: String::new(),
             code,
             sprite: None,
@@ -8915,6 +8967,7 @@ mod game_tests {
         // staged rects, never literals).
         let mut placements = Vec::new();
         let area = |code: u32, x: i32, y: i32, w: u32, h: u32| ScenePlacement {
+            role: PlacementRole::Single,
             id: String::new(),
             code,
             sprite: None,
@@ -9502,6 +9555,7 @@ mod game_tests {
         game.load_scene(
             Screen::Result,
             vec![ScenePlacement {
+                role: PlacementRole::Single,
                 id: id.to_owned(),
                 code: 0,
                 sprite: None,
@@ -10916,6 +10970,7 @@ mod game_tests {
             Screen::Waiting,
             vec![
                 ScenePlacement {
+                    role: PlacementRole::Single,
                     id: "IDC_IMAGE_SWAIT_COVERAVATAR1".to_owned(),
                     code: 0,
                     sprite: None,
@@ -10927,6 +10982,7 @@ mod game_tests {
                     },
                 },
                 ScenePlacement {
+                    role: PlacementRole::Single,
                     id: "IDC_TEXT_SWAIT_BPM".to_owned(),
                     code: 0,
                     sprite: None,

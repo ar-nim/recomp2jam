@@ -13,8 +13,8 @@ use o2jam_render::{Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
 
 use crate::avatar::{
     bind_scene_rects, load_archive_sprite_for_stage, load_scene_figures_for_room,
-    playing_member_selected, scene_block, scene_sprite_names, AvatarFigure, PlayingArtMode,
-    ScenePlacement, LOADING_SPRITE,
+    playing_member_selected, scene_block, scene_sprite_names, AvatarFigure, PlacementRole,
+    PlayingArtMode, ScenePlacement, LOADING_SPRITE,
 };
 use crate::screen::Screen;
 use crate::screens::side::{
@@ -694,6 +694,7 @@ fn full_canvas_placements(names: &[String]) -> Vec<ScenePlacement> {
     names
         .iter()
         .map(|name| ScenePlacement {
+            role: PlacementRole::Single,
             id: String::new(),
             code: 0,
             sprite: Some(name.clone()),

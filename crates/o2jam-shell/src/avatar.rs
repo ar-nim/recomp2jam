@@ -794,6 +794,7 @@ fn anchor_placement(entry: &ControlEntry) -> Option<ScenePlacement> {
         SpriteResolution::RuntimeDeferred { .. }
         | SpriteResolution::Found(_)
         | SpriteResolution::Missing { .. } => Some(ScenePlacement {
+            role: PlacementRole::Single,
             id: entry.id.clone(),
             code: entry.code,
             sprite: entry.sprite.clone(),
@@ -802,10 +803,31 @@ fn anchor_placement(entry: &ControlEntry) -> Option<ScenePlacement> {
     }
 }
 
+/// How one placement reaches the frame: painted once at its own
+/// record, or as the expanded clone of a `SET`-group template member.
+///
+/// The exe instantiates `SET` children per parent control and writes
+/// back parent-offset rects (`docs/ui-loader.md` step 8: the loader
+/// matches a group by `code & 0xFF000`, recurses for its children, and
+/// helper `0x5487B0` persists the adjusted rects). Staging expands the
+/// same way: a clone's `rect` already carries its parent's origin, and
+/// its record anchors stay template-local, so the body paints at
+/// `rect + anchor` instead of at the anchors alone.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PlacementRole {
+    /// Painted once: anchored bodies at their record anchors,
+    /// anchor-free bodies at their rect origin (verified draw chain).
+    #[default]
+    Single,
+    /// Expanded `SET` clone under one parent instance.
+    Clone,
+}
+
 /// One `ControlList` entry with its `.bnd` layout rect.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScenePlacement {
-    /// Control id (`IDC_...`).
+    /// Control id (`IDC_...`); a clone carries its parent's id so the
+    /// scene can tell which instance owns it.
     pub id: String,
     /// Control code (top byte names the state).
     pub code: u32,
@@ -814,6 +836,8 @@ pub struct ScenePlacement {
     /// Native-canvas layout rect: positions the draw origin, never
     /// clips (verified draw path).
     pub rect: Rect,
+    /// Whether this placement paints once or as a `SET` clone.
+    pub role: PlacementRole,
 }
 
 /// Find a `STATE_`/`DIALOG_` block by name.
@@ -1012,6 +1036,7 @@ pub fn load_scene_figures_for_room(
 /// record anchor (all-zero rect, never full-bleed).
 fn place_backdrop_panel(entry: &ControlEntry, sprite: &str) -> ScenePlacement {
     ScenePlacement {
+        role: PlacementRole::Single,
         id: entry.id.clone(),
         code: entry.code,
         sprite: Some(sprite.to_owned()),
@@ -1072,7 +1097,90 @@ pub fn bind_scene_rects(block: &ControlBlock, bnd: &Bnd) -> Vec<ScenePlacement> 
     if block.name == "STATE_PLAYING" {
         return bind_playing_subset(block, bnd);
     }
-    bind_entries_by_ordinal(block, bnd)
+    let mut placed = bind_entries_by_ordinal(block, bnd);
+    expand_set_clones(block, &mut placed);
+    placed
+}
+
+/// `SET`-group match key of an entry: the exe's clone rule reads
+/// `code & 0xFF000` against the group's `+0x04` word (`docs/ui-loader.md`
+/// step 8), which is the second number on the `SET` line.
+#[must_use]
+pub fn set_group_key(code: u32) -> u32 {
+    code & 0xFF_000
+}
+
+/// The `SET` group code a block line declares, if it declares one
+/// (`SET 0x11 0x00012000` → `Some(0x12000)`; a parameter-less `SET`
+/// run declares none).
+#[must_use]
+fn declared_set_code(params: &[u32]) -> Option<u32> {
+    params.get(1).copied().filter(|code| *code != 0)
+}
+
+/// Expand every `SET` group under its parent instances (exe loader
+/// step 8 + write-back helper `0x5487B0`): a group's members are
+/// template-local — their `.bnd` rects sit inside one parent's box —
+/// and each parent entry whose code carries the group key clones them
+/// with the parent's origin added to the rect. Members that no parent
+/// hosts stay single (a group without an instance paints nowhere in
+/// the exe either, but dropping art on a rule miss is worse than
+/// keeping it visible).
+///
+/// Verified against 7.55: `STATE_ROOM` parents `EXBUTTON1..6`
+/// (`0x1301201B..20`, group `0x12000`) and `SET 0x11 0x00012000`
+/// members `Room_Om.ojs (56,62)` / `Room_State.ojs (203,63)` /
+/// `Room_Number.ojs (16,14)` land at panel `(26,82)` + rect in the
+/// Wine capture `/home/arnim/scratch/ac-room.png` (correlation best
+/// match `+0,+0` each); `STATE_WAITING` parents `EXTEND1..8`
+/// (`0x16015022..29`, group `0x15000`) put `Wait_BossMark.ojs` at
+/// `(37,55)+(1,1) = (38,56)` and `Wait_PCRoomMark.ojs` at
+/// `(37,55)+(94,1) = (131,56)`, both within 1 px of
+/// `/home/arnim/scratch/ad-wait.png`.
+fn expand_set_clones(block: &ControlBlock, placements: &mut Vec<ScenePlacement>) {
+    for set in &block.sets {
+        let Some(code) = declared_set_code(&set.params) else {
+            continue;
+        };
+        let member_codes: Vec<u32> = set
+            .entries
+            .iter()
+            .filter(|entry| entry_takes_rect(entry) && entry.sprite.is_some())
+            .map(|entry| entry.code)
+            .collect();
+        let parents: Vec<(String, Rect)> = placements
+            .iter()
+            .filter(|placed| set_group_key(placed.code) == code)
+            .map(|placed| (placed.id.clone(), placed.rect))
+            .collect();
+        let members: Vec<ScenePlacement> = placements
+            .iter()
+            .filter(|placed| member_codes.contains(&placed.code))
+            .cloned()
+            .collect();
+        if parents.is_empty() || members.is_empty() {
+            continue;
+        }
+        placements.retain(|placed| !member_codes.contains(&placed.code));
+        let mut clones = Vec::with_capacity(parents.len() * members.len());
+        for (parent_id, parent_rect) in &parents {
+            for member in &members {
+                clones.push(ScenePlacement {
+                    role: PlacementRole::Clone,
+                    id: parent_id.clone(),
+                    code: member.code,
+                    sprite: member.sprite.clone(),
+                    rect: Rect {
+                        x: parent_rect.x.saturating_add(member.rect.x),
+                        y: parent_rect.y.saturating_add(member.rect.y),
+                        w: member.rect.w,
+                        h: member.rect.h,
+                    },
+                });
+            }
+        }
+        placements.extend(clones);
+    }
 }
 
 /// Every paintable entry paired with its ordinal rect through the
@@ -1128,6 +1236,7 @@ fn bind_playing_subset(block: &ControlBlock, bnd: &Bnd) -> Vec<ScenePlacement> {
 /// One placement from an entry plus its native layout rect.
 fn place_entry(entry: &ControlEntry, rect: Rect) -> ScenePlacement {
     ScenePlacement {
+        role: PlacementRole::Single,
         id: entry.id.clone(),
         code: entry.code,
         sprite: entry.sprite.clone(),
@@ -1242,12 +1351,18 @@ fn placement_view_origin(
     placement: &ScenePlacement,
     frame_w: usize,
     frame_h: usize,
+    shares_body: bool,
 ) -> (i32, i32) {
-    if figure.has_anchor_offset() {
-        return (0, 0);
+    // A `SET` clone's record anchors stay template-local, so its rect
+    // positions the body even when the layers carry anchors (exe
+    // loader writes back parent-offset rects, `docs/ui-loader.md`
+    // step 8). Single placements keep the verified rule: anchored
+    // bodies author their own absolute position and ignore the rect.
+    if placement.role == PlacementRole::Clone || shares_body || !figure.has_anchor_offset() {
+        let scaled = scale_rect_to_frame(&placement.rect, frame_w, frame_h);
+        return (scaled.x, scaled.y);
     }
-    let scaled = scale_rect_to_frame(&placement.rect, frame_w, frame_h);
-    (scaled.x, scaled.y)
+    (0, 0)
 }
 
 /// Paint every placed figure in file order (verified step 8: the
@@ -1265,9 +1380,70 @@ pub fn paint_scene_figures(
     placements: &[ScenePlacement],
     figures: &HashMap<String, AvatarFigure>,
 ) {
+    paint_scene_figures_live(frame, placements, figures, |_| true);
+}
+
+/// [`paint_scene_figures`] behind a per-placement filter: the scene
+/// decides which `SET` clones are live (populated rows and seats
+/// paint, empty slots keep their bare plate). Single placements pass
+/// any filter that accepts [`PlacementRole::Clone`] filtering only
+/// when the caller opts in — see [`clone_instance_live`].
+pub fn paint_scene_figures_live(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    figures: &HashMap<String, AvatarFigure>,
+    keep: impl Fn(&ScenePlacement) -> bool,
+) {
     let (w, h) = (frame.w, frame.h);
+    let shared = shared_sprite_names(placements);
+    for placement in placements.iter().filter(|placement| keep(placement)) {
+        let shares_body = placement
+            .sprite
+            .as_deref()
+            .is_some_and(|sprite| shared.contains(sprite));
+        paint_placed_figure(frame, placement, figures, w, h, shares_body);
+    }
+}
+
+/// Sprite bodies referenced by more than one placement of a scene.
+///
+/// One record's anchors cannot be the absolute screen position for two
+/// instances, so a shared body's anchors stay frame-internal and its
+/// placements' rects position it. Verified on 7.55: `Wait_RoomNumber.ojs`
+/// serves five top-bar digit wells (`CHNUM_10/01`, `RMNUM_100/010/001`,
+/// rects `(100,19)…(193,19)`) with one anchor `(3,0)` — the exe paints
+/// the digits in the wells, not at the frame corner — while single-use
+/// bodies like `Playing_Exit.ojs` (anchor `(751,554)` == its rect)
+/// author their own position.
+#[must_use]
+pub fn shared_sprite_names(placements: &[ScenePlacement]) -> std::collections::HashSet<&str> {
+    let mut seen = std::collections::HashSet::new();
+    let mut shared = std::collections::HashSet::new();
     for placement in placements {
-        paint_placed_figure(frame, placement, figures, w, h);
+        let Some(sprite) = placement.sprite.as_deref() else {
+            continue;
+        };
+        if !seen.insert(sprite) {
+            shared.insert(sprite);
+        }
+    }
+    shared
+}
+
+/// Liveness of one staged placement for the `SET` clone model: a
+/// clone paints only while its owner sits among the first `live`
+/// entries of `instances` (the exe clones a row template per
+/// populated row and leaves the rest as bare plates). Owners the
+/// scene does not list are chrome (scroll tracks, chat lines) and
+/// always paint; single placements always paint.
+#[must_use]
+pub fn clone_instance_live(placed: &ScenePlacement, instances: &[&str], live: usize) -> bool {
+    if placed.role != PlacementRole::Clone {
+        return true;
+    }
+    match instances.iter().position(|id| *id == placed.id) {
+        Some(index) => index < live,
+        None => true,
     }
 }
 
@@ -1281,6 +1457,7 @@ fn paint_placed_figure(
     figures: &HashMap<String, AvatarFigure>,
     frame_w: usize,
     frame_h: usize,
+    shares_body: bool,
 ) {
     let Some(name) = placement.sprite.as_ref() else {
         return;
@@ -1288,7 +1465,41 @@ fn paint_placed_figure(
     let Some(figure) = figures.get(name) else {
         return;
     };
-    let (view_x, view_y) = placement_view_origin(figure, placement, frame_w, frame_h);
+    // A clone is one instance of a template control: an image control
+    // paints one frame, so a clone contributes its frame-0 layer and the
+    // scene's live-frame pass selects any other frame on top. Single
+    // placements keep the verified all-layers stack.
+    if placement.role == PlacementRole::Clone {
+        let (view_x, view_y) =
+            placement_view_origin(figure, placement, frame_w, frame_h, shares_body);
+        if let Some(layer) = figure.layer(0) {
+            let (dx, dy) = anchor_in_frame(layer.dx, layer.dy, frame_w, frame_h);
+            blit_rgb555(
+                frame,
+                &layer.image.view(),
+                view_x + dx,
+                view_y + dy,
+                Some(layer.colorkey),
+            );
+        }
+        return;
+    }
+    let (view_x, view_y) = placement_view_origin(figure, placement, frame_w, frame_h, shares_body);
+    if std::env::var("R2J_TRACE_BLITS").is_ok() {
+        eprintln!(
+            "BLIT {} view=({},{}) anchored={} extent={:?} rect=({},{},{},{}) code=0x{:08X}",
+            name,
+            view_x,
+            view_y,
+            figure.has_anchor_offset(),
+            figure.extent(),
+            placement.rect.x,
+            placement.rect.y,
+            placement.rect.w,
+            placement.rect.h,
+            placement.code
+        );
+    }
     figure.paint_scaled_anchors(frame, view_x, view_y, frame_w, frame_h);
 }
 
@@ -1314,11 +1525,12 @@ pub fn paint_behind_placements(
     figures: &HashMap<String, AvatarFigure>,
     exclusions: &[Rect],
 ) {
+    let shared = shared_sprite_names(placements);
     for placement in placements
         .iter()
         .filter(|placed| placement_is_behind(placed))
     {
-        paint_behind_placement(frame, placement, figures, exclusions);
+        paint_behind_placement(frame, placement, figures, exclusions, &shared);
     }
 }
 
@@ -1331,11 +1543,16 @@ pub fn paint_foreground_placements(
     figures: &HashMap<String, AvatarFigure>,
 ) {
     let (frame_w, frame_h) = (frame.w, frame.h);
+    let shared = shared_sprite_names(placements);
     for placement in placements
         .iter()
         .filter(|placed| !placement_is_behind(placed))
     {
-        paint_placed_figure(frame, placement, figures, frame_w, frame_h);
+        let shares_body = placement
+            .sprite
+            .as_deref()
+            .is_some_and(|sprite| shared.contains(sprite));
+        paint_placed_figure(frame, placement, figures, frame_w, frame_h, shares_body);
     }
 }
 
@@ -1348,6 +1565,7 @@ fn paint_behind_placement(
     placement: &ScenePlacement,
     figures: &HashMap<String, AvatarFigure>,
     exclusions: &[Rect],
+    shared: &std::collections::HashSet<&str>,
 ) {
     let Some(name) = placement.sprite.as_ref() else {
         return;
@@ -1355,7 +1573,8 @@ fn paint_behind_placement(
     let Some(figure) = figures.get(name) else {
         return;
     };
-    let (view_x, view_y) = placement_view_origin(figure, placement, frame.w, frame.h);
+    let shares_body = shared.contains(name.as_str());
+    let (view_x, view_y) = placement_view_origin(figure, placement, frame.w, frame.h, shares_body);
     paint_behind_layers(frame, figure, view_x, view_y, exclusions);
 }
 
@@ -2160,6 +2379,7 @@ mod avatar_figure_tests {
 
     fn timebar_like_placement(rect: Rect) -> ScenePlacement {
         ScenePlacement {
+            role: PlacementRole::Single,
             id: "IDC_IMAGE_SPLAY_TIMEBAR".to_owned(),
             code: 0x1B50_0003,
             sprite: Some("Normal_TimeBar.ojs".to_owned()),
@@ -2180,6 +2400,7 @@ mod avatar_figure_tests {
         let figure = anchored_red_figure(2, 266);
         let figures = HashMap::from([("BpPoint_Left_bar.ojs".to_owned(), figure)]);
         let placement = ScenePlacement {
+            role: PlacementRole::Single,
             id: "IDC_IMAGE_SPLAY_BUFFER1".to_owned(),
             code: 0x1B5_0004,
             sprite: Some("BpPoint_Left_bar.ojs".to_owned()),
@@ -2201,6 +2422,7 @@ mod avatar_figure_tests {
             &figures,
             800,
             600,
+            false,
         );
         let ink = o2jam_render::pack_xrgb(255, 0, 0);
         assert_eq!(buf[266 * 800 + 2], ink, "art lands on the record anchor");
@@ -2234,6 +2456,7 @@ mod avatar_figure_tests {
             &figures,
             800,
             600,
+            false,
         );
         assert_eq!(buf[556 * 800 + 489], o2jam_render::pack_xrgb(255, 0, 0));
     }
@@ -2263,6 +2486,7 @@ mod avatar_figure_tests {
             &figures,
             800,
             600,
+            false,
         );
         assert_eq!(buf[556 * 800 + 489], o2jam_render::pack_xrgb(255, 0, 0));
     }
@@ -2291,6 +2515,7 @@ mod avatar_figure_tests {
             &figures,
             400,
             300,
+            false,
         );
         assert_eq!(buf[102], o2jam_render::pack_xrgb(255, 0, 0));
         assert_eq!(buf[0], 0);
@@ -2308,6 +2533,7 @@ mod avatar_figure_tests {
         let figure = anchored_red_figure(0, 0);
         let figures = HashMap::from([("Wait_Cover_Avatar.ojs".to_owned(), figure)]);
         let placement = ScenePlacement {
+            role: PlacementRole::Single,
             id: "IDC_IMAGE_SWAIT_COVERAVATAR1".to_owned(),
             code: 0x165_003D,
             sprite: Some("Wait_Cover_Avatar.ojs".to_owned()),
@@ -2329,6 +2555,7 @@ mod avatar_figure_tests {
             &figures,
             800,
             600,
+            false,
         );
         assert_eq!(
             buf[200 * 800 + 300],
@@ -2362,6 +2589,7 @@ mod avatar_figure_tests {
         });
         let figures = HashMap::from([("Room_Mode.ojs".to_owned(), figure)]);
         let placement = ScenePlacement {
+            role: PlacementRole::Single,
             id: "IDC_IMAGE_SROOM_MODE".to_owned(),
             code: 0x135_0028,
             sprite: Some("Room_Mode.ojs".to_owned()),
@@ -2383,6 +2611,7 @@ mod avatar_figure_tests {
             &figures,
             800,
             600,
+            false,
         );
         assert_eq!(buf[0], o2jam_render::pack_xrgb(255, 0, 0));
         assert_eq!(buf[2], o2jam_render::pack_xrgb(0, 0, 255));
@@ -2519,6 +2748,7 @@ mod avatar_figure_tests {
             "the exe view paints image 0; image 1 stays unloaded"
         );
         let placed = vec![ScenePlacement {
+            role: PlacementRole::Single,
             id: "IDC_IMAGE_SPLAY_BACK2".to_owned(),
             code: 0x1B50_0072,
             sprite: Some("Note_BG.ojs".to_owned()),
@@ -2899,6 +3129,7 @@ mod avatar_figure_tests {
         let archive = opa_blob(&[("Playing_BG.ojs", &red)]);
         let figures = load_scene_figures(&archive, &["_Playing_BG.ojs".to_owned()]);
         let placed = vec![ScenePlacement {
+            role: PlacementRole::Single,
             id: "IDC_IMAGE_SPLAY_BACK1".to_owned(),
             code: 0x1B50_0071,
             sprite: Some("_Playing_BG.ojs".to_owned()),
@@ -2950,6 +3181,7 @@ mod avatar_figure_tests {
         });
         let placed = vec![
             ScenePlacement {
+                role: PlacementRole::Single,
                 id: "IDC_IMAGE_SPLAY_BACK1".to_owned(),
                 code: 0,
                 sprite: Some("Playing_BG.ojs".to_owned()),
@@ -2961,6 +3193,7 @@ mod avatar_figure_tests {
                 },
             },
             ScenePlacement {
+                role: PlacementRole::Single,
                 id: "IDC_IMAGE_SPLAY_BACK3".to_owned(),
                 code: 0,
                 sprite: Some("Playing_Menu.ojs".to_owned()),
@@ -3413,6 +3646,7 @@ mod avatar_figure_tests {
                 let anchor = (layer.dx, layer.dy);
                 let anchored = figure.has_anchor_offset();
                 let placement = ScenePlacement {
+                    role: PlacementRole::Single,
                     id: placed.entry.id.clone(),
                     code: placed.entry.code,
                     sprite: Some(sprite.to_owned()),
@@ -3434,6 +3668,7 @@ mod avatar_figure_tests {
                     &HashMap::from([(sprite.to_owned(), figure)]),
                     800,
                     600,
+                    false,
                 );
                 let (ax, ay) = if anchored {
                     anchor_in_frame(anchor.0, anchor.1, 800, 600)

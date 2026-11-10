@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use o2jam_game::RoomTeams;
 use o2jam_net::play::SetRoomMusic;
 use o2jam_net::{ChannelState, GameMode, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
-use o2jam_render::Frame;
+use o2jam_render::{Frame, NATIVE_HEIGHT, NATIVE_WIDTH};
 use o2jam_shell::screens::side::SideScreen;
 use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
 use serde::Serialize;
@@ -544,21 +544,35 @@ fn arm_walk_gate(game: &mut ScreenGame) -> anyhow::Result<()> {
 }
 
 /// Paint one walk frame into row-major RGB bytes.
+///
+/// The scene rasterizes at the native 800x600 canvas — the frame every
+/// staged record anchor and `.bnd` rect is authored on — and the result
+/// box-downscales to the evidence size, exactly like the `shots` walk
+/// (`crate::shots`): sprite layers blit 1:1 while anchors and rects
+/// scale, so painting straight into a small frame renders staged art
+/// at double size and clipped.
 fn paint_walk_frame(game: &mut ScreenGame, now_ms: u64) -> Vec<u8> {
-    let mut native = vec![0u32; E2E_FRAME_W * E2E_FRAME_H];
+    let width = usize::try_from(NATIVE_WIDTH).unwrap_or(E2E_FRAME_W);
+    let height = usize::try_from(NATIVE_HEIGHT).unwrap_or(E2E_FRAME_H);
+    let mut native = vec![0u32; width * height];
     game.paint_at(
         &mut Frame {
             buf: &mut native,
-            w: E2E_FRAME_W,
-            h: E2E_FRAME_H,
+            w: width,
+            h: height,
         },
         now_ms,
     );
     let mut rgb = Vec::with_capacity(E2E_FRAME_W * E2E_FRAME_H * 3);
-    for pixel in native {
-        rgb.push(((pixel >> 16) & 0xFF) as u8);
-        rgb.push(((pixel >> 8) & 0xFF) as u8);
-        rgb.push((pixel & 0xFF) as u8);
+    for y in 0..E2E_FRAME_H {
+        for x in 0..E2E_FRAME_W {
+            let x0 = x * width / E2E_FRAME_W;
+            let y0 = y * height / E2E_FRAME_H;
+            let pixel = native[y0 * width + x0];
+            rgb.push(((pixel >> 16) & 0xFF) as u8);
+            rgb.push(((pixel >> 8) & 0xFF) as u8);
+            rgb.push((pixel & 0xFF) as u8);
+        }
     }
     rgb
 }

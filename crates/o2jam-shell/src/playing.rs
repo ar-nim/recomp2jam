@@ -3197,6 +3197,7 @@ impl AvatarScene {
 #[cfg(test)]
 mod live_play_tests {
     use super::*;
+    use crate::avatar::PlacementRole;
     use o2jam_game::{HOLD_TICK_BONUS_POINTS, STAT_JAM, STAT_LIFE};
     use o2jam_render::{has_ink_near, near_xrgb};
 
@@ -4302,6 +4303,7 @@ mod live_play_tests {
         });
         let art = SceneArt {
             placements: vec![ScenePlacement {
+                role: PlacementRole::Single,
                 id: "IDC_IMAGE_SPLAY_BACK1".to_owned(),
                 code: 0,
                 sprite: Some("Playing_BG.ojs".to_owned()),
@@ -5660,6 +5662,7 @@ mod highway_tests {
 mod avatar_scene_tests {
     use super::*;
     use crate::avatar::FigureLayer;
+    use crate::avatar::PlacementRole;
     use o2jam_render::near_xrgb;
 
     const WHITE: u32 = pack_xrgb(0xFF, 0xFF, 0xFF);
@@ -5887,6 +5890,7 @@ mod avatar_scene_tests {
     /// One staged bound-run placement (id + native rect).
     fn field_placement(id: &str, rect: Rect) -> ScenePlacement {
         ScenePlacement {
+            role: PlacementRole::Single,
             id: id.to_owned(),
             code: 0,
             sprite: None,

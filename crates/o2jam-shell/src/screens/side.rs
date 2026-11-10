@@ -3779,6 +3779,7 @@ pub fn paint_side_scene(
 #[cfg(test)]
 mod side_tests {
     use super::*;
+    use crate::avatar::PlacementRole;
 
     fn side_control_text() -> String {
         [
@@ -4059,6 +4060,7 @@ mod side_tests {
         // answers inside its rect and stays silent outside it.
         let staged = vec![
             ScenePlacement {
+                role: PlacementRole::Single,
                 id: "IDC_BUTTON_SPLANET_PROMOTION_LEFT".to_owned(),
                 code: PLANET_PROMO_LEFT_CODE,
                 sprite: None,
@@ -4070,6 +4072,7 @@ mod side_tests {
                 },
             },
             ScenePlacement {
+                role: PlacementRole::Single,
                 id: "IDC_BUTTON_SPLANET_PROMOTION_PLAYSTOP".to_owned(),
                 code: PLANET_PROMO_STOP_CODE,
                 sprite: None,
@@ -4081,6 +4084,7 @@ mod side_tests {
                 },
             },
             ScenePlacement {
+                role: PlacementRole::Single,
                 id: "IDC_BUTTON_SPLANET_PROMOTION_RIGHT".to_owned(),
                 code: PLANET_PROMO_RIGHT_CODE,
                 sprite: None,
@@ -4124,6 +4128,7 @@ mod side_tests {
         // the placement carrying the exit code and its parsed rect,
         // wherever that rect sits (here deliberately off-fallback).
         let staged = vec![ScenePlacement {
+            role: PlacementRole::Single,
             id: "IDC_BUTTON_SPLANET_EXIT".to_owned(),
             code: PLANET_EXIT_CODE,
             sprite: Some("Planet_Btn_Exit.ojs".to_owned()),
@@ -4497,6 +4502,7 @@ mod side_tests {
         // pager children, and the absolute cart controls.
         let mut placements = Vec::new();
         let area = |code: u32, x: i32, y: i32, w: u32, h: u32| ScenePlacement {
+            role: PlacementRole::Single,
             id: String::new(),
             code,
             sprite: None,
@@ -4586,6 +4592,7 @@ mod side_tests {
         // the absolute sort/pager/cart-buy buttons.
         let mut placements = Vec::new();
         let area = |code: u32, x: i32, y: i32, w: u32, h: u32| ScenePlacement {
+            role: PlacementRole::Single,
             id: String::new(),
             code,
             sprite: None,
@@ -4828,6 +4835,7 @@ mod side_tests {
 
     fn myroom_hit_placement(code: u32, x: i32, y: i32) -> ScenePlacement {
         ScenePlacement {
+            role: PlacementRole::Single,
             id: String::new(),
             code,
             sprite: None,
@@ -5169,6 +5177,7 @@ mod side_tests {
             for cell in 0..*count {
                 let code = 0x8C00_0000u32 | (ordinal as u32 + 1);
                 placements.push(ScenePlacement {
+                    role: PlacementRole::Single,
                     id: String::new(),
                     code,
                     sprite: None,
@@ -5210,6 +5219,7 @@ mod side_tests {
     fn select_chosung_layout_falls_back_without_index_buttons() {
         assert_eq!(select_chosung_layout(&[]), None);
         let unrelated = vec![ScenePlacement {
+            role: PlacementRole::Single,
             id: String::new(),
             code: 0x8C20_0002,
             sprite: None,
@@ -5482,6 +5492,7 @@ mod side_tests {
 
     fn lanking_button(code: u32, x: i32, y: i32) -> ScenePlacement {
         ScenePlacement {
+            role: PlacementRole::Single,
             id: String::new(),
             code,
             sprite: None,

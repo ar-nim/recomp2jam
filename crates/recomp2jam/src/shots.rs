@@ -1300,6 +1300,7 @@ pub use o2jam_render::png::encode_png;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use o2jam_shell::avatar::PlacementRole;
     use o2jam_shell::avatar::{
         anchor_in_frame, load_archive_sprite, paint_foreground_placements, paint_scene_figures,
         playing_member_selected, PlayingArtMode,
@@ -1760,7 +1761,15 @@ mod tests {
             if !claimed {
                 continue;
             }
-            let Some((top, px, py, ink)) = first_opaque_probe(figure) else {
+            // A `SET` clone paints its frame-0 layer only (one image
+            // control, one frame); single placements stack every layer
+            // and the topmost one owns the ink.
+            let probe_figure = if placed.role == PlacementRole::Clone {
+                figure.layers_through(0)
+            } else {
+                figure.clone()
+            };
+            let Some((top, px, py, ink)) = first_opaque_probe(&probe_figure) else {
                 continue;
             };
             // Verified draw chain (avatar.rs `placement_view_origin`):
@@ -1771,13 +1780,16 @@ mod tests {
             // disagreeing pair whose anchor wins. The probed layer
             // names its own anchor: layers stack at their own record
             // anchors, so the topmost ink lands at the topmost anchor.
-            let expected = if figure.has_anchor_offset() {
-                let layer = figure.layer(top).expect("probed figure has a layer");
-                let (ax, ay) = anchor_in_frame(layer.dx, layer.dy, frame_w, frame_h);
-                (ax, ay)
-            } else {
-                let scaled = o2jam_render::scale_rect_to_frame(&placed.rect, frame_w, frame_h);
-                (scaled.x, scaled.y)
+            let scaled = o2jam_render::scale_rect_to_frame(&placed.rect, frame_w, frame_h);
+            let layer = probe_figure.layer(top).expect("probed figure has a layer");
+            let (ax, ay) = anchor_in_frame(layer.dx, layer.dy, frame_w, frame_h);
+            let expected = match (placed.role, figure.has_anchor_offset()) {
+                // A clone's rect positions the body; its record anchors
+                // stay template-local and add on top.
+                (PlacementRole::Clone, _) => (scaled.x + ax, scaled.y + ay),
+                // Anchored singles author their own absolute position.
+                (PlacementRole::Single, true) => (ax, ay),
+                (PlacementRole::Single, false) => (scaled.x, scaled.y),
             };
             let mut buf = vec![0u32; frame_w * frame_h];
             paint_scene_figures(
@@ -1789,7 +1801,17 @@ mod tests {
                 std::slice::from_ref(placed),
                 figures,
             );
-            let at = (expected.1 + py) as usize * frame_w + (expected.0 + px) as usize;
+            let (probe_x, probe_y) = (expected.0 + px, expected.1 + py);
+            if probe_x < 0
+                || probe_y < 0
+                || probe_x as usize >= frame_w
+                || probe_y as usize >= frame_h
+            {
+                // Cloned template children can ride off-canvas with their
+                // parent; the blit clips them and there is nothing to probe.
+                continue;
+            }
+            let at = probe_y as usize * frame_w + probe_x as usize;
             assert_eq!(
                 buf[at], ink,
                 "{label}:{name} must paint at its placement origin"

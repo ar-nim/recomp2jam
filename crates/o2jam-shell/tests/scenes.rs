@@ -17,7 +17,7 @@ use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
 use o2jam_render::{
     has_ink_near, pack_xrgb, Frame, Rect, Rgb555Image, NATIVE_HEIGHT, NATIVE_WIDTH,
 };
-use o2jam_shell::avatar::ScenePlacement;
+use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
 use o2jam_shell::{
     can_enter, paint_screen, AvatarFigure, FigureLayer, GameLoop, MenuKey, Screen, ScreenFlow,
     ScreenGame,
@@ -473,6 +473,7 @@ fn staged_figure() -> AvatarFigure {
 /// the figure lands on the frame origin at any size).
 fn stage_screen_art(game: &mut ScreenGame, screen: Screen, name: &str) {
     let placements = vec![ScenePlacement {
+        role: PlacementRole::Single,
         id: "IDC_HARNESS".to_owned(),
         code: 0,
         sprite: Some(name.to_owned()),
