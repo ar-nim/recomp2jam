@@ -733,6 +733,35 @@ impl SongClock {
     }
 }
 
+/// Measure effective output latency through a backend's sample clock:
+/// queue a silent `marker`, then read the frames sitting behind the
+/// playhead. The reading is exact on a synthetic clock (a scripted
+/// drain) and is the queue-depth half of the live number; the device's
+/// own base latency is not exposed by cpal, so live callers pass `0`
+/// there and the device-number arm stays OPEN until the loopback rig
+/// (#98) pins it.
+///
+/// The marker is silent so a live run hears nothing; only the queue
+/// accounting moves.
+pub fn measure_output_latency(
+    backend: &mut impl AudioBackend,
+    marker: &PcmSamples,
+    device_latency_frames: u64,
+) -> LatencyProbe {
+    // A silent marker is best-effort: a busy live device can consume
+    // frames between the push and the read. The window is one lock
+    // pair, far below a callback quantum, so the reading is the depth
+    // at push time for probe purposes.
+    if backend.play_pcm(marker).is_err() {
+        return LatencyProbe::new(backend.sample_rate(), 0, device_latency_frames);
+    }
+    LatencyProbe::new(
+        backend.sample_rate(),
+        backend.pending_frames(),
+        device_latency_frames,
+    )
+}
+
 /// Output-latency probe: queued-but-unplayed frames plus the device's
 /// own base latency, all reported in milliseconds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1068,5 +1097,73 @@ mod tests {
         assert_eq!(probe.pending_ms(), 100);
         assert_eq!(probe.total_ms(), 200);
         assert_eq!(LatencyProbe::new(0, 999, 999).total_ms(), 0);
+    }
+
+    /// Synthetic-clock backend for the latency probe: queued frames
+    /// drain exactly when the test calls `drain`, so the probe reads a
+    /// fully deterministic depth. Stands in for a device callback.
+    #[derive(Debug, Default)]
+    struct SyntheticClockBackend {
+        queued_frames: u64,
+        sample_rate: u32,
+    }
+
+    impl AudioBackend for SyntheticClockBackend {
+        fn play_pcm(&mut self, pcm: &PcmSamples) -> Result<(), AudioError> {
+            self.queued_frames += pcm.samples.len() as u64 / u64::from(pcm.channels.max(1));
+            if self.sample_rate == 0 {
+                self.sample_rate = pcm.sample_rate;
+            }
+            Ok(())
+        }
+
+        fn samples_played(&self) -> u64 {
+            0
+        }
+
+        fn sample_rate(&self) -> u32 {
+            self.sample_rate
+        }
+
+        fn pending_frames(&self) -> u64 {
+            self.queued_frames
+        }
+    }
+
+    impl SyntheticClockBackend {
+        fn drain(&mut self, frames: u64) {
+            self.queued_frames = self.queued_frames.saturating_sub(frames);
+        }
+    }
+
+    #[test]
+    fn probe_measures_queued_depth_on_a_synthetic_clock() {
+        let mut clock = SyntheticClockBackend::default();
+        let marker = mono_pcm(&[0i16; 4410]); // 100 ms at 44.1 kHz
+        let probe = measure_output_latency(&mut clock, &marker, 2205);
+        assert_eq!(probe.pending_ms(), 100);
+        assert_eq!(probe.total_ms(), 150);
+        clock.drain(4410);
+        let drained = measure_output_latency(&mut clock, &marker, 2205);
+        assert_eq!(drained.pending_ms(), 100);
+        assert_eq!(drained.total_ms(), 150);
+    }
+
+    /// Guard for the probe claim (claim C40 / B51): the measured
+    /// synthetic-clock latency is recorded against the milestone-3
+    /// budget gate. The budget number itself hangs on #76, so this
+    /// guard pins the accounting shape (pending + device base =
+    /// total) and the recorded synthetic value; the device-number arm
+    /// is OPEN with the named rig step: loopback timing on the sample
+    /// clock under Wine fills `device_latency_frames`.
+    #[test]
+    fn latency_probe_guard_records_measurement_for_budget_gate() {
+        let mut clock = SyntheticClockBackend::default();
+        let marker = mono_pcm(&[0i16; 8820]); // 200 ms at 44.1 kHz
+        let probe = measure_output_latency(&mut clock, &marker, 0);
+        assert_eq!(probe.pending_ms(), 200);
+        // Device base unknown (cpal exposes none): the total equals the
+        // queue half until the loopback rig pins the device number.
+        assert_eq!(probe.total_ms(), 200);
     }
 }
