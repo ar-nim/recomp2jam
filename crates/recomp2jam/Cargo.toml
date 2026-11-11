@@ -8,6 +8,8 @@ license.workspace = true
 name = "recomp2jam"
 path = "src/main.rs"
 
+# Development tool: lints docs/parity.md and docs/claims.md against the
+# ADR rules. Not game code; the client and libraries never depend on it.
 [[bin]]
 name = "ledger-check"
 path = "src/ledger_check.rs"

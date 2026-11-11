@@ -3,6 +3,12 @@
 //! Ledger consistency check — lints `docs/parity.md` and `docs/claims.md`
 //! against the rules in ADR-0007/0008/0009/0010.
 //!
+//! **This is a development tool, not game code.** It ships inside the
+//! `recomp2jam` package for toolchain convenience (one `cargo` invocation,
+//! `clippy`/`fmt` coverage), but it is not part of the client, the shell,
+//! or any library the game depends on. It reads documentation files and
+//! exits; it never touches game state, archives, or the network.
+//!
 //! Runs in CI without `install-root`. `--report` prints the violations;
 //! without the flag the test fails on any violation in a row the re-audit
 //! has marked done (a row whose text contains `(audit:done)`), and is
