@@ -9056,9 +9056,11 @@ mod game_tests {
 
     #[test]
     fn channel_rows_ink_at_measured_native_tops() {
-        // Reference-measured anchors (`/tmp/chan2-list.png`): row text
-        // tops at 232+50·index on a native frame, scaled like staged
-        // placements elsewhere.
+        // Row-text anchors on a native frame, scaled like staged
+        // placements elsewhere. Re-measured 2026-11-11 with the
+        // pinned `Ch. NN` fallback label (#93): the Gulimche 'C'
+        // glyph tops sit 8 px above the old digit-led stand-in
+        // (224+50·index was 232+50·index).
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
         game.lane_key(3, true);
@@ -9073,7 +9075,7 @@ mod game_tests {
             },
             0,
         );
-        assert!(white_near(&buf, 800, 600, (200, 232)));
+        assert!(white_near(&buf, 800, 600, (200, 224)));
         assert_eq!(buf[240 * 800 + 230], pack_xrgb(19, 20, 21));
         assert_eq!(buf[229 * 800 + 350], pack_xrgb(230, 227, 230));
         assert!(ink_near(
