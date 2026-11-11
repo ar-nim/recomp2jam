@@ -191,11 +191,26 @@ sprite anchors in the bodies agree with those rects byte-exact.
 
 1. **Rest-state rendering rule (the desaturated look).** Measured, not
    explained: rest pixels match neither body record (7-63% of frame 0)
-   while hover matches frame 0 at 100%. Next step: read the button
-   draw-state word for one room control with a stopped-state winedbg
-   memory read (`docs/reversing.md` winedbg protocol; `emblem`/button
-   descriptor at parent `+0xF80`, stride `0x118`), or trace the palette
-   path behind the draw call.
+   while hover matches frame 0 at 100%. Leg-113 (2026-11-11,
+   `~/scratch/close-backlog/gui-drive/findings.md`) sharpened this:
+   hover equals record 0 pixel-exactly (mean |d| < 1 level, with the
+   records-as-frames correction); the rest paint is deterministic per
+   pixel within a control but is **not** a function of the art color
+   alone — the same art word rests differently in different controls,
+   falsifying closed-form transforms (matrix, per-channel scale/offset,
+   BT.601 desat, HSV-value dim, squaring, cubic RGB). The rest pixels
+   sit within dither noise (±4 levels on the 15-bit captures) of the
+   segment between the frame-0 color and the *local scene background*,
+   with a smooth per-pixel factor by color (none on bright yellow,
+   ~0.4 on red/orange, ~0.1-0.15 on blue) — i.e. a per-pixel alpha /
+   background-coupled mechanism, not a fixed color transform. Next
+   step: stopped-state winedbg read (launch on `OTwo.exe` directly,
+   one stop, queued reads — `docs/reversing.md` protocol) of the gear
+   control's sprite/draw-state words at rest vs hover to settle whether
+   a per-pixel alpha surface or a modulation color is armed; the ptrace
+   rig in `~/scratch/close-backlog/restdim113/restdim.py` is blocked on
+   yama ptrace_scope (game reparents under the explorer desktop) and
+   needs either the winedbg path or a direct-launch input fix.
 2. **A populated room row.** The live room had no open rooms, so the
    `SET 0x11` row template clones were hidden. A transient orange
    outline on one panel appeared once, immediately after the room
