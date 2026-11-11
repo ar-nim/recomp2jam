@@ -1042,12 +1042,14 @@ impl RoomTeams {
             .sum()
     }
 
-    /// Winning team: highest combined total, `None` when no seat is filled.
+    /// Winning team by combined total, `None` when no seat is filled.
     ///
-    /// Ties break toward the lower team id, matching the
-    /// first-seat-wins order of an 8-slot scan. Which side the client
-    /// renders (`Winner_image.ojs`, `Result_WinLose.ojs`) is decided by
-    /// this same comparison server-side.
+    /// Ties break toward the lower team id — this model's documented
+    /// ASSUMPTION (claim D26, OPEN), not exe behavior: the 7.55
+    /// static sweep found no in-exe team-total comparison at all;
+    /// the rendered winner follows the server-written per-member
+    /// win-flag byte, so the real tie-break rule is server-side and
+    /// unverified (live-relay step named in `docs/result-variants.md`).
     #[must_use]
     pub fn winner(&self) -> Option<u8> {
         (0..MAX_TEAMS)
@@ -1725,8 +1727,11 @@ mod tests {
         assert_eq!(room.team_of(0), Some(0));
     }
 
+    /// Tied totals fall back to the lowest team id in this model —
+    /// the fallback is the ASSUMED rule (claim D26, OPEN), standing in
+    /// for the server-side win-flag decision the client renders instead.
     #[test]
-    fn team_totals_sum_only_their_own_seats() {
+    fn tied_team_totals_fall_back_to_the_lowest_team_id() {
         let mut room = RoomTeams::new();
         room.set_team(0, 0);
         room.set_team(1, 1);
