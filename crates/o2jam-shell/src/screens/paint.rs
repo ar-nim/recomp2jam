@@ -4980,28 +4980,11 @@ pub fn winlose_frame(verdict: ResultVerdict) -> Option<u8> {
     }
 }
 
-/// Pinned grade thresholds (grade chooser `FUN_004c4dd0`, dossier
-/// `ev_615e034c…`): score ≥ max × t lifts the plate to the paired
-/// frame, compared in this order. The f64 constants sit at
-/// `0x64a500/0x644888/0x64a4f8/0x64a4f0/0x64a4e8/0x64a4e0`.
-const GRADE_THRESHOLDS: [(f64, u8); 6] = [
-    (0.30, 1),
-    (0.50, 2),
-    (0.70, 3),
-    (0.80, 4),
-    (0.90, 5),
-    (0.95, 6),
-];
+/// Grade plate frame chooser (`FUN_004c4dd0`), re-exported from
+/// `o2jam-game` where the pinned rule lives next to the ratio and
+/// promotion arms it consumes.
+pub use o2jam_game::grade_frame;
 
-/// Grade plate frame 1..=8 for one finished play (`FUN_004c4dd0`):
-/// `ratio` climbs the pinned threshold table; a max combo one under
-/// the note-count word promotes grade 6 to 7; a score equal to the
-/// max reference gives 8. The live wiring is [`result_grade_frame`]:
-/// it reads the ratio from [`o2jam_game::Score::grade_ratio`] (live
-/// [`o2jam_game::Score::grade_numerator`] over pinned
-/// [`o2jam_game::grade_max_reference`]) and selects through this
-/// table at Result paint.
-///
 /// Grade LETTERS stay OPEN: the exe grade strings (`ALL COMBO`,
 /// `COOL 95%`, …) carry zero `.text` references (full-image LE32
 /// scan, `docs/dialog-strings.md`) — result grades are `.ojs`-driven
@@ -5010,40 +4993,16 @@ const GRADE_THRESHOLDS: [(f64, u8); 6] = [
 /// live rig capture of the grade plate at controlled score bands
 /// (or a code consumer for the strings) before any letter is
 /// invented.
-#[must_use]
-pub fn grade_frame(ratio: f64, combo_at_top: bool, score_at_max: bool) -> u8 {
-    let mut grade = 0;
-    for (threshold, frame) in GRADE_THRESHOLDS {
-        if ratio >= threshold {
-            grade = grade.max(frame);
-        }
-    }
-    if grade == 6 && combo_at_top {
-        grade = 7;
-    }
-    if score_at_max {
-        grade = 8;
-    }
-    grade
-}
-
+///
 /// Live grade plate for one finished play (`FUN_004c4dd0`, computed at
-/// Result paint): the ratio comes from the live [`o2jam_game::Score`]
-/// over the pinned reference word, selected through [`grade_frame`].
+/// Result paint): the frame comes from the live [`o2jam_game::Score`]
+/// over the pinned reference word ([`o2jam_game::Score::grade_frame`]).
 /// `None` paints no plate — no chart word, or the ratio sits under
 /// the lowest threshold. The staged frame paints at (395,531)
 /// through [`paint_result_scene`].
 #[must_use]
 pub fn result_grade_frame(score: &o2jam_game::Score, note_count: u16) -> Option<u8> {
-    if note_count == 0 {
-        return None;
-    }
-    let frame = grade_frame(
-        score.grade_ratio(note_count),
-        score.is_combo_at_top(note_count),
-        score.is_score_at_max(note_count),
-    );
-    (frame >= 1).then_some(frame)
+    score.grade_frame(note_count)
 }
 
 /// White ink of the pinned result fields (the exe text helper runs

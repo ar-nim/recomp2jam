@@ -42,6 +42,21 @@ words with file offsets and REA evidence ids.
    == `0x778a00`−1) promotes 6 to 7; score equal to max gives 8.
    The plate is `Result_Imgs_Rank.ojs` frames 1–8 at (395,531).
    (`ev_615e034c…`, `ev_c61d99f8…`)
+
+   Byte-verified 2026-11-12 (worktree byte-walk, no providers): the
+   six f64 constants hold at the pinned VAs — 0.95 at `0x64a4e0` is a
+   single full-image occurrence. The reference writer is the setup
+   path `call +0xa9a` at file `0xc1821` into `FUN_004c22c0`, stored
+   `mov [edx+0x10d14],eax` at file `0xc1829`; `FUN_004c22c0` computes
+   from the u16 word `0x778a00` alone (`imul 0xc8` at file `0xc2319`
+   over the full word, group steps `imul 0xa`/`imul 0x19` at files
+   `0xc234d`/`0xc2350`, trailing group `imul 0xa` at file `0xc2376`).
+   The chooser reads `+0x10d14` and multiplies against the constants
+   at files `0xc50cc`–`0xc53ea` (`cmp ecx,[eax+0x10d14]` at file
+   `0xc53ea`). Direct disp32/moffs refs from the chooser district to
+   the score global are zero — the score read is indirect, which is
+   why a pure byte sweep cannot re-derive the compare ladder; the
+   ladder itself stays pinned on the dossier evidence ids above.
 7. Total score: `%8d` ← `0x77cd2c` at (605,533), white Arial, in
    both modes. It overlaps the left edge of the TOTAL GEM bar. No
    gem model is pinned; the bar body is staged art. Bottom counter
@@ -176,7 +191,13 @@ the tie-break becomes statically pinnable from that handler.
 6. Text-helper alignment (left versus right anchor of x in
    `FUN_0042c730`) is OPEN; shell keeps each passed x as the left
    edge.
-7. Grade reference `this+0x10d14` write site and stat-name
-   semantics (`0x77ee58`, `0x77ee60`) are OPEN.
+7. ~~Grade reference `this+0x10d14` write site~~ PINNED with #78:
+   the writer is the setup path at files `0xc1821`/`0xc1829` calling
+   `FUN_004c22c0` (rule 6 verification block above); the computation
+   reads only the word `0x778a00`. The stat-name semantics of
+   `0x77ee58`/`0x77ee60` themselves stay OPEN (labeling only — the
+   readers/writers are pinned elsewhere in this note). Grade letter
+   strings remain code-unreferenced (B4): letters are `.ojs`-driven
+   plate frames, so no letter mapping exists to pin.
 8. Role 3 draws verdict frame 0; whether observers see the rank-1
    banner is OPEN.

@@ -1499,6 +1499,62 @@ impl Score {
         let max = crate::grade_max_reference(note_count);
         max != 0 && self.grade_numerator() == max
     }
+
+    /// Grade plate frame 1..=8 for this finished play (`FUN_004c4dd0`,
+    /// rule 6 of `docs/result-variants.md`): the live
+    /// [`Score::grade_ratio`] climbs [`grade_frame`]; the combo-top and
+    /// max-score arms feed the promotion arguments.
+    #[must_use]
+    pub fn grade_frame(&self, note_count: u16) -> Option<u8> {
+        if note_count == 0 {
+            return None;
+        }
+        let frame = grade_frame(
+            self.grade_ratio(note_count),
+            self.is_combo_at_top(note_count),
+            self.is_score_at_max(note_count),
+        );
+        (frame >= 1).then_some(frame)
+    }
+}
+
+/// Pinned grade thresholds (grade chooser `FUN_004c4dd0`, dossier
+/// `ev_615e034c…`; constants byte-verified 2026-11-12, #78): score ≥
+/// max × t lifts the plate to the paired frame, compared in this order.
+/// The f64 constants sit at
+/// `0x64a500/0x644888/0x64a4f8/0x64a4f0/0x64a4e8/0x64a4e0`.
+const GRADE_THRESHOLDS: [(f64, u8); 6] = [
+    (0.30, 1),
+    (0.50, 2),
+    (0.70, 3),
+    (0.80, 4),
+    (0.90, 5),
+    (0.95, 6),
+];
+
+/// Grade plate frame 0..=8 for one finished play (`FUN_004c4dd0`,
+/// PINNED, rule 6 of `docs/result-variants.md`): `ratio` climbs the
+/// pinned threshold table; a max combo one under the note-count word
+/// promotes grade 6 to 7; a score equal to the max reference gives 8.
+/// Frame 0 means the ratio sits under the lowest band — the enter
+/// painter's empty plate state. The live wiring is
+/// [`Score::grade_frame`]; the shell paints the selected frame at
+/// (395,531).
+#[must_use]
+pub fn grade_frame(ratio: f64, combo_at_top: bool, score_at_max: bool) -> u8 {
+    let mut grade = 0;
+    for (threshold, frame) in GRADE_THRESHOLDS {
+        if ratio >= threshold {
+            grade = grade.max(frame);
+        }
+    }
+    if grade == 6 && combo_at_top {
+        grade = 7;
+    }
+    if score_at_max {
+        grade = 8;
+    }
+    grade
 }
 
 /// Records in the note-count word the grade reference leaves unscored,
@@ -2505,6 +2561,41 @@ mod tests {
         };
         assert!(!short.is_score_at_max(51));
         assert!(!Score::default().is_score_at_max(26));
+    }
+
+    #[test]
+    fn grade_mapping_selects_the_pinned_frame_at_band_boundaries() {
+        // Synthetic boundary sweep (issue #79 guard): the note word 51
+        // pins the reference at 10_450, so each point total below sits
+        // exactly at its band edge through the live ratio — frames 1..6
+        // climb the pinned 0.30/0.50/0.70/0.80/0.90/0.95 table, combo
+        // 50 (word − 1) promotes band 6 to 7, and the exact max gives 8.
+        let cases = [
+            (3_134, None),
+            (3_135, Some(1)),
+            (5_225, Some(2)),
+            (7_315, Some(3)),
+            (8_360, Some(4)),
+            (9_405, Some(5)),
+            (9_928, Some(6)),
+            (10_450, Some(8)),
+        ];
+        for (points, frame) in cases {
+            let score = Score {
+                points,
+                ..Score::default()
+            };
+            assert_eq!(score.grade_frame(51), frame, "{points} points");
+        }
+        let combo_top = Score {
+            points: 9_928,
+            max_combo: 50,
+            ..Score::default()
+        };
+        assert_eq!(combo_top.grade_frame(51), Some(7));
+        // No chart word, or a word with no reference: no plate at all.
+        assert_eq!(combo_top.grade_frame(0), None);
+        assert_eq!(Score::default().grade_frame(26), None);
     }
 
     #[test]
