@@ -138,7 +138,7 @@ wrong; Myroom stages bound like every other side screen.
 
 | Dimension | 7.55 expectation (evidence) | Shell status | Verdict |
 |---|---|---|---|
-| Composition | Staged bound `State_Planet` block (backdrop + emblem buttons + promo + MENU bar); emblem captions decode to the pinned strings in real glyphs; five pinned `.bnd` button rects; quest button commented undecided — no drum backend (docs/planet.md) | (ev: docs/planet.md) Staged art or the labeled flat card paints; captions paint into their bnd rects via `o2jam-text`. Guards: `planet_emblem_captions_decode_to_the_pinned_strings`, `planet_captions_have_real_glyphs_in_the_system_font`, `planet_captions_paint_into_their_bnd_rects`. OPEN arms: highlight rendering (the exe orange select border is capture-pinned; the shell keeps the amber cursor — next step named in `docs/planet.md`); promo carousel semantics | (R+G) PASS (v: 9692d41) |
+| Composition | Staged bound `State_Planet` block (backdrop + emblem buttons + promo + MENU bar); emblem captions decode to the pinned strings in real glyphs; five pinned `.bnd` button rects; quest button commented undecided — no drum backend (docs/planet.md) | (ev: docs/planet.md) Staged art or the labeled flat card paints; captions paint into their bnd rects via `o2jam-text`. Guards: `planet_emblem_captions_decode_to_the_pinned_strings`, `planet_captions_have_real_glyphs_in_the_system_font`, `planet_captions_paint_into_their_bnd_rects`. OPEN arms: hover highlight (per-control art pinned in `docs/hover.md` + `docs/planet.md` and painted from pointer motion — guards `hovered_planet_action_tracks_pointer_motion`…`planet_hover_without_staged_figure_paints_nothing`; the exe orange select border keeps the amber cursor stand-in — next step named in `docs/planet.md`); promo carousel semantics | (R+G) PASS (v: 9692d41) |
 | Input | Button clicks hit-test at the five pinned `.bnd` rects and HARD/NORMAL/EASY record a difficulty pick; promo `< ☐ >` cells answer clicks at their parsed rects (press records, staged placements only — ADR-0003); EXIT/OPTION discs dispatch at their pinned rects (quit-confirm / options dialog); the options dialog edits real settings (Key rebinds, Sound sliders, Game-tab ini values, SAVE/DEFAULT — docs/options.md) | (ev: docs/planet.md) Clicks hit-test and record; the options dialog stages all three tab sheets and edits real settings. Guards: `planet_dispatch_maps_promo_cells_to_carousel_presses`, `planet_promo_cells_answer_clicks_at_their_staged_rects`, `promo_press_records_the_cell_without_leaving_the_board`, `power_disc_opens_quit_confirm_and_ok_quits`, `gear_disc_opens_options_and_escape_closes_it`, `options_key_tab_rebind_answers_on_the_new_lane`, `options_sound_tab_steps_move_volumes_with_exe_bounds`, `options_game_tab_buttons_map_to_the_pinned_ini_values`, `options_save_commits_beside_the_install_root`, `options_default_restores_the_exe_defaults_per_tab`, `longnote_mode_snapshots_at_playing_entry`, plus the 13 `options::tests`. FREE/DRUM clicks stay unbound (P0). OPEN arms: exe entry key (next step: SendInput sweep per the `~/scratch/planet-verify/` recipe); options slider/button→value orders and highway pixel naming (the ticket's rig list in `docs/options.md`); in-song mix application | (R+G) PASS (v: 9692d41) |
 | Timing | BGM `Music/Planet.ojm`; Planet and the channel dialog it opens share cue record 9 (the exe's dialog lives inside `CStatePlanet`, so the exe never re-pushes that cue) | (ev: docs/planet.md) Scene entry keeps a sounding track when the cue repeats the latched record, repeat mode and volume instead of restarting it from sample 0 (ticket #27). Guards: `emblem_round_trip_keeps_the_shared_board_track_running`, `different_track_and_silence_still_cue_on_the_scene_change`, plus the `o2jam-audio` `bgm::tests::cue_*` family. OPEN arm: the BGM trigger itself is superseded per `docs/planet.md` OPEN 7 — next step named there | (R+G) PASS (v: 9692d41) |
 | Transitions | `Channel → Planet` via the dialog X; `Planet → Channel` via a lit emblem or Confirm — live-verified 2026-11-09; no bare-board → Room path is evidenced | (ev: docs/planet.md) The verified edges run; the window board session walks `avi → planet → channel → planet → channel` (19/19 trace events, smoke `docs/smoke/planet-board-session.md`). Guards: `lit_emblem_click_opens_the_channel_dialog_and_records_the_pick`, `planet_confirm_opens_the_channel_dialog`, `channel_back_closes_to_the_planet_board`, `flow_allows_every_documented_edge`. OPEN arm: bare-board → Room/solo path — next step: a live gateway replay naming the solo entry wire shapes | (R+G) PASS (v: 9692d41) |
@@ -423,9 +423,21 @@ guard tests that hold it and what stays OPEN with its next step.
 - **Pointer state (tickets #33, #26).** `GameLoop::mouse_moved` carries
   native pixels into the game; the channel select bar follows the
   hovered row and falls back to the keyboard highlight (both halves
-  live-confirmed). Per-control hover frames for room and planet stay
-  OPEN: next step is the Wine rig motion sweep (SendInput only; XTEST
-  never reaches the DirectDraw canvas).
+  live-confirmed). Room hover (ticket #33, 2026-11-11): the resolver
+  maps the pointer onto staged room chrome (`hovered_room_control`,
+  dialogs/modals/sides cover it first) and the painter repaints the
+  hovered button at full body frame 0 — the rig-pinned hover state
+  (`docs/hover.md` 2026-11-10 sweep: 17 of 18 buttons match frame 0 at
+  100%; the active filter/tab keeps frame 1). Row panels stay static
+  by negative evidence (0 changed px, no `Room_MOver.ojs` overlay).
+  The rest-state desaturation transform stays OPEN (measured, not
+  explained — next step: stopped-state winedbg draw-state read).
+  Planet hover frames stay OPEN for ticket #26, which consumes the
+  same pointer state. Guards: `hovered_room_control_resolves_the_staged_chrome_button`,
+  `hovered_room_control_clears_off_the_room_screen`,
+  `hovered_room_button_repaints_its_first_frame`,
+  `room_row_panels_stay_static_under_the_pointer`,
+  `room_hover_hides_behind_the_open_dialog`.
 - **Splash hold (ticket #24).** The Avi cue is record 8 (`bgLogo.ogg`,
   3.923 s by `o2jam-dump` + decode timing), so the 3 s stand-in cuts
   0.92 s early. The hold length and the arming event stay OPEN: the two

@@ -184,6 +184,9 @@ photo-vs-bnd value divergences stand, cited per row).
 | side.rs:894 `PLANET_EASY_RECT` | (87,32,99,112) | r3, exact (dup r18) | `IDC_BUTTON_SPLANET_EASY`, ord 3 | DONE | None |
 | side.rs:901 `PLANET_FREE_RECT` | (614,32,99,112) | r4, exact (dup r19) | `IDC_BUTTON_SPLANET_FREE`, ord 4 | DONE | None |
 | side.rs:908 `PLANET_DRUM_RECT` | (510,32,99,112) | r5, exact (dup r20) | `IDC_BUTTON_SPLANET_DRUM`, ord 5 | DONE | None |
+| side.rs `PLANET_EMBLEM_EASY_PLATE_RECT` | (94,44,84,18) | Wine hover sweep bbox 94,44-178,62, 1476 px (`docs/hover.md` `planet-emblem-easy-offA/-on.png`) | `Planet_Btn_Easy.ojs` frame-0 pixels at that offset (±30/255) | DONE | None (`docs/planet.md` board-hover section) |
+| side.rs `PLANET_EMBLEM_NORMAL_PLATE_RECT` | (213,44,84,18) | sweep bbox 213,44-297,62, 1477 px | `Planet_Btn_Normal.ojs` frame 0, same | DONE | None |
+| side.rs `PLANET_EMBLEM_HARD_PLATE_RECT` | (343,44,84,18) | sweep bbox 343,44-427,62, 1456 px | `Planet_Btn_Hard.ojs` frame 0, same | DONE | None |
 
 ## Playing (playing.rs)
 

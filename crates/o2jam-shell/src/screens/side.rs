@@ -2164,6 +2164,46 @@ pub const fn planet_band_rect(band: PlanetBand) -> Rect {
     }
 }
 
+/// EASY emblem hover plate band (native px): the 84x18 light band
+/// at (94,44)-(178,62) the Wine sweep measures on hover
+/// (`docs/hover.md`: `planet-emblem-easy-offA/-on.png`, bbox
+/// 94,44-178,62, 1476 changed px). The band pixels are the emblem
+/// body's own frame-0 pixels at that offset; the rest paint leaves
+/// them out, so the hover reveals this rect and nothing else.
+pub const PLANET_EMBLEM_EASY_PLATE_RECT: Rect = Rect {
+    x: 94,
+    y: 44,
+    w: 84,
+    h: 18,
+};
+/// NORMAL emblem hover plate band (native px): (213,44)-(297,62)
+/// (`docs/hover.md`: `planet-emblem-normal-offA/-on.png`, 1477 px).
+pub const PLANET_EMBLEM_NORMAL_PLATE_RECT: Rect = Rect {
+    x: 213,
+    y: 44,
+    w: 84,
+    h: 18,
+};
+/// HARD emblem hover plate band (native px): (343,44)-(427,62)
+/// (`docs/hover.md`: `planet-emblem-hard-offA/-on.png`, 1456 px).
+pub const PLANET_EMBLEM_HARD_PLATE_RECT: Rect = Rect {
+    x: 343,
+    y: 44,
+    w: 84,
+    h: 18,
+};
+
+/// Hover plate band of one lit emblem family (`None` never: every
+/// `PlanetBand` is a lit family — QUEST/TUTORIAL are not bands).
+#[must_use]
+pub const fn planet_plate_rect(band: PlanetBand) -> Rect {
+    match band {
+        PlanetBand::Easy => PLANET_EMBLEM_EASY_PLATE_RECT,
+        PlanetBand::Normal => PLANET_EMBLEM_NORMAL_PLATE_RECT,
+        PlanetBand::Hard => PLANET_EMBLEM_HARD_PLATE_RECT,
+    }
+}
+
 /// Board element under native pixel (`x`, `y`): the pinned `.bnd`
 /// button rects, right/bottom edges exclusive (`rect_hit`). `None`
 /// everywhere else — MENU discs and promotion cells resolve through
@@ -2248,13 +2288,22 @@ pub const PLANET_BUTTON_DRUM_CODE: u32 = 0x1920_1006;
 /// (ADR-0003: no fallback literals), never this constant.
 pub const PLANET_PROMO_LEFT_CODE: u32 = 0x1920_000D;
 /// Promotion carousel STOP cell code: halts the banner rotation
-/// (press records; semantics OPEN as above). Pinned rect rect 14
-/// (387,511)-(413,535); geometry rides staged placements only.
-pub const PLANET_PROMO_STOP_CODE: u32 = 0x1920_000E;
+/// (press records; semantics OPEN as above). `0X1920C00F`
+/// (`IDC_BUTTON_SPLANET_PROMOTION_PLAYSTOP`,
+/// `Planet_Btn_Promotion_PlayStop.ojs`): the `0xC` bit matters —
+/// `0X1920000E` is the RIGHT cell, so the old `0x...0E` value
+/// crossed the two cells (`docs/hover.md`, `docs/planet.md`).
+/// Pinned rect rect 14 (387,511)-(413,535) via ordinal
+/// `(code & 0xFFF) − 1` (`0xF − 1 = 14`); geometry rides staged
+/// placements only.
+pub const PLANET_PROMO_STOP_CODE: u32 = 0x1920_C00F;
 /// Promotion carousel RIGHT cell code: steps the banner forward
-/// (press records; semantics OPEN as above). Pinned rect rect 13
-/// (421,511)-(447,535); geometry rides staged placements only.
-pub const PLANET_PROMO_RIGHT_CODE: u32 = 0x1920_000F;
+/// (press records; semantics OPEN as above). `0X1920000E`
+/// (`IDC_BUTTON_SPLANET_PROMOTION_RIGHT`): the old `0x...0F` value
+/// named a code the block never declares (`docs/planet.md`).
+/// Pinned rect rect 13 (421,511)-(447,535); geometry rides staged
+/// placements only.
+pub const PLANET_PROMO_RIGHT_CODE: u32 = 0x1920_000E;
 /// Power disc code: opens the quit-confirm popup (capture-pinned,
 /// `docs/planet.md` "Real board structure"; message + OK/CANCEL in
 /// [`QUIT_MESSAGE_CP949`]).
@@ -2284,9 +2333,9 @@ pub const PLANET_TEXT_DRUM_CODE: u32 = 0x1940_000B;
 pub enum PlanetPromo {
     /// LEFT cell (`0X1920000D`, rect 12).
     Left,
-    /// PLAYSTOP cell (`0X1920000E`, rect 14).
+    /// PLAYSTOP cell (`0X1920C00F`, rect 14).
     Stop,
-    /// RIGHT cell (`0X1920000F`, rect 13).
+    /// RIGHT cell (`0X1920000E`, rect 13).
     Right,
 }
 

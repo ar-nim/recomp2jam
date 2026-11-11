@@ -28,11 +28,11 @@ use std::collections::HashMap;
 
 use super::super::avatar::{
     anchor_in_frame, clone_instance_live, paint_behind_placements, paint_foreground_placements,
-    paint_scene_figures, paint_scene_figures_live, scene_block, scene_sprite_names, AvatarFigure,
-    FigureLayer, PlacementRole, ScenePlacement, AVI_BLOCK, CHANNEL_BLOCK, LANKING_BLOCK,
-    LOADING_BLOCK, LOADING_COVER_SPRITE, LOADING_SPRITE, MUSICSHOP_BLOCK, MYROOM_BLOCK,
-    PLANET_BLOCK, RESULT_BLOCK, ROOM_BLOCK, SHOP_BLOCK, WAITING_BLOCK, WAIT_COVER_SPRITE,
-    WAIT_TEAM_SPRITES,
+    paint_placement_layer, paint_scene_figures, paint_scene_figures_live, scene_block,
+    scene_sprite_names, shared_sprite_names, AvatarFigure, FigureLayer, PlacementRole,
+    ScenePlacement, AVI_BLOCK, CHANNEL_BLOCK, LANKING_BLOCK, LOADING_BLOCK, LOADING_COVER_SPRITE,
+    LOADING_SPRITE, MUSICSHOP_BLOCK, MYROOM_BLOCK, PLANET_BLOCK, RESULT_BLOCK, ROOM_BLOCK,
+    SHOP_BLOCK, WAITING_BLOCK, WAIT_COVER_SPRITE, WAIT_TEAM_SPRITES,
 };
 use super::super::playing::{HighwayGeometry, PlayingView};
 use super::super::screen::Screen;
@@ -40,10 +40,11 @@ use super::side::{
     lanking_bpm_caption, lanking_diff_caption, lanking_genre_caption, lanking_lview_slots,
     lanking_rank_cells, lanking_rview_slots, lanking_tiled_rect, music_shop_buy_caption,
     music_shop_cart_page_rects, music_shop_cart_slots, music_shop_page_rects, music_shop_slots,
-    music_shop_tiled_rect, myroom_action_for_code, planet_band_rect, planet_caption_for_code,
-    shop_cart_page_rects, shop_cart_slots, wallet_row_caption, LankingSong, MusicShopRow,
-    MyRoomAction, MyRoomState, PlanetBand, PlanetOptionTab, ShopGood, WalletRow, WalletState,
-    GEM_LABEL, LANKING_LVIEW_TEXT_CODES, LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES,
+    music_shop_tiled_rect, myroom_action_for_code, planet_action_for_code, planet_band_rect,
+    planet_caption_for_code, planet_plate_rect, shop_cart_page_rects, shop_cart_slots,
+    wallet_row_caption, LankingSong, MusicShopRow, MyRoomAction, MyRoomState, PlanetAction,
+    PlanetBand, PlanetOptionTab, PlanetPromo, ShopGood, WalletRow, WalletState, GEM_LABEL,
+    LANKING_LVIEW_TEXT_CODES, LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES,
     MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS, MSHOP_ROW_TEXT_CODES,
     MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_SLOT_FIRST_CODE, QUIT_MESSAGE_CP949,
     SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS,
@@ -1567,13 +1568,94 @@ fn paint_planet_captions(frame: &mut Frame<'_>, placements: &[ScenePlacement]) {
 /// paints (no fallback geometry is invented). A picked band draws
 /// the shared amber cursor inside its pinned `.bnd` button rect —
 /// highlight rendering is unevidenced, so this cursor is an OPEN
-/// stand-in (docs/planet.md), not exe parity.
-pub fn paint_planet_scene(frame: &mut Frame<'_>, art: &SceneArt, selection: Option<PlanetBand>) {
+/// stand-in (docs/planet.md), not exe parity. The hovered board
+/// control (`hover`, from pointer motion alone) repaints its pinned
+/// highlight art on top (see [`paint_planet_hover`]); `None` keeps
+/// the rest stack, so unhover clears the highlight by repaint.
+pub fn paint_planet_scene(
+    frame: &mut Frame<'_>,
+    art: &SceneArt,
+    selection: Option<PlanetBand>,
+    hover: Option<PlanetAction>,
+) {
     art.paint_backdrop(frame, Screen::Planet);
+    paint_planet_hover(frame, art, hover);
     paint_planet_captions(frame, &art.placements);
     if let Some(band) = selection {
         let rect = planet_band_rect(band);
         paint_cursor(frame, rect.x + 10, rect.y + rect.h as i32 / 2);
+    }
+}
+
+/// Planet-board hover highlight: the pinned per-control art from
+/// the Wine sweep (`docs/hover.md`, exe `83a04541…72c823b`) — three
+/// lit emblems reveal their body's own 84x18 plate band (frame 0
+/// clipped to [`planet_plate_rect`], no frame swap), the gear and
+/// exit discs and the promo arrows repaint body frame 0 at full
+/// colour over the dimmed rest, and only the PLAYSTOP cell swaps
+/// frames (rest frame 0, hover frame 1). The QUEST/TUTORIAL plates
+/// are exe-static (0 changed pixels) and paint nothing. Every pixel
+/// comes from the staged body — a control with no staged figure
+/// (or no layer for the arm) paints nothing, never a stand-in.
+/// The rest stack underneath is untouched (its dim/selected-frame
+/// rendering stays OPEN, `docs/planet.md`), so unhover clears the
+/// highlight by repaint.
+fn paint_planet_hover(frame: &mut Frame<'_>, art: &SceneArt, hover: Option<PlanetAction>) {
+    let Some(action) = hover else {
+        return;
+    };
+    // Static QUEST/TUTORIAL plates: exe-verified no highlight.
+    let (layer_index, clip) = match action {
+        PlanetAction::Emblem { band: None } => return,
+        // Plate reveal: layer 0 clipped to the pinned band rect.
+        PlanetAction::Emblem { band: Some(band) } => (0, Some(planet_plate_rect(band))),
+        // The one true frame swap: hover arms frame 1 (frame 0
+        // stands in when the body stages a single frame).
+        PlanetAction::Promo {
+            cell: PlanetPromo::Stop,
+        } => (playstop_hover_layer(art, action), None),
+        // Dimmed-rest buttons: hover restores frame 0 at full colour.
+        PlanetAction::QuitConfirm | PlanetAction::OptionsDialog | PlanetAction::Promo { .. } => {
+            (0, None)
+        }
+    };
+    let Some(placement) = art
+        .placements
+        .iter()
+        .find(|placed| planet_action_for_code(placed.code) == Some(action))
+    else {
+        return;
+    };
+    let shared = shared_sprite_names(&art.placements);
+    let shares_body = placement
+        .sprite
+        .as_deref()
+        .is_some_and(|sprite| shared.contains(sprite));
+    paint_placement_layer(
+        frame,
+        placement,
+        &art.figures,
+        layer_index,
+        shares_body,
+        clip,
+    );
+}
+
+/// Frame index the PLAYSTOP hover arms: 1 while the staged body
+/// carries a second frame, else 0 (a single-frame stage has no swap
+/// to show, so the hover keeps the rest frame).
+fn playstop_hover_layer(art: &SceneArt, action: PlanetAction) -> usize {
+    let has_second_frame = art
+        .placements
+        .iter()
+        .find(|placed| planet_action_for_code(placed.code) == Some(action))
+        .and_then(|placement| placement.sprite.as_ref())
+        .and_then(|sprite| art.figures.get(sprite))
+        .is_some_and(|figure| figure.layer(1).is_some());
+    if has_second_frame {
+        1
+    } else {
+        0
     }
 }
 
@@ -2811,11 +2893,19 @@ pub(crate) fn paint_room_list(frame: &mut Frame<'_>, rooms: &[RoomListEntry], hi
 }
 
 /// Paint staged lobby art with the live room list and cursor on top.
+///
+/// `hovered_code` is the staged chrome control under the pointer, if
+/// any: the exe repaints that control at full body frame 0 while the
+/// pointer sits on it (`docs/hover.md`). Row panels stay static — they
+/// are not chrome controls, so the pointer over a panel repaints
+/// nothing (negative evidence: 0 changed px on all six panels,
+/// `Room_MOver.ojs` unmatched in either state).
 pub fn paint_room_scene(
     frame: &mut Frame<'_>,
     rooms: &[RoomListEntry],
     highlight: usize,
     art: &SceneArt,
+    hovered_code: Option<u32>,
 ) {
     let panels = room_panel_instances(&art.placements);
     art.paint_backdrop_live(frame, Screen::Room, |placed| {
@@ -2830,6 +2920,32 @@ pub fn paint_room_scene(
     // the exe's per-row template clone offsets stay OPEN past the
     // title/number/count pins (`findings.md` §2).
     paint_room_rows(frame, rooms, highlight, Some(art));
+    paint_room_hover(frame, art, hovered_code);
+}
+
+/// Hover repaint for one staged room chrome button (`docs/hover.md`
+/// 2026-11-10 rig sweep): the exe repaints the hovered control at
+/// full body frame 0, so the shell repaints that frame alone over the
+/// stacked rest paint. The rest-state desaturation transform is
+/// measured but unexplained (rest matches neither body record), so the
+/// rest paint keeps today's stacked look — labeled OPEN, next step a
+/// stopped-state winedbg draw-state read per `docs/hover.md`. The
+/// active filter/tab already paints frame 1 on top of the stack, so no
+/// extra arm is needed there. A missing placement, sprite, or frame
+/// paints nothing.
+fn paint_room_hover(frame: &mut Frame<'_>, art: &SceneArt, hovered_code: Option<u32>) {
+    let Some(code) = hovered_code else {
+        return;
+    };
+    let Some(placed) = art.placements.iter().find(|placed| placed.code == code) else {
+        return;
+    };
+    let shared = shared_sprite_names(&art.placements);
+    let shares_body = placed
+        .sprite
+        .as_deref()
+        .is_some_and(|sprite| shared.contains(sprite));
+    paint_placement_layer(frame, placed, &art.figures, 0, shares_body, None);
 }
 
 /// Room user-panel control ids (`STATE_ROOM` text/image wells; the
@@ -3166,16 +3282,38 @@ pub fn paint_waiting_scene(
 /// members that carry art.
 const WAITING_AVATAR_SLOT_ID: &str = "IDC_IMAGE_SWAIT_AVATAR";
 
+/// Native avatar slot of one seat: the spriteless template rect added
+/// onto the seat parent's origin (the clone write-back rule), `None`
+/// while either placement is unstaged — the slot then stays empty,
+/// never a raw-rect paint at the frame corner.
+#[must_use]
+fn waiting_seat_slot_rect(placements: &[ScenePlacement], seat: usize) -> Option<Rect> {
+    let slot = placements
+        .iter()
+        .find(|placed| placed.id == WAITING_AVATAR_SLOT_ID)
+        .map(|placed| placed.rect)?;
+    let parent = WAITING_SEAT_PARENT_IDS
+        .get(seat)
+        .and_then(|id| placements.iter().find(|placed| placed.id == *id))
+        .map(|placed| placed.rect)?;
+    Some(Rect {
+        x: parent.x.saturating_add(slot.x),
+        y: parent.y.saturating_add(slot.y),
+        w: slot.w,
+        h: slot.h,
+    })
+}
+
+/// Paint one worn figure into one seat slot, centred on the slot's
+/// scaled box (the shared seat-slot path: self and peers alike).
+fn paint_figure_in_seat_slot(frame: &mut Frame<'_>, figure: &AvatarFigure, slot: &Rect) {
+    let scaled = scale_rect_to_frame(slot, frame.w, frame.h);
+    figure.paint_extent_centered(frame, &scaled, frame.w, frame.h);
+}
+
 /// Paint the local player's worn figure into their own seat's avatar
 /// slot (seat 0, the `IDC_BUTTON_SWAIT_EXTEND1` instance the exe seats
-/// the room host on).
-///
-/// Only the local seat has a figure source in the shell: the worn stack
-/// comes from `avatar.opa` through the binary, exactly like the Result
-/// banner and the Room panel. Peers carry `RoomMember.equipment` on the
-/// wire, but the shell holds no avatar archive to stack them with —
-/// OPEN: stage the archive (or pre-stacked peer figures) and paint each
-/// occupied seat's slot the same way.
+/// the room host on). Thin wrapper over the shared seat-slot path.
 pub fn paint_waiting_seat_avatar(
     frame: &mut Frame<'_>,
     placements: &[ScenePlacement],
@@ -3184,28 +3322,36 @@ pub fn paint_waiting_seat_avatar(
     let Some(figure) = figure else {
         return;
     };
-    let Some(slot) = placements
-        .iter()
-        .find(|placed| placed.id == WAITING_AVATAR_SLOT_ID)
-        .map(|placed| placed.rect)
-    else {
-        return;
-    };
-    let Some(seat) = placements
-        .iter()
-        .find(|placed| placed.id == WAITING_SEAT_PARENT_IDS[0])
-        .map(|placed| placed.rect)
-    else {
-        return;
-    };
-    let native = Rect {
-        x: seat.x.saturating_add(slot.x),
-        y: seat.y.saturating_add(slot.y),
-        w: slot.w,
-        h: slot.h,
-    };
-    let scaled = scale_rect_to_frame(&native, frame.w, frame.h);
-    figure.paint_extent_centered(frame, &scaled, frame.w, frame.h);
+    if let Some(slot) = waiting_seat_slot_rect(placements, 0) {
+        paint_figure_in_seat_slot(frame, figure, &slot);
+    }
+}
+
+/// Paint each occupied seat's staged figure into its own avatar slot
+/// through the same slot path as the local seat (seat-relative rect
+/// plus the seat parent's origin). Vacant and locked seats keep their
+/// bare plate even when a figure is staged; unstaged seats stay empty.
+/// No template child ever paints at the raw rect: every figure goes
+/// through its seat's parent offset.
+pub fn paint_waiting_seat_avatars(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    room: &JoinedRoom,
+    figures: &[Option<AvatarFigure>],
+) {
+    let seats = staged_seats(room);
+    for (index, staged_figure) in figures.iter().enumerate() {
+        if seats.get(index).is_none_or(|seat| !seat.present) {
+            continue;
+        }
+        let (Some(figure), Some(slot)) = (
+            staged_figure.as_ref(),
+            waiting_seat_slot_rect(placements, index),
+        ) else {
+            continue;
+        };
+        paint_figure_in_seat_slot(frame, figure, &slot);
+    }
 }
 
 /// Seat-cover control ids in seat order (`COVERAVATAR1..8`, codes
@@ -6548,6 +6694,7 @@ mod paint_tests {
             &rooms,
             1,
             &art,
+            None,
         );
         let window_has_ink = |x: i32, y: i32, ww: i32, hh: i32, ink: u32| -> bool {
             for dy in 0..hh {
@@ -6647,6 +6794,7 @@ mod paint_tests {
             &two_rooms(),
             0,
             &art,
+            None,
         );
         let white = pack_xrgb(0xFF, 0xFF, 0xFF);
         let window_has_ink = |x: i32, y: i32, ww: i32, hh: i32| -> bool {
@@ -6686,6 +6834,7 @@ mod paint_tests {
             &two_rooms(),
             0,
             &art,
+            None,
         );
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
@@ -8307,6 +8456,7 @@ mod paint_tests {
             &rooms,
             0,
             &art,
+            None,
         );
         assert_eq!(buf[10 * 800 + 10], pack_xrgb(255, 0, 0));
         assert_eq!(buf[10 * 800 + 20], pack_xrgb(0, 255, 0));
@@ -8538,6 +8688,7 @@ mod paint_tests {
             &rooms,
             0,
             &art,
+            None,
         );
         let red = pack_xrgb(255, 0, 0);
         assert_eq!(buf[382 * 800 + 526], red, "state icon at its panel offset");
@@ -8680,6 +8831,7 @@ mod paint_tests {
             },
             &art,
             None,
+            None,
         );
         assert!(buf.iter().all(|pixel| *pixel == 0));
     }
@@ -8699,6 +8851,7 @@ mod paint_tests {
             },
             &art,
             Some(PlanetBand::Hard),
+            None,
         );
         let amber = pack_xrgb(0xFF, 0xD0, 0x20);
         // paint_cursor draws at (x - 6, y): (313 + 10 - 6, 32 + 56).
@@ -8708,6 +8861,307 @@ mod paint_tests {
             3 * 5,
             "only the 3x5 cursor inks"
         );
+    }
+
+    /// One two-frame anchored figure: layer 0 in `first`, layer 1
+    /// in `second`, both at (`dx`,`dy`) under a white colorkey — a
+    /// stand-in for the two-record planet button bodies (rest frame
+    /// plus hover/selected frame in stored order).
+    fn anchored_two_frame_figure(
+        w: usize,
+        h: usize,
+        dx: i32,
+        dy: i32,
+        first: [u8; 2],
+        second: [u8; 2],
+    ) -> AvatarFigure {
+        let mut figure = AvatarFigure::default();
+        for word in [first, second] {
+            figure.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&word.repeat(w * h), w, h).unwrap(),
+                dx,
+                dy,
+                colorkey: 0xFFFF,
+            });
+        }
+        figure
+    }
+
+    #[test]
+    fn hovered_emblem_reveals_the_pinned_plate_band() {
+        // Wine sweep (`docs/hover.md`): hovering EASY/NORMAL/HARD
+        // adds the body's own 84x18 light plate band (EASY
+        // (94,44)-(178,62)) with no frame swap. The rest stack keeps
+        // the top layer (the dark selected plate), so the hover
+        // repaints layer 0 clipped to the pinned band rect — and
+        // only there.
+        use super::super::side::{PlanetAction, PLANET_BUTTON_EASY_CODE};
+        let sprite = "Planet_Btn_Easy.ojs";
+        let art = SceneArt {
+            placements: vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code: PLANET_BUTTON_EASY_CODE,
+                sprite: Some(sprite.to_owned()),
+                rect: Rect {
+                    x: 87,
+                    y: 32,
+                    w: 99,
+                    h: 112,
+                },
+            }],
+            figures: HashMap::from([(
+                sprite.to_owned(),
+                anchored_two_frame_figure(99, 112, 87, 32, [0x1F, 0x00], [0x00, 0x7C]),
+            )]),
+        };
+        let blue = pack_xrgb(0x00, 0x00, 0xFF);
+        let red = pack_xrgb(0xFF, 0x00, 0x00);
+        let mut rest = vec![0u32; 800 * 600];
+        paint_planet_scene(
+            &mut Frame {
+                buf: &mut rest,
+                w: 800,
+                h: 600,
+            },
+            &art,
+            None,
+            None,
+        );
+        assert_eq!(rest[50 * 800 + 136], red, "rest keeps the top layer");
+        let mut hovered = vec![0u32; 800 * 600];
+        paint_planet_scene(
+            &mut Frame {
+                buf: &mut hovered,
+                w: 800,
+                h: 600,
+            },
+            &art,
+            None,
+            Some(PlanetAction::Emblem {
+                band: Some(PlanetBand::Easy),
+            }),
+        );
+        assert_eq!(hovered[50 * 800 + 136], blue, "plate band reveals layer 0");
+        assert_eq!(
+            hovered[100 * 800 + 136],
+            red,
+            "below the band the rest stack stands"
+        );
+        assert_eq!(
+            hovered[50 * 800 + 90],
+            red,
+            "left of the band the rest stack stands"
+        );
+    }
+
+    #[test]
+    fn quest_and_tutorial_emblems_ignore_hover() {
+        // FREE/DRUM are static (0 changed pixels, `docs/hover.md`):
+        // hovering them paints exactly the rest frame — the dimmed
+        // plates never highlight.
+        use super::super::side::{PlanetAction, PLANET_BUTTON_FREE_CODE};
+        let sprite = "Planet_Btn_Free.ojs";
+        let art = SceneArt {
+            placements: vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code: PLANET_BUTTON_FREE_CODE,
+                sprite: Some(sprite.to_owned()),
+                rect: Rect {
+                    x: 614,
+                    y: 32,
+                    w: 99,
+                    h: 112,
+                },
+            }],
+            figures: HashMap::from([(
+                sprite.to_owned(),
+                anchored_two_frame_figure(99, 112, 614, 32, [0x1F, 0x00], [0x00, 0x7C]),
+            )]),
+        };
+        let mut rest = vec![0u32; 800 * 600];
+        paint_planet_scene(
+            &mut Frame {
+                buf: &mut rest,
+                w: 800,
+                h: 600,
+            },
+            &art,
+            None,
+            None,
+        );
+        let mut hovered = vec![0u32; 800 * 600];
+        paint_planet_scene(
+            &mut Frame {
+                buf: &mut hovered,
+                w: 800,
+                h: 600,
+            },
+            &art,
+            None,
+            Some(PlanetAction::Emblem { band: None }),
+        );
+        assert_eq!(hovered, rest, "static emblems paint no highlight");
+    }
+
+    #[test]
+    fn promo_playstop_hover_paints_the_second_frame() {
+        // The one true frame swap (`docs/hover.md`): PLAYSTOP rest
+        // is frame 0, hover is body frame 1 (224 changed pixels at
+        // (392,515)-(407,529)). Unhovered the rest stack stands.
+        use super::super::side::{PlanetAction, PlanetPromo, PLANET_PROMO_STOP_CODE};
+        let sprite = "Planet_Btn_Promotion_PlayStop.ojs";
+        // Three layers on purpose: the hover must take layer 1
+        // (the pinned hover frame), never the stack top.
+        let mut playstop = AvatarFigure::default();
+        for (word, anchor) in [
+            ([0xE0, 0x03], (387, 511)),
+            ([0x00, 0x7C], (387, 511)),
+            ([0x1F, 0x00], (387, 511)),
+        ] {
+            playstop.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&word.repeat(26 * 24), 26, 24).unwrap(),
+                dx: anchor.0,
+                dy: anchor.1,
+                colorkey: 0xFFFF,
+            });
+        }
+        let art = SceneArt {
+            placements: vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code: PLANET_PROMO_STOP_CODE,
+                sprite: Some(sprite.to_owned()),
+                rect: Rect {
+                    x: 387,
+                    y: 511,
+                    w: 26,
+                    h: 24,
+                },
+            }],
+            figures: HashMap::from([(sprite.to_owned(), playstop)]),
+        };
+        let blue = pack_xrgb(0x00, 0x00, 0xFF);
+        let red = pack_xrgb(0xFF, 0x00, 0x00);
+        let mut rest = vec![0u32; 800 * 600];
+        paint_planet_scene(
+            &mut Frame {
+                buf: &mut rest,
+                w: 800,
+                h: 600,
+            },
+            &art,
+            None,
+            None,
+        );
+        assert_eq!(rest[520 * 800 + 400], blue, "rest keeps the top layer");
+        let mut hovered = vec![0u32; 800 * 600];
+        paint_planet_scene(
+            &mut Frame {
+                buf: &mut hovered,
+                w: 800,
+                h: 600,
+            },
+            &art,
+            None,
+            Some(PlanetAction::Promo {
+                cell: PlanetPromo::Stop,
+            }),
+        );
+        assert_eq!(
+            hovered[520 * 800 + 400],
+            red,
+            "hover swaps to frame 1, not the stack top"
+        );
+    }
+
+    #[test]
+    fn gear_hover_restores_the_first_frame() {
+        // OPTION/EXIT and the promo arrows (`docs/hover.md`): hover
+        // repaints body frame 0 at full colour over the dimmed rest.
+        use super::super::side::{PlanetAction, PLANET_OPTION_CODE};
+        let sprite = "Planet_Btn_Option.ojs";
+        let art = SceneArt {
+            placements: vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code: PLANET_OPTION_CODE,
+                sprite: Some(sprite.to_owned()),
+                rect: Rect {
+                    x: 710,
+                    y: 561,
+                    w: 38,
+                    h: 38,
+                },
+            }],
+            figures: HashMap::from([(
+                sprite.to_owned(),
+                anchored_two_frame_figure(38, 38, 710, 561, [0x1F, 0x00], [0x00, 0x7C]),
+            )]),
+        };
+        let blue = pack_xrgb(0x00, 0x00, 0xFF);
+        let red = pack_xrgb(0xFF, 0x00, 0x00);
+        let mut rest = vec![0u32; 800 * 600];
+        paint_planet_scene(
+            &mut Frame {
+                buf: &mut rest,
+                w: 800,
+                h: 600,
+            },
+            &art,
+            None,
+            None,
+        );
+        assert_eq!(rest[575 * 800 + 725], red, "rest keeps the top layer");
+        let mut hovered = vec![0u32; 800 * 600];
+        paint_planet_scene(
+            &mut Frame {
+                buf: &mut hovered,
+                w: 800,
+                h: 600,
+            },
+            &art,
+            None,
+            Some(PlanetAction::OptionsDialog),
+        );
+        assert_eq!(hovered[575 * 800 + 725], blue, "hover restores frame 0");
+    }
+
+    #[test]
+    fn planet_hover_without_staged_figure_paints_nothing() {
+        // No highlight without art: the hovered control stages no
+        // figure, so the frame stays untouched (no invented pixels).
+        use super::super::side::{PlanetAction, PlanetBand, PLANET_BUTTON_EASY_CODE};
+        let art = SceneArt {
+            placements: vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code: PLANET_BUTTON_EASY_CODE,
+                sprite: Some("Planet_Btn_Easy.ojs".to_owned()),
+                rect: Rect {
+                    x: 87,
+                    y: 32,
+                    w: 99,
+                    h: 112,
+                },
+            }],
+            figures: HashMap::new(),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_planet_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &art,
+            None,
+            Some(PlanetAction::Emblem {
+                band: Some(PlanetBand::Easy),
+            }),
+        );
+        assert!(buf.iter().all(|pixel| *pixel == 0));
     }
 
     #[test]
@@ -9228,6 +9682,119 @@ mod paint_tests {
             None,
         );
         assert!(empty.iter().all(|pixel| *pixel == 0));
+    }
+
+    /// Eight seat parents plus the seat-relative avatar slot, in one
+    /// synthetic row so per-seat ink never overlaps its neighbour.
+    fn waiting_avatar_placements() -> Vec<ScenePlacement> {
+        let mut placements = Vec::with_capacity(WAITING_SEATS + 1);
+        for (index, id) in WAITING_SEAT_PARENT_IDS.iter().enumerate() {
+            placements.push(ScenePlacement {
+                role: PlacementRole::Single,
+                id: (*id).to_owned(),
+                code: 0x1601_5022 + index as u32,
+                sprite: None,
+                rect: Rect {
+                    x: 10 + index as i32 * 130,
+                    y: 50,
+                    w: 123,
+                    h: 150,
+                },
+            });
+        }
+        placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: WAITING_AVATAR_SLOT_ID.to_owned(),
+            code: 0x1670_002E,
+            sprite: None,
+            rect: Rect {
+                x: 0,
+                y: 0,
+                w: 123,
+                h: 150,
+            },
+        });
+        placements
+    }
+
+    /// Seat slot box of one synthetic parent (mirrors the painter's
+    /// parent-origin plus slot-rect rule).
+    fn waiting_slot_box(seat: usize) -> Rect {
+        Rect {
+            x: 10 + seat as i32 * 130,
+            y: 50,
+            w: 123,
+            h: 150,
+        }
+    }
+
+    #[test]
+    fn waiting_seat_avatars_paint_each_occupied_seat_slot() {
+        // `waiting_room` seats self (seat 0) plus the wire host
+        // (seat 1); seats 2.. stay empty/locked. Both occupied slots
+        // take their figure through the same slot path — never the
+        // raw `(0,0,123,150)` rect.
+        let placements = waiting_avatar_placements();
+        let room = waiting_room();
+        let figures: Vec<Option<AvatarFigure>> = (0..WAITING_SEATS)
+            .map(|index| (index < 2).then(|| icon_figure(&[0x7C00])))
+            .collect();
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_seat_avatars(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            &room,
+            &figures,
+        );
+        assert!(
+            ink_in_rect(&buf, 800, waiting_slot_box(0)) > 0,
+            "self seat takes its figure"
+        );
+        assert!(
+            ink_in_rect(&buf, 800, waiting_slot_box(1)) > 0,
+            "occupied peer seat takes its figure"
+        );
+        assert_eq!(
+            ink_in_rect(
+                &buf,
+                800,
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: 9,
+                    h: 49
+                }
+            ),
+            0,
+            "no template child paints at the raw rect"
+        );
+    }
+
+    #[test]
+    fn waiting_seat_avatars_skip_empty_and_locked_seats() {
+        // Figures staged for the empty seat 2 and the locked seat 3
+        // never reach the frame: vacant seats keep their bare plate.
+        let placements = waiting_avatar_placements();
+        let room = waiting_room();
+        let figures: Vec<Option<AvatarFigure>> = (0..WAITING_SEATS)
+            .map(|index| (index == 2 || index == 3).then(|| icon_figure(&[0x7C00])))
+            .collect();
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_seat_avatars(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            &room,
+            &figures,
+        );
+        assert!(buf.iter().all(|pixel| *pixel == 0));
     }
 
     #[test]
