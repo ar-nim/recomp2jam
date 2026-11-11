@@ -1383,6 +1383,26 @@ impl Score {
     /// behavior is untraced, so the model conservatively freezes pill
     /// spend too — an implementation choice, not an exe claim.
     pub fn apply_rated(&mut self, judgement: Judgement, pills: &mut PillStock) {
+        self.apply_rated_inner(judgement, pills, true);
+    }
+
+    /// Apply one hold-tail rating through the jam + pill path with
+    /// the combo counter untouched — VERIFIED 7.55 (`FUN_00570510`,
+    /// file `0x170510`): the scorer carries no combo write on the
+    /// tail arms; a rated tail's single `+1` comes solely from the
+    /// combo helper `FUN_00541620` on the sink's Cool/Good tail arms
+    /// (files `0x16e5c1`/`0x16e73e`, claim B46). The combo break on a
+    /// Bad/Miss tail likewise does not happen here: the sink
+    /// redispatches the code-14 bookkeeping event, which resets the
+    /// counter (file `0x16ebcf`).
+    pub fn apply_rated_without_combo(&mut self, judgement: Judgement, pills: &mut PillStock) {
+        self.apply_rated_inner(judgement, pills, false);
+    }
+
+    /// Shared body of [`Score::apply_rated`] and
+    /// [`Score::apply_rated_without_combo`]; `bump_combo` selects the
+    /// tail variant's combo-silent scorer path.
+    fn apply_rated_inner(&mut self, judgement: Judgement, pills: &mut PillStock, bump_combo: bool) {
         if self.life.is_dead() {
             return;
         }
@@ -1401,9 +1421,11 @@ impl Score {
         self.life.apply(judgement);
         self.add_tier_points(judgement);
         self.jam.note(judgement);
-        match judgement {
-            Judgement::Cool | Judgement::Good => self.combo += 1,
-            Judgement::Bad | Judgement::Miss => self.combo = 0,
+        if bump_combo {
+            match judgement {
+                Judgement::Cool | Judgement::Good => self.combo += 1,
+                Judgement::Bad | Judgement::Miss => self.combo = 0,
+            }
         }
         self.max_combo = self.max_combo.max(self.combo);
     }

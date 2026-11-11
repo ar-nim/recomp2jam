@@ -29,7 +29,9 @@ Same function: tiers `0x10`/`0x20` continue combo (file
 `0x40`/Miss take the break path (file `0x176d8b`
 `ev_55bfa19b…`) — matches user report (Bad and Miss break
 combo); the long-note combo path (hold-bit `0x2000000`
-handling) also exists. Grade strings (`ALL COMBO`, `COOL 95%`,
+handling) also exists — its counter routing is pinned in the
+"Long-note combo path" section below, which also documents why
+`+0x3972` is the long-note combo, not this rule's per-hit counter. Grade strings (`ALL COMBO`, `COOL 95%`,
 `MISS 10`, … at file offsets `0x247363`/`0x2473db`/`0x24765b`)
 remain code-unreferenced (zero pointer refs to those VAs —
 result-screen `.ojs` driven); `LongnoteMode` refs (`0x3a71c`,
@@ -837,4 +839,69 @@ tests. The accumulator is the lead candidate for the dedicated
 `longNoteScore` slot in `SubmitScore` (4016) / `UpdateGameStats`
 (4014) — layout corroborated in `net-protocol.md`, but the
 submit-side read runs through a vtable path, so that link stays
-corroborated, not proven.
+not proven.
+
+## Long-note combo path — VERIFIED (B46, #80)
+
+Combo counter `+0x3972` (max `+0x3974`, B10) is incremented by
+exactly one writer: the combo helper `FUN_00541620` (file
+`0x141620`), called with the score sub-object (`this + 0x1820`;
+`+0x1820 + 0x2152 = +0x3972`, `+0x2158 = +0x3978` score,
+`+0x2154 = +0x3974` max). The helper adds `+1` combo always and
+`+10` score only when the mode byte (`+0x1853`) is not `6`
+(files `0x14162a`–`0x141659`). An exe-wide caller sweep (objdump
+scan, #80) finds exactly six call sites, every one of them a
+long-note arm — there is NO plain-note caller:
+
+1. **Head strike (the judge arm).** Second-judge hold arming
+   (file `0x176140`), mode-0 keyup hold arming gated Cool/Good
+   (call at file `0x176d86`, tier gate files `0x176c86`–`0x176c90`),
+   auto-play hold arming (file `0x177230`). The head's combo `+1`
+   happens at the strike, outside the rating-event sink.
+2. **Tail rating (the sink arm).** The sink dispatcher's code-1
+   Cool/Good arms add combo only on the tail payload bit
+   (`payload & 0x1000000`, files `0x16e5b0`–`0x16e5c1` and
+   `0x16e72d`–`0x16e73e`), each followed by a code-14
+   self-redispatch (tier `0x10`/`0x20`, files `0x16e5d4`–`0x16e5d6`
+   and `0x16e751`–`0x16e753`). The release judge itself (files
+   `0x176646`–`0x176714`) never calls the helper — the paired
+   head/tail split is: head feeds at the judge, tail feeds in the
+   sink.
+3. **Hold tick (the bonus scan).** One call per held frame over the
+   open span (call at file `0x178200`, span test files
+   `0x1781c1`/`0x1781d7`). **No cap exists**: the scan never
+   saturates the counter; it only syncs the max word behind by one
+   (`+0x3974 = combo − 1` when greater, files `0x178208`–`0x178248`;
+   the judgement store max-tracks the true value at files
+   `0x1706af`–`0x1706ef`).
+
+Breaks: the code-14 arm zeroes `+0x3972` on Bad/Miss words only
+(file `0x16ebcf`, test files `0x16ebbd`–`0x16ebcf`). Cool/Good
+never reset it.
+
+**Contradiction with the earlier "Combo rule — VERIFIED" section
+(above) and B10's "regular combo counter" label, documented per
+AGENTS.md (exe is oracle):** the same sweep shows plain
+(flag `0x00`) note judgements NEVER increment `+0x3972` — the
+counter's only writers are the six long-note arms above plus the
+three reset sites (init files `0x4de91e`/`0x4de9cc`, code-14
+file `0x16ebcf`). So `+0x3972` is the **long-note combo**
+(the count #84 paints under the LONGNOTE COMBO caption), not the
+regular per-hit combo; the section above pins only the
+continue/break *rule* (which holds everywhere: nothing resets on
+Cool/Good, code-14 resets on Bad/Miss). Where the regular combo
+lives for the big COMBO digits stays OPEN — named next step: the
+digit-frame setters for codes `0x1B500088`–`0x1B500092`
+(factory district `0x48B2D0`, HUD sprite loader `0x50D060`,
+already scoping playing.md). The `o2jam-game` scorer keeps the
+per-hit `+1` model for plain notes (`Score::apply_rated`)
+pending that trace — flagged, not silently changed.
+
+Implemented in `o2jam-game`: `Score::apply_rated_without_combo`
+(the tail's combo-silent scorer path), `RatingSink::run_combo_helper`
+(the shared adder behind tail arms and ticks), guards
+`hold_head_continues_combo_once_at_the_judge_arm`,
+`cool_tail_adds_exactly_one_combo_through_the_sink_helper`,
+`good_tail_continues_combo_through_the_good_arm`,
+`bad_tail_breaks_combo_only_through_the_bookkeeping_event`,
+`hold_tick_bumps_combo_once_per_event_without_a_cap`.
