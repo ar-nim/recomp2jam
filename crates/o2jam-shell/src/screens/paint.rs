@@ -443,6 +443,54 @@ const CHANNEL_SCROLL_UP_LOCAL: (i32, i32) = (0, 0);
 const CHANNEL_SCROLL_ARROW_H: i32 = 20;
 const CHANNEL_SCROLL_DOWN_LOCAL: (i32, i32) = (0, 196);
 
+/// Scroll-column arrow answering a click: the bnd-pinned arrows at
+/// scroll-local (0,0)/(0,196) (21x20 each). The bar body between
+/// them answers nothing (drag stays OPEN).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChannelScroll {
+    /// Up arrow: step toward the first row.
+    Up,
+    /// Down arrow: step toward the last row.
+    Down,
+}
+
+/// Native rect of one scroll-column arrow: the track origin plus the
+/// scroll-local arrow offset (bnd-pinned, same derivation as the
+/// painted scroll art).
+fn channel_scroll_arrow(local: (i32, i32)) -> Rect {
+    Rect {
+        x: CHANNEL_SCROLL_TRACK.x.saturating_add(local.0),
+        y: CHANNEL_SCROLL_TRACK.y.saturating_add(local.1),
+        w: CHANNEL_SCROLL_TRACK.w,
+        h: u32::try_from(CHANNEL_SCROLL_ARROW_H).unwrap_or(0),
+    }
+}
+
+/// Scroll arrow under native pixel (`x`, `y`) (`None` off both
+/// arrows, including the bar body between them).
+#[must_use]
+pub(crate) fn channel_scroll_hit(x: i32, y: i32) -> Option<ChannelScroll> {
+    if rect_hit(&channel_scroll_arrow(CHANNEL_SCROLL_UP_LOCAL), x, y) {
+        return Some(ChannelScroll::Up);
+    }
+    if rect_hit(&channel_scroll_arrow(CHANNEL_SCROLL_DOWN_LOCAL), x, y) {
+        return Some(ChannelScroll::Down);
+    }
+    None
+}
+
+/// True while native pixel (`x`, `y`) sits inside the enter face of
+/// viewport `slot`: the bnd bar-local face (285,11) 44x21 over the
+/// slot's bar origin — row 0 reads (502,236)-(546,257), tops and
+/// lefts inclusive like the row rects.
+#[must_use]
+pub(crate) fn channel_face_hit(x: i32, y: i32, slot: usize) -> bool {
+    let (face_x, face_y) = channel_enter_origin(slot);
+    let right = face_x.saturating_add(CHANNEL_FACE_W);
+    let bottom = face_y.saturating_add(CHANNEL_FACE_H);
+    (face_x..right).contains(&x) && (face_y..bottom).contains(&y)
+}
+
 /// Bar origin (native px) of viewport slot `slot`: the pinned row
 /// origin + the bnd +1 inset (row 0 bar at (217,225)).
 fn channel_bar_origin(slot: usize) -> (i32, i32) {
@@ -11313,6 +11361,38 @@ mod paint_tests {
         // y range but sit outside the pinned x range.
         assert_eq!(channel_row_hit(583, 240, 4), None);
         assert_eq!(channel_row_hit(100, 240, 4), None);
+    }
+
+    #[test]
+    fn channel_face_hit_covers_the_measured_faces() {
+        // Ticket #56: the bnd bar-local face (285,11) 44x21 over each
+        // slot's bar origin — row 0 reads (502,236)-(546,257), lefts
+        // and tops inclusive like the row rects.
+        for slot in 0..CHANNEL_SLOT_COUNT {
+            let (face_x, face_y) = channel_enter_origin(slot);
+            assert!(channel_face_hit(face_x + 22, face_y + 10, slot));
+            assert!(channel_face_hit(face_x, face_y, slot));
+            assert!(!channel_face_hit(face_x + 44, face_y, slot));
+            assert!(!channel_face_hit(face_x, face_y + 21, slot));
+        }
+        assert_eq!(channel_enter_origin(0), (502, 236));
+        assert!(!channel_face_hit(300, 240, 0), "row body is no face");
+        assert!(!channel_face_hit(524, 246, 1), "slot 1 face, not slot 0");
+    }
+
+    #[test]
+    fn channel_scroll_hit_uses_the_bnd_track_arrows() {
+        // Ticket #55: the bnd-pinned arrows at scroll-local
+        // (0,0)/(0,196) (21x20 each) over the (573,213) track — the
+        // bar body between them and pixels off the track hit nothing.
+        assert_eq!(channel_scroll_hit(583, 223), Some(ChannelScroll::Up));
+        assert_eq!(channel_scroll_hit(573, 213), Some(ChannelScroll::Up));
+        assert_eq!(channel_scroll_hit(593, 232), Some(ChannelScroll::Up));
+        assert_eq!(channel_scroll_hit(583, 419), Some(ChannelScroll::Down));
+        assert_eq!(channel_scroll_hit(583, 300), None, "bar body");
+        assert_eq!(channel_scroll_hit(300, 223), None, "row band");
+        assert_eq!(channel_scroll_hit(572, 223), None, "left of track");
+        assert_eq!(channel_scroll_hit(594, 223), None, "right of track");
     }
 
     #[test]

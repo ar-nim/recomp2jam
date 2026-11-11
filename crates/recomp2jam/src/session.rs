@@ -2546,7 +2546,7 @@ mod session_tests {
     #[test]
     fn channel_click_advances_to_room_without_sends() {
         // The windowed live path routes canvas clicks through the
-        // session wrapper: a channel-row click must reach the inner
+        // session wrapper: a channel face click must reach the inner
         // game exactly like keyboard Confirm (empty draft sends nothing).
         use o2jam_net::ChannelState;
         let (mut session, server) = channel_session(|mut stream| {
@@ -2568,7 +2568,9 @@ mod session_tests {
                 active: false,
             },
         ]);
-        session.mouse_click(400, 240);
+        // Ticket #56: only the enter face enters — row 0 face
+        // (502,236)-(546,257).
+        session.mouse_click(524, 246);
         server.join().unwrap();
         assert_eq!(session.game.screen(), Screen::Room);
     }

@@ -12,18 +12,19 @@ use super::super::playing::{HighwayGeometry, LivePlay, PlaySkin};
 use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
-    battle_verdict, channel_dialog_x_hit, channel_row_hit, channel_viewport, dialog_rect_hit,
-    has_room_panels, list_row_hit, paint_avi_scene, paint_channel_chat, paint_channel_list,
-    paint_channel_scene, paint_lanking_board, paint_lanking_scene, paint_loading_scene,
-    paint_loading_scene_with_status, paint_lobby_backdrop, paint_music_shop_board,
-    paint_music_shop_cart, paint_music_shop_scene, paint_myroom_data, paint_myroom_scene,
-    paint_payment_notice, paint_planet_options, paint_planet_quit, paint_planet_scene,
-    paint_playing_overlay, paint_result, paint_result_scene, paint_room_chat, paint_room_list,
-    paint_room_scene, paint_room_user_panel, paint_screen, paint_shop_board, paint_shop_scene,
-    paint_waiting_chat, paint_waiting_members, paint_waiting_scene, paint_waiting_seat_avatar,
-    paint_waiting_seat_avatars, quit_fallback_rects, rect_hit, room_panel_hit, scene_index,
-    staged_rect_hit, BattleVerdict, ChannelChatMessage, LoadingStatus, ResultPaint, ResultRankRow,
-    ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage, RESULT_BACK_ID, RESULT_BACK_RECT,
+    battle_verdict, channel_dialog_x_hit, channel_face_hit, channel_row_hit, channel_scroll_hit,
+    channel_viewport, dialog_rect_hit, has_room_panels, list_row_hit, paint_avi_scene,
+    paint_channel_chat, paint_channel_list, paint_channel_scene, paint_lanking_board,
+    paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
+    paint_lobby_backdrop, paint_music_shop_board, paint_music_shop_cart, paint_music_shop_scene,
+    paint_myroom_data, paint_myroom_scene, paint_payment_notice, paint_planet_options,
+    paint_planet_quit, paint_planet_scene, paint_playing_overlay, paint_result, paint_result_scene,
+    paint_room_chat, paint_room_list, paint_room_scene, paint_room_user_panel, paint_screen,
+    paint_shop_board, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
+    paint_waiting_scene, paint_waiting_seat_avatar, paint_waiting_seat_avatars,
+    quit_fallback_rects, rect_hit, room_panel_hit, scene_index, staged_rect_hit, BattleVerdict,
+    ChannelChatMessage, ChannelScroll, LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict,
+    SceneArt, WaitingCaptions, WaitingChatMessage, RESULT_BACK_ID, RESULT_BACK_RECT,
     RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::side::{
@@ -252,6 +253,11 @@ const MODE_FILTER_STEP: &str =
 /// Next evidence step for the four chat-tab buttons.
 const CHAT_TAB_STEP: &str =
     "rig click on each chat tab plus a capture of the filtered chat panel (the tab filters are untraced)";
+/// Next evidence step when a room dialog sheet never staged (no
+/// install-root data): the modal must not own input it cannot
+/// paint, so the click records a noop and the lobby stays usable.
+const DIALOG_STAGE_STEP: &str =
+    "stage Dialog_CreateRoom plus Dialog_Password art in the live boot path (live_art.rs stage_room_dialogs); without the sheet the modal stays shut";
 
 /// Every staged `IDC_BUTTON_SROOM_*` control of `STATE_ROOM`, in the
 /// order the router tests them, with the behaviour this tree evidences
@@ -414,8 +420,10 @@ const SPLASH_AUTO_ADVANCE_MS: u64 = 5_000;
 ///
 /// Input wiring so far: any lane key or canvas click dismisses the
 /// splash onto the bare planet board, and the splash auto-advances
-/// there on its measured 5 s timer (ticket #24, guard:
-/// `splash_auto_advances_at_timeout`). The dismiss arms stay
+/// there on its measured 5 s hold (ticket #24, guard:
+/// `splash_auto_advances_at_timeout`). Windowed runs ride the wall
+/// clock for the hold (ticket #54, claims B38); the fixed-clock
+/// path stays the headless seam. The dismiss arms stay
 /// stand-ins: the exe set is only partly pinned (Escape dismisses
 /// within ~0.3 s, `~/scratch/avi-hold/run3-escape/`; Enter and Space
 /// show no fast dismiss on the isolated rig — `~/scratch/wt24-rig/`
@@ -452,6 +460,15 @@ pub struct ScreenGame {
     /// Virtual clock position while the fixed clock is enabled
     /// (paints × step; menus and Playing share it).
     fixed_now_ms: u64,
+    /// Splash hold in ms before the auto-advance (default
+    /// [`SPLASH_AUTO_ADVANCE_MS`]): tests set 0 for an instant
+    /// advance; production never changes it.
+    splash_hold_ms: u64,
+    /// Wall-clock instant the splash mounted (recorded on every Avi
+    /// entry, including boot): the windowed auto-advance rides the
+    /// wall clock (claims B38), never the song clock — a track that
+    /// stops at its end would otherwise freeze the splash.
+    avi_entered_wall: Option<std::time::Instant>,
     audio: Option<AudioRig>,
     avatar: Option<AvatarFigure>,
     channels: Vec<ChannelState>,
@@ -960,6 +977,8 @@ impl ScreenGame {
             song_rate: 44_100,
             fixed_clock_step_ms: None,
             fixed_now_ms: 0,
+            splash_hold_ms: SPLASH_AUTO_ADVANCE_MS,
+            avi_entered_wall: Some(std::time::Instant::now()),
             audio: None,
             avatar: None,
             channels: Vec::new(),
@@ -1211,6 +1230,32 @@ impl ScreenGame {
         self
     }
 
+    /// Test affordance: override the splash hold (0 advances on the
+    /// first paint, so wall-clock guards need no sleeps).
+    pub fn set_splash_hold_ms(&mut self, hold_ms: u64) -> &mut Self {
+        self.splash_hold_ms = hold_ms;
+        self
+    }
+
+    /// True while the wall hold since the Avi entry covered the
+    /// splash hold (claims B38: menus pace on the wall clock).
+    fn splash_wall_hold_reached(&self) -> bool {
+        self.avi_entered_wall
+            .is_some_and(|entered| entered.elapsed().as_millis() >= u128::from(self.splash_hold_ms))
+    }
+
+    /// Windowed splash auto-advance on the wall clock: skipped while
+    /// the fixed clock rules (the headless seam owns timing there),
+    /// so null-audio runs still reach Planet on the hold.
+    fn advance_splash_on_wall_clock(&mut self) {
+        if self.fixed_clock_step_ms.is_some() || self.flow.current() != Screen::Avi {
+            return;
+        }
+        if self.splash_wall_hold_reached() {
+            self.enter(Screen::Planet);
+        }
+    }
+
     /// Song position in ms from the audio backend's sample
     /// counter, anchored at Playing entry
     /// (`song_anchor_sample`) — strike timing, scroll, and gauge
@@ -1260,6 +1305,9 @@ impl ScreenGame {
         }
         let entered = self.flow.go(next).is_ok();
         if entered {
+            if next == Screen::Avi {
+                self.avi_entered_wall = Some(std::time::Instant::now());
+            }
             if next == Screen::Room {
                 self.room_dialog = None;
             }
@@ -2254,9 +2302,29 @@ impl ScreenGame {
     /// otherwise a click inside a pinned row rect highlights the
     /// entry and advances like Confirm while the draft is action-free
     /// (slash drafts consume the click instead of starting).
+    /// Step the channel highlight one row toward `scroll`, clamped at
+    /// the ends: the shared Up/Down-key path the scroll arrows ride.
+    fn step_channel(&mut self, scroll: ChannelScroll) {
+        match scroll {
+            ChannelScroll::Up => {
+                self.highlight = self.highlight.saturating_sub(1);
+            }
+            ChannelScroll::Down => {
+                let last = self.channels.len().saturating_sub(1);
+                self.highlight = (self.highlight + 1).min(last);
+            }
+        }
+    }
+
     fn click_channel_row(&mut self, x: i32, y: i32) {
         if channel_dialog_x_hit(x, y) {
             self.enter(Screen::Planet);
+            return;
+        }
+        // Scroll-column arrows step like the Up/Down keys (the bar
+        // body between them answers nothing).
+        if let Some(scroll) = channel_scroll_hit(x, y) {
+            self.step_channel(scroll);
             return;
         }
         // Viewport-relative bands: the visible slot maps back through
@@ -2267,7 +2335,9 @@ impl ScreenGame {
         };
         let index = top + slot;
         self.highlight = index;
-        if self.take_channel_slash() == SlashCommand::Empty {
+        // Only the Korean-text enter face enters Room (ticket #56);
+        // a body click moves the highlight and leaves the dialog up.
+        if channel_face_hit(x, y, slot) && self.take_channel_slash() == SlashCommand::Empty {
             self.enter(Screen::Room);
         }
     }
@@ -2289,7 +2359,14 @@ impl ScreenGame {
         // straight to Waiting.
         if let Some(room) = self.rooms.get(index) {
             if room.has_password {
-                self.open_password_dialog(room.number);
+                if self.password_art.is_some() {
+                    self.open_password_dialog(room.number);
+                } else {
+                    self.last_room_control_noop = Some(RoomControlNoop {
+                        id: "LOCKED_ROOM_ROW",
+                        next_step: DIALOG_STAGE_STEP,
+                    });
+                }
                 return;
             }
         }
@@ -2312,8 +2389,19 @@ impl ScreenGame {
                 self.enter(Screen::Channel);
             }
             // Open the create-room dialog (lifecycle §7:
-            // `DIALOG_CREATEROOM` `CDCreateRoom`).
-            RoomControlAction::Create => self.open_create_room_dialog(),
+            // `DIALOG_CREATEROOM` `CDCreateRoom`); without the staged
+            // sheet the modal would own input it cannot paint, so the
+            // click records a noop and the lobby stays usable.
+            RoomControlAction::Create => {
+                if self.create_room_art.is_some() {
+                    self.open_create_room_dialog();
+                } else {
+                    self.last_room_control_noop = Some(RoomControlNoop {
+                        id: "IDC_BUTTON_SROOM_CREATE",
+                        next_step: DIALOG_STAGE_STEP,
+                    });
+                }
+            }
             // Open the options dialog over the lobby (the same
             // `Dialog_Option_*` sheet the Planet gear mounts:
             // EXIT/Escape closes it back onto Room, the flow never
@@ -4314,7 +4402,7 @@ impl ScreenGame {
             }
             return;
         }
-        if self.flow.current() == Screen::Avi && now_ms >= SPLASH_AUTO_ADVANCE_MS {
+        if self.flow.current() == Screen::Avi && now_ms >= self.splash_hold_ms {
             self.enter(Screen::Planet);
         }
         if self.flow.current() == Screen::Playing && self.playing.is_finished(now_ms) {
@@ -5252,13 +5340,8 @@ impl GameLoop for ScreenGame {
             // (the mouse edge is the pinned one; this is the
             // keyboard stand-in the session walks drive).
             (Screen::Planet, MenuKey::Confirm) => self.enter(Screen::Channel),
-            (Screen::Channel, MenuKey::Up) => {
-                self.highlight = self.highlight.saturating_sub(1);
-            }
-            (Screen::Channel, MenuKey::Down) => {
-                let last = self.channels.len().saturating_sub(1);
-                self.highlight = (self.highlight + 1).min(last);
-            }
+            (Screen::Channel, MenuKey::Up) => self.step_channel(ChannelScroll::Up),
+            (Screen::Channel, MenuKey::Down) => self.step_channel(ChannelScroll::Down),
             (Screen::Room, MenuKey::Up) => {
                 self.room_highlight = self.room_highlight.saturating_sub(1);
             }
@@ -5432,6 +5515,7 @@ impl GameLoop for ScreenGame {
     }
 
     fn paint(&mut self, frame: &mut Frame<'_>) {
+        self.advance_splash_on_wall_clock();
         let now = self.now_ms();
         self.paint_at(frame, now);
         if let Some(step_ms) = self.fixed_clock_step_ms {
@@ -6038,15 +6122,45 @@ mod game_tests {
     }
 
     #[test]
-    fn click_selects_channel_row_and_enters_rooms() {
+    fn face_click_selects_channel_row_and_enters_rooms() {
+        // Ticket #56: only the face enters — row 1 face
+        // (502,287)-(546,308).
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
         game.lane_key(3, true);
         game.click_planet(136, 88);
-        // Second row band: y in [282, 332), x anywhere on the row.
-        game.mouse_click(300, 290);
+        game.mouse_click(524, 297);
         assert_eq!(game.highlight, 1);
         assert_eq!(game.screen(), Screen::Room);
+    }
+
+    #[test]
+    fn face_click_enters_the_highlighted_channel() {
+        // Ticket #56: only the Korean-text enter face enters Room —
+        // row 0 face (502,236)-(546,257).
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        game.mouse_click(524, 246);
+        assert_eq!(game.highlight, 0);
+        assert_eq!(game.screen(), Screen::Room);
+    }
+
+    #[test]
+    fn body_click_highlights_without_entering() {
+        // Ticket #56: a row-body click moves the highlight only,
+        // never enters Room.
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        game.mouse_click(300, 240);
+        assert_eq!(game.highlight, 0);
+        assert_eq!(game.screen(), Screen::Channel);
+        game.mouse_click(300, 290);
+        assert_eq!(game.highlight, 1);
+        assert_eq!(game.screen(), Screen::Channel);
     }
 
     #[test]
@@ -6082,6 +6196,54 @@ mod game_tests {
         assert_eq!(game.screen(), Screen::Channel);
     }
 
+    /// Walk to the channel dialog over six listed rows (the pinned
+    /// viewport shows four, so the arrows have room to step).
+    fn six_channel_game() -> ScreenGame {
+        let mut game = ScreenGame::new();
+        game.set_channels(six_channels());
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        assert_eq!(game.screen(), Screen::Channel);
+        game
+    }
+
+    #[test]
+    fn scroll_down_arrow_steps_the_channel_highlight() {
+        // Ticket #55: the scroll-column down arrow steps like the
+        // Down key (bnd-pinned arrow (573,409)-(594,429)).
+        let mut game = six_channel_game();
+        game.mouse_click(583, 419);
+        assert_eq!(game.highlight, 1);
+        assert_eq!(game.screen(), Screen::Channel);
+    }
+
+    #[test]
+    fn scroll_up_arrow_at_top_clamps_the_highlight() {
+        // Ticket #55: the up arrow (573,213)-(594,233) clamps at the
+        // first row like the Up key.
+        let mut game = six_channel_game();
+        game.mouse_click(583, 223);
+        assert_eq!(game.highlight, 0);
+        assert_eq!(game.screen(), Screen::Channel);
+    }
+
+    #[test]
+    fn scroll_arrows_clamp_at_the_last_row() {
+        // Ticket #55: arrows pin at the ends — six Downs reach row
+        // 5 and a seventh arrow click holds it.
+        use MenuKey;
+        let mut game = six_channel_game();
+        for _ in 0..6 {
+            game.menu_key(MenuKey::Down, true);
+        }
+        assert_eq!(game.highlight, 5);
+        game.mouse_click(583, 419);
+        assert_eq!(game.highlight, 5);
+        game.mouse_click(583, 223);
+        assert_eq!(game.highlight, 4);
+        assert_eq!(game.screen(), Screen::Channel);
+    }
+
     #[test]
     fn click_with_slash_draft_consumes_without_advancing() {
         let mut game = ScreenGame::new();
@@ -6089,7 +6251,7 @@ mod game_tests {
         game.lane_key(3, true);
         game.click_planet(136, 88);
         game.set_channel_input("/w bob hi");
-        game.mouse_click(300, 240);
+        game.mouse_click(524, 246);
         assert_eq!(game.screen(), Screen::Channel);
         assert!(game.channel_input().is_empty());
     }
@@ -6141,6 +6303,11 @@ mod game_tests {
         assert_eq!(game.room_highlight, 1);
         // Row 1 is the locked room: the click gates through the
         // password dialog instead of joining straight to Waiting.
+        // The sheet stages first: without staged art the click
+        // records a noop and the lobby stays usable (the no-art arm
+        // below).
+        game.load_password_scene(Vec::new(), HashMap::new());
+        game.mouse_click(100, 200);
         assert_eq!(game.room_dialog(), Some(RoomDialog::Password { number: 7 }));
         assert_eq!(game.screen(), Screen::Room);
     }
@@ -7931,6 +8098,23 @@ mod game_tests {
         assert_eq!(game.screen(), Screen::Planet);
     }
 
+    #[test]
+    fn zero_hold_advances_on_first_windowed_paint() {
+        // Ticket #54: the windowed auto-advance rides the wall
+        // clock, so a zero hold leaves the splash on the first
+        // windowed paint even with no audio and no fixed clock.
+        let mut game = ScreenGame::new();
+        game.set_splash_hold_ms(0);
+        assert_eq!(game.screen(), Screen::Avi);
+        let mut buf = vec![0u32; 16 * 12];
+        game.paint(&mut Frame {
+            buf: &mut buf,
+            w: 16,
+            h: 12,
+        });
+        assert_eq!(game.screen(), Screen::Planet);
+    }
+
     /// Boot onto the staged logo splash: the bound `STATE_AVI`
     /// record (`IDC_BACK_LOGO`, full-bleed) with a one-pixel figure —
     /// the shared start every splash-edge guard walks.
@@ -8783,7 +8967,9 @@ mod game_tests {
             game.menu_key(MenuKey::Down, true);
         }
         assert_eq!(game.highlight, 5);
-        game.mouse_click(400, 240);
+        // Ticket #56: the face of visible slot 0 enters; the
+        // viewport maps it back to row 2.
+        game.mouse_click(524, 246);
         assert_eq!(game.highlight, 2);
         assert_eq!(game.screen(), Screen::Room);
     }
@@ -9741,6 +9927,82 @@ mod game_tests {
         let body = game.take_create_room().expect("committed 2004");
         assert_eq!(body.title, "x");
         assert!(!body.has_password);
+    }
+
+    #[test]
+    fn create_click_without_staged_sheet_records_noop_and_keeps_lobby() {
+        // The chrome rect stages but the dialog sheet never does (no
+        // install-root data): the click must not open a modal it
+        // cannot paint — the lobby stays usable and the miss is
+        // recorded.
+        use MenuKey;
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.load_scene(
+            Screen::Room,
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BUTTON_SROOM_CREATE".to_owned(),
+                code: 0x1320_0007,
+                sprite: None,
+                rect: Rect {
+                    x: 508,
+                    y: 372,
+                    w: 96,
+                    h: 35,
+                },
+            }],
+            HashMap::new(),
+        );
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        game.mouse_click(555, 389);
+        assert_eq!(game.room_dialog(), None, "unstaged sheet never owns input");
+        assert!(
+            game.room_control_noop().is_some(),
+            "miss recorded with the staging next step"
+        );
+        assert_eq!(game.screen(), Screen::Room);
+    }
+
+    #[test]
+    fn locked_row_click_without_staged_sheet_records_noop() {
+        // Locked row 1 (room 7) with staged panels but no password
+        // sheet: gates the dialog the same way the CREATE chrome
+        // does — no invisible modal, lobby stays usable.
+        use MenuKey;
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.set_rooms(two_rooms());
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        game.load_scene(
+            Screen::Room,
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BUTTON_SROOM_EXBUTTON2".to_owned(),
+                code: 0,
+                sprite: None,
+                rect: Rect {
+                    x: 26,
+                    y: 177,
+                    w: 288,
+                    h: 91,
+                },
+            }],
+            HashMap::new(),
+        );
+        game.mouse_click(100, 200);
+        assert_eq!(game.room_highlight, 1);
+        assert_eq!(game.room_dialog(), None, "unstaged sheet never owns input");
+        assert!(
+            game.room_control_noop().is_some(),
+            "miss recorded with the staging next step"
+        );
     }
 
     #[test]
