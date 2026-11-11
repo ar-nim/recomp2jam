@@ -17,6 +17,39 @@ Issues and specs for this repo live as GitHub issues in `ar-nim/recomp2jam`
 
 Infer the repo from `git remote -v`; `gh` does this automatically when run inside a clone.
 
+## Merge protocol (multi-agent pushes)
+
+Retro 2026-11-12: two merge mistakes cost a session — a `git add -A`
+during conflict resolution swept a subagent's uncommitted work-in-progress
+into a merge, and a resolved merge was committed without compiling.
+
+1. Resolve conflicts; stage **only the conflicted paths and regenerated
+   files** — never `git add -A` (the working tree may hold someone else's
+   live edits).
+2. Run `cargo check --workspace` **before** committing the merge.
+3. Commit the merge, then run the full gates.
+4. Remove implementer worktrees only **after every spawned subagent has
+   reported** — check first; a live agent's worktree is not debris.
+
+## Implementer brief template
+
+Every subagent brief carries, at minimum:
+
+- The worktree path and branch, with a pre-flight check that
+  `git rev-parse --show-toplevel` equals the worktree — subagents never
+  edit or build in the main checkout or a sibling worktree.
+- "Never push; never comment on or close issues" — the orchestrator
+  merges, gates, and closes.
+- "`git status` shows only intended files before reporting done."
+- For research briefs: findings are written to disk **incrementally**
+  after every experiment batch — captures without synthesis are not
+  progress (gui-drive #64 post-mortem: 4 h, 371 captures, zero findings).
+- One ticket per brief; a research ticket carries one leg, not several
+  methods.
+
+Scoping tickets quote claim ids exactly as minted in the ledger — a
+reviewer checks the ids against `docs/claims.md`.
+
 File issues only into the user's own repo. Never file into `mattpocock/skills` (the repo these skills come from) unless the user owns it. In a fork, `gh` can default to the upstream parent, so before the first `gh issue create` of a session, check the target with `gh repo view --json nameWithOwner` and confirm it with the user if it is not their repo.
 
 ## Pull requests as a triage surface

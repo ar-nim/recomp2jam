@@ -84,12 +84,69 @@ fn lint(docs_root: &Path) -> Vec<Violation> {
     check_claims_rows(&claim_fragments, &mut out);
     check_cells_join(&parity_text, &claim_fragments, &mut out);
     check_generated_files_fresh(docs_root, &mut out);
+    check_table_structure("parity", &parity_text, &mut out);
+    for (name, text) in &claim_fragments {
+        check_table_structure(name, text, &mut out);
+    }
     out
+}
+
+/// Table-structure lint (retro 2026-11-12): every markdown table row
+/// must match its header's column count and no strictly-interior cell
+/// may be empty. A fused row (`a || b`) both widens the row and leaves
+/// an empty cell — and, worse, silently drops the affected rows from
+/// every content lint above, which is how a `||` survived a full gate
+/// run once. Header-relative, so any table shape is allowed; fenced
+/// code blocks are skipped.
+fn check_table_structure(label: &str, text: &str, out: &mut Vec<Violation>) {
+    let mut in_code = false;
+    let mut header_width: Option<usize> = None;
+    for (i, line) in text.lines().enumerate() {
+        let ln = i + 1;
+        if line.trim_start().starts_with("```") {
+            in_code = !in_code;
+            header_width = None;
+            continue;
+        }
+        if in_code {
+            continue;
+        }
+        let is_row =
+            line.starts_with("| ") || (line.starts_with('|') && line.trim_end().ends_with('|'));
+        if !is_row {
+            header_width = None;
+            continue;
+        }
+        let parts = split_row_cells(line);
+        match header_width {
+            None => header_width = Some(parts.len()),
+            Some(width) => {
+                if parts.len() != width {
+                    out.push(Violation::row(format!(
+                        "{label}:{ln}: table row has {} columns, expected {width} (fused or split row?)",
+                        parts.len()
+                    )));
+                }
+            }
+        }
+        // Edge empties come from the outer pipes; a trailing empty
+        // cell (`|  |`) is the Sibling column's no-value form. Only
+        // strictly-interior empties (`a || b`) are violations.
+        for (ci, cell) in parts.iter().enumerate() {
+            let strictly_interior = ci >= 2 && ci + 2 < parts.len();
+            if strictly_interior && cell.is_empty() {
+                out.push(Violation::row(format!(
+                    "{label}:{ln}: empty interior table cell — `||` fuses rows"
+                )));
+            }
+        }
+    }
 }
 
 /// One lint finding: file, line, rule, snippet, plus whether it fails
 /// the run even without an `(audit:done)` marker (stale generated
 /// files).
+#[derive(Debug)]
 pub struct Violation {
     message: String,
     hard: bool,
@@ -677,6 +734,37 @@ mod tests {
         assert_eq!(rows[0].id(), "A1");
         assert_eq!(rows[0].level(), "EXE");
         assert_eq!(rows[0].cells_column(), "ROOM.COMP");
+    }
+
+    #[test]
+    fn table_structure_flags_fused_rows_and_width_mismatches() {
+        let mut out = Vec::new();
+        check_table_structure(
+            "scratch",
+            "| Dim | Expectation | Status | Verdict |\n|---|---|---|---|\n| A | x | y | z |\n| A | x || y | z |\n| B | x | y | z | w |\n",
+            &mut out,
+        );
+        let msgs: Vec<&str> = out.iter().map(|v| v.message.as_str()).collect();
+        assert!(
+            msgs.iter().any(|m| m.contains("empty interior table cell")),
+            "fused row must flag the empty cell: {msgs:?}"
+        );
+        assert!(
+            msgs.iter().any(|m| m.contains("columns, expected")),
+            "width mismatch must flag: {msgs:?}"
+        );
+    }
+
+    #[test]
+    fn table_structure_passes_the_committed_ledgers() {
+        let docs_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs");
+        let parity_text = parity::concat_sections(&parity::read_sections(&docs_root));
+        let mut out = Vec::new();
+        check_table_structure("parity", &parity_text, &mut out);
+        for (name, text) in claims::read_fragments(&docs_root) {
+            check_table_structure(&name, &text, &mut out);
+        }
+        assert!(out.is_empty(), "committed tables must be clean: {out:?}");
     }
 
     #[test]

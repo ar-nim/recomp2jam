@@ -7,6 +7,8 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 mod connect;
+#[cfg(test)]
+mod data_dir_guard;
 mod e2e;
 mod ledger_check;
 mod live_art;

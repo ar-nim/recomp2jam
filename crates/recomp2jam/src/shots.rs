@@ -1324,6 +1324,33 @@ pub use o2jam_render::png::encode_png;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Canary (retro 2026-11-12): broken data-dir symlinks once made
+    /// every "with install-root present" run silently skip, and the
+    /// suites stayed green while verifying nothing. A dangling symlink
+    /// or a present-but-unparsable root must be LOUD.
+    #[test]
+    fn real_data_arm_is_not_silently_absent() {
+        let root = install_root();
+        if let Ok(meta) = std::fs::symlink_metadata(&root) {
+            if meta.file_type().is_symlink() {
+                assert!(
+                    root.exists(),
+                    "install-root is a DANGLING symlink: every real-data test \
+                     silently skips and 'gates green' lies — recreate the link"
+                );
+            }
+        }
+        if root.exists() {
+            let archives = read_install_archives(&root);
+            assert!(
+                archives.interface.is_some(),
+                "install-root exists but the interface archive did not parse — \
+                 the data dirs are present yet unusable, and the suite skips"
+            );
+        }
+    }
+
     use o2jam_shell::avatar::PlacementRole;
     use o2jam_shell::avatar::{
         anchor_in_frame, load_archive_sprite, paint_foreground_placements, paint_scene_figures,
