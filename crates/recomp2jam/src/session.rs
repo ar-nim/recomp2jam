@@ -76,8 +76,18 @@
 //! the verdict turns on server-authoritative peer totals), and 4040
 //! rank places (decoded and validated; the gateway never emits it —
 //! the `FinalizeRank` broadcast stays commented out server-side).
-//! The shell's own Result Confirm/Back edges (Waiting for retry,
-//! Room for leave) stay untouched.
+//! Result input wires (relay shapes pinned by #87, landed in #88):
+//! every paint drains the staged result presses through the gateway —
+//! RETRY posts `StartGame` 4010 (`0xfaa`, empty), BACK posts
+//! `ExitPlaying` 4021 (`0xfb5`, empty, the same body the entry drain
+//! sends), and a battle (Live) result entry posts `GetLiveState` 4042
+//! (`0xfca`, empty, the exe's battle-global-gated send). The solo
+//! entry's event-ticket web call (`ticket_add.php?USER_INDEX_ID=<index>`,
+//! file `0x24a338`) is an HTTP GET, not a gateway frame — it stays
+//! OPEN until the shell owns a web seam, and the gateway is never
+//! asked to stand in for it. Retry-while-siblings-ready stays
+//! server-side (the block string VA `0x64a3a0` is pinned in
+//! `docs/cresult-anchors.md`); the shell never reimplements the rule.
 //!
 //! Host song select (Waiting scene): `--online-music-id` stages a
 //! pending pick plus the installed `OJNList.dat` catalog; the next
@@ -1471,6 +1481,42 @@ impl OnlineSession {
         }
     }
 
+    /// Result input section: drain the staged result presses through
+    /// the gateway — RETRY posts `StartGame` 4010 (`0xfaa`, empty),
+    /// BACK posts `ExitPlaying` 4021 (`0xfb5`, empty), and a battle
+    /// result entry posts `GetLiveState` 4042 (`0xfca`, empty; the
+    /// exe's battle-gated send, `docs/relay.md` §10). A failed send
+    /// warns: the screen has already moved on (the tally send keeps
+    /// its retry latch instead because Result stays). The offline
+    /// shell never reaches this bridge, so its queued presses drain
+    /// nowhere — the local screen arms still own the offline walk.
+    fn flush_result_wire(&mut self) {
+        if let Some(start) = self.game.take_result_retry() {
+            if let Err(source) = self
+                .gateway
+                .send_frame(Request::StartGame.id(), &start.encode_body())
+            {
+                tracing::warn!(%source, "result retry send failed");
+            }
+        }
+        if let Some(exit) = self.game.take_result_back() {
+            if let Err(source) = self
+                .gateway
+                .send_frame(Request::ExitPlaying.id(), &exit.encode_body())
+            {
+                tracing::warn!(%source, "result back send failed");
+            }
+        }
+        if let Some(live) = self.game.take_result_battle_entry() {
+            if let Err(source) = self
+                .gateway
+                .send_frame(o2jam_net::relay::GetLiveState::COMMAND, &live.encode_body())
+            {
+                tracing::warn!(%source, "battle live-state send failed");
+            }
+        }
+    }
+
     /// Send the end-of-song triple in the headless `run_song_flow`
     /// order — `SubmitScore` 4016, `FinalizeRank` 4041, `ExitPlaying`
     /// 4021 — then stage the battle mirror. Any failed send aborts
@@ -1933,6 +1979,7 @@ impl GameLoop for OnlineSession {
         self.poll_lobby_chat();
         self.poll_waiting_chat();
         self.poll_tally();
+        self.flush_result_wire();
     }
 }
 
@@ -3161,17 +3208,16 @@ mod session_tests {
         );
     }
 
-    /// Wire-shape replay for the result input arms (#87): the
-    /// scripted gateway drives the real session bridge to the Result
-    /// boundary and captures every frame the entry drain emits, then
-    /// the retry press lands inside the gateway's quiet window so the
-    /// replay records that today it queues nothing (the negative #88
-    /// replaces with the pinned send-shape). The three exe-named arms
-    /// are pinned as exact wire bytes — the claim #88 queues through
-    /// the bridge: retry = `StartGame` 4010 (`0xfaa`, empty), back =
-    /// `ExitPlaying` 4021 (`0xfb5`, empty — the frame the entry drain
-    /// already emits), battle entry = `GetLiveState` 4042 (`0xfca`,
-    /// empty).
+    /// Wire-shape replay for the result input arms (#87, wired in
+    /// #88): the scripted gateway drives the real session bridge to
+    /// the Result boundary and captures every frame the entry drain
+    /// emits, then the retry press lands inside the gateway's read
+    /// window so the replay records the pinned send shape: retry
+    /// queues `StartGame` 4010 (`0xfaa`, empty) through the session
+    /// bridge. The three exe-named arms are pinned as exact wire
+    /// bytes — back = `ExitPlaying` 4021 (`0xfb5`, empty — the frame
+    /// the entry drain already emits), battle entry = `GetLiveState`
+    /// 4042 (`0xfca`, empty).
     #[test]
     fn result_wire_replay_names_the_retry_back_and_battle_entry_shapes() {
         use o2jam_net::relay::GetLiveState;
@@ -3202,19 +3248,24 @@ mod session_tests {
             let exit = read_frame(&mut stream);
             assert_eq!(exit.id, ExitPlaying::COMMAND);
             assert!(exit.payload.is_empty());
-            // Hold the socket open across the client's retry press so
-            // the quiet window observes the press itself.
-            thread::sleep(Duration::from_millis(300));
+            // The retry press arrives inside this window: #88 wires
+            // the pinned body, so the quiet assertion #87 recorded
+            // becomes the `StartGame` send read.
+            let retry = read_frame(&mut stream);
+            assert_eq!(retry.id, StartGame::COMMAND);
+            assert!(retry.payload.is_empty());
             assert_quiet(&mut stream);
         });
         play_one_note_to_result(&mut session);
         paint_frame(&mut session);
         assert_eq!(session.game.screen(), Screen::Result);
         // Retry press: the exe posts relay event `0xfaa` here
-        // (`FUN_004c2f00` range, `ev_77ce98f1…`); the shell's local
-        // arm still owns the edge back to Waiting.
+        // (`FUN_004c2f00` range, `ev_77ce98f1…`); the shell queues
+        // the pinned `StartGame` body and the local arm owns the
+        // edge back to Waiting. The bridge sends on the next paint.
         session.menu_key(MenuKey::Confirm, true);
         assert_eq!(session.game.screen(), Screen::Waiting);
+        paint_frame(&mut session);
         server.join().unwrap();
         // The pinned wire shapes, whole frames: 4010 live-observed
         // empty from the exe (`docs/wine-boot.md`), 4042 byte-verified
@@ -3231,6 +3282,47 @@ mod session_tests {
             let frame = decode_frame(expected.0).unwrap();
             assert!(frame.payload.is_empty(), "pinned body stays empty");
         }
+    }
+
+    #[test]
+    fn result_back_press_sends_the_pinned_exit_playing_body() {
+        // The BACK press queues the same pinned empty `ExitPlaying`
+        // 4021 (`0xfb5`) the entry drain already sends: the gateway
+        // reads the drain's frame first, the press's second.
+        use o2jam_net::ExitPlaying;
+        let (mut session, server) = joined_waiting_session(joined_snapshot(), |mut stream| {
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::StartGame.id()
+            );
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::ConfirmMusicLoaded.id()
+            );
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::SubmitScore.id()
+            );
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::FinalizeRank.id()
+            );
+            let drain_exit = read_frame(&mut stream);
+            assert_eq!(drain_exit.id, ExitPlaying::COMMAND);
+            assert!(drain_exit.payload.is_empty());
+            let press_exit = read_frame(&mut stream);
+            assert_eq!(press_exit.id, ExitPlaying::COMMAND);
+            assert!(press_exit.payload.is_empty());
+            assert_quiet(&mut stream);
+        });
+        play_one_note_to_result(&mut session);
+        paint_frame(&mut session);
+        assert_eq!(session.game.screen(), Screen::Result);
+        session.menu_key(MenuKey::Back, true);
+        assert_eq!(session.game.screen(), Screen::Room);
+        paint_frame(&mut session);
+        server.join().unwrap();
     }
 
     #[test]
