@@ -8138,6 +8138,78 @@ mod game_tests {
         assert_eq!(game.screen(), Screen::Planet);
     }
 
+    /// Backend stub shaped like the 3.9 s logo once-track every real
+    /// backend caps at: `samples_played` parks at the track end
+    /// (3.9 s of 44.1 kHz frames) and never moves again, so the song
+    /// clock reads 3900 ms forever — the #54 freeze shape.
+    struct FinishedOnceTrack {
+        inner: o2jam_audio::NullBackend,
+    }
+
+    impl FinishedOnceTrack {
+        /// 3.9 s of frames at 44.1 kHz (the `bgLogo.ogg` length pinned
+        /// in the STATE_AVI Timing row).
+        const TRACK_END_FRAMES: u64 = 171_990;
+    }
+
+    impl AudioBackend for FinishedOnceTrack {
+        fn play_pcm(&mut self, pcm: &PcmSamples) -> Result<(), o2jam_audio::AudioError> {
+            self.inner.play_pcm(pcm)
+        }
+
+        fn set_scene_bgm(
+            &mut self,
+            pcm: Option<&PcmSamples>,
+            repeat: bool,
+        ) -> Result<(), o2jam_audio::AudioError> {
+            self.inner.set_scene_bgm(pcm, repeat)
+        }
+
+        fn scene_bgm_playing(&self) -> bool {
+            self.inner.scene_bgm_playing()
+        }
+
+        fn samples_played(&self) -> u64 {
+            Self::TRACK_END_FRAMES
+        }
+    }
+
+    #[test]
+    fn default_hold_outlasts_a_shorter_once_track_on_the_wall_clock() {
+        // Ticket #59: the default 5 s hold plus a non-repeating track
+        // shorter than the hold (the 3.9 s logo) still advances — the
+        // hold rides the wall clock (claims B38) while song position
+        // rides the sample clock. No input, no audio device; condition
+        // polling only, no sleeps (the #52 flake lesson).
+        let mut game = ScreenGame::new();
+        game.with_audio(
+            Box::new(FinishedOnceTrack {
+                inner: o2jam_audio::NullBackend::new(),
+            }),
+            HashMap::new(),
+        );
+        game.stage_scene_bgm(marker_bank(&[8]));
+        assert_eq!(game.screen(), Screen::Avi);
+        // The song clock is parked at the track end, short of the
+        // default hold: only the wall clock can advance the splash.
+        assert!(game.now_ms() < game.splash_hold_ms);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut buf = vec![0u32; 16 * 12];
+        while game.screen() == Screen::Avi {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "splash never advanced past the 3.9 s track end"
+            );
+            game.paint(&mut Frame {
+                buf: &mut buf,
+                w: 16,
+                h: 12,
+            });
+            std::thread::yield_now();
+        }
+        assert_eq!(game.screen(), Screen::Planet);
+    }
+
     /// Boot onto the staged logo splash: the bound `STATE_AVI`
     /// record (`IDC_BACK_LOGO`, full-bleed) with a one-pixel figure —
     /// the shared start every splash-edge guard walks.
