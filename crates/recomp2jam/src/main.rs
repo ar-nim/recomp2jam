@@ -1199,7 +1199,10 @@ fn setup_online(
 /// channel login, and staging it puts the Room user panel, the MyRoom
 /// readouts, and the Waiting self seat on live data. No-op on the
 /// list-only boot (no channel, no fetch).
-fn stage_boot_character(game: &mut o2jam_shell::ScreenGame, character: Option<o2jam_net::CharacterInfo>) {
+fn stage_boot_character(
+    game: &mut o2jam_shell::ScreenGame,
+    character: Option<o2jam_net::CharacterInfo>,
+) {
     if let Some(hero) = character {
         game.set_myroom_character(hero);
     }
