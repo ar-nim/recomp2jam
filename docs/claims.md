@@ -30,8 +30,8 @@ Short forms live in `GLOSSARY.md`. Normative forms:
 | EXE | 109 |
 | DATA | 19 |
 | ASSUMED | 12 |
-| OPEN | 8 |
-| Total | 148 |
+| OPEN | 9 |
+| Total | 149 |
 
 ## The pairing-rule family (known mistake + siblings)
 
@@ -173,6 +173,7 @@ index (all-zero rect, slot 0, default arm).
 | B47 | Rating-event sink `+0xa14`: per-code semantics of the 16-way dispatcher (event codes 1/9/14 observed at judgement sites) | OPEN | attach `0x56e170` at song-load (`0x570325`←`0x4dba..`), detach on chart reload `0x1717cc`, jump-table dispatcher; next step: REA dossier of the 16 dispatcher arms naming the HUD/state writer each code drives | G | PLAYING.GAME |  |
 | B48 | Grade mapping: score→grade rule; grade strings `0x247363+` provably code-unreferenced (B4) so any mapping is data- or art-side, mechanism untraced | OPEN | next step per ADR-0009: negative-evidence sweep (structural sweep + named paths over the result builder district `FUN_004c2390` file `0xc2390`) or a live rig capture of the grade plate at controlled score bands | R+G | RESULT.GAME |  |
 | B49 | Pill/jam-score shop earn flow: shop-side readers of the pill stock `+0x398c`/jam words `+0x396e` untraced (earn and spend rules themselves VERIFIED, B5–B6) | OPEN | next step: REA trace of shop-state writers reading the pill/jam words plus a live gateway replay of the earn flow | G | PLAYING.GAME, SHOP.GAME |  |
+| B50 | OJN hold-flag (bit 26) runtime semantics: recorded test sites `0x172a4f`/`0x173061` never fire on shipped payloads; judge-invisibility pinned by B14 | OPEN | per ADR-0009 a negative-evidence close needs a structural sweep + named paths: full-image sweep for bit-26 tests beyond the judge region (`0x5703f0`–`0x578300`) plus a synthetic bit-26 chart through the parser fix-up `0x572f50` naming the strike-slot `+0x3E8` consumer's observable effect; next step: that sweep + synthetic replay | G | PLAYING.GAME |  |
 
 ## C. File formats
 
