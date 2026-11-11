@@ -1060,6 +1060,35 @@ fn bind_playing_backdrops(entries: &[&ControlEntry]) -> Vec<ScenePlacement> {
         .collect()
 }
 
+/// The member life-gauge body the eight peer-slot entries
+/// reference: `Avatar_Info_LifeGauge.ojs` (46x8, `Playing1.opi`
+/// slot 6). Its record anchor is the frame corner (0,0), clear of
+/// the note lanes (they open at row 28).
+pub const PLAYING_PEER_GAUGE_SPRITE: &str = "Avatar_Info_LifeGauge.ojs";
+
+/// Anchor placement for the corner member life gauge (bnd-audit 16,
+/// ticket #102): the first `Avatar_Info_LifeGauge.ojs` entry
+/// (`IDC_IMAGE_SPLAY_LIFEGAUGE1`, entry 41 — before every behind and
+/// backdrop entry) rides its own record anchor through the unplaced
+/// rect, never an appended full-canvas placement over the 17-rect
+/// bound window (ADR-0003: the painter consumes the staged rect,
+/// never a canvas stretch). The sibling `LIFEGAUGE2..8` entries
+/// reference the same body under runtime stacking, which the peer
+/// bars keep as their RUNTIME model (geometry-audit
+/// `NATIVE_PEER_BAR`), so one placement stages the body's static
+/// anchor.
+fn bind_playing_corner_gauge(entries: &[&ControlEntry]) -> Vec<ScenePlacement> {
+    entries
+        .iter()
+        .copied()
+        .take(PLAYING_SUBSET_FIRST_ENTRY)
+        .filter(|entry| entry_takes_rect(entry))
+        .find(|entry| entry.sprite.as_deref() == Some(PLAYING_PEER_GAUGE_SPRITE))
+        .map(|entry| place_backdrop_panel(entry, PLAYING_PEER_GAUGE_SPRITE))
+        .into_iter()
+        .collect()
+}
+
 /// Anchor placements for the behind-highway scene among entries
 /// `0..213`, in file order. Staging keeps the quoted block ref
 /// (`_Playing_BG.ojs` resolves at load through
@@ -1085,9 +1114,10 @@ fn bind_playing_behind(entries: &[&ControlEntry]) -> Vec<ScenePlacement> {
 /// nothing (step 3); container-coded entries (zero low word) stay
 /// unplaced. `STATE_PLAYING` keeps the verified window: its 17 rects
 /// lay out the `EXIT`..`VOLUME` run (entries 213–229, ordinals
-/// 1–17); the static backdrop panels among entries 0–212 stage as
-/// anchor placements ahead of them, and the behind-highway scene
-/// stages first of all. Rects no entry claims are ignored (the
+/// 1–17); the corner member gauge (entry 41) and the static backdrop
+/// panels among entries 0–212 stage as anchor placements ahead of
+/// them, and the behind-highway scene stages first of the file-order
+/// art. Rects no entry claims are ignored (the
 /// Playing tail past `VOLUME` rides unloaded).
 #[must_use]
 pub fn bind_scene_rects(block: &ControlBlock, bnd: &Bnd) -> Vec<ScenePlacement> {
@@ -1220,7 +1250,8 @@ fn entry_placement(placed: PlacedControl<'_>) -> ScenePlacement {
 /// the all-zero rect (anchor draw), like the bound path.
 fn bind_playing_subset(block: &ControlBlock, bnd: &Bnd) -> Vec<ScenePlacement> {
     let entries = block.all_entries();
-    let mut placed = bind_playing_behind(&entries);
+    let mut placed = bind_playing_corner_gauge(&entries);
+    placed.extend(bind_playing_behind(&entries));
     placed.extend(bind_playing_backdrops(&entries));
     placed.extend(
         pair_entries_with_rects(block, bnd)
