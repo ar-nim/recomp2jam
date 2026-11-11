@@ -6,6 +6,7 @@
 //! hardware.
 
 pub mod avatar;
+pub mod input_latency;
 pub mod options;
 pub mod playing;
 pub mod screen;

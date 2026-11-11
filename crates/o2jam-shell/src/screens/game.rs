@@ -6038,6 +6038,70 @@ mod game_tests {
     }
 
     #[test]
+    fn input_latency_gate_holds_the_dispatch_budget() {
+        use crate::input_latency::{
+            measure_input_latency, JudgementStamp, StampState, INPUT_LATENCY_BUDGET_TICKS,
+        };
+        use o2jam_audio::{NullBackend, PcmSamples};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        use winit::keyboard::KeyCode;
+
+        // Reference: identical walk, one queued song second, then a
+        // direct lane strike — the judged state the probed run must
+        // reach through the windowed dispatch path.
+        let mut reference = ScreenGame::new();
+        reference.with_audio(Box::new(NullBackend::new()), HashMap::new());
+        reference.load_chart(vec![(0, 1000, 7)]);
+        walk_to_playing(&mut reference);
+        reference
+            .audio
+            .as_mut()
+            .expect("rig")
+            .backend
+            .play_pcm(&PcmSamples {
+                samples: vec![0i16; 44_100 * 2],
+                sample_rate: 44_100,
+                channels: 2,
+            })
+            .unwrap();
+        reference.lane_key(0, true);
+        let expected = reference.state_hash();
+
+        let mut game = ScreenGame::new();
+        game.with_audio(Box::new(NullBackend::new()), HashMap::new());
+        game.load_chart(vec![(0, 1000, 7)]);
+        walk_to_playing(&mut game);
+        game.audio
+            .as_mut()
+            .expect("rig")
+            .backend
+            .play_pcm(&PcmSamples {
+                samples: vec![0i16; 44_100 * 2],
+                sample_rate: 44_100,
+                channels: 2,
+            })
+            .unwrap();
+        let state = Rc::new(RefCell::new(StampState::new()));
+        let shell = crate::Shell::new(Box::new(JudgementStamp::new(game, state.clone())));
+        let mut handler = crate::window::WindowHandler::new(shell);
+        // A scripted KeyS with a modeled 12-tick queue: the probe
+        // must reach the judgement arm without the shell adding a
+        // single tick, and rate the same note as the reference.
+        let sample = measure_input_latency(&mut handler, KeyCode::KeyS, 12, &state)
+            .expect("lane strike reached the judgement arm");
+        assert_eq!(sample.added_ticks, 0, "shell-added latency: {sample:?}");
+        assert!(sample.within_budget());
+        assert_eq!(INPUT_LATENCY_BUDGET_TICKS, 0);
+        assert_eq!(state.borrow().judged_lanes(), [0]);
+        assert_eq!(
+            handler.shell.game.state_hash(),
+            expected,
+            "probed strike judged the same note as the direct strike"
+        );
+    }
+
+    #[test]
     fn menu_backs_out_of_lobbies() {
         use MenuKey;
         let mut game = ScreenGame::new();
