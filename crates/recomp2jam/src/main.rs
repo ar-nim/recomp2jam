@@ -528,10 +528,7 @@ fn run_online(opts: OnlineCli) -> Result<()> {
     };
     let (report, gateway) = connect::connect_and_login_with_transport(&connect_options)?;
     tracing::info!(channels = report.channels.len(), "channels listed");
-    if let Some(hero) = &report.character {
-        stage_online_identity(&mut game, hero);
-    }
-    stage_boot_character(&mut game, report.character);
+    stage_online_identity(&mut game, report.character.as_ref());
     game.set_channels(report.channels);
     if !report.rooms.is_empty() {
         tracing::info!(rooms = report.rooms.len(), "rooms listed");
@@ -1189,10 +1186,7 @@ fn setup_online(
     let options = params.into_connect_options();
     let (report, gateway) = connect::connect_and_login_with_transport(&options)?;
     tracing::info!(channels = report.channels.len(), "channels listed");
-    if let Some(hero) = &report.character {
-        stage_online_identity(game, hero);
-    }
-    stage_boot_character(game, report.character);
+    stage_online_identity(game, report.character.as_ref());
     game.set_channels(report.channels);
     if !report.rooms.is_empty() {
         tracing::info!(rooms = report.rooms.len(), "rooms listed");
@@ -1201,18 +1195,52 @@ fn setup_online(
     Ok(Some((gateway, pending_room, pending_song)))
 }
 
-/// Stage the fetched character info into the boot game (live boot,
-/// ticket #58): the windowed entries fetch `GetCharacterInfo` 2001 on
-/// channel login, and staging it puts the Room user panel, the MyRoom
-/// readouts, and the Waiting self seat on live data. No-op on the
-/// list-only boot (no channel, no fetch).
-fn stage_boot_character(
+/// Stage the fetched character identity (`GetCharacterInfo` 2001) into
+/// a windowed game (tickets #30 and #58): the room user panel readouts
+/// and the MyRoom/Waiting seats ride the record itself, the worn figure
+/// stacks from the installed `avatar.opa` with the hero's own equipment
+/// and gender (the same stack the shots walk stages), and the archive
+/// becomes the waiting-seat source so the self seat and every later
+/// peer join restage through it. No-op on the list-only boot (no
+/// channel, no fetch). Infallible by contract: a missing or
+/// unstackable archive keeps the figure slots empty, never failing
+/// the login walk.
+fn stage_online_identity(
     game: &mut o2jam_shell::ScreenGame,
-    character: Option<o2jam_net::CharacterInfo>,
+    character: Option<&o2jam_net::CharacterInfo>,
 ) {
-    if let Some(hero) = character {
-        game.set_myroom_character(hero);
+    let Some(hero) = character else {
+        return;
+    };
+    game.set_myroom_character(hero.clone());
+    let Ok((archive, table)) = connect::read_avatar_source(
+        install_root()
+            .join(INSTALLED_AVATAR_OPA)
+            .to_string_lossy()
+            .as_ref(),
+    ) else {
+        tracing::debug!(
+            "avatar.opa missing or unparsable; identity readouts stage, figures stay empty"
+        );
+        return;
+    };
+    match connect::stack_worn_figure(
+        &archive,
+        &hero.equipment,
+        hero.gender == o2jam_net::Gender::Male,
+    ) {
+        Ok(figure) if !figure.is_empty() => {
+            // The Room lobby slot and the Result banner show the same
+            // worn stack.
+            game.load_room_avatar(figure.clone());
+            game.load_avatar(figure);
+        }
+        Ok(_) => tracing::debug!("character equipment stacks empty; figure slots stay empty"),
+        Err(source) => {
+            tracing::debug!(%source, "worn figure unstackable; figure slots stay empty");
+        }
     }
+    game.set_avatar_source(archive, table);
 }
 
 /// Song index under `install-root` (the 7.55 catalog the select-music
@@ -1248,47 +1276,6 @@ fn stage_session_catalog(session: &mut session::OnlineSession) {
 /// Installed `avatar.opa` image the online identity figure stacks
 /// from (read-only, like the other archives).
 const INSTALLED_AVATAR_OPA: &str = "O2Jam/Image/avatar.opa";
-
-/// Stage the fetched character identity (`GetCharacterInfo` 2001) into
-/// a windowed game (ticket #30): the room user panel readouts ride the
-/// record itself, the worn figure stacks from the installed
-/// `avatar.opa` with the hero's own equipment and gender (the same
-/// stack the shots walk stages), and the archive becomes the
-/// waiting-seat source so the self seat and every later peer join
-/// restage through it. Infallible by contract: a missing or
-/// unstackable archive keeps the figure slots empty, never failing
-/// the login walk.
-fn stage_online_identity(game: &mut o2jam_shell::ScreenGame, hero: &o2jam_net::CharacterInfo) {
-    game.set_myroom_character(hero.clone());
-    let Ok((archive, table)) = connect::read_avatar_source(
-        install_root()
-            .join(INSTALLED_AVATAR_OPA)
-            .to_string_lossy()
-            .as_ref(),
-    ) else {
-        tracing::debug!(
-            "avatar.opa missing or unparsable; identity readouts stage, figures stay empty"
-        );
-        return;
-    };
-    match connect::stack_worn_figure(
-        &archive,
-        &hero.equipment,
-        hero.gender == o2jam_net::Gender::Male,
-    ) {
-        Ok(figure) if !figure.is_empty() => {
-            // The Room lobby slot and the Result banner show the same
-            // worn stack.
-            game.load_room_avatar(figure.clone());
-            game.load_avatar(figure);
-        }
-        Ok(_) => tracing::debug!("character equipment stacks empty; figure slots stay empty"),
-        Err(source) => {
-            tracing::debug!(%source, "worn figure unstackable; figure slots stay empty");
-        }
-    }
-    game.set_avatar_source(archive, table);
-}
 
 /// Stack the worn avatar figure into a windowed game, if requested.
 fn setup_avatar(
@@ -2326,7 +2313,7 @@ mod cli_build_tests {
             "without the identity the avatar slot stays empty"
         );
         let mut staged = room_with_avatar_slot();
-        stage_online_identity(&mut staged, &hero);
+        stage_online_identity(&mut staged, Some(&hero));
         let staged = paint_room(&mut staged);
         assert!(
             slot_ink(&staged) > 0,

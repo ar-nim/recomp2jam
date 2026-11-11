@@ -2749,7 +2749,9 @@ impl LivePlay {
     /// no-archive fallback). Peer bars stay out: they ride the over-art
     /// layer ([`Self::paint_avatar_scene`], after the staged overlay).
     pub fn paint(&mut self, frame: &mut Frame<'_>, geom: &HighwayGeometry, now_ms: u64) {
-        self.paint_over(frame, geom, now_ms, false);
+        self.advance_to(now_ms);
+        self.view.paint_curtained(frame, geom, self.curtain);
+        self.paint_action_layers(frame, geom, now_ms);
     }
 
     /// Same, over an already-blitted staged backdrop (A44): the
@@ -2761,23 +2763,16 @@ impl LivePlay {
         geom: &HighwayGeometry,
         now_ms: u64,
     ) {
-        self.paint_over(frame, geom, now_ms, true);
+        self.advance_to(now_ms);
+        self.view
+            .paint_curtained_over_staged(frame, geom, self.curtain);
+        self.paint_action_layers(frame, geom, now_ms);
     }
 
-    fn paint_over(
-        &mut self,
-        frame: &mut Frame<'_>,
-        geom: &HighwayGeometry,
-        now_ms: u64,
-        staged_backdrop: bool,
-    ) {
-        self.advance_to(now_ms);
-        if staged_backdrop {
-            self.view
-                .paint_curtained_over_staged(frame, geom, self.curtain);
-        } else {
-            self.view.paint_curtained(frame, geom, self.curtain);
-        }
+    /// The shared action pass both entry points paint after their
+    /// backdrop arm: hold tails, armed heads, bursts, jam flash,
+    /// gauge, panel strip, and judgement word.
+    fn paint_action_layers(&mut self, frame: &mut Frame<'_>, geom: &HighwayGeometry, now_ms: u64) {
         self.paint_hold_tails(frame, geom);
         self.paint_armed_heads(frame, geom);
         self.paint_hit_bursts(frame, geom, now_ms);

@@ -216,20 +216,30 @@ fn is_clipped_x(clip: Option<&Rect>, dest_x: i32) -> bool {
 }
 
 /// Intersection of two rects (`None` when disjoint or empty).
+///
+/// A dimension past `i32` saturates its far edge at `i32::MAX`
+/// rather than collapsing it to 0: an over-wide rect must read as
+/// reaching the far edge, never as disjoint at every offset.
 #[must_use]
 pub fn intersect_rect(a: &Rect, b: &Rect) -> Option<Rect> {
     let x = a.x.max(b.x);
     let y = a.y.max(b.y);
-    let right = (a.x + i32::try_from(a.w).unwrap_or(0)).min(b.x + i32::try_from(b.w).unwrap_or(0));
-    let bottom = (a.y + i32::try_from(a.h).unwrap_or(0)).min(b.y + i32::try_from(b.h).unwrap_or(0));
-    let w = right.saturating_sub(x);
-    let h = bottom.saturating_sub(y);
-    (w > 0 && h > 0).then_some(Rect {
+    let right = far_edge(a.x, a.w).min(far_edge(b.x, b.w));
+    let bottom = far_edge(a.y, a.h).min(far_edge(b.y, b.h));
+    let w64 = right.saturating_sub(i64::from(x));
+    let h64 = bottom.saturating_sub(i64::from(y));
+    (w64 > 0 && h64 > 0).then(|| Rect {
         x,
         y,
-        w: w as u32,
-        h: h as u32,
+        w: u32::try_from(w64).unwrap_or(u32::MAX),
+        h: u32::try_from(h64).unwrap_or(u32::MAX),
     })
+}
+
+/// Far edge of one rect axis, widened to `i64` so the sum cannot
+/// overflow: a dimension that does not fit `i32` saturates outward.
+fn far_edge(start: i32, len: u32) -> i64 {
+    i64::from(start) + i64::from(i32::try_from(len).unwrap_or(i32::MAX))
 }
 
 /// Percent of the note highway one curtain edge covers or reveals.
@@ -2234,6 +2244,45 @@ mod tests {
         assert_eq!(expand_rgb555(0x03E0), (0, 255, 0));
         assert_eq!(expand_rgb555(0x001F), (0, 0, 255));
         assert_eq!(expand_rgb555(0x0000), (0, 0, 0));
+    }
+
+    #[test]
+    fn intersect_rect_treats_over_wide_rect_as_reaching_the_far_edge() {
+        // Audit #102-era: a dimension past i32 must not read as
+        // disjoint — the wide rect covers the narrow one wherever
+        // their spans overlap.
+        let wide = Rect {
+            x: 0,
+            y: 0,
+            w: u32::MAX,
+            h: 10,
+        };
+        let narrow = Rect {
+            x: 5,
+            y: 2,
+            w: 8,
+            h: 4,
+        };
+        assert_eq!(
+            intersect_rect(&wide, &narrow),
+            Some(Rect {
+                x: 5,
+                y: 2,
+                w: 8,
+                h: 4,
+            }),
+            "an over-wide rect intersects every rect inside its span"
+        );
+        let beyond = Rect {
+            x: 5,
+            y: 20,
+            w: 8,
+            h: 4,
+        };
+        assert!(
+            intersect_rect(&wide, &beyond).is_none(),
+            "a fully past rect stays disjoint"
+        );
     }
 
     #[test]

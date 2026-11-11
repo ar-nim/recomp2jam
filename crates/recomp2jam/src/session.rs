@@ -1492,28 +1492,26 @@ impl OnlineSession {
     /// nowhere — the local screen arms still own the offline walk.
     fn flush_result_wire(&mut self) {
         if let Some(start) = self.game.take_result_retry() {
-            if let Err(source) = self
-                .gateway
-                .send_frame(Request::StartGame.id(), &start.encode_body())
-            {
-                tracing::warn!(%source, "result retry send failed");
-            }
+            self.send_result_frame(Request::StartGame.id(), &start.encode_body(), "retry");
         }
         if let Some(exit) = self.game.take_result_back() {
-            if let Err(source) = self
-                .gateway
-                .send_frame(Request::ExitPlaying.id(), &exit.encode_body())
-            {
-                tracing::warn!(%source, "result back send failed");
-            }
+            self.send_result_frame(Request::ExitPlaying.id(), &exit.encode_body(), "back");
         }
         if let Some(live) = self.game.take_result_battle_entry() {
-            if let Err(source) = self
-                .gateway
-                .send_frame(o2jam_net::relay::GetLiveState::COMMAND, &live.encode_body())
-            {
-                tracing::warn!(%source, "battle live-state send failed");
-            }
+            self.send_result_frame(
+                o2jam_net::relay::GetLiveState::COMMAND,
+                &live.encode_body(),
+                "battle live-state",
+            );
+        }
+    }
+
+    /// Send one result-screen request frame; a failed send warns (the
+    /// screen has already moved on — the tally send keeps its retry
+    /// latch instead because Result stays).
+    fn send_result_frame(&mut self, command: u16, body: &[u8], what: &str) {
+        if let Err(source) = self.gateway.send_frame(command, body) {
+            tracing::warn!(%source, "result {what} send failed");
         }
     }
 

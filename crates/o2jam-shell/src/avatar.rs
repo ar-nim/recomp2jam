@@ -959,16 +959,19 @@ pub fn playing_backdrop_sprite(team_play: bool, chart_slot: u8) -> String {
 #[must_use]
 pub fn is_playing_backdrop_sprite(sprite: &str) -> bool {
     sprite == "Playing_TutorialBG.ojs"
-        || (sprite.starts_with("Playing_NormalBG")
-            && sprite.ends_with(".ojs")
-            && sprite["Playing_NormalBG".len()..sprite.len() - 4]
-                .bytes()
-                .all(|byte| byte.is_ascii_digit()))
-        || (sprite.starts_with("Playing_P2PBG")
-            && sprite.ends_with(".ojs")
-            && sprite["Playing_P2PBG".len()..sprite.len() - 4]
-                .bytes()
-                .all(|byte| byte.is_ascii_digit()))
+        || is_numbered_family(sprite, "Playing_NormalBG")
+        || is_numbered_family(sprite, "Playing_P2PBG")
+}
+
+/// True for a `<family><digits>.ojs` body name: the runtime-built
+/// BACK1 backdrops number their family members (`Playing_NormalBG1..3`,
+/// `Playing_P2PBG1..2`), and no other archive body shares the shape.
+fn is_numbered_family(sprite: &str, family: &str) -> bool {
+    sprite.starts_with(family)
+        && sprite.ends_with(".ojs")
+        && sprite[family.len()..sprite.len() - 4]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit())
 }
 
 /// True for a behind-highway scene sprite, quoted or resolved: the

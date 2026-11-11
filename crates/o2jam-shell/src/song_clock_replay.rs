@@ -70,7 +70,12 @@ impl FrameSchedule {
         *rng ^= *rng >> 7;
         *rng ^= *rng << 17;
         let span = self.jitter_ms * 2 + 1;
-        self.nominal_ms + (*rng % span) - self.jitter_ms
+        // Saturating both ways: an adversarial schedule may declare
+        // jitter beyond the nominal frame (the audit's underflow
+        // case); the delta clamps at 0 instead of panicking.
+        self.nominal_ms
+            .saturating_add(*rng % span)
+            .saturating_sub(self.jitter_ms)
     }
 }
 
@@ -181,7 +186,13 @@ impl SampleClockEngine {
         // cumulative consumption never drifts from wall time.
         let due = u128::from(self.sample_rate) * u128::from(wall_delta_ms) * 1_000_000
             + u128::from(self.carry_nanos);
-        self.samples_played += (due / CARRY_MODULO) as u64;
+        // The quotient can exceed u64 only past ~10^11 years of
+        // playback at 48 kHz; saturate there instead of truncating.
+        self.samples_played = self
+            .samples_played
+            .saturating_add(u64::try_from(due / CARRY_MODULO).unwrap_or(u64::MAX));
+        // Pinned bound: the remainder of a division by CARRY_MODULO
+        // (1_000_000_000) always fits u64 — the `as` cannot narrow.
         self.carry_nanos = (due % CARRY_MODULO) as u64;
     }
 
@@ -359,6 +370,21 @@ mod tests {
         assert!(
             trace.frames.last().expect("trace has frames") > &CHART_LEN_MS,
             "schedule must outrun the chart"
+        );
+    }
+
+    /// Regression (audit #102-era): a schedule declaring jitter above
+    /// the nominal frame must not underflow the jittered delta — the
+    /// amplitude saturates at a zero-length frame and the wall times
+    /// stay reproducible and non-decreasing.
+    #[test]
+    fn frame_schedule_survives_jitter_above_nominal() {
+        let a = FrameSchedule::new(2, 10, 0xA44).wall_times(200);
+        let b = FrameSchedule::new(2, 10, 0xA44).wall_times(200);
+        assert_eq!(a, b, "same seed must reproduce the same schedule");
+        assert!(
+            a.windows(2).all(|w| w[0] <= w[1]),
+            "clamped deltas must never move a frame backwards"
         );
     }
 

@@ -9295,7 +9295,7 @@ mod paint_tests {
     }
 
     #[test]
-    #[ignore = "rest-dim is OPEN: ticket #26's fix activates this guard"]
+    #[ignore = "rest-dim is OPEN: ticket #26's fix activates this guard (kept red-by-design per the #63 art-delta-guard rule; see also #26)"]
     fn gear_hover_repaints_over_the_dimmed_rest_frame() {
         // Ticket #63 (rule: `docs/parity/art-delta-guards.md` "Art-dependent delta
         // guards"): with the offA/onA-modeled fixture — rest =

@@ -4913,17 +4913,22 @@ impl ScreenGame {
     /// without avatar.
     fn paint_playing(&mut self, frame: &mut Frame<'_>, now_ms: u64) {
         let geom = HighwayGeometry::centered(frame.w, frame.h);
+        // Re-caption before the art pass: the caption rides the
+        // right-side avatar scene painted at the end of this
+        // function, so syncing it first keeps the frame's paint
+        // order while letting the Playing art borrow live across
+        // the whole pass (one lookup, no per-frame placement clone).
+        self.sync_song_caption();
         // Game-loop staged blits (A44): the staged scene set threads
         // through the loop's own per-frame blits — the behind-highway
         // backdrop first (the exe paints the backdrop first of all;
         // A5 paint order, A39 blit chain), the highway over it, then
         // the foreground placements. The unstaged arm keeps the flat
         // placeholder fill (ADR-0003's no-archive fallback).
-        let staged_backdrop = self
-            .scene_art(Screen::Playing)
-            .is_some_and(playing_backdrop_staged);
+        let playing_art = self.scene_art[scene_index(Screen::Playing)].as_ref();
+        let staged_backdrop = playing_art.is_some_and(playing_backdrop_staged);
         if staged_backdrop {
-            if let Some(art) = self.scene_art(Screen::Playing) {
+            if let Some(art) = playing_art {
                 paint_playing_backdrop(frame, art);
             }
             self.playing
@@ -4931,19 +4936,22 @@ impl ScreenGame {
         } else {
             self.playing.paint(frame, &geom, now_ms);
         }
-        let playing_placements = self
-            .scene_art(Screen::Playing)
-            .map(|art| art.placements.clone());
-        if let Some(art) = self.scene_art(Screen::Playing) {
+        if let Some(art) = playing_art {
             paint_playing_foreground(frame, art);
+            self.playing.paint_avatar_scene_with_placements(
+                frame,
+                self.avatar.as_ref(),
+                now_ms,
+                Some(&art.placements),
+            );
+        } else {
+            self.playing.paint_avatar_scene_with_placements(
+                frame,
+                self.avatar.as_ref(),
+                now_ms,
+                None,
+            );
         }
-        self.sync_song_caption();
-        self.playing.paint_avatar_scene_with_placements(
-            frame,
-            self.avatar.as_ref(),
-            now_ms,
-            playing_placements.as_deref(),
-        );
     }
 
     /// Re-caption the song line from the waiting choice while one is

@@ -108,8 +108,10 @@ impl InputLatencySample {
     /// ([`INPUT_LATENCY_BUDGET_TICKS`]).
     // `<=` (not `==`): the budget is 0 today but rises with the
     // milestone-3 decision (#76), and the gate must keep working
-    // unmodified when it does.
-    #[allow(clippy::absurd_extreme_comparisons)]
+    // unmodified when it does. The lint is expected, not allowed:
+    // once the budget turns nonzero the comparison stops being
+    // absurd and this attribute must go away.
+    #[expect(clippy::absurd_extreme_comparisons)]
     #[must_use]
     pub fn within_budget(&self) -> bool {
         self.added_ticks <= INPUT_LATENCY_BUDGET_TICKS
