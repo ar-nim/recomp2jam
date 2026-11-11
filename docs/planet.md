@@ -17,7 +17,7 @@ CP949 lines), lines 785–809: header `STATE_PLANET 0X11`, `{`,
 | `0X19201002..06` | `IDC_BUTTON_SPLANET_{HARD,NORMAL,EASY,FREE,DRUM}` | `Planet_Btn_{Hard,Normal,Easy,Free,Drum}.ojs` |
 | `0X19400007..0B` | `IDC_TEXT_SPLANET_{HARD,NORMAL,EASY,FREE,DRUM}` | — (captions OPEN) |
 | `0X1950000C` | `IDC_IMAGE_SPLANET_PROMOTION` | `Planet_Promotion.ojs` |
-| `0X1920000D..0F` | promotion LEFT/RIGHT/PLAYSTOP | matching `.ojs` |
+| `0X1920000D/0E`, `0X1920C00F` | promotion LEFT/RIGHT/PLAYSTOP | matching `.ojs` |
 | `0X19200010..11` | EXIT / OPTION | matching `.ojs` |
 
 Button comments (CP949): HARD `신의손`, NORMAL `고수손`, EASY
@@ -181,6 +181,76 @@ Next step: pin the border rule against the staged badge-art extents
 origins) via capture alignment, then replace the cursor. Static
 handler offset for the highlight paint is unlocated (no dossier
 entry); do not invent border geometry meanwhile.
+
+## Board hover highlight — PINNED per control, shell paints it (2026-11-11)
+
+Wine rig hover sweep (`docs/hover.md`, full provenance there):
+7.55 `AngelO2Jam.exe` 5,029,888 B SHA-256
+`83a04541…72c823b`, Wine 11.21, Xvfb `:104` + wine desktop `o2jam`
+800x600, `PULSE_SINK=wine_null`, SendInput absolute motion only
+(XTEST never reaches the canvas), offA/on/offB capture triples
+under `~/scratch/hover-sweep/`, byte-identical changed-pixel counts
+across two independent runs.
+
+| control | code | hover arms | diff bbox (native px) | changed px |
+|---|---|---|---|---|
+| HARD emblem | `0x19201002` | 84x18 plate band of body frame 0, no frame swap | 343,44-427,62 | 1456 |
+| NORMAL emblem | `0x19201003` | same plate band, body frame 0 | 213,44-297,62 | 1477 |
+| EASY emblem | `0x19201004` | same plate band, body frame 0 | 94,44-178,62 | 1476 |
+| FREE (QUEST) | `0x19201005` | static | none | 0 |
+| DRUM (TUTORIAL) | `0x19201006` | static | none | 0 |
+| OPTION gear | `0x19200011` | body frame 0 at full colour | 714,565-743,594 | 615 |
+| EXIT disc | `0x19200010` | body frame 0 at full colour | 754,565-783,594 | 654 |
+| PROMO LEFT | `0x1920000D` | body frame 0 at full colour | 358,514-371,529 | 120 |
+| PROMO PLAYSTOP | `0x1920C00F` | **frame 1** (rest is frame 0) | 392,515-407,529 | 224 |
+| PROMO RIGHT | `0x1920000E` | body frame 0 at full colour | 428,514-441,529 | 120 |
+
+What this means for the painter: the emblems never swap frames —
+the hover reveals the body's own plate band (the band pixels match
+the body's frame-0 pixels at that offset within ±30/255; frame 1 is
+the *selected family* art, a click state, not hover). The discs and
+arrows restore their own frame 0 over a dimmed rest; only PLAYSTOP
+swaps frames. FREE/DRUM render dim and never react.
+
+Shell (ticket #26): `GameLoop::hovered_planet_action` resolves the
+control under the pointer through the staged dispatch table
+(ticket #33's pointer state, no second store; silent off-board, off-
+phase, and behind a modal), and `paint_planet_hover` repaints the
+pinned pixels over the untouched rest stack — emblem layer 0
+clipped to `PLANET_EMBLEM_{EASY,NORMAL,HARD}_PLATE_RECT`, discs and
+arrows layer 0 whole, PLAYSTOP layer 1 (fallback layer 0), static
+plates nothing, missing art nothing. Unhover clears by repaint.
+Guards: `hovered_planet_action_tracks_pointer_motion`,
+`planet_hover_stays_off_while_a_modal_owns_the_board`,
+`playstop_hover_arms_the_frame_swap_cell`,
+`hovered_emblem_reveals_the_pinned_plate_band`,
+`quest_and_tutorial_emblems_ignore_hover`,
+`promo_playstop_hover_paints_the_second_frame`,
+`gear_hover_restores_the_first_frame`,
+`planet_hover_without_staged_figure_paints_nothing`.
+The amber selection cursor stays labeled stand-in (section above).
+
+Promo code correction (2026-11-11): the shell had STOP and RIGHT
+crossed (`PLANET_PROMO_STOP_CODE 0x...0E`, `RIGHT 0x...0F` — the
+latter names a code the block never declares). The archive
+`ControlList_Interface.txt` `STATE_PLANET` declares
+`IDC_BUTTON_SPLANET_PROMOTION_LEFT 0X1920000D`,
+`..._RIGHT 0X1920000E`, `..._PLAYSTOP 0X1920C00F` — ordinals 12/13/14
+pair to rects 12/13/14 exactly, and the body anchors agree
+byte-exact (`Left (353,511)`, `Right (421,511)`, `PlayStop
+(387,511)`). Fixed to those values; the crossed click dispatch is
+corrected by the same change (guard above pins the archive codes
+literally). Record-count note: `Planet_Btn_Promotion_PlayStop.ojs`
+decodes to 6 raw 26x24 records at (387,511), not 2 as `docs/hover.md`
+tabulates — the shell stages all records as layers and the hover
+takes layer 1.
+
+OPEN (mechanism, not observable): the rest-dim rendering path
+(measured on every button, explained by none) and whether the exe
+clips the plate band at rest or paints it only on hover — next step
+for both is the stopped-state winedbg button-descriptor read
+(parent `+0xF80`, stride `0x118`, `docs/reversing.md` protocol).
+The rest stack underneath the hover is untouched by this ticket.
 2. Shell screen + paint + flow edges — DONE (`Screen::Planet`,
    `paint_planet_scene`, `Channel→Planet`/`Planet→Room`; walk cover in
    `shots.rs` via the verified edges).

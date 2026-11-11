@@ -40,10 +40,11 @@ use super::side::{
     lanking_bpm_caption, lanking_diff_caption, lanking_genre_caption, lanking_lview_slots,
     lanking_rank_cells, lanking_rview_slots, lanking_tiled_rect, music_shop_buy_caption,
     music_shop_cart_page_rects, music_shop_cart_slots, music_shop_page_rects, music_shop_slots,
-    music_shop_tiled_rect, myroom_action_for_code, planet_band_rect, planet_caption_for_code,
-    shop_cart_page_rects, shop_cart_slots, wallet_row_caption, LankingSong, MusicShopRow,
-    MyRoomAction, MyRoomState, PlanetBand, PlanetOptionTab, ShopGood, WalletRow, WalletState,
-    GEM_LABEL, LANKING_LVIEW_TEXT_CODES, LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES,
+    music_shop_tiled_rect, myroom_action_for_code, planet_action_for_code, planet_band_rect,
+    planet_caption_for_code, planet_plate_rect, shop_cart_page_rects, shop_cart_slots,
+    wallet_row_caption, LankingSong, MusicShopRow, MyRoomAction, MyRoomState, PlanetAction,
+    PlanetBand, PlanetOptionTab, PlanetPromo, ShopGood, WalletRow, WalletState, GEM_LABEL,
+    LANKING_LVIEW_TEXT_CODES, LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES,
     MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS, MSHOP_ROW_TEXT_CODES,
     MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_SLOT_FIRST_CODE, QUIT_MESSAGE_CP949,
     SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS,
@@ -57,8 +58,8 @@ use o2jam_net::{
 };
 use o2jam_render::font::{draw_text_cell, text_width_cell, Cell};
 use o2jam_render::{
-    blit_rgb555, draw_number, draw_text, fill_rect, number_width, pack_xrgb, scale_rect_to_frame,
-    text_width, Frame, Rect, Rgb555Image, NATIVE_HEIGHT, NATIVE_WIDTH,
+    blit_rgb555, blit_rgb555_clipped, draw_number, draw_text, fill_rect, number_width, pack_xrgb,
+    scale_rect_to_frame, text_width, Frame, Rect, Rgb555Image, NATIVE_HEIGHT, NATIVE_WIDTH,
 };
 
 /// Gameplay block: real UI lives in `Playing1.opi` (235 entries,
@@ -1567,14 +1568,102 @@ fn paint_planet_captions(frame: &mut Frame<'_>, placements: &[ScenePlacement]) {
 /// paints (no fallback geometry is invented). A picked band draws
 /// the shared amber cursor inside its pinned `.bnd` button rect —
 /// highlight rendering is unevidenced, so this cursor is an OPEN
-/// stand-in (docs/planet.md), not exe parity.
-pub fn paint_planet_scene(frame: &mut Frame<'_>, art: &SceneArt, selection: Option<PlanetBand>) {
+/// stand-in (docs/planet.md), not exe parity. The hovered board
+/// control (`hover`, from pointer motion alone) repaints its pinned
+/// highlight art on top (see [`paint_planet_hover`]); `None` keeps
+/// the rest stack, so unhover clears the highlight by repaint.
+pub fn paint_planet_scene(
+    frame: &mut Frame<'_>,
+    art: &SceneArt,
+    selection: Option<PlanetBand>,
+    hover: Option<PlanetAction>,
+) {
     art.paint_backdrop(frame, Screen::Planet);
+    paint_planet_hover(frame, art, hover);
     paint_planet_captions(frame, &art.placements);
     if let Some(band) = selection {
         let rect = planet_band_rect(band);
         paint_cursor(frame, rect.x + 10, rect.y + rect.h as i32 / 2);
     }
+}
+
+/// Planet-board hover highlight: the pinned per-control art from
+/// the Wine sweep (`docs/hover.md`, exe `83a04541…72c823b`) — three
+/// lit emblems reveal their body's own 84x18 plate band (frame 0
+/// clipped to [`planet_plate_rect`], no frame swap), the gear and
+/// exit discs and the promo arrows repaint body frame 0 at full
+/// colour over the dimmed rest, and only the PLAYSTOP cell swaps
+/// frames (rest frame 0, hover frame 1). The QUEST/TUTORIAL plates
+/// are exe-static (0 changed pixels) and paint nothing. Every pixel
+/// comes from the staged body — a control with no staged figure
+/// (or no layer for the arm) paints nothing, never a stand-in.
+/// The rest stack underneath is untouched (its dim/selected-frame
+/// rendering stays OPEN, `docs/planet.md`), so unhover clears the
+/// highlight by repaint.
+fn paint_planet_hover(frame: &mut Frame<'_>, art: &SceneArt, hover: Option<PlanetAction>) {
+    let Some(action) = hover else {
+        return;
+    };
+    let Some(placement) = art
+        .placements
+        .iter()
+        .find(|placed| planet_action_for_code(placed.code) == Some(action))
+    else {
+        return;
+    };
+    let Some(figure) = placement
+        .sprite
+        .as_ref()
+        .and_then(|sprite| art.figures.get(sprite))
+    else {
+        return;
+    };
+    match action {
+        // Static QUEST/TUTORIAL plates: exe-verified no highlight.
+        PlanetAction::Emblem { band: None } => {}
+        // Plate reveal: layer 0 clipped to the pinned band rect.
+        PlanetAction::Emblem { band: Some(band) } => {
+            if let Some(layer) = figure.layer(0) {
+                blit_planet_hover_layer(frame, layer, Some(planet_plate_rect(band)));
+            }
+        }
+        // The one true frame swap: hover arms frame 1 (frame 0
+        // stands in when the body stages a single frame).
+        PlanetAction::Promo {
+            cell: PlanetPromo::Stop,
+        } => {
+            if let Some(layer) = figure.layer(1).or(figure.layer(0)) {
+                blit_planet_hover_layer(frame, layer, None);
+            }
+        }
+        // Dimmed-rest buttons: hover restores frame 0 at full colour.
+        PlanetAction::QuitConfirm | PlanetAction::OptionsDialog | PlanetAction::Promo { .. } => {
+            if let Some(layer) = figure.layer(0) {
+                blit_planet_hover_layer(frame, layer, None);
+            }
+        }
+    }
+}
+
+/// Blit one staged hover layer at its record anchor (the same
+/// anchored positioning the rest stack uses), optionally clipped to
+/// a native rect (the emblem plate reveal). Positions scale into
+/// the frame like every other painter; nothing paints on a
+/// zero-size frame.
+fn blit_planet_hover_layer(frame: &mut Frame<'_>, layer: &FigureLayer, clip_native: Option<Rect>) {
+    if frame.w == 0 || frame.h == 0 {
+        return;
+    }
+    let (dx, dy) = anchor_in_frame(layer.dx, layer.dy, frame.w, frame.h);
+    let clip = clip_native.map(|rect| scale_rect_to_frame(&rect, frame.w, frame.h));
+    blit_rgb555_clipped(
+        frame,
+        &layer.image.view(),
+        dx,
+        dy,
+        Some(layer.colorkey),
+        clip.as_ref(),
+    );
 }
 
 /// Dialog origin (native px) of a staged `DIALOG_*` block: the
@@ -8680,6 +8769,7 @@ mod paint_tests {
             },
             &art,
             None,
+            None,
         );
         assert!(buf.iter().all(|pixel| *pixel == 0));
     }
@@ -8699,6 +8789,7 @@ mod paint_tests {
             },
             &art,
             Some(PlanetBand::Hard),
+            None,
         );
         let amber = pack_xrgb(0xFF, 0xD0, 0x20);
         // paint_cursor draws at (x - 6, y): (313 + 10 - 6, 32 + 56).
@@ -8708,6 +8799,307 @@ mod paint_tests {
             3 * 5,
             "only the 3x5 cursor inks"
         );
+    }
+
+    /// One two-frame anchored figure: layer 0 in `first`, layer 1
+    /// in `second`, both at (`dx`,`dy`) under a white colorkey — a
+    /// stand-in for the two-record planet button bodies (rest frame
+    /// plus hover/selected frame in stored order).
+    fn anchored_two_frame_figure(
+        w: usize,
+        h: usize,
+        dx: i32,
+        dy: i32,
+        first: [u8; 2],
+        second: [u8; 2],
+    ) -> AvatarFigure {
+        let mut figure = AvatarFigure::default();
+        for word in [first, second] {
+            figure.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&word.repeat(w * h), w, h).unwrap(),
+                dx,
+                dy,
+                colorkey: 0xFFFF,
+            });
+        }
+        figure
+    }
+
+    #[test]
+    fn hovered_emblem_reveals_the_pinned_plate_band() {
+        // Wine sweep (`docs/hover.md`): hovering EASY/NORMAL/HARD
+        // adds the body's own 84x18 light plate band (EASY
+        // (94,44)-(178,62)) with no frame swap. The rest stack keeps
+        // the top layer (the dark selected plate), so the hover
+        // repaints layer 0 clipped to the pinned band rect — and
+        // only there.
+        use super::super::side::{PlanetAction, PLANET_BUTTON_EASY_CODE};
+        let sprite = "Planet_Btn_Easy.ojs";
+        let art = SceneArt {
+            placements: vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code: PLANET_BUTTON_EASY_CODE,
+                sprite: Some(sprite.to_owned()),
+                rect: Rect {
+                    x: 87,
+                    y: 32,
+                    w: 99,
+                    h: 112,
+                },
+            }],
+            figures: HashMap::from([(
+                sprite.to_owned(),
+                anchored_two_frame_figure(99, 112, 87, 32, [0x1F, 0x00], [0x00, 0x7C]),
+            )]),
+        };
+        let blue = pack_xrgb(0x00, 0x00, 0xFF);
+        let red = pack_xrgb(0xFF, 0x00, 0x00);
+        let mut rest = vec![0u32; 800 * 600];
+        paint_planet_scene(
+            &mut Frame {
+                buf: &mut rest,
+                w: 800,
+                h: 600,
+            },
+            &art,
+            None,
+            None,
+        );
+        assert_eq!(rest[50 * 800 + 136], red, "rest keeps the top layer");
+        let mut hovered = vec![0u32; 800 * 600];
+        paint_planet_scene(
+            &mut Frame {
+                buf: &mut hovered,
+                w: 800,
+                h: 600,
+            },
+            &art,
+            None,
+            Some(PlanetAction::Emblem {
+                band: Some(PlanetBand::Easy),
+            }),
+        );
+        assert_eq!(hovered[50 * 800 + 136], blue, "plate band reveals layer 0");
+        assert_eq!(
+            hovered[100 * 800 + 136],
+            red,
+            "below the band the rest stack stands"
+        );
+        assert_eq!(
+            hovered[50 * 800 + 90],
+            red,
+            "left of the band the rest stack stands"
+        );
+    }
+
+    #[test]
+    fn quest_and_tutorial_emblems_ignore_hover() {
+        // FREE/DRUM are static (0 changed pixels, `docs/hover.md`):
+        // hovering them paints exactly the rest frame — the dimmed
+        // plates never highlight.
+        use super::super::side::{PlanetAction, PLANET_BUTTON_FREE_CODE};
+        let sprite = "Planet_Btn_Free.ojs";
+        let art = SceneArt {
+            placements: vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code: PLANET_BUTTON_FREE_CODE,
+                sprite: Some(sprite.to_owned()),
+                rect: Rect {
+                    x: 614,
+                    y: 32,
+                    w: 99,
+                    h: 112,
+                },
+            }],
+            figures: HashMap::from([(
+                sprite.to_owned(),
+                anchored_two_frame_figure(99, 112, 614, 32, [0x1F, 0x00], [0x00, 0x7C]),
+            )]),
+        };
+        let mut rest = vec![0u32; 800 * 600];
+        paint_planet_scene(
+            &mut Frame {
+                buf: &mut rest,
+                w: 800,
+                h: 600,
+            },
+            &art,
+            None,
+            None,
+        );
+        let mut hovered = vec![0u32; 800 * 600];
+        paint_planet_scene(
+            &mut Frame {
+                buf: &mut hovered,
+                w: 800,
+                h: 600,
+            },
+            &art,
+            None,
+            Some(PlanetAction::Emblem { band: None }),
+        );
+        assert_eq!(hovered, rest, "static emblems paint no highlight");
+    }
+
+    #[test]
+    fn promo_playstop_hover_paints_the_second_frame() {
+        // The one true frame swap (`docs/hover.md`): PLAYSTOP rest
+        // is frame 0, hover is body frame 1 (224 changed pixels at
+        // (392,515)-(407,529)). Unhovered the rest stack stands.
+        use super::super::side::{PlanetAction, PlanetPromo, PLANET_PROMO_STOP_CODE};
+        let sprite = "Planet_Btn_Promotion_PlayStop.ojs";
+        // Three layers on purpose: the hover must take layer 1
+        // (the pinned hover frame), never the stack top.
+        let mut playstop = AvatarFigure::default();
+        for (word, anchor) in [
+            ([0xE0, 0x03], (387, 511)),
+            ([0x00, 0x7C], (387, 511)),
+            ([0x1F, 0x00], (387, 511)),
+        ] {
+            playstop.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&word.repeat(26 * 24), 26, 24).unwrap(),
+                dx: anchor.0,
+                dy: anchor.1,
+                colorkey: 0xFFFF,
+            });
+        }
+        let art = SceneArt {
+            placements: vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code: PLANET_PROMO_STOP_CODE,
+                sprite: Some(sprite.to_owned()),
+                rect: Rect {
+                    x: 387,
+                    y: 511,
+                    w: 26,
+                    h: 24,
+                },
+            }],
+            figures: HashMap::from([(sprite.to_owned(), playstop)]),
+        };
+        let blue = pack_xrgb(0x00, 0x00, 0xFF);
+        let red = pack_xrgb(0xFF, 0x00, 0x00);
+        let mut rest = vec![0u32; 800 * 600];
+        paint_planet_scene(
+            &mut Frame {
+                buf: &mut rest,
+                w: 800,
+                h: 600,
+            },
+            &art,
+            None,
+            None,
+        );
+        assert_eq!(rest[520 * 800 + 400], blue, "rest keeps the top layer");
+        let mut hovered = vec![0u32; 800 * 600];
+        paint_planet_scene(
+            &mut Frame {
+                buf: &mut hovered,
+                w: 800,
+                h: 600,
+            },
+            &art,
+            None,
+            Some(PlanetAction::Promo {
+                cell: PlanetPromo::Stop,
+            }),
+        );
+        assert_eq!(
+            hovered[520 * 800 + 400],
+            red,
+            "hover swaps to frame 1, not the stack top"
+        );
+    }
+
+    #[test]
+    fn gear_hover_restores_the_first_frame() {
+        // OPTION/EXIT and the promo arrows (`docs/hover.md`): hover
+        // repaints body frame 0 at full colour over the dimmed rest.
+        use super::super::side::{PlanetAction, PLANET_OPTION_CODE};
+        let sprite = "Planet_Btn_Option.ojs";
+        let art = SceneArt {
+            placements: vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code: PLANET_OPTION_CODE,
+                sprite: Some(sprite.to_owned()),
+                rect: Rect {
+                    x: 710,
+                    y: 561,
+                    w: 38,
+                    h: 38,
+                },
+            }],
+            figures: HashMap::from([(
+                sprite.to_owned(),
+                anchored_two_frame_figure(38, 38, 710, 561, [0x1F, 0x00], [0x00, 0x7C]),
+            )]),
+        };
+        let blue = pack_xrgb(0x00, 0x00, 0xFF);
+        let red = pack_xrgb(0xFF, 0x00, 0x00);
+        let mut rest = vec![0u32; 800 * 600];
+        paint_planet_scene(
+            &mut Frame {
+                buf: &mut rest,
+                w: 800,
+                h: 600,
+            },
+            &art,
+            None,
+            None,
+        );
+        assert_eq!(rest[575 * 800 + 725], red, "rest keeps the top layer");
+        let mut hovered = vec![0u32; 800 * 600];
+        paint_planet_scene(
+            &mut Frame {
+                buf: &mut hovered,
+                w: 800,
+                h: 600,
+            },
+            &art,
+            None,
+            Some(PlanetAction::OptionsDialog),
+        );
+        assert_eq!(hovered[575 * 800 + 725], blue, "hover restores frame 0");
+    }
+
+    #[test]
+    fn planet_hover_without_staged_figure_paints_nothing() {
+        // No highlight without art: the hovered control stages no
+        // figure, so the frame stays untouched (no invented pixels).
+        use super::super::side::{PlanetAction, PlanetBand, PLANET_BUTTON_EASY_CODE};
+        let art = SceneArt {
+            placements: vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code: PLANET_BUTTON_EASY_CODE,
+                sprite: Some("Planet_Btn_Easy.ojs".to_owned()),
+                rect: Rect {
+                    x: 87,
+                    y: 32,
+                    w: 99,
+                    h: 112,
+                },
+            }],
+            figures: HashMap::new(),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_planet_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &art,
+            None,
+            Some(PlanetAction::Emblem {
+                band: Some(PlanetBand::Easy),
+            }),
+        );
+        assert!(buf.iter().all(|pixel| *pixel == 0));
     }
 
     #[test]
