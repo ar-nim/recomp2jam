@@ -219,7 +219,7 @@ phase, and behind a modal), and `paint_planet_hover` repaints the
 pinned pixels over the untouched rest stack through the shared
 `paint_placement_layer` hover painter (ticket #33, extended with
 the plate clip) — emblem layer 0 clipped to
-`PLANET_EMBLEM_{EASY,NORMAL,HARD}_PLATE_RECT`, discs and arrows
+`planet_plate_clip` over the staged button rect, discs and arrows
 layer 0 whole, PLAYSTOP layer 1 (fallback layer 0), static plates
 nothing, missing art nothing. Unhover clears by repaint.
 Guards: `hovered_planet_action_tracks_pointer_motion`,
@@ -242,10 +242,12 @@ pair to rects 12/13/14 exactly, and the body anchors agree
 byte-exact (`Left (353,511)`, `Right (421,511)`, `PlayStop
 (387,511)`). Fixed to those values; the crossed click dispatch is
 corrected by the same change (guard above pins the archive codes
-literally). Record-count note: `Planet_Btn_Promotion_PlayStop.ojs`
-decodes to 6 raw 26x24 records at (387,511), not 2 as `docs/hover.md`
-tabulates — the shell stages all records as layers and the hover
-takes layer 1.
+literally). Record-count note, resolved 2026-11-11: `Planet_Btn_Promotion_PlayStop.ojs`
+decodes to 6 raw 26x24 records at (387,511), not 2 — and the layer
+order is now pinned by direct record-vs-capture match over all six
+records (rest = rec0 624/624, hover = rec1 624/624), so the shell
+stages all records as layers and the hover takes layer 1.
+`docs/hover.md` tabulates the corrected count.
 
 OPEN (mechanism, not observable): the rest-dim rendering path
 (measured on every button, explained by none) and whether the exe

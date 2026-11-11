@@ -2164,43 +2164,40 @@ pub const fn planet_band_rect(band: PlanetBand) -> Rect {
     }
 }
 
-/// EASY emblem hover plate band (native px): the 84x18 light band
-/// at (94,44)-(178,62) the Wine sweep measures on hover
-/// (`docs/hover.md`: `planet-emblem-easy-offA/-on.png`, bbox
-/// 94,44-178,62, 1476 changed px). The band pixels are the emblem
-/// body's own frame-0 pixels at that offset; the rest paint leaves
-/// them out, so the hover reveals this rect and nothing else.
-pub const PLANET_EMBLEM_EASY_PLATE_RECT: Rect = Rect {
-    x: 94,
-    y: 44,
-    w: 84,
-    h: 18,
-};
-/// NORMAL emblem hover plate band (native px): (213,44)-(297,62)
-/// (`docs/hover.md`: `planet-emblem-normal-offA/-on.png`, 1477 px).
-pub const PLANET_EMBLEM_NORMAL_PLATE_RECT: Rect = Rect {
-    x: 213,
-    y: 44,
-    w: 84,
-    h: 18,
-};
-/// HARD emblem hover plate band (native px): (343,44)-(427,62)
-/// (`docs/hover.md`: `planet-emblem-hard-offA/-on.png`, 1456 px).
-pub const PLANET_EMBLEM_HARD_PLATE_RECT: Rect = Rect {
-    x: 343,
-    y: 44,
-    w: 84,
-    h: 18,
-};
+/// Hover plate-band width/height (native px): the Wine sweep measures
+/// the same 84x18 revealed band on all three lit emblems
+/// (`docs/hover.md` changed-pixel bboxes 94,44-178,62 /
+/// 213,44-297,62 / 343,44-427,62). Sweep-measured rendering shape —
+/// the `.bnd` carries no plate rect — so the position always rides
+/// the staged button rect below, never a board-absolute literal.
+const EMBLEM_PLATE_W: u32 = 84;
+const EMBLEM_PLATE_H: u32 = 18;
+/// Plate-band top inset below the staged button top (native px):
+/// sweep-measured, same on all three lit emblems (`docs/hover.md`).
+const EMBLEM_PLATE_INSET_Y: i32 = 12;
+/// Plate-band left inset inside the staged button (native px):
+/// sweep-measured per family width (`docs/hover.md`): the 99-wide
+/// EASY/NORMAL buttons reveal the band 7 px in, the 146-wide HARD
+/// button 30 px in.
+const EMBLEM_PLATE_INSET_X: i32 = 7;
+const EMBLEM_PLATE_INSET_X_WIDE: i32 = 30;
 
-/// Hover plate band of one lit emblem family (`None` never: every
-/// `PlanetBand` is a lit family — QUEST/TUTORIAL are not bands).
+/// Hover plate band of one lit emblem family: the sweep-measured
+/// plate shape laid over the staged button rect (parsed `.bnd` by
+/// control code — the rect position is archive geometry, only the
+/// intra-button shape above is measured). QUEST/TUTORIAL are not
+/// bands (their plates stay static, `docs/hover.md`).
 #[must_use]
-pub const fn planet_plate_rect(band: PlanetBand) -> Rect {
-    match band {
-        PlanetBand::Easy => PLANET_EMBLEM_EASY_PLATE_RECT,
-        PlanetBand::Normal => PLANET_EMBLEM_NORMAL_PLATE_RECT,
-        PlanetBand::Hard => PLANET_EMBLEM_HARD_PLATE_RECT,
+pub fn planet_plate_clip(button: &Rect, band: PlanetBand) -> Rect {
+    let inset_x = match band {
+        PlanetBand::Easy | PlanetBand::Normal => EMBLEM_PLATE_INSET_X,
+        PlanetBand::Hard => EMBLEM_PLATE_INSET_X_WIDE,
+    };
+    Rect {
+        x: button.x + inset_x,
+        y: button.y + EMBLEM_PLATE_INSET_Y,
+        w: EMBLEM_PLATE_W,
+        h: EMBLEM_PLATE_H,
     }
 }
 
@@ -3829,6 +3826,99 @@ pub fn paint_side_scene(
 mod side_tests {
     use super::*;
     use crate::avatar::PlacementRole;
+
+    #[test]
+    fn emblem_plate_clip_matches_the_sweep_bboxes() {
+        // The clip reproduces the Wine sweep bboxes on the real
+        // button rects (`docs/hover.md`): the position rides the
+        // staged rect, the intra-button shape is the measured fact.
+        let clip = planet_plate_clip(
+            &Rect {
+                x: 87,
+                y: 32,
+                w: 99,
+                h: 112,
+            },
+            PlanetBand::Easy,
+        );
+        assert_eq!(
+            clip,
+            Rect {
+                x: 94,
+                y: 44,
+                w: 84,
+                h: 18
+            }
+        );
+        let clip = planet_plate_clip(
+            &Rect {
+                x: 206,
+                y: 32,
+                w: 99,
+                h: 112,
+            },
+            PlanetBand::Normal,
+        );
+        assert_eq!(
+            clip,
+            Rect {
+                x: 213,
+                y: 44,
+                w: 84,
+                h: 18
+            }
+        );
+        let clip = planet_plate_clip(
+            &Rect {
+                x: 313,
+                y: 32,
+                w: 146,
+                h: 112,
+            },
+            PlanetBand::Hard,
+        );
+        assert_eq!(
+            clip,
+            Rect {
+                x: 343,
+                y: 44,
+                w: 84,
+                h: 18
+            }
+        );
+    }
+
+    #[test]
+    fn emblem_plate_clip_follows_the_staged_placement() {
+        // No board-absolute literals: shifting the staged button rect
+        // shifts the plate band identically (the sweep pins only the
+        // intra-button shape, `docs/hover.md`) — a hardcoded rect
+        // would fail this guard.
+        for (band, inset_x) in [
+            (PlanetBand::Easy, 7),
+            (PlanetBand::Normal, 7),
+            (PlanetBand::Hard, 30),
+        ] {
+            let clip = planet_plate_clip(
+                &Rect {
+                    x: 500,
+                    y: 200,
+                    w: 99,
+                    h: 112,
+                },
+                band,
+            );
+            assert_eq!(
+                clip,
+                Rect {
+                    x: 500 + inset_x,
+                    y: 212,
+                    w: 84,
+                    h: 18,
+                }
+            );
+        }
+    }
 
     fn side_control_text() -> String {
         [

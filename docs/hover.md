@@ -91,7 +91,7 @@ counts across two independent runs (1456 / 1477 / 1476 / 615 / 654 /
 | planet | `IDC_BUTTON_SPLANET_OPTION` (gear) | `0x19200011` | `Planet_Btn_Option.ojs` (2) | `planet-option-offA.png` / `-on.png` | 714,565-743,594 | 615 (348 strong) | neither frame (58% / 34%) | frame 0 (100%) |
 | planet | `IDC_BUTTON_SPLANET_EXIT` | `0x19200010` | `Planet_btn_Exit.ojs` (2) | `planet-exit-offA.png` / `-on.png` | 754,565-783,594 | 654 (548 strong) | neither frame (51% / 44%) | frame 0 (100%) |
 | planet | `IDC_BUTTON_SPLANET_PROMOTION_LEFT` | `0x1920000D` | `Planet_Btn_Promotion_Left.ojs` (2) | `planet-promo-left-offA.png` / `-on.png` | 358,514-371,529 | 120 (99 strong) | neither frame (83% / 82%) | frame 0 (100%) |
-| planet | `IDC_BUTTON_SPLANET_PROMOTION_PLAYSTOP` | `0x1920C00F` | `Planet_Btn_Promotion_PlayStop.ojs` (2) | `planet-promo-playstop-offA.png` / `-on.png` | 392,515-407,529 | 224 (222 strong) | frame 0 (100%) | **frame 1** (100%) |
+| planet | `IDC_BUTTON_SPLANET_PROMOTION_PLAYSTOP` | `0x1920C00F` | `Planet_Btn_Promotion_PlayStop.ojs` (6 raw 26x24 records) | `planet-promo-playstop-offA.png` / `-on.png` | 392,515-407,529 | 224 (222 strong) | record 0 (100%) | **record 1** (100%) |
 | planet | `IDC_BUTTON_SPLANET_PROMOTION_RIGHT` | `0x1920000E` | `Planet_Btn_Promotion_Right.ojs` (2) | `planet-promo-right-offA.png` / `-on.png` | 428,514-441,529 | 120 (97 strong) | neither frame (83% / 82%) | frame 0 (100%) |
 | room | `IDC_BUTTON_SROOM_EXBUTTON1` | `0x1301201B` | `Room_ButtonRoom.ojs` (8) | `room-row-panel-1-offA.png` / `-on.png` | none | 0 | panel art | static, no change |
 | room | `IDC_BUTTON_SROOM_EXBUTTON2` | `0x1301201C` | `Room_ButtonRoom.ojs` (8) | `room-row-panel-2-offA.png` / `-on.png` | none | 0 | panel art | static, no change |
@@ -167,7 +167,10 @@ sprite anchors in the bodies agree with those rects byte-exact.
   (gear 714-743 x 565-594 in a 38x38 body, exit 754-783 x 565-594,
   arrows 14x16).
 - The promo `PLAYSTOP` control is the only element that swaps frames:
-  rest = frame 0, hover = frame 1 (both 100%).
+  rest = raw record 0, hover = raw record 1 (both 100% by direct
+  record-vs-capture match over all six 26x24 records, 2026-11-11: rest
+  624/624 on rec0, hover 624/624 on rec1; the old two-record model
+  described the frame pairing, not the record count).
 
 ## Findings that change the shell's plan
 
