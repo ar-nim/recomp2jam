@@ -5746,8 +5746,9 @@ mod paint_tests {
         MSHOP_ARTIST_CODE, MSHOP_BPM_CODE, MSHOP_CART_TOGGLE_FIRST_CODE, MSHOP_EDITOR_CODE,
         MSHOP_EX_FIRST_CODE, MSHOP_GENRE_CODE, MSHOP_ISBUY_CODE, MSHOP_PAGE_CUR_ONES_CODE,
         MSHOP_PAGE_CUR_TENS_CODE, MSHOP_PAGE_TOT_ONES_CODE, MSHOP_PAGE_TOT_TENS_CODE,
-        MSHOP_TITLE_CODE, SHOP_CART_PAGE_CUR_ONES_CODE, SHOP_CART_PAGE_CUR_TENS_CODE,
-        SHOP_CART_PAGE_TOT_ONES_CODE, SHOP_CART_PAGE_TOT_TENS_CODE, SHOP_CART_TOGGLE_FIRST_CODE,
+        MSHOP_TITLE_CODE, PLANET_OPTION_CODE, SHOP_CART_PAGE_CUR_ONES_CODE,
+        SHOP_CART_PAGE_CUR_TENS_CODE, SHOP_CART_PAGE_TOT_ONES_CODE, SHOP_CART_PAGE_TOT_TENS_CODE,
+        SHOP_CART_TOGGLE_FIRST_CODE,
     };
     use super::*;
     use crate::avatar::FigureLayer;
@@ -9193,6 +9194,122 @@ mod paint_tests {
             Some(PlanetAction::OptionsDialog),
         );
         assert_eq!(hovered[575 * 800 + 725], blue, "hover restores frame 0");
+    }
+
+    /// The offA/onA-modeled hover pair (ticket #63, rule in
+    /// `docs/parity.md`): the measured dimmed-rest pattern for the
+    /// planet board buttons (`docs/hover.md`, OPTION gear diff bbox
+    /// (714,565)-(743,594), 615 changed px — hover paints body
+    /// frame 0 at full colour over the desaturated rest frame 0).
+    /// The staged body has the real-art shape (one layer,
+    /// full-colour frame 0) and the rest frame is the desaturated
+    /// decode of that same frame, so the two frames differ at every
+    /// saturated pixel — provably distinct, unlike the stacked
+    /// two-layer stand-ins whose frames differ by construction.
+    /// Synthetic words only; no captured bytes.
+    struct OffOnHoverPair {
+        /// Staged single-frame body (the figure the scene paints).
+        figure: AvatarFigure,
+        /// Frame 0 at full colour — the hover paint.
+        hover_word: u16,
+        /// The desaturated frame 0 — the rest paint once ticket #26
+        /// implements rest-dim.
+        rest_word: u16,
+    }
+
+    /// Archive-entry name of the synthetic offA/onA body.
+    const OFFON_HOVER_SPRITE: &str = "OffOn_Gear_Fixture.ojs";
+
+    /// Build the pair: a 38x38 saturated red body at the gear disc's
+    /// pinned anchor (710,561), full colour vs its desaturated
+    /// decode.
+    fn offon_hover_fixture() -> OffOnHoverPair {
+        const BODY_W: usize = 38;
+        const BODY_H: usize = 38;
+        const FULL_COLOUR_RED: u16 = 0x7C00;
+        let hover_word = FULL_COLOUR_RED;
+        let mut figure = AvatarFigure::default();
+        figure.push_layer(FigureLayer {
+            image: Rgb555Image::decode(
+                &FULL_COLOUR_RED.to_le_bytes().repeat(BODY_W * BODY_H),
+                BODY_W,
+                BODY_H,
+            )
+            .expect("fixture body decodes"),
+            dx: 710,
+            dy: 561,
+            colorkey: 0xFFFF,
+        });
+        OffOnHoverPair {
+            figure,
+            hover_word,
+            rest_word: desaturate_rgb555(hover_word),
+        }
+    }
+
+    /// Rec. 601 luma of an RGB555 word, folded back into all three
+    /// channels (the modeled desaturation of the rest frame).
+    fn desaturate_rgb555(word: u16) -> u16 {
+        let red = u32::from(word >> 10);
+        let green = u32::from((word >> 5) & 0x1F);
+        let blue = u32::from(word & 0x1F);
+        let luma = ((77 * red + 150 * green + 29 * blue) / 256) as u16;
+        luma << 10 | luma << 5 | luma
+    }
+
+    /// Paint the planet scene at 800x600 into an owned buffer.
+    fn painted_planet_frame(art: &SceneArt, hover: Option<PlanetAction>) -> Vec<u32> {
+        let mut buf = vec![0u32; 800 * 600];
+        paint_planet_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            art,
+            None,
+            hover,
+        );
+        buf
+    }
+
+    #[test]
+    #[ignore = "rest-dim is OPEN: ticket #26's fix activates this guard"]
+    fn gear_hover_repaints_over_the_dimmed_rest_frame() {
+        // Ticket #63 (rule: `docs/parity.md` "Art-dependent delta
+        // guards"): with the offA/onA-modeled fixture — rest =
+        // desaturated frame 0, hover = frame 0 at full colour — the
+        // guard asserts the rest ink differs from the hover ink at
+        // the pinned pixel. Today the rest stack paints frame 0 at
+        // full colour, so hover repaints identical pixels and this
+        // guard is red; ticket #26's rest-dim flips it to running.
+        let fixture = offon_hover_fixture();
+        assert_ne!(
+            fixture.rest_word, fixture.hover_word,
+            "the modeled frames are provably distinct at the pinned pixel"
+        );
+        let art = SceneArt {
+            placements: vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code: PLANET_OPTION_CODE,
+                sprite: Some(OFFON_HOVER_SPRITE.to_owned()),
+                rect: Rect {
+                    x: 710,
+                    y: 561,
+                    w: 38,
+                    h: 38,
+                },
+            }],
+            figures: HashMap::from([(OFFON_HOVER_SPRITE.to_owned(), fixture.figure)]),
+        };
+        let pinned = 575 * 800 + 725;
+        let rest = painted_planet_frame(&art, None);
+        let hovered = painted_planet_frame(&art, Some(PlanetAction::OptionsDialog));
+        assert_ne!(
+            rest[pinned], hovered[pinned],
+            "rest-dim keeps the measured delta: hover must repaint the dimmed frame"
+        );
     }
 
     #[test]
