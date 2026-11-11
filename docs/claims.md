@@ -28,11 +28,11 @@ Short forms live in `GLOSSARY.md`. Normative forms:
 
 | Level | Claims |
 |---|---|
-| EXE | 111 |
+| EXE | 112 |
 | DATA | 19 |
 | ASSUMED | 12 |
-| OPEN | 21 |
-| Total | 163 |
+| OPEN | 19 |
+| Total | 162 |
 
 ## The pairing-rule family (known mistake + siblings)
 
@@ -222,8 +222,8 @@ index (all-zero rect, slot 0, default arm).
 | C36 | `+12` genre bits feed the song-select bitmask (`song+0x15c`) | ASSUMED | bitmask-shaped tests; transfer unpinned — negative *(offset-only)*, re-verified 2026-11-07: no `0x15c(`/`0x194(` displacement in file `0x44000`–`0x45000` (VA `0x444000`–`0x445000`); the one `0x19c` hit is a stack slot (VA `0x444228`), not a game field; re-verified 2026-11-07 (VA `0x444000`–`0x445000` sweep: no `0x15c(`/`0x194(` game-field displacements); unflippable — the bitmask transfer has no pinned writer | R | ROOM.COMP |  |
 | C37 | First embedded JPEG bounds the last level slice on every chart | DATA | 14/14 `end == jpeg0`; negative *(offset-only)*, re-verified 2026-11-07: no `FFD8` scan in loader range VA `0x571e00`–`0x573000`, slice ends come from header count words (C13); unflippable — the JPEG bound is a layout consequence with no consumer | G | LOAD.COMP |  |
 | C38 | Exe install base directory: `Image\...` resolves against the executable's directory vs the process working directory | OPEN | next step: launch 7.55 with CWD set away from the exe directory (or trace the `Image\` open) and observe which root the archive open uses; until then `docs/install-layout.md` records the rule as open (ADR-0006) | — | — |  |
-| C39 | xTd paired table decode: `?Td/?Sd/?Bd` codes + u16 rows + pointer table at `0x2454d8`–`0x2455dc` (15+ code refs, inventoried in the progress matrix); the key-name-table guess is refuted by C18 | OPEN | next step per ADR-0009: static sweep + REA dossier of the 15+ referring sites naming each consumer's state/format surface; a cell is minted only if a consumer feeds an in-scope surface, else the table is ruled out (launcher/patcher-only) with the named paths — client-static data, no rig needed | — | — |  |
-| C40 | OJNList trailer `;HD` semantics: 719×300 B records + 148 B of 28 B `;HD`/date entries (per-difficulty levels +280–288, recsize +292) — patch manifest vs dead data | OPEN | next step per ADR-0009: static sweep + REA dossier over the OJNList reader district (`0x47a03a` chain, C14/C15) naming every reference past record 562's 300-byte span; negative-evidence close (structural sweep + named paths) if no consumer reads the trailer — C17 already pins the negative for the in-archive patch index | — | — |  |
+| C39 | xTd paired table: `?Td/?Sd/?Bd` is a byte-scan artifact — the region is 65 × `u32` VA pointers to CP949 search-key names (chosung + doubled initials, A–Z, STEP1/2/3 band/wheel/genre words); consumers all live in the SELECTMUSIC search filter (indexed loads file `0x448c2`/`0x44ecc`, letter search `0x451ed`/`0x4545f`, banner sub-ranges `0x645524`/`0x6455a0`/`0x6455bc`) — decode verified end to end and subsumed by C18; no launcher/patcher consumer exists (`docs/xtd-table.md`) | EXE | static sweep of OTwo.exe `83a04541…` (65 entries decoded, 2 base refs + all sub-range consumers named from bytes); REA dossier TBD | — | subsumed by C18 (ROOM.COMP) |
+| C40 | OJNList trailer `;HD` = updater-authored patch manifest (561 `(marker,id)` pairs + 561 28-byte `{;HD, 0xbd11, id, date}` records) and dead data to the 7.55 client: the reader tail reads its counts from mid-region footer echo words (0 pairs, 562 records), starts records 12 bytes before the pairs, expects an older `{id, date}` layout, passes its id+date gates zero times, and stops 500 bytes short of EOF (`docs/ojnlist-trailer.md`) | EXE | sequential byte accounting through the reader district (`FUN_004069b0` reads, no seeks): pair-loop count 0 @195604, record-loop count 562 @195608, records `[195612, 215348)` via `FUN_0047b370`; gate analysis vs real file bytes; REA dossier TBD | — | — | patch markers question retired (reader never executes) |
 
 ## D. Net (lighter — offsets already pinned in `net-protocol.md`/`relay.md`)
 
