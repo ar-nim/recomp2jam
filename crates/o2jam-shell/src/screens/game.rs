@@ -12918,7 +12918,51 @@ mod game_tests {
         assert_eq!(game.room_dialog(), None);
         let noop = game.room_control_noop().expect("recorded press");
         assert_eq!(noop.id, "IDC_BUTTON_SROOM_FIRSTSTEP");
-        assert!(!noop.next_step.is_empty());
+        // The press points at the tutorial entry's own OPEN item, so
+        // the label names that path — never a bare "unwired".
+        assert!(
+            noop.next_step.contains("tutorial entry path"),
+            "next step names the tutorial entry OPEN item: {}",
+            noop.next_step
+        );
+    }
+
+    #[test]
+    fn staged_firststep_rect_matches_the_room_block_rect() {
+        // Install-guarded (ticket #34): the parsed 7.55 `STATE_ROOM`
+        // block pairs `IDC_BUTTON_SROOM_FIRSTSTEP` (`0x13200032`) with
+        // its `.bnd` rect; the click dispatch hit-tests exactly that
+        // staged rect. Skips when `install-root` is absent.
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Image/Interface1.opi");
+        let Ok(bytes) = std::fs::read(&path) else {
+            return;
+        };
+        let report = crate::staging::stage_state(
+            &bytes,
+            crate::staging::State::Room,
+            crate::staging::StageContext::default(),
+        );
+        let art = report.art.expect("STATE_ROOM stages");
+        let placement = art
+            .placements
+            .iter()
+            .find(|placement| placement.code == 0x1320_0032)
+            .unwrap_or_else(|| panic!("{}: FIRSTSTEP placement stages", path.display()));
+        // The parsed block is the oracle (owner rule `f38f3`):
+        // `GLOSSARY.md` pins FIRSTSTEP at (660,1)-(720,33); the
+        // `docs/hover.md` pixel box (660,1)-(718,32) is the changed-art
+        // extent, two pixels inside the rect on each axis.
+        assert_eq!(
+            placement.rect,
+            Rect {
+                x: 660,
+                y: 1,
+                w: 60,
+                h: 32,
+            },
+            "FIRSTSTEP stages on its .bnd rect"
+        );
     }
 
     #[test]

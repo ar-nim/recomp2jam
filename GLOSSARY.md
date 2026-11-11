@@ -29,7 +29,7 @@ A staged lobby button with a control code and a `.bnd` rect, such as the room BA
 _Avoid_: button (bare), widget
 
 **FIRSTSTEP**:
-The room chrome button at top-right left of OPTION, staged rect (660,1)-(720,33), code `0x13200032`. Exe entry behavior untraced (ticket #34).
+The room chrome button at top-right left of OPTION, staged rect (660,1)-(720,33) (60x32, parsed `State_Room.bnd`), code `0x13200032`. Exe entry behavior untraced (ticket #34); a press records the labelled no-op naming the tutorial entry OPEN item.
 _Avoid_: tutorial button (bare)
 
 **Emblem**:

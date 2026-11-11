@@ -169,7 +169,7 @@ wrong; Myroom stages bound like every other side screen.
 | Dimension | 7.55 expectation (evidence) | Shell status | Verdict |
 |---|---|---|---|
 | Composition | `CStateTutorial` is a stub (`0x00`); the `Playing_TutorialBG.ojs` backdrop stages full-canvas from `Playing1` | (ev: docs/smoke/payment-tutorial-hand-session.md) The backdrop stages and the shots oracle holds `tutorial.png` byte-identical | (R) PASS (v: 9692d41) |
-| Input | The entry dispatch | (ev: docs/smoke/payment-tutorial-hand-session.md) The entry path stays OPEN — no dossier offset names the entry dispatch. Guard: `tutorial_entry_path_names_its_next_step`. Next step (`TUTORIAL_ENTRY_NEXT_STEP`): SendInput sweep of the lobby emblem buttons per the `~/scratch/planet-verify/` recipe plus a REA trace of the `CStateTutorial` entry dispatch | (R) OPEN (v: 9692d41) |
+| Input | The entry dispatch | (ev: docs/smoke/payment-tutorial-hand-session.md) The entry path stays OPEN — no dossier offset names the entry dispatch. Guard: `tutorial_entry_path_names_its_next_step`. Next step (`TUTORIAL_ENTRY_NEXT_STEP`): SendInput sweep of the lobby emblem buttons plus a SendInput click on the room `IDC_BUTTON_SROOM_FIRSTSTEP` (the ticket #34 candidate), per the `~/scratch/planet-verify/` recipe, plus a REA trace of the `CStateTutorial` entry dispatch | (R) OPEN (v: 9692d41) |
 | Timing | None documented | n/a | (R) N/A (no timed behavior — no dispatch exists to guard; next step: none) (v: 9692d41) |
 | Transitions | Lobby ↔ Tutorial via the side visit | (ev: docs/smoke/payment-tutorial-hand-session.md) Side-visit entry and return hold through the shared hand session. Guard: `payment_tutorial_hand_session_visits_both_and_returns` | (R) PASS (v: 9692d41) |
 
@@ -409,8 +409,19 @@ guard tests that hold it and what stays OPEN with its next step.
   (`ROOM_CONTROLS`) replaces the three hand-written arms: ITEMSHOP,
   MYROOM, MUSICSHOP and MYBAND open their side views; every other
   staged button records its press with its next evidence step instead
-  of dropping it. `STATE_ROOM` carries **no** tutorial control, so #34
-  closes as "not a room control" with the reporter question posted.
+  of dropping it. The reporter's "tutorial button" is
+  `IDC_BUTTON_SROOM_FIRSTSTEP` (`0x13200032`): its rect is pinned from
+  the parsed `STATE_ROOM` block — (660,1) 60x32, agreeing with
+  `GLOSSARY.md` (guard `staged_firststep_rect_matches_the_room_block_rect`)
+  — and its press resolves to the labelled no-op naming the tutorial
+  entry's own OPEN item (guard
+  `staged_room_control_without_a_target_records_a_labelled_noop`).
+  OPEN (uncertain arm, ticket #34): whether the exe's FIRSTSTEP opens
+  guided play stays unpinned — `STATE_ROOM` carries no tutorial control
+  and no dossier offset names the `CStateTutorial` entry dispatch. Next
+  step: SendInput click on FIRSTSTEP in the live room with captures
+  (the rig run the orchestrator owns; the census INDEX that may name
+  the entry offset is absent from this worktree).
 - **Room lounge chat (ticket #37).** The room lobby shares the
   main-room feed with the Channel scene (`LobbyChatPanel`, 2012 out,
   2013/2014/2016/2019/2029 in) and paints inside the staged
