@@ -423,9 +423,21 @@ guard tests that hold it and what stays OPEN with its next step.
 - **Pointer state (tickets #33, #26).** `GameLoop::mouse_moved` carries
   native pixels into the game; the channel select bar follows the
   hovered row and falls back to the keyboard highlight (both halves
-  live-confirmed). Per-control hover frames for room and planet stay
-  OPEN: next step is the Wine rig motion sweep (SendInput only; XTEST
-  never reaches the DirectDraw canvas).
+  live-confirmed). Room hover (ticket #33, 2026-11-11): the resolver
+  maps the pointer onto staged room chrome (`hovered_room_control`,
+  dialogs/modals/sides cover it first) and the painter repaints the
+  hovered button at full body frame 0 — the rig-pinned hover state
+  (`docs/hover.md` 2026-11-10 sweep: 17 of 18 buttons match frame 0 at
+  100%; the active filter/tab keeps frame 1). Row panels stay static
+  by negative evidence (0 changed px, no `Room_MOver.ojs` overlay).
+  The rest-state desaturation transform stays OPEN (measured, not
+  explained — next step: stopped-state winedbg draw-state read).
+  Planet hover frames stay OPEN for ticket #26, which consumes the
+  same pointer state. Guards: `hovered_room_control_resolves_the_staged_chrome_button`,
+  `hovered_room_control_clears_off_the_room_screen`,
+  `hovered_room_button_repaints_its_first_frame`,
+  `room_row_panels_stay_static_under_the_pointer`,
+  `room_hover_hides_behind_the_open_dialog`.
 - **Splash hold (ticket #24).** The Avi cue is record 8 (`bgLogo.ogg`,
   3.923 s by `o2jam-dump` + decode timing), so the 3 s stand-in cuts
   0.92 s early. The hold length and the arming event stay OPEN: the two
