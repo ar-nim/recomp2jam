@@ -278,7 +278,14 @@ pub const COMBO_GLOW_SPRITE: &str = "Note_Combo4.ojt";
 /// before re-anchoring — never a literal.
 const COMBO_ROW_ABOVE_LINE: i32 = 24;
 /// Staged play-time-digit body: `PlayTimeNum.ojs`, ten raw 27x21
-/// frames in digit order 0..=9 (archive slot 96).
+/// frames in digit order 0..=9 (archive slot 96). Never painted: the
+/// exe's only `PlayTimeNum` painter (`FUN_0050d800`, file `0x10D800`
+/// — the sole reader of the HUD object's +0x14 slot, filled by the
+/// loader `FUN_0050d060`, file `0x10D060`) has zero call sites and
+/// zero dword references in the 5,029,888-byte `OTwo.exe`
+/// (SHA-256 `83a04541…72c823b`; full-file E8 and LE32 sweeps), so
+/// 7.55 never draws play-time digits and no anchor exists
+/// (geometry-audit 31, negative pin).
 pub const PLAY_TIME_FONT_SPRITE: &str = "PlayTimeNum.ojs";
 /// Staged long-note combo caption plate: `Note_LongCombo.ojt`, two raw
 /// 128x128 frames (archive slot 432; the runtime body — the Playing
@@ -2820,9 +2827,16 @@ const TALLY_COUNT_GRID: [(i32, i32); 4] = [(317, 556), (392, 556), (317, 578), (
 ///   19 add `Winner_image` (265,472) / `Challenger_image` (410,472)),
 ///   the exe references the name only in its loader cluster (file
 ///   `0x24c0d8`), and the reference photo's strip carries no MMSS
-///   ink — so the former bar-centered anchor (bnd-audit 31, claims
-///   A32 ASSUMED) was invented and is removed, not re-anchored. The
-///   font stays staged ([`PlaySkin::play_time_font`]).
+///   ink. Pinned negative (geometry-audit 31): the only painter that
+///   reads the `PlayTimeNum` slot, `FUN_0050d800` (file `0x10D800`),
+///   has zero call sites and zero dword references in the exe — the
+///   HUD object (VA `0x768184`) is consumed only by the CPlayerInfo
+///   painters (file `0xDF5D0` / `0xDFA90`), which call just the
+///   Scroe/ComboScroe/P2P-max-combo painters (file `0x10D2D0` /
+///   `0x10D590` / `0x10D430`). 7.55 never paints play-time digits, so
+///   the former bar-centered anchor (bnd-audit 31, claims A32
+///   ASSUMED) was invented and is removed, not re-anchored. The font
+///   stays staged ([`PlaySkin::play_time_font`]).
 /// - `BO` / `EA05` / `O2JAM` edge labels (photo ink (6,571)-(25,584)
 ///   and (241,575)-(262,596) plus the ⚡ badge (242,554)-(279,575)):
 ///   no 7.55 source exists — the rect walks above name no such
@@ -5458,8 +5472,11 @@ mod live_play_tests {
         // bnd-audit 31's bar-centered MMSS anchor was invented: no
         // `.bnd` rect pairs `PlayTimeNum.ojs` (17 + 19 rect walk), the
         // exe names it only in the loader cluster (file `0x24c0d8`),
-        // and the reference strip shows no MMSS ink. The staged font
-        // therefore paints nothing — the TIME bar's shell art alone.
+        // and the reference strip shows no MMSS ink. Pinned negative:
+        // the sole `PlayTimeNum` painter (`FUN_0050d800`, file
+        // `0x10D800`) has zero references in the exe — 7.55 never
+        // paints play-time digits. The staged font therefore paints
+        // nothing — the TIME bar's shell art alone.
         let mut live = LivePlay::default();
         let mut buf = vec![0u32; 800 * 600];
         let plain = {
@@ -5645,9 +5662,13 @@ mod live_play_tests {
         // 19-rect `State_Playing_network.bnd` walks cover `EXIT`…
         // `VOLUME` plus `Winner_image`/`Challenger_image` only), the
         // exe names it just in the loader cluster (file `0x24c0d8`),
-        // and the reference strip shows no MMSS ink — so the staged
-        // font must not paint at all. Skins differing only in the
-        // play-time font must paint identical frames.
+        // and the reference strip shows no MMSS ink. Pinned negative:
+        // the only painter reading the `PlayTimeNum` slot,
+        // `FUN_0050d800` (file `0x10D800`), has zero call sites and
+        // zero dword references in the exe — 7.55 never paints
+        // play-time digits, so the staged font must not paint at all.
+        // Skins differing only in the play-time font must paint
+        // identical frames.
         let Some(skin) = staged_skin() else {
             println!("skip: missing Playing1.opi");
             return;
