@@ -20,7 +20,7 @@ use o2jam_net::GameSpeed;
 use o2jam_render::{
     blit_rgb555, blit_rgb555_clipped, draw_number, draw_text, fill_rect, intersect_rect,
     number_width, pack_xrgb, panel_content_rect, scale_rect_to_frame, text_width, visible_spans,
-    Frame, LaneCurtain, Rect, Rgb555Image, NATIVE_HEIGHT,
+    Frame, LaneCurtain, Rect, Rgb555Image, GLYPH_H, NATIVE_HEIGHT,
 };
 
 /// Lanes across the highway.
@@ -263,20 +263,29 @@ pub const COMBO_FONT_SPRITE: &str = "Note_ComboNum.ojs";
 /// atlas like [`HIT_BURST_SPRITE`], and
 /// [`PlaySkin::from_archive_for_stage`] routes the room stage.
 pub const COMBO_GLOW_SPRITE: &str = "Note_Combo4.ojt";
-/// Combo-digit row above the judgement line: the big photo digits
-/// (`docs/playing-reference.md`) and their glow band center here.
-/// OPEN (geometry-audit 31): the combo and long-combo digit controls
-/// (`IDC_IMAGE_SPLAY_NOTECOMBONUM1..4` / `…_LNCOMBONUM1..4`, codes
-/// `0x1B500088`–`0x1B500091`) are ControlList entries 136–145 — past
-/// the 17 `State_Playing.bnd` rects, so no parsed `.bnd` rect pairs
-/// them (all-zero rect) — and every digit frame anchors `(0,0)`, so
-/// the exe draw point is code-driven. `Scroe.ojs` / `PlayTimeNum.ojs`
-/// are named by no entry at all (code-loaded through the playing
-/// applier). This offset is photo-placed, not file geometry.
-/// Named next step: a `rea` static trace of the digit-frame setters
-/// for codes `0x1B500088`–`0x1B500092` to recover the code constants
-/// before re-anchoring — never a literal.
-const COMBO_ROW_ABOVE_LINE: i32 = 24;
+/// Exe-pinned combo-digit layout box on the native 800x600 canvas:
+/// `SetRect(0x59, 0x3C, 0xD5, 0xD2)` — x 89–213, y 60–210 — written by
+/// the number engines `0x528E20`/`0x529230` for the runtime digit
+/// controls (`NOTECOMBONUM1..4`, computed codes `0x1401D088 + slot`;
+/// claim A45, `docs/playing-digits.md` §3, dossier ev
+/// `03aa0c52…`/`6d253f51…`). The digit controls carry no `.bnd`
+/// rect, so the on-screen row is this box plus the chosen glyph
+/// frame's anchor (every staged digit frame anchors `(0,0)`,
+/// `docs/ui-draw.md` §5) — the digits paint left to right from the
+/// box origin, and the combo-glow band centers on the painted row.
+/// Geometry-audit 31 closed (was the invented `COMBO_ROW_ABOVE_LINE`).
+pub const COMBO_DIGIT_LAYOUT_BOX: Rect = Rect {
+    x: 0x59,
+    y: 0x3C,
+    w: 0x7C,
+    h: 0x96,
+};
+/// Engine hide offsets: a cleared digit moves to
+/// `(box.left − 0x5A, box.top − 0x3C)` = `(−1, 0)`, just off the
+/// canvas left edge (`docs/playing-digits.md` §3). The shell paints
+/// nothing for a cleared slot — the same pixels — and keeps the
+/// hidden position pinned for the guard.
+pub const COMBO_DIGIT_HIDE_OFFSET: (i32, i32) = (-0x5A, -0x3C);
 /// Staged play-time-digit body: `PlayTimeNum.ojs`, ten raw 27x21
 /// frames in digit order 0..=9 (archive slot 96). Never painted: the
 /// exe's only `PlayTimeNum` painter (`FUN_0050d800`, file `0x10D800`
@@ -2511,16 +2520,16 @@ impl LivePlay {
         span.x + i32::try_from(span.w).unwrap_or(0) / 2
     }
 
-    /// Judgement word above the line with the running combo beneath
-    /// it, both centered on the highway. The staged word art is
-    /// center-anchored — every `Note_Cool/Good/Bad/Miss.ojs` frame
-    /// carries a signed anchor near `(-w/2, -h/2)` (e.g. `Note_Cool`
-    /// frame 2 `(-78,-37)` 154x72) — so the draw point is the word
-    /// center, and `docs/playing-reference.md` puts the big combo +
-    /// tier word over the lanes. Word rows keep the staged offsets
-    /// above the judgement line; ink stays plain white. Combo digits
-    /// paint through the staged `Note_ComboNum.ojs` font when present
-    /// (the big photo digits), procedural glyphs otherwise.
+    /// Judgement word above the line, centered on the highway. The
+    /// staged word art is center-anchored — every `Note_Cool/Good/
+    /// Bad/Miss.ojs` frame carries a signed anchor near `(-w/2, -h/2)`
+    /// (e.g. `Note_Cool` frame 2 `(-78,-37)` 154x72) — so the draw
+    /// point is the word center, and the word keeps its line-relative
+    /// staged anchor (its own controls' setter trace is a separate
+    /// evidence arm, not A45). Combo digits paint at the exe-pinned
+    /// layout box [`COMBO_DIGIT_LAYOUT_BOX`] through the staged
+    /// `Note_ComboNum.ojs` font when present (the big photo digits),
+    /// procedural glyphs at the same origin otherwise.
     fn paint_judgement_word(&self, frame: &mut Frame<'_>, geom: &HighwayGeometry, now_ms: u64) {
         let Some((judgement, at)) = self.last_word else {
             return;
@@ -2539,26 +2548,45 @@ impl LivePlay {
             pack_xrgb(0xFF, 0xFF, 0xFF),
         );
         if self.score.combo > 0 {
-            self.paint_combo_glow(frame, geom, now_ms.saturating_sub(at));
-            match self.view.skin.combo_font() {
-                Some(font) => {
-                    font.paint_centered(
-                        frame,
-                        center_x,
-                        geom.line_y - COMBO_ROW_ABOVE_LINE,
-                        self.score.combo,
-                    );
-                }
-                None => {
-                    let digits = i32::try_from(number_width(self.score.combo)).unwrap_or(0);
-                    draw_number(
-                        frame,
-                        center_x - digits / 2,
-                        geom.line_y - COMBO_ROW_ABOVE_LINE,
-                        self.score.combo,
-                        pack_xrgb(0xFF, 0xFF, 0x40),
-                    );
-                }
+            let (row_x, row_y) = combo_digits_origin(frame.w, frame.h);
+            let row = self.combo_digit_row_box(row_x, row_y);
+            self.paint_combo_glow(frame, now_ms.saturating_sub(at), &row);
+            self.paint_combo_digits(frame, &row);
+        }
+    }
+
+    /// Ink box of the combo digit row at `(x, y)`: the staged font's
+    /// measured width and frame height, else the procedural glyph
+    /// advance and [`GLYPH_H`]. The glow band centers on this box and
+    /// the digits paint over the band.
+    fn combo_digit_row_box(&self, x: i32, y: i32) -> Rect {
+        match self.view.skin.combo_font() {
+            Some(font) => Rect {
+                x,
+                y,
+                w: font.width_of(self.score.combo),
+                h: font.height(),
+            },
+            None => Rect {
+                x,
+                y,
+                w: u32::try_from(number_width(self.score.combo)).unwrap_or(0),
+                h: u32::try_from(GLYPH_H).unwrap_or(0),
+            },
+        }
+    }
+
+    /// The combo digit row through the staged font (else procedural
+    /// glyphs), left to right from the exe layout-box origin
+    /// (`digit_row`, from [`Self::combo_digit_row_box`]).
+    fn paint_combo_digits(&self, frame: &mut Frame<'_>, digit_row: &Rect) {
+        let Rect { x, y, .. } = *digit_row;
+        match self.view.skin.combo_font() {
+            Some(font) => {
+                font.paint(frame, x, y, self.score.combo);
+            }
+            None => {
+                draw_number(frame, x, y, self.score.combo, pack_xrgb(0xFF, 0xFF, 0x40));
             }
         }
     }
@@ -2567,20 +2595,21 @@ impl LivePlay {
     /// ([`COMBO_GLOW_SPRITE`]) steps one frame per [`RECEPTOR_FRAME_MS`]
     /// across the word window (`glow_age_ms` since the judgement; the
     /// combo cluster shows only while the word is fresh). Every atlas
-    /// record anchors `(0, 0)`, so the band centers on the combo
-    /// cluster point — the digits' draw center — and the word and
-    /// digits paint over it. Staged-only: without the atlas nothing
-    /// paints (the digits keep their plain band).
-    fn paint_combo_glow(&self, frame: &mut Frame<'_>, geom: &HighwayGeometry, glow_age_ms: u64) {
+    /// record anchors `(0, 0)`, so the band centers on the painted
+    /// digit row's ink box (`digit_row`, from
+    /// [`Self::paint_combo_digits`]) — the digits and word paint over
+    /// it. Staged-only: without the atlas nothing paints.
+    fn paint_combo_glow(&self, frame: &mut Frame<'_>, glow_age_ms: u64, digit_row: &Rect) {
         let Some(glow) = self.view.skin.combo_glow_frame(Some(glow_age_ms)) else {
             return;
         };
         let (w, h) = glow.extent();
-        let center_x = Self::highway_center_x(geom);
+        let row_center_x = digit_row.x + i32::try_from(digit_row.w).unwrap_or(0) / 2;
+        let row_center_y = digit_row.y + i32::try_from(digit_row.h).unwrap_or(0) / 2;
         glow.paint_at(
             frame,
-            center_x - i32::try_from(w).unwrap_or(0) / 2,
-            geom.line_y - COMBO_ROW_ABOVE_LINE - i32::try_from(h).unwrap_or(0) / 2,
+            row_center_x - i32::try_from(w).unwrap_or(0) / 2,
+            row_center_y - i32::try_from(h).unwrap_or(0) / 2,
         );
     }
 
@@ -2895,10 +2924,11 @@ const FIELD_VOLUME_ID: &str = "IDC_TEXT_SPLAY_VLOLUME";
 /// staged art always prefers the parsed placements
 /// ([`PlayingBoundFields::from_placements`]), so these literals only
 /// pin the art-less layout (audit-DONE pattern). No digit-font
-/// control is in this run — the combo / word / long-note / jam /
-/// score / play-time digits are unbound (see
-/// [`COMBO_ROW_ABOVE_LINE`]), and the tier-count grid below is
-/// photo-measured, not file geometry (OPEN, `docs/playing-reference.md`).
+/// control is in this run — the combo / long-note / jam / score /
+/// play-time digits are unbound (the combo digits ride the exe-pinned
+/// layout box [`COMBO_DIGIT_LAYOUT_BOX`], claim A45), and the
+/// tier-count grid below is photo-measured, not file geometry (OPEN,
+/// `docs/playing-reference.md`).
 ///
 /// | # | corners | control |
 /// |---|---|---|
@@ -3135,6 +3165,30 @@ pub fn long_combo_plate_origin(frame_w: usize, frame_h: usize) -> (i32, i32) {
         scale_scene_axis(NATIVE_LONG_COMBO_PLATE.y, frame_h, SCENE_NATIVE_H)
             - LONG_COMBO_PLATE_INK.1,
     )
+}
+
+/// Blit origin of the combo digit row at one frame size: the scaled
+/// layout-box origin [`COMBO_DIGIT_LAYOUT_BOX`] (identity `(89, 60)`
+/// on the native 800x600 canvas). The staged digits paint left to
+/// right from here, each frame at its stored `(0,0)` anchor — the
+/// glyph offsets the exe's layout table would add stay OPEN
+/// (`docs/playing-digits.md` §5).
+#[must_use]
+pub fn combo_digits_origin(frame_w: usize, frame_h: usize) -> (i32, i32) {
+    (
+        scale_scene_axis(COMBO_DIGIT_LAYOUT_BOX.x, frame_w, SCENE_NATIVE_W),
+        scale_scene_axis(COMBO_DIGIT_LAYOUT_BOX.y, frame_h, SCENE_NATIVE_H),
+    )
+}
+
+/// Hidden digit position at one frame size: the scaled box origin
+/// plus [`COMBO_DIGIT_HIDE_OFFSET`] (identity `(−1, 0)` on the native
+/// canvas). A zero combo never paints, matching the exe's cleared
+/// slot parked just off the canvas.
+#[must_use]
+pub fn combo_digit_hide_origin(frame_w: usize, frame_h: usize) -> (i32, i32) {
+    let (x, y) = combo_digits_origin(frame_w, frame_h);
+    (x + COMBO_DIGIT_HIDE_OFFSET.0, y + COMBO_DIGIT_HIDE_OFFSET.1)
 }
 
 /// Draw center x and top row for the long-note combo count at one
@@ -3639,7 +3693,8 @@ mod live_play_tests {
         );
         // Score "200" centered over the staged bottom jam bar (probe
         // bar x 0..16 → center 8, strip row 55), combo "1" at the
-        // bar's left edge, "COOL" centered over the highway (center 8).
+        // scaled exe layout-box origin (7,6), "COOL" centered over
+        // the highway (center 8).
         assert!(ink_near(
             &buf,
             70,
@@ -3652,7 +3707,7 @@ mod live_play_tests {
             &buf,
             70,
             60,
-            (0, 52),
+            (6, 5),
             (10, 10),
             pack_xrgb(0xFF, 0xFF, 0x40)
         ));
@@ -4982,7 +5037,9 @@ mod live_play_tests {
     }
 
     #[test]
-    fn judgement_word_stacks_combo_beneath() {
+    fn judgement_word_stays_at_the_line_while_combo_digits_ink_the_box() {
+        // The word keeps its line-relative staged anchor; the combo
+        // digits moved to the exe layout box (scaled (7,6) here).
         let mut live = LivePlay::new(&[(0, 1000, 7)]);
         live.strike_lane(0, 1000);
         let mut buf = vec![0u32; 70 * 60];
@@ -4997,7 +5054,7 @@ mod live_play_tests {
         );
         let amber = pack_xrgb(0xFF, 0xFF, 0x40);
         // Word centers on the highway (center 8, draw x 1); combo
-        // digits "1" beneath, centered on the same x.
+        // digits "1" paint left to right from the scaled box origin.
         assert!(ink_near(
             &buf,
             70,
@@ -5006,7 +5063,7 @@ mod live_play_tests {
             (18, 9),
             pack_xrgb(0xFF, 0xFF, 0xFF)
         ));
-        assert!(ink_near(&buf, 70, 60, (4, 22), (10, 10), amber));
+        assert!(ink_near(&buf, 70, 60, (6, 5), (10, 10), amber));
     }
 
     /// Codec gap ①: the strided combo-glow atlas (`Note_Combo4/5/6.ojt`)
@@ -5100,19 +5157,12 @@ mod live_play_tests {
             &geom(),
             1005,
         );
+        assert!(ink_near(&first, 70, 60, (0, 2), (18, 9), solid_ink(0x7FE0)));
         assert!(ink_near(
             &first,
             70,
             60,
-            (0, 18),
-            (18, 9),
-            solid_ink(0x7FE0)
-        ));
-        assert!(ink_near(
-            &first,
-            70,
-            60,
-            (4, 22),
+            (6, 5),
             (10, 10),
             pack_xrgb(0xFF, 0xFF, 0x40)
         ));
@@ -5126,7 +5176,7 @@ mod live_play_tests {
             &geom(),
             1100,
         );
-        assert_eq!(second[20 * 70 + 4], solid_ink(0x001F));
+        assert_eq!(second[4 * 70 + 6], solid_ink(0x001F));
     }
 
     #[test]
@@ -5445,10 +5495,10 @@ mod live_play_tests {
             &HighwayGeometry::centered(800, 600),
             1050,
         );
-        // Combo "1" centered on the highway center x 99: 8 px wide →
-        // x 95..103 on rows 463..467 (line_y − 24), the staged
-        // sprite blit keeps exact pixels.
-        assert_eq!(buf[465 * 800 + 97], digit_ink(1));
+        // Combo "1" paints from the exe layout-box origin (89,60):
+        // the 8 px-wide digit "1" frame covers x 89..97 on rows
+        // 60..64, the staged sprite blit keeps exact pixels.
+        assert_eq!(buf[62 * 800 + 93], digit_ink(1));
         // The strip combo keeps its procedural amber glyph: the TTF
         // rasterizes it with antialiased coverage around (5,554).
         assert!(
@@ -6001,6 +6051,32 @@ mod highway_tests {
             (center - 2..center + 2).any(|x| buf[row * 800 + x] == ink)
         });
         assert!(pressed, "the armed hold shows no pressed key at the line");
+    }
+
+    #[test]
+    fn combo_digits_ink_at_the_pinned_layout_box() {
+        // A45 (docs/playing-digits.md §3): the combo digits paint
+        // through the staged font at the exe layout box (89,60) on
+        // the native canvas — not at a line-relative row. The rest
+        // frame stays clear at the box; one Cool inks the staged
+        // digit frames there, and the pinned hide position parks a
+        // cleared slot at (-1, 0), off the box.
+        let font = DigitFont::from_frames((0..10).map(|_| solid_sprite(3, 5, 0x7C00)).collect())
+            .expect("ten digit frames");
+        let mut live = LivePlay::new(&[(0, 1_000, 7)]);
+        live.set_skin(PlaySkin::default().with_combo_font(font));
+        let rest = paint_native_highway(&mut live, 900);
+        let (x, y) = combo_digits_origin(800, 600);
+        let ink = solid_ink(0x7C00);
+        let origin = usize::try_from(y).expect("row") * 800 + usize::try_from(x).expect("column");
+        assert_ne!(rest[origin], ink, "the rest frame inks the digit box");
+        live.strike_lane(0, 1_000);
+        let painted = paint_native_highway(&mut live, 1_100);
+        assert_eq!(
+            painted[origin], ink,
+            "no staged digit ink at the exe layout box origin"
+        );
+        assert_eq!(combo_digit_hide_origin(800, 600), (-1, 0));
     }
 
     #[test]
