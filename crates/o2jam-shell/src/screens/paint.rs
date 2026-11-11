@@ -3255,16 +3255,38 @@ pub fn paint_waiting_scene(
 /// members that carry art.
 const WAITING_AVATAR_SLOT_ID: &str = "IDC_IMAGE_SWAIT_AVATAR";
 
+/// Native avatar slot of one seat: the spriteless template rect added
+/// onto the seat parent's origin (the clone write-back rule), `None`
+/// while either placement is unstaged — the slot then stays empty,
+/// never a raw-rect paint at the frame corner.
+#[must_use]
+fn waiting_seat_slot_rect(placements: &[ScenePlacement], seat: usize) -> Option<Rect> {
+    let slot = placements
+        .iter()
+        .find(|placed| placed.id == WAITING_AVATAR_SLOT_ID)
+        .map(|placed| placed.rect)?;
+    let parent = WAITING_SEAT_PARENT_IDS
+        .get(seat)
+        .and_then(|id| placements.iter().find(|placed| placed.id == *id))
+        .map(|placed| placed.rect)?;
+    Some(Rect {
+        x: parent.x.saturating_add(slot.x),
+        y: parent.y.saturating_add(slot.y),
+        w: slot.w,
+        h: slot.h,
+    })
+}
+
+/// Paint one worn figure into one seat slot, centred on the slot's
+/// scaled box (the shared seat-slot path: self and peers alike).
+fn paint_figure_in_seat_slot(frame: &mut Frame<'_>, figure: &AvatarFigure, slot: &Rect) {
+    let scaled = scale_rect_to_frame(slot, frame.w, frame.h);
+    figure.paint_extent_centered(frame, &scaled, frame.w, frame.h);
+}
+
 /// Paint the local player's worn figure into their own seat's avatar
 /// slot (seat 0, the `IDC_BUTTON_SWAIT_EXTEND1` instance the exe seats
-/// the room host on).
-///
-/// Only the local seat has a figure source in the shell: the worn stack
-/// comes from `avatar.opa` through the binary, exactly like the Result
-/// banner and the Room panel. Peers carry `RoomMember.equipment` on the
-/// wire, but the shell holds no avatar archive to stack them with —
-/// OPEN: stage the archive (or pre-stacked peer figures) and paint each
-/// occupied seat's slot the same way.
+/// the room host on). Thin wrapper over the shared seat-slot path.
 pub fn paint_waiting_seat_avatar(
     frame: &mut Frame<'_>,
     placements: &[ScenePlacement],
@@ -3273,28 +3295,36 @@ pub fn paint_waiting_seat_avatar(
     let Some(figure) = figure else {
         return;
     };
-    let Some(slot) = placements
-        .iter()
-        .find(|placed| placed.id == WAITING_AVATAR_SLOT_ID)
-        .map(|placed| placed.rect)
-    else {
-        return;
-    };
-    let Some(seat) = placements
-        .iter()
-        .find(|placed| placed.id == WAITING_SEAT_PARENT_IDS[0])
-        .map(|placed| placed.rect)
-    else {
-        return;
-    };
-    let native = Rect {
-        x: seat.x.saturating_add(slot.x),
-        y: seat.y.saturating_add(slot.y),
-        w: slot.w,
-        h: slot.h,
-    };
-    let scaled = scale_rect_to_frame(&native, frame.w, frame.h);
-    figure.paint_extent_centered(frame, &scaled, frame.w, frame.h);
+    if let Some(slot) = waiting_seat_slot_rect(placements, 0) {
+        paint_figure_in_seat_slot(frame, figure, &slot);
+    }
+}
+
+/// Paint each occupied seat's staged figure into its own avatar slot
+/// through the same slot path as the local seat (seat-relative rect
+/// plus the seat parent's origin). Vacant and locked seats keep their
+/// bare plate even when a figure is staged; unstaged seats stay empty.
+/// No template child ever paints at the raw rect: every figure goes
+/// through its seat's parent offset.
+pub fn paint_waiting_seat_avatars(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    room: &JoinedRoom,
+    figures: &[Option<AvatarFigure>],
+) {
+    let seats = staged_seats(room);
+    for (index, staged_figure) in figures.iter().enumerate() {
+        if seats.get(index).is_none_or(|seat| !seat.present) {
+            continue;
+        }
+        let (Some(figure), Some(slot)) = (
+            staged_figure.as_ref(),
+            waiting_seat_slot_rect(placements, index),
+        ) else {
+            continue;
+        };
+        paint_figure_in_seat_slot(frame, figure, &slot);
+    }
 }
 
 /// Seat-cover control ids in seat order (`COVERAVATAR1..8`, codes
@@ -9620,6 +9650,119 @@ mod paint_tests {
             None,
         );
         assert!(empty.iter().all(|pixel| *pixel == 0));
+    }
+
+    /// Eight seat parents plus the seat-relative avatar slot, in one
+    /// synthetic row so per-seat ink never overlaps its neighbour.
+    fn waiting_avatar_placements() -> Vec<ScenePlacement> {
+        let mut placements = Vec::with_capacity(WAITING_SEATS + 1);
+        for (index, id) in WAITING_SEAT_PARENT_IDS.iter().enumerate() {
+            placements.push(ScenePlacement {
+                role: PlacementRole::Single,
+                id: (*id).to_owned(),
+                code: 0x1601_5022 + index as u32,
+                sprite: None,
+                rect: Rect {
+                    x: 10 + index as i32 * 130,
+                    y: 50,
+                    w: 123,
+                    h: 150,
+                },
+            });
+        }
+        placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: WAITING_AVATAR_SLOT_ID.to_owned(),
+            code: 0x1670_002E,
+            sprite: None,
+            rect: Rect {
+                x: 0,
+                y: 0,
+                w: 123,
+                h: 150,
+            },
+        });
+        placements
+    }
+
+    /// Seat slot box of one synthetic parent (mirrors the painter's
+    /// parent-origin plus slot-rect rule).
+    fn waiting_slot_box(seat: usize) -> Rect {
+        Rect {
+            x: 10 + seat as i32 * 130,
+            y: 50,
+            w: 123,
+            h: 150,
+        }
+    }
+
+    #[test]
+    fn waiting_seat_avatars_paint_each_occupied_seat_slot() {
+        // `waiting_room` seats self (seat 0) plus the wire host
+        // (seat 1); seats 2.. stay empty/locked. Both occupied slots
+        // take their figure through the same slot path — never the
+        // raw `(0,0,123,150)` rect.
+        let placements = waiting_avatar_placements();
+        let room = waiting_room();
+        let figures: Vec<Option<AvatarFigure>> = (0..WAITING_SEATS)
+            .map(|index| (index < 2).then(|| icon_figure(&[0x7C00])))
+            .collect();
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_seat_avatars(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            &room,
+            &figures,
+        );
+        assert!(
+            ink_in_rect(&buf, 800, waiting_slot_box(0)) > 0,
+            "self seat takes its figure"
+        );
+        assert!(
+            ink_in_rect(&buf, 800, waiting_slot_box(1)) > 0,
+            "occupied peer seat takes its figure"
+        );
+        assert_eq!(
+            ink_in_rect(
+                &buf,
+                800,
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: 9,
+                    h: 49
+                }
+            ),
+            0,
+            "no template child paints at the raw rect"
+        );
+    }
+
+    #[test]
+    fn waiting_seat_avatars_skip_empty_and_locked_seats() {
+        // Figures staged for the empty seat 2 and the locked seat 3
+        // never reach the frame: vacant seats keep their bare plate.
+        let placements = waiting_avatar_placements();
+        let room = waiting_room();
+        let figures: Vec<Option<AvatarFigure>> = (0..WAITING_SEATS)
+            .map(|index| (index == 2 || index == 3).then(|| icon_figure(&[0x7C00])))
+            .collect();
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_seat_avatars(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            &room,
+            &figures,
+        );
+        assert!(buf.iter().all(|pixel| *pixel == 0));
     }
 
     #[test]
