@@ -239,9 +239,18 @@ impl WindowHandler {
         };
         let wall_ms = capture.state.started.elapsed().as_millis();
         if let Some(log) = capture.state.log.as_mut() {
-            use std::io::Write;
-            let _ = writeln!(log, "event {wall_ms} {event}");
+            Self::append_log_line(log, format_args!("event {wall_ms} {event}"));
         }
+    }
+
+    /// Write one log line and flush it straight to disk: a
+    /// concurrent reader (`tail`, the replay driver) sees each routed
+    /// event without waiting for the buffer to fill. Log writes only —
+    /// the paint path pays nothing beyond the lines already written.
+    fn append_log_line(log: &mut std::io::BufWriter<std::fs::File>, line: std::fmt::Arguments<'_>) {
+        use std::io::Write;
+        let _ = log.write_fmt(line);
+        let _ = log.flush();
     }
 
     /// FNV-1a over the backbuffer words: the content fingerprint
@@ -271,11 +280,12 @@ impl WindowHandler {
         let wall_ms = capture.state.started.elapsed().as_millis();
         let state = self.shell.game.state_hash();
         if let Some(log) = capture.state.log.as_mut() {
-            use std::io::Write;
-            let _ = writeln!(
+            Self::append_log_line(
                 log,
-                "frame {0} wall_ms={wall_ms} screen={screen} state={state:016x} content={content:016x}",
-                capture.paint
+                format_args!(
+                    "frame {0} wall_ms={wall_ms} screen={screen} state={state:016x} content={content:016x}",
+                    capture.paint
+                ),
             );
         }
         let since_dump = capture.paint.saturating_sub(capture.last_dump_paint);
@@ -584,6 +594,31 @@ mod tests {
         for dump in &dumps {
             assert!(dump.file_name().to_string_lossy().ends_with("-unknown.png"));
         }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn capture_log_flushes_each_line_for_concurrent_readers() {
+        let dir = std::env::temp_dir().join(format!("recomp2jam-flush-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("output root");
+        let log_path = dir.join("input.log");
+        let probe = Rc::new(RefCell::new(InputProbe::default()));
+        let shell = Shell::new(Box::new(probe)).with_capture(super::super::CapturePlan {
+            dir: dir.join("frames"),
+            min_paint_gap: 1,
+            heartbeat_paints: 2,
+            input_log: Some(log_path.clone()),
+        });
+        let mut handler = WindowHandler::new(shell);
+        handler.route_key(KeyCode::KeyS, true);
+        // Read while the handler (and its writer) is still alive: a
+        // concurrent tail must see the routed key without a drop.
+        let text = std::fs::read_to_string(&log_path).expect("input log written");
+        assert!(
+            text.contains("key-down KeyS"),
+            "routed key visible before the writer drops: {text}"
+        );
+        drop(handler);
         std::fs::remove_dir_all(&dir).ok();
     }
 
