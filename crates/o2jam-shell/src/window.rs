@@ -26,7 +26,7 @@ struct CaptureSink {
 
 /// Event-loop state: shell plus its softbuffer surface.
 pub struct WindowHandler {
-    shell: Shell,
+    pub(crate) shell: Shell,
     surface: Option<softbuffer::Surface<OwnedDisplayHandle, Arc<Window>>>,
     surface_size: Option<(u32, u32)>,
     paint_error: Option<anyhow::Error>,
@@ -161,7 +161,9 @@ impl WindowHandler {
     /// Route one key event to a lane or menu hook. The game sees
     /// the raw press first (rebind capture), then the key map —
     /// synced from the game's current binds — resolves the lane.
-    fn route_key(&mut self, code: winit::keyboard::KeyCode, down: bool) {
+    /// `pub(crate)`: the input-latency probe (#100) drives scripted
+    /// key events through this exact path.
+    pub(crate) fn route_key(&mut self, code: winit::keyboard::KeyCode, down: bool) {
         self.log_event(&format!(
             "key-{} {code:?}",
             if down { "down" } else { "up" }
