@@ -10,6 +10,7 @@ pub mod options;
 pub mod playing;
 pub mod screen;
 pub mod screens;
+pub mod song_clock_replay;
 pub mod staging;
 mod window;
 
