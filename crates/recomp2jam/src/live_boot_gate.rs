@@ -26,7 +26,7 @@ mod live_boot_gate_tests {
     use o2jam_render::Frame as RenderFrame;
     use o2jam_shell::{GameLoop, Screen};
 
-    use crate::{assemble_online_session, connect, install_root, stage_boot_character};
+    use crate::{assemble_online_session, connect, install_root, stage_online_identity};
 
     /// Read one whole frame off the scripted gateway's socket.
     fn read_frame(stream: &mut TcpStream) -> Frame {
@@ -121,7 +121,7 @@ mod live_boot_gate_tests {
         let (report, gateway) =
             connect::connect_and_login_with_transport(&boot_options(port)).unwrap();
         let mut game = o2jam_shell::ScreenGame::new();
-        stage_boot_character(&mut game, report.character);
+        stage_online_identity(&mut game, report.character.as_ref());
         let mut session =
             assemble_online_session(game, gateway, Some("gate"), None, None, None).unwrap();
         let game = session.game_mut();

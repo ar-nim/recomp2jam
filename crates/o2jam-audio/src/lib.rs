@@ -748,11 +748,13 @@ pub fn measure_output_latency(
     marker: &PcmSamples,
     device_latency_frames: u64,
 ) -> LatencyProbe {
-    // A silent marker is best-effort: a busy live device can consume
-    // frames between the push and the read. The window is one lock
-    // pair, far below a callback quantum, so the reading is the depth
-    // at push time for probe purposes.
-    if backend.play_pcm(marker).is_err() {
+    // The marker is silent so a live run hears nothing; only the
+    // queue accounting moves. Probe contract: a failed enqueue keeps
+    // the probe usable with a zero queue depth (the device-latency
+    // arm still reports), but the failure is never silent — the
+    // caller sees a warning next to the probe reading.
+    if let Err(source) = backend.play_pcm(marker) {
+        tracing::warn!(%source, "latency marker enqueue failed; probe reports zero queue depth");
         return LatencyProbe::new(backend.sample_rate(), 0, device_latency_frames);
     }
     LatencyProbe::new(
