@@ -34,7 +34,7 @@ fixtures/original/
 .wine-*/
 wineprefix*/
 **/drive_c/
-extracted/
+extracted
 installer-out/
 game-data/
 original/
