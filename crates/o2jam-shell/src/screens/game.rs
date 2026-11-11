@@ -75,8 +75,8 @@ use o2jam_net::rooms::{
 use o2jam_net::shop::{EquipItem, SyncItemPurchase, SyncMusicPurchase};
 use o2jam_net::wallet::SyncCashPointResponse;
 use o2jam_net::{
-    ChannelState, CharacterInfo, CreateRoom, Difficulty, Gender, JoinRoom, JoinedRoom, Ready,
-    RoomListEntry, RoomTeamChanged, SetRoomTeam,
+    ChannelState, CharacterInfo, CreateRoom, Difficulty, ExitPlaying, Gender, JoinRoom, JoinedRoom,
+    Ready, RoomListEntry, RoomTeamChanged, SetRoomTeam, StartGame,
 };
 use o2jam_render::font::{draw_text_cell, Cell};
 use o2jam_render::{
@@ -597,6 +597,15 @@ pub struct ScreenGame {
     pending_team_ready: bool,
     /// Queued song pick awaiting the session (4000; the dialog row owns it).
     pending_music_send: Option<SetRoomMusic>,
+    /// Queued RETRY press awaiting the session (4010 `0xfaa`, empty;
+    /// the result RETRY button and its Confirm arm own it).
+    pending_result_retry: bool,
+    /// Queued BACK press awaiting the session (4021 `0xfb5`, empty;
+    /// the result BACK button and its Back arm own it).
+    pending_result_back: bool,
+    /// Queued battle result entry awaiting the session (4042 `0xfca`,
+    /// empty; the song-end Result entry in team play owns it).
+    pending_result_battle_entry: bool,
     /// Create-room edit focus: title until the password EDIT is hit.
     create_focus_password: bool,
     battle_teams: RoomTeams,
@@ -1025,6 +1034,9 @@ impl ScreenGame {
             pending_room_team: None,
             pending_team_ready: false,
             pending_music_send: None,
+            pending_result_retry: false,
+            pending_result_back: false,
+            pending_result_battle_entry: false,
             create_focus_password: false,
             battle_teams: RoomTeams::new(),
             battle_self_team: None,
@@ -1500,6 +1512,42 @@ impl ScreenGame {
     #[must_use]
     pub fn has_pending_music_send(&self) -> bool {
         self.pending_music_send.is_some()
+    }
+    /// Queued RETRY press for the session bridge, if any (`StartGame`
+    /// 4010, `0xfaa` — the exe's result RETRY relay event,
+    /// `FUN_004c2f00` range, `ev_77ce98f1…`). One take sends once;
+    /// the next press replaces the queue.
+    pub fn take_result_retry(&mut self) -> Option<StartGame> {
+        if self.pending_result_retry {
+            self.pending_result_retry = false;
+            Some(StartGame)
+        } else {
+            None
+        }
+    }
+    /// Queued BACK press for the session bridge, if any (`ExitPlaying`
+    /// 4021, `0xfb5` — the exe's result BACK relay event,
+    /// `docs/cresult-anchors.md` `ev_77ce98f1…`). One take sends once;
+    /// the next press replaces the queue.
+    pub fn take_result_back(&mut self) -> Option<ExitPlaying> {
+        if self.pending_result_back {
+            self.pending_result_back = false;
+            Some(ExitPlaying)
+        } else {
+            None
+        }
+    }
+    /// Queued battle result entry for the session bridge, if any
+    /// (`GetLiveState` 4042, `0xfca` — byte-verified empty,
+    /// `docs/relay.md` §10, gated on the battle global `0x7789e6`).
+    /// One take sends once; the next battle entry replaces the queue.
+    pub fn take_result_battle_entry(&mut self) -> Option<o2jam_net::relay::GetLiveState> {
+        if self.pending_result_battle_entry {
+            self.pending_result_battle_entry = false;
+            Some(o2jam_net::relay::GetLiveState)
+        } else {
+            None
+        }
     }
     /// Team broadcast slot-refresh path (4007).
     ///
@@ -2631,11 +2679,15 @@ impl ScreenGame {
     }
 
     /// Result button click: RETRY re-enters Waiting, BACK leaves
-    /// for rooms — the keyboard Confirm/Back arms on mouse.
+    /// for rooms — the keyboard Confirm/Back arms on mouse. Both
+    /// presses queue their pinned relay body for the session bridge
+    /// (4010 `0xfaa` / 4021 `0xfb5`, both empty).
     fn click_result_button(&mut self, x: i32, y: i32) {
         if self.result_button_hit(RESULT_RETRY_ID, &RESULT_RETRY_RECT, x, y) {
+            self.pending_result_retry = true;
             self.enter(Screen::Waiting);
         } else if self.result_button_hit(RESULT_BACK_ID, &RESULT_BACK_RECT, x, y) {
+            self.pending_result_back = true;
             self.enter(Screen::Room);
         }
     }
@@ -4433,6 +4485,14 @@ impl ScreenGame {
             // Song end enters Result through the entry hook, so
             // its scene-music cue (`0x13`, once — silent on the
             // 10-record bank, OPEN) fires like every other entry.
+            // A battle game's entry posts the live-state ask
+            // (4042 `0xfca`, empty — the exe's battle-gated send,
+            // `docs/relay.md` §10); solo entry queues nothing here
+            // (its event-ticket web call owns the solo arm and the
+            // shell owns no web seam: OPEN).
+            if self.room_team_play() {
+                self.pending_result_battle_entry = true;
+            }
             self.enter_screen(Screen::Result);
         }
         match self.flow.current() {
@@ -5402,7 +5462,9 @@ impl GameLoop for ScreenGame {
                     self.enter(Screen::Room);
                 }
             }
-            (Screen::Waiting, MenuKey::Back) | (Screen::Result, MenuKey::Back) => {
+            (Screen::Waiting, MenuKey::Back) => self.enter(Screen::Room),
+            (Screen::Result, MenuKey::Back) => {
+                self.pending_result_back = true;
                 self.enter(Screen::Room);
             }
             // The room lobby Enter rides the main-room chat first: a
@@ -5421,7 +5483,9 @@ impl GameLoop for ScreenGame {
                     self.enter(Screen::Waiting);
                 }
             }
-            (Screen::Loading, MenuKey::Back) | (Screen::Result, MenuKey::Confirm) => {
+            (Screen::Loading, MenuKey::Back) => self.enter(Screen::Waiting),
+            (Screen::Result, MenuKey::Confirm) => {
+                self.pending_result_retry = true;
                 self.enter(Screen::Waiting);
             }
             // `START 0x16202012` runs the all-ready check (file
@@ -11389,8 +11453,9 @@ mod game_tests {
     fn staged_retry_click_returns_to_waiting() {
         // RETRY (`IDC_BUTTON_SRESULT_RETRY`, rect 6
         // (625,570)-(708,592)): the walk stages the button through
-        // the bound arm, the click hands back to Waiting — the
-        // exe's local arm (relay `0xfaa` stays unwired: OPEN).
+        // the bound arm, the click hands back to Waiting — and
+        // queues the exe's relay body (4010 `0xfaa`, empty) for the
+        // session bridge.
         let mut game = ScreenGame::new();
         stage_result_button(&mut game, RESULT_RETRY_ID, RESULT_RETRY_RECT);
         finish_song(&mut game);
@@ -11398,14 +11463,16 @@ mod game_tests {
         assert_eq!(game.screen(), Screen::Result);
         game.mouse_click(666, 581);
         assert_eq!(game.screen(), Screen::Waiting);
+        assert!(game.take_result_retry().is_some());
+        assert!(game.take_result_retry().is_none(), "one take sends once");
     }
 
     #[test]
     fn staged_back_click_returns_to_room() {
         // BACK (`IDC_BUTTON_SRESULT_BACK`, rect 5
         // (711,569)-(794,593)): the walk stages the button, the
-        // click leaves for the room list — the exe's local arm
-        // (relay `0xfb5` stays unwired: OPEN).
+        // click leaves for the room list — and queues the exe's
+        // relay body (4021 `0xfb5`, empty) for the session bridge.
         let mut game = ScreenGame::new();
         stage_result_button(&mut game, RESULT_BACK_ID, RESULT_BACK_RECT);
         finish_song(&mut game);
@@ -11413,6 +11480,8 @@ mod game_tests {
         assert_eq!(game.screen(), Screen::Result);
         game.mouse_click(752, 581);
         assert_eq!(game.screen(), Screen::Room);
+        assert!(game.take_result_back().is_some());
+        assert!(game.take_result_back().is_none(), "one take sends once");
     }
 
     #[test]
@@ -11437,17 +11506,61 @@ mod game_tests {
     }
 
     #[test]
-    fn result_entry_stages_no_ticket_wire_call() {
-        // The solo enter painter fires the event-ticket web call
-        // (`docs/cresult-anchors.md`, `FUN_004c1b90`) and the battle
-        // fill posts net `0xfca`; the shell has no web seam, so
-        // staged entry must queue nothing — the call stays labeled
-        // OPEN until a gateway replay names its wire shape.
+    fn result_retry_and_back_queue_the_pinned_relay_bodies() {
+        // The keyboard arms queue the same pinned bodies as the
+        // buttons: Confirm on Result queues `StartGame` 4010
+        // (`0xfaa`, empty — the exe's result RETRY relay event,
+        // `FUN_004c2f00` range, `ev_77ce98f1…`), Back queues
+        // `ExitPlaying` 4021 (`0xfb5`, empty — `ev_77ce98f1…`).
+        use MenuKey;
         let mut game = ScreenGame::new();
-        stage_result_button(&mut game, RESULT_RETRY_ID, RESULT_RETRY_RECT);
         finish_song(&mut game);
         paint_result_frame(&mut game);
-        assert_eq!(game.screen(), Screen::Result);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+        assert!(game.take_result_retry().is_some());
+        assert!(game.take_result_back().is_none());
+        let mut back = ScreenGame::new();
+        finish_song(&mut back);
+        paint_result_frame(&mut back);
+        back.menu_key(MenuKey::Back, true);
+        assert_eq!(back.screen(), Screen::Room);
+        assert!(back.take_result_back().is_some());
+        assert!(back.take_result_retry().is_none());
+    }
+
+    #[test]
+    fn result_entry_stages_the_pinned_ticket_wire_call() {
+        // Result entry arms split by mode: a battle (Live) entry
+        // queues `GetLiveState` 4042 (`0xfca`, empty — byte-verified,
+        // `docs/relay.md` §10, the exe's battle-global-gated send);
+        // a solo entry queues nothing on the gateway seam — its
+        // event-ticket web call (`ticket_add.php?USER_INDEX_ID=<index>`,
+        // file `0x24a338`) is an HTTP GET, not a gateway frame, and
+        // the shell owns no web seam, so it stays OPEN (next steps:
+        // the web-seam decision, then the live request-line capture).
+        let mut game = ScreenGame::new();
+        finish_song(&mut game);
+        paint_result_frame(&mut game);
+        assert!(game.take_result_battle_entry().is_none());
+        let mut live = ScreenGame::new();
+        let mut room = waiting_room();
+        room.game_mode = o2jam_net::GameMode::Live as u8;
+        live.set_joined_room(room);
+        finish_song(&mut live);
+        paint_result_frame(&mut live);
+        assert!(
+            live.take_result_battle_entry().is_some(),
+            "battle entry queues the live-state ask"
+        );
+        assert!(
+            live.take_result_battle_entry().is_none(),
+            "one take sends once"
+        );
+        // The web call is not a gateway frame: no 4010/4021/4042 arm
+        // may stand in for it.
+        assert!(game.take_result_retry().is_none());
+        assert!(game.take_result_back().is_none());
         assert!(game.take_room_team().is_none());
         assert!(game.take_team_ready().is_none());
         assert!(game.take_music_send().is_none());
