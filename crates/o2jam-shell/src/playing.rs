@@ -1245,12 +1245,27 @@ impl PlayingView {
         self.onsets.sort_by_key(|(_, at)| *at);
     }
 
-    /// Paint highway, line, and visible notes.
+    /// Paint highway, line, and visible notes over the flat
+    /// placeholder backdrop (the no-archive fallback fill).
     pub fn paint(&self, frame: &mut Frame<'_>, geom: &HighwayGeometry) {
-        self.paint_shell(frame, geom);
-        for (lane, y) in self.visible(geom) {
-            self.paint_note(frame, geom, lane, y);
-        }
+        self.paint_backdrop_fill(frame);
+        self.paint_curtained_highway(frame, geom, LaneCurtain::Full);
+    }
+
+    /// Fill the frame with the flat Playing backdrop: the loop's
+    /// placeholder draw, kept only for the no-archive case (ADR-0003).
+    fn paint_backdrop_fill(&self, frame: &mut Frame<'_>) {
+        let w = frame.w as i32;
+        fill_rect(
+            frame,
+            &Rect {
+                x: 0,
+                y: 0,
+                w: w as u32,
+                h: frame.h as u32,
+            },
+            pack_xrgb(0x0A, 0x0A, 0x0A),
+        );
     }
 
     /// Paint the highway through a skill-ring curtain: notes outside the
@@ -1265,7 +1280,32 @@ impl PlayingView {
         geom: &HighwayGeometry,
         curtain: LaneCurtain,
     ) {
-        self.paint_shell(frame, geom);
+        self.paint_backdrop_fill(frame);
+        self.paint_curtained_highway(frame, geom, curtain);
+    }
+
+    /// Paint the highway through a skill-ring curtain over an
+    /// already-blitted staged backdrop (A44): the flat placeholder
+    /// fill stays out so the staged scene set shows through — it is
+    /// ADR-0003's no-archive fallback only.
+    pub fn paint_curtained_over_staged(
+        &self,
+        frame: &mut Frame<'_>,
+        geom: &HighwayGeometry,
+        curtain: LaneCurtain,
+    ) {
+        self.paint_curtained_highway(frame, geom, curtain);
+    }
+
+    /// Lane shells, receptors, judgement line, and the visible notes
+    /// the curtain lets through (no backdrop fill).
+    fn paint_curtained_highway(
+        &self,
+        frame: &mut Frame<'_>,
+        geom: &HighwayGeometry,
+        curtain: LaneCurtain,
+    ) {
+        self.paint_highway_shell(frame, geom);
         if curtain == LaneCurtain::Full {
             for (lane, y) in self.visible(geom) {
                 self.paint_note(frame, geom, lane, y);
@@ -1284,23 +1324,13 @@ impl PlayingView {
         }
     }
 
-    /// Background, lane skins, receptors, and the judgement line
-    /// (no notes). Even lanes keep the flat Playing backdrop; odd lanes
+    /// Lane tints, separators, receptors, and the judgement line (no
+    /// notes, no backdrop fill). Even lanes keep the surface under
+    /// them (the flat fallback fill or the staged venue); odd lanes
     /// carry the tint above so staged `Playing1.opi` edge gauges keep
     /// ringing a readable highway. The line spans the staged lane
     /// columns, not the full frame.
-    fn paint_shell(&self, frame: &mut Frame<'_>, geom: &HighwayGeometry) {
-        let w = frame.w as i32;
-        fill_rect(
-            frame,
-            &Rect {
-                x: 0,
-                y: 0,
-                w: w as u32,
-                h: frame.h as u32,
-            },
-            pack_xrgb(0x0A, 0x0A, 0x0A),
-        );
+    fn paint_highway_shell(&self, frame: &mut Frame<'_>, geom: &HighwayGeometry) {
         for lane in 0..HIGHWAY_LANES {
             let column = geom.lane_rect(lane);
             if lane % 2 == 1 {
@@ -2496,11 +2526,39 @@ impl LivePlay {
     }
 
     /// Paint highway, notes, tails, jam gauge, panel-strip score/combo,
-    /// bursts, and word. Peer bars stay out: they ride the over-art layer
-    /// ([`Self::paint_avatar_scene`], after the staged overlay).
+    /// bursts, and word over the flat placeholder backdrop (the
+    /// no-archive fallback). Peer bars stay out: they ride the over-art
+    /// layer ([`Self::paint_avatar_scene`], after the staged overlay).
     pub fn paint(&mut self, frame: &mut Frame<'_>, geom: &HighwayGeometry, now_ms: u64) {
+        self.paint_over(frame, geom, now_ms, false);
+    }
+
+    /// Same, over an already-blitted staged backdrop (A44): the
+    /// loop's placeholder fill stays out and the staged scene set
+    /// shows through (ADR-0003 keeps the fill for the no-archive case).
+    pub fn paint_over_staged_backdrop(
+        &mut self,
+        frame: &mut Frame<'_>,
+        geom: &HighwayGeometry,
+        now_ms: u64,
+    ) {
+        self.paint_over(frame, geom, now_ms, true);
+    }
+
+    fn paint_over(
+        &mut self,
+        frame: &mut Frame<'_>,
+        geom: &HighwayGeometry,
+        now_ms: u64,
+        staged_backdrop: bool,
+    ) {
         self.advance_to(now_ms);
-        self.view.paint_curtained(frame, geom, self.curtain);
+        if staged_backdrop {
+            self.view
+                .paint_curtained_over_staged(frame, geom, self.curtain);
+        } else {
+            self.view.paint_curtained(frame, geom, self.curtain);
+        }
         self.paint_hold_tails(frame, geom);
         self.paint_hit_bursts(frame, geom, now_ms);
         self.paint_jam_flash(frame, geom, now_ms);

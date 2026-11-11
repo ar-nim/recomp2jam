@@ -18,14 +18,14 @@ use super::paint::{
     paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
     paint_lobby_backdrop, paint_music_shop_board, paint_music_shop_cart, paint_music_shop_scene,
     paint_myroom_data, paint_myroom_scene, paint_payment_notice, paint_planet_options,
-    paint_planet_quit, paint_planet_scene, paint_playing_overlay, paint_result, paint_result_scene,
-    paint_room_chat, paint_room_list, paint_room_scene, paint_room_user_panel, paint_screen,
-    paint_shop_board, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
-    paint_waiting_scene, paint_waiting_seat_avatar, paint_waiting_seat_avatars,
-    quit_fallback_rects, rect_hit, room_panel_hit, scene_index, staged_rect_hit, BattleVerdict,
-    ChannelChatMessage, ChannelScroll, LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict,
-    SceneArt, WaitingCaptions, WaitingChatMessage, RESULT_BACK_ID, RESULT_BACK_RECT,
-    RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    paint_planet_quit, paint_planet_scene, paint_playing_backdrop, paint_playing_foreground,
+    paint_result, paint_result_scene, paint_room_chat, paint_room_list, paint_room_scene,
+    paint_room_user_panel, paint_screen, paint_shop_board, paint_shop_scene, paint_waiting_chat,
+    paint_waiting_members, paint_waiting_scene, paint_waiting_seat_avatar,
+    paint_waiting_seat_avatars, playing_backdrop_staged, quit_fallback_rects, rect_hit,
+    room_panel_hit, scene_index, staged_rect_hit, BattleVerdict, ChannelChatMessage, ChannelScroll,
+    LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions,
+    WaitingChatMessage, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::side::{
     can_return_side, can_visit_side, create_room_action_at, lanking_action_at, lanking_page_window,
@@ -4853,12 +4853,29 @@ impl ScreenGame {
     /// without avatar.
     fn paint_playing(&mut self, frame: &mut Frame<'_>, now_ms: u64) {
         let geom = HighwayGeometry::centered(frame.w, frame.h);
-        self.playing.paint(frame, &geom, now_ms);
+        // Game-loop staged blits (A44): the staged scene set threads
+        // through the loop's own per-frame blits — the behind-highway
+        // backdrop first (the exe paints the backdrop first of all;
+        // A5 paint order, A39 blit chain), the highway over it, then
+        // the foreground placements. The unstaged arm keeps the flat
+        // placeholder fill (ADR-0003's no-archive fallback).
+        let staged_backdrop = self
+            .scene_art(Screen::Playing)
+            .is_some_and(playing_backdrop_staged);
+        if staged_backdrop {
+            if let Some(art) = self.scene_art(Screen::Playing) {
+                paint_playing_backdrop(frame, art);
+            }
+            self.playing
+                .paint_over_staged_backdrop(frame, &geom, now_ms);
+        } else {
+            self.playing.paint(frame, &geom, now_ms);
+        }
         let playing_placements = self
             .scene_art(Screen::Playing)
             .map(|art| art.placements.clone());
         if let Some(art) = self.scene_art(Screen::Playing) {
-            paint_playing_overlay(frame, art);
+            paint_playing_foreground(frame, art);
         }
         self.sync_song_caption();
         self.playing.paint_avatar_scene_with_placements(
@@ -10992,6 +11009,34 @@ mod game_tests {
         assert_eq!(game.screen(), Screen::Playing);
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert!(buf.contains(&pack_xrgb(0x40, 0xC0, 0xFF)));
+    }
+
+    #[test]
+    fn staged_backdrop_replaces_the_loop_placeholder_fill() {
+        // A44: the staged scene set blits through the game loop —
+        // the behind-highway backdrop paints first, so the loop's
+        // flat placeholder fill (ADR-0003's no-archive fallback)
+        // stays out and the staged art shows through whole.
+        let (placements, figures) = corner_scene_art("Playing_BG.ojs");
+        let mut game = ScreenGame::new();
+        game.load_chart(vec![(2, 1500, 7)]);
+        game.load_scene(Screen::Playing, placements, figures);
+        walk_to_playing(&mut game);
+        let mut buf = vec![0u32; 70 * 60];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 70,
+                h: 60,
+            },
+            1000,
+        );
+        assert_eq!(game.screen(), Screen::Playing);
+        assert_eq!(buf[0], pack_xrgb(255, 0, 0));
+        assert!(
+            !buf.contains(&pack_xrgb(0x0A, 0x0A, 0x0A)),
+            "the loop's placeholder fill paints over/under the staged backdrop"
+        );
     }
 
     #[test]
