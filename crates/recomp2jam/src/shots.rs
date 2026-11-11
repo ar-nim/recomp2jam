@@ -1936,6 +1936,74 @@ mod tests {
     }
 
     #[test]
+    fn playing_gauge_paints_at_its_staged_anchor_rect() {
+        // Ticket #102 (bnd-audit 16): the member life gauge
+        // (`Avatar_Info_LifeGauge.ojs` — eight
+        // `IDC_IMAGE_SPLAY_LIFEGAUGE1..8` entries on one 46x8 body)
+        // carries one corner native anchor at (0,0), clear of the
+        // note lanes (they open at row 28). Staging must consume
+        // that staged anchor rect, never append the body as an
+        // extra full-canvas placement over the 17-rect bound window
+        // (ADR-0003: the painter consumes staged rects, never a
+        // canvas stretch).
+        let Some(archive) = read_install_archives(&install_root()).playing else {
+            println!("skip: missing {PLAYING_ARCHIVE}");
+            return;
+        };
+        let ctx = StageContext {
+            arena_stage: Some(2),
+            key_mode: 2,
+            team_play: false,
+        };
+        let art = stage_state(&archive, State::Playing, ctx)
+            .art
+            .expect("STATE_PLAYING stages");
+        let (placements, figures) = (&art.placements, &art.figures);
+        let placed = placements
+            .iter()
+            .find(|placed| placed.sprite.as_deref() == Some("Avatar_Info_LifeGauge.ojs"))
+            .expect("the gauge stages its placement");
+        assert_eq!(
+            (placed.rect.x, placed.rect.y, placed.rect.w, placed.rect.h),
+            (0, 0, 0, 0),
+            "the gauge rides its unplaced anchor rect alone"
+        );
+        for placed in placements {
+            assert_ne!(
+                (placed.rect.x, placed.rect.y, placed.rect.w, placed.rect.h),
+                (0, 0, NATIVE_WIDTH, NATIVE_HEIGHT),
+                "{} must never stage full-canvas",
+                placed.id
+            );
+        }
+        let figure = figures
+            .get("Avatar_Info_LifeGauge.ojs")
+            .expect("the gauge body decodes");
+        let (index, px, py, ink) = first_opaque_probe(figure).expect("the body has opaque pixels");
+        let layer = figure.layer(index).expect("the probe layer");
+        assert!(
+            i32::try_from(layer.image.w).unwrap_or(i32::MAX) <= 46
+                && i32::try_from(layer.image.h).unwrap_or(i32::MAX) <= 8,
+            "the gauge body stays inside its staged 46x8 extent"
+        );
+        let mut buf = vec![0u32; 800 * 600];
+        paint_foreground_placements(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            placements,
+            figures,
+        );
+        let at = usize::try_from(py).unwrap_or(0) * 800 + usize::try_from(px).unwrap_or(0);
+        assert_eq!(
+            buf[at], ink,
+            "gauge ink must land at its corner anchor origin"
+        );
+    }
+
+    #[test]
     fn playing_time_fill_stays_inside_the_staged_bar_rect() {
         // Ticket #102 leg 2: the procedural TIME shell and fill
         // route through the staged TIMEBAR rect (`State_Playing.bnd`
