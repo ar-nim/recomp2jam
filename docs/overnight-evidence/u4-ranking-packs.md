@@ -202,17 +202,85 @@ internally. Next step per the ticket: proxy rewrite of the 2032 send
 (recipe `~/scratch/digits-rig/proxy.py`), or a winedbg stopped-state
 read of the dialog object's vtable slot `+0x64` naming the target.
 
+## U4 gate globals sweep — PINNED (claim D24, 2026-11 static sweep)
+
+Whole-image sweep (Python byte scans + objdump 2.47 slices) over the
+read-only 7.55 copy (`OTwo.exe`, `O2Net32.dll`, `Player.dll`,
+`SendWebData.dll`) naming every reference to the three gate globals,
+the `0x779814` best-table district, and the `0x7797c0` staging area.
+
+### `0x779964` — score-list-loaded one-way latch (PINNED)
+
+The only store to this dword in any image is `movl $1,0x779964` at
+file `0xb6a39` (VA `0x4b6a39`). It sits in the ranking-dialog notify
+procedure's case `0x7ef` — the exact opcode the 2031 answer forwards
+into the ControlList queue (dispatch compares files `0xb66d8`/`0xb66e2`,
+VA `0x4b66d8`/`0x4b66e2`; case body from VA `0x4b6a07`). So receiving
+the 2031 answer arms the latch. Both 2030 send sites consume it as
+`cmpl $0x0,0x779964; jne skip-request` (files `0xac41e`, `0xb263b`):
+latch clear → send 2030 (`push 0x7ee`, indirect `+0x5c`); latch set →
+the dialog opens through the shared builder `FUN_004bd2e0` (seven call
+sites image-wide: VAs `0x4aba17`/`0x4ac447`/`0x4b17a2`/`0x4b1d08`/
+`0x4b2664`/`0x4b6a0d`/`0x4baa81`) with no new request. No clear site exists image-wide — the byte pattern occurs
+only three times (the two gates plus this store) — so the client
+fetches the best-score list once per process and then renders every
+reopen from the cached `0x779814` table.
+
+### `0x77ee86` — MemberRole word (gate value PINNED, label per D10)
+
+2030 send site 1 gates `role == 2` (Challenger): word load file
+`0xac402` (`mov 0x77ee86,%cx`), `cmp $2` file `0xac417`, `jne` past
+the send. The role word is one of 37 load sites image-wide, all pure
+loads (`66 a1`/`66 8b 0d`/`66 8b 15` forms); no store exists in any
+image, so the writer is indirect (member-state block). Semantics per
+claim D10: 0 None / 1 Champion / 2 Challenger / 3 Spectator — the
+score-list request fires only for the Challenger seat.
+
+### `0x77cd30` — own-seat-occupied byte (PINNED label)
+
+All 50 references are byte loads (`a0`/`8a 0d`/`8a 15` forms), each
+immediately copied to a stack slot and consumed as `movzbl`+`test` —
+a boolean "seated in a room" gate (e.g. files `0xaad7a`, `0xb2622`,
+`0xc4835`, `0xe53af`, `0x15f870`). 2030 send site 2 gates nonzero:
+load file `0xb2622`, test file `0xb2635`. No store exists in any
+image (indirect writer), matching its siblings in the `0x77cd00`
+room-state block (local id byte `0x77cd04`, gate byte `0x77cd05`,
+D-claims for 4040). Request fires only while seated.
+
+### `0x779814` best-table district (PINNED structure)
+
+The district is a `std::vector` triplet: begin `0x779814`, end
+`0x779818`, cap-end `0x77981c`, with MSVC bounds checks on indexed
+access (begin/cap compare + `call 0x5f1eca` at files
+`0xc4e78`–`0xc4e9d`). Writers: (a) the 2031 handler append through
+`FUN_004c5700` (file `0x15b60d`, pinned earlier); (b) the local
+best-rank updater `FUN_004c4dd0`, which scans the rows (stride 6) and
+writes `row[2 + index]` (files `0xc5027`–`0xc5069`, same split as the
+D22 read side). The updater's only caller is file `0xc3b16`, inside
+`FUN_004c38a0` — itself called from the result-screen verdict-fill
+neighborhood (files `0xc32a4`/`0xc33af`, beside the `0x77ee86` role
+reads at files `0xc32bc`/`0xc33b6`) — so the client updates its cached
+best ranks locally after a result, not only from 2031. Readers:
+`FUN_0043e9b0` scan (D22) and the 2031 append.
+
+### `0x7797c0` staging district (enumeration complete)
+
+Exactly 7 references image-wide, all dialog code: the memset preface
+(file `0x40b74`), music-id stores at file `0x40fc8` (`mov %ax,0x7797c0`,
+a second store site from a word-vector element, supplementing file
+`0x41472`) and file `0x41472`, difficulty store file `0x414f0`, and
+readers files `0x513f0`, `0x5c74f` (`movzwl` scan of the `0x1b4` song
+vector by the staged id), `0x5c8fa`, `0x5c90b`. No packet-writer
+reference exists image-wide — the staging words are dialog state only,
+which keeps the D23 narrowing standing.
+
 ## OPEN list (named next steps)
 
-1. 2031 row per-byte difficulty order: find the result-screen lookup
-   over the `0x779814` vector (row scan by music id + index by
-   difficulty) and pin the index math.
-2. 2032 wire staging: the `+0x64` slot takes `(this, opcode, 0)` at
+1. 2032 wire staging: the `+0x64` slot takes `(this, opcode, 0)` at
    all seven call sites and no payload pointer; staged words are
    dialog state (music id / difficulty / best rank at `0x7797c0`).
    Remaining: the slot function body — proxy rewrite or stopped-state
    vtable read (claim D23, narrowed).
-3. Gate globals `0x77ee86`, `0x77cd30`, `0x779964` labels.
-4. No live-server capture of 2027→2028 / 2030→2031 / 2032→2033 against
+2. No live-server capture of 2027→2028 / 2030→2031 / 2032→2033 against
    Memoryer (server interop unproven; the 2029 note's live-capture
    pattern applies).
