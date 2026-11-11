@@ -2775,7 +2775,7 @@ mod avatar_figure_tests {
         blob
     }
 
-    /// The parity residual (docs/parity.md Playing row): our shot
+    /// The parity residual (docs/parity/playing.md): our shot
     /// painted the `Note_BG.ojs` right strip at (570,458)–(774,478)
     /// over the venue deck. The exe paints BACK2 as a single-frame
     /// view — image 0, the left strip — because no exe writer selects

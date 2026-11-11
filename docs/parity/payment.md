@@ -1,0 +1,8 @@
+## `STATE_PAYMENT` — billing views (`STATE_PAYMENT`/`STATE_PAYMENT2`; `CDPayment` web billing)
+
+| Dimension | 7.55 expectation (evidence) | Shell status | Verdict |
+|---|---|---|---|
+| Composition | `CDPayment` web billing views; bound placements stage and merge (9 + 12 rects) | (ev: docs/smoke/payment-tutorial-hand-session.md) The overlay inks the unwired-billing notice (`BILLING UNWIRED` plus both lifecycle-verified pages) into the largest staged rect, so neither view stays a silent dead screen; the shots oracle holds with only the intended `payment.png` delta. Guards: `payment_side_states_the_unwired_billing_notice`, `payment_side_paints_the_unwired_billing_notice`, `payment_side_without_staged_rects_paints_no_notice` (miss path paints nothing — ADR-0003) | (R) PASS (v: 9692d41) |
+| Input | Billing entry and the web bridge | (ev: docs/smoke/payment-tutorial-hand-session.md) Entry queues no wire call on any send seam (negative guard `payment_entry_queues_no_wire_call`). OPEN: real billing — the web bridge plus a live gateway replay naming the host/session join; next step: gateway replay through the billing endpoints | (R) OPEN (v: 9692d41) |
+| Timing | None documented | n/a | (R) N/A (no timed behavior — no dispatch exists to guard; next step: none) (v: 9692d41) |
+| Transitions | Lobby ↔ Payment/Payment2 via the side visit | (ev: docs/smoke/payment-tutorial-hand-session.md) The hand session visits both billing views and returns (trace `fixtures/input-trace/payment-tutorial-hand-session.json`). Guards: `payment_tutorial_hand_session_visits_both_and_returns`, `flow_allows_every_documented_edge` | (R) PASS (v: 9692d41) |

@@ -333,7 +333,7 @@ compose-then-paint split. **INSPIRES** two concrete adoptions:
 + text (`channel-fill.md:157`). Select-music dialog bound to
 `Dialog_SelectMusic.bnd` (133 rects); many constants contradict the file
 today, pairing unproven, INDEX-button inventory and x-pitch verified
-(`geometry-audit.md:140-144,235-245`, `parity.md` musicselect cell,
+(`geometry-audit.md:140-144,235-245`, `parity/waiting.md` musicselect cell,
 `codec-coverage.md:53,96`).
 
 **Verdict.**

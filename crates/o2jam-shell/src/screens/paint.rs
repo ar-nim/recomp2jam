@@ -9197,7 +9197,7 @@ mod paint_tests {
     }
 
     /// The offA/onA-modeled hover pair (ticket #63, rule in
-    /// `docs/parity.md`): the measured dimmed-rest pattern for the
+    /// `docs/parity/art-delta-guards.md`): the measured dimmed-rest pattern for the
     /// planet board buttons (`docs/hover.md`, OPTION gear diff bbox
     /// (714,565)-(743,594), 615 changed px — hover paints body
     /// frame 0 at full colour over the desaturated rest frame 0).
@@ -9276,7 +9276,7 @@ mod paint_tests {
     #[test]
     #[ignore = "rest-dim is OPEN: ticket #26's fix activates this guard"]
     fn gear_hover_repaints_over_the_dimmed_rest_frame() {
-        // Ticket #63 (rule: `docs/parity.md` "Art-dependent delta
+        // Ticket #63 (rule: `docs/parity/art-delta-guards.md` "Art-dependent delta
         // guards"): with the offA/onA-modeled fixture — rest =
         // desaturated frame 0, hover = frame 0 at full colour — the
         // guard asserts the rest ink differs from the hover ink at
@@ -10365,7 +10365,7 @@ mod paint_tests {
     fn waiting_chat_paints_admin_rows_in_the_exe_amber() {
         // The 3013 append ink is COLORREF `0x71e6` (call file
         // `0xb9fbf`) — `0x00BBGGRR` through GDI `SetTextColor`, a warm
-        // amber (the reference rows all read warm; `docs/parity.md`
+        // amber (the reference rows all read warm; `docs/parity/verify-photo.md`
         // carries the photo residual).
         let placements = vec![waiting_probe(
             "IDC_LIST_SWAIT_CHAT",

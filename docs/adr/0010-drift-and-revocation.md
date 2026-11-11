@@ -27,7 +27,8 @@ claim.
 
 ## Per-cell record
 
-Every cell in `docs/parity.md` records, in a machine-checkable form:
+Every cell in the parity ledger (`docs/parity/` section files, indexed
+by the generated `docs/parity.md`) records, in a machine-checkable form:
 - Guard test names.
 - Evidence pointer (file offset + evidence id, or capture path).
 - Last-verified commit hash.
