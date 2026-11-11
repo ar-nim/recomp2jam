@@ -218,7 +218,7 @@ pub const STAGE_TABLE: &[StageRow] = &[
         block: Some("STATE_RESULT"),
         archive: StagingArchive::Interface,
         arm: PlacementArm::Bound,
-        extra_sprites: &["Result_WinLose.ojs"],
+        extra_sprites: &["Result_WinLose.ojs", "Result_NumFont_Blue.ojs"],
     },
     StageRow {
         state: State::Payment,

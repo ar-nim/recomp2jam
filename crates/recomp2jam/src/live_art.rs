@@ -20,7 +20,7 @@ use std::path::PathBuf;
 
 use o2jam_shell::avatar::load_archive_sprite;
 use o2jam_shell::avatar::PlayingArtMode;
-use o2jam_shell::screens::paint::DIALOG_BAR_SPRITE;
+use o2jam_shell::screens::paint::{DIALOG_BAR_SPRITE, RESULT_LIFE_FONT_SPRITE};
 use o2jam_shell::screens::side::PlanetOptionTab;
 use o2jam_shell::staging::{
     read_install_archives, stage_dialog, stage_state, Dialog, StageContext, State,
@@ -178,6 +178,22 @@ fn stage_playing_scenes(game: &mut ScreenGame, archive: &[u8]) {
     }
 }
 
+/// Merge the life-readout digit font into the staged Result scene:
+/// `PointNum.ojs` mounts at `this+0x10d10` from the PLAYING archive
+/// (exe builder `FUN_004c2390`, file `0xc2390`), so the
+/// Interface-side stage row cannot name it — both staging paths (the
+/// live window and the shots walk) call this after both archives
+/// staged. A miss keeps the value-gated digit fields unpainted (their
+/// value globals stay OPEN, `docs/cresult-anchors.md`).
+pub(crate) fn stage_result_life_font(game: &mut ScreenGame, playing_archive: &[u8]) {
+    let Some(font) = load_archive_sprite(playing_archive, RESULT_LIFE_FONT_SPRITE) else {
+        return;
+    };
+    let mut figures = HashMap::new();
+    figures.insert(RESULT_LIFE_FONT_SPRITE.to_owned(), font);
+    game.merge_scene_figures(Screen::Result, figures);
+}
+
 /// Stage genuine 7.55 scene art under every live screen when
 /// `install-root` holds the archives; missing or unreadable archives
 /// keep the fallback paint. Read-only and infallible: staging never
@@ -190,6 +206,7 @@ pub fn stage_live_scenes(game: &mut ScreenGame) {
     }
     if let Some(archive) = &installed.playing {
         stage_playing_scenes(game, archive);
+        stage_result_life_font(game, archive);
     }
 }
 

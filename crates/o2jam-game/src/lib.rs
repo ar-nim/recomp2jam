@@ -897,8 +897,10 @@ impl PillStock {
         self.pills
     }
 
-    /// Add pills, capped at `MAX_PILLS`. Callers decide when a grant
-    /// happens (no in-exe earn path is verified).
+    /// Add pills, capped at [`MAX_PILLS`]. The in-exe earn rule
+    /// (15 consecutive Cools, [`CoolStreak`]) is VERIFIED (B5); the
+    /// shop-side relay apply ([`EarnStats::apply`]) writes the stock
+    /// word raw, exactly as the exe's setter `0x540870` does.
     pub fn add(&mut self, count: u32) {
         self.pills = self.pills.saturating_add(count).min(MAX_PILLS);
     }
@@ -947,6 +949,106 @@ impl CoolStreak {
             }
         }
         false
+    }
+}
+
+/// Stat words of one relay server-info earn packet (VERIFIED #82,
+/// dossier `rea-score-handlers`): the exe's relay handler
+/// (`CRelayServerInfoMsg` vtable slot 6, VA `0x58de60`, file
+/// `0x18de60`) dispatches on the message subtype (getter `0x5a05d0`
+/// − 1, seven cases, jump table file `0x18e09c`); subtype 5 reaches
+/// VA `0x58e2d0` (file `0x18e2d0`), which deserializes the message
+/// into a 0x44-byte stat block (fields `+0x1e..+0x40` via
+/// `0x4ea3e0`) and — gated on the shop state (getter `0x478a00`
+/// == `0xA`), a member other than self (byte `0x77cd04`), and a
+/// live manager (`[0x762b44+0xf6c]`) — copies every field into
+/// BOTH the wallet stat object `0x78fb10` and the live game stat
+/// block (`[X+0x6d8]+0x1820`) through one setter family: pill
+/// stock setter `0x540870` (sub `+0x216c` = game `+0x398c`),
+/// streak `0x540890` (`+0x2170` = `+0x3990`), jam level `0x540790`
+/// (`+0x214e` = `+0x396e`), life `0x5407b0` (`+0x2150` = `+0x3970`),
+/// score `0x540810` (`+0x2160` = `+0x3980`). One packet therefore
+/// feeds the shop wallet readout and the in-game words with the
+/// same values; the setters write raw (no cap — capping is the
+/// in-play grant path's job, [`CoolStreak`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EarnStats {
+    /// Combo-saving pill stock after the earn.
+    pub pills: u32,
+    /// Consecutive-Cool streak word carried with the packet.
+    pub streak: u32,
+    /// Jam level `X` after the earn.
+    pub jam_level: u16,
+    /// Life gauge word after the earn.
+    pub life: u16,
+    /// Played score after the earn.
+    pub score: u32,
+}
+
+/// One earn-apply target. In-exe the wallet stat object (`0x78fb10`)
+/// and the live game stat block are two instances of the same
+/// member-stat class receiving the same setter writes, so the shell
+/// models them as one type used twice ([`EarnStats::apply`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EarnTarget {
+    pills: PillStock,
+    streak: u32,
+    jam_level: u16,
+    life: u16,
+    score: u32,
+}
+
+impl EarnTarget {
+    /// Write every earn word raw, mirroring the exe's setters
+    /// (`0x540870`/`0x540890`/`0x540790`/`0x5407b0`/`0x540810`):
+    /// no clamping, no policy — the packet is the source.
+    pub fn set_from(&mut self, stats: EarnStats) {
+        self.pills = PillStock::new(stats.pills);
+        self.streak = stats.streak;
+        self.jam_level = stats.jam_level;
+        self.life = stats.life;
+        self.score = stats.score;
+    }
+
+    /// Combo-saving pill stock held by this target.
+    #[must_use]
+    pub fn pills(&self) -> u32 {
+        self.pills.count()
+    }
+
+    /// Consecutive-Cool streak word held by this target.
+    #[must_use]
+    pub fn streak(&self) -> u32 {
+        self.streak
+    }
+
+    /// Jam level `X` held by this target.
+    #[must_use]
+    pub fn jam_level(&self) -> u16 {
+        self.jam_level
+    }
+
+    /// Life gauge word held by this target.
+    #[must_use]
+    pub fn life(&self) -> u16 {
+        self.life
+    }
+
+    /// Played score held by this target.
+    #[must_use]
+    pub fn score(&self) -> u32 {
+        self.score
+    }
+}
+
+impl EarnStats {
+    /// Apply one earn packet to the wallet AND the live game stat
+    /// block in one pass — the exe's dual-target write (VA `0x58e2d0`,
+    /// mode word `0x77ee84` arm 1): both targets receive the same
+    /// words through the same setter family.
+    pub fn apply(&self, wallet: &mut EarnTarget, game: &mut EarnTarget) {
+        wallet.set_from(*self);
+        game.set_from(*self);
     }
 }
 
@@ -1906,6 +2008,61 @@ mod tests {
         }
         assert!(streak.note(Judgement::Cool, &mut pills));
         assert_eq!(pills.count(), 2);
+    }
+
+    #[test]
+    fn shop_earn_packet_feeds_wallet_and_game_with_the_same_pinned_words() {
+        // The shop-side relay apply (CRelayServerInfoMsg subtype 5 ->
+        // VA 0x58e2d0, dossier rea-score-handlers) writes one packet
+        // into BOTH the wallet object 0x78fb10 and the game stat
+        // block ([X+0x6d8]+0x1820) through the same setters: pill
+        // stock 0x540870 (+0x216c = +0x398c), streak 0x540890
+        // (+0x2170 = +0x3990), jam 0x540790 (+0x214e = +0x396e),
+        // life 0x5407b0 (+0x2150 = +0x3970), score 0x540810
+        // (+0x2160 = +0x3980).
+        let packet = EarnStats {
+            pills: 2,
+            streak: 3,
+            jam_level: 7,
+            life: 0x7f7f,
+            score: 123_456,
+        };
+        let mut wallet = EarnTarget::default();
+        let mut game = EarnTarget::default();
+        packet.apply(&mut wallet, &mut game);
+        for target in [&wallet, &game] {
+            assert_eq!(target.pills(), 2);
+            assert_eq!(target.streak(), 3);
+            assert_eq!(target.jam_level(), 7);
+            assert_eq!(target.life(), 0x7f7f);
+            assert_eq!(target.score(), 123_456);
+        }
+    }
+
+    #[test]
+    fn pinned_earn_flow_reaches_the_wallet_through_one_packet() {
+        // Replay the pinned earn flow end to end: 15 consecutive
+        // Cools mint one pill in-play (B5, VERIFIED), and the shop
+        // side carries the minted stock to the wallet through the
+        // same dual-target packet the exe applies in the shop state.
+        let mut pills = PillStock::new(0);
+        let mut streak = CoolStreak::default();
+        for _ in 0..15 {
+            streak.note(Judgement::Cool, &mut pills);
+        }
+        assert_eq!(pills.count(), 1);
+        let packet = EarnStats {
+            pills: pills.count(),
+            streak: 0,
+            jam_level: 7,
+            life: 0x7f7f,
+            score: 200,
+        };
+        let mut wallet = EarnTarget::default();
+        let mut game = EarnTarget::default();
+        packet.apply(&mut wallet, &mut game);
+        assert_eq!(wallet.pills(), 1, "the wallet shows the minted pill");
+        assert_eq!(game.pills(), 1, "the game block carries the same stock");
     }
 
     #[test]

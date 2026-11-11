@@ -419,6 +419,7 @@ pub(crate) fn stage_real_art(game: &mut ScreenGame) {
     }
     if let Some(playing) = &installed.playing {
         stage_playing_archive(game, playing);
+        crate::live_art::stage_result_life_font(game, playing);
     }
 }
 

@@ -3211,6 +3211,22 @@ impl ScreenGame {
         self
     }
 
+    /// Merge extra figures into one screen's staged art — a sprite
+    /// the exe mounts from another archive, like `PointNum.ojs` on
+    /// the Result scene (`this+0x10d10`, Playing archive;
+    /// `docs/cresult-anchors.md`). Inserts into the staged map and
+    /// stages empty art when the screen holds none; placements stay
+    /// untouched. Figures whose names already stage are overwritten.
+    pub fn merge_scene_figures(
+        &mut self,
+        screen: Screen,
+        figures: HashMap<String, AvatarFigure>,
+    ) -> &mut Self {
+        let art = self.scene_art[scene_index(screen)].get_or_insert_with(SceneArt::default);
+        art.figures.extend(figures);
+        self
+    }
+
     /// Staged art for one screen, if any.
     fn scene_art(&self, screen: Screen) -> Option<&SceneArt> {
         self.scene_art[scene_index(screen)].as_ref()
@@ -4985,6 +5001,14 @@ impl ScreenGame {
                     verdict: self.result_verdict(),
                     grade: self.grade(),
                     album,
+                    // The exe life readout sums globals 0x77ee58 +
+                    // 0x77ee60 and the bottom counter reads u16
+                    // 0x76fc66; both writers are register-held, so no
+                    // live value maps yet (docs/cresult-anchors.md
+                    // OPEN 3) — neither field paints until one is
+                    // pinned, and none is invented.
+                    life_readout: None,
+                    bottom_counter: None,
                 },
             ),
             None => paint_result(
