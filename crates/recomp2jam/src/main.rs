@@ -534,6 +534,9 @@ fn run_online(opts: OnlineCli) -> Result<()> {
         tracing::info!(rooms = report.rooms.len(), "rooms listed");
         game.set_rooms(report.rooms);
     }
+    if let Some(hero) = &report.character {
+        stage_online_identity(&mut game, hero);
+    }
     let pending_room = opts
         .join_room
         .map(|number| (number, opts.room_password.clone()));
@@ -657,10 +660,14 @@ struct OnlineParams {
 
 impl OnlineParams {
     /// Assemble list-only login options (infallible: every field has a
-    /// CLI default or an empty fallback). The room join stays out:
-    /// startup only lists, and the session exchanges the pending
-    /// join on Room Confirm (see [`OnlineParams::pending_room_join`]).
+    /// CLI default or an empty fallback). Character info rides the
+    /// channel login (the server rejects 2001 outside a channel), so
+    /// the fetch arms exactly when a channel is selected. The room
+    /// join stays out: startup only lists, and the session exchanges
+    /// the pending join on Room Confirm (see
+    /// [`OnlineParams::pending_room_join`]).
     fn into_connect_options(self) -> connect::ConnectOptions {
+        let channel = self.online_gateway_id.zip(self.online_channel_id);
         connect::ConnectOptions {
             host: self.host.unwrap_or_default(),
             port: self.port,
@@ -669,11 +676,8 @@ impl OnlineParams {
             gender: o2jam_net::Gender::Any,
             relay_key1: 0,
             relay_key2: 0,
-            channel: self.online_gateway_id.zip(self.online_channel_id),
-            // Character info needs channel membership (server-verified),
-            // so the live boot fetches it exactly when it logs into a
-            // channel (ticket #58).
-            character: self.online_gateway_id.zip(self.online_channel_id).is_some(),
+            channel,
+            character: channel.is_some(),
             wallet: false,
             avatar_opa: None,
             join_room: None,
@@ -1191,6 +1195,9 @@ fn setup_online(
         tracing::info!(rooms = report.rooms.len(), "rooms listed");
         game.set_rooms(report.rooms);
     }
+    if let Some(hero) = &report.character {
+        stage_online_identity(game, hero);
+    }
     Ok(Some((gateway, pending_room, pending_song)))
 }
 
@@ -1236,6 +1243,51 @@ fn stage_session_catalog(session: &mut session::OnlineSession) {
             tracing::debug!(%source, "song catalog unparsable; dialog stages row-less");
         }
     }
+}
+
+/// Installed `avatar.opa` image the online identity figure stacks
+/// from (read-only, like the other archives).
+const INSTALLED_AVATAR_OPA: &str = "O2Jam/Image/avatar.opa";
+
+/// Stage the fetched character identity (`GetCharacterInfo` 2001) into
+/// a windowed game (ticket #30): the room user panel readouts ride the
+/// record itself, the worn figure stacks from the installed
+/// `avatar.opa` with the hero's own equipment and gender (the same
+/// stack the shots walk stages), and the archive becomes the
+/// waiting-seat source so the self seat and every later peer join
+/// restage through it. Infallible by contract: a missing or
+/// unstackable archive keeps the figure slots empty, never failing
+/// the login walk.
+fn stage_online_identity(game: &mut o2jam_shell::ScreenGame, hero: &o2jam_net::CharacterInfo) {
+    game.set_myroom_character(hero.clone());
+    let Ok((archive, table)) = connect::read_avatar_source(
+        install_root()
+            .join(INSTALLED_AVATAR_OPA)
+            .to_string_lossy()
+            .as_ref(),
+    ) else {
+        tracing::debug!(
+            "avatar.opa missing or unparsable; identity readouts stage, figures stay empty"
+        );
+        return;
+    };
+    match connect::stack_worn_figure(
+        &archive,
+        &hero.equipment,
+        hero.gender == o2jam_net::Gender::Male,
+    ) {
+        Ok(figure) if !figure.is_empty() => {
+            // The Room lobby slot and the Result banner show the same
+            // worn stack.
+            game.load_room_avatar(figure.clone());
+            game.load_avatar(figure);
+        }
+        Ok(_) => tracing::debug!("character equipment stacks empty; figure slots stay empty"),
+        Err(source) => {
+            tracing::debug!(%source, "worn figure unstackable; figure slots stay empty");
+        }
+    }
+    game.set_avatar_source(archive, table);
 }
 
 /// Stack the worn avatar figure into a windowed game, if requested.
@@ -2172,6 +2224,114 @@ mod cli_build_tests {
             "mirror: no queue forward (0 ranks)\n",
         );
         assert_eq!(format_connect_report(&report), expected);
+    }
+
+    #[test]
+    fn online_params_fetch_character_info_only_with_a_channel() {
+        // Ticket #30: the GetCharacterInfo fetch rides the channel
+        // login (the server rejects 2001 outside a channel), so the
+        // option arms exactly when a channel is selected and the
+        // list-only walk stays fetch-free.
+        let with_channel = OnlineParams {
+            online_gateway_id: Some(1),
+            online_channel_id: Some(2),
+            ..OnlineParams::default()
+        }
+        .into_connect_options();
+        assert!(with_channel.character);
+        assert!(!OnlineParams::default().into_connect_options().character);
+    }
+
+    /// Room lobby walked to its screen with only the avatar slot
+    /// staged: the paint join asserts on the slot pixels alone.
+    fn room_with_avatar_slot() -> o2jam_shell::ScreenGame {
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_shell::GameLoop;
+        let mut game = o2jam_shell::ScreenGame::new();
+        game.set_channels(vec![o2jam_net::ChannelState {
+            gateway_id: 0,
+            channel_id: 2,
+            capacity: 100,
+            population: 5,
+            active: true,
+        }]);
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        game.menu_key(o2jam_shell::MenuKey::Confirm, true);
+        assert_eq!(game.screen(), o2jam_shell::Screen::Room);
+        game.load_scene(
+            o2jam_shell::Screen::Room,
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_IMAGE_SROOM_AVATA".to_owned(),
+                code: 0x1370_0013,
+                sprite: None,
+                rect: o2jam_render::Rect {
+                    x: 0,
+                    y: 0,
+                    w: 123,
+                    h: 150,
+                },
+            }],
+            std::collections::HashMap::new(),
+        );
+        game
+    }
+
+    /// Painted Room-scene pixels: 800x600, the native canvas.
+    fn paint_room(game: &mut o2jam_shell::ScreenGame) -> Vec<u32> {
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut o2jam_render::Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        buf
+    }
+
+    /// Count the painted pixels inside the avatar slot rect
+    /// (0,0,123,150): a 2D region, not a flat buffer prefix.
+    fn slot_ink(buf: &[u32]) -> usize {
+        (0..150)
+            .flat_map(|y| (0..123).map(move |x| buf[y * 800 + x]))
+            .filter(|pixel| *pixel != 0)
+            .count()
+    }
+
+    #[test]
+    fn staged_online_identity_paints_the_room_avatar_slot() {
+        // Install-guarded (ticket #30): staging the fetched identity
+        // (the 2001 record plus the figure stacked from the installed
+        // avatar.opa with the hero's equipment) makes the Room scene
+        // paint the avatar slot; without the staging the same slot
+        // stays empty. Skips when install-root is absent.
+        if !install_root().join(INSTALLED_AVATAR_OPA).exists() {
+            println!("skip: missing install-root {INSTALLED_AVATAR_OPA}");
+            return;
+        }
+        let mut hero = o2jam_net::CharacterInfo {
+            nickname: "tester".to_owned(),
+            level: 2,
+            experience: 2133,
+            ..o2jam_net::CharacterInfo::default()
+        };
+        hero.equipment[..5].copy_from_slice(&[16, 30, 376, 383, 389]);
+        let unstaged = paint_room(&mut room_with_avatar_slot());
+        assert_eq!(
+            slot_ink(&unstaged),
+            0,
+            "without the identity the avatar slot stays empty"
+        );
+        let mut staged = room_with_avatar_slot();
+        stage_online_identity(&mut staged, &hero);
+        let staged = paint_room(&mut staged);
+        assert!(
+            slot_ink(&staged) > 0,
+            "the staged identity paints the avatar slot"
+        );
     }
 }
 
