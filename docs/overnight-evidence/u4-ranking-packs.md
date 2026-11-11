@@ -77,8 +77,37 @@ Row split (`u16` music id + four rank bytes) is Memoryer shape —
 (`Difficulty : byte` EX/NX/HX/RX, `Mozart.Metadata.Rank : byte`
 None/F/E/D/C/B/A/S/Perfect) and an `Empty`-prefix collection (no
 length word, inline values in `Enum.GetValues<Difficulty>()` order) —
-against an exe-verified 6-byte width. The paint-path read that would
-pin the per-byte difficulty order stays OPEN.
+against an exe-verified 6-byte width.
+
+### 2031 per-byte difficulty order — PINNED (claim D22, 2026-11 static sweep)
+
+Static sweep (GNU objdump 2.47 slices + Python byte scans + one Ghidra
+decompile of the host procedure, `ev_9fb4178a…`) over the read-only
+7.55 copy pins the paint-path read. The result/select procedure
+`FUN_0043e9b0` scans the best-table vector at `0x779814` row by row:
+iterator step `add $0x6` (file `0x40d5b`–`0x40d64`), row `u16` at
+byte 0 compared against the select entry's music id (load/compare
+files `0x40d78`–`0x40da2`), matched-row iterator kept in a local. It
+then reads `row[2 + d]` where `d` is the selected entry's difficulty
+word at `entry+0x210`: `movzwl 0x210(edx,eax,1)` (catalog record
+stride `0x238`) into the index, `mov 0x2(ecx,eax,1),%dl`,
+`mov %dl,0x7797c4` (files `0x40f37`–`0x40f4f`); a byte-identical
+second site at files `0x413e1`–`0x413f5`. `entry+0x210` is the chosen
+difficulty — 0 = Easy, 1 = Normal, 2 = Hard — stored by the
+select-entry builder (VA `0x4441f0`, store file `0x4425d`, ev
+`b5c3094a…`; see `docs/file-formats/ojn.md`).
+
+Per-byte order of the 2031 body, exe-pinned: bytes 0–1 = `u16` music
+id (the scan key, not difficulty-indexed); byte 2 = Easy best rank;
+byte 3 = Normal; byte 4 = Hard. Byte 5 (the fourth rank slot of the
+exe-pinned 6-byte row) rides the wire but has no reader on this path.
+The cached rank byte lands in global `0x7797c4` and drives the
+`Result_Imgs_Rank` frame chooser (reads at files `0xce79`/`0xceb2`/`0xcef3`/`0xcf34`
+with compares against 1/6/8 — the `Rank` byte values, matching
+None/F/…/S/Perfect). Memoryer's `Enum.GetValues<Difficulty>()` order
+EX/NX/HX/RX agrees for slots 0–2; the RX byte stays
+Memoryer-only. The write side uses the same split: the best-rank
+updater writes `row[2 + index]` (files `0xc5027`–`0xc5069`).
 
 ## 2033 `MusicMaxScoreAnswer` (S→C) — PINNED
 
@@ -130,18 +159,59 @@ pin-opcode-only (`push 0; push 0x7f0` at file `0x4151c`, indirect
 `+0x64` slot call at file `0x41532`).
 
 Memoryer `Messages/Requests/Ranking/MusicMaxScoreRequest.cs` decodes
-`ushort MusicId` + `ushort NoteCount` — matching the two staged
-words — so the request encodes them, but the transfer of those words
-onto the wire through the `+0x64` slot is unobserved and stays OPEN.
+`ushort MusicId` + `ushort NoteCount`. The sweep below corrects the
+staged-word identity and narrows the OPEN.
+
+### 2032 +0x64-slot sweep — narrowed OPEN (claim D23, 2026-11)
+
+Static sweep (objdump 2.47 + Python scans + Ghidra decompile of
+`FUN_0043e9b0`, `ev_9fb4178a…`).
+
+Send shape: the request goes out as a virtual call on vtable slot
+`+0x64` with arguments `(this, 0x7f0, 0)` — `push 0; push 0x7f0;
+mov edx,[eax]; mov edx,[edx+0x64]; call edx` (files `0x4151a`–
+`0x41532`, inside `FUN_0043e9b0`'s song-pick branch). All seven
+image-wide call sites of this slot pass `0` as the third argument
+(VAs `0x45e552`, `0x461ef2`, `0x46e53e` (code `0x15`), `0x46f6be`
+(`0x1a`), `0x46f722` (`0x29`), `0x4717c8` (`0x30`), `0x474529`
+(`0x3e8` Authorize)) — no call site ever hands a payload pointer to
+the slot.
+
+Staged state, corrected: right before the send the procedure zeroes a
+`0x20`-byte area at `0x7797c0` (memset preface at file `0x40b73`) and
+fills `music id u16` at `+0` (store file `0x41472`, from select-entry
+record `+0`), `difficulty u16` at `+2` (store file `0x414f0`, from
+select-entry record `+0x210` — the chosen difficulty 0/1/2, *not* a
+note count; supersedes this log's earlier "note-count word" label),
+and the cached best rank `u8` at `+4` (stores files `0x40f4b`/
+`0x413f5`, from the `0x779814` best-table lookup). Every observed
+reader of the area is dialog UI (e.g. files `0x45c74f` scanning the
+`0x1b4` song vector by the staged id, `0x4513f0`); no packet-writer
+reference to `0x7797c0`–`0x7797e0` exists image-wide. This matches the
+pinned empty-body 2027/2030 requests, which share the `push 0; push
+opcode; indirect slot call` send shape.
+
+Verdict: strong static evidence that the 2032 request rides the wire
+opcode-only and the staged words are dialog state, not wire fields.
+Memoryer's `ushort MusicId + ushort NoteCount` body stays
+corroborated-not-verified, and its `NoteCount` naming contradicts the
+exe staging (the staged word is the difficulty). Still OPEN
+(narrowed): the slot `+0x64` function body — the vtable target is not
+statically recovered, so the slot could still copy staged state
+internally. Next step per the ticket: proxy rewrite of the 2032 send
+(recipe `~/scratch/digits-rig/proxy.py`), or a winedbg stopped-state
+read of the dialog object's vtable slot `+0x64` naming the target.
 
 ## OPEN list (named next steps)
 
 1. 2031 row per-byte difficulty order: find the result-screen lookup
    over the `0x779814` vector (row scan by music id + index by
    difficulty) and pin the index math.
-2. 2032 wire staging: trace the `+0x64` send-slot helper's body
-   mechanism (reference: Authorize site file `0x74529`) to confirm or
-   deny the two staged words ride the frame.
+2. 2032 wire staging: the `+0x64` slot takes `(this, opcode, 0)` at
+   all seven call sites and no payload pointer; staged words are
+   dialog state (music id / difficulty / best rank at `0x7797c0`).
+   Remaining: the slot function body — proxy rewrite or stopped-state
+   vtable read (claim D23, narrowed).
 3. Gate globals `0x77ee86`, `0x77cd30`, `0x779964` labels.
 4. No live-server capture of 2027→2028 / 2030→2031 / 2032→2033 against
    Memoryer (server interop unproven; the 2029 note's live-capture
