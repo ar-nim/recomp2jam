@@ -1587,7 +1587,7 @@ fn paint_placed_figure(
 /// True for a behind-highway placement: its sprite names the venue
 /// or a note background, quoted or resolved (see
 /// [`is_playing_behind_sprite`)).
-fn placement_is_behind(placement: &ScenePlacement) -> bool {
+pub(crate) fn placement_is_behind(placement: &ScenePlacement) -> bool {
     placement
         .sprite
         .as_deref()

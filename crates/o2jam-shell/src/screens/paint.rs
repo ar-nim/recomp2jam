@@ -28,8 +28,8 @@ use std::collections::HashMap;
 
 use super::super::avatar::{
     anchor_in_frame, clone_instance_live, paint_behind_placements, paint_foreground_placements,
-    paint_placement_layer, paint_scene_figures, paint_scene_figures_live, scene_block,
-    scene_sprite_names, shared_sprite_names, AvatarFigure, FigureLayer, PlacementRole,
+    paint_placement_layer, paint_scene_figures, paint_scene_figures_live, placement_is_behind,
+    scene_block, scene_sprite_names, shared_sprite_names, AvatarFigure, FigureLayer, PlacementRole,
     ScenePlacement, AVI_BLOCK, CHANNEL_BLOCK, LANKING_BLOCK, LOADING_BLOCK, LOADING_COVER_SPRITE,
     LOADING_SPRITE, MUSICSHOP_BLOCK, MYROOM_BLOCK, PLANET_BLOCK, RESULT_BLOCK, ROOM_BLOCK,
     SHOP_BLOCK, WAITING_BLOCK, WAIT_COVER_SPRITE, WAIT_TEAM_SPRITES,
@@ -5626,6 +5626,21 @@ pub fn paint_playing_backdrop(frame: &mut Frame<'_>, art: &SceneArt) {
     paint_behind_placements(frame, &art.placements, &art.figures, &[]);
 }
 
+/// Whether the staged Playing scene holds a behind-highway backdrop
+/// placement (the venue/note-background set): the game loop then
+/// paints over the staged backdrop and its flat placeholder fill
+/// stays out (A44; the fill is ADR-0003's no-archive fallback).
+pub fn playing_backdrop_staged(art: &SceneArt) -> bool {
+    art.placements.iter().any(placement_is_behind)
+}
+
+/// Paint the foreground placements only (the non-behind scene set:
+/// overlay panels, bound gauges, buttons) — the game loop's final
+/// staged pass, after the highway painted over the backdrop.
+pub fn paint_playing_foreground(frame: &mut Frame<'_>, art: &SceneArt) {
+    paint_foreground_placements(frame, &art.placements, &art.figures);
+}
+
 /// Paint staged gameplay art around the highway: the behind-highway
 /// scene first (`Playing_BG<stage>.ojs` plus the `Note_BG` siblings —
 /// see `avatar::PLAYING_BEHIND_SPRITES`; `Note_BG.ojs` rides its
@@ -5639,6 +5654,12 @@ pub fn paint_playing_backdrop(frame: &mut Frame<'_>, art: &SceneArt) {
 /// uncovered and notes keep their top slot. Procedural peer gauges sit
 /// above this overlay: `LivePlay::paint_avatar_scene` paints them after,
 /// in file order over the venue art they cover.
+///
+/// The game loop does not call this combined pass: `paint_playing`
+/// threads the staged set through the loop's own blits —
+/// [`paint_playing_backdrop`] first (the exe paints the backdrop
+/// first of all), the highway over it, then [`paint_playing_foreground`]
+/// (A44). This combined form stays for the direct painter tests.
 pub fn paint_playing_overlay(frame: &mut Frame<'_>, art: &SceneArt) {
     let exclusions = playing_lane_exclusions(frame.w, frame.h);
     paint_behind_placements(frame, &art.placements, &art.figures, &exclusions);
