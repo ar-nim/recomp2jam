@@ -5227,6 +5227,13 @@ pub struct ResultRankRow {
     pub bonus: Option<u64>,
     /// Room speed code at x=685 (every named row shares it).
     pub speed: Option<u8>,
+    /// Member record `+0x31` — the first 4043 `MemberInfo` seat byte:
+    /// a 1-based index into the eight constant portrait slots
+    /// (`FUN_004c3b40`), doubling as the `FUN_004c49a0` battle-team
+    /// bucket (`0` skips the row). `None` where no member record
+    /// feeds the row (the local record's `+0x31` writer stays
+    /// unpinned — OPEN).
+    pub seat_byte: Option<u8>,
 }
 
 /// Nickname as shown: first 100 display chars (the exe truncates
@@ -5511,81 +5518,149 @@ fn paint_result_backdrop(frame: &mut Frame<'_>, art: &SceneArt) {
     paint_scene_figures(frame, &stacked, &art.figures);
 }
 
-/// Paint the avatar figure, the pinned result numbers, and the rank
-/// rows (shared by the flat fallback and the staged scene; the
-/// numbers and rows are GDI text the exe paints regardless of art).
-/// The album cover paints first into the music-name box so the text
-/// layers over it, exactly on the green panel of the reference photo.
+/// Paint the pinned result numbers, the rank rows, and the per-row
+/// portrait chips (shared by the flat fallback and the staged scene;
+/// the numbers and rows are GDI text the exe paints regardless of
+/// art). The album cover paints first into the music-name box so the
+/// text layers over it, exactly on the green panel of the reference
+/// photo; the portrait chips resolve before the rows draw, the exe
+/// attach order.
 fn paint_result_content(
     frame: &mut Frame<'_>,
-    avatar: Option<&AvatarFigure>,
     score: &o2jam_game::Score,
     rows: &[ResultRankRow],
     album: Option<&Rgb555Image>,
+    portrait_slots: Option<&[ResultPortraitSlot; 8]>,
 ) {
     paint_result_album(frame, album);
-    paint_result_avatar(frame, avatar);
     paint_result_numbers(frame, score);
     paint_result_rank_rows(frame, rows);
+    paint_result_portrait_chips(frame, rows, portrait_slots);
 }
 
-/// Local-row avatar slot (row painter `FUN_004c3b40`, file `0xc3b40`:
-/// member avatars sit at x=78, y=316+22·row under a 652×22 clip,
-/// `docs/cresult-anchors.md` `ev_88c3ca31…`). The shell stages one
-/// avatar — the local player's — so it paints the row-0 slot; peer
-/// rows keep no avatar source (the member-table avatar-id byte rides
-/// server-side, relay-adjacent: OPEN).
-const RESULT_AVATAR_X: i32 = 78;
-/// Top of the local row-0 avatar slot.
-const RESULT_AVATAR_ROW_TOP: i32 = 316;
-/// Clip over the local-row avatar slot, from the slot origin.
-const RESULT_AVATAR_CLIP: Rect = Rect {
-    x: RESULT_AVATAR_X,
-    y: RESULT_AVATAR_ROW_TOP,
-    w: 652,
-    h: 22,
-};
+/// Mode `0xf` portrait-slot table (`FUN_004c2390`, files
+/// `0xc245d`–`0xc24b8`): the eight constants the builder pushes
+/// through `0x421610(obj, entry, 22)` into `obj+0x15c` of each slot
+/// (`docs/cresult-anchors.md`, "Peer-row portraits",
+/// `ev_ccdb4679…`).
+pub const RESULT_PORTRAIT_TABLE_MODE_F: [u16; 8] = [
+    0x7c02, 0x7ee2, 0x7be0, 0x4f2a, 0x37bc, 0x001c, 0x4d5a, 0x5923,
+];
+/// Mode `0x10` portrait-slot table (files `0xc24bf`–`0xc251a`).
+pub const RESULT_PORTRAIT_TABLE_MODE_10: [u16; 8] = [
+    0xf802, 0xfde2, 0xf7e0, 0x9e6a, 0x6f5c, 0x001c, 0x9a9a, 0xb263,
+];
+/// Display-mode words selecting a table (field `+0x24` of the
+/// display-mode object `0x415cc0([0x76816c+0x80])`, getter file
+/// `0x15d2a`).
+pub const RESULT_DISPLAY_MODE_TABLE_F: u32 = 0xf;
+pub const RESULT_DISPLAY_MODE_TABLE_10: u32 = 0x10;
+/// `obj+0x15e` of every slot: `trunc(22/100·256)` (f64 constants
+/// 100.0 at `0x644548`, 256.0 at `0x644540`).
+const RESULT_PORTRAIT_NUMERATOR: u8 = 56;
+/// `obj+0x160` of every slot: `22/100` as f64.
+const RESULT_PORTRAIT_RATIO: f64 = 0.22;
 
-/// Paint the local player's avatar in its exe row slot: the staged
-/// layers author `avatar.opa` canvas anchors, so the slot hangs the
-/// figure's visible box ([`AvatarFigure::visible_origin`]) with its
-/// drawn top-left at the slot — the same adaptation as the Playing
-/// extent-centered seats, without inventing a per-figure offset.
-/// The native anchor scales into the frame like every staged body,
-/// the figure blits 1:1 under the scaled row-band clip. `None`
-/// paints nothing — peer rows stay untouched (no member avatar
-/// source staged).
-fn paint_result_avatar(frame: &mut Frame<'_>, avatar: Option<&AvatarFigure>) {
-    let Some(figure) = avatar else {
+/// One constant portrait slot object of the eight at result
+/// `this+0x5c`: an image-less sprite subclass (vtable `0x6444d8`,
+/// ctor `0x420b00`) built through the `0x40d100` null-name
+/// early-exit path — no archive body is ever loaded. Each slot is
+/// parameterized only by its mode-table u16; the two derived fields
+/// are identical across the table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResultPortraitSlot {
+    /// Mode-table constant at `obj+0x15c`, consumed as a paint
+    /// argument by the subclass draw path (`mov 0x15c(%ecx),%dx`,
+    /// file `0x2260f`, onward to `0x421cf0`).
+    pub word: u16,
+}
+
+impl ResultPortraitSlot {
+    /// `obj+0x15e` of every slot: `trunc(22/100·256)` — the
+    /// builder's second argument through `0x421610`.
+    pub const NUMERATOR: u8 = RESULT_PORTRAIT_NUMERATOR;
+    /// `obj+0x160` of every slot: `22/100` as f64.
+    pub const RATIO: f64 = RESULT_PORTRAIT_RATIO;
+}
+
+/// Build the eight constant portrait slots for a display-mode word.
+/// Mode `0xf`/`0x10` write their tables; any other mode writes
+/// neither (the exe table keeps its prior contents) — the shell
+/// stages no prior table, so `None` resolves no chips.
+#[must_use]
+pub fn result_portrait_slots(display_mode_word: u32) -> Option<[ResultPortraitSlot; 8]> {
+    let table = match display_mode_word {
+        RESULT_DISPLAY_MODE_TABLE_F => RESULT_PORTRAIT_TABLE_MODE_F,
+        RESULT_DISPLAY_MODE_TABLE_10 => RESULT_PORTRAIT_TABLE_MODE_10,
+        _ => return None,
+    };
+    Some(table.map(|word| ResultPortraitSlot { word }))
+}
+
+/// Resolve a member seat byte (member record `+0x31`, the first 4043
+/// `MemberInfo` seat byte) to its constant slot: the row painter
+/// `FUN_004c3b40` uses the byte as a 1-based, unguarded index into
+/// the eight `this+0x5c` objects (byte 1 → element 0, byte 8 →
+/// element 7; files `0xc3be2`–`0xc3bfe`). Byte 0 is the
+/// `FUN_004c49a0` battle-team skip (file `0xc4a87`), and the exe
+/// reads out of bounds for byte 0 and bytes 9+ — the shell resolves
+/// neither instead of inventing the out-of-range object.
+#[must_use]
+fn portrait_slot_for_seat_byte(
+    seat_byte: u8,
+    slots: &[ResultPortraitSlot; 8],
+) -> Option<ResultPortraitSlot> {
+    let index = usize::from(seat_byte).checked_sub(1)?;
+    slots.get(index).copied()
+}
+
+/// Paint the per-row portrait chips (row painter `FUN_004c3b40`):
+/// each row's seat byte resolves to its constant slot before the row
+/// draws, exactly the exe attach order. The slot art source stays
+/// OPEN — the eight objects are image-less and what the subclass
+/// draw path renders from `+0x15c` is unsettled (next step per
+/// `docs/cresult-anchors.md`: read the `0x6444d8` vtable draw path
+/// or capture a populated battle row) — so the resolution runs and
+/// nothing visible paints yet; no chip pixels are invented.
+fn paint_result_portrait_chips(
+    frame: &mut Frame<'_>,
+    rows: &[ResultRankRow],
+    slots: Option<&[ResultPortraitSlot; 8]>,
+) {
+    let Some(slots) = slots else {
         return;
     };
-    let (ox, oy) = figure.visible_origin();
-    let (x, y) = anchor_in_frame(
-        RESULT_AVATAR_X.saturating_sub(ox),
-        RESULT_AVATAR_ROW_TOP.saturating_sub(oy),
-        frame.w,
-        frame.h,
-    );
-    let clip = scale_rect_to_frame(&RESULT_AVATAR_CLIP, frame.w, frame.h);
-    figure.paint_clipped(frame, x, y, &clip);
+    for row in rows.iter().take(RESULT_RANK_ROWS_MAX) {
+        let Some(_chip) = row
+            .seat_byte
+            .and_then(|byte| portrait_slot_for_seat_byte(byte, slots))
+        else {
+            continue;
+        };
+        // OPEN: `_chip.word` (`obj+0x15c`) is the paint argument of
+        // the slot's draw path; its visual meaning (colour chip,
+        // gauge, nothing) lands with the pinned art source.
+    }
+    let _ = frame;
 }
 
-/// Paint the flat results fallback: card, album cover, avatar figure,
-/// the pinned result numbers, and the rank rows. The retired text
-/// verdict stays gone — the banner is a sprite frame of the staged art.
+/// Paint the flat results fallback: card, album cover, the pinned
+/// result numbers, the rank rows, and the portrait-chip resolution.
+/// The retired text verdict stays gone — the banner is a sprite frame
+/// of the staged art.
 pub(crate) fn paint_result(
     frame: &mut Frame<'_>,
-    avatar: Option<&AvatarFigure>,
     score: &o2jam_game::Score,
     rows: &[ResultRankRow],
     album: Option<&Rgb555Image>,
+    portrait_slots: Option<&[ResultPortraitSlot; 8]>,
 ) {
     paint_card(
         frame,
         pack_xrgb(0x10, 0x10, 0x08),
         pack_xrgb(0xC0, 0xA0, 0x20),
     );
-    paint_result_content(frame, avatar, score, rows, album);
+    paint_result_content(frame, score, rows, album, portrait_slots);
 }
 
 /// One staged result paint: everything the scene layers over the
@@ -5594,8 +5669,10 @@ pub(crate) fn paint_result(
 /// box).
 #[derive(Debug, Clone, Copy)]
 pub struct ResultPaint<'a> {
-    /// Avatar figure (local row-0 slot; `None` paints without one).
-    pub avatar: Option<&'a AvatarFigure>,
+    /// Constant portrait slots for the current display mode
+    /// (`result_portrait_slots`; `None` where no display-mode word
+    /// is pinned — the exe writes no table for other modes).
+    pub portrait_slots: Option<[ResultPortraitSlot; 8]>,
     /// Live score behind the pinned GDI numbers.
     pub score: &'a o2jam_game::Score,
     /// Rank-table rows from live data.
@@ -5661,7 +5738,13 @@ pub fn paint_result_scene(frame: &mut Frame<'_>, paint: &ResultPaint<'_>) {
         RESULT_BOTTOM_LAST_X,
         RESULT_BOTTOM_Y,
     );
-    paint_result_content(frame, paint.avatar, paint.score, paint.rows, paint.album);
+    paint_result_content(
+        frame,
+        paint.score,
+        paint.rows,
+        paint.album,
+        paint.portrait_slots.as_ref(),
+    );
 }
 
 /// [`paint_result_digit_field`] gated on a staged value: the exe
@@ -5837,7 +5920,7 @@ pub fn paint_screen(frame: &mut Frame<'_>, screen: Screen) {
         Screen::Playing => {
             PlayingView::default().paint(frame, &HighwayGeometry::centered(frame.w, frame.h));
         }
-        Screen::Result => paint_result(frame, None, &o2jam_game::Score::default(), &[], None),
+        Screen::Result => paint_result(frame, &o2jam_game::Score::default(), &[], None, None),
     }
 }
 
@@ -5916,7 +5999,7 @@ mod paint_tests {
             Screen::Result => paint_result_scene(
                 &mut frame,
                 &ResultPaint {
-                    avatar: None,
+                    portrait_slots: None,
                     score: &o2jam_game::Score::default(),
                     rows: &[],
                     art,
@@ -7342,7 +7425,7 @@ mod paint_tests {
                 h: 48,
             },
             &ResultPaint {
-                avatar: Some(&red_figure()),
+                portrait_slots: None,
                 score: &score,
                 rows: &[],
                 art: &art,
@@ -7492,9 +7575,9 @@ mod paint_tests {
                 w: 800,
                 h: 600,
             },
-            None,
             score,
             rows,
+            None,
             None,
         );
         buf
@@ -7516,7 +7599,7 @@ mod paint_tests {
                 h: 600,
             },
             &ResultPaint {
-                avatar: None,
+                portrait_slots: None,
                 score: &o2jam_game::Score::default(),
                 rows: &[],
                 art,
@@ -7684,9 +7767,9 @@ mod paint_tests {
                 w: 70,
                 h: 60,
             },
-            None,
             &full_score(),
             &[],
+            None,
             None,
         );
         assert!(!buf.contains(&result_number_ink()));
@@ -7732,7 +7815,7 @@ mod paint_tests {
                 h: 600,
             },
             &ResultPaint {
-                avatar: None,
+                portrait_slots: None,
                 score: &o2jam_game::Score::default(),
                 rows: &[],
                 art: &art,
@@ -7817,7 +7900,7 @@ mod paint_tests {
                 h: 600,
             },
             &ResultPaint {
-                avatar: None,
+                portrait_slots: None,
                 score: &o2jam_game::Score::default(),
                 rows: &[],
                 art: &art,
@@ -7849,6 +7932,7 @@ mod paint_tests {
             score: None,
             bonus: None,
             speed: None,
+            seat_byte: None,
         }
     }
 
@@ -7863,6 +7947,7 @@ mod paint_tests {
             score: Some(110_371),
             bonus: Some(50),
             speed: Some(3),
+            seat_byte: None,
         }
     }
 
@@ -8057,9 +8142,9 @@ mod paint_tests {
                 w: 70,
                 h: 60,
             },
-            None,
             &o2jam_game::Score::default(),
             &[live_row()],
+            None,
             None,
         );
         assert!(!buf.contains(&result_number_ink()));
@@ -8426,76 +8511,127 @@ mod paint_tests {
         }
     }
 
-    /// Native result scene with one avatar and no art: the flat
-    /// backdrop plus the row-slot avatar alone.
-    fn painted_avatar_scene(avatar: &AvatarFigure) -> Vec<u32> {
-        let art = SceneArt {
-            placements: Vec::new(),
-            figures: HashMap::new(),
-        };
-        let mut buf = vec![0u32; 800 * 600];
-        paint_result_scene(
-            &mut Frame {
-                buf: &mut buf,
-                w: 800,
-                h: 600,
-            },
-            &ResultPaint {
-                avatar: Some(avatar),
-                score: &o2jam_game::Score::default(),
-                rows: &[],
-                art: &art,
-                verdict: ResultVerdict::Solo,
-                grade: None,
-                album: None,
-                life_readout: None,
-                bottom_counter: None,
-            },
+    #[test]
+    fn portrait_slots_use_the_pinned_mode_tables() {
+        // The builder FUN_004c2390 writes one of two pinned 8-entry
+        // tables by the display-mode word +0x24 (files
+        // 0xc245d–0xc24b8 / 0xc24bf–0xc251a): mode 0xf selects
+        // {0x7c02,…}, mode 0x10 selects {0xf802,…}; any other mode
+        // writes neither and the shell stages no table.
+        let mode_f = result_portrait_slots(RESULT_DISPLAY_MODE_TABLE_F).expect("mode 0xf table");
+        assert_eq!(
+            mode_f.map(|slot| slot.word),
+            [0x7c02, 0x7ee2, 0x7be0, 0x4f2a, 0x37bc, 0x001c, 0x4d5a, 0x5923]
         );
-        buf
+        let mode_10 = result_portrait_slots(RESULT_DISPLAY_MODE_TABLE_10).expect("mode 0x10 table");
+        assert_eq!(
+            mode_10.map(|slot| slot.word),
+            [0xf802, 0xfde2, 0xf7e0, 0x9e6a, 0x6f5c, 0x001c, 0x9a9a, 0xb263]
+        );
+        assert_eq!(result_portrait_slots(0), None);
+        assert_eq!(result_portrait_slots(0x11), None);
     }
 
     #[test]
-    fn result_avatar_paints_at_the_local_row_slot() {
-        // Member avatars sit at x=78, y=316+22·row under a 652×22
-        // clip (`docs/cresult-anchors.md`, row painter
-        // `FUN_004c3b40`); the shell stages one avatar — the local
-        // player's — so it inks the row-0 slot, never the frame
-        // center.
-        let buf = painted_avatar_scene(&red_figure());
-        let at = |x: i32, y: i32| buf[y as usize * 800 + x as usize];
-        assert_eq!(at(78, 316), pack_xrgb(255, 0, 0));
-        assert_ne!(at(400, 300), pack_xrgb(255, 0, 0));
+    fn portrait_slots_carry_the_builder_fixed_fields() {
+        // Every slot gets obj+0x15e = trunc(22/100·256) = 56 and
+        // obj+0x160 = 0.22f through 0x421610(obj, entry, 22),
+        // whatever the table entry (files 0x2161c–0x21688).
+        for slots in [
+            result_portrait_slots(RESULT_DISPLAY_MODE_TABLE_F),
+            result_portrait_slots(RESULT_DISPLAY_MODE_TABLE_10),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            for _slot in slots {
+                assert_eq!(ResultPortraitSlot::NUMERATOR, 56);
+                assert!((ResultPortraitSlot::RATIO - 0.22).abs() < f64::EPSILON);
+            }
+        }
     }
 
     #[test]
-    fn result_avatar_clips_to_the_exe_row_band() {
-        // A figure taller than the 22 px row band inks the band and
-        // stops: the row below keeps the backdrop.
-        let buf = painted_avatar_scene(&solid_figure(10, 40, [0x00, 0x7C]));
-        let at = |x: i32, y: i32| buf[y as usize * 800 + x as usize];
-        assert_eq!(at(78, 337), pack_xrgb(255, 0, 0));
-        assert_ne!(at(78, 338), pack_xrgb(255, 0, 0));
-        assert_ne!(at(78, 315), pack_xrgb(255, 0, 0));
+    fn seat_byte_picks_the_slot_one_based() {
+        // FUN_004c3b40 zero-extends the record +0x31 byte and indexes
+        // the eight this+0x5c objects 1-based (files
+        // 0xc3be2–0xc3bfe): byte 1 picks element 0, byte 8 picks
+        // element 7; every member sharing a byte gets the same slot.
+        let slots = result_portrait_slots(RESULT_DISPLAY_MODE_TABLE_F).unwrap();
+        assert_eq!(
+            portrait_slot_for_seat_byte(1, &slots),
+            Some(ResultPortraitSlot { word: 0x7c02 })
+        );
+        assert_eq!(
+            portrait_slot_for_seat_byte(8, &slots),
+            Some(ResultPortraitSlot { word: 0x5923 })
+        );
+        let mode_10 = result_portrait_slots(RESULT_DISPLAY_MODE_TABLE_10).unwrap();
+        assert_eq!(
+            portrait_slot_for_seat_byte(1, &mode_10),
+            Some(ResultPortraitSlot { word: 0xf802 })
+        );
     }
 
     #[test]
-    fn result_avatar_hangs_its_visible_box_at_the_slot() {
-        // Staged layers author their own canvas anchors (the worn
-        // figure rides `avatar.opa` anchors near (119,78)); the row
-        // slot hangs the figure's visible box, not its first layer,
-        // so an offset figure still inks the slot origin.
-        let mut figure = AvatarFigure::default();
-        figure.push_layer(FigureLayer {
-            image: Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap(),
-            dx: 10,
-            dy: 5,
-            colorkey: 0xFFFF,
-        });
-        let buf = painted_avatar_scene(&figure);
-        let at = |x: i32, y: i32| buf[y as usize * 800 + x as usize];
-        assert_eq!(at(78, 316), pack_xrgb(255, 0, 0));
-        assert_ne!(at(88, 321), pack_xrgb(255, 0, 0));
+    fn seat_byte_zero_skips_the_row_as_the_battle_bucket() {
+        // The same byte is FUN_004c49a0's battle-team bucket: byte 0
+        // skips the member (file 0xc4a87), so no chip resolves.
+        let slots = result_portrait_slots(RESULT_DISPLAY_MODE_TABLE_F).unwrap();
+        assert_eq!(portrait_slot_for_seat_byte(0, &slots), None);
+    }
+
+    #[test]
+    fn seat_byte_above_eight_resolves_nothing() {
+        // The exe index is unguarded — byte 0 reads below the array
+        // and bytes 9+ read above it. The shell resolves neither
+        // instead of inventing the out-of-range object
+        // (docs/cresult-anchors.md, "Peer-row portraits").
+        let slots = result_portrait_slots(RESULT_DISPLAY_MODE_TABLE_F).unwrap();
+        assert_eq!(portrait_slot_for_seat_byte(9, &slots), None);
+        assert_eq!(portrait_slot_for_seat_byte(u8::MAX, &slots), None);
+    }
+
+    #[test]
+    fn portrait_chip_resolution_paints_nothing_visible_yet() {
+        // The eight slots are image-less sprite objects and what the
+        // draw path renders from +0x15c stays OPEN, so a fully
+        // seat-byte-populated row set through a built table leaves
+        // the frame pixel-identical to no rows at all — the chip
+        // seam resolves, no chip pixels are invented.
+        let rows = |byte| ResultRankRow {
+            seat_byte: Some(byte),
+            ..live_row()
+        };
+        let slots = result_portrait_slots(RESULT_DISPLAY_MODE_TABLE_F);
+        let paint_rows = |rows: &[ResultRankRow]| {
+            let mut buf = vec![0u32; 800 * 600];
+            paint_result(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                &o2jam_game::Score::default(),
+                rows,
+                None,
+                slots.as_ref(),
+            );
+            buf
+        };
+        // Identical rows minus the seat bytes: the chip resolution
+        // adds no pixels on top of the row text the seats paint.
+        let unseated: Vec<ResultRankRow> = [1u8, 5, 8, 0]
+            .into_iter()
+            .map(|byte| ResultRankRow {
+                seat_byte: None,
+                ..rows(byte)
+            })
+            .collect();
+        assert_eq!(
+            paint_rows(&[rows(1), rows(5), rows(8), rows(0)]),
+            paint_rows(&unseated)
+        );
     }
 
     #[test]
@@ -8521,7 +8657,7 @@ mod paint_tests {
                 h: 64,
             },
             &ResultPaint {
-                avatar: None,
+                portrait_slots: None,
                 score: &o2jam_game::Score::default(),
                 rows: &[],
                 art: &art,
@@ -8563,10 +8699,10 @@ mod paint_tests {
                 w: 800,
                 h: 600,
             },
-            None,
             &o2jam_game::Score::default(),
             &[],
             Some(&tiny_cover()),
+            None,
         );
         let at = |x: i32, y: i32| buf[y as usize * 800 + x as usize];
         assert_eq!(at(70, 304), pack_xrgb(255, 0, 0));
@@ -8586,9 +8722,9 @@ mod paint_tests {
                     w: 800,
                     h: 600,
                 },
-                None,
                 &o2jam_game::Score::default(),
                 &[],
+                None,
                 None,
             );
             buf
@@ -8601,10 +8737,10 @@ mod paint_tests {
                     w: 800,
                     h: 600,
                 },
-                None,
                 &o2jam_game::Score::default(),
                 &[],
                 Some(&tiny_cover()),
+                None,
             );
             buf
         };
@@ -8625,10 +8761,10 @@ mod paint_tests {
                 w: 64,
                 h: 48,
             },
-            None,
             &o2jam_game::Score::default(),
             &[],
             Some(&tiny_cover()),
+            None,
         );
         let dest = scale_rect_to_frame(&RESULT_MUSIC_BOX, 64, 48);
         let at = |x: i32, y: i32| buf[y as usize * 64 + x as usize];
