@@ -29,7 +29,9 @@ Same function: tiers `0x10`/`0x20` continue combo (file
 `0x40`/Miss take the break path (file `0x176d8b`
 `ev_55bfa19b…`) — matches user report (Bad and Miss break
 combo); the long-note combo path (hold-bit `0x2000000`
-handling) also exists. Grade strings (`ALL COMBO`, `COOL 95%`,
+handling) also exists — its counter routing is pinned in the
+"Long-note combo path" section below, which also documents why
+`+0x3972` is the long-note combo, not this rule's per-hit counter. Grade strings (`ALL COMBO`, `COOL 95%`,
 `MISS 10`, … at file offsets `0x247363`/`0x2473db`/`0x24765b`)
 remain code-unreferenced (zero pointer refs to those VAs —
 result-screen `.ojs` driven); `LongnoteMode` refs (`0x3a71c`,
@@ -837,4 +839,104 @@ tests. The accumulator is the lead candidate for the dedicated
 `longNoteScore` slot in `SubmitScore` (4016) / `UpdateGameStats`
 (4014) — layout corroborated in `net-protocol.md`, but the
 submit-side read runs through a vtable path, so that link stays
-corroborated, not proven.
+not proven.
+
+## Long-note combo path — VERIFIED (B46, #80)
+
+Combo counter `+0x3972` (max `+0x3974`, B10) is incremented by
+exactly one writer: the combo helper `FUN_00541620` (file
+`0x141620`), called with the score sub-object (`this + 0x1820`;
+`+0x1820 + 0x2152 = +0x3972`, `+0x2158 = +0x3978` score,
+`+0x2154 = +0x3974` max). The helper adds `+1` combo always and
+`+10` score only when the mode byte (`+0x1853`) is not `6`
+(files `0x14162a`–`0x141659`). An exe-wide caller sweep (objdump
+scan, #80) finds exactly six call sites, every one of them a
+long-note arm — there is NO plain-note caller:
+
+1. **Head strike (the judge arm).** Second-judge hold arming
+   (file `0x176140`), mode-0 keyup hold arming gated Cool/Good
+   (call at file `0x176d86`, tier gate files `0x176c86`–`0x176c90`),
+   auto-play hold arming (file `0x177230`). The head's combo `+1`
+   happens at the strike, outside the rating-event sink.
+2. **Tail rating (the sink arm).** The sink dispatcher's code-1
+   Cool/Good arms add combo only on the tail payload bit
+   (`payload & 0x1000000`, files `0x16e5b0`–`0x16e5c1` and
+   `0x16e72d`–`0x16e73e`), each followed by a code-14
+   self-redispatch (tier `0x10`/`0x20`, files `0x16e5d4`–`0x16e5d6`
+   and `0x16e751`–`0x16e753`). The release judge itself (files
+   `0x176646`–`0x176714`) never calls the helper — the paired
+   head/tail split is: head feeds at the judge, tail feeds in the
+   sink.
+3. **Hold tick (the bonus scan).** One call per held frame over the
+   open span (call at file `0x178200`, span test files
+   `0x1781c1`/`0x1781d7`). **No cap exists**: the scan never
+   saturates the counter; it only syncs the max word behind by one
+   (`+0x3974 = combo − 1` when greater, files `0x178208`–`0x178248`;
+   the judgement store max-tracks the true value at files
+   `0x1706af`–`0x1706ef`).
+
+Breaks: the code-14 arm zeroes `+0x3972` on Bad/Miss words only
+(file `0x16ebcf`, test files `0x16ebbd`–`0x16ebcf`). Cool/Good
+never reset it.
+
+**Contradiction with the earlier "Combo rule — VERIFIED" section
+(above) and B10's "regular combo counter" label, documented per
+AGENTS.md (exe is oracle):** the same sweep shows plain
+(flag `0x00`) note judgements NEVER increment `+0x3972` — the
+counter's only writers are the six long-note arms above plus the
+three reset sites (init files `0x4de91e`/`0x4de9cc`, code-14
+file `0x16ebcf`). So `+0x3972` is the **long-note combo**
+(the count #84 paints under the LONGNOTE COMBO caption), not the
+regular per-hit combo; the section above pins only the
+continue/break *rule* (which holds everywhere: nothing resets on
+Cool/Good, code-14 resets on Bad/Miss). Where the regular combo
+lives for the big COMBO digits stays OPEN — named next step: the
+digit-frame setters for codes `0x1B500088`–`0x1B500092`
+(factory district `0x48B2D0`, HUD sprite loader `0x50D060`,
+already scoping playing.md). The `o2jam-game` scorer keeps the
+per-hit `+1` model for plain notes (`Score::apply_rated`)
+pending that trace — flagged, not silently changed.
+
+Implemented in `o2jam-game`: `Score::apply_rated_without_combo`
+(the tail's combo-silent scorer path), `RatingSink::run_combo_helper`
+(the shared adder behind tail arms and ticks), guards
+`hold_head_continues_combo_once_at_the_judge_arm`,
+`cool_tail_adds_exactly_one_combo_through_the_sink_helper`,
+`good_tail_continues_combo_through_the_good_arm`,
+`bad_tail_breaks_combo_only_through_the_bookkeeping_event`,
+`hold_tick_bumps_combo_once_per_event_without_a_cap`.
+
+## Rating-event sink +0xa14 — VERIFIED per-code semantics (B47, #81)
+
+The play object keeps a nullable sink pointer at `+0xa14`: attached
+to `FUN_0056e170` (file `0x16e170`) at song load (file `0x170323`),
+cleared on chart reload (file `0x1717ca`). Callers push
+`(code, payload, tier, lane, time)` and call through the pointer; a
+null sink skips the notification. The dispatcher subtracts 1 from
+the code, bounds it to 0..=15, and jumps the 16-entry table at
+`0x56ec5c` (table bytes read from the image, #81). Emitter survey
+(objdump scan of every `+0xa14` reference) and arm bodies:
+
+| code | arm | emitter(s) | drives |
+|---|---|---|---|
+| 1 | `0x16e436` tier fan-out (0x10/0x20/0x40/0x80/0x180) | both judges (`0x1760dc`, `0x1766c4`, `0x176c24`, `0x176e4a`, `0x1771cc`), expiry scan (`0x177456`, `0x177529`) | judgement store `0x170510`, tier counts, life/jam gauge, strike-effect `0x1703f0`; long-note split: head arming (fx + `+0x17fc`/`+0xb2c`), Cool/Good tail combo helper + code-14 redispatch, Bad/Miss hold-bit code-14 redispatch |
+| 2 | `0x16e3f3` | autoplay BGM scan `0x1764ed` (B22) | strike-effect `0x1703f0` when no tail bit |
+| 3, 4 | epilogue NOP | — | nothing |
+| 5 | `0x16e1b1` note-spawn guard (`+0xe & 0x30 == 0`) | hold-bonus scan `0x177d98`, `0x177f8f` | highway note paint `0x16eca0` at lane y |
+| 6 | `0x16e210` hold-body repaint | pass-event `0x177c6a`, `0x177d41`; bonus `0x177f0e` | anim rect `0x16b880` + `0x16eea0` + two `0x16eca0` paints |
+| 7 | `0x16e97d` measure/BGA strip | pass-event `0x1778e1` | rect `0x16b1c0` + blit `0x16dc0` on beat object `0x762b44` |
+| 8 | `0x16e9fd` scroll timebase | `FUN_00575d70` `0x175ef9` | globals `0x791d70` timebase + lane scroll tables; `this+8` store |
+| 9 | `0x16e9e5` strike effect | second-judge walk `0x176eec`, `0x176f73`, `0x176ffa`, `0x177081` | `0x1703f0` with `lane + 2` only |
+| 10 | `0x16ebaa` song-end marker | song-end scan `0x1777ad` | `this+0x3c` word = 4 |
+| 11 | `0x16eb7d` beat scalar | `FUN_00575d70` `0x175e7c` | `FUN_00570f70` → `this+0xfec` via `0x16be30` |
+| 12 | epilogue NOP | play start `0x175dfc` (song position `+0x834`) | nothing (vestigial) |
+| 13 | epilogue NOP | — | nothing |
+| 14 (`0xe`) | `0x16ebbd` combo break + hold teardown | hold heads struck Bad/Miss (`0x1766fd`); redispatched from code 1 | `+0x3972` = 0 on 0x40/0x80 (file `0x16ebcf`); fx virtual `0x12`/`0x65`; clears `+0xb2c`/`+0x17fc`, sets `+0x17e0`; `+0x1818` = `FUN_00411e60` |
+| 15 | epilogue NOP | — | nothing |
+| 16 | `0x16e413` (twin of arm 2) | scroll-line scan `0x176352` | strike-effect `0x1703f0` when no tail bit |
+
+Only codes 1/9/14 carry scorer/jam/relay semantics; the rest are
+local paint/scroll/bookkeeping and report nothing to the network.
+Modeled in `o2jam-game::rating_sink` (codes 1/9/14 with outcomes;
+all other codes silent) with guard
+`paint_timing_and_nop_codes_report_nothing`.

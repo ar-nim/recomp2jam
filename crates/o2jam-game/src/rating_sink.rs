@@ -10,10 +10,61 @@
 //! needs it.
 //!
 //! The dispatcher target `FUN_0056e170` (file `0x16e170`, REA
-//! `ev_37e64f21…`, observed) suppresses codes above the jump-table
-//! span and forwards through the 16-entry table at `0x56ec5c`.
-//! Only codes viewed at judgement call sites carry server-visible
-//! effects; the rest (sequencer spawn/scroll/timing) stay local.
+//! `ev_37e64f21…`, observed) subtracts 1 from the code, bounds it
+//! to 0..=15, and jumps through the 16-entry table at `0x56ec5c`
+//! (file bytes verified, #81). Arms, each named from its body:
+//!
+//! - **1** → `0x16e436` — judgement fan-out on the rating word:
+//!   Cool `0x10` / Good `0x20` / Bad `0x40` / Miss `0x80` / paired-tail
+//!   kill `0x180`. The scoring arm: tier-count + sound relay
+//!   (`FUN_0056ddf0`), life/jam gauge deltas (`+0x1820` helpers), the
+//!   judgement store `FUN_00570510`, the strike-effect trigger
+//!   `FUN_005703f0`, and the long-note split — heads take the direct
+//!   arming branch (virtual fx + `+0x17fc`/`+0xb2c` flags, files
+//!   `0x16e55e`–`0x16e5ab`), tails on Cool/Good run the combo helper
+//!   and self-redispatch code 14 (files `0x16e5b8`–`0x16e5d6`,
+//!   `0x16e735`–`0x16e753`), Bad/Miss with any hold bit redispatch
+//!   code 14 (files `0x16e8ce`–`0x16e8d0`, `0x16e90c`–`0x16e91f`).
+//! - **2** → `0x16e3f3` — autoplay/BGM channel event (B22): when the
+//!   payload has no tail bit, the strike-effect trigger runs
+//!   (`FUN_005703f0`).
+//! - **3, 4, 12, 13, 15** → epilogue — NOP arms (codes 12 and 13 are
+//!   still emitted: code 12 at play start from `FUN_00575d70` file
+//!   `0x175dfc` with the song-position word, code 13 unused).
+//! - **5** → `0x16e1b1` — highway note spawn: unjudged records
+//!   (`+0xe & 0x30 == 0`) are painted through `FUN_0056eca0` at the
+//!   computed lane y. Emitted by the hold-bonus scan.
+//! - **6** → `0x16e210` — armed-hold body repaint: anim rect via
+//!   `FUN_0056b880`, clamp to 0..=0x1e0, `FUN_0056eea0` +
+//!   two `FUN_0056eca0` paints. Emitted by the pass-event and
+//!   hold-bonus scans.
+//! - **7** → `0x16e97d` — measure/BGA strip paint on the beat object
+//!   (global `0x762b44`, `+0xf6c`): rect `FUN_0056b1c0` + blit
+//!   `FUN_0056adc0`. Emitted by the pass-event scan.
+//! - **8** → `0x16e9fd` — scroll timebase: the float arg becomes the
+//!   global timebase `0x791d70` and the per-lane scroll tables
+//!   (`0x791d14`/`0x791d30`/`0x791d34`/`0x791d38`/`0x791d54`) are
+//!   recomputed; arg stored at `this+8`. Emitted by `FUN_00575d70`.
+//! - **9** → `0x16e9e5` — lane strike-effect trigger only
+//!   (`FUN_005703f0` with `lane + 2`). Emitted by the second judge's
+//!   walk-advance bookkeeping.
+//! - **10** → `0x16ebaa` — song-end marker: `this+0x3c` word = 4.
+//!   Emitted by the song-end scan.
+//! - **11** → `0x16eb7d` — beat scalar: the float arg through
+//!   `FUN_00570f70` into `this+0xfec` (`FUN_0056be30`). Emitted by
+//!   `FUN_00575d70` on the `+0x844` float change.
+//! - **14** → `0x16ebbd` — combo break + hold teardown: Bad/Miss words
+//!   zero the combo counter `+0x3972` (file `0x16ebcf`); the fx
+//!   virtual (`0x12`/`0x65`) fires; per-lane hold flags clear
+//!   (`+0xb2c`/`+0x17fc` = 0, `+0x17e0` = 1); `this+0x1818` takes the
+//!   `FUN_00411e60` getter. Emitted for hold heads struck Bad/Miss and
+//!   redispatched from the code-1 arms.
+//! - **16** → `0x16e413` — twin of arm 2 (strike-effect trigger when
+//!   the payload has no tail bit). Emitted by the scroll-line scan.
+//!
+//! Only codes 1/9/14 are observed at judgement call sites and carry
+//! the server-visible effects below; every other arm drives local
+//! paint, scroll, or bookkeeping state only.
 //!
 //! What the client reports to the server per rating event:
 //!
@@ -322,7 +373,7 @@ impl RatingSink {
     ) -> RatingOutcome {
         let relay_edge = self.attempt_relay_edge(class);
         let level_before = self.score.jam.level();
-        let (pill_spent, pill_granted) = self.apply_score_path(class);
+        let (pill_spent, pill_granted) = self.apply_score_path(payload, class);
         let hold_tick = self.apply_hold_tick(payload, class);
         // The scorer return is the jam grant: Cool/Good only, and
         // only when the level actually rose. The pill-saved Bad
@@ -391,28 +442,52 @@ impl RatingSink {
     }
 
     /// Run the streak + scorer path and report pill movements.
-    fn apply_score_path(&mut self, class: RatingClass) -> (bool, bool) {
+    ///
+    /// Hold tails take the combo-silent scorer variant
+    /// ([`Score::apply_rated_without_combo`]): the exe's scorer has no
+    /// combo write on the tail arms, so a Cool/Good tail's single `+1`
+    /// lands exclusively in [`Self::apply_hold_tick`] (B46) and a
+    /// Bad/Miss tail's break lands exclusively in the code-14
+    /// bookkeeping arm (file `0x16ebcf`).
+    fn apply_score_path(&mut self, payload: u32, class: RatingClass) -> (bool, bool) {
         if class == RatingClass::TailKill {
             self.score.apply_rated(Judgement::Miss, &mut self.pills);
             return (false, false);
         }
+        let is_tail = HoldSpan::marks_hold_tail(payload);
         let pills_before = self.pills.count();
         let granted = self.streak.note(class.judgement(), &mut self.pills);
-        self.score.apply_rated(class.judgement(), &mut self.pills);
+        if is_tail {
+            self.score
+                .apply_rated_without_combo(class.judgement(), &mut self.pills);
+        } else {
+            self.score.apply_rated(class.judgement(), &mut self.pills);
+        }
         let spent = self.pills.count() < pills_before && !granted;
         (spent, granted)
     }
 
-    /// Run the hold tick on Cool/Good tails (`FUN_00541620`).
+    /// Run the hold tick on Cool/Good tails (`FUN_00541620`, files
+    /// `0x16e5c1`/`0x16e73e`): the tail's one and only combo `+1`.
     fn apply_hold_tick(&mut self, payload: u32, class: RatingClass) -> bool {
         let is_tail = matches!(class, RatingClass::Cool | RatingClass::Good)
             && HoldSpan::marks_hold_tail(payload);
         if is_tail {
-            self.long_note.hold_tick();
-            self.score.combo = self.score.combo.saturating_add(1);
-            self.score.max_combo = self.score.max_combo.max(self.score.combo);
+            self.run_combo_helper();
         }
         is_tail
+    }
+
+    /// Run the combo helper `FUN_00541620` (file `0x141620`) — the
+    /// shared adder behind the Cool/Good tail arms (files `0x16e5c1`/
+    /// `0x16e73e`) and the per-frame hold-bonus scan (file `0x178200`,
+    /// B11): one long-note bonus tick (`+10`) plus `+1` combo with no
+    /// cap — the exe ticks the counter once per held frame over the
+    /// open span and never saturates it (B46).
+    pub fn run_combo_helper(&mut self) {
+        self.long_note.hold_tick();
+        self.score.combo = self.score.combo.saturating_add(1);
+        self.score.max_combo = self.score.max_combo.max(self.score.combo);
     }
 
     /// Build the jam report when the level rose on Cool/Good.
@@ -658,7 +733,26 @@ mod tests {
     }
 
     #[test]
-    fn cool_tail_ticks_bonus_and_combo_without_sound() {
+    fn hold_head_continues_combo_once_at_the_judge_arm() {
+        // B46: a Cool/Good hold head feeds the combo counter exactly
+        // once, at the judge's hold-arming call of the combo helper
+        // (exe files 0x17613d/0x176d86) — the sink's own bookkeeping
+        // arm is not involved for heads.
+        let mut sink = live_sink();
+        let before = sink.score().combo;
+        let outcome = sink.handle_judgement(head_payload(), RatingClass::Cool, 1);
+        assert!(outcome.hold_head_armed);
+        assert!(!outcome.hold_tick);
+        assert!(!outcome.hold_bookkeeping);
+        assert_eq!(sink.score().combo, before + 1);
+    }
+
+    #[test]
+    fn cool_tail_adds_exactly_one_combo_through_the_sink_helper() {
+        // B46: the rated tail's single +1 comes solely from the combo
+        // helper on the sink's Cool tail arm (exe file 0x16e5c1); the
+        // scorer carries no combo write on the tail arm (file
+        // 0x170510), so the tail feeds one combo, not two.
         let mut sink = live_sink();
         let before = sink.score().combo;
         let outcome = sink.handle_judgement(shipped_tail_payload(), RatingClass::Cool, 1);
@@ -667,8 +761,50 @@ mod tests {
         assert!(!outcome.hold_head_armed);
         assert_eq!(outcome.sound, None);
         assert_eq!(sink.long_note().points(), HOLD_TICK_BONUS_POINTS);
-        // Scorer +1 plus helper +1: the tail feeds two combo.
-        assert_eq!(sink.score().combo, before + 2);
+        assert_eq!(sink.score().combo, before + 1);
+    }
+
+    #[test]
+    fn good_tail_continues_combo_through_the_good_arm() {
+        // B46: the Good tail arm mirrors Cool (exe file 0x16e73e).
+        let mut sink = live_sink();
+        let before = sink.score().combo;
+        let outcome = sink.handle_judgement(shipped_tail_payload(), RatingClass::Good, 1);
+        assert!(outcome.hold_tick);
+        assert_eq!(sink.score().combo, before + 1);
+    }
+
+    #[test]
+    fn bad_tail_breaks_combo_only_through_the_bookkeeping_event() {
+        // B46: a Bad tail's combo break is the code-14 arm's reset
+        // (exe file 0x16ebcf), not a scorer write; the judgement
+        // itself only flags the bookkeeping redispatch.
+        let mut sink = live_sink();
+        sink.handle_judgement(tap_payload(), RatingClass::Cool, 0);
+        assert_eq!(sink.score().combo, 1);
+        let outcome = sink.handle_judgement(shipped_tail_payload(), RatingClass::Bad, 0);
+        assert!(outcome.hold_bookkeeping);
+        assert!(!outcome.hold_tick);
+        assert_eq!(
+            sink.score().combo,
+            1,
+            "the judgement leaves the counter alone"
+        );
+        sink.handle_hold(RatingClass::Bad);
+        assert_eq!(sink.score().combo, 0, "the code-14 arm breaks it");
+    }
+
+    #[test]
+    fn hold_tick_bumps_combo_once_per_event_without_a_cap() {
+        // B46: the verified per-tick +1 (B11) rides the same helper
+        // with no cap — one dispatch, one combo, however long the
+        // hold runs.
+        let mut sink = live_sink();
+        let before = sink.score().combo;
+        for _ in 0..500 {
+            sink.run_combo_helper();
+        }
+        assert_eq!(sink.score().combo, before + 500);
     }
 
     #[test]
@@ -767,6 +903,20 @@ mod tests {
         }
         assert_eq!(granted_at, Some(14));
         assert_eq!(sink.pills().count(), 1);
+    }
+
+    #[test]
+    fn paint_timing_and_nop_codes_report_nothing() {
+        // B47: the 16-way dispatcher's remaining arms (2, 5-8, 10,
+        // 11, 16, and the NOP arms 3/4/12/13/15) drive only local
+        // paint, scroll, and bookkeeping state — no scorer, no jam
+        // report, no relay edge, no sound, no hold effect reaches the
+        // sink's outcome for them.
+        let mut sink = live_sink();
+        for code in [2_u8, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 15, 16] {
+            let outcome = sink.dispatch(code, tap_payload(), RATING_COOL, 0);
+            assert_eq!(outcome, RatingOutcome::default(), "code {code}");
+        }
     }
 
     #[test]
