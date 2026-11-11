@@ -203,7 +203,7 @@ photo-vs-bnd value divergences stand, cited per row).
 | playing.rs:144 `STRIP_ROW_NATIVE` | 554 | none (sprite) | `Playing_Exit.ojs` (751,554), `Normal_TimeBar.ojs` (489,556) anchors | DONE | None |
 | playing.rs:148 `JAM_DIGIT_FALLBACK_Y` | 4 | none | fallback row, unbound art | RUNTIME | Keep |
 | playing.rs:153 `NATIVE_PEER_BAR` | (754,0,46,8) | none (unbound stacked gauges) | size from `Avatar_Info_LifeGauge.ojs` 46x8 (slot 6); origin = runtime stacking | RUNTIME | Keep; size already archive-pinned |
-| playing.rs:268 `COMBO_ROW_ABOVE_LINE` | 24 | none | invented anchor (parity/playing.md audit 31) | OPEN | Rig: exe combo-digit anchor |
+| playing.rs `COMBO_DIGIT_LAYOUT_BOX` / `COMBO_DIGIT_HIDE_OFFSET` | (0x59,0x3C)-(0xD5,0xD2) / −0x5A,−0x3C | none (unbound runtime digit controls) | exe number engines `0x528E20`/`0x529230` `SetRect` + hide offsets (claim A45, `docs/playing-digits.md` §3, ev `03aa0c52…`/`6d253f51…`) | DONE (replaces the invented `COMBO_ROW_ABOVE_LINE`, #105) | None |
 | playing.rs `PLAY_TIME_FONT_SPRITE` (staged `PlayTimeNum.ojs`, unpainted) | none — no anchor exists | negative exe pin: the only painter reading the HUD object's `PlayTimeNum` slot (+0x14, filled by loader `FUN_0050d060` file `0x10D060`) is `FUN_0050d800` (file `0x10D800`), which has zero E8 call sites and zero dword references in the 5,029,888-byte `OTwo.exe` (SHA-256 `83a04541…72c823b`); the HUD object (VA `0x768184`) is consumed only by the CPlayerInfo painters (file `0xDF5D0`/`0xDFA90`), which call just the Scroe/ComboScroe/P2P painters (file `0x10D2D0`/`0x10D590`/`0x10D430`); the string is unique at file `0x24c0d8`; the reference strip carries no MMSS ink | DONE (7.55 never paints play-time digits) | None |
 | playing.rs:289 `LONG_COMBO_PLATE_INK` | (52,61) | none (sprite frame) | `Playing1.opi` slot 432 frame 1, 74x9 at (52,61) | DONE | None |
 | playing.rs:295 `NATIVE_LONG_COMBO_PLATE` | (91,282,74,9) | none (sprite frame) | photo bright-ink scan = slot 432 frame at 1:1 | DONE | None |
@@ -273,13 +273,10 @@ Total audited: 136 named constants.
   paint.rs:429–439), `CHANNEL_VISIBLE_ROWS`, `CHANNEL_PAGER_Y` — read
   the hosting `CStatePlanet` dialog object the way the row rects were
   read (`docs/channel-fill.md`).
-- Playing combo row `COMBO_ROW_ABOVE_LINE` (playing.rs:268) and avatar
-  plate offsets `AVATAR_LEVEL_OFFSET`/`AVATAR_LIFE_OFFSET`
-  (playing.rs:2492–2496) — STILL OPEN 2026-11-10: blocked by the
-  Attempt-13 loading wedge under Wine (tee trace: full play handshake
-  completes, then silence + frozen loading art; relay refuted;
-  suspect DXSurface play-surface init). Next: winedbg stopped-state
-  read of the play-stage init (lesson 9e297) or a Windows rig.
+- Playing combo row is pinned (2026-11-12, #104/#105): the digits
+  paint at the exe layout box `COMBO_DIGIT_LAYOUT_BOX`
+  (playing.rs, claim A45) — no rig needed. The avatar plate offsets
+  `AVATAR_LEVEL_OFFSET`/`AVATAR_LIFE_OFFSET` (playing.rs) stay OPEN:
   (Room inset, waiting chat pitch, and caret were pinned in the
   2026-11-09 rig session — see the DONE rows above.)
 
@@ -318,7 +315,8 @@ Total audited: 136 named constants.
 - Loading cell PASS (ticket #16; audits 23, 35) ↔ no geometry constants (bar/caption
   placeholders are centered placeholders, never literals — negative evidence:
   no `.bnd` names the gate, the sprite-55 walk pins no sub-rect).
-- Playing cell FAIL (audits 16, 31–32) ↔ `COMBO_ROW_ABOVE_LINE` OPEN;
+- Playing cell FAIL (audits 16, 31–32) ↔ combo-row geometry pinned by
+  #104/#105 (`COMBO_DIGIT_LAYOUT_BOX`, claim A45);
   audit 16/30/32 are paint-clip behavior, not geometry constants
   (audit 30 closed by #103: per-lane curtain clip,
   `HighwayGeometry::lane_clip_rects`).
@@ -327,7 +325,7 @@ Total audited: 136 named constants.
   #107 (2026-11-11): the play-time arm is pinned negative — 7.55 never
   paints `PlayTimeNum` digits (painter `FUN_0050d800` zero-xref), so no
   anchor exists and the font stays staged-but-unpainted; the combo-row
-  arm of audit 31 stays OPEN with #104/#105.
+  arm of audit 31 is pinned by #104/#105 (A45).
 - Result cell PASS (ticket #17; audit 13) ↔ exe-pinned anchors DONE here; the old FAIL
   was fixed-pixel avatar/verdict placement, not a geometry constant — the avatar now
   hangs its visible box at the row-0 slot (78,316) under the 652×22 band clip, peer

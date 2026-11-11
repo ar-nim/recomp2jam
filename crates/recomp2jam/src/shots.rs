@@ -2773,7 +2773,7 @@ mod tests {
 
     #[test]
     fn playing_shot_paints_the_staged_combo_digit() {
-        use o2jam_shell::playing::HighwayGeometry;
+        use o2jam_shell::playing::combo_digits_origin;
         let Some(archive) = read_install_archives(&install_root()).playing else {
             println!("skip: missing {PLAYING_ARCHIVE}");
             return;
@@ -2782,22 +2782,19 @@ mod tests {
             panic!("playing: PlaySkin decoded no lanes");
         };
         let font = skin.combo_font().expect("Note_ComboNum.ojs font");
-        // Judgement-word combo anchor on the native canvas: centered
-        // on the staged lane span, 24 rows above the judgement line
-        // (LivePlay::paint_judgement_word).
-        let geom = HighwayGeometry::centered(
+        // A45 (#104): the combo digits paint left to right from the
+        // exe layout-box origin (89,60) — the number engines
+        // `0x528E20`/`0x529230` `SetRect(0x59,0x3C,0xD5,0xD2)`
+        // (docs/playing-digits.md §3), replacing the invented
+        // `COMBO_ROW_ABOVE_LINE` anchor.
+        let (x, y) = combo_digits_origin(
             usize::try_from(NATIVE_WIDTH).expect("native width fits usize"),
             usize::try_from(NATIVE_HEIGHT).expect("native height fits usize"),
         );
-        let span = geom.highway_rect();
-        let center_x = span.x + i32::try_from(span.w).expect("span width fits i32") / 2;
-        let row = geom.line_y - 24;
         // The exact staged digits the shot paints (tap Cool then hold
         // head Cool: combo 2, judged 100 ms before the paint lands).
         let mut expected = native_probe();
-        paint_probe(&mut expected, |frame| {
-            font.paint_centered(frame, center_x, row, 2)
-        });
+        paint_probe(&mut expected, |frame| font.paint(frame, x, y, 2));
         // The playing shot's frame at the same instant.
         let mut game = seeded_game();
         walk_to_playing(&mut game);
@@ -2807,6 +2804,23 @@ mod tests {
         paint_probe(&mut actual, |frame| game.paint_at(frame, 5_100));
         assert_eq!(game.screen(), Screen::Playing);
         assert_pixels_came_from_font(&actual, &expected, "combo digit");
+        // Delta rule (#63): a rest frame at the same instant (no
+        // judgement struck, so no combo digits) must differ from the
+        // painted frame at the pinned font pixels — real-art
+        // rest-vs-painted delta, not a synthetic construction.
+        let mut rest_game = seeded_game();
+        walk_to_playing(&mut rest_game);
+        let mut rest = native_probe();
+        paint_probe(&mut rest, |frame| rest_game.paint_at(frame, 5_100));
+        let changed = expected.iter().zip(&actual).zip(&rest).any(
+            |((&expected_px, &actual_px), &rest_px)| {
+                expected_px != PROBE_BACKDROP && actual_px == expected_px && rest_px != actual_px
+            },
+        );
+        assert!(
+            changed,
+            "rest ink must differ from painted ink at the pinned combo-digit pixels"
+        );
     }
 
     #[test]
