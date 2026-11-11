@@ -124,28 +124,26 @@ mod lint {
         out: &mut Vec<Violation>,
     ) {
         let v = verdict.trim();
-        let valid = [
-            "PASS",
-            "ACCEPTED",
-            "OPEN",
-            "FAIL",
-            "N/A",
-            "PASS ",
-            "OPEN ",
-            "FAIL ",
-            "N/A ",
-            "ACCEPTED ",
-        ];
-        let starts_valid = valid
-            .iter()
-            .any(|p| v.starts_with(p.trim()) || v.starts_with(p));
+        // Strip a leading "(TIER)" parenthetical so "PASS (R+G, v: …)" and
+        // "(R+G) PASS" both parse; the verdict word must still come first
+        // or second.
+        let stripped = if v.starts_with('(') {
+            match v.find(')') {
+                Some(close) => v[close + 1..].trim().to_owned(),
+                None => v.to_owned(),
+            }
+        } else {
+            v.to_owned()
+        };
+        let valid = ["PASS", "ACCEPTED", "OPEN", "FAIL", "N/A"];
+        let starts_valid = valid.iter().any(|p| stripped.starts_with(p));
         if !starts_valid {
             out.push(Violation(format!(
                 "parity.md:{ln}: [{dim}] verdict does not start with PASS/ACCEPTED/OPEN/FAIL/N/A: {v:.60}"
             )));
         }
         // A row whose verdict says OPEN/FAIL but the text claims PASS is a stale marker.
-        if (v.starts_with("OPEN") || v.starts_with("FAIL"))
+        if (stripped.starts_with("OPEN") || stripped.starts_with("FAIL"))
             && full_row.to_lowercase().contains("pass")
             && !full_row.to_lowercase().contains("pass-led")
         {
@@ -153,7 +151,7 @@ mod lint {
                 "parity.md:{ln}: [{dim}] verdict {v:.30} but row text claims PASS — stale marker?"
             )));
         }
-        if v.starts_with("OPEN")
+        if stripped.starts_with("OPEN")
             && !full_row.contains("next step")
             && !full_row.contains("Next step")
         {
