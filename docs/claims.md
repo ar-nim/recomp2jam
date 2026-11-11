@@ -30,8 +30,8 @@ Short forms live in `GLOSSARY.md`. Normative forms:
 | EXE | 109 |
 | DATA | 19 |
 | ASSUMED | 12 |
-| OPEN | 17 |
-| Total | 157 |
+| OPEN | 21 |
+| Total | 161 |
 
 ## The pairing-rule family (known mistake + siblings)
 
@@ -119,6 +119,7 @@ index (all-zero rect, slot 0, default arm).
 | A41 | Corrupt body: behaves as a miss (slot empty), exe proof open | OPEN | next step: feed a truncated / bad-envelope body through the applier `0x4e7850` slot path and observe whether the slot stays empty or the load fails (ADR-0005 evidence hook) | R | — |  |
 | A42 | Missing Block: contributes nothing for that State | OPEN | next step: trace the state applier with a Block name absent from the ControlList and observe the staged set (ADR-0005 evidence hook) | R | — |  |
 | A43 | Missing `.bnd`: contributes nothing for that Block | OPEN | next step: observe the `.bnd` loader `0x548450` failure path with an absent stem and watch the bind (ADR-0005 evidence hook) | R | — |  |
+| A44 | Game-loop staged blits: the staged scene set (bound placements + sprites, ADR-0003/0005) blitted through the loop's per-frame compositor path (renderer blits OPEN in the progress matrix; the compositor exists in `o2jam-render`, RGB555 + clip + colorkey) | OPEN | next step: thread the staged set through the loop blits — exe blit semantics pinned (A5 paint order, A39 blit chain); a frame-paced Wine capture pair only if the shots guard reads ambiguous | R | PLAYING.COMP |  |
 
 ## B. Gameplay
 
@@ -174,6 +175,9 @@ index (all-zero rect, slot 0, default arm).
 | B48 | Grade mapping: score→grade rule; grade strings `0x247363+` provably code-unreferenced (B4) so any mapping is data- or art-side, mechanism untraced | OPEN | next step per ADR-0009: negative-evidence sweep (structural sweep + named paths over the result builder district `FUN_004c2390` file `0xc2390`) or a live rig capture of the grade plate at controlled score bands | R+G | RESULT.GAME |  |
 | B49 | Pill/jam-score shop earn flow: shop-side readers of the pill stock `+0x398c`/jam words `+0x396e` untraced (earn and spend rules themselves VERIFIED, B5–B6) | OPEN | next step: REA trace of shop-state writers reading the pill/jam words plus a live gateway replay of the earn flow | G | PLAYING.GAME, SHOP.GAME |  |
 | B50 | OJN hold-flag (bit 26) runtime semantics: recorded test sites `0x172a4f`/`0x173061` never fire on shipped payloads; judge-invisibility pinned by B14 | OPEN | per ADR-0009 a negative-evidence close needs a structural sweep + named paths: full-image sweep for bit-26 tests beyond the judge region (`0x5703f0`–`0x578300`) plus a synthetic bit-26 chart through the parser fix-up `0x572f50` naming the strike-slot `+0x3E8` consumer's observable effect; next step: that sweep + synthetic replay | G | PLAYING.GAME |  |
+| B51 | Mixer architecture + latency probe: BGM/bank/note stream mix order and buffer sizing untraced (DSOUND pinned to `DirectSoundCreate` only, B38); the Rust side shows bgRoom 53.8 s parity on the sample clock, mixer + probe OPEN | OPEN | next step per ADR-0009: static sweep + REA dossier of the DirectSound mixer district naming the stream mix order and buffer sizing; the latency probe is a shell measurement on the sample clock (loopback timing), feeding the milestone-3 budget decision (#76) | R+G | PLAYING.MUSIC |  |
+| B52 | Song-clock wall-trace equivalence: the ADR-0001 sample-clock deviation vs the exe wall clock (B38) pinned by an equivalence replay inside the 6/18/25 ms judgement windows | OPEN | next step: capture a wall-clock trace on the rig (the fixed-clock headless seam exists), replay it through the sample-clock engine, and assert per-judgement drift < 6 ms; one rig session on a null sink | G | PLAYING.TIME |  |
+| B53 | Input latency budget: DirectInput-side latency (key event → judged strike) unmeasured; the number milestone 3 is held to | OPEN | next step per ADR-0009: rig capture pair — SendInput timestamps vs judged-strike samples on the live highway (per the `~/scratch/planet-verify/` recipe, null sink); measures latency, not routing (the key-up dispatch trace stays a separate arm of PLAYING.INPUT) | G | PLAYING.INPUT |  |
 
 ## C. File formats
 
