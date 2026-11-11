@@ -253,6 +253,11 @@ const MODE_FILTER_STEP: &str =
 /// Next evidence step for the four chat-tab buttons.
 const CHAT_TAB_STEP: &str =
     "rig click on each chat tab plus a capture of the filtered chat panel (the tab filters are untraced)";
+/// Next evidence step when a room dialog sheet never staged (no
+/// install-root data): the modal must not own input it cannot
+/// paint, so the click records a noop and the lobby stays usable.
+const DIALOG_STAGE_STEP: &str =
+    "stage Dialog_CreateRoom plus Dialog_Password art in the live boot path (live_art.rs stage_room_dialogs); without the sheet the modal stays shut";
 
 /// Every staged `IDC_BUTTON_SROOM_*` control of `STATE_ROOM`, in the
 /// order the router tests them, with the behaviour this tree evidences
@@ -2354,7 +2359,14 @@ impl ScreenGame {
         // straight to Waiting.
         if let Some(room) = self.rooms.get(index) {
             if room.has_password {
-                self.open_password_dialog(room.number);
+                if self.password_art.is_some() {
+                    self.open_password_dialog(room.number);
+                } else {
+                    self.last_room_control_noop = Some(RoomControlNoop {
+                        id: "LOCKED_ROOM_ROW",
+                        next_step: DIALOG_STAGE_STEP,
+                    });
+                }
                 return;
             }
         }
@@ -2377,8 +2389,19 @@ impl ScreenGame {
                 self.enter(Screen::Channel);
             }
             // Open the create-room dialog (lifecycle §7:
-            // `DIALOG_CREATEROOM` `CDCreateRoom`).
-            RoomControlAction::Create => self.open_create_room_dialog(),
+            // `DIALOG_CREATEROOM` `CDCreateRoom`); without the staged
+            // sheet the modal would own input it cannot paint, so the
+            // click records a noop and the lobby stays usable.
+            RoomControlAction::Create => {
+                if self.create_room_art.is_some() {
+                    self.open_create_room_dialog();
+                } else {
+                    self.last_room_control_noop = Some(RoomControlNoop {
+                        id: "IDC_BUTTON_SROOM_CREATE",
+                        next_step: DIALOG_STAGE_STEP,
+                    });
+                }
+            }
             // Open the options dialog over the lobby (the same
             // `Dialog_Option_*` sheet the Planet gear mounts:
             // EXIT/Escape closes it back onto Room, the flow never
@@ -6280,6 +6303,11 @@ mod game_tests {
         assert_eq!(game.room_highlight, 1);
         // Row 1 is the locked room: the click gates through the
         // password dialog instead of joining straight to Waiting.
+        // The sheet stages first: without staged art the click
+        // records a noop and the lobby stays usable (the no-art arm
+        // below).
+        game.load_password_scene(Vec::new(), HashMap::new());
+        game.mouse_click(100, 200);
         assert_eq!(game.room_dialog(), Some(RoomDialog::Password { number: 7 }));
         assert_eq!(game.screen(), Screen::Room);
     }
@@ -9899,6 +9927,82 @@ mod game_tests {
         let body = game.take_create_room().expect("committed 2004");
         assert_eq!(body.title, "x");
         assert!(!body.has_password);
+    }
+
+    #[test]
+    fn create_click_without_staged_sheet_records_noop_and_keeps_lobby() {
+        // The chrome rect stages but the dialog sheet never does (no
+        // install-root data): the click must not open a modal it
+        // cannot paint — the lobby stays usable and the miss is
+        // recorded.
+        use MenuKey;
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.load_scene(
+            Screen::Room,
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BUTTON_SROOM_CREATE".to_owned(),
+                code: 0x1320_0007,
+                sprite: None,
+                rect: Rect {
+                    x: 508,
+                    y: 372,
+                    w: 96,
+                    h: 35,
+                },
+            }],
+            HashMap::new(),
+        );
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        game.mouse_click(555, 389);
+        assert_eq!(game.room_dialog(), None, "unstaged sheet never owns input");
+        assert!(
+            game.room_control_noop().is_some(),
+            "miss recorded with the staging next step"
+        );
+        assert_eq!(game.screen(), Screen::Room);
+    }
+
+    #[test]
+    fn locked_row_click_without_staged_sheet_records_noop() {
+        // Locked row 1 (room 7) with staged panels but no password
+        // sheet: gates the dialog the same way the CREATE chrome
+        // does — no invisible modal, lobby stays usable.
+        use MenuKey;
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.set_rooms(two_rooms());
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        game.load_scene(
+            Screen::Room,
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BUTTON_SROOM_EXBUTTON2".to_owned(),
+                code: 0,
+                sprite: None,
+                rect: Rect {
+                    x: 26,
+                    y: 177,
+                    w: 288,
+                    h: 91,
+                },
+            }],
+            HashMap::new(),
+        );
+        game.mouse_click(100, 200);
+        assert_eq!(game.room_highlight, 1);
+        assert_eq!(game.room_dialog(), None, "unstaged sheet never owns input");
+        assert!(
+            game.room_control_noop().is_some(),
+            "miss recorded with the staging next step"
+        );
     }
 
     #[test]
