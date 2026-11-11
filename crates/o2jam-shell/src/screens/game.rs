@@ -2255,11 +2255,39 @@ impl ScreenGame {
     /// Staged room chrome control under the click, if the table names
     /// its code. Geometry comes from the parsed staged rect only (owner
     /// rule `f38f3`).
+    ///
+    /// Not listed: the row templates (`IDC_BUTTON_SROOM_EXBUTTON1..6`,
+    /// the `SET` clone parents) whose rects ARE the room rows and
+    /// therefore fall through to the row hit test — the exe proves
+    /// them static (0 changed px on all six panels, `docs/hover.md`),
+    /// so the hover resolver below never names them either.
     fn room_control_at(&self, x: i32, y: i32) -> Option<&'static RoomControl> {
         let placements = &self.scene_art(Screen::Room)?.placements;
         ROOM_CONTROLS
             .iter()
             .find(|control| staged_code_hit(placements, control.code, x, y))
+    }
+
+    /// Staged room chrome control under the pointer (`None` off every
+    /// control, off the Room screen, or while a dialog, modal, or side
+    /// screen covers the lobby — clicks route to those layers first,
+    /// so hover follows). The shared hover source ticket #26 consumes
+    /// for the planet board is the pointer itself (`mouse_moved`);
+    /// this resolver maps it onto the room chrome the same way clicks
+    /// resolve (`staged_code_hit` on the parsed rects). Row panels
+    /// (`EXBUTTON1..6`) are not chrome controls: the pointer over a
+    /// panel resolves to nothing and repaints nothing — static by
+    /// negative evidence (`docs/hover.md`: 0 changed px, no
+    /// `Room_MOver.ojs` overlay in either state).
+    fn hovered_room_control(&self) -> Option<&'static RoomControl> {
+        if self.flow.current() != Screen::Room {
+            return None;
+        }
+        if self.room_dialog.is_some() || self.planet_modal.is_some() || self.side.is_some() {
+            return None;
+        }
+        let (x, y) = self.pointer?;
+        self.room_control_at(x, y)
     }
 
     /// Room-row index under a click, staged panels first (see
@@ -4289,7 +4317,13 @@ impl ScreenGame {
     fn paint_room(&self, frame: &mut Frame<'_>) {
         match (self.scene_art(Screen::Room), self.rooms.is_empty()) {
             (Some(art), false) => {
-                paint_room_scene(frame, &self.rooms, self.room_highlight, art);
+                paint_room_scene(
+                    frame,
+                    &self.rooms,
+                    self.room_highlight,
+                    art,
+                    self.hovered_room_control().map(|control| control.code),
+                );
             }
             (Some(art), true) => paint_lobby_backdrop(frame, Screen::Room, art),
             (None, false) => paint_room_list(frame, &self.rooms, self.room_highlight),
@@ -5998,6 +6032,185 @@ mod game_tests {
         let mut game = room_back_game();
         game.mouse_click(10, 10);
         assert_eq!(game.screen(), Screen::Room);
+    }
+
+    /// Staged room lobby with a two-frame BACK button: layer 0 is the
+    /// exe-pinned hover frame, layer 1 the stacked rest top (the rig
+    /// pins hover to body frame 0, `docs/hover.md`).
+    fn hover_room_game() -> ScreenGame {
+        use crate::avatar::FigureLayer;
+        use MenuKey;
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.set_rooms(two_rooms());
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        let pixels = |word: u16| word.to_le_bytes().repeat(83 * 24);
+        let mut figure = AvatarFigure::default();
+        for word in [0x001Fu16, 0x03E0u16] {
+            figure.push_layer(FigureLayer {
+                image: o2jam_render::Rgb555Image::decode(&pixels(word), 83, 24)
+                    .expect("hover layers"),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+        }
+        game.load_scene(
+            Screen::Room,
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: ROOM_BACK_BUTTON_ID.to_owned(),
+                code: ROOM_BACK_BUTTON_CODE,
+                sprite: Some("Room_Back.ojs".to_owned()),
+                rect: Rect {
+                    x: 711,
+                    y: 569,
+                    w: 83,
+                    h: 24,
+                },
+            }],
+            HashMap::from([("Room_Back.ojs".to_owned(), figure)]),
+        );
+        game
+    }
+
+    /// One native pixel of the room scene at the shell seam.
+    fn room_pixel(game: &mut ScreenGame, x: usize, y: usize) -> u32 {
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        buf[y * 800 + x]
+    }
+
+    #[test]
+    fn hovered_room_control_resolves_the_staged_chrome_button() {
+        // The pointer is the shared hover source (ticket #26 consumes
+        // it for the planet board); the room resolver maps it onto
+        // staged chrome the same way clicks resolve.
+        let mut game = hover_room_game();
+        assert_eq!(game.hovered_room_control(), None);
+        game.mouse_moved(752, 581);
+        assert_eq!(
+            game.hovered_room_control().map(|control| control.code),
+            Some(ROOM_BACK_BUTTON_CODE)
+        );
+        assert_eq!(
+            game.hovered_room_control().map(|control| control.id),
+            Some(ROOM_BACK_BUTTON_ID)
+        );
+        game.mouse_moved(10, 10);
+        assert_eq!(game.hovered_room_control(), None);
+    }
+
+    #[test]
+    fn hovered_room_control_clears_off_the_room_screen() {
+        // Leaving the lobby drops hover even though the pointer still
+        // sits inside the button rect (BACK answers the click).
+        let mut game = hover_room_game();
+        game.mouse_moved(752, 581);
+        assert_eq!(
+            game.hovered_room_control().map(|control| control.code),
+            Some(ROOM_BACK_BUTTON_CODE)
+        );
+        game.mouse_click(752, 581);
+        assert_eq!(game.screen(), Screen::Channel);
+        assert_eq!(game.hovered_room_control(), None);
+    }
+
+    #[test]
+    fn hovered_room_button_repaints_its_first_frame() {
+        // The exe repaints the hovered button at full body frame 0
+        // over the stacked rest paint (`docs/hover.md` 2026-11-10
+        // sweep); leaving the control restores the rest paint.
+        let mut game = hover_room_game();
+        let rest = pack_xrgb(0x00, 0xFF, 0x00);
+        let hover = pack_xrgb(0x00, 0x00, 0xFF);
+        assert_eq!(room_pixel(&mut game, 752, 581), rest);
+        game.mouse_moved(752, 581);
+        assert_eq!(room_pixel(&mut game, 752, 581), hover);
+        game.mouse_moved(10, 10);
+        assert_eq!(room_pixel(&mut game, 752, 581), rest);
+    }
+
+    #[test]
+    fn room_row_panels_stay_static_under_the_pointer() {
+        // The exe proves the six row panels static (0 changed px on
+        // every panel, no `Room_MOver.ojs` overlay — `docs/hover.md`),
+        // so the pointer over a panel resolves to no control and the
+        // frame paints byte-identical with and without the hover.
+        let mut game = hover_room_game();
+        use crate::avatar::FigureLayer;
+        let pixels = |word: u16| word.to_le_bytes().repeat(288 * 91);
+        let mut figure = AvatarFigure::default();
+        for word in [0x001Fu16, 0x03E0u16] {
+            figure.push_layer(FigureLayer {
+                image: o2jam_render::Rgb555Image::decode(&pixels(word), 288, 91)
+                    .expect("panel layers"),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+        }
+        game.load_scene(
+            Screen::Room,
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BUTTON_SROOM_EXBUTTON1".to_owned(),
+                code: 0x1301_201B,
+                sprite: Some("Room_ButtonRoom.ojs".to_owned()),
+                rect: Rect {
+                    x: 26,
+                    y: 82,
+                    w: 288,
+                    h: 91,
+                },
+            }],
+            HashMap::from([("Room_ButtonRoom.ojs".to_owned(), figure)]),
+        );
+        let mut rest = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut rest,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        game.mouse_moved(100, 120);
+        assert_eq!(game.hovered_room_control(), None);
+        let mut hovered = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut hovered,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert_eq!(rest, hovered, "row panels repaint nothing on hover");
+    }
+
+    #[test]
+    fn room_hover_hides_behind_the_open_dialog() {
+        // Clicks route to the open dialog first, so hover follows:
+        // chrome behind the dialog highlights nothing.
+        let mut game = hover_room_game();
+        game.mouse_moved(752, 581);
+        assert_eq!(
+            game.hovered_room_control().map(|control| control.code),
+            Some(ROOM_BACK_BUTTON_CODE)
+        );
+        game.open_create_room_dialog();
+        assert_eq!(game.hovered_room_control(), None);
     }
 
     #[test]
