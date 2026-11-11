@@ -205,6 +205,17 @@ impl WindowHandler {
         }
     }
 
+    /// Remember one pointer-motion sample and forward it to the game
+    /// as native frame pixels: exactly what the `CursorMoved` window
+    /// event does. The cached window-pixel position is the press
+    /// source for a later `MouseInput` (that event carries no
+    /// position of its own), so the cache write lives here, in the
+    /// one path motion events take.
+    fn track_motion(&mut self, cursor_x: f64, cursor_y: f64) {
+        self.cursor = Some((cursor_x, cursor_y));
+        self.route_motion(cursor_x, cursor_y);
+    }
+
     /// Forward pointer motion to the game as native frame pixels (the
     /// hover source). The capture log stays silent: motion floods it,
     /// and no trace replays hover yet.
@@ -214,6 +225,22 @@ impl WindowHandler {
         };
         if let Some((x, y)) = window_to_native(window_w, window_h, cursor_x, cursor_y) {
             self.shell.game.mouse_moved(x, y);
+        }
+    }
+
+    /// Route one left-button edge: exactly what the `MouseInput`
+    /// window-event arm does. The edge position is the cursor tracked
+    /// from prior motion/enter events: `MouseInput` carries no
+    /// position (X11 button events and the Wayland protocol both omit
+    /// coordinates, so a client must track the pointer itself), and
+    /// winit 0.30 exposes no pointer-position query to fall back to —
+    /// the tracked cursor is the only source. A backend that ever
+    /// pressed with no preceding `CursorMoved`/`CursorEntered` would
+    /// drop every click (the #118 live symptom); the rig evidence and
+    /// the open desktop chain live in `docs/window-input-seam.md`.
+    fn route_mouse_input(&mut self, down: bool) {
+        if let Some((x, y)) = self.cursor {
+            self.route_mouse_edge(down, x, y);
         }
     }
 
@@ -475,17 +502,14 @@ impl ApplicationHandler for WindowHandler {
             }
             WindowEvent::Ime(Ime::Commit(text)) => self.route_text(&text),
             WindowEvent::CursorMoved { position, .. } => {
-                self.cursor = Some((position.x, position.y));
-                self.route_motion(position.x, position.y);
+                self.track_motion(position.x, position.y);
             }
             WindowEvent::MouseInput {
                 state,
                 button: MouseButton::Left,
                 ..
             } => {
-                if let Some((x, y)) = self.cursor {
-                    self.route_mouse_edge(state == ElementState::Pressed, x, y);
-                }
+                self.route_mouse_input(state == ElementState::Pressed);
             }
             WindowEvent::Resized(size) => {
                 self.resize_surface(size.width, size.height, event_loop);
@@ -527,6 +551,7 @@ mod tests {
         clicks: Vec<(i32, i32)>,
         downs: Vec<(i32, i32)>,
         ups: Vec<(i32, i32)>,
+        moves: Vec<(i32, i32)>,
     }
 
     impl GameLoop for Rc<RefCell<InputProbe>> {
@@ -552,6 +577,10 @@ mod tests {
 
         fn mouse_up(&mut self, x: i32, y: i32) {
             self.borrow_mut().ups.push((x, y));
+        }
+
+        fn mouse_moved(&mut self, x: i32, y: i32) {
+            self.borrow_mut().moves.push((x, y));
         }
 
         fn paint(&mut self, _frame: &mut o2jam_render::Frame<'_>) {}
@@ -674,6 +703,180 @@ mod tests {
         handler.route_mouse_edge(false, 100.0, 200.0);
         assert_eq!(probe.borrow().downs, vec![(100, 200)]);
         assert_eq!(probe.borrow().ups, vec![(100, 200)]);
+    }
+
+    #[test]
+    fn mouse_input_arm_routes_motion_then_both_edges_to_the_game() {
+        // The live case (#118 playtest): a motion event lands first,
+        // the press and release follow through the MouseInput arm.
+        // Every stage must reach the game through the SAME helpers
+        // the winit match arms call — a real event loop never runs
+        // in CI, so the arm bodies are the seam under test (#119).
+        let (mut handler, probe) = probed_handler();
+        handler.surface_size = Some((800, 600));
+        handler.track_motion(100.0, 200.0);
+        handler.route_mouse_input(true);
+        handler.route_mouse_input(false);
+        assert_eq!(probe.borrow().moves, vec![(100, 200)], "hover forwarded");
+        assert_eq!(probe.borrow().downs, vec![(100, 200)], "press routed");
+        assert_eq!(probe.borrow().ups, vec![(100, 200)], "release routed");
+    }
+
+    /// Log of the exact game callbacks the seam made: the event
+    /// name plus native-frame coordinates (lane presses store the
+    /// lane index in `x`).
+    type RoutedEvents = Rc<RefCell<Vec<(&'static str, i32, i32)>>>;
+
+    /// A live `ScreenGame` behind a recording delegate: the real
+    /// scene logic answers every routed event, while the delegate
+    /// logs the exact callbacks the seam made — the window owns the
+    /// game as `Box<dyn GameLoop>`, so the shared cell is the only
+    /// test-side handle on the concrete state.
+    struct SeamGame {
+        inner: Rc<RefCell<super::super::ScreenGame>>,
+        routed: RoutedEvents,
+    }
+
+    impl GameLoop for SeamGame {
+        fn lane_key(&mut self, lane: usize, down: bool) {
+            self.routed
+                .borrow_mut()
+                .push(("lane", lane as i32, down as i32));
+            self.inner.borrow_mut().lane_key(lane, down);
+        }
+
+        fn menu_key(&mut self, key: super::super::MenuKey, down: bool) {
+            self.inner.borrow_mut().menu_key(key, down);
+        }
+
+        fn text_input(&mut self, text: &str) {
+            self.inner.borrow_mut().text_input(text);
+        }
+
+        fn delete_text(&mut self) {
+            self.inner.borrow_mut().delete_text();
+        }
+
+        fn mouse_down(&mut self, x: i32, y: i32) {
+            self.routed.borrow_mut().push(("down", x, y));
+            self.inner.borrow_mut().mouse_down(x, y);
+        }
+
+        fn mouse_up(&mut self, x: i32, y: i32) {
+            self.routed.borrow_mut().push(("up", x, y));
+            self.inner.borrow_mut().mouse_up(x, y);
+        }
+
+        fn mouse_moved(&mut self, x: i32, y: i32) {
+            self.inner.borrow_mut().mouse_moved(x, y);
+        }
+
+        fn quit_requested(&self) -> bool {
+            self.inner.borrow().quit_requested()
+        }
+
+        fn screen_name(&self) -> &'static str {
+            self.inner.borrow().screen_name()
+        }
+
+        fn state_hash(&self) -> u64 {
+            self.inner.borrow().state_hash()
+        }
+
+        fn paint(&mut self, frame: &mut o2jam_render::Frame<'_>) {
+            self.inner.borrow_mut().paint(frame);
+        }
+    }
+
+    /// A handler around a live `ScreenGame` plus handles on both the
+    /// concrete game (scene assertions) and the routed-event log.
+    fn seamed_handler() -> (
+        WindowHandler,
+        Rc<RefCell<super::super::ScreenGame>>,
+        RoutedEvents,
+    ) {
+        let inner = Rc::new(RefCell::new(super::super::ScreenGame::new()));
+        let routed = Rc::new(RefCell::new(Vec::new()));
+        let shell = Shell::new(Box::new(SeamGame {
+            inner: inner.clone(),
+            routed: routed.clone(),
+        }));
+        (WindowHandler::new(shell), inner, routed)
+    }
+
+    #[test]
+    fn mouse_input_arm_advances_avi_and_arms_the_planet_press_split() {
+        // A real ScreenGame behind the seam, two scenes deep:
+        //
+        // 1. Avi press: the non-planet down-dispatch advances the
+        //    flow to the planet board — the edge reached ScreenGame
+        //    through the MouseInput arm.
+        // 2. Planet press at the pinned option-gear rect (#115 split):
+        //    the down edge only ARMS the press (no modal yet), the up
+        //    edge fires it (the Options dialog opens).
+        let (mut handler, game, routed) = seamed_handler();
+        handler.surface_size = Some((800, 600));
+        handler.track_motion(400.0, 300.0);
+        handler.route_mouse_input(true);
+        assert_eq!(
+            handler.shell.game.screen_name(),
+            "planet",
+            "the avi press advanced the flow through the seam"
+        );
+        assert_eq!(
+            routed.borrow()[..],
+            [("down", 400, 300)],
+            "exactly one down edge crossed the seam"
+        );
+        handler.track_motion(729.0, 580.0);
+        handler.route_mouse_input(true);
+        assert_eq!(
+            game.borrow().planet_modal(),
+            None,
+            "the planet down edge arms the press without firing"
+        );
+        handler.route_mouse_input(false);
+        assert_eq!(
+            game.borrow().planet_modal(),
+            Some(super::super::screens::game::PlanetModal::Options),
+            "the planet up edge fires the armed press"
+        );
+        assert_eq!(
+            routed.borrow()[..],
+            [("down", 400, 300), ("down", 729, 580), ("up", 729, 580)],
+            "both planet edges crossed the seam"
+        );
+    }
+
+    #[test]
+    fn mouse_input_arm_drops_a_press_in_the_letterbox_bars() {
+        // 1600x900 letterboxes the native frame with 200 px side
+        // bars: a motion over a bar caches the position, and the
+        // press at the same spot must still route nothing (the
+        // window-to-native mapping rejects it before the game).
+        let (mut handler, probe) = probed_handler();
+        handler.surface_size = Some((1600, 900));
+        handler.track_motion(100.0, 450.0);
+        handler.route_mouse_input(true);
+        handler.route_mouse_input(false);
+        assert!(probe.borrow().downs.is_empty(), "letterbox press dropped");
+        assert!(probe.borrow().ups.is_empty(), "letterbox release dropped");
+    }
+
+    #[test]
+    fn mouse_input_arm_drops_the_edge_when_no_position_is_known() {
+        // No motion/enter ever arrived (the headless case): the edge
+        // has no position source — winit 0.30 offers no pointer query
+        // — and routes nothing. This cold-cache drop is the only
+        // code-level explanation for the #118 live symptom; why the
+        // desktop session never delivered cursor events stays OPEN
+        // (docs/window-input-seam.md).
+        let (mut handler, probe) = probed_handler();
+        handler.surface_size = Some((800, 600));
+        handler.route_mouse_input(true);
+        handler.route_mouse_input(false);
+        assert!(probe.borrow().downs.is_empty());
+        assert!(probe.borrow().ups.is_empty());
     }
 
     #[test]

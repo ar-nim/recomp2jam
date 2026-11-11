@@ -41,6 +41,15 @@ Every subagent brief carries, at minimum:
 - "Never push; never comment on or close issues" — the orchestrator
   merges, gates, and closes.
 - "`git status` shows only intended files before reporting done."
+- Input-boundary routing changes (anything in the winit event arms —
+  mouse edges, motion, keys, text) require a window-seam test: a
+  same-file `#[cfg(test)]` in `crates/o2jam-shell/src/window.rs`
+  driving the extracted arm helper (`track_motion`,
+  `route_mouse_input`) against a real `ScreenGame`, no `EventLoop`
+  (per #119: the suite stayed green while live mouse input died —
+  every pre-#119 test drove `ScreenGame` directly, bypassing the
+  seam). The live rig (`scripts/rig-run.sh` on `:99`, XTEST driver)
+  confirms event-flow questions the headless test cannot reach.
 - For research briefs: findings are written to disk **incrementally**
   after every experiment batch — captures without synthesis are not
   progress (gui-drive #64 post-mortem: 4 h, 371 captures, zero findings).
