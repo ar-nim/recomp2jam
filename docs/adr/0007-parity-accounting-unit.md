@@ -33,7 +33,9 @@ then be audited from its driving claims without a second index.
   CHAN.COMP, …); a cell always has at least one driving claim.
 - A cell's verdict may not rest on a claim whose level is ASSUMED or
   OPEN unless the row says so explicitly (the re-audit enforces this).
-- `docs/claims.md` stays hand-written; the consistency check
+- `docs/claims.md` is GENERATED from the hand-kept fragments in
+  `docs/claims/*.md` (amended, ticket #77); the consistency check
   (wayfinder ticket #48) validates id shape, level vocabulary,
   non-empty anchors, no duplicate ids, and that every `Cells` entry
-  names a real cell.
+  names a real cell — against the fragments, plus a freshness check
+  that the rendered file matches.

@@ -1,3 +1,4 @@
+<!-- GENERATED from docs/claims/*.md by `ledger-check gen claims` — edit the fragments, never this file. -->
 # Behavioral-claims inventory (7.55) — by evidence level
 
 Every behavioral claim in `docs/*.md` (incl. `docs/file-formats/`) plus
@@ -27,11 +28,11 @@ Short forms live in `GLOSSARY.md`. Normative forms:
 
 | Level | Claims |
 |---|---|
-| EXE | 109 |
+| EXE | 111 |
 | DATA | 19 |
 | ASSUMED | 12 |
 | OPEN | 21 |
-| Total | 161 |
+| Total | 163 |
 
 ## The pairing-rule family (known mistake + siblings)
 
@@ -140,7 +141,7 @@ index (all-zero rect, slot 0, default arm).
 | B13 | Hold-active flag at `+0x9f8`, written gated on payload hold-bit tests | EXE | writes `0x17617b`/`0x176c78`/`0x17726b`; tests `0x1766cb`… | G | PLAY.GAME, PLAYING.GAME |  |
 | B14 | Chart payload hold bits: 25 = hold head, 24 = paired span tail, 26 judge-invisible (parser span marker + strike-slot `+0x3E8`) | EXE | bit-25 head test `(payload & 0x3000000) == 0x2000000` at VAs `0x576105` (second judge, ev `3d707204…`), `0x576c42` (judge keyup, ev `14992eb2…`), `0x5771f5` (auto judge, ev `d6802fde…`); bit-26 span mark `and $0x4000000` at `0x573061` (parser fix-up `0x572f50`, *(offset-only)*) is judge-invisible — its only payload consumers are the parser span survey (`0x172a4f`), the post-parse fix-up, and the strike-slot `+0x3E8` bank (B17, files `0x170427`/`0x170431`); the bit-test sweep VAs `0x5703f0`–`0x578300` finds no bit-26 test in any judge or scan, and shipped playable payloads never set the bit (gameplay.md payload-bit rules — claim CORRECTED, the old "26 = span-tail" reading is refuted); paired tails carry bit 24 (shipped flag word `0x300` keeps bit 25 too) and are excluded from walk candidacy (`0x576837`, ev `14992eb2…`) | G | PLAY.GAME, PLAYING.GAME | corrects the bit-25/26 reading |
 | B15 | Kinds 2–8 are the seven lane channels, lane = `map[kind − 2]` (identity ⇒ `kind − 2`); shipped-chart usage (`{0,2,3}`/all seven) stays data-side | EXE | loader kind gate VA `0x572732`–`0x57275a` (`kind ≥ 2 ∧ kind < [+0x82c]+2`; width 7 ⇒ 2..8; ev `8659c2d0…`); lane index read from the u16 map at `0x572791` (map filled by lane setup `0x571c30` via the out-array call `0x571e42`, ev `41695a9b…`), lane list `+0x42c + idx*0xC` at `0x572853`; kinds ≥ 0x22 fail the load (`0x5723b9`) | G | PLAY.GAME, PLAYING.GAME |  |
-| B16 | Note value = `(flags << 16) \ | (sample_id + 1)`; ids land in the `.ojm` set (one dangling) | EXE | the loader stores each lane-event dword verbatim into the record (VA `0x572828`–`0x57282f`, insert `0x5728c3`, *(offset-only)*); BGM channels decode `value & 0xFFF` as the sample id (`0x572a64`, *(offset-only)*); playable strikes consume `(payload & 0xFFF) − 1` plus `0x3E8` on bit 26 (B17, `0x1703f0`) and hold semantics read bits 24–26 (B14); the id-membership numbers stay the data walk (12/13 charts, one dangling) | G |  |
+| B16 | Note value = `(flags << 16) \| (sample_id + 1)`; ids land in the `.ojm` set (one dangling) | EXE | the loader stores each lane-event dword verbatim into the record (VA `0x572828`–`0x57282f`, insert `0x5728c3`, *(offset-only)*); BGM channels decode `value & 0xFFF` as the sample id (`0x572a64`, *(offset-only)*); playable strikes consume `(payload & 0xFFF) − 1` plus `0x3E8` on bit 26 (B17, `0x1703f0`) and hold semantics read bits 24–26 (B14); the id-membership numbers stay the data walk (12/13 charts, one dangling) | G | — |  |
 | B17 | Strike slot = `(payload & 0xFFF) − 1`, plus `0x3E8` on bit 26 | EXE | `0x1703f0` | G | PLAY.GAME, PLAYING.GAME |  |
 | B18 | Timing: 192 ticks/beat, ms via `240000 / BPM`, per-event float rounding | EXE | loader `0x571d60` (ev `8659c2d0…`): doubles `192.0` (VA `0x64b540`, × at `0x57221f`) and `240000.0` (VA `0x64dc80`, ÷ at `0x5720dc`/`0x572225`/`0x57233a`/`0x5725b8`); 0xC0 subdivision bounds `0x572273`/`0x572411`/`0x572444`; round-half-up `+0.5` (constant VA `0x644888`, site `0x572491`) into truncating `fistp` under control-word `0xC00` (`0x57211b`–`0x572132` et al.) | G | PLAY.TIME, PLAYING.GAME |  |
 | B19 | Kind-0 single float = beats per measure (a stored zero dword defaults to 1.0) | EXE | loader branch `0x572453` (`test kind`), float read `0x572462`–`0x572475` with `fld1` default `0x57247d`, measure tick length = beats × 192 (+0.5 round) stored `0x572485`–`0x5724d6`; ev `8659c2d0…`; the lone o2ma769 `0.75` observation stays corroboration | G | PLAY.TIME, PLAYING.GAME |  |
@@ -248,12 +249,12 @@ index (all-zero rect, slot 0, default arm).
 | D18 | Live-state 4042–4045 shapes incl. `MemberInfo` tail order | EXE | `0x159b50`/`0x18cf50` chains | G | WAIT.TRANS, WAITING.GAME |  |
 | D19 | Endpoints: FTP hosts, gateway IP/port, web/registry strings | EXE | string table `0x24b9c0`–`0x2514f0`; contents re-verified 2026-11-07 from bytes: gateway IPs `121.125.76.136`/`.135` at file `0x24b9c0`+, `O2JAM_MUSIC_FTP`/`O2JAM_DUMP_FTP` hosts, `15010` port string, registry `SOFTWARE\\NOWCOM\\O2Jam` | — | — |  |
 | D20 | Authorize 1000 payload order (token, gender string, marker, clientId) | ASSUMED | Memoryer order; exe byte-proof open; negative *(offset-only)*: image-wide scans find no 1000 send staging — all 46 `push 0x3E8` sites are non-packet uses (e.g. ReadFile size VA `0x5acd82`, tick timeout VA `0x5b71c9`), and the only 9 direct `SetID` (file `0x1a0550`) callers are the relay ctor family (files `0xea4f4`/`0x16dff4`/`0x16e094`/`0x18622c`/`0x18ca74`/`0x18cc64`/`0x18e114`/`0x18e1f4`/`0x1a0423`; re-verified 2026-11-07 — 46 `push $0x3E8` sites image-wide, same 9 callers; caller set re-verified 2026-11-07 — exactly 9 `call 0x5a0550`, VAs match the listed files); unflippable — no 1000-send staging exists to pin the payload order | G | — |  |
-| D21 | Result peer-row avatar: the member→avatar-id byte rides server-side; the client-side byte→figure convention is unpinned | OPEN | member table stride `0x2190` base `0x77ee90` (D16) read on the result row painter path; next step: gateway replay pinning the member→avatar convention (proxy-rewrite recipe `~/scratch/digits-rig/proxy.py`) plus a rig capture of a populated battle row | R+G | RESULT.COMP |
+| D21 | Result peer-row avatar: the member→avatar-id byte rides server-side; the client-side byte→figure convention is unpinned | OPEN | member table stride `0x2190` base `0x77ee90` (D16) read on the result row painter path; next step: gateway replay pinning the member→avatar convention (proxy-rewrite recipe `~/scratch/digits-rig/proxy.py`) plus a rig capture of a populated battle row | R+G | RESULT.COMP |  |
 | D22 | 2031 per-byte difficulty order: which body byte of `MusicScoreListAnswer` 2031 each difficulty reads (result-screen lookup over `0x779814`) | OPEN | handler `0x55b640` dossier `ev_45b5f508…` pinned; next step per ADR-0009: static sweep + REA dossier of the per-byte split at `0x779814`; Memoryer splits labeled as such until filed | R | LANKING.INPUT |  |
 | D23 | 2032 wire transfer through the `+0x64` slot: which fields ride the slot and in which order | OPEN | handler `0x55b590` dossier `ev_299779a2…` pinned; next step: REA dossier naming the `+0x64`-slot boundary and field order; upgrade to a proxy rewrite only if the sweep leaves the boundary ambiguous | R | LANKING.INPUT |  |
 | D24 | U4 ranking gate globals: which globals gate the 2027/2030/2032 sends and their answers, and the gate values | OPEN | send district `0x55b230`/`0x55b590`/`0x55b640` dossiers `ev_7f09b7fa…`/`ev_299779a2…`/`ev_45b5f508…`; next step: sweep naming each gating global and its values, stopped-state read only if a value is not statics-reachable | R | LANKING.INPUT |  |
 | D25 | Channel-row label value source: which wire field and format drive the row label (the U1 walk renders every row `Ch. 99 / FULL`; the row digits themselves are already rig-pinned to `channel_id + 1`) | OPEN | next step per ADR-0009: proxy rewrite of the 1003 reply `channel_id` (recipe `~/scratch/digits-rig/proxy.py`) turning the value-source question into a pixel/label read on a rig capture pair | R+G | CHANNEL.COMP |  |
-| D26 | Room-team tie-break display order when server-side totals are equal (totals server-side, B28; tie-break order UNVERIFIED) | OPEN | next step per ADR-0009 (server-computed rule): proxy rewrite forcing equal team totals plus a rig capture of the room/result display order; stopped-state read only if the server will not cooperate | G | WAITING.GAME |  |  |
+| D26 | Room-team tie-break display order when server-side totals are equal (totals server-side, B28; tie-break order UNVERIFIED) | OPEN | next step per ADR-0009 (server-computed rule): proxy rewrite forcing equal team totals plus a rig capture of the room/result display order; stopped-state read only if the server will not cooperate | G | WAITING.GAME |  |
 
 ## Top-6 risky claims (visible behavior on the weakest evidence)
 
@@ -275,6 +276,9 @@ index (all-zero rect, slot 0, default arm).
 
 ## Maintenance
 
+- Edit the fragments under `docs/claims/`, never this file; regenerate
+  with `cargo run -p recomp2jam --bin ledger-check -- gen claims`
+  (ledger-check fails on a stale render).
 - Update a row when its level changes; keep one claim per row.
 - New EXE evidence for an ASSUMED row retires its risk note.
 - The sibling list is the checklist for every new positional claim:
