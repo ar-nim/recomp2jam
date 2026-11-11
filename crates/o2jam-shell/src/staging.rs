@@ -13,8 +13,9 @@ use o2jam_render::{Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
 
 use crate::avatar::{
     bind_scene_rects, load_archive_sprite_for_stage, load_scene_figures_for_room,
-    playing_member_selected, scene_block, scene_sprite_names, AvatarFigure, PlacementRole,
-    PlayingArtMode, ScenePlacement, LOADING_SPRITE,
+    playing_backdrop_sprite, playing_member_selected, scene_block, scene_sprite_names,
+    AvatarFigure, PlacementRole, PlayingArtMode, ScenePlacement, LOADING_SPRITE,
+    PLAYING_BACKDROP_CODE,
 };
 use crate::screen::Screen;
 use crate::screens::side::{
@@ -410,6 +411,11 @@ pub struct StageContext {
     pub key_mode: u8,
     /// Team/versus room.
     pub team_play: bool,
+    /// Chart slot index (`0` Easy, `1` Normal, `2` Hard): feeds the
+    /// Playing BACK1 backdrop's `%d` variant (exe staging function
+    /// file `0x4dc79f`–`0x4dc7bb`; the arg semantic stays OPEN, see
+    /// `docs/playing-backdrop.md`).
+    pub chart_slot: u8,
 }
 
 /// Art one staging call returns: layout plus figures. The caller
@@ -611,27 +617,27 @@ fn stage_full_canvas_row(archive: &[u8], row: &StageRow, ctx: StageContext) -> S
     report
 }
 
-/// Stage one Playing-subset row: behind entries, backdrops, then
+/// Stage one Playing-subset row: the runtime-built BACK1 backdrop
+/// first (the exe Playing setup re-stages `IDC_IMAGE_SPLAY_BACK1`
+/// onto the mode-family full-screen body before every other pass —
+/// `docs/playing-backdrop.md`), then behind entries, backdrops, and
 /// the bound run, with figures through the context's room mode
-/// (unselected family members leave empty slots with no miss),
-/// plus the row's extra bodies merged by name.
+/// (unselected family members leave empty slots with no miss), plus
+/// the row's extra bodies merged by name.
 fn stage_playing_row(archive: &[u8], row: &StageRow, ctx: StageContext) -> StageReport {
     let mut report = StageReport::default();
     let Some(resolved) = resolve_bound_row(archive, row, &mut report) else {
         return report;
     };
     let block_name = resolved.block_name;
+    let backdrop = playing_backdrop_sprite(ctx.team_play, ctx.chart_slot);
+    let mut names = vec![backdrop.clone()];
+    names.extend(resolved.names.iter().cloned());
     let mut art = StagedArt {
         placements: bind_scene_rects(&resolved.block, &resolved.bind),
-        figures: load_playing_figures(
-            archive,
-            &resolved.names,
-            ctx,
-            &mut report,
-            row.state,
-            block_name,
-        ),
+        figures: load_playing_figures(archive, &names, ctx, &mut report, row.state, block_name),
     };
+    art.placements.insert(0, backdrop_placement(&backdrop));
     for extra in row.extra_sprites {
         match load_archive_sprite_for_stage(archive, extra, ctx.arena_stage) {
             Some(figure) => {
@@ -645,6 +651,26 @@ fn stage_playing_row(archive: &[u8], row: &StageRow, ctx: StageContext) -> Stage
     }
     report.art = Some(art);
     report
+}
+
+/// The synthetic BACK1 backdrop placement: the exe builds the
+/// staging record on the stack (no ControlList entry names the
+/// runtime-built body), so the placement carries the BACK1 code with
+/// the all-zero rect — anchored bodies draw at their record anchor
+/// `(0,0)` full-screen, never at the rect.
+fn backdrop_placement(sprite: &str) -> ScenePlacement {
+    ScenePlacement {
+        role: PlacementRole::Single,
+        id: String::new(),
+        code: PLAYING_BACKDROP_CODE,
+        sprite: Some(sprite.to_owned()),
+        rect: Rect {
+            x: 0,
+            y: 0,
+            w: 0,
+            h: 0,
+        },
+    }
 }
 
 /// Playing-subset figures through the room mode in the context: only

@@ -159,10 +159,15 @@ fn stage_playing_scenes(game: &mut ScreenGame, archive: &[u8]) {
         game.load_scene(Screen::Loading, art.placements, art.figures);
     }
     let mode = live_playing_mode(game);
+    let chart_slot = game
+        .selected_music()
+        .map(|music| music.difficulty)
+        .unwrap_or(0);
     let ctx = StageContext {
         arena_stage: Some(game.arena_stage()),
         key_mode: mode.key_mode,
         team_play: mode.team_play,
+        chart_slot,
     };
     let Some(art) = stage_state(archive, State::Playing, ctx).art else {
         return;
@@ -664,6 +669,7 @@ mod live_art_tests {
             arena_stage: Some(expected.arena_stage()),
             key_mode: mode.key_mode,
             team_play: mode.team_play,
+            chart_slot: 0,
         };
         if let Some(art) = stage_state(&playing, State::Playing, playing_ctx).art {
             expected.load_scene(Screen::Playing, art.placements, art.figures);

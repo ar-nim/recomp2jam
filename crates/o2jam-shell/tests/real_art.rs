@@ -753,6 +753,7 @@ fn playing_layers_notes_over_bound_gauges() {
         arena_stage: Some(probe.arena_stage()),
         key_mode: probe.room_key_mode(),
         team_play: probe.room_team_play(),
+        chart_slot: 0,
     };
     let Some(art) = stage_state(&archive, State::Playing, ctx).art else {
         panic!("playing: STATE_PLAYING staged no figures");

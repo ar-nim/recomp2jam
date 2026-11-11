@@ -1,4 +1,8 @@
 use super::*;
+use crate::avatar::{
+    is_playing_backdrop_sprite, playing_backdrop_sprite, playing_member_frame,
+    PLAYING_BACKDROP_CODE,
+};
 
 #[test]
 fn states_key_by_their_block_names() {
@@ -755,6 +759,7 @@ fn playing_archive_with(bodies: &[&str]) -> Vec<u8> {
 
 fn full_playing_archive() -> Vec<u8> {
     playing_archive_with(&[
+        "Playing_NormalBG2.ojs",
         "Playing_BG2.ojs",
         "Note_BG.ojs",
         "P2P7KeyNote_BG.ojs",
@@ -769,7 +774,47 @@ fn solo_seven_key_context() -> StageContext {
         arena_stage: Some(2),
         key_mode: 2,
         team_play: false,
+        chart_slot: 2,
     }
+}
+
+#[test]
+fn playing_backdrop_name_cycles_by_chart_slot_mod_three() {
+    // The exe setup sprintf's the BACK1 family with `%d = index % 3`,
+    // a zero remainder taking 3 (file `0x4dc79f`-`0x4dc7bb`).
+    assert_eq!(playing_backdrop_sprite(false, 0), "Playing_NormalBG3.ojs");
+    assert_eq!(playing_backdrop_sprite(false, 1), "Playing_NormalBG1.ojs");
+    assert_eq!(playing_backdrop_sprite(false, 2), "Playing_NormalBG2.ojs");
+    assert_eq!(playing_backdrop_sprite(false, 3), "Playing_NormalBG3.ojs");
+    assert_eq!(playing_backdrop_sprite(true, 2), "Playing_P2PBG2.ojs");
+}
+
+#[test]
+fn playing_backdrop_sprite_membership_matches_runtime_built_names() {
+    for name in [
+        "Playing_NormalBG1.ojs",
+        "Playing_NormalBG2.ojs",
+        "Playing_NormalBG3.ojs",
+        "Playing_P2PBG1.ojs",
+        "Playing_P2PBG2.ojs",
+        "Playing_TutorialBG.ojs",
+    ] {
+        assert!(is_playing_backdrop_sprite(name), "{name} stages behind");
+    }
+    for other in ["Playing_BG2.ojs", "Note_BG.ojs", "Playing_Menu.ojs"] {
+        assert!(!is_playing_backdrop_sprite(other), "{other} is not BACK1");
+    }
+}
+
+#[test]
+fn playing_backdrop_loads_its_mode_arm_frame_only() {
+    // The exe setup drives the frame by mode arm (SetFrame `0x42f870`,
+    // mode-0 arm frame 2 -> image 1); the shell rides image 1
+    // (`playing_member_frame`).
+    assert_eq!(playing_member_frame("Playing_NormalBG2.ojs"), Some(1));
+    assert_eq!(playing_member_frame("Playing_P2PBG1.ojs"), Some(1));
+    assert_eq!(playing_member_frame("Note_BG.ojs"), Some(0));
+    assert_eq!(playing_member_frame("Playing_Menu.ojs"), None);
 }
 
 #[test]
@@ -789,6 +834,7 @@ fn playing_subset_orders_behind_backdrops_then_bound_run() {
     assert_eq!(
         sprites,
         vec![
+            Some("Playing_NormalBG2.ojs"),
             Some("_Playing_BG.ojs"),
             Some("Note_BG.ojs"),
             Some("P2P7KeyNote_BG.ojs"),
@@ -797,10 +843,14 @@ fn playing_subset_orders_behind_backdrops_then_bound_run() {
             None,
             Some("Vol_Mark.ojs"),
         ],
-        "behind entries, backdrops, then the bound run"
+        "BACK1 backdrop, behind entries, backdrops, then the bound run"
     );
-    assert_eq!(art.placements[5].rect.x, 1, "EXIT takes ordinal 1");
-    assert_eq!(art.placements[6].rect.x, 10, "VOL takes ordinal 2");
+    assert_eq!(
+        art.placements[0].code, PLAYING_BACKDROP_CODE,
+        "the synthetic backdrop placement carries the BACK1 control code"
+    );
+    assert_eq!(art.placements[6].rect.x, 1, "EXIT takes ordinal 1");
+    assert_eq!(art.placements[7].rect.x, 10, "VOL takes ordinal 2");
 }
 
 #[test]
@@ -836,13 +886,14 @@ fn playing_context_selects_team_family_members() {
         arena_stage: Some(2),
         key_mode: 2,
         team_play: true,
+        chart_slot: 2,
     };
     let report = stage_state(&full_playing_archive(), State::Playing, ctx);
     let art = report.art.expect("playing stages with synthetic bytes");
     assert!(art.figures.contains_key("P2P7KeyNote_BG.ojs"));
     assert!(!art.figures.contains_key("Note_BG.ojs"));
     assert!(!art.figures.contains_key("3Key_Note_BG.ojs"));
-    assert_eq!(art.placements.len(), 7, "placements ignore the family");
+    assert_eq!(art.placements.len(), 8, "placements ignore the family");
 }
 
 #[test]
@@ -851,6 +902,7 @@ fn playing_key_mode_selects_note_background() {
         arena_stage: Some(2),
         key_mode: 0,
         team_play: false,
+        chart_slot: 2,
     };
     let report = stage_state(&full_playing_archive(), State::Playing, ctx);
     let art = report.art.expect("playing stages with synthetic bytes");
@@ -862,6 +914,7 @@ fn playing_key_mode_selects_note_background() {
 #[test]
 fn playing_missing_body_keeps_placement_with_empty_slot() {
     let archive = playing_archive_with(&[
+        "Playing_NormalBG2.ojs",
         "Playing_BG2.ojs",
         "Note_BG.ojs",
         "P2P7KeyNote_BG.ojs",
@@ -870,7 +923,7 @@ fn playing_missing_body_keeps_placement_with_empty_slot() {
     ]);
     let report = stage_state(&archive, State::Playing, solo_seven_key_context());
     let art = report.art.expect("a missing body never fails the scene");
-    assert_eq!(art.placements.len(), 7, "placements survive the miss");
+    assert_eq!(art.placements.len(), 8, "placements survive the miss");
     assert!(!art.figures.contains_key("Vol_Mark.ojs"));
     assert_eq!(report.misses.len(), 1);
     assert_eq!(report.misses[0].state, State::Playing);
