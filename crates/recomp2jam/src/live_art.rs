@@ -98,6 +98,21 @@ pub(crate) fn stage_planet_dialogs(game: &mut ScreenGame, archive: &[u8]) {
     if let Some(art) = stage_dialog(archive, Dialog::PlanetQuit, ctx).art {
         game.load_planet_quit_scene(art.placements, art.figures);
     }
+    stage_room_dialogs(game, archive);
+}
+
+/// Stage the room-lobby dialog sheets (ticket #53): `DIALOG_CREATEROOM`
+/// and `DIALOG_INPUTPASSWORD` through the declaration, like every other
+/// dialog. Each stages independently; a miss keeps the unstaged dialog
+/// path (the modal still owns input, clicks land nowhere).
+fn stage_room_dialogs(game: &mut ScreenGame, archive: &[u8]) {
+    let ctx = StageContext::default();
+    if let Some(art) = stage_dialog(archive, Dialog::CreateRoom, ctx).art {
+        game.load_create_room_scene(art.placements, art.figures);
+    }
+    if let Some(art) = stage_dialog(archive, Dialog::InputPassword, ctx).art {
+        game.load_password_scene(art.placements, art.figures);
+    }
 }
 
 /// Stage the channel dialog art through the declaration: the bound
@@ -444,6 +459,63 @@ mod live_art_tests {
     }
 
     #[test]
+    fn create_dialog_paints_its_sheet_after_live_staging() {
+        // Ticket #53: the live boot stages the create-room sheet, so
+        // opening the dialog over the same staged lobby inks pixels
+        // (unstaged, the open dialog paints nothing extra).
+        if skip_without_archives() {
+            return;
+        }
+        let mut game = live_game();
+        stage_live_scenes(&mut game);
+        walk_to(&mut game, Screen::Room);
+        let closed = painted_pixels(&mut game, 0);
+        game.open_create_room_dialog();
+        game.push_room_dialog_char('x');
+        assert_ne!(
+            painted_pixels(&mut game, 0),
+            closed,
+            "CREATE paints no sheet after live staging"
+        );
+    }
+
+    #[test]
+    fn live_staged_create_sheet_commits_a_title() {
+        // Ticket #53: the live-staged sheet carries real
+        // `Dialog_CreateRoom.bnd` rects, so a CREATE click on the
+        // staged rect commits the typed title (the 2004 body).
+        use o2jam_shell::screens::side::CREATE_ROOM_CREATE_CODE;
+        use o2jam_shell::staging::{stage_dialog, Dialog};
+        if skip_without_archives() {
+            return;
+        }
+        let archive = read_install_archives(&install_root())
+            .interface
+            .expect("interface archive stages");
+        let mut game = live_game();
+        stage_live_scenes(&mut game);
+        walk_to(&mut game, Screen::Room);
+        game.open_create_room_dialog();
+        game.push_room_dialog_char('x');
+        let staged = stage_dialog(&archive, Dialog::CreateRoom, StageContext::default())
+            .art
+            .expect("create-room dialog stages");
+        let create = staged
+            .placements
+            .iter()
+            .find(|placed| placed.code == CREATE_ROOM_CREATE_CODE)
+            .expect("CREATE rect stages");
+        let (cx, cy) = (
+            create.rect.x + create.rect.w as i32 / 2,
+            create.rect.y + create.rect.h as i32 / 2,
+        );
+        game.mouse_click(cx, cy);
+        assert_eq!(game.room_dialog(), None);
+        let body = game.take_create_room().expect("committed 2004");
+        assert_eq!(body.title, "x");
+    }
+
+    #[test]
     fn planet_paints_real_art_when_archives_present() {
         // The walk cannot reach Planet without invented input, so this
         // paints the staged scene directly: real art must ink the frame
@@ -571,6 +643,15 @@ mod live_art_tests {
         if let Some(art) = stage_dialog(&interface, Dialog::PlanetQuit, StageContext::default()).art
         {
             expected.load_planet_quit_scene(art.placements, art.figures);
+        }
+        if let Some(art) = stage_dialog(&interface, Dialog::CreateRoom, StageContext::default()).art
+        {
+            expected.load_create_room_scene(art.placements, art.figures);
+        }
+        if let Some(art) =
+            stage_dialog(&interface, Dialog::InputPassword, StageContext::default()).art
+        {
+            expected.load_password_scene(art.placements, art.figures);
         }
         if let Some(art) = stage_state(&playing, State::Loading, StageContext::default()).art {
             expected.load_scene(Screen::Loading, art.placements, art.figures);
