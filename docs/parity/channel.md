@@ -6,3 +6,24 @@
 | Input | Pick channel/planet → room (`My_channel`/`My_planet` bridge, file `0x24df70`–`0x24e024`) | Up/Down moves highlight (clamped), Confirm → Room, Back → Planet (Esc symmetry with the verified X close, guard `channel_back_closes_to_the_planet_board` plus `menu_backs_out_of_lobbies`) — entry-face click LIVE-VERIFIED 2026-11-09 (one click at (526,248) drives `03EC/0FBE/07D0/07D2/13A4` into `STATE_ROOM`, ~/scratch/planet-verify/); dialog X close and lit-emblem family switch verified the same session (ev: ~/scratch/planet-verify/ entry-face click 2026-11-09). Ticket #56: row-body clicks move the highlight only, only the enter face enters (keyboard Confirm unchanged); ticket #55: the scroll-column arrows step like the keys (bar-body drag OPEN). Guards: `face_click_enters_the_highlighted_channel`, `body_click_highlights_without_entering`, `face_click_selects_channel_row_and_enters_rooms`, `scroll_down_arrow_steps_the_channel_highlight`, `scroll_up_arrow_at_top_clamps_the_highlight`, `scroll_arrows_clamp_at_the_last_row`, `channel_face_hit_covers_the_measured_faces`, `channel_scroll_hit_uses_the_bnd_track_arrows` | PASS (R+G, v: 9692d41) (click path) / OPEN (exe key codes: Up/Down/Confirm/Back wired and tested but the exe dispatch stays unpinned — next step: SendInput arrows/Enter/Esc sweep on the live dialog per the `~/scratch/planet-verify/` recipe, reading highlight via dialog+`0x94` and the phase flag at parent+`0xF64`) |
 | Timing | None documented | n/a (ev: none — no timed dispatch documented) | N/A (R+G, v: 9692d41) (no timed behavior — no dispatch exists to guard; next step: none) |
 | Transitions | `Channel → Room`; hosted by `CStatePlanet` (resolved live 2026-11-09) | `Channel → Room` (row confirm / entry faces); dialog X (bnd-pinned rect (541,151)-(589,189); verified close click (577,171)) closes to `Planet`; hosted by `CStatePlanet` (live memory read 2026-11-09) (ev: `docs/channel-fill.md`; hosted-by live read 2026-11-09) | PASS (R, v: 9692d41) (guards: `flow_allows_every_documented_edge`, `menu_walks_full_session_to_results`, `channel_back_closes_to_the_planet_board`) |
+
+## Ticket #92 — row-label value source PINNED (2026-11-11)
+
+Claim D25 is closed without a new rig session: the proxy rewrite its next
+step named was already run on 2026-11-10 (`~/scratch/digits-rig/`, runs +5
+and +10 moving the 1003 `channel_id` under the live exe) and the 2026-11-11
+sheet decode (`docs/channel-fill.md` "Ticket #12 row-art decode") answers the
+format half. Verdict:
+
+- **Value source:** the 1003 row's `channel_id` (not the list ordinal, not
+  the gateway id). Display number = `channel_id + 1`.
+- **Format:** no client-drawn label text exists. The `Ch.` prefix is baked
+  into the `Dialog_ChannelInfo.ojs` sheet art; the number is the tens/ones
+  decimal digit frames of `ChannelInfo_CH_Num.ojs` (`(id+1)/10 % 10`,
+  `(id+1) % 10`); `FULL` is the baked `ChannelInfo_CH_Back.ojs` frame-2 bar,
+  not a text suffix. The U1-walk `Ch. 99 / FULL` rendering was the shell's
+  invented ASCII stand-in (now the labeled figure-less fallback only, #93).
+- **Identity vs display:** the entry face still sends the raw
+  `channel_id` (run-1 capture: row painted `Ch.10` entered channel `09`).
+- **OPEN (unchanged):** inactive-row gating field (`active` vs `capacity`
+  co-vary in every capture), count-strip quantization, bar frame-1 trigger.
