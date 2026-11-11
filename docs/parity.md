@@ -308,11 +308,12 @@ pipeline drift). The `STATE_WAITING` music-select row flips to PASS with guards 
 photo rows above carry the corrected residuals.
 
 - Scenes covered: 7 main + musicselect dialog + loading gate + 9 side states.
-- Re-tally 2026-11-10 (ticket #23; program start read 12 PASS /
-  28 FAIL / 30 OPEN cells in issue #9): **31 dimension rows —
-  18 PASS-led (11 pure + 7 PASS-with-OPEN-arms), 9 OPEN-led,
-  1 FAIL, 3 N/A.** Every row names its guards or its next step;
-  N/A rows name why no guard applies (no dispatch exists).
+- Re-audit 2026-11-12 (ticket #49): **57 dimension cells — 34
+  PASS, 13 OPEN, 1 FAIL, 9 N/A.** Every cell carries a tier
+  (R / G / R+G), an evidence pointer, and a last-verified commit.
+  Every OPEN names its next step; every N/A names why no guard
+  applies. The consistency check (ledger-check) reports 0
+  violations.
 - PASS: boot-into-splash, 800×600 default (`SetWindowPos` file
   `0x14b4c`/`0x14baf`), all 13 documented transition edges (plus
   rejections — `flow_allows_every_documented_edge`,
