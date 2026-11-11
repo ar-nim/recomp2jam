@@ -13,7 +13,9 @@ identically. Owner directives (2026-11-10):
 
 The controller (main agent) sequences sprints; subagents do the work
 and NEVER commit — the controller reviews, runs gates, commits
-(Conventional Commits), pushes, and updates `docs/parity.md`.
+(Conventional Commits), pushes, and updates the parity section files
+under `docs/parity/` (regenerating the `docs/parity.md` index with
+`ledger-check gen parity-index`).
 Backend sprints (audio/game crates) may run in parallel; sprints
 touching `o2jam-shell` scenes run sequentially (shared files).
 
@@ -66,8 +68,8 @@ touching `o2jam-shell` scenes run sequentially (shared files).
    where the state is reachable.
 5. **A/V compare** — `recomp2jam-av-compare` scripts vs real captures
    where frames exist (`~/scratch/av-reports/` conventions).
-6. **Parity row** — controller updates `docs/parity.md` with verdict +
-   evidence citations.
+6. **Parity row** — controller updates the matching `docs/parity/<section>.md`
+   with verdict + evidence citations, then regenerates the index.
 
 ## Sprint 0 — planet behavior pack (owner corrections, all pinned)
 

@@ -241,12 +241,12 @@ pub struct RoomControlNoop {
 /// Next evidence step for a staged room control whose click handler the
 /// tree has not traced yet: the exe `CStateRoom` click dispatch.
 const HANDLER_STEP: &str =
-    "rig click on the control in the live room plus a memory read of the CStateRoom click dispatch (docs/parity.md STATE_ROOM Input row)";
+    "rig click on the control in the live room plus a memory read of the CStateRoom click dispatch (docs/parity/room.md Input row)";
 /// Next evidence step for `IDC_BUTTON_SROOM_FIRSTSTEP` (ticket #34):
 /// `STATE_ROOM` carries no tutorial control, so the tutorial emblem's
 /// entry path owns the question.
 const TUTORIAL_STEP: &str =
-    "pin the tutorial entry path (docs/parity.md TUTORIAL_ENTRY_NEXT_STEP); STATE_ROOM itself carries no tutorial control";
+    "pin the tutorial entry path (docs/parity/tutorial.md TUTORIAL_ENTRY_NEXT_STEP); STATE_ROOM itself carries no tutorial control";
 /// Next evidence step for the three mode filters.
 const MODE_FILTER_STEP: &str =
     "rig click on each mode filter plus a capture of the filtered room list (the list filter rule is untraced)";

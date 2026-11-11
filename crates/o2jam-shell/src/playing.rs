@@ -2559,7 +2559,7 @@ const TALLY_COUNT_GRID: [(i32, i32); 4] = [(317, 556), (392, 556), (317, 578), (
 ///   VOL/EQUALIZER/COMBO/COOL/GOOD/BAD/MISS/EXIT, and the exe has no
 ///   draw string ("EA05" absent; "O2JAM" hits are FTP/server-list
 ///   context). The photo's labels are baked vintage strip art of a
-///   different client build (`docs/parity.md` venue-vintage class);
+///   different client build (`docs/parity/playing.md` venue-vintage class);
 ///   painting them would inject ink 7.55 cannot produce.
 const TALLY_TIME_NATIVE: Rect = Rect {
     x: 489,

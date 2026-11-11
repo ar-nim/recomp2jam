@@ -2223,7 +2223,7 @@ pub fn planet_hit(x: i32, y: i32) -> Option<PlanetHit> {
 
 /// Live difficulty selection on the planet board. `None` until the
 /// player picks a band; `FREE`/`DRUM` clicks never change it (their
-/// backends were never wired — P0 in `docs/parity.md`).
+/// backends were never wired — P0 in `docs/parity/planet.md`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PlanetSelection {
     band: Option<PlanetBand>,

@@ -2,7 +2,7 @@
 
 Question: our parity shot shows the `Note_BG.ojs` red deck strip at game
 `(570,458)–(774,478)` where the reference photo shows the venue deck
-(`docs/parity.md` Playing row, residual "exe cover untraced"). What does
+(`docs/parity/playing.md` Composition row, residual "exe cover untraced"). What does
 the exe paint over that region — later entry art, `Playing_Menu.ojs`
 overlap, or is the panel mode-family-only? Method: read-only byte walks
 with Python 3.14 over `Playing1.opi` plus read-only objdump 2.44 static

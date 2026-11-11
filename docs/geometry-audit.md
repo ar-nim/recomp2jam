@@ -203,7 +203,7 @@ photo-vs-bnd value divergences stand, cited per row).
 | playing.rs:144 `STRIP_ROW_NATIVE` | 554 | none (sprite) | `Playing_Exit.ojs` (751,554), `Normal_TimeBar.ojs` (489,556) anchors | DONE | None |
 | playing.rs:148 `JAM_DIGIT_FALLBACK_Y` | 4 | none | fallback row, unbound art | RUNTIME | Keep |
 | playing.rs:153 `NATIVE_PEER_BAR` | (754,0,46,8) | none (unbound stacked gauges) | size from `Avatar_Info_LifeGauge.ojs` 46x8 (slot 6); origin = runtime stacking | RUNTIME | Keep; size already archive-pinned |
-| playing.rs:268 `COMBO_ROW_ABOVE_LINE` | 24 | none | invented anchor (parity.md audit 31) | OPEN | Rig: exe combo-digit anchor |
+| playing.rs:268 `COMBO_ROW_ABOVE_LINE` | 24 | none | invented anchor (parity/playing.md audit 31) | OPEN | Rig: exe combo-digit anchor |
 | playing.rs:289 `LONG_COMBO_PLATE_INK` | (52,61) | none (sprite frame) | `Playing1.opi` slot 432 frame 1, 74x9 at (52,61) | DONE | None |
 | playing.rs:295 `NATIVE_LONG_COMBO_PLATE` | (91,282,74,9) | none (sprite frame) | photo bright-ink scan = slot 432 frame at 1:1 | DONE | None |
 | playing.rs:2476/2478 `SCENE_NATIVE_W/H` | 800 / 600 | none | canvas | RUNTIME | Keep |
@@ -257,7 +257,7 @@ Total audited: 136 named constants.
    proven shared rule (ticket #15, 154-entry proof). Promotion to
    FILE still wants a fresh rig alignment session (AV report
    `~/scratch/av-reports/` is capture-family-circular) — named next
-   step, parity.md music-select row.
+   step, parity/waiting.md music-select row.
 
 ## OPEN list (rig follow-up)
 
@@ -325,7 +325,7 @@ Total audited: 136 named constants.
   was fixed-pixel avatar/verdict placement, not a geometry constant — the avatar now
   hangs its visible box at the row-0 slot (78,316) under the 652×22 band clip, peer
   rows/portrait bodies staying OPEN (no staged source).
-- Musicselect cell (now PASS with OPENs, parity.md `STATE_WAITING`
+- Musicselect cell (now PASS with OPENs, parity/waiting.md `STATE_WAITING`
   music-select row) ↔ all 22 CANDIDATE rows stay CANDIDATE: the
   ordinal pairing is proven (154-entry proof incl. the dialog), but
   the photo-vs-bnd value divergences stand — FILE promotion per row

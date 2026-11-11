@@ -1936,6 +1936,283 @@ mod tests {
     }
 
     #[test]
+    fn playing_gauge_paints_at_its_staged_anchor_rect() {
+        // Ticket #102 (bnd-audit 16): the member life gauge
+        // (`Avatar_Info_LifeGauge.ojs` — eight
+        // `IDC_IMAGE_SPLAY_LIFEGAUGE1..8` entries on one 46x8 body)
+        // carries one corner native anchor at (0,0), clear of the
+        // note lanes (they open at row 28). Staging must consume
+        // that staged anchor rect, never append the body as an
+        // extra full-canvas placement over the 17-rect bound window
+        // (ADR-0003: the painter consumes staged rects, never a
+        // canvas stretch).
+        let Some(archive) = read_install_archives(&install_root()).playing else {
+            println!("skip: missing {PLAYING_ARCHIVE}");
+            return;
+        };
+        let ctx = StageContext {
+            arena_stage: Some(2),
+            key_mode: 2,
+            team_play: false,
+        };
+        let art = stage_state(&archive, State::Playing, ctx)
+            .art
+            .expect("STATE_PLAYING stages");
+        let (placements, figures) = (&art.placements, &art.figures);
+        let placed = placements
+            .iter()
+            .find(|placed| placed.sprite.as_deref() == Some("Avatar_Info_LifeGauge.ojs"))
+            .expect("the gauge stages its placement");
+        assert_eq!(
+            (placed.rect.x, placed.rect.y, placed.rect.w, placed.rect.h),
+            (0, 0, 0, 0),
+            "the gauge rides its unplaced anchor rect alone"
+        );
+        for placed in placements {
+            assert_ne!(
+                (
+                    placed.rect.x,
+                    placed.rect.y,
+                    placed.rect.w,
+                    placed.rect.h
+                ),
+                (0, 0, i32::from(NATIVE_WIDTH), i32::from(NATIVE_HEIGHT)),
+                "{} must never stage full-canvas",
+                placed.id
+            );
+        }
+        let figure = figures
+            .get("Avatar_Info_LifeGauge.ojs")
+            .expect("the gauge body decodes");
+        let (index, px, py, ink) = first_opaque_probe(figure).expect("the body has opaque pixels");
+        let layer = figure.layer(index).expect("the probe layer");
+        assert!(
+            i32::try_from(layer.image.w).unwrap_or(i32::MAX) <= 46
+                && i32::try_from(layer.image.h).unwrap_or(i32::MAX) <= 8,
+            "the gauge body stays inside its staged 46x8 extent"
+        );
+        let mut buf = vec![0u32; 800 * 600];
+        paint_foreground_placements(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            placements,
+            figures,
+        );
+        let at = usize::try_from(py).unwrap_or(0) * 800 + usize::try_from(px).unwrap_or(0);
+        assert_eq!(
+            buf[at], ink,
+            "gauge ink must land at its corner anchor origin"
+        );
+    }
+
+    #[test]
+    fn playing_time_fill_stays_inside_the_staged_bar_rect() {
+        // Ticket #102 leg 2: the procedural TIME shell and fill
+        // route through the staged TIMEBAR rect (`State_Playing.bnd`
+        // r2, (489,556)-(743,566) — geometry-audit DONE), never over
+        // the bar art unclipped. Two song clocks paint identical
+        // frames except the fill region, so every differing pixel
+        // must sit inside the staged rect.
+        use o2jam_shell::playing::{AvatarScene, PlayingBoundFields};
+
+        let Some(archive) = read_install_archives(&install_root()).playing else {
+            println!("skip: missing {PLAYING_ARCHIVE}");
+            return;
+        };
+        let art = stage_state(&archive, State::Playing, StageContext::default())
+            .art
+            .expect("STATE_PLAYING stages");
+        let bar = PlayingBoundFields::from_placements(&art.placements).time_bar;
+        assert_eq!(
+            bar,
+            o2jam_render::Rect {
+                x: 489,
+                y: 556,
+                w: 254,
+                h: 10
+            },
+            "the staged TIMEBAR rect is bnd r2"
+        );
+        let paint_at = |now_ms: u64| {
+            let mut scene = AvatarScene::default();
+            scene.set_song("First", 6);
+            let mut buf = vec![0u32; 800 * 600];
+            scene.paint_with_placements(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                None,
+                &o2jam_game::Score::default(),
+                now_ms,
+                Some(10_000),
+                Some(&art.placements),
+            );
+            buf
+        };
+        let early = paint_at(0);
+        let later = paint_at(5_000);
+        let (x0, y0) = (usize::try_from(bar.x).unwrap(), usize::try_from(bar.y).unwrap());
+        let (x1, y1) = (
+            x0 + usize::try_from(bar.w).unwrap(),
+            y0 + usize::try_from(bar.h).unwrap(),
+        );
+        let mut changed = 0usize;
+        for y in 0..600 {
+            for x in 0..800 {
+                if early[y * 800 + x] != later[y * 800 + x] {
+                    changed += 1;
+                    assert!(
+                        (x0..x1).contains(&x) && (y0..y1).contains(&y),
+                        "TIME fill delta at ({x},{y}) escapes the staged bar rect"
+                    );
+                }
+            }
+        }
+        assert!(changed > 0, "the fill must actually paint mid-song");
+    }
+
+    #[test]
+    fn playing_gauge_paints_at_its_staged_anchor_rect() {
+        // Ticket #102 (bnd-audit 16): the member life gauge
+        // (`Avatar_Info_LifeGauge.ojs` — eight
+        // `IDC_IMAGE_SPLAY_LIFEGAUGE1..8` entries on one 46x8 body)
+        // carries one corner native anchor at (0,0), clear of the
+        // note lanes (they open at row 28). Staging must consume
+        // that staged anchor rect, never append the body as an
+        // extra full-canvas placement over the 17-rect bound window
+        // (ADR-0003: the painter consumes staged rects, never a
+        // canvas stretch).
+        let Some(archive) = read_install_archives(&install_root()).playing else {
+            println!("skip: missing {PLAYING_ARCHIVE}");
+            return;
+        };
+        let ctx = StageContext {
+            arena_stage: Some(2),
+            key_mode: 2,
+            team_play: false,
+        };
+        let art = stage_state(&archive, State::Playing, ctx)
+            .art
+            .expect("STATE_PLAYING stages");
+        let (placements, figures) = (&art.placements, &art.figures);
+        let placed = placements
+            .iter()
+            .find(|placed| placed.sprite.as_deref() == Some("Avatar_Info_LifeGauge.ojs"))
+            .expect("the gauge stages its placement");
+        assert_eq!(
+            (placed.rect.x, placed.rect.y, placed.rect.w, placed.rect.h),
+            (0, 0, 0, 0),
+            "the gauge rides its unplaced anchor rect alone"
+        );
+        for placed in placements {
+            assert_ne!(
+                (placed.rect.x, placed.rect.y, placed.rect.w, placed.rect.h),
+                (0, 0, i32::from(NATIVE_WIDTH), i32::from(NATIVE_HEIGHT)),
+                "{} must never stage full-canvas",
+                placed.id
+            );
+        }
+        let figure = figures
+            .get("Avatar_Info_LifeGauge.ojs")
+            .expect("the gauge body decodes");
+        let (index, px, py, ink) = first_opaque_probe(figure).expect("the body has opaque pixels");
+        let layer = figure.layer(index).expect("the probe layer");
+        assert!(
+            i32::try_from(layer.image.w).unwrap_or(i32::MAX) <= 46
+                && i32::try_from(layer.image.h).unwrap_or(i32::MAX) <= 8,
+            "the gauge body stays inside its staged 46x8 extent"
+        );
+        let mut buf = vec![0u32; 800 * 600];
+        paint_foreground_placements(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            placements,
+            figures,
+        );
+        let at = usize::try_from(py).unwrap_or(0) * 800 + usize::try_from(px).unwrap_or(0);
+        assert_eq!(buf[at], ink, "gauge ink must land at its corner anchor origin");
+    }
+
+    #[test]
+    fn playing_time_fill_stays_inside_the_staged_bar_rect() {
+        // Ticket #102 leg 2: the procedural TIME shell and fill
+        // route through the staged TIMEBAR rect (`State_Playing.bnd`
+        // r2, (489,556)-(743,566) — geometry-audit DONE), never over
+        // the bar art unclipped. Two song clocks paint identical
+        // frames except the fill region, so every differing pixel
+        // must sit inside the staged rect.
+        use o2jam_shell::playing::{AvatarScene, PlayingBoundFields};
+
+        let Some(archive) = read_install_archives(&install_root()).playing else {
+            println!("skip: missing {PLAYING_ARCHIVE}");
+            return;
+        };
+        let art = stage_state(&archive, State::Playing, StageContext::default())
+            .art
+            .expect("STATE_PLAYING stages");
+        let bar = PlayingBoundFields::from_placements(&art.placements).time_bar;
+        assert_eq!(
+            bar,
+            o2jam_render::Rect {
+                x: 489,
+                y: 556,
+                w: 254,
+                h: 10
+            },
+            "the staged TIMEBAR rect is bnd r2"
+        );
+        let paint_at = |now_ms: u64| {
+            let mut scene = AvatarScene::default();
+            scene.set_song("First", 6);
+            let mut buf = vec![0u32; 800 * 600];
+            scene.paint_with_placements(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                None,
+                &o2jam_game::Score::default(),
+                now_ms,
+                Some(10_000),
+                Some(&art.placements),
+            );
+            buf
+        };
+        let early = paint_at(0);
+        let later = paint_at(5_000);
+        let (x0, y0) = (
+            usize::try_from(bar.x).unwrap(),
+            usize::try_from(bar.y).unwrap(),
+        );
+        let (x1, y1) = (
+            x0 + usize::try_from(bar.w).unwrap(),
+            y0 + usize::try_from(bar.h).unwrap(),
+        );
+        let mut changed = 0usize;
+        for y in 0..600 {
+            for x in 0..800 {
+                if early[y * 800 + x] != later[y * 800 + x] {
+                    changed += 1;
+                    assert!(
+                        (x0..x1).contains(&x) && (y0..y1).contains(&y),
+                        "TIME fill delta at ({x},{y}) escapes the staged bar rect"
+                    );
+                }
+            }
+        }
+        assert!(changed > 0, "the fill must actually paint mid-song");
+    }
+
+    #[test]
     fn missing_archives_stage_nothing() {
         assert!(read_install_archives(&install_root().join("No/Such"))
             .interface
