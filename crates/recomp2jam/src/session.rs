@@ -2234,6 +2234,34 @@ mod session_tests {
         session.paint(&mut frame);
     }
 
+    /// How long a drained-state assertion may wait for the fake
+    /// gateway's pushes to land. Generous on purpose: the deadline
+    /// only burns when the session genuinely never reaches the
+    /// expected state, never on a loaded scheduler.
+    const DRAIN_POLL_TIMEOUT: Duration = Duration::from_secs(5);
+
+    /// Repaint until `condition` holds, instead of trusting one paint
+    /// to absorb everything the fake gateway pushed. The session's
+    /// drains read under a 1 ms quiet timeout, so under CPU
+    /// contention a single paint can outrun the server thread's
+    /// writes and observe an empty socket (issue #52); polling the
+    /// drained state removes the wall-clock race without weakening
+    /// the assertions that follow.
+    fn paint_until(session: &mut OnlineSession, condition: impl Fn(&OnlineSession) -> bool) {
+        let deadline = std::time::Instant::now() + DRAIN_POLL_TIMEOUT;
+        loop {
+            paint_frame(session);
+            if condition(session) {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "session never reached the expected state within {DRAIN_POLL_TIMEOUT:?}"
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+
     /// Read one 4014 tick off the fake server's socket and decode it.
     fn read_tick(stream: &mut TcpStream) -> UpdateGameStats {
         let frame = read_frame(stream);
@@ -2625,7 +2653,7 @@ mod session_tests {
             stream.write_all(&line.encode()).unwrap();
             assert_quiet(&mut stream);
         });
-        paint_frame(&mut session);
+        paint_until(&mut session, |s| s.game.room_chat().len() == 1);
         server.join().unwrap();
         assert_eq!(session.game.room_chat().len(), 1);
         assert_eq!(session.game.room_chat()[0].sender, "host");
@@ -3120,7 +3148,9 @@ mod session_tests {
             assert_quiet(&mut stream);
         });
         play_one_note_to_result(&mut session);
-        paint_frame(&mut session);
+        paint_until(&mut session, |s| {
+            s.game.battle_verdict() == Some(o2jam_shell::screens::paint::BattleVerdict::Lose)
+        });
         server.join().unwrap();
         // Local-only staging said Win (200 vs empty); the 4018 table
         // restages both seats, so our team-0 total loses to team 1.
@@ -3193,7 +3223,7 @@ mod session_tests {
             stream.write_all(&line.encode()).unwrap();
             assert_quiet(&mut stream);
         });
-        paint_frame(&mut session);
+        paint_until(&mut session, |s| s.game.waiting_chat().len() == 1);
         server.join().unwrap();
         assert_eq!(session.game.waiting_chat().len(), 1);
         assert_eq!(session.game.waiting_chat()[0].sender, "host");
@@ -3213,7 +3243,7 @@ mod session_tests {
             stream.write_all(&line.encode()).unwrap();
             assert_quiet(&mut stream);
         });
-        paint_frame(&mut session);
+        paint_until(&mut session, |s| s.game.waiting_chat().len() == 1);
         server.join().unwrap();
         assert_eq!(session.game.waiting_chat().len(), 1);
         assert_eq!(session.game.waiting_chat()[0].sender, "op");
@@ -3236,7 +3266,7 @@ mod session_tests {
             stream.write_all(&line.encode()).unwrap();
             assert_quiet(&mut stream);
         });
-        paint_frame(&mut session);
+        paint_until(&mut session, |s| s.game.waiting_chat().len() == 1);
         server.join().unwrap();
         assert_eq!(session.game.waiting_chat().len(), 1);
         assert_eq!(session.game.waiting_chat()[0].text, "quiet");
@@ -3254,7 +3284,9 @@ mod session_tests {
             stream.write_all(&lock.encode()).unwrap();
             assert_quiet(&mut stream);
         });
-        paint_frame(&mut session);
+        paint_until(&mut session, |s| {
+            s.slot_action(2) == Some(RoomSlotAction::SlotLocked)
+        });
         server.join().unwrap();
         assert_eq!(session.slot_action(2), Some(RoomSlotAction::SlotLocked));
         assert_eq!(session.slot_action(1), None);
@@ -3271,7 +3303,7 @@ mod session_tests {
             stream.write_all(&echo.encode()).unwrap();
             assert_quiet(&mut stream);
         });
-        paint_frame(&mut session);
+        paint_until(&mut session, |s| s.member_ready(1) == Some(true));
         server.join().unwrap();
         assert_eq!(session.member_ready(1), Some(true));
         assert_eq!(session.member_ready(0), None);
@@ -3293,7 +3325,7 @@ mod session_tests {
             stream.write_all(&echo.encode()).unwrap();
             assert_quiet(&mut stream);
         });
-        paint_frame(&mut session);
+        paint_until(&mut session, |s| s.member_ready(3) == Some(false));
         server.join().unwrap();
         assert_eq!(session.slot_action(7), None);
         assert_eq!(session.member_ready(3), Some(false));
@@ -3317,7 +3349,7 @@ mod session_tests {
             stream.write_all(&line.encode()).unwrap();
             assert_quiet(&mut stream);
         });
-        paint_frame(&mut session);
+        paint_until(&mut session, |s| s.game.waiting_chat().len() == 1);
         server.join().unwrap();
         assert_eq!(session.game.waiting_chat().len(), 1);
         assert_eq!(session.game.waiting_chat()[0].text, "hello");
@@ -3340,7 +3372,7 @@ mod session_tests {
             stream.write_all(&admin.encode()).unwrap();
             assert_quiet(&mut stream);
         });
-        paint_frame(&mut session);
+        paint_until(&mut session, |s| s.game.channel_chat().len() == 2);
         server.join().unwrap();
         assert_eq!(session.game.channel_chat().len(), 2);
         assert_eq!(session.game.channel_chat()[0].sender, "host");
@@ -3363,7 +3395,7 @@ mod session_tests {
             assert_quiet(&mut stream);
         });
         session.set_local_user("me");
-        paint_frame(&mut session);
+        paint_until(&mut session, |s| s.game.channel_chat().len() == 1);
         server.join().unwrap();
         assert_eq!(session.game.channel_chat().len(), 1);
         assert_eq!(session.game.channel_chat()[0].sender, "host");
@@ -3390,7 +3422,7 @@ mod session_tests {
             stream.write_all(&admin.encode()).unwrap();
             assert_quiet(&mut stream);
         });
-        paint_frame(&mut session);
+        paint_until(&mut session, |s| s.game.channel_chat().len() == 1);
         server.join().unwrap();
         assert_eq!(session.game.channel_chat().len(), 1);
         assert_eq!(session.game.channel_chat()[0].text, "quiet");
@@ -3407,7 +3439,7 @@ mod session_tests {
             stream.write_all(&notice.encode()).unwrap();
             assert_quiet(&mut stream);
         });
-        paint_frame(&mut session);
+        paint_until(&mut session, |s| s.game.channel_chat().len() == 1);
         server.join().unwrap();
         assert_eq!(session.game.channel_chat().len(), 1);
         assert_eq!(session.game.channel_chat()[0].text, "hello");
@@ -3427,7 +3459,7 @@ mod session_tests {
             stream.write_all(&notice.encode()).unwrap();
             assert_quiet(&mut stream);
         });
-        paint_frame(&mut session);
+        paint_until(&mut session, |s| s.game.channel_chat().len() == 1);
         server.join().unwrap();
         assert_eq!(session.game.channel_chat().len(), 1);
         assert_eq!(session.game.channel_chat()[0].sender, "");
@@ -3488,10 +3520,10 @@ mod session_tests {
             stream.write_all(&notice.encode()).unwrap();
             assert_quiet(&mut stream);
         });
-        paint_frame(&mut session);
-        server.join().unwrap();
         // The 4015 echo skipped past the notice drain, so slot 2 keeps
         // its default zero instead of the echo's 1000.
+        paint_until(&mut session, |s| s.game.channel_chat().len() == 1);
+        server.join().unwrap();
         assert_eq!(session.peers().life(2), Some(0));
         assert_eq!(session.game.channel_chat().len(), 1);
         assert_eq!(session.game.channel_chat()[0].text, "hello");
@@ -3510,7 +3542,7 @@ mod session_tests {
             stream.write_all(&notice.encode()).unwrap();
             assert_quiet(&mut stream);
         });
-        paint_frame(&mut session);
+        paint_until(&mut session, |s| s.game.channel_chat().len() == 1);
         server.join().unwrap();
         assert_eq!(session.game.channel_chat().len(), 1);
         assert_eq!(session.game.channel_chat()[0].text, "hello");
@@ -3526,7 +3558,7 @@ mod session_tests {
             stream.write_all(&notice.encode()).unwrap();
             assert_quiet(&mut stream);
         });
-        paint_frame(&mut session);
+        paint_until(&mut session, |s| s.game.channel_chat().is_empty());
         server.join().unwrap();
         assert!(session.game.channel_chat().is_empty());
     }
@@ -3643,7 +3675,7 @@ mod session_tests {
             let life = read_tick(&mut stream);
             assert_eq!(life.kind, StatKind::Life);
         });
-        paint_frame(&mut session);
+        paint_until(&mut session, |s| s.peers().life(2) == Some(1000));
         server.join().unwrap();
         assert_eq!(session.peers().life(2), Some(1000));
         assert_eq!(session.peers().jam(2), Some(0));
@@ -3685,7 +3717,7 @@ mod session_tests {
             read_tick(&mut stream);
             read_tick(&mut stream);
         });
-        paint_frame(&mut session);
+        paint_until(&mut session, |s| s.peer_ranks().len() == PEER_SLOT_COUNT);
         server.join().unwrap();
         assert_eq!(session.peer_queue(), None);
         assert_eq!(session.peers().life(1), Some(0));
@@ -3713,7 +3745,7 @@ mod session_tests {
         });
         session.game.load_chart(vec![(0, 1000, 7)]);
         session.game.strike_at(0, 1000);
-        paint_frame(&mut session);
+        paint_until(&mut session, |s| s.peers().jam(0) == Some(3));
         server.join().unwrap();
         assert_eq!(session.peers().jam(0), Some(3));
         assert_eq!(session.game.live_play().peers().jam(0), Some(3));
