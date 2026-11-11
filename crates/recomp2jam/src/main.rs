@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 
 mod connect;
 mod e2e;
+mod ledger_check;
 mod live_art;
 #[cfg(test)]
 mod live_guard;
