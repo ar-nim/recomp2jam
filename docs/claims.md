@@ -30,8 +30,8 @@ Short forms live in `GLOSSARY.md`. Normative forms:
 | EXE | 109 |
 | DATA | 19 |
 | ASSUMED | 12 |
-| OPEN | 9 |
-| Total | 149 |
+| OPEN | 10 |
+| Total | 150 |
 
 ## The pairing-rule family (known mistake + siblings)
 
@@ -242,6 +242,7 @@ index (all-zero rect, slot 0, default arm).
 | D18 | Live-state 4042–4045 shapes incl. `MemberInfo` tail order | EXE | `0x159b50`/`0x18cf50` chains | G | WAIT.TRANS, WAITING.GAME |  |
 | D19 | Endpoints: FTP hosts, gateway IP/port, web/registry strings | EXE | string table `0x24b9c0`–`0x2514f0`; contents re-verified 2026-11-07 from bytes: gateway IPs `121.125.76.136`/`.135` at file `0x24b9c0`+, `O2JAM_MUSIC_FTP`/`O2JAM_DUMP_FTP` hosts, `15010` port string, registry `SOFTWARE\\NOWCOM\\O2Jam` | — | — |  |
 | D20 | Authorize 1000 payload order (token, gender string, marker, clientId) | ASSUMED | Memoryer order; exe byte-proof open; negative *(offset-only)*: image-wide scans find no 1000 send staging — all 46 `push 0x3E8` sites are non-packet uses (e.g. ReadFile size VA `0x5acd82`, tick timeout VA `0x5b71c9`), and the only 9 direct `SetID` (file `0x1a0550`) callers are the relay ctor family (files `0xea4f4`/`0x16dff4`/`0x16e094`/`0x18622c`/`0x18ca74`/`0x18cc64`/`0x18e114`/`0x18e1f4`/`0x1a0423`; re-verified 2026-11-07 — 46 `push $0x3E8` sites image-wide, same 9 callers; caller set re-verified 2026-11-07 — exactly 9 `call 0x5a0550`, VAs match the listed files); unflippable — no 1000-send staging exists to pin the payload order | G | — |  |
+| D21 | Result peer-row avatar: the member→avatar-id byte rides server-side; the client-side byte→figure convention is unpinned | OPEN | member table stride `0x2190` base `0x77ee90` (D16) read on the result row painter path; next step: gateway replay pinning the member→avatar convention (proxy-rewrite recipe `~/scratch/digits-rig/proxy.py`) plus a rig capture of a populated battle row | R+G | RESULT.COMP |  |
 
 ## Top-6 risky claims (visible behavior on the weakest evidence)
 
