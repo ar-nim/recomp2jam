@@ -8,6 +8,8 @@ reproduced; every step is described in own words with file offsets
 (VA = file + `0x400000`) plus evidence ids from the local dossier
 `extracted/rea-ui-loader-dossier.json` (format `rea-dossier-bundle-v1`,
 dossier `rea-ui-loader-controllist`, 9 records, all `observed`).
+> LOST 2026-11-11 merge clobber; re-filed by owner ticket #114 — see
+> `docs/recovery-disposition.md`.
 
 Version pin: `AngelO2Jam.exe` 5,029,888 B, SHA-256 `83a04541…72c823b`
 (both `install-root/` and the analyzed `extracted/` copy verified

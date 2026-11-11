@@ -19,6 +19,9 @@ objdump slices stay git-ignored in `extracted/`). No disassembly or
 decompiled code is reproduced; behavior is described in our own words.
 
 Dossier: `extracted/rea-cresult-anchors-dossier.json`
+(LOST 2026-11-11 merge clobber; re-filed by owner ticket #86 —
+`docs/recovery-disposition.md`. The claim rows below remain pinned
+by their offsets and are not re-opened by the loss.)
 (format `rea-dossier-bundle-v1`, dossier `rea-cresult-anchors`, 11
 records, all `observed`; evidence id = md5 of
 `rea-cresult-anchors|operation|subject-VA`).

@@ -7,7 +7,10 @@ VA = file + `0x400000`. Method: read-only headless Ghidra 12.1.2
 (`extracted/ghidra-4015-work/proj4015.gpr`) opened read-only by a
 standalone reader, plus read-only python byte scans and live archive
 parses. No disassembly or decompiled code reproduced. Dossier ids from
-`extracted/rea-ui-loader-dossier.json`; offsets marked **new** are
+`extracted/rea-ui-loader-dossier.json` (bundle and the
+`extracted/ghidra-4015-work/proj4015.gpr` project LOST 2026-11-11,
+regenerable from bytes — `docs/recovery-disposition.md`); offsets
+marked **new** are
 unfiled evidence pending a dossier record.
 
 ## Verdicts

@@ -691,7 +691,9 @@ reference-measured `232+50i` anchors are retired.
    119x23 layers at (619,529) (`colorkey 0x0`, payment dialog);
    `AlbumLoading_Panel.ojs` (Playing slot 0, 70554 B) is one 197x179
    layer at (410,210) (`colorkey 0x7D5F`, album dialog). The OJN
-   cover (`extracted/cover757-view.jpg`, 800x600 JPEG) is a
+   cover (`extracted/cover757-view.jpg`, 800x600 JPEG; file LOST
+2026-11-11, re-captured under owner ticket #92 —
+`docs/recovery-disposition.md`) is a
    full-bleed photo with no bead-pill rows or bar shell. Cover art
    carries no progress-fill anchors.
    The `0x4e47a0` dossier (`ev_68d920c2…`, file `0xe47a0`) carries

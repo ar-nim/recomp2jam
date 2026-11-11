@@ -4,7 +4,9 @@ Version pin: `AngelO2Jam.exe` == `OTwo.exe`, 5,029,888 bytes,
 SHA-256 `83a04541…72c823b`, PDB `d:\O2JamSvn\trunk\Client\O2Jam_Client(2005)\Release\OTwo.pdb`.
 In-exe evidence below uses virtual addresses; file offset = VA − `0x400000`.
 REA snapshot: `extracted/rea-snapshot` (single-line JSON dossier bundle,
-Ghidra 12.1.2, analysis digest `88a37df4…130c8d`, target SHA matches the exe).
+Ghidra 12.1.2, analysis digest `88a37df4…130c8d`, target SHA matches the
+exe). LOST 2026-11-11 merge clobber; regenerable from bytes by one
+headless re-analysis (digest re-verified) — `docs/recovery-disposition.md`.
 Behavior is described in our own words; no disassembly is reproduced.
 Harvested claims live in `docs/claims.md` (the oracle).
 
