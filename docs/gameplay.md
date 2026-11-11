@@ -786,7 +786,11 @@ scans, pairing sweep and parser — VAs `0x5703f0`–`0x578300` and
   `0x170427`/`0x170431`, claim B17). Shipped playable payloads never
   set the bit. B14's "bit 25/26 = hold span/head semantics" therefore
   resolves to: bit 25 = head, bit 24 = tail, bit 26 = parser
-  span/sample-bank marker.
+  span/sample-bank marker. Refined by the #83 structural sweep
+  (docs/ojn-bit26.md): bit 26 does ship — on 12 Tutorial kind-9 BGM
+  records, the B22 autoplay presence marker; no shipped playable-lane
+  payload sets it, and the lane-note semantics stay a synthetic-only
+  OPEN (next step: rig chart swap reading the `+0x3E8` bank).
 
 Modeled as `o2jam-game::HoldSpan` + `o2jam-game::HoldState`
 (`judge_head`, `apply_head`, `judge_tail`, `hold_tick_due`,
