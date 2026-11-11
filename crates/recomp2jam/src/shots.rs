@@ -2769,6 +2769,83 @@ mod tests {
     }
 
     #[test]
+    fn skinned_highway_renders_hold_tails_and_tick_feedback() {
+        // Ticket #84's skinned guard, real 7.55 art: (1) the paired
+        // tail paints as a scrolling note at its onset — the staged
+        // `Note_Image` head blits at the tail row (a missed head kills
+        // the beam, so the tail row carries no other ink); (2) the
+        // armed hold's tick feedback paints the long-note combo count
+        // through the staged `Note_LongComboNum.ojs` font under the
+        // caption plate.
+        use o2jam_shell::playing::{
+            long_combo_digits_origin, HighwayGeometry, LivePlay, LONG_COMBO_DIGIT_GAP,
+        };
+        let Some(archive) = read_install_archives(&install_root()).playing else {
+            println!("skip: missing {PLAYING_ARCHIVE}");
+            return;
+        };
+        let Some(skin) = PlaySkin::from_archive(&archive) else {
+            panic!("playing: PlaySkin decoded no lanes");
+        };
+        let geom = HighwayGeometry::centered(
+            usize::try_from(NATIVE_WIDTH).expect("native width fits usize"),
+            usize::try_from(NATIVE_HEIGHT).expect("native height fits usize"),
+        );
+        // (1) The untouched hold: head 1500, tail 2500, painted at
+        // 2000 — the head missed (no strike), so no beam runs, and the
+        // tail head blits 500 ms ahead of the 487-row line.
+        let mut untouched = LivePlay::new_holds(&[(2, 1_500, 2_500, 7)]);
+        untouched.set_skin(skin.clone());
+        let mut actual = native_probe();
+        paint_probe(&mut actual, |frame| untouched.paint(frame, &geom, 2_000));
+        let tail_y = geom.line_y - 500 * geom.line_y / 2000;
+        let head = skin.note_head(2).expect("lane-2 note head");
+        let column = geom.lane_rect(2);
+        let head_x = column.x
+            + (i32::try_from(column.w).expect("lane width")
+                - i32::try_from(head.extent().0).unwrap_or(0))
+                / 2;
+        let mut expected = native_probe();
+        paint_probe(&mut expected, |frame| head.paint_at(frame, head_x, tail_y));
+        assert_pixels_came_from_font(&actual, &expected, "scrolling tail head");
+        // (2) The armed hold: strike the head in-window, paint 500 ms
+        // into the span — one tick fed the snapshot, so the count
+        // digit paints centered under the caption plate.
+        let mut held = LivePlay::new_holds(&[(2, 1_500, 2_500, 7)]);
+        held.set_skin(skin);
+        held.strike_lane(2, 1_500);
+        let mut highway = native_probe();
+        paint_probe(&mut highway, |frame| held.paint(frame, &geom, 2_000));
+        let font = held
+            .long_note_tick_font()
+            .expect("Note_LongComboNum.ojs font")
+            .clone();
+        let ticks = held.shown_long_note_ticks();
+        assert_eq!(ticks, 1, "one tick fed inside the open span");
+        let mut expected = native_probe();
+        let (center_x, row) = long_combo_digits_origin(
+            usize::try_from(NATIVE_WIDTH).expect("native width fits usize"),
+            usize::try_from(NATIVE_HEIGHT).expect("native height fits usize"),
+        );
+        let width = i32::try_from(font.width_of_spaced(ticks, LONG_COMBO_DIGIT_GAP))
+            .expect("digit width fits i32");
+        paint_probe(&mut expected, |frame| {
+            font.paint_spaced(
+                frame,
+                center_x - width / 2,
+                row,
+                ticks,
+                LONG_COMBO_DIGIT_GAP,
+            );
+        });
+        let mut over_art = native_probe();
+        paint_probe(&mut over_art, |frame| {
+            held.paint_avatar_scene(frame, None, 2_000)
+        });
+        assert_pixels_came_from_font(&over_art, &expected, "long-note tick count");
+    }
+
+    #[test]
     fn scripted_hold_keyup_spends_the_chart_into_result() {
         // The verified release path closes the walked hold: the
         // key-up on the tail rates the armed tail Cool and marks it
