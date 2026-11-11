@@ -2649,6 +2649,51 @@ mod session_tests {
     }
 
     #[test]
+    fn scripted_gateway_channel_ids_move_the_row_label() {
+        // Claim D25 (#92) evidence method without Wine: the scripted
+        // gateway's 1003 channel_id rewrite (the proxy-recipe
+        // equivalent on the session seam) must move the row label
+        // the painter consumes. Same rows repaint a byte-identical
+        // frame; ids moved underneath repaint a different one — the
+        // value-source question as a pixel read, no rig required.
+        use o2jam_net::ChannelState;
+        let (mut session, server) = channel_session(|mut stream| {
+            assert_quiet(&mut stream);
+        });
+        let row = |channel_id| ChannelState {
+            gateway_id: 0,
+            channel_id,
+            capacity: 100,
+            population: 5,
+            active: true,
+        };
+        let painted = |session: &mut OnlineSession| {
+            let mut buf = vec![0u32; 800 * 600];
+            session.game_mut().paint(&mut o2jam_render::Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            });
+            buf
+        };
+        session.game_mut().set_channels(vec![row(2)]);
+        let before = painted(&mut session);
+        assert_eq!(
+            before,
+            painted(&mut session),
+            "same wire rows paint a stable frame"
+        );
+        // The proxy rewrite: same row, channel_id moved 2 -> 42.
+        session.game_mut().set_channels(vec![row(42)]);
+        let moved = painted(&mut session);
+        assert_ne!(
+            before, moved,
+            "the row label must follow the wire channel_id (#92, D25)"
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
     fn room_enter_sends_the_draft_as_one_2012() {
         // Ticket #37: the room lobby chat is the main-room chat, so
         // Enter sends the same 2012 body the Channel scene sends.

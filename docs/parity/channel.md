@@ -27,3 +27,26 @@ format half. Verdict:
   `channel_id` (run-1 capture: row painted `Ch.10` entered channel `09`).
 - **OPEN (unchanged):** inactive-row gating field (`active` vs `capacity`
   co-vary in every capture), count-strip quantization, bar frame-1 trigger.
+
+## Ticket #93 — row label wired from the pinned source (2026-11-11)
+
+The figure-less fallback row label now paints the pinned D25 reading
+instead of the invented `gateway/channel population/capacity` string:
+`Ch. ` plus the one-based wire `channel_id` as two decimal digits
+(ids past 98 wrap to their low two digits, matching the staged
+`CH_Num` wells), with ` / FULL` on rows the pinned FULL rule marks
+(active, `population >= capacity > 0`). The staged path is unchanged
+(baked `Ch.` art + digit frames + FULL bar — no client text there);
+the U1-walk `Ch. 99 / FULL` symptom is gone because the fallback no
+longer renders the server-list dump. Text rides the modern font
+rasterizer (owner decision: the exe pins positions/sizes, not glyphs).
+Guards: `channel_row_label_paints_the_pinned_value_source` (value
+source + wrap arms), `channel_row_label_marks_full_rows` (FULL arm,
+zero-capacity exclusion), `scripted_gateway_channel_ids_move_the_row_label`
+(the #92 proxy-rewrite method on the scripted-gateway seam: moved
+ids repaint a different frame, unchanged ids repaint
+byte-identically). `channel_rows_ink_at_measured_native_tops`
+re-anchored: the Gulimche 'C' glyph tops the row 8 px above the old
+digit-led stand-in (224+50·index). Shots: all 19 captures
+byte-identical before/after — the staged channel frame shows no
+delta, no PNG regen. (ev: D25 pin in `docs/claims.md`; `docs/channel-fill.md`)

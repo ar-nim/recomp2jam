@@ -1943,14 +1943,23 @@ pub const PLANET_BOARD_MENU_BACK_RECT: Rect = Rect {
     h: 32,
 };
 
-/// One channel row: `gateway/channel population/capacity` (both ids
-/// ride the `GetChannelList` 1003 row; population over capacity).
+/// Figure-less fallback row label, in the exe's pinned reading
+/// (claim D25, `docs/channel-fill.md`): `Ch. ` plus the one-based
+/// wire `channel_id` as two decimal digits (ids past 98 wrap to
+/// their low two digits, matching the staged digit wells), with
+/// ` / FULL` on rows the pinned FULL rule marks. The exe paints no
+/// row text — the staged path shows baked `Ch.` art plus digit
+/// frames instead — so this string is the labeled no-archive
+/// stand-in only, and it deliberately names the channel id alone
+/// (never the gateway id or population).
 #[must_use]
 fn channel_row_text(channel: &ChannelState) -> String {
-    format!(
-        "{}/{} {}/{}",
-        channel.gateway_id, channel.channel_id, channel.population, channel.capacity
-    )
+    let shown = (u32::from(channel.channel_id).saturating_add(1)) % 100;
+    let mut text = format!("Ch. {shown:02}");
+    if channel_row_full(channel) {
+        text.push_str(" / FULL");
+    }
+    text
 }
 
 /// Channel rows plus highlight cursor (no background fill: shared by
@@ -6583,28 +6592,52 @@ mod paint_tests {
         assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xD0, 0x20)));
     }
 
-    #[test]
-    fn channel_row_names_gateway_and_channel_ids() {
-        let channel = ChannelState {
-            gateway_id: 1,
-            channel_id: 2,
-            capacity: 100,
-            population: 5,
-            active: true,
-        };
-        assert_eq!(channel_row_text(&channel), "1/2 5/100");
+    /// One wire 1003 row; the fields the label must NOT read are
+    /// parameterized so the pinned-source guard can move them alone.
+    fn channel_row(
+        gateway_id: u16,
+        channel_id: u16,
+        capacity: i32,
+        population: i32,
+        active: bool,
+    ) -> ChannelState {
+        ChannelState {
+            gateway_id,
+            channel_id,
+            capacity,
+            population,
+            active,
+        }
     }
 
     #[test]
-    fn channel_row_orders_population_over_capacity() {
-        let channel = ChannelState {
-            gateway_id: 0,
-            channel_id: 9,
-            capacity: 200,
-            population: 7,
-            active: false,
-        };
-        assert_eq!(channel_row_text(&channel), "0/9 7/200");
+    fn channel_row_label_paints_the_pinned_value_source() {
+        // Claim D25 (#92): the label is the wire channel_id one-based
+        // in the exe's `Ch. NN` reading — never the gateway id, the
+        // population, or the capacity (a non-full row). Ids past 98
+        // wrap to their low two digits, matching the digit wells.
+        let open = channel_row(1, 2, 100, 5, true);
+        assert_eq!(channel_row_text(&open), "Ch. 03");
+        let other_gateway = channel_row(7, 2, 100, 5, true);
+        assert_eq!(channel_row_text(&other_gateway), "Ch. 03");
+        let busy = channel_row(1, 2, 100, 80, true);
+        assert_eq!(channel_row_text(&busy), "Ch. 03");
+        let wrapped = channel_row(0, 99, 100, 0, true);
+        assert_eq!(channel_row_text(&wrapped), "Ch. 00");
+    }
+
+    #[test]
+    fn channel_row_label_marks_full_rows() {
+        // FULL rows carry the ` / FULL` suffix (the baked CH_Back
+        // frame-2 face is the staged-path equivalent); the open row
+        // with the same id does not.
+        let full = channel_row(0, 9, 100, 100, true);
+        assert_eq!(channel_row_text(&full), "Ch. 10 / FULL");
+        let open = channel_row(0, 9, 100, 99, true);
+        assert_eq!(channel_row_text(&open), "Ch. 10");
+        // The pinned FULL rule: zero capacity never reads full.
+        let zero_capacity = channel_row(0, 9, 0, 0, true);
+        assert_eq!(channel_row_text(&zero_capacity), "Ch. 10");
     }
 
     #[test]
