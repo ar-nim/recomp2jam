@@ -1,23 +1,37 @@
 # Triage Labels
 
-The skills speak in terms of five canonical triage roles. This file maps those roles to the actual label strings used in this repo's issue tracker.
+The skills speak in terms of five canonical triage roles. This file maps those roles to the actual strings used in this repo's issue tracker.
 
-| Label in mattpocock/skills | Label in our tracker | Meaning                                  |
-| -------------------------- | -------------------- | ---------------------------------------- |
-| `needs-triage`             | `needs-triage`       | Maintainer needs to evaluate this issue  |
-| `needs-info`               | `needs-info`         | Waiting on reporter for more information |
-| `ready-for-agent`          | `ready-for-agent`    | Fully specified, ready for an AFK agent  |
-| `ready-for-human`          | `ready-for-human`    | Requires human implementation            |
-| `wontfix`                  | `wontfix`            | Will not be actioned                     |
+**Category = GitHub issue TYPE, not a label** (owner decision 2026-11-12): `Bug`,
+`Task`, `Feature` (`gh issue edit <n> --type Bug`). The old `bug`/`enhancement`
+labels are retired â€” never recreate them. Labels carry everything else: the
+state role, the component, claims, and the vocabularies below.
 
-The category roles `bug` and `enhancement` already exist in the tracker under those names.
+| Role in mattpocock/skills | Where it lives here                        | Meaning                                  |
+| -------------------------- | ------------------------------------------ | ---------------------------------------- |
+| category `bug`             | issue type **Bug**                         | Something is broken                      |
+| category `enhancement`     | issue type **Feature**                     | New feature or improvement               |
+| (tracking / multi-issue)   | issue type **Task**                        | Programs, maps, multi-issue tracks       |
+| `needs-triage`             | label `needs-triage`                       | Maintainer needs to evaluate this issue  |
+| `needs-info`               | label `needs-info`                         | Waiting on reporter for more information |
+| `ready-for-agent`          | label `ready-for-agent`                    | Fully specified, ready for an AFK agent  |
+| `ready-for-human`          | label `ready-for-human`                    | Requires human implementation            |
+| `wontfix`                  | label `wontfix`                            | Will not be actioned                     |
 
-When a skill mentions a role (e.g. "apply the AFK-ready triage label"), use the corresponding label string from this table.
+Component labels name the owning crate or surface: `component:shell`,
+`component:net`, `component:audio`, `component:game`, `component:render`,
+`component:file`, `component:testing`, `component:docs`, plus scene components
+(`component:room`, `component:planet`, `component:waiting`, `component:channel`).
+Add a component label at triage time; add a claim label when a ticket is
+claim-specific.
+
+When a skill mentions a role (e.g. "apply the AFK-ready triage label"), use the corresponding label string or issue type from the table above.
 
 ## Triage flow
 
 Every new issue enters with `needs-triage`, and a triage decision precedes any
-fix work: the triage step assigns the category (`bug`/`enhancement`) and the
+fix work: the triage step assigns the category (issue **type**: Bug, Task,
+or Feature) and the
 role (`ready-for-agent`, `ready-for-human`, `needs-info`, `wontfix`), and
 sizes the acceptance. An issue that is not yet triaged is not worked, however
 small it looks.
@@ -41,8 +55,8 @@ Rules for closing playtest-class tickets (retro 2026-11-11, issues #26/#30/#53â€
 3. File tracker issues sequentially in one chain and read back the title per number;
    never assume parallel `gh issue create` output order.
 4. Closing includes triage-label cleanup: `needs-triage` and `needs-info` never
-   survive on a closed issue, and the category label (`bug`/`enhancement`) is
-   applied at triage time, not left for the close.
+   survive on a closed issue, and the category (issue type) is set at triage
+   time, not left for the close.
 
 ## Edit tracker
 
