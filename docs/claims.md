@@ -28,11 +28,11 @@ Short forms live in `GLOSSARY.md`. Normative forms:
 
 | Level | Claims |
 |---|---|
-| EXE | 118 |
+| EXE | 119 |
 | DATA | 19 |
 | ASSUMED | 12 |
 | OPEN | 15 |
-| Total | 164 |
+| Total | 165 |
 
 ## The pairing-rule family (known mistake + siblings)
 
@@ -122,6 +122,7 @@ index (all-zero rect, slot 0, default arm).
 | A43 | Missing `.bnd`: contributes nothing for that Block | OPEN | next step: observe the `.bnd` loader `0x548450` failure path with an absent stem and watch the bind (ADR-0005 evidence hook) | R | — |  |
 | A44 | Game-loop staged blits: the staged scene set (bound placements + sprites, ADR-0003/0005) blitted through the loop's per-frame compositor path (renderer blits OPEN in the progress matrix; the compositor exists in `o2jam-render`, RGB555 + clip + colorkey) | OPEN | next step: thread the staged set through the loop blits — exe blit semantics pinned (A5 paint order, A39 blit chain); a frame-paced Wine capture pair only if the shots guard reads ambiguous | R | PLAYING.COMP |  |
 | A45 | Playing digit frames (codes `0x1B500088`–`0x1B500092`): the combo/long-note/jam digit controls are `CCImageBox` instances (factory `0x48B2D0` `0x500000` arm → ctor `0x50A820`) with no `.bnd` rects; their glyphs are written at runtime by the state command switch `0x498BC0` through two digit writers (`0x49F620` 4-slot bank, `0x49E8D0` 8-slot bank) feeding computed codes `0x1401D088 + slot`, laid out by the number engines `0x528E20`/`0x529230` with the exe layout box `(0x59,0x3C)–(0xD5,0xD2)`, hide offsets `−0x5A`/`−0x3C`, frame setter `0x42F870`, attribute words `+0x20`/`+0x24`; digit art resolves stage-numbered from `_Note_ComboNum`/`_Note_LongCombo`/`_Note_LongComboNum` stems | EXE | dossier `extracted/rea-playing-digits-dossier.json`, `docs/playing-digits.md` (ev `4ce1dfea…` control set, `16334cd7…` negative immediate scan, `c1683efb…` CCImageBox ctor, `c1f421aa…` command switch, `98c0210a…`/`53cc3fc9…` writers, `03aa0c52…`/`6d253f51…` layout engines, `33338430…` attribute pass, `863c5ea4…` frame setter, `2398edc5…` GetByCode); runtime id mid bytes (`0x01D0`) and the counter's per-mode quantity stay OPEN — next step: winedbg stopped-state reads at the GetByCode call sites (VA `0x498E0D`/`0x49F7A6`) on a rig capture pair | R | PLAYING.COMP | unblocks #105 |
+| A46 | Mouse tracking is a polled arm, not a message arm: the exe polls `GetCursorPos`, converts to client-relative with its own `GetClientRect`+`ClientToScreen` origin subtraction (no `ScreenToClient`/`SetCapture`/`TrackMouseEvent` imports exist), and detects motion by comparing the stored POINT against globals `0x791cbc`/`0x791cc0` (unchanged → `−100` sentinel); hover repaint is a per-frame `PtInRect` sweep over the placed bound rects (`0x546bc0`, rect stride `0x10`) delivering queued events via a vtable[1] virtual call — no `WM_MOUSEMOVE` handler exists (every `0x200` immediate in `.text` is a CRT locale/stream mask) | EXE | *(offset-only)*: WndProc `0x57dc40` (registered VA `0x57e67d`, HWND→object via GetProp `0x64dd08`, vtable[0] dispatch); input ctor `0x542490` (`DirectInputCreateA(0,0x700,&this+0x34,0)` VA `0x542559`); poll `0x544290` (motion gate `0x5443a8`, sentinel store `0x5443cf`); hover sweep `0x546bc0` (`PtInRect` VA `0x546e97`), queue drain `0x545910` (vtable[1]); background wait thread `0x545390`; `docs/mouse-tracking.md` (#112); DI device GUID path + per-class vtable identity OPEN there | R | ROOM.COMP, CHANNEL.COMP, PLANET.COMP | closes #112 |
 
 ## B. Gameplay
 
