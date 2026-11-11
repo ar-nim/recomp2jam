@@ -1447,6 +1447,50 @@ pub fn clone_instance_live(placed: &ScenePlacement, instances: &[&str], live: us
     }
 }
 
+/// Paint one layer of a placed figure at its staged view position
+/// (the same origin rule as [`paint_placed_figure`], clones included):
+/// the hover pass repaints a single frame over the stacked rest paint,
+/// so the frame index — not the whole stack — answers the pointer.
+/// A missing sprite, figure, or layer paints nothing.
+pub fn paint_placement_layer(
+    frame: &mut Frame<'_>,
+    placement: &ScenePlacement,
+    figures: &HashMap<String, AvatarFigure>,
+    layer_index: usize,
+    shares_body: bool,
+) {
+    let Some(name) = placement.sprite.as_ref() else {
+        return;
+    };
+    let Some(figure) = figures.get(name) else {
+        return;
+    };
+    let Some(layer) = figure.layer(layer_index) else {
+        return;
+    };
+    let (frame_w, frame_h) = (frame.w, frame.h);
+    if placement.role == PlacementRole::Clone {
+        let dest = scale_rect_to_frame(&placement.rect, frame_w, frame_h);
+        blit_rgb555(
+            frame,
+            &layer.image.view(),
+            dest.x + layer.dx,
+            dest.y + layer.dy,
+            Some(layer.colorkey),
+        );
+        return;
+    }
+    let (view_x, view_y) = placement_view_origin(figure, placement, frame_w, frame_h, shares_body);
+    let (dx, dy) = anchor_in_frame(layer.dx, layer.dy, frame_w, frame_h);
+    blit_rgb555(
+        frame,
+        &layer.image.view(),
+        view_x + dx,
+        view_y + dy,
+        Some(layer.colorkey),
+    );
+}
+
 /// Paint one placed figure, if its sprite loaded: every layer blits
 /// 1:1 at its record anchor scaled into the frame, over the staged
 /// view position (see [`paint_scene_figures`] for the draw chain),

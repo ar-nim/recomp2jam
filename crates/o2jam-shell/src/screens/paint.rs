@@ -28,11 +28,11 @@ use std::collections::HashMap;
 
 use super::super::avatar::{
     anchor_in_frame, clone_instance_live, paint_behind_placements, paint_foreground_placements,
-    paint_scene_figures, paint_scene_figures_live, scene_block, scene_sprite_names, AvatarFigure,
-    FigureLayer, PlacementRole, ScenePlacement, AVI_BLOCK, CHANNEL_BLOCK, LANKING_BLOCK,
-    LOADING_BLOCK, LOADING_COVER_SPRITE, LOADING_SPRITE, MUSICSHOP_BLOCK, MYROOM_BLOCK,
-    PLANET_BLOCK, RESULT_BLOCK, ROOM_BLOCK, SHOP_BLOCK, WAITING_BLOCK, WAIT_COVER_SPRITE,
-    WAIT_TEAM_SPRITES,
+    paint_placement_layer, paint_scene_figures, paint_scene_figures_live, scene_block,
+    scene_sprite_names, shared_sprite_names, AvatarFigure, FigureLayer, PlacementRole,
+    ScenePlacement, AVI_BLOCK, CHANNEL_BLOCK, LANKING_BLOCK, LOADING_BLOCK, LOADING_COVER_SPRITE,
+    LOADING_SPRITE, MUSICSHOP_BLOCK, MYROOM_BLOCK, PLANET_BLOCK, RESULT_BLOCK, ROOM_BLOCK,
+    SHOP_BLOCK, WAITING_BLOCK, WAIT_COVER_SPRITE, WAIT_TEAM_SPRITES,
 };
 use super::super::playing::{HighwayGeometry, PlayingView};
 use super::super::screen::Screen;
@@ -2900,11 +2900,19 @@ pub(crate) fn paint_room_list(frame: &mut Frame<'_>, rooms: &[RoomListEntry], hi
 }
 
 /// Paint staged lobby art with the live room list and cursor on top.
+///
+/// `hovered_code` is the staged chrome control under the pointer, if
+/// any: the exe repaints that control at full body frame 0 while the
+/// pointer sits on it (`docs/hover.md`). Row panels stay static — they
+/// are not chrome controls, so the pointer over a panel repaints
+/// nothing (negative evidence: 0 changed px on all six panels,
+/// `Room_MOver.ojs` unmatched in either state).
 pub fn paint_room_scene(
     frame: &mut Frame<'_>,
     rooms: &[RoomListEntry],
     highlight: usize,
     art: &SceneArt,
+    hovered_code: Option<u32>,
 ) {
     let panels = room_panel_instances(&art.placements);
     art.paint_backdrop_live(frame, Screen::Room, |placed| {
@@ -2919,6 +2927,32 @@ pub fn paint_room_scene(
     // the exe's per-row template clone offsets stay OPEN past the
     // title/number/count pins (`findings.md` §2).
     paint_room_rows(frame, rooms, highlight, Some(art));
+    paint_room_hover(frame, art, hovered_code);
+}
+
+/// Hover repaint for one staged room chrome button (`docs/hover.md`
+/// 2026-11-10 rig sweep): the exe repaints the hovered control at
+/// full body frame 0, so the shell repaints that frame alone over the
+/// stacked rest paint. The rest-state desaturation transform is
+/// measured but unexplained (rest matches neither body record), so the
+/// rest paint keeps today's stacked look — labeled OPEN, next step a
+/// stopped-state winedbg draw-state read per `docs/hover.md`. The
+/// active filter/tab already paints frame 1 on top of the stack, so no
+/// extra arm is needed there. A missing placement, sprite, or frame
+/// paints nothing.
+fn paint_room_hover(frame: &mut Frame<'_>, art: &SceneArt, hovered_code: Option<u32>) {
+    let Some(code) = hovered_code else {
+        return;
+    };
+    let Some(placed) = art.placements.iter().find(|placed| placed.code == code) else {
+        return;
+    };
+    let shared = shared_sprite_names(&art.placements);
+    let shares_body = placed
+        .sprite
+        .as_deref()
+        .is_some_and(|sprite| shared.contains(sprite));
+    paint_placement_layer(frame, placed, &art.figures, 0, shares_body);
 }
 
 /// Room user-panel control ids (`STATE_ROOM` text/image wells; the
@@ -6667,6 +6701,7 @@ mod paint_tests {
             &rooms,
             1,
             &art,
+            None,
         );
         let window_has_ink = |x: i32, y: i32, ww: i32, hh: i32, ink: u32| -> bool {
             for dy in 0..hh {
@@ -6766,6 +6801,7 @@ mod paint_tests {
             &two_rooms(),
             0,
             &art,
+            None,
         );
         let white = pack_xrgb(0xFF, 0xFF, 0xFF);
         let window_has_ink = |x: i32, y: i32, ww: i32, hh: i32| -> bool {
@@ -6805,6 +6841,7 @@ mod paint_tests {
             &two_rooms(),
             0,
             &art,
+            None,
         );
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
@@ -8426,6 +8463,7 @@ mod paint_tests {
             &rooms,
             0,
             &art,
+            None,
         );
         assert_eq!(buf[10 * 800 + 10], pack_xrgb(255, 0, 0));
         assert_eq!(buf[10 * 800 + 20], pack_xrgb(0, 255, 0));
@@ -8657,6 +8695,7 @@ mod paint_tests {
             &rooms,
             0,
             &art,
+            None,
         );
         let red = pack_xrgb(255, 0, 0);
         assert_eq!(buf[382 * 800 + 526], red, "state icon at its panel offset");
