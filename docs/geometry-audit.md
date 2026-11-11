@@ -204,6 +204,7 @@ photo-vs-bnd value divergences stand, cited per row).
 | playing.rs:148 `JAM_DIGIT_FALLBACK_Y` | 4 | none | fallback row, unbound art | RUNTIME | Keep |
 | playing.rs:153 `NATIVE_PEER_BAR` | (754,0,46,8) | none (unbound stacked gauges) | size from `Avatar_Info_LifeGauge.ojs` 46x8 (slot 6); origin = runtime stacking | RUNTIME | Keep; size already archive-pinned |
 | playing.rs:268 `COMBO_ROW_ABOVE_LINE` | 24 | none | invented anchor (parity/playing.md audit 31) | OPEN | Rig: exe combo-digit anchor |
+| playing.rs `PLAY_TIME_FONT_SPRITE` (staged `PlayTimeNum.ojs`, unpainted) | none — no anchor exists | negative exe pin: the only painter reading the HUD object's `PlayTimeNum` slot (+0x14, filled by loader `FUN_0050d060` file `0x10D060`) is `FUN_0050d800` (file `0x10D800`), which has zero E8 call sites and zero dword references in the 5,029,888-byte `OTwo.exe` (SHA-256 `83a04541…72c823b`); the HUD object (VA `0x768184`) is consumed only by the CPlayerInfo painters (file `0xDF5D0`/`0xDFA90`), which call just the Scroe/ComboScroe/P2P painters (file `0x10D2D0`/`0x10D590`/`0x10D430`); the string is unique at file `0x24c0d8`; the reference strip carries no MMSS ink | DONE (7.55 never paints play-time digits) | None |
 | playing.rs:289 `LONG_COMBO_PLATE_INK` | (52,61) | none (sprite frame) | `Playing1.opi` slot 432 frame 1, 74x9 at (52,61) | DONE | None |
 | playing.rs:295 `NATIVE_LONG_COMBO_PLATE` | (91,282,74,9) | none (sprite frame) | photo bright-ink scan = slot 432 frame at 1:1 | DONE | None |
 | playing.rs:2476/2478 `SCENE_NATIVE_W/H` | 800 / 600 | none | canvas | RUNTIME | Keep |
@@ -224,7 +225,7 @@ verified bound run (entries 213–229 = ordinals 1–17,
 
 ## Counts per verdict
 
-- DONE: 77 (verified archive/exe source; incl. the 2026-11-09 rig
+- DONE: 78 (verified archive/exe source; incl. the 2026-11-09 rig
   pins: room inset +12/+12, waiting chat pitch/caret/row-count;
   2026-11-11 room splits: number/title/count origins + digit pitch
   + TEXT cap fraction; and the A/V-verified select-music photo
@@ -323,6 +324,10 @@ Total audited: 136 named constants.
   `HighwayGeometry::lane_clip_rects`).
   Scoping #68 (2026-11-12): audit 16 → #102, audit 30 → #103, audit 31
   (combo row) → #104/#105, audit 31 (play-time digits) → #107, audit 32 → #106.
+  #107 (2026-11-11): the play-time arm is pinned negative — 7.55 never
+  paints `PlayTimeNum` digits (painter `FUN_0050d800` zero-xref), so no
+  anchor exists and the font stays staged-but-unpainted; the combo-row
+  arm of audit 31 stays OPEN with #104/#105.
 - Result cell PASS (ticket #17; audit 13) ↔ exe-pinned anchors DONE here; the old FAIL
   was fixed-pixel avatar/verdict placement, not a geometry constant — the avatar now
   hangs its visible box at the row-0 slot (78,316) under the 652×22 band clip, peer
