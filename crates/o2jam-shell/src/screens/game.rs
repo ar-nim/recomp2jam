@@ -1531,6 +1531,14 @@ impl ScreenGame {
         });
         self
     }
+    /// True while the create-room sheet is staged (the live-boot
+    /// staging gate asserts every dialog `paint_room` can open has
+    /// art before the dialog opens).
+    #[must_use]
+    pub fn create_room_art_staged(&self) -> bool {
+        self.create_room_art.is_some()
+    }
+
     /// Stage the password sheet (`DIALOG_INPUTPASSWORD` placements plus
     /// figures through `bind_scene_rects` on `Dialog_Password.bnd`).
     /// Staging never moves the flow.
@@ -1545,6 +1553,14 @@ impl ScreenGame {
         });
         self
     }
+    /// True while the password sheet is staged (the live-boot
+    /// staging gate asserts every dialog `paint_room` can open has
+    /// art before the dialog opens).
+    #[must_use]
+    pub fn password_art_staged(&self) -> bool {
+        self.password_art.is_some()
+    }
+
     /// Open room dialog, if any.
     #[must_use]
     pub fn room_dialog(&self) -> Option<RoomDialog> {
@@ -3569,6 +3585,14 @@ impl ScreenGame {
         self
     }
 
+    /// Fetched character data (`GetCharacterInfo` 2001), if the live
+    /// boot staged it (`None` until the windowed entries fetch on
+    /// channel login).
+    #[must_use]
+    pub fn myroom_character(&self) -> Option<&CharacterInfo> {
+        self.myroom_character.as_ref()
+    }
+
     /// Stage the worn figure the Room lobby paints in its avatar slot
     /// (`IDC_IMAGE_SROOM_AVATA`, code `0x13700013`). The binary stacks it
     /// from `avatar.opa` exactly like the Result figure; a missing
@@ -3610,9 +3634,9 @@ impl ScreenGame {
     /// joined room this stages nothing. The production caller is
     /// [`Self::set_avatar_source`] plus the `set_joined_room`
     /// restage: the self arm fires only with a staged character
-    /// (`set_myroom_character`), which the live session never fetches
-    /// (no `GetCharacterInfo` 2001 on the windowed path — next step:
-    /// fetch it on channel login, then restage) — OPEN, peers live.
+    /// (`set_myroom_character`), which the windowed entries fetch on
+    /// channel login (ticket #58; the live-boot gate pins the fetch).
+    /// Peers live; the self seat restages from live data on every join.
     pub fn stage_waiting_figures(&mut self, archive: &[u8], table: &AvatarItemTable) -> &mut Self {
         stage_seat_figures(
             &self.waiting,
@@ -4705,9 +4729,8 @@ impl ScreenGame {
                 // Dual self-figure source, intended fallback: the staged
                 // seat figure (fetched-character equipment) wins; the
                 // lobby `room_avatar` (same worn stack, CLI-staged)
-                // covers seat 0 until a character is fetched — the live
-                // session never fetches one yet, so the fallback is the
-                // live path and the staged seat the shots path.
+                // covers seat 0 only until the fetched character lands
+                // (the windowed entries fetch it on channel login).
                 if self.waiting_figures[0].is_none() {
                     paint_waiting_seat_avatar(frame, &art.placements, self.room_avatar.as_ref());
                 }

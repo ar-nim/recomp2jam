@@ -11,6 +11,8 @@ mod e2e;
 mod ledger_check;
 mod live_art;
 #[cfg(test)]
+mod live_boot_gate;
+#[cfg(test)]
 mod live_guard;
 mod live_stats;
 mod loading;
@@ -514,7 +516,10 @@ fn run_online(opts: OnlineCli) -> Result<()> {
         relay_key1: 0,
         relay_key2: 0,
         channel: opts.gateway_id.zip(opts.channel_id),
-        character: false,
+        // Character info needs channel membership (server-verified),
+        // so the live boot fetches it exactly when it logs into a
+        // channel (ticket #58).
+        character: opts.gateway_id.zip(opts.channel_id).is_some(),
         wallet: false,
         avatar_opa: None,
         join_room: None,
@@ -523,6 +528,7 @@ fn run_online(opts: OnlineCli) -> Result<()> {
     };
     let (report, gateway) = connect::connect_and_login_with_transport(&connect_options)?;
     tracing::info!(channels = report.channels.len(), "channels listed");
+    stage_boot_character(&mut game, report.character);
     game.set_channels(report.channels);
     if !report.rooms.is_empty() {
         tracing::info!(rooms = report.rooms.len(), "rooms listed");
@@ -664,7 +670,10 @@ impl OnlineParams {
             relay_key1: 0,
             relay_key2: 0,
             channel: self.online_gateway_id.zip(self.online_channel_id),
-            character: false,
+            // Character info needs channel membership (server-verified),
+            // so the live boot fetches it exactly when it logs into a
+            // channel (ticket #58).
+            character: self.online_gateway_id.zip(self.online_channel_id).is_some(),
             wallet: false,
             avatar_opa: None,
             join_room: None,
@@ -1176,12 +1185,24 @@ fn setup_online(
     let options = params.into_connect_options();
     let (report, gateway) = connect::connect_and_login_with_transport(&options)?;
     tracing::info!(channels = report.channels.len(), "channels listed");
+    stage_boot_character(game, report.character);
     game.set_channels(report.channels);
     if !report.rooms.is_empty() {
         tracing::info!(rooms = report.rooms.len(), "rooms listed");
         game.set_rooms(report.rooms);
     }
     Ok(Some((gateway, pending_room, pending_song)))
+}
+
+/// Stage the fetched character info into the boot game (live boot,
+/// ticket #58): the windowed entries fetch `GetCharacterInfo` 2001 on
+/// channel login, and staging it puts the Room user panel, the MyRoom
+/// readouts, and the Waiting self seat on live data. No-op on the
+/// list-only boot (no channel, no fetch).
+fn stage_boot_character(game: &mut o2jam_shell::ScreenGame, character: Option<o2jam_net::CharacterInfo>) {
+    if let Some(hero) = character {
+        game.set_myroom_character(hero);
+    }
 }
 
 /// Song index under `install-root` (the 7.55 catalog the select-music
