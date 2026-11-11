@@ -142,7 +142,12 @@ rect is an approximation.
 32. `o2jam-shell/src/playing.rs y_for_onset` maps song time to rows linearly
     (`line_y * ahead / lookahead`, `DEFAULT_LOOKAHEAD_MS = 2000`). Ground truth: scroll
     speed/shape is a layout-behavior guess (constant velocity, zero easing); shared by
-    notes and tail beams so both inherit the error.
+    notes and tail beams so both inherit the error. RESOLVED 2026-11-11 (#106): the
+    shape guess is EXE-truth — the 7.55 note-row map is constant-velocity linear,
+    `y = 480 - (onset - now) * speed[lane] + (lane_height[lane] - 6)`, integer, no
+    easing (`docs/scroll-map.md`); shell keeps the linear map. The exe judgement row
+    `480` and per-lane integer speed stay separate audit arms (scale constants, not
+    shape).
 33. `recomp2jam/src/shots.rs:190-230 stage_bound_block / stage_playing_archive` keep
     partial staging when any figure loads and any placement binds. Ground truth: a half-
     staged scene mixes `.bnd` positions with fallback paint; the "never blank" rule hides
