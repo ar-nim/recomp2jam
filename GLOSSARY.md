@@ -22,6 +22,16 @@ _Avoid_: popup, window
 A named ControlList run with a declared entry count.
 _Avoid_: list, section
 
+### Controls
+
+**Chrome**:
+A staged lobby button with a control code and a `.bnd` rect, such as the room BACK, CREATE, or OPTION buttons.
+_Avoid_: button (bare), widget
+
+**FIRSTSTEP**:
+The room chrome button at top-right left of OPTION, staged rect (660,1)-(720,33), code `0x13200032`. Exe entry behavior untraced (ticket #34).
+_Avoid_: tutorial button (bare)
+
 ### Verdicts
 
 **PASS**:
