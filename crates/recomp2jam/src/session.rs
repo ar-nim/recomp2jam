@@ -3149,8 +3149,7 @@ mod session_tests {
         });
         play_one_note_to_result(&mut session);
         paint_until(&mut session, |s| {
-            s.game.battle_verdict()
-                == Some(o2jam_shell::screens::paint::BattleVerdict::Lose)
+            s.game.battle_verdict() == Some(o2jam_shell::screens::paint::BattleVerdict::Lose)
         });
         server.join().unwrap();
         // Local-only staging said Win (200 vs empty); the 4018 table
@@ -3285,7 +3284,9 @@ mod session_tests {
             stream.write_all(&lock.encode()).unwrap();
             assert_quiet(&mut stream);
         });
-        paint_until(&mut session, |s| s.slot_action(2) == Some(RoomSlotAction::SlotLocked));
+        paint_until(&mut session, |s| {
+            s.slot_action(2) == Some(RoomSlotAction::SlotLocked)
+        });
         server.join().unwrap();
         assert_eq!(session.slot_action(2), Some(RoomSlotAction::SlotLocked));
         assert_eq!(session.slot_action(1), None);
