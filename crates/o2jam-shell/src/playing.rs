@@ -290,6 +290,14 @@ pub const PLAY_TIME_FONT_SPRITE: &str = "PlayTimeNum.ojs";
 /// `.bnd` rect and rides the photo-pinned box
 /// [`NATIVE_LONG_COMBO_PLATE`] instead.
 pub const LONG_COMBO_PLATE_SPRITE: &str = "Note_LongCombo.ojt";
+/// Staged long-note combo count font: `Note_LongComboNum.ojs`, ten raw
+/// frames 18 rows tall in digit order 0..=9. The block entries 129–134
+/// name the runtime body `_Note_LongComboNum.ojt` (codes
+/// `0x1B50008C`..`0x1B500091`); like the caption plate they pair rect
+/// ordinals past the 17 `State_Playing.bnd` rects, so no parsed `.bnd`
+/// rect pairs the digits — the anchor is photo-pinned (see
+/// [`NATIVE_LONG_COMBO_DIGITS`]).
+pub const LONG_COMBO_NUM_FONT_SPRITE: &str = "Note_LongComboNum.ojs";
 /// The clean plate frame: frame 0 duplicates the plate but carries a
 /// stray 10-pixel artifact run along its top row; frame 1 carries the
 /// plate ink alone.
@@ -309,6 +317,18 @@ pub const NATIVE_LONG_COMBO_PLATE: Rect = Rect {
     w: 74,
     h: 9,
 };
+/// Long-note combo count digit row on the native canvas: the reference
+/// photo's count ("216") reads (110,304)-(148,315) game px
+/// (bright-ink scan), directly under the caption plate. The digits
+/// paint centered on the plate with [`LONG_COMBO_DIGIT_GAP`] between
+/// digit boxes (the photo's 38 px across the 12+6+12-wide digits
+/// implies the 4 px pitch). Photo-placed, not file geometry — OPEN
+/// (geometry-audit 31 family, same missing setter trace as the combo
+/// digits: codes `0x1B50008C`–`0x1B500091`).
+pub const NATIVE_LONG_COMBO_DIGITS: (i32, i32) = (110, 304);
+/// Inter-digit pitch past each frame's stored width (photo-measured,
+/// see [`NATIVE_LONG_COMBO_DIGITS`]).
+pub const LONG_COMBO_DIGIT_GAP: i32 = 4;
 
 /// One decoded skin image: raw RGB555 pixels plus the source body
 /// colorkey (skipped while blitting).
@@ -472,6 +492,19 @@ impl DigitFont {
         self.paint_digits(frame, x, y, &padded_digits(value, places));
     }
 
+    /// Total width of `value` with `gap` empty columns between digit
+    /// boxes ([`LONG_COMBO_DIGIT_GAP`] under the long-note caption).
+    #[must_use]
+    pub fn width_of_spaced(&self, value: u32, gap: i32) -> u32 {
+        self.width_of_digits_spaced(&decimal_digits(value), gap)
+    }
+
+    /// Paint `value` left to right from `(x, y)`, advancing each
+    /// frame's stored width plus `gap` columns.
+    pub fn paint_spaced(&self, frame: &mut Frame<'_>, x: i32, y: i32, value: u32, gap: i32) {
+        self.paint_digits_spaced(frame, x, y, &decimal_digits(value), gap);
+    }
+
     /// Paint `value` centered on `center_x` at row `y`.
     pub fn paint_centered(&self, frame: &mut Frame<'_>, center_x: i32, y: i32, value: u32) {
         let width = i32::try_from(self.width_of(value)).unwrap_or(0);
@@ -480,22 +513,38 @@ impl DigitFont {
 
     /// Sum of the digit frames' widths.
     fn width_of_digits(&self, digits: &[u8]) -> u32 {
-        digits
+        self.width_of_digits_spaced(digits, 0)
+    }
+
+    /// Sum of the digit frames' widths plus `gap` columns between
+    /// boxes (never after the last digit).
+    fn width_of_digits_spaced(&self, digits: &[u8], gap: i32) -> u32 {
+        let sum: u32 = digits
             .iter()
             .filter_map(|digit| self.digit(*digit))
             .map(|frame| frame.image.w as u32)
-            .sum()
+            .sum();
+        let gaps = u32::try_from(gap.max(0)).unwrap_or(0);
+        let boxes = u32::try_from(digits.len().saturating_sub(1)).unwrap_or(0);
+        sum.saturating_add(gaps.saturating_mul(boxes))
     }
 
     /// Blit the digits left to right, advancing by each frame width.
     fn paint_digits(&self, frame: &mut Frame<'_>, x: i32, y: i32, digits: &[u8]) {
+        self.paint_digits_spaced(frame, x, y, digits, 0);
+    }
+
+    /// Blit the digits left to right, advancing by each frame width
+    /// plus `gap` columns.
+    fn paint_digits_spaced(&self, frame: &mut Frame<'_>, x: i32, y: i32, digits: &[u8], gap: i32) {
         let mut pen = x;
+        let gap = gap.max(0);
         for digit in digits {
             let Some(sprite) = self.digit(*digit) else {
                 continue;
             };
             blit_rgb555(frame, &sprite.image.view(), pen, y, Some(sprite.colorkey));
-            pen += i32::try_from(sprite.image.w).unwrap_or(0);
+            pen += i32::try_from(sprite.image.w).unwrap_or(0) + gap;
         }
     }
 }
@@ -548,6 +597,7 @@ pub struct PlaySkin {
     score_font: Option<DigitFont>,
     combo_font: Option<DigitFont>,
     play_time_font: Option<DigitFont>,
+    long_combo_font: Option<DigitFont>,
     long_combo_plate: Option<SkinSprite>,
     combo_glow: Vec<SkinSprite>,
 }
@@ -563,6 +613,7 @@ impl PlaySkin {
             && self.score_font.is_none()
             && self.combo_font.is_none()
             && self.play_time_font.is_none()
+            && self.long_combo_font.is_none()
             && self.long_combo_plate.is_none()
             && self.combo_glow.is_empty()
             && self.note_heads.iter().all(Option::is_none)
@@ -696,6 +747,12 @@ impl PlaySkin {
         self.play_time_font.as_ref()
     }
 
+    /// Staged long-note combo count font ([`LONG_COMBO_NUM_FONT_SPRITE`]).
+    #[must_use]
+    pub fn long_combo_font(&self) -> Option<&DigitFont> {
+        self.long_combo_font.as_ref()
+    }
+
     /// Staged long-note combo caption plate ([`LONG_COMBO_PLATE_SPRITE`]).
     #[must_use]
     pub fn long_combo_plate(&self) -> Option<&SkinSprite> {
@@ -821,6 +878,13 @@ impl PlaySkin {
         self
     }
 
+    /// Stage the long-note combo count font.
+    #[must_use]
+    pub fn with_long_combo_font(mut self, font: DigitFont) -> Self {
+        self.long_combo_font = Some(font);
+        self
+    }
+
     /// Stage the long-note combo caption plate.
     #[must_use]
     pub fn with_long_combo_plate(mut self, plate: SkinSprite) -> Self {
@@ -908,6 +972,7 @@ impl PlaySkin {
         skin.score_font = digit_font(archive, SCORE_FONT_SPRITE);
         skin.combo_font = digit_font(archive, COMBO_FONT_SPRITE);
         skin.play_time_font = digit_font(archive, PLAY_TIME_FONT_SPRITE);
+        skin.long_combo_font = digit_font(archive, LONG_COMBO_NUM_FONT_SPRITE);
         skin.long_combo_plate = archive_body(archive, LONG_COMBO_PLATE_SPRITE)
             .and_then(|body| lane_sprite(body, LONG_COMBO_PLATE_FRAME));
         let glow_name =
@@ -1587,6 +1652,13 @@ pub struct LivePlay {
     /// Jam level grant stamp in song ms (visual flash only; scoring
     /// and timing never read this).
     jam_flash_at: Option<u64>,
+    /// Tick count snapshot for the shell paint, taken at each fresh
+    /// song instant ([`Self::advance_to`] with a new `now_ms`). The
+    /// bonus accumulator itself counts every advance through an open
+    /// span (a re-paint at one instant ticks again — the walked
+    /// totals pin that), while the painted count must be idempotent
+    /// per instant: two paints at 5 100 show the same digits.
+    shown_ticks: u64,
     /// Display-only avatar scene captions (level, song, volume).
     scene: AvatarScene,
     /// Slots the 4015 peer broadcast has reported: occupancy for the
@@ -1613,6 +1685,7 @@ impl Default for LivePlay {
             sounds: Vec::new(),
             lane_flash: [None; HIGHWAY_LANES as usize],
             jam_flash_at: None,
+            shown_ticks: 0,
             scene: AvatarScene::default(),
             peer_seen: [false; PEER_SLOT_COUNT],
         }
@@ -1650,13 +1723,22 @@ impl LivePlay {
             sounds: Vec::new(),
             lane_flash: [None; HIGHWAY_LANES as usize],
             jam_flash_at: None,
+            shown_ticks: 0,
             scene: AvatarScene::default(),
             peer_seen: [false; PEER_SLOT_COUNT],
         }
     }
 
     /// Notes with long-note tails: `(lane, head ms, tail ms, sample)`.
-    /// A tail equal to (or before) its head degrades to a tap.
+    /// A tail equal to (or before) its head degrades to a tap. The
+    /// paired tail is a real chart record at its tail time: it joins
+    /// the scrolling view, so it paints as a note at its onset while
+    /// the span beam runs head-to-tail. OPEN: the exe's tail art is
+    /// the `NoteTail` option table (B41: `option.ini` `NoteTail`
+    /// 0..=4 → table `0x67fe8c`, default 2) and which body each slot
+    /// stages is untraced, so tails ride the shared staged head body
+    /// (next step: REA dossier of the `0x67fe8c` table consumers and
+    /// the per-note draw walk's tail-bit arm).
     #[must_use]
     pub fn new_holds(entries: &[(u8, u64, u64, u32)]) -> Self {
         let mut pending: Vec<PendingNote> = entries
@@ -1669,13 +1751,17 @@ impl LivePlay {
             })
             .collect();
         pending.sort_by_key(|note| note.at_ms);
+        let mut onsets: Vec<(u8, u64)> = entries
+            .iter()
+            .map(|(lane, head_ms, _, _)| (*lane, *head_ms))
+            .collect();
+        for (lane, head_ms, tail_ms, _) in entries {
+            if HoldSpan::new(*head_ms, *tail_ms).is_some() {
+                onsets.push((*lane, *tail_ms));
+            }
+        }
         Self {
-            view: PlayingView::new(
-                entries
-                    .iter()
-                    .map(|(lane, head_ms, _, _)| (*lane, *head_ms))
-                    .collect(),
-            ),
+            view: PlayingView::new(onsets),
             pending,
             score: Score::default(),
             pills: PillStock::default(),
@@ -1690,6 +1776,7 @@ impl LivePlay {
             sounds: Vec::new(),
             lane_flash: [None; HIGHWAY_LANES as usize],
             jam_flash_at: None,
+            shown_ticks: 0,
             scene: AvatarScene::default(),
             peer_seen: [false; PEER_SLOT_COUNT],
         }
@@ -1710,6 +1797,22 @@ impl LivePlay {
         if let Some(bar) = LifeBar::new(difficulty) {
             self.score.life = bar;
         }
+    }
+
+    /// The per-instant hold-tick count the shell paints under the
+    /// LONGNOTE COMBO caption ([`Self::advance_to`] snapshots it at
+    /// each fresh song instant; the walked [`LongNoteBonus`]
+    /// accumulator itself counts every advance through an open span).
+    #[must_use]
+    pub fn shown_long_note_ticks(&self) -> u32 {
+        u32::try_from(self.shown_ticks).unwrap_or(u32::MAX)
+    }
+
+    /// Staged long-note combo count font, when the skin binds it
+    /// ([`LONG_COMBO_NUM_FONT_SPRITE`]).
+    #[must_use]
+    pub fn long_note_tick_font(&self) -> Option<&DigitFont> {
+        self.view.skin.long_combo_font()
     }
 
     /// Display-only avatar scene captions (level, song, volume).
@@ -1760,6 +1863,46 @@ impl LivePlay {
             placements,
         );
         self.paint_long_combo_caption(frame);
+        self.paint_long_combo_count(frame);
+    }
+
+    /// Long-note combo count under the caption plate: the verified
+    /// hold bonus ticks +1 combo per held tick (B11, the count is the
+    /// [`LongNoteBonus`] tick accumulator; whether head/tail ratings
+    /// also feed the counter is B46 OPEN). The count paints centered
+    /// under the plate through the staged `Note_LongComboNum.ojs`
+    /// font, procedural glyphs otherwise, once any tick landed (the
+    /// exe's show/hide rule is untraced — the reference photo shows
+    /// the count standing mid-song, "216" under the caption).
+    fn paint_long_combo_count(&self, frame: &mut Frame<'_>) {
+        let ticks = u32::try_from(self.shown_ticks).unwrap_or(u32::MAX);
+        if ticks == 0 {
+            return;
+        }
+        let (center_x, row) = long_combo_digits_origin(frame.w, frame.h);
+        match self.view.skin.long_combo_font() {
+            Some(font) => {
+                let width =
+                    i32::try_from(font.width_of_spaced(ticks, LONG_COMBO_DIGIT_GAP)).unwrap_or(0);
+                font.paint_spaced(
+                    frame,
+                    center_x - width / 2,
+                    row,
+                    ticks,
+                    LONG_COMBO_DIGIT_GAP,
+                );
+            }
+            None => {
+                let digits = i32::try_from(number_width(ticks)).unwrap_or(0);
+                draw_number(
+                    frame,
+                    center_x - digits / 2,
+                    row,
+                    ticks,
+                    pack_xrgb(0xFF, 0xFF, 0xFF),
+                );
+            }
+        }
     }
 
     /// LONGNOTE COMBO caption plate over the lanes through the staged
@@ -1896,6 +2039,7 @@ impl LivePlay {
     /// hold-bonus scan then feeds one +10 tick per armed hold whose
     /// span window is still open (strict on both ends).
     pub fn advance_to(&mut self, now_ms: u64) {
+        let fresh_instant = now_ms > self.now_ms;
         self.now_ms = now_ms;
         self.view.advance_to(now_ms);
         let windows = self.windows;
@@ -1919,6 +2063,9 @@ impl LivePlay {
             .count();
         for _ in 0..held_spans {
             self.bonus.hold_tick();
+        }
+        if fresh_instant {
+            self.shown_ticks = self.bonus.ticks();
         }
     }
 
@@ -2196,6 +2343,29 @@ impl LivePlay {
             },
             TAIL_BEAM,
         );
+    }
+
+    /// Armed hold heads: while a hold stays open its lane keeps the
+    /// key pressed at the judgement line — the staged `KeydownImage`
+    /// press art bottom-anchored on the line, else the lit receptor
+    /// pad. The strike flash alone dies after [`BURST_MS`], but the
+    /// verified hold flag never clears mid-span, so the pressed key
+    /// stays down until the release.
+    fn paint_armed_heads(&self, frame: &mut Frame<'_>, geom: &HighwayGeometry) {
+        for lane in 0..HIGHWAY_LANES {
+            let held = self
+                .pending
+                .iter()
+                .any(|note| note.holding && !note.tail_judged && note.lane == lane);
+            if !held {
+                continue;
+            }
+            if let Some(press) = self.view.skin.press_key(lane) {
+                press.paint_bottom_anchored(frame, geom, lane, geom.line_y);
+            } else {
+                fill_rect(frame, &geom.receptor_pad(lane), RECEPTOR_LIT);
+            }
+        }
     }
 
     /// Whether a tail row survives the worn sight-ring curtain (same
@@ -2560,6 +2730,7 @@ impl LivePlay {
             self.view.paint_curtained(frame, geom, self.curtain);
         }
         self.paint_hold_tails(frame, geom);
+        self.paint_armed_heads(frame, geom);
         self.paint_hit_bursts(frame, geom, now_ms);
         self.paint_jam_flash(frame, geom, now_ms);
         self.paint_jam_gauge(frame);
@@ -2912,6 +3083,20 @@ pub fn long_combo_plate_origin(frame_w: usize, frame_h: usize) -> (i32, i32) {
             - LONG_COMBO_PLATE_INK.0,
         scale_scene_axis(NATIVE_LONG_COMBO_PLATE.y, frame_h, SCENE_NATIVE_H)
             - LONG_COMBO_PLATE_INK.1,
+    )
+}
+
+/// Draw center x and top row for the long-note combo count at one
+/// frame size: the digit row centers on the scaled caption plate
+/// ([`NATIVE_LONG_COMBO_DIGITS`], photo-measured) and the row scales
+/// with the frame.
+#[must_use]
+pub fn long_combo_digits_origin(frame_w: usize, frame_h: usize) -> (i32, i32) {
+    let plate = NATIVE_LONG_COMBO_PLATE;
+    let center = plate.x + i32::try_from(plate.w).unwrap_or(0) / 2;
+    (
+        scale_scene_axis(center, frame_w, SCENE_NATIVE_W),
+        scale_scene_axis(NATIVE_LONG_COMBO_DIGITS.1, frame_h, SCENE_NATIVE_H),
     )
 }
 
@@ -5634,6 +5819,132 @@ mod highway_tests {
             },
             0x0000,
         )
+    }
+
+    /// Paint the full highway frame for `live` at `now_ms` on an
+    /// 800x600 buffer.
+    fn paint_native_highway(live: &mut LivePlay, now_ms: u64) -> Vec<u32> {
+        let mut buf = vec![0u32; 800 * 600];
+        live.paint(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &HighwayGeometry::centered(800, 600),
+            now_ms,
+        );
+        buf
+    }
+
+    #[test]
+    fn hold_tail_scrolls_down_the_highway_as_a_note() {
+        // The paired tail is a real record at its tail time: it must
+        // paint as a scrolling note at its onset, not only ride the
+        // head-to-tail beam. Synthetic chart, procedural skin: the
+        // tail core is the full-lane NOTE_BLUE ink, where the beam is
+        // a 2 px column at the lane center.
+        let mut live = LivePlay::new_holds(&[(0, 1_000, 2_000, 7)]);
+        assert_eq!(live.strike_lane(0, 1_000), Some(Judgement::Cool));
+        let buf = paint_native_highway(&mut live, 1_500);
+        // 500 ms ahead of a 2000 ms lookahead on the 487-row line.
+        let tail_y = 487 - (500.0 * 487.0 / 2000.0) as i32;
+        let note = HighwayGeometry::centered(800, 600).note_rect(0, tail_y);
+        let core = pack_xrgb(0x40, 0xC0, 0xFF);
+        let row = usize::try_from(note.y + 1).expect("tail row");
+        let x0 = usize::try_from(note.x).expect("tail column");
+        let w = usize::try_from(note.w).expect("tail width");
+        let ink = (0..w).filter(|dx| buf[row * 800 + x0 + dx] == core).count();
+        assert!(
+            ink >= w.saturating_sub(2),
+            "tail core covered only {ink}/{w} columns at row {row}"
+        );
+    }
+
+    #[test]
+    fn armed_hold_keeps_the_pressed_key_down_past_the_burst() {
+        // While a hold stays armed its lane shows the pressed key at
+        // the judgement line (the staged `KeydownImage` art), not
+        // only the 150 ms strike flash: 400 ms after the strike the
+        // flash is gone but the hold is still open.
+        let mut live = LivePlay::new_holds(&[(0, 1_000, 2_000, 7)]);
+        live.set_skin(PlaySkin::default().with_press_key(0, solid_sprite(4, 4, 0x03E0)));
+        live.strike_lane(0, 1_000);
+        let buf = paint_native_highway(&mut live, 1_400);
+        let ink = solid_ink(0x03E0);
+        let lane = HighwayGeometry::centered(800, 600).lane_rect(0);
+        let center = usize::try_from(lane.x + lane.w as i32 / 2).expect("lane center");
+        // The 4x4 press art bottom-anchors at row 487: rows 483..487.
+        let pressed = (483..=486).any(|y| {
+            let row = usize::try_from(y).expect("press row");
+            (center - 2..center + 2).any(|x| buf[row * 800 + x] == ink)
+        });
+        assert!(pressed, "the armed hold shows no pressed key at the line");
+    }
+
+    #[test]
+    fn hold_tick_count_paints_under_the_caption_plate() {
+        // Tick feedback: the verified +10/+1 hold bonus ticks (B11)
+        // increment the long-note combo count, which paints under the
+        // LONGNOTE COMBO caption through the staged
+        // `Note_LongComboNum.ojs` font (or the procedural digits).
+        // Every digit pixel of a lone paint of the current tick count
+        // must appear in the over-art layer's frame.
+        let font = DigitFont::from_frames((0..10).map(|_| solid_sprite(3, 5, 0x7C00)).collect())
+            .expect("ten digit frames");
+        let mut live = LivePlay::new_holds(&[(0, 1_000, 2_000, 7)]);
+        live.set_skin(PlaySkin::default().with_long_combo_font(font));
+        live.strike_lane(0, 1_000);
+        // Feed the ticks through the highway paint's advance, then
+        // read the over-art layer at the same instant.
+        let _ = paint_native_highway(&mut live, 1_500);
+        assert!(live.bonus().ticks() > 0, "the armed span fed no ticks");
+        // The paint shows the per-instant snapshot, not the walked
+        // accumulator (a re-paint at one instant ticks the latter
+        // again — see [`LivePlay::advance_to`]).
+        let ticks = u32::try_from(live.shown_ticks).expect("tick count fits u32");
+        const BACKDROP: u32 = 0x020202;
+        let mut expected = vec![BACKDROP; 800 * 600];
+        let (center_x, row) = long_combo_digits_origin(800, 600);
+        let font = live
+            .view
+            .skin
+            .long_combo_font()
+            .expect("staged long-note font");
+        let width =
+            i32::try_from(font.width_of_spaced(ticks, LONG_COMBO_DIGIT_GAP)).expect("width");
+        font.paint_spaced(
+            &mut Frame {
+                buf: &mut expected,
+                w: 800,
+                h: 600,
+            },
+            center_x - width / 2,
+            row,
+            ticks,
+            LONG_COMBO_DIGIT_GAP,
+        );
+        let mut actual = vec![BACKDROP; 800 * 600];
+        live.paint_avatar_scene(
+            &mut Frame {
+                buf: &mut actual,
+                w: 800,
+                h: 600,
+            },
+            None,
+            1_500,
+        );
+        let mut checked = 0;
+        for at in 0..expected.len() {
+            if expected[at] != BACKDROP {
+                assert_eq!(
+                    actual[at], expected[at],
+                    "long-note count pixel {at} must land under the caption"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 0, "the tick count painted no digits");
     }
 
     fn solid_ink(word: u16) -> u32 {
