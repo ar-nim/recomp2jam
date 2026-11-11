@@ -77,8 +77,37 @@ Row split (`u16` music id + four rank bytes) is Memoryer shape —
 (`Difficulty : byte` EX/NX/HX/RX, `Mozart.Metadata.Rank : byte`
 None/F/E/D/C/B/A/S/Perfect) and an `Empty`-prefix collection (no
 length word, inline values in `Enum.GetValues<Difficulty>()` order) —
-against an exe-verified 6-byte width. The paint-path read that would
-pin the per-byte difficulty order stays OPEN.
+against an exe-verified 6-byte width.
+
+### 2031 per-byte difficulty order — PINNED (claim D22, 2026-11 static sweep)
+
+Static sweep (GNU objdump 2.47 slices + Python byte scans + one Ghidra
+decompile of the host procedure, `ev_9fb4178a…`) over the read-only
+7.55 copy pins the paint-path read. The result/select procedure
+`FUN_0043e9b0` scans the best-table vector at `0x779814` row by row:
+iterator step `add $0x6` (file `0x40d5b`–`0x40d64`), row `u16` at
+byte 0 compared against the select entry's music id (load/compare
+files `0x40d78`–`0x40da2`), matched-row iterator kept in a local. It
+then reads `row[2 + d]` where `d` is the selected entry's difficulty
+word at `entry+0x210`: `movzwl 0x210(edx,eax,1)` (catalog record
+stride `0x238`) into the index, `mov 0x2(ecx,eax,1),%dl`,
+`mov %dl,0x7797c4` (files `0x40f37`–`0x40f4f`); a byte-identical
+second site at files `0x413e1`–`0x413f5`. `entry+0x210` is the chosen
+difficulty — 0 = Easy, 1 = Normal, 2 = Hard — stored by the
+select-entry builder (VA `0x4441f0`, store file `0x4425d`, ev
+`b5c3094a…`; see `docs/file-formats/ojn.md`).
+
+Per-byte order of the 2031 body, exe-pinned: bytes 0–1 = `u16` music
+id (the scan key, not difficulty-indexed); byte 2 = Easy best rank;
+byte 3 = Normal; byte 4 = Hard. Byte 5 (the fourth rank slot of the
+exe-pinned 6-byte row) rides the wire but has no reader on this path.
+The cached rank byte lands in global `0x7797c4` and drives the
+`Result_Imgs_Rank` frame chooser (reads at files `0xce79`/`0xceb2`/`0xcef3`/`0xcf34`
+with compares against 1/6/8 — the `Rank` byte values, matching
+None/F/…/S/Perfect). Memoryer's `Enum.GetValues<Difficulty>()` order
+EX/NX/HX/RX agrees for slots 0–2; the RX byte stays
+Memoryer-only. The write side uses the same split: the best-rank
+updater writes `row[2 + index]` (files `0xc5027`–`0xc5069`).
 
 ## 2033 `MusicMaxScoreAnswer` (S→C) — PINNED
 
