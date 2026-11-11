@@ -244,3 +244,7 @@ sprite anchors in the bodies agree with those rects byte-exact.
 | Gateway | Memoryer 7.2.0 on `127.0.0.1:15010`; token read from `~/memoryer-local/O2JAM.db` `t_o2jam_login` at run time, account `tester2` (`USER_INDEX_ID` 2) |
 | Scene path | planet board → EASY emblem click → channel dialog → network popup OK (400,365) → 입장 (526,248) → `STATE_ROOM` → BACK (752,581) → planet board |
 | Tools | `~/scratch/hover-sweep/{hovctl.c,cap.sh,drive2.py,match_frames.py,ojs.py,gen_table.py}`; raw pairs, crops and the sweep JSON (`planet-sweep.json`, `room-sweep.json`) in the same directory |
+
+## Press feedback (#115, 2026-11-12)
+
+Press-down drawing per the #111 synthesis (`~/scratch/close-backlog/gui-drive/findings.md`): the planet board arms the press on left-down (`planet_pointer_down`), swaps the held control to its pressed frame only when the staged body carries one (the option gear paints nothing — no invented art), holds stable with no timeout revert, and reverts on release — release-inside also fires the action on UP (`planet_pointer_up`), release-outside reverts to REST with no action. Stand-ins kept OPEN: the release-outside revert trigger (rect-exit vs up), the release-inside revert target (hover vs rest frame), the click sound cue, and which raw record the exe's pressed art is per control (next: record-vs-capture match of the `clean-*` press crops against the staged records, the 2026-11-11 playstop method above). The room-scene quickjoin press arm is not wired (scene-local; next capture: quickjoin release-inside at up+30/90/200 ms).

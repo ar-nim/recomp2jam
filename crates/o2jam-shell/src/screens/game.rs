@@ -524,6 +524,14 @@ pub struct ScreenGame {
     /// OPEN 4). Staged placements only — unstaged promo clicks
     /// land nowhere (no fallback literals, ADR-0003).
     planet_promo: Option<PlanetPromo>,
+    /// Board control the left button is currently holding down,
+    /// if any (the press-feedback arm, #111). Armed on down over
+    /// the bare board; consumed on release. The pressed-frame
+    /// repaint reads it (see `paint_planet_press`); release-inside
+    /// dispatches the action on up, release-outside reverts with
+    /// none (both pinned; the release-outside revert trigger stays
+    /// OPEN, `docs/hover.md`).
+    planet_press: Option<PlanetAction>,
     /// Open planet-board modal, if any (quit-confirm or options).
     planet_modal: Option<PlanetModal>,
     /// Quit-confirm OK was pressed: the windowed shell exits the
@@ -1009,6 +1017,7 @@ impl ScreenGame {
             arena_stage: DEFAULT_ARENA_STAGE,
             planet: PlanetSelection::new(),
             planet_promo: None,
+            planet_press: None,
             planet_modal: None,
             quit_requested: false,
             planet_option_art: [None, None, None],
@@ -1294,6 +1303,9 @@ impl ScreenGame {
 
     /// Step the flow, re-anchoring the song clock on Playing entry.
     fn enter(&mut self, next: Screen) {
+        // A scene change while the button is held drops the press:
+        // the pressed control belongs to the scene being left.
+        self.planet_press = None;
         self.enter_screen(next);
     }
 
@@ -3274,32 +3286,138 @@ impl ScreenGame {
     /// the bare board and the dialog opens only here, never at boot.
     /// The amber-cursor stand-in stays labeled OPEN.
     pub fn click_planet(&mut self, x: i32, y: i32) {
-        // Board clicks ride the bare board: elsewhere — and while a
-        // modal owns the board — they land nowhere (the mouse router
-        // already gates; this keeps the public driver honest too).
+        // The whole-gesture driver walks the pinned split: the press
+        // arms on down, the action dispatches on release-inside up.
+        self.planet_pointer_down(x, y);
+        self.planet_pointer_up(x, y);
+    }
+
+    fn click_dispatch(&mut self, x: i32, y: i32) {
+        // The open lanking board answers its named controls
+        // (sorts, pagers, row picks) at staged rects; the shop
+        // boards answer theirs (row toggles, buys, pagers, sorts)
+        // the same way; every other side screen stays click-silent.
+        if self.side == Some(SideScreen::Lanking) {
+            self.click_lanking(x, y);
+            return;
+        }
+        if self.side == Some(SideScreen::Shop) {
+            self.click_shop(x, y);
+            return;
+        }
+        if self.side == Some(SideScreen::MusicShop) {
+            self.click_music_shop(x, y);
+            return;
+        }
+        if self.side.is_some() {
+            if self.side == Some(SideScreen::MyRoom) {
+                self.click_myroom_side(x, y);
+            }
+            return;
+        }
+        if self.planet_modal.is_some() {
+            self.click_planet_modal(x, y);
+            return;
+        }
+        if self.flow.current() == Screen::Room && self.room_dialog.is_some() {
+            self.click_room_dialog(x, y);
+            return;
+        }
+        match self.flow.current() {
+            Screen::Avi => {
+                self.enter(Screen::Planet);
+            }
+            Screen::Channel => self.click_channel_row(x, y),
+            Screen::Room => self.click_room_row(x, y),
+            Screen::Waiting => {
+                if !self.click_select_music(x, y) {
+                    self.click_waiting_button(x, y);
+                }
+            }
+            Screen::Result => self.click_result_button(x, y),
+            // Planet board click: hit-test at the pinned `.bnd`
+            // button rects and record the difficulty pick. What a
+            // pick DOES on confirm is evidence-OPEN (docs/planet.md
+            // OPEN 6: solo entry), and the FREE/DRUM back ends were
+            // never wired (P0), so every outcome stays a no-op.
+            Screen::Planet => {
+                self.click_planet(x, y);
+            }
+            // Ranking clicks on the flow screen land nowhere: the
+            // live board answers through the side-screen path
+            // (`click_lanking` over staged `side_placements`).
+            Screen::Lanking => {}
+            // Avatar-room flow clicks land nowhere: the flow screen
+            // is not side-entered (the transition map has no lobby
+            // edge into it) — the side overlay owns the dispatch
+            // (`click_myroom_side`).
+            Screen::Myroom => {}
+            // Shop clicks land nowhere: buy, gift, cart, filter, and
+            // pager semantics are all unevidenced (P0).
+            Screen::Shop | Screen::MusicShop => {}
+            Screen::Loading | Screen::Playing => {}
+        }
+    }
+
+    /// The planet board with no side screen and no modal owns it —
+    /// the only scene with a pinned press/release split (#111).
+    fn bare_planet_board(&self) -> bool {
+        self.side.is_none() && self.planet_modal.is_none() && self.flow.current() == Screen::Planet
+    }
+
+    /// Arm the board press on left-down over the bare board (pinned
+    /// #111 arm 1: the pressed frame swaps on ButtonDown, per control
+    /// — only when the staged art carries a pressed frame). Elsewhere
+    /// — and while a modal owns the board — the press lands nowhere
+    /// (the same gate the click router uses).
+    fn planet_pointer_down(&mut self, x: i32, y: i32) {
         if self.flow.current() != Screen::Planet || self.planet_modal.is_some() {
             return;
         }
         let placements: &[ScenePlacement] = self
             .scene_art(Screen::Planet)
             .map_or(&[], |art| &art.placements);
-        let action = planet_action_at(placements, x, y);
+        self.planet_press = planet_action_at(placements, x, y);
+    }
+
+    /// Release the board press (left-up). Release-inside reverts and
+    /// fires the action on up (pinned #111 arm 3); release-outside
+    /// reverts to REST with no action (arm 4 — the revert trigger,
+    /// rect-exit vs up, stays OPEN, `docs/hover.md`; this stand-in
+    /// reverts on up).
+    fn planet_pointer_up(&mut self, x: i32, y: i32) {
+        let Some(pressed) = self.planet_press.take() else {
+            return;
+        };
+        if self.flow.current() != Screen::Planet || self.planet_modal.is_some() {
+            return;
+        }
+        let placements: &[ScenePlacement] = self
+            .scene_art(Screen::Planet)
+            .map_or(&[], |art| &art.placements);
+        if planet_action_at(placements, x, y) == Some(pressed) {
+            self.dispatch_planet_action(pressed);
+        }
+    }
+
+    /// Run one board action (the release-inside click, pinned on up
+    /// not down, #111 arm 3).
+    fn dispatch_planet_action(&mut self, action: PlanetAction) {
         match action {
-            Some(PlanetAction::Emblem { band: Some(band) }) => {
+            PlanetAction::Emblem { band: Some(band) } => {
                 self.planet.select_band(band);
                 self.enter(Screen::Channel);
             }
-            Some(PlanetAction::Emblem { band: None }) => {}
-            Some(PlanetAction::Promo { cell }) => {
+            PlanetAction::Emblem { band: None } => {}
+            PlanetAction::Promo { cell } => {
                 self.planet_promo = Some(cell);
             }
-            Some(PlanetAction::QuitConfirm) => {
+            PlanetAction::QuitConfirm => {
                 self.planet_modal = Some(PlanetModal::QuitConfirm);
             }
-            Some(PlanetAction::OptionsDialog) => {
+            PlanetAction::OptionsDialog => {
                 self.planet_modal = Some(PlanetModal::Options);
             }
-            None => {}
         }
     }
 
@@ -4611,9 +4729,13 @@ impl ScreenGame {
     /// the bare board.
     fn paint_planet(&self, frame: &mut Frame<'_>) {
         match self.scene_art(Screen::Planet) {
-            Some(art) => {
-                paint_planet_scene(frame, art, self.planet.band(), self.hovered_planet_action())
-            }
+            Some(art) => paint_planet_scene(
+                frame,
+                art,
+                self.planet.band(),
+                self.hovered_planet_action(),
+                self.planet_press,
+            ),
             None => paint_screen(frame, Screen::Planet),
         }
         self.paint_planet_modal(frame);
@@ -5555,74 +5677,34 @@ impl GameLoop for ScreenGame {
         self.pointer = Some((x, y));
     }
 
-    fn mouse_click(&mut self, x: i32, y: i32) {
-        // A click lands where the pointer is, so hover and press agree
+    fn mouse_down(&mut self, x: i32, y: i32) {
+        // A press lands where the pointer is, so hover and press agree
         // even when no motion event preceded the press.
         self.pointer = Some((x, y));
-        // The open lanking board answers its named controls
-        // (sorts, pagers, row picks) at staged rects; the shop
-        // boards answer theirs (row toggles, buys, pagers, sorts)
-        // the same way; every other side screen stays click-silent.
-        if self.side == Some(SideScreen::Lanking) {
-            self.click_lanking(x, y);
+        if self.bare_planet_board() {
+            // Pinned press feedback (#111): the planet board arms the
+            // press on down and fires the action on release-inside.
+            self.planet_pointer_down(x, y);
             return;
         }
-        if self.side == Some(SideScreen::Shop) {
-            self.click_shop(x, y);
-            return;
+        // Every other scene keeps its down-dispatch (no press-split
+        // evidence there; the room-scene quickjoin arm is the named
+        // next capture, `docs/hover.md`).
+        self.click_dispatch(x, y);
+    }
+
+    fn mouse_up(&mut self, x: i32, y: i32) {
+        self.pointer = Some((x, y));
+        if self.bare_planet_board() {
+            self.planet_pointer_up(x, y);
         }
-        if self.side == Some(SideScreen::MusicShop) {
-            self.click_music_shop(x, y);
-            return;
-        }
-        if self.side.is_some() {
-            if self.side == Some(SideScreen::MyRoom) {
-                self.click_myroom_side(x, y);
-            }
-            return;
-        }
-        if self.planet_modal.is_some() {
-            self.click_planet_modal(x, y);
-            return;
-        }
-        if self.flow.current() == Screen::Room && self.room_dialog.is_some() {
-            self.click_room_dialog(x, y);
-            return;
-        }
-        match self.flow.current() {
-            Screen::Avi => {
-                self.enter(Screen::Planet);
-            }
-            Screen::Channel => self.click_channel_row(x, y),
-            Screen::Room => self.click_room_row(x, y),
-            Screen::Waiting => {
-                if !self.click_select_music(x, y) {
-                    self.click_waiting_button(x, y);
-                }
-            }
-            Screen::Result => self.click_result_button(x, y),
-            // Planet board click: hit-test at the pinned `.bnd`
-            // button rects and record the difficulty pick. What a
-            // pick DOES on confirm is evidence-OPEN (docs/planet.md
-            // OPEN 6: solo entry), and the FREE/DRUM back ends were
-            // never wired (P0), so every outcome stays a no-op.
-            Screen::Planet => {
-                self.click_planet(x, y);
-            }
-            // Ranking clicks on the flow screen land nowhere: the
-            // live board answers through the side-screen path
-            // (`click_lanking` over staged `side_placements`).
-            Screen::Lanking => {}
-            // Avatar-room flow clicks land nowhere: the flow screen
-            // is not side-entered (the transition map has no lobby
-            // edge into it) — the side overlay owns the dispatch
-            // (`click_myroom_side`).
-            Screen::Myroom => {}
-            // Shop clicks land nowhere: buy, gift, cart, filter, and
-            // pager semantics are all unevidenced (P0).
-            Screen::Shop | Screen::MusicShop => {}
-            Screen::Loading | Screen::Playing => {}
-        }
+    }
+
+    fn mouse_click(&mut self, x: i32, y: i32) {
+        // The whole-gesture driver: down then up at the same point
+        // (release-inside), what legacy click callers always meant.
+        self.mouse_down(x, y);
+        self.mouse_up(x, y);
     }
 
     fn quit_requested(&self) -> bool {
@@ -6617,6 +6699,89 @@ mod game_tests {
             });
         }
         figure
+    }
+
+    /// Layered promo figure for the press tests: layer 0 the pressed
+    /// frame (red), layer 1 the rest frame (green) — distinct frames
+    /// per the #63 guard. `layers` 1 models a control with no pressed
+    /// art (the option-gear rule): its one record IS the rest frame
+    /// (green), so down paints nothing.
+    fn press_promo_figure(w: usize, h: usize, layers: usize) -> AvatarFigure {
+        use crate::avatar::FigureLayer;
+        let pixels = |word: u16| word.to_le_bytes().repeat(w * h);
+        let mut figure = AvatarFigure::default();
+        let words: &[u16] = match layers {
+            1 => &[0x03E0],
+            _ => &[0x7C00, 0x03E0],
+        };
+        for word in words {
+            figure.push_layer(FigureLayer {
+                image: o2jam_render::Rgb555Image::decode(&pixels(*word), w, h)
+                    .expect("press layers"),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+        }
+        figure
+    }
+
+    /// Bare planet board with staged promo cells: PLAYSTOP carries a
+    /// pressed frame (two records), the LEFT cell a single record
+    /// (no pressed art). Rects are the parsed `.bnd` rects verbatim
+    /// (rects 12/14, `ControlList_Interface.txt` STATE_PLANET).
+    fn press_planet_game() -> ScreenGame {
+        use crate::screens::side::PLANET_PROMO_LEFT_CODE;
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        game.load_scene(
+            Screen::Planet,
+            vec![
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: "promo-left".to_owned(),
+                    code: PLANET_PROMO_LEFT_CODE,
+                    sprite: Some("Promo_Left.ojs".to_owned()),
+                    rect: Rect {
+                        x: 353,
+                        y: 511,
+                        w: 26,
+                        h: 24,
+                    },
+                },
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: "playstop".to_owned(),
+                    code: 0x1920_C00F,
+                    sprite: Some("PlayStop.ojs".to_owned()),
+                    rect: Rect {
+                        x: 387,
+                        y: 511,
+                        w: 26,
+                        h: 24,
+                    },
+                },
+            ],
+            HashMap::from([
+                ("Promo_Left.ojs".to_owned(), press_promo_figure(26, 24, 1)),
+                ("PlayStop.ojs".to_owned(), press_promo_figure(26, 24, 2)),
+            ]),
+        );
+        game
+    }
+
+    /// One native pixel of the planet board at the shell seam.
+    fn planet_pixel(game: &mut ScreenGame, x: usize, y: usize) -> u32 {
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        buf[y * 800 + x]
     }
 
     /// Staged room lobby with a two-frame BACK button: layer 0 is the
@@ -8866,6 +9031,82 @@ mod game_tests {
                 cell: PlanetPromo::Right
             })
         );
+    }
+
+    #[test]
+    fn planet_press_down_swaps_to_the_pressed_frame() {
+        // Pinned #111 arm 1: ButtonDown swaps the control to its
+        // pressed frame within 0.15 s (playstop, 344 px, repaint
+        // confined to the control rect — the layer repaint touches
+        // the staged rect only).
+        let mut game = press_planet_game();
+        let rest = pack_xrgb(0x00, 0xFF, 0x00);
+        let pressed = pack_xrgb(0xFF, 0x00, 0x00);
+        // #63 distinct-frame guard: rest and pressed frames differ.
+        assert_ne!(rest, pressed);
+        assert_eq!(planet_pixel(&mut game, 400, 523), rest);
+        game.mouse_down(400, 523);
+        assert_eq!(planet_pixel(&mut game, 400, 523), pressed);
+    }
+
+    #[test]
+    fn planet_press_hold_keeps_the_pressed_frame() {
+        // Pinned #111 arm 2: the pressed art is stable for the whole
+        // hold — 0 px across 0.85 s and 3.5 s holds; no timeout
+        // revert, no animation. Motion mid-hold changes nothing.
+        let mut game = press_planet_game();
+        let pressed = pack_xrgb(0xFF, 0x00, 0x00);
+        game.mouse_down(400, 523);
+        assert_eq!(planet_pixel(&mut game, 400, 523), pressed);
+        assert_eq!(planet_pixel(&mut game, 400, 523), pressed);
+        game.mouse_moved(401, 523);
+        assert_eq!(planet_pixel(&mut game, 400, 523), pressed);
+    }
+
+    #[test]
+    fn planet_release_inside_reverts_and_fires_the_action_on_up() {
+        // Pinned #111 arm 3: release-inside reverts fast (≤30–90 ms)
+        // and fires the click action on UP, never on down. The
+        // revert target (hover vs rest frame) is OPEN; on the planet
+        // board rest == hover art, so the revert shows the rest frame.
+        use crate::screens::side::PlanetPromo;
+        let mut game = press_planet_game();
+        let rest = pack_xrgb(0x00, 0xFF, 0x00);
+        game.mouse_down(366, 523);
+        assert_eq!(
+            game.planet_promo(),
+            None,
+            "the action waits for the release"
+        );
+        game.mouse_up(366, 523);
+        assert_eq!(game.planet_promo(), Some(PlanetPromo::Left));
+        assert_eq!(planet_pixel(&mut game, 400, 523), rest);
+    }
+
+    #[test]
+    fn planet_release_outside_reverts_without_action() {
+        // Pinned #111 arm 4: release-outside reverts to REST art and
+        // fires no action. The revert trigger (rect-exit vs up) stays
+        // OPEN — the stand-in reverts on up, labeled in the painter.
+        let mut game = press_planet_game();
+        let rest = pack_xrgb(0x00, 0xFF, 0x00);
+        let pressed = pack_xrgb(0xFF, 0x00, 0x00);
+        game.mouse_down(400, 523);
+        assert_eq!(planet_pixel(&mut game, 400, 523), pressed);
+        game.mouse_up(10, 10);
+        assert_eq!(game.planet_promo(), None);
+        assert_eq!(planet_pixel(&mut game, 400, 523), rest);
+    }
+
+    #[test]
+    fn planet_press_on_control_without_pressed_art_paints_nothing() {
+        // Pinned #111 arm 1 (per-control rule): the option gear shows
+        // no visible pressed art, and the shell must not invent one —
+        // a single-record staged control paints nothing on down.
+        let mut game = press_planet_game();
+        let rest = pack_xrgb(0x00, 0xFF, 0x00);
+        game.mouse_down(366, 523);
+        assert_eq!(planet_pixel(&mut game, 366, 523), rest);
     }
 
     #[test]
