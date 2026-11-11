@@ -7744,12 +7744,7 @@ mod game_tests {
         // only lane keys and canvas clicks dismiss (both stand-in
         // arms; the exe dismiss dispatch stays unpinned, ticket #24).
         let mut game = staged_splash_boot();
-        for key in [
-            MenuKey::Confirm,
-            MenuKey::Back,
-            MenuKey::Up,
-            MenuKey::Down,
-        ] {
+        for key in [MenuKey::Confirm, MenuKey::Back, MenuKey::Up, MenuKey::Down] {
             game.menu_key(key, true);
             assert_eq!(game.screen(), Screen::Avi, "{key:?} keeps the splash");
         }
