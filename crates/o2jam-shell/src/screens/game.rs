@@ -384,32 +384,37 @@ const WAITING_CONFIRM_IDS: [&str; 2] = ["IDC_BUTTON_SWAIT_START", "IDC_BUTTON_SW
 const WAITING_BACK_IDS: [&str; 2] = ["IDC_BUTTON_SWAIT_BACK", "IDC_BUTTON_SWAIT_EXIT"];
 
 /// Splash auto-advance delay in milliseconds: the exe leaves
-/// `STATE_AVI` on a timer (`docs/lifecycle.md` section 5), but the exact
-/// duration is not pinned by evidence, so this is an approximate
-/// stand-in (3 s) until the dispatch call is traced. OPEN: name the
-/// exe dispatch offset plus evidence id, then replace this value
-/// (next step: `rea` trace of the `CStateAvi` timer/dismiss arms —
-/// not in the dossier set — or a Wine null-sink measurement of the
-/// splash hold; guard: `splash_auto_advances_at_timeout`).
+/// `STATE_AVI` for the bare planet board 5 s after the logo mounts
+/// with no input. Measured twice on the isolated null-sink Wine rig
+/// (display `:97`, copied prefix + data, 1 Hz frame poll so ±~1 s):
+/// `~/scratch/wt24-rig/hold1/timeline.tsv` stamps splash-up 62.8 s
+/// and board 67.8 s (5.0 s), `hold2` stamps 63.3 s → 68.6 s
+/// (5.3 s); both `gone` frames show the bare planet board, and an
+/// Enter-key run (`key-enter/`) reaches the same board on the same
+/// ~5 s shape (Enter does not fast-dismiss, so the edge is the
+/// timer, not the key).
 ///
-/// Ticket #24 added the asset constraint: the Avi cue is record 8,
-/// `bgLogo.ogg`, 3.923 s (installed `Music/BGM.ojm`, `o2jam-dump
-/// dump-ojm` plus a decode timing), so this stand-in cuts the logo
-/// track 0.92 s short. The two boot captures on the rig recipe
-/// (`~/scratch/avi-hold/`) only reached a uniform white desktop
-/// (1.2 s → 66 s, then the board) and cannot see the logo or the
-/// `Avi` exit, so the hold stays OPEN with the frame-plus-state-id
-/// readout as the named next step (`docs/parity.md`).
-const SPLASH_AUTO_ADVANCE_MS: u64 = 3_000;
+/// The Avi cue is record 8, `bgLogo.ogg`, 3.923 s — so the logo
+/// track ends ~1.1 s before the advance, which is the ticket's
+/// expected shape (hold past the BGM end, then advance). Ticket #24
+/// replaces the old 3 s stand-in (which cut the logo track 0.92 s
+/// short) with this measured value.
+const SPLASH_AUTO_ADVANCE_MS: u64 = 5_000;
 
 /// Game loop that shows each screen's scene and walks the flow.
 ///
 /// Input wiring so far: any lane key or canvas click dismisses the
 /// splash onto the bare planet board, and the splash auto-advances
-/// there on its timer. OPEN: the exe's dismiss key is unpinned
-/// (next step: `rea` trace of the `CStateAvi` dispatch arms plus a
-/// Wine SendInput key sweep against the boot splash; guard:
-/// `lane_key_dismisses_splash_into_planet_board`).
+/// there on its measured 5 s timer (ticket #24, guard:
+/// `splash_auto_advances_at_timeout`). The dismiss arms stay
+/// stand-ins: the exe set is only partly pinned (Escape dismisses
+/// within ~0.3 s, `~/scratch/avi-hold/run3-escape/`; Enter does not
+/// fast-dismiss, `~/scratch/wt24-rig/key-enter/` — the transition
+/// follows the ~5 s timer instead). OPEN: the full `VK` sweep plus
+/// the exe lane-key mapping (guards: `lane_key_dismisses_splash_into_planet_board`,
+/// `click_dismisses_splash_into_planet_board`,
+/// `splash_click_edge_lands_the_same_bare_board`,
+/// `splash_menu_keys_keep_splash`).
 /// Room/waiting/loading inputs land with their UIs.
 pub struct ScreenGame {
     flow: ScreenFlow,
@@ -7333,39 +7338,43 @@ mod game_tests {
         assert_eq!(game.screen(), Screen::Planet);
     }
 
+    /// Boot onto the staged logo splash: the bound `STATE_AVI`
+    /// record (`IDC_BACK_LOGO`, full-bleed) with a one-pixel figure —
+    /// the shared start every splash-edge guard walks.
+    fn staged_splash_boot() -> ScreenGame {
+        use crate::avatar::FigureLayer;
+        let mut logo = AvatarFigure::default();
+        logo.push_layer(FigureLayer {
+            image: o2jam_render::Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap(),
+            dx: 0,
+            dy: 0,
+            colorkey: 0x0000,
+        });
+        let mut game = ScreenGame::new();
+        game.load_scene(
+            Screen::Avi,
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BACK_LOGO".to_owned(),
+                code: 0x1810_0001,
+                sprite: Some("O2mediaLogo.ojs".to_owned()),
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 800,
+                    h: 600,
+                },
+            }],
+            HashMap::from([("O2mediaLogo.ojs".to_owned(), logo)]),
+        );
+        game
+    }
+
     #[test]
     fn avi_boot_reaches_the_bare_planet_board_on_both_edges() {
-        use crate::avatar::FigureLayer;
-        fn staged_boot() -> ScreenGame {
-            let mut logo = AvatarFigure::default();
-            logo.push_layer(FigureLayer {
-                image: o2jam_render::Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap(),
-                dx: 0,
-                dy: 0,
-                colorkey: 0x0000,
-            });
-            let mut game = ScreenGame::new();
-            game.load_scene(
-                Screen::Avi,
-                vec![ScenePlacement {
-                    role: PlacementRole::Single,
-                    id: "IDC_BACK_LOGO".to_owned(),
-                    code: 0x1810_0001,
-                    sprite: Some("O2mediaLogo.ojs".to_owned()),
-                    rect: Rect {
-                        x: 0,
-                        y: 0,
-                        w: 800,
-                        h: 600,
-                    },
-                }],
-                HashMap::from([("O2mediaLogo.ojs".to_owned(), logo)]),
-            );
-            game
-        }
         // Key edge: boot shows the staged splash, one lane key
         // dismisses onto the bare board.
-        let mut keyed = staged_boot();
+        let mut keyed = staged_splash_boot();
         assert_eq!(keyed.screen(), Screen::Avi);
         let boot_hash = keyed.state_hash();
         keyed.lane_key(3, true);
@@ -7377,13 +7386,48 @@ mod game_tests {
         );
         // Timer edge: the same boot reaches the same board and the
         // same hash without any input.
-        let mut timed = staged_boot();
+        let mut timed = staged_splash_boot();
         paint_splash_frame(&mut timed, SPLASH_AUTO_ADVANCE_MS);
         assert_eq!(timed.screen(), Screen::Planet);
         assert_eq!(
             timed.state_hash(),
             keyed.state_hash(),
             "both boot edges land the same board state"
+        );
+    }
+
+    #[test]
+    fn splash_menu_keys_keep_splash() {
+        // Dismiss-set boundary: menu keys never leave the splash —
+        // only lane keys and canvas clicks dismiss (both stand-in
+        // arms; the exe dismiss dispatch stays unpinned, ticket #24).
+        let mut game = staged_splash_boot();
+        for key in [
+            MenuKey::Confirm,
+            MenuKey::Back,
+            MenuKey::Up,
+            MenuKey::Down,
+        ] {
+            game.menu_key(key, true);
+            assert_eq!(game.screen(), Screen::Avi, "{key:?} keeps the splash");
+        }
+    }
+
+    #[test]
+    fn splash_click_edge_lands_the_same_bare_board() {
+        // Third boot edge: a canvas click reaches the same bare board
+        // (and the same state hash) as the lane-key edge — every
+        // dismiss arm converges, no input invents a scene.
+        let mut keyed = staged_splash_boot();
+        keyed.lane_key(3, true);
+        assert_eq!(keyed.screen(), Screen::Planet);
+        let mut clicked = staged_splash_boot();
+        clicked.mouse_click(400, 300);
+        assert_eq!(clicked.screen(), Screen::Planet);
+        assert_eq!(
+            clicked.state_hash(),
+            keyed.state_hash(),
+            "click and key edges land the same board state"
         );
     }
 
