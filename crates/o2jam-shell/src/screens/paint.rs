@@ -1619,15 +1619,20 @@ fn paint_planet_captions(frame: &mut Frame<'_>, placements: &[ScenePlacement]) {
 /// stand-in (docs/planet.md), not exe parity. The hovered board
 /// control (`hover`, from pointer motion alone) repaints its pinned
 /// highlight art on top (see [`paint_planet_hover`]); `None` keeps
-/// the rest stack, so unhover clears the highlight by repaint.
+/// the rest stack, so unhover clears the highlight by repaint. The
+/// held board control (`press`, armed on left-down over the bare
+/// board) repaints its pressed frame over that (see
+/// [`paint_planet_press`]); `None` keeps the hover/rest paint.
 pub fn paint_planet_scene(
     frame: &mut Frame<'_>,
     art: &SceneArt,
     selection: Option<PlanetBand>,
     hover: Option<PlanetAction>,
+    press: Option<PlanetAction>,
 ) {
     art.paint_backdrop(frame, Screen::Planet);
     paint_planet_hover(frame, art, hover);
+    paint_planet_press(frame, art, press);
     paint_planet_captions(frame, &art.placements);
     if let Some(band) = selection {
         let rect = planet_band_rect(band);
@@ -1697,6 +1702,54 @@ fn paint_planet_hover(frame: &mut Frame<'_>, art: &SceneArt, hover: Option<Plane
         shares_body,
         clip,
     );
+}
+
+/// Planet-board pressed frame (#111): while the left button holds a
+/// board control, the control repaints its pressed frame over the
+/// hover/rest paint. The swap is per-control, pinned against the
+/// `clean-playstop`/`clean-promo-left` captures (344 px / 255 px,
+/// repaint confined to the control rect): a staged body carrying a
+/// second record repaints its alternate record (layer 0 over the
+/// stacked rest top — the same repaint arm the hover's full-colour
+/// restore uses); a single-record control (the option gear, no
+/// visible pressed art in the `geartest` crops) paints nothing, never
+/// a stand-in. Emblems paint nothing either (emblem press == hover
+/// pixel-identical, #111 arm 1 caveat; the orange ring is the
+/// channel-dialog ACTIVE marker, not a pressed frame). Which raw
+/// record the exe's pressed art is, per control, stays OPEN — next
+/// step: the record-vs-capture match of the press crops against the
+/// staged records (the `docs/hover.md` 2026-11-11 playstop method).
+fn paint_planet_press(frame: &mut Frame<'_>, art: &SceneArt, press: Option<PlanetAction>) {
+    let Some(action) = press else {
+        return;
+    };
+    // Emblems: no visible pressed art pinned (press == hover).
+    if matches!(action, PlanetAction::Emblem { .. }) {
+        return;
+    }
+    let Some(figure) = hovered_placement_figure(art, action) else {
+        return;
+    };
+    // Per-control rule: no second record, no pressed frame (the gear).
+    if figure.layer(1).is_none() {
+        return;
+    }
+    let Some(placement) = art
+        .placements
+        .iter()
+        .find(|placed| planet_action_for_code(placed.code) == Some(action))
+    else {
+        return;
+    };
+    let shared = shared_sprite_names(&art.placements);
+    let shares_body = placement
+        .sprite
+        .as_deref()
+        .is_some_and(|sprite| shared.contains(sprite));
+    // The pressed frame repaint: layer 0 (the staged alternate
+    // record) full-colour over the rest top, confined to the
+    // placement's own rect by the blit — the pinned repaint region.
+    paint_placement_layer(frame, placement, &art.figures, 0, shares_body, None);
 }
 
 /// Frame index the PLAYSTOP hover arms: 1 while the staged body
@@ -9290,6 +9343,7 @@ mod paint_tests {
             &art,
             None,
             None,
+            None,
         );
         assert!(buf.iter().all(|pixel| *pixel == 0));
     }
@@ -9309,6 +9363,7 @@ mod paint_tests {
             },
             &art,
             Some(PlanetBand::Hard),
+            None,
             None,
         );
         let amber = pack_xrgb(0xFF, 0xD0, 0x20);
@@ -9385,6 +9440,7 @@ mod paint_tests {
             &art,
             None,
             None,
+            None,
         );
         assert_eq!(rest[50 * 800 + 136], red, "rest keeps the top layer");
         let mut hovered = vec![0u32; 800 * 600];
@@ -9399,6 +9455,7 @@ mod paint_tests {
             Some(PlanetAction::Emblem {
                 band: Some(PlanetBand::Easy),
             }),
+            None,
         );
         assert_eq!(hovered[50 * 800 + 136], blue, "plate band reveals layer 0");
         assert_eq!(
@@ -9448,6 +9505,7 @@ mod paint_tests {
             &art,
             None,
             None,
+            None,
         );
         let mut hovered = vec![0u32; 800 * 600];
         paint_planet_scene(
@@ -9459,6 +9517,7 @@ mod paint_tests {
             &art,
             None,
             Some(PlanetAction::Emblem { band: None }),
+            None,
         );
         assert_eq!(hovered, rest, "static emblems paint no highlight");
     }
@@ -9512,6 +9571,7 @@ mod paint_tests {
             &art,
             None,
             None,
+            None,
         );
         assert_eq!(rest[520 * 800 + 400], blue, "rest keeps the top layer");
         let mut hovered = vec![0u32; 800 * 600];
@@ -9526,6 +9586,7 @@ mod paint_tests {
             Some(PlanetAction::Promo {
                 cell: PlanetPromo::Stop,
             }),
+            None,
         );
         assert_eq!(
             hovered[520 * 800 + 400],
@@ -9570,6 +9631,7 @@ mod paint_tests {
             &art,
             None,
             None,
+            None,
         );
         assert_eq!(rest[575 * 800 + 725], red, "rest keeps the top layer");
         let mut hovered = vec![0u32; 800 * 600];
@@ -9582,6 +9644,7 @@ mod paint_tests {
             &art,
             None,
             Some(PlanetAction::OptionsDialog),
+            None,
         );
         assert_eq!(hovered[575 * 800 + 725], blue, "hover restores frame 0");
     }
@@ -9659,6 +9722,7 @@ mod paint_tests {
             art,
             None,
             hover,
+            None,
         );
         buf
     }
@@ -9734,6 +9798,7 @@ mod paint_tests {
             Some(PlanetAction::Emblem {
                 band: Some(PlanetBand::Easy),
             }),
+            None,
         );
         assert!(buf.iter().all(|pixel| *pixel == 0));
     }

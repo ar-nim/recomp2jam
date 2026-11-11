@@ -230,6 +230,18 @@ pub trait GameLoop {
     /// 800x600 space; the shell maps window pixels before calling).
     /// Default ignores clicks so existing implementors keep compiling.
     fn mouse_click(&mut self, _x: i32, _y: i32) {}
+    /// Left button went down at native frame pixels. Pressed-art
+    /// scenes arm the press here (pinned #111: the frame swap
+    /// happens on ButtonDown, the action on release-inside).
+    /// Default routes nothing so existing implementors keep
+    /// compiling; implementors that only handle [`GameLoop::mouse_click`]
+    /// keep whole-gesture dispatch through it.
+    fn mouse_down(&mut self, _x: i32, _y: i32) {}
+    /// Left button came up at native frame pixels. Paired with
+    /// [`GameLoop::mouse_down`]: release-inside fires the press
+    /// action, release-outside reverts with none (pinned #111).
+    /// Default routes nothing.
+    fn mouse_up(&mut self, _x: i32, _y: i32) {}
     /// The pointer moved to native frame pixels (`x`, `y` in 800x600
     /// space; the shell maps window pixels before calling). Hover
     /// state rides this — the exe arms hover art on mouse motion alone

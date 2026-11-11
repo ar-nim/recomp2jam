@@ -186,15 +186,22 @@ impl WindowHandler {
         }
     }
 
-    /// Route a left press at window pixels into a native-frame
-    /// click (letterbox bars never click through).
-    fn route_click(&mut self, cursor_x: f64, cursor_y: f64) {
+    /// Route a left press/release at window pixels into native-frame
+    /// press edges (letterbox bars never press through). The down
+    /// edge keeps the `click x y` log line the capture harness
+    /// already replays; the up edge logs its own `click-up` line.
+    fn route_mouse_edge(&mut self, down: bool, cursor_x: f64, cursor_y: f64) {
         let Some((window_w, window_h)) = self.surface_size else {
             return;
         };
         if let Some((x, y)) = window_to_native(window_w, window_h, cursor_x, cursor_y) {
-            self.log_event(&format!("click {x} {y}"));
-            self.shell.game.mouse_click(x, y);
+            if down {
+                self.log_event(&format!("click {x} {y}"));
+                self.shell.game.mouse_down(x, y);
+            } else {
+                self.log_event(&format!("click-up {x} {y}"));
+                self.shell.game.mouse_up(x, y);
+            }
         }
     }
 
@@ -472,12 +479,12 @@ impl ApplicationHandler for WindowHandler {
                 self.route_motion(position.x, position.y);
             }
             WindowEvent::MouseInput {
-                state: ElementState::Pressed,
+                state,
                 button: MouseButton::Left,
                 ..
             } => {
                 if let Some((x, y)) = self.cursor {
-                    self.route_click(x, y);
+                    self.route_mouse_edge(state == ElementState::Pressed, x, y);
                 }
             }
             WindowEvent::Resized(size) => {
@@ -518,6 +525,8 @@ mod tests {
         deletes: usize,
         lanes: Vec<(usize, bool)>,
         clicks: Vec<(i32, i32)>,
+        downs: Vec<(i32, i32)>,
+        ups: Vec<(i32, i32)>,
     }
 
     impl GameLoop for Rc<RefCell<InputProbe>> {
@@ -535,6 +544,14 @@ mod tests {
 
         fn mouse_click(&mut self, x: i32, y: i32) {
             self.borrow_mut().clicks.push((x, y));
+        }
+
+        fn mouse_down(&mut self, x: i32, y: i32) {
+            self.borrow_mut().downs.push((x, y));
+        }
+
+        fn mouse_up(&mut self, x: i32, y: i32) {
+            self.borrow_mut().ups.push((x, y));
         }
 
         fn paint(&mut self, _frame: &mut o2jam_render::Frame<'_>) {}
@@ -570,7 +587,8 @@ mod tests {
         });
         let mut handler = WindowHandler::new(shell);
         handler.route_key(KeyCode::KeyS, true);
-        handler.route_click(100.0, 200.0);
+        handler.route_mouse_edge(true, 100.0, 200.0);
+        handler.route_mouse_edge(false, 100.0, 200.0);
         handler.shell.paint_backbuffer();
         handler.capture_frame();
         handler.shell.paint_backbuffer();
@@ -652,15 +670,19 @@ mod tests {
     fn left_press_reaches_the_game_at_native_pixels() {
         let (mut handler, probe) = probed_handler();
         handler.surface_size = Some((800, 600));
-        handler.route_click(100.0, 200.0);
-        assert_eq!(probe.borrow().clicks, vec![(100, 200)]);
+        handler.route_mouse_edge(true, 100.0, 200.0);
+        handler.route_mouse_edge(false, 100.0, 200.0);
+        assert_eq!(probe.borrow().downs, vec![(100, 200)]);
+        assert_eq!(probe.borrow().ups, vec![(100, 200)]);
     }
 
     #[test]
     fn clicks_need_a_sized_surface() {
         let (mut handler, probe) = probed_handler();
-        handler.route_click(100.0, 200.0);
-        assert!(probe.borrow().clicks.is_empty());
+        handler.route_mouse_edge(true, 100.0, 200.0);
+        handler.route_mouse_edge(false, 100.0, 200.0);
+        assert!(probe.borrow().downs.is_empty());
+        assert!(probe.borrow().ups.is_empty());
     }
 
     #[test]
