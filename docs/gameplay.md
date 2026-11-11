@@ -905,3 +905,38 @@ Implemented in `o2jam-game`: `Score::apply_rated_without_combo`
 `good_tail_continues_combo_through_the_good_arm`,
 `bad_tail_breaks_combo_only_through_the_bookkeeping_event`,
 `hold_tick_bumps_combo_once_per_event_without_a_cap`.
+
+## Rating-event sink +0xa14 — VERIFIED per-code semantics (B47, #81)
+
+The play object keeps a nullable sink pointer at `+0xa14`: attached
+to `FUN_0056e170` (file `0x16e170`) at song load (file `0x170323`),
+cleared on chart reload (file `0x1717ca`). Callers push
+`(code, payload, tier, lane, time)` and call through the pointer; a
+null sink skips the notification. The dispatcher subtracts 1 from
+the code, bounds it to 0..=15, and jumps the 16-entry table at
+`0x56ec5c` (table bytes read from the image, #81). Emitter survey
+(objdump scan of every `+0xa14` reference) and arm bodies:
+
+| code | arm | emitter(s) | drives |
+|---|---|---|---|
+| 1 | `0x16e436` tier fan-out (0x10/0x20/0x40/0x80/0x180) | both judges (`0x1760dc`, `0x1766c4`, `0x176c24`, `0x176e4a`, `0x1771cc`), expiry scan (`0x177456`, `0x177529`) | judgement store `0x170510`, tier counts, life/jam gauge, strike-effect `0x1703f0`; long-note split: head arming (fx + `+0x17fc`/`+0xb2c`), Cool/Good tail combo helper + code-14 redispatch, Bad/Miss hold-bit code-14 redispatch |
+| 2 | `0x16e3f3` | autoplay BGM scan `0x1764ed` (B22) | strike-effect `0x1703f0` when no tail bit |
+| 3, 4 | epilogue NOP | — | nothing |
+| 5 | `0x16e1b1` note-spawn guard (`+0xe & 0x30 == 0`) | hold-bonus scan `0x177d98`, `0x177f8f` | highway note paint `0x16eca0` at lane y |
+| 6 | `0x16e210` hold-body repaint | pass-event `0x177c6a`, `0x177d41`; bonus `0x177f0e` | anim rect `0x16b880` + `0x16eea0` + two `0x16eca0` paints |
+| 7 | `0x16e97d` measure/BGA strip | pass-event `0x1778e1` | rect `0x16b1c0` + blit `0x16dc0` on beat object `0x762b44` |
+| 8 | `0x16e9fd` scroll timebase | `FUN_00575d70` `0x175ef9` | globals `0x791d70` timebase + lane scroll tables; `this+8` store |
+| 9 | `0x16e9e5` strike effect | second-judge walk `0x176eec`, `0x176f73`, `0x176ffa`, `0x177081` | `0x1703f0` with `lane + 2` only |
+| 10 | `0x16ebaa` song-end marker | song-end scan `0x1777ad` | `this+0x3c` word = 4 |
+| 11 | `0x16eb7d` beat scalar | `FUN_00575d70` `0x175e7c` | `FUN_00570f70` → `this+0xfec` via `0x16be30` |
+| 12 | epilogue NOP | play start `0x175dfc` (song position `+0x834`) | nothing (vestigial) |
+| 13 | epilogue NOP | — | nothing |
+| 14 (`0xe`) | `0x16ebbd` combo break + hold teardown | hold heads struck Bad/Miss (`0x1766fd`); redispatched from code 1 | `+0x3972` = 0 on 0x40/0x80 (file `0x16ebcf`); fx virtual `0x12`/`0x65`; clears `+0xb2c`/`+0x17fc`, sets `+0x17e0`; `+0x1818` = `FUN_00411e60` |
+| 15 | epilogue NOP | — | nothing |
+| 16 | `0x16e413` (twin of arm 2) | scroll-line scan `0x176352` | strike-effect `0x1703f0` when no tail bit |
+
+Only codes 1/9/14 carry scorer/jam/relay semantics; the rest are
+local paint/scroll/bookkeeping and report nothing to the network.
+Modeled in `o2jam-game::rating_sink` (codes 1/9/14 with outcomes;
+all other codes silent) with guard
+`paint_timing_and_nop_codes_report_nothing`.

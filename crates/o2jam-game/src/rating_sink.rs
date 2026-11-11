@@ -10,10 +10,61 @@
 //! needs it.
 //!
 //! The dispatcher target `FUN_0056e170` (file `0x16e170`, REA
-//! `ev_37e64f21…`, observed) suppresses codes above the jump-table
-//! span and forwards through the 16-entry table at `0x56ec5c`.
-//! Only codes viewed at judgement call sites carry server-visible
-//! effects; the rest (sequencer spawn/scroll/timing) stay local.
+//! `ev_37e64f21…`, observed) subtracts 1 from the code, bounds it
+//! to 0..=15, and jumps through the 16-entry table at `0x56ec5c`
+//! (file bytes verified, #81). Arms, each named from its body:
+//!
+//! - **1** → `0x16e436` — judgement fan-out on the rating word:
+//!   Cool `0x10` / Good `0x20` / Bad `0x40` / Miss `0x80` / paired-tail
+//!   kill `0x180`. The scoring arm: tier-count + sound relay
+//!   (`FUN_0056ddf0`), life/jam gauge deltas (`+0x1820` helpers), the
+//!   judgement store `FUN_00570510`, the strike-effect trigger
+//!   `FUN_005703f0`, and the long-note split — heads take the direct
+//!   arming branch (virtual fx + `+0x17fc`/`+0xb2c` flags, files
+//!   `0x16e55e`–`0x16e5ab`), tails on Cool/Good run the combo helper
+//!   and self-redispatch code 14 (files `0x16e5b8`–`0x16e5d6`,
+//!   `0x16e735`–`0x16e753`), Bad/Miss with any hold bit redispatch
+//!   code 14 (files `0x16e8ce`–`0x16e8d0`, `0x16e90c`–`0x16e91f`).
+//! - **2** → `0x16e3f3` — autoplay/BGM channel event (B22): when the
+//!   payload has no tail bit, the strike-effect trigger runs
+//!   (`FUN_005703f0`).
+//! - **3, 4, 12, 13, 15** → epilogue — NOP arms (codes 12 and 13 are
+//!   still emitted: code 12 at play start from `FUN_00575d70` file
+//!   `0x175dfc` with the song-position word, code 13 unused).
+//! - **5** → `0x16e1b1` — highway note spawn: unjudged records
+//!   (`+0xe & 0x30 == 0`) are painted through `FUN_0056eca0` at the
+//!   computed lane y. Emitted by the hold-bonus scan.
+//! - **6** → `0x16e210` — armed-hold body repaint: anim rect via
+//!   `FUN_0056b880`, clamp to 0..=0x1e0, `FUN_0056eea0` +
+//!   two `FUN_0056eca0` paints. Emitted by the pass-event and
+//!   hold-bonus scans.
+//! - **7** → `0x16e97d` — measure/BGA strip paint on the beat object
+//!   (global `0x762b44`, `+0xf6c`): rect `FUN_0056b1c0` + blit
+//!   `FUN_0056adc0`. Emitted by the pass-event scan.
+//! - **8** → `0x16e9fd` — scroll timebase: the float arg becomes the
+//!   global timebase `0x791d70` and the per-lane scroll tables
+//!   (`0x791d14`/`0x791d30`/`0x791d34`/`0x791d38`/`0x791d54`) are
+//!   recomputed; arg stored at `this+8`. Emitted by `FUN_00575d70`.
+//! - **9** → `0x16e9e5` — lane strike-effect trigger only
+//!   (`FUN_005703f0` with `lane + 2`). Emitted by the second judge's
+//!   walk-advance bookkeeping.
+//! - **10** → `0x16ebaa` — song-end marker: `this+0x3c` word = 4.
+//!   Emitted by the song-end scan.
+//! - **11** → `0x16eb7d` — beat scalar: the float arg through
+//!   `FUN_00570f70` into `this+0xfec` (`FUN_0056be30`). Emitted by
+//!   `FUN_00575d70` on the `+0x844` float change.
+//! - **14** → `0x16ebbd` — combo break + hold teardown: Bad/Miss words
+//!   zero the combo counter `+0x3972` (file `0x16ebcf`); the fx
+//!   virtual (`0x12`/`0x65`) fires; per-lane hold flags clear
+//!   (`+0xb2c`/`+0x17fc` = 0, `+0x17e0` = 1); `this+0x1818` takes the
+//!   `FUN_00411e60` getter. Emitted for hold heads struck Bad/Miss and
+//!   redispatched from the code-1 arms.
+//! - **16** → `0x16e413` — twin of arm 2 (strike-effect trigger when
+//!   the payload has no tail bit). Emitted by the scroll-line scan.
+//!
+//! Only codes 1/9/14 are observed at judgement call sites and carry
+//! the server-visible effects below; every other arm drives local
+//! paint, scroll, or bookkeeping state only.
 //!
 //! What the client reports to the server per rating event:
 //!
@@ -852,6 +903,20 @@ mod tests {
         }
         assert_eq!(granted_at, Some(14));
         assert_eq!(sink.pills().count(), 1);
+    }
+
+    #[test]
+    fn paint_timing_and_nop_codes_report_nothing() {
+        // B47: the 16-way dispatcher's remaining arms (2, 5-8, 10,
+        // 11, 16, and the NOP arms 3/4/12/13/15) drive only local
+        // paint, scroll, and bookkeeping state — no scorer, no jam
+        // report, no relay edge, no sound, no hold effect reaches the
+        // sink's outcome for them.
+        let mut sink = live_sink();
+        for code in [2_u8, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 15, 16] {
+            let outcome = sink.dispatch(code, tap_payload(), RATING_COOL, 0);
+            assert_eq!(outcome, RatingOutcome::default(), "code {code}");
+        }
     }
 
     #[test]
