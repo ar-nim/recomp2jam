@@ -1,0 +1,162 @@
+//! Live-boot staging completeness gate (ticket #58).
+//!
+//! Retro 2026-11-11: the room-dialog staging (#53), the character
+//! fetch, and the splash clock (#54) each passed seam tests while the
+//! live window stayed broken, because the suite staged everything by
+//! hand. This gate drives the real boot entry
+//! ([`crate::connect::connect_and_login_with_transport`] plus
+//! [`crate::assemble_online_session`]) against a scripted gateway and
+//! asserts everything paint and dispatch can consume lands in one
+//! boot: the room create/password dialog sheets, the fetched character
+//! info, and the splash hold advancing on the wall clock. Skips
+//! cleanly when the install-root archives are absent.
+
+#[cfg(test)]
+mod live_boot_gate_tests {
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    use o2jam_net::frame::decode_frame;
+    use o2jam_net::{
+        AuthResponse, ChannelList, ChannelLoginResponse, CharacterInfo, Frame, Gender, Request,
+        RoomList, WireMessage, HEADER_LEN,
+    };
+    use o2jam_render::Frame as RenderFrame;
+    use o2jam_shell::{GameLoop, Screen};
+
+    use crate::{assemble_online_session, connect, install_root, stage_boot_character};
+
+    /// Read one whole frame off the scripted gateway's socket.
+    fn read_frame(stream: &mut TcpStream) -> Frame {
+        let mut header = [0u8; 4];
+        stream.read_exact(&mut header).unwrap();
+        let body_len = u16::from_le_bytes([header[0], header[1]]) as usize;
+        let mut rest = vec![0u8; body_len - HEADER_LEN];
+        stream.read_exact(&mut rest).unwrap();
+        let mut bytes = header.to_vec();
+        bytes.extend_from_slice(&rest);
+        decode_frame(&bytes).unwrap()
+    }
+
+    /// The 7.55 interface archive holds the dialog sheets the gate
+    /// asserts; without it the gate skips (CI has no game data).
+    fn archives_present() -> bool {
+        o2jam_shell::staging::read_install_archives(&install_root())
+            .interface
+            .is_some()
+    }
+
+    /// Script the boot exchange: authorize, channel list, channel
+    /// login, room list, then the `GetCharacterInfo` 2001 fetch the
+    /// gate asserts. Returns the port and the served character.
+    fn spawn_boot_gateway() -> (u16, thread::JoinHandle<CharacterInfo>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::Authorize.id());
+            let authed = AuthResponse {
+                result_code: 0,
+                tail: vec![],
+            };
+            stream.write_all(&authed.encode()).unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetChannelList.id());
+            let listed = ChannelList { channels: vec![] };
+            stream.write_all(&listed.encode()).unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::ChannelLogin.id());
+            let entered = ChannelLoginResponse {
+                result_code: 0,
+                restricted: Some(false),
+            };
+            stream.write_all(&entered.encode()).unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetChannelInfo.id());
+            let rooms = RoomList { rooms: vec![] };
+            stream.write_all(&rooms.encode()).unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetCharacterInfo.id());
+            let hero = CharacterInfo {
+                nickname: "gate".to_owned(),
+                gender: Gender::Male,
+                level: 3,
+                ..Default::default()
+            };
+            stream.write_all(&hero.encode()).unwrap();
+            hero
+        });
+        (port, server)
+    }
+
+    /// Boot options the windowed entries assemble for a channel login
+    /// (the character flag rides the channel, ticket #58).
+    fn boot_options(port: u16) -> connect::ConnectOptions {
+        connect::ConnectOptions {
+            host: "127.0.0.1".to_owned(),
+            port,
+            user_id: 7,
+            token: "gate".to_owned(),
+            gender: Gender::Any,
+            relay_key1: 0,
+            relay_key2: 0,
+            channel: Some((1, 2)),
+            character: true,
+            wallet: false,
+            avatar_opa: None,
+            join_room: None,
+            room_password: String::new(),
+            song: None,
+        }
+    }
+
+    #[test]
+    fn live_boot_stages_everything_paint_and_dispatch_consume() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let (port, server) = spawn_boot_gateway();
+        let (report, gateway) =
+            connect::connect_and_login_with_transport(&boot_options(port)).unwrap();
+        let mut game = o2jam_shell::ScreenGame::new();
+        stage_boot_character(&mut game, report.character);
+        let mut session =
+            assemble_online_session(game, gateway, Some("gate"), None, None, None).unwrap();
+        let game = session.game_mut();
+        assert!(
+            game.create_room_art_staged(),
+            "live boot stages the create-room dialog sheet"
+        );
+        assert!(
+            game.password_art_staged(),
+            "live boot stages the password dialog sheet"
+        );
+        let hero = game
+            .myroom_character()
+            .expect("live boot stages the fetched character info");
+        assert_eq!(hero.nickname, "gate");
+        assert_eq!(hero.level, 3);
+        // The splash hold advances on the live wall clock (claims B38):
+        // no input, no audio; condition polling only (#52 flake lesson).
+        assert_eq!(session.screen(), Screen::Avi);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut buf = vec![0u32; 16 * 12];
+        while session.screen() == Screen::Avi {
+            assert!(
+                Instant::now() < deadline,
+                "splash hold never advanced on the wall clock"
+            );
+            session.game_mut().paint(&mut RenderFrame {
+                buf: &mut buf,
+                w: 16,
+                h: 12,
+            });
+            thread::yield_now();
+        }
+        assert_eq!(session.screen(), Screen::Planet);
+        let served = server.join().unwrap();
+        assert_eq!(served.nickname, "gate");
+    }
+}

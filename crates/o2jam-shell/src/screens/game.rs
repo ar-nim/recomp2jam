@@ -1531,6 +1531,14 @@ impl ScreenGame {
         });
         self
     }
+    /// True while the create-room sheet is staged (the live-boot
+    /// staging gate asserts every dialog `paint_room` can open has
+    /// art before the dialog opens).
+    #[must_use]
+    pub fn create_room_art_staged(&self) -> bool {
+        self.create_room_art.is_some()
+    }
+
     /// Stage the password sheet (`DIALOG_INPUTPASSWORD` placements plus
     /// figures through `bind_scene_rects` on `Dialog_Password.bnd`).
     /// Staging never moves the flow.
@@ -1545,6 +1553,14 @@ impl ScreenGame {
         });
         self
     }
+    /// True while the password sheet is staged (the live-boot
+    /// staging gate asserts every dialog `paint_room` can open has
+    /// art before the dialog opens).
+    #[must_use]
+    pub fn password_art_staged(&self) -> bool {
+        self.password_art.is_some()
+    }
+
     /// Open room dialog, if any.
     #[must_use]
     pub fn room_dialog(&self) -> Option<RoomDialog> {
@@ -3569,6 +3585,14 @@ impl ScreenGame {
         self
     }
 
+    /// Fetched character data (`GetCharacterInfo` 2001), if the live
+    /// boot staged it (`None` until the windowed entries fetch on
+    /// channel login).
+    #[must_use]
+    pub fn myroom_character(&self) -> Option<&CharacterInfo> {
+        self.myroom_character.as_ref()
+    }
+
     /// Stage the worn figure the Room lobby paints in its avatar slot
     /// (`IDC_IMAGE_SROOM_AVATA`, code `0x13700013`). The binary stacks it
     /// from `avatar.opa` exactly like the Result figure; a missing
@@ -3610,9 +3634,9 @@ impl ScreenGame {
     /// joined room this stages nothing. The production caller is
     /// [`Self::set_avatar_source`] plus the `set_joined_room`
     /// restage: the self arm fires only with a staged character
-    /// (`set_myroom_character`), which the live session never fetches
-    /// (no `GetCharacterInfo` 2001 on the windowed path — next step:
-    /// fetch it on channel login, then restage) — OPEN, peers live.
+    /// (`set_myroom_character`), which the windowed entries fetch on
+    /// channel login (ticket #58; the live-boot gate pins the fetch).
+    /// Peers live; the self seat restages from live data on every join.
     pub fn stage_waiting_figures(&mut self, archive: &[u8], table: &AvatarItemTable) -> &mut Self {
         stage_seat_figures(
             &self.waiting,
@@ -4705,9 +4729,8 @@ impl ScreenGame {
                 // Dual self-figure source, intended fallback: the staged
                 // seat figure (fetched-character equipment) wins; the
                 // lobby `room_avatar` (same worn stack, CLI-staged)
-                // covers seat 0 until a character is fetched — the live
-                // session never fetches one yet, so the fallback is the
-                // live path and the staged seat the shots path.
+                // covers seat 0 only until the fetched character lands
+                // (the windowed entries fetch it on channel login).
                 if self.waiting_figures[0].is_none() {
                     paint_waiting_seat_avatar(frame, &art.placements, self.room_avatar.as_ref());
                 }
@@ -8112,6 +8135,78 @@ mod game_tests {
             w: 16,
             h: 12,
         });
+        assert_eq!(game.screen(), Screen::Planet);
+    }
+
+    /// Backend stub shaped like the 3.9 s logo once-track every real
+    /// backend caps at: `samples_played` parks at the track end
+    /// (3.9 s of 44.1 kHz frames) and never moves again, so the song
+    /// clock reads 3900 ms forever — the #54 freeze shape.
+    struct FinishedOnceTrack {
+        inner: o2jam_audio::NullBackend,
+    }
+
+    impl FinishedOnceTrack {
+        /// 3.9 s of frames at 44.1 kHz (the `bgLogo.ogg` length pinned
+        /// in the STATE_AVI Timing row).
+        const TRACK_END_FRAMES: u64 = 171_990;
+    }
+
+    impl AudioBackend for FinishedOnceTrack {
+        fn play_pcm(&mut self, pcm: &PcmSamples) -> Result<(), o2jam_audio::AudioError> {
+            self.inner.play_pcm(pcm)
+        }
+
+        fn set_scene_bgm(
+            &mut self,
+            pcm: Option<&PcmSamples>,
+            repeat: bool,
+        ) -> Result<(), o2jam_audio::AudioError> {
+            self.inner.set_scene_bgm(pcm, repeat)
+        }
+
+        fn scene_bgm_playing(&self) -> bool {
+            self.inner.scene_bgm_playing()
+        }
+
+        fn samples_played(&self) -> u64 {
+            Self::TRACK_END_FRAMES
+        }
+    }
+
+    #[test]
+    fn default_hold_outlasts_a_shorter_once_track_on_the_wall_clock() {
+        // Ticket #59: the default 5 s hold plus a non-repeating track
+        // shorter than the hold (the 3.9 s logo) still advances — the
+        // hold rides the wall clock (claims B38) while song position
+        // rides the sample clock. No input, no audio device; condition
+        // polling only, no sleeps (the #52 flake lesson).
+        let mut game = ScreenGame::new();
+        game.with_audio(
+            Box::new(FinishedOnceTrack {
+                inner: o2jam_audio::NullBackend::new(),
+            }),
+            HashMap::new(),
+        );
+        game.stage_scene_bgm(marker_bank(&[8]));
+        assert_eq!(game.screen(), Screen::Avi);
+        // The song clock is parked at the track end, short of the
+        // default hold: only the wall clock can advance the splash.
+        assert!(game.now_ms() < game.splash_hold_ms);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut buf = vec![0u32; 16 * 12];
+        while game.screen() == Screen::Avi {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "splash never advanced past the 3.9 s track end"
+            );
+            game.paint(&mut Frame {
+                buf: &mut buf,
+                w: 16,
+                h: 12,
+            });
+            std::thread::yield_now();
+        }
         assert_eq!(game.screen(), Screen::Planet);
     }
 
