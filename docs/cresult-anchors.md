@@ -19,12 +19,12 @@ objdump slices stay git-ignored in `extracted/`). No disassembly or
 decompiled code is reproduced; behavior is described in our own words.
 
 Dossier: `extracted/rea-cresult-anchors-dossier.json`
-(LOST 2026-11-11 merge clobber; re-filed by owner ticket #86 —
-`docs/recovery-disposition.md`. The claim rows below remain pinned
-by their offsets and are not re-opened by the loss.)
-(format `rea-dossier-bundle-v1`, dossier `rea-cresult-anchors`, 11
-records, all `observed`; evidence id = md5 of
-`rea-cresult-anchors|operation|subject-VA`).
+(re-filed 2026-11-12 by owner ticket #86 after the 2026-11-11 merge
+clobber — `docs/recovery-disposition.md`; the re-filed bundle pins
+the digit-cell font binding, 6 records, ids are sha256 of
+`rea-cresult-anchors|title|summary`; the geometry/verdict/mount claim
+rows of the lost 11-record bundle stay pinned by their offsets above
+and were not re-opened by the loss).
 
 ## Answer first — the anchors
 
@@ -36,9 +36,9 @@ records, all `observed`; evidence id = md5 of
 | MISS | text `%3d` at (426, 125), value `0x77ee48` | `ev_615e034c…` |
 | MAX COMBO | text `%4d` at (505, 130), value `0x77ee5c` | `ev_615e034c…` |
 | JAM COMBO | text `%4d` at (596, 130), value `0x77ee4c` | `ev_615e034c…` |
-| Life readout | digit-sprite cells, 24 px pitch, last cell x=460, y=77, digit 1 kerned +5 | `ev_615e034c…` |
+| Life readout | digit-sprite cells, 24 px pitch, last cell x=460, y=77, digit 1 kerned +5; font = `PointNum.ojs` (`this+0x10d10`) | `ev_615e034c…`, `ev_48c71a81…` |
 | Total score | text `%8d` at (605, 533), value `0x77cd2c` | `ev_615e034c…` |
-| Bottom counter | digit-sprite cells, 24 px pitch, last cell x=176, y=536 | `ev_615e034c…` |
+| Bottom counter | digit-sprite cells, 24 px pitch, last cell x=176, y=536; font = `Result_NumFont_Blue.ojs` (`this+0x10d0c`) | `ev_615e034c…`, `ev_63391623…` |
 | Per-member rows | rank x=91, name x=128, COOL/GOOD/BAD/MISS x=230, combo pair x=416, score x=530, bonus x=626, speed x=685; 22 px row pitch | `ev_88c3ca31…` |
 | WIN/LOSE verdict | `Result_WinLose.ojs` frames 0–3 at y=190; frame picked in `FUN_004c3120` | `ev_38f32576…`, `ev_bb4e402e…` |
 | Grade plate | `Result_Imgs_Rank.ojs` frame 1–8 at (395, 531) | `ev_c61d99f8…` |
@@ -46,8 +46,15 @@ records, all `observed`; evidence id = md5 of
 The judgement/combo/speed numbers are **GDI text**, not digit sprites.
 Only the life readout, the bottom counter, and the grade plate use
 sprite frames. `PointNum.ojs` and `Result_NumFont_Blue.ojs` are mounted
-by the builder; the binding of the digit-cell fields to a font body is
-OPEN (below).
+by the builder; the digit-cell FONT BINDING is **PINNED** (#86,
+2026-11-12, dossier `rea-cresult-anchors` re-filed): the life-readout
+painter (VA `0x4c44c0`, file `0xc44c0`) binds `this+0x10d10` =
+`PointNum.ojs`; the bottom-counter painter (VA `0x4c4630`, file
+`0xc4630`) binds `this+0x10d0c` = `Result_NumFont_Blue.ojs`, that
+body's sole use site image-wide. Both fonts decode ten layers in
+digit order (layer *n* is glyph *n*), anchored (0,0). The VALUE
+sources (`0x77ee58`+`0x77ee60`, u16 `0x76fc66`) stay OPEN — their
+writers are register-held (only absolute reads exist).
 
 ## Class identity
 
@@ -225,20 +232,31 @@ VA `0x64a3a0`) while siblings are ready. The relay wraps
 
 ## OPEN
 
-1. Digit-font binding for the two digit-cell fields (life readout,
-   bottom counter): the shared digit painter bodies (files `0xc44c0`/
-   `0xc4630`) build eight cells as `last - 168 ..= last` in 24 px
-   steps and shift digit 1 by +5, confirming the dossier geometry
-   (life y=77 last x=460; bottom y=536 last x=176) from the register
-   flow alone. The painters receive the background-control body
-   through the fetch chain, and the body backing those frames is not
-   pinned to a loaded sprite name. `PointNum.ojs` metrics match the
-   24 px cells and the +5 kern of the 12 px-wide digit 1
-   ((23−12)/2 ≈ 5), but the attachment is inference, not observed.
-   Shell consequence: `paint.rs` stages neither field (new
-   `life_and_bottom_digit_cells_stay_unpainted` test).
-2. `Result_NumFont_Blue.ojs` use site: mounted at `this+0x10d0c`, no
-   reader found in the painter set.
+1. ~~Digit-font binding~~ **PINNED 2026-11-12 (#86)**: the shared
+   digit painter bodies (files `0xc44c0`/`0xc4630`) build eight cells
+   as `last - 168 ..= last` in 24 px steps and shift digit 1 by +5,
+   confirming the geometry from the register flow alone, and the
+   binding is now observed, not inferred: painter file `0xc44c0`
+   (VA `0x4c44c0`, caller file `0xc395b`, value `0x77ee58+0x77ee60`,
+   y=77, last x=460) loads `this+0x10d10` = `PointNum.ojs` for every
+   cell (files `0xc45a6`/`0xc45ce`/`0xc45e7`/`0xc460c`); painter file
+   `0xc4630` (VA `0x4c4630`, caller file `0xc3a8d`, value u16
+   `0x76fc66`, y=536, last x=176) loads `this+0x10d0c` =
+   `Result_NumFont_Blue.ojs` (files
+   `0xc4716`/`0xc473e`/`0xc4757`/`0xc477c`). Both fonts decode ten
+   layers in digit order, anchored (0,0); the pushed frame is the raw
+   digit value, not ASCII. What stays OPEN is the VALUE semantics
+   (see 3 — the writers are register-held). Shell consequence: both
+   fonts stage (`Result_NumFont_Blue.ojs` via the Interface stage
+   row; `PointNum.ojs` merged from the Playing archive) and a field
+   paints only when a caller stages a resolved value — none is
+   invented (`result_digit_fields_stay_unpainted_without_staged_values`,
+   `life_readout_paints_pointnum_digits_through_the_pinned_cells`,
+   `bottom_counter_paints_numfont_blue_digits_through_the_pinned_cells`).
+2. ~~`Result_NumFont_Blue.ojs` use site~~ **CLOSED 2026-11-12 (#86)**:
+   mounted at `this+0x10d0c`, its only reader image-wide is the
+   bottom-counter painter (VA `0x4c4630`) — full-image disp32 scan,
+   `ev_8f5c69ce…`.
 3. Stat-name mapping for the globals: COOL/GOOD/BAD/MISS ↔
    `0x77ee42/44/46/48` and MAX/JAM COMBO ↔ `0x77ee5c`/`0x77ee4c` rest
    on column order matching the baked headers (and the 4016 field
@@ -335,16 +353,16 @@ change — all deltas below are fixture-data or by-design unpainted.
 | Score headers + boxes (Top panel) | PASS | Staged `StateResult_Top.ojs` boxes align with the photo. |
 | COOL/GOOD/BAD/MISS at (151/240/337/426, 125) | PASS | GDI numbers paint at the anchors (`result_shot_paints_the_pinned_digits`); values 1/0/0/0 vs 825/20/0/2 are the scripted walk's, not the photo's play. |
 | MAX/JAM COMBO at (505/596, 130) | PASS | Same anchor tests; 1/level-0 vs 320/563 by fixture data. |
-| SCORE readout, top center (digit-sprite life readout, y=77) | UNPAINTED, by design | Photo's 226750 is the OPEN 1 cell field; shell paints neither cell row (`life_and_bottom_digit_cells_stay_unpainted`). |
+| SCORE readout, top center (digit-sprite life readout, y=77) | UNPAINTED, values OPEN | The font binds (`PointNum.ojs`, pinned #86) but the value globals `0x77ee58`+`0x77ee60` have register-held writers, so the shell paints the field only when a caller stages a resolved value (`result_digit_fields_stay_unpainted_without_staged_values`). |
 | Verdict banner, y=190 band | PASS position | Solo walk paints image 3 at (126,190) ("GOOD!"), photo paints battle-lose "LOSE!" in the same band; frame differs by mode (`solo_shot_paints_the_solo_banner_frame`), not a regression. |
 | Local avatar, row-0 slot (78,316) under the 652×22 clip | PASS position | Walked worn figure hangs its visible box at the slot (`result_avatar_paints_at_the_local_row_slot`, `result_avatar_hangs_its_visible_box_at_the_slot`); photo's battle-row portraits ride the member table (OPEN: no staged portrait source). |
 | Rank table columns (91/128/230/416/530/626/685, 22 px pitch) | PASS position, solo subset | Walked solo row paints (`YOU`, judgements, combos, score, speed at the pinned columns — `result_shot_paints_the_rank_table_rows`); photo's second wire row has no shell counterpart (per-member tallies stay server-side: `result_rows_leave_peer_numbers_unpainted`). | |
 | Grade plate (395,531) | PASS position | Frame 8 ("Perfect", all-Cool max) vs photo's C by play data (`result_shot_paints_the_perfect_grade_plate`). |
 | Total score `%8d` at (605,533) | PASS | Paints 200 at the anchor, visible at the left of the TOTAL GEM bar (`total_score_field_paints_at_its_pinned_anchor`). |
-| Bottom counter digit cells (y=536) | UNPAINTED, by design | OPEN 1, same test as the life readout. |
+| Bottom counter digit cells (y=536) | UNPAINTED, values OPEN | Same as the life readout: font pinned (`Result_NumFont_Blue.ojs`), value global `0x76fc66` OPEN. |
 | TOTAL GEM digits | No live value | Bar is staged art; shell carries no gem model, so only the total-score GDI digits overlap it. Residual. |
 | RETRY/BACK (rects 5/6) | Staged art present | Buttons paint at the pinned rects; RETRY shows its highlight frame (shared whole-body staging, no button-state model pinned). Observation, not a regression. |
 
-Residuals carried: OPEN 1 (digit-cell font binding), OPEN 4/7
-(row model + bonus semantic), gem model, button-state frames.
-Nothing invented; unpainted stays unpainted.
+Residuals carried: OPEN 3/4/7 (value/row semantics), gem model, button-state frames.
+Nothing invented; unpainted stays unpainted until a value source is
+pinned.

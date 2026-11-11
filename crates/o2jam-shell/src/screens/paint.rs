@@ -4858,6 +4858,31 @@ pub const WINNER_IMAGE_SPRITE: &str = "Winner_image.ojs";
 /// 1..=8 shows images 0..=7.
 pub const RESULT_RANK_SPRITE: &str = "Result_Imgs_Rank.ojs";
 
+/// Life-readout digit font mounted by `FUN_004c2390` at `this+0x10d10`
+/// from the Playing archive (`Playing1.opi`): the life-readout
+/// painter (VA `0x4c44c0`, file `0xc44c0`) loads this body for every
+/// frame-select/draw pair (files `0xc45a6`/`0xc45ce`/`0xc45e7`/`0xc460c`,
+/// dossier `ev_48c71a81…`). Ten layers in digit order 0–9, all 18 px
+/// tall anchored (0,0) (`ev_a03451ed…`).
+pub const RESULT_LIFE_FONT_SPRITE: &str = "PointNum.ojs";
+/// Bottom-counter digit font mounted at `this+0x10d0c` from the
+/// Interface archive (`Interface1.opi`): the bottom-counter painter
+/// (VA `0x4c4630`, file `0xc4630`) loads this body at files
+/// `0xc4716`/`0xc473e`/`0xc4757`/`0xc477c` (dossier `ev_63391623…`) —
+/// its sole use site image-wide (`ev_8f5c69ce…`). Ten layers in digit
+/// order 0–9, 13–14 px tall anchored (0,0).
+pub const RESULT_BOTTOM_FONT_SPRITE: &str = "Result_NumFont_Blue.ojs";
+
+/// Cell geometry of the two exe digit-sprite fields (both painters
+/// build eight cells as `last − 0xa8 ..= last` in 0x18 (24 px) steps
+/// and kern digit 1 by +5: `ev_d4362eae…`).
+const RESULT_LIFE_Y: i32 = 77;
+const RESULT_LIFE_LAST_X: i32 = 460;
+const RESULT_BOTTOM_Y: i32 = 536;
+const RESULT_BOTTOM_LAST_X: i32 = 176;
+const RESULT_DIGIT_PITCH: i32 = 24;
+const RESULT_DIGIT_CELLS: usize = 8;
+
 /// Music-name box interior on the native canvas: the
 /// `Result_EachResult.ojs` body (`STATE_RESULT` rect 4
 /// `IDC_IMAGE_SRESULT_RESULTTAP`, 800×350 anchored (0,250)) bakes a
@@ -5446,6 +5471,47 @@ fn paint_result_album(frame: &mut Frame<'_>, album: Option<&Rgb555Image>) {
     );
 }
 
+/// One eight-cell digit-sprite field through the exe painters
+/// (`FUN_004c44c0`/`FUN_004c4630`, files `0xc44c0`/`0xc4630`): the
+/// decimal digits of `value` (at least one, so 0 paints a 0) fill the
+/// rightmost cells at the 24 px pitch, least significant digit
+/// rightmost, digit 1 kerned +5 (painter constant, both bodies);
+/// leading cells the count does not reach stay unpainted. Each digit
+/// selects the font body's layer of the same index (the frame pushed
+/// to the frame-select is the raw digit value, not ASCII) and blits
+/// at the cell origin under the body colour key. Native canvas only
+/// (the exe fields are fixed native pixels); a missing font or digit
+/// layer paints nothing.
+fn paint_result_digit_field(
+    frame: &mut Frame<'_>,
+    font: Option<&AvatarFigure>,
+    value: u32,
+    last_x: i32,
+    y: i32,
+) {
+    let Some(font) = font else {
+        return;
+    };
+    if !frame_is_native(frame) {
+        return;
+    }
+    let mut count = 1usize;
+    while count < RESULT_DIGIT_CELLS && value >= 10_u32.pow(count as u32) {
+        count += 1;
+    }
+    for place in 0..count {
+        let back = i32::try_from(count - 1 - place).unwrap_or(0);
+        let digit = (value / 10_u32.pow((count - 1 - place) as u32)) % 10;
+        let kern = if digit == 1 { 5 } else { 0 };
+        let x = last_x - back * RESULT_DIGIT_PITCH + kern;
+        let Some(layer) = font.layer(digit as usize) else {
+            continue;
+        };
+        let (dx, dy) = anchor_in_frame(x + layer.dx, y + layer.dy, frame.w, frame.h);
+        blit_rgb555(frame, &layer.image.view(), dx, dy, Some(layer.colorkey));
+    }
+}
+
 /// Paint the result backdrop: the staged scene minus the frame
 /// bodies ([`RESULT_FRAME_BODIES`]) in file order, so their unused
 /// frames never stack through the whole-layer pass. The Top/Bottom
@@ -5575,6 +5641,19 @@ pub struct ResultPaint<'a> {
     /// Played song's album cover (music-name box; `None` paints the
     /// staged box as-is).
     pub album: Option<&'a Rgb555Image>,
+    /// Life-readout value for the eight `PointNum.ojs` cells
+    /// (y=77, last cell x=460). The exe sums globals `0x77ee58 +
+    /// 0x77ee60` (file `0xc394e`); both writers are register-held
+    /// (only absolute reads exist — dossier `ev_a1662e22…`), so the
+    /// shell maps no live value yet (`docs/cresult-anchors.md` OPEN
+    /// 3). `None` paints nothing — no value is invented.
+    pub life_readout: Option<u32>,
+    /// Bottom-counter value for the eight `Result_NumFont_Blue.ojs`
+    /// cells (y=536, last cell x=176). The exe reads the u16 global
+    /// `0x76fc66` (file `0xc3a7f`), whose writer is likewise
+    /// register-held and whose semantic stays OPEN. `None` paints
+    /// nothing.
+    pub bottom_counter: Option<u32>,
 }
 
 /// Paint the staged result scene (`docs/cresult-anchors.md`): the
@@ -5598,7 +5677,40 @@ pub fn paint_result_scene(frame: &mut Frame<'_>, paint: &ResultPaint<'_>) {
         RESULT_RANK_SPRITE,
         paint.grade.filter(|g| *g >= 1),
     );
+    paint_result_digit_field_if_staged(
+        frame,
+        &paint.art.figures,
+        RESULT_LIFE_FONT_SPRITE,
+        paint.life_readout,
+        RESULT_LIFE_LAST_X,
+        RESULT_LIFE_Y,
+    );
+    paint_result_digit_field_if_staged(
+        frame,
+        &paint.art.figures,
+        RESULT_BOTTOM_FONT_SPRITE,
+        paint.bottom_counter,
+        RESULT_BOTTOM_LAST_X,
+        RESULT_BOTTOM_Y,
+    );
     paint_result_content(frame, paint.avatar, paint.score, paint.rows, paint.album);
+}
+
+/// [`paint_result_digit_field`] gated on a staged value: the exe
+/// fields paint from globals whose writers are register-held (OPEN),
+/// so the shell paints a field only when the caller stages a resolved
+/// value and never invents one.
+fn paint_result_digit_field_if_staged(
+    frame: &mut Frame<'_>,
+    figures: &HashMap<String, AvatarFigure>,
+    sprite: &str,
+    value: Option<u32>,
+    last_x: i32,
+    y: i32,
+) {
+    if let Some(value) = value {
+        paint_result_digit_field(frame, figures.get(sprite), value, last_x, y);
+    }
 }
 
 /// Score digits anchor top-left (`LivePlay` draws points at
@@ -5843,6 +5955,8 @@ mod paint_tests {
                     verdict: ResultVerdict::Solo,
                     grade: None,
                     album: None,
+                    life_readout: None,
+                    bottom_counter: None,
                 },
             ),
         }
@@ -7243,6 +7357,8 @@ mod paint_tests {
                 verdict: ResultVerdict::Solo,
                 grade: None,
                 album: None,
+                life_readout: None,
+                bottom_counter: None,
             },
         );
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
@@ -7344,28 +7460,22 @@ mod paint_tests {
         assert_eq!(battle_verdict(&teams, None), None);
     }
 
-    /// Pinned but unpainted digit-sprite cells (dossier OPEN 1): the
-    /// life readout and the bottom counter run through the
-    /// frame-select/draw pair over eight fixed 24 px cells,
-    /// least-significant digit rightmost, digit 1 kerned +5 (shared
-    /// painter bodies at files `0xc44c0`/`0xc4630`: cells
-    /// `last - 168 ..= last` in 24 px steps). Life value =
-    /// `0x77ee58 + 0x77ee60`, y=77, last x=460
-    /// (292/316/340/364/388/412/436/460); bottom value = `0x76fc66`,
-    /// y=536, last x=176. The pitch and kern match `PointNum.ojs`, but
-    /// the binding is inference, not observed — so neither paints.
-    /// `Result_NumFont_Blue.ojs` (`this+0x10d0c`) has no reader either.
-    const RESULT_LIFE_Y: i32 = 77;
-    const RESULT_LIFE_LAST_X: i32 = 460;
-    const RESULT_BOTTOM_Y: i32 = 536;
-    const RESULT_BOTTOM_LAST_X: i32 = 176;
-    const RESULT_DIGIT_PITCH: i32 = 24;
-    const RESULT_DIGIT_CELLS: usize = 8;
+    // Pinned digit-sprite cells (dossier `rea-cresult-anchors`,
+    // re-filed #86): the life readout and the bottom counter run
+    // through the frame-select/draw pair over eight fixed 24 px
+    // cells, least-significant digit rightmost, digit 1 kerned +5
+    // (shared painter bodies at files `0xc44c0`/`0xc4630`). The
+    // FONT BINDING is pinned: life readout <- `PointNum.ojs`
+    // (`this+0x10d10`, painter VA `0x4c44c0`), bottom counter <-
+    // `Result_NumFont_Blue.ojs` (`this+0x10d0c`, painter VA
+    // `0x4c4630`, its sole use site). The value sources (globals
+    // `0x77ee58`+`0x77ee60`, u16 `0x76fc66`) stay OPEN — the shell
+    // paints a field only when a caller stages a value.
 
-    /// Row geometry (row painter `FUN_004c3b40`, file `0xc3b40`;
-    /// dossier OPEN 4/7): row base y = 320 + 22·row. Column x values
-    /// now live beside the row model; only the base stays here for
-    /// the empty-band check.
+    // Row geometry (row painter `FUN_004c3b40`, file `0xc3b40`;
+    // dossier OPEN 4/7): row base y = 320 + 22·row. Column x values
+    // now live beside the row model; only the base stays here for
+    // the empty-band check.
     const RESULT_ROW_BASE_Y: i32 = 320;
 
     /// Cell x values of one eight-cell digit field, rightmost last.
@@ -7421,6 +7531,8 @@ mod paint_tests {
                 verdict,
                 grade,
                 album: None,
+                life_readout: None,
+                bottom_counter: None,
             },
         );
         buf
@@ -7589,10 +7701,10 @@ mod paint_tests {
     }
 
     #[test]
-    fn life_and_bottom_digit_cells_stay_unpainted() {
-        // Dossier OPEN 1: the eight-cell digit fields (24 px pitch,
-        // digit 1 kerned +5) have no observed font binding, so the
-        // shell paints neither — the GDI numbers above never touch
+    fn result_digit_fields_stay_unpainted_without_staged_values() {
+        // The fonts bind (painter VAs 0x4c44c0/0x4c4630) but the value
+        // globals stay OPEN (register-held writers), so an unstaged
+        // field paints nothing — the GDI numbers above never touch
         // the (292..460, 77) or (8..176, 536) cell rows.
         let buf = flat_native_result(&full_score());
         let ink = result_number_ink();
@@ -7607,6 +7719,131 @@ mod paint_tests {
         assert_eq!(digit_cell_xs(RESULT_LIFE_LAST_X).len(), 8);
         assert_eq!(digit_cell_xs(RESULT_LIFE_LAST_X)[0], 292);
         assert_eq!(digit_cell_xs(RESULT_BOTTOM_LAST_X)[0], 8);
+    }
+
+    /// One native staged scene with both digit fonts (the shared
+    /// ten-layer test font) and the given staged values, exactly as
+    /// [`paint_result_scene`] paints it.
+    fn painted_digit_scene(life_readout: Option<u32>, bottom_counter: Option<u32>) -> Vec<u32> {
+        let mut figures = HashMap::new();
+        figures.insert(RESULT_LIFE_FONT_SPRITE.to_owned(), digit_font_figure());
+        figures.insert(RESULT_BOTTOM_FONT_SPRITE.to_owned(), digit_font_figure());
+        let art = SceneArt {
+            placements: Vec::new(),
+            figures,
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_result_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &ResultPaint {
+                avatar: None,
+                score: &o2jam_game::Score::default(),
+                rows: &[],
+                art: &art,
+                verdict: ResultVerdict::Solo,
+                grade: None,
+                album: None,
+                life_readout,
+                bottom_counter,
+            },
+        );
+        buf
+    }
+
+    #[test]
+    fn life_readout_paints_pointnum_digits_through_the_pinned_cells() {
+        // Staged value 7: one digit in the last life cell (x=460,
+        // y=77) through the PointNum layer of the same index; the
+        // seven leading cells stay clear (digit count, not 8).
+        let buf = painted_digit_scene(Some(7), None);
+        let ink = pack_xrgb(0xFF, 0, 0xFF); // layer 7 word 0x7C1F
+        assert_eq!(
+            buf[RESULT_LIFE_Y as usize * 800 + 460],
+            ink,
+            "digit 7 layer expected at (460,77)"
+        );
+        for x in digit_cell_xs(RESULT_LIFE_LAST_X)[..7].iter() {
+            let pixel = buf[RESULT_LIFE_Y as usize * 800 + *x as usize];
+            assert_ne!(pixel, ink, "leading life cell x={x} stays clear");
+        }
+    }
+
+    #[test]
+    fn bottom_counter_paints_numfont_blue_digits_through_the_pinned_cells() {
+        // Staged value 52: digits 5 and 2 right-aligned at the two
+        // last bottom cells (x=152/176, y=536) through the
+        // Result_NumFont_Blue layers of the same indexes.
+        let buf = painted_digit_scene(None, Some(52));
+        assert_eq!(
+            buf[RESULT_BOTTOM_Y as usize * 800 + 152],
+            pack_xrgb(0xFF, 0xFF, 0), // layer 5 word 0x7FE0
+            "digit 5 layer expected at (152,536)"
+        );
+        assert_eq!(
+            buf[RESULT_BOTTOM_Y as usize * 800 + 176],
+            pack_xrgb(0, 0, 0xFF), // layer 2 word 0x001F
+            "digit 2 layer expected at (176,536)"
+        );
+    }
+
+    #[test]
+    fn result_digit_one_carries_the_pinned_five_pixel_kern() {
+        // Digit 1 shifts its cell +5 (painter constant, both bodies):
+        // value 1 lands at x=465, not 460.
+        let buf = painted_digit_scene(Some(1), None);
+        let ink = pack_xrgb(0, 0xFF, 0); // layer 1 word 0x03E0
+        assert_eq!(
+            buf[RESULT_LIFE_Y as usize * 800 + 465],
+            ink,
+            "digit 1 kerned to x=465"
+        );
+        assert_ne!(
+            buf[RESULT_LIFE_Y as usize * 800 + 460],
+            ink,
+            "unkerned origin stays clear"
+        );
+    }
+
+    #[test]
+    fn result_digit_fields_ignore_unstaged_fonts() {
+        // Values without their font body paint nothing (a staged
+        // value never invents a font); the GDI numbers and the flat
+        // card still paint around the cell rows.
+        let art = SceneArt {
+            placements: Vec::new(),
+            figures: HashMap::new(),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_result_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &ResultPaint {
+                avatar: None,
+                score: &o2jam_game::Score::default(),
+                rows: &[],
+                art: &art,
+                verdict: ResultVerdict::Solo,
+                grade: None,
+                album: None,
+                life_readout: Some(7),
+                bottom_counter: Some(52),
+            },
+        );
+        assert_ne!(
+            buf[RESULT_LIFE_Y as usize * 800 + 460],
+            pack_xrgb(0xFF, 0, 0xFF)
+        );
+        assert_ne!(
+            buf[RESULT_BOTTOM_Y as usize * 800 + 176],
+            pack_xrgb(0, 0, 0xFF)
+        );
     }
 
     /// One blank row (every column `None`): the row band keeps its
@@ -8219,6 +8456,8 @@ mod paint_tests {
                 verdict: ResultVerdict::Solo,
                 grade: None,
                 album: None,
+                life_readout: None,
+                bottom_counter: None,
             },
         );
         buf
@@ -8297,6 +8536,8 @@ mod paint_tests {
                 verdict: ResultVerdict::Battle(Some(BattleVerdict::Win)),
                 grade: None,
                 album: None,
+                life_readout: None,
+                bottom_counter: None,
             },
         );
         // The staged art paints (the corner banner body rides frame 1

@@ -159,13 +159,17 @@ the tie-break becomes statically pinnable from that handler.
 
 1. Tab selection: which tab is lit in solo versus battle, and
    whether the rank tap shows anything in solo, is not pinned.
-2. Digit-cell font binding for the life readout (value
+2. Digit-cell VALUE semantics for the life readout (value
    `0x77ee58` + `0x77ee60`, y=77, last cell x=460) and the bottom
-   counter (value `0x76fc66`, y=536, last cell x=176). Shell paints
-   neither row.
-3. `Result_NumFont_Blue.ojs` mount (`this+0x10d0c`) has no located
-   reader; `PointNum.ojs` attachment is inference from the 24 px
-   pitch and the +5 kern of digit 1.
+   counter (value `0x76fc66`, y=536, last cell x=176). The FONT
+   binding is PINNED (#86): painter file `0xc44c0` binds
+   `this+0x10d10` = `PointNum.ojs`; painter file `0xc4630` binds
+   `this+0x10d0c` = `Result_NumFont_Blue.ojs`. The shell stages both
+   fonts and paints a field only when a caller stages a resolved
+   value.
+3. ~~`Result_NumFont_Blue.ojs` mount~~ CLOSED (#86): its only
+   reader image-wide is the bottom-counter painter (file `0xc4630`).
+   `PointNum.ojs` attachment is pinned the same way (see 2).
 4. Row-record layout behind `+0x2142`… stays OPEN; columns are
    closed as passed strings (`%5d /%5d /%3d /%3d` at x=230,
    `%4d /%4d` at x=416, `%8d` of record `+0x2160` plus global

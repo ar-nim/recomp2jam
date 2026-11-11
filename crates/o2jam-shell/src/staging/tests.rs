@@ -113,15 +113,16 @@ fn playing_row_carries_no_extras() {
 }
 
 #[test]
-fn result_row_merges_the_verdict_banner_by_name() {
+fn result_row_merges_the_verdict_banner_and_bottom_counter_font_by_name() {
     let row = STAGE_TABLE
         .iter()
         .find(|row| row.state == State::Result)
         .expect("result row staged");
     assert_eq!(
         row.extra_sprites,
-        &["Result_WinLose.ojs"] as &[&str],
-        "exe mounts the banner at file 0xc2390, outside the block"
+        &["Result_WinLose.ojs", "Result_NumFont_Blue.ojs"] as &[&str],
+        "exe mounts the banner at file 0xc2390 and the bottom-counter \
+         font at this+0x10d0c, both outside the block"
     );
 }
 
@@ -418,6 +419,7 @@ fn result_archive() -> Vec<u8> {
         ("State_Result.bnd", &bnd_blob(&[(0, 0, 800, 600)])),
         ("State_Result.ojs", &sprite55_blob(2, 2, &[3; 8])),
         ("Result_WinLose.ojs", &sprite55_blob(2, 2, &[4; 8])),
+        ("Result_NumFont_Blue.ojs", &sprite55_blob(2, 2, &[5; 8])),
     ])
 }
 
@@ -435,6 +437,10 @@ fn result_state_merges_banner_by_name() {
     assert!(
         art.figures.contains_key("Result_WinLose.ojs"),
         "exe mounts the banner at file 0xc2390"
+    );
+    assert!(
+        art.figures.contains_key("Result_NumFont_Blue.ojs"),
+        "exe mounts the bottom-counter font at this+0x10d0c"
     );
 }
 
