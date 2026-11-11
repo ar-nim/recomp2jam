@@ -107,6 +107,54 @@ frame-2 LOSE! banner, one rank-free row where the photo shows
 two numbered rows, and the same number/grade geometry otherwise.
 The battle walk (`result.png`, `result-native.png`) is unchanged.
 
+## Team tie-break display order — sharpened OPEN (claim D26, issue #94)
+
+Static sweep (Python disp32 scans + objdump 2.47 slices over the
+read-only 7.55 copy) of every reference to the win-flag byte offset
+`0x21d2` and the score field `0x2160` in the member slot
+(`0x77ee90` + member × `0x2190`), plus the named ticket districts:
+
+- `0x21d2` (win flag): the only direct references are the four known
+  verdict-fill reads (files `0xc31ca`/`0xc320c`/`0xc3300`/`0xc3343`,
+  rule 2 above). No direct store exists image-wide; the writer is
+  indirect (B36 open item).
+- `0x2160` (score): readers are the row-record column format site
+  (file `0xc3c8b`, which adds one member score into the life/score
+  header global `0x77ee58` — not a team grouping) and the member
+  bulk-copy pair in `FUN_004e92a0` (file `0xe9565`). Writers are only
+  the 40xx row readers (files `0x14081d`/`0x1412d0`). No site sums
+  scores per team and no site compares two members' scores for a
+  winner.
+- Result region (`FUN_004c2390` opener, `FUN_004c3120` verdict fill,
+  `FUN_004c38a0` row fill): no team-total arithmetic and no ordering
+  loop anywhere. The winner banner is the per-member win flag keyed
+  by role (rule 2); rank rows are one painter call per qualifying
+  member in seat order (rule 4).
+- Waiting room: `FUN_0048c810` (the ticket's "team-map" district;
+  the companion address `0x48b810` has zero byte-image hits and is a
+  stale name) is input-side only — it lights exactly the pressed
+  button and returns `button − 0x16201004`. The eight team buttons
+  are a fixed grid (`0x16201004..0xB` → 0..7); no data-driven
+  ordering of teams exists.
+
+Conclusion: the client holds no tie-break rule at all. On equal
+server-side totals the displayed winner rides the server-written
+per-member win-flag byte, and every display order is the fixed
+seat/button order 0..7. The `RoomTeams::winner` lower-team-id
+tie-break is therefore labeled ASSUMPTION (claim D26), not exe
+behavior.
+
+Named next step (needs the server, so a sharpened OPEN is the
+delivery here): Memoryer live relay through the logging proxy
+(`docs/relay.md` §12) with both teams' `4014`/`4016` submissions
+scripted to equal totals (or the proxy rewriting the 4018 rows to
+equal scores per `~/scratch/digits-rig/proxy.py`), then a rig
+capture reading which member slot(s) get win-flag `1` on the
+result screen — turning the server tie rule into a pixel read.
+Fallback: REA trace of the indirect win-flag store naming the 40xx
+handler that computes it; if the flag is computed in-exe after all,
+the tie-break becomes statically pinnable from that handler.
+
 ## OPEN items
 
 1. Tab selection: which tab is lit in solo versus battle, and
