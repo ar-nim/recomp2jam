@@ -1451,6 +1451,8 @@ pub fn clone_instance_live(placed: &ScenePlacement, instances: &[&str], live: us
 /// (the same origin rule as [`paint_placed_figure`], clones included):
 /// the hover pass repaints a single frame over the stacked rest paint,
 /// so the frame index — not the whole stack — answers the pointer.
+/// `clip` optionally narrows the repaint to a native rect (the planet
+/// emblem plate reveal), scaled into the frame like every origin.
 /// A missing sprite, figure, or layer paints nothing.
 pub fn paint_placement_layer(
     frame: &mut Frame<'_>,
@@ -1458,6 +1460,7 @@ pub fn paint_placement_layer(
     figures: &HashMap<String, AvatarFigure>,
     layer_index: usize,
     shares_body: bool,
+    clip: Option<Rect>,
 ) {
     let Some(name) = placement.sprite.as_ref() else {
         return;
@@ -1469,25 +1472,28 @@ pub fn paint_placement_layer(
         return;
     };
     let (frame_w, frame_h) = (frame.w, frame.h);
+    let clip = clip.map(|rect| scale_rect_to_frame(&rect, frame_w, frame_h));
     if placement.role == PlacementRole::Clone {
         let dest = scale_rect_to_frame(&placement.rect, frame_w, frame_h);
-        blit_rgb555(
+        blit_rgb555_clipped(
             frame,
             &layer.image.view(),
             dest.x + layer.dx,
             dest.y + layer.dy,
             Some(layer.colorkey),
+            clip.as_ref(),
         );
         return;
     }
     let (view_x, view_y) = placement_view_origin(figure, placement, frame_w, frame_h, shares_body);
     let (dx, dy) = anchor_in_frame(layer.dx, layer.dy, frame_w, frame_h);
-    blit_rgb555(
+    blit_rgb555_clipped(
         frame,
         &layer.image.view(),
         view_x + dx,
         view_y + dy,
         Some(layer.colorkey),
+        clip.as_ref(),
     );
 }
 

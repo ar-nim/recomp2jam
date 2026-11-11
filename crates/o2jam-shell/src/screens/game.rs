@@ -2165,6 +2165,24 @@ impl ScreenGame {
         (top + slot < self.channels.len()).then_some(top + slot)
     }
 
+    /// Board control under the pointer, through the same staged
+    /// resolution the click path rides ([`Self::click_planet`])
+    /// (`None` off the board, off the Planet phase, or while a modal
+    /// owns the board). Ticket #26 consumes ticket #33's pointer
+    /// state here — no second hover store; motion alone arms the
+    /// painter's highlight, exactly like the channel select bar.
+    #[must_use]
+    pub fn hovered_planet_action(&self) -> Option<PlanetAction> {
+        if self.flow.current() != Screen::Planet || self.planet_modal.is_some() {
+            return None;
+        }
+        let (x, y) = self.pointer?;
+        let placements: &[ScenePlacement] = self
+            .scene_art(Screen::Planet)
+            .map_or(&[], |art| &art.placements);
+        planet_action_at(placements, x, y)
+    }
+
     /// Channel dialog click: the bnd-pinned X button rect
     /// (541,151)-(589,189) closes the dialog back to the bare planet
     /// board (verified native close click (577,171); `docs/planet.md`),
@@ -4315,7 +4333,9 @@ impl ScreenGame {
     /// the bare board.
     fn paint_planet(&self, frame: &mut Frame<'_>) {
         match self.scene_art(Screen::Planet) {
-            Some(art) => paint_planet_scene(frame, art, self.planet.band()),
+            Some(art) => {
+                paint_planet_scene(frame, art, self.planet.band(), self.hovered_planet_action())
+            }
             None => paint_screen(frame, Screen::Planet),
         }
         self.paint_planet_modal(frame);
@@ -7944,6 +7964,150 @@ mod game_tests {
             0,
         );
         assert_eq!(buf[250 * 800 + 300], bar, "highlight row keeps the bar");
+    }
+
+    #[test]
+    fn hovered_planet_action_tracks_pointer_motion() {
+        // Ticket #26 consumes ticket #33's pointer state: motion
+        // over the EASY emblem rect arms the family pick, motion
+        // over FREE arms the (static) unbound emblem, and motion
+        // off the board arms nothing. Staged placements win
+        // (ADR-0003); the pinned `.bnd` rects back the art-less run.
+        use crate::screens::side::{
+            PlanetAction, PlanetBand, PLANET_BUTTON_EASY_CODE, PLANET_BUTTON_FREE_CODE,
+        };
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        game.load_scene(
+            Screen::Planet,
+            vec![
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: "easy".to_owned(),
+                    code: PLANET_BUTTON_EASY_CODE,
+                    sprite: None,
+                    rect: Rect {
+                        x: 87,
+                        y: 32,
+                        w: 99,
+                        h: 112,
+                    },
+                },
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: "free".to_owned(),
+                    code: PLANET_BUTTON_FREE_CODE,
+                    sprite: None,
+                    rect: Rect {
+                        x: 614,
+                        y: 32,
+                        w: 99,
+                        h: 112,
+                    },
+                },
+            ],
+            HashMap::new(),
+        );
+        assert_eq!(game.screen(), Screen::Planet);
+        assert_eq!(game.hovered_planet_action(), None);
+        game.mouse_moved(136, 88);
+        assert_eq!(
+            game.hovered_planet_action(),
+            Some(PlanetAction::Emblem {
+                band: Some(PlanetBand::Easy)
+            })
+        );
+        game.mouse_moved(663, 88);
+        assert_eq!(
+            game.hovered_planet_action(),
+            Some(PlanetAction::Emblem { band: None })
+        );
+        game.mouse_moved(400, 300);
+        assert_eq!(game.hovered_planet_action(), None);
+        // Leaving the board for the channel dialog clears board
+        // hover: the dialog phase owns the pointer now.
+        game.mouse_moved(136, 88);
+        game.click_planet(136, 88);
+        assert_eq!(game.screen(), Screen::Channel);
+        assert_eq!(game.hovered_planet_action(), None);
+    }
+
+    #[test]
+    fn planet_hover_stays_off_while_a_modal_owns_the_board() {
+        // The quit-confirm modal layers over the bare board: motion
+        // over an emblem must not arm board hover behind it.
+        use crate::screens::side::{PlanetAction, PlanetBand};
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        game.load_scene(Screen::Planet, Vec::new(), HashMap::new());
+        game.click_planet(769, 580);
+        assert_eq!(game.planet_modal(), Some(PlanetModal::QuitConfirm));
+        game.mouse_moved(136, 88);
+        assert_eq!(game.hovered_planet_action(), None);
+        // Sanity: the same motion arms the emblem with no modal.
+        game.mouse_click(450, 253);
+        game.mouse_moved(136, 88);
+        assert_eq!(
+            game.hovered_planet_action(),
+            Some(PlanetAction::Emblem {
+                band: Some(PlanetBand::Easy)
+            })
+        );
+    }
+
+    #[test]
+    fn playstop_hover_arms_the_frame_swap_cell() {
+        // Regression: PLAYSTOP is `0x1920C00F` at rect 14 and RIGHT
+        // is `0x1920000E` at rect 13 (`ControlList_Interface.txt`
+        // `STATE_PLANET`; `docs/hover.md`). Hover must arm Stop on
+        // the middle cell and Right on the right cell, never crossed.
+        use crate::screens::side::{PlanetAction, PlanetPromo, PLANET_PROMO_RIGHT_CODE};
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        game.load_scene(
+            Screen::Planet,
+            vec![
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: "playstop".to_owned(),
+                    code: 0x1920_C00F,
+                    sprite: None,
+                    rect: Rect {
+                        x: 387,
+                        y: 511,
+                        w: 26,
+                        h: 24,
+                    },
+                },
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: "right".to_owned(),
+                    code: PLANET_PROMO_RIGHT_CODE,
+                    sprite: None,
+                    rect: Rect {
+                        x: 421,
+                        y: 511,
+                        w: 26,
+                        h: 24,
+                    },
+                },
+            ],
+            HashMap::new(),
+        );
+        game.mouse_moved(400, 523);
+        assert_eq!(
+            game.hovered_planet_action(),
+            Some(PlanetAction::Promo {
+                cell: PlanetPromo::Stop
+            })
+        );
+        game.mouse_moved(434, 523);
+        assert_eq!(
+            game.hovered_planet_action(),
+            Some(PlanetAction::Promo {
+                cell: PlanetPromo::Right
+            })
+        );
     }
 
     #[test]
