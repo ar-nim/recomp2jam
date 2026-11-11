@@ -2274,7 +2274,9 @@ mod tests {
         game.lane_key(3, true);
         game.click_planet(136, 88);
         assert_eq!(game.screen(), Screen::Channel);
-        game.mouse_click(300, 240);
+        // Ticket #56: only the enter face advances — row 0 face
+        // (502,236)-(546,257).
+        game.mouse_click(524, 246);
         assert_eq!(
             game.screen(),
             Screen::Room,

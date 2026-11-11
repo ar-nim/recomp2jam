@@ -12,18 +12,19 @@ use super::super::playing::{HighwayGeometry, LivePlay, PlaySkin};
 use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
-    battle_verdict, channel_dialog_x_hit, channel_row_hit, channel_viewport, dialog_rect_hit,
-    has_room_panels, list_row_hit, paint_avi_scene, paint_channel_chat, paint_channel_list,
-    paint_channel_scene, paint_lanking_board, paint_lanking_scene, paint_loading_scene,
-    paint_loading_scene_with_status, paint_lobby_backdrop, paint_music_shop_board,
-    paint_music_shop_cart, paint_music_shop_scene, paint_myroom_data, paint_myroom_scene,
-    paint_payment_notice, paint_planet_options, paint_planet_quit, paint_planet_scene,
-    paint_playing_overlay, paint_result, paint_result_scene, paint_room_chat, paint_room_list,
-    paint_room_scene, paint_room_user_panel, paint_screen, paint_shop_board, paint_shop_scene,
-    paint_waiting_chat, paint_waiting_members, paint_waiting_scene, paint_waiting_seat_avatar,
-    paint_waiting_seat_avatars, quit_fallback_rects, rect_hit, room_panel_hit, scene_index,
-    staged_rect_hit, BattleVerdict, ChannelChatMessage, LoadingStatus, ResultPaint, ResultRankRow,
-    ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage, RESULT_BACK_ID, RESULT_BACK_RECT,
+    battle_verdict, channel_dialog_x_hit, channel_face_hit, channel_row_hit, channel_scroll_hit,
+    channel_viewport, dialog_rect_hit, has_room_panels, list_row_hit, paint_avi_scene,
+    paint_channel_chat, paint_channel_list, paint_channel_scene, paint_lanking_board,
+    paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
+    paint_lobby_backdrop, paint_music_shop_board, paint_music_shop_cart, paint_music_shop_scene,
+    paint_myroom_data, paint_myroom_scene, paint_payment_notice, paint_planet_options,
+    paint_planet_quit, paint_planet_scene, paint_playing_overlay, paint_result, paint_result_scene,
+    paint_room_chat, paint_room_list, paint_room_scene, paint_room_user_panel, paint_screen,
+    paint_shop_board, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
+    paint_waiting_scene, paint_waiting_seat_avatar, paint_waiting_seat_avatars,
+    quit_fallback_rects, rect_hit, room_panel_hit, scene_index, staged_rect_hit, BattleVerdict,
+    ChannelChatMessage, ChannelScroll, LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict,
+    SceneArt, WaitingCaptions, WaitingChatMessage, RESULT_BACK_ID, RESULT_BACK_RECT,
     RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::side::{
@@ -2296,9 +2297,29 @@ impl ScreenGame {
     /// otherwise a click inside a pinned row rect highlights the
     /// entry and advances like Confirm while the draft is action-free
     /// (slash drafts consume the click instead of starting).
+    /// Step the channel highlight one row toward `scroll`, clamped at
+    /// the ends: the shared Up/Down-key path the scroll arrows ride.
+    fn step_channel(&mut self, scroll: ChannelScroll) {
+        match scroll {
+            ChannelScroll::Up => {
+                self.highlight = self.highlight.saturating_sub(1);
+            }
+            ChannelScroll::Down => {
+                let last = self.channels.len().saturating_sub(1);
+                self.highlight = (self.highlight + 1).min(last);
+            }
+        }
+    }
+
     fn click_channel_row(&mut self, x: i32, y: i32) {
         if channel_dialog_x_hit(x, y) {
             self.enter(Screen::Planet);
+            return;
+        }
+        // Scroll-column arrows step like the Up/Down keys (the bar
+        // body between them answers nothing).
+        if let Some(scroll) = channel_scroll_hit(x, y) {
+            self.step_channel(scroll);
             return;
         }
         // Viewport-relative bands: the visible slot maps back through
@@ -2309,7 +2330,9 @@ impl ScreenGame {
         };
         let index = top + slot;
         self.highlight = index;
-        if self.take_channel_slash() == SlashCommand::Empty {
+        // Only the Korean-text enter face enters Room (ticket #56);
+        // a body click moves the highlight and leaves the dialog up.
+        if channel_face_hit(x, y, slot) && self.take_channel_slash() == SlashCommand::Empty {
             self.enter(Screen::Room);
         }
     }
@@ -5294,13 +5317,8 @@ impl GameLoop for ScreenGame {
             // (the mouse edge is the pinned one; this is the
             // keyboard stand-in the session walks drive).
             (Screen::Planet, MenuKey::Confirm) => self.enter(Screen::Channel),
-            (Screen::Channel, MenuKey::Up) => {
-                self.highlight = self.highlight.saturating_sub(1);
-            }
-            (Screen::Channel, MenuKey::Down) => {
-                let last = self.channels.len().saturating_sub(1);
-                self.highlight = (self.highlight + 1).min(last);
-            }
+            (Screen::Channel, MenuKey::Up) => self.step_channel(ChannelScroll::Up),
+            (Screen::Channel, MenuKey::Down) => self.step_channel(ChannelScroll::Down),
             (Screen::Room, MenuKey::Up) => {
                 self.room_highlight = self.room_highlight.saturating_sub(1);
             }
@@ -6081,15 +6099,45 @@ mod game_tests {
     }
 
     #[test]
-    fn click_selects_channel_row_and_enters_rooms() {
+    fn face_click_selects_channel_row_and_enters_rooms() {
+        // Ticket #56: only the face enters — row 1 face
+        // (502,287)-(546,308).
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
         game.lane_key(3, true);
         game.click_planet(136, 88);
-        // Second row band: y in [282, 332), x anywhere on the row.
-        game.mouse_click(300, 290);
+        game.mouse_click(524, 297);
         assert_eq!(game.highlight, 1);
         assert_eq!(game.screen(), Screen::Room);
+    }
+
+    #[test]
+    fn face_click_enters_the_highlighted_channel() {
+        // Ticket #56: only the Korean-text enter face enters Room —
+        // row 0 face (502,236)-(546,257).
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        game.mouse_click(524, 246);
+        assert_eq!(game.highlight, 0);
+        assert_eq!(game.screen(), Screen::Room);
+    }
+
+    #[test]
+    fn body_click_highlights_without_entering() {
+        // Ticket #56: a row-body click moves the highlight only,
+        // never enters Room.
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        game.mouse_click(300, 240);
+        assert_eq!(game.highlight, 0);
+        assert_eq!(game.screen(), Screen::Channel);
+        game.mouse_click(300, 290);
+        assert_eq!(game.highlight, 1);
+        assert_eq!(game.screen(), Screen::Channel);
     }
 
     #[test]
@@ -6125,6 +6173,54 @@ mod game_tests {
         assert_eq!(game.screen(), Screen::Channel);
     }
 
+    /// Walk to the channel dialog over six listed rows (the pinned
+    /// viewport shows four, so the arrows have room to step).
+    fn six_channel_game() -> ScreenGame {
+        let mut game = ScreenGame::new();
+        game.set_channels(six_channels());
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        assert_eq!(game.screen(), Screen::Channel);
+        game
+    }
+
+    #[test]
+    fn scroll_down_arrow_steps_the_channel_highlight() {
+        // Ticket #55: the scroll-column down arrow steps like the
+        // Down key (bnd-pinned arrow (573,409)-(594,429)).
+        let mut game = six_channel_game();
+        game.mouse_click(583, 419);
+        assert_eq!(game.highlight, 1);
+        assert_eq!(game.screen(), Screen::Channel);
+    }
+
+    #[test]
+    fn scroll_up_arrow_at_top_clamps_the_highlight() {
+        // Ticket #55: the up arrow (573,213)-(594,233) clamps at the
+        // first row like the Up key.
+        let mut game = six_channel_game();
+        game.mouse_click(583, 223);
+        assert_eq!(game.highlight, 0);
+        assert_eq!(game.screen(), Screen::Channel);
+    }
+
+    #[test]
+    fn scroll_arrows_clamp_at_the_last_row() {
+        // Ticket #55: arrows pin at the ends — six Downs reach row
+        // 5 and a seventh arrow click holds it.
+        use MenuKey;
+        let mut game = six_channel_game();
+        for _ in 0..6 {
+            game.menu_key(MenuKey::Down, true);
+        }
+        assert_eq!(game.highlight, 5);
+        game.mouse_click(583, 419);
+        assert_eq!(game.highlight, 5);
+        game.mouse_click(583, 223);
+        assert_eq!(game.highlight, 4);
+        assert_eq!(game.screen(), Screen::Channel);
+    }
+
     #[test]
     fn click_with_slash_draft_consumes_without_advancing() {
         let mut game = ScreenGame::new();
@@ -6132,7 +6228,7 @@ mod game_tests {
         game.lane_key(3, true);
         game.click_planet(136, 88);
         game.set_channel_input("/w bob hi");
-        game.mouse_click(300, 240);
+        game.mouse_click(524, 246);
         assert_eq!(game.screen(), Screen::Channel);
         assert!(game.channel_input().is_empty());
     }
@@ -8843,7 +8939,9 @@ mod game_tests {
             game.menu_key(MenuKey::Down, true);
         }
         assert_eq!(game.highlight, 5);
-        game.mouse_click(400, 240);
+        // Ticket #56: the face of visible slot 0 enters; the
+        // viewport maps it back to row 2.
+        game.mouse_click(524, 246);
         assert_eq!(game.highlight, 2);
         assert_eq!(game.screen(), Screen::Room);
     }
