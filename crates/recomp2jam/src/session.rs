@@ -3161,6 +3161,78 @@ mod session_tests {
         );
     }
 
+    /// Wire-shape replay for the result input arms (#87): the
+    /// scripted gateway drives the real session bridge to the Result
+    /// boundary and captures every frame the entry drain emits, then
+    /// the retry press lands inside the gateway's quiet window so the
+    /// replay records that today it queues nothing (the negative #88
+    /// replaces with the pinned send-shape). The three exe-named arms
+    /// are pinned as exact wire bytes — the claim #88 queues through
+    /// the bridge: retry = `StartGame` 4010 (`0xfaa`, empty), back =
+    /// `ExitPlaying` 4021 (`0xfb5`, empty — the frame the entry drain
+    /// already emits), battle entry = `GetLiveState` 4042 (`0xfca`,
+    /// empty).
+    #[test]
+    fn result_wire_replay_names_the_retry_back_and_battle_entry_shapes() {
+        use o2jam_net::relay::GetLiveState;
+        use o2jam_net::{ExitPlaying, StartGame};
+
+        let (mut session, server) = joined_waiting_session(joined_snapshot(), |mut stream| {
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::StartGame.id()
+            );
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::ConfirmMusicLoaded.id()
+            );
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::SubmitScore.id()
+            );
+            assert_eq!(
+                read_frame(&mut stream).id,
+                o2jam_net::Request::FinalizeRank.id()
+            );
+            // Result entry already emits the back arm's frame: the
+            // exe's result BACK posts `0xfb5` (`ExitPlaying` 4021,
+            // `docs/cresult-anchors.md` `ev_77ce98f1…`) and the
+            // bridge sends the same empty frame at the song-end drain.
+            let exit = read_frame(&mut stream);
+            assert_eq!(exit.id, ExitPlaying::COMMAND);
+            assert!(exit.payload.is_empty());
+            // Hold the socket open across the client's retry press so
+            // the quiet window observes the press itself.
+            thread::sleep(Duration::from_millis(300));
+            assert_quiet(&mut stream);
+        });
+        play_one_note_to_result(&mut session);
+        paint_frame(&mut session);
+        assert_eq!(session.game.screen(), Screen::Result);
+        // Retry press: the exe posts relay event `0xfaa` here
+        // (`FUN_004c2f00` range, `ev_77ce98f1…`); the shell's local
+        // arm still owns the edge back to Waiting.
+        session.menu_key(MenuKey::Confirm, true);
+        assert_eq!(session.game.screen(), Screen::Waiting);
+        server.join().unwrap();
+        // The pinned wire shapes, whole frames: 4010 live-observed
+        // empty from the exe (`docs/wine-boot.md`), 4042 byte-verified
+        // empty (`docs/relay.md` §10, sole `0x0FCA` push-immediate at
+        // file `0xc365c`, gated on the battle global `0x7789e6`), 4021
+        // empty both directions (Memoryer reads nothing; the playtest
+        // walk's `0FB5` left game was accepted live).
+        for expected in [
+            (&StartGame.encode()[..], &[0x04, 0x00, 0xAA, 0x0F][..]),
+            (&ExitPlaying.encode()[..], &[0x04, 0x00, 0xB5, 0x0F][..]),
+            (&GetLiveState.encode()[..], &[0x04, 0x00, 0xCA, 0x0F][..]),
+        ] {
+            assert_eq!(expected.0, expected.1);
+            let frame = decode_frame(expected.0).unwrap();
+            assert!(frame.payload.is_empty(), "pinned body stays empty");
+        }
+    }
+
     #[test]
     fn guest_tally_stages_winning_teams_and_leaves_to_room() {
         let (mut session, server) = joined_waiting_session(guest_snapshot(), |mut stream| {
