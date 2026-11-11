@@ -28,10 +28,10 @@ Short forms live in `GLOSSARY.md`. Normative forms:
 
 | Level | Claims |
 |---|---|
-| EXE | 122 |
+| EXE | 123 |
 | DATA | 19 |
 | ASSUMED | 12 |
-| OPEN | 13 |
+| OPEN | 12 |
 | Total | 166 |
 
 ## The pairing-rule family (known mistake + siblings)
