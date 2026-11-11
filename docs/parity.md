@@ -107,224 +107,71 @@ left edge stay CANDIDATE constants). Contradiction correction:
 full-bleed r0) — the older "bind file declared but absent" note was
 wrong; Myroom stages bound like every other side screen.
 
-- `STATE_SHOP` / `STATE_MUSICSHOP` (`CStateShop`/`CStateMShop`,
-  `0xA4`/`0x6B`; `Payment` back-ends, `CMyBag`/`CCart`). Bound
-  placements stage (ItemShop 186 rects, MShop 138 rects); every
-  staged figure paints at its rect. Ticket #21 (2026-11-12): the
-  item board paints eight goods per page under the staged
-  `ITEMBUY1..8` hit areas (`0x14200018..0x1F`) — names from the
-  parsed `Itemdata_Korea.dat` table into the staged `ITEMNAME`
-  templates (`0x1440002C..0x33`), prices into the staged `ITEMWON`
-  templates (`0x14400054..0x5B`), the wallet gem word into
-  `GEMMONEY` (`0x28`, `--` until 5028/5001 words arrive), the
-  checked cart rows into the row-local `CART` templates tiled
-  over the staged `CART_EX` slots, and both pager readouts
-  (`SCROLL` children ride the staged scroll origin; cart digits
-  into the staged page-number unions). Row toggles check the
-  cart and the cart `BUYITEM` (`0x70`) queues the pinned empty
-  `SyncItemPurchase` 5000 send (file `0xf3fa8`). The song board
-  paints five catalog songs per page under the staged `MS_EX`
-  hit areas (`0x1A01802D..0x31`) — TITLE/ARTIST/EDITOR/GENRE/BPM
-  into the row-local `MMS` templates tiled per slot, ISBUY from
-  the staged 4031 flags (`FREE`/`OWNED`) — with TITLE/DIFF/BPM
-  sorts (`0x80..0x82`), the `MSALL` pager (`0x0A`/`0x0B`), the
-  staged cart rows plus both pager readouts. Per-row GEM_BUY/
-  WON_BUY (`0x41`/`0x46`) and the cart `BUYITEM` (`0x5D`) queue
-  the pinned empty `SyncMusicPurchase` 5010 send (send-switch
-  file `0xa4df0` index 8). Both wire rides stay ASSUMED behind
-  the scripted-stub seam and the take-seam (5001 undecodable
-  standalone, 5011 untraced). Guards:
-  `shop_buy_buttons_answer_contiguous_row_slots`,
-  `shop_scroll_pager_offsets_by_staged_scroll_origin`,
-  `shop_cart_buy_and_pager_answer_their_staged_buttons`,
-  `music_shop_row_slots_answer_the_ms_ex_hit_areas`,
-  `music_shop_buy_buttons_tile_per_row_slot`,
-  `music_shop_sort_and_pager_answer_their_staged_buttons`,
-  `shop_browse_toggles_cart_and_commits_5000`,
-  `shop_buyitem_without_cart_queues_nothing`,
-  `shop_pager_turns_eight_row_pages`,
-  `shop_wallet_gem_caption_waits_for_wire_data`,
-  `shop_unstaged_clicks_land_nowhere`,
-  `music_shop_sorts_pages_and_buys`,
-  `music_shop_row_pick_stages_the_cart_and_cart_buy_queues_5010`,
-  `music_shop_unstaged_clicks_land_nowhere`,
-  `shops_hand_session_browses_and_buys`,
-  `music_shop_hand_session_sorts_pages_and_buys`,
-  `shop_board_paints_names_prices_and_wallet_at_staged_rects`,
-  `music_shop_board_paints_catalog_cells_and_pager_at_staged_rects`;
-  smoke `docs/smoke/shops-hand-session.md`; shots oracle holds
-  with only the intended `shop.png` + `musicshop.png` deltas
-  (rows + pagers + wallet + cart paint). PASS (rows + pagers +
-  buys + picks + staged flags; sort directions + pager pairings
-  + cart joins ASSUMED with named rig next steps) / OPEN
-  (gem/song prices, song DIFF, money texts, filters, set-item,
-  bag, gift, MYALL pager, search, TOP100, preview, download —
-  next step: SendInput sweep on the live shops per the
-  `~/scratch/planet-verify/` recipe plus a gateway replay
-  pinning the price words).
-- `STATE_MYROOM` (`0x6A`; `CItemManager`, `CPlayerInfo`). Bound
-  placements stage (111 rects). Ticket #19 (2026-11-10): slot
-  selection records through staged `.bnd` rects; equip commits
-  the picked bag cell through `EquipItem` 5004 with the exe's
-  slot derivation (type 5 → 11, else record slot byte, < 17 —
-  send shape + rule exe-pinned static, `docs/equip.md`); the bag
-  pager turns 10-cell pages over owned inventory with parsed
-  names painted; the gift pager + pick run over staged box rows
-  and MOVE queues `ClaimGift` 5023 (shape exe-pinned); entry
-  queues `GetGiftMessageList` 5017; identity/gift captions paint
-  their TEXT rects by name identity. Guards: slot/action/pager/
-  slot-rule/row/caption/queue tests in `side.rs` + `game.rs`, hand
-  session (`myroom_hand_session_walks_slots_bag_and_gifts`, trace
-  `fixtures/input-trace/myroom-hand-session.json`, smoke
-  `docs/smoke/myroom-hand-session.md` — driven through the
-  `ScreenGame` seam, no window binding stages sides). Side-visit
-  entry and return keep passing (BACK returns to the lobby).
-  Shots oracle holds with no `myroom.png` delta (all new ink is
-  staged-data-gated and the walk stages none). Still OPEN with
-  named next steps (`docs/myroom.md` OPEN 1–8): slot-selection
-  semantics; apply/MOVE/entry-timing control choices
-  (ours-by-design); unmapped caption fields (money mappings,
-  rank/guild/win-rate/skills/notice); the file→record slot-byte
-  join (ASSUMED); vacate/goshop/webavatar/sell/bagsort/
-  messenger/conference (P0, send nothing); gift run order +
-  round trip (stub-only ASSUMED); amber-cursor highlight
-  stand-in. PASS (slot/equip/pager/gift/caption flows) / OPEN
-  (the no-ticket-call arms above).
-- `STATE_PLANET` (`CStatePlanet`, `0x11`; BGM `Music/Planet.ojm`;
-  quest button commented undecided — no drum backend). Screen,
-  paint (staged art or flat card, exe-pinned captions in real
-  glyphs), and flow edges (`Channel→Planet` via the dialog X,
-  `Planet→Channel` via a lit emblem or Confirm — live-verified
-  2026-11-09, `docs/planet.md`) live; no bare-board → Room path is
-  evidenced. Button clicks hit-test at the five pinned `.bnd`
-  button rects and HARD/NORMAL/EASY record a difficulty pick; the
-  promo `< ☐ >` cells answer clicks at their parsed rects (press
-  records, staged placements only — ADR-0003); EXIT/OPTION discs
-  dispatch at their pinned rects (quit-confirm / options dialog).
-  FREE/DRUM clicks stay unbound (P0). Guards:
-  `planet_emblem_captions_decode_to_the_pinned_strings`,
-  `planet_captions_have_real_glyphs_in_the_system_font`,
-  `planet_captions_paint_into_their_bnd_rects`,
-  `planet_dispatch_maps_promo_cells_to_carousel_presses`,
-  `planet_promo_cells_answer_clicks_at_their_staged_rects`,
-  `promo_press_records_the_cell_without_leaving_the_board`,
-  `lit_emblem_click_opens_the_channel_dialog_and_records_the_pick`,
-  `planet_confirm_opens_the_channel_dialog`,
-  `power_disc_opens_quit_confirm_and_ok_quits`,
-  `gear_disc_opens_options_and_escape_closes_it`, plus the window
-  board session (`docs/smoke/planet-board-session.md`: 19/19 trace
-  events, `avi → planet → channel → planet → channel`).
-  Ticket #27 (2026-11-10): the board track keeps playing across
-  emblem clicks — Planet and the channel dialog it opens share cue
-  record 9 (the exe's dialog lives inside `CStatePlanet`, so the exe
-  never re-pushes that cue), and the shell's scene entry now keeps a
-  sounding track when the cue repeats the latched record, repeat
-  mode and volume instead of restarting it from sample 0. Guards:
-  `emblem_round_trip_keeps_the_shared_board_track_running` (no
-  second `set_scene_bgm` for record 9 over Planet → Channel →
-  Planet), `different_track_and_silence_still_cue_on_the_scene_change`
-  (Room still switches to record 3, Loading still silences), plus the
-  `o2jam-audio` `bgm::tests::cue_*` family (record, repeat mode,
-  volume, stopped playback, silence over silence).
-  PASS (board behavior) / OPEN (highlight rendering — exe orange
-  select border capture-pinned, shell keeps the amber cursor with a
-  named next step in `docs/planet.md`; promo carousel semantics;
-  bare-board → Room/solo path; exe entry key; BGM trigger
-  superseded per `docs/planet.md` OPEN 7).
-  Options dialog (ticket #18, `docs/options.md`): all three tab
-  sheets stage through the declaration and the dialog edits real
-  settings — Key-tab rebinds answer in the lanes (mapped keys
-  only), Sound-tab sliders step the four `Sound` volumes
-  (GameEffect drives the live key mix, BGMusic scales the lobby
-  cue), Game-tab buttons write the pinned ini values (NoteType
-  0/1 with 2 a dead alias, NoteTail 0–3 by button, blend/mode/
-  long-note values), SAVE commits `option.ini` beside the install
-  root (EXIT/Escape abandon), DEFAULT restores per-tab exe
-  defaults, and `LongnoteMode` snapshots at Playing entry.
-  Guards: `options_key_tab_rebind_answers_on_the_new_lane`,
-  `options_key_tab_rebind_refuses_unmappable_keys`,
-  `options_sound_tab_steps_move_volumes_with_exe_bounds`,
-  `options_game_tab_buttons_map_to_the_pinned_ini_values`,
-  `options_tab_switches_ride_the_staged_codes`,
-  `options_save_commits_beside_the_install_root`,
-  `options_exit_closes_without_saving`,
-  `options_default_restores_the_exe_defaults_per_tab`,
-  `longnote_mode_snapshots_at_playing_entry`,
-  `key_strikes_play_at_the_game_effect_gain`,
-  `scene_bgm_cue_scales_with_the_bgmusic_volume`,
-  `option_tabs_stage_all_three_sheets_when_archives_present`
-  plus the 13 `options::tests`. PASS (dialog behavior) / OPEN
-  (highway pixel naming and slider/button→value orders — the
-  ticket's exact rig list is the named next step: one 0-vs-1 shape
-  capture, five tail captures, one mode 0-vs-1 A/B plus the
-  timing-vs-rendering call; in-song mix application).
-- `STATE_LANKING` (`0x37`; display-only, no state class — like CHANNEL).
-  Bound placements stage (73 rects). Ticket #20 (2026-11-12): the
-  board is two lists — five catalog songs per left page under the
-  staged `LVIEW_EX_1`..`_5` hit areas (353x86 tiling the song box)
-  with TITLE/DIFF/BPM/ARTIST sorts at `0x0F`..`0x12` and the `LPAGE`
-  pager at `0x15`/`0x16`; the fetched `2028 MusicPlayRankingAnswer`
-  lines on the right (self line on `RVIEW_EX_1`, ten board lines on
-  `RVIEW_EX_2`..`_11`, `0x35`..`0x3F`) with its `RPAGE` pager at
-  `0x17`/`0x18` (exe codes/names per `docs/lanking.md`; the
-  self-plus-ten shape and the zero-count ten-fill rule corroborate
-  the right slots per
-  `docs/overnight-evidence/u4-ranking-packs.md`). Row picks ride
-  the left hit areas and the tiled LANK button and name the
-  `MUSICNAME` caption (`0x34`); every row/rank cell inks its staged
-  TEXT template shifted by its staged slot origin — no geometry
-  literals. The 2028 board stages behind the scripted-stub seam
-  (proven shell-side, ASSUMED wire-side). Guards:
-  `lanking_clicks_answer_the_exe_named_sort_and_pager_codes`,
-  `lanking_row_picks_answer_the_left_hit_areas`,
-  `lanking_songs_read_catalog_fields_and_sort_keys`,
-  `lanking_rank_cells_render_fetched_lines_and_blank_fill`,
-  `lanking_sort_click_resorts_the_staged_board`,
-  `lanking_sort_title_orders_out_of_sequence_catalogs`,
-  `lanking_pager_turns_five_row_pages`,
-  `lanking_row_pick_names_the_musicname_caption`,
-  `lanking_rview_renders_the_staged_2028_board`,
-  `lanking_unstaged_clicks_land_nowhere`,
-  `lanking_hand_session_sorts_pages_picks_and_renders`; smoke
-  `docs/smoke/lanking-hand-session.md`; shots oracle holds with
-  only the intended `lanking.png` delta (rows + ranks paint).
-  PASS (rows + sorts + pagers + picks + staged ranks; sort
-  directions + pager left/right pairing + self-on-`RVIEW_EX_1`
-  ASSUMED with a named rig next step) / OPEN (BATTLE/TOP100,
-  tier buttons, search, REFRESH, GEM/CASH texts, `RVIEW_EX`
-  toggles, `LVIEW_EX` past five — next step: SendInput sweep on
-  the live board per the `~/scratch/planet-verify/` recipe;
-  song-to-board fetch join — next step: live gateway replay;
-  per-song 2031 bests on song rows — next step: join
-  `MusicScoreListAnswer` 2031 against the catalog).
-- `STATE_PAYMENT` / `STATE_PAYMENT2` (`CDPayment` web billing views).
-  Bound placements stage and merge (9 + 12 rects); the overlay inks
-  the unwired-billing notice (`BILLING UNWIRED` plus both
-  lifecycle-verified pages) into the largest staged rect, so neither
-  view stays a silent dead screen. Ticket #22 (2026-11-10): entry
-  queues no wire call on any send seam (negative guard
-  `payment_entry_queues_no_wire_call`); hand session
-  (`payment_tutorial_hand_session_visits_both_and_returns`, trace
-  `fixtures/input-trace/payment-tutorial-hand-session.json`, smoke
-  `docs/smoke/payment-tutorial-hand-session.md`). Guards:
-  `payment_side_states_the_unwired_billing_notice`,
-  `payment_side_paints_the_unwired_billing_notice`,
-  `payment_side_without_staged_rects_paints_no_notice` (miss path
-  paints nothing — ADR-0003). Shots oracle holds with only the
-  intended `payment.png` delta (notice ink). PASS (stall stated;
-  wallet rows stay data-gated) / OPEN (real billing: the web bridge
-  plus a live gateway replay naming the host/session join — next
-  step: gateway replay through the billing endpoints).
-- `STATE_TUTORIAL` (`CStateTutorial`, stub `0x00`). The
-  `Playing_TutorialBG.ojs` backdrop stages full-canvas from
-  `Playing1` and keeps passing (shots `tutorial.png` byte-identical).
-  Ticket #22 (2026-11-10): the entry path stays OPEN — no dossier
-  offset names the entry dispatch — and `TUTORIAL_ENTRY_NEXT_STEP`
-  names the rig next step (SendInput sweep of the lobby emblem
-  buttons per the `~/scratch/planet-verify/` recipe plus a REA trace
-  of the `CStateTutorial` entry dispatch). Guard:
-  `tutorial_entry_path_names_its_next_step`; side-visit entry and
-  return keep passing (`payment_tutorial_hand_session_visits_both_and_returns`).
+## `STATE_SHOP` — item shop (`CStateShop`, `0xA4`; `Payment` back-end, `CMyBag`/`CCart`)
+
+| Dimension | 7.55 expectation (evidence) | Shell status | Verdict |
+|---|---|---|---|
+| Composition | `State_Shop.bnd` 186 rects; item board paints eight goods per page — names from the parsed `Itemdata_Korea.dat` table into the `ITEMNAME` templates (`0x1440002C..0x33`), prices into the `ITEMWON` templates (`0x14400054..0x5B`), the wallet gem word into `GEMMONEY` (`0x28`), checked cart rows into the row-local `CART` templates over the staged `CART_EX` slots, both pager readouts (docs/shop.md) | (ev: docs/shop.md) Bound placements stage and every staged figure paints at its rect; the board paints names/prices/wallet/cart at the staged rects; the shots oracle holds with only the intended `shop.png` delta. Guards: `shop_board_paints_names_prices_and_wallet_at_staged_rects`, `shop_scroll_pager_offsets_by_staged_scroll_origin`, `shop_buy_buttons_answer_contiguous_row_slots`. OPEN arm: gem/song prices stay data-gated (`--` until the 5028/5001 words arrive) | (R) PASS (v: 9692d41) |
+| Input | `ITEMBUY1..8` hit areas (`0x14200018..0x1F`); cart `BUYITEM` (`0x70`) queues the pinned empty `SyncItemPurchase` 5000 send (file `0xf3fa8`) | (ev: docs/shop.md) Row toggles check the cart and the cart `BUYITEM` queues the pinned empty 5000; unstaged clicks land nowhere. Guards: `shop_browse_toggles_cart_and_commits_5000`, `shop_buyitem_without_cart_queues_nothing`, `shop_cart_buy_and_pager_answer_their_staged_buttons`, `shop_pager_turns_eight_row_pages`, `shop_unstaged_clicks_land_nowhere`, `shops_hand_session_browses_and_buys`; smoke `docs/smoke/shops-hand-session.md`. OPEN: filters, set-item, bag, gift, MYALL pager, search, TOP100, preview, download — next step: SendInput sweep on the live shop per the `~/scratch/planet-verify/` recipe plus a gateway replay pinning the price words | (R) OPEN (v: 9692d41) |
+| Timing | None documented | n/a | (R) N/A (no timed behavior — no dispatch exists to guard; next step: none) (v: 9692d41) |
+| Transitions | Lobby ↔ Shop via the side visit | (ev: docs/smoke/shops-hand-session.md) `visit_side` stages the genuine bound art and the hand session browses and buys; BACK returns to the lobby. Guards: `shops_hand_session_browses_and_buys`, `flow_allows_every_documented_edge` | (R) PASS (v: 9692d41) |
+
+## `STATE_MSHOP` — music shop (`CStateMShop`, `0x6B`)
+
+| Dimension | 7.55 expectation (evidence) | Shell status | Verdict |
+|---|---|---|---|
+| Composition | `State_MShop.bnd` 138 rects; song board paints five catalog songs per page — TITLE/ARTIST/EDITOR/GENRE/BPM into the row-local `MMS` templates tiled per slot, ISBUY from the staged 4031 flags (`FREE`/`OWNED`), TITLE/DIFF/BPM sorts (`0x80..0x82`), the `MSALL` pager (`0x0A`/`0x0B`), cart rows plus both pager readouts (docs/musicshop.md) | (ev: docs/musicshop.md) Bound placements stage and every staged figure paints at its rect; the board paints catalog cells and the pager at the staged rects; the shots oracle holds with only the intended `musicshop.png` delta. Guards: `music_shop_board_paints_catalog_cells_and_pager_at_staged_rects`, `music_shop_row_slots_answer_the_ms_ex_hit_areas`, `music_shop_buy_buttons_tile_per_row_slot` | (R) PASS (v: 9692d41) |
+| Input | `MS_EX` hit areas (`0x1A01802D..0x31`); per-row GEM_BUY/WON_BUY (`0x41`/`0x46`) and the cart `BUYITEM` (`0x5D`) queue the pinned empty `SyncMusicPurchase` 5010 send (send-switch file `0xa4df0` index 8) | (ev: docs/musicshop.md) Row picks stage the cart and the cart buy queues the pinned empty 5010; sorts and pager answer their staged buttons; unstaged clicks land nowhere. Guards: `music_shop_sorts_pages_and_buys`, `music_shop_row_pick_stages_the_cart_and_cart_buy_queues_5010`, `music_shop_sort_and_pager_answer_their_staged_buttons`, `music_shop_unstaged_clicks_land_nowhere`, `music_shop_hand_session_sorts_pages_and_buys`; smoke `docs/smoke/shops-hand-session.md`. The 5010 wire ride stays ASSUMED behind the scripted-stub seam (5001 undecodable standalone, 5011 untraced). OPEN: song DIFF, money texts, search, preview, download; sort directions and pager pairings ASSUMED — next step: SendInput sweep on the live shop per the `~/scratch/planet-verify/` recipe plus a gateway replay pinning the price words | (R) OPEN (v: 9692d41) |
+| Timing | None documented | n/a | (R) N/A (no timed behavior — no dispatch exists to guard; next step: none) (v: 9692d41) |
+| Transitions | Lobby ↔ MusicShop via the side visit | (ev: docs/smoke/shops-hand-session.md) `visit_side` stages the genuine bound art and the hand session sorts, pages, and buys; BACK returns to the lobby. Guards: `music_shop_hand_session_sorts_pages_and_buys`, `flow_allows_every_documented_edge` | (R) PASS (v: 9692d41) |
+
+## `STATE_MYROOM` — my room (`0x6A`; `CItemManager`, `CPlayerInfo`)
+
+| Dimension | 7.55 expectation (evidence) | Shell status | Verdict |
+|---|---|---|---|
+| Composition | `State_Myroom.bnd` exists on the shipped archive (111 rects, full-bleed r0 — the older "declared but absent" note was refuted); identity/gift captions paint their TEXT rects by name identity (docs/myroom.md) | (ev: docs/myroom.md) Bound placements stage; captions paint by name identity; the shots oracle holds with no `myroom.png` delta (all new ink is staged-data-gated and the walk stages none). Guards: the caption tests in `side.rs` | (R) PASS (v: 9692d41) |
+| Input | Slot selection records through staged `.bnd` rects; equip commits `EquipItem` 5004 with the exe's slot derivation (type 5 → 11, else record slot byte, < 17 — send shape + rule exe-pinned static, docs/equip.md); bag pager turns 10-cell pages; gift pager + pick with MOVE queuing `ClaimGift` 5023 (shape exe-pinned); entry queues `GetGiftMessageList` 5017 | (ev: docs/myroom.md) Slot/equip/pager/gift flows run over the staged rects with the exe-pinned send shapes. Guards: slot/action/pager/slot-rule/row/caption/queue tests in `side.rs` + `game.rs`, `myroom_hand_session_walks_slots_bag_and_gifts` (trace `fixtures/input-trace/myroom-hand-session.json`, smoke `docs/smoke/myroom-hand-session.md`, driven through the `ScreenGame` seam). OPEN (docs/myroom.md OPEN 1–8): slot-selection semantics; apply/MOVE/entry-timing control choices (ours-by-design); unmapped caption fields (money mappings, rank/guild/win-rate/skills/notice); the file→record slot-byte join (ASSUMED); vacate/goshop/webavatar/sell/bagsort/messenger/conference (P0, send nothing); gift run order + round trip (stub-only ASSUMED) — next step: the rig sweep and gateway replays named per arm in `docs/myroom.md` | (R) OPEN (v: 9692d41) |
+| Timing | None documented | n/a | (R) N/A (no timed behavior — no dispatch exists to guard; next step: none) (v: 9692d41) |
+| Transitions | Lobby ↔ MyRoom via the side visit; BACK returns to the lobby | (ev: docs/smoke/myroom-hand-session.md) `visit_side` stages the genuine bound art; the hand session walks slots, bag, and gifts and returns. Guards: `myroom_hand_session_walks_slots_bag_and_gifts`, `flow_allows_every_documented_edge` | (R) PASS (v: 9692d41) |
+
+## `STATE_PLANET` — planet board (`CStatePlanet`, `0x11`; BGM `Music/Planet.ojm`)
+
+| Dimension | 7.55 expectation (evidence) | Shell status | Verdict |
+|---|---|---|---|
+| Composition | Staged bound `State_Planet` block (backdrop + emblem buttons + promo + MENU bar); emblem captions decode to the pinned strings in real glyphs; five pinned `.bnd` button rects; quest button commented undecided — no drum backend (docs/planet.md) | (ev: docs/planet.md) Staged art or the labeled flat card paints; captions paint into their bnd rects via `o2jam-text`. Guards: `planet_emblem_captions_decode_to_the_pinned_strings`, `planet_captions_have_real_glyphs_in_the_system_font`, `planet_captions_paint_into_their_bnd_rects`. OPEN arms: highlight rendering (the exe orange select border is capture-pinned; the shell keeps the amber cursor — next step named in `docs/planet.md`); promo carousel semantics | (R+G) PASS (v: 9692d41) |
+| Input | Button clicks hit-test at the five pinned `.bnd` rects and HARD/NORMAL/EASY record a difficulty pick; promo `< ☐ >` cells answer clicks at their parsed rects (press records, staged placements only — ADR-0003); EXIT/OPTION discs dispatch at their pinned rects (quit-confirm / options dialog); the options dialog edits real settings (Key rebinds, Sound sliders, Game-tab ini values, SAVE/DEFAULT — docs/options.md) | (ev: docs/planet.md) Clicks hit-test and record; the options dialog stages all three tab sheets and edits real settings. Guards: `planet_dispatch_maps_promo_cells_to_carousel_presses`, `planet_promo_cells_answer_clicks_at_their_staged_rects`, `promo_press_records_the_cell_without_leaving_the_board`, `power_disc_opens_quit_confirm_and_ok_quits`, `gear_disc_opens_options_and_escape_closes_it`, `options_key_tab_rebind_answers_on_the_new_lane`, `options_sound_tab_steps_move_volumes_with_exe_bounds`, `options_game_tab_buttons_map_to_the_pinned_ini_values`, `options_save_commits_beside_the_install_root`, `options_default_restores_the_exe_defaults_per_tab`, `longnote_mode_snapshots_at_playing_entry`, plus the 13 `options::tests`. FREE/DRUM clicks stay unbound (P0). OPEN arms: exe entry key (next step: SendInput sweep per the `~/scratch/planet-verify/` recipe); options slider/button→value orders and highway pixel naming (the ticket's rig list in `docs/options.md`); in-song mix application | (R+G) PASS (v: 9692d41) |
+| Timing | BGM `Music/Planet.ojm`; Planet and the channel dialog it opens share cue record 9 (the exe's dialog lives inside `CStatePlanet`, so the exe never re-pushes that cue) | (ev: docs/planet.md) Scene entry keeps a sounding track when the cue repeats the latched record, repeat mode and volume instead of restarting it from sample 0 (ticket #27). Guards: `emblem_round_trip_keeps_the_shared_board_track_running`, `different_track_and_silence_still_cue_on_the_scene_change`, plus the `o2jam-audio` `bgm::tests::cue_*` family. OPEN arm: the BGM trigger itself is superseded per `docs/planet.md` OPEN 7 — next step named there | (R+G) PASS (v: 9692d41) |
+| Transitions | `Channel → Planet` via the dialog X; `Planet → Channel` via a lit emblem or Confirm — live-verified 2026-11-09; no bare-board → Room path is evidenced | (ev: docs/planet.md) The verified edges run; the window board session walks `avi → planet → channel → planet → channel` (19/19 trace events, smoke `docs/smoke/planet-board-session.md`). Guards: `lit_emblem_click_opens_the_channel_dialog_and_records_the_pick`, `planet_confirm_opens_the_channel_dialog`, `channel_back_closes_to_the_planet_board`, `flow_allows_every_documented_edge`. OPEN arm: bare-board → Room/solo path — next step: a live gateway replay naming the solo entry wire shapes | (R+G) PASS (v: 9692d41) |
+
+## `STATE_LANKING` — ranking board (`0x37`; display-only, no state class — like CHANNEL)
+
+| Dimension | 7.55 expectation (evidence) | Shell status | Verdict |
+|---|---|---|---|
+| Composition | `State_Lanking.bnd` 73 rects; two lists — five catalog songs per left page under the `LVIEW_EX_1`..`_5` hit areas (353x86 tiling the song box) with TITLE/DIFF/BPM/ARTIST sorts at `0x0F`..`0x12` and the `LPAGE` pager at `0x15`/`0x16`; the fetched `2028 MusicPlayRankingAnswer` lines on the right (self line on `RVIEW_EX_1`, ten board lines on `RVIEW_EX_2`..`_11`, `0x35`..`0x3F`) with its `RPAGE` pager at `0x17`/`0x18` (docs/lanking.md; the self-plus-ten shape and zero-count ten-fill rule corroborate per docs/overnight-evidence/u4-ranking-packs.md) | (ev: docs/lanking.md) Every row/rank cell inks its staged TEXT template shifted by its staged slot origin — no geometry literals; the 2028 board stages behind the scripted-stub seam (proven shell-side, ASSUMED wire-side); the shots oracle holds with only the intended `lanking.png` delta. Guards: `lanking_songs_read_catalog_fields_and_sort_keys`, `lanking_rank_cells_render_fetched_lines_and_blank_fill`, `lanking_rview_renders_the_staged_2028_board`, `lanking_sort_title_orders_out_of_sequence_catalogs`. OPEN arm: GEM/CASH texts stay data-gated | (R) PASS (v: 9692d41) |
+| Input | Sorts at `0x0F`..`0x12`, pagers at `0x15`/`0x16`/`0x17`/`0x18`; row picks ride the left hit areas and the tiled LANK button and name the `MUSICNAME` caption (`0x34`) | (ev: docs/lanking.md) Sort clicks resort the staged board, the pager turns five-row pages, row picks name the caption, unstaged clicks land nowhere. Guards: `lanking_clicks_answer_the_exe_named_sort_and_pager_codes`, `lanking_row_picks_answer_the_left_hit_areas`, `lanking_sort_click_resorts_the_staged_board`, `lanking_pager_turns_five_row_pages`, `lanking_row_pick_names_the_musicname_caption`, `lanking_unstaged_clicks_land_nowhere`, `lanking_hand_session_sorts_pages_picks_and_renders`; smoke `docs/smoke/lanking-hand-session.md`. OPEN: BATTLE/TOP100, tier buttons, search, REFRESH, `RVIEW_EX` toggles, `LVIEW_EX` past five; sort directions, pager left/right pairing, and self-on-`RVIEW_EX_1` ASSUMED; song-to-board fetch join; per-song 2031 bests on song rows — next steps: SendInput sweep on the live board per the `~/scratch/planet-verify/` recipe; live gateway replay for the fetch join; join `MusicScoreListAnswer` 2031 against the catalog | (R) OPEN (v: 9692d41) |
+| Timing | None documented | n/a | (R) N/A (no timed behavior — no dispatch exists to guard; next step: none) (v: 9692d41) |
+| Transitions | Lobby ↔ Lanking via the side visit | (ev: docs/smoke/lanking-hand-session.md) `visit_side` stages the genuine bound art; the hand session sorts, pages, picks, and renders, then returns. Guards: `lanking_hand_session_sorts_pages_picks_and_renders`, `flow_allows_every_documented_edge` | (R) PASS (v: 9692d41) |
+
+## `STATE_PAYMENT` — billing views (`STATE_PAYMENT`/`STATE_PAYMENT2`; `CDPayment` web billing)
+
+| Dimension | 7.55 expectation (evidence) | Shell status | Verdict |
+|---|---|---|---|
+| Composition | `CDPayment` web billing views; bound placements stage and merge (9 + 12 rects) | (ev: docs/smoke/payment-tutorial-hand-session.md) The overlay inks the unwired-billing notice (`BILLING UNWIRED` plus both lifecycle-verified pages) into the largest staged rect, so neither view stays a silent dead screen; the shots oracle holds with only the intended `payment.png` delta. Guards: `payment_side_states_the_unwired_billing_notice`, `payment_side_paints_the_unwired_billing_notice`, `payment_side_without_staged_rects_paints_no_notice` (miss path paints nothing — ADR-0003) | (R) PASS (v: 9692d41) |
+| Input | Billing entry and the web bridge | (ev: docs/smoke/payment-tutorial-hand-session.md) Entry queues no wire call on any send seam (negative guard `payment_entry_queues_no_wire_call`). OPEN: real billing — the web bridge plus a live gateway replay naming the host/session join; next step: gateway replay through the billing endpoints | (R) OPEN (v: 9692d41) |
+| Timing | None documented | n/a | (R) N/A (no timed behavior — no dispatch exists to guard; next step: none) (v: 9692d41) |
+| Transitions | Lobby ↔ Payment/Payment2 via the side visit | (ev: docs/smoke/payment-tutorial-hand-session.md) The hand session visits both billing views and returns (trace `fixtures/input-trace/payment-tutorial-hand-session.json`). Guards: `payment_tutorial_hand_session_visits_both_and_returns`, `flow_allows_every_documented_edge` | (R) PASS (v: 9692d41) |
+
+## `STATE_TUTORIAL` — tutorial (`CStateTutorial`, stub `0x00`)
+
+| Dimension | 7.55 expectation (evidence) | Shell status | Verdict |
+|---|---|---|---|
+| Composition | `CStateTutorial` is a stub (`0x00`); the `Playing_TutorialBG.ojs` backdrop stages full-canvas from `Playing1` | (ev: docs/smoke/payment-tutorial-hand-session.md) The backdrop stages and the shots oracle holds `tutorial.png` byte-identical | (R) PASS (v: 9692d41) |
+| Input | The entry dispatch | (ev: docs/smoke/payment-tutorial-hand-session.md) The entry path stays OPEN — no dossier offset names the entry dispatch. Guard: `tutorial_entry_path_names_its_next_step`. Next step (`TUTORIAL_ENTRY_NEXT_STEP`): SendInput sweep of the lobby emblem buttons per the `~/scratch/planet-verify/` recipe plus a REA trace of the `CStateTutorial` entry dispatch | (R) OPEN (v: 9692d41) |
+| Timing | None documented | n/a | (R) N/A (no timed behavior — no dispatch exists to guard; next step: none) (v: 9692d41) |
+| Transitions | Lobby ↔ Tutorial via the side visit | (ev: docs/smoke/payment-tutorial-hand-session.md) Side-visit entry and return hold through the shared hand session. Guard: `payment_tutorial_hand_session_visits_both_and_returns` | (R) PASS (v: 9692d41) |
+
+`STATE_DRUM_PLAYING` / `STATE_EXIT` (stubs `0x00`; drum never wired,
+no `CStateDrum*` class; exit is teardown, not a screen).
   PASS (backdrop staging) / OPEN (entry path with named next step).
 - `STATE_DRUM_PLAYING` / `STATE_EXIT` (stubs `0x00`; drum never wired,
   no `CStateDrum*` class; exit is teardown, not a screen).
