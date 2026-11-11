@@ -41,7 +41,7 @@ use super::side::{
     lanking_rank_cells, lanking_rview_slots, lanking_tiled_rect, music_shop_buy_caption,
     music_shop_cart_page_rects, music_shop_cart_slots, music_shop_page_rects, music_shop_slots,
     music_shop_tiled_rect, myroom_action_for_code, planet_action_for_code, planet_band_rect,
-    planet_caption_for_code, planet_plate_rect, shop_cart_page_rects, shop_cart_slots,
+    planet_caption_for_code, planet_plate_clip, shop_cart_page_rects, shop_cart_slots,
     wallet_row_caption, LankingSong, MusicShopRow, MyRoomAction, MyRoomState, PlanetAction,
     PlanetBand, PlanetOptionTab, PlanetPromo, ShopGood, WalletRow, WalletState, GEM_LABEL,
     LANKING_LVIEW_TEXT_CODES, LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES,
@@ -1588,15 +1588,17 @@ pub fn paint_planet_scene(
 }
 
 /// Planet-board hover highlight: the pinned per-control art from
-/// the Wine sweep (`docs/hover.md`, exe `83a04541…72c823b`) — three
+/// the Wine sweep (`docs/hover.md`, EXE `83a04541…72c823b`) — three
 /// lit emblems reveal their body's own 84x18 plate band (frame 0
-/// clipped to [`planet_plate_rect`], no frame swap), the gear and
-/// exit discs and the promo arrows repaint body frame 0 at full
-/// colour over the dimmed rest, and only the PLAYSTOP cell swaps
-/// frames (rest frame 0, hover frame 1). The QUEST/TUTORIAL plates
-/// are exe-static (0 changed pixels) and paint nothing. Every pixel
-/// comes from the staged body — a control with no staged figure
-/// (or no layer for the arm) paints nothing, never a stand-in.
+/// clipped to the staged button rect's plate band, no frame swap),
+/// the gear and exit discs and the promo arrows repaint body frame 0
+/// at full colour over the dimmed rest, and only the PLAYSTOP cell
+/// swaps frames (rest raw record 0, hover raw record 1 — pinned
+/// 2026-11-11 by direct record-vs-capture match, `docs/hover.md`).
+/// The QUEST/TUTORIAL plates are EXE-static (0 changed px on both
+/// plates, `docs/hover.md`) and paint nothing. Every pixel comes
+/// from the staged body — a control with no staged figure (or no
+/// layer for the arm) paints nothing, never a stand-in.
 /// The rest stack underneath is untouched (its dim/selected-frame
 /// rendering stays OPEN, `docs/planet.md`), so unhover clears the
 /// highlight by repaint.
@@ -1604,13 +1606,28 @@ fn paint_planet_hover(frame: &mut Frame<'_>, art: &SceneArt, hover: Option<Plane
     let Some(action) = hover else {
         return;
     };
-    // Static QUEST/TUTORIAL plates: exe-verified no highlight.
+    // Static QUEST/TUTORIAL plates: EXE-static, no highlight
+    // (0 changed px on both plates, `docs/hover.md`).
+    if matches!(action, PlanetAction::Emblem { band: None }) {
+        return;
+    }
+    let Some(placement) = art
+        .placements
+        .iter()
+        .find(|placed| planet_action_for_code(placed.code) == Some(action))
+    else {
+        return;
+    };
     let (layer_index, clip) = match action {
+        // Static QUEST/TUTORIAL plates never reach hover paint.
         PlanetAction::Emblem { band: None } => return,
-        // Plate reveal: layer 0 clipped to the pinned band rect.
-        PlanetAction::Emblem { band: Some(band) } => (0, Some(planet_plate_rect(band))),
-        // The one true frame swap: hover arms frame 1 (frame 0
-        // stands in when the body stages a single frame).
+        // Plate reveal: layer 0 clipped to the plate band the staged
+        // button rect carries (`side::planet_plate_clip`).
+        PlanetAction::Emblem { band: Some(band) } => {
+            (0, Some(planet_plate_clip(&placement.rect, band)))
+        }
+        // The one true frame swap: hover arms layer 1 (the staged
+        // second record; a single-record stage keeps the rest look).
         PlanetAction::Promo {
             cell: PlanetPromo::Stop,
         } => (playstop_hover_layer(art, action), None),
@@ -1618,13 +1635,6 @@ fn paint_planet_hover(frame: &mut Frame<'_>, art: &SceneArt, hover: Option<Plane
         PlanetAction::QuitConfirm | PlanetAction::OptionsDialog | PlanetAction::Promo { .. } => {
             (0, None)
         }
-    };
-    let Some(placement) = art
-        .placements
-        .iter()
-        .find(|placed| planet_action_for_code(placed.code) == Some(action))
-    else {
-        return;
     };
     let shared = shared_sprite_names(&art.placements);
     let shares_body = placement
@@ -1642,21 +1652,30 @@ fn paint_planet_hover(frame: &mut Frame<'_>, art: &SceneArt, hover: Option<Plane
 }
 
 /// Frame index the PLAYSTOP hover arms: 1 while the staged body
-/// carries a second frame, else 0 (a single-frame stage has no swap
-/// to show, so the hover keeps the rest frame).
+/// carries a second record, else 0 (a single-record stage has no swap
+/// to show, so the hover keeps the rest look).
 fn playstop_hover_layer(art: &SceneArt, action: PlanetAction) -> usize {
-    let has_second_frame = art
-        .placements
+    usize::from(hovered_figure_has_second_record(art, action))
+}
+
+/// Whether the hovered control's staged body carries a second record
+/// (the PLAYSTOP hover frame: raw record 1 against rest record 0,
+/// pinned 2026-11-11 by direct record-vs-capture match over the six
+/// raw 26x24 records of `Planet_Btn_Promotion_PlayStop.ojs` — the old
+/// two-record model in `docs/hover.md` described the frame pairing,
+/// not the record count).
+fn hovered_figure_has_second_record(art: &SceneArt, action: PlanetAction) -> bool {
+    hovered_placement_figure(art, action).is_some_and(|figure| figure.layer(1).is_some())
+}
+
+/// Staged figure behind the hovered control (`None` while the control,
+/// its sprite, or its figure is unstaged — hover then paints nothing).
+fn hovered_placement_figure(art: &SceneArt, action: PlanetAction) -> Option<&AvatarFigure> {
+    art.placements
         .iter()
         .find(|placed| planet_action_for_code(placed.code) == Some(action))
         .and_then(|placement| placement.sprite.as_ref())
         .and_then(|sprite| art.figures.get(sprite))
-        .is_some_and(|figure| figure.layer(1).is_some());
-    if has_second_frame {
-        1
-    } else {
-        0
-    }
 }
 
 /// Dialog origin (native px) of a staged `DIALOG_*` block: the
@@ -2929,10 +2948,10 @@ pub fn paint_room_scene(
 /// stacked rest paint. The rest-state desaturation transform is
 /// measured but unexplained (rest matches neither body record), so the
 /// rest paint keeps today's stacked look — labeled OPEN, next step a
-/// stopped-state winedbg draw-state read per `docs/hover.md`. The
-/// active filter/tab already paints frame 1 on top of the stack, so no
-/// extra arm is needed there. A missing placement, sprite, or frame
-/// paints nothing.
+/// stopped-state winedbg draw-state read per `docs/hover.md`. Active
+/// filter/tab codes never reach this painter (the resolver holds them
+/// at rest — EXE-pinned no-change), so every code here repaints layer
+/// 0. A missing placement, sprite, or frame paints nothing.
 fn paint_room_hover(frame: &mut Frame<'_>, art: &SceneArt, hovered_code: Option<u32>) {
     let Some(code) = hovered_code else {
         return;

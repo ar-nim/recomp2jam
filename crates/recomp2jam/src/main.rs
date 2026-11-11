@@ -1223,12 +1223,16 @@ fn setup_avatar(
 ) -> Result<()> {
     if let Some(opa_path) = avatar_opa {
         let ids = connect::parse_equipment(equip)?;
-        let figure = connect::build_worn_figure(opa_path, &ids, avatar_male)?;
+        let (archive, table) = connect::read_avatar_source(opa_path)?;
+        let figure = connect::stack_worn_figure(&archive, &ids, avatar_male)?;
         tracing::info!(layers = figure.len(), "avatar stacked");
         // The Result banner and the Room lobby both show the worn
         // figure (the room's `IDC_IMAGE_SROOM_AVATA` slot, ticket #30).
         game.load_room_avatar(figure.clone());
         game.load_avatar(figure);
+        // Waiting seats restage through the same source on every join
+        // (peers wear their wire equipment; ticket #40).
+        game.set_avatar_source(archive, table);
     }
     Ok(())
 }

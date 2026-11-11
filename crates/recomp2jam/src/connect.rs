@@ -622,6 +622,32 @@ pub fn stack_worn_figure(
     equipment: &[i32],
     male: bool,
 ) -> Result<o2jam_shell::AvatarFigure> {
+    let table = avatar_item_table(archive)?;
+    Ok(o2jam_shell::load_worn_figure(
+        archive, &table, equipment, male,
+    ))
+}
+
+/// Read an `avatar.opa` image plus its parsed item table: the source
+/// [`o2jam_shell::ScreenGame::set_avatar_source`] stacks per-seat
+/// waiting figures through on every join.
+///
+/// # Errors
+///
+/// The path is unreadable, or the archive lacks a usable item table.
+pub fn read_avatar_source(opa_path: &str) -> Result<(Vec<u8>, o2jam_file::AvatarItemTable)> {
+    let archive = read_avatar_archive(opa_path)?;
+    let table = avatar_item_table(&archive)?;
+    Ok((archive, table))
+}
+
+/// Parse the item table out of an in-memory `avatar.opa` image.
+///
+/// # Errors
+///
+/// The bytes are not an `.opa` archive, or its item table is missing
+/// or corrupt.
+fn avatar_item_table(archive: &[u8]) -> Result<o2jam_file::AvatarItemTable> {
     let entries = o2jam_file::parse_opi(archive)?;
     let table_entry = entries
         .iter()
@@ -630,28 +656,8 @@ pub fn stack_worn_figure(
     let table_bytes = archive
         .get(table_entry.data_offset..table_entry.data_offset + table_entry.size as usize)
         .with_context(|| "item table out of archive bounds")?;
-    let table = o2jam_file::parse_avatar_item_table(table_bytes)?;
-    Ok(o2jam_shell::load_worn_figure(
-        archive, &table, equipment, male,
-    ))
+    Ok(o2jam_file::parse_avatar_item_table(table_bytes)?)
 }
-
-/// Stack a worn figure from a local `avatar.opa` and explicit
-/// equipment ids (shared by `connect --avatar-opa` and
-/// `play --window --avatar-opa --equip`).
-///
-/// # Errors
-///
-/// The archive is unreadable or unstackable (see [`stack_worn_figure`]).
-pub fn build_worn_figure(
-    opa_path: &str,
-    equipment: &[i32],
-    male: bool,
-) -> Result<o2jam_shell::AvatarFigure> {
-    let archive = read_avatar_archive(opa_path)?;
-    stack_worn_figure(&archive, equipment, male)
-}
-
 /// Stack the worn figure for fetched character info from an in-memory
 /// archive image (equipment and `Male` parity come from the hero).
 ///
@@ -854,10 +860,12 @@ mod connect_flow_tests {
         let dir = std::env::temp_dir();
         let path = dir.join("recomp2jam-test-build-avatar.opa");
         std::fs::write(&path, &archive).unwrap();
-        let figure = build_worn_figure(&path.to_string_lossy(), &[1], false).unwrap();
+        let (source, table) = read_avatar_source(&path.to_string_lossy()).unwrap();
+        let figure = stack_worn_figure(&source, &[1], false).unwrap();
         std::fs::remove_file(&path).ok();
         assert_eq!(figure.len(), 1);
-        assert!(build_worn_figure("nonexistent.opa", &[1], false).is_err());
+        assert_eq!(table.rows.len(), 1);
+        assert!(read_avatar_source("nonexistent.opa").is_err());
     }
 
     #[test]
