@@ -215,6 +215,23 @@ fn is_clipped_x(clip: Option<&Rect>, dest_x: i32) -> bool {
     clip.is_some_and(|rect| dest_x < rect.x || dest_x >= rect.x + rect.w as i32)
 }
 
+/// Intersection of two rects (`None` when disjoint or empty).
+#[must_use]
+pub fn intersect_rect(a: &Rect, b: &Rect) -> Option<Rect> {
+    let x = a.x.max(b.x);
+    let y = a.y.max(b.y);
+    let right = (a.x + i32::try_from(a.w).unwrap_or(0)).min(b.x + i32::try_from(b.w).unwrap_or(0));
+    let bottom = (a.y + i32::try_from(a.h).unwrap_or(0)).min(b.y + i32::try_from(b.h).unwrap_or(0));
+    let w = right.saturating_sub(x);
+    let h = bottom.saturating_sub(y);
+    (w > 0 && h > 0).then_some(Rect {
+        x,
+        y,
+        w: w as u32,
+        h: h as u32,
+    })
+}
+
 /// Percent of the note highway one curtain edge covers or reveals.
 ///
 /// From the shipped ring descriptions (`Itemdata_Korea.dat` in

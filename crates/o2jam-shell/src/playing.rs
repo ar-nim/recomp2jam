@@ -18,9 +18,9 @@ use o2jam_game::{
 };
 use o2jam_net::GameSpeed;
 use o2jam_render::{
-    blit_rgb555, blit_rgb555_clipped, draw_number, draw_text, fill_rect, number_width, pack_xrgb,
-    panel_content_rect, scale_rect_to_frame, text_width, visible_spans, Frame, LaneCurtain, Rect,
-    Rgb555Image, NATIVE_HEIGHT,
+    blit_rgb555, blit_rgb555_clipped, draw_number, draw_text, fill_rect, intersect_rect,
+    number_width, pack_xrgb, panel_content_rect, scale_rect_to_frame, text_width, visible_spans,
+    Frame, LaneCurtain, Rect, Rgb555Image, NATIVE_HEIGHT,
 };
 
 /// Lanes across the highway.
@@ -351,8 +351,10 @@ impl SkinSprite {
         (self.image.w, self.image.h)
     }
 
-    /// Lane-centered left edge (wide art overhangs narrow lanes; the
-    /// blit clips to the frame, like the original overlap).
+    /// Lane-centered left edge. Note heads clip to their own lane
+    /// column (`paint_note_at_clipped`, claim A34), so a wide head
+    /// dies at the column edge; unclipped callers (hit bursts, press
+    /// art) keep the frame clip like the original overlap.
     fn centered_x(&self, geom: &HighwayGeometry, lane: u8) -> i32 {
         let column = geom.lane_rect(lane);
         let lane_w = i32::try_from(column.w).unwrap_or(0);
@@ -368,6 +370,27 @@ impl SkinSprite {
             self.centered_x(geom, lane),
             top_y,
             Some(self.colorkey),
+        );
+    }
+
+    /// Paint with its top at `top_y`, centered on the lane, dropping
+    /// pixels outside `clip` — the per-lane curtain clip (claim A34):
+    /// wide heads die at their own lane column's edge.
+    fn paint_note_at_clipped(
+        &self,
+        frame: &mut Frame<'_>,
+        geom: &HighwayGeometry,
+        lane: u8,
+        top_y: i32,
+        clip: &Rect,
+    ) {
+        blit_rgb555_clipped(
+            frame,
+            &self.image.view(),
+            self.centered_x(geom, lane),
+            top_y,
+            Some(self.colorkey),
+            Some(clip),
         );
     }
 
@@ -1175,6 +1198,20 @@ impl HighwayGeometry {
         }
     }
 
+    /// Per-lane curtain clip: the staged lane column cut by the
+    /// curtain's y-band spans. The exe's note draw consumes the
+    /// lane-indexed geometry table (`0x680038`, claim A34), so every
+    /// note clips to its own column rect — the x0 offsets and any
+    /// inter-lane gaps survive clipping, never a frame-derived box.
+    #[must_use]
+    pub fn lane_clip_rects(&self, lane: u8, curtain: LaneCurtain) -> Vec<Rect> {
+        let column = self.lane_rect(lane);
+        visible_spans(curtain, &self.highway_rect())
+            .into_iter()
+            .filter_map(|span| intersect_rect(&column, &span))
+            .collect()
+    }
+
     /// Scaled press-down height of one lane (clamped to lane count).
     fn scaled_key_h(&self, lane: u8) -> i32 {
         let native = NATIVE_KEY_H[lane.min(HIGHWAY_LANES - 1) as usize];
@@ -1371,21 +1408,11 @@ impl PlayingView {
         curtain: LaneCurtain,
     ) {
         self.paint_highway_shell(frame, geom);
-        if curtain == LaneCurtain::Full {
-            for (lane, y) in self.visible(geom) {
-                self.paint_note(frame, geom, lane, y);
-            }
-            return;
-        }
-        let highway = geom.highway_rect();
-        let spans = visible_spans(curtain, &highway);
         for (lane, y) in self.visible(geom) {
-            if spans
-                .iter()
-                .any(|span| y >= span.y && y < span.y + span.h as i32)
-            {
-                self.paint_note(frame, geom, lane, y);
-            }
+            // Per-lane column clip (A34): a note survives only inside
+            // its own staged column and the curtain's y-band spans.
+            let clips = geom.lane_clip_rects(lane, curtain);
+            self.paint_note(frame, geom, lane, y, &clips);
         }
     }
 
@@ -1445,26 +1472,41 @@ impl PlayingView {
         fill_rect(frame, &geom.receptor_pad(lane), ink);
     }
 
-    /// One falling note: the staged head when present, else the
-    /// `NOTE_BLUE` core the soak harness (`real_art.rs` Playing row)
-    /// and the shell overlay tests key on, plus its cap highlight.
-    fn paint_note(&self, frame: &mut Frame<'_>, geom: &HighwayGeometry, lane: u8, y: i32) {
+    /// One falling note clipped to its own lane column and the
+    /// curtain's y-band spans: the staged head when present (wide art
+    /// dies at the lane edge), else the [`NOTE_BLUE`] core the soak
+    /// harness (`real_art.rs` Playing row) and the shell overlay tests
+    /// key on, plus its cap highlight. Each `clips` rect paints its
+    /// own slice, so disjoint spans never leak pixels.
+    fn paint_note(
+        &self,
+        frame: &mut Frame<'_>,
+        geom: &HighwayGeometry,
+        lane: u8,
+        y: i32,
+        clips: &[Rect],
+    ) {
         if let Some(head) = self.skin.note_head(lane) {
-            head.paint_note_at(frame, geom, lane, y);
+            for clip in clips {
+                head.paint_note_at_clipped(frame, geom, lane, y, clip);
+            }
             return;
         }
         let core = geom.note_rect(lane, y);
-        fill_rect(
-            frame,
-            &Rect {
-                x: core.x,
-                y: core.y - 1,
-                w: core.w,
-                h: 1,
-            },
-            NOTE_CAP,
-        );
-        fill_rect(frame, &core, pack_xrgb(0x40, 0xC0, 0xFF));
+        let cap = Rect {
+            x: core.x,
+            y: core.y - 1,
+            w: core.w,
+            h: 1,
+        };
+        for clip in clips {
+            if let Some(cap_slice) = intersect_rect(&cap, clip) {
+                fill_rect(frame, &cap_slice, NOTE_CAP);
+            }
+            if let Some(core_slice) = intersect_rect(&core, clip) {
+                fill_rect(frame, &core_slice, pack_xrgb(0x40, 0xC0, 0xFF));
+            }
+        }
     }
 }
 
@@ -4291,6 +4333,69 @@ mod live_play_tests {
             LaneCurtain::Hidden,
         );
         assert!(hidden.contains(&pack_xrgb(0x40, 0xC0, 0xFF)));
+    }
+
+    #[test]
+    fn hidden_curtain_culls_wide_note_head_overhang_past_its_lane_column() {
+        // Native columns tile x 5..193; lane 0 spans 5..33. A staged
+        // head wider than its lane overhangs lane 1's column when the
+        // clip is the lane-span box — the exe clips each note to its
+        // own lane column (claim A34/B26, #103).
+        let geom = HighwayGeometry::centered(800, 600);
+        let overhang_head = solid_sprite(40, 7, 0x7C1F);
+        let mut view = PlayingView::new(vec![(0, 1500)]);
+        view.advance_to(1000);
+        view.set_skin(PlaySkin::default().with_note_head(0, overhang_head));
+        let mut buf = vec![0u32; 800 * 600];
+        view.paint_curtained(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &geom,
+            LaneCurtain::Hidden,
+        );
+        // Head row: 487 - (500 * 487 / 2000) = 366; probe mid-head.
+        let row = 369;
+        let px = |x: usize| buf[row * 800 + x];
+        // The curtain admits the probe pixel at the lane head…
+        assert_eq!(px(10), solid_ink(0x7C1F));
+        // …and rejects the off-lane pixel inside lane 1's column
+        // (odd lanes carry the shell tint there, never the overhang).
+        assert_ne!(px(36), solid_ink(0x7C1F));
+        assert_eq!(px(36), LANE_SKIN_ODD);
+    }
+
+    #[test]
+    fn hidden_curtain_culls_overhang_while_the_neighbour_lanes_note_survives() {
+        // Same row, both lanes: lane 0's overhang dies at its column
+        // edge while lane 1's own head paints inside its column.
+        let geom = HighwayGeometry::centered(800, 600);
+        let wide_head = solid_sprite(40, 7, 0x7C1F);
+        let lane_one_head = solid_sprite(22, 7, 0x03E0);
+        let skin = PlaySkin::default()
+            .with_note_head(0, wide_head)
+            .with_note_head(1, lane_one_head);
+        let mut view = PlayingView::new(vec![(0, 1500), (1, 1500)]);
+        view.advance_to(1000);
+        view.set_skin(skin);
+        let mut buf = vec![0u32; 800 * 600];
+        view.paint_curtained(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &geom,
+            LaneCurtain::Hidden,
+        );
+        let row = 369;
+        let px = |x: usize| buf[row * 800 + x];
+        assert_eq!(px(10), solid_ink(0x7C1F));
+        // Lane 1's column carries its own ink, not lane 0's overhang.
+        assert_eq!(px(36), solid_ink(0x03E0));
+        assert_eq!(px(50), solid_ink(0x03E0));
     }
 
     #[test]

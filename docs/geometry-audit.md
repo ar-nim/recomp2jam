@@ -317,8 +317,10 @@ Total audited: 136 named constants.
 - Loading cell PASS (ticket #16; audits 23, 35) ↔ no geometry constants (bar/caption
   placeholders are centered placeholders, never literals — negative evidence:
   no `.bnd` names the gate, the sprite-55 walk pins no sub-rect).
-- Playing cell FAIL (audits 16, 30–32) ↔ `COMBO_ROW_ABOVE_LINE` OPEN;
-  audit 16/30/32 are paint-clip behavior, not geometry constants.
+- Playing cell FAIL (audits 16, 31–32) ↔ `COMBO_ROW_ABOVE_LINE` OPEN;
+  audit 16/30/32 are paint-clip behavior, not geometry constants
+  (audit 30 closed by #103: per-lane curtain clip,
+  `HighwayGeometry::lane_clip_rects`).
   Scoping #68 (2026-11-12): audit 16 → #102, audit 30 → #103, audit 31
   (combo row) → #104/#105, audit 31 (play-time digits) → #107, audit 32 → #106.
 - Result cell PASS (ticket #17; audit 13) ↔ exe-pinned anchors DONE here; the old FAIL
