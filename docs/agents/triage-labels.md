@@ -24,6 +24,9 @@ Rules for closing playtest-class tickets (retro 2026-11-11, issues #26/#30/#53â€
    branches never close.
 3. File tracker issues sequentially in one chain and read back the title per number;
    never assume parallel `gh issue create` output order.
+4. Closing includes triage-label cleanup: `needs-triage` and `needs-info` never
+   survive on a closed issue, and the category label (`bug`/`enhancement`) is
+   applied at triage time, not left for the close.
 
 ## Edit tracker
 
