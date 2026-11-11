@@ -528,14 +528,14 @@ fn run_online(opts: OnlineCli) -> Result<()> {
     };
     let (report, gateway) = connect::connect_and_login_with_transport(&connect_options)?;
     tracing::info!(channels = report.channels.len(), "channels listed");
+    if let Some(hero) = &report.character {
+        stage_online_identity(&mut game, hero);
+    }
     stage_boot_character(&mut game, report.character);
     game.set_channels(report.channels);
     if !report.rooms.is_empty() {
         tracing::info!(rooms = report.rooms.len(), "rooms listed");
         game.set_rooms(report.rooms);
-    }
-    if let Some(hero) = &report.character {
-        stage_online_identity(&mut game, hero);
     }
     let pending_room = opts
         .join_room
@@ -1189,14 +1189,14 @@ fn setup_online(
     let options = params.into_connect_options();
     let (report, gateway) = connect::connect_and_login_with_transport(&options)?;
     tracing::info!(channels = report.channels.len(), "channels listed");
+    if let Some(hero) = &report.character {
+        stage_online_identity(game, hero);
+    }
     stage_boot_character(game, report.character);
     game.set_channels(report.channels);
     if !report.rooms.is_empty() {
         tracing::info!(rooms = report.rooms.len(), "rooms listed");
         game.set_rooms(report.rooms);
-    }
-    if let Some(hero) = &report.character {
-        stage_online_identity(game, hero);
     }
     Ok(Some((gateway, pending_room, pending_song)))
 }
