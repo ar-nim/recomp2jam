@@ -862,9 +862,10 @@ pub struct OjnNoteValue {
     pub sample_id: u32,
     /// Raw high word: per-note flags (hold/expression).
     /// Semantics UNVERIFIED (observed `0xC0..0xF0`, `0x200/0x300`,
-    /// `0x400` on Tutorial BGM; the in-exe parser tests payload bit
-    /// 26, which shipped note payloads never set — see
-    /// docs/file-formats/ojn.md).
+    /// `0x400` on Tutorial BGM — the B22 autoplay presence marker,
+    /// docs/ojn-bit26.md; no shipped playable-lane payload sets bit
+    /// 26, and the in-exe parser tests it at the span survey
+    /// `0x172a4f`).
     pub flags: u16,
 }
 
