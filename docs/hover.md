@@ -230,6 +230,35 @@ sprite anchors in the bodies agree with those rects byte-exact.
    emblem control, comparing the armed frame index in both pointer
    states.
 
+## Contradiction log (exe is oracle)
+
+- **#26 (hand playtest)** expected hovered planet controls to highlight
+  (emblem glow / disc state change). The glow ring in the captures is
+  the channel-select ACTIVE marker, not a hover frame — documented in
+  the issue and in `~/scratch/close-backlog/gui-drive/findings.md`
+  (2026-11-12).
+- **gui-drive / #64 salvage** (`~/scratch/close-backlog/gui-drive/findings.md`)
+  read region-locked diffs on planet playstop, promo-left, and emblem
+  as "rest→hover = cursor blob only" within the 0.9 s settle, and asked
+  for a dwell ≥2 s capture before pinning planet hover.
+- **hover-sweep (this doc, 2026-11-10/11)** positively pins per-control
+  planet hover art: plate-band reveal on the three lit emblems, frame-0
+  restore on gear/exit/promo arrows, record swap on PLAYSTOP — with
+  byte-identical changed-pixel counts across two independent runs and
+  direct frame-attributed matches at tolerance.
+
+Resolution: the sweep is the sharper instrument (per-pixel,
+frame-attributed, repeatable), while the gui-drive hover-phase labels
+were reconstructed from filenames and mtimes after its driver was lost
+(its own provenance note), so its "no change" rows cannot override
+direct frame-attributed matches. The shipped painter follows the sweep
+pins; the one capture that settles any residual doubt per issue #116's
+acceptance is a hover dwell ≥2 s on planet playstop + emblem with a
+region-locked diff. The rest-side desaturation stays OPEN (#113 —
+per-pixel alpha / background-coupled), so the shell's rest stack is not
+yet exe colour and the dimmed-rest delta guard stays `#[ignore]`
+(`docs/parity/art-delta-guards.md`).
+
 ## Provenance
 
 | item | value |
