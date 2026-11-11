@@ -76,10 +76,20 @@ installed files with Python 3.14.9; read-only string sweep of the exe
    pinned (VA `0x548640`, ev `3a869bb7…`, `docs/ui-loader.md`);
    the `0x643f34` keyword-block dossier and the `CControlList`
    RTTI class-name join stay open there.
-2. Dialog rect frame: same pixel unit and top-left origin, but the
-   `DIALOG_INFORMATION` OK-button rect sits fully outside its back
-   rect, so whether dialog rects are screen-absolute or
-   dialog-client-relative needs the applier trace.
+2. RESOLVED (#114): dialog rects are parent-client-relative in storage.
+   The create wrapper (shared tail `0x48b09c` of dispatcher `0x48a620`)
+   binds the `.bnd` rect verbatim, then the attach helper `0x50dcc0`
+   runs `OffsetRect(childRect, parentRect.x1, parentRect.y1)` and
+   persists the result — placed rect = `.bnd` rect + placed parent
+   origin for every parented control; parentless state controls stay
+   absolute in the 800x600 client. So the `DIALOG_INFORMATION` OK
+   button lands at back-origin + `(102,150)`, and its rect sitting
+   outside the back rect in the file is expected, not an anomaly.
+   Corollary: when the parent's class bits (`code & 0xF0000`) are
+   `0x20000` (the CCScrollBar family, RTTI-joined), the offset rect is
+   also written back into the pairing table via `0x5487b0` (global
+   `0x768124`), so table consumers (hover PtInRect, A1-style pairing)
+   see placed coordinates for that family.
 3. `SET`-group rect interplay beyond the per-entry ordinal rule
    (each entry's ordinal is verified; group-level behavior is
    not traced beyond the same rule applying to set members).
