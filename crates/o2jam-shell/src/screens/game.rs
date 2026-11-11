@@ -4,7 +4,8 @@
 use std::collections::HashMap;
 
 use super::super::avatar::{
-    avatar_item_by_id, ojn_cover_figure, AvatarFigure, ScenePlacement, LOADING_COVER_SPRITE,
+    avatar_item_by_id, load_worn_figure, ojn_cover_figure, AvatarFigure, ScenePlacement,
+    LOADING_COVER_SPRITE,
 };
 use super::super::options::OptionsSettings;
 use super::super::playing::{HighwayGeometry, LivePlay, PlaySkin};
@@ -20,10 +21,10 @@ use super::paint::{
     paint_playing_overlay, paint_result, paint_result_scene, paint_room_chat, paint_room_list,
     paint_room_scene, paint_room_user_panel, paint_screen, paint_shop_board, paint_shop_scene,
     paint_waiting_chat, paint_waiting_members, paint_waiting_scene, paint_waiting_seat_avatar,
-    quit_fallback_rects, rect_hit, room_panel_hit, scene_index, staged_rect_hit, BattleVerdict,
-    ChannelChatMessage, LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt,
-    WaitingCaptions, WaitingChatMessage, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID,
-    RESULT_RETRY_RECT,
+    paint_waiting_seat_avatars, quit_fallback_rects, rect_hit, room_panel_hit, scene_index,
+    staged_rect_hit, BattleVerdict, ChannelChatMessage, LoadingStatus, ResultPaint, ResultRankRow,
+    ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage, RESULT_BACK_ID, RESULT_BACK_RECT,
+    RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::side::{
     can_return_side, can_visit_side, create_room_action_at, lanking_action_at, lanking_page_window,
@@ -73,7 +74,7 @@ use o2jam_net::rooms::{
 use o2jam_net::shop::{EquipItem, SyncItemPurchase, SyncMusicPurchase};
 use o2jam_net::wallet::SyncCashPointResponse;
 use o2jam_net::{
-    ChannelState, CharacterInfo, CreateRoom, Difficulty, JoinRoom, JoinedRoom, Ready,
+    ChannelState, CharacterInfo, CreateRoom, Difficulty, Gender, JoinRoom, JoinedRoom, Ready,
     RoomListEntry, RoomTeamChanged, SetRoomTeam,
 };
 use o2jam_render::font::{draw_text_cell, Cell};
@@ -318,6 +319,13 @@ fn staged_code_hit(placements: &[ScenePlacement], code: u32, x: i32, y: i32) -> 
         .any(|placed| placed.code == code && rect_hit(&placed.rect, x, y))
 }
 
+/// Room chrome already showing its active frame: the default-active
+/// mode filter (`SHOW_ALLMODE`) and chat tab (`CHAT_ALL`) paint body
+/// frame 1 and never change on hover (EXE-pinned, `docs/hover.md`).
+/// Hover over them resolves to nothing, so the painter never repaints
+/// frame 1 with frame 0.
+const ROOM_ACTIVE_CHROME_CODES: [u32; 2] = [0x1320_1003, 0x1320_100E];
+
 /// Which lobby chat panel a call addresses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LobbyChat {
@@ -384,32 +392,41 @@ const WAITING_CONFIRM_IDS: [&str; 2] = ["IDC_BUTTON_SWAIT_START", "IDC_BUTTON_SW
 const WAITING_BACK_IDS: [&str; 2] = ["IDC_BUTTON_SWAIT_BACK", "IDC_BUTTON_SWAIT_EXIT"];
 
 /// Splash auto-advance delay in milliseconds: the exe leaves
-/// `STATE_AVI` on a timer (`docs/lifecycle.md` section 5), but the exact
-/// duration is not pinned by evidence, so this is an approximate
-/// stand-in (3 s) until the dispatch call is traced. OPEN: name the
-/// exe dispatch offset plus evidence id, then replace this value
-/// (next step: `rea` trace of the `CStateAvi` timer/dismiss arms —
-/// not in the dossier set — or a Wine null-sink measurement of the
-/// splash hold; guard: `splash_auto_advances_at_timeout`).
+/// `STATE_AVI` for the bare planet board 5 s after the logo mounts
+/// with no input. Measured twice on the isolated null-sink Wine rig
+/// (display `:97`, copied prefix + data, 1 Hz frame poll so ±1 s):
+/// `~/scratch/wt24-rig/hold1/timeline.tsv` stamps splash-up 62.8 s
+/// and board 67.8 s (5.0 s), `hold2` stamps 63.3 s → 68.6 s
+/// (5.3 s) — both rounds to a 5 s hold at the poll's ±1 s honesty;
+/// both `gone` frames show the bare planet board, and an Enter-key
+/// run (`key-enter/`) reaches the same board on the same ~5 s shape
+/// (Enter does not fast-dismiss, so the edge is the timer, not
+/// the key).
 ///
-/// Ticket #24 added the asset constraint: the Avi cue is record 8,
-/// `bgLogo.ogg`, 3.923 s (installed `Music/BGM.ojm`, `o2jam-dump
-/// dump-ojm` plus a decode timing), so this stand-in cuts the logo
-/// track 0.92 s short. The two boot captures on the rig recipe
-/// (`~/scratch/avi-hold/`) only reached a uniform white desktop
-/// (1.2 s → 66 s, then the board) and cannot see the logo or the
-/// `Avi` exit, so the hold stays OPEN with the frame-plus-state-id
-/// readout as the named next step (`docs/parity.md`).
-const SPLASH_AUTO_ADVANCE_MS: u64 = 3_000;
+/// The Avi cue is record 8, `bgLogo.ogg`, 3.923 s — so the logo
+/// track ends ~1 s before the advance, which is the ticket's
+/// expected shape (hold past the BGM end, then advance). Ticket #24
+/// replaces the old 3 s stand-in (which cut the logo track 0.92 s
+/// short) with this measured value.
+const SPLASH_AUTO_ADVANCE_MS: u64 = 5_000;
 
 /// Game loop that shows each screen's scene and walks the flow.
 ///
 /// Input wiring so far: any lane key or canvas click dismisses the
 /// splash onto the bare planet board, and the splash auto-advances
-/// there on its timer. OPEN: the exe's dismiss key is unpinned
-/// (next step: `rea` trace of the `CStateAvi` dispatch arms plus a
-/// Wine SendInput key sweep against the boot splash; guard:
-/// `lane_key_dismisses_splash_into_planet_board`).
+/// there on its measured 5 s timer (ticket #24, guard:
+/// `splash_auto_advances_at_timeout`). The dismiss arms stay
+/// stand-ins: the exe set is only partly pinned (Escape dismisses
+/// within ~0.3 s, `~/scratch/avi-hold/run3-escape/`; Enter and Space
+/// show no fast dismiss on the isolated rig — `~/scratch/wt24-rig/`
+/// `key-enter/` and `key-space/` both follow the ~5 s timer shape
+/// instead — yet Space is a lane bind, so the any-lane-key mapping
+/// is unpinned by counterexample). OPEN: the full `VK` sweep plus
+/// the exe lane-key mapping (guards: `lane_key_dismisses_splash_into_planet_board`,
+/// `click_dismisses_splash_into_planet_board`,
+/// `splash_click_edge_lands_the_same_bare_board`,
+/// `escape_dismisses_splash_into_planet_board`,
+/// `splash_menu_keys_keep_splash`).
 /// Room/waiting/loading inputs land with their UIs.
 pub struct ScreenGame {
     flow: ScreenFlow,
@@ -642,6 +659,19 @@ pub struct ScreenGame {
     /// inventory, gifts, identity and cash captions (`None` until the
     /// session stages it).
     myroom_character: Option<CharacterInfo>,
+    /// Staged worn figure per waiting seat (seat 0 self, seats 1..7
+    /// wire peers): the same `avatar.opa` stack the Result banner and
+    /// the Room panel paint, keyed by seat so each occupied slot
+    /// paints its own member. `None` seats stay empty.
+    waiting_figures: [Option<AvatarFigure>; 8],
+    /// Avatar archive plus item table backing the per-seat worn
+    /// figures (`None` until the launcher stages `--avatar-opa`):
+    /// every later `set_joined_room` restages the seats through it,
+    /// so peers wear their wire equipment as soon as the snapshot
+    /// lands. The self seat still needs the fetched character
+    /// (`set_myroom_character`) — without it only the peer seats
+    /// stage.
+    avatar_source: Option<(Vec<u8>, AvatarItemTable)>,
     /// Worn figure the Room lobby paints in its avatar slot
     /// (`IDC_IMAGE_SROOM_AVATA`): the same stack the binary builds from
     /// `avatar.opa` for the Result screen. `None` paints no figure.
@@ -879,6 +909,41 @@ fn parse_slash_draft(draft: &str, reply_to: Option<&str>) -> SlashCommand {
     }
 }
 
+/// Stack one worn figure per occupied waiting seat: the self seat
+/// wears the fetched character equipment, peers wear their wire
+/// `RoomMember.equipment`, all through the shared [`load_worn_figure`]
+/// path. Unresolvable pieces stay empty; without a joined room this
+/// stages nothing. Free function so the public stager and the join
+/// restage share one body without borrowing the whole game.
+fn stage_seat_figures(
+    waiting: &Option<JoinedRoom>,
+    character: &Option<CharacterInfo>,
+    archive: &[u8],
+    table: &AvatarItemTable,
+    figures: &mut [Option<AvatarFigure>; 8],
+) {
+    let Some(room) = waiting.as_ref() else {
+        return;
+    };
+    if let Some(character) = character.as_ref() {
+        let male = character.gender == Gender::Male;
+        let figure = load_worn_figure(archive, table, &character.equipment, male);
+        if !figure.is_empty() {
+            figures[0] = Some(figure);
+        }
+    }
+    for (offset, slot) in room.slots.iter().take(7).enumerate() {
+        let Some(member) = slot.member.as_ref() else {
+            continue;
+        };
+        let male = Gender::from_byte(member.gender) == Some(Gender::Male);
+        let figure = load_worn_figure(archive, table, &member.equipment, male);
+        if !figure.is_empty() {
+            figures[offset + 1] = Some(figure);
+        }
+    }
+}
+
 impl ScreenGame {
     /// Start at the splash screen. The song clock is the audio
     /// backend's sample counter anchored on Playing entry
@@ -971,6 +1036,8 @@ impl ScreenGame {
             myroom: MyRoomState::new(),
             myroom_items: None,
             myroom_character: None,
+            waiting_figures: std::array::from_fn(|_| None),
+            avatar_source: None,
             room_avatar: None,
             pending_equip: None,
             pending_gift_claim: None,
@@ -1298,6 +1365,11 @@ impl ScreenGame {
         self.waiting = Some(room);
         self.waiting_chat.clear();
         self.chat_input.clear();
+        // A new room means new seats: drop the old per-seat figures,
+        // then peers wear their wire equipment as soon as the snapshot
+        // lands (no-op without a staged avatar source).
+        self.waiting_figures = std::array::from_fn(|_| None);
+        self.restage_waiting_figures();
         self
     }
 
@@ -2158,6 +2230,24 @@ impl ScreenGame {
         (top + slot < self.channels.len()).then_some(top + slot)
     }
 
+    /// Board control under the pointer, through the same staged
+    /// resolution the click path rides ([`Self::click_planet`])
+    /// (`None` off the board, off the Planet phase, or while a modal
+    /// owns the board). Ticket #26 consumes ticket #33's pointer
+    /// state here — no second hover store; motion alone arms the
+    /// painter's highlight, exactly like the channel select bar.
+    #[must_use]
+    pub fn hovered_planet_action(&self) -> Option<PlanetAction> {
+        if self.flow.current() != Screen::Planet || self.planet_modal.is_some() {
+            return None;
+        }
+        let (x, y) = self.pointer?;
+        let placements: &[ScenePlacement] = self
+            .scene_art(Screen::Planet)
+            .map_or(&[], |art| &art.placements);
+        planet_action_at(placements, x, y)
+    }
+
     /// Channel dialog click: the bnd-pinned X button rect
     /// (541,151)-(589,189) closes the dialog back to the bare planet
     /// board (verified native close click (577,171); `docs/planet.md`),
@@ -2255,11 +2345,46 @@ impl ScreenGame {
     /// Staged room chrome control under the click, if the table names
     /// its code. Geometry comes from the parsed staged rect only (owner
     /// rule `f38f3`).
+    ///
+    /// Not listed: the row templates (`IDC_BUTTON_SROOM_EXBUTTON1..6`,
+    /// the `SET` clone parents) whose rects ARE the room rows and
+    /// therefore fall through to the row hit test — EXE-static by
+    /// negative evidence (0 changed px on all six panels,
+    /// `docs/hover.md`), so the hover resolver below never names
+    /// them either.
     fn room_control_at(&self, x: i32, y: i32) -> Option<&'static RoomControl> {
         let placements = &self.scene_art(Screen::Room)?.placements;
         ROOM_CONTROLS
             .iter()
             .find(|control| staged_code_hit(placements, control.code, x, y))
+    }
+
+    /// Staged room chrome control under the pointer (`None` off every
+    /// control, off the Room Scene, or while a dialog, modal, or side
+    /// Scene covers the lobby — clicks route to those layers first,
+    /// so hover follows). The shared hover source ticket #26 consumes
+    /// for the planet board is the pointer itself (`mouse_moved`);
+    /// this resolver maps it onto the room chrome the same way clicks
+    /// resolve (`staged_code_hit` on the parsed rects). Row panels
+    /// (`EXBUTTON1..6`) are not chrome controls: the pointer over a
+    /// panel resolves to nothing and repaints nothing — EXE-static by
+    /// negative evidence (`docs/hover.md`: 0 changed px, no
+    /// `Room_MOver.ojs` overlay in either state).
+    fn hovered_room_control(&self) -> Option<&'static RoomControl> {
+        if self.flow.current() != Screen::Room {
+            return None;
+        }
+        if self.room_dialog.is_some() || self.planet_modal.is_some() || self.side.is_some() {
+            return None;
+        }
+        let (x, y) = self.pointer?;
+        let control = self.room_control_at(x, y)?;
+        // Active filter/tab already shows frame 1 and never changes on
+        // hover (EXE-pinned no-change, `docs/hover.md`), so hovering
+        // one resolves to nothing: the hover must not repaint frame 1
+        // with frame 0. Filter/tab switching is unwired, so the
+        // default-active pair below never moves in the shell.
+        (!ROOM_ACTIVE_CHROME_CODES.contains(&control.code)).then_some(control)
     }
 
     /// Room-row index under a click, staged panels first (see
@@ -3365,6 +3490,78 @@ impl ScreenGame {
         self
     }
 
+    /// Stage one pre-stacked waiting figure, keyed by seat (seat 0
+    /// self, seats 1..=7 wire peers). Out-of-range seats are ignored;
+    /// empty figures stay home (`None` keeps the slot empty).
+    pub fn set_waiting_avatar(&mut self, seat: usize, figure: AvatarFigure) -> &mut Self {
+        if figure.is_empty() {
+            return self;
+        }
+        if let Some(slot) = self.waiting_figures.get_mut(seat) {
+            *slot = Some(figure);
+        }
+        self
+    }
+
+    /// Staged waiting figure of one seat (`None` while unstaged).
+    #[must_use]
+    pub fn waiting_avatar(&self, seat: usize) -> Option<&AvatarFigure> {
+        self.waiting_figures
+            .get(seat)
+            .and_then(|slot| slot.as_ref())
+    }
+
+    /// Stack one worn figure per occupied waiting seat from the
+    /// `avatar.opa` archive plus the item table, through the shared
+    /// [`load_worn_figure`] path (no fork: the same stacker the
+    /// MyRoom figure and the Result banner use). The self seat wears
+    /// the fetched character equipment, peers wear their wire
+    /// `RoomMember.equipment`; `Any` gender wears the female parity
+    /// (the connect slice's documented guess). Unresolvable pieces
+    /// stay empty — one bad sprite never blanks a seat. Without a
+    /// joined room this stages nothing. The production caller is
+    /// [`Self::set_avatar_source`] plus the `set_joined_room`
+    /// restage: the self arm fires only with a staged character
+    /// (`set_myroom_character`), which the live session never fetches
+    /// (no `GetCharacterInfo` 2001 on the windowed path — next step:
+    /// fetch it on channel login, then restage) — OPEN, peers live.
+    pub fn stage_waiting_figures(&mut self, archive: &[u8], table: &AvatarItemTable) -> &mut Self {
+        stage_seat_figures(
+            &self.waiting,
+            &self.myroom_character,
+            archive,
+            table,
+            &mut self.waiting_figures,
+        );
+        self
+    }
+
+    /// Stage the avatar archive plus item table behind the per-seat
+    /// worn figures (the launcher's `--avatar-opa` source); the seats
+    /// restage at once through it and again on every later join, so
+    /// peers wear their wire equipment as soon as the snapshot lands.
+    pub fn set_avatar_source(&mut self, archive: Vec<u8>, table: AvatarItemTable) -> &mut Self {
+        self.avatar_source = Some((archive, table));
+        self.restage_waiting_figures();
+        self
+    }
+
+    /// Restage per-seat worn figures through the staged avatar source
+    /// (no-op without one): called when the source lands and on every
+    /// later join.
+    fn restage_waiting_figures(&mut self) {
+        let Some((archive, table)) = self.avatar_source.as_ref() else {
+            return;
+        };
+        stage_seat_figures(
+            &self.waiting,
+            &self.myroom_character,
+            archive,
+            table,
+            &mut self.waiting_figures,
+        );
+    }
+
     /// Live avatar-room selection (slot pick, bag/gift pages+cursors).
     #[must_use]
     pub const fn myroom(&self) -> MyRoomState {
@@ -4226,7 +4423,9 @@ impl ScreenGame {
     /// the bare board.
     fn paint_planet(&self, frame: &mut Frame<'_>) {
         match self.scene_art(Screen::Planet) {
-            Some(art) => paint_planet_scene(frame, art, self.planet.band()),
+            Some(art) => {
+                paint_planet_scene(frame, art, self.planet.band(), self.hovered_planet_action())
+            }
             None => paint_screen(frame, Screen::Planet),
         }
         self.paint_planet_modal(frame);
@@ -4289,7 +4488,13 @@ impl ScreenGame {
     fn paint_room(&self, frame: &mut Frame<'_>) {
         match (self.scene_art(Screen::Room), self.rooms.is_empty()) {
             (Some(art), false) => {
-                paint_room_scene(frame, &self.rooms, self.room_highlight, art);
+                paint_room_scene(
+                    frame,
+                    &self.rooms,
+                    self.room_highlight,
+                    art,
+                    self.hovered_room_control().map(|control| control.code),
+                );
             }
             (Some(art), true) => paint_lobby_backdrop(frame, Screen::Room, art),
             (None, false) => paint_room_list(frame, &self.rooms, self.room_highlight),
@@ -4408,7 +4613,16 @@ impl ScreenGame {
         match (self.scene_art(Screen::Waiting), &self.waiting) {
             (Some(art), Some(room)) => {
                 paint_waiting_scene(frame, room, art, &captions);
-                paint_waiting_seat_avatar(frame, &art.placements, self.room_avatar.as_ref());
+                paint_waiting_seat_avatars(frame, &art.placements, room, &self.waiting_figures);
+                // Dual self-figure source, intended fallback: the staged
+                // seat figure (fetched-character equipment) wins; the
+                // lobby `room_avatar` (same worn stack, CLI-staged)
+                // covers seat 0 until a character is fetched — the live
+                // session never fetches one yet, so the fallback is the
+                // live path and the staged seat the shots path.
+                if self.waiting_figures[0].is_none() {
+                    paint_waiting_seat_avatar(frame, &art.placements, self.room_avatar.as_ref());
+                }
                 paint_waiting_chat(frame, &self.waiting_chat, &self.chat_input, &art.placements);
             }
             (Some(art), None) => paint_lobby_backdrop(frame, Screen::Waiting, art),
@@ -5027,6 +5241,12 @@ impl GameLoop for ScreenGame {
             return;
         }
         match (self.flow.current(), key) {
+            // Splash Escape: rig-pinned dismiss
+            // (`~/scratch/avi-hold/run3-escape/`), while Confirm
+            // (Enter), Up, and Down keep the splash (Enter shows no
+            // fast dismiss on the isolated rig,
+            // `~/scratch/wt24-rig/key-enter/`).
+            (Screen::Avi, MenuKey::Back) => self.enter(Screen::Planet),
             // Keyboard activation of the already-active emblem:
             // Confirm opens the dialog like the mouse emblem click
             // (the mouse edge is the pinned one; this is the
@@ -6000,6 +6220,249 @@ mod game_tests {
         assert_eq!(game.screen(), Screen::Room);
     }
 
+    /// Room lobby behind the hover tests: splash dismissed, planet
+    /// clicked through to Room.
+    fn hover_room_lobby() -> ScreenGame {
+        use MenuKey;
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.set_rooms(two_rooms());
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        game
+    }
+
+    /// Two-layer chrome figure: layer 0 hover blue, layer 1 rest green
+    /// (the EXE-pinned hover/rest pairing, `docs/hover.md`).
+    fn chrome_two_layer_figure(w: usize, h: usize) -> AvatarFigure {
+        use crate::avatar::FigureLayer;
+        let pixels = |word: u16| word.to_le_bytes().repeat(w * h);
+        let mut figure = AvatarFigure::default();
+        for word in [0x001Fu16, 0x03E0u16] {
+            figure.push_layer(FigureLayer {
+                image: o2jam_render::Rgb555Image::decode(&pixels(word), w, h)
+                    .expect("hover layers"),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+        }
+        figure
+    }
+
+    /// Staged room lobby with a two-frame BACK button: layer 0 is the
+    /// EXE-pinned hover frame, layer 1 the stacked rest top (the rig
+    /// pins hover to body frame 0, `docs/hover.md`).
+    fn hover_room_game() -> ScreenGame {
+        let mut game = hover_room_lobby();
+        let figure = chrome_two_layer_figure(83, 24);
+        game.load_scene(
+            Screen::Room,
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: ROOM_BACK_BUTTON_ID.to_owned(),
+                code: ROOM_BACK_BUTTON_CODE,
+                sprite: Some("Room_Back.ojs".to_owned()),
+                rect: Rect {
+                    x: 711,
+                    y: 569,
+                    w: 83,
+                    h: 24,
+                },
+            }],
+            HashMap::from([("Room_Back.ojs".to_owned(), figure)]),
+        );
+        game
+    }
+
+    /// One native pixel of the room scene at the shell seam.
+    fn room_pixel(game: &mut ScreenGame, x: usize, y: usize) -> u32 {
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        buf[y * 800 + x]
+    }
+
+    #[test]
+    fn hovered_room_control_resolves_the_staged_chrome_button() {
+        // The pointer is the shared hover source (ticket #26 consumes
+        // it for the planet board); the room resolver maps it onto
+        // staged chrome the same way clicks resolve.
+        let mut game = hover_room_game();
+        assert_eq!(game.hovered_room_control(), None);
+        game.mouse_moved(752, 581);
+        assert_eq!(
+            game.hovered_room_control().map(|control| control.code),
+            Some(ROOM_BACK_BUTTON_CODE)
+        );
+        assert_eq!(
+            game.hovered_room_control().map(|control| control.id),
+            Some(ROOM_BACK_BUTTON_ID)
+        );
+        game.mouse_moved(10, 10);
+        assert_eq!(game.hovered_room_control(), None);
+    }
+
+    #[test]
+    fn hovered_room_control_clears_off_the_room_scene() {
+        // Leaving the lobby drops hover even though the pointer still
+        // sits inside the button rect (BACK answers the click).
+        let mut game = hover_room_game();
+        game.mouse_moved(752, 581);
+        assert_eq!(
+            game.hovered_room_control().map(|control| control.code),
+            Some(ROOM_BACK_BUTTON_CODE)
+        );
+        game.mouse_click(752, 581);
+        assert_eq!(game.screen(), Screen::Channel);
+        assert_eq!(game.hovered_room_control(), None);
+    }
+
+    #[test]
+    fn hovered_room_button_repaints_its_first_frame() {
+        // The exe repaints the hovered button at full body frame 0
+        // over the stacked rest paint (`docs/hover.md` 2026-11-10
+        // sweep); leaving the control restores the rest paint.
+        let mut game = hover_room_game();
+        let rest = pack_xrgb(0x00, 0xFF, 0x00);
+        let hover = pack_xrgb(0x00, 0x00, 0xFF);
+        assert_eq!(room_pixel(&mut game, 752, 581), rest);
+        game.mouse_moved(752, 581);
+        assert_eq!(room_pixel(&mut game, 752, 581), hover);
+        game.mouse_moved(10, 10);
+        assert_eq!(room_pixel(&mut game, 752, 581), rest);
+    }
+
+    #[test]
+    fn active_room_control_ignores_hover() {
+        // SHOW_ALLMODE rests at frame 1 and the rig pins no change on
+        // hover (`docs/hover.md`): hovering the active filter resolves
+        // to no control, so the frame stays byte-identical instead of
+        // taking the frame-0 repaint.
+        let mut game = hover_room_lobby();
+        let rect = Rect {
+            x: 112,
+            y: 22,
+            w: 90,
+            h: 41,
+        };
+        game.load_scene(
+            Screen::Room,
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BUTTON_SROOM_SHOW_ALLMODE".to_owned(),
+                code: 0x1320_1003,
+                sprite: Some("Room_Btn_Show_AllMode.ojs".to_owned()),
+                rect,
+            }],
+            HashMap::from([(
+                "Room_Btn_Show_AllMode.ojs".to_owned(),
+                chrome_two_layer_figure(90, 41),
+            )]),
+        );
+        let mut rest = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut rest,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        game.mouse_moved(150, 40);
+        assert_eq!(game.hovered_room_control(), None);
+        let mut hovered = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut hovered,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert_eq!(rest, hovered, "active filter repaints nothing on hover");
+    }
+
+    #[test]
+    fn room_row_panels_stay_static_under_the_pointer() {
+        // EXE-static by negative evidence (0 changed px on every
+        // panel, no `Room_MOver.ojs` overlay — `docs/hover.md`),
+        // so the pointer over a panel resolves to no control and the
+        // frame paints byte-identical with and without the hover.
+        let mut game = hover_room_game();
+        use crate::avatar::FigureLayer;
+        let pixels = |word: u16| word.to_le_bytes().repeat(288 * 91);
+        let mut figure = AvatarFigure::default();
+        for word in [0x001Fu16, 0x03E0u16] {
+            figure.push_layer(FigureLayer {
+                image: o2jam_render::Rgb555Image::decode(&pixels(word), 288, 91)
+                    .expect("panel layers"),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+        }
+        game.load_scene(
+            Screen::Room,
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BUTTON_SROOM_EXBUTTON1".to_owned(),
+                code: 0x1301_201B,
+                sprite: Some("Room_ButtonRoom.ojs".to_owned()),
+                rect: Rect {
+                    x: 26,
+                    y: 82,
+                    w: 288,
+                    h: 91,
+                },
+            }],
+            HashMap::from([("Room_ButtonRoom.ojs".to_owned(), figure)]),
+        );
+        let mut rest = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut rest,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        game.mouse_moved(100, 120);
+        assert_eq!(game.hovered_room_control(), None);
+        let mut hovered = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut hovered,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert_eq!(rest, hovered, "row panels repaint nothing on hover");
+    }
+
+    #[test]
+    fn room_hover_hides_behind_the_open_dialog() {
+        // Clicks route to the open dialog first, so hover follows:
+        // chrome behind the dialog highlights nothing.
+        let mut game = hover_room_game();
+        game.mouse_moved(752, 581);
+        assert_eq!(
+            game.hovered_room_control().map(|control| control.code),
+            Some(ROOM_BACK_BUTTON_CODE)
+        );
+        game.open_create_room_dialog();
+        assert_eq!(game.hovered_room_control(), None);
+    }
+
     #[test]
     fn click_staged_room_option_opens_options_over_room() {
         let mut game = room_back_game();
@@ -6322,6 +6785,141 @@ mod game_tests {
             buf[(y + 1) as usize * 80 + (x - 6 + 1) as usize],
             pack_xrgb(0x30, 0xE0, 0x30)
         );
+    }
+
+    /// One solid test figure: a single pixel layer of one RGB555 word.
+    fn solid_test_figure(word: [u8; 2]) -> AvatarFigure {
+        use crate::avatar::FigureLayer;
+        let mut figure = AvatarFigure::default();
+        figure.push_layer(FigureLayer {
+            image: o2jam_render::Rgb555Image::decode(&word, 1, 1).unwrap(),
+            dx: 0,
+            dy: 0,
+            colorkey: 0x0000,
+        });
+        figure
+    }
+
+    /// One solid red test figure (a single red pixel layer).
+    fn waiting_test_figure() -> AvatarFigure {
+        solid_test_figure([0x00, 0x7C])
+    }
+
+    /// Seat-0 avatar slot scene: the `EXTEND1` parent plus the avatar
+    /// slot template, so the painter resolves the seat-0 slot box.
+    fn waiting_seat_zero_scene() -> Vec<ScenePlacement> {
+        vec![
+            ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BUTTON_SWAIT_EXTEND1".to_owned(),
+                code: 0x1601_5022,
+                sprite: None,
+                rect: Rect {
+                    x: 37,
+                    y: 55,
+                    w: 123,
+                    h: 150,
+                },
+            },
+            ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_IMAGE_SWAIT_AVATAR".to_owned(),
+                code: 0x1670_002E,
+                sprite: None,
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 123,
+                    h: 150,
+                },
+            },
+        ]
+    }
+
+    /// Center pixel of the seat-0 slot box above: the 1x1 figure lands
+    /// at parent origin + half the box (`paint_extent_centered`).
+    const WAITING_SEAT_ZERO_PIXEL: (usize, usize) = (98, 129);
+
+    #[test]
+    fn waiting_staged_seat_beats_room_avatar_fallback() {
+        // Dual self-figure source, intended fallback: the staged seat-0
+        // figure (fetched-character equipment) wins over the lobby
+        // `room_avatar`; without a staged seat the fallback covers
+        // seat 0 instead.
+        let red = pack_xrgb(0xFF, 0x00, 0x00);
+        let blue = pack_xrgb(0x00, 0x00, 0xFF);
+        let paint_seat = |game: &mut ScreenGame| {
+            let mut buf = vec![0u32; 800 * 600];
+            game.paint_at(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                0,
+            );
+            buf[WAITING_SEAT_ZERO_PIXEL.1 * 800 + WAITING_SEAT_ZERO_PIXEL.0]
+        };
+        let mut fallback_only = ScreenGame::new();
+        fallback_only.set_joined_room(waiting_room());
+        walk_to_waiting(&mut fallback_only);
+        fallback_only.load_room_avatar(solid_test_figure([0x1F, 0x00]));
+        fallback_only.load_scene(Screen::Waiting, waiting_seat_zero_scene(), HashMap::new());
+        assert_eq!(paint_seat(&mut fallback_only), blue);
+        let mut staged_wins = ScreenGame::new();
+        staged_wins.set_joined_room(waiting_room());
+        walk_to_waiting(&mut staged_wins);
+        staged_wins.load_room_avatar(solid_test_figure([0x1F, 0x00]));
+        staged_wins.set_waiting_avatar(0, waiting_test_figure());
+        staged_wins.load_scene(Screen::Waiting, waiting_seat_zero_scene(), HashMap::new());
+        assert_eq!(paint_seat(&mut staged_wins), red);
+    }
+
+    #[test]
+    fn waiting_avatar_slots_key_figures_by_seat() {
+        // Pre-stacked figures stage per seat: seats 0 and 1 hold,
+        // seat 7 stays empty, and seat 8 (past the eight) is ignored.
+        let mut game = ScreenGame::new();
+        game.set_waiting_avatar(0, waiting_test_figure())
+            .set_waiting_avatar(1, waiting_test_figure())
+            .set_waiting_avatar(8, waiting_test_figure());
+        assert!(game.waiting_avatar(0).is_some());
+        assert!(game.waiting_avatar(1).is_some());
+        assert!(game.waiting_avatar(7).is_none());
+        assert!(game.waiting_avatar(8).is_none());
+        // An empty figure never claims a slot.
+        game.set_waiting_avatar(2, AvatarFigure::default());
+        assert!(game.waiting_avatar(2).is_none());
+    }
+
+    #[test]
+    fn stage_waiting_figures_without_decodable_archive_stages_nothing() {
+        // The shared `load_worn_figure` path skips unresolvable
+        // pieces instead of failing: junk bytes stage no seat.
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        let table = o2jam_file::AvatarItemTable { rows: Vec::new() };
+        game.stage_waiting_figures(&[0x7F; 64], &table);
+        assert!((0..8).all(|seat| game.waiting_avatar(seat).is_none()));
+        // Without a joined room the stager is a no-op too.
+        let mut bare = ScreenGame::new();
+        bare.stage_waiting_figures(&[0x7F; 64], &table);
+        assert!((0..8).all(|seat| bare.waiting_avatar(seat).is_none()));
+    }
+
+    #[test]
+    fn join_restages_and_clears_stale_seat_figures() {
+        // A new join drops the old seats, then restages through the
+        // avatar source (the junk archive stages nothing, but the
+        // hook runs the shared stager without failing).
+        let mut game = ScreenGame::new();
+        game.set_waiting_avatar(0, waiting_test_figure());
+        assert!(game.waiting_avatar(0).is_some());
+        let table = o2jam_file::AvatarItemTable { rows: Vec::new() };
+        game.set_avatar_source(vec![0x7F; 64], table);
+        assert!(game.waiting_avatar(0).is_some());
+        game.set_joined_room(waiting_room());
+        assert!((0..8).all(|seat| game.waiting_avatar(seat).is_none()));
     }
 
     #[test]
@@ -7333,39 +7931,43 @@ mod game_tests {
         assert_eq!(game.screen(), Screen::Planet);
     }
 
+    /// Boot onto the staged logo splash: the bound `STATE_AVI`
+    /// record (`IDC_BACK_LOGO`, full-bleed) with a one-pixel figure —
+    /// the shared start every splash-edge guard walks.
+    fn staged_splash_boot() -> ScreenGame {
+        use crate::avatar::FigureLayer;
+        let mut logo = AvatarFigure::default();
+        logo.push_layer(FigureLayer {
+            image: o2jam_render::Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap(),
+            dx: 0,
+            dy: 0,
+            colorkey: 0x0000,
+        });
+        let mut game = ScreenGame::new();
+        game.load_scene(
+            Screen::Avi,
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BACK_LOGO".to_owned(),
+                code: 0x1810_0001,
+                sprite: Some("O2mediaLogo.ojs".to_owned()),
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 800,
+                    h: 600,
+                },
+            }],
+            HashMap::from([("O2mediaLogo.ojs".to_owned(), logo)]),
+        );
+        game
+    }
+
     #[test]
     fn avi_boot_reaches_the_bare_planet_board_on_both_edges() {
-        use crate::avatar::FigureLayer;
-        fn staged_boot() -> ScreenGame {
-            let mut logo = AvatarFigure::default();
-            logo.push_layer(FigureLayer {
-                image: o2jam_render::Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap(),
-                dx: 0,
-                dy: 0,
-                colorkey: 0x0000,
-            });
-            let mut game = ScreenGame::new();
-            game.load_scene(
-                Screen::Avi,
-                vec![ScenePlacement {
-                    role: PlacementRole::Single,
-                    id: "IDC_BACK_LOGO".to_owned(),
-                    code: 0x1810_0001,
-                    sprite: Some("O2mediaLogo.ojs".to_owned()),
-                    rect: Rect {
-                        x: 0,
-                        y: 0,
-                        w: 800,
-                        h: 600,
-                    },
-                }],
-                HashMap::from([("O2mediaLogo.ojs".to_owned(), logo)]),
-            );
-            game
-        }
         // Key edge: boot shows the staged splash, one lane key
         // dismisses onto the bare board.
-        let mut keyed = staged_boot();
+        let mut keyed = staged_splash_boot();
         assert_eq!(keyed.screen(), Screen::Avi);
         let boot_hash = keyed.state_hash();
         keyed.lane_key(3, true);
@@ -7377,13 +7979,55 @@ mod game_tests {
         );
         // Timer edge: the same boot reaches the same board and the
         // same hash without any input.
-        let mut timed = staged_boot();
+        let mut timed = staged_splash_boot();
         paint_splash_frame(&mut timed, SPLASH_AUTO_ADVANCE_MS);
         assert_eq!(timed.screen(), Screen::Planet);
         assert_eq!(
             timed.state_hash(),
             keyed.state_hash(),
             "both boot edges land the same board state"
+        );
+    }
+
+    #[test]
+    fn splash_menu_keys_keep_splash() {
+        // Dismiss-set boundary: only Back (Escape) leaves the splash —
+        // Confirm (Enter), Up, and Down keep it (rig-pinned Enter
+        // non-dismiss, `~/scratch/wt24-rig/key-enter/`; lane keys and
+        // canvas clicks are the stand-in dismiss arms, ticket #24).
+        let mut game = staged_splash_boot();
+        for key in [MenuKey::Confirm, MenuKey::Up, MenuKey::Down] {
+            game.menu_key(key, true);
+            assert_eq!(game.screen(), Screen::Avi, "{key:?} keeps the splash");
+        }
+    }
+
+    #[test]
+    fn escape_dismisses_splash_into_planet_board() {
+        // Escape (Back) dismisses within ~0.3 s on the rig
+        // (`~/scratch/avi-hold/run3-escape/`): Back leaves the splash
+        // for the bare planet board, unlike the kept menu keys above.
+        let mut game = staged_splash_boot();
+        assert_eq!(game.screen(), Screen::Avi);
+        game.menu_key(MenuKey::Back, true);
+        assert_eq!(game.screen(), Screen::Planet);
+    }
+
+    #[test]
+    fn splash_click_edge_lands_the_same_bare_board() {
+        // Third boot edge: a canvas click reaches the same bare board
+        // (and the same state hash) as the lane-key edge — every
+        // dismiss arm converges, no input invents a scene.
+        let mut keyed = staged_splash_boot();
+        keyed.lane_key(3, true);
+        assert_eq!(keyed.screen(), Screen::Planet);
+        let mut clicked = staged_splash_boot();
+        clicked.mouse_click(400, 300);
+        assert_eq!(clicked.screen(), Screen::Planet);
+        assert_eq!(
+            clicked.state_hash(),
+            keyed.state_hash(),
+            "click and key edges land the same board state"
         );
     }
 
@@ -7622,6 +8266,150 @@ mod game_tests {
             0,
         );
         assert_eq!(buf[250 * 800 + 300], bar, "highlight row keeps the bar");
+    }
+
+    #[test]
+    fn hovered_planet_action_tracks_pointer_motion() {
+        // Ticket #26 consumes ticket #33's pointer state: motion
+        // over the EASY emblem rect arms the family pick, motion
+        // over FREE arms the (static) unbound emblem, and motion
+        // off the board arms nothing. Staged placements win
+        // (ADR-0003); the pinned `.bnd` rects back the art-less run.
+        use crate::screens::side::{
+            PlanetAction, PlanetBand, PLANET_BUTTON_EASY_CODE, PLANET_BUTTON_FREE_CODE,
+        };
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        game.load_scene(
+            Screen::Planet,
+            vec![
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: "easy".to_owned(),
+                    code: PLANET_BUTTON_EASY_CODE,
+                    sprite: None,
+                    rect: Rect {
+                        x: 87,
+                        y: 32,
+                        w: 99,
+                        h: 112,
+                    },
+                },
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: "free".to_owned(),
+                    code: PLANET_BUTTON_FREE_CODE,
+                    sprite: None,
+                    rect: Rect {
+                        x: 614,
+                        y: 32,
+                        w: 99,
+                        h: 112,
+                    },
+                },
+            ],
+            HashMap::new(),
+        );
+        assert_eq!(game.screen(), Screen::Planet);
+        assert_eq!(game.hovered_planet_action(), None);
+        game.mouse_moved(136, 88);
+        assert_eq!(
+            game.hovered_planet_action(),
+            Some(PlanetAction::Emblem {
+                band: Some(PlanetBand::Easy)
+            })
+        );
+        game.mouse_moved(663, 88);
+        assert_eq!(
+            game.hovered_planet_action(),
+            Some(PlanetAction::Emblem { band: None })
+        );
+        game.mouse_moved(400, 300);
+        assert_eq!(game.hovered_planet_action(), None);
+        // Leaving the board for the channel dialog clears board
+        // hover: the dialog phase owns the pointer now.
+        game.mouse_moved(136, 88);
+        game.click_planet(136, 88);
+        assert_eq!(game.screen(), Screen::Channel);
+        assert_eq!(game.hovered_planet_action(), None);
+    }
+
+    #[test]
+    fn planet_hover_stays_off_while_a_modal_owns_the_board() {
+        // The quit-confirm modal layers over the bare board: motion
+        // over an emblem must not arm board hover behind it.
+        use crate::screens::side::{PlanetAction, PlanetBand};
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        game.load_scene(Screen::Planet, Vec::new(), HashMap::new());
+        game.click_planet(769, 580);
+        assert_eq!(game.planet_modal(), Some(PlanetModal::QuitConfirm));
+        game.mouse_moved(136, 88);
+        assert_eq!(game.hovered_planet_action(), None);
+        // Sanity: the same motion arms the emblem with no modal.
+        game.mouse_click(450, 253);
+        game.mouse_moved(136, 88);
+        assert_eq!(
+            game.hovered_planet_action(),
+            Some(PlanetAction::Emblem {
+                band: Some(PlanetBand::Easy)
+            })
+        );
+    }
+
+    #[test]
+    fn playstop_hover_arms_the_frame_swap_cell() {
+        // Regression: PLAYSTOP is `0x1920C00F` at rect 14 and RIGHT
+        // is `0x1920000E` at rect 13 (`ControlList_Interface.txt`
+        // `STATE_PLANET`; `docs/hover.md`). Hover must arm Stop on
+        // the middle cell and Right on the right cell, never crossed.
+        use crate::screens::side::{PlanetAction, PlanetPromo, PLANET_PROMO_RIGHT_CODE};
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        game.load_scene(
+            Screen::Planet,
+            vec![
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: "playstop".to_owned(),
+                    code: 0x1920_C00F,
+                    sprite: None,
+                    rect: Rect {
+                        x: 387,
+                        y: 511,
+                        w: 26,
+                        h: 24,
+                    },
+                },
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: "right".to_owned(),
+                    code: PLANET_PROMO_RIGHT_CODE,
+                    sprite: None,
+                    rect: Rect {
+                        x: 421,
+                        y: 511,
+                        w: 26,
+                        h: 24,
+                    },
+                },
+            ],
+            HashMap::new(),
+        );
+        game.mouse_moved(400, 523);
+        assert_eq!(
+            game.hovered_planet_action(),
+            Some(PlanetAction::Promo {
+                cell: PlanetPromo::Stop
+            })
+        );
+        game.mouse_moved(434, 523);
+        assert_eq!(
+            game.hovered_planet_action(),
+            Some(PlanetAction::Promo {
+                cell: PlanetPromo::Right
+            })
+        );
     }
 
     #[test]
