@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
 use o2jam_render::{pack_xrgb, Frame};
-use o2jam_shell::avatar::{paint_scene_figures, AvatarFigure, ScenePlacement};
+use o2jam_shell::avatar::{paint_scene_figures, AvatarFigure, PlacementRole, ScenePlacement};
 use o2jam_shell::screens::paint::RESULT_WINLOSE_SPRITE;
 use o2jam_shell::screens::side::{
     ROOM_BACK_BUTTON_CODE, ROOM_BACK_BUTTON_ID, ROOM_OPTION_BUTTON_CODE, ROOM_OPTION_BUTTON_ID,
@@ -617,6 +617,106 @@ fn waiting_layers_seats_over_bound_waiting_art() {
     assert_eq!(game.screen(), Screen::Waiting);
     let frame = painted(&mut game, 0);
     assert_composed(&frame, &staged, &[WHITE_TEXT, READY_GREEN], "waiting");
+}
+
+/// Bottom edge (native px) of the Waiting scene's top button band:
+/// every chrome button fully inside this band belongs to the top row
+/// (the seat parents at y 55 with h 150 reach far below it).
+const WAITING_TOP_BAND_BOTTOM: i32 = 120;
+
+#[test]
+fn waiting_top_buttons_sit_on_their_own_block_rects() {
+    // Install-guarded (ticket #57, follow-up to #40): every top-band
+    // chrome button of the staged STATE_WAITING scene (block decl
+    // `0x63`, `State_Waiting.bnd`) must pair with its `.bnd` rect by
+    // the code-ordinal rule — re-derived here from an independent
+    // ControlList + bind parse, not from the staging output — must
+    // equal that rect exactly, and must overlap no other top button.
+    // This is the per-button no-overlap lock of the #40
+    // template-at-origin family: a clone inheriting a template origin
+    // or a pairing slip lands here as a wrong rect or an overlap.
+    // Skips when install-root is absent.
+    let path = archive_path(INTERFACE_ARCHIVE);
+    let Some(archive) = install_archives().interface else {
+        println!("skip waiting top buttons: missing {}", path.display());
+        return;
+    };
+    // Independent oracle: parse the ControlList and the bind section
+    // straight from the archive, pair entries with rects through the
+    // shared exe-verified rule, and index the expected rect by code.
+    let entries = o2jam_file::parse_opi(&archive).expect("Interface1.opi parses");
+    let list_entry = o2jam_file::find_opi_entry(&entries, "ControlList_Interface.txt")
+        .expect("ControlList_Interface.txt entry exists");
+    let list_body = o2jam_file::opi_entry_body(&archive, list_entry).expect("list body in bounds");
+    let list_text = o2jam_file::decode_control_text(list_body).expect("list text decodes");
+    let list = o2jam_file::parse_control_list(&list_text).expect("control list parses");
+    let block = o2jam_shell::avatar::scene_block(&list, "STATE_WAITING").expect("block exists");
+    let bind_name = block
+        .bound_file
+        .clone()
+        .expect("STATE_WAITING carries its BOUND line");
+    let bind_entry = o2jam_file::find_opi_entry(&entries, &bind_name).expect("bind entry exists");
+    let bind_body = o2jam_file::opi_entry_body(&archive, bind_entry).expect("bind body in bounds");
+    let bind = o2jam_file::parse_bnd(bind_body).expect("bind parses");
+    let expected: HashMap<u32, o2jam_render::Rect> =
+        o2jam_file::pair_entries_with_rects(block, &bind)
+            .into_iter()
+            .filter_map(|placed| {
+                placed.rect.map(|corners| {
+                    (
+                        placed.entry.code,
+                        o2jam_render::Rect {
+                            x: corners.x1 as i32,
+                            y: corners.y1 as i32,
+                            w: corners.x2 - corners.x1,
+                            h: corners.y2 - corners.y1,
+                        },
+                    )
+                })
+            })
+            .collect();
+    // The staging under test.
+    let Some(art) = stage_state(&archive, State::Waiting, StageContext::default()).art else {
+        panic!("waiting top buttons: STATE_WAITING staged no art");
+    };
+    let top_buttons: Vec<&ScenePlacement> = art
+        .placements
+        .iter()
+        .filter(|placed| {
+            placed.role == PlacementRole::Single
+                && placed.id.starts_with("IDC_BUTTON_SWAIT")
+                && placed.rect.y + placed.rect.h as i32 <= WAITING_TOP_BAND_BOTTOM
+        })
+        .collect();
+    assert!(
+        top_buttons.len() >= 8,
+        "the top band stages the chrome button row (team buttons plus scroll/change-title)"
+    );
+    for placed in &top_buttons {
+        let want = expected
+            .get(&placed.code)
+            .unwrap_or_else(|| panic!("{} pairs with a .bnd rect", placed.id));
+        assert_eq!(
+            &placed.rect, want,
+            "{} sits on its own State_Waiting.bnd rect",
+            placed.id
+        );
+    }
+    // Per-button no-overlap: no two top-band buttons share a pixel.
+    for (index, a) in top_buttons.iter().enumerate() {
+        for b in &top_buttons[index + 1..] {
+            let overlap_x =
+                a.rect.x < b.rect.x + b.rect.w as i32 && b.rect.x < a.rect.x + a.rect.w as i32;
+            let overlap_y =
+                a.rect.y < b.rect.y + b.rect.h as i32 && b.rect.y < a.rect.y + a.rect.h as i32;
+            assert!(
+                !(overlap_x && overlap_y),
+                "top buttons {} and {} overlap",
+                a.id,
+                b.id
+            );
+        }
+    }
 }
 
 #[test]

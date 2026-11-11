@@ -1151,3 +1151,98 @@ fn table_driven_bodies_leave_the_select_bar_to_the_caller() {
         "the bar is code-mounted at the Dialog object, never table-driven"
     );
 }
+#[test]
+fn probe_waiting_top_overlaps() {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../install-root/O2Jam/Image/Interface1.opi");
+    let Ok(bytes) = std::fs::read(&path) else {
+        eprintln!("MISSING INSTALL");
+        return;
+    };
+    let report = crate::staging::stage_state(
+        &bytes,
+        crate::staging::State::Waiting,
+        crate::staging::StageContext::default(),
+    );
+    let art = report.art.expect("stages");
+    let mut top: Vec<_> = art.placements.iter().filter(|p| p.rect.y < 60).collect();
+    top.sort_by_key(|p| (p.rect.x, p.rect.y));
+    for p in &top {
+        eprintln!(
+            "{} code={:08X} rect={},{},{}x{} role={:?}",
+            p.id, p.code, p.rect.x, p.rect.y, p.rect.w, p.rect.h, p.role
+        );
+    }
+    // pairwise overlap among top-row buttons
+    for (i, a) in top.iter().enumerate() {
+        for b in &top[i + 1..] {
+            let overlap_x =
+                a.rect.x < b.rect.x + b.rect.w as i32 && b.rect.x < a.rect.x + a.rect.w as i32;
+            let overlap_y =
+                a.rect.y < b.rect.y + b.rect.h as i32 && b.rect.y < a.rect.y + a.rect.h as i32;
+            if overlap_x && overlap_y {
+                eprintln!("OVERLAP {} vs {}", a.id, b.id);
+            }
+        }
+    }
+}
+
+#[test]
+fn probe_waiting_buttons_all() {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../install-root/O2Jam/Image/Interface1.opi");
+    let Ok(bytes) = std::fs::read(&path) else {
+        eprintln!("MISSING INSTALL");
+        return;
+    };
+    let report = crate::staging::stage_state(
+        &bytes,
+        crate::staging::State::Waiting,
+        crate::staging::StageContext::default(),
+    );
+    let art = report.art.expect("stages");
+    let mut all: Vec<_> = art.placements.iter().collect();
+    all.sort_by_key(|p| (p.rect.y, p.rect.x));
+    for p in &all {
+        if p.id.contains("BUTTON") || p.rect.y < 45 {
+            eprintln!(
+                "{} code={:08X} rect={},{},{}x{} role={:?}",
+                p.id, p.code, p.rect.x, p.rect.y, p.rect.w, p.rect.h, p.role
+            );
+        }
+    }
+}
+
+#[test]
+fn probe_waiting_right_side() {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../install-root/O2Jam/Image/Interface1.opi");
+    let Ok(bytes) = std::fs::read(&path) else {
+        return;
+    };
+    let report = crate::staging::stage_state(
+        &bytes,
+        crate::staging::State::Waiting,
+        crate::staging::StageContext::default(),
+    );
+    let art = report.art.expect("stages");
+    let mut all: Vec<_> = art.placements.iter().filter(|p| p.rect.x >= 600).collect();
+    all.sort_by_key(|p| (p.rect.y, p.rect.x));
+    for p in &all {
+        eprintln!(
+            "{} code={:08X} rect={},{},{}x{} role={:?}",
+            p.id, p.code, p.rect.x, p.rect.y, p.rect.w, p.rect.h, p.role
+        );
+    }
+    // all pairwise overlaps excluding the backdrop
+    let items: Vec<_> = art.placements.iter().filter(|p| p.rect.w < 800).collect();
+    for (i, a) in items.iter().enumerate() {
+        for b in &items[i + 1..] {
+            let ox = a.rect.x < b.rect.x + b.rect.w as i32 && b.rect.x < a.rect.x + a.rect.w as i32;
+            let oy = a.rect.y < b.rect.y + b.rect.h as i32 && b.rect.y < a.rect.y + a.rect.h as i32;
+            if ox && oy && a.id != b.id {
+                eprintln!("OVERLAP {} vs {}", a.id, b.id);
+            }
+        }
+    }
+}
