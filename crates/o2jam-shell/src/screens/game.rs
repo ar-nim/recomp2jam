@@ -4,7 +4,8 @@
 use std::collections::HashMap;
 
 use super::super::avatar::{
-    avatar_item_by_id, ojn_cover_figure, AvatarFigure, ScenePlacement, LOADING_COVER_SPRITE,
+    avatar_item_by_id, load_worn_figure, ojn_cover_figure, AvatarFigure, ScenePlacement,
+    LOADING_COVER_SPRITE,
 };
 use super::super::options::OptionsSettings;
 use super::super::playing::{HighwayGeometry, LivePlay, PlaySkin};
@@ -20,10 +21,10 @@ use super::paint::{
     paint_playing_overlay, paint_result, paint_result_scene, paint_room_chat, paint_room_list,
     paint_room_scene, paint_room_user_panel, paint_screen, paint_shop_board, paint_shop_scene,
     paint_waiting_chat, paint_waiting_members, paint_waiting_scene, paint_waiting_seat_avatar,
-    quit_fallback_rects, rect_hit, room_panel_hit, scene_index, staged_rect_hit, BattleVerdict,
-    ChannelChatMessage, LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt,
-    WaitingCaptions, WaitingChatMessage, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID,
-    RESULT_RETRY_RECT,
+    paint_waiting_seat_avatars, quit_fallback_rects, rect_hit, room_panel_hit, scene_index,
+    staged_rect_hit, BattleVerdict, ChannelChatMessage, LoadingStatus, ResultPaint, ResultRankRow,
+    ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage, RESULT_BACK_ID, RESULT_BACK_RECT,
+    RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::side::{
     can_return_side, can_visit_side, create_room_action_at, lanking_action_at, lanking_page_window,
@@ -73,7 +74,7 @@ use o2jam_net::rooms::{
 use o2jam_net::shop::{EquipItem, SyncItemPurchase, SyncMusicPurchase};
 use o2jam_net::wallet::SyncCashPointResponse;
 use o2jam_net::{
-    ChannelState, CharacterInfo, CreateRoom, Difficulty, JoinRoom, JoinedRoom, Ready,
+    ChannelState, CharacterInfo, CreateRoom, Difficulty, Gender, JoinRoom, JoinedRoom, Ready,
     RoomListEntry, RoomTeamChanged, SetRoomTeam,
 };
 use o2jam_render::font::{draw_text_cell, Cell};
@@ -642,6 +643,11 @@ pub struct ScreenGame {
     /// inventory, gifts, identity and cash captions (`None` until the
     /// session stages it).
     myroom_character: Option<CharacterInfo>,
+    /// Staged worn figure per waiting seat (seat 0 self, seats 1..7
+    /// wire peers): the same `avatar.opa` stack the Result banner and
+    /// the Room panel paint, keyed by seat so each occupied slot
+    /// paints its own member. `None` seats stay empty.
+    waiting_figures: [Option<AvatarFigure>; 8],
     /// Worn figure the Room lobby paints in its avatar slot
     /// (`IDC_IMAGE_SROOM_AVATA`): the same stack the binary builds from
     /// `avatar.opa` for the Result screen. `None` paints no figure.
@@ -971,6 +977,7 @@ impl ScreenGame {
             myroom: MyRoomState::new(),
             myroom_items: None,
             myroom_character: None,
+            waiting_figures: std::array::from_fn(|_| None),
             room_avatar: None,
             pending_equip: None,
             pending_gift_claim: None,
@@ -3365,6 +3372,60 @@ impl ScreenGame {
         self
     }
 
+    /// Stage one pre-stacked waiting figure, keyed by seat (seat 0
+    /// self, seats 1..=7 wire peers). Out-of-range seats are ignored;
+    /// empty figures stay home (`None` keeps the slot empty).
+    pub fn set_waiting_avatar(&mut self, seat: usize, figure: AvatarFigure) -> &mut Self {
+        if figure.is_empty() {
+            return self;
+        }
+        if let Some(slot) = self.waiting_figures.get_mut(seat) {
+            *slot = Some(figure);
+        }
+        self
+    }
+
+    /// Staged waiting figure of one seat (`None` while unstaged).
+    #[must_use]
+    pub fn waiting_avatar(&self, seat: usize) -> Option<&AvatarFigure> {
+        self.waiting_figures
+            .get(seat)
+            .and_then(|slot| slot.as_ref())
+    }
+
+    /// Stack one worn figure per occupied waiting seat from the
+    /// `avatar.opa` archive plus the item table, through the shared
+    /// [`load_worn_figure`] path (no fork: the same stacker the
+    /// MyRoom figure and the Result banner use). The self seat wears
+    /// the fetched character equipment, peers wear their wire
+    /// `RoomMember.equipment`; `Any` gender wears the female parity
+    /// (the connect slice's documented guess). Unresolvable pieces
+    /// stay empty — one bad sprite never blanks a seat. Without a
+    /// joined room this stages nothing.
+    pub fn stage_waiting_figures(&mut self, archive: &[u8], table: &AvatarItemTable) -> &mut Self {
+        let Some(room) = self.waiting.as_ref() else {
+            return self;
+        };
+        if let Some(character) = self.myroom_character.as_ref() {
+            let male = character.gender == Gender::Male;
+            let figure = load_worn_figure(archive, table, &character.equipment, male);
+            if !figure.is_empty() {
+                self.waiting_figures[0] = Some(figure);
+            }
+        }
+        for (offset, slot) in room.slots.iter().take(7).enumerate() {
+            let Some(member) = slot.member.as_ref() else {
+                continue;
+            };
+            let male = Gender::from_byte(member.gender) == Some(Gender::Male);
+            let figure = load_worn_figure(archive, table, &member.equipment, male);
+            if !figure.is_empty() {
+                self.waiting_figures[offset + 1] = Some(figure);
+            }
+        }
+        self
+    }
+
     /// Live avatar-room selection (slot pick, bag/gift pages+cursors).
     #[must_use]
     pub const fn myroom(&self) -> MyRoomState {
@@ -4408,7 +4469,10 @@ impl ScreenGame {
         match (self.scene_art(Screen::Waiting), &self.waiting) {
             (Some(art), Some(room)) => {
                 paint_waiting_scene(frame, room, art, &captions);
-                paint_waiting_seat_avatar(frame, &art.placements, self.room_avatar.as_ref());
+                paint_waiting_seat_avatars(frame, &art.placements, room, &self.waiting_figures);
+                if self.waiting_figures[0].is_none() {
+                    paint_waiting_seat_avatar(frame, &art.placements, self.room_avatar.as_ref());
+                }
                 paint_waiting_chat(frame, &self.waiting_chat, &self.chat_input, &art.placements);
             }
             (Some(art), None) => paint_lobby_backdrop(frame, Screen::Waiting, art),
@@ -6322,6 +6386,51 @@ mod game_tests {
             buf[(y + 1) as usize * 80 + (x - 6 + 1) as usize],
             pack_xrgb(0x30, 0xE0, 0x30)
         );
+    }
+
+    /// One solid test figure (a single red pixel layer).
+    fn waiting_test_figure() -> AvatarFigure {
+        use crate::avatar::FigureLayer;
+        let mut figure = AvatarFigure::default();
+        figure.push_layer(FigureLayer {
+            image: o2jam_render::Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap(),
+            dx: 0,
+            dy: 0,
+            colorkey: 0x0000,
+        });
+        figure
+    }
+
+    #[test]
+    fn waiting_avatar_slots_key_figures_by_seat() {
+        // Pre-stacked figures stage per seat: seats 0 and 1 hold,
+        // seat 7 stays empty, and seat 8 (past the eight) is ignored.
+        let mut game = ScreenGame::new();
+        game.set_waiting_avatar(0, waiting_test_figure())
+            .set_waiting_avatar(1, waiting_test_figure())
+            .set_waiting_avatar(8, waiting_test_figure());
+        assert!(game.waiting_avatar(0).is_some());
+        assert!(game.waiting_avatar(1).is_some());
+        assert!(game.waiting_avatar(7).is_none());
+        assert!(game.waiting_avatar(8).is_none());
+        // An empty figure never claims a slot.
+        game.set_waiting_avatar(2, AvatarFigure::default());
+        assert!(game.waiting_avatar(2).is_none());
+    }
+
+    #[test]
+    fn stage_waiting_figures_without_decodable_archive_stages_nothing() {
+        // The shared `load_worn_figure` path skips unresolvable
+        // pieces instead of failing: junk bytes stage no seat.
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        let table = o2jam_file::AvatarItemTable { rows: Vec::new() };
+        game.stage_waiting_figures(&[0x7F; 64], &table);
+        assert!((0..8).all(|seat| game.waiting_avatar(seat).is_none()));
+        // Without a joined room the stager is a no-op too.
+        let mut bare = ScreenGame::new();
+        bare.stage_waiting_figures(&[0x7F; 64], &table);
+        assert!((0..8).all(|seat| bare.waiting_avatar(seat).is_none()));
     }
 
     #[test]
