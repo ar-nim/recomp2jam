@@ -26,7 +26,10 @@ pub const OJN_PATCH_INDEX_ENTRY_LEN: usize = 8;
 ///
 /// The real 7.55 file holds 561 pairs (ids 886..100, sparse) in the
 /// same order as the patch records (docs/file-formats/ojn.md).
-/// Marker semantics are OPEN.
+/// Marker semantics: none — the only exe reader is the reader-district
+/// pair loop, whose count is the mid-region footer echo word `0` on the
+/// shipped file, so the body never executes (dead data, C40,
+/// `docs/ojnlist-trailer.md`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OjnPatchIndexEntry {
     /// Marker word (`OJN_PATCH_INDEX_MARKERS`).

@@ -347,8 +347,11 @@ table 4 → `+0x184/+0x188/+0x18c`, table 5 → `+0x190` (id echo) /
 Patch index `[195616, 200104)`: 561 × 8-byte pairs (`u32` marker +
 `u32` song id). Markers are `0x43f403` (74×) / `0x43f407` (487× +
 header); ids run 886..100 sparse (same gaps and order as the patch
-records below). Marker semantics OPEN. Implemented as
-`o2jam-file::parse_ojn_patch_index`.
+records below). DEAD DATA (C40, `docs/ojnlist-trailer.md`): the only
+reader is the reader-district pair loop, whose count is the mid-region
+footer's 8th word — `0` on the shipped file — so the body never
+executes; marker semantics are retired with it. Implemented as
+`o2jam-file::parse_ojn_patch_index` (format documentation).
 
 Patch section `[200104, 215848)`: 28-byte header `{marker 0x43f407,
 count 562, top id 887, date "2009-10-29", tag}` then 561 × 28-byte
@@ -356,9 +359,17 @@ records `{magic `;HD\0`, const `0xbd11` (48401), patch id,
 `YYYY-MM-DD\0`, 5-byte tag `77 30 f7 12 00`}` (ids 886..100, dates
 2003-10-31..2009-10-21, 222 distinct), then an 8-byte truncated tail
 (the 562nd slot: magic + const only, file ends mid-record).
-`count = full records + 1` for the partial slot. Implemented as
+`count = full records + 1` for the partial slot. DEAD DATA (C40,
+`docs/ojnlist-trailer.md`): the reader-district record loop reads its
+count from the footer echo word (`562`), starts at file offset 195612
+(12 bytes before the pairs), expects an older `{u32 id; char date[]}`
+record layout (per-record callee `FUN_0047b370` id-matches `record+0`
+then `strtol`-parses `record+4` into `song+0x164..+0x168`), passes its
+own gates zero times against the shipped bytes, and stops 500 bytes
+short of EOF — vestigial patch-apply code, the `;HD` manifest is
+updater-authored and never consumed by the 7.55 client. Implemented as
 `o2jam-file::parse_ojn_patch_section` (validates magic, const, date
-shape, tag, and the count).
+shape, tag, and the count; format documentation).
 
 Key-name table (exe `.rdata`, file `0x2454d8..0x2455dc`, 260 bytes) —
 DECODED (correction: not codes). It is 65 × `u32` VA pointers to
