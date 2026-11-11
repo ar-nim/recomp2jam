@@ -414,8 +414,10 @@ const SPLASH_AUTO_ADVANCE_MS: u64 = 5_000;
 ///
 /// Input wiring so far: any lane key or canvas click dismisses the
 /// splash onto the bare planet board, and the splash auto-advances
-/// there on its measured 5 s timer (ticket #24, guard:
-/// `splash_auto_advances_at_timeout`). The dismiss arms stay
+/// there on its measured 5 s hold (ticket #24, guard:
+/// `splash_auto_advances_at_timeout`). Windowed runs ride the wall
+/// clock for the hold (ticket #54, claims B38); the fixed-clock
+/// path stays the headless seam. The dismiss arms stay
 /// stand-ins: the exe set is only partly pinned (Escape dismisses
 /// within ~0.3 s, `~/scratch/avi-hold/run3-escape/`; Enter and Space
 /// show no fast dismiss on the isolated rig — `~/scratch/wt24-rig/`
@@ -452,6 +454,15 @@ pub struct ScreenGame {
     /// Virtual clock position while the fixed clock is enabled
     /// (paints × step; menus and Playing share it).
     fixed_now_ms: u64,
+    /// Splash hold in ms before the auto-advance (default
+    /// [`SPLASH_AUTO_ADVANCE_MS`]): tests set 0 for an instant
+    /// advance; production never changes it.
+    splash_hold_ms: u64,
+    /// Wall-clock instant the splash mounted (recorded on every Avi
+    /// entry, including boot): the windowed auto-advance rides the
+    /// wall clock (claims B38), never the song clock — a track that
+    /// stops at its end would otherwise freeze the splash.
+    avi_entered_wall: Option<std::time::Instant>,
     audio: Option<AudioRig>,
     avatar: Option<AvatarFigure>,
     channels: Vec<ChannelState>,
@@ -960,6 +971,8 @@ impl ScreenGame {
             song_rate: 44_100,
             fixed_clock_step_ms: None,
             fixed_now_ms: 0,
+            splash_hold_ms: SPLASH_AUTO_ADVANCE_MS,
+            avi_entered_wall: Some(std::time::Instant::now()),
             audio: None,
             avatar: None,
             channels: Vec::new(),
@@ -1211,6 +1224,32 @@ impl ScreenGame {
         self
     }
 
+    /// Test affordance: override the splash hold (0 advances on the
+    /// first paint, so wall-clock guards need no sleeps).
+    pub fn set_splash_hold_ms(&mut self, hold_ms: u64) -> &mut Self {
+        self.splash_hold_ms = hold_ms;
+        self
+    }
+
+    /// True while the wall hold since the Avi entry covered the
+    /// splash hold (claims B38: menus pace on the wall clock).
+    fn splash_wall_hold_reached(&self) -> bool {
+        self.avi_entered_wall
+            .is_some_and(|entered| entered.elapsed().as_millis() >= u128::from(self.splash_hold_ms))
+    }
+
+    /// Windowed splash auto-advance on the wall clock: skipped while
+    /// the fixed clock rules (the headless seam owns timing there),
+    /// so null-audio runs still reach Planet on the hold.
+    fn advance_splash_on_wall_clock(&mut self) {
+        if self.fixed_clock_step_ms.is_some() || self.flow.current() != Screen::Avi {
+            return;
+        }
+        if self.splash_wall_hold_reached() {
+            self.enter(Screen::Planet);
+        }
+    }
+
     /// Song position in ms from the audio backend's sample
     /// counter, anchored at Playing entry
     /// (`song_anchor_sample`) — strike timing, scroll, and gauge
@@ -1260,6 +1299,9 @@ impl ScreenGame {
         }
         let entered = self.flow.go(next).is_ok();
         if entered {
+            if next == Screen::Avi {
+                self.avi_entered_wall = Some(std::time::Instant::now());
+            }
             if next == Screen::Room {
                 self.room_dialog = None;
             }
@@ -4314,7 +4356,7 @@ impl ScreenGame {
             }
             return;
         }
-        if self.flow.current() == Screen::Avi && now_ms >= SPLASH_AUTO_ADVANCE_MS {
+        if self.flow.current() == Screen::Avi && now_ms >= self.splash_hold_ms {
             self.enter(Screen::Planet);
         }
         if self.flow.current() == Screen::Playing && self.playing.is_finished(now_ms) {
@@ -5432,6 +5474,7 @@ impl GameLoop for ScreenGame {
     }
 
     fn paint(&mut self, frame: &mut Frame<'_>) {
+        self.advance_splash_on_wall_clock();
         let now = self.now_ms();
         self.paint_at(frame, now);
         if let Some(step_ms) = self.fixed_clock_step_ms {
@@ -7928,6 +7971,23 @@ mod game_tests {
     fn splash_auto_advances_after_timeout() {
         let mut game = ScreenGame::new();
         paint_splash_frame(&mut game, SPLASH_AUTO_ADVANCE_MS + 1_000);
+        assert_eq!(game.screen(), Screen::Planet);
+    }
+
+    #[test]
+    fn zero_hold_advances_on_first_windowed_paint() {
+        // Ticket #54: the windowed auto-advance rides the wall
+        // clock, so a zero hold leaves the splash on the first
+        // windowed paint even with no audio and no fixed clock.
+        let mut game = ScreenGame::new();
+        game.set_splash_hold_ms(0);
+        assert_eq!(game.screen(), Screen::Avi);
+        let mut buf = vec![0u32; 16 * 12];
+        game.paint(&mut Frame {
+            buf: &mut buf,
+            w: 16,
+            h: 12,
+        });
         assert_eq!(game.screen(), Screen::Planet);
     }
 
