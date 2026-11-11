@@ -194,8 +194,80 @@ One call per qualifying member from the fill (sites `0xc3579` solo,
 | `+ %d` | 626 | record +0x2164 |
 | Speed `X 0.5`…`X R` | 685 | record +0x2168 through a fixed table |
 
-The avatar is picked from the eight `this+0x5c` slots by the avatar id
-byte at record +0x31 and drawn before the text. (`ev_88c3ca31…`)
+The per-row portrait object is picked from the eight `this+0x5c` slots
+by the byte at record +0x31 and attached before the text draws. The
+convention is pinned in the next section — the "avatar id byte" naming
+above is a misnomer (the byte is the 4043 seat byte, and the picked
+object is a constant, not the member's worn avatar).
+
+## Peer-row portraits — the member→portrait convention (#85, 2026-11-12)
+
+Static re-verification over the local 7.55 copy (read-only; own words,
+file offsets; GNU objdump 2.47 slices + python3 3.14 byte scans; no REA
+dossier filed, ids below are local-static record ids). The 2026-11-12
+pass pins the convention D21 left open and corrects the "avatar id
+byte" naming carried by this file and claim D21.
+
+**Pick mechanism (row painter `FUN_004c3b40`).** Per member, the painter
+reads the record byte at +0x31, zero-extends it, and uses it as a
+1-based, unguarded index into the 8-pointer array at `this+0x5c`
+(`mov -0x4(%edx,%eax,4)`, files `0xc3be2`–`0xc3bfe`): byte value 1
+picks element 0, value 8 picks element 7, and value 0 would read the
+pointer just below the array (no guard exists). The picked object is
+stored into the member's row object (`this+0x60[3+member]`) at
+`rowobj+0x8` by helper `0x42fd50` (store at file `0x2fd5d`), then the
+row draws through `0x42f040`. (`ev_d7951a4cd28ea5705eac06fb0b144622…`)
+
+**What the eight slots hold (builder `FUN_004c2390`).** All eight are
+the same image-less sprite subclass (vtable `0x6444d8`, ctor
+`0x420b00`) created through the `0x40d100` null-name early-exit path
+(files `0xd140`–`0xd148`, `0xd338`–`0xd37c`) — no archive body is ever
+loaded into them. Each slot is parameterized only by a constant u16
+from the 8-entry table at `this+0x10cec`, pushed through
+`0x421610(obj, entry, 22)`: `obj+0x15c = entry`,
+`obj+0x15e = trunc(22/100·256) = 56`, `obj+0x160 = 0.22f` (f64
+constants 100.0 at `0x644548`, 256.0 at `0x644540`; files
+`0x2161c`–`0x21688`). The subclass draw path consumes `+0x15c` as a
+paint argument (`mov 0x15c(%ecx),%dx` file `0x2260f`, passed on to
+`0x421cf0`). (`ev_62d866b05c807a33d3a6e5870bbe95e9…`)
+
+**The table is mode-selected, not member-selected.** The builder picks
+the table by the display mode word `0x415cc0([0x76816c+0x80])` (field
+`+0x24`; getter file `0x15d2a`): mode `0xf` writes
+`{0x7c02,0x7ee2,0x7be0,0x4f2a,0x37bc,0x1c,0x4d5a,0x5923}` (files
+`0xc245d`–`0xc24b8`); mode `0x10` writes
+`{0xf802,0xfde2,0xf7e0,0x9e6a,0x6f5c,0x1c,0x9a9a,0xb263}` (files
+`0xc24bf`–`0xc251a`); any other mode writes neither (the table keeps
+its prior contents). Every member sharing a byte value gets the same
+object; no member field beyond +0x31 reaches these slots.
+(`ev_ccdb467952bcce38088794a55f94ace7…`)
+
+**The byte doubles as the battle team bucket.** `FUN_004c49a0` reads
+the same byte as `this+0x9d + member·0x2190` over the member-table
+copy the builder bulk-copied from `0x77ee90` (copy base `this+0x6c`,
+since `0x9d − 0x31 = 0x6c` and `0x6c + 8·0x2190 = 0x10cec` lands
+exactly on the table above): byte 0 skips the member (file `0xc4a87`),
+otherwise bucket `byte − 1` (shift 5) selects one of eight per-team
+records at `this+0x10d34` (files `0xc4a70`–`0xc4b20`) and sums the
+score dwords at copy-relative `+0x2158`/`+0x2160` per bucket (files
+`0xc4b5d`–`0xc4b7a`). (`ev_722e6a83cbc698ac0b62b85baa9ba6bf…`)
+
+**Convention verdict (D21 resolved).** The result painter never joins
+member equipment (or any member data) to an avatar figure: the
+per-row portrait is the constant, image-less slot object at index
+`record+0x31 − 1`, where `+0x31` is the first 4043 `MemberInfo` seat
+byte (`docs/relay.md` §10, reader file `0x159dbc` → helper `0x140d40`,
+1 B) that `FUN_004c49a0` simultaneously uses as its 1-based team
+bucket. "Seat/team byte picks a constant row chip" replaces the
+"avatar id byte" naming; a member's worn equipment figure is not read
+on this path. Contradiction with the shell (which paints the local
+worn figure at row 0, `paint.rs paint_result_avatar`) is documented,
+not silently resolved: the exe attaches the constant slot object for
+every row including row 0. What the slot object renders (color chip,
+gauge, or nothing visible — its body is empty and only `+0x15c/+0x15e`
+/`+0x160` carry data) stays OPEN: next step a read of the
+`0x6444d8`-vtable draw path (`0x421cf0` family) or one rig capture of
+a populated battle row.
 
 ## Block rects — `State_Result.bnd` (shell cross-reference)
 
