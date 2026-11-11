@@ -58,8 +58,8 @@ use o2jam_net::{
 };
 use o2jam_render::font::{draw_text_cell, text_width_cell, Cell};
 use o2jam_render::{
-    blit_rgb555, blit_rgb555_clipped, draw_number, draw_text, fill_rect, number_width, pack_xrgb,
-    scale_rect_to_frame, text_width, Frame, Rect, Rgb555Image, NATIVE_HEIGHT, NATIVE_WIDTH,
+    blit_rgb555, draw_number, draw_text, fill_rect, number_width, pack_xrgb, scale_rect_to_frame,
+    text_width, Frame, Rect, Rgb555Image, NATIVE_HEIGHT, NATIVE_WIDTH,
 };
 
 /// Gameplay block: real UI lives in `Playing1.opi` (235 entries,
@@ -1604,6 +1604,21 @@ fn paint_planet_hover(frame: &mut Frame<'_>, art: &SceneArt, hover: Option<Plane
     let Some(action) = hover else {
         return;
     };
+    // Static QUEST/TUTORIAL plates: exe-verified no highlight.
+    let (layer_index, clip) = match action {
+        PlanetAction::Emblem { band: None } => return,
+        // Plate reveal: layer 0 clipped to the pinned band rect.
+        PlanetAction::Emblem { band: Some(band) } => (0, Some(planet_plate_rect(band))),
+        // The one true frame swap: hover arms frame 1 (frame 0
+        // stands in when the body stages a single frame).
+        PlanetAction::Promo {
+            cell: PlanetPromo::Stop,
+        } => (playstop_hover_layer(art, action), None),
+        // Dimmed-rest buttons: hover restores frame 0 at full colour.
+        PlanetAction::QuitConfirm | PlanetAction::OptionsDialog | PlanetAction::Promo { .. } => {
+            (0, None)
+        }
+    };
     let Some(placement) = art
         .placements
         .iter()
@@ -1611,59 +1626,37 @@ fn paint_planet_hover(frame: &mut Frame<'_>, art: &SceneArt, hover: Option<Plane
     else {
         return;
     };
-    let Some(figure) = placement
+    let shared = shared_sprite_names(&art.placements);
+    let shares_body = placement
         .sprite
-        .as_ref()
-        .and_then(|sprite| art.figures.get(sprite))
-    else {
-        return;
-    };
-    match action {
-        // Static QUEST/TUTORIAL plates: exe-verified no highlight.
-        PlanetAction::Emblem { band: None } => {}
-        // Plate reveal: layer 0 clipped to the pinned band rect.
-        PlanetAction::Emblem { band: Some(band) } => {
-            if let Some(layer) = figure.layer(0) {
-                blit_planet_hover_layer(frame, layer, Some(planet_plate_rect(band)));
-            }
-        }
-        // The one true frame swap: hover arms frame 1 (frame 0
-        // stands in when the body stages a single frame).
-        PlanetAction::Promo {
-            cell: PlanetPromo::Stop,
-        } => {
-            if let Some(layer) = figure.layer(1).or(figure.layer(0)) {
-                blit_planet_hover_layer(frame, layer, None);
-            }
-        }
-        // Dimmed-rest buttons: hover restores frame 0 at full colour.
-        PlanetAction::QuitConfirm | PlanetAction::OptionsDialog | PlanetAction::Promo { .. } => {
-            if let Some(layer) = figure.layer(0) {
-                blit_planet_hover_layer(frame, layer, None);
-            }
-        }
-    }
+        .as_deref()
+        .is_some_and(|sprite| shared.contains(sprite));
+    paint_placement_layer(
+        frame,
+        placement,
+        &art.figures,
+        layer_index,
+        shares_body,
+        clip,
+    );
 }
 
-/// Blit one staged hover layer at its record anchor (the same
-/// anchored positioning the rest stack uses), optionally clipped to
-/// a native rect (the emblem plate reveal). Positions scale into
-/// the frame like every other painter; nothing paints on a
-/// zero-size frame.
-fn blit_planet_hover_layer(frame: &mut Frame<'_>, layer: &FigureLayer, clip_native: Option<Rect>) {
-    if frame.w == 0 || frame.h == 0 {
-        return;
+/// Frame index the PLAYSTOP hover arms: 1 while the staged body
+/// carries a second frame, else 0 (a single-frame stage has no swap
+/// to show, so the hover keeps the rest frame).
+fn playstop_hover_layer(art: &SceneArt, action: PlanetAction) -> usize {
+    let has_second_frame = art
+        .placements
+        .iter()
+        .find(|placed| planet_action_for_code(placed.code) == Some(action))
+        .and_then(|placement| placement.sprite.as_ref())
+        .and_then(|sprite| art.figures.get(sprite))
+        .is_some_and(|figure| figure.layer(1).is_some());
+    if has_second_frame {
+        1
+    } else {
+        0
     }
-    let (dx, dy) = anchor_in_frame(layer.dx, layer.dy, frame.w, frame.h);
-    let clip = clip_native.map(|rect| scale_rect_to_frame(&rect, frame.w, frame.h));
-    blit_rgb555_clipped(
-        frame,
-        &layer.image.view(),
-        dx,
-        dy,
-        Some(layer.colorkey),
-        clip.as_ref(),
-    );
 }
 
 /// Dialog origin (native px) of a staged `DIALOG_*` block: the
@@ -2952,7 +2945,7 @@ fn paint_room_hover(frame: &mut Frame<'_>, art: &SceneArt, hovered_code: Option<
         .sprite
         .as_deref()
         .is_some_and(|sprite| shared.contains(sprite));
-    paint_placement_layer(frame, placed, &art.figures, 0, shares_body);
+    paint_placement_layer(frame, placed, &art.figures, 0, shares_body, None);
 }
 
 /// Room user-panel control ids (`STATE_ROOM` text/image wells; the

@@ -216,10 +216,12 @@ Shell (ticket #26): `GameLoop::hovered_planet_action` resolves the
 control under the pointer through the staged dispatch table
 (ticket #33's pointer state, no second store; silent off-board, off-
 phase, and behind a modal), and `paint_planet_hover` repaints the
-pinned pixels over the untouched rest stack — emblem layer 0
-clipped to `PLANET_EMBLEM_{EASY,NORMAL,HARD}_PLATE_RECT`, discs and
-arrows layer 0 whole, PLAYSTOP layer 1 (fallback layer 0), static
-plates nothing, missing art nothing. Unhover clears by repaint.
+pinned pixels over the untouched rest stack through the shared
+`paint_placement_layer` hover painter (ticket #33, extended with
+the plate clip) — emblem layer 0 clipped to
+`PLANET_EMBLEM_{EASY,NORMAL,HARD}_PLATE_RECT`, discs and arrows
+layer 0 whole, PLAYSTOP layer 1 (fallback layer 0), static plates
+nothing, missing art nothing. Unhover clears by repaint.
 Guards: `hovered_planet_action_tracks_pointer_motion`,
 `planet_hover_stays_off_while_a_modal_owns_the_board`,
 `playstop_hover_arms_the_frame_swap_cell`,
