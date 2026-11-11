@@ -50,7 +50,10 @@ dialog, select-music dialog with staged rows (`Bach Alive`,
    preferred Wayland over `DISPLAY`. Fixed in-driver (drop Wayland
    vars, `WINIT_UNIX_BACKEND=x11`); the owner clicking the escaped
    window accidentally proved real-window routing (planet → channel
-   → room advanced on genuine OS input). Next step: none — contained
+   → room advanced on genuine OS input). Launch hygiene now lives in
+   one place — `scripts/rig-run.sh` (refuses `:98`, the caller's own
+   `DISPLAY`, and a leaked Wayland env; starts Xvfb when absent;
+   PID-file stop that never pattern-kills). Next step: none — contained
    since run 4, verified in run 7.
 4. **2026-11-06 token dead** (`AuthController: Invalid token`) —
    server-side expiry, not a client regression. Next step: read the
