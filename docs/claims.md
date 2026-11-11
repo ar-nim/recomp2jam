@@ -30,8 +30,8 @@ Short forms live in `GLOSSARY.md`. Normative forms:
 | EXE | 109 |
 | DATA | 19 |
 | ASSUMED | 12 |
-| OPEN | 4 |
-| Total | 144 |
+| OPEN | 10 |
+| Total | 150 |
 
 ## The pairing-rule family (known mistake + siblings)
 
@@ -169,6 +169,11 @@ index (all-zero rect, slot 0, default arm).
 | B43 | Peer life/jam mirror + rank remap broadcast from 4015 (deliver via `0x5414a0`) | EXE | `0x15fa20` chain, ev `0ff34c44…` (Ghidra) | R+G | PLAY.COMP, PLAY.GAME, PLAYING.COMP, PLAYING.GAME, RESULT.COMP |  |
 | B44 | `Sound` volumes read/write `option.ini` (GameBGVolume `+0x68`, NoteKeyVolume `+0x36164`, NoteBGVolume `+0x36168`, BGVolume `+0x3616c`; all default 255) | EXE | `OTwo.exe` md5 `34b789ff…`, objdump 2.47, 2026-11-10: reads file `0x14bb45`/`0x151587`/`0x1516d7`/`0x1517a7` (`GetPrivateProfileIntA` IAT `0x63f268`, section `Sound` VA `0x64cd7c`, file `option.ini` VA `0x645234`); writers file `0x14badb`/`0x151475`/`0x1515fe`/`0x151745` (`WritePrivateProfileStringA` IAT `0x63f26c`, same names); slider↔key map OPEN (ours-by-design) | R | PLANET.INPUT, PLAY.MUSIC |  |
 | B45 | `MODE`/`Mode` (def 0 → `+0xa34`), `NoteScreen`/`BlendHalf` (def 3 → `+0xa3c`), `NOTE`/`NoteTail` (def 2, clamp 0–4 → `0x67feac`, 5-slot table `0x67fe8c`), `NOTE`/`NoteType` (def 0, clamp 0–2 → `+0xeb4`), `LONGNOTEMODE`/`LongnoteMode` (`Option.ini`, def 3 → play `+0x17d8`); writers mirror the same names | EXE | `OTwo.exe` md5 `34b789ff…`, objdump 2.47, 2026-11-10: reads file `0x1a46e0`/`0x1a4798`/`0x16bf47`/`0x1713c7`/`0x16fb06`; Mode 1/2 arms drive the window apply (file `0x3a06c`); string-path twins force Mode 2 / BlendHalf 1; writers file `0x16bfd0`/`0x171447`/`0x1a4726`/`0x1a47de`/`0x3a6e8`-family/`0x1435xx` (KEY_n); button→value orders OPEN | R | PLANET.INPUT, PLAY.COMP |  |
+| B46 | Long-note combo path: whether hold heads, tails, and bonus ticks feed the combo counter `+0x3972` (B10) the same arms as regular notes | OPEN | combo adder `0x141620` caller survey across the long-note judge arms not filed; judgement sites `0x576691+`/`0x576be0+`/`0x576eaa+` named as the first trace targets; next step: REA dossier of the combo-writer callers naming which long-note ratings increment `+0x3972` (tick bonus +1 combo is pinned by B11, its cap behavior is not) | G | PLAYING.GAME |  |
+| B47 | Rating-event sink `+0xa14`: per-code semantics of the 16-way dispatcher (event codes 1/9/14 observed at judgement sites) | OPEN | attach `0x56e170` at song-load (`0x570325`←`0x4dba..`), detach on chart reload `0x1717cc`, jump-table dispatcher; next step: REA dossier of the 16 dispatcher arms naming the HUD/state writer each code drives | G | PLAYING.GAME |  |
+| B48 | Grade mapping: score→grade rule; grade strings `0x247363+` provably code-unreferenced (B4) so any mapping is data- or art-side, mechanism untraced | OPEN | next step per ADR-0009: negative-evidence sweep (structural sweep + named paths over the result builder district `FUN_004c2390` file `0xc2390`) or a live rig capture of the grade plate at controlled score bands | R+G | RESULT.GAME |  |
+| B49 | Pill/jam-score shop earn flow: shop-side readers of the pill stock `+0x398c`/jam words `+0x396e` untraced (earn and spend rules themselves VERIFIED, B5–B6) | OPEN | next step: REA trace of shop-state writers reading the pill/jam words plus a live gateway replay of the earn flow | G | PLAYING.GAME, SHOP.GAME |  |
+| B50 | OJN hold-flag (bit 26) runtime semantics: recorded test sites `0x172a4f`/`0x173061` never fire on shipped payloads; judge-invisibility pinned by B14 | OPEN | per ADR-0009 a negative-evidence close needs a structural sweep + named paths: full-image sweep for bit-26 tests beyond the judge region (`0x5703f0`–`0x578300`) plus a synthetic bit-26 chart through the parser fix-up `0x572f50` naming the strike-slot `+0x3E8` consumer's observable effect; next step: that sweep + synthetic replay | G | PLAYING.GAME |  |
 
 ## C. File formats
 
@@ -237,6 +242,7 @@ index (all-zero rect, slot 0, default arm).
 | D18 | Live-state 4042–4045 shapes incl. `MemberInfo` tail order | EXE | `0x159b50`/`0x18cf50` chains | G | WAIT.TRANS, WAITING.GAME |  |
 | D19 | Endpoints: FTP hosts, gateway IP/port, web/registry strings | EXE | string table `0x24b9c0`–`0x2514f0`; contents re-verified 2026-11-07 from bytes: gateway IPs `121.125.76.136`/`.135` at file `0x24b9c0`+, `O2JAM_MUSIC_FTP`/`O2JAM_DUMP_FTP` hosts, `15010` port string, registry `SOFTWARE\\NOWCOM\\O2Jam` | — | — |  |
 | D20 | Authorize 1000 payload order (token, gender string, marker, clientId) | ASSUMED | Memoryer order; exe byte-proof open; negative *(offset-only)*: image-wide scans find no 1000 send staging — all 46 `push 0x3E8` sites are non-packet uses (e.g. ReadFile size VA `0x5acd82`, tick timeout VA `0x5b71c9`), and the only 9 direct `SetID` (file `0x1a0550`) callers are the relay ctor family (files `0xea4f4`/`0x16dff4`/`0x16e094`/`0x18622c`/`0x18ca74`/`0x18cc64`/`0x18e114`/`0x18e1f4`/`0x1a0423`; re-verified 2026-11-07 — 46 `push $0x3E8` sites image-wide, same 9 callers; caller set re-verified 2026-11-07 — exactly 9 `call 0x5a0550`, VAs match the listed files); unflippable — no 1000-send staging exists to pin the payload order | G | — |  |
+| D21 | Result peer-row avatar: the member→avatar-id byte rides server-side; the client-side byte→figure convention is unpinned | OPEN | member table stride `0x2190` base `0x77ee90` (D16) read on the result row painter path; next step: gateway replay pinning the member→avatar convention (proxy-rewrite recipe `~/scratch/digits-rig/proxy.py`) plus a rig capture of a populated battle row | R+G | RESULT.COMP |  |
 
 ## Top-6 risky claims (visible behavior on the weakest evidence)
 
