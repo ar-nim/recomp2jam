@@ -3154,11 +3154,20 @@ impl ScreenGame {
         let peers = self.playing.peers();
         let room = self.waiting.as_ref();
         let speed = room.map(|joined| joined.speed);
-        let mut names = vec!["YOU".to_owned()];
+        let mut names: Vec<(String, Option<u8>)> = vec![("YOU".to_owned(), None)];
         if let Some(joined) = room {
             for slot in joined.slots.iter().take(7) {
                 if let Some(member) = slot.member.as_ref() {
-                    names.push(member.nickname.clone());
+                    // The member record +0x31 the row painter reads
+                    // is the first 4043 MemberInfo seat byte; the
+                    // shell stages no 4043 table, so the joined
+                    // room's team byte rides in its place, raw. The
+                    // waiting-room team rides 0–7 while the 4043
+                    // byte is consumed 1-based (byte 0 = team-bucket
+                    // skip): whether the result copy already holds
+                    // 1-based bytes stays OPEN (next step: populated
+                    // battle-row capture, docs/cresult-anchors.md).
+                    names.push((member.nickname.clone(), Some(member.team)));
                 }
             }
         }
@@ -3167,7 +3176,7 @@ impl ScreenGame {
             .into_iter()
             .take(8)
             .enumerate()
-            .map(|(position, name)| {
+            .map(|(position, (name, seat_byte))| {
                 let local = position == 0;
                 ResultRankRow {
                     rank: Self::result_row_rank(peers, position, row_count),
@@ -3177,6 +3186,13 @@ impl ScreenGame {
                     score: local.then_some(Self::saturate_rank_score(score.points)),
                     bonus: local.then_some(bonus_points),
                     speed,
+                    // The local row's +0x31 writer is unpinned (the
+                    // shell stages no local member record): row 0
+                    // resolves no chip until a source lands — the
+                    // exe attaches a constant slot per row, so this
+                    // only gates the unpinned local byte, never a
+                    // worn figure (OPEN, docs/cresult-anchors.md).
+                    seat_byte,
                 }
             })
             .collect()
@@ -4984,17 +5000,24 @@ impl ScreenGame {
     /// Results: staged art (`StateResult_Top/Bottom.ojs` plus
     /// `Result_WinLose.ojs` via `FUN_004c2390`, file `0xc2390`) behind
     /// the exe-selected verdict banner and grade plate frames, the
-    /// avatar figure, the pinned GDI numbers from the live score,
-    /// and the rank rows from live peers plus room names. The played
-    /// song's album cover paints into the music-name box when it
-    /// resolved (see [`Self::resolve_song_cover`]).
+    /// pinned GDI numbers from the live score, the rank rows from
+    /// live peers plus room names, and the per-row portrait-chip
+    /// resolution. The played song's album cover paints into the
+    /// music-name box when it resolved (see [`Self::resolve_song_cover`]).
     fn paint_result(&self, frame: &mut Frame<'_>) {
         let album = self.song_cover.as_ref();
         match self.scene_art(Screen::Result) {
             Some(art) => paint_result_scene(
                 frame,
                 &ResultPaint {
-                    avatar: self.avatar.as_ref(),
+                    // The eight constant slots build from the
+                    // display-mode word (0xf/0x10 select the table);
+                    // the shell pins no live source for that word
+                    // (getter file `0x15d2a`), so no table stages and
+                    // no chip paints — the exe likewise writes no
+                    // table for other modes (OPEN,
+                    // docs/cresult-anchors.md).
+                    portrait_slots: None,
                     score: self.playing.score(),
                     rows: &self.result_rank_rows(),
                     art,
@@ -5013,10 +5036,10 @@ impl ScreenGame {
             ),
             None => paint_result(
                 frame,
-                self.avatar.as_ref(),
                 self.playing.score(),
                 &self.result_rank_rows(),
                 album,
+                None,
             ),
         }
     }
@@ -5904,10 +5927,10 @@ mod game_tests {
         assert!(game.playing.drain_sounds().is_empty());
     }
 
-    #[test]
-    fn result_paints_loaded_avatar_at_the_row_slot() {
+    /// 2x1 sprite-55 figure, transparent black then red: the worn
+    /// avatar the result screen must ignore per the exe convention.
+    fn tiny_avatar_sprite() -> AvatarFigure {
         use o2jam_file::{parse_sprite55, SPRITE55_MAGIC};
-        // 2x1 sprite-55: transparent black, then red.
         let mut blob = Vec::new();
         blob.extend_from_slice(&1u16.to_le_bytes());
         blob.extend_from_slice(&SPRITE55_MAGIC.to_le_bytes());
@@ -5921,8 +5944,54 @@ mod game_tests {
         blob.extend_from_slice(&0u32.to_le_bytes());
         blob.extend_from_slice(&[0x00, 0x00, 0x00, 0x7C]);
         let sprite = parse_sprite55(&blob).unwrap();
+        AvatarFigure::from_sprite55(&sprite)
+    }
+
+    #[test]
+    fn result_rows_carry_the_peer_seat_byte_for_portrait_chips() {
+        // The row painter's record +0x31 (first 4043 MemberInfo seat
+        // byte) rides the joined room's team byte in the shell, raw
+        // (docs/cresult-anchors.md, "Peer-row portraits"): occupied
+        // peer seats feed `seat_byte`, the local row stays `None`
+        // until a local-record writer is pinned, and the battle-skip
+        // zero travels through untouched.
         let mut game = ScreenGame::new();
-        game.load_avatar(AvatarFigure::from_sprite55(&sprite));
+        let mut room = waiting_room();
+        room.slots[0].member.as_mut().unwrap().nickname = "HOST".to_owned();
+        room.slots[0].member.as_mut().unwrap().team = 3;
+        let zero = {
+            let mut member = room.slots[0].member.clone().expect("occupied seat");
+            member.nickname = "ZERO".to_owned();
+            member.team = 0;
+            member
+        };
+        room.slots.push(RoomSlot {
+            index: 1,
+            state_code: 1,
+            member: Some(zero),
+        });
+        game.waiting = Some(room);
+        let rows = game.result_rank_rows();
+        assert_eq!(rows[0].seat_byte, None, "local record byte OPEN");
+        assert_eq!(rows[1].seat_byte, Some(3));
+        assert_eq!(
+            rows[2].seat_byte,
+            Some(0),
+            "battle-skip zero passes through"
+        );
+        assert_eq!(rows.len(), 3, "only occupied seats feed rows");
+    }
+
+    #[test]
+    fn result_screen_ignores_the_worn_figure_per_the_exe_convention() {
+        // The exe attaches a constant slot object for EVERY row and
+        // never reads worn equipment on this path (the eight slots
+        // are image-less; what they render stays OPEN) — the shell's
+        // row-0 worn avatar was the documented deviation: a staged
+        // avatar figure walks the whole session without ever inking
+        // the result frame.
+        let mut game = ScreenGame::new();
+        game.load_avatar(tiny_avatar_sprite());
         for next in [
             Screen::Planet,
             Screen::Channel,
@@ -5934,9 +6003,6 @@ mod game_tests {
         ] {
             game.flow.go(next).unwrap();
         }
-        // 256x256 result: the exe row-0 slot (78,316) scales to
-        // (24,134); the red pixel lands one right of the slot
-        // origin, the slot origin itself keeps the background.
         let mut buf = vec![0u32; 256 * 256];
         game.paint_at(
             &mut Frame {
@@ -5946,8 +6012,10 @@ mod game_tests {
             },
             0,
         );
-        assert_eq!(buf[134 * 256 + 25], pack_xrgb(255, 0, 0));
+        // The exe row-0 slot region (78,316 → (24,134) at 256x256)
+        // keeps the flat card: no worn-figure pixel lands there.
         assert_eq!(buf[134 * 256 + 24], pack_xrgb(0x10, 0x10, 0x08));
+        assert_eq!(buf[134 * 256 + 25], pack_xrgb(0x10, 0x10, 0x08));
     }
 
     /// Dismiss the splash onto the bare board, then open the dialog
