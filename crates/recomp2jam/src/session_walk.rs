@@ -155,7 +155,7 @@ pub fn drive_walk(config: &WalkConfig) -> Result<Vec<WalkStage>> {
         ],
     });
     run_song_select(&mut session, config)?;
-    stage_performance_art(session.game_mut());
+    stage_performance_art(session.game_mut(), config.difficulty);
     paint_stage(&mut session, STAGE_NAMES[4], 0, &config.out_dir)?;
     stage_select_music_art(session.game_mut());
     paint_stage(&mut session, STAGE_NAMES[5], 0, &config.out_dir)?;
@@ -341,7 +341,7 @@ fn stage_interface_archive(game: &mut ScreenGame, archive: &[u8]) {
 /// siblings, and the note-background/life-gauge/buffer-bar families
 /// stage the room mode's members. The walk rooms play solo, so the
 /// room's own team word selects the members.
-fn stage_playing_archive(game: &mut ScreenGame, archive: &[u8]) {
+fn stage_playing_archive(game: &mut ScreenGame, archive: &[u8], chart_slot: u8) {
     if let Some(art) = stage_state(archive, State::Loading, StageContext::default()).art {
         game.load_scene(Screen::Loading, art.placements, art.figures);
     }
@@ -349,6 +349,7 @@ fn stage_playing_archive(game: &mut ScreenGame, archive: &[u8]) {
         arena_stage: Some(game.arena_stage()),
         key_mode: game.room_key_mode(),
         team_play: game.room_team_play(),
+        chart_slot,
     };
     let Some(art) = stage_state(archive, State::Playing, ctx).art else {
         return;
@@ -380,9 +381,9 @@ fn stage_lobby_art(game: &mut ScreenGame) {
 /// the joined room names its arena stage and key mode, so the venue
 /// and gauge families resolve through the walk's own room word.
 /// Missing or unreadable archives keep the bare paint; never fails.
-fn stage_performance_art(game: &mut ScreenGame) {
+fn stage_performance_art(game: &mut ScreenGame, chart_slot: u8) {
     if let Some(archive) = read_install_archives(&install_root()).playing {
-        stage_playing_archive(game, &archive);
+        stage_playing_archive(game, &archive, chart_slot);
     }
 }
 
@@ -730,7 +731,7 @@ mod session_walk_tests {
         session.menu_key(MenuKey::Confirm, true);
         require_screen(&session, Screen::Waiting, "room enter")?;
         run_song_select(&mut session, config)?;
-        stage_performance_art(session.game_mut());
+        stage_performance_art(session.game_mut(), config.difficulty);
         send_start_and_drain(&mut session)?;
         confirm_loaded(&mut session)?;
         Ok(session)
@@ -762,7 +763,7 @@ mod session_walk_tests {
         // staging entry never fails and never walks the flow.
         let mut game = ScreenGame::new();
         stage_lobby_art(&mut game);
-        stage_performance_art(&mut game);
+        stage_performance_art(&mut game, 0);
         stage_select_music_art(&mut game);
         assert_eq!(game.screen(), Screen::Avi);
     }
@@ -828,6 +829,7 @@ mod session_walk_tests {
             arena_stage: Some(1),
             key_mode: 1,
             team_play: false,
+            chart_slot: 0,
         };
         let staged = stage_state(&playing, State::Playing, ctx);
         assert!(

@@ -923,6 +923,54 @@ pub const PLAYING_BEHIND_SPRITES: [&str; 5] = [
     "P2P7KeyNote_BG.ojs",
 ];
 
+/// The BACK1 control code (`IDC_IMAGE_SPLAY_BACK1`, `0x1B500071`):
+/// the Playing setup re-stages this control onto a mode-family
+/// full-screen backdrop at runtime (the synthetic staging records
+/// built on the stack through the factory `0x48B2D0`,
+/// `docs/playing-backdrop.md`), so the shell synthesizes its
+/// placement with the same code.
+pub const PLAYING_BACKDROP_CODE: u32 = 0x1B500071;
+
+/// Runtime-built BACK1 backdrop name for the room mode and chart
+/// slot: the exe setup sprintf's `Playing_NormalBG%d.ojs` (solo),
+/// `Playing_P2PBG%d.ojs` (team), or `Playing_TutorialBG.ojs`
+/// (tutorial) with `%d = chart_index % 3`, a zero remainder taking 3
+/// (file `0x4dc79f`–`0x4dc7bb`; the caller's arg semantic stays
+/// OPEN — the walk feeds its chart slot, `docs/playing-backdrop.md`).
+/// The solo/team families number 1..=3 / 1..=2 in the archive; the
+/// shell has no tutorial arm.
+#[must_use]
+pub fn playing_backdrop_sprite(team_play: bool, chart_slot: u8) -> String {
+    let variant = match chart_slot % 3 {
+        0 => 3,
+        remainder => remainder,
+    };
+    if team_play {
+        format!("Playing_P2PBG{variant}.ojs")
+    } else {
+        format!("Playing_NormalBG{variant}.ojs")
+    }
+}
+
+/// True for a runtime-built BACK1 backdrop body: the solo/team
+/// numbered families plus the tutorial body. These names appear in
+/// no ControlList — the exe builds them at runtime — so membership
+/// is by shape, like `is_playing_behind_sprite`.
+#[must_use]
+pub fn is_playing_backdrop_sprite(sprite: &str) -> bool {
+    sprite == "Playing_TutorialBG.ojs"
+        || (sprite.starts_with("Playing_NormalBG")
+            && sprite.ends_with(".ojs")
+            && sprite["Playing_NormalBG".len()..sprite.len() - 4]
+                .bytes()
+                .all(|byte| byte.is_ascii_digit()))
+        || (sprite.starts_with("Playing_P2PBG")
+            && sprite.ends_with(".ojs")
+            && sprite["Playing_P2PBG".len()..sprite.len() - 4]
+                .bytes()
+                .all(|byte| byte.is_ascii_digit()))
+}
+
 /// True for a behind-highway scene sprite, quoted or resolved: the
 /// `_Playing_BG.ojs` block ref and its bare `Playing_BG.ojs` stem
 /// both match.
@@ -979,8 +1027,9 @@ pub fn playing_member_selected(sprite: &str, mode: &PlayingArtMode) -> bool {
     }
 }
 
-/// Frame the exe view paints of a note-background body: `Some(0)`
-/// for `Note_BG.ojs`, `None` for every other sprite.
+/// Frame the exe view paints of a note-background or BACK1 backdrop
+/// body: `Some(0)` for `Note_BG.ojs`, `Some(1)` for the
+/// runtime-built BACK1 backdrop, `None` for every other sprite.
 ///
 /// `IDC_IMAGE_SPLAY_BACK2` (code `0x1B500072`, `Note_BG.ojs`) stores
 /// two 213x484 raw strips — image 0 at anchor (20,0), image 1 at
@@ -995,13 +1044,31 @@ pub fn playing_member_selected(sprite: &str, mode: &PlayingArtMode) -> bool {
 /// `0x4e7525`/`0x4e7577`). BACK2 therefore keeps its loader-default
 /// image 0 — the left strip — on every Playing mode family; image 1
 /// is authored but unselected, and the reference photo pins venue
-/// deck over its band (`docs/playing-reference.md`). The unselected
-/// family members (`3Key_Note_BG.ojs`, the `P2P*Note_BG.ojs` bodies)
-/// are single-frame full-screen bodies, so the cut only ever bites
-/// `Note_BG.ojs` (`docs/notebg-cover.md`).
+/// deck over its band (`docs/playing-reference.md`).
+///
+/// The BACK1 backdrop bodies store two full-screen 800x600 frames;
+/// the solo `Playing_NormalBG1..3.ojs` frames differ only inside
+/// x 21..=230, y 0..=530 — the lane-panel band the staged
+/// `Note_BG.ojs` strip covers — so the cut is invisible in the
+/// settled scene; the P2P pair differs across the full panel
+/// (x 21..=778). The exe setup drives the frame by mode arm
+/// (`SetFrame 0x42f870`, frame 2 on the mode-0 arm at file
+/// `0x4dc7f2` → image 1, frame 1 on the mode-2 arm at file
+/// `0x4dc7dc` → image 0; which arm maps to which room mode stays
+/// OPEN — `docs/playing-backdrop.md`), and the shell rides the
+/// mode-0 arm's image 1. The unselected note-background family
+/// members (`3Key_Note_BG.ojs`, the `P2P*Note_BG.ojs` bodies) are
+/// single-frame full-screen bodies, so their cut is a no-op
+/// (`docs/notebg-cover.md`).
 #[must_use]
 pub fn playing_member_frame(sprite: &str) -> Option<usize> {
-    (sprite == "Note_BG.ojs").then_some(0)
+    if sprite == "Note_BG.ojs" {
+        return Some(0);
+    }
+    if is_playing_backdrop_sprite(sprite) {
+        return Some(1);
+    }
+    None
 }
 
 /// [`load_scene_figures_for_stage`] through the room mode: family
@@ -1588,10 +1655,9 @@ fn paint_placed_figure(
 /// or a note background, quoted or resolved (see
 /// [`is_playing_behind_sprite`)).
 pub(crate) fn placement_is_behind(placement: &ScenePlacement) -> bool {
-    placement
-        .sprite
-        .as_deref()
-        .is_some_and(is_playing_behind_sprite)
+    placement.sprite.as_deref().is_some_and(|sprite| {
+        is_playing_behind_sprite(sprite) || is_playing_backdrop_sprite(sprite)
+    })
 }
 
 /// Paint the behind-highway placements, skipping every pixel inside

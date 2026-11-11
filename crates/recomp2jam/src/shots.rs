@@ -398,6 +398,7 @@ fn stage_playing_archive(game: &mut ScreenGame, archive: &[u8]) {
         arena_stage: Some(game.arena_stage()),
         key_mode: game.room_key_mode(),
         team_play: false,
+        chart_slot: PLAYING_SONG.difficulty,
     };
     let Some(art) = stage_state(archive, State::Playing, ctx).art else {
         return;
@@ -1397,6 +1398,7 @@ mod tests {
             arena_stage: Some(game.arena_stage()),
             key_mode: game.room_key_mode(),
             team_play: game.room_team_play(),
+            chart_slot: PLAYING_SONG.difficulty,
         };
         assert_eq!(ctx.key_mode, 2, "the shot's room plays 7 keys");
         assert!(ctx.team_play, "the shot's room is a Live duo");
@@ -1434,6 +1436,7 @@ mod tests {
             arena_stage: Some(2),
             key_mode: 2,
             team_play: false,
+            chart_slot: PLAYING_SONG.difficulty,
         };
         let report = stage_state(&archive, State::Playing, ctx);
         let figures = &report
@@ -1483,6 +1486,7 @@ mod tests {
             arena_stage: Some(walk.arena_stage()),
             key_mode: walk.room_key_mode(),
             team_play: false,
+            chart_slot: PLAYING_SONG.difficulty,
         };
         let art = stage_state(&archive, State::Playing, solo)
             .art
@@ -1630,6 +1634,88 @@ mod tests {
         assert_ne!(
             plain_box, staged_box,
             "staged volume must paint VOL ink into the strip box"
+        );
+    }
+
+    #[test]
+    fn playing_shot_paints_the_backdrop_edge_label() {
+        // The BO edge label is baked art of the runtime-built BACK1
+        // backdrop (`Playing_NormalBG<d>.ojs`, full-screen first
+        // pass — `docs/playing-backdrop.md`): its ink box
+        // (4..40, 570..596) sits left of the strip panel's x 204
+        // origin, so nothing covers it and the staged shot must ink
+        // it, while a shot staged without the backdrop figure keeps
+        // the box clear. (The sibling EA05 label lands under the
+        // opaque `Playing_Menu.ojs` body and never paints in 7.55.)
+        use o2jam_shell::avatar::{playing_backdrop_sprite, PLAYING_BACKDROP_CODE};
+        let Some(archive) = read_install_archives(&install_root()).playing else {
+            println!("skip: missing {PLAYING_ARCHIVE}");
+            return;
+        };
+        let box_bytes = |buf: &[u32], w: usize| {
+            // BO label ink box, native px (docs/playing-backdrop.md).
+            const LABEL_BOX: (usize, usize, usize, usize) = (4, 570, 40, 596);
+            let (x0, y0, x1, y1) = LABEL_BOX;
+            (y0..y1)
+                .flat_map(|y| (x0..x1).map(move |x| y * w + x))
+                .map(|at| buf[at])
+                .collect::<Vec<u32>>()
+        };
+        let frame = |game: &mut ScreenGame| {
+            let (w, h) = (
+                usize::try_from(NATIVE_WIDTH).expect("native width fits usize"),
+                usize::try_from(NATIVE_HEIGHT).expect("native height fits usize"),
+            );
+            let mut buf = vec![0u32; w * h];
+            game.paint_at(
+                &mut Frame {
+                    buf: &mut buf,
+                    w,
+                    h,
+                },
+                5_100,
+            );
+            (buf, w)
+        };
+        let mut staged = seeded_game();
+        walk_to_playing(&mut staged);
+        staged.strike_at(2, 5_000);
+        let (staged_buf, w) = frame(&mut staged);
+        // Control: the same staged Playing scene minus the BACK1
+        // backdrop placement and figure, reloaded over the game.
+        let mut control = seeded_game();
+        walk_to_playing(&mut control);
+        let mut art = stage_state(
+            &archive,
+            State::Playing,
+            StageContext {
+                arena_stage: Some(control.arena_stage()),
+                key_mode: control.room_key_mode(),
+                team_play: false,
+                chart_slot: PLAYING_SONG.difficulty,
+            },
+        )
+        .art
+        .expect("playing: STATE_PLAYING stages");
+        let backdrop = playing_backdrop_sprite(false, PLAYING_SONG.difficulty);
+        art.placements
+            .retain(|placed| placed.code != PLAYING_BACKDROP_CODE);
+        art.figures.remove(&backdrop);
+        control.load_scene(Screen::Playing, art.placements, art.figures);
+        control.strike_at(2, 5_000);
+        let (control_buf, _) = frame(&mut control);
+        assert_ne!(
+            box_bytes(&staged_buf, w),
+            box_bytes(&control_buf, w),
+            "the BACK1 backdrop must ink the BO label box"
+        );
+        assert!(
+            box_bytes(&staged_buf, w)
+                .iter()
+                .filter(|pixel| **pixel != 0)
+                .count()
+                >= 20,
+            "the BO label box must carry real ink, not noise"
         );
     }
 
@@ -1954,6 +2040,7 @@ mod tests {
             arena_stage: Some(2),
             key_mode: 2,
             team_play: false,
+            chart_slot: PLAYING_SONG.difficulty,
         };
         let art = stage_state(&archive, State::Playing, ctx)
             .art
