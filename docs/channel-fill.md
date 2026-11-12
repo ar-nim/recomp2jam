@@ -929,3 +929,66 @@ comment carries the old OPEN sentence. Pinned behaviour: paint
 order, and leave `active = 0` rows painting the empty slot. The value
 join and its guard test belong to the implementation ticket; the rig
 next step for the `active`/`capacity` question is named above.
+
+## Channel scrollbar semantics — EXE-PINNED (static half, #130)
+
+Settles the ticket's static question by byte-walk (second pair of
+eyes on the `3553efc` pins, 2026-11-12): the scrollbar buttons scroll
+the LIST, never the highlight, and bar dragging exists in the exe.
+Independently re-verified every cited offset; two pins below (range
+setup, populate args) go beyond the code comments.
+
+**Method.** Read-only walk over `install-root/O2Jam/OTwo.exe`
+(5,029,888 B, md5 `34b789ff557a9bf6a1f275010dcaaceb`): GNU objdump
+2.47 slices plus Python 3.14.10 byte scans. VA = file + `0x400000`
+throughout. No REA dossier; plain disassembly in our own words.
+
+**Answer (a): the arrows scroll the list.** The mouse arm `0x50e8d0`
+(file `0x10e8d0`) hit-tests the arrow zones and steps the scrollbar
+position by signed delta through `0x50ebf0` (file `0x10ebf0`):
+up-arrow zone (file `0x10ea1a`) pushes `-1` (VA `0x50ea66`), down-arrow
+zone (file `0x10ea6b`) pushes `+1` (VA `0x50eab5`). `0x50ebf0`
+scales the int delta by the `+0xc8` double and forwards it to the
+position setter `0x50ec20` (file `0x10ec20`), which owns `this+0xb8`
+and clamps it to `[0, max-page]` (`+0xbc`/`+0xc0`). Each delta
+notifies the channel list through the `0x4749a0`/`0x4749f0` arms
+(files `0x749a0`/`0x749f0`), gated on codes `0x13`/`0x14` with the
+control code `0x8C02100C`: `CDChannelInfo+0x184 += delta`, then a
+repaint call (`0x475000`). No selection write exists on this path —
+the only two `0x8C02100C` immediates in `.text` are those two arms
+(a third byte hit at file `0x7421b` is mid-instruction noise,
+disassembly reads garbage there).
+
+**Answer (b): dragging exists.** Press zones set drag-active
+(`this+0xc4`); the motion tick `0x50e7c0` (file `0x10e7c0`) gates on
+`+0xc4 != 0`, reads the cursor through the pairing table
+(`0x768124`), and absolute-sets through the same list-top notify;
+release clears `+0xc4` (VA `0x50ead0`). The thumb paint rides the
+same position: `0x50ee50` (file `0x10de50`) recomputes
+`round(pos * scale) + origin` with the orientation arm at `+0x64`
+(vertical origin `+0xac`, horizontal `+0xa8`).
+
+**Scale equation PINNED, thumb travel OPEN.** The range setup
+`0x50f030` (file `0x10e030`, 17 E8 callers image-wide) stores its
+max arg into `+0xbc`, then: max <= page (`+0xc0`) forces scale
+`+0xc8 = 0.0`; otherwise `+0xc8 = (span_b - span_a) / (max - page)`
+with orientation-picked rect-extent pairs (vertical: `+0xb4`-`+0xac`
+minus `+0xa4`-`+0x9c`). The exact struct-rect identities are
+unpinned, so the equation cannot yet turn into thumb pixels.
+
+**Populate puzzle OPEN.** The channel populate zeroes the joint
+reset (`+0x184 = 0` at VA `0x4747ba`, scrollbar `+0xb8 = 0` at VA
+`0x4747d3`, both file `0x747ba`) — guarded in the shell by
+`repopulating_channels_resets_the_scrolled_list_top` — then calls
+the range setup at VA `0x4747ea` with args `(max = 10, second = 0)`.
+A max of 10 against ~22 wire channels does not read as an item
+count, so which scrollbar (or which units) that call serves stays
+OPEN; do not wire the thumb scale from it.
+
+**Shell consequence (landed `3553efc`, kept here).** Arrows step
+`channel_top` through `channel_viewport_from_top`; the highlight
+rides the keys alone; the bar body answers nothing to a click.
+Drag has no shell handler yet and the thumb paints fixed — both
+stay OPEN with the same named next step: a live rig capture
+measuring thumb travel per row (or a deeper byte-walk of the
+scrollbar struct rects), never an invented scale.

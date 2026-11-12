@@ -6409,6 +6409,19 @@ mod game_tests {
     }
 
     #[test]
+    fn repopulating_channels_resets_the_scrolled_list_top() {
+        // Ticket #130 (exe-pin, file `0x747ba`): populate zeroes
+        // the list top (`+0x184 = 0`) beside the scrollbar reset
+        // (`+0xb8 = 0`) — a fresh list always opens unscrolled.
+        let mut game = six_channel_game();
+        game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
+        assert_eq!(game.channel_top, 1);
+        game.set_channels(six_channels());
+        assert_eq!(game.channel_top, 0);
+        assert_eq!(game.highlight, 0);
+    }
+
+    #[test]
     fn x_button_click_closes_the_dialog_to_the_planet_board() {
         // Ticket #163 (channel leg): the bnd-pinned X rect
         // (541,151)-(589,189) closes the dialog back to the bare
