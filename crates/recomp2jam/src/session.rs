@@ -1267,14 +1267,25 @@ impl OnlineSession {
         if self.game.screen() != Screen::Playing {
             return;
         }
-        if let Err(source) = self.gateway.set_timeouts(Some(STATS_IO_TIMEOUT)) {
-            tracing::debug!(%source, "stats section skipped: timeout rejected");
+        self.with_drain_timeout(STATS_IO_TIMEOUT, "stats", |session| {
+            session.maybe_send_tick();
+            session.drain_peer_echoes();
+        });
+    }
+
+    /// Run one drain section under a short IO timeout and restore the
+    /// resting session timeout afterwards — the timeout-restore shape
+    /// every per-frame section shares: a rejected prologue traces and
+    /// skips the section, and a failed restore traces (the next
+    /// section's prologue retries the resting set).
+    fn with_drain_timeout(&mut self, short: Duration, name: &str, section: impl FnOnce(&mut Self)) {
+        if let Err(source) = self.gateway.set_timeouts(Some(short)) {
+            tracing::debug!(%source, "{name} section skipped: timeout rejected");
             return;
         }
-        self.maybe_send_tick();
-        self.drain_peer_echoes();
+        section(self);
         if let Err(source) = self.gateway.set_timeouts(Some(SESSION_IO_TIMEOUT)) {
-            tracing::debug!(%source, "stats timeout restore failed");
+            tracing::debug!(%source, "{name} timeout restore failed");
         }
     }
 
@@ -1416,20 +1427,16 @@ impl OnlineSession {
     /// bodies drop with a trace (`ERRORS-19`: nothing is dropped
     /// without a trace).
     fn drain_tally_answers(&mut self) {
-        if let Err(source) = self.gateway.set_timeouts(Some(TALLY_IO_TIMEOUT)) {
-            tracing::debug!(%source, "tally section skipped: timeout rejected");
-            return;
-        }
-        loop {
-            match self.gateway.next_frame() {
+        self.with_drain_timeout(TALLY_IO_TIMEOUT, "tally", |session| loop {
+            match session.gateway.next_frame() {
                 Ok(frame) if frame.id == ScoreSubmission::COMMAND => {
-                    self.apply_score_submission(&frame);
+                    session.apply_score_submission(&frame);
                 }
                 Ok(frame) if frame.id == ScoreCompleted::COMMAND => {
-                    self.apply_score_completed(&frame);
+                    session.apply_score_completed(&frame);
                 }
                 Ok(frame) if frame.id == GameRankUpdate::COMMAND => {
-                    self.apply_rank_update(&frame);
+                    session.apply_rank_update(&frame);
                 }
                 Ok(frame) if Generic::from_id(frame.id).is_some() => {}
                 Ok(frame) => {
@@ -1437,10 +1444,7 @@ impl OnlineSession {
                 }
                 Err(_) => break,
             }
-        }
-        if let Err(source) = self.gateway.set_timeouts(Some(SESSION_IO_TIMEOUT)) {
-            tracing::debug!(%source, "tally timeout restore failed");
-        }
+        });
     }
 
     /// Fold one 4017 frame: the submitting member is traced (no totals
@@ -1624,14 +1628,9 @@ impl OnlineSession {
         if self.game.screen() != Screen::Waiting {
             return;
         }
-        if let Err(source) = self.gateway.set_timeouts(Some(CHAT_IO_TIMEOUT)) {
-            tracing::debug!(%source, "waiting chat section skipped: timeout rejected");
-            return;
-        }
-        self.drain_waiting_chat();
-        if let Err(source) = self.gateway.set_timeouts(Some(SESSION_IO_TIMEOUT)) {
-            tracing::debug!(%source, "waiting chat timeout restore failed");
-        }
+        self.with_drain_timeout(CHAT_IO_TIMEOUT, "waiting chat", |session| {
+            session.drain_waiting_chat();
+        });
         self.poll_start();
     }
 
@@ -1749,14 +1748,9 @@ impl OnlineSession {
         let Some(chat) = LobbyChat::of_screen(self.game.screen()) else {
             return;
         };
-        if let Err(source) = self.gateway.set_timeouts(Some(NOTICE_IO_TIMEOUT)) {
-            tracing::debug!(%source, "lobby chat section skipped: timeout rejected");
-            return;
-        }
-        self.drain_lobby_chat(chat);
-        if let Err(source) = self.gateway.set_timeouts(Some(SESSION_IO_TIMEOUT)) {
-            tracing::debug!(%source, "lobby chat timeout restore failed");
-        }
+        self.with_drain_timeout(NOTICE_IO_TIMEOUT, "lobby chat", |session| {
+            session.drain_lobby_chat(chat);
+        });
     }
 
     /// Drain waiting lobby chat lines (2013/2014), incoming whispers
