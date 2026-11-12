@@ -23,9 +23,12 @@ mod inflate;
 #[macro_use]
 pub mod message;
 pub mod gift;
+mod macros;
 pub mod play;
+pub mod reader;
 pub mod relay;
 pub mod rooms;
+mod rows;
 pub mod shop;
 pub mod strings;
 pub mod wallet;

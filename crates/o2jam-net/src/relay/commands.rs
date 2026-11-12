@@ -1,93 +1,38 @@
-//! Live relay packets (room PvP lane share).
-//!
-//! Relay TCP carries [`RelayCommand`] frames with the same
-//! length-prefixed `CPacket_Str` framing as the game gateway
-//! (`[u16 len][u16 id][body]`, `len` counts the whole frame; id at
-//! buffer offset 2). The shared `SetID` writer is byte-verified:
-//! the op-5 ctor at file `0xea4e0` pushes 5 and calls the same
-//! `SetID` function at file `0x1a0550` as the gateway path
-//! (call site file `0xea4f4`; id-at-offset-2 pinned by
-//! `FUN_005a0550`, length-includes-prefix server-verified in
-//! `crate::frame`). Relay op 5 on TCP is therefore the 66-byte
-//! frame `42 00 05 00` + 62-byte tally, not the 20-byte game-
-//! gateway 4014 tick (`14 00 AE 0F` + 16-byte body); see
-//! `docs/relay.md` §2. Relay TCP peer-leg ports have no hardcoded
-//! immediate in-exe; they arrive via the server (`GetLiveState`
-//! 4042/4043, `GetP2PList` 4044/4045). The only hardcoded relay
-//! ports are [`RELAY_UDP_PORTS`]. UDP is the primary Live path: each datagram is
-//! `[u16 uncompressedLen][zlib(...)]` holding one RUDP inner frame,
-//! decoded by [`UdpRelayFrame`].
-//!
-//! Layouts mirror Memoryer's clean-room `Memoryer.Relay` messages
-//! (field order = wire order): `UpdateGameStatsEventData`,
-//! `ComboBrokenEventData`, `ComboStartedEventData`,
-//! `PeerConnectedEventData`, `PeerEndpointAssignedEventData`,
-//! `PeerConfirmRequest`, `PingRequest`, `CreateRelaySessionRequest`,
-//! `DeleteRelaySessionRequest`, `UdpRelayFrameCodec`,
-//! `UdpRelayPacketType`. The exe pins the opcodes (`SetID(1..7)`
-//! ctors), the class names (`CO2JamCoolPack`/`CO2JamMissPack`
-//! RTTI), and the endpoints — not the field bytes, so the relay
-//! bodies below are Memoryer-corroborated; see `docs/relay.md` for
-//! the anchor table and the open exe-verification items. The
-//! trailing Live-handshake section (game-gateway 4046/4047/4055/
-//! 4056) is the exception: all four are byte-verified empty
-//! in-exe (per-type offsets below; 4055 separated from the
-//! field-carrying send sites, see `docs/relay.md`).
+//! Relay command bodies: the op 1-7 messages (routing
+//! preface plus per-op fields), the Live-handshake pair, and the
+//! Live-state / peer-list answers (commands 3003-3007, 4043, 4045).
 
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::SocketAddrV4;
 
-use super::error::Error;
-use super::inflate::{compress_zlib_stored, decompress_zlib};
-use super::message::WireMessage;
-use super::strings::{decode_null_terminated, encode_null_terminated, MAX_STRING_LEN};
+use super::routing::{decode_socket, encode_socket, word_at, ConnectionEndpoint, RelayRouting};
+use crate::error::Error;
+use crate::macros::wire_enum;
+use crate::message::WireMessage;
+use crate::rows::rows_zero_on_negative_exact;
+use crate::strings::{decode_null_terminated, encode_null_terminated, MAX_STRING_LEN};
 
-/// Relay opcodes (`Memoryer.Relay` `RelayCommand`, matched in-exe by
-/// the `SetID(1..7)` ctors; see `docs/relay.md`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u16)]
-pub enum RelayCommand {
-    /// Session keys issued (`CO2Jam`-side `SetID(1)`).
-    PeerConnected = 1,
-    /// Client answers with its session keys (`SetID(2)`).
-    PeerConfirm = 2,
-    /// Relay path assigned; forces TCP fallback (`SetID(3)`).
-    PeerEndpointAssigned = 3,
-    /// Keepalive (`SetID(4)`).
-    Ping = 4,
-    /// Full score tally, fanned out to room peers (`SetID(5)`).
-    UpdateGameStats = 5,
-    /// Combo broke (`CO2JamMissPack`, `SetID(6)`).
-    ComboBroken = 6,
-    /// Combo (re)started (`CO2JamCoolPack`, `SetID(7)`).
-    ComboStarted = 7,
-    /// Bind relay sessions into a game (`u8`-counted key pairs).
-    CreateSession = 10,
-    /// Unbind relay sessions.
-    DeleteSession = 11,
-}
-
-impl RelayCommand {
-    /// Numeric wire value.
-    #[must_use]
-    pub fn id(self) -> u16 {
-        self as u16
-    }
-
-    /// Resolve a received id. `None` means not a relay command.
-    #[must_use]
-    pub fn from_id(id: u16) -> Option<Self> {
-        match id {
-            1 => Some(Self::PeerConnected),
-            2 => Some(Self::PeerConfirm),
-            3 => Some(Self::PeerEndpointAssigned),
-            4 => Some(Self::Ping),
-            5 => Some(Self::UpdateGameStats),
-            6 => Some(Self::ComboBroken),
-            7 => Some(Self::ComboStarted),
-            10 => Some(Self::CreateSession),
-            11 => Some(Self::DeleteSession),
-            _ => None,
-        }
+wire_enum! {
+    /// Relay opcodes (`Memoryer.Relay` `RelayCommand`, matched in-exe by
+    /// the `SetID(1..7)` ctors; see `docs/relay.md`).
+    pub enum RelayCommand: u16, resolve from_id, encode id, {
+        /// Session keys issued (`CO2Jam`-side `SetID(1)`).
+        PeerConnected = 1,
+        /// Client answers with its session keys (`SetID(2)`).
+        PeerConfirm = 2,
+        /// Relay path assigned; forces TCP fallback (`SetID(3)`).
+        PeerEndpointAssigned = 3,
+        /// Keepalive (`SetID(4)`).
+        Ping = 4,
+        /// Full score tally, fanned out to room peers (`SetID(5)`).
+        UpdateGameStats = 5,
+        /// Combo broke (`CO2JamMissPack`, `SetID(6)`).
+        ComboBroken = 6,
+        /// Combo (re)started (`CO2JamCoolPack`, `SetID(7)`).
+        ComboStarted = 7,
+        /// Bind relay sessions into a game (`u8`-counted key pairs).
+        CreateSession = 10,
+        /// Unbind relay sessions.
+        DeleteSession = 11,
     }
 }
 
@@ -146,179 +91,6 @@ impl MemberRole {
             }),
         }
     }
-}
-
-/// Hardcoded relay endpoint ports picked by the in-exe relay selector
-/// alongside the three relay IPs (`docs/relay.md` §9). These are the
-/// only hardcoded relay ports: a full-image `u16` scan finds `0x998f`
-/// at exactly the three selector-leaf stores (files
-/// `0x18c73b`–`0x18c77f`) and `0x9990` port-word stores only at the
-/// two matching leaves; the five other `0x9990` hits are non-port
-/// bytes (table address, relative call, jump table, data). Relay TCP
-/// peer-leg ports are server-provided (`GetLiveState`/`GetP2PList`),
-/// never immediates, so no `RELAY_TCP_PORTS` constant exists by design.
-///
-/// Byte-verified immediates: `0x998f`/`0x9990` stored as the port word by
-/// the selector leaves at file `0x18c73b`–`0x18c77f`; transport role is
-/// inferred from the UHP/UDP context, not proven by those bytes alone.
-/// (ERRORS-06: plain constants, no `unwrap`; PERF-07: `u16` literals,
-/// no narrowing casts.)
-pub const RELAY_UDP_PORTS: [u16; 2] = [39311, 39312];
-
-/// Adjunct host configured by the shared setup helper entered at file
-/// `0x193650` (`docs/relay.md` §9).
-///
-/// Byte-verified references: the `203.238.136.52` string (file `0x24e368`)
-/// is pushed as a call argument at exactly two image-wide sites (files
-/// `0x1936e2`, `0x1936fc`), both inside the same setup block that stores
-/// [`ADJUNCT_SETUP_NUMBER`]; neither the relay selector (file `0x18c6c0`)
-/// nor the UHP controller (file `0x18d580`) references this host. It is
-/// therefore a separately configured adjunct endpoint — not a fourth
-/// relay-pool member, a UHP helper, or the `CUDPFailTCPConnect` fallback
-/// path — whose exact service role stays open.
-/// (ERRORS-06: plain constant, no `unwrap`; PERF-07: no narrowing casts.)
-pub const ADJUNCT_RELAY_HOST: Ipv4Addr = Ipv4Addr::new(203, 238, 136, 52);
-
-/// Numeric value co-located with the adjunct-host setup (file `0x19370b`).
-///
-/// Byte-verified immediate: the only `0x1e6c` dword image-wide, stored into
-/// a setup-block slot just after the second adjunct-host call. Recorded as
-/// a number, not claimed as a port: no socket-connect sequence ties it to
-/// the host. (ERRORS-06/PERF-07: plain `u16` literal.)
-pub const ADJUNCT_SETUP_NUMBER: u16 = 7788;
-
-/// Serialized size of one relay endpoint: 4 address bytes + `u16` port.
-const ENDPOINT_LEN: usize = 6;
-
-/// Serialized size of one `ConnectionEndpoint`: two `u16` ports +
-/// 4 address bytes.
-const CONNECTION_ENDPOINT_LEN: usize = 8;
-
-/// Serialized size of the routing preface shared by relay ops 1–7:
-/// `i32` code + 3 endpoints + `u16` unused.
-const ROUTING_LEN: usize = 4 + 3 * ENDPOINT_LEN + 2;
-
-/// Append one relay endpoint (4 address bytes, then port as `u16`).
-fn encode_socket(endpoint: SocketAddrV4, body: &mut Vec<u8>) {
-    body.extend_from_slice(&endpoint.ip().octets());
-    body.extend_from_slice(&endpoint.port().to_le_bytes());
-}
-
-/// Split 6 endpoint bytes off the front of `body`.
-fn decode_socket(body: &[u8]) -> Result<(SocketAddrV4, &[u8]), Error> {
-    if body.len() < ENDPOINT_LEN {
-        return Err(Error::TruncatedMessage {
-            need: ENDPOINT_LEN,
-            have: body.len(),
-        });
-    }
-    let address = Ipv4Addr::new(body[0], body[1], body[2], body[3]);
-    let port = u16::from_le_bytes([body[4], body[5]]);
-    Ok((SocketAddrV4::new(address, port), &body[ENDPOINT_LEN..]))
-}
-
-/// Dual-port endpoint of relay ops 2–3 (`ConnectionEndpoint`:
-/// `Port1`, `Port2`, then 4 address bytes).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ConnectionEndpoint {
-    /// First port (the `IPEndPoint` view of this endpoint).
-    pub port1: u16,
-    /// Second port.
-    pub port2: u16,
-    /// IPv4 address.
-    pub address: Ipv4Addr,
-}
-
-impl ConnectionEndpoint {
-    /// Append the 8-byte form to `body`.
-    fn encode_into(&self, body: &mut Vec<u8>) {
-        body.extend_from_slice(&self.port1.to_le_bytes());
-        body.extend_from_slice(&self.port2.to_le_bytes());
-        body.extend_from_slice(&self.address.octets());
-    }
-
-    /// Split 8 endpoint bytes off the front of `body`.
-    fn decode_from(body: &[u8]) -> Result<(Self, &[u8]), Error> {
-        if body.len() < CONNECTION_ENDPOINT_LEN {
-            return Err(Error::TruncatedMessage {
-                need: CONNECTION_ENDPOINT_LEN,
-                have: body.len(),
-            });
-        }
-        Ok((
-            Self {
-                port1: u16::from_le_bytes([body[0], body[1]]),
-                port2: u16::from_le_bytes([body[2], body[3]]),
-                address: Ipv4Addr::new(body[4], body[5], body[6], body[7]),
-            },
-            &body[CONNECTION_ENDPOINT_LEN..],
-        ))
-    }
-}
-
-/// Routing preface shared by relay ops 1–7 (Memoryer field orders
-/// 0–2): session `code`, the 3 relay-server endpoints, `unused`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RelayRouting {
-    /// Session code (private `Code` field; zero in server events).
-    ///
-    /// The only client-sent value is 0: no nonzero `code`/`unused` writer
-    /// was located on any combo send path (the fanout wrappers stage
-    /// routing through the `0xeb4d0` helper with pushed size `0x18`, and
-    /// client combo sends carry both fields as 0; see `docs/relay.md` §6).
-    /// Server-rewritten S→C values stay OPEN (needs a wire capture).
-    /// Value pinned in `docs/relay.md` §11
-    /// (`ev_e4c4a65ec986bea1dc13e28cbcf9d36c`, observed).
-    pub code: i32,
-    /// The 3 relay-server endpoints (no count prefix; always 3).
-    pub relays: [SocketAddrV4; 3],
-    /// Reserved word (private `Unused`; zero observed).
-    pub unused: u16,
-}
-
-impl RelayRouting {
-    /// Append the 24-byte preface to `body`.
-    fn encode_into(&self, body: &mut Vec<u8>) {
-        body.extend_from_slice(&self.code.to_le_bytes());
-        for relay in &self.relays {
-            encode_socket(*relay, body);
-        }
-        body.extend_from_slice(&self.unused.to_le_bytes());
-    }
-
-    /// Split the 24-byte preface off the front of `body`.
-    fn decode_from(body: &[u8]) -> Result<(Self, &[u8]), Error> {
-        if body.len() < ROUTING_LEN {
-            return Err(Error::TruncatedMessage {
-                need: ROUTING_LEN,
-                have: body.len(),
-            });
-        }
-        let code = i32::from_le_bytes([body[0], body[1], body[2], body[3]]);
-        let (first, tail) = decode_socket(&body[4..])?;
-        let (second, tail) = decode_socket(tail)?;
-        let (third, tail) = decode_socket(tail)?;
-        let unused = u16::from_le_bytes([tail[0], tail[1]]);
-        Ok((
-            Self {
-                code,
-                relays: [first, second, third],
-                unused,
-            },
-            &tail[2..],
-        ))
-    }
-}
-
-/// Read one little-endian `u16` at `at`.
-fn word_at(body: &[u8], at: usize) -> Result<u16, Error> {
-    if body.len() < at + 2 {
-        return Err(Error::TruncatedMessage {
-            need: at + 2,
-            have: body.len(),
-        });
-    }
-    Ok(u16::from_le_bytes([body[at], body[at + 1]]))
 }
 
 /// `PeerConnected` 1: server issues session keys (S→C).
@@ -1655,237 +1427,27 @@ impl WireMessage for P2PListResponse {
     }
 
     fn decode_body(body: &[u8]) -> Result<Self, Error> {
-        if body.len() < 4 {
-            return Err(Error::TruncatedMessage {
-                need: 4,
-                have: body.len(),
-            });
-        }
-        let raw = i32::from_le_bytes([body[0], body[1], body[2], body[3]]);
-        let count = nonnegative_count(raw);
-        let need = count
-            .checked_mul(PEER_ENTRY_LEN)
-            .and_then(|entries| entries.checked_add(4))
-            .ok_or(Error::InvalidField {
-                field: "peer count",
-                reason: "count too large",
-            })?;
-        if body.len() < need {
-            return Err(Error::TruncatedMessage {
-                need,
-                have: body.len(),
-            });
-        }
-        if body.len() > need {
-            return Err(Error::TrailingBytes(body.len() - need));
-        }
-        let mut peers = Vec::with_capacity(count);
-        let mut tail = &body[4..];
-        for _ in 0..count {
-            let member_id = i32::from_le_bytes([tail[0], tail[1], tail[2], tail[3]]);
-            let (public_endpoint, rest) = decode_socket(&tail[4..])?;
-            let (local_endpoint, rest) = decode_socket(rest)?;
-            peers.push(PeerInfo {
-                member_id,
-                public_endpoint,
-                local_endpoint,
-            });
-            tail = rest;
-        }
+        let peers = rows_zero_on_negative_exact(
+            body,
+            4,
+            0,
+            4,
+            PEER_ENTRY_LEN,
+            0,
+            "peer count",
+            "count too large",
+            |row| {
+                let member_id = i32::from_le_bytes([row[0], row[1], row[2], row[3]]);
+                let (public_endpoint, rest) = decode_socket(&row[4..])?;
+                let (local_endpoint, _) = decode_socket(rest)?;
+                Ok(PeerInfo {
+                    member_id,
+                    public_endpoint,
+                    local_endpoint,
+                })
+            },
+        )?;
         Ok(Self { peers })
-    }
-}
-
-/// RUDP inner packet types (`Memoryer.Relay` `UdpRelayPacketType`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum UdpPacketType {
-    /// Fire-and-forget (Live lane traffic).
-    Unreliable = 1,
-    /// Retransmitted until acked (stats, combo packs).
-    Reliable = 2,
-    /// Bare 4-byte ack, never zlib-wrapped.
-    Ack = 3,
-}
-
-impl UdpPacketType {
-    /// Numeric wire value.
-    #[must_use]
-    pub fn as_u8(self) -> u8 {
-        self as u8
-    }
-
-    /// Parse a wire byte; unknown types are an error.
-    ///
-    /// # Errors
-    ///
-    /// `Error::InvalidField` outside 1–3.
-    pub fn from_u8(value: u8) -> Result<Self, Error> {
-        match value {
-            1 => Ok(Self::Unreliable),
-            2 => Ok(Self::Reliable),
-            3 => Ok(Self::Ack),
-            _ => Err(Error::InvalidField {
-                field: "udp packet type",
-                reason: "not 1, 2, or 3",
-            }),
-        }
-    }
-}
-
-/// One decoded RUDP datagram.
-///
-/// `payload` is the relay command frame the inner envelope wraps:
-/// `[u16 command][body]` (the envelope's `u32` command word and
-/// `innerSize` framing are validated, then stripped).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UdpRelayFrame {
-    /// Inner packet type.
-    pub packet_type: UdpPacketType,
-    /// Inner sequence number (acked by [`UdpRelayFrame::encode_ack`]).
-    pub sequence: u8,
-    /// Relay command frame: `[u16 command][body]`.
-    pub payload: Vec<u8>,
-}
-
-/// Bare ack length: `[0x03][seq][0x00][0x00]`, no zlib, no prefix.
-const ACK_FRAME_LEN: usize = 4;
-/// Datagram length prefix: `u16` uncompressed length.
-const DATAGRAM_LEN_LEN: usize = 2;
-/// Inner envelope: type + seq + size + `u32` command.
-const INNER_HEADER_LEN: usize = 8;
-
-impl UdpRelayFrame {
-    /// Decode one UDP datagram: bare ack or length-prefixed zlib.
-    ///
-    /// # Errors
-    ///
-    /// Truncation on short input, `Error::InvalidField` on bad
-    /// packet types, sizes, commands, or zlib checksums.
-    pub fn decode_datagram(datagram: &[u8]) -> Result<Self, Error> {
-        if datagram.len() == ACK_FRAME_LEN && datagram[0] == UdpPacketType::Ack.as_u8() {
-            return Ok(Self {
-                packet_type: UdpPacketType::Ack,
-                sequence: datagram[1],
-                payload: Vec::new(),
-            });
-        }
-        if datagram.len() < DATAGRAM_LEN_LEN {
-            return Err(Error::TruncatedMessage {
-                need: DATAGRAM_LEN_LEN,
-                have: datagram.len(),
-            });
-        }
-        let uncompressed_len = u16::from_le_bytes([datagram[0], datagram[1]]) as usize;
-        let inflated = decompress_zlib(&datagram[DATAGRAM_LEN_LEN..])?;
-        if inflated.len() < uncompressed_len {
-            return Err(Error::TruncatedMessage {
-                need: uncompressed_len,
-                have: inflated.len(),
-            });
-        }
-        if inflated.len() > uncompressed_len {
-            return Err(Error::TrailingBytes(inflated.len() - uncompressed_len));
-        }
-        Self::decode_inner(&inflated)
-    }
-
-    /// Parse the inflated inner envelope.
-    fn decode_inner(inner: &[u8]) -> Result<Self, Error> {
-        if inner.len() < INNER_HEADER_LEN {
-            return Err(Error::TruncatedMessage {
-                need: INNER_HEADER_LEN,
-                have: inner.len(),
-            });
-        }
-        let packet_type = UdpPacketType::from_u8(inner[0])?;
-        let sequence = inner[1];
-        let inner_size = u16::from_le_bytes([inner[2], inner[3]]) as usize;
-        if inner_size < 4 {
-            return Err(Error::InvalidField {
-                field: "relay inner size",
-                reason: "smaller than command word",
-            });
-        }
-        let command_word = u32::from_le_bytes([inner[4], inner[5], inner[6], inner[7]]);
-        let command = u16::try_from(command_word).map_err(|_| Error::InvalidField {
-            field: "relay command",
-            reason: "wider than u16",
-        })?;
-        let body_len = inner_size - 4;
-        if inner.len() < INNER_HEADER_LEN + body_len {
-            return Err(Error::TruncatedMessage {
-                need: INNER_HEADER_LEN + body_len,
-                have: inner.len(),
-            });
-        }
-        if inner.len() > INNER_HEADER_LEN + body_len {
-            return Err(Error::TrailingBytes(
-                inner.len() - INNER_HEADER_LEN - body_len,
-            ));
-        }
-        let mut payload = Vec::with_capacity(2 + body_len);
-        payload.extend_from_slice(&command.to_le_bytes());
-        payload.extend_from_slice(&inner[INNER_HEADER_LEN..INNER_HEADER_LEN + body_len]);
-        Ok(Self {
-            packet_type,
-            sequence,
-            payload,
-        })
-    }
-
-    /// Build one UDP datagram: inner envelope + stored-block zlib +
-    /// `u16` length prefix. Use [`UdpRelayFrame::encode_ack`] for acks.
-    #[must_use]
-    pub fn encode_datagram(
-        packet_type: UdpPacketType,
-        sequence: u8,
-        command: u16,
-        body: &[u8],
-    ) -> Vec<u8> {
-        let inner_size = u16::try_from(body.len() + 4).unwrap_or(u16::MAX);
-        let mut inner = Vec::with_capacity(INNER_HEADER_LEN + body.len());
-        inner.push(packet_type.as_u8());
-        inner.push(sequence);
-        inner.extend_from_slice(&inner_size.to_le_bytes());
-        inner.extend_from_slice(&u32::from(command).to_le_bytes());
-        inner.extend_from_slice(body);
-        let compressed = compress_zlib_stored(&inner);
-        let mut datagram = Vec::with_capacity(DATAGRAM_LEN_LEN + compressed.len());
-        let prefix = u16::try_from(inner.len()).unwrap_or(u16::MAX);
-        datagram.extend_from_slice(&prefix.to_le_bytes());
-        datagram.extend_from_slice(&compressed);
-        datagram
-    }
-
-    /// Build a bare 4-byte ack for `sequence`.
-    #[must_use]
-    pub fn encode_ack(sequence: u8) -> [u8; ACK_FRAME_LEN] {
-        [UdpPacketType::Ack.as_u8(), sequence, 0x00, 0x00]
-    }
-
-    /// Relay command id carried in `payload`, if present.
-    #[must_use]
-    pub fn command_id(&self) -> Option<u16> {
-        if self.payload.len() < 2 {
-            return None;
-        }
-        Some(u16::from_le_bytes([self.payload[0], self.payload[1]]))
-    }
-
-    /// Relay command carried in `payload`, if known.
-    #[must_use]
-    pub fn relay_command(&self) -> Option<RelayCommand> {
-        self.command_id().and_then(RelayCommand::from_id)
-    }
-
-    /// Relay command body (bytes after the command id).
-    #[must_use]
-    pub fn body(&self) -> &[u8] {
-        if self.payload.len() < 2 {
-            return &[];
-        }
-        &self.payload[2..]
     }
 }
 
@@ -1893,6 +1455,8 @@ impl UdpRelayFrame {
 mod relay_command_tests {
     use super::*;
     use crate::frame::decode_frame;
+    use crate::relay::{ADJUNCT_SETUP_NUMBER, RELAY_UDP_PORTS};
+    use std::net::Ipv4Addr;
 
     fn routing() -> RelayRouting {
         RelayRouting {
@@ -1928,11 +1492,22 @@ mod relay_command_tests {
     }
 
     #[test]
-    fn relay_udp_ports_match_exe_selector_immediates() {
-        assert_eq!(RELAY_UDP_PORTS, [0x998F, 0x9990]);
-        assert_eq!(RELAY_UDP_PORTS[0], 39311);
-        assert_eq!(RELAY_UDP_PORTS[1], 39312);
-        assert_ne!(RELAY_UDP_PORTS[0], RELAY_UDP_PORTS[1]);
+    fn relay_command_ids_round_trip() {
+        let all = [
+            RelayCommand::PeerConnected,
+            RelayCommand::PeerConfirm,
+            RelayCommand::PeerEndpointAssigned,
+            RelayCommand::Ping,
+            RelayCommand::UpdateGameStats,
+            RelayCommand::ComboBroken,
+            RelayCommand::ComboStarted,
+            RelayCommand::CreateSession,
+            RelayCommand::DeleteSession,
+        ];
+        for command in all {
+            assert_eq!(RelayCommand::from_id(command.id()), Some(command));
+        }
+        assert_eq!(RelayCommand::from_id(0), None);
     }
 
     #[test]
@@ -2651,6 +2226,7 @@ mod live_handshake_tests {
 mod live_state_tests {
     use super::*;
     use crate::frame::decode_frame;
+    use std::net::Ipv4Addr;
 
     #[test]
     fn live_requests_frame_exact_empty_bytes() {
@@ -3229,206 +2805,6 @@ mod member_slot_tests {
         assert_eq!(
             member_slot_address(2, MEMBER_OFF_EXTRA_DWORD),
             Ok(MEMBER_SLOT_BASE + 2 * MEMBER_SLOT_STRIDE + MEMBER_OFF_EXTRA_DWORD)
-        );
-    }
-}
-
-#[cfg(test)]
-mod adjunct_host_tests {
-    use super::*;
-
-    #[test]
-    fn adjunct_host_matches_documented_address() {
-        assert_eq!(ADJUNCT_RELAY_HOST.octets(), [203, 238, 136, 52]);
-    }
-
-    #[test]
-    fn adjunct_host_shares_relay_subnet_but_not_pool() {
-        let pool = [
-            Ipv4Addr::new(203, 238, 136, 184),
-            Ipv4Addr::new(203, 238, 136, 182),
-            Ipv4Addr::new(203, 238, 136, 183),
-        ];
-        for member in pool {
-            assert_ne!(ADJUNCT_RELAY_HOST, member);
-            assert_eq!(ADJUNCT_RELAY_HOST.octets()[..3], member.octets()[..3]);
-        }
-    }
-
-    #[test]
-    fn adjunct_setup_number_matches_exe_immediate() {
-        assert_eq!(ADJUNCT_SETUP_NUMBER, 0x1E6C);
-        assert_eq!(ADJUNCT_SETUP_NUMBER, 7788);
-    }
-}
-
-#[cfg(test)]
-mod udp_frame_tests {
-    use super::*;
-
-    #[test]
-    fn udp_packet_type_names_all_types() {
-        assert_eq!(UdpPacketType::from_u8(1), Ok(UdpPacketType::Unreliable));
-        assert_eq!(UdpPacketType::from_u8(2), Ok(UdpPacketType::Reliable));
-        assert_eq!(UdpPacketType::from_u8(3), Ok(UdpPacketType::Ack));
-        assert_eq!(UdpPacketType::Reliable.as_u8(), 2);
-    }
-
-    #[test]
-    fn udp_packet_type_rejects_unknown_type() {
-        assert_eq!(
-            UdpPacketType::from_u8(9),
-            Err(Error::InvalidField {
-                field: "udp packet type",
-                reason: "not 1, 2, or 3"
-            })
-        );
-    }
-
-    #[test]
-    fn ack_encodes_bare_four_bytes() {
-        assert_eq!(UdpRelayFrame::encode_ack(0x2A), [0x03, 0x2A, 0x00, 0x00]);
-    }
-
-    #[test]
-    fn ack_decodes_without_zlib() {
-        let frame = UdpRelayFrame::decode_datagram(&[0x03, 0x2A, 0x00, 0x00]).unwrap();
-        assert_eq!(frame.packet_type, UdpPacketType::Ack);
-        assert_eq!(frame.sequence, 0x2A);
-        assert!(frame.payload.is_empty());
-        assert_eq!(frame.command_id(), None);
-        assert_eq!(frame.relay_command(), None);
-        assert_eq!(frame.body(), &[]);
-    }
-
-    /// Fixed-Huffman datagram from Python `zlib.compress` (level 6):
-    /// inner `[01][09][08 00][05 00 00 00][AA BB CC DD]`.
-    fn fixed_datagram() -> Vec<u8> {
-        vec![
-            0x0C, 0x00, 0x78, 0x9C, 0x63, 0xE4, 0xE4, 0x60, 0x60, 0x65, 0x60, 0x60, 0x58, 0xB5,
-            0xFB, 0xCC, 0x5D, 0x00, 0x08, 0x41, 0x03, 0x26,
-        ]
-    }
-
-    #[test]
-    fn datagram_decodes_fixed_huffman_block() {
-        let frame = UdpRelayFrame::decode_datagram(&fixed_datagram()).unwrap();
-        assert_eq!(frame.packet_type, UdpPacketType::Unreliable);
-        assert_eq!(frame.sequence, 0x09);
-        assert_eq!(frame.payload, vec![0x05, 0x00, 0xAA, 0xBB, 0xCC, 0xDD]);
-        assert_eq!(frame.command_id(), Some(5));
-        assert_eq!(frame.relay_command(), Some(RelayCommand::UpdateGameStats));
-        assert_eq!(frame.body(), &[0xAA, 0xBB, 0xCC, 0xDD]);
-    }
-
-    /// Stored-block datagram from Python `zlib.compress` (level 0).
-    fn stored_datagram() -> Vec<u8> {
-        vec![
-            0x0C, 0x00, 0x78, 0x01, 0x01, 0x0C, 0x00, 0xF3, 0xFF, 0x01, 0x09, 0x08, 0x00, 0x05,
-            0x00, 0x00, 0x00, 0xAA, 0xBB, 0xCC, 0xDD, 0x08, 0x41, 0x03, 0x26,
-        ]
-    }
-
-    #[test]
-    fn datagram_decodes_stored_block() {
-        let frame = UdpRelayFrame::decode_datagram(&stored_datagram()).unwrap();
-        assert_eq!(frame.packet_type, UdpPacketType::Unreliable);
-        assert_eq!(frame.sequence, 0x09);
-        assert_eq!(frame.payload, vec![0x05, 0x00, 0xAA, 0xBB, 0xCC, 0xDD]);
-    }
-
-    /// Dynamic-Huffman datagram from Python `zlib.compress` (level 6,
-    /// 603-byte text inner): type Unreliable, seq `0x2C`, command 5.
-    fn dynamic_datagram() -> Vec<u8> {
-        vec![
-            0x5B, 0x02, 0x78, 0x9C, 0x55, 0xD1, 0x41, 0x6A, 0x03, 0x31, 0x0C, 0x05, 0xD0, 0x69,
-            0xA0, 0xF7, 0xF0, 0x01, 0xBA, 0x90, 0x2C, 0xD9, 0xB2, 0xC8, 0x41, 0xB2, 0x0E, 0x61,
-            0x0A, 0x81, 0x29, 0x43, 0x33, 0xAB, 0xDE, 0x3E, 0x06, 0x49, 0x69, 0xE4, 0x8D, 0x36,
-            0xFF, 0xF1, 0x0D, 0xFF, 0xE3, 0xEB, 0x72, 0xFA, 0x5C, 0x96, 0xE5, 0xB1, 0x6E, 0xD7,
-            0xBF, 0x72, 0xAC, 0xBF, 0x05, 0xCA, 0x6D, 0xDF, 0xB7, 0x79, 0x7E, 0xEE, 0xC7, 0x31,
-            0xCF, 0x76, 0xFF, 0x5E, 0x0B, 0x02, 0x40, 0x39, 0x6E, 0xFB, 0x63, 0x2D, 0x70, 0x2E,
-            0xFF, 0x61, 0xB4, 0x30, 0x59, 0x58, 0x2C, 0xAC, 0xAA, 0x9E, 0xC5, 0x4A, 0xDC, 0xDE,
-            0xF3, 0xD5, 0xF2, 0xDD, 0xF2, 0xC8, 0x01, 0x86, 0x83, 0xCA, 0x5D, 0x53, 0x01, 0x19,
-            0x50, 0x03, 0x15, 0x03, 0x88, 0x03, 0x12, 0xA0, 0xD4, 0xC0, 0x06, 0xB0, 0xBA, 0x18,
-            0x21, 0xBA, 0x0B, 0x56, 0x1A, 0xA9, 0xA2, 0xB9, 0x68, 0x26, 0xA8, 0x85, 0x68, 0x2E,
-            0x3A, 0x4A, 0x4D, 0x1D, 0xDD, 0xC5, 0x30, 0xC1, 0x35, 0x04, 0xBB, 0x10, 0x06, 0x49,
-            0x1D, 0x62, 0x62, 0xFE, 0xDF, 0x84, 0x86, 0x20, 0x17, 0xA3, 0x33, 0xA6, 0x8E, 0xE1,
-            0x82, 0x4D, 0xB4, 0x1E, 0xA2, 0xBA, 0xD0, 0x21, 0x3D, 0x75, 0xA8, 0x0B, 0x31, 0xD1,
-            0x29, 0x04, 0xC6, 0x1A, 0xF3, 0x41, 0x2A, 0x41, 0x1F, 0x9B, 0x7C, 0xED, 0x57, 0x09,
-            0xBC, 0x0F, 0x98, 0x17, 0x8F, 0xC9, 0x7D, 0x73, 0x8C, 0x9A, 0xF1, 0x1A, 0x9D, 0x9A,
-            0xE8, 0xAC, 0x79, 0x02, 0x5D, 0xDD, 0xB1, 0x42,
-        ]
-    }
-
-    fn dynamic_text() -> Vec<u8> {
-        let mut text = Vec::new();
-        for index in 0..12u32 {
-            text.extend_from_slice(
-                format!(
-                    "relay seq {} cool {} miss {} life {} score {}; ",
-                    index,
-                    index * 3 % 256,
-                    index * 7 % 64,
-                    1000 - index,
-                    index * 12345,
-                )
-                .as_bytes(),
-            );
-        }
-        text
-    }
-
-    #[test]
-    fn datagram_decodes_dynamic_huffman_block() {
-        let frame = UdpRelayFrame::decode_datagram(&dynamic_datagram()).unwrap();
-        assert_eq!(frame.packet_type, UdpPacketType::Unreliable);
-        assert_eq!(frame.sequence, 0x2C);
-        assert_eq!(frame.command_id(), Some(5));
-        let mut payload = vec![0x05, 0x00];
-        payload.extend_from_slice(&dynamic_text());
-        assert_eq!(frame.payload, payload);
-    }
-
-    #[test]
-    fn datagram_round_trips_through_stored_encoder() {
-        let body = vec![0xAA, 0xBB, 0xCC, 0xDD];
-        let datagram = UdpRelayFrame::encode_datagram(UdpPacketType::Reliable, 0x2C, 6, &body);
-        let frame = UdpRelayFrame::decode_datagram(&datagram).unwrap();
-        assert_eq!(frame.packet_type, UdpPacketType::Reliable);
-        assert_eq!(frame.sequence, 0x2C);
-        assert_eq!(frame.relay_command(), Some(RelayCommand::ComboBroken));
-        assert_eq!(frame.body(), &body);
-    }
-
-    #[test]
-    fn datagram_rejects_length_prefix_mismatch() {
-        let mut datagram = fixed_datagram();
-        datagram[0] = 0x0D;
-        assert_eq!(
-            UdpRelayFrame::decode_datagram(&datagram),
-            Err(Error::TruncatedMessage { need: 13, have: 12 })
-        );
-    }
-
-    #[test]
-    fn datagram_rejects_bad_checksum() {
-        let mut datagram = stored_datagram();
-        let last = datagram.len() - 1;
-        datagram[last] ^= 0xFF;
-        assert_eq!(
-            UdpRelayFrame::decode_datagram(&datagram),
-            Err(Error::InvalidField {
-                field: "zlib checksum",
-                reason: "adler32 mismatch"
-            })
-        );
-    }
-
-    #[test]
-    fn datagram_rejects_tiny_input() {
-        assert_eq!(
-            UdpRelayFrame::decode_datagram(&[0x01]),
-            Err(Error::TruncatedMessage { need: 2, have: 1 })
         );
     }
 }
