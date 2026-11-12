@@ -1546,6 +1546,29 @@ pub fn clone_instance_live(placed: &ScenePlacement, instances: &[&str], live: us
     }
 }
 
+/// The placement's loaded figure: every paint entry opens with
+/// this guard (a missing sprite or figure paints nothing).
+fn resolve_figure<'a>(
+    placement: &ScenePlacement,
+    figures: &'a HashMap<String, AvatarFigure>,
+) -> Option<&'a AvatarFigure> {
+    figures.get(placement.sprite.as_ref()?)
+}
+
+/// The placement's loaded figure and its layer `index`: the full
+/// sprite -> figure -> layer guard chain as one question, asked by
+/// the single-layer paint entries (a missing sprite, figure, or
+/// layer paints nothing).
+fn resolve_layer<'a>(
+    placement: &ScenePlacement,
+    figures: &'a HashMap<String, AvatarFigure>,
+    index: usize,
+) -> Option<(&'a AvatarFigure, &'a FigureLayer)> {
+    let figure = resolve_figure(placement, figures)?;
+    let layer = figure.layer(index)?;
+    Some((figure, layer))
+}
+
 /// Paint one layer of a placed figure at its staged view position
 /// (the same origin rule as [`paint_placed_figure`], clones included):
 /// the hover pass repaints a single frame over the stacked rest paint,
@@ -1561,13 +1584,7 @@ pub fn paint_placement_layer(
     shares_body: bool,
     clip: Option<Rect>,
 ) {
-    let Some(name) = placement.sprite.as_ref() else {
-        return;
-    };
-    let Some(figure) = figures.get(name) else {
-        return;
-    };
-    let Some(layer) = figure.layer(layer_index) else {
+    let Some((figure, layer)) = resolve_layer(placement, figures, layer_index) else {
         return;
     };
     let (frame_w, frame_h) = (frame.w, frame.h);
@@ -1609,7 +1626,7 @@ fn paint_placed_figure(
     let Some(name) = placement.sprite.as_ref() else {
         return;
     };
-    let Some(figure) = figures.get(name) else {
+    let Some(figure) = resolve_figure(placement, figures) else {
         return;
     };
     // A clone is one instance of a template control: an image control
@@ -1711,13 +1728,10 @@ fn paint_behind_placement(
     exclusions: &[Rect],
     shared: &std::collections::HashSet<&str>,
 ) {
-    let Some(name) = placement.sprite.as_ref() else {
+    let Some(figure) = resolve_figure(placement, figures) else {
         return;
     };
-    let Some(figure) = figures.get(name) else {
-        return;
-    };
-    let shares_body = shared.contains(name.as_str());
+    let shares_body = shared.contains(placement.sprite.as_deref().expect("sprite resolved"));
     let (view_x, view_y) = placement_view_origin(figure, placement, frame, shares_body);
     paint_behind_layers(frame, figure, view_x, view_y, exclusions);
 }
