@@ -1106,6 +1106,66 @@ mod tests {
     }
 
     #[test]
+    fn intra_frame_tap_registers_exactly_one_click() {
+        // The exe's per-frame drain (A46): a press and a release
+        // queued between two snapshots must still register as one
+        // click — pure state would lose the pair entirely (SDL
+        // `GetKeyboardState` warning). One freeze carries both
+        // edges; the next freeze carries none, so the tap fires
+        // once and never replays.
+        let (mut handler, game, routed) = seamed_handler();
+        handler.surface_size = Some((800, 600));
+        handler.track_motion(400.0, 300.0);
+        handler.route_mouse_input(true);
+        handler.deliver_snapshot();
+        assert_eq!(handler.shell.game.screen_name(), "planet");
+        // The whole tap lands inside one frame: no freeze between
+        // the press and the release.
+        handler.track_motion(729.0, 580.0);
+        handler.route_mouse_input(true);
+        handler.route_mouse_input(false);
+        let tap = handler.deliver_snapshot();
+        assert_eq!(tap.edges().len(), 2, "one freeze carries the tap");
+        assert_eq!(
+            game.borrow().planet_modal(),
+            Some(super::super::screens::game::PlanetModal::Options),
+            "the intra-frame tap fires exactly once"
+        );
+        assert_eq!(
+            routed.borrow()[..],
+            [("down", 400, 300), ("down", 729, 580), ("up", 729, 580),]
+        );
+        let replay = handler.deliver_snapshot();
+        assert!(replay.edges().is_empty(), "the queue drained");
+        assert_eq!(
+            game.borrow().planet_modal(),
+            Some(super::super::screens::game::PlanetModal::Options),
+            "no second firing without new edges"
+        );
+    }
+
+    #[test]
+    fn state_without_edges_never_clicks() {
+        // The counterpart the SDL warning demands: snapshots that
+        // carry pointer motion but no edges arm and fire nothing —
+        // clicks ride the drained queue, never the polled state.
+        let (mut handler, game, _) = seamed_handler();
+        handler.surface_size = Some((800, 600));
+        handler.track_motion(400.0, 300.0);
+        handler.route_mouse_input(true);
+        handler.deliver_snapshot();
+        assert_eq!(handler.shell.game.screen_name(), "planet");
+        handler.track_motion(729.0, 580.0);
+        handler.deliver_snapshot();
+        handler.deliver_snapshot();
+        assert_eq!(
+            game.borrow().planet_modal(),
+            None,
+            "motion-only snapshots never fire the gear"
+        );
+    }
+
+    #[test]
     fn mouse_input_arm_drops_a_press_in_the_letterbox_bars() {
         // 1600x900 letterboxes the native frame with 200 px side
         // bars: a motion over a bar caches the position, and the
