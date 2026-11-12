@@ -411,7 +411,11 @@ fn host_walk_room(session: &mut OnlineSession) -> Result<()> {
     Ok(())
 }
 
-/// Run select plus the chart fetch (the host Confirm shape).
+/// Run select plus the chart fetch (the host Confirm shape): the
+/// select resolves on the per-frame poll (ticket #172), so the walk
+/// pumps paints like the START drain below instead of blocking on
+/// the wire. The explicit chart fetch stays: it keeps the walk's
+/// strict failure shape while the poll only warns past a staged pick.
 fn run_song_select(session: &mut OnlineSession, config: &WalkConfig) -> Result<()> {
     let choice = SongChoice {
         music_id: config.music_id,
@@ -419,12 +423,27 @@ fn run_song_select(session: &mut OnlineSession, config: &WalkConfig) -> Result<(
         speed: config.speed,
         arena_id: config.arena_id,
     };
-    session.select_song(choice)?;
+    session.begin_song_select(choice);
+    for _ in 0..SELECT_POLLS {
+        drain_frames(session);
+        if session.selected_song().is_some() {
+            break;
+        }
+        std::thread::sleep(SELECT_REST);
+    }
+    if session.selected_song().is_none() {
+        anyhow::bail!("song select did not stage a pick");
+    }
     session.note_arena_selected(choice.arena_id);
     let level = usize::from(config.difficulty).min(OJN_LEVEL_COUNT - 1);
     session.fetch_and_stage_chart(config.music_id, level)?;
     Ok(())
 }
+
+/// Select poll rounds before giving up (each round drains + rests).
+const SELECT_POLLS: usize = 60;
+/// Rest between select polls (the 4003/4031 round-trip window).
+const SELECT_REST: std::time::Duration = std::time::Duration::from_millis(50);
 
 /// START broadcast id (4011, the host Confirm answer).
 fn start_broadcast_id() -> u16 {

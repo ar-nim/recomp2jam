@@ -22,12 +22,14 @@
 //! gauges. Chat stays send-on-action, as-is.
 //!
 //! Room join (Room scene): with `--online-join-room` the session
-//! exchanges `JoinWaiting` (3002) on Room Confirm and stages the
-//! joined snapshot through [`ScreenGame::set_joined_room`] — the
-//! `connect --join-room` shape — before the local Room → Waiting
-//! enter. Without a join target Confirm stays a local enter (the
-//! offline walk), and a failed or rejected join keeps the Room
-//! scene with a warning, so the next Confirm retries it.
+//! queues a `JoinWaiting` (3002) attempt on Room Confirm and stages
+//! the joined snapshot through [`ScreenGame::set_joined_room`] — the
+//! `connect --join-room` shape — on the per-frame poll before the
+//! poll replays the Room → Waiting enter, so a silent server never
+//! freezes the frame loop (ticket #172). Without a join target
+//! Confirm stays a local enter (the offline walk), and a failed or
+//! rejected join keeps the Room scene with a warning, so the next
+//! Confirm retries it.
 //!
 //! Waiting chat (Waiting scene): every paint drains inbound 3012
 //! player lines and 3013 administrator lines under the same short
@@ -91,13 +93,14 @@
 //!
 //! Host song select (Waiting scene): `--online-music-id` stages a
 //! pending pick plus the installed `OJNList.dat` catalog; the next
-//! master Waiting Confirm sends `SetRoomMusic` 4000, `SetRoomArena`
-//! 4002 (awaiting the 4003 echo like the headless song flow), and
-//! `GetMusicList` 4030, stages the pick through
-//! [`ScreenGame::set_selected_music`] (driving the dialog rows and
-//! the waiting song panel), then fetches the chart from the catalog
-//! container (`Music/o2ma###.ojn` through the loading gate) into the
-//! highway via [`ScreenGame::load_chart`]. The room still launches on
+//! master Waiting Confirm queues it, and the per-frame poll sends
+//! `SetRoomMusic` 4000, `SetRoomArena` 4002 (awaiting the 4003 echo
+//! like the headless song flow), and `GetMusicList` 4030, stages the
+//! pick through [`ScreenGame::set_selected_music`] (driving the
+//! dialog rows and the waiting song panel), then fetches the chart
+//! from the catalog container (`Music/o2ma###.ojn` through the
+//! loading gate) into the highway — all without blocking the frame
+//! loop on a silent server (ticket #172). The room still launches on
 //! a later Confirm (START 4010 behind the all-peers-ready gate), so
 //! the host sees the staged pick first. Guests keep the READY path,
 //! and a failed select keeps the pick for the next Confirm.
@@ -131,7 +134,7 @@
 //! never invents one.
 
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use o2jam_file::{OjnListEntry, OJN_LEVEL_COUNT};
@@ -186,6 +189,17 @@ const TALLY_IO_TIMEOUT: Duration = Duration::from_millis(100);
 /// default (`client.rs` `DEFAULT_IO_TIMEOUT`), restored after every
 /// stats section like `run_song_flow` restores `SONG_FLOW_IO_TIMEOUT`.
 const SESSION_IO_TIMEOUT: Duration = Duration::from_secs(10);
+/// Short socket window for each pending-wire drain (ticket #172):
+/// the same never-stall shape as the chat section — one paint moves
+/// one leg at most (a send plus whatever answers already arrived),
+/// and a quiet gateway simply retries on the next paint.
+const PENDING_DRAIN_TIMEOUT: Duration = Duration::from_millis(1);
+/// How long a Confirm-paced attempt waits for its answers across
+/// paints (ticket #172): the bound a silent server gets before the
+/// attempt warns and clears while the game stays responsive. One
+/// resting timeout covers the whole sequence — the old blocking
+/// exchanges waited one resting timeout per leg.
+const PENDING_WIRE_WINDOW: Duration = Duration::from_secs(10);
 /// Idle repaint gap for wire-driven lobby scenes (ticket #138): the
 /// lobby drains ride `paint` (`poll_lobby_chat` on Channel/Room,
 /// `poll_waiting_chat` plus `poll_start` on Waiting, `poll_tally` on
@@ -226,6 +240,92 @@ struct TickSnapshot {
 struct PendingRoomJoin {
     number: i32,
     password: String,
+}
+
+/// Where a pending entry resolves its screen advance (ticket #172):
+/// the poll replays the originating input into the game, so the
+/// highlight and the advance match the old synchronous path exactly.
+#[derive(Debug, Clone, Copy)]
+enum EntryOrigin {
+    /// Keyboard Confirm: the advance replays Confirm into the game.
+    Confirm,
+    /// Face/row press at (`x`, `y`): the advance replays that press
+    /// into the game (`click_at`), like the swallowed edge would have.
+    Press { x: i32, y: i32 },
+}
+
+/// Pending interactive channel login (ticket #172): the 1004 send
+/// plus the 1005 answer and the 2001 identity fetch resolve on the
+/// per-frame poll, never on the Confirm/press path — a silent server
+/// leaves the game painting instead of freezing the frame loop.
+/// Queue-latest: a re-entry replaces the stale attempt outright.
+#[derive(Debug, Clone, Copy)]
+struct ChannelLoginAttempt {
+    /// Wire-short login pair (validated at staging, like the old
+    /// synchronous entry).
+    gateway_id: i16,
+    /// Wire-short login pair (validated at staging, like the old
+    /// synchronous entry).
+    channel_id: i16,
+    /// Input the advance replays on success.
+    origin: EntryOrigin,
+    /// `true` once the 1004 send went out (the poll retries it).
+    login_sent: bool,
+    /// `true` once the 2001 fetch went out (the poll retries it).
+    identity_sent: bool,
+    /// When the silent server stops getting the benefit of the doubt.
+    deadline: Instant,
+}
+
+/// Pending Room Confirm join attempt (ticket #172): the 3002 send
+/// plus the 3003 answer resolve on the per-frame poll, never on the
+/// Confirm/press path. A timeout clears the attempt but keeps the
+/// [`PendingRoomJoin`] intent, so the next Confirm retries it — the
+/// old synchronous retry shape. Queue-latest like the login.
+#[derive(Debug, Clone)]
+struct RoomJoinAttempt {
+    /// Room number being joined.
+    number: i32,
+    /// Room password (empty for open rows).
+    password: String,
+    /// Input the advance replays on success.
+    origin: EntryOrigin,
+    /// `true` once the 3002 send went out (the poll retries it).
+    request_sent: bool,
+    /// When the silent server stops getting the benefit of the doubt.
+    deadline: Instant,
+}
+
+/// Pending master Waiting select attempt (ticket #172): the
+/// 4000/4002 sends plus the 4003 echo and the 4030 send plus the 4031
+/// answer resolve on the per-frame poll, never on the Confirm path.
+/// A timeout clears the attempt but keeps the [`SongChoice`] pick,
+/// so the next Confirm retries it — the old synchronous retry shape.
+#[derive(Debug, Clone, Copy)]
+struct SongSelectAttempt {
+    /// Host pick being staged.
+    choice: SongChoice,
+    /// Which send the poll still owes (each leg sends once; a failed
+    /// send retries the same leg next paint, never the earlier ones).
+    stage: SelectStage,
+    /// When the silent server stops getting the benefit of the doubt.
+    deadline: Instant,
+}
+
+/// Song-select send stage: the poll sends each leg once, so a quiet
+/// server sees exactly one 4000/4002 pair and one 4030 — the old
+/// synchronous send-once shape, spread across paints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectStage {
+    /// 4000/4002 unsent: send both, then await the 4003 echo.
+    SendSelect,
+    /// 4000/4002 sent: await the 4003 echo.
+    AwaitEcho,
+    /// Echo matched but the 4030 send failed: resend 4030 only,
+    /// then await the 4031 answer.
+    SendList,
+    /// 4030 sent: await the 4031 answer.
+    AwaitList,
 }
 
 /// Host song pick (`--online-music-id` plus difficulty/speed/arena):
@@ -276,6 +376,15 @@ pub struct OnlineSession {
     last_tick: Option<TickSnapshot>,
     pending_room: Option<PendingRoomJoin>,
     pending_song: Option<SongChoice>,
+    /// Live channel login (`None` while no Confirm/press entry is in
+    /// flight; the per-frame [`Self::poll_channel_login`] owns it).
+    login_attempt: Option<ChannelLoginAttempt>,
+    /// Live room join (`None` while no Confirm/press join is in
+    /// flight; the per-frame [`Self::poll_room_join`] owns it).
+    join_attempt: Option<RoomJoinAttempt>,
+    /// Live song select (`None` while no master Confirm select is in
+    /// flight; the per-frame [`Self::poll_song_select`] owns it).
+    select_attempt: Option<SongSelectAttempt>,
     /// Container tokens plus captions behind the chart fetch
     /// (`OJNList.dat` order, owned copies; see [`Self::set_song_catalog`]).
     catalog: Vec<CatalogRow>,
@@ -329,6 +438,9 @@ impl OnlineSession {
             last_tick: None,
             pending_room: None,
             pending_song: None,
+            login_attempt: None,
+            join_attempt: None,
+            select_attempt: None,
             catalog: Vec::new(),
             last_selection: None,
             local_user: String::new(),
@@ -345,8 +457,8 @@ impl OnlineSession {
     }
 
     /// Remember the Room Confirm join target: the `--online-join-room`
-    /// number plus password, exchanged on the next Room Confirm
-    /// ([`Self::join_pending_room`]).
+    /// number plus password, attempted on the next Room Confirm
+    /// ([`Self::begin_room_join`], resolved by [`Self::poll_room_join`]).
     pub fn set_pending_room_join(&mut self, number: i32, password: &str) -> &mut Self {
         self.pending_room = Some(PendingRoomJoin {
             number,
@@ -365,7 +477,8 @@ impl OnlineSession {
 
     /// Remember the host pick (`--online-music-id` plus
     /// difficulty/speed/arena): the next master Waiting Confirm
-    /// exchanges it ([`Self::select_song`]).
+    /// queues it ([`Self::begin_song_select`], resolved by
+    /// [`Self::poll_song_select`]).
     pub fn set_pending_song(&mut self, choice: SongChoice) -> &mut Self {
         self.pending_song = Some(choice);
         self
@@ -422,8 +535,8 @@ impl OnlineSession {
     /// own room breaks the server master check (`SetRoomMusic` 4000
     /// then rejects us). The arena word stays 0 until the select
     /// exchange proves one ([`Self::note_arena_selected`]). Foreign
-    /// broadcasts skip past like [`Self::await_select_frame`], never
-    /// failing the exchange.
+    /// broadcasts skip past like the per-frame drains, never failing
+    /// the exchange.
     ///
     /// # Errors
     ///
@@ -546,79 +659,166 @@ impl OnlineSession {
         self.last_selection
     }
 
-    /// Run the host select exchange over a joined room: `SetRoomMusic`
-    /// 4000, `SetRoomArena` 4002 with the 4003 echo assertion, then
-    /// `GetMusicList` 4030 with the 4031 answer — the headless
-    /// [`crate::connect::run_song_flow`] select shapes — and stage the
-    /// pick through [`ScreenGame::set_selected_music`], driving the
-    /// dialog rows and the waiting song panel. A successful exchange
-    /// consumes the pending pick, so the next master Confirm means
-    /// START instead of another select. Returns the music-list answer. Runs under the resting session timeout: the exchange is
-    /// Confirm-paced, never per-frame, so it may block like the Room
-    /// Confirm join.
-    ///
-    /// # Errors
-    ///
-    /// Whatever the gateway transport reports, or an arena echo that
-    /// does not repeat the sent stage word (the room stage did not
-    /// take, so nothing is staged).
-    pub fn select_song(&mut self, choice: SongChoice) -> anyhow::Result<MusicListAnswer> {
+    /// Stage a host song select attempt over a joined room (ticket
+    /// #172): no socket IO — the Confirm path only queues the pick,
+    /// and the per-frame [`Self::poll_song_select`] moves the legs
+    /// (`SetRoomMusic` 4000, `SetRoomArena` 4002 with the 4003 echo
+    /// assertion, then `GetMusicList` 4030 with the 4031 answer — the
+    /// headless [`crate::connect::run_song_flow`] select shapes), so
+    /// a silent server never freezes the frame loop. Queue-latest: a
+    /// repeated Confirm replaces the stale attempt outright.
+    pub(crate) fn begin_song_select(&mut self, choice: SongChoice) {
+        self.select_attempt = Some(SongSelectAttempt {
+            choice,
+            stage: SelectStage::SendSelect,
+            deadline: Instant::now() + PENDING_WIRE_WINDOW,
+        });
+    }
+
+    /// Per-frame song-select section in `Waiting`: move the pending
+    /// attempt one leg under the short pending drain, ahead of the
+    /// waiting-chat drain (which would otherwise eat the 4003/4031
+    /// answers as foreign frames). Off Waiting the attempt drops —
+    /// the pick stays, so the next master Confirm retries it — and
+    /// past the deadline it warns and clears the same way.
+    fn poll_song_select(&mut self) {
+        if self.game.screen() != Screen::Waiting {
+            if self.select_attempt.take().is_some() {
+                tracing::debug!("song select left behind leaving Waiting; dropping it");
+            }
+            return;
+        }
+        let Some(attempt) = self.select_attempt.take() else {
+            return;
+        };
+        if Instant::now() > attempt.deadline {
+            tracing::warn!("song select timed out with no server answer; pick kept");
+            return;
+        }
+        self.with_drain_timeout(PENDING_DRAIN_TIMEOUT, "song select", |session| {
+            if let Some(kept) = session.drain_song_select(attempt) {
+                session.select_attempt = Some(kept);
+            }
+        });
+    }
+
+    /// Move one song-select attempt leg: send what the stage still
+    /// owes, then drain until the socket goes quiet. Returns the
+    /// attempt while it still awaits an answer (`None` once it
+    /// resolved or failed — the pick stays staged for the next retry
+    /// either way except on success, which consumes it).
+    fn drain_song_select(&mut self, mut attempt: SongSelectAttempt) -> Option<SongSelectAttempt> {
+        match attempt.stage {
+            SelectStage::SendSelect => {
+                let select = SetRoomMusic {
+                    music_id: attempt.choice.music_id,
+                    difficulty: attempt.choice.difficulty,
+                    speed: attempt.choice.speed,
+                };
+                if let Err(source) = self
+                    .gateway
+                    .send_frame(Request::SetRoomMusic.id(), &select.encode_body())
+                {
+                    tracing::debug!(%source, "song select send failed; retrying next paint");
+                    return Some(attempt);
+                }
+                let stage = SetRoomArena::new(attempt.choice.arena_id);
+                if let Err(source) = self
+                    .gateway
+                    .send_frame(Request::SetRoomArena.id(), &stage.encode_body())
+                {
+                    tracing::debug!(%source, "song arena send failed; retrying next paint");
+                    return Some(attempt);
+                }
+                attempt.stage = SelectStage::AwaitEcho;
+            }
+            SelectStage::SendList => {
+                if let Err(source) = self
+                    .gateway
+                    .send_frame(Request::GetMusicList.id(), &GetMusicList.encode_body())
+                {
+                    tracing::debug!(%source, "music list send failed; retrying next paint");
+                    return Some(attempt);
+                }
+                attempt.stage = SelectStage::AwaitList;
+            }
+            SelectStage::AwaitEcho | SelectStage::AwaitList => {}
+        }
+        loop {
+            match self.gateway.next_frame() {
+                Ok(frame)
+                    if frame.id == RoomArenaEcho::COMMAND
+                        && attempt.stage == SelectStage::AwaitEcho =>
+                {
+                    let Ok(echo) = RoomArenaEcho::decode_frame(&frame) else {
+                        tracing::debug!(id = frame.id, "dropping undecodable arena echo");
+                        return None;
+                    };
+                    if echo.arena != attempt.choice.arena_id {
+                        tracing::warn!(
+                            sent = attempt.choice.arena_id,
+                            got = echo.arena,
+                            "arena echo mismatch; pick kept"
+                        );
+                        return None;
+                    }
+                    if let Err(source) = self
+                        .gateway
+                        .send_frame(Request::GetMusicList.id(), &GetMusicList.encode_body())
+                    {
+                        tracing::debug!(%source, "music list send failed; retrying next paint");
+                        attempt.stage = SelectStage::SendList;
+                        return Some(attempt);
+                    }
+                    attempt.stage = SelectStage::AwaitList;
+                }
+                Ok(frame)
+                    if frame.id == MusicListAnswer::COMMAND
+                        && attempt.stage == SelectStage::AwaitList =>
+                {
+                    let Ok(answer) = MusicListAnswer::decode_frame(&frame) else {
+                        tracing::debug!(id = frame.id, "dropping undecodable music list");
+                        return None;
+                    };
+                    self.resolve_song_select(answer, attempt.choice);
+                    return None;
+                }
+                Ok(frame) if Generic::from_id(frame.id).is_some() => {}
+                Ok(frame) => {
+                    tracing::debug!(id = frame.id, "skipping non-select frame in select drain");
+                }
+                Err(_) => break,
+            }
+        }
+        Some(attempt)
+    }
+
+    /// Stage a completed song select: the pick drives the dialog rows
+    /// and the waiting song panel through
+    /// [`ScreenGame::set_selected_music`], then the chart fetch stages
+    /// the highway from the catalog container — the old synchronous
+    /// Confirm shape, deferred to the poll. Consumes the pending pick,
+    /// so the next master Confirm means START instead of another
+    /// select; a failed chart fetch only warns past the staged pick.
+    fn resolve_song_select(&mut self, answer: MusicListAnswer, choice: SongChoice) {
         let select = SetRoomMusic {
             music_id: choice.music_id,
             difficulty: choice.difficulty,
             speed: choice.speed,
         };
-        self.gateway
-            .send_frame(Request::SetRoomMusic.id(), &select.encode_body())
-            .map_err(net_context)?;
-        let stage = SetRoomArena::new(choice.arena_id);
-        self.gateway
-            .send_frame(Request::SetRoomArena.id(), &stage.encode_body())
-            .map_err(net_context)?;
-        let mut skipped = Vec::new();
-        let echo_frame = self
-            .await_select_frame(RoomArenaEcho::COMMAND, &mut skipped)
-            .map_err(net_context)?;
-        let echo = RoomArenaEcho::decode_frame(&echo_frame).map_err(net_context)?;
-        if echo.arena != choice.arena_id {
-            anyhow::bail!(
-                "arena echo mismatch: sent {} but got {}",
-                choice.arena_id,
-                echo.arena
-            );
-        }
-        self.gateway
-            .send_frame(Request::GetMusicList.id(), &GetMusicList.encode_body())
-            .map_err(net_context)?;
-        let list_frame = self
-            .await_select_frame(MusicListAnswer::COMMAND, &mut skipped)
-            .map_err(net_context)?;
-        let answer = MusicListAnswer::decode_frame(&list_frame).map_err(net_context)?;
-        if !skipped.is_empty() {
-            tracing::debug!(?skipped, "select skipped broadcasts");
-        }
         self.game.set_selected_music(select);
         self.last_selection = Some(select);
         self.pending_song = None;
-        Ok(answer)
-    }
-
-    /// Read until `expected` arrives (the headless `await_lenient`
-    /// shape): keepalives stay silent; every other skipped id lands in
-    /// `skipped`, never dropped quietly.
-    fn await_select_frame(
-        &mut self,
-        expected: u16,
-        skipped: &mut Vec<u16>,
-    ) -> Result<Frame, o2jam_net::Error> {
-        loop {
-            let frame = self.gateway.next_frame()?;
-            if frame.id == expected {
-                return Ok(frame);
-            }
-            if Generic::from_id(frame.id).is_none() {
-                skipped.push(frame.id);
-            }
+        tracing::info!(
+            music_id = choice.music_id,
+            entries = answer.entries.len(),
+            free_music = answer.free_music,
+            "song staged"
+        );
+        if let Err(source) =
+            self.fetch_and_stage_chart(choice.music_id, level_for_difficulty(choice.difficulty))
+        {
+            tracing::warn!(%source, "chart fetch failed; pick stays staged");
         }
     }
 
@@ -1056,17 +1256,19 @@ impl OnlineSession {
         }
     }
 
-    /// Interactive channel entry (ticket #30): `ChannelLogin` 1004 for
-    /// the selected row, then `GetCharacterInfo` 2001, staged through
+    /// Stage an interactive channel login attempt (ticket #30 entry,
+    /// ticket #172 pending shape): no socket IO — the Confirm/press
+    /// path only queues the row, and the per-frame
+    /// [`Self::poll_channel_login`] sends `ChannelLogin` 1004 for it,
+    /// then `GetCharacterInfo` 2001 on the 1005 answer, staged through
     /// the boot path's [`crate::stage_online_identity`] — the same
     /// login-then-character order the windowed boot exchanges
     /// (`connect_and_login_with_transport`), since the server rejects
-    /// 2001 outside a channel. `true` staged the identity; a rejected
-    /// code, an undecodable answer, or a transport failure warns and
-    /// keeps Channel, so the next entry retries it. Room rows are not
-    /// refetched here (OPEN: the list-only boot stages none, so the
-    /// Room lobby still lists the boot snapshot).
-    fn enter_channel(&mut self, channel: ChannelState) -> bool {
+    /// 2001 outside a channel. Out-of-range ids warn and stage
+    /// nothing, keeping Channel. Room rows are not refetched here
+    /// (OPEN: the list-only boot stages none, so the Room lobby still
+    /// lists the boot snapshot).
+    fn begin_channel_login(&mut self, channel: ChannelState, origin: EntryOrigin) {
         let (Ok(gateway_id), Ok(channel_id)) = (
             i16::try_from(channel.gateway_id),
             i16::try_from(channel.channel_id),
@@ -1076,136 +1278,264 @@ impl OnlineSession {
                 channel_id = channel.channel_id,
                 "channel ids out of wire-short range; staying in Channel"
             );
-            return false;
+            return;
         };
-        let login = ChannelLogin {
+        self.login_attempt = Some(ChannelLoginAttempt {
             gateway_id,
             channel_id,
-        };
-        let frame = match self.exchange_room_frame(
-            Request::ChannelLogin.id(),
-            &login.encode_body(),
-            ChannelLoginResponse::COMMAND,
-        ) {
-            Ok(frame) => frame,
-            Err(source) => {
-                tracing::warn!(%source, "channel login failed; staying in Channel");
-                return false;
-            }
-        };
-        let response = match ChannelLoginResponse::decode_frame(&frame) {
-            Ok(response) => response,
-            Err(source) => {
-                tracing::debug!(id = frame.id, %source, "dropping undecodable channel login");
-                return false;
-            }
-        };
-        if ChannelLoginResult::from_code(response.result_code) != Some(ChannelLoginResult::Success)
-        {
-            tracing::warn!(
-                code = response.result_code,
-                "channel login rejected; staying in Channel"
-            );
-            return false;
-        }
-        let frame = match self.exchange_room_frame(
-            Request::GetCharacterInfo.id(),
-            &[],
-            CharacterInfo::COMMAND,
-        ) {
-            Ok(frame) => frame,
-            Err(source) => {
-                tracing::warn!(%source, "character fetch failed; staying in Channel");
-                return false;
-            }
-        };
-        let hero = match CharacterInfo::decode_frame(&frame) {
-            Ok(hero) => hero,
-            Err(source) => {
-                tracing::debug!(id = frame.id, %source, "dropping undecodable character info");
-                return false;
-            }
-        };
-        if hero.invalid {
-            tracing::warn!("server flagged the account invalid; staying in Channel");
-            return false;
-        }
-        crate::stage_online_identity(&mut self.game, Some(&hero));
-        true
+            origin,
+            login_sent: false,
+            identity_sent: false,
+            deadline: Instant::now() + PENDING_WIRE_WINDOW,
+        });
     }
 
-    /// Channel Confirm with an empty draft: log into the highlighted
-    /// row through [`Self::enter_channel`] and advance like the
-    /// offline walk once the identity stages. A failed exchange keeps
-    /// Channel (the next Confirm retries it); with no listed rows the
-    /// bare local advance stays.
+    /// Per-frame channel-login section on `Channel`: move the pending
+    /// attempt under the short pending drain, ahead of the lobby-chat
+    /// drain (which would otherwise eat the 1005/2001 answers as
+    /// foreign frames). Off Channel the attempt drops — a local-only
+    /// Back owns the screen then, and no late answer may advance it —
+    /// and past the deadline it warns and clears, keeping Channel so
+    /// the next entry retries it.
+    fn poll_channel_login(&mut self) {
+        if self.game.screen() != Screen::Channel {
+            if self.login_attempt.take().is_some() {
+                tracing::debug!("channel login left behind leaving Channel; dropping it");
+            }
+            return;
+        }
+        let Some(attempt) = self.login_attempt.take() else {
+            return;
+        };
+        if Instant::now() > attempt.deadline {
+            tracing::warn!(
+                gateway_id = attempt.gateway_id,
+                channel_id = attempt.channel_id,
+                "channel login timed out with no server answer; staying in Channel"
+            );
+            return;
+        }
+        self.with_drain_timeout(PENDING_DRAIN_TIMEOUT, "channel login", |session| {
+            if let Some(kept) = session.drain_channel_login(attempt) {
+                session.login_attempt = Some(kept);
+            }
+        });
+    }
+
+    /// Move one channel-login attempt leg: send what the stage still
+    /// owes, then drain until the socket goes quiet. Returns the
+    /// attempt while it still awaits an answer (`None` once it
+    /// resolved or failed, so the next entry retries it).
+    fn drain_channel_login(
+        &mut self,
+        mut attempt: ChannelLoginAttempt,
+    ) -> Option<ChannelLoginAttempt> {
+        if !attempt.login_sent {
+            let login = ChannelLogin {
+                gateway_id: attempt.gateway_id,
+                channel_id: attempt.channel_id,
+            };
+            if let Err(source) = self
+                .gateway
+                .send_frame(Request::ChannelLogin.id(), &login.encode_body())
+            {
+                tracing::debug!(%source, "channel login send failed; retrying next paint");
+                return Some(attempt);
+            }
+            attempt.login_sent = true;
+        }
+        loop {
+            match self.gateway.next_frame() {
+                Ok(frame)
+                    if frame.id == ChannelLoginResponse::COMMAND && !attempt.identity_sent =>
+                {
+                    let Ok(response) = ChannelLoginResponse::decode_frame(&frame) else {
+                        tracing::debug!(id = frame.id, "dropping undecodable channel login");
+                        return None;
+                    };
+                    if ChannelLoginResult::from_code(response.result_code)
+                        != Some(ChannelLoginResult::Success)
+                    {
+                        tracing::warn!(
+                            code = response.result_code,
+                            "channel login rejected; staying in Channel"
+                        );
+                        return None;
+                    }
+                    if let Err(source) =
+                        self.gateway.send_frame(Request::GetCharacterInfo.id(), &[])
+                    {
+                        tracing::debug!(%source, "character fetch send failed; retrying next paint");
+                        return Some(attempt);
+                    }
+                    attempt.identity_sent = true;
+                }
+                Ok(frame) if frame.id == CharacterInfo::COMMAND && attempt.identity_sent => {
+                    let Ok(hero) = CharacterInfo::decode_frame(&frame) else {
+                        tracing::debug!(id = frame.id, "dropping undecodable character info");
+                        return None;
+                    };
+                    if hero.invalid {
+                        tracing::warn!("server flagged the account invalid; staying in Channel");
+                        return None;
+                    }
+                    self.resolve_channel_login(hero, attempt.origin);
+                    return None;
+                }
+                Ok(frame) if Generic::from_id(frame.id).is_some() => {}
+                Ok(frame) => {
+                    tracing::debug!(id = frame.id, "skipping non-login frame in login drain");
+                }
+                Err(_) => break,
+            }
+        }
+        Some(attempt)
+    }
+
+    /// Stage a completed channel login: the fetched identity lands
+    /// through [`crate::stage_online_identity`], then the advance
+    /// replays the originating input — the old synchronous Confirm
+    /// shape, deferred to the poll.
+    fn resolve_channel_login(&mut self, hero: CharacterInfo, origin: EntryOrigin) {
+        crate::stage_online_identity(&mut self.game, Some(&hero));
+        match origin {
+            EntryOrigin::Confirm => self.game.menu_key(MenuKey::Confirm, true),
+            EntryOrigin::Press { x, y } => {
+                self.game.ingest_snapshot(&InputSnapshot::click_at(x, y));
+            }
+        }
+    }
+
+    /// Channel Confirm with an empty draft: queue the login for the
+    /// highlighted row; the per-frame poll advances like the offline
+    /// walk once the identity stages. With no listed rows the bare
+    /// local advance stays.
     fn confirm_channel(&mut self) {
         let Some(channel) = self.game.highlighted_channel() else {
             self.game.menu_key(MenuKey::Confirm, true);
             return;
         };
-        if self.enter_channel(channel) {
-            self.game.menu_key(MenuKey::Confirm, true);
-        }
+        self.begin_channel_login(channel, EntryOrigin::Confirm);
     }
 
-    /// Exchange the pending Room Confirm join and stage the joined
-    /// snapshot: `JoinWaiting` (3002, the `connect --join-room`
-    /// request shape) for the pending number and password, then the
-    /// 3003 answer's room through [`ScreenGame::set_joined_room`].
-    /// `true` staged one room; `false` keeps the Room scene — a
-    /// failed exchange, a rejected code, or an unstaged snapshot
-    /// every path warns, so no outcome is silent and the next Confirm
-    /// retries the join.
-    fn join_pending_room(&mut self) -> bool {
+    /// Stage a Room Confirm join attempt (ticket #172): no socket
+    /// IO — the Confirm/press path only queues the pending number
+    /// and password, and the per-frame [`Self::poll_room_join`]
+    /// sends `JoinWaiting` (3002, the `connect --join-room` request
+    /// shape) and stages the 3003 answer's room through
+    /// [`ScreenGame::set_joined_room`].
+    fn begin_room_join(&mut self, origin: EntryOrigin) {
         let Some(pending) = self.pending_room.clone() else {
-            return false;
+            return;
         };
-        let request = JoinRoom {
+        self.join_attempt = Some(RoomJoinAttempt {
             number: pending.number,
-            music_state: 0,
             password: pending.password,
-        };
-        // Skip-loop, not the strict transport exchange: live broadcasts
-        // (our own RoomCreated echo included) routinely interleave the
-        // answer, and no consumer folds them mid-join.
-        let frame = match self.exchange_room_frame(
-            Request::JoinWaiting.id(),
-            &request.encode_body(),
-            JoinRoomResponse::COMMAND,
-        ) {
-            Ok(frame) => frame,
-            Err(source) => {
-                tracing::warn!(%source, "room join failed; staying in Room");
-                return false;
+            origin,
+            request_sent: false,
+            deadline: Instant::now() + PENDING_WIRE_WINDOW,
+        });
+    }
+
+    /// Per-frame room-join section in `Room`: move the pending attempt
+    /// under the short pending drain, ahead of the lobby-chat drain
+    /// (which would otherwise eat the 3003 answer as a foreign
+    /// frame). Off Room the attempt drops — the intent stays, so the
+    /// next Room Confirm retries it — and past the deadline it warns
+    /// and clears the same way.
+    fn poll_room_join(&mut self) {
+        if self.game.screen() != Screen::Room {
+            if self.join_attempt.take().is_some() {
+                tracing::debug!("room join left behind leaving Room; dropping it");
             }
-        };
-        let response = match JoinRoomResponse::decode_frame(&frame) {
-            Ok(response) => response,
-            Err(source) => {
-                tracing::debug!(id = frame.id, %source, "dropping undecodable join answer");
-                return false;
-            }
-        };
-        if !matches!(
-            JoinResult::from_code(response.result_code),
-            Some(JoinResult::Success)
-        ) {
-            tracing::warn!(
-                code = response.result_code,
-                "room join rejected; staying in Room"
-            );
-            return false;
+            return;
         }
-        let Some(room) = response.room else {
-            tracing::warn!("room join answered without a snapshot; staying in Room");
-            return false;
+        let Some(attempt) = self.join_attempt.take() else {
+            return;
         };
+        if Instant::now() > attempt.deadline {
+            tracing::warn!("room join timed out with no server answer; staying in Room");
+            return;
+        }
+        self.with_drain_timeout(PENDING_DRAIN_TIMEOUT, "room join", |session| {
+            if let Some(kept) = session.drain_room_join(attempt) {
+                session.join_attempt = Some(kept);
+            }
+        });
+    }
+
+    /// Move one room-join attempt leg: send the 3002 request unless it
+    /// already went out, then drain until the socket goes quiet.
+    /// Returns the attempt while it still awaits the answer (`None`
+    /// once it resolved or failed — the intent stays, so the next
+    /// Confirm retries it). Live broadcasts (our own RoomCreated
+    /// echo included) skip past like the old skip-loop, and every
+    /// path warns, so no outcome is silent.
+    fn drain_room_join(&mut self, mut attempt: RoomJoinAttempt) -> Option<RoomJoinAttempt> {
+        if !attempt.request_sent {
+            let request = JoinRoom {
+                number: attempt.number,
+                music_state: 0,
+                password: attempt.password.clone(),
+            };
+            if let Err(source) = self
+                .gateway
+                .send_frame(Request::JoinWaiting.id(), &request.encode_body())
+            {
+                tracing::debug!(%source, "room join send failed; retrying next paint");
+                return Some(attempt);
+            }
+            attempt.request_sent = true;
+        }
+        loop {
+            match self.gateway.next_frame() {
+                Ok(frame) if frame.id == JoinRoomResponse::COMMAND => {
+                    let Ok(response) = JoinRoomResponse::decode_frame(&frame) else {
+                        tracing::debug!(id = frame.id, "dropping undecodable join answer");
+                        return None;
+                    };
+                    if !matches!(
+                        JoinResult::from_code(response.result_code),
+                        Some(JoinResult::Success)
+                    ) {
+                        tracing::warn!(
+                            code = response.result_code,
+                            "room join rejected; staying in Room"
+                        );
+                        return None;
+                    }
+                    let Some(room) = response.room else {
+                        tracing::warn!("room join answered without a snapshot; staying in Room");
+                        return None;
+                    };
+                    self.resolve_room_join(room, attempt.origin);
+                    return None;
+                }
+                Ok(frame) if Generic::from_id(frame.id).is_some() => {}
+                Ok(frame) => {
+                    tracing::debug!(id = frame.id, "skipping non-join frame in join drain");
+                }
+                Err(_) => break,
+            }
+        }
+        Some(attempt)
+    }
+
+    /// Stage a completed room join: the 3003 snapshot lands through
+    /// [`ScreenGame::set_joined_room`], then the advance replays the
+    /// originating input — the old synchronous Confirm shape,
+    /// deferred to the poll.
+    fn resolve_room_join(&mut self, room: JoinedRoom, origin: EntryOrigin) {
         self.joined_room = Some(room.clone());
         self.game.set_joined_room(room);
         self.joined_waiting = true;
         restage_live_playing(&mut self.game);
-        true
+        match origin {
+            EntryOrigin::Confirm => self.game.menu_key(MenuKey::Confirm, true),
+            EntryOrigin::Press { x, y } => {
+                self.game.ingest_snapshot(&InputSnapshot::click_at(x, y));
+            }
+        }
     }
 
     /// Waiting Confirm with an empty draft: slash drafts route through
@@ -1237,37 +1567,15 @@ impl OnlineSession {
         }
     }
 
-    /// Master Waiting Confirm with a pending host pick: run the
-    /// 4000/4002/4030 select exchange, then fetch the chart from the
-    /// staged catalog, and stay in Waiting — the next Confirm sends
-    /// START through the all-peers-ready gate, so the host sees the
-    /// staged pick first. A failed select keeps the pick (the next
-    /// Confirm retries it); a failed chart fetch warns past a staged
-    /// pick (missing install files warn, manual `--chart`/`--ojm`
-    /// still stages).
+    /// Master Waiting Confirm with a pending host pick: queue the
+    /// 4000/4002/4030 select; the per-frame poll stages it and stays
+    /// in Waiting — the next Confirm sends START through the
+    /// all-peers-ready gate, so the host sees the staged pick first.
     fn confirm_song_select(&mut self) {
         let Some(choice) = self.pending_song else {
             return;
         };
-        match self.select_song(choice) {
-            Ok(answer) => {
-                self.pending_song = None;
-                tracing::info!(
-                    music_id = choice.music_id,
-                    entries = answer.entries.len(),
-                    free_music = answer.free_music,
-                    "song staged"
-                );
-                if let Err(source) = self
-                    .fetch_and_stage_chart(choice.music_id, level_for_difficulty(choice.difficulty))
-                {
-                    tracing::warn!(%source, "chart fetch failed; pick stays staged");
-                }
-            }
-            Err(source) => {
-                tracing::warn!(%source, "song select failed; Confirm retries it");
-            }
-        }
+        self.begin_song_select(choice);
     }
 
     /// Joined-master Confirm: send `StartGame` 4010 ([`Request::StartGame`]
@@ -1969,14 +2277,20 @@ impl OnlineSession {
         };
         if self.game.screen() == Screen::Channel {
             if let Some(channel) = self.game.channel_enter_at(x, y) {
-                return !self.enter_channel(channel);
+                // Eaten: the game must not advance before the identity
+                // stages — the poll replays this press once it does.
+                self.begin_channel_login(channel, EntryOrigin::Press { x, y });
+                return true;
             }
             return false;
         }
         if self.game.screen() == Screen::Room {
             if let Some(number) = self.game.room_number_at(x, y) {
                 self.set_pending_room_join(number, "");
-                return !self.join_pending_room();
+                // Eaten: the game must not advance before the snapshot
+                // stages — the poll replays this press once it does.
+                self.begin_room_join(EntryOrigin::Press { x, y });
+                return true;
             }
             // A press that hits no room never sends: only Confirm
             // (with an explicit `--online-join-room`) retries a
@@ -1988,6 +2302,12 @@ impl OnlineSession {
             return true;
         }
         false
+    }
+
+    /// `true` while a Confirm-paced attempt still awaits its answers
+    /// (see the paint-order comment above).
+    fn wire_attempt_pending(&self) -> bool {
+        self.login_attempt.is_some() || self.join_attempt.is_some() || self.select_attempt.is_some()
     }
 }
 
@@ -2021,8 +2341,10 @@ impl GameLoop for OnlineSession {
             if self.room_chat_took_enter() {
                 return;
             }
-            if self.pending_room.is_none() || self.join_pending_room() {
+            if self.pending_room.is_none() {
                 self.game.menu_key(key, down);
+            } else {
+                self.begin_room_join(EntryOrigin::Confirm);
             }
             return;
         }
@@ -2045,14 +2367,16 @@ impl GameLoop for OnlineSession {
         // Snapshot-native sweep with the networked gates the driver
         // path used to own in the legacy whole-gesture edge: one snapshot carries the
         // tap, so the gate and the local advance read the same frame.
-        // Channel enter-face presses ride the entry gate (1004 login
-        // plus the 2001 identity fetch) before the local advance,
-        // mirroring Confirm; other Channel presses stay local exactly
-        // like their menu equivalents. Room presses mirror Confirm:
-        // join first, advance on success — a press that hits no room
-        // never sends unless a join is already pending. Waiting
+        // Channel enter-face presses queue the entry attempt (1004
+        // login plus the 2001 identity fetch resolve on the poll)
+        // before the poll replays the press, mirroring Confirm; other
+        // Channel presses stay local exactly like their menu
+        // equivalents. Room presses mirror Confirm: the join attempt
+        // queues first, the poll replays the press on success — a
+        // press that hits no room never sends unless a join is
+        // already pending. Waiting
         // confirm rides the networked Confirm gate (4008/4010 with
-        // the song-select/START exchange behind it) and never reaches
+        // the song-select poll and START behind it) and never reaches
         // the game; other Waiting presses stay local exactly like
         // their menu equivalents. Click evidence states (P0: every
         // path labeled, OPEN stays open). Anything unclaimed advances
@@ -2104,9 +2428,25 @@ impl GameLoop for OnlineSession {
         if self.game.screen() != Screen::Loading {
             self.loaded_sent = false;
         }
+        // Pending-wire polls run before the lobby/waiting drains:
+        // those skip foreign frames, so a later order would eat the
+        // 1005/2001, 3003, and 4003/4031 answers before they resolve.
+        // While an attempt is still in flight the lobby/waiting
+        // drains pause outright: a single-shot answer landing between
+        // two drains in one paint would otherwise die as a foreign
+        // frame with no retry. Chat resumes — nothing is lost, the
+        // socket buffers it — once the attempt resolves or times out;
+        // START still advances through `poll_start` meanwhile.
+        self.poll_channel_login();
+        self.poll_room_join();
+        self.poll_song_select();
         self.poll_stats();
-        self.poll_lobby_chat();
-        self.poll_waiting_chat();
+        if self.wire_attempt_pending() {
+            self.poll_start();
+        } else {
+            self.poll_lobby_chat();
+            self.poll_waiting_chat();
+        }
         self.poll_tally();
         self.flush_result_wire();
     }
@@ -2656,11 +2996,16 @@ mod session_tests {
         // Ticket #30: Confirm on a channel row exchanges the 1004
         // login plus the 2001 identity fetch before advancing, so the
         // first Room paint already carries the staged identity.
+        // Ticket #172: the exchange resolves on the per-frame poll —
+        // Confirm only queues it, paints move it.
         let (mut session, server) = channel_session(|mut stream| {
             answer_entry_login(&mut stream);
         });
         session.game.set_channels(vec![entry_channel()]);
         session.menu_key(MenuKey::Confirm, true);
+        paint_until(&mut session, |session| {
+            session.game.screen() == Screen::Room
+        });
         server.join().unwrap();
         assert_eq!(session.game.screen(), Screen::Room);
         let hero = session
@@ -2675,12 +3020,16 @@ mod session_tests {
     fn channel_face_press_logs_in_and_stages_character() {
         // Ticket #30, live press path: the windowed client delivers a
         // press snapshot, so the enter-face press must exchange
-        // before the Room paint like Confirm does.
+        // before the Room paint like Confirm does. Ticket #172: the
+        // press queues the attempt; the poll replays it on success.
         let (mut session, server) = channel_session(|mut stream| {
             answer_entry_login(&mut stream);
         });
         session.game.set_channels(vec![entry_channel()]);
         session.ingest_snapshot(&InputSnapshot::press_at(524, 246));
+        paint_until(&mut session, |session| {
+            session.game.screen() == Screen::Room
+        });
         server.join().unwrap();
         assert_eq!(session.game.screen(), Screen::Room);
         let hero = session
@@ -2711,9 +3060,247 @@ mod session_tests {
         });
         session.game.set_channels(vec![entry_channel()]);
         session.menu_key(MenuKey::Confirm, true);
+        for _ in 0..3 {
+            paint_frame(&mut session);
+        }
         server.join().unwrap();
         assert_eq!(session.game.screen(), Screen::Channel);
         assert!(session.game.myroom_character().is_none());
+    }
+
+    #[test]
+    fn channel_login_without_reply_keeps_painting_until_late_reply() {
+        // Ticket #172: the login must not block the frame loop while
+        // the server stays quiet — paints continue on Channel, and a
+        // late 1005 plus the 2001 identity still completes the entry.
+        // The blocking exchange fails this: Confirm only returns once
+        // the reply arrives, so the game is already in Room after it.
+        use o2jam_net::{ChannelLoginResponse, CharacterInfo, Gender};
+        let (mut session, server) = channel_session(|mut stream| {
+            let login = read_frame(&mut stream);
+            assert_eq!(login.id, 1004);
+            // Half a second of server silence: the old code sat inside
+            // the exchange for all of it; the pending login paints on.
+            thread::sleep(Duration::from_millis(500));
+            stream
+                .write_all(
+                    &ChannelLoginResponse {
+                        result_code: 0,
+                        restricted: Some(false),
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            let fetch = read_frame(&mut stream);
+            assert_eq!(fetch.id, 2000);
+            stream
+                .write_all(
+                    &CharacterInfo {
+                        nickname: "gate".to_owned(),
+                        gender: Gender::Male,
+                        level: 3,
+                        ..Default::default()
+                    }
+                    .encode(),
+                )
+                .unwrap();
+        });
+        session.game.set_channels(vec![entry_channel()]);
+        session.menu_key(MenuKey::Confirm, true);
+        for _ in 0..5 {
+            paint_frame(&mut session);
+        }
+        assert_eq!(session.game.screen(), Screen::Channel);
+        assert!(session.game.myroom_character().is_none());
+        paint_until(&mut session, |session| {
+            session.game.screen() == Screen::Room
+        });
+        server.join().unwrap();
+        let hero = session
+            .game
+            .myroom_character()
+            .expect("late reply stages the fetched character info");
+        assert_eq!(hero.nickname, "gate");
+    }
+
+    #[test]
+    fn channel_login_no_reply_never_blocks_paint() {
+        // Ticket #172, the freeze itself: a server that takes the
+        // 1004 and never answers must not stall the frame loop — the
+        // old blocking exchange sat in the read for the whole resting
+        // timeout. The stonewall sleeps past it, detached: joining it
+        // would park the test longer than the login window it proves.
+        let (mut session, _server) = channel_session(|mut stream| {
+            let login = read_frame(&mut stream);
+            assert_eq!(login.id, 1004);
+            thread::sleep(Duration::from_secs(12));
+        });
+        session.game.set_channels(vec![entry_channel()]);
+        let started = std::time::Instant::now();
+        session.menu_key(MenuKey::Confirm, true);
+        for _ in 0..20 {
+            paint_frame(&mut session);
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "twenty paints took {:?} with no server reply",
+            started.elapsed()
+        );
+        assert_eq!(session.game.screen(), Screen::Channel);
+    }
+
+    #[test]
+    fn channel_reentry_after_quick_back_paints_through() {
+        // Ticket #172 repro: enter, quick back (local-only — the
+        // server still holds the old channel session), re-enter. The
+        // stonewalled second 1004 must not freeze the game.
+        let (mut session, _server) = channel_session(|mut stream| {
+            answer_entry_login(&mut stream);
+            // The re-entry login: taken, never answered past the login
+            // window, like Memoryer holding the stale session. Sleeps
+            // past the resting timeout detached (see the no-reply
+            // test): joining it would park the test.
+            let second = read_frame(&mut stream);
+            assert_eq!(second.id, 1004);
+            thread::sleep(Duration::from_secs(12));
+        });
+        session.game.set_channels(vec![entry_channel()]);
+        session.menu_key(MenuKey::Confirm, true);
+        paint_until(&mut session, |session| {
+            session.game.screen() == Screen::Room
+        });
+        // Quick back: Room Back returns to the channel list, still
+        // local-only — the server holds the old channel session.
+        session.menu_key(MenuKey::Back, true);
+        assert_eq!(session.game.screen(), Screen::Channel);
+        let started = std::time::Instant::now();
+        session.menu_key(MenuKey::Confirm, true);
+        for _ in 0..5 {
+            paint_frame(&mut session);
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "five re-entry paints took {:?} with no server reply",
+            started.elapsed()
+        );
+        assert_eq!(session.game.screen(), Screen::Channel);
+    }
+
+    #[test]
+    fn channel_login_expiry_clears_pending_and_ignores_late_reply() {
+        // Ticket #172, the timeout leg: past the window the attempt
+        // warns and clears (staying in Channel), so a reply that
+        // arrives after the deadline stages nothing.
+        use o2jam_net::ChannelLoginResponse;
+        let (mut session, server) = channel_session(|mut stream| {
+            let login = read_frame(&mut stream);
+            assert_eq!(login.id, 1004);
+            thread::sleep(Duration::from_millis(400));
+            stream
+                .write_all(
+                    &ChannelLoginResponse {
+                        result_code: 0,
+                        restricted: Some(false),
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            // The cleared attempt never fetches: no 2000 follows, and
+            // the drained 1005 answers nothing.
+            assert_quiet(&mut stream);
+        });
+        session.game.set_channels(vec![entry_channel()]);
+        session.menu_key(MenuKey::Confirm, true);
+        paint_frame(&mut session);
+        assert!(session.login_attempt.is_some());
+        session
+            .login_attempt
+            .as_mut()
+            .expect("login in flight")
+            .deadline = std::time::Instant::now() - Duration::from_secs(1);
+        paint_frame(&mut session);
+        assert!(session.login_attempt.is_none());
+        thread::sleep(Duration::from_millis(500));
+        for _ in 0..3 {
+            paint_frame(&mut session);
+        }
+        server.join().unwrap();
+        assert_eq!(session.game.screen(), Screen::Channel);
+        assert!(session.game.myroom_character().is_none());
+    }
+
+    #[test]
+    fn room_join_without_reply_keeps_painting_until_late_reply() {
+        // Ticket #172 for the Room Confirm join: the 3002 wait must
+        // not block the frame loop either — paints continue in Room,
+        // and the late 3003 still stages the snapshot and advances.
+        use o2jam_net::{JoinRoom, JoinRoomResponse};
+        let (mut session, server) = room_session(|mut stream| {
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, JoinRoom::COMMAND);
+            thread::sleep(Duration::from_millis(400));
+            let answered = JoinRoomResponse {
+                result_code: 0,
+                room: Some(joined_snapshot()),
+            };
+            stream.write_all(&answered.encode()).unwrap();
+        });
+        session.set_pending_room_join(3, "");
+        session.menu_key(MenuKey::Confirm, true);
+        for _ in 0..3 {
+            paint_frame(&mut session);
+        }
+        assert_eq!(session.game.screen(), Screen::Room);
+        paint_until(&mut session, |session| {
+            session.game.screen() == Screen::Waiting
+        });
+        server.join().unwrap();
+        assert!(session.game.is_room_master());
+    }
+
+    #[test]
+    fn song_select_without_reply_keeps_painting_until_late_reply() {
+        // Ticket #172 for the master Waiting select: the 4000/4002
+        // echo wait must not block the frame loop — paints continue in
+        // Waiting with the pick still pending, and the late 4003 plus
+        // 4031 still stage it.
+        let (mut session, server) = joined_waiting_session(joined_snapshot(), |mut stream| {
+            use o2jam_net::play::{MusicListAnswer, MusicListEntry, RoomArenaEcho};
+            use o2jam_net::{Request, SetRoomArena, SetRoomMusic};
+            let select = read_frame(&mut stream);
+            assert_eq!(select.id, Request::SetRoomMusic.id());
+            assert!(SetRoomMusic::decode_body(&select.payload).is_ok());
+            stream.write_all(&encode_frame(4001, &[])).unwrap();
+            let stage = read_frame(&mut stream);
+            assert_eq!(stage.id, Request::SetRoomArena.id());
+            assert!(SetRoomArena::decode_body(&stage.payload).is_ok());
+            thread::sleep(Duration::from_millis(400));
+            stream.write_all(&RoomArenaEcho::new(0).encode()).unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetMusicList.id());
+            let listed = MusicListAnswer {
+                entries: vec![MusicListEntry {
+                    id: 757,
+                    notes_ex: 100,
+                    notes_nx: 200,
+                    notes_hx: 300,
+                }],
+                free_music: true,
+            };
+            stream.write_all(&listed.encode()).unwrap();
+        });
+        session.set_pending_song(host_choice());
+        session.menu_key(MenuKey::Confirm, true);
+        for _ in 0..3 {
+            paint_frame(&mut session);
+        }
+        assert!(session.pending_song.is_some());
+        assert_eq!(session.selected_song(), None);
+        paint_until(&mut session, |session| session.selected_song().is_some());
+        server.join().unwrap();
+        assert_eq!(
+            session.selected_song().map(|select| select.music_id),
+            Some(757)
+        );
     }
 
     #[test]
@@ -2891,8 +3478,10 @@ mod session_tests {
         session.set_pending_room_join(3, "");
         assert!(!session.game.is_room_master());
         session.menu_key(MenuKey::Confirm, true);
+        paint_until(&mut session, |session| {
+            session.game.screen() == Screen::Waiting
+        });
         server.join().unwrap();
-        assert_eq!(session.game.screen(), Screen::Waiting);
         assert!(session.game.is_room_master());
         assert_eq!(session.game.room_key_mode(), 2);
     }
@@ -2925,10 +3514,13 @@ mod session_tests {
             },
         ]);
         // Ticket #56: only the enter face enters — row 0 face
-        // (502,236)-(546,257).
+        // (502,236)-(546,257). Ticket #172: the click queues the
+        // attempt; the poll replays it on success.
         session.ingest_snapshot(&InputSnapshot::click_at(524, 246));
+        paint_until(&mut session, |session| {
+            session.game.screen() == Screen::Room
+        });
         server.join().unwrap();
-        assert_eq!(session.game.screen(), Screen::Room);
         let hero = session
             .game
             .myroom_character()
@@ -3079,9 +3671,13 @@ mod session_tests {
         session
             .game_mut()
             .set_rooms(vec![room_row(3, "Jam"), room_row(7, "Locked")]);
+        // Ticket #172: the click queues the join; the poll replays
+        // it once the snapshot stages.
         session.ingest_snapshot(&InputSnapshot::click_at(400, 154));
+        paint_until(&mut session, |session| {
+            session.game.screen() == Screen::Waiting
+        });
         server.join().unwrap();
-        assert_eq!(session.game.screen(), Screen::Waiting);
     }
 
     #[test]
@@ -3102,9 +3698,11 @@ mod session_tests {
             stream.write_all(&answered.encode()).unwrap();
         });
         session.set_pending_room_join(3, "");
-        assert!(session.join_pending_room());
+        session.menu_key(MenuKey::Confirm, true);
+        paint_until(&mut session, |session| {
+            session.game.screen() == Screen::Waiting
+        });
         server.join().unwrap();
-        assert_eq!(session.game.screen(), Screen::Room);
     }
 
     #[test]
@@ -3172,6 +3770,9 @@ mod session_tests {
         });
         session.set_pending_room_join(3, "wrong");
         session.menu_key(MenuKey::Confirm, true);
+        for _ in 0..3 {
+            paint_frame(&mut session);
+        }
         server.join().unwrap();
         assert_eq!(session.game.screen(), Screen::Room);
         assert!(!session.game.is_room_master());
@@ -3192,6 +3793,9 @@ mod session_tests {
         });
         session.set_pending_room_join(3, "");
         session.menu_key(MenuKey::Confirm, true);
+        for _ in 0..3 {
+            paint_frame(&mut session);
+        }
         server.join().unwrap();
         assert_eq!(session.game.screen(), Screen::Room);
         assert!(!session.game.is_room_master());
@@ -4392,14 +4996,18 @@ mod session_tests {
 
     #[test]
     fn select_song_sends_4000_4002_4030_and_stages_pick() {
+        // Ticket #172: Confirm only queues the pick (the scripted
+        // server asserts the 4000/4002/4030 bodies); the per-frame
+        // poll moves the legs and stages it.
         let (mut session, server) = joined_waiting_session(joined_snapshot(), |mut stream| {
             answer_select(&mut stream, 0);
             assert_quiet(&mut stream);
         });
-        let answer = session.select_song(host_choice()).unwrap();
+        session.set_pending_song(host_choice());
+        session.menu_key(MenuKey::Confirm, true);
+        paint_until(&mut session, |session| session.selected_song().is_some());
         server.join().unwrap();
-        assert_eq!(answer.entries.len(), 1);
-        assert!(answer.free_music);
+        assert!(session.pending_song.is_none());
         assert_eq!(
             session.selected_song(),
             Some(o2jam_net::SetRoomMusic {
@@ -4429,10 +5037,13 @@ mod session_tests {
             // The client bails on the mismatch: no 4030 follows.
             assert_quiet(&mut stream);
         });
-        let outcome = session.select_song(host_choice());
+        session.set_pending_song(host_choice());
+        session.menu_key(MenuKey::Confirm, true);
+        for _ in 0..3 {
+            paint_frame(&mut session);
+        }
         server.join().unwrap();
-        let message = format!("{:?}", outcome.unwrap_err());
-        assert!(message.contains("arena echo mismatch"), "{message}");
+        assert!(session.pending_song.is_some());
         assert_eq!(session.selected_song(), None);
     }
 
@@ -4461,6 +5072,7 @@ mod session_tests {
         });
         session.set_pending_song(host_choice());
         session.menu_key(MenuKey::Confirm, true);
+        paint_until(&mut session, |session| session.selected_song().is_some());
         assert_eq!(session.game.screen(), Screen::Waiting);
         assert!(session.pending_song.is_none());
         session.menu_key(MenuKey::Confirm, true);
