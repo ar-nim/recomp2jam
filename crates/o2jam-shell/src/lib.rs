@@ -226,16 +226,24 @@ pub trait GameLoop {
     fn text_input(&mut self, _text: &str) {}
     /// The Backspace key went down; chat drafts consume it as erase.
     fn delete_text(&mut self) {}
-    /// A left mouse click at native frame pixels (`x`, `y` in
-    /// 800x600 space; the shell maps window pixels before calling).
-    /// Default ignores clicks so existing implementors keep compiling.
+    /// Whole-gesture convenience for tests and drivers: a press and
+    /// release at native frame pixels (`x`, `y` in 800x600 space).
+    /// The window NEVER dispatches through this — live press/release
+    /// always arrive as separate [`GameLoop::mouse_down`] /
+    /// [`GameLoop::mouse_up`] edges (#118 no-input leg, #141 seam
+    /// audit): an implementor handling only this method would lose
+    /// every live press. Implementors must handle the edges; this
+    /// default composes them so legacy gesture callers keep working.
+    /// Default ignores the gesture so existing implementors keep
+    /// compiling.
     fn mouse_click(&mut self, _x: i32, _y: i32) {}
     /// Left button went down at native frame pixels. Pressed-art
     /// scenes arm the press here (pinned #111: the frame swap
     /// happens on ButtonDown, the action on release-inside).
     /// Default routes nothing so existing implementors keep
-    /// compiling; implementors that only handle [`GameLoop::mouse_click`]
-    /// keep whole-gesture dispatch through it.
+    /// compiling; live dispatch is edge-only — see
+    /// [`GameLoop::mouse_click`] for why whole-gesture handling here
+    /// is not enough.
     fn mouse_down(&mut self, _x: i32, _y: i32) {}
     /// Left button came up at native frame pixels. Paired with
     /// [`GameLoop::mouse_down`]: release-inside fires the press

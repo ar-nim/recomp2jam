@@ -741,6 +741,32 @@ mod tests {
         assert_eq!(probe.borrow().ups, vec![(100, 200)], "release routed");
     }
 
+    #[test]
+    fn mouse_input_arm_never_dispatches_through_mouse_click() {
+        // #141 seam-drift guard, the failure direction the edge
+        // assertions cannot see: an implementor that handles ONLY
+        // `mouse_click` receives nothing while the edges stay no-ops
+        // (the #118 no-input leg). The probe records `clicks`
+        // precisely so this test fails the day the window routes a
+        // gesture through `mouse_click` instead of the edges.
+        let (mut handler, probe) = probed_handler();
+        handler.surface_size = Some((800, 600));
+        handler.track_motion(100.0, 200.0);
+        handler.route_mouse_input(true);
+        handler.route_mouse_input(false);
+        assert_eq!(
+            probe.borrow().clicks,
+            Vec::new(),
+            "the seam must dispatch edges only; mouse_click is a test/driver convenience"
+        );
+        assert_eq!(
+            probe.borrow().downs,
+            vec![(100, 200)],
+            "both edges still reach the game"
+        );
+        assert_eq!(probe.borrow().ups, vec![(100, 200)]);
+    }
+
     /// Log of the exact game callbacks the seam made: the event
     /// name plus native-frame coordinates (lane presses store the
     /// lane index in `x`).

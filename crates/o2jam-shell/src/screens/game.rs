@@ -373,7 +373,9 @@ pub enum PlanetModal {
 }
 
 /// Native click canvas width (the shell maps window pixels into
-/// 800x600 before calling [`GameLoop::mouse_click`]).
+/// 800x600 before calling [`GameLoop::mouse_down`] /
+/// [`GameLoop::mouse_up`]; [`GameLoop::mouse_click`] composes the two
+/// for gesture callers).
 const CLICK_W: i32 = 800;
 /// Native click canvas height (see [`CLICK_W`]).
 const CLICK_H: i32 = 600;
