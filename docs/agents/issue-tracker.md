@@ -91,3 +91,13 @@ Used by `/wayfinder`. The **map** is a single issue with **child** issues as tic
 - **Frontier query**: list the map's open children (`gh issue list --state open`, scoped to the map's sub-issues / task list), drop any with an open blocker (see **Count open blockers**, or an open issue in the `Blocked by` line) or an assignee; first in map order wins.
 - **Claim**: `gh issue edit <n> --add-assignee @me`, the session's first write.
 - **Resolve**: `gh issue comment <n> --body "<answer>"`, then `gh issue close <n>`, then append a context pointer (gist + link) to the map's Decisions-so-far.
+
+## Issue creation hygiene (retro 2026-11-12)
+
+- Create issues ONE at a time with `scripts/issue-create.sh` (or
+  `gh issue create --body-file`). NEVER pipe markdown through delimiter-split
+  loops — a `|` in a table once shredded 20 junk issues out of one heredoc.
+- The script reads back number, title, and labels; diff intent vs reality on
+  the spot. A fragment title or a pipe-prefixed title fails the sanity check.
+- GitHub has NO CLI/API issue deletion. Mistakes: label `to-remove`, the owner
+  bulk-deletes via the UI (filter by label).
