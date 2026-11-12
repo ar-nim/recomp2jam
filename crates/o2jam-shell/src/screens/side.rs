@@ -2885,10 +2885,24 @@ pub const fn create_room_action_for_code(code: u32) -> Option<CreateRoomAction> 
         _ => None,
     }
 }
-/// Create-room action under native pixel (`x`, `y`): staged `.bnd`
-/// rects only — the placement whose code dispatches and whose rect
-/// contains the point (owner rule `f38f3`: geometry from parsed
-/// rects, never literals). `None` while no staged rect covers it.
+/// One staged dialog child's client-absolute rect: the `.bnd` rect at
+/// the dialog origin (pinned #114, `docs/bnd-semantics.md` — the same
+/// rect `paint_dialog_scene` inks and `dialog_rect_hit` answers, so
+/// paint and dispatch land together; owner rule `f38f3` holds since
+/// both the origin and the rect ride staged geometry, never literals).
+fn dialog_child_rect(placements: &[ScenePlacement], placed: &ScenePlacement) -> Rect {
+    let (origin_x, origin_y) = super::paint::dialog_origin(placements);
+    Rect {
+        x: placed.rect.x + origin_x,
+        y: placed.rect.y + origin_y,
+        w: placed.rect.w,
+        h: placed.rect.h,
+    }
+}
+/// Create-room action under native pixel (`x`, `y`): the placement
+/// whose code dispatches and whose dialog-relative rect contains the
+/// point (child rects are parent-relative in storage, pinned #114).
+/// `None` while no staged rect covers it.
 #[must_use]
 pub fn create_room_action_at(
     placements: &[ScenePlacement],
@@ -2897,7 +2911,7 @@ pub fn create_room_action_at(
 ) -> Option<CreateRoomAction> {
     placements.iter().find_map(|placed| {
         create_room_action_for_code(placed.code)
-            .filter(|_| super::paint::rect_hit(&placed.rect, x, y))
+            .filter(|_| super::paint::rect_hit(&dialog_child_rect(placements, placed), x, y))
     })
 }
 /// One password-dialog action: the code-to-action dispatch output.
@@ -2917,12 +2931,14 @@ pub const fn password_action_for_code(code: u32) -> Option<PasswordAction> {
         _ => None,
     }
 }
-/// Password-dialog action under native pixel (`x`, `y`): staged `.bnd`
-/// rects only (see [`create_room_action_at`]).
+/// Password-dialog action under native pixel (`x`, `y`): the placement
+/// whose code dispatches and whose dialog-relative rect contains the
+/// point (same #114 parent-relative storage as [`create_room_action_at`]).
 #[must_use]
 pub fn password_action_at(placements: &[ScenePlacement], x: i32, y: i32) -> Option<PasswordAction> {
     placements.iter().find_map(|placed| {
-        password_action_for_code(placed.code).filter(|_| super::paint::rect_hit(&placed.rect, x, y))
+        password_action_for_code(placed.code)
+            .filter(|_| super::paint::rect_hit(&dialog_child_rect(placements, placed), x, y))
     })
 }
 /// Create-room form behind the dialog: title/password edits plus the
@@ -3843,6 +3859,99 @@ pub fn paint_side_scene(
 mod side_tests {
     use super::*;
     use crate::avatar::PlacementRole;
+
+    /// Staged create-room placements mirroring the real 7.55 sheet:
+    /// the `Dialog_CreateRoom.ojs` back at (188,71) plus the CREATE
+    /// button's dialog-local `.bnd` rect (146,374).
+    fn create_room_dialog_placements() -> Vec<ScenePlacement> {
+        vec![
+            ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BACK_DCROOM_1".to_owned(),
+                code: 0x2410_0001, // IDC_BACK_DCROOM_1, real 7.55 code
+                sprite: Some("Dialog_CreateRoom.ojs".to_owned()),
+                rect: Rect {
+                    x: 188,
+                    y: 71,
+                    w: 425,
+                    h: 433,
+                },
+            },
+            ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BUTTON_DCROOM_CREATE".to_owned(),
+                code: CREATE_ROOM_CREATE_CODE,
+                sprite: Some("CreateRoom_Create.ojs".to_owned()),
+                rect: Rect {
+                    x: 146,
+                    y: 374,
+                    w: 126,
+                    h: 45,
+                },
+            },
+        ]
+    }
+
+    #[test]
+    fn create_room_create_hits_the_parent_offset_rect() {
+        // Pinned #114 (`docs/bnd-semantics.md`): child rects are
+        // parent-relative in storage, so CREATE answers at the back
+        // origin + its `.bnd` rect — (188 + 146 + 63, 71 + 374 + 22)
+        // — while the verbatim storage center answers nothing.
+        let placements = create_room_dialog_placements();
+        assert_eq!(
+            create_room_action_at(&placements, 397, 467),
+            Some(CreateRoomAction::Commit),
+            "CREATE commits at back origin + .bnd center"
+        );
+        assert_eq!(
+            create_room_action_at(&placements, 209, 396),
+            None,
+            "the verbatim storage center is dialog-local, never a hit"
+        );
+    }
+
+    #[test]
+    fn password_ok_hits_the_parent_offset_rect() {
+        // Same #114 rule for the password sheet: `Dialog_Password.ojs`
+        // back at (251,145), OK at dialog-local (52,181).
+        let placements = vec![
+            ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BACK_DPASSWORD_1".to_owned(),
+                code: 0x2810_0001, // IDC_BACK_DPASSWORD_1, real 7.55 code
+                sprite: Some("Dialog_Password.ojs".to_owned()),
+                rect: Rect {
+                    x: 251,
+                    y: 145,
+                    w: 320,
+                    h: 221,
+                },
+            },
+            ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BUTTON_DPASSWORD_OK".to_owned(),
+                code: PASSWORD_OK_CODE,
+                sprite: Some("Dialog_PasswordOK.ojs".to_owned()),
+                rect: Rect {
+                    x: 52,
+                    y: 181,
+                    w: 107,
+                    h: 26,
+                },
+            },
+        ];
+        assert_eq!(
+            password_action_at(&placements, 356, 339),
+            Some(PasswordAction::Commit),
+            "OK commits at back origin + .bnd center"
+        );
+        assert_eq!(
+            password_action_at(&placements, 105, 194),
+            None,
+            "the verbatim storage center is dialog-local, never a hit"
+        );
+    }
 
     #[test]
     fn emblem_plate_clip_matches_the_sweep_bboxes() {

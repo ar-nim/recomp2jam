@@ -13,19 +13,20 @@ use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
     battle_verdict, channel_dialog_x_hit, channel_face_hit, channel_row_hit, channel_scroll_hit,
-    channel_viewport, dialog_rect_hit, has_room_panels, list_row_hit, paint_avi_scene,
-    paint_channel_chat, paint_channel_list, paint_channel_scene, paint_lanking_board,
-    paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
-    paint_lobby_backdrop, paint_music_shop_board, paint_music_shop_cart, paint_music_shop_scene,
-    paint_myroom_data, paint_myroom_scene, paint_payment_notice, paint_planet_options,
-    paint_planet_quit, paint_planet_scene, paint_playing_backdrop, paint_playing_foreground,
-    paint_result, paint_result_scene, paint_room_chat, paint_room_hover, paint_room_list,
-    paint_room_scene, paint_room_user_panel, paint_screen, paint_shop_board, paint_shop_scene,
-    paint_waiting_chat, paint_waiting_members, paint_waiting_scene, paint_waiting_seat_avatar,
-    paint_waiting_seat_avatars, playing_backdrop_staged, quit_fallback_rects, rect_hit,
-    room_panel_hit, scene_index, staged_rect_hit, BattleVerdict, ChannelChatMessage, ChannelScroll,
-    LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions,
-    WaitingChatMessage, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    channel_viewport, dialog_origin, dialog_rect_hit, has_room_panels, list_row_hit,
+    paint_avi_scene, paint_channel_chat, paint_channel_list, paint_channel_scene,
+    paint_dialog_scene, paint_lanking_board, paint_lanking_scene, paint_loading_scene,
+    paint_loading_scene_with_status, paint_lobby_backdrop, paint_music_shop_board,
+    paint_music_shop_cart, paint_music_shop_scene, paint_myroom_data, paint_myroom_scene,
+    paint_payment_notice, paint_planet_options, paint_planet_quit, paint_planet_scene,
+    paint_playing_backdrop, paint_playing_foreground, paint_result, paint_result_scene,
+    paint_room_chat, paint_room_hover, paint_room_list, paint_room_scene, paint_room_user_panel,
+    paint_screen, paint_shop_board, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
+    paint_waiting_scene, paint_waiting_seat_avatar, paint_waiting_seat_avatars,
+    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_panel_hit, scene_index,
+    staged_rect_hit, BattleVerdict, ChannelChatMessage, ChannelScroll, LoadingStatus, ResultPaint,
+    ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage, RESULT_BACK_ID,
+    RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::side::{
     can_return_side, can_visit_side, create_room_action_at, lanking_action_at, lanking_page_window,
@@ -5011,19 +5012,22 @@ impl ScreenGame {
                 self.room_avatar.as_ref(),
             );
         }
-        // The open room dialog layers over the lobby: staged sheet
-        // first, then the form texts at the parsed edit rects. Empty
-        // fields paint nothing (the staged plate shows through).
+        // The open room dialog layers over the lobby: the staged sheet
+        // dialog-relative first (child `.bnd` rects are parent-relative
+        // in storage, pinned #114 — the same `dialog_origin + rect`
+        // the planet dialogs paint), then the form texts at the parsed
+        // edit rects. Empty fields paint nothing (the staged plate shows
+        // through).
         match self.room_dialog {
             Some(RoomDialog::CreateRoom) => {
                 if let Some(art) = self.create_room_art.as_ref() {
-                    art.paint_overlay(frame);
+                    paint_dialog_scene(frame, art);
                     self.paint_create_room_texts(frame, &art.placements);
                 }
             }
             Some(RoomDialog::Password { .. }) => {
                 if let Some(art) = self.password_art.as_ref() {
-                    art.paint_overlay(frame);
+                    paint_dialog_scene(frame, art);
                     self.paint_password_text(frame, &art.placements);
                 }
             }
@@ -5033,7 +5037,8 @@ impl ScreenGame {
         // the Planet board (EXIT/Escape closes back onto Room).
         self.paint_planet_modal(frame);
     }
-    /// Create-room texts at the parsed title/password edit rects.
+    /// Create-room texts at the parsed title/password edit rects,
+    /// dialog-relative like every other dialog child (pinned #114).
     fn paint_create_room_texts(&self, frame: &mut Frame<'_>, placements: &[ScenePlacement]) {
         for (code, text) in [
             (
@@ -5051,11 +5056,19 @@ impl ScreenGame {
             let Some(placed) = placements.iter().find(|placed| placed.code == code) else {
                 continue;
             };
-            let scaled = scale_rect_to_frame(&placed.rect, frame.w, frame.h);
+            let (origin_x, origin_y) = dialog_origin(placements);
+            let placed_rect = Rect {
+                x: placed.rect.x + origin_x,
+                y: placed.rect.y + origin_y,
+                w: placed.rect.w,
+                h: placed.rect.h,
+            };
+            let scaled = scale_rect_to_frame(&placed_rect, frame.w, frame.h);
             draw_text(frame, scaled.x, scaled.y, text, 0xFFFF_FFFF);
         }
     }
-    /// Password text at the parsed password edit rect.
+    /// Password text at the parsed password edit rect, dialog-relative
+    /// like every other dialog child (pinned #114).
     fn paint_password_text(&self, frame: &mut Frame<'_>, placements: &[ScenePlacement]) {
         if self.password_form.password.is_empty() {
             return;
@@ -5066,7 +5079,14 @@ impl ScreenGame {
         else {
             return;
         };
-        let scaled = scale_rect_to_frame(&placed.rect, frame.w, frame.h);
+        let (origin_x, origin_y) = dialog_origin(placements);
+        let placed_rect = Rect {
+            x: placed.rect.x + origin_x,
+            y: placed.rect.y + origin_y,
+            w: placed.rect.w,
+            h: placed.rect.h,
+        };
+        let scaled = scale_rect_to_frame(&placed_rect, frame.w, frame.h);
         draw_text(
             frame,
             scaled.x,
@@ -11217,6 +11237,51 @@ mod game_tests {
         let body = game.take_create_room().expect("committed 2004");
         assert_eq!(body.title, "x");
         assert!(!body.has_password);
+    }
+
+    #[test]
+    fn create_room_create_clicks_the_parent_offset_rect_with_real_bytes() {
+        // Real 7.55 bytes (skips without install-root): CREATE commits
+        // at the #114 parent-offset rect, never at the verbatim storage
+        // rect (ticket #134). The back sits at (188,71) with CREATE
+        // dialog-local at (146,374), so the commit lands at (397,467)
+        // while the storage center (209,396) answers nothing.
+        use crate::screens::side::CREATE_ROOM_CREATE_CODE;
+        use crate::staging::{stage_dialog, Dialog, StageContext};
+        let mut game = ScreenGame::new();
+        let Ok(bytes) = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../install-root/O2Jam/Image/Interface1.opi"),
+        ) else {
+            return;
+        };
+        let art = stage_dialog(&bytes, Dialog::CreateRoom, StageContext::default())
+            .art
+            .expect("create-room stages with real bytes");
+        let placements = art.placements.clone();
+        game.load_create_room_scene(art.placements, art.figures);
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        game.open_create_room_dialog();
+        game.push_room_dialog_char('x');
+        assert_eq!(
+            super::super::paint::dialog_origin(&placements),
+            (188, 71),
+            "the back rect authors the dialog origin"
+        );
+        game.click_room_dialog(209, 396);
+        assert_eq!(
+            game.room_dialog(),
+            Some(RoomDialog::CreateRoom),
+            "the verbatim storage center is dialog-local, never a hit"
+        );
+        assert!(game.take_create_room().is_none());
+        click_staged_dialog_button(&mut game, &placements, CREATE_ROOM_CREATE_CODE);
+        assert_eq!(game.room_dialog(), None);
+        let body = game.take_create_room().expect("committed 2004");
+        assert_eq!(body.title, "x");
     }
 
     #[test]
