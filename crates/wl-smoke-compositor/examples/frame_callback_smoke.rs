@@ -120,7 +120,11 @@ fn run() -> Result<Verdict> {
 }
 
 /// The game binary: explicit arg, then the example env var cargo sets when
-/// a binary target is in scope, then the default debug profile path.
+/// a binary target is in scope, then the workspace's debug build. The
+/// default path is kept honest: built when missing, rebuilt when it
+/// predates the workspace sources, so a stale binary can never silently
+/// test the wrong code (a real incident: a pre-fix binary reported RED
+/// on the fixed tree).
 fn resolve_game_binary(arg: Option<&str>) -> Result<PathBuf> {
     if let Some(path) = arg {
         return Ok(PathBuf::from(path));
@@ -128,15 +132,70 @@ fn resolve_game_binary(arg: Option<&str>) -> Result<PathBuf> {
     if let Some(path) = option_env!("CARGO_BIN_EXE_recomp2jam") {
         return Ok(PathBuf::from(path));
     }
-    let default = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/recomp2jam");
-    if default.is_file() {
-        return Ok(default);
+    let default = workspace_root().join("target/debug/recomp2jam");
+    if !default.is_file() {
+        build_game_binary()?;
+    } else if binary_is_stale(&default)? {
+        eprintln!("frame-callback-smoke: game binary predates the workspace sources; rebuilding");
+        build_game_binary()?;
     }
-    bail!(
-        "game binary not found at {}; build it (`cargo build -p recomp2jam`) \
-         or pass its path as the second argument",
-        default.display()
-    )
+    if default.is_file() {
+        Ok(default)
+    } else {
+        bail!(
+            "game binary not found at {}; `cargo build -p recomp2jam` failed or was not run — \
+             build it or pass its path as the second argument",
+            default.display()
+        )
+    }
+}
+
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn build_game_binary() -> Result<()> {
+    let status = std::process::Command::new(env!("CARGO"))
+        .args(["build", "--quiet", "-p", "recomp2jam"])
+        .current_dir(workspace_root())
+        .status()
+        .context("failed to run cargo build -p recomp2jam")?;
+    if !status.success() {
+        bail!("cargo build -p recomp2jam exited with {status}");
+    }
+    Ok(())
+}
+
+/// True when any workspace source file is newer than the binary.
+fn binary_is_stale(binary: &Path) -> Result<bool> {
+    use std::time::SystemTime;
+    let bin_mtime = fs::metadata(binary)
+        .and_then(|m| m.modified())
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    let mut newest = SystemTime::UNIX_EPOCH;
+    fn walk(dir: &Path, newest: &mut SystemTime) -> std::io::Result<()> {
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            let meta = entry.metadata()?;
+            if meta.is_dir() {
+                if path.file_name().is_some_and(|n| n != "target") {
+                    walk(&path, newest)?;
+                }
+            } else if path.extension().is_some_and(|e| e == "rs" || e == "toml") {
+                if let Ok(m) = meta.modified() {
+                    if m > *newest {
+                        *newest = m;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    for crate_dir in fs::read_dir(workspace_root().join("crates"))? {
+        walk(&crate_dir?.path(), &mut newest)?;
+    }
+    Ok(newest > bin_mtime)
 }
 
 /// Launch the game with Wayland forced: our socket, our runtime dir, and

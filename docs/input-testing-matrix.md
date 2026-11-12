@@ -438,3 +438,16 @@ Full evidence log with raw snippets: `~/scratch/input-testing/findings-survey-ve
    drives press/move/release through the seat).
 3. i3 testsuite — https://raw.githubusercontent.com/i3/i3/next/docs/testsuite
    ("tests are run under Xvfb display :99"; Perl X11::XCB driving).
+
+## Running the headless fixture anywhere
+
+`cargo run --example frame_callback_smoke -- starve` (or `flow`) is fully
+self-contained: the fixture IS the compositor (own temp `XDG_RUNTIME_DIR` +
+socket), so it needs **no display server, no KWin, no weston, no uinput, no
+installs** — any Linux machine or CI runner with cargo suffices. The example
+builds the game binary itself and rebuilds when the sources change, so a stale
+binary can never silently test the wrong code. CI sketch: `cargo build` then
+`cargo run --example frame_callback_smoke -- starve` (exit code is the
+verdict). The fixture is also the planned home of deterministic `wl_pointer`
+injection for the input-routing cases (see #118 no-input leg).
+
