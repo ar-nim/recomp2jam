@@ -348,6 +348,70 @@ fn full_canvas_miss_keeps_placement_with_empty_slot() {
 }
 
 #[test]
+fn byname_table_names_the_exe_literal_sheets_beside_playing() {
+    let files: Vec<&str> = BYNAME_TABLE.iter().map(|row| row.bind_file).collect();
+    assert_eq!(
+        files,
+        [
+            "State_Playing_network.bnd",
+            "Avatar_Info.bnd",
+            "Map_Avatar.bnd"
+        ],
+        "the trio the exe loads by name, pinned by #165"
+    );
+    for row in BYNAME_TABLE {
+        assert_eq!(row.archive, StagingArchive::Playing);
+        assert_eq!(row.host, State::Playing);
+    }
+}
+
+#[test]
+fn byname_sheet_stages_file_order_rects_with_no_block() {
+    let archive = o2jam_file::test_archive::build_archive(&[(
+        "State_Playing_network.bnd",
+        &bnd_blob(&[(265, 472, 389, 482), (410, 472, 534, 482)]),
+    )]);
+    let row = ByNameRow {
+        bind_file: "State_Playing_network.bnd",
+        archive: StagingArchive::Playing,
+        host: State::Playing,
+    };
+    let report = stage_byname_sheet(&archive, &row);
+    assert!(report.misses.is_empty());
+    let art = report.art.expect("by-name sheet stages its rects");
+    assert_eq!(art.placements.len(), 2, "one placement per file-order rect");
+    assert_eq!(
+        art.placements[0].rect,
+        rect_from_corners(265, 472, 389, 482)
+    );
+    assert_eq!(
+        art.placements[1].rect,
+        rect_from_corners(410, 472, 534, 482)
+    );
+    assert!(
+        art.placements.iter().all(|placed| placed.sprite.is_none()),
+        "no block names a body, so no sprite rides along"
+    );
+    assert!(art.figures.is_empty());
+}
+
+#[test]
+fn byname_sheet_missing_file_stages_nothing_with_a_miss() {
+    let archive = o2jam_file::test_archive::build_archive(&[]);
+    let row = ByNameRow {
+        bind_file: "State_Playing_network.bnd",
+        archive: StagingArchive::Playing,
+        host: State::Playing,
+    };
+    let report = stage_byname_sheet(&archive, &row);
+    assert!(report.art.is_none(), "a missing bind stages nothing");
+    assert_eq!(report.misses.len(), 1);
+    assert_eq!(report.misses[0].state, State::Playing);
+    assert_eq!(report.misses[0].block, "STATE_PLAYING");
+    assert_eq!(report.misses[0].entry, "State_Playing_network.bnd");
+}
+
+#[test]
 fn payment_views_stage_through_their_own_rows() {
     let list = [
         "NUMBER_OF_STATE 0x02",

@@ -1790,7 +1790,7 @@ fn hovered_placement_figure(art: &SceneArt, action: PlanetAction) -> Option<&Ava
 /// `(0,0)` without a staged backdrop (select-music-like sheets
 /// then paint absolute, correct for their near-origin backdrops).
 #[must_use]
-pub(crate) fn dialog_origin(placements: &[ScenePlacement]) -> (i32, i32) {
+pub fn dialog_origin(placements: &[ScenePlacement]) -> (i32, i32) {
     placements
         .iter()
         .find(|placement| {

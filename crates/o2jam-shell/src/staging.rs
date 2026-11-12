@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use o2jam_file::{Bnd, ControlBlock, ControlList};
-use o2jam_render::{Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
+use o2jam_render::{rect_from_corners, Rect, NATIVE_HEIGHT, NATIVE_WIDTH};
 
 use crate::avatar::{
     bind_scene_rects, load_archive_sprite_for_stage, load_scene_figures_for_room,
@@ -394,6 +394,54 @@ pub const DIALOG_TABLE: &[DialogRow] = &[
     },
 ];
 
+/// One declaration row per exe-literal bind load: a `.bnd` file the
+/// exe stages by name (files `0x24aba7`/`0x24b080`,
+/// `docs/bnd-semantics.md`), with no `ControlList` block to pair it —
+/// `ControlList_Playing.txt` declares only `STATE_PLAYING`, so the
+/// bound-arm resolver has nothing to mirror for these sheets. The key
+/// is the literal file name (the exe's own vocabulary, like the
+/// `STATE_*` block names keying [`STAGE_TABLE`]); `host` names the
+/// neighbor scene whose slot consumes the art later.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ByNameRow {
+    /// Literal `.bnd` file in the archive.
+    pub bind_file: &'static str,
+    /// Archive holding the file.
+    pub archive: StagingArchive,
+    /// Neighbor scene the art stages beside.
+    pub host: State,
+}
+
+/// The by-name declaration, read as data: one row per literal bind
+/// load the exe mounts outside every `ControlList` block (ticket
+/// #166). The rows share the one staging seam — [`stage_byname_sheet`]
+/// parses each file through the existing `parse_bnd` path and stages
+/// the file's own rects — never a second system, never literals.
+/// Paint wiring rides a later ticket: the game parks these placements
+/// beside the Playing scene.
+///
+/// Exe evidence: `Avatar_Info.bnd`/`Map_Avatar.bnd` at file
+/// `0x24aba7`, `State_Playing_network.bnd` at file `0x24b080`
+/// (`docs/bnd-semantics.md`); the single-block Playing list behind
+/// the missing `BOUND` rows is pinned by #165.
+pub const BYNAME_TABLE: &[ByNameRow] = &[
+    ByNameRow {
+        bind_file: "State_Playing_network.bnd",
+        archive: StagingArchive::Playing,
+        host: State::Playing,
+    },
+    ByNameRow {
+        bind_file: "Avatar_Info.bnd",
+        archive: StagingArchive::Playing,
+        host: State::Playing,
+    },
+    ByNameRow {
+        bind_file: "Map_Avatar.bnd",
+        archive: StagingArchive::Playing,
+        host: State::Playing,
+    },
+];
+
 /// Control-list entry holding every Interface Block.
 const INTERFACE_LIST: &str = "ControlList_Interface.txt";
 /// Control-list entry holding every Playing Block.
@@ -498,6 +546,50 @@ pub fn stage_dialog(archive: &[u8], dialog: Dialog, ctx: StageContext) -> StageR
         },
         ctx,
     )
+}
+
+/// Stage one by-name sheet from archive bytes through its row: parse
+/// the literal `.bnd` through the existing `parse_bnd` path and stage
+/// one placement per rect in file order, verbatim through
+/// `rect_from_corners` (the same conversion the bound arm uses). No
+/// block pairs the rects and none names a body, so the placements
+/// carry no id, code, or sprite and no figure loads (ADR-0003: parsed
+/// data, never literals; paint wiring rides a later ticket). A
+/// missing bind file records its miss against the host row and stages
+/// nothing.
+#[must_use]
+pub fn stage_byname_sheet(archive: &[u8], row: &ByNameRow) -> StageReport {
+    let mut report = StageReport::default();
+    let Some(bind) = read_bind(archive, row.bind_file) else {
+        push_miss(&mut report, row.host, row.host.block_name(), row.bind_file);
+        return report;
+    };
+    let art = StagedArt {
+        placements: byname_placements(&bind),
+        figures: HashMap::new(),
+    };
+    if art.placements.is_empty() {
+        return report;
+    }
+    report.art = Some(art);
+    report
+}
+
+/// One placement per literal-bind rect in file order: the file's own
+/// contents, with no entry to pair — no id, code, or sprite (mirrors
+/// `full_canvas_placements`, but with the parsed rects, never the
+/// canvas fill).
+fn byname_placements(bind: &Bnd) -> Vec<ScenePlacement> {
+    bind.rects
+        .iter()
+        .map(|corners| ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code: 0,
+            sprite: None,
+            rect: rect_from_corners(corners.x1, corners.y1, corners.x2, corners.y2),
+        })
+        .collect()
 }
 
 /// One bound row resolved to stager inputs: the Block name for
