@@ -2356,6 +2356,49 @@ impl ScreenGame {
         (top + slot < self.channels.len()).then_some(top + slot)
     }
 
+    /// Highlighted channel row (the keyboard Confirm target;
+    /// `None` off the Channel screen or with no listed rows). The
+    /// session bridge logs into it before advancing (ticket #30).
+    #[must_use]
+    pub fn highlighted_channel(&self) -> Option<ChannelState> {
+        if self.flow.current() != Screen::Channel {
+            return None;
+        }
+        self.channels.get(self.highlight).copied()
+    }
+
+    /// Channel row whose enter face covers (`x`, `y`) (the mouse
+    /// entry target; `None` off the Channel screen, on the X/scroll
+    /// chrome, on a row body, or while a slash draft owns the click).
+    /// Mirrors [`Self::click_channel_row`]'s enter arm so the session
+    /// bridge can exchange the login before forwarding the press
+    /// (ticket #30).
+    #[must_use]
+    pub fn channel_enter_at(&self, x: i32, y: i32) -> Option<ChannelState> {
+        if self.flow.current() != Screen::Channel {
+            return None;
+        }
+        if channel_dialog_x_hit(x, y) || channel_scroll_hit(x, y).is_some() {
+            return None;
+        }
+        let (top, shown) = channel_viewport(self.highlight, self.channels.len());
+        let slot = channel_row_hit(x, y, shown)?;
+        let index = top + slot;
+        if index >= self.channels.len() {
+            return None;
+        }
+        if !channel_face_hit(x, y, slot) {
+            return None;
+        }
+        // A slash draft consumes the click instead of entering
+        // (the click path takes it); peek here so the query stays
+        // side-effect free.
+        if self.channel_slash_command() != SlashCommand::Empty {
+            return None;
+        }
+        self.channels.get(index).copied()
+    }
+
     /// Board control under the pointer, through the same staged
     /// resolution the click path rides ([`Self::click_planet`])
     /// (`None` off the board, off the Planet phase, or while a modal
@@ -8229,6 +8272,47 @@ mod game_tests {
         let second = game.take_equip_send().expect("second apply queues");
         assert_eq!((second.slot, second.item_id), (1, 2));
         let _ = MYROOM_BAG_FIRST_CODE;
+    }
+
+    /// Highlighted channel row (the keyboard Confirm target).
+    #[test]
+    fn highlighted_channel_names_the_confirm_target() {
+        let mut game = ScreenGame::new();
+        assert_eq!(game.highlighted_channel(), None);
+        game.set_channels(two_channels());
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        assert_eq!(game.screen(), Screen::Channel);
+        assert_eq!(
+            game.highlighted_channel().map(|row| row.channel_id),
+            Some(2)
+        );
+        game.menu_key(MenuKey::Down, true);
+        assert_eq!(
+            game.highlighted_channel().map(|row| row.channel_id),
+            Some(9)
+        );
+    }
+
+    /// Mouse entry target: only an enter-face click names its row.
+    #[test]
+    fn channel_enter_at_names_only_face_clicks() {
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        // Row 0 enter face (ticket #56: (502,236)-(546,257)).
+        assert_eq!(
+            game.channel_enter_at(524, 246).map(|row| row.channel_id),
+            Some(2)
+        );
+        // Row bodies highlight only, never enter.
+        assert_eq!(game.channel_enter_at(300, 240), None);
+        assert_eq!(game.channel_enter_at(300, 290), None);
+        // Off the rows entirely.
+        assert_eq!(game.channel_enter_at(10, 10), None);
+        // The X chrome closes instead of entering.
+        assert_eq!(game.channel_enter_at(577, 171), None);
     }
 
     #[test]
