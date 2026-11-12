@@ -9,6 +9,7 @@ use super::error::Error;
 use super::frame::Frame;
 use super::message::{decode_empty_frame, encode_empty, EmptyMessage, WireMessage};
 use super::strings::{decode_null_terminated, encode_null_terminated, MAX_STRING_LEN};
+use crate::macros::wire_enum;
 
 // `SyncFreePass` 5025 likewise sends a bare header (send case VA
 // `0x4f400c`, file `0xf400c`; the three virtual-send sites pass a
@@ -96,32 +97,13 @@ impl FreePassType {
     }
 }
 
-/// Free-pass sync verdicts (Memoryer `SyncResult`, `uint`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u32)]
-pub enum SyncFreePassResult {
-    /// Wallet + pass state follow (or nothing on a short body).
-    Success = 0,
-    /// Pass state unavailable.
-    Unknown = 0xFFFF_FFA2,
-}
-
-impl SyncFreePassResult {
-    /// Numeric wire value.
-    #[must_use]
-    pub fn as_u32(self) -> u32 {
-        self as u32
-    }
-
-    /// Interpret a raw verdict. `None` means a code the 7.55
-    /// server never sends (kept extensible, never guessed).
-    #[must_use]
-    pub fn from_u32(value: u32) -> Option<Self> {
-        match value {
-            0 => Some(Self::Success),
-            0xFFFF_FFA2 => Some(Self::Unknown),
-            _ => None,
-        }
+wire_enum! {
+    /// Free-pass sync verdicts (Memoryer `SyncResult`, `uint`).
+    pub enum SyncFreePassResult: u32, resolve from_u32, encode as_u32, {
+        /// Wallet + pass state follow (or nothing on a short body).
+        Success = 0,
+        /// Pass state unavailable.
+        Unknown = 0xFFFF_FFA2,
     }
 }
 
@@ -353,6 +335,14 @@ mod tests {
             Some(SyncFreePassResult::Unknown)
         );
         assert_eq!(SyncFreePassResult::from_u32(7), None);
+    }
+
+    #[test]
+    fn sync_free_pass_result_codes_round_trip() {
+        for result in [SyncFreePassResult::Success, SyncFreePassResult::Unknown] {
+            assert_eq!(SyncFreePassResult::from_u32(result.as_u32()), Some(result));
+        }
+        assert_eq!(SyncFreePassResult::from_u32(1), None);
     }
 
     #[test]

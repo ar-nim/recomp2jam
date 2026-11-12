@@ -42,53 +42,30 @@ use super::message::WireMessage;
 use super::rows::rows_zero_on_negative_exact;
 use super::strings::{decode_null_terminated, encode_null_terminated, MAX_STRING_LEN};
 
-/// Relay opcodes (`Memoryer.Relay` `RelayCommand`, matched in-exe by
-/// the `SetID(1..7)` ctors; see `docs/relay.md`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u16)]
-pub enum RelayCommand {
-    /// Session keys issued (`CO2Jam`-side `SetID(1)`).
-    PeerConnected = 1,
-    /// Client answers with its session keys (`SetID(2)`).
-    PeerConfirm = 2,
-    /// Relay path assigned; forces TCP fallback (`SetID(3)`).
-    PeerEndpointAssigned = 3,
-    /// Keepalive (`SetID(4)`).
-    Ping = 4,
-    /// Full score tally, fanned out to room peers (`SetID(5)`).
-    UpdateGameStats = 5,
-    /// Combo broke (`CO2JamMissPack`, `SetID(6)`).
-    ComboBroken = 6,
-    /// Combo (re)started (`CO2JamCoolPack`, `SetID(7)`).
-    ComboStarted = 7,
-    /// Bind relay sessions into a game (`u8`-counted key pairs).
-    CreateSession = 10,
-    /// Unbind relay sessions.
-    DeleteSession = 11,
-}
+use crate::macros::wire_enum;
 
-impl RelayCommand {
-    /// Numeric wire value.
-    #[must_use]
-    pub fn id(self) -> u16 {
-        self as u16
-    }
-
-    /// Resolve a received id. `None` means not a relay command.
-    #[must_use]
-    pub fn from_id(id: u16) -> Option<Self> {
-        match id {
-            1 => Some(Self::PeerConnected),
-            2 => Some(Self::PeerConfirm),
-            3 => Some(Self::PeerEndpointAssigned),
-            4 => Some(Self::Ping),
-            5 => Some(Self::UpdateGameStats),
-            6 => Some(Self::ComboBroken),
-            7 => Some(Self::ComboStarted),
-            10 => Some(Self::CreateSession),
-            11 => Some(Self::DeleteSession),
-            _ => None,
-        }
+wire_enum! {
+    /// Relay opcodes (`Memoryer.Relay` `RelayCommand`, matched in-exe by
+    /// the `SetID(1..7)` ctors; see `docs/relay.md`).
+    pub enum RelayCommand: u16, resolve from_id, encode id, {
+        /// Session keys issued (`CO2Jam`-side `SetID(1)`).
+        PeerConnected = 1,
+        /// Client answers with its session keys (`SetID(2)`).
+        PeerConfirm = 2,
+        /// Relay path assigned; forces TCP fallback (`SetID(3)`).
+        PeerEndpointAssigned = 3,
+        /// Keepalive (`SetID(4)`).
+        Ping = 4,
+        /// Full score tally, fanned out to room peers (`SetID(5)`).
+        UpdateGameStats = 5,
+        /// Combo broke (`CO2JamMissPack`, `SetID(6)`).
+        ComboBroken = 6,
+        /// Combo (re)started (`CO2JamCoolPack`, `SetID(7)`).
+        ComboStarted = 7,
+        /// Bind relay sessions into a game (`u8`-counted key pairs).
+        CreateSession = 10,
+        /// Unbind relay sessions.
+        DeleteSession = 11,
     }
 }
 
@@ -1909,6 +1886,25 @@ mod relay_command_tests {
         assert_eq!(RelayCommand::from_id(11), Some(RelayCommand::DeleteSession));
         assert_eq!(RelayCommand::from_id(8), None);
         assert_eq!(RelayCommand::UpdateGameStats.id(), 5);
+    }
+
+    #[test]
+    fn relay_command_ids_round_trip() {
+        let all = [
+            RelayCommand::PeerConnected,
+            RelayCommand::PeerConfirm,
+            RelayCommand::PeerEndpointAssigned,
+            RelayCommand::Ping,
+            RelayCommand::UpdateGameStats,
+            RelayCommand::ComboBroken,
+            RelayCommand::ComboStarted,
+            RelayCommand::CreateSession,
+            RelayCommand::DeleteSession,
+        ];
+        for command in all {
+            assert_eq!(RelayCommand::from_id(command.id()), Some(command));
+        }
+        assert_eq!(RelayCommand::from_id(0), None);
     }
 
     #[test]

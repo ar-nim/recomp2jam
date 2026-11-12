@@ -23,6 +23,7 @@ mod inflate;
 #[macro_use]
 pub mod message;
 pub mod gift;
+mod macros;
 pub mod play;
 pub mod reader;
 pub mod relay;
