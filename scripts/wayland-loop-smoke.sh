@@ -28,6 +28,10 @@
 #
 # Requires: kwin_wayland and qdbus6 on the PATH, XDG_RUNTIME_DIR set, a
 # KDE session bus (org.kde.KWin) for the minimize step.
+#
+# CI/headless counterpart (no session display, no installs): the in-repo
+# compositor fixture crates/wl-smoke-compositor (#126) with driver example
+# frame_callback_smoke (starve|flow) — same bands, same red-green.
 set -euo pipefail
 
 # --- tunables (issue #118 acceptance bands) ---------------------------------

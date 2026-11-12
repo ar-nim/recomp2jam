@@ -10,6 +10,7 @@ members = [
   "crates/o2jam-net",
   "crates/recomp2jam",
   "crates/o2jam-dump",
+  "crates/wl-smoke-compositor",
 ]
 
 [workspace.package]

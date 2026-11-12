@@ -1,6 +1,9 @@
 # Input-testing matrix — OS/environment-agnostic auto-testing of the window input boundary
 
 Date: 2026-11-12. Ticket #121. Related: #118 (live regression), #119 (L0 seam gate, landed).
+Update 2026-11-12 (ticket #126): the L2-Wayland frame-callback starvation case is
+now LANDED as a headless in-repo compositor fixture (`crates/wl-smoke-compositor`),
+superseding the weston-install line for that case — weston is unneeded for it.
 Read-only research; no repo code changed. Local inventory at
 `~/scratch/input-testing/findings-inventory.md`.
 
@@ -192,9 +195,12 @@ Zero-install fallback compositor candidate: `kwin_wayland` nested
 ## Open items named for tickets
 
 - L1: ydotool driver script + `rig-run.sh` Wayland mode.
-- L2: Wayland CI job (weston-in-Xvfb; XTEST injection; ubuntu-latest).
+- L2: Wayland CI job — frame-callback starvation harness LANDED (#126,
+  `wl-smoke-compositor`, no weston/Xvfb/install needed); input-routing
+  cases still planned weston-in-Xvfb with XTEST injection on ubuntu-latest.
 - L2 (later): Windows SendInput job; wlroots virtual-pointer variant;
-  macOS optional.
+  macOS optional. Pointer injection on the landed fixture is recorded
+  above as the future #118 no-input leg (server-side only).
 - #118: contained-reproduction experiment per the checks above
   (requires installing `weston` + `ydotool` on the owner machine —
   owner approval; both user-level, no system config). Note the L1
@@ -280,7 +286,51 @@ Red-green evidence (KWin 6.8.2, 2026-11-12): pre-fix tree (parent of
 7c3fcfd (`pre_present_notify`) 0.0 % across all five windows, twice — PASS.
 Refs: #118 #119.
 
-### L2-Wayland-CI — weston nested in Xvfb + XTEST (6 cases; compositor = weston, NOT KWin)
+Headless CI counterpart: `crates/wl-smoke-compositor` (#126) reproduces
+this same red-green with no session display — see the L2-Wayland-CI landed
+section below.
+
+### L2-Wayland-CI — headless in-repo compositor fixture (landed, #126) + weston/XTEST (input cases)
+
+The frame-callback starvation probe no longer needs weston, Xvfb, or any
+install: `crates/wl-smoke-compositor` is a minimal headless Wayland compositor
+(`publish = false`; outside the shipped client's dependency tree) that serves
+exactly the globals winit 0.30.13 + softbuffer bind, records
+`wl_surface.frame` requests, and either never completes them (`starve`) or
+paces them at ~60 Hz (`flow`). The driver
+(`cargo run -p wl-smoke-compositor --example frame_callback_smoke -- starve|flow`)
+spawns the game binary on a temp-`XDG_RUNTIME_DIR` socket with `DISPLAY`
+unset, waits for map + first paint, and samples `/proc/<pid>/stat` utime+stime
+over 5 x 6 s windows with the #118 bands (PASS: every window < 20% CPU in
+starve; FAIL: any >= 60%). The KWin script (`scripts/wayland-loop-smoke.sh`)
+stays as the real-compositor L1 smoke; the fixture is the environment-agnostic
+L2/CI red-green for the same gate.
+
+Red-green evidence (fixture compositor, 2026-11-12): pre-fix tree (parent of
+7c3fcfd) starve FAIL [99.7, 99.8, 99.7, 99.8, 99.8] % CPU with 565
+free-running paints; fixed tree starve PASS [0.0, 0.0, 0.0, 0.0, 0.0] % with
+the frame callback held pending, and flow PASS-with-paints
+[62.2, 61.8, 61.8, 61.8, 62.3] % with 299 paints during sampling (the
+flow arm's liveness proof: a debug-profile game repainting at ~60 Hz spends
+~62% of one core on its software raster — healthy, paced, not wedged).
+Refs: #118 #126.
+
+Future input leg (NOT implemented, recorded here per #126): the fixture's
+`wl_seat` already hands out `wl_pointer` objects; injecting deterministic
+pointer stimuli for the #118 no-input leg is purely server-side from here —
+send `wl_pointer.enter` (serial + surface + fixed-point coords), then
+`motion`/`button` (press/release) events with monotonically increasing
+serials and timestamps from the compositor turn loop, and drive asserts off
+the game's routed-event log. No client-side or kernel-input machinery
+(uinput/XTEST) is needed at any tier for this.
+
+The remaining Wayland-CI cases (click routing, letterbox, lane keys — the
+weston/XTEST rows below) still target a real compositor because they assert
+client *response* to input, not just loop health.
+
+#### Original weston row (superseded for starvation only; still the plan for input routing)
+
+Compositor = weston, NOT KWin:
 
 Setup: ubuntu-latest, apt `weston xvfb python-xlib`-class deps, Xvfb :99,
 `weston --backend=x11-backend.so --socket=...` on :99, client with
@@ -293,7 +343,7 @@ assertions, no X in the loop.)
 3. `l2w_letterbox_drop` — same as L1 #4 assertions.
 4. `l2w_release_outside_is_noop` — same as L1 #5 assertions.
 5. `l2w_lane_key_routes` — action: XTEST key press/release; assertion: lane down/up in log. Caveat encoded: with no WM the focused-surface path is weston's own click-to-focus; if keys starve, mark case expected-fail referencing winit #4822 (PointerRoot-focus drop) rather than deleting it.
-6. `l2w_frame_callback_starvation_probe` — action: occlude/iconify the client surface (or move it fully behind a second surface), wait 1 s, restore, request redraw via driver click; assertion: input log + a client heartbeat line prove the loop resumed without a 100%-CPU wedge (strace fingerprint of #4668 — `epoll_pwait` timeout-0 at kHz rates — is the failure signature; under our `Wait` control flow the spin variant is not expected, the starvation variant is).
+6. `l2w_frame_callback_starvation_probe` — **LANDED (#126) headless**: superseded by `crates/wl-smoke-compositor` + `frame_callback_smoke` (see the landed section above); occlude/iconify starvation is now synthesized by the fixture holding `wl_callback.done`, with no compositor install at all. The original weston occlude-and-restore variant stays as an optional real-compositor extension.
 
 ### L2-X11-CI — Xvfb + XTEST port of the :99 rig (5 cases)
 

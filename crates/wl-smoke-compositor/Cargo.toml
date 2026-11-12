@@ -1,0 +1,19 @@
+[package]
+name = "wl-smoke-compositor"
+description = "Minimal headless Wayland compositor fixture for the frame-callback starvation red-green (#126)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+tempfile = "3"
+wayland-backend = "0.3"
+wayland-protocols = { version = "0.32", features = ["server"] }
+wayland-server = "0.31"
+[lib]
+name = "wl_smoke_compositor"
+path = "src/lib.rs"
