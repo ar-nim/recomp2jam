@@ -32,7 +32,7 @@ Shared evidence pins (reused, never re-derived):
 | Channel | `channel_chrome_sweep_arms_rows_but_not_chrome`, `channel_hover_follows_the_scrolled_viewport`, `channel_hover_survives_a_slash_draft` | `x_button_click_closes_the_dialog_to_the_planet_board`, `channel_scroll_bar_body_click_is_a_labelled_noop`, `empty_channel_list_answers_no_hover_or_click` | bnd-pinned X rect (541,151)-(589,189); NO PAGER readout |
 | Waiting | `waiting_chrome_sweep_arms_no_hover_state` | `waiting_start_press_fires_on_down_and_holds_on_release`, `waiting_team_sweep_queues_4004_then_4008_per_button`, `waiting_unwired_chrome_clicks_land_nowhere`, `waiting_dialog_up_routes_rows_and_holds_chrome` | 4004/4008 relay pins |
 | Result | `result_chrome_sweep_paints_no_hover_state`, `result_rank_rows_are_not_chrome` | `result_retry_press_fires_on_down_and_queues_4010_once`, `result_back_release_outside_holds_rooms` | 4010/4021 relay pins (#87/#88) |
-| Room | `hovered_room_control_*`, `room_hover_hides_behind_the_open_dialog` | per-arm guards incl. create-room popup (#134), top strip, FIRSTSTEP labeled no-op (#34) | `docs/hover.md` room table |
+| Room | `hovered_room_control_*`, `room_hover_hides_behind_the_open_dialog` | per-arm guards incl. create-room popup (#134), top strip, FIRSTSTEP visits Tutorial (#34) | `docs/hover.md` room table |
 
 Options dialog rides the in-flight #131/#132 findings (this sweep
 adds no duplicate geometry work).
@@ -127,7 +127,7 @@ a future control must arrive with evidence, not by accident.
 
 - [x] Planet board: emblems, gear, exit, promo cells + FREE/DRUM labeled no-ops
 - [x] Channel: rows, select bar, enter face, scrollbar, pager
-- [x] Room: chrome on both list arms, create-room popup, top strip, FIRSTSTEP labeled no-op, dialogs
+- [x] Room: chrome on both list arms, create-room popup, top strip, FIRSTSTEP visits Tutorial, dialogs
 - [x] Waiting: top buttons, seat covers, team buttons, music-select cells
 - [x] Side screens: shop / musicshop / myroom / lanking / payment chrome (silence asserted per control or wired)
 - [x] Result: retry/back/confirm chrome

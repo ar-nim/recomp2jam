@@ -247,11 +247,6 @@ pub struct RoomControlNoop {
 /// tree has not traced yet: the exe `CStateRoom` click dispatch.
 const HANDLER_STEP: &str =
     "rig click on the control in the live room plus a memory read of the CStateRoom click dispatch (docs/parity/room.md Input row)";
-/// Next evidence step for `IDC_BUTTON_SROOM_FIRSTSTEP` (ticket #34):
-/// `STATE_ROOM` carries no tutorial control, so the tutorial emblem's
-/// entry path owns the question.
-const TUTORIAL_STEP: &str =
-    "pin the tutorial entry path (docs/parity/tutorial.md TUTORIAL_ENTRY_NEXT_STEP); STATE_ROOM itself carries no tutorial control";
 /// Next evidence step for the three mode filters.
 const MODE_FILTER_STEP: &str =
     "rig click on each mode filter plus a capture of the filtered room list (the list filter rule is untraced)";
@@ -269,7 +264,7 @@ const DIALOG_STAGE_STEP: &str =
 /// (tickets #32/#34).
 ///
 /// A control that already has a target keeps it (`BACK`, `CREATE`,
-/// `OPTION`, the four side visits cited below); every other staged
+/// `OPTION`, the five side visits cited below); every other staged
 /// button carries its named next evidence step. The codes pair with the
 /// `.bnd` rects by control ordinal (owner rule `f38f3`), so each arm is
 /// a rect lookup plus a dispatch — no geometry is invented here.
@@ -284,9 +279,15 @@ const ROOM_CONTROLS: &[RoomControl] = &[
     routed(0x1320_0002, "IDC_BUTTON_SROOM_BACK", Back),
     routed(0x1320_0007, "IDC_BUTTON_SROOM_CREATE", Create),
     routed(0x1320_000B, "IDC_BUTTON_SROOM_OPTION", Options),
-    // The four controls whose target already ships in the shell.
+    // The four controls whose target already ships in the shell, plus
+    // the tutorial entry: the room top-right `FIRSTSTEP` chrome
+    // (`Room_FirstStep.ojs`, hover rect 660,1-718,32 per `docs/hover.md`)
+    // visits the guided-play side screen (`CStateTutorial`). What the
+    // exe runs on tutorial entry stays OPEN behind
+    // `TUTORIAL_ENTRY_NEXT_STEP` (`docs/parity/tutorial.md` Input row).
     routed(0x1320_0008, "IDC_BUTTON_SROOM_ITEMSHOP", Side(SideScreen::Shop)),
     routed(0x1320_0009, "IDC_BUTTON_SROOM_MYROOM", Side(SideScreen::MyRoom)),
+    routed(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP", Side(SideScreen::Tutorial)),
     routed(0x1320_0037, "IDC_BUTTON_SROOM_MUSICSHOP", Side(SideScreen::MusicShop)),
     // `MYBAND` opens the ranking board: the band standings board the tree
     // ships is `SideScreen::Lanking` (the room has no band view). The
@@ -297,7 +298,6 @@ const ROOM_CONTROLS: &[RoomControl] = &[
     // No evidenced target yet: the press is recorded with its next step.
     unwired(0x1320_0006, "IDC_BUTTON_SROOM_QUICKJOIN", HANDLER_STEP),
     unwired(0x1320_000A, "IDC_BUTTON_SROOM_COUPON", HANDLER_STEP),
-    unwired(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP", TUTORIAL_STEP),
     unwired(0x1320_0038, "IDC_BUTTON_SROOM_MYCAPSULE", HANDLER_STEP),
     unwired(0x1320_0039, "IDC_BUTTON_SROOM_EVENT", HANDLER_STEP),
     unwired(0x1320_003D, "IDC_BUTTON_SROOM_CONFERENCE", HANDLER_STEP),
@@ -16262,12 +16262,34 @@ mod game_tests {
     }
 
     #[test]
-    fn staged_room_control_without_a_target_records_a_labelled_noop() {
-        // Ticket #34: `FIRSTSTEP` is the closest staged control to a
-        // reported tutorial button, and `STATE_ROOM` carries no
-        // tutorial entry at all — the click must be recorded, never
-        // silently dropped.
+    fn staged_firststep_button_enters_the_tutorial_flow() {
+        // Ticket #34: the room top-right `FIRSTSTEP` chrome
+        // (`0x13200032`, `Room_FirstStep.ojs`, hover rect 660,1-718,32
+        // per `docs/hover.md`) answers by visiting the tutorial side
+        // screen (`CStateTutorial`); the lobby holds underneath and
+        // BACK returns to it. What the exe runs on tutorial entry
+        // stays OPEN behind `TUTORIAL_ENTRY_NEXT_STEP` (guarded by
+        // `tutorial_entry_path_names_its_next_step`).
         let mut game = room_lobby_with_control(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP");
+        game.ingest_snapshot(&InputSnapshot::click_at(
+            ROOM_CONTROL_TEST_CLICK.0,
+            ROOM_CONTROL_TEST_CLICK.1,
+        ));
+        assert_eq!(game.side(), Some(SideScreen::Tutorial));
+        assert_eq!(game.screen(), Screen::Room);
+        assert_eq!(game.room_control_noop(), None);
+        assert!(game.leave_side());
+        assert_eq!(game.side(), None);
+        assert_eq!(game.screen(), Screen::Room);
+    }
+
+    #[test]
+    fn staged_room_control_without_a_target_records_a_labelled_noop() {
+        // Ticket #34: `QUICKJOIN` stands in for the staged controls
+        // with no evidenced target yet (`FIRSTSTEP` now visits the
+        // tutorial side screen) — the click must be recorded, never
+        // silently dropped.
+        let mut game = room_lobby_with_control(0x1320_0006, "IDC_BUTTON_SROOM_QUICKJOIN");
         game.ingest_snapshot(&InputSnapshot::click_at(
             ROOM_CONTROL_TEST_CLICK.0,
             ROOM_CONTROL_TEST_CLICK.1,
@@ -16276,12 +16298,12 @@ mod game_tests {
         assert_eq!(game.side(), None);
         assert_eq!(game.room_dialog(), None);
         let noop = game.room_control_noop().expect("recorded press");
-        assert_eq!(noop.id, "IDC_BUTTON_SROOM_FIRSTSTEP");
-        // The press points at the tutorial entry's own OPEN item, so
-        // the label names that path — never a bare "unwired".
+        assert_eq!(noop.id, "IDC_BUTTON_SROOM_QUICKJOIN");
+        // The press names the exe `CStateRoom` click dispatch rig step
+        // — never a bare "unwired".
         assert!(
-            noop.next_step.contains("tutorial entry path"),
-            "next step names the tutorial entry OPEN item: {}",
+            noop.next_step.contains("CStateRoom click dispatch"),
+            "next step names the dispatch rig step: {}",
             noop.next_step
         );
     }
