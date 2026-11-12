@@ -9697,6 +9697,7 @@ mod paint_tests {
                 selection,
                 hover,
                 press,
+                1,
             );
             buf
         };
@@ -9751,6 +9752,7 @@ mod paint_tests {
             None,
             None,
             None,
+            1,
         );
         for (code, x) in [
             (PLANET_BUTTON_FREE_CODE, 614),
