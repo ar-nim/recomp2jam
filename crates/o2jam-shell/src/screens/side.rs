@@ -2295,9 +2295,8 @@ pub const PLANET_BUTTON_EASY_CODE: u32 = 0x1920_1004;
 pub const PLANET_BUTTON_FREE_CODE: u32 = 0x1920_1005;
 /// DRUM emblem button code (quest, backend never wired — P0).
 pub const PLANET_BUTTON_DRUM_CODE: u32 = 0x1920_1006;
-/// Promotion carousel LEFT cell code: steps the banner back (the
-/// press records; carousel semantics stay OPEN, `docs/planet.md`
-/// OPEN 4). Pinned rect rect 12 (353,511)-(379,535) via ordinal
+/// Promotion carousel LEFT cell code: steps the banner back (exe
+/// handler VA `0x48e0eb`, wrap — `docs/planet.md`). Pinned rect rect 12 (353,511)-(379,535) via ordinal
 /// `(code & 0xFFF) − 1` — geometry rides staged placements only
 /// (ADR-0003: no fallback literals), never this constant.
 pub const PLANET_PROMO_LEFT_CODE: u32 = 0x1920_000D;
@@ -2337,11 +2336,27 @@ pub const PLANET_TEXT_FREE_CODE: u32 = 0x1940_000A;
 /// DRUM caption code (`IDC_TEXT_SPLANET_DRUM`).
 pub const PLANET_TEXT_DRUM_CODE: u32 = 0x1940_000B;
 
+/// Promotion banner image code: `IDC_IMAGE_SPLANET_PROMOTION`
+/// (`Planet_Promotion.ojs`, three raw 701x333 records sharing the
+/// (49,163) anchor — the three carousel frames). Pinned by the
+/// archive (`ControlList_Interface.txt` STATE_PLANET) and the exe's
+/// single immediate push (file `0x8de2d`, VA `0x48de2d`, the Planet
+/// state mount: control handle to `dialog+0x84`). Geometry rides
+/// staged placements only (owner rule `f38f3`), never this constant.
+pub const PLANET_PROMO_IMAGE_CODE: u32 = 0x1950_000C;
+/// Carousel rotation period in milliseconds: the exe's per-frame
+/// tick (VA `0x48e3b0`) advances one banner frame per `0xBB8` (3000)
+/// elapsed milliseconds (push at file `0x8d3d0`, VA `0x48d3d0`)
+/// while the rotation flag (`this+0x90`) is set, then repaints
+/// through the refresh arm (VA `0x48e4b0`). The shell core carries
+/// no wall clock, so the cadence gate lives in the presenter — see
+/// [`PlanetPromoCarousel::step_forward`] and
+/// `ScreenGame::tick_planet_promo`.
+pub const PLANET_PROMO_TICK_MS: u32 = 3000;
 /// One pressed promotion-carousel cell: which banner control
 /// answered the click (LEFT steps back, STOP halts rotation,
-/// RIGHT steps forward — what the exe does with the press stays
-/// OPEN, `docs/planet.md` OPEN 4; the shell records the press and
-/// holds the board). Geometry never lives here: it rides the
+/// RIGHT steps forward — the carousel arms are exe-pinned,
+/// `docs/planet.md`). Geometry never lives here: it rides the
 /// staged `.bnd` placements (owner rule `f38f3`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanetPromo {
@@ -2351,6 +2366,80 @@ pub enum PlanetPromo {
     Stop,
     /// RIGHT cell (`0X1920000E`, rect 13).
     Right,
+}
+
+/// Promotion-carousel state: the 1-based banner frame plus the
+/// rotation flag (exe `CStatePlanet` words `this+0x80`/`this+0x90`,
+/// `docs/planet.md`). Boot opens on frame 1 with rotation enabled
+/// (constructor VAs `0x48dc4c`/`0x48dc8c`); the staged banner body
+/// supplies the frame count (`Planet_Promotion.ojs` carries three
+/// frames). Frame/flag words are `u32`/bool here — the exe words
+/// are read by comparison only, never by address width.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlanetPromoCarousel {
+    /// Visible banner frame, 1-based (exe `this+0x80`).
+    index: u32,
+    /// Rotation enabled (exe `this+0x90` nonzero).
+    spinning: bool,
+}
+
+/// Boot state (first banner, rotation on) is the default: a fresh
+/// carousel is a booted board.
+impl Default for PlanetPromoCarousel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PlanetPromoCarousel {
+    /// Boot state: first banner, rotation on.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            index: 1,
+            spinning: true,
+        }
+    }
+
+    /// Visible banner frame, 1-based.
+    #[must_use]
+    pub const fn index(self) -> u32 {
+        self.index
+    }
+
+    /// Whether the rotation tick advances the banner.
+    #[must_use]
+    pub const fn spinning(self) -> bool {
+        self.spinning
+    }
+
+    /// LEFT arm (VA `0x48e0eb`): one frame back, wrapping frame 1
+    /// to the last frame. With no staged frames the wrap lands on
+    /// 0 and paints nothing (the exe skips its refresh with no
+    /// image control mounted).
+    pub fn step_back(&mut self, frames: u32) {
+        if self.index <= 1 {
+            self.index = frames;
+        } else {
+            self.index -= 1;
+        }
+    }
+
+    /// RIGHT arm and rotation-tick arm (VAs `0x48e13c`/`0x48e3b0`):
+    /// one frame forward, wrapping the last frame to the first.
+    pub fn step_forward(&mut self, frames: u32) {
+        if self.index >= frames {
+            self.index = 1;
+        } else {
+            self.index += 1;
+        }
+    }
+
+    /// PLAYSTOP arm (VA `0x48e190`): toggles rotation `0 <-> 1`
+    /// with no immediate repaint (the tick reads the flag).
+    pub fn toggle(&mut self) {
+        self.spinning = !self.spinning;
+    }
 }
 
 /// One planet-board action: the control-code → action dispatch
@@ -2367,7 +2456,8 @@ pub enum PlanetAction {
         band: Option<PlanetBand>,
     },
     /// Promotion-carousel cell pressed: the press records (see
-    /// [`PlanetPromo`]); carousel semantics stay OPEN.
+    /// [`PlanetPromo`]) and drives the carousel (see
+    /// [`PlanetPromoCarousel`]).
     Promo {
         /// Which banner control answered the click.
         cell: PlanetPromo,
@@ -2379,8 +2469,8 @@ pub enum PlanetAction {
 }
 
 /// Action for one planet control code (`None` for every other
-/// code: BACK, self — the promo arms name their cell while the
-/// carousel semantics stay OPEN, `docs/planet.md` OPEN 4). The emblem arm is the
+/// code: BACK, self — the promo arms name their cell and drive the
+/// carousel, `docs/planet.md`). The emblem arm is the
 /// family-select half of the exe handler (E1,
 /// `docs/overnight-evidence/e1-channel-dialog-trigger.md`:
 /// family-index write + reconnect); the dialog-open half is the

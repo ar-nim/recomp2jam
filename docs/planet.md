@@ -278,16 +278,47 @@ The rest stack underneath the hover is untouched by this ticket.
    (`docs/smoke/planet-board-session.md`).
 3. ~~FREE/DRUM click behavior~~ DONE as permanent rejection (P0:
    no backend ever existed); what they would do stays OPEN forever.
-4. ~~Promotion PLAYSTOP/LEFT/RIGHT semantics — hit rects unwireable:
-   the `.bnd` walk pins their y band (511–535) but no x extents.~~
-   Hit rects PINNED 2026-11-11 (parsed bytes, ordinal pairing):
-   rect 12 LEFT (353,511)-(379,535), rect 13 RIGHT (421,511)-(447,535),
-   rect 14 PLAYSTOP (387,511)-(413,535) — the `< ☐ >` nav cluster
-   over the promo banner (window capture `docs/smoke/planet-board-session.md`).
-   The shell dispatches them through staged placements only
-   (`PlanetAction::Promo`, recorded press, ADR-0003: no fallback
-   literals); carousel semantics stay OPEN forever (no consumer
-   evidenced).
+4. ~~Promotion PLAYSTOP/LEFT/RIGHT semantics~~ PINNED 2026-11-12
+   (static: `OTwo.exe` 7.55 `83a04541…72c823b`, GNU objdump 2.47
+   slices + Python 3.14.10 byte scans, read-only copy, no new REA
+   dossier). The `CStatePlanet` click dispatch (VA `0x48e000`)
+   compares the control code: `== 0x1920C00F` → PLAYSTOP arm (VA
+   `0x48e190`); else `code − 0x1920000D` range-switches
+   (`sub` at VA `0x48e052`, jump table VA `0x48e254`) over
+   LEFT/RIGHT/EXIT/OPTION. The carousel words are `this+0x80`
+   (1-based banner index, boot 1 at VA `0x48dc4c`), `this+0x7c`
+   (frame count, from the promo image at mount), and `this+0x90`
+   (rotation flag, boot 1 at VA `0x48dc8c`):
+   - LEFT (VA `0x48e0eb`): `index <= 1 ? index = max : index--`,
+     then refresh.
+   - RIGHT (VA `0x48e13c`): `index >= max ? index = 1 : index++`,
+     then refresh.
+   - PLAYSTOP: toggles the flag `0 <-> 1` with no repaint.
+   - Rotation tick (VA `0x48e3b0`, on the state's vtable at
+     `.rdata` VA `0x647b38` — the per-frame update): returns
+     while the flag is clear, else returns until 3000 ms elapse
+     (`0xBB8` push at file `0x8d3d0`/VA `0x48d3d0` through the
+     timer helper `0x411ea0` on clock `0x768120` against
+     `this+0x88`), then steps one frame forward with wrap and
+     refreshes.
+   - Refresh (VA `0x48e4b0`): the `IDC_IMAGE_SPLANET_PROMOTION`
+     (`0X1950000C`, single immediate push file `0x8de2d`/VA
+     `0x48de2d`) image control at `dialog+0x84` takes
+     `set_frame(index)`. The shipped `Planet_Promotion.ojs`
+     (`Interface1.opi`) carries three raw 701x333 records sharing
+     the (49,163) anchor — the three banner frames the exe
+     1-based-indexes. Shell: `PlanetPromoCarousel`
+     (index/flag, same wrap/toggle) drives the staged banner
+     layer; the 3000 ms wall-clock cadence stays presenter-side
+     (the core exposes `tick_planet_promo`; OPEN: hook it into
+     the windowed frame loop). Guards:
+     `promo_boots_on_the_first_banner_and_spinning`,
+     `promo_left_steps_the_banner_back_with_wrap`,
+     `promo_right_steps_the_banner_forward_with_wrap`,
+     `promo_stop_toggles_the_rotation_flag`,
+     `promo_tick_advances_only_while_spinning`,
+     `promo_left_press_repaints_the_banner_region`,
+     `promo_banner_frame_follows_the_carousel_index`.
 5. ~~EXIT/OPTION destinations — same: pinned origins (750,561)/(710,561)
    only, no sizes, so no hit rect and no action.~~ DONE: ordinal
    pairing gives full rects — EXIT rect 15 (750,561)-(788,599),
