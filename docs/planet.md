@@ -212,6 +212,29 @@ the *selected family* art, a click state, not hover). The discs and
 arrows restore their own frame 0 over a dimmed rest; only PLAYSTOP
 swaps frames. FREE/DRUM render dim and never react.
 
+Ticket #137 lit-state rule (PINNED 2026-11-12, always-dim,
+unconditional): the QUEST (DRUM rect `0x19201006`) and TUTORIAL
+(FREE rect `0x19201005`) emblems are dim in every observed state
+and no state lights them — rest, hover, press, and
+family-selected/dialog-open. Evidence: (a) the hover sweep
+(`docs/hover.md`) — rest matches body frame 0 at only 55-56%
+(dim, disabled) and the in-rect hover diff is byte-identical
+offA/on for both rects (re-verified); (b) the `clean-emblem`
+press series (`~/scratch/close-backlog/gui-drive/captures/`, 7
+frames rest→dialog-open) — both rects byte-identical across all
+frames while the dialog region changes, so selecting an H/M/G
+family does not touch them; (c) canvas brightness runs at ~0.32x
+the staged frame-0 opaque mean for both bodies (dimmed, not lit);
+(d) static: the exe emblem dispatcher covers all five codes
+uniformly (toggle group, family index `pressed - 0x19201002`, no
+per-emblem frame branch —
+`docs/overnight-evidence/e1-channel-dialog-trigger.md`), and
+`OTwo.exe` carries no quest/event backend strings, so the dim is
+paint-time disabled rendering with no live condition behind it.
+The exact dim coefficients stay OPEN (the #113/#26 rest-dim
+transform, sharpened-OPEN); the shell paints the rest stack at
+full colour until #26 lands (ignored guard below names it).
+
 Shell (ticket #26): `GameLoop::hovered_planet_action` resolves the
 control under the pointer through the staged dispatch table
 (ticket #33's pointer state, no second store; silent off-board, off-
@@ -227,6 +250,9 @@ Guards: `hovered_planet_action_tracks_pointer_motion`,
 `playstop_hover_arms_the_frame_swap_cell`,
 `hovered_emblem_reveals_the_pinned_plate_band`,
 `quest_and_tutorial_emblems_ignore_hover`,
+`quest_and_tutorial_emblems_hold_rest_across_press_and_selection`,
+`quest_and_tutorial_rest_paints_the_dimmed_frame` (ignored,
+red-by-design until #26's rest-dim),
 `promo_playstop_hover_paints_the_second_frame`,
 `gear_hover_restores_the_first_frame`,
 `planet_hover_without_staged_figure_paints_nothing`.
