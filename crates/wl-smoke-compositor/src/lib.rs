@@ -1,6 +1,7 @@
-//! A minimal headless Wayland compositor that exists only to answer one
-//! question deterministically: does the game idle when the compositor
-//! withholds `wl_surface.frame` callbacks?
+//! A minimal headless Wayland compositor that exists only to answer two
+//! questions deterministically: does the game idle when the compositor
+//! withholds `wl_surface.frame` callbacks, and does a protocol-level
+//! pointer click reach the game's input routing?
 //!
 //! Ticket #126 (refs #118). The owner-machine KWin harness
 //! (`scripts/wayland-loop-smoke.sh`, L1) proved the fix (7c3fcfd,
@@ -20,8 +21,11 @@
 //!   client is throttled by nothing but its own loop).
 //! - `wl_seat` (v1, pointer capability only): enough for winit to treat
 //!   the seat as usable; no keymap needed because no keyboard is announced.
-//!   Pointer *event injection* (wl_pointer.enter/motion/button) slots in
-//!   here later for the #118 no-input leg — see `docs/input-testing-matrix.md`.
+//!   Pointer *event injection* (wl_pointer.enter/motion/button/leave) is
+//!   implemented here — it is the #118 no-input leg (see
+//!   [`PointerEvent`] and `examples/input_smoke.rs`): the compositor
+//!   sends the exact wire sequence a live click produces, so the
+//!   environment (KWin/uinput/XTEST routing) is bypassed entirely.
 //! - `xdg_wm_base` (v3): initial `xdg_toplevel.configure(0, 0)` +
 //!   `xdg_surface.configure` on `get_toplevel`, `ack_configure` accepted,
 //!   the surface is never killed.
@@ -36,7 +40,9 @@
 mod handlers;
 mod state;
 
-pub use state::{CompositorStats, FrameCallbackPolicy};
+pub mod driver;
+
+pub use state::{CompositorStats, FrameCallbackPolicy, PointerEvent};
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -113,6 +119,26 @@ impl Compositor {
     /// Snapshot of the counters the verdict is built from.
     pub fn stats(&self) -> CompositorStats {
         self.state.stats()
+    }
+
+    /// Whether the client bound a pointer and created its toplevel —
+    /// the precondition for [`Compositor::inject_pointer`].
+    pub fn pointer_ready(&self) -> bool {
+        self.state.pointer_ready()
+    }
+
+    /// Surface-local center of the toplevel's last committed buffer
+    /// (where an injected click lands). `None` before the first paint.
+    pub fn toplevel_center(&self) -> Option<(f64, f64)> {
+        self.state.toplevel_center()
+    }
+
+    /// Queue one server-side pointer event (`enter`/`motion`/`button`/
+    /// `leave`) on the client's pointer object, aimed at its toplevel
+    /// surface. Events flush with the next [`Compositor::turn`]; a dead
+    /// client object makes the event a no-op.
+    pub fn inject_pointer(&mut self, event: PointerEvent) {
+        self.state.dispatch_pointer_event(&event);
     }
 
     /// Accept every connection queued on the listening socket.

@@ -4,6 +4,15 @@ Date: 2026-11-12. Ticket #121. Related: #118 (live regression), #119 (L0 seam ga
 Update 2026-11-12 (ticket #126): the L2-Wayland frame-callback starvation case is
 now LANDED as a headless in-repo compositor fixture (`crates/wl-smoke-compositor`),
 superseding the weston-install line for that case — weston is unneeded for it.
+Update 2026-11-12 (ticket #118/#126): the L2-Wayland **input-routing** case is now
+LANDED-headless on the same fixture: server-side `wl_pointer.enter/motion/button/
+leave` injection (`examples/input_smoke.rs`) drives the game's real client input
+chain and red-greens on the `click x y` line of the game's input log. It
+supersedes the weston-in-Xvfb/XTEST input-routing line of the L2 plan below —
+no weston, no Xvfb, no XTEST needed for routing regressions. The uinput/KWin
+live path stays open as the *environment* check (see the tie-back below): green
+here plus red live means the client routing is clean and the environment input
+path is at fault.
 Read-only research; no repo code changed. Local inventory at
 `~/scratch/input-testing/findings-inventory.md`.
 
@@ -197,7 +206,10 @@ Zero-install fallback compositor candidate: `kwin_wayland` nested
 - L1: ydotool driver script + `rig-run.sh` Wayland mode.
 - L2: Wayland CI job — frame-callback starvation harness LANDED (#126,
   `wl-smoke-compositor`, no weston/Xvfb/install needed); input-routing
-  cases still planned weston-in-Xvfb with XTEST injection on ubuntu-latest.
+  case LANDED-headless on the same fixture (server-side wl_pointer
+  injection, `examples/input_smoke.rs`, supersedes the
+  weston-in-Xvfb/XTEST input line — the uinput/KWin live path remains
+  as the environment check only).
 - L2 (later): Windows SendInput job; wlroots virtual-pointer variant;
   macOS optional. Pointer injection on the landed fixture is recorded
   above as the future #118 no-input leg (server-side only).

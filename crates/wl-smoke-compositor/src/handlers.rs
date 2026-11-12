@@ -18,13 +18,12 @@ use wayland_server::protocol::{
 };
 use wayland_server::{Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource};
 
-use crate::state::{announce_seat_capabilities, announce_shm_formats, State};
+use crate::state::{announce_seat_capabilities, announce_shm_formats, BufferData, State};
 
 /// User data for `xdg_surface`: the wl_surface it decorates, so handlers
 /// that need the pairing can find it without a reverse lookup.
 pub struct XdgSurfaceData {
-    #[allow(dead_code)]
-    surface: wl_surface::WlSurface,
+    pub(crate) surface: wl_surface::WlSurface,
 }
 
 impl GlobalDispatch<wl_compositor::WlCompositor, ()> for State {
@@ -126,13 +125,13 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for State {
     }
 }
 
-impl Dispatch<wl_buffer::WlBuffer, ()> for State {
+impl Dispatch<wl_buffer::WlBuffer, BufferData> for State {
     fn request(
         _state: &mut State,
         _client: &Client,
         _resource: &wl_buffer::WlBuffer,
         _request: wl_buffer::Request,
-        _data: &(),
+        _data: &BufferData,
         _handle: &DisplayHandle,
         _data_init: &mut DataInit<'_, State>,
     ) {
@@ -179,8 +178,11 @@ impl Dispatch<wl_shm_pool::WlShmPool, ()> for State {
         _handle: &DisplayHandle,
         data_init: &mut DataInit<'_, State>,
     ) {
-        if let wl_shm_pool::Request::CreateBuffer { id, .. } = request {
-            data_init.init(id, ());
+        if let wl_shm_pool::Request::CreateBuffer {
+            id, width, height, ..
+        } = request
+        {
+            data_init.init(id, BufferData { width, height });
         }
     }
 }
@@ -201,7 +203,7 @@ impl GlobalDispatch<wl_seat::WlSeat, ()> for State {
 
 impl Dispatch<wl_seat::WlSeat, ()> for State {
     fn request(
-        _state: &mut State,
+        state: &mut State,
         _client: &Client,
         _resource: &wl_seat::WlSeat,
         request: wl_seat::Request,
@@ -211,7 +213,8 @@ impl Dispatch<wl_seat::WlSeat, ()> for State {
     ) {
         match request {
             wl_seat::Request::GetPointer { id } => {
-                data_init.init(id, ());
+                let pointer = data_init.init(id, ());
+                state.set_pointer(pointer);
             }
             // Not advertised, but initializing instead of erroring keeps
             // the fixture permissive: without a keymap the client simply
@@ -234,9 +237,9 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
         _handle: &DisplayHandle,
         _data_init: &mut DataInit<'_, State>,
     ) {
-        // set_cursor / release are all ignored. Server-side
-        // enter/motion/button injection for the future #118 no-input leg
-        // would send events on this object.
+        // set_cursor / release are all ignored. Server-side input
+        // injection sends events on this object (see
+        // [`State::dispatch_pointer_event`]).
     }
 }
 
@@ -294,13 +297,15 @@ impl Dispatch<xdg_surface::XdgSurface, XdgSurfaceData> for State {
         _client: &Client,
         resource: &xdg_surface::XdgSurface,
         request: xdg_surface::Request,
-        _data: &XdgSurfaceData,
+        data: &XdgSurfaceData,
         _handle: &DisplayHandle,
         data_init: &mut DataInit<'_, State>,
     ) {
         match request {
             xdg_surface::Request::GetToplevel { id } => {
                 let toplevel = data_init.init(id, ());
+                // The injection target: the surface this toplevel decorates.
+                state.set_toplevel(data.surface.clone());
                 // Initial configure: 0x0 leaves the size to the client.
                 // xdg_toplevel.configure must precede xdg_surface.configure.
                 toplevel.configure(0, 0, Vec::new());

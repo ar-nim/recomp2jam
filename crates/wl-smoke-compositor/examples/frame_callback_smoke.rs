@@ -17,11 +17,12 @@
 //! Exit codes: 0 = verdict PASS, 1 = verdict FAIL, 2 = harness error.
 
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::path::Path;
+use std::process::Child;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
+use wl_smoke_compositor::driver;
 use wl_smoke_compositor::{Compositor, CompositorStats, FrameCallbackPolicy};
 
 // Acceptance bands from issue #118 (same as scripts/wayland-loop-smoke.sh).
@@ -43,20 +44,6 @@ const FLOW_MIN_PAINTS: u64 = 10;
 /// Linux `USER_HZ`; /proc utime/stime are ticks of this clock (100 on
 /// every Linux target this repo runs on).
 const USER_HZ: u64 = 100;
-
-/// Failed-authorize login against the local Memoryer is fine: the loop
-/// still maps and paints the splash, which is all this probe needs.
-const GAME_ARGS: [&str; 9] = [
-    "online",
-    "--host",
-    "127.0.0.1",
-    "--port",
-    "15010",
-    "--user-id",
-    "2",
-    "--token",
-    "77b0a3e3-32e6-4a67-b3d8-563a0df4c08c",
-];
 
 fn main() {
     let verdict = match run() {
@@ -82,7 +69,7 @@ fn run() -> Result<Verdict> {
         Some("flow") => FrameCallbackPolicy::Flow,
         other => bail!("usage: frame_callback_smoke [starve|flow] [GAME-BINARY] (got {other:?})"),
     };
-    let game_binary = resolve_game_binary(args.next().as_deref())?;
+    let game_binary = driver::resolve_game_binary(args.next().as_deref())?;
 
     let scratch = tempfile::tempdir().context("create scratch dir")?;
     let socket_name = format!("wl-smoke-{}", std::process::id());
@@ -93,7 +80,7 @@ fn run() -> Result<Verdict> {
         .context("socket path has no file name")?
         .to_owned();
 
-    let mut game = spawn_game(&game_binary, scratch.path(), &socket_file_name)?;
+    let mut game = driver::spawn_game(&game_binary, scratch.path(), &socket_file_name, &[])?;
     println!(
         "frame-callback-smoke: game pid {} on socket {} (log: {})",
         game.id(),
@@ -101,7 +88,7 @@ fn run() -> Result<Verdict> {
         scratch.path().join("game.log").display()
     );
 
-    wait_for_first_paint(&mut compositor, &mut game, scratch.path())?;
+    driver::wait_for_first_paint(&mut compositor, &mut game, scratch.path(), MAP_WAIT)?;
     println!("frame-callback-smoke: first paint seen; settling {SETTLE:?}");
     compositor.run_until(Instant::now() + SETTLE)?;
 
@@ -109,7 +96,7 @@ fn run() -> Result<Verdict> {
     let samples = sample_cpu_windows(&mut compositor, &mut game, scratch.path())?;
     let paints_during_sampling = compositor.stats().paints - paints_at_sample_start;
     let stats = compositor.stats();
-    stop_game_verified(&mut game);
+    driver::stop_game_verified(&mut game, "frame-callback-smoke");
 
     Ok(build_verdict(
         policy,
@@ -117,128 +104,6 @@ fn run() -> Result<Verdict> {
         paints_during_sampling,
         &stats,
     ))
-}
-
-/// The game binary: explicit arg, then the example env var cargo sets when
-/// a binary target is in scope, then the workspace's debug build. The
-/// default path is kept honest: built when missing, rebuilt when it
-/// predates the workspace sources, so a stale binary can never silently
-/// test the wrong code (a real incident: a pre-fix binary reported RED
-/// on the fixed tree).
-fn resolve_game_binary(arg: Option<&str>) -> Result<PathBuf> {
-    if let Some(path) = arg {
-        return Ok(PathBuf::from(path));
-    }
-    if let Some(path) = option_env!("CARGO_BIN_EXE_recomp2jam") {
-        return Ok(PathBuf::from(path));
-    }
-    let default = workspace_root().join("target/debug/recomp2jam");
-    if !default.is_file() {
-        build_game_binary()?;
-    } else if binary_is_stale(&default)? {
-        eprintln!("frame-callback-smoke: game binary predates the workspace sources; rebuilding");
-        build_game_binary()?;
-    }
-    if default.is_file() {
-        Ok(default)
-    } else {
-        bail!(
-            "game binary not found at {}; `cargo build -p recomp2jam` failed or was not run — \
-             build it or pass its path as the second argument",
-            default.display()
-        )
-    }
-}
-
-fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-
-fn build_game_binary() -> Result<()> {
-    let status = std::process::Command::new(env!("CARGO"))
-        .args(["build", "--quiet", "-p", "recomp2jam"])
-        .current_dir(workspace_root())
-        .status()
-        .context("failed to run cargo build -p recomp2jam")?;
-    if !status.success() {
-        bail!("cargo build -p recomp2jam exited with {status}");
-    }
-    Ok(())
-}
-
-/// True when any workspace source file is newer than the binary.
-fn binary_is_stale(binary: &Path) -> Result<bool> {
-    use std::time::SystemTime;
-    let bin_mtime = fs::metadata(binary)
-        .and_then(|m| m.modified())
-        .unwrap_or(SystemTime::UNIX_EPOCH);
-    let mut newest = SystemTime::UNIX_EPOCH;
-    fn walk(dir: &Path, newest: &mut SystemTime) -> std::io::Result<()> {
-        for entry in fs::read_dir(dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            let meta = entry.metadata()?;
-            if meta.is_dir() {
-                if path.file_name().is_some_and(|n| n != "target") {
-                    walk(&path, newest)?;
-                }
-            } else if path.extension().is_some_and(|e| e == "rs" || e == "toml") {
-                if let Ok(m) = meta.modified() {
-                    if m > *newest {
-                        *newest = m;
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-    for crate_dir in fs::read_dir(workspace_root().join("crates"))? {
-        walk(&crate_dir?.path(), &mut newest)?;
-    }
-    Ok(newest > bin_mtime)
-}
-
-/// Launch the game with Wayland forced: our socket, our runtime dir, and
-/// no DISPLAY / WINIT_UNIX_BACKEND / inherited-session socket leaks.
-fn spawn_game(binary: &Path, runtime_dir: &Path, socket_name: &std::ffi::OsStr) -> Result<Child> {
-    let log = fs::File::create(runtime_dir.join("game.log"))?;
-    Command::new(binary)
-        .args(GAME_ARGS)
-        .env("XDG_RUNTIME_DIR", runtime_dir)
-        .env("WAYLAND_DISPLAY", socket_name)
-        .env_remove("DISPLAY")
-        .env_remove("WAYLAND_SOCKET")
-        .env_remove("WINIT_UNIX_BACKEND")
-        .stdin(Stdio::null())
-        .stdout(log.try_clone()?)
-        .stderr(log)
-        .spawn()
-        .with_context(|| format!("spawn {}", binary.display()))
-}
-
-/// Pump the compositor until the game commits its first buffer, with the
-/// map-wait lesson from the KWin harness applied (startup churn can take
-/// a while; a failed authorize still maps and paints).
-fn wait_for_first_paint(
-    compositor: &mut Compositor,
-    game: &mut Child,
-    scratch: &Path,
-) -> Result<()> {
-    let deadline = Instant::now() + MAP_WAIT;
-    while Instant::now() < deadline {
-        compositor.turn()?;
-        if compositor.stats().first_paint_at.is_some() {
-            return Ok(());
-        }
-        if let Some(status) = game.try_wait()? {
-            return Err(game_exit_error(status, scratch));
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    bail!(
-        "no first paint within {MAP_WAIT:?}; game log tail:\n{}",
-        log_tail(scratch)
-    )
 }
 
 /// The 5 x 6 s sampling run: per-window utime+stime deltas in percent of
@@ -253,7 +118,7 @@ fn sample_cpu_windows(
     for _ in 0..WINDOW_COUNT {
         compositor.run_until(Instant::now() + Duration::from_secs(WINDOW_SECS))?;
         if let Some(status) = game.try_wait()? {
-            return Err(game_exit_error(status, scratch));
+            return Err(driver::game_exit_error(status, scratch));
         }
         let ticks = cpu_ticks(game.id())?;
         let window_ticks = ticks.saturating_sub(previous_ticks);
@@ -283,20 +148,6 @@ fn cpu_ticks(pid: u32) -> Result<u64> {
     let utime: u64 = fields[11].parse().context("parse utime")?;
     let stime: u64 = fields[12].parse().context("parse stime")?;
     Ok(utime + stime)
-}
-
-/// PID-recorded kill (scripts/rig-run.sh discipline, never pkill -f):
-/// signal only while /proc still shows the process we started.
-fn stop_game_verified(game: &mut Child) {
-    let pid = game.id();
-    let cmdline = fs::read_to_string(format!("/proc/{pid}/cmdline")).unwrap_or_default();
-    if cmdline.contains("recomp2jam") {
-        let _ = game.kill();
-        let _ = game.wait();
-        println!("frame-callback-smoke: stopped game (pid {pid})");
-    } else {
-        println!("frame-callback-smoke: pid {pid} no longer matches 'recomp2jam' — not signalling");
-    }
 }
 
 fn build_verdict(
@@ -354,20 +205,4 @@ fn build_verdict(
         line: line("INCONCLUSIVE"),
         code: 2,
     }
-}
-
-fn game_exit_error(status: std::process::ExitStatus, scratch: &Path) -> anyhow::Error {
-    anyhow::anyhow!(
-        "game exited mid-probe ({status}); log tail:\n{}",
-        log_tail(scratch)
-    )
-}
-
-fn log_tail(scratch: &Path) -> String {
-    let log = scratch.join("game.log");
-    let Ok(content) = fs::read_to_string(&log) else {
-        return format!("(no log at {})", log.display());
-    };
-    let tail: Vec<&str> = content.lines().collect();
-    tail[tail.len().saturating_sub(15)..].join("\n")
 }

@@ -291,13 +291,15 @@ impl WindowHandler {
         }
     }
 
-    /// Write one log line and flush it straight to disk: a
+    /// Write one log line (newline-terminated, as the one-line-per-
+    /// event contract promises) and flush it straight to disk: a
     /// concurrent reader (`tail`, the replay driver) sees each routed
     /// event without waiting for the buffer to fill. Log writes only —
     /// the paint path pays nothing beyond the lines already written.
     fn append_log_line(log: &mut std::io::BufWriter<std::fs::File>, line: std::fmt::Arguments<'_>) {
         use std::io::Write;
         let _ = log.write_fmt(line);
+        let _ = log.write_all(b"\n");
         let _ = log.flush();
     }
 

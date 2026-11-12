@@ -13,8 +13,14 @@ use wayland_protocols::xdg::shell::server::xdg_wm_base;
 use wayland_server::backend::ObjectId;
 use wayland_server::protocol::wl_buffer::WlBuffer;
 use wayland_server::protocol::wl_callback::WlCallback;
+use wayland_server::protocol::wl_pointer::ButtonState;
+use wayland_server::protocol::wl_pointer::WlPointer;
+use wayland_server::protocol::wl_surface::WlSurface;
 use wayland_server::protocol::{wl_compositor, wl_seat, wl_shm};
 use wayland_server::{Display, GlobalDispatch, Resource};
+
+/// Linux input event code for the left mouse button (`BTN_LEFT`).
+pub const BTN_LEFT: u32 = 0x110;
 
 /// Pacing for [`FrameCallbackPolicy::Flow`]: a frame callback is completed
 /// once it has been armed for one interval, capping the client's repaint
@@ -55,6 +61,54 @@ struct ArmedFrameCallback {
     callback: WlCallback,
 }
 
+/// One server-side pointer event to inject into the client — the
+/// wire-level shape of a real pointer gesture, so the injection path
+/// cannot drift from what a compositor actually sends.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PointerEvent {
+    /// `wl_pointer.enter`: pointer moves onto the surface.
+    Enter { x: f64, y: f64 },
+    /// `wl_pointer.motion`: pointer moves within the surface.
+    Motion { x: f64, y: f64 },
+    /// `wl_pointer.button`: one button edge (left/middle/right by code).
+    Button { button: u32, pressed: bool },
+    /// `wl_pointer.leave`: pointer leaves the surface.
+    Leave,
+}
+
+impl PointerEvent {
+    /// The standard click sequence at surface-local coordinates:
+    /// enter, one motion (so a press never arrives positionless), the
+    /// left-button down/up pair, leave. A client that tracks the
+    /// pointer from motion/enter events — winit's contract — resolves
+    /// the press position from the motion here, exactly as with a
+    /// human click.
+    pub fn click_at(x: f64, y: f64) -> Vec<PointerEvent> {
+        vec![
+            PointerEvent::Enter { x, y },
+            PointerEvent::Motion { x, y },
+            PointerEvent::Button {
+                button: BTN_LEFT,
+                pressed: true,
+            },
+            PointerEvent::Button {
+                button: BTN_LEFT,
+                pressed: false,
+            },
+            PointerEvent::Leave,
+        ]
+    }
+}
+
+/// Dimensions of one shm buffer, kept as its user data so a commit
+/// can record the painted surface size (injection needs it to aim at
+/// the surface center).
+#[derive(Debug, Clone, Copy)]
+pub struct BufferData {
+    pub width: i32,
+    pub height: i32,
+}
+
 /// Per-surface state accumulated between commits.
 #[derive(Default)]
 pub struct PendingSurface {
@@ -86,6 +140,17 @@ pub struct State {
     armed_frame_callbacks: Vec<ArmedFrameCallback>,
     paints: u64,
     first_paint_at: Option<Instant>,
+    /// Pointer object the client created via `wl_seat.get_pointer`.
+    /// The game creates exactly one; injection sends events on it.
+    pointer: Option<WlPointer>,
+    /// Surface decorated by the (single) xdg_toplevel — the injection
+    /// target. The game has exactly one window.
+    toplevel: Option<WlSurface>,
+    /// Last committed attach dimensions per surface (buffer width and
+    /// height), so injection can aim at the painted surface's center.
+    surface_sizes: HashMap<ObjectId, (i32, i32)>,
+    /// Clock anchor for the `time` argument of pointer events.
+    started: Instant,
 }
 
 impl State {
@@ -97,7 +162,75 @@ impl State {
             armed_frame_callbacks: Vec::new(),
             paints: 0,
             first_paint_at: None,
+            pointer: None,
+            toplevel: None,
+            surface_sizes: HashMap::new(),
+            started: Instant::now(),
         }
+    }
+
+    /// Record the pointer object a `wl_seat.get_pointer` created.
+    pub fn set_pointer(&mut self, pointer: WlPointer) {
+        self.pointer = Some(pointer);
+    }
+
+    /// Record the surface an `xdg_toplevel` decorates.
+    pub fn set_toplevel(&mut self, surface: WlSurface) {
+        self.toplevel = Some(surface);
+    }
+
+    /// Injection can start once the client bound a pointer and created
+    /// its toplevel.
+    pub fn pointer_ready(&self) -> bool {
+        self.pointer.is_some() && self.toplevel.is_some()
+    }
+
+    /// Surface-local center of the toplevel's last committed buffer —
+    /// where a click lands. `None` before the first paint.
+    pub fn toplevel_center(&self) -> Option<(f64, f64)> {
+        let (width, height) = self.surface_sizes.get(&self.toplevel.as_ref()?.id())?;
+        Some((f64::from(*width) / 2.0, f64::from(*height) / 2.0))
+    }
+
+    /// Queue one pointer event on the client's pointer object. Events
+    /// flush with the next server turn; a dead client object makes the
+    /// event a no-op (the game may exit between the driver's ready
+    /// check and the injection).
+    pub fn dispatch_pointer_event(&mut self, event: &PointerEvent) {
+        // Handle clones, not borrows: `next_serial` needs `&mut self`
+        // while the sends hold the resources.
+        let (Some(pointer), Some(surface)) = (self.pointer.clone(), self.toplevel.clone()) else {
+            return;
+        };
+        if !pointer.is_alive() || !surface.is_alive() {
+            return;
+        }
+        let now_ms = self.started.elapsed().as_millis() as u32;
+        match event {
+            PointerEvent::Enter { x, y } => {
+                pointer.enter(self.next_serial(), &surface, *x, *y);
+            }
+            PointerEvent::Motion { x, y } => {
+                pointer.motion(now_ms, *x, *y);
+            }
+            PointerEvent::Button { button, pressed } => {
+                let state = if *pressed {
+                    ButtonState::Pressed
+                } else {
+                    ButtonState::Released
+                };
+                pointer.button(self.next_serial(), now_ms, *button, state);
+            }
+            PointerEvent::Leave => {
+                pointer.leave(self.next_serial(), &surface);
+            }
+        }
+    }
+
+    /// Next protocol serial (enter/button/leave each take one).
+    fn next_serial(&mut self) -> u32 {
+        self.next_serial = self.next_serial.wrapping_add(1);
+        self.next_serial
     }
 
     pub fn stats(&self) -> CompositorStats {
@@ -134,6 +267,13 @@ impl State {
             if self.first_paint_at.is_none() {
                 self.first_paint_at = Some(now);
             }
+            // Remember what the client painted so injection can aim at
+            // the surface center (the configure is 0x0; the size is the
+            // client's own choice).
+            if let Some(data) = buffer.data::<BufferData>() {
+                self.surface_sizes
+                    .insert(surface.clone(), (data.width, data.height));
+            }
             // Generated senders swallow InvalidId for dead objects, which
             // is the detach-then-destroy race handled.
             buffer.release();
@@ -144,6 +284,7 @@ impl State {
     /// `done` can never be sent on a dead object.
     pub fn drop_surface(&mut self, surface: ObjectId) {
         self.surfaces.remove(&surface);
+        self.surface_sizes.remove(&surface);
         self.armed_frame_callbacks
             .retain(|armed| armed.owner != surface);
     }
@@ -213,4 +354,53 @@ pub fn announce_shm_formats(shm: &wl_shm::WlShm) {
 /// Pointer-only seat capabilities.
 pub fn announce_seat_capabilities(seat: &wl_seat::WlSeat) {
     seat.capabilities(wl_seat::Capability::Pointer);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The injected click must be the standard wire sequence: a press
+    /// never arrives positionless (the motion precedes it) and the
+    /// button edges bracket the pair with enter before and leave after.
+    #[test]
+    fn click_sequence_is_enter_motion_button_button_leave() {
+        let sequence = PointerEvent::click_at(400.0, 300.0);
+        assert_eq!(
+            sequence,
+            vec![
+                PointerEvent::Enter { x: 400.0, y: 300.0 },
+                PointerEvent::Motion { x: 400.0, y: 300.0 },
+                PointerEvent::Button {
+                    button: BTN_LEFT,
+                    pressed: true
+                },
+                PointerEvent::Button {
+                    button: BTN_LEFT,
+                    pressed: false
+                },
+                PointerEvent::Leave,
+            ]
+        );
+        let is_button = |event: &PointerEvent| matches!(event, PointerEvent::Button { .. });
+        let first_button = sequence.iter().position(is_button).expect("a button edge");
+        let last_button = sequence.iter().rposition(is_button).expect("a button edge");
+        assert!(
+            matches!(sequence.first(), Some(PointerEvent::Enter { .. })),
+            "enter opens the sequence"
+        );
+        assert!(
+            matches!(sequence.last(), Some(PointerEvent::Leave)),
+            "leave closes the sequence"
+        );
+        assert!(
+            !is_button(&sequence[first_button - 1]),
+            "a motion arms the press position before the first button edge"
+        );
+        assert_eq!(
+            last_button - first_button,
+            1,
+            "down and up are adjacent (no stray event between the edges)"
+        );
+    }
 }
