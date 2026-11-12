@@ -20,7 +20,11 @@ of the staged `ControlList` Block at runtime and `read_bind`
 live staging row: `STAGE_TABLE` (`staging.rs:164-266`) for states,
 `DIALOG_TABLE` (`staging.rs:354-396`) for dialogs, both staged through
 `stage_state` (`staging.rs:468`) / `stage_dialog` (`staging.rs:486`) →
-`stage_bound_row` → `bind_scene_rects` (`staging.rs:554-560`).
+`stage_bound_row` → `bind_scene_rects` (`staging.rs:554-560`) — or,
+for the exe-literal Playing sheets with no `BOUND` block, `BYNAME_TABLE`
+(`staging.rs:427`), staged through `stage_byname_sheet`
+(`staging.rs:561`), which parses the named file through the same
+`read_bind` path and stages one placement per rect in file order.
 Per-file evidence below cites the row plus the live caller that stages it
 (`crates/recomp2jam/src/live_art.rs` is the live boot path; `shots.rs`
 `side_stage_data` is the shipping screenshot walk).
@@ -103,23 +107,25 @@ a live path, so each lands in A. Nothing is tests-only.
 
 | file | bucket | evidence | notes |
 |---|---|---|---|
-| Avatar_Info.bnd | E | parse pinned: 10 rects (`real_art.rs` `avatar_info_sheet_parses_ten_gauge_rects`, #165); `ControlList_Playing.txt` carries only `STATE_PLAYING` (`playing_control_list_mounts_only_the_solo_sheet`) so no `BOUND` row can mount this sheet | exe loads it by name (`docs/bnd-semantics.md`, file `0x24aba7`); our Rust mentions only its `.ojs` bodies in doc comments (`playing.rs:150`, `avatar.rs:1134`) — the `.bnd` parses but no table row can stage it (STOP #165: a `STAGE_TABLE` row mirrors a `BOUND` block; none exists) |
-| Map_Avatar.bnd | E | parse pinned: 8 rects incl. rect 0 `(307,161)-(607,461)` (`real_art.rs` `map_avatar_sheet_parses_eight_seat_rects`, #165); single-block list as above | exe loads it by name (same evidence); our Rust hardcodes rect 0 as `AVATAR_SEAT_NATIVE` (`playing.rs:2819`) — the sheet parses but no table row can stage it (same STOP) |
+| Avatar_Info.bnd | A | `staging.rs:427` (`BYNAME_TABLE` row) + `live_art.rs:215` (`stage_playing_byname_sheets`, #166) + `game.rs:1667` (`load_byname_sheet` slot beside Playing) | exe loads it by name (`docs/bnd-semantics.md`, file `0x24aba7`); staged-rects guard `avatar_info_sheet_stages_ten_rects_by_name` pins its 10 parsed rects stage verbatim; no figures (no block names a body) — paint wiring rides a later ticket |
+| Map_Avatar.bnd | A | `staging.rs:427` (`BYNAME_TABLE` row) + `live_art.rs:215` + `game.rs:1667` | exe loads it by name (same evidence); staged-rects guard `map_avatar_sheet_stages_eight_rects_by_name` pins its 8 parsed rects incl. rect 0 `(307,161)-(607,461)` stage verbatim (`playing.rs:2819` keeps the hardcoded `AVATAR_SEAT_NATIVE` read until paint wiring lands); no figures — paint wiring rides a later ticket |
 | State_Playing.bnd | A | `staging.rs:238` (`State::Playing` row, PlayingSubset) + `live_art.rs:181` (`stage_playing_scenes`) | 17-rect walk stages live (`PLAYING_BIND_FILE` at `paint.rs:70`) |
-| State_Playing_network.bnd | E | parse pinned: 19 rects incl. records 18–19 `(265,472)-(389,482)` / `(410,472)-(534,482)` (`real_art.rs` `playing_network_sheet_parses_nineteen_exit_path_rects`, #165); single-block list as above | 19-rect exit-path variant (`playing.rs:2850`, `paint.rs:4943` doc comments); nothing consumes staged network placements (`game.rs` has no `network` consumer) — the sheet parses but no table row can stage it (same STOP); nearest entry: the `State::Playing` row (`staging.rs:238`), whose `BOUND` line exists and this sheet's does not |
+| State_Playing_network.bnd | A | `staging.rs:427` (`BYNAME_TABLE` row) + `live_art.rs:215` + `game.rs:1667` | 19-rect exit-path variant (`playing.rs:2850`, `paint.rs:4943` doc comments); staged-rects guard `playing_network_sheet_stages_nineteen_rects_by_name` pins all 19 parsed rects stage verbatim incl. records 18–19 `(265,472)-(389,482)` / `(410,472)-(534,482)`; no figures — paint wiring rides a later ticket |
 
 ## Counts
 
-- A consumed-live: **20** (19 Interface + 1 Playing)
+- A consumed-live: **23** (19 Interface + 4 Playing)
 - B tests-only: **0**
 - C unreferenced, known-dead legacy: **7**
 - D exe-dead per ADR-0012: **3**
-- E GAP: **22** (19 Interface + 3 Playing)
+- E GAP: **19** (19 Interface + 0 Playing)
 - Total: **52** ✓
 
 (#165 leaves the counts unchanged: Payment stays A — its live-boot
 caveat is closed by a staging arm, not a bucket move — and the three
-Playing sheets stay E pending a by-name staging arm.)
+Playing sheets stay E pending a by-name staging arm. #166 lands that
+arm: the trio moves E → A, parsed + staged + parked on the live boot
+path; paint wiring rides a later ticket.)
 
 ## Gaps (§E, verbatim)
 
@@ -131,8 +137,7 @@ Playing sheets stay E pending a by-name staging arm.)
 `Dialog_Messenger_Note.bnd`, `Dialog_Messenger_PopUpMenu.bnd`,
 `Dialog_Messenger_Question.bnd`, `Dialog_MusicInfo.bnd`,
 `Dialog_Question2.bnd`, `Dialog_Shopping_Add.bnd`,
-`Dialog_SkillInfo.bnd`, `Dialog_Whisper.bnd`, `Avatar_Info.bnd`,
-`Map_Avatar.bnd`, `State_Playing_network.bnd`.
+`Dialog_SkillInfo.bnd`, `Dialog_Whisper.bnd`.
 
 Next evidence step for each E row: confirm in the exe census whether a
 live `ControlList` `BOUND` line (or a literal load, as pinned for the
@@ -146,5 +151,12 @@ their literal-load mount (files `0x24aba7`/`0x24b080`) *and* their
 parse (10/8/19 rects, guards above), but a `BOUND`-mirroring table row
 is impossible — `ControlList_Playing.txt` declares exactly one block
 (`STATE_PLAYING`), so `resolve_bound_row` has nothing to resolve for
-them. They stay E pending a by-name staging arm (a new shape, not a
-table row); the Payment live-boot caveat is closed (rows above).
+them. The Payment live-boot caveat is closed (rows above).
+
+Resolved since the census (#166): the trio rides the by-name staging
+arm instead of a `BOUND` row — `BYNAME_TABLE` (`staging.rs:427`)
+stages each literal file through `stage_byname_sheet`
+(`staging.rs:561`) into its game slot (`game.rs:1667`) on the live
+boot path (`live_art.rs:215`). Staged-rects guards pin all three
+sheets (19/10/8 placements equal the parsed rects); no figures stage
+and paint wiring rides a later ticket. The rows above move E → A.
