@@ -515,17 +515,23 @@ pub struct Oja55TrailingFrame<'a> {
 /// `FileError::TooShort` when the record table overruns the buffer,
 /// `FileError::UnknownFormat` on a broken chain or a plane walk that
 /// does not match the layout.
-pub fn parse_oja55(bytes: &[u8]) -> Result<Oja55<'_>, FileError> {
+/// One `.oja` v5.5 frame table record: `x`, `y`, `w`, `h`, then the
+/// plane offsets `a` (pixel rows), `b` (pixel bytes), `c` (alpha
+/// bytes).
+type Oja55Record = (i16, i16, u16, u16, u32, u32, u32);
+
+/// Read the `.oja` v5.5 header (tag, magic, count, reserved) and the
+/// `count`-entry frame table after it.
+fn read_oja55_records(bytes: &[u8]) -> Result<(u16, u16, Vec<Oja55Record>), FileError> {
     if bytes.len() < OJA_HEADER_LEN {
         return Err(FileError::TooShort(bytes.len()));
     }
-    let tag = read_u16le(bytes, 0)?;
     if read_u16le(bytes, 2)? != OJA_MAGIC {
         return Err(unknown_format(bytes));
     }
+    let tag = read_u16le(bytes, 0)?;
     let count = read_u16le(bytes, 4)? as usize;
     let reserved = read_u16le(bytes, 6)?;
-    let blob_start = dir_end(count, OJA_RECORD_LEN, OJA_HEADER_LEN, bytes.len())?;
     let mut records = Vec::with_capacity(count.min(1024));
     for i in 0..count {
         let off = OJA_HEADER_LEN + i * OJA_RECORD_LEN;
@@ -539,8 +545,14 @@ pub fn parse_oja55(bytes: &[u8]) -> Result<Oja55<'_>, FileError> {
             read_u32le(bytes, off + 16)?,
         ));
     }
-    // The planes chain: each frame's data follows the previous one,
-    // so `a[n + 1] == a[n] + b[n] + c[n]` on every real container.
+    Ok((tag, reserved, records))
+}
+
+/// Validate the frame table: each frame's planes chain straight after
+/// the previous one's (`a[n + 1] == a[n] + b[n] + c[n]`), and the table
+/// is non-empty (empty tables have no real-body precedent; the plane
+/// layout is meaningless without frames).
+fn validate_oja55_chain(bytes: &[u8], records: &[Oja55Record]) -> Result<(), FileError> {
     for pair in records.windows(2) {
         let (_, _, _, _, a, b, c) = pair[0];
         let (_, _, _, _, a_next, _, _) = pair[1];
@@ -552,11 +564,56 @@ pub fn parse_oja55(bytes: &[u8]) -> Result<Oja55<'_>, FileError> {
             return Err(unknown_format(bytes));
         }
     }
-    // Empty tables have no real-body precedent; the plane layout is
-    // meaningless without frames.
-    if count == 0 {
+    if records.is_empty() {
         return Err(unknown_format(bytes));
     }
+    Ok(())
+}
+
+/// Lay out every frame's planes at one candidate base shift: `blob_start`
+/// plus the record-stride shift `k * OJA_RECORD_LEN`. Returns the frames
+/// when every walk lands inside the buffer (`None` asks the caller to
+/// try the next shift).
+fn layout_oja55_frames<'a>(
+    bytes: &'a [u8],
+    blob_start: usize,
+    shift: usize,
+    records: &[Oja55Record],
+) -> Option<Vec<Oja55Frame<'a>>> {
+    let mut frames = Vec::with_capacity(records.len());
+    for &(x, y, w, h, a, b, c) in records {
+        let base = usize::try_from(a)
+            .ok()
+            .and_then(|a| a.checked_add(shift))
+            .and_then(|a| a.checked_add(blob_start))?;
+        let pixel_len = usize::try_from(b).unwrap_or(usize::MAX);
+        let alpha_len = usize::try_from(c).unwrap_or(usize::MAX);
+        let pixels_end = base.checked_add(pixel_len)?;
+        let alpha_end = pixels_end.checked_add(alpha_len)?;
+        if alpha_end > bytes.len() {
+            return None;
+        }
+        let rows = parse_oja_plane_rows(bytes, base, pixels_end, w, h)?;
+        frames.push(Oja55Frame {
+            x,
+            y,
+            w,
+            h,
+            a,
+            b,
+            c,
+            rows,
+            alpha: &bytes[pixels_end..alpha_end],
+        });
+    }
+    Some(frames)
+}
+
+pub fn parse_oja55(bytes: &[u8]) -> Result<Oja55<'_>, FileError> {
+    let (tag, reserved, records) = read_oja55_records(bytes)?;
+    let count = records.len();
+    let blob_start = dir_end(count, OJA_RECORD_LEN, OJA_HEADER_LEN, bytes.len())?;
+    validate_oja55_chain(bytes, &records)?;
     // Plane base: the smallest record-stride shift where every
     // frame's walk lands exactly on `a + b`. All three real 7.55
     // bodies chain their planes straight after the table (shift 0);
@@ -580,50 +637,7 @@ pub fn parse_oja55(bytes: &[u8]) -> Result<Oja55<'_>, FileError> {
         if scan_floor > bytes.len() {
             return Err(unknown_format(bytes));
         }
-        let mut frames = Vec::with_capacity(count);
-        let mut laid_out = true;
-        for &(x, y, w, h, a, b, c) in &records {
-            let Some(base) = usize::try_from(a)
-                .ok()
-                .and_then(|a| a.checked_add(shift))
-                .and_then(|a| a.checked_add(blob_start))
-            else {
-                laid_out = false;
-                break;
-            };
-            let pixel_len = usize::try_from(b).unwrap_or(usize::MAX);
-            let alpha_len = usize::try_from(c).unwrap_or(usize::MAX);
-            let Some(pixels_end) = base.checked_add(pixel_len) else {
-                laid_out = false;
-                break;
-            };
-            let Some(alpha_end) = pixels_end.checked_add(alpha_len) else {
-                laid_out = false;
-                break;
-            };
-            if alpha_end > bytes.len() {
-                laid_out = false;
-                break;
-            }
-            match parse_oja_plane_rows(bytes, base, pixels_end, w, h) {
-                Some(rows) => frames.push(Oja55Frame {
-                    x,
-                    y,
-                    w,
-                    h,
-                    a,
-                    b,
-                    c,
-                    rows,
-                    alpha: &bytes[pixels_end..alpha_end],
-                }),
-                None => {
-                    laid_out = false;
-                    break;
-                }
-            }
-        }
-        if laid_out {
+        if let Some(frames) = layout_oja55_frames(bytes, blob_start, shift, &records) {
             let last = records[count - 1];
             let planes_end = usize::try_from(last.4)
                 .ok()
@@ -1585,6 +1599,14 @@ mod oja55_tests {
         };
         let body = archive_body(&archive, "Playing_Effect_Jam.oja");
         let oja = parse_oja55(&body).unwrap();
+        assert_oja55_frame_table(&oja);
+        assert_oja55_trailing_frames(&oja);
+    }
+
+    /// The ten tabulated frames: 300x300 at anchor (0, 0), span count
+    /// and first span per frame, and every alpha plane covering its
+    /// pixels exactly (`c == covered`).
+    fn assert_oja55_frame_table(oja: &Oja55<'_>) {
         assert_eq!(oja.frames.len(), 10);
         assert_eq!(oja.trailing_frames.len(), 6);
         assert_eq!(oja.trailing.len(), 9_159);
@@ -1620,10 +1642,15 @@ mod oja55_tests {
             );
             assert_eq!(frame.alpha.len(), usize::try_from(frame.c).unwrap());
         }
-        // The recordless frames (no records): span count, first span,
-        // covered pixels, and mask bytes per frame. Every plane ends
-        // on the canvas bottom row; every mask is a canvas-row map
-        // (299 rows of 300 bytes; the first frame's is six short).
+    }
+
+    /// The recordless trailing frames (no records): span count, first
+    /// span, covered pixels, and mask bytes per frame. Every plane
+    /// ends on the canvas bottom row; every mask is a canvas-row map
+    /// (299 rows of 300 bytes; the first frame's is six short). The
+    /// first two masks have emptied their bottom canvas rows; later
+    /// frames' flash core still glows there.
+    fn assert_oja55_trailing_frames(oja: &Oja55<'_>) {
         let trailing = [
             (281, (0, 25), 82_494, 89_694),
             (300, (0, 0), 90_000, 89_700),
@@ -1647,8 +1674,6 @@ mod oja55_tests {
             assert_eq!(covered, trailing[i].2, "trailing frame {i} covered");
             assert_eq!(frame.alpha.len(), trailing[i].3, "trailing frame {i} mask");
         }
-        // The first two masks have emptied their bottom canvas rows;
-        // later frames' flash core still glows there.
         assert!(
             oja.trailing_frames[0].alpha[..].ends_with(&[0u8; 300]),
             "first mask tail is zero"

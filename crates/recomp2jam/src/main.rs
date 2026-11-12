@@ -712,6 +712,22 @@ impl OnlineParams {
     }
 }
 
+/// `connect` subcommand: assemble the song flow and login options,
+/// run the pinned login flow, print the report. The clap fields stay
+/// in [`run_command`]; this is the flow the arm dispatches to.
+///
+/// # Errors
+///
+/// Whatever the song-flow build, the login-options build, or the
+/// login flow reports.
+fn run_connect(song_flow: SongFlowParams, params: ConnectParams) -> Result<()> {
+    let song = song_flow.into_song_flow()?;
+    let options = params.into_connect_options(song)?;
+    let report = connect::connect_and_login(&options)?;
+    print_connect_report(&report);
+    Ok(())
+}
+
 /// Dispatch one CLI subcommand.
 ///
 /// # Errors
@@ -758,8 +774,8 @@ fn run_command(command: Command) -> Result<()> {
             final_score,
             life,
             long_note,
-        } => {
-            let song = SongFlowParams {
+        } => run_connect(
+            SongFlowParams {
                 music_id,
                 difficulty,
                 game_speed,
@@ -780,9 +796,8 @@ fn run_command(command: Command) -> Result<()> {
                 final_score,
                 life,
                 long_note,
-            }
-            .into_song_flow()?;
-            let options = ConnectParams {
+            },
+            ConnectParams {
                 host,
                 port,
                 user_id,
@@ -797,12 +812,8 @@ fn run_command(command: Command) -> Result<()> {
                 avatar_opa,
                 join_room,
                 room_password,
-            }
-            .into_connect_options(song)?;
-            let report = connect::connect_and_login(&options)?;
-            print_connect_report(&report);
-            Ok(())
-        }
+            },
+        ),
         Command::Shots { out_dir } => {
             for path in shots::write_shots(std::path::Path::new(&out_dir))? {
                 println!("wrote {}", path.display());
@@ -893,7 +904,7 @@ fn run_command(command: Command) -> Result<()> {
             online_difficulty,
             online_speed,
             online_arena,
-        } => run_play(
+        } => run_play(PlayOptions {
             chart,
             ojm,
             level,
@@ -917,17 +928,15 @@ fn run_command(command: Command) -> Result<()> {
             online_difficulty,
             online_speed,
             online_arena,
-        ),
+        }),
     }
 }
 
-/// `play` subcommand: windowed game or headless autoplay.
-///
-/// # Errors
-///
-/// Whatever chart/bank loading, login, audio, or the window reports.
-#[allow(clippy::too_many_arguments, reason = "CLI fields pass through once")]
-fn run_play(
+/// `play` subcommand fields (one named bundle, no flag-argument
+/// soup): the chart/autoplay wiring plus the `--online-*` login
+/// pass-through.
+#[derive(Debug, Clone)]
+struct PlayOptions {
     chart: Option<String>,
     ojm: Option<String>,
     level: usize,
@@ -951,43 +960,50 @@ fn run_play(
     online_difficulty: u8,
     online_speed: u8,
     online_arena: i32,
-) -> Result<()> {
-    tracing::info!(?chart, ?window, "play stub");
-    if window {
+}
+
+/// `play` subcommand: windowed game or headless autoplay.
+///
+/// # Errors
+///
+/// Whatever chart/bank loading, login, audio, or the window reports.
+fn run_play(opts: PlayOptions) -> Result<()> {
+    tracing::info!(chart = ?opts.chart, window = opts.window, "play stub");
+    if opts.window {
         let mut game = o2jam_shell::ScreenGame::new();
         game.load_options(&install_root());
-        setup_splash(&mut game, &interface)?;
+        setup_splash(&mut game, &opts.interface)?;
         let gateway = setup_online(
             &mut game,
-            online,
-            &host,
-            user_id,
-            &token,
-            port,
-            online_gateway_id,
-            online_channel_id,
-            online_join_room,
-            &online_room_password,
-            online_music_id,
-            online_difficulty,
-            online_speed,
-            online_arena,
+            opts.online,
+            &opts.host,
+            opts.user_id,
+            &opts.token,
+            opts.port,
+            opts.online_gateway_id,
+            opts.online_channel_id,
+            opts.online_join_room,
+            &opts.online_room_password,
+            opts.online_music_id,
+            opts.online_difficulty,
+            opts.online_speed,
+            opts.online_arena,
         )?;
-        setup_avatar(&mut game, &avatar_opa, &equip, avatar_male)?;
-        setup_chart_audio(&mut game, &chart, &ojm, level, sound)?;
+        setup_avatar(&mut game, &opts.avatar_opa, &opts.equip, opts.avatar_male)?;
+        setup_chart_audio(&mut game, &opts.chart, &opts.ojm, opts.level, opts.sound)?;
         match gateway {
             Some((transport, pending_room, pending_song)) => {
                 let mut session = assemble_online_session(
                     game,
                     transport,
-                    token.as_deref(),
+                    opts.token.as_deref(),
                     pending_room,
                     pending_song,
-                    online_create_room.as_deref(),
+                    opts.online_create_room.as_deref(),
                 )?;
                 // Audio containment: without --sound every bank attach
                 // stays on the null sink even when hardware exists.
-                session.set_silent_audio(!sound);
+                session.set_silent_audio(!opts.sound);
                 run_windowed_session(session, None)?;
             }
             None => {
@@ -1005,10 +1021,10 @@ fn run_play(
         }
         return Ok(());
     }
-    let chart_path = chart.ok_or_else(|| {
+    let chart_path = opts.chart.ok_or_else(|| {
         anyhow::anyhow!("--chart FILE.ojn is required (add --window for the empty shell)")
     })?;
-    run_autoplay(&chart_path, ojm.as_deref(), level, sound)
+    run_autoplay(&chart_path, opts.ojm.as_deref(), opts.level, opts.sound)
 }
 
 /// `e2e` subcommand: headless boot-to-Result walk with PNGs.
@@ -1443,6 +1459,19 @@ fn setup_chart_audio(
 /// golden test below pins the CLI output.
 fn format_connect_report(report: &connect::ConnectReport) -> String {
     let mut text = String::new();
+    push_identity_section(&mut text, report);
+    push_wallet_section(&mut text, report.wallet.as_ref());
+    push_channels_section(&mut text, &report.channels);
+    push_rooms_section(&mut text, &report.rooms);
+    push_login_section(&mut text, report.channel_login.as_ref());
+    push_join_section(&mut text, report.join.as_ref());
+    push_song_section(&mut text, report.song.as_ref());
+    text
+}
+
+/// Authorize, character, and avatar lines (each arm prints only when
+/// the login flow actually returned that section).
+fn push_identity_section(text: &mut String, report: &connect::ConnectReport) {
     text.push_str(&format!(
         "authorize: {}\n",
         connect::name_result(report.auth_code)
@@ -1456,7 +1485,12 @@ fn format_connect_report(report: &connect::ConnectReport) -> String {
     if report.avatar_layers > 0 {
         text.push_str(&format!("avatar: {} layers worn\n", report.avatar_layers));
     }
-    if let Some(wallet) = &report.wallet {
+}
+
+/// Wallet balance line plus the skipped-broadcast list (only when a
+/// wallet was requested).
+fn push_wallet_section(text: &mut String, wallet: Option<&connect::WalletReport>) {
+    if let Some(wallet) = wallet {
         text.push_str(&format!(
             "wallet: gem {} cash_point {} point {} o2_cash {}\n",
             wallet.gem, wallet.cash_point, wallet.point, wallet.o2_cash
@@ -1465,8 +1499,12 @@ fn format_connect_report(report: &connect::ConnectReport) -> String {
             text.push_str(&format!("skipped broadcasts: {:?}\n", wallet.skipped));
         }
     }
-    text.push_str(&format!("channels: {}\n", report.channels.len()));
-    for channel in &report.channels {
+}
+
+/// Channel list line, one row per channel.
+fn push_channels_section(text: &mut String, channels: &[o2jam_net::ChannelState]) {
+    text.push_str(&format!("channels: {}\n", channels.len()));
+    for channel in channels {
         text.push_str(&format!(
             "  gateway {} channel {}: {}/{} {}\n",
             channel.gateway_id,
@@ -1476,11 +1514,12 @@ fn format_connect_report(report: &connect::ConnectReport) -> String {
             if channel.active { "open" } else { "closed" },
         ));
     }
-    let open_rooms: Vec<_> = report
-        .rooms
-        .iter()
-        .filter(|room| room.number != 0)
-        .collect();
+}
+
+/// Open-room count plus up to 10 room rows (room number 0 means
+/// closed, so it does not count).
+fn push_rooms_section(text: &mut String, rooms: &[o2jam_net::RoomListEntry]) {
+    let open_rooms: Vec<_> = rooms.iter().filter(|room| room.number != 0).collect();
     text.push_str(&format!("rooms: {} open\n", open_rooms.len()));
     for room in open_rooms.iter().take(10) {
         text.push_str(&format!(
@@ -1492,7 +1531,12 @@ fn format_connect_report(report: &connect::ConnectReport) -> String {
             if room.has_password { " locked" } else { "" },
         ));
     }
-    if let Some(login) = &report.channel_login {
+}
+
+/// Channel-login result line with the NORMAL-mode restriction word
+/// (only when a channel login was requested).
+fn push_login_section(text: &mut String, login: Option<&o2jam_net::ChannelLoginResponse>) {
+    if let Some(login) = login {
         let restricted = match login.restricted {
             Some(true) => "restricted",
             Some(false) => "unrestricted",
@@ -1503,7 +1547,12 @@ fn format_connect_report(report: &connect::ConnectReport) -> String {
             connect::name_result(login.result_code)
         ));
     }
-    if let Some(join) = &report.join {
+}
+
+/// Room-join answer line (snapshot seat count when the server echoed
+/// the room, else the no-snapshot note).
+fn push_join_section(text: &mut String, join: Option<&o2jam_net::JoinRoomResponse>) {
+    if let Some(join) = join {
         match &join.room {
             Some(room) => text.push_str(&format!(
                 "room: {} seats, {} in ({})\n",
@@ -1514,7 +1563,12 @@ fn format_connect_report(report: &connect::ConnectReport) -> String {
             None => text.push_str("room: joined without snapshot\n"),
         }
     }
-    if let Some(song) = &report.song {
+}
+
+/// Song-flow lines: music list, arena echo, peer tick bar, queue
+/// mirror, and skipped broadcasts (only when a song flow ran).
+fn push_song_section(text: &mut String, song: Option<&connect::SongFlowReport>) {
+    if let Some(song) = song {
         text.push_str(&format!(
             "music: {} entries (free music: {})\n",
             song.music_entries,
@@ -1547,7 +1601,6 @@ fn format_connect_report(report: &connect::ConnectReport) -> String {
             text.push_str(&format!("skipped broadcasts: {:?}\n", song.skipped));
         }
     }
-    text
 }
 
 /// Print one login-flow report (authorize, character, avatar, channels,

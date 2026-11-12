@@ -153,6 +153,7 @@ use o2jam_net::{
 use o2jam_shell::screens::game::{LobbyChat, SlashCommand};
 use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
 
+use crate::connect::net_context;
 use crate::live_art::restage_live_playing;
 use crate::live_stats::{apply_peer_update, jam_tick_for_score, life_tick_for_live_play};
 use crate::loading::{
@@ -392,12 +393,9 @@ impl OnlineSession {
     ) -> anyhow::Result<Frame> {
         self.gateway
             .send_frame(request_id, body)
-            .map_err(|source| anyhow::anyhow!("{source}"))?;
+            .map_err(net_context)?;
         loop {
-            let frame = self
-                .gateway
-                .next_frame()
-                .map_err(|source| anyhow::anyhow!("{source}"))?;
+            let frame = self.gateway.next_frame().map_err(net_context)?;
             if frame.id == expected {
                 return Ok(frame);
             }
@@ -438,8 +436,7 @@ impl OnlineSession {
             &create.encode_body(),
             CreateRoomResponse::COMMAND,
         )?;
-        let created = CreateRoomResponse::decode_frame(&created)
-            .map_err(|source| anyhow::anyhow!("{source}"))?;
+        let created = CreateRoomResponse::decode_frame(&created).map_err(net_context)?;
         if created.result != CreateResult::Success {
             anyhow::bail!("room create rejected: {:?}", created.result);
         }
@@ -450,8 +447,7 @@ impl OnlineSession {
             .with_context(|| "room create answered without a snapshot")?;
         let listed =
             self.exchange_room_frame(Request::GetChannelInfo.id(), &[], RoomList::COMMAND)?;
-        let listed =
-            RoomList::decode_frame(&listed).map_err(|source| anyhow::anyhow!("{source}"))?;
+        let listed = RoomList::decode_frame(&listed).map_err(net_context)?;
         let entry = listed
             .rooms
             .iter()
@@ -565,17 +561,16 @@ impl OnlineSession {
         };
         self.gateway
             .send_frame(Request::SetRoomMusic.id(), &select.encode_body())
-            .map_err(|source| anyhow::anyhow!("{source}"))?;
+            .map_err(net_context)?;
         let stage = SetRoomArena::new(choice.arena_id);
         self.gateway
             .send_frame(Request::SetRoomArena.id(), &stage.encode_body())
-            .map_err(|source| anyhow::anyhow!("{source}"))?;
+            .map_err(net_context)?;
         let mut skipped = Vec::new();
         let echo_frame = self
             .await_select_frame(RoomArenaEcho::COMMAND, &mut skipped)
-            .map_err(|source| anyhow::anyhow!("{source}"))?;
-        let echo = RoomArenaEcho::decode_frame(&echo_frame)
-            .map_err(|source| anyhow::anyhow!("{source}"))?;
+            .map_err(net_context)?;
+        let echo = RoomArenaEcho::decode_frame(&echo_frame).map_err(net_context)?;
         if echo.arena != choice.arena_id {
             anyhow::bail!(
                 "arena echo mismatch: sent {} but got {}",
@@ -585,12 +580,11 @@ impl OnlineSession {
         }
         self.gateway
             .send_frame(Request::GetMusicList.id(), &GetMusicList.encode_body())
-            .map_err(|source| anyhow::anyhow!("{source}"))?;
+            .map_err(net_context)?;
         let list_frame = self
             .await_select_frame(MusicListAnswer::COMMAND, &mut skipped)
-            .map_err(|source| anyhow::anyhow!("{source}"))?;
-        let answer = MusicListAnswer::decode_frame(&list_frame)
-            .map_err(|source| anyhow::anyhow!("{source}"))?;
+            .map_err(net_context)?;
+        let answer = MusicListAnswer::decode_frame(&list_frame).map_err(net_context)?;
         if !skipped.is_empty() {
             tracing::debug!(?skipped, "select skipped broadcasts");
         }
@@ -1267,14 +1261,25 @@ impl OnlineSession {
         if self.game.screen() != Screen::Playing {
             return;
         }
-        if let Err(source) = self.gateway.set_timeouts(Some(STATS_IO_TIMEOUT)) {
-            tracing::debug!(%source, "stats section skipped: timeout rejected");
+        self.with_drain_timeout(STATS_IO_TIMEOUT, "stats", |session| {
+            session.maybe_send_tick();
+            session.drain_peer_echoes();
+        });
+    }
+
+    /// Run one drain section under a short IO timeout and restore the
+    /// resting session timeout afterwards — the timeout-restore shape
+    /// every per-frame section shares: a rejected prologue traces and
+    /// skips the section, and a failed restore traces (the next
+    /// section's prologue retries the resting set).
+    fn with_drain_timeout(&mut self, short: Duration, name: &str, section: impl FnOnce(&mut Self)) {
+        if let Err(source) = self.gateway.set_timeouts(Some(short)) {
+            tracing::debug!(%source, "{name} section skipped: timeout rejected");
             return;
         }
-        self.maybe_send_tick();
-        self.drain_peer_echoes();
+        section(self);
         if let Err(source) = self.gateway.set_timeouts(Some(SESSION_IO_TIMEOUT)) {
-            tracing::debug!(%source, "stats timeout restore failed");
+            tracing::debug!(%source, "{name} timeout restore failed");
         }
     }
 
@@ -1416,20 +1421,16 @@ impl OnlineSession {
     /// bodies drop with a trace (`ERRORS-19`: nothing is dropped
     /// without a trace).
     fn drain_tally_answers(&mut self) {
-        if let Err(source) = self.gateway.set_timeouts(Some(TALLY_IO_TIMEOUT)) {
-            tracing::debug!(%source, "tally section skipped: timeout rejected");
-            return;
-        }
-        loop {
-            match self.gateway.next_frame() {
+        self.with_drain_timeout(TALLY_IO_TIMEOUT, "tally", |session| loop {
+            match session.gateway.next_frame() {
                 Ok(frame) if frame.id == ScoreSubmission::COMMAND => {
-                    self.apply_score_submission(&frame);
+                    session.apply_score_submission(&frame);
                 }
                 Ok(frame) if frame.id == ScoreCompleted::COMMAND => {
-                    self.apply_score_completed(&frame);
+                    session.apply_score_completed(&frame);
                 }
                 Ok(frame) if frame.id == GameRankUpdate::COMMAND => {
-                    self.apply_rank_update(&frame);
+                    session.apply_rank_update(&frame);
                 }
                 Ok(frame) if Generic::from_id(frame.id).is_some() => {}
                 Ok(frame) => {
@@ -1437,10 +1438,7 @@ impl OnlineSession {
                 }
                 Err(_) => break,
             }
-        }
-        if let Err(source) = self.gateway.set_timeouts(Some(SESSION_IO_TIMEOUT)) {
-            tracing::debug!(%source, "tally timeout restore failed");
-        }
+        });
     }
 
     /// Fold one 4017 frame: the submitting member is traced (no totals
@@ -1624,14 +1622,9 @@ impl OnlineSession {
         if self.game.screen() != Screen::Waiting {
             return;
         }
-        if let Err(source) = self.gateway.set_timeouts(Some(CHAT_IO_TIMEOUT)) {
-            tracing::debug!(%source, "waiting chat section skipped: timeout rejected");
-            return;
-        }
-        self.drain_waiting_chat();
-        if let Err(source) = self.gateway.set_timeouts(Some(SESSION_IO_TIMEOUT)) {
-            tracing::debug!(%source, "waiting chat timeout restore failed");
-        }
+        self.with_drain_timeout(CHAT_IO_TIMEOUT, "waiting chat", |session| {
+            session.drain_waiting_chat();
+        });
         self.poll_start();
     }
 
@@ -1749,14 +1742,9 @@ impl OnlineSession {
         let Some(chat) = LobbyChat::of_screen(self.game.screen()) else {
             return;
         };
-        if let Err(source) = self.gateway.set_timeouts(Some(NOTICE_IO_TIMEOUT)) {
-            tracing::debug!(%source, "lobby chat section skipped: timeout rejected");
-            return;
-        }
-        self.drain_lobby_chat(chat);
-        if let Err(source) = self.gateway.set_timeouts(Some(SESSION_IO_TIMEOUT)) {
-            tracing::debug!(%source, "lobby chat timeout restore failed");
-        }
+        self.with_drain_timeout(NOTICE_IO_TIMEOUT, "lobby chat", |session| {
+            session.drain_lobby_chat(chat);
+        });
     }
 
     /// Drain waiting lobby chat lines (2013/2014), incoming whispers
