@@ -66,6 +66,7 @@
 //!   their exe-mirror load behavior; the effective defaults used
 //!   here (Mode 0, BlendHalf 1) follow the exe's forced values.
 
+use std::ops::RangeInclusive;
 use std::path::Path;
 use winit::keyboard::KeyCode;
 
@@ -382,6 +383,22 @@ fn clamp_u8_setting(value: i32) -> u8 {
     u8::try_from(value).unwrap_or(if value < 0 { 0 } else { 255 })
 }
 
+/// Sound-section volume for `key`, clamped like the exe volume
+/// readers: the four `Sound` keys share this one shape.
+fn sound_setting(sections: &[ProfileSection], key: &str, default: u8) -> u8 {
+    clamp_u8_setting(profile_int(sections, "Sound", key, i32::from(default)))
+}
+
+/// A profile int restricted to `valid`, else the exe default (the
+/// NOTE `NoteType`/`NoteTail` readers clamp exactly this way).
+fn clamped_choice(raw: i32, valid: RangeInclusive<i32>, default: u8) -> u8 {
+    if valid.contains(&raw) {
+        u8::try_from(raw).unwrap_or(default)
+    } else {
+        default
+    }
+}
+
 /// The options dialog values: every tab's settings plus their
 /// `option.ini` form. Load with [`Self::load_from_dir`] at boot
 /// (missing file degrades to the exe defaults, never an error);
@@ -486,44 +503,22 @@ impl OptionsSettings {
             settings.lane_dik[lane] = dik;
             settings.lane_keys[lane] = keycode_of_dik(dik).unwrap_or(DEFAULT_LANE_KEYS[lane]);
         }
-        settings.bgm_music = clamp_u8_setting(profile_int(
-            &sections,
-            "Sound",
-            "GameBGVolume",
-            i32::from(DEFAULT_SOUND_VOLUME),
-        ));
-        settings.bg_effect = clamp_u8_setting(profile_int(
-            &sections,
-            "Sound",
-            "BGVolume",
-            i32::from(DEFAULT_SOUND_VOLUME),
-        ));
-        settings.game_music = clamp_u8_setting(profile_int(
-            &sections,
-            "Sound",
-            "NoteBGVolume",
-            i32::from(DEFAULT_SOUND_VOLUME),
-        ));
-        settings.game_effect = clamp_u8_setting(profile_int(
-            &sections,
-            "Sound",
-            "NoteKeyVolume",
-            i32::from(DEFAULT_SOUND_VOLUME),
-        ));
+        settings.bgm_music = sound_setting(&sections, "GameBGVolume", DEFAULT_SOUND_VOLUME);
+        settings.bg_effect = sound_setting(&sections, "BGVolume", DEFAULT_SOUND_VOLUME);
+        settings.game_music = sound_setting(&sections, "NoteBGVolume", DEFAULT_SOUND_VOLUME);
+        settings.game_effect = sound_setting(&sections, "NoteKeyVolume", DEFAULT_SOUND_VOLUME);
         settings.mode = profile_int(&sections, "MODE", "Mode", DEFAULT_MODE);
         settings.blend_half = profile_int(&sections, "NoteScreen", "BlendHalf", DEFAULT_BLEND_HALF);
-        let note_type = profile_int(&sections, "NOTE", "NoteType", i32::from(DEFAULT_NOTE_TYPE));
-        settings.note_type = if (0..=2).contains(&note_type) {
-            u8::try_from(note_type).unwrap_or(DEFAULT_NOTE_TYPE)
-        } else {
-            DEFAULT_NOTE_TYPE
-        };
-        let note_tail = profile_int(&sections, "NOTE", "NoteTail", i32::from(DEFAULT_NOTE_TAIL));
-        settings.note_tail = if (0..=4).contains(&note_tail) {
-            u8::try_from(note_tail).unwrap_or(DEFAULT_NOTE_TAIL)
-        } else {
-            DEFAULT_NOTE_TAIL
-        };
+        settings.note_type = clamped_choice(
+            profile_int(&sections, "NOTE", "NoteType", i32::from(DEFAULT_NOTE_TYPE)),
+            0..=2,
+            DEFAULT_NOTE_TYPE,
+        );
+        settings.note_tail = clamped_choice(
+            profile_int(&sections, "NOTE", "NoteTail", i32::from(DEFAULT_NOTE_TAIL)),
+            0..=4,
+            DEFAULT_NOTE_TAIL,
+        );
         settings.longnote_mode = profile_int(
             &sections,
             "LONGNOTEMODE",
