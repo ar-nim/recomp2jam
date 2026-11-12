@@ -2,6 +2,7 @@
 
 pub mod game;
 pub mod paint;
+mod select_paint;
 pub mod side;
 
 pub use game::ScreenGame;
