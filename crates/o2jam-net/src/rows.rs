@@ -14,7 +14,10 @@
 //! Cursor-shaped copies (variable-length rows, `Reader`-driven
 //! decoders, unsigned counts) keep their hand-rolled loops: their
 //! truncation and trailing-byte error shapes are pinned per handler
-//! and do not fit the upfront-length plans below.
+//! and do not fit the upfront-length plans below. `play` score
+//! completed also keeps its loop: the room-master byte sits between
+//! the count and the rows, so the rows do not start at the plans'
+//! `head + count` offset.
 
 use super::error::Error;
 
