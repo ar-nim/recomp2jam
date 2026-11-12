@@ -271,7 +271,7 @@ pub fn restage_live_playing(game: &mut ScreenGame) {
 mod live_art_tests {
     use o2jam_net::{ChannelState, GameMode, JoinedRoom, RoomListEntry};
     use o2jam_render::{Frame, NATIVE_HEIGHT, NATIVE_WIDTH};
-    use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
+    use o2jam_shell::{GameLoop, InputSnapshot, MenuKey, Screen, ScreenGame};
 
     use super::{install_root, restage_live_playing, stage_live_scenes, stage_planet_dialogs};
     use o2jam_shell::screens::game::PlanetModal;
@@ -580,7 +580,7 @@ mod live_art_tests {
             origin_x + create.rect.x + create.rect.w as i32 / 2,
             origin_y + create.rect.y + create.rect.h as i32 / 2,
         );
-        game.mouse_click(cx, cy);
+        game.ingest_snapshot(&InputSnapshot::click_at(cx, cy));
         assert_eq!(game.room_dialog(), None);
         let body = game.take_create_room().expect("committed 2004");
         assert_eq!(body.title, "x");

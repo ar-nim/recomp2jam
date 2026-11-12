@@ -167,6 +167,22 @@ impl<G> JudgementStamp<G> {
     }
 }
 
+impl<G: GameLoop> JudgementStamp<G> {
+    /// Record one lane press on the judgement stamp without
+    /// forwarding: the snapshot intake observes every drained edge,
+    /// then forwards the whole snapshot once — recording here and
+    /// replaying through [`GameLoop::lane_key`] would judge twice.
+    fn record_lane_press(&mut self, lane: usize) {
+        if let Ok(mut state) = self.state.try_borrow_mut() {
+            state.judged_lanes.push(lane);
+            let now = state.clock.now();
+            if let Some(probe) = state.probe.as_mut() {
+                probe.judgement_tick = Some(now);
+            }
+        }
+    }
+}
+
 impl<G: GameLoop> GameLoop for JudgementStamp<G> {
     fn capture_raw_key(&mut self, code: KeyCode, down: bool) -> bool {
         self.inner.capture_raw_key(code, down)
@@ -178,13 +194,7 @@ impl<G: GameLoop> GameLoop for JudgementStamp<G> {
 
     fn lane_key(&mut self, lane: usize, down: bool) {
         if down {
-            if let Ok(mut state) = self.state.try_borrow_mut() {
-                state.judged_lanes.push(lane);
-                let now = state.clock.now();
-                if let Some(probe) = state.probe.as_mut() {
-                    probe.judgement_tick = Some(now);
-                }
-            }
+            self.record_lane_press(lane);
         }
         self.inner.lane_key(lane, down);
     }
@@ -201,12 +211,16 @@ impl<G: GameLoop> GameLoop for JudgementStamp<G> {
         self.inner.delete_text();
     }
 
-    fn mouse_click(&mut self, x: i32, y: i32) {
-        self.inner.mouse_click(x, y);
-    }
-
-    fn mouse_moved(&mut self, x: i32, y: i32) {
-        self.inner.mouse_moved(x, y);
+    fn ingest_snapshot(&mut self, snapshot: &super::InputSnapshot) {
+        // Observe every drained lane press on the stamp, then forward
+        // the whole snapshot once: replaying through `lane_key` would
+        // forward twice, and bypassing the record would blind the gate.
+        for edge in snapshot.edges() {
+            if let super::InputEdge::Lane { lane, down: true } = *edge {
+                self.record_lane_press(lane);
+            }
+        }
+        self.inner.ingest_snapshot(snapshot);
     }
 
     fn quit_requested(&self) -> bool {
@@ -295,6 +309,16 @@ mod tests {
 
         fn menu_key(&mut self, key: MenuKey, down: bool) {
             let _ = (key, down);
+        }
+
+        fn ingest_snapshot(&mut self, snapshot: &super::super::InputSnapshot) {
+            for edge in snapshot.edges() {
+                match *edge {
+                    super::super::InputEdge::Lane { lane, down } => self.lane_key(lane, down),
+                    super::super::InputEdge::Menu { key, down } => self.menu_key(key, down),
+                    _ => {}
+                }
+            }
         }
 
         fn paint(&mut self, _frame: &mut o2jam_render::Frame<'_>) {}

@@ -375,9 +375,8 @@ pub enum PlanetModal {
 }
 
 /// Native click canvas width (the shell maps window pixels into
-/// 800x600 before calling [`GameLoop::mouse_down`] /
-/// [`GameLoop::mouse_up`]; [`GameLoop::mouse_click`] composes the two
-/// for gesture callers).
+/// 800x600 and freezes them into the per-frame [`InputSnapshot`](crate::InputSnapshot)
+/// the game sweeps).
 const CLICK_W: i32 = 800;
 /// Native click canvas height (see [`CLICK_W`]).
 const CLICK_H: i32 = 600;
@@ -499,10 +498,10 @@ pub struct ScreenGame {
     /// slot-through-top (`code + top`), key steps re-seat the top
     /// under the highlight (exe key rule stays OPEN).
     channel_top: usize,
-    /// Native pointer position from the last motion event (`None` until
+    /// Native pointer position from the last snapshot (`None` until
     /// the pointer moves): the hover source for scenes with pinned hover
     /// art (the channel select bar). Test affordance and live input both
-    /// feed it through [`GameLoop::mouse_moved`].
+    /// feed it through [`GameLoop::ingest_snapshot`].
     pointer: Option<(i32, i32)>,
     /// Channel-scene lobby chat panel (main-room 2013/2014/2016/2019/
     /// 2029 rows plus the 2012 draft).
@@ -2706,7 +2705,7 @@ impl ScreenGame {
     /// control, off the Room Scene, or while a dialog, modal, or side
     /// Scene covers the lobby — clicks route to those layers first,
     /// so hover follows). The shared hover source ticket #26 consumes
-    /// for the planet board is the pointer itself (`mouse_moved`);
+    /// for the planet board is the pointer itself (the snapshot pointer);
     /// this resolver maps it onto the room chrome the same way clicks
     /// resolve (`staged_code_hit` on the parsed rects). Row panels
     /// (`EXBUTTON1..6`) are not chrome controls: the pointer over a
@@ -3563,8 +3562,8 @@ impl ScreenGame {
     }
 
     /// Apply one press edge at native frame pixels: the shared
-    /// helper behind both the legacy `mouse_down` edge and the
-    /// snapshot sweep — a press lands where the pointer is, so hover
+    /// helper behind the snapshot press edge — a press lands where
+    /// the pointer is, so hover
     /// and press agree even when no motion preceded the press.
     fn apply_pointer_down(&mut self, x: i32, y: i32) {
         self.pointer = Some((x, y));
@@ -3581,8 +3580,8 @@ impl ScreenGame {
     }
 
     /// Apply one release edge at native frame pixels: the shared
-    /// helper behind both the legacy `mouse_up` edge and the
-    /// snapshot sweep (release-inside fires, pinned #111 arm 3).
+    /// helper behind the snapshot release edge (release-inside
+    /// fires, pinned #111 arm 3).
     fn apply_pointer_up(&mut self, x: i32, y: i32) {
         self.pointer = Some((x, y));
         if self.bare_planet_board() {
@@ -6065,30 +6064,10 @@ impl GameLoop for ScreenGame {
         }
     }
 
-    fn mouse_moved(&mut self, x: i32, y: i32) {
-        self.pointer = Some((x, y));
-    }
-
-    fn mouse_down(&mut self, x: i32, y: i32) {
-        self.apply_pointer_down(x, y);
-    }
-
-    fn mouse_up(&mut self, x: i32, y: i32) {
-        self.apply_pointer_up(x, y);
-    }
-
-    fn mouse_click(&mut self, x: i32, y: i32) {
-        // The whole-gesture driver: down then up at the same point
-        // (release-inside), what legacy click callers always meant.
-        self.mouse_down(x, y);
-        self.mouse_up(x, y);
-    }
-
     fn ingest_snapshot(&mut self, snapshot: &InputSnapshot) {
-        // Snapshot-native sweep (ADR-0013, migrated phase 3 for the
-        // planet press-split): the pointer syncs at paint-time
-        // position, then each drained edge applies in arrival order
-        // through the same helpers the legacy edges use.
+        // Snapshot-native sweep (ADR-0013): the pointer syncs at
+        // paint-time position, then each drained edge applies in
+        // arrival order through the press/release helpers.
         if let Some((x, y)) = snapshot.pointer() {
             self.pointer = Some((x, y));
         }
@@ -6873,7 +6852,7 @@ mod game_tests {
     fn click_dismisses_splash_into_planet_board() {
         let mut game = ScreenGame::new();
         assert_eq!(game.screen(), Screen::Avi);
-        game.mouse_click(400, 300);
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 300));
         assert_eq!(game.screen(), Screen::Planet);
     }
 
@@ -6885,7 +6864,7 @@ mod game_tests {
         game.set_channels(two_channels());
         game.lane_key(3, true);
         game.click_planet(136, 88);
-        game.mouse_click(524, 297);
+        game.ingest_snapshot(&InputSnapshot::click_at(524, 297));
         assert_eq!(game.highlight, 1);
         assert_eq!(game.screen(), Screen::Room);
     }
@@ -6898,7 +6877,7 @@ mod game_tests {
         game.set_channels(two_channels());
         game.lane_key(3, true);
         game.click_planet(136, 88);
-        game.mouse_click(524, 246);
+        game.ingest_snapshot(&InputSnapshot::click_at(524, 246));
         assert_eq!(game.highlight, 0);
         assert_eq!(game.screen(), Screen::Room);
     }
@@ -6911,10 +6890,10 @@ mod game_tests {
         game.set_channels(two_channels());
         game.lane_key(3, true);
         game.click_planet(136, 88);
-        game.mouse_click(300, 240);
+        game.ingest_snapshot(&InputSnapshot::click_at(300, 240));
         assert_eq!(game.highlight, 0);
         assert_eq!(game.screen(), Screen::Channel);
-        game.mouse_click(300, 290);
+        game.ingest_snapshot(&InputSnapshot::click_at(300, 290));
         assert_eq!(game.highlight, 1);
         assert_eq!(game.screen(), Screen::Channel);
     }
@@ -6925,8 +6904,8 @@ mod game_tests {
         game.set_channels(two_channels());
         game.lane_key(3, true);
         game.click_planet(136, 88);
-        game.mouse_click(10, 10);
-        game.mouse_click(700, 152);
+        game.ingest_snapshot(&InputSnapshot::click_at(10, 10));
+        game.ingest_snapshot(&InputSnapshot::click_at(700, 152));
         assert_eq!(game.highlight, 0);
         assert_eq!(game.screen(), Screen::Channel);
     }
@@ -6941,13 +6920,13 @@ mod game_tests {
         game.lane_key(3, true);
         game.click_planet(136, 88);
         // y = 240 sits inside row 0's band (224-275).
-        game.mouse_click(583, 240);
+        game.ingest_snapshot(&InputSnapshot::click_at(583, 240));
         assert_eq!(game.highlight, 0);
         assert_eq!(game.screen(), Screen::Channel);
-        game.mouse_click(100, 240);
+        game.ingest_snapshot(&InputSnapshot::click_at(100, 240));
         assert_eq!(game.highlight, 0);
         assert_eq!(game.screen(), Screen::Channel);
-        game.mouse_click(700, 290);
+        game.ingest_snapshot(&InputSnapshot::click_at(700, 290));
         assert_eq!(game.highlight, 0);
         assert_eq!(game.screen(), Screen::Channel);
     }
@@ -6969,7 +6948,7 @@ mod game_tests {
         // scrolls the LIST, not the highlight — the click lands in
         // the list-top offset while the highlight stays put.
         let mut game = six_channel_game();
-        game.mouse_click(583, 419);
+        game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
         assert_eq!(game.highlight, 0);
         assert_eq!(game.channel_top, 1);
         assert_eq!(game.screen(), Screen::Channel);
@@ -6981,7 +6960,7 @@ mod game_tests {
         // arrow (573,213)-(594,233)); at the first row the top
         // clamps at 0 and the highlight stays put.
         let mut game = six_channel_game();
-        game.mouse_click(583, 223);
+        game.ingest_snapshot(&InputSnapshot::click_at(583, 223));
         assert_eq!(game.highlight, 0);
         assert_eq!(game.channel_top, 0);
         assert_eq!(game.screen(), Screen::Channel);
@@ -6999,10 +6978,10 @@ mod game_tests {
         }
         assert_eq!(game.highlight, 5);
         assert_eq!(game.channel_top, 2);
-        game.mouse_click(583, 419);
+        game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
         assert_eq!(game.highlight, 5);
         assert_eq!(game.channel_top, 2);
-        game.mouse_click(583, 223);
+        game.ingest_snapshot(&InputSnapshot::click_at(583, 223));
         assert_eq!(game.highlight, 5);
         assert_eq!(game.channel_top, 1);
         assert_eq!(game.screen(), Screen::Channel);
@@ -7015,9 +6994,9 @@ mod game_tests {
         // absolute row `top + slot` (the exe row faces add the top
         // to the slot, files `0x7459a`/`0x74678`).
         let mut game = six_channel_game();
-        game.mouse_click(583, 419);
+        game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
         assert_eq!(game.channel_top, 1);
-        game.mouse_click(300, 240);
+        game.ingest_snapshot(&InputSnapshot::click_at(300, 240));
         assert_eq!(game.highlight, 1);
         assert_eq!(game.screen(), Screen::Channel);
     }
@@ -7028,7 +7007,7 @@ mod game_tests {
         // (541,151)-(589,189) closes the dialog back to the bare
         // board — the verified native close click (577,171).
         let mut game = six_channel_game();
-        game.mouse_click(577, 171);
+        game.ingest_snapshot(&InputSnapshot::click_at(577, 171));
         assert_eq!(game.screen(), Screen::Planet);
     }
 
@@ -7039,20 +7018,20 @@ mod game_tests {
         // the scroll arrows are not rows — hovering them arms no
         // select-bar row and names no enter face.
         let mut game = six_channel_game();
-        game.mouse_moved(524, 246);
+        game.ingest_snapshot(&InputSnapshot::motion_to(524, 246));
         assert_eq!(game.hovered_channel_row(), Some(0));
         assert!(game.channel_enter_at(524, 246).is_some());
-        game.mouse_moved(300, 240);
+        game.ingest_snapshot(&InputSnapshot::motion_to(300, 240));
         assert_eq!(game.hovered_channel_row(), Some(0));
-        game.mouse_moved(300, 290);
+        game.ingest_snapshot(&InputSnapshot::motion_to(300, 290));
         assert_eq!(game.hovered_channel_row(), Some(1));
-        game.mouse_moved(565, 170);
+        game.ingest_snapshot(&InputSnapshot::motion_to(565, 170));
         assert_eq!(game.hovered_channel_row(), None);
         assert_eq!(game.channel_enter_at(565, 170), None);
-        game.mouse_moved(583, 223);
+        game.ingest_snapshot(&InputSnapshot::motion_to(583, 223));
         assert_eq!(game.hovered_channel_row(), None);
         assert_eq!(game.channel_enter_at(583, 223), None);
-        game.mouse_moved(583, 419);
+        game.ingest_snapshot(&InputSnapshot::motion_to(583, 419));
         assert_eq!(game.hovered_channel_row(), None);
         assert_eq!(game.channel_enter_at(583, 419), None);
     }
@@ -7070,7 +7049,7 @@ mod game_tests {
         // recommendation (scale `+0xc8` source unpinned), not a gap.
         // The dialog carries no pager readout (NO PAGER).
         let mut game = six_channel_game();
-        game.mouse_click(583, 320);
+        game.ingest_snapshot(&InputSnapshot::click_at(583, 320));
         assert_eq!(game.highlight, 0);
         assert_eq!(game.channel_top, 0);
         assert_eq!(game.screen(), Screen::Channel);
@@ -7085,9 +7064,9 @@ mod game_tests {
         game.lane_key(3, true);
         game.click_planet(136, 88);
         assert_eq!(game.screen(), Screen::Channel);
-        game.mouse_moved(300, 240);
+        game.ingest_snapshot(&InputSnapshot::motion_to(300, 240));
         assert_eq!(game.hovered_channel_row(), None);
-        game.mouse_click(300, 240);
+        game.ingest_snapshot(&InputSnapshot::click_at(300, 240));
         assert_eq!(game.highlight, 0);
         assert_eq!(game.screen(), Screen::Channel);
     }
@@ -7104,9 +7083,9 @@ mod game_tests {
             game.menu_key(MenuKey::Down, true);
         }
         assert_eq!(game.highlight, 5);
-        game.mouse_moved(300, 400);
+        game.ingest_snapshot(&InputSnapshot::motion_to(300, 400));
         assert_eq!(game.hovered_channel_row(), Some(5));
-        game.mouse_click(300, 400);
+        game.ingest_snapshot(&InputSnapshot::click_at(300, 400));
         assert_eq!(game.highlight, 5);
         assert_eq!(game.screen(), Screen::Channel);
     }
@@ -7118,7 +7097,7 @@ mod game_tests {
         // under the pointer — the hover/click split stays pinned.
         let mut game = six_channel_game();
         game.set_channel_input("/w bob hi");
-        game.mouse_moved(300, 290);
+        game.ingest_snapshot(&InputSnapshot::motion_to(300, 290));
         assert_eq!(game.hovered_channel_row(), Some(1));
     }
 
@@ -7129,7 +7108,7 @@ mod game_tests {
         game.lane_key(3, true);
         game.click_planet(136, 88);
         game.set_channel_input("/w bob hi");
-        game.mouse_click(524, 246);
+        game.ingest_snapshot(&InputSnapshot::click_at(524, 246));
         assert_eq!(game.screen(), Screen::Channel);
         assert!(game.channel_input().is_empty());
     }
@@ -7145,7 +7124,7 @@ mod game_tests {
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room);
         // First row band: y in [150, 158).
-        game.mouse_click(300, 154);
+        game.ingest_snapshot(&InputSnapshot::click_at(300, 154));
         assert_eq!(game.room_highlight, 0);
         assert_eq!(game.screen(), Screen::Waiting);
     }
@@ -7177,7 +7156,7 @@ mod game_tests {
             }],
             HashMap::new(),
         );
-        game.mouse_click(100, 200);
+        game.ingest_snapshot(&InputSnapshot::click_at(100, 200));
         assert_eq!(game.room_highlight, 1);
         // Row 1 is the locked room: the click gates through the
         // password dialog instead of joining straight to Waiting.
@@ -7185,7 +7164,7 @@ mod game_tests {
         // records a noop and the lobby stays usable (the no-art arm
         // below).
         game.load_password_scene(Vec::new(), HashMap::new());
-        game.mouse_click(100, 200);
+        game.ingest_snapshot(&InputSnapshot::click_at(100, 200));
         assert_eq!(game.room_dialog(), Some(RoomDialog::Password { number: 7 }));
         assert_eq!(game.screen(), Screen::Room);
     }
@@ -7201,7 +7180,7 @@ mod game_tests {
                 h: 30,
             },
         );
-        game.mouse_click(640, 115);
+        game.ingest_snapshot(&InputSnapshot::click_at(640, 115));
         assert_eq!(game.screen(), Screen::Loading);
     }
 
@@ -7216,7 +7195,7 @@ mod game_tests {
                 h: 30,
             },
         );
-        game.mouse_click(60, 575);
+        game.ingest_snapshot(&InputSnapshot::click_at(60, 575));
         assert_eq!(game.screen(), Screen::Room);
     }
 
@@ -7254,14 +7233,14 @@ mod game_tests {
     #[test]
     fn click_staged_room_back_returns_to_channel() {
         let mut game = room_back_game();
-        game.mouse_click(752, 581);
+        game.ingest_snapshot(&InputSnapshot::click_at(752, 581));
         assert_eq!(game.screen(), Screen::Channel);
     }
 
     #[test]
     fn click_outside_room_back_keeps_room() {
         let mut game = room_back_game();
-        game.mouse_click(10, 10);
+        game.ingest_snapshot(&InputSnapshot::click_at(10, 10));
         assert_eq!(game.screen(), Screen::Room);
     }
 
@@ -7456,7 +7435,7 @@ mod game_tests {
         // staged chrome the same way clicks resolve.
         let mut game = hover_room_game();
         assert_eq!(game.hovered_room_control(), None);
-        game.mouse_moved(752, 581);
+        game.ingest_snapshot(&InputSnapshot::motion_to(752, 581));
         assert_eq!(
             game.hovered_room_control().map(|control| control.code),
             Some(ROOM_BACK_BUTTON_CODE)
@@ -7465,7 +7444,7 @@ mod game_tests {
             game.hovered_room_control().map(|control| control.id),
             Some(ROOM_BACK_BUTTON_ID)
         );
-        game.mouse_moved(10, 10);
+        game.ingest_snapshot(&InputSnapshot::motion_to(10, 10));
         assert_eq!(game.hovered_room_control(), None);
     }
 
@@ -7474,12 +7453,12 @@ mod game_tests {
         // Leaving the lobby drops hover even though the pointer still
         // sits inside the button rect (BACK answers the click).
         let mut game = hover_room_game();
-        game.mouse_moved(752, 581);
+        game.ingest_snapshot(&InputSnapshot::motion_to(752, 581));
         assert_eq!(
             game.hovered_room_control().map(|control| control.code),
             Some(ROOM_BACK_BUTTON_CODE)
         );
-        game.mouse_click(752, 581);
+        game.ingest_snapshot(&InputSnapshot::click_at(752, 581));
         assert_eq!(game.screen(), Screen::Channel);
         assert_eq!(game.hovered_room_control(), None);
     }
@@ -7493,9 +7472,9 @@ mod game_tests {
         let rest = pack_xrgb(0x00, 0xFF, 0x00);
         let hover = pack_xrgb(0x00, 0x00, 0xFF);
         assert_eq!(room_pixel(&mut game, 752, 581), rest);
-        game.mouse_moved(752, 581);
+        game.ingest_snapshot(&InputSnapshot::motion_to(752, 581));
         assert_eq!(room_pixel(&mut game, 752, 581), hover);
-        game.mouse_moved(10, 10);
+        game.ingest_snapshot(&InputSnapshot::motion_to(10, 10));
         assert_eq!(room_pixel(&mut game, 752, 581), rest);
     }
 
@@ -7510,13 +7489,13 @@ mod game_tests {
         let rest = pack_xrgb(0x00, 0xFF, 0x00);
         let hover = pack_xrgb(0x00, 0x00, 0xFF);
         assert_eq!(room_pixel(&mut game, 752, 581), rest);
-        game.mouse_moved(752, 581);
+        game.ingest_snapshot(&InputSnapshot::motion_to(752, 581));
         assert_eq!(
             game.hovered_room_control().map(|control| control.code),
             Some(ROOM_BACK_BUTTON_CODE)
         );
         assert_eq!(room_pixel(&mut game, 752, 581), hover);
-        game.mouse_moved(10, 10);
+        game.ingest_snapshot(&InputSnapshot::motion_to(10, 10));
         assert_eq!(room_pixel(&mut game, 752, 581), rest);
     }
 
@@ -7556,7 +7535,7 @@ mod game_tests {
             },
             0,
         );
-        game.mouse_moved(150, 40);
+        game.ingest_snapshot(&InputSnapshot::motion_to(150, 40));
         assert_eq!(game.hovered_room_control(), None);
         let mut hovered = vec![0u32; 800 * 600];
         game.paint_at(
@@ -7614,7 +7593,7 @@ mod game_tests {
             },
             0,
         );
-        game.mouse_moved(100, 120);
+        game.ingest_snapshot(&InputSnapshot::motion_to(100, 120));
         assert_eq!(game.hovered_room_control(), None);
         let mut hovered = vec![0u32; 800 * 600];
         game.paint_at(
@@ -7633,7 +7612,7 @@ mod game_tests {
         // Clicks route to the open dialog first, so hover follows:
         // chrome behind the dialog highlights nothing.
         let mut game = hover_room_game();
-        game.mouse_moved(752, 581);
+        game.ingest_snapshot(&InputSnapshot::motion_to(752, 581));
         assert_eq!(
             game.hovered_room_control().map(|control| control.code),
             Some(ROOM_BACK_BUTTON_CODE)
@@ -7675,7 +7654,7 @@ mod game_tests {
             ],
             HashMap::new(),
         );
-        game.mouse_click(757, 17);
+        game.ingest_snapshot(&InputSnapshot::click_at(757, 17));
         assert_eq!(game.planet_modal(), Some(PlanetModal::Options));
         assert_eq!(game.screen(), Screen::Room);
         game.menu_key(MenuKey::Back, true);
@@ -7694,7 +7673,7 @@ mod game_tests {
         game.menu_key(MenuKey::Confirm, true);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Waiting);
-        game.mouse_click(640, 115);
+        game.ingest_snapshot(&InputSnapshot::click_at(640, 115));
         assert_eq!(game.screen(), Screen::Waiting);
     }
 
@@ -8203,7 +8182,7 @@ mod game_tests {
         let mut game = swept_waiting_game();
         let before = paint_waiting_frame(&mut game, 800, 600);
         for (x, y) in WAITING_CHROME_POINTS {
-            game.mouse_moved(x, y);
+            game.ingest_snapshot(&InputSnapshot::motion_to(x, y));
             assert_eq!(game.screen(), Screen::Waiting);
         }
         assert!(!game.has_pending_team_send());
@@ -8223,9 +8202,9 @@ mod game_tests {
         // capture for lobby chrome (`docs/hover.md` press section).
         let mut game = swept_waiting_game();
         assert!(game.is_room_master());
-        game.mouse_down(699, 144);
+        game.ingest_snapshot(&InputSnapshot::press_at(699, 144));
         assert_eq!(game.screen(), Screen::Loading);
-        game.mouse_up(699, 144);
+        game.ingest_snapshot(&InputSnapshot::release_at(699, 144));
         assert_eq!(game.screen(), Screen::Loading);
     }
 
@@ -8236,9 +8215,9 @@ mod game_tests {
         // release cannot revert it — the scene holds Room. Same
         // down-dispatch stand-in as START (planet press-split OPEN).
         let mut game = swept_waiting_game();
-        game.mouse_down(752, 581);
+        game.ingest_snapshot(&InputSnapshot::press_at(752, 581));
         assert_eq!(game.screen(), Screen::Room);
-        game.mouse_up(10, 10);
+        game.ingest_snapshot(&InputSnapshot::release_at(10, 10));
         assert_eq!(game.screen(), Screen::Room);
     }
 
@@ -8251,9 +8230,9 @@ mod game_tests {
         let mut game = swept_waiting_game();
         game.waiting.as_mut().expect("joined room").member_id = 4;
         assert!(!game.is_room_master());
-        game.mouse_down(699, 144);
+        game.ingest_snapshot(&InputSnapshot::press_at(699, 144));
         assert_eq!(game.screen(), Screen::Waiting);
-        game.mouse_up(10, 10);
+        game.ingest_snapshot(&InputSnapshot::release_at(10, 10));
         assert_eq!(game.screen(), Screen::Waiting);
         assert!(!game.has_pending_team_send());
         assert!(!game.has_pending_music_send());
@@ -8312,7 +8291,7 @@ mod game_tests {
             .enumerate()
             {
                 let team = u8::try_from(team).expect("eight teams fit");
-                game.mouse_click(x, y);
+                game.ingest_snapshot(&InputSnapshot::click_at(x, y));
                 assert_eq!(game.waiting.as_ref().expect("joined room").team, team);
                 assert_eq!(game.battle_self_team, Some(team));
                 assert_eq!(game.take_room_team(), Some(SetRoomTeam { team }));
@@ -8357,7 +8336,7 @@ mod game_tests {
                 (240, 140),
                 (98, 329),
             ] {
-                game.mouse_click(x, y);
+                game.ingest_snapshot(&InputSnapshot::click_at(x, y));
                 assert_eq!(game.screen(), Screen::Waiting);
             }
             assert_eq!(game.waiting.as_ref().expect("joined room").team, 1);
@@ -8402,7 +8381,7 @@ mod game_tests {
             (505, 478),
             (505, 547),
         ] {
-            game.mouse_click(x, y);
+            game.ingest_snapshot(&InputSnapshot::click_at(x, y));
             assert_eq!(
                 game.screen(),
                 Screen::Waiting,
@@ -8425,10 +8404,10 @@ mod game_tests {
         game.load_select_music_scene(Vec::new(), HashMap::new());
         stage_waiting_song(&mut game);
         assert!(game.is_room_master());
-        game.mouse_click(98, 140);
+        game.ingest_snapshot(&InputSnapshot::click_at(98, 140));
         assert_eq!(game.screen(), Screen::Waiting);
         assert!(!game.has_pending_music_send());
-        game.mouse_click(400, 150 + 23 + 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 150 + 23 + 11));
         assert_eq!(
             game.take_music_send(),
             Some(SetRoomMusic {
@@ -8438,7 +8417,7 @@ mod game_tests {
             }),
             "row click commits the 4000 pick"
         );
-        game.mouse_click(699, 144);
+        game.ingest_snapshot(&InputSnapshot::click_at(699, 144));
         assert_eq!(game.screen(), Screen::Loading);
     }
 
@@ -8463,7 +8442,7 @@ mod game_tests {
     fn click_retries_result_into_waiting() {
         let mut game = result_game();
         // Pinned RETRY rect (625,570)-(708,592).
-        game.mouse_click(666, 581);
+        game.ingest_snapshot(&InputSnapshot::click_at(666, 581));
         assert_eq!(game.screen(), Screen::Waiting);
     }
 
@@ -8471,14 +8450,14 @@ mod game_tests {
     fn click_leaves_result_into_rooms() {
         let mut game = result_game();
         // Pinned BACK rect (711,569)-(794,593).
-        game.mouse_click(752, 581);
+        game.ingest_snapshot(&InputSnapshot::click_at(752, 581));
         assert_eq!(game.screen(), Screen::Room);
     }
 
     #[test]
     fn click_outside_result_buttons_keeps_result() {
         let mut game = result_game();
-        game.mouse_click(400, 300);
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 300));
         assert_eq!(game.screen(), Screen::Result);
     }
 
@@ -9461,10 +9440,10 @@ mod game_tests {
     fn myroom_slot_click_selects_through_staged_rect() {
         let mut game = myroom_open_overlay();
         assert_eq!(game.myroom().selected_slot(), 0);
-        game.mouse_click(11, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(11, 11));
         assert_eq!(game.myroom().selected_slot(), 3);
         // Outside every staged placement the selection holds.
-        game.mouse_click(0, 500);
+        game.ingest_snapshot(&InputSnapshot::click_at(0, 500));
         assert_eq!(game.myroom().selected_slot(), 3);
     }
 
@@ -9472,13 +9451,13 @@ mod game_tests {
     fn myroom_bag_pager_turns_over_staged_inventory() {
         let mut game = myroom_open_overlay();
         assert_eq!(game.myroom().bag_page(), 0);
-        game.mouse_click(151, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(151, 11));
         assert_eq!(game.myroom().bag_page(), 1);
-        game.mouse_click(151, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(151, 11));
         assert_eq!(game.myroom().bag_page(), 1);
-        game.mouse_click(101, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(101, 11));
         assert_eq!(game.myroom().bag_page(), 0);
-        game.mouse_click(101, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(101, 11));
         assert_eq!(game.myroom().bag_page(), 0);
     }
 
@@ -9487,15 +9466,15 @@ mod game_tests {
         use super::super::side::MYROOM_BAG_FIRST_CODE;
         let mut game = myroom_open_overlay();
         // Pick the first bag cell (item 1, type 2, record slot 0).
-        game.mouse_click(201, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(201, 11));
         assert_eq!(game.myroom().bag_cell(), Some(0));
-        game.mouse_click(451, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(451, 11));
         let send = game.take_equip_send().expect("apply queues the equip send");
         assert_eq!((send.slot, send.item_id), (0, 1));
         assert!(game.take_equip_send().is_none());
         // The staged worn set mirrors the commit (slot 0 wears 1).
-        game.mouse_click(251, 11);
-        game.mouse_click(451, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(251, 11));
+        game.ingest_snapshot(&InputSnapshot::click_at(451, 11));
         let second = game.take_equip_send().expect("second apply queues");
         assert_eq!((second.slot, second.item_id), (1, 2));
         let _ = MYROOM_BAG_FIRST_CODE;
@@ -9683,9 +9662,9 @@ mod game_tests {
             .expect("staged character")
             .item_gifts
             .push(gift);
-        game.mouse_click(401, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(401, 11));
         assert_eq!(game.myroom().gift_cell(), Some(0));
-        game.mouse_click(501, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(501, 11));
         let claim = game.take_gift_claim().expect("MOVE queues the gift claim");
         assert_eq!(claim.gift_type, GiftType::Item);
         assert_eq!((claim.gift_id, claim.resource_id), (7, 1));
@@ -9891,26 +9870,26 @@ mod game_tests {
             });
         // Slot pick: the staged slot button (code ordinal 3) at its
         // staged rect records the selection.
-        game.mouse_click(11, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(11, 11));
         assert_eq!(game.myroom().selected_slot(), 3);
         // Bag pager: 12 owned rows turn exactly one page.
-        game.mouse_click(151, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(151, 11));
         assert_eq!(game.myroom().bag_page(), 1);
-        game.mouse_click(101, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(101, 11));
         assert_eq!(game.myroom().bag_page(), 0);
         // Equip: first bag cell (item 1, record slot 0) applies.
-        game.mouse_click(201, 11);
-        game.mouse_click(451, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(201, 11));
+        game.ingest_snapshot(&InputSnapshot::click_at(451, 11));
         let equip = game.take_equip_send().expect("equip queued");
         assert_eq!((equip.slot, equip.item_id), (0, 1));
         // Gift: first box cell claims item gift 7 from Giver.
-        game.mouse_click(401, 11);
-        game.mouse_click(501, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(401, 11));
+        game.ingest_snapshot(&InputSnapshot::click_at(501, 11));
         let claim = game.take_gift_claim().expect("claim queued");
         assert_eq!(claim.gift_type, GiftType::Item);
         assert_eq!((claim.gift_id, claim.resource_id), (7, 1));
         // BACK returns to the lobby that opened the room.
-        game.mouse_click(551, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(551, 11));
         assert_eq!(game.side(), None);
         assert_eq!(game.screen(), Screen::Waiting);
     }
@@ -9918,7 +9897,7 @@ mod game_tests {
     #[test]
     fn myroom_back_click_returns_to_the_lobby() {
         let mut game = myroom_open_overlay();
-        game.mouse_click(551, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(551, 11));
         assert_eq!(game.side(), None);
         assert_eq!(game.screen(), Screen::Waiting);
     }
@@ -10274,7 +10253,7 @@ mod game_tests {
         keyed.lane_key(3, true);
         assert_eq!(keyed.screen(), Screen::Planet);
         let mut clicked = staged_splash_boot();
-        clicked.mouse_click(400, 300);
+        clicked.ingest_snapshot(&InputSnapshot::click_at(400, 300));
         assert_eq!(clicked.screen(), Screen::Planet);
         assert_eq!(
             clicked.state_hash(),
@@ -10562,7 +10541,7 @@ mod game_tests {
         game.lane_key(3, true);
         game.click_planet(136, 88);
         assert_eq!(game.screen(), Screen::Channel);
-        game.mouse_moved(300, 340);
+        game.ingest_snapshot(&InputSnapshot::motion_to(300, 340));
         assert_eq!(game.hovered_channel_row(), Some(2));
         let mut buf = vec![0u32; 800 * 600];
         game.paint_at(
@@ -10577,7 +10556,7 @@ mod game_tests {
         assert_eq!(buf[340 * 800 + 300], bar, "bar follows the pointer row");
         assert_ne!(buf[250 * 800 + 300], bar, "row 0 lost the bar");
         // Off the rows the bar returns to the keyboard highlight.
-        game.mouse_moved(20, 20);
+        game.ingest_snapshot(&InputSnapshot::motion_to(20, 20));
         assert_eq!(game.hovered_channel_row(), None);
         let mut buf = vec![0u32; 800 * 600];
         game.paint_at(
@@ -11594,7 +11573,7 @@ mod game_tests {
         assert_eq!(game.highlight, 5);
         // Ticket #56: the face of visible slot 0 enters; the
         // viewport maps it back to row 2.
-        game.mouse_click(524, 246);
+        game.ingest_snapshot(&InputSnapshot::click_at(524, 246));
         assert_eq!(game.highlight, 2);
         assert_eq!(game.screen(), Screen::Room);
     }
@@ -11752,7 +11731,7 @@ mod game_tests {
         assert!(buf.iter().any(|pixel| *pixel != buf[0]));
         // OK (fallback box center) quits and closes; CANCEL instead
         // closes without quitting (fresh game below).
-        game.mouse_click(350, 253);
+        game.ingest_snapshot(&InputSnapshot::click_at(350, 253));
         assert!(game.quit_confirmed(), "OK must quit");
         assert_eq!(game.planet_modal(), None);
     }
@@ -11848,7 +11827,7 @@ mod game_tests {
         game.click_planet(769, 580);
         assert_eq!(game.planet_modal(), Some(PlanetModal::QuitConfirm));
         // CANCEL fallback box center (native 450,253).
-        game.mouse_click(450, 253);
+        game.ingest_snapshot(&InputSnapshot::click_at(450, 253));
         assert!(!game.quit_confirmed());
         assert_eq!(game.planet_modal(), None);
         assert_eq!(game.screen(), Screen::Planet);
@@ -11937,7 +11916,7 @@ mod game_tests {
 
     /// Click the center of a synthetic 36x20 button at `(x, y)`.
     fn click_button(game: &mut ScreenGame, x: i32, y: i32) {
-        game.mouse_click(x + 18, y + 10);
+        game.ingest_snapshot(&InputSnapshot::click_at(x + 18, y + 10));
     }
 
     #[test]
@@ -12341,7 +12320,7 @@ mod game_tests {
             HashMap::new(),
         );
         walk_to_waiting(&mut game);
-        game.mouse_click(660, 75);
+        game.ingest_snapshot(&InputSnapshot::click_at(660, 75));
         assert_eq!(game.waiting.as_ref().unwrap().team, 0);
         assert_eq!(game.battle_self_team, Some(0));
         assert!(game.has_pending_team_send());
@@ -12349,7 +12328,7 @@ mod game_tests {
         assert_eq!(game.take_team_ready(), Some(Ready));
         assert!(!game.has_pending_team_send());
         // A click outside both staged buttons queues nothing.
-        game.mouse_click(10, 10);
+        game.ingest_snapshot(&InputSnapshot::click_at(10, 10));
         assert!(!game.has_pending_team_send());
     }
 
@@ -12381,7 +12360,7 @@ mod game_tests {
         );
         walk_to_waiting(&mut game);
         assert!(game.is_room_master());
-        game.mouse_click(660, 75);
+        game.ingest_snapshot(&InputSnapshot::click_at(660, 75));
         assert_eq!(game.waiting.as_ref().unwrap().team, 0);
         assert!(game.take_room_team().is_some(), "4004 staged");
         assert!(game.take_team_ready().is_some(), "4008 staged");
@@ -12425,7 +12404,7 @@ mod game_tests {
         game.load_select_music_scene(Vec::new(), HashMap::new());
         stage_waiting_song(&mut game);
         walk_to_waiting(&mut game);
-        game.mouse_click(400, 150 + 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 150 + 11));
         let buf = paint_waiting_frame(&mut game, 800, 600);
         assert!(ink_near(
             &buf,
@@ -12459,7 +12438,7 @@ mod game_tests {
         stage_waiting_song(&mut game);
         walk_to_waiting(&mut game);
         assert!(game.is_room_master());
-        game.mouse_click(400, 150 + 23 + 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 150 + 23 + 11));
         let picked = game.selected_music().expect("row click commits the song");
         assert_eq!(picked.music_id, 757);
         assert_eq!(picked.difficulty, 1);
@@ -12468,7 +12447,7 @@ mod game_tests {
         assert_eq!(game.take_music_send(), Some(picked));
         assert!(!game.has_pending_music_send());
         // A click outside the staged rows queues nothing.
-        game.mouse_click(10, 10);
+        game.ingest_snapshot(&InputSnapshot::click_at(10, 10));
         assert!(!game.has_pending_music_send());
     }
 
@@ -12483,12 +12462,12 @@ mod game_tests {
         walk_to_waiting(&mut game);
         game.waiting.as_mut().expect("joined room").member_id = 4;
         assert!(!game.is_room_master());
-        game.mouse_click(400, 150 + 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 150 + 11));
         assert!(!game.has_pending_music_send());
         let mut bare = ScreenGame::new();
         bare.set_joined_room(waiting_room());
         walk_to_waiting(&mut bare);
-        bare.mouse_click(400, 150 + 11);
+        bare.ingest_snapshot(&InputSnapshot::click_at(400, 150 + 11));
         assert!(!bare.has_pending_music_send());
     }
 
@@ -12505,7 +12484,7 @@ mod game_tests {
         stage_waiting_song(&mut game);
         walk_to_waiting(&mut game);
         assert!(game.is_room_master());
-        game.mouse_click(400, 150 + 23 + 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 150 + 23 + 11));
         assert_eq!(
             game.take_music_send(),
             Some(o2jam_net::SetRoomMusic {
@@ -12628,7 +12607,7 @@ mod game_tests {
         game.click_planet(136, 88);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room);
-        game.mouse_click(555, 389);
+        game.ingest_snapshot(&InputSnapshot::click_at(555, 389));
         assert_eq!(game.room_dialog(), None, "unstaged sheet never owns input");
         assert!(
             game.room_control_noop().is_some(),
@@ -12666,7 +12645,7 @@ mod game_tests {
             }],
             HashMap::new(),
         );
-        game.mouse_click(100, 200);
+        game.ingest_snapshot(&InputSnapshot::click_at(100, 200));
         assert_eq!(game.room_highlight, 1);
         assert_eq!(game.room_dialog(), None, "unstaged sheet never owns input");
         assert!(
@@ -13538,7 +13517,7 @@ mod game_tests {
 
     fn assert_no_side_hover(game: &mut ScreenGame, x: i32, y: i32) {
         // No side screen owns hover art: the sweep arms nothing.
-        game.mouse_moved(x, y);
+        game.ingest_snapshot(&InputSnapshot::motion_to(x, y));
         assert!(game.hovered_planet_action().is_none());
         assert!(game.hovered_channel_row().is_none());
         assert!(game.hovered_room_control().is_none());
@@ -13590,7 +13569,7 @@ mod game_tests {
         game.load_side_scene(shop_side_placements(), HashMap::new());
         assert!(game.visit_side(SideScreen::Shop));
         for (x, y) in [(300, 240), (300, 290), (524, 246)] {
-            game.mouse_moved(x, y);
+            game.ingest_snapshot(&InputSnapshot::motion_to(x, y));
             assert_eq!(
                 game.hovered_channel_row(),
                 None,
@@ -13614,26 +13593,26 @@ mod game_tests {
             .iter()
             .enumerate()
         {
-            game.mouse_click(705, 105 + slot as i32 * 84);
+            game.ingest_snapshot(&InputSnapshot::click_at(705, 105 + slot as i32 * 84));
             assert_eq!(
                 game.lanking_selected_title(),
                 Some((*title).to_owned()),
                 "LVIEW row {slot} picked nothing"
             );
         }
-        game.mouse_click(85, 12);
+        game.ingest_snapshot(&InputSnapshot::click_at(85, 12));
         assert_eq!(game.lanking_page(), 1);
-        game.mouse_click(85, 12);
+        game.ingest_snapshot(&InputSnapshot::click_at(85, 12));
         assert_eq!(game.lanking_page(), 2);
-        game.mouse_click(85, 12);
+        game.ingest_snapshot(&InputSnapshot::click_at(85, 12));
         assert_eq!(game.lanking_page(), 2, "NEXT holds past the end");
-        game.mouse_click(155, 12);
+        game.ingest_snapshot(&InputSnapshot::click_at(155, 12));
         assert_eq!(game.lanking_page(), 1);
-        game.mouse_click(155, 12);
+        game.ingest_snapshot(&InputSnapshot::click_at(155, 12));
         assert_eq!(game.lanking_page(), 0);
-        game.mouse_click(155, 12);
+        game.ingest_snapshot(&InputSnapshot::click_at(155, 12));
         assert_eq!(game.lanking_page(), 0, "PREV holds at the start");
-        game.mouse_click(15, 12);
+        game.ingest_snapshot(&InputSnapshot::click_at(15, 12));
         assert_eq!(game.lanking_sort(), Some(LankingSort::Title));
         assert_eq!(game.lanking_page(), 0, "sort resets the page");
         let row = |rank: i32| RankEntry {
@@ -13644,13 +13623,13 @@ mod game_tests {
             self_entry: RankEntry::default(),
             entries: (1..=12).map(row).collect(),
         });
-        game.mouse_click(645, 386);
+        game.ingest_snapshot(&InputSnapshot::click_at(645, 386));
         assert_eq!(game.lanking_rpage, 1);
-        game.mouse_click(645, 386);
+        game.ingest_snapshot(&InputSnapshot::click_at(645, 386));
         assert_eq!(game.lanking_rpage, 1, "right NEXT holds past the end");
-        game.mouse_click(605, 386);
+        game.ingest_snapshot(&InputSnapshot::click_at(605, 386));
         assert_eq!(game.lanking_rpage, 0);
-        game.mouse_click(605, 386);
+        game.ingest_snapshot(&InputSnapshot::click_at(605, 386));
         assert_eq!(game.lanking_rpage, 0, "right PREV holds at the start");
         let pinned = (
             game.lanking_sort(),
@@ -13658,7 +13637,7 @@ mod game_tests {
             game.lanking_selected_title(),
         );
         for (x, y) in [(505, 405), (505, 455), (205, 105), (305, 365)] {
-            game.mouse_click(x, y);
+            game.ingest_snapshot(&InputSnapshot::click_at(x, y));
             assert_eq!(
                 (
                     game.lanking_sort(),
@@ -13683,41 +13662,41 @@ mod game_tests {
         // ITEMNAME/ITEMWON templates) lands nowhere.
         use o2jam_net::shop::SyncItemPurchase;
         let mut game = open_shop_board(10);
-        game.mouse_click(40, 570);
+        game.ingest_snapshot(&InputSnapshot::click_at(40, 570));
         assert_eq!(game.take_shop_buy(), None, "empty cart commits nothing");
         for slot in 0..8u32 {
             let x = 220 + (slot % 4) as i32 * 141 + 40;
             let y = 187 + (slot / 4) as i32 * 153 + 8;
-            game.mouse_click(x, y);
+            game.ingest_snapshot(&InputSnapshot::click_at(x, y));
         }
         assert_eq!(game.shop_cart(), vec![1, 2, 3, 4, 5, 6, 7, 8]);
-        game.mouse_click(261, 196);
+        game.ingest_snapshot(&InputSnapshot::click_at(261, 196));
         assert_eq!(game.shop_cart(), vec![2, 3, 4, 5, 6, 7, 8]);
-        game.mouse_click(753, 379);
+        game.ingest_snapshot(&InputSnapshot::click_at(753, 379));
         assert_eq!(game.shop_page(), 1);
-        game.mouse_click(261, 196);
+        game.ingest_snapshot(&InputSnapshot::click_at(261, 196));
         assert_eq!(game.shop_cart(), vec![2, 3, 4, 5, 6, 7, 8, 9]);
-        game.mouse_click(753, 379);
+        game.ingest_snapshot(&InputSnapshot::click_at(753, 379));
         assert_eq!(game.shop_page(), 1, "scroll NEXT holds past the end");
-        game.mouse_click(226, 379);
+        game.ingest_snapshot(&InputSnapshot::click_at(226, 379));
         assert_eq!(game.shop_page(), 0);
-        game.mouse_click(226, 379);
+        game.ingest_snapshot(&InputSnapshot::click_at(226, 379));
         assert_eq!(game.shop_page(), 0, "scroll PREV holds at the start");
-        game.mouse_click(40, 570);
+        game.ingest_snapshot(&InputSnapshot::click_at(40, 570));
         assert_eq!(game.take_shop_buy(), Some(SyncItemPurchase));
         assert_eq!(game.take_shop_buy(), None, "the seam drains once");
         assert_eq!(game.shop_visible_cart().len(), 5);
-        game.mouse_click(340, 575);
+        game.ingest_snapshot(&InputSnapshot::click_at(340, 575));
         assert_eq!(game.shop_visible_cart().len(), 3);
-        game.mouse_click(340, 575);
+        game.ingest_snapshot(&InputSnapshot::click_at(340, 575));
         assert_eq!(game.shop_visible_cart().len(), 3, "cart NEXT holds");
-        game.mouse_click(220, 575);
+        game.ingest_snapshot(&InputSnapshot::click_at(220, 575));
         assert_eq!(game.shop_visible_cart().len(), 5);
-        game.mouse_click(220, 575);
+        game.ingest_snapshot(&InputSnapshot::click_at(220, 575));
         assert_eq!(game.shop_visible_cart().len(), 5, "cart PREV holds");
         let pinned = (game.shop_cart(), game.shop_page());
         for (x, y) in [(100, 290), (254, 575), (400, 383), (250, 75), (260, 175)] {
-            game.mouse_click(x, y);
+            game.ingest_snapshot(&InputSnapshot::click_at(x, y));
             assert_eq!(
                 (game.shop_cart(), game.shop_page()),
                 pinned,
@@ -13742,37 +13721,37 @@ mod game_tests {
         for (slot, song_id) in [757, 758, 759, 760, 761].iter().enumerate() {
             // Slot centers: the staged slots tile edge-to-edge, so
             // row tops would re-hit the row above.
-            game.mouse_click(19, 144 + slot as i32 * 84);
+            game.ingest_snapshot(&InputSnapshot::click_at(19, 144 + slot as i32 * 84));
             assert!(
                 game.music_shop_cart().contains(song_id),
                 "MS_EX row {slot} staged nothing"
             );
         }
-        game.mouse_click(318, 533);
+        game.ingest_snapshot(&InputSnapshot::click_at(318, 533));
         assert_eq!(game.music_shop_page(), 1);
-        game.mouse_click(19, 105);
+        game.ingest_snapshot(&InputSnapshot::click_at(19, 105));
         assert!(game.music_shop_cart().contains(&762));
-        game.mouse_click(199, 533);
+        game.ingest_snapshot(&InputSnapshot::click_at(199, 533));
         assert_eq!(game.music_shop_page(), 0);
-        game.mouse_click(318, 533);
+        game.ingest_snapshot(&InputSnapshot::click_at(318, 533));
         assert_eq!(game.music_shop_page(), 1);
-        game.mouse_click(134, 85);
+        game.ingest_snapshot(&InputSnapshot::click_at(134, 85));
         assert_eq!(game.music_shop_sort(), Some(LankingSort::Title));
         assert_eq!(game.music_shop_page(), 0, "TITLE resets the page");
-        game.mouse_click(200, 90);
+        game.ingest_snapshot(&InputSnapshot::click_at(200, 90));
         assert_eq!(game.music_shop_sort(), Some(LankingSort::Diff));
-        game.mouse_click(260, 90);
+        game.ingest_snapshot(&InputSnapshot::click_at(260, 90));
         assert_eq!(game.music_shop_sort(), Some(LankingSort::Bpm));
-        game.mouse_click(341, 156);
+        game.ingest_snapshot(&InputSnapshot::click_at(341, 156));
         assert_eq!(game.take_music_buy(), Some(SyncMusicPurchase));
         assert_eq!(game.take_music_buy(), None, "the seam drains once");
-        game.mouse_click(350, 179);
+        game.ingest_snapshot(&InputSnapshot::click_at(350, 179));
         assert_eq!(
             game.take_music_buy(),
             Some(SyncMusicPurchase),
             "tiled WON buy queues 5010"
         );
-        game.mouse_click(440, 535);
+        game.ingest_snapshot(&InputSnapshot::click_at(440, 535));
         assert_eq!(
             game.take_music_buy(),
             Some(SyncMusicPurchase),
@@ -13780,20 +13759,20 @@ mod game_tests {
         );
         assert_eq!(game.take_music_buy(), None);
         assert_eq!(game.music_shop_visible_cart().len(), 5);
-        game.mouse_click(680, 535);
+        game.ingest_snapshot(&InputSnapshot::click_at(680, 535));
         assert_eq!(game.music_shop_visible_cart().len(), 1);
-        game.mouse_click(680, 535);
+        game.ingest_snapshot(&InputSnapshot::click_at(680, 535));
         assert_eq!(game.music_shop_visible_cart().len(), 1, "cart NEXT holds");
-        game.mouse_click(560, 535);
+        game.ingest_snapshot(&InputSnapshot::click_at(560, 535));
         assert_eq!(game.music_shop_visible_cart().len(), 5);
-        game.mouse_click(560, 535);
+        game.ingest_snapshot(&InputSnapshot::click_at(560, 535));
         assert_eq!(game.music_shop_visible_cart().len(), 5, "cart PREV holds");
         let pinned = (
             game.music_shop_cart(),
             game.music_shop_page(),
             game.music_shop_sort(),
         );
-        game.mouse_click(250, 540);
+        game.ingest_snapshot(&InputSnapshot::click_at(250, 540));
         assert_eq!(
             (
                 game.music_shop_cart(),
@@ -13822,24 +13801,24 @@ mod game_tests {
         // `myroom_entry_queues_gift_list_fetch`); the sweep drains it
         // so later takes prove the chrome added nothing.
         assert!(game.take_gift_list_request().is_some());
-        game.mouse_click(451, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(451, 11));
         assert_eq!(
             game.take_equip_send(),
             None,
             "no picked cell equips nothing"
         );
-        game.mouse_click(501, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(501, 11));
         assert_eq!(
             game.take_gift_claim(),
             None,
             "no picked gift claims nothing"
         );
-        game.mouse_click(11, 41);
+        game.ingest_snapshot(&InputSnapshot::click_at(11, 41));
         assert_eq!(game.take_equip_send(), None);
         assert_eq!(game.take_gift_claim(), None);
         assert_eq!(game.take_gift_list_request(), None);
         assert_eq!(game.myroom().selected_slot(), 0, "VACATE records only");
-        game.mouse_click(61, 41);
+        game.ingest_snapshot(&InputSnapshot::click_at(61, 41));
         assert_eq!(
             game.side(),
             Some(SideScreen::MyRoom),
@@ -13847,43 +13826,43 @@ mod game_tests {
         );
         assert_eq!(game.take_equip_send(), None);
         assert_eq!(game.take_gift_claim(), None);
-        game.mouse_click(11, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(11, 11));
         assert_eq!(game.myroom().selected_slot(), 3);
-        game.mouse_click(201, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(201, 11));
         assert_eq!(game.myroom().bag_cell(), Some(0));
-        game.mouse_click(251, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(251, 11));
         assert_eq!(game.myroom().bag_cell(), Some(1));
-        game.mouse_click(451, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(451, 11));
         let equip = game.take_equip_send().expect("apply queues the equip send");
         assert_eq!((equip.slot, equip.item_id), (1, 2));
-        game.mouse_click(201, 11);
-        game.mouse_click(451, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(201, 11));
+        game.ingest_snapshot(&InputSnapshot::click_at(451, 11));
         let first = game.take_equip_send().expect("re-apply queues again");
         assert_eq!((first.slot, first.item_id), (0, 1));
-        game.mouse_click(151, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(151, 11));
         assert_eq!(game.myroom().bag_page(), 1);
-        game.mouse_click(151, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(151, 11));
         assert_eq!(game.myroom().bag_page(), 1, "bag NEXT holds past the end");
-        game.mouse_click(101, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(101, 11));
         assert_eq!(game.myroom().bag_page(), 0);
-        game.mouse_click(101, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(101, 11));
         assert_eq!(game.myroom().bag_page(), 0, "bag PREV holds at the start");
-        game.mouse_click(351, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(351, 11));
         assert_eq!(game.myroom().gift_page(), 0, "gift NEXT holds on one page");
-        game.mouse_click(301, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(301, 11));
         assert_eq!(game.myroom().gift_page(), 0, "gift PREV holds at the start");
-        game.mouse_click(401, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(401, 11));
         assert_eq!(game.myroom().gift_cell(), Some(0));
-        game.mouse_click(501, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(501, 11));
         assert_eq!(
             game.take_gift_claim(),
             None,
             "claim with no staged rows records nothing"
         );
-        game.mouse_click(11, 101);
+        game.ingest_snapshot(&InputSnapshot::click_at(11, 101));
         assert_eq!(game.myroom().selected_slot(), 3, "caption is not a button");
         assert_eq!(game.myroom().bag_page(), 0);
-        game.mouse_click(551, 11);
+        game.ingest_snapshot(&InputSnapshot::click_at(551, 11));
         assert_eq!(game.side(), None);
         assert_eq!(game.screen(), Screen::Waiting);
     }
@@ -13898,7 +13877,7 @@ mod game_tests {
         // (next: rig capture of a payment click with Memoryer up).
         let mut game = payment_open_overlay();
         for (x, y) in [(30, 20), (200, 130), (799, 599)] {
-            game.mouse_click(x, y);
+            game.ingest_snapshot(&InputSnapshot::click_at(x, y));
             assert_eq!(game.side(), Some(SideScreen::Payment));
             assert_eq!(game.screen(), Screen::Waiting);
         }
@@ -13927,7 +13906,7 @@ mod game_tests {
         for mut game in [open_planet_side_overlay(), open_tutorial_overlay()] {
             let side = game.side();
             for (x, y) in [(140, 115), (340, 215), (799, 599)] {
-                game.mouse_click(x, y);
+                game.ingest_snapshot(&InputSnapshot::click_at(x, y));
                 assert_eq!(game.side(), side);
                 assert_eq!(game.screen(), Screen::Waiting);
             }
@@ -13959,7 +13938,7 @@ mod game_tests {
                 h: 30,
             },
         );
-        game.mouse_click(640, 115);
+        game.ingest_snapshot(&InputSnapshot::click_at(640, 115));
         assert_eq!(game.screen(), Screen::Loading);
         for (x, y) in [
             (0, 0),
@@ -13969,7 +13948,7 @@ mod game_tests {
             (400, 300),
             (640, 115),
         ] {
-            game.mouse_click(x, y);
+            game.ingest_snapshot(&InputSnapshot::click_at(x, y));
             assert_eq!(
                 game.screen(),
                 Screen::Loading,
@@ -13995,7 +13974,7 @@ mod game_tests {
             assert_eq!(game.screen(), Screen::Avi);
             assert_no_side_hover(&mut game, x, y);
             assert_eq!(game.screen(), Screen::Avi);
-            game.mouse_click(x, y);
+            game.ingest_snapshot(&InputSnapshot::click_at(x, y));
             assert_eq!(game.screen(), Screen::Planet);
             hashes.push(game.state_hash());
         }
@@ -14489,7 +14468,7 @@ mod game_tests {
         finish_song(&mut game);
         paint_result_frame(&mut game);
         assert_eq!(game.screen(), Screen::Result);
-        game.mouse_click(666, 581);
+        game.ingest_snapshot(&InputSnapshot::click_at(666, 581));
         assert_eq!(game.screen(), Screen::Waiting);
         assert!(game.take_result_retry().is_some());
         assert!(game.take_result_retry().is_none(), "one take sends once");
@@ -14506,7 +14485,7 @@ mod game_tests {
         finish_song(&mut game);
         paint_result_frame(&mut game);
         assert_eq!(game.screen(), Screen::Result);
-        game.mouse_click(752, 581);
+        game.ingest_snapshot(&InputSnapshot::click_at(752, 581));
         assert_eq!(game.screen(), Screen::Room);
         assert!(game.take_result_back().is_some());
         assert!(game.take_result_back().is_none(), "one take sends once");
@@ -14522,7 +14501,7 @@ mod game_tests {
         finish_song(&mut game);
         paint_result_frame(&mut game);
         assert_eq!(game.screen(), Screen::Result);
-        game.mouse_click(0, 0);
+        game.ingest_snapshot(&InputSnapshot::click_at(0, 0));
         assert_eq!(game.screen(), Screen::Result);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Waiting);
@@ -14638,10 +14617,10 @@ mod game_tests {
         // press-split (that evidence is planet-only, #111), so the
         // down-dispatch stands (same stand-in as the waiting leg).
         let mut game = swept_result_game();
-        game.mouse_down(666, 581);
+        game.ingest_snapshot(&InputSnapshot::press_at(666, 581));
         assert_eq!(game.screen(), Screen::Waiting);
         assert!(game.take_result_retry().is_some());
-        game.mouse_up(666, 581);
+        game.ingest_snapshot(&InputSnapshot::release_at(666, 581));
         assert_eq!(game.screen(), Screen::Waiting);
         assert!(game.take_result_retry().is_none(), "one take sends once");
     }
@@ -14653,10 +14632,10 @@ mod game_tests {
         // relay body (#87) — so an outside release cannot revert
         // it: the scene holds Room.
         let mut game = swept_result_game();
-        game.mouse_down(752, 581);
+        game.ingest_snapshot(&InputSnapshot::press_at(752, 581));
         assert_eq!(game.screen(), Screen::Room);
         assert!(game.take_result_back().is_some());
-        game.mouse_up(10, 10);
+        game.ingest_snapshot(&InputSnapshot::release_at(10, 10));
         assert_eq!(game.screen(), Screen::Room);
         assert!(game.take_result_back().is_none());
     }
@@ -14689,7 +14668,7 @@ mod game_tests {
                 (400, 300),
                 (600, 200),
             ] {
-                game.mouse_moved(x, y);
+                game.ingest_snapshot(&InputSnapshot::motion_to(x, y));
                 assert_eq!(game.screen(), Screen::Result);
             }
             assert!(game.take_result_retry().is_none());
@@ -14716,7 +14695,7 @@ mod game_tests {
                 game.set_battle_self_team(Some(1));
             }
             for (x, y) in [(200, 350), (200, 450), (400, 300), (600, 200)] {
-                game.mouse_click(x, y);
+                game.ingest_snapshot(&InputSnapshot::click_at(x, y));
                 assert_eq!(game.screen(), Screen::Result);
             }
             assert!(game.take_result_retry().is_none());
@@ -14742,12 +14721,12 @@ mod game_tests {
                     game.set_battle_self_team(Some(1));
                 }
                 if retry {
-                    game.mouse_click(666, 581);
+                    game.ingest_snapshot(&InputSnapshot::click_at(666, 581));
                     assert_eq!(game.screen(), Screen::Waiting);
                     assert!(game.take_result_retry().is_some());
                     assert!(game.take_result_back().is_none());
                 } else {
-                    game.mouse_click(752, 581);
+                    game.ingest_snapshot(&InputSnapshot::click_at(752, 581));
                     assert_eq!(game.screen(), Screen::Room);
                     assert!(game.take_result_back().is_some());
                     assert!(game.take_result_retry().is_none());
@@ -16339,7 +16318,10 @@ mod game_tests {
             (0x1320_003A, "IDC_BUTTON_SROOM_MYBAND", SideScreen::Lanking),
         ] {
             let mut game = room_lobby_with_control(code, id);
-            game.mouse_click(ROOM_CONTROL_TEST_CLICK.0, ROOM_CONTROL_TEST_CLICK.1);
+            game.ingest_snapshot(&InputSnapshot::click_at(
+                ROOM_CONTROL_TEST_CLICK.0,
+                ROOM_CONTROL_TEST_CLICK.1,
+            ));
             assert_eq!(game.side(), Some(side), "{id}");
             assert_eq!(game.screen(), Screen::Room, "{id}");
             assert_eq!(game.room_control_noop(), None, "{id}");
@@ -16353,7 +16335,10 @@ mod game_tests {
         // tutorial entry at all — the click must be recorded, never
         // silently dropped.
         let mut game = room_lobby_with_control(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP");
-        game.mouse_click(ROOM_CONTROL_TEST_CLICK.0, ROOM_CONTROL_TEST_CLICK.1);
+        game.ingest_snapshot(&InputSnapshot::click_at(
+            ROOM_CONTROL_TEST_CLICK.0,
+            ROOM_CONTROL_TEST_CLICK.1,
+        ));
         assert_eq!(game.screen(), Screen::Room);
         assert_eq!(game.side(), None);
         assert_eq!(game.room_dialog(), None);
@@ -16409,7 +16394,7 @@ mod game_tests {
     #[test]
     fn click_away_from_every_room_control_stays_in_the_lobby() {
         let mut game = room_lobby_with_control(0x1320_0008, "IDC_BUTTON_SROOM_ITEMSHOP");
-        game.mouse_click(10, 10);
+        game.ingest_snapshot(&InputSnapshot::click_at(10, 10));
         assert_eq!(game.screen(), Screen::Room);
         assert_eq!(game.side(), None);
         assert_eq!(game.room_control_noop(), None);
@@ -16420,7 +16405,10 @@ mod game_tests {
         // No staged rect names the code, so the click falls through to
         // the row hit test exactly as before (nothing is invented).
         let mut game = room_lobby_with_controls(&[]);
-        game.mouse_click(ROOM_CONTROL_TEST_CLICK.0, ROOM_CONTROL_TEST_CLICK.1);
+        game.ingest_snapshot(&InputSnapshot::click_at(
+            ROOM_CONTROL_TEST_CLICK.0,
+            ROOM_CONTROL_TEST_CLICK.1,
+        ));
         assert_eq!(game.screen(), Screen::Room);
         assert_eq!(game.side(), None);
         assert_eq!(game.room_control_noop(), None);
@@ -16430,7 +16418,7 @@ mod game_tests {
     fn room_row_bands_still_answer_beside_the_control_table() {
         let mut game = room_lobby_with_control(0x1320_0008, "IDC_BUTTON_SROOM_ITEMSHOP");
         // First row band of the legacy list: y in [150, 158).
-        game.mouse_click(300, 154);
+        game.ingest_snapshot(&InputSnapshot::click_at(300, 154));
         assert_eq!(game.room_highlight, 0);
         assert_eq!(game.screen(), Screen::Waiting);
     }
@@ -16615,10 +16603,10 @@ mod game_tests {
             .iter()
             .find(|placement| placement.code == code)
             .unwrap_or_else(|| panic!("code {code:#010X} stages"));
-        game.mouse_click(
+        game.ingest_snapshot(&InputSnapshot::click_at(
             origin.0 + placement.rect.x + i32::try_from(placement.rect.w).unwrap_or(0) / 2,
             origin.1 + placement.rect.y + i32::try_from(placement.rect.h).unwrap_or(0) / 2,
-        );
+        ));
     }
 
     #[test]

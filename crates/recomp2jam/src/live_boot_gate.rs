@@ -182,22 +182,24 @@ mod live_boot_gate_tests {
         assert_eq!(session.screen(), Screen::Planet);
         // The live input path reaches the game THROUGH the session's
         // GameLoop impl (the window holds `Box<dyn GameLoop>`). #118's
-        // no-input leg: the impl overrode mouse_click but not the
-        // #115 press edges, whose trait defaults are no-ops — presses,
-        // releases, and motion vanished while menu_key forwarded fine
-        // (Enter worked, clicks and hover did not).
+        // no-input leg: the impl overrode the whole-gesture edge but
+        // not the #115 press edges, whose trait defaults were no-ops
+        // — presses, releases, and motion vanished while menu_key
+        // forwarded fine (Enter worked, clicks and hover did not).
+        // The snapshot intake is required now, so the seam cannot
+        // recur: every implementor names how it sweeps.
         assert!(
             session.game_mut().planet_modal().is_none(),
             "fresh boot owns a bare planet board"
         );
         {
             let game_loop: &mut dyn o2jam_shell::GameLoop = &mut session;
-            game_loop.mouse_down(729, 580); // gear disc (pinned e2e coord)
-            game_loop.mouse_up(729, 580);
+            game_loop.ingest_snapshot(&o2jam_shell::InputSnapshot::press_at(729, 580)); // gear disc (pinned e2e coord)
+            game_loop.ingest_snapshot(&o2jam_shell::InputSnapshot::release_at(729, 580));
         }
         assert!(
             session.game_mut().planet_modal().is_some(),
-            "mouse_down/up through the session GameLoop must open the gear dialog"
+            "snapshot press/release through the session GameLoop must open the gear dialog"
         );
         session
             .game_mut()

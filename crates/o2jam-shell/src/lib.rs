@@ -350,57 +350,18 @@ pub trait GameLoop {
     fn text_input(&mut self, _text: &str) {}
     /// The Backspace key went down; chat drafts consume it as erase.
     fn delete_text(&mut self) {}
-    /// Whole-gesture convenience for tests and drivers: a press and
-    /// release at native frame pixels (`x`, `y` in 800x600 space).
-    /// The window NEVER dispatches through this — live press/release
-    /// always arrive as separate [`GameLoop::mouse_down`] /
-    /// [`GameLoop::mouse_up`] edges (#118 no-input leg, #141 seam
-    /// audit): an implementor handling only this method would lose
-    /// every live press. Implementors must handle the edges; this
-    /// default composes them so legacy gesture callers keep working.
-    /// Default ignores the gesture so existing implementors keep
-    /// compiling.
-    fn mouse_click(&mut self, _x: i32, _y: i32) {}
-    /// Left button went down at native frame pixels. Pressed-art
-    /// scenes arm the press here (pinned #111: the frame swap
-    /// happens on ButtonDown, the action on release-inside).
-    /// Default routes nothing so existing implementors keep
-    /// compiling; live dispatch is edge-only — see
-    /// [`GameLoop::mouse_click`] for why whole-gesture handling here
-    /// is not enough.
-    fn mouse_down(&mut self, _x: i32, _y: i32) {}
-    /// Left button came up at native frame pixels. Paired with
-    /// [`GameLoop::mouse_down`]: release-inside fires the press
-    /// action, release-outside reverts with none (pinned #111).
-    /// Default routes nothing.
-    fn mouse_up(&mut self, _x: i32, _y: i32) {}
-    /// The pointer moved to native frame pixels (`x`, `y` in 800x600
-    /// space; the shell maps window pixels before calling). Hover
-    /// state rides this — the exe arms hover art on mouse motion alone
-    /// (`Dialog_ChannelSelectBar.ojs` follows the row under the
-    /// pointer, live-confirmed 2026-11-09). Default ignores motion so
-    /// existing implementors keep compiling.
-    fn mouse_moved(&mut self, _x: i32, _y: i32) {}
     /// Per-frame pulled input intake (ADR-0013): the shell freezes
     /// one snapshot at each frame boundary and the game sweeps it
-    /// here — positions and state, never event-time pushes. The
-    /// default replays the snapshot through the edge methods in
-    /// arrival order (pointer first, as hover) so existing
-    /// implementors keep working; snapshot-native states override
-    /// this and sweep [`InputSnapshot`] directly.
-    fn ingest_snapshot(&mut self, snapshot: &InputSnapshot) {
-        if let Some((x, y)) = snapshot.pointer() {
-            self.mouse_moved(x, y);
-        }
-        for edge in snapshot.edges() {
-            match *edge {
-                InputEdge::PointerDown { x, y } => self.mouse_down(x, y),
-                InputEdge::PointerUp { x, y } => self.mouse_up(x, y),
-                InputEdge::Lane { lane, down } => self.lane_key(lane, down),
-                InputEdge::Menu { key, down } => self.menu_key(key, down),
-            }
-        }
-    }
+    /// here — pointer position plus the frame's drained discrete
+    /// edges in arrival order, never event-time pushes. Required:
+    /// every implementor names how it sweeps, so the #118 silent-drop
+    /// class (a forwarding seam swallowing a press edge) cannot
+    /// recur. Hover reads the snapshot pointer at paint time (the exe
+    /// arms hover art on motion alone — `Dialog_ChannelSelectBar.ojs`
+    /// follows the row under the pointer, live-confirmed 2026-11-09);
+    /// presses arm on [`InputEdge::PointerDown`] and fire on
+    /// release-inside (pinned #111).
+    fn ingest_snapshot(&mut self, snapshot: &InputSnapshot);
     /// Whether the game asked to quit (the planet quit-confirm OK).
     /// The windowed shell exits the event loop on it; headless walks
     /// read the flag instead. Default never quits so existing
@@ -671,6 +632,7 @@ mod tests {
     struct SolidGame(u32);
     impl GameLoop for SolidGame {
         fn lane_key(&mut self, _lane: usize, _down: bool) {}
+        fn ingest_snapshot(&mut self, _snapshot: &InputSnapshot) {}
         fn paint(&mut self, frame: &mut o2jam_render::Frame<'_>) {
             frame.buf.fill(self.0);
         }

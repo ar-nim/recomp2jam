@@ -1325,6 +1325,7 @@ pub use o2jam_render::png::encode_png;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use o2jam_shell::InputSnapshot;
 
     /// Canary (retro 2026-11-12): broken data-dir symlinks once made
     /// every "with install-root present" run silently skip, and the
@@ -2471,7 +2472,7 @@ mod tests {
         // paints under the amber-cursor pick stand-in.
         let mut game = seeded_game();
         game.lane_key(3, true);
-        game.mouse_click(577, 171);
+        game.ingest_snapshot(&InputSnapshot::click_at(577, 171));
         assert_eq!(game.screen(), Screen::Planet, "dialog X → bare board");
         game.click_planet(386, 88);
         assert_eq!(
@@ -2503,7 +2504,7 @@ mod tests {
         // the dialog through the flow gate.
         let mut game = seeded_game();
         game.lane_key(3, true);
-        game.mouse_click(577, 171);
+        game.ingest_snapshot(&InputSnapshot::click_at(577, 171));
         assert_eq!(game.screen(), Screen::Planet);
         game.click_planet(386, 88);
         assert_eq!(
@@ -2530,7 +2531,7 @@ mod tests {
         assert_eq!(game.screen(), Screen::Channel);
         // Ticket #56: only the enter face advances — row 0 face
         // (502,236)-(546,257).
-        game.mouse_click(524, 246);
+        game.ingest_snapshot(&InputSnapshot::click_at(524, 246));
         assert_eq!(
             game.screen(),
             Screen::Room,
@@ -2538,7 +2539,7 @@ mod tests {
         );
         let mut game = seeded_game();
         game.lane_key(3, true);
-        game.mouse_click(577, 171);
+        game.ingest_snapshot(&InputSnapshot::click_at(577, 171));
         assert_eq!(game.screen(), Screen::Planet, "dialog X → Planet");
     }
 
@@ -2555,7 +2556,7 @@ mod tests {
         ] {
             let mut game = seeded_game();
             game.lane_key(3, true);
-            game.mouse_click(577, 171);
+            game.ingest_snapshot(&InputSnapshot::click_at(577, 171));
             assert_eq!(game.screen(), Screen::Planet);
             game.click_planet(x, 88);
             assert_eq!(game.screen(), Screen::Channel, "lit emblem → dialog");
@@ -2563,7 +2564,7 @@ mod tests {
         }
         let mut game = seeded_game();
         game.lane_key(3, true);
-        game.mouse_click(577, 171);
+        game.ingest_snapshot(&InputSnapshot::click_at(577, 171));
         game.click_planet(663, 88);
         game.click_planet(559, 88);
         assert_eq!(game.planet_selection(), None);
@@ -2630,7 +2631,7 @@ mod tests {
         assert_ne!(popup, board, "quit popup painted nothing");
         // OK center through the dialog-relative rect: origin
         // (240,189) + (52,181) + half of 107x26.
-        game.mouse_click(345, 383);
+        game.ingest_snapshot(&InputSnapshot::click_at(345, 383));
         assert!(game.quit_confirmed(), "staged OK must quit");
         let mut game = seeded_game();
         game.lane_key(3, true);

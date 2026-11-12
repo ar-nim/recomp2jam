@@ -654,7 +654,7 @@ impl ApplicationHandler for WindowHandler {
 
 #[cfg(test)]
 mod tests {
-    use super::super::GameLoop;
+    use super::super::{GameLoop, InputEdge};
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -665,10 +665,13 @@ mod tests {
         texts: Vec<String>,
         deletes: usize,
         lanes: Vec<(usize, bool)>,
-        clicks: Vec<(i32, i32)>,
-        downs: Vec<(i32, i32)>,
-        ups: Vec<(i32, i32)>,
-        moves: Vec<(i32, i32)>,
+        /// One entry per delivered snapshot: the intake count pins
+        /// the single-consumption-point shape (ADR-0013).
+        ingests: usize,
+        /// Every drained edge, in arrival order.
+        edges: Vec<super::super::InputEdge>,
+        /// Latest snapshot pointer per delivery (hover reads it).
+        pointers: Vec<Option<(i32, i32)>>,
     }
 
     impl GameLoop for Rc<RefCell<InputProbe>> {
@@ -684,20 +687,19 @@ mod tests {
             self.borrow_mut().deletes += 1;
         }
 
-        fn mouse_click(&mut self, x: i32, y: i32) {
-            self.borrow_mut().clicks.push((x, y));
-        }
-
-        fn mouse_down(&mut self, x: i32, y: i32) {
-            self.borrow_mut().downs.push((x, y));
-        }
-
-        fn mouse_up(&mut self, x: i32, y: i32) {
-            self.borrow_mut().ups.push((x, y));
-        }
-
-        fn mouse_moved(&mut self, x: i32, y: i32) {
-            self.borrow_mut().moves.push((x, y));
+        fn ingest_snapshot(&mut self, snapshot: &super::super::InputSnapshot) {
+            let edges: Vec<super::super::InputEdge> = snapshot.edges().to_vec();
+            {
+                let mut probe = self.borrow_mut();
+                probe.ingests += 1;
+                probe.pointers.push(snapshot.pointer());
+                probe.edges.extend(edges.iter().copied());
+                for edge in &edges {
+                    if let InputEdge::Lane { lane, down } = *edge {
+                        probe.lanes.push((lane, down));
+                    }
+                }
+            }
         }
 
         fn paint(&mut self, _frame: &mut o2jam_render::Frame<'_>) {}
@@ -880,8 +882,13 @@ mod tests {
         handler.route_mouse_edge(true, 100.0, 200.0);
         handler.route_mouse_edge(false, 100.0, 200.0);
         handler.deliver_snapshot();
-        assert_eq!(probe.borrow().downs, vec![(100, 200)]);
-        assert_eq!(probe.borrow().ups, vec![(100, 200)]);
+        assert_eq!(
+            probe.borrow().edges,
+            vec![
+                InputEdge::PointerDown { x: 100, y: 200 },
+                InputEdge::PointerUp { x: 100, y: 200 },
+            ]
+        );
     }
 
     #[test]
@@ -898,22 +905,32 @@ mod tests {
         handler.route_mouse_input(true);
         handler.route_mouse_input(false);
         handler.deliver_snapshot();
-        assert_eq!(probe.borrow().moves, vec![(100, 200)], "hover forwarded");
-        assert_eq!(probe.borrow().downs, vec![(100, 200)], "press routed");
-        assert_eq!(probe.borrow().ups, vec![(100, 200)], "release routed");
+        assert_eq!(
+            probe.borrow().pointers,
+            vec![Some((100, 200))],
+            "hover forwarded at paint-time position"
+        );
+        assert_eq!(
+            probe.borrow().edges,
+            vec![
+                InputEdge::PointerDown { x: 100, y: 200 },
+                InputEdge::PointerUp { x: 100, y: 200 },
+            ],
+            "press and release routed"
+        );
     }
 
     #[test]
-    fn mouse_input_arm_never_dispatches_through_mouse_click() {
-        // #141 seam-drift guard, the failure direction the edge
-        // assertions cannot see: an implementor that handles ONLY
-        // `mouse_click` receives nothing while the edges stay no-ops
-        // (the #118 no-input leg). The probe records `clicks`
-        // precisely so this test fails the day the window routes a
-        // gesture through `mouse_click` instead of the edges.
+    fn snapshot_intake_delivers_both_edges_in_one_freeze() {
+        // #141 seam-drift guard, kept through the snapshot migration:
+        // the failure direction it pins is an implementor or a seam
+        // that drops a press edge while keys keep flowing (the #118
+        // no-input leg). The probe counts intakes precisely, so this
+        // test fails the day the window stops delivering whole
+        // snapshots and something between the arms drops an edge.
         // Snapshot evolution (ADR-0013): the freeze delivers exactly
-        // one snapshot carrying both edges — the seam dispatches
-        // snapshots, never gestures.
+        // one snapshot carrying both edges — the seam delivers
+        // snapshots, never per-event pushes.
         let (mut handler, probe) = probed_handler();
         handler.surface_size = Some((800, 600));
         handler.track_motion(100.0, 200.0);
@@ -923,16 +940,18 @@ mod tests {
         assert_eq!(snapshot.sequence(), 0);
         assert_eq!(snapshot.edges().len(), 2, "one freeze, both edges");
         assert_eq!(
-            probe.borrow().clicks,
-            Vec::new(),
-            "the seam must dispatch edges only; mouse_click is a test/driver convenience"
+            probe.borrow().ingests,
+            1,
+            "the seam delivers snapshots, never gestures"
         );
         assert_eq!(
-            probe.borrow().downs,
-            vec![(100, 200)],
+            probe.borrow().edges,
+            vec![
+                InputEdge::PointerDown { x: 100, y: 200 },
+                InputEdge::PointerUp { x: 100, y: 200 },
+            ],
             "both edges still reach the game"
         );
-        assert_eq!(probe.borrow().ups, vec![(100, 200)]);
     }
 
     #[test]
@@ -953,8 +972,8 @@ mod tests {
         assert_eq!(second.sequence(), 1);
         assert_eq!(second.pointer(), Some((10, 20)), "position persists");
         assert!(second.edges().is_empty(), "the queue drained");
-        assert_eq!(probe.borrow().downs.len(), 1);
-        assert_eq!(probe.borrow().ups.len(), 1);
+        assert_eq!(probe.borrow().ingests, 2);
+        assert_eq!(probe.borrow().edges.len(), 2);
     }
 
     #[test]
@@ -1011,18 +1030,20 @@ mod tests {
             self.inner.borrow_mut().delete_text();
         }
 
-        fn mouse_down(&mut self, x: i32, y: i32) {
-            self.routed.borrow_mut().push(("down", x, y));
-            self.inner.borrow_mut().mouse_down(x, y);
-        }
-
-        fn mouse_up(&mut self, x: i32, y: i32) {
-            self.routed.borrow_mut().push(("up", x, y));
-            self.inner.borrow_mut().mouse_up(x, y);
-        }
-
-        fn mouse_moved(&mut self, x: i32, y: i32) {
-            self.inner.borrow_mut().mouse_moved(x, y);
+        fn ingest_snapshot(&mut self, snapshot: &super::super::InputSnapshot) {
+            // Record each drained edge in arrival order, then let the
+            // real scene logic answer — the routed log is exactly
+            // what the seam delivered, in order.
+            for edge in snapshot.edges() {
+                let (name, x, y) = match *edge {
+                    InputEdge::PointerDown { x, y } => ("down", x, y),
+                    InputEdge::PointerUp { x, y } => ("up", x, y),
+                    InputEdge::Lane { lane, down } => ("lane", lane as i32, down as i32),
+                    InputEdge::Menu { .. } => continue,
+                };
+                self.routed.borrow_mut().push((name, x, y));
+            }
+            self.inner.borrow_mut().ingest_snapshot(snapshot);
         }
 
         fn quit_requested(&self) -> bool {
@@ -1178,8 +1199,8 @@ mod tests {
         handler.route_mouse_input(false);
         let snapshot = handler.deliver_snapshot();
         assert!(snapshot.edges().is_empty(), "letterbox edges never queue");
-        assert!(probe.borrow().downs.is_empty(), "letterbox press dropped");
-        assert!(probe.borrow().ups.is_empty(), "letterbox release dropped");
+        assert!(probe.borrow().edges.is_empty(), "letterbox press dropped");
+        assert_eq!(probe.borrow().pointers, vec![None]);
     }
 
     #[test]
@@ -1197,8 +1218,7 @@ mod tests {
         let snapshot = handler.deliver_snapshot();
         assert!(snapshot.edges().is_empty(), "no position, no edges");
         assert!(snapshot.pointer().is_none());
-        assert!(probe.borrow().downs.is_empty());
-        assert!(probe.borrow().ups.is_empty());
+        assert!(probe.borrow().edges.is_empty());
     }
 
     #[test]
@@ -1207,8 +1227,7 @@ mod tests {
         handler.route_mouse_edge(true, 100.0, 200.0);
         handler.route_mouse_edge(false, 100.0, 200.0);
         handler.deliver_snapshot();
-        assert!(probe.borrow().downs.is_empty());
-        assert!(probe.borrow().ups.is_empty());
+        assert!(probe.borrow().edges.is_empty());
     }
 
     #[test]

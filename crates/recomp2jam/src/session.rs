@@ -152,7 +152,7 @@ use o2jam_net::{
     SetRoomArena, SetRoomMusic, StartGame, SubmitScore, WireMessage,
 };
 use o2jam_shell::screens::game::{LobbyChat, SlashCommand};
-use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
+use o2jam_shell::{GameLoop, InputEdge, InputSnapshot, MenuKey, Screen, ScreenGame};
 
 use crate::connect::net_context;
 use crate::live_art::restage_live_playing;
@@ -1959,6 +1959,36 @@ impl OnlineSession {
             }
         }
     }
+
+    /// Run the networked gates for one press edge: `true` eats the
+    /// edge (the game never sees it). Releases and keys always pass
+    /// through — the game answers those locally.
+    fn swallow_networked_edge(&mut self, edge: &InputEdge) -> bool {
+        let InputEdge::PointerDown { x, y } = *edge else {
+            return false;
+        };
+        if self.game.screen() == Screen::Channel {
+            if let Some(channel) = self.game.channel_enter_at(x, y) {
+                return !self.enter_channel(channel);
+            }
+            return false;
+        }
+        if self.game.screen() == Screen::Room {
+            if let Some(number) = self.game.room_number_at(x, y) {
+                self.set_pending_room_join(number, "");
+                return !self.join_pending_room();
+            }
+            // A press that hits no room never sends: only Confirm
+            // (with an explicit `--online-join-room`) retries a
+            // pending join.
+            return self.pending_room.is_some();
+        }
+        if self.game.screen() == Screen::Waiting && self.game.waiting_confirm_hit(x, y) {
+            self.confirm_waiting();
+            return true;
+        }
+        false
+    }
 }
 
 impl GameLoop for OnlineSession {
@@ -2011,75 +2041,38 @@ impl GameLoop for OnlineSession {
         self.game.delete_text();
     }
 
-    fn mouse_down(&mut self, x: i32, y: i32) {
-        // Forward the press edge (#118 no-input leg: these edges were
-        // trait-default no-ops here, so every windowed press, release,
-        // and motion vanished while menu_key forwarded fine). A Channel
-        // enter-face press rides the networked entry gate first (the
-        // driver-path `mouse_click` arm below mirrors it), so the live
-        // window stages the identity before the Room paint; a failed
-        // exchange eats the press and keeps Channel.
-        if self.game.screen() == Screen::Channel {
-            if let Some(channel) = self.game.channel_enter_at(x, y) {
-                if !self.enter_channel(channel) {
-                    return;
-                }
+    fn ingest_snapshot(&mut self, snapshot: &InputSnapshot) {
+        // Snapshot-native sweep with the networked gates the driver
+        // path used to own in the legacy whole-gesture edge: one snapshot carries the
+        // tap, so the gate and the local advance read the same frame.
+        // Channel enter-face presses ride the entry gate (1004 login
+        // plus the 2001 identity fetch) before the local advance,
+        // mirroring Confirm; other Channel presses stay local exactly
+        // like their menu equivalents. Room presses mirror Confirm:
+        // join first, advance on success — a press that hits no room
+        // never sends unless a join is already pending. Waiting
+        // confirm rides the networked Confirm gate (4008/4010 with
+        // the song-select/START exchange behind it) and never reaches
+        // the game; other Waiting presses stay local exactly like
+        // their menu equivalents. Click evidence states (P0: every
+        // path labeled, OPEN stays open). Anything unclaimed advances
+        // locally with no send, like lane keys. Menu edges ride the
+        // session's Confirm gates (Waiting/Channel/Room/Loading),
+        // exactly like the legacy direct `menu_key` path — the game
+        // never sees a gated Confirm.
+        let mut surviving = InputSnapshot::new();
+        surviving.set_pointer(snapshot.pointer());
+        for edge in snapshot.edges() {
+            if let InputEdge::Menu { key, down } = *edge {
+                self.menu_key(key, down);
+                continue;
             }
-        }
-        self.game.mouse_down(x, y);
-    }
-
-    fn mouse_up(&mut self, x: i32, y: i32) {
-        self.game.mouse_up(x, y);
-    }
-
-    fn mouse_moved(&mut self, x: i32, y: i32) {
-        self.game.mouse_moved(x, y);
-    }
-
-    fn mouse_click(&mut self, x: i32, y: i32) {
-        // Click evidence states (P0: every path labeled, OPEN stays open):
-        // Channel enter-face clicks ride the networked entry gate
-        // (1004 login plus the 2001 identity fetch) before the local
-        // advance, mirroring Confirm; other Channel clicks stay local
-        // exactly like their menu equivalents.
-        // Room clicks mirror Confirm: join first, advance on success.
-        if self.game.screen() == Screen::Channel {
-            if let Some(channel) = self.game.channel_enter_at(x, y) {
-                if !self.enter_channel(channel) {
-                    return;
-                }
+            if self.swallow_networked_edge(edge) {
+                continue;
             }
-            self.game.mouse_click(x, y);
-            return;
+            surviving.push_edge(*edge);
         }
-        if self.game.screen() == Screen::Room {
-            if let Some(number) = self.game.room_number_at(x, y) {
-                self.set_pending_room_join(number, "");
-                if self.join_pending_room() {
-                    self.game.mouse_click(x, y);
-                }
-                return;
-            }
-            // A click that hits no room never sends: only Confirm (with
-            // an explicit `--online-join-room`) retries a pending join.
-            if self.pending_room.is_none() {
-                self.game.mouse_click(x, y);
-            }
-            return;
-        }
-        // Waiting confirm rides the networked Confirm gate (4008/4010
-        // with the song-select/START exchange behind it); other Waiting
-        // clicks stay local exactly like their menu equivalents.
-        if self.game.screen() == Screen::Waiting && self.game.waiting_confirm_hit(x, y) {
-            self.confirm_waiting();
-            return;
-        }
-        // Forward canvas clicks like lane keys: anything unclaimed
-        // above advances locally with no send. Waiting-confirm clicks
-        // ride the local advance without the 4008 exchange, so keyboard
-        // Confirm stays the verified path for starting games (OPEN).
-        self.game.mouse_click(x, y);
+        self.game.ingest_snapshot(&surviving);
     }
 
     fn quit_requested(&self) -> bool {
@@ -2194,7 +2187,7 @@ mod session_tests {
         HEADER_LEN,
     };
     use o2jam_shell::screens::game::LobbyChat;
-    use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
+    use o2jam_shell::{GameLoop, InputSnapshot, MenuKey, Screen, ScreenGame};
 
     use super::{level_for_difficulty, saturate_bonus, OnlineSession, SongChoice};
 
@@ -2680,14 +2673,14 @@ mod session_tests {
 
     #[test]
     fn channel_face_press_logs_in_and_stages_character() {
-        // Ticket #30, live press path: the windowed client dispatches
-        // through `mouse_down`, so the enter-face press must exchange
+        // Ticket #30, live press path: the windowed client delivers a
+        // press snapshot, so the enter-face press must exchange
         // before the Room paint like Confirm does.
         let (mut session, server) = channel_session(|mut stream| {
             answer_entry_login(&mut stream);
         });
         session.game.set_channels(vec![entry_channel()]);
-        session.mouse_down(524, 246);
+        session.ingest_snapshot(&InputSnapshot::press_at(524, 246));
         server.join().unwrap();
         assert_eq!(session.game.screen(), Screen::Room);
         let hero = session
@@ -2933,7 +2926,7 @@ mod session_tests {
         ]);
         // Ticket #56: only the enter face enters — row 0 face
         // (502,236)-(546,257).
-        session.mouse_click(524, 246);
+        session.ingest_snapshot(&InputSnapshot::click_at(524, 246));
         server.join().unwrap();
         assert_eq!(session.game.screen(), Screen::Room);
         let hero = session
@@ -3086,7 +3079,7 @@ mod session_tests {
         session
             .game_mut()
             .set_rooms(vec![room_row(3, "Jam"), room_row(7, "Locked")]);
-        session.mouse_click(400, 154);
+        session.ingest_snapshot(&InputSnapshot::click_at(400, 154));
         server.join().unwrap();
         assert_eq!(session.game.screen(), Screen::Waiting);
     }
@@ -3139,7 +3132,27 @@ mod session_tests {
             }],
             std::collections::HashMap::new(),
         );
-        session.mouse_click(150, 130);
+        session.ingest_snapshot(&InputSnapshot::click_at(150, 130));
+        server.join().unwrap();
+        assert_eq!(session.game.screen(), Screen::Waiting);
+    }
+
+    #[test]
+    fn waiting_menu_confirm_sends_ready_through_snapshot() {
+        // The session's Confirm gates ride the snapshot too: a Menu
+        // edge (what the window queues for Enter) reaches the 4008
+        // exchange, never the game's local advance.
+        use o2jam_net::Ready;
+        let (mut session, server) = joined_waiting_session(guest_snapshot(), |mut stream| {
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, Ready::COMMAND);
+        });
+        let mut snapshot = InputSnapshot::new();
+        snapshot.push_edge(o2jam_shell::InputEdge::Menu {
+            key: MenuKey::Confirm,
+            down: true,
+        });
+        session.ingest_snapshot(&snapshot);
         server.join().unwrap();
         assert_eq!(session.game.screen(), Screen::Waiting);
     }
