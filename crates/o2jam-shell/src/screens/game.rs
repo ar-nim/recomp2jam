@@ -608,6 +608,149 @@ impl PendingOutbox {
     }
 }
 
+/// Left-list songs, sorts, pages, and the fetched rank board behind
+/// the lanking side screen (#139 cluster 2: the Data Clump of all
+/// six `lanking_*` fields). Pure board state — no side dispatch,
+/// paint, or input — so the board reads without touching the
+/// `ScreenGame` God class. `ScreenGame` keeps thin delegates under
+/// the same names, so the click seam and the snapshot surface never
+/// change.
+#[derive(Default)]
+struct LankingState {
+    /// Left-list songs behind the lanking board (`OJNList.dat`
+    /// order, owned copies; see [`ScreenGame::set_lanking_catalog`]).
+    lanking_songs: Vec<LankingSong>,
+    /// Active left-list sort (`None`: catalog order until a sort
+    /// button answers; directions ASSUMED ascending).
+    lanking_sort: Option<LankingSort>,
+    /// Left-list page (five rows per page, the staged `LVIEW_EX` hit areas).
+    lanking_page: usize,
+    /// Right-list page (ten board rows per page past the self line).
+    lanking_rpage: usize,
+    /// Fetched rank board (`2028 MusicPlayRankingAnswer`) staged
+    /// behind the scripted-stub seam: proven shell-side, ASSUMED
+    /// wire-side until a live gateway replay confirms it.
+    lanking_board: Option<MusicPlayRankingAnswer>,
+    /// Picked left-list song id (row toggle or LANK button); names
+    /// the `MUSICNAME` caption. The song-to-board fetch join stays
+    /// OPEN (no live gateway).
+    lanking_selected: Option<u32>,
+}
+
+impl LankingState {
+    /// Stage the catalog (`OJNList.dat` order, owned copies so the
+    /// board outlives the parse borrow). Resets sort and pages.
+    fn set_catalog(&mut self, entries: &[OjnListEntry<'_>]) {
+        self.lanking_songs = lanking_songs(entries);
+        self.lanking_sort = None;
+        self.lanking_page = 0;
+        self.lanking_selected = None;
+    }
+
+    /// Stage one fetched rank board behind the scripted-stub seam.
+    /// Resets the right-list page.
+    fn stage_board(&mut self, answer: MusicPlayRankingAnswer) {
+        self.lanking_board = Some(answer);
+        self.lanking_rpage = 0;
+    }
+
+    /// Active left-list sort (`None`: catalog order).
+    fn sort(&self) -> Option<LankingSort> {
+        self.lanking_sort
+    }
+
+    /// Left-list page (eleven rows per page).
+    fn page(&self) -> usize {
+        self.lanking_page
+    }
+
+    /// Sorted left-list songs on the current page (owned page:
+    /// small, five rows at most).
+    fn visible_songs(&self) -> Vec<LankingSong> {
+        let mut songs = self.lanking_songs.clone();
+        if let Some(sort) = self.lanking_sort {
+            sort_lanking_songs(&mut songs, sort);
+        }
+        let (start, end) = lanking_page_window(songs.len(), LANKING_LVIEW_ROWS, self.lanking_page);
+        songs[start..end].to_vec()
+    }
+
+    /// Fetched rank lines on the current right-list page (wire
+    /// order, ten rows at most past the self line; empty until
+    /// staged).
+    fn visible_ranks(&self) -> Vec<RankEntry> {
+        let Some(board) = self.lanking_board.as_ref() else {
+            return Vec::new();
+        };
+        let (start, end) =
+            lanking_page_window(board.entries.len(), LANKING_RVIEW_ROWS, self.lanking_rpage);
+        board.entries[start..end].to_vec()
+    }
+
+    /// Viewer's own fetched rank line for the first right-list
+    /// slot (`None` until a board stages).
+    fn self_entry(&self) -> Option<RankEntry> {
+        self.lanking_board
+            .as_ref()
+            .map(|board| board.self_entry.clone())
+    }
+
+    /// Picked song title for the `MUSICNAME` caption (`None` until
+    /// a row toggle or LANK button picks a visible row).
+    fn selected_title(&self) -> Option<String> {
+        let picked = self.lanking_selected?;
+        self.lanking_songs
+            .iter()
+            .find(|song| song.song_id == picked)
+            .map(|song| song.title.clone())
+    }
+
+    /// Board action through the control-code dispatch: sorts resort
+    /// and reset the page, pagers step and hold at the ends, row
+    /// picks name the caption song.
+    fn apply_action(&mut self, action: LankingAction) {
+        match action {
+            LankingAction::Sort(sort) => {
+                self.lanking_sort = Some(sort);
+                self.lanking_page = 0;
+            }
+            LankingAction::LViewPrev => {
+                self.lanking_page = self.lanking_page.saturating_sub(1);
+            }
+            LankingAction::LViewNext => {
+                if self
+                    .lanking_page
+                    .saturating_add(1)
+                    .saturating_mul(LANKING_LVIEW_ROWS)
+                    < self.lanking_songs.len()
+                {
+                    self.lanking_page = self.lanking_page.saturating_add(1);
+                }
+            }
+            LankingAction::RViewPrev => {
+                self.lanking_rpage = self.lanking_rpage.saturating_sub(1);
+            }
+            LankingAction::RViewNext => {
+                let rows = self
+                    .lanking_board
+                    .as_ref()
+                    .map_or(0, |board| board.entries.len());
+                if self
+                    .lanking_rpage
+                    .saturating_add(1)
+                    .saturating_mul(LANKING_RVIEW_ROWS)
+                    < rows
+                {
+                    self.lanking_rpage = self.lanking_rpage.saturating_add(1);
+                }
+            }
+            LankingAction::SelectRow(slot) => {
+                self.lanking_selected = self.visible_songs().get(slot).map(|song| song.song_id);
+            }
+        }
+    }
+}
+
 /// Room/waiting/loading inputs land with their UIs.
 pub struct ScreenGame {
     flow: ScreenFlow,
@@ -814,24 +957,10 @@ pub struct ScreenGame {
     chart_notes: u32,
     side: Option<SideScreen>,
     side_origin: Option<Screen>,
-    /// Left-list songs behind the lanking board (`OJNList.dat`
-    /// order, owned copies; see [`Self::set_lanking_catalog`]).
-    lanking_songs: Vec<LankingSong>,
-    /// Active left-list sort (`None`: catalog order until a sort
-    /// button answers; directions ASSUMED ascending).
-    lanking_sort: Option<LankingSort>,
-    /// Left-list page (five rows per page, the staged `LVIEW_EX` hit areas).
-    lanking_page: usize,
-    /// Right-list page (ten board rows per page past the self line).
-    lanking_rpage: usize,
-    /// Fetched rank board (`2028 MusicPlayRankingAnswer`) staged
-    /// behind the scripted-stub seam: proven shell-side, ASSUMED
-    /// wire-side until a live gateway replay confirms it.
-    lanking_board: Option<MusicPlayRankingAnswer>,
-    /// Picked left-list song id (row toggle or LANK button); names
-    /// the `MUSICNAME` caption. The song-to-board fetch join stays
-    /// OPEN (no live gateway).
-    lanking_selected: Option<u32>,
+    /// Lanking board state (the catalog, sort, pages, board, and
+    /// pick; #139 cluster 2): every `lanking_*` word lives here;
+    /// the hash fold reads it for the six hashed words.
+    lanking: LankingState,
     /// Item-shop goods (`Itemdata_Korea.dat` order, owned copies;
     /// see [`Self::set_shop_catalog`]).
     shop_goods: Vec<ShopGood>,
@@ -1228,12 +1357,7 @@ impl ScreenGame {
             chart_notes: 0,
             side: None,
             side_origin: None,
-            lanking_songs: Vec::new(),
-            lanking_sort: None,
-            lanking_page: 0,
-            lanking_rpage: 0,
-            lanking_board: None,
-            lanking_selected: None,
+            lanking: LankingState::default(),
             shop_goods: Vec::new(),
             shop_page: 0,
             shop_cart: Vec::new(),
@@ -4527,10 +4651,7 @@ impl ScreenGame {
     /// copies so the board outlives the parse borrow; mirrors
     /// [`Self::set_song_catalog`]). Resets sort and pages.
     pub fn set_lanking_catalog(&mut self, entries: &[OjnListEntry<'_>]) -> &mut Self {
-        self.lanking_songs = lanking_songs(entries);
-        self.lanking_sort = None;
-        self.lanking_page = 0;
-        self.lanking_selected = None;
+        self.lanking.set_catalog(entries);
         self
     }
 
@@ -4539,33 +4660,27 @@ impl ScreenGame {
     /// the wire ride stays ASSUMED until a live gateway replay.
     /// Resets the right-list page.
     pub fn stage_lanking_board(&mut self, answer: MusicPlayRankingAnswer) -> &mut Self {
-        self.lanking_board = Some(answer);
-        self.lanking_rpage = 0;
+        self.lanking.stage_board(answer);
         self
     }
 
     /// Active left-list sort (`None`: catalog order).
     #[must_use]
     pub fn lanking_sort(&self) -> Option<LankingSort> {
-        self.lanking_sort
+        self.lanking.sort()
     }
 
     /// Left-list page (eleven rows per page).
     #[must_use]
     pub fn lanking_page(&self) -> usize {
-        self.lanking_page
+        self.lanking.page()
     }
 
     /// Sorted left-list songs on the current page (owned page:
     /// small, five rows at most).
     #[must_use]
     pub fn lanking_visible_songs(&self) -> Vec<LankingSong> {
-        let mut songs = self.lanking_songs.clone();
-        if let Some(sort) = self.lanking_sort {
-            sort_lanking_songs(&mut songs, sort);
-        }
-        let (start, end) = lanking_page_window(songs.len(), LANKING_LVIEW_ROWS, self.lanking_page);
-        songs[start..end].to_vec()
+        self.lanking.visible_songs()
     }
 
     /// Fetched rank lines on the current right-list page (wire
@@ -4573,32 +4688,21 @@ impl ScreenGame {
     /// staged).
     #[must_use]
     pub fn lanking_visible_ranks(&self) -> Vec<RankEntry> {
-        let Some(board) = self.lanking_board.as_ref() else {
-            return Vec::new();
-        };
-        let (start, end) =
-            lanking_page_window(board.entries.len(), LANKING_RVIEW_ROWS, self.lanking_rpage);
-        board.entries[start..end].to_vec()
+        self.lanking.visible_ranks()
     }
 
     /// Viewer's own fetched rank line for the first right-list
     /// slot (`None` until a board stages).
     #[must_use]
     pub fn lanking_self_entry(&self) -> Option<RankEntry> {
-        self.lanking_board
-            .as_ref()
-            .map(|board| board.self_entry.clone())
+        self.lanking.self_entry()
     }
 
     /// Picked song title for the `MUSICNAME` caption (`None` until
     /// a row toggle or LANK button picks a visible row).
     #[must_use]
     pub fn lanking_selected_title(&self) -> Option<String> {
-        let picked = self.lanking_selected?;
-        self.lanking_songs
-            .iter()
-            .find(|song| song.song_id == picked)
-            .map(|song| song.title.clone())
+        self.lanking.selected_title()
     }
 
     /// Board click through the control-code dispatch
@@ -4614,48 +4718,7 @@ impl ScreenGame {
         let Some(action) = lanking_action_at(&self.side_placements, x, y) else {
             return;
         };
-        match action {
-            LankingAction::Sort(sort) => {
-                self.lanking_sort = Some(sort);
-                self.lanking_page = 0;
-            }
-            LankingAction::LViewPrev => {
-                self.lanking_page = self.lanking_page.saturating_sub(1);
-            }
-            LankingAction::LViewNext => {
-                if self
-                    .lanking_page
-                    .saturating_add(1)
-                    .saturating_mul(LANKING_LVIEW_ROWS)
-                    < self.lanking_songs.len()
-                {
-                    self.lanking_page = self.lanking_page.saturating_add(1);
-                }
-            }
-            LankingAction::RViewPrev => {
-                self.lanking_rpage = self.lanking_rpage.saturating_sub(1);
-            }
-            LankingAction::RViewNext => {
-                let rows = self
-                    .lanking_board
-                    .as_ref()
-                    .map_or(0, |board| board.entries.len());
-                if self
-                    .lanking_rpage
-                    .saturating_add(1)
-                    .saturating_mul(LANKING_RVIEW_ROWS)
-                    < rows
-                {
-                    self.lanking_rpage = self.lanking_rpage.saturating_add(1);
-                }
-            }
-            LankingAction::SelectRow(slot) => {
-                self.lanking_selected = self
-                    .lanking_visible_songs()
-                    .get(slot)
-                    .map(|song| song.song_id);
-            }
-        }
+        self.lanking.apply_action(action);
     }
 
     /// Stage the item-shop catalog (`Itemdata_Korea.dat` order,
@@ -6298,18 +6361,21 @@ fn observable_state_hash(game: &ScreenGame) -> u64 {
     hash_u64(&mut hash, u64::from(game.playing.life()));
     hash_u64(
         &mut hash,
-        game.lanking_sort.map_or(u64::MAX, |sort| sort as u64),
+        game.lanking
+            .lanking_sort
+            .map_or(u64::MAX, |sort| sort as u64),
     );
-    hash_u64(&mut hash, game.lanking_page as u64);
-    hash_u64(&mut hash, game.lanking_rpage as u64);
-    hash_u64(&mut hash, game.lanking_songs.len() as u64);
+    hash_u64(&mut hash, game.lanking.lanking_page as u64);
+    hash_u64(&mut hash, game.lanking.lanking_rpage as u64);
+    hash_u64(&mut hash, game.lanking.lanking_songs.len() as u64);
     hash_u64(
         &mut hash,
-        game.lanking_board
+        game.lanking
+            .lanking_board
             .as_ref()
             .map_or(0, |board| board.entries.len() as u64),
     );
-    if let Some(selected) = game.lanking_selected {
+    if let Some(selected) = game.lanking.lanking_selected {
         hash_u64(&mut hash, u64::from(selected));
     }
     hash_u64(&mut hash, game.shop_page as u64);
@@ -13720,13 +13786,19 @@ mod game_tests {
             entries: (1..=12).map(row).collect(),
         });
         game.ingest_snapshot(&InputSnapshot::click_at(645, 386));
-        assert_eq!(game.lanking_rpage, 1);
+        assert_eq!(game.lanking.lanking_rpage, 1);
         game.ingest_snapshot(&InputSnapshot::click_at(645, 386));
-        assert_eq!(game.lanking_rpage, 1, "right NEXT holds past the end");
+        assert_eq!(
+            game.lanking.lanking_rpage, 1,
+            "right NEXT holds past the end"
+        );
         game.ingest_snapshot(&InputSnapshot::click_at(605, 386));
-        assert_eq!(game.lanking_rpage, 0);
+        assert_eq!(game.lanking.lanking_rpage, 0);
         game.ingest_snapshot(&InputSnapshot::click_at(605, 386));
-        assert_eq!(game.lanking_rpage, 0, "right PREV holds at the start");
+        assert_eq!(
+            game.lanking.lanking_rpage, 0,
+            "right PREV holds at the start"
+        );
         let pinned = (
             game.lanking_sort(),
             game.lanking_page(),
@@ -14674,9 +14746,11 @@ mod game_tests {
     #[test]
     fn populated_outbox_pins_the_observable_state_hash() {
         // Characterization for the PendingOutbox extraction (#139,
-        // cluster 1): all thirteen wire queues populated through
-        // their queueing arms, then the observable hash pinned
-        // byte-identical. The extraction must not move one hash bit:
+        // cluster 1) extended by the LankingState extraction
+        // (cluster 2): all thirteen wire queues populated through
+        // their queueing arms plus the lanking catalog/sort/page/
+        // pick/board population below, then the observable hash
+        // pinned byte-identical. The extraction must not move one hash bit:
         // the take_* drains below prove every arm queued, the pinned
         // word proves the hash fold is untouched. Only the two shop
         // sends feed the fold today; the rest ride along so a future
@@ -14780,6 +14854,47 @@ mod game_tests {
         game.click_music_shop(424, 529);
         assert!(game.leave_side());
 
+        // Lanking arm (#139 cluster 2): the catalog + TITLE sort +
+        // left pager step + row pick + staged 2028 board + right
+        // pager step feed the hash fold; the extraction must not
+        // move one hash bit.
+        let mut blob = Vec::new();
+        for index in 0..12u32 {
+            blob.extend_from_slice(&lanking_record(
+                757 + index,
+                120.0,
+                &format!("Song{index:03}"),
+                &format!("Band{index:03}"),
+            ));
+        }
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_lanking_catalog(&entries);
+        game.load_side_scene(lanking_side_placements(), HashMap::new());
+        assert!(game.visit_side(SideScreen::Lanking));
+        game.click_lanking(15, 12);
+        assert_eq!(game.lanking_sort(), Some(LankingSort::Title));
+        game.click_lanking(85, 12);
+        assert_eq!(game.lanking_page(), 1);
+        game.click_lanking(705, 105);
+        assert!(game.lanking_selected_title().is_some());
+        game.stage_lanking_board(o2jam_net::MusicPlayRankingAnswer {
+            self_entry: o2jam_net::RankEntry::default(),
+            entries: (1..=12)
+                .map(|rank| o2jam_net::RankEntry {
+                    rank,
+                    nickname: format!("Rival{rank:02}"),
+                    battles: 10,
+                    wins: 7,
+                    win_rate: 70,
+                    delta: o2jam_net::RankDelta::Up,
+                    rank_delta: 0,
+                })
+                .collect(),
+        });
+        game.click_lanking(645, 382);
+        assert_eq!(game.lanking_visible_ranks().len(), 2);
+        assert!(game.leave_side());
+
         // Create-room arm: the dialog commit queues 2004.
         game.menu_key(MenuKey::Back, true);
         assert_eq!(game.screen(), Screen::Room);
@@ -14830,8 +14945,8 @@ mod game_tests {
 
         let populated = game.state_hash();
         assert_eq!(
-            populated, 0x9EBE_663C_2708_EFBC,
-            "outbox population must not move the observable hash"
+            populated, 0xD1E1_FA12_E996_C424,
+            "outbox+lanking population must not move the observable hash"
         );
 
         // The seam drains every queue exactly once.
