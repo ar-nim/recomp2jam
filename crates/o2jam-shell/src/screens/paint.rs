@@ -445,12 +445,14 @@ const CHANNEL_SCROLL_DOWN_LOCAL: (i32, i32) = (0, 196);
 
 /// Scroll-column arrow answering a click: the bnd-pinned arrows at
 /// scroll-local (0,0)/(0,196) (21x20 each). The bar body between
-/// them answers nothing (drag stays OPEN).
+/// them answers nothing to a click — the exe drags it (press zones
+/// set drag-active `+0xc4`, motion tick `0x50e7c0`), but press+motion
+/// drag has no shell handler yet (ticket #130 recommendation).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ChannelScroll {
-    /// Up arrow: step toward the first row.
+    /// Up arrow: scroll the list toward the first row.
     Up,
-    /// Down arrow: step toward the last row.
+    /// Down arrow: scroll the list toward the last row.
     Down,
 }
 
@@ -790,6 +792,11 @@ fn paint_channel_bar_art(
 /// arrows at scroll-local (0,0)/(0,196) with the bar body between
 /// them. Each part paints only while its own figure staged.
 fn paint_channel_scroll_art(frame: &mut Frame<'_>, art: &SceneArt) {
+    // The bar rides scroll-local (0,20) whatever the list top: the
+    // exe re-seats the thumb from the scroll position on every delta
+    // (`0x50ee50` recomputes `round(pos*scale)+origin` and writes the
+    // bar rect back through the pairing table), but the thumb scale
+    // (`+0xc8`) source is unpinned, so the ride stays OPEN.
     if frame.w == 0 || frame.h == 0 {
         return;
     }
@@ -963,16 +970,31 @@ fn paint_channel_scrim(frame: &mut Frame<'_>, shown: usize) {
 /// Reference-grade, exe-OPEN; scroll interaction itself stays OPEN.
 pub(crate) const CHANNEL_VISIBLE_ROWS: usize = 4;
 
-/// Visible Channel slice for `highlight`: viewport top plus shown
-/// count (the highlight always lands inside). Single source shared by
-/// paint and click mapping. NO PAGER: the 7.55 channel dialog has no
+/// Visible Channel slice for a stored list top: clamped origin plus
+/// shown count. The scroll arrows drive this origin directly — the
+/// exe scrollbar owns its position (`this+0xb8`, clamped
+/// `[0, max-page]` in `0x50ec20`, file `0x10ec20`) and forwards each
+/// delta to the list top (`CDChannelInfo+0x184`, handlers `0x4749a0`/
+/// `0x4749f0`, files `0x749a0`/`0x749f0`) — while the keyboard
+/// highlight never enters it. Observed with GNU objdump 2.47 slices
+/// plus Python 3.14.10 byte scans over the read-only 7.55 copy.
+#[must_use]
+pub(crate) fn channel_viewport_from_top(top: usize, len: usize) -> (usize, usize) {
+    let max_top = len.saturating_sub(CHANNEL_VISIBLE_ROWS);
+    let top = top.min(max_top);
+    (top, len.saturating_sub(top).min(CHANNEL_VISIBLE_ROWS))
+}
+
+/// Visible Channel slice for `highlight`: the highlight-following
+/// top plus shown count (the highlight always lands inside). Shared
+/// by the key path (which re-seats the stored top under the
+/// highlight) and the paint/click mapping. NO PAGER: the 7.55 channel dialog has no
 /// pager readout or arrows (bnd has no rects; sheet art bottom is rim
 /// chrome + scroll down-arrow, decoded 2026-11-10; the block's
 /// LEFT/RIGHT buttons stage zero rects and are statically unreachable).
 #[must_use]
 pub(crate) fn channel_viewport(highlight: usize, len: usize) -> (usize, usize) {
-    let top = viewport_top(highlight, len);
-    (top, len.saturating_sub(top).min(CHANNEL_VISIBLE_ROWS))
+    channel_viewport_from_top(viewport_top(highlight, len), len)
 }
 #[must_use]
 pub(crate) fn viewport_top(highlight: usize, len: usize) -> usize {
@@ -2058,11 +2080,12 @@ fn channel_row_text(channel: &ChannelState) -> String {
 fn paint_channel_rows(
     frame: &mut Frame<'_>,
     channels: &[ChannelState],
+    top: usize,
     highlight: usize,
     art: Option<&SceneArt>,
     hovered_row: Option<usize>,
 ) {
-    let (top, shown) = channel_viewport(highlight, channels.len());
+    let (top, shown) = channel_viewport_from_top(top, channels.len());
     paint_channel_scrim(frame, shown);
     let visible: Vec<(usize, &ChannelState)> =
         channels.iter().skip(top).take(shown).enumerate().collect();
@@ -2220,11 +2243,12 @@ fn paint_channel_highlight(
 pub(crate) fn paint_channel_list(
     frame: &mut Frame<'_>,
     channels: &[ChannelState],
+    top: usize,
     highlight: usize,
 ) {
     fill_background(frame, Screen::Channel);
     paint_title(frame, "CHANNEL");
-    paint_channel_rows(frame, channels, highlight, None, None);
+    paint_channel_rows(frame, channels, top, highlight, None, None);
 }
 
 /// Paint the staged channel dialog body ([`CHANNEL_DIALOG_SPRITE`]) at
@@ -2260,6 +2284,7 @@ fn paint_channel_dialog_body(frame: &mut Frame<'_>, art: &SceneArt) -> bool {
 pub fn paint_channel_scene(
     frame: &mut Frame<'_>,
     channels: &[ChannelState],
+    top: usize,
     highlight: usize,
     art: &SceneArt,
     board: Option<&SceneArt>,
@@ -2279,7 +2304,7 @@ pub fn paint_channel_scene(
     if !art.has_figures() && !board.is_some_and(|board| board.has_figures()) {
         paint_title_over_art(frame, Screen::Channel);
     }
-    paint_channel_rows(frame, channels, highlight, Some(art), hovered_row);
+    paint_channel_rows(frame, channels, top, highlight, Some(art), hovered_row);
 }
 
 /// One room row: `3 TITLE 5/8`, locked rooms suffixed `!`.
@@ -6878,6 +6903,7 @@ mod paint_tests {
             },
             &two_channels(),
             0,
+            0,
             &art,
             None,
             None,
@@ -6945,6 +6971,7 @@ mod paint_tests {
                 h: 48,
             },
             &two_channels(),
+            0,
             1,
         );
         assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
@@ -9275,6 +9302,7 @@ mod paint_tests {
             },
             &two_channels(),
             0,
+            0,
             &art,
             None,
             None,
@@ -11359,6 +11387,7 @@ mod paint_tests {
             },
             &[],
             0,
+            0,
             &art,
             None,
             None,
@@ -11416,6 +11445,7 @@ mod paint_tests {
                 h: 48,
             },
             &two_channels(),
+            0,
             0,
             &art,
             None,
@@ -11522,6 +11552,7 @@ mod paint_tests {
                 active: true,
             }],
             0,
+            0,
             &art,
             None,
             None,
@@ -11590,6 +11621,7 @@ mod paint_tests {
                     h: 600,
                 },
                 &[channel],
+                0,
                 0,
                 &art,
                 None,
@@ -11668,6 +11700,7 @@ mod paint_tests {
                 },
             ],
             0,
+            0,
             &art,
             None,
             None,
@@ -11706,6 +11739,7 @@ mod paint_tests {
             },
             &two_channels(),
             0,
+            0,
             &art,
             None,
             None,
@@ -11741,6 +11775,7 @@ mod paint_tests {
             },
             &two_channels(),
             0,
+            0,
             &art,
             None,
             None,
@@ -11775,6 +11810,7 @@ mod paint_tests {
                 h: 600,
             },
             &two_channels(),
+            0,
             0,
             &art,
             None,
@@ -11816,6 +11852,7 @@ mod paint_tests {
             },
             &two_channels(),
             0,
+            0,
             &art,
             None,
             None,
@@ -11850,6 +11887,7 @@ mod paint_tests {
             },
             &two_channels(),
             0,
+            0,
             &art,
             None,
             None,
@@ -11879,6 +11917,7 @@ mod paint_tests {
                 h: 600,
             },
             &two_channels(),
+            0,
             1,
             &art,
             None,
@@ -11916,6 +11955,7 @@ mod paint_tests {
             },
             &two_channels(),
             0,
+            0,
             &art,
             None,
             None,
@@ -11940,6 +11980,7 @@ mod paint_tests {
                 h: 600,
             },
             &two_channels(),
+            0,
             0,
         );
         // Number well interior.
@@ -12004,6 +12045,7 @@ mod paint_tests {
                 h: 600,
             },
             &two_channels(),
+            0,
             0,
             &art,
             None,
@@ -12137,6 +12179,7 @@ mod paint_tests {
             },
             &two_channels(),
             0,
+            0,
             &art,
             Some(&board),
             None,
@@ -12176,6 +12219,7 @@ mod paint_tests {
                 h: 600,
             },
             &two_channels(),
+            0,
             0,
             &art,
             Some(&empty_board),

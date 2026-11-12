@@ -13,8 +13,8 @@ use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
     battle_verdict, channel_dialog_x_hit, channel_face_hit, channel_row_hit, channel_scroll_hit,
-    channel_viewport, dialog_origin, dialog_rect_hit, has_room_panels, list_row_hit,
-    paint_avi_scene, paint_channel_chat, paint_channel_list, paint_channel_scene,
+    channel_viewport, channel_viewport_from_top, dialog_origin, dialog_rect_hit, has_room_panels,
+    list_row_hit, paint_avi_scene, paint_channel_chat, paint_channel_list, paint_channel_scene,
     paint_dialog_scene, paint_lanking_board, paint_lanking_scene, paint_loading_scene,
     paint_loading_scene_with_status, paint_lobby_backdrop, paint_music_shop_board,
     paint_music_shop_cart, paint_music_shop_scene, paint_myroom_data, paint_myroom_scene,
@@ -25,8 +25,8 @@ use super::paint::{
     paint_waiting_scene, paint_waiting_seat_avatar, paint_waiting_seat_avatars,
     playing_backdrop_staged, quit_fallback_rects, rect_hit, room_panel_hit, scene_index,
     staged_rect_hit, BattleVerdict, ChannelChatMessage, ChannelScroll, LoadingStatus, ResultPaint,
-    ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage, RESULT_BACK_ID,
-    RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage,
+    CHANNEL_VISIBLE_ROWS, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::side::{
     can_return_side, can_visit_side, create_room_action_at, lanking_action_at, lanking_page_window,
@@ -481,6 +481,15 @@ pub struct ScreenGame {
     avatar: Option<AvatarFigure>,
     channels: Vec<ChannelState>,
     highlight: usize,
+    /// Channel list-top offset (the scrolled origin): the
+    /// `CDChannelInfo+0x184` analog. The scroll arrows step this
+    /// offset (`0x50ebf0`→`0x50ec20` mutates the scrollbar's own
+    /// position and forwards the delta to the list, handlers
+    /// `0x4749a0`/`0x4749f0`); the highlight/selection is never
+    /// touched on that path (ticket #130). Row clicks map
+    /// slot-through-top (`code + top`), key steps re-seat the top
+    /// under the highlight (exe key rule stays OPEN).
+    channel_top: usize,
     /// Native pointer position from the last motion event (`None` until
     /// the pointer moves): the hover source for scenes with pinned hover
     /// art (the channel select bar). Test affordance and live input both
@@ -1019,6 +1028,7 @@ impl ScreenGame {
             avatar: None,
             channels: Vec::new(),
             highlight: 0,
+            channel_top: 0,
             pointer: None,
             channel_chat: LobbyChatPanel::default(),
             room_chat: LobbyChatPanel::default(),
@@ -1423,6 +1433,10 @@ impl ScreenGame {
     pub fn set_channels(&mut self, channels: Vec<ChannelState>) -> &mut Self {
         self.channels = channels;
         self.highlight = 0;
+        // The exe zeroes the list top beside the populate (the
+        // `+0x184 = 0` + scrollbar `+0xb8 = 0` joint reset, file
+        // `0x747ba`): a fresh list always opens unscrolled.
+        self.channel_top = 0;
         self.channel_chat = LobbyChatPanel::default();
         self
     }
@@ -2413,7 +2427,7 @@ impl ScreenGame {
     }
 
     /// Channel row under the pointer, mapped back through the
-    /// highlight-following viewport (`None` off the rows, or while the
+    /// stored list top (`None` off the rows, or while the
     /// Channel dialog is not on screen).
     #[must_use]
     pub fn hovered_channel_row(&self) -> Option<usize> {
@@ -2421,7 +2435,7 @@ impl ScreenGame {
             return None;
         }
         let (x, y) = self.pointer?;
-        let (top, shown) = channel_viewport(self.highlight, self.channels.len());
+        let (top, shown) = channel_viewport_from_top(self.channel_top, self.channels.len());
         let slot = channel_row_hit(x, y, shown)?;
         (top + slot < self.channels.len()).then_some(top + slot)
     }
@@ -2451,7 +2465,7 @@ impl ScreenGame {
         if channel_dialog_x_hit(x, y) || channel_scroll_hit(x, y).is_some() {
             return None;
         }
-        let (top, shown) = channel_viewport(self.highlight, self.channels.len());
+        let (top, shown) = channel_viewport_from_top(self.channel_top, self.channels.len());
         let slot = channel_row_hit(x, y, shown)?;
         let index = top + slot;
         if index >= self.channels.len() {
@@ -2494,7 +2508,10 @@ impl ScreenGame {
     /// entry and advances like Confirm while the draft is action-free
     /// (slash drafts consume the click instead of starting).
     /// Step the channel highlight one row toward `scroll`, clamped at
-    /// the ends: the shared Up/Down-key path the scroll arrows ride.
+    /// the ends: the Up/Down-key path (the scroll arrows no longer
+    /// ride this — ticket #130 pins them to the list top instead).
+    /// The top re-seats under the highlight so the key cursor stays
+    /// visible; the exe key rule itself stays OPEN.
     fn step_channel(&mut self, scroll: ChannelScroll) {
         match scroll {
             ChannelScroll::Up => {
@@ -2505,6 +2522,29 @@ impl ScreenGame {
                 self.highlight = (self.highlight + 1).min(last);
             }
         }
+        self.channel_top = channel_viewport(self.highlight, self.channels.len()).0;
+    }
+
+    /// Step the channel list-top offset one row toward `scroll`,
+    /// clamped to `[0, len - shown]`: the scroll-arrow path. The exe
+    /// scrollbar owns its position (`this+0xb8`, clamped
+    /// `[0, max-page]` in `0x50ec20`, file `0x10ec20`) and the arrow
+    /// zones (mouse arm `0x50e8d0`, files `0x10ea1a`/`0x10ea6b`)
+    /// step it by `∓1` through `0x50ebf0` (file `0x10ebf0`),
+    /// forwarding each delta to the list top (`CDChannelInfo+0x184`,
+    /// handlers `0x4749a0`/`0x4749f0`); the highlight is never
+    /// touched on that path. Observed with GNU objdump 2.47 slices
+    /// plus Python 3.14.10 byte scans over the read-only 7.55 copy.
+    fn step_channel_list(&mut self, scroll: ChannelScroll) {
+        let max_top = self.channels.len().saturating_sub(CHANNEL_VISIBLE_ROWS);
+        match scroll {
+            ChannelScroll::Up => {
+                self.channel_top = self.channel_top.saturating_sub(1);
+            }
+            ChannelScroll::Down => {
+                self.channel_top = (self.channel_top + 1).min(max_top);
+            }
+        }
     }
 
     fn click_channel_row(&mut self, x: i32, y: i32) {
@@ -2512,15 +2552,15 @@ impl ScreenGame {
             self.enter(Screen::Planet);
             return;
         }
-        // Scroll-column arrows step like the Up/Down keys (the bar
-        // body between them answers nothing).
+        // Scroll-column arrows scroll the list top (`step_channel_list`);
+        // the bar body between them answers nothing to a click.
         if let Some(scroll) = channel_scroll_hit(x, y) {
-            self.step_channel(scroll);
+            self.step_channel_list(scroll);
             return;
         }
         // Viewport-relative bands: the visible slot maps back through
-        // the highlight-following viewport (see `channel_viewport`).
-        let (top, shown) = channel_viewport(self.highlight, self.channels.len());
+        // the stored list top (see `channel_viewport_from_top`).
+        let (top, shown) = channel_viewport_from_top(self.channel_top, self.channels.len());
         let Some(slot) = channel_row_hit(x, y, shown) else {
             return;
         };
@@ -4965,6 +5005,7 @@ impl ScreenGame {
                 paint_channel_scene(
                     frame,
                     &self.channels,
+                    self.channel_top,
                     self.highlight,
                     art,
                     self.scene_art(Screen::Planet),
@@ -4972,7 +5013,9 @@ impl ScreenGame {
                 );
             }
             (Some(art), true) => paint_lobby_backdrop(frame, Screen::Channel, art),
-            (None, false) => paint_channel_list(frame, &self.channels, self.highlight),
+            (None, false) => {
+                paint_channel_list(frame, &self.channels, self.channel_top, self.highlight)
+            }
             (None, true) => paint_screen(frame, Screen::Channel),
         }
         paint_channel_chat(frame, self.channel_chat.history(), self.channels.len());
@@ -6768,38 +6811,60 @@ mod game_tests {
 
     #[test]
     fn scroll_down_arrow_steps_the_channel_highlight() {
-        // Ticket #55: the scroll-column down arrow steps like the
-        // Down key (bnd-pinned arrow (573,409)-(594,429)).
+        // Ticket #130 (exe-pin, supersedes #55): the down arrow
+        // scrolls the LIST, not the highlight — the click lands in
+        // the list-top offset while the highlight stays put.
         let mut game = six_channel_game();
         game.mouse_click(583, 419);
-        assert_eq!(game.highlight, 1);
+        assert_eq!(game.highlight, 0);
+        assert_eq!(game.channel_top, 1);
         assert_eq!(game.screen(), Screen::Channel);
     }
 
     #[test]
     fn scroll_up_arrow_at_top_clamps_the_highlight() {
-        // Ticket #55: the up arrow (573,213)-(594,233) clamps at the
-        // first row like the Up key.
+        // Ticket #130: the up arrow scrolls the list top (bnd-pinned
+        // arrow (573,213)-(594,233)); at the first row the top
+        // clamps at 0 and the highlight stays put.
         let mut game = six_channel_game();
         game.mouse_click(583, 223);
         assert_eq!(game.highlight, 0);
+        assert_eq!(game.channel_top, 0);
         assert_eq!(game.screen(), Screen::Channel);
     }
 
     #[test]
     fn scroll_arrows_clamp_at_the_last_row() {
-        // Ticket #55: arrows pin at the ends — six Downs reach row
-        // 5 and a seventh arrow click holds it.
+        // Ticket #130: the list top pins at `len - shown` (six rows
+        // show four, so the top clamps at 2) while the highlight
+        // rides the keys alone — arrows never touch it.
         use MenuKey;
         let mut game = six_channel_game();
         for _ in 0..6 {
             game.menu_key(MenuKey::Down, true);
         }
         assert_eq!(game.highlight, 5);
+        assert_eq!(game.channel_top, 2);
         game.mouse_click(583, 419);
         assert_eq!(game.highlight, 5);
+        assert_eq!(game.channel_top, 2);
         game.mouse_click(583, 223);
-        assert_eq!(game.highlight, 4);
+        assert_eq!(game.highlight, 5);
+        assert_eq!(game.channel_top, 1);
+        assert_eq!(game.screen(), Screen::Channel);
+    }
+
+    #[test]
+    fn scrolled_row_click_maps_through_the_list_top() {
+        // Ticket #130: one down-arrow scroll (top 0 → 1) re-seats
+        // the viewport, so a body click on slot 0 highlights the
+        // absolute row `top + slot` (the exe row faces add the top
+        // to the slot, files `0x7459a`/`0x74678`).
+        let mut game = six_channel_game();
+        game.mouse_click(583, 419);
+        assert_eq!(game.channel_top, 1);
+        game.mouse_click(300, 240);
+        assert_eq!(game.highlight, 1);
         assert_eq!(game.screen(), Screen::Channel);
     }
 
@@ -6840,14 +6905,20 @@ mod game_tests {
 
     #[test]
     fn channel_scroll_bar_body_click_is_a_labelled_noop() {
-        // Ticket #163 (channel leg, CLICK): the 21x45 bar body
-        // between the scroll arrows answers nothing — only the
-        // arrows step the highlight. The dialog carries no pager
-        // readout (NO PAGER, `paint.rs` `channel_viewport`); bar
-        // drag stays OPEN (next: rig capture of a bar-body drag).
+        // Ticket #163 (channel leg, CLICK) + #130 (exe-pin): the
+        // 21x45 bar body between the scroll arrows answers nothing
+        // to a bare CLICK — only the arrows scroll the list top.
+        // The exe DOES drag the bar (press zones set drag-active
+        // `+0xc4` with capture `0x547cd0`; motion tick `0x50e7c0`
+        // re-reads the live cursor into the absolute setter
+        // `0x50ed00`; release arm clears `+0xc4`), but press+motion
+        // drag has no shell handler yet — implementation stays a
+        // recommendation (scale `+0xc8` source unpinned), not a gap.
+        // The dialog carries no pager readout (NO PAGER).
         let mut game = six_channel_game();
         game.mouse_click(583, 320);
         assert_eq!(game.highlight, 0);
+        assert_eq!(game.channel_top, 0);
         assert_eq!(game.screen(), Screen::Channel);
     }
 
