@@ -1,10 +1,12 @@
 //! Headless pointer-injection probe — the input-routing arm of the #118
 //! red-green (Refs: #126).
 //!
-//! The #118 no-input leg is OPEN in every live environment (owner desktop
-//! KWin, uinput rigs): real clicks never reach the game on any backend —
-//! suspected environment routing, not client code. This probe
-//! discriminates exactly that. The fixture *is* the compositor, so it
+//! The #118 no-input leg is RESOLVED: two code defects, no environment
+//! fault — the frame-callback gate (`7c3fcfd`) and the session's
+//! GameLoop forwarding gap (`ea926c1`). This probe guards the whole
+//! class: phase 1 asserts the click routes (window layer), phase 2
+//! asserts the game ACTS on it (an emblem click enters Channel), which
+//! is the arm that bites on a forwarding regression. The fixture *is* the compositor, so it
 //! sends the protocol-level wire sequence of a real click
 //! (`wl_pointer.enter` → `motion` → `button` down/up → `leave`) directly
 //! into the client. No KWin, no uinput, no XTEST, no seat — the
@@ -116,12 +118,55 @@ fn run() -> Result<i32> {
         compositor.turn()?;
     }
 
-    let verdict = match wait_for_click_line(&input_log, CLICK_WAIT)? {
+    let routed = wait_for_click_line(&input_log, CLICK_WAIT)?;
+    let verdict = match routed {
         Some((x, y)) => {
             println!(
-                "input-smoke: verdict=PASS routed click at native ({x}, {y}), injected center ({center_x:.0}, {center_y:.0})"
+                "input-smoke: phase1=PASS routed click at native ({x}, {y}), injected center ({center_x:.0}, {center_y:.0})"
             );
-            0
+            // Phase 2 — the GAME must act. Click the gear disc (pinned
+            // e2e coord); the options dialog must paint, which changes
+            // the planet frame's content hash. (A screen-name line is
+            // not usable: the modal keeps screen=planet, and a banded
+            // emblem would need a lit-state seed this harness lacks.)
+            // This is the arm that catches the #118 forwarding class:
+            // routing logs the click BEFORE the (then no-op) session
+            // call, so phase 1 alone stayed green while live input died.
+            // Settle hover first: sweep the pointer onto the gear so the
+            // hover repaint happens BEFORE the settled hash; then the
+            // click's required change can only be the dialog.
+            for event in [
+                PointerEvent::Enter { x: 729.0, y: 580.0 },
+                PointerEvent::Motion { x: 729.0, y: 580.0 },
+            ] {
+                compositor.inject_pointer(event);
+                compositor.turn()?;
+            }
+            std::thread::sleep(Duration::from_millis(1000));
+            let settled = last_content_hash(&input_log, "planet");
+            for event in PointerEvent::click_at(729.0, 580.0) {
+                if matches!(event, PointerEvent::Button { pressed: false, .. }) {
+                    std::thread::sleep(CLICK_HOLD);
+                }
+                compositor.inject_pointer(event);
+                compositor.turn()?;
+            }
+            let reacted = wait_for_content_change(&input_log, "planet", settled, CLICK_WAIT)?;
+            match reacted {
+                true => {
+                    println!(
+                        "input-smoke: phase2=PASS gear click repainted the planet (dialog acted)"
+                    );
+                    0
+                }
+                false => {
+                    eprintln!(
+                        "input-smoke: verdict=FAIL click routed (phase1) but the game never acted — planet content hash never changed; input log tail:\n{}",
+                        log_tail(&input_log)
+                    );
+                    1
+                }
+            }
         }
         None => {
             eprintln!(
@@ -212,6 +257,39 @@ fn wait_for_click_line(input_log: &Path, wait: Duration) -> Result<Option<(i32, 
         std::thread::sleep(Duration::from_millis(50));
     }
     Ok(None)
+}
+
+/// The content hash of the newest frame line for the given screen
+/// (`frame <n> wall_ms=<ms> screen=<name> state=<h> content=<h>`).
+fn last_content_hash(input_log: &Path, screen: &str) -> Option<String> {
+    let Ok(content) = fs::read_to_string(input_log) else {
+        return None;
+    };
+    content
+        .lines()
+        .filter(|l| l.split_whitespace().nth(3) == Some(format!("screen={screen}").as_str()))
+        .filter_map(|l| l.split("content=").nth(1).map(str::to_owned))
+        .next_back()
+}
+
+/// Poll until a frame line for the given screen carries a content hash
+/// different from the settled one — the game visibly reacted.
+fn wait_for_content_change(
+    input_log: &Path,
+    screen: &str,
+    settled: Option<String>,
+    wait: Duration,
+) -> Result<bool> {
+    let deadline = Instant::now() + wait;
+    while Instant::now() < deadline {
+        if let Some(now) = last_content_hash(input_log, screen) {
+            if settled.as_deref() != Some(now.as_str()) {
+                return Ok(true);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Ok(false)
 }
 
 /// The last `click x y` line in the input log (press edge; `click-up`
