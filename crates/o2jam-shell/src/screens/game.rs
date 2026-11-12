@@ -35,13 +35,13 @@ use super::side::{
     password_action_at, payment_side_notice, planet_action_at, select_chosung_cells,
     select_chosung_layout, select_difficulty_ink, select_music_rows, select_music_songs,
     select_pager_caption, select_picked_caption, select_row_hit, select_search_caption,
-    select_status_line, shop_action_at, shop_goods, shop_page_count, sort_lanking_songs,
-    waiting_song_detail_line, waiting_song_title_line, waiting_team_for_code, wallet_row_caption,
-    CreateRoomAction, CreateRoomForm, LankingAction, LankingSong, LankingSort, MusicShopAction,
-    MusicShopRow, MyRoomAction, MyRoomState, PasswordAction, PasswordForm, PlanetAction,
-    PlanetOptionTab, PlanetPromo, PlanetSelection, RoomDialog, SelectMusicRow, SelectMusicSong,
-    ShopAction, ShopGood, SideScreen, WalletRow, WalletState, GEM_LABEL, LANKING_LVIEW_ROWS,
-    LANKING_RVIEW_ROWS, MSHOP_CART_ROWS, MSHOP_SONG_ROWS, OPTION_GAME_BLEND_NO,
+    select_status_line, shop_action_at, shop_goods, shop_page_count, side_scene_slot,
+    sort_lanking_songs, waiting_song_detail_line, waiting_song_title_line, waiting_team_for_code,
+    wallet_row_caption, CreateRoomAction, CreateRoomForm, LankingAction, LankingSong, LankingSort,
+    MusicShopAction, MusicShopRow, MyRoomAction, MyRoomState, PasswordAction, PasswordForm,
+    PlanetAction, PlanetOptionTab, PlanetPromo, PlanetSelection, RoomDialog, SelectMusicRow,
+    SelectMusicSong, ShopAction, ShopGood, SideScreen, WalletRow, WalletState, GEM_LABEL,
+    LANKING_LVIEW_ROWS, LANKING_RVIEW_ROWS, MSHOP_CART_ROWS, MSHOP_SONG_ROWS, OPTION_GAME_BLEND_NO,
     OPTION_GAME_BLEND_YES, OPTION_GAME_EFFECT_HIGH, OPTION_GAME_EFFECT_LOW,
     OPTION_GAME_EFFECT_NORMAL, OPTION_GAME_GUIDE_LONG, OPTION_GAME_GUIDE_MIDDLE,
     OPTION_GAME_GUIDE_NOUSE, OPTION_GAME_GUIDE_SHORT, OPTION_GAME_LONGNOTE_NONE,
@@ -4165,6 +4165,7 @@ impl ScreenGame {
         }
         self.side_origin = Some(self.flow.current());
         self.side = Some(side);
+        self.mount_staged_side_art(side);
         self.apply_bgm_cue(side.bgm_cue());
         if side == SideScreen::MyRoom {
             // Entry gift-list fetch (5017): the wire shape is
@@ -4174,6 +4175,32 @@ impl ScreenGame {
             self.pending_gift_list = true;
         }
         true
+    }
+
+    /// Mount the declaration-staged art behind one side screen on
+    /// entry (ticket #136): the live boot stages every Interface
+    /// State into its full-screen scene slot, while the shots walk
+    /// fills these side slots directly — both name the same State
+    /// (`state_of_screen` == `state_of_side`), so mounting the
+    /// staged scene art reproduces the walk's backdrop on the live
+    /// path. Paint and click dispatch both read the side slots, so
+    /// the mount fixes the black screen and the dead clicks
+    /// together. No staged art (the walk-only Tutorial backdrop)
+    /// leaves walk-staged slots untouched.
+    fn mount_staged_side_art(&mut self, side: SideScreen) {
+        if side == SideScreen::Payment {
+            if let Some(art) = self.payment_art.clone() {
+                self.side_placements = art.placements;
+                self.side_figures = art.figures;
+            }
+            return;
+        }
+        if let Some(slot) = side_scene_slot(side) {
+            if let Some(art) = self.scene_art(slot).cloned() {
+                self.side_placements = art.placements;
+                self.side_figures = art.figures;
+            }
+        }
     }
 
     /// Return to the lobby that opened the side screen. The lobby
@@ -9152,6 +9179,77 @@ mod game_tests {
         );
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert_eq!(game.screen(), Screen::Channel);
+    }
+
+    #[test]
+    fn side_visit_mounts_staged_scene_art_and_keeps_walk_only_sides() {
+        // Ticket #136: the live boot stages each Interface State
+        // into its full-screen scene slot while the side slots stay
+        // empty, so the room-entered sides painted black. Entry
+        // mounts the staged scene art into the side slots (paint and
+        // click dispatch both read them); a walk-staged side with no
+        // scene slot (the Tutorial Playing backdrop) keeps its slots.
+        use super::super::side::SideScreen;
+        use crate::avatar::ScenePlacement;
+        use o2jam_render::Rect;
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Room);
+        game.load_scene(
+            Screen::Shop,
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_SHOP".to_owned(),
+                code: 0,
+                sprite: Some("Shop_Item.ojs".to_owned()),
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 800,
+                    h: 600,
+                },
+            }],
+            HashMap::from([("Shop_Item.ojs".to_owned(), red_scene_figure())]),
+        );
+        assert!(game.visit_side(SideScreen::Shop));
+        let mut buf = vec![0u32; 8 * 8];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 8,
+                h: 8,
+            },
+            0,
+        );
+        assert_eq!(buf[0], pack_xrgb(255, 0, 0));
+        assert!(game.leave_side());
+        let mut bare = ScreenGame::new();
+        walk_to_lobby(&mut bare, Screen::Waiting);
+        bare.load_side_scene(
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_TUTORIAL".to_owned(),
+                code: 0,
+                sprite: Some("Playing1_back.ojs".to_owned()),
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 800,
+                    h: 600,
+                },
+            }],
+            HashMap::from([("Playing1_back.ojs".to_owned(), red_scene_figure())]),
+        );
+        assert!(bare.visit_side(SideScreen::Tutorial));
+        let mut walk_buf = vec![0u32; 8 * 8];
+        bare.paint_at(
+            &mut Frame {
+                buf: &mut walk_buf,
+                w: 8,
+                h: 8,
+            },
+            0,
+        );
+        assert_eq!(walk_buf[0], pack_xrgb(255, 0, 0));
     }
 
     /// One red pixel figure for staged scene art.

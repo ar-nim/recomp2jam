@@ -189,4 +189,62 @@ mod live_boot_gate_tests {
         let served = server.join().unwrap();
         assert_eq!(served.nickname, "gate");
     }
+
+    /// Ticket #136: side screens opened from the room on the live
+    /// path painted fully black. The shots walk fills the side slots
+    /// directly (`stage_side_art` + `visit_side`), while the live
+    /// boot only staged the same State art into the full-screen
+    /// scene slots — which the side overlay never reads — so the
+    /// room-entered Shop/MyRoom/MusicShop painted the clear color.
+    /// The gate boots through the real entry, enters each side from
+    /// the room lobby, and asserts staged art inks the frame.
+    #[test]
+    fn live_boot_side_entry_paints_staged_art() {
+        use o2jam_render::{NATIVE_HEIGHT, NATIVE_WIDTH};
+        use o2jam_shell::screens::side::SideScreen;
+
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let (port, server) = spawn_boot_gateway();
+        let (report, gateway) =
+            connect::connect_and_login_with_transport(&boot_options(port)).unwrap();
+        let mut game = o2jam_shell::ScreenGame::new();
+        stage_online_identity(&mut game, report.character.as_ref());
+        let mut session =
+            assemble_online_session(game, gateway, Some("gate"), None, None, None).unwrap();
+        let width = usize::try_from(NATIVE_WIDTH).unwrap_or(1);
+        let height = usize::try_from(NATIVE_HEIGHT).unwrap_or(1);
+        let game = session.game_mut();
+        for lobby in [Screen::Planet, Screen::Channel, Screen::Room] {
+            assert!(
+                game.enter_screen(lobby),
+                "gate reaches the room lobby through {lobby:?}"
+            );
+        }
+        for side in [
+            SideScreen::Shop,
+            SideScreen::MusicShop,
+            SideScreen::MyRoom,
+            SideScreen::Payment,
+        ] {
+            assert!(
+                game.visit_side(side),
+                "room opens {side:?} on the live path"
+            );
+            let mut buf = vec![0u32; width * height];
+            game.paint(&mut RenderFrame {
+                buf: &mut buf,
+                w: width,
+                h: height,
+            });
+            assert!(
+                buf.iter().any(|pixel| *pixel != 0),
+                "live-path {side:?} paints fully black from the room"
+            );
+            assert!(game.leave_side(), "{side:?} returns to the room");
+        }
+        server.join().unwrap();
+    }
 }

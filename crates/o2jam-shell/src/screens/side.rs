@@ -169,6 +169,23 @@ impl SideScreen {
     }
 }
 
+/// Full-screen scene slot holding the same declaration State behind
+/// one side screen (`state_of_screen` == `state_of_side` for every
+/// pair, ticket #136); `None` while the side owns no scene slot
+/// (Payment parks in the dedicated payment slot, Tutorial stages
+/// Playing-archive art through the shots walk only).
+#[must_use]
+pub const fn side_scene_slot(side: SideScreen) -> Option<Screen> {
+    match side {
+        SideScreen::Shop => Some(Screen::Shop),
+        SideScreen::MusicShop => Some(Screen::MusicShop),
+        SideScreen::MyRoom => Some(Screen::Myroom),
+        SideScreen::Lanking => Some(Screen::Lanking),
+        SideScreen::Planet => Some(Screen::Planet),
+        SideScreen::Payment | SideScreen::Tutorial => None,
+    }
+}
+
 /// Whether a lobby may open a side screen: any lobby opens any side
 /// (lifecycle §12 transition summary).
 #[must_use]
