@@ -1,8 +1,11 @@
 //! [`ScreenGame`]: the window's game loop, owning the [`ScreenFlow`]
 //! and walking screens on input.
 
+mod waiting;
+
 use std::collections::HashMap;
 
+use self::waiting::PendingOutbox;
 use super::super::avatar::{
     avatar_item_by_id, load_worn_figure, ojn_cover_figure, AvatarFigure, ScenePlacement,
     LOADING_COVER_SPRITE,
@@ -431,182 +434,6 @@ const SPLASH_HOLD_POLL_MS: u64 = 100;
 /// frameless boards paint nothing new and stay fully idle (the
 /// #138 parked-loop result holds).
 const PLANET_PROMO_HEARTBEAT_MS: u64 = 1_000;
-
-/// Game loop that shows each screen's scene and walks the flow.
-///
-/// Input wiring so far: any lane key or canvas click dismisses the
-/// splash onto the bare planet board, and the splash auto-advances
-/// there on its measured 5 s hold (ticket #24, guard:
-/// `splash_auto_advances_at_timeout`). Windowed runs ride the wall
-/// clock for the hold (ticket #54, claims B38); the fixed-clock
-/// path stays the headless seam. The dismiss arms stay
-/// stand-ins: the exe set is only partly pinned (Escape dismisses
-/// within ~0.3 s, `~/scratch/avi-hold/run3-escape/`; Enter and Space
-/// show no fast dismiss on the isolated rig — `~/scratch/wt24-rig/`
-/// `key-enter/` and `key-space/` both follow the ~5 s timer shape
-/// instead — yet Space is a lane bind, so the any-lane-key mapping
-/// is unpinned by counterexample). OPEN: the full `VK` sweep plus
-/// the exe lane-key mapping (guards: `lane_key_dismisses_splash_into_planet_board`,
-/// `click_dismisses_splash_into_planet_board`,
-/// `splash_click_edge_lands_the_same_bare_board`,
-/// `escape_dismisses_splash_into_planet_board`,
-/// `splash_menu_keys_keep_splash`).
-/// Queued session-bridge sends behind the shell screens (#139
-/// cluster 1: the Data Clump of all thirteen `pending_*` wire
-/// queues). Every queueing arm stages its pinned body here and the
-/// session seam drains it once through a `take_*` accessor; the
-/// `has_pending_*` arms peek without draining. Pure data — no
-/// screen, paint, or input logic — so unsent traffic reads without
-/// touching the `ScreenGame` God class. `ScreenGame` keeps thin
-/// delegates under the same names, so the session bridge and the
-/// snapshot surface never change.
-#[derive(Default)]
-struct PendingOutbox {
-    /// Committed create-room body awaiting the session send (2004).
-    pending_create_room: Option<CreateRoom>,
-    /// Committed locked-room join awaiting the session send (3002).
-    pending_join: Option<JoinRoom>,
-    /// Queued team send awaiting the session (4004; the toggle owns it).
-    pending_room_team: Option<SetRoomTeam>,
-    /// Queued ready-clear awaiting the session (4008; the team switch owns it).
-    pending_team_ready: bool,
-    /// Queued song pick awaiting the session (4000; the dialog row owns it).
-    pending_music_send: Option<SetRoomMusic>,
-    /// Queued RETRY press awaiting the session (4010 `0xfaa`, empty;
-    /// the result RETRY button and its Confirm arm own it).
-    pending_result_retry: bool,
-    /// Queued BACK press awaiting the session (4021 `0xfb5`, empty;
-    /// the result BACK button and its Back arm own it).
-    pending_result_back: bool,
-    /// Queued battle result entry awaiting the session (4042 `0xfca`,
-    /// empty; the song-end Result entry in team play owns it).
-    pending_result_battle_entry: bool,
-    /// Queued cart buy awaiting the session send (5000; the cart
-    /// `BUYITEM` owns it).
-    pending_shop_buy: Option<SyncItemPurchase>,
-    /// Queued song buy awaiting the session send (5010; the row
-    /// buy buttons and the cart `BUYITEM` own it).
-    pending_music_buy: Option<SyncMusicPurchase>,
-    /// Committed equip send awaiting the session (5004; the apply
-    /// button owns it).
-    pending_equip: Option<EquipItem>,
-    /// Committed gift claim awaiting the session (5023; MOVE owns it).
-    pending_gift_claim: Option<ClaimGift>,
-    /// Gift-list fetch awaiting the session (5017; queued on entry).
-    pending_gift_list: bool,
-}
-
-impl PendingOutbox {
-    /// Queued team send for the session bridge, if any (4004). One
-    /// take sends once; the next press replaces the queued team.
-    fn take_room_team(&mut self) -> Option<SetRoomTeam> {
-        self.pending_room_team.take()
-    }
-    /// Queued ready-clear for the session bridge, if any (4008).
-    /// The team switch queues it directly behind its 4004.
-    fn take_team_ready(&mut self) -> Option<Ready> {
-        if self.pending_team_ready {
-            self.pending_team_ready = false;
-            Some(Ready)
-        } else {
-            None
-        }
-    }
-    /// Whether a team-button pair is queued for the session bridge.
-    #[must_use]
-    fn has_pending_team_send(&self) -> bool {
-        self.pending_room_team.is_some() || self.pending_team_ready
-    }
-    /// Queued song pick for the session bridge, if any (4000). One
-    /// take sends once; the next row press replaces the queued pick.
-    fn take_music_send(&mut self) -> Option<SetRoomMusic> {
-        self.pending_music_send.take()
-    }
-    /// Whether a dialog row pick is queued for the session bridge.
-    #[must_use]
-    fn has_pending_music_send(&self) -> bool {
-        self.pending_music_send.is_some()
-    }
-    /// Queued RETRY press for the session bridge, if any (`StartGame`
-    /// 4010, `0xfaa` — the exe's result RETRY relay event,
-    /// `FUN_004c2f00` range, `ev_77ce98f1…`). One take sends once;
-    /// the next press replaces the queue.
-    fn take_result_retry(&mut self) -> Option<StartGame> {
-        if self.pending_result_retry {
-            self.pending_result_retry = false;
-            Some(StartGame)
-        } else {
-            None
-        }
-    }
-    /// Queued BACK press for the session bridge, if any (`ExitPlaying`
-    /// 4021, `0xfb5` — the exe's result BACK relay event,
-    /// `docs/cresult-anchors.md` `ev_77ce98f1…`). One take sends once;
-    /// the next press replaces the queue.
-    fn take_result_back(&mut self) -> Option<ExitPlaying> {
-        if self.pending_result_back {
-            self.pending_result_back = false;
-            Some(ExitPlaying)
-        } else {
-            None
-        }
-    }
-    /// Queued battle result entry for the session bridge, if any
-    /// (`GetLiveState` 4042, `0xfca` — byte-verified empty,
-    /// `docs/relay.md` §10, gated on the battle global `0x7789e6`).
-    /// One take sends once; the next battle entry replaces the queue.
-    fn take_result_battle_entry(&mut self) -> Option<o2jam_net::relay::GetLiveState> {
-        if self.pending_result_battle_entry {
-            self.pending_result_battle_entry = false;
-            Some(o2jam_net::relay::GetLiveState)
-        } else {
-            None
-        }
-    }
-    /// Committed create-room body awaiting the session send (2004).
-    fn take_create_room(&mut self) -> Option<CreateRoom> {
-        self.pending_create_room.take()
-    }
-    /// Committed locked-room join awaiting the session send (3002).
-    fn take_join(&mut self) -> Option<JoinRoom> {
-        self.pending_join.take()
-    }
-    /// Committed equip send for the session bridge, if any (5004).
-    /// One take sends once; the next apply replaces the queued send.
-    fn take_equip_send(&mut self) -> Option<EquipItem> {
-        self.pending_equip.take()
-    }
-    /// Whether an equip send is queued for the session bridge.
-    #[must_use]
-    fn has_pending_equip_send(&self) -> bool {
-        self.pending_equip.is_some()
-    }
-    /// Committed gift claim for the session bridge, if any (5023).
-    /// One take sends once; the next MOVE replaces the queued claim.
-    fn take_gift_claim(&mut self) -> Option<ClaimGift> {
-        self.pending_gift_claim.take()
-    }
-    /// Gift-list fetch for the session bridge, if any (5017; queued
-    /// on avatar-room entry). One take sends once.
-    fn take_gift_list_request(&mut self) -> Option<GetGiftMessageList> {
-        if self.pending_gift_list {
-            self.pending_gift_list = false;
-            Some(GetGiftMessageList)
-        } else {
-            None
-        }
-    }
-    /// Queued cart buy for the session bridge, if any (5000). One
-    /// body per `BUYITEM` commit; the seam drains it.
-    fn take_shop_buy(&mut self) -> Option<SyncItemPurchase> {
-        self.pending_shop_buy.take()
-    }
-    /// Queued song buy for the session bridge, if any (5010). One
-    /// body per row or cart commit; the seam drains it.
-    fn take_music_buy(&mut self) -> Option<SyncMusicPurchase> {
-        self.pending_music_buy.take()
-    }
-}
 
 /// Left-list songs, sorts, pages, and the fetched rank board behind
 /// the lanking side screen (#139 cluster 2: the Data Clump of all
@@ -1213,6 +1040,25 @@ impl PlanetBoardState {
     }
 }
 
+/// Game loop that shows each screen's scene and walks the flow.
+///
+/// Input wiring so far: any lane key or canvas click dismisses the
+/// splash onto the bare planet board, and the splash auto-advances
+/// there on its measured 5 s hold (ticket #24, guard:
+/// `splash_auto_advances_at_timeout`). Windowed runs ride the wall
+/// clock for the hold (ticket #54, claims B38); the fixed-clock
+/// path stays the headless seam. The dismiss arms stay
+/// stand-ins: the exe set is only partly pinned (Escape dismisses
+/// within ~0.3 s, `~/scratch/avi-hold/run3-escape/`; Enter and Space
+/// show no fast dismiss on the isolated rig — `~/scratch/wt24-rig/`
+/// `key-enter/` and `key-space/` both follow the ~5 s timer shape
+/// instead — yet Space is a lane bind, so the any-lane-key mapping
+/// is unpinned by counterexample). OPEN: the full `VK` sweep plus
+/// the exe lane-key mapping (guards: `lane_key_dismisses_splash_into_planet_board`,
+/// `click_dismisses_splash_into_planet_board`,
+/// `splash_click_edge_lands_the_same_bare_board`,
+/// `escape_dismisses_splash_into_planet_board`,
+/// `splash_menu_keys_keep_splash`).
 /// Room/waiting/loading inputs land with their UIs.
 pub struct ScreenGame {
     flow: ScreenFlow,
