@@ -9344,6 +9344,166 @@ mod game_tests {
         assert_eq!(game.hovered_planet_action(), None);
     }
 
+    /// Stage the bare planet board with every emblem and disc
+    /// placement (parsed `.bnd` rects verbatim, codes from
+    /// `ControlList_Interface.txt` `STATE_PLANET`): the shared
+    /// driver for the disc/emblem sweep guards below (ADR-0003:
+    /// staged rects, never literals).
+    fn swept_planet_game() -> ScreenGame {
+        use crate::screens::side::{
+            PLANET_BUTTON_DRUM_CODE, PLANET_BUTTON_EASY_CODE, PLANET_BUTTON_FREE_CODE,
+            PLANET_BUTTON_HARD_CODE, PLANET_BUTTON_NORMAL_CODE, PLANET_DRUM_RECT, PLANET_EASY_RECT,
+            PLANET_EXIT_CODE, PLANET_EXIT_RECT, PLANET_FREE_RECT, PLANET_HARD_RECT,
+            PLANET_NORMAL_RECT, PLANET_OPTION_CODE, PLANET_OPTION_RECT,
+        };
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        game.load_scene(
+            Screen::Planet,
+            vec![
+                ("hard", PLANET_BUTTON_HARD_CODE, PLANET_HARD_RECT),
+                ("normal", PLANET_BUTTON_NORMAL_CODE, PLANET_NORMAL_RECT),
+                ("easy", PLANET_BUTTON_EASY_CODE, PLANET_EASY_RECT),
+                ("free", PLANET_BUTTON_FREE_CODE, PLANET_FREE_RECT),
+                ("drum", PLANET_BUTTON_DRUM_CODE, PLANET_DRUM_RECT),
+                ("exit", PLANET_EXIT_CODE, PLANET_EXIT_RECT),
+                ("option", PLANET_OPTION_CODE, PLANET_OPTION_RECT),
+            ]
+            .into_iter()
+            .map(|(id, code, rect)| ScenePlacement {
+                role: PlacementRole::Single,
+                id: id.to_owned(),
+                code,
+                sprite: None,
+                rect,
+            })
+            .collect(),
+            HashMap::new(),
+        );
+        game
+    }
+
+    #[test]
+    fn disc_sweep_arms_the_gear_and_exit_discs() {
+        // Ticket #163 (planet leg, `docs/hover.md` gear/exit rows:
+        // hover repaints the disc at full body frame 0): sweeping
+        // the pointer over the OPTION disc arms the options dialog,
+        // over the EXIT disc the quit-confirm, and off the board
+        // arms nothing. Motion alone drives it (polled PtInRect
+        // sweep, `docs/mouse-tracking.md`).
+        use crate::screens::side::PlanetAction;
+        let mut game = swept_planet_game();
+        assert_eq!(game.screen(), Screen::Planet);
+        game.mouse_moved(729, 580);
+        assert_eq!(
+            game.hovered_planet_action(),
+            Some(PlanetAction::OptionsDialog)
+        );
+        game.mouse_moved(769, 580);
+        assert_eq!(
+            game.hovered_planet_action(),
+            Some(PlanetAction::QuitConfirm)
+        );
+        game.mouse_moved(400, 300);
+        assert_eq!(game.hovered_planet_action(), None);
+    }
+
+    #[test]
+    fn hard_normal_and_drum_sweeps_arm_their_emblems() {
+        // Ticket #163 (planet leg): the sweep covers every emblem
+        // the EASY-only guard never visits — lit HARD/NORMAL arm
+        // their bands, DRUM arms the static unbound emblem (its
+        // QUEST plate never highlights, `docs/hover.md`).
+        use crate::screens::side::{PlanetAction, PlanetBand};
+        let mut game = swept_planet_game();
+        game.mouse_moved(386, 88);
+        assert_eq!(
+            game.hovered_planet_action(),
+            Some(PlanetAction::Emblem {
+                band: Some(PlanetBand::Hard)
+            })
+        );
+        game.mouse_moved(255, 88);
+        assert_eq!(
+            game.hovered_planet_action(),
+            Some(PlanetAction::Emblem {
+                band: Some(PlanetBand::Normal)
+            })
+        );
+        game.mouse_moved(559, 88);
+        assert_eq!(
+            game.hovered_planet_action(),
+            Some(PlanetAction::Emblem { band: None })
+        );
+    }
+
+    #[test]
+    fn free_and_drum_clicks_are_labelled_noops() {
+        // Ticket #163 (planet leg): the QUEST/TUTORIAL plates are
+        // EXE-static on hover (0 changed px, `docs/hover.md`) and
+        // their backends were never wired (P0) — a click records
+        // no family, opens no dialog, and holds the bare board.
+        // Next evidence step: the exe backend (if any) behind
+        // FREE/DRUM, same as the populated-room OPEN in #33.
+        let mut game = swept_planet_game();
+        game.mouse_click(663, 88);
+        assert_eq!(game.screen(), Screen::Planet);
+        assert_eq!(game.planet_selection(), None);
+        assert_eq!(game.planet_modal(), None);
+        assert_eq!(game.planet_promo(), None);
+        game.mouse_click(559, 88);
+        assert_eq!(game.screen(), Screen::Planet);
+        assert_eq!(game.planet_selection(), None);
+        assert_eq!(game.planet_modal(), None);
+        assert_eq!(game.planet_promo(), None);
+    }
+
+    #[test]
+    fn gear_release_inside_opens_the_options_dialog() {
+        // Ticket #163 (planet leg, pinned #111 arms 1+3): the press
+        // arms on down with no action yet, and release-inside fires
+        // on up — the gear opens the options dialog.
+        let mut game = swept_planet_game();
+        game.mouse_down(729, 580);
+        assert_eq!(
+            game.planet_modal(),
+            None,
+            "the action waits for the release"
+        );
+        game.mouse_up(729, 580);
+        assert_eq!(game.planet_modal(), Some(PlanetModal::Options));
+        assert_eq!(game.screen(), Screen::Planet);
+    }
+
+    #[test]
+    fn exit_release_outside_reverts_without_action() {
+        // Ticket #163 (planet leg, pinned #111 arm 4): a down on
+        // the EXIT disc released off the board reverts to REST and
+        // opens nothing. The revert trigger (rect-exit vs up)
+        // stays OPEN — the stand-in reverts on up (`docs/hover.md`).
+        let mut game = swept_planet_game();
+        game.mouse_down(769, 580);
+        assert_eq!(game.planet_modal(), None);
+        game.mouse_up(10, 10);
+        assert_eq!(game.planet_modal(), None);
+        assert_eq!(game.screen(), Screen::Planet);
+        assert!(!game.quit_confirmed());
+    }
+
+    #[test]
+    fn board_click_while_quit_modal_open_lands_nowhere() {
+        // Ticket #163 (planet leg, modal gating arm): while the
+        // quit-confirm owns the board, an emblem click is not a
+        // family pick — the modal stays open and the board holds.
+        let mut game = swept_planet_game();
+        game.mouse_click(769, 580);
+        assert_eq!(game.planet_modal(), Some(PlanetModal::QuitConfirm));
+        game.mouse_click(136, 88);
+        assert_eq!(game.planet_modal(), Some(PlanetModal::QuitConfirm));
+        assert_eq!(game.screen(), Screen::Planet);
+        assert_eq!(game.planet_selection(), None);
+    }
+
     #[test]
     fn planet_hover_stays_off_while_a_modal_owns_the_board() {
         // The quit-confirm modal layers over the bare board: motion

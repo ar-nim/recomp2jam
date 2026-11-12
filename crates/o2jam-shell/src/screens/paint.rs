@@ -9683,6 +9683,64 @@ mod paint_tests {
         assert_eq!(hovered[575 * 800 + 725], blue, "hover restores frame 0");
     }
 
+    #[test]
+    fn exit_hover_restores_the_first_frame() {
+        // Ticket #163 (planet leg): the EXIT disc rides the same
+        // hover arm as OPTION (`docs/hover.md`: EXIT diff bbox
+        // 754,565-783,594, hover paints body frame 0 at full
+        // colour). Two stacked layers stand in for rest over
+        // hover-top, so the guard pins the repaint, not the
+        // exe's desaturated rest (OPEN, `docs/hover.md`).
+        use super::super::side::{PlanetAction, PLANET_EXIT_CODE};
+        let sprite = "Planet_Btn_Exit.ojs";
+        let art = SceneArt {
+            placements: vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code: PLANET_EXIT_CODE,
+                sprite: Some(sprite.to_owned()),
+                rect: Rect {
+                    x: 750,
+                    y: 561,
+                    w: 38,
+                    h: 38,
+                },
+            }],
+            figures: HashMap::from([(
+                sprite.to_owned(),
+                anchored_two_frame_figure(38, 38, 750, 561, [0x1F, 0x00], [0x00, 0x7C]),
+            )]),
+        };
+        let blue = pack_xrgb(0x00, 0x00, 0xFF);
+        let red = pack_xrgb(0xFF, 0x00, 0x00);
+        let mut rest = vec![0u32; 800 * 600];
+        paint_planet_scene(
+            &mut Frame {
+                buf: &mut rest,
+                w: 800,
+                h: 600,
+            },
+            &art,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(rest[575 * 800 + 765], red, "rest keeps the top layer");
+        let mut hovered = vec![0u32; 800 * 600];
+        paint_planet_scene(
+            &mut Frame {
+                buf: &mut hovered,
+                w: 800,
+                h: 600,
+            },
+            &art,
+            None,
+            Some(PlanetAction::QuitConfirm),
+            None,
+        );
+        assert_eq!(hovered[575 * 800 + 765], blue, "hover restores frame 0");
+    }
+
     /// The offA/onA-modeled hover pair (ticket #63, rule in
     /// `docs/parity/art-delta-guards.md`): the measured dimmed-rest pattern for the
     /// planet board buttons (`docs/hover.md`, OPTION gear diff bbox
