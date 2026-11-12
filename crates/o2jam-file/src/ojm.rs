@@ -706,7 +706,19 @@ pub fn recover_new_variant_sample(data: &[u8]) -> Result<Vec<u8>, FileError> {
 ///
 /// `FileError::TooShort`/`Truncated` when the buffer ends early,
 /// `FileError::UnknownFormat` on a bad header or non-OGG body.
-pub fn parse_omc(bytes: &[u8]) -> Result<Vec<OjmSample<'_>>, FileError> {
+/// One old-variant table entry read: either a blank (all-zero)
+/// padding slot, or one OGG sample plus the offset just past its
+/// body.
+enum OmcStep<'a> {
+    /// Blank slot: no stream follows; entry was padding.
+    Blank,
+    /// One OGG sample and the offset just past its body.
+    Sample { sample: OjmSample<'a>, end: usize },
+}
+
+/// Validate the old-variant OMC/OJM header (16-byte floor, `OMC`/`OJM`
+/// magic) and return the first entry offset (+12).
+fn check_omc_header(bytes: &[u8]) -> Result<usize, FileError> {
     if bytes.len() < 16 {
         return Err(FileError::TooShort(bytes.len()));
     }
@@ -715,13 +727,57 @@ pub fn parse_omc(bytes: &[u8]) -> Result<Vec<OjmSample<'_>>, FileError> {
             magic: bytes[..4.min(bytes.len())].to_vec(),
         });
     }
-    let mut off = read_u32le(bytes, 12)? as usize;
+    let off = read_u32le(bytes, 12)? as usize;
     if off < 16 || off > bytes.len() {
         return Err(FileError::Truncated {
             need: off,
             have: bytes.len(),
         });
     }
+    Ok(off)
+}
+
+/// Read one 36-byte old-variant table entry (`name[32] + size`) and
+/// its OGG body. Blank (all-zero) entries skip; a zero size on a named
+/// entry is degenerate (the walk would stall: end == start).
+fn read_omc_entry<'a>(bytes: &'a [u8], off: usize) -> Result<OmcStep<'a>, FileError> {
+    let name = read_name(bytes, off)?;
+    let size = read_u32le(bytes, off + 32)? as usize;
+    if name.is_empty() && size == 0 {
+        return Ok(OmcStep::Blank);
+    }
+    if size == 0 {
+        // Degenerate entry: no stream follows, and accepting it
+        // would stall the walk (end == start).
+        return Err(FileError::Truncated {
+            need: off + 36 + 1,
+            have: bytes.len().min(off + 36),
+        });
+    }
+    let start = off + 36;
+    let end = start.checked_add(size).ok_or(FileError::Truncated {
+        need: usize::MAX,
+        have: bytes.len(),
+    })?;
+    if end > bytes.len() {
+        return Err(FileError::Truncated {
+            need: end,
+            have: bytes.len(),
+        });
+    }
+    check_ogg(bytes, start)?;
+    Ok(OmcStep::Sample {
+        sample: OjmSample {
+            name,
+            sample_id: None,
+            data: &bytes[start..end],
+        },
+        end,
+    })
+}
+
+pub fn parse_omc(bytes: &[u8]) -> Result<Vec<OjmSample<'_>>, FileError> {
+    let mut off = check_omc_header(bytes)?;
     let mut out = Vec::new();
     loop {
         if off == bytes.len() {
@@ -729,38 +785,12 @@ pub fn parse_omc(bytes: &[u8]) -> Result<Vec<OjmSample<'_>>, FileError> {
             // raw streams: entry offset == file length).
             return Ok(out);
         }
-        let name = read_name(bytes, off)?;
-        let size = read_u32le(bytes, off + 32)? as usize;
-        if name.is_empty() && size == 0 {
-            // Blank slot: no stream follows; entry was padding.
-            off += 36;
-        } else {
-            if size == 0 {
-                // Degenerate entry: no stream follows, and accepting it
-                // would stall the walk (end == start).
-                return Err(FileError::Truncated {
-                    need: off + 36 + 1,
-                    have: bytes.len().min(off + 36),
-                });
+        match read_omc_entry(bytes, off)? {
+            OmcStep::Blank => off += 36,
+            OmcStep::Sample { sample, end } => {
+                out.push(sample);
+                off = end;
             }
-            let start = off + 36;
-            let end = start.checked_add(size).ok_or(FileError::Truncated {
-                need: usize::MAX,
-                have: bytes.len(),
-            })?;
-            if end > bytes.len() {
-                return Err(FileError::Truncated {
-                    need: end,
-                    have: bytes.len(),
-                });
-            }
-            check_ogg(bytes, start)?;
-            out.push(OjmSample {
-                name,
-                sample_id: None,
-                data: &bytes[start..end],
-            });
-            off = end;
         }
         if off == bytes.len() {
             return Ok(out);
