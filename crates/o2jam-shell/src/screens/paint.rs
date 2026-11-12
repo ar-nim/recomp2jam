@@ -1646,8 +1646,8 @@ fn paint_planet_captions(frame: &mut Frame<'_>, placements: &[ScenePlacement]) {
 /// held board control (`press`, armed on left-down over the bare
 /// board) repaints its pressed frame over that (see
 /// [`paint_planet_press`]); `None` keeps the hover/rest paint. The
-/// carousel banner (`promo_index`, 1-based — `0` keeps the rest
-/// stack) repaints its selected frame over the backdrop (see
+/// carousel banner (`promo_index`, 1-based — `0` paints no banner
+/// frame) repaints its selected frame over the backdrop (see
 /// [`paint_planet_promo_frame`]).
 pub fn paint_planet_scene(
     frame: &mut Frame<'_>,
@@ -1657,7 +1657,16 @@ pub fn paint_planet_scene(
     press: Option<PlanetAction>,
     promo_index: u32,
 ) {
-    art.paint_backdrop(frame, Screen::Planet);
+    // The banner body's three frames stack in the shared rest paint
+    // ([`SceneArt::paint_backdrop`] keeps the verified all-layers
+    // stack every other single body relies on), but the exe's image
+    // control mounts ONE frame per view: paint the rest WITHOUT the
+    // banner placement, then lay only the selected frame over it —
+    // its colorkey holes show the backdrop, never a sibling frame
+    // (#170 ghosting; the exe refresh arm VA `0x48e4b0`).
+    art.paint_backdrop_live(frame, Screen::Planet, |placed| {
+        placed.code != PLANET_PROMO_IMAGE_CODE
+    });
     paint_planet_promo_frame(frame, art, promo_index);
     paint_planet_hover(frame, art, hover);
     paint_planet_press(frame, art, press);
@@ -1670,13 +1679,15 @@ pub fn paint_planet_scene(
 
 /// Promotion-banner frame: the exe's image control paints one frame
 /// per view (refresh arm VA `0x48e4b0` → `set_frame(index)`), so the
-/// shell repaints the staged `IDC_IMAGE_SPLANET_PROMOTION` body's
-/// selected layer over the backdrop's full stack. The frames share
-/// one anchor and size (the shipped body carries three 701x333
-/// records at (49,163)), so the selected frame covers the stack
-/// exactly. Index 0 or an unstaged body paints nothing; an index past
-/// the staged layers keeps the rest stack (the shell never invents
-/// frames). Runs before hover/press so their repaints stay on top.
+/// shell paints the rest stack without the banner placement
+/// ([`paint_planet_scene`]) and then repaints the staged
+/// `IDC_IMAGE_SPLANET_PROMOTION` body's selected layer over it. The
+/// frames share one anchor and size (the shipped body carries three
+/// 701x333 records at (49,163)), and the colorkey-0 holes show the
+/// backdrop — never a sibling frame (#170). Index 0 or an unstaged
+/// body paints nothing; an index past the staged layers keeps the
+/// backdrop (the shell never invents frames). Runs before hover/press
+/// so their repaints stay on top.
 fn paint_planet_promo_frame(frame: &mut Frame<'_>, art: &SceneArt, promo_index: u32) {
     let Some(placement) = art
         .placements
@@ -6090,13 +6101,14 @@ mod paint_tests {
         MSHOP_ARTIST_CODE, MSHOP_BPM_CODE, MSHOP_CART_TOGGLE_FIRST_CODE, MSHOP_EDITOR_CODE,
         MSHOP_EX_FIRST_CODE, MSHOP_GENRE_CODE, MSHOP_ISBUY_CODE, MSHOP_PAGE_CUR_ONES_CODE,
         MSHOP_PAGE_CUR_TENS_CODE, MSHOP_PAGE_TOT_ONES_CODE, MSHOP_PAGE_TOT_TENS_CODE,
-        MSHOP_TITLE_CODE, PLANET_OPTION_CODE, SHOP_CART_PAGE_CUR_ONES_CODE,
-        SHOP_CART_PAGE_CUR_TENS_CODE, SHOP_CART_PAGE_TOT_ONES_CODE, SHOP_CART_PAGE_TOT_TENS_CODE,
-        SHOP_CART_TOGGLE_FIRST_CODE,
+        MSHOP_TITLE_CODE, PLANET_OPTION_CODE, PLANET_PROMO_IMAGE_CODE,
+        SHOP_CART_PAGE_CUR_ONES_CODE, SHOP_CART_PAGE_CUR_TENS_CODE, SHOP_CART_PAGE_TOT_ONES_CODE,
+        SHOP_CART_PAGE_TOT_TENS_CODE, SHOP_CART_TOGGLE_FIRST_CODE,
     };
     use super::*;
     use crate::avatar::FigureLayer;
     use crate::screen::Screen;
+    use crate::staging::{stage_state, StageContext, State};
     use o2jam_net::{JoinedRoom, RoomMember, RoomSlot};
     use o2jam_render::{has_ink_near, near_xrgb};
     use o2jam_render::{pack_xrgb, Frame, Rgb555Image};
@@ -6112,6 +6124,15 @@ mod paint_tests {
             screen,
         );
         buf
+    }
+
+    /// Read the pinned Interface archive, `None` without install-root.
+    fn interface_archive() -> Option<Vec<u8>> {
+        std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../install-root/O2Jam/Image/Interface1.opi"),
+        )
+        .ok()
     }
 
     /// One red pixel figure (colorkey white, so the pixel paints).
@@ -9875,9 +9896,9 @@ mod paint_tests {
 
     #[test]
     fn promo_banner_frame_follows_the_carousel_index() {
-        // The banner body paints its selected frame over the stacked
-        // rest (exe refresh arm VA `0x48e4b0` → `set_frame(index)`):
-        // index 1 shows the first frame, index 3 the top frame.
+        // The banner body paints its selected frame alone (exe
+        // refresh arm VA `0x48e4b0` → `set_frame(index)`): index 1
+        // shows the first frame, index 3 the top frame.
         use super::super::side::PLANET_PROMO_IMAGE_CODE;
         let sprite = "Planet_Promotion.ojs";
         let mut banner = AvatarFigure::default();
@@ -9933,6 +9954,84 @@ mod paint_tests {
             paint_index(3),
             pack_xrgb(0x00, 0x00, 0xFF),
             "index 3 shows the top banner frame"
+        );
+    }
+
+    #[test]
+    fn promo_banner_paints_only_the_selected_frame() {
+        // Real 7.55 bytes (skips without install-root): the banner
+        // stages three 701x333 frames sharing the (49,163) anchor with
+        // colorkey-0 holes. The exe's image control mounts ONE frame
+        // per view (refresh arm VA `0x48e4b0` → `set_frame`), so the
+        // view at index N must equal the same painter fed a one-frame
+        // body of frame N — the #170 stacked rest let the selected
+        // frame's holes show the sibling frames (ghost of the previous
+        // banner where the exe shows the dialog backdrop).
+        let Some(archive) = interface_archive() else {
+            return;
+        };
+        let staged = stage_state(&archive, State::Planet, StageContext::default())
+            .art
+            .expect("planet scene stages with real bytes");
+        let art = SceneArt {
+            placements: staged.placements,
+            figures: staged.figures,
+        };
+        let sprite = art
+            .placements
+            .iter()
+            .find(|placed| placed.code == PLANET_PROMO_IMAGE_CODE)
+            .expect("promotion banner stages")
+            .sprite
+            .clone()
+            .expect("banner names a sprite");
+        let banner = art.figures.get(&sprite).expect("banner figure loads");
+        assert!(
+            banner.len() >= 2,
+            "the guard needs the multi-frame banner body"
+        );
+
+        /// The scene art with the banner body swapped for a one-frame
+        /// body carrying only record `keep` — the exe control with one
+        /// record mounted shows it at the same anchor.
+        fn with_one_frame_banner(art: &SceneArt, sprite: &str, keep: usize) -> SceneArt {
+            let mut body = AvatarFigure::default();
+            if let Some(layer) = art.figures[sprite].layer(keep) {
+                body.push_layer(layer.clone());
+            }
+            let mut figures = art.figures.clone();
+            figures.insert(sprite.to_owned(), body);
+            SceneArt {
+                placements: art.placements.clone(),
+                figures,
+            }
+        }
+
+        let paint = |art: &SceneArt, index: u32| {
+            let mut buf = vec![0u32; 800 * 600];
+            paint_planet_scene(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                art,
+                None,
+                None,
+                None,
+                index,
+            );
+            buf
+        };
+        let expected_one = paint(&with_one_frame_banner(&art, &sprite, 0), 1);
+        let expected_two = paint(&with_one_frame_banner(&art, &sprite, 1), 1);
+        let one = paint(&art, 1);
+        let two = paint(&art, 2);
+        assert_ne!(one, expected_two, "the guard needs distinct frames");
+        assert_eq!(one, expected_one, "index 1 paints only frame 1");
+        assert_eq!(
+            two, expected_two,
+            "index 2 paints only frame 2 — no sibling frame in the holes"
         );
     }
 
