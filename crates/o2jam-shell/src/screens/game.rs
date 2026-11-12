@@ -751,6 +751,159 @@ impl LankingState {
     }
 }
 
+/// Item-shop goods, pages, and the checked cart behind the shop
+/// side screen (#139 cluster 3: the Data Clump of all four
+/// `shop_*` fields). Pure board state — no side dispatch, paint,
+/// or wire queue — so the board reads without touching the
+/// `ScreenGame` God class. `ScreenGame` keeps thin delegates under
+/// the same names, so the click seam and the snapshot surface never
+/// change. The cart commit still queues on the outbox (cluster 1):
+/// `apply_action` only reports it, the caller queues the send.
+#[derive(Default)]
+struct ShopState {
+    /// Item-shop goods (`Itemdata_Korea.dat` order, owned copies;
+    /// see [`Self::set_shop_catalog`]).
+    shop_goods: Vec<ShopGood>,
+    /// Item-list page (eight rows per page, the staged `ITEMBUY`
+    /// hit areas).
+    shop_page: usize,
+    /// Checked cart item ids in toggle order (the `ITEMBUY`
+    /// selection behind the cart `BUYITEM` commit).
+    shop_cart: Vec<u32>,
+    /// Cart-list page (five rows per page, the staged `CART_EX`
+    /// slots).
+    shop_cart_page: usize,
+}
+
+impl ShopState {
+    /// Stage the item-shop catalog (`Itemdata_Korea.dat` order,
+    /// owned copies so the board outlives the parse borrow). Resets
+    /// the item page; the cart keeps its checks.
+    fn set_catalog(&mut self, table: &o2jam_file::AvatarItemTable) {
+        self.shop_goods = shop_goods(table);
+        self.shop_page = 0;
+    }
+
+    /// Item-list page (eight rows per page).
+    fn page(&self) -> usize {
+        self.shop_page
+    }
+
+    /// Cart-list page (five rows per page).
+    fn cart_page(&self) -> usize {
+        self.shop_cart_page
+    }
+
+    /// Checked cart item ids in toggle order.
+    fn cart(&self) -> Vec<u32> {
+        self.shop_cart.clone()
+    }
+
+    /// Check one catalog good into the cart (id must exist; the
+    /// click seam feeds the same cart — this stages restores).
+    fn cart_push(&mut self, item_id: u32) {
+        if self.shop_goods.iter().any(|good| good.item_id == item_id)
+            && !self.shop_cart.contains(&item_id)
+        {
+            self.shop_cart.push(item_id);
+        }
+    }
+
+    /// Sorted catalog goods on the current item-list page (owned
+    /// page: small, eight rows at most). No sorts exist on the
+    /// item board: catalog order always.
+    fn visible_goods(&self) -> Vec<ShopGood> {
+        let (start, end) =
+            lanking_page_window(self.shop_goods.len(), SHOP_ITEM_ROWS, self.shop_page);
+        self.shop_goods[start..end].to_vec()
+    }
+
+    /// Checked cart goods on the current cart page (toggle order,
+    /// five rows at most; unknown ids drop out).
+    fn visible_cart(&self) -> Vec<ShopGood> {
+        let goods: Vec<ShopGood> = self
+            .shop_cart
+            .iter()
+            .filter_map(|item_id| {
+                self.shop_goods
+                    .iter()
+                    .find(|good| good.item_id == *item_id)
+                    .cloned()
+            })
+            .collect();
+        let (start, end) = lanking_page_window(goods.len(), SHOP_CART_ROWS, self.shop_cart_page);
+        goods[start..end].to_vec()
+    }
+
+    /// Cart page count (at least one: the pager paints `1/1` on an
+    /// empty cart, never `0/0`).
+    fn cart_pages(&self) -> usize {
+        shop_page_count(self.shop_cart.len(), SHOP_CART_ROWS)
+    }
+
+    /// Item-list page count (at least one, same empty-cart rule).
+    fn list_pages(&self) -> usize {
+        shop_page_count(self.shop_goods.len(), SHOP_ITEM_ROWS)
+    }
+
+    /// Row toggle through the control-code dispatch: checks the
+    /// good into the cart, unchecks a held one. Never commits.
+    fn toggle_row(&mut self, slot: usize) {
+        if let Some(good) = self.visible_goods().get(slot).cloned() {
+            if let Some(held) = self.shop_cart.iter().position(|id| *id == good.item_id) {
+                self.shop_cart.remove(held);
+            } else {
+                self.shop_cart.push(good.item_id);
+            }
+        }
+    }
+
+    /// Board action through the control-code dispatch: row toggles
+    /// check the cart, both pagers step and hold at the ends.
+    /// Reports whether the action commits the cart (`BUYITEM` on a
+    /// non-empty cart): the caller queues the pinned 5000 send on
+    /// the outbox, so this board state never touches the wire.
+    fn apply_action(&mut self, action: ShopAction) -> bool {
+        match action {
+            ShopAction::ToggleRow(slot) => {
+                self.toggle_row(slot);
+                false
+            }
+            ShopAction::CartBuy => !self.shop_cart.is_empty(),
+            ShopAction::ItemPrev => {
+                self.shop_page = self.shop_page.saturating_sub(1);
+                false
+            }
+            ShopAction::ItemNext => {
+                if self
+                    .shop_page
+                    .saturating_add(1)
+                    .saturating_mul(SHOP_ITEM_ROWS)
+                    < self.shop_goods.len()
+                {
+                    self.shop_page = self.shop_page.saturating_add(1);
+                }
+                false
+            }
+            ShopAction::CartPrev => {
+                self.shop_cart_page = self.shop_cart_page.saturating_sub(1);
+                false
+            }
+            ShopAction::CartNext => {
+                if self
+                    .shop_cart_page
+                    .saturating_add(1)
+                    .saturating_mul(SHOP_CART_ROWS)
+                    < self.shop_cart.len()
+                {
+                    self.shop_cart_page = self.shop_cart_page.saturating_add(1);
+                }
+                false
+            }
+        }
+    }
+}
+
 /// Room/waiting/loading inputs land with their UIs.
 pub struct ScreenGame {
     flow: ScreenFlow,
@@ -961,18 +1114,10 @@ pub struct ScreenGame {
     /// pick; #139 cluster 2): every `lanking_*` word lives here;
     /// the hash fold reads it for the six hashed words.
     lanking: LankingState,
-    /// Item-shop goods (`Itemdata_Korea.dat` order, owned copies;
-    /// see [`Self::set_shop_catalog`]).
-    shop_goods: Vec<ShopGood>,
-    /// Item-list page (eight rows per page, the staged `ITEMBUY`
-    /// hit areas).
-    shop_page: usize,
-    /// Checked cart item ids in toggle order (the `ITEMBUY`
-    /// selection behind the cart `BUYITEM` commit).
-    shop_cart: Vec<u32>,
-    /// Cart-list page (five rows per page, the staged `CART_EX`
-    /// slots).
-    shop_cart_page: usize,
+    /// Item-shop board state (the catalog, pages, and cart; #139
+    /// cluster 3): every `shop_*` word lives here; the hash fold
+    /// reads it for the four hashed words.
+    shop: ShopState,
     /// Live wallet words behind the shop gem cells (5028/5001/5003
     /// folds; `--` until data).
     wallet: WalletState,
@@ -1358,10 +1503,7 @@ impl ScreenGame {
             side: None,
             side_origin: None,
             lanking: LankingState::default(),
-            shop_goods: Vec::new(),
-            shop_page: 0,
-            shop_cart: Vec::new(),
-            shop_cart_page: 0,
+            shop: ShopState::default(),
             wallet: WalletState::default(),
             music_shop_songs: Vec::new(),
             music_shop_sort: None,
@@ -4725,31 +4867,32 @@ impl ScreenGame {
     /// owned copies so the board outlives the parse borrow). Resets
     /// the item page; the cart keeps its checks.
     pub fn set_shop_catalog(&mut self, table: &o2jam_file::AvatarItemTable) -> &mut Self {
-        self.shop_goods = shop_goods(table);
-        self.shop_page = 0;
+        self.shop.set_catalog(table);
         self
     }
 
     /// Item-list page (eight rows per page).
     #[must_use]
     pub fn shop_page(&self) -> usize {
-        self.shop_page
+        self.shop.page()
+    }
+
+    /// Cart-list page (five rows per page).
+    #[must_use]
+    pub fn shop_cart_page(&self) -> usize {
+        self.shop.cart_page()
     }
 
     /// Checked cart item ids in toggle order.
     #[must_use]
     pub fn shop_cart(&self) -> Vec<u32> {
-        self.shop_cart.clone()
+        self.shop.cart()
     }
 
     /// Check one catalog good into the cart (id must exist; the
     /// click seam feeds the same cart — this stages restores).
     pub fn shop_cart_push(&mut self, item_id: u32) {
-        if self.shop_goods.iter().any(|good| good.item_id == item_id)
-            && !self.shop_cart.contains(&item_id)
-        {
-            self.shop_cart.push(item_id);
-        }
+        self.shop.cart_push(item_id);
     }
 
     /// Sorted catalog goods on the current item-list page (owned
@@ -4757,40 +4900,27 @@ impl ScreenGame {
     /// item board: catalog order always.
     #[must_use]
     pub fn shop_visible_goods(&self) -> Vec<ShopGood> {
-        let (start, end) =
-            lanking_page_window(self.shop_goods.len(), SHOP_ITEM_ROWS, self.shop_page);
-        self.shop_goods[start..end].to_vec()
+        self.shop.visible_goods()
     }
 
     /// Checked cart goods on the current cart page (toggle order,
     /// five rows at most; unknown ids drop out).
     #[must_use]
     pub fn shop_visible_cart(&self) -> Vec<ShopGood> {
-        let goods: Vec<ShopGood> = self
-            .shop_cart
-            .iter()
-            .filter_map(|item_id| {
-                self.shop_goods
-                    .iter()
-                    .find(|good| good.item_id == *item_id)
-                    .cloned()
-            })
-            .collect();
-        let (start, end) = lanking_page_window(goods.len(), SHOP_CART_ROWS, self.shop_cart_page);
-        goods[start..end].to_vec()
+        self.shop.visible_cart()
     }
 
     /// Cart page count (at least one: the pager paints `1/1` on an
     /// empty cart, never `0/0`).
     #[must_use]
     pub fn shop_cart_pages(&self) -> usize {
-        shop_page_count(self.shop_cart.len(), SHOP_CART_ROWS)
+        self.shop.cart_pages()
     }
 
     /// Item-list page count (at least one, same empty-cart rule).
     #[must_use]
     pub fn shop_list_pages(&self) -> usize {
-        shop_page_count(self.shop_goods.len(), SHOP_ITEM_ROWS)
+        self.shop.list_pages()
     }
 
     /// Wallet gem cell caption (`GEM 1200`); `--` until the 5028
@@ -4842,47 +4972,8 @@ impl ScreenGame {
         let Some(action) = shop_action_at(&self.side_placements, x, y) else {
             return;
         };
-        match action {
-            ShopAction::ToggleRow(slot) => {
-                if let Some(good) = self.shop_visible_goods().get(slot).cloned() {
-                    if let Some(held) = self.shop_cart.iter().position(|id| *id == good.item_id) {
-                        self.shop_cart.remove(held);
-                    } else {
-                        self.shop_cart.push(good.item_id);
-                    }
-                }
-            }
-            ShopAction::CartBuy => {
-                if !self.shop_cart.is_empty() {
-                    self.outbox.pending_shop_buy = Some(SyncItemPurchase);
-                }
-            }
-            ShopAction::ItemPrev => {
-                self.shop_page = self.shop_page.saturating_sub(1);
-            }
-            ShopAction::ItemNext => {
-                if self
-                    .shop_page
-                    .saturating_add(1)
-                    .saturating_mul(SHOP_ITEM_ROWS)
-                    < self.shop_goods.len()
-                {
-                    self.shop_page = self.shop_page.saturating_add(1);
-                }
-            }
-            ShopAction::CartPrev => {
-                self.shop_cart_page = self.shop_cart_page.saturating_sub(1);
-            }
-            ShopAction::CartNext => {
-                if self
-                    .shop_cart_page
-                    .saturating_add(1)
-                    .saturating_mul(SHOP_CART_ROWS)
-                    < self.shop_cart.len()
-                {
-                    self.shop_cart_page = self.shop_cart_page.saturating_add(1);
-                }
-            }
+        if self.shop.apply_action(action) {
+            self.outbox.pending_shop_buy = Some(SyncItemPurchase);
         }
     }
 
@@ -5095,7 +5186,7 @@ impl ScreenGame {
                     &self.shop_visible_goods(),
                     &self.wallet,
                     &self.shop_visible_cart(),
-                    self.shop_cart_page,
+                    self.shop_cart_page(),
                     self.shop_cart_pages(),
                 );
             }
@@ -6378,10 +6469,10 @@ fn observable_state_hash(game: &ScreenGame) -> u64 {
     if let Some(selected) = game.lanking.lanking_selected {
         hash_u64(&mut hash, u64::from(selected));
     }
-    hash_u64(&mut hash, game.shop_page as u64);
-    hash_u64(&mut hash, game.shop_cart_page as u64);
-    hash_u64(&mut hash, game.shop_goods.len() as u64);
-    for id in &game.shop_cart {
+    hash_u64(&mut hash, game.shop.shop_page as u64);
+    hash_u64(&mut hash, game.shop.shop_cart_page as u64);
+    hash_u64(&mut hash, game.shop.shop_goods.len() as u64);
+    for id in &game.shop.shop_cart {
         hash_u64(&mut hash, u64::from(*id));
     }
     hash_u64(
@@ -14747,10 +14838,12 @@ mod game_tests {
     fn populated_outbox_pins_the_observable_state_hash() {
         // Characterization for the PendingOutbox extraction (#139,
         // cluster 1) extended by the LankingState extraction
-        // (cluster 2): all thirteen wire queues populated through
-        // their queueing arms plus the lanking catalog/sort/page/
-        // pick/board population below, then the observable hash
-        // pinned byte-identical. The extraction must not move one hash bit:
+        // (cluster 2) and the ShopState population (cluster 3): all
+        // thirteen wire queues populated through their queueing arms
+        // plus the lanking catalog/sort/page/pick/board and the shop
+        // catalog/toggle/page/cart-page populations below, then the
+        // observable hash pinned byte-identical. The extraction must
+        // not move one hash bit:
         // the take_* drains below prove every arm queued, the pinned
         // word proves the hash fold is untouched. Only the two shop
         // sends feed the fold today; the rest ride along so a future
@@ -14831,7 +14924,15 @@ mod game_tests {
         game.set_shop_catalog(&o2jam_file::AvatarItemTable { rows });
         game.load_side_scene(shop_side_placements(), HashMap::new());
         assert!(game.visit_side(SideScreen::Shop));
+        // Shop arm (#139 cluster 3): the catalog + row toggle +
+        // item pager step + cart pager hold + cart BUYITEM feed the
+        // hash fold; the extraction must not move one hash bit.
         game.click_shop(221, 188);
+        assert_eq!(game.shop_cart(), vec![1]);
+        game.click_shop(753, 379);
+        assert_eq!(game.shop_page(), 1);
+        game.click_shop(340, 575);
+        assert_eq!(game.shop_cart(), vec![1]);
         game.click_shop(18, 564);
         assert!(game.leave_side());
 
@@ -14945,8 +15046,8 @@ mod game_tests {
 
         let populated = game.state_hash();
         assert_eq!(
-            populated, 0xD1E1_FA12_E996_C424,
-            "outbox+lanking population must not move the observable hash"
+            populated, 0xAFC5_1971_B8A6_D771,
+            "outbox+lanking+shop population must not move the observable hash"
         );
 
         // The seam drains every queue exactly once.
