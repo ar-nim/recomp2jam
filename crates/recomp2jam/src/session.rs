@@ -153,6 +153,7 @@ use o2jam_net::{
 use o2jam_shell::screens::game::{LobbyChat, SlashCommand};
 use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
 
+use crate::connect::net_context;
 use crate::live_art::restage_live_playing;
 use crate::live_stats::{apply_peer_update, jam_tick_for_score, life_tick_for_live_play};
 use crate::loading::{
@@ -392,12 +393,9 @@ impl OnlineSession {
     ) -> anyhow::Result<Frame> {
         self.gateway
             .send_frame(request_id, body)
-            .map_err(|source| anyhow::anyhow!("{source}"))?;
+            .map_err(net_context)?;
         loop {
-            let frame = self
-                .gateway
-                .next_frame()
-                .map_err(|source| anyhow::anyhow!("{source}"))?;
+            let frame = self.gateway.next_frame().map_err(net_context)?;
             if frame.id == expected {
                 return Ok(frame);
             }
@@ -438,8 +436,7 @@ impl OnlineSession {
             &create.encode_body(),
             CreateRoomResponse::COMMAND,
         )?;
-        let created = CreateRoomResponse::decode_frame(&created)
-            .map_err(|source| anyhow::anyhow!("{source}"))?;
+        let created = CreateRoomResponse::decode_frame(&created).map_err(net_context)?;
         if created.result != CreateResult::Success {
             anyhow::bail!("room create rejected: {:?}", created.result);
         }
@@ -450,8 +447,7 @@ impl OnlineSession {
             .with_context(|| "room create answered without a snapshot")?;
         let listed =
             self.exchange_room_frame(Request::GetChannelInfo.id(), &[], RoomList::COMMAND)?;
-        let listed =
-            RoomList::decode_frame(&listed).map_err(|source| anyhow::anyhow!("{source}"))?;
+        let listed = RoomList::decode_frame(&listed).map_err(net_context)?;
         let entry = listed
             .rooms
             .iter()
@@ -565,17 +561,16 @@ impl OnlineSession {
         };
         self.gateway
             .send_frame(Request::SetRoomMusic.id(), &select.encode_body())
-            .map_err(|source| anyhow::anyhow!("{source}"))?;
+            .map_err(net_context)?;
         let stage = SetRoomArena::new(choice.arena_id);
         self.gateway
             .send_frame(Request::SetRoomArena.id(), &stage.encode_body())
-            .map_err(|source| anyhow::anyhow!("{source}"))?;
+            .map_err(net_context)?;
         let mut skipped = Vec::new();
         let echo_frame = self
             .await_select_frame(RoomArenaEcho::COMMAND, &mut skipped)
-            .map_err(|source| anyhow::anyhow!("{source}"))?;
-        let echo = RoomArenaEcho::decode_frame(&echo_frame)
-            .map_err(|source| anyhow::anyhow!("{source}"))?;
+            .map_err(net_context)?;
+        let echo = RoomArenaEcho::decode_frame(&echo_frame).map_err(net_context)?;
         if echo.arena != choice.arena_id {
             anyhow::bail!(
                 "arena echo mismatch: sent {} but got {}",
@@ -585,12 +580,11 @@ impl OnlineSession {
         }
         self.gateway
             .send_frame(Request::GetMusicList.id(), &GetMusicList.encode_body())
-            .map_err(|source| anyhow::anyhow!("{source}"))?;
+            .map_err(net_context)?;
         let list_frame = self
             .await_select_frame(MusicListAnswer::COMMAND, &mut skipped)
-            .map_err(|source| anyhow::anyhow!("{source}"))?;
-        let answer = MusicListAnswer::decode_frame(&list_frame)
-            .map_err(|source| anyhow::anyhow!("{source}"))?;
+            .map_err(net_context)?;
+        let answer = MusicListAnswer::decode_frame(&list_frame).map_err(net_context)?;
         if !skipped.is_empty() {
             tracing::debug!(?skipped, "select skipped broadcasts");
         }

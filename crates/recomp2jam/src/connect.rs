@@ -25,6 +25,13 @@ use o2jam_net::{
     SubmitScore, SyncMemberMusicState, UpdateGameStats, WireMessage,
 };
 
+/// Lift one wire decode/IO error into an anyhow error, preserving the
+/// error's own `{source}` text — the shared tail of every frame read,
+/// decode, and send in the login flow and the session loops.
+pub(crate) fn net_context(source: impl std::fmt::Display) -> anyhow::Error {
+    anyhow::anyhow!("{source}")
+}
+
 /// Login options (see `recomp2jam connect --help`).
 #[derive(Debug, Clone)]
 pub struct ConnectOptions {
@@ -298,7 +305,7 @@ pub fn run_song_flow(
     send_tally(gateway, options)?;
     gateway
         .set_timeouts(Some(SONG_FLOW_IO_TIMEOUT))
-        .map_err(|source| anyhow::anyhow!("{source}"))?;
+        .map_err(net_context)?;
     Ok(SongFlowReport {
         music_entries: listed.entries.len(),
         free_music: listed.free_music,
@@ -319,7 +326,7 @@ fn send_select(gateway: &mut GatewayConnection, options: &SongFlowOptions) -> Re
     };
     gateway
         .send_frame(Request::SetRoomMusic.id(), &select.encode_body())
-        .map_err(|source| anyhow::anyhow!("{source}"))
+        .map_err(net_context)
 }
 
 /// Send the stage word and assert the gateway echoes it back.
@@ -334,10 +341,9 @@ fn select_arena(
     let stage = SetRoomArena::new(options.arena_id);
     gateway
         .send_frame(Request::SetRoomArena.id(), &stage.encode_body())
-        .map_err(|source| anyhow::anyhow!("{source}"))?;
-    let frame = await_lenient(gateway, RoomArenaEcho::COMMAND, skipped)
-        .map_err(|source| anyhow::anyhow!("{source}"))?;
-    let echo = RoomArenaEcho::decode_frame(&frame).map_err(|source| anyhow::anyhow!("{source}"))?;
+        .map_err(net_context)?;
+    let frame = await_lenient(gateway, RoomArenaEcho::COMMAND, skipped).map_err(net_context)?;
+    let echo = RoomArenaEcho::decode_frame(&frame).map_err(net_context)?;
     if echo.arena != options.arena_id {
         bail!(
             "arena echo mismatch: sent {} but got {}",
@@ -354,10 +360,9 @@ fn fetch_music_list(
 ) -> Result<MusicListAnswer> {
     gateway
         .send_frame(Request::GetMusicList.id(), &GetMusicList.encode_body())
-        .map_err(|source| anyhow::anyhow!("{source}"))?;
-    let frame = await_lenient(gateway, MusicListAnswer::COMMAND, skipped)
-        .map_err(|source| anyhow::anyhow!("{source}"))?;
-    MusicListAnswer::decode_frame(&frame).map_err(|source| anyhow::anyhow!("{source}"))
+        .map_err(net_context)?;
+    let frame = await_lenient(gateway, MusicListAnswer::COMMAND, skipped).map_err(net_context)?;
+    MusicListAnswer::decode_frame(&frame).map_err(net_context)
 }
 
 fn send_sync(gateway: &mut GatewayConnection, options: &SongFlowOptions) -> Result<()> {
@@ -366,33 +371,33 @@ fn send_sync(gateway: &mut GatewayConnection, options: &SongFlowOptions) -> Resu
     };
     gateway
         .send_frame(Request::SyncMemberMusicState.id(), &state.encode_body())
-        .map_err(|source| anyhow::anyhow!("{source}"))?;
+        .map_err(net_context)?;
     let progress = SetDownloadProgress {
         progress: 100,
         member_id: options.member_id,
     };
     gateway
         .send_frame(Request::SetDownloadProgress.id(), &progress.encode_body())
-        .map_err(|source| anyhow::anyhow!("{source}"))
+        .map_err(net_context)
 }
 
 fn send_start(gateway: &mut GatewayConnection, options: &SongFlowOptions) -> Result<()> {
     gateway
         .send_frame(Request::StartGame.id(), &StartGame.encode_body())
-        .map_err(|source| anyhow::anyhow!("{source}"))?;
+        .map_err(net_context)?;
     let loaded = ConfirmMusicLoaded {
         power_skill_id: options.power_skill_id,
         speed: options.speed,
     };
     gateway
         .send_frame(Request::ConfirmMusicLoaded.id(), &loaded.encode_body())
-        .map_err(|source| anyhow::anyhow!("{source}"))
+        .map_err(net_context)
 }
 
 fn send_tick(gateway: &mut GatewayConnection, options: &SongFlowOptions) -> Result<()> {
     gateway
         .send_frame(Request::UpdateGameStats.id(), &options.tick().encode_body())
-        .map_err(|source| anyhow::anyhow!("{source}"))
+        .map_err(net_context)
 }
 
 /// Wait briefly for the tracker's peer-bar echo; `None` means the
@@ -435,13 +440,13 @@ fn send_tally(gateway: &mut GatewayConnection, options: &SongFlowOptions) -> Res
     };
     gateway
         .send_frame(Request::SubmitScore.id(), &tally.encode_body())
-        .map_err(|source| anyhow::anyhow!("{source}"))?;
+        .map_err(net_context)?;
     gateway
         .send_frame(Request::FinalizeRank.id(), &FinalizeRank.encode_body())
-        .map_err(|source| anyhow::anyhow!("{source}"))?;
+        .map_err(net_context)?;
     gateway
         .send_frame(Request::ExitPlaying.id(), &ExitPlaying.encode_body())
-        .map_err(|source| anyhow::anyhow!("{source}"))
+        .map_err(net_context)
 }
 
 /// Connect, authorize, list channels, and optionally log into one,
