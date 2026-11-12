@@ -209,31 +209,7 @@ pub struct RoomListEntry {
     pub room_type: u8,
 }
 
-/// Decode one `0`/`1` byte as bool.
-fn read_int_flag(reader: &mut Reader<'_>, field: &'static str) -> Result<bool, Error> {
-    match reader.read_i32()? {
-        0 => Ok(false),
-        1 => Ok(true),
-        _ => Err(Error::InvalidField {
-            field,
-            reason: "not 0 or 1",
-        }),
-    }
-}
-
-/// `i16` 0/1 as bool.
-fn read_short_flag(reader: &mut Reader<'_>, field: &'static str) -> Result<bool, Error> {
-    let bytes = reader.take(2)?;
-    match i16::from_le_bytes([bytes[0], bytes[1]]) {
-        0 => Ok(false),
-        1 => Ok(true),
-        _ => Err(Error::InvalidField {
-            field,
-            reason: "not 0 or 1",
-        }),
-    }
-}
-
+/// Decode one member slot of a joined-room body.
 fn decode_room_member(reader: &mut Reader<'_>) -> Result<RoomMember, Error> {
     let nickname = reader.read_string()?;
     let level = reader.read_i32()?;
@@ -247,14 +223,8 @@ fn decode_room_member(reader: &mut Reader<'_>) -> Result<RoomMember, Error> {
     for slot in &mut equipment {
         *slot = reader.read_i32()?;
     }
-    let music_count = reader.read_i32()?;
-    if music_count < 0 {
-        return Err(Error::InvalidField {
-            field: "member music ids",
-            reason: "negative count",
-        });
-    }
-    let mut music_ids = Vec::with_capacity(music_count as usize);
+    let music_count = reader.read_count("member music ids", true)?;
+    let mut music_ids = Vec::with_capacity(music_count);
     for _ in 0..music_count {
         music_ids.push(reader.read_u16()?);
     }
@@ -262,7 +232,7 @@ fn decode_room_member(reader: &mut Reader<'_>) -> Result<RoomMember, Error> {
     let free_pass = reader.read_u32()?;
     let playing_state = reader.read_u8()?;
     let administrator = reader.read_flag("member administrator flag")?;
-    let super_manager = read_int_flag(reader, "member super-manager flag")?;
+    let super_manager = reader.read_int_flag("member super-manager flag")?;
     Ok(RoomMember {
         nickname,
         level,
@@ -339,24 +309,18 @@ fn decode_joined_room(body: &[u8]) -> Result<JoinedRoom, Error> {
     let game_mode = reader.read_u8()?;
     let difficulty = reader.read_u8()?;
     let speed = reader.read_u8()?;
-    let has_super_manager = read_int_flag(&mut reader, "room super-manager flag")?;
+    let has_super_manager = reader.read_int_flag("room super-manager flag")?;
     let user_count = reader.read_i32()?;
     let mut slots = Vec::with_capacity(7);
     for _ in 0..7 {
         slots.push(decode_room_slot(&mut reader)?);
     }
-    let skill_count = reader.read_i32()?;
-    if skill_count < 0 {
-        return Err(Error::InvalidField {
-            field: "joined-room skills",
-            reason: "negative count",
-        });
-    }
-    let mut skills = Vec::with_capacity(skill_count as usize);
+    let skill_count = reader.read_count("joined-room skills", true)?;
+    let mut skills = Vec::with_capacity(skill_count);
     for _ in 0..skill_count {
         skills.push(reader.read_i32()?);
     }
-    let premium = read_short_flag(&mut reader, "joined-room premium flag")?;
+    let premium = reader.read_short_flag("joined-room premium flag")?;
     let champion = if reader.remaining() == 0 {
         None
     } else {
@@ -429,27 +393,12 @@ fn read_room_entry(reader: &mut Reader<'_>) -> Result<RoomListEntry, Error> {
     let user_count = reader.read_u8()?;
     let min_level = reader.read_u8()?;
     let max_level = reader.read_u8()?;
-    let skill_count = reader.read_i32()?;
-    if skill_count < 0 {
-        return Err(Error::InvalidField {
-            field: "room skills",
-            reason: "negative count",
-        });
-    }
-    let mut skills = Vec::with_capacity(skill_count as usize);
+    let skill_count = reader.read_count("room skills", true)?;
+    let mut skills = Vec::with_capacity(skill_count);
     for _ in 0..skill_count {
         skills.push(reader.read_i32()?);
     }
-    let premium = match reader.read_u16()? {
-        0 => false,
-        1 => true,
-        _ => {
-            return Err(Error::InvalidField {
-                field: "room premium flag",
-                reason: "not 0 or 1",
-            });
-        }
-    };
+    let premium = reader.read_short_flag("room premium flag")?;
     let room_type = reader.read_u8()?;
     Ok(RoomListEntry {
         number,

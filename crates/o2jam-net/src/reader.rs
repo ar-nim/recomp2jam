@@ -70,6 +70,30 @@ impl<'body> Reader<'body> {
         }
     }
 
+    /// One `0`/`1` `i32` word as bool.
+    pub(crate) fn read_int_flag(&mut self, field: &'static str) -> Result<bool, Error> {
+        match self.read_i32()? {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(Error::InvalidField {
+                field,
+                reason: "not 0 or 1",
+            }),
+        }
+    }
+
+    /// One `0`/`1` `i16` word as bool.
+    pub(crate) fn read_short_flag(&mut self, field: &'static str) -> Result<bool, Error> {
+        match self.read_i16()? {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(Error::InvalidField {
+                field,
+                reason: "not 0 or 1",
+            }),
+        }
+    }
+
     /// Null-terminated string under the default wire cap.
     pub(crate) fn read_string(&mut self) -> Result<String, Error> {
         self.read_capped_string(MAX_STRING_LEN)
@@ -155,6 +179,41 @@ mod reader_tests {
             reader.read_flag("test flag"),
             Err(Error::InvalidField {
                 field: "test flag",
+                reason: "not 0 or 1"
+            })
+        );
+    }
+
+    #[test]
+    fn int_flag_rejects_words_other_than_zero_or_one() {
+        let word = 2i32.to_le_bytes();
+        let mut reader = reader_of(&word);
+        assert_eq!(
+            reader.read_int_flag("test int flag"),
+            Err(Error::InvalidField {
+                field: "test int flag",
+                reason: "not 0 or 1"
+            })
+        );
+    }
+
+    #[test]
+    fn short_flag_reads_zero_and_one_words() {
+        let words = [0i16.to_le_bytes(), 1i16.to_le_bytes()].concat();
+        let mut reader = reader_of(&words);
+        assert!(!reader.read_short_flag("first").unwrap());
+        assert!(reader.read_short_flag("second").unwrap());
+        reader.finish().unwrap();
+    }
+
+    #[test]
+    fn short_flag_rejects_words_other_than_zero_or_one() {
+        let word = 2i16.to_le_bytes();
+        let mut reader = reader_of(&word);
+        assert_eq!(
+            reader.read_short_flag("test short flag"),
+            Err(Error::InvalidField {
+                field: "test short flag",
                 reason: "not 0 or 1"
             })
         );
