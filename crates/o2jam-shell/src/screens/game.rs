@@ -7394,6 +7394,750 @@ mod game_tests {
         assert_eq!(game.screen(), Screen::Waiting);
     }
 
+    /// Stage the waiting chrome row with exe-pinned code/rect pairs
+    /// (`Interface1.opi` `STATE_WAITING` + `State_Waiting.bnd` — the
+    /// same parse the #57 no-overlap guard re-derives in
+    /// `tests/real_art.rs`): the shared driver for the sweep guards
+    /// below (ADR-0003: staged rects, never literals). Spriteless:
+    /// clicks resolve by id/code plus rect, so no figures are needed.
+    fn swept_waiting_game() -> ScreenGame {
+        let button = |id: &str, code: u32, rect: Rect| ScenePlacement {
+            role: PlacementRole::Single,
+            id: id.to_owned(),
+            code,
+            sprite: None,
+            rect,
+        };
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        game.load_scene(
+            Screen::Waiting,
+            vec![
+                button(
+                    "IDC_BUTTON_SWAIT_START",
+                    0x1620_2012,
+                    Rect {
+                        x: 628,
+                        y: 126,
+                        w: 142,
+                        h: 37,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_READY",
+                    0x1620_2013,
+                    Rect {
+                        x: 628,
+                        y: 126,
+                        w: 142,
+                        h: 37,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_BACK",
+                    0x1620_0002,
+                    Rect {
+                        x: 711,
+                        y: 569,
+                        w: 83,
+                        h: 24,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_MUSELECT",
+                    0x1620_0003,
+                    Rect {
+                        x: 540,
+                        y: 493,
+                        w: 54,
+                        h: 49,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_MAPLEFT",
+                    0x1620_000C,
+                    Rect {
+                        x: 631,
+                        y: 539,
+                        w: 32,
+                        h: 20,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_MAPRIGHT",
+                    0x1620_000D,
+                    Rect {
+                        x: 667,
+                        y: 539,
+                        w: 33,
+                        h: 20,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_CHANGE_TITLE",
+                    0x1620_0047,
+                    Rect {
+                        x: 478,
+                        y: 13,
+                        w: 86,
+                        h: 26,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_EMOTION",
+                    0x1620_0048,
+                    Rect {
+                        x: 533,
+                        y: 562,
+                        w: 61,
+                        h: 23,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_1SKILLLEFT",
+                    0x1620_0050,
+                    Rect {
+                        x: 662,
+                        y: 204,
+                        w: 34,
+                        h: 38,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_1SKILLRIGHT",
+                    0x1620_0051,
+                    Rect {
+                        x: 736,
+                        y: 204,
+                        w: 34,
+                        h: 38,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_2SKILLLEFT",
+                    0x1620_0052,
+                    Rect {
+                        x: 662,
+                        y: 242,
+                        w: 34,
+                        h: 38,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_2SKILLRIGHT",
+                    0x1620_0053,
+                    Rect {
+                        x: 736,
+                        y: 242,
+                        w: 34,
+                        h: 38,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_3SKILLLEFT",
+                    0x1620_0054,
+                    Rect {
+                        x: 662,
+                        y: 280,
+                        w: 34,
+                        h: 38,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_3SKILLRIGHT",
+                    0x1620_0055,
+                    Rect {
+                        x: 736,
+                        y: 280,
+                        w: 34,
+                        h: 38,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_SPEED_LEFT",
+                    0x1620_0064,
+                    Rect {
+                        x: 647,
+                        y: 378,
+                        w: 33,
+                        h: 36,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_SPEED_RIGHT",
+                    0x1620_0065,
+                    Rect {
+                        x: 736,
+                        y: 378,
+                        w: 33,
+                        h: 36,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_MESSENGER",
+                    0x1620_006A,
+                    Rect {
+                        x: 668,
+                        y: 569,
+                        w: 40,
+                        h: 24,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_TEAMA",
+                    0x1620_1004,
+                    Rect {
+                        x: 652,
+                        y: 65,
+                        w: 24,
+                        h: 24,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_TEAMB",
+                    0x1620_1005,
+                    Rect {
+                        x: 682,
+                        y: 65,
+                        w: 24,
+                        h: 24,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_TEAMC",
+                    0x1620_1006,
+                    Rect {
+                        x: 712,
+                        y: 65,
+                        w: 24,
+                        h: 24,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_TEAMD",
+                    0x1620_1007,
+                    Rect {
+                        x: 742,
+                        y: 65,
+                        w: 24,
+                        h: 24,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_TEAME",
+                    0x1620_1008,
+                    Rect {
+                        x: 652,
+                        y: 93,
+                        w: 24,
+                        h: 24,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_TEAMF",
+                    0x1620_1009,
+                    Rect {
+                        x: 682,
+                        y: 93,
+                        w: 24,
+                        h: 24,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_TEAMG",
+                    0x1620_100A,
+                    Rect {
+                        x: 712,
+                        y: 93,
+                        w: 24,
+                        h: 24,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_TEAMH",
+                    0x1620_100B,
+                    Rect {
+                        x: 742,
+                        y: 93,
+                        w: 24,
+                        h: 24,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_CHAT_ALL",
+                    0x1620_100E,
+                    Rect {
+                        x: 415,
+                        y: 562,
+                        w: 23,
+                        h: 23,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_CHAT_FRIEND",
+                    0x1620_100F,
+                    Rect {
+                        x: 441,
+                        y: 562,
+                        w: 23,
+                        h: 23,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_CHAT_GUILD",
+                    0x1620_1010,
+                    Rect {
+                        x: 467,
+                        y: 562,
+                        w: 23,
+                        h: 23,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_CHAT_WHISPER",
+                    0x1620_1011,
+                    Rect {
+                        x: 493,
+                        y: 562,
+                        w: 23,
+                        h: 23,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_TOPEFFECT",
+                    0x1620_1020,
+                    Rect {
+                        x: 719,
+                        y: 450,
+                        w: 60,
+                        h: 48,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_BOTTOMEFFECT",
+                    0x1620_1021,
+                    Rect {
+                        x: 719,
+                        y: 507,
+                        w: 60,
+                        h: 48,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_MASTER_SKILLSEL",
+                    0x1620_2056,
+                    Rect {
+                        x: 629,
+                        y: 327,
+                        w: 140,
+                        h: 35,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_SKILLSEL",
+                    0x1620_2057,
+                    Rect {
+                        x: 629,
+                        y: 327,
+                        w: 140,
+                        h: 35,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_EXTEND1",
+                    0x1601_5022,
+                    Rect {
+                        x: 37,
+                        y: 55,
+                        w: 123,
+                        h: 150,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_EXTEND2",
+                    0x1601_5023,
+                    Rect {
+                        x: 179,
+                        y: 55,
+                        w: 123,
+                        h: 150,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_EXTEND5",
+                    0x1601_5026,
+                    Rect {
+                        x: 37,
+                        y: 245,
+                        w: 123,
+                        h: 150,
+                    },
+                ),
+                button(
+                    "IDC_IMAGE_SWAIT_COVERAVATAR1",
+                    0x1650_003D,
+                    Rect {
+                        x: 28,
+                        y: 53,
+                        w: 141,
+                        h: 175,
+                    },
+                ),
+                button(
+                    "IDC_IMAGE_SWAIT_COVERAVATAR2",
+                    0x1650_003E,
+                    Rect {
+                        x: 170,
+                        y: 53,
+                        w: 141,
+                        h: 175,
+                    },
+                ),
+                button(
+                    "IDC_IMAGE_SWAIT_COVERAVATAR5",
+                    0x1650_0041,
+                    Rect {
+                        x: 28,
+                        y: 242,
+                        w: 141,
+                        h: 175,
+                    },
+                ),
+                button(
+                    "IDC_SCROLL_SWAIT_CHAT",
+                    0x1620_0038,
+                    Rect {
+                        x: 496,
+                        y: 451,
+                        w: 18,
+                        h: 18,
+                    },
+                ),
+                button(
+                    "IDC_SCROLL_SWAIT_CHAT",
+                    0x1620_003A,
+                    Rect {
+                        x: 496,
+                        y: 469,
+                        w: 18,
+                        h: 18,
+                    },
+                ),
+                button(
+                    "IDC_SCROLL_SWAIT_CHAT",
+                    0x1620_0039,
+                    Rect {
+                        x: 496,
+                        y: 538,
+                        w: 18,
+                        h: 18,
+                    },
+                ),
+            ],
+            HashMap::new(),
+        );
+        game
+    }
+
+    /// Native centers of every staged waiting chrome control above,
+    /// in staging order: the HOVER sweep visits each one.
+    const WAITING_CHROME_POINTS: [(i32, i32); 40] = [
+        (699, 144),
+        (699, 144),
+        (752, 581),
+        (567, 517),
+        (647, 549),
+        (683, 549),
+        (521, 26),
+        (563, 573),
+        (679, 223),
+        (753, 223),
+        (679, 261),
+        (753, 261),
+        (679, 299),
+        (753, 299),
+        (663, 396),
+        (752, 396),
+        (688, 581),
+        (664, 77),
+        (694, 77),
+        (724, 77),
+        (754, 77),
+        (664, 105),
+        (694, 105),
+        (724, 105),
+        (754, 105),
+        (426, 573),
+        (452, 573),
+        (478, 573),
+        (504, 573),
+        (749, 474),
+        (749, 531),
+        (699, 344),
+        (98, 130),
+        (240, 130),
+        (98, 320),
+        (98, 140),
+        (240, 140),
+        (98, 329),
+        (505, 478),
+        (505, 547),
+    ];
+
+    #[test]
+    fn waiting_chrome_sweep_arms_no_hover_state() {
+        // Ticket #163 (waiting leg, HOVER stand-in): no waiting
+        // chrome was ever hover-captured (`docs/hover.md` covers
+        // room + planet only), and the shell stages no hover
+        // resolver — motion over START/READY/BACK, every team
+        // button, MUSELECT, the map pager, chat tabs, seats, covers,
+        // or the scroll column arms nothing: the screen holds, no
+        // send queues, and the frame paints pixel-identical.
+        // Next evidence step: the SendInput hover sweep on the live
+        // waiting chrome (same rig as `docs/hover.md`).
+        let mut game = swept_waiting_game();
+        let before = paint_waiting_frame(&mut game, 800, 600);
+        for (x, y) in WAITING_CHROME_POINTS {
+            game.mouse_moved(x, y);
+            assert_eq!(game.screen(), Screen::Waiting);
+        }
+        assert!(!game.has_pending_team_send());
+        assert!(!game.has_pending_music_send());
+        let after = paint_waiting_frame(&mut game, 800, 600);
+        assert_eq!(before, after, "hover paints no waiting chrome state");
+    }
+
+    #[test]
+    fn waiting_start_press_fires_on_down_and_holds_on_release() {
+        // Ticket #163 (waiting leg, CLICK press + release-inside):
+        // the master START press fires on down — Waiting owns no
+        // press-split (that evidence is planet-only, #111), so the
+        // down-dispatch stands — and release-inside fires nothing
+        // more: the scene holds Loading exactly once.
+        // Next evidence step: the quickjoin-style release-inside
+        // capture for lobby chrome (`docs/hover.md` press section).
+        let mut game = swept_waiting_game();
+        assert!(game.is_room_master());
+        game.mouse_down(699, 144);
+        assert_eq!(game.screen(), Screen::Loading);
+        game.mouse_up(699, 144);
+        assert_eq!(game.screen(), Screen::Loading);
+    }
+
+    #[test]
+    fn waiting_back_commits_on_down_and_holds_on_release_outside() {
+        // Ticket #163 (waiting leg, CLICK press + release-outside):
+        // BACK commits on down (the Room edge), so an outside
+        // release cannot revert it — the scene holds Room. Same
+        // down-dispatch stand-in as START (planet press-split OPEN).
+        let mut game = swept_waiting_game();
+        game.mouse_down(752, 581);
+        assert_eq!(game.screen(), Screen::Room);
+        game.mouse_up(10, 10);
+        assert_eq!(game.screen(), Screen::Room);
+    }
+
+    #[test]
+    fn waiting_ready_guest_press_arms_nothing_and_releases_clean() {
+        // Ticket #163 (waiting leg, CLICK guest arm): a guest READY
+        // press stays in Waiting (guests ready through the session
+        // bridge, never Confirm) — down arms nothing, release
+        // outside reverts nothing, and no send queues.
+        let mut game = swept_waiting_game();
+        game.waiting.as_mut().expect("joined room").member_id = 4;
+        assert!(!game.is_room_master());
+        game.mouse_down(699, 144);
+        assert_eq!(game.screen(), Screen::Waiting);
+        game.mouse_up(10, 10);
+        assert_eq!(game.screen(), Screen::Waiting);
+        assert!(!game.has_pending_team_send());
+        assert!(!game.has_pending_music_send());
+    }
+
+    #[test]
+    fn waiting_team_sweep_queues_4004_then_4008_per_button() {
+        // Ticket #163 (waiting leg, CLICK battle vs normal): every
+        // TEAMA..H press lights its team and queues the
+        // `SetRoomTeam` 4004 + `Ready` 4008 pair on down in both
+        // Normal and Live rooms — the exe gate helper behind the
+        // send (`FUN_00556680`) is untraced, so the shell sends in
+        // both (OPEN, same as `select_team` documents).
+        for live in [false, true] {
+            let mut room = waiting_room();
+            if live {
+                room.game_mode = o2jam_net::GameMode::Live as u8;
+            }
+            let mut game = ScreenGame::new();
+            game.set_joined_room(room);
+            walk_to_waiting(&mut game);
+            game.load_scene(
+                Screen::Waiting,
+                [
+                    ("IDC_BUTTON_SWAIT_TEAMA", 0x1620_1004u32, (652, 65)),
+                    ("IDC_BUTTON_SWAIT_TEAMB", 0x1620_1005u32, (682, 65)),
+                    ("IDC_BUTTON_SWAIT_TEAMC", 0x1620_1006u32, (712, 65)),
+                    ("IDC_BUTTON_SWAIT_TEAMD", 0x1620_1007u32, (742, 65)),
+                    ("IDC_BUTTON_SWAIT_TEAME", 0x1620_1008u32, (652, 93)),
+                    ("IDC_BUTTON_SWAIT_TEAMF", 0x1620_1009u32, (682, 93)),
+                    ("IDC_BUTTON_SWAIT_TEAMG", 0x1620_100Au32, (712, 93)),
+                    ("IDC_BUTTON_SWAIT_TEAMH", 0x1620_100Bu32, (742, 93)),
+                ]
+                .into_iter()
+                .map(|(id, code, (x, y))| ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: id.to_owned(),
+                    code,
+                    sprite: None,
+                    rect: Rect { x, y, w: 24, h: 24 },
+                })
+                .collect(),
+                HashMap::new(),
+            );
+            for (team, (x, y)) in [
+                (664, 77),
+                (694, 77),
+                (724, 77),
+                (754, 77),
+                (664, 105),
+                (694, 105),
+                (724, 105),
+                (754, 105),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let team = u8::try_from(team).expect("eight teams fit");
+                game.mouse_click(x, y);
+                assert_eq!(game.waiting.as_ref().expect("joined room").team, team);
+                assert_eq!(game.battle_self_team, Some(team));
+                assert_eq!(game.take_room_team(), Some(SetRoomTeam { team }));
+                assert_eq!(game.take_team_ready(), Some(Ready));
+                assert!(!game.has_pending_team_send());
+            }
+            assert_eq!(game.screen(), Screen::Waiting);
+        }
+    }
+
+    #[test]
+    fn waiting_seat_and_cover_clicks_land_nowhere_empty_or_populated() {
+        // Ticket #163 (waiting leg, CLICK empty vs populated
+        // seats): seat EXTEND plates and avatar covers are not
+        // chrome — clicks on them select nothing in an empty room
+        // or a populated one. The exe seat-click target (if any) is
+        // unpinned; the shell holds the scene with no send.
+        // Next evidence step: seat-click capture on live waiting
+        // (empty vs occupied vs locked seats).
+        for populated in [false, true] {
+            let mut game = swept_waiting_game();
+            if populated {
+                let mut peer = waiting_room().slots[0].member.clone().expect("host seat");
+                peer.master = false;
+                game.waiting
+                    .as_mut()
+                    .expect("joined room")
+                    .slots
+                    .push(RoomSlot {
+                        index: 1,
+                        state_code: 1,
+                        member: Some(peer),
+                    });
+            } else {
+                game.waiting.as_mut().expect("joined room").slots.clear();
+            }
+            for (x, y) in [
+                (98, 130),
+                (240, 130),
+                (98, 320),
+                (98, 140),
+                (240, 140),
+                (98, 329),
+            ] {
+                game.mouse_click(x, y);
+                assert_eq!(game.screen(), Screen::Waiting);
+            }
+            assert_eq!(game.waiting.as_ref().expect("joined room").team, 1);
+            assert!(!game.has_pending_team_send());
+            assert!(!game.has_pending_music_send());
+        }
+    }
+
+    #[test]
+    fn waiting_unwired_chrome_clicks_land_nowhere() {
+        // Ticket #163 (waiting leg, CLICK labelled no-ops):
+        // MUSELECT-open, the map pager, change-title, emotion, skill
+        // pagers, speed stepper, messenger, effect plates, skill
+        // select, chat tabs, and the chat scroll column stage no
+        // handler — clicks hold Waiting with no send. Each names
+        // the same next step: the SendInput sweep on the live
+        // waiting board (`~/scratch/planet-verify/` recipe).
+        let mut game = swept_waiting_game();
+        for (x, y) in [
+            (567, 517),
+            (647, 549),
+            (683, 549),
+            (521, 26),
+            (563, 573),
+            (679, 223),
+            (753, 223),
+            (679, 261),
+            (753, 261),
+            (679, 299),
+            (753, 299),
+            (663, 396),
+            (752, 396),
+            (688, 581),
+            (749, 474),
+            (749, 531),
+            (699, 344),
+            (426, 573),
+            (452, 573),
+            (478, 573),
+            (504, 573),
+            (505, 460),
+            (505, 478),
+            (505, 547),
+        ] {
+            game.mouse_click(x, y);
+            assert_eq!(
+                game.screen(),
+                Screen::Waiting,
+                "click at ({x}, {y}) lands nowhere"
+            );
+        }
+        assert!(!game.has_pending_team_send());
+        assert!(!game.has_pending_music_send());
+    }
+
+    #[test]
+    fn waiting_dialog_up_routes_rows_and_holds_chrome() {
+        // Ticket #163 (waiting leg, CLICK dialog-up arm): with the
+        // master song dialog staged, a search-table row click still
+        // commits its song (4000), a seat-cover click still lands
+        // nowhere, and the START pill still confirms into Loading —
+        // the dialog consumes row hits first, chrome answers
+        // everywhere else.
+        let mut game = swept_waiting_game();
+        game.load_select_music_scene(Vec::new(), HashMap::new());
+        stage_waiting_song(&mut game);
+        assert!(game.is_room_master());
+        game.mouse_click(98, 140);
+        assert_eq!(game.screen(), Screen::Waiting);
+        assert!(!game.has_pending_music_send());
+        game.mouse_click(400, 150 + 23 + 11);
+        assert_eq!(
+            game.take_music_send(),
+            Some(SetRoomMusic {
+                music_id: 757,
+                difficulty: 1,
+                speed: 3
+            }),
+            "row click commits the 4000 pick"
+        );
+        game.mouse_click(699, 144);
+        assert_eq!(game.screen(), Screen::Loading);
+    }
+
     fn result_game() -> ScreenGame {
         let mut game = ScreenGame::new();
         for next in [
