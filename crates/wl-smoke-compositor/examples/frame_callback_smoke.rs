@@ -11,9 +11,21 @@
 //! - `flow`: callbacks complete at ~60 Hz. Sanity arm: the game must keep
 //!   painting (paints counted by the compositor must grow during sampling)
 //!   and stay below the 60% fail band — so an idle verdict can never pass
-//!   by the game simply never painting.
+//!   by the game simply never painting. Under repaint-on-demand (#138)
+//!   the pump (not the assertion) moved: the probe injects one pointer
+//!   motion per half-window, and every motion owes exactly one repaint
+//!   through the hover-dirty path.
+//! - `idle`: callbacks flow at ~60 Hz against an EXPOSED window (no
+//!   occlusion) while the game sits untouched after the first paint:
+//!   the #138 repaint-on-demand guard. PASS: every window < 20% CPU
+//!   (a repaint-on-idle loop pins ~60%+ here, like the pre-fix wedge).
+//!   FAIL otherwise — no inconclusive band: the window stays exposed
+//!   with flowing callbacks, so any sample above the pass band is
+//!   repaint waste. Liveness rides the first-paint gate
+//!   (the game mapped and painted), so — unlike `flow` — this arm
+//!   expects paints-during-sampling near zero and asserts no floor.
 //!
-//! Usage: `frame_callback_smoke [starve|flow] [GAME-BINARY]`.
+//! Usage: `frame_callback_smoke [starve|flow|idle] [GAME-BINARY]`.
 //! Exit codes: 0 = verdict PASS, 1 = verdict FAIL, 2 = harness error.
 
 use std::fs;
@@ -23,7 +35,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use wl_smoke_compositor::driver;
-use wl_smoke_compositor::{Compositor, CompositorStats, FrameCallbackPolicy};
+use wl_smoke_compositor::{Compositor, CompositorStats, FrameCallbackPolicy, PointerEvent};
 
 // Acceptance bands from issue #118 (same as scripts/wayland-loop-smoke.sh).
 const MAP_WAIT: Duration = Duration::from_secs(20);
@@ -57,6 +69,33 @@ fn main() {
     std::process::exit(verdict.code);
 }
 
+/// What the probe feeds the game and which bands judge it: `Idle` rides
+/// flowing callbacks like `Flow` (the window stays exposed) but judges
+/// like `Starve` (the untouched game must idle near 0% CPU).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProbeMode {
+    Starve,
+    Flow,
+    Idle,
+}
+
+impl ProbeMode {
+    /// Compositor callback behavior for this mode.
+    fn frame_policy(self) -> FrameCallbackPolicy {
+        match self {
+            ProbeMode::Starve => FrameCallbackPolicy::Starve,
+            ProbeMode::Flow | ProbeMode::Idle => FrameCallbackPolicy::Flow,
+        }
+    }
+
+    /// Whether this mode floors paints-during-sampling (only `Flow`
+    /// proves liveness by repaint volume; `Idle` proves it by the
+    /// first-paint gate and expects near-zero paints after).
+    fn floors_paints(self) -> bool {
+        self == ProbeMode::Flow
+    }
+}
+
 struct Verdict {
     line: String,
     code: i32,
@@ -64,11 +103,15 @@ struct Verdict {
 
 fn run() -> Result<Verdict> {
     let mut args = std::env::args().skip(1);
-    let policy = match args.next().as_deref() {
-        Some("starve") => FrameCallbackPolicy::Starve,
-        Some("flow") => FrameCallbackPolicy::Flow,
-        other => bail!("usage: frame_callback_smoke [starve|flow] [GAME-BINARY] (got {other:?})"),
+    let mode = match args.next().as_deref() {
+        Some("starve") => ProbeMode::Starve,
+        Some("flow") => ProbeMode::Flow,
+        Some("idle") => ProbeMode::Idle,
+        other => {
+            bail!("usage: frame_callback_smoke [starve|flow|idle] [GAME-BINARY] (got {other:?})")
+        }
     };
+    let policy = mode.frame_policy();
     let game_binary = driver::resolve_game_binary(args.next().as_deref())?;
 
     let scratch = tempfile::tempdir().context("create scratch dir")?;
@@ -92,33 +135,84 @@ fn run() -> Result<Verdict> {
     println!("frame-callback-smoke: first paint seen; settling {SETTLE:?}");
     compositor.run_until(Instant::now() + SETTLE)?;
 
+    // The flow pump: one pointer motion per half-window owes one
+    // hover-dirty repaint each, so liveness still shows up as paint
+    // volume under repaint-on-demand. Enter first: a bare motion
+    // before enter is off-protocol and clients may ignore it.
+    let motion_target = if mode.floors_paints() {
+        let (x, y) = wait_for_motion_target(&mut compositor, &mut game, scratch.path())?;
+        compositor.inject_pointer(PointerEvent::Enter { x, y });
+        compositor.turn()?;
+        Some((x, y))
+    } else {
+        None
+    };
+
     let paints_at_sample_start = compositor.stats().paints;
-    let samples = sample_cpu_windows(&mut compositor, &mut game, scratch.path())?;
+    let samples = sample_cpu_windows(&mut compositor, &mut game, scratch.path(), motion_target)?;
     let paints_during_sampling = compositor.stats().paints - paints_at_sample_start;
     let stats = compositor.stats();
     driver::stop_game_verified(&mut game, "frame-callback-smoke");
 
     Ok(build_verdict(
-        policy,
+        mode,
         &samples,
         paints_during_sampling,
         &stats,
     ))
 }
 
+/// The pointer position flow motions aim at: first paint plus a bound
+/// pointer and a committed toplevel (the input probe's preconditions).
+fn wait_for_motion_target(
+    compositor: &mut Compositor,
+    game: &mut Child,
+    scratch: &Path,
+) -> Result<(f64, f64)> {
+    let deadline = Instant::now() + MAP_WAIT;
+    while Instant::now() < deadline {
+        compositor.turn()?;
+        if compositor.pointer_ready() {
+            if let Some(center) = compositor.toplevel_center() {
+                return Ok(center);
+            }
+        }
+        if let Some(status) = game.try_wait()? {
+            return Err(driver::game_exit_error(status, scratch));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    bail!("no motion target (pointer + toplevel) within {MAP_WAIT:?}");
+}
+
 /// The 5 x 6 s sampling run: per-window utime+stime deltas in percent of
 /// one core. Also the natural place to die early if the game exits.
+/// With a motion target (flow mode), each half-window opens with one
+/// pointer motion — one hover-dirty repaint per motion — so the liveness
+/// floor keeps meaning paint volume without ever spinning the loop.
 fn sample_cpu_windows(
     compositor: &mut Compositor,
     game: &mut Child,
     scratch: &Path,
+    motion_target: Option<(f64, f64)>,
 ) -> Result<Vec<f64>> {
+    const HALVES: u64 = 2;
     let mut samples = Vec::with_capacity(WINDOW_COUNT);
     let mut previous_ticks = cpu_ticks(game.id())?;
-    for _ in 0..WINDOW_COUNT {
-        compositor.run_until(Instant::now() + Duration::from_secs(WINDOW_SECS))?;
-        if let Some(status) = game.try_wait()? {
-            return Err(driver::game_exit_error(status, scratch));
+    for window in 0..WINDOW_COUNT {
+        for half in 0..HALVES {
+            if let Some((x, y)) = motion_target {
+                // Alternate a pixel sideways so consecutive motions
+                // always move the hover point, never re-arm the same.
+                let nudge = f64::from(((window * HALVES as usize + half as usize) % 2) as u8);
+                compositor.inject_pointer(PointerEvent::Motion { x: x + nudge, y });
+                compositor.turn()?;
+            }
+            compositor
+                .run_until(Instant::now() + Duration::from_secs(WINDOW_SECS) / HALVES as u32)?;
+            if let Some(status) = game.try_wait()? {
+                return Err(driver::game_exit_error(status, scratch));
+            }
         }
         let ticks = cpu_ticks(game.id())?;
         let window_ticks = ticks.saturating_sub(previous_ticks);
@@ -151,7 +245,7 @@ fn cpu_ticks(pid: u32) -> Result<u64> {
 }
 
 fn build_verdict(
-    policy: FrameCallbackPolicy,
+    mode: ProbeMode,
     samples: &[f64],
     paints_during_sampling: u64,
     stats: &CompositorStats,
@@ -164,13 +258,13 @@ fn build_verdict(
         .join(", ");
     let line = |verdict: &str| {
         format!(
-            "mode={policy:?} verdict={verdict} cpu-samples-pct=[{sample_line}] \
+            "mode={mode:?} verdict={verdict} cpu-samples-pct=[{sample_line}] \
              max={max:.1} paints={} paints-during-sampling={paints_during_sampling} \
              pending-frame-callbacks={}",
             stats.paints, stats.pending_frame_callbacks
         )
     };
-    let fail_band = if policy == FrameCallbackPolicy::Flow {
+    let fail_band = if mode == ProbeMode::Flow {
         FLOW_FAIL_MIN_PERCENT
     } else {
         FAIL_MIN_PERCENT
@@ -181,21 +275,29 @@ fn build_verdict(
             code: 1,
         };
     }
-    if policy == FrameCallbackPolicy::Flow && paints_during_sampling < FLOW_MIN_PAINTS {
+    if mode.floors_paints() && paints_during_sampling < FLOW_MIN_PAINTS {
         return Verdict {
             line: line("FAIL(no-paints)"),
             code: 1,
         };
     }
-    if policy == FrameCallbackPolicy::Starve
-        && samples.iter().all(|sample| *sample < PASS_MAX_PERCENT)
-    {
+    if mode != ProbeMode::Flow && samples.iter().all(|sample| *sample < PASS_MAX_PERCENT) {
         return Verdict {
             line: line("PASS"),
             code: 0,
         };
     }
-    if policy == FrameCallbackPolicy::Flow {
+    // `Idle` has no inconclusive band: the window stays exposed with
+    // flowing callbacks, so any sample above the pass band is repaint
+    // waste, never occlusion-timing noise (`Starve` keeps its middle
+    // band: a minimized window can take a turn to go quiet).
+    if mode == ProbeMode::Idle {
+        return Verdict {
+            line: line("FAIL(idle-waste)"),
+            code: 1,
+        };
+    }
+    if mode == ProbeMode::Flow {
         return Verdict {
             line: line("PASS"),
             code: 0,

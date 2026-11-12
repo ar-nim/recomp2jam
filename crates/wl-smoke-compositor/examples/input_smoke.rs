@@ -118,7 +118,7 @@ fn run() -> Result<i32> {
         compositor.turn()?;
     }
 
-    let routed = wait_for_click_line(&input_log, CLICK_WAIT)?;
+    let routed = wait_for_click_line(&mut compositor, &input_log, CLICK_WAIT)?;
     let verdict = match routed {
         Some((x, y)) => {
             println!(
@@ -151,7 +151,13 @@ fn run() -> Result<i32> {
                 compositor.inject_pointer(event);
                 compositor.turn()?;
             }
-            let reacted = wait_for_content_change(&input_log, "planet", settled, CLICK_WAIT)?;
+            let reacted = wait_for_content_change(
+                &mut compositor,
+                &input_log,
+                "planet",
+                settled,
+                CLICK_WAIT,
+            )?;
             match reacted {
                 true => {
                     println!(
@@ -247,10 +253,19 @@ fn inject_motion_control(
 }
 
 /// Poll the input log for a routed click line until the deadline.
-/// Returns the click's native-frame coordinates.
-fn wait_for_click_line(input_log: &Path, wait: Duration) -> Result<Option<(i32, i32)>> {
+/// Returns the click's native-frame coordinates. The compositor keeps
+/// turning while polling: under repaint-on-demand (#138) the reaction
+/// paint rides a frame callback, and a stalled compositor would wedge
+/// the client mid-gesture (the flake that bit the on-demand input
+/// probe — the paint, never the routing, stopped).
+fn wait_for_click_line(
+    compositor: &mut Compositor,
+    input_log: &Path,
+    wait: Duration,
+) -> Result<Option<(i32, i32)>> {
     let deadline = Instant::now() + wait;
     while Instant::now() < deadline {
+        compositor.turn()?;
         if let Some(click) = latest_click_line(input_log)? {
             return Ok(Some(click));
         }
@@ -275,6 +290,7 @@ fn last_content_hash(input_log: &Path, screen: &str) -> Option<String> {
 /// Poll until a frame line for the given screen carries a content hash
 /// different from the settled one — the game visibly reacted.
 fn wait_for_content_change(
+    compositor: &mut Compositor,
     input_log: &Path,
     screen: &str,
     settled: Option<String>,
@@ -282,6 +298,9 @@ fn wait_for_content_change(
 ) -> Result<bool> {
     let deadline = Instant::now() + wait;
     while Instant::now() < deadline {
+        // Keep the frame callbacks flowing: the reaction paint the
+        // probe waits for needs one (see `wait_for_click_line`).
+        compositor.turn()?;
         if let Some(now) = last_content_hash(input_log, screen) {
             if settled.as_deref() != Some(now.as_str()) {
                 return Ok(true);

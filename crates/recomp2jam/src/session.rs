@@ -186,6 +186,14 @@ const TALLY_IO_TIMEOUT: Duration = Duration::from_millis(100);
 /// default (`client.rs` `DEFAULT_IO_TIMEOUT`), restored after every
 /// stats section like `run_song_flow` restores `SONG_FLOW_IO_TIMEOUT`.
 const SESSION_IO_TIMEOUT: Duration = Duration::from_secs(10);
+/// Idle repaint gap for wire-driven lobby scenes (ticket #138): the
+/// lobby drains ride `paint` (`poll_lobby_chat` on Channel/Room,
+/// `poll_waiting_chat` plus `poll_start` on Waiting, `poll_tally` on
+/// Result), so a modest heartbeat keeps chat, START, and tally arriving
+/// while the board sits untouched. 250 ms bounds the added latency under
+/// a keystroke; the 1 ms drain timeouts bound each heartbeat's cost
+/// (the tally send stays join-gated; its 100 ms drain fires on Result).
+const SESSION_POLL_HEARTBEAT: Duration = Duration::from_millis(250);
 /// C->S ready toggle (4008): the joined-guest Confirm send. Empty
 /// body — see [`Ready`]: all five exe send sites push a zero word
 /// then the opcode (`push 0; push 0xfa8`, files `0xacebe`, `0xb24f6`,
@@ -2086,6 +2094,18 @@ impl GameLoop for OnlineSession {
         self.game.state_hash()
     }
 
+    fn idle_repaint_interval(&self) -> Option<std::time::Duration> {
+        if let Some(gap) = self.game.idle_repaint_interval() {
+            return Some(gap);
+        }
+        match self.game.screen() {
+            Screen::Channel | Screen::Room | Screen::Waiting | Screen::Result => {
+                Some(SESSION_POLL_HEARTBEAT)
+            }
+            _ => None,
+        }
+    }
+
     fn paint(&mut self, frame: &mut o2jam_render::Frame<'_>) {
         self.game.paint(frame);
         if self.game.screen() != Screen::Loading {
@@ -2460,6 +2480,59 @@ mod session_tests {
             assert_quiet(&mut stream);
         });
         assert!(!session.flush_chat().unwrap());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn wire_driven_scenes_keep_a_poll_heartbeat_while_planet_idles() {
+        // Ticket #138: the lobby drains ride `paint` (chat on
+        // Channel/Room, chat plus START on Waiting, tally on Result),
+        // so the session owes a modest heartbeat there — while Planet
+        // and Loading park the loop with no timer of their own.
+        use o2jam_render::Frame;
+
+        use super::SESSION_POLL_HEARTBEAT;
+        let (mut session, server) = waiting_session(|mut stream| {
+            assert_quiet(&mut stream);
+        });
+        assert_eq!(session.game.screen(), Screen::Waiting);
+        assert_eq!(
+            session.idle_repaint_interval(),
+            Some(SESSION_POLL_HEARTBEAT)
+        );
+        assert!(session.game.enter_screen(Screen::Loading));
+        assert_eq!(session.idle_repaint_interval(), None);
+        assert!(session.game.enter_screen(Screen::Playing));
+        assert_eq!(
+            session.idle_repaint_interval(),
+            Some(Duration::from_nanos(o2jam_shell::TICK_NANOS))
+        );
+        session.game.load_chart_holds(vec![(2, 5_000, 5_000, 7)]);
+        session.game.strike_at(2, 5_000);
+        let mut buf = vec![0u32; 64 * 64];
+        session.game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 64,
+                h: 64,
+            },
+            7_000,
+        );
+        assert_eq!(session.game.screen(), Screen::Result);
+        assert_eq!(
+            session.idle_repaint_interval(),
+            Some(SESSION_POLL_HEARTBEAT)
+        );
+        for screen in [Screen::Room, Screen::Channel] {
+            assert!(session.game.enter_screen(screen));
+            assert_eq!(
+                session.idle_repaint_interval(),
+                Some(SESSION_POLL_HEARTBEAT),
+                "{screen:?} keeps its poll heartbeat"
+            );
+        }
+        assert!(session.game.enter_screen(Screen::Planet));
+        assert_eq!(session.idle_repaint_interval(), None);
         server.join().unwrap();
     }
 
