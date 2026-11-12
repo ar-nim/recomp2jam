@@ -284,8 +284,8 @@ because #118 reproduced only on the owner's KWin 6.8.2 session.
 
 Method: nested `kwin_wayland --socket wl-smoke-<pid> --width 800 --height 600`
 on the current session; game launched with `DISPLAY`/`WINIT_UNIX_BACKEND`
-unset and `WAYLAND_DISPLAY=wl-smoke-<pid>` (no `--sound` — null sink by
-default); nested compositor window minimized via the session KWin scripting
+unset and `WAYLAND_DISPLAY=wl-smoke-<pid>` (opt-out `--no-sound` keeps
+the null sink; sound is on by default since #120); nested compositor window minimized via the session KWin scripting
 API (`org.kde.kwin.Scripting.loadScript` + `start`; the window has an EMPTY
 `resourceClass` on KWin 6.8, so the script matches by PID/caption, and
 script `console.log` read-back goes through the user journal since KWin 6
