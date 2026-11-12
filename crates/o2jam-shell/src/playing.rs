@@ -2892,7 +2892,12 @@ const TALLY_VOLUME_NATIVE: (i32, i32) = (705, 579);
 /// EXIT readout on the native canvas: staged `Playing_Exit.ojs`
 /// anchor `(751,554)` (archive slot 92, 42x42 button art).
 /// No-archive fallback only (see above).
-const TALLY_EXIT_NATIVE: (i32, i32) = (751, 554);
+const TALLY_EXIT_NATIVE: Rect = Rect {
+    x: 751,
+    y: 554,
+    w: 42,
+    h: 42,
+};
 /// Control ids of the `EXIT`..`VOLUME` run (`State_Playing.bnd`
 /// rects 1..=17). Lookup is by id, never by code: run codes
 /// collide after the subset window (both `IDC_TEXT_SPLAY_LEVEL1`
@@ -2993,12 +2998,7 @@ impl PlayingBoundFields {
     #[must_use]
     pub fn fallback() -> Self {
         Self {
-            exit: Rect {
-                x: TALLY_EXIT_NATIVE.0,
-                y: TALLY_EXIT_NATIVE.1,
-                w: 42,
-                h: 42,
-            },
+            exit: TALLY_EXIT_NATIVE,
             chat_window: Rect {
                 x: 274,
                 y: 9,
