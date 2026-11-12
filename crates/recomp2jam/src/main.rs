@@ -1454,6 +1454,19 @@ fn setup_chart_audio(
 /// golden test below pins the CLI output.
 fn format_connect_report(report: &connect::ConnectReport) -> String {
     let mut text = String::new();
+    push_identity_section(&mut text, report);
+    push_wallet_section(&mut text, report.wallet.as_ref());
+    push_channels_section(&mut text, &report.channels);
+    push_rooms_section(&mut text, &report.rooms);
+    push_login_section(&mut text, report.channel_login.as_ref());
+    push_join_section(&mut text, report.join.as_ref());
+    push_song_section(&mut text, report.song.as_ref());
+    text
+}
+
+/// Authorize, character, and avatar lines (each arm prints only when
+/// the login flow actually returned that section).
+fn push_identity_section(text: &mut String, report: &connect::ConnectReport) {
     text.push_str(&format!(
         "authorize: {}\n",
         connect::name_result(report.auth_code)
@@ -1467,7 +1480,12 @@ fn format_connect_report(report: &connect::ConnectReport) -> String {
     if report.avatar_layers > 0 {
         text.push_str(&format!("avatar: {} layers worn\n", report.avatar_layers));
     }
-    if let Some(wallet) = &report.wallet {
+}
+
+/// Wallet balance line plus the skipped-broadcast list (only when a
+/// wallet was requested).
+fn push_wallet_section(text: &mut String, wallet: Option<&connect::WalletReport>) {
+    if let Some(wallet) = wallet {
         text.push_str(&format!(
             "wallet: gem {} cash_point {} point {} o2_cash {}\n",
             wallet.gem, wallet.cash_point, wallet.point, wallet.o2_cash
@@ -1476,8 +1494,12 @@ fn format_connect_report(report: &connect::ConnectReport) -> String {
             text.push_str(&format!("skipped broadcasts: {:?}\n", wallet.skipped));
         }
     }
-    text.push_str(&format!("channels: {}\n", report.channels.len()));
-    for channel in &report.channels {
+}
+
+/// Channel list line, one row per channel.
+fn push_channels_section(text: &mut String, channels: &[o2jam_net::ChannelState]) {
+    text.push_str(&format!("channels: {}\n", channels.len()));
+    for channel in channels {
         text.push_str(&format!(
             "  gateway {} channel {}: {}/{} {}\n",
             channel.gateway_id,
@@ -1487,11 +1509,12 @@ fn format_connect_report(report: &connect::ConnectReport) -> String {
             if channel.active { "open" } else { "closed" },
         ));
     }
-    let open_rooms: Vec<_> = report
-        .rooms
-        .iter()
-        .filter(|room| room.number != 0)
-        .collect();
+}
+
+/// Open-room count plus up to 10 room rows (room number 0 means
+/// closed, so it does not count).
+fn push_rooms_section(text: &mut String, rooms: &[o2jam_net::RoomListEntry]) {
+    let open_rooms: Vec<_> = rooms.iter().filter(|room| room.number != 0).collect();
     text.push_str(&format!("rooms: {} open\n", open_rooms.len()));
     for room in open_rooms.iter().take(10) {
         text.push_str(&format!(
@@ -1503,7 +1526,12 @@ fn format_connect_report(report: &connect::ConnectReport) -> String {
             if room.has_password { " locked" } else { "" },
         ));
     }
-    if let Some(login) = &report.channel_login {
+}
+
+/// Channel-login result line with the NORMAL-mode restriction word
+/// (only when a channel login was requested).
+fn push_login_section(text: &mut String, login: Option<&o2jam_net::ChannelLoginResponse>) {
+    if let Some(login) = login {
         let restricted = match login.restricted {
             Some(true) => "restricted",
             Some(false) => "unrestricted",
@@ -1514,7 +1542,12 @@ fn format_connect_report(report: &connect::ConnectReport) -> String {
             connect::name_result(login.result_code)
         ));
     }
-    if let Some(join) = &report.join {
+}
+
+/// Room-join answer line (snapshot seat count when the server echoed
+/// the room, else the no-snapshot note).
+fn push_join_section(text: &mut String, join: Option<&o2jam_net::JoinRoomResponse>) {
+    if let Some(join) = join {
         match &join.room {
             Some(room) => text.push_str(&format!(
                 "room: {} seats, {} in ({})\n",
@@ -1525,7 +1558,12 @@ fn format_connect_report(report: &connect::ConnectReport) -> String {
             None => text.push_str("room: joined without snapshot\n"),
         }
     }
-    if let Some(song) = &report.song {
+}
+
+/// Song-flow lines: music list, arena echo, peer tick bar, queue
+/// mirror, and skipped broadcasts (only when a song flow ran).
+fn push_song_section(text: &mut String, song: Option<&connect::SongFlowReport>) {
+    if let Some(song) = song {
         text.push_str(&format!(
             "music: {} entries (free music: {})\n",
             song.music_entries,
@@ -1558,7 +1596,6 @@ fn format_connect_report(report: &connect::ConnectReport) -> String {
             text.push_str(&format!("skipped broadcasts: {:?}\n", song.skipped));
         }
     }
-    text
 }
 
 /// Print one login-flow report (authorize, character, avatar, channels,
