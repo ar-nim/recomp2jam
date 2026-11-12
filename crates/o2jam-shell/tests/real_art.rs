@@ -14,14 +14,15 @@ use o2jam_file::{
     Bnd,
 };
 use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
-use o2jam_render::{pack_xrgb, Frame};
+use o2jam_render::{pack_xrgb, rect_from_corners, Frame};
 use o2jam_shell::avatar::{paint_scene_figures, AvatarFigure, PlacementRole, ScenePlacement};
 use o2jam_shell::screens::paint::RESULT_WINLOSE_SPRITE;
 use o2jam_shell::screens::side::{
     ROOM_BACK_BUTTON_CODE, ROOM_BACK_BUTTON_ID, ROOM_OPTION_BUTTON_CODE, ROOM_OPTION_BUTTON_ID,
 };
 use o2jam_shell::staging::{
-    read_install_archives, stage_dialog, stage_state, Dialog, InstallArchives, StageContext, State,
+    read_install_archives, stage_byname_sheet, stage_dialog, stage_state, Dialog, InstallArchives,
+    StageContext, State, BYNAME_TABLE,
 };
 use o2jam_shell::{GameLoop, MenuKey, Screen, ScreenGame};
 
@@ -818,8 +819,8 @@ fn playing_sheet(name: &str) -> Option<Bnd> {
 /// The network sheet parses its 19 exit-path rects (#165): the exe
 /// loads `State_Playing_network.bnd` literally by name (no `BOUND`
 /// block mounts it), and `paint.rs` pins record 18 to the
-/// Winner/Challenger exit-path placement. Pinned until a by-name
-/// staging arm lands.
+/// Winner/Challenger exit-path placement. Staged by the by-name arm
+/// (`playing_network_sheet_stages_nineteen_rects_by_name`).
 #[test]
 fn playing_network_sheet_parses_nineteen_exit_path_rects() {
     let Some(bind) = playing_sheet("State_Playing_network.bnd") else {
@@ -846,7 +847,8 @@ fn playing_network_sheet_parses_nineteen_exit_path_rects() {
 
 /// The avatar-info sheet parses its 10 member-gauge rects (#165):
 /// the exe loads `Avatar_Info.bnd` literally by name (no `BOUND`
-/// block mounts it). Pinned until a by-name staging arm lands.
+/// block mounts it). Staged by the by-name arm
+/// (`avatar_info_sheet_stages_ten_rects_by_name`).
 #[test]
 fn avatar_info_sheet_parses_ten_gauge_rects() {
     let Some(bind) = playing_sheet("Avatar_Info.bnd") else {
@@ -862,8 +864,8 @@ fn avatar_info_sheet_parses_ten_gauge_rects() {
 /// The seat-map sheet parses its 8 avatar-seat rects (#165): the exe
 /// loads `Map_Avatar.bnd` literally by name (no `BOUND` block mounts
 /// it), and `playing.rs` pins rect 0 to the solo seat box the
-/// reference photo verifies. Pinned until a by-name staging arm
-/// lands.
+/// reference photo verifies. Staged by the by-name arm
+/// (`map_avatar_sheet_stages_eight_rects_by_name`).
 #[test]
 fn map_avatar_sheet_parses_eight_seat_rects() {
     let Some(bind) = playing_sheet("Map_Avatar.bnd") else {
@@ -880,6 +882,81 @@ fn map_avatar_sheet_parses_eight_seat_rects() {
         (307, 161, 607, 461),
         "seat-map rect 0 stays the solo avatar seat box"
     );
+}
+
+/// One by-name sheet stages exactly its parsed `.bnd` rects (#166):
+/// the declaration names the literal file, the arm parses it through
+/// the existing `parse_bnd` path, and each placement carries its
+/// file-order rect verbatim — no `ControlList` block pairs it, and
+/// no block names a body, so no figure stages (paint wiring rides a
+/// later ticket).
+fn assert_byname_sheet_stages_parsed_rects(bind_file: &str, expected: usize) {
+    let Some(archive) = install_archives().playing else {
+        println!(
+            "skip by-name staging: missing {}",
+            archive_path(PLAYING_ARCHIVE).display()
+        );
+        return;
+    };
+    let bind = playing_sheet(bind_file)
+        .unwrap_or_else(|| panic!("playing: {bind_file} parses before it stages"));
+    assert_eq!(
+        bind.rects.len(),
+        expected,
+        "{bind_file}: keeps its parsed rect count"
+    );
+    let row = BYNAME_TABLE
+        .iter()
+        .find(|row| row.bind_file == bind_file)
+        .unwrap_or_else(|| panic!("playing: {bind_file} has a by-name row"));
+    let report = stage_byname_sheet(&archive, row);
+    assert!(report.misses.is_empty(), "{bind_file}: stages with no miss");
+    let art = report
+        .art
+        .unwrap_or_else(|| panic!("{bind_file}: stages by name"));
+    assert_eq!(
+        art.placements.len(),
+        bind.rects.len(),
+        "{bind_file}: one placement per parsed rect"
+    );
+    for (placed, corners) in art.placements.iter().zip(bind.rects.iter()) {
+        assert_eq!(
+            placed.rect,
+            rect_from_corners(corners.x1, corners.y1, corners.x2, corners.y2),
+            "{bind_file}: staged placement keeps its parsed rect"
+        );
+    }
+    assert!(
+        art.figures.is_empty(),
+        "{bind_file}: no block names a body, so no figure stages"
+    );
+}
+
+/// The network sheet stages its 19 exit-path rects by name (#166):
+/// the exe loads `State_Playing_network.bnd` literally (files
+/// `0x24b080`), so the by-name row stages the file's own contents
+/// beside the Playing scene.
+#[test]
+fn playing_network_sheet_stages_nineteen_rects_by_name() {
+    assert_byname_sheet_stages_parsed_rects("State_Playing_network.bnd", 19);
+}
+
+/// The avatar-info sheet stages its 10 member-gauge rects by name
+/// (#166): the exe loads `Avatar_Info.bnd` literally (files
+/// `0x24aba7`), so the by-name row stages the file's own contents
+/// beside the Playing scene.
+#[test]
+fn avatar_info_sheet_stages_ten_rects_by_name() {
+    assert_byname_sheet_stages_parsed_rects("Avatar_Info.bnd", 10);
+}
+
+/// The seat-map sheet stages its 8 avatar-seat rects by name (#166):
+/// the exe loads `Map_Avatar.bnd` literally (files `0x24aba7`), so
+/// the by-name row stages the file's own contents beside the Playing
+/// scene.
+#[test]
+fn map_avatar_sheet_stages_eight_rects_by_name() {
+    assert_byname_sheet_stages_parsed_rects("Map_Avatar.bnd", 8);
 }
 
 /// The Playing list mounts only the solo sheet (#165):
