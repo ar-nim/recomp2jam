@@ -13392,6 +13392,166 @@ mod game_tests {
         assert!(game.take_join().is_none());
     }
 
+    /// Stage the result chrome with exe-pinned code/rect pairs
+    /// (`State_Result.bnd` r5/r6, `docs/cresult-anchors.md`): the
+    /// shared driver for the sweep guards below (ADR-0003: staged
+    /// rects, never literals).
+    fn swept_result_game() -> ScreenGame {
+        use super::super::paint::{RESULT_BACK_CODE, RESULT_RETRY_CODE};
+        let mut game = ScreenGame::new();
+        finish_song(&mut game);
+        game.load_scene(
+            Screen::Result,
+            vec![
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: RESULT_RETRY_ID.to_owned(),
+                    code: RESULT_RETRY_CODE,
+                    sprite: None,
+                    rect: RESULT_RETRY_RECT,
+                },
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: RESULT_BACK_ID.to_owned(),
+                    code: RESULT_BACK_CODE,
+                    sprite: None,
+                    rect: RESULT_BACK_RECT,
+                },
+            ],
+            HashMap::new(),
+        );
+        paint_result_frame(&mut game);
+        assert_eq!(game.screen(), Screen::Result);
+        game
+    }
+
+    #[test]
+    fn result_retry_press_fires_on_down_and_queues_4010_once() {
+        // Ticket #163 (result leg, CLICK press + release-inside):
+        // RETRY fires on down — Waiting plus the pinned 4010
+        // `0xfaa` relay body (#88) — and release-inside queues
+        // nothing more: one take sends once. Result owns no
+        // press-split (that evidence is planet-only, #111), so the
+        // down-dispatch stands (same stand-in as the waiting leg).
+        let mut game = swept_result_game();
+        game.mouse_down(666, 581);
+        assert_eq!(game.screen(), Screen::Waiting);
+        assert!(game.take_result_retry().is_some());
+        game.mouse_up(666, 581);
+        assert_eq!(game.screen(), Screen::Waiting);
+        assert!(game.take_result_retry().is_none(), "one take sends once");
+    }
+
+    #[test]
+    fn result_back_release_outside_holds_rooms() {
+        // Ticket #163 (result leg, CLICK press + release-outside):
+        // BACK commits on down — Room plus the pinned 4021 `0xfb5`
+        // relay body (#87) — so an outside release cannot revert
+        // it: the scene holds Room.
+        let mut game = swept_result_game();
+        game.mouse_down(752, 581);
+        assert_eq!(game.screen(), Screen::Room);
+        assert!(game.take_result_back().is_some());
+        game.mouse_up(10, 10);
+        assert_eq!(game.screen(), Screen::Room);
+        assert!(game.take_result_back().is_none());
+    }
+
+    #[test]
+    fn result_chrome_sweep_paints_no_hover_state() {
+        // Ticket #163 (result leg, HOVER stand-in solo + battle):
+        // no result chrome was ever hover-captured (`docs/hover.md`
+        // covers room + planet only), and the shell stages no hover
+        // resolver — motion over RETRY, BACK, or the row field arms
+        // nothing in a solo or a battle result: the screen holds
+        // and the frame paints pixel-identical.
+        // Next evidence step: the SendInput hover sweep on the live
+        // result chrome (same rig as `docs/hover.md`).
+        for battle in [false, true] {
+            let mut game = swept_result_game();
+            if battle {
+                let mut room = waiting_room();
+                room.game_mode = o2jam_net::GameMode::Live as u8;
+                game.set_joined_room(room);
+                game.set_battle_teams(battle_teams_self_wins());
+                game.set_battle_self_team(Some(1));
+            }
+            let before = paint_result_frame(&mut game);
+            for (x, y) in [
+                (666, 581),
+                (752, 581),
+                (200, 350),
+                (200, 450),
+                (400, 300),
+                (600, 200),
+            ] {
+                game.mouse_moved(x, y);
+                assert_eq!(game.screen(), Screen::Result);
+            }
+            assert!(game.take_result_retry().is_none());
+            assert!(game.take_result_back().is_none());
+            let after = paint_result_frame(&mut game);
+            assert_eq!(before, after, "hover paints no result chrome state");
+        }
+    }
+
+    #[test]
+    fn result_rank_rows_are_not_chrome() {
+        // Ticket #163 (result leg, CLICK rank rows solo + battle):
+        // rank rows paint live data but answer no click — the wire
+        // calls landed on RETRY/BACK only (#87/#88). Clicks across
+        // the row field hold Result with no relay queued, whether
+        // the rows carry the solo local score or battle peer rows.
+        for battle in [false, true] {
+            let mut game = swept_result_game();
+            if battle {
+                let mut room = waiting_room();
+                room.game_mode = o2jam_net::GameMode::Live as u8;
+                game.set_joined_room(room);
+                game.set_battle_teams(battle_teams_self_wins());
+                game.set_battle_self_team(Some(1));
+            }
+            for (x, y) in [(200, 350), (200, 450), (400, 300), (600, 200)] {
+                game.mouse_click(x, y);
+                assert_eq!(game.screen(), Screen::Result);
+            }
+            assert!(game.take_result_retry().is_none());
+            assert!(game.take_result_back().is_none());
+        }
+    }
+
+    #[test]
+    fn result_solo_and_battle_chrome_agree() {
+        // Ticket #163 (result leg, CLICK solo vs battle): RETRY and
+        // BACK answer identically with and without a battle claim —
+        // RETRY hands back to Waiting plus 4010, BACK leaves for
+        // rooms plus 4021. The battle verdict banner stays
+        // display-only: it never joins the click dispatch.
+        for battle in [false, true] {
+            for retry in [true, false] {
+                let mut game = swept_result_game();
+                if battle {
+                    let mut room = waiting_room();
+                    room.game_mode = o2jam_net::GameMode::Live as u8;
+                    game.set_joined_room(room);
+                    game.set_battle_teams(battle_teams_self_wins());
+                    game.set_battle_self_team(Some(1));
+                }
+                if retry {
+                    game.mouse_click(666, 581);
+                    assert_eq!(game.screen(), Screen::Waiting);
+                    assert!(game.take_result_retry().is_some());
+                    assert!(game.take_result_back().is_none());
+                } else {
+                    game.mouse_click(752, 581);
+                    assert_eq!(game.screen(), Screen::Room);
+                    assert!(game.take_result_back().is_some());
+                    assert!(game.take_result_retry().is_none());
+                }
+            }
+        }
+    }
+
     fn paint_playing_frame(game: &mut ScreenGame, w: usize, h: usize) -> Vec<u32> {
         let mut buf = vec![0u32; w * h];
         game.paint_at(

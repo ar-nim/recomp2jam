@@ -5261,6 +5261,17 @@ pub(crate) const RESULT_BACK_RECT: Rect = Rect {
 pub(crate) const RESULT_RETRY_ID: &str = "IDC_BUTTON_SRESULT_RETRY";
 /// Staged control id behind [`RESULT_BACK_RECT`].
 pub(crate) const RESULT_BACK_ID: &str = "IDC_BUTTON_SRESULT_BACK";
+/// Staged control code behind [`RESULT_RETRY_RECT`] (`0x17202006`:
+/// low word `0x006` pairs with `State_Result.bnd` rect 6 by the
+/// code-ordinal rule, like the room BACK pairing). Test-pinned:
+/// stages the result sweep driver with the real staged codes.
+#[cfg(test)]
+pub(crate) const RESULT_RETRY_CODE: u32 = 0x1720_2006;
+/// Staged control code behind [`RESULT_BACK_RECT`] (`0x17200005`:
+/// low word `0x005` pairs with `State_Result.bnd` rect 5).
+/// Test-pinned like [`RESULT_RETRY_CODE`].
+#[cfg(test)]
+pub(crate) const RESULT_BACK_CODE: u32 = 0x1720_0005;
 
 /// Rank number column x (`%d` at x=91, drawn only with 2+ players).
 const RESULT_RANK_X: i32 = 91;
