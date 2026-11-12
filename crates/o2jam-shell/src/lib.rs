@@ -201,6 +201,130 @@ pub const fn menu_of(code: KeyCode) -> Option<MenuKey> {
     }
 }
 
+/// One discrete input edge inside a frame: the exe drains queued
+/// discretes at the frame boundary (claim A46,
+/// `docs/mouse-tracking.md`), so a press and a release inside the
+/// same frame both survive as ordered edges — pure state would lose
+/// the pair (SDL `GetKeyboardState` warning,
+/// `docs/input-architecture-128.md` §2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputEdge {
+    /// Left button went down at native frame pixels (800x600 space).
+    PointerDown { x: i32, y: i32 },
+    /// Left button came up at native frame pixels.
+    PointerUp { x: i32, y: i32 },
+    /// A lane key changed state (`down` = press).
+    Lane { lane: usize, down: bool },
+    /// A menu key changed state (`down` = press).
+    Menu { key: MenuKey, down: bool },
+}
+
+/// Per-frame pulled input snapshot (ADR-0013): the shell freezes one
+/// of these at each frame boundary — the latest pointer position,
+/// the button state, and the frame's drained discrete edges in
+/// arrival order — and the game sweeps it once. Scenes own
+/// hit-testing against the snapshot (hover = pointer at paint
+/// time); the queue preserves intra-frame taps a pure poll would
+/// miss. Sequence numbers order snapshots for replay/trace tools.
+#[derive(Debug, Clone, Default)]
+pub struct InputSnapshot {
+    pointer: Option<(i32, i32)>,
+    left_held: bool,
+    edges: Vec<InputEdge>,
+    sequence: u64,
+}
+
+impl InputSnapshot {
+    /// An empty snapshot: no pointer yet, button up, no edges.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Latest pointer position in native frame pixels, if known.
+    #[must_use]
+    pub const fn pointer(&self) -> Option<(i32, i32)> {
+        self.pointer
+    }
+
+    /// Whether the left button is held at the freeze.
+    #[must_use]
+    pub const fn left_held(&self) -> bool {
+        self.left_held
+    }
+
+    /// The frame's drained edges, in arrival order.
+    #[must_use]
+    pub fn edges(&self) -> &[InputEdge] {
+        &self.edges
+    }
+
+    /// Freeze order of this snapshot (one per shell freeze).
+    #[must_use]
+    pub const fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
+    /// Record the latest pointer position.
+    pub fn set_pointer(&mut self, position: Option<(i32, i32)>) {
+        self.pointer = position;
+    }
+
+    /// Record the button state at the freeze.
+    pub fn set_left_held(&mut self, held: bool) {
+        self.left_held = held;
+    }
+
+    /// Stamp the freeze order.
+    pub fn set_sequence(&mut self, sequence: u64) {
+        self.sequence = sequence;
+    }
+
+    /// Append one discrete edge, preserving arrival order.
+    pub fn push_edge(&mut self, edge: InputEdge) {
+        self.edges.push(edge);
+    }
+
+    /// A whole press+release gesture at one point (release-inside):
+    /// the pointer plus a down edge and its matching up edge, in
+    /// order — what legacy click callers always meant.
+    #[must_use]
+    pub fn click_at(x: i32, y: i32) -> Self {
+        let mut snapshot = Self::new();
+        snapshot.set_pointer(Some((x, y)));
+        snapshot.push_edge(InputEdge::PointerDown { x, y });
+        snapshot.push_edge(InputEdge::PointerUp { x, y });
+        snapshot
+    }
+
+    /// A press edge at one point (the button stays held).
+    #[must_use]
+    pub fn press_at(x: i32, y: i32) -> Self {
+        let mut snapshot = Self::new();
+        snapshot.set_pointer(Some((x, y)));
+        snapshot.set_left_held(true);
+        snapshot.push_edge(InputEdge::PointerDown { x, y });
+        snapshot
+    }
+
+    /// A release edge at one point (the button is up after).
+    #[must_use]
+    pub fn release_at(x: i32, y: i32) -> Self {
+        let mut snapshot = Self::new();
+        snapshot.set_pointer(Some((x, y)));
+        snapshot.push_edge(InputEdge::PointerUp { x, y });
+        snapshot
+    }
+
+    /// Pointer motion with no edges (the hover source).
+    #[must_use]
+    pub fn motion_to(x: i32, y: i32) -> Self {
+        let mut snapshot = Self::new();
+        snapshot.set_pointer(Some((x, y)));
+        snapshot
+    }
+}
+
 /// Window event sink: the game implements [`GameLoop`] to receive
 /// input and paint requests. Paint targets an XRGB8888 `Frame`
 /// over the shell backbuffer; the shell presents it with softbuffer.
@@ -446,6 +570,82 @@ mod tests {
         assert!((alpha - 0.25).abs() < 1e-6);
         let (ticks, _) = clock.advance(0);
         assert_eq!(ticks, 0);
+    }
+
+    #[test]
+    fn snapshot_starts_empty_with_no_pointer_or_edges() {
+        let snapshot = InputSnapshot::new();
+        assert_eq!(snapshot.pointer(), None);
+        assert!(!snapshot.left_held());
+        assert!(snapshot.edges().is_empty());
+        assert_eq!(snapshot.sequence(), 0);
+    }
+
+    #[test]
+    fn click_at_carries_press_then_release_in_order() {
+        let snapshot = InputSnapshot::click_at(100, 200);
+        assert_eq!(snapshot.pointer(), Some((100, 200)));
+        assert!(!snapshot.left_held());
+        assert_eq!(
+            snapshot.edges(),
+            &[
+                InputEdge::PointerDown { x: 100, y: 200 },
+                InputEdge::PointerUp { x: 100, y: 200 },
+            ]
+        );
+    }
+
+    #[test]
+    fn press_at_holds_the_button_with_one_down_edge() {
+        let snapshot = InputSnapshot::press_at(100, 200);
+        assert_eq!(snapshot.pointer(), Some((100, 200)));
+        assert!(snapshot.left_held());
+        assert_eq!(
+            snapshot.edges(),
+            &[InputEdge::PointerDown { x: 100, y: 200 }]
+        );
+    }
+
+    #[test]
+    fn release_at_frees_the_button_with_one_up_edge() {
+        let snapshot = InputSnapshot::release_at(100, 200);
+        assert_eq!(snapshot.pointer(), Some((100, 200)));
+        assert!(!snapshot.left_held());
+        assert_eq!(snapshot.edges(), &[InputEdge::PointerUp { x: 100, y: 200 }]);
+    }
+
+    #[test]
+    fn motion_to_moves_the_pointer_with_no_edges() {
+        let snapshot = InputSnapshot::motion_to(100, 200);
+        assert_eq!(snapshot.pointer(), Some((100, 200)));
+        assert!(!snapshot.left_held());
+        assert!(snapshot.edges().is_empty());
+    }
+
+    #[test]
+    fn pushed_edges_keep_arrival_order_for_the_drain() {
+        let mut snapshot = InputSnapshot::new();
+        snapshot.push_edge(InputEdge::PointerDown { x: 1, y: 2 });
+        snapshot.push_edge(InputEdge::PointerUp { x: 1, y: 2 });
+        snapshot.push_edge(InputEdge::PointerDown { x: 1, y: 2 });
+        snapshot.push_edge(InputEdge::Lane {
+            lane: 0,
+            down: true,
+        });
+        snapshot.push_edge(InputEdge::Menu {
+            key: MenuKey::Back,
+            down: true,
+        });
+        assert_eq!(snapshot.edges().len(), 5);
+        assert_eq!(
+            snapshot.edges()[3],
+            InputEdge::Lane {
+                lane: 0,
+                down: true
+            }
+        );
+        snapshot.set_sequence(7);
+        assert_eq!(snapshot.sequence(), 7);
     }
 
     struct SolidGame(u32);
