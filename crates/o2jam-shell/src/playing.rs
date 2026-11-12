@@ -2971,6 +2971,22 @@ pub struct PlayingBoundFields {
     pub volume: Rect,
 }
 
+/// Member text fallback rects (table rows 8–14): the pinned
+/// `(660, 11+15i)-(787, 23+15i)` ladder of
+/// `IDC_IMAGE_SPLAY_WAITUSER_TEXT1..7` as one formula instead of
+/// seven literal rects.
+fn waituser_fallback_rects() -> [Rect; 7] {
+    std::array::from_fn(|i| {
+        let y = 11 + 15 * i32::try_from(i).expect("waituser slot index fits i32");
+        Rect {
+            x: 660,
+            y,
+            w: 127,
+            h: 12,
+        }
+    })
+}
+
 impl PlayingBoundFields {
     /// No-archive fallback: the parsed `State_Playing.bnd` rects
     /// verbatim (see the table above).
@@ -3014,50 +3030,7 @@ impl PlayingBoundFields {
                 w: 146,
                 h: 9,
             },
-            waituser_texts: [
-                Rect {
-                    x: 660,
-                    y: 11,
-                    w: 127,
-                    h: 12,
-                },
-                Rect {
-                    x: 660,
-                    y: 26,
-                    w: 127,
-                    h: 12,
-                },
-                Rect {
-                    x: 660,
-                    y: 41,
-                    w: 127,
-                    h: 12,
-                },
-                Rect {
-                    x: 660,
-                    y: 56,
-                    w: 127,
-                    h: 12,
-                },
-                Rect {
-                    x: 660,
-                    y: 71,
-                    w: 127,
-                    h: 12,
-                },
-                Rect {
-                    x: 660,
-                    y: 86,
-                    w: 127,
-                    h: 12,
-                },
-                Rect {
-                    x: 660,
-                    y: 101,
-                    w: 127,
-                    h: 12,
-                },
-            ],
+            waituser_texts: waituser_fallback_rects(),
             hottime: Rect {
                 x: 710,
                 y: 21,
@@ -6533,13 +6506,21 @@ mod avatar_scene_tests {
             }
         );
         assert_eq!(
+            fields.waituser_texts,
+            waituser_fallback_rects(),
+            "rows 8–14 all come from the one waituser ladder"
+        );
+        // Evidence pins (the table row, ends of the 15-px ladder):
+        // the literals stay so the formula cannot drift.
+        assert_eq!(
             fields.waituser_texts[0],
             Rect {
                 x: 660,
                 y: 11,
                 w: 127,
                 h: 12
-            }
+            },
+            "row 8: (660,11)-(787,23)"
         );
         assert_eq!(
             fields.waituser_texts[6],
@@ -6548,7 +6529,8 @@ mod avatar_scene_tests {
                 y: 101,
                 w: 127,
                 h: 12
-            }
+            },
+            "row 14: (660,101)-(787,113)"
         );
         assert_eq!(
             fields.hottime,
