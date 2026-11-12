@@ -3120,6 +3120,34 @@ fn paint_room_details(
     }
 }
 
+/// Room top-band chrome the 7.55 client never shows (`ticket #169`):
+/// `MYCAPSULE`/`EVENT`/`MYBAND` stage faithfully (the #135 census
+/// pins every top-band rect) but the room-setup path clears each
+/// control's draw-path words, so the identical rects never collide on
+/// screen. Pinned: the three codes occur exactly once each in
+/// `AngelO2Jam.exe` (file `0x8ee00`/`0x8ee27`/`0x8ee4e`, the three
+/// pushes of the room-setup tail at files `0x8edff`/`0x8ee26`/`0x8ee4d`),
+/// each followed by a `GetByCode 0x48bcf0` lookup (`ev_2398edc5…`) and
+/// zeroing writes through the attribute setters `0x409bd0`/`0x409bf0`
+/// (control words `+0x20`/`+0x24`, read by the control draw path —
+/// `ev_890684f1…`); both arms of the enclosing conditional (file
+/// `0x8ec9e`) converge on that tail, so the clear is unconditional,
+/// and no other code in the binary names these controls (full-image
+/// LE32 sweep: one hit per code, the pushes above). The reference
+/// room capture (`~/scratch/ac-room.png`) shows none of the three.
+/// Residual OPEN: cached-pointer writes cannot be excluded by a static
+/// sweep — next step a stopped-state read of the three controls'
+/// `+0x20`/`+0x24` words in a live room (the #113 method).
+/// Staging stays frozen: this gates paint and dispatch only.
+pub(crate) const ROOM_BUNDLED_CHROME_CODES: [u32; 3] = [0x1320_0038, 0x1320_0039, 0x1320_003A];
+
+/// True while the staged room control `code` may paint and answer
+/// input: everything stages, but the exe-hidden bundled chrome (see
+/// [`ROOM_BUNDLED_CHROME_CODES`]) never reaches the screen.
+pub(crate) fn room_chrome_visible(code: u32) -> bool {
+    !ROOM_BUNDLED_CHROME_CODES.contains(&code)
+}
+
 /// Paint the online room list with a highlight cursor.
 pub(crate) fn paint_room_list(frame: &mut Frame<'_>, rooms: &[RoomListEntry], highlight: usize) {
     fill_background(frame, Screen::Room);
@@ -3145,7 +3173,7 @@ pub fn paint_room_scene(
 ) {
     let panels = room_panel_instances(&art.placements);
     art.paint_backdrop_live(frame, Screen::Room, |placed| {
-        clone_instance_live(placed, &panels, rooms.len())
+        room_chrome_visible(placed.code) && clone_instance_live(placed, &panels, rooms.len())
     });
     paint_room_row_icons(frame, art, rooms);
     paint_room_details(frame, rooms, highlight, Some(art));
@@ -4721,6 +4749,19 @@ fn paint_title(frame: &mut Frame<'_>, title: &str) {
 /// a readable title (no flat card).
 pub fn paint_lobby_backdrop(frame: &mut Frame<'_>, screen: Screen, art: &SceneArt) {
     art.paint_backdrop(frame, screen);
+    paint_title_over_art(frame, screen);
+}
+
+/// Lobby backdrop behind a per-placement filter (the room empty-list
+/// arm: staged art minus the exe-hidden bundled chrome, which the
+/// shared unfiltered backdrop would paint unconditionally).
+pub fn paint_lobby_backdrop_live(
+    frame: &mut Frame<'_>,
+    screen: Screen,
+    art: &SceneArt,
+    keep: impl Fn(&ScenePlacement) -> bool,
+) {
+    art.paint_backdrop_live(frame, screen, keep);
     paint_title_over_art(frame, screen);
 }
 
