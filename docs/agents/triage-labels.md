@@ -57,6 +57,13 @@ Rules for closing playtest-class tickets (retro 2026-11-11, issues #26/#30/#53�
 4. Closing includes triage-label cleanup: `needs-triage` and `needs-info` never
    survive on a closed issue, and the category (issue type) is set at triage
    time, not left for the close.
+5. Every behavior-fix closing comment carries a `## Guards` heading listing the
+   exact test names that pin the fix (one per line). Historical closures without
+   the heading are exempt — a missing heading is never a failure — but any guard
+   name listed under the heading must exist in `crates/` (`scripts/tracker-audit.sh`
+   enforces this).
+
+   Example: `## Guards` followed by `staged_play_time_font_paints_nothing`.
 
 ## Edit tracker
 
