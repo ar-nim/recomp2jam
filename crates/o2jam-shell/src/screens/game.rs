@@ -61,7 +61,7 @@ use super::side::{
     SELECT_TABLE_HEADERS, SELECT_TABLE_LEFT, SELECT_TABLE_WIDTH, SELECT_TITLE_RADIO,
     SELECT_VISIBLE_ROWS, SELECT_WHEEL_FILTERS, SHOP_CART_ROWS, SHOP_ITEM_ROWS,
 };
-use crate::{menu_of, MenuKey};
+use crate::{menu_of, InputEdge, InputSnapshot, MenuKey};
 use o2jam_audio::{
     song_position_ms, AudioBackend, BgmSelection, CueOutcome, PcmSamples, SceneBgm, SceneCue,
 };
@@ -3562,6 +3562,34 @@ impl ScreenGame {
         self.side.is_none() && self.planet_modal.is_none() && self.flow.current() == Screen::Planet
     }
 
+    /// Apply one press edge at native frame pixels: the shared
+    /// helper behind both the legacy `mouse_down` edge and the
+    /// snapshot sweep — a press lands where the pointer is, so hover
+    /// and press agree even when no motion preceded the press.
+    fn apply_pointer_down(&mut self, x: i32, y: i32) {
+        self.pointer = Some((x, y));
+        if self.bare_planet_board() {
+            // Pinned press feedback (#111): the planet board arms the
+            // press on down and fires the action on release-inside.
+            self.planet_pointer_down(x, y);
+            return;
+        }
+        // Every other scene keeps its down-dispatch (no press-split
+        // evidence there; the room-scene quickjoin arm is the named
+        // next capture, `docs/hover.md`).
+        self.click_dispatch(x, y);
+    }
+
+    /// Apply one release edge at native frame pixels: the shared
+    /// helper behind both the legacy `mouse_up` edge and the
+    /// snapshot sweep (release-inside fires, pinned #111 arm 3).
+    fn apply_pointer_up(&mut self, x: i32, y: i32) {
+        self.pointer = Some((x, y));
+        if self.bare_planet_board() {
+            self.planet_pointer_up(x, y);
+        }
+    }
+
     /// Arm the board press on left-down over the bare board (pinned
     /// #111 arm 1: the pressed frame swaps on ButtonDown, per control
     /// — only when the staged art carries a pressed frame). Elsewhere
@@ -6042,26 +6070,11 @@ impl GameLoop for ScreenGame {
     }
 
     fn mouse_down(&mut self, x: i32, y: i32) {
-        // A press lands where the pointer is, so hover and press agree
-        // even when no motion event preceded the press.
-        self.pointer = Some((x, y));
-        if self.bare_planet_board() {
-            // Pinned press feedback (#111): the planet board arms the
-            // press on down and fires the action on release-inside.
-            self.planet_pointer_down(x, y);
-            return;
-        }
-        // Every other scene keeps its down-dispatch (no press-split
-        // evidence there; the room-scene quickjoin arm is the named
-        // next capture, `docs/hover.md`).
-        self.click_dispatch(x, y);
+        self.apply_pointer_down(x, y);
     }
 
     fn mouse_up(&mut self, x: i32, y: i32) {
-        self.pointer = Some((x, y));
-        if self.bare_planet_board() {
-            self.planet_pointer_up(x, y);
-        }
+        self.apply_pointer_up(x, y);
     }
 
     fn mouse_click(&mut self, x: i32, y: i32) {
@@ -6069,6 +6082,24 @@ impl GameLoop for ScreenGame {
         // (release-inside), what legacy click callers always meant.
         self.mouse_down(x, y);
         self.mouse_up(x, y);
+    }
+
+    fn ingest_snapshot(&mut self, snapshot: &InputSnapshot) {
+        // Snapshot-native sweep (ADR-0013, migrated phase 3 for the
+        // planet press-split): the pointer syncs at paint-time
+        // position, then each drained edge applies in arrival order
+        // through the same helpers the legacy edges use.
+        if let Some((x, y)) = snapshot.pointer() {
+            self.pointer = Some((x, y));
+        }
+        for edge in snapshot.edges() {
+            match *edge {
+                InputEdge::PointerDown { x, y } => self.apply_pointer_down(x, y),
+                InputEdge::PointerUp { x, y } => self.apply_pointer_up(x, y),
+                InputEdge::Lane { lane, down } => self.lane_key(lane, down),
+                InputEdge::Menu { key, down } => self.menu_key(key, down),
+            }
+        }
     }
 
     fn quit_requested(&self) -> bool {
@@ -10604,23 +10635,23 @@ mod game_tests {
         );
         assert_eq!(game.screen(), Screen::Planet);
         assert_eq!(game.hovered_planet_action(), None);
-        game.mouse_moved(136, 88);
+        game.ingest_snapshot(&InputSnapshot::motion_to(136, 88));
         assert_eq!(
             game.hovered_planet_action(),
             Some(PlanetAction::Emblem {
                 band: Some(PlanetBand::Easy)
             })
         );
-        game.mouse_moved(663, 88);
+        game.ingest_snapshot(&InputSnapshot::motion_to(663, 88));
         assert_eq!(
             game.hovered_planet_action(),
             Some(PlanetAction::Emblem { band: None })
         );
-        game.mouse_moved(400, 300);
+        game.ingest_snapshot(&InputSnapshot::motion_to(400, 300));
         assert_eq!(game.hovered_planet_action(), None);
         // Leaving the board for the channel dialog clears board
         // hover: the dialog phase owns the pointer now.
-        game.mouse_moved(136, 88);
+        game.ingest_snapshot(&InputSnapshot::motion_to(136, 88));
         game.click_planet(136, 88);
         assert_eq!(game.screen(), Screen::Channel);
         assert_eq!(game.hovered_planet_action(), None);
@@ -10676,17 +10707,17 @@ mod game_tests {
         use crate::screens::side::PlanetAction;
         let mut game = swept_planet_game();
         assert_eq!(game.screen(), Screen::Planet);
-        game.mouse_moved(729, 580);
+        game.ingest_snapshot(&InputSnapshot::motion_to(729, 580));
         assert_eq!(
             game.hovered_planet_action(),
             Some(PlanetAction::OptionsDialog)
         );
-        game.mouse_moved(769, 580);
+        game.ingest_snapshot(&InputSnapshot::motion_to(769, 580));
         assert_eq!(
             game.hovered_planet_action(),
             Some(PlanetAction::QuitConfirm)
         );
-        game.mouse_moved(400, 300);
+        game.ingest_snapshot(&InputSnapshot::motion_to(400, 300));
         assert_eq!(game.hovered_planet_action(), None);
     }
 
@@ -10698,21 +10729,21 @@ mod game_tests {
         // QUEST plate never highlights, `docs/hover.md`).
         use crate::screens::side::{PlanetAction, PlanetBand};
         let mut game = swept_planet_game();
-        game.mouse_moved(386, 88);
+        game.ingest_snapshot(&InputSnapshot::motion_to(386, 88));
         assert_eq!(
             game.hovered_planet_action(),
             Some(PlanetAction::Emblem {
                 band: Some(PlanetBand::Hard)
             })
         );
-        game.mouse_moved(255, 88);
+        game.ingest_snapshot(&InputSnapshot::motion_to(255, 88));
         assert_eq!(
             game.hovered_planet_action(),
             Some(PlanetAction::Emblem {
                 band: Some(PlanetBand::Normal)
             })
         );
-        game.mouse_moved(559, 88);
+        game.ingest_snapshot(&InputSnapshot::motion_to(559, 88));
         assert_eq!(
             game.hovered_planet_action(),
             Some(PlanetAction::Emblem { band: None })
@@ -10728,12 +10759,12 @@ mod game_tests {
         // Next evidence step: the exe backend (if any) behind
         // FREE/DRUM, same as the populated-room OPEN in #33.
         let mut game = swept_planet_game();
-        game.mouse_click(663, 88);
+        game.ingest_snapshot(&InputSnapshot::click_at(663, 88));
         assert_eq!(game.screen(), Screen::Planet);
         assert_eq!(game.planet_selection(), None);
         assert_eq!(game.planet_modal(), None);
         assert_eq!(game.planet_promo(), None);
-        game.mouse_click(559, 88);
+        game.ingest_snapshot(&InputSnapshot::click_at(559, 88));
         assert_eq!(game.screen(), Screen::Planet);
         assert_eq!(game.planet_selection(), None);
         assert_eq!(game.planet_modal(), None);
@@ -10746,13 +10777,13 @@ mod game_tests {
         // arms on down with no action yet, and release-inside fires
         // on up — the gear opens the options dialog.
         let mut game = swept_planet_game();
-        game.mouse_down(729, 580);
+        game.ingest_snapshot(&InputSnapshot::press_at(729, 580));
         assert_eq!(
             game.planet_modal(),
             None,
             "the action waits for the release"
         );
-        game.mouse_up(729, 580);
+        game.ingest_snapshot(&InputSnapshot::release_at(729, 580));
         assert_eq!(game.planet_modal(), Some(PlanetModal::Options));
         assert_eq!(game.screen(), Screen::Planet);
     }
@@ -10764,9 +10795,9 @@ mod game_tests {
         // opens nothing. The revert trigger (rect-exit vs up)
         // stays OPEN — the stand-in reverts on up (`docs/hover.md`).
         let mut game = swept_planet_game();
-        game.mouse_down(769, 580);
+        game.ingest_snapshot(&InputSnapshot::press_at(769, 580));
         assert_eq!(game.planet_modal(), None);
-        game.mouse_up(10, 10);
+        game.ingest_snapshot(&InputSnapshot::release_at(10, 10));
         assert_eq!(game.planet_modal(), None);
         assert_eq!(game.screen(), Screen::Planet);
         assert!(!game.quit_confirmed());
@@ -10778,9 +10809,9 @@ mod game_tests {
         // quit-confirm owns the board, an emblem click is not a
         // family pick — the modal stays open and the board holds.
         let mut game = swept_planet_game();
-        game.mouse_click(769, 580);
+        game.ingest_snapshot(&InputSnapshot::click_at(769, 580));
         assert_eq!(game.planet_modal(), Some(PlanetModal::QuitConfirm));
-        game.mouse_click(136, 88);
+        game.ingest_snapshot(&InputSnapshot::click_at(136, 88));
         assert_eq!(game.planet_modal(), Some(PlanetModal::QuitConfirm));
         assert_eq!(game.screen(), Screen::Planet);
         assert_eq!(game.planet_selection(), None);
@@ -10796,11 +10827,11 @@ mod game_tests {
         game.load_scene(Screen::Planet, Vec::new(), HashMap::new());
         game.click_planet(769, 580);
         assert_eq!(game.planet_modal(), Some(PlanetModal::QuitConfirm));
-        game.mouse_moved(136, 88);
+        game.ingest_snapshot(&InputSnapshot::motion_to(136, 88));
         assert_eq!(game.hovered_planet_action(), None);
         // Sanity: the same motion arms the emblem with no modal.
-        game.mouse_click(450, 253);
-        game.mouse_moved(136, 88);
+        game.ingest_snapshot(&InputSnapshot::click_at(450, 253));
+        game.ingest_snapshot(&InputSnapshot::motion_to(136, 88));
         assert_eq!(
             game.hovered_planet_action(),
             Some(PlanetAction::Emblem {
@@ -10848,14 +10879,14 @@ mod game_tests {
             ],
             HashMap::new(),
         );
-        game.mouse_moved(400, 523);
+        game.ingest_snapshot(&InputSnapshot::motion_to(400, 523));
         assert_eq!(
             game.hovered_planet_action(),
             Some(PlanetAction::Promo {
                 cell: PlanetPromo::Stop
             })
         );
-        game.mouse_moved(434, 523);
+        game.ingest_snapshot(&InputSnapshot::motion_to(434, 523));
         assert_eq!(
             game.hovered_planet_action(),
             Some(PlanetAction::Promo {
@@ -10876,7 +10907,7 @@ mod game_tests {
         // #63 distinct-frame guard: rest and pressed frames differ.
         assert_ne!(rest, pressed);
         assert_eq!(planet_pixel(&mut game, 400, 523), rest);
-        game.mouse_down(400, 523);
+        game.ingest_snapshot(&InputSnapshot::press_at(400, 523));
         assert_eq!(planet_pixel(&mut game, 400, 523), pressed);
     }
 
@@ -10887,10 +10918,10 @@ mod game_tests {
         // revert, no animation. Motion mid-hold changes nothing.
         let mut game = press_planet_game();
         let pressed = pack_xrgb(0xFF, 0x00, 0x00);
-        game.mouse_down(400, 523);
+        game.ingest_snapshot(&InputSnapshot::press_at(400, 523));
         assert_eq!(planet_pixel(&mut game, 400, 523), pressed);
         assert_eq!(planet_pixel(&mut game, 400, 523), pressed);
-        game.mouse_moved(401, 523);
+        game.ingest_snapshot(&InputSnapshot::motion_to(401, 523));
         assert_eq!(planet_pixel(&mut game, 400, 523), pressed);
     }
 
@@ -10903,13 +10934,13 @@ mod game_tests {
         use crate::screens::side::PlanetPromo;
         let mut game = press_planet_game();
         let rest = pack_xrgb(0x00, 0xFF, 0x00);
-        game.mouse_down(366, 523);
+        game.ingest_snapshot(&InputSnapshot::press_at(366, 523));
         assert_eq!(
             game.planet_promo(),
             None,
             "the action waits for the release"
         );
-        game.mouse_up(366, 523);
+        game.ingest_snapshot(&InputSnapshot::release_at(366, 523));
         assert_eq!(game.planet_promo(), Some(PlanetPromo::Left));
         assert_eq!(planet_pixel(&mut game, 400, 523), rest);
     }
@@ -10922,9 +10953,9 @@ mod game_tests {
         let mut game = press_planet_game();
         let rest = pack_xrgb(0x00, 0xFF, 0x00);
         let pressed = pack_xrgb(0xFF, 0x00, 0x00);
-        game.mouse_down(400, 523);
+        game.ingest_snapshot(&InputSnapshot::press_at(400, 523));
         assert_eq!(planet_pixel(&mut game, 400, 523), pressed);
-        game.mouse_up(10, 10);
+        game.ingest_snapshot(&InputSnapshot::release_at(10, 10));
         assert_eq!(game.planet_promo(), None);
         assert_eq!(planet_pixel(&mut game, 400, 523), rest);
     }
@@ -10936,7 +10967,7 @@ mod game_tests {
         // a single-record staged control paints nothing on down.
         let mut game = press_planet_game();
         let rest = pack_xrgb(0x00, 0xFF, 0x00);
-        game.mouse_down(366, 523);
+        game.ingest_snapshot(&InputSnapshot::press_at(366, 523));
         assert_eq!(planet_pixel(&mut game, 366, 523), rest);
     }
 
