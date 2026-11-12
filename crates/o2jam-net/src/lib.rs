@@ -27,6 +27,7 @@ pub mod play;
 pub mod reader;
 pub mod relay;
 pub mod rooms;
+mod rows;
 pub mod shop;
 pub mod strings;
 pub mod wallet;

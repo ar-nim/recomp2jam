@@ -8,6 +8,7 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 
 use super::error::Error;
 use super::frame::{encode_frame, Frame};
+use super::rows::rows_reject_negative_exact;
 use super::strings::{decode_null_terminated, encode_null_terminated, MAX_STRING_LEN};
 
 /// Encode/decode contract for one command's body.
@@ -621,61 +622,36 @@ impl WireMessage for ChannelList {
     }
 
     fn decode_body(body: &[u8]) -> Result<Self, Error> {
-        if body.len() < 4 {
-            return Err(Error::TruncatedMessage {
-                need: 4,
-                have: body.len(),
-            });
-        }
-        let count = i32::from_le_bytes([body[0], body[1], body[2], body[3]]);
-        if count < 0 {
-            return Err(Error::InvalidField {
-                field: "channel count",
-                reason: "negative",
-            });
-        }
-        let count = count as usize;
-        let need = 4 + count * CHANNEL_ROW_LEN;
-        if body.len() < need {
-            return Err(Error::TruncatedMessage {
-                need,
-                have: body.len(),
-            });
-        }
-        if body.len() > need {
-            return Err(Error::TrailingBytes(body.len() - need));
-        }
-        let mut channels = Vec::with_capacity(count);
-        for row in 0..count {
-            let base = 4 + row * CHANNEL_ROW_LEN;
-            let active = match body[base + 12] {
-                0 => false,
-                1 => true,
-                _ => {
-                    return Err(Error::InvalidField {
-                        field: "channel active flag",
-                        reason: "not 0 or 1",
-                    })
-                }
-            };
-            channels.push(ChannelState {
-                gateway_id: u16::from_le_bytes([body[base], body[base + 1]]),
-                channel_id: u16::from_le_bytes([body[base + 2], body[base + 3]]),
-                capacity: i32::from_le_bytes([
-                    body[base + 4],
-                    body[base + 5],
-                    body[base + 6],
-                    body[base + 7],
-                ]),
-                population: i32::from_le_bytes([
-                    body[base + 8],
-                    body[base + 9],
-                    body[base + 10],
-                    body[base + 11],
-                ]),
-                active,
-            });
-        }
+        let channels = rows_reject_negative_exact(
+            body,
+            4,
+            0,
+            4,
+            CHANNEL_ROW_LEN,
+            0,
+            "channel count",
+            "negative",
+            "row bytes overflow address space",
+            |row| {
+                let active = match row[12] {
+                    0 => false,
+                    1 => true,
+                    _ => {
+                        return Err(Error::InvalidField {
+                            field: "channel active flag",
+                            reason: "not 0 or 1",
+                        })
+                    }
+                };
+                Ok(ChannelState {
+                    gateway_id: u16::from_le_bytes([row[0], row[1]]),
+                    channel_id: u16::from_le_bytes([row[2], row[3]]),
+                    capacity: i32::from_le_bytes([row[4], row[5], row[6], row[7]]),
+                    population: i32::from_le_bytes([row[8], row[9], row[10], row[11]]),
+                    active,
+                })
+            },
+        )?;
         Ok(Self { channels })
     }
 }

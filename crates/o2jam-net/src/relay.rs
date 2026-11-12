@@ -39,6 +39,7 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use super::error::Error;
 use super::inflate::{compress_zlib_stored, decompress_zlib};
 use super::message::WireMessage;
+use super::rows::rows_zero_on_negative_exact;
 use super::strings::{decode_null_terminated, encode_null_terminated, MAX_STRING_LEN};
 
 /// Relay opcodes (`Memoryer.Relay` `RelayCommand`, matched in-exe by
@@ -1655,43 +1656,26 @@ impl WireMessage for P2PListResponse {
     }
 
     fn decode_body(body: &[u8]) -> Result<Self, Error> {
-        if body.len() < 4 {
-            return Err(Error::TruncatedMessage {
-                need: 4,
-                have: body.len(),
-            });
-        }
-        let raw = i32::from_le_bytes([body[0], body[1], body[2], body[3]]);
-        let count = nonnegative_count(raw);
-        let need = count
-            .checked_mul(PEER_ENTRY_LEN)
-            .and_then(|entries| entries.checked_add(4))
-            .ok_or(Error::InvalidField {
-                field: "peer count",
-                reason: "count too large",
-            })?;
-        if body.len() < need {
-            return Err(Error::TruncatedMessage {
-                need,
-                have: body.len(),
-            });
-        }
-        if body.len() > need {
-            return Err(Error::TrailingBytes(body.len() - need));
-        }
-        let mut peers = Vec::with_capacity(count);
-        let mut tail = &body[4..];
-        for _ in 0..count {
-            let member_id = i32::from_le_bytes([tail[0], tail[1], tail[2], tail[3]]);
-            let (public_endpoint, rest) = decode_socket(&tail[4..])?;
-            let (local_endpoint, rest) = decode_socket(rest)?;
-            peers.push(PeerInfo {
-                member_id,
-                public_endpoint,
-                local_endpoint,
-            });
-            tail = rest;
-        }
+        let peers = rows_zero_on_negative_exact(
+            body,
+            4,
+            0,
+            4,
+            PEER_ENTRY_LEN,
+            0,
+            "peer count",
+            "count too large",
+            |row| {
+                let member_id = i32::from_le_bytes([row[0], row[1], row[2], row[3]]);
+                let (public_endpoint, rest) = decode_socket(&row[4..])?;
+                let (local_endpoint, _) = decode_socket(rest)?;
+                Ok(PeerInfo {
+                    member_id,
+                    public_endpoint,
+                    local_endpoint,
+                })
+            },
+        )?;
         Ok(Self { peers })
     }
 }
