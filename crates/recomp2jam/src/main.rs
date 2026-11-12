@@ -628,8 +628,14 @@ fn capture_plan(
     frame_dump: Option<String>,
     input_log: Option<String>,
 ) -> Option<o2jam_shell::CapturePlan> {
-    frame_dump.map(|dir| o2jam_shell::CapturePlan {
-        dir: std::path::PathBuf::from(dir),
+    // Either arm arms the plan: `--input-log` alone must not be a silent
+    // no-op (a live-probe incident: three sessions "proved" no-input while
+    // the log was never wired).
+    if frame_dump.is_none() && input_log.is_none() {
+        return None;
+    }
+    Some(o2jam_shell::CapturePlan {
+        dir: frame_dump.map(std::path::PathBuf::from).unwrap_or_default(),
         min_paint_gap: 25,
         heartbeat_paints: 600,
         input_log: input_log.map(std::path::PathBuf::from),

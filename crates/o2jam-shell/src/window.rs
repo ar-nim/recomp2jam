@@ -350,6 +350,11 @@ impl WindowHandler {
             return;
         }
         capture.last_dump_paint = capture.paint;
+        // A plan armed for the input log alone carries an empty dir: skip
+        // dumps, keep counting.
+        if capture.state.dir.as_os_str().is_empty() {
+            return;
+        }
         let rgb = xrgb_to_rgb(&self.shell.pixels);
         let png = o2jam_render::png::encode_png(DEFAULT_WIDTH, DEFAULT_HEIGHT, &rgb);
         let name = format!("frame-{:06}-{screen}.png", capture.paint);

@@ -156,6 +156,32 @@ mod live_boot_gate_tests {
             thread::yield_now();
         }
         assert_eq!(session.screen(), Screen::Planet);
+        // The live input path reaches the game THROUGH the session's
+        // GameLoop impl (the window holds `Box<dyn GameLoop>`). #118's
+        // no-input leg: the impl overrode mouse_click but not the
+        // #115 press edges, whose trait defaults are no-ops — presses,
+        // releases, and motion vanished while menu_key forwarded fine
+        // (Enter worked, clicks and hover did not).
+        assert!(
+            session.game_mut().planet_modal().is_none(),
+            "fresh boot owns a bare planet board"
+        );
+        {
+            let game_loop: &mut dyn o2jam_shell::GameLoop = &mut session;
+            game_loop.mouse_down(729, 580); // gear disc (pinned e2e coord)
+            game_loop.mouse_up(729, 580);
+        }
+        assert!(
+            session.game_mut().planet_modal().is_some(),
+            "mouse_down/up through the session GameLoop must open the gear dialog"
+        );
+        session
+            .game_mut()
+            .menu_key(o2jam_shell::MenuKey::Back, true);
+        assert!(
+            session.game_mut().planet_modal().is_none(),
+            "escape closes the gear dialog after the forwarded gesture"
+        );
         let served = server.join().unwrap();
         assert_eq!(served.nickname, "gate");
     }

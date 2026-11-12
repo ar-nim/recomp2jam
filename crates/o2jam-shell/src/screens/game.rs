@@ -3393,7 +3393,8 @@ impl ScreenGame {
         let placements: &[ScenePlacement] = self
             .scene_art(Screen::Planet)
             .map_or(&[], |art| &art.placements);
-        self.planet_press = planet_action_at(placements, x, y);
+        let press = planet_action_at(placements, x, y);
+        self.planet_press = press;
     }
 
     /// Release the board press (left-up). Release-inside reverts and

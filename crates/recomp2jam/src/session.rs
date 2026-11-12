@@ -1921,6 +1921,21 @@ impl GameLoop for OnlineSession {
         self.game.delete_text();
     }
 
+    fn mouse_down(&mut self, x: i32, y: i32) {
+        // Forward the press edge (#118 no-input leg: these edges were
+        // trait-default no-ops here, so every windowed press, release,
+        // and motion vanished while menu_key forwarded fine).
+        self.game.mouse_down(x, y);
+    }
+
+    fn mouse_up(&mut self, x: i32, y: i32) {
+        self.game.mouse_up(x, y);
+    }
+
+    fn mouse_moved(&mut self, x: i32, y: i32) {
+        self.game.mouse_moved(x, y);
+    }
+
     fn mouse_click(&mut self, x: i32, y: i32) {
         // Click evidence states (P0: every path labeled, OPEN stays open):
         // Channel rows ride reference-measured bands (exe-OPEN) but send

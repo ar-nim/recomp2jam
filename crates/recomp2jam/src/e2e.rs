@@ -599,6 +599,23 @@ fn write_trace_json(dir: Option<&Path>, report: &E2eReport) -> anyhow::Result<()
 
 #[cfg(test)]
 mod tests {
+    /// The live input path is mouse_down + mouse_up (the #115 press
+    /// split), not `click_planet`. With real staged art, the down/up
+    /// pair must open the gear dialog exactly like the direct call —
+    /// this is the headless reproduction of "clicks route but the
+    /// game never acts" (#118 no-input leg).
+    #[test]
+    fn press_gesture_opens_gear_dialog_like_the_direct_click() {
+        let mut e2e = E2eWalker::seeded(None).expect("seeded walker");
+        e2e.dismiss_splash().expect("splash dismisses");
+        e2e.game.mouse_down(E2E_GEAR_CLICK.0, E2E_GEAR_CLICK.1);
+        e2e.game.mouse_up(E2E_GEAR_CLICK.0, E2E_GEAR_CLICK.1);
+        assert!(
+            e2e.game.planet_modal().is_some(),
+            "press gesture (down+up) must open the gear dialog like click_planet does"
+        );
+    }
+
     use super::*;
 
     /// Screens the walk must show, in player order.
