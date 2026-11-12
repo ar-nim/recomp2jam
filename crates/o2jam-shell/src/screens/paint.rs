@@ -46,9 +46,10 @@ use super::side::{
     PlanetBand, PlanetOptionTab, PlanetPromo, ShopGood, WalletRow, WalletState, GEM_LABEL,
     LANKING_LVIEW_TEXT_CODES, LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES,
     MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS, MSHOP_ROW_TEXT_CODES,
-    MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_SLOT_FIRST_CODE, QUIT_MESSAGE_CP949,
-    SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS,
-    SHOP_GEMMONEY_CODE, SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS,
+    MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_SLOT_FIRST_CODE, PLANET_PROMO_IMAGE_CODE,
+    QUIT_MESSAGE_CP949, SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE,
+    SHOP_CART_ROWS, SHOP_GEMMONEY_CODE, SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE,
+    SHOP_ITEM_ROWS,
 };
 use o2jam_file::ControlList;
 use o2jam_game::RoomTeams;
@@ -1644,15 +1645,20 @@ fn paint_planet_captions(frame: &mut Frame<'_>, placements: &[ScenePlacement]) {
 /// the rest stack, so unhover clears the highlight by repaint. The
 /// held board control (`press`, armed on left-down over the bare
 /// board) repaints its pressed frame over that (see
-/// [`paint_planet_press`]); `None` keeps the hover/rest paint.
+/// [`paint_planet_press`]); `None` keeps the hover/rest paint. The
+/// carousel banner (`promo_index`, 1-based — `0` keeps the rest
+/// stack) repaints its selected frame over the backdrop (see
+/// [`paint_planet_promo_frame`]).
 pub fn paint_planet_scene(
     frame: &mut Frame<'_>,
     art: &SceneArt,
     selection: Option<PlanetBand>,
     hover: Option<PlanetAction>,
     press: Option<PlanetAction>,
+    promo_index: u32,
 ) {
     art.paint_backdrop(frame, Screen::Planet);
+    paint_planet_promo_frame(frame, art, promo_index);
     paint_planet_hover(frame, art, hover);
     paint_planet_press(frame, art, press);
     paint_planet_captions(frame, &art.placements);
@@ -1660,6 +1666,37 @@ pub fn paint_planet_scene(
         let rect = planet_band_rect(band);
         paint_cursor(frame, rect.x + 10, rect.y + rect.h as i32 / 2);
     }
+}
+
+/// Promotion-banner frame: the exe's image control paints one frame
+/// per view (refresh arm VA `0x48e4b0` → `set_frame(index)`), so the
+/// shell repaints the staged `IDC_IMAGE_SPLANET_PROMOTION` body's
+/// selected layer over the backdrop's full stack. The frames share
+/// one anchor and size (the shipped body carries three 701x333
+/// records at (49,163)), so the selected frame covers the stack
+/// exactly. Index 0 or an unstaged body paints nothing; an index past
+/// the staged layers keeps the rest stack (the shell never invents
+/// frames). Runs before hover/press so their repaints stay on top.
+fn paint_planet_promo_frame(frame: &mut Frame<'_>, art: &SceneArt, promo_index: u32) {
+    let Some(placement) = art
+        .placements
+        .iter()
+        .find(|placed| placed.code == PLANET_PROMO_IMAGE_CODE)
+    else {
+        return;
+    };
+    let Some(layer) = promo_index
+        .checked_sub(1)
+        .and_then(|index| usize::try_from(index).ok())
+    else {
+        return;
+    };
+    let shared = shared_sprite_names(&art.placements);
+    let shares_body = placement
+        .sprite
+        .as_deref()
+        .is_some_and(|sprite| shared.contains(sprite));
+    paint_placement_layer(frame, placement, &art.figures, layer, shares_body, None);
 }
 
 /// Planet-board hover highlight: the pinned per-control art from
@@ -9417,6 +9454,7 @@ mod paint_tests {
             None,
             None,
             None,
+            1,
         );
         assert!(buf.iter().all(|pixel| *pixel == 0));
     }
@@ -9438,6 +9476,7 @@ mod paint_tests {
             Some(PlanetBand::Hard),
             None,
             None,
+            1,
         );
         let amber = pack_xrgb(0xFF, 0xD0, 0x20);
         // paint_cursor draws at (x - 6, y): (313 + 10 - 6, 32 + 56).
@@ -9514,6 +9553,7 @@ mod paint_tests {
             None,
             None,
             None,
+            1,
         );
         assert_eq!(rest[50 * 800 + 136], red, "rest keeps the top layer");
         let mut hovered = vec![0u32; 800 * 600];
@@ -9529,6 +9569,7 @@ mod paint_tests {
                 band: Some(PlanetBand::Easy),
             }),
             None,
+            1,
         );
         assert_eq!(hovered[50 * 800 + 136], blue, "plate band reveals layer 0");
         assert_eq!(
@@ -9579,6 +9620,7 @@ mod paint_tests {
             None,
             None,
             None,
+            1,
         );
         let mut hovered = vec![0u32; 800 * 600];
         paint_planet_scene(
@@ -9591,8 +9633,169 @@ mod paint_tests {
             None,
             Some(PlanetAction::Emblem { band: None }),
             None,
+            1,
         );
         assert_eq!(hovered, rest, "static emblems paint no highlight");
+    }
+
+    /// Staged FREE + DRUM placements with two-record bodies (the
+    /// exe-pinned codes and `.bnd` rects: DRUM/QUEST
+    /// `(510,32)-(609,144)`, FREE/TUTORIAL `(614,32)-(713,144)`),
+    /// so the #137 condition sweep paints both dimmed plates.
+    fn quest_and_tutorial_art() -> SceneArt {
+        use super::super::side::{PLANET_BUTTON_DRUM_CODE, PLANET_BUTTON_FREE_CODE};
+        const FREE_SPRITE: &str = "Planet_Btn_Free.ojs";
+        const DRUM_SPRITE: &str = "Planet_Btn_Drum.ojs";
+        SceneArt {
+            placements: vec![
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: String::new(),
+                    code: PLANET_BUTTON_FREE_CODE,
+                    sprite: Some(FREE_SPRITE.to_owned()),
+                    rect: Rect {
+                        x: 614,
+                        y: 32,
+                        w: 99,
+                        h: 112,
+                    },
+                },
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: String::new(),
+                    code: PLANET_BUTTON_DRUM_CODE,
+                    sprite: Some(DRUM_SPRITE.to_owned()),
+                    rect: Rect {
+                        x: 510,
+                        y: 32,
+                        w: 99,
+                        h: 112,
+                    },
+                },
+            ],
+            figures: HashMap::from([
+                (
+                    FREE_SPRITE.to_owned(),
+                    anchored_two_frame_figure(99, 112, 614, 32, [0x1F, 0x00], [0x00, 0x7C]),
+                ),
+                (
+                    DRUM_SPRITE.to_owned(),
+                    anchored_two_frame_figure(99, 112, 510, 32, [0x1F, 0x00], [0x00, 0x7C]),
+                ),
+            ]),
+        }
+    }
+
+    /// Pinned pixels of one dimmed plate: the staged `.bnd` rect
+    /// owned by `code` in `quest_and_tutorial_art`.
+    fn quest_or_tutorial_rect(code: u32, buf: &[u32]) -> Vec<u32> {
+        let x0 = if code == super::super::side::PLANET_BUTTON_FREE_CODE {
+            614
+        } else {
+            510
+        };
+        (32..144)
+            .flat_map(|y| (x0..x0 + 99).map(move |x| buf[y * 800 + x]))
+            .collect()
+    }
+
+    #[test]
+    fn quest_and_tutorial_emblems_hold_rest_across_press_and_selection() {
+        // Ticket #137 (rule pinned in `docs/planet.md`): QUEST and
+        // TUTORIAL never light — rest, hover, press, and a picked
+        // H/M/G family all paint the same plate pixels. The sweep
+        // covers both emblem codes in every pointer/selection
+        // state; the exe shows them dim in all four (byte-identical
+        // rects rest-to-dialog-open, `clean-emblem` series).
+        use super::super::side::{
+            PlanetAction, PlanetBand, PLANET_BUTTON_DRUM_CODE, PLANET_BUTTON_FREE_CODE,
+        };
+        let art = quest_and_tutorial_art();
+        let paint = |selection: Option<PlanetBand>,
+                     hover: Option<PlanetAction>,
+                     press: Option<PlanetAction>| {
+            let mut buf = vec![0u32; 800 * 600];
+            paint_planet_scene(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                &art,
+                selection,
+                hover,
+                press,
+                1,
+            );
+            buf
+        };
+        let rest = paint(None, None, None);
+        let states = [
+            (
+                "hover",
+                paint(None, Some(PlanetAction::Emblem { band: None }), None),
+            ),
+            (
+                "press",
+                paint(None, None, Some(PlanetAction::Emblem { band: None })),
+            ),
+            ("hard-selected", paint(Some(PlanetBand::Hard), None, None)),
+        ];
+        for code in [PLANET_BUTTON_FREE_CODE, PLANET_BUTTON_DRUM_CODE] {
+            let rest_rect = quest_or_tutorial_rect(code, &rest);
+            for (state, buf) in &states {
+                assert_eq!(
+                    quest_or_tutorial_rect(code, buf),
+                    rest_rect,
+                    "code {code:#X} holds its rest plate while {state}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "rest-dim is OPEN: ticket #26's fix activates this guard (kept red-by-design per the #63 art-delta-guard rule; exact exe dim coefficients stay OPEN per #113)"]
+    fn quest_and_tutorial_rest_paints_the_dimmed_frame() {
+        // Ticket #137: the exe runs both plates at ~0.32x staged
+        // brightness in every state (`docs/planet.md`), so the rest
+        // paint must dim frame 0, never stack it full-colour. The
+        // modeled desaturation stands in for #26's rest-dim; today
+        // the rest stack paints full colour, so this guard is red.
+        use super::super::side::{PLANET_BUTTON_DRUM_CODE, PLANET_BUTTON_FREE_CODE};
+        const BODY_WORD: u16 = 0x7C00;
+        let dimmed = desaturate_rgb555(BODY_WORD);
+        assert_ne!(
+            dimmed, BODY_WORD,
+            "the modeled frames are provably distinct"
+        );
+        let art = quest_and_tutorial_art();
+        let mut buf = vec![0u32; 800 * 600];
+        paint_planet_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &art,
+            None,
+            None,
+            None,
+            1,
+        );
+        for (code, x) in [
+            (PLANET_BUTTON_FREE_CODE, 614),
+            (PLANET_BUTTON_DRUM_CODE, 510),
+        ] {
+            assert_eq!(
+                buf[82 * 800 + (x + 49)],
+                pack_xrgb(
+                    ((dimmed >> 10) << 3) as u8,
+                    (((dimmed >> 5) & 0x1F) << 3) as u8,
+                    ((dimmed & 0x1F) << 3) as u8
+                ),
+                "code {code:#X} rests dimmed, not full-colour"
+            );
+        }
     }
 
     #[test]
@@ -9645,6 +9848,7 @@ mod paint_tests {
             None,
             None,
             None,
+            1,
         );
         assert_eq!(rest[520 * 800 + 400], blue, "rest keeps the top layer");
         let mut hovered = vec![0u32; 800 * 600];
@@ -9660,11 +9864,75 @@ mod paint_tests {
                 cell: PlanetPromo::Stop,
             }),
             None,
+            1,
         );
         assert_eq!(
             hovered[520 * 800 + 400],
             red,
             "hover swaps to frame 1, not the stack top"
+        );
+    }
+
+    #[test]
+    fn promo_banner_frame_follows_the_carousel_index() {
+        // The banner body paints its selected frame over the stacked
+        // rest (exe refresh arm VA `0x48e4b0` → `set_frame(index)`):
+        // index 1 shows the first frame, index 3 the top frame.
+        use super::super::side::PLANET_PROMO_IMAGE_CODE;
+        let sprite = "Planet_Promotion.ojs";
+        let mut banner = AvatarFigure::default();
+        for (word, anchor) in [
+            (0x7C00u16, (49, 163)),
+            (0x03E0u16, (49, 163)),
+            (0x001Fu16, (49, 163)),
+        ] {
+            banner.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&word.to_le_bytes().repeat(16), 4, 4).unwrap(),
+                dx: anchor.0,
+                dy: anchor.1,
+                colorkey: 0xFFFF,
+            });
+        }
+        let art = SceneArt {
+            placements: vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code: PLANET_PROMO_IMAGE_CODE,
+                sprite: Some(sprite.to_owned()),
+                rect: Rect {
+                    x: 49,
+                    y: 163,
+                    w: 701,
+                    h: 333,
+                },
+            }],
+            figures: HashMap::from([(sprite.to_owned(), banner)]),
+        };
+        let paint_index = |index: u32| {
+            let mut buf = vec![0u32; 800 * 600];
+            paint_planet_scene(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                &art,
+                None,
+                None,
+                None,
+                index,
+            );
+            buf[164 * 800 + 50]
+        };
+        assert_eq!(
+            paint_index(1),
+            pack_xrgb(0xFF, 0x00, 0x00),
+            "boot shows the first banner frame"
+        );
+        assert_eq!(
+            paint_index(3),
+            pack_xrgb(0x00, 0x00, 0xFF),
+            "index 3 shows the top banner frame"
         );
     }
 
@@ -9705,6 +9973,7 @@ mod paint_tests {
             None,
             None,
             None,
+            1,
         );
         assert_eq!(rest[575 * 800 + 725], red, "rest keeps the top layer");
         let mut hovered = vec![0u32; 800 * 600];
@@ -9718,6 +9987,7 @@ mod paint_tests {
             None,
             Some(PlanetAction::OptionsDialog),
             None,
+            1,
         );
         assert_eq!(hovered[575 * 800 + 725], blue, "hover restores frame 0");
     }
@@ -9763,6 +10033,7 @@ mod paint_tests {
             None,
             None,
             None,
+            1,
         );
         assert_eq!(rest[575 * 800 + 765], red, "rest keeps the top layer");
         let mut hovered = vec![0u32; 800 * 600];
@@ -9776,6 +10047,7 @@ mod paint_tests {
             None,
             Some(PlanetAction::QuitConfirm),
             None,
+            1,
         );
         assert_eq!(hovered[575 * 800 + 765], blue, "hover restores frame 0");
     }
@@ -9854,6 +10126,7 @@ mod paint_tests {
             None,
             hover,
             None,
+            1,
         );
         buf
     }
@@ -9930,6 +10203,7 @@ mod paint_tests {
                 band: Some(PlanetBand::Easy),
             }),
             None,
+            1,
         );
         assert!(buf.iter().all(|pixel| *pixel == 0));
     }

@@ -40,10 +40,10 @@ use super::side::{
     sort_lanking_songs, waiting_song_detail_line, waiting_song_title_line, waiting_team_for_code,
     wallet_row_caption, CreateRoomAction, CreateRoomForm, LankingAction, LankingSong, LankingSort,
     MusicShopAction, MusicShopRow, MyRoomAction, MyRoomState, PasswordAction, PasswordForm,
-    PlanetAction, PlanetOptionTab, PlanetPromo, PlanetSelection, RoomDialog, SelectMusicRow,
-    SelectMusicSong, ShopAction, ShopGood, SideScreen, WalletRow, WalletState, GEM_LABEL,
-    LANKING_LVIEW_ROWS, LANKING_RVIEW_ROWS, MSHOP_CART_ROWS, MSHOP_SONG_ROWS, OPTION_GAME_BLEND_NO,
-    OPTION_GAME_BLEND_YES, OPTION_GAME_EFFECT_HIGH, OPTION_GAME_EFFECT_LOW,
+    PlanetAction, PlanetOptionTab, PlanetPromo, PlanetPromoCarousel, PlanetSelection, RoomDialog,
+    SelectMusicRow, SelectMusicSong, ShopAction, ShopGood, SideScreen, WalletRow, WalletState,
+    GEM_LABEL, LANKING_LVIEW_ROWS, LANKING_RVIEW_ROWS, MSHOP_CART_ROWS, MSHOP_SONG_ROWS,
+    OPTION_GAME_BLEND_NO, OPTION_GAME_BLEND_YES, OPTION_GAME_EFFECT_HIGH, OPTION_GAME_EFFECT_LOW,
     OPTION_GAME_EFFECT_NORMAL, OPTION_GAME_GUIDE_LONG, OPTION_GAME_GUIDE_MIDDLE,
     OPTION_GAME_GUIDE_NOUSE, OPTION_GAME_GUIDE_SHORT, OPTION_GAME_LONGNOTE_NONE,
     OPTION_GAME_LONGNOTE_USED, OPTION_GAME_MODE_FULL, OPTION_GAME_MODE_WIN, OPTION_GAME_NOTETYPE1,
@@ -51,14 +51,15 @@ use super::side::{
     OPTION_KEY_LANE_FIRST, OPTION_KEY_TEST, OPTION_SOUND_BG_EFFECT_DOWN, OPTION_SOUND_BG_EFFECT_UP,
     OPTION_SOUND_BG_MUSIC_DOWN, OPTION_SOUND_BG_MUSIC_UP, OPTION_SOUND_GAME_EFFECT_DOWN,
     OPTION_SOUND_GAME_EFFECT_UP, OPTION_SOUND_GAME_MUSIC_DOWN, OPTION_SOUND_GAME_MUSIC_UP,
-    PLANET_OPTION_FIRST_TAB, QUIT_CANCEL_CODE, QUIT_OK_CODE, SELECT_ARTIST_RADIO,
-    SELECT_CHO_SUNG_LEFT, SELECT_CHO_SUNG_PITCH, SELECT_CHO_SUNG_ROW_CELLS, SELECT_CHO_SUNG_Y,
-    SELECT_FILTER_BUTTON_H, SELECT_FILTER_BUTTON_PITCH, SELECT_FILTER_BUTTON_TOP,
-    SELECT_FILTER_COLUMNS, SELECT_GENRE_FILTERS, SELECT_HEADER_COLUMNS, SELECT_HEADER_Y,
-    SELECT_LEVEL_FILTERS, SELECT_OK_BUTTON, SELECT_PAGER_RIGHT, SELECT_RESULT_TABS,
-    SELECT_ROW_PITCH, SELECT_ROW_TOP, SELECT_SEARCH_BOX, SELECT_SEARCH_BUTTON, SELECT_SEARCH_Y,
-    SELECT_STATUS_H, SELECT_STATUS_Y, SELECT_TABLE_HEADERS, SELECT_TABLE_LEFT, SELECT_TABLE_WIDTH,
-    SELECT_TITLE_RADIO, SELECT_VISIBLE_ROWS, SELECT_WHEEL_FILTERS, SHOP_CART_ROWS, SHOP_ITEM_ROWS,
+    PLANET_OPTION_FIRST_TAB, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE,
+    SELECT_ARTIST_RADIO, SELECT_CHO_SUNG_LEFT, SELECT_CHO_SUNG_PITCH, SELECT_CHO_SUNG_ROW_CELLS,
+    SELECT_CHO_SUNG_Y, SELECT_FILTER_BUTTON_H, SELECT_FILTER_BUTTON_PITCH,
+    SELECT_FILTER_BUTTON_TOP, SELECT_FILTER_COLUMNS, SELECT_GENRE_FILTERS, SELECT_HEADER_COLUMNS,
+    SELECT_HEADER_Y, SELECT_LEVEL_FILTERS, SELECT_OK_BUTTON, SELECT_PAGER_RIGHT,
+    SELECT_RESULT_TABS, SELECT_ROW_PITCH, SELECT_ROW_TOP, SELECT_SEARCH_BOX, SELECT_SEARCH_BUTTON,
+    SELECT_SEARCH_Y, SELECT_STATUS_H, SELECT_STATUS_Y, SELECT_TABLE_HEADERS, SELECT_TABLE_LEFT,
+    SELECT_TABLE_WIDTH, SELECT_TITLE_RADIO, SELECT_VISIBLE_ROWS, SELECT_WHEEL_FILTERS,
+    SHOP_CART_ROWS, SHOP_ITEM_ROWS,
 };
 use crate::{menu_of, MenuKey};
 use o2jam_audio::{
@@ -537,10 +538,16 @@ pub struct ScreenGame {
     /// stay unbound per P0).
     planet: PlanetSelection,
     /// Last pressed promotion-carousel cell, if any (the press
-    /// records; carousel semantics stay OPEN, `docs/planet.md`
-    /// OPEN 4). Staged placements only — unstaged promo clicks
-    /// land nowhere (no fallback literals, ADR-0003).
+    /// records and drives the carousel below). Staged placements
+    /// only — unstaged promo clicks land nowhere (no fallback
+    /// literals, ADR-0003).
     planet_promo: Option<PlanetPromo>,
+    /// Promotion-carousel state: the 1-based banner frame plus the
+    /// rotation flag (exe-pinned, `docs/planet.md`). LEFT/RIGHT
+    /// step the index with wrap, STOP toggles the flag, the
+    /// rotation tick advances while the flag is set, and the
+    /// painter follows the index.
+    planet_promo_carousel: PlanetPromoCarousel,
     /// Board control the left button is currently holding down,
     /// if any (the press-feedback arm, #111). Armed on down over
     /// the bare board; consumed on release. The pressed-frame
@@ -1046,6 +1053,7 @@ impl ScreenGame {
             arena_stage: DEFAULT_ARENA_STAGE,
             planet: PlanetSelection::new(),
             planet_promo: None,
+            planet_promo_carousel: PlanetPromoCarousel::new(),
             planet_press: None,
             planet_modal: None,
             quit_requested: false,
@@ -2427,11 +2435,12 @@ impl ScreenGame {
     }
 
     /// Channel row under the pointer, mapped back through the
-    /// stored list top (`None` off the rows, or while the
-    /// Channel dialog is not on screen).
+    /// stored list top (`None` off the rows, off the Channel
+    /// screen, under an open side overlay, on the X/scroll chrome, on a
+    /// row body, or while a slash draft owns the click).
     #[must_use]
     pub fn hovered_channel_row(&self) -> Option<usize> {
-        if self.flow.current() != Screen::Channel {
+        if self.flow.current() != Screen::Channel || self.side.is_some() {
             return None;
         }
         let (x, y) = self.pointer?;
@@ -3439,7 +3448,9 @@ impl ScreenGame {
     /// the flow gate (`Planet`→`Channel`, the dialog-over-board
     /// phase flag `parent+0xF64` in the exe); power opens the
     /// quit-confirm modal, gear the options modal, promotion cells
-    /// record the press and hold the board (carousel semantics OPEN).
+    /// record the press and drive the carousel (LEFT/RIGHT step
+    /// with wrap, STOP toggles rotation — exe-pinned,
+    /// `docs/planet.md`).
     /// The emblems are server channel families (live-verified 2026-11-09,
     /// `docs/planet.md` "Live verification"). FREE/DRUM stay
     /// unbound (P0).
@@ -3583,6 +3594,15 @@ impl ScreenGame {
             PlanetAction::Emblem { band: None } => {}
             PlanetAction::Promo { cell } => {
                 self.planet_promo = Some(cell);
+                // Carousel arms (exe-pinned, `docs/planet.md`):
+                // LEFT steps back with wrap, RIGHT steps forward
+                // with wrap, STOP toggles rotation (no repaint).
+                let frames = self.promo_frame_count();
+                match cell {
+                    PlanetPromo::Left => self.planet_promo_carousel.step_back(frames),
+                    PlanetPromo::Right => self.planet_promo_carousel.step_forward(frames),
+                    PlanetPromo::Stop => self.planet_promo_carousel.toggle(),
+                }
             }
             PlanetAction::QuitConfirm => {
                 self.planet_modal = Some(PlanetModal::QuitConfirm);
@@ -3926,6 +3946,50 @@ impl ScreenGame {
     #[must_use]
     pub fn planet_promo(&self) -> Option<PlanetPromo> {
         self.planet_promo
+    }
+
+    /// Visible promo banner frame, 1-based (exe `this+0x80`; boot 1).
+    #[must_use]
+    pub fn planet_promo_index(&self) -> u32 {
+        self.planet_promo_carousel.index()
+    }
+
+    /// Whether the carousel rotation tick advances the banner (exe
+    /// `this+0x90` nonzero; boot on).
+    #[must_use]
+    pub fn planet_promo_spinning(&self) -> bool {
+        self.planet_promo_carousel.spinning()
+    }
+
+    /// Staged promo banner frame count: the layers of the staged
+    /// `IDC_IMAGE_SPLANET_PROMOTION` body (`0` while unstaged — the
+    /// exe's wrap then lands on 0 and its refresh paints nothing).
+    fn promo_frame_count(&self) -> u32 {
+        self.scene_art(Screen::Planet)
+            .and_then(|art| {
+                art.placements
+                    .iter()
+                    .find(|placed| placed.code == PLANET_PROMO_IMAGE_CODE)
+            })
+            .and_then(|placed| placed.sprite.as_deref())
+            .and_then(|sprite| {
+                self.scene_art(Screen::Planet)
+                    .and_then(|art| art.figures.get(sprite))
+            })
+            .map_or(0, |figure| u32::try_from(figure.len()).unwrap_or(0))
+    }
+
+    /// One carousel rotation step: advance a frame while spinning,
+    /// hold while stopped (the tick body, VA `0x48e3b0`, minus the
+    /// wall-clock gate — the exe fires it every
+    /// [`PLANET_PROMO_TICK_MS`] through its per-frame update). The
+    /// windowed presenter owns the 3000 ms cadence (OPEN: hook this
+    /// into the frame loop); the core stays deterministic.
+    pub fn tick_planet_promo(&mut self) {
+        if self.planet_promo_spinning() {
+            let frames = self.promo_frame_count();
+            self.planet_promo_carousel.step_forward(frames);
+        }
     }
 
     /// Stage the avatar-item table (`Itemdata_Korea.dat`): bag, equip
@@ -4959,6 +5023,7 @@ impl ScreenGame {
                 self.planet.band(),
                 self.hovered_planet_action(),
                 self.planet_press,
+                self.planet_promo_carousel.index(),
             ),
             None => paint_screen(frame, Screen::Planet),
         }
@@ -6125,17 +6190,18 @@ mod game_tests {
     };
     use super::super::side::{
         LANKING_LPAGE_NEXT_CODE, LANKING_LPAGE_PREV_CODE, LANKING_LVIEW_TEXT_CODES,
-        LANKING_LVIEW_TOGGLE_FIRST_CODE, LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES,
-        LANKING_RVIEW_TOGGLE_FIRST_CODE, LANKING_SORT_TITLE_CODE, MSHOP_BPM_SORT_CODE,
-        MSHOP_CART_BUY_CODE, MSHOP_CART_LEFT_CODE, MSHOP_CART_RIGHT_CODE, MSHOP_DIFF_SORT_CODE,
-        MSHOP_EX_FIRST_CODE, MSHOP_GEM_BUY_CODE, MSHOP_MSALL_LEFT_CODE, MSHOP_MSALL_RIGHT_CODE,
-        MSHOP_PAGE_CUR_ONES_CODE, MSHOP_PAGE_CUR_TENS_CODE, MSHOP_PAGE_TOT_ONES_CODE,
-        MSHOP_PAGE_TOT_TENS_CODE, MSHOP_TITLE_SORT_CODE, MSHOP_WON_BUY_CODE, ROOM_BACK_BUTTON_CODE,
-        ROOM_BACK_BUTTON_ID, ROOM_OPTION_BUTTON_CODE, ROOM_OPTION_BUTTON_ID, SHOP_BUYITEM_CODE,
-        SHOP_CART_LEFT_CODE, SHOP_CART_PAGE_CUR_ONES_CODE, SHOP_CART_PAGE_CUR_TENS_CODE,
-        SHOP_CART_PAGE_TOT_ONES_CODE, SHOP_CART_PAGE_TOT_TENS_CODE, SHOP_CART_RIGHT_CODE,
-        SHOP_GEMMONEY_CODE, SHOP_ITEMBUY_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE,
-        SHOP_ITEMWON_FIRST_CODE, SHOP_SCROLL_CODE, SHOP_SCROLL_LEFT_CODE, SHOP_SCROLL_RIGHT_CODE,
+        LANKING_LVIEW_TOGGLE_FIRST_CODE, LANKING_MUSICNAME_CODE, LANKING_RPAGE_NEXT_CODE,
+        LANKING_RPAGE_PREV_CODE, LANKING_RVIEW_TEXT_CODES, LANKING_RVIEW_TOGGLE_FIRST_CODE,
+        LANKING_SORT_TITLE_CODE, MSHOP_BPM_SORT_CODE, MSHOP_CART_BUY_CODE, MSHOP_CART_LEFT_CODE,
+        MSHOP_CART_RIGHT_CODE, MSHOP_DIFF_SORT_CODE, MSHOP_EX_FIRST_CODE, MSHOP_GEM_BUY_CODE,
+        MSHOP_MSALL_LEFT_CODE, MSHOP_MSALL_RIGHT_CODE, MSHOP_PAGE_CUR_ONES_CODE,
+        MSHOP_PAGE_CUR_TENS_CODE, MSHOP_PAGE_TOT_ONES_CODE, MSHOP_PAGE_TOT_TENS_CODE,
+        MSHOP_TITLE_SORT_CODE, MSHOP_WON_BUY_CODE, ROOM_BACK_BUTTON_CODE, ROOM_BACK_BUTTON_ID,
+        ROOM_OPTION_BUTTON_CODE, ROOM_OPTION_BUTTON_ID, SHOP_BUYITEM_CODE, SHOP_CART_LEFT_CODE,
+        SHOP_CART_PAGE_CUR_ONES_CODE, SHOP_CART_PAGE_CUR_TENS_CODE, SHOP_CART_PAGE_TOT_ONES_CODE,
+        SHOP_CART_PAGE_TOT_TENS_CODE, SHOP_CART_RIGHT_CODE, SHOP_GEMMONEY_CODE,
+        SHOP_ITEMBUY_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE,
+        SHOP_SCROLL_CODE, SHOP_SCROLL_LEFT_CODE, SHOP_SCROLL_RIGHT_CODE,
     };
     use super::*;
     use crate::avatar::AvatarFigure;
@@ -9274,7 +9340,8 @@ mod game_tests {
         use super::super::side::{
             MYROOM_APPLY_CODE, MYROOM_BACK_CODE, MYROOM_BAG_FIRST_CODE, MYROOM_BAG_LEFT_CODE,
             MYROOM_BAG_RIGHT_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_GIFT_LEFT_CODE,
-            MYROOM_GIFT_RIGHT_CODE, MYROOM_MOVE_CODE, MYROOM_NICKNAME_CODE, MYROOM_SLOT_FIRST_CODE,
+            MYROOM_GIFT_RIGHT_CODE, MYROOM_GOSHOP_CODE, MYROOM_MOVE_CODE, MYROOM_NICKNAME_CODE,
+            MYROOM_SLOT_FIRST_CODE, MYROOM_VACATE_CODE,
         };
         let mut game = ScreenGame::new();
         walk_to_lobby(&mut game, Screen::Waiting);
@@ -9292,6 +9359,8 @@ mod game_tests {
             myroom_hit_placement(MYROOM_GIFT_FIRST_CODE, 400, 10),
             myroom_hit_placement(MYROOM_APPLY_CODE, 450, 10),
             myroom_hit_placement(MYROOM_MOVE_CODE, 500, 10),
+            myroom_hit_placement(MYROOM_VACATE_CODE, 10, 40),
+            myroom_hit_placement(MYROOM_GOSHOP_CODE, 60, 40),
             myroom_hit_placement(MYROOM_NICKNAME_CODE, 10, 100),
             myroom_hit_placement(MYROOM_BACK_CODE, 550, 10),
         ];
@@ -10812,6 +10881,170 @@ mod game_tests {
         let rest = pack_xrgb(0x00, 0xFF, 0x00);
         game.mouse_down(366, 523);
         assert_eq!(planet_pixel(&mut game, 366, 523), rest);
+    }
+
+    /// Bare planet board with the promo banner body (three distinct
+    /// frames) plus the three carousel cells at their parsed `.bnd`
+    /// rects (rects 11–14, `ControlList_Interface.txt`
+    /// STATE_PLANET). The banner anchors at its `.bnd` rect origin
+    /// (49,163), like the shipped `Planet_Promotion.ojs` records.
+    fn promo_carousel_game() -> ScreenGame {
+        use crate::avatar::FigureLayer;
+        use crate::screens::side::{
+            PLANET_PROMO_IMAGE_CODE, PLANET_PROMO_LEFT_CODE, PLANET_PROMO_RIGHT_CODE,
+            PLANET_PROMO_STOP_CODE,
+        };
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        let banner = "Planet_Promotion.ojs";
+        let mut frames = AvatarFigure::default();
+        for word in [0x7C00u16, 0x03E0u16, 0x001Fu16] {
+            frames.push_layer(FigureLayer {
+                image: o2jam_render::Rgb555Image::decode(&word.to_le_bytes().repeat(16), 4, 4)
+                    .expect("promo frames"),
+                dx: 49,
+                dy: 163,
+                colorkey: 0xFFFF,
+            });
+        }
+        game.load_scene(
+            Screen::Planet,
+            vec![
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: "promo-banner".to_owned(),
+                    code: PLANET_PROMO_IMAGE_CODE,
+                    sprite: Some(banner.to_owned()),
+                    rect: Rect {
+                        x: 49,
+                        y: 163,
+                        w: 701,
+                        h: 333,
+                    },
+                },
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: "promo-left".to_owned(),
+                    code: PLANET_PROMO_LEFT_CODE,
+                    sprite: Some("Promo_Left.ojs".to_owned()),
+                    rect: Rect {
+                        x: 353,
+                        y: 511,
+                        w: 26,
+                        h: 24,
+                    },
+                },
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: "promo-right".to_owned(),
+                    code: PLANET_PROMO_RIGHT_CODE,
+                    sprite: Some("Promo_Right.ojs".to_owned()),
+                    rect: Rect {
+                        x: 421,
+                        y: 511,
+                        w: 26,
+                        h: 24,
+                    },
+                },
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: "promo-stop".to_owned(),
+                    code: PLANET_PROMO_STOP_CODE,
+                    sprite: Some("Promo_Stop.ojs".to_owned()),
+                    rect: Rect {
+                        x: 387,
+                        y: 511,
+                        w: 26,
+                        h: 24,
+                    },
+                },
+            ],
+            HashMap::from([(banner.to_owned(), frames)]),
+        );
+        game
+    }
+
+    #[test]
+    fn promo_boots_on_the_first_banner_and_spinning() {
+        // Exe boot pins (`OTwo.exe` 7.55): the carousel index opens
+        // at 1 (VA `0x48dc4c`, `this+0x80 = 1`) with rotation enabled
+        // (VA `0x48dc8c`, `this+0x90 = 1`), `docs/planet.md`.
+        let game = promo_carousel_game();
+        assert_eq!(game.planet_promo_index(), 1);
+        assert!(game.planet_promo_spinning());
+    }
+
+    #[test]
+    fn promo_left_steps_the_banner_back_with_wrap() {
+        // LEFT arm (VA `0x48e0eb`): index 1 wraps to the last frame,
+        // then steps back one frame per press.
+        use crate::screens::side::PlanetPromo;
+        let mut game = promo_carousel_game();
+        game.click_planet(366, 523);
+        assert_eq!(game.planet_promo(), Some(PlanetPromo::Left));
+        assert_eq!(game.planet_promo_index(), 3);
+        game.click_planet(366, 523);
+        assert_eq!(game.planet_promo_index(), 2);
+    }
+
+    #[test]
+    fn promo_right_steps_the_banner_forward_with_wrap() {
+        // RIGHT arm (VA `0x48e13c`): forward one frame per press,
+        // wrapping the last frame back to the first.
+        let mut game = promo_carousel_game();
+        game.click_planet(434, 523);
+        assert_eq!(game.planet_promo_index(), 2);
+        game.click_planet(434, 523);
+        assert_eq!(game.planet_promo_index(), 3);
+        game.click_planet(434, 523);
+        assert_eq!(game.planet_promo_index(), 1);
+    }
+
+    #[test]
+    fn promo_stop_toggles_the_rotation_flag() {
+        // PLAYSTOP arm (VA `0x48e190`): toggles the rotation flag
+        // `0 <-> 1` with no immediate repaint.
+        let mut game = promo_carousel_game();
+        game.click_planet(400, 523);
+        assert!(!game.planet_promo_spinning());
+        assert_eq!(game.planet_promo_index(), 1);
+        game.click_planet(400, 523);
+        assert!(game.planet_promo_spinning());
+        assert_eq!(game.planet_promo_index(), 1);
+    }
+
+    #[test]
+    fn promo_tick_advances_only_while_spinning() {
+        // Rotation tick (VA `0x48e3b0` minus the wall-clock gate):
+        // one step forward per tick while spinning, frozen while
+        // stopped — STOP halts the timer without moving the frame.
+        let mut game = promo_carousel_game();
+        game.tick_planet_promo();
+        assert_eq!(game.planet_promo_index(), 2);
+        game.click_planet(400, 523);
+        game.tick_planet_promo();
+        assert_eq!(
+            game.planet_promo_index(),
+            2,
+            "stopped carousel holds its frame"
+        );
+        game.click_planet(400, 523);
+        game.tick_planet_promo();
+        assert_eq!(game.planet_promo_index(), 3);
+    }
+
+    #[test]
+    fn promo_left_press_repaints_the_banner_region() {
+        // The visible banner follows the carousel index: at boot the
+        // board shows frame 1, after LEFT it shows frame 3 (the
+        // 1-to-max wrap), repainted over the stacked rest frames.
+        let mut game = promo_carousel_game();
+        let first = pack_xrgb(0xFF, 0x00, 0x00);
+        let last = pack_xrgb(0x00, 0x00, 0xFF);
+        assert_eq!(planet_pixel(&mut game, 50, 164), first);
+        game.click_planet(366, 523);
+        assert_eq!(game.planet_promo_index(), 3);
+        assert_eq!(planet_pixel(&mut game, 50, 164), last);
     }
 
     #[test]
@@ -12534,6 +12767,8 @@ mod game_tests {
             lanking_placement(LANKING_SORT_TITLE_CODE, 10, 10, 12),
             lanking_placement(LANKING_LPAGE_NEXT_CODE, 80, 10, 12),
             lanking_placement(LANKING_LPAGE_PREV_CODE, 150, 10, 12),
+            lanking_placement(LANKING_RPAGE_PREV_CODE, 570, 380, 12),
+            lanking_placement(LANKING_RPAGE_NEXT_CODE, 640, 380, 12),
         ];
         for slot in 0i32..5 {
             placements.push(lanking_placement(
@@ -13064,6 +13299,538 @@ mod game_tests {
         assert!(game.lanking_visible_songs().is_empty());
         assert!(game.lanking_visible_ranks().is_empty());
         assert_eq!(game.lanking_selected_title(), None);
+    }
+
+    // --- Ticket #163 final legs: side screens + loading/splash ---
+    //
+    // Side chrome is partially click-silent by design (the ledger's
+    // side-state OPEN cells): the sweeps below assert the documented
+    // silence per control (no hover state arms anywhere on a side
+    // screen; clicks on unwired chrome land nowhere) or pin the wired
+    // outcome where the dispatch exists. Unevidenced arms guard the
+    // LABELED stand-in with the next rig step named, never an
+    // invented behavior.
+
+    fn open_planet_side_overlay() -> ScreenGame {
+        // Synthetic planet-side chrome: the solo-mission board
+        // stages placements but answers no click yet (OPEN).
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        let area = |code: u32, x: i32, y: i32| ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect { x, y, w: 80, h: 30 },
+        };
+        game.load_side_scene(
+            vec![area(0x1500_0001, 100, 100), area(0x1500_0002, 300, 200)],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::Planet));
+        game
+    }
+
+    fn open_tutorial_overlay() -> ScreenGame {
+        // Same synthetic pair behind the tutorial backdrop.
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        let area = |code: u32, x: i32, y: i32| ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect { x, y, w: 80, h: 30 },
+        };
+        game.load_side_scene(
+            vec![area(0x0010_0001, 100, 100), area(0x0010_0002, 300, 200)],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::Tutorial));
+        game
+    }
+
+    fn side_chrome_centers(game: &ScreenGame) -> Vec<(i32, i32)> {
+        // Every staged placement center: the sweep walks chrome,
+        // never literals at the call site.
+        game.side_placements
+            .iter()
+            .map(|placed| {
+                (
+                    placed.rect.x + placed.rect.w as i32 / 2,
+                    placed.rect.y + placed.rect.h as i32 / 2,
+                )
+            })
+            .collect()
+    }
+
+    fn assert_no_side_hover(game: &mut ScreenGame, x: i32, y: i32) {
+        // No side screen owns hover art: the sweep arms nothing.
+        game.mouse_moved(x, y);
+        assert!(game.hovered_planet_action().is_none());
+        assert!(game.hovered_channel_row().is_none());
+        assert!(game.hovered_room_control().is_none());
+    }
+
+    #[test]
+    fn side_hover_sweep_arms_no_hover_state() {
+        // Ticket #163 (side legs, HOVER): all seven sides open from
+        // Waiting; the pointer sweeps every staged control center
+        // plus a blank corner and arms no hover state anywhere — the
+        // side stays open, the lobby holds. Documented silence: the
+        // next evidence step is the rig hover sweep naming a side
+        // hover frame, if any exists.
+        use super::super::side::ALL_SIDE_SCREENS;
+        for side in ALL_SIDE_SCREENS {
+            let mut game = match side {
+                SideScreen::Shop => open_shop_board(10),
+                SideScreen::MusicShop => open_music_shop_board(7),
+                SideScreen::MyRoom => myroom_open_overlay(),
+                SideScreen::Lanking => open_lanking_board(12),
+                SideScreen::Payment => payment_open_overlay(),
+                SideScreen::Planet => open_planet_side_overlay(),
+                SideScreen::Tutorial => open_tutorial_overlay(),
+            };
+            assert_eq!(game.side(), Some(side));
+            for (x, y) in side_chrome_centers(&game) {
+                assert_no_side_hover(&mut game, x, y);
+                assert_eq!(game.side(), Some(side), "hover left {side:?}");
+                assert_eq!(game.screen(), Screen::Waiting);
+            }
+            assert_no_side_hover(&mut game, 799, 599);
+            assert_eq!(game.side(), Some(side));
+            assert_eq!(game.screen(), Screen::Waiting);
+        }
+    }
+
+    #[test]
+    fn side_hover_from_channel_arms_no_channel_row() {
+        // Ticket #163 (side legs, HOVER wiring): the channel select
+        // bar must not arm under an open side overlay — clicks route
+        // to the side layer first, so hover follows (the room
+        // resolver's pinned rule). Failing-first: the resolver missed
+        // the side gate.
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        assert_eq!(game.screen(), Screen::Channel);
+        game.load_side_scene(shop_side_placements(), HashMap::new());
+        assert!(game.visit_side(SideScreen::Shop));
+        for (x, y) in [(300, 240), (300, 290), (524, 246)] {
+            game.mouse_moved(x, y);
+            assert_eq!(
+                game.hovered_channel_row(),
+                None,
+                "channel row armed under the shop overlay at ({x},{y})"
+            );
+        }
+        assert_eq!(game.side(), Some(SideScreen::Shop));
+    }
+
+    #[test]
+    fn lanking_chrome_sweep_presses_every_staged_control() {
+        // Ticket #163 (lanking leg, CLICK): press+release through the
+        // routed gesture on every staged control — five LVIEW row
+        // toggles pick their caption songs, both pagers step and hold
+        // at the ends on both lists, and display-only chrome (RVIEW
+        // toggles, TEXT templates, MUSICNAME) lands nowhere. Sorts
+        // beyond TITLE ride the same `from_code` arm unstaged.
+        use o2jam_net::{MusicPlayRankingAnswer, RankEntry};
+        let mut game = open_lanking_board(12);
+        for (slot, title) in ["Song000", "Song001", "Song002", "Song003", "Song004"]
+            .iter()
+            .enumerate()
+        {
+            game.mouse_click(705, 105 + slot as i32 * 84);
+            assert_eq!(
+                game.lanking_selected_title(),
+                Some((*title).to_owned()),
+                "LVIEW row {slot} picked nothing"
+            );
+        }
+        game.mouse_click(85, 12);
+        assert_eq!(game.lanking_page(), 1);
+        game.mouse_click(85, 12);
+        assert_eq!(game.lanking_page(), 2);
+        game.mouse_click(85, 12);
+        assert_eq!(game.lanking_page(), 2, "NEXT holds past the end");
+        game.mouse_click(155, 12);
+        assert_eq!(game.lanking_page(), 1);
+        game.mouse_click(155, 12);
+        assert_eq!(game.lanking_page(), 0);
+        game.mouse_click(155, 12);
+        assert_eq!(game.lanking_page(), 0, "PREV holds at the start");
+        game.mouse_click(15, 12);
+        assert_eq!(game.lanking_sort(), Some(LankingSort::Title));
+        assert_eq!(game.lanking_page(), 0, "sort resets the page");
+        let row = |rank: i32| RankEntry {
+            rank,
+            ..RankEntry::default()
+        };
+        game.stage_lanking_board(MusicPlayRankingAnswer {
+            self_entry: RankEntry::default(),
+            entries: (1..=12).map(row).collect(),
+        });
+        game.mouse_click(645, 386);
+        assert_eq!(game.lanking_rpage, 1);
+        game.mouse_click(645, 386);
+        assert_eq!(game.lanking_rpage, 1, "right NEXT holds past the end");
+        game.mouse_click(605, 386);
+        assert_eq!(game.lanking_rpage, 0);
+        game.mouse_click(605, 386);
+        assert_eq!(game.lanking_rpage, 0, "right PREV holds at the start");
+        let pinned = (
+            game.lanking_sort(),
+            game.lanking_page(),
+            game.lanking_selected_title(),
+        );
+        for (x, y) in [(505, 405), (505, 455), (205, 105), (305, 365)] {
+            game.mouse_click(x, y);
+            assert_eq!(
+                (
+                    game.lanking_sort(),
+                    game.lanking_page(),
+                    game.lanking_selected_title()
+                ),
+                pinned,
+                "display-only chrome at ({x},{y}) changed the board"
+            );
+        }
+        assert_eq!(game.side(), Some(SideScreen::Lanking));
+    }
+
+    #[test]
+    fn shop_chrome_sweep_presses_every_staged_control() {
+        // Ticket #163 (shop leg, CLICK): press+release through the
+        // routed gesture on every staged control — the empty cart
+        // commits nothing, all eight ITEMBUY toggles check and uncheck,
+        // the scroll pager turns and holds, BUYITEM queues the pinned
+        // 5000 send, the cart pager turns over a full cart, and the
+        // display-only chrome (GEMMONEY, page digits, scroll bar body,
+        // ITEMNAME/ITEMWON templates) lands nowhere.
+        use o2jam_net::shop::SyncItemPurchase;
+        let mut game = open_shop_board(10);
+        game.mouse_click(40, 570);
+        assert_eq!(game.take_shop_buy(), None, "empty cart commits nothing");
+        for slot in 0..8u32 {
+            let x = 220 + (slot % 4) as i32 * 141 + 40;
+            let y = 187 + (slot / 4) as i32 * 153 + 8;
+            game.mouse_click(x, y);
+        }
+        assert_eq!(game.shop_cart(), vec![1, 2, 3, 4, 5, 6, 7, 8]);
+        game.mouse_click(261, 196);
+        assert_eq!(game.shop_cart(), vec![2, 3, 4, 5, 6, 7, 8]);
+        game.mouse_click(753, 379);
+        assert_eq!(game.shop_page(), 1);
+        game.mouse_click(261, 196);
+        assert_eq!(game.shop_cart(), vec![2, 3, 4, 5, 6, 7, 8, 9]);
+        game.mouse_click(753, 379);
+        assert_eq!(game.shop_page(), 1, "scroll NEXT holds past the end");
+        game.mouse_click(226, 379);
+        assert_eq!(game.shop_page(), 0);
+        game.mouse_click(226, 379);
+        assert_eq!(game.shop_page(), 0, "scroll PREV holds at the start");
+        game.mouse_click(40, 570);
+        assert_eq!(game.take_shop_buy(), Some(SyncItemPurchase));
+        assert_eq!(game.take_shop_buy(), None, "the seam drains once");
+        assert_eq!(game.shop_visible_cart().len(), 5);
+        game.mouse_click(340, 575);
+        assert_eq!(game.shop_visible_cart().len(), 3);
+        game.mouse_click(340, 575);
+        assert_eq!(game.shop_visible_cart().len(), 3, "cart NEXT holds");
+        game.mouse_click(220, 575);
+        assert_eq!(game.shop_visible_cart().len(), 5);
+        game.mouse_click(220, 575);
+        assert_eq!(game.shop_visible_cart().len(), 5, "cart PREV holds");
+        let pinned = (game.shop_cart(), game.shop_page());
+        for (x, y) in [(100, 290), (254, 575), (400, 383), (250, 75), (260, 175)] {
+            game.mouse_click(x, y);
+            assert_eq!(
+                (game.shop_cart(), game.shop_page()),
+                pinned,
+                "display-only chrome at ({x},{y}) changed the board"
+            );
+            assert_eq!(game.take_shop_buy(), None);
+        }
+        assert_eq!(game.side(), Some(SideScreen::Shop));
+    }
+
+    #[test]
+    fn music_shop_chrome_sweep_presses_every_staged_control() {
+        // Ticket #163 (music-shop leg, CLICK): press+release through
+        // the routed gesture on every staged control — all five MS_EX
+        // rows stage the cart, the MSALL pager turns and holds, each
+        // sort resorts and resets the page, the tiled row buys and the
+        // cart BUYITEM queue the pinned 5010 send, the cart pager turns
+        // over a full cart, and the page digits land nowhere. PRICE
+        // stays display-only with no price source (OPEN).
+        use o2jam_net::shop::SyncMusicPurchase;
+        let mut game = open_music_shop_board(7);
+        for (slot, song_id) in [757, 758, 759, 760, 761].iter().enumerate() {
+            // Slot centers: the staged slots tile edge-to-edge, so
+            // row tops would re-hit the row above.
+            game.mouse_click(19, 144 + slot as i32 * 84);
+            assert!(
+                game.music_shop_cart().contains(song_id),
+                "MS_EX row {slot} staged nothing"
+            );
+        }
+        game.mouse_click(318, 533);
+        assert_eq!(game.music_shop_page(), 1);
+        game.mouse_click(19, 105);
+        assert!(game.music_shop_cart().contains(&762));
+        game.mouse_click(199, 533);
+        assert_eq!(game.music_shop_page(), 0);
+        game.mouse_click(318, 533);
+        assert_eq!(game.music_shop_page(), 1);
+        game.mouse_click(134, 85);
+        assert_eq!(game.music_shop_sort(), Some(LankingSort::Title));
+        assert_eq!(game.music_shop_page(), 0, "TITLE resets the page");
+        game.mouse_click(200, 90);
+        assert_eq!(game.music_shop_sort(), Some(LankingSort::Diff));
+        game.mouse_click(260, 90);
+        assert_eq!(game.music_shop_sort(), Some(LankingSort::Bpm));
+        game.mouse_click(341, 156);
+        assert_eq!(game.take_music_buy(), Some(SyncMusicPurchase));
+        assert_eq!(game.take_music_buy(), None, "the seam drains once");
+        game.mouse_click(350, 179);
+        assert_eq!(
+            game.take_music_buy(),
+            Some(SyncMusicPurchase),
+            "tiled WON buy queues 5010"
+        );
+        game.mouse_click(440, 535);
+        assert_eq!(
+            game.take_music_buy(),
+            Some(SyncMusicPurchase),
+            "cart BUYITEM queues 5010"
+        );
+        assert_eq!(game.take_music_buy(), None);
+        assert_eq!(game.music_shop_visible_cart().len(), 5);
+        game.mouse_click(680, 535);
+        assert_eq!(game.music_shop_visible_cart().len(), 1);
+        game.mouse_click(680, 535);
+        assert_eq!(game.music_shop_visible_cart().len(), 1, "cart NEXT holds");
+        game.mouse_click(560, 535);
+        assert_eq!(game.music_shop_visible_cart().len(), 5);
+        game.mouse_click(560, 535);
+        assert_eq!(game.music_shop_visible_cart().len(), 5, "cart PREV holds");
+        let pinned = (
+            game.music_shop_cart(),
+            game.music_shop_page(),
+            game.music_shop_sort(),
+        );
+        game.mouse_click(250, 540);
+        assert_eq!(
+            (
+                game.music_shop_cart(),
+                game.music_shop_page(),
+                game.music_shop_sort()
+            ),
+            pinned,
+            "page digits changed the board"
+        );
+        assert_eq!(game.take_music_buy(), None);
+        assert_eq!(game.side(), Some(SideScreen::MusicShop));
+    }
+
+    #[test]
+    fn myroom_chrome_sweep_presses_every_staged_control() {
+        // Ticket #163 (myroom leg, CLICK): press+release through the
+        // routed gesture on every staged control — slot select, bag
+        // cell pick + equip commit (5004), bag/gift pagers turning and
+        // holding, gift cell pick (claim with no staged rows queues
+        // nothing), the caption landing nowhere, VACATE and GOSHOP as
+        // labeled no-ops (send shape OPEN; nested sides rejected), and
+        // BACK returning to the lobby last. Slot-filter semantics stay
+        // OPEN (`docs/myroom.md`).
+        let mut game = myroom_open_overlay();
+        // Entry queues the 5017 gift-list fetch (pinned by
+        // `myroom_entry_queues_gift_list_fetch`); the sweep drains it
+        // so later takes prove the chrome added nothing.
+        assert!(game.take_gift_list_request().is_some());
+        game.mouse_click(451, 11);
+        assert_eq!(
+            game.take_equip_send(),
+            None,
+            "no picked cell equips nothing"
+        );
+        game.mouse_click(501, 11);
+        assert_eq!(
+            game.take_gift_claim(),
+            None,
+            "no picked gift claims nothing"
+        );
+        game.mouse_click(11, 41);
+        assert_eq!(game.take_equip_send(), None);
+        assert_eq!(game.take_gift_claim(), None);
+        assert_eq!(game.take_gift_list_request(), None);
+        assert_eq!(game.myroom().selected_slot(), 0, "VACATE records only");
+        game.mouse_click(61, 41);
+        assert_eq!(
+            game.side(),
+            Some(SideScreen::MyRoom),
+            "GOSHOP keeps the room"
+        );
+        assert_eq!(game.take_equip_send(), None);
+        assert_eq!(game.take_gift_claim(), None);
+        game.mouse_click(11, 11);
+        assert_eq!(game.myroom().selected_slot(), 3);
+        game.mouse_click(201, 11);
+        assert_eq!(game.myroom().bag_cell(), Some(0));
+        game.mouse_click(251, 11);
+        assert_eq!(game.myroom().bag_cell(), Some(1));
+        game.mouse_click(451, 11);
+        let equip = game.take_equip_send().expect("apply queues the equip send");
+        assert_eq!((equip.slot, equip.item_id), (1, 2));
+        game.mouse_click(201, 11);
+        game.mouse_click(451, 11);
+        let first = game.take_equip_send().expect("re-apply queues again");
+        assert_eq!((first.slot, first.item_id), (0, 1));
+        game.mouse_click(151, 11);
+        assert_eq!(game.myroom().bag_page(), 1);
+        game.mouse_click(151, 11);
+        assert_eq!(game.myroom().bag_page(), 1, "bag NEXT holds past the end");
+        game.mouse_click(101, 11);
+        assert_eq!(game.myroom().bag_page(), 0);
+        game.mouse_click(101, 11);
+        assert_eq!(game.myroom().bag_page(), 0, "bag PREV holds at the start");
+        game.mouse_click(351, 11);
+        assert_eq!(game.myroom().gift_page(), 0, "gift NEXT holds on one page");
+        game.mouse_click(301, 11);
+        assert_eq!(game.myroom().gift_page(), 0, "gift PREV holds at the start");
+        game.mouse_click(401, 11);
+        assert_eq!(game.myroom().gift_cell(), Some(0));
+        game.mouse_click(501, 11);
+        assert_eq!(
+            game.take_gift_claim(),
+            None,
+            "claim with no staged rows records nothing"
+        );
+        game.mouse_click(11, 101);
+        assert_eq!(game.myroom().selected_slot(), 3, "caption is not a button");
+        assert_eq!(game.myroom().bag_page(), 0);
+        game.mouse_click(551, 11);
+        assert_eq!(game.side(), None);
+        assert_eq!(game.screen(), Screen::Waiting);
+    }
+
+    #[test]
+    fn payment_chrome_sweep_clicks_land_nowhere() {
+        // Ticket #163 (payment leg, CLICK): the billing views complete
+        // no web call, so every staged rect and every blank point
+        // routes nothing — the side stays open, the lobby holds, and
+        // no send seam queues anything. Labeled stand-in: the click
+        // semantics of a real billing view ride a live-gateway replay
+        // (next: rig capture of a payment click with Memoryer up).
+        let mut game = payment_open_overlay();
+        for (x, y) in [(30, 20), (200, 130), (799, 599)] {
+            game.mouse_click(x, y);
+            assert_eq!(game.side(), Some(SideScreen::Payment));
+            assert_eq!(game.screen(), Screen::Waiting);
+        }
+        assert!(game.take_equip_send().is_none());
+        assert!(game.take_gift_claim().is_none());
+        assert!(game.take_gift_list_request().is_none());
+        assert!(game.take_create_room().is_none());
+        assert!(game.take_join().is_none());
+        assert!(game.take_music_send().is_none());
+        assert!(game.take_room_team().is_none());
+        assert!(game.take_team_ready().is_none());
+        assert!(game.take_shop_buy().is_none());
+        assert!(game.take_music_buy().is_none());
+        assert!(game.leave_side());
+    }
+
+    #[test]
+    fn planet_side_and_tutorial_clicks_land_nowhere() {
+        // Ticket #163 (planet-side + tutorial legs, CLICK): the
+        // solo-mission board and the tutorial backdrop stage art but
+        // answer no control yet — clicks on staged chrome and blank
+        // points route nothing, queue nothing, and keep the side open.
+        // Labeled stand-ins: the solo-entry edge stays OPEN
+        // (`docs/planet.md` OPEN 6); the next step names the rig
+        // capture of a planet-side emblem press.
+        for mut game in [open_planet_side_overlay(), open_tutorial_overlay()] {
+            let side = game.side();
+            for (x, y) in [(140, 115), (340, 215), (799, 599)] {
+                game.mouse_click(x, y);
+                assert_eq!(game.side(), side);
+                assert_eq!(game.screen(), Screen::Waiting);
+            }
+            assert!(game.take_equip_send().is_none());
+            assert!(game.take_gift_claim().is_none());
+            assert!(game.take_gift_list_request().is_none());
+            assert!(game.take_create_room().is_none());
+            assert!(game.take_join().is_none());
+            assert!(game.take_music_send().is_none());
+            assert!(game.take_shop_buy().is_none());
+            assert!(game.take_music_buy().is_none());
+            assert!(game.leave_side());
+        }
+    }
+
+    #[test]
+    fn loading_chrome_absence_sweep_routes_no_click_or_hover() {
+        // Ticket #163 (loading leg): the gate has no chrome — clicks
+        // anywhere (corners, center, the staged READY rect) route
+        // nothing and arm no hover state; the screen holds Loading.
+        // Deliberate: menu keys still route (BACK returns below), so
+        // the absence pins clicks, not input.
+        let mut game = waiting_game_with_button(
+            "IDC_BUTTON_SWAIT_READY",
+            Rect {
+                x: 600,
+                y: 100,
+                w: 80,
+                h: 30,
+            },
+        );
+        game.mouse_click(640, 115);
+        assert_eq!(game.screen(), Screen::Loading);
+        for (x, y) in [
+            (0, 0),
+            (799, 0),
+            (0, 599),
+            (799, 599),
+            (400, 300),
+            (640, 115),
+        ] {
+            game.mouse_click(x, y);
+            assert_eq!(
+                game.screen(),
+                Screen::Loading,
+                "click at ({x},{y}) left Loading"
+            );
+            assert_no_side_hover(&mut game, x, y);
+            assert_eq!(game.screen(), Screen::Loading);
+        }
+        game.menu_key(MenuKey::Back, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+    }
+
+    #[test]
+    fn splash_chrome_absence_sweep_every_click_lands_the_same_board() {
+        // Ticket #163 (splash leg): the splash has no chrome — no
+        // hover state arms anywhere and every canvas click dismisses
+        // to the same bare board (no per-control routing).
+        // Deliberate: the whole-screen dismiss is the gesture, not a
+        // control.
+        let mut hashes = Vec::new();
+        for (x, y) in [(0, 0), (799, 0), (0, 599), (799, 599), (400, 300)] {
+            let mut game = ScreenGame::new();
+            assert_eq!(game.screen(), Screen::Avi);
+            assert_no_side_hover(&mut game, x, y);
+            assert_eq!(game.screen(), Screen::Avi);
+            game.mouse_click(x, y);
+            assert_eq!(game.screen(), Screen::Planet);
+            hashes.push(game.state_hash());
+        }
+        assert!(
+            hashes.windows(2).all(|pair| pair[0] == pair[1]),
+            "all splash clicks converge on one board"
+        );
     }
 
     #[test]
