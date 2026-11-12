@@ -23,7 +23,8 @@ use o2jam_shell::avatar::PlayingArtMode;
 use o2jam_shell::screens::paint::{DIALOG_BAR_SPRITE, RESULT_LIFE_FONT_SPRITE};
 use o2jam_shell::screens::side::PlanetOptionTab;
 use o2jam_shell::staging::{
-    read_install_archives, stage_dialog, stage_state, Dialog, StageContext, State,
+    read_install_archives, stage_byname_sheet, stage_dialog, stage_state, Dialog, StageContext,
+    StagingArchive, State, BYNAME_TABLE,
 };
 use o2jam_shell::{PlaySkin, Screen, ScreenGame};
 
@@ -200,6 +201,26 @@ fn stage_playing_scenes(game: &mut ScreenGame, archive: &[u8]) {
     game.load_scene(Screen::Playing, art.placements, art.figures);
     if let Some(skin) = PlaySkin::from_archive_for_stage(archive, Some(game.arena_stage())) {
         game.set_play_skin(skin);
+    }
+    stage_playing_byname_sheets(game, archive);
+}
+
+/// Stage the exe-literal Playing sheets beside the Playing scene
+/// (ticket #166): `State_Playing_network` + `Avatar_Info` +
+/// `Map_Avatar` ride no `ControlList` block, so the by-name rows
+/// stage each file's own rects into its game slot. Missing sheets
+/// keep their unstaged slots; paint wiring rides a later ticket.
+/// Restage-safe: `load_byname_sheet` overwrites per bind file, so a
+/// room change re-stages exactly the trio.
+fn stage_playing_byname_sheets(game: &mut ScreenGame, archive: &[u8]) {
+    for row in BYNAME_TABLE
+        .iter()
+        .filter(|row| row.archive == StagingArchive::Playing)
+    {
+        let Some(art) = stage_byname_sheet(archive, row).art else {
+            continue;
+        };
+        game.load_byname_sheet(row.bind_file, art.placements, art.figures);
     }
 }
 

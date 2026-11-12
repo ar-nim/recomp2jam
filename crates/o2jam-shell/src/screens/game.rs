@@ -602,6 +602,12 @@ pub struct ScreenGame {
     /// until the live boot stages them; the painter still reads the
     /// side slots, so paint wiring rides a later ticket.
     payment_art: Option<SceneArt>,
+    /// Staged exe-literal Playing sheets (`State_Playing_network` +
+    /// `Avatar_Info` + `Map_Avatar` placements, no figures — no block
+    /// names a body), keyed by bind file. Empty until the live boot
+    /// stages them beside the Playing scene; paint wiring rides a
+    /// later ticket.
+    byname_art: HashMap<String, SceneArt>,
     /// Committed create-room body awaiting the session send (2004).
     pending_create_room: Option<CreateRoom>,
     /// Committed locked-room join awaiting the session send (3002).
@@ -1046,6 +1052,7 @@ impl ScreenGame {
             create_room_art: None,
             password_art: None,
             payment_art: None,
+            byname_art: HashMap::new(),
             pending_create_room: None,
             pending_join: None,
             pending_room_team: None,
@@ -1651,6 +1658,33 @@ impl ScreenGame {
     #[must_use]
     pub fn payment_art_staged(&self) -> bool {
         self.payment_art.is_some()
+    }
+
+    /// Stage one exe-literal Playing sheet beside the Playing scene:
+    /// the by-name row's parsed rects plus its (today empty) figures,
+    /// keyed by bind file so paint wiring can find each sheet later.
+    /// Staging never moves the flow.
+    pub fn load_byname_sheet(
+        &mut self,
+        bind_file: &str,
+        placements: Vec<ScenePlacement>,
+        figures: HashMap<String, AvatarFigure>,
+    ) -> &mut Self {
+        self.byname_art.insert(
+            bind_file.to_owned(),
+            SceneArt {
+                placements,
+                figures,
+            },
+        );
+        self
+    }
+    /// True while the named literal sheet is staged (the live-boot
+    /// staging gate asserts the live path stages the trio beside the
+    /// Playing scene).
+    #[must_use]
+    pub fn byname_art_staged(&self, bind_file: &str) -> bool {
+        self.byname_art.contains_key(bind_file)
     }
 
     /// Open room dialog, if any.

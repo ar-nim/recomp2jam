@@ -48,6 +48,14 @@ mod live_boot_gate_tests {
             .is_some()
     }
 
+    /// The 7.55 playing archive holds the exe-literal sheets (#166);
+    /// without it the gate skips only the by-name asserts below.
+    fn playing_present() -> bool {
+        o2jam_shell::staging::read_install_archives(&install_root())
+            .playing
+            .is_some()
+    }
+
     /// Script the boot exchange: authorize, channel list, channel
     /// login, room list, then the `GetCharacterInfo` 2001 fetch the
     /// gate asserts. Returns the port and the served character.
@@ -137,6 +145,18 @@ mod live_boot_gate_tests {
             game.payment_art_staged(),
             "live boot stages the payment sheets"
         );
+        if playing_present() {
+            for sheet in [
+                "State_Playing_network.bnd",
+                "Avatar_Info.bnd",
+                "Map_Avatar.bnd",
+            ] {
+                assert!(
+                    game.byname_art_staged(sheet),
+                    "live boot stages the {sheet} literal sheet"
+                );
+            }
+        }
         let hero = game
             .myroom_character()
             .expect("live boot stages the fetched character info");
