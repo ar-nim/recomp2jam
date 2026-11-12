@@ -3258,7 +3258,7 @@ pub fn paint_room_user_panel(
 ) {
     if let (Some(figure), Some(slot)) = (figure, staged_field_rect(placements, ROOM_AVATAR_ID)) {
         let slot = scale_rect_to_frame(&slot, frame.w, frame.h);
-        figure.paint_extent_centered(frame, &slot, frame.w, frame.h);
+        figure.paint_visible_centered(frame, &slot, frame.w, frame.h);
     }
     if let Some(character) = character {
         let ink = caption_ink(art_title_ink());
@@ -3569,10 +3569,12 @@ fn waiting_seat_slot_rect(placements: &[ScenePlacement], seat: usize) -> Option<
 }
 
 /// Paint one worn figure into one seat slot, centred on the slot's
-/// scaled box (the shared seat-slot path: self and peers alike).
+/// scaled box (the shared seat-slot path: self and peers alike). The
+/// visible box centers, so the head-to-feet stack lands inside the
+/// slot (ticket #171) — the same helper the room panel uses.
 fn paint_figure_in_seat_slot(frame: &mut Frame<'_>, figure: &AvatarFigure, slot: &Rect) {
     let scaled = scale_rect_to_frame(slot, frame.w, frame.h);
-    figure.paint_extent_centered(frame, &scaled, frame.w, frame.h);
+    figure.paint_visible_centered(frame, &scaled, frame.w, frame.h);
 }
 
 /// Paint the local player's worn figure into their own seat's avatar
@@ -6147,6 +6149,7 @@ mod paint_tests {
         SHOP_CART_PAGE_TOT_TENS_CODE, SHOP_CART_TOGGLE_FIRST_CODE,
     };
     use super::*;
+    use crate::avatar::load_worn_figure;
     use crate::avatar::FigureLayer;
     use crate::screen::Screen;
     use crate::staging::{stage_state, StageContext, State};
@@ -10799,6 +10802,181 @@ mod paint_tests {
             ink_in_rect(&buf, 800, slot) > 0,
             "figure ink must land inside the staged slot"
         );
+    }
+
+    /// Read the pinned avatar archive, `None` without install-root.
+    fn avatar_archive() -> Option<Vec<u8>> {
+        std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../install-root/O2Jam/Image/avatar.opa"),
+        )
+        .ok()
+    }
+
+    /// The staged hero's worn figure on real 7.55 bytes (`None`
+    /// without install-root): the tester's equipment (`tester`,
+    /// the `staged_online_identity` hero) stacked through the shared
+    /// `load_worn_figure` path — the same stacker the waiting seats
+    /// paint — at the live `Any`-parity guess (female).
+    fn stacked_hero_figure() -> Option<AvatarFigure> {
+        let archive = avatar_archive()?;
+        let entries = o2jam_file::parse_opi(&archive).ok()?;
+        let table_entry = entries
+            .iter()
+            .find(|entry| entry.name == "Itemdata_Korea.dat")?;
+        let size = usize::try_from(table_entry.size).ok()?;
+        let body = archive.get(table_entry.data_offset..table_entry.data_offset + size)?;
+        let table = o2jam_file::parse_avatar_item_table(body).ok()?;
+        let figure = load_worn_figure(&archive, &table, &[16, 30, 376, 383, 389], false);
+        (!figure.is_empty()).then_some(figure)
+    }
+
+    /// Ink bounding box of the figure alone: pixels the painted
+    /// frame inks over the bare frame, so panel captions and
+    /// placeholders never count as figure ink.
+    fn figure_only_bbox(painted: &[u32], bare: &[u32]) -> Option<(i32, i32, i32, i32)> {
+        let mut ink: Option<(i32, i32, i32, i32)> = None;
+        for (at, pixel) in painted.iter().enumerate() {
+            if *pixel == 0 || bare.get(at) != Some(&0) {
+                continue;
+            }
+            let x = i32::try_from(at % 800).unwrap_or(0);
+            let y = i32::try_from(at / 800).unwrap_or(0);
+            ink = Some(match ink {
+                Some((x0, y0, x1, y1)) => (x0.min(x), y0.min(y), x1.max(x), y1.max(y)),
+                None => (x, y, x, y),
+            });
+        }
+        ink
+    }
+
+    /// The ink box must sit centered and contained in its slot: the
+    /// full stack (head to feet) lands in the avatar rect instead of
+    /// a head-sized blob at the border.
+    fn assert_figure_fills_slot(painted: &[u32], bare: &[u32], slot: Rect) {
+        let (x0, y0, x1, y1) =
+            figure_only_bbox(painted, bare).expect("the stacked figure must ink the scene");
+        assert!(
+            x1 - x0 + 1 >= 40 && y1 - y0 + 1 >= 100,
+            "the room paint must show the full stack (ink {w}x{h}), not a head-sized blob",
+            w = x1 - x0 + 1,
+            h = y1 - y0 + 1,
+        );
+        assert!(
+            x0 >= slot.x
+                && y0 >= slot.y
+                && x1 < slot.x + slot.w as i32
+                && y1 < slot.y + slot.h as i32,
+            "figure ink ({x0},{y0})-({x1},{y1}) must stay inside its slot {slot:?}"
+        );
+        let center = |low: i32, high: i32| (low + high) / 2;
+        assert!(
+            (center(x0, x1) - center(slot.x, slot.x + slot.w as i32)).abs() <= 12
+                && (center(y0, y1) - center(slot.y, slot.y + slot.h as i32)).abs() <= 12,
+            "figure ink ({x0},{y0})-({x1},{y1}) must center in its slot {slot:?}"
+        );
+    }
+
+    #[test]
+    fn room_user_panel_centers_the_stacked_worn_figure_in_its_slot() {
+        // Ticket #171: the room panel showed a head-sized blob at the
+        // slot's border instead of the full worn figure. The staged
+        // hero stacks head to feet through the waiting-seat stacker,
+        // so the room paint must land that same stack centered and
+        // contained in the `IDC_IMAGE_SROOM_AVATA` slot.
+        let Some(figure) = stacked_hero_figure() else {
+            println!("skip: missing install-root avatar.opa");
+            return;
+        };
+        let placements = room_user_panel_placements();
+        let slot = placements
+            .iter()
+            .find(|placed| placed.id == ROOM_AVATAR_ID)
+            .expect("slot staged")
+            .rect;
+        let mut bare = vec![0u32; 800 * 600];
+        paint_room_user_panel(
+            &mut Frame {
+                buf: &mut bare,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            None,
+            None,
+        );
+        let mut buf = vec![0u32; 800 * 600];
+        paint_room_user_panel(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            None,
+            Some(&figure),
+        );
+        assert_figure_fills_slot(&buf, &bare, slot);
+    }
+
+    #[test]
+    fn waiting_seat_avatar_centers_the_stacked_worn_figure_in_its_slot() {
+        // The proven reference for #171: the same hero stack through
+        // the waiting seat-0 slot must land centered and contained
+        // too — the room panel matches this figure for the same
+        // equipment, both through the shared seat-slot helper.
+        let Some(figure) = stacked_hero_figure() else {
+            println!("skip: missing install-root avatar.opa");
+            return;
+        };
+        let slot = Rect {
+            x: 37,
+            y: 55,
+            w: 123,
+            h: 150,
+        };
+        let placements = vec![
+            ScenePlacement {
+                role: PlacementRole::Single,
+                id: WAITING_SEAT_PARENT_IDS[0].to_owned(),
+                code: 0x1601_5022,
+                sprite: None,
+                rect: slot,
+            },
+            ScenePlacement {
+                role: PlacementRole::Single,
+                id: WAITING_AVATAR_SLOT_ID.to_owned(),
+                code: 0x1670_002E,
+                sprite: None,
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 123,
+                    h: 150,
+                },
+            },
+        ];
+        let mut bare = vec![0u32; 800 * 600];
+        paint_waiting_seat_avatar(
+            &mut Frame {
+                buf: &mut bare,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            None,
+        );
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_seat_avatar(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            Some(&figure),
+        );
+        assert_figure_fills_slot(&buf, &bare, slot);
     }
 
     #[test]
