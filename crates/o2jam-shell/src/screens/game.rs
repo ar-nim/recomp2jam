@@ -417,6 +417,11 @@ const WAITING_BACK_IDS: [&str; 2] = ["IDC_BUTTON_SWAIT_BACK", "IDC_BUTTON_SWAIT_
 /// replaces the old 3 s stand-in (which cut the logo track 0.92 s
 /// short) with this measured value.
 const SPLASH_AUTO_ADVANCE_MS: u64 = 5_000;
+/// Splash hold poll gap while windowed (ticket #138): the Avi
+/// auto-advance rides the wall clock (`advance_splash_on_wall_clock`
+/// polls it per paint), so a modest wakeup checks the hold instead of
+/// the loop's 60 Hz tick — the advance lands within this of the hold.
+const SPLASH_HOLD_POLL_MS: u64 = 100;
 
 /// Game loop that shows each screen's scene and walks the flow.
 ///
@@ -5858,6 +5863,26 @@ impl GameLoop for ScreenGame {
         observable_state_hash(self)
     }
 
+    fn idle_repaint_interval(&self) -> Option<std::time::Duration> {
+        match self.flow.current() {
+            // Song scroll, receptor flash, and the end-of-song Result
+            // edge all ride the sample clock (`paint_at` polls it), so
+            // Playing keeps the loop's 60 Hz tick while a song runs.
+            Screen::Playing => Some(std::time::Duration::from_nanos(crate::TICK_NANOS)),
+            // The splash auto-advance rides the wall clock, so a modest
+            // poll checks the hold; fixed-clock replays keep the tick
+            // pace the headless seam always drove (`paint_at` advances
+            // the virtual clock per paint there).
+            Screen::Avi if self.fixed_clock_step_ms.is_none() => {
+                Some(std::time::Duration::from_millis(SPLASH_HOLD_POLL_MS))
+            }
+            Screen::Avi => Some(std::time::Duration::from_nanos(crate::TICK_NANOS)),
+            // Every other scene is event-driven (input, resizes, lobby
+            // drains owned by the session layer): no timer of its own.
+            _ => None,
+        }
+    }
+
     fn paint(&mut self, frame: &mut Frame<'_>) {
         self.advance_splash_on_wall_clock();
         let now = self.now_ms();
@@ -8850,6 +8875,76 @@ mod game_tests {
         let mut game = ScreenGame::new();
         paint_splash_frame(&mut game, SPLASH_AUTO_ADVANCE_MS + 1_000);
         assert_eq!(game.screen(), Screen::Planet);
+    }
+
+    #[test]
+    fn splash_scene_polls_its_wall_hold_at_a_modest_gap() {
+        // Ticket #138: the splash auto-advance rides the wall clock,
+        // so the window owes one modest wakeup per hold check — not
+        // the loop's 60 Hz tick — while the logo sits untouched.
+        let game = ScreenGame::new();
+        assert_eq!(game.screen(), Screen::Avi);
+        assert_eq!(
+            GameLoop::idle_repaint_interval(&game),
+            Some(std::time::Duration::from_millis(SPLASH_HOLD_POLL_MS))
+        );
+    }
+
+    #[test]
+    fn fixed_clock_splash_keeps_the_tick_pace() {
+        // Trace replays drive the virtual clock per paint, so the
+        // windowed replay keeps the tick pace the headless seam
+        // always drove (no replay slows down under #138).
+        let mut game = ScreenGame::new();
+        game.enable_fixed_clock(16);
+        assert_eq!(
+            GameLoop::idle_repaint_interval(&game),
+            Some(std::time::Duration::from_nanos(crate::TICK_NANOS))
+        );
+    }
+
+    #[test]
+    fn playing_scene_holds_the_sixty_hertz_tick() {
+        // Song scroll, receptor flash, and the end-of-song Result edge
+        // all ride the sample clock per paint: Playing keeps ticking.
+        let mut game = ScreenGame::new();
+        walk_to_playing(&mut game);
+        assert_eq!(
+            GameLoop::idle_repaint_interval(&game),
+            Some(std::time::Duration::from_nanos(crate::TICK_NANOS))
+        );
+    }
+
+    #[test]
+    fn settled_scenes_idle_without_a_timer() {
+        // Every other scene is event-driven (input, resizes, and the
+        // session layer's lobby drains): the game sets no timer of its
+        // own, so the windowed loop parks on these boards. The walk
+        // follows the pinned menu path (`menu_walks_lobbies_to_playing`).
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        assert_eq!(game.screen(), Screen::Planet);
+        assert_eq!(GameLoop::idle_repaint_interval(&game), None);
+        for (key, screen) in [
+            (MenuKey::Confirm, Screen::Channel),
+            (MenuKey::Confirm, Screen::Room),
+            (MenuKey::Confirm, Screen::Waiting),
+            (MenuKey::Confirm, Screen::Loading),
+        ] {
+            game.menu_key(key, true);
+            assert_eq!(game.screen(), screen);
+            assert_eq!(
+                GameLoop::idle_repaint_interval(&game),
+                None,
+                "{screen:?} must idle without a timer"
+            );
+        }
+        // Side overlays ride the lobby screen underneath: no timer
+        // while the shop sheet sits over Waiting.
+        assert!(game.enter_screen(Screen::Waiting));
+        assert!(game.visit_side(super::super::side::SideScreen::Shop));
+        assert_eq!(GameLoop::idle_repaint_interval(&game), None);
+        assert!(game.leave_side());
     }
 
     #[test]
