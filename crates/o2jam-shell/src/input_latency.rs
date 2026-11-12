@@ -221,6 +221,10 @@ impl<G: GameLoop> GameLoop for JudgementStamp<G> {
         self.inner.state_hash()
     }
 
+    fn idle_repaint_interval(&self) -> Option<std::time::Duration> {
+        self.inner.idle_repaint_interval()
+    }
+
     fn paint(&mut self, frame: &mut o2jam_render::Frame<'_>) {
         self.inner.paint(frame);
     }

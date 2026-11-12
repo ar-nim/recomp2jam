@@ -13,19 +13,20 @@ use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
     battle_verdict, channel_dialog_x_hit, channel_face_hit, channel_row_hit, channel_scroll_hit,
-    channel_viewport, dialog_rect_hit, has_room_panels, list_row_hit, paint_avi_scene,
-    paint_channel_chat, paint_channel_list, paint_channel_scene, paint_lanking_board,
-    paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
-    paint_lobby_backdrop, paint_music_shop_board, paint_music_shop_cart, paint_music_shop_scene,
-    paint_myroom_data, paint_myroom_scene, paint_payment_notice, paint_planet_options,
-    paint_planet_quit, paint_planet_scene, paint_playing_backdrop, paint_playing_foreground,
-    paint_result, paint_result_scene, paint_room_chat, paint_room_hover, paint_room_list,
-    paint_room_scene, paint_room_user_panel, paint_screen, paint_shop_board, paint_shop_scene,
-    paint_waiting_chat, paint_waiting_members, paint_waiting_scene, paint_waiting_seat_avatar,
-    paint_waiting_seat_avatars, playing_backdrop_staged, quit_fallback_rects, rect_hit,
-    room_panel_hit, scene_index, staged_rect_hit, BattleVerdict, ChannelChatMessage, ChannelScroll,
-    LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions,
-    WaitingChatMessage, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    channel_viewport, dialog_origin, dialog_rect_hit, has_room_panels, list_row_hit,
+    paint_avi_scene, paint_channel_chat, paint_channel_list, paint_channel_scene,
+    paint_dialog_scene, paint_lanking_board, paint_lanking_scene, paint_loading_scene,
+    paint_loading_scene_with_status, paint_lobby_backdrop, paint_music_shop_board,
+    paint_music_shop_cart, paint_music_shop_scene, paint_myroom_data, paint_myroom_scene,
+    paint_payment_notice, paint_planet_options, paint_planet_quit, paint_planet_scene,
+    paint_playing_backdrop, paint_playing_foreground, paint_result, paint_result_scene,
+    paint_room_chat, paint_room_hover, paint_room_list, paint_room_scene, paint_room_user_panel,
+    paint_screen, paint_shop_board, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
+    paint_waiting_scene, paint_waiting_seat_avatar, paint_waiting_seat_avatars,
+    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_panel_hit, scene_index,
+    staged_rect_hit, BattleVerdict, ChannelChatMessage, ChannelScroll, LoadingStatus, ResultPaint,
+    ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage, RESULT_BACK_ID,
+    RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::side::{
     can_return_side, can_visit_side, create_room_action_at, lanking_action_at, lanking_page_window,
@@ -418,6 +419,11 @@ const WAITING_BACK_IDS: [&str; 2] = ["IDC_BUTTON_SWAIT_BACK", "IDC_BUTTON_SWAIT_
 /// replaces the old 3 s stand-in (which cut the logo track 0.92 s
 /// short) with this measured value.
 const SPLASH_AUTO_ADVANCE_MS: u64 = 5_000;
+/// Splash hold poll gap while windowed (ticket #138): the Avi
+/// auto-advance rides the wall clock (`advance_splash_on_wall_clock`
+/// polls it per paint), so a modest wakeup checks the hold instead of
+/// the loop's 60 Hz tick — the advance lands within this of the hold.
+const SPLASH_HOLD_POLL_MS: u64 = 100;
 
 /// Game loop that shows each screen's scene and walks the flow.
 ///
@@ -5075,19 +5081,22 @@ impl ScreenGame {
                 self.room_avatar.as_ref(),
             );
         }
-        // The open room dialog layers over the lobby: staged sheet
-        // first, then the form texts at the parsed edit rects. Empty
-        // fields paint nothing (the staged plate shows through).
+        // The open room dialog layers over the lobby: the staged sheet
+        // dialog-relative first (child `.bnd` rects are parent-relative
+        // in storage, pinned #114 — the same `dialog_origin + rect`
+        // the planet dialogs paint), then the form texts at the parsed
+        // edit rects. Empty fields paint nothing (the staged plate shows
+        // through).
         match self.room_dialog {
             Some(RoomDialog::CreateRoom) => {
                 if let Some(art) = self.create_room_art.as_ref() {
-                    art.paint_overlay(frame);
+                    paint_dialog_scene(frame, art);
                     self.paint_create_room_texts(frame, &art.placements);
                 }
             }
             Some(RoomDialog::Password { .. }) => {
                 if let Some(art) = self.password_art.as_ref() {
-                    art.paint_overlay(frame);
+                    paint_dialog_scene(frame, art);
                     self.paint_password_text(frame, &art.placements);
                 }
             }
@@ -5097,7 +5106,8 @@ impl ScreenGame {
         // the Planet board (EXIT/Escape closes back onto Room).
         self.paint_planet_modal(frame);
     }
-    /// Create-room texts at the parsed title/password edit rects.
+    /// Create-room texts at the parsed title/password edit rects,
+    /// dialog-relative like every other dialog child (pinned #114).
     fn paint_create_room_texts(&self, frame: &mut Frame<'_>, placements: &[ScenePlacement]) {
         for (code, text) in [
             (
@@ -5115,11 +5125,19 @@ impl ScreenGame {
             let Some(placed) = placements.iter().find(|placed| placed.code == code) else {
                 continue;
             };
-            let scaled = scale_rect_to_frame(&placed.rect, frame.w, frame.h);
+            let (origin_x, origin_y) = dialog_origin(placements);
+            let placed_rect = Rect {
+                x: placed.rect.x + origin_x,
+                y: placed.rect.y + origin_y,
+                w: placed.rect.w,
+                h: placed.rect.h,
+            };
+            let scaled = scale_rect_to_frame(&placed_rect, frame.w, frame.h);
             draw_text(frame, scaled.x, scaled.y, text, 0xFFFF_FFFF);
         }
     }
-    /// Password text at the parsed password edit rect.
+    /// Password text at the parsed password edit rect, dialog-relative
+    /// like every other dialog child (pinned #114).
     fn paint_password_text(&self, frame: &mut Frame<'_>, placements: &[ScenePlacement]) {
         if self.password_form.password.is_empty() {
             return;
@@ -5130,7 +5148,14 @@ impl ScreenGame {
         else {
             return;
         };
-        let scaled = scale_rect_to_frame(&placed.rect, frame.w, frame.h);
+        let (origin_x, origin_y) = dialog_origin(placements);
+        let placed_rect = Rect {
+            x: placed.rect.x + origin_x,
+            y: placed.rect.y + origin_y,
+            w: placed.rect.w,
+            h: placed.rect.h,
+        };
+        let scaled = scale_rect_to_frame(&placed_rect, frame.w, frame.h);
         draw_text(
             frame,
             scaled.x,
@@ -5981,6 +6006,26 @@ impl GameLoop for ScreenGame {
 
     fn state_hash(&self) -> u64 {
         observable_state_hash(self)
+    }
+
+    fn idle_repaint_interval(&self) -> Option<std::time::Duration> {
+        match self.flow.current() {
+            // Song scroll, receptor flash, and the end-of-song Result
+            // edge all ride the sample clock (`paint_at` polls it), so
+            // Playing keeps the loop's 60 Hz tick while a song runs.
+            Screen::Playing => Some(std::time::Duration::from_nanos(crate::TICK_NANOS)),
+            // The splash auto-advance rides the wall clock, so a modest
+            // poll checks the hold; fixed-clock replays keep the tick
+            // pace the headless seam always drove (`paint_at` advances
+            // the virtual clock per paint there).
+            Screen::Avi if self.fixed_clock_step_ms.is_none() => {
+                Some(std::time::Duration::from_millis(SPLASH_HOLD_POLL_MS))
+            }
+            Screen::Avi => Some(std::time::Duration::from_nanos(crate::TICK_NANOS)),
+            // Every other scene is event-driven (input, resizes, lobby
+            // drains owned by the session layer): no timer of its own.
+            _ => None,
+        }
     }
 
     fn paint(&mut self, frame: &mut Frame<'_>) {
@@ -7490,6 +7535,750 @@ mod game_tests {
         assert_eq!(game.screen(), Screen::Waiting);
         game.mouse_click(640, 115);
         assert_eq!(game.screen(), Screen::Waiting);
+    }
+
+    /// Stage the waiting chrome row with exe-pinned code/rect pairs
+    /// (`Interface1.opi` `STATE_WAITING` + `State_Waiting.bnd` — the
+    /// same parse the #57 no-overlap guard re-derives in
+    /// `tests/real_art.rs`): the shared driver for the sweep guards
+    /// below (ADR-0003: staged rects, never literals). Spriteless:
+    /// clicks resolve by id/code plus rect, so no figures are needed.
+    fn swept_waiting_game() -> ScreenGame {
+        let button = |id: &str, code: u32, rect: Rect| ScenePlacement {
+            role: PlacementRole::Single,
+            id: id.to_owned(),
+            code,
+            sprite: None,
+            rect,
+        };
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        game.load_scene(
+            Screen::Waiting,
+            vec![
+                button(
+                    "IDC_BUTTON_SWAIT_START",
+                    0x1620_2012,
+                    Rect {
+                        x: 628,
+                        y: 126,
+                        w: 142,
+                        h: 37,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_READY",
+                    0x1620_2013,
+                    Rect {
+                        x: 628,
+                        y: 126,
+                        w: 142,
+                        h: 37,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_BACK",
+                    0x1620_0002,
+                    Rect {
+                        x: 711,
+                        y: 569,
+                        w: 83,
+                        h: 24,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_MUSELECT",
+                    0x1620_0003,
+                    Rect {
+                        x: 540,
+                        y: 493,
+                        w: 54,
+                        h: 49,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_MAPLEFT",
+                    0x1620_000C,
+                    Rect {
+                        x: 631,
+                        y: 539,
+                        w: 32,
+                        h: 20,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_MAPRIGHT",
+                    0x1620_000D,
+                    Rect {
+                        x: 667,
+                        y: 539,
+                        w: 33,
+                        h: 20,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_CHANGE_TITLE",
+                    0x1620_0047,
+                    Rect {
+                        x: 478,
+                        y: 13,
+                        w: 86,
+                        h: 26,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_EMOTION",
+                    0x1620_0048,
+                    Rect {
+                        x: 533,
+                        y: 562,
+                        w: 61,
+                        h: 23,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_1SKILLLEFT",
+                    0x1620_0050,
+                    Rect {
+                        x: 662,
+                        y: 204,
+                        w: 34,
+                        h: 38,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_1SKILLRIGHT",
+                    0x1620_0051,
+                    Rect {
+                        x: 736,
+                        y: 204,
+                        w: 34,
+                        h: 38,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_2SKILLLEFT",
+                    0x1620_0052,
+                    Rect {
+                        x: 662,
+                        y: 242,
+                        w: 34,
+                        h: 38,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_2SKILLRIGHT",
+                    0x1620_0053,
+                    Rect {
+                        x: 736,
+                        y: 242,
+                        w: 34,
+                        h: 38,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_3SKILLLEFT",
+                    0x1620_0054,
+                    Rect {
+                        x: 662,
+                        y: 280,
+                        w: 34,
+                        h: 38,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_3SKILLRIGHT",
+                    0x1620_0055,
+                    Rect {
+                        x: 736,
+                        y: 280,
+                        w: 34,
+                        h: 38,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_SPEED_LEFT",
+                    0x1620_0064,
+                    Rect {
+                        x: 647,
+                        y: 378,
+                        w: 33,
+                        h: 36,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_SPEED_RIGHT",
+                    0x1620_0065,
+                    Rect {
+                        x: 736,
+                        y: 378,
+                        w: 33,
+                        h: 36,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_MESSENGER",
+                    0x1620_006A,
+                    Rect {
+                        x: 668,
+                        y: 569,
+                        w: 40,
+                        h: 24,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_TEAMA",
+                    0x1620_1004,
+                    Rect {
+                        x: 652,
+                        y: 65,
+                        w: 24,
+                        h: 24,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_TEAMB",
+                    0x1620_1005,
+                    Rect {
+                        x: 682,
+                        y: 65,
+                        w: 24,
+                        h: 24,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_TEAMC",
+                    0x1620_1006,
+                    Rect {
+                        x: 712,
+                        y: 65,
+                        w: 24,
+                        h: 24,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_TEAMD",
+                    0x1620_1007,
+                    Rect {
+                        x: 742,
+                        y: 65,
+                        w: 24,
+                        h: 24,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_TEAME",
+                    0x1620_1008,
+                    Rect {
+                        x: 652,
+                        y: 93,
+                        w: 24,
+                        h: 24,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_TEAMF",
+                    0x1620_1009,
+                    Rect {
+                        x: 682,
+                        y: 93,
+                        w: 24,
+                        h: 24,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_TEAMG",
+                    0x1620_100A,
+                    Rect {
+                        x: 712,
+                        y: 93,
+                        w: 24,
+                        h: 24,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_TEAMH",
+                    0x1620_100B,
+                    Rect {
+                        x: 742,
+                        y: 93,
+                        w: 24,
+                        h: 24,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_CHAT_ALL",
+                    0x1620_100E,
+                    Rect {
+                        x: 415,
+                        y: 562,
+                        w: 23,
+                        h: 23,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_CHAT_FRIEND",
+                    0x1620_100F,
+                    Rect {
+                        x: 441,
+                        y: 562,
+                        w: 23,
+                        h: 23,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_CHAT_GUILD",
+                    0x1620_1010,
+                    Rect {
+                        x: 467,
+                        y: 562,
+                        w: 23,
+                        h: 23,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_CHAT_WHISPER",
+                    0x1620_1011,
+                    Rect {
+                        x: 493,
+                        y: 562,
+                        w: 23,
+                        h: 23,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_TOPEFFECT",
+                    0x1620_1020,
+                    Rect {
+                        x: 719,
+                        y: 450,
+                        w: 60,
+                        h: 48,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_BOTTOMEFFECT",
+                    0x1620_1021,
+                    Rect {
+                        x: 719,
+                        y: 507,
+                        w: 60,
+                        h: 48,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_MASTER_SKILLSEL",
+                    0x1620_2056,
+                    Rect {
+                        x: 629,
+                        y: 327,
+                        w: 140,
+                        h: 35,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_SKILLSEL",
+                    0x1620_2057,
+                    Rect {
+                        x: 629,
+                        y: 327,
+                        w: 140,
+                        h: 35,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_EXTEND1",
+                    0x1601_5022,
+                    Rect {
+                        x: 37,
+                        y: 55,
+                        w: 123,
+                        h: 150,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_EXTEND2",
+                    0x1601_5023,
+                    Rect {
+                        x: 179,
+                        y: 55,
+                        w: 123,
+                        h: 150,
+                    },
+                ),
+                button(
+                    "IDC_BUTTON_SWAIT_EXTEND5",
+                    0x1601_5026,
+                    Rect {
+                        x: 37,
+                        y: 245,
+                        w: 123,
+                        h: 150,
+                    },
+                ),
+                button(
+                    "IDC_IMAGE_SWAIT_COVERAVATAR1",
+                    0x1650_003D,
+                    Rect {
+                        x: 28,
+                        y: 53,
+                        w: 141,
+                        h: 175,
+                    },
+                ),
+                button(
+                    "IDC_IMAGE_SWAIT_COVERAVATAR2",
+                    0x1650_003E,
+                    Rect {
+                        x: 170,
+                        y: 53,
+                        w: 141,
+                        h: 175,
+                    },
+                ),
+                button(
+                    "IDC_IMAGE_SWAIT_COVERAVATAR5",
+                    0x1650_0041,
+                    Rect {
+                        x: 28,
+                        y: 242,
+                        w: 141,
+                        h: 175,
+                    },
+                ),
+                button(
+                    "IDC_SCROLL_SWAIT_CHAT",
+                    0x1620_0038,
+                    Rect {
+                        x: 496,
+                        y: 451,
+                        w: 18,
+                        h: 18,
+                    },
+                ),
+                button(
+                    "IDC_SCROLL_SWAIT_CHAT",
+                    0x1620_003A,
+                    Rect {
+                        x: 496,
+                        y: 469,
+                        w: 18,
+                        h: 18,
+                    },
+                ),
+                button(
+                    "IDC_SCROLL_SWAIT_CHAT",
+                    0x1620_0039,
+                    Rect {
+                        x: 496,
+                        y: 538,
+                        w: 18,
+                        h: 18,
+                    },
+                ),
+            ],
+            HashMap::new(),
+        );
+        game
+    }
+
+    /// Native centers of every staged waiting chrome control above,
+    /// in staging order: the HOVER sweep visits each one.
+    const WAITING_CHROME_POINTS: [(i32, i32); 40] = [
+        (699, 144),
+        (699, 144),
+        (752, 581),
+        (567, 517),
+        (647, 549),
+        (683, 549),
+        (521, 26),
+        (563, 573),
+        (679, 223),
+        (753, 223),
+        (679, 261),
+        (753, 261),
+        (679, 299),
+        (753, 299),
+        (663, 396),
+        (752, 396),
+        (688, 581),
+        (664, 77),
+        (694, 77),
+        (724, 77),
+        (754, 77),
+        (664, 105),
+        (694, 105),
+        (724, 105),
+        (754, 105),
+        (426, 573),
+        (452, 573),
+        (478, 573),
+        (504, 573),
+        (749, 474),
+        (749, 531),
+        (699, 344),
+        (98, 130),
+        (240, 130),
+        (98, 320),
+        (98, 140),
+        (240, 140),
+        (98, 329),
+        (505, 478),
+        (505, 547),
+    ];
+
+    #[test]
+    fn waiting_chrome_sweep_arms_no_hover_state() {
+        // Ticket #163 (waiting leg, HOVER stand-in): no waiting
+        // chrome was ever hover-captured (`docs/hover.md` covers
+        // room + planet only), and the shell stages no hover
+        // resolver — motion over START/READY/BACK, every team
+        // button, MUSELECT, the map pager, chat tabs, seats, covers,
+        // or the scroll column arms nothing: the screen holds, no
+        // send queues, and the frame paints pixel-identical.
+        // Next evidence step: the SendInput hover sweep on the live
+        // waiting chrome (same rig as `docs/hover.md`).
+        let mut game = swept_waiting_game();
+        let before = paint_waiting_frame(&mut game, 800, 600);
+        for (x, y) in WAITING_CHROME_POINTS {
+            game.mouse_moved(x, y);
+            assert_eq!(game.screen(), Screen::Waiting);
+        }
+        assert!(!game.has_pending_team_send());
+        assert!(!game.has_pending_music_send());
+        let after = paint_waiting_frame(&mut game, 800, 600);
+        assert_eq!(before, after, "hover paints no waiting chrome state");
+    }
+
+    #[test]
+    fn waiting_start_press_fires_on_down_and_holds_on_release() {
+        // Ticket #163 (waiting leg, CLICK press + release-inside):
+        // the master START press fires on down — Waiting owns no
+        // press-split (that evidence is planet-only, #111), so the
+        // down-dispatch stands — and release-inside fires nothing
+        // more: the scene holds Loading exactly once.
+        // Next evidence step: the quickjoin-style release-inside
+        // capture for lobby chrome (`docs/hover.md` press section).
+        let mut game = swept_waiting_game();
+        assert!(game.is_room_master());
+        game.mouse_down(699, 144);
+        assert_eq!(game.screen(), Screen::Loading);
+        game.mouse_up(699, 144);
+        assert_eq!(game.screen(), Screen::Loading);
+    }
+
+    #[test]
+    fn waiting_back_commits_on_down_and_holds_on_release_outside() {
+        // Ticket #163 (waiting leg, CLICK press + release-outside):
+        // BACK commits on down (the Room edge), so an outside
+        // release cannot revert it — the scene holds Room. Same
+        // down-dispatch stand-in as START (planet press-split OPEN).
+        let mut game = swept_waiting_game();
+        game.mouse_down(752, 581);
+        assert_eq!(game.screen(), Screen::Room);
+        game.mouse_up(10, 10);
+        assert_eq!(game.screen(), Screen::Room);
+    }
+
+    #[test]
+    fn waiting_ready_guest_press_arms_nothing_and_releases_clean() {
+        // Ticket #163 (waiting leg, CLICK guest arm): a guest READY
+        // press stays in Waiting (guests ready through the session
+        // bridge, never Confirm) — down arms nothing, release
+        // outside reverts nothing, and no send queues.
+        let mut game = swept_waiting_game();
+        game.waiting.as_mut().expect("joined room").member_id = 4;
+        assert!(!game.is_room_master());
+        game.mouse_down(699, 144);
+        assert_eq!(game.screen(), Screen::Waiting);
+        game.mouse_up(10, 10);
+        assert_eq!(game.screen(), Screen::Waiting);
+        assert!(!game.has_pending_team_send());
+        assert!(!game.has_pending_music_send());
+    }
+
+    #[test]
+    fn waiting_team_sweep_queues_4004_then_4008_per_button() {
+        // Ticket #163 (waiting leg, CLICK battle vs normal): every
+        // TEAMA..H press lights its team and queues the
+        // `SetRoomTeam` 4004 + `Ready` 4008 pair on down in both
+        // Normal and Live rooms — the exe gate helper behind the
+        // send (`FUN_00556680`) is untraced, so the shell sends in
+        // both (OPEN, same as `select_team` documents).
+        for live in [false, true] {
+            let mut room = waiting_room();
+            if live {
+                room.game_mode = o2jam_net::GameMode::Live as u8;
+            }
+            let mut game = ScreenGame::new();
+            game.set_joined_room(room);
+            walk_to_waiting(&mut game);
+            game.load_scene(
+                Screen::Waiting,
+                [
+                    ("IDC_BUTTON_SWAIT_TEAMA", 0x1620_1004u32, (652, 65)),
+                    ("IDC_BUTTON_SWAIT_TEAMB", 0x1620_1005u32, (682, 65)),
+                    ("IDC_BUTTON_SWAIT_TEAMC", 0x1620_1006u32, (712, 65)),
+                    ("IDC_BUTTON_SWAIT_TEAMD", 0x1620_1007u32, (742, 65)),
+                    ("IDC_BUTTON_SWAIT_TEAME", 0x1620_1008u32, (652, 93)),
+                    ("IDC_BUTTON_SWAIT_TEAMF", 0x1620_1009u32, (682, 93)),
+                    ("IDC_BUTTON_SWAIT_TEAMG", 0x1620_100Au32, (712, 93)),
+                    ("IDC_BUTTON_SWAIT_TEAMH", 0x1620_100Bu32, (742, 93)),
+                ]
+                .into_iter()
+                .map(|(id, code, (x, y))| ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: id.to_owned(),
+                    code,
+                    sprite: None,
+                    rect: Rect { x, y, w: 24, h: 24 },
+                })
+                .collect(),
+                HashMap::new(),
+            );
+            for (team, (x, y)) in [
+                (664, 77),
+                (694, 77),
+                (724, 77),
+                (754, 77),
+                (664, 105),
+                (694, 105),
+                (724, 105),
+                (754, 105),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let team = u8::try_from(team).expect("eight teams fit");
+                game.mouse_click(x, y);
+                assert_eq!(game.waiting.as_ref().expect("joined room").team, team);
+                assert_eq!(game.battle_self_team, Some(team));
+                assert_eq!(game.take_room_team(), Some(SetRoomTeam { team }));
+                assert_eq!(game.take_team_ready(), Some(Ready));
+                assert!(!game.has_pending_team_send());
+            }
+            assert_eq!(game.screen(), Screen::Waiting);
+        }
+    }
+
+    #[test]
+    fn waiting_seat_and_cover_clicks_land_nowhere_empty_or_populated() {
+        // Ticket #163 (waiting leg, CLICK empty vs populated
+        // seats): seat EXTEND plates and avatar covers are not
+        // chrome — clicks on them select nothing in an empty room
+        // or a populated one. The exe seat-click target (if any) is
+        // unpinned; the shell holds the scene with no send.
+        // Next evidence step: seat-click capture on live waiting
+        // (empty vs occupied vs locked seats).
+        for populated in [false, true] {
+            let mut game = swept_waiting_game();
+            if populated {
+                let mut peer = waiting_room().slots[0].member.clone().expect("host seat");
+                peer.master = false;
+                game.waiting
+                    .as_mut()
+                    .expect("joined room")
+                    .slots
+                    .push(RoomSlot {
+                        index: 1,
+                        state_code: 1,
+                        member: Some(peer),
+                    });
+            } else {
+                game.waiting.as_mut().expect("joined room").slots.clear();
+            }
+            for (x, y) in [
+                (98, 130),
+                (240, 130),
+                (98, 320),
+                (98, 140),
+                (240, 140),
+                (98, 329),
+            ] {
+                game.mouse_click(x, y);
+                assert_eq!(game.screen(), Screen::Waiting);
+            }
+            assert_eq!(game.waiting.as_ref().expect("joined room").team, 1);
+            assert!(!game.has_pending_team_send());
+            assert!(!game.has_pending_music_send());
+        }
+    }
+
+    #[test]
+    fn waiting_unwired_chrome_clicks_land_nowhere() {
+        // Ticket #163 (waiting leg, CLICK labelled no-ops):
+        // MUSELECT-open, the map pager, change-title, emotion, skill
+        // pagers, speed stepper, messenger, effect plates, skill
+        // select, chat tabs, and the chat scroll column stage no
+        // handler — clicks hold Waiting with no send. Each names
+        // the same next step: the SendInput sweep on the live
+        // waiting board (`~/scratch/planet-verify/` recipe).
+        let mut game = swept_waiting_game();
+        for (x, y) in [
+            (567, 517),
+            (647, 549),
+            (683, 549),
+            (521, 26),
+            (563, 573),
+            (679, 223),
+            (753, 223),
+            (679, 261),
+            (753, 261),
+            (679, 299),
+            (753, 299),
+            (663, 396),
+            (752, 396),
+            (688, 581),
+            (749, 474),
+            (749, 531),
+            (699, 344),
+            (426, 573),
+            (452, 573),
+            (478, 573),
+            (504, 573),
+            (505, 460),
+            (505, 478),
+            (505, 547),
+        ] {
+            game.mouse_click(x, y);
+            assert_eq!(
+                game.screen(),
+                Screen::Waiting,
+                "click at ({x}, {y}) lands nowhere"
+            );
+        }
+        assert!(!game.has_pending_team_send());
+        assert!(!game.has_pending_music_send());
+    }
+
+    #[test]
+    fn waiting_dialog_up_routes_rows_and_holds_chrome() {
+        // Ticket #163 (waiting leg, CLICK dialog-up arm): with the
+        // master song dialog staged, a search-table row click still
+        // commits its song (4000), a seat-cover click still lands
+        // nowhere, and the START pill still confirms into Loading —
+        // the dialog consumes row hits first, chrome answers
+        // everywhere else.
+        let mut game = swept_waiting_game();
+        game.load_select_music_scene(Vec::new(), HashMap::new());
+        stage_waiting_song(&mut game);
+        assert!(game.is_room_master());
+        game.mouse_click(98, 140);
+        assert_eq!(game.screen(), Screen::Waiting);
+        assert!(!game.has_pending_music_send());
+        game.mouse_click(400, 150 + 23 + 11);
+        assert_eq!(
+            game.take_music_send(),
+            Some(SetRoomMusic {
+                music_id: 757,
+                difficulty: 1,
+                speed: 3
+            }),
+            "row click commits the 4000 pick"
+        );
+        game.mouse_click(699, 144);
+        assert_eq!(game.screen(), Screen::Loading);
     }
 
     fn result_game() -> ScreenGame {
@@ -9069,6 +9858,76 @@ mod game_tests {
         let mut game = ScreenGame::new();
         paint_splash_frame(&mut game, SPLASH_AUTO_ADVANCE_MS + 1_000);
         assert_eq!(game.screen(), Screen::Planet);
+    }
+
+    #[test]
+    fn splash_scene_polls_its_wall_hold_at_a_modest_gap() {
+        // Ticket #138: the splash auto-advance rides the wall clock,
+        // so the window owes one modest wakeup per hold check — not
+        // the loop's 60 Hz tick — while the logo sits untouched.
+        let game = ScreenGame::new();
+        assert_eq!(game.screen(), Screen::Avi);
+        assert_eq!(
+            GameLoop::idle_repaint_interval(&game),
+            Some(std::time::Duration::from_millis(SPLASH_HOLD_POLL_MS))
+        );
+    }
+
+    #[test]
+    fn fixed_clock_splash_keeps_the_tick_pace() {
+        // Trace replays drive the virtual clock per paint, so the
+        // windowed replay keeps the tick pace the headless seam
+        // always drove (no replay slows down under #138).
+        let mut game = ScreenGame::new();
+        game.enable_fixed_clock(16);
+        assert_eq!(
+            GameLoop::idle_repaint_interval(&game),
+            Some(std::time::Duration::from_nanos(crate::TICK_NANOS))
+        );
+    }
+
+    #[test]
+    fn playing_scene_holds_the_sixty_hertz_tick() {
+        // Song scroll, receptor flash, and the end-of-song Result edge
+        // all ride the sample clock per paint: Playing keeps ticking.
+        let mut game = ScreenGame::new();
+        walk_to_playing(&mut game);
+        assert_eq!(
+            GameLoop::idle_repaint_interval(&game),
+            Some(std::time::Duration::from_nanos(crate::TICK_NANOS))
+        );
+    }
+
+    #[test]
+    fn settled_scenes_idle_without_a_timer() {
+        // Every other scene is event-driven (input, resizes, and the
+        // session layer's lobby drains): the game sets no timer of its
+        // own, so the windowed loop parks on these boards. The walk
+        // follows the pinned menu path (`menu_walks_lobbies_to_playing`).
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        assert_eq!(game.screen(), Screen::Planet);
+        assert_eq!(GameLoop::idle_repaint_interval(&game), None);
+        for (key, screen) in [
+            (MenuKey::Confirm, Screen::Channel),
+            (MenuKey::Confirm, Screen::Room),
+            (MenuKey::Confirm, Screen::Waiting),
+            (MenuKey::Confirm, Screen::Loading),
+        ] {
+            game.menu_key(key, true);
+            assert_eq!(game.screen(), screen);
+            assert_eq!(
+                GameLoop::idle_repaint_interval(&game),
+                None,
+                "{screen:?} must idle without a timer"
+            );
+        }
+        // Side overlays ride the lobby screen underneath: no timer
+        // while the shop sheet sits over Waiting.
+        assert!(game.enter_screen(Screen::Waiting));
+        assert!(game.visit_side(super::super::side::SideScreen::Shop));
+        assert_eq!(GameLoop::idle_repaint_interval(&game), None);
+        assert!(game.leave_side());
     }
 
     #[test]
@@ -11448,6 +12307,51 @@ mod game_tests {
     }
 
     #[test]
+    fn create_room_create_clicks_the_parent_offset_rect_with_real_bytes() {
+        // Real 7.55 bytes (skips without install-root): CREATE commits
+        // at the #114 parent-offset rect, never at the verbatim storage
+        // rect (ticket #134). The back sits at (188,71) with CREATE
+        // dialog-local at (146,374), so the commit lands at (397,467)
+        // while the storage center (209,396) answers nothing.
+        use crate::screens::side::CREATE_ROOM_CREATE_CODE;
+        use crate::staging::{stage_dialog, Dialog, StageContext};
+        let mut game = ScreenGame::new();
+        let Ok(bytes) = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../install-root/O2Jam/Image/Interface1.opi"),
+        ) else {
+            return;
+        };
+        let art = stage_dialog(&bytes, Dialog::CreateRoom, StageContext::default())
+            .art
+            .expect("create-room stages with real bytes");
+        let placements = art.placements.clone();
+        game.load_create_room_scene(art.placements, art.figures);
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        game.open_create_room_dialog();
+        game.push_room_dialog_char('x');
+        assert_eq!(
+            super::super::paint::dialog_origin(&placements),
+            (188, 71),
+            "the back rect authors the dialog origin"
+        );
+        game.click_room_dialog(209, 396);
+        assert_eq!(
+            game.room_dialog(),
+            Some(RoomDialog::CreateRoom),
+            "the verbatim storage center is dialog-local, never a hit"
+        );
+        assert!(game.take_create_room().is_none());
+        click_staged_dialog_button(&mut game, &placements, CREATE_ROOM_CREATE_CODE);
+        assert_eq!(game.room_dialog(), None);
+        let body = game.take_create_room().expect("committed 2004");
+        assert_eq!(body.title, "x");
+    }
+
+    #[test]
     fn create_click_without_staged_sheet_records_noop_and_keeps_lobby() {
         // The chrome rect stages but the dialog sheet never does (no
         // install-root data): the click must not open a modal it
@@ -12908,6 +13812,166 @@ mod game_tests {
         assert!(game.take_music_send().is_none());
         assert!(game.take_create_room().is_none());
         assert!(game.take_join().is_none());
+    }
+
+    /// Stage the result chrome with exe-pinned code/rect pairs
+    /// (`State_Result.bnd` r5/r6, `docs/cresult-anchors.md`): the
+    /// shared driver for the sweep guards below (ADR-0003: staged
+    /// rects, never literals).
+    fn swept_result_game() -> ScreenGame {
+        use super::super::paint::{RESULT_BACK_CODE, RESULT_RETRY_CODE};
+        let mut game = ScreenGame::new();
+        finish_song(&mut game);
+        game.load_scene(
+            Screen::Result,
+            vec![
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: RESULT_RETRY_ID.to_owned(),
+                    code: RESULT_RETRY_CODE,
+                    sprite: None,
+                    rect: RESULT_RETRY_RECT,
+                },
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: RESULT_BACK_ID.to_owned(),
+                    code: RESULT_BACK_CODE,
+                    sprite: None,
+                    rect: RESULT_BACK_RECT,
+                },
+            ],
+            HashMap::new(),
+        );
+        paint_result_frame(&mut game);
+        assert_eq!(game.screen(), Screen::Result);
+        game
+    }
+
+    #[test]
+    fn result_retry_press_fires_on_down_and_queues_4010_once() {
+        // Ticket #163 (result leg, CLICK press + release-inside):
+        // RETRY fires on down — Waiting plus the pinned 4010
+        // `0xfaa` relay body (#88) — and release-inside queues
+        // nothing more: one take sends once. Result owns no
+        // press-split (that evidence is planet-only, #111), so the
+        // down-dispatch stands (same stand-in as the waiting leg).
+        let mut game = swept_result_game();
+        game.mouse_down(666, 581);
+        assert_eq!(game.screen(), Screen::Waiting);
+        assert!(game.take_result_retry().is_some());
+        game.mouse_up(666, 581);
+        assert_eq!(game.screen(), Screen::Waiting);
+        assert!(game.take_result_retry().is_none(), "one take sends once");
+    }
+
+    #[test]
+    fn result_back_release_outside_holds_rooms() {
+        // Ticket #163 (result leg, CLICK press + release-outside):
+        // BACK commits on down — Room plus the pinned 4021 `0xfb5`
+        // relay body (#87) — so an outside release cannot revert
+        // it: the scene holds Room.
+        let mut game = swept_result_game();
+        game.mouse_down(752, 581);
+        assert_eq!(game.screen(), Screen::Room);
+        assert!(game.take_result_back().is_some());
+        game.mouse_up(10, 10);
+        assert_eq!(game.screen(), Screen::Room);
+        assert!(game.take_result_back().is_none());
+    }
+
+    #[test]
+    fn result_chrome_sweep_paints_no_hover_state() {
+        // Ticket #163 (result leg, HOVER stand-in solo + battle):
+        // no result chrome was ever hover-captured (`docs/hover.md`
+        // covers room + planet only), and the shell stages no hover
+        // resolver — motion over RETRY, BACK, or the row field arms
+        // nothing in a solo or a battle result: the screen holds
+        // and the frame paints pixel-identical.
+        // Next evidence step: the SendInput hover sweep on the live
+        // result chrome (same rig as `docs/hover.md`).
+        for battle in [false, true] {
+            let mut game = swept_result_game();
+            if battle {
+                let mut room = waiting_room();
+                room.game_mode = o2jam_net::GameMode::Live as u8;
+                game.set_joined_room(room);
+                game.set_battle_teams(battle_teams_self_wins());
+                game.set_battle_self_team(Some(1));
+            }
+            let before = paint_result_frame(&mut game);
+            for (x, y) in [
+                (666, 581),
+                (752, 581),
+                (200, 350),
+                (200, 450),
+                (400, 300),
+                (600, 200),
+            ] {
+                game.mouse_moved(x, y);
+                assert_eq!(game.screen(), Screen::Result);
+            }
+            assert!(game.take_result_retry().is_none());
+            assert!(game.take_result_back().is_none());
+            let after = paint_result_frame(&mut game);
+            assert_eq!(before, after, "hover paints no result chrome state");
+        }
+    }
+
+    #[test]
+    fn result_rank_rows_are_not_chrome() {
+        // Ticket #163 (result leg, CLICK rank rows solo + battle):
+        // rank rows paint live data but answer no click — the wire
+        // calls landed on RETRY/BACK only (#87/#88). Clicks across
+        // the row field hold Result with no relay queued, whether
+        // the rows carry the solo local score or battle peer rows.
+        for battle in [false, true] {
+            let mut game = swept_result_game();
+            if battle {
+                let mut room = waiting_room();
+                room.game_mode = o2jam_net::GameMode::Live as u8;
+                game.set_joined_room(room);
+                game.set_battle_teams(battle_teams_self_wins());
+                game.set_battle_self_team(Some(1));
+            }
+            for (x, y) in [(200, 350), (200, 450), (400, 300), (600, 200)] {
+                game.mouse_click(x, y);
+                assert_eq!(game.screen(), Screen::Result);
+            }
+            assert!(game.take_result_retry().is_none());
+            assert!(game.take_result_back().is_none());
+        }
+    }
+
+    #[test]
+    fn result_solo_and_battle_chrome_agree() {
+        // Ticket #163 (result leg, CLICK solo vs battle): RETRY and
+        // BACK answer identically with and without a battle claim —
+        // RETRY hands back to Waiting plus 4010, BACK leaves for
+        // rooms plus 4021. The battle verdict banner stays
+        // display-only: it never joins the click dispatch.
+        for battle in [false, true] {
+            for retry in [true, false] {
+                let mut game = swept_result_game();
+                if battle {
+                    let mut room = waiting_room();
+                    room.game_mode = o2jam_net::GameMode::Live as u8;
+                    game.set_joined_room(room);
+                    game.set_battle_teams(battle_teams_self_wins());
+                    game.set_battle_self_team(Some(1));
+                }
+                if retry {
+                    game.mouse_click(666, 581);
+                    assert_eq!(game.screen(), Screen::Waiting);
+                    assert!(game.take_result_retry().is_some());
+                    assert!(game.take_result_back().is_none());
+                } else {
+                    game.mouse_click(752, 581);
+                    assert_eq!(game.screen(), Screen::Room);
+                    assert!(game.take_result_back().is_some());
+                    assert!(game.take_result_retry().is_none());
+                }
+            }
+        }
     }
 
     fn paint_playing_frame(game: &mut ScreenGame, w: usize, h: usize) -> Vec<u32> {

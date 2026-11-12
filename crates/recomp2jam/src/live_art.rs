@@ -551,7 +551,9 @@ mod live_art_tests {
     fn live_staged_create_sheet_commits_a_title() {
         // Ticket #53: the live-staged sheet carries real
         // `Dialog_CreateRoom.bnd` rects, so a CREATE click on the
-        // staged rect commits the typed title (the 2004 body).
+        // dialog-relative rect (back origin + `.bnd` rect, pinned #114)
+        // commits the typed title (the 2004 body).
+        use o2jam_shell::screens::paint::dialog_origin;
         use o2jam_shell::screens::side::CREATE_ROOM_CREATE_CODE;
         use o2jam_shell::staging::{stage_dialog, Dialog};
         if skip_without_archives() {
@@ -573,9 +575,10 @@ mod live_art_tests {
             .iter()
             .find(|placed| placed.code == CREATE_ROOM_CREATE_CODE)
             .expect("CREATE rect stages");
+        let (origin_x, origin_y) = dialog_origin(&staged.placements);
         let (cx, cy) = (
-            create.rect.x + create.rect.w as i32 / 2,
-            create.rect.y + create.rect.h as i32 / 2,
+            origin_x + create.rect.x + create.rect.w as i32 / 2,
+            origin_y + create.rect.y + create.rect.h as i32 / 2,
         );
         game.mouse_click(cx, cy);
         assert_eq!(game.room_dialog(), None);

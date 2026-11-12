@@ -22,7 +22,15 @@
 # /proc/<pid>/cmdline still matches before signalling, per
 # scripts/rig-run.sh discipline. Total runtime is ~60 s per run.
 #
-# Usage: scripts/wayland-loop-smoke.sh [--scratch DIR] [GAME-BINARY]
+# IDLE mode (#138 repaint-on-demand): `scripts/wayland-loop-smoke.sh --idle`
+# skips the occlusion step and samples the EXPOSED window while the game
+# sits untouched after the splash auto-advance (~5 s) onto the planet:
+# PASS is still every window < 20% CPU, FAIL any window >= 60%. Red on
+# the unconditional-request_redraw loop (~60%+ idle); green once paints
+# go on-demand. The headless twin (no KWin needed) is
+# `cargo run -p wl-smoke-compositor --example frame_callback_smoke -- idle`.
+#
+# Usage: scripts/wayland-loop-smoke.sh [--idle] [--scratch DIR] [GAME-BINARY]
 #   GAME-BINARY defaults to <repo>/target/debug/recomp2jam; built with
 #   `cargo build` when missing.
 #
@@ -49,6 +57,11 @@ MARKER="wl-smoke-$$"    # KWin script console.log prefix; unique per run
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SCRATCH="$(mktemp -d /tmp/wayland-loop-smoke.XXXXXX)"
+IDLE=0
+if [ "${1:-}" = "--idle" ]; then
+  IDLE=1
+  shift
+fi
 GAME_BIN="${1:-"$REPO_ROOT/target/debug/recomp2jam"}"
 GAME_PID=""
 KWIN_PID=""
@@ -270,8 +283,13 @@ verdict_from_samples() {
 preflight
 start_nested_kwin
 start_game
-occlude_game_window
+if [ "$IDLE" = 1 ]; then
+  log "idle mode: window stays exposed, no occlusion (the #138 arm)"
+else
+  occlude_game_window
+fi
 sample_cpu
 VERDICT="$(verdict_from_samples)"
-log "verdict: $VERDICT (samples: ${SAMPLES[*]}% | pass < ${PASS_MAX_PERCENT}% every window, fail >= ${FAIL_MIN_PERCENT}% any window)"
+MODE_LABEL="occluded"; [ "$IDLE" = 1 ] && MODE_LABEL="idle-exposed"
+log "verdict: $VERDICT (mode=$MODE_LABEL samples: ${SAMPLES[*]}% | pass < ${PASS_MAX_PERCENT}% every window, fail >= ${FAIL_MIN_PERCENT}% any window)"
 [ "$VERDICT" = PASS ]

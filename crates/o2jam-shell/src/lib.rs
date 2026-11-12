@@ -278,6 +278,17 @@ pub trait GameLoop {
     fn state_hash(&self) -> u64 {
         0
     }
+    /// Longest the window loop may sit without a repaint while idle:
+    /// `None` on static scenes (input and resizes repaint), `Some(gap)`
+    /// while time or the wire can move the frame on its own (the Playing
+    /// song clock, lobby network drains, the splash wall hold). The loop
+    /// only ever SKIPS paints on `None` — never changes what a paint
+    /// draws — so the shots/oracle suites pin the frames and this seam
+    /// pins the when (ticket #138). Default `None` so existing
+    /// implementors keep compiling.
+    fn idle_repaint_interval(&self) -> Option<std::time::Duration> {
+        None
+    }
     /// Paint the current frame into the backbuffer view.
     fn paint(&mut self, frame: &mut o2jam_render::Frame<'_>);
 }

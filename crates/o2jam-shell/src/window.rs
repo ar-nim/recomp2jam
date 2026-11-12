@@ -8,7 +8,7 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, Ime, KeyEvent, MouseButton, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, OwnedDisplayHandle};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, OwnedDisplayHandle};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowAttributes};
 
@@ -32,6 +32,12 @@ pub struct WindowHandler {
     paint_error: Option<anyhow::Error>,
     cursor: Option<(f64, f64)>,
     capture: Option<CaptureSink>,
+    /// An input or resize arrived since the last `about_to_wait` pass:
+    /// the frame it may have changed owes one repaint (ticket #138).
+    input_dirty: bool,
+    /// Next heartbeat deadline while a time/wire-driven scene sets one
+    /// (`GameLoop::idle_repaint_interval`); `None` on static scenes.
+    next_heartbeat: Option<std::time::Instant>,
 }
 
 impl WindowHandler {
@@ -52,6 +58,8 @@ impl WindowHandler {
             paint_error: None,
             cursor: None,
             capture,
+            input_dirty: false,
+            next_heartbeat: None,
         }
     }
 
@@ -176,6 +184,9 @@ impl WindowHandler {
     /// `pub(crate)`: the input-latency probe (#100) drives scripted
     /// key events through this exact path.
     pub(crate) fn route_key(&mut self, code: winit::keyboard::KeyCode, down: bool) {
+        // Any key edge may move game state (dismiss, rebind, strike),
+        // so the frame it changed owes one repaint (ticket #138).
+        self.input_dirty = true;
         self.log_event(&format!(
             "key-{} {code:?}",
             if down { "down" } else { "up" }
@@ -203,6 +214,9 @@ impl WindowHandler {
     /// edge keeps the `click x y` log line the capture harness
     /// already replays; the up edge logs its own `click-up` line.
     fn route_mouse_edge(&mut self, down: bool, cursor_x: f64, cursor_y: f64) {
+        // Press feedback arms on down and fires on release-inside
+        // (pinned #111): the changed frame owes one repaint.
+        self.input_dirty = true;
         let Some((window_w, window_h)) = self.surface_size else {
             return;
         };
@@ -225,6 +239,9 @@ impl WindowHandler {
     /// one path motion events take.
     fn track_motion(&mut self, cursor_x: f64, cursor_y: f64) {
         self.cursor = Some((cursor_x, cursor_y));
+        // Hover art follows the pointer alone (the channel bar tracks
+        // motion with no press), so motion owes one repaint too.
+        self.input_dirty = true;
         self.route_motion(cursor_x, cursor_y);
     }
 
@@ -262,6 +279,8 @@ impl WindowHandler {
     /// Control characters never reach the log or the game: Enter's
     /// produced `\r` would poison the capture log's line format.
     fn route_text(&mut self, text: &str) {
+        // Chat drafts ink every committed char: the draft owes a repaint.
+        self.input_dirty = true;
         let clean: String = text.chars().filter(|ch| !ch.is_control()).collect();
         if clean.is_empty() {
             return;
@@ -274,6 +293,7 @@ impl WindowHandler {
 
     /// Erase one draft character (Backspace press).
     fn route_erase(&mut self) {
+        self.input_dirty = true;
         self.log_event("erase");
         self.shell.game.delete_text();
     }
@@ -476,6 +496,30 @@ pub fn present_layout(
     })
 }
 
+/// One `about_to_wait` paint decision: whether this pass owes the
+/// compositor a frame, and the next heartbeat deadline. Pure so the
+/// idle policy stays pinned without a window (scenario guards below).
+///
+/// Static scenes (`None`) repaint only the pass an input or resize
+/// dirtied. Heartbeat scenes repaint that pass too, plus pace further
+/// paints off the last one — Playing holds its tick, lobby drains ride
+/// their poll gap, and the first heartbeat pass paints immediately.
+fn plan_repaint(
+    input_dirty: bool,
+    gap: Option<std::time::Duration>,
+    next_due: Option<std::time::Instant>,
+    now: std::time::Instant,
+) -> (bool, Option<std::time::Instant>) {
+    let Some(gap) = gap else {
+        return (input_dirty, None);
+    };
+    if input_dirty || next_due.is_none_or(|due| now >= due) {
+        (true, Some(now + gap))
+    } else {
+        (false, next_due)
+    }
+}
+
 impl ApplicationHandler for WindowHandler {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         self.attach_window(event_loop);
@@ -532,6 +576,8 @@ impl ApplicationHandler for WindowHandler {
             }
             WindowEvent::Resized(size) => {
                 self.resize_surface(size.width, size.height, event_loop);
+                // A new surface size rescales the whole frame.
+                self.input_dirty = true;
             }
             WindowEvent::RedrawRequested => {
                 self.shell.paint_backbuffer();
@@ -547,8 +593,25 @@ impl ApplicationHandler for WindowHandler {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        if let Some(window) = self.shell.window.as_ref() {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(window) = self.shell.window.clone() else {
+            return;
+        };
+        let input_dirty = std::mem::replace(&mut self.input_dirty, false);
+        let gap = self.shell.game.idle_repaint_interval();
+        let now = std::time::Instant::now();
+        let (repaint, next_due) = plan_repaint(input_dirty, gap, self.next_heartbeat, now);
+        self.next_heartbeat = next_due;
+        // A static scene (`None`) parks the loop in `Wait`: it sleeps
+        // until the next input or resize instead of spinning the
+        // frame-callback cycle (ticket #138). A heartbeat scene
+        // re-arms its own deadline so Playing holds its tick and the
+        // lobby drains keep arriving.
+        match next_due {
+            Some(due) => event_loop.set_control_flow(ControlFlow::WaitUntil(due)),
+            None => event_loop.set_control_flow(ControlFlow::Wait),
+        }
+        if repaint {
             window.request_redraw();
         }
     }
@@ -610,6 +673,65 @@ mod tests {
         let probe = Rc::new(RefCell::new(InputProbe::default()));
         let shell = Shell::new(Box::new(probe.clone()));
         (WindowHandler::new(shell), probe)
+    }
+
+    #[test]
+    fn static_scene_repaints_only_on_input() {
+        // The #138 idle arm: a static scene with no input owes the
+        // compositor nothing, so the loop parks instead of spinning.
+        let now = std::time::Instant::now();
+        assert_eq!(plan_repaint(false, None, None, now), (false, None));
+        assert_eq!(
+            plan_repaint(false, None, Some(now), now),
+            (false, None),
+            "a stale deadline never outlives its scene"
+        );
+    }
+
+    #[test]
+    fn static_scene_repaints_the_dirtied_pass() {
+        let now = std::time::Instant::now();
+        assert_eq!(plan_repaint(true, None, None, now), (true, None));
+    }
+
+    #[test]
+    fn heartbeat_scene_paints_its_first_pass_immediately() {
+        let now = std::time::Instant::now();
+        let gap = std::time::Duration::from_millis(100);
+        assert_eq!(
+            plan_repaint(false, Some(gap), None, now),
+            (true, Some(now + gap))
+        );
+    }
+
+    #[test]
+    fn heartbeat_scene_paces_repaints_off_the_last_paint() {
+        let start = std::time::Instant::now();
+        let gap = std::time::Duration::from_millis(100);
+        let due = start + gap;
+        // Before the deadline the loop sleeps through the pass.
+        assert_eq!(
+            plan_repaint(false, Some(gap), Some(due), start),
+            (false, Some(due))
+        );
+        // At the deadline it repaints and re-arms off this paint.
+        assert_eq!(
+            plan_repaint(false, Some(gap), Some(due), due),
+            (true, Some(due + gap))
+        );
+    }
+
+    #[test]
+    fn heartbeat_scene_repaints_at_once_on_input() {
+        // Input never waits for the deadline — and the deadline
+        // re-arms off the input paint, so the pace never doubles up.
+        let start = std::time::Instant::now();
+        let gap = std::time::Duration::from_millis(250);
+        let due = start + gap;
+        assert_eq!(
+            plan_repaint(true, Some(gap), Some(due), start),
+            (true, Some(start + gap))
+        );
     }
 
     #[test]
