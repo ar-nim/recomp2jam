@@ -1599,6 +1599,14 @@ mod oja55_tests {
         };
         let body = archive_body(&archive, "Playing_Effect_Jam.oja");
         let oja = parse_oja55(&body).unwrap();
+        assert_oja55_frame_table(&oja);
+        assert_oja55_trailing_frames(&oja);
+    }
+
+    /// The ten tabulated frames: 300x300 at anchor (0, 0), span count
+    /// and first span per frame, and every alpha plane covering its
+    /// pixels exactly (`c == covered`).
+    fn assert_oja55_frame_table(oja: &Oja55<'_>) {
         assert_eq!(oja.frames.len(), 10);
         assert_eq!(oja.trailing_frames.len(), 6);
         assert_eq!(oja.trailing.len(), 9_159);
@@ -1634,10 +1642,15 @@ mod oja55_tests {
             );
             assert_eq!(frame.alpha.len(), usize::try_from(frame.c).unwrap());
         }
-        // The recordless frames (no records): span count, first span,
-        // covered pixels, and mask bytes per frame. Every plane ends
-        // on the canvas bottom row; every mask is a canvas-row map
-        // (299 rows of 300 bytes; the first frame's is six short).
+    }
+
+    /// The recordless trailing frames (no records): span count, first
+    /// span, covered pixels, and mask bytes per frame. Every plane
+    /// ends on the canvas bottom row; every mask is a canvas-row map
+    /// (299 rows of 300 bytes; the first frame's is six short). The
+    /// first two masks have emptied their bottom canvas rows; later
+    /// frames' flash core still glows there.
+    fn assert_oja55_trailing_frames(oja: &Oja55<'_>) {
         let trailing = [
             (281, (0, 25), 82_494, 89_694),
             (300, (0, 0), 90_000, 89_700),
@@ -1661,8 +1674,6 @@ mod oja55_tests {
             assert_eq!(covered, trailing[i].2, "trailing frame {i} covered");
             assert_eq!(frame.alpha.len(), trailing[i].3, "trailing frame {i} mask");
         }
-        // The first two masks have emptied their bottom canvas rows;
-        // later frames' flash core still glows there.
         assert!(
             oja.trailing_frames[0].alpha[..].ends_with(&[0u8; 300]),
             "first mask tail is zero"
