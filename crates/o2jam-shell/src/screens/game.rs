@@ -6698,6 +6698,100 @@ mod game_tests {
     }
 
     #[test]
+    fn x_button_click_closes_the_dialog_to_the_planet_board() {
+        // Ticket #163 (channel leg): the bnd-pinned X rect
+        // (541,151)-(589,189) closes the dialog back to the bare
+        // board — the verified native close click (577,171).
+        let mut game = six_channel_game();
+        game.mouse_click(577, 171);
+        assert_eq!(game.screen(), Screen::Planet);
+    }
+
+    #[test]
+    fn channel_chrome_sweep_arms_rows_but_not_chrome() {
+        // Ticket #163 (channel leg, HOVER): the pointer sweep arms
+        // a row over faces and bodies alike, but the X zone and
+        // the scroll arrows are not rows — hovering them arms no
+        // select-bar row and names no enter face.
+        let mut game = six_channel_game();
+        game.mouse_moved(524, 246);
+        assert_eq!(game.hovered_channel_row(), Some(0));
+        assert!(game.channel_enter_at(524, 246).is_some());
+        game.mouse_moved(300, 240);
+        assert_eq!(game.hovered_channel_row(), Some(0));
+        game.mouse_moved(300, 290);
+        assert_eq!(game.hovered_channel_row(), Some(1));
+        game.mouse_moved(565, 170);
+        assert_eq!(game.hovered_channel_row(), None);
+        assert_eq!(game.channel_enter_at(565, 170), None);
+        game.mouse_moved(583, 223);
+        assert_eq!(game.hovered_channel_row(), None);
+        assert_eq!(game.channel_enter_at(583, 223), None);
+        game.mouse_moved(583, 419);
+        assert_eq!(game.hovered_channel_row(), None);
+        assert_eq!(game.channel_enter_at(583, 419), None);
+    }
+
+    #[test]
+    fn channel_scroll_bar_body_click_is_a_labelled_noop() {
+        // Ticket #163 (channel leg, CLICK): the 21x45 bar body
+        // between the scroll arrows answers nothing — only the
+        // arrows step the highlight. The dialog carries no pager
+        // readout (NO PAGER, `paint.rs` `channel_viewport`); bar
+        // drag stays OPEN (next: rig capture of a bar-body drag).
+        let mut game = six_channel_game();
+        game.mouse_click(583, 320);
+        assert_eq!(game.highlight, 0);
+        assert_eq!(game.screen(), Screen::Channel);
+    }
+
+    #[test]
+    fn empty_channel_list_answers_no_hover_or_click() {
+        // Ticket #163 (channel leg, empty-list arm): with no rows
+        // listed, the row bands arm nothing and clicks hold the
+        // dialog — the empty dialog still paints over the splash.
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        assert_eq!(game.screen(), Screen::Channel);
+        game.mouse_moved(300, 240);
+        assert_eq!(game.hovered_channel_row(), None);
+        game.mouse_click(300, 240);
+        assert_eq!(game.highlight, 0);
+        assert_eq!(game.screen(), Screen::Channel);
+    }
+
+    #[test]
+    fn channel_hover_follows_the_scrolled_viewport() {
+        // Ticket #163 (channel leg, scrolled arm): with the
+        // highlight on the last of six rows, the viewport shows
+        // rows 2..5 — the pointer over slot 3 arms row 5, mapped
+        // back through `channel_viewport` like the click path.
+        use MenuKey;
+        let mut game = six_channel_game();
+        for _ in 0..5 {
+            game.menu_key(MenuKey::Down, true);
+        }
+        assert_eq!(game.highlight, 5);
+        game.mouse_moved(300, 400);
+        assert_eq!(game.hovered_channel_row(), Some(5));
+        game.mouse_click(300, 400);
+        assert_eq!(game.highlight, 5);
+        assert_eq!(game.screen(), Screen::Channel);
+    }
+
+    #[test]
+    fn channel_hover_survives_a_slash_draft() {
+        // Ticket #163 (channel leg): a slash draft consumes face
+        // clicks without entering, but hover still names the row
+        // under the pointer — the hover/click split stays pinned.
+        let mut game = six_channel_game();
+        game.set_channel_input("/w bob hi");
+        game.mouse_moved(300, 290);
+        assert_eq!(game.hovered_channel_row(), Some(1));
+    }
+
+    #[test]
     fn click_with_slash_draft_consumes_without_advancing() {
         let mut game = ScreenGame::new();
         game.set_channels(two_channels());
