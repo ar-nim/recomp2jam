@@ -5188,6 +5188,110 @@ impl ScreenGame {
             ),
         }
     }
+
+    /// Splash keys: Escape dismisses (rig-pinned,
+    /// `~/scratch/avi-hold/run3-escape/`), while Confirm (Enter), Up,
+    /// and Down keep the splash (Enter shows no fast dismiss on the
+    /// isolated rig, `~/scratch/wt24-rig/key-enter/`).
+    fn avi_key(&mut self, key: MenuKey) {
+        if key == MenuKey::Back {
+            self.enter(Screen::Planet);
+        }
+    }
+
+    /// Keyboard activation of the already-active emblem: Confirm
+    /// opens the dialog like the mouse emblem click (the mouse edge
+    /// is the pinned one; this is the keyboard stand-in the session
+    /// walks drive).
+    fn planet_key(&mut self, key: MenuKey) {
+        if key == MenuKey::Confirm {
+            self.enter(Screen::Channel);
+        }
+    }
+
+    fn channel_key(&mut self, key: MenuKey) {
+        match key {
+            MenuKey::Up => self.step_channel(ChannelScroll::Up),
+            MenuKey::Down => self.step_channel(ChannelScroll::Down),
+            MenuKey::Back => self.enter(Screen::Planet),
+            MenuKey::Confirm => {
+                if self.take_channel_slash() == SlashCommand::Empty {
+                    self.enter(Screen::Room);
+                }
+            }
+        }
+    }
+
+    /// Lobby Confirm rides the main-room chat first: a non-empty
+    /// draft (plain chat or a slash command) consumes it, an empty
+    /// draft advances to Waiting like the Channel Confirm does
+    /// (ticket #37). An open room dialog owns the keyboard, so a
+    /// leftover draft neither sends nor holds the Enter.
+    fn room_key(&mut self, key: MenuKey) {
+        match key {
+            MenuKey::Up => {
+                self.room_highlight = self.room_highlight.saturating_sub(1);
+            }
+            MenuKey::Down => {
+                let last = self.rooms.len().saturating_sub(1);
+                self.room_highlight = (self.room_highlight + 1).min(last);
+            }
+            MenuKey::Back => self.enter(Screen::Channel),
+            MenuKey::Confirm => {
+                if self.room_dialog.is_some() {
+                    // The open sheet owns the keyboard: Enter neither
+                    // sends the lobby draft nor leaves the lobby. Its
+                    // own controls (create/join, password OK) commit
+                    // through their staged rects.
+                } else if self.take_room_slash() == SlashCommand::Empty {
+                    self.enter(Screen::Waiting);
+                }
+            }
+        }
+    }
+
+    /// Loading Confirm runs the gate (`enter_screen` holds the edge
+    /// while the gate is unready): validation, staging, OJN decrypt,
+    /// and Vorbis init all staged, an audio rig attached, and no
+    /// latched failure. Until then Confirm leaves the scene in
+    /// Loading (honest).
+    fn loading_key(&mut self, key: MenuKey) {
+        match key {
+            MenuKey::Confirm => self.enter(Screen::Playing),
+            MenuKey::Back => self.enter(Screen::Waiting),
+            _ => {}
+        }
+    }
+
+    /// `START 0x16202012` runs the all-ready check (file
+    /// `0xb5560`): the master starts only with every occupied peer
+    /// ready, and non-masters never start — they ready up (4008,
+    /// owned by the session bridge), so their Confirm stays in
+    /// Waiting. With no joined room there is no master state, and
+    /// the offline walk keeps advancing. Slash drafts (`/w`, `/r`,
+    /// `/h`, `/help`) consume the Enter without starting: only an
+    /// empty draft advances.
+    fn waiting_key(&mut self, key: MenuKey) {
+        match key {
+            MenuKey::Back => self.enter(Screen::Room),
+            MenuKey::Confirm => self.confirm_waiting(),
+            _ => {}
+        }
+    }
+
+    fn result_key(&mut self, key: MenuKey) {
+        match key {
+            MenuKey::Back => {
+                self.outbox.pending_result_back = true;
+                self.enter(Screen::Room);
+            }
+            MenuKey::Confirm => {
+                self.outbox.pending_result_retry = true;
+                self.enter(Screen::Waiting);
+            }
+            _ => {}
+        }
+    }
 }
 
 impl Default for ScreenGame {
@@ -5262,75 +5366,14 @@ impl GameLoop for ScreenGame {
             }
             return;
         }
-        match (self.flow.current(), key) {
-            // Splash Escape: rig-pinned dismiss
-            // (`~/scratch/avi-hold/run3-escape/`), while Confirm
-            // (Enter), Up, and Down keep the splash (Enter shows no
-            // fast dismiss on the isolated rig,
-            // `~/scratch/wt24-rig/key-enter/`).
-            (Screen::Avi, MenuKey::Back) => self.enter(Screen::Planet),
-            // Keyboard activation of the already-active emblem:
-            // Confirm opens the dialog like the mouse emblem click
-            // (the mouse edge is the pinned one; this is the
-            // keyboard stand-in the session walks drive).
-            (Screen::Planet, MenuKey::Confirm) => self.enter(Screen::Channel),
-            (Screen::Channel, MenuKey::Up) => self.step_channel(ChannelScroll::Up),
-            (Screen::Channel, MenuKey::Down) => self.step_channel(ChannelScroll::Down),
-            (Screen::Room, MenuKey::Up) => {
-                self.room_highlight = self.room_highlight.saturating_sub(1);
-            }
-            (Screen::Room, MenuKey::Down) => {
-                let last = self.rooms.len().saturating_sub(1);
-                self.room_highlight = (self.room_highlight + 1).min(last);
-            }
-            // Loading Confirm runs the gate (`enter_screen` holds
-            // the edge while the gate is unready): validation,
-            // staging, OJN decrypt, and Vorbis init all staged, an
-            // audio rig attached, and no latched failure. Until
-            // then Confirm leaves the scene in Loading (honest).
-            (Screen::Loading, MenuKey::Confirm) => self.enter(Screen::Playing),
-            (Screen::Room, MenuKey::Back) => self.enter(Screen::Channel),
-            (Screen::Channel, MenuKey::Back) => self.enter(Screen::Planet),
-            (Screen::Channel, MenuKey::Confirm) => {
-                if self.take_channel_slash() == SlashCommand::Empty {
-                    self.enter(Screen::Room);
-                }
-            }
-            (Screen::Waiting, MenuKey::Back) => self.enter(Screen::Room),
-            (Screen::Result, MenuKey::Back) => {
-                self.outbox.pending_result_back = true;
-                self.enter(Screen::Room);
-            }
-            // The room lobby Enter rides the main-room chat first: a
-            // non-empty draft (plain chat or a slash command) consumes
-            // it, an empty draft advances to Waiting like the Channel
-            // Confirm does (ticket #37). An open room dialog owns the
-            // keyboard, so a leftover draft neither sends nor holds
-            // the Enter.
-            (Screen::Room, MenuKey::Confirm) => {
-                if self.room_dialog.is_some() {
-                    // The open sheet owns the keyboard: Enter neither
-                    // sends the lobby draft nor leaves the lobby. Its
-                    // own controls (create/join, password OK) commit
-                    // through their staged rects.
-                } else if self.take_room_slash() == SlashCommand::Empty {
-                    self.enter(Screen::Waiting);
-                }
-            }
-            (Screen::Loading, MenuKey::Back) => self.enter(Screen::Waiting),
-            (Screen::Result, MenuKey::Confirm) => {
-                self.outbox.pending_result_retry = true;
-                self.enter(Screen::Waiting);
-            }
-            // `START 0x16202012` runs the all-ready check (file
-            // `0xb5560`): the master starts only with every occupied
-            // peer ready, and non-masters never start — they ready up
-            // (4008, owned by the session bridge), so their Confirm
-            // stays in Waiting. With no joined room there is no
-            // master state, and the offline walk keeps advancing.
-            // Slash drafts (`/w`, `/r`, `/h`, `/help`) consume the
-            // Enter without starting: only an empty draft advances.
-            (Screen::Waiting, MenuKey::Confirm) => self.confirm_waiting(),
+        match self.flow.current() {
+            Screen::Avi => self.avi_key(key),
+            Screen::Planet => self.planet_key(key),
+            Screen::Channel => self.channel_key(key),
+            Screen::Room => self.room_key(key),
+            Screen::Loading => self.loading_key(key),
+            Screen::Waiting => self.waiting_key(key),
+            Screen::Result => self.result_key(key),
             _ => {}
         }
     }
