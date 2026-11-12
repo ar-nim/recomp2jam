@@ -13378,6 +13378,68 @@ mod game_tests {
     }
 
     #[test]
+    fn loading_chrome_absence_sweep_routes_no_click_or_hover() {
+        // Ticket #163 (loading leg): the gate has no chrome — clicks
+        // anywhere (corners, center, the staged READY rect) route
+        // nothing and arm no hover state; the screen holds Loading.
+        // Deliberate: menu keys still route (BACK returns below), so
+        // the absence pins clicks, not input.
+        let mut game = waiting_game_with_button(
+            "IDC_BUTTON_SWAIT_READY",
+            Rect {
+                x: 600,
+                y: 100,
+                w: 80,
+                h: 30,
+            },
+        );
+        game.mouse_click(640, 115);
+        assert_eq!(game.screen(), Screen::Loading);
+        for (x, y) in [
+            (0, 0),
+            (799, 0),
+            (0, 599),
+            (799, 599),
+            (400, 300),
+            (640, 115),
+        ] {
+            game.mouse_click(x, y);
+            assert_eq!(
+                game.screen(),
+                Screen::Loading,
+                "click at ({x},{y}) left Loading"
+            );
+            assert_no_side_hover(&mut game, x, y);
+            assert_eq!(game.screen(), Screen::Loading);
+        }
+        game.menu_key(MenuKey::Back, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+    }
+
+    #[test]
+    fn splash_chrome_absence_sweep_every_click_lands_the_same_board() {
+        // Ticket #163 (splash leg): the splash has no chrome — no
+        // hover state arms anywhere and every canvas click dismisses
+        // to the same bare board (no per-control routing).
+        // Deliberate: the whole-screen dismiss is the gesture, not a
+        // control.
+        let mut hashes = Vec::new();
+        for (x, y) in [(0, 0), (799, 0), (0, 599), (799, 599), (400, 300)] {
+            let mut game = ScreenGame::new();
+            assert_eq!(game.screen(), Screen::Avi);
+            assert_no_side_hover(&mut game, x, y);
+            assert_eq!(game.screen(), Screen::Avi);
+            game.mouse_click(x, y);
+            assert_eq!(game.screen(), Screen::Planet);
+            hashes.push(game.state_hash());
+        }
+        assert!(
+            hashes.windows(2).all(|pair| pair[0] == pair[1]),
+            "all splash clicks converge on one board"
+        );
+    }
+
+    #[test]
     fn finished_song_enters_result_and_cues_silence_until_its_bank_is_found() {
         // Null backend only (containment): playing track 3 cues
         // while playing; result's `0x13` names no `BGM.ojm` record
