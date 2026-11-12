@@ -9567,6 +9567,164 @@ mod paint_tests {
         assert_eq!(hovered, rest, "static emblems paint no highlight");
     }
 
+    /// Staged FREE + DRUM placements with two-record bodies (the
+    /// exe-pinned codes and `.bnd` rects: DRUM/QUEST
+    /// `(510,32)-(609,144)`, FREE/TUTORIAL `(614,32)-(713,144)`),
+    /// so the #137 condition sweep paints both dimmed plates.
+    fn quest_and_tutorial_art() -> SceneArt {
+        use super::super::side::{PLANET_BUTTON_DRUM_CODE, PLANET_BUTTON_FREE_CODE};
+        const FREE_SPRITE: &str = "Planet_Btn_Free.ojs";
+        const DRUM_SPRITE: &str = "Planet_Btn_Drum.ojs";
+        SceneArt {
+            placements: vec![
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: String::new(),
+                    code: PLANET_BUTTON_FREE_CODE,
+                    sprite: Some(FREE_SPRITE.to_owned()),
+                    rect: Rect {
+                        x: 614,
+                        y: 32,
+                        w: 99,
+                        h: 112,
+                    },
+                },
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: String::new(),
+                    code: PLANET_BUTTON_DRUM_CODE,
+                    sprite: Some(DRUM_SPRITE.to_owned()),
+                    rect: Rect {
+                        x: 510,
+                        y: 32,
+                        w: 99,
+                        h: 112,
+                    },
+                },
+            ],
+            figures: HashMap::from([
+                (
+                    FREE_SPRITE.to_owned(),
+                    anchored_two_frame_figure(99, 112, 614, 32, [0x1F, 0x00], [0x00, 0x7C]),
+                ),
+                (
+                    DRUM_SPRITE.to_owned(),
+                    anchored_two_frame_figure(99, 112, 510, 32, [0x1F, 0x00], [0x00, 0x7C]),
+                ),
+            ]),
+        }
+    }
+
+    /// Pinned pixels of one dimmed plate: the staged `.bnd` rect
+    /// owned by `code` in `quest_and_tutorial_art`.
+    fn quest_or_tutorial_rect(code: u32, buf: &[u32]) -> Vec<u32> {
+        let x0 = if code == super::super::side::PLANET_BUTTON_FREE_CODE {
+            614
+        } else {
+            510
+        };
+        (32..144)
+            .flat_map(|y| (x0..x0 + 99).map(move |x| buf[y * 800 + x]))
+            .collect()
+    }
+
+    #[test]
+    fn quest_and_tutorial_emblems_hold_rest_across_press_and_selection() {
+        // Ticket #137 (rule pinned in `docs/planet.md`): QUEST and
+        // TUTORIAL never light — rest, hover, press, and a picked
+        // H/M/G family all paint the same plate pixels. The sweep
+        // covers both emblem codes in every pointer/selection
+        // state; the exe shows them dim in all four (byte-identical
+        // rects rest-to-dialog-open, `clean-emblem` series).
+        use super::super::side::{
+            PlanetAction, PlanetBand, PLANET_BUTTON_DRUM_CODE, PLANET_BUTTON_FREE_CODE,
+        };
+        let art = quest_and_tutorial_art();
+        let paint = |selection: Option<PlanetBand>,
+                     hover: Option<PlanetAction>,
+                     press: Option<PlanetAction>| {
+            let mut buf = vec![0u32; 800 * 600];
+            paint_planet_scene(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                &art,
+                selection,
+                hover,
+                press,
+            );
+            buf
+        };
+        let rest = paint(None, None, None);
+        let states = [
+            (
+                "hover",
+                paint(None, Some(PlanetAction::Emblem { band: None }), None),
+            ),
+            (
+                "press",
+                paint(None, None, Some(PlanetAction::Emblem { band: None })),
+            ),
+            ("hard-selected", paint(Some(PlanetBand::Hard), None, None)),
+        ];
+        for code in [PLANET_BUTTON_FREE_CODE, PLANET_BUTTON_DRUM_CODE] {
+            let rest_rect = quest_or_tutorial_rect(code, &rest);
+            for (state, buf) in &states {
+                assert_eq!(
+                    quest_or_tutorial_rect(code, buf),
+                    rest_rect,
+                    "code {code:#X} holds its rest plate while {state}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "rest-dim is OPEN: ticket #26's fix activates this guard (kept red-by-design per the #63 art-delta-guard rule; exact exe dim coefficients stay OPEN per #113)"]
+    fn quest_and_tutorial_rest_paints_the_dimmed_frame() {
+        // Ticket #137: the exe runs both plates at ~0.32x staged
+        // brightness in every state (`docs/planet.md`), so the rest
+        // paint must dim frame 0, never stack it full-colour. The
+        // modeled desaturation stands in for #26's rest-dim; today
+        // the rest stack paints full colour, so this guard is red.
+        use super::super::side::{PLANET_BUTTON_DRUM_CODE, PLANET_BUTTON_FREE_CODE};
+        const BODY_WORD: u16 = 0x7C00;
+        let dimmed = desaturate_rgb555(BODY_WORD);
+        assert_ne!(
+            dimmed, BODY_WORD,
+            "the modeled frames are provably distinct"
+        );
+        let art = quest_and_tutorial_art();
+        let mut buf = vec![0u32; 800 * 600];
+        paint_planet_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &art,
+            None,
+            None,
+            None,
+        );
+        for (code, x) in [
+            (PLANET_BUTTON_FREE_CODE, 614),
+            (PLANET_BUTTON_DRUM_CODE, 510),
+        ] {
+            assert_eq!(
+                buf[82 * 800 + (x + 49)],
+                pack_xrgb(
+                    ((dimmed >> 10) << 3) as u8,
+                    (((dimmed >> 5) & 0x1F) << 3) as u8,
+                    ((dimmed & 0x1F) << 3) as u8
+                ),
+                "code {code:#X} rests dimmed, not full-colour"
+            );
+        }
+    }
+
     #[test]
     fn promo_playstop_hover_paints_the_second_frame() {
         // The one true frame swap (`docs/hover.md`): PLAYSTOP rest
