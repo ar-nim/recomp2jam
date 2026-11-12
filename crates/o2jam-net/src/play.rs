@@ -8,6 +8,7 @@
 
 use super::error::Error;
 use super::message::WireMessage;
+use super::rows::rows_reject_negative_min;
 
 /// In-play stat channel (`UpdateGameStats` 4014 kind word).
 ///
@@ -608,37 +609,29 @@ impl WireMessage for MusicListAnswer {
     }
 
     fn decode_body(body: &[u8]) -> Result<Self, Error> {
-        if body.len() < 2 {
-            return Err(Error::TruncatedMessage {
-                need: 2,
-                have: body.len(),
-            });
-        }
-        let count = i16::from_le_bytes([body[0], body[1]]);
-        let count = usize::try_from(count).map_err(|_| Error::InvalidField {
-            field: "music list count",
-            reason: "negative entry count",
-        })?;
-        let need = 2 + count * MUSIC_LIST_ENTRY_LEN + 1;
-        if body.len() < need {
-            return Err(Error::TruncatedMessage {
-                need,
-                have: body.len(),
-            });
-        }
-        let mut entries = Vec::with_capacity(count);
-        for index in 0..count {
-            let at = 2 + index * MUSIC_LIST_ENTRY_LEN;
-            entries.push(MusicListEntry {
-                id: u16::from_le_bytes([body[at], body[at + 1]]),
-                notes_ex: u16::from_le_bytes([body[at + 2], body[at + 3]]),
-                notes_nx: u16::from_le_bytes([body[at + 4], body[at + 5]]),
-                notes_hx: u16::from_le_bytes([body[at + 6], body[at + 7]]),
-            });
-        }
+        let entries = rows_reject_negative_min(
+            body,
+            2,
+            0,
+            2,
+            MUSIC_LIST_ENTRY_LEN,
+            1,
+            "music list count",
+            "negative entry count",
+            "row bytes overflow address space",
+            |row| {
+                Ok(MusicListEntry {
+                    id: u16::from_le_bytes([row[0], row[1]]),
+                    notes_ex: u16::from_le_bytes([row[2], row[3]]),
+                    notes_nx: u16::from_le_bytes([row[4], row[5]]),
+                    notes_hx: u16::from_le_bytes([row[6], row[7]]),
+                })
+            },
+        )?;
+        let free_music = body[2 + entries.len() * MUSIC_LIST_ENTRY_LEN] != 0;
         Ok(Self {
             entries,
-            free_music: body[2 + count * MUSIC_LIST_ENTRY_LEN] != 0,
+            free_music,
         })
     }
 }

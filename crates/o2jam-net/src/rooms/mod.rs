@@ -11,7 +11,9 @@ use std::borrow::Cow;
 use super::error::Error;
 use super::frame::encode_frame;
 use super::message::WireMessage;
+use super::reader::Reader;
 use super::strings::{decode_null_terminated, encode_null_terminated, MAX_STRING_LEN};
+use crate::macros::wire_enum;
 
 /// Title cap (`StringMessageField(maxLength: 21)`).
 pub const ROOM_TITLE_LEN: usize = 21;
@@ -112,62 +114,40 @@ pub fn om_icon_frame(level: u16) -> u8 {
     }
 }
 
-/// Scroll speed (`Mozart.Metadata.GameSpeed` as forked by
-/// Memoryer.Data — ordinal, unlike the Mozart_Client build's
-/// shuffled mapping).
-///
-/// The 7.55 client maps each value 0–11 to an `X …` label in one
-/// function and to consecutive Room_Speed.ojs icon cells (frame =
-/// `speed + 12*difficulty + extra + 1`, files `0x12674a`–`0x12676f`);
-/// see `docs/room-enums.md`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum GameSpeed {
-    /// Half speed.
-    X05 = 0,
-    /// Normal speed.
-    X10 = 1,
-    /// 1.5x.
-    X15 = 2,
-    /// Double.
-    X20 = 3,
-    /// 2.5x.
-    X25 = 4,
-    /// Triple.
-    X30 = 5,
-    /// 3.5x.
-    X35 = 6,
-    /// 4x.
-    X40 = 7,
-    /// 4.5x.
-    X45 = 8,
-    /// 5x.
-    X50 = 9,
-    /// 6x.
-    X60 = 10,
-    /// Random.
-    Xr = 11,
-}
-
-impl GameSpeed {
-    /// Interpret a raw speed byte. `None` means unknown.
-    #[must_use]
-    pub fn from_code(code: u8) -> Option<Self> {
-        match code {
-            0 => Some(Self::X05),
-            1 => Some(Self::X10),
-            2 => Some(Self::X15),
-            3 => Some(Self::X20),
-            4 => Some(Self::X25),
-            5 => Some(Self::X30),
-            6 => Some(Self::X35),
-            7 => Some(Self::X40),
-            8 => Some(Self::X45),
-            9 => Some(Self::X50),
-            10 => Some(Self::X60),
-            11 => Some(Self::Xr),
-            _ => None,
-        }
+wire_enum! {
+    /// Scroll speed (`Mozart.Metadata.GameSpeed` as forked by
+    /// Memoryer.Data — ordinal, unlike the Mozart_Client build's
+    /// shuffled mapping).
+    ///
+    /// The 7.55 client maps each value 0–11 to an `X …` label in one
+    /// function and to consecutive Room_Speed.ojs icon cells (frame =
+    /// `speed + 12*difficulty + extra + 1`, files `0x12674a`–`0x12676f`);
+    /// see `docs/room-enums.md`.
+    pub enum GameSpeed: u8, resolve from_code, {
+        /// Half speed.
+        X05 = 0,
+        /// Normal speed.
+        X10 = 1,
+        /// 1.5x.
+        X15 = 2,
+        /// Double.
+        X20 = 3,
+        /// 2.5x.
+        X25 = 4,
+        /// Triple.
+        X30 = 5,
+        /// 3.5x.
+        X35 = 6,
+        /// 4x.
+        X40 = 7,
+        /// 4.5x.
+        X45 = 8,
+        /// 5x.
+        X50 = 9,
+        /// 6x.
+        X60 = 10,
+        /// Random.
+        Xr = 11,
     }
 }
 
@@ -208,113 +188,7 @@ pub struct RoomListEntry {
     pub room_type: u8,
 }
 
-/// Decode one `0`/`1` byte as bool.
-fn decode_flag(body: &[u8], field: &'static str) -> Result<bool, Error> {
-    match body {
-        [0] => Ok(false),
-        [1] => Ok(true),
-        _ => Err(Error::InvalidField {
-            field,
-            reason: "not 0 or 1",
-        }),
-    }
-}
-
-/// Cursor over a room-list body; every read bounds-checks.
-struct Reader<'body> {
-    body: &'body [u8],
-    pos: usize,
-}
-
-impl<'body> Reader<'body> {
-    fn new(body: &'body [u8]) -> Self {
-        Self { body, pos: 0 }
-    }
-
-    fn take(&mut self, count: usize) -> Result<&'body [u8], Error> {
-        if self.body.len() - self.pos < count {
-            return Err(Error::TruncatedMessage {
-                need: self.pos + count,
-                have: self.body.len(),
-            });
-        }
-        let bytes = &self.body[self.pos..self.pos + count];
-        self.pos += count;
-        Ok(bytes)
-    }
-
-    fn read_u8(&mut self) -> Result<u8, Error> {
-        Ok(self.take(1)?[0])
-    }
-
-    fn read_u16(&mut self) -> Result<u16, Error> {
-        let bytes = self.take(2)?;
-        Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
-    }
-
-    fn read_i32(&mut self) -> Result<i32, Error> {
-        let bytes = self.take(4)?;
-        Ok(i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
-    }
-
-    fn read_u32(&mut self) -> Result<u32, Error> {
-        let bytes = self.take(4)?;
-        Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
-    }
-
-    fn read_string(&mut self) -> Result<String, Error> {
-        let (text, used) = decode_null_terminated(&self.body[self.pos..], MAX_STRING_LEN)?;
-        self.pos += used;
-        Ok(text)
-    }
-
-    fn read_flag(&mut self, field: &'static str) -> Result<bool, Error> {
-        decode_flag(self.take(1)?, field)
-    }
-
-    fn read_title(&mut self) -> Result<String, Error> {
-        let (text, used) = decode_null_terminated(&self.body[self.pos..], ROOM_TITLE_LEN)?;
-        self.pos += used;
-        Ok(text)
-    }
-
-    fn finish(&self) -> Result<(), Error> {
-        if self.pos != self.body.len() {
-            return Err(Error::TrailingBytes(self.body.len() - self.pos));
-        }
-        Ok(())
-    }
-
-    fn remaining(&self) -> usize {
-        self.body.len() - self.pos
-    }
-}
-
-/// `i32` 0/1 as bool.
-fn read_int_flag(reader: &mut Reader<'_>, field: &'static str) -> Result<bool, Error> {
-    match reader.read_i32()? {
-        0 => Ok(false),
-        1 => Ok(true),
-        _ => Err(Error::InvalidField {
-            field,
-            reason: "not 0 or 1",
-        }),
-    }
-}
-
-/// `i16` 0/1 as bool.
-fn read_short_flag(reader: &mut Reader<'_>, field: &'static str) -> Result<bool, Error> {
-    let bytes = reader.take(2)?;
-    match i16::from_le_bytes([bytes[0], bytes[1]]) {
-        0 => Ok(false),
-        1 => Ok(true),
-        _ => Err(Error::InvalidField {
-            field,
-            reason: "not 0 or 1",
-        }),
-    }
-}
-
+/// Decode one member slot of a joined-room body.
 fn decode_room_member(reader: &mut Reader<'_>) -> Result<RoomMember, Error> {
     let nickname = reader.read_string()?;
     let level = reader.read_i32()?;
@@ -328,14 +202,8 @@ fn decode_room_member(reader: &mut Reader<'_>) -> Result<RoomMember, Error> {
     for slot in &mut equipment {
         *slot = reader.read_i32()?;
     }
-    let music_count = reader.read_i32()?;
-    if music_count < 0 {
-        return Err(Error::InvalidField {
-            field: "member music ids",
-            reason: "negative count",
-        });
-    }
-    let mut music_ids = Vec::with_capacity(music_count as usize);
+    let music_count = reader.read_count("member music ids", true)?;
+    let mut music_ids = Vec::with_capacity(music_count);
     for _ in 0..music_count {
         music_ids.push(reader.read_u16()?);
     }
@@ -343,7 +211,7 @@ fn decode_room_member(reader: &mut Reader<'_>) -> Result<RoomMember, Error> {
     let free_pass = reader.read_u32()?;
     let playing_state = reader.read_u8()?;
     let administrator = reader.read_flag("member administrator flag")?;
-    let super_manager = read_int_flag(reader, "member super-manager flag")?;
+    let super_manager = reader.read_int_flag("member super-manager flag")?;
     Ok(RoomMember {
         nickname,
         level,
@@ -420,24 +288,18 @@ fn decode_joined_room(body: &[u8]) -> Result<JoinedRoom, Error> {
     let game_mode = reader.read_u8()?;
     let difficulty = reader.read_u8()?;
     let speed = reader.read_u8()?;
-    let has_super_manager = read_int_flag(&mut reader, "room super-manager flag")?;
+    let has_super_manager = reader.read_int_flag("room super-manager flag")?;
     let user_count = reader.read_i32()?;
     let mut slots = Vec::with_capacity(7);
     for _ in 0..7 {
         slots.push(decode_room_slot(&mut reader)?);
     }
-    let skill_count = reader.read_i32()?;
-    if skill_count < 0 {
-        return Err(Error::InvalidField {
-            field: "joined-room skills",
-            reason: "negative count",
-        });
-    }
-    let mut skills = Vec::with_capacity(skill_count as usize);
+    let skill_count = reader.read_count("joined-room skills", true)?;
+    let mut skills = Vec::with_capacity(skill_count);
     for _ in 0..skill_count {
         skills.push(reader.read_i32()?);
     }
-    let premium = read_short_flag(&mut reader, "joined-room premium flag")?;
+    let premium = reader.read_short_flag("joined-room premium flag")?;
     let champion = if reader.remaining() == 0 {
         None
     } else {
@@ -510,27 +372,12 @@ fn read_room_entry(reader: &mut Reader<'_>) -> Result<RoomListEntry, Error> {
     let user_count = reader.read_u8()?;
     let min_level = reader.read_u8()?;
     let max_level = reader.read_u8()?;
-    let skill_count = reader.read_i32()?;
-    if skill_count < 0 {
-        return Err(Error::InvalidField {
-            field: "room skills",
-            reason: "negative count",
-        });
-    }
-    let mut skills = Vec::with_capacity(skill_count as usize);
+    let skill_count = reader.read_count("room skills", true)?;
+    let mut skills = Vec::with_capacity(skill_count);
     for _ in 0..skill_count {
         skills.push(reader.read_i32()?);
     }
-    let premium = match reader.read_u16()? {
-        0 => false,
-        1 => true,
-        _ => {
-            return Err(Error::InvalidField {
-                field: "room premium flag",
-                reason: "not 0 or 1",
-            });
-        }
-    };
+    let premium = reader.read_short_flag("room premium flag")?;
     let room_type = reader.read_u8()?;
     Ok(RoomListEntry {
         number,
@@ -2213,6 +2060,27 @@ mod room_list_tests {
         }
         assert_eq!(GameSpeed::from_code(12), None);
         assert_eq!(GameSpeed::from_code(0xFF), None);
+    }
+
+    #[test]
+    fn game_speed_codes_round_trip() {
+        let all = [
+            GameSpeed::X05,
+            GameSpeed::X10,
+            GameSpeed::X15,
+            GameSpeed::X20,
+            GameSpeed::X25,
+            GameSpeed::X30,
+            GameSpeed::X35,
+            GameSpeed::X40,
+            GameSpeed::X45,
+            GameSpeed::X50,
+            GameSpeed::X60,
+            GameSpeed::Xr,
+        ];
+        for speed in all {
+            assert_eq!(GameSpeed::from_code(speed as u8), Some(speed));
+        }
     }
 
     #[test]
