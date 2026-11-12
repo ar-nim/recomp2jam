@@ -257,6 +257,29 @@ GNOME/mutter-verified.
 6. `l1_lane_key_routes` — action: `KEY_A` press+release (keycode-based, layout-independent); assertion: `key <lane(A)> down` then `up`.
 7. `l1_device_readiness_guard` — action: emit click 0 ms after device open; assertion: driver reports device-not-ready and defers; no event is silently lost (documented udev pickup latency made explicit).
 
+### L1 — AUTOMATED: `l1_frame_callback_starvation_keeps_loop_idle`
+
+Status: **AUTOMATED** (2026-11-12). Harness: `scripts/wayland-loop-smoke.sh`.
+This is the owner-machine L1 arm of the starvation probe planned for
+L2-Wayland-CI below (`l2w_frame_callback_starvation_probe`), built first
+because #118 reproduced only on the owner's KWin 6.8.2 session.
+
+Method: nested `kwin_wayland --socket wl-smoke-<pid> --width 800 --height 600`
+on the current session; game launched with `DISPLAY`/`WINIT_UNIX_BACKEND`
+unset and `WAYLAND_DISPLAY=wl-smoke-<pid>` (no `--sound` — null sink by
+default); nested compositor window minimized via the session KWin scripting
+API (`org.kde.kwin.Scripting.loadScript` + `start`; the window has an EMPTY
+`resourceClass` on KWin 6.8, so the script matches by PID/caption, and
+script `console.log` read-back goes through the user journal since KWin 6
+removed `writeFile`); then 5 x 6 s windows of `/proc/<pid>/stat`
+utime+stime deltas. PASS: every window < 20% CPU; FAIL: any window >= 60%.
+Cleanup is PID-recorded only (rig-run.sh discipline, never `pkill -f`).
+
+Red-green evidence (KWin 6.8.2, 2026-11-12): pre-fix tree (parent of
+7c3fcfd) wedged at 99.7 / 99.5 / 99.8 / 99.7 / 99.5 % CPU — FAIL; with
+7c3fcfd (`pre_present_notify`) 0.0 % across all five windows, twice — PASS.
+Refs: #118 #119.
+
 ### L2-Wayland-CI — weston nested in Xvfb + XTEST (6 cases; compositor = weston, NOT KWin)
 
 Setup: ubuntu-latest, apt `weston xvfb python-xlib`-class deps, Xvfb :99,
@@ -285,7 +308,8 @@ give keyboard focus — without a WM keys stay PointerRoot-focused and starve
 5. `l2x_lane_key_routes_with_wm` — key press/release under the minimal WM → lane down/up; without WM this case is skipped with the #4822 reference.
 
 Counts: L0 23 existing (no new code needed beyond keeping them green), L1 7
-new, L2-Wayland 6 new, L2-X11 5 new — 18 new live/CI cases on top of the 23
+new (plus `l1_frame_callback_starvation_keeps_loop_idle` AUTOMATED, above),
+L2-Wayland 6 new, L2-X11 5 new — 18 new live/CI cases on top of the 23
 seam tests.
 
 ## Appendix — verified findings (2026-11-12, web-verified run)
