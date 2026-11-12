@@ -1623,9 +1623,6 @@ fn paint_placed_figure(
     figures: &HashMap<String, AvatarFigure>,
     shares_body: bool,
 ) {
-    let Some(name) = placement.sprite.as_ref() else {
-        return;
-    };
     let Some(figure) = resolve_figure(placement, figures) else {
         return;
     };
@@ -1648,21 +1645,6 @@ fn paint_placed_figure(
         return;
     }
     let (view_x, view_y) = placement_view_origin(figure, placement, frame, shares_body);
-    if std::env::var("R2J_TRACE_BLITS").is_ok() {
-        eprintln!(
-            "BLIT {} view=({},{}) anchored={} extent={:?} rect=({},{},{},{}) code=0x{:08X}",
-            name,
-            view_x,
-            view_y,
-            figure.has_anchor_offset(),
-            figure.extent(),
-            placement.rect.x,
-            placement.rect.y,
-            placement.rect.w,
-            placement.rect.h,
-            placement.code
-        );
-    }
     figure.paint_scaled_anchors(frame, view_x, view_y, frame.w, frame.h);
 }
 
