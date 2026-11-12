@@ -359,11 +359,80 @@ impl AvatarFigure {
         let (extent_w, extent_h) = self.extent();
         let (origin_x, origin_y) = self.extent_origin();
         // Extent box centered in the seat, on the native canvas.
+        self.paint_box_centered(
+            frame,
+            seat,
+            frame_w,
+            frame_h,
+            (origin_x, origin_y),
+            (
+                u64::try_from(extent_w).unwrap_or(0),
+                u64::try_from(extent_h).unwrap_or(0),
+            ),
+        );
+    }
+
+    /// Paint so the visible box centers in `seat`: the drawn-content
+    /// box ([`Self::visible_origin`]..[`Self::extent`]) centers per
+    /// axis on the native canvas, and every layer blits 1:1 at its
+    /// anchor offset from the visible origin. Empty figures paint
+    /// nothing. The Room panel and the waiting seats use this — the
+    /// worn figure's layers carry `avatar.opa` canvas anchors with
+    /// all-positive minima, so centering the whole authoring canvas
+    /// shoved the figure past the slot's edges (ticket #171); the
+    /// content box lands the head-to-feet stack inside its slot.
+    /// Non-positive anchor minima keep the extent-centered box
+    /// exactly, like [`Self::paint_extent_centered`].
+    pub fn paint_visible_centered(
+        &self,
+        frame: &mut Frame<'_>,
+        seat: &Rect,
+        frame_w: usize,
+        frame_h: usize,
+    ) {
+        if self.layers.is_empty() {
+            return;
+        }
+        let (extent_w, extent_h) = self.extent();
+        let (origin_x, origin_y) = self.visible_origin();
+        // Visible box centered in the seat, on the native canvas:
+        // the layers span `origin..extent`, so all-positive anchors
+        // shrink the centered box to the drawn content.
+        self.paint_box_centered(
+            frame,
+            seat,
+            frame_w,
+            frame_h,
+            (origin_x, origin_y),
+            (
+                u64::try_from(extent_w)
+                    .unwrap_or(0)
+                    .saturating_sub(u64::try_from(origin_x.max(0)).unwrap_or(0)),
+                u64::try_from(extent_h)
+                    .unwrap_or(0)
+                    .saturating_sub(u64::try_from(origin_y.max(0)).unwrap_or(0)),
+            ),
+        );
+    }
+
+    /// Blit every layer with the box centered in `seat`: each layer
+    /// lands at its anchor offset from the box origin under its own
+    /// source colorkey.
+    fn paint_box_centered(
+        &self,
+        frame: &mut Frame<'_>,
+        seat: &Rect,
+        frame_w: usize,
+        frame_h: usize,
+        origin: (i32, i32),
+        box_size: (u64, u64),
+    ) {
         let center_native = |offset: u64, span: u32, start: i32| -> i32 {
             i32::try_from(i64::from(start) + (i64::from(span) - offset as i64) / 2).unwrap_or(0)
         };
-        let left = center_native(u64::try_from(extent_w).unwrap_or(0), seat.w, seat.x);
-        let top = center_native(u64::try_from(extent_h).unwrap_or(0), seat.h, seat.y);
+        let left = center_native(box_size.0, seat.w, seat.x);
+        let top = center_native(box_size.1, seat.h, seat.y);
+        let (origin_x, origin_y) = origin;
         for layer in &self.layers {
             let (dx, dy) = anchor_in_frame(
                 left.saturating_add(layer.dx.saturating_sub(origin_x)),

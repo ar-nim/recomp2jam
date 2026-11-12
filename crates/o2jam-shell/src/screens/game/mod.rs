@@ -8146,7 +8146,8 @@ mod game_tests {
     }
 
     /// Center pixel of the seat-0 slot box above: the 1x1 figure lands
-    /// at parent origin + half the box (`paint_extent_centered`).
+    /// at parent origin + half the box (`paint_visible_centered`, the
+    /// zero-anchor box it shares with `paint_extent_centered`).
     const WAITING_SEAT_ZERO_PIXEL: (usize, usize) = (98, 129);
 
     #[test]
