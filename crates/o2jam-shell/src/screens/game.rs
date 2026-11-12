@@ -4064,6 +4064,31 @@ impl ScreenGame {
         if let Some(character) = self.myroom_character.as_mut() {
             character.equipment[usize::from(slot)] = item_word;
         }
+        self.restage_worn_figure();
+    }
+
+    /// Restage the worn figure after the equipment table changed
+    /// (ticket #30 stale-figure leftover): the Room lobby slot and
+    /// the Result banner re-stack from the staged avatar source like
+    /// the channel-login staging does, and the waiting seats restage
+    /// through it when a room is mounted. A missing source or an
+    /// unstackable table keeps the old figures, never blanking them.
+    fn restage_worn_figure(&mut self) {
+        if let (Some((archive, table)), Some(character)) =
+            (self.avatar_source.as_ref(), self.myroom_character.as_ref())
+        {
+            let figure = load_worn_figure(
+                archive,
+                table,
+                &character.equipment,
+                character.gender == Gender::Male,
+            );
+            if !figure.is_empty() {
+                self.room_avatar = Some(figure.clone());
+                self.avatar = Some(figure);
+            }
+        }
+        self.restage_waiting_figures();
     }
 
     /// Claim the selected gift cell: the 5023 body queues for the
@@ -8313,6 +8338,132 @@ mod game_tests {
         assert_eq!(game.channel_enter_at(10, 10), None);
         // The X chrome closes instead of entering.
         assert_eq!(game.channel_enter_at(577, 171), None);
+    }
+
+    /// Minimal sprite55 body (mirrors the avatar-figure builders): a
+    /// 1x1 red pixel with a black colorkey.
+    fn worn_test_sprite() -> Vec<u8> {
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&1u16.to_le_bytes());
+        blob.extend_from_slice(&o2jam_file::SPRITE55_MAGIC.to_le_bytes());
+        blob.extend_from_slice(&1u16.to_le_bytes());
+        blob.extend_from_slice(&0u16.to_le_bytes());
+        blob.extend_from_slice(&0u16.to_le_bytes());
+        blob.extend_from_slice(&0u16.to_le_bytes());
+        blob.extend_from_slice(&1u16.to_le_bytes());
+        blob.extend_from_slice(&1u16.to_le_bytes());
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        blob.extend_from_slice(&2u32.to_le_bytes());
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        blob.extend_from_slice(&[0x00, 0x7C]);
+        blob
+    }
+
+    /// Minimal `.opa` image (header + bodies + trailing entry table;
+    /// mirrors the avatar-figure builders).
+    fn worn_test_archive(bodies: &[(&str, &[u8])]) -> Vec<u8> {
+        use o2jam_file::{
+            OPI_ENTRY_LEN, OPI_HEADER_LEN, OPI_NAME_OFF, OPI_OFFSET_OFF, OPI_RESERVED_OFF,
+            OPI_SIZE_OFF,
+        };
+        let mut blob = vec![0u8; OPI_HEADER_LEN];
+        blob[..4].copy_from_slice(&1u32.to_le_bytes());
+        blob[4..8].copy_from_slice(&(bodies.len() as u32).to_le_bytes());
+        let mut off = OPI_HEADER_LEN as u32;
+        let mut table = Vec::new();
+        for (name, body) in bodies {
+            let mut entry = vec![0u8; OPI_ENTRY_LEN];
+            entry[..4].copy_from_slice(&1u32.to_le_bytes());
+            entry[OPI_NAME_OFF..OPI_NAME_OFF + name.len()].copy_from_slice(name.as_bytes());
+            entry[OPI_OFFSET_OFF..OPI_OFFSET_OFF + 4].copy_from_slice(&off.to_le_bytes());
+            entry[OPI_SIZE_OFF..OPI_SIZE_OFF + 4]
+                .copy_from_slice(&(body.len() as u32).to_le_bytes());
+            entry[OPI_RESERVED_OFF..OPI_RESERVED_OFF + 4]
+                .copy_from_slice(&(body.len() as u32).to_le_bytes());
+            table.push(entry);
+            off += body.len() as u32;
+        }
+        for (_, body) in bodies {
+            blob.extend_from_slice(body);
+        }
+        for entry in table {
+            blob.extend_from_slice(&entry);
+        }
+        blob
+    }
+
+    /// One wearable test row: item 1, type 2, record slot 0, with
+    /// male- and female-parity wear sprites resolving into the test
+    /// archive.
+    fn worn_test_table() -> o2jam_file::AvatarItemTable {
+        o2jam_file::AvatarItemTable {
+            rows: vec![o2jam_file::AvatarItemRow {
+                item_id: 1,
+                item_type: 2,
+                price: 100,
+                params: [0, 0, 0, 0],
+                flags: (0, 0),
+                name: "Gear1".to_owned(),
+                description: String::new(),
+                sprites: vec![
+                    (1, "icon.oji".to_owned()),
+                    (1, "icon.oji".to_owned()),
+                    (1, "01F01001.oji".to_owned()),
+                    (1, "01F01001.oji".to_owned()),
+                ],
+            }],
+        }
+    }
+
+    /// Ticket #30 stale-figure leftover: applying equipment must
+    /// re-stack the Room lobby figure, not just the worn table.
+    #[test]
+    fn myroom_apply_restages_the_room_avatar() {
+        let sprite = worn_test_sprite();
+        let archive = worn_test_archive(&[("01F01001.ojs", &sprite)]);
+        let table = worn_test_table();
+        let mut game = ScreenGame::new();
+        game.set_myroom_items(table.clone());
+        game.set_myroom_character(myroom_test_character(vec![1]));
+        game.set_avatar_source(archive, table);
+        game.load_room_avatar(solid_test_figure([0x1F, 0x00]));
+        let paint_first_pixel = |figure: &AvatarFigure| {
+            let mut buf = vec![0u32; 1];
+            figure.paint(
+                &mut o2jam_render::Frame {
+                    buf: &mut buf,
+                    w: 1,
+                    h: 1,
+                },
+                0,
+                0,
+            );
+            buf[0]
+        };
+        let before = game.room_avatar.clone().expect("stale figure staged");
+        // Pick the first bag cell (item 1) and apply it.
+        game.myroom.pick_bag_cell(Some(0));
+        game.apply_myroom_equip();
+        assert_eq!(
+            game.myroom_character
+                .as_ref()
+                .expect("staged character")
+                .equipment[0],
+            1
+        );
+        let after = game
+            .room_avatar
+            .clone()
+            .expect("equip restages the room figure");
+        assert_ne!(
+            paint_first_pixel(&after),
+            paint_first_pixel(&before),
+            "the lobby figure follows the new equipment"
+        );
+        assert_eq!(
+            paint_first_pixel(&after),
+            o2jam_render::pack_xrgb(255, 0, 0)
+        );
     }
 
     #[test]
