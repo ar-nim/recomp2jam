@@ -1084,6 +1084,135 @@ impl MusicShopState {
     }
 }
 
+/// Planet-board state behind the bare board (#139 cluster 5: the
+/// Data Clump of the six planet/promo words). Pure board state — no
+/// flow step, paint, or scene-art read — so the board reads without
+/// touching the `ScreenGame` God class. `ScreenGame` keeps thin
+/// delegates under the same names, so the click seam, the hover
+/// resolver, the paint overlay, and the snapshot surface never
+/// change. The board dispatch never touches the flow: `apply_action`
+/// only reports the emblem pick, and the caller steps Planet →
+/// Channel on it.
+#[derive(Default)]
+struct PlanetBoardState {
+    /// Live difficulty pick (HARD/NORMAL/EASY; FREE/DRUM stay
+    /// unbound per P0).
+    planet: PlanetSelection,
+    /// Last pressed promotion-carousel cell, if any (the press
+    /// records and drives the carousel). Staged placements only —
+    /// unstaged promo clicks land nowhere (no fallback literals,
+    /// ADR-0003).
+    planet_promo: Option<PlanetPromo>,
+    /// Promotion-carousel state: the 1-based banner frame plus the
+    /// rotation flag (exe-pinned, `docs/planet.md`). LEFT/RIGHT
+    /// step the index with wrap, STOP toggles the flag, the
+    /// rotation tick advances while the flag is set, and the
+    /// painter follows the index.
+    planet_promo_carousel: PlanetPromoCarousel,
+    /// Frame-time anchor of the last carousel advance, if any (the
+    /// 3000 ms accumulator behind the exe's per-frame rotation tick,
+    /// VA `0x48e3b0`: `tick_promo_clocked` anchors on the first
+    /// bare-board paint, then steps one banner frame per
+    /// `PLANET_PROMO_TICK_MS` of board time while the flag holds).
+    promo_last_advance_ms: Option<u64>,
+    /// Board control the left button is currently holding down,
+    /// if any (the press-feedback arm, #111). Armed on down over
+    /// the bare board; consumed on release. The pressed-frame
+    /// repaint reads it; release-inside dispatches the action on
+    /// up, release-outside reverts with none (both pinned; the
+    /// release-outside revert trigger stays OPEN, `docs/hover.md`).
+    planet_press: Option<PlanetAction>,
+    /// Open planet-board modal, if any (quit-confirm or options).
+    planet_modal: Option<PlanetModal>,
+}
+
+impl PlanetBoardState {
+    /// Run one board action (the release-inside click, pinned on up
+    /// not down, #111 arm 3). Reports the family pick: the caller
+    /// steps Planet → Channel on it, so this board state never
+    /// touches the flow (the modal opens stay board-internal).
+    fn apply_action(&mut self, action: PlanetAction, promo_frames: u32) -> bool {
+        match action {
+            PlanetAction::Emblem { band: Some(band) } => {
+                self.planet.select_band(band);
+                true
+            }
+            PlanetAction::Emblem { band: None } => false,
+            PlanetAction::Promo { cell } => {
+                self.planet_promo = Some(cell);
+                // Carousel arms (exe-pinned, `docs/planet.md`):
+                // LEFT steps back with wrap, RIGHT steps forward
+                // with wrap, STOP toggles rotation (no repaint).
+                match cell {
+                    PlanetPromo::Left => self.planet_promo_carousel.step_back(promo_frames),
+                    PlanetPromo::Right => self.planet_promo_carousel.step_forward(promo_frames),
+                    PlanetPromo::Stop => self.planet_promo_carousel.toggle(),
+                }
+                false
+            }
+            PlanetAction::QuitConfirm => {
+                self.planet_modal = Some(PlanetModal::QuitConfirm);
+                false
+            }
+            PlanetAction::OptionsDialog => {
+                self.planet_modal = Some(PlanetModal::Options);
+                false
+            }
+        }
+    }
+
+    /// One carousel rotation step: advance a frame while spinning,
+    /// hold while stopped (the tick body, VA `0x48e3b0`, minus the
+    /// cadence gate).
+    fn tick_promo(&mut self, frames: u32) {
+        if self.planet_promo_carousel.spinning() {
+            self.planet_promo_carousel.step_forward(frames);
+        }
+    }
+
+    /// Clocked rotation advance accumulator: anchor on the first
+    /// tick, then step one banner frame per `PLANET_PROMO_TICK_MS`
+    /// of frame time. Covered boards, a cleared flag, and frameless
+    /// boards never reach here (the caller gates), so the banner
+    /// holds; frame time is the paint seam's explicit instant
+    /// (sample clock windowed, fixed clock on replays): no wall
+    /// clock here.
+    fn tick_promo_clocked(&mut self, now_ms: u64, frames: u32) {
+        match self.promo_last_advance_ms {
+            None => self.promo_last_advance_ms = Some(now_ms),
+            Some(last) if now_ms.saturating_sub(last) >= u64::from(PLANET_PROMO_TICK_MS) => {
+                self.tick_promo(frames);
+                self.promo_last_advance_ms = Some(now_ms);
+            }
+            Some(_) => {}
+        }
+    }
+
+    /// Record the board control the left button now holds (`None`
+    /// drops the press: the pressed control belongs to the scene
+    /// being left).
+    fn arm_press(&mut self, press: Option<PlanetAction>) {
+        self.planet_press = press;
+    }
+
+    /// Consume the held press (the release edge).
+    fn take_press(&mut self) -> Option<PlanetAction> {
+        self.planet_press.take()
+    }
+
+    /// Open one board modal over the bare board (the modal owns
+    /// clicks until closed).
+    fn open_modal(&mut self, modal: PlanetModal) {
+        self.planet_modal = Some(modal);
+    }
+
+    /// Close the open board modal (Escape, EXIT, or the quit
+    /// confirm's answer).
+    fn close_modal(&mut self) {
+        self.planet_modal = None;
+    }
+}
+
 /// Room/waiting/loading inputs land with their UIs.
 pub struct ScreenGame {
     flow: ScreenFlow,
@@ -1174,36 +1303,11 @@ pub struct ScreenGame {
     /// (`Playing_BG<stage>.ojs` and the staged kits; see
     /// [`Self::arena_stage`]).
     arena_stage: u16,
-    /// Live planet-board difficulty pick (HARD/NORMAL/EASY; FREE/DRUM
-    /// stay unbound per P0).
-    planet: PlanetSelection,
-    /// Last pressed promotion-carousel cell, if any (the press
-    /// records and drives the carousel below). Staged placements
-    /// only — unstaged promo clicks land nowhere (no fallback
-    /// literals, ADR-0003).
-    planet_promo: Option<PlanetPromo>,
-    /// Promotion-carousel state: the 1-based banner frame plus the
-    /// rotation flag (exe-pinned, `docs/planet.md`). LEFT/RIGHT
-    /// step the index with wrap, STOP toggles the flag, the
-    /// rotation tick advances while the flag is set, and the
-    /// painter follows the index.
-    planet_promo_carousel: PlanetPromoCarousel,
-    /// Frame-time anchor of the last carousel advance, if any (the
-    /// 3000 ms accumulator behind the exe's per-frame rotation tick,
-    /// VA `0x48e3b0`: `tick_planet_promo_at` anchors on the first
-    /// bare-board paint, then steps one banner frame per
-    /// `PLANET_PROMO_TICK_MS` of board time while the flag holds).
-    promo_last_advance_ms: Option<u64>,
-    /// Board control the left button is currently holding down,
-    /// if any (the press-feedback arm, #111). Armed on down over
-    /// the bare board; consumed on release. The pressed-frame
-    /// repaint reads it (see `paint_planet_press`); release-inside
-    /// dispatches the action on up, release-outside reverts with
-    /// none (both pinned; the release-outside revert trigger stays
-    /// OPEN, `docs/hover.md`).
-    planet_press: Option<PlanetAction>,
-    /// Open planet-board modal, if any (quit-confirm or options).
-    planet_modal: Option<PlanetModal>,
+    /// Planet-board state (the difficulty pick, promo carousel,
+    /// press memory, and modal; #139 cluster 5): every planet/promo
+    /// word lives here; the paint overlay and the hash fold read it
+    /// through the same-named delegates and field paths.
+    planet_board: PlanetBoardState,
     /// Quit-confirm OK was pressed: the windowed shell exits the
     /// event loop ([`GameLoop::quit_requested`]); headless walks
     /// read the flag instead.
@@ -1633,12 +1737,7 @@ impl ScreenGame {
             loading_gate_phase: 0,
             loading_gate_failed: false,
             arena_stage: DEFAULT_ARENA_STAGE,
-            planet: PlanetSelection::new(),
-            planet_promo: None,
-            planet_promo_carousel: PlanetPromoCarousel::new(),
-            promo_last_advance_ms: None,
-            planet_press: None,
-            planet_modal: None,
+            planet_board: PlanetBoardState::default(),
             quit_requested: false,
             planet_option_art: [None, None, None],
             planet_option_tab: PLANET_OPTION_FIRST_TAB,
@@ -1902,7 +2001,7 @@ impl ScreenGame {
     fn enter(&mut self, next: Screen) {
         // A scene change while the button is held drops the press:
         // the pressed control belongs to the scene being left.
-        self.planet_press = None;
+        self.planet_board.arm_press(None);
         self.enter_screen(next);
     }
 
@@ -3038,7 +3137,7 @@ impl ScreenGame {
     /// painter's highlight, exactly like the channel select bar.
     #[must_use]
     pub fn hovered_planet_action(&self) -> Option<PlanetAction> {
-        if self.flow.current() != Screen::Planet || self.planet_modal.is_some() {
+        if self.flow.current() != Screen::Planet || self.planet_modal().is_some() {
             return None;
         }
         let (x, y) = self.pointer?;
@@ -3184,7 +3283,7 @@ impl ScreenGame {
             // `Dialog_Option_*` sheet the Planet gear mounts:
             // EXIT/Escape closes it back onto Room, the flow never
             // moves).
-            RoomControlAction::Options => self.planet_modal = Some(PlanetModal::Options),
+            RoomControlAction::Options => self.planet_board.open_modal(PlanetModal::Options),
             // Visit a side screen the tree already ships; the lobby
             // gate is `can_visit_side`.
             RoomControlAction::Side(side) => {
@@ -3240,7 +3339,7 @@ impl ScreenGame {
         if self.flow.current() != Screen::Room {
             return None;
         }
-        if self.room_dialog.is_some() || self.planet_modal.is_some() || self.side.is_some() {
+        if self.room_dialog.is_some() || self.planet_modal().is_some() || self.side.is_some() {
             return None;
         }
         let (x, y) = self.pointer?;
@@ -4035,7 +4134,7 @@ impl ScreenGame {
             }
             return;
         }
-        if self.planet_modal.is_some() {
+        if self.planet_modal().is_some() {
             self.click_planet_modal(x, y);
             return;
         }
@@ -4082,7 +4181,9 @@ impl ScreenGame {
     /// The planet board with no side screen and no modal owns it —
     /// the only scene with a pinned press/release split (#111).
     fn bare_planet_board(&self) -> bool {
-        self.side.is_none() && self.planet_modal.is_none() && self.flow.current() == Screen::Planet
+        self.side.is_none()
+            && self.planet_modal().is_none()
+            && self.flow.current() == Screen::Planet
     }
 
     /// Apply one press edge at native frame pixels: the shared
@@ -4119,14 +4220,14 @@ impl ScreenGame {
     /// — and while a modal owns the board — the press lands nowhere
     /// (the same gate the click router uses).
     fn planet_pointer_down(&mut self, x: i32, y: i32) {
-        if self.flow.current() != Screen::Planet || self.planet_modal.is_some() {
+        if self.flow.current() != Screen::Planet || self.planet_modal().is_some() {
             return;
         }
         let placements: &[ScenePlacement] = self
             .scene_art(Screen::Planet)
             .map_or(&[], |art| &art.placements);
         let press = planet_action_at(placements, x, y);
-        self.planet_press = press;
+        self.planet_board.arm_press(press);
     }
 
     /// Release the board press (left-up). Release-inside reverts and
@@ -4135,10 +4236,10 @@ impl ScreenGame {
     /// rect-exit vs up, stays OPEN, `docs/hover.md`; this stand-in
     /// reverts on up).
     fn planet_pointer_up(&mut self, x: i32, y: i32) {
-        let Some(pressed) = self.planet_press.take() else {
+        let Some(pressed) = self.planet_board.take_press() else {
             return;
         };
-        if self.flow.current() != Screen::Planet || self.planet_modal.is_some() {
+        if self.flow.current() != Screen::Planet || self.planet_modal().is_some() {
             return;
         }
         let placements: &[ScenePlacement] = self
@@ -4150,39 +4251,21 @@ impl ScreenGame {
     }
 
     /// Run one board action (the release-inside click, pinned on up
-    /// not down, #111 arm 3).
+    /// not down, #111 arm 3). The board state owns the arms; the
+    /// flow step rides the reported family pick.
     fn dispatch_planet_action(&mut self, action: PlanetAction) {
-        match action {
-            PlanetAction::Emblem { band: Some(band) } => {
-                self.planet.select_band(band);
-                self.enter(Screen::Channel);
-            }
-            PlanetAction::Emblem { band: None } => {}
-            PlanetAction::Promo { cell } => {
-                self.planet_promo = Some(cell);
-                // Carousel arms (exe-pinned, `docs/planet.md`):
-                // LEFT steps back with wrap, RIGHT steps forward
-                // with wrap, STOP toggles rotation (no repaint).
-                let frames = self.promo_frame_count();
-                match cell {
-                    PlanetPromo::Left => self.planet_promo_carousel.step_back(frames),
-                    PlanetPromo::Right => self.planet_promo_carousel.step_forward(frames),
-                    PlanetPromo::Stop => self.planet_promo_carousel.toggle(),
-                }
-            }
-            PlanetAction::QuitConfirm => {
-                self.planet_modal = Some(PlanetModal::QuitConfirm);
-            }
-            PlanetAction::OptionsDialog => {
-                self.planet_modal = Some(PlanetModal::Options);
-            }
+        if self
+            .planet_board
+            .apply_action(action, self.promo_frame_count())
+        {
+            self.enter(Screen::Channel);
         }
     }
 
     /// Open planet-board modal, if any (paint/click driver).
     #[must_use]
     pub fn planet_modal(&self) -> Option<PlanetModal> {
-        self.planet_modal
+        self.planet_board.planet_modal
     }
 
     /// Whether the quit-confirm OK was pressed (the windowed shell
@@ -4315,14 +4398,14 @@ impl ScreenGame {
     /// only, Escape closes the unstaged dialog). Other clicks land
     /// nowhere: the modal owns the board while open.
     fn click_planet_modal(&mut self, x: i32, y: i32) {
-        match self.planet_modal {
+        match self.planet_board.planet_modal {
             Some(PlanetModal::QuitConfirm) => {
                 let (ok_hit, cancel_hit) = self.quit_button_hits(x, y);
                 if ok_hit {
                     self.quit_requested = true;
-                    self.planet_modal = None;
+                    self.planet_board.close_modal();
                 } else if cancel_hit {
-                    self.planet_modal = None;
+                    self.planet_board.close_modal();
                 }
             }
             Some(PlanetModal::Options) => {
@@ -4350,7 +4433,7 @@ impl ScreenGame {
     fn click_options_dialog(&mut self, x: i32, y: i32) {
         let tab = self.planet_option_tab;
         if self.options_hit(tab.exit_code(), x, y) {
-            self.planet_modal = None;
+            self.planet_board.close_modal();
             self.option_rebind = None;
             return;
         }
@@ -4504,27 +4587,27 @@ impl ScreenGame {
     /// Picked planet difficulty band, if any (paint/hit-test driver).
     #[must_use]
     pub fn planet_selection(&self) -> Option<super::side::PlanetBand> {
-        self.planet.band()
+        self.planet_board.planet.band()
     }
 
     /// Last pressed promotion-carousel cell, if any (paint/click
     /// driver; `None` until a staged promo cell answers a click).
     #[must_use]
     pub fn planet_promo(&self) -> Option<PlanetPromo> {
-        self.planet_promo
+        self.planet_board.planet_promo
     }
 
     /// Visible promo banner frame, 1-based (exe `this+0x80`; boot 1).
     #[must_use]
     pub fn planet_promo_index(&self) -> u32 {
-        self.planet_promo_carousel.index()
+        self.planet_board.planet_promo_carousel.index()
     }
 
     /// Whether the carousel rotation tick advances the banner (exe
     /// `this+0x90` nonzero; boot on).
     #[must_use]
     pub fn planet_promo_spinning(&self) -> bool {
-        self.planet_promo_carousel.spinning()
+        self.planet_board.planet_promo_carousel.spinning()
     }
 
     /// Staged promo banner frame count: the layers of the staged
@@ -4552,10 +4635,8 @@ impl ScreenGame {
     /// by the windowed heartbeat); this stays the driver-invoked
     /// single step.
     pub fn tick_planet_promo(&mut self) {
-        if self.planet_promo_spinning() {
-            let frames = self.promo_frame_count();
-            self.planet_promo_carousel.step_forward(frames);
-        }
+        let frames = self.promo_frame_count();
+        self.planet_board.tick_promo(frames);
     }
 
     /// Clocked rotation advance: on the bare board while spinning,
@@ -4568,19 +4649,13 @@ impl ScreenGame {
     /// windowed, fixed clock on replays): no wall clock here.
     fn tick_planet_promo_at(&mut self, now_ms: u64) {
         if !self.bare_planet_board()
-            || !self.planet_promo_spinning()
+            || !self.planet_board.planet_promo_carousel.spinning()
             || self.promo_frame_count() == 0
         {
             return;
         }
-        match self.promo_last_advance_ms {
-            None => self.promo_last_advance_ms = Some(now_ms),
-            Some(last) if now_ms.saturating_sub(last) >= u64::from(PLANET_PROMO_TICK_MS) => {
-                self.tick_planet_promo();
-                self.promo_last_advance_ms = Some(now_ms);
-            }
-            Some(_) => {}
-        }
+        self.planet_board
+            .tick_promo_clocked(now_ms, self.promo_frame_count());
     }
 
     /// Stage the avatar-item table (`Itemdata_Korea.dat`): bag, equip
@@ -5431,10 +5506,10 @@ impl ScreenGame {
             Some(art) => paint_planet_scene(
                 frame,
                 art,
-                self.planet.band(),
+                self.planet_board.planet.band(),
                 self.hovered_planet_action(),
-                self.planet_press,
-                self.planet_promo_carousel.index(),
+                self.planet_board.planet_press,
+                self.planet_board.planet_promo_carousel.index(),
             ),
             None => paint_screen(frame, Screen::Planet),
         }
@@ -5443,7 +5518,7 @@ impl ScreenGame {
 
     /// Open planet-board modal over the bare board, if any.
     fn paint_planet_modal(&self, frame: &mut Frame<'_>) {
-        match self.planet_modal {
+        match self.planet_board.planet_modal {
             Some(PlanetModal::QuitConfirm) => {
                 paint_planet_quit(frame, self.planet_quit_art.as_ref());
             }
@@ -6254,7 +6329,7 @@ impl GameLoop for ScreenGame {
         // press is consumed (menu keys keep their routing so Escape
         // still closes and disarms).
         if !down
-            || self.planet_modal != Some(PlanetModal::Options)
+            || self.planet_modal() != Some(PlanetModal::Options)
             || self.planet_option_tab != PlanetOptionTab::Key
         {
             return false;
@@ -6303,12 +6378,12 @@ impl GameLoop for ScreenGame {
             }
             return;
         }
-        if self.planet_modal.is_some() {
+        if self.planet_modal().is_some() {
             // Back cancels the quit-confirm and closes options
             // (Escape closes the options dialog, live-pinned).
             // Confirm stays inert so the quit needs the explicit OK.
             if key == MenuKey::Back {
-                self.planet_modal = None;
+                self.planet_board.close_modal();
                 self.option_rebind = None;
             }
             return;
@@ -6515,6 +6590,19 @@ fn hash_u64(hash: &mut u64, word: u64) {
 /// loading gate, and the live score/life. The trace harness compares
 /// this across replays (same stimuli → same final state hash); it is
 /// a test affordance, never gameplay input.
+/// Word of one held board press for the observable hash fold
+/// (`None` rides as MAX; the emblem arms ride their band, the promo
+/// arms their cell, the two dialog-open arms their own word).
+fn planet_press_word(press: Option<PlanetAction>) -> u64 {
+    match press {
+        None => u64::MAX,
+        Some(PlanetAction::Emblem { band }) => 100 + band.map_or(0, |band| band as u64),
+        Some(PlanetAction::Promo { cell }) => 200 + cell as u64,
+        Some(PlanetAction::QuitConfirm) => 300,
+        Some(PlanetAction::OptionsDialog) => 400,
+    }
+}
+
 fn observable_state_hash(game: &ScreenGame) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
     hash_str(&mut hash, game.screen_name());
@@ -6591,6 +6679,38 @@ fn observable_state_hash(game: &ScreenGame) -> u64 {
     for id in &game.music_shop.music_shop_cart {
         hash_u64(&mut hash, u64::from(*id));
     }
+    hash_u64(
+        &mut hash,
+        game.planet_board
+            .planet
+            .band()
+            .map_or(u64::MAX, |band| band as u64),
+    );
+    hash_u64(
+        &mut hash,
+        game.planet_board
+            .planet_promo
+            .map_or(u64::MAX, |cell| cell as u64),
+    );
+    hash_u64(
+        &mut hash,
+        u64::from(game.planet_board.planet_promo_carousel.index()),
+    );
+    hash_u64(
+        &mut hash,
+        u64::from(game.planet_board.planet_promo_carousel.spinning()),
+    );
+    hash_u64(
+        &mut hash,
+        game.planet_board.promo_last_advance_ms.unwrap_or(0),
+    );
+    hash_u64(&mut hash, planet_press_word(game.planet_board.planet_press));
+    hash_u64(
+        &mut hash,
+        game.planet_board
+            .planet_modal
+            .map_or(u64::MAX, |modal| modal as u64),
+    );
     hash_u64(&mut hash, game.outbox.pending_shop_buy.map_or(0, |_| 5_000));
     hash_u64(
         &mut hash,
@@ -14934,14 +15054,16 @@ mod game_tests {
     fn populated_outbox_pins_the_observable_state_hash() {
         // Characterization for the PendingOutbox extraction (#139,
         // cluster 1) extended by the LankingState extraction
-        // (cluster 2), the ShopState population (cluster 3), and the
-        // MusicShopState population (cluster 4): all thirteen wire
-        // queues populated through their queueing arms plus the
-        // lanking catalog/sort/page/pick/board, the shop
-        // catalog/toggle/page/cart-page, and the music-shop
-        // catalog/sort/page/board/pick/cart-page populations below,
-        // then the observable hash pinned byte-identical. The
-        // extraction must not move one hash bit:
+        // (cluster 2), the ShopState population (cluster 3), the
+        // MusicShopState population (cluster 4), and the planet-board
+        // population (cluster 5): all thirteen wire queues populated
+        // through their queueing arms plus the lanking
+        // catalog/sort/page/pick/board, the shop
+        // catalog/toggle/page/cart-page, the music-shop
+        // catalog/sort/page/board/pick/cart-page, and the planet
+        // band/promo/carousel/modal/press populations below, then
+        // the observable hash pinned byte-identical. The extraction
+        // must not move one hash bit:
         // the take_* drains below prove every arm queued, the pinned
         // word proves the hash fold is untouched. Only the two shop
         // sends feed the fold today; the rest ride along so a future
@@ -15166,6 +15288,92 @@ mod game_tests {
         game.click_room_dialog(20, 20);
         assert_eq!(game.screen(), Screen::Waiting);
 
+        // Planet-board arm (#139 cluster 5): the promo LEFT press
+        // (records + wraps the 3-frame banner) plus the STOP pair
+        // (spin off, re-armed), the gear modal open + Escape close,
+        // the HARD band pick (via Channel and back), and a held
+        // promo press feed the hash fold; the extraction must not
+        // move one hash bit.
+        use crate::avatar::FigureLayer;
+        use crate::screens::side::PlanetBand;
+        use crate::screens::side::{
+            PLANET_PROMO_IMAGE_CODE, PLANET_PROMO_LEFT_CODE, PLANET_PROMO_STOP_CODE,
+        };
+        game.menu_key(MenuKey::Back, true);
+        game.menu_key(MenuKey::Back, true);
+        game.menu_key(MenuKey::Back, true);
+        assert_eq!(game.screen(), Screen::Planet);
+        let banner = "Planet_Promotion.ojs";
+        let mut frames = AvatarFigure::default();
+        for word in [0x7C00u16, 0x03E0u16, 0x001Fu16] {
+            frames.push_layer(FigureLayer {
+                image: o2jam_render::Rgb555Image::decode(&word.to_le_bytes().repeat(16), 4, 4)
+                    .expect("promo frames"),
+                dx: 49,
+                dy: 163,
+                colorkey: 0xFFFF,
+            });
+        }
+        game.load_scene(
+            Screen::Planet,
+            vec![
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: "promo-banner".to_owned(),
+                    code: PLANET_PROMO_IMAGE_CODE,
+                    sprite: Some(banner.to_owned()),
+                    rect: Rect {
+                        x: 49,
+                        y: 163,
+                        w: 701,
+                        h: 333,
+                    },
+                },
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: "promo-left".to_owned(),
+                    code: PLANET_PROMO_LEFT_CODE,
+                    sprite: None,
+                    rect: Rect {
+                        x: 353,
+                        y: 511,
+                        w: 26,
+                        h: 24,
+                    },
+                },
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: "promo-stop".to_owned(),
+                    code: PLANET_PROMO_STOP_CODE,
+                    sprite: None,
+                    rect: Rect {
+                        x: 387,
+                        y: 511,
+                        w: 26,
+                        h: 24,
+                    },
+                },
+            ],
+            HashMap::from([(banner.to_owned(), frames)]),
+        );
+        game.click_planet(366, 523);
+        assert_eq!(game.planet_promo(), Some(PlanetPromo::Left));
+        assert_eq!(game.planet_promo_index(), 3);
+        game.click_planet(400, 523);
+        assert!(!game.planet_promo_spinning());
+        game.click_planet(400, 523);
+        assert!(game.planet_promo_spinning());
+        game.click_planet(729, 580);
+        assert_eq!(game.planet_modal(), Some(PlanetModal::Options));
+        game.menu_key(MenuKey::Back, true);
+        assert_eq!(game.planet_modal(), None);
+        game.click_planet(386, 88);
+        assert_eq!(game.planet_selection(), Some(PlanetBand::Hard));
+        assert_eq!(game.screen(), Screen::Channel);
+        game.menu_key(MenuKey::Back, true);
+        assert_eq!(game.screen(), Screen::Planet);
+        game.ingest_snapshot(&InputSnapshot::press_at(366, 523));
+
         // Every arm queued without a drain so far.
         assert!(game.has_pending_team_send());
         assert!(game.has_pending_music_send());
@@ -15173,8 +15381,8 @@ mod game_tests {
 
         let populated = game.state_hash();
         assert_eq!(
-            populated, 0x368F_119F_1EFD_901E,
-            "outbox+lanking+shop+musicshop population must not move the observable hash"
+            populated, 0xFD87_E3A6_7367_3B3B,
+            "outbox+lanking+shop+musicshop+planet population must not move the observable hash"
         );
 
         // The seam drains every queue exactly once.
