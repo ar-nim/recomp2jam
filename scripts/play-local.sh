@@ -51,7 +51,8 @@ print(row[0])
 PY
 ) || { echo "play-local: token lookup failed ($TOKEN)" >&2; exit 1; }
 
-# 4. Build once, then run. Sound on until #120 flips the default.
+# 4. Build once, then run. Sound on by default (#120); pass
+# --no-sound in EXTRA for a silent rig.
 BIN="$REPO_ROOT/target/release/recomp2jam"
 [ -x "$BIN" ] || cargo build --release --manifest-path "$REPO_ROOT/Cargo.toml"
 cd "$REPO_ROOT"
@@ -59,4 +60,4 @@ echo "play-local: user-id $USER_ID, token ${TOKEN:0:8}…, memoryer 127.0.0.1:15
 exec env WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-1}" "$BIN" online \
   --host 127.0.0.1 --port 15010 \
   --user-id "$USER_ID" --token "$TOKEN" \
-  --sound "${EXTRA[@]}"
+  "${EXTRA[@]}"

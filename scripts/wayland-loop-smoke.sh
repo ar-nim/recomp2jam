@@ -116,10 +116,12 @@ start_nested_kwin() {
 
 start_game() {
   # Containment: no DISPLAY (force winit's Wayland backend), no
-  # WINIT_UNIX_BACKEND override. No --sound: the binary's audio backend is
-  # the silent null sink by default (automated runs must never sound).
+  # WINIT_UNIX_BACKEND override. Pass --no-sound: sound is on by
+  # default (#120), and automated runs must never sound (silent
+  # null sink on opt-out).
   env -u DISPLAY -u WINIT_UNIX_BACKEND "WAYLAND_DISPLAY=$SOCKET_NAME" \
     "$GAME_BIN" online \
+    --no-sound \
     --host 127.0.0.1 --port 15010 \
     --user-id 2 --token 77b0a3e3-32e6-4a67-b3d8-563a0df4c08c \
     > "$SCRATCH/game.log" 2>&1 &

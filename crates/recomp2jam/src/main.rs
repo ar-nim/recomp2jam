@@ -228,10 +228,11 @@ enum Command {
         /// Load the splash backdrop from this `.opi` archive.
         #[arg(long)]
         interface: Option<String>,
-        /// Play sound through the default output (default: null
-        /// sink, so rigs never reach the speakers).
+        /// Silence the audio rig (default: sound plays through the
+        /// default output; automated rigs and CI pass this so runs
+        /// never reach the speakers).
         #[arg(long)]
-        sound: bool,
+        no_sound: bool,
         /// Fixed-clock test affordance: advance the virtual clock by
         /// this many ms per painted frame (deterministic windowed
         /// traces without an audio device).
@@ -272,9 +273,10 @@ enum Command {
         /// Difficulty level (0-based; default 0).
         #[arg(long, default_value = "0")]
         level: usize,
-        /// Play sound through the default output (needs audio hardware).
+        /// Silence the audio rig (default: sound plays through the
+        /// default output; automated runs pass this).
         #[arg(long)]
-        sound: bool,
+        no_sound: bool,
         /// Open the game window (needs a display; headless CI skips it).
         #[arg(long)]
         window: bool,
@@ -491,7 +493,7 @@ struct OnlineCli {
     speed: u8,
     arena: i32,
     interface: Option<String>,
-    sound: bool,
+    no_sound: bool,
     fixed_clock: Option<u64>,
     frame_dump: Option<String>,
     input_log: Option<String>,
@@ -553,13 +555,14 @@ fn run_online(opts: OnlineCli) -> Result<()> {
         pending_song,
         opts.create_room.as_deref(),
     )?;
-    // Audio containment (memory 979fb): rigs and CI never reach the
-    // speakers unless a human passes --sound.
-    session.set_silent_audio(!opts.sound);
+    // Audio containment (memory 979fb): automated rigs pass
+    // --no-sound so they never reach the speakers; the default
+    // plays live.
+    session.set_silent_audio(opts.no_sound);
     if let Some(step_ms) = opts.fixed_clock {
         session.game_mut().enable_fixed_clock(step_ms);
     }
-    session.attach_initial_audio(opts.sound);
+    session.attach_initial_audio(!opts.no_sound);
     run_windowed_session(session, capture_plan(opts.frame_dump, opts.input_log))
 }
 
@@ -843,7 +846,7 @@ fn run_command(command: Command) -> Result<()> {
             speed,
             arena,
             interface,
-            sound,
+            no_sound,
             fixed_clock,
             frame_dump,
             input_log,
@@ -863,7 +866,7 @@ fn run_command(command: Command) -> Result<()> {
             speed,
             arena,
             interface,
-            sound,
+            no_sound,
             fixed_clock,
             frame_dump,
             input_log,
@@ -884,7 +887,7 @@ fn run_command(command: Command) -> Result<()> {
             chart,
             ojm,
             level,
-            sound,
+            no_sound,
             window,
             avatar_opa,
             equip,
@@ -908,7 +911,7 @@ fn run_command(command: Command) -> Result<()> {
             chart,
             ojm,
             level,
-            sound,
+            no_sound,
             window,
             avatar_opa,
             equip,
@@ -940,7 +943,7 @@ struct PlayOptions {
     chart: Option<String>,
     ojm: Option<String>,
     level: usize,
-    sound: bool,
+    no_sound: bool,
     window: bool,
     avatar_opa: Option<String>,
     equip: String,
@@ -990,7 +993,13 @@ fn run_play(opts: PlayOptions) -> Result<()> {
             opts.online_arena,
         )?;
         setup_avatar(&mut game, &opts.avatar_opa, &opts.equip, opts.avatar_male)?;
-        setup_chart_audio(&mut game, &opts.chart, &opts.ojm, opts.level, opts.sound)?;
+        setup_chart_audio(
+            &mut game,
+            &opts.chart,
+            &opts.ojm,
+            opts.level,
+            !opts.no_sound,
+        )?;
         match gateway {
             Some((transport, pending_room, pending_song)) => {
                 let mut session = assemble_online_session(
@@ -1001,9 +1010,9 @@ fn run_play(opts: PlayOptions) -> Result<()> {
                     pending_song,
                     opts.online_create_room.as_deref(),
                 )?;
-                // Audio containment: without --sound every bank attach
+                // Audio containment: with --no-sound every bank attach
                 // stays on the null sink even when hardware exists.
-                session.set_silent_audio(!opts.sound);
+                session.set_silent_audio(opts.no_sound);
                 run_windowed_session(session, None)?;
             }
             None => {
@@ -1024,7 +1033,7 @@ fn run_play(opts: PlayOptions) -> Result<()> {
     let chart_path = opts.chart.ok_or_else(|| {
         anyhow::anyhow!("--chart FILE.ojn is required (add --window for the empty shell)")
     })?;
-    run_autoplay(&chart_path, opts.ojm.as_deref(), opts.level, opts.sound)
+    run_autoplay(&chart_path, opts.ojm.as_deref(), opts.level, !opts.no_sound)
 }
 
 /// `e2e` subcommand: headless boot-to-Result walk with PNGs.
@@ -1324,8 +1333,8 @@ fn setup_avatar(
     Ok(())
 }
 
-/// Output backend honoring the `--sound` flag: live hardware only on
-/// request, the silent null sink otherwise (automated runs must never
+/// Output backend honoring the `--no-sound` flag: live hardware by
+/// default, the silent null sink on opt-out (automated runs must never
 /// reach the speakers; CI has no audio device). Mirrors `run_autoplay`.
 fn audio_backend(sound: bool) -> Box<dyn o2jam_audio::AudioBackend> {
     if sound {
@@ -1439,7 +1448,7 @@ fn setup_chart_audio(
             tracing::info!("key sounds attached");
         }
     }
-    // Null/silent unless `--sound` (audio containment): the cue
+    // Null/silent with `--no-sound` (audio containment): the cue
     // through the null sink only counts frames. Staging the bank
     // cues the current (Avi) screen immediately, and every later
     // entry re-cues through the same table.
@@ -1647,7 +1656,7 @@ fn load_level_chart(
 }
 
 /// Headless autoplay: load chart + bank, step a virtual clock (or the
-/// wall clock with `--sound`), trigger key sounds, judge perfect.
+/// wall clock unless `--no-sound`), trigger key sounds, judge perfect.
 fn run_autoplay(chart_path: &str, ojm_path: Option<&str>, level: usize, sound: bool) -> Result<()> {
     use anyhow::Context;
     use o2jam_game::{Judgement, Score, Sequencer};
@@ -1788,7 +1797,7 @@ mod cli_build_tests {
 
     #[test]
     fn audio_backend_off_queues_silently_without_hardware() {
-        // Windowed runs without `--sound` must never touch audio
+        // Windowed runs with `--no-sound` must never touch audio
         // hardware: the silent sink counts queued frames with no device
         // open, so this stays green on headless CI. A live backend
         // reports its own playhead instead of the queued count.
@@ -1801,6 +1810,34 @@ mod cli_build_tests {
         };
         backend.play_pcm(&pcm).unwrap();
         assert_eq!(backend.samples_played(), 50);
+    }
+
+    #[test]
+    fn play_defaults_to_sound_on() {
+        // #120: audio is live unless `--no-sound` opts out — a bare
+        // run reaches the speakers.
+        let cli = Cli::try_parse_from(["recomp2jam", "play"]).unwrap();
+        let Command::Play { no_sound, .. } = cli.command.unwrap() else {
+            panic!("expected play subcommand");
+        };
+        assert!(!no_sound);
+    }
+
+    #[test]
+    fn no_sound_flag_opts_out_of_audio() {
+        // #120: `--no-sound` flips the rig silent on both windowed
+        // subcommands; the session then stays on the null sink.
+        let cli = Cli::try_parse_from(["recomp2jam", "play", "--no-sound"]).unwrap();
+        let Command::Play { no_sound, .. } = cli.command.unwrap() else {
+            panic!("expected play subcommand");
+        };
+        assert!(no_sound);
+        let cli = Cli::try_parse_from(["recomp2jam", "online", "--token", "tester", "--no-sound"])
+            .unwrap();
+        let Command::Online { no_sound, .. } = cli.command.unwrap() else {
+            panic!("expected online subcommand");
+        };
+        assert!(no_sound);
     }
 
     #[test]

@@ -159,7 +159,7 @@ UDP is primary for Live, TCP fallback (freeze-prone at game start).
 ## 5. Offline-playable verdict
 
 Plays offline (no server): chart load/decrypt (`new`-XOR + `ojn` slices), OJM decode,
-`o2jam-game` judgement/scoring, `o2jam-shell` window/input, `play --chart/--ojm/--sound`,
+`o2jam-game` judgement/scoring, `o2jam-shell` window/input, `play --chart/--ojm/--no-sound`,
 `OJNList.dat` song index, `option.ini` display settings.
 Needs a server: login/auth (`OTwo.exe` RSA params + gateway 15010), planet/channel/room
 lifecycle, any multiplayer incl. Live relay + UHP, `SubmitScore`/rankings,
