@@ -13853,4 +13853,112 @@ mod game_tests {
             );
         }
     }
+
+    /// Stage one real `Dialog_Option_*` sheet (skips without
+    /// install-root): the genuine 7.55 block + `.bnd` pairing through
+    /// the staging declaration, like the live client stages it. The
+    /// placements stay readable for dialog-relative click centers.
+    fn stage_real_option_sheet(
+        game: &mut ScreenGame,
+        tab: PlanetOptionTab,
+    ) -> Option<Vec<ScenePlacement>> {
+        use crate::staging::{stage_dialog, StageContext};
+        let bytes = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../install-root/O2Jam/Image/Interface1.opi"),
+        )
+        .ok()?;
+        let dialog = match tab {
+            PlanetOptionTab::Key => crate::staging::Dialog::PlanetOption,
+            PlanetOptionTab::Sound => crate::staging::Dialog::PlanetOptionSound,
+            PlanetOptionTab::Game => crate::staging::Dialog::PlanetOptionGame,
+        };
+        let art = stage_dialog(&bytes, dialog, StageContext::default())
+            .art
+            .expect("option sheet stages with real bytes");
+        let placements = art.placements.clone();
+        game.load_planet_option_tab(tab, art.placements, art.figures);
+        Some(placements)
+    }
+
+    /// Click the center of one staged dialog code's `.bnd` rect
+    /// (dialog-relative: `dialog_origin + rect`, exactly what
+    /// `dialog_rect_hit` answers).
+    fn click_staged_dialog_button(game: &mut ScreenGame, placements: &[ScenePlacement], code: u32) {
+        let origin = super::super::paint::dialog_origin(placements);
+        let placement = placements
+            .iter()
+            .find(|placement| placement.code == code)
+            .unwrap_or_else(|| panic!("code {code:#010X} stages"));
+        game.mouse_click(
+            origin.0 + placement.rect.x + i32::try_from(placement.rect.w).unwrap_or(0) / 2,
+            origin.1 + placement.rect.y + i32::try_from(placement.rect.h).unwrap_or(0) / 2,
+        );
+    }
+
+    #[test]
+    fn options_save_click_commits_ini_at_the_staged_rect() {
+        // Real 7.55 bytes (skips without install-root): the Key-tab
+        // SAVE button at its staged `.bnd` rect commits `option.ini`
+        // beside the install root and stays open — the #131 report
+        // (dead SAVE) guarded at the exact staged geometry (#15/#16
+        // dispatch chain on top of real dialog geometry).
+        let mut game = ScreenGame::new();
+        let Some(placements) = stage_real_option_sheet(&mut game, PlanetOptionTab::Key) else {
+            return;
+        };
+        let root = std::env::temp_dir().join(format!("recomp2jam-opt-save-{}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("temp install root");
+        game.load_options(&root);
+        open_options(&mut game);
+        click_staged_dialog_button(&mut game, &placements, PlanetOptionTab::Key.save_code());
+        assert_eq!(
+            game.planet_modal(),
+            Some(PlanetModal::Options),
+            "SAVE commits and keeps the dialog open"
+        );
+        let ini = std::fs::read_to_string(root.join("option.ini")).expect("SAVE writes ini");
+        assert!(ini.contains("[Sound]"), "committed ini:\n{ini}");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn options_exit_click_closes_at_the_staged_rect() {
+        // Real 7.55 bytes (skips without install-root): the staged
+        // EXIT button closes the dialog without saving (#131).
+        let mut game = ScreenGame::new();
+        let Some(placements) = stage_real_option_sheet(&mut game, PlanetOptionTab::Key) else {
+            return;
+        };
+        open_options(&mut game);
+        click_staged_dialog_button(&mut game, &placements, PlanetOptionTab::Key.exit_code());
+        assert_eq!(game.planet_modal(), None, "EXIT closes the dialog");
+    }
+
+    #[test]
+    fn options_key_tab_clicks_arm_rebind_and_switch_tabs_at_staged_rects() {
+        // Real 7.55 bytes (skips without install-root): the Key-tab
+        // lane buttons arm their rebind at the staged rects, and the
+        // staged SOUNDSET header flips the sheet — the #131 "key tab
+        // cannot be changed" leg at the real geometry.
+        let mut game = ScreenGame::new();
+        let Some(placements) = stage_real_option_sheet(&mut game, PlanetOptionTab::Key) else {
+            return;
+        };
+        stage_real_option_sheet(&mut game, PlanetOptionTab::Sound);
+        open_options(&mut game);
+        click_staged_dialog_button(&mut game, &placements, OPTION_KEY_LANE_FIRST + 2);
+        assert_eq!(game.option_rebind_armed(), Some(2), "KEY3 arms lane 2");
+        click_staged_dialog_button(
+            &mut game,
+            &placements,
+            super::super::side::OPTION_KEY_SOUNDSET,
+        );
+        assert_eq!(game.planet_option_tab(), PlanetOptionTab::Sound);
+        assert_eq!(
+            game.option_rebind_armed(),
+            None,
+            "switching tabs disarms the pending rebind"
+        );
+    }
 }

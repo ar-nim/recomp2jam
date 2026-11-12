@@ -144,6 +144,60 @@ can hold those.
 | paint.rs:5092 `RESULT_DIGIT_CELLS` | 8 | none | same citation (eight 24 px cells) | DONE | None |
 | paint.rs:5098 `RESULT_ROW_BASE_Y` | 320 | none | `FUN_004c3b40`: 320+22·row | DONE | None |
 
+## Options dialog (game.rs options handlers, paint.rs dialog paint, #131/#132)
+
+Audit date: 2026-11-12 (worktree cb2/options131). Verdict up front:
+the staging/pairing was **provably correct** — the rect-level dump of
+all three `DIALOG_OPTION_KEY/SOUND/GAME` blocks vs their `.bnd` files
+shows every placement byte-equal to its code-ordinal rect (25/22/23
+placements, zero misses). Both tickets traced to one paint-side rule
+instead: `paint_dialog_figure` painted every child's whole decoded
+figure at the dialog origin, ignoring the record anchors and the
+placement rect.
+
+**Dialog placement rule (verified, now guarded):** sprite-55 records
+carry a `(x,y)` placement anchor (`docs/file-formats/opi.md` §
+Sprite-55). Per record, dialog-relative: anchor non-zero → paint at
+`dialog_origin + anchor`; anchor `(0,0)` → the `.bnd` rect is the
+record's only placement data → paint at `dialog_origin + rect` (the
+exact rect `dialog_rect_hit` answers). One frame per distinct anchor
+(first layer at each), the exe image control's one-frame-per-view with
+loader default frame 0. The backdrop (`Dialog_*.ojs`) keeps its
+absolute anchor (its anchor *is* the dialog origin).
+
+Evidence from the 7.55 bytes (Interface1.opi, pinned above):
+
+| Sprite | Records | Anchors | Reading |
+|---|---|---|---|
+| `Dialog_Option_*.ojs` | 2 | both `(217,42)` 365x515 | backdrop frames, absolute mount |
+| `Option_Save/Default/Exit.ojs` | 2 | both at the button's local rect | positioned art (painted right even by the old rule) |
+| `OptionKey_Keytext.ojs` | 37 | all `(0,0)` | key-letter font atlas (A-Z + digits by size walk); rect-only placement |
+| `OptionKey_Select.ojs` | 7 | the 7 `KEY1..7` local rects | per-key selected indicator sheet |
+| `Option_Sound_BarEdge.ojs` | 8 | 4 left (66,*) + 4 right (300,*) | slider edge assembly |
+| `Option_Game_*.ojs` (radios/uncheck) | 1 | `(0,0)` | rect-only placement (stacked top-left pre-fix) |
+
+Pre-fix symptom mapping: `(0,0)`-anchored bodies (`Keytext` 37 glyphs,
+the Game-tab 16x16 radios, `EffectUnCheck1/2`) all painted at the
+dialog origin — the #132 top-left stack, and why clicks at the visible
+pile hit nothing (#131 on the key/game tabs). `Save/Default/Exit` and
+the sound sliders always painted at their rects (non-zero anchors) and
+were verified live end-to-end through the windowed client (wl-smoke
+compositor probe: gear opens, SAVE commits `option.ini`, sliders step,
+EXIT closes) — their #131 leg does not reproduce at this tip; the
+dispatch chain (modal → `click_options_dialog` → per-tab handlers) is
+seam-guarded since #15/#16 and now also at the real staged geometry
+(`options_*_at_the_staged_rect` guards, `game_tests`).
+
+**OPEN (rig follow-up):** per-control frame selection — which record
+a control paints by state: `Keytext` glyph = the bound key's letter
+(needs the DIK→record table + a Wine capture of the key tab),
+`Select` = the selected key's indicator only (all 7 paint today),
+`BarEdge` = the control's own row/side (all 8 paint today, visually
+complete by accident), `Save/Default/Exit` pressed/hover frames.
+`BarEdge` left-edge records sit at x=66 while the EDGE controls' `.bnd`
+rects start at x=53 — hit box and art disagree by 13 px in the exe
+data itself; hits ride the `.bnd` rects per the pairing rule.
+
 ## Select-music dialog (side.rs:497–600)
 
 Scene note: bound to `Dialog_SelectMusic.bnd` (133 rects). The constants

@@ -1803,8 +1803,19 @@ pub(crate) fn dialog_origin(placements: &[ScenePlacement]) -> (i32, i32) {
 }
 
 /// Paint one dialog placement at its dialog-relative origin: the
+/// Paint one dialog placement at its dialog-relative origin: the
 /// backdrop (`Dialog_*.ojs`) at its absolute anchor (its anchor
-/// *is* the origin), every child at origin + anchor.
+/// *is* the dialog origin, painted at view `(0,0)`); every child
+/// one frame per distinct record anchor — the first layer at each
+/// anchor — at `origin + local`, where `local` is the record anchor
+/// when the record carries one and the placement's `.bnd` rect
+/// origin when the record anchors at `(0,0)` (the pinned bound-body
+/// rule applied dialog-relative, `docs/geometry-audit.md` § Options
+/// dialog). One frame per anchor is the exe image control's
+/// one-frame-per-view with the loader default frame 0; multi-anchor
+/// sheets (`OptionKey_Select`'s seven key indicators,
+/// `Option_Sound_BarEdge`'s slider edges) keep every authored
+/// position until per-control frame selection lands (OPEN).
 fn paint_dialog_figure(
     frame: &mut Frame<'_>,
     placement: &ScenePlacement,
@@ -1815,12 +1826,35 @@ fn paint_dialog_figure(
         .sprite
         .as_deref()
         .is_some_and(|sprite| sprite.starts_with("Dialog_"));
-    let (view_x, view_y) = if is_backdrop {
-        (0, 0)
-    } else {
-        anchor_in_frame(origin.0, origin.1, frame.w, frame.h)
-    };
-    figure.paint_scaled_anchors(frame, view_x, view_y, frame.w, frame.h);
+    if is_backdrop {
+        figure.paint_scaled_anchors(frame, 0, 0, frame.w, frame.h);
+        return;
+    }
+    let mut painted_anchors: Vec<(i32, i32)> = Vec::new();
+    for index in 0..figure.len() {
+        let Some(layer) = figure.layer(index) else {
+            continue;
+        };
+        // A `(0,0)` record carries no position: the `.bnd` rect is
+        // its only placement data (verified bound-body rule).
+        let at = if layer.dx == 0 && layer.dy == 0 {
+            (placement.rect.x + layer.dx, placement.rect.y + layer.dy)
+        } else {
+            (layer.dx, layer.dy)
+        };
+        if painted_anchors.contains(&at) {
+            continue;
+        }
+        painted_anchors.push(at);
+        let (view_x, view_y) = anchor_in_frame(origin.0 + at.0, origin.1 + at.1, frame.w, frame.h);
+        blit_rgb555(
+            frame,
+            &layer.image.view(),
+            view_x,
+            view_y,
+            Some(layer.colorkey),
+        );
+    }
 }
 
 /// Paint a staged dialog scene dialog-relative (options and
@@ -12259,5 +12293,309 @@ mod paint_tests {
         assert_eq!(buf[40 * 800 + 480], 0, "instname untouched");
         assert_eq!(buf[455 * 800 + 100], 0, "notice text untouched");
         assert_eq!(buf[480 * 800 + 100], 0, "notice board untouched");
+    }
+}
+
+#[cfg(test)]
+mod dialog_paint_tests {
+    //! Dialog paint guards (Refs: #131, #132): painted art and
+    //! [`dialog_rect_hit`] must answer the same dialog-relative
+    //! rect, so a click always lands on visible art. The pairing
+    //! (`parse_bnd` + code-ordinal) is unchanged — the rule under
+    //! guard is the per-record placement: a record anchor when the
+    //! record carries one, the placement's `.bnd` rect origin when
+    //! the record anchors at `(0,0)`, one frame per distinct anchor.
+
+    use super::*;
+    use crate::avatar::{AvatarFigure, FigureLayer, PlacementRole, ScenePlacement};
+    use crate::staging::{stage_dialog, Dialog, StageContext};
+    use o2jam_render::{blit_rgb555, Frame, Rgb555Image};
+
+    /// One 1x1 red pixel layer (colorkey white, so the pixel paints).
+    fn red_layer(dx: i32, dy: i32) -> FigureLayer {
+        FigureLayer {
+            image: Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap(),
+            dx,
+            dy,
+            colorkey: 0xFFFF,
+        }
+    }
+
+    fn placement(id: &str, code: u32, sprite: &str, rect: Rect) -> ScenePlacement {
+        ScenePlacement {
+            role: PlacementRole::Single,
+            id: id.to_owned(),
+            code,
+            sprite: Some(sprite.to_owned()),
+            rect,
+        }
+    }
+
+    /// Ink bounds of one painted frame (`None` when no pixel painted).
+    fn ink_bbox(buf: &[u32], w: usize) -> Option<(i32, i32, i32, i32)> {
+        let mut bounds: Option<(i32, i32, i32, i32)> = None;
+        for (at, word) in buf.iter().enumerate() {
+            if *word == 0 {
+                continue;
+            }
+            let (x, y) = ((at % w) as i32, (at / w) as i32);
+            bounds = Some(match bounds {
+                None => (x, y, x, y),
+                Some((x1, y1, x2, y2)) => (x1.min(x), y1.min(y), x2.max(x), y2.max(y)),
+            });
+        }
+        bounds
+    }
+
+    #[test]
+    fn zero_anchor_children_paint_at_their_bnd_rects() {
+        // Synthetic, archive-independent: a child whose records all
+        // anchor at (0,0) carries no position of its own — the `.bnd`
+        // rect is its only placement data. Its ink must land at
+        // `dialog_origin + rect` (the exact rect `dialog_rect_hit`
+        // answers), and `(0,0)`-anchored records are frames of one
+        // view, so only the first paints — never a stack at the
+        // dialog origin (the #132 top-left pile).
+        let mut backdrop = AvatarFigure::default();
+        backdrop.push_layer(red_layer(240, 189));
+        let mut glyph = AvatarFigure::default();
+        for _ in 0..3 {
+            glyph.push_layer(red_layer(0, 0));
+        }
+        let placements = vec![
+            placement(
+                "IDC_BACK",
+                1,
+                "Dialog_Synthetic.ojs",
+                Rect {
+                    x: 240,
+                    y: 189,
+                    w: 320,
+                    h: 221,
+                },
+            ),
+            placement(
+                "IDC_GLYPH",
+                2,
+                "Glyph.ojs",
+                Rect {
+                    x: 52,
+                    y: 181,
+                    w: 107,
+                    h: 26,
+                },
+            ),
+        ];
+        let art = SceneArt {
+            placements,
+            figures: HashMap::from([
+                ("Dialog_Synthetic.ojs".to_owned(), backdrop),
+                ("Glyph.ojs".to_owned(), glyph),
+            ]),
+        };
+        let origin = dialog_origin(&art.placements);
+        assert_eq!(origin, (240, 189), "the backdrop rect authors the origin");
+        assert!(
+            dialog_rect_hit(&art.placements, 2, 292, 370),
+            "hit and paint must agree on the dialog-relative rect"
+        );
+        let mut buf = vec![0u32; 800 * 600];
+        paint_dialog_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &art,
+        );
+        // Backdrop 1px at its anchor + exactly one glyph frame at
+        // origin + (52,181) = (292,370); the two other frames stay unpainted.
+        assert_eq!(
+            buf.iter().filter(|word| **word != 0).count(),
+            2,
+            "one backdrop pixel plus one glyph frame pixel"
+        );
+        assert_eq!(ink_bbox(&buf, 800), Some((240, 189, 292, 370)));
+    }
+
+    /// Read the pinned Interface archive, `None` without install-root.
+    fn interface_archive() -> Option<Vec<u8>> {
+        std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../install-root/O2Jam/Image/Interface1.opi"),
+        )
+        .ok()
+    }
+
+    #[test]
+    fn option_sheets_paint_on_their_hit_rects() {
+        // Real 7.55 bytes (skips without install-root): every child of
+        // all three `Dialog_Option_*` sheets paints its first ink at
+        // `dialog_origin + (record anchor, else the .bnd rect origin)`
+        // — the same rect `dialog_rect_hit` answers — so every tab's
+        // art and hit tests land together (#131 inert controls, #132
+        // stacked sprites both traced here).
+        let Some(archive) = interface_archive() else {
+            return;
+        };
+        let ctx = StageContext::default();
+        let mut checked = 0usize;
+        for dialog in [
+            Dialog::PlanetOption,
+            Dialog::PlanetOptionSound,
+            Dialog::PlanetOptionGame,
+        ] {
+            let art = stage_dialog(&archive, dialog, ctx)
+                .art
+                .expect("option sheet stages with real bytes");
+            let origin = dialog_origin(&art.placements);
+            for placement in &art.placements {
+                // The backdrop paints view-`(0,0)` at its absolute
+                // anchor (its anchor *is* the dialog origin).
+                if placement
+                    .sprite
+                    .as_deref()
+                    .is_some_and(|sprite| sprite.starts_with("Dialog_"))
+                {
+                    continue;
+                }
+                let Some(name) = placement.sprite.as_ref() else {
+                    continue;
+                };
+                let Some(figure) = art.figures.get(name) else {
+                    continue;
+                };
+                if figure.is_empty() {
+                    continue;
+                }
+                let mut buf = vec![0u32; 800 * 600];
+                paint_dialog_figure(
+                    &mut Frame {
+                        buf: &mut buf,
+                        w: 800,
+                        h: 600,
+                    },
+                    placement,
+                    figure,
+                    origin,
+                );
+                let Some((x1, y1, _, _)) = ink_bbox(&buf, 800) else {
+                    panic!("{} paints no ink", placement.id);
+                };
+                if figure.has_anchor_offset() {
+                    // Anchored records author their own position: the
+                    // painted buffer must equal every distinct anchor's
+                    // first frame blitted at `origin + anchor`.
+                    let mut expected = vec![0u32; 800 * 600];
+                    let mut anchors: Vec<(i32, i32)> = Vec::new();
+                    for index in 0..figure.len() {
+                        let Some(layer) = figure.layer(index) else {
+                            continue;
+                        };
+                        let at = (layer.dx, layer.dy);
+                        if anchors.contains(&at) {
+                            continue;
+                        }
+                        anchors.push(at);
+                        let (view_x, view_y) =
+                            anchor_in_frame(origin.0 + at.0, origin.1 + at.1, 800, 600);
+                        blit_rgb555(
+                            &mut Frame {
+                                buf: &mut expected,
+                                w: 800,
+                                h: 600,
+                            },
+                            &layer.image.view(),
+                            view_x,
+                            view_y,
+                            Some(layer.colorkey),
+                        );
+                    }
+                    assert_eq!(
+                        buf, expected,
+                        "{} ({}) paints its anchored frames dialog-relative",
+                        placement.id, name
+                    );
+                } else {
+                    // `(0,0)`-anchored records carry no position: the
+                    // `.bnd` rect is their only placement data, so the
+                    // first ink must sit on `origin + rect` — the same
+                    // rect `dialog_rect_hit` answers.
+                    let expected = (origin.0 + placement.rect.x, origin.1 + placement.rect.y);
+                    assert!(
+                        (x1 - expected.0).abs() <= 2 && (y1 - expected.1).abs() <= 2,
+                        "{} ({}) first ink at ({x1},{y1}), expected {expected:?}",
+                        placement.id,
+                        name
+                    );
+                }
+                checked += 1;
+            }
+        }
+        assert!(checked >= 60, "all three sheets guard, got {checked}");
+    }
+
+    #[test]
+    fn keytext_sheet_paints_one_frame_per_key_button() {
+        // Real 7.55 bytes (skips without install-root):
+        // `OptionKey_Keytext.ojs` decodes 37 `(0,0)`-anchored glyph
+        // records (the key-letter font). Painting a lane button keeps
+        // exactly one frame — the loader default frame 0 — at its
+        // `.bnd` rect; the #132 regression stacked all 37 records at
+        // the dialog origin.
+        let Some(archive) = interface_archive() else {
+            return;
+        };
+        let art = stage_dialog(&archive, Dialog::PlanetOption, StageContext::default())
+            .art
+            .expect("key sheet stages with real bytes");
+        let origin = dialog_origin(&art.placements);
+        let placement = art
+            .placements
+            .iter()
+            .find(|placement| placement.code == super::super::side::OPTION_KEY_LANE_FIRST)
+            .expect("KEY1 button stages");
+        let figure = art
+            .figures
+            .get(placement.sprite.as_ref().expect("KEY1 names a sprite"))
+            .expect("KEY1 figure loads");
+        assert!(
+            figure.len() > 1,
+            "the guard needs the multi-record glyph sheet"
+        );
+        let mut painted = vec![0u32; 800 * 600];
+        paint_dialog_figure(
+            &mut Frame {
+                buf: &mut painted,
+                w: 800,
+                h: 600,
+            },
+            placement,
+            figure,
+            origin,
+        );
+        let mut frame0 = vec![0u32; 800 * 600];
+        let layer = figure.layer(0).expect("glyph frame 0 decodes");
+        let (view_x, view_y) = anchor_in_frame(
+            origin.0 + placement.rect.x,
+            origin.1 + placement.rect.y,
+            800,
+            600,
+        );
+        blit_rgb555(
+            &mut Frame {
+                buf: &mut frame0,
+                w: 800,
+                h: 600,
+            },
+            &layer.image.view(),
+            view_x,
+            view_y,
+            Some(layer.colorkey),
+        );
+        assert_eq!(
+            painted, frame0,
+            "a lane button paints exactly its first glyph frame"
+        );
     }
 }
