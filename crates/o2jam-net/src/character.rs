@@ -10,7 +10,8 @@
 use super::error::Error;
 use super::frame::encode_frame;
 use super::message::{Gender, WireMessage};
-use super::strings::{decode_null_terminated, encode_null_terminated, MAX_STRING_LEN};
+use super::reader::Reader;
+use super::strings::{encode_null_terminated, MAX_STRING_LEN};
 
 /// Equipment slots in wire order (`ItemType` 0–16).
 pub const EQUIPMENT_SLOTS: usize = 17;
@@ -97,86 +98,6 @@ pub struct CharacterInfo {
     pub penalty_count: i16,
     /// Penalty level.
     pub penalty_level: i16,
-}
-
-/// Cursor over a response body; every read bounds-checks.
-struct Reader<'body> {
-    body: &'body [u8],
-    pos: usize,
-}
-
-impl<'body> Reader<'body> {
-    fn new(body: &'body [u8]) -> Self {
-        Self { body, pos: 0 }
-    }
-
-    fn take(&mut self, count: usize) -> Result<&'body [u8], Error> {
-        if self.body.len() - self.pos < count {
-            return Err(Error::TruncatedMessage {
-                need: self.pos + count,
-                have: self.body.len(),
-            });
-        }
-        let bytes = &self.body[self.pos..self.pos + count];
-        self.pos += count;
-        Ok(bytes)
-    }
-
-    fn read_i32(&mut self) -> Result<i32, Error> {
-        let bytes = self.take(4)?;
-        Ok(i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
-    }
-
-    fn read_i16(&mut self) -> Result<i16, Error> {
-        let bytes = self.take(2)?;
-        Ok(i16::from_le_bytes([bytes[0], bytes[1]]))
-    }
-
-    fn read_u8(&mut self) -> Result<u8, Error> {
-        Ok(self.take(1)?[0])
-    }
-
-    /// One `0`/`1` byte as bool.
-    fn read_flag(&mut self, field: &'static str) -> Result<bool, Error> {
-        match self.read_u8()? {
-            0 => Ok(false),
-            1 => Ok(true),
-            _ => Err(Error::InvalidField {
-                field,
-                reason: "not 0 or 1",
-            }),
-        }
-    }
-
-    fn read_string(&mut self) -> Result<String, Error> {
-        let (text, used) = decode_null_terminated(&self.body[self.pos..], MAX_STRING_LEN)?;
-        self.pos += used;
-        Ok(text)
-    }
-
-    /// Element count prefix; negative counts are malformed.
-    fn read_count(&mut self, field: &'static str, wide: bool) -> Result<usize, Error> {
-        let count = if wide {
-            self.read_i32()?
-        } else {
-            i32::from(self.read_i16()?)
-        };
-        if count < 0 {
-            return Err(Error::InvalidField {
-                field,
-                reason: "negative count",
-            });
-        }
-        Ok(count as usize)
-    }
-
-    /// No bytes may remain after the last field.
-    fn finish(&self) -> Result<(), Error> {
-        if self.pos != self.body.len() {
-            return Err(Error::TrailingBytes(self.body.len() - self.pos));
-        }
-        Ok(())
-    }
 }
 
 fn read_gift_item(reader: &mut Reader<'_>) -> Result<GiftItemInfo, Error> {

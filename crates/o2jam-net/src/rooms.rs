@@ -11,6 +11,7 @@ use std::borrow::Cow;
 use super::error::Error;
 use super::frame::encode_frame;
 use super::message::WireMessage;
+use super::reader::Reader;
 use super::strings::{decode_null_terminated, encode_null_terminated, MAX_STRING_LEN};
 
 /// Title cap (`StringMessageField(maxLength: 21)`).
@@ -209,88 +210,6 @@ pub struct RoomListEntry {
 }
 
 /// Decode one `0`/`1` byte as bool.
-fn decode_flag(body: &[u8], field: &'static str) -> Result<bool, Error> {
-    match body {
-        [0] => Ok(false),
-        [1] => Ok(true),
-        _ => Err(Error::InvalidField {
-            field,
-            reason: "not 0 or 1",
-        }),
-    }
-}
-
-/// Cursor over a room-list body; every read bounds-checks.
-struct Reader<'body> {
-    body: &'body [u8],
-    pos: usize,
-}
-
-impl<'body> Reader<'body> {
-    fn new(body: &'body [u8]) -> Self {
-        Self { body, pos: 0 }
-    }
-
-    fn take(&mut self, count: usize) -> Result<&'body [u8], Error> {
-        if self.body.len() - self.pos < count {
-            return Err(Error::TruncatedMessage {
-                need: self.pos + count,
-                have: self.body.len(),
-            });
-        }
-        let bytes = &self.body[self.pos..self.pos + count];
-        self.pos += count;
-        Ok(bytes)
-    }
-
-    fn read_u8(&mut self) -> Result<u8, Error> {
-        Ok(self.take(1)?[0])
-    }
-
-    fn read_u16(&mut self) -> Result<u16, Error> {
-        let bytes = self.take(2)?;
-        Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
-    }
-
-    fn read_i32(&mut self) -> Result<i32, Error> {
-        let bytes = self.take(4)?;
-        Ok(i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
-    }
-
-    fn read_u32(&mut self) -> Result<u32, Error> {
-        let bytes = self.take(4)?;
-        Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
-    }
-
-    fn read_string(&mut self) -> Result<String, Error> {
-        let (text, used) = decode_null_terminated(&self.body[self.pos..], MAX_STRING_LEN)?;
-        self.pos += used;
-        Ok(text)
-    }
-
-    fn read_flag(&mut self, field: &'static str) -> Result<bool, Error> {
-        decode_flag(self.take(1)?, field)
-    }
-
-    fn read_title(&mut self) -> Result<String, Error> {
-        let (text, used) = decode_null_terminated(&self.body[self.pos..], ROOM_TITLE_LEN)?;
-        self.pos += used;
-        Ok(text)
-    }
-
-    fn finish(&self) -> Result<(), Error> {
-        if self.pos != self.body.len() {
-            return Err(Error::TrailingBytes(self.body.len() - self.pos));
-        }
-        Ok(())
-    }
-
-    fn remaining(&self) -> usize {
-        self.body.len() - self.pos
-    }
-}
-
-/// `i32` 0/1 as bool.
 fn read_int_flag(reader: &mut Reader<'_>, field: &'static str) -> Result<bool, Error> {
     match reader.read_i32()? {
         0 => Ok(false),

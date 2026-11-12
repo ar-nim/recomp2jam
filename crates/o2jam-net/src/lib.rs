@@ -24,6 +24,7 @@ mod inflate;
 pub mod message;
 pub mod gift;
 pub mod play;
+pub mod reader;
 pub mod relay;
 pub mod rooms;
 pub mod shop;
