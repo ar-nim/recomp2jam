@@ -904,6 +904,186 @@ impl ShopState {
     }
 }
 
+/// Song-shop songs, sorts, pages, and the fetched flag board behind
+/// the music-shop side screen (#139 cluster 4: the Data Clump of all
+/// six `music_shop_*` fields). Pure board state — no side dispatch,
+/// paint, or wire queue — so the board reads without touching the
+/// `ScreenGame` God class. `ScreenGame` keeps thin delegates under
+/// the same names, so the click seam and the snapshot surface never
+/// change. Row and cart commits still queue on the outbox (cluster
+/// 1): `apply_action` only reports them, the caller queues the
+/// pinned 5010 send.
+#[derive(Default)]
+struct MusicShopState {
+    /// Song-shop catalog (`OJNList.dat` order, owned copies; see
+    /// [`ScreenGame::set_music_shop_catalog`]).
+    music_shop_songs: Vec<LankingSong>,
+    /// Active song-shop sort (`None`: catalog order until a sort
+    /// button answers; directions ASSUMED ascending).
+    music_shop_sort: Option<LankingSort>,
+    /// Song-list page (five rows per page, the staged `MS_EX` hit
+    /// areas).
+    music_shop_page: usize,
+    /// Fetched song flags (`GetMusicList` 4031 answer) staged
+    /// behind the scripted-stub seam: the shell proves the rows,
+    /// the wire ride stays ASSUMED until a live gateway replay.
+    music_shop_board: Option<MusicListAnswer>,
+    /// Checked song-shop cart ids in pick order (the `MS_EX` row
+    /// selection behind the cart `BUYITEM` commit).
+    music_shop_cart: Vec<u32>,
+    /// Cart-list page (five rows per page, the staged music-cart
+    /// `CART_EX` slots).
+    music_shop_cart_page: usize,
+}
+
+impl MusicShopState {
+    /// Stage the song-shop catalog (`OJNList.dat` order, owned
+    /// copies so the board outlives the parse borrow). Resets sort
+    /// and pages.
+    fn set_catalog(&mut self, entries: &[OjnListEntry<'_>]) {
+        self.music_shop_songs = lanking_songs(entries);
+        self.music_shop_sort = None;
+        self.music_shop_page = 0;
+        self.music_shop_cart_page = 0;
+    }
+
+    /// Stage the fetched song flags (`GetMusicList` 4031 answer).
+    /// Resets the song-list page.
+    fn stage_board(&mut self, answer: MusicListAnswer) {
+        self.music_shop_board = Some(answer);
+        self.music_shop_page = 0;
+    }
+
+    /// Active song-shop sort (`None`: catalog order).
+    fn sort(&self) -> Option<LankingSort> {
+        self.music_shop_sort
+    }
+
+    /// Song-list page (five rows per page).
+    fn page(&self) -> usize {
+        self.music_shop_page
+    }
+
+    /// Cart-list page (five rows per page).
+    fn cart_page(&self) -> usize {
+        self.music_shop_cart_page
+    }
+
+    /// Checked song-shop cart ids in pick order.
+    fn cart(&self) -> Vec<u32> {
+        self.music_shop_cart.clone()
+    }
+
+    /// Pick one catalog song into the cart (id must exist; the
+    /// click seam feeds the same cart — this stages restores).
+    fn cart_push(&mut self, song_id: u32) {
+        if self
+            .music_shop_songs
+            .iter()
+            .any(|song| song.song_id == song_id)
+            && !self.music_shop_cart.contains(&song_id)
+        {
+            self.music_shop_cart.push(song_id);
+        }
+    }
+
+    /// Checked music-cart songs on the current cart page (pick
+    /// order, five rows at most; unknown ids drop out).
+    fn visible_cart(&self) -> Vec<LankingSong> {
+        let songs: Vec<LankingSong> = self
+            .music_shop_cart
+            .iter()
+            .filter_map(|song_id| {
+                self.music_shop_songs
+                    .iter()
+                    .find(|song| song.song_id == *song_id)
+                    .cloned()
+            })
+            .collect();
+        let (start, end) =
+            lanking_page_window(songs.len(), MSHOP_CART_ROWS, self.music_shop_cart_page);
+        songs[start..end].to_vec()
+    }
+
+    /// Music-cart page count (at least one, same empty-cart rule).
+    fn cart_pages(&self) -> usize {
+        shop_page_count(self.music_shop_cart.len(), MSHOP_CART_ROWS)
+    }
+
+    /// Song-list page count (at least one, same empty-cart rule).
+    fn list_pages(&self) -> usize {
+        shop_page_count(self.music_shop_songs.len(), MSHOP_SONG_ROWS)
+    }
+
+    /// Sorted song-shop rows with live flags on the current page
+    /// (owned page: small, five rows at most).
+    fn visible_rows(&self) -> Vec<MusicShopRow> {
+        let mut songs = self.music_shop_songs.clone();
+        if let Some(sort) = self.music_shop_sort {
+            sort_lanking_songs(&mut songs, sort);
+        }
+        let (start, end) = lanking_page_window(songs.len(), MSHOP_SONG_ROWS, self.music_shop_page);
+        music_shop_rows(&songs[start..end], self.music_shop_board.as_ref())
+    }
+
+    /// Board action through the control-code dispatch: row picks
+    /// stage the cart, sorts resort and reset the page, and the
+    /// pagers step and hold at the ends. Reports whether the action
+    /// queues the pinned 5010 send (a row buy on a visible row, or
+    /// the cart `BUYITEM`): the caller queues it on the outbox, so
+    /// this board state never touches the wire.
+    fn apply_action(&mut self, action: MusicShopAction) -> bool {
+        match action {
+            MusicShopAction::SelectRow(slot) => {
+                if let Some(row) = self.visible_rows().get(slot) {
+                    let song_id = row.song.song_id;
+                    if !self.music_shop_cart.contains(&song_id) {
+                        self.music_shop_cart.push(song_id);
+                    }
+                }
+                false
+            }
+            MusicShopAction::BuyRow { slot, gem: _ } => self.visible_rows().get(slot).is_some(),
+            MusicShopAction::Sort(sort) => {
+                self.music_shop_sort = Some(sort);
+                self.music_shop_page = 0;
+                false
+            }
+            MusicShopAction::MsPrev => {
+                self.music_shop_page = self.music_shop_page.saturating_sub(1);
+                false
+            }
+            MusicShopAction::MsNext => {
+                if self
+                    .music_shop_page
+                    .saturating_add(1)
+                    .saturating_mul(MSHOP_SONG_ROWS)
+                    < self.music_shop_songs.len()
+                {
+                    self.music_shop_page = self.music_shop_page.saturating_add(1);
+                }
+                false
+            }
+            MusicShopAction::CartBuy => true,
+            MusicShopAction::CartPrev => {
+                self.music_shop_cart_page = self.music_shop_cart_page.saturating_sub(1);
+                false
+            }
+            MusicShopAction::CartNext => {
+                if self
+                    .music_shop_cart_page
+                    .saturating_add(1)
+                    .saturating_mul(MSHOP_CART_ROWS)
+                    < self.music_shop_cart.len()
+                {
+                    self.music_shop_cart_page = self.music_shop_cart_page.saturating_add(1);
+                }
+                false
+            }
+        }
+    }
+}
+
 /// Room/waiting/loading inputs land with their UIs.
 pub struct ScreenGame {
     flow: ScreenFlow,
@@ -1121,25 +1301,10 @@ pub struct ScreenGame {
     /// Live wallet words behind the shop gem cells (5028/5001/5003
     /// folds; `--` until data).
     wallet: WalletState,
-    /// Song-shop catalog (`OJNList.dat` order, owned copies; see
-    /// [`Self::set_music_shop_catalog`]).
-    music_shop_songs: Vec<LankingSong>,
-    /// Active song-shop sort (`None`: catalog order until a sort
-    /// button answers; directions ASSUMED ascending).
-    music_shop_sort: Option<LankingSort>,
-    /// Song-list page (five rows per page, the staged `MS_EX` hit
-    /// areas).
-    music_shop_page: usize,
-    /// Fetched song flags (`GetMusicList` 4031 answer) staged
-    /// behind the scripted-stub seam: the shell proves the rows,
-    /// the wire ride stays ASSUMED until a live gateway replay.
-    music_shop_board: Option<MusicListAnswer>,
-    /// Checked song-shop cart ids in pick order (the `MS_EX` row
-    /// selection behind the cart `BUYITEM` commit).
-    music_shop_cart: Vec<u32>,
-    /// Cart-list page (five rows per page, the staged music-cart
-    /// `CART_EX` slots).
-    music_shop_cart_page: usize,
+    /// Song-shop board state (the catalog, sort, pages, board, and
+    /// cart; #139 cluster 4): every `music_shop_*` word lives here;
+    /// the hash fold reads it for the six hashed words.
+    music_shop: MusicShopState,
     side_placements: Vec<ScenePlacement>,
     side_figures: HashMap<String, AvatarFigure>,
     /// Live avatar-room selection (slot pick, bag/gift pages+cursors).
@@ -1505,12 +1670,7 @@ impl ScreenGame {
             lanking: LankingState::default(),
             shop: ShopState::default(),
             wallet: WalletState::default(),
-            music_shop_songs: Vec::new(),
-            music_shop_sort: None,
-            music_shop_page: 0,
-            music_shop_board: None,
-            music_shop_cart: Vec::new(),
-            music_shop_cart_page: 0,
+            music_shop: MusicShopState::default(),
             side_placements: Vec::new(),
             side_figures: HashMap::new(),
             myroom: MyRoomState::new(),
@@ -4981,10 +5141,7 @@ impl ScreenGame {
     /// copies so the board outlives the parse borrow; mirrors
     /// [`Self::set_lanking_catalog`]). Resets sort and pages.
     pub fn set_music_shop_catalog(&mut self, entries: &[OjnListEntry<'_>]) -> &mut Self {
-        self.music_shop_songs = lanking_songs(entries);
-        self.music_shop_sort = None;
-        self.music_shop_page = 0;
-        self.music_shop_cart_page = 0;
+        self.music_shop.set_catalog(entries);
         self
     }
 
@@ -4993,83 +5150,64 @@ impl ScreenGame {
     /// the wire ride stays ASSUMED until a live gateway replay.
     /// Resets the song-list page.
     pub fn stage_music_shop_board(&mut self, answer: MusicListAnswer) -> &mut Self {
-        self.music_shop_board = Some(answer);
-        self.music_shop_page = 0;
+        self.music_shop.stage_board(answer);
         self
     }
 
     /// Active song-shop sort (`None`: catalog order).
     #[must_use]
     pub fn music_shop_sort(&self) -> Option<LankingSort> {
-        self.music_shop_sort
+        self.music_shop.sort()
     }
 
     /// Song-list page (five rows per page).
     #[must_use]
     pub fn music_shop_page(&self) -> usize {
-        self.music_shop_page
+        self.music_shop.page()
+    }
+
+    /// Music-cart page (five rows per page).
+    #[must_use]
+    pub fn music_shop_cart_page(&self) -> usize {
+        self.music_shop.cart_page()
     }
 
     /// Checked song-shop cart ids in pick order.
     #[must_use]
     pub fn music_shop_cart(&self) -> Vec<u32> {
-        self.music_shop_cart.clone()
+        self.music_shop.cart()
     }
 
     /// Pick one catalog song into the cart (id must exist; the
     /// click seam feeds the same cart — this stages restores).
     pub fn music_shop_cart_push(&mut self, song_id: u32) {
-        if self
-            .music_shop_songs
-            .iter()
-            .any(|song| song.song_id == song_id)
-            && !self.music_shop_cart.contains(&song_id)
-        {
-            self.music_shop_cart.push(song_id);
-        }
+        self.music_shop.cart_push(song_id);
     }
 
     /// Checked music-cart songs on the current cart page (pick
     /// order, five rows at most; unknown ids drop out).
     #[must_use]
     pub fn music_shop_visible_cart(&self) -> Vec<LankingSong> {
-        let songs: Vec<LankingSong> = self
-            .music_shop_cart
-            .iter()
-            .filter_map(|song_id| {
-                self.music_shop_songs
-                    .iter()
-                    .find(|song| song.song_id == *song_id)
-                    .cloned()
-            })
-            .collect();
-        let (start, end) =
-            lanking_page_window(songs.len(), MSHOP_CART_ROWS, self.music_shop_cart_page);
-        songs[start..end].to_vec()
+        self.music_shop.visible_cart()
     }
 
     /// Music-cart page count (at least one, same empty-cart rule).
     #[must_use]
     pub fn music_shop_cart_pages(&self) -> usize {
-        shop_page_count(self.music_shop_cart.len(), MSHOP_CART_ROWS)
+        self.music_shop.cart_pages()
     }
 
     /// Song-list page count (at least one, same empty-cart rule).
     #[must_use]
     pub fn music_shop_list_pages(&self) -> usize {
-        shop_page_count(self.music_shop_songs.len(), MSHOP_SONG_ROWS)
+        self.music_shop.list_pages()
     }
 
     /// Sorted song-shop rows with live flags on the current page
     /// (owned page: small, five rows at most).
     #[must_use]
     pub fn music_shop_visible_rows(&self) -> Vec<MusicShopRow> {
-        let mut songs = self.music_shop_songs.clone();
-        if let Some(sort) = self.music_shop_sort {
-            sort_lanking_songs(&mut songs, sort);
-        }
-        let (start, end) = lanking_page_window(songs.len(), MSHOP_SONG_ROWS, self.music_shop_page);
-        music_shop_rows(&songs[start..end], self.music_shop_board.as_ref())
+        self.music_shop.visible_rows()
     }
 
     /// Queued song buy for the session bridge, if any (5010). One
@@ -5092,53 +5230,8 @@ impl ScreenGame {
         let Some(action) = music_shop_action_at(&self.side_placements, x, y) else {
             return;
         };
-        match action {
-            MusicShopAction::SelectRow(slot) => {
-                if let Some(row) = self.music_shop_visible_rows().get(slot) {
-                    let song_id = row.song.song_id;
-                    if !self.music_shop_cart.contains(&song_id) {
-                        self.music_shop_cart.push(song_id);
-                    }
-                }
-            }
-            MusicShopAction::BuyRow { slot, gem: _ } => {
-                if self.music_shop_visible_rows().get(slot).is_some() {
-                    self.outbox.pending_music_buy = Some(SyncMusicPurchase);
-                }
-            }
-            MusicShopAction::Sort(sort) => {
-                self.music_shop_sort = Some(sort);
-                self.music_shop_page = 0;
-            }
-            MusicShopAction::MsPrev => {
-                self.music_shop_page = self.music_shop_page.saturating_sub(1);
-            }
-            MusicShopAction::MsNext => {
-                if self
-                    .music_shop_page
-                    .saturating_add(1)
-                    .saturating_mul(MSHOP_SONG_ROWS)
-                    < self.music_shop_songs.len()
-                {
-                    self.music_shop_page = self.music_shop_page.saturating_add(1);
-                }
-            }
-            MusicShopAction::CartBuy => {
-                self.outbox.pending_music_buy = Some(SyncMusicPurchase);
-            }
-            MusicShopAction::CartPrev => {
-                self.music_shop_cart_page = self.music_shop_cart_page.saturating_sub(1);
-            }
-            MusicShopAction::CartNext => {
-                if self
-                    .music_shop_cart_page
-                    .saturating_add(1)
-                    .saturating_mul(MSHOP_CART_ROWS)
-                    < self.music_shop_cart.len()
-                {
-                    self.music_shop_cart_page = self.music_shop_cart_page.saturating_add(1);
-                }
-            }
+        if self.music_shop.apply_action(action) {
+            self.outbox.pending_music_buy = Some(SyncMusicPurchase);
         }
     }
 
@@ -5198,14 +5291,14 @@ impl ScreenGame {
                     frame,
                     &self.side_placements,
                     &self.music_shop_visible_rows(),
-                    self.music_shop_page,
+                    self.music_shop_page(),
                     self.music_shop_list_pages(),
                 );
                 paint_music_shop_cart(
                     frame,
                     &self.side_placements,
                     &self.music_shop_visible_cart(),
-                    self.music_shop_cart_page,
+                    self.music_shop_cart_page(),
                     self.music_shop_cart_pages(),
                 );
             }
@@ -6481,18 +6574,21 @@ fn observable_state_hash(game: &ScreenGame) -> u64 {
     );
     hash_u64(
         &mut hash,
-        game.music_shop_sort.map_or(u64::MAX, |sort| sort as u64),
+        game.music_shop
+            .music_shop_sort
+            .map_or(u64::MAX, |sort| sort as u64),
     );
-    hash_u64(&mut hash, game.music_shop_page as u64);
-    hash_u64(&mut hash, game.music_shop_cart_page as u64);
-    hash_u64(&mut hash, game.music_shop_songs.len() as u64);
+    hash_u64(&mut hash, game.music_shop.music_shop_page as u64);
+    hash_u64(&mut hash, game.music_shop.music_shop_cart_page as u64);
+    hash_u64(&mut hash, game.music_shop.music_shop_songs.len() as u64);
     hash_u64(
         &mut hash,
-        game.music_shop_board
+        game.music_shop
+            .music_shop_board
             .as_ref()
             .map_or(0, |board| board.entries.len() as u64),
     );
-    for id in &game.music_shop_cart {
+    for id in &game.music_shop.music_shop_cart {
         hash_u64(&mut hash, u64::from(*id));
     }
     hash_u64(&mut hash, game.outbox.pending_shop_buy.map_or(0, |_| 5_000));
@@ -14838,12 +14934,14 @@ mod game_tests {
     fn populated_outbox_pins_the_observable_state_hash() {
         // Characterization for the PendingOutbox extraction (#139,
         // cluster 1) extended by the LankingState extraction
-        // (cluster 2) and the ShopState population (cluster 3): all
-        // thirteen wire queues populated through their queueing arms
-        // plus the lanking catalog/sort/page/pick/board and the shop
-        // catalog/toggle/page/cart-page populations below, then the
-        // observable hash pinned byte-identical. The extraction must
-        // not move one hash bit:
+        // (cluster 2), the ShopState population (cluster 3), and the
+        // MusicShopState population (cluster 4): all thirteen wire
+        // queues populated through their queueing arms plus the
+        // lanking catalog/sort/page/pick/board, the shop
+        // catalog/toggle/page/cart-page, and the music-shop
+        // catalog/sort/page/board/pick/cart-page populations below,
+        // then the observable hash pinned byte-identical. The
+        // extraction must not move one hash bit:
         // the take_* drains below prove every arm queued, the pinned
         // word proves the hash fold is untouched. Only the two shop
         // sends feed the fold today; the rest ride along so a future
@@ -14936,7 +15034,10 @@ mod game_tests {
         game.click_shop(18, 564);
         assert!(game.leave_side());
 
-        // Song-shop arm: the row pick plus cart BUYITEM queues 5010.
+        // Song-shop arm (#139 cluster 4): the catalog + TITLE sort +
+        // MSALL pager step + staged 4031 board + row picks on both
+        // pages + cart pager step + cart BUYITEM feed the hash fold;
+        // the extraction must not move one hash bit.
         let mut blob = Vec::new();
         for index in 0..7 {
             let song_id = 757 + index as u32;
@@ -14949,9 +15050,35 @@ mod game_tests {
         }
         let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
         game.set_music_shop_catalog(&entries);
+        game.stage_music_shop_board(o2jam_net::play::MusicListAnswer {
+            entries: (757..764)
+                .map(|id| o2jam_net::play::MusicListEntry {
+                    id: id as u16,
+                    notes_ex: 100,
+                    notes_nx: 200,
+                    notes_hx: 300,
+                })
+                .collect(),
+            free_music: false,
+        });
         game.load_side_scene(music_shop_side_placements(), HashMap::new());
         assert!(game.visit_side(SideScreen::MusicShop));
+        game.click_music_shop(134, 85);
+        assert_eq!(game.music_shop_sort(), Some(LankingSort::Title));
+        game.click_music_shop(318, 533);
+        assert_eq!(game.music_shop_page(), 1);
         game.click_music_shop(19, 105);
+        game.click_music_shop(19, 231);
+        assert_eq!(game.music_shop_cart().len(), 2);
+        game.click_music_shop(199, 533);
+        assert_eq!(game.music_shop_page(), 0);
+        game.click_music_shop(19, 105);
+        game.click_music_shop(19, 231);
+        game.click_music_shop(19, 315);
+        game.click_music_shop(19, 399);
+        game.click_music_shop(19, 483);
+        assert_eq!(game.music_shop_cart().len(), 7);
+        game.click_music_shop(662, 530);
         game.click_music_shop(424, 529);
         assert!(game.leave_side());
 
@@ -15046,8 +15173,8 @@ mod game_tests {
 
         let populated = game.state_hash();
         assert_eq!(
-            populated, 0xAFC5_1971_B8A6_D771,
-            "outbox+lanking+shop population must not move the observable hash"
+            populated, 0x368F_119F_1EFD_901E,
+            "outbox+lanking+shop+musicshop population must not move the observable hash"
         );
 
         // The seam drains every queue exactly once.
