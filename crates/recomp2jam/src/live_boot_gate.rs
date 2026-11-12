@@ -133,6 +133,10 @@ mod live_boot_gate_tests {
             game.password_art_staged(),
             "live boot stages the password dialog sheet"
         );
+        assert!(
+            game.payment_art_staged(),
+            "live boot stages the payment sheets"
+        );
         let hero = game
             .myroom_character()
             .expect("live boot stages the fetched character info");

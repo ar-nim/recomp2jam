@@ -75,6 +75,7 @@ fn stage_interface_scenes(game: &mut ScreenGame, archive: &[u8]) {
     stage_select_dialog_art(game, archive);
     stage_channel_dialog(game, archive);
     stage_planet_dialogs(game, archive);
+    stage_payment_sheets(game, archive);
 }
 
 /// Stage the planet-board modal sheets: all three options tabs
@@ -113,6 +114,30 @@ fn stage_room_dialogs(game: &mut ScreenGame, archive: &[u8]) {
     if let Some(art) = stage_dialog(archive, Dialog::InputPassword, ctx).art {
         game.load_password_scene(art.placements, art.figures);
     }
+}
+
+/// Stage the billing sheets on the live boot path.
+///
+/// `STATE_PAYMENT` + `STATE_PAYMENT2` stage through the declaration,
+/// merged exactly like the shots side-walk (`shots.rs` `side_stage_data`). The rows
+/// already staged through the side walk; only the live boot path
+/// never mounted them. Parked in its own slot — the painter still
+/// reads the side slots, so paint wiring rides a later ticket.
+fn stage_payment_sheets(game: &mut ScreenGame, archive: &[u8]) {
+    let ctx = StageContext::default();
+    let mut placements = Vec::new();
+    let mut figures = HashMap::new();
+    for state in [State::Payment, State::Payment2] {
+        let Some(art) = stage_state(archive, state, ctx).art else {
+            continue;
+        };
+        placements.extend(art.placements);
+        figures.extend(art.figures);
+    }
+    if placements.is_empty() {
+        return;
+    }
+    game.load_payment_scene(placements, figures);
 }
 
 /// Stage the channel dialog art through the declaration: the bound

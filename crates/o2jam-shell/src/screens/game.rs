@@ -597,6 +597,11 @@ pub struct ScreenGame {
     create_room_art: Option<SceneArt>,
     /// Staged password sheet (`DIALOG_INPUTPASSWORD` placements+figures).
     password_art: Option<SceneArt>,
+    /// Staged billing sheets (`STATE_PAYMENT` + `STATE_PAYMENT2`
+    /// placements+figures, merged like the shots side-walk). `None`
+    /// until the live boot stages them; the painter still reads the
+    /// side slots, so paint wiring rides a later ticket.
+    payment_art: Option<SceneArt>,
     /// Committed create-room body awaiting the session send (2004).
     pending_create_room: Option<CreateRoom>,
     /// Committed locked-room join awaiting the session send (3002).
@@ -1040,6 +1045,7 @@ impl ScreenGame {
             password_form: PasswordForm::new(),
             create_room_art: None,
             password_art: None,
+            payment_art: None,
             pending_create_room: None,
             pending_join: None,
             pending_room_team: None,
@@ -1621,6 +1627,30 @@ impl ScreenGame {
     #[must_use]
     pub fn password_art_staged(&self) -> bool {
         self.password_art.is_some()
+    }
+
+    /// Stage the billing sheets (`STATE_PAYMENT` + `STATE_PAYMENT2`
+    /// placements plus figures through the declaration, merged like
+    /// the shots side-walk). Staging never moves the flow; the live
+    /// boot path never visits a side screen, so without this arm the
+    /// Payment overlay painted the unwired notice over empty art.
+    pub fn load_payment_scene(
+        &mut self,
+        placements: Vec<ScenePlacement>,
+        figures: HashMap<String, AvatarFigure>,
+    ) -> &mut Self {
+        self.payment_art = Some(SceneArt {
+            placements,
+            figures,
+        });
+        self
+    }
+    /// True while the billing sheets are staged (the live-boot
+    /// staging gate asserts the live path stages them like every
+    /// other Interface sheet).
+    #[must_use]
+    pub fn payment_art_staged(&self) -> bool {
+        self.payment_art.is_some()
     }
 
     /// Open room dialog, if any.
