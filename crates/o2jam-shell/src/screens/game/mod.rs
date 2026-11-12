@@ -1,10 +1,12 @@
 //! [`ScreenGame`]: the window's game loop, owning the [`ScreenFlow`]
 //! and walking screens on input.
 
+mod lanking;
 mod waiting;
 
 use std::collections::HashMap;
 
+use self::lanking::LankingState;
 use self::waiting::PendingOutbox;
 use super::super::avatar::{
     avatar_item_by_id, load_worn_figure, ojn_cover_figure, AvatarFigure, ScenePlacement,
@@ -41,17 +43,17 @@ use super::side::{
     select_pager_caption, select_picked_caption, select_row_hit, select_search_caption,
     select_status_line, shop_action_at, shop_goods, shop_page_count, side_scene_slot,
     sort_lanking_songs, waiting_song_detail_line, waiting_song_title_line, waiting_team_for_code,
-    wallet_row_caption, CreateRoomAction, CreateRoomForm, LankingAction, LankingSong, LankingSort,
+    wallet_row_caption, CreateRoomAction, CreateRoomForm, LankingSong, LankingSort,
     MusicShopAction, MusicShopRow, MyRoomAction, MyRoomState, PasswordAction, PasswordForm,
     PlanetAction, PlanetOptionTab, PlanetPromo, PlanetPromoCarousel, PlanetSelection, RoomDialog,
     SelectMusicRow, SelectMusicSong, ShopAction, ShopGood, SideScreen, WalletRow, WalletState,
-    GEM_LABEL, LANKING_LVIEW_ROWS, LANKING_RVIEW_ROWS, MSHOP_CART_ROWS, MSHOP_SONG_ROWS,
-    OPTION_GAME_BLEND_NO, OPTION_GAME_BLEND_YES, OPTION_GAME_EFFECT_HIGH, OPTION_GAME_EFFECT_LOW,
-    OPTION_GAME_EFFECT_NORMAL, OPTION_GAME_GUIDE_LONG, OPTION_GAME_GUIDE_MIDDLE,
-    OPTION_GAME_GUIDE_NOUSE, OPTION_GAME_GUIDE_SHORT, OPTION_GAME_LONGNOTE_NONE,
-    OPTION_GAME_LONGNOTE_USED, OPTION_GAME_MODE_FULL, OPTION_GAME_MODE_WIN, OPTION_GAME_NOTETYPE1,
-    OPTION_GAME_NOTETYPE2, OPTION_KEY_3KEY_FIRST, OPTION_KEY_3KEY_MODE, OPTION_KEY_7KEY_MODE,
-    OPTION_KEY_LANE_FIRST, OPTION_KEY_TEST, OPTION_SOUND_BG_EFFECT_DOWN, OPTION_SOUND_BG_EFFECT_UP,
+    GEM_LABEL, MSHOP_CART_ROWS, MSHOP_SONG_ROWS, OPTION_GAME_BLEND_NO, OPTION_GAME_BLEND_YES,
+    OPTION_GAME_EFFECT_HIGH, OPTION_GAME_EFFECT_LOW, OPTION_GAME_EFFECT_NORMAL,
+    OPTION_GAME_GUIDE_LONG, OPTION_GAME_GUIDE_MIDDLE, OPTION_GAME_GUIDE_NOUSE,
+    OPTION_GAME_GUIDE_SHORT, OPTION_GAME_LONGNOTE_NONE, OPTION_GAME_LONGNOTE_USED,
+    OPTION_GAME_MODE_FULL, OPTION_GAME_MODE_WIN, OPTION_GAME_NOTETYPE1, OPTION_GAME_NOTETYPE2,
+    OPTION_KEY_3KEY_FIRST, OPTION_KEY_3KEY_MODE, OPTION_KEY_7KEY_MODE, OPTION_KEY_LANE_FIRST,
+    OPTION_KEY_TEST, OPTION_SOUND_BG_EFFECT_DOWN, OPTION_SOUND_BG_EFFECT_UP,
     OPTION_SOUND_BG_MUSIC_DOWN, OPTION_SOUND_BG_MUSIC_UP, OPTION_SOUND_GAME_EFFECT_DOWN,
     OPTION_SOUND_GAME_EFFECT_UP, OPTION_SOUND_GAME_MUSIC_DOWN, OPTION_SOUND_GAME_MUSIC_UP,
     PLANET_OPTION_FIRST_TAB, PLANET_PROMO_IMAGE_CODE, PLANET_PROMO_TICK_MS, QUIT_CANCEL_CODE,
@@ -434,149 +436,6 @@ const SPLASH_HOLD_POLL_MS: u64 = 100;
 /// frameless boards paint nothing new and stay fully idle (the
 /// #138 parked-loop result holds).
 const PLANET_PROMO_HEARTBEAT_MS: u64 = 1_000;
-
-/// Left-list songs, sorts, pages, and the fetched rank board behind
-/// the lanking side screen (#139 cluster 2: the Data Clump of all
-/// six `lanking_*` fields). Pure board state — no side dispatch,
-/// paint, or input — so the board reads without touching the
-/// `ScreenGame` God class. `ScreenGame` keeps thin delegates under
-/// the same names, so the click seam and the snapshot surface never
-/// change.
-#[derive(Default)]
-struct LankingState {
-    /// Left-list songs behind the lanking board (`OJNList.dat`
-    /// order, owned copies; see [`ScreenGame::set_lanking_catalog`]).
-    lanking_songs: Vec<LankingSong>,
-    /// Active left-list sort (`None`: catalog order until a sort
-    /// button answers; directions ASSUMED ascending).
-    lanking_sort: Option<LankingSort>,
-    /// Left-list page (five rows per page, the staged `LVIEW_EX` hit areas).
-    lanking_page: usize,
-    /// Right-list page (ten board rows per page past the self line).
-    lanking_rpage: usize,
-    /// Fetched rank board (`2028 MusicPlayRankingAnswer`) staged
-    /// behind the scripted-stub seam: proven shell-side, ASSUMED
-    /// wire-side until a live gateway replay confirms it.
-    lanking_board: Option<MusicPlayRankingAnswer>,
-    /// Picked left-list song id (row toggle or LANK button); names
-    /// the `MUSICNAME` caption. The song-to-board fetch join stays
-    /// OPEN (no live gateway).
-    lanking_selected: Option<u32>,
-}
-
-impl LankingState {
-    /// Stage the catalog (`OJNList.dat` order, owned copies so the
-    /// board outlives the parse borrow). Resets sort and pages.
-    fn set_catalog(&mut self, entries: &[OjnListEntry<'_>]) {
-        self.lanking_songs = lanking_songs(entries);
-        self.lanking_sort = None;
-        self.lanking_page = 0;
-        self.lanking_selected = None;
-    }
-
-    /// Stage one fetched rank board behind the scripted-stub seam.
-    /// Resets the right-list page.
-    fn stage_board(&mut self, answer: MusicPlayRankingAnswer) {
-        self.lanking_board = Some(answer);
-        self.lanking_rpage = 0;
-    }
-
-    /// Active left-list sort (`None`: catalog order).
-    fn sort(&self) -> Option<LankingSort> {
-        self.lanking_sort
-    }
-
-    /// Left-list page (eleven rows per page).
-    fn page(&self) -> usize {
-        self.lanking_page
-    }
-
-    /// Sorted left-list songs on the current page (owned page:
-    /// small, five rows at most).
-    fn visible_songs(&self) -> Vec<LankingSong> {
-        let mut songs = self.lanking_songs.clone();
-        if let Some(sort) = self.lanking_sort {
-            sort_lanking_songs(&mut songs, sort);
-        }
-        let (start, end) = lanking_page_window(songs.len(), LANKING_LVIEW_ROWS, self.lanking_page);
-        songs[start..end].to_vec()
-    }
-
-    /// Fetched rank lines on the current right-list page (wire
-    /// order, ten rows at most past the self line; empty until
-    /// staged).
-    fn visible_ranks(&self) -> Vec<RankEntry> {
-        let Some(board) = self.lanking_board.as_ref() else {
-            return Vec::new();
-        };
-        let (start, end) =
-            lanking_page_window(board.entries.len(), LANKING_RVIEW_ROWS, self.lanking_rpage);
-        board.entries[start..end].to_vec()
-    }
-
-    /// Viewer's own fetched rank line for the first right-list
-    /// slot (`None` until a board stages).
-    fn self_entry(&self) -> Option<RankEntry> {
-        self.lanking_board
-            .as_ref()
-            .map(|board| board.self_entry.clone())
-    }
-
-    /// Picked song title for the `MUSICNAME` caption (`None` until
-    /// a row toggle or LANK button picks a visible row).
-    fn selected_title(&self) -> Option<String> {
-        let picked = self.lanking_selected?;
-        self.lanking_songs
-            .iter()
-            .find(|song| song.song_id == picked)
-            .map(|song| song.title.clone())
-    }
-
-    /// Board action through the control-code dispatch: sorts resort
-    /// and reset the page, pagers step and hold at the ends, row
-    /// picks name the caption song.
-    fn apply_action(&mut self, action: LankingAction) {
-        match action {
-            LankingAction::Sort(sort) => {
-                self.lanking_sort = Some(sort);
-                self.lanking_page = 0;
-            }
-            LankingAction::LViewPrev => {
-                self.lanking_page = self.lanking_page.saturating_sub(1);
-            }
-            LankingAction::LViewNext => {
-                if self
-                    .lanking_page
-                    .saturating_add(1)
-                    .saturating_mul(LANKING_LVIEW_ROWS)
-                    < self.lanking_songs.len()
-                {
-                    self.lanking_page = self.lanking_page.saturating_add(1);
-                }
-            }
-            LankingAction::RViewPrev => {
-                self.lanking_rpage = self.lanking_rpage.saturating_sub(1);
-            }
-            LankingAction::RViewNext => {
-                let rows = self
-                    .lanking_board
-                    .as_ref()
-                    .map_or(0, |board| board.entries.len());
-                if self
-                    .lanking_rpage
-                    .saturating_add(1)
-                    .saturating_mul(LANKING_RVIEW_ROWS)
-                    < rows
-                {
-                    self.lanking_rpage = self.lanking_rpage.saturating_add(1);
-                }
-            }
-            LankingAction::SelectRow(slot) => {
-                self.lanking_selected = self.visible_songs().get(slot).map(|song| song.song_id);
-            }
-        }
-    }
-}
 
 /// Item-shop goods, pages, and the checked cart behind the shop
 /// side screen (#139 cluster 3: the Data Clump of all four
