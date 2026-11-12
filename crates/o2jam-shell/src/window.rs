@@ -63,6 +63,9 @@ impl WindowHandler {
             return;
         };
         let pixels = &self.shell.pixels;
+        // Clone the window handle up front: `buffer_mut` borrows the surface
+        // mutably for the whole present, and the gate call needs the window.
+        let window = surface.window().clone();
         match surface.buffer_mut() {
             Ok(mut buffer) => {
                 let Some((width, height)) = self.surface_size else {
@@ -94,6 +97,15 @@ impl WindowHandler {
                 for word in buffer.iter_mut() {
                     *word |= 0xFF00_0000;
                 }
+                // Arm winit 0.30.13's frame-callback gate: it engages ONLY
+                // via `pre_present_notify` (winit #4668-adjacent; verified by
+                // the winit-diligence sweep). Without this call our
+                // `request_redraw` in `about_to_wait` re-pings the loop every
+                // pass and the Wayland event loop busy-repaints at 100% CPU
+                // (reproduced on KWin 6.8.2, 2026-11-12). With the gate
+                // armed, the loop blocks on the compositor's frame callback
+                // and idles. See ~/scratch/winit-4668/findings.md.
+                window.pre_present_notify();
                 if let Err(error) = buffer.present() {
                     self.paint_error = Some(anyhow::anyhow!("present failed: {error:?}"));
                     event_loop.exit();
