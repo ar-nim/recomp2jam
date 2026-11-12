@@ -2349,9 +2349,10 @@ pub const PLANET_PROMO_IMAGE_CODE: u32 = 0x1950_000C;
 /// elapsed milliseconds (push at file `0x8d3d0`, VA `0x48d3d0`)
 /// while the rotation flag (`this+0x90`) is set, then repaints
 /// through the refresh arm (VA `0x48e4b0`). The shell core carries
-/// no wall clock, so the cadence gate lives in the presenter — see
-/// [`PlanetPromoCarousel::step_forward`] and
-/// `ScreenGame::tick_planet_promo`.
+/// no wall clock, so the cadence gate lives in the clocked paint
+/// path — see [`PlanetPromoCarousel::step_forward`] and
+/// `ScreenGame::tick_planet_promo_at`, pulsed by the windowed
+/// heartbeat — keeping the core deterministic on frame time.
 pub const PLANET_PROMO_TICK_MS: u32 = 3000;
 /// One pressed promotion-carousel cell: which banner control
 /// answered the click (LEFT steps back, STOP halts rotation,

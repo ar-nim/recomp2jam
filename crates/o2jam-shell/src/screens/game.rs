@@ -51,15 +51,15 @@ use super::side::{
     OPTION_KEY_LANE_FIRST, OPTION_KEY_TEST, OPTION_SOUND_BG_EFFECT_DOWN, OPTION_SOUND_BG_EFFECT_UP,
     OPTION_SOUND_BG_MUSIC_DOWN, OPTION_SOUND_BG_MUSIC_UP, OPTION_SOUND_GAME_EFFECT_DOWN,
     OPTION_SOUND_GAME_EFFECT_UP, OPTION_SOUND_GAME_MUSIC_DOWN, OPTION_SOUND_GAME_MUSIC_UP,
-    PLANET_OPTION_FIRST_TAB, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE,
-    SELECT_ARTIST_RADIO, SELECT_CHO_SUNG_LEFT, SELECT_CHO_SUNG_PITCH, SELECT_CHO_SUNG_ROW_CELLS,
-    SELECT_CHO_SUNG_Y, SELECT_FILTER_BUTTON_H, SELECT_FILTER_BUTTON_PITCH,
-    SELECT_FILTER_BUTTON_TOP, SELECT_FILTER_COLUMNS, SELECT_GENRE_FILTERS, SELECT_HEADER_COLUMNS,
-    SELECT_HEADER_Y, SELECT_LEVEL_FILTERS, SELECT_OK_BUTTON, SELECT_PAGER_RIGHT,
-    SELECT_RESULT_TABS, SELECT_ROW_PITCH, SELECT_ROW_TOP, SELECT_SEARCH_BOX, SELECT_SEARCH_BUTTON,
-    SELECT_SEARCH_Y, SELECT_STATUS_H, SELECT_STATUS_Y, SELECT_TABLE_HEADERS, SELECT_TABLE_LEFT,
-    SELECT_TABLE_WIDTH, SELECT_TITLE_RADIO, SELECT_VISIBLE_ROWS, SELECT_WHEEL_FILTERS,
-    SHOP_CART_ROWS, SHOP_ITEM_ROWS,
+    PLANET_OPTION_FIRST_TAB, PLANET_PROMO_IMAGE_CODE, PLANET_PROMO_TICK_MS, QUIT_CANCEL_CODE,
+    QUIT_OK_CODE, SELECT_ARTIST_RADIO, SELECT_CHO_SUNG_LEFT, SELECT_CHO_SUNG_PITCH,
+    SELECT_CHO_SUNG_ROW_CELLS, SELECT_CHO_SUNG_Y, SELECT_FILTER_BUTTON_H,
+    SELECT_FILTER_BUTTON_PITCH, SELECT_FILTER_BUTTON_TOP, SELECT_FILTER_COLUMNS,
+    SELECT_GENRE_FILTERS, SELECT_HEADER_COLUMNS, SELECT_HEADER_Y, SELECT_LEVEL_FILTERS,
+    SELECT_OK_BUTTON, SELECT_PAGER_RIGHT, SELECT_RESULT_TABS, SELECT_ROW_PITCH, SELECT_ROW_TOP,
+    SELECT_SEARCH_BOX, SELECT_SEARCH_BUTTON, SELECT_SEARCH_Y, SELECT_STATUS_H, SELECT_STATUS_Y,
+    SELECT_TABLE_HEADERS, SELECT_TABLE_LEFT, SELECT_TABLE_WIDTH, SELECT_TITLE_RADIO,
+    SELECT_VISIBLE_ROWS, SELECT_WHEEL_FILTERS, SHOP_CART_ROWS, SHOP_ITEM_ROWS,
 };
 use crate::{menu_of, MenuKey};
 use o2jam_audio::{
@@ -424,6 +424,14 @@ const SPLASH_AUTO_ADVANCE_MS: u64 = 5_000;
 /// polls it per paint), so a modest wakeup checks the hold instead of
 /// the loop's 60 Hz tick — the advance lands within this of the hold.
 const SPLASH_HOLD_POLL_MS: u64 = 100;
+/// Planet promo heartbeat while windowed (ticket #167): the banner
+/// rotates on the exe's 3000 ms cadence (`PLANET_PROMO_TICK_MS`,
+/// pinned `0xBB8` push) while the rotation flag holds, so the bare
+/// board owes the loop one modest wakeup per second — the advance
+/// lands within one pulse of the tick. Stopped, covered, or
+/// frameless boards paint nothing new and stay fully idle (the
+/// #138 parked-loop result holds).
+const PLANET_PROMO_HEARTBEAT_MS: u64 = 1_000;
 
 /// Game loop that shows each screen's scene and walks the flow.
 ///
@@ -539,6 +547,12 @@ pub struct ScreenGame {
     /// rotation tick advances while the flag is set, and the
     /// painter follows the index.
     planet_promo_carousel: PlanetPromoCarousel,
+    /// Frame-time anchor of the last carousel advance, if any (the
+    /// 3000 ms accumulator behind the exe's per-frame rotation tick,
+    /// VA `0x48e3b0`: `tick_planet_promo_at` anchors on the first
+    /// bare-board paint, then steps one banner frame per
+    /// `PLANET_PROMO_TICK_MS` of board time while the flag holds).
+    promo_last_advance_ms: Option<u64>,
     /// Board control the left button is currently holding down,
     /// if any (the press-feedback arm, #111). Armed on down over
     /// the bare board; consumed on release. The pressed-frame
@@ -1044,6 +1058,7 @@ impl ScreenGame {
             planet: PlanetSelection::new(),
             planet_promo: None,
             planet_promo_carousel: PlanetPromoCarousel::new(),
+            promo_last_advance_ms: None,
             planet_press: None,
             planet_modal: None,
             quit_requested: false,
@@ -3941,14 +3956,39 @@ impl ScreenGame {
 
     /// One carousel rotation step: advance a frame while spinning,
     /// hold while stopped (the tick body, VA `0x48e3b0`, minus the
-    /// wall-clock gate — the exe fires it every
-    /// [`PLANET_PROMO_TICK_MS`] through its per-frame update). The
-    /// windowed presenter owns the 3000 ms cadence (OPEN: hook this
-    /// into the frame loop); the core stays deterministic.
+    /// cadence gate). The clocked paint path owns the exe's
+    /// `PLANET_PROMO_TICK_MS` cadence (`tick_planet_promo_at`, pulsed
+    /// by the windowed heartbeat); this stays the driver-invoked
+    /// single step.
     pub fn tick_planet_promo(&mut self) {
         if self.planet_promo_spinning() {
             let frames = self.promo_frame_count();
             self.planet_promo_carousel.step_forward(frames);
+        }
+    }
+
+    /// Clocked rotation advance: on the bare board while spinning,
+    /// anchor the accumulator on the first paint, then step one
+    /// banner frame per `PLANET_PROMO_TICK_MS` of frame time (the
+    /// exe's per-frame update, VA `0x48e3b0`, fires the body on the
+    /// same cadence). Covered boards, a cleared flag, and frameless
+    /// boards never touch the accumulator, so the banner holds.
+    /// Frame time is the paint seam's explicit instant (sample clock
+    /// windowed, fixed clock on replays): no wall clock here.
+    fn tick_planet_promo_at(&mut self, now_ms: u64) {
+        if !self.bare_planet_board()
+            || !self.planet_promo_spinning()
+            || self.promo_frame_count() == 0
+        {
+            return;
+        }
+        match self.promo_last_advance_ms {
+            None => self.promo_last_advance_ms = Some(now_ms),
+            Some(last) if now_ms.saturating_sub(last) >= u64::from(PLANET_PROMO_TICK_MS) => {
+                self.tick_planet_promo();
+                self.promo_last_advance_ms = Some(now_ms);
+            }
+            Some(_) => {}
         }
     }
 
@@ -4877,6 +4917,10 @@ impl ScreenGame {
             }
             self.enter_screen(Screen::Result);
         }
+        // The promo carousel rotates on board time: each paint feeds
+        // the frame clock to the 3000 ms accumulator (the windowed
+        // heartbeat in `idle_repaint_interval` supplies the pulse).
+        self.tick_planet_promo_at(now_ms);
         match self.flow.current() {
             Screen::Playing => self.paint_playing(frame, now_ms),
             Screen::Avi => self.paint_avi(frame),
@@ -6023,6 +6067,19 @@ impl GameLoop for ScreenGame {
                 Some(std::time::Duration::from_millis(SPLASH_HOLD_POLL_MS))
             }
             Screen::Avi => Some(std::time::Duration::from_nanos(crate::TICK_NANOS)),
+            // The promo carousel rotates on its 3000 ms cadence while
+            // the rotation flag holds (#167), so the bare board owes
+            // the loop one modest pulse per second — the advance lands
+            // within one pulse of the tick. Stopped, covered, or
+            // frameless boards paint nothing new, so they stay fully
+            // idle (the #138 parked-loop result holds).
+            Screen::Planet
+                if self.bare_planet_board()
+                    && self.planet_promo_spinning()
+                    && self.promo_frame_count() > 0 =>
+            {
+                Some(std::time::Duration::from_millis(PLANET_PROMO_HEARTBEAT_MS))
+            }
             // Every other scene is event-driven (input, resizes, lobby
             // drains owned by the session layer): no timer of its own.
             _ => None,
@@ -10960,6 +11017,90 @@ mod game_tests {
         game.click_planet(400, 523);
         game.tick_planet_promo();
         assert_eq!(game.planet_promo_index(), 3);
+    }
+
+    #[test]
+    fn promo_heartbeat_pulses_while_the_board_spins() {
+        // Ticket #167: the bare spinning board owes the loop one
+        // modest wakeup per second — the 3000 ms rotation tick rides
+        // the repaint pulse, so the advance lands within one pulse
+        // of the cadence.
+        let mut game = promo_carousel_game();
+        game.lane_key(3, true);
+        assert_eq!(game.screen(), Screen::Planet);
+        assert_eq!(
+            GameLoop::idle_repaint_interval(&game),
+            Some(std::time::Duration::from_millis(PLANET_PROMO_HEARTBEAT_MS))
+        );
+    }
+
+    #[test]
+    fn promo_heartbeat_parks_while_stopped() {
+        // Ticket #167: STOP clears the rotation flag, so the board
+        // owes the loop nothing — stopped stays fully idle (the #138
+        // parked-loop result holds on the promo board too).
+        let mut game = promo_carousel_game();
+        game.lane_key(3, true);
+        game.click_planet(400, 523);
+        assert!(!game.planet_promo_spinning());
+        assert_eq!(GameLoop::idle_repaint_interval(&game), None);
+    }
+
+    #[test]
+    fn promo_heartbeat_parks_while_the_quit_modal_covers_the_board() {
+        // Ticket #167: the heartbeat mirrors the bare-board gate —
+        // the quit-confirm modal owns the board, so no pulse even
+        // while the flag spins. (Sides mount only over the
+        // Channel/Room/Waiting lobbies through the public seam, so
+        // the modal arm carries the covered-board case here.)
+        let mut game = promo_carousel_game();
+        game.lane_key(3, true);
+        game.click_planet(769, 580);
+        assert_eq!(game.planet_modal(), Some(PlanetModal::QuitConfirm));
+        assert!(game.planet_promo_spinning());
+        assert_eq!(GameLoop::idle_repaint_interval(&game), None);
+    }
+
+    /// Deterministic clock pump: the paint seam's explicit instant
+    /// is the frame time the carousel accumulator reads.
+    fn paint_planet_frame_at(game: &mut ScreenGame, now_ms: u64) {
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            now_ms,
+        );
+    }
+
+    #[test]
+    fn promo_clock_advances_the_banner_past_three_seconds() {
+        // Ticket #167: with the flag set, pumping the frame clock
+        // past the 3000 ms cadence advances the banner one frame —
+        // the heartbeat pulse drives the accumulator through paint.
+        let mut game = promo_carousel_game();
+        game.lane_key(3, true);
+        for now_ms in [0, 1_000, 2_000, 3_000, 4_000] {
+            paint_planet_frame_at(&mut game, now_ms);
+        }
+        assert_eq!(game.planet_promo_index(), 2);
+    }
+
+    #[test]
+    fn promo_clock_holds_the_banner_while_stopped() {
+        // Ticket #167: with the flag clear, the same clock pump
+        // leaves the banner on its frame — the accumulator never
+        // arms while stopped.
+        let mut game = promo_carousel_game();
+        game.lane_key(3, true);
+        game.click_planet(400, 523);
+        assert!(!game.planet_promo_spinning());
+        for now_ms in [0, 1_000, 2_000, 3_000, 4_000] {
+            paint_planet_frame_at(&mut game, now_ms);
+        }
+        assert_eq!(game.planet_promo_index(), 1);
     }
 
     #[test]
