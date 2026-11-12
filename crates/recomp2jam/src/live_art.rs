@@ -609,6 +609,7 @@ mod live_art_tests {
             None,
             None,
             None,
+            1,
         );
         assert!(
             buf.iter().any(|pixel| *pixel != 0),

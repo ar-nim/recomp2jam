@@ -40,10 +40,10 @@ use super::side::{
     sort_lanking_songs, waiting_song_detail_line, waiting_song_title_line, waiting_team_for_code,
     wallet_row_caption, CreateRoomAction, CreateRoomForm, LankingAction, LankingSong, LankingSort,
     MusicShopAction, MusicShopRow, MyRoomAction, MyRoomState, PasswordAction, PasswordForm,
-    PlanetAction, PlanetOptionTab, PlanetPromo, PlanetSelection, RoomDialog, SelectMusicRow,
-    SelectMusicSong, ShopAction, ShopGood, SideScreen, WalletRow, WalletState, GEM_LABEL,
-    LANKING_LVIEW_ROWS, LANKING_RVIEW_ROWS, MSHOP_CART_ROWS, MSHOP_SONG_ROWS, OPTION_GAME_BLEND_NO,
-    OPTION_GAME_BLEND_YES, OPTION_GAME_EFFECT_HIGH, OPTION_GAME_EFFECT_LOW,
+    PlanetAction, PlanetOptionTab, PlanetPromo, PlanetPromoCarousel, PlanetSelection, RoomDialog,
+    SelectMusicRow, SelectMusicSong, ShopAction, ShopGood, SideScreen, WalletRow, WalletState,
+    GEM_LABEL, LANKING_LVIEW_ROWS, LANKING_RVIEW_ROWS, MSHOP_CART_ROWS, MSHOP_SONG_ROWS,
+    OPTION_GAME_BLEND_NO, OPTION_GAME_BLEND_YES, OPTION_GAME_EFFECT_HIGH, OPTION_GAME_EFFECT_LOW,
     OPTION_GAME_EFFECT_NORMAL, OPTION_GAME_GUIDE_LONG, OPTION_GAME_GUIDE_MIDDLE,
     OPTION_GAME_GUIDE_NOUSE, OPTION_GAME_GUIDE_SHORT, OPTION_GAME_LONGNOTE_NONE,
     OPTION_GAME_LONGNOTE_USED, OPTION_GAME_MODE_FULL, OPTION_GAME_MODE_WIN, OPTION_GAME_NOTETYPE1,
@@ -51,14 +51,15 @@ use super::side::{
     OPTION_KEY_LANE_FIRST, OPTION_KEY_TEST, OPTION_SOUND_BG_EFFECT_DOWN, OPTION_SOUND_BG_EFFECT_UP,
     OPTION_SOUND_BG_MUSIC_DOWN, OPTION_SOUND_BG_MUSIC_UP, OPTION_SOUND_GAME_EFFECT_DOWN,
     OPTION_SOUND_GAME_EFFECT_UP, OPTION_SOUND_GAME_MUSIC_DOWN, OPTION_SOUND_GAME_MUSIC_UP,
-    PLANET_OPTION_FIRST_TAB, QUIT_CANCEL_CODE, QUIT_OK_CODE, SELECT_ARTIST_RADIO,
-    SELECT_CHO_SUNG_LEFT, SELECT_CHO_SUNG_PITCH, SELECT_CHO_SUNG_ROW_CELLS, SELECT_CHO_SUNG_Y,
-    SELECT_FILTER_BUTTON_H, SELECT_FILTER_BUTTON_PITCH, SELECT_FILTER_BUTTON_TOP,
-    SELECT_FILTER_COLUMNS, SELECT_GENRE_FILTERS, SELECT_HEADER_COLUMNS, SELECT_HEADER_Y,
-    SELECT_LEVEL_FILTERS, SELECT_OK_BUTTON, SELECT_PAGER_RIGHT, SELECT_RESULT_TABS,
-    SELECT_ROW_PITCH, SELECT_ROW_TOP, SELECT_SEARCH_BOX, SELECT_SEARCH_BUTTON, SELECT_SEARCH_Y,
-    SELECT_STATUS_H, SELECT_STATUS_Y, SELECT_TABLE_HEADERS, SELECT_TABLE_LEFT, SELECT_TABLE_WIDTH,
-    SELECT_TITLE_RADIO, SELECT_VISIBLE_ROWS, SELECT_WHEEL_FILTERS, SHOP_CART_ROWS, SHOP_ITEM_ROWS,
+    PLANET_OPTION_FIRST_TAB, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE,
+    SELECT_ARTIST_RADIO, SELECT_CHO_SUNG_LEFT, SELECT_CHO_SUNG_PITCH, SELECT_CHO_SUNG_ROW_CELLS,
+    SELECT_CHO_SUNG_Y, SELECT_FILTER_BUTTON_H, SELECT_FILTER_BUTTON_PITCH,
+    SELECT_FILTER_BUTTON_TOP, SELECT_FILTER_COLUMNS, SELECT_GENRE_FILTERS, SELECT_HEADER_COLUMNS,
+    SELECT_HEADER_Y, SELECT_LEVEL_FILTERS, SELECT_OK_BUTTON, SELECT_PAGER_RIGHT,
+    SELECT_RESULT_TABS, SELECT_ROW_PITCH, SELECT_ROW_TOP, SELECT_SEARCH_BOX, SELECT_SEARCH_BUTTON,
+    SELECT_SEARCH_Y, SELECT_STATUS_H, SELECT_STATUS_Y, SELECT_TABLE_HEADERS, SELECT_TABLE_LEFT,
+    SELECT_TABLE_WIDTH, SELECT_TITLE_RADIO, SELECT_VISIBLE_ROWS, SELECT_WHEEL_FILTERS,
+    SHOP_CART_ROWS, SHOP_ITEM_ROWS,
 };
 use crate::{menu_of, MenuKey};
 use o2jam_audio::{
@@ -528,10 +529,16 @@ pub struct ScreenGame {
     /// stay unbound per P0).
     planet: PlanetSelection,
     /// Last pressed promotion-carousel cell, if any (the press
-    /// records; carousel semantics stay OPEN, `docs/planet.md`
-    /// OPEN 4). Staged placements only — unstaged promo clicks
-    /// land nowhere (no fallback literals, ADR-0003).
+    /// records and drives the carousel below). Staged placements
+    /// only — unstaged promo clicks land nowhere (no fallback
+    /// literals, ADR-0003).
     planet_promo: Option<PlanetPromo>,
+    /// Promotion-carousel state: the 1-based banner frame plus the
+    /// rotation flag (exe-pinned, `docs/planet.md`). LEFT/RIGHT
+    /// step the index with wrap, STOP toggles the flag, the
+    /// rotation tick advances while the flag is set, and the
+    /// painter follows the index.
+    planet_promo_carousel: PlanetPromoCarousel,
     /// Board control the left button is currently holding down,
     /// if any (the press-feedback arm, #111). Armed on down over
     /// the bare board; consumed on release. The pressed-frame
@@ -1036,6 +1043,7 @@ impl ScreenGame {
             arena_stage: DEFAULT_ARENA_STAGE,
             planet: PlanetSelection::new(),
             planet_promo: None,
+            planet_promo_carousel: PlanetPromoCarousel::new(),
             planet_press: None,
             planet_modal: None,
             quit_requested: false,
@@ -3399,7 +3407,9 @@ impl ScreenGame {
     /// the flow gate (`Planet`→`Channel`, the dialog-over-board
     /// phase flag `parent+0xF64` in the exe); power opens the
     /// quit-confirm modal, gear the options modal, promotion cells
-    /// record the press and hold the board (carousel semantics OPEN).
+    /// record the press and drive the carousel (LEFT/RIGHT step
+    /// with wrap, STOP toggles rotation — exe-pinned,
+    /// `docs/planet.md`).
     /// The emblems are server channel families (live-verified 2026-11-09,
     /// `docs/planet.md` "Live verification"). FREE/DRUM stay
     /// unbound (P0).
@@ -3543,6 +3553,15 @@ impl ScreenGame {
             PlanetAction::Emblem { band: None } => {}
             PlanetAction::Promo { cell } => {
                 self.planet_promo = Some(cell);
+                // Carousel arms (exe-pinned, `docs/planet.md`):
+                // LEFT steps back with wrap, RIGHT steps forward
+                // with wrap, STOP toggles rotation (no repaint).
+                let frames = self.promo_frame_count();
+                match cell {
+                    PlanetPromo::Left => self.planet_promo_carousel.step_back(frames),
+                    PlanetPromo::Right => self.planet_promo_carousel.step_forward(frames),
+                    PlanetPromo::Stop => self.planet_promo_carousel.toggle(),
+                }
             }
             PlanetAction::QuitConfirm => {
                 self.planet_modal = Some(PlanetModal::QuitConfirm);
@@ -3886,6 +3905,50 @@ impl ScreenGame {
     #[must_use]
     pub fn planet_promo(&self) -> Option<PlanetPromo> {
         self.planet_promo
+    }
+
+    /// Visible promo banner frame, 1-based (exe `this+0x80`; boot 1).
+    #[must_use]
+    pub fn planet_promo_index(&self) -> u32 {
+        self.planet_promo_carousel.index()
+    }
+
+    /// Whether the carousel rotation tick advances the banner (exe
+    /// `this+0x90` nonzero; boot on).
+    #[must_use]
+    pub fn planet_promo_spinning(&self) -> bool {
+        self.planet_promo_carousel.spinning()
+    }
+
+    /// Staged promo banner frame count: the layers of the staged
+    /// `IDC_IMAGE_SPLANET_PROMOTION` body (`0` while unstaged — the
+    /// exe's wrap then lands on 0 and its refresh paints nothing).
+    fn promo_frame_count(&self) -> u32 {
+        self.scene_art(Screen::Planet)
+            .and_then(|art| {
+                art.placements
+                    .iter()
+                    .find(|placed| placed.code == PLANET_PROMO_IMAGE_CODE)
+            })
+            .and_then(|placed| placed.sprite.as_deref())
+            .and_then(|sprite| {
+                self.scene_art(Screen::Planet)
+                    .and_then(|art| art.figures.get(sprite))
+            })
+            .map_or(0, |figure| u32::try_from(figure.len()).unwrap_or(0))
+    }
+
+    /// One carousel rotation step: advance a frame while spinning,
+    /// hold while stopped (the tick body, VA `0x48e3b0`, minus the
+    /// wall-clock gate — the exe fires it every
+    /// [`PLANET_PROMO_TICK_MS`] through its per-frame update). The
+    /// windowed presenter owns the 3000 ms cadence (OPEN: hook this
+    /// into the frame loop); the core stays deterministic.
+    pub fn tick_planet_promo(&mut self) {
+        if self.planet_promo_spinning() {
+            let frames = self.promo_frame_count();
+            self.planet_promo_carousel.step_forward(frames);
+        }
     }
 
     /// Stage the avatar-item table (`Itemdata_Korea.dat`): bag, equip
@@ -4919,6 +4982,7 @@ impl ScreenGame {
                 self.planet.band(),
                 self.hovered_planet_action(),
                 self.planet_press,
+                self.planet_promo_carousel.index(),
             ),
             None => paint_screen(frame, Screen::Planet),
         }
@@ -10741,6 +10805,170 @@ mod game_tests {
         let rest = pack_xrgb(0x00, 0xFF, 0x00);
         game.mouse_down(366, 523);
         assert_eq!(planet_pixel(&mut game, 366, 523), rest);
+    }
+
+    /// Bare planet board with the promo banner body (three distinct
+    /// frames) plus the three carousel cells at their parsed `.bnd`
+    /// rects (rects 11–14, `ControlList_Interface.txt`
+    /// STATE_PLANET). The banner anchors at its `.bnd` rect origin
+    /// (49,163), like the shipped `Planet_Promotion.ojs` records.
+    fn promo_carousel_game() -> ScreenGame {
+        use crate::avatar::FigureLayer;
+        use crate::screens::side::{
+            PLANET_PROMO_IMAGE_CODE, PLANET_PROMO_LEFT_CODE, PLANET_PROMO_RIGHT_CODE,
+            PLANET_PROMO_STOP_CODE,
+        };
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        let banner = "Planet_Promotion.ojs";
+        let mut frames = AvatarFigure::default();
+        for word in [0x7C00u16, 0x03E0u16, 0x001Fu16] {
+            frames.push_layer(FigureLayer {
+                image: o2jam_render::Rgb555Image::decode(&word.to_le_bytes().repeat(16), 4, 4)
+                    .expect("promo frames"),
+                dx: 49,
+                dy: 163,
+                colorkey: 0xFFFF,
+            });
+        }
+        game.load_scene(
+            Screen::Planet,
+            vec![
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: "promo-banner".to_owned(),
+                    code: PLANET_PROMO_IMAGE_CODE,
+                    sprite: Some(banner.to_owned()),
+                    rect: Rect {
+                        x: 49,
+                        y: 163,
+                        w: 701,
+                        h: 333,
+                    },
+                },
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: "promo-left".to_owned(),
+                    code: PLANET_PROMO_LEFT_CODE,
+                    sprite: Some("Promo_Left.ojs".to_owned()),
+                    rect: Rect {
+                        x: 353,
+                        y: 511,
+                        w: 26,
+                        h: 24,
+                    },
+                },
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: "promo-right".to_owned(),
+                    code: PLANET_PROMO_RIGHT_CODE,
+                    sprite: Some("Promo_Right.ojs".to_owned()),
+                    rect: Rect {
+                        x: 421,
+                        y: 511,
+                        w: 26,
+                        h: 24,
+                    },
+                },
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: "promo-stop".to_owned(),
+                    code: PLANET_PROMO_STOP_CODE,
+                    sprite: Some("Promo_Stop.ojs".to_owned()),
+                    rect: Rect {
+                        x: 387,
+                        y: 511,
+                        w: 26,
+                        h: 24,
+                    },
+                },
+            ],
+            HashMap::from([(banner.to_owned(), frames)]),
+        );
+        game
+    }
+
+    #[test]
+    fn promo_boots_on_the_first_banner_and_spinning() {
+        // Exe boot pins (`OTwo.exe` 7.55): the carousel index opens
+        // at 1 (VA `0x48dc4c`, `this+0x80 = 1`) with rotation enabled
+        // (VA `0x48dc8c`, `this+0x90 = 1`), `docs/planet.md`.
+        let game = promo_carousel_game();
+        assert_eq!(game.planet_promo_index(), 1);
+        assert!(game.planet_promo_spinning());
+    }
+
+    #[test]
+    fn promo_left_steps_the_banner_back_with_wrap() {
+        // LEFT arm (VA `0x48e0eb`): index 1 wraps to the last frame,
+        // then steps back one frame per press.
+        use crate::screens::side::PlanetPromo;
+        let mut game = promo_carousel_game();
+        game.click_planet(366, 523);
+        assert_eq!(game.planet_promo(), Some(PlanetPromo::Left));
+        assert_eq!(game.planet_promo_index(), 3);
+        game.click_planet(366, 523);
+        assert_eq!(game.planet_promo_index(), 2);
+    }
+
+    #[test]
+    fn promo_right_steps_the_banner_forward_with_wrap() {
+        // RIGHT arm (VA `0x48e13c`): forward one frame per press,
+        // wrapping the last frame back to the first.
+        let mut game = promo_carousel_game();
+        game.click_planet(434, 523);
+        assert_eq!(game.planet_promo_index(), 2);
+        game.click_planet(434, 523);
+        assert_eq!(game.planet_promo_index(), 3);
+        game.click_planet(434, 523);
+        assert_eq!(game.planet_promo_index(), 1);
+    }
+
+    #[test]
+    fn promo_stop_toggles_the_rotation_flag() {
+        // PLAYSTOP arm (VA `0x48e190`): toggles the rotation flag
+        // `0 <-> 1` with no immediate repaint.
+        let mut game = promo_carousel_game();
+        game.click_planet(400, 523);
+        assert!(!game.planet_promo_spinning());
+        assert_eq!(game.planet_promo_index(), 1);
+        game.click_planet(400, 523);
+        assert!(game.planet_promo_spinning());
+        assert_eq!(game.planet_promo_index(), 1);
+    }
+
+    #[test]
+    fn promo_tick_advances_only_while_spinning() {
+        // Rotation tick (VA `0x48e3b0` minus the wall-clock gate):
+        // one step forward per tick while spinning, frozen while
+        // stopped — STOP halts the timer without moving the frame.
+        let mut game = promo_carousel_game();
+        game.tick_planet_promo();
+        assert_eq!(game.planet_promo_index(), 2);
+        game.click_planet(400, 523);
+        game.tick_planet_promo();
+        assert_eq!(
+            game.planet_promo_index(),
+            2,
+            "stopped carousel holds its frame"
+        );
+        game.click_planet(400, 523);
+        game.tick_planet_promo();
+        assert_eq!(game.planet_promo_index(), 3);
+    }
+
+    #[test]
+    fn promo_left_press_repaints_the_banner_region() {
+        // The visible banner follows the carousel index: at boot the
+        // board shows frame 1, after LEFT it shows frame 3 (the
+        // 1-to-max wrap), repainted over the stacked rest frames.
+        let mut game = promo_carousel_game();
+        let first = pack_xrgb(0xFF, 0x00, 0x00);
+        let last = pack_xrgb(0x00, 0x00, 0xFF);
+        assert_eq!(planet_pixel(&mut game, 50, 164), first);
+        game.click_planet(366, 523);
+        assert_eq!(game.planet_promo_index(), 3);
+        assert_eq!(planet_pixel(&mut game, 50, 164), last);
     }
 
     #[test]
