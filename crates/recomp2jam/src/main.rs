@@ -904,7 +904,7 @@ fn run_command(command: Command) -> Result<()> {
             online_difficulty,
             online_speed,
             online_arena,
-        } => run_play(
+        } => run_play(PlayOptions {
             chart,
             ojm,
             level,
@@ -928,17 +928,15 @@ fn run_command(command: Command) -> Result<()> {
             online_difficulty,
             online_speed,
             online_arena,
-        ),
+        }),
     }
 }
 
-/// `play` subcommand: windowed game or headless autoplay.
-///
-/// # Errors
-///
-/// Whatever chart/bank loading, login, audio, or the window reports.
-#[allow(clippy::too_many_arguments, reason = "CLI fields pass through once")]
-fn run_play(
+/// `play` subcommand fields (one named bundle, no flag-argument
+/// soup): the chart/autoplay wiring plus the `--online-*` login
+/// pass-through.
+#[derive(Debug, Clone)]
+struct PlayOptions {
     chart: Option<String>,
     ojm: Option<String>,
     level: usize,
@@ -962,43 +960,50 @@ fn run_play(
     online_difficulty: u8,
     online_speed: u8,
     online_arena: i32,
-) -> Result<()> {
-    tracing::info!(?chart, ?window, "play stub");
-    if window {
+}
+
+/// `play` subcommand: windowed game or headless autoplay.
+///
+/// # Errors
+///
+/// Whatever chart/bank loading, login, audio, or the window reports.
+fn run_play(opts: PlayOptions) -> Result<()> {
+    tracing::info!(chart = ?opts.chart, window = opts.window, "play stub");
+    if opts.window {
         let mut game = o2jam_shell::ScreenGame::new();
         game.load_options(&install_root());
-        setup_splash(&mut game, &interface)?;
+        setup_splash(&mut game, &opts.interface)?;
         let gateway = setup_online(
             &mut game,
-            online,
-            &host,
-            user_id,
-            &token,
-            port,
-            online_gateway_id,
-            online_channel_id,
-            online_join_room,
-            &online_room_password,
-            online_music_id,
-            online_difficulty,
-            online_speed,
-            online_arena,
+            opts.online,
+            &opts.host,
+            opts.user_id,
+            &opts.token,
+            opts.port,
+            opts.online_gateway_id,
+            opts.online_channel_id,
+            opts.online_join_room,
+            &opts.online_room_password,
+            opts.online_music_id,
+            opts.online_difficulty,
+            opts.online_speed,
+            opts.online_arena,
         )?;
-        setup_avatar(&mut game, &avatar_opa, &equip, avatar_male)?;
-        setup_chart_audio(&mut game, &chart, &ojm, level, sound)?;
+        setup_avatar(&mut game, &opts.avatar_opa, &opts.equip, opts.avatar_male)?;
+        setup_chart_audio(&mut game, &opts.chart, &opts.ojm, opts.level, opts.sound)?;
         match gateway {
             Some((transport, pending_room, pending_song)) => {
                 let mut session = assemble_online_session(
                     game,
                     transport,
-                    token.as_deref(),
+                    opts.token.as_deref(),
                     pending_room,
                     pending_song,
-                    online_create_room.as_deref(),
+                    opts.online_create_room.as_deref(),
                 )?;
                 // Audio containment: without --sound every bank attach
                 // stays on the null sink even when hardware exists.
-                session.set_silent_audio(!sound);
+                session.set_silent_audio(!opts.sound);
                 run_windowed_session(session, None)?;
             }
             None => {
@@ -1016,10 +1021,10 @@ fn run_play(
         }
         return Ok(());
     }
-    let chart_path = chart.ok_or_else(|| {
+    let chart_path = opts.chart.ok_or_else(|| {
         anyhow::anyhow!("--chart FILE.ojn is required (add --window for the empty shell)")
     })?;
-    run_autoplay(&chart_path, ojm.as_deref(), level, sound)
+    run_autoplay(&chart_path, opts.ojm.as_deref(), opts.level, opts.sound)
 }
 
 /// `e2e` subcommand: headless boot-to-Result walk with PNGs.
