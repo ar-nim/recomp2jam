@@ -3352,26 +3352,7 @@ impl ScreenGame {
     }
 
     fn click_dispatch(&mut self, x: i32, y: i32) {
-        // The open lanking board answers its named controls
-        // (sorts, pagers, row picks) at staged rects; the shop
-        // boards answer theirs (row toggles, buys, pagers, sorts)
-        // the same way; every other side screen stays click-silent.
-        if self.side == Some(SideScreen::Lanking) {
-            self.click_lanking(x, y);
-            return;
-        }
-        if self.side == Some(SideScreen::Shop) {
-            self.click_shop(x, y);
-            return;
-        }
-        if self.side == Some(SideScreen::MusicShop) {
-            self.click_music_shop(x, y);
-            return;
-        }
-        if self.side.is_some() {
-            if self.side == Some(SideScreen::MyRoom) {
-                self.click_myroom_side(x, y);
-            }
+        if self.click_side_screen(x, y) {
             return;
         }
         if self.planet_modal().is_some() {
@@ -3388,11 +3369,7 @@ impl ScreenGame {
             }
             Screen::Channel => self.click_channel_row(x, y),
             Screen::Room => self.click_room_row(x, y),
-            Screen::Waiting => {
-                if !self.click_select_music(x, y) {
-                    self.click_waiting_button(x, y);
-                }
-            }
+            Screen::Waiting => self.click_waiting(x, y),
             Screen::Result => self.click_result_button(x, y),
             // Planet board click: hit-test at the pinned `.bnd`
             // button rects and record the difficulty pick. What a
@@ -3415,6 +3392,41 @@ impl ScreenGame {
             // pager semantics are all unevidenced (P0).
             Screen::Shop | Screen::MusicShop => {}
             Screen::Loading | Screen::Playing => {}
+        }
+    }
+
+    /// The open side screen answers its named controls at staged
+    /// rects (lanking: sorts, pagers, row picks; shop: row toggles,
+    /// buys, pagers, sorts; my room: the side overlay); every other
+    /// side screen stays click-silent. Returns whether the click was
+    /// consumed.
+    fn click_side_screen(&mut self, x: i32, y: i32) -> bool {
+        if self.side == Some(SideScreen::Lanking) {
+            self.click_lanking(x, y);
+            return true;
+        }
+        if self.side == Some(SideScreen::Shop) {
+            self.click_shop(x, y);
+            return true;
+        }
+        if self.side == Some(SideScreen::MusicShop) {
+            self.click_music_shop(x, y);
+            return true;
+        }
+        if self.side.is_some() {
+            if self.side == Some(SideScreen::MyRoom) {
+                self.click_myroom_side(x, y);
+            }
+            return true;
+        }
+        false
+    }
+
+    /// Waiting clicks: the song-select dialog consumes first, the
+    /// staged room buttons answer only what it passes over.
+    fn click_waiting(&mut self, x: i32, y: i32) {
+        if !self.click_select_music(x, y) {
+            self.click_waiting_button(x, y);
         }
     }
 
@@ -4563,63 +4575,7 @@ impl ScreenGame {
     pub fn paint_at(&mut self, frame: &mut Frame<'_>, now_ms: u64) {
         frame.buf.fill(FRAME_CLEAR_COLOR);
         if self.side.is_some() {
-            paint_side_scene(frame, &self.side_placements, &self.side_figures);
-            // The billing views complete no web call, so the
-            // Payment overlay inks the unwired notice over the
-            // staged art (miss path paints nothing); every other
-            // side screen paints art alone.
-            if self.side == Some(SideScreen::Payment) {
-                paint_payment_notice(frame, &self.side_placements, &payment_side_notice());
-            }
-            // The lanking overlay inks rows, ranks, and the picked
-            // caption into staged TEXT rects over the bound art;
-            // without staged rows it paints nothing (art-only).
-            if self.side == Some(SideScreen::Lanking) {
-                paint_lanking_board(
-                    frame,
-                    &self.side_placements,
-                    &self.lanking_visible_songs(),
-                    self.lanking_self_entry().as_ref(),
-                    &self.lanking_visible_ranks(),
-                    self.lanking_selected_title().as_deref(),
-                );
-            }
-            // The shop overlay inks goods, prices, the wallet cell,
-            // the cart, and both pager readouts into staged TEXT
-            // rects; without staged goods it paints nothing.
-            if self.side == Some(SideScreen::Shop) {
-                paint_shop_board(
-                    frame,
-                    &self.side_placements,
-                    &self.shop_visible_goods(),
-                    &self.wallet,
-                    &self.shop_visible_cart(),
-                    self.shop_cart_page(),
-                    self.shop_cart_pages(),
-                );
-            }
-            // The song-shop overlay inks catalog rows with live
-            // flags plus the cart and both pager readouts; without
-            // staged songs it paints nothing.
-            if self.side == Some(SideScreen::MusicShop) {
-                paint_music_shop_board(
-                    frame,
-                    &self.side_placements,
-                    &self.music_shop_visible_rows(),
-                    self.music_shop_page(),
-                    self.music_shop_list_pages(),
-                );
-                paint_music_shop_cart(
-                    frame,
-                    &self.side_placements,
-                    &self.music_shop_visible_cart(),
-                    self.music_shop_cart_page(),
-                    self.music_shop_cart_pages(),
-                );
-            }
-            if self.side == Some(SideScreen::MyRoom) {
-                self.paint_myroom_overlay(frame, &self.side_placements);
-            }
+            self.paint_side(frame);
             return;
         }
         if self.flow.current() == Screen::Avi && now_ms >= self.splash_hold_ms {
@@ -4656,6 +4612,70 @@ impl ScreenGame {
             Screen::Myroom => self.paint_myroom(frame),
             Screen::Shop => self.paint_shop(frame),
             Screen::MusicShop => self.paint_music_shop(frame),
+        }
+    }
+
+    /// The active side screen: staged art plus its board overlay
+    /// (billing notice, lanking, shop, song-shop, my room). Each
+    /// overlay inks into staged TEXT rects; without staged rows or
+    /// goods it paints nothing (art-only).
+    fn paint_side(&mut self, frame: &mut Frame<'_>) {
+        paint_side_scene(frame, &self.side_placements, &self.side_figures);
+        // The billing views complete no web call, so the
+        // Payment overlay inks the unwired notice over the
+        // staged art (miss path paints nothing); every other
+        // side screen paints art alone.
+        if self.side == Some(SideScreen::Payment) {
+            paint_payment_notice(frame, &self.side_placements, &payment_side_notice());
+        }
+        // The lanking overlay inks rows, ranks, and the picked
+        // caption into staged TEXT rects over the bound art;
+        // without staged rows it paints nothing (art-only).
+        if self.side == Some(SideScreen::Lanking) {
+            paint_lanking_board(
+                frame,
+                &self.side_placements,
+                &self.lanking_visible_songs(),
+                self.lanking_self_entry().as_ref(),
+                &self.lanking_visible_ranks(),
+                self.lanking_selected_title().as_deref(),
+            );
+        }
+        // The shop overlay inks goods, prices, the wallet cell,
+        // the cart, and both pager readouts into staged TEXT
+        // rects; without staged goods it paints nothing.
+        if self.side == Some(SideScreen::Shop) {
+            paint_shop_board(
+                frame,
+                &self.side_placements,
+                &self.shop_visible_goods(),
+                &self.wallet,
+                &self.shop_visible_cart(),
+                self.shop_cart_page(),
+                self.shop_cart_pages(),
+            );
+        }
+        // The song-shop overlay inks catalog rows with live
+        // flags plus the cart and both pager readouts; without
+        // staged songs it paints nothing.
+        if self.side == Some(SideScreen::MusicShop) {
+            paint_music_shop_board(
+                frame,
+                &self.side_placements,
+                &self.music_shop_visible_rows(),
+                self.music_shop_page(),
+                self.music_shop_list_pages(),
+            );
+            paint_music_shop_cart(
+                frame,
+                &self.side_placements,
+                &self.music_shop_visible_cart(),
+                self.music_shop_cart_page(),
+                self.music_shop_cart_pages(),
+            );
+        }
+        if self.side == Some(SideScreen::MyRoom) {
+            self.paint_myroom_overlay(frame, &self.side_placements);
         }
     }
 
