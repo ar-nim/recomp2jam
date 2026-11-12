@@ -451,6 +451,163 @@ const PLANET_PROMO_HEARTBEAT_MS: u64 = 1_000;
 /// `splash_click_edge_lands_the_same_bare_board`,
 /// `escape_dismisses_splash_into_planet_board`,
 /// `splash_menu_keys_keep_splash`).
+/// Queued session-bridge sends behind the shell screens (#139
+/// cluster 1: the Data Clump of all thirteen `pending_*` wire
+/// queues). Every queueing arm stages its pinned body here and the
+/// session seam drains it once through a `take_*` accessor; the
+/// `has_pending_*` arms peek without draining. Pure data — no
+/// screen, paint, or input logic — so unsent traffic reads without
+/// touching the `ScreenGame` God class. `ScreenGame` keeps thin
+/// delegates under the same names, so the session bridge and the
+/// snapshot surface never change.
+#[derive(Default)]
+struct PendingOutbox {
+    /// Committed create-room body awaiting the session send (2004).
+    pending_create_room: Option<CreateRoom>,
+    /// Committed locked-room join awaiting the session send (3002).
+    pending_join: Option<JoinRoom>,
+    /// Queued team send awaiting the session (4004; the toggle owns it).
+    pending_room_team: Option<SetRoomTeam>,
+    /// Queued ready-clear awaiting the session (4008; the team switch owns it).
+    pending_team_ready: bool,
+    /// Queued song pick awaiting the session (4000; the dialog row owns it).
+    pending_music_send: Option<SetRoomMusic>,
+    /// Queued RETRY press awaiting the session (4010 `0xfaa`, empty;
+    /// the result RETRY button and its Confirm arm own it).
+    pending_result_retry: bool,
+    /// Queued BACK press awaiting the session (4021 `0xfb5`, empty;
+    /// the result BACK button and its Back arm own it).
+    pending_result_back: bool,
+    /// Queued battle result entry awaiting the session (4042 `0xfca`,
+    /// empty; the song-end Result entry in team play owns it).
+    pending_result_battle_entry: bool,
+    /// Queued cart buy awaiting the session send (5000; the cart
+    /// `BUYITEM` owns it).
+    pending_shop_buy: Option<SyncItemPurchase>,
+    /// Queued song buy awaiting the session send (5010; the row
+    /// buy buttons and the cart `BUYITEM` own it).
+    pending_music_buy: Option<SyncMusicPurchase>,
+    /// Committed equip send awaiting the session (5004; the apply
+    /// button owns it).
+    pending_equip: Option<EquipItem>,
+    /// Committed gift claim awaiting the session (5023; MOVE owns it).
+    pending_gift_claim: Option<ClaimGift>,
+    /// Gift-list fetch awaiting the session (5017; queued on entry).
+    pending_gift_list: bool,
+}
+
+impl PendingOutbox {
+    /// Queued team send for the session bridge, if any (4004). One
+    /// take sends once; the next press replaces the queued team.
+    fn take_room_team(&mut self) -> Option<SetRoomTeam> {
+        self.pending_room_team.take()
+    }
+    /// Queued ready-clear for the session bridge, if any (4008).
+    /// The team switch queues it directly behind its 4004.
+    fn take_team_ready(&mut self) -> Option<Ready> {
+        if self.pending_team_ready {
+            self.pending_team_ready = false;
+            Some(Ready)
+        } else {
+            None
+        }
+    }
+    /// Whether a team-button pair is queued for the session bridge.
+    #[must_use]
+    fn has_pending_team_send(&self) -> bool {
+        self.pending_room_team.is_some() || self.pending_team_ready
+    }
+    /// Queued song pick for the session bridge, if any (4000). One
+    /// take sends once; the next row press replaces the queued pick.
+    fn take_music_send(&mut self) -> Option<SetRoomMusic> {
+        self.pending_music_send.take()
+    }
+    /// Whether a dialog row pick is queued for the session bridge.
+    #[must_use]
+    fn has_pending_music_send(&self) -> bool {
+        self.pending_music_send.is_some()
+    }
+    /// Queued RETRY press for the session bridge, if any (`StartGame`
+    /// 4010, `0xfaa` — the exe's result RETRY relay event,
+    /// `FUN_004c2f00` range, `ev_77ce98f1…`). One take sends once;
+    /// the next press replaces the queue.
+    fn take_result_retry(&mut self) -> Option<StartGame> {
+        if self.pending_result_retry {
+            self.pending_result_retry = false;
+            Some(StartGame)
+        } else {
+            None
+        }
+    }
+    /// Queued BACK press for the session bridge, if any (`ExitPlaying`
+    /// 4021, `0xfb5` — the exe's result BACK relay event,
+    /// `docs/cresult-anchors.md` `ev_77ce98f1…`). One take sends once;
+    /// the next press replaces the queue.
+    fn take_result_back(&mut self) -> Option<ExitPlaying> {
+        if self.pending_result_back {
+            self.pending_result_back = false;
+            Some(ExitPlaying)
+        } else {
+            None
+        }
+    }
+    /// Queued battle result entry for the session bridge, if any
+    /// (`GetLiveState` 4042, `0xfca` — byte-verified empty,
+    /// `docs/relay.md` §10, gated on the battle global `0x7789e6`).
+    /// One take sends once; the next battle entry replaces the queue.
+    fn take_result_battle_entry(&mut self) -> Option<o2jam_net::relay::GetLiveState> {
+        if self.pending_result_battle_entry {
+            self.pending_result_battle_entry = false;
+            Some(o2jam_net::relay::GetLiveState)
+        } else {
+            None
+        }
+    }
+    /// Committed create-room body awaiting the session send (2004).
+    fn take_create_room(&mut self) -> Option<CreateRoom> {
+        self.pending_create_room.take()
+    }
+    /// Committed locked-room join awaiting the session send (3002).
+    fn take_join(&mut self) -> Option<JoinRoom> {
+        self.pending_join.take()
+    }
+    /// Committed equip send for the session bridge, if any (5004).
+    /// One take sends once; the next apply replaces the queued send.
+    fn take_equip_send(&mut self) -> Option<EquipItem> {
+        self.pending_equip.take()
+    }
+    /// Whether an equip send is queued for the session bridge.
+    #[must_use]
+    fn has_pending_equip_send(&self) -> bool {
+        self.pending_equip.is_some()
+    }
+    /// Committed gift claim for the session bridge, if any (5023).
+    /// One take sends once; the next MOVE replaces the queued claim.
+    fn take_gift_claim(&mut self) -> Option<ClaimGift> {
+        self.pending_gift_claim.take()
+    }
+    /// Gift-list fetch for the session bridge, if any (5017; queued
+    /// on avatar-room entry). One take sends once.
+    fn take_gift_list_request(&mut self) -> Option<GetGiftMessageList> {
+        if self.pending_gift_list {
+            self.pending_gift_list = false;
+            Some(GetGiftMessageList)
+        } else {
+            None
+        }
+    }
+    /// Queued cart buy for the session bridge, if any (5000). One
+    /// body per `BUYITEM` commit; the seam drains it.
+    fn take_shop_buy(&mut self) -> Option<SyncItemPurchase> {
+        self.pending_shop_buy.take()
+    }
+    /// Queued song buy for the session bridge, if any (5010). One
+    /// body per row or cart commit; the seam drains it.
+    fn take_music_buy(&mut self) -> Option<SyncMusicPurchase> {
+        self.pending_music_buy.take()
+    }
+}
+
 /// Room/waiting/loading inputs land with their UIs.
 pub struct ScreenGame {
     flow: ScreenFlow,
@@ -643,25 +800,11 @@ pub struct ScreenGame {
     /// stages them beside the Playing scene; paint wiring rides a
     /// later ticket.
     byname_art: HashMap<String, SceneArt>,
-    /// Committed create-room body awaiting the session send (2004).
-    pending_create_room: Option<CreateRoom>,
-    /// Committed locked-room join awaiting the session send (3002).
-    pending_join: Option<JoinRoom>,
-    /// Queued team send awaiting the session (4004; the toggle owns it).
-    pending_room_team: Option<SetRoomTeam>,
-    /// Queued ready-clear awaiting the session (4008; the team switch owns it).
-    pending_team_ready: bool,
-    /// Queued song pick awaiting the session (4000; the dialog row owns it).
-    pending_music_send: Option<SetRoomMusic>,
-    /// Queued RETRY press awaiting the session (4010 `0xfaa`, empty;
-    /// the result RETRY button and its Confirm arm own it).
-    pending_result_retry: bool,
-    /// Queued BACK press awaiting the session (4021 `0xfb5`, empty;
-    /// the result BACK button and its Back arm own it).
-    pending_result_back: bool,
-    /// Queued battle result entry awaiting the session (4042 `0xfca`,
-    /// empty; the song-end Result entry in team play owns it).
-    pending_result_battle_entry: bool,
+    /// Queued session-bridge sends (the wire outbox, #139 cluster 1):
+    /// every `pending_*` queue lives here and drains through its
+    /// `take_*` accessor; the hash fold reads it for the two hashed
+    /// sends.
+    outbox: PendingOutbox,
     /// Create-room edit focus: title until the password EDIT is hit.
     create_focus_password: bool,
     battle_teams: RoomTeams,
@@ -704,9 +847,6 @@ pub struct ScreenGame {
     /// Live wallet words behind the shop gem cells (5028/5001/5003
     /// folds; `--` until data).
     wallet: WalletState,
-    /// Queued cart buy awaiting the session send (5000; the cart
-    /// `BUYITEM` owns it).
-    pending_shop_buy: Option<SyncItemPurchase>,
     /// Song-shop catalog (`OJNList.dat` order, owned copies; see
     /// [`Self::set_music_shop_catalog`]).
     music_shop_songs: Vec<LankingSong>,
@@ -726,9 +866,6 @@ pub struct ScreenGame {
     /// Cart-list page (five rows per page, the staged music-cart
     /// `CART_EX` slots).
     music_shop_cart_page: usize,
-    /// Queued song buy awaiting the session send (5010; the row
-    /// buy buttons and the cart `BUYITEM` own it).
-    pending_music_buy: Option<SyncMusicPurchase>,
     side_placements: Vec<ScenePlacement>,
     side_figures: HashMap<String, AvatarFigure>,
     /// Live avatar-room selection (slot pick, bag/gift pages+cursors).
@@ -758,13 +895,6 @@ pub struct ScreenGame {
     /// (`IDC_IMAGE_SROOM_AVATA`): the same stack the binary builds from
     /// `avatar.opa` for the Result screen. `None` paints no figure.
     room_avatar: Option<AvatarFigure>,
-    /// Committed equip send awaiting the session (5004; the apply
-    /// button owns it).
-    pending_equip: Option<EquipItem>,
-    /// Committed gift claim awaiting the session (5023; MOVE owns it).
-    pending_gift_claim: Option<ClaimGift>,
-    /// Gift-list fetch awaiting the session (5017; queued on entry).
-    pending_gift_list: bool,
     scene_art: [Option<SceneArt>; 12],
 }
 
@@ -1091,14 +1221,7 @@ impl ScreenGame {
             password_art: None,
             payment_art: None,
             byname_art: HashMap::new(),
-            pending_create_room: None,
-            pending_join: None,
-            pending_room_team: None,
-            pending_team_ready: false,
-            pending_music_send: None,
-            pending_result_retry: false,
-            pending_result_back: false,
-            pending_result_battle_entry: false,
+            outbox: PendingOutbox::default(),
             create_focus_password: false,
             battle_teams: RoomTeams::new(),
             battle_self_team: None,
@@ -1116,14 +1239,12 @@ impl ScreenGame {
             shop_cart: Vec::new(),
             shop_cart_page: 0,
             wallet: WalletState::default(),
-            pending_shop_buy: None,
             music_shop_songs: Vec::new(),
             music_shop_sort: None,
             music_shop_page: 0,
             music_shop_board: None,
             music_shop_cart: Vec::new(),
             music_shop_cart_page: 0,
-            pending_music_buy: None,
             side_placements: Vec::new(),
             side_figures: HashMap::new(),
             myroom: MyRoomState::new(),
@@ -1132,9 +1253,6 @@ impl ScreenGame {
             waiting_figures: std::array::from_fn(|_| None),
             avatar_source: None,
             room_avatar: None,
-            pending_equip: None,
-            pending_gift_claim: None,
-            pending_gift_list: false,
             scene_art: std::array::from_fn(|_| None),
         }
     }
@@ -1548,75 +1666,55 @@ impl ScreenGame {
         // Ungated join sends the pair in exe order (4004 then 4008).
         // Without a joined room there is no send target (gated arm).
         if self.waiting.is_some() {
-            self.pending_room_team = Some(SetRoomTeam { team });
-            self.pending_team_ready = true;
+            self.outbox.pending_room_team = Some(SetRoomTeam { team });
+            self.outbox.pending_team_ready = true;
         }
     }
     /// Queued team send for the session bridge, if any (4004). One
     /// take sends once; the next press replaces the queued team.
     pub fn take_room_team(&mut self) -> Option<SetRoomTeam> {
-        self.pending_room_team.take()
+        self.outbox.take_room_team()
     }
     /// Queued ready-clear for the session bridge, if any (4008).
     /// The team switch queues it directly behind its 4004.
     pub fn take_team_ready(&mut self) -> Option<Ready> {
-        if self.pending_team_ready {
-            self.pending_team_ready = false;
-            Some(Ready)
-        } else {
-            None
-        }
+        self.outbox.take_team_ready()
     }
     /// Whether a team-button pair is queued for the session bridge.
     #[must_use]
     pub fn has_pending_team_send(&self) -> bool {
-        self.pending_room_team.is_some() || self.pending_team_ready
+        self.outbox.has_pending_team_send()
     }
     /// Queued song pick for the session bridge, if any (4000). One
     /// take sends once; the next row press replaces the queued pick.
     pub fn take_music_send(&mut self) -> Option<SetRoomMusic> {
-        self.pending_music_send.take()
+        self.outbox.take_music_send()
     }
     /// Whether a dialog row pick is queued for the session bridge.
     #[must_use]
     pub fn has_pending_music_send(&self) -> bool {
-        self.pending_music_send.is_some()
+        self.outbox.has_pending_music_send()
     }
     /// Queued RETRY press for the session bridge, if any (`StartGame`
     /// 4010, `0xfaa` — the exe's result RETRY relay event,
     /// `FUN_004c2f00` range, `ev_77ce98f1…`). One take sends once;
     /// the next press replaces the queue.
     pub fn take_result_retry(&mut self) -> Option<StartGame> {
-        if self.pending_result_retry {
-            self.pending_result_retry = false;
-            Some(StartGame)
-        } else {
-            None
-        }
+        self.outbox.take_result_retry()
     }
     /// Queued BACK press for the session bridge, if any (`ExitPlaying`
     /// 4021, `0xfb5` — the exe's result BACK relay event,
     /// `docs/cresult-anchors.md` `ev_77ce98f1…`). One take sends once;
     /// the next press replaces the queue.
     pub fn take_result_back(&mut self) -> Option<ExitPlaying> {
-        if self.pending_result_back {
-            self.pending_result_back = false;
-            Some(ExitPlaying)
-        } else {
-            None
-        }
+        self.outbox.take_result_back()
     }
     /// Queued battle result entry for the session bridge, if any
     /// (`GetLiveState` 4042, `0xfca` — byte-verified empty,
     /// `docs/relay.md` §10, gated on the battle global `0x7789e6`).
     /// One take sends once; the next battle entry replaces the queue.
     pub fn take_result_battle_entry(&mut self) -> Option<o2jam_net::relay::GetLiveState> {
-        if self.pending_result_battle_entry {
-            self.pending_result_battle_entry = false;
-            Some(o2jam_net::relay::GetLiveState)
-        } else {
-            None
-        }
+        self.outbox.take_result_battle_entry()
     }
     /// Team broadcast slot-refresh path (4007).
     ///
@@ -1747,11 +1845,11 @@ impl ScreenGame {
     }
     /// Committed create-room body awaiting the session send (2004).
     pub fn take_create_room(&mut self) -> Option<CreateRoom> {
-        self.pending_create_room.take()
+        self.outbox.take_create_room()
     }
     /// Committed locked-room join awaiting the session send (3002).
     pub fn take_join(&mut self) -> Option<JoinRoom> {
-        self.pending_join.take()
+        self.outbox.take_join()
     }
     /// `CreateRoom` form behind the open dialog.
     #[must_use]
@@ -1796,7 +1894,7 @@ impl ScreenGame {
                     }
                     Some(CreateRoomAction::Commit) => {
                         if let Some(body) = self.create_room_form.commit() {
-                            self.pending_create_room = Some(body);
+                            self.outbox.pending_create_room = Some(body);
                             self.room_dialog = None;
                         }
                     }
@@ -1813,7 +1911,7 @@ impl ScreenGame {
                     .map_or(&[], |art| &art.placements);
                 match password_action_at(placements, x, y) {
                     Some(PasswordAction::Commit) => {
-                        self.pending_join = Some(JoinRoom {
+                        self.outbox.pending_join = Some(JoinRoom {
                             number,
                             music_state: 0,
                             password: self.password_form.password.clone(),
@@ -2794,7 +2892,7 @@ impl ScreenGame {
             return false;
         };
         self.set_selected_music(pick);
-        self.pending_music_send = Some(pick);
+        self.outbox.pending_music_send = Some(pick);
         true
     }
     /// Song-dialog click: a search-table row hit commits the row's
@@ -2874,10 +2972,10 @@ impl ScreenGame {
     /// (4010 `0xfaa` / 4021 `0xfb5`, both empty).
     fn click_result_button(&mut self, x: i32, y: i32) {
         if self.result_button_hit(RESULT_RETRY_ID, &RESULT_RETRY_RECT, x, y) {
-            self.pending_result_retry = true;
+            self.outbox.pending_result_retry = true;
             self.enter(Screen::Waiting);
         } else if self.result_button_hit(RESULT_BACK_ID, &RESULT_BACK_RECT, x, y) {
-            self.pending_result_back = true;
+            self.outbox.pending_result_back = true;
             self.enter(Screen::Room);
         }
     }
@@ -4172,30 +4270,25 @@ impl ScreenGame {
     /// Committed equip send for the session bridge, if any (5004).
     /// One take sends once; the next apply replaces the queued send.
     pub fn take_equip_send(&mut self) -> Option<EquipItem> {
-        self.pending_equip.take()
+        self.outbox.take_equip_send()
     }
 
     /// Whether an equip send is queued for the session bridge.
     #[must_use]
     pub fn has_pending_equip_send(&self) -> bool {
-        self.pending_equip.is_some()
+        self.outbox.has_pending_equip_send()
     }
 
     /// Committed gift claim for the session bridge, if any (5023).
     /// One take sends once; the next MOVE replaces the queued claim.
     pub fn take_gift_claim(&mut self) -> Option<ClaimGift> {
-        self.pending_gift_claim.take()
+        self.outbox.take_gift_claim()
     }
 
     /// Gift-list fetch for the session bridge, if any (5017; queued
     /// on avatar-room entry). One take sends once.
     pub fn take_gift_list_request(&mut self) -> Option<GetGiftMessageList> {
-        if self.pending_gift_list {
-            self.pending_gift_list = false;
-            Some(GetGiftMessageList)
-        } else {
-            None
-        }
+        self.outbox.take_gift_list_request()
     }
 
     /// Bag pages over the staged inventory (page 0 without data).
@@ -4298,7 +4391,7 @@ impl ScreenGame {
         let Ok(item_word) = i32::try_from(item_id) else {
             return;
         };
-        self.pending_equip = Some(EquipItem {
+        self.outbox.pending_equip = Some(EquipItem {
             slot: i32::from(slot),
             item_id: item_word,
         });
@@ -4358,7 +4451,7 @@ impl ScreenGame {
         } else {
             GiftType::Item
         };
-        self.pending_gift_claim = Some(ClaimGift {
+        self.outbox.pending_gift_claim = Some(ClaimGift {
             gift_type,
             gift_id: view.gift_id,
             resource_id: view.resource_id,
@@ -4383,7 +4476,7 @@ impl ScreenGame {
             // exe-pinned (`docs/gifts.md`); queueing it on entry is
             // ours-by-design — the exe entry path is unpinned — and
             // stays labeled until the rig names the entry fetch.
-            self.pending_gift_list = true;
+            self.outbox.pending_gift_list = true;
         }
         true
     }
@@ -4670,7 +4763,7 @@ impl ScreenGame {
     /// Queued cart buy for the session bridge, if any (5000). One
     /// body per `BUYITEM` commit; the seam drains it.
     pub fn take_shop_buy(&mut self) -> Option<SyncItemPurchase> {
-        self.pending_shop_buy.take()
+        self.outbox.take_shop_buy()
     }
 
     /// Item-shop click through the control-code dispatch
@@ -4698,7 +4791,7 @@ impl ScreenGame {
             }
             ShopAction::CartBuy => {
                 if !self.shop_cart.is_empty() {
-                    self.pending_shop_buy = Some(SyncItemPurchase);
+                    self.outbox.pending_shop_buy = Some(SyncItemPurchase);
                 }
             }
             ShopAction::ItemPrev => {
@@ -4828,7 +4921,7 @@ impl ScreenGame {
     /// Queued song buy for the session bridge, if any (5010). One
     /// body per row or cart commit; the seam drains it.
     pub fn take_music_buy(&mut self) -> Option<SyncMusicPurchase> {
-        self.pending_music_buy.take()
+        self.outbox.take_music_buy()
     }
 
     /// Song-shop click through the control-code dispatch
@@ -4856,7 +4949,7 @@ impl ScreenGame {
             }
             MusicShopAction::BuyRow { slot, gem: _ } => {
                 if self.music_shop_visible_rows().get(slot).is_some() {
-                    self.pending_music_buy = Some(SyncMusicPurchase);
+                    self.outbox.pending_music_buy = Some(SyncMusicPurchase);
                 }
             }
             MusicShopAction::Sort(sort) => {
@@ -4877,7 +4970,7 @@ impl ScreenGame {
                 }
             }
             MusicShopAction::CartBuy => {
-                self.pending_music_buy = Some(SyncMusicPurchase);
+                self.outbox.pending_music_buy = Some(SyncMusicPurchase);
             }
             MusicShopAction::CartPrev => {
                 self.music_shop_cart_page = self.music_shop_cart_page.saturating_sub(1);
@@ -4980,7 +5073,7 @@ impl ScreenGame {
             // (its event-ticket web call owns the solo arm and the
             // shell owns no web seam: OPEN).
             if self.room_team_play() {
-                self.pending_result_battle_entry = true;
+                self.outbox.pending_result_battle_entry = true;
             }
             self.enter_screen(Screen::Result);
         }
@@ -6009,7 +6102,7 @@ impl GameLoop for ScreenGame {
             }
             (Screen::Waiting, MenuKey::Back) => self.enter(Screen::Room),
             (Screen::Result, MenuKey::Back) => {
-                self.pending_result_back = true;
+                self.outbox.pending_result_back = true;
                 self.enter(Screen::Room);
             }
             // The room lobby Enter rides the main-room chat first: a
@@ -6030,7 +6123,7 @@ impl GameLoop for ScreenGame {
             }
             (Screen::Loading, MenuKey::Back) => self.enter(Screen::Waiting),
             (Screen::Result, MenuKey::Confirm) => {
-                self.pending_result_retry = true;
+                self.outbox.pending_result_retry = true;
                 self.enter(Screen::Waiting);
             }
             // `START 0x16202012` runs the all-ready check (file
@@ -6245,8 +6338,11 @@ fn observable_state_hash(game: &ScreenGame) -> u64 {
     for id in &game.music_shop_cart {
         hash_u64(&mut hash, u64::from(*id));
     }
-    hash_u64(&mut hash, game.pending_shop_buy.map_or(0, |_| 5_000));
-    hash_u64(&mut hash, game.pending_music_buy.map_or(0, |_| 5_010));
+    hash_u64(&mut hash, game.outbox.pending_shop_buy.map_or(0, |_| 5_000));
+    hash_u64(
+        &mut hash,
+        game.outbox.pending_music_buy.map_or(0, |_| 5_010),
+    );
     hash
 }
 
@@ -14571,6 +14667,201 @@ mod game_tests {
         assert!(game.take_room_team().is_none());
         assert!(game.take_team_ready().is_none());
         assert!(game.take_music_send().is_none());
+        assert!(game.take_create_room().is_none());
+        assert!(game.take_join().is_none());
+    }
+
+    #[test]
+    fn populated_outbox_pins_the_observable_state_hash() {
+        // Characterization for the PendingOutbox extraction (#139,
+        // cluster 1): all thirteen wire queues populated through
+        // their queueing arms, then the observable hash pinned
+        // byte-identical. The extraction must not move one hash bit:
+        // the take_* drains below prove every arm queued, the pinned
+        // word proves the hash fold is untouched. Only the two shop
+        // sends feed the fold today; the rest ride along so a future
+        // fold change re-pins here.
+        use super::super::side::{
+            MYROOM_APPLY_CODE, MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_MOVE_CODE,
+        };
+        use MenuKey;
+        let mut game = ScreenGame::new();
+
+        // Battle entry first: the song-end arm needs the offline
+        // walk, so the Live room stages before the first finish.
+        let mut live = waiting_room();
+        live.game_mode = o2jam_net::GameMode::Live as u8;
+        game.set_joined_room(live);
+        finish_song(&mut game);
+        paint_result_frame(&mut game);
+        assert_eq!(game.screen(), Screen::Result);
+
+        // Result arms: BACK queues 4021 (leaves for Room), then the
+        // re-walked song queues 4042 again and Confirm queues 4010.
+        game.menu_key(MenuKey::Back, true);
+        assert_eq!(game.screen(), Screen::Room);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+        finish_song(&mut game);
+        paint_result_frame(&mut game);
+        assert_eq!(game.screen(), Screen::Result);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+
+        // Team arms: the toggle queues 4004 + 4008.
+        game.select_team(5);
+        // Song-pick arm: the staged row click queues 4000.
+        game.load_select_music_scene(Vec::new(), HashMap::new());
+        stage_waiting_song(&mut game);
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 150 + 23 + 11));
+
+        // Avatar-room arms: entry queues the 5017 fetch, the bag
+        // APPLY queues 5004, the gift MOVE queues 5023.
+        game.set_myroom_items(myroom_test_table());
+        let mut character = myroom_test_character((1..=12).collect());
+        character.item_gifts.push(o2jam_net::GiftItemInfo {
+            gift_id: 7,
+            item_id: 1,
+            sender: "Giver".to_owned(),
+        });
+        game.set_myroom_character(character);
+        game.load_side_scene(
+            vec![
+                myroom_hit_placement(MYROOM_BAG_FIRST_CODE, 200, 10),
+                myroom_hit_placement(MYROOM_APPLY_CODE, 450, 10),
+                myroom_hit_placement(MYROOM_GIFT_FIRST_CODE, 400, 10),
+                myroom_hit_placement(MYROOM_MOVE_CODE, 500, 10),
+            ],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        game.ingest_snapshot(&InputSnapshot::click_at(201, 11));
+        game.ingest_snapshot(&InputSnapshot::click_at(451, 11));
+        game.ingest_snapshot(&InputSnapshot::click_at(401, 11));
+        game.ingest_snapshot(&InputSnapshot::click_at(501, 11));
+        assert!(game.leave_side());
+
+        // Item-shop arm: the row toggle plus cart BUYITEM queues 5000.
+        let rows: Vec<o2jam_file::AvatarItemRow> = (1..=10)
+            .map(|item_id| o2jam_file::AvatarItemRow {
+                item_id,
+                item_type: 0,
+                price: item_id * 100,
+                params: [0; 4],
+                flags: (0, 0),
+                name: format!("Good{item_id:02}"),
+                description: String::new(),
+                sprites: Vec::new(),
+            })
+            .collect();
+        game.set_shop_catalog(&o2jam_file::AvatarItemTable { rows });
+        game.load_side_scene(shop_side_placements(), HashMap::new());
+        assert!(game.visit_side(SideScreen::Shop));
+        game.click_shop(221, 188);
+        game.click_shop(18, 564);
+        assert!(game.leave_side());
+
+        // Song-shop arm: the row pick plus cart BUYITEM queues 5010.
+        let mut blob = Vec::new();
+        for index in 0..7 {
+            let song_id = 757 + index as u32;
+            blob.extend_from_slice(&lanking_record(
+                song_id,
+                120.0,
+                &format!("Tune{index:03}"),
+                &format!("Band{index:03}"),
+            ));
+        }
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_music_shop_catalog(&entries);
+        game.load_side_scene(music_shop_side_placements(), HashMap::new());
+        assert!(game.visit_side(SideScreen::MusicShop));
+        game.click_music_shop(19, 105);
+        game.click_music_shop(424, 529);
+        assert!(game.leave_side());
+
+        // Create-room arm: the dialog commit queues 2004.
+        game.menu_key(MenuKey::Back, true);
+        assert_eq!(game.screen(), Screen::Room);
+        game.open_create_room_dialog();
+        game.load_create_room_scene(
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BUTTON_DCROOM_CREATE".to_owned(),
+                code: crate::screens::side::CREATE_ROOM_CREATE_CODE,
+                sprite: None,
+                rect: Rect {
+                    x: 10,
+                    y: 10,
+                    w: 50,
+                    h: 30,
+                },
+            }],
+            HashMap::new(),
+        );
+        game.push_room_dialog_char('x');
+        game.click_room_dialog(20, 20);
+        assert_eq!(game.room_dialog(), None);
+
+        // Password-join arm: the OK commit queues 3002 (Waiting).
+        game.open_password_dialog(7);
+        game.load_password_scene(
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BUTTON_DPASSWORD_OK".to_owned(),
+                code: crate::screens::side::PASSWORD_OK_CODE,
+                sprite: None,
+                rect: Rect {
+                    x: 10,
+                    y: 10,
+                    w: 50,
+                    h: 30,
+                },
+            }],
+            HashMap::new(),
+        );
+        game.click_room_dialog(20, 20);
+        assert_eq!(game.screen(), Screen::Waiting);
+
+        // Every arm queued without a drain so far.
+        assert!(game.has_pending_team_send());
+        assert!(game.has_pending_music_send());
+        assert!(game.has_pending_equip_send());
+
+        let populated = game.state_hash();
+        assert_eq!(
+            populated, 0x9EBE_663C_2708_EFBC,
+            "outbox population must not move the observable hash"
+        );
+
+        // The seam drains every queue exactly once.
+        assert!(game.take_result_battle_entry().is_some());
+        assert!(game.take_result_retry().is_some());
+        assert!(game.take_result_back().is_some());
+        assert!(game.take_room_team().is_some());
+        assert!(game.take_team_ready().is_some());
+        assert!(game.take_music_send().is_some());
+        assert!(game.take_equip_send().is_some());
+        assert!(game.take_gift_claim().is_some());
+        assert!(game.take_gift_list_request().is_some());
+        assert!(game.take_shop_buy().is_some());
+        assert!(game.take_music_buy().is_some());
+        assert!(game.take_create_room().is_some());
+        assert!(game.take_join().is_some());
+        assert!(!game.has_pending_team_send());
+        assert!(!game.has_pending_music_send());
+        assert!(!game.has_pending_equip_send());
+        assert!(game.take_result_battle_entry().is_none());
+        assert!(game.take_result_retry().is_none());
+        assert!(game.take_result_back().is_none());
+        assert!(game.take_room_team().is_none());
+        assert!(game.take_team_ready().is_none());
+        assert!(game.take_music_send().is_none());
+        assert!(game.take_equip_send().is_none());
+        assert!(game.take_gift_claim().is_none());
+        assert!(game.take_gift_list_request().is_none());
+        assert!(game.take_shop_buy().is_none());
+        assert!(game.take_music_buy().is_none());
         assert!(game.take_create_room().is_none());
         assert!(game.take_join().is_none());
     }
