@@ -381,6 +381,26 @@ pub trait GameLoop {
     /// pointer, live-confirmed 2026-11-09). Default ignores motion so
     /// existing implementors keep compiling.
     fn mouse_moved(&mut self, _x: i32, _y: i32) {}
+    /// Per-frame pulled input intake (ADR-0013): the shell freezes
+    /// one snapshot at each frame boundary and the game sweeps it
+    /// here — positions and state, never event-time pushes. The
+    /// default replays the snapshot through the edge methods in
+    /// arrival order (pointer first, as hover) so existing
+    /// implementors keep working; snapshot-native states override
+    /// this and sweep [`InputSnapshot`] directly.
+    fn ingest_snapshot(&mut self, snapshot: &InputSnapshot) {
+        if let Some((x, y)) = snapshot.pointer() {
+            self.mouse_moved(x, y);
+        }
+        for edge in snapshot.edges() {
+            match *edge {
+                InputEdge::PointerDown { x, y } => self.mouse_down(x, y),
+                InputEdge::PointerUp { x, y } => self.mouse_up(x, y),
+                InputEdge::Lane { lane, down } => self.lane_key(lane, down),
+                InputEdge::Menu { key, down } => self.menu_key(key, down),
+            }
+        }
+    }
     /// Whether the game asked to quit (the planet quit-confirm OK).
     /// The windowed shell exits the event loop on it; headless walks
     /// read the flag instead. Default never quits so existing

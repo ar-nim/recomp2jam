@@ -262,6 +262,7 @@ pub(crate) fn measure_input_latency(
         state.clock.advance(modeled_queue_ticks);
     }
     handler.route_key(code, true);
+    handler.deliver_snapshot();
     let state = state.borrow();
     let probe = state.probe.as_ref()?;
     let judgement_tick = probe.judgement_tick?;

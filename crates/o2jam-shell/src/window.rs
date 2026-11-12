@@ -12,7 +12,9 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, OwnedDisplayHandle};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowAttributes};
 
-use super::{menu_of, CaptureState, Shell, DEFAULT_HEIGHT, DEFAULT_WIDTH};
+use super::{
+    menu_of, CaptureState, InputEdge, InputSnapshot, Shell, DEFAULT_HEIGHT, DEFAULT_WIDTH,
+};
 
 /// Trace-capture state owned by the handler: paint counting, last
 /// screen/content fingerprints, and the last dumped paint.
@@ -32,6 +34,15 @@ pub struct WindowHandler {
     paint_error: Option<anyhow::Error>,
     cursor: Option<(f64, f64)>,
     capture: Option<CaptureSink>,
+    /// Queued discrete edges since the last freeze: winit events are
+    /// OS transport only (ADR-0013), so every decoded edge waits here
+    /// for the frame boundary instead of reaching the game directly.
+    pending_edges: Vec<InputEdge>,
+    /// Left-button state at the freeze (persists across snapshots;
+    /// edges alone would lose a hold that spans frames).
+    left_held: bool,
+    /// Freeze order stamped on each delivered snapshot.
+    snapshot_sequence: u64,
     /// An input or resize arrived since the last `about_to_wait` pass:
     /// the frame it may have changed owes one repaint (ticket #138).
     input_dirty: bool,
@@ -58,6 +69,9 @@ impl WindowHandler {
             paint_error: None,
             cursor: None,
             capture,
+            pending_edges: Vec::new(),
+            left_held: false,
+            snapshot_sequence: 0,
             input_dirty: false,
             next_heartbeat: None,
         }
@@ -178,11 +192,12 @@ impl WindowHandler {
         }
     }
 
-    /// Route one key event to a lane or menu hook. The game sees
+    /// Route one key event to a lane or menu edge. The game sees
     /// the raw press first (rebind capture), then the key map —
     /// synced from the game's current binds — resolves the lane.
-    /// `pub(crate)`: the input-latency probe (#100) drives scripted
-    /// key events through this exact path.
+    /// Edges queue for the next freeze; nothing reaches the game
+    /// here (ADR-0013). `pub(crate)`: the input-latency probe (#100)
+    /// drives scripted key events through this exact path.
     pub(crate) fn route_key(&mut self, code: winit::keyboard::KeyCode, down: bool) {
         // Any key edge may move game state (dismiss, rebind, strike),
         // so the frame it changed owes one repaint (ticket #138).
@@ -203,16 +218,17 @@ impl WindowHandler {
             self.shell.keymap.release(&code)
         };
         if let Some(lane) = lane {
-            self.shell.game.lane_key(lane, down);
+            self.pending_edges.push(InputEdge::Lane { lane, down });
         } else if let Some(menu) = menu_of(code) {
-            self.shell.game.menu_key(menu, down);
+            self.pending_edges.push(InputEdge::Menu { key: menu, down });
         }
     }
 
-    /// Route a left press/release at window pixels into native-frame
-    /// press edges (letterbox bars never press through). The down
+    /// Queue a left press/release at window pixels as a native-frame
+    /// press edge (letterbox bars never press through). The down
     /// edge keeps the `click x y` log line the capture harness
     /// already replays; the up edge logs its own `click-up` line.
+    /// Queued only — the next freeze delivers it (ADR-0013).
     fn route_mouse_edge(&mut self, down: bool, cursor_x: f64, cursor_y: f64) {
         // Press feedback arms on down and fires on release-inside
         // (pinned #111): the changed frame owes one repaint.
@@ -223,54 +239,68 @@ impl WindowHandler {
         if let Some((x, y)) = window_to_native(window_w, window_h, cursor_x, cursor_y) {
             if down {
                 self.log_event(&format!("click {x} {y}"));
-                self.shell.game.mouse_down(x, y);
+                self.pending_edges.push(InputEdge::PointerDown { x, y });
+                self.left_held = true;
             } else {
                 self.log_event(&format!("click-up {x} {y}"));
-                self.shell.game.mouse_up(x, y);
+                self.pending_edges.push(InputEdge::PointerUp { x, y });
+                self.left_held = false;
             }
         }
     }
 
-    /// Remember one pointer-motion sample and forward it to the game
-    /// as native frame pixels: exactly what the `CursorMoved` window
-    /// event does. The cached window-pixel position is the press
-    /// source for a later `MouseInput` (that event carries no
-    /// position of its own), so the cache write lives here, in the
-    /// one path motion events take.
+    /// Remember one pointer-motion sample: the pending cursor cache
+    /// the next freeze reads as the snapshot pointer (hover = paint-
+    /// time position, ADR-0013). Queued only — the `MouseInput` arm
+    /// below is the press source for a later edge (that event carries
+    /// no position of its own), so the cache write lives here, in
+    /// the one path motion events take.
     fn track_motion(&mut self, cursor_x: f64, cursor_y: f64) {
         self.cursor = Some((cursor_x, cursor_y));
         // Hover art follows the pointer alone (the channel bar tracks
         // motion with no press), so motion owes one repaint too.
         self.input_dirty = true;
-        self.route_motion(cursor_x, cursor_y);
     }
 
-    /// Forward pointer motion to the game as native frame pixels (the
-    /// hover source). The capture log stays silent: motion floods it,
-    /// and no trace replays hover yet.
-    fn route_motion(&mut self, cursor_x: f64, cursor_y: f64) {
-        let Some((window_w, window_h)) = self.surface_size else {
-            return;
-        };
-        if let Some((x, y)) = window_to_native(window_w, window_h, cursor_x, cursor_y) {
-            self.shell.game.mouse_moved(x, y);
-        }
-    }
-
-    /// Route one left-button edge: exactly what the `MouseInput`
-    /// window-event arm does. The edge position is the cursor tracked
-    /// from prior motion/enter events: `MouseInput` carries no
-    /// position (X11 button events and the Wayland protocol both omit
-    /// coordinates, so a client must track the pointer itself), and
-    /// winit 0.30 exposes no pointer-position query to fall back to —
-    /// the tracked cursor is the only source. A backend that ever
+    /// Queue one left-button edge from the `MouseInput` window-event
+    /// arm. The edge position is the cursor tracked from prior
+    /// motion/enter events: `MouseInput` carries no position (X11
+    /// button events and the Wayland protocol both omit coordinates,
+    /// so a client must track the pointer itself), and winit 0.30
+    /// exposes no pointer-position query to fall back to — the
+    /// tracked cursor is the only source. A backend that ever
     /// pressed with no preceding `CursorMoved`/`CursorEntered` would
     /// drop every click (the #118 live symptom); the rig evidence and
     /// the open desktop chain live in `docs/window-input-seam.md`.
+    /// Queued only — the next freeze delivers it (ADR-0013).
     fn route_mouse_input(&mut self, down: bool) {
         if let Some((x, y)) = self.cursor {
             self.route_mouse_edge(down, x, y);
         }
+    }
+
+    /// Freeze the frame's input snapshot and deliver it to the game:
+    /// the pending pointer maps to native frame pixels, the queued
+    /// edges drain in arrival order, and the button state carries
+    /// over. Exactly one consumption point per frame (ADR-0013) —
+    /// the live loop calls this at each `RedrawRequested` before
+    /// painting; headless tests call it after queueing events.
+    /// Returns the frozen snapshot for trace/test assertions.
+    pub(crate) fn deliver_snapshot(&mut self) -> InputSnapshot {
+        let pointer = self.cursor.and_then(|(cursor_x, cursor_y)| {
+            let (window_w, window_h) = self.surface_size?;
+            window_to_native(window_w, window_h, cursor_x, cursor_y)
+        });
+        let mut snapshot = InputSnapshot::new();
+        snapshot.set_pointer(pointer);
+        snapshot.set_left_held(self.left_held);
+        snapshot.set_sequence(self.snapshot_sequence);
+        self.snapshot_sequence = self.snapshot_sequence.saturating_add(1);
+        for edge in self.pending_edges.drain(..) {
+            snapshot.push_edge(edge);
+        }
+        self.shell.game.ingest_snapshot(&snapshot);
+        snapshot
     }
 
     /// Feed committed text into the game (winit `Ime::Commit`, or a
@@ -580,6 +610,11 @@ impl ApplicationHandler for WindowHandler {
                 self.input_dirty = true;
             }
             WindowEvent::RedrawRequested => {
+                // Frame boundary (ADR-0013): freeze the queued input
+                // into one snapshot and sweep it before painting, so
+                // the frame the compositor gets already answers the
+                // frame's input at paint-time positions.
+                self.deliver_snapshot();
                 self.shell.paint_backbuffer();
                 self.present(event_loop);
                 self.capture_frame();
@@ -825,6 +860,7 @@ mod tests {
         let (mut handler, probe) = probed_handler();
         handler.route_key(KeyCode::KeyS, true);
         handler.route_key(KeyCode::KeyS, false);
+        handler.deliver_snapshot();
         assert_eq!(probe.borrow().lanes, vec![(0, true), (0, false)]);
     }
 
@@ -832,6 +868,7 @@ mod tests {
     fn backspace_release_routes_nowhere() {
         let (mut handler, probe) = probed_handler();
         handler.route_key(KeyCode::Backspace, false);
+        handler.deliver_snapshot();
         assert_eq!(probe.borrow().deletes, 0);
         assert!(probe.borrow().lanes.is_empty());
     }
@@ -842,6 +879,7 @@ mod tests {
         handler.surface_size = Some((800, 600));
         handler.route_mouse_edge(true, 100.0, 200.0);
         handler.route_mouse_edge(false, 100.0, 200.0);
+        handler.deliver_snapshot();
         assert_eq!(probe.borrow().downs, vec![(100, 200)]);
         assert_eq!(probe.borrow().ups, vec![(100, 200)]);
     }
@@ -853,11 +891,13 @@ mod tests {
         // Every stage must reach the game through the SAME helpers
         // the winit match arms call — a real event loop never runs
         // in CI, so the arm bodies are the seam under test (#119).
+        // Queued only: one freeze delivers the whole frame.
         let (mut handler, probe) = probed_handler();
         handler.surface_size = Some((800, 600));
         handler.track_motion(100.0, 200.0);
         handler.route_mouse_input(true);
         handler.route_mouse_input(false);
+        handler.deliver_snapshot();
         assert_eq!(probe.borrow().moves, vec![(100, 200)], "hover forwarded");
         assert_eq!(probe.borrow().downs, vec![(100, 200)], "press routed");
         assert_eq!(probe.borrow().ups, vec![(100, 200)], "release routed");
@@ -871,11 +911,17 @@ mod tests {
         // (the #118 no-input leg). The probe records `clicks`
         // precisely so this test fails the day the window routes a
         // gesture through `mouse_click` instead of the edges.
+        // Snapshot evolution (ADR-0013): the freeze delivers exactly
+        // one snapshot carrying both edges — the seam dispatches
+        // snapshots, never gestures.
         let (mut handler, probe) = probed_handler();
         handler.surface_size = Some((800, 600));
         handler.track_motion(100.0, 200.0);
         handler.route_mouse_input(true);
         handler.route_mouse_input(false);
+        let snapshot = handler.deliver_snapshot();
+        assert_eq!(snapshot.sequence(), 0);
+        assert_eq!(snapshot.edges().len(), 2, "one freeze, both edges");
         assert_eq!(
             probe.borrow().clicks,
             Vec::new(),
@@ -887,6 +933,47 @@ mod tests {
             "both edges still reach the game"
         );
         assert_eq!(probe.borrow().ups, vec![(100, 200)]);
+    }
+
+    #[test]
+    fn frozen_snapshot_drains_the_queue_exactly_once() {
+        // The per-frame edge queue (ADR-0013): one freeze carries
+        // every queued edge in order, and the next freeze carries
+        // none — edges never replay and never leak across frames.
+        let (mut handler, probe) = probed_handler();
+        handler.surface_size = Some((800, 600));
+        handler.track_motion(10.0, 20.0);
+        handler.route_mouse_input(true);
+        handler.route_mouse_input(false);
+        let first = handler.deliver_snapshot();
+        assert_eq!(first.sequence(), 0);
+        assert_eq!(first.pointer(), Some((10, 20)));
+        assert_eq!(first.edges().len(), 2);
+        let second = handler.deliver_snapshot();
+        assert_eq!(second.sequence(), 1);
+        assert_eq!(second.pointer(), Some((10, 20)), "position persists");
+        assert!(second.edges().is_empty(), "the queue drained");
+        assert_eq!(probe.borrow().downs.len(), 1);
+        assert_eq!(probe.borrow().ups.len(), 1);
+    }
+
+    #[test]
+    fn button_state_survives_empty_freezes_between_edges() {
+        // State vs edges (SDL `GetKeyboardState` warning): a hold
+        // spanning frames stays held across snapshots with no edges,
+        // and only its release edge frees it.
+        let (mut handler, _probe) = probed_handler();
+        handler.surface_size = Some((800, 600));
+        handler.track_motion(10.0, 20.0);
+        handler.route_mouse_input(true);
+        let pressed = handler.deliver_snapshot();
+        assert!(pressed.left_held());
+        let held = handler.deliver_snapshot();
+        assert!(held.edges().is_empty());
+        assert!(held.left_held(), "the hold spans the empty frame");
+        handler.route_mouse_input(false);
+        let released = handler.deliver_snapshot();
+        assert!(!released.left_held());
     }
 
     /// Log of the exact game callbacks the seam made: the event
@@ -985,6 +1072,7 @@ mod tests {
         handler.surface_size = Some((800, 600));
         handler.track_motion(400.0, 300.0);
         handler.route_mouse_input(true);
+        handler.deliver_snapshot();
         assert_eq!(
             handler.shell.game.screen_name(),
             "planet",
@@ -997,12 +1085,14 @@ mod tests {
         );
         handler.track_motion(729.0, 580.0);
         handler.route_mouse_input(true);
+        handler.deliver_snapshot();
         assert_eq!(
             game.borrow().planet_modal(),
             None,
             "the planet down edge arms the press without firing"
         );
         handler.route_mouse_input(false);
+        handler.deliver_snapshot();
         assert_eq!(
             game.borrow().planet_modal(),
             Some(super::super::screens::game::PlanetModal::Options),
@@ -1026,6 +1116,8 @@ mod tests {
         handler.track_motion(100.0, 450.0);
         handler.route_mouse_input(true);
         handler.route_mouse_input(false);
+        let snapshot = handler.deliver_snapshot();
+        assert!(snapshot.edges().is_empty(), "letterbox edges never queue");
         assert!(probe.borrow().downs.is_empty(), "letterbox press dropped");
         assert!(probe.borrow().ups.is_empty(), "letterbox release dropped");
     }
@@ -1042,6 +1134,9 @@ mod tests {
         handler.surface_size = Some((800, 600));
         handler.route_mouse_input(true);
         handler.route_mouse_input(false);
+        let snapshot = handler.deliver_snapshot();
+        assert!(snapshot.edges().is_empty(), "no position, no edges");
+        assert!(snapshot.pointer().is_none());
         assert!(probe.borrow().downs.is_empty());
         assert!(probe.borrow().ups.is_empty());
     }
@@ -1051,6 +1146,7 @@ mod tests {
         let (mut handler, probe) = probed_handler();
         handler.route_mouse_edge(true, 100.0, 200.0);
         handler.route_mouse_edge(false, 100.0, 200.0);
+        handler.deliver_snapshot();
         assert!(probe.borrow().downs.is_empty());
         assert!(probe.borrow().ups.is_empty());
     }
