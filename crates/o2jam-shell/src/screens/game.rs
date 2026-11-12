@@ -19,9 +19,9 @@ use super::paint::{
     paint_lobby_backdrop, paint_music_shop_board, paint_music_shop_cart, paint_music_shop_scene,
     paint_myroom_data, paint_myroom_scene, paint_payment_notice, paint_planet_options,
     paint_planet_quit, paint_planet_scene, paint_playing_backdrop, paint_playing_foreground,
-    paint_result, paint_result_scene, paint_room_chat, paint_room_list, paint_room_scene,
-    paint_room_user_panel, paint_screen, paint_shop_board, paint_shop_scene, paint_waiting_chat,
-    paint_waiting_members, paint_waiting_scene, paint_waiting_seat_avatar,
+    paint_result, paint_result_scene, paint_room_chat, paint_room_hover, paint_room_list,
+    paint_room_scene, paint_room_user_panel, paint_screen, paint_shop_board, paint_shop_scene,
+    paint_waiting_chat, paint_waiting_members, paint_waiting_scene, paint_waiting_seat_avatar,
     paint_waiting_seat_avatars, playing_backdrop_staged, quit_fallback_rects, rect_hit,
     room_panel_hit, scene_index, staged_rect_hit, BattleVerdict, ChannelChatMessage, ChannelScroll,
     LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions,
@@ -4815,17 +4815,19 @@ impl ScreenGame {
 
     /// Room lobby: staged art behind the live list, flat card fallback.
     fn paint_room(&self, frame: &mut Frame<'_>) {
+        // The exe arms chrome hover on an empty live room too (every
+        // `docs/hover.md` sweep row shows the six empty row panels
+        // while the chrome buttons repaint on hover), so both staged
+        // arms take the hovered code.
+        let hovered_code = self.hovered_room_control().map(|control| control.code);
         match (self.scene_art(Screen::Room), self.rooms.is_empty()) {
             (Some(art), false) => {
-                paint_room_scene(
-                    frame,
-                    &self.rooms,
-                    self.room_highlight,
-                    art,
-                    self.hovered_room_control().map(|control| control.code),
-                );
+                paint_room_scene(frame, &self.rooms, self.room_highlight, art, hovered_code);
             }
-            (Some(art), true) => paint_lobby_backdrop(frame, Screen::Room, art),
+            (Some(art), true) => {
+                paint_lobby_backdrop(frame, Screen::Room, art);
+                paint_room_hover(frame, art, hovered_code);
+            }
             (None, false) => paint_room_list(frame, &self.rooms, self.room_highlight),
             (None, true) => paint_screen(frame, Screen::Room),
         }
@@ -6880,6 +6882,36 @@ mod game_tests {
         game
     }
 
+    /// Room lobby with staged chrome but an empty live list: the
+    /// fresh-server state the owner playtest exercised (no rooms
+    /// created, so the empty-list paint arm serves the scene).
+    fn hover_empty_room_game() -> ScreenGame {
+        use MenuKey;
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        game.load_scene(
+            Screen::Room,
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: ROOM_BACK_BUTTON_ID.to_owned(),
+                code: ROOM_BACK_BUTTON_CODE,
+                sprite: Some("Room_Back.ojs".to_owned()),
+                rect: Rect {
+                    x: 711,
+                    y: 569,
+                    w: 83,
+                    h: 24,
+                },
+            }],
+            HashMap::from([("Room_Back.ojs".to_owned(), chrome_two_layer_figure(83, 24))]),
+        );
+        game
+    }
+
     /// One native pixel of the room scene at the shell seam.
     fn room_pixel(game: &mut ScreenGame, x: usize, y: usize) -> u32 {
         let mut buf = vec![0u32; 800 * 600];
@@ -6939,6 +6971,27 @@ mod game_tests {
         let hover = pack_xrgb(0x00, 0x00, 0xFF);
         assert_eq!(room_pixel(&mut game, 752, 581), rest);
         game.mouse_moved(752, 581);
+        assert_eq!(room_pixel(&mut game, 752, 581), hover);
+        game.mouse_moved(10, 10);
+        assert_eq!(room_pixel(&mut game, 752, 581), rest);
+    }
+
+    #[test]
+    fn hovered_room_button_repaints_on_an_empty_room_list() {
+        // The exe arms chrome hover on an empty live room — every
+        // `docs/hover.md` sweep row shows the six empty row panels
+        // while BACK/CREATE/QUICKJOIN still repaint on hover — so the
+        // empty-list paint arm must repaint the hovered frame too,
+        // not only the non-empty-list `paint_room_scene` arm.
+        let mut game = hover_empty_room_game();
+        let rest = pack_xrgb(0x00, 0xFF, 0x00);
+        let hover = pack_xrgb(0x00, 0x00, 0xFF);
+        assert_eq!(room_pixel(&mut game, 752, 581), rest);
+        game.mouse_moved(752, 581);
+        assert_eq!(
+            game.hovered_room_control().map(|control| control.code),
+            Some(ROOM_BACK_BUTTON_CODE)
+        );
         assert_eq!(room_pixel(&mut game, 752, 581), hover);
         game.mouse_moved(10, 10);
         assert_eq!(room_pixel(&mut game, 752, 581), rest);

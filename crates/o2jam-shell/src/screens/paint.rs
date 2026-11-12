@@ -3062,7 +3062,7 @@ pub fn paint_room_scene(
 /// filter/tab codes never reach this painter (the resolver holds them
 /// at rest — EXE-pinned no-change), so every code here repaints layer
 /// 0. A missing placement, sprite, or frame paints nothing.
-fn paint_room_hover(frame: &mut Frame<'_>, art: &SceneArt, hovered_code: Option<u32>) {
+pub(crate) fn paint_room_hover(frame: &mut Frame<'_>, art: &SceneArt, hovered_code: Option<u32>) {
     let Some(code) = hovered_code else {
         return;
     };
