@@ -3223,6 +3223,11 @@ const ROOM_PANEL_EXP_ID: &str = "IDC_TEXT_SROOM_EXP";
 const ROOM_PANEL_GRADE_ID: &str = "IDC_TEXT_SROOM_WINLOSE";
 /// Cash-point well (`Cash Point` row).
 const ROOM_PANEL_CASH_ID: &str = "IDC_TEXT_SROOM_BONUSPOINT";
+/// Next-up-exp well (`Next Up Exp.` row, code `0x13400042`, staged
+/// `(720,377)-(777,388)`): the 7.55 room capture shows the current
+/// experience there (`2133`, equal to `Exp.`), so the panel paints
+/// `CharacterInfo.experience` pending a two-account rig capture.
+const ROOM_PANEL_NEXT_UP_EXP_ID: &str = "IDC_TEXT_SROOM_NEXTUPEXP";
 /// Penalty-count well (`패널티횟수` row).
 const ROOM_PANEL_PENALTY_COUNT_ID: &str = "IDC_TEXT_SROOM_PENALTYCOUNT";
 /// Penalty-level well (`패널티레벨` row).
@@ -3246,10 +3251,17 @@ const ROOM_PANEL_PLACEHOLDER: &str = "준비중..";
 /// MyRoom scene reads — and the nickname line prefixes the level, as
 /// the 7.55 room capture shows (`Lv.2 tester`).
 ///
+/// `Next Up Exp.` carries the current experience: the 7.55 room capture
+/// (`/home/arnim/scratch/ac-room.png`, tester Lv 2) shows `2133` there,
+/// equal to the `Exp.` well. Single-capture pin (n=1): OPEN whether it
+/// tracks Exp or a level threshold — next step is a two-account rig
+/// capture at different exp/level, plus identifying the setter among
+/// the twelve `0x50f520` sites in `FUN_00491af0`.
+///
 /// OPEN wells (nothing painted, next steps named):
-/// - `NEXTUPEXP`: needs the level-up experience table (not parsed).
 /// - `MYRANK` / `NOTICE_TEXT` / `DESC`: web-served text, no client
-///   source (the capture shows art text in `DESC`).
+///   source (the capture shows notice text in `DESC`, so the bottom
+///   plate paints bare).
 pub fn paint_room_user_panel(
     frame: &mut Frame<'_>,
     placements: &[ScenePlacement],
@@ -3277,6 +3289,13 @@ pub fn paint_room_user_panel(
             placements,
             ROOM_PANEL_CASH_ID,
             character.bonus_point,
+            ink,
+        );
+        paint_room_panel_number(
+            frame,
+            placements,
+            ROOM_PANEL_NEXT_UP_EXP_ID,
+            character.experience,
             ink,
         );
         paint_room_panel_number(
@@ -10652,6 +10671,7 @@ mod paint_tests {
             (ROOM_PANEL_EXP_ID, 0x1340_003F, (688, 308, 89, 11)),
             (ROOM_PANEL_GRADE_ID, 0x1340_0040, (688, 331, 89, 11)),
             (ROOM_PANEL_CASH_ID, 0x1340_0041, (714, 354, 63, 11)),
+            (ROOM_PANEL_NEXT_UP_EXP_ID, 0x1340_0042, (720, 377, 57, 11)),
             (ROOM_PANEL_PENALTY_COUNT_ID, 0x1340_0043, (714, 400, 63, 11)),
             (ROOM_PANEL_PENALTY_LEVEL_ID, 0x1340_0044, (714, 423, 63, 11)),
             (ROOM_PANEL_BAND_ID, 0x1340_0045, (705, 446, 72, 11)),
@@ -10709,6 +10729,7 @@ mod paint_tests {
             ROOM_PANEL_LEVEL_ID,
             ROOM_PANEL_EXP_ID,
             ROOM_PANEL_CASH_ID,
+            ROOM_PANEL_NEXT_UP_EXP_ID,
             ROOM_PANEL_PENALTY_COUNT_ID,
             ROOM_PANEL_PENALTY_LEVEL_ID,
         ] {
@@ -10752,6 +10773,7 @@ mod paint_tests {
             ROOM_PANEL_LEVEL_ID,
             ROOM_PANEL_EXP_ID,
             ROOM_PANEL_CASH_ID,
+            ROOM_PANEL_NEXT_UP_EXP_ID,
             ROOM_PANEL_PENALTY_COUNT_ID,
             ROOM_PANEL_PENALTY_LEVEL_ID,
         ] {
@@ -10772,6 +10794,87 @@ mod paint_tests {
                     .expect("grade well")
                     .rect
             ) > 0
+        );
+    }
+
+    #[test]
+    fn room_user_panel_paints_next_up_exp_from_current_experience() {
+        // The 7.55 room capture (`/home/arnim/scratch/ac-room.png`, tester
+        // Lv 2) shows `2133` in `Next Up Exp.`, equal to the `Exp.` well —
+        // a single-capture pin, so this guard names the observed value,
+        // not a threshold rule (see the `NEXTUPEXP` note on the painter).
+        let placements = room_user_panel_placements();
+        let character = CharacterInfo {
+            experience: 2133,
+            ..CharacterInfo::default()
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_room_user_panel(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            Some(&character),
+            None,
+        );
+        let rect = placements
+            .iter()
+            .find(|placed| placed.id == ROOM_PANEL_NEXT_UP_EXP_ID)
+            .expect("next-up well staged")
+            .rect;
+        assert!(
+            ink_in_rect(&buf, 800, rect) > 0,
+            "Next Up Exp. must ink the staged well"
+        );
+    }
+
+    #[test]
+    fn room_user_panel_leaves_the_desc_well_empty_without_a_web_source() {
+        // The bottom plate is the staged `IDC_TEXT_SROOM_DESC` well
+        // (`0x13400046`, `(646,468)-(776,534)`): the 7.55 room capture
+        // shows web-served notice text there, which the client never
+        // receives — so the plate paints bare even with a character.
+        let mut placements = room_user_panel_placements();
+        placements.push(ScenePlacement {
+            role: PlacementRole::Single,
+            id: "IDC_TEXT_SROOM_DESC".to_owned(),
+            code: 0x1340_0046,
+            sprite: None,
+            rect: Rect {
+                x: 646,
+                y: 468,
+                w: 130,
+                h: 66,
+            },
+        });
+        let character = CharacterInfo {
+            nickname: "tester".to_owned(),
+            level: 2,
+            experience: 2133,
+            ..CharacterInfo::default()
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_room_user_panel(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            Some(&character),
+            None,
+        );
+        let rect = placements
+            .iter()
+            .find(|placed| placed.id == "IDC_TEXT_SROOM_DESC")
+            .expect("desc well staged")
+            .rect;
+        assert_eq!(
+            ink_in_rect(&buf, 800, rect),
+            0,
+            "the DESC plate stays bare without a web source"
         );
     }
 
