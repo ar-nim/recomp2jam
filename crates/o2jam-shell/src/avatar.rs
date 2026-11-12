@@ -1450,8 +1450,7 @@ fn rgb888_to_rgb555(decoded: &o2jam_file::JpegRgbImage) -> Option<Rgb555Image> {
 fn placement_view_origin(
     figure: &AvatarFigure,
     placement: &ScenePlacement,
-    frame_w: usize,
-    frame_h: usize,
+    frame: &Frame<'_>,
     shares_body: bool,
 ) -> (i32, i32) {
     // A `SET` clone's record anchors stay template-local, so its rect
@@ -1460,7 +1459,7 @@ fn placement_view_origin(
     // step 8). Single placements keep the verified rule: anchored
     // bodies author their own absolute position and ignore the rect.
     if placement.role == PlacementRole::Clone || shares_body || !figure.has_anchor_offset() {
-        let scaled = scale_rect_to_frame(&placement.rect, frame_w, frame_h);
+        let scaled = scale_rect_to_frame(&placement.rect, frame.w, frame.h);
         return (scaled.x, scaled.y);
     }
     (0, 0)
@@ -1495,14 +1494,13 @@ pub fn paint_scene_figures_live(
     figures: &HashMap<String, AvatarFigure>,
     keep: impl Fn(&ScenePlacement) -> bool,
 ) {
-    let (w, h) = (frame.w, frame.h);
     let shared = shared_sprite_names(placements);
     for placement in placements.iter().filter(|placement| keep(placement)) {
         let shares_body = placement
             .sprite
             .as_deref()
             .is_some_and(|sprite| shared.contains(sprite));
-        paint_placed_figure(frame, placement, figures, w, h, shares_body);
+        paint_placed_figure(frame, placement, figures, shares_body);
     }
 }
 
@@ -1586,7 +1584,7 @@ pub fn paint_placement_layer(
         );
         return;
     }
-    let (view_x, view_y) = placement_view_origin(figure, placement, frame_w, frame_h, shares_body);
+    let (view_x, view_y) = placement_view_origin(figure, placement, frame, shares_body);
     let (dx, dy) = anchor_in_frame(layer.dx, layer.dy, frame_w, frame_h);
     blit_rgb555_clipped(
         frame,
@@ -1606,8 +1604,6 @@ fn paint_placed_figure(
     frame: &mut Frame<'_>,
     placement: &ScenePlacement,
     figures: &HashMap<String, AvatarFigure>,
-    frame_w: usize,
-    frame_h: usize,
     shares_body: bool,
 ) {
     let Some(name) = placement.sprite.as_ref() else {
@@ -1621,10 +1617,9 @@ fn paint_placed_figure(
     // scene's live-frame pass selects any other frame on top. Single
     // placements keep the verified all-layers stack.
     if placement.role == PlacementRole::Clone {
-        let (view_x, view_y) =
-            placement_view_origin(figure, placement, frame_w, frame_h, shares_body);
+        let (view_x, view_y) = placement_view_origin(figure, placement, frame, shares_body);
         if let Some(layer) = figure.layer(0) {
-            let (dx, dy) = anchor_in_frame(layer.dx, layer.dy, frame_w, frame_h);
+            let (dx, dy) = anchor_in_frame(layer.dx, layer.dy, frame.w, frame.h);
             blit_rgb555(
                 frame,
                 &layer.image.view(),
@@ -1635,7 +1630,7 @@ fn paint_placed_figure(
         }
         return;
     }
-    let (view_x, view_y) = placement_view_origin(figure, placement, frame_w, frame_h, shares_body);
+    let (view_x, view_y) = placement_view_origin(figure, placement, frame, shares_body);
     if std::env::var("R2J_TRACE_BLITS").is_ok() {
         eprintln!(
             "BLIT {} view=({},{}) anchored={} extent={:?} rect=({},{},{},{}) code=0x{:08X}",
@@ -1651,7 +1646,7 @@ fn paint_placed_figure(
             placement.code
         );
     }
-    figure.paint_scaled_anchors(frame, view_x, view_y, frame_w, frame_h);
+    figure.paint_scaled_anchors(frame, view_x, view_y, frame.w, frame.h);
 }
 
 /// True for a behind-highway placement: its sprite names the venue
@@ -1692,7 +1687,6 @@ pub fn paint_foreground_placements(
     placements: &[ScenePlacement],
     figures: &HashMap<String, AvatarFigure>,
 ) {
-    let (frame_w, frame_h) = (frame.w, frame.h);
     let shared = shared_sprite_names(placements);
     for placement in placements
         .iter()
@@ -1702,7 +1696,7 @@ pub fn paint_foreground_placements(
             .sprite
             .as_deref()
             .is_some_and(|sprite| shared.contains(sprite));
-        paint_placed_figure(frame, placement, figures, frame_w, frame_h, shares_body);
+        paint_placed_figure(frame, placement, figures, shares_body);
     }
 }
 
@@ -1724,7 +1718,7 @@ fn paint_behind_placement(
         return;
     };
     let shares_body = shared.contains(name.as_str());
-    let (view_x, view_y) = placement_view_origin(figure, placement, frame.w, frame.h, shares_body);
+    let (view_x, view_y) = placement_view_origin(figure, placement, frame, shares_body);
     paint_behind_layers(frame, figure, view_x, view_y, exclusions);
 }
 
@@ -2570,8 +2564,6 @@ mod avatar_figure_tests {
             },
             &placement,
             &figures,
-            800,
-            600,
             false,
         );
         let ink = o2jam_render::pack_xrgb(255, 0, 0);
@@ -2604,8 +2596,6 @@ mod avatar_figure_tests {
             },
             &placement,
             &figures,
-            800,
-            600,
             false,
         );
         assert_eq!(buf[556 * 800 + 489], o2jam_render::pack_xrgb(255, 0, 0));
@@ -2634,8 +2624,6 @@ mod avatar_figure_tests {
             },
             &placement,
             &figures,
-            800,
-            600,
             false,
         );
         assert_eq!(buf[556 * 800 + 489], o2jam_render::pack_xrgb(255, 0, 0));
@@ -2663,8 +2651,6 @@ mod avatar_figure_tests {
             },
             &placement,
             &figures,
-            400,
-            300,
             false,
         );
         assert_eq!(buf[102], o2jam_render::pack_xrgb(255, 0, 0));
@@ -2703,8 +2689,6 @@ mod avatar_figure_tests {
             },
             &placement,
             &figures,
-            800,
-            600,
             false,
         );
         assert_eq!(
@@ -2759,8 +2743,6 @@ mod avatar_figure_tests {
             },
             &placement,
             &figures,
-            800,
-            600,
             false,
         );
         assert_eq!(buf[0], o2jam_render::pack_xrgb(255, 0, 0));
@@ -3816,8 +3798,6 @@ mod avatar_figure_tests {
                     },
                     &placement,
                     &HashMap::from([(sprite.to_owned(), figure)]),
-                    800,
-                    600,
                     false,
                 );
                 let (ax, ay) = if anchored {
