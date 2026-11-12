@@ -2386,6 +2386,49 @@ impl ScreenGame {
         (top + slot < self.channels.len()).then_some(top + slot)
     }
 
+    /// Highlighted channel row (the keyboard Confirm target;
+    /// `None` off the Channel screen or with no listed rows). The
+    /// session bridge logs into it before advancing (ticket #30).
+    #[must_use]
+    pub fn highlighted_channel(&self) -> Option<ChannelState> {
+        if self.flow.current() != Screen::Channel {
+            return None;
+        }
+        self.channels.get(self.highlight).copied()
+    }
+
+    /// Channel row whose enter face covers (`x`, `y`) (the mouse
+    /// entry target; `None` off the Channel screen, on the X/scroll
+    /// chrome, on a row body, or while a slash draft owns the click).
+    /// Mirrors [`Self::click_channel_row`]'s enter arm so the session
+    /// bridge can exchange the login before forwarding the press
+    /// (ticket #30).
+    #[must_use]
+    pub fn channel_enter_at(&self, x: i32, y: i32) -> Option<ChannelState> {
+        if self.flow.current() != Screen::Channel {
+            return None;
+        }
+        if channel_dialog_x_hit(x, y) || channel_scroll_hit(x, y).is_some() {
+            return None;
+        }
+        let (top, shown) = channel_viewport(self.highlight, self.channels.len());
+        let slot = channel_row_hit(x, y, shown)?;
+        let index = top + slot;
+        if index >= self.channels.len() {
+            return None;
+        }
+        if !channel_face_hit(x, y, slot) {
+            return None;
+        }
+        // A slash draft consumes the click instead of entering
+        // (the click path takes it); peek here so the query stays
+        // side-effect free.
+        if self.channel_slash_command() != SlashCommand::Empty {
+            return None;
+        }
+        self.channels.get(index).copied()
+    }
+
     /// Board control under the pointer, through the same staged
     /// resolution the click path rides ([`Self::click_planet`])
     /// (`None` off the board, off the Planet phase, or while a modal
@@ -4051,6 +4094,31 @@ impl ScreenGame {
         if let Some(character) = self.myroom_character.as_mut() {
             character.equipment[usize::from(slot)] = item_word;
         }
+        self.restage_worn_figure();
+    }
+
+    /// Restage the worn figure after the equipment table changed
+    /// (ticket #30 stale-figure leftover): the Room lobby slot and
+    /// the Result banner re-stack from the staged avatar source like
+    /// the channel-login staging does, and the waiting seats restage
+    /// through it when a room is mounted. A missing source or an
+    /// unstackable table keeps the old figures, never blanking them.
+    fn restage_worn_figure(&mut self) {
+        if let (Some((archive, table)), Some(character)) =
+            (self.avatar_source.as_ref(), self.myroom_character.as_ref())
+        {
+            let figure = load_worn_figure(
+                archive,
+                table,
+                &character.equipment,
+                character.gender == Gender::Male,
+            );
+            if !figure.is_empty() {
+                self.room_avatar = Some(figure.clone());
+                self.avatar = Some(figure);
+            }
+        }
+        self.restage_waiting_figures();
     }
 
     /// Claim the selected gift cell: the 5023 body queues for the
@@ -8259,6 +8327,173 @@ mod game_tests {
         let second = game.take_equip_send().expect("second apply queues");
         assert_eq!((second.slot, second.item_id), (1, 2));
         let _ = MYROOM_BAG_FIRST_CODE;
+    }
+
+    /// Highlighted channel row (the keyboard Confirm target).
+    #[test]
+    fn highlighted_channel_names_the_confirm_target() {
+        let mut game = ScreenGame::new();
+        assert_eq!(game.highlighted_channel(), None);
+        game.set_channels(two_channels());
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        assert_eq!(game.screen(), Screen::Channel);
+        assert_eq!(
+            game.highlighted_channel().map(|row| row.channel_id),
+            Some(2)
+        );
+        game.menu_key(MenuKey::Down, true);
+        assert_eq!(
+            game.highlighted_channel().map(|row| row.channel_id),
+            Some(9)
+        );
+    }
+
+    /// Mouse entry target: only an enter-face click names its row.
+    #[test]
+    fn channel_enter_at_names_only_face_clicks() {
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        // Row 0 enter face (ticket #56: (502,236)-(546,257)).
+        assert_eq!(
+            game.channel_enter_at(524, 246).map(|row| row.channel_id),
+            Some(2)
+        );
+        // Row bodies highlight only, never enter.
+        assert_eq!(game.channel_enter_at(300, 240), None);
+        assert_eq!(game.channel_enter_at(300, 290), None);
+        // Off the rows entirely.
+        assert_eq!(game.channel_enter_at(10, 10), None);
+        // The X chrome closes instead of entering.
+        assert_eq!(game.channel_enter_at(577, 171), None);
+    }
+
+    /// Minimal sprite55 body (mirrors the avatar-figure builders): a
+    /// 1x1 red pixel with a black colorkey.
+    fn worn_test_sprite() -> Vec<u8> {
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&1u16.to_le_bytes());
+        blob.extend_from_slice(&o2jam_file::SPRITE55_MAGIC.to_le_bytes());
+        blob.extend_from_slice(&1u16.to_le_bytes());
+        blob.extend_from_slice(&0u16.to_le_bytes());
+        blob.extend_from_slice(&0u16.to_le_bytes());
+        blob.extend_from_slice(&0u16.to_le_bytes());
+        blob.extend_from_slice(&1u16.to_le_bytes());
+        blob.extend_from_slice(&1u16.to_le_bytes());
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        blob.extend_from_slice(&2u32.to_le_bytes());
+        blob.extend_from_slice(&0u32.to_le_bytes());
+        blob.extend_from_slice(&[0x00, 0x7C]);
+        blob
+    }
+
+    /// Minimal `.opa` image (header + bodies + trailing entry table;
+    /// mirrors the avatar-figure builders).
+    fn worn_test_archive(bodies: &[(&str, &[u8])]) -> Vec<u8> {
+        use o2jam_file::{
+            OPI_ENTRY_LEN, OPI_HEADER_LEN, OPI_NAME_OFF, OPI_OFFSET_OFF, OPI_RESERVED_OFF,
+            OPI_SIZE_OFF,
+        };
+        let mut blob = vec![0u8; OPI_HEADER_LEN];
+        blob[..4].copy_from_slice(&1u32.to_le_bytes());
+        blob[4..8].copy_from_slice(&(bodies.len() as u32).to_le_bytes());
+        let mut off = OPI_HEADER_LEN as u32;
+        let mut table = Vec::new();
+        for (name, body) in bodies {
+            let mut entry = vec![0u8; OPI_ENTRY_LEN];
+            entry[..4].copy_from_slice(&1u32.to_le_bytes());
+            entry[OPI_NAME_OFF..OPI_NAME_OFF + name.len()].copy_from_slice(name.as_bytes());
+            entry[OPI_OFFSET_OFF..OPI_OFFSET_OFF + 4].copy_from_slice(&off.to_le_bytes());
+            entry[OPI_SIZE_OFF..OPI_SIZE_OFF + 4]
+                .copy_from_slice(&(body.len() as u32).to_le_bytes());
+            entry[OPI_RESERVED_OFF..OPI_RESERVED_OFF + 4]
+                .copy_from_slice(&(body.len() as u32).to_le_bytes());
+            table.push(entry);
+            off += body.len() as u32;
+        }
+        for (_, body) in bodies {
+            blob.extend_from_slice(body);
+        }
+        for entry in table {
+            blob.extend_from_slice(&entry);
+        }
+        blob
+    }
+
+    /// One wearable test row: item 1, type 2, record slot 0, with
+    /// male- and female-parity wear sprites resolving into the test
+    /// archive.
+    fn worn_test_table() -> o2jam_file::AvatarItemTable {
+        o2jam_file::AvatarItemTable {
+            rows: vec![o2jam_file::AvatarItemRow {
+                item_id: 1,
+                item_type: 2,
+                price: 100,
+                params: [0, 0, 0, 0],
+                flags: (0, 0),
+                name: "Gear1".to_owned(),
+                description: String::new(),
+                sprites: vec![
+                    (1, "icon.oji".to_owned()),
+                    (1, "icon.oji".to_owned()),
+                    (1, "01F01001.oji".to_owned()),
+                    (1, "01F01001.oji".to_owned()),
+                ],
+            }],
+        }
+    }
+
+    /// Ticket #30 stale-figure leftover: applying equipment must
+    /// re-stack the Room lobby figure, not just the worn table.
+    #[test]
+    fn myroom_apply_restages_the_room_avatar() {
+        let sprite = worn_test_sprite();
+        let archive = worn_test_archive(&[("01F01001.ojs", &sprite)]);
+        let table = worn_test_table();
+        let mut game = ScreenGame::new();
+        game.set_myroom_items(table.clone());
+        game.set_myroom_character(myroom_test_character(vec![1]));
+        game.set_avatar_source(archive, table);
+        game.load_room_avatar(solid_test_figure([0x1F, 0x00]));
+        let paint_first_pixel = |figure: &AvatarFigure| {
+            let mut buf = vec![0u32; 1];
+            figure.paint(
+                &mut o2jam_render::Frame {
+                    buf: &mut buf,
+                    w: 1,
+                    h: 1,
+                },
+                0,
+                0,
+            );
+            buf[0]
+        };
+        let before = game.room_avatar.clone().expect("stale figure staged");
+        // Pick the first bag cell (item 1) and apply it.
+        game.myroom.pick_bag_cell(Some(0));
+        game.apply_myroom_equip();
+        assert_eq!(
+            game.myroom_character
+                .as_ref()
+                .expect("staged character")
+                .equipment[0],
+            1
+        );
+        let after = game
+            .room_avatar
+            .clone()
+            .expect("equip restages the room figure");
+        assert_ne!(
+            paint_first_pixel(&after),
+            paint_first_pixel(&before),
+            "the lobby figure follows the new equipment"
+        );
+        assert_eq!(
+            paint_first_pixel(&after),
+            o2jam_render::pack_xrgb(255, 0, 0)
+        );
     }
 
     #[test]

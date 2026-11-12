@@ -145,6 +145,7 @@ use o2jam_net::rooms::{
     WaitingAdminMessage, WaitingUserMessage,
 };
 use o2jam_net::{
+    ChannelLogin, ChannelLoginResponse, ChannelLoginResult, ChannelState, CharacterInfo,
     ConfirmMusicLoaded, CreateResult, CreateRoom, CreateRoomResponse, ExitPlaying, FinalizeRank,
     Frame, GameMode, GameStatsUpdate, GatewayConnection, Generic, GetMusicList, JoinResult,
     JoinRoom, JoinRoomResponse, JoinedRoom, KeyMode, MemberReadyStateChanged, Ready, Request,
@@ -1047,6 +1048,99 @@ impl OnlineSession {
         }
     }
 
+    /// Interactive channel entry (ticket #30): `ChannelLogin` 1004 for
+    /// the selected row, then `GetCharacterInfo` 2001, staged through
+    /// the boot path's [`crate::stage_online_identity`] — the same
+    /// login-then-character order the windowed boot exchanges
+    /// (`connect_and_login_with_transport`), since the server rejects
+    /// 2001 outside a channel. `true` staged the identity; a rejected
+    /// code, an undecodable answer, or a transport failure warns and
+    /// keeps Channel, so the next entry retries it. Room rows are not
+    /// refetched here (OPEN: the list-only boot stages none, so the
+    /// Room lobby still lists the boot snapshot).
+    fn enter_channel(&mut self, channel: ChannelState) -> bool {
+        let (Ok(gateway_id), Ok(channel_id)) = (
+            i16::try_from(channel.gateway_id),
+            i16::try_from(channel.channel_id),
+        ) else {
+            tracing::warn!(
+                gateway_id = channel.gateway_id,
+                channel_id = channel.channel_id,
+                "channel ids out of wire-short range; staying in Channel"
+            );
+            return false;
+        };
+        let login = ChannelLogin {
+            gateway_id,
+            channel_id,
+        };
+        let frame = match self.exchange_room_frame(
+            Request::ChannelLogin.id(),
+            &login.encode_body(),
+            ChannelLoginResponse::COMMAND,
+        ) {
+            Ok(frame) => frame,
+            Err(source) => {
+                tracing::warn!(%source, "channel login failed; staying in Channel");
+                return false;
+            }
+        };
+        let response = match ChannelLoginResponse::decode_frame(&frame) {
+            Ok(response) => response,
+            Err(source) => {
+                tracing::debug!(id = frame.id, %source, "dropping undecodable channel login");
+                return false;
+            }
+        };
+        if ChannelLoginResult::from_code(response.result_code) != Some(ChannelLoginResult::Success)
+        {
+            tracing::warn!(
+                code = response.result_code,
+                "channel login rejected; staying in Channel"
+            );
+            return false;
+        }
+        let frame = match self.exchange_room_frame(
+            Request::GetCharacterInfo.id(),
+            &[],
+            CharacterInfo::COMMAND,
+        ) {
+            Ok(frame) => frame,
+            Err(source) => {
+                tracing::warn!(%source, "character fetch failed; staying in Channel");
+                return false;
+            }
+        };
+        let hero = match CharacterInfo::decode_frame(&frame) {
+            Ok(hero) => hero,
+            Err(source) => {
+                tracing::debug!(id = frame.id, %source, "dropping undecodable character info");
+                return false;
+            }
+        };
+        if hero.invalid {
+            tracing::warn!("server flagged the account invalid; staying in Channel");
+            return false;
+        }
+        crate::stage_online_identity(&mut self.game, Some(&hero));
+        true
+    }
+
+    /// Channel Confirm with an empty draft: log into the highlighted
+    /// row through [`Self::enter_channel`] and advance like the
+    /// offline walk once the identity stages. A failed exchange keeps
+    /// Channel (the next Confirm retries it); with no listed rows the
+    /// bare local advance stays.
+    fn confirm_channel(&mut self) {
+        let Some(channel) = self.game.highlighted_channel() else {
+            self.game.menu_key(MenuKey::Confirm, true);
+            return;
+        };
+        if self.enter_channel(channel) {
+            self.game.menu_key(MenuKey::Confirm, true);
+        }
+    }
+
     /// Exchange the pending Room Confirm join and stage the joined
     /// snapshot: `JoinWaiting` (3002, the `connect --join-room`
     /// request shape) for the pending number and password, then the
@@ -1874,7 +1968,7 @@ impl GameLoop for OnlineSession {
         }
         if key == MenuKey::Confirm && self.game.screen() == Screen::Channel {
             match self.flush_channel_action() {
-                Ok(sent) if !sent => self.game.menu_key(key, down),
+                Ok(sent) if !sent => self.confirm_channel(),
                 Ok(_) => {}
                 Err(source) => {
                     tracing::warn!(%source, "lobby send failed; draft kept");
@@ -1912,7 +2006,18 @@ impl GameLoop for OnlineSession {
     fn mouse_down(&mut self, x: i32, y: i32) {
         // Forward the press edge (#118 no-input leg: these edges were
         // trait-default no-ops here, so every windowed press, release,
-        // and motion vanished while menu_key forwarded fine).
+        // and motion vanished while menu_key forwarded fine). A Channel
+        // enter-face press rides the networked entry gate first (the
+        // driver-path `mouse_click` arm below mirrors it), so the live
+        // window stages the identity before the Room paint; a failed
+        // exchange eats the press and keeps Channel.
+        if self.game.screen() == Screen::Channel {
+            if let Some(channel) = self.game.channel_enter_at(x, y) {
+                if !self.enter_channel(channel) {
+                    return;
+                }
+            }
+        }
         self.game.mouse_down(x, y);
     }
 
@@ -1926,9 +2031,20 @@ impl GameLoop for OnlineSession {
 
     fn mouse_click(&mut self, x: i32, y: i32) {
         // Click evidence states (P0: every path labeled, OPEN stays open):
-        // Channel rows ride reference-measured bands (exe-OPEN) but send
-        // nothing either way, matching Confirm on an empty draft.
+        // Channel enter-face clicks ride the networked entry gate
+        // (1004 login plus the 2001 identity fetch) before the local
+        // advance, mirroring Confirm; other Channel clicks stay local
+        // exactly like their menu equivalents.
         // Room clicks mirror Confirm: join first, advance on success.
+        if self.game.screen() == Screen::Channel {
+            if let Some(channel) = self.game.channel_enter_at(x, y) {
+                if !self.enter_channel(channel) {
+                    return;
+                }
+            }
+            self.game.mouse_click(x, y);
+            return;
+        }
         if self.game.screen() == Screen::Room {
             if let Some(number) = self.game.room_number_at(x, y) {
                 self.set_pending_room_join(number, "");
@@ -1951,11 +2067,10 @@ impl GameLoop for OnlineSession {
             self.confirm_waiting();
             return;
         }
-        // Forward canvas clicks like lane keys: Channel/Room clicks
-        // advance locally with no lobby send (Confirm on an empty draft
-        // sends nothing either). Waiting-confirm clicks ride the local
-        // advance without the 4008 exchange, so keyboard Confirm stays
-        // the verified path for starting games (OPEN).
+        // Forward canvas clicks like lane keys: anything unclaimed
+        // above advances locally with no send. Waiting-confirm clicks
+        // ride the local advance without the 4008 exchange, so keyboard
+        // Confirm stays the verified path for starting games (OPEN).
         self.game.mouse_click(x, y);
     }
 
@@ -2428,14 +2543,111 @@ mod session_tests {
         assert_eq!(session.game.channel_input(), "");
     }
 
+    /// Script the interactive channel-entry exchange (ticket #30):
+    /// the 1004 login answers success, then the 2001 character answer
+    /// the gate asserts.
+    fn answer_entry_login(stream: &mut TcpStream) {
+        use o2jam_net::{ChannelLoginResponse, CharacterInfo, Gender};
+        let login = read_frame(stream);
+        assert_eq!(login.id, 1004);
+        stream
+            .write_all(
+                &ChannelLoginResponse {
+                    result_code: 0,
+                    restricted: Some(false),
+                }
+                .encode(),
+            )
+            .unwrap();
+        let fetch = read_frame(stream);
+        assert_eq!(fetch.id, 2000);
+        stream
+            .write_all(
+                &CharacterInfo {
+                    nickname: "gate".to_owned(),
+                    gender: Gender::Male,
+                    level: 3,
+                    ..Default::default()
+                }
+                .encode(),
+            )
+            .unwrap();
+    }
+
+    /// One listed channel row behind the interactive entry tests.
+    fn entry_channel() -> o2jam_net::ChannelState {
+        o2jam_net::ChannelState {
+            gateway_id: 0,
+            channel_id: 2,
+            capacity: 100,
+            population: 5,
+            active: true,
+        }
+    }
+
     #[test]
-    fn channel_confirm_without_a_draft_advances_to_room() {
+    fn channel_confirm_logs_in_and_stages_character() {
+        // Ticket #30: Confirm on a channel row exchanges the 1004
+        // login plus the 2001 identity fetch before advancing, so the
+        // first Room paint already carries the staged identity.
         let (mut session, server) = channel_session(|mut stream| {
-            assert_quiet(&mut stream);
+            answer_entry_login(&mut stream);
         });
+        session.game.set_channels(vec![entry_channel()]);
         session.menu_key(MenuKey::Confirm, true);
         server.join().unwrap();
         assert_eq!(session.game.screen(), Screen::Room);
+        let hero = session
+            .game
+            .myroom_character()
+            .expect("interactive entry stages the fetched character info");
+        assert_eq!(hero.nickname, "gate");
+        assert_eq!(hero.level, 3);
+    }
+
+    #[test]
+    fn channel_face_press_logs_in_and_stages_character() {
+        // Ticket #30, live press path: the windowed client dispatches
+        // through `mouse_down`, so the enter-face press must exchange
+        // before the Room paint like Confirm does.
+        let (mut session, server) = channel_session(|mut stream| {
+            answer_entry_login(&mut stream);
+        });
+        session.game.set_channels(vec![entry_channel()]);
+        session.mouse_down(524, 246);
+        server.join().unwrap();
+        assert_eq!(session.game.screen(), Screen::Room);
+        let hero = session
+            .game
+            .myroom_character()
+            .expect("face-press entry stages the fetched character info");
+        assert_eq!(hero.nickname, "gate");
+    }
+
+    #[test]
+    fn channel_confirm_stays_on_rejected_login() {
+        // A rejected 1005 answers no identity fetch (no 2000 follows)
+        // and keeps Channel, so the next Confirm retries the entry.
+        use o2jam_net::ChannelLoginResponse;
+        let (mut session, server) = channel_session(|mut stream| {
+            let login = read_frame(&mut stream);
+            assert_eq!(login.id, 1004);
+            stream
+                .write_all(
+                    &ChannelLoginResponse {
+                        result_code: 7,
+                        restricted: None,
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            assert_quiet(&mut stream);
+        });
+        session.game.set_channels(vec![entry_channel()]);
+        session.menu_key(MenuKey::Confirm, true);
+        server.join().unwrap();
+        assert_eq!(session.game.screen(), Screen::Channel);
+        assert!(session.game.myroom_character().is_none());
     }
 
     #[test]
@@ -2620,13 +2832,15 @@ mod session_tests {
     }
 
     #[test]
-    fn channel_click_advances_to_room_without_sends() {
+    fn channel_click_logs_in_and_stages_character() {
         // The windowed live path routes canvas clicks through the
         // session wrapper: a channel face click must reach the inner
-        // game exactly like keyboard Confirm (empty draft sends nothing).
+        // game exactly like keyboard Confirm — ticket #30 extends
+        // that parity to the entry exchange (1004 login plus the 2001
+        // identity fetch), so the first Room paint stages identity.
         use o2jam_net::ChannelState;
         let (mut session, server) = channel_session(|mut stream| {
-            assert_quiet(&mut stream);
+            answer_entry_login(&mut stream);
         });
         session.game_mut().set_channels(vec![
             ChannelState {
@@ -2649,6 +2863,11 @@ mod session_tests {
         session.mouse_click(524, 246);
         server.join().unwrap();
         assert_eq!(session.game.screen(), Screen::Room);
+        let hero = session
+            .game
+            .myroom_character()
+            .expect("click entry stages the fetched character info");
+        assert_eq!(hero.nickname, "gate");
     }
 
     #[test]
