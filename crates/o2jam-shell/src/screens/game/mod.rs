@@ -2,12 +2,14 @@
 //! and walking screens on input.
 
 mod lanking;
+mod musicshop;
 mod shop;
 mod waiting;
 
 use std::collections::HashMap;
 
 use self::lanking::LankingState;
+use self::musicshop::MusicShopState;
 use self::shop::ShopState;
 use self::waiting::PendingOutbox;
 use super::super::avatar::{
@@ -36,19 +38,18 @@ use super::paint::{
     CHANNEL_VISIBLE_ROWS, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::side::{
-    can_return_side, can_visit_side, create_room_action_at, lanking_action_at, lanking_page_window,
-    lanking_songs, music_shop_action_at, music_shop_rows, myroom_action_at, myroom_bag_pages,
-    myroom_bag_rows, myroom_equip_slot, myroom_gift_captions, myroom_gift_page, myroom_gift_pages,
-    myroom_gift_views, myroom_identity_captions, myroom_record_slot, paint_side_scene,
-    password_action_at, payment_side_notice, planet_action_at, select_chosung_cells,
-    select_chosung_layout, select_difficulty_ink, select_music_rows, select_music_songs,
-    select_pager_caption, select_picked_caption, select_row_hit, select_search_caption,
-    select_status_line, shop_action_at, shop_page_count, side_scene_slot, sort_lanking_songs,
-    waiting_song_detail_line, waiting_song_title_line, waiting_team_for_code, wallet_row_caption,
-    CreateRoomAction, CreateRoomForm, LankingSong, LankingSort, MusicShopAction, MusicShopRow,
-    MyRoomAction, MyRoomState, PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab,
-    PlanetPromo, PlanetPromoCarousel, PlanetSelection, RoomDialog, SelectMusicRow, SelectMusicSong,
-    ShopGood, SideScreen, WalletRow, WalletState, GEM_LABEL, MSHOP_CART_ROWS, MSHOP_SONG_ROWS,
+    can_return_side, can_visit_side, create_room_action_at, lanking_action_at,
+    music_shop_action_at, myroom_action_at, myroom_bag_pages, myroom_bag_rows, myroom_equip_slot,
+    myroom_gift_captions, myroom_gift_page, myroom_gift_pages, myroom_gift_views,
+    myroom_identity_captions, myroom_record_slot, paint_side_scene, password_action_at,
+    payment_side_notice, planet_action_at, select_chosung_cells, select_chosung_layout,
+    select_difficulty_ink, select_music_rows, select_music_songs, select_pager_caption,
+    select_picked_caption, select_row_hit, select_search_caption, select_status_line,
+    shop_action_at, side_scene_slot, waiting_song_detail_line, waiting_song_title_line,
+    waiting_team_for_code, wallet_row_caption, CreateRoomAction, CreateRoomForm, LankingSong,
+    LankingSort, MusicShopRow, MyRoomAction, MyRoomState, PasswordAction, PasswordForm,
+    PlanetAction, PlanetOptionTab, PlanetPromo, PlanetPromoCarousel, PlanetSelection, RoomDialog,
+    SelectMusicRow, SelectMusicSong, ShopGood, SideScreen, WalletRow, WalletState, GEM_LABEL,
     OPTION_GAME_BLEND_NO, OPTION_GAME_BLEND_YES, OPTION_GAME_EFFECT_HIGH, OPTION_GAME_EFFECT_LOW,
     OPTION_GAME_EFFECT_NORMAL, OPTION_GAME_GUIDE_LONG, OPTION_GAME_GUIDE_MIDDLE,
     OPTION_GAME_GUIDE_NOUSE, OPTION_GAME_GUIDE_SHORT, OPTION_GAME_LONGNOTE_NONE,
@@ -437,186 +438,6 @@ const SPLASH_HOLD_POLL_MS: u64 = 100;
 /// frameless boards paint nothing new and stay fully idle (the
 /// #138 parked-loop result holds).
 const PLANET_PROMO_HEARTBEAT_MS: u64 = 1_000;
-
-/// Song-shop songs, sorts, pages, and the fetched flag board behind
-/// the music-shop side screen (#139 cluster 4: the Data Clump of all
-/// six `music_shop_*` fields). Pure board state — no side dispatch,
-/// paint, or wire queue — so the board reads without touching the
-/// `ScreenGame` God class. `ScreenGame` keeps thin delegates under
-/// the same names, so the click seam and the snapshot surface never
-/// change. Row and cart commits still queue on the outbox (cluster
-/// 1): `apply_action` only reports them, the caller queues the
-/// pinned 5010 send.
-#[derive(Default)]
-struct MusicShopState {
-    /// Song-shop catalog (`OJNList.dat` order, owned copies; see
-    /// [`ScreenGame::set_music_shop_catalog`]).
-    music_shop_songs: Vec<LankingSong>,
-    /// Active song-shop sort (`None`: catalog order until a sort
-    /// button answers; directions ASSUMED ascending).
-    music_shop_sort: Option<LankingSort>,
-    /// Song-list page (five rows per page, the staged `MS_EX` hit
-    /// areas).
-    music_shop_page: usize,
-    /// Fetched song flags (`GetMusicList` 4031 answer) staged
-    /// behind the scripted-stub seam: the shell proves the rows,
-    /// the wire ride stays ASSUMED until a live gateway replay.
-    music_shop_board: Option<MusicListAnswer>,
-    /// Checked song-shop cart ids in pick order (the `MS_EX` row
-    /// selection behind the cart `BUYITEM` commit).
-    music_shop_cart: Vec<u32>,
-    /// Cart-list page (five rows per page, the staged music-cart
-    /// `CART_EX` slots).
-    music_shop_cart_page: usize,
-}
-
-impl MusicShopState {
-    /// Stage the song-shop catalog (`OJNList.dat` order, owned
-    /// copies so the board outlives the parse borrow). Resets sort
-    /// and pages.
-    fn set_catalog(&mut self, entries: &[OjnListEntry<'_>]) {
-        self.music_shop_songs = lanking_songs(entries);
-        self.music_shop_sort = None;
-        self.music_shop_page = 0;
-        self.music_shop_cart_page = 0;
-    }
-
-    /// Stage the fetched song flags (`GetMusicList` 4031 answer).
-    /// Resets the song-list page.
-    fn stage_board(&mut self, answer: MusicListAnswer) {
-        self.music_shop_board = Some(answer);
-        self.music_shop_page = 0;
-    }
-
-    /// Active song-shop sort (`None`: catalog order).
-    fn sort(&self) -> Option<LankingSort> {
-        self.music_shop_sort
-    }
-
-    /// Song-list page (five rows per page).
-    fn page(&self) -> usize {
-        self.music_shop_page
-    }
-
-    /// Cart-list page (five rows per page).
-    fn cart_page(&self) -> usize {
-        self.music_shop_cart_page
-    }
-
-    /// Checked song-shop cart ids in pick order.
-    fn cart(&self) -> Vec<u32> {
-        self.music_shop_cart.clone()
-    }
-
-    /// Pick one catalog song into the cart (id must exist; the
-    /// click seam feeds the same cart — this stages restores).
-    fn cart_push(&mut self, song_id: u32) {
-        if self
-            .music_shop_songs
-            .iter()
-            .any(|song| song.song_id == song_id)
-            && !self.music_shop_cart.contains(&song_id)
-        {
-            self.music_shop_cart.push(song_id);
-        }
-    }
-
-    /// Checked music-cart songs on the current cart page (pick
-    /// order, five rows at most; unknown ids drop out).
-    fn visible_cart(&self) -> Vec<LankingSong> {
-        let songs: Vec<LankingSong> = self
-            .music_shop_cart
-            .iter()
-            .filter_map(|song_id| {
-                self.music_shop_songs
-                    .iter()
-                    .find(|song| song.song_id == *song_id)
-                    .cloned()
-            })
-            .collect();
-        let (start, end) =
-            lanking_page_window(songs.len(), MSHOP_CART_ROWS, self.music_shop_cart_page);
-        songs[start..end].to_vec()
-    }
-
-    /// Music-cart page count (at least one, same empty-cart rule).
-    fn cart_pages(&self) -> usize {
-        shop_page_count(self.music_shop_cart.len(), MSHOP_CART_ROWS)
-    }
-
-    /// Song-list page count (at least one, same empty-cart rule).
-    fn list_pages(&self) -> usize {
-        shop_page_count(self.music_shop_songs.len(), MSHOP_SONG_ROWS)
-    }
-
-    /// Sorted song-shop rows with live flags on the current page
-    /// (owned page: small, five rows at most).
-    fn visible_rows(&self) -> Vec<MusicShopRow> {
-        let mut songs = self.music_shop_songs.clone();
-        if let Some(sort) = self.music_shop_sort {
-            sort_lanking_songs(&mut songs, sort);
-        }
-        let (start, end) = lanking_page_window(songs.len(), MSHOP_SONG_ROWS, self.music_shop_page);
-        music_shop_rows(&songs[start..end], self.music_shop_board.as_ref())
-    }
-
-    /// Board action through the control-code dispatch: row picks
-    /// stage the cart, sorts resort and reset the page, and the
-    /// pagers step and hold at the ends. Reports whether the action
-    /// queues the pinned 5010 send (a row buy on a visible row, or
-    /// the cart `BUYITEM`): the caller queues it on the outbox, so
-    /// this board state never touches the wire.
-    fn apply_action(&mut self, action: MusicShopAction) -> bool {
-        match action {
-            MusicShopAction::SelectRow(slot) => {
-                if let Some(row) = self.visible_rows().get(slot) {
-                    let song_id = row.song.song_id;
-                    if !self.music_shop_cart.contains(&song_id) {
-                        self.music_shop_cart.push(song_id);
-                    }
-                }
-                false
-            }
-            MusicShopAction::BuyRow { slot, gem: _ } => self.visible_rows().get(slot).is_some(),
-            MusicShopAction::Sort(sort) => {
-                self.music_shop_sort = Some(sort);
-                self.music_shop_page = 0;
-                false
-            }
-            MusicShopAction::MsPrev => {
-                self.music_shop_page = self.music_shop_page.saturating_sub(1);
-                false
-            }
-            MusicShopAction::MsNext => {
-                if self
-                    .music_shop_page
-                    .saturating_add(1)
-                    .saturating_mul(MSHOP_SONG_ROWS)
-                    < self.music_shop_songs.len()
-                {
-                    self.music_shop_page = self.music_shop_page.saturating_add(1);
-                }
-                false
-            }
-            MusicShopAction::CartBuy => true,
-            MusicShopAction::CartPrev => {
-                self.music_shop_cart_page = self.music_shop_cart_page.saturating_sub(1);
-                false
-            }
-            MusicShopAction::CartNext => {
-                if self
-                    .music_shop_cart_page
-                    .saturating_add(1)
-                    .saturating_mul(MSHOP_CART_ROWS)
-                    < self.music_shop_cart.len()
-                {
-                    self.music_shop_cart_page = self.music_shop_cart_page.saturating_add(1);
-                }
-                false
-            }
-        }
-    }
-}
 
 /// Planet-board state behind the bare board (#139 cluster 5: the
 /// Data Clump of the six planet/promo words). Pure board state — no
