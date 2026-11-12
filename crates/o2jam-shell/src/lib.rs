@@ -281,7 +281,8 @@ pub trait GameLoop {
     /// Longest the window loop may sit without a repaint while idle:
     /// `None` on static scenes (input and resizes repaint), `Some(gap)`
     /// while time or the wire can move the frame on its own (the Playing
-    /// song clock, lobby network drains, the splash wall hold). The loop
+    /// song clock, lobby network drains, the splash wall hold, the planet
+    /// promo rotation). The loop
     /// only ever SKIPS paints on `None` — never changes what a paint
     /// draws — so the shots/oracle suites pin the frames and this seam
     /// pins the when (ticket #138). Default `None` so existing
