@@ -9,6 +9,10 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+use o2jam_file::{
+    decode_control_text, find_opi_entry, opi_entry_body, parse_bnd, parse_control_list, parse_opi,
+    Bnd,
+};
 use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
 use o2jam_render::{pack_xrgb, Frame};
 use o2jam_shell::avatar::{paint_scene_figures, AvatarFigure, PlacementRole, ScenePlacement};
@@ -796,4 +800,111 @@ fn result_layers_digits_over_bound_result_art() {
     let frame = painted(&mut game, 7000);
     assert_eq!(game.screen(), Screen::Result);
     assert_composed(&frame, &staged, &[WHITE_TEXT], "result");
+}
+
+/// One Playing-archive sheet parsed by name (`None` skips the caller
+/// when the archives are absent; a present archive missing the entry
+/// fails loudly — the census pins all four names).
+fn playing_sheet(name: &str) -> Option<Bnd> {
+    let path = archive_path(PLAYING_ARCHIVE);
+    let archive = install_archives().playing?;
+    let entries = parse_opi(&archive).unwrap();
+    let entry = find_opi_entry(&entries, name)
+        .unwrap_or_else(|| panic!("playing: {name} missing from {}", path.display()));
+    let body = opi_entry_body(&archive, entry).unwrap();
+    Some(parse_bnd(body).unwrap_or_else(|err| panic!("playing: {name} parses: {err:?}")))
+}
+
+/// The network sheet parses its 19 exit-path rects (#165): the exe
+/// loads `State_Playing_network.bnd` literally by name (no `BOUND`
+/// block mounts it), and `paint.rs` pins record 18 to the
+/// Winner/Challenger exit-path placement. Pinned until a by-name
+/// staging arm lands.
+#[test]
+fn playing_network_sheet_parses_nineteen_exit_path_rects() {
+    let Some(bind) = playing_sheet("State_Playing_network.bnd") else {
+        println!(
+            "skip playing network: missing {}",
+            archive_path(PLAYING_ARCHIVE).display()
+        );
+        return;
+    };
+    assert_eq!(bind.rects.len(), 19, "network sheet keeps its 19 rects");
+    let winner = &bind.rects[17];
+    assert_eq!(
+        (winner.x1, winner.y1, winner.x2, winner.y2),
+        (265, 472, 389, 482),
+        "network record 18 stays the Winner_image exit-path placement"
+    );
+    let challenger = &bind.rects[18];
+    assert_eq!(
+        (challenger.x1, challenger.y1, challenger.x2, challenger.y2),
+        (410, 472, 534, 482),
+        "network record 19 stays the Challenger_image exit-path placement"
+    );
+}
+
+/// The avatar-info sheet parses its 10 member-gauge rects (#165):
+/// the exe loads `Avatar_Info.bnd` literally by name (no `BOUND`
+/// block mounts it). Pinned until a by-name staging arm lands.
+#[test]
+fn avatar_info_sheet_parses_ten_gauge_rects() {
+    let Some(bind) = playing_sheet("Avatar_Info.bnd") else {
+        println!(
+            "skip avatar info: missing {}",
+            archive_path(PLAYING_ARCHIVE).display()
+        );
+        return;
+    };
+    assert_eq!(bind.rects.len(), 10, "avatar-info sheet keeps its 10 rects");
+}
+
+/// The seat-map sheet parses its 8 avatar-seat rects (#165): the exe
+/// loads `Map_Avatar.bnd` literally by name (no `BOUND` block mounts
+/// it), and `playing.rs` pins rect 0 to the solo seat box the
+/// reference photo verifies. Pinned until a by-name staging arm
+/// lands.
+#[test]
+fn map_avatar_sheet_parses_eight_seat_rects() {
+    let Some(bind) = playing_sheet("Map_Avatar.bnd") else {
+        println!(
+            "skip map avatar: missing {}",
+            archive_path(PLAYING_ARCHIVE).display()
+        );
+        return;
+    };
+    assert_eq!(bind.rects.len(), 8, "seat-map sheet keeps its 8 rects");
+    let seat = &bind.rects[0];
+    assert_eq!(
+        (seat.x1, seat.y1, seat.x2, seat.y2),
+        (307, 161, 607, 461),
+        "seat-map rect 0 stays the solo avatar seat box"
+    );
+}
+
+/// The Playing list mounts only the solo sheet (#165):
+/// `ControlList_Playing.txt` declares exactly one block
+/// (`STATE_PLAYING` → `State_Playing.bnd`), so the trio above has no
+/// `BOUND` row for `resolve_bound_row` to consume — the negative
+/// evidence (ADR-0009) behind the missing table rows.
+#[test]
+fn playing_control_list_mounts_only_the_solo_sheet() {
+    let path = archive_path(PLAYING_ARCHIVE);
+    let Some(archive) = install_archives().playing else {
+        println!("skip playing list: missing {}", path.display());
+        return;
+    };
+    let entries = parse_opi(&archive).unwrap();
+    let entry = find_opi_entry(&entries, "ControlList_Playing.txt")
+        .unwrap_or_else(|| panic!("playing: list missing from {}", path.display()));
+    let body = opi_entry_body(&archive, entry).unwrap();
+    let text = decode_control_text(body).unwrap();
+    let list = parse_control_list(&text).unwrap();
+    assert_eq!(list.blocks.len(), 1, "playing list keeps its single block");
+    assert_eq!(list.blocks[0].name, "STATE_PLAYING");
+    assert_eq!(
+        list.blocks[0].bound_file.as_deref(),
+        Some("State_Playing.bnd"),
+        "the lone block still binds the solo sheet"
+    );
 }
