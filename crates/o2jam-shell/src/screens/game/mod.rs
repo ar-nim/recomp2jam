@@ -27,17 +27,18 @@ use super::paint::{
     channel_viewport, channel_viewport_from_top, dialog_origin, dialog_rect_hit, has_room_panels,
     list_row_hit, paint_avi_scene, paint_channel_chat, paint_channel_list, paint_channel_scene,
     paint_dialog_scene, paint_lanking_board, paint_lanking_scene, paint_loading_scene,
-    paint_loading_scene_with_status, paint_lobby_backdrop, paint_music_shop_board,
-    paint_music_shop_cart, paint_music_shop_scene, paint_myroom_data, paint_myroom_scene,
-    paint_payment_notice, paint_planet_options, paint_planet_quit, paint_planet_scene,
-    paint_playing_backdrop, paint_playing_foreground, paint_result, paint_result_scene,
-    paint_room_chat, paint_room_hover, paint_room_list, paint_room_scene, paint_room_user_panel,
-    paint_screen, paint_shop_board, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
-    paint_waiting_scene, paint_waiting_seat_avatar, paint_waiting_seat_avatars,
-    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_panel_hit, scene_index,
-    staged_rect_hit, BattleVerdict, ChannelChatMessage, ChannelScroll, LoadingStatus, ResultPaint,
-    ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage,
-    CHANNEL_VISIBLE_ROWS, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    paint_loading_scene_with_status, paint_lobby_backdrop, paint_lobby_backdrop_live,
+    paint_music_shop_board, paint_music_shop_cart, paint_music_shop_scene, paint_myroom_data,
+    paint_myroom_scene, paint_payment_notice, paint_planet_options, paint_planet_quit,
+    paint_planet_scene, paint_playing_backdrop, paint_playing_foreground, paint_result,
+    paint_result_scene, paint_room_chat, paint_room_hover, paint_room_list, paint_room_scene,
+    paint_room_user_panel, paint_screen, paint_shop_board, paint_shop_scene, paint_waiting_chat,
+    paint_waiting_members, paint_waiting_scene, paint_waiting_seat_avatar,
+    paint_waiting_seat_avatars, playing_backdrop_staged, quit_fallback_rects, rect_hit,
+    room_chrome_visible, room_panel_hit, scene_index, staged_rect_hit, BattleVerdict,
+    ChannelChatMessage, ChannelScroll, LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict,
+    SceneArt, WaitingCaptions, WaitingChatMessage, CHANNEL_VISIBLE_ROWS, RESULT_BACK_ID,
+    RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::select_paint::{
     paint_select_chosung_rows, paint_select_filter_columns, paint_select_ok,
@@ -288,7 +289,10 @@ const ROOM_CONTROLS: &[RoomControl] = &[
     routed(0x1320_0009, "IDC_BUTTON_SROOM_MYROOM", Side(SideScreen::MyRoom)),
     routed(0x1320_0037, "IDC_BUTTON_SROOM_MUSICSHOP", Side(SideScreen::MusicShop)),
     // `MYBAND` opens the ranking board: the band standings board the tree
-    // ships is `SideScreen::Lanking` (the room has no band view).
+    // ships is `SideScreen::Lanking` (the room has no band view). The
+    // exe hides the button on room setup, so `room_control_at` holds
+    // this route out of dispatch — it documents where the press would
+    // go, never a live edge.
     routed(0x1320_003A, "IDC_BUTTON_SROOM_MYBAND", Side(SideScreen::Lanking)),
     // No evidenced target yet: the press is recorded with its next step.
     unwired(0x1320_0006, "IDC_BUTTON_SROOM_QUICKJOIN", HANDLER_STEP),
@@ -2549,7 +2553,10 @@ impl ScreenGame {
 
     /// Staged room chrome control under the click, if the table names
     /// its code. Geometry comes from the parsed staged rect only (owner
-    /// rule `f38f3`).
+    /// rule `f38f3`). The exe-hidden bundled chrome never answers:
+    /// `MYCAPSULE`/`EVENT`/`MYBAND` clear their draw-path words on room
+    /// setup (`room_chrome_visible`), so hover resolves through this
+    /// same gate.
     ///
     /// Not listed: the row templates (`IDC_BUTTON_SROOM_EXBUTTON1..6`,
     /// the `SET` clone parents) whose rects ARE the room rows and
@@ -2559,9 +2566,9 @@ impl ScreenGame {
     /// them either.
     fn room_control_at(&self, x: i32, y: i32) -> Option<&'static RoomControl> {
         let placements = &self.scene_art(Screen::Room)?.placements;
-        ROOM_CONTROLS
-            .iter()
-            .find(|control| staged_code_hit(placements, control.code, x, y))
+        ROOM_CONTROLS.iter().find(|control| {
+            room_chrome_visible(control.code) && staged_code_hit(placements, control.code, x, y)
+        })
     }
 
     /// Staged room chrome control under the pointer (`None` off every
@@ -4844,7 +4851,9 @@ impl ScreenGame {
                 paint_room_scene(frame, &self.rooms, self.room_highlight, art, hovered_code);
             }
             (Some(art), true) => {
-                paint_lobby_backdrop(frame, Screen::Room, art);
+                paint_lobby_backdrop_live(frame, Screen::Room, art, |placed| {
+                    room_chrome_visible(placed.code)
+                });
                 paint_room_hover(frame, art, hovered_code);
             }
             (None, false) => paint_room_list(frame, &self.rooms, self.room_highlight),
@@ -7026,6 +7035,129 @@ mod game_tests {
         );
         game.open_create_room_dialog();
         assert_eq!(game.hovered_room_control(), None);
+    }
+
+    /// Room lobby staging the exe-hidden bundled chrome beside the
+    /// visible BACK button: `EVENT`/`MYCAPSULE` inside the tab span
+    /// and `MYBAND` at its `State_Room.bnd` rect 57 (411,1)-(482,33)
+    /// (the #135 census pins the staging; the exe never shows them).
+    fn bundled_chrome_room_game() -> ScreenGame {
+        let mut game = hover_room_lobby();
+        let mut figures =
+            HashMap::from([("Room_Back.ojs".to_owned(), chrome_two_layer_figure(83, 24))]);
+        for sprite in [
+            "Room_btn_MyCapsule.ojs",
+            "Room_Event.ojs",
+            "Room_Btn_Lanking.ojs",
+        ] {
+            figures.insert(sprite.to_owned(), solid_figure(71, 32, 0x7C00u16));
+        }
+        game.load_scene(
+            Screen::Room,
+            vec![
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: ROOM_BACK_BUTTON_ID.to_owned(),
+                    code: ROOM_BACK_BUTTON_CODE,
+                    sprite: Some("Room_Back.ojs".to_owned()),
+                    rect: Rect {
+                        x: 711,
+                        y: 569,
+                        w: 83,
+                        h: 24,
+                    },
+                },
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: "IDC_BUTTON_SROOM_EVENT".to_owned(),
+                    code: 0x1320_0039,
+                    sprite: Some("Room_Event.ojs".to_owned()),
+                    rect: Rect {
+                        x: 162,
+                        y: 1,
+                        w: 71,
+                        h: 32,
+                    },
+                },
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: "IDC_BUTTON_SROOM_MYCAPSULE".to_owned(),
+                    code: 0x1320_0038,
+                    sprite: Some("Room_btn_MyCapsule.ojs".to_owned()),
+                    rect: Rect {
+                        x: 237,
+                        y: 1,
+                        w: 71,
+                        h: 32,
+                    },
+                },
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: "IDC_BUTTON_SROOM_MYBAND".to_owned(),
+                    code: 0x1320_003A,
+                    sprite: Some("Room_Btn_Lanking.ojs".to_owned()),
+                    rect: Rect {
+                        x: 411,
+                        y: 1,
+                        w: 71,
+                        h: 32,
+                    },
+                },
+            ],
+            figures,
+        );
+        game
+    }
+
+    /// Whole room frame at the shell seam for paint-equality guards.
+    fn painted_room_frame(game: &mut ScreenGame) -> Vec<u32> {
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        buf
+    }
+
+    #[test]
+    fn bundled_room_chrome_answers_no_click_or_hover() {
+        // The exe clears the bundled chrome's draw-path words on room
+        // setup (always-hidden, ticket #169): staged or not, clicks
+        // and hover resolve to nothing — never a side visit, never a
+        // recorded press.
+        let mut game = bundled_chrome_room_game();
+        for (x, y) in [(197, 17), (272, 17), (446, 17)] {
+            game.ingest_snapshot(&InputSnapshot::motion_to(x, y));
+            assert_eq!(game.hovered_room_control(), None);
+            game.ingest_snapshot(&InputSnapshot::click_at(x, y));
+            assert_eq!(game.screen(), Screen::Room);
+            assert_eq!(game.side(), None);
+            assert_eq!(game.room_control_noop(), None);
+        }
+        // The visible neighbour still answers, so the gate is selective.
+        game.ingest_snapshot(&InputSnapshot::click_at(752, 581));
+        assert_eq!(game.screen(), Screen::Channel);
+    }
+
+    #[test]
+    fn bundled_room_chrome_paints_no_pixels() {
+        // Staging the bundled chrome changes no room pixel: the
+        // painter holds it out exactly as the exe does.
+        let mut with_hidden = bundled_chrome_room_game();
+        let mut without_hidden = hover_room_game();
+        assert_eq!(
+            painted_room_frame(&mut with_hidden),
+            painted_room_frame(&mut without_hidden)
+        );
+        // The visible neighbour still paints, so the gate is selective.
+        assert_eq!(
+            room_pixel(&mut with_hidden, 752, 581),
+            pack_xrgb(0x00, 0xFF, 0x00)
+        );
     }
 
     #[test]
@@ -16085,8 +16217,17 @@ mod game_tests {
 
     #[test]
     fn staged_room_chrome_buttons_reach_their_side_views() {
-        // Ticket #32: every room chrome button with a target already in
-        // the tree answers on its staged rect and stays a lobby visit.
+        // Ticket #32: every VISIBLE room chrome button with a target
+        // already in the tree answers on its staged rect and stays a
+        // lobby visit. `MYBAND` (`0x1320003A`) is no longer in this
+        // loop: ticket #169 pins it exe-hidden (the room-setup path
+        // clears its draw-path words; sole binary references are the
+        // three clears, file `0x8ee00`/`0x8ee27`/`0x8ee4e`), so no
+        // staged rect — synthetic or bnd — answers in 7.55. Its route
+        // stays in `ROOM_CONTROLS` as documentation, held out of
+        // dispatch by `room_chrome_visible`; the hidden behavior is
+        // guarded by `bundled_room_chrome_answers_no_click_or_hover`
+        // and `bundled_room_chrome_paints_no_pixels`.
         for (code, id, side) in [
             (0x1320_0008, "IDC_BUTTON_SROOM_ITEMSHOP", SideScreen::Shop),
             (0x1320_0009, "IDC_BUTTON_SROOM_MYROOM", SideScreen::MyRoom),
@@ -16095,7 +16236,6 @@ mod game_tests {
                 "IDC_BUTTON_SROOM_MUSICSHOP",
                 SideScreen::MusicShop,
             ),
-            (0x1320_003A, "IDC_BUTTON_SROOM_MYBAND", SideScreen::Lanking),
         ] {
             let mut game = room_lobby_with_control(code, id);
             game.ingest_snapshot(&InputSnapshot::click_at(
