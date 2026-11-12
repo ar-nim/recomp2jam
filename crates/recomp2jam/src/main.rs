@@ -712,6 +712,22 @@ impl OnlineParams {
     }
 }
 
+/// `connect` subcommand: assemble the song flow and login options,
+/// run the pinned login flow, print the report. The clap fields stay
+/// in [`run_command`]; this is the flow the arm dispatches to.
+///
+/// # Errors
+///
+/// Whatever the song-flow build, the login-options build, or the
+/// login flow reports.
+fn run_connect(song_flow: SongFlowParams, params: ConnectParams) -> Result<()> {
+    let song = song_flow.into_song_flow()?;
+    let options = params.into_connect_options(song)?;
+    let report = connect::connect_and_login(&options)?;
+    print_connect_report(&report);
+    Ok(())
+}
+
 /// Dispatch one CLI subcommand.
 ///
 /// # Errors
@@ -758,8 +774,8 @@ fn run_command(command: Command) -> Result<()> {
             final_score,
             life,
             long_note,
-        } => {
-            let song = SongFlowParams {
+        } => run_connect(
+            SongFlowParams {
                 music_id,
                 difficulty,
                 game_speed,
@@ -780,9 +796,8 @@ fn run_command(command: Command) -> Result<()> {
                 final_score,
                 life,
                 long_note,
-            }
-            .into_song_flow()?;
-            let options = ConnectParams {
+            },
+            ConnectParams {
                 host,
                 port,
                 user_id,
@@ -797,12 +812,8 @@ fn run_command(command: Command) -> Result<()> {
                 avatar_opa,
                 join_room,
                 room_password,
-            }
-            .into_connect_options(song)?;
-            let report = connect::connect_and_login(&options)?;
-            print_connect_report(&report);
-            Ok(())
-        }
+            },
+        ),
         Command::Shots { out_dir } => {
             for path in shots::write_shots(std::path::Path::new(&out_dir))? {
                 println!("wrote {}", path.display());
