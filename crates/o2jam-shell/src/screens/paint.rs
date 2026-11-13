@@ -434,6 +434,7 @@ const CHANNEL_COUNT_LOCAL: (i32, i32) = (90, 12);
 /// bar body rides between them — its exact body offset inside the
 /// arrow-bounded track is the one derived value here (mounted under
 /// the up arrow at (0,20)); every other value is bnd-pinned.
+const CHANNEL_SCROLL_BAR_BODY_H: i32 = 45; // 21x45 bar body between arrows
 const CHANNEL_SCROLL_TRACK: Rect = Rect {
     x: 573,
     y: 213,
@@ -798,8 +799,8 @@ fn paint_channel_scroll_art(frame: &mut Frame<'_>, art: &SceneArt, top: usize, l
     // the bar rect back through the pairing table (`+0xc8` scale
     // source is UNPINNED, see ticket #174 / #130).
     // OPEN: +0xc8 scale equation unpinned — here using the linear
-    // fraction `pos / max_top` over the pinned track y233..=409
-    // (origin 233, travel 176) with no thumb-height compensation.
+    // fraction `pos / max_top` over origin travel 233..=(409 - 45)
+    // (45 px bar body) with thumb-height compensation.
     if frame.w == 0 || frame.h == 0 {
         return;
     }
@@ -810,9 +811,13 @@ fn paint_channel_scroll_art(frame: &mut Frame<'_>, art: &SceneArt, top: usize, l
     } else {
         (top.min(max_top) as f32 / max_top as f32).clamp(0.0, 1.0)
     };
+    // OPEN: +0xc8 scale equation unpinned — linear fraction over
+    // origin travel 233..=(409 - body height) (45 px bar body).
     let track_top = 233i32;
     let track_bot = 409i32;
-    let thumb_y = track_top + (frac * (track_bot - track_top) as f32).round() as i32;
+    let body_h = CHANNEL_SCROLL_BAR_BODY_H;
+    let origin_bot = track_bot - body_h;
+    let thumb_y = track_top + (frac * (origin_bot - track_top) as f32).round() as i32;
     let paint_part = |frame: &mut Frame<'_>, figure_name: &str, local: (i32, i32)| {
         let Some(figure) = art
             .figures
@@ -12839,7 +12844,7 @@ mod paint_tests {
             None,
         );
         assert_eq!(buf[233 * 800 + 583], blue, "thumb at track top");
-        // top = 2 (max) -> thumb at track bottom (y409).
+        // top = 2 (max) -> thumb origin at track bottom (y364).
         let mut buf = vec![0u32; 800 * 600];
         paint_channel_scene(
             &mut Frame {
@@ -12854,7 +12859,16 @@ mod paint_tests {
             None,
             None,
         );
-        assert_eq!(buf[409 * 800 + 583], blue, "thumb at track bottom");
+        assert_eq!(buf[364 * 800 + 583], blue, "thumb at track bottom");
+        // no ink below down arrow (y429)
+        let mut any = false;
+        for y in 429..600 {
+            if buf[y * 800 + 583] == blue {
+                any = true;
+                break;
+            }
+        }
+        assert!(!any, "thumb never paints below down arrow");
     }
 
     #[test]
