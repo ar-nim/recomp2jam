@@ -13,6 +13,7 @@
 //! filenames those are comes from [`pick_wear_sprites`].
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use o2jam_file::{
     classify_sprite, find_opi_entry, opi_entry_body, pair_entries_with_rects, resolve_sprite_entry,
@@ -33,6 +34,39 @@ fn archive_name(filename: &str) -> String {
         Some((stem, _)) => format!("{stem}.ojs"),
         None => filename.to_owned(),
     }
+}
+
+/// Idle-breathing cycle length for worn avatar figures (12 frames,
+/// `docs/equip.md`: every probed worn body carries 12 chained
+/// breathing frames). OPEN: the exe's ms/frame cadence is not yet
+/// pinned (#176); the 250 ms value below reuses the net-drain
+/// heartbeat until a Wine dwell capture pins it. Labelled OPEN.
+pub const AVATAR_BREATHING_FRAME_COUNT: usize = 12;
+/// Cadence of one breathing frame (ms). OPEN until a Wine dwell
+/// capture pins it (`docs/equip.md`); 250 ms reuses the net-drain
+/// heartbeat as the interim value.
+pub const AVATAR_BREATHING_TICK_MS: u64 = 250;
+
+/// Breathing frame index for a paint instant: advances one frame per
+/// [`AVATAR_BREATHING_TICK_MS`] of paint-clock time, wrapping over
+/// [`AVATAR_BREATHING_FRAME_COUNT`].
+#[must_use]
+pub fn avatar_breathing_frame(now_ms: u64) -> usize {
+    (usize::try_from(now_ms / AVATAR_BREATHING_TICK_MS).unwrap_or(0)) % AVATAR_BREATHING_FRAME_COUNT
+}
+
+static AVATAR_BREATHING_NOW_MS: AtomicU64 = AtomicU64::new(0);
+
+/// Record the paint-clock instant driving avatar breathing (called from
+/// the paint seam). `0` until the first paint.
+pub fn set_avatar_breathing_now_ms(now_ms: u64) {
+    AVATAR_BREATHING_NOW_MS.store(now_ms, Ordering::Relaxed);
+}
+
+/// Paint-clock instant currently driving avatar breathing.
+#[must_use]
+pub fn avatar_breathing_now_ms() -> u64 {
+    AVATAR_BREATHING_NOW_MS.load(Ordering::Relaxed)
 }
 
 /// One composited part: image plus its record anchor offset.
@@ -433,7 +467,23 @@ impl AvatarFigure {
         let left = center_native(box_size.0, seat.w, seat.x);
         let top = center_native(box_size.1, seat.h, seat.y);
         let (origin_x, origin_y) = origin;
-        for layer in &self.layers {
+        // Breathing: a worn figure stacks N parts x 12 frames. Paint
+        // only the frame selected by the paint clock for each part;
+        // static figures (not a multiple of 12 layers) paint all.
+        let layers: Vec<&FigureLayer> = if self.layers.len() >= 12
+            && self
+                .layers
+                .len()
+                .is_multiple_of(AVATAR_BREATHING_FRAME_COUNT)
+        {
+            let frame = avatar_breathing_frame(avatar_breathing_now_ms());
+            (0..self.layers.len() / AVATAR_BREATHING_FRAME_COUNT)
+                .filter_map(|part| self.layers.get(part * AVATAR_BREATHING_FRAME_COUNT + frame))
+                .collect()
+        } else {
+            self.layers.iter().collect()
+        };
+        for layer in layers {
             let (dx, dy) = anchor_in_frame(
                 left.saturating_add(layer.dx.saturating_sub(origin_x)),
                 top.saturating_add(layer.dy.saturating_sub(origin_y)),
@@ -3883,5 +3933,16 @@ mod avatar_figure_tests {
             proven >= 40,
             "expected the bound-run proof to cover 40+ entries, got {proven}"
         );
+    }
+
+    #[test]
+    fn avatar_breathing_frame_clock_guard() {
+        assert_eq!(avatar_breathing_frame(0), 0);
+        let f250 = avatar_breathing_frame(250);
+        assert_eq!(f250, 1);
+        assert_ne!(f250, avatar_breathing_frame(0));
+        assert_eq!(avatar_breathing_frame(12 * 250), 0);
+        // determinism: same instant twice
+        assert_eq!(avatar_breathing_frame(1000), avatar_breathing_frame(1000));
     }
 }
