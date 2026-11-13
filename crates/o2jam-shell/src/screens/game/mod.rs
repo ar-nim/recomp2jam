@@ -16268,6 +16268,23 @@ mod game_tests {
             assert_eq!(game.screen(), Screen::Room, "{id}");
             assert_eq!(game.room_control_noop(), None, "{id}");
         }
+        // Ticket #169: the bundled top-band chrome is exe-hidden, so
+        // even when staged on the test rect it must not reach a side
+        // view and must not be recorded as a labelled press.
+        for (code, id) in [
+            (0x1320_0038, "IDC_BUTTON_SROOM_MYCAPSULE"),
+            (0x1320_0039, "IDC_BUTTON_SROOM_EVENT"),
+            (0x1320_003A, "IDC_BUTTON_SROOM_MYBAND"),
+        ] {
+            let mut game = room_lobby_with_control(code, id);
+            game.ingest_snapshot(&InputSnapshot::click_at(
+                ROOM_CONTROL_TEST_CLICK.0,
+                ROOM_CONTROL_TEST_CLICK.1,
+            ));
+            assert_eq!(game.side(), None, "{id}");
+            assert_eq!(game.screen(), Screen::Room, "{id}");
+            assert_eq!(game.room_control_noop(), None, "{id}");
+        }
     }
 
     #[test]
