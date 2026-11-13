@@ -992,3 +992,78 @@ Drag has no shell handler yet and the thumb paints fixed — both
 stay OPEN with the same named next step: a live rig capture
 measuring thumb travel per row (or a deeper byte-walk of the
 scrollbar struct rects), never an invented scale.
+
+## Ticket #189 — exe channel-dialog arrow-key rule PINNED: keys are no-ops (2026-11-14)
+
+Closes the #174 remainder. Question: do Up/Down step the scrollbar
+position (`+0xb8`) directly, move the highlight with top-follow, or
+something else? Answer: **something else — the exe ignores them.**
+Two legs, diagnose-first, on the isolated :97 rig (own Xvfb/prefix/run
+copy, `PULSE_SINK=wine_null`; :96 rig and Memoryer untouched).
+
+**Static leg (byte-walk, own words).** Toolchain pins match #130 (GNU
+objdump 2.47, Python 3.14.10, read-only 7.55 copy 5,029,888 B, sha256
+`83a04541…72c823b`; VA = file + `0x400000`). Re-verified the scrollbar
+machinery (#130): delta forwarder `0x50ebf0` (file `0x10ebf0`); channel
+±1 arms at files `0x74920`/`0x74960` (push `∓1`, `ret $0x4` — button
+arms, no delta arg); list-top notify arms at files `0x749a0`/`0x749f0`
+(codes `0x13`/`0x14`, control `0x8C02100C`, `CDChannelInfo+0x184 +=
+arg`, repaint `0x475000`). All four arms have NO direct `E8` caller in
+`.text` — they are reached by virtual dispatch (observed `call *%eax`
+after vtable lookup, e.g. VA `0x474879` +`0x8`), so key-vs-mouse routing
+is a message/code choice, not a distinct call site. New for #189: zero
+`cmp *,0x26` (VK_UP) in `.text` in any register form, and the ten `cmp
+eax,0x28` hits are non-key (e.g. VA `0x46d597` compares a
+`(y2-y1)/0xb8` quotient against 40 — a layout clamp, `0xb8` a pixel
+stride there, not VK_DOWN). The key dispatch source stays unpinned —
+consistent with there being no key handler at all for this dialog.
+
+**Rig leg (dwell, decisive).** Boot `wine explorer
+/desktop=o2jam,800x600 OTwo.exe <blob> <mirror>x5` (mirror
+`|test|??|127.0.0.1|15010`), notice H-plate XTEST, native white-box
+XTEST away, dialog auto-opens EASY with numbered rows `Ch.01..`. New
+SendInput key helper (`sikey.c`, winegcc, `VK <hex>` press via the
+`o2jam` desktop join — same pattern as `siclick3.c`); every delivery
+`n=1`, foreground window constant `0x20086`. The blue NORMAL-mode box
+(appears ~2-10 s after most opens, not all) eats keys: Enter/ESC dismiss
+it AND take the dialog down with it — no dismiss-keeps-dialog path
+exists, so all reads below use the clean window (blue probe < 40 on both
+bounding captures; presses after blue-onset counted VOID). Captures in
+`~/scratch/t189-keyrule/` (proprietary, never in repo):
+
+- `r2-poll0`/`r2-down4`/`r2-up4`: Down x4 + Up x4 blind bursts on a
+  populated list — row bands pixel-identical (0 changed px per band,
+  threshold 90).
+- `b2-base`/`b2-D1`/`b2-D4`/`b2-U4`: single-Down then +3 Downs then +4
+  Ups with per-press captures, all clean — rows stay `Ch.01-04`, bands
+  identical.
+- `a-armed`/`a-D1`/`a-D3`/`a-U2`: mouse-armed control — row-1 body
+  SendInput click paints the lime select outline on `Ch.02`, then Down
+  x3 + Up x2: outline unmoved (green px 325/327 before and after).
+- `i-D2`/`i-enter`: Down x2 then Enter — no room entry, dialog stays,
+  server log byte-identical (no entry packet).
+- `m-arrowdown` liveness control (same session, same list): one
+  scrollbar down-arrow SendInput click `(583,419)` scrolled `Ch.01-04`
+  → `Ch.02-05` (top 0→1) and dropped the outline. Mouse path alive;
+  key path dead.
+
+Rules OUT: position-step (A) and highlight-step-with-top-follow (B).
+**Verdict: Up/Down (and Enter, observed along the way) do nothing
+visible — the dialog is mouse-only** (rows, scrollbar arrows,
+enter faces, X). Invisible-highlight is also excluded as far as pixels
+can tell: Enter after Down x2 entered no room.
+
+**Shell consequence (landed here).** `channel_key` Up/Down arms are
+documented no-ops; `step_channel` (highlight-step + top-follow
+placeholder) deleted with its two OPEN labels; the dead
+highlight→top mappers `channel_viewport`/`viewport_top` deleted with
+their test (no caller re-seats the top under the highlight anymore;
+windows derive from the stored top via `channel_viewport_from_top`
+alone). Paint untouched: keys never reach `+0xb8`, so thumb geometry
+is unaffected (the `+0xc8` scale OPEN stands). Confirm/Back arms are
+out of scope (still OPEN). Guard:
+`channel_arrow_keys_leave_list_top_and_highlight_untouched` (live chain
+`winit key event → window.rs::route_key → InputEdge::Menu →
+ScreenGame::ingest_snapshot → ScreenGame::menu_key →
+ScreenGame::channel_key`; red-proven: old step+re-seat behavior FAILs
+it, the no-op PASSes it).

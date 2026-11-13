@@ -1007,25 +1007,6 @@ pub(crate) fn channel_viewport_from_top(top: usize, len: usize) -> (usize, usize
     (top, len.saturating_sub(top).min(CHANNEL_VISIBLE_ROWS))
 }
 
-/// Visible Channel slice for `highlight`: the highlight-following
-/// top plus shown count (the highlight always lands inside). Shared
-/// by the key path (which re-seats the stored top under the
-/// highlight) and the paint/click mapping. NO PAGER: the 7.55 channel dialog has no
-/// pager readout or arrows (bnd has no rects; sheet art bottom is rim
-/// chrome + scroll down-arrow, decoded 2026-11-10; the block's
-/// LEFT/RIGHT buttons stage zero rects and are statically unreachable).
-#[must_use]
-pub(crate) fn channel_viewport(highlight: usize, len: usize) -> (usize, usize) {
-    channel_viewport_from_top(viewport_top(highlight, len), len)
-}
-#[must_use]
-pub(crate) fn viewport_top(highlight: usize, len: usize) -> usize {
-    let max_top = len.saturating_sub(CHANNEL_VISIBLE_ROWS);
-    highlight
-        .saturating_sub(CHANNEL_VISIBLE_ROWS - 1)
-        .min(max_top)
-}
-
 /// Item shop: staged art behind an empty catalogue, flat card
 /// fallback. Catalogue rows need item data joins (OPEN) — no rows,
 /// prices, or selection state.
@@ -2240,9 +2221,9 @@ fn channel_row_text(channel: &ChannelState) -> String {
 }
 
 /// Channel rows plus highlight cursor (no background fill: shared by
-/// the flat fallback and the art scene). Only the viewport around the
-/// highlight paints (no pager: the 7.55 dialog has none — see
-/// [`channel_viewport`]). `art` selects
+/// the flat fallback and the art scene). Only the stored-top viewport
+/// paints (no pager: the 7.55 dialog has none — see
+/// [`channel_viewport_from_top`]). `art` selects
 /// staged enter-button art over the procedural plates in the art path
 /// (`None` is the flat fallback).
 fn paint_channel_rows(

@@ -24,8 +24,8 @@ use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
     battle_verdict, channel_dialog_x_hit, channel_face_hit, channel_row_hit, channel_scroll_hit,
-    channel_viewport, channel_viewport_from_top, dialog_origin, dialog_rect_hit, has_room_panels,
-    list_row_hit, paint_avi_scene, paint_channel_chat, paint_channel_list, paint_channel_scene,
+    channel_viewport_from_top, dialog_origin, dialog_rect_hit, has_room_panels, list_row_hit,
+    paint_avi_scene, paint_channel_chat, paint_channel_list, paint_channel_scene,
     paint_dialog_scene, paint_lanking_board, paint_lanking_scene, paint_loading_scene,
     paint_loading_scene_with_status, paint_lobby_backdrop, paint_lobby_backdrop_live,
     paint_music_shop_board, paint_music_shop_cart, paint_myroom_data, paint_myroom_figure,
@@ -503,8 +503,8 @@ pub struct ScreenGame {
     /// position and forwards the delta to the list, handlers
     /// `0x4749a0`/`0x4749f0`); the highlight/selection is never
     /// touched on that path (ticket #130). Row clicks map
-    /// slot-through-top (`code + top`), key steps re-seat the top
-    /// under the highlight (exe key rule stays OPEN).
+    /// slot-through-top (`code + top`); Up/Down keys never touch the
+    /// highlight or the top (rig-pinned no-ops, ticket #189).
     channel_top: usize,
     channel_drag: bool,
     /// Native pointer position from the last snapshot (`None` until
@@ -2424,24 +2424,6 @@ impl ScreenGame {
     /// otherwise a click inside a pinned row rect highlights the
     /// entry and advances like Confirm while the draft is action-free
     /// (slash drafts consume the click instead of starting).
-    /// Step the channel highlight one row toward `scroll`, clamped at
-    /// the ends: the Up/Down-key path (the scroll arrows no longer
-    /// ride this — ticket #130 pins them to the list top instead).
-    /// The top re-seats under the highlight so the key cursor stays
-    /// visible; the exe key rule itself stays OPEN.
-    fn step_channel(&mut self, scroll: ChannelScroll) {
-        match scroll {
-            ChannelScroll::Up => {
-                self.highlight = self.highlight.saturating_sub(1);
-            }
-            ChannelScroll::Down => {
-                let last = self.channels.len().saturating_sub(1);
-                self.highlight = (self.highlight + 1).min(last);
-            }
-        }
-        self.channel_top = channel_viewport(self.highlight, self.channels.len()).0;
-    }
-
     /// Step the channel list-top offset one row toward `scroll`,
     /// clamped to `[0, len - shown]`: the scroll-arrow path. The exe
     /// scrollbar owns its position (`this+0xb8`, clamped
@@ -5670,8 +5652,16 @@ impl ScreenGame {
 
     fn channel_key(&mut self, key: MenuKey) {
         match key {
-            MenuKey::Up => self.step_channel(ChannelScroll::Up),
-            MenuKey::Down => self.step_channel(ChannelScroll::Down),
+            // Ticket #189 (rig-pin, closes the #174 key-rule OPEN):
+            // the exe ignores Up/Down on the channel dialog — 14+
+            // SendInput presses on live populated lists (mouse-armed
+            // and unarmed) moved zero row pixels, while a scrollbar
+            // arrow click in the same session scrolled the list top
+            // 0 -> 1 (captures r2/b2/a/m legs, ~/scratch/t189-keyrule/;
+            // no VK_UP/VK_DOWN compare in .text either). Navigation is
+            // mouse-only, so the keys never touch the highlight or the
+            // top. Confirm/Back below are out of scope (still OPEN).
+            MenuKey::Up | MenuKey::Down => {}
             MenuKey::Back => self.enter(Screen::Planet),
             MenuKey::Confirm => {
                 if self.take_channel_slash() == SlashCommand::Empty {
@@ -6660,26 +6650,41 @@ mod game_tests {
     }
 
     #[test]
-    fn highlight_moves_with_bounds() {
+    fn channel_arrow_keys_leave_list_top_and_highlight_untouched() {
+        // Ticket #189 (rig-pin, closes the #174 key-rule OPEN): the exe
+        // ignores Up/Down on the channel dialog — 14+ SendInput presses
+        // on live populated lists (mouse-armed and unarmed) moved zero
+        // row pixels, while a scrollbar arrow click in the same session
+        // scrolled the list top 0 -> 1 (captures r2/b2/a/m legs,
+        // ~/scratch/t189-keyrule/; no VK_UP/VK_DOWN compare in .text).
+        // Neither the +0xb8 position-step nor highlight-step-with-top-
+        // follow holds: keys are no-ops on both the highlight and the top.
+        // Live caller chain:
+        //   winit key event -> window.rs::route_key -> InputEdge::Menu
+        //   -> ScreenGame::ingest_snapshot -> ScreenGame::menu_key
+        //   -> ScreenGame::channel_key (Up/Down arms)
+        // Archives absent -> N/A (synthetic channels, no install-root read).
         use MenuKey;
-        let mut game = ScreenGame::new();
-        game.set_channels(two_channels());
-        game.lane_key(3, true);
-        game.click_planet(136, 88);
+        let mut game = six_channel_game();
         game.menu_key(MenuKey::Down, true);
         game.menu_key(MenuKey::Down, true);
         game.menu_key(MenuKey::Up, true);
         game.menu_key(MenuKey::Up, true);
         game.menu_key(MenuKey::Up, true);
-        // Down,Down clamps at 1; three Ups clamp back at 0.
-        let mut probe = ScreenGame::new();
-        probe.set_channels(two_channels());
-        probe.lane_key(0, true);
-        probe.click_planet(136, 88);
-        probe.menu_key(MenuKey::Down, true);
-        probe.menu_key(MenuKey::Down, true);
         assert_eq!(game.highlight, 0);
-        assert_eq!(probe.highlight, 1);
+        assert_eq!(game.channel_top, 0);
+        // Keys never disturb an armed selection or a scrolled top either.
+        game.ingest_snapshot(&InputSnapshot::click_at(300, 340));
+        assert_eq!(game.highlight, 2);
+        game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
+        assert_eq!(game.channel_top, 1);
+        for _ in 0..4 {
+            game.menu_key(MenuKey::Down, true);
+            game.menu_key(MenuKey::Up, true);
+        }
+        assert_eq!(game.highlight, 2);
+        assert_eq!(game.channel_top, 1);
+        assert_eq!(game.screen(), Screen::Channel);
         // Empty list never moves.
         let mut bare = ScreenGame::new();
         bare.lane_key(0, true);
@@ -6696,11 +6701,13 @@ mod game_tests {
         game.lane_key(3, true);
         game.click_planet(136, 88);
         assert_eq!(game.screen(), Screen::Channel);
+        // Ticket #189: Up/Down are rig-pinned no-ops, so the highlight
+        // Confirm enters stays where the dialog opened it (row 0).
         game.menu_key(MenuKey::Down, true);
-        assert_eq!(game.highlight, 1);
+        assert_eq!(game.highlight, 0);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room);
-        assert_eq!(game.highlight, 1);
+        assert_eq!(game.highlight, 0);
     }
 
     fn waiting_game_with_button(id: &str, rect: Rect) -> ScreenGame {
@@ -6863,13 +6870,14 @@ mod game_tests {
     #[test]
     fn scroll_arrows_clamp_at_the_last_row() {
         // Ticket #130: the list top pins at `len - shown` (six rows
-        // show four, so the top clamps at 2) while the highlight
-        // rides the keys alone — arrows never touch it.
-        use MenuKey;
+        // show four, so the top clamps at 2) — arrows never touch the
+        // highlight. Ticket #189: the keys are no-ops, so the tail-row
+        // selection below rides a mouse row click, not key steps.
         let mut game = six_channel_game();
-        for _ in 0..6 {
-            game.menu_key(MenuKey::Down, true);
-        }
+        game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
+        game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
+        assert_eq!(game.channel_top, 2);
+        game.ingest_snapshot(&InputSnapshot::click_at(300, 400));
         assert_eq!(game.highlight, 5);
         assert_eq!(game.channel_top, 2);
         game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
@@ -6902,11 +6910,10 @@ mod game_tests {
         // (`+0xb8 = 0`) — a fresh list always opens unscrolled.
         // The highlight is carried non-zero into the repopulate so the
         // reset assertion is meaningful (a zero highlight would pass
-        // even without the reset).
-        use MenuKey;
+        // even without the reset). Ticket #189: keys are no-ops, so the
+        // carried selection rides a mouse row click instead of key steps.
         let mut game = six_channel_game();
-        game.menu_key(MenuKey::Down, true);
-        game.menu_key(MenuKey::Down, true);
+        game.ingest_snapshot(&InputSnapshot::click_at(300, 340));
         assert_eq!(game.highlight, 2);
         game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
         assert_eq!(game.channel_top, 1);
@@ -7057,12 +7064,13 @@ mod game_tests {
         // Ticket #163 (channel leg, scrolled arm): with the
         // highlight on the last of six rows, the viewport shows
         // rows 2..5 — the pointer over slot 3 arms row 5, mapped
-        // back through `channel_viewport` like the click path.
-        use MenuKey;
+        // back through `channel_viewport_from_top` like the click path.
+        // Ticket #189: keys are no-ops, so the tail selection rides
+        // two arrow scrolls plus a mouse row click, not key steps.
         let mut game = six_channel_game();
-        for _ in 0..5 {
-            game.menu_key(MenuKey::Down, true);
-        }
+        game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
+        game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
+        game.ingest_snapshot(&InputSnapshot::click_at(300, 400));
         assert_eq!(game.highlight, 5);
         game.ingest_snapshot(&InputSnapshot::motion_to(300, 400));
         assert_eq!(game.hovered_channel_row(), Some(5));
@@ -9774,10 +9782,12 @@ mod game_tests {
             game.highlighted_channel().map(|row| row.channel_id),
             Some(2)
         );
+        // Ticket #189: Up/Down are rig-pinned no-ops, so the Confirm
+        // target stays on the opening row (id 2), never advancing to 9.
         game.menu_key(MenuKey::Down, true);
         assert_eq!(
             game.highlighted_channel().map(|row| row.channel_id),
-            Some(9)
+            Some(2)
         );
     }
 
@@ -12442,25 +12452,17 @@ mod game_tests {
     }
 
     #[test]
-    fn channel_viewport_follows_highlight() {
-        assert_eq!(channel_viewport(0, 10), (0, 4));
-        assert_eq!(channel_viewport(5, 10), (2, 4));
-        assert_eq!(channel_viewport(9, 10), (6, 4));
-        assert_eq!(channel_viewport(0, 2), (0, 2));
-        assert_eq!(channel_viewport(0, 0), (0, 0));
-    }
-
-    #[test]
     fn channel_click_maps_through_viewport() {
         // Highlight on row 5 shows rows 2-5; the top visible band
-        // selects row 2.
+        // selects row 2. Ticket #189: keys are no-ops, so the tail
+        // selection rides arrow scrolls plus a mouse row click.
         let mut game = ScreenGame::new();
         game.set_channels(six_channels());
         game.lane_key(3, true);
         game.click_planet(136, 88);
-        for _ in 0..5 {
-            game.menu_key(MenuKey::Down, true);
-        }
+        game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
+        game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
+        game.ingest_snapshot(&InputSnapshot::click_at(300, 400));
         assert_eq!(game.highlight, 5);
         // Ticket #56: the face of visible slot 0 enters; the
         // viewport maps it back to row 2.
