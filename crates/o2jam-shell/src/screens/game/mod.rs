@@ -16616,6 +16616,73 @@ mod game_tests {
         };
         stage_real_option_sheet(&mut game, PlanetOptionTab::Sound);
         open_options(&mut game);
+        // Paint parity (guards #132): the KEY3 lane button's art must
+        // paint at its staged rect, so visible art and the hit rect
+        // coincide. Isolate the dialog paint (no board backdrop) so
+        // the rect carries ink only when the glyph paints there;
+        // broken paint piles the glyph at the dialog origin and leaves
+        // this rect empty.
+        let archive = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../install-root/O2Jam/Image/Interface1.opi"),
+        );
+        if let Ok(archive) = archive {
+            use crate::staging::{stage_dialog, StageContext};
+            let art = stage_dialog(
+                &archive,
+                crate::staging::Dialog::PlanetOption,
+                StageContext::default(),
+            )
+            .art
+            .expect("key sheet stages");
+            let origin = super::super::paint::dialog_origin(&art.placements);
+            let key3 = art
+                .placements
+                .iter()
+                .find(|placement| placement.code == OPTION_KEY_LANE_FIRST + 2)
+                .expect("KEY3 stages");
+            let (kx, ky) = (origin.0 + key3.rect.x, origin.1 + key3.rect.y);
+            let (kw, kh) = (
+                usize::try_from(key3.rect.w).unwrap_or(0),
+                usize::try_from(key3.rect.h).unwrap_or(0),
+            );
+            let backdrop = art
+                .placements
+                .iter()
+                .find(|placement| {
+                    placement
+                        .sprite
+                        .as_deref()
+                        .is_some_and(|sprite| sprite.starts_with("Dialog_"))
+                })
+                .expect("backdrop stages")
+                .clone();
+            let key3_placement = key3.clone();
+            let key3_sprite = key3.sprite.clone().expect("KEY3 sprite");
+            let mut figures = std::collections::HashMap::new();
+            if let Some(fig) = art.figures.get(&key3_sprite) {
+                figures.insert(key3_sprite.clone(), fig.clone());
+            }
+            let scene_art = super::super::paint::SceneArt {
+                placements: vec![backdrop, key3_placement],
+                figures,
+            };
+            let mut buf = vec![0u32; 800 * 600];
+            super::super::paint::paint_planet_options(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                Some(&scene_art),
+                PlanetOptionTab::Key,
+            );
+            let rect_ink = (0..kh)
+                .flat_map(|dy| (0..kw).map(move |dx| (dy, dx)))
+                .filter(|(dy, dx)| buf[(ky as usize + *dy) * 800 + (kx as usize + *dx)] != 0)
+                .count();
+            assert!(rect_ink > 0, "KEY3 button paints no ink at its staged rect");
+        }
         click_staged_dialog_button(&mut game, &placements, OPTION_KEY_LANE_FIRST + 2);
         assert_eq!(game.option_rebind_armed(), Some(2), "KEY3 arms lane 2");
         click_staged_dialog_button(
