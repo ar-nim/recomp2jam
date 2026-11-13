@@ -6517,6 +6517,48 @@ mod game_tests {
     }
 
     #[test]
+    fn drag_sets_capture_moves_top() {
+        // Ticket #174: a press on the bar body sets the drag capture
+        // and a following motion absolute-sets the list top (linear
+        // OPEN scale over track y233-409).
+        let mut game = six_channel_game();
+        game.ingest_snapshot(&InputSnapshot::press_at(583, 320));
+        assert!(game.channel_drag, "press on bar body sets drag capture");
+        assert_eq!(game.screen(), Screen::Channel);
+        game.ingest_snapshot(&InputSnapshot::motion_to(583, 409));
+        assert_eq!(
+            game.channel_top, 2,
+            "motion drags the list top to the bottom"
+        );
+        assert_eq!(game.screen(), Screen::Channel);
+    }
+
+    #[test]
+    fn release_clears_drag_capture() {
+        // Ticket #174: release clears the capture, so motion after
+        // release no longer moves the list top.
+        let mut game = six_channel_game();
+        game.ingest_snapshot(&InputSnapshot::press_at(583, 320));
+        assert!(game.channel_drag);
+        game.ingest_snapshot(&InputSnapshot::release_at(583, 320));
+        assert!(!game.channel_drag, "release clears drag capture");
+        let before = game.channel_top;
+        game.ingest_snapshot(&InputSnapshot::motion_to(583, 409));
+        assert_eq!(game.channel_top, before, "motion after release is ignored");
+        assert_eq!(game.screen(), Screen::Channel);
+    }
+
+    #[test]
+    fn arrow_press_does_not_set_drag_capture() {
+        // Ticket #174: pressing an arrow keeps click-step semantics
+        // and never arms the bar-body drag capture.
+        let mut game = six_channel_game();
+        game.ingest_snapshot(&InputSnapshot::press_at(583, 419));
+        assert!(!game.channel_drag, "arrow press does not capture drag");
+        assert_eq!(game.screen(), Screen::Channel);
+    }
+
+    #[test]
     fn empty_channel_list_answers_no_hover_or_click() {
         // Ticket #163 (channel leg, empty-list arm): with no rows
         // listed, the row bands arm nothing and clicks hold the
