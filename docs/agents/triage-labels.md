@@ -76,6 +76,14 @@ Rules for closing playtest-class tickets (retro 2026-11-11, issues #26/#30/#53â€
    Example: `## Guards` followed by `staged_play_time_font_paints_nothing`,
    with its PASS and FAIL lines recorded in the same closing report.
 
+6. Every commit hash cited as evidence in a tracker comment is verified to
+   exist before the comment is posted: run `git cat-file -t <sha>` and confirm
+   it prints `commit`. Failure mode prevented: an agent stalls on "commit not
+   found" when a later step (or a reviewer) tries to resolve the cited object,
+   because the hash was mistyped or never existed (precedent: #167 cited
+   `ea4e098b`, which resolves to nothing; the real fix was `ea4f098`). This
+   check runs before any `gh issue comment`.
+
 ## Edit tracker
 
 Edit the "Label in our tracker" column to match whatever vocabulary you actually use.
