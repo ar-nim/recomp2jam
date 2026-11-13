@@ -84,6 +84,28 @@ Rules for closing playtest-class tickets (retro 2026-11-11, issues #26/#30/#53�
    `ea4e098b`, which resolves to nothing; the real fix was `ea4f098`). This
    check runs before any `gh issue comment`.
 
+
+7. **Live-path reachability for behavior guards.** Every guard named under
+   `## Guards` carries, in the same closing comment, one of:
+   - a **live caller chain** from boot to the guarded code, using real entry
+     and function names (for example `main.rs::run_play` → `setup_online` →
+     `connect::connect_and_login_with_transport` → `stage_online_identity` →
+     `ScreenGame::set_avatar_source`); or
+   - an explicit **seam-suffices** note (`seam: <reason>`) stating why no live
+     chain reaches the code (pure parser/codec/math, seam-defined contract
+     cited by an ADR or claim, or unreachable by design).
+   A guard with neither is a seam-only guard and cannot close a player-visible
+   ticket. Authoring template and tier ladder: `docs/live-path-reachability.md`.
+   Precedent: #191/#192/#193 closed on green seam guards while the features
+   stayed broken live — the guards never named the live chain.
+
+8. **Player-visible close leg.** A player-visible ticket closes only after a
+   live/behavior confirmation leg: owner playtest, a headless live-path walk
+   (`live_boot_gate`, `session_walk`, `live_stats`), or a scripted-gateway round
+   trip through the real boot entry. Seam guards alone never close such a
+   ticket. Docs and presentational fixes use the `(none -- docs: ...)`
+   / `(none -- presentational: ...)` exemption from rule 5 and skip this leg.
+
 ## Edit tracker
 
 Edit the "Label in our tracker" column to match whatever vocabulary you actually use.

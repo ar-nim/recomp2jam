@@ -55,6 +55,11 @@ Every subagent brief carries, at minimum:
   progress (gui-drive #64 post-mortem: 4 h, 371 captures, zero findings).
 - One ticket per brief; a research ticket carries one leg, not several
   methods.
+- Behavior guards (any test named under `## Guards`) must carry a live
+  caller chain from boot or a seam-suffices note per
+  `docs/live-path-reachability.md` (close discipline rules 7-8 in
+  `docs/agents/triage-labels.md`). Seam-green alone never closes a
+  player-visible ticket.
 
 Scoping tickets quote claim ids exactly as minted in the ledger — a
 reviewer checks the ids against `docs/claims.md`.

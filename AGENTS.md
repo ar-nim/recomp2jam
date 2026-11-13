@@ -32,6 +32,11 @@ Rules:
   music). Only synthetic fixtures live in `fixtures/`.
 - Never paste disassembly or decompiled code. Describe behavior in your
   own words with file offsets + REA evidence IDs, then re-implement.
+- Tests = features: a guard pins a behavior only when it names the live
+  caller chain from boot that reaches the guarded code, or states why the
+  seam test suffices; seam-green alone never closes a player-visible
+  ticket. Authoring template + tier ladder: `docs/live-path-reachability.md`;
+  close discipline: `docs/agents/triage-labels.md` (rules 7-8).
 - Pin every RE note to version 7.55 with hashes, sizes, tool versions.
 - Conventional Commits (`feat`/`fix`/`docs`/…), imperative subjects.
 
