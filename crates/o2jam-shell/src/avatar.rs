@@ -470,15 +470,19 @@ impl AvatarFigure {
         // Breathing: a worn figure stacks N parts x 12 frames. Paint
         // only the frame selected by the paint clock for each part;
         // static figures (not a multiple of 12 layers) paint all.
-        let layers: Vec<&FigureLayer> =
-            if self.layers.len() >= 12 && self.layers.len().is_multiple_of(AVATAR_BREATHING_FRAME_COUNT) {
-                let frame = avatar_breathing_frame(avatar_breathing_now_ms());
-                (0..self.layers.len() / AVATAR_BREATHING_FRAME_COUNT)
-                    .filter_map(|part| self.layers.get(part * AVATAR_BREATHING_FRAME_COUNT + frame))
-                    .collect()
-            } else {
-                self.layers.iter().collect()
-            };
+        let layers: Vec<&FigureLayer> = if self.layers.len() >= 12
+            && self
+                .layers
+                .len()
+                .is_multiple_of(AVATAR_BREATHING_FRAME_COUNT)
+        {
+            let frame = avatar_breathing_frame(avatar_breathing_now_ms());
+            (0..self.layers.len() / AVATAR_BREATHING_FRAME_COUNT)
+                .filter_map(|part| self.layers.get(part * AVATAR_BREATHING_FRAME_COUNT + frame))
+                .collect()
+        } else {
+            self.layers.iter().collect()
+        };
         for layer in layers {
             let (dx, dy) = anchor_in_frame(
                 left.saturating_add(layer.dx.saturating_sub(origin_x)),
@@ -3929,5 +3933,16 @@ mod avatar_figure_tests {
             proven >= 40,
             "expected the bound-run proof to cover 40+ entries, got {proven}"
         );
+    }
+
+    #[test]
+    fn avatar_breathing_frame_clock_guard() {
+        assert_eq!(avatar_breathing_frame(0), 0);
+        let f250 = avatar_breathing_frame(250);
+        assert_eq!(f250, 1);
+        assert_ne!(f250, avatar_breathing_frame(0));
+        assert_eq!(avatar_breathing_frame(12 * 250), 0);
+        // determinism: same instant twice
+        assert_eq!(avatar_breathing_frame(1000), avatar_breathing_frame(1000));
     }
 }
