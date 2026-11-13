@@ -15,7 +15,9 @@ use super::super::screen::Screen;
 use o2jam_file::OJN_LEVEL_COUNT;
 use o2jam_file::{AvatarItemRow, AvatarItemTable, Bnd, ControlBlock, ControlList, OjnListEntry};
 use o2jam_net::play::{MusicListAnswer, SetRoomMusic};
-use o2jam_net::shop::{SellItemResponse, SyncItemPurchasePrefix, SyncItemPurchaseWallets};
+use o2jam_net::shop::{
+    SellItemResponse, SyncItemPurchasePrefix, SyncItemPurchaseWallets, SyncMusicPurchaseResponse,
+};
 use o2jam_net::wallet::{
     FreePassType, SyncCashPointResponse, SyncFreePassResponse, SyncFreePassResult,
 };
@@ -1909,8 +1911,10 @@ pub fn myroom_gift_page(views: &[MyRoomGiftView], page: usize) -> &[MyRoomGiftVi
 
 /// Identity captions from fetched character data: every field maps
 /// by name identity to its TEXT control (nickname, level,
-/// bonus point, experience, penalties, cash wallets). Money
-/// controls without a name-identical field (`MGAME_MONEY`,
+/// bonus point, experience, penalties). Cash wallets live on the
+/// single [`WalletState`] now ([`myroom_wallet_captions` paints the
+/// O2/MUSIC/ITEM cash controls), so they stay out of this record.
+/// Money controls without a name-identical field (`MGAME_MONEY`,
 /// `O2JAM_MONEY`, `O2MONEY`, `CHARGEMONEY`), rank, guild, win-rate
 /// and skill counts stay unpainted — their mapping is OPEN
 /// (`docs/myroom.md`).
@@ -1929,9 +1933,23 @@ pub fn myroom_identity_captions(character: &CharacterInfo) -> Vec<(u32, String)>
             MYROOM_PENALTY_LEVEL_CODE,
             character.penalty_level.to_string(),
         ),
-        (MYROOM_O2CASH_CODE, character.o2_cash.to_string()),
-        (MYROOM_MUSICCASH_CODE, character.music_cash.to_string()),
-        (MYROOM_ITEMCASH_CODE, character.item_cash.to_string()),
+    ]
+}
+
+/// Money captions from the single wallet: the three cash TEXT
+/// controls read [`WalletState`], never the character record, so the
+/// shop readout and the MyRoom plate stay one source (`--` until the
+/// matching wire words arrive; the 2001 record and the purchase
+/// replies are the only feeds).
+#[must_use]
+pub fn myroom_wallet_captions(state: &WalletState) -> Vec<(u32, String)> {
+    vec![
+        (MYROOM_O2CASH_CODE, wallet_amount_caption(state.o2_cash)),
+        (
+            MYROOM_MUSICCASH_CODE,
+            wallet_amount_caption(state.music_cash),
+        ),
+        (MYROOM_ITEMCASH_CODE, wallet_amount_caption(state.item_cash)),
     ]
 }
 
@@ -3741,6 +3759,29 @@ impl WalletState {
         self.item_cash = Some(wallets.item_cash);
     }
 
+    /// Fold the 5011 music-purchase wallets into the wallet: the six
+    /// wire words refresh the same slots the 5029/5001 words update.
+    pub fn apply_music_purchase(&mut self, response: &SyncMusicPurchaseResponse) {
+        self.gem = Some(response.gem);
+        self.point = Some(response.point);
+        self.o2_cash = Some(response.o2_cash);
+        self.music_cash = Some(response.music_cash);
+        self.item_cash = Some(response.item_cash);
+        self.cash_point = Some(response.cash_point);
+    }
+
+    /// Fold the fetched 2001 character cash into the wallet so the
+    /// shell paints one source: the character record feeds, the
+    /// wallet owns.
+    pub fn apply_character_cash(&mut self, character: &CharacterInfo) {
+        self.gem = Some(character.gem);
+        self.point = Some(character.point);
+        self.o2_cash = Some(character.o2_cash);
+        self.music_cash = Some(character.music_cash);
+        self.item_cash = Some(character.item_cash);
+        self.cash_point = Some(character.cash_point);
+    }
+
     /// Wallet rows in display order: gem first, then cash lines.
     #[must_use]
     pub fn rows(self) -> [WalletRow; WALLET_ROW_COUNT] {
@@ -5324,6 +5365,9 @@ mod side_tests {
 
     #[test]
     fn myroom_identity_captions_carry_character_fields() {
+        // Cash wallets moved to the single wallet (#202): identity
+        // carries nickname/level/exp/penalties only, money paints
+        // from myroom_wallet_captions.
         let character = CharacterInfo {
             nickname: "Tester".to_owned(),
             level: 12,
@@ -5338,7 +5382,7 @@ mod side_tests {
         );
         assert_eq!(caption_text(&captions, MYROOM_LEVEL_CODE), Some("12"));
         assert_eq!(caption_text(&captions, MYROOM_EXP_CODE), Some("3450"));
-        assert_eq!(caption_text(&captions, MYROOM_O2CASH_CODE), Some("500"));
+        assert_eq!(caption_text(&captions, MYROOM_O2CASH_CODE), None);
     }
 
     fn side_music_answer(free_music: bool) -> MusicListAnswer {
@@ -6160,6 +6204,84 @@ mod side_tests {
         assert_eq!(state.music_cash, Some(450));
         assert_eq!(state.item_cash, Some(125));
         assert_eq!(state.gem, None);
+    }
+
+    #[test]
+    fn wallet_applies_music_purchase_words() {
+        // Live caller chain (Tier 2 proves it):
+        //   OnlineSession::paint (GameLoop) -> poll_music_buy -> drain_music_buy
+        //   -> ScreenGame::apply_music_purchase_response -> WalletState::apply_music_purchase.
+        use o2jam_net::shop::{MusicEntry, SyncMusicPurchaseResponse};
+        let mut state = WalletState::default();
+        state.apply_music_purchase(&SyncMusicPurchaseResponse {
+            gem: 1000,
+            point: 250,
+            o2_cash: 5000,
+            music_cash: 120,
+            item_cash: 340,
+            cash_point: 56,
+            music_list: vec![MusicEntry {
+                music_id: 757,
+                day: 14,
+                month: 3,
+                year: 25,
+                hour: 18,
+                minute: 45,
+            }],
+            gift_boxes_raw: Vec::new(),
+            free_pass_extension_days: 7,
+        });
+        assert_eq!(state.gem, Some(1000));
+        assert_eq!(state.point, Some(250));
+        assert_eq!(state.o2_cash, Some(5000));
+        assert_eq!(state.music_cash, Some(120));
+        assert_eq!(state.item_cash, Some(340));
+        assert_eq!(state.cash_point, Some(56));
+    }
+
+    #[test]
+    fn wallet_applies_character_cash_words() {
+        // Live caller chain:
+        //   main.rs::run_play -> setup_online -> stage_online_identity
+        //   -> ScreenGame::set_myroom_character -> WalletState::apply_character_cash.
+        let mut state = WalletState::default();
+        state.apply_character_cash(&CharacterInfo {
+            gem: 1100,
+            point: 11,
+            o2_cash: 500,
+            music_cash: 120,
+            item_cash: 340,
+            cash_point: 22,
+            ..CharacterInfo::default()
+        });
+        assert_eq!(state.gem, Some(1100));
+        assert_eq!(state.point, Some(11));
+        assert_eq!(state.o2_cash, Some(500));
+        assert_eq!(state.music_cash, Some(120));
+        assert_eq!(state.item_cash, Some(340));
+        assert_eq!(state.cash_point, Some(22));
+    }
+
+    #[test]
+    fn myroom_wallet_captions_read_the_wallet() {
+        // Live caller chain:
+        //   OnlineSession::paint (GameLoop) -> ScreenGame::paint_myroom_overlay
+        //   -> myroom_wallet_captions.
+        let mut state = WalletState::default();
+        state.apply_purchase_wallets(&SyncItemPurchaseWallets {
+            music_cash: 120,
+            item_cash: 340,
+        });
+        state.apply_purchase_prefix(&SyncItemPurchasePrefix {
+            gem: 1000,
+            point: 250,
+            o2_cash: 5000,
+            cash_point: 56,
+        });
+        let captions = myroom_wallet_captions(&state);
+        assert_eq!(caption_text(&captions, MYROOM_O2CASH_CODE), Some("5000"));
+        assert_eq!(caption_text(&captions, MYROOM_MUSICCASH_CODE), Some("120"));
+        assert_eq!(caption_text(&captions, MYROOM_ITEMCASH_CODE), Some("340"));
     }
 
     #[test]

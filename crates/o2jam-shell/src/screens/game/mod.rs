@@ -47,19 +47,19 @@ use super::side::{
     can_return_side, can_visit_side, create_room_action_at, lanking_action_at,
     music_shop_action_at, myroom_action_at, myroom_bag_pages, myroom_bag_rows, myroom_equip_slot,
     myroom_gift_captions, myroom_gift_page, myroom_gift_pages, myroom_gift_views,
-    myroom_identity_captions, myroom_record_slot, paint_side_scene, password_action_at,
-    payment_side_notice, planet_action_at, select_music_rows, select_music_songs, select_row_hit,
-    shop_action_at, side_scene_slot, waiting_song_detail_line, waiting_song_title_line,
-    waiting_team_for_code, wallet_row_caption, CreateRoomAction, CreateRoomForm, LankingSong,
-    LankingSort, MusicShopRow, MyRoomAction, MyRoomState, PasswordAction, PasswordForm,
-    PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog, SelectMusicSong, ShopGood, SideScreen,
-    WalletRow, WalletState, GEM_LABEL, OPTION_GAME_BLEND_NO, OPTION_GAME_BLEND_YES,
-    OPTION_GAME_EFFECT_HIGH, OPTION_GAME_EFFECT_LOW, OPTION_GAME_EFFECT_NORMAL,
-    OPTION_GAME_GUIDE_LONG, OPTION_GAME_GUIDE_MIDDLE, OPTION_GAME_GUIDE_NOUSE,
-    OPTION_GAME_GUIDE_SHORT, OPTION_GAME_LONGNOTE_NONE, OPTION_GAME_LONGNOTE_USED,
-    OPTION_GAME_MODE_FULL, OPTION_GAME_MODE_WIN, OPTION_GAME_NOTETYPE1, OPTION_GAME_NOTETYPE2,
-    OPTION_KEY_3KEY_FIRST, OPTION_KEY_3KEY_MODE, OPTION_KEY_7KEY_MODE, OPTION_KEY_LANE_FIRST,
-    OPTION_KEY_TEST, OPTION_SOUND_BG_EFFECT_DOWN, OPTION_SOUND_BG_EFFECT_UP,
+    myroom_identity_captions, myroom_record_slot, myroom_wallet_captions, paint_side_scene,
+    password_action_at, payment_side_notice, planet_action_at, select_music_rows,
+    select_music_songs, select_row_hit, shop_action_at, side_scene_slot, waiting_song_detail_line,
+    waiting_song_title_line, waiting_team_for_code, wallet_row_caption, CreateRoomAction,
+    CreateRoomForm, LankingSong, LankingSort, MusicShopRow, MyRoomAction, MyRoomState,
+    PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog,
+    SelectMusicSong, ShopGood, SideScreen, WalletRow, WalletState, GEM_LABEL, OPTION_GAME_BLEND_NO,
+    OPTION_GAME_BLEND_YES, OPTION_GAME_EFFECT_HIGH, OPTION_GAME_EFFECT_LOW,
+    OPTION_GAME_EFFECT_NORMAL, OPTION_GAME_GUIDE_LONG, OPTION_GAME_GUIDE_MIDDLE,
+    OPTION_GAME_GUIDE_NOUSE, OPTION_GAME_GUIDE_SHORT, OPTION_GAME_LONGNOTE_NONE,
+    OPTION_GAME_LONGNOTE_USED, OPTION_GAME_MODE_FULL, OPTION_GAME_MODE_WIN, OPTION_GAME_NOTETYPE1,
+    OPTION_GAME_NOTETYPE2, OPTION_KEY_3KEY_FIRST, OPTION_KEY_3KEY_MODE, OPTION_KEY_7KEY_MODE,
+    OPTION_KEY_LANE_FIRST, OPTION_KEY_TEST, OPTION_SOUND_BG_EFFECT_DOWN, OPTION_SOUND_BG_EFFECT_UP,
     OPTION_SOUND_BG_MUSIC_DOWN, OPTION_SOUND_BG_MUSIC_UP, OPTION_SOUND_GAME_EFFECT_DOWN,
     OPTION_SOUND_GAME_EFFECT_UP, OPTION_SOUND_GAME_MUSIC_DOWN, OPTION_SOUND_GAME_MUSIC_UP,
     PLANET_OPTION_FIRST_TAB, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE,
@@ -77,7 +77,7 @@ use o2jam_net::rooms::{
     RankNotification, ReceiveWhisper, SendMainRoomMessage, SendWaitingMessage, SendWhisper,
     WaitingAdminMessage, WaitingUserMessage,
 };
-use o2jam_net::shop::{EquipItem, SyncItemPurchase, SyncMusicPurchase};
+use o2jam_net::shop::{EquipItem, SyncItemPurchase, SyncMusicPurchase, SyncMusicPurchaseResponse};
 use o2jam_net::wallet::SyncCashPointResponse;
 use o2jam_net::{
     ChannelState, CharacterInfo, CreateRoom, Difficulty, ExitPlaying, Gender, JoinRoom, JoinedRoom,
@@ -646,8 +646,10 @@ pub struct ScreenGame {
     /// cluster 3): every `shop_*` word lives here; the hash fold
     /// reads it for the four hashed words.
     shop: ShopState,
-    /// Live wallet words behind the shop gem cells (5028/5001/5003
-    /// folds; `--` until data).
+    /// Live wallet words behind the shop gem cell and the MyRoom
+    /// money captions (5028/5001/5003/5011/2001 folds; `--` until
+    /// data). One source: every readout and post-purchase refresh
+    /// shares this state, never a per-screen balance.
     wallet: WalletState,
     /// Song-shop board state (the catalog, sort, pages, board, and
     /// cart; #139 cluster 4): every `music_shop_*` word lives here;
@@ -3975,6 +3977,10 @@ impl ScreenGame {
     /// equipment, inventory, gifts, identity and cash captions.
     /// Staging never moves the flow.
     pub fn set_myroom_character(&mut self, character: CharacterInfo) -> &mut Self {
+        // The character record feeds the single wallet (#202): its
+        // cash lands here, and every money caption paints from the
+        // wallet afterwards — never from this record again.
+        self.wallet.apply_character_cash(&character);
         self.myroom_character = Some(character);
         self
     }
@@ -4511,6 +4517,35 @@ impl ScreenGame {
         self.shop.shop_cart_page = 0;
     }
 
+    /// Live wallet behind the shop and MyRoom money readouts (5028 /
+    /// 5001 / 5003 / 5011 / 2001 folds; `--` until the first words
+    /// arrive). One source: every readout and post-purchase refresh
+    /// shares this state, never a per-screen balance.
+    #[must_use]
+    pub const fn wallet(&self) -> WalletState {
+        self.wallet
+    }
+
+    /// MyRoom money captions from the single wallet (the O2/MUSIC/
+    /// ITEM cash TEXT controls): the same state the shop readout and
+    /// both post-purchase refreshes share.
+    #[must_use]
+    pub fn myroom_money_captions(&self) -> Vec<(u32, String)> {
+        myroom_wallet_captions(&self.wallet)
+    }
+
+    /// Fold a successful 5011 music purchase into the shell: the
+    /// single wallet refreshes from the reply words and the cart
+    /// clears against the bought rows. Owned-song persistence stays
+    /// OPEN — like the 5001 cart clear, the shell cannot mint owned
+    /// rows server-authoritatively here; that needs the owned-list
+    /// probe.
+    pub fn apply_music_purchase_response(&mut self, response: &SyncMusicPurchaseResponse) {
+        self.wallet.apply_music_purchase(response);
+        self.music_shop.music_shop_cart.clear();
+        self.music_shop.music_shop_cart_page = 0;
+    }
+
     /// Queued cart buy for the session bridge, if any (5000). One
     /// body per `BUYITEM` commit; the seam drains it.
     pub fn take_shop_buy(&mut self) -> Option<SyncItemPurchase> {
@@ -4805,6 +4840,9 @@ impl ScreenGame {
         let page_gifts = myroom_gift_page(&views, self.myroom.gift_page());
         let gifts: Vec<String> = page_gifts.iter().map(|view| view.name.clone()).collect();
         let mut captions = myroom_identity_captions(character);
+        // Money paints from the single wallet (#202): the character
+        // record fed it at staging, purchases refresh it after.
+        captions.extend(myroom_wallet_captions(&self.wallet));
         captions.extend(myroom_gift_captions(
             &views,
             self.myroom.gift_page(),
@@ -9442,6 +9480,38 @@ mod game_tests {
             0,
         );
         assert!(bare_buf.iter().all(|pixel| *pixel == 0));
+    }
+
+    #[test]
+    fn myroom_money_captions_read_the_single_wallet() {
+        // Live caller chain (feed):
+        //   main.rs::run_play -> setup_online -> stage_online_identity
+        //   -> ScreenGame::set_myroom_character -> WalletState::apply_character_cash.
+        // Live caller chain (read):
+        //   OnlineSession::paint (GameLoop) -> ScreenGame::paint_myroom_overlay
+        //   -> myroom_wallet_captions.
+        // Pure shell state: no archives read, so no CI skip.
+        use super::super::side::{MYROOM_ITEMCASH_CODE, MYROOM_MUSICCASH_CODE, MYROOM_O2CASH_CODE};
+        let mut game = ScreenGame::new();
+        game.set_myroom_character(CharacterInfo {
+            o2_cash: 500,
+            music_cash: 120,
+            item_cash: 340,
+            ..CharacterInfo::default()
+        });
+        assert_eq!(game.wallet().o2_cash, Some(500));
+        assert_eq!(game.wallet().music_cash, Some(120));
+        assert_eq!(game.wallet().item_cash, Some(340));
+        let captions = game.myroom_money_captions();
+        let caption = |code: u32| {
+            captions
+                .iter()
+                .find(|(candidate, _)| *candidate == code)
+                .map(|(_, text)| text.as_str())
+        };
+        assert_eq!(caption(MYROOM_O2CASH_CODE), Some("500"));
+        assert_eq!(caption(MYROOM_MUSICCASH_CODE), Some("120"));
+        assert_eq!(caption(MYROOM_ITEMCASH_CODE), Some("340"));
     }
 
     fn payment_hit_placement(code: u32, x: i32, y: i32, w: u32, h: u32) -> ScenePlacement {
@@ -14691,8 +14761,11 @@ mod game_tests {
         assert!(game.has_pending_equip_send());
 
         let populated = game.state_hash();
+        // #202 re-pins: staging the avatar-room character now funds
+        // the single wallet (gem None -> Some(0) on this default
+        // record), so the fold's wallet word moves once, by design.
         assert_eq!(
-            populated, 0xFD87_E3A6_7367_3B3B,
+            populated, 0xE9B7_4397_3925_67E3,
             "outbox+lanking+shop+musicshop+planet population must not move the observable hash"
         );
 
