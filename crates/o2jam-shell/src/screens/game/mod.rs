@@ -5283,13 +5283,7 @@ impl ScreenGame {
             MenuKey::Down => self.step_channel(ChannelScroll::Down),
             MenuKey::Back => self.enter(Screen::Planet),
             MenuKey::Confirm => {
-                if self.take_channel_slash() == SlashCommand::Empty
-                    && self
-                        .channels
-                        .get(self.highlight)
-                        .map(|c| c.active)
-                        .unwrap_or(false)
-                {
+                if self.take_channel_slash() == SlashCommand::Empty {
                     self.enter(Screen::Room);
                 }
             }
