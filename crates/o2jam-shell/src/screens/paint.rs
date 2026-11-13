@@ -792,16 +792,27 @@ fn paint_channel_bar_art(
 /// Staged scroll bodies riding the bnd track (573,213): the up/down
 /// arrows at scroll-local (0,0)/(0,196) with the bar body between
 /// them. Each part paints only while its own figure staged.
-fn paint_channel_scroll_art(frame: &mut Frame<'_>, art: &SceneArt) {
-    // The bar rides scroll-local (0,20) whatever the list top: the
-    // exe re-seats the thumb from the scroll position on every delta
-    // (`0x50ee50` recomputes `round(pos*scale)+origin` and writes the
-    // bar rect back through the pairing table), but the thumb scale
-    // (`+0xc8`) source is unpinned, so the ride stays OPEN.
+fn paint_channel_scroll_art(frame: &mut Frame<'_>, art: &SceneArt, top: usize, len: usize) {
+    // Thumb paint for the channel scrollbar. The exe recomputes the
+    // thumb at `0x50ee50` as `round(pos * scale) + origin` and writes
+    // the bar rect back through the pairing table (`+0xc8` scale
+    // source is UNPINNED, see ticket #174 / #130).
+    // OPEN: +0xc8 scale equation unpinned — here using the linear
+    // fraction `pos / max_top` over the pinned track y233..=409
+    // (origin 233, travel 176) with no thumb-height compensation.
     if frame.w == 0 || frame.h == 0 {
         return;
     }
     let track = &CHANNEL_SCROLL_TRACK;
+    let max_top = len.saturating_sub(CHANNEL_VISIBLE_ROWS);
+    let frac = if max_top == 0 {
+        0.0
+    } else {
+        (top.min(max_top) as f32 / max_top as f32).clamp(0.0, 1.0)
+    };
+    let track_top = 233i32;
+    let track_bot = 409i32;
+    let thumb_y = track_top + (frac * (track_bot - track_top) as f32).round() as i32;
     let paint_part = |frame: &mut Frame<'_>, figure_name: &str, local: (i32, i32)| {
         let Some(figure) = art
             .figures
@@ -814,11 +825,7 @@ fn paint_channel_scroll_art(frame: &mut Frame<'_>, art: &SceneArt) {
         figure.paint_scaled_anchors(frame, dx, dy, frame.w, frame.h);
     };
     paint_part(frame, CHANNEL_SCROLL_UP_SPRITE, CHANNEL_SCROLL_UP_LOCAL);
-    paint_part(
-        frame,
-        CHANNEL_SCROLL_BAR_SPRITE,
-        (0, CHANNEL_SCROLL_ARROW_H),
-    );
+    paint_part(frame, CHANNEL_SCROLL_BAR_SPRITE, (0, thumb_y - track.y));
     paint_part(frame, CHANNEL_SCROLL_DOWN_SPRITE, CHANNEL_SCROLL_DOWN_LOCAL);
 }
 
@@ -2185,7 +2192,7 @@ fn paint_channel_rows(
         }
     }
     if let Some(art) = art {
-        paint_channel_scroll_art(frame, art);
+        paint_channel_scroll_art(frame, art, top, channels.len());
     }
 }
 
@@ -12869,6 +12876,64 @@ mod paint_tests {
         assert_eq!(channel_enter_origin(0), (502, 236));
         assert!(!channel_face_hit(300, 240, 0), "row body is no face");
         assert!(!channel_face_hit(524, 246, 1), "slot 1 face, not slot 0");
+    }
+
+    #[test]
+    fn thumb_tracks_list_top() {
+        // Ticket #174: the scrollbar thumb paints at the list-top
+        // fraction of the pinned track (y233-409); arrow-scrolling the
+        // list moves it.
+        fn six_channels() -> Vec<ChannelState> {
+            (0..6)
+                .map(|i| ChannelState {
+                    gateway_id: 0,
+                    channel_id: i as u16,
+                    capacity: 10,
+                    population: 1,
+                    active: true,
+                })
+                .collect()
+        }
+        let blue = pack_xrgb(0x00, 0x00, 0xFF);
+        let art = SceneArt {
+            placements: Vec::new(),
+            figures: std::collections::HashMap::from([(
+                CHANNEL_SCROLL_BAR_SPRITE.to_owned(),
+                solid_figure(21, 45, [0x1F, 0x00]),
+            )]),
+        };
+        // top = 0 -> thumb at track top (y233).
+        let mut buf = vec![0u32; 800 * 600];
+        paint_channel_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &six_channels(),
+            0,
+            0,
+            &art,
+            None,
+            None,
+        );
+        assert_eq!(buf[233 * 800 + 583], blue, "thumb at track top");
+        // top = 2 (max) -> thumb at track bottom (y409).
+        let mut buf = vec![0u32; 800 * 600];
+        paint_channel_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &six_channels(),
+            2,
+            0,
+            &art,
+            None,
+            None,
+        );
+        assert_eq!(buf[409 * 800 + 583], blue, "thumb at track bottom");
     }
 
     #[test]

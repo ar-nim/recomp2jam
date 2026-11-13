@@ -2,7 +2,8 @@
 # tracker-audit.sh — verify closed-issue guard coverage (issue #173).
 #
 # Usage:
-#   scripts/tracker-audit.sh
+#   scripts/tracker-audit.sh                      # full closed-issue walk (CI default)
+#   scripts/tracker-audit.sh 129 163 165         # fast path: lint only these issues
 #   TRACKER_AUDIT_EXTRA_GUARD=bogus_guard_xyz scripts/tracker-audit.sh  # self-test: must exit 1
 #
 # Walks CLOSED issues via gh, extracts the test names listed under a
@@ -33,20 +34,28 @@ gh auth status >/dev/null 2>&1 || { echo "tracker-audit: warning: gh not authent
 
 [ -d "$CRATE_DIR" ] || die "crates/ not found at $CRATE_DIR"
 
-# --- collect closed issue numbers (--limit pages internally; 1000 covers >200) ---
-NUMBERS="$(gh issue list --state closed --limit 1000 --json number --jq '.[].number')" || die "gh issue list failed"
-[ -n "$NUMBERS" ] || die "no closed issues returned"
+# --- collect issue numbers ---------------------------------------------------
+# Fast path: positional args are an explicit issue subset (one gh call per
+# issue instead of a full tracker walk). Bare invocation keeps the full-walk
+# CI behavior. Mirrors guard-liveness.sh's [ISSUES...] fast path.
+if [ "$#" -gt 0 ]; then
+  for arg in "$@"; do
+    case "$arg" in
+      ''|*[!0-9]*) die "issue numbers must be positive integers (got '$arg')" ;;
+    esac
+  done
+  NUMBERS="$(printf '%s\n' "$@")"
+else
+  NUMBERS="$(gh issue list --state closed --limit 1000 --json number --jq '.[].number')" || die "gh issue list failed"
+  [ -n "$NUMBERS" ] || die "no closed issues returned"
+fi
 
 # --- extract guard names from the '## Guards' section of issue text --------
 # Section = lines after a '## Guards' heading up to the next '##' heading.
 # Accepts backticked names and bare snake_case tokens (which must contain
 # an underscore, so prose words never become guard candidates).
 extract_guards() {
-  awk '
-    /^##+ *Guards/ { in_section = 1; next }
-    /^##+ / { in_section = 0 }
-    in_section { print }
-  ' | grep -oE '`[A-Za-z_][A-Za-z0-9_]*`|\<[a-z][a-z0-9_]*_[a-z0-9_]*\>' | tr -d '`' | sort -u
+  awk -f "$REPO_ROOT/scripts/lib/extract-guards.awk" | grep -oE '`[A-Za-z_][A-Za-z0-9_]*`|\<[a-z][a-z0-9_]*_[a-z0-9_]*\>' | tr -d '`' | sort -u
 }
 
 guard_in_tree() {

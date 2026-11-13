@@ -764,7 +764,10 @@ mod tests {
         // re-arms off the input paint, so the pace never doubles up.
         let start = std::time::Instant::now();
         let gap = std::time::Duration::from_millis(250);
-        let due = start + gap;
+        // The deadline sits a full extra gap out, so an input at
+        // `start` re-arming off the input paint is distinguishable
+        // from one that merely keeps (or doubles) the old deadline.
+        let due = start + gap + gap;
         assert_eq!(
             plan_repaint(true, Some(gap), Some(due), start),
             (true, Some(start + gap))

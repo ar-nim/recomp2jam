@@ -63,7 +63,26 @@ Rules for closing playtest-class tickets (retro 2026-11-11, issues #26/#30/#53�
    name listed under the heading must exist in `crates/` (`scripts/tracker-audit.sh`
    enforces this).
 
-   Example: `## Guards` followed by `staged_play_time_font_paints_nothing`.
+   Red-proof: a guard name closes a fix only when the closing report carries
+   that guard's PASS line and its FAIL line — break the fix, watch it fail,
+   restore the fix, watch it pass — and the reviewer re-ran both. A guard with
+   no FAIL line is hollow and does not close the fix (precedent: 4 of 19
+   backfilled guards had to be strengthened after the fact).
+
+   Exemption: purely presentational or docs-only fixes carry no real guard;
+   use `(none -- <class>: <why>)` in place of a guard name, where `<class>`
+   is `docs` or `presentational`. Never fabricate a test name for such a fix.
+
+   Example: `## Guards` followed by `staged_play_time_font_paints_nothing`,
+   with its PASS and FAIL lines recorded in the same closing report.
+
+6. Every commit hash cited as evidence in a tracker comment is verified to
+   exist before the comment is posted: run `git cat-file -t <sha>` and confirm
+   it prints `commit`. Failure mode prevented: an agent stalls on "commit not
+   found" when a later step (or a reviewer) tries to resolve the cited object,
+   because the hash was mistyped or never existed (precedent: #167 cited
+   `ea4e098b`, which resolves to nothing; the real fix was `ea4f098`). This
+   check runs before any `gh issue comment`.
 
 ## Edit tracker
 

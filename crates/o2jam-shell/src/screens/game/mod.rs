@@ -504,6 +504,7 @@ pub struct ScreenGame {
     /// slot-through-top (`code + top`), key steps re-seat the top
     /// under the highlight (exe key rule stays OPEN).
     channel_top: usize,
+    channel_drag: bool,
     /// Native pointer position from the last snapshot (`None` until
     /// the pointer moves): the hover source for scenes with pinned hover
     /// art (the channel select bar). Test affordance and live input both
@@ -966,6 +967,7 @@ impl ScreenGame {
             channels: Vec::new(),
             highlight: 0,
             channel_top: 0,
+            channel_drag: false,
             pointer: None,
             channel_chat: LobbyChatPanel::default(),
             room_chat: LobbyChatPanel::default(),
@@ -1346,6 +1348,7 @@ impl ScreenGame {
         // `+0x184 = 0` + scrollbar `+0xb8 = 0` joint reset, file
         // `0x747ba`): a fresh list always opens unscrolled.
         self.channel_top = 0;
+        self.channel_drag = false;
         self.channel_chat = LobbyChatPanel::default();
         self
     }
@@ -3473,6 +3476,16 @@ impl ScreenGame {
             self.planet_pointer_down(x, y);
             return;
         }
+        // Channel scrollbar drag arm (#174): press on the bar body
+        // (track between the two arrows) sets the drag capture;
+        // arrows still click-step via click_dispatch.
+        if self.flow.current() == Screen::Channel
+            && (573..=593).contains(&x)
+            && (233..=409).contains(&y)
+        {
+            self.channel_drag = true;
+            return;
+        }
         // Every other scene keeps its down-dispatch (no press-split
         // evidence there; the room-scene quickjoin arm is the named
         // next capture, `docs/hover.md`).
@@ -3486,6 +3499,9 @@ impl ScreenGame {
         self.pointer = Some((x, y));
         if self.bare_planet_board() {
             self.planet_pointer_up(x, y);
+        }
+        if self.flow.current() == Screen::Channel {
+            self.channel_drag = false;
         }
     }
 
@@ -5447,6 +5463,14 @@ impl GameLoop for ScreenGame {
         // arrival order through the press/release helpers.
         if let Some((x, y)) = snapshot.pointer() {
             self.pointer = Some((x, y));
+            if self.flow.current() == Screen::Channel && self.channel_drag {
+                let max_top = self.channels.len().saturating_sub(CHANNEL_VISIBLE_ROWS);
+                let track_top = 233i32;
+                let track_bot = 409i32;
+                let frac =
+                    ((y - track_top) as f32 / (track_bot - track_top) as f32).clamp(0.0, 1.0);
+                self.channel_top = (frac * max_top as f32).round() as usize;
+            }
         }
         for edge in snapshot.edges() {
             match *edge {
@@ -6438,9 +6462,17 @@ mod game_tests {
         // Ticket #130 (exe-pin, file `0x747ba`): populate zeroes
         // the list top (`+0x184 = 0`) beside the scrollbar reset
         // (`+0xb8 = 0`) — a fresh list always opens unscrolled.
+        // The highlight is carried non-zero into the repopulate so the
+        // reset assertion is meaningful (a zero highlight would pass
+        // even without the reset).
+        use MenuKey;
         let mut game = six_channel_game();
+        game.menu_key(MenuKey::Down, true);
+        game.menu_key(MenuKey::Down, true);
+        assert_eq!(game.highlight, 2);
         game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
         assert_eq!(game.channel_top, 1);
+        assert_eq!(game.highlight, 2);
         game.set_channels(six_channels());
         assert_eq!(game.channel_top, 0);
         assert_eq!(game.highlight, 0);
@@ -6497,6 +6529,48 @@ mod game_tests {
         game.ingest_snapshot(&InputSnapshot::click_at(583, 320));
         assert_eq!(game.highlight, 0);
         assert_eq!(game.channel_top, 0);
+        assert_eq!(game.screen(), Screen::Channel);
+    }
+
+    #[test]
+    fn drag_sets_capture_moves_top() {
+        // Ticket #174: a press on the bar body sets the drag capture
+        // and a following motion absolute-sets the list top (linear
+        // OPEN scale over track y233-409).
+        let mut game = six_channel_game();
+        game.ingest_snapshot(&InputSnapshot::press_at(583, 320));
+        assert!(game.channel_drag, "press on bar body sets drag capture");
+        assert_eq!(game.screen(), Screen::Channel);
+        game.ingest_snapshot(&InputSnapshot::motion_to(583, 409));
+        assert_eq!(
+            game.channel_top, 2,
+            "motion drags the list top to the bottom"
+        );
+        assert_eq!(game.screen(), Screen::Channel);
+    }
+
+    #[test]
+    fn release_clears_drag_capture() {
+        // Ticket #174: release clears the capture, so motion after
+        // release no longer moves the list top.
+        let mut game = six_channel_game();
+        game.ingest_snapshot(&InputSnapshot::press_at(583, 320));
+        assert!(game.channel_drag);
+        game.ingest_snapshot(&InputSnapshot::release_at(583, 320));
+        assert!(!game.channel_drag, "release clears drag capture");
+        let before = game.channel_top;
+        game.ingest_snapshot(&InputSnapshot::motion_to(583, 409));
+        assert_eq!(game.channel_top, before, "motion after release is ignored");
+        assert_eq!(game.screen(), Screen::Channel);
+    }
+
+    #[test]
+    fn arrow_press_does_not_set_drag_capture() {
+        // Ticket #174: pressing an arrow keeps click-step semantics
+        // and never arms the bar-body drag capture.
+        let mut game = six_channel_game();
+        game.ingest_snapshot(&InputSnapshot::press_at(583, 419));
+        assert!(!game.channel_drag, "arrow press does not capture drag");
         assert_eq!(game.screen(), Screen::Channel);
     }
 
@@ -16276,6 +16350,23 @@ mod game_tests {
             assert_eq!(game.screen(), Screen::Room, "{id}");
             assert_eq!(game.room_control_noop(), None, "{id}");
         }
+        // Ticket #169: the bundled top-band chrome is exe-hidden, so
+        // even when staged on the test rect it must not reach a side
+        // view and must not be recorded as a labelled press.
+        for (code, id) in [
+            (0x1320_0038, "IDC_BUTTON_SROOM_MYCAPSULE"),
+            (0x1320_0039, "IDC_BUTTON_SROOM_EVENT"),
+            (0x1320_003A, "IDC_BUTTON_SROOM_MYBAND"),
+        ] {
+            let mut game = room_lobby_with_control(code, id);
+            game.ingest_snapshot(&InputSnapshot::click_at(
+                ROOM_CONTROL_TEST_CLICK.0,
+                ROOM_CONTROL_TEST_CLICK.1,
+            ));
+            assert_eq!(game.side(), None, "{id}");
+            assert_eq!(game.screen(), Screen::Room, "{id}");
+            assert_eq!(game.room_control_noop(), None, "{id}");
+        }
     }
 
     #[test]
@@ -16632,6 +16723,73 @@ mod game_tests {
         };
         stage_real_option_sheet(&mut game, PlanetOptionTab::Sound);
         open_options(&mut game);
+        // Paint parity (guards #132): the KEY3 lane button's art must
+        // paint at its staged rect, so visible art and the hit rect
+        // coincide. Isolate the dialog paint (no board backdrop) so
+        // the rect carries ink only when the glyph paints there;
+        // broken paint piles the glyph at the dialog origin and leaves
+        // this rect empty.
+        let archive = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../install-root/O2Jam/Image/Interface1.opi"),
+        );
+        if let Ok(archive) = archive {
+            use crate::staging::{stage_dialog, StageContext};
+            let art = stage_dialog(
+                &archive,
+                crate::staging::Dialog::PlanetOption,
+                StageContext::default(),
+            )
+            .art
+            .expect("key sheet stages");
+            let origin = super::super::paint::dialog_origin(&art.placements);
+            let key3 = art
+                .placements
+                .iter()
+                .find(|placement| placement.code == OPTION_KEY_LANE_FIRST + 2)
+                .expect("KEY3 stages");
+            let (kx, ky) = (origin.0 + key3.rect.x, origin.1 + key3.rect.y);
+            let (kw, kh) = (
+                usize::try_from(key3.rect.w).unwrap_or(0),
+                usize::try_from(key3.rect.h).unwrap_or(0),
+            );
+            let backdrop = art
+                .placements
+                .iter()
+                .find(|placement| {
+                    placement
+                        .sprite
+                        .as_deref()
+                        .is_some_and(|sprite| sprite.starts_with("Dialog_"))
+                })
+                .expect("backdrop stages")
+                .clone();
+            let key3_placement = key3.clone();
+            let key3_sprite = key3.sprite.clone().expect("KEY3 sprite");
+            let mut figures = std::collections::HashMap::new();
+            if let Some(fig) = art.figures.get(&key3_sprite) {
+                figures.insert(key3_sprite.clone(), fig.clone());
+            }
+            let scene_art = super::super::paint::SceneArt {
+                placements: vec![backdrop, key3_placement],
+                figures,
+            };
+            let mut buf = vec![0u32; 800 * 600];
+            super::super::paint::paint_planet_options(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                Some(&scene_art),
+                PlanetOptionTab::Key,
+            );
+            let rect_ink = (0..kh)
+                .flat_map(|dy| (0..kw).map(move |dx| (dy, dx)))
+                .filter(|(dy, dx)| buf[(ky as usize + *dy) * 800 + (kx as usize + *dx)] != 0)
+                .count();
+            assert!(rect_ink > 0, "KEY3 button paints no ink at its staged rect");
+        }
         click_staged_dialog_button(&mut game, &placements, OPTION_KEY_LANE_FIRST + 2);
         assert_eq!(game.option_rebind_armed(), Some(2), "KEY3 arms lane 2");
         click_staged_dialog_button(
