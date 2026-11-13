@@ -35,6 +35,25 @@ fn archive_name(filename: &str) -> String {
     }
 }
 
+/// Idle-breathing cycle length for worn avatar figures (12 frames,
+/// `docs/equip.md`: every probed worn body carries 12 chained
+/// breathing frames). OPEN: the exe's ms/frame cadence is not yet
+/// pinned (#176); the 250 ms value below reuses the net-drain
+/// heartbeat until a Wine dwell capture pins it. Labelled OPEN.
+pub const AVATAR_BREATHING_FRAME_COUNT: usize = 12;
+/// Cadence of one breathing frame (ms). OPEN until a Wine dwell
+/// capture pins it (`docs/equip.md`); 250 ms reuses the net-drain
+/// heartbeat as the interim value.
+pub const AVATAR_BREATHING_TICK_MS: u64 = 250;
+
+/// Breathing frame index for a paint instant: advances one frame per
+/// [`AVATAR_BREATHING_TICK_MS`] of paint-clock time, wrapping over
+/// [`AVATAR_BREATHING_FRAME_COUNT`].
+#[must_use]
+pub fn avatar_breathing_frame(now_ms: u64) -> usize {
+    (usize::try_from(now_ms / AVATAR_BREATHING_TICK_MS).unwrap_or(0)) % AVATAR_BREATHING_FRAME_COUNT
+}
+
 /// One composited part: image plus its record anchor offset.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FigureLayer {
