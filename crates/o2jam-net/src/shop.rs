@@ -209,6 +209,133 @@ empty_message!(SyncItemPurchase, 5000);
 // MusicList ids (acquired songs) plus the FreeMusic flag from 4031.
 empty_message!(SyncMusicPurchase, 5010);
 
+/// `SyncMusicPurchase` 5011 response: wallets + acquired-music list +
+/// gift boxes + free-pass extension days (reply shape pinned by #192).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MusicEntry {
+    pub music_id: u16,
+    pub day: u8,
+    pub month: u8,
+    pub year: u8,
+    pub hour: u8,
+    pub minute: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncMusicPurchaseResponse {
+    pub gem: i32,
+    pub point: i32,
+    pub o2_cash: i32,
+    pub music_cash: i32,
+    pub item_cash: i32,
+    pub cash_point: i32,
+    pub music_list: Vec<MusicEntry>,
+    /// Raw bytes of both i16-counted gift boxes (preserved for round-trip;
+    /// inner element shape stays OPEN).
+    pub gift_boxes_raw: Vec<u8>,
+    pub free_pass_extension_days: i32,
+}
+
+impl super::message::WireMessage for SyncMusicPurchaseResponse {
+    const COMMAND: u16 = 5011;
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = Vec::new();
+        for w in [
+            self.gem,
+            self.point,
+            self.o2_cash,
+            self.music_cash,
+            self.item_cash,
+            self.cash_point,
+        ] {
+            body.extend_from_slice(&w.to_le_bytes());
+        }
+        let n = self.music_list.len() as i16;
+        body.extend_from_slice(&n.to_le_bytes());
+        for m in &self.music_list {
+            body.extend_from_slice(&m.music_id.to_le_bytes());
+            body.extend_from_slice(&[m.day, m.month, m.year, m.hour, m.minute]);
+        }
+        body.extend_from_slice(&self.gift_boxes_raw);
+        body.extend_from_slice(&self.free_pass_extension_days.to_le_bytes());
+        body
+    }
+    fn decode_body(body: &[u8]) -> Result<Self, super::error::Error> {
+        use super::error::Error;
+        if body.len() < 24 + 2 + 4 {
+            return Err(Error::TruncatedMessage {
+                need: 30,
+                have: body.len(),
+            });
+        }
+        let mut o = 0;
+        let rd = |b: &[u8], o: &mut usize| -> i32 {
+            let v = i32::from_le_bytes([b[*o], b[*o + 1], b[*o + 2], b[*o + 3]]);
+            *o += 4;
+            v
+        };
+        let gem = rd(body, &mut o);
+        let point = rd(body, &mut o);
+        let o2_cash = rd(body, &mut o);
+        let music_cash = rd(body, &mut o);
+        let item_cash = rd(body, &mut o);
+        let cash_point = rd(body, &mut o);
+        // music list count i16
+        let cnt = i16::from_le_bytes([body[o], body[o + 1]]) as usize;
+        o += 2;
+        let mut music_list = Vec::with_capacity(cnt);
+        for _ in 0..cnt {
+            if o + 7 > body.len() {
+                return Err(Error::TruncatedMessage {
+                    need: o + 7,
+                    have: body.len(),
+                });
+            }
+            let music_id = u16::from_le_bytes([body[o], body[o + 1]]);
+            o += 2;
+            let day = body[o];
+            let month = body[o + 1];
+            let year = body[o + 2];
+            let hour = body[o + 3];
+            let minute = body[o + 4];
+            o += 5;
+            music_list.push(MusicEntry {
+                music_id,
+                day,
+                month,
+                year,
+                hour,
+                minute,
+            });
+        }
+        // gift boxes raw = everything except trailing 4 bytes
+        if body.len() < o + 4 {
+            return Err(Error::TruncatedMessage {
+                need: o + 4,
+                have: body.len(),
+            });
+        }
+        let gift_boxes_raw = body[o..body.len() - 4].to_vec();
+        let free_pass_extension_days = i32::from_le_bytes([
+            body[body.len() - 4],
+            body[body.len() - 3],
+            body[body.len() - 2],
+            body[body.len() - 1],
+        ]);
+        Ok(Self {
+            gem,
+            point,
+            o2_cash,
+            music_cash,
+            item_cash,
+            cash_point,
+            music_list,
+            gift_boxes_raw,
+            free_pass_extension_days,
+        })
+    }
+}
+
 /// First 16 wire bytes of a `SyncItemPurchase` 5001 response: the
 /// four-word wallet prefix (`Gem`, `Point`, `O2Cash`, `CashPoint`).
 ///
