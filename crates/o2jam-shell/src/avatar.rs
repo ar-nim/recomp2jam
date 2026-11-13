@@ -791,8 +791,6 @@ pub const SHOP_BLOCK: &str = "STATE_SHOP";
 pub const SHOP_BIND_FILE: &str = "State_ItemShop.bnd";
 /// Song-shop block (shop/owned/cart row SETs).
 pub const MUSICSHOP_BLOCK: &str = "STATE_MUSICSHOP";
-/// Song-shop bind file (138 rects, `docs/musicshop.md`).
-pub const MUSICSHOP_BIND_FILE: &str = "State_MShop.bnd";
 /// Avatar-room block (bind file declared but absent — anchor paint).
 pub const MYROOM_BLOCK: &str = "STATE_MYROOM";
 /// Waiting seat-cover body: one `Wait_Cover_Avatar.ojs` per seat
