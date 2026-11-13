@@ -1,0 +1,158 @@
+{
+  "schema_version": "recomp2jam-input-v1",
+  "scenario": "shop-goods-browse-pager",
+  "time_base": {
+    "name": "menu-monotonic",
+    "unit": "microseconds"
+  },
+  "events": [
+    {
+      "action": "press",
+      "control": "click",
+      "control_id": "IDC_BUTTON_SROOM_ITEMSHOP",
+      "label": "room-itemshop-press",
+      "sequence": 0,
+      "time_ms": 1000,
+      "time_us": 1000000,
+      "x": 410,
+      "y": 385
+    },
+    {
+      "action": "release",
+      "control": "click",
+      "control_id": "IDC_BUTTON_SROOM_ITEMSHOP",
+      "label": "room-itemshop-release",
+      "sequence": 1,
+      "time_ms": 1080,
+      "time_us": 1080000,
+      "x": 410,
+      "y": 385
+    },
+    {
+      "action": "reach",
+      "control": "await-screen",
+      "screen": "shop",
+      "sequence": 2,
+      "time_ms": 1800,
+      "time_us": 1800000
+    },
+    {
+      "action": "press",
+      "control": "click",
+      "control_id": "Shop_ItemScroll_Right",
+      "label": "goods-pager-next-press-1",
+      "sequence": 3,
+      "time_ms": 2500,
+      "time_us": 2500000,
+      "x": 536,
+      "y": 9
+    },
+    {
+      "action": "release",
+      "control": "click",
+      "control_id": "Shop_ItemScroll_Right",
+      "label": "goods-pager-next-release-1",
+      "sequence": 4,
+      "time_ms": 2580,
+      "time_us": 2580000,
+      "x": 536,
+      "y": 9
+    },
+    {
+      "action": "press",
+      "control": "click",
+      "control_id": "Shop_ItemScroll_Right",
+      "label": "goods-pager-next-press-2",
+      "sequence": 5,
+      "time_ms": 3200,
+      "time_us": 3200000,
+      "x": 536,
+      "y": 9
+    },
+    {
+      "action": "release",
+      "control": "click",
+      "control_id": "Shop_ItemScroll_Right",
+      "label": "goods-pager-next-release-2",
+      "sequence": 6,
+      "time_ms": 3280,
+      "time_us": 3280000,
+      "x": 536,
+      "y": 9
+    },
+    {
+      "action": "press",
+      "control": "click",
+      "control_id": "Shop_ItemScroll_Right",
+      "label": "goods-pager-next-hold-press",
+      "sequence": 7,
+      "time_ms": 3900,
+      "time_us": 3900000,
+      "x": 536,
+      "y": 9
+    },
+    {
+      "action": "release",
+      "control": "click",
+      "control_id": "Shop_ItemScroll_Right",
+      "label": "goods-pager-next-hold-release",
+      "sequence": 8,
+      "time_ms": 3980,
+      "time_us": 3980000,
+      "x": 536,
+      "y": 9
+    },
+    {
+      "action": "press",
+      "control": "click",
+      "control_id": "Shop_ItemScroll_Left",
+      "label": "goods-pager-prev-press",
+      "sequence": 9,
+      "time_ms": 4600,
+      "time_us": 4600000,
+      "x": 9,
+      "y": 9
+    },
+    {
+      "action": "release",
+      "control": "click",
+      "control_id": "Shop_ItemScroll_Left",
+      "label": "goods-pager-prev-release",
+      "sequence": 10,
+      "time_ms": 4680,
+      "time_us": 4680000,
+      "x": 9,
+      "y": 9
+    },
+    {
+      "action": "press",
+      "control": "click",
+      "control_id": "IDC_BUTTON_SSHOP_BAGRIGHT",
+      "label": "owned-pager-right-press",
+      "sequence": 11,
+      "time_ms": 5300,
+      "time_us": 5300000,
+      "x": 690,
+      "y": 510
+    },
+    {
+      "action": "release",
+      "control": "click",
+      "control_id": "IDC_BUTTON_SSHOP_BAGRIGHT",
+      "label": "owned-pager-right-release",
+      "sequence": 12,
+      "time_ms": 5380,
+      "time_us": 5380000,
+      "x": 690,
+      "y": 510
+    },
+    {
+      "action": "reach",
+      "control": "await-screen",
+      "screen": "shop",
+      "sequence": 13,
+      "time_ms": 6000,
+      "time_us": 6000000
+    }
+  ]
+}

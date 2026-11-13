@@ -1,0 +1,114 @@
+{
+  "schema_version": "recomp2jam-input-v1",
+  "scenario": "shop-row-cart-buyitem",
+  "time_base": {
+    "name": "menu-monotonic",
+    "unit": "microseconds"
+  },
+  "events": [
+    {
+      "action": "press",
+      "control": "click",
+      "control_id": "IDC_BUTTON_SROOM_ITEMSHOP",
+      "label": "room-itemshop-press",
+      "sequence": 0,
+      "time_ms": 1000,
+      "time_us": 1000000,
+      "x": 410,
+      "y": 385
+    },
+    {
+      "action": "release",
+      "control": "click",
+      "control_id": "IDC_BUTTON_SROOM_ITEMSHOP",
+      "label": "room-itemshop-release",
+      "sequence": 1,
+      "time_ms": 1080,
+      "time_us": 1080000,
+      "x": 410,
+      "y": 385
+    },
+    {
+      "action": "reach",
+      "control": "await-screen",
+      "screen": "shop",
+      "sequence": 2,
+      "time_ms": 1800,
+      "time_us": 1800000
+    },
+    {
+      "action": "press",
+      "control": "click",
+      "control_id": "IDC_BUTTON_SSHOP_ITEMBUY1",
+      "label": "goods-row-1-toggle-press",
+      "sequence": 3,
+      "time_ms": 2500,
+      "time_us": 2500000,
+      "x": 140,
+      "y": 108
+    },
+    {
+      "action": "release",
+      "control": "click",
+      "control_id": "IDC_BUTTON_SSHOP_ITEMBUY1",
+      "label": "goods-row-1-toggle-release",
+      "sequence": 4,
+      "time_ms": 2580,
+      "time_us": 2580000,
+      "x": 140,
+      "y": 108
+    },
+    {
+      "action": "press",
+      "control": "click",
+      "control_id": "IDC_BUTTON_SSHOP_ITEMBUY2",
+      "label": "goods-row-2-toggle-press",
+      "sequence": 5,
+      "time_ms": 3200,
+      "time_us": 3200000,
+      "x": 140,
+      "y": 128
+    },
+    {
+      "action": "release",
+      "control": "click",
+      "control_id": "IDC_BUTTON_SSHOP_ITEMBUY2",
+      "label": "goods-row-2-toggle-release",
+      "sequence": 6,
+      "time_ms": 3280,
+      "time_us": 3280000,
+      "x": 140,
+      "y": 128
+    },
+    {
+      "action": "press",
+      "control": "click",
+      "control_id": "IDC_BUTTON_SSHOP_BUYITEM",
+      "label": "cart-buyitem-commit-press",
+      "sequence": 7,
+      "time_ms": 3900,
+      "time_us": 3900000,
+      "x": 630,
+      "y": 510
+    },
+    {
+      "action": "release",
+      "control": "click",
+      "control_id": "IDC_BUTTON_SSHOP_BUYITEM",
+      "label": "cart-buyitem-commit-release",
+      "sequence": 8,
+      "time_ms": 3980,
+      "time_us": 3980000,
+      "x": 630,
+      "y": 510
+    },
+    {
+      "action": "reach",
+      "control": "await-screen",
+      "screen": "shop",
+      "sequence": 9,
+      "time_ms": 4600,
+      "time_us": 4600000
+    }
+  ]
+}
