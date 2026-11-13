@@ -46,10 +46,10 @@ use super::side::{
     PlanetBand, PlanetOptionTab, PlanetPromo, ShopGood, WalletRow, WalletState, GEM_LABEL,
     LANKING_LVIEW_TEXT_CODES, LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES,
     MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS, MSHOP_ROW_TEXT_CODES,
-    MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_SLOT_FIRST_CODE, PLANET_PROMO_IMAGE_CODE,
-    QUIT_MESSAGE_CP949, SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE,
-    SHOP_CART_ROWS, SHOP_GEMMONEY_CODE, SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE,
-    SHOP_ITEM_ROWS,
+    MYROOM_AVATAR_CODE, MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_SLOT_FIRST_CODE,
+    PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949, SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE,
+    SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE, SHOP_ITEMNAME_FIRST_CODE,
+    SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS,
 };
 use o2jam_file::ControlList;
 use o2jam_game::RoomTeams;
@@ -1157,6 +1157,29 @@ fn paint_myroom_cells(
             paint_text_into_rect(frame, placed.rect, name, CP949_INK);
         }
     }
+}
+
+/// Avatar-room portrait: the staged worn figure center-stage in
+/// its staged AVATAR rect (`MYROOM_AVATAR_CODE`), breathing on the
+/// paint clock through the #193 per-run pipeline
+/// (`AvatarFigure::paint_visible_centered`). Without a staged figure
+/// or rect the slot stays empty — art alone, never a fallback pose.
+pub fn paint_myroom_figure(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    figure: Option<&AvatarFigure>,
+    now_ms: u64,
+) {
+    let (Some(figure), Some(slot)) = (
+        figure,
+        placements
+            .iter()
+            .find(|placed| placed.code == MYROOM_AVATAR_CODE),
+    ) else {
+        return;
+    };
+    let slot = scale_rect_to_frame(&slot.rect, frame.w, frame.h);
+    figure.paint_visible_centered(frame, &slot, frame.w, frame.h, now_ms);
 }
 
 /// Rankings: staged art behind an empty list-view, flat card

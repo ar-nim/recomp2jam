@@ -24,6 +24,7 @@ mod live_boot_gate_tests {
         RoomList, WireMessage, HEADER_LEN,
     };
     use o2jam_render::Frame as RenderFrame;
+    use o2jam_shell::screens::SideScreen;
     use o2jam_shell::{GameLoop, Screen};
 
     use crate::{
@@ -384,6 +385,105 @@ mod live_boot_gate_tests {
         assert!(
             !game.lanking_visible_songs().is_empty(),
             "live boot stages the lanking board from the installed song catalog"
+        );
+        server.join().unwrap();
+    }
+
+    /// Ticket #199 close leg (live path): the channel-login boot must
+    /// stage the whole MyRoom data path — character record, item-table
+    /// bag source, staged worn figure — and the entered avatar room
+    /// must paint something the unstaged boot does not.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play (`--window --online` with a channel)
+    ///   -> setup_online -> connect::connect_and_login_with_transport
+    ///   -> stage_online_identity -> ScreenGame::set_myroom_character
+    ///     + ScreenGame::set_avatar_source (myroom_items ride here)
+    ///   -> live_art::stage_live_scenes (real STATE_MYROOM art)
+    ///   -> ScreenGame::enter_screen(Room) -> visit_side(MyRoom)
+    ///   -> ScreenGame::paint_at -> paint_side -> paint_myroom_figure
+    ///     + paint_myroom_overlay.
+    /// The scripted gateway's hero carries server-shaped zeros (no
+    /// equipment, no inventory), so the test dresses it from the real
+    /// installed item table: the staging path stays 100% real, only
+    /// the closet contents are crafted.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_boot_myroom_data_path_paints_on_channel_login() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let avatar_path = install_root().join("O2Jam/Image/avatar.opa");
+        let Some(path) = avatar_path.to_str() else {
+            println!("skip: non-UTF8 avatar.opa path");
+            return;
+        };
+        let Ok((_, table)) = connect::read_avatar_source(path) else {
+            println!("skip: missing or unparsable install-root avatar.opa");
+            return;
+        };
+        if table.rows.is_empty() {
+            println!("skip: installed item table holds no rows");
+            return;
+        }
+        let (port, server) = spawn_boot_gateway();
+        let (report, gateway) =
+            connect::connect_and_login_with_transport(&boot_options(port)).unwrap();
+        let mut hero = report
+            .character
+            .clone()
+            .expect("channel login fetches the character");
+        for (slot, row) in table.rows.iter().take(5).enumerate() {
+            if let Ok(id) = i32::try_from(row.item_id) {
+                hero.equipment[slot] = id;
+                hero.inventory.push(id);
+            }
+        }
+        let mut game = o2jam_shell::ScreenGame::new();
+        stage_online_identity(&mut game, Some(&hero));
+        assert!(
+            game.myroom_character().is_some(),
+            "channel login stages the character record live"
+        );
+        let mut session =
+            assemble_online_session(game, gateway, Some("gate"), None, None, None).unwrap();
+        let live = session.game_mut();
+        crate::live_art::stage_live_scenes(live);
+        assert!(live.enter_screen(Screen::Planet));
+        assert!(live.enter_screen(Screen::Channel));
+        assert!(live.enter_screen(Screen::Room));
+        assert!(live.visit_side(SideScreen::MyRoom));
+        let mut painted = vec![0u32; 800 * 600];
+        live.paint_at(
+            &mut RenderFrame {
+                buf: &mut painted,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        let bare = {
+            let mut unstaged = o2jam_shell::ScreenGame::new();
+            crate::live_art::stage_live_scenes(&mut unstaged);
+            assert!(unstaged.enter_screen(Screen::Planet));
+            assert!(unstaged.enter_screen(Screen::Channel));
+            assert!(unstaged.enter_screen(Screen::Room));
+            assert!(unstaged.visit_side(SideScreen::MyRoom));
+            let mut buf = vec![0u32; 800 * 600];
+            unstaged.paint_at(
+                &mut RenderFrame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                0,
+            );
+            buf
+        };
+        assert_ne!(
+            painted, bare,
+            "entered MyRoom paints staged character data live (figure, bag, captions)"
         );
         server.join().unwrap();
     }

@@ -1497,6 +1497,12 @@ pub const MYROOM_VACATE_CODE: u32 = 0x1520_0004;
 /// queued `EquipItem` 5004 shape and slot derivation are
 /// exe-pinned; next step: rig walk of the myroom apply gesture.
 pub const MYROOM_APPLY_CODE: u32 = 0x1520_3034;
+/// Avatar portrait (`0X15700012` AVATAR image, `docs/myroom.md`
+/// block walk): the staged worn figure paints here, never text.
+/// Keyed by code like the other MyRoom image families (bag, gift,
+/// slot covers) — the painter finds the staged `.bnd` rect, never
+/// a literal.
+pub const MYROOM_AVATAR_CODE: u32 = 0x1570_0012;
 /// Nickname caption (`IDC_TEXT_SMYROOM_NICKNAME`).
 pub const MYROOM_NICKNAME_CODE: u32 = 0x1540_0037;
 /// Level caption (`IDC_TEXT_SMYROOM_LEVEL`).

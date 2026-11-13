@@ -28,16 +28,17 @@ use super::paint::{
     list_row_hit, paint_avi_scene, paint_channel_chat, paint_channel_list, paint_channel_scene,
     paint_dialog_scene, paint_lanking_board, paint_lanking_scene, paint_loading_scene,
     paint_loading_scene_with_status, paint_lobby_backdrop, paint_lobby_backdrop_live,
-    paint_music_shop_board, paint_music_shop_cart, paint_myroom_data, paint_myroom_scene,
-    paint_payment_notice, paint_planet_options, paint_planet_quit, paint_planet_scene,
-    paint_playing_backdrop, paint_playing_foreground, paint_result, paint_result_scene,
-    paint_room_chat, paint_room_hover, paint_room_list, paint_room_scene, paint_room_user_panel,
-    paint_screen, paint_shop_board, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
-    paint_waiting_scene, paint_waiting_seat_avatar, paint_waiting_seat_avatars,
-    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
-    scene_index, staged_rect_hit, BattleVerdict, ChannelChatMessage, ChannelScroll, LoadingStatus,
-    ResultPaint, ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage,
-    CHANNEL_VISIBLE_ROWS, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    paint_music_shop_board, paint_music_shop_cart, paint_myroom_data, paint_myroom_figure,
+    paint_myroom_scene, paint_payment_notice, paint_planet_options, paint_planet_quit,
+    paint_planet_scene, paint_playing_backdrop, paint_playing_foreground, paint_result,
+    paint_result_scene, paint_room_chat, paint_room_hover, paint_room_list, paint_room_scene,
+    paint_room_user_panel, paint_screen, paint_shop_board, paint_shop_scene, paint_waiting_chat,
+    paint_waiting_members, paint_waiting_scene, paint_waiting_seat_avatar,
+    paint_waiting_seat_avatars, playing_backdrop_staged, quit_fallback_rects, rect_hit,
+    room_chrome_visible, room_panel_hit, scene_index, staged_rect_hit, BattleVerdict,
+    ChannelChatMessage, ChannelScroll, LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict,
+    SceneArt, WaitingCaptions, WaitingChatMessage, CHANNEL_VISIBLE_ROWS, RESULT_BACK_ID,
+    RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::select_paint::{
     paint_select_chosung_rows, paint_select_filter_columns, paint_select_ok,
@@ -4046,12 +4047,17 @@ impl ScreenGame {
     /// worn figures (the launcher's `--avatar-opa` source); the seats
     /// restage at once through it and again on every later join, so
     /// peers wear their wire equipment as soon as the snapshot lands.
+    /// The same table stages the MyRoom bag, gift, and info-plate
+    /// name source: without it the avatar-room overlay's early return
+    /// keeps every row blank live (ticket #199 diagnose leg — today
+    /// only the shop catalog rode this landing, ticket #191).
     pub fn set_avatar_source(&mut self, archive: Vec<u8>, table: AvatarItemTable) -> &mut Self {
         // The shop board rides the same `Itemdata_Korea.dat` table as
         // the avatar source (server-authoritative catalog join):
         // stage it here so the live board is never empty after the
         // avatar archive lands.
         self.shop.set_catalog(&table);
+        self.myroom_items = Some(table.clone());
         self.avatar_source = Some((archive, table));
         self.restage_waiting_figures();
         self
@@ -4646,7 +4652,7 @@ impl ScreenGame {
     pub fn paint_at(&mut self, frame: &mut Frame<'_>, now_ms: u64) {
         frame.buf.fill(FRAME_CLEAR_COLOR);
         if self.side.is_some() {
-            self.paint_side(frame);
+            self.paint_side(frame, now_ms);
             return;
         }
         if self.flow.current() == Screen::Avi && now_ms >= self.splash_hold_ms {
@@ -4685,7 +4691,7 @@ impl ScreenGame {
             Screen::Result => self.paint_result(frame),
             Screen::Planet => self.paint_planet(frame),
             Screen::Lanking => self.paint_lanking(frame),
-            Screen::Myroom => self.paint_myroom(frame),
+            Screen::Myroom => self.paint_myroom(frame, now_ms),
             Screen::Shop => self.paint_shop(frame),
             // `Screen::MusicShop` is the scene-art slot behind
             // `SideScreen::MusicShop` only; the flow transition map has
@@ -4699,7 +4705,7 @@ impl ScreenGame {
     /// (billing notice, lanking, shop, song-shop, my room). Each
     /// overlay inks into staged TEXT rects; without staged rows or
     /// goods it paints nothing (art-only).
-    fn paint_side(&mut self, frame: &mut Frame<'_>) {
+    fn paint_side(&mut self, frame: &mut Frame<'_>, now_ms: u64) {
         paint_side_scene(frame, &self.side_placements, &self.side_figures);
         // The billing views complete no web call, so the
         // Payment overlay inks the unwired notice over the
@@ -4755,6 +4761,12 @@ impl ScreenGame {
             );
         }
         if self.side == Some(SideScreen::MyRoom) {
+            paint_myroom_figure(
+                frame,
+                &self.side_placements,
+                self.myroom_worn_figure(),
+                now_ms,
+            );
             self.paint_myroom_overlay(frame, &self.side_placements);
         }
     }
@@ -4776,14 +4788,24 @@ impl ScreenGame {
     /// Slot selection, equip commit, bag/gift pagers, and gift claim
     /// ride [`Self::click_myroom_side`]; vacate/goshop/shop-hop send
     /// nothing (OPEN, `docs/myroom.md`).
-    fn paint_myroom(&self, frame: &mut Frame<'_>) {
+    fn paint_myroom(&self, frame: &mut Frame<'_>, now_ms: u64) {
         match self.scene_art(Screen::Myroom) {
             Some(art) => {
                 paint_myroom_scene(frame, art);
+                paint_myroom_figure(frame, &art.placements, self.myroom_worn_figure(), now_ms);
                 self.paint_myroom_overlay(frame, &art.placements);
             }
             None => paint_screen(frame, Screen::Myroom),
         }
+    }
+
+    /// Staged worn figure behind the avatar-room portrait: the same
+    /// stack the Room lobby slot and the Result banner show (kept live
+    /// by the login staging and the equip restage hook), so the MyRoom
+    /// portrait always wears the current equipment. `None` until the
+    /// live boot stages a character with a stackable archive.
+    fn myroom_worn_figure(&self) -> Option<&AvatarFigure> {
+        self.room_avatar.as_ref()
     }
 
     /// Avatar-room rows and captions over staged placements: the
@@ -9442,6 +9464,188 @@ mod game_tests {
             0,
         );
         assert!(bare_buf.iter().all(|pixel| *pixel == 0));
+    }
+
+    /// Ticket #199 diagnose leg: the avatar-item table behind the
+    /// bag, gift, and info-plate names must land with the avatar
+    /// source. Today only the shop catalog rides it (ticket #191),
+    /// so the side overlay's early return keeps every MyRoom row
+    /// blank on every boot — character or not.
+    #[test]
+    fn myroom_bag_source_lands_with_avatar_source() {
+        // Live caller chain:
+        //   main.rs::run_play -> setup_online
+        //   -> connect::connect_and_login_with_transport
+        //   -> stage_online_identity -> ScreenGame::set_avatar_source
+        //   -> (new) myroom item-table staging -> paint_side
+        //   -> paint_myroom_overlay -> paint_myroom_data.
+        // Archives absent -> N/A (synthetic table, no install-root read).
+        use super::super::side::{MYROOM_BAG_FIRST_CODE, MYROOM_NICKNAME_CODE};
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        game.set_myroom_character(myroom_test_character((1..=12).collect()));
+        game.set_avatar_source(Vec::new(), myroom_test_table());
+        game.load_side_scene(
+            vec![
+                myroom_hit_placement(MYROOM_BAG_FIRST_CODE, 200, 10),
+                myroom_hit_placement(MYROOM_NICKNAME_CODE, 10, 100),
+            ],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        let bag_inked = (10..30).any(|y| (200..240).any(|x| buf[y * 800 + x] != 0));
+        assert!(
+            bag_inked,
+            "bag row paints once the avatar source lands the item table"
+        );
+    }
+
+    /// Ticket #199 figure leg: entering the avatar room must paint
+    /// the staged worn figure center-stage (equipment stacked through
+    /// the #193 pipeline), not art alone.
+    #[test]
+    fn myroom_side_entry_paints_equipped_figure() {
+        // Live caller chain:
+        //   main.rs::run_play -> GameLoop paint -> ScreenGame::paint_at
+        //   -> paint_side -> paint_myroom_figure
+        //   -> AvatarFigure::paint_visible_centered (the #193 pipeline).
+        // Archives absent -> N/A (synthetic archive and table).
+        let sprite = worn_test_sprite();
+        let archive = worn_test_archive(&[("01F01001.ojs", &sprite)]);
+        let table = worn_test_table();
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Room);
+        game.set_myroom_character(myroom_test_character(vec![1]));
+        game.set_avatar_source(archive.clone(), table.clone());
+        let figure = load_worn_figure(&archive, &table, &[1], true);
+        assert!(
+            !figure.is_empty(),
+            "item 1 stacks through the worn test archive"
+        );
+        game.load_room_avatar(figure);
+        // The exe's AVATAR image rect (`docs/myroom.md`: 0X15700012).
+        use super::super::side::MYROOM_AVATAR_CODE;
+        game.load_scene(
+            Screen::Myroom,
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code: MYROOM_AVATAR_CODE,
+                sprite: None,
+                rect: Rect {
+                    x: 300,
+                    y: 200,
+                    w: 100,
+                    h: 160,
+                },
+            }],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        let portrait_inked = (200..360).any(|y| (300..400).any(|x| buf[y * 800 + x] != 0));
+        assert!(
+            portrait_inked,
+            "entered MyRoom paints the equipped figure center-stage"
+        );
+    }
+
+    /// Ticket #199 breathe leg: the staged MyRoom figure must idle-
+    /// breathe on the paint clock — one frame per 12-frame body per
+    /// tick, single-frame bodies every paint (the #193 per-run rule
+    /// through the MyRoom path).
+    #[test]
+    fn myroom_figure_breathes_on_the_paint_clock() {
+        // Live caller chain:
+        //   main.rs::run_play -> GameLoop paint -> ScreenGame::paint_at
+        //   -> paint_side -> paint_myroom_figure
+        //   -> AvatarFigure::paint_visible_centered(now_ms)
+        //   -> avatar_breathing_frame(now_ms) selects the run frame.
+        // Archives absent -> N/A (synthetic layers, no archive read).
+        use crate::avatar::{FigureLayer, AVATAR_BREATHING_TICK_MS};
+        use o2jam_render::Rgb555Image;
+        let layer = |word: u16, dx: i32| FigureLayer {
+            image: Rgb555Image::decode(&word.to_le_bytes(), 1, 1).unwrap(),
+            dx,
+            dy: 0,
+            colorkey: 0x0000,
+        };
+        let mut figure = AvatarFigure::default();
+        for frame in 0..12u16 {
+            figure.push_layer(layer(0x0001 + frame, i32::from(frame)));
+        }
+        let mut single = AvatarFigure::default();
+        single.push_layer(layer(0x7FFF, 12));
+        figure.push_body(single);
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Room);
+        game.load_room_avatar(figure);
+        use super::super::side::MYROOM_AVATAR_CODE;
+        game.load_scene(
+            Screen::Myroom,
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code: MYROOM_AVATAR_CODE,
+                sprite: None,
+                rect: Rect {
+                    x: 300,
+                    y: 200,
+                    w: 100,
+                    h: 160,
+                },
+            }],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        let paint = |game: &mut ScreenGame, now_ms: u64| {
+            let mut buf = vec![0u32; 800 * 600];
+            game.paint_at(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                now_ms,
+            );
+            buf
+        };
+        let inked_x = |buf: &[u32]| {
+            (300..400)
+                .filter(|&x| (200..360).any(|y| buf[y * 800 + x] != 0))
+                .collect::<Vec<_>>()
+        };
+        let parked = inked_x(&paint(&mut game, 0));
+        let ticked = inked_x(&paint(&mut game, AVATAR_BREATHING_TICK_MS));
+        assert!(
+            !parked.is_empty() && !ticked.is_empty(),
+            "the staged figure inks its slot on both paints"
+        );
+        assert_ne!(
+            parked, ticked,
+            "the paint clock advances the 12-frame run's selected frame"
+        );
+        assert!(
+            parked.iter().any(|x| ticked.contains(x)),
+            "the single-frame body paints on every paint"
+        );
     }
 
     fn payment_hit_placement(code: u32, x: i32, y: i32, w: u32, h: u32) -> ScenePlacement {

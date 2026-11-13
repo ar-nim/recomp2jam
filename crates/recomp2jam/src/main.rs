@@ -1238,7 +1238,14 @@ fn setup_online(
 /// peer join restage through it. The item-shop catalog rides the
 /// same `Itemdata_Korea.dat` table, so it stages on every boot that
 /// lands the installed archive — including the list-only default
-/// (no channel, no fetch; ticket #191 reopen). Infallible by
+/// (no channel, no fetch; ticket #191 reopen). The MyRoom data path
+/// rides the same two stagings (ticket #199 diagnose leg, named so a
+/// later blank panel traces to its source): the character record
+/// (`set_myroom_character` — channel-login boots only, `None` on the
+/// list-only default), the bag/gift/info-plate name source (the item
+/// table `set_avatar_source` stages beside the shop catalog — every
+/// archive landing, even item-less), and the portrait figure (the worn
+/// stack below, kept live by the equip restage hook). Infallible by
 /// contract: a missing or
 /// unstackable archive keeps the figure slots empty, never failing
 /// the login walk.

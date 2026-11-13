@@ -63,6 +63,23 @@ through the `.bnd` like every other bound scene.
   equipment, inventory, item/music gifts, cash wallets); staged
   through `set_myroom_character` until a live gateway exists.
 
+## Live boot data path (ticket #199 diagnose leg)
+
+Three sources, three stagings — a blank MyRoom panel traces to
+its source, never to "the data":
+
+- Character record: staged live on channel-login boots only
+  (`stage_online_identity` → `set_myroom_character`); the
+  list-only default boot stages none.
+- Bag/gift/info-plate name source: the `Itemdata_Korea.dat` table
+  `set_avatar_source` stages beside the shop catalog — every
+  archive landing, even item-less (before #199 it never landed:
+  the overlay's early return kept every row blank on every boot).
+- Portrait figure: the worn stack (`load_worn_figure` from the
+  staged archive + table + hero equipment/gender) painted into
+  the `0X15700012` AVATAR rect on the paint clock (#193 per-run
+  breathe), kept live by the equip restage hook.
+
 ## Landed 2026-11-10 (ticket #19)
 
 - Slot selection: 11 buttons dispatch by code ordinal through
