@@ -22,10 +22,12 @@ extract_guards() {
 command -v gh >/dev/null 2>&1 || { echo "guard-liveness: warning: gh missing; skip" >&2; exit 0; }
 gh auth status >/dev/null 2>&1 || { echo "guard-liveness: warning: gh unauth; skip" >&2; exit 0; }
 
+scanned=0
 dead=()
 total=0
 while read -r num; do
   [ -n "$num" ] || continue
+  scanned=$((scanned+1))
   text="$(gh issue view "$num" --json body,comments --jq '[.body] + [.comments[].body] | join("\n")' 2>/dev/null || true)"
   [ -n "$text" ] || continue
   guards="$(echo "$text" | extract_guards || true)"
@@ -40,7 +42,12 @@ while read -r num; do
       dead+=("$name")
     fi
   done <<< "$guards"
-done <<< "$(gh issue list --state closed --limit 1000 --json number --jq '.[].number')"
+if [ "$#" -gt 1 ]; then
+  nums="${*:2}"
+else
+  nums="$(gh issue list --state closed --limit 1000 --json number --jq '.[].number')"
+fi
+done <<< "$nums"
 
 # self-test hook
 if [ -n "${TRACKER_AUDIT_EXTRA_GUARD:-}" ]; then
@@ -53,7 +60,7 @@ if [ -n "${TRACKER_AUDIT_EXTRA_GUARD:-}" ]; then
   fi
 fi
 
-echo "guard-liveness: $total guards checked, ${#dead[@]} dead"
+echo "guard-liveness: scanned $scanned issues, $total guards checked, ${#dead[@]} dead"
 if [ "${#dead[@]}" -gt 0 ]; then
   printf 'dead: %s\n' "${dead[@]}"
   exit 1
