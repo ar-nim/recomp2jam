@@ -6321,6 +6321,19 @@ mod game_tests {
     }
 
     #[test]
+    fn face_click_selects_channel_row_and_enters_rooms() {
+        // Ticket #56: only the face enters — row 0 (active) face
+        // (502,236)-(546,257).
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        game.ingest_snapshot(&InputSnapshot::click_at(524, 246));
+        assert_eq!(game.highlight, 0);
+        assert_eq!(game.screen(), Screen::Room);
+    }
+
+    #[test]
     fn ch190_inactive_row_refuses_face_enter() {
         // Ticket #190: row 1 of `two_channels()` is inactive, so its
         // enter face must not advance to Room (and names no entry
