@@ -53,9 +53,9 @@ open overlay. `side_hover_from_channel_arms_no_channel_row` failed
 first, then the `side.is_some()` gate landed (room-resolver
 precedent + `click_dispatch` order).
 
-### Shop (`SideScreen::Shop`) — wired
+### Shop (`SideScreen::Shop`) — wired + labeled no-ops (ticket #195)
 
-Guard: `shop_chrome_sweep_presses_every_staged_control`.
+Guards: `shop_chrome_sweep_presses_every_staged_control`, `shop_preview_selects_row_and_back_clears`, `shop_bag_pager_turns_over_staged_owned_inventory`, `shop_row_prices_come_from_the_staged_catalog`, `shop_unwired_browse_chrome_lands_nowhere`, `shop_preview_and_bag_pager_ink_their_staged_rects`.
 
 | control | outcome | evidence/stand-in |
 |---|---|---|
@@ -63,7 +63,17 @@ Guard: `shop_chrome_sweep_presses_every_staged_control`.
 | `BUYITEM` | empty cart queues nothing; full cart queues one 5000 send, seam drains once | pinned 5000 send |
 | Scroll pager (relative children) | steps 8-row pages, holds at both ends | staged scroll origin |
 | Cart pager | steps over a full cart, holds at both ends | empty-cart `1/1` rule |
-| `GEMMONEY`, page digits, scroll bar body, `ITEMNAME`/`ITEMWON` templates | land nowhere, queue nothing | display-only, no-op guard |
+| `ITEMPRE` ×8 / `ITEMBACK` | pick the visible row into an id-stable preview slot; `ITEMBACK` clears; both queue nothing | staged buttons + staged catalog |
+| `BAGLEFT` / `BAGRIGHT` | turn ten-cell owned pages in inventory order (zero/unknown skip), hold at both ends, queue nothing | staged pager + staged inventory join |
+| `ITEMWON` ×8 | ink the staged catalog price word per row, no invented data | parsed `Itemdata_Korea.dat` price |
+| `GEMMONEY`, page digits, scroll bar body, `ITEMNAME` templates | land nowhere, queue nothing | display-only, no-op guard |
+| Bag page digits (`LPAGECNT`/`RPAGECNT`) | land nowhere (paint targets; L = current / R = total is ASSUMED) | display-only, labeled stand-in — next: rig capture of a bag-page turn |
+| `ITEMCOMMENT` | lands nowhere (paint target; preview name inks here, ASSUMED) | display-only, labeled stand-in — next: rig capture of a preview press |
+| `ITEMGEM` ×8, `CHECKGEM`/`CHECKMONEY` | staged but blank — the gem/won split of the single parsed price word is unpinned | labeled no-ops — next: file→entry price mapping + rig capture at known prices |
+| `ITEMSHOW` ×8, `MYBAGITEM` ×10 icons | land nowhere (icon paint needs sprite staging, OPEN) | display-only, labeled stand-in — next: sprite-slot→icon mapping |
+| GIRL/BOY, SET/FASHION/ACCESSORY/BEAUTY/INSTRUMENT, SUBMENU ×6, EXTMENU opener + 12 filters | never stage in the live dump (203 placements) — land nowhere by absence | labeled no-ops — next: SendInput sweep if they ever stage |
+| `BAGSORT`, `PLANET_UP`/`DOWN`, `ITEMGIFT` ×8, `GIFTITEM` | stage but record nothing (sort/gift semantics unpinned) | labeled no-ops — next: rig capture / gift send pins (#178 stories 20-21) |
+| TOP100 | absent — no item-shop arm (#181 verdict: music-shop-only `0x1A20007D`); never dispatches here | mis-scoped #178 story 10 → music shop #179 |
 
 ### Music shop (`SideScreen::MusicShop`) — wired
 
