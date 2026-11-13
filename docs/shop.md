@@ -80,14 +80,52 @@ the take-seam (`docs/shop-buy.md`). Sort/filter/set-item/bag/
 gift semantics stay display-only OPEN (next step: SendInput sweep
 on the live shop per the `~/scratch/planet-verify/` recipe).
 
+## Ticket #196 (2026-11-14)
+
+ControlList walk (`ControlList_Interface.txt` `STATE_SHOP`, same
+pinned exe bytes as above) names the full button inventory the
+ticket wires: `ITEMGIFT1..8` (`0x14200020..0x27`, art-less),
+`ITEMPRE1..8` (`0x14200064..0x6B`, `Shop_ItemPre.ojs`), `ITEMBACK`
+(`0x1420006C`, `Shop_ItemBack.ojs`), cart `GIFTITEM` (`0x14200071`,
+`Shop_Btn_GiftItem.ojs`), `MGASH` (`0x14400029`), `CART_CHECKGEM` /
+`CART_CHECKMONEY` (`0x14400074`/`0x75`), and the art-less
+`IDC_IMAGE_SSHOP_AVATAR` pane (`0x14700034`, staged figure like the
+room slot).
+
+- Avatar pane: the equipped worn figure stages through the #193
+  pipeline (`load_worn_figure`, no fork) on every source/character
+  stage, equip commit, shop entry, and preview change, and paints at
+  the staged pane rect on the paint clock (`paint_shop_avatar`).
+  Missing source/character/data keeps the old pane (never blanked);
+  without a pane the art stays alone (never invented).
+- Try-on: row `ITEMPRE` previews the visible good (the exe preview
+  semantics stay OPEN — ours-by-design); `ITEMBACK` and leaving the
+  shop revert to the equipped avatar. Preview never touches
+  equipment or the wire (server-authoritative, no local minting).
+- Gift: `ITEMGIFT`/`GIFTITEM` record `ShopGiftNoop` (id + next step)
+  and queue nothing. Gift send has no TCP shape (web-only
+  `gift_input.aspx`, `docs/gifts.md`); `Dialog_GiftView.bnd`
+  stages nowhere (census bucket E, `docs/bnd-consumption.md`).
+- Balances: `MGASH` paints the `o2_cash` word (`--` until the 5001
+  prefix folds; the cell→word join stays OPEN — `cash_point` /
+  `item_cash` are the named alternatives). `CHECKMONEY` sums the
+  checked cart's `ITEMWON` prices (ours-by-design); `CHECKGEM`
+  stays `--` (no gem-price source, same OPEN as `ITEMGEM`).
+- Bag-vs-giftbox landing of a bought item stays UNCONFIRMED
+  (probed nowhere — the 5001 entry list is GLOBAL-sized, so the
+  client cannot decode the landing; never invented).
+
 ## OPEN
 
 1. Entry/exit dispatch call sites.
 2. TEXT caption and icon staging sources (GEM cell staged from
-   5028/5001 words since ticket #21; `MGASH` source unpinned).
+   5028/5001 words since ticket #21; `MGASH`→`o2_cash` join OPEN —
+   rig capture at known balances still names the cell).
 3. Buy/gift/cart/set-item click semantics — PARTIAL: `ITEMBUY`
-   checks the cart, `BUYITEM` commits 5000 (ASSUMED wire-side);
-   gift/set-item unevidenced.
+   checks the cart, `BUYITEM` commits 5000 (ASSUMED wire-side),
+   `ITEMGIFT`/`GIFTITEM` record a no-op (ticket #196);
+   set-item unevidenced; bag-vs-giftbox landing UNCONFIRMED
+   (ticket #196 — probed nowhere, never invented).
 4. Scroll, bag pager, planet pager, ext-menu filter behavior —
    PARTIAL: scroll pager steps and holds (origin-offset
    read ASSUMED); bag/planet pagers and filters display-only.

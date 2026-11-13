@@ -285,13 +285,43 @@ pub fn shop_items(table: &AvatarItemTable) -> Vec<ShopItemView<'_>> {
 // commits through `BUYITEM` (`0x70`) as the pinned empty
 // `SyncItemPurchase` 5000 send (file `0xf3fa8`); the 5001 answer is
 // undecodable standalone, so the wire ride stays ASSUMED behind the
-// take-seam (`docs/shop-buy.md`). Filters, set-item, bag, and gift
-// semantics stay display-only OPEN (next step: SendInput sweep on
-// the live shop per the `~/scratch/planet-verify/` recipe).
+// take-seam (`docs/shop-buy.md`). Row `ITEMPRE` previews into the
+// avatar pane and `ITEMBACK` reverts (both ours-by-design, ticket
+// #196); `ITEMGIFT`/`GIFTITEM` record a no-op (`ShopGiftNoop`).
+// Filters, set-item, and bag semantics stay display-only OPEN
+// (next step: SendInput sweep on the live shop per the
+// `~/scratch/planet-verify/` recipe).
 
 /// First per-row buy button (`IDC_BUTTON_SSHOP_ITEMBUY1`); eight run
 /// contiguously through `+7` (block walk + staged dump).
 pub const SHOP_ITEMBUY_FIRST_CODE: u32 = 0x1420_0018;
+/// First per-row gift button (`IDC_BUTTON_SSHOP_ITEMGIFT1`); eight
+/// run contiguously through `+7`, art-less (verified against
+/// `ControlList_Interface.txt` `STATE_SHOP`: codes `0x14200020..0x27`,
+/// no sprite). Presses record a no-op ([`ShopGiftNoop`]): gift send is
+/// web-only (`gift_input.aspx`, `docs/gifts.md`) and
+/// `Dialog_GiftView.bnd` stages nowhere (census bucket E).
+pub const SHOP_ITEMGIFT_FIRST_CODE: u32 = 0x1420_0020;
+/// Control ids behind the eight `ITEMGIFT` buttons, in row order.
+pub const SHOP_ITEMGIFT_IDS: [&str; 8] = [
+    "IDC_BUTTON_SSHOP_ITEMGIFT1",
+    "IDC_BUTTON_SSHOP_ITEMGIFT2",
+    "IDC_BUTTON_SSHOP_ITEMGIFT3",
+    "IDC_BUTTON_SSHOP_ITEMGIFT4",
+    "IDC_BUTTON_SSHOP_ITEMGIFT5",
+    "IDC_BUTTON_SSHOP_ITEMGIFT6",
+    "IDC_BUTTON_SSHOP_ITEMGIFT7",
+    "IDC_BUTTON_SSHOP_ITEMGIFT8",
+];
+/// First per-row preview button (`IDC_BUTTON_SSHOP_ITEMPRE1`);
+/// eight run contiguously through `+7` (`Shop_ItemPre.ojs` bodies).
+/// Ours-by-design: row try-on into the avatar pane (ticket #196) —
+/// the exe preview semantics stay OPEN.
+pub const SHOP_ITEMPRE_FIRST_CODE: u32 = 0x1420_0064;
+/// Preview-back button (`IDC_BUTTON_SSHOP_ITEMBACK`,
+/// `Shop_ItemBack.ojs`). Ours-by-design: reverts the try-on to the
+/// equipped avatar (ticket #196).
+pub const SHOP_ITEMBACK_CODE: u32 = 0x1420_006C;
 /// Visible item rows per page (eight staged `ITEMBUY` hit areas).
 pub const SHOP_ITEM_ROWS: usize = 8;
 /// First row-name TEXT template (`IDC_TEXT_SSHOP_ITEMNAME1`); eight
@@ -313,6 +343,12 @@ pub const SHOP_SCROLL_RIGHT_CODE: u32 = 0x1420_0049;
 /// Cart buy (`IDC_BUTTON_SSHOP_BUYITEM`): commits the cart through
 /// the pinned empty `SyncItemPurchase` 5000 send.
 pub const SHOP_BUYITEM_CODE: u32 = 0x1420_0070;
+/// Cart gift button (`IDC_BUTTON_SSHOP_GIFTITEM`,
+/// `Shop_Btn_GiftItem.ojs`). Records the same gift no-op as the
+/// per-row `ITEMGIFT` buttons: no wire send is invented.
+pub const SHOP_GIFTITEM_CODE: u32 = 0x1420_0071;
+/// Cart gift button id (the [`ShopGiftNoop`] record behind it).
+pub const SHOP_GIFTITEM_ID: &str = "IDC_BUTTON_SSHOP_GIFTITEM";
 /// Cart pager (`IDC_BUTTON_SSHOP_MYCART_LEFT/RIGHT`).
 pub const SHOP_CART_LEFT_CODE: u32 = 0x1420_0072;
 pub const SHOP_CART_RIGHT_CODE: u32 = 0x1420_0073;
@@ -332,10 +368,47 @@ pub const SHOP_CART_PAGE_CUR_TENS_CODE: u32 = 0x1450_0081;
 pub const SHOP_CART_PAGE_CUR_ONES_CODE: u32 = 0x1450_0080;
 pub const SHOP_CART_PAGE_TOT_TENS_CODE: u32 = 0x1450_0083;
 pub const SHOP_CART_PAGE_TOT_ONES_CODE: u32 = 0x1450_0082;
+/// Next evidence step for a staged shop gift control press: the gift
+/// send has no TCP shape (web-only `gift_input.aspx`, `docs/gifts.md`),
+/// `Dialog_GiftView.bnd` stages nowhere (census bucket E,
+/// `docs/bnd-consumption.md`), and the bag-vs-giftbox landing of a
+/// bought item stays UNCONFIRMED (`docs/shop.md` OPEN 3) — so the
+/// press records instead of sending.
+pub const SHOP_GIFT_NEXT_STEP: &str = "SendInput sweep of the live shop ITEMGIFT/GIFTITEM buttons plus Dialog_GiftView.bnd staging (bucket E) and the gift_input.aspx web-only send (docs/gifts.md); bag-vs-giftbox landing UNCONFIRMED";
+/// Record of one staged shop gift press that stages no dialog and
+/// queues no wire (ticket #196): the click is answered, never
+/// silently dropped and never invented onto the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShopGiftNoop {
+    /// Staged control id (`IDC_BUTTON_SSHOP_ITEMGIFT*`, `IDC_BUTTON_SSHOP_GIFTITEM`).
+    pub id: &'static str,
+    /// Next evidence step that would wire the control.
+    pub next_step: &'static str,
+}
 /// Wallet gem text (`IDC_TEXT_SSHOP_GEMMONEY`): the exe displays
 /// balances alongside gem (`docs/shop-buy.md`), so the staged gem
-/// word paints here (`--` until wire data). `MGASH` stays OPEN.
+/// word paints here (`--` until wire data).
 pub const SHOP_GEMMONEY_CODE: u32 = 0x1440_0028;
+/// Wallet cash text (`IDC_TEXT_SSHOP_MGASH`): paints the item-shop
+/// cash word (`--` until wire data). OPEN join: the cell→word mapping
+/// is unpinned — `o2_cash` (the entry `+0x14` cash-price baseline the
+/// exe checks affordability against and displays alongside gem,
+/// `docs/shop-buy.md`) is the current read; `cash_point`/`item_cash`
+/// stay candidates until a rig capture at known balances pins it.
+pub const SHOP_MGASH_CODE: u32 = 0x1440_0029;
+/// Cart gem total (`IDC_TEXT_SSHOP_CART_CHECKGEM`): no gem-price
+/// source is pinned (same OPEN as the `ITEMGEM` cells), so the cell
+/// stays `--` (never an invented sum).
+pub const SHOP_CART_CHECKGEM_CODE: u32 = 0x1440_0074;
+/// Cart cash total (`IDC_TEXT_SSHOP_CART_CHECKMONEY`): the checked
+/// cart's summed `ITEMWON` prices (ours-by-design — the only
+/// client-side total consistent with the row cells; the exe total
+/// rule stays OPEN).
+pub const SHOP_CART_CHECKMONEY_CODE: u32 = 0x1440_0075;
+/// Avatar-pane figure slot (`IDC_IMAGE_SSHOP_AVATAR`, art-less →
+/// staged figure, ticket #196): the equipped (or preview) worn
+/// figure paints here on the paint clock, like the room slot.
+pub const SHOP_AVATAR_CODE: u32 = 0x1470_0034;
 
 /// One staged shop good: owned copies so the board outlives the
 /// parse borrow (mirrors [`LankingSong`]).
@@ -364,12 +437,23 @@ pub fn shop_goods(table: &AvatarItemTable) -> Vec<ShopGood> {
 }
 
 /// One item-shop click the exe codes name: row toggles, the cart
-/// buy, and both pagers. Everything else (filters, set-item, bag,
-/// gift) lands nowhere.
+/// buy, both pagers, row try-on, try-on revert, and the recorded
+/// gift no-ops. Everything else (filters, set-item, bag) lands
+/// nowhere.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShopAction {
     /// Row `ITEMBUY` button toggled (0-based on the page).
     ToggleRow(usize),
+    /// Row `ITEMPRE` button previews the row good in the avatar pane
+    /// (0-based on the page; ours-by-design, ticket #196).
+    TryOn(usize),
+    /// `ITEMBACK` reverts the preview to the equipped avatar.
+    RevertTryOn,
+    /// Row `ITEMGIFT` button (0-based on the page): recorded no-op,
+    /// never a send ([`ShopGiftNoop`]).
+    GiftRow(usize),
+    /// Cart `GIFTITEM`: recorded no-op, never a send.
+    GiftCart,
     /// Cart `BUYITEM` commits the cart.
     CartBuy,
     /// Item-list scroll pager stepped back.
@@ -430,6 +514,8 @@ fn shop_scroll_origin(placements: &[ScenePlacement]) -> Option<Rect> {
 fn shop_action_for_code(code: u32) -> Option<ShopAction> {
     match code {
         SHOP_BUYITEM_CODE => Some(ShopAction::CartBuy),
+        SHOP_GIFTITEM_CODE => Some(ShopAction::GiftCart),
+        SHOP_ITEMBACK_CODE => Some(ShopAction::RevertTryOn),
         SHOP_SCROLL_LEFT_CODE => Some(ShopAction::ItemPrev),
         SHOP_SCROLL_RIGHT_CODE => Some(ShopAction::ItemNext),
         SHOP_CART_LEFT_CODE => Some(ShopAction::CartPrev),
@@ -440,9 +526,23 @@ fn shop_action_for_code(code: u32) -> Option<ShopAction> {
 
 /// Row toggle behind one `ITEMBUY` code (`None` outside the eight).
 fn shop_row_toggle(code: u32) -> Option<ShopAction> {
-    let slot = code.checked_sub(SHOP_ITEMBUY_FIRST_CODE)?;
-    let slot = usize::try_from(slot).ok()?;
-    (slot < SHOP_ITEM_ROWS).then_some(ShopAction::ToggleRow(slot))
+    shop_row_slot(SHOP_ITEMBUY_FIRST_CODE, code)
+        .and_then(|slot| (slot < SHOP_ITEM_ROWS).then_some(ShopAction::ToggleRow(slot)))
+        .or_else(|| {
+            shop_row_slot(SHOP_ITEMGIFT_FIRST_CODE, code)
+                .and_then(|slot| (slot < SHOP_ITEM_ROWS).then_some(ShopAction::GiftRow(slot)))
+        })
+        .or_else(|| {
+            shop_row_slot(SHOP_ITEMPRE_FIRST_CODE, code)
+                .and_then(|slot| (slot < SHOP_ITEM_ROWS).then_some(ShopAction::TryOn(slot)))
+        })
+}
+
+/// Row slot behind one per-row button run (`None` below the run's
+/// first code or past `u32` range; the caller bounds it to the row
+/// count).
+fn shop_row_slot(first: u32, code: u32) -> Option<usize> {
+    usize::try_from(code.checked_sub(first)?).ok()
 }
 
 /// Page count of a `per_page`-row list (at least one: an empty cart

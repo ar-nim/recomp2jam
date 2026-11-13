@@ -32,12 +32,13 @@ use super::paint::{
     paint_payment_notice, paint_planet_options, paint_planet_quit, paint_planet_scene,
     paint_playing_backdrop, paint_playing_foreground, paint_result, paint_result_scene,
     paint_room_chat, paint_room_hover, paint_room_list, paint_room_scene, paint_room_user_panel,
-    paint_screen, paint_shop_board, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
-    paint_waiting_scene, paint_waiting_seat_avatar, paint_waiting_seat_avatars,
-    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
-    scene_index, staged_rect_hit, BattleVerdict, ChannelChatMessage, ChannelScroll, LoadingStatus,
-    ResultPaint, ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage,
-    CHANNEL_VISIBLE_ROWS, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    paint_screen, paint_shop_avatar, paint_shop_board, paint_shop_scene, paint_waiting_chat,
+    paint_waiting_members, paint_waiting_scene, paint_waiting_seat_avatar,
+    paint_waiting_seat_avatars, playing_backdrop_staged, quit_fallback_rects, rect_hit,
+    room_chrome_visible, room_panel_hit, scene_index, staged_rect_hit, BattleVerdict,
+    ChannelChatMessage, ChannelScroll, LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict,
+    SceneArt, WaitingCaptions, WaitingChatMessage, CHANNEL_VISIBLE_ROWS, RESULT_BACK_ID,
+    RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::select_paint::{
     paint_select_chosung_rows, paint_select_filter_columns, paint_select_ok,
@@ -52,17 +53,18 @@ use super::side::{
     shop_action_at, side_scene_slot, waiting_song_detail_line, waiting_song_title_line,
     waiting_team_for_code, wallet_row_caption, CreateRoomAction, CreateRoomForm, LankingSong,
     LankingSort, MusicShopRow, MyRoomAction, MyRoomState, PasswordAction, PasswordForm,
-    PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog, SelectMusicSong, ShopGood, SideScreen,
-    WalletRow, WalletState, GEM_LABEL, OPTION_GAME_BLEND_NO, OPTION_GAME_BLEND_YES,
-    OPTION_GAME_EFFECT_HIGH, OPTION_GAME_EFFECT_LOW, OPTION_GAME_EFFECT_NORMAL,
-    OPTION_GAME_GUIDE_LONG, OPTION_GAME_GUIDE_MIDDLE, OPTION_GAME_GUIDE_NOUSE,
-    OPTION_GAME_GUIDE_SHORT, OPTION_GAME_LONGNOTE_NONE, OPTION_GAME_LONGNOTE_USED,
-    OPTION_GAME_MODE_FULL, OPTION_GAME_MODE_WIN, OPTION_GAME_NOTETYPE1, OPTION_GAME_NOTETYPE2,
-    OPTION_KEY_3KEY_FIRST, OPTION_KEY_3KEY_MODE, OPTION_KEY_7KEY_MODE, OPTION_KEY_LANE_FIRST,
-    OPTION_KEY_TEST, OPTION_SOUND_BG_EFFECT_DOWN, OPTION_SOUND_BG_EFFECT_UP,
+    PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog, SelectMusicSong, ShopAction,
+    ShopGiftNoop, ShopGood, SideScreen, WalletRow, WalletState, GEM_LABEL, O2_CASH_LABEL,
+    OPTION_GAME_BLEND_NO, OPTION_GAME_BLEND_YES, OPTION_GAME_EFFECT_HIGH, OPTION_GAME_EFFECT_LOW,
+    OPTION_GAME_EFFECT_NORMAL, OPTION_GAME_GUIDE_LONG, OPTION_GAME_GUIDE_MIDDLE,
+    OPTION_GAME_GUIDE_NOUSE, OPTION_GAME_GUIDE_SHORT, OPTION_GAME_LONGNOTE_NONE,
+    OPTION_GAME_LONGNOTE_USED, OPTION_GAME_MODE_FULL, OPTION_GAME_MODE_WIN, OPTION_GAME_NOTETYPE1,
+    OPTION_GAME_NOTETYPE2, OPTION_KEY_3KEY_FIRST, OPTION_KEY_3KEY_MODE, OPTION_KEY_7KEY_MODE,
+    OPTION_KEY_LANE_FIRST, OPTION_KEY_TEST, OPTION_SOUND_BG_EFFECT_DOWN, OPTION_SOUND_BG_EFFECT_UP,
     OPTION_SOUND_BG_MUSIC_DOWN, OPTION_SOUND_BG_MUSIC_UP, OPTION_SOUND_GAME_EFFECT_DOWN,
     OPTION_SOUND_GAME_EFFECT_UP, OPTION_SOUND_GAME_MUSIC_DOWN, OPTION_SOUND_GAME_MUSIC_UP,
     PLANET_OPTION_FIRST_TAB, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE,
+    SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS,
 };
 use crate::{menu_of, InputEdge, InputSnapshot, MenuKey};
 use o2jam_audio::{
@@ -81,7 +83,7 @@ use o2jam_net::shop::{EquipItem, SyncItemPurchase, SyncMusicPurchase};
 use o2jam_net::wallet::SyncCashPointResponse;
 use o2jam_net::{
     ChannelState, CharacterInfo, CreateRoom, Difficulty, ExitPlaying, Gender, JoinRoom, JoinedRoom,
-    Ready, RoomListEntry, RoomTeamChanged, SetRoomTeam, StartGame,
+    Ready, RoomListEntry, RoomTeamChanged, SetRoomTeam, StartGame, EQUIPMENT_SLOTS,
 };
 use o2jam_render::{
     draw_text, fill_rect, pack_xrgb, scale_rect_to_frame, text_width, Frame, Rect, Rgb555Image,
@@ -649,6 +651,13 @@ pub struct ScreenGame {
     /// Live wallet words behind the shop gem cells (5028/5001/5003
     /// folds; `--` until data).
     wallet: WalletState,
+    /// Staged item-shop avatar pane (ticket #196): the equipped worn
+    /// figure, or the try-on preview while one stages. `None` paints
+    /// the staged art alone (never an invented figure).
+    shop_avatar: Option<AvatarFigure>,
+    /// Last staged shop gift press ([`ShopGiftNoop`]); `None` until a
+    /// gift button answers.
+    shop_gift_noop: Option<ShopGiftNoop>,
     /// Song-shop board state (the catalog, sort, pages, board, and
     /// cart; #139 cluster 4): every `music_shop_*` word lives here;
     /// the hash fold reads it for the six hashed words.
@@ -1014,6 +1023,8 @@ impl ScreenGame {
             lanking: LankingState::default(),
             shop: ShopState::default(),
             wallet: WalletState::default(),
+            shop_avatar: None,
+            shop_gift_noop: None,
             music_shop: MusicShopState::default(),
             side_placements: Vec::new(),
             side_figures: HashMap::new(),
@@ -3976,6 +3987,7 @@ impl ScreenGame {
     /// Staging never moves the flow.
     pub fn set_myroom_character(&mut self, character: CharacterInfo) -> &mut Self {
         self.myroom_character = Some(character);
+        self.restage_shop_avatar();
         self
     }
 
@@ -4054,6 +4066,7 @@ impl ScreenGame {
         self.shop.set_catalog(&table);
         self.avatar_source = Some((archive, table));
         self.restage_waiting_figures();
+        self.restage_shop_avatar();
         self
     }
 
@@ -4235,6 +4248,7 @@ impl ScreenGame {
             }
         }
         self.restage_waiting_figures();
+        self.restage_shop_avatar();
     }
 
     /// Claim the selected gift cell: the 5023 body queues for the
@@ -4290,6 +4304,11 @@ impl ScreenGame {
             // stays labeled until the rig names the entry fetch.
             self.outbox.pending_gift_list = true;
         }
+        if side == SideScreen::Shop {
+            // The pane shows the equipped avatar on entry (a preview
+            // never survives a leave — see `leave_side`).
+            self.restage_shop_avatar();
+        }
         true
     }
 
@@ -4328,6 +4347,12 @@ impl ScreenGame {
         };
         if !can_return_side(side, origin) {
             return false;
+        }
+        if side == SideScreen::Shop {
+            // A preview never sticks past the shop: leaving reverts
+            // to the equipped avatar (ticket #196).
+            self.shop.clear_try_on();
+            self.restage_shop_avatar();
         }
         self.side = None;
         self.side_origin = None;
@@ -4476,6 +4501,28 @@ impl ScreenGame {
         wallet_row_caption(&WalletRow::named(GEM_LABEL, self.wallet.gem))
     }
 
+    /// Wallet cash cell caption (`O2 CASH 50`); `--` until a 5001
+    /// purchase prefix folds the word. The `MGASH`→`o2_cash` join is
+    /// OPEN (see `SHOP_MGASH_CODE`); the caption only renders the
+    /// staged word, never a guessed one.
+    #[must_use]
+    pub fn shop_won_caption(&self) -> String {
+        wallet_row_caption(&WalletRow::named(O2_CASH_LABEL, self.wallet.o2_cash))
+    }
+
+    /// Checked-cart cash total caption: the summed `ITEMWON` row
+    /// prices (ours-by-design, same rule the board paints).
+    #[must_use]
+    pub fn shop_cart_money_total(&self) -> u32 {
+        self.shop_cart_total()
+    }
+
+    /// Summed `ITEMWON` prices over the checked cart (saturating;
+    /// the board and the caption share this one total).
+    fn shop_cart_total(&self) -> u32 {
+        self.shop.cart_total()
+    }
+
     /// Fold a 5028 wallet refresh into the shop wallet.
     pub fn apply_shop_cash_point(&mut self, response: &SyncCashPointResponse) {
         self.wallet.apply_cash_point(response);
@@ -4519,10 +4566,12 @@ impl ScreenGame {
 
     /// Item-shop click through the control-code dispatch
     /// ([`shop_action_at`]): row toggles check the cart, `BUYITEM`
-    /// commits a non-empty cart through the pinned 5000 send, and
-    /// both pagers step and hold at the ends. Staged placements
-    /// only — unstaged clicks land nowhere. Only answers on the
-    /// open shop side screen.
+    /// commits a non-empty cart through the pinned 5000 send, both
+    /// pagers step and hold at the ends, `ITEMPRE` previews the row
+    /// good in the avatar pane, `ITEMBACK` reverts to the equipped
+    /// avatar, and the gift buttons record a no-op (never a send).
+    /// Staged placements only — unstaged clicks land nowhere. Only
+    /// answers on the open shop side screen.
     pub fn click_shop(&mut self, x: i32, y: i32) {
         if self.side != Some(SideScreen::Shop) {
             return;
@@ -4530,9 +4579,116 @@ impl ScreenGame {
         let Some(action) = shop_action_at(&self.side_placements, x, y) else {
             return;
         };
-        if self.shop.apply_action(action) {
-            self.outbox.pending_shop_buy = Some(SyncItemPurchase);
+        match action {
+            ShopAction::GiftRow(_) | ShopAction::GiftCart => self.record_shop_gift_noop(action),
+            ShopAction::TryOn(_) | ShopAction::RevertTryOn => {
+                if self.shop.apply_action(action) {
+                    self.outbox.pending_shop_buy = Some(SyncItemPurchase);
+                }
+                self.restage_shop_avatar();
+            }
+            _ => {
+                if self.shop.apply_action(action) {
+                    self.outbox.pending_shop_buy = Some(SyncItemPurchase);
+                }
+            }
         }
+    }
+
+    /// Record one staged shop gift press: the control id plus the
+    /// next evidence step. Queues nothing — gift send has no TCP
+    /// shape on 7.55 (web-only `gift_input.aspx`, `docs/gifts.md`).
+    fn record_shop_gift_noop(&mut self, action: ShopAction) {
+        let id = match action {
+            ShopAction::GiftRow(slot) => SHOP_ITEMGIFT_IDS
+                .get(slot)
+                .copied()
+                .unwrap_or(SHOP_GIFTITEM_ID),
+            _ => SHOP_GIFTITEM_ID,
+        };
+        self.shop_gift_noop = Some(ShopGiftNoop {
+            id,
+            next_step: SHOP_GIFT_NEXT_STEP,
+        });
+    }
+
+    /// Last recorded shop gift no-op (`None` until a gift button
+    /// answers).
+    #[must_use]
+    pub fn shop_gift_noop(&self) -> Option<ShopGiftNoop> {
+        self.shop_gift_noop
+    }
+
+    /// Previewed catalog item id (`None`: the pane shows the
+    /// equipped avatar).
+    #[must_use]
+    pub fn shop_try_on(&self) -> Option<u32> {
+        self.shop.try_on()
+    }
+
+    /// Whether the avatar pane holds a staged figure (equipped or
+    /// preview; `None` paints the staged art alone).
+    #[must_use]
+    pub fn shop_avatar_staged(&self) -> bool {
+        self.shop_avatar.is_some()
+    }
+
+    /// Equipment the avatar pane stacks from: the fetched hero set
+    /// with the previewed item swapped into its exe-derived slot
+    /// (same [`myroom_equip_slot`] rule the equip commit uses).
+    /// `None` without a preview, staged table, or character.
+    #[must_use]
+    pub fn shop_preview_equipment(&self) -> Option<[i32; EQUIPMENT_SLOTS]> {
+        let table = self.avatar_source.as_ref().map(|(_, table)| table)?;
+        let character = self.myroom_character.as_ref()?;
+        let item_id = self.shop.try_on()?;
+        let row = avatar_item_by_id(table, item_id)?;
+        let slot = myroom_equip_slot(row.item_type, myroom_record_slot(row))?;
+        let mut equipment = character.equipment;
+        equipment[usize::from(slot)] = i32::try_from(item_id).ok()?;
+        Some(equipment)
+    }
+
+    /// Revert the preview to the equipped avatar (`ITEMBACK`, and
+    /// leaving the shop side): clears the staged item and restages
+    /// the equipped pane. Never touches equipment or the wire.
+    pub fn revert_shop_preview(&mut self) -> &mut Self {
+        self.shop.clear_try_on();
+        self.restage_shop_avatar();
+        self
+    }
+
+    /// Restage the avatar pane through the #193 pipeline
+    /// ([`load_worn_figure`], no fork): the preview equipment while a
+    /// preview stages and stacks, else the fetched hero set. A
+    /// missing source, character, or unstackable set keeps the old
+    /// pane (never blanking it); without a pane the art stays alone.
+    fn restage_shop_avatar(&mut self) {
+        let staged = self.shop_preview_figure().or_else(|| {
+            let (archive, table) = self.avatar_source.as_ref()?;
+            let character = self.myroom_character.as_ref()?;
+            let figure = load_worn_figure(
+                archive,
+                table,
+                &character.equipment,
+                character.gender == Gender::Male,
+            );
+            (!figure.is_empty()).then_some(figure)
+        });
+        if let Some(figure) = staged {
+            self.shop_avatar = Some(figure);
+        }
+    }
+
+    /// Stack the preview figure from the swapped equipment (`None`
+    /// when the preview is unresolvable or unstackable — the pane
+    /// then keeps the equipped figure).
+    fn shop_preview_figure(&self) -> Option<AvatarFigure> {
+        let (archive, table) = self.avatar_source.as_ref()?;
+        let character = self.myroom_character.as_ref()?;
+        let equipment = self.shop_preview_equipment()?;
+        let figure = load_worn_figure(archive, table, &equipment, character.gender == Gender::Male);
+        (!figure.is_empty()).then_some(figure)
     }
 
     /// Stage the song-shop catalog (`OJNList.dat` order, owned
@@ -4646,7 +4802,7 @@ impl ScreenGame {
     pub fn paint_at(&mut self, frame: &mut Frame<'_>, now_ms: u64) {
         frame.buf.fill(FRAME_CLEAR_COLOR);
         if self.side.is_some() {
-            self.paint_side(frame);
+            self.paint_side(frame, now_ms);
             return;
         }
         if self.flow.current() == Screen::Avi && now_ms >= self.splash_hold_ms {
@@ -4699,7 +4855,7 @@ impl ScreenGame {
     /// (billing notice, lanking, shop, song-shop, my room). Each
     /// overlay inks into staged TEXT rects; without staged rows or
     /// goods it paints nothing (art-only).
-    fn paint_side(&mut self, frame: &mut Frame<'_>) {
+    fn paint_side(&mut self, frame: &mut Frame<'_>, now_ms: u64) {
         paint_side_scene(frame, &self.side_placements, &self.side_figures);
         // The billing views complete no web call, so the
         // Payment overlay inks the unwired notice over the
@@ -4721,9 +4877,11 @@ impl ScreenGame {
                 self.lanking_selected_title().as_deref(),
             );
         }
-        // The shop overlay inks goods, prices, the wallet cell,
-        // the cart, and both pager readouts into staged TEXT
-        // rects; without staged goods it paints nothing.
+        // The shop overlay inks goods, prices, both wallet cells,
+        // the cart with its checkout totals, both pager readouts,
+        // and the avatar pane (equipped or preview figure on the
+        // paint clock) into staged rects; without staged goods it
+        // paints nothing.
         if self.side == Some(SideScreen::Shop) {
             paint_shop_board(
                 frame,
@@ -4733,6 +4891,12 @@ impl ScreenGame {
                 &self.shop_visible_cart(),
                 self.shop_cart_page(),
                 self.shop_cart_pages(),
+            );
+            paint_shop_avatar(
+                frame,
+                &self.side_placements,
+                self.shop_avatar.as_ref(),
+                now_ms,
             );
         }
         // The song-shop overlay inks catalog rows with live
@@ -13049,6 +13213,340 @@ mod game_tests {
         assert_eq!(game.shop_page(), 0);
         assert!(game.shop_visible_goods().is_empty());
         assert_eq!(game.take_shop_buy(), None);
+    }
+
+    /// Two stackable shop goods over the synthetic worn archive: red
+    /// item 1 in record slot 0, green item 2 in record slot 1 (type 2
+    /// rides the record slot, `docs/equip.md`).
+    fn shop_preview_table() -> o2jam_file::AvatarItemTable {
+        // Four wear slots per row like `worn_test_table` (the picker
+        // reads slots 2.. by gender parity); slot 2 names the red
+        // body for item 1, the green body for item 2.
+        let row = |item_id: u32, slot: u8, body: &str| o2jam_file::AvatarItemRow {
+            item_id,
+            item_type: 2,
+            price: item_id * 100,
+            params: [0, 0, u32::from(slot) << 24, 0],
+            flags: (0, 0),
+            name: format!("Good{item_id:02}"),
+            description: String::new(),
+            sprites: vec![
+                (1, "icon.oji".to_owned()),
+                (1, "icon.oji".to_owned()),
+                (1, body.to_owned()),
+                (1, body.to_owned()),
+            ],
+        };
+        o2jam_file::AvatarItemTable {
+            rows: vec![row(1, 0, "01F01001.oji"), row(2, 1, "02F01001.oji")],
+        }
+    }
+
+    /// Synthetic worn archive behind [`shop_preview_table`]: one red
+    /// pixel per item-1 layer, one green pixel per item-2 layer.
+    fn shop_preview_archive() -> Vec<u8> {
+        worn_test_archive(&[
+            ("01F01001.ojs", &worn_test_sprite()),
+            ("02F01001.ojs", &worn_test_green_sprite()),
+        ])
+    }
+
+    /// One green pixel sprite-55 body (the preview counterpart to
+    /// the red [`worn_test_sprite`]).
+    fn worn_test_green_sprite() -> Vec<u8> {
+        let mut blob = worn_test_sprite();
+        let last = blob.len() - 1;
+        blob[last - 1] = 0xE0;
+        blob[last] = 0x03;
+        blob
+    }
+
+    /// Hero wearing red item 1 in slot 0 (female parity keeps both
+    /// synthetic bodies on the same wear path).
+    fn shop_preview_hero() -> CharacterInfo {
+        let mut hero = myroom_test_character(vec![1, 2]);
+        hero.equipment[0] = 1;
+        hero
+    }
+
+    /// Open shop side with the preview placements, staged table,
+    /// hero, and stackable archive (the live
+    /// `stage_online_identity` join, minus the gateway).
+    fn open_shop_preview_board() -> ScreenGame {
+        use super::super::side::{
+            SHOP_AVATAR_CODE, SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE,
+            SHOP_GIFTITEM_CODE, SHOP_ITEMBACK_CODE, SHOP_ITEMGIFT_FIRST_CODE,
+            SHOP_ITEMPRE_FIRST_CODE, SHOP_MGASH_CODE,
+        };
+        let mut game = ScreenGame::new();
+        walk_to_waiting(&mut game);
+        let table = shop_preview_table();
+        game.set_shop_catalog(&table);
+        game.set_myroom_character(shop_preview_hero());
+        game.set_avatar_source(shop_preview_archive(), table);
+        let mut placements = shop_side_placements();
+        let area = |code: u32, x: i32, y: i32, w: u32, h: u32| ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect { x, y, w, h },
+        };
+        for slot in 0..8u32 {
+            let x = 220 + (slot % 4) as i32 * 141;
+            placements.push(area(
+                SHOP_ITEMPRE_FIRST_CODE + slot,
+                x,
+                207 + (slot / 4) as i32 * 153,
+                81,
+                17,
+            ));
+            placements.push(area(
+                SHOP_ITEMGIFT_FIRST_CODE + slot,
+                x,
+                227 + (slot / 4) as i32 * 153,
+                81,
+                17,
+            ));
+        }
+        placements.push(area(SHOP_ITEMBACK_CODE, 130, 563, 49, 23));
+        placements.push(area(SHOP_GIFTITEM_CODE, 70, 563, 49, 23));
+        placements.push(area(SHOP_MGASH_CODE, 200, 288, 95, 13));
+        placements.push(area(SHOP_CART_CHECKGEM_CODE, 82, 320, 95, 13));
+        placements.push(area(SHOP_CART_CHECKMONEY_CODE, 200, 320, 95, 13));
+        placements.push(area(SHOP_AVATAR_CODE, 600, 100, 120, 200));
+        game.load_side_scene(placements, HashMap::new());
+        assert!(game.visit_side(SideScreen::Shop));
+        game
+    }
+
+    #[test]
+    fn shop_try_on_previews_visible_row_without_touching_equipped() {
+        // Live caller chain:
+        //   main.rs::run_play -> setup_online -> stage_online_identity
+        //   -> ScreenGame::set_avatar_source + set_myroom_character
+        //   -> visit_side(Shop) -> click_shop(ITEMPRE) -> ShopState::preview_slot
+        //   -> ScreenGame::restage_shop_avatar (load_worn_figure, ticket #193).
+        // Archives absent -> skip cleanly (CI has no game data): the
+        // synthetic worn archive stacks here, so this seam runs everywhere.
+        let mut game = open_shop_preview_board();
+        assert_eq!(game.shop_try_on(), None);
+        let pane_layers = |game: &ScreenGame| game.shop_avatar.as_ref().map(AvatarFigure::len);
+        assert_eq!(pane_layers(&game), Some(1), "equipped pane stacks one body");
+        // Row 1 holds green item 2 (ITEMPRE at x 361..442, y 207..224).
+        game.click_shop(362, 208);
+        assert_eq!(game.shop_try_on(), Some(2));
+        assert_eq!(
+            pane_layers(&game),
+            Some(2),
+            "preview restages the pane through the worn stacker"
+        );
+        // The equipped set never moves and no wire queues: preview
+        // is paint-only (server-authoritative, no local minting).
+        let hero = game.myroom_character().expect("hero staged");
+        assert_eq!(hero.equipment[0], 1);
+        assert_eq!(hero.equipment[1], 0);
+        assert_eq!(game.take_shop_buy(), None);
+        assert!(!game.has_pending_equip_send());
+        assert_eq!(game.take_gift_claim(), None);
+        // The synthetic archive stacks, so the pane holds the
+        // preview figure on the fly.
+        assert!(game.shop_avatar_staged());
+    }
+
+    #[test]
+    fn shop_preview_overrides_equipped_slot_for_render() {
+        // Live caller chain: same try-on chain as
+        // `shop_try_on_previews_visible_row_without_touching_equipped`;
+        // the override follows the exe equip-slot rule the commit
+        // path uses (`docs/equip.md`: type 2 rides the record slot).
+        let mut game = open_shop_preview_board();
+        game.click_shop(362, 208);
+        let preview = game.shop_preview_equipment().expect("preview staged");
+        assert_eq!(preview[0], 1, "unrelated slots keep the equipped item");
+        assert_eq!(preview[1], 2, "previewed item swaps into its slot");
+        assert!(
+            preview[2..].iter().all(|slot| *slot == 0),
+            "remaining slots stay empty"
+        );
+    }
+
+    #[test]
+    fn shop_revert_restores_equipped_avatar() {
+        // Live caller chain: the try-on chain above, then
+        // `ITEMBACK` (or leaving the shop) -> ShopState::clear_try_on
+        // -> restage_shop_avatar (equipped set, no preview).
+        let mut game = open_shop_preview_board();
+        let pane_layers = |game: &ScreenGame| game.shop_avatar.as_ref().map(AvatarFigure::len);
+        game.click_shop(362, 208);
+        assert_eq!(game.shop_try_on(), Some(2));
+        assert_eq!(pane_layers(&game), Some(2));
+        // ITEMBACK at (130..179, 563..586).
+        game.click_shop(131, 564);
+        assert_eq!(game.shop_try_on(), None);
+        assert!(game.shop_preview_equipment().is_none());
+        assert_eq!(
+            pane_layers(&game),
+            Some(1),
+            "revert restages the equipped pane"
+        );
+        // Leaving the shop reverts too: nothing sticks without purchase.
+        game.click_shop(362, 208);
+        assert_eq!(game.shop_try_on(), Some(2));
+        assert!(game.leave_side());
+        assert_eq!(game.shop_try_on(), None);
+    }
+
+    #[test]
+    fn shop_gift_buttons_record_noop_and_queue_nothing() {
+        // Live caller chain:
+        //   main.rs::run_play -> setup_online -> stage_online_identity
+        //   -> ScreenGame::set_avatar_source -> visit_side(Shop)
+        //   -> click_shop(ITEMGIFT/GIFTITEM) -> record_shop_gift_noop.
+        // Gift send has no TCP shape (web-only `gift_input.aspx`,
+        // `docs/gifts.md`); `Dialog_GiftView.bnd` stages nowhere
+        // (census bucket E) — so the press records, never sends.
+        use super::super::side::{SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS};
+        let mut game = open_shop_preview_board();
+        // Row 0 gift button at (220..301, 227..244).
+        game.click_shop(221, 228);
+        assert_eq!(
+            game.shop_gift_noop(),
+            Some(ShopGiftNoop {
+                id: SHOP_ITEMGIFT_IDS[0],
+                next_step: SHOP_GIFT_NEXT_STEP,
+            })
+        );
+        // Cart GIFTITEM at (70..119, 563..586).
+        game.click_shop(71, 564);
+        assert_eq!(
+            game.shop_gift_noop(),
+            Some(ShopGiftNoop {
+                id: SHOP_GIFTITEM_ID,
+                next_step: SHOP_GIFT_NEXT_STEP,
+            })
+        );
+        // Nothing moves: cart, outbox, and gift-box claim untouched.
+        assert!(game.shop_cart().is_empty());
+        assert_eq!(game.take_shop_buy(), None);
+        assert_eq!(game.take_gift_claim(), None);
+        assert_eq!(game.shop_try_on(), None);
+    }
+
+    #[test]
+    fn shop_balances_update_after_every_wallet_fold() {
+        // Live caller chain:
+        //   main.rs::run_play -> setup_online -> stage_online_identity
+        //   -> ScreenGame::set_avatar_source (catalog, wallet `--`)
+        //   -> session::OnlineSession::drain_shop_buy (5001 prefix)
+        //   -> ScreenGame::apply_shop_purchase_prefix.
+        // Both balances start unknown and each fold updates its cell.
+        let mut game = open_shop_board(2);
+        assert_eq!(game.shop_gem_caption(), "GEM --");
+        assert_eq!(game.shop_won_caption(), "O2 CASH --");
+        game.apply_shop_cash_point(&SyncCashPointResponse {
+            gem: 1200,
+            cash_point: 50,
+        });
+        assert_eq!(game.shop_gem_caption(), "GEM 1200");
+        assert_eq!(game.shop_won_caption(), "O2 CASH --");
+        game.apply_shop_purchase_prefix(&o2jam_net::shop::SyncItemPurchasePrefix {
+            gem: 1100,
+            point: 1,
+            o2_cash: 77,
+            cash_point: 51,
+        });
+        assert_eq!(game.shop_gem_caption(), "GEM 1100");
+        assert_eq!(game.shop_won_caption(), "O2 CASH 77");
+    }
+
+    #[test]
+    fn shop_avatar_pane_stacks_equipped_figure_from_installed_avatar() {
+        // Live caller chain:
+        //   main.rs::run_play -> setup_online -> stage_online_identity
+        //   -> connect::read_avatar_source + stack_worn_figure
+        //   -> ScreenGame::set_avatar_source + set_myroom_character
+        //   -> restage_shop_avatar -> paint_shop_avatar.
+        // Real 7.55 bytes (skips without install-root, CI has no game
+        // data): item 1 is the red hair the probe stacks, so the pane
+        // proves the live kit, never a stand-in.
+        use super::super::paint::paint_shop_avatar;
+        use super::super::side::SHOP_AVATAR_CODE;
+        let archive_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Image/avatar.opa");
+        let archive = match std::fs::read(&archive_path) {
+            Ok(archive) => archive,
+            Err(_) => {
+                println!("skip: missing install-root avatar.opa");
+                return;
+            }
+        };
+        let entries = o2jam_file::parse_opi(&archive).expect("avatar.opa parses");
+        let entry = entries
+            .iter()
+            .find(|entry| entry.name == "Itemdata_Korea.dat")
+            .expect("avatar.opa carries the item table");
+        let table_bytes = archive
+            .get(entry.data_offset..entry.data_offset + entry.size as usize)
+            .expect("item table in bounds");
+        let table = o2jam_file::parse_avatar_item_table(table_bytes).expect("item table parses");
+        let mut hero = myroom_test_character(Vec::new());
+        hero.equipment[0] = 1;
+        hero.gender = o2jam_net::Gender::Male;
+        let mut game = ScreenGame::new();
+        walk_to_waiting(&mut game);
+        game.set_shop_catalog(&table);
+        game.set_myroom_character(hero);
+        game.set_avatar_source(archive, table);
+        assert!(
+            game.shop_avatar_staged(),
+            "equipped hero stacks the shop pane from installed bytes"
+        );
+        assert_eq!(game.shop_try_on(), None);
+        // Try-on swaps the equipped slot on real rows (item 2 rides
+        // the same slot 0 as item 1) and paints ink in the pane.
+        let placements = vec![ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code: SHOP_AVATAR_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 600,
+                y: 100,
+                w: 120,
+                h: 200,
+            },
+        }];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_shop_avatar(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            game.shop_avatar.as_ref(),
+            0,
+        );
+        assert!(
+            buf.iter().any(|pixel| *pixel != 0),
+            "equipped pane inks at the staged avatar rect"
+        );
+    }
+
+    #[test]
+    fn shop_cart_money_total_follows_checked_rows() {
+        // Live caller chain: the try-on chain's board half —
+        // click_shop(ITEMBUY) -> ShopState::toggle_row; the total
+        // sums the same `ITEMWON` prices the board paints
+        // (ours-by-design, ticket #196).
+        let mut game = open_shop_board(10);
+        assert_eq!(game.shop_cart_money_total(), 0);
+        game.click_shop(221, 188);
+        game.click_shop(362, 188);
+        assert_eq!(game.shop_cart_money_total(), 300);
+        game.click_shop(221, 188);
+        assert_eq!(game.shop_cart_money_total(), 200);
     }
 
     fn open_music_shop_board(song_count: usize) -> ScreenGame {
