@@ -338,4 +338,53 @@ mod live_boot_gate_tests {
         );
         server.join().unwrap();
     }
+
+    /// Ticket #192 (reopened): the music-shop and lanking boards were
+    /// empty on the live boot — `stage_session_catalog` staged only the
+    /// select-music dialog while only the `shots` walk staged the board
+    /// catalogs. Boots through the real entry and asserts the boards
+    /// ride the installed `OJNList.dat` live.
+    #[test]
+    fn live_boot_stages_music_shop_and_lanking_boards() {
+        // Live caller chain:
+        //   main.rs::run_play -> assemble_online_session ->
+        //   stage_session_catalog ->
+        //   session::OnlineSession::set_song_catalog ->
+        //   ScreenGame::set_song_catalog ->
+        //   MusicShopState::set_catalog + LankingState::set_catalog
+        // Archives absent -> skip cleanly (CI has no game data).
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let catalog = install_root().join(crate::SESSION_CATALOG);
+        let bytes = match std::fs::read(&catalog) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                println!("skip: missing {}", catalog.display());
+                return;
+            }
+        };
+        if o2jam_file::parse_ojn_list(&bytes).is_err() {
+            println!("skip: unparsable {}", catalog.display());
+            return;
+        }
+        let (port, server) = spawn_boot_gateway();
+        let (report, gateway) =
+            connect::connect_and_login_with_transport(&boot_options(port)).unwrap();
+        let mut game = o2jam_shell::ScreenGame::new();
+        stage_online_identity(&mut game, report.character.as_ref());
+        let mut session =
+            assemble_online_session(game, gateway, Some("gate"), None, None, None).unwrap();
+        let game = session.game_mut();
+        assert!(
+            !game.music_shop_visible_rows().is_empty(),
+            "live boot stages the music-shop board from the installed song catalog"
+        );
+        assert!(
+            !game.lanking_visible_songs().is_empty(),
+            "live boot stages the lanking board from the installed song catalog"
+        );
+        server.join().unwrap();
+    }
 }
