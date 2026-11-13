@@ -3481,7 +3481,7 @@ impl ScreenGame {
         // arrows still click-step via click_dispatch.
         if self.flow.current() == Screen::Channel
             && (573..=593).contains(&x)
-            && (233..=409).contains(&y)
+            && (233..=364).contains(&y)
         {
             self.channel_drag = true;
             return;
@@ -5466,9 +5466,10 @@ impl GameLoop for ScreenGame {
             if self.flow.current() == Screen::Channel && self.channel_drag {
                 let max_top = self.channels.len().saturating_sub(CHANNEL_VISIBLE_ROWS);
                 let track_top = 233i32;
-                let track_bot = 409i32;
-                let frac =
-                    ((y - track_top) as f32 / (track_bot - track_top) as f32).clamp(0.0, 1.0);
+                let track_bot_origin = 364i32;
+                let frac = ((y.clamp(track_top, track_bot_origin) - track_top) as f32
+                    / (track_bot_origin - track_top) as f32)
+                    .clamp(0.0, 1.0);
                 self.channel_top = (frac * max_top as f32).round() as usize;
             }
         }
@@ -6547,6 +6548,30 @@ mod game_tests {
             "motion drags the list top to the bottom"
         );
         assert_eq!(game.screen(), Screen::Channel);
+    }
+
+    #[test]
+    fn drag_to_bottom_reaches_max_top() {
+        // Ticket #174: 7 rows, motion to track bottom sets top 3.
+        fn seven_channels() -> Vec<ChannelState> {
+            (0..7)
+                .map(|i| ChannelState {
+                    gateway_id: 0,
+                    channel_id: i as u16,
+                    capacity: 10,
+                    population: 1,
+                    active: true,
+                })
+                .collect()
+        }
+        let mut game = ScreenGame::new();
+        game.set_channels(seven_channels());
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        assert_eq!(game.screen(), Screen::Channel);
+        game.ingest_snapshot(&InputSnapshot::press_at(583, 320));
+        game.ingest_snapshot(&InputSnapshot::motion_to(583, 364));
+        assert_eq!(game.channel_top, 3, "motion to track bottom sets top 3");
     }
 
     #[test]
