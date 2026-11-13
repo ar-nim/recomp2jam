@@ -16,7 +16,7 @@ use self::shop::ShopState;
 use self::waiting::PendingOutbox;
 use super::super::avatar::{
     avatar_item_by_id, load_worn_figure, ojn_cover_figure, AvatarFigure, ScenePlacement,
-    LOADING_COVER_SPRITE,
+    AVATAR_BREATHING_TICK_MS, LOADING_COVER_SPRITE,
 };
 use super::super::options::OptionsSettings;
 use super::super::playing::{HighwayGeometry, LivePlay, PlaySkin};
@@ -3482,6 +3482,33 @@ impl ScreenGame {
             && self.flow.current() == Screen::Planet
     }
 
+    /// The room lobby with no side sheet, no room dialog, and no
+    /// options modal owns it — the only room state where the worn
+    /// figure slot is fully visible (the planet bare-board mirror).
+    fn bare_room_board(&self) -> bool {
+        self.side.is_none() && self.room_dialog.is_none() && self.planet_modal().is_none()
+    }
+
+    /// Worn figure behind the Room user-panel slot, if staged and
+    /// non-empty (an empty figure stages no pulse, the waiting-seat
+    /// rule).
+    fn room_worn_figure_shown(&self) -> bool {
+        self.room_avatar
+            .as_ref()
+            .is_some_and(|figure| !figure.is_empty())
+    }
+
+    /// Any worn figure behind the Waiting seats: a staged seat figure
+    /// arms the pulse, else the lobby `room_avatar` covers seat 0
+    /// until the fetched seat lands (the painter's dual-source
+    /// fallback).
+    fn waiting_worn_figure_shown(&self) -> bool {
+        self.waiting_figures
+            .iter()
+            .any(|slot| slot.as_ref().is_some_and(|figure| !figure.is_empty()))
+            || self.room_worn_figure_shown()
+    }
+
     /// Apply one press edge at native frame pixels: the shared
     /// helper behind the snapshot press edge — a press lands where
     /// the pointer is, so hover
@@ -5680,6 +5707,21 @@ impl GameLoop for ScreenGame {
                     && self.promo_frame_count() > 0 =>
             {
                 Some(std::time::Duration::from_millis(PLANET_PROMO_HEARTBEAT_MS))
+            }
+            // The worn avatar breathes on its paint-clock cadence
+            // while shown, so a bare Room/Waiting board with a staged
+            // figure owes the loop one pulse per breathing tick — the
+            // figure advances frames across repaints with no input.
+            // Covered boards (side sheet, room dialog, options modal)
+            // and figure-less boards paint nothing new, so they stay
+            // fully idle (the #138 parked-loop result holds). OPEN: the
+            // cadence is the shell's paint-clock tick, not exe-pinned
+            // parity (`docs/equip.md`).
+            Screen::Room if self.bare_room_board() && self.room_worn_figure_shown() => {
+                Some(std::time::Duration::from_millis(AVATAR_BREATHING_TICK_MS))
+            }
+            Screen::Waiting if self.side.is_none() && self.waiting_worn_figure_shown() => {
+                Some(std::time::Duration::from_millis(AVATAR_BREATHING_TICK_MS))
             }
             // Every other scene is event-driven (input, resizes, lobby
             // drains owned by the session layer): no timer of its own.
@@ -11192,6 +11234,197 @@ mod game_tests {
         assert_eq!(game.planet_modal(), Some(PlanetModal::QuitConfirm));
         assert!(game.planet_promo_spinning());
         assert_eq!(GameLoop::idle_repaint_interval(&game), None);
+    }
+
+    /// Twelve-frame breathing figure: one 1x1 layer per frame with a
+    /// distinct ink word, so successive paint-clock ticks ink
+    /// distinguishable pixels (the avatar.rs breathing analog, staged
+    /// synthetically — no archive read, so no CI skip).
+    fn breathing_test_figure() -> AvatarFigure {
+        use crate::avatar::{FigureLayer, AVATAR_BREATHING_FRAME_COUNT, AVATAR_BREATHING_TICK_MS};
+        use o2jam_render::Rgb555Image;
+        let _ = AVATAR_BREATHING_TICK_MS;
+        let mut figure = AvatarFigure::default();
+        for frame in 0..AVATAR_BREATHING_FRAME_COUNT {
+            let word = 0x0001 + u16::try_from(frame).unwrap_or(0);
+            figure.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&word.to_le_bytes(), 1, 1).unwrap(),
+                dx: i32::try_from(frame).unwrap_or(0),
+                dy: 0,
+                colorkey: 0x0000,
+            });
+        }
+        figure
+    }
+
+    /// Room scene carrying only the worn-figure slot
+    /// (`IDC_IMAGE_SROOM_AVATA`, code `0x13700013`), so the Room
+    /// painter resolves the user-panel figure with no other art.
+    fn room_avatar_slot_scene() -> Vec<ScenePlacement> {
+        vec![ScenePlacement {
+            role: PlacementRole::Single,
+            id: "IDC_IMAGE_SROOM_AVATA".to_owned(),
+            code: 0x1370_0013,
+            sprite: None,
+            rect: Rect {
+                x: 300,
+                y: 200,
+                w: 100,
+                h: 160,
+            },
+        }]
+    }
+
+    /// Deterministic clock pump for the lobby scenes: paint at the
+    /// explicit instant and keep the pixels, so two paints without
+    /// input prove the paint clock alone advances the frame.
+    fn paint_lobby_frame_at(game: &mut ScreenGame, now_ms: u64) -> Vec<u32> {
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            now_ms,
+        );
+        buf
+    }
+
+    #[test]
+    fn room_idle_pulse_arms_while_the_worn_figure_shows() {
+        // Ticket #205: the Room lobby owes the loop one pulse per
+        // breathing tick while a worn figure shows, so the avatar
+        // breathes with no input — the frame advances across paints.
+        // Live caller chain:
+        //   main.rs::run_play -> WindowHandler::about_to_wait
+        //   -> GameLoop::idle_repaint_interval (the pulse) and
+        //   -> GameLoop::paint -> ScreenGame::paint_at -> paint_room
+        //   -> paint_room_user_panel
+        //   -> avatar_breathing_frame(now_ms) selects the run frame.
+        // Archives absent -> N/A (synthetic layers, no archive read).
+        use crate::avatar::AVATAR_BREATHING_TICK_MS;
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Room);
+        game.load_room_avatar(breathing_test_figure());
+        game.load_scene(Screen::Room, room_avatar_slot_scene(), HashMap::new());
+        assert_eq!(
+            GameLoop::idle_repaint_interval(&game),
+            Some(std::time::Duration::from_millis(AVATAR_BREATHING_TICK_MS)),
+            "worn figure shown owes one pulse per breathing tick"
+        );
+        let parked = paint_lobby_frame_at(&mut game, 0);
+        let ticked = paint_lobby_frame_at(&mut game, AVATAR_BREATHING_TICK_MS);
+        assert!(
+            parked.iter().any(|pixel| *pixel != 0) && ticked.iter().any(|pixel| *pixel != 0),
+            "the staged figure inks its slot on both paints"
+        );
+        assert_ne!(
+            parked, ticked,
+            "the paint clock advances the breathing frame with no input"
+        );
+    }
+
+    #[test]
+    fn waiting_idle_pulse_arms_while_a_seat_figure_shows() {
+        // Ticket #205: Waiting owes the same breathing pulse — a
+        // staged seat figure arms it, and the lobby `room_avatar`
+        // covers seat 0 until the fetched seat lands (the painter's
+        // dual-source fallback). Two paints without input advance the
+        // seat frame.
+        // Live caller chain:
+        //   main.rs::run_play -> WindowHandler::about_to_wait
+        //   -> GameLoop::idle_repaint_interval (the pulse) and
+        //   -> GameLoop::paint -> ScreenGame::paint_at -> paint_waiting
+        //   -> paint_waiting_seat_avatars
+        //   -> avatar_breathing_frame(now_ms) selects the run frame.
+        // Archives absent -> N/A (synthetic layers, no archive read).
+        use crate::avatar::AVATAR_BREATHING_TICK_MS;
+        use std::time::Duration;
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        assert_eq!(game.screen(), Screen::Waiting);
+        game.set_waiting_avatar(0, breathing_test_figure());
+        game.load_scene(Screen::Waiting, waiting_seat_zero_scene(), HashMap::new());
+        assert_eq!(
+            GameLoop::idle_repaint_interval(&game),
+            Some(Duration::from_millis(AVATAR_BREATHING_TICK_MS)),
+            "staged seat figure owes one pulse per breathing tick"
+        );
+        let parked = paint_lobby_frame_at(&mut game, 0);
+        let ticked = paint_lobby_frame_at(&mut game, AVATAR_BREATHING_TICK_MS);
+        assert_ne!(
+            parked, ticked,
+            "the paint clock advances the seat frame with no input"
+        );
+        let mut fallback = ScreenGame::new();
+        fallback.set_joined_room(waiting_room());
+        walk_to_waiting(&mut fallback);
+        fallback.load_room_avatar(breathing_test_figure());
+        assert_eq!(
+            GameLoop::idle_repaint_interval(&fallback),
+            Some(Duration::from_millis(AVATAR_BREATHING_TICK_MS)),
+            "lobby fallback figure covers seat 0 until the seat stages"
+        );
+    }
+
+    #[test]
+    fn room_idle_pulse_parks_while_covered_or_figure_less() {
+        // Ticket #205: covered boards (side sheet, room dialog) and
+        // figure-less or empty-figure boards owe the loop nothing —
+        // the #138 parked-loop result holds on the breathing arm too.
+        // Live caller chain: the WindowHandler::about_to_wait read of
+        // GameLoop::idle_repaint_interval on each lobby board below.
+        // Archives absent -> N/A (synthetic layers, no archive read).
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Room);
+        assert_eq!(
+            GameLoop::idle_repaint_interval(&game),
+            None,
+            "figure-less Room stays fully idle"
+        );
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+        assert_eq!(
+            GameLoop::idle_repaint_interval(&game),
+            None,
+            "figure-less Waiting stays fully idle"
+        );
+        assert!(game.enter_screen(Screen::Room));
+        game.load_room_avatar(breathing_test_figure());
+        game.load_scene(Screen::Room, room_avatar_slot_scene(), HashMap::new());
+        assert!(game.visit_side(SideScreen::Shop));
+        assert_eq!(
+            GameLoop::idle_repaint_interval(&game),
+            None,
+            "side sheet over a figured Room stays fully idle"
+        );
+        assert!(game.leave_side());
+        game.open_create_room_dialog();
+        assert_eq!(
+            GameLoop::idle_repaint_interval(&game),
+            None,
+            "room dialog over a figured Room stays fully idle"
+        );
+        let mut waiting = ScreenGame::new();
+        waiting.set_joined_room(waiting_room());
+        walk_to_waiting(&mut waiting);
+        waiting.set_waiting_avatar(0, breathing_test_figure());
+        assert!(waiting.visit_side(SideScreen::Shop));
+        assert_eq!(
+            GameLoop::idle_repaint_interval(&waiting),
+            None,
+            "side sheet over a figured Waiting stays fully idle"
+        );
+        let mut empty = ScreenGame::new();
+        walk_to_lobby(&mut empty, Screen::Room);
+        empty.load_room_avatar(AvatarFigure::default());
+        assert_eq!(
+            GameLoop::idle_repaint_interval(&empty),
+            None,
+            "an empty figure stages no pulse"
+        );
     }
 
     /// Deterministic clock pump: the paint seam's explicit instant
