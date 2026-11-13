@@ -1531,4 +1531,65 @@ mod tests {
             Err(Error::UnknownCommand(5033))
         );
     }
+
+    fn purchased_two_songs() -> SyncMusicPurchaseResponse {
+        SyncMusicPurchaseResponse {
+            gem: 1000,
+            point: 250,
+            o2_cash: 5000,
+            music_cash: 120,
+            item_cash: 340,
+            cash_point: 56,
+            music_list: vec![
+                MusicEntry {
+                    music_id: 101,
+                    day: 14,
+                    month: 3,
+                    year: 25,
+                    hour: 18,
+                    minute: 45,
+                },
+                MusicEntry {
+                    music_id: 202,
+                    day: 1,
+                    month: 12,
+                    year: 26,
+                    hour: 9,
+                    minute: 5,
+                },
+            ],
+            // Item-gift count 1 + opaque payload, music-gift count 0;
+            // inner element shape stays OPEN.
+            gift_boxes_raw: vec![0x01, 0x00, 0x09, 0x07, 0x00, 0x00],
+            free_pass_extension_days: 7,
+        }
+    }
+
+    #[test]
+    fn sync_music_purchase_5011_response_round_trips_two_entries_and_gifts() {
+        let response = purchased_two_songs();
+        let body = response.encode_body();
+        assert_eq!(SyncMusicPurchaseResponse::decode_body(&body), Ok(response));
+    }
+
+    #[test]
+    fn sync_music_purchase_5011_response_decodes_pinned_wire_bytes() {
+        let body = vec![
+            0xE8, 0x03, 0x00, 0x00, // gem 1000
+            0xFA, 0x00, 0x00, 0x00, // point 250
+            0x88, 0x13, 0x00, 0x00, // o2_cash 5000
+            0x78, 0x00, 0x00, 0x00, // music_cash 120
+            0x54, 0x01, 0x00, 0x00, // item_cash 340
+            0x38, 0x00, 0x00, 0x00, // cash_point 56
+            0x02, 0x00, // music count 2
+            0x65, 0x00, 0x0E, 0x03, 0x19, 0x12, 0x2D, // id 101 + expiry
+            0xCA, 0x00, 0x01, 0x0C, 0x1A, 0x09, 0x05, // id 202 + expiry
+            0x01, 0x00, 0x09, 0x07, 0x00, 0x00, // gift boxes raw
+            0x07, 0x00, 0x00, 0x00, // free-pass days 7
+        ];
+        assert_eq!(
+            SyncMusicPurchaseResponse::decode_body(&body),
+            Ok(purchased_two_songs())
+        );
+    }
 }
