@@ -4039,6 +4039,11 @@ impl ScreenGame {
     /// restage at once through it and again on every later join, so
     /// peers wear their wire equipment as soon as the snapshot lands.
     pub fn set_avatar_source(&mut self, archive: Vec<u8>, table: AvatarItemTable) -> &mut Self {
+        // The shop board rides the same `Itemdata_Korea.dat` table as
+        // the avatar source (server-authoritative catalog join):
+        // stage it here so the live board is never empty after the
+        // avatar archive lands.
+        self.shop.set_catalog(&table);
         self.avatar_source = Some((archive, table));
         self.restage_waiting_figures();
         self
@@ -12946,6 +12951,32 @@ mod game_tests {
             cash_point: 50,
         });
         assert_eq!(game.shop_gem_caption(), "GEM 1200");
+    }
+
+    #[test]
+    fn shop_board_stages_goods_from_avatar_source() {
+        // The live avatar archive carries `Itemdata_Korea.dat`; staging
+        // it must populate the shop board (items + avatar-tab rows)
+        // without a separate `set_shop_catalog` call (server-
+        // authoritative catalog join).
+        let mut game = ScreenGame::new();
+        walk_to_waiting(&mut game);
+        let rows: Vec<o2jam_file::AvatarItemRow> = (1..=2)
+            .map(|item_id| o2jam_file::AvatarItemRow {
+                item_id,
+                item_type: item_id,
+                price: item_id * 100,
+                params: [0; 4],
+                flags: (0, 0),
+                name: format!("Good{item_id:02}"),
+                description: String::new(),
+                sprites: Vec::new(),
+            })
+            .collect();
+        game.set_avatar_source(vec![0x7F; 64], o2jam_file::AvatarItemTable { rows });
+        assert_eq!(game.shop_visible_goods().len(), 2);
+        assert_eq!(game.shop_visible_goods()[0].item_id, 1);
+        assert_eq!(game.shop_visible_goods()[1].item_id, 2);
     }
 
     #[test]
