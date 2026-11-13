@@ -2969,8 +2969,10 @@ impl ScreenGame {
     }
 
     /// Stage the song catalog (`OJNList.dat` order, owned copies) for
-    /// the select-music table and the chosen-song caption. Dead slots
-    /// stay out; a missing catalog paints dialog art without rows.
+    /// the select-music table, the chosen-song caption, AND the lanking
+    /// and music-shop boards (same parse, ticket #192: the live boot
+    /// stages only this catalog, so the boards ride it instead of
+    /// waiting for a separate staging call). Dead slots stay out; a missing catalog paints dialog art without rows.
     /// The BPM column stages alongside for the waiting `BPM` caption,
     /// and the container tokens for the album-cover path (see
     /// [`Self::resolve_song_cover`]).
@@ -2986,6 +2988,13 @@ impl ScreenGame {
             .filter(|entry| entry.is_song())
             .map(|entry| (entry.song_id, entry.ojm_file.clone()))
             .collect();
+        // The lanking and music-shop boards ride the same `OJNList.dat`
+        // catalog as the select-music table: stage them here so the live
+        // boot (which stages the song catalog through `stage_session_catalog`)
+        // never leaves those boards empty without a separate staging call
+        // (mirrors #191's avatar-source hook for the item shop).
+        self.lanking.set_catalog(entries);
+        self.music_shop.set_catalog(entries);
         self.resolve_song_cover();
         self
     }
@@ -12992,6 +13001,34 @@ mod game_tests {
         assert_eq!(game.shop_visible_goods().len(), 2);
         assert_eq!(game.shop_visible_goods()[0].item_id, 1);
         assert_eq!(game.shop_visible_goods()[1].item_id, 2);
+    }
+
+    #[test]
+    fn music_shop_board_stages_songs_from_catalog() {
+        // Live caller chain (seam-suffices? no — live caller exists):
+        //   main.rs::run_play -> stage_session_catalog -> session::OnlineSession::set_song_catalog
+        //   -> ScreenGame::set_song_catalog -> MusicShopState::set_catalog
+        // Archives absent -> skip cleanly (CI has no game data): this
+        // seam uses a synthetic catalog blob, so it runs everywhere.
+        let mut game = ScreenGame::new();
+        let blob = waiting_song_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_song_catalog(&entries);
+        assert!(!game.music_shop_visible_rows().is_empty());
+        assert_eq!(game.music_shop_visible_rows()[0].song.title, "First");
+    }
+
+    #[test]
+    fn lanking_board_stages_songs_from_catalog() {
+        // Live caller chain:
+        //   main.rs::run_play -> stage_session_catalog -> session::OnlineSession::set_song_catalog
+        //   -> ScreenGame::set_song_catalog -> LankingState::set_catalog
+        let mut game = ScreenGame::new();
+        let blob = waiting_song_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_song_catalog(&entries);
+        assert!(!game.lanking_visible_songs().is_empty());
+        assert_eq!(game.lanking_visible_songs()[0].title, "First");
     }
 
     #[test]

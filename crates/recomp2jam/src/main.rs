@@ -1016,13 +1016,11 @@ fn run_play(opts: PlayOptions) -> Result<()> {
                 run_windowed_session(session, None)?;
             }
             None => {
-                // Offline walk: stage the genuine scene art from the
-                // installed archives when present (infallible; without
-                // game data the flat fallbacks stay), then seed demo
-                // lobby lists so the staged rows render for hand
-                // verification.
-                live_art::stage_live_scenes(&mut game);
-                seed_offline_lobby(&mut game);
+                // Offline walk: the windowed arm stages genuine scene
+                // art, the song catalog, and demo lobby lists through
+                // one entry (ticket #192) so the boards never go empty
+                // on the default boot without a separate staging call.
+                stage_offline_windowed(&mut game);
                 let event_loop = winit::event_loop::EventLoop::new()
                     .map_err(|e| anyhow::anyhow!("event loop failed: {e:?}"))?;
                 o2jam_shell::Shell::new(Box::new(game)).run(event_loop)?;
@@ -1302,6 +1300,46 @@ fn stage_session_catalog(session: &mut session::OnlineSession) {
         }
         Err(source) => {
             tracing::debug!(%source, "song catalog unparsable; dialog stages row-less");
+        }
+    }
+}
+
+/// Stage the default offline windowed boot (ticket #192): genuine
+/// scene art from the installed archives when present (infallible;
+/// without game data the flat fallbacks stay), the song catalog
+/// (`OJNList.dat`, feeding the select-music dialog AND the
+/// lanking/music-shop boards through `set_song_catalog`), then demo
+/// lobby lists so the staged rows render for hand verification.
+fn stage_offline_windowed(game: &mut o2jam_shell::ScreenGame) {
+    live_art::stage_live_scenes(game);
+    stage_offline_music_boards(game);
+    seed_offline_lobby(game);
+}
+
+/// Stage the installed song catalog (`OJNList.dat`) into a windowed
+/// offline game: the select-music dialog plus the lanking and
+/// music-shop boards ride the same parse (see
+/// [`o2jam_shell::ScreenGame::set_song_catalog`]). A missing or
+/// unparsable catalog keeps every board row-less; no fallback rows
+/// are invented.
+fn stage_offline_music_boards(game: &mut o2jam_shell::ScreenGame) {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../install-root")
+        .join(SESSION_CATALOG);
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            tracing::debug!("song catalog missing; boards stage row-less");
+            return;
+        }
+    };
+    match o2jam_file::parse_ojn_list(&bytes) {
+        Ok(entries) => {
+            game.set_song_catalog(&entries);
+            tracing::info!("offline song catalog staged");
+        }
+        Err(source) => {
+            tracing::debug!(%source, "song catalog unparsable; boards stage row-less");
         }
     }
 }
@@ -2570,5 +2608,49 @@ mod scene_bgm_tests {
             assert!(!pcm.unwrap().samples.is_empty());
         }
         assert_eq!(bgm.play_scene_music(19, false, &bank), None);
+    }
+}
+
+/// Ticket #192 (reopened): the music-shop and lanking boards were
+/// empty on the default offline boot — the windowed arm staged scene
+/// art and demo lobby lists but never the song catalog, and only the
+/// `shots` walk staged the board catalogs. Guards the offline staging
+/// entry so the boards ride the installed `OJNList.dat` live.
+#[cfg(test)]
+mod offline_music_board_tests {
+    use super::*;
+
+    #[test]
+    fn offline_boot_stages_music_shop_and_lanking_boards() {
+        // Live caller chain:
+        //   main.rs::run_play (offline windowed arm) ->
+        //   stage_offline_windowed -> stage_offline_music_boards ->
+        //   ScreenGame::set_song_catalog ->
+        //   MusicShopState::set_catalog + LankingState::set_catalog
+        // Archives absent -> skip cleanly (CI has no game data).
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root")
+            .join(SESSION_CATALOG);
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                println!("skip: missing {}", path.display());
+                return;
+            }
+        };
+        if o2jam_file::parse_ojn_list(&bytes).is_err() {
+            println!("skip: unparsable {}", path.display());
+            return;
+        }
+        let mut game = o2jam_shell::ScreenGame::new();
+        stage_offline_windowed(&mut game);
+        assert!(
+            !game.music_shop_visible_rows().is_empty(),
+            "offline boot stages the music-shop board from {SESSION_CATALOG}"
+        );
+        assert!(
+            !game.lanking_visible_songs().is_empty(),
+            "offline boot stages the lanking board from {SESSION_CATALOG}"
+        );
     }
 }
