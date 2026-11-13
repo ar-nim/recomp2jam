@@ -12608,8 +12608,9 @@ mod paint_tests {
         let blue = pack_xrgb(0x00, 0x00, 0xFF);
         // Face of viewport slot 0 (native 502,236 + 44x21 art).
         assert_eq!(buf[240 * 800 + 510], blue);
-        // Face of viewport slot 1.
-        assert_eq!(buf[290 * 800 + 510], blue);
+        // Face of viewport slot 1 is an inactive row: the enter face
+        // is not painted (ticket #190).
+        assert_ne!(buf[290 * 800 + 510], blue);
         assert!(!buf.contains(&CHANNEL_ENTER_TONE));
     }
 
