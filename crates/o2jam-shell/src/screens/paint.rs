@@ -10916,12 +10916,25 @@ mod paint_tests {
         .ok()
     }
 
-    /// The staged hero's worn figure on real 7.55 bytes (`None`
-    /// without install-root): the tester's equipment (`tester`,
-    /// the `staged_online_identity` hero) stacked through the shared
-    /// `load_worn_figure` path — the same stacker the waiting seats
-    /// paint — at the live `Any`-parity guess (female).
-    fn stacked_hero_figure() -> Option<AvatarFigure> {
+    /// The live tester2 equipment row (`~/memoryer-local` SQLite
+    /// `O2JAM.db`, `t_o2jam_item` `USER_INDEX_ID=2`, read 2026-11-13,
+    /// ticket #171 round 2): hair 16, body 30, top 376, bottom 383,
+    /// shoes 389 at `Equip1..Equip5` plus the default male face 35 at
+    /// `Equip12` (the pinned type-5 → slot `0xb` rule,
+    /// `docs/equip.md`); every other `Equip` column is 0. The server
+    /// copies the row 1:1 into the 17-slot `CharacterInfo.equipment`
+    /// (live wire probe: the face-only row stacked 60 layers and the
+    /// panel rightly painted head-only; the kitted row stacks 447).
+    /// Column placement of the five kit ids is fixture freedom (the
+    /// stacker resolves ids, not slot semantics); only the face column
+    /// is pinned.
+    const LIVE_TESTER2_EQUIPMENT_ROW: [i32; 17] =
+        [16, 30, 376, 383, 389, 0, 0, 0, 0, 0, 0, 35, 0, 0, 0, 0, 0];
+
+    /// Stack one 17-slot equipment row on real 7.55 bytes (`None`
+    /// without install-root) through the shared `load_worn_figure`
+    /// path — the same stacker the waiting seats paint.
+    fn stacked_figure_for_row(equipment: &[i32], male: bool) -> Option<AvatarFigure> {
         let archive = avatar_archive()?;
         let entries = o2jam_file::parse_opi(&archive).ok()?;
         let table_entry = entries
@@ -10930,8 +10943,15 @@ mod paint_tests {
         let size = usize::try_from(table_entry.size).ok()?;
         let body = archive.get(table_entry.data_offset..table_entry.data_offset + size)?;
         let table = o2jam_file::parse_avatar_item_table(body).ok()?;
-        let figure = load_worn_figure(&archive, &table, &[16, 30, 376, 383, 389], false);
+        let figure = load_worn_figure(&archive, &table, equipment, male);
         (!figure.is_empty()).then_some(figure)
+    }
+
+    /// The staged hero's worn figure: the live tester2 equipment row
+    /// (below) at the live male parity (the 2001 reply reads
+    /// `Gender: Male` for tester2).
+    fn stacked_hero_figure() -> Option<AvatarFigure> {
+        stacked_figure_for_row(&LIVE_TESTER2_EQUIPMENT_ROW, true)
     }
 
     /// Ink bounding box of the figure alone: pixels the painted
@@ -11080,6 +11100,65 @@ mod paint_tests {
             Some(&figure),
         );
         assert_figure_fills_slot(&buf, &bare, slot);
+    }
+
+    #[test]
+    fn room_user_panel_paints_head_only_for_the_face_only_row() {
+        // Ticket #171 round 2 diagnosis: the live tester2 row carried
+        // exactly one worn item (the default male face 35 at
+        // `Equip12`), so the head-only panel render was CORRECT for
+        // that data — the stacker stacks what the 2001 reply carries
+        // and invents no body parts. This guard pins that reading: the
+        // face-only row inks a head-sized blob (under half the slot
+        // height), never a full-body figure.
+        let mut face_only = [0i32; 17];
+        face_only[11] = 35;
+        let Some(figure) = stacked_figure_for_row(&face_only, true) else {
+            println!("skip: missing install-root avatar.opa");
+            return;
+        };
+        let placements = room_user_panel_placements();
+        let slot = placements
+            .iter()
+            .find(|placed| placed.id == ROOM_AVATAR_ID)
+            .expect("slot staged")
+            .rect;
+        let mut bare = vec![0u32; 800 * 600];
+        paint_room_user_panel(
+            &mut Frame {
+                buf: &mut bare,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            None,
+            None,
+        );
+        let mut buf = vec![0u32; 800 * 600];
+        paint_room_user_panel(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            None,
+            Some(&figure),
+        );
+        let (x0, y0, x1, y1) =
+            figure_only_bbox(&buf, &bare).expect("the face stack must ink the scene");
+        assert!(
+            y1 - y0 + 1 < 75,
+            "the face-only row must paint head-only ink ({h} tall), not a body",
+            h = y1 - y0 + 1,
+        );
+        assert!(
+            x0 >= slot.x
+                && y0 >= slot.y
+                && x1 < slot.x + slot.w as i32
+                && y1 < slot.y + slot.h as i32,
+            "face ink ({x0},{y0})-({x1},{y1}) must stay inside its slot {slot:?}"
+        );
     }
 
     #[test]

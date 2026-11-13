@@ -2397,13 +2397,18 @@ mod cli_build_tests {
             println!("skip: missing install-root {INSTALLED_AVATAR_OPA}");
             return;
         }
+        // The live tester2 row (`t_o2jam_item` USER_INDEX_ID=2,
+        // ticket #171 round 2): kit ids at Equip1..5, the default
+        // male face 35 at Equip12 (pinned type-5 → slot 0xb rule),
+        // zeros elsewhere — `o2jam-shell`'s `LIVE_TESTER2_EQUIPMENT_ROW`
+        // documents the row and its live-wire probe numbers.
         let mut hero = o2jam_net::CharacterInfo {
             nickname: "tester".to_owned(),
             level: 2,
             experience: 2133,
             ..o2jam_net::CharacterInfo::default()
         };
-        hero.equipment[..5].copy_from_slice(&[16, 30, 376, 383, 389]);
+        hero.equipment = [16, 30, 376, 383, 389, 0, 0, 0, 0, 0, 0, 35, 0, 0, 0, 0, 0];
         let unstaged = paint_room(&mut room_with_avatar_slot());
         assert_eq!(
             slot_ink(&unstaged),
