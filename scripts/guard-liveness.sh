@@ -5,11 +5,7 @@ CACHE="${1:-/tmp/guard-liveness-list.txt}"
 [ -s "$CACHE" ] || (cd "$REPO_ROOT" && cargo test --workspace -- --list > "$CACHE" 2>&1)
 
 extract_guards() {
-  awk '
-    /^##+ *Guards/ { in_section = 1; next }
-    /^##+ / { in_section = 0 }
-    in_section { print }
-  ' | grep -oE '`[A-Za-z_][A-Za-z0-9_]*`|\<[a-z][a-z0-9_]*_[a-z0-9_]*\>' | tr -d '`' | sort -u
+  awk -f "$REPO_ROOT/scripts/lib/extract-guards.awk" | grep -oE '`[A-Za-z_][A-Za-z0-9_]*`|\<[a-z][a-z0-9_]*_[a-z0-9_]*\>' | tr -d '`' | sort -u
 }
 
 command -v gh >/dev/null 2>&1 || { echo "guard-liveness: warning: gh missing; skip" >&2; exit 0; }
