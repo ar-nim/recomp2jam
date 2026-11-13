@@ -117,11 +117,38 @@ its source, never to "the data":
   returns to the opening lobby
   (`myroom_back_click_returns_to_the_lobby`).
 
+## Ticket #200 (2026-11-14) — bag source probe + vacate + slot counts
+
+- Bag source PINNED (live Memoryer 7.2.0 probe, `tester2`): the 2001
+  `inventory` run IS the owned-items source — `Bag1..30` in column
+  order, zeros included (before fixture: 30 zeros; `Bag31+` gated by
+  `BAG_EXT_COUNT`, still 0 on the rig). Setting `Bag1..3` =
+  `376, 383, 35` returned `inventory=[376, 383, 35, 0×27]`, so the
+  client pages exactly this run in server order, skipping zeros and
+  unknown ids (`myroom_owned_rows`). No separate inventory reply and
+  no equip-response items exist on this path (5005 is result + tail
+  only, `docs/equip.md`). Fixture: tester2 `Bag1..3` hold `376, 383,
+  35` (DB backup `~/memoryer-local/O2JAM.db.pre200.bak`); local DB
+  rows only, never wire. Guard:
+  `myroom_bag_pages_probed_inventory_in_server_order`.
+- Vacate now clears the selected worn slot (same-ordinal button →
+  equipment cell, ours-by-design) and restages the figure through
+  the #193 hook; queues nothing (send shape still OPEN). Guards:
+  `myroom_vacate_clears_the_selected_slot_and_restages`,
+  `myroom_vacate_queues_no_wire_send`.
+- Equip restage unchanged (guard annotated, still green).
+- Slot-filter counts for the next agent: 11 slot buttons
+  (`0X15200005..0F`) vs 16 slot images with Korean slot comments
+  (`0X15600013..22`) vs 17 equipment slots — no mapping between the
+  three is pinned, so no filter is implemented.
+
 ## OPEN
 
 1. Slot-selection semantics: selection records; what the exe
-   filters or targets with it is unpinned. Next step: rig
-   comparison of bag contents per slot button.
+   filters or targets with it is unpinned — the 11 button ordinals,
+   the 16 slot-image comments, and the 17 equipment slots have no
+   pinned join. Next step: rig comparison of bag contents per slot
+   button (does the bag filter at all, and by which slot set).
 2. Apply/MOVE control choice (ours-by-design). Next step: rig
    walk of the myroom apply/claim gestures.
 3. Entry gift-list fetch timing (ours-by-design). Next step: rig
@@ -132,9 +159,13 @@ its source, never to "the data":
    of the userinfo plate at known stats.
 5. File → record slot-byte join (ASSUMED). Next step: REA trace
    of the `0x52dba0` lookup showing the record layout.
-6. Vacate/GOSHOP/webavatar/sell/bagsort/messenger/conference/
-   pcroom/alarm send nothing (P0). Next step: per-control rig or
-   dossier pins before any wire is queued.
+6. Vacate clears the staged worn slot locally and restages but
+   queues nothing; GOSHOP/webavatar/sell/bagsort/messenger/
+   conference/pcroom/alarm still send nothing (P0). The vacate
+   button-ordinal → equipment-slot identity and the absent send stay
+   OPEN. Next step: rig walk of the vacate gesture naming the slot
+   and any wire send (per-control rig or dossier pins before any
+   wire is queued).
 7. Gift run order (items-first) and `is_attributive: false` are
    ours-by-design; the claim round trip is stub-only (ASSUMED).
    Next step: live gateway replay of the gift box.
