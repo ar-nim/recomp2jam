@@ -86,7 +86,11 @@ now also wears the full-body kit ids 16 (hair), 30 (base body
 not slot semantics; only the face column is pinned). Live wire probe
 (`recomp2jam connect --character` against `127.0.0.1:15010`):
 face-only row stacked **60 layers**, kitted row **447 layers**
-(male parity).
+(male parity). Fixture (ticket #200, 2026-11-14): the tester2 row
+carries `Bag1..3 = 376, 383, 35` (zeros elsewhere, `BAG_EXT_COUNT`
+0), so the probed 2001 `inventory` reads `[376, 383, 35, 0×27]` —
+the owned-items source the bag pages live (DB backup
+`~/memoryer-local/O2JAM.db.pre200.bak`; local DB rows only).
 
 ## Worn-figure idle frames (structure pinned, cadence OPEN)
 

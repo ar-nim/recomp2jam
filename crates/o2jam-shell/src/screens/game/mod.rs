@@ -4177,7 +4177,8 @@ impl ScreenGame {
             MyRoomAction::PickGiftCell(cell) => self.myroom.pick_gift_cell(Some(cell)),
             MyRoomAction::ApplyEquip => self.apply_myroom_equip(),
             MyRoomAction::ClaimGift => self.apply_myroom_claim(),
-            MyRoomAction::VacateSlot | MyRoomAction::OpenShop | MyRoomAction::BackToLobby => {}
+            MyRoomAction::VacateSlot => self.apply_myroom_vacate(),
+            MyRoomAction::OpenShop | MyRoomAction::BackToLobby => {}
         }
     }
 
@@ -4221,6 +4222,25 @@ impl ScreenGame {
         });
         if let Some(character) = self.myroom_character.as_mut() {
             character.equipment[usize::from(slot)] = item_word;
+        }
+        self.restage_worn_figure();
+    }
+
+    /// Vacate the selected slot: the same-ordinal equipment cell
+    /// clears to 0 and the worn figure restages through the #193 hook.
+    /// The button-ordinal to equipment-slot identity is ours-by-design
+    /// (the 11 staged buttons name no equipment slot in the block dump;
+    /// equip slots 11..16 have no button) — next step: rig walk of the
+    /// vacate gesture naming the slot and any wire send. Queues nothing:
+    /// the vacate send shape is unpinned (OPEN, `docs/myroom.md`).
+    fn apply_myroom_vacate(&mut self) {
+        let slot = usize::from(self.myroom.selected_slot());
+        if let Some(cell) = self
+            .myroom_character
+            .as_mut()
+            .and_then(|character| character.equipment.get_mut(slot))
+        {
+            *cell = 0;
         }
         self.restage_worn_figure();
     }
@@ -4821,8 +4841,9 @@ impl ScreenGame {
     /// names, and identity captions into their staged `.bnd` rects;
     /// without staged data the art paints alone (oracle-neutral).
     /// Slot selection, equip commit, bag/gift pagers, and gift claim
-    /// ride [`Self::click_myroom_side`]; vacate/goshop/shop-hop send
-    /// nothing (OPEN, `docs/myroom.md`).
+    /// ride [`Self::click_myroom_side`]; vacate clears the selected worn
+    /// slot and restages but queues nothing (send shape OPEN,
+    /// `docs/myroom.md`); goshop/shop-hop send nothing (same OPEN).
     fn paint_myroom(&self, frame: &mut Frame<'_>, now_ms: u64) {
         match self.scene_art(Screen::Myroom) {
             Some(art) => {
@@ -9224,6 +9245,10 @@ mod game_tests {
 
     #[test]
     fn myroom_slot_click_selects_through_staged_rect() {
+        // Live caller chain:
+        //   main.rs::run_play -> OnlineSession::ingest_snapshot
+        //   -> ScreenGame::click_myroom_side -> apply_myroom_action(SelectSlot).
+        // Archives absent -> N/A (synthetic table, no install-root read).
         let mut game = myroom_open_overlay();
         assert_eq!(game.myroom().selected_slot(), 0);
         game.ingest_snapshot(&InputSnapshot::click_at(11, 11));
@@ -9235,6 +9260,11 @@ mod game_tests {
 
     #[test]
     fn myroom_bag_pager_turns_over_staged_inventory() {
+        // Live caller chain:
+        //   main.rs::run_play -> OnlineSession::ingest_snapshot
+        //   -> ScreenGame::click_myroom_side -> apply_myroom_action(BagPage)
+        //   -> myroom_bag_page_count (2001 inventory) -> turn_bag_page.
+        // Archives absent -> N/A (synthetic inventory, no install-root read).
         let mut game = myroom_open_overlay();
         assert_eq!(game.myroom().bag_page(), 0);
         game.ingest_snapshot(&InputSnapshot::click_at(151, 11));
@@ -9249,6 +9279,12 @@ mod game_tests {
 
     #[test]
     fn myroom_equip_queues_5004_with_derived_slot() {
+        // Live caller chain:
+        //   main.rs::run_play -> OnlineSession::ingest_snapshot
+        //   -> ScreenGame::click_myroom_side -> apply_myroom_action(ApplyEquip)
+        //   -> apply_myroom_equip (exe slot derivation, docs/equip.md)
+        //   -> session bridge take_equip_send (5004).
+        // Archives absent -> N/A (synthetic table, no install-root read).
         use super::super::side::MYROOM_BAG_FIRST_CODE;
         let mut game = myroom_open_overlay();
         // Pick the first bag cell (item 1, type 2, record slot 0).
@@ -9264,6 +9300,167 @@ mod game_tests {
         let second = game.take_equip_send().expect("second apply queues");
         assert_eq!((second.slot, second.item_id), (1, 2));
         let _ = MYROOM_BAG_FIRST_CODE;
+    }
+
+    /// Ticket #200: the bag pages the server's owned-items source in
+    /// wire order — the 2001 `inventory` run (`Bag1..30`, zeros
+    /// included; live probe 2026-11-14: tester2 `Bag1..3` =
+    /// `376, 383, 35`, rest zero). Zeros and unknown ids never take a
+    /// bag cell, and the single page holds over the filtered run.
+    #[test]
+    fn myroom_bag_pages_probed_inventory_in_server_order() {
+        // Live caller chain:
+        //   main.rs::run_play -> setup_online
+        //   -> connect::connect_and_login_with_transport -> fetch_character
+        //   (GetCharacterInfo 2001) -> stage_online_identity
+        //   -> ScreenGame::set_myroom_character -> paint_myroom_overlay
+        //   -> myroom_bag_rows (server order, zero/unknown skip).
+        // Archives absent -> N/A (synthetic table, no install-root read).
+        use super::super::side::{
+            MYROOM_APPLY_CODE, MYROOM_BAG_FIRST_CODE, MYROOM_BAG_LEFT_CODE, MYROOM_BAG_RIGHT_CODE,
+        };
+        let row = |item_id: u32, item_type: u32, slot_byte: u8| o2jam_file::AvatarItemRow {
+            item_id,
+            item_type,
+            price: 100,
+            params: [0, 0, u32::from(slot_byte) << 24, 0],
+            flags: (0, 0),
+            name: format!("Gear{item_id}"),
+            description: String::new(),
+            sprites: Vec::new(),
+        };
+        let table = o2jam_file::AvatarItemTable {
+            // Face 35 pins the type-5 force-slot-11 arm on a probed id.
+            rows: vec![row(376, 2, 0), row(383, 2, 1), row(35, 5, 0)],
+        };
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        game.set_myroom_items(table);
+        // Probed wire shape: owned ids in Bag order with zero gaps and
+        // one unknown id interleaved (never in the table).
+        game.set_myroom_character(myroom_test_character(vec![376, 0, 383, 999_999, 35]));
+        game.load_side_scene(
+            vec![
+                myroom_hit_placement(MYROOM_BAG_FIRST_CODE, 200, 10),
+                myroom_hit_placement(MYROOM_BAG_FIRST_CODE + 1, 250, 10),
+                myroom_hit_placement(MYROOM_BAG_FIRST_CODE + 2, 300, 10),
+                myroom_hit_placement(MYROOM_BAG_FIRST_CODE + 3, 350, 10),
+                myroom_hit_placement(MYROOM_APPLY_CODE, 450, 10),
+                myroom_hit_placement(MYROOM_BAG_LEFT_CODE, 100, 10),
+                myroom_hit_placement(MYROOM_BAG_RIGHT_CODE, 150, 10),
+            ],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        // Three owned rows only: the pager holds on the single page.
+        game.ingest_snapshot(&InputSnapshot::click_at(151, 11));
+        assert_eq!(game.myroom().bag_page(), 0);
+        // Cells follow the filtered run in server order, skipping the
+        // zero gaps and the unknown id.
+        game.ingest_snapshot(&InputSnapshot::click_at(201, 11));
+        game.ingest_snapshot(&InputSnapshot::click_at(451, 11));
+        assert_eq!(
+            game.take_equip_send().map(|send| (send.slot, send.item_id)),
+            Some((0, 376))
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(251, 11));
+        game.ingest_snapshot(&InputSnapshot::click_at(451, 11));
+        assert_eq!(
+            game.take_equip_send().map(|send| (send.slot, send.item_id)),
+            Some((1, 383))
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(301, 11));
+        game.ingest_snapshot(&InputSnapshot::click_at(451, 11));
+        assert_eq!(
+            game.take_equip_send().map(|send| (send.slot, send.item_id)),
+            Some((11, 35))
+        );
+        // Past the filtered run the fourth cell equips nothing.
+        game.ingest_snapshot(&InputSnapshot::click_at(351, 11));
+        assert_eq!(game.myroom().bag_cell(), Some(3));
+        game.ingest_snapshot(&InputSnapshot::click_at(451, 11));
+        assert_eq!(game.take_equip_send(), None);
+    }
+
+    /// Ticket #200: VACATE clears the selected worn slot and restages
+    /// the figure through the #193 hook — the portrait loses the
+    /// vacated part instead of pinning it stale (ticket #30 shape).
+    #[test]
+    fn myroom_vacate_clears_the_selected_slot_and_restages() {
+        // Live caller chain:
+        //   main.rs::run_play -> OnlineSession::ingest_snapshot
+        //   -> ScreenGame::click_myroom_side -> apply_myroom_action(VacateSlot)
+        //   -> apply_myroom_vacate -> restage_worn_figure (the #193 hook).
+        // Archives absent -> N/A (synthetic archive and table,
+        // no install-root read).
+        use super::super::side::MYROOM_VACATE_CODE;
+        let wearable = |item_id: u32, sprite: &str| o2jam_file::AvatarItemRow {
+            item_id,
+            item_type: 2,
+            price: 100,
+            params: [0, 0, 0, 0],
+            flags: (0, 0),
+            name: format!("Gear{item_id}"),
+            description: String::new(),
+            sprites: vec![
+                (1, "icon.oji".to_owned()),
+                (1, "icon.oji".to_owned()),
+                (1, sprite.to_owned()),
+                (1, sprite.to_owned()),
+            ],
+        };
+        let table = o2jam_file::AvatarItemTable {
+            rows: vec![wearable(1, "01F01001.oji"), wearable(2, "02F02001.oji")],
+        };
+        let red = worn_test_sprite();
+        let mut green = worn_test_sprite();
+        let tail = green.len();
+        // Same 1x1 body, green pixel instead of red: the two worn
+        // parts stack distinct layers the vacate can remove one of.
+        green[tail - 2..].copy_from_slice(&[0xE0, 0x03]);
+        let archive = worn_test_archive(&[("01F01001.ojs", &red), ("02F02001.ojs", &green)]);
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Waiting);
+        game.set_myroom_items(table.clone());
+        let mut hero = myroom_test_character(vec![1, 2]);
+        hero.equipment[0] = 1;
+        hero.equipment[1] = 2;
+        game.set_myroom_character(hero);
+        game.set_avatar_source(archive, table);
+        game.load_room_avatar(solid_test_figure([0x1F, 0x00]));
+        game.load_side_scene(
+            vec![myroom_hit_placement(MYROOM_VACATE_CODE, 10, 40)],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MyRoom));
+        // Slot 0 is selected by default and wears item 1.
+        game.ingest_snapshot(&InputSnapshot::click_at(11, 41));
+        let hero = game.myroom_character.as_ref().expect("staged character");
+        assert_eq!(hero.equipment[0], 0, "the selected slot clears");
+        assert_eq!(hero.equipment[1], 2, "only the selected slot clears");
+        let figure = game.room_avatar.clone().expect("figure restages");
+        assert_eq!(
+            figure.len(),
+            1,
+            "the portrait loses the vacated part, never pins it stale"
+        );
+    }
+
+    /// Ticket #200: VACATE queues no wire send — the vacate send shape
+    /// is unpinned (OPEN), so the press only clears the staged worn
+    /// set and restages.
+    #[test]
+    fn myroom_vacate_queues_no_wire_send() {
+        // Live caller chain: same ingest path as
+        // `myroom_vacate_clears_the_selected_slot_and_restages`;
+        // every session-bridge seam stays empty on this press.
+        // Archives absent -> N/A (synthetic table, no install-root read).
+        let mut game = myroom_open_overlay();
+        assert!(game.take_gift_list_request().is_some());
+        game.ingest_snapshot(&InputSnapshot::click_at(11, 41));
+        assert_eq!(game.take_equip_send(), None);
+        assert_eq!(game.take_gift_claim(), None);
+        assert_eq!(game.take_gift_list_request(), None);
     }
 
     /// Highlighted channel row (the keyboard Confirm target).
@@ -9384,6 +9581,13 @@ mod game_tests {
 
     /// Ticket #30 stale-figure leftover: applying equipment must
     /// re-stack the Room lobby figure, not just the worn table.
+    /// Ticket #200 keeps this green: equip still restages immediately
+    /// through the #193 hook (`restage_worn_figure`).
+    // Live caller chain:
+    //   main.rs::run_play -> OnlineSession::ingest_snapshot
+    //   -> ScreenGame::click_myroom_side -> apply_myroom_action(ApplyEquip)
+    //   -> apply_myroom_equip -> restage_worn_figure (the #193 hook).
+    // Archives absent -> N/A (synthetic archive and table).
     #[test]
     fn myroom_apply_restages_the_room_avatar() {
         let sprite = worn_test_sprite();
@@ -13852,9 +14056,10 @@ mod game_tests {
         // routed gesture on every staged control — slot select, bag
         // cell pick + equip commit (5004), bag/gift pagers turning and
         // holding, gift cell pick (claim with no staged rows queues
-        // nothing), the caption landing nowhere, VACATE and GOSHOP as
-        // labeled no-ops (send shape OPEN; nested sides rejected), and
-        // BACK returning to the lobby last. Slot-filter semantics stay
+        // nothing), the caption landing nowhere, VACATE clearing the
+        // selected worn slot with no wire send (send shape OPEN) and
+        // GOSHOP as a labeled no-op (nested sides rejected), and BACK
+        // returning to the lobby last. Slot-filter semantics stay
         // OPEN (`docs/myroom.md`).
         let mut game = myroom_open_overlay();
         // Entry queues the 5017 gift-list fetch (pinned by
@@ -13877,7 +14082,11 @@ mod game_tests {
         assert_eq!(game.take_equip_send(), None);
         assert_eq!(game.take_gift_claim(), None);
         assert_eq!(game.take_gift_list_request(), None);
-        assert_eq!(game.myroom().selected_slot(), 0, "VACATE records only");
+        assert_eq!(
+            game.myroom().selected_slot(),
+            0,
+            "VACATE keeps the selection"
+        );
         game.ingest_snapshot(&InputSnapshot::click_at(61, 41));
         assert_eq!(
             game.side(),

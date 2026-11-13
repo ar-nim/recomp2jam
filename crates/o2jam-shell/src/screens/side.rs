@@ -1489,8 +1489,9 @@ pub const MYROOM_BACK_CODE: u32 = 0x1520_0002;
 /// Records only — nested sides stay rejected, so the hop is OPEN
 /// with a leave-then-visit hand step.
 pub const MYROOM_GOSHOP_CODE: u32 = 0x1520_0003;
-/// Vacate button (`MyRoom_Btn_Vacate.ojs`): clears the slot.
-/// Records only — the vacate send shape is unpinned (OPEN).
+/// Vacate button (`MyRoom_Btn_Vacate.ojs`): clears the selected worn
+/// slot locally and restages the figure; queues nothing — the vacate
+/// send shape is unpinned (OPEN, `docs/myroom.md`).
 pub const MYROOM_VACATE_CODE: u32 = 0x1520_0004;
 /// INVENTORY button (`Myroom_Inventory.ojs`): commits the
 /// selected bag cell (equip-apply). The control choice is
@@ -1558,7 +1559,9 @@ pub enum MyRoomAction {
     PickGiftCell(usize),
     /// INVENTORY pressed: equip the selected bag cell.
     ApplyEquip,
-    /// Vacate pressed: records only (send shape OPEN).
+    /// Vacate pressed: clears the selected worn slot (button ordinal =
+    /// equipment slot, ours-by-design) and restages; queues nothing
+    /// (send shape OPEN).
     VacateSlot,
     /// BACK pressed: return to the opening lobby.
     BackToLobby,
