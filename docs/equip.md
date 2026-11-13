@@ -145,3 +145,83 @@ slot order (`docs/file-formats/opi.md`; exe part logic OPEN).
 `equip_item_response_zero_item_decodes`,
 `equip_item_response_rejects_short_body`,
 `equip_item_response_rejects_trailing_bytes`.
+
+## Avatar idle animation (ticket #176) — OPEN
+
+### What is pinned
+
+- Every probed worn body carries 12 chained breathing frames (verified:
+  `avatar.opa` bodies such as `01M010010001.ojs` decode to exactly 12
+  sprite-55 images sharing one record anchor, e.g. `(130, 78)`; the
+  single-frame siblings such as `01M01001.ojs` carry 1). The current
+  `load_worn_figure` flattens all 12 images into `AvatarFigure.layers`,
+  so they stack at paint time instead of animating. Treating them as
+  animation frames (paint one per clock) is the OPEN implementation arm.
+- The paint site is `AvatarFigure::paint_visible_centered` (room panel
+  `paint_room_user_panel` and waiting seats `paint_figure_in_seat_slot`
+  in `crates/o2jam-shell/src/screens/paint.rs`); both call it with a
+  `&Rect` slot and no clock today.
+- Timed-cycle precedent: `PLANET_PROMO_TICK_MS` (3000 ms) via
+  `tick_planet_promo_at` / `tick_promo_clocked` in
+  `crates/o2jam-shell/src/screens/game/planet.rs`, pulsed by the
+  `idle_repaint_interval` heartbeat (`Screen::Planet` arm, 1000 ms
+  heartbeat in `crates/o2jam-shell/src/screens/game/mod.rs`).
+
+### Static attempt (2026-11-13)
+
+- Located the generic sprite-frame machinery in `OTwo.exe` (VA/file
+  per `docs/claims.md` A10): frame index lives at sprite-control
+  `+0x134` (file `0x1e050`/`0x1e06e`), frame table at `+0x120`
+  (stride `0x14`, signed anchor words at record `+0`/`+2`), and the
+  setter at VA `0x41e0f0` (file `0x1e0f0`) stores the index only when
+  it is below the image count returned by the getter at `0x41e140`.
+- A direct cross-reference scan of the image for the setter/getter VAs
+  (`0x41e0f0`, `0x41e120`, `0x41e0d0`, `0x41e140`) returned zero hits:
+  they are reached through the sprite control's vtable, not by direct
+  `call`, so the avatar-specific advance site could not be isolated by
+  byte scan. No avatar-class (`CAvatar`) method references survived as
+  strings beyond the RTTI name at file `0x27ea50`; `Avatar.opa` string
+  refs (files `0xa739`, `0x10ffb`) are archive-load sites, not paint
+  or timer sites.
+- No immediate resembling a breathing cadence (no `cmp`/timer against
+  a small constant) could be attributed to the avatar paint district
+  from bytes alone.
+
+### Empirical attempt (2026-11-13)
+
+- Launched `OTwo.exe` (SHA `83a04541…72c823b`) under `scripts/rig-run.sh`
+  on display `:101` with a null PulseAudio sink and the local Memoryer
+  (`127.0.0.1:15010`, token for `USER_INDEX_ID=2`); the rig produced a
+  bright frame (`bright=4800`), confirming the client boots, but driving
+  it through login, channel select, and into a room/waiting scene with a
+  worn figure requires the full SendInput sequence (X-plate template
+  detection + dialog dismissal) documented in
+  `~/scratch/button-unblock/`. That sequence was not completed within
+  this attempt, so no dwell capture and no frame-change timestamps were
+  obtained.
+
+### Result
+
+- **Cadence: OPEN.** No ms/frame value is pinned; no value is invented.
+- **Driver: OPEN.** The generic sprite-frame setter is pinned
+  (`0x41e0f0`/`+0x134`/`+0x120`), but the avatar-specific advance
+  (paint-clock accumulator vs. timer tick, and the cadence constant)
+  is not.
+- **Implementation: not landed.** Per the ticket hard rule, no code
+  change ships without a pinned cadence. The natural landing shape,
+  once pinned, is: add a frame index derived as `f(now_ms, cadence)` to
+  `paint_visible_centered` (and thread `now_ms` through
+  `paint_room_user_panel` / `paint_figure_in_seat_slot`), select one
+  image per 12-frame body instead of stacking all 12, and give the
+  Room/Waiting scenes an `idle_repaint_interval` pulse (reusing the
+  250 ms net-drain heartbeat if it covers the cadence, else a
+  dedicated arm) — mirroring `tick_planet_promo_at`.
+- **Guard: not added.** A failing-first guard (staged worn figure,
+  clock advanced by cadence → painted frame advances; clock pinned → no
+  advance) is specified but cannot be written against an unpinned
+  number.
+
+Next evidence step: complete the SendInput-driven Wine dwell capture on
+a worn-figure scene (room panel or waiting seat) and record frame-change
+timestamps over 10–20 s; in parallel, static-trace the vtable callers of
+`0x41e0f0` to find the avatar advance site and its cadence immediate.
