@@ -200,8 +200,13 @@ empty_message!(SyncItemPurchase, 5000);
 // the `0x138a`-based send builder (file `0xa4df0`) case at index 8
 // (`0x138a` + 8 = `0x1392` = 5010) is the empty-send case — opcode
 // word plus a length word of 4, no appends (`docs/shop-buy.md`).
-// The name follows `docs/net-protocol.md` (Memoryer corroboration);
-// the 5011 answer shape is untraced, so no response type is claimed.
+// The name follows `docs/net-protocol.md` (Memoryer corroboration).
+// 5011 reply shape (Memoryer `SyncMusicPurchaseResponse`, 2026-04):
+// wallets (Gem, Point, O2Cash, MusicCash, ItemCash, CashPoint) plus an
+// i16-counted MusicList of {MusicId u16, Day/Month/Year/Hour/Minute u8}
+// expiry stamps, i16-counted ItemGiftBox and MusicGiftBox, and a trailing
+// FreePassExtensionDays i32. Owned-state for the board derives from the
+// MusicList ids (acquired songs) plus the FreeMusic flag from 4031.
 empty_message!(SyncMusicPurchase, 5010);
 
 /// First 16 wire bytes of a `SyncItemPurchase` 5001 response: the
