@@ -6394,6 +6394,47 @@ mod paint_tests {
         assert!(!lit(481, 429, 282, 15), "empty cart paints nothing");
     }
 
+    #[test]
+    fn music_shop_board_paints_owned_marks_at_staged_rects() {
+        // Owned-state marks (FREE/OWNED) ride the staged ISBUY cell.
+        let placements = vec![
+            shop_placement(MSHOP_EX_FIRST_CODE, 18, 104, 353, 86),
+            shop_placement(MSHOP_TITLE_CODE, 89, 5, 213, 11),
+            shop_placement(MSHOP_ISBUY_CODE, 281, 4, 66, 11),
+            shop_placement(MSHOP_ARTIST_CODE, 122, 23, 106, 11),
+            shop_placement(MSHOP_EDITOR_CODE, 265, 23, 82, 11),
+            shop_placement(MSHOP_GENRE_CODE, 122, 38, 65, 11),
+            shop_placement(MSHOP_BPM_CODE, 223, 38, 25, 11),
+        ];
+        let rows = vec![MusicShopRow {
+            song: LankingSong {
+                song_id: 757,
+                title: "First".to_owned(),
+                artist: "Band".to_owned(),
+                editor: "NoteFactory".to_owned(),
+                genre: 3,
+                bpm: 124.0,
+                levels: [5, 9, 14],
+            },
+            free: true,
+            listed: false,
+        }];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_music_shop_board(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            &rows,
+            0,
+            1,
+        );
+        let lit = |x: i32, y: i32, w: u32, h: u32| -> bool { has_ink_in(&buf, 800, x, y, w, h) };
+        assert!(lit(299, 108, 66, 11), "FREE owned mark paints");
+    }
+
     fn shop_placement(code: u32, x: i32, y: i32, w: u32, h: u32) -> ScenePlacement {
         ScenePlacement {
             role: PlacementRole::Single,
