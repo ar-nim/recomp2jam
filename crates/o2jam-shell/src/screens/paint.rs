@@ -748,42 +748,46 @@ fn paint_channel_bar_art(
         dy + body.dy,
         Some(body.colorkey),
     );
-    if let Some(digits) = art
-        .figures
-        .get(CHANNEL_DIGIT_SPRITE)
-        .filter(|figure| !figure.is_empty())
-    {
-        for (tens, local) in [
-            (true, CHANNEL_DIGIT_LOCALS[0]),
-            (false, CHANNEL_DIGIT_LOCALS[1]),
-        ] {
-            if let Some(shown) = digits.layer(channel_digit(channel, tens)) {
-                paint_bar_layer(frame, shown, bar_origin, local);
+    // Inactive rows paint the baked empty slot: no digits, no count
+    // strip, and (see `paint_channel_face`) no enter face.
+    if channel.active {
+        if let Some(digits) = art
+            .figures
+            .get(CHANNEL_DIGIT_SPRITE)
+            .filter(|figure| !figure.is_empty())
+        {
+            for (tens, local) in [
+                (true, CHANNEL_DIGIT_LOCALS[0]),
+                (false, CHANNEL_DIGIT_LOCALS[1]),
+            ] {
+                if let Some(shown) = digits.layer(channel_digit(channel, tens)) {
+                    paint_bar_layer(frame, shown, bar_origin, local);
+                }
             }
         }
-    }
-    if let Some(count) = art
-        .figures
-        .get(CHANNEL_COUNT_SPRITE)
-        .filter(|figure| !figure.is_empty())
-    {
-        if let Some(strip) = count.layer(0) {
-            let width = channel_fill_width(channel);
-            if width > 0 {
-                let cropped = crop_layer_width(strip, width);
-                let (dx, dy) = anchor_in_frame(
-                    bar_origin.0 + CHANNEL_COUNT_LOCAL.0,
-                    bar_origin.1 + CHANNEL_COUNT_LOCAL.1,
-                    frame.w,
-                    frame.h,
-                );
-                blit_rgb555(
-                    frame,
-                    &cropped.view(),
-                    dx + strip.dx,
-                    dy + strip.dy,
-                    Some(strip.colorkey),
-                );
+        if let Some(count) = art
+            .figures
+            .get(CHANNEL_COUNT_SPRITE)
+            .filter(|figure| !figure.is_empty())
+        {
+            if let Some(strip) = count.layer(0) {
+                let width = channel_fill_width(channel);
+                if width > 0 {
+                    let cropped = crop_layer_width(strip, width);
+                    let (dx, dy) = anchor_in_frame(
+                        bar_origin.0 + CHANNEL_COUNT_LOCAL.0,
+                        bar_origin.1 + CHANNEL_COUNT_LOCAL.1,
+                        frame.w,
+                        frame.h,
+                    );
+                    blit_rgb555(
+                        frame,
+                        &cropped.view(),
+                        dx + strip.dx,
+                        dy + strip.dy,
+                        Some(strip.colorkey),
+                    );
+                }
             }
         }
     }
@@ -12445,6 +12449,108 @@ mod paint_tests {
             active: false,
         });
         assert_eq!(empty[245 * 800 + 310], blue, "zero cap fills none");
+    }
+
+    #[test]
+    fn inactive_row_paints_empty_slot_no_digits() {
+        // Ticket #190: an inactive row paints the baked empty slot —
+        // no digit plates over the tens/ones wells, so the wells keep
+        // the bar ink. Red on HEAD (digits painted unconditionally),
+        // green after the active-gated fix.
+        let blue = pack_xrgb(0x00, 0x00, 0xFF);
+        let art = SceneArt {
+            placements: Vec::new(),
+            figures: HashMap::from([
+                (
+                    CHANNEL_BAR_SPRITE.to_owned(),
+                    solid_figure(347, 41, [0x1F, 0x00]), // solid blue
+                ),
+                (CHANNEL_DIGIT_SPRITE.to_owned(), digit_figure()),
+            ]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_channel_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &[ChannelState {
+                gateway_id: 0,
+                channel_id: 27,
+                capacity: 0,
+                population: 0,
+                active: false,
+            }],
+            0,
+            0,
+            &art,
+            None,
+            None,
+        );
+        // Bar-local (50,11)/(63,11) over the row-0 bar origin
+        // (217,225): tens well centre (273,245), ones (286,245).
+        assert_eq!(
+            buf[245 * 800 + 273],
+            blue,
+            "inactive tens well keeps bar ink"
+        );
+        assert_eq!(
+            buf[245 * 800 + 286],
+            blue,
+            "inactive ones well keeps bar ink"
+        );
+    }
+
+    #[test]
+    fn inactive_row_paints_empty_slot_no_count_strip() {
+        // Ticket #190 strip leg: an inactive row paints no count
+        // strip, so the strip position keeps the bar ink even with a
+        // nonzero population share.
+        let green = pack_xrgb(0x00, 0xFF, 0x00);
+        let blue = pack_xrgb(0x00, 0x00, 0xFF);
+        let art = SceneArt {
+            placements: Vec::new(),
+            figures: HashMap::from([
+                (
+                    CHANNEL_BAR_SPRITE.to_owned(),
+                    solid_figure(347, 41, [0x1F, 0x00]), // solid blue
+                ),
+                (
+                    CHANNEL_COUNT_SPRITE.to_owned(),
+                    solid_figure(185, 19, [0xE0, 0x03]), // solid green
+                ),
+            ]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_channel_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &[ChannelState {
+                gateway_id: 0,
+                channel_id: 1,
+                capacity: 100,
+                population: 50,
+                active: false,
+            }],
+            0,
+            0,
+            &art,
+            None,
+            None,
+        );
+        assert_eq!(
+            buf[245 * 800 + 310],
+            blue,
+            "inactive row paints no green strip"
+        );
+        assert!(
+            !buf.contains(&green),
+            "inactive row paints no count strip at all"
+        );
     }
 
     #[test]
