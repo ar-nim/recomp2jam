@@ -142,6 +142,41 @@ its source, never to "the data":
   (`0X15600013..22`) vs 17 equipment slots — no mapping between the
   three is pinned, so no filter is implemented.
 
+## Ticket #201 (2026-11-14) — info plate + gift claim + P0 verdicts
+
+- Info plate: NEXTUPEXP paints the staged experience (room-panel
+  precedent — the 7.55 room capture shows `Exp.` there), WINRATION
+  (`0x1540_003C`, exe spelling) paints integer percent from staged
+  wins/battles (`0%` with no battles; percent sign and zero-battles
+  fallback ours-by-design). Control names pinned from the shipped
+  `ControlList_Interface.txt` block dump (O2MONEY `0x10`,
+  CHARGEMONEY `0x11`, NEXTUPEXP `0x3B`, WINRATION `0x3C`, RANK
+  `0x3D`, GUILD `0x3E`, MGAME `0x3F`, O2JAM `0x40`,
+  FREEINFO1..4 `0x41..44`, SKILLCOUNT1..10 `0x5C..65`,
+  NOTICE `0x68/69`, PCROOMMARK `0x6A`, WEBAVATAR `0x58`,
+  CONFERENCE `0x6B`, BAGSORT `0x6C`, MESSENGER `0x6D`,
+  ALARM `0x6E/6F`). Guards:
+  `myroom_info_plate_paints_win_rate_from_staged_battles`,
+  `myroom_info_plate_paints_next_up_exp_from_staged_experience`,
+  `myroom_info_plate_leaves_unpinned_money_rank_guild_skills_notice_blank`.
+- Gift claim lands in the bag: `apply_gift_claim_success` removes the
+  claimed gift from its staged box run and appends an item gift's
+  resource to the staged inventory (music gifts only leave the box);
+  the session bridge (`poll_gift_claim`/`drain_gift_claim`) folds a
+  successful 5024 verdict through it. Scripted-gateway round trips:
+  5017/5018 entry fetch (5018 body exe-ignored, drain-only) and
+  5023/5024 claim-into-bag. Guards:
+  `myroom_gift_claim_lands_item_in_staged_bag`,
+  `myroom_gift_list_fetch_round_trips_through_scripted_gateway`,
+  `myroom_gift_claim_round_trips_and_lands_in_bag_through_scripted_gateway`.
+- P0 verdicts recorded per control (`myroom_p0_verdict`): WEBAVATAR,
+  CONFERENCE, BAGSORT, MESSENGER queue nothing; ALARM/PCROOMMARK are
+  image-only; NOTICE stays unpainted like waiting NOTICE. Vacate
+  (ITEMSELL) keeps its #200 local-clear + restage with no wire send.
+  Guard: `myroom_p0_controls_answer_nothing_and_queue_no_wire`.
+- Amber stand-in kept: highlight rendering still OPEN (no rig pins
+  the real frames).
+
 ## OPEN
 
 1. Slot-selection semantics: selection records; what the exe
@@ -153,21 +188,25 @@ its source, never to "the data":
    walk of the myroom apply/claim gestures.
 3. Entry gift-list fetch timing (ours-by-design). Next step: rig
    or gateway replay naming the entry fetch.
-4. Caption mappings without a name-identical field (MGAME/O2JAM/
-   O2MONEY/CHARGEMONEY, rank, guild, win-rate format, skill
-   counts, notice, next-up exp, freeinfo). Next step: rig capture
-   of the userinfo plate at known stats.
+4. Caption mappings without a pinned source (O2MONEY/CHARGEMONEY,
+   MGAME/O2JAM money, RANK, GUILD, FREEINFO1..4, SKILLCOUNT1..10,
+   NOTICE content). WINRATION value source pinned (wins/battles),
+   format ours-by-design; NEXTUPEXP paints experience per the room
+   precedent (single-capture pin). Next step: rig capture of the
+   userinfo plate at known stats naming each remaining rect's source
+   and format.
 5. File → record slot-byte join (ASSUMED). Next step: REA trace
    of the `0x52dba0` lookup showing the record layout.
 6. Vacate clears the staged worn slot locally and restages but
    queues nothing; GOSHOP/webavatar/sell/bagsort/messenger/
-   conference/pcroom/alarm still send nothing (P0). The vacate
-   button-ordinal → equipment-slot identity and the absent send stay
-   OPEN. Next step: rig walk of the vacate gesture naming the slot
-   and any wire send (per-control rig or dossier pins before any
-   wire is queued).
+   conference/pcroom/alarm still send nothing (P0 verdicts recorded
+   in `myroom_p0_verdict`). The vacate button-ordinal →
+   equipment-slot identity and the absent send stay OPEN. Next step:
+   rig walk of the vacate gesture naming the slot and any wire send
+   (per-control rig or dossier pins before any wire is queued).
 7. Gift run order (items-first) and `is_attributive: false` are
-   ours-by-design; the claim round trip is stub-only (ASSUMED).
-   Next step: live gateway replay of the gift box.
+   ours-by-design; the claim round trip is scripted-gateway only
+   (live Memoryer replay names the server's 5024 verdict and any
+   inventory echo). Next step: live gateway replay of the gift box.
 8. Highlight rendering: the amber cursor is an OPEN stand-in.
    Next step: rig capture of the selected-slot/cell frames.

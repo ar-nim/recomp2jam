@@ -1692,6 +1692,12 @@ pub const MYROOM_APPLY_CODE: u32 = 0x1520_3034;
 /// slot covers) — the painter finds the staged `.bnd` rect, never
 /// a literal.
 pub const MYROOM_AVATAR_CODE: u32 = 0x1570_0012;
+/// O2-money caption (`IDC_TEXT_SMYROOM_O2MONEY`): no wire source
+/// pinned — stays unpainted, OPEN (`docs/myroom.md` OPEN 4).
+pub const MYROOM_O2MONEY_CODE: u32 = 0x1540_0010;
+/// Charge-money caption (`IDC_TEXT_SMYROOM_CHARGEMONEY`): no wire
+/// source pinned — stays unpainted, OPEN (`docs/myroom.md` OPEN 4).
+pub const MYROOM_CHARGEMONEY_CODE: u32 = 0x1540_0011;
 /// Nickname caption (`IDC_TEXT_SMYROOM_NICKNAME`).
 pub const MYROOM_NICKNAME_CODE: u32 = 0x1540_0037;
 /// Level caption (`IDC_TEXT_SMYROOM_LEVEL`).
@@ -1700,6 +1706,34 @@ pub const MYROOM_LEVEL_CODE: u32 = 0x1540_0038;
 pub const MYROOM_BONUS_CODE: u32 = 0x1540_0039;
 /// Experience caption (`IDC_TEXT_SMYROOM_EXP`).
 pub const MYROOM_EXP_CODE: u32 = 0x1540_003A;
+/// Next-up-exp caption (`IDC_TEXT_SMYROOM_NEXTUPEXP`): paints the
+/// staged experience, following the room-panel precedent (the 7.55
+/// room capture shows `Exp.` there; `docs/myroom.md` OPEN 4).
+pub const MYROOM_NEXTUPEXP_CODE: u32 = 0x1540_003B;
+/// Win-rate caption (`IDC_TEXT_SMYROOM_WINRATION`, exe spelling):
+/// integer percent from staged wins/battles (`docs/myroom.md` OPEN 4).
+pub const MYROOM_WINRATE_CODE: u32 = 0x1540_003C;
+/// Rank caption (`IDC_TEXT_SMYROOM_RANK`): web-served, no client
+/// source — stays unpainted, OPEN (`docs/myroom.md` OPEN 4).
+pub const MYROOM_RANK_CODE: u32 = 0x1540_003D;
+/// Guild caption (`IDC_TEXT_SMYROOM_GUILD`): no wire source pinned
+/// — stays unpainted, OPEN (`docs/myroom.md` OPEN 4).
+pub const MYROOM_GUILD_CODE: u32 = 0x1540_003E;
+/// MGame-money caption (`IDC_TEXT_SMYROOM_MGAME_MONEY`): no wire
+/// source pinned — stays unpainted, OPEN (`docs/myroom.md` OPEN 4).
+pub const MYROOM_MGAME_MONEY_CODE: u32 = 0x1540_003F;
+/// O2Jam-money caption (`IDC_TEXT_SMYROOM_O2JAM_MONEY`): no wire
+/// source pinned — stays unpainted, OPEN (`docs/myroom.md` OPEN 4).
+pub const MYROOM_O2JAM_MONEY_CODE: u32 = 0x1540_0040;
+/// First free-info caption (`IDC_TEXT_SMYROOM_FREEINFO1`).
+pub const MYROOM_FREEINFO_FIRST_CODE: u32 = 0x1540_0041;
+/// Free-info caption count (FREEINFO1..4).
+pub const MYROOM_FREEINFO_COUNT: usize = 4;
+/// First skill-count caption (`IDC_TEXT_SMYROOM_SKILLCOUNT1`): source
+/// OPEN — stays unpainted (`docs/myroom.md` OPEN 4).
+pub const MYROOM_SKILLCOUNT_FIRST_CODE: u32 = 0x1540_005C;
+/// Skill-count caption count (SKILLCOUNT1..10).
+pub const MYROOM_SKILLCOUNT_COUNT: usize = 10;
 /// Penalty-count caption (`IDC_TEXT_SMYROOM_PENALTYCOUNT`).
 pub const MYROOM_PENALTY_COUNT_CODE: u32 = 0x1540_0066;
 /// Penalty-level caption (`IDC_TEXT_SMYROOM_PENALTYLEVEL`).
@@ -1710,6 +1744,25 @@ pub const MYROOM_O2CASH_CODE: u32 = 0x1540_0059;
 pub const MYROOM_MUSICCASH_CODE: u32 = 0x1540_005A;
 /// Item-cash caption (`IDC_TEXT_SMYROOM_ITEMCASH`).
 pub const MYROOM_ITEMCASH_CODE: u32 = 0x1540_005B;
+/// Notice-text image (`IDC_IMAGE_SMYROOM_NOTICE_TEXT`): content OPEN
+/// like the waiting NOTICE (`docs/caption-sources.md`) — paints nothing.
+pub const MYROOM_NOTICE_TEXT_CODE: u32 = 0x1550_0068;
+/// Notice-board image (`IDC_IMAGE_SMYROOM_NOTICEBOARD`).
+pub const MYROOM_NOTICEBOARD_CODE: u32 = 0x1550_0069;
+/// PC-room mark (`IDC_IMAGE_SMYROOM_PCROOMMARK`): P0, visibly inert.
+pub const MYROOM_PCROOMMARK_CODE: u32 = 0x1550_006A;
+/// Web-avatar button (`IDC_BUTTON_SMYROOM_WEBABATAR`): P0, queues nothing.
+pub const MYROOM_WEBAVATAR_CODE: u32 = 0x1520_0058;
+/// Conference button (`IDC_BUTTON_SMYROOM_CONFERENCE`): P0, queues nothing.
+pub const MYROOM_CONFERENCE_CODE: u32 = 0x1520_006B;
+/// Bag-sort button (`IDC_BUTTON_SMYROOM_BAGSORT`): P0, queues nothing.
+pub const MYROOM_BAGSORT_CODE: u32 = 0x1520_006C;
+/// Messenger button (`IDC_BUTTON_SMYROOM_MESSENGER`): P0, queues nothing.
+pub const MYROOM_MESSENGER_CODE: u32 = 0x1520_006D;
+/// Messenger alarm (`IDC_IMAGE_SMYROOM_MESSENGER_ALRAM`): P0, paints nothing.
+pub const MYROOM_ALARM_CODE: u32 = 0x1550_006E;
+/// Messenger alarm popup (`IDC_IMAGE_SMYROOM_MESSENGER_ALRAM1`): P0.
+pub const MYROOM_ALARM_POPUP_CODE: u32 = 0x1550_006F;
 /// Gift-count caption (`IDC_TEXT_GIFT_NUM`).
 pub const MYROOM_GIFT_NUM_CODE: u32 = 0x1540_004F;
 /// Gift resource-name caption (`IDC_TEXT_GIFT_ITEMNAME`).
@@ -2104,22 +2157,39 @@ pub fn myroom_gift_page(views: &[MyRoomGiftView], page: usize) -> &[MyRoomGiftVi
     rows.get(..rows.len().min(MYROOM_GIFT_CELLS)).unwrap_or(&[])
 }
 
-/// Identity captions from fetched character data: every field maps
-/// by name identity to its TEXT control (nickname, level,
-/// bonus point, experience, penalties). Cash wallets live on the
+/// Identity captions from fetched character data: nickname, level,
+/// bonus point, experience, next-up exp (staged experience, room
+/// precedent), win-rate (staged wins/battles percent), and penalties.
+/// Cash wallets live on the
 /// single [`WalletState`] now ([`myroom_wallet_captions` paints the
 /// O2/MUSIC/ITEM cash controls), so they stay out of this record.
-/// Money controls without a name-identical field (`MGAME_MONEY`,
-/// `O2JAM_MONEY`, `O2MONEY`, `CHARGEMONEY`), rank, guild, win-rate
-/// and skill counts stay unpainted — their mapping is OPEN
+/// Money controls without a pinned source (`MGAME_MONEY`,
+/// `O2JAM_MONEY`, `O2MONEY`, `CHARGEMONEY`), rank, guild, free-info,
+/// skill counts and notice stay unpainted — their mapping is OPEN
 /// (`docs/myroom.md`).
 #[must_use]
+pub fn myroom_win_rate_text(character: &CharacterInfo) -> String {
+    if character.battles <= 0 {
+        return "0%".to_owned();
+    }
+    let wins = i64::from(character.wins.max(0));
+    let battles = i64::from(character.battles.max(1));
+    let percent = (wins * 100 / battles).clamp(0, 100);
+    format!("{percent}%")
+}
+
+pub fn myroom_next_up_exp_text(character: &CharacterInfo) -> String {
+    character.experience.to_string()
+}
+
 pub fn myroom_identity_captions(character: &CharacterInfo) -> Vec<(u32, String)> {
     vec![
         (MYROOM_NICKNAME_CODE, character.nickname.clone()),
         (MYROOM_LEVEL_CODE, character.level.to_string()),
         (MYROOM_BONUS_CODE, character.bonus_point.to_string()),
         (MYROOM_EXP_CODE, character.experience.to_string()),
+        (MYROOM_NEXTUPEXP_CODE, myroom_next_up_exp_text(character)),
+        (MYROOM_WINRATE_CODE, myroom_win_rate_text(character)),
         (
             MYROOM_PENALTY_COUNT_CODE,
             character.penalty_count.to_string(),
@@ -2129,6 +2199,33 @@ pub fn myroom_identity_captions(character: &CharacterInfo) -> Vec<(u32, String)>
             character.penalty_level.to_string(),
         ),
     ]
+}
+
+pub const fn myroom_p0_verdict(code: u32) -> Option<&'static str> {
+    match code {
+        MYROOM_WEBAVATAR_CODE => Some(
+            "WEBAVATAR P0: no wire send; web avatar page lives outside the gateway - visibly inert",
+        ),
+        MYROOM_CONFERENCE_CODE => {
+            Some("CONFERENCE P0: no wire send; backend never wired - visibly inert")
+        }
+        MYROOM_BAGSORT_CODE => {
+            Some("BAGSORT P0: no wire send; sort semantics unpinned - visibly inert")
+        }
+        MYROOM_MESSENGER_CODE => {
+            Some("MESSENGER P0: no wire send; backend never wired - visibly inert")
+        }
+        MYROOM_ALARM_CODE | MYROOM_ALARM_POPUP_CODE => {
+            Some("MESSENGER_ALARM P0: image only, no wire read - paints nothing new")
+        }
+        MYROOM_PCROOMMARK_CODE => {
+            Some("PCROOMMARK P0: image only, no wire read - paints nothing new")
+        }
+        MYROOM_NOTICE_TEXT_CODE | MYROOM_NOTICEBOARD_CODE => {
+            Some("NOTICE P0: content OPEN like waiting NOTICE - paints nothing")
+        }
+        _ => None,
+    }
 }
 
 /// Money captions from the single wallet: the three cash TEXT

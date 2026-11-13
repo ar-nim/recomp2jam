@@ -4344,6 +4344,36 @@ impl ScreenGame {
         });
     }
 
+    /// Fold a successful `ClaimGift` 5024 reply into the staged room:
+    /// the claimed gift leaves its box run, and an item gift lands its
+    /// resource in the staged inventory (music gifts own no inventory
+    /// row, so they only leave the box). Unknown gift ids change
+    /// nothing. The session bridge owns the verdict; this is the
+    /// staged-data fold it calls.
+    pub fn apply_gift_claim_success(&mut self, gift_id: i32) {
+        let Some(character) = self.myroom_character.as_mut() else {
+            return;
+        };
+        if let Some(index) = character
+            .item_gifts
+            .iter()
+            .position(|gift| gift.gift_id == gift_id)
+        {
+            let gift = character.item_gifts.remove(index);
+            if !character.inventory.contains(&gift.item_id) {
+                character.inventory.push(gift.item_id);
+            }
+            return;
+        }
+        if let Some(index) = character
+            .music_gifts
+            .iter()
+            .position(|gift| gift.gift_id == gift_id)
+        {
+            character.music_gifts.remove(index);
+        }
+    }
+
     /// Open a side screen from a lobby; rejects other origins and
     /// remembers the lobby to return to. Entry cues the side
     /// screen's scene music (see [`SideScreen::bgm_cue`]); a
@@ -10188,6 +10218,204 @@ mod game_tests {
         assert_eq!(caption(MYROOM_O2CASH_CODE), Some("500"));
         assert_eq!(caption(MYROOM_MUSICCASH_CODE), Some("120"));
         assert_eq!(caption(MYROOM_ITEMCASH_CODE), Some("340"));
+    }
+
+    #[test]
+    fn myroom_info_plate_paints_win_rate_from_staged_battles() {
+        // Live caller chain (feed):
+        //   main.rs::run_play -> setup_online
+        //   -> connect::connect_and_login_with_transport -> fetch_character
+        //   (GetCharacterInfo 2001) -> stage_online_identity
+        //   -> ScreenGame::set_myroom_character.
+        // Live caller chain (read):
+        //   OnlineSession::paint (GameLoop) -> ScreenGame::paint_myroom_overlay
+        //   -> myroom_identity_captions -> myroom_win_rate_text.
+        // Pure shell state: no archives read, so no CI skip.
+        use super::super::side::{myroom_identity_captions, MYROOM_WINRATE_CODE};
+        let character = CharacterInfo {
+            wins: 3,
+            battles: 4,
+            ..CharacterInfo::default()
+        };
+        let captions = myroom_identity_captions(&character);
+        let win_rate = captions
+            .iter()
+            .find(|(code, _)| *code == MYROOM_WINRATE_CODE)
+            .map(|(_, text)| text.as_str());
+        assert_eq!(win_rate, Some("75%"));
+        let idle = myroom_identity_captions(&CharacterInfo::default());
+        let idle_rate = idle
+            .iter()
+            .find(|(code, _)| *code == MYROOM_WINRATE_CODE)
+            .map(|(_, text)| text.as_str());
+        assert_eq!(idle_rate, Some("0%"));
+    }
+
+    #[test]
+    fn myroom_info_plate_paints_next_up_exp_from_staged_experience() {
+        // Live caller chain (feed): same 2001 staging as
+        // `myroom_info_plate_paints_win_rate_from_staged_battles`.
+        // Live caller chain (read):
+        //   OnlineSession::paint (GameLoop) -> ScreenGame::paint_myroom_overlay
+        //   -> myroom_identity_captions -> myroom_next_up_exp_text.
+        // Room-panel precedent: the 7.55 room capture shows `Exp.` in
+        // the next-up well, so the plate paints staged experience
+        // (single-capture pin, OPEN whether it tracks a threshold).
+        // Pure shell state: no archives read, so no CI skip.
+        use super::super::side::{
+            myroom_identity_captions, MYROOM_EXP_CODE, MYROOM_NEXTUPEXP_CODE,
+        };
+        let character = CharacterInfo {
+            experience: 2133,
+            ..CharacterInfo::default()
+        };
+        let captions = myroom_identity_captions(&character);
+        let caption = |code: u32| {
+            captions
+                .iter()
+                .find(|(candidate, _)| *candidate == code)
+                .map(|(_, text)| text.as_str())
+        };
+        assert_eq!(caption(MYROOM_EXP_CODE), Some("2133"));
+        assert_eq!(caption(MYROOM_NEXTUPEXP_CODE), Some("2133"));
+    }
+
+    #[test]
+    fn myroom_info_plate_leaves_unpinned_money_rank_guild_skills_notice_blank() {
+        // Live caller chain: same 2001 staging + paint overlay as the
+        // win-rate guard above; this guard pins the OPEN boundary.
+        // (`docs/myroom.md` OPEN 4: O2MONEY/CHARGEMONEY, MGAME/O2JAM
+        // money, rank, guild, free-info, skill counts and notice have
+        // no pinned wire source, so no caption claims their rects.)
+        // Pure shell state: no archives read, so no CI skip.
+        use super::super::side::{
+            myroom_identity_captions, MYROOM_CHARGEMONEY_CODE, MYROOM_GUILD_CODE,
+            MYROOM_MGAME_MONEY_CODE, MYROOM_O2JAM_MONEY_CODE, MYROOM_O2MONEY_CODE,
+            MYROOM_RANK_CODE, MYROOM_SKILLCOUNT_FIRST_CODE,
+        };
+        let character = CharacterInfo {
+            nickname: "Tester".to_owned(),
+            level: 12,
+            experience: 3450,
+            ..CharacterInfo::default()
+        };
+        let captions = myroom_identity_captions(&character);
+        for code in [
+            MYROOM_O2MONEY_CODE,
+            MYROOM_CHARGEMONEY_CODE,
+            MYROOM_MGAME_MONEY_CODE,
+            MYROOM_O2JAM_MONEY_CODE,
+            MYROOM_RANK_CODE,
+            MYROOM_GUILD_CODE,
+        ] {
+            assert!(
+                captions.iter().all(|(candidate, _)| *candidate != code),
+                "unpinned code {code:#X} claims no caption"
+            );
+        }
+        assert!(
+            (0..super::super::side::MYROOM_SKILLCOUNT_COUNT).all(|index| {
+                let code = MYROOM_SKILLCOUNT_FIRST_CODE + index as u32;
+                captions.iter().all(|(candidate, _)| *candidate != code)
+            }),
+            "skill counts stay unpainted without a pinned source"
+        );
+    }
+
+    #[test]
+    fn myroom_gift_claim_lands_item_in_staged_bag() {
+        // Live caller chain (queue):
+        //   main.rs::run_play -> OnlineSession::ingest_snapshot
+        //   -> ScreenGame::click_myroom_side -> apply_myroom_action(ClaimGift)
+        //   -> apply_myroom_claim -> session bridge take_gift_claim (5023).
+        // Live caller chain (fold):
+        //   OnlineSession::paint -> poll_gift_claim -> drain_gift_claim
+        //   (5024 Success) -> ScreenGame::apply_gift_claim_success.
+        // Pure shell state: no archives read, so no CI skip.
+        let mut game = myroom_open_overlay();
+        game.myroom_character
+            .as_mut()
+            .expect("staged character")
+            .item_gifts
+            .push(o2jam_net::GiftItemInfo {
+                gift_id: 7,
+                item_id: 13,
+                sender: "Giver".to_owned(),
+            });
+        assert!(!game
+            .myroom_character()
+            .expect("staged")
+            .inventory
+            .contains(&13));
+        game.apply_gift_claim_success(7);
+        let hero = game.myroom_character().expect("staged character");
+        assert!(hero.item_gifts.is_empty(), "claimed gift leaves the box");
+        assert!(
+            hero.inventory.contains(&13),
+            "claimed item lands in the bag"
+        );
+        game.apply_gift_claim_success(999);
+        assert!(game
+            .myroom_character()
+            .expect("staged")
+            .inventory
+            .contains(&13));
+    }
+
+    #[test]
+    fn myroom_p0_controls_answer_nothing_and_queue_no_wire() {
+        // Live caller chain:
+        //   main.rs::run_play -> OnlineSession::ingest_snapshot
+        //   -> ScreenGame::click_myroom_side -> myroom_action_at
+        //   (P0 codes dispatch to no action) -> every session-bridge
+        //   seam stays empty.
+        // Pure shell state: no archives read, so no CI skip.
+        use super::super::side::{
+            myroom_action_for_code, myroom_p0_verdict, MYROOM_ALARM_CODE, MYROOM_ALARM_POPUP_CODE,
+            MYROOM_BAGSORT_CODE, MYROOM_CONFERENCE_CODE, MYROOM_MESSENGER_CODE,
+            MYROOM_NOTICEBOARD_CODE, MYROOM_NOTICE_TEXT_CODE, MYROOM_PCROOMMARK_CODE,
+            MYROOM_VACATE_CODE, MYROOM_WEBAVATAR_CODE,
+        };
+        for code in [
+            MYROOM_WEBAVATAR_CODE,
+            MYROOM_CONFERENCE_CODE,
+            MYROOM_BAGSORT_CODE,
+            MYROOM_MESSENGER_CODE,
+        ] {
+            assert_eq!(
+                myroom_action_for_code(code),
+                None,
+                "P0 button {code:#X} dispatches nothing"
+            );
+            assert!(
+                myroom_p0_verdict(code).is_some(),
+                "P0 button {code:#X} carries a verdict"
+            );
+        }
+        for code in [
+            MYROOM_ALARM_CODE,
+            MYROOM_ALARM_POPUP_CODE,
+            MYROOM_PCROOMMARK_CODE,
+            MYROOM_NOTICE_TEXT_CODE,
+            MYROOM_NOTICEBOARD_CODE,
+        ] {
+            assert_eq!(
+                myroom_action_for_code(code),
+                None,
+                "P0 image {code:#X} dispatches nothing"
+            );
+            assert!(
+                myroom_p0_verdict(code).is_some(),
+                "P0 image {code:#X} carries a verdict"
+            );
+        }
+        let mut game = myroom_open_overlay();
+        assert!(game.take_gift_list_request().is_some());
+        game.ingest_snapshot(&InputSnapshot::click_at(11, 41));
+        assert_eq!(game.take_equip_send(), None);
+        assert_eq!(game.take_gift_claim(), None);
+        assert_eq!(game.take_gift_list_request(), None);
+        let _ = MYROOM_VACATE_CODE;
     }
 
     fn payment_hit_placement(code: u32, x: i32, y: i32, w: u32, h: u32) -> ScenePlacement {

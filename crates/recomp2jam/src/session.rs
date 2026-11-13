@@ -139,6 +139,7 @@ use std::time::{Duration, Instant};
 use anyhow::Context;
 use o2jam_file::{OjnListEntry, OJN_LEVEL_COUNT};
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams};
+use o2jam_net::gift::{ClaimGiftResponse, GetGiftMessageList, GetGiftMessageListResponse};
 use o2jam_net::play::{
     GameRankUpdate, MusicListAnswer, RoomArenaEcho, ScoreCompleted, ScoreSubmission,
 };
@@ -300,6 +301,29 @@ struct MusicBuyAttempt {
     deadline: Instant,
 }
 
+/// Pending gift-list fetch (ticket #201): the 5017 send plus the 5018
+/// answer resolve on the per-frame poll. The 5018 body is exe-ignored
+/// (`docs/gifts.md`); the drain only clears the attempt. A timeout
+/// clears it so the next MyRoom entry retries it.
+#[derive(Debug, Clone, Copy)]
+struct GiftListAttempt {
+    /// When the silent server stops getting the benefit of the doubt.
+    deadline: Instant,
+}
+
+/// Pending gift-claim attempt (ticket #201): the 5023 send plus the
+/// 5024 answer resolve on the per-frame poll. The reply carries only
+/// a verdict, so the claimed gift id rides here for the success
+/// fold into the staged bag. A timeout clears the attempt so the
+/// next MOVE retries it.
+#[derive(Debug, Clone, Copy)]
+struct GiftClaimAttempt {
+    /// Claimed gift id for the 5024 success fold.
+    gift_id: i32,
+    /// When the silent server stops getting the benefit of the doubt.
+    deadline: Instant,
+}
+
 /// Pending Room Confirm join attempt (ticket #172): the 3002 send
 /// plus the 3003 answer resolve on the per-frame poll, never on the
 /// Confirm/press path. A timeout clears the attempt but keeps the
@@ -414,6 +438,12 @@ pub struct OnlineSession {
     /// Live song-shop buy (`None` while no buy commit is in
     /// flight; the per-frame [`Self::poll_music_buy`] owns it).
     music_buy_attempt: Option<MusicBuyAttempt>,
+    /// Live gift-list fetch (`None` while no MyRoom entry fetch is in
+    /// flight; the per-frame [`Self::poll_gift_list`] owns it).
+    gift_list_attempt: Option<GiftListAttempt>,
+    /// Live gift claim (`None` while no MOVE claim is in flight; the
+    /// per-frame [`Self::poll_gift_claim`] owns it).
+    gift_claim_attempt: Option<GiftClaimAttempt>,
     /// Container tokens plus captions behind the chart fetch
     /// (`OJNList.dat` order, owned copies; see [`Self::set_song_catalog`]).
     catalog: Vec<CatalogRow>,
@@ -472,6 +502,8 @@ impl OnlineSession {
             select_attempt: None,
             shop_buy_attempt: None,
             music_buy_attempt: None,
+            gift_list_attempt: None,
+            gift_claim_attempt: None,
             catalog: Vec::new(),
             last_selection: None,
             local_user: String::new(),
@@ -2104,6 +2136,154 @@ impl OnlineSession {
         Some(attempt)
     }
 
+    fn flush_gift_list(&mut self) {
+        if self.gift_list_attempt.is_some() {
+            return;
+        }
+        if self.game.take_gift_list_request().is_some() {
+            if let Err(source) = self.gateway.send_frame(GetGiftMessageList::COMMAND, &[]) {
+                tracing::warn!(%source, "gift list send failed");
+            } else {
+                self.gift_list_attempt = Some(GiftListAttempt {
+                    deadline: Instant::now() + PENDING_WIRE_WINDOW,
+                });
+            }
+        }
+    }
+
+    /// Per-frame gift-list section on the MyRoom side: move the
+    /// pending 5017 attempt under the short pending drain. Off the
+    /// MyRoom side the attempt drops, and past the deadline it warns
+    /// and clears, keeping the side so the next entry retries it.
+    fn poll_gift_list(&mut self) {
+        if self.game.side() != Some(SideScreen::MyRoom) {
+            if self.gift_list_attempt.take().is_some() {
+                tracing::debug!("gift list left behind leaving the MyRoom side; dropping it");
+            }
+            return;
+        }
+        let Some(attempt) = self.gift_list_attempt.take() else {
+            return;
+        };
+        if Instant::now() > attempt.deadline {
+            tracing::warn!("gift list timed out with no server answer; staying on MyRoom");
+            return;
+        }
+        self.with_drain_timeout(PENDING_DRAIN_TIMEOUT, "gift list", |session| {
+            if let Some(kept) = session.drain_gift_list(attempt) {
+                session.gift_list_attempt = Some(kept);
+            }
+        });
+    }
+
+    /// Move one gift-list attempt leg: drain until the socket goes
+    /// quiet. The 5018 body is exe-ignored (`docs/gifts.md`), so the
+    /// drain only clears the attempt — no staged data changes.
+    /// Returns the attempt while it still awaits an answer.
+    fn drain_gift_list(&mut self, attempt: GiftListAttempt) -> Option<GiftListAttempt> {
+        loop {
+            match self.gateway.next_frame() {
+                Ok(frame) if frame.id == 5018 => {
+                    if GetGiftMessageListResponse::decode_body(&frame.payload).is_err() {
+                        tracing::debug!(id = frame.id, "dropping undecodable gift list reply");
+                    }
+                    return None;
+                }
+                Ok(frame) if Generic::from_id(frame.id).is_some() => {}
+                Ok(frame) => {
+                    tracing::debug!(
+                        id = frame.id,
+                        "skipping non-gift-list frame in gift list drain"
+                    );
+                }
+                Err(_) => break,
+            }
+        }
+        Some(attempt)
+    }
+
+    fn flush_gift_claim(&mut self) {
+        if self.gift_claim_attempt.is_some() {
+            return;
+        }
+        if let Some(claim) = self.game.take_gift_claim() {
+            let gift_id = claim.gift_id;
+            if let Err(source) = self
+                .gateway
+                .send_frame(o2jam_net::gift::ClaimGift::COMMAND, &claim.encode_body())
+            {
+                tracing::warn!(%source, "gift claim send failed");
+            } else {
+                self.gift_claim_attempt = Some(GiftClaimAttempt {
+                    gift_id,
+                    deadline: Instant::now() + PENDING_WIRE_WINDOW,
+                });
+            }
+        }
+    }
+
+    /// Per-frame gift-claim section on the MyRoom side: move the
+    /// pending 5023 attempt under the short pending drain. Off the
+    /// MyRoom side the attempt drops, and past the deadline it warns
+    /// and clears, keeping the side so the next MOVE retries it.
+    fn poll_gift_claim(&mut self) {
+        if self.game.side() != Some(SideScreen::MyRoom) {
+            if self.gift_claim_attempt.take().is_some() {
+                tracing::debug!("gift claim left behind leaving the MyRoom side; dropping it");
+            }
+            return;
+        }
+        let Some(attempt) = self.gift_claim_attempt.take() else {
+            return;
+        };
+        if Instant::now() > attempt.deadline {
+            tracing::warn!("gift claim timed out with no server answer; staying on MyRoom");
+            return;
+        }
+        self.with_drain_timeout(PENDING_DRAIN_TIMEOUT, "gift claim", |session| {
+            if let Some(kept) = session.drain_gift_claim(attempt) {
+                session.gift_claim_attempt = Some(kept);
+            }
+        });
+    }
+
+    /// Move one gift-claim attempt leg: drain until the socket goes
+    /// quiet, folding a successful 5024 verdict into the staged bag.
+    /// Returns the attempt while it still awaits an answer.
+    fn drain_gift_claim(&mut self, attempt: GiftClaimAttempt) -> Option<GiftClaimAttempt> {
+        loop {
+            match self.gateway.next_frame() {
+                Ok(frame) if frame.id == 5024 => {
+                    match ClaimGiftResponse::decode_body(&frame.payload) {
+                        Ok(response)
+                            if !response.invalid
+                                && response.result_code
+                                    == o2jam_net::gift::ClaimGiftResult::Success.as_u8() =>
+                        {
+                            self.game.apply_gift_claim_success(attempt.gift_id);
+                        }
+                        Ok(_) => {
+                            tracing::debug!(id = frame.id, "gift claim rejected; staged box holds");
+                        }
+                        Err(_) => {
+                            tracing::debug!(id = frame.id, "dropping undecodable gift claim reply");
+                        }
+                    }
+                    return None;
+                }
+                Ok(frame) if Generic::from_id(frame.id).is_some() => {}
+                Ok(frame) => {
+                    tracing::debug!(
+                        id = frame.id,
+                        "skipping non-gift-claim frame in gift claim drain"
+                    );
+                }
+                Err(_) => break,
+            }
+        }
+        Some(attempt)
+    }
+
     /// Send one result-screen request frame; a failed send warns (the
     /// screen has already moved on — the tally send keeps its retry
     /// latch instead because Result stays).
@@ -2502,6 +2682,8 @@ impl OnlineSession {
             || self.select_attempt.is_some()
             || self.shop_buy_attempt.is_some()
             || self.music_buy_attempt.is_some()
+            || self.gift_list_attempt.is_some()
+            || self.gift_claim_attempt.is_some()
     }
 }
 
@@ -2640,6 +2822,10 @@ impl GameLoop for OnlineSession {
         self.poll_shop_buy();
         self.flush_music_buy();
         self.poll_music_buy();
+        self.flush_gift_list();
+        self.poll_gift_list();
+        self.flush_gift_claim();
+        self.poll_gift_claim();
         self.poll_channel_login();
         self.poll_room_join();
         self.poll_song_select();
@@ -3433,6 +3619,171 @@ mod session_tests {
             .find(|(code, _)| *code == MYROOM_MUSICCASH_CODE)
             .map(|(_, text)| text);
         assert_eq!(myroom_music.as_deref(), Some("120"));
+    }
+
+    #[test]
+    fn myroom_gift_list_fetch_round_trips_through_scripted_gateway() {
+        // Live caller chain:
+        //   OnlineSession::paint (GameLoop, the windowed frame entry
+        //   main.rs::run_play drives) -> flush_gift_list (5017 send)
+        //   -> poll_gift_list -> drain_gift_list (5018, exe-ignored body).
+        // Tier 2 scripted gateway. Synthetic table + character only:
+        // no archives read (CI-safe).
+        use o2jam_net::frame::encode_frame;
+        use o2jam_net::gift::GetGiftMessageListResponse;
+        use o2jam_shell::screens::side::SideScreen;
+        use std::collections::HashMap;
+
+        let (port, server) = fake_gateway(|mut stream| {
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, 5017);
+            assert!(frame.payload.is_empty());
+            let reply = GetGiftMessageListResponse {
+                invalid: false,
+                messages: Vec::new(),
+            };
+            stream
+                .write_all(&encode_frame(5018, &reply.encode_body()))
+                .unwrap();
+        });
+
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+        game.set_myroom_items(o2jam_file::AvatarItemTable { rows: Vec::new() });
+        game.set_myroom_character(o2jam_net::CharacterInfo::default());
+        game.load_side_scene(Vec::new(), HashMap::new());
+        assert!(game.visit_side(SideScreen::MyRoom));
+
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        assert!(session.gift_list_attempt.is_none());
+
+        paint_frame(&mut session);
+        paint_until(&mut session, |s| s.gift_list_attempt.is_none());
+        server.join().unwrap();
+
+        assert!(session.gift_list_attempt.is_none());
+        assert!(session.gift_claim_attempt.is_none());
+    }
+
+    #[test]
+    fn myroom_gift_claim_round_trips_and_lands_in_bag_through_scripted_gateway() {
+        // Live caller chain:
+        //   OnlineSession::paint (GameLoop, the windowed frame entry
+        //   main.rs::run_play drives) -> flush_gift_claim (5023 send)
+        //   -> poll_gift_claim -> drain_gift_claim (5024 Success)
+        //   -> ScreenGame::apply_gift_claim_success (bag fold).
+        // Tier 2 scripted gateway. Synthetic table + character only:
+        // no archives read (CI-safe).
+        use o2jam_net::frame::encode_frame;
+        use o2jam_net::gift::{ClaimGift, ClaimGiftResponse};
+        use o2jam_shell::screens::side::SideScreen;
+        use std::collections::HashMap;
+
+        let (port, server) = fake_gateway(|mut stream| {
+            use o2jam_net::gift::GetGiftMessageListResponse;
+            let entry = read_frame(&mut stream);
+            assert_eq!(entry.id, 5017);
+            let empty = GetGiftMessageListResponse {
+                invalid: false,
+                messages: Vec::new(),
+            };
+            stream
+                .write_all(&encode_frame(5018, &empty.encode_body()))
+                .unwrap();
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, 5023);
+            let claim = ClaimGift::decode_body(&frame.payload).unwrap();
+            assert_eq!(claim.gift_id, 7);
+            assert_eq!(claim.resource_id, 1);
+            let reply = ClaimGiftResponse {
+                invalid: false,
+                result_code: 0,
+            };
+            stream
+                .write_all(&encode_frame(5024, &reply.encode_body()))
+                .unwrap();
+        });
+
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        let cell = ScenePlacement {
+            id: String::new(),
+            code: o2jam_shell::screens::side::MYROOM_GIFT_FIRST_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 10,
+                y: 10,
+                w: 40,
+                h: 20,
+            },
+            role: PlacementRole::Single,
+        };
+        let move_button = ScenePlacement {
+            id: String::new(),
+            code: o2jam_shell::screens::side::MYROOM_MOVE_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 100,
+                y: 10,
+                w: 40,
+                h: 20,
+            },
+            role: PlacementRole::Single,
+        };
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+        game.set_myroom_items(o2jam_file::AvatarItemTable {
+            rows: vec![o2jam_file::AvatarItemRow {
+                item_id: 1,
+                item_type: 2,
+                price: 100,
+                params: [0, 0, 0, 0],
+                flags: (0, 0),
+                name: "Gear1".to_owned(),
+                description: String::new(),
+                sprites: Vec::new(),
+            }],
+        });
+        let mut hero = o2jam_net::CharacterInfo {
+            nickname: "Tester".to_owned(),
+            ..o2jam_net::CharacterInfo::default()
+        };
+        hero.item_gifts.push(o2jam_net::GiftItemInfo {
+            gift_id: 7,
+            item_id: 1,
+            sender: "Giver".to_owned(),
+        });
+        game.set_myroom_character(hero);
+        game.load_side_scene(vec![cell, move_button], HashMap::new());
+        assert!(game.visit_side(SideScreen::MyRoom));
+        game.click_myroom_side(11, 11);
+        game.click_myroom_side(101, 11);
+
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+
+        paint_frame(&mut session);
+        paint_until(&mut session, |s| {
+            s.gift_claim_attempt.is_none()
+                && s.game
+                    .myroom_character()
+                    .is_some_and(|hero| hero.inventory.contains(&1))
+        });
+        server.join().unwrap();
+
+        let hero = session.game.myroom_character().expect("staged character");
+        assert!(hero.item_gifts.is_empty(), "claimed gift leaves the box");
+        assert!(hero.inventory.contains(&1), "claimed item lands in the bag");
+        assert!(session.gift_claim_attempt.is_none());
     }
 
     fn entry_channel() -> o2jam_net::ChannelState {
