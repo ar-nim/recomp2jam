@@ -20,6 +20,12 @@ wire_enum! {
         SendMainRoomMessage = 2012,
         Announce = 2015,
         SendWhisper = 2017,
+        /// Channel exit leave (ticket #175 pin): the exe's channel-scene
+        /// exit dispatch (control word 0x13200002) sends this empty via
+        /// the standard vtable `+0x5c` send (file 0x48ff90). Memoryer
+        /// answers 2022 and then accepts a fresh 1004; without it a
+        /// second 1004 draws a 1001 `-1` auth error.
+        ChannelLogout = 2021,
         GetMusicPlayRanking = 2027,
         GetMusicScoreList = 2030,
         GetMusicMaxScore = 2032,
@@ -84,6 +90,10 @@ wire_enum! {
         MainRoomAdminMessage = 2014,
         Announcement = 2016,
         SendWhisper = 2018,
+        /// `ChannelLogout` 2021 answer (ticket #175 probe): `i32` result,
+        /// 0 on success. No dedicated decoder yet — the session drain
+        /// skips it; decode when a consumer needs the code (OPEN).
+        ChannelLogout = 2022,
         GetMusicPlayRanking = 2028,
         GetMusicScoreList = 2031,
         GetMusicMaxScore = 2033,
@@ -143,6 +153,7 @@ mod tests {
             Request::SendMainRoomMessage,
             Request::Announce,
             Request::SendWhisper,
+            Request::ChannelLogout,
             Request::GetMusicPlayRanking,
             Request::GetMusicScoreList,
             Request::GetMusicMaxScore,
@@ -196,6 +207,7 @@ mod tests {
         assert_eq!(Response::from_id(1003), Some(Response::GetChannelList));
         assert_eq!(Response::from_id(1008), Some(Response::SessionKeys));
         assert_eq!(Response::from_id(2003), Some(Response::RoomList));
+        assert_eq!(Response::from_id(2022), Some(Response::ChannelLogout));
         assert_eq!(Response::from_id(1002), None);
     }
 

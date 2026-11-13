@@ -1914,6 +1914,22 @@ impl OnlineSession {
         }
     }
 
+    /// Per-frame channel-leave flush: one queued Room-back
+    /// `ChannelLogout` 2021 (empty — the exe's exit dispatch sends it,
+    /// ticket #175 pin). It runs before the login poll so a back-then-
+    /// re-enter sequence never puts a fresh 1004 on the wire ahead of
+    /// the leave: Memoryer answers a second 1004 with a 1001 `-1`
+    /// auth error until the leave resets the session (probe, ticket
+    /// #175). A failed send warns: the screen has already moved on.
+    fn flush_channel_logout(&mut self) {
+        if !self.game.take_channel_logout() {
+            return;
+        }
+        if let Err(source) = self.gateway.send_frame(Request::ChannelLogout.id(), &[]) {
+            tracing::warn!(%source, "channel logout send failed");
+        }
+    }
+
     /// Send one result-screen request frame; a failed send warns (the
     /// screen has already moved on — the tally send keeps its retry
     /// latch instead because Result stays).
@@ -2437,6 +2453,11 @@ impl GameLoop for OnlineSession {
         // frame with no retry. Chat resumes — nothing is lost, the
         // socket buffers it — once the attempt resolves or times out;
         // START still advances through `poll_start` meanwhile.
+        // The queued channel leave goes out first: a back-then-re-enter
+        // sequence must never put a fresh 1004 on the wire ahead of the
+        // 2021 leave (Memoryer answers it with a 1001 `-1` auth error
+        // until the leave resets the session, ticket #175 probe).
+        self.flush_channel_logout();
         self.poll_channel_login();
         self.poll_room_join();
         self.poll_song_select();
@@ -3151,11 +3172,20 @@ mod session_tests {
 
     #[test]
     fn channel_reentry_after_quick_back_paints_through() {
-        // Ticket #172 repro: enter, quick back (local-only — the
-        // server still holds the old channel session), re-enter. The
-        // stonewalled second 1004 must not freeze the game.
+        // Ticket #172 repro: enter, quick back (the pinned 2021 leave
+        // goes out, ticket #175), re-enter. The stonewalled second
+        // 1004 must not freeze the game.
         let (mut session, _server) = channel_session(|mut stream| {
             answer_entry_login(&mut stream);
+            // The pinned leave (empty 2021) with its probe-observed
+            // `2022` answer, so the scripted session state stays
+            // consistent with Memoryer's.
+            let logout = read_frame(&mut stream);
+            assert_eq!(logout.id, 2021);
+            assert!(logout.payload.is_empty());
+            stream
+                .write_all(&encode_frame(2022, &0i32.to_le_bytes()))
+                .unwrap();
             // The re-entry login: taken, never answered past the login
             // window, like Memoryer holding the stale session. Sleeps
             // past the resting timeout detached (see the no-reply
@@ -3169,8 +3199,8 @@ mod session_tests {
         paint_until(&mut session, |session| {
             session.game.screen() == Screen::Room
         });
-        // Quick back: Room Back returns to the channel list, still
-        // local-only — the server holds the old channel session.
+        // Quick back: Room Back returns to the channel list, sending
+        // the pinned leave (the script consumes and answers it).
         session.menu_key(MenuKey::Back, true);
         assert_eq!(session.game.screen(), Screen::Channel);
         let started = std::time::Instant::now();
@@ -3184,6 +3214,44 @@ mod session_tests {
             started.elapsed()
         );
         assert_eq!(session.game.screen(), Screen::Channel);
+    }
+
+    #[test]
+    fn channel_back_sends_pinned_logout_and_reentry_completes() {
+        // Ticket #175: the exe's channel exit sends `ChannelLogout`
+        // 2021 (empty body — dispatch word 0x13200002, send at file
+        // 0x48ff90), and Memoryer then answers the next 1004 (probe:
+        // without the leave the second 1004 draws a 1001 -1 auth
+        // error and never a 1005, while 2021 answers 2022 result 0
+        // and the follow-up 1004 succeeds). The scripted gateway
+        // replays that pinned order across the full
+        // enter -> back -> re-enter sequence.
+        let (mut session, server) = channel_session(|mut stream| {
+            answer_entry_login(&mut stream);
+            // Quick back: the pinned leave must hit the wire.
+            let logout = read_frame(&mut stream);
+            assert_eq!(logout.id, 2021);
+            assert!(logout.payload.is_empty(), "pinned empty logout body");
+            // The probe-observed leave answer: `i32` 0.
+            stream
+                .write_all(&encode_frame(2022, &0i32.to_le_bytes()))
+                .unwrap();
+            // Re-entry against the reset session completes.
+            answer_entry_login(&mut stream);
+        });
+        session.game.set_channels(vec![entry_channel()]);
+        session.menu_key(MenuKey::Confirm, true);
+        paint_until(&mut session, |session| {
+            session.game.screen() == Screen::Room
+        });
+        session.menu_key(MenuKey::Back, true);
+        assert_eq!(session.game.screen(), Screen::Channel);
+        session.menu_key(MenuKey::Confirm, true);
+        paint_until(&mut session, |session| {
+            session.game.screen() == Screen::Room
+        });
+        server.join().unwrap();
+        assert_eq!(session.game.screen(), Screen::Room);
     }
 
     #[test]
