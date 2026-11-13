@@ -504,6 +504,7 @@ pub struct ScreenGame {
     /// slot-through-top (`code + top`), key steps re-seat the top
     /// under the highlight (exe key rule stays OPEN).
     channel_top: usize,
+    channel_drag: bool,
     /// Native pointer position from the last snapshot (`None` until
     /// the pointer moves): the hover source for scenes with pinned hover
     /// art (the channel select bar). Test affordance and live input both
@@ -966,6 +967,7 @@ impl ScreenGame {
             channels: Vec::new(),
             highlight: 0,
             channel_top: 0,
+            channel_drag: false,
             pointer: None,
             channel_chat: LobbyChatPanel::default(),
             room_chat: LobbyChatPanel::default(),
@@ -1346,6 +1348,7 @@ impl ScreenGame {
         // `+0x184 = 0` + scrollbar `+0xb8 = 0` joint reset, file
         // `0x747ba`): a fresh list always opens unscrolled.
         self.channel_top = 0;
+        self.channel_drag = false;
         self.channel_chat = LobbyChatPanel::default();
         self
     }
@@ -3457,6 +3460,16 @@ impl ScreenGame {
             self.planet_pointer_down(x, y);
             return;
         }
+        // Channel scrollbar drag arm (#174): press on the bar body
+        // (track between the two arrows) sets the drag capture;
+        // arrows still click-step via click_dispatch.
+        if self.flow.current() == Screen::Channel
+            && (573..=593).contains(&x)
+            && (233..=409).contains(&y)
+        {
+            self.channel_drag = true;
+            return;
+        }
         // Every other scene keeps its down-dispatch (no press-split
         // evidence there; the room-scene quickjoin arm is the named
         // next capture, `docs/hover.md`).
@@ -3470,6 +3483,9 @@ impl ScreenGame {
         self.pointer = Some((x, y));
         if self.bare_planet_board() {
             self.planet_pointer_up(x, y);
+        }
+        if self.flow.current() == Screen::Channel {
+            self.channel_drag = false;
         }
     }
 
@@ -5431,6 +5447,14 @@ impl GameLoop for ScreenGame {
         // arrival order through the press/release helpers.
         if let Some((x, y)) = snapshot.pointer() {
             self.pointer = Some((x, y));
+            if self.flow.current() == Screen::Channel && self.channel_drag {
+                let max_top = self.channels.len().saturating_sub(CHANNEL_VISIBLE_ROWS);
+                let track_top = 233i32;
+                let track_bot = 409i32;
+                let frac =
+                    ((y - track_top) as f32 / (track_bot - track_top) as f32).clamp(0.0, 1.0);
+                self.channel_top = (frac * max_top as f32).round() as usize;
+            }
         }
         for edge in snapshot.edges() {
             match *edge {
