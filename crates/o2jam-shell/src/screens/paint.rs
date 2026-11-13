@@ -3286,10 +3286,11 @@ pub fn paint_room_user_panel(
     placements: &[ScenePlacement],
     character: Option<&CharacterInfo>,
     figure: Option<&AvatarFigure>,
+    now_ms: u64,
 ) {
     if let (Some(figure), Some(slot)) = (figure, staged_field_rect(placements, ROOM_AVATAR_ID)) {
         let slot = scale_rect_to_frame(&slot, frame.w, frame.h);
-        figure.paint_visible_centered(frame, &slot, frame.w, frame.h);
+        figure.paint_visible_centered(frame, &slot, frame.w, frame.h, now_ms);
     }
     if let Some(character) = character {
         let ink = caption_ink(art_title_ink());
@@ -3610,9 +3611,14 @@ fn waiting_seat_slot_rect(placements: &[ScenePlacement], seat: usize) -> Option<
 /// scaled box (the shared seat-slot path: self and peers alike). The
 /// visible box centers, so the head-to-feet stack lands inside the
 /// slot (ticket #171) — the same helper the room panel uses.
-fn paint_figure_in_seat_slot(frame: &mut Frame<'_>, figure: &AvatarFigure, slot: &Rect) {
+fn paint_figure_in_seat_slot(
+    frame: &mut Frame<'_>,
+    figure: &AvatarFigure,
+    slot: &Rect,
+    now_ms: u64,
+) {
     let scaled = scale_rect_to_frame(slot, frame.w, frame.h);
-    figure.paint_visible_centered(frame, &scaled, frame.w, frame.h);
+    figure.paint_visible_centered(frame, &scaled, frame.w, frame.h, now_ms);
 }
 
 /// Paint the local player's worn figure into their own seat's avatar
@@ -3622,12 +3628,13 @@ pub fn paint_waiting_seat_avatar(
     frame: &mut Frame<'_>,
     placements: &[ScenePlacement],
     figure: Option<&AvatarFigure>,
+    now_ms: u64,
 ) {
     let Some(figure) = figure else {
         return;
     };
     if let Some(slot) = waiting_seat_slot_rect(placements, 0) {
-        paint_figure_in_seat_slot(frame, figure, &slot);
+        paint_figure_in_seat_slot(frame, figure, &slot, now_ms);
     }
 }
 
@@ -3642,6 +3649,7 @@ pub fn paint_waiting_seat_avatars(
     placements: &[ScenePlacement],
     room: &JoinedRoom,
     figures: &[Option<AvatarFigure>],
+    now_ms: u64,
 ) {
     let seats = staged_seats(room);
     for (index, staged_figure) in figures.iter().enumerate() {
@@ -3654,7 +3662,7 @@ pub fn paint_waiting_seat_avatars(
         ) else {
             continue;
         };
-        paint_figure_in_seat_slot(frame, figure, &slot);
+        paint_figure_in_seat_slot(frame, figure, &slot, now_ms);
     }
 }
 
@@ -10786,6 +10794,7 @@ mod paint_tests {
             &placements,
             Some(&character),
             None,
+            0,
         );
         for id in [
             ROOM_NICKNAME_ID,
@@ -10830,6 +10839,7 @@ mod paint_tests {
             &placements,
             None,
             None,
+            0,
         );
         for id in [
             ROOM_NICKNAME_ID,
@@ -10881,6 +10891,7 @@ mod paint_tests {
             &placements,
             Some(&character),
             None,
+            0,
         );
         let rect = placements
             .iter()
@@ -10928,6 +10939,7 @@ mod paint_tests {
             &placements,
             Some(&character),
             None,
+            0,
         );
         let rect = placements
             .iter()
@@ -10960,6 +10972,7 @@ mod paint_tests {
             &placements,
             None,
             Some(&figure),
+            0,
         );
         assert!(
             ink_in_rect(&buf, 800, slot) > 0,
@@ -11087,6 +11100,7 @@ mod paint_tests {
             &placements,
             None,
             None,
+            0,
         );
         let mut buf = vec![0u32; 800 * 600];
         paint_room_user_panel(
@@ -11098,6 +11112,7 @@ mod paint_tests {
             &placements,
             None,
             Some(&figure),
+            0,
         );
         assert_figure_fills_slot(&buf, &bare, slot);
     }
@@ -11148,6 +11163,7 @@ mod paint_tests {
             },
             &placements,
             None,
+            0,
         );
         let mut buf = vec![0u32; 800 * 600];
         paint_waiting_seat_avatar(
@@ -11158,6 +11174,7 @@ mod paint_tests {
             },
             &placements,
             Some(&figure),
+            0,
         );
         assert_figure_fills_slot(&buf, &bare, slot);
     }
@@ -11193,6 +11210,7 @@ mod paint_tests {
             &placements,
             None,
             None,
+            0,
         );
         let mut buf = vec![0u32; 800 * 600];
         paint_room_user_panel(
@@ -11204,6 +11222,7 @@ mod paint_tests {
             &placements,
             None,
             Some(&figure),
+            0,
         );
         let (x0, y0, x1, y1) =
             figure_only_bbox(&buf, &bare).expect("the face stack must ink the scene");
@@ -11247,6 +11266,7 @@ mod paint_tests {
             },
             &placements,
             Some(&figure),
+            0,
         );
         assert!(
             ink_in_rect(
@@ -11284,6 +11304,7 @@ mod paint_tests {
             },
             &placements,
             None,
+            0,
         );
         assert!(empty.iter().all(|pixel| *pixel == 0));
     }
@@ -11353,6 +11374,7 @@ mod paint_tests {
             &placements,
             &room,
             &figures,
+            0,
         );
         assert!(
             ink_in_rect(&buf, 800, waiting_slot_box(0)) > 0,
@@ -11397,6 +11419,7 @@ mod paint_tests {
             &placements,
             &room,
             &figures,
+            0,
         );
         assert!(buf.iter().all(|pixel| *pixel == 0));
     }

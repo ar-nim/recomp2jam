@@ -4667,9 +4667,11 @@ impl ScreenGame {
             }
             self.enter_screen(Screen::Result);
         }
-        // Avatar breathing rides the paint clock: record the instant
-        // so worn figures select their breathing frame (ticket #193).
-        crate::avatar::set_avatar_breathing_now_ms(now_ms);
+        // Avatar breathing rides the paint clock: `now_ms` threads
+        // into the room/waiting/playing avatar painters, so each
+        // worn figure selects its breathing frame for this paint
+        // (ticket #193) — no shared clock, parallel paints stay
+        // deterministic.
         // The promo carousel rotates on board time: each paint feeds
         // the frame clock to the 3000 ms accumulator (the windowed
         // heartbeat in `idle_repaint_interval` supplies the pulse).
@@ -4678,8 +4680,8 @@ impl ScreenGame {
             Screen::Playing => self.paint_playing(frame, now_ms),
             Screen::Avi => self.paint_avi(frame),
             Screen::Channel => self.paint_channel(frame),
-            Screen::Room => self.paint_room(frame),
-            Screen::Waiting => self.paint_waiting(frame),
+            Screen::Room => self.paint_room(frame, now_ms),
+            Screen::Waiting => self.paint_waiting(frame, now_ms),
             Screen::Loading => self.paint_loading(frame),
             Screen::Result => self.paint_result(frame),
             Screen::Planet => self.paint_planet(frame),
@@ -4908,7 +4910,7 @@ impl ScreenGame {
     }
 
     /// Room lobby: staged art behind the live list, flat card fallback.
-    fn paint_room(&self, frame: &mut Frame<'_>) {
+    fn paint_room(&self, frame: &mut Frame<'_>, now_ms: u64) {
         // The exe arms chrome hover on an empty live room too (every
         // `docs/hover.md` sweep row shows the six empty row panels
         // while the chrome buttons repaint on hover), so both staged
@@ -4946,6 +4948,7 @@ impl ScreenGame {
                 &art.placements,
                 self.myroom_character.as_ref(),
                 self.room_avatar.as_ref(),
+                now_ms,
             );
         }
         // The open room dialog layers over the lobby: the staged sheet
@@ -5050,7 +5053,7 @@ impl ScreenGame {
     /// to `DAILOG_SELECTMUSIC` filter buttons. Cards stay staged art:
     /// `paint_waiting_staged` never paints those rects (see the
     /// `paint_waiting_music` docs and the chat/cards absence tests).
-    fn paint_waiting(&self, frame: &mut Frame<'_>) {
+    fn paint_waiting(&self, frame: &mut Frame<'_>, now_ms: u64) {
         let captions = WaitingCaptions {
             song_title: self.room_song_title(),
             song_bpm: self.room_song_bpm(),
@@ -5059,14 +5062,25 @@ impl ScreenGame {
         match (self.scene_art(Screen::Waiting), &self.waiting) {
             (Some(art), Some(room)) => {
                 paint_waiting_scene(frame, room, art, &captions);
-                paint_waiting_seat_avatars(frame, &art.placements, room, &self.waiting_figures);
+                paint_waiting_seat_avatars(
+                    frame,
+                    &art.placements,
+                    room,
+                    &self.waiting_figures,
+                    now_ms,
+                );
                 // Dual self-figure source, intended fallback: the staged
                 // seat figure (fetched-character equipment) wins; the
                 // lobby `room_avatar` (same worn stack, CLI-staged)
                 // covers seat 0 only until the fetched character lands
                 // (the windowed entries fetch it on channel login).
                 if self.waiting_figures[0].is_none() {
-                    paint_waiting_seat_avatar(frame, &art.placements, self.room_avatar.as_ref());
+                    paint_waiting_seat_avatar(
+                        frame,
+                        &art.placements,
+                        self.room_avatar.as_ref(),
+                        now_ms,
+                    );
                 }
                 paint_waiting_chat(frame, &self.waiting_chat, &self.chat_input, &art.placements);
             }

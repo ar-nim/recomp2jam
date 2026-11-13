@@ -13,7 +13,6 @@
 //! filenames those are comes from [`pick_wear_sprites`].
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use o2jam_file::{
     classify_sprite, find_opi_entry, opi_entry_body, pair_entries_with_rects, resolve_sprite_entry,
@@ -53,20 +52,6 @@ pub const AVATAR_BREATHING_TICK_MS: u64 = 250;
 #[must_use]
 pub fn avatar_breathing_frame(now_ms: u64) -> usize {
     (usize::try_from(now_ms / AVATAR_BREATHING_TICK_MS).unwrap_or(0)) % AVATAR_BREATHING_FRAME_COUNT
-}
-
-static AVATAR_BREATHING_NOW_MS: AtomicU64 = AtomicU64::new(0);
-
-/// Record the paint-clock instant driving avatar breathing (called from
-/// the paint seam). `0` until the first paint.
-pub fn set_avatar_breathing_now_ms(now_ms: u64) {
-    AVATAR_BREATHING_NOW_MS.store(now_ms, Ordering::Relaxed);
-}
-
-/// Paint-clock instant currently driving avatar breathing.
-#[must_use]
-pub fn avatar_breathing_now_ms() -> u64 {
-    AVATAR_BREATHING_NOW_MS.load(Ordering::Relaxed)
 }
 
 /// One composited part: image plus its record anchor offset.
@@ -153,6 +138,12 @@ fn oja_canvas(w: u16, h: u16, rows: &[Sprite55RowSpan<'_>]) -> Rgb555Image {
 pub struct AvatarFigure {
     /// Layers in paint order.
     layers: Vec<FigureLayer>,
+    /// Contiguous layer runs stacked per source body, in paint order:
+    /// one entry per body the figure stacked (ticket #193 — the live
+    /// kit mixes 12-frame breathing bodies with single-frame bodies,
+    /// so the painter selects the breathing frame per run instead of
+    /// gating on the flat layer count). Empty runs never appear.
+    part_lens: Vec<usize>,
 }
 
 impl AvatarFigure {
@@ -174,7 +165,21 @@ impl AvatarFigure {
                     })
             })
             .collect();
-        Self { layers }
+        Self::from_layers(layers)
+    }
+
+    /// Stack decoded layers as one body run: single-frame bodies stay
+    /// one entry, 12-frame breathing bodies stay twelve. Empty bodies
+    /// stage nothing, never an empty run.
+    fn from_layers(layers: Vec<FigureLayer>) -> Self {
+        Self {
+            part_lens: if layers.is_empty() {
+                Vec::new()
+            } else {
+                vec![layers.len()]
+            },
+            layers,
+        }
     }
 
     /// Decode every animation frame of a strided atlas: one layer per
@@ -207,7 +212,7 @@ impl AvatarFigure {
                 }
             }
         }
-        Self { layers }
+        Self::from_layers(layers)
     }
 
     /// Decode every frame of a `.oja` effect animation (codec gap ⑤):
@@ -233,7 +238,7 @@ impl AvatarFigure {
                 .iter()
                 .map(FigureLayer::from_oja_trailing_frame),
         );
-        Self { layers }
+        Self::from_layers(layers)
     }
 
     /// Decode every image of a prefixed body onto its full `w*h`
@@ -271,12 +276,37 @@ impl AvatarFigure {
                 }
             })
             .collect();
-        Self { layers }
+        Self::from_layers(layers)
     }
 
     /// Stack an extra layer on top (equipped parts resolve here).
+    /// The layer joins the topmost body run, so a lone stack keeps
+    /// the flat selection shape it always had.
     pub fn push_layer(&mut self, layer: FigureLayer) {
         self.layers.push(layer);
+        if let Some(top) = self.part_lens.last_mut() {
+            *top += 1;
+        } else {
+            self.part_lens.push(1);
+        }
+    }
+
+    /// Stack a decoded body on top as its own run (worn parts resolve
+    /// here): its layers keep their frame count apart from the bodies
+    /// below, so mixed 12-frame and single-frame kits animate per
+    /// part. Empty bodies stage nothing.
+    pub fn push_body(&mut self, body: AvatarFigure) {
+        if body.layers.is_empty() {
+            return;
+        }
+        let mut offset = 0;
+        for &run in &body.part_lens {
+            self.layers
+                .extend_from_slice(&body.layers[offset..offset + run]);
+            self.part_lens.push(run);
+            offset += run;
+        }
+        debug_assert_eq!(offset, body.layers.len());
     }
 
     /// Decoded layer count.
@@ -301,14 +331,22 @@ impl AvatarFigure {
     /// ([`playing_member_frame`]).
     #[must_use]
     pub fn layers_through(&self, last: usize) -> Self {
-        Self {
-            layers: self
-                .layers
-                .iter()
-                .take(last.saturating_add(1))
-                .cloned()
-                .collect(),
+        let take = last.saturating_add(1);
+        let mut layers = Vec::new();
+        let mut part_lens = Vec::new();
+        let mut offset = 0;
+        for &run in &self.part_lens {
+            if offset >= take {
+                break;
+            }
+            let len = run.min(take - offset);
+            if len > 0 {
+                layers.extend_from_slice(&self.layers[offset..offset + len]);
+                part_lens.push(len);
+            }
+            offset += run;
         }
+        Self { layers, part_lens }
     }
 
     /// Whether any layer carries a nonzero record anchor. Such a body
@@ -386,6 +424,7 @@ impl AvatarFigure {
         seat: &Rect,
         frame_w: usize,
         frame_h: usize,
+        now_ms: u64,
     ) {
         if self.layers.is_empty() {
             return;
@@ -398,6 +437,7 @@ impl AvatarFigure {
             seat,
             frame_w,
             frame_h,
+            now_ms,
             (origin_x, origin_y),
             (
                 u64::try_from(extent_w).unwrap_or(0),
@@ -423,6 +463,7 @@ impl AvatarFigure {
         seat: &Rect,
         frame_w: usize,
         frame_h: usize,
+        now_ms: u64,
     ) {
         if self.layers.is_empty() {
             return;
@@ -437,6 +478,7 @@ impl AvatarFigure {
             seat,
             frame_w,
             frame_h,
+            now_ms,
             (origin_x, origin_y),
             (
                 u64::try_from(extent_w)
@@ -452,12 +494,17 @@ impl AvatarFigure {
     /// Blit every layer with the box centered in `seat`: each layer
     /// lands at its anchor offset from the box origin under its own
     /// source colorkey.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "paint chain threads frame, seat, dims, clock, and box together"
+    )]
     fn paint_box_centered(
         &self,
         frame: &mut Frame<'_>,
         seat: &Rect,
         frame_w: usize,
         frame_h: usize,
+        now_ms: u64,
         origin: (i32, i32),
         box_size: (u64, u64),
     ) {
@@ -467,23 +514,34 @@ impl AvatarFigure {
         let left = center_native(box_size.0, seat.w, seat.x);
         let top = center_native(box_size.1, seat.h, seat.y);
         let (origin_x, origin_y) = origin;
-        // Breathing: a worn figure stacks N parts x 12 frames. Paint
-        // only the frame selected by the paint clock for each part;
-        // static figures (not a multiple of 12 layers) paint all.
-        let layers: Vec<&FigureLayer> = if self.layers.len() >= 12
-            && self
-                .layers
-                .len()
-                .is_multiple_of(AVATAR_BREATHING_FRAME_COUNT)
-        {
-            let frame = avatar_breathing_frame(avatar_breathing_now_ms());
-            (0..self.layers.len() / AVATAR_BREATHING_FRAME_COUNT)
-                .filter_map(|part| self.layers.get(part * AVATAR_BREATHING_FRAME_COUNT + frame))
-                .collect()
-        } else {
-            self.layers.iter().collect()
-        };
-        for layer in layers {
+        // Breathing: each stacked body carries its own frame run — a
+        // 12-frame body paints its paint-clock frame, a single-frame
+        // body paints every frame. The old flat `len % 12` gate went
+        // static on mixed kits (ticket #193: the 447-layer live kit
+        // mixes twelve 12-frame bodies with three single-frame
+        // bodies), stacking every frame at once.
+        let breath_frame = avatar_breathing_frame(now_ms);
+        let mut selected: Vec<&FigureLayer> = Vec::new();
+        let mut offset = 0;
+        for &run in &self.part_lens {
+            let part = &self.layers[offset..offset + run];
+            if run >= AVATAR_BREATHING_FRAME_COUNT
+                && run.is_multiple_of(AVATAR_BREATHING_FRAME_COUNT)
+            {
+                for part_index in 0..run / AVATAR_BREATHING_FRAME_COUNT {
+                    if let Some(layer) =
+                        part.get(part_index * AVATAR_BREATHING_FRAME_COUNT + breath_frame)
+                    {
+                        selected.push(layer);
+                    }
+                }
+            } else {
+                selected.extend(part.iter());
+            }
+            offset += run;
+        }
+        debug_assert_eq!(offset, self.layers.len());
+        for layer in selected {
             let (dx, dy) = anchor_in_frame(
                 left.saturating_add(layer.dx.saturating_sub(origin_x)),
                 top.saturating_add(layer.dy.saturating_sub(origin_y)),
@@ -734,9 +792,10 @@ pub fn load_worn_figure(
             let Ok(sprite) = o2jam_file::parse_sprite55(body) else {
                 continue;
             };
-            figure
-                .layers
-                .extend(AvatarFigure::from_sprite55(&sprite).layers);
+            // One body, one run: 12-frame breathing bodies and
+            // single-frame bodies keep their own frame counts, so the
+            // mixed live kit animates per part (ticket #193).
+            figure.push_body(AvatarFigure::from_sprite55(&sprite));
         }
     }
     figure
@@ -3935,8 +3994,103 @@ mod avatar_figure_tests {
         );
     }
 
+    /// One 1x1 layer with an exact RGB555 word at `(dx, 0)`, opaque
+    /// under the zero colorkey (synthetic breathing analog: no
+    /// archive needed, so CI without game data still runs it).
+    fn breathing_test_layer(word: u16, dx: i32) -> FigureLayer {
+        FigureLayer {
+            image: Rgb555Image::decode(&word.to_le_bytes(), 1, 1).unwrap(),
+            dx,
+            dy: 0,
+            colorkey: 0x0000,
+        }
+    }
+
+    /// Framebuffer word one RGB555 word paints as.
+    fn breathing_test_ink(word: u16) -> u32 {
+        let (r, g, b) = o2jam_file::rgb555_to_rgb888(word);
+        o2jam_render::pack_xrgb(r, g, b)
+    }
+
+    /// Paint one figure through the room-panel path at one paint
+    /// instant and return the framebuffer (the clock threads through
+    /// the paint chain — no shared state, so parallel tests stay
+    /// deterministic).
+    fn paint_centered_pixels(figure: &AvatarFigure, now_ms: u64) -> Vec<u32> {
+        let mut buf = vec![0u32; 800 * 600];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 800,
+            h: 600,
+        };
+        figure.paint_visible_centered(
+            &mut frame,
+            &Rect {
+                x: 0,
+                y: 0,
+                w: 800,
+                h: 600,
+            },
+            800,
+            600,
+            now_ms,
+        );
+        buf
+    }
+
+    #[test]
+    fn kitted_figure_breathes_one_frame_per_part() {
+        // Live caller chain:
+        //   main.rs::run_play -> GameLoop paint -> ScreenGame::paint
+        //   -> ScreenGame::paint_at -> ScreenGame::paint_room
+        //   -> paint_room_user_panel -> AvatarFigure::paint_visible_centered
+        //   -> AvatarFigure::paint_box_centered
+        // The live kit stacks 447 layers (item 376 mixes twelve
+        // 12-frame breathing bodies with three single-frame I-variant
+        // bodies, so 447 % 12 != 0): every 12-frame part must still
+        // paint its paint-clock frame while single-frame bodies paint
+        // every frame. Synthetic analog (one 12-frame run plus one
+        // single-frame run = 13 layers): no archive needed.
+        let mut figure = AvatarFigure::default();
+        for part_frame in 0..12u16 {
+            // One 12-frame body: twelve 1x1 layers at dx 0..12.
+            figure.push_layer(breathing_test_layer(
+                0x0001 + part_frame,
+                i32::from(part_frame),
+            ));
+        }
+        // One single-frame body stacked on top: white at dx 12.
+        let mut single = AvatarFigure::default();
+        single.push_layer(breathing_test_layer(0x7FFF, 12));
+        figure.push_body(single);
+        assert_eq!(figure.len(), 13);
+        // 13 layers centered in 800x600 land at x 393..406, y 299.
+        let pixel = |buf: &[u32], dx: usize| buf[299 * 800 + 393 + dx];
+        let parked = paint_centered_pixels(&figure, 0);
+        assert_eq!(pixel(&parked, 0), breathing_test_ink(0x0001));
+        assert_eq!(
+            pixel(&parked, 1),
+            0,
+            "frame 1 of the 12-run must not paint while frame 0 is selected"
+        );
+        assert_eq!(pixel(&parked, 12), breathing_test_ink(0x7FFF));
+        let ticked = paint_centered_pixels(&figure, AVATAR_BREATHING_TICK_MS);
+        assert_eq!(pixel(&ticked, 1), breathing_test_ink(0x0002));
+        assert_eq!(
+            pixel(&ticked, 0),
+            0,
+            "frame 0 of the 12-run must not paint while frame 1 is selected"
+        );
+        assert_eq!(pixel(&ticked, 12), breathing_test_ink(0x7FFF));
+    }
     #[test]
     fn avatar_breathing_frame_clock_guard() {
+        // Live caller chain:
+        //   main.rs::run_play -> GameLoop paint -> ScreenGame::paint
+        //   -> ScreenGame::paint_at(now_ms) -> avatar_breathing_frame(now_ms)
+        // Math seam of the paint-clock frame index (no archive read).
+        // The 250 ms cadence stays OPEN (docs/equip.md): this pins the
+        // wrap and step shape, never the exe period.
         assert_eq!(avatar_breathing_frame(0), 0);
         let f250 = avatar_breathing_frame(250);
         assert_eq!(f250, 1);
