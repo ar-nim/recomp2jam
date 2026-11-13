@@ -6422,9 +6422,17 @@ mod game_tests {
         // Ticket #130 (exe-pin, file `0x747ba`): populate zeroes
         // the list top (`+0x184 = 0`) beside the scrollbar reset
         // (`+0xb8 = 0`) — a fresh list always opens unscrolled.
+        // The highlight is carried non-zero into the repopulate so the
+        // reset assertion is meaningful (a zero highlight would pass
+        // even without the reset).
+        use MenuKey;
         let mut game = six_channel_game();
+        game.menu_key(MenuKey::Down, true);
+        game.menu_key(MenuKey::Down, true);
+        assert_eq!(game.highlight, 2);
         game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
         assert_eq!(game.channel_top, 1);
+        assert_eq!(game.highlight, 2);
         game.set_channels(six_channels());
         assert_eq!(game.channel_top, 0);
         assert_eq!(game.highlight, 0);
