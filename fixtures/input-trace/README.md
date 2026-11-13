@@ -65,3 +65,29 @@ exe takes launcher cmdline) → planet → channel → room → waiting
 room create (`--create-room "U1 Trace"`), and the host pick
 (`--music-id 757`) ride CLI args; everything visible rides real
 window input.
+
+## Menu traces (ticket #208, snapshot seam)
+
+Five synthetic shop/MyRoom traces replay through the `ScreenGame`
+snapshot seam (`crates/recomp2jam/src/menu_trace_replay.rs`), never
+through OS injection — `SendInput`/XTEST stay reserved for the
+integration-layer probes. Each event carries microsecond stamps
+(`time_us`, agreeing with the legacy `time_ms` floor), explicit
+press AND release pairs, canvas `(x, y)`, the exe staged
+`control_id`, and a human `label`.
+
+| trace | walk |
+|---|---|
+| `shop-entry-from-room.json` | Room → `ITEMSHOP` chrome → shop side |
+| `shop-goods-browse-pager.json` | entry → item pager next/next/hold/prev → owned pager hold |
+| `shop-row-cart-buyitem.json` | entry → row 1 + row 2 toggles → `BUYITEM` commit |
+| `myroom-bag-slot-equip.json` | Room → `MYROOM` chrome → slot select → bag pick → `INVENTORY` equip |
+| `giftbox-claim.json` | Room → `MYROOM` chrome → gift cell pick → gift `MOVE` claim |
+
+Harness rules: `await-screen` syncs on the flow screen *or* the open
+side overlay (shop/MyRoom ride sides); a missed sync fails the run.
+`text` refuses with the window-layer reason (needs IME injection).
+Every trace replays twice with per-event verdict plus state-hash
+comparison — a divergence fails the run. Staging is fully synthetic
+(catalog via `set_avatar_source`, the #191 live-chain entry), so
+these run with or without `install-root`.

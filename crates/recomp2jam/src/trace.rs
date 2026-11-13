@@ -21,7 +21,20 @@
 //!
 //! Timestamps are the event's intended menu-clock time (relative to
 //! the window's first paint); the harness records the applied time
-//! separately in the binary's capture log (skill rule 4).
+//! separately in the binary's capture log (skill rule 4). The
+//! legacy `time_ms` pacing still drives the windowed XTEST rig;
+//! `time_us` (ticket #208) is the microsecond authority and must
+//! agree with it (`time_ms == time_us / 1000`, whole-millisecond
+//! floor). Runs order on the microsecond clock.
+//!
+//! Pointer gestures pair explicitly: a `click` `press` opens the
+//! gesture at `(x, y)` and a `release` at the same point closes it
+//! (a release with no matching press, or at another point,
+//! rejects). A lone press stays a tap shorthand for the windowed
+//! driver (the committed U1 trace clicks this way). Optional
+//! `control_id` (the exe staged control, e.g.
+//! `IDC_BUTTON_SSHOP_BUYITEM`) and `label` (the human step name)
+//! name the gesture without changing replay.
 
 use std::path::Path;
 
@@ -60,8 +73,15 @@ pub struct TimeBase {
 pub struct TraceEvent {
     /// Strictly increasing sequence number (replay order authority).
     pub sequence: u64,
-    /// Intended timestamp on the trace's clock.
+    /// Intended timestamp on the trace's clock (legacy millisecond
+    /// pacing: the windowed XTEST driver still reads this field).
     pub time_ms: u64,
+    /// Microsecond timestamp authority (ticket #208): when present
+    /// it orders the run on the microsecond clock and must agree
+    /// with the legacy pacing (`time_ms == time_us / 1000`, the
+    /// driver whole-millisecond floor). New traces always carry it.
+    #[serde(default)]
+    pub time_us: Option<u64>,
     /// Control: `lane-N` (0..=6), `menu-confirm`, `menu-back`,
     /// `menu-up`, `menu-down`, `click`, `text`, `await-screen`.
     pub control: String,
@@ -80,6 +100,16 @@ pub struct TraceEvent {
     /// Screen name for `await-screen`.
     #[serde(default)]
     pub screen: Option<String>,
+    /// Exe staged control id for `click` (e.g.
+    /// `IDC_BUTTON_SSHOP_BUYITEM`): names the dispatched control
+    /// beside the portable `control` name. Informational — dispatch
+    /// still resolves the staged code tables by coordinate.
+    #[serde(default)]
+    pub control_id: Option<String>,
+    /// Human step name for `click` (e.g. `row-1-toggle`): keeps the
+    /// trace readable without changing replay.
+    #[serde(default)]
+    pub label: Option<String>,
 }
 
 /// Load and validate one trace file (JSON).
@@ -122,8 +152,10 @@ pub fn validate(trace: &InputTrace) -> Result<(), Vec<String>> {
         violations.push("trace has no events".to_owned());
     }
     let mut held: Vec<&str> = Vec::new();
+    let mut open_clicks: Vec<(i32, i32)> = Vec::new();
     let mut last_sequence = None;
     let mut last_time = None;
+    let mut last_time_us = None;
     for event in &trace.events {
         if let Some(previous) = last_sequence {
             if event.sequence <= previous {
@@ -143,7 +175,25 @@ pub fn validate(trace: &InputTrace) -> Result<(), Vec<String>> {
             }
         }
         last_time = Some(event.time_ms);
-        validate_event(event, &mut held, &mut violations);
+        let time_us = effective_time_us(event);
+        if let Some(previous) = last_time_us {
+            if time_us < previous {
+                violations.push(format!(
+                    "event {}: time_us {time_us} goes backwards",
+                    event.sequence
+                ));
+            }
+        }
+        last_time_us = Some(time_us);
+        if let Some(stamp) = event.time_us {
+            if stamp / 1000 != event.time_ms {
+                violations.push(format!(
+                    "event {}: time_us {stamp} disagrees with time_ms {}",
+                    event.sequence, event.time_ms
+                ));
+            }
+        }
+        validate_event(event, &mut held, &mut open_clicks, &mut violations);
     }
     for open in held {
         violations.push(format!("control {open:?} pressed without a release"));
@@ -155,11 +205,23 @@ pub fn validate(trace: &InputTrace) -> Result<(), Vec<String>> {
     }
 }
 
+/// Effective microsecond stamp: the `time_us` authority when the
+/// trace carries it, else the legacy millisecond pacing in
+/// microseconds (saturating — a hostile `u64::MAX` pacing clamps
+/// instead of wrapping the order check).
+fn effective_time_us(event: &TraceEvent) -> u64 {
+    event
+        .time_us
+        .unwrap_or_else(|| event.time_ms.saturating_mul(1000))
+}
+
 /// Validate one event: known control/action pair, payload bounds,
-/// press/release pairing tracked in `held`.
+/// press/release pairing tracked in `held`, click gestures tracked
+/// in `open_clicks`.
 fn validate_event<'a>(
     event: &'a TraceEvent,
     held: &mut Vec<&'a str>,
+    open_clicks: &mut Vec<(i32, i32)>,
     violations: &mut Vec<String>,
 ) {
     let at = format!(
@@ -178,9 +240,6 @@ fn validate_event<'a>(
             validate_press_release(event, held, violations, &at);
         }
         "click" => {
-            if event.action != "press" {
-                violations.push(format!("{at}: click only presses"));
-            }
             let Some((x, y)) = event.x.zip(event.y) else {
                 violations.push(format!("{at}: click needs x and y"));
                 return;
@@ -188,6 +247,22 @@ fn validate_event<'a>(
             if !(0..800).contains(&x) || !(0..600).contains(&y) {
                 violations.push(format!("{at}: click ({x},{y}) outside the 800x600 canvas"));
             }
+            match event.action.as_str() {
+                // A lone press stays a tap shorthand for the
+                // windowed XTEST driver (the committed U1 trace
+                // clicks this way); an explicit release closes the
+                // gesture at the same point.
+                "press" => open_clicks.push((x, y)),
+                "release" => match open_clicks.pop() {
+                    Some(open) if open == (x, y) => {}
+                    _ => {
+                        violations.push(format!("{at}: release at ({x},{y}) closes no open press"))
+                    }
+                },
+                _ => violations.push(format!("{at}: click presses or releases")),
+            }
+            validate_name(event.control_id.as_deref(), "control_id", &at, violations);
+            validate_name(event.label.as_deref(), "label", &at, violations);
         }
         "text" => {
             if event.action != "type" {
@@ -219,6 +294,15 @@ fn validate_event<'a>(
             }
         }
         other => violations.push(format!("{at}: unknown control {other:?}")),
+    }
+}
+
+/// Optional human/exe name on a click: present means visible —
+/// blank or control-character content rejects.
+fn validate_name(name: Option<&str>, field: &str, at: &str, violations: &mut Vec<String>) {
+    let Some(name) = name else { return };
+    if name.trim().is_empty() || name.chars().any(char::is_control) {
+        violations.push(format!("{at}: {field} must be visible text"));
     }
 }
 
@@ -281,12 +365,15 @@ mod tests {
         TraceEvent {
             sequence,
             time_ms,
+            time_us: None,
             control: control.to_owned(),
             action: action.to_owned(),
             x: None,
             y: None,
             text: None,
             screen: None,
+            control_id: None,
+            label: None,
         }
     }
 
@@ -359,6 +446,82 @@ mod tests {
         assert!(validate(&trace(vec![click])).is_err());
     }
 
+    fn click_at(sequence: u64, time_us: u64, action: &str, x: i32, y: i32) -> TraceEvent {
+        TraceEvent {
+            sequence,
+            time_ms: time_us / 1000,
+            time_us: Some(time_us),
+            control: "click".to_owned(),
+            action: action.to_owned(),
+            x: Some(x),
+            y: Some(y),
+            text: None,
+            screen: None,
+            control_id: Some("IDC_BUTTON_SSHOP_BUYITEM".to_owned()),
+            label: Some("cart-commit".to_owned()),
+        }
+    }
+
+    #[test]
+    fn time_us_must_agree_with_time_ms() {
+        // Ticket #208: the microsecond stamp is the authority; a
+        // trace carrying both clocks must name the same instant.
+        let mut press = click_at(0, 1_000_000, "press", 630, 510);
+        press.time_ms = 999;
+        assert!(validate(&trace(vec![press])).is_err());
+    }
+
+    #[test]
+    fn time_us_orders_events_on_the_microsecond_clock() {
+        // Millisecond pacing ties (same `time_ms`, 1 ms apart in
+        // reality) still move forward on the microsecond clock;
+        // backwards microsecond time rejects even when `time_ms`
+        // never moves backwards.
+        let forward = trace(vec![
+            click_at(0, 1_000_000, "press", 630, 510),
+            click_at(1, 1_000_400, "release", 630, 510),
+        ]);
+        assert!(validate(&forward).is_ok());
+        let mut back = click_at(1, 999_900, "release", 630, 510);
+        back.time_ms = 1000;
+        let backward = trace(vec![click_at(0, 1_000_000, "press", 630, 510), back]);
+        assert!(validate(&backward).is_err());
+    }
+
+    #[test]
+    fn click_release_needs_a_matching_press() {
+        // Press/release pairs pin the gesture: a lone release and a
+        // release at another point both reject. A lone press stays a
+        // tap shorthand for the windowed XTEST driver (the committed
+        // U1 trace clicks this way), so only the release arm is
+        // strict.
+        let lone_release = trace(vec![click_at(0, 1_000_000, "release", 630, 510)]);
+        assert!(validate(&lone_release).is_err());
+        let moved_release = trace(vec![
+            click_at(0, 1_000_000, "press", 630, 510),
+            click_at(1, 1_000_400, "release", 100, 100),
+        ]);
+        assert!(validate(&moved_release).is_err());
+        let pair = trace(vec![
+            click_at(0, 1_000_000, "press", 630, 510),
+            click_at(1, 1_000_400, "release", 630, 510),
+        ]);
+        assert!(validate(&pair).is_ok());
+        let tap = trace(vec![click_at(0, 1_000_000, "press", 630, 510)]);
+        assert!(validate(&tap).is_ok());
+    }
+
+    #[test]
+    fn control_id_and_label_reject_blanks() {
+        let mut blank_id = click_at(0, 1_000_000, "press", 630, 510);
+        blank_id.control_id = Some(String::new());
+        assert!(validate(&trace(vec![blank_id])).is_err());
+        let mut blank_label = click_at(0, 1_000_000, "press", 630, 510);
+        blank_label.label = Some("  ".to_owned());
+        assert!(validate(&trace(vec![blank_label])).is_err());
+        assert!(validate(&trace(vec![click_at(0, 1_000_000, "press", 630, 510)])).is_ok());
+    }
+
     #[test]
     fn unknown_controls_and_screens_reject() {
         let mut text = event(0, 0, "text", "type");
@@ -368,5 +531,37 @@ mod tests {
         bogus_screen.screen = Some("nowhere".to_owned());
         assert!(validate(&trace(vec![bogus_screen])).is_err());
         assert!(validate(&trace(vec![event(0, 0, "telepathy", "press")])).is_err());
+    }
+
+    /// Fixture paths for the ticket #208 shop/MyRoom menu traces
+    /// (synthetic clicks, committed beside the driver traces).
+    const MENU_TRACES: [&str; 5] = [
+        "shop-entry-from-room.json",
+        "shop-goods-browse-pager.json",
+        "shop-row-cart-buyitem.json",
+        "myroom-bag-slot-equip.json",
+        "giftbox-claim.json",
+    ];
+
+    #[test]
+    fn committed_menu_traces_validate() {
+        // Ticket #208: every committed menu trace validates —
+        // monotonic microsecond stamps, closed press/release pairs,
+        // canvas bounds, named controls.
+        for name in MENU_TRACES {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../fixtures/input-trace")
+                .join(name);
+            let loaded = load_validated(&path)
+                .unwrap_or_else(|_| panic!("menu trace must validate: {name}"));
+            assert!(
+                loaded.events.iter().any(|event| event.time_us.is_some()),
+                "{name} carries microsecond stamps"
+            );
+            assert!(
+                loaded.events.iter().any(|event| event.control_id.is_some()),
+                "{name} names its controls"
+            );
+        }
     }
 }

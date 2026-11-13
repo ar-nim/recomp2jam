@@ -1,0 +1,40 @@
+{
+  "schema_version": "recomp2jam-input-v1",
+  "scenario": "shop-entry-from-room",
+  "time_base": {
+    "name": "menu-monotonic",
+    "unit": "microseconds"
+  },
+  "events": [
+    {
+      "action": "press",
+      "control": "click",
+      "control_id": "IDC_BUTTON_SROOM_ITEMSHOP",
+      "label": "room-itemshop-press",
+      "sequence": 0,
+      "time_ms": 1000,
+      "time_us": 1000000,
+      "x": 410,
+      "y": 385
+    },
+    {
+      "action": "release",
+      "control": "click",
+      "control_id": "IDC_BUTTON_SROOM_ITEMSHOP",
+      "label": "room-itemshop-release",
+      "sequence": 1,
+      "time_ms": 1080,
+      "time_us": 1080000,
+      "x": 410,
+      "y": 385
+    },
+    {
+      "action": "reach",
+      "control": "await-screen",
+      "screen": "shop",
+      "sequence": 2,
+      "time_ms": 1800,
+      "time_us": 1800000
+    }
+  ]
+}

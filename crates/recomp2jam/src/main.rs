@@ -18,6 +18,7 @@ mod live_boot_gate;
 mod live_guard;
 mod live_stats;
 mod loading;
+mod menu_trace_replay;
 mod session;
 mod session_walk;
 mod shots;
@@ -253,6 +254,17 @@ enum Command {
         /// Trace JSON path.
         #[arg(long)]
         trace: String,
+    },
+    /// Replay one shop/MyRoom menu trace twice through the
+    /// ScreenGame snapshot seam (synthetic staging, deterministic
+    /// repeat check with state-hash comparison).
+    ReplayMenuTrace {
+        /// Trace JSON path.
+        #[arg(long)]
+        trace: String,
+        /// Synthetic staging family: shop, myroom-equip, myroom-gift.
+        #[arg(long)]
+        stage: String,
     },
     /// End-to-end window walk: boot to Result through every landed
     /// State with one PNG per step plus `trace.json` (headless: the
@@ -879,6 +891,25 @@ fn run_command(command: Command) -> Result<()> {
                 loaded.events.len(),
                 loaded.time_base.name,
                 loaded.time_base.unit
+            );
+            Ok(())
+        }
+        Command::ReplayMenuTrace { trace, stage } => {
+            // A bare file name resolves to the committed menu-trace
+            // fixtures; anything else loads as a path.
+            let loaded = if std::path::Path::new(&trace).exists() {
+                trace::load_validated(std::path::Path::new(&trace))?
+            } else {
+                menu_trace_replay::load_menu_trace(&trace)?
+            };
+            let report = menu_trace_replay::replay_menu_file(&loaded, &stage)?;
+            println!(
+                "replay ok: {} ({} applied, {} accepted, final side {:?}, hash {})",
+                report.scenario,
+                report.applied(),
+                report.events.len() - report.applied() - report.rejected(),
+                report.final_side,
+                report.final_hash
             );
             Ok(())
         }

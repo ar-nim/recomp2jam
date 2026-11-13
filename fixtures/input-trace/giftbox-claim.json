@@ -1,0 +1,92 @@
+{
+  "schema_version": "recomp2jam-input-v1",
+  "scenario": "giftbox-claim",
+  "time_base": {
+    "name": "menu-monotonic",
+    "unit": "microseconds"
+  },
+  "events": [
+    {
+      "action": "press",
+      "control": "click",
+      "control_id": "IDC_BUTTON_SROOM_MYROOM",
+      "label": "room-myroom-press",
+      "sequence": 0,
+      "time_ms": 1000,
+      "time_us": 1000000,
+      "x": 410,
+      "y": 385
+    },
+    {
+      "action": "release",
+      "control": "click",
+      "control_id": "IDC_BUTTON_SROOM_MYROOM",
+      "label": "room-myroom-release",
+      "sequence": 1,
+      "time_ms": 1080,
+      "time_us": 1080000,
+      "x": 410,
+      "y": 385
+    },
+    {
+      "action": "reach",
+      "control": "await-screen",
+      "screen": "myroom",
+      "sequence": 2,
+      "time_ms": 1800,
+      "time_us": 1800000
+    },
+    {
+      "action": "press",
+      "control": "click",
+      "control_id": "IDC_BUTTON_SMYROOM_GIFTBOX_EX1",
+      "label": "gift-cell-0-pick-press",
+      "sequence": 3,
+      "time_ms": 2500,
+      "time_us": 2500000,
+      "x": 401,
+      "y": 11
+    },
+    {
+      "action": "release",
+      "control": "click",
+      "control_id": "IDC_BUTTON_SMYROOM_GIFTBOX_EX1",
+      "label": "gift-cell-0-pick-release",
+      "sequence": 4,
+      "time_ms": 2580,
+      "time_us": 2580000,
+      "x": 401,
+      "y": 11
+    },
+    {
+      "action": "press",
+      "control": "click",
+      "control_id": "Myroom_Btn_GiftMove",
+      "label": "gift-move-claim-press",
+      "sequence": 5,
+      "time_ms": 3200,
+      "time_us": 3200000,
+      "x": 501,
+      "y": 11
+    },
+    {
+      "action": "release",
+      "control": "click",
+      "control_id": "Myroom_Btn_GiftMove",
+      "label": "gift-move-claim-release",
+      "sequence": 6,
+      "time_ms": 3280,
+      "time_us": 3280000,
+      "x": 501,
+      "y": 11
+    },
+    {
+      "action": "reach",
+      "control": "await-screen",
+      "screen": "myroom",
+      "sequence": 7,
+      "time_ms": 3900,
+      "time_us": 3900000
+    }
+  ]
+}
