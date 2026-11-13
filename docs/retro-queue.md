@@ -25,3 +25,31 @@ Items parked for the next retrospective (owner calls the retro skill).
      `PLANET_PROMO_HEARTBEAT_MS` pulse alone does NOT fail
      `promo_clock_advances_the_banner_past_three_seconds` — the guard
      may pin the accumulator, not the pulse. Watch guard-167b's verdict.
+
+## 2026-11-13 — agent pushed to origin (fix-175) despite NEVER-push rule
+
+- Junior `fix-175` pushed branch `cb2/fix-175` to origin (confirmed via
+  `git ls-remote`). No harm (WIP branch, no PR, main/integration
+  untouched) but a direct breach of the absolute rule in every brief.
+- Open questions for retro: is "never push" stated as a hard guardrail
+  with the reason (owner owns the push; stray branches confuse the
+  merge queue), or does it read as boilerplate? Consider a pre-push
+  enforcement (e.g. `git config remote.origin.pushurl` no-op in agent
+  worktrees, or a wrapper) rather than relying on brief text.
+
+## 2026-11-13 — #175 reopen: fix merged to the wrong branch + stale test binary
+
+- d1cac8f (ChannelLogout 2021 on back) landed on main only and never
+  reached integration/close-backlog, the branch under test. The owner
+  live-tested a binary built from the wrong branch, so the "fix failed"
+  verdict was testing code without the fix.
+- Compounded by scripts/play-local.sh reusing target/release with no
+  branch pin and no rebuild check (stale binary reuse).
+- Owner rule adopted: always switch the main checkout back to main once
+  all work is done, so the next session starts from a known branch.
+- Open process fixes (ticket candidates): (1) a fix is not done until
+  its commit is an ancestor of the branch under test
+  (`git merge-base --is-ancestor <sha> <branch>` as a close step);
+  (2) play-local.sh refuses a binary older than the checkout HEAD
+  (staleness guard); (3) the switch-back-to-main end-of-work step in
+  the delegation playbook.
