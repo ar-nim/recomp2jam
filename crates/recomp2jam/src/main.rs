@@ -1021,6 +1021,10 @@ fn run_play(opts: PlayOptions) -> Result<()> {
                 // game data the flat fallbacks stay), then seed demo
                 // lobby lists so the staged rows render for hand
                 // verification.
+                // Default-boot staging: the shop catalog rides the
+                // installed avatar.opa table, so the board is never empty
+                // without an opt-in flag.
+                stage_online_identity(&mut game, None);
                 live_art::stage_live_scenes(&mut game);
                 seed_offline_lobby(&mut game);
                 let event_loop = winit::event_loop::EventLoop::new()
@@ -1234,18 +1238,20 @@ fn setup_online(
 /// stacks from the installed `avatar.opa` with the hero's own equipment
 /// and gender (the same stack the shots walk stages), and the archive
 /// becomes the waiting-seat source so the self seat and every later
-/// peer join restage through it. No-op on the list-only boot (no
-/// channel, no fetch). Infallible by contract: a missing or
+/// peer join restage through it. The item-shop catalog rides the
+/// same `Itemdata_Korea.dat` table, so it stages on every boot that
+/// lands the installed archive — including the list-only default
+/// (no channel, no fetch; ticket #191 reopen). Infallible by
+/// contract: a missing or
 /// unstackable archive keeps the figure slots empty, never failing
 /// the login walk.
 fn stage_online_identity(
     game: &mut o2jam_shell::ScreenGame,
     character: Option<&o2jam_net::CharacterInfo>,
 ) {
-    let Some(hero) = character else {
-        return;
-    };
-    game.set_myroom_character(hero.clone());
+    if let Some(hero) = character {
+        game.set_myroom_character(hero.clone());
+    }
     let Ok((archive, table)) = connect::read_avatar_source(
         install_root()
             .join(INSTALLED_AVATAR_OPA)
@@ -1257,22 +1263,28 @@ fn stage_online_identity(
         );
         return;
     };
-    match connect::stack_worn_figure(
-        &archive,
-        &hero.equipment,
-        hero.gender == o2jam_net::Gender::Male,
-    ) {
-        Ok(figure) if !figure.is_empty() => {
-            // The Room lobby slot and the Result banner show the same
-            // worn stack.
-            game.load_room_avatar(figure.clone());
-            game.load_avatar(figure);
-        }
-        Ok(_) => tracing::debug!("character equipment stacks empty; figure slots stay empty"),
-        Err(source) => {
-            tracing::debug!(%source, "worn figure unstackable; figure slots stay empty");
+    if let Some(hero) = character {
+        match connect::stack_worn_figure(
+            &archive,
+            &hero.equipment,
+            hero.gender == o2jam_net::Gender::Male,
+        ) {
+            Ok(figure) if !figure.is_empty() => {
+                // The Room lobby slot and the Result banner show the same
+                // worn stack.
+                game.load_room_avatar(figure.clone());
+                game.load_avatar(figure);
+            }
+            Ok(_) => tracing::debug!("character equipment stacks empty; figure slots stay empty"),
+            Err(source) => {
+                tracing::debug!(%source, "worn figure unstackable; figure slots stay empty");
+            }
         }
     }
+    // The shop board rides the same `Itemdata_Korea.dat` table as the
+    // avatar source (server-authoritative catalog join): stage it here
+    // so the live board is never empty after the avatar archive lands,
+    // even on the default boot that fetches no character (no channel).
     game.set_avatar_source(archive, table);
 }
 

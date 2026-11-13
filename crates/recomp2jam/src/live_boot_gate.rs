@@ -26,7 +26,9 @@ mod live_boot_gate_tests {
     use o2jam_render::Frame as RenderFrame;
     use o2jam_shell::{GameLoop, Screen};
 
-    use crate::{assemble_online_session, connect, install_root, stage_online_identity};
+    use crate::{
+        assemble_online_session, connect, install_root, setup_online, stage_online_identity,
+    };
 
     /// Read one whole frame off the scripted gateway's socket.
     fn read_frame(stream: &mut TcpStream) -> Frame {
@@ -267,6 +269,73 @@ mod live_boot_gate_tests {
             );
             assert!(game.leave_side(), "{side:?} returns to the room");
         }
+
+        server.join().unwrap();
+    }
+
+    /// Ticket #191 reopen: the shop board must not be empty on the
+    /// DEFAULT live boot (no --gateway-id/--channel-id, no
+    /// --avatar-opa). The seam guard
+    /// `shop_board_stages_goods_from_avatar_source` called
+    /// `set_avatar_source` directly and passed while the default boot
+    /// never reached it (`stage_online_identity` returned before the
+    /// staging call without a fetched character). This gate drives
+    /// the real setup path (`setup_online`, the entry `run_play`
+    /// `--window --online` uses) with a channel-less login and
+    /// asserts the catalog lands.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play (`--window --online`, default flags)
+    ///     -> setup_online (channel=None, character unFetched)
+    ///     -> connect::connect_and_login_with_transport
+    ///     -> stage_online_identity (character None)
+    ///     -> ScreenGame::set_avatar_source
+    ///     -> ShopState::set_catalog
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_boot_default_stages_shop_catalog() {
+        if !install_root().join("O2Jam/Image/avatar.opa").exists() {
+            println!("skip: missing install-root avatar.opa");
+            return;
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::Authorize.id());
+            let authed = AuthResponse {
+                result_code: 0,
+                tail: vec![],
+            };
+            stream.write_all(&authed.encode()).unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetChannelList.id());
+            let listed = ChannelList { channels: vec![] };
+            stream.write_all(&listed.encode()).unwrap();
+        });
+        // The default boot: online, but list-only — no gateway or
+        // channel ids (so no character fetch), no `--avatar-opa`.
+        let mut game = o2jam_shell::ScreenGame::new();
+        let host = Some("127.0.0.1".to_owned());
+        let user_id = Some(7);
+        let token = Some("gate".to_owned());
+        let transport = setup_online(
+            &mut game, true, &host, user_id, &token, port, None, None, None, "", None, 0, 0, 0,
+        )
+        .unwrap()
+        .expect("online setup returns the live transport");
+        let (gateway, pending_room, pending_song) = transport;
+        assert!(pending_room.is_none(), "default boot stages no room join");
+        assert!(pending_song.is_none(), "default boot stages no song pick");
+        let mut session =
+            assemble_online_session(game, gateway, Some("gate"), None, None, None).unwrap();
+        let game = session.game_mut();
+        assert!(
+            !game.shop_visible_goods().is_empty(),
+            "default live boot stages the shop catalog"
+        );
         server.join().unwrap();
     }
 }
