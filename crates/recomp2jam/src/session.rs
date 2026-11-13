@@ -147,7 +147,9 @@ use o2jam_net::rooms::{
     RoomList, RoomSlotAction, RoomSlotUpdate, SendMainRoomMessage, SendWaitingMessage, SendWhisper,
     WaitingAdminMessage, WaitingUserMessage,
 };
-use o2jam_net::shop::{SyncItemPurchase, SyncItemPurchasePrefix};
+use o2jam_net::shop::{
+    SyncItemPurchase, SyncItemPurchasePrefix, SyncMusicPurchase, SyncMusicPurchaseResponse,
+};
 use o2jam_net::EmptyMessage;
 use o2jam_net::{
     ChannelLogin, ChannelLoginResponse, ChannelLoginResult, ChannelState, CharacterInfo,
@@ -289,6 +291,15 @@ struct ShopBuyAttempt {
     deadline: Instant,
 }
 
+/// Pending song-shop buy attempt (ticket #202): the 5010 send plus
+/// the 5011 answer resolve on the per-frame poll. A timeout clears
+/// the attempt so the next buy retries it.
+#[derive(Debug, Clone, Copy)]
+struct MusicBuyAttempt {
+    /// When the silent server stops getting the benefit of the doubt.
+    deadline: Instant,
+}
+
 /// Pending Room Confirm join attempt (ticket #172): the 3002 send
 /// plus the 3003 answer resolve on the per-frame poll, never on the
 /// Confirm/press path. A timeout clears the attempt but keeps the
@@ -400,6 +411,9 @@ pub struct OnlineSession {
     /// Live item-shop buy (`None` while no BUYITEM commit is in
     /// flight; the per-frame [`Self::poll_shop_buy`] owns it).
     shop_buy_attempt: Option<ShopBuyAttempt>,
+    /// Live song-shop buy (`None` while no buy commit is in
+    /// flight; the per-frame [`Self::poll_music_buy`] owns it).
+    music_buy_attempt: Option<MusicBuyAttempt>,
     /// Container tokens plus captions behind the chart fetch
     /// (`OJNList.dat` order, owned copies; see [`Self::set_song_catalog`]).
     catalog: Vec<CatalogRow>,
@@ -457,6 +471,7 @@ impl OnlineSession {
             join_attempt: None,
             select_attempt: None,
             shop_buy_attempt: None,
+            music_buy_attempt: None,
             catalog: Vec::new(),
             last_selection: None,
             local_user: String::new(),
@@ -2019,6 +2034,76 @@ impl OnlineSession {
         Some(attempt)
     }
 
+    fn flush_music_buy(&mut self) {
+        // A buy already in flight must not be re-sent; leave any
+        // queued commit staged so it retries once the reply lands.
+        if self.music_buy_attempt.is_some() {
+            return;
+        }
+        if self.game.take_music_buy().is_some() {
+            if let Err(source) = self.gateway.send_frame(SyncMusicPurchase::COMMAND, &[]) {
+                tracing::warn!(%source, "music buy send failed");
+            } else {
+                self.music_buy_attempt = Some(MusicBuyAttempt {
+                    deadline: Instant::now() + PENDING_WIRE_WINDOW,
+                });
+            }
+        }
+    }
+
+    /// Per-frame song-shop buy section on the MusicShop side: move
+    /// the pending attempt under the short pending drain. Off the
+    /// MusicShop side the attempt drops (a local Back owns the
+    /// screen then), and past the deadline it warns and clears,
+    /// keeping the side so the next buy retries it.
+    fn poll_music_buy(&mut self) {
+        if self.game.side() != Some(SideScreen::MusicShop) {
+            if self.music_buy_attempt.take().is_some() {
+                tracing::debug!("music buy left behind leaving the MusicShop side; dropping it");
+            }
+            return;
+        }
+        let Some(attempt) = self.music_buy_attempt.take() else {
+            return;
+        };
+        if Instant::now() > attempt.deadline {
+            tracing::warn!("music buy timed out with no server answer; staying on MusicShop");
+            return;
+        }
+        self.with_drain_timeout(PENDING_DRAIN_TIMEOUT, "music buy", |session| {
+            if let Some(kept) = session.drain_music_buy(attempt) {
+                session.music_buy_attempt = Some(kept);
+            }
+        });
+    }
+
+    /// Move one song-shop buy attempt leg: drain until the socket
+    /// goes quiet, folding the 5011 wallet words on the reply.
+    /// Returns the attempt while it still awaits an answer.
+    fn drain_music_buy(&mut self, attempt: MusicBuyAttempt) -> Option<MusicBuyAttempt> {
+        loop {
+            match self.gateway.next_frame() {
+                Ok(frame) if frame.id == 5011 => {
+                    if let Ok(response) = SyncMusicPurchaseResponse::decode_body(&frame.payload) {
+                        self.game.apply_music_purchase_response(&response);
+                    } else {
+                        tracing::debug!(id = frame.id, "dropping undecodable music buy reply");
+                    }
+                    return None;
+                }
+                Ok(frame) if Generic::from_id(frame.id).is_some() => {}
+                Ok(frame) => {
+                    tracing::debug!(
+                        id = frame.id,
+                        "skipping non-music-buy frame in music buy drain"
+                    );
+                }
+                Err(_) => break,
+            }
+        }
+        Some(attempt)
+    }
+
     /// Send one result-screen request frame; a failed send warns (the
     /// screen has already moved on — the tally send keeps its retry
     /// latch instead because Result stays).
@@ -2416,6 +2501,7 @@ impl OnlineSession {
             || self.join_attempt.is_some()
             || self.select_attempt.is_some()
             || self.shop_buy_attempt.is_some()
+            || self.music_buy_attempt.is_some()
     }
 }
 
@@ -2552,6 +2638,8 @@ impl GameLoop for OnlineSession {
         self.flush_channel_logout();
         self.flush_shop_buy();
         self.poll_shop_buy();
+        self.flush_music_buy();
+        self.poll_music_buy();
         self.poll_channel_login();
         self.poll_room_join();
         self.poll_song_select();
@@ -3166,6 +3254,186 @@ mod session_tests {
     #[test]
     #[ignore = "OPEN #194: no distinct 5001 insufficient-funds reply evidenced; probe bytes 152B gem=626 tail=2912127"]
     fn shop_buy_insufficient_funds_arm_open() {}
+
+    #[test]
+    fn wallet_single_source_refreshes_shop_and_myroom_after_item_buy() {
+        // Live caller chain:
+        //   OnlineSession::paint (GameLoop, the windowed frame entry
+        //   main.rs::run_play drives) -> poll_shop_buy -> drain_shop_buy
+        //   -> ScreenGame::apply_shop_purchase_prefix -> WalletState::apply_purchase_prefix.
+        //   Readouts: ScreenGame::shop_gem_caption + ScreenGame::myroom_money_captions.
+        // Tier 2 scripted gateway. Synthetic catalogs only: no archives read (CI-safe).
+        use o2jam_net::frame::encode_frame;
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::PlacementRole;
+        use o2jam_shell::avatar::ScenePlacement;
+        use o2jam_shell::screens::side::{SideScreen, MYROOM_O2CASH_CODE};
+        use std::collections::HashMap;
+
+        let (port, server) = fake_gateway(|mut stream| {
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, 5000);
+            let mut payload = vec![0u8; 152];
+            payload[0..4].copy_from_slice(&626i32.to_le_bytes());
+            payload[4..8].copy_from_slice(&7i32.to_le_bytes());
+            payload[8..12].copy_from_slice(&450i32.to_le_bytes());
+            payload[12..16].copy_from_slice(&30i32.to_le_bytes());
+            payload[148..152].copy_from_slice(&2912127i32.to_le_bytes());
+            stream.write_all(&encode_frame(5001, &payload)).unwrap();
+        });
+
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+        // A staged character funds the wallet first: the post-buy
+        // MyRoom caption must follow the reply (450), not this 900.
+        game.set_myroom_character(o2jam_net::CharacterInfo {
+            o2_cash: 900,
+            ..o2jam_net::CharacterInfo::default()
+        });
+
+        game.set_shop_catalog(&o2jam_file::AvatarItemTable {
+            rows: vec![o2jam_file::AvatarItemRow {
+                item_id: 1,
+                item_type: 0,
+                price: 100,
+                params: [0; 4],
+                flags: (0, 0),
+                name: "Good01".to_owned(),
+                description: String::new(),
+                sprites: Vec::new(),
+            }],
+        });
+        let placement = ScenePlacement {
+            id: String::new(),
+            code: o2jam_shell::screens::side::SHOP_BUYITEM_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 0,
+                y: 0,
+                w: 10,
+                h: 10,
+            },
+            role: PlacementRole::Single,
+        };
+        game.load_side_scene(vec![placement], HashMap::new());
+        assert!(game.visit_side(SideScreen::Shop));
+        game.shop_cart_push(1);
+        assert_eq!(game.shop_cart(), vec![1]);
+        game.click_shop(1, 1);
+
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        session.game.click_shop(1, 1);
+
+        paint_frame(&mut session);
+
+        paint_until(&mut session, |s| s.game.shop_gem_caption() == "GEM 626");
+        server.join().unwrap();
+
+        assert!(session.game.shop_cart().is_empty());
+        assert_eq!(session.game.shop_gem_caption(), "GEM 626");
+        let myroom_o2 = session
+            .game
+            .myroom_money_captions()
+            .into_iter()
+            .find(|(code, _)| *code == MYROOM_O2CASH_CODE)
+            .map(|(_, text)| text);
+        assert_eq!(myroom_o2.as_deref(), Some("450"));
+    }
+
+    #[test]
+    fn music_buy_round_trips_through_scripted_gateway() {
+        // Live caller chain:
+        //   OnlineSession::paint (GameLoop, the windowed frame entry
+        //   main.rs::run_play drives) -> flush_music_buy (5010 send)
+        //   -> poll_music_buy -> drain_music_buy
+        //   -> ScreenGame::apply_music_purchase_response -> WalletState::apply_music_purchase.
+        //   Readouts: ScreenGame::shop_gem_caption + ScreenGame::myroom_money_captions.
+        // Tier 2 scripted gateway. Synthetic catalogs only: no archives read (CI-safe).
+        use o2jam_net::shop::{MusicEntry, SyncMusicPurchaseResponse};
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::PlacementRole;
+        use o2jam_shell::avatar::ScenePlacement;
+        use o2jam_shell::screens::side::{
+            SideScreen, MSHOP_CART_BUY_CODE, MSHOP_EX_FIRST_CODE, MYROOM_MUSICCASH_CODE,
+        };
+        use std::collections::HashMap;
+
+        let (port, server) = fake_gateway(|mut stream| {
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, 5010);
+            let response = SyncMusicPurchaseResponse {
+                gem: 1000,
+                point: 250,
+                o2_cash: 5000,
+                music_cash: 120,
+                item_cash: 340,
+                cash_point: 56,
+                music_list: vec![MusicEntry {
+                    music_id: 757,
+                    day: 14,
+                    month: 3,
+                    year: 25,
+                    hour: 18,
+                    minute: 45,
+                }],
+                gift_boxes_raw: Vec::new(),
+                free_pass_extension_days: 7,
+            };
+            stream.write_all(&response.encode()).unwrap();
+        });
+
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+
+        let blob = select_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_music_shop_catalog(&entries);
+        let area = |code: u32, x: i32, y: i32, w: u32, h: u32| ScenePlacement {
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect { x, y, w, h },
+            role: PlacementRole::Single,
+        };
+        game.load_side_scene(
+            vec![
+                area(MSHOP_EX_FIRST_CODE, 18, 104, 353, 86),
+                area(MSHOP_CART_BUY_CODE, 423, 528, 49, 23),
+            ],
+            HashMap::new(),
+        );
+        assert!(game.visit_side(SideScreen::MusicShop));
+        game.click_music_shop(19, 105);
+        assert_eq!(game.music_shop_cart(), vec![757]);
+        game.click_music_shop(424, 529);
+
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+
+        paint_frame(&mut session);
+
+        paint_until(&mut session, |s| s.game.shop_gem_caption() == "GEM 1000");
+        server.join().unwrap();
+
+        assert!(session.game.music_shop_cart().is_empty());
+        assert_eq!(session.game.shop_gem_caption(), "GEM 1000");
+        let myroom_music = session
+            .game
+            .myroom_money_captions()
+            .into_iter()
+            .find(|(code, _)| *code == MYROOM_MUSICCASH_CODE)
+            .map(|(_, text)| text);
+        assert_eq!(myroom_music.as_deref(), Some("120"));
+    }
 
     fn entry_channel() -> o2jam_net::ChannelState {
         o2jam_net::ChannelState {
