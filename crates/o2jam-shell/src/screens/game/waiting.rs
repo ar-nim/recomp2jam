@@ -33,6 +33,12 @@ pub(crate) struct PendingOutbox {
     /// Queued BACK press awaiting the session (4021 `0xfb5`, empty;
     /// the result BACK button and its Back arm own it).
     pub(crate) pending_result_back: bool,
+    /// Queued channel leave awaiting the session (`ChannelLogout`
+    /// 2021, empty — the exe's channel-exit dispatch sends it, ticket
+    /// #175 pin; the Room Back key and BACK button own it). Memoryer
+    /// stonewalls the next 1004 until it lands (probe: a second 1004
+    /// without it draws a 1001 `-1` auth error, never a 1005).
+    pub(crate) pending_channel_logout: bool,
     /// Queued battle result entry awaiting the session (4042 `0xfca`,
     /// empty; the song-end Result entry in team play owns it).
     pub(crate) pending_result_battle_entry: bool,
@@ -104,6 +110,17 @@ impl PendingOutbox {
             Some(ExitPlaying)
         } else {
             None
+        }
+    }
+    /// Queued channel leave for the session bridge, if any
+    /// (`ChannelLogout` 2021, empty — ticket #175 pin). One take sends
+    /// once; a leave queued while one is still unsent replaces it.
+    pub(crate) fn take_channel_logout(&mut self) -> bool {
+        if self.pending_channel_logout {
+            self.pending_channel_logout = false;
+            true
+        } else {
+            false
         }
     }
     /// Queued battle result entry for the session bridge, if any

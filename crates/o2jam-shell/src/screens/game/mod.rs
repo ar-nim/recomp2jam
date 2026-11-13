@@ -1478,6 +1478,13 @@ impl ScreenGame {
     pub fn take_result_back(&mut self) -> Option<ExitPlaying> {
         self.outbox.take_result_back()
     }
+    /// Queued channel leave for the session bridge, if any
+    /// (`ChannelLogout` 2021, empty — the exe's channel-exit dispatch,
+    /// ticket #175 pin). One take sends once; the next leave replaces
+    /// the queue.
+    pub fn take_channel_logout(&mut self) -> bool {
+        self.outbox.take_channel_logout()
+    }
     /// Queued battle result entry for the session bridge, if any
     /// (`GetLiveState` 4042, `0xfca` — byte-verified empty,
     /// `docs/relay.md` §10, gated on the battle global `0x7789e6`).
@@ -2467,6 +2474,17 @@ impl ScreenGame {
     /// then the row hit test — staged panels (verbatim `.bnd` rects in
     /// file order) ahead of the legacy row bands. Either row path
     /// highlights the row and advances like Confirm.
+    /// Leave the channel lobby for the channel list: the local scene
+    /// step plus the pinned wire leave (`ChannelLogout` 2021, empty —
+    /// the exe's exit dispatch sends it, ticket #175 pin; Memoryer
+    /// stonewalls the next 1004 until it lands). The session bridge
+    /// drains the queue; the offline walk drains nowhere, like the
+    /// result outbox.
+    fn exit_room_to_channel(&mut self) {
+        self.outbox.pending_channel_logout = true;
+        self.enter(Screen::Channel);
+    }
+
     fn click_room_row(&mut self, x: i32, y: i32) {
         if self.click_room_control(x, y) {
             return;
@@ -2505,10 +2523,8 @@ impl ScreenGame {
         };
         match control.action {
             // Leave for the channel scene (lifecycle §7: the same edge
-            // the Back key rides).
-            RoomControlAction::Back => {
-                self.enter(Screen::Channel);
-            }
+            // the Back key rides), telling the server (pinned 2021).
+            RoomControlAction::Back => self.exit_room_to_channel(),
             // Open the create-room dialog (lifecycle §7:
             // `DIALOG_CREATEROOM` `CDCreateRoom`); without the staged
             // sheet the modal would own input it cannot paint, so the
@@ -5265,7 +5281,7 @@ impl ScreenGame {
                 let last = self.rooms.len().saturating_sub(1);
                 self.room_highlight = (self.room_highlight + 1).min(last);
             }
-            MenuKey::Back => self.enter(Screen::Channel),
+            MenuKey::Back => self.exit_room_to_channel(),
             MenuKey::Confirm => {
                 if self.room_dialog.is_some() {
                     // The open sheet owns the keyboard: Enter neither
