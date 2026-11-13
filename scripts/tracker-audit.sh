@@ -42,11 +42,7 @@ NUMBERS="$(gh issue list --state closed --limit 1000 --json number --jq '.[].num
 # Accepts backticked names and bare snake_case tokens (which must contain
 # an underscore, so prose words never become guard candidates).
 extract_guards() {
-  awk '
-    /^##+ *Guards/ { in_section = 1; next }
-    /^##+ / { in_section = 0 }
-    in_section { print }
-  ' | grep -oE '`[A-Za-z_][A-Za-z0-9_]*`|\<[a-z][a-z0-9_]*_[a-z0-9_]*\>' | tr -d '`' | sort -u
+  awk -f "$REPO_ROOT/scripts/lib/extract-guards.awk" | grep -oE '`[A-Za-z_][A-Za-z0-9_]*`|\<[a-z][a-z0-9_]*_[a-z0-9_]*\>' | tr -d '`' | sort -u
 }
 
 guard_in_tree() {
