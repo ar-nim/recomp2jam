@@ -4641,6 +4641,9 @@ impl ScreenGame {
             }
             self.enter_screen(Screen::Result);
         }
+        // Avatar breathing rides the paint clock: record the instant
+        // so worn figures select their breathing frame (ticket #193).
+        crate::avatar::set_avatar_breathing_now_ms(now_ms);
         // The promo carousel rotates on board time: each paint feeds
         // the frame clock to the 3000 ms accumulator (the windowed
         // heartbeat in `idle_repaint_interval` supplies the pulse).
