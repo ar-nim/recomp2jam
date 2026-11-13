@@ -147,7 +147,7 @@ use o2jam_net::rooms::{
     RoomList, RoomSlotAction, RoomSlotUpdate, SendMainRoomMessage, SendWaitingMessage, SendWhisper,
     WaitingAdminMessage, WaitingUserMessage,
 };
-use o2jam_net::shop::SyncItemPurchase;
+use o2jam_net::shop::{SyncItemPurchase, SyncItemPurchasePrefix};
 use o2jam_net::EmptyMessage;
 use o2jam_net::{
     ChannelLogin, ChannelLoginResponse, ChannelLoginResult, ChannelState, CharacterInfo,
@@ -157,6 +157,7 @@ use o2jam_net::{
     SetRoomArena, SetRoomMusic, StartGame, SubmitScore, WireMessage,
 };
 use o2jam_shell::screens::game::{LobbyChat, SlashCommand};
+use o2jam_shell::screens::SideScreen;
 use o2jam_shell::{GameLoop, InputEdge, InputSnapshot, MenuKey, Screen, ScreenGame};
 
 use crate::connect::net_context;
@@ -279,6 +280,15 @@ struct ChannelLoginAttempt {
     deadline: Instant,
 }
 
+/// Pending item-shop buy attempt (ticket #194): the 5000 send plus
+/// the 5001 answer resolve on the per-frame poll. A timeout clears
+/// the attempt so the next BUYITEM retries it.
+#[derive(Debug, Clone, Copy)]
+struct ShopBuyAttempt {
+    /// When the silent server stops getting the benefit of the doubt.
+    deadline: Instant,
+}
+
 /// Pending Room Confirm join attempt (ticket #172): the 3002 send
 /// plus the 3003 answer resolve on the per-frame poll, never on the
 /// Confirm/press path. A timeout clears the attempt but keeps the
@@ -387,6 +397,9 @@ pub struct OnlineSession {
     /// Live song select (`None` while no master Confirm select is in
     /// flight; the per-frame [`Self::poll_song_select`] owns it).
     select_attempt: Option<SongSelectAttempt>,
+    /// Live item-shop buy (`None` while no BUYITEM commit is in
+    /// flight; the per-frame [`Self::poll_shop_buy`] owns it).
+    shop_buy_attempt: Option<ShopBuyAttempt>,
     /// Container tokens plus captions behind the chart fetch
     /// (`OJNList.dat` order, owned copies; see [`Self::set_song_catalog`]).
     catalog: Vec<CatalogRow>,
@@ -443,6 +456,7 @@ impl OnlineSession {
             login_attempt: None,
             join_attempt: None,
             select_attempt: None,
+            shop_buy_attempt: None,
             catalog: Vec::new(),
             last_selection: None,
             local_user: String::new(),
@@ -1933,11 +1947,76 @@ impl OnlineSession {
     }
 
     fn flush_shop_buy(&mut self) {
+        // A buy already in flight must not be re-sent; leave any
+        // queued commit staged so it retries once the reply lands.
+        if self.shop_buy_attempt.is_some() {
+            return;
+        }
         if self.game.take_shop_buy().is_some() {
             if let Err(source) = self.gateway.send_frame(SyncItemPurchase::COMMAND, &[]) {
                 tracing::warn!(%source, "shop buy send failed");
+            } else {
+                self.shop_buy_attempt = Some(ShopBuyAttempt {
+                    deadline: Instant::now() + PENDING_WIRE_WINDOW,
+                });
             }
         }
+    }
+
+    /// Per-frame item-shop buy section on the Shop side: move the
+    /// pending attempt under the short pending drain. Off the Shop
+    /// side the attempt drops (a local Back owns the screen then),
+    /// and past the deadline it warns and clears, keeping the side so
+    /// the next BUYITEM retries it.
+    fn poll_shop_buy(&mut self) {
+        if self.game.side() != Some(SideScreen::Shop) {
+            if self.shop_buy_attempt.take().is_some() {
+                tracing::debug!("shop buy left behind leaving the Shop side; dropping it");
+            }
+            return;
+        }
+        let Some(attempt) = self.shop_buy_attempt.take() else {
+            return;
+        };
+        if Instant::now() > attempt.deadline {
+            tracing::warn!("shop buy timed out with no server answer; staying on Shop");
+            return;
+        }
+        self.with_drain_timeout(PENDING_DRAIN_TIMEOUT, "shop buy", |session| {
+            if let Some(kept) = session.drain_shop_buy(attempt) {
+                session.shop_buy_attempt = Some(kept);
+            }
+        });
+    }
+
+    /// Move one shop-buy attempt leg: drain until the socket goes
+    /// quiet, folding the 5001 wallet prefix on the reply. Returns the
+    /// attempt while it still awaits an answer.
+    fn drain_shop_buy(&mut self, attempt: ShopBuyAttempt) -> Option<ShopBuyAttempt> {
+        loop {
+            match self.gateway.next_frame() {
+                Ok(frame) if frame.id == 5001 => {
+                    if let Ok((prefix, _rest)) =
+                        SyncItemPurchasePrefix::decode_prefix(&frame.payload)
+                    {
+                        self.game.apply_shop_purchase_prefix(&prefix);
+                        self.game.apply_shop_purchase();
+                    } else {
+                        tracing::debug!(id = frame.id, "dropping undecodable shop buy reply");
+                    }
+                    return None;
+                }
+                Ok(frame) if Generic::from_id(frame.id).is_some() => {}
+                Ok(frame) => {
+                    tracing::debug!(
+                        id = frame.id,
+                        "skipping non-shop-buy frame in shop buy drain"
+                    );
+                }
+                Err(_) => break,
+            }
+        }
+        Some(attempt)
     }
 
     /// Send one result-screen request frame; a failed send warns (the
@@ -2333,7 +2412,10 @@ impl OnlineSession {
     /// `true` while a Confirm-paced attempt still awaits its answers
     /// (see the paint-order comment above).
     fn wire_attempt_pending(&self) -> bool {
-        self.login_attempt.is_some() || self.join_attempt.is_some() || self.select_attempt.is_some()
+        self.login_attempt.is_some()
+            || self.join_attempt.is_some()
+            || self.select_attempt.is_some()
+            || self.shop_buy_attempt.is_some()
     }
 }
 
@@ -2469,6 +2551,7 @@ impl GameLoop for OnlineSession {
         // until the leave resets the session, ticket #175 probe).
         self.flush_channel_logout();
         self.flush_shop_buy();
+        self.poll_shop_buy();
         self.poll_channel_login();
         self.poll_room_join();
         self.poll_song_select();
@@ -3013,6 +3096,86 @@ mod session_tests {
     }
 
     /// One listed channel row behind the interactive entry tests.
+    #[test]
+    fn shop_buy_round_trips_through_scripted_gateway() {
+        use o2jam_net::frame::encode_frame;
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::PlacementRole;
+        use o2jam_shell::avatar::ScenePlacement;
+        use o2jam_shell::screens::side::SideScreen;
+        use std::collections::HashMap;
+
+        let (port, server) = fake_gateway(|mut stream| {
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, 5000);
+            let mut payload = vec![0u8; 152];
+            payload[0..4].copy_from_slice(&626i32.to_le_bytes());
+            payload[148..152].copy_from_slice(&2912127i32.to_le_bytes());
+            stream.write_all(&encode_frame(5001, &payload)).unwrap();
+        });
+
+        let mut game = ScreenGame::new();
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Waiting);
+
+        game.set_shop_catalog(&o2jam_file::AvatarItemTable {
+            rows: vec![o2jam_file::AvatarItemRow {
+                item_id: 1,
+                item_type: 0,
+                price: 100,
+                params: [0; 4],
+                flags: (0, 0),
+                name: "Good01".to_owned(),
+                description: String::new(),
+                sprites: Vec::new(),
+            }],
+        });
+        let placement = ScenePlacement {
+            id: String::new(),
+            code: o2jam_shell::screens::side::SHOP_BUYITEM_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 0,
+                y: 0,
+                w: 10,
+                h: 10,
+            },
+            role: PlacementRole::Single,
+        };
+        game.load_side_scene(vec![placement], HashMap::new());
+        assert!(game.visit_side(SideScreen::Shop));
+        game.shop_cart_push(1);
+        assert_eq!(game.shop_cart(), vec![1]);
+        game.click_shop(1, 1);
+
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+        session.game.click_shop(1, 1);
+        assert!(session.shop_buy_attempt.is_none());
+
+        paint_frame(&mut session);
+
+        paint_until(&mut session, |s| s.game.shop_gem_caption() == "GEM 626");
+        server.join().unwrap();
+
+        assert!(session.shop_buy_attempt.is_none());
+        assert!(session.game.shop_cart().is_empty());
+        assert_eq!(session.game.shop_gem_caption(), "GEM 626");
+    }
+
+    /// Insufficient-funds arm stays OPEN: no distinct 5001 failure
+    /// reply is evidenced in `docs/shop-buy.md` (the 5001 handler
+    /// returns wallet words on every reply, with no result code), so
+    /// there is no separate failure shape to script. Probe bytes for
+    /// the success reply used above: 152 B, first word `gem=626` LE,
+    /// wallets zero, trailing word `2912127`.
+    #[test]
+    #[ignore = "OPEN #194: no distinct 5001 insufficient-funds reply evidenced; probe bytes 152B gem=626 tail=2912127"]
+    fn shop_buy_insufficient_funds_arm_open() {}
+
     fn entry_channel() -> o2jam_net::ChannelState {
         o2jam_net::ChannelState {
             gateway_id: 0,

@@ -4491,6 +4491,18 @@ impl ScreenGame {
         self.wallet.apply_purchase_wallets(wallets);
     }
 
+    /// Fold a successful 5001 purchase into the shell: the cart
+    /// clears against the bought rows and the wallet prefix has
+    /// already folded through [`Self::apply_shop_purchase_prefix`].
+    /// Owned-inventory persistence stays OPEN — the probed 5001
+    /// carries no item ids back, so the client cannot mint owned
+    /// rows server-authoritatively here; that needs the owned-list
+    /// probe (#200 territory).
+    pub fn apply_shop_purchase(&mut self) {
+        self.shop.shop_cart.clear();
+        self.shop.shop_cart_page = 0;
+    }
+
     /// Queued cart buy for the session bridge, if any (5000). One
     /// body per `BUYITEM` commit; the seam drains it.
     pub fn take_shop_buy(&mut self) -> Option<SyncItemPurchase> {
