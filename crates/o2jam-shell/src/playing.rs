@@ -3406,7 +3406,7 @@ impl AvatarScene {
         Self::paint_caption_line(frame, layout.level_origin, &self.player_line());
         Self::paint_life_bar(frame, &layout.life_bar, score.life.life());
         if let Some(figure) = avatar {
-            figure.paint_extent_centered(frame, &layout.seat, frame.w, frame.h);
+            figure.paint_extent_centered(frame, &layout.seat, frame.w, frame.h, now_ms);
         }
         Self::paint_tally_strip(frame, &layout, score, now_ms, song_end_ms, self);
     }
