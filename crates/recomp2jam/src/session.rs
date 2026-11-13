@@ -147,6 +147,8 @@ use o2jam_net::rooms::{
     RoomList, RoomSlotAction, RoomSlotUpdate, SendMainRoomMessage, SendWaitingMessage, SendWhisper,
     WaitingAdminMessage, WaitingUserMessage,
 };
+use o2jam_net::shop::SyncItemPurchase;
+use o2jam_net::EmptyMessage;
 use o2jam_net::{
     ChannelLogin, ChannelLoginResponse, ChannelLoginResult, ChannelState, CharacterInfo,
     ConfirmMusicLoaded, CreateResult, CreateRoom, CreateRoomResponse, ExitPlaying, FinalizeRank,
@@ -1930,6 +1932,14 @@ impl OnlineSession {
         }
     }
 
+    fn flush_shop_buy(&mut self) {
+        if self.game.take_shop_buy().is_some() {
+            if let Err(source) = self.gateway.send_frame(SyncItemPurchase::COMMAND, &[]) {
+                tracing::warn!(%source, "shop buy send failed");
+            }
+        }
+    }
+
     /// Send one result-screen request frame; a failed send warns (the
     /// screen has already moved on — the tally send keeps its retry
     /// latch instead because Result stays).
@@ -2458,6 +2468,7 @@ impl GameLoop for OnlineSession {
         // 2021 leave (Memoryer answers it with a 1001 `-1` auth error
         // until the leave resets the session, ticket #175 probe).
         self.flush_channel_logout();
+        self.flush_shop_buy();
         self.poll_channel_login();
         self.poll_room_join();
         self.poll_song_select();
