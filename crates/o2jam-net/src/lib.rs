@@ -31,6 +31,7 @@ pub mod rooms;
 mod rows;
 pub mod shop;
 pub mod strings;
+pub mod testing;
 pub mod wallet;
 
 pub use client::{GatewayConnection, DEFAULT_GATEWAY_PORT};

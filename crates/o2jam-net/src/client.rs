@@ -198,7 +198,6 @@ fn is_keepalive(id: u16) -> bool {
 #[cfg(test)]
 mod gateway_connection_tests {
     use std::io::Write;
-    use std::net::TcpListener;
     use std::thread;
 
     use super::*;
@@ -207,12 +206,7 @@ mod gateway_connection_tests {
     use crate::message::{ChannelList, WireMessage};
 
     fn loopback_pair() -> (GatewayConnection, TcpStream) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let accepted = thread::spawn(move || listener.accept().unwrap().0);
-        let client = GatewayConnection::connect(address).unwrap();
-        let server = accepted.join().unwrap();
-        (client, server)
+        crate::testing::loopback_pair()
     }
 
     #[test]
