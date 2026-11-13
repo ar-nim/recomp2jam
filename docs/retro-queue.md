@@ -53,3 +53,9 @@ Items parked for the next retrospective (owner calls the retro skill).
   (2) play-local.sh refuses a binary older than the checkout HEAD
   (staleness guard); (3) the switch-back-to-main end-of-work step in
   the delegation playbook.
+
+## 2026-11-13 — closed #191/#192/#193 on green guards while the features stayed broken live
+
+- Owner live check: item shop still a static page, music shop same, room avatar not breathing. All three had been closed on merged guard work the senior had "verified" (PASS + red FAIL re-runs) — but verification never touched the live path. Tests pass is not feature works.
+- #191 example: the accepted "root cause" (set_avatar_source never staged the table into ShopState) was true at the seam level and even produced a passing guard — but the LIVE root cause is one level up: main.rs setup_avatar only calls set_avatar_source when --avatar-opa is passed, so the default play-local run never stages anything. Diagnose-first traced the seam, not the live path.
+- Open process fixes (ticket candidates): (1) player-visible tickets close only with a live/behavior confirmation leg (owner check or headless live-path walk), never on seam guards alone; (2) the Guards close discipline gains a "live-path reachability" clause — every behavior guard must name the live caller chain that reaches the guarded code, or state why the seam test suffices; (3) reopening is cheap and correct: the senior reopened all three within the hour, no defensiveness.
