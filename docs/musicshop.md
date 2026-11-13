@@ -63,9 +63,14 @@ No transition claimed from buttons alone; dispatch calls unknown.
 ## Screens (implemented)
 
 Shell screen + paint + flow + live staging — DONE
-   (`Screen::MusicShop`, `paint_music_shop_scene`, all-reject flow,
-   `stage_interface_scenes` + soak tests; side-screen clicks
-   route through `click_music_shop` since ticket #21).
+   (`Screen::MusicShop` is the scene-art slot behind the side overlay;
+   the flow transition map has no edge into `Screen::MusicShop`, so the
+   flow paint arm is unreachable/dead and was removed (ticket #181).
+   The canonical, live path is `SideScreen::MusicShop` — `visit_side`
+   stages art and `paint_side` paints the board/cart; clicks route
+   through `click_music_shop`. `MUSIC_SHOP_BIND_FILE` (side.rs) is the
+   sole bind-file constant; the duplicate `MUSICSHOP_BIND_FILE`
+   (avatar.rs) was unused and removed (ticket #181).)
 
 ## Ticket #21 (2026-11-12)
 
@@ -93,6 +98,8 @@ shape is untraced, so the wire ride stays ASSUMED behind the
 take-seam.
 
 ## OPEN
+
+TOP100 ownership (ticket #181): the `0x1A20007D..0x84` arm (TOP100 + key/title/diff/bpm/price + SELECTALL) is music-shop chrome only; the item shop (`State_ItemShop.bnd`) has no TOP100 control (owner live check 2026-11-13). Corrected: docs/parity/shop.md, docs/shop.md (no TOP100 entry present), and the #178 story list (story 10 mis-scoped → music shop #179).
 
 1. Rect contents → placements — DONE (138 rects, ordinal pairing).
 2. Album-art source + GEM/WON buy semantics — PARTIAL: per-row

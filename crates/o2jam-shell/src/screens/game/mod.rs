@@ -28,7 +28,7 @@ use super::paint::{
     list_row_hit, paint_avi_scene, paint_channel_chat, paint_channel_list, paint_channel_scene,
     paint_dialog_scene, paint_lanking_board, paint_lanking_scene, paint_loading_scene,
     paint_loading_scene_with_status, paint_lobby_backdrop, paint_lobby_backdrop_live,
-    paint_music_shop_board, paint_music_shop_cart, paint_music_shop_scene, paint_myroom_data,
+    paint_music_shop_board, paint_music_shop_cart, paint_myroom_data,
     paint_myroom_scene, paint_payment_notice, paint_planet_options, paint_planet_quit,
     paint_planet_scene, paint_playing_backdrop, paint_playing_foreground, paint_result,
     paint_result_scene, paint_room_chat, paint_room_hover, paint_room_list, paint_room_scene,
@@ -4688,7 +4688,11 @@ impl ScreenGame {
             Screen::Lanking => self.paint_lanking(frame),
             Screen::Myroom => self.paint_myroom(frame),
             Screen::Shop => self.paint_shop(frame),
-            Screen::MusicShop => self.paint_music_shop(frame),
+            // `Screen::MusicShop` is the scene-art slot behind
+            // `SideScreen::MusicShop` only; the flow transition map has
+            // no edge into it, so this arm is unreachable (dead flow
+            // screen). The side overlay owns the paint (`paint_side`).
+            Screen::MusicShop => {}
         }
     }
 
@@ -4763,16 +4767,6 @@ impl ScreenGame {
         match self.scene_art(Screen::Shop) {
             Some(art) => paint_shop_scene(frame, art),
             None => paint_screen(frame, Screen::Shop),
-        }
-    }
-
-    /// Song shop: staged art when present, else the flat card. Preview,
-    /// download, cart, and buy flows stay unevidenced — paint only,
-    /// no selection state.
-    fn paint_music_shop(&self, frame: &mut Frame<'_>) {
-        match self.scene_art(Screen::MusicShop) {
-            Some(art) => paint_music_shop_scene(frame, art),
-            None => paint_screen(frame, Screen::MusicShop),
         }
     }
 
