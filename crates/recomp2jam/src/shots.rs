@@ -17,7 +17,7 @@ use o2jam_shell::staging::{
     read_install_archives, stage_dialog, stage_state, state_of_screen, state_of_side, Dialog,
     StageContext, State,
 };
-use o2jam_shell::{GameLoop, MenuKey, PlaySkin, Screen, ScreenGame};
+use o2jam_shell::{GameLoop, InputSnapshot, MenuKey, PlaySkin, Screen, ScreenGame};
 
 use crate::connect::stack_worn_figure;
 use crate::loading::{loading_phase_status, LOADING_GATE_STEPS};
@@ -39,7 +39,9 @@ pub struct Shot {
     pub rgb: Vec<u8>,
 }
 
-/// Capture avi, channel, room, waiting, waiting-guest, musicselect, loading,
+/// Capture avi, channel, channel-native, room, waiting, waiting-guest,
+/// shop, shop-native, musicshop, musicshop-native, myroom, myroom-native,
+/// lanking, payment, tutorial, musicselect, loading,
 /// playing, playing-native, result, result-native, result-solo,
 /// result-solo-native. The waiting shot carries the staged song
 /// catalog plus inventory (so MAPNAME/BPM/SKILLCOUNT ink their
@@ -77,7 +79,7 @@ pub struct Shot {
 /// When the scripted walk leaves the expected screen.
 pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
     let mut game = seeded_game();
-    let mut shots = Vec::with_capacity(14);
+    let mut shots = Vec::with_capacity(24);
     shots.push(shoot(&mut game, "avi", 0)?);
     game.lane_key(3, true);
     // Boot shows the bare board (S0.3 owner correction): the staged
@@ -99,6 +101,18 @@ pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
         Some(o2jam_shell::screens::side::PlanetBand::Hard)
     );
     shots.push(shoot_checked(&mut game, "channel", Screen::Channel, 0)?);
+    // The native companion paints the live ten-row wire mirror (open
+    // ids 0-4 and 9, padded closed ids 5-8), so the reference
+    // comparison reads the same rows the exe shows. The highlight
+    // resets to row 0 (id 0, open), so the Room entry arm is unchanged.
+    stage_channel_wire_mirror(&mut game);
+    scroll_channel_to_closed_rows(&mut game);
+    shots.push(shoot_checked_native(
+        &mut game,
+        "channel-native",
+        Screen::Channel,
+        0,
+    )?);
     // Room entry happens only through the channel dialog (entry-button
     // faces; wine-boot.md Attempt 9 verified 입장 clicks advance to the
     // room list): Confirm takes the highlighted row into Room.
@@ -140,6 +154,9 @@ pub fn capture_all() -> anyhow::Result<Vec<Shot>> {
         }
         assert!(game.visit_side(side), "Waiting -> {side:?}");
         shots.push(shoot_side(&mut game, side)?);
+        if has_native_companion(side) {
+            shots.push(shoot_side_native(&mut game, side)?);
+        }
         assert!(game.leave_side(), "{side:?} -> Waiting");
     }
     stage_select_music_scene(&mut game);
@@ -309,6 +326,29 @@ pub(crate) fn stage_side_art(game: &mut ScreenGame, side: SideScreen) -> bool {
     true
 }
 
+/// Side screens with a full-native companion for pixel-exact reference
+/// comparison (ticket #207: item shop, music shop, MyRoom). The
+/// remaining sides keep their downscaled shot only.
+fn has_native_companion(side: SideScreen) -> bool {
+    matches!(
+        side,
+        SideScreen::Shop | SideScreen::MusicShop | SideScreen::MyRoom
+    )
+}
+
+/// Native file stem for one side screen (`shop-native`, …).
+fn side_native_shot_name(side: SideScreen) -> &'static str {
+    match side {
+        SideScreen::Shop => "shop-native",
+        SideScreen::MusicShop => "musicshop-native",
+        SideScreen::MyRoom => "myroom-native",
+        SideScreen::Lanking => "lanking-native",
+        SideScreen::Payment => "payment-native",
+        SideScreen::Tutorial => "tutorial-native",
+        SideScreen::Planet => "planet-native",
+    }
+}
+
 /// Shot file stem for one side screen.
 fn side_shot_name(side: SideScreen) -> &'static str {
     match side {
@@ -420,6 +460,40 @@ pub(crate) fn stage_real_art(game: &mut ScreenGame) {
     if let Some(playing) = &installed.playing {
         stage_playing_archive(game, playing);
         crate::live_art::stage_result_life_font(game, playing);
+    }
+}
+
+/// Live 1003 wire mirror (2026-11-13 CLI probe against local Memoryer
+/// 7.2.0 at 127.0.0.1:15010): ids 0-4 and 9 open with 0/100, ids 5-8
+/// padded closed with 0/0 and the inactive byte set. The native channel
+/// shot paints this list so the exe comparison reads the same ten rows.
+fn wire_mirror_channels() -> Vec<ChannelState> {
+    let mut rows = Vec::with_capacity(10);
+    for channel_id in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] {
+        let open = channel_id < 5 || channel_id == 9;
+        rows.push(ChannelState {
+            gateway_id: 0,
+            channel_id,
+            capacity: if open { 100 } else { 0 },
+            population: 0,
+            active: open,
+        });
+    }
+    rows
+}
+
+/// Stage the live wire mirror over the seeded lobby rows before the
+/// native channel shot (highlight resets to row 0, id 0, open).
+fn stage_channel_wire_mirror(game: &mut ScreenGame) {
+    game.set_channels(wire_mirror_channels());
+}
+
+/// Scroll the mirrored list to its closed rows through the pinned
+/// scroll-down arrow (583,419): five list-top steps show rows 5-8
+/// while the highlight stays on row 0, so Confirm still enters id 0.
+fn scroll_channel_to_closed_rows(game: &mut ScreenGame) {
+    for _ in 0..5 {
+        game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
     }
 }
 
@@ -1169,6 +1243,17 @@ fn shoot_checked(
     shoot(game, name, now_ms)
 }
 
+/// Rasterize an open side screen at the full native canvas: the same
+/// instant as the downscaled side shot, for pixel-exact reference
+/// comparison.
+fn shoot_side_native(game: &mut ScreenGame, side: SideScreen) -> anyhow::Result<Shot> {
+    let name = side_native_shot_name(side);
+    if game.side() != Some(side) {
+        anyhow::bail!("shot {name}: side {:?}, want {side:?}", game.side());
+    }
+    Ok(shoot_native(game, name, 0))
+}
+
 /// Rasterize an open side screen: the flow stays on the lobby while
 /// the side overlay paints through `paint_side_scene`.
 fn shoot_side(game: &mut ScreenGame, side: SideScreen) -> anyhow::Result<Shot> {
@@ -1397,6 +1482,67 @@ mod tests {
         game.menu_key(MenuKey::Confirm, true);
         let rgb = frame_rgb(&mut game, 100);
         assert_eq!(rgb.len(), SHOT_W * SHOT_H * 3);
+    }
+
+    #[test]
+    fn channel_wire_mirror_matches_the_live_ten_row_list() {
+        // The 2026-11-13 CLI probe against local Memoryer lists ten
+        // rows: ids 0-4 and 9 open at 0/100, ids 5-8 padded closed at
+        // 0/0 with the inactive byte set.
+        let rows = wire_mirror_channels();
+        assert_eq!(rows.len(), 10, "the gateway pads the list to ten rows");
+        for (index, row) in rows.iter().enumerate() {
+            let want_id = u16::try_from(index).expect("ten rows fit u16");
+            assert_eq!(row.gateway_id, 0);
+            assert_eq!(row.channel_id, want_id);
+            let open = want_id < 5 || want_id == 9;
+            assert_eq!(row.active, open, "row {want_id} joinability");
+            assert_eq!(row.population, 0);
+            assert_eq!(row.capacity, if open { 100 } else { 0 });
+        }
+    }
+
+    #[test]
+    fn channel_native_paints_the_wire_mirror_at_full_canvas() {
+        // The native companion repaints the channel instant over the
+        // ten-row mirror scrolled to its closed rows (5-8) at 800x600
+        // while the highlight stays on row 0, so the walk still
+        // enters id 0.
+        let mut game = seeded_game();
+        game.lane_key(3, true);
+        game.click_planet(386, 88);
+        stage_channel_wire_mirror(&mut game);
+        scroll_channel_to_closed_rows(&mut game);
+        assert_eq!(
+            game.highlighted_channel().map(|row| row.channel_id),
+            Some(0),
+            "scrolling never moves the highlight"
+        );
+        let shot = shoot_checked_native(&mut game, "channel-native", Screen::Channel, 0)
+            .expect("channel dialog stays open over the mirror");
+        assert_eq!((shot.w, shot.h), (800, 600));
+        assert_eq!(shot.rgb.len(), 800 * 600 * 3);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room, "row 0 stays enterable");
+    }
+
+    #[test]
+    fn side_native_repaints_the_open_side_at_full_canvas() {
+        // Without game data the side art never stages, so the
+        // companion has no instant to repaint (clean skip, CI arm).
+        let mut game = seeded_game();
+        walk_to_waiting(&mut game);
+        if !stage_side_art(&mut game, SideScreen::Shop) {
+            println!("skip: missing side art");
+            return;
+        }
+        stage_shop_walk_board(&mut game);
+        assert!(game.visit_side(SideScreen::Shop));
+        let shot = shoot_side_native(&mut game, SideScreen::Shop)
+            .expect("open shop repaints at native canvas");
+        assert_eq!(shot.name, "shop-native");
+        assert_eq!((shot.w, shot.h), (800, 600));
+        assert!(game.leave_side());
     }
 
     #[test]
@@ -1801,7 +1947,8 @@ mod tests {
         let shots = capture_all().unwrap();
         let names: Vec<&str> = shots.iter().map(|shot| shot.name).collect();
         // Side-state shots ride along only when install-root stages
-        // their art (clean skip otherwise — CI arm).
+        // their art (clean skip otherwise — CI arm); the #207 scenes
+        // carry a native companion right after their preview.
         let side_names: Vec<&str> = [
             SideScreen::Shop,
             SideScreen::MusicShop,
@@ -1812,7 +1959,13 @@ mod tests {
         ]
         .into_iter()
         .filter(|side| side_stage_data(*side).is_some())
-        .map(side_shot_name)
+        .flat_map(|side| {
+            if has_native_companion(side) {
+                vec![side_shot_name(side), side_native_shot_name(side)]
+            } else {
+                vec![side_shot_name(side)]
+            }
+        })
         .collect();
         // Boot order (S0.3): the bare board shoots before the dialog
         // opens over it.
@@ -1820,6 +1973,7 @@ mod tests {
             "avi",
             "planet",
             "channel",
+            "channel-native",
             "room",
             "waiting",
             "waiting-guest",
@@ -3651,7 +3805,14 @@ mod tests {
         .into_iter()
         .filter(|side| side_stage_data(*side).is_some())
         .count();
-        assert_eq!(shots.len(), 14 + side_count);
+        let native_count = [SideScreen::Shop, SideScreen::MusicShop, SideScreen::MyRoom]
+            .into_iter()
+            .filter(|side| side_stage_data(*side).is_some())
+            .count();
+        // Fifteen fixed scenes (channel carries its wire-mirror
+        // native) plus one preview per staged side and one native
+        // per staged #207 side.
+        assert_eq!(shots.len(), 15 + side_count + native_count);
         for shot in &shots {
             assert!(is_varied(&shot.rgb), "{} paints a flat frame", shot.name);
         }
@@ -3672,9 +3833,17 @@ mod tests {
         .into_iter()
         .filter(|side| side_stage_data(*side).is_some())
         .count();
-        assert_eq!(written.len(), 13 + side_count);
+        let native_count = [SideScreen::Shop, SideScreen::MusicShop, SideScreen::MyRoom]
+            .into_iter()
+            .filter(|side| side_stage_data(*side).is_some())
+            .count();
+        // Fourteen fixed files (channel plus its wire-mirror native,
+        // minus the never-written avi) plus staged previews and #207
+        // natives.
+        assert_eq!(written.len(), 14 + side_count + native_count);
         assert!(!dir.join("avi.png").exists());
         assert!(dir.join("planet.png").exists());
+        assert!(dir.join("channel-native.png").exists());
         assert!(dir.join("waiting-guest.png").exists());
         assert!(dir.join("musicselect.png").exists());
         assert!(dir.join("playing-native.png").exists());
@@ -3690,6 +3859,13 @@ mod tests {
             "tutorial",
         ] {
             assert_eq!(dir.join(format!("{name}.png")).exists(), side_count == 6);
+        }
+        for name in ["shop-native", "musicshop-native", "myroom-native"] {
+            assert_eq!(
+                dir.join(format!("{name}.png")).exists(),
+                side_count == 6,
+                "{name} rides its staged preview"
+            );
         }
         std::fs::remove_dir_all(&dir).unwrap();
     }
