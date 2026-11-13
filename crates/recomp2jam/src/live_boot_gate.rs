@@ -337,6 +337,85 @@ mod live_boot_gate_tests {
             !game.shop_visible_goods().is_empty(),
             "default live boot stages the shop catalog"
         );
+        assert!(
+            !game.shop_avatar_staged(),
+            "default boot stages no avatar pane without a fetched hero (never invented)"
+        );
+        server.join().unwrap();
+    }
+
+    /// Ticket #196: the channel-login boot must reach the avatar pane.
+    /// The seam guards stage source and hero by hand; this gate drives
+    /// the real entry (`setup_online` with a channel login) and asserts
+    /// the equipped hero (real item 1, `avatar.opa` + `Itemdata`) lands
+    /// a staged pane through the #193 stacker — the #191 lesson (the
+    /// chain above the seam is what breaks).
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play (`--window --online` channel login)
+    ///   -> setup_online -> connect_and_login_with_transport
+    ///   -> stage_online_identity (character Some)
+    ///   -> ScreenGame::set_myroom_character + set_avatar_source
+    ///   -> ScreenGame::restage_shop_avatar (load_worn_figure).
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_boot_shop_avatar_pane_stages_equipped_figure() {
+        if !install_root().join("O2Jam/Image/avatar.opa").exists() {
+            println!("skip: missing install-root avatar.opa");
+            return;
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::Authorize.id());
+            let authed = AuthResponse {
+                result_code: 0,
+                tail: vec![],
+            };
+            stream.write_all(&authed.encode()).unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetChannelList.id());
+            let listed = ChannelList { channels: vec![] };
+            stream.write_all(&listed.encode()).unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::ChannelLogin.id());
+            let entered = ChannelLoginResponse {
+                result_code: 0,
+                restricted: Some(false),
+            };
+            stream.write_all(&entered.encode()).unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetChannelInfo.id());
+            let rooms = RoomList { rooms: vec![] };
+            stream.write_all(&rooms.encode()).unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetCharacterInfo.id());
+            let mut hero = CharacterInfo {
+                nickname: "gate".to_owned(),
+                gender: Gender::Male,
+                level: 3,
+                ..Default::default()
+            };
+            hero.equipment[0] = 1;
+            stream.write_all(&hero.encode()).unwrap();
+            hero
+        });
+        let (report, gateway) =
+            connect::connect_and_login_with_transport(&boot_options(port)).unwrap();
+        let mut game = o2jam_shell::ScreenGame::new();
+        stage_online_identity(&mut game, report.character.as_ref());
+        let mut session =
+            assemble_online_session(game, gateway, Some("gate"), None, None, None).unwrap();
+        let game = session.game_mut();
+        assert_eq!(
+            game.shop_try_on(),
+            None,
+            "live boot stages no preview, only the equipped pane"
+        );
+        assert!(
+            game.shop_avatar_staged(),
+            "channel login stages the shop avatar pane from the equipped hero"
+        );
         server.join().unwrap();
     }
 

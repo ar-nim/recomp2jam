@@ -25,6 +25,10 @@ pub(crate) struct ShopState {
     /// Checked cart item ids in toggle order (the `ITEMBUY`
     /// selection behind the cart `BUYITEM` commit).
     pub(crate) shop_cart: Vec<u32>,
+    /// Previewed catalog item id (`ITEMPRE` try-on, ticket #196):
+    /// paints in the avatar pane without touching the equipped set
+    /// or queueing wire. `None` shows the equipped avatar.
+    pub(crate) shop_try_on: Option<u32>,
     /// Cart-list page (five rows per page, the staged `CART_EX`
     /// slots).
     pub(crate) shop_cart_page: usize,
@@ -61,6 +65,39 @@ impl ShopState {
     /// Checked cart item ids in toggle order.
     pub(crate) fn cart(&self) -> Vec<u32> {
         self.shop_cart.clone()
+    }
+
+    /// Summed `ITEMWON` prices over the checked cart (saturating;
+    /// unknown ids drop out like the cart rows do).
+    pub(crate) fn cart_total(&self) -> u32 {
+        self.shop_cart
+            .iter()
+            .filter_map(|item_id| self.shop_goods.iter().find(|good| good.item_id == *item_id))
+            .map(|good| good.price)
+            .fold(0u32, |total, price| total.saturating_add(price))
+    }
+
+    /// Previewed catalog item id (`None`: equipped avatar shows).
+    pub(crate) fn try_on(&self) -> Option<u32> {
+        self.shop_try_on
+    }
+
+    /// Preview the visible row's good (`ITEMPRE` try-on): stages the
+    /// id and reports whether a row good was staged. Never touches
+    /// the cart or the wire.
+    pub(crate) fn preview_slot(&mut self, slot: usize) -> bool {
+        match self.visible_goods().get(slot).map(|good| good.item_id) {
+            Some(item_id) => {
+                self.shop_try_on = Some(item_id);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Revert the preview to the equipped avatar (`ITEMBACK`).
+    pub(crate) fn clear_try_on(&mut self) {
+        self.shop_try_on = None;
     }
 
     /// Check one catalog good into the cart (id must exist; the
@@ -199,6 +236,15 @@ impl ShopState {
                 self.toggle_row(slot);
                 false
             }
+            ShopAction::TryOn(slot) => {
+                self.preview_slot(slot);
+                false
+            }
+            ShopAction::RevertTryOn => {
+                self.clear_try_on();
+                false
+            }
+            ShopAction::GiftRow(_) | ShopAction::GiftCart => false,
             ShopAction::CartBuy => !self.shop_cart.is_empty(),
             ShopAction::ItemPrev => {
                 self.shop_page = self.shop_page.saturating_sub(1);
@@ -228,14 +274,6 @@ impl ShopState {
                 {
                     self.shop_cart_page = self.shop_cart_page.saturating_add(1);
                 }
-                false
-            }
-            ShopAction::PreviewRow(slot) => {
-                self.select_preview(slot);
-                false
-            }
-            ShopAction::PreviewBack => {
-                self.clear_preview();
                 false
             }
             ShopAction::BagPrev => {

@@ -47,9 +47,11 @@ use super::side::{
     GEM_LABEL, LANKING_LVIEW_TEXT_CODES, LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES,
     MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS, MSHOP_ROW_TEXT_CODES,
     MYROOM_AVATAR_CODE, MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_SLOT_FIRST_CODE,
-    PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949, SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE,
-    SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE, SHOP_ITEMCOMMENT_CODE,
-    SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS,
+    O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949, SHOP_AVATAR_CODE,
+    SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE, SHOP_CART_ITEMNAME_CODE,
+    SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE,
+    SHOP_ITEMCOMMENT_CODE, SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS,
+    SHOP_MGASH_CODE,
 };
 use o2jam_file::ControlList;
 use o2jam_game::RoomTeams;
@@ -1339,9 +1341,11 @@ fn paint_lanking_caption(frame: &mut Frame<'_>, placements: &[ScenePlacement], t
 
 /// Item-shop board overlay over the staged side art: the visible
 /// goods' names and cash prices into the staged `ITEMNAME`/`ITEMWON`
-/// TEXT rects (gem cells stay blank — no pinned source), the wallet
-/// gem cell, the checked cart rows, and both pager readouts — each
-/// inked into staged rects, never literals. Text renders through
+/// TEXT rects (per-row gem cells stay blank — no pinned source), the
+/// wallet gem and cash cells (`GEMMONEY`, `MGASH`), the checked cart
+/// rows with the checkout totals (`CHECKMONEY` sums the row prices,
+/// `CHECKGEM` stays `--` — same OPEN), and both pager readouts —
+/// each inked into staged rects, never literals. Text renders through
 /// the system face (owner decision `e8d01`).
 pub fn paint_shop_board(
     frame: &mut Frame<'_>,
@@ -1371,11 +1375,16 @@ fn paint_shop_rows(frame: &mut Frame<'_>, placements: &[ScenePlacement], goods: 
     }
 }
 
-/// Wallet gem cell (`GEMMONEY`): `--` until the 5028 refresh folds
-/// a gem word.
+/// Wallet gem cell (`GEMMONEY`) plus the cash cell (`MGASH`):
+/// `--` until their wire words fold (gem via 5028/5001/5003, cash
+/// via the 5001 prefix; the `MGASH`→`o2_cash` join stays OPEN).
 fn paint_shop_wallet(frame: &mut Frame<'_>, placements: &[ScenePlacement], wallet: &WalletState) {
     if let Some(rect) = shop_template_rect(placements, SHOP_GEMMONEY_CODE) {
         let row = WalletRow::named(GEM_LABEL, wallet.gem);
+        paint_text_into_rect(frame, rect, &wallet_row_caption(&row), CP949_INK);
+    }
+    if let Some(rect) = shop_template_rect(placements, SHOP_MGASH_CODE) {
+        let row = WalletRow::named(O2_CASH_LABEL, wallet.o2_cash);
         paint_text_into_rect(frame, rect, &wallet_row_caption(&row), CP949_INK);
     }
 }
@@ -1391,6 +1400,9 @@ fn paint_shop_cart(
     cart_page: usize,
     cart_pages: usize,
 ) {
+    // Totals ride their own TEXT rects, never the row templates:
+    // they ink even when no cart row stages.
+    paint_shop_cart_totals(frame, placements, cart);
     let slots = shop_cart_slots(placements);
     let num = shop_template_rect(placements, SHOP_CART_NUM_CODE);
     let name = shop_template_rect(placements, SHOP_CART_ITEMNAME_CODE);
@@ -1457,6 +1469,39 @@ pub fn paint_shop_bag_pager(
     if let Some((cur, tot)) = shop_bag_page_rects(placements) {
         paint_text_into_rect(frame, cur, &(bag_page + 1).to_string(), CP949_INK);
         paint_text_into_rect(frame, tot, &bag_pages.to_string(), CP949_INK);
+    }
+}
+
+/// Cart checkout totals: the summed `ITEMWON` prices into
+/// `CHECKMONEY`, `--` into `CHECKGEM` (no gem-price source is
+/// pinned — same OPEN as the `ITEMGEM` row cells).
+fn paint_shop_cart_totals(frame: &mut Frame<'_>, placements: &[ScenePlacement], cart: &[ShopGood]) {
+    if let Some(rect) = shop_template_rect(placements, SHOP_CART_CHECKGEM_CODE) {
+        paint_text_into_rect(frame, rect, super::side::UNKNOWN_AMOUNT, CP949_INK);
+    }
+    if let Some(rect) = shop_template_rect(placements, SHOP_CART_CHECKMONEY_CODE) {
+        let total = cart
+            .iter()
+            .map(|good| good.price)
+            .fold(0u32, |total, price| total.saturating_add(price));
+        paint_text_into_rect(frame, rect, &total.to_string(), CP949_INK);
+    }
+}
+
+/// Item-shop avatar pane over the staged side art: the equipped (or
+/// preview) worn figure at the staged `IDC_IMAGE_SSHOP_AVATAR` rect
+/// on the paint clock (ticket #196, same breathing path as the room
+/// slot). `None` paints no figure; without the staged rect the pane
+/// stays art-only.
+pub fn paint_shop_avatar(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    figure: Option<&AvatarFigure>,
+    now_ms: u64,
+) {
+    if let (Some(figure), Some(slot)) = (figure, shop_template_rect(placements, SHOP_AVATAR_CODE)) {
+        let slot = scale_rect_to_frame(&slot, frame.w, frame.h);
+        figure.paint_visible_centered(frame, &slot, frame.w, frame.h, now_ms);
     }
 }
 
@@ -6469,6 +6514,87 @@ mod paint_tests {
         assert!(lit(317, 568, 28, 17), "bag cur page paints");
         assert!(lit(357, 568, 28, 17), "bag tot page paints");
         assert!(!lit(300, 169, 38, 13), "ITEMGEM stays dark");
+    }
+
+    #[test]
+    fn shop_board_paints_won_balance_and_cart_totals_at_staged_rects() {
+        // Ticket #196: the `MGASH` cash cell and the cart checkout
+        // totals ink at their staged rects — the cash word from the
+        // 5001 prefix, the money total summed from the row prices,
+        // `--` for the gem total (no gem-price source is pinned).
+        let placements = vec![
+            shop_placement(SHOP_MGASH_CODE, 200, 288, 95, 13),
+            shop_placement(SHOP_CART_CHECKGEM_CODE, 82, 320, 95, 13),
+            shop_placement(SHOP_CART_CHECKMONEY_CODE, 200, 320, 95, 13),
+        ];
+        let wallet = WalletState {
+            gem: Some(1200),
+            o2_cash: Some(50),
+            ..WalletState::default()
+        };
+        let cart = vec![ShopGood {
+            item_id: 1,
+            name: "Hair".to_owned(),
+            price: 1000,
+        }];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_shop_board(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            &[],
+            &wallet,
+            &cart,
+            0,
+            1,
+        );
+        let lit = |x: i32, y: i32, w: u32, h: u32| -> bool { has_ink_in(&buf, 800, x, y, w, h) };
+        assert!(lit(200, 288, 95, 13), "won balance paints");
+        assert!(lit(82, 320, 95, 13), "cart gem total paints");
+        assert!(lit(200, 320, 95, 13), "cart money total paints");
+    }
+
+    #[test]
+    fn shop_avatar_pane_paints_staged_figure_on_paint_clock() {
+        // Ticket #196: the equipped (or preview) figure inks at the
+        // staged `IDC_IMAGE_SSHOP_AVATAR` rect on the paint clock
+        // (ticket #193 breathing path, no fork); `None` paints
+        // nothing so the staged art stays alone.
+        let placements = vec![shop_placement(SHOP_AVATAR_CODE, 600, 100, 120, 200)];
+        let figure = red_figure();
+        let mut buf = vec![0u32; 800 * 600];
+        paint_shop_avatar(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            Some(&figure),
+            0,
+        );
+        assert!(
+            has_ink_in(&buf, 800, 600, 100, 120, 200),
+            "staged figure paints in the avatar pane"
+        );
+        let mut dark = vec![0u32; 800 * 600];
+        paint_shop_avatar(
+            &mut Frame {
+                buf: &mut dark,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            None,
+            0,
+        );
+        assert!(
+            !has_ink_in(&dark, 800, 600, 100, 120, 200),
+            "unstaged pane paints no figure"
+        );
     }
 
     #[test]
