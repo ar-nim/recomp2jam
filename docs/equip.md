@@ -68,6 +68,49 @@ The slot is derived from the item record (looked up via the
   skipped, never fatal (`load_worn_figure`,
   `crates/o2jam-shell/src/avatar.rs` — unchanged).
 
+## Live local-server equipment (the #171 head-only fact, 2026-11-13)
+
+The local Memoryer rig (`~/memoryer-local`, SQLite `O2JAM.db`) held
+**one nonzero equip cell per account**: `t_o2jam_item` rows for both
+`USER_INDEX_ID=1` (tester) and `USER_INDEX_ID=2` (tester2) carried
+`Equip12 = 35` and zeros elsewhere. Item 35 is the default male face
+(row name `남자얼굴 기본`, type word `0x00800105`, low byte `5` — the
+type-5 → slot `0xb` rule above, so `Equip12` is the face column).
+The 2001 reply therefore carried a one-item kit, and the head-only
+room-panel render was CORRECT for that data (ticket #171 round 2;
+the stacker stacks what the reply carries). Fixture: the tester2 row
+now also wears the full-body kit ids 16 (hair), 30 (base body
+`몸통`), 376 (top), 383 (bottom), 389 (shoes) at `Equip1..Equip5`
+(column placement of kit ids is fixture freedom — the server copies
+`Equip{N}` to wire slot `{N-1}` blind, and the stacker resolves ids,
+not slot semantics; only the face column is pinned). Live wire probe
+(`recomp2jam connect --character` against `127.0.0.1:15010`):
+face-only row stacked **60 layers**, kitted row **447 layers**
+(male parity).
+
+## Worn-figure idle frames (structure pinned, cadence OPEN)
+
+Every probed worn-item body holds **12 chained same-part frames** in
+one sprite-55 container: face `01M160000001.ojs` (12 records, anchors
+(134,81)/(134,82)/(134,83), 32×35–36), body `01M13T0000001.ojs`
+(12 records, (133,109)/(133,110), 33–34×89–90), bottom
+`17M14001.ojs` (12 × 22×40 at (139,136)), shoes `17M15001.ojs`
+(12 × 36×25), tops `17MB/MG/MK13T001.ojs` (12 records each) —
+record-directory walks land exact (`8 + 20·12 + blob == len`),
+±1 px anchor/size jitter between neighbours (breathing-class pose
+sets). `from_sprite55` currently stacks all 12 as coincident layers
+(multi-image plain bodies: layers-vs-frames reading OPEN,
+`crates/o2jam-shell/src/avatar.rs`). The exe room animates the
+avatar/user strip live (capture-region fact, `docs/hover.md`: measured
+strip bbox 485,50–726,255 animates between parked-pointer captures),
+but no pinned source gives the exe's frame period or order for the
+worn figure. **OPEN (named): cadence pin via a Wine dwell capture** —
+tick-timed captures of the room avatar region (e.g. 10 Hz for 10 s
+under the `recomp2jam-reference-capture` rig), diff to the frame
+count (expected cycle length 12), derive the ms-per-frame period;
+then implement the frame-cycle tick with that pinned cadence. No
+cadence is invented until then.
+
 ## `load_worn_figure` mapping (unchanged code)
 
 Per nonzero equipment id in slot order: resolve the
