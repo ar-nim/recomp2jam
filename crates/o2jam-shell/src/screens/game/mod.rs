@@ -32,13 +32,13 @@ use super::paint::{
     paint_myroom_scene, paint_payment_notice, paint_planet_options, paint_planet_quit,
     paint_planet_scene, paint_playing_backdrop, paint_playing_foreground, paint_result,
     paint_result_scene, paint_room_chat, paint_room_hover, paint_room_list, paint_room_scene,
-    paint_room_user_panel, paint_screen, paint_shop_board, paint_shop_scene, paint_waiting_chat,
-    paint_waiting_members, paint_waiting_scene, paint_waiting_seat_avatar,
-    paint_waiting_seat_avatars, playing_backdrop_staged, quit_fallback_rects, rect_hit,
-    room_chrome_visible, room_panel_hit, scene_index, staged_rect_hit, BattleVerdict,
-    ChannelChatMessage, ChannelScroll, LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict,
-    SceneArt, WaitingCaptions, WaitingChatMessage, CHANNEL_VISIBLE_ROWS, RESULT_BACK_ID,
-    RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    paint_room_user_panel, paint_screen, paint_shop_bag_pager, paint_shop_board,
+    paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
+    paint_waiting_scene, paint_waiting_seat_avatar, paint_waiting_seat_avatars,
+    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
+    scene_index, staged_rect_hit, BattleVerdict, ChannelChatMessage, ChannelScroll, LoadingStatus,
+    ResultPaint, ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage,
+    CHANNEL_VISIBLE_ROWS, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::select_paint::{
     paint_select_chosung_rows, paint_select_filter_columns, paint_select_ok,
@@ -4468,6 +4468,41 @@ impl ScreenGame {
         self.shop.visible_cart()
     }
 
+    /// Previewed good, if the picked id still catalogs (`None`
+    /// until an `ITEMPRE` pick lands, or after `ITEMBACK`).
+    #[must_use]
+    pub fn shop_preview(&self) -> Option<ShopGood> {
+        self.shop.preview_good()
+    }
+
+    /// Owned-panel page (ten `MYBAGITEM` icons per page).
+    #[must_use]
+    pub fn shop_bag_page(&self) -> usize {
+        self.shop.bag_page()
+    }
+
+    /// Staged owned-item ids behind the shop bag panel (empty until
+    /// a character stages on a fetched boot).
+    fn shop_inventory(&self) -> &[i32] {
+        self.myroom_character
+            .as_ref()
+            .map(|character| character.inventory.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Owned goods on the current bag page (ten cells at most).
+    #[must_use]
+    pub fn shop_visible_bag(&self) -> Vec<ShopGood> {
+        self.shop.visible_bag(self.shop_inventory())
+    }
+
+    /// Owned-panel page count (at least one, same empty-panel rule
+    /// as the cart pager).
+    #[must_use]
+    pub fn shop_bag_pages(&self) -> usize {
+        self.shop.bag_pages(self.shop_inventory())
+    }
+
     /// Cart page count (at least one: the pager paints `1/1` on an
     /// empty cart, never `0/0`).
     #[must_use]
@@ -4571,7 +4606,8 @@ impl ScreenGame {
         let Some(action) = shop_action_at(&self.side_placements, x, y) else {
             return;
         };
-        if self.shop.apply_action(action) {
+        let owned_len = self.shop.bag_goods(self.shop_inventory()).len();
+        if self.shop.apply_action(action, owned_len) {
             self.outbox.pending_shop_buy = Some(SyncItemPurchase);
         }
     }
@@ -4774,6 +4810,13 @@ impl ScreenGame {
                 &self.shop_visible_cart(),
                 self.shop_cart_page(),
                 self.shop_cart_pages(),
+            );
+            paint_shop_preview(frame, &self.side_placements, self.shop_preview().as_ref());
+            paint_shop_bag_pager(
+                frame,
+                &self.side_placements,
+                self.shop_bag_page(),
+                self.shop_bag_pages(),
             );
         }
         // The song-shop overlay inks catalog rows with live
@@ -5823,12 +5866,21 @@ mod game_tests {
         MSHOP_CART_RIGHT_CODE, MSHOP_DIFF_SORT_CODE, MSHOP_EX_FIRST_CODE, MSHOP_GEM_BUY_CODE,
         MSHOP_MSALL_LEFT_CODE, MSHOP_MSALL_RIGHT_CODE, MSHOP_PAGE_CUR_ONES_CODE,
         MSHOP_PAGE_CUR_TENS_CODE, MSHOP_PAGE_TOT_ONES_CODE, MSHOP_PAGE_TOT_TENS_CODE,
-        MSHOP_TITLE_SORT_CODE, MSHOP_WON_BUY_CODE, ROOM_BACK_BUTTON_CODE, ROOM_BACK_BUTTON_ID,
-        ROOM_OPTION_BUTTON_CODE, ROOM_OPTION_BUTTON_ID, SHOP_BUYITEM_CODE, SHOP_CART_LEFT_CODE,
-        SHOP_CART_PAGE_CUR_ONES_CODE, SHOP_CART_PAGE_CUR_TENS_CODE, SHOP_CART_PAGE_TOT_ONES_CODE,
-        SHOP_CART_PAGE_TOT_TENS_CODE, SHOP_CART_RIGHT_CODE, SHOP_GEMMONEY_CODE,
-        SHOP_ITEMBUY_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE,
-        SHOP_SCROLL_CODE, SHOP_SCROLL_LEFT_CODE, SHOP_SCROLL_RIGHT_CODE,
+        MSHOP_TITLE_SORT_CODE, MSHOP_TOP100_CODE, MSHOP_WON_BUY_CODE, ROOM_BACK_BUTTON_CODE,
+        ROOM_BACK_BUTTON_ID, ROOM_OPTION_BUTTON_CODE, ROOM_OPTION_BUTTON_ID, SHOP_BAGSORT_CODE,
+        SHOP_BAG_LEFT_CODE, SHOP_BAG_PAGE_CUR_ONES_CODE, SHOP_BAG_PAGE_CUR_TENS_CODE,
+        SHOP_BAG_PAGE_TOT_ONES_CODE, SHOP_BAG_PAGE_TOT_TENS_CODE, SHOP_BAG_RIGHT_CODE,
+        SHOP_BOY_CODE, SHOP_BUYITEM_CODE, SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE,
+        SHOP_CART_LEFT_CODE, SHOP_CART_PAGE_CUR_ONES_CODE, SHOP_CART_PAGE_CUR_TENS_CODE,
+        SHOP_CART_PAGE_TOT_ONES_CODE, SHOP_CART_PAGE_TOT_TENS_CODE, SHOP_CART_RIGHT_CODE,
+        SHOP_CATEGORY_BUTTONS, SHOP_CATEGORY_FIRST_CODE, SHOP_EXTMENU_BUTTONS,
+        SHOP_EXTMENU_FIRST_CODE, SHOP_EXTMENU_ON_CODE, SHOP_GEMMONEY_CODE, SHOP_GIFTITEM_CODE,
+        SHOP_GIRL_CODE, SHOP_ITEMBACK_CODE, SHOP_ITEMBUY_FIRST_CODE, SHOP_ITEMCOMMENT_CODE,
+        SHOP_ITEMGEM_FIRST_CODE, SHOP_ITEMGIFT_FIRST_CODE, SHOP_ITEMNAME_FIRST_CODE,
+        SHOP_ITEMPRE_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE,
+        SHOP_MYBAGITEM_FIRST_CODE, SHOP_PLANET_DOWN_CODE, SHOP_PLANET_UP_CODE, SHOP_SCROLL_CODE,
+        SHOP_SCROLL_LEFT_CODE, SHOP_SCROLL_RIGHT_CODE, SHOP_SUBMENU_BUTTONS,
+        SHOP_SUBMENU_FIRST_CODE,
     };
     use super::*;
     use crate::avatar::AvatarFigure;
@@ -13186,6 +13238,13 @@ mod game_tests {
                 81,
                 17,
             ));
+            placements.push(area(
+                SHOP_ITEMPRE_FIRST_CODE + slot,
+                300 + (slot % 4) as i32 * 141,
+                210 + (slot / 4) as i32 * 150,
+                40,
+                17,
+            ));
             placements.push(area(SHOP_ITEMNAME_FIRST_CODE + slot, 231, 69, 100, 12));
             placements.push(area(SHOP_ITEMWON_FIRST_CODE + slot, 247, 169, 38, 13));
         }
@@ -13196,6 +13255,14 @@ mod game_tests {
         placements.push(area(SHOP_CART_LEFT_CODE, 198, 564, 47, 22));
         placements.push(area(SHOP_CART_RIGHT_CODE, 317, 564, 47, 22));
         placements.push(area(SHOP_GEMMONEY_CODE, 82, 288, 95, 13));
+        placements.push(area(SHOP_ITEMBACK_CODE, 121, 241, 60, 23));
+        placements.push(area(SHOP_ITEMCOMMENT_CODE, 468, 421, 163, 89));
+        placements.push(area(SHOP_BAG_LEFT_CODE, 267, 564, 49, 24));
+        placements.push(area(SHOP_BAG_RIGHT_CODE, 386, 564, 49, 24));
+        placements.push(area(SHOP_BAG_PAGE_CUR_TENS_CODE, 317, 590, 14, 8));
+        placements.push(area(SHOP_BAG_PAGE_CUR_ONES_CODE, 331, 590, 14, 8));
+        placements.push(area(SHOP_BAG_PAGE_TOT_TENS_CODE, 357, 590, 14, 8));
+        placements.push(area(SHOP_BAG_PAGE_TOT_ONES_CODE, 371, 590, 14, 8));
         placements.push(area(SHOP_CART_PAGE_CUR_TENS_CODE, 247, 567, 14, 17));
         placements.push(area(SHOP_CART_PAGE_CUR_ONES_CODE, 261, 567, 14, 17));
         placements.push(area(SHOP_CART_PAGE_TOT_TENS_CODE, 287, 567, 14, 17));
@@ -13243,6 +13310,183 @@ mod game_tests {
         assert_eq!(game.shop_page(), 0);
         game.click_shop(226, 379);
         assert_eq!(game.shop_page(), 0);
+    }
+
+    #[test]
+    fn shop_preview_selects_row_and_back_clears() {
+        // Live caller chain:
+        //   main.rs::run_play -> setup_online
+        //   -> connect::connect_and_login_with_transport
+        //   -> stage_online_identity -> ScreenGame::set_avatar_source
+        //   -> ShopState::set_catalog, then click_shop on the staged
+        //   ITEMPRE controls. An ITEMPRE press previews that page row
+        //   (id-stable across list pages); ITEMBACK clears the pick and
+        //   queues nothing.
+        let mut game = open_shop_board(10);
+        assert_eq!(game.shop_preview(), None);
+        game.click_shop(320, 218);
+        assert_eq!(
+            game.shop_preview().map(|good| good.item_id),
+            Some(1),
+            "ITEMPRE1 previews the first page row"
+        );
+        game.click_shop(753, 379);
+        assert_eq!(game.shop_page(), 1);
+        assert_eq!(
+            game.shop_preview().map(|good| good.item_id),
+            Some(1),
+            "preview ids survive the list page turn"
+        );
+        game.click_shop(461, 218);
+        assert_eq!(
+            game.shop_preview().map(|good| good.item_id),
+            Some(10),
+            "ITEMPRE2 on page 1 previews the tenth good"
+        );
+        game.click_shop(151, 252);
+        assert_eq!(game.shop_preview(), None, "ITEMBACK clears");
+        assert_eq!(game.take_shop_buy(), None);
+    }
+
+    #[test]
+    fn shop_bag_pager_turns_over_staged_owned_inventory() {
+        // Live caller chain:
+        //   main.rs::run_play -> setup_online
+        //   -> connect::connect_and_login_with_transport
+        //   -> stage_online_identity -> ScreenGame::set_avatar_source
+        //   -> ShopState::set_catalog (+ set_myroom_character on
+        //   fetched boots for the owned ids), then click_shop on the
+        //   staged BAGLEFT/RIGHT pager. The pager turns over owned
+        //   goods in inventory order (zero/unknown ids skip) and holds
+        //   at both ends; it never queues a send.
+        let mut game = open_shop_board(25);
+        game.set_myroom_character(myroom_test_character(vec![
+            0, 3, 999, 1, 2, 5, 7, 9, 11, 13, 15, 17, 19, 21,
+        ]));
+        assert_eq!(game.shop_bag_pages(), 2);
+        let first: Vec<u32> = game
+            .shop_visible_bag()
+            .iter()
+            .map(|good| good.item_id)
+            .collect();
+        assert_eq!(first, vec![3, 1, 2, 5, 7, 9, 11, 13, 15, 17]);
+        game.click_shop(410, 576);
+        assert_eq!(game.shop_bag_page(), 1);
+        let second: Vec<u32> = game
+            .shop_visible_bag()
+            .iter()
+            .map(|good| good.item_id)
+            .collect();
+        assert_eq!(second, vec![19, 21]);
+        game.click_shop(410, 576);
+        assert_eq!(game.shop_bag_page(), 1, "bag NEXT holds past the end");
+        game.click_shop(291, 576);
+        assert_eq!(game.shop_bag_page(), 0);
+        game.click_shop(291, 576);
+        assert_eq!(game.shop_bag_page(), 0, "bag PREV holds at the start");
+        assert_eq!(game.take_shop_buy(), None);
+    }
+
+    #[test]
+    fn shop_row_prices_come_from_the_staged_catalog() {
+        // Live caller chain:
+        //   main.rs::run_play -> setup_online
+        //   -> connect::connect_and_login_with_transport
+        //   -> stage_online_identity -> ScreenGame::set_avatar_source
+        //   -> ShopState::set_catalog. Per-row WON cells ink the staged
+        //   catalog price word with no invented data (a zero price and
+        //   a non-id price ride through untouched); the GEM cell has no
+        //   pinned source and stays blank (the paint guard pins the
+        //   dark rect).
+        let priced = [(1u32, 777u32), (2, 0), (3, 2500)];
+        let rows: Vec<o2jam_file::AvatarItemRow> = priced
+            .iter()
+            .map(|(item_id, price)| o2jam_file::AvatarItemRow {
+                item_id: *item_id,
+                item_type: 0,
+                price: *price,
+                params: [0; 4],
+                flags: (0, 0),
+                name: format!("Priced{item_id:02}"),
+                description: String::new(),
+                sprites: Vec::new(),
+            })
+            .collect();
+        let mut game = ScreenGame::new();
+        walk_to_waiting(&mut game);
+        game.set_shop_catalog(&o2jam_file::AvatarItemTable { rows });
+        let staged: Vec<(u32, u32)> = game
+            .shop_visible_goods()
+            .iter()
+            .map(|good| (good.item_id, good.price))
+            .collect();
+        assert_eq!(staged, vec![(1, 777), (2, 0), (3, 2500)]);
+    }
+
+    #[test]
+    fn shop_unwired_browse_chrome_lands_nowhere() {
+        // Live caller chain: same catalog staging as the preview
+        // guard, then click_shop on ControlList-named chrome the live
+        // dump never stages (gender, category, submenu, ext-menu,
+        // bag-sort, planet pager, per-row gifts, gift commit), plus
+        // the music-shop TOP100 arm (#181: music-shop-only — the item
+        // shop owns no TOP100 control), plus the paint-target codes
+        // (icons, comment, gem cells, cart totals). Every one lands
+        // nowhere: no cart check, no page turn, no preview, no send.
+        let mut game = open_shop_board(10);
+        let mut codes = vec![
+            SHOP_GIRL_CODE,
+            SHOP_BOY_CODE,
+            SHOP_PLANET_UP_CODE,
+            SHOP_PLANET_DOWN_CODE,
+            SHOP_GIFTITEM_CODE,
+            SHOP_EXTMENU_ON_CODE,
+            SHOP_BAGSORT_CODE,
+            SHOP_ITEMSHOW_FIRST_CODE,
+            SHOP_MYBAGITEM_FIRST_CODE,
+            SHOP_ITEMCOMMENT_CODE,
+            SHOP_CART_CHECKGEM_CODE,
+            SHOP_CART_CHECKMONEY_CODE,
+            SHOP_ITEMGEM_FIRST_CODE,
+            MSHOP_TOP100_CODE,
+        ];
+        for slot in 0..SHOP_CATEGORY_BUTTONS as u32 {
+            codes.push(SHOP_CATEGORY_FIRST_CODE + slot);
+        }
+        for slot in 0..SHOP_SUBMENU_BUTTONS as u32 {
+            codes.push(SHOP_SUBMENU_FIRST_CODE + slot);
+        }
+        for slot in 0..8u32 {
+            codes.push(SHOP_ITEMGIFT_FIRST_CODE + slot);
+        }
+        for slot in 0..SHOP_EXTMENU_BUTTONS as u32 {
+            codes.push(SHOP_EXTMENU_FIRST_CODE + slot);
+        }
+        let area = |code: u32, index: usize| ScenePlacement {
+            role: PlacementRole::Single,
+            id: String::new(),
+            code,
+            sprite: None,
+            rect: Rect {
+                x: 10 + (index as i32) * 15,
+                y: 30,
+                w: 10,
+                h: 10,
+            },
+        };
+        for (index, code) in codes.iter().enumerate() {
+            game.side_placements.push(area(*code, index));
+        }
+        for (index, _) in codes.iter().enumerate() {
+            game.click_shop(10 + (index as i32) * 15 + 5, 35);
+        }
+        assert!(game.shop_cart().is_empty());
+        assert_eq!(game.shop_page(), 0);
+        assert_eq!(game.shop_cart_page(), 0);
+        assert_eq!(game.shop_bag_page(), 0);
+        assert_eq!(game.shop_preview(), None);
+        assert_eq!(game.take_shop_buy(), None);
+        assert_eq!(game.side(), Some(SideScreen::Shop));
     }
 
     #[test]
@@ -13717,9 +13961,12 @@ mod game_tests {
         // routed gesture on every staged control — the empty cart
         // commits nothing, all eight ITEMBUY toggles check and uncheck,
         // the scroll pager turns and holds, BUYITEM queues the pinned
-        // 5000 send, the cart pager turns over a full cart, and the
+        // 5000 send, the cart pager turns over a full cart, the #195
+        // browse tools answer (ITEMPRE previews, ITEMBACK clears, the
+        // bag pager holds with no owned panel staged), and the
         // display-only chrome (GEMMONEY, page digits, scroll bar body,
-        // ITEMNAME/ITEMWON templates) lands nowhere.
+        // ITEMNAME/ITEMWON templates, preview comment, bag readout)
+        // lands nowhere.
         use o2jam_net::shop::SyncItemPurchase;
         let mut game = open_shop_board(10);
         game.ingest_snapshot(&InputSnapshot::click_at(40, 570));
@@ -13754,11 +14001,46 @@ mod game_tests {
         assert_eq!(game.shop_visible_cart().len(), 5);
         game.ingest_snapshot(&InputSnapshot::click_at(220, 575));
         assert_eq!(game.shop_visible_cart().len(), 5, "cart PREV holds");
-        let pinned = (game.shop_cart(), game.shop_page());
-        for (x, y) in [(100, 290), (254, 575), (400, 383), (250, 75), (260, 175)] {
+        game.ingest_snapshot(&InputSnapshot::click_at(320, 218));
+        assert_eq!(
+            game.shop_preview().map(|good| good.item_id),
+            Some(1),
+            "ITEMPRE1 previews the first page row"
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(151, 252));
+        assert_eq!(game.shop_preview(), None, "ITEMBACK clears");
+        game.ingest_snapshot(&InputSnapshot::click_at(410, 576));
+        assert_eq!(
+            game.shop_bag_page(),
+            0,
+            "bag NEXT holds with no owned panel staged"
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(291, 576));
+        assert_eq!(game.shop_bag_page(), 0, "bag PREV holds at the start");
+        let pinned = (
+            game.shop_cart(),
+            game.shop_page(),
+            game.shop_preview(),
+            game.shop_bag_page(),
+        );
+        for (x, y) in [
+            (100, 290),
+            (254, 575),
+            (400, 383),
+            (250, 75),
+            (260, 175),
+            (550, 465),
+            (324, 594),
+            (364, 594),
+        ] {
             game.ingest_snapshot(&InputSnapshot::click_at(x, y));
             assert_eq!(
-                (game.shop_cart(), game.shop_page()),
+                (
+                    game.shop_cart(),
+                    game.shop_page(),
+                    game.shop_preview(),
+                    game.shop_bag_page()
+                ),
                 pinned,
                 "display-only chrome at ({x},{y}) changed the board"
             );

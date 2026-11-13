@@ -312,6 +312,86 @@ pub const SHOP_SCROLL_CODE: u32 = 0x1402_2047;
 /// by the staged scroll origin).
 pub const SHOP_SCROLL_LEFT_CODE: u32 = 0x1420_0048;
 pub const SHOP_SCROLL_RIGHT_CODE: u32 = 0x1420_0049;
+/// Bag pager (`IDC_BUTTON_SSHOP_BAGLEFT/RIGHT`): pages the owned
+/// panel over the staged `MYBAGITEM1..10` icons.
+pub const SHOP_BAG_LEFT_CODE: u32 = 0x1420_004C;
+pub const SHOP_BAG_RIGHT_CODE: u32 = 0x1420_004D;
+/// Bag page readout, current page (`IDC_IMAGE_SSHOP_LPAGECNT_10/1`):
+/// tens then ones (L = current is ASSUMED — the digit pair left of
+/// the readout center; next step: rig capture of a bag-page turn).
+pub const SHOP_BAG_PAGE_CUR_TENS_CODE: u32 = 0x1450_004E;
+pub const SHOP_BAG_PAGE_CUR_ONES_CODE: u32 = 0x1450_004F;
+/// Bag page readout, total pages (`IDC_IMAGE_SSHOP_RPAGECNT_10/1`):
+/// tens then ones (R = total is ASSUMED, same next step).
+pub const SHOP_BAG_PAGE_TOT_TENS_CODE: u32 = 0x1450_0050;
+pub const SHOP_BAG_PAGE_TOT_ONES_CODE: u32 = 0x1450_0051;
+/// First per-row preview button (`IDC_BUTTON_SSHOP_ITEMPRE1`); eight
+/// run contiguously through `+7` (block walk + staged dump).
+pub const SHOP_ITEMPRE_FIRST_CODE: u32 = 0x1420_0064;
+/// Visible preview buttons per page (eight staged `ITEMPRE` areas).
+pub const SHOP_PREVIEW_ROWS: usize = 8;
+/// Preview clear (`IDC_BUTTON_SSHOP_ITEMBACK`).
+pub const SHOP_ITEMBACK_CODE: u32 = 0x1420_006C;
+/// Preview comment text (`IDC_TEXT_SSHOP_ITEMCOMMENT`): the tooltip
+/// panel the preview name inks (pairing ASSUMED — `ITEMCOMMENT2`
+/// mirrors it; next step: rig capture of a preview press).
+pub const SHOP_ITEMCOMMENT_CODE: u32 = 0x1440_0085;
+/// Owned bag cells per page (ten staged `MYBAGITEM` icons).
+pub const SHOP_BAG_CELLS: usize = 10;
+/// Cart total texts (`IDC_TEXT_SSHOP_CART_CHECKGEM/CHECKMONEY`):
+/// staged but unpainted — the gem/won split of the single parsed
+/// price word is unpinned, so both stay blank (labeled no-op).
+pub const SHOP_CART_CHECKGEM_CODE: u32 = 0x1440_0074;
+pub const SHOP_CART_CHECKMONEY_CODE: u32 = 0x1440_0075;
+/// Gender filter buttons (`IDC_BUTTON_SSHOP_GIRL/BOY`): ControlList
+/// names only — neither stages in the live dump, so both land
+/// nowhere (labeled no-op; next step: SendInput sweep if they stage).
+pub const SHOP_GIRL_CODE: u32 = 0x1420_2006;
+pub const SHOP_BOY_CODE: u32 = 0x1420_2007;
+/// Category buttons (`IDC_BUTTON_SSHOP_SET/FASHION/ACCESSORY/BEAUTY/
+/// INSTRUMENT`): five contiguous codes, none staged live (labeled
+/// no-op, same next step).
+pub const SHOP_CATEGORY_FIRST_CODE: u32 = 0x1420_100A;
+/// Category buttons in the row (five `Shop_Shop*` buttons).
+pub const SHOP_CATEGORY_BUTTONS: usize = 5;
+/// Submenu buttons (`IDC_BUTTON_SSHOP_SUBMENU1..6`): six contiguous
+/// codes, none staged live (labeled no-op, same next step).
+pub const SHOP_SUBMENU_FIRST_CODE: u32 = 0x1420_8012;
+/// Submenu buttons in the row (six `Shop_SubMenu` buttons).
+pub const SHOP_SUBMENU_BUTTONS: usize = 6;
+/// First per-row gift button (`IDC_BUTTON_SSHOP_ITEMGIFT1`); eight
+/// run contiguously through `+7` (gifting is out of scope: stories
+/// 20-21 need exe pins, so all eight land nowhere).
+pub const SHOP_ITEMGIFT_FIRST_CODE: u32 = 0x1420_0020;
+/// Gift commit (`IDC_BUTTON_SSHOP_GIFTITEM`): send shape unpinned,
+/// lands nowhere (labeled no-op).
+pub const SHOP_GIFTITEM_CODE: u32 = 0x1420_0071;
+/// Ext-menu opener (`IDC_BUTTON_SSHOP_EXTMENU_ON`): its twelve
+/// filter children stage nothing live, so the opener records
+/// nothing (labeled no-op).
+pub const SHOP_EXTMENU_ON_CODE: u32 = 0x1420_0099;
+/// First ext-menu filter (`IDC_BUTTON_SSHOP_EXTMENU_ALL`); twelve
+/// run contiguously through `+11` (none staged live).
+pub const SHOP_EXTMENU_FIRST_CODE: u32 = 0x1420_109B;
+/// Ext-menu filters in the menu (twelve `Shop_ExtMenu` buttons).
+pub const SHOP_EXTMENU_BUTTONS: usize = 12;
+/// Planet pager (`IDC_BUTTON_SSHOP_PLANET_UP/DOWN`): display-only,
+/// lands nowhere (labeled no-op).
+pub const SHOP_PLANET_UP_CODE: u32 = 0x1420_0008;
+pub const SHOP_PLANET_DOWN_CODE: u32 = 0x1420_0009;
+/// Bag sort (`IDC_BUTTON_SSHOP_BAGSORT`): sort semantics unpinned,
+/// lands nowhere (labeled no-op).
+pub const SHOP_BAGSORT_CODE: u32 = 0x1420_00B7;
+/// First item icon (`IDC_IMAGE_SSHOP_ITEMSHOW1`); eight run
+/// contiguously (paint targets, never dispatch).
+pub const SHOP_ITEMSHOW_FIRST_CODE: u32 = 0x1460_0035;
+/// First owned-bag icon (`IDC_IMAGE_SSHOP_MYBAGITEM1`); ten run
+/// contiguously (paint targets, never dispatch).
+pub const SHOP_MYBAGITEM_FIRST_CODE: u32 = 0x1460_003D;
+/// Music-shop TOP100 (`0x1A20007D`, `docs/musicshop.md`): music-shop
+/// chrome only per the #181 verdict — the item shop owns no TOP100
+/// arm, so this code never dispatches on the item side.
+pub const MSHOP_TOP100_CODE: u32 = 0x1A20_007D;
 /// Cart buy (`IDC_BUTTON_SSHOP_BUYITEM`): commits the cart through
 /// the pinned empty `SyncItemPurchase` 5000 send.
 pub const SHOP_BUYITEM_CODE: u32 = 0x1420_0070;
@@ -366,8 +446,8 @@ pub fn shop_goods(table: &AvatarItemTable) -> Vec<ShopGood> {
 }
 
 /// One item-shop click the exe codes name: row toggles, the cart
-/// buy, and both pagers. Everything else (filters, set-item, bag,
-/// gift) lands nowhere.
+/// buy, the list/cart pagers, the bag pager, and the row preview.
+/// Everything else (filters, set-item, gift, totals) lands nowhere.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShopAction {
     /// Row `ITEMBUY` button toggled (0-based on the page).
@@ -382,6 +462,14 @@ pub enum ShopAction {
     CartPrev,
     /// Cart-list pager stepped forward.
     CartNext,
+    /// Row `ITEMPRE` button picked for preview (0-based on the page).
+    PreviewRow(usize),
+    /// `ITEMBACK` clears the preview.
+    PreviewBack,
+    /// Bag pager stepped back over the owned panel.
+    BagPrev,
+    /// Bag pager stepped forward over the owned panel.
+    BagNext,
 }
 
 /// Board click under native pixel (`x`, `y`): the staged placement
@@ -436,7 +524,10 @@ fn shop_action_for_code(code: u32) -> Option<ShopAction> {
         SHOP_SCROLL_RIGHT_CODE => Some(ShopAction::ItemNext),
         SHOP_CART_LEFT_CODE => Some(ShopAction::CartPrev),
         SHOP_CART_RIGHT_CODE => Some(ShopAction::CartNext),
-        _ => shop_row_toggle(code),
+        SHOP_BAG_LEFT_CODE => Some(ShopAction::BagPrev),
+        SHOP_BAG_RIGHT_CODE => Some(ShopAction::BagNext),
+        SHOP_ITEMBACK_CODE => Some(ShopAction::PreviewBack),
+        _ => shop_row_toggle(code).or_else(|| shop_preview_slot(code)),
     }
 }
 
@@ -445,6 +536,13 @@ fn shop_row_toggle(code: u32) -> Option<ShopAction> {
     let slot = code.checked_sub(SHOP_ITEMBUY_FIRST_CODE)?;
     let slot = usize::try_from(slot).ok()?;
     (slot < SHOP_ITEM_ROWS).then_some(ShopAction::ToggleRow(slot))
+}
+
+/// Preview pick behind one `ITEMPRE` code (`None` outside the eight).
+fn shop_preview_slot(code: u32) -> Option<ShopAction> {
+    let slot = code.checked_sub(SHOP_ITEMPRE_FIRST_CODE)?;
+    let slot = usize::try_from(slot).ok()?;
+    (slot < SHOP_PREVIEW_ROWS).then_some(ShopAction::PreviewRow(slot))
 }
 
 /// Page count of a `per_page`-row list (at least one: an empty cart
@@ -487,6 +585,30 @@ pub fn shop_cart_page_rects(placements: &[ScenePlacement]) -> Option<(Rect, Rect
         digit(SHOP_CART_PAGE_CUR_ONES_CODE)?,
         digit(SHOP_CART_PAGE_TOT_TENS_CODE)?,
         digit(SHOP_CART_PAGE_TOT_ONES_CODE)?,
+    );
+    Some((
+        rect_union(cur_tens, cur_ones),
+        rect_union(tot_tens, tot_ones),
+    ))
+}
+
+/// Bag page-number rects: current-page tens+ones union, then total
+/// tens+ones union (`None` when any digit slot is unstaged). The
+/// L = current / R = total pairing is ASSUMED (see the `LPAGECNT` /
+/// `RPAGECNT` constants); next step: rig capture of a bag-page turn.
+#[must_use]
+pub fn shop_bag_page_rects(placements: &[ScenePlacement]) -> Option<(Rect, Rect)> {
+    let digit = |code| {
+        placements
+            .iter()
+            .find(|placed| placed.code == code)
+            .map(|placed| placed.rect)
+    };
+    let (cur_tens, cur_ones, tot_tens, tot_ones) = (
+        digit(SHOP_BAG_PAGE_CUR_TENS_CODE)?,
+        digit(SHOP_BAG_PAGE_CUR_ONES_CODE)?,
+        digit(SHOP_BAG_PAGE_TOT_TENS_CODE)?,
+        digit(SHOP_BAG_PAGE_TOT_ONES_CODE)?,
     );
     Some((
         rect_union(cur_tens, cur_ones),

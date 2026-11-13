@@ -78,7 +78,34 @@ commits through `BUYITEM` (`0x70`) as the pinned empty
 is undecodable standalone, so the wire ride stays ASSUMED behind
 the take-seam (`docs/shop-buy.md`). Sort/filter/set-item/bag/
 gift semantics stay display-only OPEN (next step: SendInput sweep
-on the live shop per the `~/scratch/planet-verify/` recipe).
+on the live shop per the `~/scratch/planet-verify/` recipe) —
+see ticket #195 for what that sweep's evidence split resolved.
+
+## Ticket #195 (2026-11-13)
+
+Browse tools against the #191 staged catalog. Wired: the owned
+bag pager (`BAGLEFT`/`BAGRIGHT`, `0x4C`/`0x4D`) turns ten-cell
+`MYBAGITEM` pages over staged inventory ids in inventory order
+(zero/unknown skip, holds at both ends, queues nothing); the
+row preview (`ITEMPRE1..8`, `0x64..0x6B`) picks the visible row
+into an id-stable slot and `ITEMBACK` (`0x6C`) clears it;
+per-row `ITEMWON` cells ink the parsed catalog price word
+(`shop_row_prices_come_from_the_staged_catalog` — no invented
+data). ASSUMED pairings with rig next steps: the preview name
+inks `ITEMCOMMENT` (`0x85`; `ITEMCOMMENT2` mirrors it) and the
+bag readout inks current/total into the L (`0x4E`/`0x4F`)/R
+(`0x50`/`0x51`) digit unions. Labeled no-ops (each pinned by
+`shop_unwired_browse_chrome_lands_nowhere`): the gender, category
+(`0x0A..0x0E`), submenu, and ext-menu filter buttons never stage
+in the live dump (203 placements, verified 2026-11-13 — the
+`ControlList` names them but the staged set omits them), so
+filter clicks land nowhere by absence; `BAGSORT`, the planet
+pager, `ITEMGIFT1..8`/`GIFTITEM`, cart `CHECKGEM`/`CHECKMONEY`
+totals, and the `ITEMGEM1..8` cells (gem-price join still
+unpinned) stage but record nothing. No search chrome exists in
+`State_ItemShop.bnd` (#178 story 8 has no control to wire).
+TOP100 is music-shop-only per the #181 verdict and owns no
+item-shop arm (`MSHOP_TOP100_CODE` never dispatches here).
 
 ## OPEN
 
@@ -86,8 +113,12 @@ on the live shop per the `~/scratch/planet-verify/` recipe).
 2. TEXT caption and icon staging sources (GEM cell staged from
    5028/5001 words since ticket #21; `MGASH` source unpinned).
 3. Buy/gift/cart/set-item click semantics — PARTIAL: `ITEMBUY`
-   checks the cart, `BUYITEM` commits 5000 (ASSUMED wire-side);
-   gift/set-item unevidenced.
+   checks the cart, `BUYITEM` commits 5000 (ASSUMED wire-side),
+   `ITEMPRE`/`ITEMBACK` preview and clear (comment pairing
+   ASSUMED); gift/set-item unevidenced.
 4. Scroll, bag pager, planet pager, ext-menu filter behavior —
    PARTIAL: scroll pager steps and holds (origin-offset
-   read ASSUMED); bag/planet pagers and filters display-only.
+   read ASSUMED); bag pager steps and holds over staged owned
+   inventory (L/R readout pairing ASSUMED); planet pager and
+   filters display-only — the filter buttons never stage live
+   (absence, ticket #195).

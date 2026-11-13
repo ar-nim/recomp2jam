@@ -41,15 +41,15 @@ use super::side::{
     lanking_rank_cells, lanking_rview_slots, lanking_tiled_rect, music_shop_buy_caption,
     music_shop_cart_page_rects, music_shop_cart_slots, music_shop_page_rects, music_shop_slots,
     music_shop_tiled_rect, myroom_action_for_code, planet_action_for_code, planet_band_rect,
-    planet_caption_for_code, planet_plate_clip, shop_cart_page_rects, shop_cart_slots,
-    wallet_row_caption, LankingSong, MusicShopRow, MyRoomAction, MyRoomState, PlanetAction,
-    PlanetBand, PlanetOptionTab, PlanetPromo, ShopGood, WalletRow, WalletState, GEM_LABEL,
-    LANKING_LVIEW_TEXT_CODES, LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES,
+    planet_caption_for_code, planet_plate_clip, shop_bag_page_rects, shop_cart_page_rects,
+    shop_cart_slots, wallet_row_caption, LankingSong, MusicShopRow, MyRoomAction, MyRoomState,
+    PlanetAction, PlanetBand, PlanetOptionTab, PlanetPromo, ShopGood, WalletRow, WalletState,
+    GEM_LABEL, LANKING_LVIEW_TEXT_CODES, LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES,
     MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS, MSHOP_ROW_TEXT_CODES,
     MYROOM_AVATAR_CODE, MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_SLOT_FIRST_CODE,
     PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949, SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE,
-    SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE, SHOP_ITEMNAME_FIRST_CODE,
-    SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS,
+    SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE, SHOP_ITEMCOMMENT_CODE,
+    SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS,
 };
 use o2jam_file::ControlList;
 use o2jam_game::RoomTeams;
@@ -1424,6 +1424,39 @@ fn paint_shop_cart(
     if let Some((cur, tot)) = shop_cart_page_rects(placements) {
         paint_text_into_rect(frame, cur, &(cart_page + 1).to_string(), CP949_INK);
         paint_text_into_rect(frame, tot, &cart_pages.to_string(), CP949_INK);
+    }
+}
+
+/// Previewed good into the staged `ITEMCOMMENT` TEXT rect (the
+/// tooltip panel pairing is ASSUMED — `ITEMCOMMENT2` mirrors it;
+/// next step: rig capture of a preview press). Paints nothing
+/// without a staged comment rect or preview pick.
+pub fn paint_shop_preview(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    preview: Option<&ShopGood>,
+) {
+    let Some(good) = preview else {
+        return;
+    };
+    if let Some(rect) = shop_template_rect(placements, SHOP_ITEMCOMMENT_CODE) {
+        paint_text_into_rect(frame, rect, &good.name, CP949_INK);
+    }
+}
+
+/// Owned-panel pager readout: current page into the left digit
+/// union, total pages into the right one (L = current / R = total
+/// is ASSUMED; next step: rig capture of a bag-page turn). Paints
+/// nothing when any readout digit is unstaged.
+pub fn paint_shop_bag_pager(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    bag_page: usize,
+    bag_pages: usize,
+) {
+    if let Some((cur, tot)) = shop_bag_page_rects(placements) {
+        paint_text_into_rect(frame, cur, &(bag_page + 1).to_string(), CP949_INK);
+        paint_text_into_rect(frame, tot, &bag_pages.to_string(), CP949_INK);
     }
 }
 
@@ -6213,9 +6246,10 @@ mod paint_tests {
         MSHOP_ARTIST_CODE, MSHOP_BPM_CODE, MSHOP_CART_TOGGLE_FIRST_CODE, MSHOP_EDITOR_CODE,
         MSHOP_EX_FIRST_CODE, MSHOP_GENRE_CODE, MSHOP_ISBUY_CODE, MSHOP_PAGE_CUR_ONES_CODE,
         MSHOP_PAGE_CUR_TENS_CODE, MSHOP_PAGE_TOT_ONES_CODE, MSHOP_PAGE_TOT_TENS_CODE,
-        MSHOP_TITLE_CODE, PLANET_OPTION_CODE, PLANET_PROMO_IMAGE_CODE,
+        MSHOP_TITLE_CODE, PLANET_OPTION_CODE, PLANET_PROMO_IMAGE_CODE, SHOP_BAG_PAGE_CUR_ONES_CODE,
+        SHOP_BAG_PAGE_CUR_TENS_CODE, SHOP_BAG_PAGE_TOT_ONES_CODE, SHOP_BAG_PAGE_TOT_TENS_CODE,
         SHOP_CART_PAGE_CUR_ONES_CODE, SHOP_CART_PAGE_CUR_TENS_CODE, SHOP_CART_PAGE_TOT_ONES_CODE,
-        SHOP_CART_PAGE_TOT_TENS_CODE, SHOP_CART_TOGGLE_FIRST_CODE,
+        SHOP_CART_PAGE_TOT_TENS_CODE, SHOP_CART_TOGGLE_FIRST_CODE, SHOP_ITEMGEM_FIRST_CODE,
     };
     use super::*;
     use crate::avatar::load_worn_figure;
@@ -6368,6 +6402,73 @@ mod paint_tests {
         assert!(lit(287, 567, 28, 17), "tot page paints");
         assert!(lit(137, 464, 149, 15), "cart row paints");
         assert!(!lit(0, 0, 100, 12), "unstaged band stays dark");
+    }
+
+    #[test]
+    fn shop_preview_and_bag_pager_ink_their_staged_rects() {
+        // Synthetic `STATE_SHOP` browse chrome: the preview pick
+        // inks its name into the staged ITEMCOMMENT rect, the bag
+        // pager inks the current page into the left digit union and
+        // the total into the right one, and the staged ITEMGEM rects
+        // stay dark (the gem-price join is OPEN).
+        let placements = vec![
+            shop_placement(SHOP_ITEMCOMMENT_CODE, 468, 421, 163, 89),
+            shop_placement(SHOP_BAG_PAGE_CUR_TENS_CODE, 317, 568, 14, 17),
+            shop_placement(SHOP_BAG_PAGE_CUR_ONES_CODE, 331, 568, 14, 17),
+            shop_placement(SHOP_BAG_PAGE_TOT_TENS_CODE, 357, 568, 14, 17),
+            shop_placement(SHOP_BAG_PAGE_TOT_ONES_CODE, 371, 568, 14, 17),
+            shop_placement(SHOP_ITEMGEM_FIRST_CODE, 300, 169, 38, 13),
+            shop_placement(SHOP_ITEMNAME_FIRST_CODE, 231, 69, 100, 12),
+            shop_placement(SHOP_ITEMWON_FIRST_CODE, 247, 169, 38, 13),
+        ];
+        let preview = ShopGood {
+            item_id: 7,
+            name: "PreviewHair".to_owned(),
+            price: 14000,
+        };
+        let goods = vec![ShopGood {
+            item_id: 1,
+            name: "Hair".to_owned(),
+            price: 1000,
+        }];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_shop_board(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            &goods,
+            &WalletState::default(),
+            &[],
+            0,
+            1,
+        );
+        paint_shop_preview(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            Some(&preview),
+        );
+        paint_shop_bag_pager(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            1,
+            3,
+        );
+        let lit = |x: i32, y: i32, w: u32, h: u32| -> bool { has_ink_in(&buf, 800, x, y, w, h) };
+        assert!(lit(468, 421, 163, 89), "preview name paints");
+        assert!(lit(317, 568, 28, 17), "bag cur page paints");
+        assert!(lit(357, 568, 28, 17), "bag tot page paints");
+        assert!(!lit(300, 169, 38, 13), "ITEMGEM stays dark");
     }
 
     #[test]
