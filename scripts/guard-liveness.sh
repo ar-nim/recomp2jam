@@ -1,15 +1,8 @@
 #!/usr/bin/env bash
-# guard-liveness.sh — verify each named ## Guards entry actually executes.
-# Usage: scripts/guard-liveness.sh [CACHE_FILE]
-# Caches `cargo test --workspace -- --list` output to /tmp/guard-liveness-list.txt
 set -euo pipefail
-
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CACHE="${1:-/tmp/guard-liveness-list.txt}"
-
-if [ ! -s "$CACHE" ]; then
-  (cd "$REPO_ROOT" && cargo test --workspace -- --list > "$CACHE" 2>&1)
-fi
+[ -s "$CACHE" ] || (cd "$REPO_ROOT" && cargo test --workspace -- --list > "$CACHE" 2>&1)
 
 extract_guards() {
   awk '
@@ -22,9 +15,13 @@ extract_guards() {
 command -v gh >/dev/null 2>&1 || { echo "guard-liveness: warning: gh missing; skip" >&2; exit 0; }
 gh auth status >/dev/null 2>&1 || { echo "guard-liveness: warning: gh unauth; skip" >&2; exit 0; }
 
-scanned=0
-dead=()
-total=0
+if [ "$#" -gt 1 ]; then
+  nums="${*:2}"
+else
+  nums="$(gh issue list --state closed --limit 1000 --json number --jq '.[].number')"
+fi
+
+scanned=0; total=0; dead=()
 while read -r num; do
   [ -n "$num" ] || continue
   scanned=$((scanned+1))
@@ -42,14 +39,8 @@ while read -r num; do
       dead+=("$name")
     fi
   done <<< "$guards"
-if [ "$#" -gt 1 ]; then
-  nums="${*:2}"
-else
-  nums="$(gh issue list --state closed --limit 1000 --json number --jq '.[].number')"
-fi
 done <<< "$nums"
 
-# self-test hook
 if [ -n "${TRACKER_AUDIT_EXTRA_GUARD:-}" ]; then
   total=$((total+1))
   if grep -qF "$TRACKER_AUDIT_EXTRA_GUARD" "$CACHE"; then
