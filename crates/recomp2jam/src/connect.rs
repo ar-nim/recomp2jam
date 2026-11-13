@@ -802,9 +802,7 @@ fn login_channel(
 #[cfg(test)]
 mod connect_flow_tests {
     use std::io::{Read, Write};
-    use std::net::{TcpListener, TcpStream};
-    use std::thread;
-    use std::time::Duration;
+    use std::net::TcpStream;
 
     use o2jam_net::{
         frame::decode_frame, AuthResponse, ChannelList, ChannelLoginResponse, Frame, HEADER_LEN,
@@ -883,13 +881,7 @@ mod connect_flow_tests {
 
     #[test]
     fn logs_into_fake_gateway_end_to_end() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .unwrap();
+        let (port, server) = o2jam_net::testing::fake_gateway(move |mut stream| {
             assert_eq!(read_frame(&mut stream).id, Request::Authorize.id());
             let authed = AuthResponse {
                 result_code: 0,
@@ -925,13 +917,7 @@ mod connect_flow_tests {
 
     #[test]
     fn fetches_character_after_channel_login() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .unwrap();
+        let (port, server) = o2jam_net::testing::fake_gateway(move |mut stream| {
             assert_eq!(read_frame(&mut stream).id, Request::Authorize.id());
             let authed = AuthResponse {
                 result_code: 0,
@@ -1043,13 +1029,7 @@ mod connect_flow_tests {
         let dir = std::env::temp_dir();
         let path = dir.join("recomp2jam-test-avatar.opa");
         std::fs::write(&path, &archive).unwrap();
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .unwrap();
+        let (port, server) = o2jam_net::testing::fake_gateway(move |mut stream| {
             assert_eq!(read_frame(&mut stream).id, Request::Authorize.id());
             let authed = AuthResponse {
                 result_code: 0,
@@ -1091,13 +1071,7 @@ mod connect_flow_tests {
     #[test]
     fn joins_room_after_channel_login() {
         use o2jam_net::{JoinRoomResponse, JoinedRoom};
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .unwrap();
+        let (port, server) = o2jam_net::testing::fake_gateway(move |mut stream| {
             assert_eq!(read_frame(&mut stream).id, Request::Authorize.id());
             let authed = AuthResponse {
                 result_code: 0,
@@ -1161,13 +1135,7 @@ mod connect_flow_tests {
 
     #[test]
     fn refuses_failed_authorize() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .unwrap();
+        let (port, server) = o2jam_net::testing::fake_gateway(move |mut stream| {
             assert_eq!(read_frame(&mut stream).id, Request::Authorize.id());
             let rejected = AuthResponse {
                 result_code: 0xFFFF_FFFF,
@@ -1340,9 +1308,7 @@ mod avatar_io_tests {
 #[cfg(test)]
 mod song_flow_tests {
     use std::io::{Read, Write};
-    use std::net::{TcpListener, TcpStream};
-    use std::thread;
-    use std::time::Duration;
+    use std::net::TcpStream;
 
     use o2jam_net::{
         frame::{decode_frame, encode_frame},
@@ -1368,7 +1334,7 @@ mod song_flow_tests {
 
     fn flow_options() -> SongFlowOptions {
         let mut options = SongFlowOptions::new(757);
-        options.peer_bar_timeout = Duration::from_millis(200);
+        options.peer_bar_timeout = std::time::Duration::from_millis(200);
         options
     }
 
@@ -1396,13 +1362,7 @@ mod song_flow_tests {
 
     #[test]
     fn host_song_flow_reaches_exit_over_fake_gateway() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .unwrap();
+        let (port, server) = o2jam_net::testing::fake_gateway(move |mut stream| {
             let select = read_frame(&mut stream);
             assert_eq!(select.id, Request::SetRoomMusic.id());
             assert_eq!(
@@ -1493,13 +1453,7 @@ mod song_flow_tests {
 
     #[test]
     fn song_flow_tolerates_a_quiet_room() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .unwrap();
+        let (port, server) = o2jam_net::testing::fake_gateway(move |mut stream| {
             assert_eq!(read_frame(&mut stream).id, Request::SetRoomMusic.id());
             let stage = read_frame(&mut stream);
             assert_eq!(stage.id, Request::SetRoomArena.id());
@@ -1547,13 +1501,7 @@ mod song_flow_tests {
         arena_echoed: i32,
         peer_echo: Option<GameStatsUpdate>,
     ) -> anyhow::Result<super::SongFlowReport> {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .unwrap();
+        let (port, server) = o2jam_net::testing::fake_gateway(move |mut stream| {
             assert_eq!(read_frame(&mut stream).id, Request::SetRoomMusic.id());
             let stage = read_frame(&mut stream);
             assert_eq!(stage.id, Request::SetRoomArena.id());
@@ -1644,13 +1592,7 @@ mod song_flow_tests {
 
     #[test]
     fn arena_echo_mismatch_fails_the_flow() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .unwrap();
+        let (port, server) = o2jam_net::testing::fake_gateway(move |mut stream| {
             assert_eq!(read_frame(&mut stream).id, Request::SetRoomMusic.id());
             let stage = read_frame(&mut stream);
             assert_eq!(stage.id, Request::SetRoomArena.id());
@@ -1814,7 +1756,7 @@ mod song_flow_tests {
         drop(gateway);
         let mut helper = Err(anyhow::anyhow!("not attempted"));
         for _ in 0..10 {
-            std::thread::sleep(Duration::from_millis(500));
+            std::thread::sleep(std::time::Duration::from_millis(500));
             helper = connect_and_login(&ConnectOptions {
                 song: None,
                 ..options.clone()
@@ -1836,9 +1778,7 @@ mod song_flow_tests {
 #[cfg(test)]
 mod wallet_flow_tests {
     use std::io::{Read, Write};
-    use std::net::{TcpListener, TcpStream};
-    use std::thread;
-    use std::time::Duration;
+    use std::net::TcpStream;
 
     use o2jam_net::{
         frame::{decode_frame, encode_frame},
@@ -1953,13 +1893,7 @@ mod wallet_flow_tests {
 
     #[test]
     fn wallet_fetch_reads_cash_sync_then_purchase_prefix() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .unwrap();
+        let (port, server) = o2jam_net::testing::fake_gateway(move |mut stream| {
             answer_login(&mut stream);
             answer_wallet(&mut stream);
         });
@@ -1979,13 +1913,7 @@ mod wallet_flow_tests {
 
     #[test]
     fn wallet_fetch_skips_a_channel_broadcast() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .unwrap();
+        let (port, server) = o2jam_net::testing::fake_gateway(move |mut stream| {
             answer_login(&mut stream);
             let cash = read_frame(&mut stream);
             assert_eq!(cash.id, SyncCashPoint::COMMAND);
@@ -2015,13 +1943,7 @@ mod wallet_flow_tests {
 
     #[test]
     fn wallet_fetch_stays_quiet_without_the_flag() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .unwrap();
+        let (port, server) = o2jam_net::testing::fake_gateway(move |mut stream| {
             answer_login(&mut stream);
         });
         let mut options = wallet_options(port);
@@ -2033,13 +1955,7 @@ mod wallet_flow_tests {
 
     #[test]
     fn wallet_fetch_needs_character_info() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .unwrap();
+        let (port, server) = o2jam_net::testing::fake_gateway(move |mut stream| {
             assert_eq!(read_frame(&mut stream).id, Request::Authorize.id());
             stream
                 .write_all(
@@ -2078,13 +1994,7 @@ mod wallet_flow_tests {
 
     #[test]
     fn wallet_reads_fail_loudly_on_short_prefix() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .unwrap();
+        let (port, server) = o2jam_net::testing::fake_gateway(move |mut stream| {
             let cash = read_frame(&mut stream);
             assert_eq!(cash.id, SyncCashPoint::COMMAND);
             stream.write_all(&cash_answer().encode()).unwrap();

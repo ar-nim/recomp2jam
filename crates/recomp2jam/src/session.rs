@@ -2663,16 +2663,7 @@ mod session_tests {
     fn fake_gateway(
         with_server: impl FnOnce(TcpStream) + Send + 'static,
     ) -> (u16, thread::JoinHandle<()>) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .unwrap();
-            with_server(stream);
-        });
-        (port, server)
+        o2jam_net::testing::fake_gateway(with_server)
     }
 
     /// Stage the S7 loading gate the way the live lane does
