@@ -893,6 +893,9 @@ fn paint_channel_face(frame: &mut Frame<'_>, slot: usize, channel: &ChannelState
         paint_channel_button(frame, slot, w, h);
         return;
     };
+    if !channel.active {
+        return;
+    }
     if channel_row_full(channel) {
         return;
     }

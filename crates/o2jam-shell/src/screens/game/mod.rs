@@ -2374,6 +2374,10 @@ impl ScreenGame {
         if !channel_face_hit(x, y, slot) {
             return None;
         }
+        let channel = self.channels.get(index)?;
+        if !channel.active {
+            return None;
+        }
         // A slash draft consumes the click instead of entering
         // (the click path takes it); peek here so the query stays
         // side-effect free.
@@ -2468,7 +2472,10 @@ impl ScreenGame {
         self.highlight = index;
         // Only the Korean-text enter face enters Room (ticket #56);
         // a body click moves the highlight and leaves the dialog up.
-        if channel_face_hit(x, y, slot) && self.take_channel_slash() == SlashCommand::Empty {
+        if channel_face_hit(x, y, slot)
+            && self.take_channel_slash() == SlashCommand::Empty
+            && self.channels.get(index).map(|c| c.active).unwrap_or(false)
+        {
             self.enter(Screen::Room);
         }
     }
@@ -5276,7 +5283,13 @@ impl ScreenGame {
             MenuKey::Down => self.step_channel(ChannelScroll::Down),
             MenuKey::Back => self.enter(Screen::Planet),
             MenuKey::Confirm => {
-                if self.take_channel_slash() == SlashCommand::Empty {
+                if self.take_channel_slash() == SlashCommand::Empty
+                    && self
+                        .channels
+                        .get(self.highlight)
+                        .map(|c| c.active)
+                        .unwrap_or(false)
+                {
                     self.enter(Screen::Room);
                 }
             }
