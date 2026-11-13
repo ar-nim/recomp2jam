@@ -52,3 +52,7 @@ Default five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `
 ### Domain docs
 
 Single-context: one `GLOSSARY.md` plus `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+### Delegation
+
+Senior/junior delegation playbook (skip bound, steer-vs-respawn, show-two-then-delegate, thinking escalation, verify-don't-trust). See `docs/agents/delegation.md`.
