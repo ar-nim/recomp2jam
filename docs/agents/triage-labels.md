@@ -27,6 +27,24 @@ claim-specific.
 
 When a skill mentions a role (e.g. "apply the AFK-ready triage label"), use the corresponding label string or issue type from the table above.
 
+## Flag labels (orthogonal to roles)
+
+`needs-owner`, `hand-playtest`, and `question` are flags, not state
+roles: they ride alongside the one state role and never replace it.
+
+- `needs-owner`: the only remaining leg needs the owner's own hands
+  or eyes (live-confirm on their rig, a screenshot of a symptom only
+  they can see, a rig-eyes verdict). Agents cannot advance it: do not
+  spawn, steer, or respawn on it while the flag stands. Apply with a
+  comment naming exactly what is needed from the owner; remove the
+  moment the owner responds (back to `ready-for-agent` for the next
+  agent leg, or close). It never survives on a closed issue (owner
+  decision 2026-11-15: owner hand/eye legs are marked, never polled).
+- `hand-playtest`: close-discipline marker (rule 1 below); the ticket
+  closes only on live evidence.
+- `question`: the tracker holds a question for the owner; answer it
+  and close, or convert it to work.
+
 ## Triage flow
 
 Every new issue enters with `needs-triage`, and a triage decision precedes any
@@ -43,6 +61,9 @@ Two recorded exceptions, both with the triage record visible on the tracker:
 - Execution issues cut by a scoping ticket enter directly at their decided
   role; the scoping ticket's resolution comment is their triage record and
   stays linked.
+- When the only remaining leg is owner hands or eyes, apply `needs-owner`
+  alongside the state role (never instead of it) with a comment naming
+  the exact ask, and stop delegating until the owner responds.
 
 ## Close discipline
 
