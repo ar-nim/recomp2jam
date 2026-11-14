@@ -1,0 +1,56 @@
+name: input-rig
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  windows-input:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --workspace
+      - name: Run client
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath .\target\debug\recomp2jam.exe -ArgumentList "--input-log","$PWD\input.log" -PassThru
+          $p.Id | Out-File client.pid
+          Start-Sleep -Seconds 5
+      - name: Inject input via SendInput
+        shell: pwsh
+        run: |
+          Add-Type -MemberDefinition '[DllImport("user32.dll")] public static extern IntPtr FindWindow(string c, string t); [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h); [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y); [DllImport("user32.dll")] public static extern void mouse_event(uint f, int dx, int dy, uint d, uint e);' -Name Inj -Namespace Win
+          $h = [Win.Inj]::FindWindow($null, "recomp2jam")
+          if ($h -eq [IntPtr]::Zero) { throw "client window not found" }
+          [Win.Inj]::SetForegroundWindow($h) | Out-Null
+          Start-Sleep -Milliseconds 300
+          [Win.Inj]::SetCursorPos(120, 80)
+          Start-Sleep -Milliseconds 100
+          [Win.Inj]::mouse_event(0x0002, 0, 0, 0, 0)
+          Start-Sleep -Milliseconds 50
+          [Win.Inj]::mouse_event(0x0004, 0, 0, 0, 0)
+      - name: Assert input log
+        shell: pwsh
+        run: |
+          Start-Sleep -Seconds 2
+          $log = Get-Content input.log -ErrorAction SilentlyContinue
+          if (-not ($log -match "^click \d+ \d+$")) { throw "click not logged" }
+          if (-not ($log -match "^click-up \d+ \d+$")) { throw "click-up not logged" }
+          Write-Host "input arrived"
+      - name: Stop client
+        if: always()
+        shell: pwsh
+        run: |
+          $pid = Get-Content client.pid
+          Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+
+  x11-input:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config xvfb xdotool
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --workspace
+      - name: Run X11 rig + inject
+        run: bash scripts/ci-input-rig.sh
