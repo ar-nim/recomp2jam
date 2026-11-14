@@ -14345,6 +14345,12 @@ mod game_tests {
 
     #[test]
     fn shop_board_stages_goods_from_avatar_source() {
+        // Live caller chain (seam-suffices? no — live caller exists):
+        //   main.rs::run_play -> setup_online / offline arm
+        //   -> stage_online_identity -> ScreenGame::set_avatar_source
+        //   -> ShopState::set_catalog
+        // Live entry drives the guard `live_boot_default_stages_shop_catalog`
+        // in crates/recomp2jam/src/live_boot_gate.rs (headless setup_online).
         // The live avatar archive carries `Itemdata_Korea.dat`; staging
         // it must populate the shop board (items + avatar-tab rows)
         // without a separate `set_shop_catalog` call (server-
