@@ -338,6 +338,14 @@ mod live_boot_gate_tests {
             "default live boot stages the shop catalog"
         );
         assert!(
+            !game.music_shop_visible_rows().is_empty(),
+            "default live boot stages the music-shop board from the installed song catalog"
+        );
+        assert!(
+            !game.lanking_visible_songs().is_empty(),
+            "default live boot stages the lanking board from the installed song catalog"
+        );
+        assert!(
             !game.shop_avatar_staged(),
             "default boot stages no avatar pane without a fetched hero (never invented)"
         );

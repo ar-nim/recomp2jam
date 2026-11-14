@@ -1287,6 +1287,22 @@ fn stage_online_identity(
     if let Some(hero) = character {
         game.set_myroom_character(hero.clone());
     }
+
+    // The music-shop and lanking boards ride the installed song
+    // catalog (`OJNList.dat`): stage it on every identity pass, even
+    // when the avatar archive is missing (mirrors the item-shop hook
+    // below and ticket #192 reopen). Missing/unparsable catalog leaves
+    // the boards row-less; no fallback rows are invented.
+    let catalog_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../install-root")
+        .join("O2Jam/Image/OJNList.dat");
+    if let Ok(bytes) = std::fs::read(&catalog_path) {
+        if let Ok(entries) = o2jam_file::parse_ojn_list(&bytes) {
+            game.set_song_catalog(&entries);
+            tracing::info!("music-shop board staged from identity");
+        }
+    }
+
     let Ok((archive, table)) = connect::read_avatar_source(
         install_root()
             .join(INSTALLED_AVATAR_OPA)
@@ -2700,6 +2716,41 @@ mod offline_music_board_tests {
         assert!(
             !game.lanking_visible_songs().is_empty(),
             "offline boot stages the lanking board from {SESSION_CATALOG}"
+        );
+    }
+
+    #[test]
+    fn online_identity_without_character_stages_music_shop_and_lanking_boards() {
+        // Live caller chain (`recomp2jam online`, no channel login):
+        //   main.rs::run_online -> stage_online_identity(None)
+        //   -> ScreenGame::set_song_catalog ->
+        //   MusicShopState::set_catalog + LankingState::set_catalog.
+        // run_online never calls stage_session_catalog, so without the
+        // ticket-#192 hook the boards stay row-less live.
+        // Archives absent -> skip cleanly (CI has no game data).
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root")
+            .join(SESSION_CATALOG);
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                println!("skip: missing {}", path.display());
+                return;
+            }
+        };
+        if o2jam_file::parse_ojn_list(&bytes).is_err() {
+            println!("skip: unparsable {}", path.display());
+            return;
+        }
+        let mut game = o2jam_shell::ScreenGame::new();
+        stage_online_identity(&mut game, None);
+        assert!(
+            !game.music_shop_visible_rows().is_empty(),
+            "online identity pass stages the music-shop board from {SESSION_CATALOG}"
+        );
+        assert!(
+            !game.lanking_visible_songs().is_empty(),
+            "online identity pass stages the lanking board from {SESSION_CATALOG}"
         );
     }
 }
