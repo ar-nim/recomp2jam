@@ -45,3 +45,21 @@ frame 100 wall_ms=65628 screen=planet ...
 frame 101 wall_ms=66629 screen=planet ...
 frame 102 wall_ms=67629 screen=planet ...
 No judged strikes injected; no pair B numbers.
+frame 192 wall_ms=62522 screen=channel state=4e7bddfa9c217d06 content=e33ee2c377a22f3b
+frame 193 wall_ms=62771 screen=channel state=4e7bddfa9c217d06 content=e33ee2c377a22f3b
+frame 194 wall_ms=63021 screen=channel state=4e7bddfa9c217d06 content=e33ee2c377a22f3b
+frame 195 wall_ms=63271 screen=channel state=4e7bddfa9c217d06 content=e33ee2c377a22f3b
+frame 196 wall_ms=63522 screen=channel state=4e7bddfa9c217d06 content=e33ee2c377a22f3b
+frame 197 wall_ms=63771 screen=channel state=4e7bddfa9c217d06 content=e33ee2c377a22f3b
+frame 198 wall_ms=64023 screen=channel state=4e7bddfa9c217d06 content=e33ee2c377a22f3b
+frame 199 wall_ms=64272 screen=channel state=4e7bddfa9c217d06 content=e33ee2c377a22f3b
+frame 200 wall_ms=64522 screen=channel state=4e7bddfa9c217d06 content=e33ee2c377a22f3b
+frame 201 wall_ms=64773 screen=channel state=4e7bddfa9c217d06 content=e33ee2c377a22f3b
+
+## Pair B XTEST attempt
+
+Client parks after channel login timeout:
+`channel login timed out with no server answer; staying in Channel gateway_id=0 channel_id=0`
+No Room/Waiting/Playing reached. Major finding: channel login does not
+complete even with valid token/gateway/channel ids when the channel
+dialog is opened manually.
