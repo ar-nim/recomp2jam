@@ -85,6 +85,36 @@ template) and adds:
 - The thinking level (start medium).
 - The skip budget remaining for this wave (default 3).
 - Exemplar references when the item is part of a batch.
+- Implementer address: address the subagent as `implementer` (never `junior`)
+  throughout the brief and its report.
+
+## Merge-conflict discipline
+
+Retro 2026-11-12: mid-conflict mistakes cost a session. When a merge
+conflicts:
+
+
+- Copy both sides verbatim into the resolution before editing. Never
+  reconstruct a side from memory.
+- Diff each hunk against both parents before staging, one hunk at a
+  time.
+- Stage only the conflicted paths and regenerated files. Never
+  `git add -A` — the working tree may hold someone else's live edits.
+- No `git stash` mid-conflict. Stash hides the conflict state and loses
+  context; resolve in place, or abort and restart.
+- Run `cargo check --workspace` before committing the merge; full gates
+  after.
+
+See `docs/agents/issue-tracker.md` (merge protocol) for the full
+sequence.
+
+## Land-or-rebase timing pointer
+
+Land (merge) only after the full gates
+are green on the implementer's commit; rebase onto the current base
+before starting when behind. Do not let work sit unlanded across a
+wave. If a conflict appears mid-land, follow the merge-conflict
+discipline above; never `git stash`.
 
 ## Audit
 
