@@ -73,8 +73,12 @@ fi
 # 4b. Staleness guard (retro #215): a release binary built before the
 #     current checkout HEAD would let a playtester live-test stale code.
 #     Refuse and ask for a rebuild rather than silently running it.
+#     The timestamp is scoped to binary-relevant paths (#221): HEAD
+#     commits that touch only docs, scripts, or CI must not mark a
+#     cargo-current binary stale. Uncommitted edits are NOT detected
+#     (limitation: the guard reads committed timestamps only).
 BIN="$REPO_ROOT/target/release/recomp2jam"
-HEAD_TS="$(git -C "$REPO_ROOT" log -1 --format=%ct 2>/dev/null || echo 0)"
+HEAD_TS="$(git -C "$REPO_ROOT" log -1 --format=%ct -- crates/ Cargo.toml Cargo.lock 2>/dev/null || echo 0)"
 if [ -x "$BIN" ] && [ "${HEAD_TS:-0}" -gt 0 ]; then
   BIN_TS="$(stat -c %Y "$BIN" 2>/dev/null || echo 0)"
   if [ "${BIN_TS:-0}" -lt "$HEAD_TS" ]; then
