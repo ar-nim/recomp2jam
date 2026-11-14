@@ -296,6 +296,29 @@ impl WindowHandler {
         snapshot.set_left_held(self.left_held);
         snapshot.set_sequence(self.snapshot_sequence);
         self.snapshot_sequence = self.snapshot_sequence.saturating_add(1);
+        // Judged-strike log (ticket #76): each lane-down edge entering
+        // the snapshot is the judged strike's entry into the judgement
+        // arm, stamped at frame delivery. Logged before the drain so the
+        // line order matches the edge order in the snapshot.
+        // Collect lane-down edges first to avoid borrow conflicts.
+        let judged_lanes: Vec<usize> = self
+            .pending_edges
+            .iter()
+            .filter_map(|e| match e {
+                InputEdge::Lane { lane, down: true } => Some(*lane),
+                _ => None,
+            })
+            .collect();
+        if !judged_lanes.is_empty() {
+            if let Some(capture) = self.capture.as_mut() {
+                let wall_ms = capture.state.started.elapsed().as_millis();
+                if let Some(log) = capture.state.log.as_mut() {
+                    for lane in judged_lanes {
+                        Self::append_log_line(log, format_args!("judged {wall_ms} lane {lane}"));
+                    }
+                }
+            }
+        }
         for edge in self.pending_edges.drain(..) {
             snapshot.push_edge(edge);
         }
@@ -824,6 +847,29 @@ mod tests {
         for dump in &dumps {
             assert!(dump.file_name().to_string_lossy().ends_with("-unknown.png"));
         }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn capture_log_records_judged_strikes_on_delivery() {
+        let dir = std::env::temp_dir().join(format!("recomp2jam-judged-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("output root");
+        let log_path = dir.join("input.log");
+        let probe = Rc::new(RefCell::new(InputProbe::default()));
+        let shell = Shell::new(Box::new(probe.clone())).with_capture(super::super::CapturePlan {
+            dir: dir.join("frames"),
+            min_paint_gap: 1,
+            heartbeat_paints: 2,
+            input_log: Some(log_path.clone()),
+        });
+        let mut handler = WindowHandler::new(shell);
+        handler.route_key(KeyCode::KeyS, true);
+        handler.deliver_snapshot();
+        drop(handler);
+        let text = std::fs::read_to_string(&log_path).expect("input log written");
+        assert!(text.contains("key-down KeyS"), "key line: {text}");
+        assert!(text.contains("judged "), "judged line: {text}");
+        assert!(text.contains("lane 0"), "lane number: {text}");
         std::fs::remove_dir_all(&dir).ok();
     }
 
