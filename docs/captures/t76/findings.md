@@ -68,3 +68,11 @@ frame 187 wall_ms=66010 screen=channel state=4e7bddfa9c217d06 content=e33ee2c377
 frame 188 wall_ms=66260 screen=channel state=4e7bddfa9c217d06 content=e33ee2c377a22f3b
 frame 189 wall_ms=66510 screen=channel state=4e7bddfa9c217d06 content=e33ee2c377a22f3b
 frame 190 wall_ms=66760 screen=channel state=4e7bddfa9c217d06 content=e33ee2c377a22f3b
+
+## Verdict
+
+Pair B is blocked on product bug #230 (Channel dialog enter face does not
+transition, online and offline). Server flow works; client stays on
+Channel after clicking the enter face. Pair A waits on the exe sampler spec
+(docs/captures/t76/exe-sampler-spec.md). Rust instrumentation and guard
+are green. No further rig sessions were booted.
