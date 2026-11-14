@@ -70,6 +70,20 @@ if ! rig_check_audio_sink "$AUDIO_POLICY" "${PULSE_SINK:-}"; then
   exit "$RIG_E_AUDIO"
 fi
 
+# 4b. Staleness guard (retro #215): a release binary built before the
+#     current checkout HEAD would let a playtester live-test stale code.
+#     Refuse and ask for a rebuild rather than silently running it.
+BIN="$REPO_ROOT/target/release/recomp2jam"
+HEAD_TS="$(git -C "$REPO_ROOT" log -1 --format=%ct 2>/dev/null || echo 0)"
+if [ -x "$BIN" ] && [ "${HEAD_TS:-0}" -gt 0 ]; then
+  BIN_TS="$(stat -c %Y "$BIN" 2>/dev/null || echo 0)"
+  if [ "${BIN_TS:-0}" -lt "$HEAD_TS" ]; then
+    echo "play-local: release binary is stale (built before checkout HEAD ${HEAD_TS})" >&2
+    echo "play-local: rebuild first: cargo build --release --manifest-path \"$REPO_ROOT/Cargo.toml\"" >&2
+    exit 1
+  fi
+fi
+
 [ "$CHECK_ONLY" = 1 ] && { echo "play-local: preflight OK"; exit 0; }
 
 # 5. Fresh token for the account (t_o2jam_login holds the session guids;
@@ -89,7 +103,6 @@ PY
 
 # 6. Build once, then run. Sound on by default (#120); pass
 # --no-sound in EXTRA for a silent rig.
-BIN="$REPO_ROOT/target/release/recomp2jam"
 [ -x "$BIN" ] || cargo build --release --manifest-path "$REPO_ROOT/Cargo.toml"
 cd "$REPO_ROOT"
 echo "play-local: user-id $USER_ID, token ${TOKEN:0:8}…, memoryer 127.0.0.1:15010"
