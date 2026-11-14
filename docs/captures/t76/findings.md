@@ -25,7 +25,7 @@ Blocked; spec in `docs/captures/t76/exe-sampler-spec.md`.
 `cargo fmt --check`, `cargo clippy -p o2jam-shell --all-targets -- -D warnings`,
 `cargo test -p o2jam-shell` all green (exit 0).
 
-## Pair B retry (2026-11-15)
+## Pair B retry (2026-11-15, unattended)
 
 Client now boots to STATE_PLANET with valid token + gateway/channel ids
 (`--gateway-id 0 --channel-id 0`). Navigation to STATE_PLAYING still
@@ -34,3 +34,14 @@ requires the XTEST sequence from docs/smoke/u1-windowed-online.md
 sequence was not completed in this leg, so no judged strikes were
 injected and no pair B numbers were captured. Instrumentation and
 guard remain green.
+
+
+## Pair B unattended attempt
+
+Command (sanitized Wayland, null sink, valid token):
+`recomp2jam online ... --gateway-id 0 --channel-id 0 --create-room t76 --music-id 757 --no-sound --input-log ...`
+Result: client parks on STATE_PLANET (36 avi frames then planet frames only; 66 planet frames, no channel/room/waiting/playing). Last lines:
+frame 100 wall_ms=65628 screen=planet ...
+frame 101 wall_ms=66629 screen=planet ...
+frame 102 wall_ms=67629 screen=planet ...
+No judged strikes injected; no pair B numbers.
