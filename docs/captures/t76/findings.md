@@ -63,3 +63,8 @@ Client parks after channel login timeout:
 No Room/Waiting/Playing reached. Major finding: channel login does not
 complete even with valid token/gateway/channel ids when the channel
 dialog is opened manually.
+frame 186 wall_ms=65759 screen=channel state=4e7bddfa9c217d06 content=e33ee2c377a22f3b
+frame 187 wall_ms=66010 screen=channel state=4e7bddfa9c217d06 content=e33ee2c377a22f3b
+frame 188 wall_ms=66260 screen=channel state=4e7bddfa9c217d06 content=e33ee2c377a22f3b
+frame 189 wall_ms=66510 screen=channel state=4e7bddfa9c217d06 content=e33ee2c377a22f3b
+frame 190 wall_ms=66760 screen=channel state=4e7bddfa9c217d06 content=e33ee2c377a22f3b
