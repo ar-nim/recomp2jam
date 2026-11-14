@@ -292,6 +292,14 @@ enum Command {
         /// Open the game window (needs a display; headless CI skips it).
         #[arg(long)]
         window: bool,
+        /// Frame-capture directory: one PNG per gated paint (screen
+        /// change or content change, heartbeat-bounded).
+        #[arg(long, requires = "input_log")]
+        frame_dump: Option<String>,
+        /// Applied-event log (one line per routed event plus one
+        /// `frame` line per paint). Test affordance.
+        #[arg(long)]
+        input_log: Option<String>,
         /// Stack the result-screen avatar from this `avatar.opa`.
         #[arg(long)]
         avatar_opa: Option<String>,
@@ -920,6 +928,8 @@ fn run_command(command: Command) -> Result<()> {
             level,
             no_sound,
             window,
+            frame_dump,
+            input_log,
             avatar_opa,
             equip,
             avatar_male,
@@ -944,6 +954,8 @@ fn run_command(command: Command) -> Result<()> {
             level,
             no_sound,
             window,
+            frame_dump,
+            input_log,
             avatar_opa,
             equip,
             avatar_male,
@@ -976,6 +988,8 @@ struct PlayOptions {
     level: usize,
     no_sound: bool,
     window: bool,
+    frame_dump: Option<String>,
+    input_log: Option<String>,
     avatar_opa: Option<String>,
     equip: String,
     avatar_male: bool,
@@ -1057,7 +1071,12 @@ fn run_play(opts: PlayOptions) -> Result<()> {
                 stage_offline_windowed(&mut game);
                 let event_loop = winit::event_loop::EventLoop::new()
                     .map_err(|e| anyhow::anyhow!("event loop failed: {e:?}"))?;
-                o2jam_shell::Shell::new(Box::new(game)).run(event_loop)?;
+                let shell = o2jam_shell::Shell::new(Box::new(game));
+                let shell = match capture_plan(opts.frame_dump.clone(), opts.input_log.clone()) {
+                    Some(plan) => shell.with_capture(plan),
+                    None => shell,
+                };
+                shell.run(event_loop)?;
             }
         }
         return Ok(());
