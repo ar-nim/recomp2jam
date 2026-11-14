@@ -623,6 +623,16 @@ fn paint_channel_row_chrome(frame: &mut Frame<'_>, slot: usize) {
 }
 const CHANNEL_ENTER_TONE: u32 = pack_xrgb(150, 148, 151);
 
+/// Orange CLOSE ink on inactive rows, sampled off the exe
+/// closed rows (`~/scratch/t207/closed-compare.png`: the median of
+/// 1079 glyph pixels is (247,144,40)).
+const CHANNEL_CLOSE_TONE: u32 = pack_xrgb(0xF7, 0x90, 0x28);
+
+/// Dark well behind the CLOSE marking: the exe closed-row face zone
+/// reads near-black (most-common bucket (16,16,16)) where the staged
+/// bar frame-0 well is blank gray.
+const CHANNEL_CLOSE_WELL_TONE: u32 = pack_xrgb(0x10, 0x10, 0x10);
+
 /// Whether a row shows the baked FULL bar: a live row at (or past)
 /// capacity shows the `CH_Back` frame-2 FULL face instead of the
 /// enter button. Zero capacity never reads full — the quiet-server
@@ -882,7 +892,28 @@ fn paint_channel_button(frame: &mut Frame<'_>, slot: usize, w: i32, h: i32) {
     fill_rect(frame, &channel_enter_rect(slot, w, h), CHANNEL_ENTER_TONE);
 }
 
-/// Per-row enter face after the bar: staged [`CHANNEL_ENTER_SPRITE`]
+/// CLOSE marking on an inactive row: a dark well over the staged
+/// face rect with orange `CLOSE` centered in it, per the exe
+/// closed-row capture (`docs/captures/t207/t207-findings.md`
+/// closed-row verdict). No staged CLOSE figure exists — the pinned
+/// 7.55 dialog block names no `CH_Close` sprite, `CH_Back` frames are
+/// normal/etched-입장/FULL, and `CH_Enter` frames are 입장-only
+/// (`docs/channel-fill.md` "Ticket #12 row-art decode") — so the
+/// marking is procedural. The well bevel stays OPEN.
+fn paint_channel_close_marking(frame: &mut Frame<'_>, slot: usize, w: i32, h: i32) {
+    const CLOSE_WORD: &str = "CLOSE";
+    const CLOSE_GLYPH_H: i32 = 12;
+    let rect = channel_enter_rect(slot, w, h);
+    fill_rect(frame, &rect, CHANNEL_CLOSE_WELL_TONE);
+    let word_w = i32::try_from(text_width(CLOSE_WORD)).unwrap_or(0);
+    let x = rect.x + (rect.w as i32 - word_w).max(0) / 2;
+    let y = rect.y + (rect.h as i32 - CLOSE_GLYPH_H).max(0) / 2;
+    draw_text(frame, x, y, CLOSE_WORD, CHANNEL_CLOSE_TONE);
+}
+
+/// Per-row enter face after the bar: the CLOSE marking on inactive
+/// rows (no staged CLOSE figure exists, so it paints procedurally —
+/// see [`paint_channel_close_marking`]), staged [`CHANNEL_ENTER_SPRITE`]
 /// frame 0 for joinable rows, nothing for FULL rows (the baked FULL
 /// bar covers the well), and the procedural plate where no enter art
 /// staged. Faces ride above the bar because the bar frame's face
@@ -891,6 +922,10 @@ fn paint_channel_button(frame: &mut Frame<'_>, slot: usize, w: i32, h: i32) {
 fn paint_channel_face(frame: &mut Frame<'_>, slot: usize, channel: &ChannelState, art: &SceneArt) {
     let w = i32::try_from(frame.w).unwrap_or(0);
     let h = i32::try_from(frame.h).unwrap_or(0);
+    if !channel.active {
+        paint_channel_close_marking(frame, slot, w, h);
+        return;
+    }
     let Some(figure) = art
         .figures
         .get(CHANNEL_ENTER_SPRITE)
@@ -899,9 +934,6 @@ fn paint_channel_face(frame: &mut Frame<'_>, slot: usize, channel: &ChannelState
         paint_channel_button(frame, slot, w, h);
         return;
     };
-    if !channel.active {
-        return;
-    }
     if channel_row_full(channel) {
         return;
     }
@@ -12845,6 +12877,69 @@ mod paint_tests {
         assert!(
             !buf.contains(&green),
             "inactive row paints no count strip at all"
+        );
+    }
+
+    #[test]
+    fn inactive_row_paints_close_marking_over_the_face_well() {
+        // Live caller chain:
+        //   main.rs::run_play -> ScreenGame::paint -> paint_at
+        //   -> ScreenGame::paint_channel -> paint_channel_scene
+        //   -> paint_channel_rows -> paint_channel_face.
+        // Ticket #212: an inactive row paints the CLOSE marking at
+        // the staged face well (dark well + orange CLOSE) instead of
+        // the bar frame's blank gray well. Red while
+        // `paint_channel_face` early-returns on `!active`.
+        let art = SceneArt {
+            placements: Vec::new(),
+            figures: HashMap::from([
+                (
+                    CHANNEL_BAR_SPRITE.to_owned(),
+                    solid_figure(347, 41, [0x1F, 0x00]), // solid blue
+                ),
+                (
+                    CHANNEL_ENTER_SPRITE.to_owned(),
+                    solid_figure(44, 21, [0xE0, 0x7C]),
+                ),
+            ]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_channel_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &[ChannelState {
+                gateway_id: 0,
+                channel_id: 7,
+                capacity: 0,
+                population: 0,
+                active: false,
+            }],
+            0,
+            0,
+            &art,
+            None,
+            None,
+        );
+        let face = channel_enter_rect(0, 800, 600);
+        assert_eq!(
+            buf[face.y as usize * 800 + face.x as usize],
+            CHANNEL_CLOSE_WELL_TONE,
+            "inactive face well carries the CLOSE dark well, not bar ink"
+        );
+        let mut close_inked = 0;
+        for y in face.y..face.y + face.h as i32 {
+            for x in face.x..face.x + face.w as i32 {
+                if near_xrgb(buf[y as usize * 800 + x as usize], CHANNEL_CLOSE_TONE) {
+                    close_inked += 1;
+                }
+            }
+        }
+        assert!(
+            close_inked >= 8,
+            "inactive face well shows orange CLOSE ink, found {close_inked}"
         );
     }
 
