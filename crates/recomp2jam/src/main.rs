@@ -1058,7 +1058,7 @@ fn run_play(opts: PlayOptions) -> Result<()> {
                 // Audio containment: with --no-sound every bank attach
                 // stays on the null sink even when hardware exists.
                 session.set_silent_audio(opts.no_sound);
-                run_windowed_session(session, None)?;
+                run_windowed_session(session, capture_plan(opts.frame_dump.clone(), opts.input_log.clone()))?;
             }
             None => {
                 // Offline walk: the windowed arm stages genuine scene
