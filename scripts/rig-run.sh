@@ -143,6 +143,41 @@ cmd_run() {
   return 0
 }
 
+
+cmd_run_wayland() {
+  local socket="$1" out_dir="$2"; shift 2
+  [ "${1:-}" = "--" ] && shift
+  [ "$#" -ge 1 ] || die "wayland: no binary given after --"
+  [ -n "$socket" ] || die "wayland: no socket given"
+  mkdir -p "$out_dir"
+  : > "$out_dir/claims"
+  export RIG_CLAIMS_FILE="$out_dir/claims"
+  : > "$out_dir/pids"
+
+  # Wayland mode: SET WAYLAND_DISPLAY, unset DISPLAY/WINIT_UNIX_BACKEND.
+  export WAYLAND_DISPLAY="$socket"
+  unset DISPLAY WINIT_UNIX_BACKEND
+  : "${PULSE_SINK:=wine_null}"
+  export PULSE_SINK
+
+  if command -v setsid >/dev/null 2>&1; then
+    WAYLAND_DISPLAY="$socket" setsid "$@" >"$out_dir/client.log" 2>&1 &
+  else
+    WAYLAND_DISPLAY="$socket" "$@" >"$out_dir/client.log" 2>&1 &
+  fi
+  echo "client $! $*" >> "$out_dir/pids"
+
+  {
+    echo "export WAYLAND_DISPLAY='$socket'"
+    echo "unset DISPLAY WINIT_UNIX_BACKEND"
+    echo "export PULSE_SINK='${PULSE_SINK:-wine_null}'"
+  } > "$out_dir/env.sh"
+
+  echo "rig-run: started $1 on wayland socket $socket (pid $(tail -1 "$out_dir/pids" | cut -d' ' -f2))"
+  echo "rig-run: driver env written to $out_dir/env.sh; stop with: scripts/rig-run.sh stop $out_dir"
+  return 0
+}
+
 # --- stop / status ---------------------------------------------------------
 # Each pidfile line: "<tag> <pid> <cmdline-fragment>". Before signalling we
 # verify /proc/<pid>/cmdline still contains the fragment, so PID reuse can
@@ -485,6 +520,7 @@ main() {
   local cmd="${1:-}"; shift || true
   case "$cmd" in
     run)    [ "$#" -ge 3 ] || die "run: expected <display> <out-dir> -- <binary> [args...]"; cmd_run "$@" ;;
+    wayland) [ "$#" -ge 3 ] || die "wayland: expected <socket> <out-dir> -- <binary> [args...]"; cmd_run_wayland "$@" ;;
     stop)   [ "$#" -ge 1 ] || die "stop: expected <out-dir>"; cmd_stop "$1" ;;
     status) [ "$#" -ge 1 ] || die "status: expected <out-dir>"; cmd_status "$1" ;;
     selftest) cmd_selftest ;;
