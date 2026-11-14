@@ -106,3 +106,20 @@ Used by `/wayfinder`. The **map** is a single issue with **child** issues as tic
   the spot. A fragment title or a pipe-prefixed title fails the sanity check.
 - GitHub has NO CLI/API issue deletion. Mistakes: label `to-remove`, the owner
   bulk-deletes via the UI (filter by label).
+
+## Worktree setup (push-proof agent worktrees)
+
+Agent worktrees are created **beside** the main checkout, named
+`/home/arnim/Projects/recomp2jam-wt<N>-v<ticket>` on branch `cb2/tt-<ticket>`
+(or the assigned branch). They symlink `install-root/` and `extracted/` to
+the main checkout's copies (never commit those symlinks).
+
+Immediately after `git worktree add`, run from inside the new worktree:
+
+    scripts/worktree-setup.sh
+
+This sets `remote.origin.pushurl` to `ext::<repo>/scripts/no-push.sh` and
+enables the ext transport locally, so `git push` fails locally with a clear
+message before touching origin. The main checkout is never configured this
+way; `worktree-setup.sh` refuses to run there, keeping the orchestrator's
+push path intact. See retro-queue entry "agent pushed to origin (fix-175)".
