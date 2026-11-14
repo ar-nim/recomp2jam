@@ -24,3 +24,13 @@ Blocked; spec in `docs/captures/t76/exe-sampler-spec.md`.
 
 `cargo fmt --check`, `cargo clippy -p o2jam-shell --all-targets -- -D warnings`,
 `cargo test -p o2jam-shell` all green (exit 0).
+
+## Pair B retry (2026-11-15)
+
+Client now boots to STATE_PLANET with valid token + gateway/channel ids
+(`--gateway-id 0 --channel-id 0`). Navigation to STATE_PLAYING still
+requires the XTEST sequence from docs/smoke/u1-windowed-online.md
+(channel dialog, room, waiting, song select, start, loading). That
+sequence was not completed in this leg, so no judged strikes were
+injected and no pair B numbers were captured. Instrumentation and
+guard remain green.
