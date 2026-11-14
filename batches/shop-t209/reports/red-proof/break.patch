@@ -1,0 +1,15 @@
+diff --git a/crates/o2jam-shell/src/screens/game/mod.rs b/crates/o2jam-shell/src/screens/game/mod.rs
+index fd723a8..8640ec0 100644
+--- a/crates/o2jam-shell/src/screens/game/mod.rs
++++ b/crates/o2jam-shell/src/screens/game/mod.rs
+@@ -4696,7 +4696,9 @@ impl ScreenGame {
+     /// Queued cart buy for the session bridge, if any (5000). One
+     /// body per `BUYITEM` commit; the seam drains it.
+     pub fn take_shop_buy(&mut self) -> Option<SyncItemPurchase> {
+-        self.outbox.take_shop_buy()
++        // RED-PROOF BREAK (#209): the queued 5000 BUYITEM commit is lost.
++        let _ = self.outbox.take_shop_buy();
++        None
+     }
+ 
+     /// Item-shop click through the control-code dispatch

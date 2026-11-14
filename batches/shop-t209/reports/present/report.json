@@ -1,0 +1,132 @@
+{
+  "rows": {
+    "item-shop-browse-buy": {
+      "checks": {
+        "trace:shop-entry-from-room": {
+          "status": "passed",
+          "detail": "applied=2 accepted=1 side=Some(\"shop\") hash=672317363423538015 (2 runs identical)"
+        },
+        "trace:shop-goods-browse-pager": {
+          "status": "passed",
+          "detail": "applied=12 accepted=2 side=Some(\"shop\") hash=14071993421952621406 (2 runs identical)"
+        },
+        "trace:shop-row-cart-buyitem": {
+          "status": "passed",
+          "detail": "applied=8 accepted=2 side=Some(\"shop\") hash=6687841259901729973 (2 runs identical)"
+        },
+        "guard:room_shop_entry_replay_is_deterministic": {
+          "status": "passed",
+          "detail": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 332 filtered out; finished in 0.00s"
+        },
+        "guard:shop_browse_pager_replay_turns_pages_and_holds": {
+          "status": "passed",
+          "detail": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 332 filtered out; finished in 0.00s"
+        },
+        "guard:shop_row_cart_buyitem_replay_commits_the_cart": {
+          "status": "passed",
+          "detail": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 332 filtered out; finished in 0.00s"
+        },
+        "guard:shop_browse_toggles_cart_and_commits_5000": {
+          "status": "passed",
+          "detail": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1099 filtered out; finished in 0.00s"
+        },
+        "capture:shop-native.png": {
+          "status": "passed",
+          "detail": "sha256 a61c12366966972ace8267eeffb4f6c1849a184460ee22a71732f1af6b5fbd15 == pinned"
+        }
+      }
+    },
+    "music-shop-browse-buy": {
+      "checks": {
+        "guard:music_shop_board_paints_catalog_cells_and_pager_at_staged_rects": {
+          "status": "passed",
+          "detail": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1099 filtered out; finished in 0.01s"
+        },
+        "guard:music_shop_board_paints_owned_marks_at_staged_rects": {
+          "status": "passed",
+          "detail": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1099 filtered out; finished in 0.01s"
+        },
+        "guard:music_shop_row_pick_stages_the_cart_and_cart_buy_queues_5010": {
+          "status": "passed",
+          "detail": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1099 filtered out; finished in 0.00s"
+        },
+        "capture:musicshop-native.png": {
+          "status": "passed",
+          "detail": "sha256 621caa264d65bb0270c39e649583b72e56b1e96bf522bf5c1df4234da559d727 == pinned"
+        }
+      }
+    },
+    "myroom-enter-equip": {
+      "checks": {
+        "trace:myroom-bag-slot-equip": {
+          "status": "passed",
+          "detail": "applied=8 accepted=2 side=Some(\"myroom\") hash=17498477000476273470 (2 runs identical)"
+        },
+        "trace:giftbox-claim": {
+          "status": "passed",
+          "detail": "applied=6 accepted=2 side=Some(\"myroom\") hash=17498477000476273470 (2 runs identical)"
+        },
+        "guard:myroom_bag_slot_equip_replay_applies_the_pick": {
+          "status": "passed",
+          "detail": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 332 filtered out; finished in 0.00s"
+        },
+        "guard:giftbox_claim_replay_queues_the_claim": {
+          "status": "passed",
+          "detail": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 332 filtered out; finished in 0.00s"
+        },
+        "guard:myroom_equip_queues_5004_with_derived_slot": {
+          "status": "passed",
+          "detail": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1099 filtered out; finished in 0.00s"
+        },
+        "guard:myroom_gift_claim_queues_5023_for_the_picked_cell": {
+          "status": "passed",
+          "detail": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1099 filtered out; finished in 0.00s"
+        },
+        "guard:myroom_entry_queues_gift_list_fetch": {
+          "status": "passed",
+          "detail": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1099 filtered out; finished in 0.00s"
+        },
+        "capture:myroom-native.png": {
+          "status": "passed",
+          "detail": "sha256 335f63d7021e7d3a8bc6b406bc133d9b08c7236c256b989936127a0c76737bed == pinned"
+        }
+      }
+    },
+    "channel-closed-list": {
+      "checks": {
+        "guard:channel_wire_mirror_matches_the_live_ten_row_list": {
+          "status": "passed",
+          "detail": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 332 filtered out; finished in 0.00s"
+        },
+        "guard:channel_native_paints_the_wire_mirror_at_full_canvas": {
+          "status": "passed",
+          "detail": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 332 filtered out; finished in 0.86s"
+        },
+        "guard:channel_shot_paints_no_fill_under_the_live_list": {
+          "status": "passed",
+          "detail": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 332 filtered out; finished in 0.77s"
+        },
+        "capture:channel-native.png": {
+          "status": "passed",
+          "detail": "sha256 d5f9e9334240e0ac28aeddf25a9d3e65b0b7ff18e10e461753392195ba4885ce == pinned"
+        }
+      }
+    }
+  },
+  "live": {
+    "live-channel-list": {
+      "status": "skipped",
+      "detail": "opt-in only (pass --live)"
+    }
+  },
+  "verdicts": {
+    "item-shop-browse-buy": "passed",
+    "music-shop-browse-buy": "needs_review",
+    "myroom-enter-equip": "needs_review",
+    "channel-closed-list": "needs_review"
+  },
+  "gate": {
+    "failed": 0,
+    "exit": 0
+  }
+}

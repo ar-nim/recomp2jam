@@ -1,0 +1,5 @@
+commit=90970dd
+rustc=rustc 1.99.1 (58cf8f9c3 2026-10-13) (Arch Linux rust 1:1.99.1-2)
+cargo=cargo 1.99.1 (5f94df478 2026-08-27) (Arch Linux rust 1:1.99.1-2)
+python=Python 3.14.10
+locale=LANG=en_SG.UTF-8;LC_CTYPE="en_SG.UTF-8";LC_NUMERIC="en_SG.UTF-8";LC_TIME=en_DK.UTF-8;LC_COLLATE="en_SG.UTF-8";LC_MONETARY="en_SG.UTF-8";LC_MESSAGES="en_SG.UTF-8";LC_PAPER="en_SG.UTF-8";LC_NAME="en_SG.UTF-8";LC_ADDRESS="en_SG.UTF-8";LC_TELEPHONE="en_SG.UTF-8";LC_MEASUREMENT="en_SG.UTF-8";LC_IDENTIFICATION="en_SG.UTF-8";LC_ALL=;

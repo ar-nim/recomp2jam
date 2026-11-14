@@ -1,0 +1,259 @@
+{
+  "batch": "shop-t209",
+  "description": "Shop/MyRoom/channel batch gate: wires #207 reference captures, #208 input traces, and the live-Memoryer leg into one manifest with explicit thresholds. Offline rows run headless (no Xvfb, no window, no OS input); live rows are opt-in (--live) and reported separately as interop evidence.",
+  "platform": "linux-x86_64 headless (snapshot seam + scripted CLI, virtual audio only)",
+  "run_policy": {
+    "audio": "PULSE_SINK must be a null/virtual sink; scripted runs never touch the speakers",
+    "display": "no display claimed or touched (no Xvfb, no window)",
+    "preflight": "scripts/lib/rig-preflight.sh; fail closed on conflicts (exits 10-16)",
+    "isolation": "one out-dir per scenario run under <out>/<stamp>/; preflight claims released at the end",
+    "verdicts": "passed | failed | skipped | needs_review; a skip is never a pass; needs_review never counts as a pass",
+    "gate_exit": "0 iff failed == 0 and preflight passed (needs_review and skipped are loud, not silent)",
+    "toolchain": "recorded per run (cargo/rustc/python3/Memoryer/commit); reproduce from the recorded versions"
+  },
+  "rows": [
+    {
+      "expected": "green row: all checks pass (or the capture skips cleanly without data)",
+      "guards": [
+        {
+          "filter": "room_shop_entry_replay_is_deterministic",
+          "package": "recomp2jam",
+          "target": "--bin recomp2jam"
+        },
+        {
+          "filter": "shop_browse_pager_replay_turns_pages_and_holds",
+          "package": "recomp2jam",
+          "target": "--bin recomp2jam"
+        },
+        {
+          "filter": "shop_row_cart_buyitem_replay_commits_the_cart",
+          "package": "recomp2jam",
+          "target": "--bin recomp2jam"
+        },
+        {
+          "filter": "shop_browse_toggles_cart_and_commits_5000",
+          "package": "o2jam-shell"
+        }
+      ],
+      "id": "item-shop-browse-buy",
+      "input_traces": [
+        {
+          "file": "fixtures/input-trace/shop-entry-from-room.json",
+          "stage": "shop",
+          "scenario": "shop-entry-from-room",
+          "events": 3,
+          "applied": 2,
+          "accepted": 1,
+          "final_side": "shop"
+        },
+        {
+          "file": "fixtures/input-trace/shop-goods-browse-pager.json",
+          "stage": "shop",
+          "scenario": "shop-goods-browse-pager",
+          "events": 14,
+          "applied": 12,
+          "accepted": 2,
+          "final_side": "shop"
+        },
+        {
+          "file": "fixtures/input-trace/shop-row-cart-buyitem.json",
+          "stage": "shop",
+          "scenario": "shop-row-cart-buyitem",
+          "events": 10,
+          "applied": 8,
+          "accepted": 2,
+          "final_side": "shop"
+        }
+      ],
+      "known_open": [
+        "parity Input OPENs are out of this path (filters, search, set-item, gift, ITEMGEM join, cart totals, download); next step per docs/parity/shop.md is a live-shop SendInput sweep, not this row."
+      ],
+      "reference_captures": [
+        {
+          "capture_id": "t207-test-shop-native",
+          "manifest": "docs/captures/t207/item-shop.md",
+          "provenance": "test role, recomp2jam walk (byte-deterministic; re-run verified by t207)",
+          "scene_file": "shop-native.png",
+          "sha256": "a61c12366966972ace8267eeffb4f6c1849a184460ee22a71732f1af6b5fbd15",
+          "side": "shop",
+          "state": "STATE_SHOP (CStateShop) via visit_side(Shop)",
+          "pinned_from": "worktree cb2/tt-209 @90970dd: shots 2026-11-14 (full sha); prefixes equal the t207 pins at cc5ce40 (walk unchanged by the merge)"
+        }
+      ],
+      "scene": "item shop board (STATE_SHOP): browse pages, row->cart, BUYITEM 5000 commit",
+      "status_when_green": "passed"
+    },
+    {
+      "expected": "NEEDS-REVIEW when checks pass: song-DIFF values do not ink (captured gap, docs/parity/musicshop.md OPEN); no music-shop input trace exists (#208 shipped item-shop traces only)",
+      "guards": [
+        {
+          "filter": "music_shop_board_paints_catalog_cells_and_pager_at_staged_rects",
+          "package": "o2jam-shell"
+        },
+        {
+          "filter": "music_shop_board_paints_owned_marks_at_staged_rects",
+          "package": "o2jam-shell"
+        },
+        {
+          "filter": "music_shop_row_pick_stages_the_cart_and_cart_buy_queues_5010",
+          "package": "o2jam-shell"
+        }
+      ],
+      "id": "music-shop-browse-buy",
+      "input_traces": [],
+      "known_open": [
+        "song DIFF values do not visibly ink (mshop-zoom.png crop; docs/parity/musicshop.md OPEN arm).",
+        "No music-shop input trace exists yet: browse->buy is covered by capture + guards only. Next step: author a music-shop trace + staging following the #208 pattern, then promote this row to passed.",
+        "Reference role (7.55 exe) OPEN: no pinned prior exe music-shop capture; entry unmapped."
+      ],
+      "reference_captures": [
+        {
+          "capture_id": "t207-test-musicshop-native",
+          "manifest": "docs/captures/t207/music-shop.md",
+          "provenance": "test role, recomp2jam walk (byte-deterministic; re-run verified by t207)",
+          "scene_file": "musicshop-native.png",
+          "sha256": "621caa264d65bb0270c39e649583b72e56b1e96bf522bf5c1df4234da559d727",
+          "side": "musicshop",
+          "state": "STATE_MSHOP (CStateMShop) via visit_side(MusicShop)",
+          "pinned_from": "worktree cb2/tt-209 @90970dd: shots 2026-11-14 (full sha); prefixes equal the t207 pins at cc5ce40 (walk unchanged by the merge)"
+        }
+      ],
+      "scene": "music shop board (STATE_MSHOP): catalog cells, owned marks, cart, pagers",
+      "status_when_green": "needs_review"
+    },
+    {
+      "expected": "NEEDS-REVIEW when checks pass: entry/gift wire effects (5017/5017 fetch, 5023 claim) stay stub-side until a live sweep; no exe reference capture exists",
+      "guards": [
+        {
+          "filter": "myroom_bag_slot_equip_replay_applies_the_pick",
+          "package": "recomp2jam",
+          "target": "--bin recomp2jam"
+        },
+        {
+          "filter": "giftbox_claim_replay_queues_the_claim",
+          "package": "recomp2jam",
+          "target": "--bin recomp2jam"
+        },
+        {
+          "filter": "myroom_equip_queues_5004_with_derived_slot",
+          "package": "o2jam-shell"
+        },
+        {
+          "filter": "myroom_gift_claim_queues_5023_for_the_picked_cell",
+          "package": "o2jam-shell"
+        },
+        {
+          "filter": "myroom_entry_queues_gift_list_fetch",
+          "package": "o2jam-shell"
+        }
+      ],
+      "id": "myroom-enter-equip",
+      "input_traces": [
+        {
+          "file": "fixtures/input-trace/myroom-bag-slot-equip.json",
+          "stage": "myroom-equip",
+          "scenario": "myroom-bag-slot-equip",
+          "events": 10,
+          "applied": 8,
+          "accepted": 2,
+          "final_side": "myroom"
+        },
+        {
+          "file": "fixtures/input-trace/giftbox-claim.json",
+          "stage": "myroom-gift",
+          "scenario": "giftbox-claim",
+          "events": 8,
+          "applied": 6,
+          "accepted": 2,
+          "final_side": "myroom"
+        }
+      ],
+      "known_open": [
+        "Entry side effects (gift-list fetch, gift claim 5023, entry 5017 queueing) are seam-pinned only; the live sweep is the next step (docs/myroom.md OPEN 1-8).",
+        "Reference role (7.55 exe) OPEN: no pinned prior exe MyRoom capture; entry unmapped."
+      ],
+      "reference_captures": [
+        {
+          "capture_id": "t207-test-myroom-native",
+          "manifest": "docs/captures/t207/myroom.md",
+          "provenance": "test role, recomp2jam walk (byte-deterministic; re-run verified by t207)",
+          "scene_file": "myroom-native.png",
+          "sha256": "335f63d7021e7d3a8bc6b406bc133d9b08c7236c256b989936127a0c76737bed",
+          "side": "myroom",
+          "state": "STATE_MYROOM (0x6A) via visit_side(MyRoom)",
+          "pinned_from": "worktree cb2/tt-209 @90970dd: shots 2026-11-14 (full sha); prefixes equal the t207 pins at cc5ce40 (walk unchanged by the merge)"
+        }
+      ],
+      "scene": "MyRoom overlay (STATE_MYROOM): enter, bag slot->equip (5004), gift-box claim (5023)",
+      "status_when_green": "needs_review"
+    },
+    {
+      "expected": "NEEDS-REVIEW when checks pass: CLOSE marking on inactive rows is missing (#190 fix pending); no fresh exe boot this cycle (pre-net init AV, see t207-findings.md)",
+      "guards": [
+        {
+          "filter": "channel_wire_mirror_matches_the_live_ten_row_list",
+          "package": "recomp2jam",
+          "target": "--bin recomp2jam"
+        },
+        {
+          "filter": "channel_native_paints_the_wire_mirror_at_full_canvas",
+          "package": "recomp2jam",
+          "target": "--bin recomp2jam"
+        },
+        {
+          "filter": "channel_shot_paints_no_fill_under_the_live_list",
+          "package": "recomp2jam",
+          "target": "--bin recomp2jam"
+        }
+      ],
+      "id": "channel-closed-list",
+      "input_traces": [],
+      "known_open": [
+        "Inactive rows keep the bar frame's blank gray well: no CLOSE marking (paint_channel_face returns early for !active; #190 fix: paint the CLOSE marking on inactive rows).",
+        "Reference role: substituted prior exe captures (digits-rig Nov-10) per t207; fresh boot blocked on the pre-net init AV."
+      ],
+      "reference_captures": [
+        {
+          "capture_id": "t207-test-channel-native",
+          "manifest": "docs/captures/t207/channel.md",
+          "provenance": "test role, recomp2jam walk (byte-deterministic); reference role = pinned prior exe captures aim-scroll4-0.png + dialog.png (digits-rig, same gateway shape)",
+          "scene_file": "channel-native.png",
+          "sha256": "d5f9e9334240e0ac28aeddf25a9d3e65b0b7ff18e10e461753392195ba4885ce",
+          "side": "channel dialog over planet",
+          "state": "STATE_CHANNEL dialog, list scrolled to closed rows 5-8, highlight row 0",
+          "pinned_from": "worktree cb2/tt-209 @90970dd: shots 2026-11-14 (full sha); prefixes equal the t207 pins at cc5ce40 (walk unchanged by the merge)"
+        }
+      ],
+      "scene": "channel list dialog: 10-row wire mirror (ids 0-4,9 open 0/100; ids 5-8 closed 0/0 inactive), closed rows paint the empty slot",
+      "status_when_green": "needs_review",
+      "wire_shape": {
+        "active": {
+          "capacity": 0,
+          "channel_id": [
+            5,
+            6,
+            7,
+            8
+          ],
+          "population": 0
+        },
+        "gateway_id": 0,
+        "open": {
+          "capacity": 100,
+          "channel_id": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            9
+          ],
+          "population": 0
+        },
+        "rows": 10
+      }
+    }
+  ],
+  "threshold_notes": "Exact assertions where pinned (trace verdict counts, final sides, guard tests, byte-identical captures on a deterministic walk); 7.55-derived tolerances where rig-measured (live population expected 0 on the isolated rig, recorded always; channel shape ids/flags/capacity exact per the Nov-13 CLI probe).",
+  "ticket": 209
+}
