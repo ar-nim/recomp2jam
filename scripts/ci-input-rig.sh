@@ -91,6 +91,6 @@ kill "$CLIENT_PID" 2>/dev/null || true
 wait "$CLIENT_PID" 2>/dev/null || true
 kill "$XVFB_PID" 2>/dev/null || true
 if [ ! -f "$OUT/input.log" ]; then echo "FAIL: no input log" >&2; exit 1; fi
-if ! grep -qE '^click [0-9]+ [0-9]+$' "$OUT/input.log"; then echo "FAIL: click not logged" >&2; exit 1; fi
-if ! grep -qE '^click-up [0-9]+ [0-9]+$' "$OUT/input.log"; then echo "FAIL: click-up not logged" >&2; exit 1; fi
+if ! grep -qE "click 120 80$" "$OUT/input.log"; then echo "FAIL: click not logged" >&2; exit 1; fi
+if ! grep -qE "click-up 120 80$" "$OUT/input.log"; then echo "FAIL: click-up not logged" >&2; exit 1; fi
 echo "PASS: injected move+click arrived"
