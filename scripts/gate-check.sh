@@ -28,17 +28,7 @@ for arg in "$@"; do
 done
 
 HIDDEN_BACKUP=""
-restore_install_root() {
-    printf 'restore: backup=%s present=%s\n' "$HIDDEN_BACKUP" "$([ -e "$REPO_ROOT/install-root" ] && echo yes || echo no)" >&2
-    if [ -n "$HIDDEN_BACKUP" ] && [ -e "$HIDDEN_BACKUP" ]; then
-        if [ -e "$REPO_ROOT/install-root" ]; then
-            rm -rf "$REPO_ROOT/install-root"
-        fi
-        mv "$HIDDEN_BACKUP" "$REPO_ROOT/install-root"
-    fi
-    HIDDEN_BACKUP=""
-}
-trap restore_install_root EXIT
+trap 'if [ -n "${HIDDEN_BACKUP:-}" ] && [ -e "${HIDDEN_BACKUP:-}" ]; then mv "${HIDDEN_BACKUP}" "$REPO_ROOT/install-root"; fi' EXIT
 
 present_root_existed=0
 if [ -e "$REPO_ROOT/install-root" ]; then present_root_existed=1; fi
@@ -56,11 +46,14 @@ cargo test --workspace
 
 step "cargo test --workspace (install-root hidden)"
 if [ "$present_root_existed" -eq 1 ]; then
-    HIDDEN_BACKUP="$(mktemp -d)/install-root"
+    HIDDEN_BACKUP="$REPO_ROOT/.install-root.gate-hidden"
     mv "$REPO_ROOT/install-root" "$HIDDEN_BACKUP"
 fi
 cargo test --workspace
-restore_install_root
+if [ -n "$HIDDEN_BACKUP" ] && [ -e "$HIDDEN_BACKUP" ]; then
+    mv "$HIDDEN_BACKUP" "$REPO_ROOT/install-root"
+fi
+HIDDEN_BACKUP=""
 
 if [ "$no_push" -eq 1 ]; then
     step "push + verify (SKIPPED: no-push)"
