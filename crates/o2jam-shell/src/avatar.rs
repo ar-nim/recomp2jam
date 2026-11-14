@@ -315,6 +315,13 @@ impl AvatarFigure {
         self.layers.len()
     }
 
+    /// Contiguous body-run lengths in paint order (one per stacked
+    /// body). Exposed for kit-structure diagnostics and guards.
+    #[must_use]
+    pub fn part_lens(&self) -> &[usize] {
+        &self.part_lens
+    }
+
     /// One decoded layer in paint order (`None` past the end).
     /// Number-font bodies decode one layer per digit, so digit
     /// painters index here instead of re-stacking the whole body.
@@ -514,29 +521,24 @@ impl AvatarFigure {
         let left = center_native(box_size.0, seat.w, seat.x);
         let top = center_native(box_size.1, seat.h, seat.y);
         let (origin_x, origin_y) = origin;
-        // Breathing: each stacked body carries its own frame run — a
-        // 12-frame body paints its paint-clock frame, a single-frame
-        // body paints every frame. The old flat `len % 12` gate went
-        // static on mixed kits (ticket #193: the 447-layer live kit
-        // mixes twelve 12-frame bodies with three single-frame
-        // bodies), stacking every frame at once.
-        let breath_frame = avatar_breathing_frame(now_ms);
+        // Breathing: each stacked body carries its own frame run and
+        // paints exactly one frame per paint clock, whatever the run
+        // length (ticket #222 round 2). No run falls through to
+        // painting every layer at once.
+        // Every body run is one breathing body: it carries `run`
+        // frames, and exactly one of them paints for the current paint
+        // clock. The frame index wraps over the run length so a body of
+        // any length selects one pose (no run length falls through to
+        // painting all frames at once).
+        let tick = usize::try_from(now_ms / AVATAR_BREATHING_TICK_MS).unwrap_or(0);
         let mut selected: Vec<&FigureLayer> = Vec::new();
         let mut offset = 0;
         for &run in &self.part_lens {
             let part = &self.layers[offset..offset + run];
-            if run >= AVATAR_BREATHING_FRAME_COUNT
-                && run.is_multiple_of(AVATAR_BREATHING_FRAME_COUNT)
-            {
-                for part_index in 0..run / AVATAR_BREATHING_FRAME_COUNT {
-                    if let Some(layer) =
-                        part.get(part_index * AVATAR_BREATHING_FRAME_COUNT + breath_frame)
-                    {
-                        selected.push(layer);
-                    }
+            if run > 0 {
+                if let Some(layer) = part.get(tick % run) {
+                    selected.push(layer);
                 }
-            } else {
-                selected.extend(part.iter());
             }
             offset += run;
         }
@@ -4096,5 +4098,34 @@ mod avatar_figure_tests {
         assert_eq!(avatar_breathing_frame(12 * 250), 0);
         // determinism: same instant twice
         assert_eq!(avatar_breathing_frame(1000), avatar_breathing_frame(1000));
+    }
+
+    #[test]
+    fn tt222_selection_path_paints_one_frame_per_run() {
+        // Ticket #222 round 2 selection-path guard: a body whose run
+        // length is not a multiple of 12 (here 5) must paint exactly one
+        // frame per paint tick, never all frames stacked. Red-prove by
+        // forcing the stack-all branch: the guard fails (5 nonzero
+        // pixels) and passes again once restored.
+        // Live caller chain: see kitted_figure_breathes_one_frame_per_part.
+        let mut figure = AvatarFigure::default();
+        for frame in 0..5u16 {
+            figure.push_layer(breathing_test_layer(0x0001 + frame, i32::from(frame)));
+        }
+        assert_eq!(figure.len(), 5);
+        let parked = paint_centered_pixels(&figure, 0);
+        let ticked = paint_centered_pixels(&figure, AVATAR_BREATHING_TICK_MS);
+        let nonzero = |buf: &[u32]| buf.iter().filter(|p| **p != 0).count();
+        assert_eq!(
+            nonzero(&parked),
+            1,
+            "non-conforming run must paint one frame"
+        );
+        assert_eq!(
+            nonzero(&ticked),
+            1,
+            "non-conforming run must paint one frame"
+        );
+        assert_ne!(parked, ticked, "the clock advances the selected frame");
     }
 }
