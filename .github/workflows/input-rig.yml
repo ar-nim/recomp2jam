@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config xvfb xdotool
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config xvfb xdotool x11-utils
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --workspace
       - name: Run X11 rig + inject

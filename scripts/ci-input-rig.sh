@@ -5,6 +5,7 @@ OUT="$REPO_ROOT/.ci-rig"
 rm -rf "$OUT"; mkdir -p "$OUT"
 DISPLAY_NUM=":99"
 if ! command -v Xvfb >/dev/null; then echo "FAIL: Xvfb not found" >&2; exit 1; fi
+if ! command -v xdpyinfo >/dev/null; then echo "FAIL: xdpyinfo not found (install x11-utils)" >&2; exit 1; fi
 # Never touch the live session: a leaked WAYLAND_DISPLAY makes winit open
 # the window on the owner's compositor instead of the rig display (seen
 # 2026-11-14: client windows popped onto the live Plasma session).
