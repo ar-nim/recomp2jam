@@ -11950,6 +11950,132 @@ mod game_tests {
     }
 
     #[test]
+    fn tt222_room_breathing_trail_diff() {
+        use crate::avatar::AVATAR_BREATHING_TICK_MS;
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Room);
+        game.load_room_avatar(breathing_test_figure());
+        game.load_scene(Screen::Room, room_avatar_slot_scene(), HashMap::new());
+        let mut buf = vec![0u32; 800 * 600];
+        let mut frames: Vec<Vec<u32>> = Vec::new();
+        for i in 0..4u64 {
+            game.paint_at(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                i * AVATAR_BREATHING_TICK_MS,
+            );
+            frames.push(buf.clone());
+        }
+        for (i, f) in frames.iter().enumerate() {
+            let nonzero: usize = f.iter().filter(|p| **p != 0).count();
+            println!("TT222 frame {} nonzero={}", i, nonzero);
+        }
+        for i in 1..frames.len() {
+            let mut persist = 0;
+            let mut erased = 0;
+            let mut added = 0;
+            let mut minx = 800;
+            let mut maxx = 0;
+            let mut miny = 600;
+            let mut maxy = 0;
+            for y in 0..600usize {
+                for x in 0..800usize {
+                    let a = frames[i - 1][y * 800 + x];
+                    let b = frames[i][y * 800 + x];
+                    if a != 0 && b != 0 {
+                        persist += 1;
+                    }
+                    if a != 0 && b == 0 {
+                        erased += 1;
+                    }
+                    if a == 0 && b != 0 {
+                        added += 1;
+                        minx = minx.min(x);
+                        maxx = maxx.max(x);
+                        miny = miny.min(y);
+                        maxy = maxy.max(y);
+                    }
+                }
+            }
+            println!(
+                "TT222 frame{}->{} persist={} erased={} added={} added_bbox=({},{}..{},{})",
+                i - 1,
+                i,
+                persist,
+                erased,
+                added,
+                minx,
+                miny,
+                maxx,
+                maxy
+            );
+        }
+    }
+
+    #[test]
+    fn tt222_room_breathing_no_stale_figure_pixels_across_ticks() {
+        // Ticket #222 paint-seam guard: a worn breathing figure on a
+        // bare Room board advances frames on the paint clock, and no
+        // stale figure pixels may survive into the next paint. The
+        // frame is cleared to black at paint start (FRAME_CLEAR_COLOR,
+        // pinned by the planet capture), so the old figure pixel is
+        // erased before the new frame is inked; only the static title
+        // ink persists across paints.
+        // Live caller chain:
+        //   main.rs::run_play -> WindowHandler::paint -> Shell::paint_backbuffer
+        //   -> ScreenGame::paint -> ScreenGame::paint_at (frame clear)
+        //   -> paint_room -> paint_lobby_backdrop_live (no fill, art-less)
+        //   -> paint_room_user_panel -> AvatarFigure::paint_visible_centered
+        //   -> avatar_breathing_frame(now_ms).
+        use crate::avatar::AVATAR_BREATHING_TICK_MS;
+        let mut game = ScreenGame::new();
+        walk_to_lobby(&mut game, Screen::Room);
+        game.load_room_avatar(breathing_test_figure());
+        game.load_scene(Screen::Room, room_avatar_slot_scene(), HashMap::new());
+        let mut buf = vec![0u32; 800 * 600];
+        let mut frames: Vec<Vec<u32>> = Vec::new();
+        for i in 0..4u64 {
+            game.paint_at(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                i * AVATAR_BREATHING_TICK_MS,
+            );
+            frames.push(buf.clone());
+        }
+        // Static ink = pixels nonzero in every frame (the title).
+        let static_mask: Vec<bool> = (0..800 * 600)
+            .map(|idx| frames.iter().all(|f| f[idx] != 0))
+            .collect();
+        for i in 1..frames.len() {
+            let stale_figure: usize = (0..800 * 600)
+                .filter(|&idx| frames[i - 1][idx] != 0 && frames[i][idx] != 0 && !static_mask[idx])
+                .count();
+            assert_eq!(
+                stale_figure,
+                0,
+                "stale figure pixels persist across paint {}->{}: {}",
+                i - 1,
+                i,
+                stale_figure
+            );
+            let figure_pixels: usize = (0..800 * 600)
+                .filter(|&idx| frames[i][idx] != 0 && !static_mask[idx])
+                .count();
+            assert_eq!(
+                figure_pixels, 1,
+                "frame {} should carry exactly one figure pixel, got {}",
+                i, figure_pixels
+            );
+        }
+    }
+
+    #[test]
     fn waiting_idle_pulse_arms_while_a_seat_figure_shows() {
         // Ticket #205: Waiting owes the same breathing pulse — a
         // staged seat figure arms it, and the lobby `room_avatar`
