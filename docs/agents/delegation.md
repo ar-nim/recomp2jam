@@ -68,9 +68,11 @@ template instead of a description.
 
 The senior re-runs **every** PASS/FAIL line a junior reports.
 
-- Re-run the gates (`cargo fmt --check`, `cargo clippy --workspace
-  --all-targets -- -D warnings`, `cargo test --workspace`) on the
-  junior's commit, not on the junior's word.
+- Re-run the gates via `scripts/gate-check.sh` (fmt, clippy, both
+  test arms, push, origin-verify) on the junior's commit, not on the
+  junior's word. Equivalent manual form: `cargo fmt --check`,
+  `cargo clippy --workspace --all-targets -- -D warnings`,
+  `cargo test --workspace` (present + hidden install-root arms).
 - Re-run any named guard or test the junior claims green.
 - A junior's "PASS" is a claim, not evidence, until the senior
   reproduces it.
