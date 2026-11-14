@@ -122,8 +122,12 @@ cmd_run() {
     display_up "$display" || die "Xvfb on $display did not come up (see $out_dir/xvfb.log)"
   fi
 
-  DISPLAY="$display" "$@" >"$out_dir/client.log" 2>&1 &
-  echo "client $! $1" >> "$out_dir/pids"
+  if command -v setsid >/dev/null 2>&1; then
+    DISPLAY="$display" setsid "$@" >"$out_dir/client.log" 2>&1 &
+  else
+    DISPLAY="$display" "$@" >"$out_dir/client.log" 2>&1 &
+  fi
+  echo "client $! $*" >> "$out_dir/pids"
 
   {
     echo "export DISPLAY='$display'"
@@ -150,11 +154,76 @@ process_gone() {
   [ "$state" = "Z" ] || [ -z "$state" ]
 }
 
+# Helpers for process-group reaping (issue #219): the launcher pid may have
+# exited while the game lives on in the same process group.
+pgrp_alive() {
+  local pgid="$1" p
+  for p in /proc/[0-9]*; do
+    [ -r "$p/stat" ] || continue
+    [ "$p" = "/proc/$$" ] && continue
+    awk -v g="$pgid" '{ if ($5 == g) exit 0; else exit 1 }' "$p/stat" 2>/dev/null && return 0
+  done
+  return 1
+}
+
+frag_pids() {
+  # print pids whose cmdline contains $1 (excluding this shell + parent)
+  local frag="$1" p pid
+  [ -n "$frag" ] || return 0
+  for p in /proc/[0-9]*; do
+    pid="${p##*/}"
+    [ "$pid" = "$$" ] && continue
+    [ "$pid" = "$PPID" ] && continue
+    [ -r "$p/cmdline" ] || continue
+    if tr '\0' ' ' < "$p/cmdline" 2>/dev/null | grep -qF "$frag"; then
+      echo "$pid"
+    fi
+  done
+}
+
+frag_alive() {
+  local frag="$1"
+  [ -n "$frag" ] || return 1
+  [ -n "$(frag_pids "$frag")" ]
+}
+
+kill_process_group() {
+  local pgid="$1" frag="$2" failures="$3" i pids
+  # Signal whole process group first.
+  kill -- "-$pgid" 2>/dev/null || true
+  kill "$pgid" 2>/dev/null || true
+  pids="$(frag_pids "$frag")"
+  [ -n "$pids" ] && kill $pids 2>/dev/null || true
+  for i in $(seq 1 50); do
+    pgrp_alive "$pgid" || { frag_alive "$frag" || break; }
+    # if pgrp gone but frag survivors remain, break out to escalate
+    if ! pgrp_alive "$pgid" && ! frag_alive "$frag"; then break; fi
+    sleep 0.1
+  done
+  if pgrp_alive "$pgid" || frag_alive "$frag"; then
+    kill -9 -- "-$pgid" 2>/dev/null || true
+    pids="$(frag_pids "$frag")"
+    [ -n "$pids" ] && kill -9 $pids 2>/dev/null || true
+    sleep 0.3
+  fi
+  if pgrp_alive "$pgid" || frag_alive "$frag"; then
+    echo "process client (pgid $pgid) survived SIGKILL" >> "$failures"
+    echo "rig-run: FAILED to stop client (pgid $pgid) — recorded, evidence kept"
+    return 1
+  fi
+  echo "rig-run: stopped client (pgid $pgid)"
+  return 0
+}
+
 kill_recorded() {
   local out_dir="$1" failures="$2" failed=0
   [ -f "$out_dir/pids" ] || die "no pidfile at $out_dir/pids"
   while read -r tag pid frag; do
     [ -n "${pid:-}" ] || continue
+    if [ "$tag" = "client" ]; then
+      if ! kill_process_group "$pid" "$frag" "$failures"; then failed=1; fi
+      continue
+    fi
     if [ -r "/proc/$pid/cmdline" ] && tr '\0' ' ' < "/proc/$pid/cmdline" | grep -qF "$frag"; then
       kill "$pid" 2>/dev/null || true
       for _ in $(seq 1 20); do process_gone "$pid" && break; sleep 0.1; done
