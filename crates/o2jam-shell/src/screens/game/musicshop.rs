@@ -2,7 +2,7 @@
 //! behind the music-shop side screen (#139 cluster 4).
 
 use o2jam_file::OjnListEntry;
-use o2jam_net::play::MusicListAnswer;
+use o2jam_net::play::{MusicListAnswer, MusicListEntry};
 
 use super::super::side::{
     lanking_page_window, lanking_songs, music_shop_rows, shop_page_count, sort_lanking_songs,
@@ -57,6 +57,30 @@ impl MusicShopState {
     pub(crate) fn stage_board(&mut self, answer: MusicListAnswer) {
         self.music_shop_board = Some(answer);
         self.music_shop_page = 0;
+    }
+
+    /// Fold the 5011 acquired-song ids into the fetched-flags board:
+    /// the reply carries the server-authoritative owned list (unlike
+    /// the id-less 5001 item reply), so each id joins the 4031
+    /// entries and its row paints OWNED. Without a staged 4031 board
+    /// the ids seed one with the free flag cleared — no free flag is
+    /// invented. Merged rows carry zeroed note counts: nothing reads
+    /// them, only ids feed the owned check.
+    pub(crate) fn fold_purchased_songs(&mut self, song_ids: &[u16]) {
+        let board = self.music_shop_board.get_or_insert(MusicListAnswer {
+            entries: Vec::new(),
+            free_music: false,
+        });
+        for song_id in song_ids {
+            if !board.entries.iter().any(|entry| entry.id == *song_id) {
+                board.entries.push(MusicListEntry {
+                    id: *song_id,
+                    notes_ex: 0,
+                    notes_nx: 0,
+                    notes_hx: 0,
+                });
+            }
+        }
     }
 
     /// Active song-shop sort (`None`: catalog order).

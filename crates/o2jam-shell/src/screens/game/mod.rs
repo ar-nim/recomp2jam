@@ -4682,13 +4682,21 @@ impl ScreenGame {
     }
 
     /// Fold a successful 5011 music purchase into the shell: the
-    /// single wallet refreshes from the reply words and the cart
-    /// clears against the bought rows. Owned-song persistence stays
-    /// OPEN — like the 5001 cart clear, the shell cannot mint owned
-    /// rows server-authoritatively here; that needs the owned-list
-    /// probe.
+    /// single wallet refreshes from the reply words, the
+    /// server-authoritative acquired ids join the fetched-flags
+    /// board (their rows paint OWNED), and the cart clears against
+    /// the bought rows. Unlike the id-less 5001 item reply, the
+    /// 5011 music list names the owned songs, so no separate
+    /// owned-list probe is needed here.
     pub fn apply_music_purchase_response(&mut self, response: &SyncMusicPurchaseResponse) {
         self.wallet.apply_music_purchase(response);
+        self.music_shop.fold_purchased_songs(
+            &response
+                .music_list
+                .iter()
+                .map(|entry| entry.music_id)
+                .collect::<Vec<_>>(),
+        );
         self.music_shop.music_shop_cart.clear();
         self.music_shop.music_shop_cart_page = 0;
     }
@@ -14841,6 +14849,73 @@ mod game_tests {
         game.click_music_shop(424, 529);
         assert_eq!(game.take_music_buy(), Some(SyncMusicPurchase));
         assert_eq!(game.take_music_buy(), None);
+    }
+
+    #[test]
+    fn music_buy_folds_owned_songs_into_shop_board_and_select() {
+        // Live caller chain:
+        //   main.rs::run_play -> setup_online -> stage_online_identity
+        //   -> ScreenGame::set_song_catalog (the catalog fans out to
+        //   the select table and both boards) -> ScreenGame::click_music_shop
+        //   (the cart BUYITEM queues the pinned 5010)
+        //   -> OnlineSession::paint -> flush_music_buy (5010 send)
+        //   -> poll_music_buy -> drain_music_buy (5011)
+        //   -> ScreenGame::apply_music_purchase_response
+        //   -> MusicShopState::fold_purchased_songs (board)
+        //   + WalletState::apply_music_purchase (wallet).
+        //   Readouts: music_shop_visible_rows (OWNED caption) + select_songs.
+        // Tier 0 seam: proves the fold at the seam; the Tier 2 gateway
+        // guard proves the 5010/5011 wire ride.
+        use super::super::side::music_shop_buy_caption;
+        use o2jam_net::shop::MusicEntry;
+
+        let mut game = ScreenGame::new();
+        walk_to_waiting(&mut game);
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&lanking_record(757, 124.0, "First", "Band"));
+        blob.extend_from_slice(&lanking_record(758, 130.0, "Second", "Set"));
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_song_catalog(&entries);
+        game.stage_music_shop_board(o2jam_net::play::MusicListAnswer {
+            entries: Vec::new(),
+            free_music: false,
+        });
+        game.music_shop_cart_push(757);
+        assert_eq!(game.music_shop_cart(), vec![757]);
+        assert!(game
+            .music_shop_visible_rows()
+            .iter()
+            .map(music_shop_buy_caption)
+            .all(|caption| caption.is_empty()));
+
+        game.apply_music_purchase_response(&SyncMusicPurchaseResponse {
+            gem: 1000,
+            point: 250,
+            o2_cash: 5000,
+            music_cash: 120,
+            item_cash: 340,
+            cash_point: 56,
+            music_list: vec![MusicEntry {
+                music_id: 757,
+                day: 0,
+                month: 0,
+                year: 0,
+                hour: 0,
+                minute: 0,
+            }],
+            gift_boxes_raw: Vec::new(),
+            free_pass_extension_days: 0,
+        });
+
+        assert!(game.music_shop_cart().is_empty());
+        assert!(game.select_songs().iter().any(|song| song.song_id == 757));
+        let owned: Vec<u32> = game
+            .music_shop_visible_rows()
+            .iter()
+            .filter(|row| music_shop_buy_caption(row) == "OWNED")
+            .map(|row| row.song.song_id)
+            .collect();
+        assert_eq!(owned, vec![757]);
     }
 
     #[test]

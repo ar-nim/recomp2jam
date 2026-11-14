@@ -3537,8 +3537,11 @@ mod session_tests {
         //   OnlineSession::paint (GameLoop, the windowed frame entry
         //   main.rs::run_play drives) -> flush_music_buy (5010 send)
         //   -> poll_music_buy -> drain_music_buy
-        //   -> ScreenGame::apply_music_purchase_response -> WalletState::apply_music_purchase.
-        //   Readouts: ScreenGame::shop_gem_caption + ScreenGame::myroom_money_captions.
+        //   -> ScreenGame::apply_music_purchase_response
+        //   -> MusicShopState::fold_purchased_songs (board)
+        //   + WalletState::apply_music_purchase (wallet).
+        //   Readouts: ScreenGame::shop_gem_caption + ScreenGame::myroom_money_captions
+        //   + music_shop_visible_rows (OWNED) + ScreenGame::select_songs.
         // Tier 2 scripted gateway. Synthetic catalogs only: no archives read (CI-safe).
         use o2jam_net::shop::{MusicEntry, SyncMusicPurchaseResponse};
         use o2jam_render::Rect;
@@ -3582,7 +3585,10 @@ mod session_tests {
 
         let blob = select_catalog_blob();
         let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
-        game.set_music_shop_catalog(&entries);
+        // Stage through the live-boot entry (stage_online_identity /
+        // stage_session_catalog fan the same parse out to the select
+        // table and both boards), never the shop-only setter.
+        game.set_song_catalog(&entries);
         let area = |code: u32, x: i32, y: i32, w: u32, h: u32| ScenePlacement {
             id: String::new(),
             code,
@@ -3612,6 +3618,21 @@ mod session_tests {
 
         assert!(session.game.music_shop_cart().is_empty());
         assert_eq!(session.game.shop_gem_caption(), "GEM 1000");
+        // The bought song joins the owned board (its shop row paints
+        // OWNED) and stays in the song-select catalog.
+        assert!(session
+            .game
+            .select_songs()
+            .iter()
+            .any(|song| song.song_id == 757));
+        let owned: Vec<u32> = session
+            .game
+            .music_shop_visible_rows()
+            .iter()
+            .filter(|row| row.listed)
+            .map(|row| row.song.song_id)
+            .collect();
+        assert_eq!(owned, vec![757]);
         let myroom_music = session
             .game
             .myroom_money_captions()
