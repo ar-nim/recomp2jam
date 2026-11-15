@@ -40,6 +40,12 @@ Drive the full planet-to-waiting path with control ids and staged rect
 centers, so no hand-read coords remain and two consecutive runs produce
 the identical scene sequence (#239).
 
+Drive every A/B pair from one shared input trace (`recomp2jam-input-v1`:
+ordered press/release events, song-position clock for gameplay,
+monotonic clock for menus). Record the trace ID in both manifests and
+compare only on matching IDs: what is pressed and where the pointer is
+changes what renders, so mismatched stimuli void the pixels (#245).
+
 ## Number bar
 
 Every latency or budget figure carries sample count and build profile.
