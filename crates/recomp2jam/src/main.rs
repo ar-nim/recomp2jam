@@ -1067,6 +1067,22 @@ fn run_play(opts: PlayOptions) -> Result<()> {
                 // Audio containment: with --no-sound every bank attach
                 // stays on the null sink even when hardware exists.
                 session.set_silent_audio(opts.no_sound);
+                // Boot already logged into the requested channel
+                // (setup_online with gateway+channel ids), so mark
+                // residency now: a later face press replays locally
+                // instead of re-sending a login the server ignores
+                // on an occupied session (ticket #230).
+                if let (Some(gw), Some(ch)) =
+                    (opts.online_gateway_id, opts.online_channel_id)
+                {
+                    session.set_resident_channel(o2jam_net::ChannelState {
+                        gateway_id: gw as u16,
+                        channel_id: ch as u16,
+                        capacity: 0,
+                        population: 0,
+                        active: true,
+                    });
+                }
                 run_windowed_session(
                     session,
                     capture_plan(opts.frame_dump.clone(), opts.input_log.clone()),
