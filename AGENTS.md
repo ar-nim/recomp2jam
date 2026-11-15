@@ -23,6 +23,7 @@ Pick one branch:
   `docs/progress.md`. Fresh worktree? Symlink `install-root/` first:
   archives resolve from the build dir, so without it the client
   silently paints fallbacks (guard: `scripts/verify-shots.sh`).
+- Rig procedure → `docs/rig-runbook.md` (single home for rig lore).
 - Implementing → invoke `/skill:clean-code` and hold its 10/10:
   intent-revealing names, small functions, scenario-named tests.
 
