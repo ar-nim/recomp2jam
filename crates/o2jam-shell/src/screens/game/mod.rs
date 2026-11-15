@@ -2640,6 +2640,16 @@ impl ScreenGame {
             .map(|room| room.number)
     }
 
+    /// Room title under a native click, if any row covers the point.
+    /// The resident-room check matches on title: the joined snapshot
+    /// this client holds carries no wire id (ticket #231).
+    #[must_use]
+    pub fn room_title_at(&self, x: i32, y: i32) -> Option<&str> {
+        self.room_index_at(x, y)
+            .and_then(|index| self.rooms.get(index))
+            .map(|room| room.title.as_str())
+    }
+
     /// Staged room-panel click: file-order panel index covering
     /// (`x`, `y`) (`None` while no bound panel covers the point).
     fn room_panel_click(&self, x: i32, y: i32) -> Option<usize> {

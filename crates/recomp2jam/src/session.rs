@@ -433,6 +433,15 @@ pub struct OnlineSession {
     /// Coordinates of the resident-channel face press that was replayed
     /// locally, so only its matching release is swallowed.
     resident_press: Option<(i32, i32)>,
+    /// Title of the room the session currently occupies (set on a
+    /// resolved join or boot create-and-join, cleared on leave or
+    /// timeout). A swallowed row press naming this room replays
+    /// locally instead of re-sending a join the server ignores
+    /// (duplicate join of an occupied room; ticket #231).
+    resident_room: Option<String>,
+    /// Coordinates of the resident-room row press that was replayed
+    /// locally, so only its matching release is swallowed.
+    resident_room_press: Option<(i32, i32)>,
     /// Live room join (`None` while no Confirm/press join is in
     /// flight; the per-frame [`Self::poll_room_join`] owns it).
     join_attempt: Option<RoomJoinAttempt>,
@@ -507,6 +516,8 @@ impl OnlineSession {
             login_attempt: None,
             resident_channel: None,
             resident_press: None,
+            resident_room: None,
+            resident_room_press: None,
             join_attempt: None,
             select_attempt: None,
             shop_buy_attempt: None,
@@ -700,6 +711,7 @@ impl OnlineSession {
     /// session joined directly and mirrors the waiting-room shape
     /// `join_pending_room` stages for guests.
     pub fn stage_hosted_room(&mut self, room: JoinedRoom) -> &mut Self {
+        self.resident_room = Some(room.title.clone());
         self.joined_room = Some(room.clone());
         self.game.set_joined_room(room);
         self.joined_waiting = true;
@@ -1619,6 +1631,7 @@ impl OnlineSession {
     /// originating input — the old synchronous Confirm shape,
     /// deferred to the poll.
     fn resolve_room_join(&mut self, room: JoinedRoom, origin: EntryOrigin) {
+        self.resident_room = Some(room.title.clone());
         self.joined_room = Some(room.clone());
         self.game.set_joined_room(room);
         self.joined_waiting = true;
@@ -2020,6 +2033,7 @@ impl OnlineSession {
         }
         self.clear_resident_channel();
         self.resident_press = None;
+        self.resident_room = None;
         if let Err(source) = self.gateway.send_frame(Request::ChannelLogout.id(), &[]) {
             tracing::warn!(%source, "channel logout send failed");
         }
@@ -2710,7 +2724,27 @@ impl OnlineSession {
             return false;
         }
         if self.game.screen() == Screen::Room {
+            // Swallow only the release matching a replayed resident row
+            // press; other releases pass through.
+            if let InputEdge::PointerUp { .. } = *edge {
+                if self.resident_room_press == Some((x, y)) {
+                    self.resident_room_press = None;
+                    return true;
+                }
+                return false;
+            }
             if let Some(number) = self.game.room_number_at(x, y) {
+                // Resident room: replay locally instead of re-sending
+                // a join the server ignores on an occupied room
+                // (ticket #231); the wire path stays for the rest.
+                if let Some(title) = self.game.room_title_at(x, y) {
+                    if self.resident_room.as_deref() == Some(title) {
+                        self.resident_room_press = Some((x, y));
+                        self.game.ingest_snapshot(&InputSnapshot::click_at(x, y));
+                        return true;
+                    }
+                }
+                self.set_pending_room_join(number, "");
                 self.set_pending_room_join(number, "");
                 // Eaten: the game must not advance before the snapshot
                 // stages — the poll replays this press once it does.
@@ -3945,6 +3979,53 @@ mod session_tests {
             session.game.screen(),
             Screen::Room,
             "resident face press enters Room with no wire round trip"
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn tt231_resident_room_press_replays_without_wire() {
+        // Ticket #231: a row press naming the resident room replays
+        // locally with no join on the wire. The resident row press at
+        // the fallback band (400, 154) must reach Waiting while the
+        // server sees zero frames (read with a timeout: any send fails
+        // the test instead of hanging it).
+        use o2jam_net::RoomListEntry;
+        use std::io::Read;
+        let (mut session, server) = room_session(|mut stream| {
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut header = [0u8; 4];
+            assert!(
+                stream.read_exact(&mut header).is_err(),
+                "resident room press sent a frame on the wire"
+            );
+        });
+        session.game.set_rooms(vec![RoomListEntry {
+            number: 7,
+            state_code: 1,
+            title: "Lobby".to_owned(),
+            has_password: false,
+            music_id: 0,
+            difficulty: 0,
+            key_mode: 2,
+            game_mode: 0,
+            speed: 1,
+            capacity: 8,
+            user_count: 5,
+            min_level: 0,
+            max_level: 0,
+            skills: vec![],
+            premium: false,
+            room_type: 0,
+        }]);
+        session.resident_room = Some("Lobby".to_owned());
+        session.ingest_snapshot(&InputSnapshot::click_at(400, 154));
+        assert_eq!(
+            session.game.screen(),
+            Screen::Waiting,
+            "resident room press enters Waiting with no wire round trip"
         );
         server.join().unwrap();
     }
