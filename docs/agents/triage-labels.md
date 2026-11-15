@@ -54,6 +54,11 @@ role (`ready-for-agent`, `ready-for-human`, `needs-info`, `wontfix`), and
 sizes the acceptance. An issue that is not yet triaged is not worked, however
 small it looks.
 
+Owner decision 2026-11-16: an exe behavior mismatch is a Bug, not a
+question and not a feature request. Where the exe is the behavior
+oracle and our client diverges, file it as Bug with the exe evidence
+required in acceptance.
+
 Two recorded exceptions, both with the triage record visible on the tracker:
 
 - Wayfinder map tickets carry `wayfinder:` labels and are triaged by the map
