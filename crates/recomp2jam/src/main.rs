@@ -579,6 +579,15 @@ fn run_online(opts: OnlineCli) -> Result<()> {
     // --no-sound so they never reach the speakers; the default
     // plays live.
     session.set_silent_audio(opts.no_sound);
+    if let Some((gw, ch)) = opts.gateway_id.zip(opts.channel_id) {
+        session.set_resident_channel(o2jam_net::ChannelState {
+            gateway_id: gw as u16,
+            channel_id: ch as u16,
+            capacity: 0,
+            population: 0,
+            active: true,
+        });
+    }
     if let Some(step_ms) = opts.fixed_clock {
         session.game_mut().enable_fixed_clock(step_ms);
     }
