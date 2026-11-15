@@ -1072,9 +1072,7 @@ fn run_play(opts: PlayOptions) -> Result<()> {
                 // residency now: a later face press replays locally
                 // instead of re-sending a login the server ignores
                 // on an occupied session (ticket #230).
-                if let (Some(gw), Some(ch)) =
-                    (opts.online_gateway_id, opts.online_channel_id)
-                {
+                if let (Some(gw), Some(ch)) = (opts.online_gateway_id, opts.online_channel_id) {
                     session.set_resident_channel(o2jam_net::ChannelState {
                         gateway_id: gw as u16,
                         channel_id: ch as u16,
