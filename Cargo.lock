@@ -711,6 +711,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "input-drive"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "o2jam-render",
+ "o2jam-shell",
+ "x11rb",
+]
+
+[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2610,6 +2620,7 @@ name = "wl-smoke-compositor"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "input-drive",
  "tempfile",
  "wayland-backend",
  "wayland-protocols",

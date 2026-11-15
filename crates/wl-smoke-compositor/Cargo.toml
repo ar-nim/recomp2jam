@@ -10,6 +10,7 @@ publish = false
 
 [dependencies]
 anyhow.workspace = true
+input-drive = { path = "../input-drive" }
 tempfile = "3"
 wayland-backend = "0.3"
 wayland-protocols = { version = "0.32", features = ["server"] }

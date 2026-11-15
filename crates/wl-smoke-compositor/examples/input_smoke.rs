@@ -1,35 +1,20 @@
 //! Headless pointer-injection probe — the input-routing arm of the #118
 //! red-green (Refs: #126).
 //!
-//! The #118 no-input leg is RESOLVED: two code defects, no environment
-//! fault — the frame-callback gate (`7c3fcfd`) and the session's
-//! GameLoop forwarding gap (`ea926c1`). This probe guards the whole
-//! class: phase 1 asserts the click routes (window layer), phase 2
-//! asserts the game ACTS on it (an emblem click enters Channel), which
-//! is the arm that bites on a forwarding regression. The fixture *is* the compositor, so it
-//! sends the protocol-level wire sequence of a real click
-//! (`wl_pointer.enter` → `motion` → `button` down/up → `leave`) directly
-//! into the client. No KWin, no uinput, no XTEST, no seat — the
-//! environment is bypassed by construction:
+//! The gesture now comes from the `input-drive` seam (ticket #127): the
+//! harness drains one [`ScriptedSource`] and translates each frozen
+//! snapshot into backend injection — fixture wire events on Wayland,
+//! XTEST on X11. The game freezes the edges again in
+//! `WindowHandler::deliver_snapshot`, sweeps them via
+//! `GameLoop::ingest_snapshot`, then paints. The verdict still reads
+//! the game's input log in both arms.
 //!
-//! - A `click x y` line in the game's input log proves the full client
-//!   chain (winit Wayland backend → `CursorMoved`/`MouseInput` →
-//!   `WindowHandler` routing → game dispatch). Client routing broken ⇒
-//!   FAIL, the guard bites.
-//! - Green here plus red live isolates the environment path as the
-//!   fault (see `docs/input-testing-matrix.md`).
+//! Phase 1 (click routes to the input log) must stay green.
+//! Phase 2 (gear click repaints the planet) must stay green.
+//! Evidence of the contract: `crates/o2jam-shell/src/window.rs`
+//! `deliver_snapshot` log lines (`click`, `click-up`).
 //!
-//! The probe runs in the fixture's normal callback-flow regime: input
-//! routing does not involve the frame-callback gate.
-//!
-//! Observed game log contract (crates/o2jam-shell/src/window.rs): the log
-//! records `event <wall_ms> click <x> <y>` on the press edge and
-//! `event <wall_ms> click-up <x> <y>` on release. Motion routes to the
-//! game as hover but is deliberately NOT logged (it would flood the
-//! trace), so the PASS assertion is the click line only — a paint or
-//! content reaction to motion is not required or expected.
-//!
-//! Usage: `input_smoke [GAME-BINARY]`.
+//! Usage: `input_smoke [--backend wayland|x11|auto] [GAME-BINARY]`.
 //! Exit codes: 0 = verdict PASS, 1 = verdict FAIL, 2 = harness error.
 
 use std::fs;
@@ -37,6 +22,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
+use input_drive::{InputBackend, InputEdge, InputSnapshot, SnapshotSource};
 use wl_smoke_compositor::driver;
 use wl_smoke_compositor::{Compositor, FrameCallbackPolicy, PointerEvent};
 
@@ -47,6 +33,8 @@ const CLICK_HOLD: Duration = Duration::from_millis(40);
 const CLICK_WAIT: Duration = Duration::from_secs(10);
 /// The pure-motion control window: no click line may appear in it.
 const MOTION_CONTROL_WINDOW: Duration = Duration::from_secs(1);
+/// Linux input event code for the left mouse button.
+const LEFT_BUTTON: u32 = 0x110;
 
 fn main() {
     let code = match run() {
@@ -60,8 +48,109 @@ fn main() {
 }
 
 fn run() -> Result<i32> {
-    let mut args = std::env::args().skip(1);
-    let game_binary = driver::resolve_game_binary(args.next().as_deref())?;
+    let (backend_flag, game_arg) = parse_args(std::env::args().skip(1));
+    let backend = match backend_flag.as_deref() {
+        None | Some("auto") => select_auto(),
+        Some(flag) => InputBackend::from_flag(flag)
+            .with_context(|| format!("unknown --backend '{flag}' (want wayland|x11|auto)"))?,
+    };
+    match backend {
+        InputBackend::WaylandFixture => run_wayland(game_arg.as_deref()),
+        #[cfg(target_os = "linux")]
+        InputBackend::X11Xvfb => run_x11(game_arg.as_deref()),
+        #[cfg(not(target_os = "linux"))]
+        InputBackend::X11Xvfb => bail!("the x11 arm needs Linux (self-spawned Xvfb)"),
+    }
+}
+
+/// Explicit `--backend` wins; without one, `WAYLAND_DISPLAY` selects
+/// the fixture arm, else `DISPLAY` selects X11, else the fixture arm
+/// (it needs no display at all).
+fn select_auto() -> InputBackend {
+    input_drive::auto_backend().unwrap_or(InputBackend::WaylandFixture)
+}
+
+fn parse_args(args: impl Iterator<Item = String>) -> (Option<String>, Option<String>) {
+    let mut backend = None;
+    let mut game = None;
+    let mut pending_backend = false;
+    for arg in args {
+        if pending_backend {
+            backend = Some(arg);
+            pending_backend = false;
+        } else if arg == "--backend" {
+            pending_backend = true;
+        } else if let Some(flag) = arg.strip_prefix("--backend=") {
+            backend = Some(flag.to_owned());
+        } else if game.is_none() {
+            game = Some(arg);
+        }
+    }
+    (backend, game)
+}
+
+/// One frozen snapshot as fixture wire events: pointer motion first,
+/// then one button event per pointer edge. Enter/leave stay with the
+/// caller (one enter per gesture, one leave at the end). Keyboard
+/// edges have no fixture path (OPEN-1) and are skipped.
+fn wire_events_for(snapshot: &InputSnapshot) -> Vec<PointerEvent> {
+    let mut events = Vec::new();
+    if let Some((x, y)) = snapshot.pointer() {
+        events.push(PointerEvent::Motion {
+            x: f64::from(x),
+            y: f64::from(y),
+        });
+    }
+    for edge in snapshot.edges() {
+        match edge {
+            InputEdge::PointerDown { .. } => events.push(PointerEvent::Button {
+                button: LEFT_BUTTON,
+                pressed: true,
+            }),
+            InputEdge::PointerUp { .. } => events.push(PointerEvent::Button {
+                button: LEFT_BUTTON,
+                pressed: false,
+            }),
+            _ => {}
+        }
+    }
+    events
+}
+
+/// Inject one snapshot's wire events, holding before each release so
+/// the client sees the press before the release.
+fn inject_snapshot(compositor: &mut Compositor, snapshot: &InputSnapshot) -> Result<()> {
+    for event in wire_events_for(snapshot) {
+        if matches!(event, PointerEvent::Button { pressed: false, .. }) {
+            std::thread::sleep(CLICK_HOLD);
+        }
+        compositor.inject_pointer(event);
+        // Flush each step so the client sees motion before the button,
+        // and the press before the release.
+        compositor.turn()?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn run_x11(game_arg: Option<&str>) -> Result<i32> {
+    let game_binary = driver::resolve_game_binary(game_arg)?;
+    let scratch = tempfile::tempdir().context("create scratch dir")?;
+    let report = input_drive::x11::run_probe(&game_binary, scratch.path())?;
+    if !report.click_routed {
+        eprintln!("input-smoke: verdict=FAIL (x11) click never routed to the input log");
+        return Ok(1);
+    }
+    if !report.game_reacted {
+        eprintln!("input-smoke: verdict=FAIL (x11) click routed but the planet never repainted");
+        return Ok(1);
+    }
+    println!("input-smoke: verdict=PASS (x11) routed and the planet repainted");
+    Ok(0)
+}
+
+fn run_wayland(game_arg: Option<&str>) -> Result<i32> {
+    let game_binary = driver::resolve_game_binary(game_arg)?;
 
     let scratch = tempfile::tempdir().context("create scratch dir")?;
     let socket_name = format!("wl-smoke-input-{}", std::process::id());
@@ -101,22 +190,59 @@ fn run() -> Result<i32> {
         "input-smoke: first paint + pointer bound; toplevel center ({center_x:.0}, {center_y:.0})"
     );
 
+    // The case both Linux arms drive: silent control motion, center
+    // click, gear hover, gear click.
+    let mut script = input_drive::probe_gesture(
+        (center_x.round() as i32, center_y.round() as i32),
+        (729, 580),
+    );
+    let control = script.snapshot();
+    let center_click = script.snapshot();
+    let gear_hover = script.snapshot();
+    let gear_click = script.snapshot();
+    assert!(
+        control.edges().is_empty(),
+        "the scripted control must carry no edges"
+    );
+    assert_eq!(
+        center_click.edges().len(),
+        2,
+        "the scripted click must freeze down+up in one frame"
+    );
+
     // Control: one pure motion must NOT produce a click line (the game's
     // log contract: motion routes as hover, stays silent). Any click
     // line here means the injection misfired before the click.
-    inject_motion_control(&mut compositor, center_x, center_y, &input_log)?;
+    compositor.inject_pointer(PointerEvent::Enter {
+        x: control.pointer().map_or(center_x, |(x, _)| f64::from(x)),
+        y: control.pointer().map_or(center_y, |(_, y)| f64::from(y)),
+    });
+    compositor.turn()?;
+    inject_snapshot(&mut compositor, &control)?;
+    let control_end = Instant::now() + MOTION_CONTROL_WINDOW;
+    while Instant::now() < control_end {
+        compositor.turn()?;
+        if let Some((x, y)) = latest_click_line(&input_log)? {
+            bail!(
+                "control motion produced a click line ({x}, {y}); injection misfired before the click"
+            );
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    compositor.inject_pointer(PointerEvent::Leave);
+    compositor.turn()?;
+    println!("input-smoke: control motion silent (no click line), as the log contract requires");
 
     // The click: enter + motion + down, hold, up + leave — the exact
     // sequence a human click produces on the wire.
-    for event in PointerEvent::click_at(center_x, center_y) {
-        if matches!(event, PointerEvent::Button { pressed: false, .. }) {
-            std::thread::sleep(CLICK_HOLD);
-        }
-        compositor.inject_pointer(event);
-        // Flush each step so the client sees enter before the button,
-        // and the press before the release.
-        compositor.turn()?;
-    }
+    compositor.inject_pointer(PointerEvent::Enter {
+        x: center_x,
+        y: center_y,
+    });
+    compositor.turn()?;
+    inject_snapshot(&mut compositor, &center_click)?;
+    compositor.inject_pointer(PointerEvent::Leave);
+    compositor.turn()?;
 
     let routed = wait_for_click_line(&mut compositor, &input_log, CLICK_WAIT)?;
     let verdict = match routed {
@@ -135,22 +261,14 @@ fn run() -> Result<i32> {
             // Settle hover first: sweep the pointer onto the gear so the
             // hover repaint happens BEFORE the settled hash; then the
             // click's required change can only be the dialog.
-            for event in [
-                PointerEvent::Enter { x: 729.0, y: 580.0 },
-                PointerEvent::Motion { x: 729.0, y: 580.0 },
-            ] {
-                compositor.inject_pointer(event);
-                compositor.turn()?;
-            }
+            compositor.inject_pointer(PointerEvent::Enter { x: 729.0, y: 580.0 });
+            compositor.turn()?;
+            inject_snapshot(&mut compositor, &gear_hover)?;
             std::thread::sleep(Duration::from_millis(1000));
             let settled = last_content_hash(&input_log, "planet");
-            for event in PointerEvent::click_at(729.0, 580.0) {
-                if matches!(event, PointerEvent::Button { pressed: false, .. }) {
-                    std::thread::sleep(CLICK_HOLD);
-                }
-                compositor.inject_pointer(event);
-                compositor.turn()?;
-            }
+            inject_snapshot(&mut compositor, &gear_click)?;
+            compositor.inject_pointer(PointerEvent::Leave);
+            compositor.turn()?;
             let reacted = wait_for_content_change(
                 &mut compositor,
                 &input_log,
@@ -210,48 +328,6 @@ fn wait_for_paint_and_pointer(
     )
 }
 
-/// Inject one motion away from the center and assert the game stays
-/// silent about clicks for the control window: motion alone routes as
-/// hover and never logs (documented contract), and the PASS criterion
-/// must not depend on any motion-driven paint reaction.
-fn inject_motion_control(
-    compositor: &mut Compositor,
-    center_x: f64,
-    center_y: f64,
-    input_log: &Path,
-) -> Result<()> {
-    // Away from the center so a mis-tracked press position would show
-    // up in the coords of any wrongly logged click. Enter first: a bare
-    // motion before enter is off-protocol and clients may ignore it.
-    for event in [
-        PointerEvent::Enter {
-            x: center_x + 37.0,
-            y: center_y - 23.0,
-        },
-        PointerEvent::Motion {
-            x: center_x + 37.0,
-            y: center_y - 23.0,
-        },
-    ] {
-        compositor.inject_pointer(event);
-        compositor.turn()?;
-    }
-    let control_end = Instant::now() + MOTION_CONTROL_WINDOW;
-    while Instant::now() < control_end {
-        compositor.turn()?;
-        if let Some((x, y)) = latest_click_line(input_log)? {
-            bail!(
-                "control motion produced a click line ({x}, {y}); injection misfired before the click"
-            );
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    compositor.inject_pointer(PointerEvent::Leave);
-    compositor.turn()?;
-    println!("input-smoke: control motion silent (no click line), as the log contract requires");
-    Ok(())
-}
-
 /// Poll the input log for a routed click line until the deadline.
 /// Returns the click's native-frame coordinates. The compositor keeps
 /// turning while polling: under repaint-on-demand (#138) the reaction
@@ -280,11 +356,7 @@ fn last_content_hash(input_log: &Path, screen: &str) -> Option<String> {
     let Ok(content) = fs::read_to_string(input_log) else {
         return None;
     };
-    content
-        .lines()
-        .filter(|l| l.split_whitespace().nth(3) == Some(format!("screen={screen}").as_str()))
-        .filter_map(|l| l.split("content=").nth(1).map(str::to_owned))
-        .next_back()
+    input_drive::log::last_content_hash(&content, screen)
 }
 
 /// Poll until a frame line for the given screen carries a content hash
@@ -317,22 +389,12 @@ fn latest_click_line(input_log: &Path) -> Result<Option<(i32, i32)>> {
     let Ok(content) = fs::read_to_string(input_log) else {
         return Ok(None);
     };
-    for line in content.lines().rev() {
-        let fields: Vec<&str> = line.split_whitespace().collect();
-        // The press line's shape: `event <wall_ms> click <x> <y>`.
-        if fields.len() == 5 && fields[0] == "event" && fields[2] == "click" {
-            let x: i32 = fields[3].parse().context("parse click x")?;
-            let y: i32 = fields[4].parse().context("parse click y")?;
-            return Ok(Some((x, y)));
-        }
-    }
-    Ok(None)
+    Ok(input_drive::log::latest_click_line(&content))
 }
 
 fn log_tail(input_log: &Path) -> String {
     let Ok(content) = fs::read_to_string(input_log) else {
         return format!("(no log at {})", input_log.display());
     };
-    let tail: Vec<&str> = content.lines().collect();
-    tail[tail.len().saturating_sub(15)..].join("\n")
+    input_drive::log::log_tail(&content, 15)
 }

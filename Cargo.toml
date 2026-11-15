@@ -11,6 +11,7 @@ members = [
   "crates/recomp2jam",
   "crates/o2jam-dump",
   "crates/wl-smoke-compositor",
+  "crates/input-drive",
 ]
 
 [workspace.package]
