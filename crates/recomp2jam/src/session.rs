@@ -3921,6 +3921,35 @@ mod session_tests {
     }
 
     #[test]
+    fn tt230_resident_face_press_replays_without_wire() {
+        // Ticket #230: a face press naming the resident channel replays
+        // locally with no ChannelLogin on the wire. The resident press
+        // at the pinned face point (524, 246) must reach Room while the
+        // server sees zero frames (read with a timeout: any send fails
+        // the test instead of hanging it).
+        use std::io::Read;
+        let (mut session, server) = channel_session(|mut stream| {
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut header = [0u8; 4];
+            assert!(
+                stream.read_exact(&mut header).is_err(),
+                "resident face press sent a frame on the wire"
+            );
+        });
+        session.game.set_channels(vec![entry_channel()]);
+        session.set_resident_channel(entry_channel());
+        session.ingest_snapshot(&InputSnapshot::click_at(524, 246));
+        assert_eq!(
+            session.game.screen(),
+            Screen::Room,
+            "resident face press enters Room with no wire round trip"
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
     fn channel_confirm_stays_on_rejected_login() {
         // A rejected 1005 answers no identity fetch (no 2000 follows)
         // and keeps Channel, so the next Confirm retries the entry.
