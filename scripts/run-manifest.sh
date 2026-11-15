@@ -129,19 +129,25 @@ PY
 }
 
 cmd_verify() {
-  local arg="$1"
+  local arg="$1" other="${2:-}"
   [ -n "$arg" ] || die "verify: manifest or directory required"
   require_python
-  local manifest
+  local manifest other_manifest
   manifest="$(manifest_path_from_arg "$arg")"
   [ -r "$manifest" ] || die "verify: cannot read manifest: $manifest"
 
-  local base_dir
+  local base_dir other_dir
   base_dir="$(cd "$(dirname "$manifest")" && pwd)"
+  other_dir=""
+  if [ -n "$other" ]; then
+    other_manifest="$(manifest_path_from_arg "$other")"
+    [ -r "$other_manifest" ] || die "verify: cannot read manifest: $other_manifest"
+    other_dir="$(cd "$(dirname "$other_manifest")" && pwd)"
+  fi
 
-  python3 - "$manifest" "$base_dir" <<'PY'
+  python3 - "$manifest" "$base_dir" "$other_dir" <<'PY'
 import json, os, sys
-manifest_path, base_dir = sys.argv[1], sys.argv[2]
+manifest_path, base_dir, other_dir = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(manifest_path, "r", encoding="utf-8") as fh:
     data = json.load(fh)
 
@@ -186,6 +192,27 @@ if os.path.isdir(shots_dir):
         for item in dupes:
             print("  dupe: " + item, file=sys.stderr)
         sys.exit(1)
+
+# An A/B proof with identical files across pairs proves nothing
+# (seen: seat shots byte-identical to native). With a second
+# manifest, every screenshot hash must be unique across both sets.
+if other_dir:
+    other_shots = os.path.join(other_dir, "artifacts", "screenshots")
+    if os.path.isdir(other_shots):
+        cross = []
+        for name in sorted(os.listdir(other_shots)):
+            full = os.path.join(other_shots, name)
+            if not os.path.isfile(full):
+                continue
+            with open(full, "rb") as fh:
+                digest = hashlib.md5(fh.read()).hexdigest()
+            if digest in seen:
+                cross.append("%s duplicates %s" % (name, seen[digest]))
+        if cross:
+            print("run-manifest: CROSS-PAIR duplicate screenshots", file=sys.stderr)
+            for item in cross:
+                print("  dupe: " + item, file=sys.stderr)
+            sys.exit(1)
 
 print("run-manifest: artifact set complete")
 PY
@@ -276,7 +303,7 @@ main() {
   local cmd="${1:-}"; shift || true
   case "$cmd" in
     write) [ "$#" -ge 1 ] || die "usage: run-manifest.sh write OUT_DIR [options]"; cmd_write "$@" ;;
-    verify) [ "$#" -ge 1 ] || die "usage: run-manifest.sh verify MANIFEST_OR_DIR"; cmd_verify "$1" ;;
+    verify) [ "$#" -ge 1 ] || die "usage: run-manifest.sh verify MANIFEST_OR_DIR [OTHER_FOR_CROSS_PAIR_CHECK]"; cmd_verify "$1" "${2:-}" ;;
     rerun) [ "$#" -ge 1 ] || die "usage: run-manifest.sh rerun MANIFEST [options]"; cmd_rerun "$@" ;;
     sequence) [ "$#" -ge 1 ] || die "usage: run-manifest.sh sequence INPUT_LOG"; cmd_sequence "$1" ;;
     *) die "usage: run-manifest.sh {write|verify|rerun|sequence} ..." ;;
