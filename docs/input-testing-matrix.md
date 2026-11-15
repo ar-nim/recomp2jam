@@ -13,6 +13,18 @@ no weston, no Xvfb, no XTEST needed for routing regressions. The uinput/KWin
 live path stays open as the *environment* check (see the tie-back below): green
 here plus red live means the client routing is clean and the environment input
 path is at fault.
+Update 2026-11-15 (ticket #127): the seam above is now `crates/input-drive`
+(dev-only, `publish = false`, outside the shipped client tree). `SnapshotSource`
+produces one `InputSnapshot` per freeze; `ScriptedSource` replays the shared
+two-phase probe gesture (silent control motion, center click, gear hover,
+gear click) deterministically. `examples/input_smoke.rs` drains the script
+through both Linux arms — Wayland fixture wire events and self-spawned
+Xvfb+XTEST (`input_drive::x11`, same gesture, same input-log verdict) — with
+explicit `--backend wayland|x11` selection and auto-detect (`WAYLAND_DISPLAY`
+selects the fixture arm, else `DISPLAY` selects X11). Windows (SendInput),
+macOS (CGEventPost + Accessibility-permission note), and Android/iOS
+investigation live as code notes under `crates/input-drive/notes/`; the
+L2-Windows/L2-macOS rows below stay the CI plan for those slots.
 Read-only research; no repo code changed. Local inventory at
 `~/scratch/input-testing/findings-inventory.md`.
 

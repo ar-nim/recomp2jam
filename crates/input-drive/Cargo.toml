@@ -1,0 +1,19 @@
+[package]
+name = "input-drive"
+description = "Snapshot sources driving the game input seam in tests (t127)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+o2jam-shell = { path = "../o2jam-shell" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.13", features = ["xtest"] }
+
+[dev-dependencies]
+o2jam-render = { path = "../o2jam-render" }
