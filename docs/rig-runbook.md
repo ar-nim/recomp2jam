@@ -17,7 +17,7 @@ protocol-only and never counts as a live pair.
 | Pair | Input driver | Video backend | Status | Proof |
 |---|---|---|---|---|
 | Xvfb + XTEST | XTEST (X11 protocol events) | self-spawned Xvfb, 1024x768 | **Proven** | native pair: Playing reached, 60 judged presses (`docs/captures/t76/findings.md`) |
-| Live seat + ydotool | ydotool (kernel uinput) | real compositor seat | Specified | proof pending (#242) |
+| Live seat + ydotool | ydotool (kernel uinput) | real compositor seat | Manual spot-check only; never feeds numbers | procedure proven, live execution needs a supervised unlocked session (#242, ready-for-human) |
 | Wine X11 + SendInput | winegcc SendInput helper | Wine under Xvfb | Specified | proof pending (#240) |
 | Synthetic compositor fixture | `wl_pointer` injection | headless compositor | Protocol-only | CI seam only, never a budget pair (#126, #127) |
 
