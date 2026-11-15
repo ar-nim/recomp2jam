@@ -76,3 +76,13 @@ transition, online and offline). Server flow works; client stays on
 Channel after clicking the enter face. Pair A waits on the exe sampler spec
 (docs/captures/t76/exe-sampler-spec.md). Rust instrumentation and guard
 are green. No further rig sessions were booted.
+frame 304 wall_ms=99443 screen=room state=562ee0d97c1d0b4b content=1cd832da1cbfbb42
+frame 305 wall_ms=99693 screen=room state=562ee0d97c1d0b4b content=1cd832da1cbfbb42
+frame 306 wall_ms=99944 screen=room state=562ee0d97c1d0b4b content=1cd832da1cbfbb42
+frame 307 wall_ms=100193 screen=room state=562ee0d97c1d0b4b content=1cd832da1cbfbb42
+frame 308 wall_ms=100442 screen=room state=562ee0d97c1d0b4b content=1cd832da1cbfbb42
+
+## Pair B retry after #230
+
+Room scene reached after channel enter. Further navigation to Waiting/Playing
+did not occur with Enter/click attempts; client stays on Room.
