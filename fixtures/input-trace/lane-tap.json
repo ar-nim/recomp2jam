@@ -1,0 +1,9 @@
+{
+  "schema_version": "recomp2jam-input-v1",
+  "scenario": "lane-tap",
+  "time_base": { "name": "song-position", "unit": "microseconds" },
+  "events": [
+    { "sequence": 0, "time_us": 1000000, "control": "lane-1", "action": "press" },
+    { "sequence": 1, "time_us": 1080000, "control": "lane-1", "action": "release" }
+  ]
+}

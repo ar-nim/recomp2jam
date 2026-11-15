@@ -75,6 +75,9 @@ pub struct TraceEvent {
     pub sequence: u64,
     /// Intended timestamp on the trace's clock (legacy millisecond
     /// pacing: the windowed XTEST driver still reads this field).
+    /// Defaults to 0 when a trace carries only the microsecond
+    /// authority (skill example), so both clock precisions parse.
+    #[serde(default)]
     pub time_ms: u64,
     /// Microsecond timestamp authority (ticket #208): when present
     /// it orders the run on the microsecond clock and must agree
@@ -160,7 +163,7 @@ pub fn validate(trace: &InputTrace) -> Result<(), Vec<String>> {
         if let Some(previous) = last_sequence {
             if event.sequence <= previous {
                 violations.push(format!(
-                    "event {}: sequence {} not increasing",
+                    "event {}: non-monotonic sequence ({} not greater than previous)",
                     event.sequence, event.sequence
                 ));
             }
@@ -169,7 +172,7 @@ pub fn validate(trace: &InputTrace) -> Result<(), Vec<String>> {
         if let Some(previous) = last_time {
             if event.time_ms < previous {
                 violations.push(format!(
-                    "event {}: time {} goes backwards",
+                    "event {}: non-monotonic time ({} goes backwards)",
                     event.sequence, event.time_ms
                 ));
             }
@@ -179,14 +182,18 @@ pub fn validate(trace: &InputTrace) -> Result<(), Vec<String>> {
         if let Some(previous) = last_time_us {
             if time_us < previous {
                 violations.push(format!(
-                    "event {}: time_us {time_us} goes backwards",
+                    "event {}: non-monotonic time (time_us {time_us} goes backwards)",
                     event.sequence
                 ));
             }
         }
         last_time_us = Some(time_us);
         if let Some(stamp) = event.time_us {
-            if stamp / 1000 != event.time_ms {
+            // Agreement is only meaningful when the legacy millisecond
+            // stamp was actually carried; a trace that rides the
+            // microsecond authority alone (skill example) omits
+            // `time_ms` and must not be rejected for disagreeing.
+            if event.time_ms != 0 && stamp / 1000 != event.time_ms {
                 violations.push(format!(
                     "event {}: time_us {stamp} disagrees with time_ms {}",
                     event.sequence, event.time_ms
@@ -232,7 +239,9 @@ fn validate_event<'a>(
         control if control.starts_with("lane-") => {
             let lane: usize = control["lane-".len()..].parse().unwrap_or(usize::MAX);
             if lane > 6 {
-                violations.push(format!("{at}: lane index out of 0..=6"));
+                violations.push(format!(
+                    "{at}: out-of-range lane (index {lane} not in 0..=6)"
+                ));
             }
             validate_press_release(event, held, violations, &at);
         }
@@ -344,7 +353,7 @@ fn validate_press_release<'a>(
                 .position(|held| *held == event.control)
                 .is_none()
             {
-                violations.push(format!("{at}: release without a press"));
+                violations.push(format!("{at}: unpaired release (no matching press)"));
             } else {
                 held.remove(
                     held.iter()
@@ -563,5 +572,77 @@ mod tests {
                 "{name} names its controls"
             );
         }
+    }
+
+    /// Synthetic gameplay lane traces (ticket #246): small,
+    /// committable, exercising simultaneous lanes and hold pairs.
+    const LANE_TRACES: [&str; 3] = ["lane-simultaneous.json", "lane-hold.json", "lane-tap.json"];
+
+    #[test]
+    fn committed_lane_traces_validate() {
+        for name in LANE_TRACES {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../fixtures/input-trace")
+                .join(name);
+            let loaded = load_validated(&path)
+                .unwrap_or_else(|_| panic!("lane trace must validate: {name}"));
+            assert!(!loaded.events.is_empty(), "{name} has events");
+            assert!(
+                loaded
+                    .events
+                    .iter()
+                    .all(|event| event.control.starts_with("lane-")),
+                "{name} is gameplay lanes"
+            );
+        }
+    }
+
+    #[test]
+    fn simultaneous_lanes_validate_clean() {
+        let trace = trace(vec![
+            event(0, 0, "lane-0", "press"),
+            event(1, 0, "lane-1", "press"),
+            event(2, 10, "lane-0", "release"),
+            event(3, 10, "lane-1", "release"),
+        ]);
+        assert!(validate(&trace).is_ok());
+    }
+
+    #[test]
+    fn hold_press_release_pair_validates_clean() {
+        let trace = trace(vec![
+            event(0, 0, "lane-4", "press"),
+            event(1, 500, "lane-4", "release"),
+        ]);
+        assert!(validate(&trace).is_ok());
+    }
+
+    #[test]
+    fn non_monotonic_sequence_rejects_with_named_reason() {
+        let bad = trace(vec![
+            event(0, 0, "lane-0", "press"),
+            event(0, 10, "lane-0", "release"),
+        ]);
+        let violations = validate(&bad).unwrap_err();
+        assert!(violations
+            .iter()
+            .any(|v| v.contains("non-monotonic sequence")));
+    }
+
+    #[test]
+    fn unpaired_release_rejects_with_named_reason() {
+        let bad = trace(vec![event(0, 0, "lane-1", "release")]);
+        let violations = validate(&bad).unwrap_err();
+        assert!(violations.iter().any(|v| v.contains("unpaired release")));
+    }
+
+    #[test]
+    fn out_of_range_lane_rejects_with_named_reason() {
+        let bad = trace(vec![
+            event(0, 0, "lane-7", "press"),
+            event(1, 10, "lane-7", "release"),
+        ]);
+        let violations = validate(&bad).unwrap_err();
+        assert!(violations.iter().any(|v| v.contains("out-of-range lane")));
     }
 }
