@@ -1,25 +1,73 @@
 #!/usr/bin/env bash
-# rig-drive.sh — ydotool (kernel uinput) input driver for rig sessions.
+# rig-drive.sh — input driver for rig sessions.
+#
+# Backends:
+#   ydotool (default) — kernel uinput via ydotoold (live seat / Wine).
+#   xtest             — XTEST via python-xlib (bare Xvfb rigs).
 #
 # Usage:
-#   scripts/rig-drive.sh wait-device <out-dir>     # poll until ydotoold answers
-#   scripts/rig-drive.sh move <out-dir> <x> <y>    # absolute move
-#   scripts/rig-drive.sh click <out-dir> [button]   # default left (0xC0)
-#   scripts/rig-drive.sh key <out-dir> <code[:state]>...
-#   scripts/rig-drive.sh dry-run <out-dir>          # print planned commands, move nothing
+#   scripts/rig-drive.sh [--backend ydotool|xtest] [--display :N] [--dry-run] \
+#       {wait-device|move|click|key|focus|dry-run} <out-dir> [args...]
+#   scripts/rig-drive.sh {ydotool|xtest} {wait-device|...} <out-dir> [args...]
 #
-# Honors the same out-dir/PID discipline as scripts/rig-run.sh: any daemon
-# started is recorded in <out-dir>/pids and stopped via rig-run.sh stop.
+# The backend may also be selected with RIG_DRIVER_BACKEND. Dry-run mode
+# (command `dry-run`, or --dry-run) prints the planned commands and touches
+# no input device.
 set -euo pipefail
 
 die() { echo "rig-drive: $*" >&2; exit 2; }
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 YDOTOOL="${YDOTOOL:-ydotool}"
 YDOTOOLD="${YDOTOOLD:-ydotoold}"
+XTEST_PY="$SCRIPT_DIR/rig-xtest.py"
 
-wait_device() {
+backend="${RIG_DRIVER_BACKEND:-ydotool}"
+dry_run="${RIG_DRIVER_DRY_RUN:-0}"
+display_override="${RIG_DISPLAY:-}"
+
+# --- option parsing (global flags may appear anywhere) --------------------
+remaining=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --backend) backend="${2:-}"; shift 2 ;;
+    --backend=*) backend="${1#*=}"; shift ;;
+    --display) display_override="${2:-}"; shift 2 ;;
+    --display=*) display_override="${1#*=}"; shift ;;
+    --dry-run) dry_run=1; shift ;;
+    --) shift; break ;;
+    *) remaining+=("$1"); shift ;;
+  esac
+done
+set -- "${remaining[@]}"
+
+# backend may be given as the first positional token
+if [[ "${1:-}" == "ydotool" || "${1:-}" == "xtest" ]]; then
+  backend="$1"; shift
+fi
+
+case "$backend" in
+  ydotool|xtest) ;;
+  *) die "unknown backend: $backend (expected ydotool or xtest)" ;;
+esac
+
+cmd="${1:-}"; shift || true
+
+load_env() {
+  local out_dir="$1"
+  if [[ -f "$out_dir/env.sh" ]]; then
+    # shellcheck source=/dev/null
+    . "$out_dir/env.sh"
+  fi
+  if [[ -n "$display_override" ]]; then
+    export DISPLAY="$display_override"
+  fi
+}
+
+# --- ydotool backend --------------------------------------------------------
+yd_wait() {
   local out_dir="$1" i
-  [ -d "$out_dir" ] || mkdir -p "$out_dir"
+  [[ -d "$out_dir" ]] || mkdir -p "$out_dir"
   for i in $(seq 1 50); do
     if "$YDOTOOL" debug >/dev/null 2>&1; then
       echo "rig-drive: ydotool device ready"
@@ -30,42 +78,115 @@ wait_device() {
   die "ydotoold did not become ready within 5s"
 }
 
-cmd_wait() { wait_device "$1"; }
+# --- xtest backend ---------------------------------------------------------
+xt() {
+  # xt <out_dir> <xtest-subcommand> [args...]
+  local out_dir="$1"; shift
+  load_env "$out_dir"
+  if [[ "$dry_run" == "1" ]]; then
+    echo "rig-drive: DRY RUN (xtest) — DISPLAY=${DISPLAY:-<unset>} python3 $XTEST_PY --display ${DISPLAY:-<unset>} $*"
+    return 0
+  fi
+  [[ -n "${DISPLAY:-}" ]] || die "xtest: DISPLAY is not set (source $out_dir/env.sh or pass --display)"
+  python3 "$XTEST_PY" --display "$DISPLAY" "$@"
+}
+
+# --- commands ---------------------------------------------------------------
+cmd_wait() {
+  local out_dir="$1"
+  if [[ "$backend" == "xtest" ]]; then
+    xt "$out_dir" wait-device
+  else
+    if [[ "$dry_run" == "1" ]]; then
+      echo "rig-drive: DRY RUN (ydotool) — $YDOTOOL debug"
+      return 0
+    fi
+    yd_wait "$out_dir"
+  fi
+}
+
 cmd_move() {
   local out_dir="$1" x="$2" y="$3"
-  wait_device "$out_dir"
-  "$YDOTOOL" mousemove --absolute -x "$x" -y "$y"
-  echo "rig-drive: moved to $x,$y"
+  if [[ "$backend" == "xtest" ]]; then
+    xt "$out_dir" move "$x" "$y"
+  else
+    if [[ "$dry_run" == "1" ]]; then
+      echo "rig-drive: DRY RUN (ydotool) — $YDOTOOL mousemove --absolute -x $x -y $y"
+      return 0
+    fi
+    yd_wait "$out_dir"
+    "$YDOTOOL" mousemove --absolute -x "$x" -y "$y"
+    echo "rig-drive: moved to $x,$y"
+  fi
 }
+
 cmd_click() {
-  local out_dir="$1" btn="${2:-0xC0}"
-  wait_device "$out_dir"
-  "$YDOTOOL" click "$btn"
-  echo "rig-drive: clicked $btn"
+  local out_dir="$1" btn="${2:-1}"
+  if [[ "$backend" == "xtest" ]]; then
+    xt "$out_dir" click "$btn"
+  else
+    if [[ "$dry_run" == "1" ]]; then
+      echo "rig-drive: DRY RUN (ydotool) — $YDOTOOL click $btn"
+      return 0
+    fi
+    yd_wait "$out_dir"
+    "$YDOTOOL" click "$btn"
+    echo "rig-drive: clicked $btn"
+  fi
 }
+
 cmd_key() {
   local out_dir="$1"; shift
-  [ "$#" -ge 1 ] || die "key: need at least one code[:state]"
-  wait_device "$out_dir"
-  "$YDOTOOL" key "$@"
-  echo "rig-drive: key $*"
+  [[ "$#" -ge 1 ]] || die "key: need at least one code[:state]"
+  if [[ "$backend" == "xtest" ]]; then
+    xt "$out_dir" key "$@"
+  else
+    if [[ "$dry_run" == "1" ]]; then
+      echo "rig-drive: DRY RUN (ydotool) — $YDOTOOL key $*"
+      return 0
+    fi
+    yd_wait "$out_dir"
+    "$YDOTOOL" key "$@"
+    echo "rig-drive: key $*"
+  fi
 }
+
+cmd_focus() {
+  local out_dir="$1" needle="${2:-recomp2jam}"
+  if [[ "$backend" == "xtest" ]]; then
+    xt "$out_dir" focus "$needle"
+  else
+    if [[ "$dry_run" == "1" ]]; then
+      echo "rig-drive: DRY RUN (ydotool) — focus $needle (no-op on uinput backend)"
+      return 0
+    fi
+    echo "rig-drive: focus requested for $needle (ydotool backend drives the seat; no focus call)"
+  fi
+}
+
 cmd_dry() {
   local out_dir="$1"
-  echo "rig-drive: DRY RUN — no pointer or keyboard action taken"
-  echo "rig-drive: planned: wait-device -> move -> click -> key"
-  echo "rig-drive: out-dir=$out_dir"
+  load_env "$out_dir"
+  echo "rig-drive: DRY RUN ($backend) — no pointer or keyboard action taken"
+  echo "rig-drive: planned sequence: wait-device -> focus -> move -> click -> key"
+  echo "rig-drive: backend=$backend out-dir=$out_dir display=${display_override:-${DISPLAY:-<from env.sh>}}"
+  echo "rig-drive: example: $0 --backend $backend move $out_dir <x> <y>"
+  echo "rig-drive: example: $0 --backend $backend click $out_dir [button]"
+  echo "rig-drive: example: $0 --backend $backend key $out_dir <code[:state]>..."
+  echo "rig-drive: example: $0 --backend $backend focus $out_dir [window]"
 }
 
 main() {
-  local cmd="${1:-}"; shift || true
   case "$cmd" in
-    wait-device) [ "$#" -ge 1 ] || die "usage: wait-device <out-dir>"; cmd_wait "$1" ;;
-    move) [ "$#" -ge 3 ] || die "usage: move <out-dir> <x> <y>"; cmd_move "$@" ;;
-    click) [ "$#" -ge 1 ] || die "usage: click <out-dir> [button]"; cmd_click "$@" ;;
-    key) [ "$#" -ge 2 ] || die "usage: key <out-dir> <code[:state]>..."; cmd_key "$@" ;;
-    dry-run) [ "$#" -ge 1 ] || die "usage: dry-run <out-dir>"; cmd_dry "$1" ;;
-    *) die "usage: rig-drive.sh {wait-device|move|click|key|dry-run} ..." ;;
+    wait-device) [[ $# -ge 1 ]] || die "usage: wait-device <out-dir>"; cmd_wait "$1" ;;
+    move) [[ $# -ge 3 ]] || die "usage: move <out-dir> <x> <y>"; cmd_move "$@" ;;
+    click) [[ $# -ge 1 ]] || die "usage: click <out-dir> [button]"; cmd_click "$@" ;;
+    key) [[ $# -ge 2 ]] || die "usage: key <out-dir> <code[:state]>..."; cmd_key "$@" ;;
+    focus) [[ $# -ge 1 ]] || die "usage: focus <out-dir> [window]"; cmd_focus "$@" ;;
+    dry-run) [[ $# -ge 1 ]] || die "usage: dry-run <out-dir>"; cmd_dry "$1" ;;
+    "") die "usage: rig-drive.sh {wait-device|move|click|key|focus|dry-run} ..." ;;
+    *) die "unknown command: $cmd" ;;
   esac
 }
+
 main "$@"
