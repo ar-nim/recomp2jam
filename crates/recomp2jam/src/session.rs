@@ -784,6 +784,20 @@ impl OnlineSession {
             }
             return;
         }
+        // Browser picks queue on the game outbox (row click); move one
+        // into the pending song slot the Confirm path sends (ticket
+        // #232). The dialog OK already closed, so this arm never
+        // races an open picker.
+        if self.pending_song.is_none() {
+            if let Some(pick) = self.game.take_music_send() {
+                self.pending_song = Some(SongChoice {
+                    music_id: pick.music_id,
+                    difficulty: pick.difficulty,
+                    speed: pick.speed,
+                    arena_id: 0,
+                });
+            }
+        }
         let Some(attempt) = self.select_attempt.take() else {
             return;
         };
