@@ -579,6 +579,15 @@ fn run_online(opts: OnlineCli) -> Result<()> {
     // --no-sound so they never reach the speakers; the default
     // plays live.
     session.set_silent_audio(opts.no_sound);
+    if let Some((gw, ch)) = opts.gateway_id.zip(opts.channel_id) {
+        session.set_resident_channel(o2jam_net::ChannelState {
+            gateway_id: gw as u16,
+            channel_id: ch as u16,
+            capacity: 0,
+            population: 0,
+            active: true,
+        });
+    }
     if let Some(step_ms) = opts.fixed_clock {
         session.game_mut().enable_fixed_clock(step_ms);
     }
@@ -1058,7 +1067,24 @@ fn run_play(opts: PlayOptions) -> Result<()> {
                 // Audio containment: with --no-sound every bank attach
                 // stays on the null sink even when hardware exists.
                 session.set_silent_audio(opts.no_sound);
-                run_windowed_session(session, capture_plan(opts.frame_dump.clone(), opts.input_log.clone()))?;
+                // Boot already logged into the requested channel
+                // (setup_online with gateway+channel ids), so mark
+                // residency now: a later face press replays locally
+                // instead of re-sending a login the server ignores
+                // on an occupied session (ticket #230).
+                if let (Some(gw), Some(ch)) = (opts.online_gateway_id, opts.online_channel_id) {
+                    session.set_resident_channel(o2jam_net::ChannelState {
+                        gateway_id: gw as u16,
+                        channel_id: ch as u16,
+                        capacity: 0,
+                        population: 0,
+                        active: true,
+                    });
+                }
+                run_windowed_session(
+                    session,
+                    capture_plan(opts.frame_dump.clone(), opts.input_log.clone()),
+                )?;
             }
             None => {
                 // Offline walk: the windowed arm stages genuine scene

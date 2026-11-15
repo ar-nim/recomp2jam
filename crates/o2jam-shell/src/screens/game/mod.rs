@@ -6792,6 +6792,21 @@ mod game_tests {
     }
 
     #[test]
+    fn tt230_face_click_reaches_room_entry() {
+        // Ticket #230 seam guard: the enter face on an open channel
+        // dialog must reach the same Room transition as keyboard
+        // Confirm (the board enter path), not die in the dialog
+        // router.
+        let mut game = ScreenGame::new();
+        game.set_channels(two_channels());
+        game.lane_key(3, true);
+        game.click_planet(136, 88);
+        assert_eq!(game.screen(), Screen::Channel);
+        game.ingest_snapshot(&InputSnapshot::click_at(524, 246));
+        assert_eq!(game.screen(), Screen::Room);
+    }
+
+    #[test]
     fn body_click_highlights_without_entering() {
         // Ticket #56: a row-body click moves the highlight only,
         // never enters Room.
