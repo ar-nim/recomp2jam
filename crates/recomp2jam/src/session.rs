@@ -430,6 +430,9 @@ pub struct OnlineSession {
     /// boot auto-login, cleared on leave or timeout). A swallowed face
     /// press naming this channel skips the wire round trip.
     resident_channel: Option<ChannelState>,
+    /// Coordinates of the resident-channel face press that was replayed
+    /// locally, so only its matching release is swallowed.
+    resident_press: Option<(i32, i32)>,
     /// Live room join (`None` while no Confirm/press join is in
     /// flight; the per-frame [`Self::poll_room_join`] owns it).
     join_attempt: Option<RoomJoinAttempt>,
@@ -503,6 +506,7 @@ impl OnlineSession {
             pending_song: None,
             login_attempt: None,
             resident_channel: None,
+            resident_press: None,
             join_attempt: None,
             select_attempt: None,
             shop_buy_attempt: None,
@@ -1389,6 +1393,7 @@ impl OnlineSession {
         };
         if Instant::now() > attempt.deadline {
             self.clear_resident_channel();
+            self.resident_press = None;
             tracing::warn!(
                 gateway_id = attempt.gateway_id,
                 channel_id = attempt.channel_id,
@@ -2013,6 +2018,8 @@ impl OnlineSession {
         if !self.game.take_channel_logout() {
             return;
         }
+        self.clear_resident_channel();
+        self.resident_press = None;
         if let Err(source) = self.gateway.send_frame(Request::ChannelLogout.id(), &[]) {
             tracing::warn!(%source, "channel logout send failed");
         }
@@ -2667,14 +2674,20 @@ impl OnlineSession {
     /// edge (the game never sees it). Releases and keys always pass
     /// through — the game answers those locally.
     fn swallow_networked_edge(&mut self, edge: &InputEdge) -> bool {
-        let InputEdge::PointerDown { x, y } = *edge else {
-            return false;
+        let (x, y) = match *edge {
+            InputEdge::PointerDown { x, y } => (x, y),
+            InputEdge::PointerUp { x, y } => (x, y),
+            _ => return false,
         };
         if self.game.screen() == Screen::Channel {
-            // A resident-channel press already replayed on down; swallow
-            // the matching release so it cannot double-advance.
-            if matches!(*edge, InputEdge::PointerUp { .. }) && self.resident_channel.is_some() {
-                return true;
+            // Swallow only the release matching a replayed resident face
+            // press; other releases (e.g. scrollbar drag) pass through.
+            if let InputEdge::PointerUp { .. } = *edge {
+                if self.resident_press == Some((x, y)) {
+                    self.resident_press = None;
+                    return true;
+                }
+                return false;
             }
             if let Some(channel) = self.game.channel_enter_at(x, y) {
                 // Resident channel: skip the wire round trip and replay
@@ -2685,6 +2698,7 @@ impl OnlineSession {
                     .map(|c| (c.gateway_id, c.channel_id))
                     == Some((channel.gateway_id, channel.channel_id))
                 {
+                    self.resident_press = Some((x, y));
                     self.game.ingest_snapshot(&InputSnapshot::click_at(x, y));
                     return true;
                 }
