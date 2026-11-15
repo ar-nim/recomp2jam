@@ -149,7 +149,6 @@ missing = []
 for field in ("pair", "build", "params", "script", "seed"):
     if field not in data:
         missing.append("field:" + field)
-
 required = data.get("required_artifacts") or [
     "manifest.json", "artifacts/screenshots", "artifacts/stats",
     "artifacts/scene-sequence.txt",
@@ -164,6 +163,30 @@ if missing:
     for item in missing:
         print("  missing: " + item, file=sys.stderr)
     sys.exit(1)
+
+# Screenshots must be pairwise distinct: a copied file renamed per
+# scene proves nothing (seen: byte-identical loading/waiting shots).
+import hashlib
+shots_dir = os.path.join(base_dir, "artifacts", "screenshots")
+if os.path.isdir(shots_dir):
+    seen = {}
+    dupes = []
+    for name in sorted(os.listdir(shots_dir)):
+        full = os.path.join(shots_dir, name)
+        if not os.path.isfile(full):
+            continue
+        with open(full, "rb") as fh:
+            digest = hashlib.md5(fh.read()).hexdigest()
+        if digest in seen:
+            dupes.append("%s duplicates %s" % (name, seen[digest]))
+        else:
+            seen[digest] = name
+    if dupes:
+        print("run-manifest: DUPLICATE screenshots", file=sys.stderr)
+        for item in dupes:
+            print("  dupe: " + item, file=sys.stderr)
+        sys.exit(1)
+
 print("run-manifest: artifact set complete")
 PY
 }
