@@ -99,18 +99,25 @@ main() {
   [ -n "$log_file" ] || die "usage: scene-probe.sh INPUT_LOG [--watch ...]"
   shift || true
 
-  local watch=0 interval="0.5" count=1 changes_only=0 json=0 sequence=0
+  local watch=0 interval="0.5" count=1 count_set=0 changes_only=0 json=0 sequence=0
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --watch|--poll) watch=1; count=0; shift ;;
+      --watch|--poll) watch=1; shift ;;
       --interval) interval="$2"; shift 2 ;;
-      --count) count="$2"; shift 2 ;;
+      --count) count="$2"; count_set=1; shift 2 ;;
       --changes-only) changes_only=1; shift ;;
       --json) json=1; shift ;;
       --sequence|--scenes) sequence=1; shift ;;
       *) die "unknown option: $1" ;;
     esac
   done
+
+  # A watch without an explicit count polls forever; cap it so no
+  # invocation (human or subagent) hangs unbounded. 240 polls at the
+  # default interval is two minutes; pass --count for more.
+  if [ "$watch" = "1" ] && [ "$count_set" = "0" ]; then
+    count=240
+  fi
 
   if [ "$sequence" = "1" ]; then
     [ -r "$log_file" ] || die "cannot read input log: $log_file"

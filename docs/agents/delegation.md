@@ -64,6 +64,17 @@ template instead of a description.
 - Do not start high by default; reserve the escalation for the case
   that needs it, and record the trigger in the report.
 
+## Timeouts and filenames
+
+- Every brief wraps blocking commands in `timeout` (ten minutes
+  unless the ticket says otherwise), and every script poll ships
+  with a default cap, so a stuck run dies loudly instead of
+  hanging a subagent with status "working" and no report.
+- Every brief dictates exact filenames and adds "no aliases or
+  variants without asking": two agents in one night padded
+  scripts/ with duplicate-named files, and verification caught
+  both. Naming is senior business.
+
 ## Verify, don't trust
 
 The senior re-runs **every** PASS/FAIL line a junior reports.
