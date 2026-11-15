@@ -86,3 +86,8 @@ frame 308 wall_ms=100442 screen=room state=562ee0d97c1d0b4b content=1cd832da1cbf
 
 Room scene reached after channel enter. Further navigation to Waiting/Playing
 did not occur with Enter/click attempts; client stays on Room.
+frame 175 wall_ms=67470 screen=room state=c9035000ad5a0309 content=287cd84761ea3027
+frame 176 wall_ms=67720 screen=room state=c9035000ad5a0309 content=287cd84761ea3027
+frame 177 wall_ms=67970 screen=room state=c9035000ad5a0309 content=287cd84761ea3027
+frame 178 wall_ms=68220 screen=room state=c9035000ad5a0309 content=287cd84761ea3027
+frame 179 wall_ms=68470 screen=room state=c9035000ad5a0309 content=287cd84761ea3027
