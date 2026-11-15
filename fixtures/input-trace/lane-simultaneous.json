@@ -1,0 +1,11 @@
+{
+  "schema_version": "recomp2jam-input-v1",
+  "scenario": "lane-simultaneous",
+  "time_base": { "name": "song-position", "unit": "microseconds" },
+  "events": [
+    { "sequence": 0, "time_ms": 0, "time_us": 0, "control": "lane-0", "action": "press" },
+    { "sequence": 1, "time_ms": 0, "time_us": 0, "control": "lane-2", "action": "press" },
+    { "sequence": 2, "time_ms": 50, "time_us": 50000, "control": "lane-0", "action": "release" },
+    { "sequence": 3, "time_ms": 50, "time_us": 50000, "control": "lane-2", "action": "release" }
+  ]
+}
