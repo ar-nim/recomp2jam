@@ -92,7 +92,11 @@ fn shipped_charts_set_bit26_only_on_tutorial_bgm_records() {
     files.sort();
     // Count is install-dependent (small install: 14; full music pack:
     // hundreds, ticket #286). The invariant below is what is pinned.
-    assert!(files.len() >= 14, "expected at least 14 charts, found {}", files.len());
+    assert!(
+        files.len() >= 14,
+        "expected at least 14 charts, found {}",
+        files.len()
+    );
 
     for path in &files {
         let bytes = std::fs::read(path).expect("read chart");
@@ -123,14 +127,8 @@ fn shipped_charts_set_bit26_only_on_tutorial_bgm_records() {
                 // o2ma100, kind 10 on o2ma132 - the small-install pin
                 // said kind 9; exe verification pending, see
                 // docs/ojn-bit26.md).
-                assert!(
-                    hit.raw & 0x0400_0000 != 0,
-                    "{name}: autoplay flags 0x0400"
-                );
-                assert!(
-                    hit.raw & !0x0400_0000 >= 1,
-                    "{name}: 1-based sample id"
-                );
+                assert!(hit.raw & 0x0400_0000 != 0, "{name}: autoplay flags 0x0400");
+                assert!(hit.raw & !0x0400_0000 >= 1, "{name}: 1-based sample id");
             }
         }
     }
