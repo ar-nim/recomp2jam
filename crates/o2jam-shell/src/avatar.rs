@@ -9,7 +9,7 @@
 //! records plus the recordless trailing frames (see
 //! [`AvatarFigure::from_oja55`]) — and anything else (the compressed
 //! `.oji` outlier frames) is skipped — their codec is still TBD in
-//! `o2jam-file`. Equipped parts stack on as extra layers; which
+//! `o2jam-file`. Equipped parts stack on as extra bodies; which
 //! filenames those are comes from [`pick_wear_sprites`].
 
 use std::collections::HashMap;
@@ -770,8 +770,9 @@ pub fn avatar_item_by_id(
 }
 
 /// Build the worn figure for an equipment table: per nonzero item
-/// id (in slot order) resolve the item row, pick its wear sprites,
-/// and stack every decodable body as layers. Unresolvable pieces —
+/// id (in slot order) resolve the item row, pick its wear bodies
+/// (one per part block, [`pick_wear_sprites`]), and stack every
+/// decodable body as layers. Unresolvable pieces —
 /// unknown ids, missing archive entries, non-sprite or undecodable
 /// bodies — are skipped, never fatal: one bad sprite must not blank
 /// the whole avatar. Empty when nothing resolves.
@@ -2015,32 +2016,80 @@ fn push_fragment(fragments: &mut Vec<Rect>, left: i64, top: i64, right: i64, bot
     });
 }
 
-/// Pick the sprite filenames one equipped item contributes to the
-/// worn figure (heuristic from 1541 real rows, exe part logic OPEN):
-/// slots 0–1 are icons (never worn); otherwise the wearer's parity
-/// wins — even slots for male, odd for female (`27M…`/`27F…` split
-/// filenames prove the parity); an empty parity falls back to the
-/// other side (unisex single-variant items). Slot order is kept so
-/// multi-part items (torso + arms) layer deterministically.
+/// Shop-portrait slots leading every item row's sprite table (never
+/// worn, `docs/file-formats/opi.md`).
+const ITEM_ICON_SLOTS: usize = 2;
+/// Five pose variants per part block, each declaring one male and one
+/// female slot.
+const PART_VARIANT_SLOTS: usize = 5;
+/// Male and female slot per variant: even slots male, odd female.
+const SEX_SLOTS: usize = 2;
+/// Slot parity of the male body and of the female one.
+const MALE_SLOT_OFFSET: usize = 0;
+const FEMALE_SLOT_OFFSET: usize = 1;
+/// Part blocks per row: everything the row's slots carry after the
+/// icons splits into blocks of male/female variant pairs.
+const ITEM_PART_BLOCKS: usize =
+    (o2jam_file::AVATAR_SPRITE_SLOTS - ITEM_ICON_SLOTS) / (PART_VARIANT_SLOTS * SEX_SLOTS);
+
+/// Body a part block declares for one sex parity (`None` when the
+/// block holds no slot for it).
+fn first_body_in_part(
+    row: &o2jam_file::AvatarItemRow,
+    part: usize,
+    sex_offset: usize,
+) -> Option<&str> {
+    (0..PART_VARIANT_SLOTS).find_map(|variant| {
+        let (_, name) = row
+            .sprites
+            .get(part_variant_slot(part, variant, sex_offset))?;
+        (!name.is_empty()).then_some(name.as_str())
+    })
+}
+
+/// Slot index of one part variant: the part blocks start after the two
+/// shop icons, and inside a block the variants alternate male/female.
+fn part_variant_slot(part: usize, variant: usize, sex_offset: usize) -> usize {
+    ITEM_ICON_SLOTS + part * PART_VARIANT_SLOTS * SEX_SLOTS + variant * SEX_SLOTS + sex_offset
+}
+
+/// The bodies the wearer draws from one item row: one per part block
+/// the row declares, in block order.
+///
+/// A row spreads its parts across four blocks of five male plus five
+/// female variant slots (`docs/file-formats/opi.md`): a plain garment
+/// fills block 0, a jacket adds its sleeves in blocks 1 and 2. The
+/// five variants of a block are five poses of the SAME part — the
+/// unisex items repeat one file across their slots, and item 376
+/// (`마이콜잭손 상의`) carries five jacket poses per block. Wearing
+/// every slot painted those poses on top of each other at one anchor:
+/// the stacked ghost hands of ticket #222.
+///
+/// Within a block the first non-empty wearer-parity slot wins (slot
+/// order, `docs/claims.md` C33), falling back to the other parity per
+/// part so a male-only or female-only block still wears its art.
+///
+/// OPEN (not pinned): WHICH of a block's five poses the 7.55 exe wears
+/// is unpinned — no character field selects one (`CharacterInfo` 2001
+/// carries no such field) and no per-slot flag distinguishes them.
+/// Next evidence step: a Wine rig capture with item 376 worn, to read
+/// the arm pose off the room avatar. Variant 1 is a one-image still in
+/// 437 of 473 multi-variant blocks while variants 2-5 breathe, so if
+/// that capture shows moving sleeves the next candidate rule is to
+/// prefer the block's animated variant.
 #[must_use]
 pub fn pick_wear_sprites(row: &o2jam_file::AvatarItemRow, male: bool) -> Vec<String> {
-    let mut picked: Vec<String> = row
-        .sprites
-        .iter()
-        .enumerate()
-        .filter(|(slot, (_, name))| *slot >= 2 && (*slot % 2 == 0) == male && !name.is_empty())
-        .map(|(_, (_, name))| name.clone())
-        .collect();
-    if picked.is_empty() {
-        picked = row
-            .sprites
-            .iter()
-            .enumerate()
-            .filter(|(slot, (_, name))| *slot >= 2 && !name.is_empty())
-            .map(|(_, (_, name))| name.clone())
-            .collect();
-    }
-    picked
+    let (wearer, other) = if male {
+        (MALE_SLOT_OFFSET, FEMALE_SLOT_OFFSET)
+    } else {
+        (FEMALE_SLOT_OFFSET, MALE_SLOT_OFFSET)
+    };
+    (0..ITEM_PART_BLOCKS)
+        .filter_map(|part| {
+            first_body_in_part(row, part, wearer).or_else(|| first_body_in_part(row, part, other))
+        })
+        .map(str::to_owned)
+        .collect()
 }
 
 #[cfg(test)]
@@ -2113,7 +2162,10 @@ mod avatar_figure_tests {
     }
 
     #[test]
-    fn wear_picks_parity_skipping_icons() {
+    fn wear_picks_one_body_per_part_from_the_wearer_parity() {
+        // Even slots are male, odd female; the five variants of a part
+        // are poses of one body, so one of them is worn (ticket #222:
+        // wearing all five stacked ghost hands at one anchor).
         let row = wear_row(vec![
             (1, "icon.oji"),
             (1, "icon.oji"),
@@ -2124,11 +2176,32 @@ mod avatar_figure_tests {
         ]);
         assert_eq!(
             pick_wear_sprites(&row, true),
-            vec!["27M23001.oji".to_owned(), "27M23001.oji".to_owned()]
+            vec!["27M23001.oji".to_owned()]
         );
         assert_eq!(
             pick_wear_sprites(&row, false),
-            vec!["27F23001.oji".to_owned(), "27F23001.oji".to_owned()]
+            vec!["27F23001.oji".to_owned()]
+        );
+    }
+
+    #[test]
+    fn wear_picks_one_body_for_each_part_block() {
+        // A jacket declares a torso in block 0 and its two sleeves in
+        // blocks 1 and 2 (item 376 shape): three bodies, never fifteen.
+        let mut sprites: Vec<(u8, &str)> = vec![(1, "icon.oji"), (1, "icon.oji")];
+        sprites.extend(std::iter::repeat_n((1, ""), 40));
+        sprites[2].1 = "torso-I.oji";
+        sprites[4].1 = "torso-G.oji";
+        sprites[12].1 = "arml-I.oji";
+        sprites[22].1 = "armr-I.oji";
+        let row = wear_row(sprites);
+        assert_eq!(
+            pick_wear_sprites(&row, true),
+            vec![
+                "torso-I.oji".to_owned(),
+                "arml-I.oji".to_owned(),
+                "armr-I.oji".to_owned()
+            ]
         );
     }
 
@@ -4053,12 +4126,13 @@ mod avatar_figure_tests {
         //   -> ScreenGame::paint_at -> ScreenGame::paint_room
         //   -> paint_room_user_panel -> AvatarFigure::paint_visible_centered
         //   -> AvatarFigure::paint_box_centered
-        // The live kit stacks 447 layers (item 376 mixes twelve
-        // 12-frame breathing bodies with three single-frame I-variant
-        // bodies, so 447 % 12 != 0): every 12-frame part must still
-        // paint its paint-clock frame while single-frame bodies paint
-        // every frame. Synthetic analog (one 12-frame run plus one
-        // single-frame run = 13 layers): no archive needed.
+        // The live kit stages 8 bodies / 63 layers through the shared
+        // stacker (items 16/30/376/383/389/35; item 376 contributes a
+        // still torso and still sleeves beside its breathing ones):
+        // every 12-frame part must still paint its paint-clock frame
+        // while single-frame bodies paint every frame. Synthetic analog
+        // (one 12-frame run plus one single-frame run = 13 layers): no
+        // archive needed.
         let mut figure = AvatarFigure::default();
         for part_frame in 0..12u16 {
             // One 12-frame body: twelve 1x1 layers at dx 0..12.
@@ -4227,5 +4301,65 @@ mod avatar_figure_tests {
         let painted = buf.iter().filter(|p| **p != BACKDROP && **p != 0).count();
         assert_eq!(painted, 1, "figure must paint exactly one pixel");
         let _ = AVATAR_BREATHING_TICK_MS;
+    }
+
+    #[test]
+    fn tt222_single_paint_blits_one_pose_per_hand_anchor() {
+        // Ticket #222 within-paint ghost guard: a single paint of the
+        // shared centered figure painter must not blit several poses at
+        // the same anchor. The real tester2 kit (items 16/30/376/383/
+        // 389/35) stages 40 runs that collapse into 8 anchor groups of
+        // 5 runs each; the selector blits all 5 per paint, so 5 poses
+        // land on one anchor in a single frame - the owner's ghost
+        // hands. This guard fails on current main because those groups
+        // exist (group size 5 > 1).
+        // Live caller chain:
+        //   main.rs::run_play -> WindowHandler::paint -> Shell::paint_backbuffer
+        //   -> ScreenGame::paint -> ScreenGame::paint_at (frame clear)
+        //   -> paint_room -> paint_room_user_panel
+        //   -> AvatarFigure::paint_visible_centered -> paint_box_centered.
+        // OPEN (not pinned): the exe's equipment-to-run selection gate
+        // (which variant per anchor the exe actually paints) is
+        // unpinned; this guard pins OUR observed failure mechanism
+        // through the live painter and does not invent exe semantics.
+        // Close still requires owner live-confirm (close-discipline 8).
+        let archive_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Image/avatar.opa");
+        let Ok(archive) = std::fs::read(&archive_path) else {
+            // CI has no game data: skip cleanly.
+            return;
+        };
+        let entries = o2jam_file::parse_opi(&archive).unwrap();
+        let entry = entries
+            .iter()
+            .find(|e| e.name == "Itemdata_Korea.dat")
+            .expect("avatar.opa carries the item table");
+        let table_bytes = &archive[entry.data_offset..entry.data_offset + entry.size as usize];
+        let table = o2jam_file::parse_avatar_item_table(table_bytes).unwrap();
+        let eq = [
+            16i32, 30, 376, 383, 389, 0, 0, 0, 0, 0, 0, 35, 0, 0, 0, 0, 0,
+        ];
+        let figure = load_worn_figure(&archive, &table, &eq, true);
+        // Group runs by the anchor the selector picks at tick 0.
+        let mut offset = 0usize;
+        let mut groups: std::collections::BTreeMap<(i32, i32), usize> =
+            std::collections::BTreeMap::new();
+        for &run in figure.part_lens() {
+            let sel = 0usize % run;
+            let layer = figure.layer(offset + sel).unwrap();
+            *groups.entry((layer.dx, layer.dy)).or_insert(0) += 1;
+            offset += run;
+        }
+        // No anchor may host more than one run in a single paint.
+        let duplicate: Vec<((i32, i32), usize)> = groups
+            .iter()
+            .filter(|&(_, n)| *n > 1)
+            .map(|(k, v)| (*k, *v))
+            .collect();
+        assert!(
+            duplicate.is_empty(),
+            "single paint blits duplicate-anchor hands: {:?}",
+            duplicate
+        );
     }
 }
