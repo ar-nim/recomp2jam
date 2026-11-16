@@ -6533,6 +6533,170 @@ mod session_tests {
     }
 
     #[test]
+    fn live_created_room_master_paints_start_not_ready() {
+        // Live-path guard (ticket #277): a real scripted-gateway
+        // create-room walk reaches Waiting as host, stages the genuine
+        // 7.55 art, paints a frame, and must show the master control
+        // set (START present, READY absent). Guard-green/live-broken
+        // (#191-#193): the seam filter pins `IDC_BUTTON_SWAIT_START`
+        // vs `IDC_BUTTON_SWAIT_READY`, but the live backdrop also
+        // carries `IDC_IMAGE_SWAIT_READYBUTTEONINACTIVE`
+        // (`Waiting_Ready_Inactive.ojs`) at the same rect, which the
+        // filter leaves unfiltered and paints over START for the host.
+        // Live caller chain:
+        //   assemble_online_session -> session.stage_live_art()
+        //   -> session.create_and_join_room() -> stage_hosted_room
+        //   -> ScreenGame::set_joined_room -> self.waiting (member_id 0)
+        //   paint -> OnlineSession::paint -> ScreenGame::paint
+        //   -> paint_waiting (Some art, Some room)
+        //   -> paint_waiting_scene(frame, room, art, captions)
+        //   -> art.paint_backdrop_live(Screen::Waiting, keep)
+        //     keep: START/MASTER_SKILLSEL iff is_room_master (member_id==0),
+        //           READY/SKILLSEL iff !is_room_master
+        //   -> paint_waiting_staged / paint_waiting_seat_avatars / ...
+        use o2jam_net::frame::encode_frame;
+        use o2jam_net::message::{CreateResult, CreateRoomResponse, CreatedRoom};
+        use o2jam_net::{RoomList, RoomListEntry};
+        use o2jam_render::Frame;
+        use o2jam_shell::screens::paint::SceneArt;
+        use std::path::PathBuf;
+
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
+        if o2jam_shell::staging::read_install_archives(&root)
+            .interface
+            .is_none()
+        {
+            return;
+        }
+
+        let (mut session, server) = room_session(|mut stream| {
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, o2jam_net::Request::CreateRoom.id());
+            let resp = CreateRoomResponse {
+                result: CreateResult::Success,
+                info: Some(CreatedRoom {
+                    number: 42,
+                    premium: false,
+                    password: String::new(),
+                    has_password: false,
+                    min_level: 1,
+                    max_level: 99,
+                }),
+            };
+            stream
+                .write_all(&encode_frame(
+                    CreateRoomResponse::COMMAND,
+                    &resp.encode_body(),
+                ))
+                .unwrap();
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, o2jam_net::Request::GetChannelInfo.id());
+            let entry = RoomListEntry {
+                number: 42,
+                state_code: 1,
+                title: "x".to_owned(),
+                has_password: false,
+                music_id: 0,
+                difficulty: 0,
+                key_mode: 2,
+                game_mode: 0,
+                speed: 1,
+                capacity: 8,
+                user_count: 1,
+                min_level: 1,
+                max_level: 99,
+                skills: Vec::new(),
+                premium: false,
+                room_type: 0,
+            };
+            let list = RoomList { rooms: vec![entry] };
+            stream
+                .write_all(&encode_frame(RoomList::COMMAND, &list.encode_body()))
+                .unwrap();
+            assert_quiet(&mut stream);
+        });
+
+        session.stage_live_art();
+
+        let placements = vec![o2jam_shell::avatar::ScenePlacement {
+            role: o2jam_shell::avatar::PlacementRole::Single,
+            id: "IDC_BUTTON_DCROOM_CREATE".to_owned(),
+            code: o2jam_shell::screens::side::CREATE_ROOM_CREATE_CODE,
+            sprite: None,
+            rect: o2jam_render::Rect {
+                x: 10,
+                y: 10,
+                w: 50,
+                h: 30,
+            },
+        }];
+        session
+            .game_mut()
+            .load_create_room_scene(placements, std::collections::HashMap::new());
+        session.game_mut().open_create_room_dialog();
+        session.game_mut().push_room_dialog_char('x');
+        session.game_mut().click_room_dialog(20, 20);
+        assert!(session.game_mut().room_dialog().is_none());
+
+        paint_until(&mut session, |s| s.screen() == Screen::Waiting);
+
+        // Live paint (what the host actually sees).
+        let mut live_buf = vec![0u32; 800 * 600];
+        let mut live_frame = Frame {
+            buf: &mut live_buf,
+            w: 800,
+            h: 600,
+        };
+        session.paint(&mut live_frame);
+
+        assert!(session.game.is_room_master(), "host must be room master");
+
+        // Reference paint: same scene art, but only the master's START
+        // control at the shared rect (READY + its inactive overlay
+        // excluded). The live frame must match it in that rect; any
+        // difference means a non-master sprite (READY / inactive
+        // overlay) is showing for the master.
+        let archive = o2jam_shell::staging::read_install_archives(&root)
+            .interface
+            .unwrap();
+        let report = o2jam_shell::staging::stage_state(
+            &archive,
+            o2jam_shell::staging::State::Waiting,
+            o2jam_shell::staging::StageContext::default(),
+        );
+        let staged = report.art.expect("Waiting art staged");
+        let scene_art = SceneArt {
+            placements: staged.placements,
+            figures: staged.figures,
+        };
+        let mut ref_buf = vec![0u32; 800 * 600];
+        let mut ref_frame = Frame {
+            buf: &mut ref_buf,
+            w: 800,
+            h: 600,
+        };
+        scene_art.paint_backdrop_live(&mut ref_frame, Screen::Waiting, |placed| {
+            placed.id == "IDC_BUTTON_SWAIT_START"
+        });
+
+        // Compare the shared control rect (628,126)-(770,163).
+        let (rx, ry, rw, rh) = (628i32, 126i32, 142i32, 37i32);
+        for dy in 0..rh {
+            for dx in 0..rw {
+                let x = (rx + dx) as usize;
+                let y = (ry + dy) as usize;
+                if live_buf[y * 800 + x] != ref_buf[y * 800 + x] {
+                    panic!(
+                        "READY-shown-for-master: live Waiting paint at ({},{}) differs from START-only reference (live={:#010x}, ref={:#010x})",
+                        x, y, live_buf[y * 800 + x], ref_buf[y * 800 + x]
+                    );
+                }
+            }
+        }
+
+        server.join().unwrap();
+    }
+    #[test]
     fn password_join_commit_stages_room_over_scripted_gateway() {
         // Ticket #269 wire guard (join side): a real session walk,
         // password dialog commit queues the join body, then a paint
