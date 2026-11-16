@@ -25,7 +25,7 @@ use o2jam_net::{
     CharacterInfo, CreateRoom, Difficulty, GameMode, GameSpeed, GameStatsUpdate, GiftItemInfo,
     GiftMusicInfo, KeyMode, RankDelta, RankEntry,
 };
-use o2jam_render::{pack_xrgb, Frame, Rect};
+use o2jam_render::{Frame, Rect};
 
 /// Item-shop block (`CStateShop`, 164 decl entries).
 pub const SHOP_BLOCK: &str = "STATE_SHOP";
@@ -1129,29 +1129,23 @@ pub fn select_music_sprite_names(list: &ControlList) -> Vec<String> {
     block_sprite_names(list, SELECT_MUSIC_DIALOG_BLOCK)
 }
 
-// --- Song-select dialog structure (`reference-musicselect-4x3.png`) ---
+// --- Song-select dialog data (`reference-musicselect-4x3.png`) ---
 //
-// Anchors below measure the open `DAILOG_SELECTMUSIC` dialog on the
-// 800x600 native canvas (the 4:3 reference PNG at 2.4 px per native
-// pixel). Painters scale them through `scale_rect_to_frame`, so the
-// structure keeps its reference proportions at any frame size over
-// the staged dialog art.
+// The dialog's chrome, its filter buttons, the table header, the INDEX
+// letters and the OK pill are all bound OPI sprites that carry their
+// own labels (`SelectMusic_Btn_Step1_all.ojs` names its 전체); the art
+// paints through [`super::paint::SceneArt::paint_overlay`]. Only live
+// content inks here, at slots the `.bnd`/`SET` templates place
+// ([`super::select_paint`]). The former reference-measured caption
+// anchors were retired with the scrim plates they drew on (ticket
+// #272, `docs/geometry-audit.md`).
 
 /// Difficulty-slot letters for the search-result icon column:
 /// `Ex`/`Nx`/`Hx` map to `E`/`N`/`H` (the Easy/Normal/Hard order the
-/// life-bar deltas already use).
+/// life-bar deltas already use). The letters themselves are baked into
+/// the row's note icon (`SelectMusic_Diff.ojs` frames); the frame the
+/// exe selects per chart stays OPEN.
 pub const SELECT_DIFFICULTY_LETTERS: [&str; OJN_LEVEL_COUNT] = ["E", "N", "H"];
-
-/// Song-level band captions, top to bottom. The exe bands are
-/// `초급 1–8` / `중급 8–19` / `고급 19–27` / `최고급 27+` (gameplay
-/// level gating, file `0x24578e`, dossier `ev_68760cac…`); the CP949
-/// captions draw as ASCII stand-ins (the micro-font has no hangul).
-pub const SELECT_LEVEL_FILTERS: [&str; 5] = ["ALL", "EASY", "MID", "HIGH", "TOP"];
-
-/// Wheel-bucket captions, top to bottom: the exe key-name table
-/// GOLD/BLACK/BLUE/RED/SILVER (`docs/dialog-strings.md`, filter path
-/// pinned) plus the ALL lead-in.
-pub const SELECT_WHEEL_FILTERS: [&str; 6] = ["ALL", "GOLD", "BLACK", "BLUE", "RED", "SILVER"];
 
 /// Genre captions, top to bottom (reference column 발라드/락/댄스/
 /// 힙합,R&B/재즈,펑크/클래식/기타). No exe genre-name table is
@@ -1165,12 +1159,6 @@ pub const SELECT_GENRE_FILTERS: [&str; 8] = [
     "JAZZ/FUNK",
     "CLASSIC",
     "ETC",
-];
-
-/// Search-result column captions (reference 라벨/노트/곡명/작곡가/
-/// 레벨/다운/듣기/정보/성적; ASCII stand-ins).
-pub const SELECT_TABLE_HEADERS: [&str; 9] = [
-    "LABEL", "NOTE", "TITLE", "ARTIST", "LVL", "DL", "PLAY", "INFO", "GRADE",
 ];
 
 /// Staged catalog song: the identity fields the search table names
@@ -1281,87 +1269,12 @@ pub fn select_pager_caption(row_count: usize) -> String {
     format!("1/{pages}")
 }
 
-/// Chosung search cells in reference order: 14 jamo, `A`..`Z`, then
-/// the 숫자/기타 words (42 cells over two rows). The jamo are the
-/// 14 simple initial consonants of the CP949 sort set (clusters
-/// ㄲ/ㄸ/ㅃ/ㅆ/ㅉ excluded — they sort under their base). Word cells
-/// stay `None` (no caption source) and keep their grid slots so the
-/// letters land at their reference positions; every `Some` cell
-/// rasterizes through the embedded TTF (the micro-font had no
-/// CP949 glyphs — that documented gap is closed).
-#[must_use]
-pub fn select_chosung_cells() -> Vec<Option<char>> {
-    const SORT_JAMO: [char; 14] = [
-        'ㄱ', 'ㄴ', 'ㄷ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅅ', 'ㅇ', 'ㅈ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ',
-    ];
-    let mut cells: Vec<Option<char>> = SORT_JAMO.iter().copied().map(Some).collect();
-    cells.extend(('A'..='Z').map(Some));
-    for _ in 0..SELECT_CHO_SUNG_WORDS {
-        cells.push(None);
-    }
-    cells
-}
-
-/// Difficulty-slot ink: easy green, normal yellow, hard red (the
-/// reference letter colors).
-#[must_use]
-pub const fn select_difficulty_ink(slot: usize) -> u32 {
-    match slot {
-        0 => pack_xrgb(0x30, 0xE0, 0x30),
-        1 => pack_xrgb(0xFF, 0xD0, 0x20),
-        _ => pack_xrgb(0xFF, 0x50, 0x50),
-    }
-}
-
-/// Filter-column panels (native pixels): song-level, wheel, and genre
-/// columns left to right, each spanning its button run.
-pub const SELECT_FILTER_COLUMNS: [Rect; 3] = [
-    Rect {
-        x: 28,
-        y: 95,
-        w: 96,
-        h: 300,
-    },
-    Rect {
-        x: 130,
-        y: 95,
-        w: 92,
-        h: 300,
-    },
-    Rect {
-        x: 230,
-        y: 95,
-        w: 100,
-        h: 300,
-    },
-];
-
-/// First filter button top (native y), its vertical pitch, and button
-/// height (reference column buttons).
-pub const SELECT_FILTER_BUTTON_TOP: i32 = 129;
-pub const SELECT_FILTER_BUTTON_PITCH: i32 = 33;
-pub const SELECT_FILTER_BUTTON_H: u32 = 26;
-
-/// Search-result tabs (native pixels): active search tab, picked tab.
-pub const SELECT_RESULT_TABS: [Rect; 2] = [
-    Rect {
-        x: 352,
-        y: 93,
-        w: 140,
-        h: 24,
-    },
-    Rect {
-        x: 494,
-        y: 93,
-        w: 127,
-        h: 24,
-    },
-];
-
-/// Search-table geometry (native pixels): header top, first row top,
-/// row pitch, visible rows (the reference shows ten full rows), and
-/// the horizontal band all rows share (left edge, width).
-pub const SELECT_HEADER_Y: i32 = 127;
+/// Search-table click band (native pixels): first row top, row pitch,
+/// visible rows, and the horizontal band the rows answer on. FILE
+/// values — `IDC_BUTTON_DSMUSIC_EXTEND1..10` pair `Dialog_SelectMusic.bnd`
+/// rects 3–12 (331,150)-(762,173), pitch 23 — kept as the click inverse
+/// for [`select_row_hit`]; the painter reads the staged bands instead
+/// ([`super::select_paint`]).
 pub const SELECT_ROW_TOP: i32 = 150;
 pub const SELECT_ROW_PITCH: i32 = 23;
 pub const SELECT_VISIBLE_ROWS: usize = 10;
@@ -1372,7 +1285,7 @@ pub const SELECT_TABLE_WIDTH: u32 = 437;
 /// table band or past the staged rows). Inverse of the
 /// [`SELECT_ROW_TOP`]/[`SELECT_ROW_PITCH`] bands; mouse clicks arrive
 /// pre-mapped to native space. Only the first [`SELECT_VISIBLE_ROWS`]
-/// rows paint, so only they answer.
+/// rows answer.
 #[must_use]
 pub fn select_row_hit(x: i32, y: i32, row_count: usize) -> Option<usize> {
     let width = i32::try_from(SELECT_TABLE_WIDTH).unwrap_or(0);
@@ -1387,75 +1300,17 @@ pub fn select_row_hit(x: i32, y: i32, row_count: usize) -> Option<usize> {
     (index < row_count.min(SELECT_VISIBLE_ROWS)).then_some(index)
 }
 
-/// Header column lefts (native x): the check box plus the nine
-/// [`SELECT_TABLE_HEADERS`] captions.
-pub const SELECT_HEADER_COLUMNS: [i32; 10] = [344, 360, 392, 417, 565, 627, 650, 673, 692, 715];
-
-/// Status line top and strip height (native pixels), plus the pager
-/// text's right edge.
-pub const SELECT_STATUS_Y: i32 = 394;
-pub const SELECT_STATUS_H: i32 = 18;
-pub const SELECT_PAGER_RIGHT: i32 = 756;
-
-/// Search row (native pixels): title/artist radio dots, edit box,
-/// search button, all below [`SELECT_SEARCH_Y`].
-pub const SELECT_SEARCH_Y: i32 = 417;
-pub const SELECT_TITLE_RADIO: Rect = Rect {
-    x: 352,
-    y: 423,
-    w: 8,
-    h: 8,
-};
-pub const SELECT_ARTIST_RADIO: Rect = Rect {
-    x: 410,
-    y: 423,
-    w: 8,
-    h: 8,
-};
-pub const SELECT_SEARCH_BOX: Rect = Rect {
-    x: 475,
-    y: 417,
-    w: 212,
-    h: 25,
-};
-pub const SELECT_SEARCH_BUTTON: Rect = Rect {
-    x: 694,
-    y: 417,
-    w: 38,
-    h: 25,
-};
-
-/// Chosung grid row tops and left edge (native pixels).
-/// CANDIDATE — `docs/geometry-audit.md` (offsets diverge from
-/// `Dialog_SelectMusic.bnd` r87–128: tops 444/462 vs file 440/455,
-/// left 352 vs file 345); rig follow-up, do not replace.
-pub const SELECT_CHO_SUNG_Y: [i32; 2] = [444, 462];
-pub const SELECT_CHO_SUNG_LEFT: i32 = 352;
-/// Chosung cell pitch (native pixels). FILE per the audit: the x-step
-/// of the INDEX button rects (r87–128) is exactly 15. Fallback for
-/// stages without dialog placements; the painter prefers
-/// [`select_chosung_layout`].
-pub const SELECT_CHO_SUNG_PITCH: i32 = 15;
-/// Chosung jamo/letter/word inventory. FILE per the audit: exactly
-/// the `Dialog_SelectMusic` INDEX-button inventory (14 jamo r87–100,
-/// 13+13 letters, 2 words r127–128).
-pub const SELECT_CHO_SUNG_JAMO: usize = 14;
-pub const SELECT_CHO_SUNG_WORDS: usize = 2;
-/// Chosung row cell counts derived from the jamo/letter/word
-/// inventory (FILE values; [`select_chosung_layout`] recounts them
-/// from staged placements at runtime).
-pub const SELECT_CHO_SUNG_ROW_CELLS: [usize; 2] =
-    [SELECT_CHO_SUNG_JAMO + 13, 13 + SELECT_CHO_SUNG_WORDS];
-
 /// Chosung grid geometry counted from staged dialog placements: the
 /// INDEX-button inventory (`IDC_BUTTON_DSMUSIC_SERACH_INDEX*`,
 /// ordinals 87–128 of `Dialog_SelectMusic.bnd`) gives the row cell
-/// counts and the x-pitch — both FILE per `docs/geometry-audit.md`.
-/// `None` when no INDEX button stages: callers keep the audited
-/// constants above.
+/// counts and the x-pitch — both FILE per `docs/geometry-audit.md`,
+/// and both proven against the genuine bind by the shots guard. The
+/// INDEX buttons carry their own jamo/letter/word stamps, so the
+/// painter draws no letters: this layout only feeds the inventory
+/// proof.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelectChosungLayout {
-    /// Painted cells per grid row, top row first.
+    /// INDEX buttons per grid row, top row first.
     pub row_cells: Vec<usize>,
     /// X pitch between adjacent cells (native pixels).
     pub pitch: i32,
@@ -1463,7 +1318,8 @@ pub struct SelectChosungLayout {
 
 /// Count the chosung grid from the staged INDEX buttons: group them
 /// by rect top (row), sort each row left to right, and take the
-/// smallest positive x-step as the pitch.
+/// smallest positive x-step as the pitch. `None` while no INDEX
+/// button stages.
 #[must_use]
 pub fn select_chosung_layout(placements: &[ScenePlacement]) -> Option<SelectChosungLayout> {
     let index_rects = index_button_rects(placements);
@@ -1511,14 +1367,6 @@ fn row_pitch(row: &[Rect]) -> Option<i32> {
         .filter(|step| *step > 0)
         .min()
 }
-
-/// OK button (native pixels; the reference bottom-center pill).
-pub const SELECT_OK_BUTTON: Rect = Rect {
-    x: 342,
-    y: 506,
-    w: 113,
-    h: 40,
-};
 
 /// Catalog title for one song id (`None` for dead slots and unknown ids).
 /// Dead-slot filtering matches [`music_shop_songs`]: only song entries resolve.
@@ -5749,18 +5597,9 @@ mod side_tests {
     }
 
     #[test]
-    fn select_music_dialog_stays_empty_without_block() {
-        let list = o2jam_file::parse_control_list(&side_control_text()).unwrap();
-        assert!(select_music_sprite_names(&list).is_empty());
-    }
-
-    #[test]
-    fn select_filters_name_three_columns() {
-        assert_eq!(SELECT_LEVEL_FILTERS, ["ALL", "EASY", "MID", "HIGH", "TOP"]);
-        assert_eq!(
-            SELECT_WHEEL_FILTERS,
-            ["ALL", "GOLD", "BLACK", "BLUE", "RED", "SILVER"]
-        );
+    fn select_genre_filters_name_the_reference_columns() {
+        // The genre table survives the #272 caption retirement: the
+        // lanking board still reads it as its genre cell stand-in.
         assert_eq!(
             SELECT_GENRE_FILTERS,
             [
@@ -5777,11 +5616,9 @@ mod side_tests {
     }
 
     #[test]
-    fn select_table_headers_name_nine_columns() {
-        assert_eq!(
-            SELECT_TABLE_HEADERS,
-            ["LABEL", "NOTE", "TITLE", "ARTIST", "LVL", "DL", "PLAY", "INFO", "GRADE"]
-        );
+    fn select_music_dialog_stays_empty_without_block() {
+        let list = o2jam_file::parse_control_list(&side_control_text()).unwrap();
+        assert!(select_music_sprite_names(&list).is_empty());
     }
 
     #[test]
@@ -5923,82 +5760,6 @@ mod side_tests {
             },
         }];
         assert_eq!(select_chosung_layout(&unrelated), None);
-    }
-
-    #[test]
-    fn select_chosung_cells_span_jamo_letters_and_words() {
-        let cells = select_chosung_cells();
-        assert_eq!(cells.len(), 42);
-        let jamo: Vec<char> = cells[..SELECT_CHO_SUNG_JAMO]
-            .iter()
-            .filter_map(|cell| *cell)
-            .collect();
-        assert_eq!(
-            jamo,
-            [
-                'ㄱ', 'ㄴ', 'ㄷ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅅ', 'ㅇ', 'ㅈ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ'
-            ],
-            "the 14 simple initial jamo must fill the sort grid"
-        );
-        let letters: Vec<char> = cells.iter().filter_map(|cell| *cell).skip(14).collect();
-        assert_eq!(letters, ('A'..='Z').collect::<Vec<_>>());
-        assert_eq!(cells[40], None);
-        assert_eq!(cells[41], None);
-    }
-
-    #[test]
-    fn select_inks_follow_the_reference_letters() {
-        assert_eq!(SELECT_DIFFICULTY_LETTERS, ["E", "N", "H"]);
-        assert_eq!(select_difficulty_ink(0), pack_xrgb(0x30, 0xE0, 0x30));
-        assert_eq!(select_difficulty_ink(1), pack_xrgb(0xFF, 0xD0, 0x20));
-        assert_eq!(select_difficulty_ink(2), pack_xrgb(0xFF, 0x50, 0x50));
-    }
-
-    #[test]
-    fn select_layout_pins_reference_anchors() {
-        // Native 800x600 measurements of reference-musicselect-4x3.png:
-        // three filter columns, ten 23 px rows under a 127-top header,
-        // and the bottom-center OK pill.
-        assert_eq!(
-            SELECT_FILTER_COLUMNS,
-            [
-                Rect {
-                    x: 28,
-                    y: 95,
-                    w: 96,
-                    h: 300
-                },
-                Rect {
-                    x: 130,
-                    y: 95,
-                    w: 92,
-                    h: 300
-                },
-                Rect {
-                    x: 230,
-                    y: 95,
-                    w: 100,
-                    h: 300
-                }
-            ]
-        );
-        assert_eq!(SELECT_FILTER_BUTTON_TOP, 129);
-        assert_eq!(SELECT_FILTER_BUTTON_PITCH, 33);
-        assert_eq!(SELECT_ROW_TOP, 150);
-        assert_eq!(SELECT_ROW_PITCH, 23);
-        assert_eq!(SELECT_VISIBLE_ROWS, 10);
-        assert_eq!(SELECT_HEADER_COLUMNS[3], 417);
-        assert_eq!(SELECT_CHO_SUNG_LEFT, 352);
-        assert_eq!(SELECT_CHO_SUNG_PITCH, 15);
-        assert_eq!(
-            SELECT_OK_BUTTON,
-            Rect {
-                x: 342,
-                y: 506,
-                w: 113,
-                h: 40
-            }
-        );
     }
 
     #[test]

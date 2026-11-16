@@ -308,6 +308,23 @@ impl Dialog {
         }
     }
 
+    /// Bodies the sheet declares but opens hidden (see
+    /// [`SELECT_MUSIC_HIDDEN_AT_OPEN`]): placements keep their rects
+    /// while no figure loads, so the slot paints nothing.
+    #[must_use]
+    pub const fn hidden_sprites(self) -> &'static [&'static str] {
+        match self {
+            Dialog::SelectMusic => SELECT_MUSIC_HIDDEN_AT_OPEN,
+            Dialog::ChannelInfo
+            | Dialog::PlanetOption
+            | Dialog::PlanetOptionSound
+            | Dialog::PlanetOptionGame
+            | Dialog::PlanetQuit
+            | Dialog::CreateRoom
+            | Dialog::InputPassword => &[],
+        }
+    }
+
     /// State this dialog mounts over.
     #[must_use]
     pub const fn host(self) -> State {
@@ -442,6 +459,39 @@ pub const BYNAME_TABLE: &[ByNameRow] = &[
     },
 ];
 
+/// Bodies the song-select sheet declares but opens hidden (ticket
+/// #272). Two families sit against the visible song-select panel:
+///
+/// - the random panel (`SelectMusic_Random1_BG.ojs` and its five
+///   `SelectMusic_Btn_Random1_*` buttons) pairs the *same* `.bnd` rects
+///   as the level column's `STEP1_*` buttons — the block's two
+///   selection panels, one visible at a time, switched by the top bar's
+///   `IDC_BUTTON_DSMUSIC_MUISCSELECT 0x2720001A` /
+///   `IDC_BUTTON_DSMUSIC_RANDOMSELECT 0x2720001B`;
+/// - the three help overlays behind the `?` buttons
+///   (`SelectMusic_*GuidImg.ojs`, ControlList comment `'?' 이미지,
+///   가이드 이미지`), each a screen-size guide sheet.
+///
+/// The pinned reference
+/// `docs/screenshots/reference-musicselect-4x3.png` shows the dialog
+/// open in song-select mode with no guide sheet, so both families start
+/// hidden and only their rects stage. The switch handlers stay OPEN
+/// (next evidence: the exe handlers behind the panel-switch codes
+/// `0x2720001A`/`0x2720001B`, and behind
+/// `IDC_BUTTON_DSMUSIC_LABELQUESTION 0x27200053` /
+/// `IDC_BUTTON_DSMUSIC_SEARCHQUESTION 0x27200055` for the guides).
+pub const SELECT_MUSIC_HIDDEN_AT_OPEN: &[&str] = &[
+    "SelectMusic_Random1_BG.ojs",
+    "SelectMusic_Btn_Random1_all.ojs",
+    "SelectMusic_Btn_Random1_Easy.ojs",
+    "SelectMusic_Btn_Random1_Intermediate.ojs",
+    "SelectMusic_Btn_Random1_High.ojs",
+    "SelectMusic_Btn_Random1_Highest.ojs",
+    "SelectMusic_LabelGuidImg.ojs",
+    "SelectMusic_SearchGuidImg.ojs",
+    "SelectMusic_ListGuidImg.ojs",
+];
+
 /// Control-list entry holding every Interface Block.
 const INTERFACE_LIST: &str = "ControlList_Interface.txt";
 /// Control-list entry holding every Playing Block.
@@ -535,7 +585,7 @@ pub fn stage_dialog(archive: &[u8], dialog: Dialog, ctx: StageContext) -> StageR
     let Some(row) = DIALOG_TABLE.iter().find(|row| row.dialog == dialog) else {
         return StageReport::default();
     };
-    stage_bound_row(
+    stage_bound_row_hiding(
         archive,
         &StageRow {
             state: row.host,
@@ -545,6 +595,7 @@ pub fn stage_dialog(archive: &[u8], dialog: Dialog, ctx: StageContext) -> StageR
             extra_sprites: &[],
         },
         ctx,
+        dialog.hidden_sprites(),
     )
 }
 
@@ -644,6 +695,19 @@ fn resolve_bound_row(
 /// Stage one bound row: the Block paired with its `.bnd`, plus the
 /// row's extra bodies merged by name.
 fn stage_bound_row(archive: &[u8], row: &StageRow, ctx: StageContext) -> StageReport {
+    stage_bound_row_hiding(archive, row, ctx, &[])
+}
+
+/// [`stage_bound_row`] with bodies the sheet names but opens hidden:
+/// their placements keep their rects (clicks and geometry stay
+/// file-derived) while no figure loads, so the slot paints nothing —
+/// the same empty-slot arm the Playing mode families use.
+fn stage_bound_row_hiding(
+    archive: &[u8],
+    row: &StageRow,
+    ctx: StageContext,
+    hidden: &[&str],
+) -> StageReport {
     let mut report = StageReport::default();
     let Some(resolved) = resolve_bound_row(archive, row, &mut report) else {
         return report;
@@ -652,12 +716,16 @@ fn stage_bound_row(archive: &[u8], row: &StageRow, ctx: StageContext) -> StageRe
         placements: bind_scene_rects(&resolved.block, &resolved.bind),
         figures: HashMap::new(),
     };
+    let visible_names: Vec<String> = staged_names(&resolved.names, row.extra_sprites)
+        .into_iter()
+        .filter(|name| !hidden.contains(&name.as_str()))
+        .collect();
     load_figures(
         archive,
         row.state,
         resolved.block_name,
         ctx,
-        &staged_names(&resolved.names, row.extra_sprites),
+        &visible_names,
         &mut art,
         &mut report,
     );

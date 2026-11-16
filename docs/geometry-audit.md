@@ -198,36 +198,30 @@ complete by accident), `Save/Default/Exit` pressed/hover frames.
 rects start at x=53 — hit box and art disagree by 13 px in the exe
 data itself; hits ride the `.bnd` rects per the pairing rule.
 
-## Select-music dialog (side.rs:497–600)
+## Select-music dialog (retired; ticket #272)
 
-Scene note: bound to `Dialog_SelectMusic.bnd` (133 rects). The constants
-look file-traceable by role, but the file contradicts almost every
-value (see divergence column); only row tops, the two pitches, and the
-inventory counts match exactly. Conservative verdicts below; the dialog
-pairing rides the shared ordinal rule now (ticket #15: the 154-entry
-paint proof covers `DAILOG_SELECTMUSIC`, so entries pair — the
-photo-vs-bnd value divergences stand, cited per row).
+**Closed 2026-11-16 by retirement, not by re-measurement.** Every
+`SELECT_*` value in this section anchored a *painted* stand-in (caption
+plates, header captions, radio dots, chosung letters, the OK caption)
+over bound OPI art. The exe draws those pixels from the sprite bodies —
+`Dialog_SelectMusic.bnd` pairs every `IDC_BUTTON_DSMUSIC_*` entry by
+code ordinal and the bodies carry their own labels
+(`SelectMusic_Btn_Step1_all.ojs` names its 전체, `SelectMusic_OK.ojs` its
+OK) — so the plates covered the art with near-black scrims (ticket #272,
+owner playtest 2026-11-16). The painters are gone; the pixels now come
+from the staged art at its file rects, and the live text layer
+(`crates/o2jam-shell/src/screens/select_paint.rs`) inks only the sheet's
+`TEXT` controls at their `.bnd`/`SET` slots. Surviving constants are the
+click band below (FILE-backed by the EXTEND rects) and the INDEX
+inventory probe.
 
-| Constant | Value | Candidate (file rect / divergence) | Pairing evidence | Verdict | Proposed action |
-|---|---|---|---|---|---|
-| side.rs:497 `SELECT_FILTER_COLUMNS` | (28,95,96,300),(130,95,92,300),(230,95,100,300) | STEP1/2/3 button runs r27–31 (24,118)-(118,375), r32–37 (125,147)-(219,292), r38–45 (226,118)-(320,350): tops 118 vs 95, lefts +4, widths −2…+10 | `IDC_BUTTON_DSMUSIC_STEP1_ALL…` ord 27… | CANDIDATE | Rig: prove pairing, then re-measure |
-| side.rs:520–522 `SELECT_FILTER_BUTTON_TOP/PITCH/H` | 129 / 33 / 26 | file tops 118 pitch 29 h 29 (r27–31) | same | CANDIDATE | same |
-| side.rs:525 `SELECT_RESULT_TABS` | (352,93,140,24),(494,93,127,24) | r46 (350,88)-(490,109), r47 (500,88)-(640,109): +2/+5 offsets, w 140 matches tab 1 only | `IDC_IMAGE_DSMUSIC_TABRESULT/TABPLAYLIST` ord 46/47 | CANDIDATE | same |
-| side.rs:543 `SELECT_HEADER_Y` | 127 | r54 CHECKALL_BG (339,126)-(352,139): y 126 | `IDC_IMAGE_DSMUSIC_CHECKALL_BG` ord 54 | CANDIDATE | same |
-| side.rs:544–545 `SELECT_ROW_TOP / SELECT_ROW_PITCH` | 150 / 23 | r3–12 (331,150)-(762,173) ×10, pitch 23, tops exact | `IDC_BUTTON_DSMUSIC_EXTEND1..10` ord 3–12 | CANDIDATE (strong) | File-backed once pairing proven |
-| side.rs:546 `SELECT_VISIBLE_ROWS` | 10 | 10 EXTEND rects r3–12 | same | CANDIDATE (strong) | same |
-| side.rs:547–548 `SELECT_TABLE_LEFT / SELECT_TABLE_WIDTH` | 344 / 437 | file band 331–762 (w 431): left +13, width +6 | contradicts r3–12 | CANDIDATE (divergent) | Rig: exe table band |
-| side.rs:552 `SELECT_HEADER_COLUMNS` | [344,360,392,417,565,627,650,673,692,715] | r54–64 x1 [339,356,382,409,563,635,658,681,…,730]: offsets +2…−15, one extra column | header buttons ord 54–64 | CANDIDATE (divergent) | Rig |
-| side.rs:556–557 `SELECT_STATUS_Y / SELECT_STATUS_H` | 394 / 18 | r65 (338,390)-(653,404): y 390, h 14 | `IDC_TEXT_DSMUSIC_SERACHRESHLT` ord 65 | CANDIDATE (divergent) | Rig |
-| side.rs:558 `SELECT_PAGER_RIGHT` | 756 | r70 RIGHT (726,386)-(744,406): right edge 744 | `IDC_BUTTON_DSMUSIC_RIGHT` ord 70 | CANDIDATE (divergent) | Rig |
-| side.rs:562 `SELECT_SEARCH_Y` | 417 | search row r72–75 tops 413–418 | ord 72–75 | CANDIDATE | Rig |
-| side.rs:563/569 `SELECT_TITLE_RADIO / SELECT_ARTIST_RADIO` | (352,423,8,8) / (410,423,8,8) | no 8x8 rect; interior dots of r72 (341,413)-(393,435) / r73 (396,413)-(462,435) | ord 72/73 | CANDIDATE | Rig: exe radio dot placement |
-| side.rs:575 `SELECT_SEARCH_BOX` | (475,417,212,25) | r74 EDIT (474,418)-(675,432): +1/−1 origin, w 212 vs 201, h 25 vs 14 | `IDC_EDIT_DSMUSIC_SEARCH` ord 74 | CANDIDATE (divergent) | Rig |
-| side.rs:581 `SELECT_SEARCH_BUTTON` | (694,417,38,25) | r75 (695,414)-(742,434): −1/+3 origin, w 38 vs 47 | `IDC_BUTTON_DSMUSIC_SERACH` ord 75 | CANDIDATE (divergent) | Rig |
-| side.rs:591–593 `SELECT_CHO_SUNG_Y / LEFT / PITCH` | [444,462] / 352 / 15 | index rows r87–113 y440, r114–128 y455; x1 345; x-step 15 exact | `IDC_BUTTON_DSMUSIC_SERACH_INDEX0..41` ord 87–128 | CANDIDATE (pitch FILE, offsets divergent) | Rig: row tops/left |
-| side.rs:594–595 `SELECT_CHO_SUNG_JAMO / WORDS` | 14 / 2 | row inventory exact: 14 jamo (r87–100) + 13 letters (r101–113); 13 letters (r114–126) + 2 words (r127–128) | same | FILE | Count from INDEX button inventory at runtime |
-| side.rs:596 `SELECT_CHO_SUNG_ROW_CELLS` | [27,15] | derived from JAMO/WORDS | — | RUNTIME | Keep |
-| side.rs:600 `SELECT_OK_BUTTON` | (342,506,113,40) | r1 (326,497)-(452,542): +16/+9 origin, w 113 vs 126 | `IDC_BUTTON_DSMUSIC_OK` ord 1 | CANDIDATE (divergent) | Rig |
+| Constant | Status |
+|---|---|
+| `SELECT_FILTER_COLUMNS`, `SELECT_FILTER_BUTTON_TOP/PITCH/H` | Removed — art owns the column plates |
+| `SELECT_RESULT_TABS`, `SELECT_HEADER_Y`, `SELECT_HEADER_COLUMNS`, `SELECT_TABLE_HEADERS` | Removed — header/tab chrome is art; tab counts ink at the `TEXT` rects |
+| `SELECT_STATUS_Y/H`, `SELECT_PAGER_RIGHT`, `SELECT_SEARCH_Y`, `SELECT_TITLE_RADIO`, `SELECT_ARTIST_RADIO`, `SELECT_SEARCH_BOX`, `SELECT_SEARCH_BUTTON`, `SELECT_OK_BUTTON` | Removed — status/pager ink their `TEXT` rects; radios, edit box, search button and OK pill are art |
+| `SELECT_CHO_SUNG_Y/LEFT/PITCH/JAMO/WORDS/ROW_CELLS`, `select_chosung_cells` | Removed — the INDEX buttons carry their own stamps; `select_chosung_layout` stays as the inventory proof |
+| `SELECT_ROW_TOP`, `SELECT_ROW_PITCH`, `SELECT_VISIBLE_ROWS`, `SELECT_TABLE_LEFT`, `SELECT_TABLE_WIDTH` | Kept as the [`select_row_hit`] click band; FILE-backed by `IDC_BUTTON_DSMUSIC_EXTEND1..10` rects (331,150)-(762,173), pitch 23 |
 
 ## Planet (side.rs:880–908)
 
@@ -279,23 +273,21 @@ verified bound run (entries 213–229 = ordinals 1–17,
 
 ## Counts per verdict
 
-- DONE: 78 (verified archive/exe source; incl. the 2026-11-09 rig
+- DONE: 56 (verified archive/exe source; incl. the 2026-11-09 rig
   pins: room inset +12/+12, waiting chat pitch/caret/row-count;
   2026-11-11 room splits: number/title/count origins + digit pitch
-  + TEXT cap fraction; and the A/V-verified select-music photo
-  constants — see the A/V section)
-- FILE: 3 (`SELECT_CHO_SUNG_JAMO`,
-  `SELECT_CHO_SUNG_WORDS`,
-  `SELECT_CHO_SUNG_PITCH`)
+  + TEXT cap fraction)
+- RETIRED: 22 (the select-music caption anchors — the OPI button
+  bodies carry those pixels; see "Select-music dialog" below)
+- FILE: 3 (the select-music click band and the INDEX inventory probe;
+  the caption anchors they used to sit beside were retired in #272)
 - RUNTIME: 22 (exe-computed / server / scaled-frame / fallback)
-- CANDIDATE: 0 (the 22 select-music rows were upgraded to
-  DONE-exe-output-verified by the 2026-11-10 A/V alignment; the bnd
-  values are documented as contradicted, not applied)
+- CANDIDATE: 0
 - OPEN: 11 (channel chrome 10 — partly live-measured 2026-11-09, see
   the channel rows; playing anchors 3 — blocked by the Attempt-13
   loading wedge; minus the 2 retired room inset rows, now DONE)
 
-Total audited: 136 named constants.
+Total audited: 136 named constants (114 live, 22 retired in #272).
 
 ## Highest-value FILE replacements (ranked)
 
@@ -304,9 +296,9 @@ Total audited: 136 named constants.
    with verified ordinal pairing; fallback constants pinned by
    `waiting_chat_native_fallback_rects_match_the_state_waiting_bnd`,
    doc comments cite the pairing evidence.
-2. `SELECT_CHO_SUNG_JAMO`/`WORDS`/`PITCH` (side.rs:593–595) — exact
-   `Dialog_SelectMusic` INDEX-button inventory and x-pitch; countable
-   from staged placements at runtime.
+2. ~~`SELECT_CHO_SUNG_JAMO`/`WORDS`/`PITCH`~~ — RETIRED (#272): the
+   INDEX buttons carry their own stamps, so only the inventory proof
+   stays (`select_chosung_layout`, shots guard).
 3. `SELECT_ROW_TOP`/`SELECT_ROW_PITCH` (side.rs:544–545) — exact match
    on the ten EXTEND button rects; the dialog pairing now rides the
    proven shared rule (ticket #15, 154-entry proof). Promotion to
@@ -422,3 +414,13 @@ LANCZOS) vs the shell renders (400→800 NEAREST, placement preserved at
 Consequence: the 20 select-music CANDIDATE constants keep their values
 with verdict upgraded to DONE (exe-output-verified via A/V alignment);
 the audit's FILE count is unchanged (no file replacement occurred).
+
+Correction (ticket #272, 2026-11-16): the alignment above proved that
+the *staged art* lands where the capture shows it — the art paints at
+the `.bnd` rects, and the OK pill matched the capture pixel-exact at
+its bnd rect (326,497). What it could not show is that the photo
+constants' *plates* were ever the exe's pixels: they were our stand-ins
+drawn on top, which is why "shifting toward the bnd values" changed
+nothing (the bodies under the plates already sat there). The plates are
+retired; the pixel evidence now rides the art itself
+(`song_dialog_buttons_paint_their_staged_bodies`).

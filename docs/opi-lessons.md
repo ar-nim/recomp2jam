@@ -33,12 +33,27 @@ bytes corroborated along the way.
 7. **Mode families gate staging.** The Playing block carries
    mode-twin families (note-BG, life-gauge, BP-buffer per 3/5/7 key
    and P2P variants); only the member the joined room names paints.
-   Staging all of them scatters art across the screen.
+   Staging all of them scatters art across the screen. Dialogs do the
+   same: `DAILOG_SELECTMUSIC` declares the random panel
+   (`SelectMusic_Random1_*`) on the *same* `.bnd` rects as the level
+   column's `STEP1_*` buttons, chosen by the top bar's 곡선택/랜덤
+   buttons, and pairs each `?` button with a screen-size guide sheet
+   (`SelectMusic_*GuidImg.ojs`). Both families start hidden — the
+   reference capture shows the dialog open without them — so they stage
+   as rects with no body (`Dialog::hidden_sprites`).
 8. **Half-res frames must be scaled to their placement**, not blitted
    1:1 — the exe scales, our 1:1 shortcut showed quarter art.
 9. **Digits and captions are sprites too**: `Scroe`/`PlayTimeNum`/
    `Note_ComboNum` are ten-frame fonts (0–9); bind all ten or fall
    back. Room numbers use the same pattern (`ROOMNO1/10/100`).
+
+10. **Baked labels are not missing text.** A button body carries its
+    own word (`SelectMusic_Btn_Step1_all.ojs` names its 전체), so a
+    painter must not fake a caption over it: an ASCII stand-in plus a
+    scrim plate paints dark rectangles over real art (ticket #272).
+    Only the `TEXT` controls of the block hold live text (counts,
+    status, pager, row fields) — ink those at their `.bnd` rects, and
+    nothing else.
 
 ## The debug method that found them
 
