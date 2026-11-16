@@ -606,6 +606,9 @@ pub struct ScreenGame {
     /// only). Zeroed until staged.
     skill_counts: [u32; 3],
     select_music_art: Option<SceneArt>,
+    /// Cached copy of the last staged song-select dialog art so the
+    /// MUSELECT open trigger can reopen it after an OK close (#266).
+    select_music_art_cache: Option<SceneArt>,
     /// Open room dialog, if any (create-room or password entry over Room).
     room_dialog: Option<RoomDialog>,
     /// Create-room form behind the dialog (cleared on open).
@@ -1009,6 +1012,7 @@ impl ScreenGame {
             song_cover: None,
             skill_counts: [0, 0, 0],
             select_music_art: None,
+            select_music_art_cache: None,
             room_dialog: None,
             create_room_form: CreateRoomForm::new(),
             password_form: PasswordForm::new(),
@@ -2771,6 +2775,23 @@ impl ScreenGame {
             self.select_team(team);
             return;
         }
+        // Song-select open trigger: the room master's MUSELECT button
+        // (`IDC_BUTTON_SWAIT_MUSELECT`, file `0xb2622`) stages the
+        // dialog. Non-master clicks are dropped by the exe, so they
+        // stay a no-op here. Reopens after an OK close by restoring
+        // the cached dialog art (ticket #266); a fresh stage is used
+        // when nothing was cached yet.
+        let mu_select = staged_rect_hit(placements, "IDC_BUTTON_SWAIT_MUSELECT", x, y);
+        if mu_select && self.is_room_master() {
+            if self.select_music_art.is_none() {
+                if let Some(cached) = self.select_music_art_cache.clone() {
+                    self.select_music_art = Some(cached);
+                } else {
+                    self.load_select_music_scene(Vec::new(), HashMap::new());
+                }
+            }
+            return;
+        }
         let back = WAITING_BACK_IDS
             .iter()
             .any(|id| staged_rect_hit(placements, id, x, y));
@@ -3076,10 +3097,12 @@ impl ScreenGame {
         placements: Vec<ScenePlacement>,
         figures: HashMap<String, AvatarFigure>,
     ) -> &mut Self {
-        self.select_music_art = Some(SceneArt {
+        let art = SceneArt {
             placements,
             figures,
-        });
+        };
+        self.select_music_art_cache = Some(art.clone());
+        self.select_music_art = Some(art);
         self
     }
 
@@ -6913,6 +6936,144 @@ mod game_tests {
             "OK with no pick leaves the dialog open"
         );
         assert!(!game.has_pending_music_send(), "no pick is queued");
+    }
+
+    #[test]
+    fn waiting_mu_select_opens_song_dialog_for_master() {
+        // Ticket #266 A1: a master click on the staged MUSELECT control
+        // opens the song-select dialog (Screen::Waiting -> MUSELECT rect
+        // hit -> load_select_music_scene staging) when it is closed.
+        use crate::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_render::Rect;
+        use std::collections::HashMap;
+        let mu_placement = ScenePlacement {
+            id: "IDC_BUTTON_SWAIT_MUSELECT".to_owned(),
+            code: 0,
+            sprite: None,
+            rect: Rect {
+                x: 100,
+                y: 100,
+                w: 80,
+                h: 30,
+            },
+            role: PlacementRole::Single,
+        };
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        game.load_scene(Screen::Waiting, vec![mu_placement], HashMap::new());
+        assert!(
+            !game.select_music_dialog_open(),
+            "dialog closed before open"
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(140, 115));
+        assert!(
+            game.select_music_dialog_open(),
+            "master MUSELECT opens the song dialog"
+        );
+    }
+
+    #[test]
+    fn waiting_mu_select_is_noop_for_non_master() {
+        // Ticket #266 A1: the exe drops non-master MUSELECT clicks
+        // (file 0xb2622), so a guest click leaves the dialog closed.
+        use crate::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_render::Rect;
+        use std::collections::HashMap;
+        let mu_placement = ScenePlacement {
+            id: "IDC_BUTTON_SWAIT_MUSELECT".to_owned(),
+            code: 0,
+            sprite: None,
+            rect: Rect {
+                x: 100,
+                y: 100,
+                w: 80,
+                h: 30,
+            },
+            role: PlacementRole::Single,
+        };
+        let mut room = waiting_room();
+        room.member_id = 1;
+        let mut game = ScreenGame::new();
+        game.set_joined_room(room);
+        walk_to_waiting(&mut game);
+        game.load_scene(Screen::Waiting, vec![mu_placement], HashMap::new());
+        assert!(!game.select_music_dialog_open());
+        game.ingest_snapshot(&InputSnapshot::click_at(140, 115));
+        assert!(
+            !game.select_music_dialog_open(),
+            "non-master MUSELECT is a no-op"
+        );
+    }
+
+    #[test]
+    fn waiting_mu_select_reopens_after_ok_close() {
+        // Ticket #266 A2: after an OK close, a second MUSELECT click
+        // reopens the dialog, and a fresh row pick restages the queued
+        // pick (overwriting any prior queued pick).
+        use crate::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_render::Rect;
+        use std::collections::HashMap;
+        let mu_placement = ScenePlacement {
+            id: "IDC_BUTTON_SWAIT_MUSELECT".to_owned(),
+            code: 0,
+            sprite: None,
+            rect: Rect {
+                x: 100,
+                y: 100,
+                w: 80,
+                h: 30,
+            },
+            role: PlacementRole::Single,
+        };
+        let ok_placement = ScenePlacement {
+            id: "IDC_BUTTON_DSMUSIC_OK".to_owned(),
+            code: 0x27200002,
+            sprite: None,
+            rect: Rect {
+                x: 326,
+                y: 497,
+                w: 126,
+                h: 45,
+            },
+            role: PlacementRole::Single,
+        };
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        game.load_scene(Screen::Waiting, vec![mu_placement], HashMap::new());
+        game.load_select_music_scene(vec![ok_placement], HashMap::new());
+        let blob = waiting_song_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_song_catalog(&entries);
+        // First pick + OK close.
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 150 + 23 + 11));
+        assert!(game.has_pending_music_send(), "row click stages the pick");
+        game.ingest_snapshot(&InputSnapshot::click_at(389, 519));
+        assert!(!game.select_music_dialog_open(), "OK closes the dialog");
+        // Reopen via MUSELECT.
+        game.ingest_snapshot(&InputSnapshot::click_at(140, 115));
+        assert!(
+            game.select_music_dialog_open(),
+            "MUSELECT reopens the dialog"
+        );
+        // Fresh row pick restages (overwrites) the queued pick.
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 150 + 23 + 11));
+        assert!(
+            game.has_pending_music_send(),
+            "fresh row pick restages pending_music_send"
+        );
+        // The reopened dialog carries the cached OK placement, so a
+        // second OK click closes it again with the pick still queued.
+        game.ingest_snapshot(&InputSnapshot::click_at(389, 519));
+        assert!(
+            !game.select_music_dialog_open(),
+            "OK on the reopened dialog closes it again"
+        );
+        assert!(
+            game.has_pending_music_send(),
+            "the pick stays queued after the reopen close"
+        );
     }
 
     #[test]
