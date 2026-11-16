@@ -1718,6 +1718,82 @@ impl OnlineSession {
         self.confirm_song_select();
     }
 
+    /// Drain one queued create-room commit (ticket #269): the shell's
+    /// dialog Commit queues `pending_create_room` (the 2004 body); this
+    /// bridge moves the committed title through the existing host path
+    /// [`Self::create_and_join_room`] (CreateRoom 2004 -> room list
+    /// row -> `stage_hosted_room`), then steps the scene into Waiting.
+    /// No second create send is invented. A create already in flight
+    /// (joined room staged) is left alone so a retry does not
+    /// double-create.
+    pub fn flush_create_room(&mut self) {
+        if self.joined_room.is_some() && self.joined_waiting {
+            let _ = self.game.take_create_room();
+            return;
+        }
+        let Some(body) = self.game.take_create_room() else {
+            return;
+        };
+        match self.create_and_join_room(&body.title) {
+            Ok(_) => {
+                let _ = self.game.enter_screen(Screen::Waiting);
+            }
+            Err(source) => {
+                tracing::warn!(%source, "create room failed; staying in Room");
+            }
+        }
+    }
+
+    /// Drain one queued password-dialog join (ticket #269): the shell's
+    /// password Commit queues `pending_join` (a `JoinRoom` 3002 body)
+    /// and steps to Waiting; this bridge sends `JoinWaiting` (3002)
+    /// through the gateway and stages the answer's room, mirroring
+    /// `resolve_room_join` without re-running the origin replay (the
+    /// shell already moved to Waiting). No second join send beyond the
+    /// existing 3002 shape is invented.
+    pub fn flush_join(&mut self) {
+        let Some(body) = self.game.take_join() else {
+            return;
+        };
+        if let Err(source) = self
+            .gateway
+            .send_frame(Request::JoinWaiting.id(), &body.encode_body())
+        {
+            tracing::warn!(%source, "password join send failed; staying in Waiting");
+            return;
+        }
+        loop {
+            match self.gateway.next_frame() {
+                Ok(frame) if frame.id == JoinRoomResponse::COMMAND => {
+                    if let Ok(response) = JoinRoomResponse::decode_frame(&frame) {
+                        if matches!(
+                            JoinResult::from_code(response.result_code),
+                            Some(JoinResult::Success)
+                        ) {
+                            if let Some(room) = response.room {
+                                self.resident_room = Some(room.title.clone());
+                                self.joined_room = Some(room.clone());
+                                self.game.set_joined_room(room);
+                                self.joined_waiting = true;
+                                restage_live_playing(&mut self.game);
+                                let _ = self.game.enter_screen(Screen::Waiting);
+                            }
+                        } else {
+                            tracing::warn!(
+                                code = response.result_code,
+                                "password join rejected; staying in Waiting"
+                            );
+                        }
+                    }
+                    break;
+                }
+                Ok(frame) if Generic::from_id(frame.id).is_some() => {}
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+    }
+
     /// Joined-master Confirm: send `StartGame` 4010 ([`Request::StartGame`]
     /// with the [`StartGame`] empty body — the `run_song_flow` send
     /// shape, minus the `ConfirmMusicLoaded` tail, which the Loading
@@ -6363,6 +6439,159 @@ mod session_tests {
         // 4. Flow advanced into song select (attempt staged, pick
         // consumed from the outbox).
         assert!(!session.game_mut().has_pending_music_send());
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn waiting_create_room_commit_stages_room_over_scripted_gateway() {
+        use o2jam_net::frame::encode_frame;
+        use o2jam_net::message::{CreateResult, CreateRoom, CreateRoomResponse, CreatedRoom};
+        use o2jam_net::{RoomList, RoomListEntry};
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use std::collections::HashMap;
+
+        let (mut session, server) = room_session(|mut stream| {
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, o2jam_net::Request::CreateRoom.id());
+            let body = CreateRoom::decode_body(&frame.payload).unwrap();
+            assert_eq!(body.title, "x");
+            let resp = CreateRoomResponse {
+                result: CreateResult::Success,
+                info: Some(CreatedRoom {
+                    number: 42,
+                    premium: false,
+                    password: String::new(),
+                    has_password: false,
+                    min_level: 1,
+                    max_level: 99,
+                }),
+            };
+            stream
+                .write_all(&encode_frame(
+                    CreateRoomResponse::COMMAND,
+                    &resp.encode_body(),
+                ))
+                .unwrap();
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, o2jam_net::Request::GetChannelInfo.id());
+            let entry = RoomListEntry {
+                number: 42,
+                state_code: 1,
+                title: "x".to_owned(),
+                has_password: false,
+                music_id: 0,
+                difficulty: 0,
+                key_mode: 2,
+                game_mode: 0,
+                speed: 1,
+                capacity: 8,
+                user_count: 1,
+                min_level: 1,
+                max_level: 99,
+                skills: Vec::new(),
+                premium: false,
+                room_type: 0,
+            };
+            let list = RoomList { rooms: vec![entry] };
+            stream
+                .write_all(&encode_frame(RoomList::COMMAND, &list.encode_body()))
+                .unwrap();
+            assert_quiet(&mut stream);
+        });
+
+        let placements = vec![ScenePlacement {
+            role: PlacementRole::Single,
+            id: "IDC_BUTTON_DCROOM_CREATE".to_owned(),
+            code: o2jam_shell::screens::side::CREATE_ROOM_CREATE_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 10,
+                y: 10,
+                w: 50,
+                h: 30,
+            },
+        }];
+        session
+            .game_mut()
+            .load_create_room_scene(placements, HashMap::new());
+        session.game_mut().open_create_room_dialog();
+        session.game_mut().push_room_dialog_char('x');
+        session.game_mut().click_room_dialog(20, 20);
+        assert!(session.game_mut().room_dialog().is_none());
+
+        paint_frame(&mut session);
+
+        assert_eq!(session.screen(), Screen::Waiting);
+        assert_eq!(
+            session.joined_room.as_ref().map(|r| r.title.as_str()),
+            Some("x")
+        );
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn password_join_commit_stages_room_over_scripted_gateway() {
+        // Ticket #269 wire guard (join side): a real session walk,
+        // password dialog commit queues the join body, then a paint
+        // must put the 3002 JoinWaiting frame on the wire with the
+        // committed password and stage the returned room. Server-side
+        // assertion pins the accept clause.
+        use o2jam_net::frame::encode_frame;
+        use o2jam_net::{JoinRoom, JoinRoomResponse};
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use std::collections::HashMap;
+
+        let (mut session, server) = room_session(|mut stream| {
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, o2jam_net::Request::JoinWaiting.id());
+            let body = JoinRoom::decode_body(&frame.payload).unwrap();
+            assert_eq!(body.number, 7);
+            assert_eq!(body.password, "pw");
+            let room = joined_snapshot();
+            let resp = JoinRoomResponse {
+                result_code: 0,
+                room: Some(room),
+            };
+            stream
+                .write_all(&encode_frame(
+                    JoinRoomResponse::COMMAND,
+                    &resp.encode_body(),
+                ))
+                .unwrap();
+            assert_quiet(&mut stream);
+        });
+
+        let placements = vec![ScenePlacement {
+            role: PlacementRole::Single,
+            id: "IDC_BUTTON_DPASSWORD_OK".to_owned(),
+            code: o2jam_shell::screens::side::PASSWORD_OK_CODE,
+            sprite: None,
+            rect: Rect {
+                x: 10,
+                y: 10,
+                w: 50,
+                h: 30,
+            },
+        }];
+        session
+            .game_mut()
+            .load_password_scene(placements, HashMap::new());
+        session.game_mut().open_password_dialog(7);
+        session.game_mut().push_room_dialog_char('p');
+        session.game_mut().push_room_dialog_char('w');
+        session.game_mut().click_room_dialog(20, 20);
+        assert!(session.game_mut().room_dialog().is_none());
+        assert_eq!(session.screen(), Screen::Waiting);
+
+        paint_frame(&mut session);
+
+        assert_eq!(session.screen(), Screen::Waiting);
+        assert!(session.joined_room.is_some());
+        assert!(session.game_mut().take_join().is_none());
 
         server.join().unwrap();
     }
