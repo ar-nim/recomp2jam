@@ -4500,6 +4500,58 @@ mod session_tests {
     }
 
     #[test]
+    fn ch190_scripted_gateway_inactive_row_refuses_face_enter_and_paints_dimmed() {
+        // Ticket #190 seam guard (scripted gateway): a 1003 row the
+        // gateway marks inactive must refuse entry end to end through
+        // the real session wrapper, and paint with the dimmed ink.
+        // Live caller chain:
+        //   winit pointer down -> window.rs::route_input
+        //   -> InputEdge::PointerDown -> OnlineSession::swallow_networked_edge
+        //   -> ScreenGame::channel_enter_at (None on an inactive row)
+        //   -> no begin_channel_login; ScreenGame::ingest_snapshot moves
+        //      the highlight only
+        //   paint -> ScreenGame::paint -> paint_channel_scene
+        //   -> paint_channel_rows -> paint_channel_face (early return on
+        //      !active) with dimmed ink (0x707070) on the row.
+        use o2jam_net::ChannelState;
+        use o2jam_render::{pack_xrgb, Frame};
+        let (mut session, server) = channel_session(|mut stream| {
+            assert_quiet(&mut stream);
+        });
+        session.game_mut().set_channels(vec![
+            ChannelState {
+                gateway_id: 0,
+                channel_id: 2,
+                capacity: 100,
+                population: 5,
+                active: true,
+            },
+            ChannelState {
+                gateway_id: 0,
+                channel_id: 9,
+                capacity: 0,
+                population: 0,
+                active: false,
+            },
+        ]);
+        // Inactive row's enter face (row 1) must not start a login.
+        session.ingest_snapshot(&InputSnapshot::click_at(524, 297));
+        let mut buf = vec![0u32; 800 * 600];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 800,
+            h: 600,
+        };
+        session.paint(&mut frame);
+        assert_eq!(session.game.screen(), Screen::Channel);
+        assert!(
+            buf.contains(&pack_xrgb(0x70, 0x70, 0x70)),
+            "inactive row must paint with the dimmed ink"
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
     fn channel_click_logs_in_and_stages_character() {
         // The windowed live path routes canvas clicks through the
         // session wrapper: a channel face click must reach the inner

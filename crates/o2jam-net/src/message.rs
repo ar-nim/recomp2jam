@@ -1530,6 +1530,40 @@ mod tests {
     }
 
     #[test]
+    fn channel_joinability_keys_on_active_byte_not_capacity() {
+        // Wire contract (exe handler VA 0x475260): joinability is the
+        // active byte alone; capacity (including 0) never flips it.
+        let mut body = vec![0x03, 0x00, 0x00, 0x00];
+        // row: gw=1 ch=2 cap=0 pop=0 active=1 (joinable despite zero cap)
+        body.extend_from_slice(&[
+            0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+        ]);
+        // row: gw=3 ch=4 cap=100 pop=5 active=0 (not joinable despite cap)
+        body.extend_from_slice(&[
+            0x03, 0x00, 0x04, 0x00, 0x64, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00,
+        ]);
+        // row: gw=5 ch=6 cap=0 pop=0 active=0 (not joinable)
+        body.extend_from_slice(&[
+            0x05, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ]);
+        let list = ChannelList::decode_body(&body).unwrap();
+        assert_eq!(list.channels.len(), 3);
+        assert!(
+            list.channels[0].active,
+            "capacity 0 with active byte 1 must stay joinable"
+        );
+        assert_eq!(list.channels[0].capacity, 0);
+        assert!(
+            !list.channels[1].active,
+            "capacity 100 with active byte 0 must not be joinable"
+        );
+        assert!(
+            !list.channels[2].active,
+            "capacity 0 with active byte 0 must not be joinable"
+        );
+    }
+
+    #[test]
     fn channel_list_rejects_truncated_row() {
         let body = vec![0x01, 0x00, 0x00, 0x00, 0x01, 0x00];
         assert_eq!(
