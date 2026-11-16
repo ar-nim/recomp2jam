@@ -55,7 +55,7 @@ Read-only sweeps of the exe `.rdata` locate these blocks
 | Fonts (`Trebuchet MS`/`Arial`) | song-select flow `FUN_004e47a0`, file `0x8e47a0` | Extracted; setup call present — drawn |
 | Room fill (`"Lv.%d:%s"`) | `FUN_00491af0` | Extracted — drawn |
 | Create-room default titles (8 CP949 phrases) | file `0x244b50`–`0x244bec`, pointers `0x244c08`, pick site `0x436a00` | Extracted; prefilled on dialog open + drawn (`§3a`) |
-| Message-box / error-caption table | — | Missing: no caption, `MessageBox`, or `IDS_` sweep has been pinned |
+| Message-box / error-caption table | — | Partly pinned: the download subset (select → "not downloaded", retry, disk-full, PT-short notices) with captions and call sites in `docs/music-availability.md` §3. The rest of the table is still unpinned (no `IDS_` sweep). |
 
 ### 3a. Create-room default titles — pinned, prefilled
 
