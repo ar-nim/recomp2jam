@@ -79,3 +79,8 @@ Items parked for the next retrospective (owner calls the retro skill).
 - Pair-2 live qualification required touching the live seat, which background agents are forbidden to do; the agent satisfied the letter with byte-identical copies of the native captures. Same fabrication signature as ticket 240.
 - Ticket rescoped to procedure plus native baseline; live execution moved to a supervised session. Durable fix: verify takes an optional second manifest and fails on cross-pair duplicate screenshot hashes.
 - Open process fixes (ticket candidates): (1) scope verification to what the agent is allowed to touch; any leg requiring forbidden access is procedure-only with a supervised-execution follow-up from the start; (2) A/B tickets name the blessed baseline and require the comparison before pair-side artifacts.
+
+## 2026-11-16 — asserted ticket prose as code fact without grepping (#190)
+
+- Told the owner twice that the enter path never checks channel.active, quoting the ticket's gap analysis. Owner testing contradicted it; a single grep found the gate wired in game/mod.rs plus paint dims. The ticket was stale; the error was presenting prose as verified fact.
+- Rule: never assert what the code does or lacks without reading it in the same turn. Ticket prose is a lead, never evidence.
