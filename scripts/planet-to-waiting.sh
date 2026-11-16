@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# planet-to-waiting.sh — aim-by-rect drive from Planet to Waiting.
+# planet-to-waiting.sh — aim-by-rect drive from Planet to Waiting/Loading.
 #
 # Every click target is resolved at run time:
 #   * control ids via `o2jam-dump rect` (native staged rects)
@@ -7,21 +7,60 @@
 #     crates/o2jam-shell/src/screens/paint.rs (channel_enter_origin)
 # No hand-read coordinates appear in this script. A click that does
 # not advance the scene fails the run with a non-zero exit.
+#
+# Modes:
+#   standalone (default): build the client, boot the session through
+#     scripts/rig-run.sh, drive it, stop it by PID, print the scene sequence.
+#   --attach OUT_DIR: drive a session that is already booted in OUT_DIR
+#     (scripts/rig-afk.sh owns boot/stop there). No build, no boot, no stop.
+#
+# Usage:
+#   scripts/planet-to-waiting.sh [OUT_DIR] [--display :N] [--sound|--no-sound]
+#       [--music-id N] [--target loading|playing]
+#   scripts/planet-to-waiting.sh --attach OUT_DIR [--display :N]
+#       [--music-id N] [--target loading|playing]
+#
+# --music-id stages a host song pick: the first Waiting Confirm queues the
+# 4000/4002/4030 select and stays in Waiting, the second sends START (the
+# shell stages the pick first, so the host sees it). --target playing then
+# Confirms at Loading (4012) and waits for Playing.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=lib/rig-session.sh
+. "$SCRIPT_DIR/lib/rig-session.sh"
 
 DISPLAY_NUM="${DISPLAY:-:99}"
 OUT_DIR=""
+ATTACH=0
+SOUND=1
+MUSIC_ID=""
+TARGET="loading"
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --display) DISPLAY_NUM="$2"; shift 2 ;;
     --display=*) DISPLAY_NUM="${1#*=}"; shift ;;
+    --attach) ATTACH=1; OUT_DIR="$2"; shift 2 ;;
+    --attach=*) ATTACH=1; OUT_DIR="${1#*=}"; shift ;;
+    --sound) SOUND=1; shift ;;
+    --no-sound) SOUND=0; shift ;;
+    --music-id) MUSIC_ID="$2"; shift 2 ;;
+    --music-id=*) MUSIC_ID="${1#*=}"; shift ;;
+    --target) TARGET="$2"; shift 2 ;;
+    --target=*) TARGET="${1#*=}"; shift ;;
     *) OUT_DIR="$1"; shift ;;
   esac
 done
 [ -n "$OUT_DIR" ] || { echo "planet-to-waiting: output directory required" >&2; exit 2; }
+case "$TARGET" in
+  loading) ;;
+  playing)
+    [ -n "$MUSIC_ID" ] || { echo "planet-to-waiting: --target playing needs --music-id (Loading Confirm enters Playing only with a staged pick)" >&2; exit 2; }
+    ;;
+  *) echo "planet-to-waiting: --target must be loading or playing (got '$TARGET')" >&2; exit 2 ;;
+esac
 
 # Sanitize the environment: never leak a Wayland session onto the rig.
 unset WAYLAND_DISPLAY XDG_SESSION_TYPE QT_QPA_PLATFORM 2>/dev/null || true
@@ -30,8 +69,8 @@ export WINIT_UNIX_BACKEND=x11
 export PULSE_SINK
 
 mkdir -p "$OUT_DIR"
-LOG="$OUT_DIR/input.log"
-FRAMES="$OUT_DIR/frames"
+LOG="$(rig_session_log "$OUT_DIR")"
+FRAMES="$(rig_session_frames "$OUT_DIR")"
 mkdir -p "$FRAMES"
 
 # --- helpers ---------------------------------------------------------------
@@ -54,9 +93,23 @@ print(x + w // 2, y + h // 2)
 PY
 }
 
+# The channel enter face: the pinned row-0 face of the channel bar
+# (crates/o2jam-shell/src/screens/paint.rs, channel_enter_origin).
+channel_enter_center() {
+  python3 - <<'PY'
+row_left, row_top = 216, 224
+bar_inset = 1
+face_local_x, face_local_y = 285, 11
+face_w, face_h = 44, 21
+print(row_left + bar_inset + face_local_x + face_w // 2,
+      row_top + bar_inset + face_local_y + face_h // 2)
+PY
+}
+
 wait_scene() {
-  local target="$1" timeout="${2:-60}"
-  local deadline=$((SECONDS + timeout))
+  local target="$1"
+  local limit="${2:-60}"
+  local deadline=$((SECONDS + limit))
   local scene=""
   while [ "$SECONDS" -lt "$deadline" ]; do
     if [ -r "$LOG" ]; then
@@ -72,66 +125,123 @@ wait_scene() {
   exit 1
 }
 
+# The staging signal for a host song pick is the client's own log line: the
+# select exchange (4000/4002/4030 + catalog chart fetch) runs over several
+# seconds and the scene legitimately stays in Waiting while it does, so the
+# second Confirm waits for the line instead of guessing a sleep.
+wait_host_pick_staged() {
+  local limit="${1:-120}"
+  local deadline=$((SECONDS + limit))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    if grep -q "song staged" "$OUT_DIR/client.log" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  echo "planet-to-waiting: FAIL: the host song pick never staged (no 'song staged' in $OUT_DIR/client.log)" >&2
+  exit 1
+}
+
 click_at() {
   local x="$1" y="$2"
   "$REPO_ROOT/scripts/rig-drive.sh" --backend xtest --display "$DISPLAY_NUM" move "$OUT_DIR" "$x" "$y" >/dev/null
   "$REPO_ROOT/scripts/rig-drive.sh" --backend xtest --display "$DISPLAY_NUM" click "$OUT_DIR" 1 >/dev/null
 }
 
-# --- build -----------------------------------------------------------------
-(cd "$REPO_ROOT" && cargo build -q -p recomp2jam >/dev/null 2>&1) || die "build failed"
-BIN="$REPO_ROOT/target/debug/recomp2jam"
-[ -x "$BIN" ] || die "no binary at $BIN"
+press_key() {
+  "$REPO_ROOT/scripts/rig-drive.sh" --backend xtest --display "$DISPLAY_NUM" key "$OUT_DIR" "$1" >/dev/null
+}
 
-# --- boot ------------------------------------------------------------------
-"$REPO_ROOT/scripts/rig-run.sh" run "$DISPLAY_NUM" "$OUT_DIR" -- \
-  "$BIN" online \
-    --host 127.0.0.1 --port 15010 \
-    --user-id 1 --token eebaccee-fde9-4c50-b941-fda6c7004376 \
-    --gateway-id 0 --channel-id 0 \
-    --create-room "DriveRoom" \
-    --no-sound \
-    --frame-dump "$FRAMES" \
-    --input-log "$LOG" \
-  >/dev/null 2>&1 || die "rig-run boot failed"
+# --- session lifecycle (standalone mode) -----------------------------------
+build_client() {
+  (cd "$REPO_ROOT" && cargo build -q -p recomp2jam >/dev/null 2>&1) || die "build failed"
+  [ -x "$(rig_session_binary)" ] || die "no binary at $(rig_session_binary)"
+}
 
-# --- drive -----------------------------------------------------------------
+boot_session() {
+  local -a argv=() options=()
+  if [ -n "$MUSIC_ID" ]; then
+    options+=(--music-id "$MUSIC_ID")
+  fi
+  if [ "$SOUND" = "0" ]; then
+    options+=(--no-sound)
+  fi
+  mapfile -t argv < <(rig_session_argv "$OUT_DIR" "${options[@]}")
+  "$REPO_ROOT/scripts/rig-run.sh" run "$DISPLAY_NUM" "$OUT_DIR" -- \
+    "$(rig_session_binary)" "${argv[@]}" >/dev/null 2>&1 || die "rig-run boot failed"
+}
+
+stop_session() {
+  "$REPO_ROOT/scripts/rig-run.sh" stop "$OUT_DIR" >/dev/null 2>&1 || true
+}
+
+# --- the drive itself -------------------------------------------------------
 # 1. Splash -> Planet.
-wait_scene planet 90
+drive_to_waiting() {
+  wait_scene planet 90
 
-# 2. Planet emblem (control id) -> Channel.
-read -r px py <<<"$(rect_center IDC_BUTTON_SPLANET_NORMAL)"
-click_at "$px" "$py"
-wait_scene channel 30
+  # 2. Planet emblem (control id) -> Channel.
+  local px py
+  read -r px py <<<"$(rect_center IDC_BUTTON_SPLANET_NORMAL)"
+  click_at "$px" "$py"
+  wait_scene channel 30
 
-# 3. Channel enter face (pinned constants, channel_enter_origin row 0).
-read -r cx cy <<<"$(python3 - <<'PY'
-# Constants from crates/o2jam-shell/src/screens/paint.rs
-row_left, row_top = 216, 224
-bar_inset = 1
-face_local_x, face_local_y = 285, 11
-face_w, face_h = 44, 21
-print(row_left + bar_inset + face_local_x + face_w // 2,
-      row_top + bar_inset + face_local_y + face_h // 2)
-PY
-)"
-click_at "$cx" "$cy"
-wait_scene room 60
+  # 3. Channel enter face (pinned constants, channel_enter_origin row 0).
+  local cx cy
+  read -r cx cy <<<"$(channel_enter_center)"
+  click_at "$cx" "$cy"
+  wait_scene room 60
 
-# 4. Room row (control id panel) -> Waiting.
-read -r rx ry <<<"$(rect_center IDC_BUTTON_SROOM_EXBUTTON1)"
-click_at "$rx" "$ry"
-wait_scene waiting 60
+  # 4. Room row (control id panel) -> Waiting.
+  local rx ry
+  read -r rx ry <<<"$(rect_center IDC_BUTTON_SROOM_EXBUTTON1)"
+  click_at "$rx" "$ry"
+  wait_scene waiting 60
+}
 
-# 5. Waiting confirm (control id) — press the chrome. START advances to
-# loading, so the drive ends there: reaching loading proves the press.
-read -r wx wy <<<"$(rect_center IDC_BUTTON_SWAIT_START)"
-click_at "$wx" "$wy"
-wait_scene loading 60
+# 5. Waiting confirm (control id): START. With a host pick staged the first
+# press queues the select and stays in Waiting, so the second press is the
+# one that sends START and reaches Loading.
+drive_to_loading() {
+  local wx wy
+  read -r wx wy <<<"$(rect_center IDC_BUTTON_SWAIT_START)"
+  click_at "$wx" "$wy"
+  if [ -n "$MUSIC_ID" ]; then
+    wait_host_pick_staged 120
+    click_at "$wx" "$wy"
+  fi
+  wait_scene loading 60
+}
 
-# --- stop ------------------------------------------------------------------
-"$REPO_ROOT/scripts/rig-run.sh" stop "$OUT_DIR" >/dev/null 2>&1 || true
+# 6. Loading confirm (Return) sends ConfirmMusicLoaded 4012 -> Playing.
+drive_to_playing() {
+  press_key Return
+  wait_scene playing 60
+}
 
-# --- report ----------------------------------------------------------------
-echo "planet-to-waiting: OK scene sequence:"
-"$REPO_ROOT/scripts/scene-probe.sh" "$LOG" --sequence
+report_sequence() {
+  echo "planet-to-waiting: OK scene sequence:"
+  "$REPO_ROOT/scripts/scene-probe.sh" "$LOG" --sequence
+}
+
+drive_scenes() {
+  drive_to_waiting
+  drive_to_loading
+  if [ "$TARGET" = "playing" ]; then
+    drive_to_playing
+  fi
+}
+
+main() {
+  if [ "$ATTACH" = "1" ]; then
+    drive_scenes
+  else
+    build_client
+    boot_session
+    drive_scenes
+    stop_session
+  fi
+  report_sequence
+}
+
+main "$@"
