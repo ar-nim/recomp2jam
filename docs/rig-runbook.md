@@ -72,6 +72,11 @@ and cleanup failures keep the evidence instead of deleting it.
   binary, and writes `env.sh`. Stop with `scripts/rig-run.sh stop
   <out-dir>`; status with `status`. Wayland mode uses
   `scripts/rig-run.sh wayland <socket> <out-dir> -- <binary>`.
+- Displays: Xvfb is the workbench. Agent rig work always runs headless
+  and invisible; nothing ever lands on the live seat unless the owner
+  needs eyes on it. A seat run means a normal window the owner can
+  see, announced first, pointer restored after, and never a
+  fullscreen takeover (owner rule 2026-11-16).
 - Drive: `scripts/rig-drive.sh` (ydotool) for move, click, and key;
   `dry-run` prints planned commands without touching input. The XTEST
   backend (#234) drives a native Xvfb client through the same interface.
