@@ -350,10 +350,12 @@ semantics TBD.
   only; multi-part items (tops + arms) take one block per part in slot
   order. Filename stems encode gender+part (`01F…`/`01M…`, `…T…`
   torso, `…LA…`/`…RA…` arms) and a pose letter (`I`/`G`/`B`/`K`/`D`).
-  Worn-figure rule (`pick_wear_sprites`): one body per part block,
-  first non-empty wearer-parity slot, other-parity fallback per part,
-  slot order kept (ticket #222: the block's five variants are poses of
-  the same part, worn pose OPEN — `docs/equip.md`).
+  Worn-figure rule (`pick_wear_sprites`): one body per part block in
+  the kit's pose (idle, or the instrument pose the kit's
+  type-15..18 row selects), wearer parity first (ticket #222: the
+  block's five variants are poses of the same part — idle, guitar,
+  bass, keyboard, drum — never animation frames; pin in
+  `docs/equip.md`).
 - 47 `.ojs` bodies are raw JPEGs (`FF D8 … FF D9` verified on
   all); 5 `.oji` bodies share the sprite-55 envelope.
 

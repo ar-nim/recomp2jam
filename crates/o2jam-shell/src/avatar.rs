@@ -35,23 +35,48 @@ fn archive_name(filename: &str) -> String {
     }
 }
 
-/// Idle-breathing cycle length for worn avatar figures (12 frames,
-/// `docs/equip.md`: every probed worn body carries 12 chained
-/// breathing frames). OPEN: the exe's ms/frame cadence is not yet
-/// pinned (#176); the 250 ms value below reuses the net-drain
-/// heartbeat until a Wine dwell capture pins it. Labelled OPEN.
+/// Frames of the common breathing body shape (12 chained frames,
+/// `docs/equip.md`: face, hair, base body, bottom, and shoes carry 12;
+/// the instrument poses carry 12 as well).
 pub const AVATAR_BREATHING_FRAME_COUNT: usize = 12;
-/// Cadence of one breathing frame (ms). OPEN until a Wine dwell
-/// capture pins it (`docs/equip.md`); 250 ms reuses the net-drain
-/// heartbeat as the interim value.
-pub const AVATAR_BREATHING_TICK_MS: u64 = 250;
+/// Paint-clock ms per worn-avatar animation step. Pinned from the exe
+/// (`docs/equip.md`): CAvatar's constructor (VA `0x52b290`) stores
+/// `0x42` = 66 ms at `+0x1f0`, and its paint (VA `0x52b9b0`) advances
+/// the phase by `elapsed / 66`. A 12-frame body therefore advances one
+/// frame per 66 ms (792 ms per breathing cycle).
+pub const AVATAR_BREATHING_TICK_MS: u64 = 66;
+/// Steps of the worn-avatar animation phase: the exe wraps the counter
+/// at `0x30` = 48 (`docs/equip.md`), so one full phase cycle is
+/// 48 * 66 ms = 3168 ms.
+pub const AVATAR_ANIMATION_PHASE_COUNT: usize = 48;
 
-/// Breathing frame index for a paint instant: advances one frame per
+/// Animation phase for a paint instant: one step per
 /// [`AVATAR_BREATHING_TICK_MS`] of paint-clock time, wrapping over
-/// [`AVATAR_BREATHING_FRAME_COUNT`].
+/// [`AVATAR_ANIMATION_PHASE_COUNT`]. Every worn part reads this one
+/// phase, so all parts advance together (`docs/equip.md`).
 #[must_use]
-pub fn avatar_breathing_frame(now_ms: u64) -> usize {
-    (usize::try_from(now_ms / AVATAR_BREATHING_TICK_MS).unwrap_or(0)) % AVATAR_BREATHING_FRAME_COUNT
+pub fn avatar_animation_phase(now_ms: u64) -> usize {
+    (usize::try_from(now_ms / AVATAR_BREATHING_TICK_MS).unwrap_or(0)) % AVATAR_ANIMATION_PHASE_COUNT
+}
+
+/// Frame one worn part body shows at `phase`, mirroring the exe's
+/// frame rule (`docs/equip.md`, paint VA `0x52b9b0`): a body with more
+/// frames than the phase shows the phase as its frame, a 12- or
+/// 24-frame body wraps the phase, and every other length holds frame
+/// 0 — the exe asks its setter for frame 1 there, which the setter
+/// rejects, so a one-image body (`I` idle sleeves and torso) never
+/// changes pose.
+#[must_use]
+fn worn_part_frame(phase: usize, frame_count: usize) -> usize {
+    if frame_count > phase {
+        phase
+    } else if frame_count == AVATAR_BREATHING_FRAME_COUNT
+        || frame_count == 2 * AVATAR_BREATHING_FRAME_COUNT
+    {
+        phase % frame_count
+    } else {
+        0
+    }
 }
 
 /// One composited part: image plus its record anchor offset.
@@ -521,24 +546,17 @@ impl AvatarFigure {
         let left = center_native(box_size.0, seat.w, seat.x);
         let top = center_native(box_size.1, seat.h, seat.y);
         let (origin_x, origin_y) = origin;
-        // Breathing: each stacked body carries its own frame run and
-        // paints exactly one frame per paint clock, whatever the run
-        // length (ticket #222 round 2). No run falls through to
-        // painting every layer at once.
-        // Every body run is one breathing body: it carries `run`
-        // frames, and exactly one of them paints for the current paint
-        // clock. The frame index wraps over the run length so a body of
-        // any length selects one pose (no run length falls through to
-        // painting all frames at once).
-        let tick = usize::try_from(now_ms / AVATAR_BREATHING_TICK_MS).unwrap_or(0);
+        // Every body run is one worn part: it carries its own frames and
+        // paints exactly one of them for the current animation phase
+        // (`worn_part_frame`), whatever the run length, so no run falls
+        // through to painting all frames at once (ticket #222).
+        let phase = avatar_animation_phase(now_ms);
         let mut selected: Vec<&FigureLayer> = Vec::new();
         let mut offset = 0;
         for &run in &self.part_lens {
             let part = &self.layers[offset..offset + run];
-            if run > 0 {
-                if let Some(layer) = part.get(tick % run) {
-                    selected.push(layer);
-                }
+            if let Some(layer) = part.get(worn_part_frame(phase, run)) {
+                selected.push(layer);
             }
             offset += run;
         }
@@ -769,9 +787,10 @@ pub fn avatar_item_by_id(
     table.rows.iter().find(|row| row.item_id == item_id)
 }
 
-/// Build the worn figure for an equipment table: per nonzero item
-/// id (in slot order) resolve the item row, pick its wear bodies
-/// (one per part block, [`pick_wear_sprites`]), and stack every
+/// Build the worn figure for an equipment table: fix the kit's pose
+/// family (instrument or idle, [`worn_pose`]), then per nonzero item id
+/// (in slot order) resolve the item row, pick its wear bodies (one per
+/// part block in that pose, [`pick_wear_sprites`]), and stack every
 /// decodable body as layers. Unresolvable pieces —
 /// unknown ids, missing archive entries, non-sprite or undecodable
 /// bodies — are skipped, never fatal: one bad sprite must not blank
@@ -785,12 +804,16 @@ pub fn load_worn_figure(
 ) -> AvatarFigure {
     let rows: HashMap<u32, _> = table.rows.iter().map(|row| (row.item_id, row)).collect();
     let entries = o2jam_file::parse_opi(archive).unwrap_or_default();
+    let worn_rows: Vec<&o2jam_file::AvatarItemRow> = equipment
+        .iter()
+        .copied()
+        .filter(|id| *id != 0)
+        .filter_map(|id| rows.get(&(id as u32)).copied())
+        .collect();
+    let pose = worn_pose(worn_rows.iter().copied());
     let mut figure = AvatarFigure::default();
-    for id in equipment.iter().copied().filter(|id| *id != 0) {
-        let Some(row) = rows.get(&(id as u32)) else {
-            continue;
-        };
-        for filename in pick_wear_sprites(row, male) {
+    for row in worn_rows {
+        for filename in pick_wear_sprites(row, male, pose) {
             let wanted = archive_name(&filename);
             let Some(entry) = entries.iter().find(|entry| entry.name == wanted) else {
                 continue;
@@ -2032,19 +2055,83 @@ const FEMALE_SLOT_OFFSET: usize = 1;
 const ITEM_PART_BLOCKS: usize =
     (o2jam_file::AVATAR_SPRITE_SLOTS - ITEM_ICON_SLOTS) / (PART_VARIANT_SLOTS * SEX_SLOTS);
 
-/// Body a part block declares for one sex parity (`None` when the
-/// block holds no slot for it).
-fn first_body_in_part(
+/// Pose family a worn avatar kit draws its part blocks in.
+///
+/// The five variant slots of a part block are the idle pose plus the
+/// four instrument-playing poses, and the 7.55 exe picks ONE of them
+/// for the whole avatar from the instrument it wears (`docs/equip.md`,
+/// CAvatar pose word): item type `16` (guitar) wears `G`, `18` (bass)
+/// `B`, `15` (keyboard) `K`, `17` (drum) `D`, and a kit with no
+/// instrument wears the idle pose `I`. All parts advance together on
+/// the paint clock inside that pose; the pose itself never changes
+/// while the kit stays the same.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AvatarPose {
+    /// Idle pose (`I` slots): a one-image still for most garments.
+    Idle,
+    /// Guitar-playing pose (`G` slots).
+    Guitar,
+    /// Bass-playing pose (`B` slots).
+    Bass,
+    /// Keyboard-playing pose (`K` slots).
+    Keyboard,
+    /// Drum-playing pose (`D` slots).
+    Drum,
+}
+
+/// Item-row type byte of the instrument skins that select a playing
+/// pose (`docs/equip.md`: `0x0f..0x12` = keyboard/guitar/drum/bass).
+const INSTRUMENT_TYPES: std::ops::RangeInclusive<u32> = 0x0F..=0x12;
+
+impl AvatarPose {
+    /// Pose one item row declares (`Idle` for every non-instrument row).
+    #[must_use]
+    pub fn of_item(row: &o2jam_file::AvatarItemRow) -> Self {
+        // Exe switch table at VA `0x52b96c` maps the row type byte to
+        // the variant bits of the avatar pose word.
+        match row.item_type & 0xFF {
+            16 => Self::Guitar,
+            18 => Self::Bass,
+            15 => Self::Keyboard,
+            17 => Self::Drum,
+            _ => Self::Idle,
+        }
+    }
+
+    /// Variant slot index of this pose inside a part block.
+    #[must_use]
+    fn variant(self) -> usize {
+        match self {
+            Self::Idle => 0,
+            Self::Guitar => 1,
+            Self::Bass => 2,
+            Self::Keyboard => 3,
+            Self::Drum => 4,
+        }
+    }
+}
+
+/// Pose family a worn kit draws: the instrument pose when the kit
+/// carries an instrument skin, else the idle pose (`docs/equip.md`).
+#[must_use]
+pub fn worn_pose<'a>(rows: impl IntoIterator<Item = &'a o2jam_file::AvatarItemRow>) -> AvatarPose {
+    rows.into_iter()
+        .find(|row| INSTRUMENT_TYPES.contains(&(row.item_type & 0xFF)))
+        .map_or(AvatarPose::Idle, AvatarPose::of_item)
+}
+
+/// Body a part block declares for one sex parity and pose variant
+/// (`None` when the block holds no slot for it).
+fn body_in_part(
     row: &o2jam_file::AvatarItemRow,
     part: usize,
+    variant: usize,
     sex_offset: usize,
 ) -> Option<&str> {
-    (0..PART_VARIANT_SLOTS).find_map(|variant| {
-        let (_, name) = row
-            .sprites
-            .get(part_variant_slot(part, variant, sex_offset))?;
-        (!name.is_empty()).then_some(name.as_str())
-    })
+    let (_, name) = row
+        .sprites
+        .get(part_variant_slot(part, variant, sex_offset))?;
+    (!name.is_empty()).then_some(name.as_str())
 }
 
 /// Slot index of one part variant: the part blocks start after the two
@@ -2054,7 +2141,7 @@ fn part_variant_slot(part: usize, variant: usize, sex_offset: usize) -> usize {
 }
 
 /// The bodies the wearer draws from one item row: one per part block
-/// the row declares, in block order.
+/// the row declares, in block order, in the kit's pose (`docs/equip.md`).
 ///
 /// A row spreads its parts across four blocks of five male plus five
 /// female variant slots (`docs/file-formats/opi.md`): a plain garment
@@ -2065,28 +2152,35 @@ fn part_variant_slot(part: usize, variant: usize, sex_offset: usize) -> usize {
 /// every slot painted those poses on top of each other at one anchor:
 /// the stacked ghost hands of ticket #222.
 ///
-/// Within a block the first non-empty wearer-parity slot wins (slot
-/// order, `docs/claims.md` C33), falling back to the other parity per
-/// part so a male-only or female-only block still wears its art.
-///
-/// OPEN (not pinned): WHICH of a block's five poses the 7.55 exe wears
-/// is unpinned — no character field selects one (`CharacterInfo` 2001
-/// carries no such field) and no per-slot flag distinguishes them.
-/// Next evidence step: a Wine rig capture with item 376 worn, to read
-/// the arm pose off the room avatar. Variant 1 is a one-image still in
-/// 437 of 473 multi-variant blocks while variants 2-5 breathe, so if
-/// that capture shows moving sleeves the next candidate rule is to
-/// prefer the block's animated variant.
+/// Pinned selection (`docs/equip.md`): the exe reads the pose variant
+/// the kit's instrument declares for every block, so a torso, its
+/// sleeves and the hair always wear the same letter. A block that
+/// carries no art in that pose falls back to its other sex parity, and
+/// then to its first non-empty wearer-parity slot, so a garment never
+/// vanishes; the exe draws nothing when the exact slot is empty (that
+/// divergence is recorded in `docs/equip.md`).
 #[must_use]
-pub fn pick_wear_sprites(row: &o2jam_file::AvatarItemRow, male: bool) -> Vec<String> {
+pub fn pick_wear_sprites(
+    row: &o2jam_file::AvatarItemRow,
+    male: bool,
+    pose: AvatarPose,
+) -> Vec<String> {
     let (wearer, other) = if male {
         (MALE_SLOT_OFFSET, FEMALE_SLOT_OFFSET)
     } else {
         (FEMALE_SLOT_OFFSET, MALE_SLOT_OFFSET)
     };
+    let variant = pose.variant();
     (0..ITEM_PART_BLOCKS)
         .filter_map(|part| {
-            first_body_in_part(row, part, wearer).or_else(|| first_body_in_part(row, part, other))
+            body_in_part(row, part, variant, wearer)
+                .or_else(|| body_in_part(row, part, variant, other))
+                .or_else(|| {
+                    (0..PART_VARIANT_SLOTS).find_map(|fallback| {
+                        body_in_part(row, part, fallback, wearer)
+                            .or_else(|| body_in_part(row, part, fallback, other))
+                    })
+                })
         })
         .map(str::to_owned)
         .collect()
@@ -2175,11 +2269,11 @@ mod avatar_figure_tests {
             (1, "27F23001.oji"),
         ]);
         assert_eq!(
-            pick_wear_sprites(&row, true),
+            pick_wear_sprites(&row, true, AvatarPose::Idle),
             vec!["27M23001.oji".to_owned()]
         );
         assert_eq!(
-            pick_wear_sprites(&row, false),
+            pick_wear_sprites(&row, false, AvatarPose::Idle),
             vec!["27F23001.oji".to_owned()]
         );
     }
@@ -2196,13 +2290,67 @@ mod avatar_figure_tests {
         sprites[22].1 = "armr-I.oji";
         let row = wear_row(sprites);
         assert_eq!(
-            pick_wear_sprites(&row, true),
+            pick_wear_sprites(&row, true, AvatarPose::Idle),
             vec![
                 "torso-I.oji".to_owned(),
                 "arml-I.oji".to_owned(),
                 "armr-I.oji".to_owned()
             ]
         );
+    }
+
+    #[test]
+    fn wear_follows_the_kit_pose_in_every_block() {
+        // Pinned exe rule (`docs/equip.md`): the pose letter is ONE
+        // choice for the whole avatar, so every block wears the same
+        // letter — a guitar kit wears the `G` torso with its `G`
+        // sleeves, never the idle `I` pose of a block that has it.
+        let mut sprites: Vec<(u8, &str)> = vec![(1, "icon.oji"), (1, "icon.oji")];
+        sprites.extend(std::iter::repeat_n((1, ""), 40));
+        sprites[2].1 = "torso-I.oji";
+        sprites[4].1 = "torso-G.oji";
+        sprites[12].1 = "arml-I.oji";
+        sprites[14].1 = "arml-G.oji";
+        sprites[22].1 = "armr-I.oji";
+        sprites[24].1 = "armr-G.oji";
+        let row = wear_row(sprites);
+        assert_eq!(
+            pick_wear_sprites(&row, true, AvatarPose::Guitar),
+            vec![
+                "torso-G.oji".to_owned(),
+                "arml-G.oji".to_owned(),
+                "armr-G.oji".to_owned()
+            ]
+        );
+        assert_eq!(
+            pick_wear_sprites(&row, true, AvatarPose::Drum),
+            vec![
+                "torso-I.oji".to_owned(),
+                "arml-I.oji".to_owned(),
+                "armr-I.oji".to_owned()
+            ],
+            "a block without the kit pose keeps a wear body"
+        );
+    }
+
+    #[test]
+    fn worn_pose_reads_the_instrument_row_type() {
+        // Exe type->pose switch (VA `0x52b96c`): 16 guitar, 18 bass,
+        // 15 keyboard, 17 drum; any other row type keeps the idle pose.
+        let mut guitar = wear_row(Vec::new());
+        guitar.item_type = 16;
+        let mut bass = wear_row(Vec::new());
+        bass.item_type = 18;
+        let mut keyboard = wear_row(Vec::new());
+        keyboard.item_type = 15;
+        let mut drum = wear_row(Vec::new());
+        drum.item_type = 17;
+        let top = wear_row(Vec::new());
+        assert_eq!(worn_pose([&top]), AvatarPose::Idle);
+        assert_eq!(worn_pose([&top, &guitar]), AvatarPose::Guitar);
+        assert_eq!(worn_pose([&bass]), AvatarPose::Bass);
+        assert_eq!(worn_pose([&keyboard]), AvatarPose::Keyboard);
+        assert_eq!(worn_pose([&drum]), AvatarPose::Drum);
     }
 
     #[test]
@@ -2213,9 +2361,12 @@ mod avatar_figure_tests {
             (1, ""),
             (1, "uni.oji"),
         ]);
-        assert_eq!(pick_wear_sprites(&row, true), vec!["uni.oji".to_owned()]);
+        assert_eq!(
+            pick_wear_sprites(&row, true, AvatarPose::Idle),
+            vec!["uni.oji".to_owned()]
+        );
         let bare = wear_row(vec![(1, "icon.oji"), (1, "icon.oji")]);
-        assert!(pick_wear_sprites(&bare, false).is_empty());
+        assert!(pick_wear_sprites(&bare, false, AvatarPose::Idle).is_empty());
     }
 
     #[test]
@@ -4166,20 +4317,128 @@ mod avatar_figure_tests {
         assert_eq!(pixel(&ticked, 12), breathing_test_ink(0x7FFF));
     }
     #[test]
-    fn avatar_breathing_frame_clock_guard() {
+    fn avatar_animation_phase_clock_guard() {
         // Live caller chain:
         //   main.rs::run_play -> GameLoop paint -> ScreenGame::paint
-        //   -> ScreenGame::paint_at(now_ms) -> avatar_breathing_frame(now_ms)
-        // Math seam of the paint-clock frame index (no archive read).
-        // The 250 ms cadence stays OPEN (docs/equip.md): this pins the
-        // wrap and step shape, never the exe period.
-        assert_eq!(avatar_breathing_frame(0), 0);
-        let f250 = avatar_breathing_frame(250);
-        assert_eq!(f250, 1);
-        assert_ne!(f250, avatar_breathing_frame(0));
-        assert_eq!(avatar_breathing_frame(12 * 250), 0);
+        //   -> ScreenGame::paint_at(now_ms) -> paint_room
+        //   -> paint_room_user_panel -> AvatarFigure::paint_visible_centered
+        //   -> paint_box_centered -> avatar_animation_phase(now_ms).
+        // Pinned numbers (`docs/equip.md`, CAvatar ctor VA `0x52b290`
+        // stores 0x42 at +0x1f0): one step per 66 ms, 48 steps per
+        // phase cycle (paint VA `0x52b9b0` wraps at 0x30).
+        assert_eq!(AVATAR_BREATHING_TICK_MS, 66);
+        assert_eq!(AVATAR_ANIMATION_PHASE_COUNT, 48);
+        assert_eq!(avatar_animation_phase(0), 0);
+        assert_eq!(avatar_animation_phase(65), 0);
+        assert_eq!(avatar_animation_phase(66), 1);
+        assert_eq!(avatar_animation_phase(12 * 66), 12);
+        assert_eq!(avatar_animation_phase(48 * 66), 0);
+        assert_eq!(avatar_animation_phase(47 * 66), 47);
         // determinism: same instant twice
-        assert_eq!(avatar_breathing_frame(1000), avatar_breathing_frame(1000));
+        assert_eq!(avatar_animation_phase(1000), avatar_animation_phase(1000));
+    }
+
+    #[test]
+    fn avatar_part_frame_follows_the_exe_frame_rule() {
+        // Exe frame rule (paint VA `0x52b9b0`): a body longer than the
+        // phase shows the phase; 12- and 24-frame bodies wrap it; any
+        // other length holds frame 0 (the exe asks for frame 1, which
+        // its setter rejects, so a one-image body never advances).
+        assert_eq!(worn_part_frame(0, 1), 0);
+        assert_eq!(worn_part_frame(47, 1), 0);
+        let twelve: Vec<usize> = (0..24).map(|phase| worn_part_frame(phase, 12)).collect();
+        assert_eq!(
+            twelve,
+            vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        );
+        assert_eq!(worn_part_frame(30, 24), 6);
+        assert_eq!(worn_part_frame(4, 5), 4);
+        assert_eq!(worn_part_frame(5, 5), 0);
+    }
+
+    #[test]
+    fn tt222d_breathing_body_advances_between_animation_steps() {
+        // MOTION ACROSS TICKS (ticket #222d): two paints of the same
+        // figure one animation step apart must differ in the worn-part
+        // region, so a breathing body is seen to move with no input.
+        // Synthetic analog of the live kit's 12-frame base body (no
+        // archive read). Live caller chain: see
+        // avatar_animation_phase_clock_guard.
+        let mut figure = AvatarFigure::default();
+        for part_frame in 0..12u16 {
+            figure.push_layer(breathing_test_layer(
+                0x0001 + part_frame,
+                i32::from(part_frame),
+            ));
+        }
+        let parked = paint_centered_pixels(&figure, 0);
+        let stepped = paint_centered_pixels(&figure, AVATAR_BREATHING_TICK_MS);
+        assert_ne!(
+            parked, stepped,
+            "one animation step must advance the worn part's frame"
+        );
+        let wrapped = paint_centered_pixels(
+            &figure,
+            u64::try_from(AVATAR_BREATHING_FRAME_COUNT).unwrap() * AVATAR_BREATHING_TICK_MS,
+        );
+        assert_eq!(
+            wrapped, parked,
+            "a 12-frame body wraps to its first frame after 12 steps"
+        );
+    }
+
+    #[test]
+    fn tt222d_still_part_holds_its_pose_and_never_blanks() {
+        // STILL-VARIANT GUARD (ticket #222d): the idle pose (`I`) of the
+        // live kit's sleeves and torso is a one-image body. The exe
+        // holds frame 0 there (`docs/equip.md`), so the part must paint
+        // the same pose at every phase of the 48-step cycle and must
+        // never drop out of the paint. Red-prove by asking
+        // `worn_part_frame` for a frame outside the run: the part paints
+        // nothing and the guard fails.
+        // Live caller chain: see avatar_animation_phase_clock_guard.
+        let mut figure = AvatarFigure::default();
+        let mut sleeve = AvatarFigure::default();
+        sleeve.push_layer(breathing_test_layer(0x7FFF, 0));
+        figure.push_body(sleeve);
+        let parked = paint_centered_pixels(&figure, 0);
+        assert_eq!(
+            parked.iter().filter(|pixel| **pixel != 0).count(),
+            1,
+            "the one-image sleeve inks its single pixel"
+        );
+        for step in 0..u64::try_from(AVATAR_ANIMATION_PHASE_COUNT).unwrap() {
+            let later = paint_centered_pixels(&figure, step * AVATAR_BREATHING_TICK_MS);
+            assert_eq!(
+                parked, later,
+                "a one-image body holds its pose at step {step}"
+            );
+        }
+    }
+
+    #[test]
+    fn tt222d_instrument_pose_animates_the_sleeves() {
+        // INSTRUMENT POSE (ticket #222d): the `G`/`B`/`K`/`D` variants
+        // are 12-frame playing poses (`docs/equip.md`), so once the kit
+        // wears an instrument the sleeves advance frames between steps
+        // like the breathing bodies do.
+        // Live caller chain: see avatar_animation_phase_clock_guard.
+        let mut figure = AvatarFigure::default();
+        for part_frame in 0..12u16 {
+            figure.push_layer(breathing_test_layer(
+                0x0001 + part_frame,
+                i32::from(part_frame),
+            ));
+        }
+        let parked = paint_centered_pixels(&figure, 0);
+        let stepped = paint_centered_pixels(&figure, AVATAR_BREATHING_TICK_MS);
+        let nonzero = |buf: &[u32]| buf.iter().filter(|pixel| **pixel != 0).count();
+        assert_eq!(nonzero(&parked), 1, "one pose per paint, never the stack");
+        assert_eq!(nonzero(&stepped), 1, "one pose per paint, never the stack");
+        assert_ne!(
+            parked, stepped,
+            "the playing pose advances its frame per step"
+        );
     }
 
     #[test]
@@ -4360,6 +4619,91 @@ mod avatar_figure_tests {
             duplicate.is_empty(),
             "single paint blits duplicate-anchor hands: {:?}",
             duplicate
+        );
+    }
+
+    /// Paint the live worn kit through the shared centered painter at
+    /// one paint instant (800x600 seat, 1:1 scale).
+    fn paint_live_kit(figure: &AvatarFigure, now_ms: u64) -> Vec<u32> {
+        let mut buf = vec![0u32; 800 * 600];
+        let mut frame = Frame {
+            buf: &mut buf,
+            w: 800,
+            h: 600,
+        };
+        figure.paint_visible_centered(
+            &mut frame,
+            &Rect {
+                x: 0,
+                y: 0,
+                w: 800,
+                h: 600,
+            },
+            800,
+            600,
+            now_ms,
+        );
+        buf
+    }
+
+    #[test]
+    fn tt222d_live_kit_moves_between_animation_steps() {
+        // MOTION-ACROSS-TICKS guard on the live kit (ticket #222d): two
+        // paints one animation step apart (66 ms, `docs/equip.md`) must
+        // differ, so the worn figure is seen to move with no input, and
+        // a 12-frame body must return to its first frame after 12 steps.
+        // The idle sleeves and jacket torso are one-image bodies, so
+        // they hold their pose (guard
+        // tt222d_idle_hand_body_stays_still_across_steps pins that half).
+        // Live caller chain:
+        //   main.rs::run_play -> WindowHandler::paint
+        //   -> Shell::paint_backbuffer -> ScreenGame::paint
+        //   -> ScreenGame::paint_at (frame clear) -> paint_room
+        //   -> paint_backdrop_live -> paint_room_user_panel
+        //   -> AvatarFigure::paint_visible_centered -> paint_box_centered
+        //   -> avatar_animation_phase -> worn_part_frame.
+        let archive_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Image/avatar.opa");
+        let Ok(archive) = std::fs::read(&archive_path) else {
+            // CI has no game data: skip cleanly.
+            return;
+        };
+        let entries = o2jam_file::parse_opi(&archive).unwrap();
+        let entry = entries
+            .iter()
+            .find(|e| e.name == "Itemdata_Korea.dat")
+            .expect("avatar.opa carries the item table");
+        let table_bytes = &archive[entry.data_offset..entry.data_offset + entry.size as usize];
+        let table = o2jam_file::parse_avatar_item_table(table_bytes).unwrap();
+        let eq = [
+            16i32, 30, 376, 383, 389, 0, 0, 0, 0, 0, 0, 35, 0, 0, 0, 0, 0,
+        ];
+        let figure = load_worn_figure(&archive, &table, &eq, true);
+        assert!(
+            figure.part_lens().contains(&AVATAR_BREATHING_FRAME_COUNT),
+            "the live kit stages a 12-frame breathing body: {:?}",
+            figure.part_lens()
+        );
+        assert!(
+            figure.part_lens().contains(&1),
+            "the live kit stages the idle one-image sleeves/torso: {:?}",
+            figure.part_lens()
+        );
+        let parked = paint_live_kit(&figure, 0);
+        let stepped = paint_live_kit(&figure, AVATAR_BREATHING_TICK_MS);
+        let moved = parked
+            .iter()
+            .zip(stepped.iter())
+            .filter(|(before, after)| before != after)
+            .count();
+        assert!(moved > 0, "one animation step must move the worn figure");
+        let wrapped = paint_live_kit(
+            &figure,
+            u64::try_from(AVATAR_BREATHING_FRAME_COUNT).unwrap() * AVATAR_BREATHING_TICK_MS,
+        );
+        assert_eq!(
+            wrapped, parked,
+            "one 12-frame cycle returns the figure to its first frames"
         );
     }
 }
