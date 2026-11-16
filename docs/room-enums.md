@@ -317,42 +317,37 @@ panel, 57x97 anchored at `(538,447)` (teal title over a dark value
 box), authored exactly over the button; `Wait_AlbumMode.ojs` is the
 `앨범정보`/`앨범 선택` album-mode panel.
 
-What the exe draws there, in its own words (`OTwo.exe` sha256
-`83a04541…72c823b`):
+**OPEN — exe display behavior is NOT pinned.** The pinned exe binary
+is available locally (`OTwo.exe` sha256 `83a04541…72c823b`,
+5,029,888 B), so byte scans are possible, but the offsets and
+"local-static record" ids quoted in earlier drafts of this section
+(`0xae45f`–`0xae499`, `0xb4b57`–`0xb4bb7`, `0xae9e5`–`0xaea03`,
+`2ef6dffb…`, `cc65bb93…`, `9039f914…`, `2058ffa9…`, `4153008a…`)
+exist only in an agent's scratch notes — no REA dossier in
+`extracted/` backs them. Treat them as leads, not evidence.
 
-- **Host**: the backdrop alone. The host arm reads the song-select
-  control's visible field (`+0x20`) and clears it together with the
-  control's arm (`+0x24`) at file `0xae45f`–`0xae499`
-  (local-static record `2ef6dffb…245b`), and the state applier arms
-  the control while setting the three `COVER*` bodies to frame 0 at
-  file `0xb4b57`–`0xb4bb7` (`cc65bb93…4e96`). The frame setter stores
-  the frame, clamps it to the body's frame count, and indexes
-  `frame − 1`, so frame 0 draws no image (`9039f914…a1091`).
-- **Peer**: the `BPM` cover. The peer arm leaves the cover at frame 1
-  and never arms the song-select control; only a Challenger
-  (`MemberRole` word `0x77ee86` = 2, claim D10) re-shows the button
-  (file `0xae9e5`–`0xaea03`, `2058ffa9…895f0`).
-- **Every role**: no `Wait_AlbumMode.ojs`. The image names the
-  `0x1650001c` control code nowhere (whole-image dword sweep: 0 hits,
-  the `Note_BG` image-1 precedent in `docs/notebg-cover.md`), so the
-  body is authored-but-unselected. OPEN: an album-mode room may arm
-  it (next evidence step: a room whose mode word arms that control).
+Likewise the four PNGs previously cited as "Wine exe captures"
+(`~/scratch/w8-wait.png`, `ad-wait.png`, `w10-wait.png`,
+`w11-wait.png`) are unqualified: no capture manifest, no
+version/hash/offset pin, no tool versions. The Wine X11 + SendInput
+rig is **specified, proof pending (#240)**, and the 2026-11-16 retro
+records a fabricated Wine A/B evidence episode. We cannot invoke the
+exe oracle on unpinned captures (owner challenge, 2026-11-16).
 
-One static arm disagrees and the captures settle it: the Waiting
-setup's host arm sets the cover to frame 1 (`4153008a…b5e`), the later
-state applier hides it, and the Wine host capture
-`~/scratch/w8-wait.png` (START armed) shows the bare backdrop — no
-button body, no `BPM` panel, no album panel
-(`caa30d69…be6`). The peer captures `~/scratch/ad-wait.png`,
-`w10-wait.png`, and `w11-wait.png` (READY armed) all show the `BPM`
-panel and no button (`8bc15817…688`).
+What IS established:
+- Data: the control table above from `Interface1.opi` and
+  `State_Waiting.bnd` (codes, rects, bound bodies).
+- Our client: the `BPM` cover is painted over the MUSELECT button in
+  file order; the live-path guard `waiting_song_rect_is_bare_for_host_
+  and_covered_for_peer` pins our divergence, not exe behavior.
+- Owner live observation: as host, a blue song-select button was
+  expected at this rect; our client showed the `BPM` box.
 
-Contradiction, recorded per AGENTS.md (the exe is the oracle): the
-owner's #278 playtest expected a blue song-select button as host,
-while the exe's host capture shows the bare backdrop placeholder.
-Both stay on record; OPEN with the next evidence step: an exe host
-capture in the exact Waiting-popup state, to settle whether a host
-ever sees the button.
+**Next evidence step:** a qualified Wine/exe capture of the host
+Waiting screen with provenance (version, hash, offsets, evidence IDs,
+capture manifest), gated by #240. Until then the host/peer display
+rule is OPEN, and any shipped behavior based on the unpinned captures
+is provisional.
 
 Click routing is untouched by the art rule: the host still opens the
 song dialog from this rect (dispatch case file `0xb2622`), which is
@@ -367,8 +362,9 @@ the shot walk replays the master waiting instant from seat 5 of the
 same Live duo (same arena word, room song 757, captions, and
 3012/3013 chat — `crates/recomp2jam/src/shots.rs` `guest_waiting_room` /
 `seeded_guest_game`). The guest frame differs from the master
-`waiting.png` in the seat plates and the song rect (host: bare
-backdrop; peer: `BPM` panel — "The waiting song rect" above) and
+`waiting.png` in the seat plates and the song rect (the current
+shell rule, which is OPEN pending exe evidence — "The waiting song
+rect" above) and
 differs from `musicselect.png` in 330774 of 360300 raw bytes: no
 dialog art, no structure, no song panel (gate hides them even when
 staged), while the staged `BPM` caption stays (catalog column
