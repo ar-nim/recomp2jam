@@ -537,6 +537,15 @@ pub struct ScreenGame {
     rooms: Vec<RoomListEntry>,
     room_highlight: usize,
     waiting: Option<JoinedRoom>,
+    /// The master's START control shows its armed face: the local start
+    /// request stands and the game has not begun. The exe keeps this in
+    /// the control's press state word (`[ctrl+0x60]`, setter VA
+    /// `0x4f72b0`, read back at VA `0x4f72e0`): the START click handler
+    /// arms it (VA `0x4b22d0`, file `0xb237d`) and the Waiting update
+    /// clears it when the request no longer stands (VA `0x4b2540`). A
+    /// guest's face needs no field — it follows the local seat's ready
+    /// byte (see [`Self::waiting_confirm_armed`]).
+    waiting_start_armed: bool,
     /// Live waiting-room chat rows (3012/3013 packets only, oldest first).
     waiting_chat: Vec<WaitingChatMessage>,
     /// Unsent chat draft for the input line (3011 source).
@@ -1008,6 +1017,7 @@ impl ScreenGame {
             rooms: Vec::new(),
             room_highlight: 0,
             waiting: None,
+            waiting_start_armed: false,
             waiting_chat: Vec::new(),
             chat_input: String::new(),
             selected_music: None,
@@ -1309,6 +1319,11 @@ impl ScreenGame {
         }
         let entered = self.flow.go(next).is_ok();
         if entered {
+            // A scene change drops the Waiting confirm's armed face, the
+            // planet board's rule: the body and its records belong to
+            // the scene being left (the exe rebuilds its controls and
+            // their frames per scene).
+            self.waiting_start_armed = false;
             if next == Screen::Avi {
                 self.avi_entered_wall = Some(std::time::Instant::now());
             }
@@ -2381,6 +2396,54 @@ impl ScreenGame {
     #[must_use]
     pub fn can_start_game(&self) -> bool {
         self.is_room_master() && self.all_peers_ready()
+    }
+
+    /// The local player's Waiting confirm control shows its armed face —
+    /// the exe's per-control press state word (`[ctrl+0x60]`, setter VA
+    /// `0x4f72b0`, read back at VA `0x4f72e0`):
+    ///
+    /// - a guest's READY follows the local seat's ready byte — the
+    ///   seat-ready update arms it while the seat is ready and clears it
+    ///   with an explicit rest frame when not (VA `0x4b5850`, file
+    ///   `0xb590b`-`0xb594f`; VA `0x4af1e0`, file `0xaf2d5`-`0xaf319`);
+    /// - a master's START follows the start request the click issued
+    ///   ([`Self::arm_waiting_start`]).
+    ///
+    /// Both arms paint the role-owned body's third record: the exe's
+    /// kind-`0x2000` dispatch arm sets absolute frame 3 (file
+    /// `0x4f6b7c`). This is the single home for the face state; the
+    /// painter reads it as `paint_waiting_scene`'s `confirm_armed`.
+    #[must_use]
+    pub fn waiting_confirm_armed(&self) -> bool {
+        if self.is_room_master() {
+            self.waiting_start_armed
+        } else {
+            self.local_member_ready()
+        }
+    }
+
+    /// The local player's own seat is marked ready — the exe's self
+    /// ready byte (`0x77cd32`), the word the READY face follows.
+    #[must_use]
+    fn local_member_ready(&self) -> bool {
+        let Some(room) = self.waiting.as_ref() else {
+            return false;
+        };
+        room.slots
+            .iter()
+            .find(|slot| slot.index == room.member_id)
+            .and_then(|slot| slot.member.as_ref())
+            .is_some_and(|member| member.ready)
+    }
+
+    /// Light the START control's armed face: the master's start request
+    /// went out and stands until the scene leaves Waiting (the exe arms
+    /// it in the click handler, file `0xb237d`, and clears it from its
+    /// Waiting update, VA `0x4b2540`). The session bridge calls this
+    /// after the 4010 send; the shell's own Confirm never needs it — an
+    /// offline master leaves for Loading at once.
+    pub fn arm_waiting_start(&mut self) {
+        self.waiting_start_armed = true;
     }
 
     /// Run the waiting Confirm gate shared by Enter and clicks:
@@ -5686,7 +5749,7 @@ impl ScreenGame {
         };
         match (self.scene_art(Screen::Waiting), &self.waiting) {
             (Some(art), Some(room)) => {
-                paint_waiting_scene(frame, room, art, &captions);
+                paint_waiting_scene(frame, room, art, &captions, self.waiting_confirm_armed());
                 paint_waiting_seat_avatars(
                     frame,
                     &art.placements,
@@ -6348,6 +6411,10 @@ fn observable_state_hash(game: &ScreenGame) -> u64 {
         game.planet_board.promo_last_advance_ms.unwrap_or(0),
     );
     hash_u64(&mut hash, planet_press_word(game.planet_board.planet_press));
+    // The Waiting confirm's armed face: a ready/start request that
+    // stands changes what the frame paints (the third record) without
+    // touching any other folded field, so replays must see it.
+    hash_u64(&mut hash, u64::from(game.waiting_confirm_armed()));
     hash_u64(
         &mut hash,
         game.planet_board
@@ -7773,6 +7840,163 @@ mod game_tests {
         );
         game.ingest_snapshot(&InputSnapshot::click_at(60, 575));
         assert_eq!(game.screen(), Screen::Room);
+    }
+
+    /// Waiting art with the master's START body carrying three distinct
+    /// records: record 0 red (rest), record 1 green (hover), record 2
+    /// blue (the armed face — `Wait_Start.ojs` carries 3 raw records and
+    /// the exe's kind-`0x2000` arm paints absolute frame 3).
+    fn waiting_three_record_start_game(member_id: u8) -> ScreenGame {
+        use crate::avatar::{AvatarFigure, FigureLayer, ScenePlacement};
+        use o2jam_render::Rgb555Image;
+        let record = |word: [u8; 2]| {
+            let mut figure = AvatarFigure::default();
+            figure.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&word, 1, 1).unwrap(),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+            figure
+        };
+        let mut body = record([0x00, 0x7C]);
+        body.push_layer(FigureLayer {
+            image: Rgb555Image::decode(&[0xE0, 0x03], 1, 1).unwrap(),
+            dx: 0,
+            dy: 0,
+            colorkey: 0xFFFF,
+        });
+        body.push_layer(FigureLayer {
+            image: Rgb555Image::decode(&[0x1F, 0x00], 1, 1).unwrap(),
+            dx: 0,
+            dy: 0,
+            colorkey: 0xFFFF,
+        });
+        let mut game = ScreenGame::new();
+        let mut room = waiting_room();
+        room.member_id = member_id;
+        // The local seat is the joined member, marked ready: the word
+        // the READY face follows (self ready byte `0x77cd32`).
+        let local = room.slots[0].member.clone().expect("staged member");
+        room.slots = (0..=member_id)
+            .map(|index| RoomSlot {
+                index,
+                state_code: 1,
+                member: (index == member_id).then(|| local.clone()),
+            })
+            .collect();
+        game.set_joined_room(room);
+        walk_to_waiting(&mut game);
+        let confirm = if member_id == 0 {
+            "IDC_BUTTON_SWAIT_START"
+        } else {
+            "IDC_BUTTON_SWAIT_READY"
+        };
+        game.load_scene(
+            Screen::Waiting,
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: confirm.to_owned(),
+                code: 0,
+                sprite: Some("Wait_Start.ojs".to_owned()),
+                rect: Rect {
+                    x: 10,
+                    y: 10,
+                    w: 4,
+                    h: 4,
+                },
+            }],
+            std::collections::HashMap::from([("Wait_Start.ojs".to_owned(), body)]),
+        );
+        game
+    }
+
+    /// Pixel the confirm body paints at its rect origin.
+    fn painted_confirm_pixel(game: &mut ScreenGame) -> u32 {
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        buf[10 * 800 + 10]
+    }
+
+    #[test]
+    fn waiting_start_arm_paints_the_third_record() {
+        // Ticket #284: the exe swaps the START body to absolute frame 3
+        // (the third record, `docs/room-enums.md:145`: frame n paints
+        // record n-1) through the per-control press state word setter
+        // `0x4f72b0` and the Waiting update's cached re-assert (file
+        // `0xb29b0`-`0xb29e5`). Live chain: `main::run_online` ->
+        // `Shell::run` -> `Session::paint` -> `ScreenGame::paint` ->
+        // `paint_waiting` -> `paint_waiting_scene` ->
+        // `paint_waiting_confirm_face`; the arm arrives from
+        // `OnlineSession::confirm_master_start` ->
+        // `ScreenGame::arm_waiting_start`.
+        let mut game = waiting_three_record_start_game(0);
+        assert_eq!(
+            painted_confirm_pixel(&mut game),
+            pack_xrgb(255, 0, 0),
+            "a master with no request standing paints the rest record"
+        );
+        game.arm_waiting_start();
+        assert_eq!(
+            painted_confirm_pixel(&mut game),
+            pack_xrgb(0, 0, 255),
+            "the standing start request paints the third record"
+        );
+    }
+
+    #[test]
+    fn waiting_guest_ready_arm_paints_the_third_record() {
+        // The guest face follows the local seat's ready byte: the
+        // seat-ready update arms frame 3 while ready and clears it with
+        // an explicit rest frame when not (VA `0x4b5850`, file
+        // `0xb590b`-`0xb594f`). Live chain: `main::run_online` ->
+        // `Shell::run` -> `Session::paint` -> `ScreenGame::paint` ->
+        // `paint_waiting` -> `paint_waiting_scene` ->
+        // `paint_waiting_confirm_face`; the ready flag arrives from
+        // `OnlineSession::confirm_guest_ready` ->
+        // `ScreenGame::set_member_ready`.
+        let mut game = waiting_three_record_start_game(1);
+        assert_eq!(
+            painted_confirm_pixel(&mut game),
+            pack_xrgb(0, 0, 255),
+            "a ready guest paints the third record"
+        );
+        game.set_member_ready(1, false);
+        assert_eq!(
+            painted_confirm_pixel(&mut game),
+            pack_xrgb(255, 0, 0),
+            "an un-ready guest returns to the rest record"
+        );
+    }
+
+    #[test]
+    fn waiting_start_arm_drops_with_the_scene() {
+        // A scene change drops the armed face the way it drops the
+        // planet press (the body belongs to the scene being left).
+        // Live chain: `main::run_online` -> `Shell::run` ->
+        // `ScreenGame::enter` (Back/Confirm transitions).
+        let mut game = waiting_three_record_start_game(0);
+        game.arm_waiting_start();
+        assert!(game.waiting_confirm_armed());
+        assert!(game.enter_screen(Screen::Room));
+        assert!(!game.waiting_confirm_armed());
+    }
+
+    #[test]
+    fn waiting_confirm_arm_enters_the_state_hash() {
+        // seam: observability only — `observable_state_hash` is the
+        // replay-comparison fold, not a runtime caller.
+        let mut game = waiting_three_record_start_game(0);
+        let rest = game.state_hash();
+        game.arm_waiting_start();
+        assert_ne!(rest, game.state_hash(), "the armed face moves the hash");
     }
 
     /// Room walked to with the pinned back button staged:
@@ -17729,8 +17953,11 @@ mod game_tests {
         // #202 re-pins: staging the avatar-room character now funds
         // the single wallet (gem None -> Some(0) on this default
         // record), so the fold's wallet word moves once, by design.
+        // #284 re-pins: the Waiting confirm face word folds after the
+        // planet press word on every screen (0 while no ready/start
+        // request stands), so the stream shifts once.
         assert_eq!(
-            populated, 0xE9B7_4397_3925_67E3,
+            populated, 0x1BBD_91F6_2C80_6183,
             "outbox+lanking+shop+musicshop+planet population must not move the observable hash"
         );
 
