@@ -36,9 +36,10 @@ use super::paint::{
     paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
     paint_waiting_scene, paint_waiting_seat_avatar, paint_waiting_seat_avatars,
     playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
-    scene_index, staged_rect_hit, BattleVerdict, ChannelChatMessage, ChannelScroll, LoadingStatus,
-    ResultPaint, ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions, WaitingChatMessage,
-    CHANNEL_VISIBLE_ROWS, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    scene_index, staged_rect_hit, waiting_confirm_control_id, BattleVerdict, ChannelChatMessage,
+    ChannelScroll, LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt,
+    WaitingCaptions, WaitingChatMessage, CHANNEL_VISIBLE_ROWS, RESULT_BACK_ID, RESULT_BACK_RECT,
+    RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::select_paint::{
     paint_select_chosung_rows, paint_select_filter_columns, paint_select_ok,
@@ -2761,17 +2762,15 @@ impl ScreenGame {
         let Some(art) = self.scene_art(Screen::Waiting) else {
             return false;
         };
-        // Role-filter the paired control ids (docs/room-enums.md
-        // "Waiting master gate"): master keeps START, non-master
-        // keeps READY. Seam: `Self::is_room_master`.
-        let confirm_ids: &[&str] = if self.is_room_master() {
-            &["IDC_BUTTON_SWAIT_START"]
-        } else {
-            &["IDC_BUTTON_SWAIT_READY"]
-        };
-        confirm_ids
-            .iter()
-            .any(|id| staged_rect_hit(&art.placements, id, x, y))
+        // Role-owned control (docs/room-enums.md "Waiting master
+        // gate"): master hits START, non-master hits READY. Seam:
+        // `Self::is_room_master`.
+        staged_rect_hit(
+            &art.placements,
+            waiting_confirm_control_id(self.is_room_master()),
+            x,
+            y,
+        )
     }
 
     /// Waiting button click: staged START/READY runs the Confirm
@@ -2809,17 +2808,14 @@ impl ScreenGame {
         let back = WAITING_BACK_IDS
             .iter()
             .any(|id| staged_rect_hit(placements, id, x, y));
-        // Role-filter the paired control ids (docs/room-enums.md
-        // "Waiting master gate"): master confirms on START, guests
-        // on READY.
-        let confirm_ids: &[&str] = if self.is_room_master() {
-            &["IDC_BUTTON_SWAIT_START"]
-        } else {
-            &["IDC_BUTTON_SWAIT_READY"]
-        };
-        let confirm = confirm_ids
-            .iter()
-            .any(|id| staged_rect_hit(placements, id, x, y));
+        // Role-owned control (docs/room-enums.md "Waiting master
+        // gate"): master confirms on START, guests on READY.
+        let confirm = staged_rect_hit(
+            placements,
+            waiting_confirm_control_id(self.is_room_master()),
+            x,
+            y,
+        );
         if back {
             self.enter(Screen::Room);
         } else if confirm {

@@ -3681,29 +3681,67 @@ pub fn paint_waiting_scene(
     captions: &WaitingCaptions<'_>,
 ) {
     let seats = staged_seats(room);
-    // Role-filter the paired Waiting control ids (docs/room-enums.md
-    // "Waiting master gate"): the master arm keeps START
-    // (`IDC_BUTTON_SWAIT_START`) + MASTER_SKILLSEL
-    // (`IDC_BUTTON_SWAIT_MASTER_SKILLSEL`); the non-master arm keeps
-    // READY (`IDC_BUTTON_SWAIT_READY`) + SKILLSEL
-    // (`IDC_BUTTON_SWAIT_SKILLSEL`). Seam: `ScreenGame::is_room_master`
-    // (seat id 0); mirrored here as `room.member_id == 0`.
+    // Seam: `ScreenGame::is_room_master` (seat id 0), mirrored here as
+    // `room.member_id == 0`. See [`waiting_control_armed_for_role`].
     let is_room_master = room.member_id == 0;
     art.paint_backdrop_live(frame, Screen::Waiting, |placed| {
-        if !waiting_seat_clone_live(placed, &seats) {
-            return false;
-        }
-        match placed.id.as_str() {
-            "IDC_BUTTON_SWAIT_START" | "IDC_BUTTON_SWAIT_MASTER_SKILLSEL" => is_room_master,
-            "IDC_BUTTON_SWAIT_READY" | "IDC_BUTTON_SWAIT_SKILLSEL" => !is_room_master,
-            _ => true,
-        }
+        waiting_seat_clone_live(placed, &seats)
+            && waiting_control_armed_for_role(&placed.id, is_room_master)
     });
     paint_waiting_seat_marks(frame, &seats, art);
     if waiting_has_staged_covers(&art.placements) {
         paint_waiting_staged(frame, room, &art.placements, captions);
     } else {
         paint_waiting_rows(frame, room);
+    }
+}
+
+/// The Waiting confirm control the local role owns
+/// (`docs/room-enums.md` "Waiting master gate"): the master arm enables
+/// `START 0x16202012` (file `0xae3d3`) and the non-master arm enables
+/// `READY 0x16202013` (file `0xae835`), so the same staged rect fires a
+/// different request per role (`ScreenGame::waiting_confirm_hit`).
+#[must_use]
+pub const fn waiting_confirm_control_id(is_room_master: bool) -> &'static str {
+    if is_room_master {
+        "IDC_BUTTON_SWAIT_START"
+    } else {
+        "IDC_BUTTON_SWAIT_READY"
+    }
+}
+
+/// Whether the Waiting setup arms one staged control for this role.
+///
+/// The exe swaps role-paired controls in its Waiting dialog setup (func
+/// file `0xae350`; the `+0x30` local flag read at file `0xae38e` picks
+/// the arm):
+///
+/// - master arm — enables `START 0x16202012` (file `0xae3d3`), disables
+///   `READY 0x16202013` (file `0xae3ff` plus the frame reset through VA
+///   `0x42f870`), and frame-resets both inactive-dress overlays
+///   (`READYBUTTEONINACTIVE 0x1650006e` fetch file `0xae796`,
+///   `SPEEDBUTTEONINACTIVE 0x1650006f` fetch file `0xae7cb`; reset at
+///   file `0xae7c6`/`0xae7fb`);
+/// - non-master arm (file `0xae805`) — enables READY (file `0xae835`),
+///   disables START (file `0xae859`), and leaves the inactive overlays
+///   untouched.
+///
+/// `MASTER_SKILLSEL`/`SKILLSEL` carry the same pairing (ControlList
+/// comments name them "when master" / "when not master"). Disable-vs-hide
+/// stays OPEN (a frame reset paints nothing, so this shell hides); when a
+/// guest shows the inactive overlays is OPEN too — the state-driven update
+/// shows both while `[0x77ee86] == 3` (file `0xaec29`), and the word's
+/// meaning has no pin yet. Next evidence step: pin `[0x77ee86]` (the room
+/// or player state the guest overlay waits on) against a live capture.
+#[must_use]
+fn waiting_control_armed_for_role(id: &str, is_room_master: bool) -> bool {
+    match id {
+        "IDC_BUTTON_SWAIT_START" | "IDC_BUTTON_SWAIT_MASTER_SKILLSEL" => is_room_master,
+        "IDC_BUTTON_SWAIT_READY"
+        | "IDC_BUTTON_SWAIT_SKILLSEL"
+        | "IDC_IMAGE_SWAIT_READYBUTTEONINACTIVE"
+        | "IDC_IMAGE_SWAIT_SPEEDBUTTEONINACTIVE" => !is_room_master,
+        _ => true,
     }
 }
 
@@ -7002,6 +7040,93 @@ mod paint_tests {
         assert_eq!(waiting_row_text(0, &seats[0]), "0 B YOU R");
         assert_eq!(waiting_row_text(2, &seats[2]), "2 - ---");
         assert_eq!(waiting_row_text(3, &seats[3]), "3 - LOCK");
+    }
+
+    /// Staged waiting art holding one control pair at the same rect:
+    /// the first id paints red, the second green (staging order is
+    /// paint order, so the second wins wherever both survive).
+    fn waiting_role_pair_art(ids: [&str; 2]) -> SceneArt {
+        let place = |id: &str, sprite: &str| ScenePlacement {
+            role: PlacementRole::Single,
+            id: id.to_owned(),
+            code: 0,
+            sprite: Some(sprite.to_owned()),
+            rect: Rect {
+                x: 10,
+                y: 10,
+                w: 4,
+                h: 4,
+            },
+        };
+        SceneArt {
+            placements: vec![place(ids[0], "Role_A.ojs"), place(ids[1], "Role_B.ojs")],
+            figures: HashMap::from([
+                ("Role_A.ojs".to_owned(), solid_figure(1, 1, [0x00, 0x7C])),
+                ("Role_B.ojs".to_owned(), solid_figure(1, 1, [0xE0, 0x03])),
+            ]),
+        }
+    }
+
+    /// Pixel at the shared control rect origin after painting the
+    /// waiting scene as `member_id`.
+    fn waiting_role_pixel(art: &SceneArt, member_id: u8) -> u32 {
+        let mut room = waiting_room();
+        room.member_id = member_id;
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &room,
+            art,
+            &WaitingCaptions::default(),
+        );
+        buf[10 * 800 + 10]
+    }
+
+    #[test]
+    fn waiting_master_paints_start_while_guest_paints_ready() {
+        // docs/room-enums.md "Waiting master gate": the master arm
+        // enables START 0x16202012 (file 0xae3d3) and the non-master
+        // arm enables READY 0x16202013 (file 0xae835), while both
+        // controls stay staged at one rect.
+        let art = waiting_role_pair_art(["IDC_BUTTON_SWAIT_START", "IDC_BUTTON_SWAIT_READY"]);
+        assert_eq!(
+            waiting_role_pixel(&art, 0),
+            pack_xrgb(255, 0, 0),
+            "master keeps START"
+        );
+        assert_eq!(
+            waiting_role_pixel(&art, 1),
+            pack_xrgb(0, 255, 0),
+            "guest keeps READY"
+        );
+    }
+
+    #[test]
+    fn waiting_master_paints_no_inactive_dress_over_the_confirm_rect() {
+        // The master arm frame-resets both inactive-dress overlays
+        // (fetch file 0xae796/0xae7cb, reset at file 0xae7c6/0xae7fb),
+        // so neither may cover START; the non-master arm leaves them
+        // untouched, so a guest still paints them.
+        for overlay in [
+            "IDC_IMAGE_SWAIT_READYBUTTEONINACTIVE",
+            "IDC_IMAGE_SWAIT_SPEEDBUTTEONINACTIVE",
+        ] {
+            let art = waiting_role_pair_art(["IDC_BUTTON_SWAIT_START", overlay]);
+            assert_eq!(
+                waiting_role_pixel(&art, 0),
+                pack_xrgb(255, 0, 0),
+                "{overlay} must not cover START for the master"
+            );
+            assert_eq!(
+                waiting_role_pixel(&art, 1),
+                pack_xrgb(0, 255, 0),
+                "{overlay} stays for a guest"
+            );
+        }
     }
 
     #[test]

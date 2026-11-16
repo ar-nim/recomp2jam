@@ -255,6 +255,21 @@ opener `0x4bd2e0` and forwards UI event 7 through `0x478c90`)
 master opens music selection; non-masters keep the staged `BPM`
 caption (their speed picker) with no select control.
 
+The same master arm also clears both inactive-dress overlays: it
+fetches `READYBUTTEONINACTIVE 0x1650006e` at file `0xae796` and
+`SPEEDBUTTEONINACTIVE 0x1650006f` at file `0xae7cb`, and resets each
+frame through `0x42f870` (file `0xae7c6` and `0xae7fb`) before the arm
+ends at file `0xae800`. The non-master arm never touches either id, so
+a guest keeps whatever the state-driven update left. That update
+near file `0xaebaf` sets the local state word `[ctrl + 0x534] = 1` and
+resets both overlays (file `0xaebef`/`0xaec24`); one branch instead
+shows both — the one that reads the word `[0x77ee86]` at file
+`0xaec29` and acts only when it equals `3` (shows at file `0xaede1` and
+`0xaee16`). The meaning of `[0x77ee86]` is OPEN (next evidence step: a
+live capture of the guest waiting room in the two states). At rest
+this model paints the inactive dress for a guest and never for the
+master, which is what the shell mirrors.
+
 The START click itself (dispatch compare at file `0xb2315`) runs the
 all-ready check first: it calls the readiness function at file
 `0xb5560` (`ev_de3fc543dcc420684f7bbdc6698ff87f`, observed), which
@@ -268,13 +283,18 @@ then emits an error instead of the start event: `> 0` → error `0xfaa`,
 `-5` → alternate emit (`0x6497bc`). The master starts only with
 every peer ready; non-masters ready up (4008) instead of starting.
 
-Shell mirror (`crates/o2jam-shell/src/screens/game.rs`):
+Shell mirror (`crates/o2jam-shell/src/screens/game/mod.rs`):
 `is_room_master` (seat id 0, the creator — the 4043 header derives
 `+0x30 = 1` exactly when the requesting member id is 0,
 `docs/relay.md` §10), `all_peers_ready` (occupied non-self slots
 ready), `can_start_game` (both). The waiting song panel plus the
 select dialog art/structure/OK pill paint only for the master; the
-staged `BPM` caption paints for everyone. Waiting Confirm advances
+staged `BPM` caption paints for everyone. The control-role rule
+itself lives in `waiting_control_armed_for_role`
+(`crates/o2jam-shell/src/screens/paint.rs`): master keeps
+START/MASTER_SKILLSEL, a guest keeps READY/SKILLSEL plus both
+inactive-dress overlays; `waiting_confirm_control_id` names the role's
+confirm id for the two hit paths. Waiting Confirm advances
 to Loading only with no joined room (offline walk) or
 `can_start_game`; a non-master or unready Confirm stays in Waiting.
 
