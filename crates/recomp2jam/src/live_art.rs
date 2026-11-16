@@ -174,7 +174,7 @@ fn stage_select_dialog_art(game: &mut ScreenGame, archive: &[u8]) {
     if art.figures.is_empty() {
         return;
     }
-    game.load_select_music_scene(art.placements, art.figures);
+    game.cache_select_music_scene(art.placements, art.figures);
 }
 
 /// Stage Playing-archive scenes through the live room: the Loading gate
@@ -468,6 +468,31 @@ mod live_art_tests {
     }
 
     #[test]
+    fn live_boot_waiting_lands_plain_without_select_music_dialog() {
+        // Live caller chain:
+        //   main.rs::run_play -> assemble_online_session ->
+        //   session::OnlineSession::stage_live_art ->
+        //   crate::live_art::stage_live_scenes ->
+        //   stage_interface_scenes -> stage_select_dialog_art ->
+        //   ScreenGame::cache_select_music_scene (cache only).
+        // Archives absent -> skip cleanly (CI has no game data).
+        if !interface_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let mut game = live_game();
+        stage_live_scenes(&mut game);
+        assert!(
+            !game.select_music_dialog_open(),
+            "live staging must not auto-open the select-music dialog"
+        );
+        assert!(
+            game.select_music_art_cached(),
+            "live staging must still cache the select-music dialog art"
+        );
+    }
+
+    #[test]
     fn planet_stages_bound_art_when_archives_present() {
         // Seventeen bound entries pair seventeen `.bnd` rects by code
         // ordinal (self included, with the miss rect); the grown figures
@@ -693,7 +718,7 @@ mod live_art_tests {
         if let Some(art) =
             stage_dialog(&interface, Dialog::SelectMusic, StageContext::default()).art
         {
-            expected.load_select_music_scene(art.placements, art.figures);
+            expected.cache_select_music_scene(art.placements, art.figures);
         }
         let mut channel_figures =
             stage_dialog(&interface, Dialog::ChannelInfo, StageContext::default())

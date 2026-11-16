@@ -1492,6 +1492,13 @@ impl ScreenGame {
     pub fn select_music_dialog_open(&self) -> bool {
         self.select_music_art.is_some()
     }
+
+    /// Whether the song-select dialog art is cached (available for
+    /// MUSELECT restore) even while the overlay is closed (ticket #270).
+    #[must_use]
+    pub fn select_music_art_cached(&self) -> bool {
+        self.select_music_art_cache.is_some()
+    }
     /// Queued RETRY press for the session bridge, if any (`StartGame`
     /// 4010, `0xfaa` — the exe's result RETRY relay event,
     /// `FUN_004c2f00` range, `ev_77ce98f1…`). One take sends once;
@@ -3092,6 +3099,25 @@ impl ScreenGame {
     /// Stage real song-select dialog art (`DAILOG_SELECTMUSIC` placements
     /// plus figures loaded through `load_scene_figures`). Waiting layers
     /// it over the seats; empty art paints nothing extra.
+    /// Stage select-music dialog art into the cache only, without
+    /// opening the dialog overlay (ticket #270). The open state stays
+    /// false from boot; MUSELECT restores the cached art to open.
+    pub fn cache_select_music_scene(
+        &mut self,
+        placements: Vec<ScenePlacement>,
+        figures: HashMap<String, AvatarFigure>,
+    ) -> &mut Self {
+        let art = SceneArt {
+            placements,
+            figures,
+        };
+        self.select_music_art_cache = Some(art);
+        self
+    }
+
+    /// Stage real song-select dialog art (`DAILOG_SELECTMUSIC` placements
+    /// plus figures) and open the dialog overlay. Used by MUSELECT
+    /// reopen and tests.
     pub fn load_select_music_scene(
         &mut self,
         placements: Vec<ScenePlacement>,
