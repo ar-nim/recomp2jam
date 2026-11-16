@@ -164,6 +164,7 @@ use o2jam_shell::screens::SideScreen;
 use o2jam_shell::{GameLoop, InputEdge, InputSnapshot, MenuKey, Screen, ScreenGame};
 
 use crate::connect::net_context;
+mod attempt;
 use crate::live_art::restage_live_playing;
 use crate::live_stats::{apply_peer_update, jam_tick_for_score, life_tick_for_live_play};
 use crate::loading::{
@@ -1783,22 +1784,6 @@ impl OnlineSession {
         });
     }
 
-    /// Run one drain section under a short IO timeout and restore the
-    /// resting session timeout afterwards — the timeout-restore shape
-    /// every per-frame section shares: a rejected prologue traces and
-    /// skips the section, and a failed restore traces (the next
-    /// section's prologue retries the resting set).
-    fn with_drain_timeout(&mut self, short: Duration, name: &str, section: impl FnOnce(&mut Self)) {
-        if let Err(source) = self.gateway.set_timeouts(Some(short)) {
-            tracing::debug!(%source, "{name} section skipped: timeout rejected");
-            return;
-        }
-        section(self);
-        if let Err(source) = self.gateway.set_timeouts(Some(SESSION_IO_TIMEOUT)) {
-            tracing::debug!(%source, "{name} timeout restore failed");
-        }
-    }
-
     /// Live score snapshot behind the ticks: row 0 of the live rank rows
     /// carries the local points, jam level, and hold bonus (`None` only
     /// while the rows cannot name the local seat, never in practice);
@@ -2907,17 +2892,7 @@ impl GameLoop for OnlineSession {
         // 2021 leave (Memoryer answers it with a 1001 `-1` auth error
         // until the leave resets the session, ticket #175 probe).
         self.flush_channel_logout();
-        self.flush_shop_buy();
-        self.poll_shop_buy();
-        self.flush_music_buy();
-        self.poll_music_buy();
-        self.flush_gift_list();
-        self.poll_gift_list();
-        self.flush_gift_claim();
-        self.poll_gift_claim();
-        self.poll_channel_login();
-        self.poll_room_join();
-        self.poll_song_select();
+        self.poll_attempts();
         self.poll_stats();
         if self.wire_attempt_pending() {
             self.poll_start();
@@ -6188,6 +6163,43 @@ mod session_tests {
         server.join().unwrap();
         assert_eq!(chart.song_id, 757);
         assert!(session.game.has_loading_cover());
+    }
+
+    #[test]
+    fn timeout_restore_after_drain_section() {
+        let (mut session, server) = channel_session(|_stream| {});
+        session.with_drain_timeout(std::time::Duration::from_millis(1), "test", |_s| {});
+        assert_eq!(
+            session.gateway_read_timeout(),
+            Some(std::time::Duration::from_secs(10)),
+            "drain section must restore the resting timeout"
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn retry_keeps_attempt_on_quiet_socket() {
+        let (mut session, server) = channel_session(|_stream| {});
+        let kept = session.drain_shop_buy(super::ShopBuyAttempt {
+            deadline: std::time::Instant::now() + std::time::Duration::from_secs(10),
+        });
+        assert!(
+            kept.is_some(),
+            "a quiet socket must keep the attempt for retry"
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn poll_order_pending_pauses_lobby_drain() {
+        // With an attempt in flight, wire_attempt_pending must be true
+        // so the paint path skips the lobby/waiting drains.
+        let (mut session, server) = channel_session(|_stream| {});
+        session.shop_buy_attempt = Some(super::ShopBuyAttempt {
+            deadline: std::time::Instant::now() + std::time::Duration::from_secs(10),
+        });
+        assert!(session.wire_attempt_pending());
+        server.join().unwrap();
     }
 
     #[test]

@@ -127,6 +127,11 @@ impl GatewayConnection {
         }
     }
 
+    /// Current read timeout (for guards).
+    pub fn read_timeout(&self) -> Result<Option<Duration>, Error> {
+        self.stream.read_timeout().map_err(Error::transport)
+    }
+
     /// Override the blocking read/write timeouts.
     ///
     /// # Errors
