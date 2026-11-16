@@ -3739,25 +3739,16 @@ pub const fn waiting_confirm_control_id(is_room_master: bool) -> &'static str {
 /// (`Wait_MusicSelect.ojs`, the blue 곡선택 button) sits under its
 /// `BPM` cover `IDC_IMAGE_SWAIT_COVERMUSIC 0x1650001d`
 /// (`Wait_Cover_Music.ojs`, `.bnd` rect 28, authored over the button).
-/// The exe clears the song-select control's visible field in the master
-/// arm (file `0xae45f`–`0xae499`: fetch `0x16200003`, test the control's
-/// `+0x20` field, clear it and the `+0x24` arm) and its state applier
-/// arms the control while setting the three `COVER*` bodies to frame 0
-/// (file `0xb4b57`–`0xb4bb7`; the setter stores the frame, clamps to the
-/// body's frame count, and indexes `frame − 1`, so frame 0 draws no
-/// image). A host therefore reads the bare backdrop at the song rect,
-/// while a peer keeps the `BPM` cover — Wine host capture
-/// `~/scratch/w8-wait.png` (START armed) against peer captures
-/// `ad-wait.png`/`w10-wait.png`/`w11-wait.png` (READY armed). Only a
-/// Challenger (`MemberRole` word `0x77ee86` = 2, claim D10) re-shows the
-/// button (file `0xae9e5`–`0xaea03`); this shell models no such role yet
-/// (OPEN: MemberRole). `IDC_IMAGE_SWAIT_ALBUMMODE 0x1650001c` paints for
-/// no role: the image names that control code nowhere (whole-image
-/// dword sweep, 0 hits — the `Note_BG` image-1 precedent in
-/// `docs/notebg-cover.md`), and no capture shows its `앨범정보` header
-/// (OPEN: an album-mode room may arm it). Click routing is untouched:
-/// the host still opens the song dialog from this rect (dispatch case
-/// file `0xb2622`), which is exe behavior, not a shell gap.
+/// The owner decision (2026-11-16, ticket #278) sets this shell rule:
+/// the host sees the button with no cover, a peer sees the cover with no
+/// button. The exe display rule is OPEN — no qualified capture pins it
+/// (`docs/room-enums.md` "The waiting song rect"; next evidence step is
+/// a Wine/exe capture with a provenance manifest, gated by #240), so
+/// this rule is the owner's call, not an exe reading.
+/// `IDC_IMAGE_SWAIT_ALBUMMODE 0x1650001c` paints for no role; whether
+/// an album-mode room arms it is OPEN. Click routing is untouched: the
+/// host still opens the song dialog from this rect (dispatch case file
+/// `0xb2622`), which is exe behavior, not a shell gap.
 #[must_use]
 fn waiting_control_armed_for_role(id: &str, is_room_master: bool) -> bool {
     match id {
@@ -3766,7 +3757,8 @@ fn waiting_control_armed_for_role(id: &str, is_room_master: bool) -> bool {
         | "IDC_BUTTON_SWAIT_SKILLSEL"
         | "IDC_IMAGE_SWAIT_READYBUTTEONINACTIVE"
         | "IDC_IMAGE_SWAIT_SPEEDBUTTEONINACTIVE" => !is_room_master,
-        "IDC_BUTTON_SWAIT_MUSELECT" | "IDC_IMAGE_SWAIT_COVERMUSIC" => !is_room_master,
+        "IDC_BUTTON_SWAIT_MUSELECT" => is_room_master,
+        "IDC_IMAGE_SWAIT_COVERMUSIC" => !is_room_master,
         "IDC_IMAGE_SWAIT_ALBUMMODE" => false,
         _ => true,
     }
@@ -12621,15 +12613,13 @@ mod paint_tests {
     }
 
     #[test]
-    fn host_reads_the_bare_song_rect_and_a_peer_keeps_the_bpm_cover() {
-        // The host arm clears the song-select control's visible field
-        // and its state applier hides the `COVER*` bodies (exe files
-        // `0xae45f`-`0xae499`, `0xb4b57`-`0xb4bb7`; Wine host capture
-        // `~/scratch/w8-wait.png`), so the staged `Wait_MusicSelect.ojs`
-        // button and the `BPM` panel both stay off the song rect. A peer
-        // keeps the cover (Wine peer captures `ad-wait.png`/
-        // `w10-wait.png`). `Wait_AlbumMode.ojs` paints for neither: the
-        // image names its control code nowhere.
+    fn host_paints_the_select_button_while_peer_keeps_the_bpm_cover() {
+        // Owner decision 2026-11-16 (ticket #278): the host sees the
+        // staged `Wait_MusicSelect.ojs` button on the song rect and no
+        // `BPM` panel, a peer keeps the `BPM` panel and never sees the
+        // button. `Wait_AlbumMode.ojs` paints for neither role. The exe
+        // display rule is OPEN (`docs/room-enums.md` "The waiting song
+        // rect"), so this seam pins the shell rule only.
         let placements = vec![
             waiting_probe(
                 "IDC_BUTTON_SWAIT_MUSELECT",
@@ -12678,20 +12668,56 @@ mod paint_tests {
             buf
         };
         let host = paint(0);
-        assert_eq!(host[515 * 800 + 560], 0, "host paints no song chrome");
-        assert_eq!(host[460 * 800 + 536], 0, "host paints no album panel");
-        assert!(
-            !host.contains(&pack_xrgb(255, 0, 0)),
-            "no button art at all"
+        assert_eq!(
+            host[493 * 800 + 540],
+            pack_xrgb(255, 0, 0),
+            "host paints the select button at its rect origin"
         );
+        assert_eq!(host[460 * 800 + 536], 0, "host paints no album panel");
 
         let peer = paint(5);
-        assert_ne!(peer[515 * 800 + 560], 0, "peer keeps the BPM cover");
+        let cover_pixel = peer[515 * 800 + 560];
+        assert_ne!(cover_pixel, 0, "peer keeps the BPM cover");
+        assert!(!host.contains(&cover_pixel), "host paints no BPM cover");
         assert!(
             !peer.contains(&pack_xrgb(255, 0, 0)),
             "peer never shows the button"
         );
         assert_eq!(peer[460 * 800 + 536], 0, "album panel stays off for peers");
+    }
+
+    #[test]
+    fn waiting_song_rect_bodies_swap_with_the_role() {
+        // Rule pin for the two pixel guards above (owner decision
+        // 2026-11-16, ticket #278). A peer's opaque `BPM` cover hides a
+        // stray button completely, so the frames cannot see a peer-armed
+        // button; this pin names the arms themselves: host keeps the
+        // song-select button, peer keeps the `BPM` cover, and the
+        // album-mode body stays off for both roles.
+        assert!(waiting_control_armed_for_role(
+            "IDC_BUTTON_SWAIT_MUSELECT",
+            true
+        ));
+        assert!(!waiting_control_armed_for_role(
+            "IDC_BUTTON_SWAIT_MUSELECT",
+            false
+        ));
+        assert!(!waiting_control_armed_for_role(
+            "IDC_IMAGE_SWAIT_COVERMUSIC",
+            true
+        ));
+        assert!(waiting_control_armed_for_role(
+            "IDC_IMAGE_SWAIT_COVERMUSIC",
+            false
+        ));
+        assert!(!waiting_control_armed_for_role(
+            "IDC_IMAGE_SWAIT_ALBUMMODE",
+            true
+        ));
+        assert!(!waiting_control_armed_for_role(
+            "IDC_IMAGE_SWAIT_ALBUMMODE",
+            false
+        ));
     }
 
     #[test]

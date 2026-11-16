@@ -450,10 +450,15 @@ mod live_art_tests {
     }
 
     #[test]
-    fn waiting_song_rect_is_bare_for_host_and_covered_for_peer() {
-        // Live-path guard (ticket #278): the Waiting song rect carries
-        // role-swapped bodies, and only a peer's arm leaves the `BPM`
-        // cover on top of it.
+    fn waiting_song_rect_shows_select_button_for_host_and_cover_for_peer() {
+        // Live-path guard (ticket #278, owner decision 2026-11-16): the
+        // Waiting song rect carries role-swapped bodies. The host sees
+        // the blue song-select button with no `BPM` cover; a peer keeps
+        // the `BPM` cover and never sees the button. The exe display
+        // rule is OPEN (`docs/room-enums.md` "The waiting song rect":
+        // next evidence step is a qualified capture, gated by #240), so
+        // this guard pins the owner-decision shell rule, not exe
+        // behavior.
         //
         // Live caller chain:
         //   main.rs::run_play -> setup_online -> session::OnlineSession::stage_live_art
@@ -492,15 +497,51 @@ mod live_art_tests {
             "MUSELECT body must stay the shipped one"
         );
 
-        // One probe inside the song-select rect and the `BPM` cover,
-        // clear of the `BPM` text readout rect (552,504)-(582,520); a
-        // second inside the album-mode body (`0x1650001C`, rect 27
-        // `(533,441)-(601,551)`) and clear of both other bodies.
-        let probe = |pixels: &[u32], (x, y): (usize, usize)| {
-            pixels[y * usize::try_from(NATIVE_WIDTH).unwrap_or(1) + x]
-        };
-        let song_probe = (545, 500);
+        let width = usize::try_from(NATIVE_WIDTH).unwrap_or(1);
+        let probe = |pixels: &[u32], (x, y): (usize, usize)| pixels[y * width + x];
+        // Inside the album-mode body (`0x1650001C`, rect 27
+        // `(533,441)-(601,551)`) and clear of the button and the cover.
         let album_probe = (536, 460);
+        // The song rect proper is the union of the three staged bodies
+        // (`(533,441)-(601,551)`): a whole-region read, so a role that
+        // swaps one body for the other cannot slip past a lucky pixel.
+        let song_rect = (533usize, 441usize, 601usize, 551usize);
+        let song_body_ids = [
+            "IDC_BUTTON_SWAIT_MUSELECT",
+            "IDC_IMAGE_SWAIT_COVERMUSIC",
+            "IDC_IMAGE_SWAIT_ALBUMMODE",
+        ];
+        let region = |pixels: &[u32]| -> Vec<u32> {
+            let (x0, y0, x1, y1) = song_rect;
+            (y0..y1)
+                .flat_map(|y| pixels[y * width + x0..y * width + x1].to_vec())
+                .collect()
+        };
+        // First differing pixel between two song-rect reads, as
+        // `(x, y) left vs right`, so a role swap reads as one
+        // coordinate instead of a pixel dump.
+        let first_mismatch = |left: &[u32], right: &[u32]| -> Option<String> {
+            let stride = song_rect.2 - song_rect.0;
+            left.iter()
+                .zip(right)
+                .position(|(a, b)| a != b)
+                .map(|index| {
+                    format!(
+                        "({}, {}) {:#010x} vs {:#010x}",
+                        song_rect.0 + index % stride,
+                        song_rect.1 + index / stride,
+                        left[index],
+                        right[index]
+                    )
+                })
+        };
+        let assert_same_read = |left: &[u32], right: &[u32], what: &str| {
+            let mismatch = first_mismatch(left, right);
+            assert!(mismatch.is_none(), "{what}: first mismatch {mismatch:?}");
+        };
+        let assert_reads_differ = |left: &[u32], right: &[u32], what: &str| {
+            assert!(first_mismatch(left, right).is_some(), "{what}");
+        };
 
         let host_frame = painted_pixels(&mut host, 0);
 
@@ -515,9 +556,12 @@ mod live_art_tests {
         peer.set_joined_room(peer_room);
         let peer_frame = painted_pixels(&mut peer, 0);
 
-        // The backdrop-only reference, computed in-process: the same
-        // staged Waiting scene with the song-rect bodies dropped, so the
-        // probe reads whatever the backdrop paints there.
+        // References computed in-process from the same staged art: the
+        // song-rect bodies reduced to one named body, or to none. Each
+        // reference paints on the role that shows the kept body, so the
+        // role filter keeps it; wherever a dropped body is absent the
+        // reference reads what that role's backdrop paints, so no
+        // capture pixel is baked in.
         let archive = read_install_archives(&install_root())
             .interface
             .expect("interface archive");
@@ -528,47 +572,64 @@ mod live_art_tests {
             placements,
             figures,
         } = staged;
-        let backdrop_only: Vec<ScenePlacement> = placements
-            .into_iter()
-            .filter(|placed| {
-                !matches!(
-                    placed.id.as_str(),
-                    "IDC_BUTTON_SWAIT_MUSELECT"
-                        | "IDC_IMAGE_SWAIT_COVERMUSIC"
-                        | "IDC_IMAGE_SWAIT_ALBUMMODE"
-                )
-            })
-            .collect();
-        host.load_scene(Screen::Waiting, backdrop_only, figures);
-        let backdrop = painted_pixels(&mut host, 0);
+        let paint_song_bodies = |game: &mut ScreenGame, keep: &[&str]| -> Vec<u32> {
+            let kept: Vec<ScenePlacement> = placements
+                .iter()
+                .filter(|placed| {
+                    !song_body_ids.contains(&placed.id.as_str())
+                        || keep.contains(&placed.id.as_str())
+                })
+                .cloned()
+                .collect();
+            game.load_scene(Screen::Waiting, kept, figures.clone());
+            painted_pixels(game, 0)
+        };
+        let bare = paint_song_bodies(&mut host, &[]);
+        let button_only = paint_song_bodies(&mut host, &["IDC_BUTTON_SWAIT_MUSELECT"]);
+        let cover_only = paint_song_bodies(&mut peer, &["IDC_IMAGE_SWAIT_COVERMUSIC"]);
 
-        assert_eq!(
-            probe(&host_frame, song_probe),
-            probe(&backdrop, song_probe),
-            "host paints the BPM cover over the bare song rect"
+        let host_region = region(&host_frame);
+        let peer_region = region(&peer_frame);
+        let bare_region = region(&bare);
+        let button_region = region(&button_only);
+        let cover_region = region(&cover_only);
+
+        assert_reads_differ(
+            &host_region,
+            &bare_region,
+            "host must paint the song-select button, not a bare rect",
         );
-        assert_ne!(
-            probe(&peer_frame, song_probe),
-            probe(&backdrop, song_probe),
-            "peer keeps the BPM cover on the song rect"
+        assert_same_read(
+            &host_region,
+            &button_region,
+            "host paints the button alone: no BPM cover over it",
         );
-        assert_ne!(
-            probe(&host_frame, song_probe),
-            probe(&peer_frame, song_probe),
-            "the song rect must read differently per role"
+        assert_same_read(
+            &peer_region,
+            &cover_region,
+            "peer paints the BPM cover alone: no button under it",
+        );
+        assert_reads_differ(
+            &peer_region,
+            &bare_region,
+            "peer must not read the bare rect: it keeps the BPM cover",
+        );
+        assert_reads_differ(
+            &host_region,
+            &peer_region,
+            "the song rect must read differently per role",
         );
         assert_eq!(
             probe(&host_frame, album_probe),
-            probe(&backdrop, album_probe),
+            probe(&bare, album_probe),
             "the album-mode body paints for no role"
         );
         assert_eq!(
             probe(&peer_frame, album_probe),
-            probe(&backdrop, album_probe),
+            probe(&bare, album_probe),
             "the album-mode body paints for no role"
         );
     }
-
     #[test]
     fn staging_never_moves_the_flow() {
         let mut game = live_game();
