@@ -63,9 +63,10 @@ fn run() -> Result<i32> {
     }
 }
 
-/// Explicit `--backend` wins; without one, `WAYLAND_DISPLAY` selects
-/// the fixture arm, else `DISPLAY` selects X11, else the fixture arm
-/// (it needs no display at all).
+/// Explicit `--backend` wins; without one, `DISPLAY` selects X11,
+/// else the fixture arm (it needs no display at all). The fixture arm
+/// is never auto-selected from an ambient `WAYLAND_DISPLAY` (issue
+/// #267); pin it with `--backend wayland` instead.
 fn select_auto() -> InputBackend {
     input_drive::auto_backend().unwrap_or(InputBackend::WaylandFixture)
 }
