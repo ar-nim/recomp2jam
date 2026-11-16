@@ -12,6 +12,7 @@
 //! field) are server-verified against Encore's `SizePrefixedMessageFramer`
 //! and a live Memoryer gateway (`docs/net-protocol.md` §3).
 
+pub mod auth_parameters;
 pub mod character;
 pub mod client;
 pub mod command;
@@ -69,3 +70,8 @@ pub use rooms::{
     RoomState, SendMainRoomMessage, SendWhisper, SendWhisperResponse, ROOM_TITLE_LEN,
 };
 pub use strings::{decode_null_terminated, encode_null_terminated, MAX_STRING_LEN};
+
+pub use auth_parameters::{
+    assemble_launch_arguments, mirror_token, AuthParameters, AUTH_PARAMETER_FIELD_COUNT,
+    GATEWAY_MIRROR_COUNT,
+};
