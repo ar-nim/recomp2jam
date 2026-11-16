@@ -47,11 +47,16 @@ roles: they ride alongside the one state role and never replace it.
 
 ## Triage flow
 
-Every new issue enters with `needs-triage`, and a triage decision precedes any
-fix work: the triage step assigns the category (issue **type**: Bug, Task,
-or Feature) and the
-role (`ready-for-agent`, `ready-for-human`, `needs-info`, `wontfix`), and
-sizes the acceptance. An issue that is not yet triaged is not worked, however
+Every issue enters with `needs-triage` — no exception for the reporter or
+for what the issue was cut from. The flow is always the same: issue created
+→ triage → work → loop until fixed. The triage step assigns the category
+(issue **type**: Bug, Task, or Feature) and the role (`ready-for-agent`,
+`ready-for-human`, `needs-info`, `wontfix`), adds the component label, and
+sizes the acceptance. Triage may be fast — one pass may conclude the issue
+is already fully specified (its sizing may live in a parent record) and
+promote it straight to `ready-for-agent` — but the triage step itself is
+never skipped: an issue is never born pre-labeled into a work role (owner
+decision 2026-11-16). An issue that is not yet triaged is not worked, however
 small it looks.
 
 Owner decision 2026-11-16: an exe behavior mismatch is a Bug, not a
@@ -63,9 +68,9 @@ Two recorded exceptions, both with the triage record visible on the tracker:
 
 - Wayfinder map tickets carry `wayfinder:` labels and are triaged by the map
   itself (charting is the triage act).
-- Execution issues cut by a scoping ticket enter directly at their decided
-  role; the scoping ticket's resolution comment is their triage record and
-  stays linked.
+- Execution issues cut by a scoping ticket still enter with `needs-triage`;
+  the triage pass promotes them in one step, citing the scoping ticket's
+  resolution comment as the triage record (which stays linked).
 - When the only remaining leg is owner hands or eyes, apply `needs-owner`
   alongside the state role (never instead of it) with a comment naming
   the exact ask, and stop delegating until the owner responds.
