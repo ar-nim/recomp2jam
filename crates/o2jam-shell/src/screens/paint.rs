@@ -11274,8 +11274,10 @@ mod paint_tests {
     /// `Equip12` (the pinned type-5 → slot `0xb` rule,
     /// `docs/equip.md`); every other `Equip` column is 0. The server
     /// copies the row 1:1 into the 17-slot `CharacterInfo.equipment`
-    /// (live wire probe: the face-only row stacked 60 layers and the
-    /// panel rightly painted head-only; the kitted row stacks 447).
+    /// (live wire probe under the stack-every-slot picker read 60 and
+    /// 447 layers; the picker now wears one body per part block, so the
+    /// face-only row stages one 12-frame body and the kitted row 8
+    /// bodies — the panel rightly painted head-only for the face row).
     /// Column placement of the five kit ids is fixture freedom (the
     /// stacker resolves ids, not slot semantics); only the face column
     /// is pinned.

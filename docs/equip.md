@@ -86,7 +86,10 @@ now also wears the full-body kit ids 16 (hair), 30 (base body
 not slot semantics; only the face column is pinned). Live wire probe
 (`recomp2jam connect --character` against `127.0.0.1:15010`):
 face-only row stacked **60 layers**, kitted row **447 layers**
-(male parity). Fixture (ticket #200, 2026-11-14): the tester2 row
+(male parity) — those counts are the retired stack-every-slot
+picker's output; the one-body-per-part picker now stages 12 layers
+for the face-only row and 63 for the kitted row (see the worn-figure
+mapping below). Fixture (ticket #200, 2026-11-14): the tester2 row
 carries `Bag1..3 = 376, 383, 35` (zeros elsewhere, `BAG_EXT_COUNT`
 0), so the probed 2001 `inventory` reads `[376, 383, 35, 0×27]` —
 the owned-items source the bag pages live (DB backup
@@ -115,7 +118,7 @@ count (expected cycle length 12), derive the ms-per-frame period;
 then implement the frame-cycle tick with that pinned cadence. No
 cadence is invented until then.
 
-## `load_worn_figure` mapping (unchanged code)
+## `load_worn_figure` mapping (one body per part)
 
 Per nonzero equipment id in slot order: resolve the
 `AvatarItemRow` by id, run `pick_wear_sprites`, map each filename
@@ -124,9 +127,30 @@ Per nonzero equipment id in slot order: resolve the
 Do not confuse the two "slot" uses: the 17 equipment slots above
 select *which item* is worn, while the 42 sprite slots per item
 row select *which bodies* are drawn — slots 0–1 are shop icons
-(never worn); from slot 2 up, even slots carry male variants and
-odd slots female ones, with fallback to the other parity, kept in
-slot order (`docs/file-formats/opi.md`; exe part logic OPEN).
+(never worn); the rest splits into **4 part blocks of 5 male + 5
+female pose variants** (block `b`, variant `v`: male slot
+`2+10b+2v`, female slot `3+10b+2v`). Even slots carry male
+variants, odd slots female ones (`docs/file-formats/opi.md`).
+
+`pick_wear_sprites` wears **one body per part block**, first
+non-empty wearer-parity slot, other-parity fallback per part, slot
+order kept (ticket #222: the five variants of a block are five
+*poses of the same part*, so wearing all five printed ghost hands at
+one anchor — item 376 stages torso / left arm / right arm in blocks
+0–2, five poses each, and the unisex items repeat one file across
+their five slots). The live tester2 kit therefore stages 8 bodies
+(hair, body, torso, left arm, right arm, bottom, shoes, face) and 63
+layers.
+
+**OPEN (named): which pose variant the exe wears.** Nothing selects
+one: `CharacterInfo` (2001) carries no character/variant field, the
+per-slot flag byte is `1` throughout, and no static site ties the
+variant letter (`I`/`G`/`B`/`K`/`D`) to a reader. Next evidence step:
+a Wine rig capture with item 376 worn (the pose differs visibly:
+variant `I` is a one-image still, `G`/`B`/`K`/`D` are 12-frame
+breathing poses that differ in arm shape), read the arm pose off the
+room avatar. If it shows moving sleeves or a different pose, the
+picker's within-block rule changes; the layout rule does not.
 
 ## Verdict
 
