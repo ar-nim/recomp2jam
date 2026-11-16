@@ -17,9 +17,14 @@ use anyhow::{bail, Context, Result};
 
 use crate::Compositor;
 
+/// The rig fence: a spawned smoke client stays on the null sink, so a
+/// probe example can never open the operator's output device (#283).
+pub const RIG_FENCE: &str = "--no-sound";
+
 /// Failed-authorize login against the local Memoryer is fine: the loop
-/// still maps and paints the splash, which is all the probes need.
-pub const GAME_ARGS: [&str; 9] = [
+/// still maps and paints the splash, which is all the probes need. The
+/// last entry is the fence — every smoke spawn plays silent.
+pub const GAME_ARGS: [&str; 10] = [
     "online",
     "--host",
     "127.0.0.1",
@@ -29,6 +34,7 @@ pub const GAME_ARGS: [&str; 9] = [
     "2",
     "--token",
     "77b0a3e3-32e6-4a67-b3d8-563a0df4c08c",
+    RIG_FENCE,
 ];
 
 /// Launch the game with Wayland forced: our socket, our runtime dir, and
@@ -189,4 +195,21 @@ pub fn log_tail(scratch: &Path) -> String {
     };
     let tail: Vec<&str> = content.lines().collect();
     tail[tail.len().saturating_sub(15)..].join("\n")
+}
+
+#[cfg(test)]
+mod driver_tests {
+    use super::*;
+
+    /// Seam-suffices (#283): the two examples (`frame_callback_smoke`,
+    /// `input_smoke`) are `spawn_game`'s only callers, so the constant
+    /// they hand it pins every smoke spawn. Asserts the argument list,
+    /// never a device.
+    #[test]
+    fn smoke_game_args_never_opt_into_hardware_audio() {
+        assert!(
+            GAME_ARGS.contains(&RIG_FENCE),
+            "smoke spawn must carry the rig fence, got {GAME_ARGS:?}"
+        );
+    }
 }

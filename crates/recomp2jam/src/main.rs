@@ -575,9 +575,10 @@ fn run_online(opts: OnlineCli) -> Result<()> {
         pending_song,
         opts.create_room.as_deref(),
     )?;
-    // Audio containment (memory 979fb): automated rigs pass
-    // --no-sound so they never reach the speakers; the default
-    // plays live.
+    // Audio containment (memory 979fb): the windowed live boot is the
+    // one arm that unfences the session, and only when the run did not
+    // pass --no-sound. Every other arm keeps the fence `new` starts
+    // with (#283).
     session.set_silent_audio(opts.no_sound);
     if let Some((gw, ch)) = opts.gateway_id.zip(opts.channel_id) {
         session.set_resident_channel(o2jam_net::ChannelState {
@@ -1065,7 +1066,8 @@ fn run_play(opts: PlayOptions) -> Result<()> {
                     opts.online_create_room.as_deref(),
                 )?;
                 // Audio containment: with --no-sound every bank attach
-                // stays on the null sink even when hardware exists.
+                // stays on the null sink even when hardware exists (the
+                // session starts fenced, this is the live unfence).
                 session.set_silent_audio(opts.no_sound);
                 // Boot already logged into the requested channel
                 // (setup_online with gateway+channel ids), so mark
@@ -1517,21 +1519,13 @@ fn setup_avatar(
     Ok(())
 }
 
-/// Output backend honoring the `--no-sound` flag: live hardware by
+/// Output backend honoring the `--no-sound` flag: the live sink by
 /// default, the silent null sink on opt-out (automated runs must never
-/// reach the speakers; CI has no audio device). Mirrors `run_autoplay`.
+/// reach the speakers; CI has no audio device). Routes through the one
+/// sink decision ([`o2jam_audio::SinkChoice`]) like the session
+/// attaches. Mirrors `run_autoplay`.
 fn audio_backend(sound: bool) -> Box<dyn o2jam_audio::AudioBackend> {
-    if sound {
-        match o2jam_audio::CpalBackend::try_new() {
-            Ok(backend) => Box::new(backend),
-            Err(e) => {
-                eprintln!("audio unavailable ({e}); continuing silent");
-                Box::new(o2jam_audio::NullBackend::new())
-            }
-        }
-    } else {
-        Box::new(o2jam_audio::NullBackend::new())
-    }
+    o2jam_audio::SinkChoice::for_session(sound, false).open()
 }
 
 /// Installed scene-BGM bank the launch cue plays (`Music/BGM.ojm`,

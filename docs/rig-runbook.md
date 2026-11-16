@@ -237,6 +237,35 @@ such a run declares `expect=silence` and its artifact is the proof that
 nothing was audible. See `docs/captures/t223/01-live-cadence-method.md`
 for the capture cadence.
 
+### Containment fence for test arms (#283)
+
+`cargo test` runs that spawn the real client must never reach the
+speakers. Two fences hold, and both are guarded:
+
+- **The spawn argument list carries `--no-sound`.** Every in-repo spawn
+  helper ends its argv with the fence: `input-drive` `game_args` (the
+  X11 arm), `wl-smoke-compositor` `GAME_ARGS` (the two smoke examples),
+  and the rig scripts. A spawned client then boots fenced.
+  Guards: `x11_game_args_never_opt_into_hardware_audio`,
+  `smoke_game_args_never_opt_into_hardware_audio`.
+- **A session starts fenced.** `OnlineSession::new` starts on the null
+  sink; only the windowed live boot lifts the fence with `--no-sound`'s
+  value (`session.set_silent_audio(opts.no_sound)`). The walk fixtures
+  therefore attach banks silently, and the env-gated audible walk stays
+  on the null sink. Guards:
+  `live_walk_bank_attach_stays_on_the_null_sink`,
+  `sink_choice_never_reaches_hardware_for_a_test_arm`.
+
+The sink is one decision, `o2jam_audio::SinkChoice::for_session(live_player,
+rig_fenced)`, and one constructor, `SinkChoice::open`. Hardware needs
+both a live player and no fence. Never construct `CpalBackend` outside
+that seam. Guards read the choice and the argv; they never open a
+device, so a red proof stays silent.
+
+Different lanes, different levers: a rig run that must *capture* audio
+uses the per-run sink and `PIPEWIRE_NODE` (above, #279); a test arm that
+must not *have* audio passes `--no-sound` and inherits the null sink.
+
 ## Negatives (do not re-prove)
 
 - Bare Xvfb ignores kernel input devices: uinput/ydotool events never
