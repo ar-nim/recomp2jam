@@ -784,20 +784,6 @@ impl OnlineSession {
             }
             return;
         }
-        // Browser picks queue on the game outbox (row click); move one
-        // into the pending song slot the Confirm path sends (ticket
-        // #232). The dialog OK already closed, so this arm never
-        // races an open picker.
-        if self.pending_song.is_none() {
-            if let Some(pick) = self.game.take_music_send() {
-                self.pending_song = Some(SongChoice {
-                    music_id: pick.music_id,
-                    difficulty: pick.difficulty,
-                    speed: pick.speed,
-                    arena_id: 0,
-                });
-            }
-        }
         let Some(attempt) = self.select_attempt.take() else {
             return;
         };
@@ -1696,6 +1682,39 @@ impl OnlineSession {
             return;
         };
         self.begin_song_select(choice);
+    }
+
+    /// Drain one queued song pick (ticket #232): once the select-music
+    /// dialog has closed, convert the shell's `pending_music_send`
+    /// into a `SongChoice` (arena from the joined room) and hand it to
+    /// the existing `confirm_song_select` path. No conversion while
+    /// the dialog is open or an attempt is in flight, and no second
+    /// send is invented.
+    pub fn flush_music_send(&mut self) {
+        if self.select_attempt.is_some() {
+            return;
+        }
+        if self.pending_song.is_some() {
+            return;
+        }
+        if self.game.select_music_dialog_open() {
+            return;
+        }
+        let Some(pick) = self.game.take_music_send() else {
+            return;
+        };
+        let arena_id = self
+            .joined_room
+            .as_ref()
+            .map(|room| room.arena)
+            .unwrap_or(0);
+        self.pending_song = Some(SongChoice {
+            music_id: pick.music_id,
+            difficulty: pick.difficulty,
+            speed: pick.speed,
+            arena_id,
+        });
+        self.confirm_song_select();
     }
 
     /// Joined-master Confirm: send `StartGame` 4010 ([`Request::StartGame`]
@@ -2931,6 +2950,7 @@ impl GameLoop for OnlineSession {
         self.poll_gift_claim();
         self.poll_channel_login();
         self.poll_room_join();
+        self.flush_music_send();
         self.poll_song_select();
         self.poll_stats();
         if self.wire_attempt_pending() {

@@ -1480,6 +1480,14 @@ impl ScreenGame {
     pub fn has_pending_music_send(&self) -> bool {
         self.outbox.has_pending_music_send()
     }
+
+    /// Whether the song-select dialog overlay is currently staged
+    /// (ticket #232): the session bridge waits for it to close
+    /// before converting a queued pick into a `SongChoice`.
+    #[must_use]
+    pub fn select_music_dialog_open(&self) -> bool {
+        self.select_music_art.is_some()
+    }
     /// Queued RETRY press for the session bridge, if any (`StartGame`
     /// 4010, `0xfaa` — the exe's result RETRY relay event,
     /// `FUN_004c2f00` range, `ev_77ce98f1…`). One take sends once;
@@ -2720,11 +2728,13 @@ impl ScreenGame {
         // Dialog OK confirms the staged pick (ticket #232): the
         // BND-paired OK button (Dialog_SelectMusic.bnd rect [1])
         // closes the dialog with the pick queued for the session
-        // bridge. With no staged pick it stays a no-op like the
-        // other chrome, and the click falls through.
+        // bridge. A "staged pick" is a queued `pending_music_send`
+        // (row click), not the pre-existing room song, so OK with
+        // no row click stays a no-op like the other chrome and the
+        // click falls through.
         if let Some(art) = self.select_music_art.as_ref() {
             if staged_rect_hit(&art.placements, "IDC_BUTTON_DSMUSIC_OK", x, y)
-                && self.selected_music.is_some()
+                && self.has_pending_music_send()
             {
                 self.select_music_art = None;
                 return true;
@@ -6833,10 +6843,12 @@ mod game_tests {
     }
 
     #[test]
-    fn tt232_dialog_ok_closes_with_staged_pick() {
-        // Ticket #232 seam guard: dialog OK with a staged pick closes
-        // the picker (row clicks only ever staged). OK with no pick
-        // stays a no-op and falls through like the other chrome.
+    fn waiting_select_music_ok_with_staged_pick_closes_dialog_and_stages_4000() {
+        // Ticket #232 seam guard (proposed guard name): a row click
+        // stages a pick (queues `pending_music_send`); the dialog OK
+        // then closes the overlay while the pick stays queued for the
+        // session bridge (`flush_music_send` -> 4000). Row click first
+        // so the pick is genuinely staged, not a stale room song.
         use crate::avatar::{PlacementRole, ScenePlacement};
         use o2jam_render::Rect;
         let ok_placement = ScenePlacement {
@@ -6855,18 +6867,28 @@ mod game_tests {
         game.set_joined_room(waiting_room());
         walk_to_waiting(&mut game);
         game.load_select_music_scene(vec![ok_placement], HashMap::new());
-        game.set_selected_music(waiting_song_selection());
+        let blob = waiting_song_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_song_catalog(&entries);
+        // Stage a pick through the real row-click path.
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 150 + 23 + 11));
+        assert!(game.has_pending_music_send(), "row click stages the pick");
+        // OK click closes the dialog, leaving the pick queued.
         game.ingest_snapshot(&InputSnapshot::click_at(389, 519));
         assert!(
             game.select_music_art.is_none(),
             "OK with a staged pick closes the dialog"
         );
+        assert!(
+            game.has_pending_music_send(),
+            "the pick stays queued for the session bridge"
+        );
     }
 
     #[test]
-    fn tt232_dialog_ok_without_pick_stays_noop() {
-        // Ticket #232 seam guard, second half: OK with no staged pick
-        // answers nothing and leaves the dialog open.
+    fn waiting_select_music_ok_without_pick_is_noop() {
+        // Ticket #232: OK with no staged pick (no row click) is a
+        // no-op and leaves the dialog open.
         use crate::avatar::{PlacementRole, ScenePlacement};
         use o2jam_render::Rect;
         let ok_placement = ScenePlacement {
@@ -6890,6 +6912,7 @@ mod game_tests {
             game.select_music_art.is_some(),
             "OK with no pick leaves the dialog open"
         );
+        assert!(!game.has_pending_music_send(), "no pick is queued");
     }
 
     #[test]
