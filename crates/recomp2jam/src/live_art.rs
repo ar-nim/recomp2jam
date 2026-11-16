@@ -1145,10 +1145,23 @@ mod live_art_tests {
         (!songs.is_empty()).then_some(songs)
     }
 
+    /// The pick the #274 caption guards stage: easy chart at normal
+    /// speed (layer 1 of the badge body, the EX1 cell).
+    fn ex_pick(song_id: u16) -> o2jam_net::SetRoomMusic {
+        o2jam_net::SetRoomMusic {
+            music_id: song_id,
+            difficulty: 0,
+            speed: 1,
+        }
+    }
+
     /// Waiting game on the live-staged art: the joined room names
     /// `room_music_id`, the installed catalog is staged, and an optional
-    /// host pick names `pick`.
-    fn staged_waiting_pick_game(room_music_id: u16, pick: Option<u16>) -> ScreenGame {
+    /// host pick carries its own difficulty and speed codes.
+    fn staged_waiting_pick_game(
+        room_music_id: u16,
+        pick: Option<o2jam_net::SetRoomMusic>,
+    ) -> ScreenGame {
         let mut game = live_game();
         let mut room = live_room();
         room.music_id = room_music_id;
@@ -1157,12 +1170,8 @@ mod live_art_tests {
             .expect("installed catalog bytes");
         let entries = o2jam_file::parse_ojn_list(&bytes).expect("installed catalog parses");
         game.set_song_catalog(&entries);
-        if let Some(music_id) = pick {
-            game.set_selected_music(o2jam_net::SetRoomMusic {
-                music_id,
-                difficulty: 0,
-                speed: 1,
-            });
+        if let Some(pick) = pick {
+            game.set_selected_music(pick);
         }
         stage_live_scenes(&mut game);
         walk_to(&mut game, Screen::Waiting);
@@ -1204,7 +1213,7 @@ mod live_art_tests {
             return;
         };
         let song_id = u16::try_from(songs[0].song_id).expect("catalog song id fits u16");
-        let mut picked = staged_waiting_pick_game(0, Some(song_id));
+        let mut picked = staged_waiting_pick_game(0, Some(ex_pick(song_id)));
         let mut room_named = staged_waiting_pick_game(song_id, None);
         let rect = staged_musicname_rect(&picked);
         let picked_frame = painted_pixels(&mut picked, 0);
@@ -1258,7 +1267,7 @@ mod live_art_tests {
         };
         let song_id = u16::try_from(songs[0].song_id).expect("catalog song id fits u16");
         let mut bare = staged_waiting_pick_game(0, None);
-        let mut picked = staged_waiting_pick_game(0, Some(song_id));
+        let mut picked = staged_waiting_pick_game(0, Some(ex_pick(song_id)));
         let width = usize::try_from(NATIVE_WIDTH).unwrap_or(1);
         let grid_bottom = seat_grid_bottom(picked.scene_placements(Screen::Waiting));
         assert!(grid_bottom > 0, "the staged scene carries seat covers");
@@ -1275,6 +1284,117 @@ mod live_art_tests {
         assert!(
             changed.is_none(),
             "the pick must not ink the chat band: first pixel changed below the seat grid: {changed:?}"
+        );
+    }
+
+    /// Pinned `LEVEL` badge rect of the live-staged Waiting art
+    /// (`State_Waiting.bnd` rect 26, paired by code ordinal - read from
+    /// the staged placements, never a literal).
+    fn staged_level_rect(game: &ScreenGame) -> o2jam_render::Rect {
+        game.scene_placements(Screen::Waiting)
+            .iter()
+            .find(|placed| placed.id == "IDC_IMAGE_SWAIT_LEVEL")
+            .map(|placed| placed.rect)
+            .expect("LEVEL placement missing from staged Waiting art")
+    }
+
+    /// Pixels of one staged `Wait_Level.ojs` frame that the painted
+    /// buffer does not carry, counted over the frame's own non-colorkey
+    /// pixels drawn at the badge rect origin. Zero means the badge
+    /// shows exactly that frame.
+    fn level_frame_mismatches(
+        painted: &[u32],
+        width: usize,
+        rect: o2jam_render::Rect,
+        image: &o2jam_render::Rgb555Image,
+        colorkey: u16,
+    ) -> usize {
+        let left = usize::try_from(rect.x).unwrap_or(usize::MAX);
+        let top = usize::try_from(rect.y).unwrap_or(usize::MAX);
+        let mut mismatches = 0;
+        for y in 0..image.h {
+            for x in 0..image.w {
+                let word = image.words[y * image.w + x];
+                if word == colorkey {
+                    continue;
+                }
+                let (r, g, b) = o2jam_render::expand_rgb555(word);
+                let expected = o2jam_render::pack_xrgb(r, g, b);
+                let pixel = painted.get((top + y) * width + left + x);
+                if pixel != Some(&expected) {
+                    mismatches += 1;
+                }
+            }
+        }
+        mismatches
+    }
+
+    #[test]
+    fn live_waiting_badge_paints_the_bound_level_frame() {
+        // Live chain: main.rs::run_play -> setup_online ->
+        //   stage_online_identity -> stage_live_scenes ->
+        //   stage_interface_scenes(State::Waiting) ->
+        //   ScreenGame::set_selected_music (session::OnlineSession::
+        //   resolve_song_select) -> ScreenGame::paint_at -> paint_waiting
+        //   -> paint_waiting_scene -> paint_waiting_staged ->
+        //   paint_waiting_level_badge
+        // Ticket #275: the `LEVEL` badge paints exactly the staged
+        // `Wait_Level.ojs` frame `12*difficulty + speed` the pick names -
+        // the EX cell (green) at normal speed and the HX cell (red) at
+        // 4x differ, and each reproduces its own frame's pixels. The
+        // room that names no song paints no badge frame at all.
+        //
+        // Archives absent -> skip cleanly (CI has no game data).
+        if skip_without_archives() {
+            return;
+        }
+        let Some(songs) = installed_catalog_songs() else {
+            println!("skip: missing installed song catalog");
+            return;
+        };
+        let Some(staged) = declared_interface(State::Waiting) else {
+            println!("skip: STATE_WAITING does not stage");
+            return;
+        };
+        let body = staged
+            .figures
+            .get("Wait_Level.ojs")
+            .cloned()
+            .expect("the staged LEVEL control names Wait_Level.ojs");
+        assert_eq!(
+            body.len(),
+            60,
+            "Wait_Level.ojs carries 5 families x 12 cells"
+        );
+        let song_id = u16::try_from(songs[0].song_id).expect("catalog song id fits u16");
+        let width = usize::try_from(NATIVE_WIDTH).unwrap_or(1);
+        let badge = |difficulty: u8, speed: u8| o2jam_net::SetRoomMusic {
+            music_id: song_id,
+            difficulty,
+            speed,
+        };
+        let mut easy = staged_waiting_pick_game(0, Some(badge(0, 1)));
+        let easy_frame = painted_pixels(&mut easy, 0);
+        let rect = staged_level_rect(&easy);
+        let mut hard = staged_waiting_pick_game(0, Some(badge(2, 7)));
+        let hard_frame = painted_pixels(&mut hard, 0);
+        for (frames, layer, name) in [
+            (&easy_frame, 1usize, "EX1 (difficulty 0, speed 1)"),
+            (&hard_frame, 31usize, "HX4 (difficulty 2, speed 7)"),
+        ] {
+            let frame = body.layer(layer).expect("staged badge frame");
+            assert_eq!(
+                level_frame_mismatches(frames, width, rect, &frame.image, frame.colorkey),
+                0,
+                "the badge must show the {name} frame of Wait_Level.ojs"
+            );
+        }
+        let mut bare = staged_waiting_pick_game(0, None);
+        let bare_frame = painted_pixels(&mut bare, 0);
+        let frame = body.layer(1).expect("staged EX1 frame");
+        assert!(
+            level_frame_mismatches(&bare_frame, width, rect, &frame.image, frame.colorkey) > 0,
+            "a room with no song must not paint the EX1 badge frame"
         );
     }
 
