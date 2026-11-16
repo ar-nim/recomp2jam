@@ -153,14 +153,15 @@ use o2jam_net::shop::{
 };
 use o2jam_net::EmptyMessage;
 use o2jam_net::{
-    AcquireMusic, ChannelLogin, ChannelLoginResponse, ChannelLoginResult, ChannelState,
-    CharacterInfo, ConfirmMusicLoaded, CreateResult, CreateRoom, CreateRoomResponse,
-    DownloadProgressChanged, ExitPlaying, FinalizeRank, Frame, GameMode, GameStatsUpdate,
+    AcquireMusic, AcquireMusicRequest, ChannelLogin, ChannelLoginResponse, ChannelLoginResult,
+    ChannelState, CharacterInfo, ConfirmMusicLoaded, CreateResult, CreateRoom, CreateRoomResponse,
+    DownloadProgressChanged, Event, ExitPlaying, FinalizeRank, Frame, GameMode, GameStatsUpdate,
     GatewayConnection, Generic, GetMusicList, JoinResult, JoinRoom, JoinRoomResponse, JoinedRoom,
-    KeyMode, MemberReadyStateChanged, Ready, Request, SetRoomArena, SetRoomMusic, StartGame,
-    SubmitScore, SyncMemberMusicStateEvent, WireMessage,
+    KeyMode, MemberReadyStateChanged, MusicState, Ready, Request, SetRoomArena, SetRoomMusic,
+    StartGame, SubmitScore, SyncMemberMusicStateEvent, UpdateMusicState, WaitingMusicChanged,
+    WireMessage,
 };
-use o2jam_shell::screens::game::{LobbyChat, SlashCommand};
+use o2jam_shell::screens::game::{LobbyChat, SlashCommand, StartGateVerdict, StartRequest};
 use o2jam_shell::screens::SideScreen;
 use o2jam_shell::{GameLoop, InputEdge, InputSnapshot, MenuKey, Screen, ScreenGame};
 
@@ -224,11 +225,39 @@ const SESSION_POLL_HEARTBEAT: Duration = Duration::from_millis(250);
 /// 4009 (`docs/client-server-plan.md` Phase 3 pairs 4008/4009 like
 /// 4000/4001). The old one-flag-byte send was a documented guess —
 /// the exe sites refute it.
+///
 /// S->C start broadcast (4011): answers the host `StartGame` 4010
-/// (`docs/client-server-plan.md` Phase 4 pairs 4010/4011). The id
-/// alone advances the shell — no body is staged here — so no decoder
-/// is needed.
+/// (`docs/client-server-plan.md` Phase 4 pairs 4010/4011).
+///
+/// `docs/music-availability.md` §4: the server answers `Result = None`
+/// (-1) and does not start while any member's music state is not
+/// Ready, so the result word decides whether the shell may advance. The
+/// exe's waiting scenes ignore the id (it maps to their default arm);
+/// the refusal is what this read honours.
 const START_BROADCAST_COMMAND: u16 = 4011;
+/// 4011 `StartResult::Success` (Memoryer `StartGameEventData`).
+const START_RESULT_SUCCESS: i32 = 0;
+
+/// The result word a 4011 broadcast carries (`i32`, Memoryer
+/// `StartGameEventData.Result`): `None` for a body too short to hold
+/// one — the bare broadcast our rigs send, which reads as a start.
+#[must_use]
+fn start_broadcast_result(payload: &[u8]) -> Option<i32> {
+    let bytes: [u8; 4] = payload.get(..4)?.try_into().ok()?;
+    Some(i32::from_le_bytes(bytes))
+}
+
+/// Whether one wire id re-announces the room's music state: the exe's
+/// 4022 (a member left the game, VAs `0x4ab658`/`0x4b0e12`), 4024 and
+/// 4058 (the two skill changes, VAs `0x4ab90c`/`0x4b10fd`/`0x4b17dc`)
+/// arms end with the same 4025 send (`docs/music-availability.md` §2).
+#[must_use]
+fn announces_room_music_state(frame_id: u16) -> bool {
+    matches!(
+        Event::from_id(frame_id),
+        Some(Event::UserLeaveGame | Event::WaitingSkillChanged | Event::WaitingSkillExChanged)
+    )
+}
 
 /// Sent-tick dedupe key: the wire moves only when play does (per-hit
 /// shape — identical snapshots between judgements send nothing).
@@ -1809,30 +1838,39 @@ impl OnlineSession {
         }
     }
 
-    /// Joined-master Confirm: send `StartGame` 4010 ([`Request::StartGame`]
-    /// with the [`StartGame`] empty body — the `run_song_flow` send
-    /// shape, minus the `ConfirmMusicLoaded` tail, which the Loading
-    /// section owns). Blocked while any occupied peer is unready — the
-    /// shell [`ScreenGame::can_start_game`] gate — with a warning and
-    /// no packet. Loading waits on the 4011 broadcast
-    /// ([`Self::poll_start`]), never on this send.
+    /// Joined-master Confirm: run the shell's START gate and send what
+    /// its verdict asks for (`docs/music-availability.md` §4, exe click
+    /// handler VA `0x4b22d0`).
+    ///
+    /// - startable -> `4010 StartGame` (the `run_song_flow` send shape,
+    ///   minus the `ConfirmMusicLoaded` tail, which Loading owns);
+    /// - a member lacks the room song -> `4034 AcquireMusicRequest`,
+    ///   whose 4035 answer hands that member its download
+    ///   ([`Self::apply_acquire_music`]);
+    /// - a peer unready / teams unbalanced / a download standing -> no
+    ///   packet, the shell's pinned notice says why.
+    ///
+    /// Loading waits on the 4011 broadcast ([`Self::poll_start`]), never
+    /// on this send, and a refused 4011 keeps the room in Waiting.
     fn confirm_master_start(&mut self) {
-        if !self.game.can_start_game() {
-            tracing::warn!("start blocked: every occupied peer must be ready");
-            return;
+        let request = self.game.press_start();
+        let (id, body, sent) = match request {
+            StartRequest::StartGame => (Request::StartGame.id(), StartGame.encode_body(), "start"),
+            StartRequest::AcquireMusic => (
+                Request::AcquireMusicRequest.id(),
+                AcquireMusicRequest.encode_body(),
+                "acquire music",
+            ),
+            StartRequest::Nothing => {
+                if let Some(notice) = self.game.waiting_notice() {
+                    tracing::warn!(notice, "start blocked by the group gate");
+                }
+                return;
+            }
+        };
+        if let Err(source) = self.gateway.send_frame(id, &body) {
+            tracing::warn!(%source, action = sent, "start send failed; Confirm retries it");
         }
-        if let Err(source) = self
-            .gateway
-            .send_frame(Request::StartGame.id(), &StartGame.encode_body())
-        {
-            tracing::warn!(%source, "start send failed; Confirm retries it");
-            return;
-        }
-        // The request stands until the game begins: the START control
-        // paints its armed face meanwhile. The exe arms that face in the
-        // click handler itself (VA `0x4b22d0`, file `0xb237d`) and keeps
-        // it until its Waiting update clears it (VA `0x4b2540`).
-        self.game.arm_waiting_start();
     }
 
     /// Joined-guest Confirm: flip the local ready toggle and send the
@@ -2615,7 +2653,7 @@ impl OnlineSession {
                     self.apply_waiting_admin_message(&frame);
                 }
                 Ok(frame) if frame.id == START_BROADCAST_COMMAND => {
-                    self.start_announced = true;
+                    self.apply_start_broadcast(&frame.payload);
                 }
                 Ok(frame) if frame.id == RoomSlotUpdate::COMMAND => {
                     self.apply_slot_update(&frame);
@@ -2632,6 +2670,12 @@ impl OnlineSession {
                 Ok(frame) if frame.id == DownloadProgressChanged::COMMAND => {
                     self.apply_download_progress(&frame);
                 }
+                Ok(frame) if frame.id == WaitingMusicChanged::COMMAND => {
+                    self.apply_waiting_music_changed(&frame);
+                }
+                Ok(frame) if announces_room_music_state(frame.id) => {
+                    self.announce_music_state();
+                }
                 Ok(frame) if Generic::from_id(frame.id).is_some() => {}
                 Ok(frame) => {
                     tracing::debug!(id = frame.id, "skipping non-chat frame in waiting drain");
@@ -2643,17 +2687,24 @@ impl OnlineSession {
 
     /// Fold one 4037 frame into its waiting seat: one member's music
     /// state (§2, handler VA `0x559990`, the state landing in the
-    /// seat's `+0x217c`). Undecodable bodies drop with a trace.
+    /// seat's `+0x217c`), then run the exe's retry arm
+    /// ([`Self::retry_master_start`]). Undecodable bodies drop with a
+    /// trace.
     fn apply_member_music_state(&mut self, frame: &Frame) {
         let Ok(event) = SyncMemberMusicStateEvent::decode_frame(frame) else {
             tracing::debug!(id = frame.id, "dropping undecodable music state");
             return;
         };
         self.stage_member_music_state(event.member_id, event.state.code());
+        if event.state == MusicState::Ready {
+            self.finish_self_music_download();
+            self.retry_master_start();
+        }
     }
 
     /// Fold one 4035 frame (the counted member/state list the server
-    /// hands out on START, §2/§4) into the waiting seats.
+    /// hands out on START, §2/§4) into the waiting seats, then run the
+    /// exe's 4035 arms ([`Self::answer_acquire_music`]).
     fn apply_acquire_music(&mut self, frame: &Frame) {
         let Ok(event) = AcquireMusic::decode_frame(frame) else {
             tracing::debug!(id = frame.id, "dropping undecodable acquire music");
@@ -2661,6 +2712,143 @@ impl OnlineSession {
         };
         for member in &event.members {
             self.stage_member_music_state(member.member_id, member.state.code());
+        }
+        self.answer_acquire_music(&event);
+    }
+
+    /// The exe's 4035 arms (VA `0x4b1d42` normal mode, `0x4aba51` live
+    /// mode), per announced member:
+    ///
+    /// - a non-zero state means a transfer stands (`scene+0x504 = 1`)
+    ///   and no `4010` goes out; when that state belongs to the local
+    ///   member, the client **enqueues the room song instead of
+    ///   starting** (`StartMusicDownload`, VA `0x4bb1e0`);
+    /// - an all-`Ready` list is the exe's retry arm: a master whose
+    ///   start request stands re-sends `4010`.
+    fn answer_acquire_music(&mut self, event: &AcquireMusic) {
+        let self_id = self.joined_room.as_ref().map(|room| room.member_id);
+        let self_state = self_id.and_then(|id| {
+            event
+                .members
+                .iter()
+                .find(|member| Some(member.member_id) == Some(id))
+                .map(|member| member.state)
+        });
+        if event
+            .members
+            .iter()
+            .any(|member| member.state != MusicState::Ready)
+        {
+            if self_state.is_some_and(|state| state != MusicState::Ready) {
+                self.kick_room_song_download();
+            }
+            return;
+        }
+        self.finish_self_music_download();
+        self.retry_master_start();
+    }
+
+    /// The download kick (`docs/music-availability.md` §4): enqueue the
+    /// room song and mark the download running, so the START control
+    /// only re-arms its face until the transfer lands. The transfer is
+    /// slice 4; nothing leaves the machine here.
+    fn kick_room_song_download(&mut self) {
+        let Some(song_id) = self.game.room_music_id() else {
+            tracing::warn!("download kick without a staged room song");
+            return;
+        };
+        if self.game.begin_music_download(song_id) {
+            tracing::info!(song_id, "room song queued for download");
+        }
+    }
+
+    /// A staged download whose song now reads `Ready` on our own seat is
+    /// done: drop the request so the START control stops treating the
+    /// room as busy. Slice 4's pump owns the real completion (progress,
+    /// promote, `5012`); the seat state the server syncs back is the
+    /// signal it reports through.
+    fn finish_self_music_download(&mut self) {
+        let Some(member_id) = self.joined_room.as_ref().map(|room| room.member_id) else {
+            return;
+        };
+        if self.game.member_music_state(member_id) != Some(MusicState::Ready.code()) {
+            return;
+        }
+        if let Some(song_id) = self.game.room_music_id() {
+            self.game.finish_music_download(song_id);
+        }
+    }
+
+    /// The exe's retry arm (4035 all-`Ready`, 4037, and the leave/slot
+    /// updates): a master whose START request stands re-sends `4010`
+    /// once the group gate passes again (the exe's master byte `+0x30`
+    /// plus the gate verdict, VA `0x4b5560`). A guest never sends.
+    fn retry_master_start(&mut self) {
+        if !self.joined_waiting
+            || !self.game.is_room_master()
+            || !self.game.waiting_confirm_armed()
+            || self.game.start_gate_verdict() != StartGateVerdict::Startable
+        {
+            return;
+        }
+        if let Err(source) = self
+            .gateway
+            .send_frame(Request::StartGame.id(), &StartGame.encode_body())
+        {
+            tracing::warn!(%source, "start retry failed; the next event retries it");
+        }
+    }
+
+    /// Fold one 4001 frame: the room's song changed, so the shell
+    /// restages it and the client announces its music state for the new
+    /// song (the exe's 4001 arm, VAs `0x4ab591`/`0x4b0d4e`; handler VA
+    /// `0x55f2d0` reads id, difficulty and speed).
+    fn apply_waiting_music_changed(&mut self, frame: &Frame) {
+        let Ok(event) = WaitingMusicChanged::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable room music change");
+            return;
+        };
+        self.game
+            .set_room_music(event.music_id, event.difficulty, event.speed);
+        self.announce_music_state();
+    }
+
+    /// Announce this client's music state for the room's staged song
+    /// (`UpdateMusicState` 4025, `docs/music-availability.md` §2): the
+    /// exe's state computer VA `0x4be690` followed by the `push 0;
+    /// push 0xfb9` send, at every one of its eight sites — the room-song
+    /// change, a member leaving the game, and the two skill changes.
+    ///
+    /// No song stands -> no announcement: song id `0` names no chart
+    /// file, and the exe computes against a staged id only.
+    fn announce_music_state(&mut self) {
+        let Some(song_id) = self.game.room_music_id() else {
+            tracing::debug!("music state announcement skipped: no staged room song");
+            return;
+        };
+        let state = UpdateMusicState {
+            state: self.game.music_state_for(song_id),
+        };
+        if let Err(source) = self
+            .gateway
+            .send_frame(Request::UpdateMusicState.id(), &state.encode_body())
+        {
+            tracing::warn!(%source, "music state send failed");
+        }
+    }
+
+    /// Fold one 4011 start broadcast: a `StartResult::Success` (or a
+    /// body too short to carry a result — the bare broadcast shape the
+    /// rigs send) announces the start, anything else is the server's
+    /// refusal (a member still lacks the music) and keeps the room in
+    /// Waiting with the download it kicked.
+    fn apply_start_broadcast(&mut self, payload: &[u8]) {
+        match start_broadcast_result(payload) {
+            Some(result) if result != START_RESULT_SUCCESS => {
+                tracing::info!(result, "start refused; staying in Waiting");
+                self.game.note_waiting_download();
+            }
+            _ => self.start_announced = true,
         }
     }
 
@@ -3163,8 +3351,9 @@ mod session_tests {
     use o2jam_game::PEER_SLOT_COUNT;
     use o2jam_net::frame::{decode_frame, encode_frame};
     use o2jam_net::{
-        Frame, GameStatsUpdate, GatewayConnection, StatKind, UpdateGameStats, WireMessage,
-        HEADER_LEN,
+        AcquireMusic, Frame, GameStatsUpdate, GatewayConnection, MemberMusicState, MusicState,
+        Request, StatKind, SyncMemberMusicStateEvent, UpdateGameStats, WaitingMusicChanged,
+        WireMessage, HEADER_LEN,
     };
     use o2jam_shell::screens::game::LobbyChat;
     use o2jam_shell::{GameLoop, InputSnapshot, MenuKey, Screen, ScreenGame};
@@ -3293,14 +3482,19 @@ mod session_tests {
 
     /// One seated member for staged snapshots (level/gender/gem
     /// zeros — only nickname and readiness matter to the gate).
-    fn member(nickname: &str, ready: bool) -> o2jam_net::RoomMember {
+    /// One seated peer on a given team. The server hands every joining
+    /// member the first unused team (Memoryer `Room.Attach`), so a room
+    /// with more than one member always spans distinct teams — which is
+    /// exactly what the exe's team-balance gate (VA `0x4b5560`) needs to
+    /// pass. Both members on one team is a shape the server never sends.
+    fn member_on_team(nickname: &str, ready: bool, team: u8) -> o2jam_net::RoomMember {
         o2jam_net::RoomMember {
             nickname: nickname.to_owned(),
             level: 1,
             gender: 0,
             gem: 0,
             master: false,
-            team: 0,
+            team,
             ready,
             music_state: 0,
             equipment: [0; 17],
@@ -3313,13 +3507,21 @@ mod session_tests {
         }
     }
 
+    /// A seated peer on team A (slot 0's own team).
+    fn member(nickname: &str, ready: bool) -> o2jam_net::RoomMember {
+        member_on_team(nickname, ready, 0)
+    }
+
     /// Guest snapshot: our seat is 1 under a ready master at seat 0.
+    /// Teams follow the server's first-unused-team rule (master A, guest
+    /// B), so the team-balance gate passes on readiness alone.
     fn guest_snapshot() -> o2jam_net::JoinedRoom {
         let mut room = joined_snapshot();
         room.member_id = 1;
+        room.team = 1;
         room.user_count = 2;
         room.slots[0].member = Some(member("host", true));
-        room.slots[1].member = Some(member("guest", false));
+        room.slots[1].member = Some(member_on_team("guest", false, 1));
         room
     }
 
@@ -5104,7 +5306,7 @@ mod session_tests {
     #[test]
     fn master_blocked_until_every_peer_ready() {
         let mut room = joined_snapshot();
-        room.slots[1].member = Some(member("peer", false));
+        room.slots[1].member = Some(member_on_team("peer", false, 1));
         let (mut session, server) = joined_waiting_session(room, |mut stream| {
             // The blocked first Confirm sends nothing: the first
             // frame on the wire is the gated START below.
@@ -5118,7 +5320,7 @@ mod session_tests {
         session.menu_key(MenuKey::Confirm, true);
         assert_eq!(session.game.screen(), Screen::Waiting);
         let mut ready_room = joined_snapshot();
-        ready_room.slots[1].member = Some(member("peer", true));
+        ready_room.slots[1].member = Some(member_on_team("peer", true, 1));
         session.game.set_joined_room(ready_room);
         assert!(session.game.can_start_game());
         session.menu_key(MenuKey::Confirm, true);
@@ -5126,10 +5328,179 @@ mod session_tests {
         assert_eq!(session.game.screen(), Screen::Waiting);
     }
 
+    /// Joined master room with one ready peer and a staged room song
+    /// (`joined_snapshot` has neither): the shape a `3003` answer gives
+    /// a host waiting to start.
+    fn startable_room() -> o2jam_net::JoinedRoom {
+        let mut room = joined_snapshot();
+        room.music_id = 757;
+        room.slots[1].member = Some(member_on_team("peer", true, 1));
+        room
+    }
+
+    #[test]
+    fn no_music_member_blocks_start_and_kicks_the_room_song_download() {
+        // docs/music-availability.md §4, live chain: `main.rs::run_play`
+        // -> `assemble_online_session` -> `OnlineSession::paint`
+        // (Waiting) -> `poll_waiting_chat` -> `drain_waiting_chat` ->
+        // `apply_acquire_music` -> `answer_acquire_music` ->
+        // `kick_room_song_download` -> `ScreenGame::begin_music_download`.
+        //
+        // The START press runs the gate (VA `0x4b5560`): a peer whose
+        // seat reports NoMusic answers 4034 AcquireMusicRequest instead
+        // of 4010, the 4035 answer hands the room its states, and the
+        // local member enqueues the room song instead of starting. Once
+        // the peer reports Ready (4037), the master's retry arm sends
+        // 4010 and the server's Success broadcast reaches Loading.
+        let mut peer = member_on_team("peer", true, 1);
+        peer.music_state = MusicState::NoMusic.code();
+        let mut room = startable_room();
+        room.slots[1].member = Some(peer);
+        let (mut session, server) = joined_waiting_session(room, |mut stream| {
+            let acquire = read_frame(&mut stream);
+            assert_eq!(acquire.id, Request::AcquireMusicRequest.id());
+            assert!(acquire.payload.is_empty());
+            let states = AcquireMusic {
+                members: vec![
+                    MemberMusicState {
+                        member_id: 0,
+                        state: MusicState::Downloading,
+                    },
+                    MemberMusicState {
+                        member_id: 1,
+                        state: MusicState::NoMusic,
+                    },
+                ],
+            };
+            stream.write_all(&states.encode()).unwrap();
+            // A member still lacks the music: no 4010 on this arm.
+            assert_quiet(&mut stream);
+            let ready = SyncMemberMusicStateEvent {
+                member_id: 1,
+                state: MusicState::Ready,
+            };
+            stream.write_all(&ready.encode()).unwrap();
+            let start = read_frame(&mut stream);
+            assert_eq!(start.id, 4010);
+            assert!(start.payload.is_empty());
+            stream.write_all(&encode_frame(4011, &[])).unwrap();
+            assert_quiet(&mut stream);
+        });
+        session.menu_key(MenuKey::Confirm, true);
+        assert_eq!(session.game.screen(), Screen::Waiting);
+        for _ in 0..50 {
+            if session.game.music_download().is_running() {
+                break;
+            }
+            paint_frame(&mut session);
+        }
+        assert!(
+            session.game.music_download().is_running(),
+            "the 4035 answer kicks the room song download"
+        );
+        assert_eq!(session.game.music_download().requests().len(), 1);
+        assert_eq!(session.game.screen(), Screen::Waiting);
+        for _ in 0..50 {
+            if session.game.screen() == Screen::Loading {
+                break;
+            }
+            paint_frame(&mut session);
+        }
+        server.join().unwrap();
+        assert_eq!(session.game.screen(), Screen::Loading);
+    }
+
+    #[test]
+    fn a_refused_start_broadcast_keeps_the_room_in_waiting() {
+        // §4: the server answers `StartResult::None` (-1) while a member
+        // lacks the music and starts nothing. The result word decides —
+        // our Loading must wait for a Success.
+        let (mut session, server) = joined_waiting_session(startable_room(), |mut stream| {
+            let start = read_frame(&mut stream);
+            assert_eq!(start.id, 4010);
+            stream
+                .write_all(&encode_frame(4011, &(-1i32).to_le_bytes()))
+                .unwrap();
+            assert_quiet(&mut stream);
+        });
+        session.menu_key(MenuKey::Confirm, true);
+        for _ in 0..50 {
+            if session.game.waiting_notice().is_some() {
+                break;
+            }
+            paint_frame(&mut session);
+        }
+        server.join().unwrap();
+        assert_eq!(
+            session.game.waiting_notice(),
+            Some(o2jam_shell::screens::game::WAITING_START_DOWNLOAD_NOTICE),
+            "the refusal word was read and the download notice stands"
+        );
+        assert_eq!(session.game.screen(), Screen::Waiting);
+    }
+
+    #[test]
+    fn the_room_song_change_announces_the_music_state() {
+        // §2/§4, live chain: `main.rs::run_play` -> `OnlineSession::paint`
+        // (Waiting) -> `poll_waiting_chat` -> `drain_waiting_chat` ->
+        // `apply_waiting_music_changed` -> `announce_music_state`.
+        //
+        // The exe's 4001 arm (VA `0x4ab591`) restages the room song and
+        // sends 4025 for it. An install scan that lists no chart file
+        // answers NoMusic — the honest byte, never the old blind Ready.
+        let (mut session, server) = joined_waiting_session(startable_room(), |mut stream| {
+            let changed = WaitingMusicChanged {
+                music_id: 900,
+                difficulty: 1,
+                speed: 3,
+            };
+            stream.write_all(&changed.encode()).unwrap();
+            let state = read_frame(&mut stream);
+            assert_eq!(state.id, Request::UpdateMusicState.id());
+            assert_eq!(state.payload, vec![MusicState::NoMusic.code()]);
+            assert_quiet(&mut stream);
+        });
+        session.set_installed_music(Some(o2jam_file::installed_music(Vec::<String>::new())));
+        for _ in 0..30 {
+            paint_frame(&mut session);
+        }
+        server.join().unwrap();
+        assert_eq!(session.game.room_music_id(), Some(900));
+    }
+
+    #[test]
+    fn a_member_leaving_the_game_and_a_skill_change_reannounce_the_music_state() {
+        // §2: the exe's 4022 (VA `0x4ab658`), 4024 (`0x4ab90c`) and 4058
+        // (`0x4b17dc`) arms all end in the same 4025 send — the room
+        // re-announces after a member leaves the game and after either
+        // skill change. Live chain: `OnlineSession::paint` (Waiting) ->
+        // `poll_waiting_chat` -> `drain_waiting_chat` ->
+        // `announces_room_music_state` -> `announce_music_state`.
+        use o2jam_net::Event;
+        let (mut session, server) = joined_waiting_session(startable_room(), |mut stream| {
+            for event in [
+                Event::UserLeaveGame,
+                Event::WaitingSkillChanged,
+                Event::WaitingSkillExChanged,
+            ] {
+                stream.write_all(&encode_frame(event.id(), &[0])).unwrap();
+                let state = read_frame(&mut stream);
+                assert_eq!(state.id, Request::UpdateMusicState.id());
+                assert_eq!(state.payload, vec![MusicState::Ready.code()]);
+            }
+            assert_quiet(&mut stream);
+        });
+        for _ in 0..30 {
+            paint_frame(&mut session);
+        }
+        server.join().unwrap();
+        assert_eq!(session.game.room_music_id(), Some(757));
+    }
+
     #[test]
     fn start_broadcast_advances_host_to_loading() {
         let mut room = joined_snapshot();
-        room.slots[1].member = Some(member("peer", true));
+        room.slots[1].member = Some(member_on_team("peer", true, 1));
         let (mut session, server) = joined_waiting_session(room, |mut stream| {
             let start = read_frame(&mut stream);
             assert_eq!(start.id, 4010);
@@ -5172,7 +5543,7 @@ mod session_tests {
     fn loading_confirm_sends_4012_then_enters_playing() {
         use o2jam_net::{ConfirmMusicLoaded, Request};
         let mut room = joined_snapshot();
-        room.slots[1].member = Some(member("peer", true));
+        room.slots[1].member = Some(member_on_team("peer", true, 1));
         let (mut session, server) = joined_waiting_session(room, |mut stream| {
             let start = read_frame(&mut stream);
             assert_eq!(start.id, 4010);
@@ -5273,7 +5644,7 @@ mod session_tests {
     fn result_entry_submits_live_tally_then_finalizes_and_exits() {
         use o2jam_net::{ConfirmMusicLoaded, Request, SubmitScore};
         let mut room = joined_snapshot();
-        room.slots[1].member = Some(member("peer", true));
+        room.slots[1].member = Some(member_on_team("peer", true, 1));
         let (mut session, server) = joined_waiting_session(room, |mut stream| {
             assert_eq!(read_frame(&mut stream).id, 4010);
             stream.write_all(&encode_frame(4011, &[])).unwrap();
@@ -5324,7 +5695,7 @@ mod session_tests {
         use o2jam_net::{GameRankUpdate, MatchResult, ScoreCompleted, ScoreEntry, ScoreSubmission};
         let mut room = joined_snapshot();
         room.slots[0].member = Some(member("host", true));
-        room.slots[1].member = Some(member("peer", true));
+        room.slots[1].member = Some(member_on_team("peer", true, 1));
         room.slots[1].member.as_mut().unwrap().team = 1;
         let (mut session, server) = joined_waiting_session(room, |mut stream| {
             assert_eq!(read_frame(&mut stream).id, 4010);
@@ -5707,7 +6078,7 @@ mod session_tests {
         };
         let mut room = guest_snapshot();
         room.user_count = 3;
-        room.slots[2].member = Some(member("third", true));
+        room.slots[2].member = Some(member_on_team("third", true, 2));
         let (mut session, server) = joined_waiting_session(room, move |mut stream| {
             stream.write_all(&single.encode()).unwrap();
             stream.write_all(&acquire.encode()).unwrap();

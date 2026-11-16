@@ -58,6 +58,34 @@ Consequence: a song in `OJNList.dat` with no `o2ma<id>.ojn` on disk is
   `0xab7ab`, `0xaba29`, `0xb0dcd`, `0xb0faa`, `0xb17b4`, `0xb1d1a`,
   `0xb6a9e`; each uses the pinned send idiom (`push 0; push 0xfb9` then
   vtable `+0x5c`).
+- **When those 8 sites fire (PINNED, slice 3).** Both waiting-room
+  classes are event handlers over `(id, member, arg)`; three sites sit
+  in `CLiveWaiting`'s handler (VA `0x4ab330`, RTTI name from radare2
+  `aaa`), four in `CNormalWaiting`'s (VA `0x4b0a50`), and one in the
+  handler both classes forward unhandled event ids to (VA `0x4b6620`).
+  The moment each site fires, by event id:
+
+  | site (file) | class | event | moment |
+  |---|---|---|---|
+  | `0xab60c` | CLiveWaiting | 4001 WaitingMusicChanged | the new room song was just staged in the waiting music UI |
+  | `0xab7a4` | CLiveWaiting | 4022 UserLeaveGame | after the leaving member's seat reconciliation |
+  | `0xaba22` | CLiveWaiting | 4024 WaitingSkillChanged | after the skill refresh |
+  | `0xb0dc6` | CNormalWaiting | 4001 WaitingMusicChanged | same, with its master-only notice branch first |
+  | `0xb0fa3` | CNormalWaiting | 4022 UserLeaveGame | same as the live-mode twin |
+  | `0xb17ad` | CNormalWaiting | 4024 WaitingSkillChanged | same as the live-mode twin |
+  | `0xb1d13` | CNormalWaiting | 4058 WaitingSkillExChanged | after the skill-ring refresh |
+  | `0xb6a97` | both (fallback) | internal UI event `0x10000006` | download queue finished: sends 4025 only when no transfer ran (`scene+0x4fc == 0`), else sends 4036 |
+
+  Consequences: no 4025 fires on a select pick, on a room join, or on
+  receiving 4035/4037/4039. The room song the byte is computed for is
+  global `0x7789d8`, written by the 4001 network handler VA `0x55f2d0`
+  (file `0x15f2d0`): it reads a `u16` music id, one difficulty byte and
+  one speed byte, stores the id with its variant nibble lifted to bits
+  28-31, then queues the UI events that reach the two handlers above.
+  Event ids read from Memoryer's `Commands.cs` (corroboration); the
+  sites, the case tables (`0x4abc8c`/`0x4abcb0` live mode,
+  `0x4b1f24`/`0x4b1f48` normal mode) and the handler chain are exe pins
+  (objdump 2.47 + radare2 6.2.2 slices over the read-only 7.55 copy).
 - The byte is computed by VA `0x4be690` (called by every one of those
   sites, files `0xab60c`…`0xb6a97`): take the room's staged music id
   `0x7789d8 & 0x0fffffff`, find its table entry, then
@@ -157,6 +185,66 @@ Server side (corroboration, Memoryer `Controllers/WaitingController.cs`):
 4011 `StartResult.None`, and treats a member as `Ready` once
 `SetDownloadProgress` reports 100 %.
 
+### 4a. The START gate and the kick arm (PINNED, slice 3)
+
+The `CNormalWaiting` START click handler (VA `0x4b22d0`, file
+`0xb22d0`, control word `0x16202012`) runs this order:
+
+1. a transfer already stands (`scene+0x504 != 0`) → only the button face
+   is re-armed, no packet, no notice;
+2. gate helper VA `0x4b5560` answers a verdict word:
+   - `1` → send `4010 StartGame` (`0xfaa`);
+   - `-2` (`0xfffffffe`) → send **`4034 AcquireMusicRequest`**
+     (`0xfc2`, empty body; send push at file `0xb23d2`), no notice;
+   - `-1` (`0xffffffff`) → notice VA `0x6497ec` "some players are not
+     ready" on the notice box (call VA `0x478c90`, text push file
+     `0xb23b1`);
+   - `-5` (`0xfffffffb`) → notice VA `0x6497bc` "the teams do not match"
+     (text push file `0xb23ee`);
+   - `-3`/`-4` → no packet and no notice (the player sees the download
+     bar).
+
+Gate helper VA `0x4b5560` (file `0xb5560`) verdicts in test order:
+
+1. any occupied peer seat (index other than the local id byte
+   `0x77cd04`) with a zero ready byte (`seat+0x32`) → `-1`;
+2. with more than one member inset (`0x7789ec`), a team histogram over
+   the self team (`0x77cd31`) and the peer team bytes (`seat+0x31`):
+   every used team must hold the same number of players and at least two
+   teams must be used, else `-5` (the same rule Memoryer's
+   `TeamUnbalanced` test applies, and its join path gives every arriving
+   member the first unused team, so a real room always spans teams);
+3. each occupied peer seat's music-state byte (`seat+0x217c`): `1` →
+   `-2`, `2` → `-3`, `4` → `-4`;
+4. else `1`.
+
+The loop skips the local seat, so our own missing song never blocks the
+click: the server's refusal is what kicks our download. `CLiveWaiting`
+carries a simpler twin at VA `0x4aefe0` that also tests the local seat's
+byte (global `0x77ee7c` = self seat `+0x217c`) and has no team arm; both
+twins answer the same `-1`..`-4` codes.
+
+The 4035 answer then runs the per-member arms (CNormalWaiting
+`0x4b1d42`, CLiveWaiting `0x4aba51`):
+
+- state non-zero → `scene+0x504 = 1` (transfer running) and
+  `scene+0x538 = 1` (start pending), refresh, then, when the member is
+  the local id, **VA `0x4bb1e0` StartMusicDownload** — the arm taken
+  instead of sending 4010;
+- state zero → only with the master byte (`0x77cd30`, the self seat's
+  master marker) set and the gate verdict `> 0`: send 4010 and clear
+  `scene+0x538`.
+
+The retry arms are the same master-and-gate pair: 4037 SyncMemberMusicState
+(`0x4b1de1`), 3007 UserLeaveWaiting and 3009 RoomSlotUpdate. A member
+leaving during a transfer adds notice VA `0x649738` "a user left during
+the song download; start the game again" (file `0xab4d3`).
+
+4011 itself maps to the waiting classes' default arm — neither class
+reads its result word; the refusal still has to keep the client in
+Waiting, because the server starts nothing while a member's state is not
+Ready.
+
 ## 5. OPEN (next evidence step each)
 
 1. Writer of `entry+0x15c` bit `0x8`. The scan packs the installed bit
@@ -170,14 +258,21 @@ Server side (corroboration, Memoryer `Controllers/WaitingController.cs`):
 3. `5012` send site: scan for the `SetID` ctor store of `0x1394` rather
    than a `push imm32` (that scan found nothing).
 4. Which scene class owns each twin select handler (VAs `0x4ad940`,
-   `0x4b42d0`) — vtable/RTTI read.
+   `0x4b42d0`) — vtable/RTTI read. **Partly closed in slice 3:** the
+   same twins are called from the two waiting classes' own event arms
+   (`0x4ad940` from `CLiveWaiting`, `0x4b42d0` from `CNormalWaiting`),
+   so each one belongs to its class; which *select* dialog instance
+   uses them stays OPEN.
 5. Meaning of globals `0x77ee28` (compared `>= 0xa`) and `0x768b34` in
    the `NoAccess` branch of VA `0x4be690`.
 
+Closed by slice 3: the 4025 send moments (§2's table above) and the
+`-2` acquire arm of the START gate (§4a).
+
 ## 6. Our client today
 
-Slices 1+2 landed, merged with the #273/#274 song-dialog filter columns
-(`docs/select-filters.md`); slices 3-5 still open.
+Slices 1-3 landed (1+2 merged with the #273/#274 song-dialog filter
+columns, `docs/select-filters.md`); slices 4-5 still open.
 
 - `crates/o2jam-file/src/music.rs`: pure availability model.
   `installed_music(names)` packs a `Music\` listing into the seat shape
@@ -208,8 +303,25 @@ Slices 1+2 landed, merged with the #273/#274 song-dialog filter columns
   so the box geometry stays OPEN.
   `set_member_music_state`/`member_music_state` are the seat `+0x217c`
   byte.
-- `crates/o2jam-shell/src/screens/game/mod.rs` `can_start_game` still
-  gates on peer readiness only — no music-availability gate (slice 3).
+- `crates/o2jam-shell/src/screens/game/mod.rs`: `can_start_game` keeps
+  the readiness rule, and `start_gate_verdict` is the exe's gate (§4a):
+  readiness, then team balance, then every occupied peer's music state,
+  in the exe's order. `press_start` runs the click arms and answers
+  `StartRequest::{StartGame, AcquireMusic, Nothing}`; the two gate arms
+  with a box stage a pinned notice (`WAITING_START_NOT_READY_NOTICE`,
+  `WAITING_START_TEAMS_NOTICE`) that the waiting painter inks over the
+  top-bar `ROOMNAME` line — the notice box sheet is not pinned, the same
+  stand-in shape the song dialog uses. `music_state_for(song_id)` is our
+  own byte (§2's two-way answer) and `room_music_id` the staged room
+  song.
+- `crates/o2jam-shell/src/music_download.rs`: the pure download queue
+  behind the kick (§4). `MusicDownload::enqueue` keeps one request per
+  song and `is_running` is the scene's `+0x4fc`; the transfer, promote,
+  progress and announce are slice 4.
+- `crates/o2jam-shell/src/screens/game/mod.rs` `begin_music_download`
+  is the kick the session calls; the download notice
+  (`WAITING_START_DOWNLOAD_NOTICE`, VA `0x6459e8`) stands in for the
+  download bar (`Wait_Downloding.ojs`) until slice 4 paints it.
 - `crates/recomp2jam/src/connect.rs`: `run_song_flow` sends the honest
   `UpdateMusicState` 4025 (`Ready 0` when the install has the chart
   file, `NoMusic 1` when not) instead of the old blind
@@ -219,19 +331,21 @@ Slices 1+2 landed, merged with the #273/#274 song-dialog filter columns
   longer rides the select flow.
 - `crates/recomp2jam/src/session.rs`: the Waiting drain folds 4037
   (one seat) and 4035 (every listed seat) into the room mirror through
-  `ScreenGame::set_member_music_state`; 4039 decodes and traces only —
-  the percentage has no staged seat field until the download bar lands
-  (slice 3/4).
-- `crates/o2jam-net`: 4025 `UpdateMusicState`, 4035 `AcquireMusic`,
-  4037 `SyncMemberMusicStateEvent`, 4039 `DownloadProgressChanged`,
-  5012 `SyncMusicDownload` plus the `MusicState` enum. Still missing:
-  4034 `AcquireMusicRequest` (the acquire ping, §4); the `4030`/`4031`
-  list family is already in `o2jam-net`.
-- OPEN for slice 3: the exe's eight 4025 send sites are unmapped, so
-  the live session does not announce our state yet — the headless
-  `connect --music-id` flow does. Mapping one site to the waiting
-  song-change/START arm is the next evidence step (§5 items 1-2 give
-  the code to follow).
+  `ScreenGame::set_member_music_state`, announces 4025 at the pinned
+  moments (§2: the 4001 song change, 4022 UserLeaveGame, 4024
+  WaitingSkillChanged, 4058 WaitingSkillExChanged), runs the START
+  gate's arms (`4034` on a missing song, `4010` when startable,
+  the pinned notice arms otherwise), kicks the room song's download when
+  the 4035 answer marks our own state non-Ready, retries `4010` from the
+  4035/4037 ready arms, and keeps Waiting when a 4011 arrives with a
+  non-zero result. 4039 decodes and traces only — the percentage has no
+  staged seat field until the download bar lands (slice 4).
+- `crates/o2jam-net`: 4025 `UpdateMusicState`, 4026/4022/4024/4058 event
+  ids, 4034 `AcquireMusicRequest`, 4035 `AcquireMusic`, 4036
+  `SyncMemberMusicState`, 4037 `SyncMemberMusicStateEvent`, 4039
+  `DownloadProgressChanged`, 4001 `WaitingMusicChanged`, 5012
+  `SyncMusicDownload` plus the `MusicState` enum. The `4030`/`4031` list
+  family is already in `o2jam-net`.
 
 ## 7. Implementation slicing (proposal)
 
@@ -254,10 +368,21 @@ from slice 1. Acceptance: a fake gateway e2e proves a NoMusic member
 refuses 4011 and reports NoMusic; payload guards cite §2 offsets.
 
 Slice 3 — START gate + download kick (`o2jam-shell` + binary).
-Gate `can_start_game`/`confirm_waiting` on every member's music state
-being Ready (the 4011 refusal arm, §4). Acceptance: START with an
-uninstalled room song shows "a user left/start again"-class notice and
-starts the download instead of loading; guard names the caller chain.
+**Landed.** Gate `can_start_game`/`confirm_waiting` on the pinned gate
+verdicts (§4a) and wire the acquire arm: a member without the room song
+answers `4034 AcquireMusicRequest`, the 4035 answer kicks that member's
+download instead of starting, and the 4035/4037 ready arms retry `4010`.
+A non-zero 4011 result keeps Waiting.
+
+Acceptance, corrected against the exe: the START with an uninstalled
+room song does **not** show a "user left / start again" notice there —
+that notice (VA `0x649738`) belongs to the leave-during-download arm.
+The `-2` arm sends `4034` and shows nothing; the player's visible
+feedback is the download bar. Because slice 4 owns that bar, slice 3
+paints the pinned download-in-progress notice class (VA `0x6459e8`)
+until then. The gate's own notices are the not-ready (`0x6497ec`) and
+team (`0x6497bc`) arms. Guards name the caller chain from
+`main.rs::run_play`.
 
 Slice 4 — downloader (`o2jam-file` naming + new OS adapter). Pure part:
 id → `o2ma<id>.ojn`/`o2ma<id>_<v>.ojn` names, `MUSIC\Temp\` staging,
@@ -270,7 +395,7 @@ progress then 5012, and the song becomes selectable and startable.
 Slice 5 — owner confirm (playtest both branches: shop-style notice and
 post-START download), then close per `docs/agents/triage-labels.md`.
 
-## 8. Guards (slices 1+2)
+## 8. Guards (slices 1+3)
 
 Live chain or seam reason per `docs/live-path-reachability.md`; every
 guard below carries a red-proof (PASS / FAIL / PASS / FAIL / PASS) in
@@ -319,3 +444,51 @@ the closing report.
   `session::OnlineSession::paint` (Waiting) → `poll_waiting_chat` →
   `drain_waiting_chat` → `apply_member_music_state` /
   `apply_acquire_music` → `ScreenGame::set_member_music_state`.
+
+### Slice 3 guards
+
+Red-proofs ran as green → break → red → restore → green; the break
+listed after each name is the one that turned it red.
+
+- `no_music_member_blocks_start_and_kicks_the_room_song_download` — live
+  chain: `main.rs::run_play` → `assemble_online_session` →
+  `OnlineSession::paint` (Waiting) → `poll_waiting_chat` →
+  `drain_waiting_chat` → `apply_acquire_music` →
+  `answer_acquire_music` → `kick_room_song_download` →
+  `ScreenGame::begin_music_download`. Break: the kick arm removed, or
+  the 4037 retry arm removed.
+- `a_refused_start_broadcast_keeps_the_room_in_waiting` — live chain:
+  the same paint → `drain_waiting_chat` → `apply_start_broadcast`. Break:
+  the result word ignored.
+- `the_room_song_change_announces_the_music_state` — live chain: the
+  same paint → `drain_waiting_chat` → `apply_waiting_music_changed` →
+  `announce_music_state`. Break: the 4001 arm removed.
+- `a_member_leaving_the_game_and_a_skill_change_reannounce_the_music_state`
+  — same chain → `announces_room_music_state` → `announce_music_state`.
+  Break: the three event arms removed, or only 4022 kept.
+- `start_gate_asks_for_the_music_when_a_peer_lacks_the_room_song` —
+  chain: `session::confirm_master_start` → `ScreenGame::press_start` →
+  `start_gate_verdict`. Break: the `NoMusic` peer arm claims startable.
+- `start_gate_tests_readiness_before_the_team_and_music_arms` — same
+  chain. Break: readiness checked only for a Ready-music peer.
+- `start_gate_reads_the_team_shape_like_the_exe` — same chain. Break:
+  `teams_startable` always true.
+- `start_click_during_a_download_only_rearms_the_face` — same chain plus
+  `ScreenGame::begin_music_download`. Break: the running-download arm
+  removed.
+- `the_waiting_notice_takes_the_room_title_line` — chain:
+  `ScreenGame::paint_at` → `paint_waiting` → `paint_waiting_scene` →
+  `paint_waiting_staged` → `paint_waiting_top_line`. Break: the notice
+  branch falls back to the title.
+- `enqueuing_a_room_song_marks_the_download_running`,
+  `the_same_room_song_is_queued_once`,
+  `an_unstaged_room_song_queues_nothing`,
+  `finishing_the_last_transfer_clears_the_running_flag` — seam: the pure
+  queue, reached from `begin_music_download` and slice 4's pump. Break:
+  the duplicate check removed.
+- `acquire_music_request_carries_no_body` and
+  `waiting_music_changed_reads_id_then_difficulty_then_speed` — seam: wire
+  codecs, §2/§4a offsets cited per test. Break: the 4001 difficulty and
+  speed bytes swapped.
+- OPEN left for slice 4/5: the download bar geometry (`Wait_Downloding`
+  art), the notice-box sheet, and the real transport.

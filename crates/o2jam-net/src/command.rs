@@ -42,6 +42,11 @@ wire_enum! {
         GetMusicList = 4030,
         /// Music state announcement (docs/music-availability.md §2).
         UpdateMusicState = 4025,
+        /// The acquire ping a room master sends when its START gate
+        /// finds a member without the room song
+        /// (docs/music-availability.md §4; exe gate verdict -2, gate
+        /// VA `0x4b5560`, send site file `0xb23d2`).
+        AcquireMusicRequest = 4034,
         SyncMemberMusicState = 4036,
         SetDownloadProgress = 4038,
         FinalizeRank = 4041,
@@ -113,6 +118,10 @@ wire_enum! {
         ReceiveWhisper = 2019,
         RankNotification = 2029,
         RoomSlotUpdate = 3009,
+        /// The room's song changed; the client restages it and
+        /// re-announces its music state (the exe's 4001 arm, VAs
+        /// `0x4ab591`/`0x4b0d4e`; handler VA `0x55f2d0`).
+        WaitingMusicChanged = 4001,
         RoomArenaEcho = 4003,
         RoomTeamChanged = 4007,
         UserReadyStateChanged = 4009,
@@ -124,6 +133,15 @@ wire_enum! {
         SyncMemberMusicState = 4037,
         /// One member's download percentage (§2).
         DownloadProgressChanged = 4039,
+        /// A member left the game; every waiting room re-announces its
+        /// music state (the exe's 4022 arm, VAs `0x4ab658`/`0x4b0e12`).
+        UserLeaveGame = 4022,
+        /// The room's skills changed; the waiting room re-announces its
+        /// music state (VAs `0x4ab90c`/`0x4b10fd`).
+        WaitingSkillChanged = 4024,
+        /// The room's skill-ring set changed; the waiting room
+        /// re-announces its music state (VA `0x4b17dc`).
+        WaitingSkillExChanged = 4058,
         ScoreSubmission = 4017,
         ScoreCompleted = 4018,
         GameRankUpdate = 4040,
@@ -269,6 +287,10 @@ mod tests {
             Event::ScoreSubmission,
             Event::ScoreCompleted,
             Event::GameRankUpdate,
+            Event::WaitingMusicChanged,
+            Event::UserLeaveGame,
+            Event::WaitingSkillChanged,
+            Event::WaitingSkillExChanged,
         ];
         for event in all {
             assert_eq!(Event::from_id(event.id()), Some(event));
@@ -329,6 +351,21 @@ mod tests {
         assert_eq!(Event::from_id(4025), None);
         assert_eq!(Request::from_id(4035), None);
         assert_eq!(Event::from_id(5012), None);
+    }
+
+    #[test]
+    fn resolves_the_start_gate_family_ids() {
+        // docs/music-availability.md §4: the master's gate sends the
+        // acquire ping 4034; the room re-announces 4025 off these four
+        // events (exe arms 0x4ab591, 0x4ab658, 0x4ab90c, 0x4b17dc and
+        // their normal-mode twins).
+        assert_eq!(Request::from_id(4034), Some(Request::AcquireMusicRequest));
+        assert_eq!(Event::from_id(4001), Some(Event::WaitingMusicChanged));
+        assert_eq!(Event::from_id(4022), Some(Event::UserLeaveGame));
+        assert_eq!(Event::from_id(4024), Some(Event::WaitingSkillChanged));
+        assert_eq!(Event::from_id(4058), Some(Event::WaitingSkillExChanged));
+        assert_eq!(Event::from_id(4034), None);
+        assert_eq!(Request::from_id(4001), None);
     }
 
     #[test]

@@ -3681,6 +3681,10 @@ pub struct WaitingCaptions<'a> {
     /// Difficulty and speed behind the `LEVEL` badge, from the same
     /// pick-or-room source as `song`.
     pub level: Option<WaitingLevel>,
+    /// Pinned notice standing over the top-bar room line (the exe's
+    /// notice box above the START control,
+    /// `docs/music-availability.md` §4); `None` paints the room title.
+    pub notice: Option<&'static str>,
 }
 
 /// Difficulty and speed behind the `LEVEL` badge: the two bytes the
@@ -4338,7 +4342,10 @@ fn paint_waiting_staged(
     captions: &WaitingCaptions<'_>,
 ) {
     let placements = &art.placements;
-    paint_waiting_title(frame, room, placements);
+    match captions.notice {
+        Some(notice) => paint_waiting_top_line(frame, notice, placements),
+        None => paint_waiting_title(frame, room, placements),
+    }
     paint_waiting_level_badge(frame, captions.level, art);
     paint_waiting_covers(frame, room, placements);
     paint_waiting_team_highlight(frame, room, placements);
@@ -4353,8 +4360,17 @@ fn paint_waiting_staged(
 
 /// Room title at the `ROOMNAME` rect (top bar, rect 21).
 fn paint_waiting_title(frame: &mut Frame<'_>, room: &JoinedRoom, placements: &[ScenePlacement]) {
+    paint_waiting_top_line(frame, &room.title, placements);
+}
+
+/// Text on the `ROOMNAME` line: the room title, or the standing notice
+/// (the START gate's refusal, `docs/music-availability.md` §4a). The
+/// exe sets that notice on its own box above the START control; the box
+/// sheet is not pinned, so the pinned top-bar line stands in — the same
+/// stand-in shape the song dialog's notice uses for its status line.
+fn paint_waiting_top_line(frame: &mut Frame<'_>, text: &str, placements: &[ScenePlacement]) {
     if let Some((x, y)) = waiting_bnd_origin(placements, WAITING_ROOMNAME_ID, frame) {
-        paint_room_detail_line(frame, x, y, &room.title, art_title_ink());
+        paint_room_detail_line(frame, x, y, text, art_title_ink());
     }
 }
 
@@ -12870,6 +12886,48 @@ mod paint_tests {
             &placements,
         );
         assert_eq!(buf[13 * 800 + 270], scrim_color());
+    }
+
+    #[test]
+    fn the_waiting_notice_takes_the_room_title_line() {
+        // docs/music-availability.md §4: the START gate's refusal notice
+        // stands over the top-bar line while it is set (the exe's notice
+        // box above the START control); with no notice the room title
+        // paints there. Same `ROOMNAME` rect, so the ink replaces it.
+        let placements = vec![waiting_probe(
+            "IDC_TEXT_SWAIT_ROOMNAME",
+            None,
+            (274, 15, 466, 38),
+        )];
+        let art = placements_stage(&placements);
+        let mut titled = vec![0u32; 800 * 600];
+        paint_waiting_staged(
+            &mut Frame {
+                buf: &mut titled,
+                w: 800,
+                h: 600,
+            },
+            &champion_room(),
+            &art,
+            &WaitingCaptions::default(),
+        );
+        let mut noticed = vec![0u32; 800 * 600];
+        paint_waiting_staged(
+            &mut Frame {
+                buf: &mut noticed,
+                w: 800,
+                h: 600,
+            },
+            &champion_room(),
+            &art,
+            &WaitingCaptions {
+                notice: Some("Some players are not ready."),
+                ..Default::default()
+            },
+        );
+        assert_eq!(titled[13 * 800 + 270], scrim_color());
+        assert_eq!(noticed[13 * 800 + 270], scrim_color());
+        assert_ne!(titled, noticed, "the notice inks its own glyphs");
     }
 
     #[test]

@@ -78,6 +78,11 @@ song_empty!(StartGame, 4010);
 song_empty!(ExitPlaying, 4021);
 song_empty!(GetMusicList, 4030);
 song_empty!(FinalizeRank, 4041);
+// The acquire ping (§4): the room master asks the server to hand the
+// members their music states once the START gate finds a missing song
+// (gate VA `0x4b5560` verdict -2, send site file `0xb23d2`). Empty
+// body, like the other host requests.
+song_empty!(AcquireMusicRequest, 4034);
 
 /// `SetRoomMusic` 4000: host picks the room song.
 ///
@@ -658,6 +663,58 @@ impl WireMessage for UpdateMusicState {
         }
         Ok(Self {
             state: MusicState::from_code(body[0])?,
+        })
+    }
+}
+
+/// `WaitingMusicChanged` 4001 (S→C event): the room's song changed.
+///
+/// The exe handler VA `0x55f2d0` (file `0x15f2d0`) reads a `u16` music
+/// id, one difficulty byte and one speed byte, stores the id into the
+/// staged room song (`0x7789d8`, variant nibble lifted to bits 28-31),
+/// and queues the UI events the waiting rooms turn into their 4025
+/// re-announcement (`docs/music-availability.md` §2). The body order
+/// therefore matches [`SetRoomMusic`]'s request shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WaitingMusicChanged {
+    /// Song id the room switched to.
+    pub music_id: u16,
+    /// Chart difficulty code (`Difficulty::from_code`).
+    pub difficulty: u8,
+    /// Scroll-speed code (`GameSpeed` ordinal).
+    pub speed: u8,
+}
+
+/// Body length of [`WaitingMusicChanged`]: 2 + 1 + 1.
+const WAITING_MUSIC_CHANGED_BODY_LEN: usize = 4;
+
+impl WireMessage for WaitingMusicChanged {
+    const COMMAND: u16 = 4001;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = Vec::with_capacity(WAITING_MUSIC_CHANGED_BODY_LEN);
+        body.extend_from_slice(&self.music_id.to_le_bytes());
+        body.push(self.difficulty);
+        body.push(self.speed);
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < WAITING_MUSIC_CHANGED_BODY_LEN {
+            return Err(Error::TruncatedMessage {
+                need: WAITING_MUSIC_CHANGED_BODY_LEN,
+                have: body.len(),
+            });
+        }
+        if body.len() > WAITING_MUSIC_CHANGED_BODY_LEN {
+            return Err(Error::TrailingBytes(
+                body.len() - WAITING_MUSIC_CHANGED_BODY_LEN,
+            ));
+        }
+        Ok(Self {
+            music_id: u16::from_le_bytes([body[0], body[1]]),
+            difficulty: body[2],
+            speed: body[3],
         })
     }
 }
@@ -2315,6 +2372,42 @@ mod song_sync_tests {
         assert!(AcquireMusic::decode_body(&[0x02, 0x00, 0x04, 0x02]).is_err());
         assert!(AcquireMusic::decode_body(&[]).is_err());
         assert!(AcquireMusic::decode_body(&[0x01, 0x00, 0x04, 0x00]).is_err());
+    }
+
+    #[test]
+    fn acquire_music_request_carries_no_body() {
+        // §4: the master's acquire ping is an empty request (gate
+        // verdict -2, send site file `0xb23d2`).
+        assert_eq!(
+            AcquireMusicRequest::COMMAND,
+            Request::AcquireMusicRequest as u16
+        );
+        assert!(AcquireMusicRequest.encode_body().is_empty());
+        assert_eq!(
+            <AcquireMusicRequest as WireMessage>::decode_body(&[]),
+            Ok(AcquireMusicRequest)
+        );
+        let frame = decode_frame(&AcquireMusicRequest.encode()).unwrap();
+        assert_eq!(frame.id, 4034);
+        assert!(<AcquireMusicRequest as WireMessage>::decode_body(&[0x00]).is_err());
+    }
+
+    #[test]
+    fn waiting_music_changed_reads_id_then_difficulty_then_speed() {
+        // §2: handler VA `0x55f2d0` reads a `u16` id, a difficulty
+        // byte and a speed byte, and stores the id in the staged room
+        // song — the same order `SetRoomMusic` sends.
+        let event = WaitingMusicChanged {
+            music_id: 757,
+            difficulty: 2,
+            speed: 5,
+        };
+        assert_eq!(event.encode_body(), vec![0xF5, 0x02, 0x02, 0x05]);
+        let frame = decode_frame(&event.encode()).unwrap();
+        assert_eq!(frame.id, 4001);
+        assert_eq!(WaitingMusicChanged::decode_frame(&frame), Ok(event));
+        assert!(WaitingMusicChanged::decode_body(&[0xF5, 0x02, 0x02]).is_err());
+        assert!(WaitingMusicChanged::decode_body(&[0xF5, 0x02, 0x02, 0x05, 0x00]).is_err());
     }
 
     #[test]

@@ -65,6 +65,7 @@ use super::side::{
     PLANET_OPTION_FIRST_TAB, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE,
     SELECT_NOT_DOWNLOADED_NOTICE, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS,
 };
+use crate::music_download::MusicDownload;
 use crate::{menu_of, InputEdge, InputSnapshot, MenuKey};
 use o2jam_audio::{
     song_position_ms, AudioBackend, BgmSelection, CueOutcome, PcmSamples, SceneBgm, SceneCue,
@@ -72,7 +73,7 @@ use o2jam_audio::{
 use o2jam_file::{AvatarItemTable, InstalledMusic, OjnListEntry, OjnMidTagEntry};
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams, PEER_SLOT_COUNT};
 use o2jam_net::gift::{ClaimGift, GetGiftMessageList, GiftType};
-use o2jam_net::play::{MusicListAnswer, SetRoomMusic};
+use o2jam_net::play::{MusicListAnswer, MusicState, SetRoomMusic};
 use o2jam_net::rooms::{
     Announcement, MainRoomAdminMessage, MainRoomUserMessage, MusicPlayRankingAnswer, RankEntry,
     RankNotification, ReceiveWhisper, SendMainRoomMessage, SendWaitingMessage, SendWhisper,
@@ -467,6 +468,106 @@ const PLANET_PROMO_HEARTBEAT_MS: u64 = 1_000;
 /// `splash_click_edge_lands_the_same_bare_board`,
 /// `escape_dismisses_splash_into_planet_board`,
 /// `splash_menu_keys_keep_splash`).
+/// Team buttons a waiting room offers (`TEAMA..H`, 0..7 — the
+/// shared toggle helper's index space, VA `0x48c810`).
+const TEAM_SLOT_COUNT: usize = 8;
+/// Highest team index a staged seat can name.
+const TEAM_SLOT_HIGH: u8 = 7;
+
+/// What the Waiting START press asks the session bridge to send
+/// (`docs/music-availability.md` §4a, exe click handler VA `0x4b22d0`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartRequest {
+    /// The gate says startable: `4010 StartGame` (`0xfaa`).
+    StartGame,
+    /// A member lacks the room song: `4034 AcquireMusicRequest`
+    /// (`0xfc2`), the ping that makes the server hand out the states.
+    AcquireMusic,
+    /// No packet: a download already stands, or the gate's arms
+    /// without a send.
+    Nothing,
+}
+
+/// The exe's START gate verdicts (VA `0x4b5560`, one arm per return
+/// code): `1` startable, `-1` a peer is not ready, `-2` a peer lacks
+/// the music, `-3` a peer cannot access it, `-4` a peer is already
+/// downloading, `-5` the teams do not match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartGateVerdict {
+    /// Every peer ready, teams balanced, every peer's music ready.
+    Startable,
+    /// An occupied peer seat is not ready (exe verdict `-1`).
+    PeerNotReady,
+    /// An occupied peer reports `NoMusic` for the room song (`-2`).
+    MusicMissing,
+    /// An occupied peer reports `NoAccess` for the room song (`-3`).
+    MusicNoAccess,
+    /// An occupied peer is already downloading the room song (`-4`).
+    MusicDownloading,
+    /// A room with more than one member sits on one team, or on teams
+    /// of unequal size (`-5`).
+    TeamsUnbalanced,
+}
+
+/// Notice for a gate arm that shows one: the exe sets these on its
+/// notice box with a `(text, control, 0, 1)` call to VA `0x478c90`.
+/// Own-words transcriptions of the pinned CP949 strings.
+pub const WAITING_START_NOT_READY_NOTICE: &str = "Some players are not ready.";
+/// Team arm of the same box (VA `0x6497bc`).
+pub const WAITING_START_TEAMS_NOTICE: &str = "The teams do not match.";
+/// Download-in-progress notice (VA `0x6459e8`): the pinned text for
+/// "a transfer is running, wait for it". The exe shows the download bar
+/// (`Wait_Downloding.ojs`, §4) at this moment instead; the bar lands in
+/// slice 4, so this class stands in until then.
+pub const WAITING_START_DOWNLOAD_NOTICE: &str =
+    "The song is downloading. Press OK after it completes.";
+
+/// Notice for one gate verdict (`None` while the verdict has no box
+/// arm: the exe sends `4034` for a missing song and shows nothing).
+#[must_use]
+fn waiting_notice_for(verdict: StartGateVerdict) -> Option<&'static str> {
+    match verdict {
+        StartGateVerdict::PeerNotReady => Some(WAITING_START_NOT_READY_NOTICE),
+        StartGateVerdict::TeamsUnbalanced => Some(WAITING_START_TEAMS_NOTICE),
+        StartGateVerdict::MusicDownloading => Some(WAITING_START_DOWNLOAD_NOTICE),
+        StartGateVerdict::Startable
+        | StartGateVerdict::MusicMissing
+        | StartGateVerdict::MusicNoAccess => None,
+    }
+}
+
+/// The music arm of the gate for one seat byte: the verdict a peer's
+/// state adds, or `None` when it does not block. The exe branches on
+/// `1`/`2`/`4` only; `Ready` and any unnamed byte block nothing.
+#[must_use]
+fn blocked_music_verdict(seat_state: u8) -> Option<StartGateVerdict> {
+    match MusicState::from_code(seat_state) {
+        Ok(MusicState::NoMusic) => Some(StartGateVerdict::MusicMissing),
+        Ok(MusicState::NoAccess) => Some(StartGateVerdict::MusicNoAccess),
+        Ok(MusicState::Downloading) => Some(StartGateVerdict::MusicDownloading),
+        Ok(MusicState::Ready) | Err(_) => None,
+    }
+}
+
+/// Whether the seated members may start on team shape alone: with more
+/// than one member at least two teams are in use and every used team
+/// holds the same number of players (the exe's histogram arm, gate VA
+/// `0x4b5560`; Memoryer's `WaitingController` applies the same rule as
+/// "one team, or unequal counts").
+#[must_use]
+fn teams_startable(self_team: u8, peers: &[&o2jam_net::RoomMember]) -> bool {
+    if peers.is_empty() {
+        return true;
+    }
+    let mut teams = [0usize; TEAM_SLOT_COUNT];
+    teams[usize::from(self_team.min(TEAM_SLOT_HIGH))] += 1;
+    for peer in peers {
+        teams[usize::from(peer.team.min(TEAM_SLOT_HIGH))] += 1;
+    }
+    let used: Vec<usize> = teams.iter().copied().filter(|count| *count > 0).collect();
+    used.len() > 1 && used.iter().all(|count| *count == used[0])
+}
+
 /// Room/waiting/loading inputs land with their UIs.
 pub struct ScreenGame {
     flow: ScreenFlow,
@@ -546,6 +647,15 @@ pub struct ScreenGame {
     /// guest's face needs no field — it follows the local seat's ready
     /// byte (see [`Self::waiting_confirm_armed`]).
     waiting_start_armed: bool,
+    /// Pinned Waiting-room notice standing over the top-bar room line:
+    /// the exe's notice box over the START control (VA `0x4b22d0`,
+    /// calls VA `0x478c90`) for the gate refusals
+    /// (`docs/music-availability.md` §4a). `None` paints the room title.
+    waiting_notice: Option<&'static str>,
+    /// Staged song download (§4): the queue a START gate kick fills,
+    /// plus the running flag the START control and the waiting scene
+    /// read (`state+0x4fc`). Empty until a member lacks the room song.
+    music_download: MusicDownload,
     /// Live waiting-room chat rows (3012/3013 packets only, oldest first).
     waiting_chat: Vec<WaitingChatMessage>,
     /// Unsent chat draft for the input line (3011 source).
@@ -1044,6 +1154,8 @@ impl ScreenGame {
             select_filter: SelectMusicFilter::ALL,
             installed_music: None,
             select_music_notice: None,
+            waiting_notice: None,
+            music_download: MusicDownload::default(),
             room_dialog: None,
             create_room_form: CreateRoomForm::new(),
             password_form: PasswordForm::new(),
@@ -2447,15 +2559,175 @@ impl ScreenGame {
     }
 
     /// Run the waiting Confirm gate shared by Enter and clicks:
-    /// slash-free drafts advance offline walkers and ready masters;
-    /// guests and masters with unready peers stay put (see
-    /// [`Self::can_start_game`]).
+    /// slash-free drafts advance offline walkers and masters the START
+    /// gate passes ([`Self::press_start`]); guests, unready peers, and a
+    /// room song some member lacks stay put.
     fn confirm_waiting(&mut self) {
-        if self.take_chat_slash() == SlashCommand::Empty
-            && (self.waiting.is_none() || self.can_start_game())
-        {
+        if self.take_chat_slash() != SlashCommand::Empty {
+            return;
+        }
+        if self.waiting.is_none() {
+            self.enter(Screen::Loading);
+            return;
+        }
+        if self.can_start_game() && self.start_gate_verdict() == StartGateVerdict::Startable {
             self.enter(Screen::Loading);
         }
+    }
+
+    /// The START control's press (the exe click handler VA `0x4b22d0`,
+    /// `docs/music-availability.md` §4a): arm the face, run the gate, and
+    /// answer what the session bridge must send.
+    ///
+    /// The arms, in the exe's order:
+    ///
+    /// 1. a download stands (`scene+0x4fc`) — only the face is re-armed,
+    ///    no packet;
+    /// 2. the gate ([`Self::start_gate_verdict`]) says startable — `4010
+    ///    StartGame` (`0xfaa`);
+    /// 3. a member lacks the room song — `4034 AcquireMusicRequest`
+    ///    (`0xfc2`), which is what makes the server hand the members
+    ///    their states and the missing member its download;
+    /// 4. a peer is not ready, or the teams do not match — the pinned
+    ///    notice and no packet;
+    /// 5. a peer cannot access the music, or is already downloading —
+    ///    no packet (the exe has no send arm; the player sees the
+    ///    download bar, which slice 4 paints).
+    pub fn press_start(&mut self) -> StartRequest {
+        self.arm_waiting_start();
+        if self.music_download.is_running() {
+            self.note_waiting_download();
+            return StartRequest::Nothing;
+        }
+        let verdict = self.start_gate_verdict();
+        self.waiting_notice = waiting_notice_for(verdict);
+        match verdict {
+            StartGateVerdict::Startable => StartRequest::StartGame,
+            StartGateVerdict::MusicMissing => StartRequest::AcquireMusic,
+            StartGateVerdict::PeerNotReady
+            | StartGateVerdict::MusicNoAccess
+            | StartGateVerdict::MusicDownloading
+            | StartGateVerdict::TeamsUnbalanced => StartRequest::Nothing,
+        }
+    }
+
+    /// The exe's START gate verdict (VA `0x4b5560`, file `0xb5560`),
+    /// tested in the exe's order: every occupied peer ready, then team
+    /// balance for a room with more than one member, then each occupied
+    /// peer's music-state byte (seat `+0x217c`). The local seat is
+    /// skipped — the exe's own missing song does not block its click;
+    /// the server's 4011 refusal answers it instead.
+    ///
+    /// No joined room reads [`StartGateVerdict::Startable`]: the offline
+    /// walk has no peers to clear.
+    #[must_use]
+    pub fn start_gate_verdict(&self) -> StartGateVerdict {
+        let Some(room) = self.waiting.as_ref() else {
+            return StartGateVerdict::Startable;
+        };
+        let peers: Vec<&o2jam_net::RoomMember> = room
+            .slots
+            .iter()
+            .filter(|slot| slot.index != room.member_id)
+            .filter_map(|slot| slot.member.as_ref())
+            .collect();
+        if peers.iter().any(|peer| !peer.ready) {
+            return StartGateVerdict::PeerNotReady;
+        }
+        if !teams_startable(room.team, &peers) {
+            return StartGateVerdict::TeamsUnbalanced;
+        }
+        peers
+            .iter()
+            .find_map(|peer| blocked_music_verdict(peer.music_state))
+            .unwrap_or(StartGateVerdict::Startable)
+    }
+
+    /// The notice standing over the waiting top bar (the exe's notice
+    /// box), `None` while nothing was refused.
+    #[must_use]
+    pub fn waiting_notice(&self) -> Option<&'static str> {
+        self.waiting_notice
+    }
+
+    /// Clear the standing waiting notice (the session clears it when a
+    /// start attempt succeeds).
+    pub fn clear_waiting_notice(&mut self) -> &mut Self {
+        self.waiting_notice = None;
+        self
+    }
+
+    /// Stage the room song the 4001 event names (the exe's staged room
+    /// song `0x7789d8`, handler VA `0x55f2d0`): the 4025 announcement
+    /// and the waiting captions follow it.
+    pub fn set_room_music(&mut self, music_id: u16, difficulty: u8, speed: u8) -> &mut Self {
+        if let Some(room) = self.waiting.as_mut() {
+            room.music_id = music_id;
+            room.difficulty = difficulty;
+            room.speed = speed;
+        }
+        self
+    }
+
+    /// The room song a 4025 announcement is computed for: the joined
+    /// room's staged song, `None` while no room or no song stands
+    /// (song id `0` names no chart file).
+    #[must_use]
+    pub fn room_music_id(&self) -> Option<u16> {
+        self.waiting
+            .as_ref()
+            .map(|room| room.music_id)
+            .filter(|music_id| *music_id != 0)
+    }
+
+    /// The music state this client announces for one song (§2): `Ready`
+    /// when the install's `Music` folder carries the chart file,
+    /// `NoMusic` otherwise (the exe's two-way answer, VA `0x4be808`).
+    /// Without an install scan there is no local knowledge, so the
+    /// answer stays `Ready` — the pre-#276 world, never an invented
+    /// refusal.
+    #[must_use]
+    pub fn music_state_for(&self, song_id: u16) -> MusicState {
+        let installed = match self.installed_music.as_ref() {
+            None => true,
+            Some(seat) => seat.is_installed(song_id),
+        };
+        MusicState::for_installed(installed)
+    }
+
+    /// The staged download queue and its running flag (§4).
+    #[must_use]
+    pub fn music_download(&self) -> &MusicDownload {
+        &self.music_download
+    }
+
+    /// Kick the room song's download (the exe's `StartMusicDownload`,
+    /// VA `0x4bb1e0`): enqueue it and mark the download running, so a
+    /// START press only re-arms the face until the transfer completes.
+    /// `true` when the queue took the song; the transfer itself is
+    /// slice 4, so nothing leaves the machine yet.
+    pub fn begin_music_download(&mut self, song_id: u16) -> bool {
+        let queued = self.music_download.enqueue(song_id);
+        if queued {
+            self.note_waiting_download();
+        }
+        queued
+    }
+
+    /// Stage the download-in-progress notice: a transfer stands (or the
+    /// server refused a START because one must), so the waiting top bar
+    /// says to wait for it (§4). Slice 4 replaces this with the download
+    /// bar the exe paints.
+    pub fn note_waiting_download(&mut self) -> &mut Self {
+        self.waiting_notice = Some(WAITING_START_DOWNLOAD_NOTICE);
+        self
+    }
+
+    /// Drop one finished transfer from the queue (slice 4's pump owns
+    /// the call; the last drop clears the running flag).
+    pub fn finish_music_download(&mut self, song_id: u16) -> &mut Self {
+        self.music_download.finish(song_id);
+        self
     }
 
     /// Advance a joined guest to Loading on the 4011 start broadcast.
@@ -5746,6 +6018,7 @@ impl ScreenGame {
             song_bpm: self.room_song_bpm(),
             skill_counts: self.skill_counts,
             level: self.waiting_level(),
+            notice: self.waiting_notice,
         };
         match (self.scene_art(Screen::Waiting), &self.waiting) {
             (Some(art), Some(room)) => {
@@ -19648,6 +19921,119 @@ mod game_tests {
         assert!(game.can_start_game());
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Loading);
+    }
+
+    /// The joined master's room plus one ready peer on the other team
+    /// (the server hands every join the first unused team).
+    fn waiting_room_with_peer(peer: RoomMember) -> JoinedRoom {
+        let mut room = waiting_room();
+        room.music_id = 757;
+        room.slots.push(RoomSlot {
+            index: 1,
+            state_code: 1,
+            member: Some(peer),
+        });
+        room.user_count = 2;
+        room
+    }
+
+    /// A peer on team A (the self team is 1 in [`waiting_room`]).
+    fn ready_peer() -> RoomMember {
+        let mut peer = waiting_room().slots[0]
+            .member
+            .clone()
+            .expect("fixture seats the master");
+        peer.nickname = "peer".to_owned();
+        peer.master = false;
+        peer.team = 0;
+        peer
+    }
+
+    #[test]
+    fn start_gate_asks_for_the_music_when_a_peer_lacks_the_room_song() {
+        // docs/music-availability.md §4a: an occupied peer seat whose
+        // music state is NoMusic turns the gate into its -2 arm
+        // (VA `0x4b5560`), and the click answers with 4034
+        // AcquireMusicRequest (`0xfc2`) instead of 4010 — no notice,
+        // the download starts on the 4035 answer.
+        let mut game = ScreenGame::new();
+        let mut peer = ready_peer();
+        peer.music_state = o2jam_net::MusicState::NoMusic.code();
+        game.set_joined_room(waiting_room_with_peer(peer));
+        walk_to_waiting(&mut game);
+        assert!(game.can_start_game());
+        assert_eq!(game.start_gate_verdict(), StartGateVerdict::MusicMissing);
+        assert_eq!(game.press_start(), StartRequest::AcquireMusic);
+        assert_eq!(game.waiting_notice(), None);
+    }
+
+    #[test]
+    fn start_gate_tests_readiness_before_the_team_and_music_arms() {
+        // The exe tests in order: every peer ready (-1), then the team
+        // histogram (-5), then each peer's music state (-2/-3/-4).
+        let mut game = ScreenGame::new();
+        let mut peer = ready_peer();
+        peer.ready = false;
+        peer.music_state = o2jam_net::MusicState::NoMusic.code();
+        game.set_joined_room(waiting_room_with_peer(peer));
+        walk_to_waiting(&mut game);
+        assert_eq!(game.start_gate_verdict(), StartGateVerdict::PeerNotReady);
+        assert_eq!(game.press_start(), StartRequest::Nothing);
+        assert_eq!(game.waiting_notice(), Some(WAITING_START_NOT_READY_NOTICE));
+    }
+
+    #[test]
+    fn start_gate_reads_the_team_shape_like_the_exe() {
+        // Multiplayer rooms need at least two teams of equal size (the
+        // exe's histogram arm; Memoryer's `TeamUnbalanced` test). One
+        // team for everyone is the shape the server never sends, so the
+        // gate reports it instead of starting.
+        let mut game = ScreenGame::new();
+        let mut peer = ready_peer();
+        peer.team = 1; // the self team: one team only
+        game.set_joined_room(waiting_room_with_peer(peer));
+        walk_to_waiting(&mut game);
+        assert_eq!(game.start_gate_verdict(), StartGateVerdict::TeamsUnbalanced);
+        assert_eq!(game.press_start(), StartRequest::Nothing);
+        assert_eq!(game.waiting_notice(), Some(WAITING_START_TEAMS_NOTICE));
+        // Two teams of one player each pass, and the gate reaches its
+        // music arm.
+        game.set_joined_room(waiting_room_with_peer(ready_peer()));
+        assert_eq!(game.start_gate_verdict(), StartGateVerdict::Startable);
+        assert_eq!(game.press_start(), StartRequest::StartGame);
+        assert_eq!(game.waiting_notice(), None);
+    }
+
+    #[test]
+    fn start_click_during_a_download_only_rearms_the_face() {
+        // §4a: the click handler's first arm — `scene+0x504 != 0` (a
+        // transfer stands) re-arms the button face and sends nothing;
+        // the player gets the download notice.
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room_with_peer(ready_peer()));
+        walk_to_waiting(&mut game);
+        assert!(game.begin_music_download(757));
+        assert!(game.music_download().is_running());
+        assert_eq!(game.press_start(), StartRequest::Nothing);
+        assert_eq!(game.waiting_notice(), Some(WAITING_START_DOWNLOAD_NOTICE));
+        assert!(game.waiting_confirm_armed());
+        // The queue holds the room song once, whatever the click count.
+        game.press_start();
+        assert_eq!(game.music_download().requests().len(), 1);
+    }
+
+    #[test]
+    fn a_missing_room_song_announces_no_music_state() {
+        // §2: the announcement is computed for the room's staged song;
+        // with none (id 0) the client answers Ready rather than
+        // inventing a NoMusic for a song nobody picked.
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        assert_eq!(game.room_music_id(), None);
+        game.set_room_music(757, 2, 5);
+        assert_eq!(game.room_music_id(), Some(757));
+        // No install scan, no local knowledge: the pre-#276 answer.
+        assert_eq!(game.music_state_for(757), o2jam_net::MusicState::Ready);
     }
     /// One room chrome control staged on its own test rect, on the
     /// walked Avi → Channel → Room path.
