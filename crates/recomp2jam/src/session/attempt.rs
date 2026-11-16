@@ -39,6 +39,7 @@ impl OnlineSession {
         self.poll_gift_claim();
         self.poll_channel_login();
         self.poll_room_join();
+        self.flush_music_send();
         self.poll_song_select();
     }
 

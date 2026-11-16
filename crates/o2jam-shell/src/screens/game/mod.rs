@@ -1480,6 +1480,14 @@ impl ScreenGame {
     pub fn has_pending_music_send(&self) -> bool {
         self.outbox.has_pending_music_send()
     }
+
+    /// Whether the song-select dialog overlay is currently staged
+    /// (ticket #232): the session bridge waits for it to close
+    /// before converting a queued pick into a `SongChoice`.
+    #[must_use]
+    pub fn select_music_dialog_open(&self) -> bool {
+        self.select_music_art.is_some()
+    }
     /// Queued RETRY press for the session bridge, if any (`StartGame`
     /// 4010, `0xfaa` — the exe's result RETRY relay event,
     /// `FUN_004c2f00` range, `ev_77ce98f1…`). One take sends once;
@@ -2704,17 +2712,35 @@ impl ScreenGame {
     /// — the `MUSELECT 0x16200003` click handler drops non-master
     /// clicks (file `0xb2622`). Anything else falls through to the
     /// seat buttons below: the dialog chrome (filters, pager,
-    /// search, chosung, OK) has no evidenced click behavior, so it
-    /// stays display-only and BACK stays reachable. `true` consumed.
+    /// search, chosung) has no evidenced click behavior, so it stays
+    /// display-only and BACK stays reachable. The OK button is the
+    /// one evidenced exception (ticket #232): with a staged pick it
+    /// confirms and closes the dialog so START can proceed. `true`
+    /// consumed.
     fn click_select_music(&mut self, x: i32, y: i32) -> bool {
         if !self.is_room_master() || self.select_music_art.is_none() {
             return false;
         }
         let rows = select_music_rows(&self.catalog_songs);
-        let Some(index) = select_row_hit(x, y, rows.len()) else {
-            return false;
-        };
-        self.pick_select_music_row(index)
+        if let Some(index) = select_row_hit(x, y, rows.len()) {
+            return self.pick_select_music_row(index);
+        }
+        // Dialog OK confirms the staged pick (ticket #232): the
+        // BND-paired OK button (Dialog_SelectMusic.bnd rect [1])
+        // closes the dialog with the pick queued for the session
+        // bridge. A "staged pick" is a queued `pending_music_send`
+        // (row click), not the pre-existing room song, so OK with
+        // no row click stays a no-op like the other chrome and the
+        // click falls through.
+        if let Some(art) = self.select_music_art.as_ref() {
+            if staged_rect_hit(&art.placements, "IDC_BUTTON_DSMUSIC_OK", x, y)
+                && self.has_pending_music_send()
+            {
+                self.select_music_art = None;
+                return true;
+            }
+        }
+        false
     }
     /// Whether a click hits a staged Waiting confirm button
     /// (START/READY ids only; art-less clicks land nowhere — no pinned
@@ -6814,6 +6840,79 @@ mod game_tests {
         assert_eq!(game.screen(), Screen::Channel);
         game.ingest_snapshot(&InputSnapshot::click_at(524, 246));
         assert_eq!(game.screen(), Screen::Room);
+    }
+
+    #[test]
+    fn waiting_select_music_ok_with_staged_pick_closes_dialog_and_stages_4000() {
+        // Ticket #232 seam guard (proposed guard name): a row click
+        // stages a pick (queues `pending_music_send`); the dialog OK
+        // then closes the overlay while the pick stays queued for the
+        // session bridge (`flush_music_send` -> 4000). Row click first
+        // so the pick is genuinely staged, not a stale room song.
+        use crate::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_render::Rect;
+        let ok_placement = ScenePlacement {
+            id: "IDC_BUTTON_DSMUSIC_OK".to_owned(),
+            code: 0x27200002,
+            sprite: None,
+            rect: Rect {
+                x: 326,
+                y: 497,
+                w: 126,
+                h: 45,
+            },
+            role: PlacementRole::Single,
+        };
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        game.load_select_music_scene(vec![ok_placement], HashMap::new());
+        let blob = waiting_song_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_song_catalog(&entries);
+        // Stage a pick through the real row-click path.
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 150 + 23 + 11));
+        assert!(game.has_pending_music_send(), "row click stages the pick");
+        // OK click closes the dialog, leaving the pick queued.
+        game.ingest_snapshot(&InputSnapshot::click_at(389, 519));
+        assert!(
+            game.select_music_art.is_none(),
+            "OK with a staged pick closes the dialog"
+        );
+        assert!(
+            game.has_pending_music_send(),
+            "the pick stays queued for the session bridge"
+        );
+    }
+
+    #[test]
+    fn waiting_select_music_ok_without_pick_is_noop() {
+        // Ticket #232: OK with no staged pick (no row click) is a
+        // no-op and leaves the dialog open.
+        use crate::avatar::{PlacementRole, ScenePlacement};
+        use o2jam_render::Rect;
+        let ok_placement = ScenePlacement {
+            id: "IDC_BUTTON_DSMUSIC_OK".to_owned(),
+            code: 0x27200002,
+            sprite: None,
+            rect: Rect {
+                x: 326,
+                y: 497,
+                w: 126,
+                h: 45,
+            },
+            role: PlacementRole::Single,
+        };
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        game.load_select_music_scene(vec![ok_placement], HashMap::new());
+        game.ingest_snapshot(&InputSnapshot::click_at(389, 519));
+        assert!(
+            game.select_music_art.is_some(),
+            "OK with no pick leaves the dialog open"
+        );
+        assert!(!game.has_pending_music_send(), "no pick is queued");
     }
 
     #[test]
