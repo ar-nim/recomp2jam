@@ -317,58 +317,68 @@ panel, 57x97 anchored at `(538,447)` (teal title over a dark value
 box), authored exactly over the button; `Wait_AlbumMode.ojs` is the
 `앨범정보`/`앨범 선택` album-mode panel.
 
-**OPEN — exe display behavior is NOT pinned.** The pinned exe binary
-is available locally (`OTwo.exe` sha256 `83a04541…72c823b`,
+**Current shell rule (owner decision 2026-11-16, ticket #278).** As
+host, the client shows the blue `곡선택` song-select button on this
+rect and no `BPM` cover; as a peer it shows the `BPM` cover and no
+button; `Wait_AlbumMode.ojs` paints for no role. The owner made this
+call after a shell rule that hid both bodies for the host left a bare
+backdrop. This is a shell rule: it rests on the owner's decision, not
+on exe evidence.
+
+**OPEN — the exe display behavior is NOT pinned.** The pinned exe
+binary is available locally (`OTwo.exe` sha256 `83a04541…72c823b`,
 5,029,888 B), so byte scans are possible, but the offsets and
 "local-static record" ids quoted in earlier drafts of this section
 (`0xae45f`–`0xae499`, `0xb4b57`–`0xb4bb7`, `0xae9e5`–`0xaea03`,
 `2ef6dffb…`, `cc65bb93…`, `9039f914…`, `2058ffa9…`, `4153008a…`)
 exist only in an agent's scratch notes — no REA dossier in
-`extracted/` backs them. Treat them as leads, not evidence.
+`extracted/` backs them. Treat them as leads, not evidence: this
+section does not read them as behavior.
 
-Likewise the four PNGs previously cited as "Wine exe captures"
+Unpinned leads, never evidence: four PNGs in agent scratch
 (`~/scratch/w8-wait.png`, `ad-wait.png`, `w10-wait.png`,
-`w11-wait.png`) are unqualified: no capture manifest, no
-version/hash/offset pin, no tool versions. The Wine X11 + SendInput
-rig is **specified, proof pending (#240)**, and the 2026-11-16 retro
-records a fabricated Wine A/B evidence episode. We cannot invoke the
-exe oracle on unpinned captures (owner challenge, 2026-11-16).
+`w11-wait.png`) were once cited as "Wine exe captures". They carry no
+capture manifest, no version/hash/offset pin, and no tool versions.
+The Wine X11 + SendInput rig is **specified, proof pending (#240)**,
+and the 2026-11-16 retro records a fabricated Wine A/B evidence
+episode. We cannot invoke the exe oracle on unpinned captures.
 
 What IS established:
 - Data: the control table above from `Interface1.opi` and
   `State_Waiting.bnd` (codes, rects, bound bodies).
-- Our client: the `BPM` cover is painted over the MUSELECT button in
-  file order; the live-path guard `waiting_song_rect_is_bare_for_host_
-  and_covered_for_peer` pins our divergence, not exe behavior.
-- Owner live observation: as host, a blue song-select button was
-  expected at this rect; our client showed the `BPM` box.
+- Our client: the `BPM` cover is authored over the MUSELECT button
+  and paints after it in file order, so a role filter alone decides
+  which body reaches the screen.
+- Pins for the rule: `waiting_song_rect_bodies_swap_with_the_role`
+  (the arms), the shell seam `host_paints_the_select_button_while_
+  peer_keeps_the_bpm_cover`, and the live-path guard
+  `waiting_song_rect_shows_select_button_for_host_and_cover_for_peer`
+  (references computed in-process from the same staged art, no
+  capture pixel).
+- Owner live observation: as host, the owner expected a blue
+  song-select button at this rect and the client showed the `BPM`
+  box.
 
 **Next evidence step:** a qualified Wine/exe capture of the host
 Waiting screen with provenance (version, hash, offsets, evidence IDs,
-capture manifest), gated by #240. Until then the host/peer display
-rule is OPEN, and any shipped behavior based on the unpinned captures
-is provisional.
+capture manifest), gated by #240. That capture settles the exe display
+rule; until then the rule above stays the owner's decision.
 
 Click routing is untouched by the art rule: the host still opens the
 song dialog from this rect (dispatch case file `0xb2622`), which is
-exe behavior, not a shell gap. Guards: shell seam
-`host_reads_the_bare_song_rect_and_a_peer_keeps_the_bpm_cover`, live
-path `waiting_song_rect_is_bare_for_host_and_covered_for_peer`
-(computes the backdrop-only reference in-process), and the existing
-master/peer song-dialog click guards.
+exe behavior, not a shell gap. The master/peer song-dialog click
+guards (`waiting_mu_select_*`) are unchanged.
 
 Shot-walk verdict (guest view, `docs/screenshots/waiting-guest.png`):
 the shot walk replays the master waiting instant from seat 5 of the
 same Live duo (same arena word, room song 757, captions, and
 3012/3013 chat — `crates/recomp2jam/src/shots.rs` `guest_waiting_room` /
 `seeded_guest_game`). The guest frame differs from the master
-`waiting.png` in the seat plates and the song rect (the current
-shell rule, which is OPEN pending exe evidence — "The waiting song
-rect" above) and
-differs from `musicselect.png` in 330774 of 360300 raw bytes: no
-dialog art, no structure, no song panel (gate hides them even when
-staged), while the staged `BPM` caption stays (catalog column
-present, never `-0-`).
+`waiting.png` in the seat plates and the song rect (the owner-decision
+shell rule — "The waiting song rect" above) and differs from
+`musicselect.png` in 330774 of 360300 raw bytes: no dialog art, no
+structure, no song panel (gate hides them even when staged), while the
+staged `BPM` caption stays (catalog column present, never `-0-`).
 Gate state on the walked guest: `is_room_master` false,
 `all_peers_ready` true, `can_start_game` false, Confirm stays in
 Waiting — the non-master arm (READY shown, START hidden;
