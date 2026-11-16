@@ -1405,11 +1405,24 @@ fn stage_session_catalog(session: &mut session::OnlineSession) {
     };
     match o2jam_file::parse_ojn_list(&bytes) {
         Ok(entries) => {
-            session.set_song_catalog(&entries);
+            session.set_song_catalog_with_labels(&entries, &catalog_labels(&bytes));
             tracing::info!("song catalog staged");
         }
         Err(source) => {
             tracing::debug!(%source, "song catalog unparsable; dialog stages row-less");
+        }
+    }
+}
+
+/// The catalog's table-5 label buckets (the song dialog's label column
+/// input, ticket #273). An unreadable middle region stages no bucket:
+/// that column then keeps no row, exactly like a song the table omits.
+fn catalog_labels(bytes: &[u8]) -> Vec<o2jam_file::OjnMidTagEntry> {
+    match o2jam_file::parse_ojn_list_labels(bytes) {
+        Ok(labels) => labels,
+        Err(source) => {
+            tracing::debug!(%source, "song labels unparsable; label filter keeps no row");
+            Vec::new()
         }
     }
 }
@@ -1445,7 +1458,7 @@ fn stage_offline_music_boards(game: &mut o2jam_shell::ScreenGame) {
     };
     match o2jam_file::parse_ojn_list(&bytes) {
         Ok(entries) => {
-            game.set_song_catalog(&entries);
+            game.set_song_catalog_with_labels(&entries, &catalog_labels(&bytes));
             tracing::info!("offline song catalog staged");
         }
         Err(source) => {

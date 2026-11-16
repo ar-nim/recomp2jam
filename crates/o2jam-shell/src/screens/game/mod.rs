@@ -52,13 +52,15 @@ use super::side::{
     wallet_row_caption, CreateRoomAction, CreateRoomForm, LankingSong, LankingSort, MusicShopRow,
     MyRoomAction, MyRoomState, PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab,
     PlanetPromo, RoomDialog, SelectMusicSong, ShopAction, ShopGiftNoop, ShopGood, SideScreen,
-    WalletRow, WalletState, GEM_LABEL, O2_CASH_LABEL, OPTION_GAME_BLEND_NO, OPTION_GAME_BLEND_YES,
-    OPTION_GAME_EFFECT_HIGH, OPTION_GAME_EFFECT_LOW, OPTION_GAME_EFFECT_NORMAL,
-    OPTION_GAME_GUIDE_LONG, OPTION_GAME_GUIDE_MIDDLE, OPTION_GAME_GUIDE_NOUSE,
-    OPTION_GAME_GUIDE_SHORT, OPTION_GAME_LONGNOTE_NONE, OPTION_GAME_LONGNOTE_USED,
-    OPTION_GAME_MODE_FULL, OPTION_GAME_MODE_WIN, OPTION_GAME_NOTETYPE1, OPTION_GAME_NOTETYPE2,
-    OPTION_KEY_3KEY_FIRST, OPTION_KEY_3KEY_MODE, OPTION_KEY_7KEY_MODE, OPTION_KEY_LANE_FIRST,
-    OPTION_KEY_TEST, OPTION_SOUND_BG_EFFECT_DOWN, OPTION_SOUND_BG_EFFECT_UP,
+    WalletRow, WalletState, GEM_LABEL, O2_CASH_LABEL, OPTION_GAME_BLEND_NO,
+    OPTION_GAME_BLEND_YES, OPTION_GAME_EFFECT_HIGH, OPTION_GAME_EFFECT_LOW,
+    OPTION_GAME_EFFECT_NORMAL, OPTION_GAME_GUIDE_LONG, OPTION_GAME_GUIDE_MIDDLE,
+    OPTION_GAME_GUIDE_NOUSE, OPTION_GAME_GUIDE_SHORT, OPTION_GAME_LONGNOTE_NONE,
+    OPTION_GAME_LONGNOTE_USED, OPTION_GAME_MODE_FULL, OPTION_GAME_MODE_WIN,
+    OPTION_GAME_NOTETYPE1, OPTION_GAME_NOTETYPE2, OPTION_KEY_3KEY_FIRST, OPTION_KEY_3KEY_MODE,
+    OPTION_KEY_7KEY_MODE, OPTION_KEY_LANE_FIRST, OPTION_KEY_TEST, OPTION_SOUND_BG_EFFECT_DOWN,
+    OPTION_SOUND_BG_EFFECT_UP, select_filter_choice_at, select_music_songs_with_labels,
+    SelectMusicFilter,
     OPTION_SOUND_BG_MUSIC_DOWN, OPTION_SOUND_BG_MUSIC_UP, OPTION_SOUND_GAME_EFFECT_DOWN,
     OPTION_SOUND_GAME_EFFECT_UP, OPTION_SOUND_GAME_MUSIC_DOWN, OPTION_SOUND_GAME_MUSIC_UP,
     PLANET_OPTION_FIRST_TAB, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE,
@@ -68,7 +70,7 @@ use crate::{menu_of, InputEdge, InputSnapshot, MenuKey};
 use o2jam_audio::{
     song_position_ms, AudioBackend, BgmSelection, CueOutcome, PcmSamples, SceneBgm, SceneCue,
 };
-use o2jam_file::{AvatarItemTable, OjnListEntry};
+use o2jam_file::{AvatarItemTable, OjnListEntry, OjnMidTagEntry};
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams, PEER_SLOT_COUNT};
 use o2jam_net::gift::{ClaimGift, GetGiftMessageList, GiftType};
 use o2jam_net::play::{MusicListAnswer, SetRoomMusic};
@@ -616,6 +618,12 @@ pub struct ScreenGame {
     /// Cached copy of the last staged song-select dialog art so the
     /// MUSELECT open trigger can reopen it after an OK close (#266).
     select_music_art_cache: Option<SceneArt>,
+    /// Live filter-column choices of the song dialog (#273): the level,
+    /// label and genre buttons narrow the search table exactly as the
+    /// exe's chained filters do (`docs/select-filters.md`). Reset to
+    /// [`SelectMusicFilter::ALL`] whenever the dialog opens, the exe's
+    /// ctor sentinels.
+    select_filter: SelectMusicFilter,
     /// Open room dialog, if any (create-room or password entry over Room).
     room_dialog: Option<RoomDialog>,
     /// Create-room form behind the dialog (cleared on open).
@@ -1020,6 +1028,7 @@ impl ScreenGame {
             skill_counts: [0, 0, 0],
             select_music_art: None,
             select_music_art_cache: None,
+            select_filter: SelectMusicFilter::ALL,
             room_dialog: None,
             create_room_form: CreateRoomForm::new(),
             password_form: PasswordForm::new(),
@@ -1505,6 +1514,17 @@ impl ScreenGame {
     #[must_use]
     pub fn select_music_art_cached(&self) -> bool {
         self.select_music_art_cache.is_some()
+    }
+
+    /// Staged placements of the open song-select dialog (`None` while
+    /// the overlay is closed). The filter columns and the OK pill are
+    /// hit-tested against these, so callers read the same geometry the
+    /// clicks do.
+    #[must_use]
+    pub fn select_music_placements(&self) -> Option<&[ScenePlacement]> {
+        self.select_music_art
+            .as_ref()
+            .map(|art| art.placements.as_slice())
     }
     /// Queued RETRY press for the session bridge, if any (`StartGame`
     /// 4010, `0xfaa` — the exe's result RETRY relay event,
@@ -2697,7 +2717,9 @@ impl ScreenGame {
     /// when the row, the slot code, the song id, or the speed has no
     /// source — nothing is invented.
     fn select_row_pick(&self, index: usize) -> Option<SetRoomMusic> {
-        let row = select_music_rows(&self.catalog_songs).get(index).copied()?;
+        let row = select_music_rows(&self.catalog_songs, self.select_filter)
+            .get(index)
+            .copied()?;
         let difficulty = u8::try_from(row.slot).ok()?;
         Difficulty::from_code(difficulty)?;
         Some(SetRoomMusic {
@@ -2733,18 +2755,18 @@ impl ScreenGame {
     /// song through [`Self::pick_select_music_row`]. Only the room
     /// master sees the dialog (paint gates it) and only masters pick
     /// — the `MUSELECT 0x16200003` click handler drops non-master
-    /// clicks (file `0xb2622`). Anything else falls through to the
-    /// seat buttons below: the dialog chrome (filters, pager,
-    /// search, chosung) has no evidenced click behavior, so it stays
-    /// display-only and BACK stays reachable. The OK button is the
-    /// one evidenced exception (ticket #232): with a staged pick it
-    /// confirms and closes the dialog so START can proceed. `true`
-    /// consumed.
+    /// clicks (file `0xb2622`). The three filter columns narrow the
+    /// table first (ticket #273, [`Self::click_select_filter`]). The
+    /// rest of the chrome (pager, search, chosung) has no evidenced
+    /// click behavior, so it stays display-only and BACK stays
+    /// reachable. The OK button is the other evidenced exception
+    /// (ticket #232): with a staged pick it confirms and closes the
+    /// dialog so START can proceed. `true` consumed.
     fn click_select_music(&mut self, x: i32, y: i32) -> bool {
         if !self.is_room_master() || self.select_music_art.is_none() {
             return false;
         }
-        let rows = select_music_rows(&self.catalog_songs);
+        let rows = select_music_rows(&self.catalog_songs, self.select_filter);
         if let Some(index) = select_row_hit(x, y, rows.len()) {
             return self.pick_select_music_row(index);
         }
@@ -2763,7 +2785,32 @@ impl ScreenGame {
                 return true;
             }
         }
-        false
+        self.click_select_filter(x, y)
+    }
+
+    /// Song-dialog filter columns (ticket #273): a click on a
+    /// `IDC_BUTTON_DSMUSIC_STEP{1,2,3}_*` button stores that column's
+    /// choice and the table narrows on the next paint. The exe does the
+    /// same — the click handlers store `code - base` in the dialog
+    /// state word (level VA `0x43f6c2`, label VA `0x43f7ee`, genre VA
+    /// `0x43f91b`) and rerun the filter chain at once (VA `0x446950`).
+    /// `true` consumed.
+    fn click_select_filter(&mut self, x: i32, y: i32) -> bool {
+        let Some(art) = self.select_music_art.as_ref() else {
+            return false;
+        };
+        let Some(choice) = select_filter_choice_at(&art.placements, x, y) else {
+            return false;
+        };
+        self.select_filter.choose(choice);
+        true
+    }
+
+    /// Live filter-column choices of the song dialog (the search table
+    /// narrows by them).
+    #[must_use]
+    pub fn select_filter(&self) -> SelectMusicFilter {
+        self.select_filter
     }
     /// Whether a click hits a staged Waiting confirm button
     /// (START/READY ids only; art-less clicks land nowhere — no pinned
@@ -2809,6 +2856,9 @@ impl ScreenGame {
         let mu_select = staged_rect_hit(placements, "IDC_BUTTON_SWAIT_MUSELECT", x, y);
         if mu_select && self.is_room_master() {
             if self.select_music_art.is_none() {
+                // A reopened dialog starts unfiltered, like the exe's
+                // ctor sentinels (VAs `0x43d324`/`0x43d331`/`0x43d33e`).
+                self.select_filter = SelectMusicFilter::ALL;
                 if let Some(cached) = self.select_music_art_cache.clone() {
                     self.select_music_art = Some(cached);
                 } else {
@@ -3058,9 +3108,22 @@ impl ScreenGame {
     /// waiting for a separate staging call). Dead slots stay out; a missing catalog paints dialog art without rows.
     /// The BPM column stages alongside for the waiting `BPM` caption,
     /// and the container tokens for the album-cover path (see
-    /// [`Self::resolve_song_cover`]).
+    /// [`Self::resolve_song_cover`]). Label buckets stay unstaged, so
+    /// the dialog's label filter keeps no row.
     pub fn set_song_catalog(&mut self, entries: &[OjnListEntry<'_>]) -> &mut Self {
-        self.catalog_songs = select_music_songs(entries);
+        self.set_song_catalog_with_labels(entries, &[])
+    }
+
+    /// Stage the song catalog with its `OJNList.dat` table-5 label
+    /// buckets (the song-dialog label column's input, ticket #273);
+    /// every other board stages exactly as [`Self::set_song_catalog`]
+    /// does.
+    pub fn set_song_catalog_with_labels(
+        &mut self,
+        entries: &[OjnListEntry<'_>],
+        labels: &[OjnMidTagEntry],
+    ) -> &mut Self {
+        self.catalog_songs = select_music_songs_with_labels(entries, labels);
         self.catalog_bpm = entries
             .iter()
             .filter(|entry| entry.is_song())
@@ -3141,7 +3204,8 @@ impl ScreenGame {
 
     /// Stage real song-select dialog art (`DAILOG_SELECTMUSIC` placements
     /// plus figures) and open the dialog overlay. Used by MUSELECT
-    /// reopen and tests.
+    /// reopen and tests. Opening clears the filter columns, the exe's
+    /// ctor sentinels (VAs `0x43d324`/`0x43d331`/`0x43d33e`).
     pub fn load_select_music_scene(
         &mut self,
         placements: Vec<ScenePlacement>,
@@ -3151,6 +3215,7 @@ impl ScreenGame {
             placements,
             figures,
         };
+        self.select_filter = SelectMusicFilter::ALL;
         self.select_music_art_cache = Some(art.clone());
         self.select_music_art = Some(art);
         self
@@ -5566,7 +5631,7 @@ impl ScreenGame {
             return;
         };
         let slots = SelectTextSlots::from_placements(&art.placements);
-        let rows = select_music_rows(&self.catalog_songs);
+        let rows = select_music_rows(&self.catalog_songs, self.select_filter);
         paint_select_text(frame, &slots, &rows, self.selected_music);
     }
 
@@ -6398,11 +6463,7 @@ mod game_tests {
             });
         }
         if game.catalog_songs.is_empty() {
-            game.catalog_songs = vec![SelectMusicSong {
-                song_id: 757,
-                title: "First".to_owned(),
-                artist: "Band".to_owned(),
-            }];
+            game.catalog_songs = vec![super::super::side::staged_song(757)];
         }
         if game.audio.is_none() {
             game.with_audio(Box::new(o2jam_audio::NullBackend::new()), HashMap::new());
@@ -6957,6 +7018,71 @@ mod game_tests {
         assert!(
             !game.select_music_dialog_open(),
             "non-master MUSELECT is a no-op"
+        );
+    }
+
+    #[test]
+    fn waiting_select_music_filter_click_narrows_the_search_table() {
+        // Ticket #273 guard. Live chain from boot: `main::run_play` ->
+        // `ScreenGame::paint_waiting` / `click_waiting` ->
+        // `click_select_music` -> `click_select_filter` ->
+        // `SelectMusicFilter::choose` -> `select_music_rows`, which both
+        // the text layer and the row pick read. A level-column click
+        // must store the band and drop every row outside it; a row
+        // click after filtering must then pick the filtered song.
+        use crate::screens::side::{
+            filter_button_placements, filter_catalog_blob, filter_catalog_labels,
+            select_music_rows, SelectGenreFilter, SelectLabelFilter, SelectLevelBand,
+        };
+        const STEP1_EASY_AT: (i32, i32) = (70, 160);
+        const STEP1_HIGHEST_AT: (i32, i32) = (70, 248);
+        const STEP2_GOLD_AT: (i32, i32) = (160, 160);
+        const STEP2_BLACK_AT: (i32, i32) = (160, 190);
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        game.load_select_music_scene(filter_button_placements(), HashMap::new());
+        let blob = filter_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        let labels = filter_catalog_labels();
+        game.set_song_catalog_with_labels(&entries, &labels);
+        fn row_count(game: &ScreenGame) -> usize {
+            select_music_rows(game.select_songs(), game.select_filter()).len()
+        }
+        assert_eq!(row_count(&game), 9, "three songs, three slots each");
+        // Level column: the band stores and the table narrows.
+        game.ingest_snapshot(&InputSnapshot::click_at(STEP1_EASY_AT.0, STEP1_EASY_AT.1));
+        assert_eq!(game.select_filter().level, SelectLevelBand::Easy);
+        assert_eq!(row_count(&game), 3, "only the levels 3/5/7 chart survives");
+        assert!(select_music_rows(game.select_songs(), game.select_filter())
+            .iter()
+            .all(|row| row.song.song_id == 101));
+        // The label column narrows further (level easy x GOLD).
+        game.ingest_snapshot(&InputSnapshot::click_at(STEP2_GOLD_AT.0, STEP2_GOLD_AT.1));
+        assert_eq!(game.select_filter().label, SelectLabelFilter::Gold);
+        assert_eq!(row_count(&game), 3);
+        game.ingest_snapshot(&InputSnapshot::click_at(STEP2_BLACK_AT.0, STEP2_BLACK_AT.1));
+        assert_eq!(game.select_filter().label, SelectLabelFilter::Black);
+        assert_eq!(
+            row_count(&game),
+            0,
+            "no easy chart carries the BLACK bucket"
+        );
+        // A later level click clears the columns chained after it.
+        game.ingest_snapshot(&InputSnapshot::click_at(
+            STEP1_HIGHEST_AT.0,
+            STEP1_HIGHEST_AT.1,
+        ));
+        assert_eq!(game.select_filter().level, SelectLevelBand::Highest);
+        assert_eq!(game.select_filter().label, SelectLabelFilter::All);
+        assert_eq!(game.select_filter().genre, SelectGenreFilter::All);
+        assert_eq!(row_count(&game), 3);
+        // The row pick rides the same filter: row 0 is now song 103.
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 150 + 11));
+        assert_eq!(
+            game.selected_music.map(|pick| pick.music_id),
+            Some(103),
+            "the first filtered row picks the filtered song"
         );
     }
 

@@ -12,6 +12,11 @@ use crate::{read_u32le, unknown_format, FileError};
 /// (`8 + 3264 + 11244 + 6516 + 1440 + 4504 + 40`; docs/file-formats/ojn.md).
 pub const OJN_MID_REGION_LEN: usize = 27016;
 
+/// Offset of the middle region inside a whole `OJNList.dat` file: the
+/// song records come first (`OJN_MID_SONG_COUNT` x
+/// [`crate::OJN_LIST_RECORD_LEN`] = 168600 bytes).
+pub const OJN_MID_REGION_OFFSET: usize = OJN_MID_SONG_COUNT * crate::OJN_LIST_RECORD_LEN;
+
 /// Magic heading the middle region (first header word on the real file).
 pub const OJN_MID_MAGIC: u32 = 63540;
 
@@ -590,6 +595,27 @@ pub fn parse_ojn_mid_table5(bytes: &[u8]) -> Result<Vec<OjnMidTagEntry>, FileErr
     Ok(entries)
 }
 
+/// Parse the table-5 label buckets straight out of a whole
+/// `OJNList.dat` file (song records first, middle region second).
+///
+/// The buckets feed the song dialog's label filter (select-entry
+/// `+0x4`, `docs/select-filters.md`).
+///
+/// # Errors
+///
+/// `FileError::Truncated` when the file carries no middle region, plus
+/// every error [`parse_ojn_mid_region`] reports.
+pub fn parse_ojn_list_labels(bytes: &[u8]) -> Result<Vec<OjnMidTagEntry>, FileError> {
+    let end = OJN_MID_REGION_OFFSET + OJN_MID_REGION_LEN;
+    let region = bytes
+        .get(OJN_MID_REGION_OFFSET..end)
+        .ok_or(FileError::Truncated {
+            need: end,
+            have: bytes.len(),
+        })?;
+    Ok(parse_ojn_mid_region(region)?.tags)
+}
+
 /// Parse the `OJNList.dat` middle region: magic + table-1 count, the
 /// five tables, and the footer. Requires exactly `OJN_MID_REGION_LEN`
 /// bytes.
@@ -992,6 +1018,26 @@ mod tests {
             blob.extend_from_slice(&word.to_le_bytes());
         }
         blob
+    }
+
+    #[test]
+    fn ojn_list_labels_split_the_whole_file_at_the_record_boundary() {
+        // `parse_ojn_list_labels` reads the middle region from
+        // `OJN_MID_REGION_OFFSET` (562 x 300 record bytes), not from the
+        // file start: a whole-file blob whose song records are zeroed
+        // still yields every bucket, and a file cut inside the region is
+        // `Truncated`.
+        let mut file = vec![0u8; OJN_MID_REGION_OFFSET];
+        file.extend_from_slice(&full_mid_region_blob());
+        let tags = parse_ojn_list_labels(&file).unwrap();
+        assert_eq!(tags.len(), OJN_MID_SONG_COUNT);
+        assert_eq!(tags[0].category, 1);
+        assert_eq!(OJN_MID_REGION_OFFSET, 168600);
+        let short = &file[..file.len() - 4];
+        assert!(matches!(
+            parse_ojn_list_labels(short),
+            Err(FileError::Truncated { .. })
+        ));
     }
 
     #[test]
