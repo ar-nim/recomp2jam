@@ -49,7 +49,11 @@ roles: they ride alongside the one state role and never replace it.
 
 Every issue enters with `needs-triage` — no exception for the reporter or
 for what the issue was cut from. The flow is always the same: issue created
-→ triage → work → loop until fixed. The triage step assigns the category
+→ triage → work. After a work round, the issue moves to whatever the
+evidence supports — another work round, `needs-info` (waiting on the
+reporter or owner), `needs-owner`, `ready-for-human`, `wontfix`, or close —
+there is no implied promise to loop until fixed. The triage step assigns the
+category
 (issue **type**: Bug, Task, or Feature) and the role (`ready-for-agent`,
 `ready-for-human`, `needs-info`, `wontfix`), adds the component label, and
 sizes the acceptance. Triage may be fast — one pass may conclude the issue
