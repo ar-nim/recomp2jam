@@ -1149,7 +1149,8 @@ pub const SELECT_DIFFICULTY_LETTERS: [&str; OJN_LEVEL_COUNT] = ["E", "N", "H"];
 
 /// Genre captions, top to bottom (reference column 발라드/락/댄스/
 /// 힙합,R&B/재즈,펑크/클래식/기타). No exe genre-name table is
-/// pinned, so these are reference-transcribed stand-ins.
+/// pinned, so these are reference-transcribed stand-ins; the filter
+/// itself tests pinned genre ids ([`SelectGenreFilter`]).
 pub const SELECT_GENRE_FILTERS: [&str; 8] = [
     "ALL",
     "BALLAD",
@@ -1161,9 +1162,214 @@ pub const SELECT_GENRE_FILTERS: [&str; 8] = [
     "ETC",
 ];
 
+// --- Song-dialog filters (ticket #273, `docs/select-filters.md`) ---
+//
+// The dialog carries three filter columns of bound OPI buttons. Each
+// column is a radio group: a click stores the button's value (code
+// minus the family base) in a dialog state word, then reruns the
+// filter chain master list -> level -> label -> genre, so the table
+// narrows at once. The rules below are the chain's own predicates
+// (AngelO2Jam.exe 7.55, sha256 `83a04541…`; static pins, offsets in
+// `docs/select-filters.md`).
+
+/// Level-band buttons (left column, `IDC_BUTTON_DSMUSIC_STEP1_*`,
+/// codes `0x2720101C..0x27201020`, top to bottom).
+///
+/// Band `n` keeps the rows whose chart level (select-entry `+0x212`,
+/// the level of that row's difficulty) passes the exe's compare:
+/// `1 <= level < 8`, `8 <= level < 19`, `19 <= level < 27`, then
+/// `level >= 27` (5-arm jump table VA `0x447038`, file `0x47038`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SelectLevelBand {
+    /// `IDC_BUTTON_DSMUSIC_STEP1_ALL` — every level.
+    #[default]
+    All,
+    /// `IDC_BUTTON_DSMUSIC_STEP1_EASY` — levels 1..=7.
+    Easy,
+    /// `IDC_BUTTON_DSMUSIC_STEP1_INTERMEDIATE` — levels 8..=18.
+    Intermediate,
+    /// `IDC_BUTTON_DSMUSIC_STEP1_HIGH` — levels 19..=26.
+    High,
+    /// `IDC_BUTTON_DSMUSIC_STEP1_HIGHEST` — levels 27 and up.
+    Highest,
+}
+
+impl SelectLevelBand {
+    /// Whether a chart level falls in this band.
+    #[must_use]
+    pub fn keeps(self, level: u16) -> bool {
+        match self {
+            Self::All => true,
+            Self::Easy => (1..8).contains(&level),
+            Self::Intermediate => (8..19).contains(&level),
+            Self::High => (19..27).contains(&level),
+            Self::Highest => level >= 27,
+        }
+    }
+}
+
+/// Label-bucket buttons (middle column, `IDC_BUTTON_DSMUSIC_STEP2_*`,
+/// codes `0x2720B021..0x2720B026`, top to bottom).
+///
+/// Button `n` keeps the rows whose bucket (select-entry `+0x4`, the
+/// `OJNList.dat` table-5 category copied from `song+0x194`) equals
+/// `n`: GOLD 1, BLACK 2, BLUE 3, RED 4, SILVER 5 (6-arm jump table VA
+/// `0x447718`, file `0x47718`). The banner row that names these
+/// buttons is off by one against them — observed exe behavior kept
+/// OPEN (`o2jam_file::ojn_step2_banner_entry`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SelectLabelFilter {
+    /// `IDC_BUTTON_DSMUSIC_STEP2_ALL` — every bucket.
+    #[default]
+    All,
+    /// `IDC_BUTTON_DSMUSIC_STEP2_GOLD` — bucket 1.
+    Gold,
+    /// `IDC_BUTTON_DSMUSIC_STEP2_BLACK` — bucket 2.
+    Black,
+    /// `IDC_BUTTON_DSMUSIC_STEP2_BLUE` — bucket 3.
+    Blue,
+    /// `IDC_BUTTON_DSMUSIC_STEP2_RED` — bucket 4.
+    Red,
+    /// `IDC_BUTTON_DSMUSIC_STEP2_SILVER` — bucket 5.
+    Silver,
+}
+
+impl SelectLabelFilter {
+    /// Table-5 bucket this button keeps (`None` for the ALL button).
+    fn bucket(self) -> Option<u16> {
+        match self {
+            Self::All => None,
+            Self::Gold => Some(1),
+            Self::Black => Some(2),
+            Self::Blue => Some(3),
+            Self::Red => Some(4),
+            Self::Silver => Some(5),
+        }
+    }
+
+    /// Whether a song's bucket survives this button. A song without a
+    /// bucket stores 0, which no button keeps (the exe compares the
+    /// entry word against `n` in 1..=5).
+    fn keeps(self, label: Option<u16>) -> bool {
+        self.bucket().is_none_or(|bucket| label == Some(bucket))
+    }
+}
+
+/// Genre buttons (right column, `IDC_BUTTON_DSMUSIC_STEP3_*`, codes
+/// `0x2720B027..0x2720B02E`, top to bottom).
+///
+/// Each button keeps a pinned genre-id set (select-entry `+0x214`, the
+/// catalog's genre word low half; 8-arm jump table VA `0x447e50`, file
+/// `0x47e50`). Dance takes 2/3/9 and ETC takes 10 because the shipped
+/// catalog uses those ids.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SelectGenreFilter {
+    /// `IDC_BUTTON_DSMUSIC_STEP3_ALL` — every genre.
+    #[default]
+    All,
+    /// `IDC_BUTTON_DSMUSIC_STEP3_BALLAD` — genre 0.
+    Ballad,
+    /// `IDC_BUTTON_DSMUSIC_STEP3_ROCK` — genre 1.
+    Rock,
+    /// `IDC_BUTTON_DSMUSIC_STEP3_DANCE` — genres 2, 3 and 9.
+    Dance,
+    /// `IDC_BUTTON_DSMUSIC_STEP3_HIPHOP_SOUL` — genres 4 and 5.
+    HipHopSoul,
+    /// `IDC_BUTTON_DSMUSIC_STEP3_JAZZ_FUNK` — genres 6 and 7.
+    JazzFunk,
+    /// `IDC_BUTTON_DSMUSIC_STEP3_CLASSIC` — genre 8.
+    Classic,
+    /// `IDC_BUTTON_DSMUSIC_STEP3_ETC` — genre 10.
+    Etc,
+}
+
+impl SelectGenreFilter {
+    /// Whether a song's genre id survives this button.
+    #[must_use]
+    pub fn keeps(self, genre: u16) -> bool {
+        match self {
+            Self::All => true,
+            Self::Ballad => genre == 0,
+            Self::Rock => genre == 1,
+            Self::Dance => matches!(genre, 2 | 3 | 9),
+            Self::HipHopSoul => matches!(genre, 4 | 5),
+            Self::JazzFunk => matches!(genre, 6 | 7),
+            Self::Classic => genre == 8,
+            Self::Etc => genre == 10,
+        }
+    }
+}
+
+/// One clicked filter button, with the choice it stores.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectFilterChoice {
+    /// A level-band button.
+    Level(SelectLevelBand),
+    /// A label-bucket button.
+    Label(SelectLabelFilter),
+    /// A genre button.
+    Genre(SelectGenreFilter),
+}
+
+/// Live filter states of the song dialog, one per column.
+///
+/// The exe keeps three dialog state words (level `+0x6BC`, label
+/// `+0x6C0`, genre `+0x6C4`) and chains them: level picks from the
+/// master list, label from the level result, genre from the label
+/// result — a logical AND in that order.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SelectMusicFilter {
+    /// Level-band column choice.
+    pub level: SelectLevelBand,
+    /// Label-bucket column choice.
+    pub label: SelectLabelFilter,
+    /// Genre column choice.
+    pub genre: SelectGenreFilter,
+}
+
+impl SelectMusicFilter {
+    /// No filter chosen: the dialog's opening state (the exe ctor's
+    /// sentinels 5/6/8, VAs `0x43d324`/`0x43d331`/`0x43d33e`, which no
+    /// button reaches).
+    pub const ALL: Self = Self {
+        level: SelectLevelBand::All,
+        label: SelectLabelFilter::All,
+        genre: SelectGenreFilter::All,
+    };
+
+    /// Store one clicked button, applying the exe's cascade rule: a
+    /// click clears the filters chained *after* it, because the chain
+    /// reruns from the clicked column with the later states reset to
+    /// ALL (level click: store VA `0x446d08`..`0x446d14`; label click:
+    /// VA `0x4473d3`..`0x4473df`). Filters are therefore combined in
+    /// click order, level first.
+    pub fn choose(&mut self, choice: SelectFilterChoice) {
+        match choice {
+            SelectFilterChoice::Level(band) => {
+                self.level = band;
+                self.label = SelectLabelFilter::All;
+                self.genre = SelectGenreFilter::All;
+            }
+            SelectFilterChoice::Label(label) => {
+                self.label = label;
+                self.genre = SelectGenreFilter::All;
+            }
+            SelectFilterChoice::Genre(genre) => self.genre = genre,
+        }
+    }
+
+    /// Whether one chart row survives all three columns.
+    #[must_use]
+    pub fn keeps(self, song: &SelectMusicSong, slot: usize) -> bool {
+        self.level.keeps(song.chart_level(slot))
+            && self.label.keeps(song.label)
+            && self.genre.keeps(song.genre)
+    }
+}
+
 /// Staged catalog song: the identity fields the search table names
-/// (`OJNList.dat` record; owned copies so the catalog outlives the
-/// parse borrow).
+/// plus the filter inputs (`OJNList.dat` record; owned copies so the
+/// catalog outlives the parse borrow).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectMusicSong {
     /// Song id (matches the `o2ma###` file number).
@@ -1172,12 +1378,45 @@ pub struct SelectMusicSong {
     pub title: String,
     /// Song artist.
     pub artist: String,
+    /// Per-difficulty chart levels (`entry+0x212` input): the record's
+    /// `level_flags` low half (Easy), high half (Normal), then
+    /// `stable_minor` low half (Hard). The exe indexes exactly these
+    /// three words by the chosen difficulty (VA `0x444268`/`0x44426e`,
+    /// ev `b5c3094a…`).
+    pub levels: [u16; OJN_LEVEL_COUNT],
+    /// Chart genre id (`entry+0x214`): the catalog record's genre word
+    /// low half (0..10 on the 7.55 file).
+    pub genre: u16,
+    /// Song-wheel label bucket (`entry+0x4`): the `OJNList.dat`
+    /// table-5 category 1..=5, `None` while no bucket is staged.
+    pub label: Option<u16>,
+}
+
+impl SelectMusicSong {
+    /// Chart level of one difficulty slot (0 outside the staged
+    /// [`OJN_LEVEL_COUNT`] slots, which no row asks for).
+    #[must_use]
+    pub fn chart_level(&self, slot: usize) -> u16 {
+        self.levels.get(slot).copied().unwrap_or(0)
+    }
 }
 
 /// Catalog songs in file order, dead slots filtered out exactly like
-/// [`music_shop_songs`]; empty without catalog data.
+/// [`music_shop_songs`]; empty without catalog data. Label buckets
+/// stay unstaged: use [`select_music_songs_with_labels`] when the
+/// table-5 tags are parsed.
 #[must_use]
 pub fn select_music_songs(entries: &[OjnListEntry<'_>]) -> Vec<SelectMusicSong> {
+    select_music_songs_with_labels(entries, &[])
+}
+
+/// Catalog songs with their table-5 label buckets attached (the STEP2
+/// filter input). A song id absent from `labels` keeps no bucket.
+#[must_use]
+pub fn select_music_songs_with_labels(
+    entries: &[OjnListEntry<'_>],
+    labels: &[o2jam_file::OjnMidTagEntry],
+) -> Vec<SelectMusicSong> {
     entries
         .iter()
         .filter(|entry| entry.is_song())
@@ -1185,8 +1424,154 @@ pub fn select_music_songs(entries: &[OjnListEntry<'_>]) -> Vec<SelectMusicSong> 
             song_id: entry.song_id,
             title: entry.title.clone(),
             artist: entry.artist.clone(),
+            levels: [
+                low_word(entry.level_flags),
+                high_word(entry.level_flags),
+                low_word(entry.stable_minor),
+            ],
+            genre: low_word(entry.genre),
+            label: label_bucket(labels, entry.song_id),
         })
         .collect()
+}
+
+/// Low `u16` of a catalog word (checked narrowing, PERF-07).
+fn low_word(word: u32) -> u16 {
+    u16::try_from(word & 0xFFFF).unwrap_or(0)
+}
+
+/// High `u16` of a catalog word.
+fn high_word(word: u32) -> u16 {
+    u16::try_from(word >> 16).unwrap_or(0)
+}
+
+/// Table-5 bucket for one song id (`None` while no tag carries it).
+fn label_bucket(labels: &[o2jam_file::OjnMidTagEntry], song_id: u32) -> Option<u16> {
+    labels
+        .iter()
+        .find(|tag| tag.song_id == song_id)
+        .and_then(|tag| u16::try_from(tag.category).ok())
+}
+
+/// Catalog song fixture for the shell's dialog tests: the `First`/`Band`
+/// identity those tests assert, levels 1/2/3 (one per difficulty slot),
+/// genre 0 and no label bucket.
+#[cfg(test)]
+pub(crate) fn staged_song(song_id: u32) -> SelectMusicSong {
+    SelectMusicSong {
+        song_id,
+        title: "First".to_owned(),
+        artist: "Band".to_owned(),
+        levels: [1, 2, 3],
+        genre: 0,
+        label: None,
+    }
+}
+
+/// Catalog blob that splits across every filter column (ticket #273):
+/// song 101 (levels 3/5/7, ballad, GOLD), song 102 (levels 10/15/20,
+/// rock, BLACK), song 103 (levels 28/30/40, ETC, no bucket).
+#[cfg(test)]
+pub(crate) fn filter_catalog_blob() -> Vec<u8> {
+    let mut blob = filter_song_record(101, [3, 5, 7], 0);
+    blob.extend_from_slice(&filter_song_record(102, [10, 15, 20], 1));
+    blob.extend_from_slice(&filter_song_record(103, [28, 30, 40], 10));
+    blob
+}
+
+/// One catalog record with the filter inputs the dialog reads:
+/// per-difficulty levels (record +24 low/high halves, +28) and the
+/// genre id (+16).
+#[cfg(test)]
+fn filter_song_record(song_id: u32, levels: [u32; 3], genre: u32) -> Vec<u8> {
+    let token = format!("o2ma{song_id}.ojm");
+    let mut rec = vec![0u8; 300];
+    rec[8..11].copy_from_slice(b"ojn");
+    rec[4..8].copy_from_slice(&song_id.to_le_bytes());
+    rec[20..24].copy_from_slice(&124.0f32.to_le_bytes());
+    rec[112..118].copy_from_slice(b"Titled");
+    rec[176..180].copy_from_slice(b"Band");
+    rec[240..240 + token.len()].copy_from_slice(token.as_bytes());
+    rec[24..28].copy_from_slice(&(levels[0] | (levels[1] << 16)).to_le_bytes());
+    rec[28..32].copy_from_slice(&levels[2].to_le_bytes());
+    rec[16..20].copy_from_slice(&genre.to_le_bytes());
+    rec
+}
+
+/// Table-5 buckets of [`filter_catalog_blob`]: GOLD for song 101,
+/// BLACK for song 102, none for song 103.
+#[cfg(test)]
+pub(crate) fn filter_catalog_labels() -> Vec<o2jam_file::OjnMidTagEntry> {
+    vec![
+        o2jam_file::OjnMidTagEntry {
+            song_id: 101,
+            category: 1,
+        },
+        o2jam_file::OjnMidTagEntry {
+            song_id: 102,
+            category: 2,
+        },
+    ]
+}
+
+/// [`filter_catalog_blob`] staged as songs plus its label buckets.
+#[cfg(test)]
+pub(crate) fn filter_catalog_songs() -> Vec<SelectMusicSong> {
+    let blob = filter_catalog_blob();
+    let entries = o2jam_file::parse_ojn_list(&blob).expect("fixture parses");
+    select_music_songs_with_labels(&entries, &filter_catalog_labels())
+}
+
+/// The dialog's 19 filter buttons at their `Dialog_SelectMusic.bnd`
+/// rects (three columns of 94x29 cells, 29-pixel pitch).
+#[cfg(test)]
+pub(crate) fn filter_button_placements() -> Vec<ScenePlacement> {
+    fn column(ids: &[&str], x: i32) -> Vec<ScenePlacement> {
+        ids.iter()
+            .enumerate()
+            .map(|(row, id)| ScenePlacement {
+                role: super::super::avatar::PlacementRole::Single,
+                id: (*id).to_owned(),
+                code: 0,
+                sprite: None,
+                rect: Rect {
+                    x,
+                    y: 118 + 29 * i32::try_from(row).unwrap_or(0),
+                    w: 94,
+                    h: 29,
+                },
+            })
+            .collect()
+    }
+    const LEVEL: [&str; 5] = [
+        "IDC_BUTTON_DSMUSIC_STEP1_ALL",
+        "IDC_BUTTON_DSMUSIC_STEP1_EASY",
+        "IDC_BUTTON_DSMUSIC_STEP1_INTERMEDIATE",
+        "IDC_BUTTON_DSMUSIC_STEP1_HIGH",
+        "IDC_BUTTON_DSMUSIC_STEP1_HIGHEST",
+    ];
+    const LABEL: [&str; 6] = [
+        "IDC_BUTTON_DSMUSIC_STEP2_ALL",
+        "IDC_BUTTON_DSMUSIC_STEP2_GOLD",
+        "IDC_BUTTON_DSMUSIC_STEP2_BLACK",
+        "IDC_BUTTON_DSMUSIC_STEP2_BLUE",
+        "IDC_BUTTON_DSMUSIC_STEP2_RED",
+        "IDC_BUTTON_DSMUSIC_STEP2_SILVER",
+    ];
+    const GENRE: [&str; 8] = [
+        "IDC_BUTTON_DSMUSIC_STEP3_ALL",
+        "IDC_BUTTON_DSMUSIC_STEP3_BALLAD",
+        "IDC_BUTTON_DSMUSIC_STEP3_ROCK",
+        "IDC_BUTTON_DSMUSIC_STEP3_DANCE",
+        "IDC_BUTTON_DSMUSIC_STEP3_HIPHOP_SOUL",
+        "IDC_BUTTON_DSMUSIC_STEP3_JAZZ_FUNK",
+        "IDC_BUTTON_DSMUSIC_STEP3_CLASSIC",
+        "IDC_BUTTON_DSMUSIC_STEP3_ETC",
+    ];
+    let mut placements = column(&LEVEL, 24);
+    placements.extend(column(&LABEL, 125));
+    placements.extend(column(&GENRE, 226));
+    placements
 }
 
 /// One search-result row: one song at one difficulty slot. The
@@ -1224,19 +1609,103 @@ impl SelectMusicRow<'_> {
     }
 }
 
-/// Search-result rows in catalog order, easy-first; empty without
-/// songs. The reference client drops charts the install lacks; the
-/// staged data has no availability source, so every slot draws
-/// (documented gap).
+/// Search-result rows in catalog order, easy-first, narrowed by the
+/// dialog's filter columns; empty without songs. The reference client
+/// drops charts the install lacks; the staged data has no
+/// availability source, so every slot draws (documented gap).
 #[must_use]
-pub fn select_music_rows(songs: &[SelectMusicSong]) -> Vec<SelectMusicRow<'_>> {
+pub fn select_music_rows(
+    songs: &[SelectMusicSong],
+    filter: SelectMusicFilter,
+) -> Vec<SelectMusicRow<'_>> {
     let mut rows = Vec::with_capacity(songs.len().saturating_mul(OJN_LEVEL_COUNT));
     for song in songs {
         for slot in 0..OJN_LEVEL_COUNT {
-            rows.push(SelectMusicRow { song, slot });
+            if filter.keeps(song, slot) {
+                rows.push(SelectMusicRow { song, slot });
+            }
         }
     }
     rows
+}
+
+/// Level-band buttons of the staged dialog, top to bottom.
+const SELECT_LEVEL_BUTTONS: [(&str, SelectLevelBand); 5] = [
+    ("IDC_BUTTON_DSMUSIC_STEP1_ALL", SelectLevelBand::All),
+    ("IDC_BUTTON_DSMUSIC_STEP1_EASY", SelectLevelBand::Easy),
+    (
+        "IDC_BUTTON_DSMUSIC_STEP1_INTERMEDIATE",
+        SelectLevelBand::Intermediate,
+    ),
+    ("IDC_BUTTON_DSMUSIC_STEP1_HIGH", SelectLevelBand::High),
+    ("IDC_BUTTON_DSMUSIC_STEP1_HIGHEST", SelectLevelBand::Highest),
+];
+
+/// Label-bucket buttons of the staged dialog, top to bottom.
+const SELECT_LABEL_BUTTONS: [(&str, SelectLabelFilter); 6] = [
+    ("IDC_BUTTON_DSMUSIC_STEP2_ALL", SelectLabelFilter::All),
+    ("IDC_BUTTON_DSMUSIC_STEP2_GOLD", SelectLabelFilter::Gold),
+    ("IDC_BUTTON_DSMUSIC_STEP2_BLACK", SelectLabelFilter::Black),
+    ("IDC_BUTTON_DSMUSIC_STEP2_BLUE", SelectLabelFilter::Blue),
+    ("IDC_BUTTON_DSMUSIC_STEP2_RED", SelectLabelFilter::Red),
+    ("IDC_BUTTON_DSMUSIC_STEP2_SILVER", SelectLabelFilter::Silver),
+];
+
+/// Genre buttons of the staged dialog, top to bottom.
+const SELECT_GENRE_BUTTONS: [(&str, SelectGenreFilter); 8] = [
+    ("IDC_BUTTON_DSMUSIC_STEP3_ALL", SelectGenreFilter::All),
+    ("IDC_BUTTON_DSMUSIC_STEP3_BALLAD", SelectGenreFilter::Ballad),
+    ("IDC_BUTTON_DSMUSIC_STEP3_ROCK", SelectGenreFilter::Rock),
+    ("IDC_BUTTON_DSMUSIC_STEP3_DANCE", SelectGenreFilter::Dance),
+    (
+        "IDC_BUTTON_DSMUSIC_STEP3_HIPHOP_SOUL",
+        SelectGenreFilter::HipHopSoul,
+    ),
+    (
+        "IDC_BUTTON_DSMUSIC_STEP3_JAZZ_FUNK",
+        SelectGenreFilter::JazzFunk,
+    ),
+    (
+        "IDC_BUTTON_DSMUSIC_STEP3_CLASSIC",
+        SelectGenreFilter::Classic,
+    ),
+    ("IDC_BUTTON_DSMUSIC_STEP3_ETC", SelectGenreFilter::Etc),
+];
+
+/// Filter button under a staged-dialog click (`None` outside every
+/// filter band, and while the dialog stages no filter buttons).
+#[must_use]
+pub fn select_filter_choice_at(
+    placements: &[ScenePlacement],
+    x: i32,
+    y: i32,
+) -> Option<SelectFilterChoice> {
+    button_choice_at(placements, &SELECT_LEVEL_BUTTONS, x, y)
+        .map(SelectFilterChoice::Level)
+        .or_else(|| {
+            button_choice_at(placements, &SELECT_LABEL_BUTTONS, x, y).map(SelectFilterChoice::Label)
+        })
+        .or_else(|| {
+            button_choice_at(placements, &SELECT_GENRE_BUTTONS, x, y).map(SelectFilterChoice::Genre)
+        })
+}
+
+/// The clicked button's value from one column table.
+fn button_choice_at<T: Copy>(
+    placements: &[ScenePlacement],
+    buttons: &[(&str, T)],
+    x: i32,
+    y: i32,
+) -> Option<T> {
+    buttons
+        .iter()
+        .find(|(id, _)| {
+            placements
+                .iter()
+                .find(|placed| placed.id == *id)
+                .is_some_and(|placed| super::paint::rect_hit(&placed.rect, x, y))
+        })
+        .map(|(_, value)| *value)
 }
 
 /// Search-tab caption for the row count (reference `검색결과 (1608곡)`).
@@ -1252,9 +1721,14 @@ pub fn select_picked_caption() -> &'static str {
     "SELECTED (0)"
 }
 
-/// Status line under the rows: the exe's `%s -> %s 검색 결과입니다.`
-/// banner format (VA `0x645a50` family, `docs/dialog-strings.md`) with
-/// both filters at the ALL default — nothing stages narrower filters.
+/// Status line under the rows: one of the exe's search banners
+/// (`%s 검색 결과입니다.` / `%s -> %s …` / `%s -> %s-> %s …`, VAs
+/// `0x645A50`/`0x645A64`/`0x645A80`, `docs/dialog-strings.md`). It still
+/// names the ALL path: the exe fills the slots from its STEP1/STEP2/
+/// STEP3 name rows (`0x645524`/`0x6455A0`/`0x6455BC`), and the STEP2
+/// row is off by one against its buttons (GOLD banners `신곡`,
+/// observed exe behavior kept OPEN) — wiring those names is the
+/// filter-banner ticket, not #273 (`docs/select-filters.md`).
 #[must_use]
 pub fn select_status_line() -> &'static str {
     "ALL -> ALL SEARCH RESULT."
@@ -5578,11 +6052,7 @@ mod side_tests {
     #[test]
     fn myroom_gift_views_resolve_names_and_senders() {
         let table = side_item_table();
-        let songs = vec![SelectMusicSong {
-            song_id: 757,
-            title: "First".to_owned(),
-            artist: "Band".to_owned(),
-        }];
+        let songs = vec![staged_song(757)];
         let mut character = CharacterInfo::default();
         character.item_gifts.push(GiftItemInfo {
             gift_id: 7,
@@ -5742,7 +6212,7 @@ mod side_tests {
         let blob = side_catalog();
         let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
         let songs = select_music_songs(&entries);
-        let rows = select_music_rows(&songs);
+        let rows = select_music_rows(&songs, SelectMusicFilter::ALL);
         assert_eq!(rows.len(), 6);
         assert_eq!(rows[0].song.song_id, 757);
         assert_eq!(rows[0].slot, 0);
@@ -5752,7 +6222,7 @@ mod side_tests {
         assert_eq!(rows[3].song.song_id, 770);
         assert_eq!(rows[3].slot, 0);
         assert_eq!(rows[5].slot, 2);
-        assert!(select_music_rows(&[]).is_empty());
+        assert!(select_music_rows(&[], SelectMusicFilter::ALL).is_empty());
     }
 
     #[test]
@@ -5778,9 +6248,197 @@ mod side_tests {
         let blob = side_catalog();
         let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
         let songs = select_music_songs(&entries);
-        let rows = select_music_rows(&songs);
+        let rows = select_music_rows(&songs, SelectMusicFilter::ALL);
         assert!(rows.iter().all(|row| row.level().is_none()));
         assert!(rows.iter().all(|row| row.grade().is_none()));
+    }
+
+    /// Song ids of the rows a filter keeps.
+    fn kept_song_ids(songs: &[SelectMusicSong], filter: SelectMusicFilter) -> Vec<u32> {
+        select_music_rows(songs, filter)
+            .iter()
+            .map(|row| row.song.song_id)
+            .collect()
+    }
+
+    #[test]
+    fn level_bands_keep_their_pinned_edges() {
+        // Ticket #273, STEP1 filter (VA 0x446950, 5-arm table VA
+        // 0x447038): 1 <= level < 8, 8 <= level < 19, 19 <= level < 27,
+        // then level >= 27. Signed compares on the row's chart level.
+        use SelectLevelBand::{All, Easy, High, Highest, Intermediate};
+        assert!(All.keeps(0) && All.keeps(50));
+        assert!(Easy.keeps(1) && Easy.keeps(7));
+        assert!(!Easy.keeps(0) && !Easy.keeps(8));
+        assert!(Intermediate.keeps(8) && Intermediate.keeps(18));
+        assert!(!Intermediate.keeps(7) && !Intermediate.keeps(19));
+        assert!(High.keeps(19) && High.keeps(26));
+        assert!(!High.keeps(18) && !High.keeps(27));
+        assert!(Highest.keeps(27) && Highest.keeps(50));
+        assert!(!Highest.keeps(26));
+    }
+
+    #[test]
+    fn label_buttons_keep_their_own_bucket_only() {
+        // STEP2 filter (VA 0x447050, 6-arm table VA 0x447718): button n
+        // keeps the rows whose `entry+0x4` bucket equals n (GOLD 1 ..
+        // SILVER 5); a song with no bucket matches no button.
+        use SelectLabelFilter::{All, Black, Blue, Gold, Red, Silver};
+        for (button, bucket) in [(Gold, 1u16), (Black, 2), (Blue, 3), (Red, 4), (Silver, 5)] {
+            assert!(button.keeps(Some(bucket)), "button keeps its bucket");
+            assert!(!button.keeps(None), "a bucketless song matches no button");
+            assert!(!button.keeps(Some(bucket % 5 + 1)), "no other bucket");
+        }
+        assert!(All.keeps(Some(1)) && All.keeps(None));
+    }
+
+    #[test]
+    fn genre_buttons_keep_their_pinned_id_sets() {
+        // STEP3 filter (VA 0x447730, 8-arm table VA 0x447e50): ballad 0,
+        // rock 1, dance 2/3/9, hiphop/R&B 4/5, jazz/funk 6/7, classic
+        // 8, ETC 10.
+        use SelectGenreFilter::{All, Ballad, Classic, Dance, Etc, HipHopSoul, JazzFunk, Rock};
+        assert!((0..=10).all(|genre| All.keeps(genre)));
+        assert!(Ballad.keeps(0) && !Ballad.keeps(1));
+        assert!(Rock.keeps(1) && !Rock.keeps(0) && !Rock.keeps(2));
+        assert!(Dance.keeps(2) && Dance.keeps(3) && Dance.keeps(9));
+        assert!(!Dance.keeps(0) && !Dance.keeps(4) && !Dance.keeps(10));
+        assert!(HipHopSoul.keeps(4) && HipHopSoul.keeps(5) && !HipHopSoul.keeps(6));
+        assert!(JazzFunk.keeps(6) && JazzFunk.keeps(7) && !JazzFunk.keeps(8));
+        assert!(Classic.keeps(8) && !Classic.keeps(9));
+        assert!(Etc.keeps(10) && !Etc.keeps(9));
+    }
+
+    #[test]
+    fn select_music_rows_narrow_per_filter_column() {
+        // Ticket #273: each column narrows the search table on its own.
+        let songs = filter_catalog_songs();
+        assert_eq!(kept_song_ids(&songs, SelectMusicFilter::ALL).len(), 9);
+        let level = |band| SelectMusicFilter {
+            level: band,
+            ..SelectMusicFilter::ALL
+        };
+        assert_eq!(
+            kept_song_ids(&songs, level(SelectLevelBand::Easy)),
+            vec![101, 101, 101]
+        );
+        assert_eq!(
+            kept_song_ids(&songs, level(SelectLevelBand::Intermediate)),
+            vec![102, 102]
+        );
+        assert_eq!(
+            kept_song_ids(&songs, level(SelectLevelBand::High)),
+            vec![102]
+        );
+        assert_eq!(
+            kept_song_ids(&songs, level(SelectLevelBand::Highest)),
+            vec![103, 103, 103]
+        );
+        let label = SelectMusicFilter {
+            label: SelectLabelFilter::Black,
+            ..SelectMusicFilter::ALL
+        };
+        assert_eq!(kept_song_ids(&songs, label), vec![102, 102, 102]);
+        let genre = |genre| SelectMusicFilter {
+            genre,
+            ..SelectMusicFilter::ALL
+        };
+        assert_eq!(
+            kept_song_ids(&songs, genre(SelectGenreFilter::Ballad)),
+            vec![101, 101, 101]
+        );
+        assert_eq!(
+            kept_song_ids(&songs, genre(SelectGenreFilter::Etc)),
+            vec![103, 103, 103]
+        );
+    }
+
+    #[test]
+    fn select_filters_compose_as_and_in_click_order() {
+        // The chain runs level -> label -> genre (master +0x640 ->
+        // +0x650 -> +0x660 -> +0x670), so the columns intersect.
+        let songs = filter_catalog_songs();
+        let mut filter = SelectMusicFilter::ALL;
+        filter.choose(SelectFilterChoice::Level(SelectLevelBand::Intermediate));
+        filter.choose(SelectFilterChoice::Label(SelectLabelFilter::Black));
+        filter.choose(SelectFilterChoice::Genre(SelectGenreFilter::Rock));
+        assert_eq!(
+            filter,
+            SelectMusicFilter {
+                level: SelectLevelBand::Intermediate,
+                label: SelectLabelFilter::Black,
+                genre: SelectGenreFilter::Rock,
+            }
+        );
+        assert_eq!(kept_song_ids(&songs, filter), vec![102, 102]);
+        // A column that no song satisfies empties the table.
+        filter.choose(SelectFilterChoice::Genre(SelectGenreFilter::Classic));
+        assert!(kept_song_ids(&songs, filter).is_empty());
+    }
+
+    #[test]
+    fn select_filter_click_clears_the_columns_chained_after_it() {
+        // The exe click path stores 0 (ALL) into the later columns
+        // before chaining (level click VA 0x446d08..0x446d14, label
+        // click VA 0x4473d3..0x4473df), so filters combine in click
+        // order, level first.
+        let mut filter = SelectMusicFilter::ALL;
+        filter.choose(SelectFilterChoice::Label(SelectLabelFilter::Black));
+        filter.choose(SelectFilterChoice::Genre(SelectGenreFilter::Rock));
+        assert_eq!(filter.label, SelectLabelFilter::Black);
+        assert_eq!(filter.genre, SelectGenreFilter::Rock);
+        // A level click drops both later columns.
+        filter.choose(SelectFilterChoice::Level(SelectLevelBand::Easy));
+        assert_eq!(filter.level, SelectLevelBand::Easy);
+        assert_eq!(filter.label, SelectLabelFilter::All);
+        assert_eq!(filter.genre, SelectGenreFilter::All);
+        let songs = filter_catalog_songs();
+        assert_eq!(kept_song_ids(&songs, filter), vec![101, 101, 101]);
+        // A label click drops only the genre column.
+        filter.choose(SelectFilterChoice::Genre(SelectGenreFilter::Rock));
+        filter.choose(SelectFilterChoice::Label(SelectLabelFilter::Black));
+        assert_eq!(filter.level, SelectLevelBand::Easy);
+        assert_eq!(filter.label, SelectLabelFilter::Black);
+        assert_eq!(filter.genre, SelectGenreFilter::All);
+        // Level Easy x label BLACK leaves nothing (song 101 is GOLD).
+        assert!(kept_song_ids(&songs, filter).is_empty());
+    }
+
+    #[test]
+    fn select_filter_choice_maps_the_staged_buttons() {
+        // Every filter button of the staged dialog maps to its column
+        // value; the gaps between the columns and the table band map
+        // to nothing.
+        let placements = filter_button_placements();
+        let hitters = [
+            (70, 160, SelectFilterChoice::Level(SelectLevelBand::Easy)),
+            (70, 248, SelectFilterChoice::Level(SelectLevelBand::Highest)),
+            (
+                160,
+                190,
+                SelectFilterChoice::Label(SelectLabelFilter::Black),
+            ),
+            (
+                160,
+                277,
+                SelectFilterChoice::Label(SelectLabelFilter::Silver),
+            ),
+            (
+                260,
+                300,
+                SelectFilterChoice::Genre(SelectGenreFilter::Classic),
+            ),
+            (260, 333, SelectFilterChoice::Genre(SelectGenreFilter::Etc)),
+            (260, 130, SelectFilterChoice::Genre(SelectGenreFilter::All)),
+        ];
+        for (x, y, want) in hitters {
+            assert_eq!(select_filter_choice_at(&placements, x, y), Some(want));
+        }
+        // Column gaps and the search table never answer as filters.
+        for (x, y) in [(122, 160), (222, 160), (400, 160), (70, 47)] {
+            assert_eq!(select_filter_choice_at(&placements, x, y), None);
+        }
+        assert_eq!(select_filter_choice_at(&[], 70, 160), None);
     }
 
     #[test]

@@ -740,7 +740,10 @@ fn stage_select_music_catalog(game: &mut ScreenGame) {
     }
     if let Ok(archive) = std::fs::read(install_root().join(MUSICSELECT_CATALOG)) {
         if let Ok(entries) = o2jam_file::parse_ojn_list(&archive) {
-            game.set_song_catalog(&entries);
+            // The table-5 buckets ride the same file (ticket #273): the
+            // dialog's label column filters on them.
+            let labels = o2jam_file::parse_ojn_list_labels(&archive).unwrap_or_default();
+            game.set_song_catalog_with_labels(&entries, &labels);
             if !game.select_songs().is_empty() {
                 return;
             }
@@ -3929,7 +3932,9 @@ mod tests {
     fn musicselect_fallback_catalog_lists_four_synthetic_songs() {
         // No game data read: the fallback blobs parse to one row per
         // difficulty slot (four songs, three slots each).
-        use o2jam_shell::screens::side::{select_music_rows, select_music_songs};
+        use o2jam_shell::screens::side::{
+            select_music_rows, select_music_songs, SelectMusicFilter,
+        };
         let bytes = musicselect_fallback_catalog();
         let entries = o2jam_file::parse_ojn_list(&bytes).expect("fallback catalog parses");
         assert_eq!(entries.len(), MUSICSELECT_FALLBACK_SONGS.len());
@@ -3937,7 +3942,7 @@ mod tests {
         assert_eq!(songs.len(), MUSICSELECT_FALLBACK_SONGS.len());
         assert_eq!(songs[0].song_id, u32::from(PLAYING_SONG.music_id));
         assert_eq!(
-            select_music_rows(&songs).len(),
+            select_music_rows(&songs, SelectMusicFilter::ALL).len(),
             MUSICSELECT_FALLBACK_SONGS.len() * 3
         );
     }
@@ -4069,6 +4074,59 @@ mod tests {
             frame[108 * 800 + 360],
             o2jam_render::pack_xrgb(0x10, 0x10, 0x18),
             "no scrim plate under the tab caption"
+        );
+    }
+
+    #[test]
+    fn song_dialog_level_filter_click_narrows_the_live_catalog() {
+        // Ticket #273 live chain with genuine data:
+        // `main::capture_all` -> `seeded_game` -> `walk_to_waiting`
+        // (boot -> Planet -> Channel -> Room -> Waiting as master) ->
+        // `stage_select_music_scene` (real `OJNList.dat` catalog +
+        // `DAILOG_SELECTMUSIC` art) -> `ingest_snapshot` ->
+        // `click_waiting` -> `click_select_music` ->
+        // `click_select_filter` -> `select_music_rows`. The click lands
+        // on the staged `IDC_BUTTON_DSMUSIC_STEP1_EASY` rect, and every
+        // surviving row's chart level must sit in that band (exe STEP1
+        // filter VA `0x446950`: 1 <= level < 8).
+        use o2jam_shell::screens::side::{select_music_rows, SelectLevelBand};
+        if read_install_archives(&install_root()).interface.is_none() {
+            println!("skip: missing {INTERFACE_ARCHIVE}");
+            return;
+        }
+        let mut game = seeded_game();
+        walk_to_waiting(&mut game);
+        stage_select_music_scene(&mut game);
+        let Some(rect) = game.select_music_placements().and_then(|placements| {
+            placements
+                .iter()
+                .find(|placed| placed.id == "IDC_BUTTON_DSMUSIC_STEP1_EASY")
+                .map(|placed| placed.rect)
+        }) else {
+            println!("skip: staged dialog names no STEP1 level buttons");
+            return;
+        };
+        let unfiltered_rows = select_music_rows(game.select_songs(), game.select_filter()).len();
+        assert!(unfiltered_rows > 0, "the catalog stages rows");
+        let click_x = rect.x + i32::try_from(rect.w / 2).unwrap_or(0);
+        let click_y = rect.y + i32::try_from(rect.h / 2).unwrap_or(0);
+        game.ingest_snapshot(&InputSnapshot::click_at(click_x, click_y));
+        assert_eq!(
+            game.select_filter().level,
+            SelectLevelBand::Easy,
+            "the staged level button stores its band"
+        );
+        let filtered = select_music_rows(game.select_songs(), game.select_filter());
+        assert!(
+            filtered.len() < unfiltered_rows,
+            "the band drops rows ({unfiltered_rows} -> {})",
+            filtered.len()
+        );
+        assert!(
+            filtered
+                .iter()
+                .all(|row| SelectLevelBand::Easy.keeps(row.song.chart_level(row.slot))),
+            "every visible row sits in the clicked band"
         );
     }
 

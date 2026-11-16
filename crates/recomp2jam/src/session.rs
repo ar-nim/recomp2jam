@@ -574,7 +574,19 @@ impl OnlineSession {
     /// staging — a missing catalog paints dialog art without rows,
     /// and the chart fetch then warns instead of inventing a path.
     pub fn set_song_catalog(&mut self, entries: &[OjnListEntry<'_>]) -> &mut Self {
-        self.game.set_song_catalog(entries);
+        self.set_song_catalog_with_labels(entries, &[])
+    }
+
+    /// Stage the song catalog with its `OJNList.dat` table-5 label
+    /// buckets (the song dialog's label column input, ticket #273);
+    /// every other board stages exactly as [`Self::set_song_catalog`]
+    /// does.
+    pub fn set_song_catalog_with_labels(
+        &mut self,
+        entries: &[OjnListEntry<'_>],
+        labels: &[o2jam_file::OjnMidTagEntry],
+    ) -> &mut Self {
+        self.game.set_song_catalog_with_labels(entries, labels);
         self.catalog = entries
             .iter()
             .filter(|entry| entry.is_song())

@@ -307,6 +307,11 @@ impl OjnListEntry<'_> {
     }
 }
 
+/// Bytes per `OJNList.dat` song record (the file's leading 562 records,
+/// `[0, 168600)`; the middle tables follow — see
+/// [`crate::OJN_MID_REGION_OFFSET`]).
+pub const OJN_LIST_RECORD_LEN: usize = 300;
+
 /// Parse an `OJNList.dat` song index: consecutive 300-byte records
 /// (record 0 is song 100, not a header). A trailing partial record
 /// (148 bytes in 7.55) is ignored. Dead slots past the song table
@@ -316,7 +321,7 @@ impl OjnListEntry<'_> {
 ///
 /// `FileError::UnknownFormat` when the header magic mismatches.
 pub fn parse_ojn_list(bytes: &[u8]) -> Result<Vec<OjnListEntry<'_>>, FileError> {
-    if bytes.len() < 300 || bytes[8..11] != *b"ojn" {
+    if bytes.len() < OJN_LIST_RECORD_LEN || bytes[8..11] != *b"ojn" {
         return Err(FileError::UnknownFormat {
             magic: bytes[..4.min(bytes.len())].to_vec(),
         });
@@ -324,8 +329,8 @@ pub fn parse_ojn_list(bytes: &[u8]) -> Result<Vec<OjnListEntry<'_>>, FileError> 
     let mut out = Vec::new();
     let mut index = 0usize;
     let mut off = 0usize;
-    while off + 300 <= bytes.len() {
-        let rec = &bytes[off..off + 300];
+    while off + OJN_LIST_RECORD_LEN <= bytes.len() {
+        let rec = &bytes[off..off + OJN_LIST_RECORD_LEN];
         out.push(OjnListEntry {
             index,
             unknown0: read_u32le(bytes, off)?,
@@ -380,7 +385,7 @@ pub fn parse_ojn_list(bytes: &[u8]) -> Result<Vec<OjnListEntry<'_>>, FileError> 
             raw: rec,
         });
         index += 1;
-        off += 300;
+        off += OJN_LIST_RECORD_LEN;
     }
     Ok(out)
 }

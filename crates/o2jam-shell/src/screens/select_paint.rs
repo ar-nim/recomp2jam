@@ -225,7 +225,7 @@ fn paint_slot(frame: &mut Frame<'_>, slot: Option<Rect>, text: &str, ink: u32) {
 #[cfg(test)]
 mod tests {
     use super::super::super::avatar::PlacementRole;
-    use super::super::side::{select_music_rows, SelectMusicSong};
+    use super::super::side::{select_music_rows, staged_song, SelectMusicFilter, SelectMusicSong};
     use super::*;
 
     /// One staged placement at a native rect.
@@ -337,11 +337,7 @@ mod tests {
 
     /// One catalog song (`First`/`Band`).
     fn songs() -> Vec<SelectMusicSong> {
-        vec![SelectMusicSong {
-            song_id: 757,
-            title: "First".to_owned(),
-            artist: "Band".to_owned(),
-        }]
+        vec![staged_song(757)]
     }
 
     /// Any pixel inside `rect` carries `ink`.
@@ -427,7 +423,7 @@ mod tests {
         let mut buf = vec![background; 800 * 600];
         let slots = SelectTextSlots::from_placements(&dialog_placements());
         let songs = songs();
-        let rows = select_music_rows(&songs);
+        let rows = select_music_rows(&songs, SelectMusicFilter::ALL);
         paint_select_text(
             &mut Frame {
                 buf: &mut buf,

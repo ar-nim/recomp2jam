@@ -224,7 +224,9 @@ table 4 → `+0x184/+0x188/+0x18c`, table 5 → `+0x190` (id echo) /
   `entry+0x4 == 1..=5`) → `+0x660` → STEP3 genre (`+0x214`, VA
   `0x447730`/file `0x47730`, table VA `0x447e50`/file `0x47e50`)
   → `+0x670`; `+0x680`/`+0x690` are auxiliary pre-filter outputs
-  (producers below).
+  (producers below). Per-column rules (level bands, label buckets,
+  genre id sets), the click cascade, and what the client implements:
+  `docs/select-filters.md` (ticket #273).
   The STEP2 label buttons (`DAILOG_SELECTMUSIC` in
   `install-root/Image/Interface1.opi`: `STEP2_ALL`/`GOLD`/`BLACK`/
   `BLUE`/`RED`/`SILVER`, codes `0x2720B021..0x2720B026`, art
