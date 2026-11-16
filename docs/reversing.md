@@ -103,3 +103,10 @@ Rationale: #278 cited four Nov-8 PNGs as "Wine exe captures" with no
 manifest while the Wine rig was still proof-pending (#240); the
 2026-11-16 retro records a fabricated Wine A/B evidence episode. The
 claim was retracted and the doc downgraded to OPEN.
+
+Machine check (#281): `scripts/rig-provenance.sh emit` writes
+`<out-dir>/provenance.json` from the run dir, `scripts/run-manifest.sh
+verify` fails any capture that lacks a provenance entry, and
+`scripts/rig-provenance.sh cite <out-dir> --claim exe` prints the citation
+only for a complete manifest whose producer is the exe itself. Procedure:
+`docs/rig-runbook.md` (Standard run).

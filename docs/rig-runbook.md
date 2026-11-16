@@ -31,6 +31,31 @@ One manifest per run records `pair`, `build`, `params`, `script`, and
 `seed`. One artifact layout per run holds the manifest copy, the input
 log, screenshots, and stats. A verifier rejects incomplete sets (#236).
 
+Capture provenance is emitted, not hand-written (#281,
+`docs/reversing.md` section 6):
+
+```
+scripts/rig-run.sh run <display> <out-dir> -- <binary> [args...]
+scripts/rig-provenance.sh emit <out-dir> --producer <binary> \
+    --producer-kind exe --producer-version 7.55 --capture-tool ffmpeg
+scripts/run-manifest.sh verify <out-dir>      # fails an unmanifested capture
+scripts/rig-provenance.sh cite <out-dir> --claim exe   # citation paragraph
+```
+
+`emit` reads the run dir that `rig-run.sh` leaves behind (`pids` -> full
+command, `env.sh` -> display and sink, `claims` -> display), probes the
+tool versions, hashes every capture, and writes `provenance.json` with
+its own manifest hash last. `--tool-version ROLE VERSION` pins a tool
+whose version query the host cannot answer. An exe run must name its
+capture tool: the exe cannot dump its own Wine pixels.
+
+`cite --claim exe` prints the paragraph only when the manifest is
+complete and the producer is the exe itself; that is the check that
+would have refused the #278 retraction. A run dir written before
+`rig-run.sh` recorded `pids` has no discoverable command: pass
+`--command` and `--build` by hand, or `verify` fails loud (an unnamed
+command is not provenance).
+
 The scheduled injector stamps one epoch per press to its own record file
 across all lanes; the pairing script matches epochs to judged lines,
 validates the count, and reports p50, p99, and max. A count mismatch
@@ -192,7 +217,7 @@ Rules:
 | Modality | Native pair (proven) | Wine pair (pending #240) | Gap |
 |----------|----------------------|--------------------------|-----|
 | Input    | XTEST + epoch-stamped injector | SendInput helper + traces | Wine pair proof pending; exe launch unblocked by the #265 blob builder |
-| Video    | frame dump + scene probe | framebuffer capture | provenance manifest generation is manual (reversing.md section 6 rule) |
+| Video    | frame dump + scene probe | framebuffer capture | provenance emitted by `scripts/rig-provenance.sh` (#281) |
 | Audio    | suppressed (--no-sound, null sink) | suppressed (Null driver) | no capture path: need virtual sink + monitor tap on both legs, non-silence validation, wav artifacts |
 
 The audio row is the architectural hole: containment exists, capture

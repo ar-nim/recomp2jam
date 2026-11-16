@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
 # run-manifest.sh - standard run manifest: write, verify, rerun.
+#
+# verify also enforces capture provenance (docs/reversing.md section 6,
+# scripts/rig-provenance.sh): a run dir that holds captures needs a
+# complete provenance.json, or the run fails.
 set -euo pipefail
 
 die() { echo "run-manifest: $*" >&2; exit 2; }
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROVENANCE_LIB="$SCRIPT_DIR/lib/rig-provenance.py"
 
 require_python() {
   command -v python3 >/dev/null 2>&1 || die "python3 is required"
@@ -216,6 +223,14 @@ if other_dir:
 
 print("run-manifest: artifact set complete")
 PY
+
+  check_capture_provenance "$base_dir"
+}
+
+check_capture_provenance() {
+  local run_dir="$1"
+  [ -r "$PROVENANCE_LIB" ] || die "verify: missing provenance checker: $PROVENANCE_LIB"
+  python3 "$PROVENANCE_LIB" check "$run_dir"
 }
 
 cmd_rerun() {
