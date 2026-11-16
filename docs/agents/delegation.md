@@ -76,6 +76,9 @@ template instead of a description.
   variants without asking": two agents in one night padded
   scripts/ with duplicate-named files, and verification caught
   both. Naming is senior business.
+- Every brief quotes the documented recipe command for the exact leg
+  before adapting it, and routes all runs through kit scripts (never
+  bare sleeps, pattern-kills, or hand-rolled display handling).
 
 ## Verify, don't trust
 

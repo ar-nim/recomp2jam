@@ -60,12 +60,28 @@ Rig artifacts never share a path with client outputs. The injector keeps
 its own record file; it never writes into the client input log. Manifest,
 input log, screenshots, and stats live in the run's out-dir. Client
 outputs (input log, frame dump) stay on the paths the client wrote them.
+
+## Commit-or-lose-it rule
+
+No load-bearing script lives in /tmp: helpers land in `scripts/` or
+their full reconstruction recipe is pinned in the runbook. Two builders
+died in /tmp in one night (exe auth-blob builder, wine host-room); both
+recipes survive in `docs/wine-boot.md`, and the wine host script is
+committed. (#264)
 `scripts/rig-run.sh` records every PID it started in `<out-dir>/pids`
 and every claim it owns in `<out-dir>/claims`; it never pattern-kills,
 and cleanup failures keep the evidence instead of deleting it.
 
 ## Boot, drive, aim, observe
 
+- Recipes first, never from memory: quote the documented command for
+  the exact leg before adapting it, and record adaptations as their
+  own trial. Bare guesses against documented recipes failed every
+  time they were tried (exe launch, #261).
+- Eat your own rig: every run — headless or supervised seat — goes
+  through the kit scripts (preflight, PID discipline, polling waits,
+  sanitized env). No bare sleeps, no pattern-kill, no hand-rolled
+  display handling where a kit command exists (#263).
 - Boot: `scripts/rig-run.sh run <display> <out-dir> -- <binary> [args...]`
   runs the shared preflight (display, audio sink, Memoryer, install-root,
   relay ports, Wine prefix), starts Xvfb when absent, launches the
