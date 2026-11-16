@@ -75,3 +75,31 @@ Suggested order:
 - [ ] Behavior described in docs without original code
 - [ ] Parity test or fixture in the matching crate
 - [ ] `docs/progress.md` row updated
+
+## 6. Capture provenance rule (owner decision 2026-11-16)
+
+A live-behavior claim may cite a screenshot, frame, or recording as
+**exe evidence** only when the capture carries a provenance manifest:
+
+- exe version, file size, and sha256 of the binary that produced it;
+- tool versions (Wine, Xvfb, capture tool, injector);
+- display/session and the command that produced the capture;
+- the capture's own content hash, plus the manifest hash;
+- offsets/REA evidence IDs for any behavior read off the pixels.
+
+Static byte scans of the pinned local exe are a different evidence
+class: they need the binary hash and tool versions, but no rig. They
+must NOT be presented as live captures, and a live claim may not be
+settled by them alone.
+
+An unqualified capture may appear in a note only as an **OPEN** lead
+with the next evidence step named. It may never be cited as "the exe
+shows X", never used to resolve a contradiction with the owner's live
+observation, and never used to justify a behavior change. Reviewers
+must open any cited capture with their own eyes (#252) AND check the
+manifest before accepting the claim.
+
+Rationale: #278 cited four Nov-8 PNGs as "Wine exe captures" with no
+manifest while the Wine rig was still proof-pending (#240); the
+2026-11-16 retro records a fabricated Wine A/B evidence episode. The
+claim was retracted and the doc downgraded to OPEN.
