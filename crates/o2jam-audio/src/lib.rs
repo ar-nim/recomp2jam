@@ -367,6 +367,51 @@ impl PcmQueue {
     }
 }
 
+/// The output sink one session attach plays through.
+///
+/// The choice is one pure decision ([`SinkChoice::for_session`]) built
+/// by one constructor ([`SinkChoice::open`]), so every attach site
+/// picks the hardware backend deliberately or gets the null sink
+/// (#283: no test arm may reach the speakers by omission).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SinkChoice {
+    /// The OS default output device: the live player's speakers.
+    Hardware,
+    /// A sink that discards every write: tests, rigs, headless runs.
+    Null,
+}
+
+impl SinkChoice {
+    /// The one sink decision: hardware needs a live player and no rig
+    /// fence. Every other shape stays on the null sink.
+    #[must_use]
+    pub const fn for_session(live_player: bool, rig_fenced: bool) -> Self {
+        if live_player && !rig_fenced {
+            Self::Hardware
+        } else {
+            Self::Null
+        }
+    }
+
+    /// Build the backend for this choice. Only [`Self::Hardware`] opens
+    /// a device, and a device that will not open degrades to the null
+    /// sink: a headless run stays silent instead of failing. Guards
+    /// read [`Self::for_session`], never this call.
+    #[must_use]
+    pub fn open(self) -> Box<dyn AudioBackend> {
+        match self {
+            Self::Null => Box::new(NullBackend::new()),
+            Self::Hardware => match CpalBackend::try_new() {
+                Ok(backend) => Box::new(backend),
+                Err(source) => {
+                    eprintln!("audio unavailable ({source}); continuing silent");
+                    Box::new(NullBackend::new())
+                }
+            },
+        }
+    }
+}
+
 /// Live audio backend: pushes decoded PCM through the OS mixer and
 /// reports device frames consumed, which anchors the song clock.
 /// Created with [`CpalBackend::try_new`]; needs real hardware, so no
@@ -380,6 +425,9 @@ pub struct CpalBackend {
 
 impl CpalBackend {
     /// Open the default output device. Fails cleanly headless.
+    ///
+    /// The only device-open call in the workspace: session attaches
+    /// reach it through [`SinkChoice::open`].
     ///
     /// # Errors
     ///
@@ -825,6 +873,24 @@ mod tests {
         };
         b.play_pcm(&pcm).unwrap();
         assert_eq!(b.samples_played(), 50);
+    }
+
+    /// Live chain (#283): every session attach site
+    /// (`recomp2jam::session` `attach_initial_audio` /
+    /// `attach_bank_for_song`) and every rig arm reaches a sink through
+    /// this one decision. A test arm asks for no live player, or holds
+    /// the rig fence, or both — never hardware. Asserts the choice
+    /// only: `SinkChoice::open` is the call that opens a device.
+    #[test]
+    fn sink_choice_never_reaches_hardware_for_a_test_arm() {
+        assert_eq!(SinkChoice::for_session(false, false), SinkChoice::Null);
+        assert_eq!(SinkChoice::for_session(false, true), SinkChoice::Null);
+        assert_eq!(SinkChoice::for_session(true, true), SinkChoice::Null);
+        assert_eq!(
+            SinkChoice::for_session(true, false),
+            SinkChoice::Hardware,
+            "the live player is the one arm that unfences"
+        );
     }
 
     #[test]

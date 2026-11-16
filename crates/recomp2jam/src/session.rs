@@ -487,10 +487,11 @@ pub struct OnlineSession {
     /// `true` once this Result visit sent the tally triple
     /// (cleared on leaving Result, so the next song tallies again).
     tally_sent: bool,
-    /// Silent-audio rig switch: set by the launch client when the
-    /// run must never touch an audio device (null-sink containment
-    /// in automated rigs; memory 979fb). With `true`, bank attaches
-    /// use the null backend even when hardware exists.
+    /// Silent-audio rig switch: `true` keeps every attach on the null
+    /// sink even when hardware exists. A session starts fenced
+    /// (`new`) — only the windowed live boot unfences it through
+    /// [`Self::set_silent_audio`] with the run's `--no-sound` value, so
+    /// no test or rig arm reaches the speakers by omission (#283).
     silent_audio: bool,
     /// Last slot action per seat, from 3009 updates (`None` while the
     /// seat never changed). The shell exposes no per-seat write yet,
@@ -535,7 +536,7 @@ impl OnlineSession {
             start_announced: false,
             loaded_sent: false,
             tally_sent: false,
-            silent_audio: false,
+            silent_audio: true,
             slot_actions: [None; 8],
             ready_echoes: [None; 8],
         }
@@ -1038,26 +1039,17 @@ impl OnlineSession {
     }
 
     /// Attach one song's key-sound bank to the game backend so struck
-    /// notes emit their samples: live hardware plays through
-    /// `CpalBackend` unless the silent-audio rig switch holds
-    /// ([`Self::set_silent_audio`]), headless falls back to
-    /// `NullBackend` (the `main.rs` windowed shape). Best-effort: an
-    /// empty bank keeps the silent play shape, never failing the
-    /// staged chart.
+    /// notes emit their samples: the sink comes from [`Self::audio_sink`],
+    /// so a fenced session stays on the null sink even on a machine with
+    /// hardware. Best-effort: an empty bank keeps the silent play shape,
+    /// never failing the staged chart.
     pub fn attach_bank_for_song(&mut self, music_id: u16, format_version: f32) {
         let bank = self.bank_for_song(music_id, format_version);
         if bank.is_empty() {
             return;
         }
         let entries = bank.len();
-        let backend: Box<dyn o2jam_audio::AudioBackend> = if self.silent_audio {
-            Box::new(o2jam_audio::NullBackend::new())
-        } else {
-            match o2jam_audio::CpalBackend::try_new() {
-                Ok(backend) => Box::new(backend),
-                Err(_) => Box::new(o2jam_audio::NullBackend::new()),
-            }
-        };
+        let backend = self.audio_sink(true).open();
         self.game.with_audio(backend, bank);
         // Scene BGM stages with the key bank: boot already cued
         // Avi in the windowed setup, and the song attach re-cues
@@ -1074,23 +1066,22 @@ impl OnlineSession {
         self
     }
 
+    /// The sink an attach would pick for this session: the live request
+    /// meets the rig fence in [`o2jam_audio::SinkChoice::for_session`],
+    /// the one decision in the workspace. Pure — a guard can read the
+    /// choice without opening a device.
+    #[must_use]
+    pub fn audio_sink(&self, live_player: bool) -> o2jam_audio::SinkChoice {
+        o2jam_audio::SinkChoice::for_session(live_player, self.silent_audio)
+    }
+
     /// Attach the launch audio rig (a fresh backend plus the scene-BGM
     /// bank) so the loading gate sees a rig before any song bank
-    /// attaches and the boot BGM cue sounds: live hardware only when
-    /// `live` holds and the silent-audio rig switch is off, the null
-    /// sink otherwise (audio containment).
+    /// attaches and the boot BGM cue sounds: the sink comes from
+    /// [`Self::audio_sink`], so a fenced session plays the cue on the
+    /// null sink (audio containment).
     pub fn attach_initial_audio(&mut self, live: bool) {
-        let backend: Box<dyn o2jam_audio::AudioBackend> = if live && !self.silent_audio {
-            match o2jam_audio::CpalBackend::try_new() {
-                Ok(backend) => Box::new(backend),
-                Err(source) => {
-                    eprintln!("audio unavailable ({source}); continuing silent");
-                    Box::new(o2jam_audio::NullBackend::new())
-                }
-            }
-        } else {
-            Box::new(o2jam_audio::NullBackend::new())
-        };
+        let backend = self.audio_sink(live).open();
         self.game
             .with_audio(backend, std::collections::HashMap::new());
         self.game.stage_scene_bgm(crate::load_scene_bgm_bank());

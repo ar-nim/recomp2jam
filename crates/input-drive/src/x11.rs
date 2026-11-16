@@ -187,6 +187,29 @@ fn inject_motion(
     Ok(())
 }
 
+/// Game arguments for one probe child: the login plus the probe capture
+/// plan, and the rig fence last — `--no-sound` keeps the spawned client
+/// on the null sink, so an armed probe can never open the operator's
+/// output device (#283).
+fn game_args(frames: &Path, input_log: &Path) -> Vec<String> {
+    vec![
+        "online".to_owned(),
+        "--host".to_owned(),
+        "127.0.0.1".to_owned(),
+        "--port".to_owned(),
+        "15010".to_owned(),
+        "--user-id".to_owned(),
+        "2".to_owned(),
+        "--token".to_owned(),
+        "77b0a3e3-32e6-4a67-b3d8-563a0df4c08c".to_owned(),
+        "--frame-dump".to_owned(),
+        frames.display().to_string(),
+        "--input-log".to_owned(),
+        input_log.display().to_string(),
+        "--no-sound".to_owned(),
+    ]
+}
+
 /// Launch the game on one X display with the probe capture plan.
 fn spawn_game_on(
     game_binary: &Path,
@@ -198,21 +221,7 @@ fn spawn_game_on(
     let frames = scratch.join("frames");
     std::fs::create_dir_all(&frames)?;
     Command::new(game_binary)
-        .args([
-            "online",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            "15010",
-            "--user-id",
-            "2",
-            "--token",
-            "77b0a3e3-32e6-4a67-b3d8-563a0df4c08c",
-            "--frame-dump",
-            &frames.display().to_string(),
-            "--input-log",
-            &input_log.display().to_string(),
-        ])
+        .args(game_args(&frames, input_log))
         .env("DISPLAY", display)
         .env_remove("WAYLAND_DISPLAY")
         .env_remove("WAYLAND_SOCKET")
@@ -392,6 +401,21 @@ fn find_game_window(
 mod x11_tests {
     use super::*;
     use crate::script::ScriptedSource;
+
+    /// Live chain (#283): `cargo test -p input-drive` ->
+    /// `x11_arm_routes_click_through_real_game` -> `run_probe` ->
+    /// `spawn_game_on` -> `game_args` -> child `main::run_online` ->
+    /// `attach_initial_audio(!no_sound)`. Asserts the spawned argument
+    /// list, never a device: with the fence the child's session stays
+    /// on the null sink whatever the machine's hardware.
+    #[test]
+    fn x11_game_args_never_opt_into_hardware_audio() {
+        let args = game_args(Path::new("/tmp/frames"), Path::new("/tmp/input.log"));
+        assert!(
+            args.iter().any(|arg| arg == "--no-sound"),
+            "probe child must carry the rig fence, got {args:?}"
+        );
+    }
 
     #[test]
     fn lock_path_names_the_display_lock() {

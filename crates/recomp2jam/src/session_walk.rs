@@ -278,6 +278,10 @@ fn connect_transport(
 
 /// Pair the game with its gateway and remember the host pick.
 fn build_session(config: &WalkConfig, gateway: GatewayConnection) -> Result<OnlineSession> {
+    // Audio containment (#283): the walk never unfences. `OnlineSession`
+    // starts on the rig fence, and only the windowed live boot lifts it
+    // with `--no-sound`'s value, so every walk (rig capture and the
+    // audible gate test) attaches its bank on the null sink.
     let mut session = OnlineSession::new(ScreenGame::new(), gateway);
     session.game_mut().load_options(&install_root());
     stage_catalog(&mut session);
@@ -999,6 +1003,34 @@ mod session_walk_tests {
             probe.nonzero.load(Ordering::Relaxed) > 0,
             "emitted frames carry nonzero PCM"
         );
+    }
+
+    /// Live chain (#283): `cargo test -p recomp2jam` -> this walk's
+    /// `build_session` -> `fetch_and_stage_chart` ->
+    /// `attach_bank_for_song` -> `OnlineSession::audio_sink(true)` ->
+    /// `o2jam_audio::SinkChoice::for_session(true, rig_fenced)` ->
+    /// `NullBackend`. The walk itself is env-gated
+    /// (`O2JAM_LIVE_GATEWAY`), so this seam test builds the same
+    /// session through `build_session` with a loopback gateway and
+    /// reads the choice: pure, no device open, and a broken fence
+    /// fails here instead of on the operator's speakers.
+    #[test]
+    fn live_walk_bank_attach_stays_on_the_null_sink() {
+        use o2jam_audio::SinkChoice;
+        let (port, server) = o2jam_net::testing::fake_gateway(|_stream| {});
+        let gateway =
+            GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).expect("gateway");
+        let config = WalkConfig::local(
+            std::env::temp_dir().join(format!("walk-fence-{}", std::process::id())),
+            "fence-token".to_owned(),
+        );
+        let session = build_session(&config, gateway).expect("walk session builds");
+        assert_eq!(
+            session.audio_sink(true),
+            SinkChoice::Null,
+            "the audible walk must ask for the null sink, never the speakers"
+        );
+        server.join().unwrap();
     }
 
     /// Guarded: runs only with `O2JAM_LIVE_GATEWAY=host:port` and
