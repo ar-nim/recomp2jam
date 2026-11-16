@@ -403,9 +403,8 @@ const FRAME_CLEAR_COLOR: u32 = 0;
 /// convention (the `START 0x16202012` / `READY 0x16202013` arms,
 /// `docs/room-enums.md`): the exact staged names stay untraced, so
 /// clicks only fire while staged art binds one of these ids.
-const WAITING_CONFIRM_IDS: [&str; 2] = ["IDC_BUTTON_SWAIT_START", "IDC_BUTTON_SWAIT_READY"];
 /// Waiting back-button candidates (same convention caveat as
-/// [`WAITING_CONFIRM_IDS`]).
+/// [`WAITING_BACK_IDS`]).
 const WAITING_BACK_IDS: [&str; 2] = ["IDC_BUTTON_SWAIT_BACK", "IDC_BUTTON_SWAIT_EXIT"];
 
 /// Splash auto-advance delay in milliseconds: the exe leaves
@@ -2755,7 +2754,15 @@ impl ScreenGame {
         let Some(art) = self.scene_art(Screen::Waiting) else {
             return false;
         };
-        WAITING_CONFIRM_IDS
+        // Role-filter the paired control ids (docs/room-enums.md
+        // "Waiting master gate"): master keeps START, non-master
+        // keeps READY. Seam: `Self::is_room_master`.
+        let confirm_ids: &[&str] = if self.is_room_master() {
+            &["IDC_BUTTON_SWAIT_START"]
+        } else {
+            &["IDC_BUTTON_SWAIT_READY"]
+        };
+        confirm_ids
             .iter()
             .any(|id| staged_rect_hit(&art.placements, id, x, y))
     }
@@ -2795,7 +2802,15 @@ impl ScreenGame {
         let back = WAITING_BACK_IDS
             .iter()
             .any(|id| staged_rect_hit(placements, id, x, y));
-        let confirm = WAITING_CONFIRM_IDS
+        // Role-filter the paired control ids (docs/room-enums.md
+        // "Waiting master gate"): master confirms on START, guests
+        // on READY.
+        let confirm_ids: &[&str] = if self.is_room_master() {
+            &["IDC_BUTTON_SWAIT_START"]
+        } else {
+            &["IDC_BUTTON_SWAIT_READY"]
+        };
+        let confirm = confirm_ids
             .iter()
             .any(|id| staged_rect_hit(placements, id, x, y));
         if back {
@@ -7464,6 +7479,106 @@ mod game_tests {
         );
         game.ingest_snapshot(&InputSnapshot::click_at(640, 115));
         assert_eq!(game.screen(), Screen::Loading);
+    }
+
+    #[test]
+    fn waiting_offline_guest_start_click_does_not_confirm() {
+        // Role gate (docs/room-enums.md "Waiting master gate"): an
+        // offline (non-master) game staging only START must not treat a
+        // click on it as a confirm.
+        let mut game = waiting_game_with_button(
+            "IDC_BUTTON_SWAIT_START",
+            Rect {
+                x: 600,
+                y: 100,
+                w: 80,
+                h: 30,
+            },
+        );
+        assert!(!game.is_room_master());
+        game.ingest_snapshot(&InputSnapshot::click_at(640, 115));
+        assert_eq!(game.screen(), Screen::Waiting);
+    }
+
+    #[test]
+    fn waiting_master_shows_start_guest_shows_ready() {
+        use crate::avatar::{AvatarFigure, FigureLayer, ScenePlacement};
+        use o2jam_render::{Frame, Rgb555Image};
+        let red = || {
+            let mut f = AvatarFigure::default();
+            f.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&[0x00, 0x7C], 1, 1).unwrap(),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+            f
+        };
+        let mk = |member_id: u8| {
+            let mut game = ScreenGame::new();
+            let mut room = waiting_room();
+            room.member_id = member_id;
+            game.set_joined_room(room);
+            walk_to_waiting(&mut game);
+            let placements = vec![
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: "IDC_BUTTON_SWAIT_START".to_owned(),
+                    code: 0,
+                    sprite: Some("B.ojs".to_owned()),
+                    rect: Rect {
+                        x: 10,
+                        y: 10,
+                        w: 4,
+                        h: 4,
+                    },
+                },
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: "IDC_BUTTON_SWAIT_READY".to_owned(),
+                    code: 0,
+                    sprite: Some("B.ojs".to_owned()),
+                    rect: Rect {
+                        x: 50,
+                        y: 50,
+                        w: 4,
+                        h: 4,
+                    },
+                },
+            ];
+            game.load_scene(
+                Screen::Waiting,
+                placements,
+                std::collections::HashMap::from([("B.ojs".to_owned(), red())]),
+            );
+            game
+        };
+        // master: START rect (10,10) paints; READY rect (50,50) does not
+        let mut g = mk(0);
+        let mut buf = vec![0u32; 800 * 600];
+        g.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert!(buf[10 * 800 + 10] != 0, "master START should paint");
+        assert!(buf[50 * 800 + 50] == 0, "master READY should not paint");
+        // guest: READY rect paints; START rect does not
+        let mut g = mk(1);
+        let mut buf = vec![0u32; 800 * 600];
+        g.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert!(buf[50 * 800 + 50] != 0, "guest READY should paint");
+        assert!(buf[10 * 800 + 10] == 0, "guest START should not paint");
     }
 
     #[test]

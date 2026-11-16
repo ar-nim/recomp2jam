@@ -3681,8 +3681,23 @@ pub fn paint_waiting_scene(
     captions: &WaitingCaptions<'_>,
 ) {
     let seats = staged_seats(room);
+    // Role-filter the paired Waiting control ids (docs/room-enums.md
+    // "Waiting master gate"): the master arm keeps START
+    // (`IDC_BUTTON_SWAIT_START`) + MASTER_SKILLSEL
+    // (`IDC_BUTTON_SWAIT_MASTER_SKILLSEL`); the non-master arm keeps
+    // READY (`IDC_BUTTON_SWAIT_READY`) + SKILLSEL
+    // (`IDC_BUTTON_SWAIT_SKILLSEL`). Seam: `ScreenGame::is_room_master`
+    // (seat id 0); mirrored here as `room.member_id == 0`.
+    let is_room_master = room.member_id == 0;
     art.paint_backdrop_live(frame, Screen::Waiting, |placed| {
-        waiting_seat_clone_live(placed, &seats)
+        if !waiting_seat_clone_live(placed, &seats) {
+            return false;
+        }
+        match placed.id.as_str() {
+            "IDC_BUTTON_SWAIT_START" | "IDC_BUTTON_SWAIT_MASTER_SKILLSEL" => is_room_master,
+            "IDC_BUTTON_SWAIT_READY" | "IDC_BUTTON_SWAIT_SKILLSEL" => !is_room_master,
+            _ => true,
+        }
     });
     paint_waiting_seat_marks(frame, &seats, art);
     if waiting_has_staged_covers(&art.placements) {
