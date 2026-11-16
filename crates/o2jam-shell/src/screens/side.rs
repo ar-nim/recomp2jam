@@ -3342,6 +3342,26 @@ pub fn password_action_at(placements: &[ScenePlacement], x: i32, y: i32) -> Opti
             .filter(|_| super::paint::rect_hit(&dialog_child_rect(placements, placed), x, y))
     })
 }
+/// The eight default titles the exe fills into a fresh CREATE ROOM,
+/// in table order (CP949 text, OTwo.exe 7.55 `83a04541…`, file
+/// `0x244b50`–`0x244bec` behind the pointer table at file `0x244c08`;
+/// pin in `docs/dialog-strings.md` §3a).
+pub const DEFAULT_ROOM_TITLES: [&str; 8] = [
+    "니들이 리듬을 알아?!",
+    "자나깨나 두들겨보세!!",
+    "신나게 두들겨보자!",
+    "키보드는 부수지마!!",
+    "따라올테면 따라와봐!",
+    "짜릿한 콤보의 쾌감!",
+    "신나는 음악을 즐겨봐!",
+    "손가락이 부서지도록!",
+];
+/// Default title `index`, wrapping around the table: the exe picks
+/// `rand() % 8` over these eight entries (file `0x436a4b`–`0x436a5d`).
+#[must_use]
+pub fn default_room_title(index: usize) -> &'static str {
+    DEFAULT_ROOM_TITLES[index % DEFAULT_ROOM_TITLES.len()]
+}
 /// Create-room form behind the dialog: title/password edits plus the
 /// two toggle pairs (Normal/Live battle, 3/7 keys). Caps follow the
 /// `CreateRoom` wire (`ROOM_TITLE_CAP` 22 / `ROOM_PASSWORD_CAP` 12).
@@ -3349,6 +3369,11 @@ pub fn password_action_at(placements: &[ScenePlacement], x: i32, y: i32) -> Opti
 pub struct CreateRoomForm {
     /// Title edit (cap 22).
     pub title: String,
+    /// True while the whole title is selected — the state the exe
+    /// leaves a freshly prefilled title in (selection reset to
+    /// `[0, len]`, file `0x436a8c`), so the next typed char or
+    /// backspace replaces all of it (Win32 edit behaviour).
+    pub title_selected: bool,
     /// Password edit (cap 12).
     pub password: String,
     /// Battle mode (Live) versus normal.
@@ -3362,16 +3387,46 @@ impl CreateRoomForm {
     pub fn new() -> Self {
         Self::default()
     }
+    /// Dialog-open form: `title` prefilled and fully selected, so the
+    /// first typed char replaces it (the exe writes one of
+    /// [`DEFAULT_ROOM_TITLES`] into the open dialog's title edit and
+    /// selects it all, file `0x436a00`).
+    #[must_use]
+    pub fn with_default_title(title: &str) -> Self {
+        Self {
+            title: title.to_owned(),
+            title_selected: !title.is_empty(),
+            ..Self::default()
+        }
+    }
     /// Type one char into the title edit (cap 22, control chars refused).
+    /// A fully selected title is replaced by the first char.
     pub fn push_title_char(&mut self, typed: char) {
-        if typed.is_control() || self.title.chars().count() >= 22 {
+        if typed.is_control() {
+            return;
+        }
+        self.clear_selected_title();
+        if self.title.chars().count() >= 22 {
             return;
         }
         self.title.push(typed);
     }
-    /// Erase one title char.
+    /// Erase one title char: a fully selected title clears at once.
     pub fn pop_title(&mut self) {
+        if self.clear_selected_title() {
+            return;
+        }
         self.title.pop();
+    }
+    /// Drop a fully selected title, reporting whether it was selected:
+    /// the first edit after a prefill replaces the whole default.
+    fn clear_selected_title(&mut self) -> bool {
+        if !self.title_selected {
+            return false;
+        }
+        self.title.clear();
+        self.title_selected = false;
+        true
     }
     /// Type one char into the password edit (cap 12, control chars refused).
     pub fn push_password_char(&mut self, typed: char) {
@@ -3384,9 +3439,12 @@ impl CreateRoomForm {
     pub fn pop_password(&mut self) {
         self.password.pop();
     }
-    /// Commit body for `CreateRoom` 2004 (`None` while the title is empty:
-    /// every observed CREATE ROOM frame holds the title empty with OK
-    /// never firing, `docs/wine-boot.md`). An empty password means no lock.
+    /// Commit body for `CreateRoom` 2004. `None` while the title is
+    /// empty: the exe OK handler (VA `0x436ac0`) refuses that state
+    /// with `방 제목을 입력하세요.` (file `0x244f04`), and no Wine run
+    /// ever sent a 2004 (`docs/wine-boot.md`). The same handler also
+    /// refuses an all-space title — not gated here yet. An empty
+    /// password means no lock.
     #[must_use]
     pub fn commit(&self) -> Option<CreateRoom> {
         if self.title.is_empty() {
@@ -5023,6 +5081,50 @@ mod side_tests {
             password_action_for_code(PASSWORD_CANCEL_CODE),
             Some(PasswordAction::Cancel)
         );
+    }
+
+    #[test]
+    fn default_room_titles_are_the_eight_pinned_exe_entries() {
+        // seam: the pin is the table itself — OTwo.exe 7.55
+        // `83a04541…` file `0x244b50`–`0x244bec` (CP949, 18–21 bytes
+        // each, behind the pointer table at file `0x244c08`).
+        assert_eq!(
+            DEFAULT_ROOM_TITLES,
+            [
+                "니들이 리듬을 알아?!",
+                "자나깨나 두들겨보세!!",
+                "신나게 두들겨보자!",
+                "키보드는 부수지마!!",
+                "따라올테면 따라와봐!",
+                "짜릿한 콤보의 쾌감!",
+                "신나는 음악을 즐겨봐!",
+                "손가락이 부서지도록!",
+            ]
+        );
+        for (index, title) in DEFAULT_ROOM_TITLES.iter().enumerate() {
+            assert_eq!(default_room_title(index), *title);
+        }
+        assert_eq!(
+            default_room_title(DEFAULT_ROOM_TITLES.len()),
+            DEFAULT_ROOM_TITLES[0],
+            "the exe's `% 8` wraps an out-of-range index"
+        );
+    }
+
+    #[test]
+    fn prefilled_default_title_is_selected_so_edits_replace_it() {
+        let mut form = CreateRoomForm::with_default_title(default_room_title(2));
+        assert!(form.title_selected);
+        form.push_title_char('J');
+        assert_eq!(form.title, "J", "one typed char replaces the default");
+        form.push_title_char('a');
+        assert_eq!(form.title, "Ja");
+
+        let mut cleared = CreateRoomForm::with_default_title(default_room_title(0));
+        cleared.pop_title();
+        assert_eq!(cleared.title, "", "backspace clears the selected default");
+        cleared.pop_title();
+        assert_eq!(cleared.title, "", "an empty title stays empty");
     }
 
     #[test]
