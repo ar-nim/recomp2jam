@@ -103,15 +103,114 @@ and cleanup failures keep the evidence instead of deleting it.
 - Observe: the scene probe reports the current scene as text from the
   capture log, so navigation costs no image reads (#236). Judged lines
   come from the client input log (`--input-log`); frames from
-  `--frame-dump`; audio stays on the null sink (`--no-sound`).
+  `--frame-dump`; audio from the run's virtual sink through the monitor
+  tap described below (`<out-dir>/audio/`, #279).
 
-## Audio containment
+## Audio capture (agent path, #279)
 
-Automated runs never reach the speakers. `scripts/rig-run.sh` enforces
-a null sink (`wine_null`) in preflight and records the choice; set
-`PULSE_SINK` only to another explicitly chosen sink. See
-`docs/captures/t223/01-live-cadence-method.md` for the capture cadence
-and `--no-sound`.
+Automated runs never reach the speakers, and they no longer suppress
+audio either: a rig run captures it. One module owns the lane —
+`scripts/rig-audio.sh` — sourced by `scripts/rig-run.sh` (`run`/`stop`
+drive it) and callable standalone for `probe` and `verify`.
+
+### Routing
+
+A capture run owns a per-run sink, created by the preflight and unloaded
+on `stop` (`rig_null_<pid>`, recorded in `<out-dir>/claims`). Two
+environment levers point clients at it, one per client family:
+
+| Client family | Lever | Why |
+|---|---|---|
+| PulseAudio-protocol clients (`pacat`, winepulse) | `PULSE_SINK` | the pulse server honours it |
+| ALSA clients (cpal's Linux host, so the native client) | `PIPEWIRE_NODE` | PipeWire's ALSA plugin (`libasound_module_pcm_pipewire.so`) reads `PIPEWIRE_NODE`; it does not know `PULSE_SINK` |
+
+`rig-run.sh run` exports both into the client environment and records
+them in `<out-dir>/env.sh`. Probe evidence (2026-11-16, PipeWire 1.6.11,
+pulse-compat 15.0.0): `PIPEWIRE_NODE=<sink>` routed an ALSA producer to
+the sink's monitor (peak −21.07 dBFS recorded from the tap);
+`PULSE_SINK=<sink>` routed a `pacat` producer (−1.36 dBFS); the same ALSA
+producer without the lever landed on the default sink. The native client
+opens `cpal::default_host()` → ALSA default → the PipeWire plugin, so the
+first lever is what keeps it off the owner's speakers.
+
+### Tap and sidecar
+
+`capture-start` opens the tap before the client starts, so the first cue
+is in the artifact: `parec` records `<sink>.monitor` at the sink's own
+specification (`float32le`, 48 kHz, stereo — the sidecar records
+`resampling=none` when tap and sink agree) into
+`<out-dir>/audio/audio.wav`. `capture-stop` signals the
+recorder by process group (never by pattern), measures the artifact, and
+finalizes the sidecar `<out-dir>/audio/manifest` — one `key=value` line
+per fact: `sink`, `source`, `client`, `rate`, `channels`, `format`,
+`expect`, `state`, `started_at`, `stopped_at`, `duration_s`,
+`peak_dbfs`, `mean_dbfs`, `source_verified`, `route`, `sink_spec`,
+`resampling`, `client_streams`, `streams_normalized`, `muted_streams`.
+
+### Silent-fallback guard
+
+A wrong `-d` device name is not an error on PipeWire: `parec -d
+missing.monitor` and `pw-record --target missing` both recorded the
+default source (the owner's microphone or the speakers' monitor) instead
+of failing — observed in the #279 probes. So `capture-start` proves the
+tap before the client starts: it maps the recorder's own process id to a
+`pactl source-output` and requires the source to equal `<sink>.monitor`.
+A mismatch fails the run (exit 12) and reaps the recorder. Never capture
+with `pw-record --target <name>`: it falls back silently.
+
+### Mute normalisation
+
+A remembered mute leaves the tap digitally silent while the stream looks
+healthy: the first native acceptance run recorded 39 s of −91 dBFS with
+`Mute: yes` on the client's stream (PipeWire stream-restore). The lane
+therefore reads `Mute`/`Volume` per stream and, for streams on the run's
+own sink only, sets mute off and volume 100% (`streams_normalized`,
+`muted_streams` in the sidecar). A stream on any other sink is never
+touched.
+
+### Route guard (no path to the default sink)
+
+After the client starts, `run` reads `pactl list sink-inputs`, maps sink
+indices to names, and looks for streams whose `node.name` /
+`application.name` carries the client's basename. A client stream on the
+system default sink aborts the run: exit 12, `CONTAINMENT BREACH` on
+stderr, `route=default-sink-breach` in the sidecar, and the run is
+stopped immediately. The check polls for up to `RIG_AUDIO_ROUTE_TRIES`
+ticks (100, so 10 s): the native client opens its stream about 4 s into
+the boot, after chart and bank decode. A client that opens no stream
+leaves `route=unseen` and the loudness probe still judges the artifact.
+
+### Validation bar
+
+A recorder that ran proves nothing; a measured level does.
+
+- `scripts/rig-audio.sh probe <wav>` prints `peak_dbfs=` and
+  `mean_dbfs=`; exit 0 above the floor, 1 below it, 2 when unreadable.
+- `scripts/rig-audio.sh verify <out-dir>` is the run-level verifier:
+  `expect=sound` (client argv without `--no-sound`) fails when the
+  artifact is missing or silent; `expect=silence` (`--no-sound`) accepts
+  a silent artifact as the containment record; `expect=disabled`
+  (`RIG_AUDIO_CAPTURE=0`) records an explicit opt-out; a run with no lane
+  at all fails.
+- The verifier call site belongs to the orchestrator:
+  `scripts/run-manifest.sh verify` must run `scripts/rig-audio.sh verify
+  <out-dir>` when the run declares audio (merge step, #279).
+
+Knobs: `RIG_AUDIO_CAPTURE` (1, the default), `RIG_AUDIO_RATE` (48000),
+`RIG_AUDIO_CHANNELS` (2), `RIG_AUDIO_FORMAT` (float32le),
+`RIG_AUDIO_FLOOR_DBFS` (−60), `RIG_AUDIO_IDENTITY_TRIES` (40).
+
+### Legs
+
+| Leg | Sink | Tap | Status |
+|---|---|---|---|
+| Native (recomp2jam) | per-run `rig_null_<pid>` | `parec` monitor → wav | proven: #279 acceptance run captured non-silent game audio |
+| Wine (OTwo.exe) | same sink, same tap | same tap | OPEN: Wine 11.22 ships the pulse driver and the exe already reaches `wine_null` through `PULSE_SINK` (`docs/wine-boot.md`, 2026-11-08 evidence: `OTwo.exe` sink-input on the null sink). No driver switch is needed; what is missing is a blob-launched exe boot bound to a per-run sink in one run, which is #240's launcher. Sink, tap, guards, and verifier are leg-agnostic |
+
+`--no-sound` stays available for runs that must not emit audio at all;
+such a run declares `expect=silence` and its artifact is the proof that
+nothing was audible. See `docs/captures/t223/01-live-cadence-method.md`
+for the capture cadence.
 
 ## Negatives (do not re-prove)
 
@@ -133,6 +232,10 @@ and `--no-sound`.
   (`docs/wine-boot.md`).
 - A Wayland leak puts the client on the real desktop; `rig-run.sh`
   refuses a leaked `WAYLAND_DISPLAY` or `XDG_SESSION_TYPE=wayland`.
+- A PipeWire recorder with a wrong device name records the default
+  source instead of failing (`parec -d missing.monitor`,
+  `pw-record --target missing`). Verify the recorder's source, or the
+  artifact may hold the owner's microphone. (#279)
 
 ## Evidence and close discipline
 
@@ -148,7 +251,8 @@ passing with no game data (#233 story 20).
 - Parent spec: #233. Sibling kit tickets #234 (XTEST backend), #235 (rect
   query), #236 (scene probe and manifest), #237 (injector and stats),
   #239 (planet-to-waiting drive), #240 (Wine qualification), #241
-  (N-200 number), #242 (live-seat qualification).
+  (N-200 number), #242 (live-seat qualification), #279 (audio capture
+  lane).
 - Backends: `docs/captures/t127/02-backends.md`.
 - Wine boot: `docs/wine-boot.md`.
 - Cadence capture: `docs/captures/t223/01-live-cadence-method.md`.
@@ -193,8 +297,7 @@ Rules:
 |----------|----------------------|--------------------------|-----|
 | Input    | XTEST + epoch-stamped injector | SendInput helper + traces | Wine pair proof pending; exe launch unblocked by the #265 blob builder |
 | Video    | frame dump + scene probe | framebuffer capture | provenance manifest generation is manual (reversing.md section 6 rule) |
-| Audio    | suppressed (--no-sound, null sink) | suppressed (Null driver) | no capture path: need virtual sink + monitor tap on both legs, non-silence validation, wav artifacts |
+| Audio    | per-run virtual sink + monitor tap, wav + sidecar, non-silence verifier (#279) | suppressed (fixed `wine_null`) | Wine leg: bind a blob-launched boot to a per-run sink and tap it (#240); the exe already honours `PULSE_SINK` |
 
-The audio row is the architectural hole: containment exists, capture
-does not. Fixing it is the prerequisite for any audio parity claim
-(A/V compare, loudness, drift).
+The native audio row is closed by #279 (see "Audio capture" above); the
+Wine row closes with #240 using the same sink, tap, and verifier.
