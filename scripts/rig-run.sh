@@ -39,6 +39,10 @@ RIG_LIB="$(cd "$(dirname "$0")/lib" && pwd)/rig-preflight.sh"
 # used standalone (#279).
 # shellcheck source=rig-audio.sh
 . "$(cd "$(dirname "$0")" && pwd)/rig-audio.sh"
+# The X display stubs (`xdpyinfo` / `Xvfb`) are shared with the AFK runner's
+# selftest, so both selftests stub the display from one home.
+# shellcheck source=lib/rig-stub-display.sh
+. "$(cd "$(dirname "$0")" && pwd)/lib/rig-stub-display.sh"
 
 die() { echo "rig-run: $*" >&2; exit 2; }
 
@@ -465,21 +469,12 @@ assert_reject() {
   return 0
 }
 
-# Display stubs only: the sound-server stubs (pactl + parec) are the audio
-# lane's, so both selftests model PipeWire from one home (rig-audio.sh).
+# Display stubs live in lib/rig-stub-display.sh (shared with the AFK runner's
+# selftest); the sound-server stubs (pactl + parec) are the audio lane's, so
+# every rig selftest models PipeWire from one home (rig-audio.sh).
 write_stubs() {
   local stubbin="$1" stubstate="$2"
-  mkdir -p "$stubbin" "$stubstate"
-  cat >"$stubbin/xdpyinfo" <<'STUBEOF'
-#!/bin/sh
-if [ -f "$STUBSTATE/up-$2" ]; then exit 0; else exit 1; fi
-STUBEOF
-  cat >"$stubbin/Xvfb" <<'STUBEOF'
-#!/bin/sh
-touch "$STUBSTATE/up-$1"
-exec sleep 120
-STUBEOF
-  chmod +x "$stubbin/xdpyinfo" "$stubbin/Xvfb"
+  rig_display_stub_tools "$stubbin" "$stubstate"
   rig_audio_stub_tools "$stubbin" "$stubstate"
 }
 

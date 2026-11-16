@@ -71,6 +71,66 @@ monotonic clock for menus). Record the trace ID in both manifests and
 compare only on matching IDs: what is pressed and where the pointer is
 changes what renders, so mismatched stimuli void the pixels (#245).
 
+## AFK end-to-end runner (#280)
+
+One unattended command boots, drives, captures, packages, and checks a run:
+
+```
+scripts/rig-afk.sh <out-dir> [--pair native] [--scene-script PATH]
+    [--target loading|playing] [--music-id ID]
+    [--inject-keys lane-0,lane-3,...] [--inject-count N]
+    [--min-frames N] [--display :N] [--binary PATH]
+scripts/rig-afk.sh selftest
+```
+
+It composes the kit instead of repeating it:
+
+| Phase | Kit command | Substitution home |
+|---|---|---|
+| allocate | display scan (:150-:199) + `rig_claimed_by` | `scripts/rig-afk.sh` |
+| boot | `scripts/rig-run.sh run` (preflight, owned sink, audio lane) | `scripts/rig-run.sh` |
+| drive | the scene script in `--attach` mode | `scripts/planet-to-waiting.sh` |
+| inject | `scripts/rig-inject.sh` (own record file) | `scripts/rig-inject.sh` |
+| stop | `scripts/rig-run.sh stop` (pidfile only) | `scripts/rig-run.sh` |
+| package | `run-manifest.sh write` + `rig-provenance.sh emit` | those scripts |
+| check | scene probe, frame count, `pair-stats.sh`, `rig-audio.sh verify`, `run-manifest.sh verify` | those scripts |
+
+The native session argv (binary, login, room, frame dump, input log) lives in
+one place, `scripts/lib/rig-session.sh`, so the runner and the standalone drive
+cannot drift. A scene script must accept `--attach OUT_DIR --display :N`;
+`scripts/planet-to-waiting.sh` ships that mode (plus `--sound`, `--music-id`,
+`--target`).
+
+Self-checks, all of them red on failure and quoted verbatim in
+`<out-dir>/report.md` and `<out-dir>/report.json`:
+
+1. `scene` — the scene probe on the run's input log reports the target scene.
+2. `frames` — frame PNGs in `<out-dir>/frames` reach the floor (default 4).
+3. `judged` — with an injector record, `pair-stats.sh` pairs it with the
+   client's `judged` lines and the counts must match; a menu-only pack says
+   `SKIP ... (menu-only drive)` instead of passing silently.
+4. `audio` — the sidecar must declare `expect=sound`, `state=captured`, and
+   `rig-audio.sh verify` must measure above the floor.
+5. `manifest` — `run-manifest.sh verify` (artifact set, screenshots distinct,
+   provenance complete, audio verified).
+
+`<out-dir>/status` holds `PASS` or `FAILED`; the runner exits 0 or 1. A failed
+check keeps the whole pack — nothing is deleted and nothing is cleaned up — and
+names the gap in the report. Every phase is bounded
+(`RIG_AFK_BOOT_TIMEOUT` 90 s, `RIG_AFK_DRIVE_TIMEOUT` 300 s,
+`RIG_AFK_INJECT_TIMEOUT` 120 s, `RIG_AFK_STOP_TIMEOUT` 90 s), every teardown
+is PID-file based, and Ctrl-C stops the run through the pidfile before writing
+a FAILED report. The runner refuses an out-dir that already holds files: a
+mixed pack cannot be cited, and deleting the old one would destroy the record
+of the run that failed.
+
+`selftest` is hermetic (stub Xvfb, stub PipeWire tools, stand-in client, drive,
+and injector): one happy leg with five green checks, one menu-only leg for the
+declared skip, and six red legs — wrong scene, frame floor, judged mismatch,
+audio lane switched off, silent audio, provenance dropped — each printing the
+`check ... FAIL` line it asserted. `RIG_AFK_FAULT` exists only for that last
+leg; a real run leaves it unset.
+
 ## Number bar
 
 Every latency or budget figure carries sample count and build profile.
@@ -121,6 +181,10 @@ and cleanup failures keep the evidence instead of deleting it.
 - Drive: `scripts/rig-drive.sh` (ydotool) for move, click, and key;
   `dry-run` prints planned commands without touching input. The XTEST
   backend (#234) drives a native Xvfb client through the same interface.
+  `scripts/planet-to-waiting.sh --attach <out-dir>` drives a session the
+  caller already booted (the AFK runner's shape); `--music-id` stages the
+  host pick (first Waiting Confirm) so the second reaches Loading, and
+  `--target playing` Confirms at Loading (4012) into Playing.
 - Aim: chrome coords resolve from staged BND rects, never hand-read
   pixels. Native aim uses the dump tool's rect query for a BND control
   id (#235); unknown ids fail loudly. Wine aim cites pinned reference
