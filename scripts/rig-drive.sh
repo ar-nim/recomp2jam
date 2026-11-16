@@ -20,6 +20,10 @@ die() { echo "rig-drive: $*" >&2; exit 2; }
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 YDOTOOL="${YDOTOOL:-ydotool}"
 YDOTOOLD="${YDOTOOLD:-ydotoold}"
+
+# Default socket lives in the out-dir so a daemon we start is owned by
+# that run and recorded in its pidfile (rig-run.sh PID discipline).
+yd_socket() { printf '%s/.ydotool.sock' "$1"; }
 XTEST_PY="$SCRIPT_DIR/rig-xtest.py"
 
 backend="${RIG_DRIVER_BACKEND:-ydotool}"
@@ -65,9 +69,35 @@ load_env() {
 }
 
 # --- ydotool backend --------------------------------------------------------
-yd_wait() {
+# Ensure ydotoold is running (starting it user-level when needed) and poll
+# for udev device recognition instead of sleeping once. Poll, never a
+# fixed sleep, so the udev recognition delay is tolerated deterministically.
+yd_ensure() {
   local out_dir="$1" i
   [[ -d "$out_dir" ]] || mkdir -p "$out_dir"
+  export YDOTOOL_SOCKET="$(yd_socket "$out_dir")"
+  if "$YDOTOOL" debug >/dev/null 2>&1; then
+    return 0
+  fi
+  # Dry-run must not start a daemon or touch uinput.
+  if [[ "$dry_run" == "1" ]]; then
+    return 0
+  fi
+  "$YDOTOOLD" --socket-path "$YDOTOOL_SOCKET" >"$out_dir/ydotoold.log" 2>&1 &
+  echo "ydotoold $! ydotoold" >> "$out_dir/pids"
+  for i in $(seq 1 50); do
+    if "$YDOTOOL" debug >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  die "ydotoold did not become ready within 5s"
+}
+
+yd_wait() {
+  local out_dir="$1" i
+  yd_ensure "$out_dir"
+  # Already ready after ensure; keep a final poll for late udev recognition.
   for i in $(seq 1 50); do
     if "$YDOTOOL" debug >/dev/null 2>&1; then
       echo "rig-drive: ydotool device ready"
