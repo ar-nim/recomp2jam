@@ -1826,7 +1826,13 @@ impl OnlineSession {
             .send_frame(Request::StartGame.id(), &StartGame.encode_body())
         {
             tracing::warn!(%source, "start send failed; Confirm retries it");
+            return;
         }
+        // The request stands until the game begins: the START control
+        // paints its armed face meanwhile. The exe arms that face in the
+        // click handler itself (VA `0x4b22d0`, file `0xb237d`) and keeps
+        // it until its Waiting update clears it (VA `0x4b2540`).
+        self.game.arm_waiting_start();
     }
 
     /// Joined-guest Confirm: flip the local ready toggle and send the
@@ -6771,6 +6777,10 @@ mod session_tests {
         session.paint(&mut live_frame);
 
         assert!(session.game.is_room_master(), "host must be room master");
+        assert!(
+            !session.game.waiting_confirm_armed(),
+            "no start request stands before the click"
+        );
 
         // Reference paint: same scene art, but only the master's START
         // control at the shared rect (READY + its inactive overlay
@@ -6796,9 +6806,28 @@ mod session_tests {
             w: 800,
             h: 600,
         };
-        scene_art.paint_backdrop_live(&mut ref_frame, Screen::Waiting, |placed| {
-            placed.id == "IDC_BUTTON_SWAIT_START"
-        });
+        // The master's own START body at its rest record: ticket #284
+        // made the confirm face paint exactly one record (#284: the
+        // body carries 3, the exe paints one frame), so the reference
+        // is that one record, not the whole stack.
+        let start = scene_art
+            .placements
+            .iter()
+            .find(|placed| placed.id == "IDC_BUTTON_SWAIT_START")
+            .expect("START staged");
+        let shared = o2jam_shell::avatar::shared_sprite_names(&scene_art.placements);
+        let shares_body = start
+            .sprite
+            .as_deref()
+            .is_some_and(|sprite| shared.contains(sprite));
+        o2jam_shell::avatar::paint_placement_layer(
+            &mut ref_frame,
+            start,
+            &scene_art.figures,
+            0,
+            shares_body,
+            None,
+        );
 
         // Compare the shared control rect (628,126)-(770,163).
         let (rx, ry, rw, rh) = (628i32, 126i32, 142i32, 37i32);
@@ -6817,6 +6846,245 @@ mod session_tests {
 
         server.join().unwrap();
     }
+
+    /// The role-owned Waiting confirm body (START for a master, READY
+    /// for a guest) and its `.bnd` rect in the staged Waiting art.
+    fn confirm_control(is_room_master: bool) -> &'static str {
+        if is_room_master {
+            "IDC_BUTTON_SWAIT_START"
+        } else {
+            "IDC_BUTTON_SWAIT_READY"
+        }
+    }
+
+    /// The staged Waiting art the live join stages (ticket #284 live
+    /// guards), or `None` when this checkout has no game data.
+    fn staged_waiting_art() -> Option<o2jam_shell::screens::paint::SceneArt> {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../install-root");
+        let archive = o2jam_shell::staging::read_install_archives(&root).interface?;
+        let report = o2jam_shell::staging::stage_state(
+            &archive,
+            o2jam_shell::staging::State::Waiting,
+            o2jam_shell::staging::StageContext::default(),
+        );
+        let staged = report.art?;
+        Some(o2jam_shell::screens::paint::SceneArt {
+            placements: staged.placements,
+            figures: staged.figures,
+        })
+    }
+
+    /// A frame carrying one record of the staged confirm body, painted
+    /// alone: the reference the live face must match.
+    fn confirm_record_reference(
+        scene_art: &o2jam_shell::screens::paint::SceneArt,
+        confirm: &str,
+        record: usize,
+    ) -> Vec<u32> {
+        let mut buf = vec![0u32; 800 * 600];
+        let mut frame = o2jam_render::Frame {
+            buf: &mut buf,
+            w: 800,
+            h: 600,
+        };
+        let placed = scene_art
+            .placements
+            .iter()
+            .find(|placed| placed.id == confirm)
+            .expect("confirm control staged");
+        let shared = o2jam_shell::avatar::shared_sprite_names(&scene_art.placements);
+        let shares_body = placed
+            .sprite
+            .as_deref()
+            .is_some_and(|sprite| shared.contains(sprite));
+        o2jam_shell::avatar::paint_placement_layer(
+            &mut frame,
+            placed,
+            &scene_art.figures,
+            record,
+            shares_body,
+            None,
+        );
+        buf
+    }
+
+    /// The confirm placement's rect as `(x, y, w, h)`.
+    fn confirm_rect(
+        scene_art: &o2jam_shell::screens::paint::SceneArt,
+        confirm: &str,
+    ) -> (i32, i32, usize, usize) {
+        let rect = scene_art
+            .placements
+            .iter()
+            .find(|placed| placed.id == confirm)
+            .expect("confirm control staged")
+            .rect;
+        (rect.x, rect.y, rect.w as usize, rect.h as usize)
+    }
+
+    /// One native-canvas paint of the live session.
+    fn paint_live(session: &mut OnlineSession) -> Vec<u32> {
+        let mut buf = vec![0u32; 800 * 600];
+        let mut frame = o2jam_render::Frame {
+            buf: &mut buf,
+            w: 800,
+            h: 600,
+        };
+        session.paint(&mut frame);
+        buf
+    }
+
+    /// Assert the live rect carries every opaque pixel of the reference
+    /// record (the body's colour-key leaves the rest of the rect showing
+    /// the backdrop, which the single-record reference does not paint).
+    fn compare_record_ink(
+        live: &[u32],
+        reference: &[u32],
+        rect: (i32, i32, usize, usize),
+        what: &str,
+    ) {
+        let (rx, ry, rw, rh) = rect;
+        let mut inked = 0usize;
+        for dy in 0..rh {
+            for dx in 0..rw {
+                let x = (rx + dx as i32) as usize;
+                let y = (ry + dy as i32) as usize;
+                let index = y * 800 + x;
+                if reference[index] == 0 {
+                    continue;
+                }
+                inked += 1;
+                assert_eq!(
+                    live[index], reference[index],
+                    "{what}: live Waiting paint at ({x},{y}) differs from its record"
+                );
+            }
+        }
+        assert!(inked > 0, "{what}: the reference record paints no ink");
+    }
+
+    /// Pixels of the rect where both records ink but differ: the
+    /// discrimination the face assertions rely on.
+    fn differing_ink(first: &[u32], second: &[u32], rect: (i32, i32, usize, usize)) -> usize {
+        let (rx, ry, rw, rh) = rect;
+        let mut count = 0usize;
+        for dy in 0..rh {
+            for dx in 0..rw {
+                let index = ((ry + dy as i32) as usize) * 800 + (rx + dx as i32) as usize;
+                if first[index] != 0 && second[index] != 0 && first[index] != second[index] {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
+    #[test]
+    fn live_guest_ready_shows_the_armed_third_record() {
+        // Ticket #284 live guard: a guest's READY body carries 3 raw
+        // records, and the seat-ready update arms the third one while
+        // the local ready byte stands and clears it back to the rest
+        // record when the byte drops (VA `0x4b5850`, file
+        // `0xb590b`-`0xb594f`). Live chain: `main::run_online` ->
+        // `Shell::run` -> `Session::paint` -> `ScreenGame::paint` ->
+        // `paint_waiting` -> `paint_waiting_scene` ->
+        // `paint_waiting_confirm_face`; the ready byte arrives from
+        // `OnlineSession::confirm_guest_ready` -> `ScreenGame::set_member_ready`.
+        let Some(scene_art) = staged_waiting_art() else {
+            return;
+        };
+
+        let (mut session, server) = joined_waiting_session(guest_snapshot(), |mut stream| {
+            // The Confirm's 4008 ready toggle rides an empty body.
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, 4008);
+            assert!(frame.payload.is_empty());
+            assert_quiet(&mut stream);
+        });
+        session.game_mut().load_scene(
+            Screen::Waiting,
+            scene_art.placements.clone(),
+            scene_art.figures.clone(),
+        );
+
+        let confirm = confirm_control(false);
+        let rect = confirm_rect(&scene_art, confirm);
+        let rest = confirm_record_reference(&scene_art, confirm, 0);
+        let armed = confirm_record_reference(&scene_art, confirm, 2);
+        assert!(
+            differing_ink(&rest, &armed, rect) > 0,
+            "the staged READY body's first and third records must differ for this guard to bite"
+        );
+
+        // Not ready yet: the rest record.
+        let live = paint_live(&mut session);
+        assert!(!session.game.waiting_confirm_armed());
+        compare_record_ink(&live, &rest, rect, "guest at rest");
+
+        // Confirm readies the local seat: the third record.
+        session.menu_key(MenuKey::Confirm, true);
+        assert!(session.game.waiting_confirm_armed(), "READY is armed");
+        let live = paint_live(&mut session);
+        compare_record_ink(&live, &armed, rect, "guest armed");
+
+        // Un-ready drops it back to the rest record.
+        session.game.set_member_ready(1, false);
+        let live = paint_live(&mut session);
+        compare_record_ink(&live, &rest, rect, "guest un-ready");
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn live_master_start_arm_shows_the_armed_third_record() {
+        // Ticket #284 live guard (master side): the START click arms the
+        // control's press state word (VA `0x4b22d0`, file `0xb237d`) and
+        // the face paints the body's third record until the game begins.
+        // Live chain: `main::run_online` -> `Shell::run` ->
+        // `Session::paint` -> `ScreenGame::paint` -> `paint_waiting` ->
+        // `paint_waiting_scene` -> `paint_waiting_confirm_face`; the arm
+        // arrives from `OnlineSession::confirm_master_start` ->
+        // `ScreenGame::arm_waiting_start`.
+        let Some(scene_art) = staged_waiting_art() else {
+            return;
+        };
+
+        let (mut session, server) = joined_waiting_session(joined_snapshot(), |mut stream| {
+            // The gated START leaves as a 4010 with an empty body.
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, 4010);
+            assert!(frame.payload.is_empty());
+            assert_quiet(&mut stream);
+        });
+        session.game_mut().load_scene(
+            Screen::Waiting,
+            scene_art.placements.clone(),
+            scene_art.figures.clone(),
+        );
+        assert!(session.game.is_room_master());
+
+        let confirm = confirm_control(true);
+        let rect = confirm_rect(&scene_art, confirm);
+        let rest = confirm_record_reference(&scene_art, confirm, 0);
+        let armed = confirm_record_reference(&scene_art, confirm, 2);
+        assert!(
+            differing_ink(&rest, &armed, rect) > 0,
+            "the staged START body's first and third records must differ for this guard to bite"
+        );
+
+        let live = paint_live(&mut session);
+        assert!(!session.game.waiting_confirm_armed());
+        compare_record_ink(&live, &rest, rect, "master at rest");
+
+        // Confirm issues the start request: the third record.
+        session.menu_key(MenuKey::Confirm, true);
+        assert!(session.game.waiting_confirm_armed(), "START is armed");
+        let live = paint_live(&mut session);
+        compare_record_ink(&live, &armed, rect, "master armed");
+
+        server.join().unwrap();
+    }
+
     #[test]
     fn password_join_commit_stages_room_over_scripted_gateway() {
         // Ticket #269 wire guard (join side): a real session walk,

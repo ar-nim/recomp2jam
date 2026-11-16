@@ -299,6 +299,71 @@ for the two hit paths. Waiting Confirm advances
 to Loading only with no joined room (offline walk) or
 `can_start_game`; a non-master or unready Confirm stays in Waiting.
 
+## Waiting confirm press face (7.55 static map, ticket #284)
+
+Static only over the read-only 7.55 copy (`OTwo.exe` sha256
+`83a045418b6219ba340681766b33de2bfbb5ff51b813ef4e2e9dd1def72c823b`,
+5,029,888 B; VA = file + `0x400000`). Tools: `python3` byte scans plus
+Capstone 5.0.7; behavior described in own words, no disassembly
+reproduced, no capture used.
+
+Art: `Wait_Start.ojs` and `Wait_Ready.ojs` each hold 3 raw 142x37
+RGB555 records (colorkey `0x0000`) at anchor (628,126); record 0 is the
+dim face (mean luma 15.4 against 17.0 for records 1 and 2). The body
+is one sprite object (frame count `+0x148`, current `+0x164`, rest
+`+0x168`), and frames are 1-based, so frame 1 paints record 0, frame 2
+record 1, frame 3 record 2.
+
+State machine: the per-control press state word lives at `+0x60`. The
+setter (VA `0x4f72b0`, file `0xf72b0`) stores `(arg + 1) & 1` there and
+re-dispatches the stored value to the kind dispatcher `0x4f6a30`,
+which switches on `[ctrl+0x10] & 0xf000`. The kind-`0x2000` arm (file
+`0x4f6b7c`) advances the frame once, flips the state word again, and
+sets absolute frame 3 while the result stays non-zero. Both START
+(`0x16202012`) and READY (`0x16202013`) carry nibble `2`, so both take
+that arm. Net for a pair of calls: **argument 1 = the armed face (frame
+3, record 2), argument 0 = the rest state**, with the frame left at
+rest+1 by the advance, which is why every clearing caller follows with
+the rest-frame setter `0x42f810` (VA `0x42f810`; the hover arm `0x4f6e20`
+uses `0x42f850` = current = rest + 1 = frame 2, record 1).
+
+Who sets and clears it:
+
+- The Waiting screen command handler (VA `0x4b22d0`) answers
+  `0x16202012` (compare at file `0xb2315`) by playing the click sound,
+  fetching the control through `0x48bcf0`, arming it with argument 1
+  (file `0xb237d`), and then running the all-ready check `0x4b5560`.
+  Its already-pending arm (gate `[screen+0x504]` at file `0xb2326`)
+  re-arms only while the state word still reads zero (file `0xb242f`).
+- No mouse edge clears it: an exhaustive scan of the setter's 94 call
+  sites finds no down/up- or enter/leave-driven clearing call for these
+  controls. Clearing happens in the screen's update function (VA
+  `0x4b2540`: START at files `0xb27f2`/`0xb2947`, READY at
+  `0xb2b0b`/`0xb2c47`) after the refusal warning, and in the seat-ready
+  update (VA `0x4b5850`, files `0xb590b`-`0xb594f`; VA `0x4af1e0`,
+  files `0xaf2d5`-`0xaf319`), which arms READY while the local ready
+  byte stands and clears it, rest frame included, when it drops.
+- The face is re-asserted from a cached copy (file `0xb29b0`-`0xb29e5`:
+  read `0x4f72e0`, cache into `[screen+0x368]`, re-set the word from
+  it), so it is a latch that follows room/seat state, not a mouse hold.
+
+OPEN (next evidence step): the exact refusal set that drops the START
+face before the scene changes — the `[screen+0x35c]`-indexed table byte
+`8` test, `[0x778a5c]`, the empty `[screen+0x540]` list, and
+`[0x7789d8] & 0xf0000000` with `[screen+0x374]`. Reading those four
+conditions in one pass would let the shell clear the face mid-waiting
+instead of only at the scene change.
+
+Shell mirror: `ScreenGame::waiting_confirm_armed` is the single home
+for the face (master: `waiting_start_armed`, set by
+`OnlineSession::confirm_master_start` after the 4010 send and dropped
+on any scene change; guest: the local seat's ready flag, the same word
+`set_member_ready` folds from `confirm_guest_ready`),
+`paint_waiting_scene` passes it to `paint_waiting_confirm_face`, which
+paints exactly one record — layer 0 at rest, layer
+`WAITING_CONFIRM_ARMED_RECORD` (2) while armed — and the confirm body
+leaves the backdrop stack through `waiting_paints_one_record`.
+
 ## The waiting song rect (7.55, host vs peer)
 
 `STATE_WAITING` authors three bodies onto one rect (`Interface1.opi`,

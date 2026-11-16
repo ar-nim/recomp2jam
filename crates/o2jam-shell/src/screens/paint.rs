@@ -3700,11 +3700,16 @@ pub struct WaitingLevel {
 /// counts, map, BPM, speed, music, wins), while the flat fallback
 /// below keeps the invented grid. Without staged cover placements
 /// the legacy rows keep their slot so the bare scene still reads.
+///
+/// `confirm_armed` is the local player's ready/start request standing:
+/// the role-owned confirm body then paints its armed record instead of
+/// its rest record (see [`paint_waiting_confirm_face`]).
 pub fn paint_waiting_scene(
     frame: &mut Frame<'_>,
     room: &JoinedRoom,
     art: &SceneArt,
     captions: &WaitingCaptions<'_>,
+    confirm_armed: bool,
 ) {
     let seats = staged_seats(room);
     // Seam: `ScreenGame::is_room_master` (seat id 0), mirrored here as
@@ -3713,8 +3718,11 @@ pub fn paint_waiting_scene(
     art.paint_backdrop_live(frame, Screen::Waiting, |placed| {
         waiting_seat_clone_live(placed, &seats)
             && waiting_control_armed_for_role(&placed.id, is_room_master)
-            && !waiting_paints_by_frame(&placed.id)
+            && !waiting_paints_one_record(&placed.id)
     });
+    // The confirm face keeps the backdrop's stacking slot: it painted in
+    // the backdrop pass before it selected its own record.
+    paint_waiting_confirm_face(frame, art, is_room_master, confirm_armed);
     paint_waiting_seat_marks(frame, &seats, art);
     if waiting_has_staged_covers(&art.placements) {
         paint_waiting_staged(frame, room, art, captions);
@@ -3723,14 +3731,67 @@ pub fn paint_waiting_scene(
     }
 }
 
-/// Whether a Waiting control paints one live-selected frame instead of
-/// its staged first record, so the rest stack leaves it out: the
-/// `LEVEL` badge alone ([`paint_waiting_level_badge`]). The exe's image
-/// control draws the frame its setter staged (`docs/ui-draw.md` steps
-/// 3-6; a frame swap never stacks frames), so stacking this body's 60
-/// frames would paint the last one (`MXR`) over the live pick.
-fn waiting_paints_by_frame(id: &str) -> bool {
+/// Whether a Waiting control paints one selected record instead of its
+/// staged layer stack, so the rest stack leaves it out: the `LEVEL`
+/// badge ([`paint_waiting_level_badge`]) and the role-owned confirm
+/// body ([`paint_waiting_confirm_face`]). The exe's image control
+/// draws the one frame its setter staged (`docs/ui-draw.md` steps 3-6;
+/// a frame swap never stacks frames), so stacking the badge's 60
+/// frames would paint the last one (`MXR`) over the live pick, and
+/// stacking the confirm body's 3 frames would paint its armed face
+/// over the rest face forever.
+fn waiting_paints_one_record(id: &str) -> bool {
     id == WAITING_LEVEL_ID
+        || id == waiting_confirm_control_id(true)
+        || id == waiting_confirm_control_id(false)
+}
+
+/// Record index of the armed confirm face: the third record of
+/// `Wait_Start.ojs`/`Wait_Ready.ojs` (both carry 3 raw 142x37 records).
+/// The exe's kind-`0x2000` dispatch arm (file `0x4f6b7c`, reached from
+/// the press setter `0x4f72b0`) sets absolute frame 3 when the control's
+/// press state word is non-zero, and frames are 1-based
+/// (`docs/room-enums.md:145`: frame n paints record n-1).
+const WAITING_CONFIRM_ARMED_RECORD: usize = 2;
+
+/// Paint the role-owned Waiting confirm body: exactly one record, its
+/// rest record (index 0, the dim face) or the armed record
+/// ([`WAITING_CONFIRM_ARMED_RECORD`]) while the local request stands.
+///
+/// The exe arms this face through the control's press state word
+/// `[ctrl+0x60]`: the START click handler sets it (VA `0x4b22d0`, file
+/// `0xb237d`) and the read-back arm of the same handler only re-arms a
+/// cleared control (file `0xb242f`); the seat-ready update arms it while
+/// the local ready byte stands and clears it with an explicit rest frame
+/// (VA `0x4b5850`, file `0xb590b`-`0xb594f`). A body without a third
+/// record (no pressed art staged) keeps its rest record, never a
+/// stand-in paint.
+fn paint_waiting_confirm_face(
+    frame: &mut Frame<'_>,
+    art: &SceneArt,
+    is_room_master: bool,
+    armed: bool,
+) {
+    let confirm_id = waiting_confirm_control_id(is_room_master);
+    let Some(placement) = art.placements.iter().find(|placed| placed.id == confirm_id) else {
+        return;
+    };
+    let shared = shared_sprite_names(&art.placements);
+    let shares_body = placement
+        .sprite
+        .as_deref()
+        .is_some_and(|sprite| shared.contains(sprite));
+    let pressed_record_staged = placement
+        .sprite
+        .as_ref()
+        .and_then(|sprite| art.figures.get(sprite))
+        .is_some_and(|figure| figure.layer(WAITING_CONFIRM_ARMED_RECORD).is_some());
+    let record = if armed && pressed_record_staged {
+        WAITING_CONFIRM_ARMED_RECORD
+    } else {
+        0
+    };
+    paint_placement_layer(frame, placement, &art.figures, record, shares_body, None);
 }
 
 /// The Waiting confirm control the local role owns
@@ -7206,6 +7267,7 @@ mod paint_tests {
             &room,
             art,
             &WaitingCaptions::default(),
+            false,
         );
         buf[10 * 800 + 10]
     }
@@ -7251,6 +7313,108 @@ mod paint_tests {
                 "{overlay} stays for a guest"
             );
         }
+    }
+
+    /// Staged waiting art holding one confirm control at (10,10) whose
+    /// body carries `records` distinct 1x1 records: record n paints the
+    /// `n`-th word (red, green, blue).
+    fn waiting_confirm_art(id: &str, records: &[[u8; 2]]) -> SceneArt {
+        let mut body = AvatarFigure::default();
+        for word in records {
+            body.push_layer(FigureLayer {
+                image: Rgb555Image::decode(word, 1, 1).unwrap(),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+        }
+        SceneArt {
+            placements: vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: id.to_owned(),
+                code: 0,
+                sprite: Some("Wait_Start.ojs".to_owned()),
+                rect: Rect {
+                    x: 10,
+                    y: 10,
+                    w: 4,
+                    h: 4,
+                },
+            }],
+            figures: HashMap::from([("Wait_Start.ojs".to_owned(), body)]),
+        }
+    }
+
+    /// Pixel at the confirm rect origin after painting the waiting
+    /// scene as `member_id` with the face `confirm_armed`.
+    fn waiting_confirm_pixel(art: &SceneArt, member_id: u8, confirm_armed: bool) -> u32 {
+        let mut room = waiting_room();
+        room.member_id = member_id;
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &room,
+            art,
+            &WaitingCaptions::default(),
+            confirm_armed,
+        );
+        buf[10 * 800 + 10]
+    }
+
+    #[test]
+    fn waiting_confirm_face_paints_the_armed_record_for_either_role() {
+        // #284: `Wait_Start.ojs`/`Wait_Ready.ojs` carry 3 raw records and
+        // the exe paints exactly one frame of each — the rest record, or
+        // the third record (absolute frame 3, kind-`0x2000` dispatch arm
+        // file `0x4f6b7c`) while the local request stands. Stacking them
+        // would paint the armed face over the rest face forever.
+        let records = [[0x00, 0x7C], [0xE0, 0x03], [0x1F, 0x00]];
+        for (member_id, confirm) in [
+            (0u8, "IDC_BUTTON_SWAIT_START"),
+            (1, "IDC_BUTTON_SWAIT_READY"),
+        ] {
+            let art = waiting_confirm_art(confirm, &records);
+            assert_eq!(
+                waiting_confirm_pixel(&art, member_id, false),
+                pack_xrgb(255, 0, 0),
+                "{confirm} at rest paints its first record"
+            );
+            assert_eq!(
+                waiting_confirm_pixel(&art, member_id, true),
+                pack_xrgb(0, 0, 255),
+                "{confirm} armed paints its third record"
+            );
+        }
+    }
+
+    #[test]
+    fn waiting_confirm_face_keeps_the_rest_record_without_pressed_art() {
+        // A body staged without a third record keeps its rest record
+        // while armed: never a blank rect and never a stand-in face.
+        let art = waiting_confirm_art("IDC_BUTTON_SWAIT_START", &[[0x00, 0x7C]]);
+        assert_eq!(
+            waiting_confirm_pixel(&art, 0, true),
+            pack_xrgb(255, 0, 0),
+            "a single-record body stays on its rest record"
+        );
+    }
+
+    #[test]
+    fn waiting_confirm_face_leaves_the_other_role_control_unpainted() {
+        // The role filter stays the single home for which control shows
+        // (`waiting_control_armed_for_role`): arming the local face never
+        // lights the control the other role owns.
+        let records = [[0x00, 0x7C], [0xE0, 0x03], [0x1F, 0x00]];
+        let art = waiting_confirm_art("IDC_BUTTON_SWAIT_READY", &records);
+        assert_eq!(
+            waiting_confirm_pixel(&art, 0, true),
+            0,
+            "a master never paints the guest's READY body"
+        );
     }
 
     #[test]
@@ -8235,6 +8399,7 @@ mod paint_tests {
             &room,
             &art,
             &WaitingCaptions::default(),
+            false,
         );
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert!(buf.contains(&pack_xrgb(0x30, 0xE0, 0x30)));
@@ -11190,6 +11355,7 @@ mod paint_tests {
             &waiting_room(),
             &art,
             &WaitingCaptions::default(),
+            false,
         );
         let red = pack_xrgb(255, 0, 0);
         // Empty seat 2 keeps its staged art pixel: no live line.
@@ -12749,6 +12915,7 @@ mod paint_tests {
             &waiting_room(),
             &art,
             &WaitingCaptions::default(),
+            false,
         );
         assert_eq!(buf[51 * 800 + 24], scrim_color());
         assert_eq!(buf[150 * 800 + 100], 0);
@@ -12806,6 +12973,7 @@ mod paint_tests {
                 &room,
                 &art,
                 &WaitingCaptions::default(),
+                false,
             );
             buf
         };
