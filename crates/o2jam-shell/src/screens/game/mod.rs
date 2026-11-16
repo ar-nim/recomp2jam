@@ -7063,6 +7063,17 @@ mod game_tests {
             game.has_pending_music_send(),
             "fresh row pick restages pending_music_send"
         );
+        // The reopened dialog carries the cached OK placement, so a
+        // second OK click closes it again with the pick still queued.
+        game.ingest_snapshot(&InputSnapshot::click_at(389, 519));
+        assert!(
+            !game.select_music_dialog_open(),
+            "OK on the reopened dialog closes it again"
+        );
+        assert!(
+            game.has_pending_music_send(),
+            "the pick stays queued after the reopen close"
+        );
     }
 
     #[test]
