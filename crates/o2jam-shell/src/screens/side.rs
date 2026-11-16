@@ -13,7 +13,10 @@ use super::super::avatar::{
 };
 use super::super::screen::Screen;
 use o2jam_file::OJN_LEVEL_COUNT;
-use o2jam_file::{AvatarItemRow, AvatarItemTable, Bnd, ControlBlock, ControlList, OjnListEntry};
+use o2jam_file::{
+    AvatarItemRow, AvatarItemTable, Bnd, ChartMask, ControlBlock, ControlList, InstalledMusic,
+    OjnListEntry,
+};
 use o2jam_net::play::MusicListAnswer;
 use o2jam_net::shop::{
     SellItemResponse, SyncItemPurchasePrefix, SyncItemPurchaseWallets, SyncMusicPurchaseResponse,
@@ -1367,9 +1370,10 @@ impl SelectMusicFilter {
     }
 }
 
-/// Staged catalog song: the identity fields the search table names
-/// plus the filter inputs (`OJNList.dat` record; owned copies so the
-/// catalog outlives the parse borrow).
+/// Staged catalog song: the identity fields the search table names,
+/// the filter inputs (`OJNList.dat` record) and the availability the
+/// install scan answers (`docs/music-availability.md` §1); owned copies
+/// so the catalog outlives the parse borrow.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectMusicSong {
     /// Song id (matches the `o2ma###` file number).
@@ -1390,6 +1394,14 @@ pub struct SelectMusicSong {
     /// Song-wheel label bucket (`entry+0x4`): the `OJNList.dat`
     /// table-5 category 1..=5, `None` while no bucket is staged.
     pub label: Option<u16>,
+    /// Per-difficulty chart presence (song table `entry+0x15c` bits
+    /// 0-2, §1). A song whose `o2ma<id>.ojn` is missing carries no
+    /// chart bit at all.
+    pub charts: ChartMask,
+    /// Whether the song's chart file is on disk. `false` is the exe's
+    /// "not downloaded" state: the row paints the notice and refuses
+    /// the pick (§3).
+    pub installed: bool,
 }
 
 impl SelectMusicSong {
@@ -1399,38 +1411,86 @@ impl SelectMusicSong {
     pub fn chart_level(&self, slot: usize) -> u16 {
         self.levels.get(slot).copied().unwrap_or(0)
     }
+
+    /// Stage the install scan's answer for this song (`true`: its
+    /// `o2ma<id>.ojn` exists). An installed song carries all three
+    /// charts — the value the music-list handler stamps for a song the
+    /// server lists (§1) and the set a local chart file provides.
+    pub fn set_installed(&mut self, installed: bool) {
+        self.installed = installed;
+        self.charts = if installed {
+            ChartMask::ALL
+        } else {
+            ChartMask::NONE
+        };
+    }
+}
+
+/// Caption the select dialog shows for a song the install does not
+/// carry: the exe's not-downloaded notice (VA `0x645ae0`, §3; set on
+/// the shared notice dialog through VA `0x50bfb0`). Own-words
+/// transcription of the pinned CP949 text.
+pub const SELECT_NOT_DOWNLOADED_NOTICE: &str =
+    "This song is not downloaded. Click the [Download] icon to download it.";
+
+/// Whether one catalog song's chart file is installed.
+///
+/// `installed` is the pure scan (§1). `None` means no scan ran — the
+/// install carries no `Music` folder, as on a machine without game
+/// data — so the client has no local knowledge and the song keeps the
+/// pre-#276 selectable answer; a real install always carries the
+/// folder, so the live client always has the scan.
+#[must_use]
+pub fn song_installed(song_id: u32, installed: Option<&InstalledMusic>) -> bool {
+    match installed {
+        None => true,
+        Some(seat) => u16::try_from(song_id).is_ok_and(|id| seat.is_installed(id)),
+    }
 }
 
 /// Catalog songs in file order, dead slots filtered out exactly like
 /// [`music_shop_songs`]; empty without catalog data. Label buckets
 /// stay unstaged: use [`select_music_songs_with_labels`] when the
-/// table-5 tags are parsed.
+/// table-5 tags are parsed. `installed` is the install scan's answer
+/// (§1); `None` means no local knowledge, so every song stays
+/// selectable.
 #[must_use]
-pub fn select_music_songs(entries: &[OjnListEntry<'_>]) -> Vec<SelectMusicSong> {
-    select_music_songs_with_labels(entries, &[])
+pub fn select_music_songs(
+    entries: &[OjnListEntry<'_>],
+    installed: Option<&InstalledMusic>,
+) -> Vec<SelectMusicSong> {
+    select_music_songs_with_labels(entries, &[], installed)
 }
 
 /// Catalog songs with their table-5 label buckets attached (the STEP2
-/// filter input). A song id absent from `labels` keeps no bucket.
+/// filter input) and the install scan's availability. A song id absent
+/// from `labels` keeps no bucket.
 #[must_use]
 pub fn select_music_songs_with_labels(
     entries: &[OjnListEntry<'_>],
     labels: &[o2jam_file::OjnMidTagEntry],
+    installed: Option<&InstalledMusic>,
 ) -> Vec<SelectMusicSong> {
     entries
         .iter()
         .filter(|entry| entry.is_song())
-        .map(|entry| SelectMusicSong {
-            song_id: entry.song_id,
-            title: entry.title.clone(),
-            artist: entry.artist.clone(),
-            levels: [
-                low_word(entry.level_flags),
-                high_word(entry.level_flags),
-                low_word(entry.stable_minor),
-            ],
-            genre: low_word(entry.genre),
-            label: label_bucket(labels, entry.song_id),
+        .map(|entry| {
+            let mut song = SelectMusicSong {
+                song_id: entry.song_id,
+                title: entry.title.clone(),
+                artist: entry.artist.clone(),
+                levels: [
+                    low_word(entry.level_flags),
+                    high_word(entry.level_flags),
+                    low_word(entry.stable_minor),
+                ],
+                genre: low_word(entry.genre),
+                label: label_bucket(labels, entry.song_id),
+                charts: ChartMask::NONE,
+                installed: false,
+            };
+            song.set_installed(song_installed(entry.song_id, installed));
+            song
         })
         .collect()
 }
@@ -1455,7 +1515,7 @@ fn label_bucket(labels: &[o2jam_file::OjnMidTagEntry], song_id: u32) -> Option<u
 
 /// Catalog song fixture for the shell's dialog tests: the `First`/`Band`
 /// identity those tests assert, levels 1/2/3 (one per difficulty slot),
-/// genre 0 and no label bucket.
+/// genre 0, no label bucket, and installed with all three charts.
 #[cfg(test)]
 pub(crate) fn staged_song(song_id: u32) -> SelectMusicSong {
     SelectMusicSong {
@@ -1465,6 +1525,8 @@ pub(crate) fn staged_song(song_id: u32) -> SelectMusicSong {
         levels: [1, 2, 3],
         genre: 0,
         label: None,
+        charts: o2jam_file::ChartMask::ALL,
+        installed: true,
     }
 }
 
@@ -1519,7 +1581,7 @@ pub(crate) fn filter_catalog_labels() -> Vec<o2jam_file::OjnMidTagEntry> {
 pub(crate) fn filter_catalog_songs() -> Vec<SelectMusicSong> {
     let blob = filter_catalog_blob();
     let entries = o2jam_file::parse_ojn_list(&blob).expect("fixture parses");
-    select_music_songs_with_labels(&entries, &filter_catalog_labels())
+    select_music_songs_with_labels(&entries, &filter_catalog_labels(), None)
 }
 
 /// The dialog's 19 filter buttons at their `Dialog_SelectMusic.bnd`
@@ -1607,12 +1669,23 @@ impl SelectMusicRow<'_> {
     pub fn grade(self) -> Option<u8> {
         None
     }
+
+    /// Whether this row's chart is playable: the song's file is
+    /// installed and its difficulty bit is set (§1). The exe sends
+    /// `4000 SetRoomMusic` only for such a row and shows the
+    /// not-downloaded notice otherwise (§3).
+    #[must_use]
+    pub fn playable(self) -> bool {
+        self.song.installed && self.song.charts.has_chart(self.slot)
+    }
 }
 
 /// Search-result rows in catalog order, easy-first, narrowed by the
-/// dialog's filter columns; empty without songs. The reference client
-/// drops charts the install lacks; the staged data has no
-/// availability source, so every slot draws (documented gap).
+/// dialog's filter columns; empty without songs. Every slot draws: the
+/// exe lists a song the install does not carry too, and the row's
+/// not-downloaded state is what tells the player why (the pick
+/// refuses, §3). [`SelectMusicRow::playable`] carries the per-chart
+/// gate.
 #[must_use]
 pub fn select_music_rows(
     songs: &[SelectMusicSong],
@@ -6149,21 +6222,21 @@ mod side_tests {
     fn select_songs_walk_catalog_skipping_dead_slots() {
         let blob = side_catalog();
         let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
-        let songs = select_music_songs(&entries);
+        let songs = select_music_songs(&entries, None);
         assert_eq!(songs.len(), 2);
         assert_eq!(songs[0].song_id, 757);
         assert_eq!(songs[0].title, "First");
         assert_eq!(songs[0].artist, "Band");
         assert_eq!(songs[1].song_id, 770);
         assert_eq!(songs[1].artist, "Band");
-        assert!(select_music_songs(&[]).is_empty());
+        assert!(select_music_songs(&[], None).is_empty());
     }
 
     #[test]
     fn select_rows_repeat_each_song_per_difficulty_slot() {
         let blob = side_catalog();
         let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
-        let songs = select_music_songs(&entries);
+        let songs = select_music_songs(&entries, None);
         let rows = select_music_rows(&songs, SelectMusicFilter::ALL);
         assert_eq!(rows.len(), 6);
         assert_eq!(rows[0].song.song_id, 757);
@@ -6199,10 +6272,35 @@ mod side_tests {
     fn select_rows_leave_levels_and_grades_undrawn() {
         let blob = side_catalog();
         let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
-        let songs = select_music_songs(&entries);
+        let songs = select_music_songs(&entries, None);
         let rows = select_music_rows(&songs, SelectMusicFilter::ALL);
         assert!(rows.iter().all(|row| row.level().is_none()));
         assert!(rows.iter().all(|row| row.grade().is_none()));
+    }
+
+    #[test]
+    fn select_songs_take_their_availability_from_the_install_scan() {
+        // §1: the install scan decides, not the catalog and not the
+        // server. 757's chart file exists, so its rows are playable
+        // (all three chart bits); 770 has no file, so its rows carry
+        // no chart bit and refuse. No scan (`None`) keeps both
+        // selectable — no local knowledge.
+        let blob = side_catalog();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        let seat = o2jam_file::installed_music(["o2ma757.ojn"]);
+        let songs = select_music_songs(&entries, Some(&seat));
+        assert_eq!(songs[0].song_id, 757);
+        assert!(songs[0].installed);
+        assert_eq!(songs[0].charts, ChartMask::ALL);
+        assert_eq!(songs[1].song_id, 770);
+        assert!(!songs[1].installed);
+        assert_eq!(songs[1].charts, ChartMask::NONE);
+        let rows = select_music_rows(&songs, SelectMusicFilter::ALL);
+        assert!(rows[..3].iter().all(|row| row.playable()));
+        assert!(rows[3..].iter().all(|row| !row.playable()));
+        assert!(select_music_songs(&entries, None)
+            .iter()
+            .all(|song| song.installed));
     }
 
     /// Song ids of the rows a filter keeps.

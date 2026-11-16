@@ -420,7 +420,7 @@ impl SongFlowParams {
         let Some(music_id) = self.music_id else {
             return Ok(None);
         };
-        let mut flow = connect::SongFlowOptions::new(music_id);
+        let mut flow = connect::SongFlowOptions::new(music_id, installed_music_state(music_id));
         flow.difficulty = self.difficulty;
         flow.speed = self.game_speed;
         flow.arena_id = self.arena_id;
@@ -1393,6 +1393,11 @@ const SESSION_CATALOG: &str = "O2Jam/Image/OJNList.dat";
 /// dialog row-less (no fallback rows: invented songs must never reach
 /// the host pick); the chart fetch then warns instead of staging.
 fn stage_session_catalog(session: &mut session::OnlineSession) {
+    // Availability rides the catalog (§1): stage the install's `Music`
+    // scan so a catalog song without a chart file shows the
+    // not-downloaded notice and refuses the pick. Staged first so the
+    // catalog inherits it; without game data the scan answers `None`.
+    session.set_installed_music(o2jam_shell::music_install::scan_installed_music());
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../install-root")
         .join(SESSION_CATALOG);
@@ -1446,6 +1451,9 @@ fn stage_offline_windowed(game: &mut o2jam_shell::ScreenGame) {
 /// unparsable catalog keeps every board row-less; no fallback rows
 /// are invented.
 fn stage_offline_music_boards(game: &mut o2jam_shell::ScreenGame) {
+    // The offline walk stages the same local availability the online
+    // boot stages (§1); `None` without game data.
+    game.set_installed_music(o2jam_shell::music_install::scan_installed_music());
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../install-root")
         .join(SESSION_CATALOG);
@@ -1465,6 +1473,21 @@ fn stage_offline_music_boards(game: &mut o2jam_shell::ScreenGame) {
             tracing::debug!(%source, "song catalog unparsable; boards stage row-less");
         }
     }
+}
+
+/// Music state to announce for one room song (`UpdateMusicState` 4025,
+/// `docs/music-availability.md` §2).
+///
+/// Availability is the install's `Music` folder (§1): `Ready` only when
+/// `o2ma<id>.ojn` is there, `NoMusic` otherwise — the exe's own two-way
+/// answer (VA `0x4be808`). Without game data nothing is installed, so
+/// the honest answer stays `NoMusic`; the `NoAccess` arm needs the
+/// PT-gate globals (§5.5, OPEN) and is never claimed here.
+fn installed_music_state(music_id: u16) -> o2jam_net::MusicState {
+    let installed = o2jam_shell::music_install::scan_installed_music()
+        .as_ref()
+        .is_some_and(|seat| seat.is_installed(music_id));
+    o2jam_net::MusicState::for_installed(installed)
 }
 
 /// Installed `avatar.opa` image the online identity figure stacks

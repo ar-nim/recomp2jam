@@ -1141,7 +1141,9 @@ mod live_art_tests {
     fn installed_catalog_songs() -> Option<Vec<o2jam_shell::screens::side::SelectMusicSong>> {
         let bytes = std::fs::read(install_root().join("O2Jam/Image/OJNList.dat")).ok()?;
         let entries = o2jam_file::parse_ojn_list(&bytes).ok()?;
-        let songs = o2jam_shell::screens::side::select_music_songs(&entries);
+        // No install scan here: these tests prove caption geometry, and
+        // an unknown availability keeps every row as before (#276).
+        let songs = o2jam_shell::screens::side::select_music_songs(&entries, None);
         (!songs.is_empty()).then_some(songs)
     }
 

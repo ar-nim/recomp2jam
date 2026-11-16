@@ -40,9 +40,13 @@ wire_enum! {
         SubmitScore = 4016,
         ExitPlaying = 4021,
         GetMusicList = 4030,
+        /// Music state announcement (docs/music-availability.md §2).
+        UpdateMusicState = 4025,
         SyncMemberMusicState = 4036,
         SetDownloadProgress = 4038,
         FinalizeRank = 4041,
+        /// Download-complete announce (docs/music-availability.md §4).
+        SyncMusicDownload = 5012,
         Terminate = 65520,
     }
 }
@@ -113,6 +117,13 @@ wire_enum! {
         RoomTeamChanged = 4007,
         UserReadyStateChanged = 4009,
         GameStatsUpdate = 4015,
+        /// Per-member music states the server hands out on START
+        /// (docs/music-availability.md §2/§4).
+        AcquireMusic = 4035,
+        /// One member's music state change (§2).
+        SyncMemberMusicState = 4037,
+        /// One member's download percentage (§2).
+        DownloadProgressChanged = 4039,
         ScoreSubmission = 4017,
         ScoreCompleted = 4018,
         GameRankUpdate = 4040,
@@ -171,6 +182,8 @@ mod tests {
             Request::SyncMemberMusicState,
             Request::SetDownloadProgress,
             Request::FinalizeRank,
+            Request::UpdateMusicState,
+            Request::SyncMusicDownload,
             Request::Terminate,
         ];
         for request in all {
@@ -250,6 +263,9 @@ mod tests {
             Event::RoomTeamChanged,
             Event::UserReadyStateChanged,
             Event::GameStatsUpdate,
+            Event::AcquireMusic,
+            Event::SyncMemberMusicState,
+            Event::DownloadProgressChanged,
             Event::ScoreSubmission,
             Event::ScoreCompleted,
             Event::GameRankUpdate,
@@ -297,6 +313,22 @@ mod tests {
         assert_eq!(Event::from_id(4040), Some(Event::GameRankUpdate));
         assert_eq!(Event::from_id(4016), None);
         assert_eq!(Event::from_id(4041), None);
+    }
+
+    #[test]
+    fn resolves_music_state_family_ids() {
+        // docs/music-availability.md §2: 4025/4036/4038 go up, while
+        // 4035/4037/4039 arrive as events; 5012 rides the shop range.
+        assert_eq!(Request::from_id(4025), Some(Request::UpdateMusicState));
+        assert_eq!(Request::from_id(4036), Some(Request::SyncMemberMusicState));
+        assert_eq!(Request::from_id(4038), Some(Request::SetDownloadProgress));
+        assert_eq!(Request::from_id(5012), Some(Request::SyncMusicDownload));
+        assert_eq!(Event::from_id(4035), Some(Event::AcquireMusic));
+        assert_eq!(Event::from_id(4037), Some(Event::SyncMemberMusicState));
+        assert_eq!(Event::from_id(4039), Some(Event::DownloadProgressChanged));
+        assert_eq!(Event::from_id(4025), None);
+        assert_eq!(Request::from_id(4035), None);
+        assert_eq!(Event::from_id(5012), None);
     }
 
     #[test]

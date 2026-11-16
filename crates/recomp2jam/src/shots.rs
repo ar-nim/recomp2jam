@@ -736,6 +736,10 @@ fn stage_select_music_scene(game: &mut ScreenGame) {
 /// Skips when a catalog is already staged so the playing caption
 /// keeps the same rows.
 fn stage_select_music_catalog(game: &mut ScreenGame) {
+    // Availability is local file presence (§1): stage the install's
+    // `Music` scan first so the dialog's rows carry the real answer.
+    // Without game data the scan answers `None` (no local knowledge).
+    game.set_installed_music(o2jam_shell::music_install::scan_installed_music());
     if !game.select_songs().is_empty() {
         return;
     }
@@ -3412,7 +3416,7 @@ mod tests {
         use o2jam_shell::screens::side::select_music_songs;
         if let Ok(archive) = std::fs::read(install_root().join(MUSICSELECT_CATALOG)) {
             if let Ok(entries) = o2jam_file::parse_ojn_list(&archive) {
-                if !select_music_songs(&entries).is_empty() {
+                if !select_music_songs(&entries, None).is_empty() {
                     return entries
                         .iter()
                         .filter(|entry| entry.is_song())
@@ -3949,7 +3953,7 @@ mod tests {
         let bytes = musicselect_fallback_catalog();
         let entries = o2jam_file::parse_ojn_list(&bytes).expect("fallback catalog parses");
         assert_eq!(entries.len(), MUSICSELECT_FALLBACK_SONGS.len());
-        let songs = select_music_songs(&entries);
+        let songs = select_music_songs(&entries, None);
         assert_eq!(songs.len(), MUSICSELECT_FALLBACK_SONGS.len());
         assert_eq!(songs[0].song_id, u32::from(PLAYING_SONG.music_id));
         assert_eq!(

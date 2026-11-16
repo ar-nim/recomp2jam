@@ -137,7 +137,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
-use o2jam_file::{OjnListEntry, OJN_LEVEL_COUNT};
+use o2jam_file::{InstalledMusic, OjnListEntry, OJN_LEVEL_COUNT};
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams};
 use o2jam_net::gift::{ClaimGiftResponse, GetGiftMessageList, GetGiftMessageListResponse};
 use o2jam_net::play::{
@@ -153,11 +153,12 @@ use o2jam_net::shop::{
 };
 use o2jam_net::EmptyMessage;
 use o2jam_net::{
-    ChannelLogin, ChannelLoginResponse, ChannelLoginResult, ChannelState, CharacterInfo,
-    ConfirmMusicLoaded, CreateResult, CreateRoom, CreateRoomResponse, ExitPlaying, FinalizeRank,
-    Frame, GameMode, GameStatsUpdate, GatewayConnection, Generic, GetMusicList, JoinResult,
-    JoinRoom, JoinRoomResponse, JoinedRoom, KeyMode, MemberReadyStateChanged, Ready, Request,
-    SetRoomArena, SetRoomMusic, StartGame, SubmitScore, WireMessage,
+    AcquireMusic, ChannelLogin, ChannelLoginResponse, ChannelLoginResult, ChannelState,
+    CharacterInfo, ConfirmMusicLoaded, CreateResult, CreateRoom, CreateRoomResponse,
+    DownloadProgressChanged, ExitPlaying, FinalizeRank, Frame, GameMode, GameStatsUpdate,
+    GatewayConnection, Generic, GetMusicList, JoinResult, JoinRoom, JoinRoomResponse, JoinedRoom,
+    KeyMode, MemberReadyStateChanged, Ready, Request, SetRoomArena, SetRoomMusic, StartGame,
+    SubmitScore, SyncMemberMusicStateEvent, WireMessage,
 };
 use o2jam_shell::screens::game::{LobbyChat, SlashCommand};
 use o2jam_shell::screens::SideScreen;
@@ -565,6 +566,17 @@ impl OnlineSession {
     /// [`Self::poll_song_select`]).
     pub fn set_pending_song(&mut self, choice: SongChoice) -> &mut Self {
         self.pending_song = Some(choice);
+        self
+    }
+
+    /// Stage the install's local music availability (`Music` folder
+    /// scan, `docs/music-availability.md` §1) into the select-music
+    /// dialog's rows. Order-independent with
+    /// [`Self::set_song_catalog`]: either staging point takes the
+    /// other's answer. `None` (no game data) leaves every row
+    /// selectable.
+    pub fn set_installed_music(&mut self, installed: Option<InstalledMusic>) -> &mut Self {
+        self.game.set_installed_music(installed);
         self
     }
 
@@ -2591,10 +2603,11 @@ impl OnlineSession {
     }
 
     /// Drain inbound 3012 player lines and 3013 administrator lines
-    /// into the waiting history until the socket goes quiet — the
-    /// 4015 echo drain's best-effort shape: keepalives skip silently,
-    /// foreign ids log and skip (`ERRORS-19`: nothing is dropped
-    /// without a trace).
+    /// into the waiting history, plus the waiting music-state family
+    /// (`4035`/`4037`/`4039`, `docs/music-availability.md` §2), until
+    /// the socket goes quiet — the 4015 echo drain's best-effort
+    /// shape: keepalives skip silently, foreign ids log and skip
+    /// (`ERRORS-19`: nothing is dropped without a trace).
     fn drain_waiting_chat(&mut self) {
         loop {
             match self.gateway.next_frame() {
@@ -2613,12 +2626,68 @@ impl OnlineSession {
                 Ok(frame) if frame.id == MemberReadyStateChanged::COMMAND => {
                     self.apply_ready_echo(&frame);
                 }
+                Ok(frame) if frame.id == SyncMemberMusicStateEvent::COMMAND => {
+                    self.apply_member_music_state(&frame);
+                }
+                Ok(frame) if frame.id == AcquireMusic::COMMAND => {
+                    self.apply_acquire_music(&frame);
+                }
+                Ok(frame) if frame.id == DownloadProgressChanged::COMMAND => {
+                    self.apply_download_progress(&frame);
+                }
                 Ok(frame) if Generic::from_id(frame.id).is_some() => {}
                 Ok(frame) => {
                     tracing::debug!(id = frame.id, "skipping non-chat frame in waiting drain");
                 }
                 Err(_) => break,
             }
+        }
+    }
+
+    /// Fold one 4037 frame into its waiting seat: one member's music
+    /// state (§2, handler VA `0x559990`, the state landing in the
+    /// seat's `+0x217c`). Undecodable bodies drop with a trace.
+    fn apply_member_music_state(&mut self, frame: &Frame) {
+        let Ok(event) = SyncMemberMusicStateEvent::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable music state");
+            return;
+        };
+        self.stage_member_music_state(event.member_id, event.state.code());
+    }
+
+    /// Fold one 4035 frame (the counted member/state list the server
+    /// hands out on START, §2/§4) into the waiting seats.
+    fn apply_acquire_music(&mut self, frame: &Frame) {
+        let Ok(event) = AcquireMusic::decode_frame(frame) else {
+            tracing::debug!(id = frame.id, "dropping undecodable acquire music");
+            return;
+        };
+        for member in &event.members {
+            self.stage_member_music_state(member.member_id, member.state.code());
+        }
+    }
+
+    /// One member's music state into the shell seats.
+    fn stage_member_music_state(&mut self, member_id: u8, state: u8) {
+        tracing::debug!(member = member_id, state, "member music state");
+        self.game.set_member_music_state(member_id, state);
+    }
+
+    /// Decode one 4039 download percentage (§2, handler VA `0x559a10`:
+    /// percentage then member).
+    ///
+    /// No staging: the percentage has no seat field our client models
+    /// yet — the exe forwards it to the waiting download bar
+    /// (`Wait_Downloding.ojs`, §4) and the post-START flow that owns
+    /// that art is slice 3/4 (#276). Traced, never silently eaten.
+    fn apply_download_progress(&mut self, frame: &Frame) {
+        match DownloadProgressChanged::decode_frame(frame) {
+            Ok(progress) => tracing::debug!(
+                member = progress.member_id,
+                percent = progress.percentage,
+                "download progress (no staged bar yet)"
+            ),
+            Err(_) => tracing::debug!(id = frame.id, "dropping undecodable download progress"),
         }
     }
 
@@ -5612,6 +5681,55 @@ mod session_tests {
         server.join().unwrap();
         assert_eq!(session.member_ready(1), Some(true));
         assert_eq!(session.member_ready(0), None);
+    }
+
+    #[test]
+    fn waiting_seats_take_the_music_state_family() {
+        // Live caller chain (docs/live-path-reachability.md):
+        //   main.rs::run_play -> assemble_online_session ->
+        //   OnlineSession::paint (Waiting) -> poll_waiting_chat ->
+        //   drain_waiting_chat -> apply_member_music_state (4037) /
+        //   apply_acquire_music (4035) -> ScreenGame::set_member_music_state
+        //   (the seat `+0x217c` byte, docs/music-availability.md §2).
+        use o2jam_net::{AcquireMusic, MemberMusicState, MusicState, SyncMemberMusicStateEvent};
+        let single = SyncMemberMusicStateEvent {
+            member_id: 1,
+            state: MusicState::NoMusic,
+        };
+        let acquire = AcquireMusic {
+            members: vec![
+                MemberMusicState {
+                    member_id: 0,
+                    state: MusicState::Downloading,
+                },
+                MemberMusicState {
+                    member_id: 2,
+                    state: MusicState::Ready,
+                },
+            ],
+        };
+        let mut room = guest_snapshot();
+        room.user_count = 3;
+        room.slots[2].member = Some(member("third", true));
+        let (mut session, server) = joined_waiting_session(room, move |mut stream| {
+            stream.write_all(&single.encode()).unwrap();
+            stream.write_all(&acquire.encode()).unwrap();
+            assert_quiet(&mut stream);
+        });
+        paint_until(&mut session, |s| s.game.member_music_state(2) == Some(0));
+        server.join().unwrap();
+        assert_eq!(
+            session.game.member_music_state(1),
+            Some(MusicState::NoMusic.code()),
+            "4037 stages the named seat"
+        );
+        assert_eq!(
+            session.game.member_music_state(0),
+            Some(MusicState::Downloading.code()),
+            "4035 stages every listed seat"
+        );
+        assert_eq!(session.game.member_music_state(2), Some(0));
+        assert_eq!(session.game.member_music_state(3), None);
     }
 
     #[test]

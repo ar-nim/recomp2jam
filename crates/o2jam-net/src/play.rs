@@ -562,6 +562,285 @@ impl WireMessage for SyncMemberMusicState {
     }
 }
 
+/// Music-state byte the waiting room trades (`docs/music-availability.md`
+/// §2; Memoryer `Encore.Data/Metadata/MusicState.cs`).
+///
+/// The exe computes it from the room's staged song (`0x7789d8`) and
+/// the song table's `entry+0x15c` word through VA `0x4be690`, stores
+/// it into the local seat (`+0x217c`), and sends it as the `4025`
+/// body. `NoAccess` needs the PT-gate globals (`0x77ee28`,
+/// `0x768b34`) that our client does not model yet — OPEN, §5.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum MusicState {
+    /// `0`: the chart file is on disk.
+    Ready = 0,
+    /// `1`: the song is known but its file is missing.
+    NoMusic = 1,
+    /// `2`: the song needs a purchase the account does not hold.
+    NoAccess = 2,
+    /// `4`: a download for this song is running.
+    Downloading = 4,
+}
+
+impl MusicState {
+    /// The exe's two-way answer for a room song (§2, VA `0x4be808`):
+    /// `Ready` when the install carries the chart file, `NoMusic` when
+    /// it does not.
+    #[must_use]
+    pub fn for_installed(installed: bool) -> Self {
+        if installed {
+            Self::Ready
+        } else {
+            Self::NoMusic
+        }
+    }
+
+    /// Wire byte.
+    #[must_use]
+    pub fn code(self) -> u8 {
+        self as u8
+    }
+
+    /// Parse a wire byte; anything but 0/1/2/4 is an error, so a wire
+    /// change is loud instead of silently staging a bogus state.
+    ///
+    /// # Errors
+    ///
+    /// `Error::InvalidField` outside the four states.
+    pub fn from_code(code: u8) -> Result<Self, Error> {
+        match code {
+            0 => Ok(Self::Ready),
+            1 => Ok(Self::NoMusic),
+            2 => Ok(Self::NoAccess),
+            4 => Ok(Self::Downloading),
+            _ => Err(Error::InvalidField {
+                field: "music state",
+                reason: "not 0, 1, 2 or 4",
+            }),
+        }
+    }
+}
+
+/// `UpdateMusicState` 4025: announce our music state for the room's
+/// song (client to server).
+///
+/// One state byte (§2: eight exe send sites push `0xfb9` with the byte
+/// VA `0x4be690` computes, files `0xab613`…`0xb6a9e`; Memoryer
+/// `UpdateMusicStateRequest` carries one `MusicState` field).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UpdateMusicState {
+    /// State our client reports for the room's song.
+    pub state: MusicState,
+}
+
+/// Body length of [`UpdateMusicState`]: one state byte.
+const UPDATE_MUSIC_STATE_BODY_LEN: usize = 1;
+
+impl WireMessage for UpdateMusicState {
+    const COMMAND: u16 = 4025;
+
+    fn encode_body(&self) -> Vec<u8> {
+        vec![self.state.code()]
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < UPDATE_MUSIC_STATE_BODY_LEN {
+            return Err(Error::TruncatedMessage {
+                need: UPDATE_MUSIC_STATE_BODY_LEN,
+                have: body.len(),
+            });
+        }
+        if body.len() > UPDATE_MUSIC_STATE_BODY_LEN {
+            return Err(Error::TrailingBytes(
+                body.len() - UPDATE_MUSIC_STATE_BODY_LEN,
+            ));
+        }
+        Ok(Self {
+            state: MusicState::from_code(body[0])?,
+        })
+    }
+}
+
+/// One member's music state inside [`AcquireMusic`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemberMusicState {
+    /// Room slot the state belongs to.
+    pub member_id: u8,
+    /// State that member reports.
+    pub state: MusicState,
+}
+
+/// Wire size of one [`MemberMusicState`]: member byte plus state byte.
+const MEMBER_MUSIC_STATE_LEN: usize = 2;
+
+/// `AcquireMusic` 4035 (S→C event): the room's per-member music
+/// states, sent when a START needs the members to fetch the song.
+///
+/// Shape from §2's handler (a counted list whose entries forward
+/// `(member, state)`, VA `0x5598f7`-area) and Memoryer
+/// `AcquireMusicEventData` (one byte-counted collection of
+/// member/state pairs).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcquireMusic {
+    /// One entry per member the server names.
+    pub members: Vec<MemberMusicState>,
+}
+
+impl WireMessage for AcquireMusic {
+    const COMMAND: u16 = 4035;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let count = u8::try_from(self.members.len()).unwrap_or(u8::MAX);
+        let mut body = Vec::with_capacity(1 + self.members.len() * MEMBER_MUSIC_STATE_LEN);
+        body.push(count);
+        for member in self.members.iter().take(usize::from(count)) {
+            body.push(member.member_id);
+            body.push(member.state.code());
+        }
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        let count = usize::from(
+            *body
+                .first()
+                .ok_or(Error::TruncatedMessage { need: 1, have: 0 })?,
+        );
+        let need = 1 + count * MEMBER_MUSIC_STATE_LEN;
+        if body.len() < need {
+            return Err(Error::TruncatedMessage {
+                need,
+                have: body.len(),
+            });
+        }
+        if body.len() > need {
+            return Err(Error::TrailingBytes(body.len() - need));
+        }
+        let mut members = Vec::with_capacity(count);
+        for row in body[1..].as_chunks::<MEMBER_MUSIC_STATE_LEN>().0 {
+            members.push(MemberMusicState {
+                member_id: row[0],
+                state: MusicState::from_code(row[1])?,
+            });
+        }
+        Ok(Self { members })
+    }
+}
+
+/// `SyncMemberMusicState` 4037 (S→C event): one member's music state.
+///
+/// The suffix separates this broadcast from the `4036` request our
+/// client sends. Shape from §2's handler VA `0x559990`: two one-byte
+/// reads, the first matched against the local member id and the second
+/// written into the seat's `+0x217c`; Memoryer
+/// `SyncMemberMusicStateEventData` carries member then state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyncMemberMusicStateEvent {
+    /// Room slot the state belongs to.
+    pub member_id: u8,
+    /// State that member reports.
+    pub state: MusicState,
+}
+
+impl WireMessage for SyncMemberMusicStateEvent {
+    const COMMAND: u16 = 4037;
+
+    fn encode_body(&self) -> Vec<u8> {
+        vec![self.member_id, self.state.code()]
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < MEMBER_MUSIC_STATE_LEN {
+            return Err(Error::TruncatedMessage {
+                need: MEMBER_MUSIC_STATE_LEN,
+                have: body.len(),
+            });
+        }
+        if body.len() > MEMBER_MUSIC_STATE_LEN {
+            return Err(Error::TrailingBytes(body.len() - MEMBER_MUSIC_STATE_LEN));
+        }
+        Ok(Self {
+            member_id: body[0],
+            state: MusicState::from_code(body[1])?,
+        })
+    }
+}
+
+/// `DownloadProgressChanged` 4039 (S→C event): a member's download
+/// percentage.
+///
+/// Wire order percentage then member (§2: handler VA `0x559a10` reads
+/// two one-byte fields and forwards `(percentage, member)`; Memoryer
+/// `DownloadProgressChangedEventData` orders percentage first).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DownloadProgressChanged {
+    /// Percent downloaded (`0..=100`).
+    pub percentage: u8,
+    /// Room slot downloading.
+    pub member_id: u8,
+}
+
+impl WireMessage for DownloadProgressChanged {
+    const COMMAND: u16 = 4039;
+
+    fn encode_body(&self) -> Vec<u8> {
+        vec![self.percentage, self.member_id]
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < MEMBER_MUSIC_STATE_LEN {
+            return Err(Error::TruncatedMessage {
+                need: MEMBER_MUSIC_STATE_LEN,
+                have: body.len(),
+            });
+        }
+        if body.len() > MEMBER_MUSIC_STATE_LEN {
+            return Err(Error::TrailingBytes(body.len() - MEMBER_MUSIC_STATE_LEN));
+        }
+        Ok(Self {
+            percentage: body[0],
+            member_id: body[1],
+        })
+    }
+}
+
+/// `SyncMusicDownload` 5012: announce that one song's files finished
+/// downloading and sit in the install's `Music` folder (client to
+/// server).
+///
+/// One `u16` music id (`docs/net-protocol.md` §4c; Memoryer
+/// `SyncMusicDownloadRequest`). The exe's send site is still OPEN (§5
+/// item 3): the promote leg (§4) will own it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyncMusicDownload {
+    /// Song id whose download finished.
+    pub music_id: u16,
+}
+
+impl WireMessage for SyncMusicDownload {
+    const COMMAND: u16 = 5012;
+
+    fn encode_body(&self) -> Vec<u8> {
+        self.music_id.to_le_bytes().to_vec()
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        if body.len() < 2 {
+            return Err(Error::TruncatedMessage {
+                need: 2,
+                have: body.len(),
+            });
+        }
+        if body.len() > 2 {
+            return Err(Error::TrailingBytes(body.len() - 2));
+        }
+        Ok(Self {
+            music_id: word_at(body, 0),
+        })
+    }
+}
+
 /// One song row of the `GetMusicList` 4031 answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MusicListEntry {
@@ -1943,6 +2222,127 @@ mod song_sync_tests {
         let frame = decode_frame(&state.encode()).unwrap();
         assert_eq!(frame.id, 4036);
         assert_eq!(SyncMemberMusicState::decode_frame(&frame), Ok(state));
+    }
+
+    #[test]
+    fn update_music_state_carries_one_state_byte() {
+        // §2: the 4025 body is the byte VA `0x4be690` computes —
+        // `Ready 0` when the chart file is on disk, `NoMusic 1`
+        // otherwise. One byte, nothing else.
+        let ready = UpdateMusicState {
+            state: MusicState::Ready,
+        };
+        assert_eq!(ready.encode_body(), vec![0x00]);
+        let frame = decode_frame(&ready.encode()).unwrap();
+        assert_eq!(frame.id, 4025);
+        assert_eq!(UpdateMusicState::decode_frame(&frame), Ok(ready));
+        let missing = UpdateMusicState {
+            state: MusicState::NoMusic,
+        };
+        assert_eq!(missing.encode_body(), vec![0x01]);
+        assert_eq!(
+            UpdateMusicState::decode_body(&missing.encode_body()),
+            Ok(missing)
+        );
+        // The whole enum a peer can send (§2's four states).
+        for state in [
+            MusicState::Ready,
+            MusicState::NoMusic,
+            MusicState::NoAccess,
+            MusicState::Downloading,
+        ] {
+            assert_eq!(MusicState::from_code(state.code()), Ok(state));
+        }
+        // A fifth value would be a wire change, not a state we stage.
+        assert!(MusicState::from_code(3).is_err());
+        assert!(UpdateMusicState::decode_body(&[0x03]).is_err());
+        assert!(UpdateMusicState::decode_body(&[]).is_err());
+        assert!(UpdateMusicState::decode_body(&[0x00, 0x00]).is_err());
+    }
+
+    #[test]
+    fn music_state_for_installed_follows_the_exe_two_way_answer() {
+        // §2 VA `0x4be808`: chart bits set -> bit `0x8` picks
+        // Ready/NoMusic; our install scan answers the bit directly.
+        assert_eq!(MusicState::for_installed(true), MusicState::Ready);
+        assert_eq!(MusicState::for_installed(false), MusicState::NoMusic);
+    }
+
+    #[test]
+    fn sync_member_music_state_event_reads_member_then_state() {
+        // §2, handler VA `0x559990`: two one-byte reads, the first
+        // matched against the local member id, the second stored into
+        // the seat's `+0x217c` — so the wire order is member, state.
+        let state = SyncMemberMusicStateEvent {
+            member_id: 3,
+            state: MusicState::NoMusic,
+        };
+        assert_eq!(state.encode_body(), vec![0x03, 0x01]);
+        let frame = decode_frame(&state.encode()).unwrap();
+        assert_eq!(frame.id, 4037);
+        assert_eq!(SyncMemberMusicStateEvent::decode_frame(&frame), Ok(state));
+        assert!(SyncMemberMusicStateEvent::decode_body(&[0x03]).is_err());
+        assert!(SyncMemberMusicStateEvent::decode_body(&[0x03, 0x01, 0x00]).is_err());
+        assert!(SyncMemberMusicStateEvent::decode_body(&[0x03, 0x09]).is_err());
+    }
+
+    #[test]
+    fn acquire_music_counts_member_state_pairs() {
+        // §2 (handler VA `0x5598f7`-area) reads a counted list whose
+        // entries forward `(member, state)`; §4 says a START hands the
+        // members their states through it.
+        let event = AcquireMusic {
+            members: vec![
+                MemberMusicState {
+                    member_id: 0,
+                    state: MusicState::Downloading,
+                },
+                MemberMusicState {
+                    member_id: 2,
+                    state: MusicState::Ready,
+                },
+            ],
+        };
+        assert_eq!(event.encode_body(), vec![0x02, 0x00, 0x04, 0x02, 0x00]);
+        let frame = decode_frame(&event.encode()).unwrap();
+        assert_eq!(frame.id, 4035);
+        assert_eq!(AcquireMusic::decode_frame(&frame), Ok(event));
+        // An empty list is a count of zero, not an error.
+        let empty = AcquireMusic { members: vec![] };
+        assert_eq!(empty.encode_body(), vec![0x00]);
+        assert_eq!(AcquireMusic::decode_body(&empty.encode_body()), Ok(empty));
+        // Truncated pair and trailing bytes both reject.
+        assert!(AcquireMusic::decode_body(&[0x02, 0x00, 0x04, 0x02]).is_err());
+        assert!(AcquireMusic::decode_body(&[]).is_err());
+        assert!(AcquireMusic::decode_body(&[0x01, 0x00, 0x04, 0x00]).is_err());
+    }
+
+    #[test]
+    fn download_progress_changed_reads_percentage_then_member() {
+        // §2, handler VA `0x559a10` forwards `(percentage, member)`.
+        let event = DownloadProgressChanged {
+            percentage: 42,
+            member_id: 5,
+        };
+        assert_eq!(event.encode_body(), vec![42, 5]);
+        let frame = decode_frame(&event.encode()).unwrap();
+        assert_eq!(frame.id, 4039);
+        assert_eq!(DownloadProgressChanged::decode_frame(&frame), Ok(event));
+        assert!(DownloadProgressChanged::decode_body(&[42]).is_err());
+        assert!(DownloadProgressChanged::decode_body(&[42, 5, 0]).is_err());
+    }
+
+    #[test]
+    fn sync_music_download_carries_the_song_id() {
+        // `docs/net-protocol.md` §4c / §4: one `u16` music id
+        // announces a finished transfer (exe send site OPEN, §5.3).
+        let announce = SyncMusicDownload { music_id: 757 };
+        assert_eq!(announce.encode_body(), vec![0xF5, 0x02]);
+        let frame = decode_frame(&announce.encode()).unwrap();
+        assert_eq!(frame.id, 5012);
+        assert_eq!(SyncMusicDownload::decode_frame(&frame), Ok(announce));
+        assert!(SyncMusicDownload::decode_body(&[0xF5]).is_err());
+        assert!(SyncMusicDownload::decode_body(&[0xF5, 0x02, 0x00]).is_err());
     }
 
     #[test]

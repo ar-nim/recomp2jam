@@ -49,27 +49,27 @@ use super::side::{
     myroom_identity_captions, myroom_record_slot, myroom_wallet_captions, paint_side_scene,
     password_action_at, payment_side_notice, planet_action_at, select_filter_choice_at,
     select_music_rows, select_music_songs_with_labels, select_row_hit, shop_action_at,
-    side_scene_slot, waiting_team_for_code, wallet_row_caption, CreateRoomAction, CreateRoomForm,
-    LankingSong, LankingSort, MusicShopRow, MyRoomAction, MyRoomState, PasswordAction,
-    PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog, SelectMusicFilter,
-    SelectMusicSong, ShopAction, ShopGiftNoop, ShopGood, SideScreen, WalletRow, WalletState,
-    GEM_LABEL, O2_CASH_LABEL, OPTION_GAME_BLEND_NO, OPTION_GAME_BLEND_YES, OPTION_GAME_EFFECT_HIGH,
-    OPTION_GAME_EFFECT_LOW, OPTION_GAME_EFFECT_NORMAL, OPTION_GAME_GUIDE_LONG,
-    OPTION_GAME_GUIDE_MIDDLE, OPTION_GAME_GUIDE_NOUSE, OPTION_GAME_GUIDE_SHORT,
-    OPTION_GAME_LONGNOTE_NONE, OPTION_GAME_LONGNOTE_USED, OPTION_GAME_MODE_FULL,
-    OPTION_GAME_MODE_WIN, OPTION_GAME_NOTETYPE1, OPTION_GAME_NOTETYPE2, OPTION_KEY_3KEY_FIRST,
-    OPTION_KEY_3KEY_MODE, OPTION_KEY_7KEY_MODE, OPTION_KEY_LANE_FIRST, OPTION_KEY_TEST,
-    OPTION_SOUND_BG_EFFECT_DOWN, OPTION_SOUND_BG_EFFECT_UP, OPTION_SOUND_BG_MUSIC_DOWN,
-    OPTION_SOUND_BG_MUSIC_UP, OPTION_SOUND_GAME_EFFECT_DOWN, OPTION_SOUND_GAME_EFFECT_UP,
-    OPTION_SOUND_GAME_MUSIC_DOWN, OPTION_SOUND_GAME_MUSIC_UP, PLANET_OPTION_FIRST_TAB,
-    PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP,
-    SHOP_ITEMGIFT_IDS,
+    side_scene_slot, song_installed, waiting_team_for_code, wallet_row_caption, CreateRoomAction,
+    CreateRoomForm, LankingSong, LankingSort, MusicShopRow, MyRoomAction, MyRoomState,
+    PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog,
+    SelectMusicFilter, SelectMusicRow, SelectMusicSong, ShopAction, ShopGiftNoop, ShopGood,
+    SideScreen, WalletRow, WalletState, GEM_LABEL, O2_CASH_LABEL, OPTION_GAME_BLEND_NO,
+    OPTION_GAME_BLEND_YES, OPTION_GAME_EFFECT_HIGH, OPTION_GAME_EFFECT_LOW,
+    OPTION_GAME_EFFECT_NORMAL, OPTION_GAME_GUIDE_LONG, OPTION_GAME_GUIDE_MIDDLE,
+    OPTION_GAME_GUIDE_NOUSE, OPTION_GAME_GUIDE_SHORT, OPTION_GAME_LONGNOTE_NONE,
+    OPTION_GAME_LONGNOTE_USED, OPTION_GAME_MODE_FULL, OPTION_GAME_MODE_WIN, OPTION_GAME_NOTETYPE1,
+    OPTION_GAME_NOTETYPE2, OPTION_KEY_3KEY_FIRST, OPTION_KEY_3KEY_MODE, OPTION_KEY_7KEY_MODE,
+    OPTION_KEY_LANE_FIRST, OPTION_KEY_TEST, OPTION_SOUND_BG_EFFECT_DOWN, OPTION_SOUND_BG_EFFECT_UP,
+    OPTION_SOUND_BG_MUSIC_DOWN, OPTION_SOUND_BG_MUSIC_UP, OPTION_SOUND_GAME_EFFECT_DOWN,
+    OPTION_SOUND_GAME_EFFECT_UP, OPTION_SOUND_GAME_MUSIC_DOWN, OPTION_SOUND_GAME_MUSIC_UP,
+    PLANET_OPTION_FIRST_TAB, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE,
+    SELECT_NOT_DOWNLOADED_NOTICE, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS,
 };
 use crate::{menu_of, InputEdge, InputSnapshot, MenuKey};
 use o2jam_audio::{
     song_position_ms, AudioBackend, BgmSelection, CueOutcome, PcmSamples, SceneBgm, SceneCue,
 };
-use o2jam_file::{AvatarItemTable, OjnListEntry, OjnMidTagEntry};
+use o2jam_file::{AvatarItemTable, InstalledMusic, OjnListEntry, OjnMidTagEntry};
 use o2jam_game::{PeerBars, QueueEvent, RankDelivery, RoomTeams, PEER_SLOT_COUNT};
 use o2jam_net::gift::{ClaimGift, GetGiftMessageList, GiftType};
 use o2jam_net::play::{MusicListAnswer, SetRoomMusic};
@@ -623,6 +623,14 @@ pub struct ScreenGame {
     /// [`SelectMusicFilter::ALL`] whenever the dialog opens, the exe's
     /// ctor sentinels.
     select_filter: SelectMusicFilter,
+    /// Local music seat from the install's `Music` folder scan
+    /// (`docs/music-availability.md` §1): which catalog songs have a
+    /// chart file on disk. `None` while no scan ran (no local
+    /// knowledge; see [`super::side::song_installed`]).
+    installed_music: Option<InstalledMusic>,
+    /// Caption the select dialog currently shows instead of its status
+    /// line: the not-downloaded notice (§3) after a refused pick.
+    select_music_notice: Option<&'static str>,
     /// Open room dialog, if any (create-room or password entry over Room).
     room_dialog: Option<RoomDialog>,
     /// Create-room form behind the dialog (cleared on open).
@@ -813,11 +821,7 @@ fn chart_cover_path(token: &str) -> Option<std::path::PathBuf> {
     let stem = token
         .get(..stem_len)
         .filter(|_| token[stem_len..].eq_ignore_ascii_case(".ojm"))?;
-    Some(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../install-root/O2Jam/Music")
-            .join(format!("{stem}.ojn")),
-    )
+    Some(crate::music_install::install_music_dir().join(format!("{stem}.ojn")))
 }
 
 /// Decoded cover pixels as an RGB555 image (5-bit channels; the frame
@@ -1028,6 +1032,8 @@ impl ScreenGame {
             select_music_art: None,
             select_music_art_cache: None,
             select_filter: SelectMusicFilter::ALL,
+            installed_music: None,
+            select_music_notice: None,
             room_dialog: None,
             create_room_form: CreateRoomForm::new(),
             password_form: PasswordForm::new(),
@@ -1437,6 +1443,34 @@ impl ScreenGame {
             }
         }
         self
+    }
+
+    /// Fold one member's music state into its waiting seat — the field
+    /// the exe keeps at `seat+0x217c` and writes from the `4035`/
+    /// `4037` handlers (`docs/music-availability.md` §2).
+    ///
+    /// The seat keeps the raw wire byte; unknown members and rooms
+    /// without the seat stay a silent no-op, exactly like
+    /// [`Self::set_member_ready`].
+    pub fn set_member_music_state(&mut self, member_id: u8, state: u8) -> &mut Self {
+        if let Some(room) = self.waiting.as_mut() {
+            if let Some(slot) = room.slots.iter_mut().find(|slot| slot.index == member_id) {
+                if let Some(member) = slot.member.as_mut() {
+                    member.music_state = state;
+                }
+            }
+        }
+        self
+    }
+
+    /// Staged music state of one occupied waiting seat (`None` without
+    /// a joined room or such a seat): the `seat+0x217c` byte the
+    /// `4035`/`4037` family fills (§2).
+    #[must_use]
+    pub fn member_music_state(&self, member_id: u8) -> Option<u8> {
+        let room = self.waiting.as_ref()?;
+        let slot = room.slots.iter().find(|slot| slot.index == member_id)?;
+        slot.member.as_ref().map(|member| member.music_state)
     }
 
     /// Toggle-select one waiting team button (the toggle-group map).
@@ -2713,12 +2747,15 @@ impl ScreenGame {
     /// `SetRoomMusic` body behind one dialog row: the row's song id
     /// plus its difficulty slot (row slots repeat Easy/Normal/Hard,
     /// the `Difficulty` code order), at the surviving speed. `None`
-    /// when the row, the slot code, the song id, or the speed has no
-    /// source — nothing is invented.
-    fn select_row_pick(&self, index: usize) -> Option<SetRoomMusic> {
-        let row = select_music_rows(&self.catalog_songs, self.select_filter)
-            .get(index)
-            .copied()?;
+    /// when the chart is not playable, the slot code, the song id, or
+    /// the speed has no source — nothing is invented.
+    fn select_row_pick(&self, row: SelectMusicRow<'_>) -> Option<SetRoomMusic> {
+        // §3: the exe sends `4000` only for a row whose chart bit is
+        // set, and its confirm handlers refuse a song whose
+        // `o2ma<id>.ojn` is missing (§2). No chart bit, no pick.
+        if !row.playable() {
+            return None;
+        }
         let difficulty = u8::try_from(row.slot).ok()?;
         Difficulty::from_code(difficulty)?;
         Some(SetRoomMusic {
@@ -2739,13 +2776,31 @@ impl ScreenGame {
     /// body queues for the session bridge. `false` stages nothing
     /// (no joined room to commit to). The no-catalog path stays
     /// display-only — empty rows never invent a song.
+    ///
+    /// A row whose chart file the install lacks is refused: the exe's
+    /// confirm path sets the not-downloaded caption on the shared
+    /// notice dialog and sends no `4000` (§3). This swaps the dialog's
+    /// status line for [`SELECT_NOT_DOWNLOADED_NOTICE`] and stages
+    /// nothing else; the Download icon the caption names is a later
+    /// slice, so a refused row never becomes a pick.
     fn pick_select_music_row(&mut self, index: usize) -> bool {
         if self.waiting.is_none() {
             return false;
         }
-        let Some(pick) = self.select_row_pick(index) else {
+        let row = select_music_rows(&self.catalog_songs, self.select_filter)
+            .get(index)
+            .copied();
+        let Some(row) = row else {
             return false;
         };
+        if !row.song.installed {
+            self.select_music_notice = Some(SELECT_NOT_DOWNLOADED_NOTICE);
+            return true;
+        }
+        let Some(pick) = self.select_row_pick(row) else {
+            return false;
+        };
+        self.select_music_notice = None;
         self.set_selected_music(pick);
         self.outbox.pending_music_send = Some(pick);
         true
@@ -2781,6 +2836,7 @@ impl ScreenGame {
                 && self.has_pending_music_send()
             {
                 self.select_music_art = None;
+                self.select_music_notice = None;
                 return true;
             }
         }
@@ -2854,6 +2910,7 @@ impl ScreenGame {
         // when nothing was cached yet.
         let mu_select = staged_rect_hit(placements, "IDC_BUTTON_SWAIT_MUSELECT", x, y);
         if mu_select && self.is_room_master() {
+            self.select_music_notice = None;
             if self.select_music_art.is_none() {
                 // A reopened dialog starts unfiltered, like the exe's
                 // ctor sentinels (VAs `0x43d324`/`0x43d331`/`0x43d33e`).
@@ -3117,12 +3174,18 @@ impl ScreenGame {
     /// buckets (the song-dialog label column's input, ticket #273);
     /// every other board stages exactly as [`Self::set_song_catalog`]
     /// does.
+    ///
+    /// The songs also take the staged install scan's availability
+    /// (`docs/music-availability.md` §1): catalog staging may run
+    /// before or after [`Self::set_installed_music`], and the rows
+    /// carry the scan's answer either way.
     pub fn set_song_catalog_with_labels(
         &mut self,
         entries: &[OjnListEntry<'_>],
         labels: &[OjnMidTagEntry],
     ) -> &mut Self {
-        self.catalog_songs = select_music_songs_with_labels(entries, labels);
+        self.catalog_songs =
+            select_music_songs_with_labels(entries, labels, self.installed_music.as_ref());
         self.catalog_bpm = entries
             .iter()
             .filter(|entry| entry.is_song())
@@ -3142,6 +3205,32 @@ impl ScreenGame {
         self.music_shop.set_catalog(entries);
         self.resolve_song_cover();
         self
+    }
+
+    /// Stage the install's local music availability: the `Music`
+    /// folder scan packed into the seat shape
+    /// (`docs/music-availability.md` §1, [`o2jam_file::installed_music`]).
+    ///
+    /// The install decides which songs exist, never the server and
+    /// never the catalog. A scan that never ran (`None`: the install
+    /// carries no `Music` folder) keeps every catalog song selectable,
+    /// the pre-#276 answer — no local knowledge, no invented notice.
+    /// Catalog staging may run before or after this call: the staged
+    /// songs take the new answer in place either way.
+    pub fn set_installed_music(&mut self, installed: Option<InstalledMusic>) -> &mut Self {
+        self.installed_music = installed;
+        for song in &mut self.catalog_songs {
+            song.set_installed(song_installed(song.song_id, self.installed_music.as_ref()));
+        }
+        self
+    }
+
+    /// Caption the select dialog shows instead of its status line
+    /// (`None` while nothing was refused): the pinned not-downloaded
+    /// notice a pick of an unavailable song raises (§3).
+    #[must_use]
+    pub fn select_music_notice(&self) -> Option<&'static str> {
+        self.select_music_notice
     }
 
     /// Load the selected song's album cover from the staged catalog
@@ -5652,7 +5741,13 @@ impl ScreenGame {
         };
         let slots = SelectTextSlots::from_placements(&art.placements);
         let rows = select_music_rows(&self.catalog_songs, self.select_filter);
-        paint_select_text(frame, &slots, &rows, self.selected_music);
+        paint_select_text(
+            frame,
+            &slots,
+            &rows,
+            self.selected_music,
+            self.select_music_notice,
+        );
     }
 
     /// Layer staged song-select dialog figures over the waiting seats.
@@ -14306,6 +14401,108 @@ mod game_tests {
     }
 
     #[test]
+    fn uninstalled_song_row_shows_the_notice_and_refuses_the_pick() {
+        // Live caller chain (docs/live-path-reachability.md):
+        //   main.rs::run_play -> stage_session_catalog
+        //     (o2jam_shell::music_install::scan_installed_music ->
+        //      session::OnlineSession::set_installed_music ->
+        //      ScreenGame::set_installed_music)
+        //   -> session::OnlineSession::set_song_catalog_with_labels
+        //   -> ScreenGame::set_song_catalog_with_labels,
+        // then the dialog click: ScreenGame::click_waiting_button
+        // (MUSELECT) -> ScreenGame::click_select_music ->
+        // ScreenGame::pick_select_music_row.
+        // The install scan is synthetic here, so the guard runs with or
+        // without install-root (CI has no game data).
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        game.load_select_music_scene(Vec::new(), HashMap::new());
+        // The live order: the scan stages first, then the catalog takes
+        // its answer (§1). Only 757's chart file is on disk; 770's is
+        // not.
+        game.set_installed_music(Some(o2jam_file::installed_music(["o2ma757.ojn"])));
+        let blob = lanking_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_song_catalog(&entries);
+        walk_to_waiting(&mut game);
+        assert!(game.is_room_master());
+        assert_eq!(game.select_music_notice(), None);
+        // Rows 0-2 are 757 (installed), rows 3-5 are 770 (missing).
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 150 + 11));
+        assert_eq!(
+            game.take_music_send().map(|pick| pick.music_id),
+            Some(757),
+            "an installed row still picks"
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 150 + 3 * 23 + 11));
+        assert_eq!(
+            game.select_music_notice(),
+            Some(SELECT_NOT_DOWNLOADED_NOTICE),
+            "the refused row raises the pinned notice (§3)"
+        );
+        assert!(
+            !game.has_pending_music_send(),
+            "a song without its chart file never queues a 4000 (§3)"
+        );
+        assert_eq!(
+            game.selected_music().map(|pick| pick.music_id),
+            Some(757),
+            "the refused row leaves the staged song alone"
+        );
+    }
+
+    #[test]
+    fn select_notice_caption_inks_over_the_dialog_status_line() {
+        // Live chain: the same staging as
+        // `uninstalled_song_row_shows_the_notice_and_refuses_the_pick`,
+        // then ScreenGame::paint_at -> paint_waiting ->
+        // paint_select_music_text -> select_paint::paint_select_text.
+        // The pinned notice replaces the dialog's own caption line, at
+        // the staged `IDC_TEXT_DSMUSIC_SERACHRESHLT` rect (§3; the
+        // exe's message box has no sheet we hold — OPEN in
+        // docs/music-availability.md §6).
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        game.load_select_music_scene(select_sheet_placements(), HashMap::new());
+        let blob = lanking_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        // Reverse order of the live boot: the catalog stages first and
+        // the scan re-applies its answer in place.
+        game.set_song_catalog(&entries);
+        game.set_installed_music(Some(o2jam_file::installed_music(["o2ma757.ojn"])));
+        walk_to_waiting(&mut game);
+        let before = paint_waiting_frame(&mut game, 800, 600);
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 150 + 3 * 23 + 11));
+        assert_eq!(
+            game.select_music_notice(),
+            Some(SELECT_NOT_DOWNLOADED_NOTICE)
+        );
+        let after = paint_waiting_frame(&mut game, 800, 600);
+        let status = Rect {
+            x: 338,
+            y: 390,
+            w: 315,
+            h: 14,
+        };
+        assert_ne!(
+            rect_pixels(&before, 800, status),
+            rect_pixels(&after, 800, status),
+            "the notice repaints the dialog's caption line"
+        );
+        assert!(ink_near(
+            &after,
+            800,
+            600,
+            (status.x, status.y),
+            (
+                i32::try_from(status.w).unwrap_or(i32::MAX),
+                i32::try_from(status.h).unwrap_or(i32::MAX),
+            ),
+            pack_xrgb(0xFF, 0xFF, 0xFF)
+        ));
+    }
+
+    #[test]
     fn select_row_click_without_master_or_art_commits_nothing() {
         // `MUSELECT 0x16200003` drops non-master clicks, and an
         // art-less master sees no dialog: both click nowhere.
@@ -17747,6 +17944,18 @@ mod game_tests {
     /// probes band the ink color instead of one exact pixel.
     fn white_near(buf: &[u32], w: usize, h: usize, origin: (i32, i32)) -> bool {
         ink_near(buf, w, h, origin, (64, 9), pack_xrgb(0xFF, 0xFF, 0xFF))
+    }
+
+    /// Pixels of one native rect, row-major, for "this area repainted"
+    /// comparisons.
+    fn rect_pixels(buf: &[u32], frame_w: usize, rect: Rect) -> Vec<u32> {
+        (rect.y..rect.y + rect.h as i32)
+            .flat_map(|y| (rect.x..rect.x + rect.w as i32).map(move |x| (x, y)))
+            .filter_map(|(x, y)| {
+                let (row, col) = (usize::try_from(y).ok()?, usize::try_from(x).ok()?);
+                buf.get(row * frame_w + col).copied()
+            })
+            .collect()
     }
 
     /// True while ink nears `ink` inside the `probe` box at `origin`.

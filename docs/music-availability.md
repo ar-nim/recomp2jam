@@ -176,16 +176,62 @@ Server side (corroboration, Memoryer `Controllers/WaitingController.cs`):
 
 ## 6. Our client today
 
-- `crates/o2jam-shell/src/screens/side.rs` builds select rows straight
-  from the catalog (`select_music_songs` → every `OJNList` song), so
-  every song is selectable; nothing knows about files on disk.
-- `crates/o2jam-shell/src/screens/game/mod.rs` `can_start_game` gates on
-  peer readiness only — no music-availability gate.
-- `crates/recomp2jam/src/connect.rs` `send_sync` publishes
-  `SyncMemberMusicState{member_id}` and `SetDownloadProgress{100}` blind:
-  the client always claims readiness.
-- `crates/o2jam-net` has 4036/4038 only. Missing: 4025, 4035, 4037,
-  4039, 5012, and the 4031/4033 music list.
+Slices 1+2 landed, merged with the #273/#274 song-dialog filter columns
+(`docs/select-filters.md`); slices 3-5 still open.
+
+- `crates/o2jam-file/src/music.rs`: pure availability model.
+  `installed_music(names)` packs a `Music\` listing into the seat shape
+  of §1 (id `packed & 0x0fff`, variant nibble `(packed & 0xf000) >> 12`
+  with the installed mark `0x8`, one entry per file, duplicates kept);
+  `ChartMask` is the `entry+0x15c` chart triple.
+- `crates/o2jam-shell/src/music_install.rs`: the thin `read_dir`
+  adapter at the shell edge. `scan_installed_music()` answers `None`
+  when the install has no `Music` folder (CI ships no game data), and
+  `None` means **no local knowledge**: `SelectMusicSong.installed`
+  stays `true` for every catalog row, which keeps the seam tests' world
+  coherent and paints no invented notice. A real install always has
+  the folder, so the live client always has the scan.
+- `crates/o2jam-shell/src/screens/side.rs`: `SelectMusicSong` carries
+  `charts`/`installed`; `song_installed` is the one availability
+  answer, `SelectMusicRow::playable` the per-chart gate.
+- `crates/o2jam-shell/src/screens/game/mod.rs`:
+  `set_song_catalog_with_labels` stages the scan's answer
+  (order-independent with `set_installed_music`); a pick of a row
+  whose chart file is missing raises `SELECT_NOT_DOWNLOADED_NOTICE`
+  and queues no `4000` (§3). The dialog's ONE row list feeds both
+  features: `select_music_rows` narrows by the live filter columns
+  (#273) and every surviving row carries its availability, so a row
+  click resolves its index against the filtered rows and then refuses
+  an uninstalled one. The caption inks over the dialog's own bottom
+  caption line (`IDC_TEXT_DSMUSIC_SERACHRESHLT`) — the exe sets it on
+  the shared notice box object `0x77acc8`, whose sheet we do not hold,
+  so the box geometry stays OPEN.
+  `set_member_music_state`/`member_music_state` are the seat `+0x217c`
+  byte.
+- `crates/o2jam-shell/src/screens/game/mod.rs` `can_start_game` still
+  gates on peer readiness only — no music-availability gate (slice 3).
+- `crates/recomp2jam/src/connect.rs`: `run_song_flow` sends the honest
+  `UpdateMusicState` 4025 (`Ready 0` when the install has the chart
+  file, `NoMusic 1` when not) instead of the old blind
+  `SyncMemberMusicState` plus `SetDownloadProgress(100)` pair. The CLI
+  derives the byte with `main::installed_music_state` (§1 scan); a
+  download that never ran has no percentage to report, so `4038` no
+  longer rides the select flow.
+- `crates/recomp2jam/src/session.rs`: the Waiting drain folds 4037
+  (one seat) and 4035 (every listed seat) into the room mirror through
+  `ScreenGame::set_member_music_state`; 4039 decodes and traces only —
+  the percentage has no staged seat field until the download bar lands
+  (slice 3/4).
+- `crates/o2jam-net`: 4025 `UpdateMusicState`, 4035 `AcquireMusic`,
+  4037 `SyncMemberMusicStateEvent`, 4039 `DownloadProgressChanged`,
+  5012 `SyncMusicDownload` plus the `MusicState` enum. Still missing:
+  4034 `AcquireMusicRequest` (the acquire ping, §4); the `4030`/`4031`
+  list family is already in `o2jam-net`.
+- OPEN for slice 3: the exe's eight 4025 send sites are unmapped, so
+  the live session does not announce our state yet — the headless
+  `connect --music-id` flow does. Mapping one site to the waiting
+  song-change/START arm is the next evidence step (§5 items 1-2 give
+  the code to follow).
 
 ## 7. Implementation slicing (proposal)
 
@@ -223,3 +269,53 @@ progress then 5012, and the song becomes selectable and startable.
 
 Slice 5 — owner confirm (playtest both branches: shop-style notice and
 post-START download), then close per `docs/agents/triage-labels.md`.
+
+## 8. Guards (slices 1+2)
+
+Live chain or seam reason per `docs/live-path-reachability.md`; every
+guard below carries a red-proof (PASS / FAIL / PASS / FAIL / PASS) in
+the closing report.
+
+- `scan_pattern_names_pack_the_installed_seat`,
+  `non_chart_names_stay_out_of_the_seat`,
+  `variant_suffix_and_directory_prefix_keep_the_same_id`,
+  `seat_holds_one_entry_per_file_and_masks_the_id_to_twelve_bits`,
+  `seat_lookup_answers_by_id_not_by_position`,
+  `chart_mask_reads_the_three_difficulty_bits` — seam: pure model, no
+  runtime caller beyond `installed_music`/`ChartMask`.
+- `absent_music_folder_answers_no_local_knowledge`,
+  `music_folder_listing_packs_the_chart_files_only` — seam: the
+  `read_dir` adapter is the only OS touch; a synthetic temp folder
+  proves it without game data.
+- `select_songs_take_their_availability_from_the_install_scan` — seam:
+  the catalog mapper is pure. Live chain proven by
+  `uninstalled_song_row_shows_the_notice_and_refuses_the_pick`.
+- `uninstalled_song_row_shows_the_notice_and_refuses_the_pick` — live
+  chain: `main.rs::run_play` → `stage_session_catalog`
+  (`music_install::scan_installed_music` →
+  `session::OnlineSession::set_installed_music` →
+  `ScreenGame::set_installed_music`) /
+  `stage_offline_windowed` → `stage_offline_music_boards` →
+  `ScreenGame::set_song_catalog` → `click_waiting_button` (MUSELECT) →
+  `click_select_music` → `pick_select_music_row`.
+- `select_notice_caption_inks_over_the_dialog_status_line` — live
+  chain: the staging above → `ScreenGame::paint_at` → `paint_waiting`
+  → `paint_select_music_text` → `select_paint::paint_select_text`.
+- `update_music_state_carries_one_state_byte`,
+  `music_state_for_installed_follows_the_exe_two_way_answer`,
+  `sync_member_music_state_event_reads_member_then_state`,
+  `acquire_music_counts_member_state_pairs`,
+  `download_progress_changed_reads_percentage_then_member`,
+  `sync_music_download_carries_the_song_id`,
+  `resolves_music_state_family_ids` — seam: pure codecs and the id
+  table, §2/§4 offsets cited per test.
+- `no_music_member_reports_no_music_state_and_no_blind_progress` —
+  live chain: `main.rs::run_command` (`connect --music-id`) →
+  `SongFlowParams::into_song_flow` → `main::installed_music_state` →
+  `connect::connect_and_login_with_transport` →
+  `connect::run_song_flow` → `connect::send_music_state`.
+- `waiting_seats_take_the_music_state_family` — live chain:
+  `main.rs::run_play` → `assemble_online_session` →
+  `session::OnlineSession::paint` (Waiting) → `poll_waiting_chat` →
+  `drain_waiting_chat` → `apply_member_music_state` /
+  `apply_acquire_music` → `ScreenGame::set_member_music_state`.

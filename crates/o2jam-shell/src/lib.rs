@@ -7,6 +7,7 @@
 
 pub mod avatar;
 pub mod input_latency;
+pub mod music_install;
 pub mod options;
 pub mod playing;
 pub mod screen;

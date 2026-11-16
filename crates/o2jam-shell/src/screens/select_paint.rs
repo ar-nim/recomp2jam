@@ -139,11 +139,15 @@ fn slot_on_band(band: Rect, template: Rect) -> Rect {
 
 /// Paint the dialog's live text over the staged art: tab counts, status
 /// line, pager, then one line per staged row (title, artist, level).
+///
+/// `notice` replaces the status line while a refused pick's caption is
+/// up (the pinned not-downloaded notice, §3).
 pub(crate) fn paint_select_text(
     frame: &mut Frame<'_>,
     slots: &SelectTextSlots,
     rows: &[SelectMusicRow<'_>],
     picked: Option<SetRoomMusic>,
+    notice: Option<&str>,
 ) {
     paint_slot(
         frame,
@@ -157,7 +161,12 @@ pub(crate) fn paint_select_text(
         select_picked_caption(),
         select_dim_ink(),
     );
-    paint_slot(frame, slots.status, select_status_line(), select_ink());
+    paint_slot(
+        frame,
+        slots.status,
+        notice.unwrap_or(select_status_line()),
+        select_ink(),
+    );
     paint_slot(
         frame,
         slots.pager,
@@ -432,6 +441,7 @@ mod tests {
             },
             &slots,
             &rows,
+            None,
             None,
         );
         let tabs = Rect {

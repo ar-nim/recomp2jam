@@ -20,9 +20,9 @@ use o2jam_net::{
 use o2jam_net::{
     AuthResponse, AuthResult, AuthorizeRequest, ChannelList, ChannelLogin, ChannelLoginResponse,
     ChannelState, CharacterInfo, ConfirmMusicLoaded, ExitPlaying, FinalizeRank, GameStatsUpdate,
-    GatewayConnection, Gender, Generic, GetMusicList, JoinRoom, JoinRoomResponse, Request,
-    RoomList, RoomListEntry, SetDownloadProgress, SetRoomArena, SetRoomMusic, StartGame, StatKind,
-    SubmitScore, SyncMemberMusicState, UpdateGameStats, WireMessage,
+    GatewayConnection, Gender, Generic, GetMusicList, JoinRoom, JoinRoomResponse, MusicState,
+    Request, RoomList, RoomListEntry, SetRoomArena, SetRoomMusic, StartGame, StatKind, SubmitScore,
+    UpdateGameStats, UpdateMusicState, WireMessage,
 };
 
 /// Lift one wire decode/IO error into an anyhow error, preserving the
@@ -121,13 +121,25 @@ pub fn parse_stat_kind(word: &str) -> Result<StatKind> {
 pub struct SongFlowOptions {
     /// Room song id (`SetRoomMusic` 4000).
     pub music_id: u16,
+    /// Music state our client announces for that song (`UpdateMusicState`
+    /// 4025, `docs/music-availability.md` §2). The caller derives it:
+    /// the CLI scans the install's `Music` folder and reports `Ready`
+    /// only when the chart file is there.
+    pub music_state: MusicState,
     /// Chart difficulty code (0 EX, 1 NX, 2 HX, 3 RX).
     pub difficulty: u8,
     /// Scroll-speed code (`SetRoomMusic` + `ConfirmMusicLoaded`).
     pub speed: u8,
     /// Room stage word (`SetRoomArena` 4002, echoed as 4003).
     pub arena_id: i32,
-    /// Room slot the sync steps belong to.
+    /// Room slot the caller holds (`--member-id`).
+    ///
+    /// No frame in this flow carries it any more: the honest
+    /// announcement is the state byte of `UpdateMusicState` (§2), and
+    /// the blind `SyncMemberMusicState`/`SetDownloadProgress` pair that
+    /// used it is gone. The acquire ping (`4034`/`4036`) and the
+    /// download progress (`4038`, per member) that do carry a slot are
+    /// slices 3-4 (#276).
     pub member_id: u8,
     /// Power skill-ring id (`ConfirmMusicLoaded` 4012).
     pub power_skill_id: i32,
@@ -165,11 +177,14 @@ pub struct SongFlowOptions {
 
 impl SongFlowOptions {
     /// Live-proven synthetic tally for `music_id` (defaults mirror
-    /// the fake-gateway test vectors).
+    /// the fake-gateway test vectors). `music_state` is the honest
+    /// 4025 answer for that song; it has no default, because a claim
+    /// of `Ready` without the file on disk is exactly the #276 defect.
     #[must_use]
-    pub fn new(music_id: u16) -> Self {
+    pub fn new(music_id: u16, music_state: MusicState) -> Self {
         Self {
             music_id,
+            music_state,
             difficulty: 2,
             speed: 1,
             arena_id: 0,
@@ -285,7 +300,8 @@ fn await_lenient(
 
 /// Run the host song flow over an authorized, room-joined gateway.
 ///
-/// Fire-and-forget sends carry the play steps; only the arena echo
+/// Fire-and-forget sends carry the play steps (including the honest
+/// `UpdateMusicState` 4025 for the room's song); only the arena echo
 /// (4002 → 4003) and the music list (4030 → 4031) plus the peer-bar
 /// echo (4015, best effort) await replies. Returns what the list
 /// step learned.
@@ -297,7 +313,7 @@ pub fn run_song_flow(
     send_select(gateway, options)?;
     let arena_echo = select_arena(gateway, options, &mut skipped)?;
     let listed = fetch_music_list(gateway, &mut skipped)?;
-    send_sync(gateway, options)?;
+    send_music_state(gateway, options)?;
     send_start(gateway, options)?;
     send_tick(gateway, options)?;
     let peer_bar = await_peer_bar(gateway, options, &mut skipped);
@@ -365,19 +381,24 @@ fn fetch_music_list(
     MusicListAnswer::decode_frame(&frame).map_err(net_context)
 }
 
-fn send_sync(gateway: &mut GatewayConnection, options: &SongFlowOptions) -> Result<()> {
-    let state = SyncMemberMusicState {
-        member_id: options.member_id,
+/// Announce our music state for the room's song (`UpdateMusicState`
+/// 4025).
+///
+/// `docs/music-availability.md` §2: the exe sends one state byte per
+/// announcement — `Ready 0` when the chart file sits in the install's
+/// `Music` folder, `NoMusic 1` when it does not — and nothing else
+/// rides the frame. The former shape published a bare
+/// `SyncMemberMusicState` plus `SetDownloadProgress(100)`, which told
+/// the gateway every member had its song whatever the disk said; a
+/// download that has not started has no percentage to report (real
+/// progress rides `4038` from the FTP engine, §4), so that blind claim
+/// is gone rather than re-sent.
+fn send_music_state(gateway: &mut GatewayConnection, options: &SongFlowOptions) -> Result<()> {
+    let state = UpdateMusicState {
+        state: options.music_state,
     };
     gateway
-        .send_frame(Request::SyncMemberMusicState.id(), &state.encode_body())
-        .map_err(net_context)?;
-    let progress = SetDownloadProgress {
-        progress: 100,
-        member_id: options.member_id,
-    };
-    gateway
-        .send_frame(Request::SetDownloadProgress.id(), &progress.encode_body())
+        .send_frame(Request::UpdateMusicState.id(), &state.encode_body())
         .map_err(net_context)
 }
 
@@ -1313,9 +1334,9 @@ mod song_flow_tests {
     use o2jam_net::{
         frame::{decode_frame, encode_frame},
         play::{MusicListAnswer, RoomArenaEcho},
-        ConfirmMusicLoaded, Frame, GameStatsUpdate, GatewayConnection, Request,
-        SetDownloadProgress, SetRoomArena, SetRoomMusic, StatKind, SubmitScore,
-        SyncMemberMusicState, UpdateGameStats, WireMessage, HEADER_LEN,
+        ConfirmMusicLoaded, Frame, GameStatsUpdate, GatewayConnection, MusicState, Request,
+        SetRoomArena, SetRoomMusic, StatKind, SubmitScore, UpdateGameStats, UpdateMusicState,
+        WireMessage, HEADER_LEN,
     };
 
     use super::{run_song_flow, SongFlowOptions};
@@ -1333,7 +1354,7 @@ mod song_flow_tests {
     }
 
     fn flow_options() -> SongFlowOptions {
-        let mut options = SongFlowOptions::new(757);
+        let mut options = SongFlowOptions::new(757, MusicState::Ready);
         options.peer_bar_timeout = std::time::Duration::from_millis(200);
         options
     }
@@ -1386,19 +1407,12 @@ mod song_flow_tests {
             stream.write_all(&echoed.encode()).unwrap();
             assert_eq!(read_frame(&mut stream).id, Request::GetMusicList.id());
             stream.write_all(&list_answer().encode()).unwrap();
-            let sync = read_frame(&mut stream);
-            assert_eq!(sync.id, Request::SyncMemberMusicState.id());
+            let music_state = read_frame(&mut stream);
+            assert_eq!(music_state.id, Request::UpdateMusicState.id());
             assert_eq!(
-                SyncMemberMusicState::decode_body(&sync.payload).unwrap(),
-                SyncMemberMusicState { member_id: 0 }
-            );
-            let progress = read_frame(&mut stream);
-            assert_eq!(progress.id, Request::SetDownloadProgress.id());
-            assert_eq!(
-                SetDownloadProgress::decode_body(&progress.payload).unwrap(),
-                SetDownloadProgress {
-                    progress: 100,
-                    member_id: 0,
+                UpdateMusicState::decode_body(&music_state.payload).unwrap(),
+                UpdateMusicState {
+                    state: MusicState::Ready,
                 }
             );
             assert_eq!(read_frame(&mut stream).id, Request::StartGame.id());
@@ -1465,14 +1479,7 @@ mod song_flow_tests {
             stream.write_all(&echoed.encode()).unwrap();
             assert_eq!(read_frame(&mut stream).id, Request::GetMusicList.id());
             stream.write_all(&list_answer().encode()).unwrap();
-            assert_eq!(
-                read_frame(&mut stream).id,
-                Request::SyncMemberMusicState.id()
-            );
-            assert_eq!(
-                read_frame(&mut stream).id,
-                Request::SetDownloadProgress.id()
-            );
+            assert_eq!(read_frame(&mut stream).id, Request::UpdateMusicState.id());
             assert_eq!(read_frame(&mut stream).id, Request::StartGame.id());
             assert_eq!(read_frame(&mut stream).id, Request::ConfirmMusicLoaded.id());
             assert_eq!(read_frame(&mut stream).id, Request::UpdateGameStats.id());
@@ -1491,6 +1498,58 @@ mod song_flow_tests {
         assert_eq!(report.peers.life_levels(), [0; 8]);
         assert_eq!(report.peer_queue, None);
         assert!(report.peer_ranks.is_empty());
+    }
+
+    #[test]
+    fn no_music_member_reports_no_music_state_and_no_blind_progress() {
+        // Acceptance for #276 slice 2: a member whose chart file is
+        // missing reports `NoMusic 1` through `UpdateMusicState` 4025
+        // (§2) instead of the old blind `SyncMemberMusicState` plus
+        // `SetDownloadProgress(100)`. The frame after the announcement
+        // is `StartGame` 4010 — nothing claims a download percentage at
+        // a point where no download ran (§4 reports real progress).
+        // Live caller chain (docs/live-path-reachability.md):
+        //   main.rs::run_command ("connect --music-id") ->
+        //   SongFlowParams::into_song_flow ->
+        //   main::installed_music_state (§1 scan) ->
+        //   connect::connect_and_login_with_transport ->
+        //   connect::run_song_flow -> connect::send_music_state.
+        let (port, server) = o2jam_net::testing::fake_gateway(move |mut stream| {
+            assert_eq!(read_frame(&mut stream).id, Request::SetRoomMusic.id());
+            let stage = read_frame(&mut stream);
+            assert_eq!(stage.id, Request::SetRoomArena.id());
+            stream.write_all(&RoomArenaEcho::new(0).encode()).unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetMusicList.id());
+            stream.write_all(&list_answer().encode()).unwrap();
+            let announced = read_frame(&mut stream);
+            assert_eq!(
+                announced.id,
+                Request::UpdateMusicState.id(),
+                "the honest state rides 4025"
+            );
+            assert_eq!(
+                UpdateMusicState::decode_body(&announced.payload).unwrap(),
+                UpdateMusicState {
+                    state: MusicState::NoMusic,
+                },
+                "state byte 1 (§2), not a claimed 100 percent download"
+            );
+            assert_eq!(
+                read_frame(&mut stream).id,
+                Request::StartGame.id(),
+                "no SetDownloadProgress 4038 (progress 100) rides the flow"
+            );
+            assert_eq!(read_frame(&mut stream).id, Request::ConfirmMusicLoaded.id());
+            assert_eq!(read_frame(&mut stream).id, Request::UpdateGameStats.id());
+            assert_eq!(read_frame(&mut stream).id, Request::SubmitScore.id());
+            assert_eq!(read_frame(&mut stream).id, Request::FinalizeRank.id());
+            assert_eq!(read_frame(&mut stream).id, Request::ExitPlaying.id());
+        });
+        let mut gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut options = flow_options();
+        options.music_state = MusicState::NoMusic;
+        run_song_flow(&mut gateway, &options).unwrap();
+        server.join().unwrap();
     }
 
     /// Drive the standard flow against a fake gateway, answering the
@@ -1513,14 +1572,7 @@ mod song_flow_tests {
             stream.write_all(&echoed.encode()).unwrap();
             assert_eq!(read_frame(&mut stream).id, Request::GetMusicList.id());
             stream.write_all(&list_answer().encode()).unwrap();
-            assert_eq!(
-                read_frame(&mut stream).id,
-                Request::SyncMemberMusicState.id()
-            );
-            assert_eq!(
-                read_frame(&mut stream).id,
-                Request::SetDownloadProgress.id()
-            );
+            assert_eq!(read_frame(&mut stream).id, Request::UpdateMusicState.id());
             assert_eq!(read_frame(&mut stream).id, Request::StartGame.id());
             assert_eq!(read_frame(&mut stream).id, Request::ConfirmMusicLoaded.id());
             let tick = read_frame(&mut stream);
@@ -1729,7 +1781,12 @@ mod song_flow_tests {
         assert_eq!(created.result.as_i32(), 0, "live room created");
         assert!(created.info.is_some(), "live room snapshot");
 
-        let mut flow = SongFlowOptions::new(757);
+        // Honest 4025 answer for song 757 from the install scan (§1),
+        // exactly like the CLI's `installed_music_state`.
+        let installed = o2jam_shell::music_install::scan_installed_music()
+            .as_ref()
+            .is_some_and(|seat| seat.is_installed(757));
+        let mut flow = SongFlowOptions::new(757, MusicState::for_installed(installed));
         flow.arena_id = 1;
         let report = run_song_flow(&mut gateway, &flow).unwrap();
         assert!(
