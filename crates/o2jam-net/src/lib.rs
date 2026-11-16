@@ -51,12 +51,12 @@ pub use message::{
     SubscriptionAlert, Terminate, WireMessage, MEMORYER_CLIENT_ID,
 };
 pub use play::{
-    AcquireMusic, ConfirmMusicLoaded, DownloadProgressChanged, ExitPlaying, FinalizeRank,
-    GameRankUpdate, GameStatsUpdate, GetMusicList, MatchResult, MemberMusicState,
+    AcquireMusic, AcquireMusicRequest, ConfirmMusicLoaded, DownloadProgressChanged, ExitPlaying,
+    FinalizeRank, GameRankUpdate, GameStatsUpdate, GetMusicList, MatchResult, MemberMusicState,
     MemberReadyStateChanged, MusicState, Ready, RoomTeamChanged, ScoreCompleted, ScoreEntry,
     ScoreSubmission, SetDownloadProgress, SetRoomArena, SetRoomMusic, SetRoomTeam, StartGame,
     StatKind, SubmitScore, SyncMemberMusicState, SyncMemberMusicStateEvent, SyncMusicDownload,
-    UpdateGameStats, UpdateMusicState,
+    UpdateGameStats, UpdateMusicState, WaitingMusicChanged,
 };
 pub use relay::{
     ComboBroken, ComboStarted, ConnectionEndpoint, CreateRelaySession, DeleteRelaySession,

@@ -7,6 +7,7 @@
 
 pub mod avatar;
 pub mod input_latency;
+pub mod music_download;
 pub mod music_install;
 pub mod options;
 pub mod playing;
@@ -19,6 +20,7 @@ mod window;
 pub use avatar::{
     load_archive_sprite, load_worn_figure, pick_wear_sprites, AvatarFigure, FigureLayer,
 };
+pub use music_download::{MusicDownload, MusicDownloadRequest};
 pub use playing::{HighwayGeometry, LivePlay, PlaySkin, PlayingView};
 pub use screen::{can_enter, BadTransition, Screen, ScreenFlow};
 pub use screens::{paint_screen, ScreenGame};
