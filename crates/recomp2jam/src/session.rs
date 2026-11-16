@@ -2731,7 +2731,7 @@ impl OnlineSession {
             event
                 .members
                 .iter()
-                .find(|member| Some(member.member_id) == Some(id))
+                .find(|member| member.member_id == id)
                 .map(|member| member.state)
         });
         if event
