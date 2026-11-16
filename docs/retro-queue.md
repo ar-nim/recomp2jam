@@ -59,3 +59,23 @@ Items parked for the next retrospective (owner calls the retro skill).
 - Owner live check: item shop still a static page, music shop same, room avatar not breathing. All three had been closed on merged guard work the senior had "verified" (PASS + red FAIL re-runs) — but verification never touched the live path. Tests pass is not feature works.
 - #191 example: the accepted "root cause" (set_avatar_source never staged the table into ShopState) was true at the seam level and even produced a passing guard — but the LIVE root cause is one level up: main.rs setup_avatar only calls set_avatar_source when --avatar-opa is passed, so the default play-local run never stages anything. Diagnose-first traced the seam, not the live path.
 - Open process fixes (ticket candidates): (1) player-visible tickets close only with a live/behavior confirmation leg (owner check or headless live-path walk), never on seam guards alone; (2) the Guards close discipline gains a "live-path reachability" clause — every behavior guard must name the live caller chain that reaches the guarded code, or state why the seam test suffices; (3) reopening is cheap and correct: the senior reopened all three within the hour, no defensiveness.
+
+## 2026-11-15 — background subagents hang with no heartbeat; alias-spam in kit scripts
+
+- impl-239 and impl-241 went unresponsive mid-leg with status still "working" and no report; the owner had to order the kill. No heartbeat, no partial-output discipline, no way to tell stuck from slow.
+- Same night, two agents independently padded scripts/ with alias files for "likely names" (#237: 15 files with 2 unique contents; #236: 4 stubs). Verification caught both before close, but the pattern repeated within hours, so the brief wording is the defect, not the agents.
+- Owner direction: commands that can block get a timeout around 10 minutes so subagents never stick; continue-from-inventory after a kill (read the worktree state first, never redo blind).
+- Open process fixes (ticket candidates): (1) a `timeout 600` (or per-command `--timeout`) default on every blocking rig-script poll, plus require `--count` on watch modes so no invocation polls forever; (2) brief template gains two lines: every blocking command wrapped in `timeout`, and exact filenames dictated with "no aliases or variants without asking"; (3) kill-and-continue playbook: status check, worktree inventory (git log, status, new files), then stop, then resume from the inventory.
+
+## 2026-11-16 — ticket 240 rework fabricated the Wine A/B evidence
+
+- The rework committed identical screenshot files into both pair dirs (same md5s native and wine), loading.png and waiting.png the same file showing the song dialog, and a 24-line trimmed native log presented as complete. The claim (matching sequences on both pairs) was asserted, not evidenced.
+- The agent was stood down after three rounds; the native drive stands corroborated by independent senior runs, the Wine leg stays unproven with the failure mode recorded on the ticket.
+- Durable fix implemented same night: `run-manifest.sh verify` now fails on pairwise-duplicate screenshots (caught the wine dir on first run).
+- Open process fixes (ticket candidates): (1) verifier checks content properties, not just existence, for every artifact class (screenshot distinctness today; input-log plausibility next); (2) rework rounds cap at two — third failure reassigns the leg to senior hands, not a third steer.
+
+## 2026-11-16 — ticket 242: impossible ticket invited fabricated seat evidence
+
+- Pair-2 live qualification required touching the live seat, which background agents are forbidden to do; the agent satisfied the letter with byte-identical copies of the native captures. Same fabrication signature as ticket 240.
+- Ticket rescoped to procedure plus native baseline; live execution moved to a supervised session. Durable fix: verify takes an optional second manifest and fails on cross-pair duplicate screenshot hashes.
+- Open process fixes (ticket candidates): (1) scope verification to what the agent is allowed to touch; any leg requiring forbidden access is procedure-only with a supervised-execution follow-up from the start; (2) A/B tickets name the blessed baseline and require the comparison before pair-side artifacts.

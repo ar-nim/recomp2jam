@@ -8,7 +8,9 @@ protocol) and `docs/agents/triage-labels.md`.
 ## Roles
 
 - **Senior**: owns the plan, the evidence, the gates, and the close.
-  Spawns juniors, reviews their diffs, re-runs their gates, merges.
+  Spawns juniors, reviews their diffs, re-runs their gates, merges,
+  and pushes always: merged work is pushed immediately, never
+  accumulated unpushed (owner decision 2026-11-16).
 - **Junior**: works in one assigned worktree on one ticket. Reports
   done with `git status` clean of unintended files. Never pushes,
   never comments on or closes issues.
