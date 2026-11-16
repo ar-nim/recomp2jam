@@ -95,7 +95,7 @@ carries `Bag1..3 = 376, 383, 35` (zeros elsewhere, `BAG_EXT_COUNT`
 the owned-items source the bag pages live (DB backup
 `~/memoryer-local/O2JAM.db.pre200.bak`; local DB rows only).
 
-## Worn-figure idle frames (structure pinned, cadence OPEN)
+## Worn-figure animation (pinned: 66 ms step, 48-step phase)
 
 Every probed worn-item body holds **12 chained same-part frames** in
 one sprite-55 container: face `01M160000001.ojs` (12 records, anchors
@@ -104,25 +104,105 @@ one sprite-55 container: face `01M160000001.ojs` (12 records, anchors
 `17M14001.ojs` (12 × 22×40 at (139,136)), shoes `17M15001.ojs`
 (12 × 36×25), tops `17MB/MG/MK13T001.ojs` (12 records each) —
 record-directory walks land exact (`8 + 20·12 + blob == len`),
-±1 px anchor/size jitter between neighbours (breathing-class pose
-sets). `from_sprite55` currently stacks all 12 as coincident layers
-(multi-image plain bodies: layers-vs-frames reading OPEN,
-`crates/o2jam-shell/src/avatar.rs`). The exe room animates the
-avatar/user strip live (capture-region fact, `docs/hover.md`: measured
-strip bbox 485,50–726,255 animates between parked-pointer captures),
-but no pinned source gives the exe's frame period or order for the
-worn figure. **OPEN (named): cadence pin via a Wine dwell capture** —
-tick-timed captures of the room avatar region (e.g. 10 Hz for 10 s
-under the `recomp2jam-reference-capture` rig), diff to the frame
-count (expected cycle length 12), derive the ms-per-frame period;
-then implement the frame-cycle tick with that pinned cadence. No
-cadence is invented until then.
+±1 px anchor/size jitter between neighbours (breathing frames).
+Those records are the frames of ONE sprite (our
+`AvatarFigure::from_sprite55` stacks them as layers and the shared
+painter selects one per animation phase).
+
+Frame counts per (part block, pose) on the live archive, male slots
+(`o2jam-dump` probe over 1541 rows): idle pose `I` is a **1-image
+still** in 676 blocks (265 of them arm blocks), 12 frames in 37 arm
+blocks; every instrument pose `G`/`B`/`K`/`D` is 12 frames (302–306
+blocks each). Three blocks carry 11-frame bodies and twelve carry
+13-frame bodies.
+
+### Exe pin (file offsets, `objdump -d`; version `AngelO2Jam.exe`
+5,029,888 B, SHA-256 `83a04541…72c823b`, file offset = VA −
+`0x400000`)
+
+The worn avatar is class **CAvatar** (vtable `0x64c828`, RTTI
+complete-object-locator `0x668a78` → `.?AVCAvatar@@`; ctor VA
+`0x52b180`, built by the ControlList factories at `0x432d26`,
+`0x479bb6`, `0x48a982`, `0x48b624`, size `0x20c`).
+
+- **Step cadence: 66 ms.** The ctor (VA `0x52b290`) stores `0x42` at
+  `+0x1f0` (ms per animation step) and starts the phase counter
+  `+0x1ec` at 0. The paint (VA `0x52b9b0`, vtable slot 9) asks the
+  timer helper VA `0x411ea0` whether `now − +0x1f4 > +0x1f0`, then
+  adds `floor((now − last) / 66)` steps to a float remainder at
+  `+0x1f8` and wraps the phase over `0x30` = **48** steps (a phase
+  above 48 is forced to 1). One phase cycle is 3168 ms; a 12-frame
+  body advances one frame every 66 ms (792 ms per cycle, 15.15
+  frames/s).
+- **One phase for every part**: the paint walks the draw-order row
+  and sets each part's frame from the same counter
+  (setter VA `0x41e0f0`), so all parts advance together.
+- **Frame rule**: a body with more frames than the phase shows the
+  phase as its frame; a 12-frame body shows `phase % 12`; a 24-frame
+  body `phase % 24`; any other length asks for frame 1, which the
+  setter rejects (index ≥ count), so a **1-image body never changes
+  pose** and an 11- or 13-frame body freezes on frame 1 after the
+  first steps.
+- **Pose is static per kit**: the restage (VA `0x52b480`) builds ONE
+  pose word per avatar. Bits 3–5 choose the block's variant slot
+  (selector VA `0x52e730`: variant 0 → slot base 2, 1 → 4, 2 → 6,
+  3 → 8, 4 → 10; bits 8–10 add 10 per part block, bit 6 adds the
+  female parity, so slot = `2 + 10·block + 2·variant + female`). The
+  variant comes from the row type byte of the item at CAvatar
+  `+0x60` — switch table VA `0x52b96c`: **16 guitar → 1, 18 bass →
+  2, 15 keyboard → 3, 17 drum → 4**, anything else → 0. That field
+  and `+0x64` are written only from the global pair `0x77b52c` /
+  `0x77b530` (init `0x52b21e`, restage `0x52b4c8`, reload
+  `0x52b624`), which the image initialises to 0 at `0x63d1d3` /
+  `0x63d1dd` and never writes again — so a live 7.55 avatar always
+  wears variant 0.
+- **What the five variants are**: row type bytes `0x0f..0x12` are
+  the instrument skins (`Itemdata_Korea.dat`: 15 keyboard
+  `피쉬키보드`, 16 guitar `샤인`/`이글 스트라이크`, 17 drum
+  `블루쉘 드럼`, 18 bass `피너츠`), and the variant letters match:
+  **I** idle (one-image still), **G** guitar, **B** bass, **K**
+  keyboard, **D** drum (12-frame playing poses). Wearing an
+  instrument therefore changes the pose of *every* part block and
+  turns the sleeves into a 12-frame playing animation; a kit with no
+  instrument wears the idle pose, whose sleeves and jacket torso are
+  a single still image. **The five variants are not animation
+  frames; the exe never cycles them.**
+
+### Consequence for ticket #222
+
+The idle hands of a jacketed avatar (item 376's sleeves) are a
+1-image still in the exe too, so "hands do not move" is exe parity
+for an instrument-less kit; room motion comes from the 12-frame
+bodies (base body, hair, face, bottom, shoes) at 66 ms per frame.
+Our painter implements this (`AVATAR_BREATHING_TICK_MS = 66`,
+`AVATAR_ANIMATION_PHASE_COUNT = 48`, `worn_part_frame`,
+`AvatarPose`, `worn_pose`), and the bare-board idle pulse runs at
+one step (66 ms) so every step reaches the screen.
+
+Documented divergences, none silent:
+
+1. **Empty pose slot**: the exe returns null and draws no part;
+   `pick_wear_sprites` falls back to the block's other parity and
+   then to its first non-empty wearer-parity slot, so a garment never
+   vanishes. Revisit if a real kit shows the difference.
+2. **Draw order**: the exe paints parts in a fixed 5×36 order table
+   (VA `0x64c770`, row per pose, `0xff` terminated) — pinned data,
+   not yet consumed: our painter keeps equipment-slot order. OPEN:
+   z-order parity.
+3. **Odd-length bodies** (11/13 frames) are rare; the rule above is
+   implemented as pinned (frame 0 instead of the exe's rejected
+   frame 1, same visible result).
+
+OPEN: no live read of CAvatar `+0x60` (expected `(0,0)`) — next
+evidence step is a winedbg stopped-state read on the room avatar.
 
 ## `load_worn_figure` mapping (one body per part)
 
 Per nonzero equipment id in slot order: resolve the
-`AvatarItemRow` by id, run `pick_wear_sprites`, map each filename
-`.oji` → `.ojs`, parse `sprite55`, stack decodable layers.
+`AvatarItemRow` by id, fix the kit pose (`worn_pose`: an instrument
+skin selects `G`/`B`/`K`/`D`, else idle), run `pick_wear_sprites`
+with that pose, map each filename `.oji` → `.ojs`, parse
+`sprite55`, stack decodable layers.
 
 Do not confuse the two "slot" uses: the 17 equipment slots above
 select *which item* is worn, while the 42 sprite slots per item
@@ -132,25 +212,14 @@ female pose variants** (block `b`, variant `v`: male slot
 `2+10b+2v`, female slot `3+10b+2v`). Even slots carry male
 variants, odd slots female ones (`docs/file-formats/opi.md`).
 
-`pick_wear_sprites` wears **one body per part block**, first
-non-empty wearer-parity slot, other-parity fallback per part, slot
-order kept (ticket #222: the five variants of a block are five
-*poses of the same part*, so wearing all five printed ghost hands at
-one anchor — item 376 stages torso / left arm / right arm in blocks
-0–2, five poses each, and the unisex items repeat one file across
-their five slots). The live tester2 kit therefore stages 8 bodies
-(hair, body, torso, left arm, right arm, bottom, shoes, face) and 63
-layers.
-
-**OPEN (named): which pose variant the exe wears.** Nothing selects
-one: `CharacterInfo` (2001) carries no character/variant field, the
-per-slot flag byte is `1` throughout, and no static site ties the
-variant letter (`I`/`G`/`B`/`K`/`D`) to a reader. Next evidence step:
-a Wine rig capture with item 376 worn (the pose differs visibly:
-variant `I` is a one-image still, `G`/`B`/`K`/`D` are 12-frame
-breathing poses that differ in arm shape), read the arm pose off the
-room avatar. If it shows moving sleeves or a different pose, the
-picker's within-block rule changes; the layout rule does not.
+`pick_wear_sprites` wears **one body per part block** in the kit's
+pose, wearer parity first (ticket #222: the five variants of a block
+are five *poses of the same part*, so wearing all five printed ghost
+hands at one anchor — item 376 stages torso / left arm / right arm in
+blocks 0–2, five poses each, and the unisex items repeat one file
+across their five slots). The live tester2 kit therefore stages 8
+bodies (hair, body, torso, left arm, right arm, bottom, shoes, face)
+and 63 layers: run lengths `[12, 12, 1, 1, 1, 12, 12, 12]`.
 
 ## Verdict
 
@@ -174,82 +243,22 @@ picker's within-block rule changes; the layout rule does not.
 `equip_item_response_rejects_short_body`,
 `equip_item_response_rejects_trailing_bytes`.
 
-## Avatar idle animation (ticket #176) — OPEN
+## Avatar idle animation (ticket #176 / #222d) — CLOSED by the pin above
 
-### What is pinned
-
-- Every probed worn body carries 12 chained breathing frames (verified:
-  `avatar.opa` bodies such as `01M010010001.ojs` decode to exactly 12
-  sprite-55 images sharing one record anchor, e.g. `(130, 78)`; the
-  single-frame siblings such as `01M01001.ojs` carry 1). The current
-  `load_worn_figure` flattens all 12 images into `AvatarFigure.layers`,
-  so they stack at paint time instead of animating. Treating them as
-  animation frames (paint one per clock) is the OPEN implementation arm.
-- The paint site is `AvatarFigure::paint_visible_centered` (room panel
-  `paint_room_user_panel` and waiting seats `paint_figure_in_seat_slot`
-  in `crates/o2jam-shell/src/screens/paint.rs`); both call it with a
-  `&Rect` slot and no clock today.
-- Timed-cycle precedent: `PLANET_PROMO_TICK_MS` (3000 ms) via
-  `tick_planet_promo_at` / `tick_promo_clocked` in
-  `crates/o2jam-shell/src/screens/game/planet.rs`, pulsed by the
-  `idle_repaint_interval` heartbeat (`Screen::Planet` arm, 1000 ms
-  heartbeat in `crates/o2jam-shell/src/screens/game/mod.rs`).
-
-### Static attempt (2026-11-13)
-
-- Located the generic sprite-frame machinery in `OTwo.exe` (VA/file
-  per `docs/claims.md` A10): frame index lives at sprite-control
-  `+0x134` (file `0x1e050`/`0x1e06e`), frame table at `+0x120`
-  (stride `0x14`, signed anchor words at record `+0`/`+2`), and the
-  setter at VA `0x41e0f0` (file `0x1e0f0`) stores the index only when
-  it is below the image count returned by the getter at `0x41e140`.
-- A direct cross-reference scan of the image for the setter/getter VAs
-  (`0x41e0f0`, `0x41e120`, `0x41e0d0`, `0x41e140`) returned zero hits:
-  they are reached through the sprite control's vtable, not by direct
-  `call`, so the avatar-specific advance site could not be isolated by
-  byte scan. No avatar-class (`CAvatar`) method references survived as
-  strings beyond the RTTI name at file `0x27ea50`; `Avatar.opa` string
-  refs (files `0xa739`, `0x10ffb`) are archive-load sites, not paint
-  or timer sites.
-- No immediate resembling a breathing cadence (no `cmp`/timer against
-  a small constant) could be attributed to the avatar paint district
-  from bytes alone.
-
-### Empirical attempt (2026-11-13)
-
-- Launched `OTwo.exe` (SHA `83a04541…72c823b`) under `scripts/rig-run.sh`
-  on display `:101` with a null PulseAudio sink and the local Memoryer
-  (`127.0.0.1:15010`, token for `USER_INDEX_ID=2`); the rig produced a
-  bright frame (`bright=4800`), confirming the client boots, but driving
-  it through login, channel select, and into a room/waiting scene with a
-  worn figure requires the full SendInput sequence (X-plate template
-  detection + dialog dismissal) documented in
-  `~/scratch/button-unblock/`. That sequence was not completed within
-  this attempt, so no dwell capture and no frame-change timestamps were
-  obtained.
-
-### Result
-
-- **Cadence: OPEN.** No ms/frame value is pinned; no value is invented.
-- **Driver: OPEN.** The generic sprite-frame setter is pinned
-  (`0x41e0f0`/`+0x134`/`+0x120`), but the avatar-specific advance
-  (paint-clock accumulator vs. timer tick, and the cadence constant)
-  is not.
-- **Implementation: not landed.** Per the ticket hard rule, no code
-  change ships without a pinned cadence. The natural landing shape,
-  once pinned, is: add a frame index derived as `f(now_ms, cadence)` to
-  `paint_visible_centered` (and thread `now_ms` through
-  `paint_room_user_panel` / `paint_figure_in_seat_slot`), select one
-  image per 12-frame body instead of stacking all 12, and give the
-  Room/Waiting scenes an `idle_repaint_interval` pulse (reusing the
-  250 ms net-drain heartbeat if it covers the cadence, else a
-  dedicated arm) — mirroring `tick_planet_promo_at`.
-- **Guard: not added.** A failing-first guard (staged worn figure,
-  clock advanced by cadence → painted frame advances; clock pinned → no
-  advance) is specified but cannot be written against an unpinned
-  number.
-
-Next evidence step: complete the SendInput-driven Wine dwell capture on
-a worn-figure scene (room panel or waiting seat) and record frame-change
-timestamps over 10–20 s; in parallel, static-trace the vtable callers of
-`0x41e0f0` to find the avatar advance site and its cadence immediate.
+The 2026-11-13 attempt found the generic sprite-frame setter (VA
+`0x41e0f0`) but could not attribute the avatar's cadence, and #176
+was closed as superseded. Ticket #222d resumed the static hunt with
+the class identified first (CAvatar vtable `0x64c828`) and pinned the
+step (66 ms), the phase cycle (48) and the frame rule; the static
+attempts and their negative results stay in the git history of this
+file for the record. Implementation lives in
+`crates/o2jam-shell/src/avatar.rs` (`AVATAR_BREATHING_TICK_MS`,
+`AVATAR_ANIMATION_PHASE_COUNT`, `avatar_animation_phase`,
+`worn_part_frame`, `AvatarPose`, `worn_pose`), and the guards
+`avatar_animation_phase_clock_guard`,
+`avatar_part_frame_follows_the_exe_frame_rule`,
+`tt222d_live_kit_moves_between_animation_steps`,
+`tt222d_still_part_holds_its_pose_and_never_blanks`,
+`tt222d_instrument_pose_animates_the_sleeves`,
+`wear_follows_the_kit_pose_in_every_block`,
+`worn_pose_reads_the_instrument_row_type`.

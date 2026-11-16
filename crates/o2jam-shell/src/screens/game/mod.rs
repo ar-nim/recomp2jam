@@ -6082,15 +6082,14 @@ impl GameLoop for ScreenGame {
             {
                 Some(std::time::Duration::from_millis(PLANET_PROMO_HEARTBEAT_MS))
             }
-            // The worn avatar breathes on its paint-clock cadence
-            // while shown, so a bare Room/Waiting board with a staged
-            // figure owes the loop one pulse per breathing tick — the
-            // figure advances frames across repaints with no input.
+            // The worn avatar animates on its paint clock while shown,
+            // so a bare Room/Waiting board with a staged figure owes the
+            // loop one pulse per animation step — 66 ms, the exe's
+            // step (`docs/equip.md`), so every step reaches the screen
+            // and frames advance across repaints with no input.
             // Covered boards (side sheet, room dialog, options modal)
             // and figure-less boards paint nothing new, so they stay
-            // fully idle (the #138 parked-loop result holds). OPEN: the
-            // cadence is the shell's paint-clock tick, not exe-pinned
-            // parity (`docs/equip.md`).
+            // fully idle (the #138 parked-loop result holds).
             Screen::Room if self.bare_room_board() && self.room_worn_figure_shown() => {
                 Some(std::time::Duration::from_millis(AVATAR_BREATHING_TICK_MS))
             }
@@ -10962,7 +10961,8 @@ mod game_tests {
         //   main.rs::run_play -> GameLoop paint -> ScreenGame::paint_at
         //   -> paint_side -> paint_myroom_figure
         //   -> AvatarFigure::paint_visible_centered(now_ms)
-        //   -> avatar_breathing_frame(now_ms) selects the run frame.
+        //   -> avatar_animation_phase(now_ms) selects the phase and the
+        //   run frame (66 ms step, pinned in `docs/equip.md`).
         // Archives absent -> N/A (synthetic layers, no archive read).
         use crate::avatar::{FigureLayer, AVATAR_BREATHING_TICK_MS};
         use o2jam_render::Rgb555Image;
@@ -12752,7 +12752,8 @@ mod game_tests {
         //   -> GameLoop::idle_repaint_interval (the pulse) and
         //   -> GameLoop::paint -> ScreenGame::paint_at -> paint_room
         //   -> paint_room_user_panel
-        //   -> avatar_breathing_frame(now_ms) selects the run frame.
+        //   -> avatar_animation_phase(now_ms) selects the phase and the
+        //   run frame (66 ms step, pinned in `docs/equip.md`).
         // Archives absent -> N/A (synthetic layers, no archive read).
         use crate::avatar::AVATAR_BREATHING_TICK_MS;
         let mut game = ScreenGame::new();
@@ -12856,7 +12857,7 @@ mod game_tests {
         //   -> ScreenGame::paint -> ScreenGame::paint_at (frame clear)
         //   -> paint_room -> paint_lobby_backdrop_live (no fill, art-less)
         //   -> paint_room_user_panel -> AvatarFigure::paint_visible_centered
-        //   -> avatar_breathing_frame(now_ms).
+        //   -> avatar_animation_phase(now_ms).
         use crate::avatar::AVATAR_BREATHING_TICK_MS;
         let mut game = ScreenGame::new();
         walk_to_lobby(&mut game, Screen::Room);
@@ -12914,7 +12915,8 @@ mod game_tests {
         //   -> GameLoop::idle_repaint_interval (the pulse) and
         //   -> GameLoop::paint -> ScreenGame::paint_at -> paint_waiting
         //   -> paint_waiting_seat_avatars
-        //   -> avatar_breathing_frame(now_ms) selects the run frame.
+        //   -> avatar_animation_phase(now_ms) selects the phase and the
+        //   run frame (66 ms step, pinned in `docs/equip.md`).
         // Archives absent -> N/A (synthetic layers, no archive read).
         use crate::avatar::AVATAR_BREATHING_TICK_MS;
         use std::time::Duration;
