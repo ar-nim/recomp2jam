@@ -90,3 +90,12 @@ Next step (named): rig chart swap — serve a synthetic chart whose
 lane note carries bit 26 to the Wine client and read the strike-slot
 `+0x3E8` bank after load (memory-read rig per `~/scratch/planet-verify`
 / winedbg discipline), naming the bank consumer's observable effect.
+
+## Full-pack update (2026-11-16, ticket #286 extraction fallout)
+
+The Music_Full.exe extraction (515 charts) extends the shipped corpus beyond the 14-chart small install:
+
+- o2ma100.ojn ships bit 26 on all three levels (kind 9, raw 0x0400_0001) - same encoding as Tutorial.
+- o2ma132.ojn ships a kind-10 hit - the small-install pin (kind 9 only) does not hold pack-wide.
+
+The test now pins the STRUCTURAL encoding pack-wide (autoplay flags 0x0400 + 1-based sample id) and keeps Tutorial 12-hit/level-0 pin verbatim. OPEN: the full kind set that may carry bit 26 (exe verification of the kind dispatch pending).

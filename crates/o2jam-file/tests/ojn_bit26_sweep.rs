@@ -90,7 +90,9 @@ fn shipped_charts_set_bit26_only_on_tutorial_bgm_records() {
         .filter(|path| path.extension().is_some_and(|ext| ext == "ojn"))
         .collect();
     files.sort();
-    assert_eq!(files.len(), 14, "7.55 ships 14 .ojn charts");
+    // Count is install-dependent (small install: 14; full music pack:
+    // hundreds, ticket #286). The invariant below is what is pinned.
+    assert!(files.len() >= 14, "expected at least 14 charts, found {}", files.len());
 
     for path in &files {
         let bytes = std::fs::read(path).expect("read chart");
@@ -109,7 +111,27 @@ fn shipped_charts_set_bit26_only_on_tutorial_bgm_records() {
                 );
             }
         } else {
-            assert!(hits.is_empty(), "{name} ships a bit-26 payload: {hits:?}");
+            // Full-pack finding (ticket #286 extraction): more charts
+            // than Tutorial ship bit 26 - o2ma100.ojn carries it on
+            // all three levels. The pinned invariant is the ENCODING
+            // (docs/ojn-bit26.md: BGM channel kind 9, flags 0x0400 +
+            // 1-based sample id), not Tutorial exclusivity - that was
+            // an artifact of the 14-chart install.
+            for hit in &hits {
+                // Structural encoding only for the wider pack: the
+                // kind set is OPEN (full-pack sightings: kind 9 on
+                // o2ma100, kind 10 on o2ma132 - the small-install pin
+                // said kind 9; exe verification pending, see
+                // docs/ojn-bit26.md).
+                assert!(
+                    hit.raw & 0x0400_0000 != 0,
+                    "{name}: autoplay flags 0x0400"
+                );
+                assert!(
+                    hit.raw & !0x0400_0000 >= 1,
+                    "{name}: 1-based sample id"
+                );
+            }
         }
     }
 }
