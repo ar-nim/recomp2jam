@@ -388,7 +388,16 @@ mod tests {
                 charts.push(path);
             }
         }
-        assert_eq!(charts.len(), 14, "the 7.55 install ships 14 charts");
+        // Count is install-dependent: the small install shipped 14
+        // charts; after the full music pack extraction (ticket #286)
+        // the folder carries hundreds. The invariant is that EVERY
+        // shipped chart's cover extracts and decodes - the floor
+        // guards against an empty read, not a specific install state.
+        assert!(
+            charts.len() >= 14,
+            "expected at least the 14 charts of the small install, found {}",
+            charts.len()
+        );
         for path in &charts {
             let bytes =
                 std::fs::read(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
