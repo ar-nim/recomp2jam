@@ -1185,6 +1185,59 @@ pub fn has_ink_near(buf: &[u32], ink: u32) -> bool {
     buf.iter().any(|pixel| near_xrgb(*pixel, ink))
 }
 
+/// Whether a rect holds one point (right and bottom edges excluded).
+fn rect_holds(rect: &Rect, x: i32, y: i32) -> bool {
+    i64::from(x) >= i64::from(rect.x)
+        && i64::from(x) < far_edge(rect.x, rect.w)
+        && i64::from(y) >= i64::from(rect.y)
+        && i64::from(y) < far_edge(rect.y, rect.h)
+}
+
+/// Pixels of one `w`-wide frame inside `rect`, row-major (the part
+/// clipped off-frame is dropped). Lets a guard read one control's own
+/// pixels — a caption rect, for example — without a literal copy.
+#[must_use]
+pub fn pixels_in_rect(buf: &[u32], w: usize, rect: Rect) -> Vec<u32> {
+    let mut inside = Vec::new();
+    let height = buf.len().checked_div(w.max(1)).unwrap_or(0);
+    let Some((x0, y0, x1, y1)) = clip(&rect, w, height) else {
+        return inside;
+    };
+    for y in y0..y1 {
+        inside.extend_from_slice(&buf[y * w + x0..y * w + x1]);
+    }
+    inside
+}
+
+/// First pixel (x, y) where two `w`-wide frames differ outside
+/// `allowed`; `None` when every changed pixel sits inside the rect.
+/// A guard uses it to say "nothing but this control re-inked".
+#[must_use]
+pub fn first_change_outside(
+    before: &[u32],
+    after: &[u32],
+    w: usize,
+    allowed: Rect,
+) -> Option<(usize, usize)> {
+    let width = w.max(1);
+    let height = before.len().min(after.len()) / width;
+    for y in 0..height {
+        let row = y * width;
+        for x in 0..width {
+            let (Ok(px), Ok(py)) = (i32::try_from(x), i32::try_from(y)) else {
+                continue;
+            };
+            if rect_holds(&allowed, px, py) {
+                continue;
+            }
+            if before[row + x] != after[row + x] {
+                return Some((x, y));
+            }
+        }
+    }
+    None
+}
+
 /// Fill a clipped rectangle with a translucent color.
 /// Alpha 0 paints nothing; 255 is a solid fill_rect.
 pub fn fill_rect_alpha(frame: &mut Frame<'_>, rect: &Rect, color: u32, alpha: u8) {

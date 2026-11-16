@@ -720,10 +720,11 @@ fn drive_solo_to_result() -> ScreenGame {
 }
 
 /// Stage the musicselect shot's dialog scene: the host song flow
-/// (catalog plus pick) so the waiting song panel resolves, then the
-/// real `DAILOG_SELECTMUSIC` dialog art over the seats. Staged after
-/// the waiting shot so earlier shots stay untouched; never fails.
-/// Without archive art the panel still stages (documented gap).
+/// (catalog plus pick) so the waiting `MUSICNAME` caption resolves,
+/// then the real `DAILOG_SELECTMUSIC` dialog art over the seats.
+/// Staged after the waiting shot so earlier shots stay untouched;
+/// never fails. Without archive art the caption still stages
+/// (documented gap).
 fn stage_select_music_scene(game: &mut ScreenGame) {
     stage_select_music_catalog(game);
     game.set_selected_music(PLAYING_SONG);
@@ -3903,10 +3904,20 @@ mod tests {
     }
 
     #[test]
-    fn musicselect_shot_repaints_waiting_with_song_panel() {
+    fn musicselect_shot_repaints_waiting_with_the_staged_pick() {
         // The host song flow (catalog plus pick) stages under the
-        // dialog: the waiting song panel inks new pixels while the
-        // flow stays on Waiting for the dialog shot.
+        // dialog: the staged `MUSICNAME` caption and the dialog ink new
+        // pixels (ticket #274 dropped the readout panel above the chat)
+        // while the flow stays on Waiting for the dialog shot.
+        //
+        // The pick's title rides the BND-pinned `MUSICNAME` rect, so a
+        // boot with no interface art has no caption geometry to ink (the
+        // old literal panel used to paint here). Skip cleanly: CI has no
+        // game data.
+        if read_install_archives(&install_root()).interface.is_none() {
+            println!("skip: missing {INTERFACE_ARCHIVE}");
+            return;
+        }
         let mut game = seeded_game();
         game.lane_key(3, true);
         game.click_planet(136, 88);
@@ -3921,7 +3932,7 @@ mod tests {
             "host song flow stages a catalog"
         );
         let after = frame_rgb(&mut game, 0);
-        assert_ne!(before, after, "song panel changed no pixels");
+        assert_ne!(before, after, "the staged pick changed no pixels");
         assert!(is_varied(&after), "musicselect paints a flat frame");
     }
 
@@ -3947,7 +3958,7 @@ mod tests {
         // With genuine dialog art staged, the structure's amber search
         // tab inks over the waiting seats (pinned anchor from the
         // shell's own structure test); without archives the dialog
-        // stays hidden and only the song panel stages.
+        // stays hidden and only the `MUSICNAME` caption stages.
         let Some(archive) = read_install_archives(&install_root()).interface else {
             println!("skip: missing {INTERFACE_ARCHIVE}");
             return;

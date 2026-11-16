@@ -376,9 +376,9 @@ same Live duo (same arena word, room song 757, captions, and
 `seeded_guest_game`). The guest frame differs from the master
 `waiting.png` in the seat plates and the song rect (the owner-decision
 shell rule — "The waiting song rect" above) and differs from
-`musicselect.png` in 330774 of 360300 raw bytes: no dialog art, no
-structure, no song panel (gate hides them even when staged), while the
-staged `BPM` caption stays (catalog column present, never `-0-`).
+`musicselect.png` in 330774 of 360300 raw bytes: no dialog art and no
+structure (gate hides them even when staged), while the staged `BPM`
+caption stays (catalog column present, never `-0-`).
 Gate state on the walked guest: `is_room_master` false,
 `all_peers_ready` true, `can_start_game` false, Confirm stays in
 Waiting — the non-master arm (READY shown, START hidden;

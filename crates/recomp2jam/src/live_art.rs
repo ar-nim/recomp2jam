@@ -1136,6 +1136,148 @@ mod live_art_tests {
         assert_ne!(bare, staged);
     }
 
+    /// Installed catalog rows (`OJNList.dat`), the live caption source;
+    /// `None` without game data.
+    fn installed_catalog_songs() -> Option<Vec<o2jam_shell::screens::side::SelectMusicSong>> {
+        let bytes = std::fs::read(install_root().join("O2Jam/Image/OJNList.dat")).ok()?;
+        let entries = o2jam_file::parse_ojn_list(&bytes).ok()?;
+        let songs = o2jam_shell::screens::side::select_music_songs(&entries);
+        (!songs.is_empty()).then_some(songs)
+    }
+
+    /// Waiting game on the live-staged art: the joined room names
+    /// `room_music_id`, the installed catalog is staged, and an optional
+    /// host pick names `pick`.
+    fn staged_waiting_pick_game(room_music_id: u16, pick: Option<u16>) -> ScreenGame {
+        let mut game = live_game();
+        let mut room = live_room();
+        room.music_id = room_music_id;
+        game.set_joined_room(room);
+        let bytes = std::fs::read(install_root().join("O2Jam/Image/OJNList.dat"))
+            .expect("installed catalog bytes");
+        let entries = o2jam_file::parse_ojn_list(&bytes).expect("installed catalog parses");
+        game.set_song_catalog(&entries);
+        if let Some(music_id) = pick {
+            game.set_selected_music(o2jam_net::SetRoomMusic {
+                music_id,
+                difficulty: 0,
+                speed: 1,
+            });
+        }
+        stage_live_scenes(&mut game);
+        walk_to(&mut game, Screen::Waiting);
+        assert_eq!(game.screen(), Screen::Waiting);
+        game
+    }
+
+    /// Pinned `MUSICNAME` rect of the live-staged Waiting art
+    /// (`State_Waiting.bnd` rect 22, paired by code ordinal — read from
+    /// the staged placements, never a literal).
+    fn staged_musicname_rect(game: &ScreenGame) -> o2jam_render::Rect {
+        game.scene_placements(Screen::Waiting)
+            .iter()
+            .find(|placed| placed.id == "IDC_TEXT_SWAIT_MUSICNAME")
+            .map(|placed| placed.rect)
+            .expect("MUSICNAME placement missing from staged Waiting art")
+    }
+
+    #[test]
+    fn live_waiting_pick_titles_the_bound_musicname_rect() {
+        // Live chain: main.rs::run_play -> setup_online ->
+        //   stage_online_identity -> stage_live_scenes ->
+        //   stage_interface_scenes(State::Waiting) ->
+        //   ScreenGame::set_selected_music (session::OnlineSession::
+        //   resolve_song_select) -> ScreenGame::paint_at -> paint_waiting
+        //   -> paint_waiting_scene -> paint_waiting_staged ->
+        //   paint_waiting_music
+        // Ticket #274: the master's pick names the `.bnd` `MUSICNAME`
+        // TEXT control at once, so a room that names the picked song
+        // and a room that names nothing plus the pick ink the same
+        // caption inside the pinned rect.
+        //
+        // Archives absent -> skip cleanly (CI has no game data).
+        if skip_without_archives() {
+            return;
+        }
+        let Some(songs) = installed_catalog_songs() else {
+            println!("skip: missing installed song catalog");
+            return;
+        };
+        let song_id = u16::try_from(songs[0].song_id).expect("catalog song id fits u16");
+        let mut picked = staged_waiting_pick_game(0, Some(song_id));
+        let mut room_named = staged_waiting_pick_game(song_id, None);
+        let rect = staged_musicname_rect(&picked);
+        let picked_frame = painted_pixels(&mut picked, 0);
+        let named_frame = painted_pixels(&mut room_named, 0);
+        let width = usize::try_from(NATIVE_WIDTH).unwrap_or(1);
+        assert!(
+            o2jam_render::has_ink_near(
+                &o2jam_render::pixels_in_rect(&picked_frame, width, rect),
+                o2jam_render::pack_xrgb(0xFF, 0xFF, 0xFF)
+            ),
+            "the staged pick inks no caption inside the MUSICNAME rect"
+        );
+        assert!(
+            o2jam_render::pixels_in_rect(&picked_frame, width, rect)
+                == o2jam_render::pixels_in_rect(&named_frame, width, rect),
+            "the caption must carry the staged pick's title, not the room's"
+        );
+    }
+
+    /// Bottom edge of the lowest staged seat cover: the seat grid's
+    /// lower bound (the chat box sits under it, where the #274 readout
+    /// panel used to ink).
+    fn seat_grid_bottom(placements: &[o2jam_shell::avatar::ScenePlacement]) -> u32 {
+        placements
+            .iter()
+            .filter(|placed| placed.id.starts_with("IDC_IMAGE_SWAIT_COVERAVATAR"))
+            .map(|placed| u32::try_from(placed.rect.y).unwrap_or(0) + placed.rect.h)
+            .max()
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn live_waiting_pick_inks_nothing_below_the_seat_grid() {
+        // Live chain: main.rs::run_play -> setup_online ->
+        //   stage_online_identity -> stage_live_scenes ->
+        //   stage_interface_scenes(State::Waiting) ->
+        //   ScreenGame::set_selected_music -> ScreenGame::paint_at ->
+        //   paint_waiting -> paint_waiting_scene -> paint_waiting_staged
+        // Ticket #274: the chosen-song readout used to ink a dark panel
+        // above the chat rows (a literal `(w/8, h*3/4)` scrim over the
+        // staged `State_Waiting.bnd` backdrop). A pick may now re-ink
+        // the pinned `MUSICNAME` rect and nothing else.
+        //
+        // Archives absent -> skip cleanly (CI has no game data).
+        if skip_without_archives() {
+            return;
+        }
+        let Some(songs) = installed_catalog_songs() else {
+            println!("skip: missing installed song catalog");
+            return;
+        };
+        let song_id = u16::try_from(songs[0].song_id).expect("catalog song id fits u16");
+        let mut bare = staged_waiting_pick_game(0, None);
+        let mut picked = staged_waiting_pick_game(0, Some(song_id));
+        let width = usize::try_from(NATIVE_WIDTH).unwrap_or(1);
+        let grid_bottom = seat_grid_bottom(picked.scene_placements(Screen::Waiting));
+        assert!(grid_bottom > 0, "the staged scene carries seat covers");
+        let seat_grid = o2jam_render::Rect {
+            x: 0,
+            y: 0,
+            w: u32::try_from(width).unwrap_or(0),
+            h: grid_bottom,
+        };
+        let bare_frame = painted_pixels(&mut bare, 0);
+        let picked_frame = painted_pixels(&mut picked, 0);
+        let changed =
+            o2jam_render::first_change_outside(&bare_frame, &picked_frame, width, seat_grid);
+        assert!(
+            changed.is_none(),
+            "the pick must not ink the chat band: first pixel changed below the seat grid: {changed:?}"
+        );
+    }
+
     #[test]
     fn loading_paint_uses_staged_gate_when_archives_present() {
         if skip_without_archives() {

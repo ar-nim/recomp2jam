@@ -14,7 +14,7 @@ use super::super::avatar::{
 use super::super::screen::Screen;
 use o2jam_file::OJN_LEVEL_COUNT;
 use o2jam_file::{AvatarItemRow, AvatarItemTable, Bnd, ControlBlock, ControlList, OjnListEntry};
-use o2jam_net::play::{MusicListAnswer, SetRoomMusic};
+use o2jam_net::play::MusicListAnswer;
 use o2jam_net::shop::{
     SellItemResponse, SyncItemPurchasePrefix, SyncItemPurchaseWallets, SyncMusicPurchaseResponse,
 };
@@ -22,8 +22,8 @@ use o2jam_net::wallet::{
     FreePassType, SyncCashPointResponse, SyncFreePassResponse, SyncFreePassResult,
 };
 use o2jam_net::{
-    CharacterInfo, CreateRoom, Difficulty, GameMode, GameSpeed, GameStatsUpdate, GiftItemInfo,
-    GiftMusicInfo, KeyMode, RankDelta, RankEntry,
+    CharacterInfo, CreateRoom, GameMode, GameStatsUpdate, GiftItemInfo, GiftMusicInfo, KeyMode,
+    RankDelta, RankEntry,
 };
 use o2jam_render::{pack_xrgb, Frame, Rect};
 
@@ -1533,54 +1533,6 @@ pub fn waiting_song_title<'a>(entries: &'a [OjnListEntry<'a>], music_id: u16) ->
 /// Whether one catalog entry is the wanted waiting song.
 fn is_waiting_song(entry: &OjnListEntry<'_>, music_id: u16) -> bool {
     entry.is_song() && entry.song_id == u32::from(music_id)
-}
-
-/// Difficulty label for the waiting song panel (`EX`/`NX`/`HX`/`RX`).
-#[must_use]
-pub fn waiting_song_difficulty_label(difficulty: u8) -> String {
-    match Difficulty::from_code(difficulty) {
-        Some(Difficulty::Ex) => "EX".to_owned(),
-        Some(Difficulty::Nx) => "NX".to_owned(),
-        Some(Difficulty::Hx) => "HX".to_owned(),
-        Some(Difficulty::Rx) => "RX".to_owned(),
-        None => format!("DIF {difficulty}"),
-    }
-}
-
-/// Scroll-speed label for the waiting song panel (`X0.5`..`X6`, `XR`).
-#[must_use]
-pub fn waiting_song_speed_label(speed: u8) -> String {
-    match GameSpeed::from_code(speed) {
-        Some(GameSpeed::X05) => "X0.5".to_owned(),
-        Some(GameSpeed::X10) => "X1".to_owned(),
-        Some(GameSpeed::X15) => "X1.5".to_owned(),
-        Some(GameSpeed::X20) => "X2".to_owned(),
-        Some(GameSpeed::X25) => "X2.5".to_owned(),
-        Some(GameSpeed::X30) => "X3".to_owned(),
-        Some(GameSpeed::X35) => "X3.5".to_owned(),
-        Some(GameSpeed::X40) => "X4".to_owned(),
-        Some(GameSpeed::X45) => "X4.5".to_owned(),
-        Some(GameSpeed::X50) => "X5".to_owned(),
-        Some(GameSpeed::X60) => "X6".to_owned(),
-        Some(GameSpeed::Xr) => "XR".to_owned(),
-        None => format!("SPD {speed}"),
-    }
-}
-
-/// Title row for the waiting song panel: chosen id plus catalog title.
-#[must_use]
-pub fn waiting_song_title_line(music_id: u16, title: &str) -> String {
-    format!("M{music_id} {title}")
-}
-
-/// Detail row for the waiting song panel: difficulty plus speed.
-#[must_use]
-pub fn waiting_song_detail_line(selection: &SetRoomMusic) -> String {
-    format!(
-        "{} {}",
-        waiting_song_difficulty_label(selection.difficulty),
-        waiting_song_speed_label(selection.speed)
-    )
 }
 
 /// Equipped my-room rows in slot order, skipping zero and unknown ids
@@ -6009,31 +5961,6 @@ mod side_tests {
         assert_eq!(waiting_song_title(&entries, 770), Some("Second"));
         assert_eq!(waiting_song_title(&entries, 999), None);
         assert_eq!(waiting_song_title(&[], 757), None);
-    }
-
-    #[test]
-    fn waiting_song_labels_name_difficulty_and_speed() {
-        assert_eq!(waiting_song_difficulty_label(0), "EX");
-        assert_eq!(waiting_song_difficulty_label(1), "NX");
-        assert_eq!(waiting_song_difficulty_label(2), "HX");
-        assert_eq!(waiting_song_difficulty_label(3), "RX");
-        assert_eq!(waiting_song_difficulty_label(9), "DIF 9");
-        assert_eq!(waiting_song_speed_label(1), "X1");
-        assert_eq!(waiting_song_speed_label(3), "X2");
-        assert_eq!(waiting_song_speed_label(11), "XR");
-        assert_eq!(waiting_song_speed_label(12), "SPD 12");
-    }
-
-    #[test]
-    fn waiting_song_lines_carry_id_title_and_choices() {
-        use o2jam_net::play::SetRoomMusic;
-        let selection = SetRoomMusic {
-            music_id: 757,
-            difficulty: 2,
-            speed: 3,
-        };
-        assert_eq!(waiting_song_title_line(757, "First"), "M757 First");
-        assert_eq!(waiting_song_detail_line(&selection), "HX X2");
     }
 
     fn side_rank_update(ranks: [u8; 8]) -> GameStatsUpdate {
