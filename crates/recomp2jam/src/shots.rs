@@ -4099,20 +4099,52 @@ mod tests {
     }
 
     #[test]
-    fn guest_view_hides_staged_select_but_keeps_bpm_source() {
+    fn guest_view_hides_staged_select_but_keeps_shared_captions() {
         // The gate hides dialog art, structure, and panel even when
         // staged (shell `waiting_non_master_hides_select_but_keeps_bpm`):
-        // staging the host flow on the guest changes no pixels, while
-        // the catalog BPM source for the shared song stays present.
+        // staging the host flow on the guest paints no select pixels,
+        // while the catalog BPM source for the shared song stays present.
+        // The shared top-bar captions stay shared (tickets #274/#275):
+        // the staged pick re-inks the `LEVEL` badge only - the
+        // `MUSICNAME` title names the same song from the room echo, and
+        // the badge follows the same pick-or-room source as the title.
+        // A guest never stages a pick live (the `MUSELECT` click handler
+        // drops non-master clicks, file `0xb2622`); this test stages one
+        // on purpose.
         use o2jam_shell::screens::paint::waiting_bpm_caption;
 
         let mut guest = seeded_guest_game();
         walk_to_waiting(&mut guest);
-        let before = frame_rgb(&mut guest, 0);
+        let width = usize::try_from(NATIVE_WIDTH).unwrap_or(1);
+        let before = paint_native_frame(&mut guest, 0);
         stage_select_music_scene(&mut guest);
         assert!(!guest.select_songs().is_empty());
-        let after = frame_rgb(&mut guest, 0);
-        assert_eq!(before, after, "guest staged no select pixels");
+        let after = paint_native_frame(&mut guest, 0);
+        let Some(badge) = guest
+            .scene_placements(Screen::Waiting)
+            .iter()
+            .find(|placed| placed.id == "IDC_IMAGE_SWAIT_LEVEL")
+            .map(|placed| placed.rect)
+        else {
+            // No staged art (CI carries no game data): the flat guest
+            // view has no shared caption to re-ink, so the host flow
+            // must leave it byte-identical.
+            assert_eq!(
+                before, after,
+                "guest staged no select pixels without staged art"
+            );
+            return;
+        };
+        let changed = o2jam_render::first_change_outside(&before, &after, width, badge);
+        assert!(
+            changed.is_none(),
+            "guest staged no select pixels outside the shared LEVEL badge: {changed:?}"
+        );
+        assert_ne!(
+            o2jam_render::pixels_in_rect(&before, width, badge),
+            o2jam_render::pixels_in_rect(&after, width, badge),
+            "the shared badge follows the staged pick's difficulty and speed"
+        );
         let song_id = u32::from(PLAYING_SONG.music_id);
         let bpm = staged_catalog_bpm(song_id);
         assert!(bpm.is_some(), "staged catalog must name the room song");

@@ -105,6 +105,7 @@ supply sizes only.
 | paint.rs:1626 `WAITING_ROW_H` | 8 | none | lobby pitch; `seat_origin` is scaled-frame math | RUNTIME | Keep |
 | paint.rs:2375 `WAITING_CHAT_LIST_RECT` | (24,455,487,98) | `State_Waiting.bnd` r42 (24,455)-(511,553), exact | `IDC_LIST_SWAIT_CHAT 0x1680002b`, ord 42 | DONE (this commit) | Fallback pinned to bnd rect 42; painter reads the bind at runtime |
 | paint.rs:2383 `WAITING_CHAT_EDIT_RECT` | (20,563,440,20) | `State_Waiting.bnd` r19 (20,563)-(460,583), exact | `IDC_EDIT_SWAIT_CHAT 0x16300014`, ord 19 | DONE (this commit) | same |
+| paint.rs `WAITING_LEVEL_SPEEDS` | 12 | `Wait_Level.ojs` frame grid (`Interface1.opi`, 60 frames = 5 families x 12) | exe `imul ecx,0xc` at file `0x4b33f7` (frame `12*difficulty + speed`) | DONE (ticket #275) | The painter reads the staged body at runtime; the 12 re-derives the art's own grid |
 | paint.rs:2325 `WAITING_CHAT_ROW_H` | 17 | none: 98 px list / 6 rows ≈ 16.3; measured row tops 455.4/472.5/489.8 | reference photo only | OPEN | Rig: exe chat line pitch |
 | paint.rs:2328 `WAITING_CHAT_VISIBLE_ROWS` | 6 | derived (98/17 slots) | — | RUNTIME | Keep (re-derives once ROW_H is pinned) |
 | paint.rs:2333 `WAITING_CHAT_CARET_INSET` | (5,5) | none: caret chrome | reference photo (caret at (25,568)) | OPEN | Rig: exe caret placement |

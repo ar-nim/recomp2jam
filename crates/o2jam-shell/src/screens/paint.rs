@@ -3678,6 +3678,20 @@ pub struct WaitingCaptions<'a> {
     pub song_bpm: Option<f32>,
     /// Staged inventory counts, one per skill slot.
     pub skill_counts: [u32; 3],
+    /// Difficulty and speed behind the `LEVEL` badge, from the same
+    /// pick-or-room source as `song`.
+    pub level: Option<WaitingLevel>,
+}
+
+/// Difficulty and speed behind the `LEVEL` badge: the two bytes the
+/// exe's frame formula reads (`0x7789e7` difficulty, `0x7789e9`
+/// speed, struct `0x7789d8`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WaitingLevel {
+    /// Difficulty code (`Difficulty::from_code`).
+    pub difficulty: u8,
+    /// Speed code (`GameSpeed::from_code`).
+    pub speed: u8,
 }
 
 /// Paint staged waiting art (team buttons, avatar covers) with the
@@ -3699,13 +3713,24 @@ pub fn paint_waiting_scene(
     art.paint_backdrop_live(frame, Screen::Waiting, |placed| {
         waiting_seat_clone_live(placed, &seats)
             && waiting_control_armed_for_role(&placed.id, is_room_master)
+            && !waiting_paints_by_frame(&placed.id)
     });
     paint_waiting_seat_marks(frame, &seats, art);
     if waiting_has_staged_covers(&art.placements) {
-        paint_waiting_staged(frame, room, &art.placements, captions);
+        paint_waiting_staged(frame, room, art, captions);
     } else {
         paint_waiting_rows(frame, room);
     }
+}
+
+/// Whether a Waiting control paints one live-selected frame instead of
+/// its staged first record, so the rest stack leaves it out: the
+/// `LEVEL` badge alone ([`paint_waiting_level_badge`]). The exe's image
+/// control draws the frame its setter staged (`docs/ui-draw.md` steps
+/// 3-6; a frame swap never stacks frames), so stacking this body's 60
+/// frames would paint the last one (`MXR`) over the live pick.
+fn waiting_paints_by_frame(id: &str) -> bool {
+    id == WAITING_LEVEL_ID
 }
 
 /// The Waiting confirm control the local role owns
@@ -3894,6 +3919,9 @@ const WAITING_ROOMNAME_ID: &str = "IDC_TEXT_SWAIT_ROOMNAME";
 /// Selected-song text (`TEXT_SWAIT_MUSICNAME`, code `0x16400017` →
 /// rect 22, top bar beside the title).
 const WAITING_MUSICNAME_ID: &str = "IDC_TEXT_SWAIT_MUSICNAME";
+/// Difficulty/speed badge art (`LEVEL`, code `0x1650001B` → rect 26
+/// `(218,12)-(273,40)`, immediately left of the room title).
+const WAITING_LEVEL_ID: &str = "IDC_IMAGE_SWAIT_LEVEL";
 /// Champion win-count text (`TEXT_SWAIT_WINNERSCROE`, code `0x1640006D`
 /// → rect 108, the Wins box inside the champion card).
 const WAITING_WINNERSCORE_ID: &str = "IDC_TEXT_SWAIT_WINNERSCROE";
@@ -4231,11 +4259,12 @@ fn waiting_has_staged_covers(placements: &[ScenePlacement]) -> bool {
         .any(|id| placements.iter().any(|placed| &placed.id == id))
 }
 
-/// Staged waiting regions, each at its verbatim `.bnd` rect: seat
-/// covers, team highlight, title, wins, speed, skills, skill counts,
-/// map name, BPM, and song (the song caption resolves through the
-/// staged catalog, `M{id}` while it names no such song; the BPM
-/// caption resolves through its BPM column, `-0-` on mismatch).
+/// Staged waiting regions, each at its verbatim `.bnd` rect: title,
+/// the difficulty/speed badge, seat covers, team highlight, wins,
+/// speed, skills, skill counts, map name, BPM, and song (the song
+/// caption resolves through the staged catalog, `M{id}` while it
+/// names no such song; the BPM caption resolves through its BPM
+/// column, `-0-` on mismatch).
 /// `INSTNAME` (`TEXT_SWAIT_INSTNAME`, `0x16400019`) stays unpainted:
 /// zero code immediates name it (OPEN 1), so no shell source reaches
 /// its rect. `NOTICE_TEXT`/`NOTICEBOARD` (`0x16500062/63`) stay
@@ -4244,10 +4273,12 @@ fn waiting_has_staged_covers(placements: &[ScenePlacement]) -> bool {
 fn paint_waiting_staged(
     frame: &mut Frame<'_>,
     room: &JoinedRoom,
-    placements: &[ScenePlacement],
+    art: &SceneArt,
     captions: &WaitingCaptions<'_>,
 ) {
+    let placements = &art.placements;
     paint_waiting_title(frame, room, placements);
+    paint_waiting_level_badge(frame, captions.level, art);
     paint_waiting_covers(frame, room, placements);
     paint_waiting_team_highlight(frame, room, placements);
     paint_waiting_wins(frame, room, placements);
@@ -4264,6 +4295,62 @@ fn paint_waiting_title(frame: &mut Frame<'_>, room: &JoinedRoom, placements: &[S
     if let Some((x, y)) = waiting_bnd_origin(placements, WAITING_ROOMNAME_ID, frame) {
         paint_room_detail_line(frame, x, y, &room.title, art_title_ink());
     }
+}
+
+/// Speed cells per difficulty family in `Wait_Level.ojs` — the
+/// `GameSpeed` chain 0..11 (`0.5`, `1`, `1.5`, ..., `6`, `R`), pinned
+/// by the exe's `12*difficulty` term (file `0x4b33f4`) and by the
+/// 60-frame body (5 families x 12 cells).
+const WAITING_LEVEL_SPEEDS: usize = 12;
+
+/// `Wait_Level.ojs` frame the badge paints: `12*difficulty + speed`.
+/// The exe stages `index + 1` and setter VA `0x42f870` subtracts the
+/// one before its image lookup, so the staged layer is the plain
+/// product (files `0x4b33f4`-`0x4b3442`, `0x4b805a`-`0x4b80a0`).
+/// A speed code past the 12 cells names no cell: `None` paints
+/// nothing rather than a neighbouring speed, and a difficulty family
+/// past the staged body stays empty for the same reason.
+#[must_use]
+fn waiting_level_layer(level: WaitingLevel) -> Option<usize> {
+    let cell = usize::from(level.speed);
+    (cell < WAITING_LEVEL_SPEEDS)
+        .then(|| usize::from(level.difficulty) * WAITING_LEVEL_SPEEDS + cell)
+}
+
+/// Difficulty/speed badge at the `LEVEL` rect (rect 26
+/// `(218,12)-(273,40)`, immediately left of the room title): one
+/// `Wait_Level.ojs` frame carrying the family letter and the speed
+/// suffix (`EX1`, `NX2`, `HX5`; EX green, NX orange-yellow, HX red —
+/// the body's own colours). The exe resets the control to no image
+/// when no song stands (file `0x4ba88d`, setter arg 0), so a missing
+/// level source paints nothing; `INSTNAME`-style stand-ins never
+/// reach this rect.
+///
+/// Two exe rules stay OPEN and never paint here: the MX family shift
+/// for an EX chart above level 3 (`0x4b3372`-`0x4b33b7`, `+0x30`;
+/// the shell stages no per-chart level) and the AX family for a
+/// flagged song id (`0x7789d8 & 0xf0000000`, writer untraced). Both
+/// are recorded in `docs/caption-sources.md`.
+fn paint_waiting_level_badge(frame: &mut Frame<'_>, level: Option<WaitingLevel>, art: &SceneArt) {
+    let Some(level) = level else {
+        return;
+    };
+    let Some(layer) = waiting_level_layer(level) else {
+        return;
+    };
+    let Some(placed) = art
+        .placements
+        .iter()
+        .find(|placed| placed.id == WAITING_LEVEL_ID)
+    else {
+        return;
+    };
+    let shared = shared_sprite_names(&art.placements);
+    let shares_body = placed
+        .sprite
+        .as_deref()
+        .is_some_and(|sprite| shared.contains(sprite));
+    paint_placement_layer(frame, placed, &art.figures, layer, shares_body, None);
 }
 
 /// Seat lines at the cover rects (rects 60..67): champion names its
@@ -11132,6 +11219,15 @@ mod paint_tests {
         }
     }
 
+    /// Placements-only stage (probe rects, no art bodies): the caption
+    /// guards need the rects, never a decoded sprite.
+    fn placements_stage(placements: &[ScenePlacement]) -> SceneArt {
+        SceneArt {
+            placements: placements.to_vec(),
+            figures: HashMap::new(),
+        }
+    }
+
     /// Waiting room with every staged field set: champion seat 1,
     /// streak 3, song 757, speed code 5 (`X3`), one skill ring.
     fn champion_room() -> JoinedRoom {
@@ -12161,7 +12257,7 @@ mod paint_tests {
                 h: 600,
             },
             &champion_room(),
-            &placements,
+            &placements_stage(&placements),
             &WaitingCaptions::default(),
         );
         assert!(buf.iter().all(|pixel| *pixel == 0));
@@ -12583,7 +12679,7 @@ mod paint_tests {
                 h: 600,
             },
             &champion_room(),
-            &placements,
+            &placements_stage(&placements),
             &WaitingCaptions::default(),
         );
         assert!(buf.iter().all(|pixel| *pixel == 0));
@@ -12623,7 +12719,7 @@ mod paint_tests {
                 h: 600,
             },
             &champion_room(),
-            &empty,
+            &placements_stage(&empty),
             &WaitingCaptions::default(),
         );
         assert!(buf.iter().all(|pixel| *pixel == 0));
@@ -14067,7 +14163,7 @@ mod paint_tests {
                 h: 600,
             },
             &room,
-            &placements,
+            &placements_stage(&placements),
             &WaitingCaptions::default(),
         );
         assert_eq!(buf[13 * 800 + 476], scrim_color(), "mapname inks");

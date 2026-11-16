@@ -1,4 +1,4 @@
-# Waiting caption sources (7.55) — MAPNAME/BPM/SKILLCOUNT pinned, INSTNAME/NOTICE open
+# Waiting caption sources (7.55) — MAPNAME/BPM/SKILLCOUNT/LEVEL pinned, INSTNAME/NOTICE open
 
 Version pinned to 7.55 (`AngelO2Jam.exe` 5,029,888 B, sha256
 `83a04541…72c823b`). File offsets (VA = file + `0x400000`). Method:
@@ -21,6 +21,7 @@ shell leaves unpainted (`MAPNAME`/`INSTNAME` per the
 | Instrument name | `IDC_TEXT_SWAIT_INSTNAME` | `0x16400019` |
 | BPM | `IDC_TEXT_SWAIT_BPM` | `0x16400069` |
 | Skill counts | `IDC_TEXT_SWAIT_1/2/3SKILLCOUNT` | `0x1640005E..60` |
+| Difficulty badge | `IDC_IMAGE_SWAIT_LEVEL` | `0x1650001B` |
 | Notice | `IDC_IMAGE_SWAIT_NOTICE_TEXT` / `NOTICEBOARD` | `0x16500062/63` |
 
 ## Verdicts
@@ -91,10 +92,53 @@ shell leaves unpainted (`MAPNAME`/`INSTNAME` per the
   server echo), else the joined room's song; the catalog supplies the
   title, else the bare `M{id}`. The shell-invented readout panel that
   used to ink title/difficulty/speed above the chat rows is gone - the
-  difficulty half is ticket #275. Whether the exe writes the pick into
+  difficulty half is the `LEVEL` badge below (ticket #275). Whether the
+  exe writes the pick into
   its own room struct before the echo is OPEN (next step: a capture
   with a provenance manifest under #240); rect and caption control are
   static pins either way.
+
+- **LEVEL badge - PINNED** (control, rect, frame formula; ticket #275).
+  Local static data: `ControlList_Interface.txt` names
+  `IDC_IMAGE_SWAIT_LEVEL 0X1650001B` with sprite `Wait_Level.ojs`
+  (no text), so the family letters and the speed suffix are the body's
+  own pixels and the painter picks one frame. Code ordinal
+  `(0x1B - 1) = 26` pairs it to `State_Waiting.bnd` rect 26
+  `(218,12)-(273,40)` (55x28, the badge's own size), immediately left
+  of `IDC_TEXT_SWAIT_ROOMNAME` rect 21 `(274,15)-(466,38)`.
+  `Wait_Level.ojs` (Interface1.opi) carries 60 frames, every anchor
+  `(0,0)`: five families of 12 speed cells, EX 0-11 (green), NX 12-23
+  (orange-yellow), HX 24-35 (red), then the AX 36-47 and MX 48-59
+  families; the cells run `0.5`, `1`, `1.5`, ..., `5`, `6`, `R` — the
+  `GameSpeed` code order 0..11. Frame: the exe computes
+  `12*difficulty + speed + 1` (difficulty byte `0x7789e7`, speed byte
+  `0x7789e9`, `imul ecx,0xc` file `0x4b33f7`, `lea
+  eax,[ecx+edx*1+0x1]` file `0x4b3405`; the same arithmetic repeats in
+  the speed-button arms at files `0x4b7fe6`-`0x4b7ffb` and
+  `0x4b80d1`-`0x4b80e6`) and stages it through setter VA `0x42f870`,
+  which looks the image up one below its argument — so the painted
+  frame is `12*difficulty + speed`. With no song the Waiting setup
+  resets the control (file `0x4ba88d`, setter arg 0 = no image), so the
+  badge paints nothing then. Shell source order matches the `MUSICNAME`
+  caption: the master's staged pick (its difficulty slot plus the
+  surviving speed), else the joined room's echo; the badge paints no
+  rest stack (the exe's image control shows one frame). The speed half
+  rides the same `JoinedRoom.speed` the `SPEED_NUM` caption paints, so
+  both name one local speed; a per-member speed distinct from the room
+  echo is not staged yet.
+  Two arithmetic branches stay OPEN and never paint in the shell:
+  (a) an EX chart whose music-record EX level word (`+0x14`) exceeds 3
+  shifts the family by `0x30` into the MX block (files
+  `0x4b3372`-`0x4b33b7`) — the shell stages no per-chart level, so the
+  next evidence step is a per-chart level source; (b) a selected-song
+  dword with a set top nibble (`0x7789d8 & 0xf0000000`) always paints
+  the AX family at `speed + 0x25` regardless of the difficulty byte
+  (files `0x4b33d4`-`0x4b33e9`) — which writer sets that nibble is
+  untraced (OPEN 5 states the global, not the flag).
+  Guards: `staged_pick_badge_paints_the_level_frame_the_pick_names` and
+  `room_without_a_song_paints_no_level_badge` (Tier 0 seam, synthetic
+  cells), `live_waiting_badge_paints_the_bound_level_frame` (real
+  archives, skips cleanly without game data).
 
 ## OPEN
 

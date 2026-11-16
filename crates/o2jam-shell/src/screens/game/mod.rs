@@ -38,8 +38,8 @@ use super::paint::{
     playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
     scene_index, staged_rect_hit, waiting_confirm_control_id, BattleVerdict, ChannelChatMessage,
     ChannelScroll, LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt,
-    WaitingCaptions, WaitingChatMessage, WaitingSong, CHANNEL_VISIBLE_ROWS, RESULT_BACK_ID,
-    RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    WaitingCaptions, WaitingChatMessage, WaitingLevel, WaitingSong, CHANNEL_VISIBLE_ROWS,
+    RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::select_paint::{paint_select_text, SelectTextSlots};
 use super::side::{
@@ -3199,6 +3199,26 @@ impl ScreenGame {
         })
     }
 
+    /// Difficulty and speed behind the `LEVEL` badge (rect 26, left of
+    /// the room title): the master's staged pick first, else the joined
+    /// room's echo — the same source order as [`Self::waiting_song`],
+    /// because the badge names the same song the caption does. A room
+    /// that names no song paints no badge: the exe resets the control to
+    /// no image (file `0x4ba88d`, setter arg 0).
+    fn waiting_level(&self) -> Option<WaitingLevel> {
+        if let Some(pick) = self.selected_music {
+            return (pick.music_id != 0).then_some(WaitingLevel {
+                difficulty: pick.difficulty,
+                speed: pick.speed,
+            });
+        }
+        let room = self.waiting.as_ref()?;
+        (room.music_id != 0).then_some(WaitingLevel {
+            difficulty: room.difficulty,
+            speed: room.speed,
+        })
+    }
+
     /// Catalog BPM for one song id, if a live song record stages it.
     fn catalog_song_bpm(&self, music_id: u16) -> Option<f32> {
         self.catalog_bpm.get(&u32::from(music_id)).copied()
@@ -5509,6 +5529,7 @@ impl ScreenGame {
             song: self.waiting_song(),
             song_bpm: self.room_song_bpm(),
             skill_counts: self.skill_counts,
+            level: self.waiting_level(),
         };
         match (self.scene_art(Screen::Waiting), &self.waiting) {
             (Some(art), Some(room)) => {
@@ -6214,8 +6235,8 @@ mod game_tests {
         SHOP_SUBMENU_FIRST_CODE,
     };
     use super::*;
-    use crate::avatar::AvatarFigure;
     use crate::avatar::PlacementRole;
+    use crate::avatar::{AvatarFigure, FigureLayer};
     use crate::screen::Screen;
     use crate::{GameLoop, MenuKey};
     use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
@@ -9561,6 +9582,151 @@ mod game_tests {
         assert!(
             changed.is_none(),
             "the pick must not ink the chat band: first pixel changed below the seat grid: {changed:?}"
+        );
+    }
+
+    /// Cell count of the synthetic `Wait_Level.ojs` body: the three
+    /// standard difficulty families at their 12 speed cells.
+    const LEVEL_BADGE_CELLS: u8 = 36;
+
+    /// RGB555 body pixel of one synthetic badge cell: full red plus the
+    /// cell's own code in green, so the painted frame names itself and
+    /// no cell collapses onto the transparent key.
+    fn level_badge_cell_word(cell: u8) -> u16 {
+        0x7C00 | (u16::from(cell) << 5)
+    }
+
+    /// Framebuffer word [`level_badge_cell_word`] blits as.
+    fn level_badge_cell_ink(cell: u8) -> u32 {
+        let (r, g, b) = o2jam_render::expand_rgb555(level_badge_cell_word(cell));
+        pack_xrgb(r, g, b)
+    }
+
+    /// Staged waiting covers plus the `LEVEL` badge rect (rects 60 and
+    /// 26): the difficulty/speed badge stage. Every synthetic cell is a
+    /// 1x1 layer at anchor `(0,0)` (the real body's anchors, so the
+    /// bound rect positions it) whose colour names the cell, so the
+    /// frame that wins reads straight from the buffer.
+    fn level_badge_scene() -> (Vec<ScenePlacement>, HashMap<String, AvatarFigure>) {
+        let mut body = AvatarFigure::default();
+        for cell in 0..LEVEL_BADGE_CELLS {
+            body.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&level_badge_cell_word(cell).to_le_bytes(), 1, 1)
+                    .unwrap(),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+        }
+        (
+            vec![
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: "IDC_IMAGE_SWAIT_COVERAVATAR1".to_owned(),
+                    code: 0,
+                    sprite: None,
+                    rect: Rect {
+                        x: 28,
+                        y: 53,
+                        w: 141,
+                        h: 175,
+                    },
+                },
+                ScenePlacement {
+                    role: PlacementRole::Single,
+                    id: "IDC_IMAGE_SWAIT_LEVEL".to_owned(),
+                    code: 0,
+                    sprite: Some("Wait_Level.ojs".to_owned()),
+                    rect: Rect {
+                        x: 218,
+                        y: 12,
+                        w: 55,
+                        h: 28,
+                    },
+                },
+            ],
+            HashMap::from([("Wait_Level.ojs".to_owned(), body)]),
+        )
+    }
+
+    /// Waiting game on the badge stage: the joined room names
+    /// `room_music_id` (difficulty 1, speed 2), with an optional staged
+    /// pick.
+    fn level_badge_game(room_music_id: u16, pick: Option<SetRoomMusic>) -> ScreenGame {
+        let mut game = ScreenGame::new();
+        let mut room = waiting_room();
+        room.music_id = room_music_id;
+        room.difficulty = 1;
+        room.speed = 2;
+        game.set_joined_room(room);
+        walk_to_waiting(&mut game);
+        if let Some(pick) = pick {
+            game.set_selected_music(pick);
+        }
+        let (placements, figures) = level_badge_scene();
+        game.load_scene(Screen::Waiting, placements, figures);
+        game
+    }
+
+    /// Inked pixels inside the staged badge rect, in rect order.
+    fn level_badge_ink(game: &ScreenGame, frame: &[u32]) -> Vec<u32> {
+        let badge = game
+            .scene_placements(Screen::Waiting)
+            .iter()
+            .find(|placed| placed.id == "IDC_IMAGE_SWAIT_LEVEL")
+            .map(|placed| placed.rect)
+            .expect("staged LEVEL placement");
+        o2jam_render::pixels_in_rect(frame, 800, badge)
+            .into_iter()
+            .filter(|pixel| *pixel != 0)
+            .collect()
+    }
+
+    #[test]
+    fn staged_pick_badge_paints_the_level_frame_the_pick_names() {
+        // Live chain: main.rs::run_play -> Shell::run ->
+        //   ScreenGame::paint -> ScreenGame::paint_at -> paint_waiting ->
+        //   paint_waiting_scene -> paint_waiting_staged ->
+        //   paint_waiting_level_badge
+        // Ticket #275: the `LEVEL` badge (`IDC_IMAGE_SWAIT_LEVEL`,
+        // code `0X1650001B`, `State_Waiting.bnd` rect 26, left of the
+        // room title) carries the picked difficulty plus the speed
+        // cell. The exe stages `12*difficulty + speed + 1` (setter VA
+        // `0x42f870` subtracts the one), so a hard/speed-3 pick paints
+        // layer `12*2 + 3 = 27` alone - one frame, never the 36-cell
+        // stack the exe's image control replaced.
+        let mut game = level_badge_game(
+            0,
+            Some(SetRoomMusic {
+                music_id: 757,
+                difficulty: 2,
+                speed: 3,
+            }),
+        );
+        let frame = paint_waiting_frame(&mut game, 800, 600);
+        assert_eq!(
+            level_badge_ink(&game, &frame),
+            vec![level_badge_cell_ink(27)],
+            "the badge must paint the pick's single frame (HX at speed 3)"
+        );
+    }
+
+    #[test]
+    fn room_without_a_song_paints_no_level_badge() {
+        // Live chain: main.rs::run_play -> Shell::run ->
+        //   ScreenGame::paint -> ScreenGame::paint_at -> paint_waiting ->
+        //   paint_waiting_scene -> paint_waiting_staged ->
+        //   paint_waiting_level_badge
+        // The exe resets the badge control when no song stands (file
+        // `0x4ba88d`, setter arg 0 paints no image), so a room with no
+        // song leaves the badge rect untouched - the rest stack may not
+        // ink its staged frames there either.
+        let mut game = level_badge_game(0, None);
+        let frame = paint_waiting_frame(&mut game, 800, 600);
+        assert_eq!(
+            level_badge_ink(&game, &frame),
+            Vec::<u32>::new(),
+            "a room with no song paints no badge"
         );
     }
 
