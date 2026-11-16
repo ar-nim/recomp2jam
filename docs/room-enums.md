@@ -287,26 +287,92 @@ Shell mirror (`crates/o2jam-shell/src/screens/game/mod.rs`):
 `is_room_master` (seat id 0, the creator — the 4043 header derives
 `+0x30 = 1` exactly when the requesting member id is 0,
 `docs/relay.md` §10), `all_peers_ready` (occupied non-self slots
-ready), `can_start_game` (both). The waiting song panel plus the
-select dialog art/structure/OK pill paint only for the master; the
-staged `BPM` caption paints for everyone. The control-role rule
+ready), `can_start_game` (both). The select dialog art, structure, and OK
+pill paint only for the master; the song rect carries different art
+per role ("The waiting song rect" below). The control-role rule
 itself lives in `waiting_control_armed_for_role`
 (`crates/o2jam-shell/src/screens/paint.rs`): master keeps
 START/MASTER_SKILLSEL, a guest keeps READY/SKILLSEL plus both
-inactive-dress overlays; `waiting_confirm_control_id` names the role's
-confirm id for the two hit paths. Waiting Confirm advances
+inactive-dress overlays and the song-rect art ("The waiting song
+rect" below); `waiting_confirm_control_id` names the role's confirm id
+for the two hit paths. Waiting Confirm advances
 to Loading only with no joined room (offline walk) or
 `can_start_game`; a non-master or unready Confirm stays in Waiting.
+
+## The waiting song rect (7.55, host vs peer)
+
+`STATE_WAITING` authors three bodies onto one rect (`Interface1.opi`,
+sha256 `d6654119…d50584`; layout `State_Waiting.bnd`):
+
+| id | code | ordinal → rect | body |
+|---|---|---|---|
+| `IDC_BUTTON_SWAIT_MUSELECT` | `0x16200003` | 2 → `(540,493)-(594,542)` | `Wait_MusicSelect.ojs` |
+| `IDC_IMAGE_SWAIT_COVERMUSIC` | `0x1650001d` | 28 → `(538,489)-(595,544)` | `Wait_Cover_Music.ojs` |
+| `IDC_TEXT_SWAIT_BPM` | `0x16400069` | 104 → `(552,504)-(582,520)` | none (text) |
+| `IDC_IMAGE_SWAIT_ALBUMMODE` | `0x1650001c` | 27 → `(533,441)-(601,551)` | `Wait_AlbumMode.ojs` |
+
+Decoded bodies: `Wait_MusicSelect.ojs` is the blue 곡선택
+(song-select) button, 54x49; `Wait_Cover_Music.ojs` is the `BPM`
+panel, 57x97 anchored at `(538,447)` (teal title over a dark value
+box), authored exactly over the button; `Wait_AlbumMode.ojs` is the
+`앨범정보`/`앨범 선택` album-mode panel.
+
+What the exe draws there, in its own words (`OTwo.exe` sha256
+`83a04541…72c823b`):
+
+- **Host**: the backdrop alone. The host arm reads the song-select
+  control's visible field (`+0x20`) and clears it together with the
+  control's arm (`+0x24`) at file `0xae45f`–`0xae499`
+  (local-static record `2ef6dffb…245b`), and the state applier arms
+  the control while setting the three `COVER*` bodies to frame 0 at
+  file `0xb4b57`–`0xb4bb7` (`cc65bb93…4e96`). The frame setter stores
+  the frame, clamps it to the body's frame count, and indexes
+  `frame − 1`, so frame 0 draws no image (`9039f914…a1091`).
+- **Peer**: the `BPM` cover. The peer arm leaves the cover at frame 1
+  and never arms the song-select control; only a Challenger
+  (`MemberRole` word `0x77ee86` = 2, claim D10) re-shows the button
+  (file `0xae9e5`–`0xaea03`, `2058ffa9…895f0`).
+- **Every role**: no `Wait_AlbumMode.ojs`. The image names the
+  `0x1650001c` control code nowhere (whole-image dword sweep: 0 hits,
+  the `Note_BG` image-1 precedent in `docs/notebg-cover.md`), so the
+  body is authored-but-unselected. OPEN: an album-mode room may arm
+  it (next evidence step: a room whose mode word arms that control).
+
+One static arm disagrees and the captures settle it: the Waiting
+setup's host arm sets the cover to frame 1 (`4153008a…b5e`), the later
+state applier hides it, and the Wine host capture
+`~/scratch/w8-wait.png` (START armed) shows the bare backdrop — no
+button body, no `BPM` panel, no album panel
+(`caa30d69…be6`). The peer captures `~/scratch/ad-wait.png`,
+`w10-wait.png`, and `w11-wait.png` (READY armed) all show the `BPM`
+panel and no button (`8bc15817…688`).
+
+Contradiction, recorded per AGENTS.md (the exe is the oracle): the
+owner's #278 playtest expected a blue song-select button as host,
+while the exe's host capture shows the bare backdrop placeholder.
+Both stay on record; OPEN with the next evidence step: an exe host
+capture in the exact Waiting-popup state, to settle whether a host
+ever sees the button.
+
+Click routing is untouched by the art rule: the host still opens the
+song dialog from this rect (dispatch case file `0xb2622`), which is
+exe behavior, not a shell gap. Guards: shell seam
+`host_reads_the_bare_song_rect_and_a_peer_keeps_the_bpm_cover`, live
+path `waiting_song_rect_is_bare_for_host_and_covered_for_peer`
+(computes the backdrop-only reference in-process), and the existing
+master/peer song-dialog click guards.
 
 Shot-walk verdict (guest view, `docs/screenshots/waiting-guest.png`):
 the shot walk replays the master waiting instant from seat 5 of the
 same Live duo (same arena word, room song 757, captions, and
 3012/3013 chat — `crates/recomp2jam/src/shots.rs` `guest_waiting_room` /
-`seeded_guest_game`). The guest frame is byte-identical to the master
-`waiting.png` (seat id paints nothing) and differs from
-`musicselect.png` in 330774 of 360300 raw bytes: no dialog art, no
-structure, no song panel (gate hides them even when staged), while
-the staged `BPM` caption stays (catalog column present, never `-0-`).
+`seeded_guest_game`). The guest frame differs from the master
+`waiting.png` in the seat plates and the song rect (host: bare
+backdrop; peer: `BPM` panel — "The waiting song rect" above) and
+differs from `musicselect.png` in 330774 of 360300 raw bytes: no
+dialog art, no structure, no song panel (gate hides them even when
+staged), while the staged `BPM` caption stays (catalog column
+present, never `-0-`).
 Gate state on the walked guest: `is_room_master` false,
 `all_peers_ready` true, `can_start_game` false, Confirm stays in
 Waiting — the non-master arm (READY shown, START hidden;

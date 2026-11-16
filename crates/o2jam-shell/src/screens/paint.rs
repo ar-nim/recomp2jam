@@ -3733,6 +3733,31 @@ pub const fn waiting_confirm_control_id(is_room_master: bool) -> &'static str {
 /// shows both while `[0x77ee86] == 3` (file `0xaec29`), and the word's
 /// meaning has no pin yet. Next evidence step: pin `[0x77ee86]` (the room
 /// or player state the guest overlay waits on) against a live capture.
+///
+/// The song rect at `.bnd` rect 2 `(540,493)-(594,542)` is the third
+/// role-swapped region: `IDC_BUTTON_SWAIT_MUSELECT 0x16200003`
+/// (`Wait_MusicSelect.ojs`, the blue 곡선택 button) sits under its
+/// `BPM` cover `IDC_IMAGE_SWAIT_COVERMUSIC 0x1650001d`
+/// (`Wait_Cover_Music.ojs`, `.bnd` rect 28, authored over the button).
+/// The exe clears the song-select control's visible field in the master
+/// arm (file `0xae45f`–`0xae499`: fetch `0x16200003`, test the control's
+/// `+0x20` field, clear it and the `+0x24` arm) and its state applier
+/// arms the control while setting the three `COVER*` bodies to frame 0
+/// (file `0xb4b57`–`0xb4bb7`; the setter stores the frame, clamps to the
+/// body's frame count, and indexes `frame − 1`, so frame 0 draws no
+/// image). A host therefore reads the bare backdrop at the song rect,
+/// while a peer keeps the `BPM` cover — Wine host capture
+/// `~/scratch/w8-wait.png` (START armed) against peer captures
+/// `ad-wait.png`/`w10-wait.png`/`w11-wait.png` (READY armed). Only a
+/// Challenger (`MemberRole` word `0x77ee86` = 2, claim D10) re-shows the
+/// button (file `0xae9e5`–`0xaea03`); this shell models no such role yet
+/// (OPEN: MemberRole). `IDC_IMAGE_SWAIT_ALBUMMODE 0x1650001c` paints for
+/// no role: the image names that control code nowhere (whole-image
+/// dword sweep, 0 hits — the `Note_BG` image-1 precedent in
+/// `docs/notebg-cover.md`), and no capture shows its `앨범정보` header
+/// (OPEN: an album-mode room may arm it). Click routing is untouched:
+/// the host still opens the song dialog from this rect (dispatch case
+/// file `0xb2622`), which is exe behavior, not a shell gap.
 #[must_use]
 fn waiting_control_armed_for_role(id: &str, is_room_master: bool) -> bool {
     match id {
@@ -3741,6 +3766,8 @@ fn waiting_control_armed_for_role(id: &str, is_room_master: bool) -> bool {
         | "IDC_BUTTON_SWAIT_SKILLSEL"
         | "IDC_IMAGE_SWAIT_READYBUTTEONINACTIVE"
         | "IDC_IMAGE_SWAIT_SPEEDBUTTEONINACTIVE" => !is_room_master,
+        "IDC_BUTTON_SWAIT_MUSELECT" | "IDC_IMAGE_SWAIT_COVERMUSIC" => !is_room_master,
+        "IDC_IMAGE_SWAIT_ALBUMMODE" => false,
         _ => true,
     }
 }
@@ -12591,6 +12618,80 @@ mod paint_tests {
         );
         assert_eq!(buf[51 * 800 + 24], scrim_color());
         assert_eq!(buf[150 * 800 + 100], 0);
+    }
+
+    #[test]
+    fn host_reads_the_bare_song_rect_and_a_peer_keeps_the_bpm_cover() {
+        // The host arm clears the song-select control's visible field
+        // and its state applier hides the `COVER*` bodies (exe files
+        // `0xae45f`-`0xae499`, `0xb4b57`-`0xb4bb7`; Wine host capture
+        // `~/scratch/w8-wait.png`), so the staged `Wait_MusicSelect.ojs`
+        // button and the `BPM` panel both stay off the song rect. A peer
+        // keeps the cover (Wine peer captures `ad-wait.png`/
+        // `w10-wait.png`). `Wait_AlbumMode.ojs` paints for neither: the
+        // image names its control code nowhere.
+        let placements = vec![
+            waiting_probe(
+                "IDC_BUTTON_SWAIT_MUSELECT",
+                Some("Wait_MusicSelect.ojs"),
+                (540, 493, 594, 542),
+            ),
+            waiting_probe(
+                "IDC_IMAGE_SWAIT_COVERMUSIC",
+                Some("Wait_Cover_Music.ojs"),
+                (538, 489, 595, 544),
+            ),
+            waiting_probe(
+                "IDC_IMAGE_SWAIT_ALBUMMODE",
+                Some("Wait_AlbumMode.ojs"),
+                (533, 441, 601, 551),
+            ),
+        ];
+        let art = SceneArt {
+            placements,
+            figures: HashMap::from([
+                ("Wait_MusicSelect.ojs".to_owned(), red_figure()),
+                (
+                    "Wait_Cover_Music.ojs".to_owned(),
+                    solid_figure(57, 97, [0xE0, 0x03]),
+                ),
+                (
+                    "Wait_AlbumMode.ojs".to_owned(),
+                    solid_figure(68, 110, [0xFF, 0x7F]),
+                ),
+            ]),
+        };
+        let paint = |member_id: u8| {
+            let mut room = waiting_room();
+            room.member_id = member_id;
+            let mut buf = vec![0u32; 800 * 600];
+            paint_waiting_scene(
+                &mut Frame {
+                    buf: &mut buf,
+                    w: 800,
+                    h: 600,
+                },
+                &room,
+                &art,
+                &WaitingCaptions::default(),
+            );
+            buf
+        };
+        let host = paint(0);
+        assert_eq!(host[515 * 800 + 560], 0, "host paints no song chrome");
+        assert_eq!(host[460 * 800 + 536], 0, "host paints no album panel");
+        assert!(
+            !host.contains(&pack_xrgb(255, 0, 0)),
+            "no button art at all"
+        );
+
+        let peer = paint(5);
+        assert_ne!(peer[515 * 800 + 560], 0, "peer keeps the BPM cover");
+        assert!(
+            !peer.contains(&pack_xrgb(255, 0, 0)),
+            "peer never shows the button"
+        );
+        assert_eq!(peer[460 * 800 + 536], 0, "album panel stays off for peers");
     }
 
     #[test]
