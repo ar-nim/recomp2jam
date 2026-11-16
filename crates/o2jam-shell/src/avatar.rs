@@ -4228,4 +4228,108 @@ mod avatar_figure_tests {
         assert_eq!(painted, 1, "figure must paint exactly one pixel");
         let _ = AVATAR_BREATHING_TICK_MS;
     }
+
+    #[test]
+    fn dbg_anchor_groups() {
+        let archive_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Image/avatar.opa");
+        let Ok(archive) = std::fs::read(&archive_path) else {
+            return;
+        };
+        let entries = o2jam_file::parse_opi(&archive).unwrap();
+        let entry = entries
+            .iter()
+            .find(|e| e.name == "Itemdata_Korea.dat")
+            .unwrap();
+        let table_bytes = &archive[entry.data_offset..entry.data_offset + entry.size as usize];
+        let table = o2jam_file::parse_avatar_item_table(table_bytes).unwrap();
+        let eq = [
+            16i32, 30, 376, 383, 389, 0, 0, 0, 0, 0, 0, 35, 0, 0, 0, 0, 0,
+        ];
+        let fig = load_worn_figure(&archive, &table, &eq, true);
+        // iterate runs
+        // AvatarFigure.layers is private; use public layer() and part_lens
+        let mut offset = 0usize;
+        for (ri, &run) in fig.part_lens().iter().enumerate() {
+            // selected frame at tick 0
+            let sel_idx = 0usize % run;
+            let layer = fig.layer(offset + sel_idx).unwrap();
+            // run anchor = min dx,dy over all frames in run
+            let mut minx = i32::MAX;
+            let mut miny = i32::MAX;
+            let mut maxx = i32::MIN;
+            let mut maxy = i32::MIN;
+            for k in 0..run {
+                let l = fig.layer(offset + k).unwrap();
+                minx = minx.min(l.dx);
+                miny = miny.min(l.dy);
+                maxx = maxx.max(l.dx + l.image.w as i32);
+                maxy = maxy.max(l.dy + l.image.h as i32);
+            }
+            println!("RUN {:2} len={:2} sel_frame={} sel_anchor=({},{}) sel_size=({},{}) run_bbox=({},{})-({},{})",
+                ri, run, sel_idx, layer.dx, layer.dy, layer.image.w, layer.image.h,
+                minx, miny, maxx, maxy);
+            offset += run;
+        }
+    }
+
+    #[test]
+    fn tt222_single_paint_blits_one_pose_per_hand_anchor() {
+        // Ticket #222 within-paint ghost guard: a single paint of the
+        // shared centered figure painter must not blit several poses at
+        // the same anchor. The real tester2 kit (items 16/30/376/383/
+        // 389/35) stages 40 runs that collapse into 8 anchor groups of
+        // 5 runs each; the selector blits all 5 per paint, so 5 poses
+        // land on one anchor in a single frame - the owner's ghost
+        // hands. This guard fails on current main because those groups
+        // exist (group size 5 > 1).
+        // Live caller chain:
+        //   main.rs::run_play -> WindowHandler::paint -> Shell::paint_backbuffer
+        //   -> ScreenGame::paint -> ScreenGame::paint_at (frame clear)
+        //   -> paint_room -> paint_room_user_panel
+        //   -> AvatarFigure::paint_visible_centered -> paint_box_centered.
+        // OPEN (not pinned): the exe's equipment-to-run selection gate
+        // (which variant per anchor the exe actually paints) is
+        // unpinned; this guard pins OUR observed failure mechanism
+        // through the live painter and does not invent exe semantics.
+        // Close still requires owner live-confirm (close-discipline 8).
+        let archive_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Image/avatar.opa");
+        let Ok(archive) = std::fs::read(&archive_path) else {
+            // CI has no game data: skip cleanly.
+            return;
+        };
+        let entries = o2jam_file::parse_opi(&archive).unwrap();
+        let entry = entries
+            .iter()
+            .find(|e| e.name == "Itemdata_Korea.dat")
+            .expect("avatar.opa carries the item table");
+        let table_bytes = &archive[entry.data_offset..entry.data_offset + entry.size as usize];
+        let table = o2jam_file::parse_avatar_item_table(table_bytes).unwrap();
+        let eq = [
+            16i32, 30, 376, 383, 389, 0, 0, 0, 0, 0, 0, 35, 0, 0, 0, 0, 0,
+        ];
+        let figure = load_worn_figure(&archive, &table, &eq, true);
+        // Group runs by the anchor the selector picks at tick 0.
+        let mut offset = 0usize;
+        let mut groups: std::collections::BTreeMap<(i32, i32), usize> =
+            std::collections::BTreeMap::new();
+        for &run in figure.part_lens() {
+            let sel = 0usize % run;
+            let layer = figure.layer(offset + sel).unwrap();
+            *groups.entry((layer.dx, layer.dy)).or_insert(0) += 1;
+            offset += run;
+        }
+        // No anchor may host more than one run in a single paint.
+        let duplicate: Vec<((i32, i32), usize)> = groups
+            .iter()
+            .filter(|&(_, n)| *n > 1)
+            .map(|(k, v)| (*k, *v))
+            .collect();
+        assert!(
+            duplicate.is_empty(),
+            "single paint blits duplicate-anchor hands: {:?}",
+            duplicate
+        );
+    }
 }
