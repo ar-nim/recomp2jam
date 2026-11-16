@@ -159,3 +159,42 @@ passing with no game data (#233 story 20).
 - Playtest loop: `docs/playtest.md`.
 - Scene, chrome, dialog, and emblem are the domain words used throughout
   (`GLOSSARY.md`).
+
+## Two-path architecture (owner decision 2026-11-16)
+
+The machine runs two permanently separated evidence paths. Neither
+path may borrow devices from the other.
+
+|              | Owner path (playtest)          | Agent path (rig)                          |
+|--------------|--------------------------------|--------------------------------------------|
+| Video        | real seat / compositor window  | private Xvfb (unique display) or Wine desktop |
+| Audio        | default sink (speakers)        | dedicated virtual sink with a monitor tap  |
+| Input        | real keyboard/mouse            | XTEST / SendInput / trace replay           |
+| Capture      | owner eyes, ad hoc             | manifest'd artifacts only                   |
+| Runs when    | owner present                  | any time, unattended (AFK)                 |
+
+Rules:
+
+- The agent path never touches the owner path: no real-seat windows,
+  no default-sink audio, no ambient session env (the #267 fence;
+  rig-run refuses leaked WAYLAND_DISPLAY). The owner path never feeds
+  budget numbers (existing pair rule).
+- Every agent run captures all three modalities it can reach — input
+  (injector record + client input log), video (frame dump and/or
+  framebuffer capture), audio (monitor tap of the virtual sink) — and
+  every capture lands in the run out-dir with its manifest entry.
+  Audio capture is a first-class lane, not an afterthought:
+  comparison tooling (loudness, drift) requires both sides to carry
+  audio.
+
+## Modality gaps (2026-11-16 architecture review)
+
+| Modality | Native pair (proven) | Wine pair (pending #240) | Gap |
+|----------|----------------------|--------------------------|-----|
+| Input    | XTEST + epoch-stamped injector | SendInput helper + traces | Wine pair proof pending; exe launch unblocked by the #265 blob builder |
+| Video    | frame dump + scene probe | framebuffer capture | provenance manifest generation is manual (reversing.md section 6 rule) |
+| Audio    | suppressed (--no-sound, null sink) | suppressed (Null driver) | no capture path: need virtual sink + monitor tap on both legs, non-silence validation, wav artifacts |
+
+The audio row is the architectural hole: containment exists, capture
+does not. Fixing it is the prerequisite for any audio parity claim
+(A/V compare, loudness, drift).
