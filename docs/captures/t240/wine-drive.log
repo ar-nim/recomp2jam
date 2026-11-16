@@ -1,0 +1,18 @@
+01:21:43 drive start display=:160 target=room account=tester host_user=3
+frame 1 screen=planet mean_luma=61.2 cue=probe:board shot=planet.png t=01:22:36
+01:22:37 popup probe attempt=1 max_blue=0.185
+01:22:37 aim easy-emblem at (136,88) evidence=docs/captures: planet-verify findings.md 'reopen: siclick (136,88)'; the H/EASY plate opens the Channel dialog
+01:22:38 inject send-click easy-emblem (136,88) opendesktop=0x54 err=14007 setthreaddesktop=1 err=0 click 136 88
+01:22:41 popup probe attempt=1 max_blue=0.986
+01:22:41 aim fallback-ok at (400,365) evidence=planet-verify findings.md: the NORMAL-mode message box OK sits at (400,365) and blocks canvas clicks until dismissed
+01:22:41 inject send-click fallback-ok (400,365) opendesktop=0x54 err=14007 setthreaddesktop=1 err=0 click 400 365
+01:22:43 popup probe attempt=2 max_blue=0.000
+frame 2 screen=channel mean_luma=82.6 cue=server:03EA shot=channel.png t=01:22:44
+01:22:44 host started pid=1515952
+01:22:44 host room created
+01:22:47 popup probe attempt=1 max_blue=0.000
+01:22:47 aim channel-enter at (526,248) evidence=docs/channel-fill.md: bnd-pinned enter face (502,236) 44x21 on row 0, centre (524,246); the live Wine aim (526,248) is the same face
+01:22:48 inject send-click channel-enter (526,248) opendesktop=0x54 err=14007 setthreaddesktop=1 err=0 click 526 248
+frame 3 screen=room mean_luma=118.6 cue=server:03EC shot=room.png t=01:22:50
+01:22:50 host stopped
+01:22:50 drive done reached=planet,channel,room probe_dir=/tmp/wine-scene-probe-p28nzh9i

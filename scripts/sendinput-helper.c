@@ -4,9 +4,17 @@
  * runs inside Wine and delivers input through the Win32 SendInput queue
  * that the canvas actually polls (see docs/wine-boot.md, Attempts 7-9).
  *
+ * Every invocation prints the desktop join and the SendInput result, so a
+ * silent no-op (wrong desktop, denied send) is visible in the drive log
+ * instead of being mistaken for a client that ignored the input.
+ *
  * Usage (one command per invocation):
  *   sendinput_helper.exe.so move X Y
  *   sendinput_helper.exe.so click X Y        # move, down, up
+ *   sendinput_helper.exe.so dclick X Y       # move, then two down/up pairs
+ *                                            # 120 ms apart (one process, so
+ *                                            # the pair lands inside the
+ *                                            # client's double-click time)
  *   sendinput_helper.exe.so down X Y         # move then left-down
  *   sendinput_helper.exe.so up X Y           # move then left-up
  *   sendinput_helper.exe.so key <name> down|up
@@ -22,8 +30,11 @@
 
 static void join_game_desktop(void) {
     HDESK desk = OpenDesktopA("o2jam", 0, FALSE, MAXIMUM_ALLOWED);
+    printf("opendesktop=%p err=%lu\n", (void *)desk, (unsigned long)GetLastError());
     if (desk) {
-        SetThreadDesktop(desk);
+        SetLastError(0);
+        BOOL joined = SetThreadDesktop(desk);
+        printf("setthreaddesktop=%d err=%lu\n", joined, (unsigned long)GetLastError());
     }
     Sleep(100);
 }
@@ -96,6 +107,28 @@ int main(int argc, char **argv) {
         Sleep(150);
         left_up();
         printf("click %s %s\n", argv[2], argv[3]);
+        return 0;
+    }
+    if (strcmp(argv[1], "dclick") == 0 && argc >= 4) {
+        int x = atoi(argv[2]), y = atoi(argv[3]);
+        move_to(x, y);
+        for (int pair = 0; pair < 2; pair++) {
+            SetLastError(0);
+            UINT down = 0, up = 0;
+            INPUT inp;
+            ZeroMemory(&inp, sizeof(inp));
+            inp.type = INPUT_MOUSE;
+            inp.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+            down = SendInput(1, &inp, sizeof(inp));
+            Sleep(80);
+            ZeroMemory(&inp, sizeof(inp));
+            inp.type = INPUT_MOUSE;
+            inp.mi.dwFlags = MOUSEEVENTF_LEFTUP;
+            up = SendInput(1, &inp, sizeof(inp));
+            printf("dclick pair %d down=%u up=%u err=%lu\n", pair, down, up,
+                   (unsigned long)GetLastError());
+            if (pair == 0) Sleep(40);
+        }
         return 0;
     }
     if (strcmp(argv[1], "key") == 0 && argc >= 4) {

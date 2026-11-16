@@ -18,7 +18,7 @@ protocol-only and never counts as a live pair.
 |---|---|---|---|---|
 | Xvfb + XTEST | XTEST (X11 protocol events) | self-spawned Xvfb, 1024x768 | **Proven** | native pair: Playing reached, 60 judged presses (`docs/captures/t76/findings.md`) |
 | Live seat + ydotool | ydotool (kernel uinput) | real compositor seat | Manual spot-check only; never feeds numbers | procedure proven, live execution needs a supervised unlocked session (#242, ready-for-human) |
-| Wine X11 + SendInput | winegcc SendInput helper | Wine under Xvfb | Specified | proof pending (#240) |
+| Wine X11 + SendInput | winegcc SendInput helper | Wine under Xvfb | **Qualified to the room stage** | `scripts/rig-wine-run.sh` pack, pair `wine-x11-sendinput`: planet → channel → room with provenance (`docs/captures/t240/findings.md`); waiting/loading OPEN (join wall, same note) |
 | Synthetic compositor fixture | `wl_pointer` injection | headless compositor | Protocol-only | CI seam only, never a budget pair (#126, #127) |
 
 Xvfb + XTEST is the blessed baseline. No pair feeds a budget number
@@ -70,6 +70,39 @@ ordered press/release events, song-position clock for gameplay,
 monotonic clock for menus). Record the trace ID in both manifests and
 compare only on matching IDs: what is pressed and where the pointer is
 changes what renders, so mismatched stimuli void the pixels (#245).
+
+## Wine leg (#240)
+
+One command produces the Wine pair's pack, composing the same kit:
+
+```
+scripts/rig-wine-run.sh OUT_DIR [--target room|loading] [--display :N]
+    [--music-id ID] [--user-index-id N] [--host-user-index-id N] [--cross DIR]
+```
+
+| Phase | Kit command | Substitution home |
+|---|---|---|
+| mint argv | `scripts/rig-mint-launch-argv.sh` (#265 builder, read-only DB) | that script |
+| boot | `scripts/rig-run.sh run` → `scripts/rig-wine.sh launch` | `scripts/rig-wine.sh` |
+| drive | `scripts/wine-scene.py --attach OUT --display :N` | that script |
+| host a room | `scripts/wine-room-host.py` (the exe cannot create one) | that script |
+| stop | `scripts/rig-run.sh stop` (pidfile only) | `scripts/rig-run.sh` |
+| package | `run-manifest.sh write` + `rig-provenance.sh emit --producer-kind exe` | those scripts |
+| check | `run-manifest.sh verify [--cross partner]`, `rig-audio.sh verify`, `cite --claim exe` | those scripts |
+
+Pins the leg enforces: the exe sha256 (default `83a04541…72c823b`, 7.55),
+`WINEPREFIX` (a Korean-locale prefix, claimed by the preflight), the
+`o2jam` 800x600 Wine desktop, and a per-run display. The launcher resets
+its own prefix's `wineserver` before exec (a relaunch against a stale
+window id dies in `X_CreateWindow BadWindow`), and the drive labels a scene
+only when its pixels match a measured signature — a frame that shows
+another scene is reported, never relabelled.
+
+Known gaps from the qualification run (each with its next step in
+`docs/captures/t240/findings.md`): the waiting-room join, a loading-gate
+pixel signature, the route guard matching the launcher instead of
+`OTwo.exe`, and `run-manifest.sh`'s `artifacts/screenshots` versus the AFK
+runner's `frames/`.
 
 ## AFK end-to-end runner (#280)
 
@@ -294,7 +327,7 @@ Knobs: `RIG_AUDIO_CAPTURE` (1, the default), `RIG_AUDIO_RATE` (48000),
 | Leg | Sink | Tap | Status |
 |---|---|---|---|
 | Native (recomp2jam) | per-run `rig_null_<pid>` | `parec` monitor → wav | proven: #279 acceptance run captured non-silent game audio |
-| Wine (OTwo.exe) | same sink, same tap | same tap | OPEN: Wine 11.22 ships the pulse driver and the exe already reaches `wine_null` through `PULSE_SINK` (`docs/wine-boot.md`, 2026-11-08 evidence: `OTwo.exe` sink-input on the null sink). No driver switch is needed; what is missing is a blob-launched exe boot bound to a per-run sink in one run, which is #240's launcher. Sink, tap, guards, and verifier are leg-agnostic |
+| Wine (OTwo.exe) | same sink, same tap | same tap | Proven (#240): a blob-launched boot bound to the run's own sink — `pactl` showed `OTwo.exe` on `rig_null_<pid>`, and the tap measured peak 0.0 dBFS over 90 s (`docs/captures/t240/findings.md`). The launcher's basename is not the exe's, so `rig-run.sh`'s route guard reports `route=unseen`; the level probe still judges the artifact, and closing that guard is a named follow-up |
 
 `--no-sound` stays available for runs that must not emit audio at all;
 such a run declares `expect=silence` and its artifact is the proof that
@@ -413,9 +446,9 @@ Rules:
 
 | Modality | Native pair (proven) | Wine pair (pending #240) | Gap |
 |----------|----------------------|--------------------------|-----|
-| Input    | XTEST + epoch-stamped injector | SendInput helper + traces | Wine pair proof pending; exe launch unblocked by the #265 blob builder |
-| Video    | frame dump + scene probe | framebuffer capture | provenance emitted by `scripts/rig-provenance.sh` (#281) |
-| Audio    | per-run virtual sink + monitor tap, wav + sidecar, non-silence verifier (#279) | suppressed (fixed `wine_null`) | Wine leg: bind a blob-launched boot to a per-run sink and tap it (#240); the exe already honours `PULSE_SINK` |
+| Input    | XTEST + epoch-stamped injector | SendInput helper (winegcc, committed source) | canvas presses proven on three scenes (#240); the room-row join gesture is OPEN |
+| Video    | frame dump + scene probe | x11grab (ffmpeg) with measured scene signatures | three scenes captured with provenance (#240); waiting/loading signatures OPEN |
+| Audio    | per-run virtual sink + monitor tap, wav + sidecar, non-silence verifier (#279) | per-run sink + monitor tap (same lane, #240) | closed: the Wine leg captures audio on its own sink (peak 0.0 dBFS, `docs/captures/t240/findings.md`) |
 
 The native audio row is closed by #279 (see "Audio capture" above); the
 Wine row closes with #240 using the same sink, tap, and verifier.

@@ -1,0 +1,12 @@
+user_index_id=1
+user_id=tester
+username_sha256=5263f10d98956d684e4eb35c24ac753486ceba03fbe3dbe606d8da726ba6e94c
+level=7
+gender=1
+nickname=tester
+rank=0
+gateway_address=127.0.0.1
+gateway_port=15010
+argv_words=6
+argv_sha256=1c95d47820e67954823e35787853d71f5401acdac47576a64d636045e2aab7d5
+blob_chars=721

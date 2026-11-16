@@ -1,0 +1,110 @@
+{
+  "schema": "rig-provenance-v1",
+  "created_at": "2026-11-16T17:22:57+00:00",
+  "run": {
+    "out_dir": "/home/arnim/scratch/240-fix/wine2",
+    "pair": "wine-x11-sendinput",
+    "build": "f0f5a6d0e5509e3a22d8c4d9d87cecb7b0017f81",
+    "seed": "816229180",
+    "manifest_json": "manifest.json"
+  },
+  "producer": {
+    "kind": "exe",
+    "name": "OTwo.exe",
+    "path": "/home/arnim/scratch/run-full/OTwo.exe",
+    "sha256": "83a045418b6219ba340681766b33de2bfbb5ff51b813ef4e2e9dd1def72c823b",
+    "size_bytes": 5029888,
+    "version": "7.55"
+  },
+  "session": {
+    "display": ":160",
+    "wayland_display": "",
+    "xdg_session_type": "",
+    "pulse_sink": "rig_null_1509711",
+    "command": [
+      "scripts/rig-wine.sh",
+      "launch",
+      "/home/arnim/scratch/240-fix/wine2/argv.txt",
+      "(wine",
+      "explorer",
+      "/desktop=o2jam,800x600",
+      "/home/arnim/scratch/run-full/OTwo.exe,",
+      "argv",
+      "=",
+      "AuthParameters",
+      "blob",
+      "+",
+      "5",
+      "|test|??|addr|port",
+      "mirrors",
+      "from",
+      "argv.txt)"
+    ]
+  },
+  "tools": {
+    "python3": {
+      "name": "python3",
+      "version": "Python 3.14.10",
+      "available": true
+    },
+    "xvfb": {
+      "name": "Xvfb",
+      "version": "21.1.26-1",
+      "available": true
+    },
+    "wine": {
+      "name": "wine",
+      "version": "11.22",
+      "available": true
+    },
+    "capture": {
+      "name": "ffmpeg",
+      "version": "n9.0.2",
+      "available": true
+    },
+    "injector": {
+      "name": "sendinput-helper.exe.so",
+      "version": "29770ddd3574",
+      "available": true
+    }
+  },
+  "artifacts": [
+    {
+      "path": "argv.txt",
+      "sha256": "1c95d47820e67954823e35787853d71f5401acdac47576a64d636045e2aab7d5",
+      "size_bytes": 846,
+      "media": "other"
+    },
+    {
+      "path": "argv.txt.fields",
+      "sha256": "c273f072f8f9c641faa840ddd85097cc58ebb5f059fce1ffe1321bfb96c545e1",
+      "size_bytes": 302,
+      "media": "other"
+    },
+    {
+      "path": "artifacts/screenshots/channel.png",
+      "sha256": "ea5cc6d632a534ab02d7d6f12e10bf357f8cf5dc65db991a9b026ee0ecf6c563",
+      "size_bytes": 185939,
+      "media": "image"
+    },
+    {
+      "path": "artifacts/screenshots/planet.png",
+      "sha256": "235f53521171be4f1d4c725d16143332fa47b66813f9e1c5b8e8b09fe68ddc21",
+      "size_bytes": 186191,
+      "media": "image"
+    },
+    {
+      "path": "artifacts/screenshots/room.png",
+      "sha256": "f91adc41dd70e360e60ecfa6451c322ba85d7aa8a1c1b92c3d460943e4ff542f",
+      "size_bytes": 88025,
+      "media": "image"
+    },
+    {
+      "path": "audio/audio.wav",
+      "sha256": "e7562862717bac8c05339111ba5fb3a4df171e2e86ec0401439ed4d28876ec2b",
+      "size_bytes": 33554520,
+      "media": "audio"
+    }
+  ],
+  "manifest_sha256": "a47d90cd5fde27c2e7ce7000833178ac5e829fa54a0bd3f75e5dc99b92f5b69c"
+}

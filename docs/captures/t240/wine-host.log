@@ -1,0 +1,8 @@
+01:22:44 host authorized user_index_id=3
+01:22:44 host in channel 0/0
+01:22:44 host event cmd=0FA3 len=4 hex=0f000080
+01:22:44 host room created number=0 title=WINEJOIN
+01:22:45 host music set 757/2/1
+01:22:46 host arena 0 (flaps stay off: an in-room arena change trips the Wine DXSurface error)
+01:22:46 host opcode 0FA1 len=4 hex=f5020201
+01:22:46 host opcode 0FA3 len=4 hex=00000000

@@ -1123,3 +1123,32 @@ notes: the supervisor/drive scripts (`supervisor2.log`, `drive_ui.py`,
 CState current-state field was interrupted by the known helper-thread
 fault (c0000005 at 0xffbc11b0) and continues under
 `~/scratch/planet-verify/`.
+
+## Attempt 14 — rig-leg qualification run: planet -> channel -> room (2026-11-17)
+
+Question: can the exe be launched and driven entirely through the unified
+rig kit (`scripts/rig-wine-run.sh`), with provenance for every capture,
+after the #265 blob builder replaced the hand-built argv? Method and
+result are recorded in `docs/captures/t240/findings.md`; what is new
+here is the exe-side detail.
+
+- Boot: `scripts/rig-wine.sh launch <argv.txt>` under
+  `scripts/rig-run.sh` on a private Xvfb `:160`, Wine desktop
+  `o2jam` 800x600, per-run null sink. The board appears ~50 s after exec
+  and the notice carousel reads in Korean (CP949 prefix).
+- Path walked: board -> EASY emblem (136,88) opens the Channel dialog
+  (`03E8`/`03EA`) -> NORMAL-mode message box OK (400,365) clears the block
+  -> `입장` face (526,248) sends `03EC` and the room stage renders ->
+  captures at each stage.
+- The aim at (145,105) used in Attempt 4 does NOT open the dialog on this
+  build/desktop; (136,88) does, matching the planet-verify note.
+- Room-row join did not happen this run: the hosted row needs the
+  client's `07DA`/`07E8` member/music poll (observed at +36 s, or not at
+  all before the idle fuse returns the client to the board), and a
+  double-click at the Attempt 13 hot zone (100,100) with the row on screen
+  produced no `0BBA` (two such attempts; next step in the findings note).
+- Environment: Wine 11.22 blocks a prefix cloned from 11.21 behind the
+  `wine-mono` install dialog until one `WINEDLLOVERRIDES="mscoree,mshtml="
+  wineboot -u`; and a relaunch against a live `wineserver` dies in
+  `X_CreateWindow` (`BadWindow 0xa00007`, the Attempt 11 note), which the
+  launcher now prevents by resetting its own prefix first.

@@ -1,0 +1,28 @@
+{
+  "pair": "wine-x11-sendinput",
+  "build": "f0f5a6d0e5509e3a22d8c4d9d87cecb7b0017f81",
+  "params": "display=:160 sink=rig_null_1509711 exe_sha256=83a045418b6219ba340681766b33de2bfbb5ff51b813ef4e2e9dd1def72c823b",
+  "script": "scripts/wine-scene.py (target room, music 757)",
+  "seed": "816229180",
+  "created_at": "2026-11-16T17:22:57.554600+00:00",
+  "input_log": "artifacts/input.log",
+  "scene_sequence": [
+    "planet",
+    "channel",
+    "room"
+  ],
+  "artifacts": {
+    "root": ".",
+    "input_log": "artifacts/input.log",
+    "screenshots_dir": "artifacts/screenshots",
+    "stats_dir": "artifacts/stats",
+    "scene_sequence_file": "artifacts/scene-sequence.txt"
+  },
+  "required_artifacts": [
+    "manifest.json",
+    "artifacts/input.log",
+    "artifacts/screenshots",
+    "artifacts/stats",
+    "artifacts/scene-sequence.txt"
+  ]
+}

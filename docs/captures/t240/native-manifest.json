@@ -1,0 +1,30 @@
+{
+  "pair": "native-xvfb-xtest",
+  "build": "f0f5a6d0e5509e3a22d8c4d9d87cecb7b0017f81",
+  "params": "display=:150 pair=native-xvfb-xtest target=loading music-id=757",
+  "script": "planet-to-waiting.sh --target loading --music-id 757",
+  "seed": "222773556",
+  "created_at": "2026-11-16T17:24:57.250131+00:00",
+  "input_log": "artifacts/input.log",
+  "scene_sequence": [
+    "planet",
+    "channel",
+    "room",
+    "waiting",
+    "loading"
+  ],
+  "artifacts": {
+    "root": ".",
+    "input_log": "artifacts/input.log",
+    "screenshots_dir": "artifacts/screenshots",
+    "stats_dir": "artifacts/stats",
+    "scene_sequence_file": "artifacts/scene-sequence.txt"
+  },
+  "required_artifacts": [
+    "manifest.json",
+    "artifacts/input.log",
+    "artifacts/screenshots",
+    "artifacts/stats",
+    "artifacts/scene-sequence.txt"
+  ]
+}
