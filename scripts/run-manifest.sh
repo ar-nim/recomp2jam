@@ -225,6 +225,11 @@ print("run-manifest: artifact set complete")
 PY
 
   check_capture_provenance "$base_dir"
+  # Audio artifact validation (#279): when the run declares audio,
+  # rig-audio verify enforces presence + non-silence + manifest fields.
+  if compgen -G "$base_dir/audio/manifest" >/dev/null; then
+    "$SCRIPT_DIR/rig-audio.sh" verify "$base_dir" || die "verify: audio artifact failed rig-audio verify"
+  fi
 }
 
 check_capture_provenance() {

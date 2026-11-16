@@ -11,9 +11,13 @@
 #     conflicting display/port/prefix claims, no occupied relay ports,
 #     virtual/null audio sink present and selected (NEVER the speakers),
 #     Memoryer up and answering (unless RIG_EXPECT_MEMORYER=0), install-root
-#     readable — then starts Xvfb on <display> when absent, launches <binary>
-#     in the background with sanitized env, and records every PID it started
-#     in <out-dir>/pids and every claim it owns in <out-dir>/claims.
+#     readable — then opens the audio lane (scripts/rig-audio.sh: a per-run
+#     owned sink plus a monitor-tap recorder into <out-dir>/audio/audio.wav),
+#     starts Xvfb on <display> when absent, launches <binary> in the
+#     background with sanitized env, asserts the client's streams landed on
+#     the run sink (a stream on the system default sink aborts the run),
+#     and records every PID it started in <out-dir>/pids and every claim it
+#     owns in <out-dir>/claims.
 # stop: kills only the PIDs recorded in <out-dir>/pids, verifying each
 #     process still matches what was started. Never pattern-kills. Cleanup
 #     failures are recorded in <out-dir>/cleanup-failures.log, the evidence
@@ -30,6 +34,11 @@ set -euo pipefail
 RIG_LIB="$(cd "$(dirname "$0")/lib" && pwd)/rig-preflight.sh"
 # shellcheck source=lib/rig-preflight.sh
 . "$RIG_LIB"
+# The audio lane (monitor tap, probe, verifier) lives in one module and is
+# sourced here so `run`/`stop` drive it and `scripts/rig-audio.sh` can be
+# used standalone (#279).
+# shellcheck source=rig-audio.sh
+. "$(cd "$(dirname "$0")" && pwd)/rig-audio.sh"
 
 die() { echo "rig-run: $*" >&2; exit 2; }
 
@@ -91,12 +100,69 @@ preflight_run_checks() {
   rig_check_install_root || { code=$?; preflight_release "$out_dir"; return "$code"; }
   rig_check_memoryer || { code=$?; preflight_release "$out_dir"; return "$code"; }
   rig_check_relay_ports_free || { code=$?; preflight_release "$out_dir"; return "$code"; }
+  if rig_audio_capturing && [ -z "${RIG_SINK_NAME:-}" ]; then
+    # A capture run owns its sink: a shared sink would mix other runs (and
+    # other agents) into this run's artifact, and stop could not tear it down.
+    # The name keeps the preflight's null-sink policy word ("null"), so the
+    # audio guard still proves this sink can never be the owner's speakers.
+    RIG_SINK_NAME="rig_null_$$"
+    export RIG_SINK_NAME
+  fi
   sink="${RIG_SINK_NAME:-$PULSE_SINK}"
   export PULSE_SINK="$sink"
+  # Two levers reach the sink, one per client family: PipeWire's pulse server
+  # honors PULSE_SINK, and ALSA clients (cpal's Linux host, hence the native
+  # client) reach PipeWire through the ALSA plugin, which honors PIPEWIRE_NODE
+  # (docs/rig-runbook.md, audio capture).
+  export PIPEWIRE_NODE="$sink"
   rig_check_audio_sink null "$sink" || { code=$?; preflight_release "$out_dir"; return "$code"; }
   rig_check_prefix "$out_dir" || { code=$?; preflight_release "$out_dir"; return "$code"; }
   rig_claim_listen_ports "$out_dir" || { code=$?; preflight_release "$out_dir"; return "$code"; }
   return 0
+}
+
+# `--no-sound` declares a containment-only run (the client plays nothing);
+# any other argv shape declares game audio, which the lane must then carry.
+audio_expectation() {
+  local argument
+  for argument in "$@"; do
+    if [ "$argument" = "--no-sound" ]; then
+      echo "silence"
+      return 0
+    fi
+  done
+  echo "sound"
+}
+
+client_basename() { printf '%s' "${1##*/}"; }
+
+# A client stream on the system default sink is a containment breach: stop
+# the run loudly instead of letting the owner path receive agent audio.
+assert_audio_route() {
+  local out_dir="$1" client="$2" attempt code route
+  local tries="${RIG_AUDIO_ROUTE_TRIES:-100}"
+  for attempt in $(seq 1 "$tries"); do
+    code=0
+    rig_audio_assert_route "$out_dir" "$client" || code=$?
+    [ "$code" -eq "$RIG_E_AUDIO" ] && return "$code"
+    route="$(rig_audio_field "$out_dir" route || echo unseen)"
+    [ "$route" = "unseen" ] || return 0
+    sleep 0.1
+  done
+  rig_note "client '$client' opened no audio stream in the route check (declared: $(rig_audio_field "$out_dir" expect || echo unknown)); the level probe still judges the artifact"
+  return 0
+}
+
+write_env_sh() {
+  local display="$1" out_dir="$2"
+  {
+    echo "export DISPLAY='$display'"
+    echo "export WINIT_UNIX_BACKEND=x11"
+    echo "export PULSE_SINK='${PULSE_SINK:-wine_null}'"
+    echo "export PIPEWIRE_NODE='${PIPEWIRE_NODE:-${PULSE_SINK:-wine_null}}'"
+    echo "export RIG_AUDIO_ARTIFACT='$(rig_audio_artifact "$out_dir")'"
+    echo "export RIG_AUDIO_MANIFEST='$(rig_audio_sidecar "$out_dir")'"
+  } > "$out_dir/env.sh"
 }
 
 cmd_run() {
@@ -122,6 +188,15 @@ cmd_run() {
     display_up "$display" || die "Xvfb on $display did not come up (see $out_dir/xvfb.log)"
   fi
 
+  # The lane opens before the client, so the first cue is in the artifact.
+  local expect client
+  expect="$(audio_expectation "$@")"
+  client="$(client_basename "$1")"
+  if ! rig_audio_capture_start "$out_dir" "${PULSE_SINK:-wine_null}" "$expect" "$client"; then
+    preflight_release "$out_dir"
+    exit "$RIG_E_AUDIO"
+  fi
+
   if command -v setsid >/dev/null 2>&1; then
     DISPLAY="$display" setsid "$@" >"$out_dir/client.log" 2>&1 &
   else
@@ -129,15 +204,18 @@ cmd_run() {
   fi
   echo "client $! $*" >> "$out_dir/pids"
 
-  {
-    echo "export DISPLAY='$display'"
-    echo "export WINIT_UNIX_BACKEND=x11"
-    echo "export PULSE_SINK='${PULSE_SINK:-wine_null}'"
-  } > "$out_dir/env.sh"
+  write_env_sh "$display" "$out_dir"
 
   echo "rig-run: started $1 on $display (pid $(tail -1 "$out_dir/pids" | cut -d' ' -f2))"
   if [ "$started_xvfb" = 1 ]; then
     echo "rig-run: started Xvfb for $display ($(head -1 "$out_dir/pids" | cut -d' ' -f2))"
+  fi
+  echo "rig-run: audio lane $(rig_audio_sidecar "$out_dir") (artifact $(rig_audio_artifact "$out_dir"))"
+
+  if ! assert_audio_route "$out_dir" "$client"; then
+    echo "rig-run: CONTAINMENT BREACH — stopping the run (see $(rig_audio_sidecar "$out_dir"))" >&2
+    cmd_stop "$out_dir" || true
+    exit "$RIG_E_AUDIO"
   fi
   echo "rig-run: driver env written to $out_dir/env.sh; stop with: scripts/rig-run.sh stop $out_dir"
   return 0
@@ -167,10 +245,12 @@ cmd_run_wayland() {
   fi
   echo "client $! $*" >> "$out_dir/pids"
 
+  export PIPEWIRE_NODE="$PULSE_SINK"
   {
     echo "export WAYLAND_DISPLAY='$socket'"
     echo "unset DISPLAY WINIT_UNIX_BACKEND"
     echo "export PULSE_SINK='${PULSE_SINK:-wine_null}'"
+    echo "export PIPEWIRE_NODE='${PIPEWIRE_NODE}'"
   } > "$out_dir/env.sh"
 
   echo "rig-run: started $1 on wayland socket $socket (pid $(tail -1 "$out_dir/pids" | cut -d' ' -f2))"
@@ -283,6 +363,8 @@ cmd_stop() {
   local failures="$out_dir/.cleanup-failures.tmp"
   : > "$failures"
   if ! kill_recorded "$out_dir" "$failures"; then code="$RIG_E_CLEANUP"; fi
+  # The lane closes after the client, so the artifact holds the last audio.
+  rig_audio_capture_stop "$out_dir" || code="$RIG_E_AUDIO"
   rig_release_sink "$out_dir" "$failures"
   if [ -s "$failures" ]; then code="$RIG_E_CLEANUP"; fi
   if [ "$code" -ne 0 ]; then
@@ -326,22 +408,26 @@ cmd_selftest() {
   if WAYLAND_DISPLAY=wayland-0 DISPLAY= bash "$0" run :96 "$tmp/o" -- true 2>"$tmp/e"; then
     die "selftest: leaked WAYLAND_DISPLAY was not refused"
   fi
-  # run + stop round-trip on a scratch display with a stand-in binary
-  if command -v Xvfb >/dev/null; then
-    "${clean[@]}" bash "$0" run :96 "$tmp/rig" -- sleep 30
-    [ -f "$tmp/rig/pids" ] || die "selftest: pidfile not written"
-    grep -q "client" "$tmp/rig/pids" || die "selftest: client pid not recorded"
-    local st; st="$(cmd_status "$tmp/rig")"
-    grep -q "alive" <<<"$st" || die "selftest: client not alive"
-    bash "$0" stop "$tmp/rig"
-    if cmd_status "$tmp/rig" 2>/dev/null; then
-      die "selftest: pidfile still present after stop"
-    fi
-    # the pkill-fault re-run: stopping twice must be clean and kill nothing else
-    bash "$0" stop "$tmp/rig-missing" 2>/dev/null && die "selftest: stop on missing pidfile should fail" || true
-  else
-    echo "rig-run: selftest skipped Xvfb round-trip (Xvfb not installed)"
+  # run + stop round-trip on a scratch display with a stand-in binary. The
+  # whole leg runs on the stub display and sound server, so a selftest never
+  # touches the real seat, the real audio state, or the owner's speakers.
+  write_stubs "$tmp/stubbin" "$tmp/stubstate"
+  mkdir -p "$tmp/fake-root"
+  local hermes=(env -u WAYLAND_DISPLAY -u DISPLAY XDG_SESSION_TYPE=
+    "PATH=$tmp/stubbin:/usr/bin:/bin" "STUBSTATE=$tmp/stubstate"
+    "RIG_STATE_DIR=$tmp/rig-state" "RIG_INSTALL_ROOT=$tmp/fake-root"
+    "RIG_RELAY_PORTS=59891 59892" "RIG_EXPECT_MEMORYER=0")
+  "${hermes[@]}" bash "$0" run :96 "$tmp/rig" -- sleep 30 >/dev/null
+  [ -f "$tmp/rig/pids" ] || die "selftest: pidfile not written"
+  grep -q "client" "$tmp/rig/pids" || die "selftest: client pid not recorded"
+  local st; st="$(cmd_status "$tmp/rig")"
+  grep -q "alive" <<<"$st" || die "selftest: client not alive"
+  "${hermes[@]}" bash "$0" stop "$tmp/rig" >/dev/null
+  if cmd_status "$tmp/rig" 2>/dev/null; then
+    die "selftest: pidfile still present after stop"
   fi
+  # the pkill-fault re-run: stopping twice must be clean and kill nothing else
+  bash "$0" stop "$tmp/rig-missing" 2>/dev/null && die "selftest: stop on missing pidfile should fail" || true
   preflight_legs "$tmp"
   rm -rf "$tmp"
   echo "rig-run: selftest OK"
@@ -379,6 +465,8 @@ assert_reject() {
   return 0
 }
 
+# Display stubs only: the sound-server stubs (pactl + parec) are the audio
+# lane's, so both selftests model PipeWire from one home (rig-audio.sh).
 write_stubs() {
   local stubbin="$1" stubstate="$2"
   mkdir -p "$stubbin" "$stubstate"
@@ -391,29 +479,8 @@ STUBEOF
 touch "$STUBSTATE/up-$1"
 exec sleep 120
 STUBEOF
-  cat >"$stubbin/pactl" <<'STUBEOF'
-#!/bin/sh
-extra="$STUBSTATE/sinks-extra"
-if [ "$1" = "list" ]; then
-  if [ "$STUB_SINK_MISSING" != "1" ]; then
-    printf '7\twine_null\tPipeWire\ts16le 2ch 44100Hz\tIDLE\n'
-  else
-    printf '64\talsa_output.usb-ADAPTER\tPipeWire\ts24le 2ch 48000Hz\tSUSPENDED\n'
-  fi
-  [ -f "$extra" ] && cat "$extra"
-elif [ "$1" = "load-module" ]; then
-  name=""; for a in "$@"; do case "$a" in sink_name=*) name="${a#sink_name=}";; esac; done
-  printf '99\t%s\tPipeWire\ts16le 2ch 44100Hz\tIDLE\n' "$name" >> "$extra"
-  echo 99
-elif [ "$1" = "unload-module" ]; then
-  if [ "$STUB_UNLOAD_FAIL" = "1" ]; then exit 1; fi
-  touch "$STUBSTATE/unloaded-$2"
-elif [ "$1" = "get-default-sink" ]; then
-  echo alsa_output.usb-ADAPTER
-fi
-exit 0
-STUBEOF
-  chmod +x "$stubbin/xdpyinfo" "$stubbin/Xvfb" "$stubbin/pactl"
+  chmod +x "$stubbin/xdpyinfo" "$stubbin/Xvfb"
+  rig_audio_stub_tools "$stubbin" "$stubstate"
 }
 
 preflight_legs() {
@@ -514,6 +581,91 @@ PYEOF
   [ "$kept" = 1 ] || die "selftest: leg cleanup-failure FAILED: pidfile deleted despite failure"
   [ "$logged" = 1 ] || die "selftest: leg cleanup-failure FAILED: no cleanup-failures.log"
   assert_reject "cleanup-failure" 16 "cleanup" "$tmp/err-clean"
+
+  audio_lane_legs "$tmp" "${senv[@]}"
+}
+
+# --- #279 audio lane legs ----------------------------------------------------
+# Hermetic: the stub parec writes a wav and the stub pactl models the graph,
+# so these legs prove the lane is wired into `run`/`stop` without a sound
+# server, a game, or the owner's speakers.
+
+attempt_then() {
+  local leg="$1" errfile="$2"; shift 2
+  attempt "$errfile" "$@"
+  if [ "$ATTEMPT_EXIT" -ne 0 ]; then
+    cat "$errfile" >&2
+    die "selftest: leg $leg setup failed (exit $ATTEMPT_EXIT)"
+  fi
+  return 0
+}
+
+lane_field() { rig_audio_field "$1" "$2" 2>/dev/null || true; }
+
+assert_lane_field() {
+  local leg="$1" out_dir="$2" key="$3" want="$4" got
+  got="$(lane_field "$out_dir" "$key")"
+  if [ "$got" != "$want" ]; then
+    die "selftest: leg $leg FAILED: $key is '$got', want '$want'"
+  fi
+}
+
+audio_lane_legs() {
+  local tmp="$1"; shift
+  local senv=("$@")
+
+  # 1. A run that declares sound captures a measured artifact, and the
+  #    verifier accepts it (live chain: rig-run.sh run -> cmd_run ->
+  #    preflight_run_checks -> rig_audio_capture_start -> parec monitor tap).
+  attempt_then "audio-lane" "$tmp/err-audio" "${senv[@]}" \
+    bash "$0" run :199 "$tmp/o-audio" -- sleep 30
+  assert_lane_field "audio-lane" "$tmp/o-audio" expect "sound"
+  assert_lane_field "audio-lane" "$tmp/o-audio" state "capturing"
+  assert_lane_field "audio-lane" "$tmp/o-audio" source_verified "yes"
+  grep -q "PIPEWIRE_NODE=" "$tmp/o-audio/env.sh" ||
+    die "selftest: leg audio-lane FAILED: env.sh carries no PIPEWIRE_NODE"
+  attempt_then "audio-lane" "$tmp/err-audio-stop" "${senv[@]}" bash "$0" stop "$tmp/o-audio"
+  assert_lane_field "audio-lane" "$tmp/o-audio" state "captured"
+  rig_audio_verify "$tmp/o-audio" >/dev/null ||
+    die "selftest: leg audio-lane FAILED: verifier rejected the captured artifact"
+  echo "selftest: leg audio-lane PASS (monitor tap, sidecar, verifier)"
+
+  # 2. A silent artifact of a sound run must fail the verifier: a recording
+  #    process that ran proves nothing (reference-capture rule).
+  attempt_then "audio-silent-declared-sound" "$tmp/err-quiet" "${senv[@]}" \
+    STUB_AUDIO_SILENT=1 bash "$0" run :200 "$tmp/o-quiet" -- sleep 30
+  attempt_then "audio-silent-declared-sound" "$tmp/err-quiet-stop" "${senv[@]}" \
+    bash "$0" stop "$tmp/o-quiet"
+  if rig_audio_verify "$tmp/o-quiet" >/dev/null 2>&1; then
+    die "selftest: leg audio-silent-declared-sound FAILED: verifier accepted a silent artifact of a sound run"
+  fi
+  echo "selftest: leg audio-silent-declared-sound PASS (silent artifact rejected)"
+
+  # 3. `--no-sound` declares a containment-only run: silent artifact, pass.
+  attempt_then "audio-declared-silence" "$tmp/err-ns" "${senv[@]}" \
+    STUB_AUDIO_SILENT=1 bash "$0" run :201 "$tmp/o-ns" -- sleep 30 --no-sound
+  assert_lane_field "audio-declared-silence" "$tmp/o-ns" expect "silence"
+  attempt_then "audio-declared-silence" "$tmp/err-ns-stop" "${senv[@]}" \
+    bash "$0" stop "$tmp/o-ns"
+  rig_audio_verify "$tmp/o-ns" >/dev/null ||
+    die "selftest: leg audio-declared-silence FAILED: verifier rejected a --no-sound run"
+  echo "selftest: leg audio-declared-silence PASS (--no-sound run accepted)"
+
+  # 4. A client stream on the run sink is contained.
+  attempt_then "audio-route-run-sink" "$tmp/err-route-ok" "${senv[@]}" \
+    RIG_SINK_NAME=rig_null_route_ok STUB_SINKINPUT_NAME=sleep STUB_SINKINPUT_SINK=rig_null_route_ok \
+    bash "$0" run :202 "$tmp/o-route-ok" -- sleep 30
+  assert_lane_field "audio-route-run-sink" "$tmp/o-route-ok" route "sink"
+  attempt "$tmp/err-route-ok-stop" "${senv[@]}" bash "$0" stop "$tmp/o-route-ok"
+  echo "selftest: leg audio-route-run-sink PASS (client observed on the run sink)"
+
+  # 5. A client stream on the system default sink aborts the run.
+  attempt "$tmp/err-route-bad" "${senv[@]}" \
+    STUB_SINKINPUT_NAME=sleep STUB_SINKINPUT_SINK=alsa_output.default \
+    bash "$0" run :203 "$tmp/o-route-bad" -- sleep 30
+  assert_reject "audio-route-breach" 12 "CONTAINMENT BREACH" "$tmp/err-route-bad"
+  assert_lane_field "audio-route-breach" "$tmp/o-route-bad" route "default-sink-breach"
+  attempt "$tmp/err-route-bad-stop" "${senv[@]}" bash "$0" stop "$tmp/o-route-bad"
 }
 
 main() {
