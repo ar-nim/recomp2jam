@@ -46,7 +46,7 @@ use super::select_paint::{
     paint_select_result_tabs, paint_select_search_row, paint_select_status_row, paint_select_table,
 };
 use super::side::{
-    can_return_side, can_visit_side, create_room_action_at, lanking_action_at,
+    can_return_side, can_visit_side, create_room_action_at, default_room_title, lanking_action_at,
     music_shop_action_at, myroom_action_at, myroom_bag_pages, myroom_bag_rows, myroom_equip_slot,
     myroom_gift_captions, myroom_gift_page, myroom_gift_pages, myroom_gift_views,
     myroom_identity_captions, myroom_record_slot, myroom_wallet_captions, paint_side_scene,
@@ -334,6 +334,19 @@ fn staged_code_hit(placements: &[ScenePlacement], code: u32, x: i32, y: i32) -> 
     placements
         .iter()
         .any(|placed| placed.code == code && rect_hit(&placed.rect, x, y))
+}
+
+/// Default-title index for a create-room dialog opening now: the exe
+/// seeds the C runtime generator from the tick clock and keeps
+/// `rand() % 8` (files `0x436a2e`–`0x436a5d`), so every open lands on
+/// one of the eight titles. Wall-clock nanoseconds give the same
+/// spread without the generator (the exe's seed-to-index mapping is
+/// not reproduced, only its uniformity).
+fn opening_default_title_index() -> usize {
+    let elapsed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since_epoch| since_epoch.subsec_nanos());
+    usize::try_from(elapsed).unwrap_or(0)
 }
 
 /// Room chrome already showing its active frame: the default-active
@@ -1643,9 +1656,14 @@ impl ScreenGame {
     pub fn room_dialog(&self) -> Option<RoomDialog> {
         self.room_dialog
     }
-    /// Open the create-room dialog over Room with a cleared form.
+    /// Open the create-room dialog over Room with the exe's default
+    /// title prefilled and fully selected: the exe fills the open
+    /// dialog's title edit with one of eight Korean titles (pick site
+    /// file `0x436a00`, table file `0x244b50`) and selects it, so the
+    /// first typed char replaces the whole default.
     pub fn open_create_room_dialog(&mut self) {
-        self.create_room_form = CreateRoomForm::new();
+        self.create_room_form =
+            CreateRoomForm::with_default_title(default_room_title(opening_default_title_index()));
         self.create_focus_password = false;
         self.room_dialog = Some(RoomDialog::CreateRoom);
     }
@@ -13959,7 +13977,24 @@ mod game_tests {
     }
 
     #[test]
-    fn create_room_commit_needs_title_and_stages_2004() {
+    fn create_room_commit_stages_the_typed_title() {
+        // Ticket #271, live chain: winit key → `push_room_dialog_char` →
+        // `CreateRoomForm::push_title_char` (the prefilled default is
+        // selected, so one char replaces it) → `click_room_dialog`
+        // (Commit) → `CreateRoomForm::commit` → `take_create_room`.
+        let mut game = game_with_open_create_dialog();
+        game.push_room_dialog_char('x');
+        game.click_room_dialog(20, 20);
+        assert_eq!(game.room_dialog(), None);
+        let body = game.take_create_room().expect("committed 2004");
+        assert_eq!(body.title, "x");
+        assert!(!body.has_password);
+    }
+
+    /// Room lobby with the dialog CREATE control staged on the test
+    /// rect and the create-room dialog open: `(20, 20)` sits inside the
+    /// staged control.
+    fn game_with_open_create_dialog() -> ScreenGame {
         let mut game = ScreenGame::new();
         game.lane_key(3, true);
         game.click_planet(136, 88);
@@ -13967,29 +14002,78 @@ mod game_tests {
         assert_eq!(game.screen(), Screen::Room);
         game.open_create_room_dialog();
         assert_eq!(game.room_dialog(), Some(RoomDialog::CreateRoom));
-        // Empty title commits nothing; typed title proves the commit.
-        let placements = vec![ScenePlacement {
-            role: PlacementRole::Single,
-            id: "IDC_BUTTON_DCROOM_CREATE".to_owned(),
-            code: crate::screens::side::CREATE_ROOM_CREATE_CODE,
-            sprite: None,
-            rect: Rect {
-                x: 10,
-                y: 10,
-                w: 50,
-                h: 30,
-            },
-        }];
-        let figures = HashMap::new();
-        game.load_create_room_scene(placements, figures);
-        game.click_room_dialog(20, 20);
+        game.load_create_room_scene(
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_BUTTON_DCROOM_CREATE".to_owned(),
+                code: crate::screens::side::CREATE_ROOM_CREATE_CODE,
+                sprite: None,
+                rect: Rect {
+                    x: 10,
+                    y: 10,
+                    w: 50,
+                    h: 30,
+                },
+            }],
+            HashMap::new(),
+        );
+        game
+    }
+
+    #[test]
+    fn room_create_click_opens_the_dialog_with_an_exe_default_title() {
+        // Ticket #271, live chain: `main.rs::run_play` → winit click →
+        // `ScreenGame::ingest_snapshot` → `click_room_control`
+        // (`RoomControlAction::Create`) → `open_create_room_dialog` →
+        // `CreateRoomForm::with_default_title` → `default_room_title`.
+        let mut game = room_lobby_with_control(0x1320_0007, "IDC_BUTTON_SROOM_CREATE");
+        game.load_create_room_scene(Vec::new(), HashMap::new());
+        game.ingest_snapshot(&InputSnapshot::click_at(
+            ROOM_CONTROL_TEST_CLICK.0,
+            ROOM_CONTROL_TEST_CLICK.1,
+        ));
         assert_eq!(game.room_dialog(), Some(RoomDialog::CreateRoom));
-        game.push_room_dialog_char('x');
+        let form = game.create_room_form();
+        assert!(
+            crate::screens::side::DEFAULT_ROOM_TITLES.contains(&form.title.as_str()),
+            "the dialog opens on one of the eight exe titles, got {:?}",
+            form.title
+        );
+        assert!(
+            form.title_selected,
+            "the exe leaves the default title fully selected"
+        );
+    }
+
+    #[test]
+    fn create_room_commit_takes_the_untouched_default_title() {
+        // Live chain: `main.rs::run_play` → winit click → `click_room_control`
+        // (`RoomControlAction::Create`) → `open_create_room_dialog` →
+        // `click_room_dialog` (Commit) → `CreateRoomForm::commit`.
+        let mut game = game_with_open_create_dialog();
+        let prefilled = game.create_room_form().title.clone();
+        assert!(!prefilled.is_empty());
         game.click_room_dialog(20, 20);
         assert_eq!(game.room_dialog(), None);
         let body = game.take_create_room().expect("committed 2004");
-        assert_eq!(body.title, "x");
-        assert!(!body.has_password);
+        assert_eq!(
+            body.title, prefilled,
+            "the commit sends the prefilled default"
+        );
+    }
+
+    #[test]
+    fn create_room_cleared_default_title_commits_nothing() {
+        // Live chain: `main.rs::run_play` → winit Backspace →
+        // `delete_room_dialog_char` → `CreateRoomForm::pop_title` (the
+        // selected default clears whole) → `click_room_dialog` (Commit)
+        // → `CreateRoomForm::commit` returns `None`.
+        let mut game = game_with_open_create_dialog();
+        game.delete_room_dialog_char();
+        assert_eq!(game.create_room_form().title, "");
+        game.click_room_dialog(20, 20);
+        assert_eq!(game.room_dialog(), Some(RoomDialog::CreateRoom));
+        assert!(game.take_create_room().is_none());
     }
 
     #[test]

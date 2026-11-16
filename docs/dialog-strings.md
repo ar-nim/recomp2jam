@@ -54,7 +54,67 @@ Read-only sweeps of the exe `.rdata` locate these blocks
 | Channel/planet script bridge (`My_channel`, `CTuser_id[%d]`) | file `0x24df70`–`0x24e024` | Extracted; web bridge — drawn |
 | Fonts (`Trebuchet MS`/`Arial`) | song-select flow `FUN_004e47a0`, file `0x8e47a0` | Extracted; setup call present — drawn |
 | Room fill (`"Lv.%d:%s"`) | `FUN_00491af0` | Extracted — drawn |
+| Create-room default titles (8 CP949 phrases) | file `0x244b50`–`0x244bec`, pointers `0x244c08`, pick site `0x436a00` | Extracted; prefilled on dialog open + drawn (`§3a`) |
 | Message-box / error-caption table | — | Missing: no caption, `MessageBox`, or `IDS_` sweep has been pinned |
+
+### 3a. Create-room default titles — pinned, prefilled
+
+A CREATE ROOM dialog never opens with an empty title. Version pin:
+`OTwo.exe` 5,029,888 B, SHA-256 `83a04541…72c823b`; method = Python
+3.14.10 byte scans, GNU objdump 2.47 slices, radare2 6.2.2 call
+xrefs, all over the read-only copy (file offset = VA − `0x400000`).
+
+Eight null-terminated CP949 titles sit back to back at file
+`0x244b50`–`0x244c03` (18–21 bytes each); the `u32` pointer table
+behind them is file `0x244c08`–`0x244c27` (VA `0x644c08`), and the
+whole image holds exactly one reference to it, file `0x36a60`:
+
+| file offset | CP949 bytes | text |
+|---|---|---|
+| `0x244b50` | 20 | `니들이 리듬을 알아?!` |
+| `0x244b68` | 21 | `자나깨나 두들겨보세!!` |
+| `0x244b80` | 18 | `신나게 두들겨보자!` |
+| `0x244b94` | 19 | `키보드는 부수지마!!` |
+| `0x244ba8` | 20 | `따라올테면 따라와봐!` |
+| `0x244bc0` | 19 | `짜릿한 콤보의 쾌감!` |
+| `0x244bd4` | 21 | `신나는 음악을 즐겨봐!` |
+| `0x244bec` | 20 | `손가락이 부서지도록!` |
+
+The pick helper at VA `0x436a00` (159 B) seeds the C runtime
+generator with the tick clock modulo 1000, takes one value mod 8
+(MSVC signed-`%` idiom at VA `0x436a4b`), copies the entry into a
+50-byte stack buffer, writes it into the dialog's title edit
+(this+`0x240`), then resets that edit's selection to `[0, len]` —
+the default opens fully selected, so the first typed char replaces
+it. `CDCreateRoom` calls the helper on dialog open/show (VA
+`0x43554f`, `0x43581f`) and on the re-show path (VA `0x435c80`),
+each guarded on the edit existing.
+
+No player name is involved: the helper reads no session, nickname,
+or config global, and none of the eight entries carries a `%s`.
+The dialog's accepted title lives at this+`0x185` and the OK
+handler (VA `0x436ac0`) refuses an empty or all-space title with
+`방 제목을 입력하세요.` (file `0x244f04`) and a forbidden word with
+file `0x244f1c`. The owner report's "incorporating the player
+name" is contradicted by the pin; the exe is the oracle.
+
+Corroboration, not evidence: `docs/wine-boot.md` §Attempt 12 (live
+Wine capture, 2026-11-08) saw two of these eight strings in the
+title field; its transcription `신나는 음악을 즐겨라!` is wrong —
+the pinned bytes at `0x244bd4` read `신나는 음악을 즐겨봐!`. The
+caption at file `0x249be4` caps a title at `영문 21자, 한글 10자`
+= 21 CP949 bytes, and every entry fits. Server side adds nothing:
+Memoryer `CreateRoomRequest.Title` (order 0) goes straight into
+`RoomService.CreateRoom` (`~/mozart-src`, behavior reference).
+
+Drawn: `create_room_sprite_names`-staged title edits paint the
+form text at the parsed rect, so the prefill is visible
+(`crates/o2jam-shell/src/screens/side.rs` `DEFAULT_ROOM_TITLES`,
+`default_room_title`; prefill at `open_create_room_dialog`).
+Known divergence, not a pin: our wire is UTF-8
+(`docs/claims.md` D4), so a 20-char Korean default reaches a
+Memoryer server as 7 Hangul chars under the 21-byte title cap,
+where the exe's CP949 title fits whole.
 
 ## 4. Word-list text — decoded, not drawn
 
