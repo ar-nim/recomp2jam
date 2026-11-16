@@ -41,10 +41,7 @@ use super::paint::{
     WaitingCaptions, WaitingChatMessage, CHANNEL_VISIBLE_ROWS, RESULT_BACK_ID, RESULT_BACK_RECT,
     RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
-use super::select_paint::{
-    paint_select_chosung_rows, paint_select_filter_columns, paint_select_ok,
-    paint_select_result_tabs, paint_select_search_row, paint_select_status_row, paint_select_table,
-};
+use super::select_paint::{paint_select_text, SelectTextSlots};
 use super::side::{
     can_return_side, can_visit_side, create_room_action_at, default_room_title, lanking_action_at,
     music_shop_action_at, myroom_action_at, myroom_bag_pages, myroom_bag_rows, myroom_equip_slot,
@@ -5560,32 +5557,25 @@ impl ScreenGame {
         // everyone (non-masters pick speed from it).
         if self.is_room_master() {
             self.paint_select_music_art(frame);
-            self.paint_select_music_structure(frame);
+            self.paint_select_music_text(frame);
             self.paint_selected_song_panel(frame);
         }
     }
 
-    /// Paint the song-select dialog structure over the staged art:
-    /// filter columns, result tabs, the catalog-driven search table,
-    /// status + pager, search row, chosung grid, and the OK pill.
-    /// Rows come from the staged catalog alone; no art is invented for
-    /// the check or 다운/듣기/정보 icon cells (documented gaps).
-    fn paint_select_music_structure(&self, frame: &mut Frame<'_>) {
-        if self.select_music_art.is_none() {
+    /// Paint the song-select dialog's live text over the staged art:
+    /// the result-tab counts, the status line, the pager, and one
+    /// title/artist/level line per staged row band, all at the slots
+    /// the `.bnd`/`SET` templates place. The chrome, the filter
+    /// buttons, the table header, the INDEX letters and the OK pill are
+    /// bound OPI sprites with their labels baked in, so this pass inks
+    /// glyphs only — a plate here would cover the art (ticket #272).
+    fn paint_select_music_text(&self, frame: &mut Frame<'_>) {
+        let Some(art) = self.select_music_art.as_ref() else {
             return;
-        }
+        };
+        let slots = SelectTextSlots::from_placements(&art.placements);
         let rows = select_music_rows(&self.catalog_songs);
-        paint_select_filter_columns(frame);
-        paint_select_result_tabs(frame, rows.len());
-        paint_select_table(frame, &rows, self.selected_music);
-        paint_select_status_row(frame, rows.len());
-        paint_select_search_row(frame);
-        let placements: &[ScenePlacement] = self
-            .select_music_art
-            .as_ref()
-            .map_or(&[], |art| &art.placements);
-        paint_select_chosung_rows(frame, placements);
-        paint_select_ok(frame);
+        paint_select_text(frame, &slots, &rows, self.selected_music);
     }
 
     /// Layer staged song-select dialog figures over the waiting seats.
@@ -6246,7 +6236,7 @@ mod game_tests {
     use super::super::paint::{
         background_of, channel_chat_row_text, rank_notice_board_text, seat_origin, RESULT_MUSIC_BOX,
     };
-    use super::super::select_paint::{select_active_ink, select_dim_ink, select_scrim};
+    use super::super::select_paint::{select_active_ink, select_dim_ink};
     use super::super::side::{
         LANKING_LPAGE_NEXT_CODE, LANKING_LPAGE_PREV_CODE, LANKING_LVIEW_TEXT_CODES,
         LANKING_LVIEW_TOGGLE_FIRST_CODE, LANKING_MUSICNAME_CODE, LANKING_RPAGE_NEXT_CODE,
@@ -6282,59 +6272,6 @@ mod game_tests {
     use std::cell::RefCell;
     use std::path::PathBuf;
     use std::rc::Rc;
-
-    #[test]
-    fn select_chosung_rows_ride_the_staged_index_inventory() {
-        // FILE wiring (docs/geometry-audit.md): with the dialog's
-        // INDEX buttons staged, the letters land by the staged
-        // inventory pitch (20 here, deliberately not the constant
-        // 15); without them the audited constants drive the grid.
-        let mut staged = vec![0u32; 800 * 600];
-        let pitch20 = (0..42)
-            .map(|index| ScenePlacement {
-                role: PlacementRole::Single,
-                id: String::new(),
-                code: 0x8C00_0000 | (88 + index as u32),
-                sprite: None,
-                rect: Rect {
-                    x: 345 + 20 * (index % 27),
-                    y: if index < 27 { 440 } else { 455 },
-                    w: 14,
-                    h: 14,
-                },
-            })
-            .collect::<Vec<_>>();
-        paint_select_chosung_rows(
-            &mut Frame {
-                buf: &mut staged,
-                w: 800,
-                h: 600,
-            },
-            &pitch20,
-        );
-        // Cell 14 is 'A': at pitch 20 it inks at x 632, and the
-        // pitch-15 spot (x 562) stays bare.
-        let band = |buf: &[u32], x: i32| {
-            (446..458)
-                .flat_map(|y| (x..x + 6).map(move |px| buf[y * 800 + px as usize]))
-                .any(|pixel| pixel != 0)
-        };
-        assert!(band(&staged, 632), "'A' must ride the staged pitch 20");
-        assert!(!band(&staged, 562), "pitch-15 spot must stay bare");
-        let mut fallback = vec![0u32; 800 * 600];
-        paint_select_chosung_rows(
-            &mut Frame {
-                buf: &mut fallback,
-                w: 800,
-                h: 600,
-            },
-            &[],
-        );
-        assert!(
-            band(&fallback, 562),
-            "without placements the constant pitch 15 drives 'A'"
-        );
-    }
 
     #[test]
     fn loaded_chart_scales_notes_down_the_highway() {
@@ -9676,25 +9613,44 @@ mod game_tests {
         assert_eq!(buf[56 * 80 + 10], background_of(Screen::Waiting));
     }
 
-    #[test]
-    fn select_music_structure_layers_over_waiting_seats() {
-        // The dialog is modal: with its art staged, the structure's
-        // table band covers the seat grid while the art and the
-        // chosen-song panel stay visible on top.
-        let (placements, figures) = corner_scene_art("AlbumList.ojs");
+    /// Waiting game with the dialog sheet staged: `with_text` also
+    /// carries the live-text slots, so the two frames differ by the
+    /// text pass alone.
+    fn select_sheet_frame(with_text: bool) -> (ScreenGame, Vec<u32>) {
+        let (mut placements, figures) = corner_scene_art("AlbumList.ojs");
+        placements.extend(super::super::paint::unbound_scene_placements(&[
+            "AlbumList.ojs".to_owned(),
+        ]));
+        if with_text {
+            placements.extend(select_sheet_placements());
+        }
         let mut game = ScreenGame::new();
         game.set_joined_room(waiting_room());
         walk_to_waiting(&mut game);
         game.load_select_music_scene(placements, figures);
         stage_waiting_song(&mut game);
-        let buf = paint_waiting_frame(&mut game, 80, 64);
-        assert_eq!(buf[0], pack_xrgb(255, 0, 0));
-        assert!(white_near(&buf, 80, 64, (10, 48)));
-        let (x, y) = seat_origin(1, 80, 64);
+        let buf = paint_waiting_frame(&mut game, 800, 600);
+        (game, buf)
+    }
+
+    #[test]
+    fn select_text_layer_paints_nothing_over_the_seats() {
+        // The dialog is modal art over the waiting seats, and the text
+        // pass inks captions at its staged slots only: the seat pixel
+        // survives unchanged from the art-only frame (the retired #272
+        // plates filled the row band over the seats).
+        let (_art_only_game, art_only) = select_sheet_frame(false);
+        let (_with_text_game, with_text) = select_sheet_frame(true);
+        assert_eq!(art_only[0], pack_xrgb(255, 0, 0));
+        let (x, y) = seat_origin(1, 800, 600);
+        let at = (y + 1) as usize * 800 + (x - 6 + 1) as usize;
         assert_eq!(
-            buf[(y + 1) as usize * 80 + (x - 6 + 1) as usize],
-            select_scrim(),
-            "the modal dialog structure covers the seats"
+            art_only[at], with_text[at],
+            "the text pass must leave the seat pixels alone"
+        );
+        assert_ne!(
+            art_only, with_text,
+            "the text pass must ink its staged slots"
         );
     }
 
@@ -9812,9 +9768,16 @@ mod game_tests {
     }
 
     /// Waiting game with dialog art and the one-song catalog staged:
-    /// the structure-paint scenario.
+    /// the text-layer scenario. The synthetic sheet carries the block's
+    /// TEXT control ids and two spriteless row bands at their `.bnd`
+    /// rects, so the layer resolves the same slots the genuine dialog
+    /// names (`SelectTextSlots`).
     fn select_structure_game() -> ScreenGame {
-        let (placements, figures) = corner_scene_art("AlbumList.ojs");
+        let mut placements = select_sheet_placements();
+        let figures = HashMap::from([("AlbumList.ojs".to_owned(), red_scene_figure())]);
+        placements.extend(super::super::paint::unbound_scene_placements(&[
+            "AlbumList.ojs".to_owned(),
+        ]));
         let mut game = ScreenGame::new();
         game.set_joined_room(waiting_room());
         walk_to_waiting(&mut game);
@@ -9823,8 +9786,113 @@ mod game_tests {
         game
     }
 
+    /// The dialog's live-text slots as `Dialog_SelectMusic.bnd` places
+    /// them: four TEXT controls, the `SET 0x0B` row text templates
+    /// (parent-local), and two spriteless `EXTEND` row bands.
+    fn select_sheet_placements() -> Vec<ScenePlacement> {
+        let placed = |id: &str, code: u32, rect: Rect| ScenePlacement {
+            role: PlacementRole::Single,
+            id: id.to_owned(),
+            code,
+            sprite: None,
+            rect,
+        };
+        vec![
+            placed(
+                "IDC_TEXT_DSMUSIC_TABRESULT",
+                0x2740_0033,
+                Rect {
+                    x: 356,
+                    y: 94,
+                    w: 126,
+                    h: 15,
+                },
+            ),
+            placed(
+                "IDC_TEXT_DSMUSIC_TABPLAYLIST",
+                0x2740_0034,
+                Rect {
+                    x: 504,
+                    y: 94,
+                    w: 118,
+                    h: 15,
+                },
+            ),
+            placed(
+                "IDC_TEXT_DSMUSIC_SERACHRESHLT",
+                0x2740_0042,
+                Rect {
+                    x: 338,
+                    y: 390,
+                    w: 315,
+                    h: 14,
+                },
+            ),
+            placed(
+                "IDC_TEXT_DSMUSIC_PAGENUM",
+                0x2740_0048,
+                Rect {
+                    x: 669,
+                    y: 390,
+                    w: 54,
+                    h: 13,
+                },
+            ),
+            placed(
+                "IDC_TEXT_DSMUSIC_TITLE",
+                0x2740_0012,
+                Rect {
+                    x: 79,
+                    y: 6,
+                    w: 149,
+                    h: 12,
+                },
+            ),
+            placed(
+                "IDC_TEXT_DSMUSIC_ARTIST",
+                0x2740_0013,
+                Rect {
+                    x: 233,
+                    y: 6,
+                    w: 74,
+                    h: 12,
+                },
+            ),
+            placed(
+                "IDC_TEXT_DSMUSIC_TXT_DIFF",
+                0x2740_0014,
+                Rect {
+                    x: 309,
+                    y: 6,
+                    w: 15,
+                    h: 12,
+                },
+            ),
+            placed(
+                "IDC_BUTTON_DSMUSIC_EXTEND1",
+                0x2701_7004,
+                Rect {
+                    x: 331,
+                    y: 150,
+                    w: 431,
+                    h: 23,
+                },
+            ),
+            placed(
+                "IDC_BUTTON_DSMUSIC_EXTEND2",
+                0x2701_7005,
+                Rect {
+                    x: 331,
+                    y: 173,
+                    w: 431,
+                    h: 23,
+                },
+            ),
+        ]
+    }
+
     #[test]
-    fn select_structure_paints_regions_over_dialog_art() {
+    fn select_text_layer_inks_the_staged_slots_over_dialog_art() {
         let mut game = select_structure_game();
         let mut buf = vec![0u32; 800 * 600];
         game.paint_at(
@@ -9835,59 +9903,47 @@ mod game_tests {
             },
             0,
         );
-        // Staged art stays visible behind the structure.
+        // Staged art stays visible.
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
-        // Filter column one: header scrim plus EASY button at its
-        // reference pitch (129 + 33).
-        assert_eq!(buf[95 * 800 + 30], select_scrim());
-        assert_eq!(buf[162 * 800 + 30], select_scrim());
-        // Row one: green E letter at the icon column (text inks
-        // inside the band), white title ink at the TITLE column,
-        // unknown dashes at LVL and GRADE.
+        // Search tab count (amber) and the picked tab at its slot.
         assert!(ink_near(
             &buf,
             800,
             600,
-            (392, 150),
-            (10, 16),
-            pack_xrgb(0x30, 0xE0, 0x30)
-        ));
-        assert!(white_near(&buf, 800, 600, (417, 150)));
-        assert!(ink_near(
-            &buf,
-            800,
-            600,
-            (628, 152),
-            (12, 16),
-            select_dim_ink()
-        ));
-        assert!(ink_near(
-            &buf,
-            800,
-            600,
-            (716, 152),
-            (12, 16),
-            select_dim_ink()
-        ));
-        // Search tab (amber caption), status banner, pager, and the
-        // centered OK caption.
-        assert!(ink_near(
-            &buf,
-            800,
-            600,
-            (355, 95),
-            (40, 16),
+            (356, 94),
+            (126, 15),
             select_active_ink()
         ));
-        assert!(white_near(&buf, 800, 600, (346, 398)));
-        assert!(white_near(&buf, 800, 600, (744, 398)));
-        assert!(white_near(&buf, 800, 600, (380, 523)));
-        // Chosung letter A (row 1, cell 14) at its grid slot.
-        assert!(white_near(&buf, 800, 600, (563, 444)));
+        assert!(ink_near(
+            &buf,
+            800,
+            600,
+            (504, 94),
+            (118, 15),
+            select_dim_ink()
+        ));
+        // Status line and pager.
+        assert!(white_near(&buf, 800, 600, (338, 390)));
+        assert!(white_near(&buf, 800, 600, (669, 390)));
+        // Row one: title at the cloned `SET` template slot (331+79,
+        // 150+6), artist at 331+233, and the unknown level dash.
+        assert!(white_near(&buf, 800, 600, (410, 156)));
+        assert!(white_near(&buf, 800, 600, (564, 156)));
+        assert!(ink_near(
+            &buf,
+            800,
+            600,
+            (640, 156),
+            (15, 12),
+            select_dim_ink()
+        ));
+        // No plate: not one pixel carries the retired scrim tone (the
+        // filter columns, the table band and the OK pill stay art only).
+        assert!(!buf.contains(&pack_xrgb(0x10, 0x10, 0x18)));
     }
 
     #[test]
-    fn select_structure_paints_without_catalog_rows() {
+    fn select_text_layer_counts_rows_without_a_catalog() {
         let (placements, figures) = corner_scene_art("AlbumList.ojs");
         let mut game = ScreenGame::new();
         game.set_joined_room(waiting_room());
@@ -9902,17 +9958,9 @@ mod game_tests {
             },
             0,
         );
-        // The zero-row search tab still counts (amber ink); no row
-        // band paints, so the row area keeps the waiting backdrop.
+        // Without the sheet's TEXT slots nothing inks, so the row area
+        // keeps the waiting backdrop (no invented geometry).
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
-        assert!(ink_near(
-            &buf,
-            800,
-            600,
-            (355, 95),
-            (40, 16),
-            select_active_ink()
-        ));
         assert_eq!(
             buf[160 * 800 + 400],
             super::super::paint::background_of(Screen::Waiting)
@@ -13871,14 +13919,14 @@ mod game_tests {
     }
 
     #[test]
-    fn picked_select_row_highlights_its_letter() {
-        // The committed row reads back on the table: only its
-        // difficulty letter inks the active orange. Row 0 is the
-        // Easy slot (green unpicked), so the probe stays red without
-        // the highlight.
+    fn picked_select_row_highlights_its_title() {
+        // The committed row reads back on the table: only its title
+        // inks the active orange, the row below keeps the white ink.
+        // The dialog's live-text slots are staged (the letters ride the
+        // row art, ticket #272), so a click inside band 0 highlights it.
         let mut game = ScreenGame::new();
         game.set_joined_room(waiting_room());
-        game.load_select_music_scene(Vec::new(), HashMap::new());
+        game.load_select_music_scene(select_sheet_placements(), HashMap::new());
         stage_waiting_song(&mut game);
         walk_to_waiting(&mut game);
         game.ingest_snapshot(&InputSnapshot::click_at(400, 150 + 11));
@@ -13887,16 +13935,16 @@ mod game_tests {
             &buf,
             800,
             600,
-            (392, 150),
-            (12, 12),
+            (410, 156),
+            (149, 12),
             pack_xrgb(0xFF, 0xA0, 0x20)
         ));
         assert!(!ink_near(
             &buf,
             800,
             600,
-            (392, 196),
-            (12, 12),
+            (410, 179),
+            (149, 12),
             pack_xrgb(0xFF, 0xA0, 0x20)
         ));
     }

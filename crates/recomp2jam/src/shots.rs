@@ -3942,48 +3942,133 @@ mod tests {
         );
     }
 
+    /// Button bodies the song-select dialog carries: the three labelled
+    /// filter columns, the OK pill, the search button, and the close
+    /// button. Each was under a retired #272 plate.
+    const SELECT_DIALOG_BUTTON_SPRITES: [&str; 6] = [
+        "SelectMusic_Btn_Step1_all.ojs",
+        "SelectMusic_Btn_Step2_Gold.ojs",
+        "SelectMusic_Btn_Step3_Rock.ojs",
+        "SelectMusic_Search_Title.ojs",
+        "SelectMusic_Btn_Serach.ojs",
+        "SelectMusic_OK.ojs",
+    ];
+
+    /// The song-select shot's waiting frame: the scripted walk as the
+    /// room master, then the genuine dialog art plus the live text
+    /// layer (see [`stage_select_music_scene`]).
+    fn painted_select_music_frame(archive: &[u8]) -> (StagedArt, Vec<u32>) {
+        let art = stage_dialog(archive, Dialog::SelectMusic, StageContext::default())
+            .art
+            .expect("select-music dialog stages");
+        let mut game = seeded_game();
+        walk_to_waiting(&mut game);
+        stage_select_music_scene(&mut game);
+        assert_eq!(game.screen(), Screen::Waiting);
+        (art, paint_native_frame(&mut game, 0))
+    }
+
     #[test]
-    fn musicselect_dialog_structure_paints_search_tab_over_waiting() {
-        // With genuine dialog art staged, the structure's amber search
-        // tab inks over the waiting seats (pinned anchor from the
-        // shell's own structure test); without archives the dialog
-        // stays hidden and only the song panel stages.
+    fn song_dialog_buttons_paint_their_staged_bodies() {
+        // Live caller chain: `main` -> `capture_all` -> `seeded_game` ->
+        // `walk_to_waiting` (boot -> Planet -> Channel -> Room ->
+        // Waiting as master) -> `stage_select_music_scene` ->
+        // `stage_select_music_art`/`stage_dialog` (the same staging the
+        // window runs through `live_art::stage_select_dialog_art`) ->
+        // `ScreenGame::paint_at` -> `paint_waiting` ->
+        // `paint_select_music_art` (bodies) -> `paint_select_music_text`
+        // (glyphs only). Every named button body must reach the frame
+        // unchanged at its staged origin: an opaque plate over the
+        // button (the #272 black rectangles) replaces its pixels.
         let Some(archive) = read_install_archives(&install_root()).interface else {
             println!("skip: missing {INTERFACE_ARCHIVE}");
             return;
         };
-        if stage_dialog(&archive, Dialog::SelectMusic, StageContext::default())
-            .art
-            .is_none()
-        {
-            println!("skip: select-music dialog missing");
-            return;
+        let (art, actual) = painted_select_music_frame(&archive);
+        for sprite in SELECT_DIALOG_BUTTON_SPRITES {
+            let placed = art
+                .placements
+                .iter()
+                .find(|placed| {
+                    placed.role == PlacementRole::Single && placed.sprite.as_deref() == Some(sprite)
+                })
+                .unwrap_or_else(|| panic!("{sprite} stages"));
+            assert!(
+                art.figures.contains_key(sprite),
+                "{sprite} body decodes at stage time"
+            );
+            let mut expected = native_probe();
+            paint_probe(&mut expected, |frame| {
+                paint_scene_figures(frame, std::slice::from_ref(placed), &art.figures);
+            });
+            assert!(
+                expected.iter().any(|pixel| *pixel != PROBE_BACKDROP),
+                "{sprite} probe inks nothing"
+            );
+            assert_pixels_came_from_font(&actual, &expected, sprite);
         }
-        let mut game = seeded_game();
-        game.lane_key(3, true);
-        game.click_planet(136, 88);
-        game.menu_key(MenuKey::Confirm, true);
-        game.menu_key(MenuKey::Confirm, true);
-        stage_select_music_scene(&mut game);
-        let mut buf = vec![0u32; 800 * 600];
-        game.paint_at(
-            &mut Frame {
-                buf: &mut buf,
-                w: 800,
-                h: 600,
-            },
-            0,
-        );
-        assert_eq!(game.screen(), Screen::Waiting);
-        let amber = o2jam_render::pack_xrgb(0xFF, 0xA0, 0x20);
-        if buf[95 * 800 + 355] != amber {
+    }
+
+    #[test]
+    fn song_dialog_mode_and_help_families_stay_hidden_at_stage_time() {
+        // Live chain: `live_art::stage_select_dialog_art` ->
+        // `stage_dialog` -> `Dialog::hidden_sprites`. The sheet still
+        // names every gated body (the block proof below), so a dropped
+        // gate re-stages the random panel over the level column and the
+        // guide sheets over the table — the pinned reference
+        // `reference-musicselect-4x3.png` shows neither.
+        let Some(archive) = read_install_archives(&install_root()).interface else {
+            println!("skip: missing {INTERFACE_ARCHIVE}");
+            return;
+        };
+        let entries = o2jam_file::parse_opi(&archive).expect("opi parses");
+        let entry = o2jam_file::find_opi_entry(&entries, "ControlList_Interface.txt")
+            .expect("control list exists");
+        let body = o2jam_file::opi_entry_body(&archive, entry).expect("control list reads");
+        let text = o2jam_file::decode_control_text(body).expect("control list decodes");
+        let list = o2jam_file::parse_control_list(&text).expect("control list parses");
+        let block = scene_block(&list, "DAILOG_SELECTMUSIC").expect("block exists");
+        let named = scene_sprite_names(block);
+        let art = stage_dialog(&archive, Dialog::SelectMusic, StageContext::default())
+            .art
+            .expect("select-music dialog stages");
+        for hidden in o2jam_shell::staging::SELECT_MUSIC_HIDDEN_AT_OPEN {
+            assert!(
+                named.iter().any(|name| name == hidden),
+                "{hidden} must stay named by the block"
+            );
+            assert!(
+                !art.figures.contains_key(*hidden),
+                "{hidden} must stage hidden"
+            );
+        }
+    }
+
+    #[test]
+    fn musicselect_dialog_text_layer_inks_the_staged_tab_slot() {
+        // With genuine dialog art staged, the live search-tab count inks
+        // at its `IDC_TEXT_DSMUSIC_TABRESULT` slot (bnd rect 48:
+        // (356,94)) over the waiting seats; the retired structure
+        // plates filled the surrounding band with the scrim tone.
+        let Some(archive) = read_install_archives(&install_root()).interface else {
+            println!("skip: missing {INTERFACE_ARCHIVE}");
+            return;
+        };
+        let (art, frame) = painted_select_music_frame(&archive);
+        if !art.figures.values().any(|figure| !figure.is_empty()) {
             println!("skip: dialog art staged no figures");
             return;
         }
-        assert_eq!(
-            buf[95 * 800 + 355],
-            amber,
-            "search tab must ink over the waiting seats"
+        let amber = o2jam_render::pack_xrgb(0xFF, 0xA0, 0x20);
+        let inked = (94..109)
+            .flat_map(|y| (356..482).map(move |x| (x, y)))
+            .filter(|(x, y)| frame[*y as usize * 800 + *x as usize] == amber)
+            .count();
+        assert!(inked > 0, "search-tab count must ink its staged slot");
+        assert_ne!(
+            frame[108 * 800 + 360],
+            o2jam_render::pack_xrgb(0x10, 0x10, 0x18),
+            "no scrim plate under the tab caption"
         );
     }
 

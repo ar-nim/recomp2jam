@@ -25,11 +25,13 @@ Evidence: screen path `waiting → waiting → loading`, state hashes
 `waiting_hand_session_picks_song_then_starts` (plus
 `click_staged_select_row_commits_song_and_queues_4004`,
 `select_row_click_without_master_or_art_commits_nothing`,
-`picked_select_row_highlights_its_letter`).
+`picked_select_row_highlights_its_title`).
 
 ## Deltas found (new rows, never silent fixes)
 
 1. **Picked-row highlight renders the active-tab orange stand-in.**
+   The picked row's *title* takes the ink (ticket #272 moved it off the
+   difficulty letter, which is baked into the row's note icon now).
    The exe's picked-row rendering is unpinned — no capture pins it.
    Next step: SendInput row-click sweep on the live dialog per the
    `~/scratch/planet-verify/` recipe, capture the picked row, then
