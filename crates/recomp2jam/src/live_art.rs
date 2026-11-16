@@ -450,6 +450,126 @@ mod live_art_tests {
     }
 
     #[test]
+    fn waiting_song_rect_is_bare_for_host_and_covered_for_peer() {
+        // Live-path guard (ticket #278): the Waiting song rect carries
+        // role-swapped bodies, and only a peer's arm leaves the `BPM`
+        // cover on top of it.
+        //
+        // Live caller chain:
+        //   main.rs::run_play -> setup_online -> session::OnlineSession::stage_live_art
+        //   -> crate::live_art::stage_live_scenes -> stage_interface_scenes
+        //   -> stage_state(State::Waiting) -> ScreenGame::paint_at
+        //   -> paint_waiting -> paint_waiting_scene
+        //   -> waiting_control_armed_for_role (the Waiting role filter).
+        //
+        // Staging keeps the shipped bindings whatever the role: the
+        // `ControlList_Interface.txt` `STATE_WAITING` block names
+        // `IDC_BUTTON_SWAIT_MUSELECT 0x16200003 "Wait_MusicSelect.ojs"`
+        // (code ordinal 2 → `.bnd` rect 2 `(540,493)-(594,542)`) and
+        // `IDC_IMAGE_SWAIT_COVERMUSIC 0x1650001D "Wait_Cover_Music.ojs"`
+        // (ordinal 28 → rect 28, authored over the button). The role
+        // only decides which of them paints.
+        //
+        // Archives absent -> skip cleanly (CI has no game data).
+        if skip_without_archives() {
+            return;
+        }
+        let mut host = live_game();
+        stage_live_scenes(&mut host);
+        walk_to(&mut host, Screen::Waiting);
+        assert_eq!(host.screen(), Screen::Waiting);
+
+        use o2jam_shell::avatar::ScenePlacement;
+        let placements = host.scene_placements(Screen::Waiting);
+        let song_select = placements
+            .iter()
+            .find(|placed: &&ScenePlacement| placed.id == "IDC_BUTTON_SWAIT_MUSELECT")
+            .expect("MUSELECT placement missing from staged Waiting art");
+        assert_eq!(song_select.code, 0x16200003, "MUSELECT code mismatch");
+        assert_eq!(
+            song_select.sprite.as_deref(),
+            Some("Wait_MusicSelect.ojs"),
+            "MUSELECT body must stay the shipped one"
+        );
+
+        // One probe inside the song-select rect and the `BPM` cover,
+        // clear of the `BPM` text readout rect (552,504)-(582,520); a
+        // second inside the album-mode body (`0x1650001C`, rect 27
+        // `(533,441)-(601,551)`) and clear of both other bodies.
+        let probe = |pixels: &[u32], (x, y): (usize, usize)| {
+            pixels[y * usize::try_from(NATIVE_WIDTH).unwrap_or(1) + x]
+        };
+        let song_probe = (545, 500);
+        let album_probe = (536, 460);
+
+        let host_frame = painted_pixels(&mut host, 0);
+
+        // The peer paint: the same staged scene walked the same way,
+        // joined at seat 5 (the creator keeps seat 0, so any other id
+        // is a peer — `docs/relay.md` §10).
+        let mut peer = live_game();
+        stage_live_scenes(&mut peer);
+        walk_to(&mut peer, Screen::Waiting);
+        let mut peer_room = live_room();
+        peer_room.member_id = 5;
+        peer.set_joined_room(peer_room);
+        let peer_frame = painted_pixels(&mut peer, 0);
+
+        // The backdrop-only reference, computed in-process: the same
+        // staged Waiting scene with the song-rect bodies dropped, so the
+        // probe reads whatever the backdrop paints there.
+        let archive = read_install_archives(&install_root())
+            .interface
+            .expect("interface archive");
+        let staged = stage_state(&archive, State::Waiting, StageContext::default())
+            .art
+            .expect("waiting art");
+        let StagedArt {
+            placements,
+            figures,
+        } = staged;
+        let backdrop_only: Vec<ScenePlacement> = placements
+            .into_iter()
+            .filter(|placed| {
+                !matches!(
+                    placed.id.as_str(),
+                    "IDC_BUTTON_SWAIT_MUSELECT"
+                        | "IDC_IMAGE_SWAIT_COVERMUSIC"
+                        | "IDC_IMAGE_SWAIT_ALBUMMODE"
+                )
+            })
+            .collect();
+        host.load_scene(Screen::Waiting, backdrop_only, figures);
+        let backdrop = painted_pixels(&mut host, 0);
+
+        assert_eq!(
+            probe(&host_frame, song_probe),
+            probe(&backdrop, song_probe),
+            "host paints the BPM cover over the bare song rect"
+        );
+        assert_ne!(
+            probe(&peer_frame, song_probe),
+            probe(&backdrop, song_probe),
+            "peer keeps the BPM cover on the song rect"
+        );
+        assert_ne!(
+            probe(&host_frame, song_probe),
+            probe(&peer_frame, song_probe),
+            "the song rect must read differently per role"
+        );
+        assert_eq!(
+            probe(&host_frame, album_probe),
+            probe(&backdrop, album_probe),
+            "the album-mode body paints for no role"
+        );
+        assert_eq!(
+            probe(&peer_frame, album_probe),
+            probe(&backdrop, album_probe),
+            "the album-mode body paints for no role"
+        );
+    }
+
+    #[test]
     fn staging_never_moves_the_flow() {
         let mut game = live_game();
         walk_to(&mut game, Screen::Waiting);

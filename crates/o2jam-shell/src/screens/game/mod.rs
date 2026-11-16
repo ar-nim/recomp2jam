@@ -3429,6 +3429,16 @@ impl ScreenGame {
         self
     }
 
+    /// Staged placements for one screen, if any (read-only accessor
+    /// for live-path guards; empty when the screen holds no staged
+    /// art).
+    #[must_use]
+    pub fn scene_placements(&self, screen: Screen) -> &[ScenePlacement] {
+        self.scene_art[scene_index(screen)]
+            .as_ref()
+            .map_or(&[], |art| &art.placements)
+    }
+
     /// Staged art for one screen, if any.
     fn scene_art(&self, screen: Screen) -> Option<&SceneArt> {
         self.scene_art[scene_index(screen)].as_ref()
