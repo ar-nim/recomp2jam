@@ -97,7 +97,7 @@
 //! `SetRoomMusic` 4000, `SetRoomArena` 4002 (awaiting the 4003 echo
 //! like the headless song flow), and `GetMusicList` 4030, stages the
 //! pick through [`ScreenGame::set_selected_music`] (driving the
-//! dialog rows and the waiting song panel), then fetches the chart
+//! dialog rows and the waiting `MUSICNAME` caption), then fetches the chart
 //! from the catalog container (`Music/o2ma###.ojn` through the
 //! loading gate) into the highway — all without blocking the frame
 //! loop on a silent server (ticket #172). The room still launches on
@@ -891,7 +891,7 @@ impl OnlineSession {
     }
 
     /// Stage a completed song select: the pick drives the dialog rows
-    /// and the waiting song panel through
+    /// and the waiting `MUSICNAME` caption through
     /// [`ScreenGame::set_selected_music`], then the chart fetch stages
     /// the highway from the catalog container — the old synchronous
     /// Confirm shape, deferred to the poll. Consumes the pending pick,

@@ -51,8 +51,8 @@ scaled-frame math, procedural no-archive fallbacks) and OPEN items
 | lib.rs:46 `DEFAULT_HEIGHT` | 600 | none | same citation | RUNTIME | Keep |
 | game.rs:72 `CLICK_W` | 800 | none | shell click canvas = native size | RUNTIME | Keep |
 | game.rs:74 `CLICK_H` | 600 | none | same | RUNTIME | Keep |
-| game.rs:1849 `SONG_PANEL_ROWS` | 2 | none | derived layout (title+detail) | RUNTIME | Keep |
-| game.rs:1851 `SONG_PANEL_ROW_H` | 8 | none | lobby text pitch | RUNTIME | Keep |
+| game.rs:1849 `SONG_PANEL_ROWS` | 2 | `State_Waiting.bnd` r22 `MUSICNAME` | removed (ticket #274): the chosen-song panel was shell-invented chrome; the pick now rides the BND-pinned `IDC_TEXT_SWAIT_MUSICNAME` rect (`0x16400017`, ord 22) | DONE | Gone |
+| game.rs:1851 `SONG_PANEL_ROW_H` | 8 | none | removed with the panel (ticket #274) | DONE | Gone |
 
 ## Channel select + channel-info dialog (paint.rs:115–760)
 

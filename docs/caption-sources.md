@@ -16,6 +16,7 @@ shell leaves unpainted (`MAPNAME`/`INSTNAME` per the
 
 | Caption | Control | Code |
 |---|---|---|
+| Song name | `IDC_TEXT_SWAIT_MUSICNAME` | `0x16400017` |
 | Map name | `IDC_TEXT_SWAIT_MAPNAME` | `0x16400018` |
 | Instrument name | `IDC_TEXT_SWAIT_INSTNAME` | `0x16400019` |
 | BPM | `IDC_TEXT_SWAIT_BPM` | `0x16400069` |
@@ -76,6 +77,24 @@ shell leaves unpainted (`MAPNAME`/`INSTNAME` per the
   `+0x46c` (file `0xbca0f`). `NOTICEBOARD` lookup file `0xbca2c`,
   stored to dialog `+0x4f4`, frame 2 through `0x42f5a0` (files
   `0xbca52` / `0xbca5d`).
+
+- **MUSICNAME - PINNED** (control plus rect, ticket #274). Local
+  static data: `Interface1.opi` sha256
+  `d66541198965d622ff0177b306d916885ae4d64ae07b2c2264fcbdd850d50584`,
+  `ControlList_Interface.txt` entry slot 1595 (data offset `0x46fd7d6`,
+  90472 B) names `IDC_TEXT_SWAIT_MUSICNAME 0X16400017` with no sprite -
+  a TEXT control whose glyphs the shell fills. Code ordinal
+  `(0x17 - 1) = 22` pairs it to `State_Waiting.bnd` (archive slot 1375,
+  offset 62684300, 1862 B) rect 22 `(573,15)-(773,38)` = top-right of
+  the 800x600 canvas. Shell source order: the master's staged pick
+  first (it takes effect at once; the room mirror moves only on the
+  server echo), else the joined room's song; the catalog supplies the
+  title, else the bare `M{id}`. The shell-invented readout panel that
+  used to ink title/difficulty/speed above the chat rows is gone - the
+  difficulty half is ticket #275. Whether the exe writes the pick into
+  its own room struct before the echo is OPEN (next step: a capture
+  with a provenance manifest under #240); rect and caption control are
+  static pins either way.
 
 ## OPEN
 

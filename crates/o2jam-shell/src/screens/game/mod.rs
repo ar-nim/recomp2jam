@@ -38,8 +38,8 @@ use super::paint::{
     playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
     scene_index, staged_rect_hit, waiting_confirm_control_id, BattleVerdict, ChannelChatMessage,
     ChannelScroll, LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt,
-    WaitingCaptions, WaitingChatMessage, CHANNEL_VISIBLE_ROWS, RESULT_BACK_ID, RESULT_BACK_RECT,
-    RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    WaitingCaptions, WaitingChatMessage, WaitingSong, CHANNEL_VISIBLE_ROWS, RESULT_BACK_ID,
+    RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::select_paint::{paint_select_text, SelectTextSlots};
 use super::side::{
@@ -48,22 +48,21 @@ use super::side::{
     myroom_gift_captions, myroom_gift_page, myroom_gift_pages, myroom_gift_views,
     myroom_identity_captions, myroom_record_slot, myroom_wallet_captions, paint_side_scene,
     password_action_at, payment_side_notice, planet_action_at, select_music_rows,
-    select_music_songs, select_row_hit, shop_action_at, side_scene_slot, waiting_song_detail_line,
-    waiting_song_title_line, waiting_team_for_code, wallet_row_caption, CreateRoomAction,
-    CreateRoomForm, LankingSong, LankingSort, MusicShopRow, MyRoomAction, MyRoomState,
-    PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog,
-    SelectMusicSong, ShopAction, ShopGiftNoop, ShopGood, SideScreen, WalletRow, WalletState,
-    GEM_LABEL, O2_CASH_LABEL, OPTION_GAME_BLEND_NO, OPTION_GAME_BLEND_YES, OPTION_GAME_EFFECT_HIGH,
-    OPTION_GAME_EFFECT_LOW, OPTION_GAME_EFFECT_NORMAL, OPTION_GAME_GUIDE_LONG,
-    OPTION_GAME_GUIDE_MIDDLE, OPTION_GAME_GUIDE_NOUSE, OPTION_GAME_GUIDE_SHORT,
-    OPTION_GAME_LONGNOTE_NONE, OPTION_GAME_LONGNOTE_USED, OPTION_GAME_MODE_FULL,
-    OPTION_GAME_MODE_WIN, OPTION_GAME_NOTETYPE1, OPTION_GAME_NOTETYPE2, OPTION_KEY_3KEY_FIRST,
-    OPTION_KEY_3KEY_MODE, OPTION_KEY_7KEY_MODE, OPTION_KEY_LANE_FIRST, OPTION_KEY_TEST,
-    OPTION_SOUND_BG_EFFECT_DOWN, OPTION_SOUND_BG_EFFECT_UP, OPTION_SOUND_BG_MUSIC_DOWN,
-    OPTION_SOUND_BG_MUSIC_UP, OPTION_SOUND_GAME_EFFECT_DOWN, OPTION_SOUND_GAME_EFFECT_UP,
-    OPTION_SOUND_GAME_MUSIC_DOWN, OPTION_SOUND_GAME_MUSIC_UP, PLANET_OPTION_FIRST_TAB,
-    PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP,
-    SHOP_ITEMGIFT_IDS,
+    select_music_songs, select_row_hit, shop_action_at, side_scene_slot, waiting_team_for_code,
+    wallet_row_caption, CreateRoomAction, CreateRoomForm, LankingSong, LankingSort, MusicShopRow,
+    MyRoomAction, MyRoomState, PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab,
+    PlanetPromo, RoomDialog, SelectMusicSong, ShopAction, ShopGiftNoop, ShopGood, SideScreen,
+    WalletRow, WalletState, GEM_LABEL, O2_CASH_LABEL, OPTION_GAME_BLEND_NO, OPTION_GAME_BLEND_YES,
+    OPTION_GAME_EFFECT_HIGH, OPTION_GAME_EFFECT_LOW, OPTION_GAME_EFFECT_NORMAL,
+    OPTION_GAME_GUIDE_LONG, OPTION_GAME_GUIDE_MIDDLE, OPTION_GAME_GUIDE_NOUSE,
+    OPTION_GAME_GUIDE_SHORT, OPTION_GAME_LONGNOTE_NONE, OPTION_GAME_LONGNOTE_USED,
+    OPTION_GAME_MODE_FULL, OPTION_GAME_MODE_WIN, OPTION_GAME_NOTETYPE1, OPTION_GAME_NOTETYPE2,
+    OPTION_KEY_3KEY_FIRST, OPTION_KEY_3KEY_MODE, OPTION_KEY_7KEY_MODE, OPTION_KEY_LANE_FIRST,
+    OPTION_KEY_TEST, OPTION_SOUND_BG_EFFECT_DOWN, OPTION_SOUND_BG_EFFECT_UP,
+    OPTION_SOUND_BG_MUSIC_DOWN, OPTION_SOUND_BG_MUSIC_UP, OPTION_SOUND_GAME_EFFECT_DOWN,
+    OPTION_SOUND_GAME_EFFECT_UP, OPTION_SOUND_GAME_MUSIC_DOWN, OPTION_SOUND_GAME_MUSIC_UP,
+    PLANET_OPTION_FIRST_TAB, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE,
+    SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS,
 };
 use crate::{menu_of, InputEdge, InputSnapshot, MenuKey};
 use o2jam_audio::{
@@ -84,9 +83,7 @@ use o2jam_net::{
     ChannelState, CharacterInfo, CreateRoom, Difficulty, ExitPlaying, Gender, JoinRoom, JoinedRoom,
     Ready, RoomListEntry, RoomTeamChanged, SetRoomTeam, StartGame, EQUIPMENT_SLOTS,
 };
-use o2jam_render::{
-    draw_text, fill_rect, pack_xrgb, scale_rect_to_frame, text_width, Frame, Rect, Rgb555Image,
-};
+use o2jam_render::{draw_text, scale_rect_to_frame, Frame, Rect, Rgb555Image};
 use winit::keyboard::KeyCode;
 
 /// Loading-gate phase capacity (lifecycle section 9, steps 2-5):
@@ -3054,7 +3051,8 @@ impl ScreenGame {
     }
 
     /// Stage the song catalog (`OJNList.dat` order, owned copies) for
-    /// the select-music table, the chosen-song caption, AND the lanking
+    /// the select-music table, the waiting `MUSICNAME` caption, AND the
+    /// lanking
     /// and music-shop boards (same parse, ticket #192: the live boot
     /// stages only this catalog, so the boards ride it instead of
     /// waiting for a separate staging call). Dead slots stay out; a missing catalog paints dialog art without rows.
@@ -3181,19 +3179,24 @@ impl ScreenGame {
             .map(|song| song.title.as_str())
     }
 
-    /// Catalog title for the chosen song, if staged.
-    fn selected_song_title(&self) -> Option<&str> {
-        let selection = self.selected_music.as_ref()?;
-        self.catalog_song_title(selection.music_id)
-    }
-
-    /// Catalog title for the joined room's song, if staged: the
-    /// `MUSICNAME` caption source (room-fill string flow,
-    /// `docs/channel-fill.md`); `None` paints the bare `M{id}`
-    /// fallback.
-    fn room_song_title(&self) -> Option<&str> {
+    /// Song behind the `MUSICNAME` caption (rect 22, top bar): the
+    /// master's staged pick when one stands — it takes effect at once,
+    /// where the room mirror moves only on the server echo — else the
+    /// joined room's song. The catalog supplies the title when it names
+    /// the id (room-fill string flow, `docs/channel-fill.md`); without
+    /// a title the caption paints the bare `M{id}` fallback.
+    fn waiting_song(&self) -> Option<WaitingSong<'_>> {
+        if let Some(pick) = self.selected_music {
+            return Some(WaitingSong {
+                music_id: pick.music_id,
+                title: self.catalog_song_title(pick.music_id),
+            });
+        }
         let room = self.waiting.as_ref()?;
-        self.catalog_song_title(room.music_id)
+        Some(WaitingSong {
+            music_id: room.music_id,
+            title: self.catalog_song_title(room.music_id),
+        })
     }
 
     /// Catalog BPM for one song id, if a live song record stages it.
@@ -3222,18 +3225,6 @@ impl ScreenGame {
     #[must_use]
     pub fn skill_counts(&self) -> [u32; 3] {
         self.skill_counts
-    }
-
-    /// Waiting song panel rows: title row plus difficulty row.
-    /// `None` while the choice or its title is missing; dialog art
-    /// still paints then.
-    fn selected_song_lines(&self) -> Option<[String; 2]> {
-        let selection = self.selected_music.as_ref()?;
-        let title = self.selected_song_title()?;
-        Some([
-            waiting_song_title_line(selection.music_id, title),
-            waiting_song_detail_line(selection),
-        ])
     }
 
     /// Stage battle totals (`RoomTeams` mirrors the server-side 4014/4016
@@ -5495,11 +5486,12 @@ impl ScreenGame {
     }
 
     /// Waiting: staged art behind the live seats, flat card fallback,
-    /// then the live chat box, then the staged song-select dialog: art,
-    /// its structure overlay (catalog-driven table), and the
-    /// chosen-song panel. The staged MAPNAME/BPM/SKILLCOUNT captions
-    /// paint from the room word, the catalog BPM column, and the
-    /// staged inventory (`INSTNAME`/`NOTICE` stay unpainted, OPEN 1/2).
+    /// then the live chat box, then the staged song-select dialog: art
+    /// plus its structure overlay (catalog-driven table). The staged
+    /// MAPNAME/BPM/SKILLCOUNT captions paint from the room word, the
+    /// catalog BPM column, and the staged inventory (`INSTNAME`/`NOTICE`
+    /// stay unpainted, OPEN 1/2); the `MUSICNAME` caption names the
+    /// staged pick (ticket #274 — no readout panel above the chat).
     ///
     /// Chat rows come from live 3012/3013 packets only
     /// ([`Self::push_waiting_user_message`]/[`Self::push_waiting_admin_message`])
@@ -5514,7 +5506,7 @@ impl ScreenGame {
     /// `paint_waiting_music` docs and the chat/cards absence tests).
     fn paint_waiting(&self, frame: &mut Frame<'_>, now_ms: u64) {
         let captions = WaitingCaptions {
-            song_title: self.room_song_title(),
+            song: self.waiting_song(),
             song_bpm: self.room_song_bpm(),
             skill_counts: self.skill_counts,
         };
@@ -5552,13 +5544,13 @@ impl ScreenGame {
         }
         // Song selection is the room master's alone (the `MUSELECT
         // 0x16200003` click handler drops non-master clicks, file
-        // `0xb2622`): only a master self sees the dialog and the
-        // chosen-song panel. The staged `BPM` caption stays for
-        // everyone (non-masters pick speed from it).
+        // `0xb2622`): only a master self sees the dialog. The staged
+        // `BPM` caption stays for everyone (non-masters pick speed from
+        // it), and the pick's title rides the shared `MUSICNAME` caption
+        // for every role (ticket #274).
         if self.is_room_master() {
             self.paint_select_music_art(frame);
             self.paint_select_music_text(frame);
-            self.paint_selected_song_panel(frame);
         }
     }
 
@@ -5585,49 +5577,6 @@ impl ScreenGame {
             return;
         };
         art.paint_overlay(frame);
-    }
-
-    /// Paint the chosen-song panel rows (title, then difficulty).
-    /// Missing choices or titles paint nothing: art without rows.
-    fn paint_selected_song_panel(&self, frame: &mut Frame<'_>) {
-        let Some([title_line, detail_line]) = self.selected_song_lines() else {
-            return;
-        };
-        Self::paint_song_panel_line(frame, 0, &title_line);
-        Self::paint_song_panel_line(frame, 1, &detail_line);
-    }
-
-    /// Panel rows stacked below the seat grid: title row 0, detail row 1.
-    const SONG_PANEL_ROWS: usize = 2;
-    /// Row step matching the lobby list height.
-    const SONG_PANEL_ROW_H: i32 = 8;
-
-    /// Top-left of song panel row `slot` (bottom-left, below the seats).
-    fn song_panel_origin(frame: &Frame<'_>, slot: usize) -> (i32, i32) {
-        let width = i32::try_from(frame.w).unwrap_or(i32::MAX);
-        let height = i32::try_from(frame.h).unwrap_or(i32::MAX);
-        let step = i32::try_from(slot).unwrap_or(i32::MAX);
-        (width / 8, height * 3 / 4 + step * Self::SONG_PANEL_ROW_H)
-    }
-
-    /// One song panel row: dark scrim plus white ink.
-    fn paint_song_panel_line(frame: &mut Frame<'_>, slot: usize, text: &str) {
-        if slot >= Self::SONG_PANEL_ROWS || text.is_empty() {
-            return;
-        }
-        let (x, y) = Self::song_panel_origin(frame, slot);
-        let text_w = u32::try_from(text_width(text)).unwrap_or(u32::MAX);
-        fill_rect(
-            frame,
-            &Rect {
-                x: x - 4,
-                y: y - 2,
-                w: text_w.saturating_add(8),
-                h: 9,
-            },
-            pack_xrgb(0x08, 0x08, 0x10),
-        );
-        draw_text(frame, x, y, text, pack_xrgb(0xFF, 0xFF, 0xFF));
     }
 
     /// Loading gate: staged art behind the progress bar. A staged
@@ -5701,7 +5650,10 @@ impl ScreenGame {
             return;
         };
         let speed_code = selection.speed;
-        let title = self.selected_song_title().unwrap_or("").to_owned();
+        let title = self
+            .catalog_song_title(selection.music_id)
+            .unwrap_or("")
+            .to_owned();
         self.playing.scene_mut().set_song(&title, speed_code);
     }
 
@@ -9497,33 +9449,119 @@ mod game_tests {
         buf
     }
 
-    #[test]
-    fn waiting_selected_song_paints_title_and_difficulty_rows() {
+    /// Native rect of the staged `MUSICNAME` TEXT control: the `.bnd`
+    /// pairing the scene carried in, never a literal (pinned
+    /// `State_Waiting.bnd` rect 22, 7.55).
+    fn staged_musicname_rect(game: &ScreenGame) -> Rect {
+        game.scene_art(Screen::Waiting)
+            .and_then(|art| {
+                art.placements
+                    .iter()
+                    .find(|placed| placed.id == "IDC_TEXT_SWAIT_MUSICNAME")
+            })
+            .map(|placed| placed.rect)
+            .expect("staged MUSICNAME placement")
+    }
+
+    /// Waiting game on the staged caption scene: the joined room names
+    /// `room_music_id`, the catalog names song 757, and an optional
+    /// staged pick names `pick`.
+    fn musicname_pick_game(room_music_id: u16, pick: Option<u16>) -> ScreenGame {
         let mut game = ScreenGame::new();
-        game.set_joined_room(waiting_room());
+        let mut room = waiting_room();
+        room.music_id = room_music_id;
+        game.set_joined_room(room);
         walk_to_waiting(&mut game);
-        stage_waiting_song(&mut game);
-        let buf = paint_waiting_frame(&mut game, 80, 64);
-        // Panel sits below the seats: title `M...` at (10, 48),
-        // detail `H...` at (10, 56); each line inks inside its row.
-        assert!(ink_near(
-            &buf,
-            80,
-            64,
-            (10, 48),
-            (20, 8),
-            pack_xrgb(0xFF, 0xFF, 0xFF)
-        ));
-        assert!(ink_near(
-            &buf,
-            80,
-            64,
-            (10, 56),
-            (20, 8),
-            pack_xrgb(0xFF, 0xFF, 0xFF)
-        ));
-        // Seats keep painting under the panel.
-        assert!(buf.contains(&pack_xrgb(0x30, 0xE0, 0x30)));
+        let blob = waiting_song_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_song_catalog(&entries);
+        if let Some(music_id) = pick {
+            game.set_selected_music(o2jam_net::play::SetRoomMusic {
+                music_id,
+                difficulty: 2,
+                speed: 3,
+            });
+        }
+        let (placements, figures) = musicname_scene();
+        game.load_scene(Screen::Waiting, placements, figures);
+        game
+    }
+
+    #[test]
+    fn staged_pick_titles_the_bound_musicname_caption() {
+        // Live chain: main.rs::run_play -> Shell::run ->
+        //   ScreenGame::paint -> ScreenGame::paint_at -> paint_waiting ->
+        //   paint_waiting_scene -> paint_waiting_staged ->
+        //   paint_waiting_music
+        // `MUSICNAME` is the `State_Waiting.bnd` TEXT control
+        // (`IDC_TEXT_SWAIT_MUSICNAME`, code `0X16400017`, rect 22). The
+        // master's staged pick names it at once, so a room that names
+        // the picked song and a room that names nothing plus the pick
+        // ink the same caption.
+        let mut picked = musicname_pick_game(0, Some(757));
+        let mut room_named = musicname_pick_game(757, None);
+        let rect = staged_musicname_rect(&picked);
+        let picked_frame = paint_waiting_frame(&mut picked, 800, 600);
+        let named_frame = paint_waiting_frame(&mut room_named, 800, 600);
+        assert!(
+            ink_near(
+                &picked_frame,
+                800,
+                600,
+                (rect.x, rect.y),
+                (
+                    i32::try_from(rect.w).unwrap_or(0),
+                    i32::try_from(rect.h).unwrap_or(0)
+                ),
+                pack_xrgb(0xFF, 0xFF, 0xFF)
+            ),
+            "the staged pick inks no caption inside the MUSICNAME rect"
+        );
+        assert!(
+            o2jam_render::pixels_in_rect(&picked_frame, 800, rect)
+                == o2jam_render::pixels_in_rect(&named_frame, 800, rect),
+            "the caption must carry the staged pick's title, not the room's"
+        );
+    }
+
+    /// Bottom edge of the lowest staged seat cover: the seat grid's
+    /// lower bound. The chat box sits under it, and the #274 readout
+    /// panel used to ink exactly that band (`(w/8, h*3/4)`).
+    fn seat_grid_bottom(placements: &[ScenePlacement]) -> u32 {
+        placements
+            .iter()
+            .filter(|placed| placed.id.starts_with("IDC_IMAGE_SWAIT_COVERAVATAR"))
+            .map(|placed| u32::try_from(placed.rect.y).unwrap_or(0) + placed.rect.h)
+            .max()
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn staged_pick_inks_nothing_below_the_seat_grid() {
+        // Live chain: main.rs::run_play -> Shell::run ->
+        //   ScreenGame::paint -> ScreenGame::paint_at -> paint_waiting ->
+        //   paint_waiting_scene -> paint_waiting_staged
+        // Ticket #274: the chosen-song readout used to paint a dark
+        // panel plus rows above the chat area. Staging a pick may now
+        // ink the top-bar caption and nothing under the seat grid.
+        let mut bare = musicname_pick_game(0, None);
+        let mut picked = musicname_pick_game(0, Some(757));
+        let grid_bottom = seat_grid_bottom(picked.scene_placements(Screen::Waiting));
+        assert!(grid_bottom > 0, "the staged scene carries seat covers");
+        let seat_grid = Rect {
+            x: 0,
+            y: 0,
+            w: 800,
+            h: grid_bottom,
+        };
+        let bare_frame = paint_waiting_frame(&mut bare, 800, 600);
+        let picked_frame = paint_waiting_frame(&mut picked, 800, 600);
+        let changed =
+            o2jam_render::first_change_outside(&bare_frame, &picked_frame, 800, seat_grid);
+        assert!(
+            changed.is_none(),
+            "the pick must not ink the chat band: first pixel changed below the seat grid: {changed:?}"
+        );
     }
 
     /// Staged waiting covers plus the `MUSICNAME` top-bar rect
@@ -18716,8 +18754,8 @@ mod game_tests {
     fn waiting_non_master_hides_select_but_keeps_bpm() {
         // Only the master opens music selection (file `0xb2622`
         // drops non-master `MUSELECT` clicks): a guest self sees no
-        // dialog art, no structure, and no chosen-song panel — but
-        // the staged `BPM` caption stays (guests pick speed from it).
+        // dialog art and no structure — but the staged `BPM` caption
+        // stays (guests pick speed from it).
         let (placements, figures) = corner_scene_art("AlbumList.ojs");
         let mut game = ScreenGame::new();
         let mut room = guest_room();
@@ -18761,10 +18799,10 @@ mod game_tests {
         );
         assert!(!game.is_room_master());
         let buf = paint_waiting_frame(&mut game, 800, 600);
-        // No dialog art at the origin, no structure scrims, no
-        // chosen-song panel rows below the seats (staged art without
-        // figures leaves the frame untouched, so absence reads 0) —
-        // but the BPM scrim inks its rect.
+        // No dialog art at the origin, no structure scrims, and the
+        // #274 readout band below the seats stays clear (staged art
+        // without figures leaves the frame untouched, so absence reads
+        // 0) — but the BPM scrim inks its rect.
         assert_eq!(buf[0], 0);
         assert_eq!(buf[95 * 800 + 30], 0);
         assert_eq!(buf[450 * 800 + 100], 0);

@@ -3651,6 +3651,17 @@ pub(crate) fn paint_waiting_members(frame: &mut Frame<'_>, room: &JoinedRoom) {
     paint_waiting_rows(frame, room);
 }
 
+/// Song behind the `MUSICNAME` caption (`IDC_TEXT_SWAIT_MUSICNAME`,
+/// code `0X16400017`): the id the caption falls back to, plus the
+/// staged catalog title when one names that id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WaitingSong<'a> {
+    /// Song id the caption names.
+    pub music_id: u16,
+    /// Staged catalog title of that id, if the catalog names it.
+    pub title: Option<&'a str>,
+}
+
 /// Live caption sources for the staged waiting rects. Every field
 /// has a pinned shell source (`docs/caption-sources.md`): the map
 /// name rides the room word, the BPM rides the staged catalog
@@ -3660,8 +3671,9 @@ pub(crate) fn paint_waiting_members(frame: &mut Frame<'_>, room: &JoinedRoom) {
 /// a staged record.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct WaitingCaptions<'a> {
-    /// Staged catalog title for the room's song, if it names one.
-    pub song_title: Option<&'a str>,
+    /// Song behind the `MUSICNAME` caption: the master's staged pick
+    /// when one stands, else the joined room's song.
+    pub song: Option<WaitingSong<'a>>,
     /// Staged catalog BPM of the room's song, if it names one.
     pub song_bpm: Option<f32>,
     /// Staged inventory counts, one per skill slot.
@@ -4244,7 +4256,7 @@ fn paint_waiting_staged(
     paint_waiting_skillcounts(frame, &captions.skill_counts, placements);
     paint_waiting_mapname(frame, room, placements);
     paint_waiting_bpm(frame, captions.song_bpm, placements);
-    paint_waiting_music(frame, room, placements, captions.song_title);
+    paint_waiting_music(frame, placements, captions.song);
 }
 
 /// Room title at the `ROOMNAME` rect (top bar, rect 21).
@@ -4452,9 +4464,13 @@ fn paint_waiting_skillcounts(
 }
 
 /// Selected-song label at the `MUSICNAME` rect (rect 22, top bar):
-/// the staged catalog title for the room's song when it names one
+/// the staged catalog title for the caption's song when it names one
 /// (room-fill string flow, `docs/channel-fill.md`), else the bare
-/// song id (the song table lives server-side, as in the lobby).
+/// song id (the song table lives server-side, as in the lobby). The
+/// caption names the master's staged pick at once and the joined
+/// room's song otherwise ([`WaitingSong`]); ticket #274 removed the
+/// shell-invented readout panel that used to ink this data above the
+/// chat rows.
 /// The `COVERMUSIC` button, the select arrow, the `Random` cards, and
 /// BACK stay staged art — recorded negatives, not gaps (chat now has a
 /// live source: [`paint_waiting_chat`]):
@@ -4468,16 +4484,18 @@ fn paint_waiting_skillcounts(
 ///   card picks — so the painter stages art only.
 fn paint_waiting_music(
     frame: &mut Frame<'_>,
-    room: &JoinedRoom,
     placements: &[ScenePlacement],
-    song_title: Option<&str>,
+    song: Option<WaitingSong<'_>>,
 ) {
+    let Some(song) = song else {
+        return;
+    };
     if let Some((x, y)) = waiting_bnd_origin(placements, WAITING_MUSICNAME_ID, frame) {
         paint_room_detail_line(
             frame,
             x,
             y,
-            &waiting_music_caption(room.music_id, song_title),
+            &waiting_music_caption(song.music_id, song.title),
             art_title_ink(),
         );
     }
@@ -12008,9 +12026,11 @@ mod paint_tests {
                 w: 800,
                 h: 600,
             },
-            &champion_room(),
             &placements,
-            None,
+            Some(WaitingSong {
+                music_id: 757,
+                title: None,
+            }),
         );
         assert_eq!(buf[13 * 800 + 569], scrim_color());
         assert!(has_ink_near(&buf, art_title_ink()));
@@ -12048,12 +12068,38 @@ mod paint_tests {
                 w: 800,
                 h: 600,
             },
-            &champion_room(),
             &placements,
-            Some("First"),
+            Some(WaitingSong {
+                music_id: 757,
+                title: Some("First"),
+            }),
         );
         assert_eq!(buf[13 * 800 + 569], scrim_color());
         assert!(has_ink_near(&buf, art_title_ink()));
+    }
+
+    #[test]
+    fn musicname_paints_nothing_without_a_song_source() {
+        // No joined room and no staged pick: the caption has no song
+        // to name and leaves the pinned rect untouched (the staged
+        // backdrop paints it).
+        let placements = vec![waiting_probe(
+            "IDC_TEXT_SWAIT_MUSICNAME",
+            None,
+            (573, 15, 773, 38),
+        )];
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_music(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &placements,
+            None,
+        );
+        assert!(!has_ink_near(&buf, art_title_ink()));
+        assert_eq!(buf[13 * 800 + 569], 0);
     }
 
     #[test]
