@@ -79,6 +79,20 @@ Two recorded exceptions, both with the triage record visible on the tracker:
   alongside the state role (never instead of it) with a comment naming
   the exact ask, and stop delegating until the owner responds.
 
+## Spec tickets (owner decision 2026-11-16)
+
+A SPEC is an issue labeled `spec` carrying a story checklist for one game
+state or one cross-cutting domain. Rules:
+
+- Specs stay OPEN while any story is uncovered; a spec closes only when
+  every story box is checked AND each has a covering ticket closure.
+- Execution tickets map to their spec as GitHub sub-issues; the spec
+  body holds the story list, comments hold the audit trail.
+- One spec per state (the STAGE_TABLE states plus Channel and Loading);
+  cross-cutting domains (net protocol, file formats, avatar system,
+  audio, rig) carry their own specs. Dialogs are stories inside their
+  host state spec, not separate specs.
+
 ## Close discipline
 
 Rules for closing playtest-class tickets (retro 2026-11-11, issues #26/#30/#53–#56):
