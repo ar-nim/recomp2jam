@@ -1,6 +1,7 @@
 //! Backend selection: explicit override wins, otherwise
-//! auto-detect reads `WAYLAND_DISPLAY` (our fixture arm) first and
-//! `DISPLAY` (the Xvfb/XTEST arm) second.
+//! auto-detect reads `DISPLAY` (the Xvfb/XTEST arm) only. The Wayland
+//! fixture arm is never selected from an ambient `WAYLAND_DISPLAY` --
+//! it must be pinned explicitly (issue #267 hermeticity fence).
 
 /// The two Linux input arms behind the trait.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,9 +34,11 @@ impl InputBackend {
 }
 
 /// Pick the arm: the explicit override wins; without one,
-/// `WAYLAND_DISPLAY` selects the fixture arm, else `DISPLAY` selects
-/// X11, else there is nothing to drive. Pure over the env snapshot so
-/// tests pin the priority without mutating the process environment.
+/// an explicitly provided `WAYLAND_DISPLAY` selects the fixture arm,
+/// else `DISPLAY` selects X11, else there is nothing to drive. Pure
+/// over the env snapshot so tests pin the priority without mutating
+/// the process environment. `auto_backend` never feeds an ambient
+/// `WAYLAND_DISPLAY` here (issue #267).
 #[must_use]
 pub fn select_backend(
     explicit: Option<InputBackend>,
@@ -57,11 +60,13 @@ pub fn select_backend(
 /// Read the live process environment and select.
 #[must_use]
 pub fn auto_backend() -> Option<InputBackend> {
-    select_backend(
-        None,
-        std::env::var("WAYLAND_DISPLAY").ok().as_deref(),
-        std::env::var("DISPLAY").ok().as_deref(),
-    )
+    // Hermeticity fence (#267): never auto-detect an ambient
+    // `WAYLAND_DISPLAY` -- it may point at the owner's live session.
+    // The Wayland fixture arm is opt-in only, pinned by an explicit
+    // `--backend wayland` or by a caller that feeds its own socket to
+    // `select_backend`. Only `DISPLAY` is read from the environment,
+    // and the X11 arm overrides it with a self-spawned Xvfb.
+    select_backend(None, None, std::env::var("DISPLAY").ok().as_deref())
 }
 
 #[cfg(test)]
@@ -90,6 +95,20 @@ mod backend_tests {
     fn empty_env_selects_no_arm() {
         assert_eq!(select_backend(None, None, None), None);
         assert_eq!(select_backend(None, Some(""), Some("")), None);
+    }
+
+    /// Hermeticity guard (#267): an ambient `WAYLAND_DISPLAY` must never
+    /// route the auto-detect to the fixture arm, even when it is set in
+    /// the process environment (as it is on the owner's live KDE
+    /// session). Seam-suffices: `auto_backend` is the single seam between
+    /// the process environment and backend selection; the smoke example's
+    /// `select_auto` is the only live caller, and it may reach the fixture
+    /// arm only through an explicitly pinned socket or `--backend wayland`.
+    #[test]
+    fn auto_backend_ignores_ambient_wayland_display() {
+        // Whatever the ambient environment holds, the fixture arm must not
+        // be selected by ambient state alone.
+        assert_ne!(auto_backend(), Some(InputBackend::WaylandFixture));
     }
 
     #[test]
