@@ -22,8 +22,8 @@ use o2jam_file::{
 };
 use o2jam_net::CharacterInfo;
 use o2jam_render::{
-    blit_rgb555, blit_rgb555_clipped, fill_rect, rect_from_corners, scale_rect_to_frame, Frame,
-    Rect, Rgb555Image,
+    blit_rgb555, blit_rgb555_clipped, rect_from_corners, scale_rect_to_frame, Frame, Rect,
+    Rgb555Image,
 };
 
 /// Archive body name for a table filename: same stem, `.ojs`
@@ -543,23 +543,14 @@ impl AvatarFigure {
             offset += run;
         }
         debug_assert_eq!(offset, self.layers.len());
-        // Clear the whole avatar box before painting the selected
-        // frame: a breathing body's previous frame must not survive
-        // into the next paint wherever the new frame does not overpaint
-        // (the hand body showed this — its frames leave stale pixels
-        // because transparent colour-key pixels skip). Clearing the
-        // full box (not just the selected layer) is what makes the
-        // reuse-dirty canvas clean; every state routes through here.
-        fill_rect(
-            frame,
-            &Rect {
-                x: left,
-                y: top,
-                w: u32::try_from(box_size.0).unwrap_or(0),
-                h: u32::try_from(box_size.1).unwrap_or(0),
-            },
-            0,
-        );
+        // No clear here: `paint_at` fills the whole backbuffer with
+        // FRAME_CLEAR_COLOR at frame start and the scene backdrop
+        // repaints every frame, so the previous figure is already
+        // erased by the device-black + full-repaint model (the exe
+        // no-fill pin stands). A box clear mixes frame pixels with
+        // native extents (unit mismatch) and overpaints the backdrop
+        // plate inked just before the figure. Transparent colour-key
+        // pixels skip, so a backdrop pixel survives the figure paint.
         for layer in selected {
             let (dx, dy) = anchor_in_frame(
                 left.saturating_add(layer.dx.saturating_sub(origin_x)),
@@ -4177,14 +4168,18 @@ mod avatar_figure_tests {
     }
 
     #[test]
-    fn tt222_hand_run_clears_dirty_canvas() {
-        // Ticket #222 hand leg (strengthened): painting the ticked
-        // frame over a canvas still carrying the previous frame's
-        // pixels (the live reuse case) must leave no residue outside
-        // the new frame — the shared path clears the avatar box first.
-        // Red-proof: without the box clear, the previous frame's
-        // pixel survives and this assertion fails.
-        // Live caller chain: see kitted_figure_breathes_one_frame_per_part.
+    fn tt222_hand_run_no_clear_preserves_backdrop_pixel() {
+        // Ticket #222 root-cause leg (no-clear contract): the shared
+        // centered figure painter must NOT clear the avatar box. A
+        // backdrop pixel present before the figure paint survives the
+        // figure paint, because transparent colour-key pixels skip and
+        // there is no fill_rect erase. Red-proof: reintroducing the
+        // box clear zeroes the backdrop pixel and this assertion fails.
+        // Live caller chain: main::run_play -> WindowHandler::paint
+        //   -> Shell::paint_backbuffer -> ScreenGame::paint
+        //   -> paint_at (frame clear) -> paint_room -> paint_backdrop_live
+        //   -> paint_room_user_panel -> AvatarFigure::paint_visible_centered
+        //   -> paint_box_centered (no fill).
         use crate::avatar::AVATAR_BREATHING_TICK_MS;
         let mut figure = AvatarFigure::default();
         for frame in 0..24u16 {
@@ -4196,33 +4191,41 @@ mod avatar_figure_tests {
             w: 800,
             h: 600,
         };
-        // Frame 0 alone.
-        let mut clean0 = vec![0u32; 800 * 600];
-        let mut f0 = Frame {
-            buf: &mut clean0,
+        // Backdrop pixel at a column the selected frame never paints
+        // (dx 12 is outside the 0..12 frame columns): a non-zero ink.
+        const BACKDROP: u32 = 0x00ABCDEF;
+        let mut buf = vec![0u32; 800 * 600];
+        // seed the whole backdrop with BACKDROP so any clear is visible
+        for p in buf.iter_mut() {
+            *p = BACKDROP;
+        }
+        let mut frame = Frame {
+            buf: &mut buf,
             w: 800,
             h: 600,
         };
-        figure.paint_visible_centered(&mut f0, &seat, 800, 600, 0);
-        // Frame 1 alone (ticked).
-        let mut clean1 = vec![0u32; 800 * 600];
-        let mut f1 = Frame {
-            buf: &mut clean1,
-            w: 800,
-            h: 600,
-        };
-        figure.paint_visible_centered(&mut f1, &seat, 800, 600, AVATAR_BREATHING_TICK_MS);
-        // Dirty canvas = frame 0's pixels, then paint frame 1 on top.
-        let mut dirty = clean0.clone();
-        let mut fd = Frame {
-            buf: &mut dirty,
-            w: 800,
-            h: 600,
-        };
-        figure.paint_visible_centered(&mut fd, &seat, 800, 600, AVATAR_BREATHING_TICK_MS);
+        figure.paint_visible_centered(&mut frame, &seat, 800, 600, 0);
+        // The no-clear contract: a backdrop pixel sitting inside
+        // the avatar box but at a column the selected frame does not
+        // paint (transparent key pixels skip, no fill_rect erase)
+        // survives the figure paint. With a box clear reintroduced
+        // that pixel becomes 0 and this assertion fails.
+        let painted_idx = buf
+            .iter()
+            .enumerate()
+            .find(|(_, p)| **p != BACKDROP && **p != 0)
+            .map(|(i, _)| i)
+            .expect("figure must paint one pixel");
+        // neighbour to the right is inside the box but transparent in
+        // the selected frame, so it must keep the backdrop ink.
+        let neighbour = painted_idx + 1;
         assert_eq!(
-            dirty, clean1,
-            "previous frame residue survives on the reused canvas"
+            buf[neighbour], BACKDROP,
+            "backdrop pixel inside the box was erased (clear reintroduced?)"
         );
+        // Sanity: exactly one pixel painted by the figure.
+        let painted = buf.iter().filter(|p| **p != BACKDROP && **p != 0).count();
+        assert_eq!(painted, 1, "figure must paint exactly one pixel");
+        let _ = AVATAR_BREATHING_TICK_MS;
     }
 }
