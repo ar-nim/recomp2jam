@@ -22,8 +22,8 @@ use o2jam_file::{
 };
 use o2jam_net::CharacterInfo;
 use o2jam_render::{
-    blit_rgb555, blit_rgb555_clipped, rect_from_corners, scale_rect_to_frame, Frame, Rect,
-    Rgb555Image,
+    blit_rgb555, blit_rgb555_clipped, fill_rect, rect_from_corners, scale_rect_to_frame, Frame,
+    Rect, Rgb555Image,
 };
 
 /// Archive body name for a table filename: same stem, `.ojs`
@@ -543,6 +543,23 @@ impl AvatarFigure {
             offset += run;
         }
         debug_assert_eq!(offset, self.layers.len());
+        // Clear the whole avatar box before painting the selected
+        // frame: a breathing body's previous frame must not survive
+        // into the next paint wherever the new frame does not overpaint
+        // (the hand body showed this — its frames leave stale pixels
+        // because transparent colour-key pixels skip). Clearing the
+        // full box (not just the selected layer) is what makes the
+        // reuse-dirty canvas clean; every state routes through here.
+        fill_rect(
+            frame,
+            &Rect {
+                x: left,
+                y: top,
+                w: u32::try_from(box_size.0).unwrap_or(0),
+                h: u32::try_from(box_size.1).unwrap_or(0),
+            },
+            0,
+        );
         for layer in selected {
             let (dx, dy) = anchor_in_frame(
                 left.saturating_add(layer.dx.saturating_sub(origin_x)),
@@ -4127,5 +4144,85 @@ mod avatar_figure_tests {
             "non-conforming run must paint one frame"
         );
         assert_ne!(parked, ticked, "the clock advances the selected frame");
+    }
+
+    #[test]
+    fn tt222_hand_run_paints_one_frame_per_run() {
+        // Ticket #222 hand leg: a 24-frame body (the hand's multi-block
+        // run shape, like the live kit's 24-layer hand bodies) must
+        // paint exactly one frame per paint tick through the shared
+        // centered path — never all 24 frames stacked. Red-prove by
+        // forcing the stack-all branch: the guard fails and passes
+        // again once restored.
+        // Live caller chain: see kitted_figure_breathes_one_frame_per_part.
+        let mut figure = AvatarFigure::default();
+        for frame in 0..24u16 {
+            figure.push_layer(breathing_test_layer(0x0001 + frame, i32::from(frame % 12)));
+        }
+        assert_eq!(figure.len(), 24);
+        let parked = paint_centered_pixels(&figure, 0);
+        let ticked = paint_centered_pixels(&figure, AVATAR_BREATHING_TICK_MS);
+        let nonzero = |buf: &[u32]| buf.iter().filter(|p| **p != 0).count();
+        assert_eq!(
+            nonzero(&parked),
+            1,
+            "24-frame hand run must paint one frame"
+        );
+        assert_eq!(
+            nonzero(&ticked),
+            1,
+            "24-frame hand run must paint one frame"
+        );
+        assert_ne!(parked, ticked, "the clock advances the selected frame");
+    }
+
+    #[test]
+    fn tt222_hand_run_clears_dirty_canvas() {
+        // Ticket #222 hand leg (strengthened): painting the ticked
+        // frame over a canvas still carrying the previous frame's
+        // pixels (the live reuse case) must leave no residue outside
+        // the new frame — the shared path clears the avatar box first.
+        // Red-proof: without the box clear, the previous frame's
+        // pixel survives and this assertion fails.
+        // Live caller chain: see kitted_figure_breathes_one_frame_per_part.
+        use crate::avatar::AVATAR_BREATHING_TICK_MS;
+        let mut figure = AvatarFigure::default();
+        for frame in 0..24u16 {
+            figure.push_layer(breathing_test_layer(0x0001 + frame, i32::from(frame % 12)));
+        }
+        let seat = Rect {
+            x: 0,
+            y: 0,
+            w: 800,
+            h: 600,
+        };
+        // Frame 0 alone.
+        let mut clean0 = vec![0u32; 800 * 600];
+        let mut f0 = Frame {
+            buf: &mut clean0,
+            w: 800,
+            h: 600,
+        };
+        figure.paint_visible_centered(&mut f0, &seat, 800, 600, 0);
+        // Frame 1 alone (ticked).
+        let mut clean1 = vec![0u32; 800 * 600];
+        let mut f1 = Frame {
+            buf: &mut clean1,
+            w: 800,
+            h: 600,
+        };
+        figure.paint_visible_centered(&mut f1, &seat, 800, 600, AVATAR_BREATHING_TICK_MS);
+        // Dirty canvas = frame 0's pixels, then paint frame 1 on top.
+        let mut dirty = clean0.clone();
+        let mut fd = Frame {
+            buf: &mut dirty,
+            w: 800,
+            h: 600,
+        };
+        figure.paint_visible_centered(&mut fd, &seat, 800, 600, AVATAR_BREATHING_TICK_MS);
+        assert_eq!(
+            dirty, clean1,
+            "previous frame residue survives on the reused canvas"
+        );
     }
 }
