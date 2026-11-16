@@ -6232,4 +6232,75 @@ mod session_tests {
         assert_eq!(level_for_difficulty(3), 2);
         assert_eq!(level_for_difficulty(9), 2);
     }
+
+    #[test]
+    fn waiting_select_music_ok_with_staged_pick_reaches_4000_over_scripted_gateway() {
+        // Ticket #232 wire guard: a real session walk, row click through
+        // ingest_snapshot, OK click at the staged rect, then a paint
+        // must put the 4000 SetRoomMusic frame on the wire with the
+        // staged music id. Server-side assertion pins the accept clause.
+        use o2jam_render::Rect;
+        use o2jam_shell::avatar::{PlacementRole, ScenePlacement};
+        use std::collections::HashMap;
+
+        let room = joined_snapshot();
+        let (mut session, server) = joined_waiting_session(room, |mut stream| {
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, o2jam_net::Request::SetRoomMusic.id());
+            let body = o2jam_net::play::SetRoomMusic::decode_body(&frame.payload).unwrap();
+            assert_eq!(body.music_id, 757);
+            // begin_song_select also sends SetRoomArena 4002 right after.
+            let frame = read_frame(&mut stream);
+            assert_eq!(frame.id, o2jam_net::Request::SetRoomArena.id());
+            assert_quiet(&mut stream);
+        });
+
+        // Stage the dialog overlay with a pinned OK rect plus a catalog
+        // so the row click commits song 757 (Normal slot).
+        let ok_placement = ScenePlacement {
+            id: "IDC_BUTTON_DSMUSIC_OK".to_owned(),
+            code: 0x27200002,
+            sprite: None,
+            rect: Rect {
+                x: 326,
+                y: 497,
+                w: 126,
+                h: 45,
+            },
+            role: PlacementRole::Single,
+        };
+        session
+            .game_mut()
+            .load_select_music_scene(vec![ok_placement], HashMap::new());
+        let mut rec = vec![0u8; 300];
+        rec[8..11].copy_from_slice(b"ojn");
+        rec[4..8].copy_from_slice(&757u32.to_le_bytes());
+        rec[20..24].copy_from_slice(&124.0f32.to_le_bytes());
+        rec[112..117].copy_from_slice(b"First");
+        rec[176..180].copy_from_slice(b"Band");
+        rec[240..251].copy_from_slice(b"o2ma757.ojm");
+        let entries = o2jam_file::parse_ojn_list(&rec).unwrap();
+        session.set_song_catalog(&entries);
+
+        // 1. Row click stages the pick.
+        session
+            .game_mut()
+            .ingest_snapshot(&InputSnapshot::click_at(400, 150 + 23 + 11));
+        assert!(session.game_mut().has_pending_music_send());
+
+        // 2. OK click closes the dialog.
+        session
+            .game_mut()
+            .ingest_snapshot(&InputSnapshot::click_at(389, 519));
+        assert!(!session.game_mut().select_music_dialog_open());
+
+        // 3. Polling drives the queued pick onto the wire as 4000.
+        paint_frame(&mut session);
+
+        // 4. Flow advanced into song select (attempt staged, pick
+        // consumed from the outbox).
+        assert!(!session.game_mut().has_pending_music_send());
+
+        server.join().unwrap();
+    }
 }
