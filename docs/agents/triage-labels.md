@@ -92,6 +92,16 @@ state or one cross-cutting domain. Rules:
   cross-cutting domains (net protocol, file formats, avatar system,
   audio, rig) carry their own specs. Dialogs are stories inside their
   host state spec, not separate specs.
+- Owner decision 2026-11-17: a dialog system that spans several hosts
+  or carries its own wire district is a cross-cutting concern and MAY
+  own a separate spec. Applied to #314 Options, #315 Messenger and
+  #316 app-wide utility dialogs. Host-specific dialogs stay inside
+  their host state spec. A single new seam — the host dispatch
+  boundary — serves the dialog specs; guards drive it with no display.
+- The exe state census lives in `docs/exe-state-inventory.md`: 16
+  ControlList state headers, one Playing block in `Playing1.opi`, a
+  loading overlay, and 27 dialog blocks. Dead legacy stems
+  (`StateRoom`, Bulletin, MyCapsule, Top100) get no spec (ADR-0012).
 
 ## Close discipline
 
