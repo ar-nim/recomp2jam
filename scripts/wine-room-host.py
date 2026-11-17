@@ -18,8 +18,15 @@ the host needs to bring a guest to the loading screen.
 The account token is read read-only from the Memoryer database
 (`mode=ro`); nothing is written to the server or the DB.
 
+Two modes: host a room for the guest, or `--wire-tap` a pass-through
+TCP relay that logs the exe's game-TCP frames into the run out-dir. The
+relay logs every frame in both directions; S2C 2005 is the room-created
+event that opens the client's row-paint window.
+
 Usage:
   scripts/wine-room-host.py --out-dir DIR [options]
+  scripts/wine-room-host.py --wire-tap --out-dir DIR --wire-log PATH \\
+      --listen-port 15012 --upstream-port 15010
 
 Options:
   --out-dir DIR        directory for host.log (required)
@@ -54,12 +61,15 @@ import socket
 import sqlite3
 import struct
 import sys
+import threading
 import time
 from pathlib import Path
 
 GATEWAY = ("127.0.0.1", 15010)
 CLIENT_ID = "726PNA-B1YW-28ZG9M-I5SC-Q0OPM6"
 PING = 6001
+ROOM_CREATED = 2005
+WIRE_BODY_PREVIEW = 128
 
 AUTHORIZE = 1000
 AUTHORIZE_ANSWER = 1001
@@ -90,6 +100,46 @@ def encode_string(text: str, cap: int = 65535) -> bytes:
 
 def encode_endpoint(ip: str, port: int) -> bytes:
     return bytes(int(part) for part in ip.split(".")) + struct.pack("<H", port)
+
+
+def split_wire_frames(buffer: bytes) -> tuple[list[bytes], bytes]:
+    """Return whole length-prefixed frames and the bytes still incomplete."""
+    frames = []
+    offset = 0
+    while len(buffer) - offset >= 4:
+        (length,) = struct.unpack_from("<H", buffer, offset)
+        if length < 4 or len(buffer) - offset < length:
+            break
+        frames.append(buffer[offset:offset + length])
+        offset += length
+    return frames, buffer[offset:]
+
+
+class WireLog:
+    """Appends one line per relayed game frame, without changing a byte.
+
+    The exe reaches Memoryer through this tap in a wired run. S2C 2005
+    is the room-created event that repaints the client's room list, so
+    each such line carries an evidence ID for the row-paint window.
+    """
+
+    def __init__(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.handle = open(path, "w", buffering=1, encoding="utf-8")
+
+    def frame(self, direction: str, data: bytes) -> None:
+        opcode, body = struct.unpack_from("<H", data, 2)[0], data[4:]
+        detail = ""
+        if direction == "S2C" and opcode == ROOM_CREATED:
+            detail = f" ROOM_CREATED room={body[:4].hex()}"
+        self.handle.write(
+            f"{time.strftime('%H:%M:%S')} {direction} opcode={opcode} "
+            f"({opcode:04X}) len={len(body)} hex={body[:WIRE_BODY_PREVIEW].hex()}"
+            f"{detail}\n"
+        )
+
+    def connection(self, message: str) -> None:
+        self.handle.write(f"{time.strftime('%H:%M:%S')} {message}\n")
 
 
 class Log:
@@ -257,6 +307,56 @@ class HostSession:
         self.log.write("host recreate done (fuse suppression)")
 
 
+def relay_wire(source: socket.socket, target: socket.socket, direction: str,
+               wire_log: WireLog) -> None:
+    """Forward frames unchanged while recording them; never rewrite."""
+    pending = b""
+    try:
+        while True:
+            chunk = source.recv(65536)
+            if not chunk:
+                return
+            pending += chunk
+            frames, pending = split_wire_frames(pending)
+            for data in frames:
+                wire_log.frame(direction, data)
+            target.sendall(b"".join(frames))
+    except OSError as error:
+        wire_log.connection(f"relay {direction} end: {error}")
+    finally:
+        try:
+            target.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
+
+
+def serve_wire_tap(listen_port: int, upstream_port: int, wire_log: WireLog) -> None:
+    """Accept exe connections and log both directions in frame order."""
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(("127.0.0.1", listen_port))
+    server.listen(4)
+    wire_log.connection(
+        f"wire-tap listening 127.0.0.1:{listen_port} "
+        f"-> 127.0.0.1:{upstream_port} (pass-through)"
+    )
+    while True:
+        client, _ = server.accept()
+        upstream = socket.create_connection(("127.0.0.1", upstream_port), timeout=10)
+        wire_log.connection(f"wire-tap client {client.getpeername()} connected")
+        threads = [
+            threading.Thread(target=relay_wire, args=(client, upstream, "C2S", wire_log)),
+            threading.Thread(target=relay_wire, args=(upstream, client, "S2C", wire_log)),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        client.close()
+        upstream.close()
+        wire_log.connection("wire-tap client disconnected")
+
+
 def hold_session(session: HostSession, log: Log, start_delay: float, hold: float,
                  stop_file: Path, cmd_file: Path) -> None:
     joined_at: float | None = None
@@ -300,10 +400,20 @@ def main() -> None:
     parser.add_argument("--hold", type=float, default=300.0)
     parser.add_argument("--stop-file", default="")
     parser.add_argument("--cmd-file", default="")
+    parser.add_argument("--wire-tap", action="store_true",
+                        help="log the exe's game-TCP frames without changing them")
+    parser.add_argument("--listen-port", type=int, default=15012)
+    parser.add_argument("--upstream-port", type=int, default=15010)
+    parser.add_argument("--wire-log", default="")
     arguments = parser.parse_args()
 
     out_dir = Path(arguments.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    if arguments.wire_tap:
+        wire_log_path = Path(arguments.wire_log) if arguments.wire_log else out_dir / "wire" / "room-stage.log"
+        serve_wire_tap(arguments.listen_port, arguments.upstream_port,
+                       WireLog(wire_log_path))
+        return
     log = Log(out_dir / "host.log")
     stop_file = Path(arguments.stop_file) if arguments.stop_file else out_dir / "host.stop"
     cmd_file = Path(arguments.cmd_file) if arguments.cmd_file else out_dir / "host.cmd"

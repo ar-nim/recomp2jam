@@ -244,6 +244,87 @@ class Frames:
         return float(changed.mean())
 
 
+class WireTapLog:
+    """Read-only view of the run's pass-through wire tap.
+
+    The writer lives in `wine-room-host.py --wire-tap`. A downstream 2005
+    line is the room-created event whose arrival opens the row-paint window;
+    counting it here ties each pixel probe to a wire event in drive.log.
+    """
+
+    ROOM_CREATED = 2005
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.offset = 0
+        self.room_created_count = 0
+
+    def take(self) -> list[str]:
+        if not self.path.is_file():
+            return []
+        with open(self.path, "rb") as handle:
+            handle.seek(self.offset)
+            text = handle.read().decode("utf-8", "replace")
+            self.offset = handle.tell()
+        fresh = []
+        for line in text.splitlines():
+            if "S2C" in line and f"opcode={self.ROOM_CREATED} " in line:
+                self.room_created_count += 1
+                fresh.append(line)
+        return fresh
+
+    def note(self, log: SceneLog, label: str) -> None:
+        events = self.take()
+        first = f" first={events[0]}" if events else ""
+        log.event(f"wire {label} S2C 2005 count={self.room_created_count}{first}")
+
+
+class RoomPaintWait:
+    """Watches for the hosted row while keeping the session alive.
+
+    `row_dismiss=none` is the fuse hypothesis arm: the no-response modal
+    is left up because its OK button sends FFF0 and ends the session before
+    the row can paint. `repaint` is called once at the scheduled time so a
+    late host rebuild can be tested inside the same window.
+    """
+
+    def __init__(self, frames: Frames, injector: Input, wire: WireTapLog,
+                 log: SceneLog, row_dismiss: str) -> None:
+        self.frames = frames
+        self.injector = injector
+        self.wire = wire
+        self.log = log
+        self.row_dismiss = row_dismiss
+        self.popup_was_up = False
+
+    def observe_popup(self) -> None:
+        is_up = self.frames.popup_is_up()
+        if is_up and self.row_dismiss == "auto":
+            self.injector.send_click("fallback-ok")
+            time.sleep(1.0)
+        elif is_up != self.popup_was_up:
+            self.log.event(f"paint wait popup_up={is_up} row_dismiss={self.row_dismiss}")
+        self.popup_was_up = is_up
+
+    def run(self, timeout: float, repaint=None, repaint_after: float = 0.0) -> bool:
+        started = time.time()
+        deadline = started + timeout
+        repaint_sent = False
+        while time.time() < deadline:
+            if (repaint is not None and not repaint_sent
+                    and time.time() - started >= repaint_after):
+                repaint()
+                repaint_sent = True
+            self.frames.grab()
+            self.observe_popup()
+            if self.frames.row_painted():
+                self.wire.note(self.log, "row painted")
+                return True
+            time.sleep(0.5)
+        self.wire.note(self.log, "row window closed")
+        return False
+
+
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 
 
@@ -521,7 +602,7 @@ def hover_press_join(frames: Frames, injector: Input, server: ServerLog,
 
 
 def drive(arguments, frames: Frames, server: ServerLog, injector: Input,
-          log: SceneLog, shots: Path) -> list[str]:
+          log: SceneLog, shots: Path, wire: WireTapLog) -> list[str]:
     reached: list[str] = []
     targets = ["planet", "channel", "room", "waiting", "loading"]
     wanted = targets[: targets.index(arguments.target) + 1]
@@ -574,28 +655,6 @@ def drive(arguments, frames: Frames, server: ServerLog, injector: Input,
             log.event("host room created")
         time.sleep(2)
     try:
-        def paint_with_clear_view(timeout: float) -> bool:
-            """Wait for the row, clearing the message box as it appears.
-
-            The box lands exactly when the row paints and swallows every
-            click it covers, so the drive clears it inside the wait. The
-            room row needs the client's member/music poll (07DA/07E8)
-            before it paints; on a cold session that poll is ~36 s away,
-            which is why this wait is generous (docs/wine-boot.md,
-            Attempt 11 timing anatomy).
-            """
-            deadline = time.time() + timeout
-            while time.time() < deadline:
-                frames.grab()
-                if frames.popup_is_up():
-                    injector.send_click("fallback-ok")
-                    time.sleep(1.0)
-                    continue
-                if frames.row_painted():
-                    return True
-                time.sleep(0.5)
-            return False
-
         def reopen_live_list() -> bool:
             """Force a fresh channel list after a dead dialog.
 
@@ -626,8 +685,11 @@ def drive(arguments, frames: Frames, server: ServerLog, injector: Input,
             return False
 
         def attempt_join() -> bool:
-            if not dismiss_popup(frames, injector, log, tries=2):
-                log.event("join attempt with the message box still up")
+            if arguments.row_dismiss == "auto":
+                if not dismiss_popup(frames, injector, log, tries=2):
+                    log.event("join attempt with the message box still up")
+            else:
+                log.event("join attempt with row-dismiss=none (message box left up)")
             if arguments.join_mode == "hover-press":
                 return hover_press_join(frames, injector, server, log, shots,
                                         arguments.join_timeout)
@@ -653,12 +715,16 @@ def drive(arguments, frames: Frames, server: ServerLog, injector: Input,
         if "waiting" not in wanted:
             return reached
 
+        wire.note(log, "room stage entered")
+        repaint = None
         if arguments.row_repaint == "recreate" and host is not None:
             # The idle fuse can return the client to the board before its
             # member/music poll paints the row. A host rebuild sends fresh
             # 2005 data while the guest sits on the room stage (Attempt 12).
-            host.command("recreate")
-        painted = paint_with_clear_view(40.0)
+            def repaint() -> None:
+                host.command("recreate")
+        room_wait = RoomPaintWait(frames, injector, wire, log, arguments.row_dismiss)
+        painted = room_wait.run(40.0, repaint, arguments.repaint_delay)
         log.event(f"room row painted={painted}")
         joined = painted and attempt_join()
         log.event(f"join attempt 1 joined={joined}")
@@ -673,7 +739,8 @@ def drive(arguments, frames: Frames, server: ServerLog, injector: Input,
             # 36 s poll.
             if server.wait_for("03EA", 150.0):
                 dismiss_popup(frames, injector, log)
-                if enter_room_stage() and paint_with_clear_view(25.0):
+                warm_wait = RoomPaintWait(frames, injector, wire, log, "auto")
+                if enter_room_stage() and warm_wait.run(25.0):
                     joined = attempt_join()
                     log.event(f"join attempt 2 joined={joined}")
         if not joined:
@@ -738,6 +805,15 @@ def main() -> int:
                         default=str(Path.home() / "memoryer-local" / "server.log"))
     parser.add_argument("--host-user-index-id", type=int, default=3)
     parser.add_argument("--join-timeout", type=float, default=12.0)
+    parser.add_argument("--row-dismiss", choices=["auto", "none"],
+                        default="auto",
+                        help="auto clears the no-response modal; none keeps "
+                             "the session whose OK button sends FFF0")
+    parser.add_argument("--repaint-delay", type=float, default=0.0,
+                        help="seconds from room entry before a host recreate")
+    parser.add_argument("--wire-log", default="",
+                        help="the run's pass-through wire log (defaults to "
+                             "OUT_DIR/wire/room-stage.log)")
     parser.add_argument("--join-mode", choices=["dclick", "hover-press"],
                         default="dclick",
                         help="join stimulus: the qualified double-click or the "
@@ -763,11 +839,13 @@ def main() -> int:
     probe_dir = Path(tempfile.mkdtemp(prefix="wine-scene-probe-"))
     frames = Frames(arguments.display, probe_dir)
     server = ServerLog(Path(arguments.server_log), arguments.account)
+    wire = WireTapLog(Path(arguments.wire_log) if arguments.wire_log
+                      else out_dir / "wire" / "room-stage.log")
     injector = Input(arguments.display,
                      read_env(out_dir, arguments.wineprefix), log)
     reached: list[str] = []
     try:
-        reached = drive(arguments, frames, server, injector, log, shots)
+        reached = drive(arguments, frames, server, injector, log, shots, wire)
     finally:
         log.event(f"drive done reached={','.join(reached)} probe_dir={probe_dir}")
     return 0 if reached else 1
