@@ -423,10 +423,13 @@ cmd_selftest() {
   # touches the real seat, the real audio state, or the owner's speakers.
   write_stubs "$tmp/stubbin" "$tmp/stubstate"
   mkdir -p "$tmp/fake-root"
+  # Short poll only inside the hermetic selftest: each poll spawns stub
+  # pactl processes, and no real client needs the production 10 s window.
   local hermes=(env -u WAYLAND_DISPLAY -u DISPLAY XDG_SESSION_TYPE=
     "PATH=$tmp/stubbin:/usr/bin:/bin" "STUBSTATE=$tmp/stubstate"
     "RIG_STATE_DIR=$tmp/rig-state" "RIG_INSTALL_ROOT=$tmp/fake-root"
-    "RIG_RELAY_PORTS=59891 59892" "RIG_EXPECT_MEMORYER=0")
+    "RIG_RELAY_PORTS=59891 59892" "RIG_EXPECT_MEMORYER=0"
+    "RIG_AUDIO_ROUTE_TRIES=5")
   "${hermes[@]}" bash "$0" run :96 "$tmp/rig" -- sleep 30 >/dev/null
   [ -f "$tmp/rig/pids" ] || die "selftest: pidfile not written"
   grep -q "client" "$tmp/rig/pids" || die "selftest: client pid not recorded"
@@ -492,6 +495,7 @@ preflight_legs() {
     "PATH=$stubbin:/usr/bin:/bin" "STUBSTATE=$stubstate"
     "RIG_STATE_DIR=$tmp/rig-state" "RIG_INSTALL_ROOT=$tmp/fake-root"
     "RIG_RELAY_PORTS=59891 59892" "RIG_EXPECT_MEMORYER=0"
+    "RIG_AUDIO_ROUTE_TRIES=5"
     "RIG_AUDIO_TEST_STREAM_PIDS=4242" "RIG_AUDIO_SKIP_STREAM_BASELINE=1")
 
   # Occupied relay port must reject with 11 (fixture: python listener).

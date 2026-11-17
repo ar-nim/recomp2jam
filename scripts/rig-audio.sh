@@ -862,8 +862,9 @@ STUBEOF
 }
 
 # A stub recorder: registers itself for the requested device, writes a wav
-# (tone unless STUB_AUDIO_SILENT=1), then stays alive until the lane
-# signals its process group.
+# (tone unless STUB_AUDIO_SILENT=1), then stays briefly so the lane can
+# verify and stop it. The bound keeps an interrupted selftest from leaving
+# a `sleep` orphan; a real run's recorder is stopped by process group.
 rig_audio_write_stub_parec() {
   cat > "$1/parec" <<'STUBEOF'
 #!/bin/sh
@@ -895,7 +896,7 @@ if [ -n "$out" ]; then
   fi
   ffmpeg -hide_banner -loglevel error -f lavfi -i "$source" -t 3 -ac 2 "$out" || :
 fi
-exec sleep 300
+exec sleep 5
 STUBEOF
   chmod +x "$1/parec"
 }
