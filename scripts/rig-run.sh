@@ -200,13 +200,19 @@ cmd_run() {
     preflight_release "$out_dir"
     exit "$RIG_E_AUDIO"
   fi
+  rig_audio_set_field "$out_dir" client_display "$display"
+  rig_audio_set_field "$out_dir" client_prefix "${WINEPREFIX:-}"
+  rig_audio_record_route_baseline "$out_dir"
 
+  local client_pid
   if command -v setsid >/dev/null 2>&1; then
     DISPLAY="$display" setsid "$@" >"$out_dir/client.log" 2>&1 &
   else
     DISPLAY="$display" "$@" >"$out_dir/client.log" 2>&1 &
   fi
-  echo "client $! $*" >> "$out_dir/pids"
+  client_pid=$!
+  echo "client $client_pid $*" >> "$out_dir/pids"
+  rig_audio_set_field "$out_dir" client_pid "$client_pid"
 
   write_env_sh "$display" "$out_dir"
 
@@ -485,7 +491,8 @@ preflight_legs() {
   local senv=(env -u WAYLAND_DISPLAY -u DISPLAY XDG_SESSION_TYPE=
     "PATH=$stubbin:/usr/bin:/bin" "STUBSTATE=$stubstate"
     "RIG_STATE_DIR=$tmp/rig-state" "RIG_INSTALL_ROOT=$tmp/fake-root"
-    "RIG_RELAY_PORTS=59891 59892" "RIG_EXPECT_MEMORYER=0")
+    "RIG_RELAY_PORTS=59891 59892" "RIG_EXPECT_MEMORYER=0"
+    "RIG_AUDIO_TEST_STREAM_PIDS=4242" "RIG_AUDIO_SKIP_STREAM_BASELINE=1")
 
   # Occupied relay port must reject with 11 (fixture: python listener).
   python3 - "$stubstate/relay-ready" 59891 <<'PYEOF' &
@@ -661,6 +668,17 @@ audio_lane_legs() {
   assert_reject "audio-route-breach" 12 "CONTAINMENT BREACH" "$tmp/err-route-bad"
   assert_lane_field "audio-route-breach" "$tmp/o-route-bad" route "default-sink-breach"
   attempt "$tmp/err-route-bad-stop" "${senv[@]}" bash "$0" stop "$tmp/o-route-bad"
+
+  # 6. An exe-named stream that predates the boot is a leftover. With the
+  #    baseline recorded, it is excluded and an innocent run proceeds.
+  attempt_then "audio-route-baseline" "$tmp/err-route-baseline" "${senv[@]}" \
+    RIG_AUDIO_SKIP_STREAM_BASELINE=0 STUB_SINKINPUT_NAME=OTwo.exe \
+    STUB_SINKINPUT_SINK=alsa_output.default \
+    bash "$0" run :204 "$tmp/o-route-baseline" -- sleep 30
+  assert_lane_field "audio-route-baseline" "$tmp/o-route-baseline" route "unseen"
+  assert_lane_field "audio-route-baseline" "$tmp/o-route-baseline" baseline_streams "1"
+  attempt "$tmp/err-route-baseline-stop" "${senv[@]}" bash "$0" stop "$tmp/o-route-baseline"
+  echo "selftest: leg audio-route-baseline PASS (pre-boot stream not attributed)"
 }
 
 main() {

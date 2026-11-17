@@ -306,7 +306,13 @@ finalizes the sidecar `<out-dir>/audio/manifest` — one `key=value` line
 per fact: `sink`, `source`, `client`, `rate`, `channels`, `format`,
 `expect`, `state`, `started_at`, `stopped_at`, `duration_s`,
 `peak_dbfs`, `mean_dbfs`, `source_verified`, `route`, `sink_spec`,
-`resampling`, `client_streams`, `streams_normalized`, `muted_streams`.
+`resampling`, `client_streams`, `streams_normalized`, `muted_streams`,
+`on_default_sink`, `default_sink`, `run_sink_streams`,
+`muted_run_sink_streams`, `client_stream_pid`, `client_stream_binary`,
+`foreign_process_streams`, `baseline_streams`,
+`baseline_streams_excluded`, `unattributed_default_streams`,
+`route_snapshot`, `route_baseline`. The route facts are written before
+any breach abort, so a failed run remains auditable (#319).
 
 ### Silent-fallback guard
 
@@ -331,21 +337,43 @@ touched.
 
 ### Route guard (no path to the default sink)
 
-After the client starts, `run` reads `pactl list sink-inputs`, maps sink
-indices to names, and looks for streams whose `node.name` /
-`application.name` carries the client's basename **or** the Wine exe
-stream name `OTwo.exe` (#311). A matching stream on the system default
-sink aborts the run: exit 12, `CONTAINMENT BREACH` on stderr,
-`route=default-sink-breach` in the sidecar, and the run is stopped
-immediately. The check polls for up to `RIG_AUDIO_ROUTE_TRIES` ticks (100,
-so 10 s): the native client opens its stream about 4 s into the boot,
-after chart and bank decode. A graph with no matching stream leaves
-`route=unseen`: that verdict only says the guard saw nothing. It is **not**
-proof of silence; the level sidecar (`expect`, `state`, `peak_dbfs`,
-`mean_dbfs`) and `rig-audio.sh verify` judge the artifact. The hermetic
-`scripts/rig-audio.sh selftest` pins both Wine exe cases:
-`wine-exe-run-sink` (green, `route=sink`) and `wine-exe-default-sink`
-(red, breach + exit 12).
+Before the client starts, `run` records the graph baseline
+(`audio/route-baseline.txt`). After the client starts, `run` writes a full
+graph snapshot (`audio/route-snapshot.txt`) at each route check: `pactl
+get-default-sink`, `pactl list sinks short`, and `pactl list sink-inputs`,
+including each stream's `application.process.id`, `application.process.binary`,
+`node.name`, `application.name`, `Sink`, and `Mute`. Both files are text
+provenance artifacts, never audio bytes. Pass
+`--artifact audio/route-snapshot.txt --artifact audio/route-baseline.txt`
+to `rig-provenance.sh emit` so they appear in the pack's provenance.
+
+A stream is attributed to this run only when its name carries the client
+basename **or** the Wine exe stream name `OTwo.exe` (#311), its process is
+a descendant of the launched client **or** its process environment matches
+this run's `DISPLAY`, `PULSE_SINK`, and `WINEPREFIX`, and the stream was not
+present in the pre-boot baseline. Name matching alone is not ownership:
+two unrelated Wine sessions can both own an `OTwo.exe` stream (#319).
+Streams from other processes are counted in `foreign_process_streams` and
+never normalized or treated as this run's client. An exe-named stream with
+no process id on the default sink still aborts: an unattributed stream is
+not assumed harmless.
+
+A matching stream on the system default sink aborts the run: exit 12,
+`CONTAINMENT BREACH` on stderr, `route=default-sink-breach` in the sidecar,
+and the run is stopped immediately. The abort message and sidecar name the
+owning process id. The check polls for up to `RIG_AUDIO_ROUTE_TRIES` ticks
+(100, so 10 s): the native client opens its stream about 4 s into the boot,
+after chart and bank decode. `route=unseen` now means no stream was
+attributed to this run; check `foreign_process_streams` and the snapshot
+before claiming the graph was empty. It is **not** proof of silence; the
+level sidecar (`expect`, `state`, `peak_dbfs`, `mean_dbfs`) and
+`rig-audio.sh verify` judge the artifact. The hermetic
+`scripts/rig-audio.sh selftest` pins the Wine cases:
+`wine-exe-run-sink` (green, `route=sink`), `wine-exe-default-sink` (red,
+breach + exit 12), `wine-exe-foreign-process-id` (a leftover is not
+attributed), `wine-exe-foreign-process-id-default-sink` (a leftover does
+not abort an innocent run), `wine-exe-unknown-pid-default-sink` (red), and
+`wine-exe-baseline-stream-excluded` (a pre-boot stream is not ours).
 
 ### Validation bar
 
@@ -366,13 +394,15 @@ A recorder that ran proves nothing; a measured level does.
 Knobs: `RIG_AUDIO_CAPTURE` (1, the default), `RIG_AUDIO_RATE` (48000),
 `RIG_AUDIO_CHANNELS` (2), `RIG_AUDIO_FORMAT` (float32le),
 `RIG_AUDIO_FLOOR_DBFS` (−60), `RIG_AUDIO_IDENTITY_TRIES` (40).
+`RIG_AUDIO_TEST_STREAM_PIDS` and `RIG_AUDIO_SKIP_STREAM_BASELINE` are
+hermetic selftest seams; never set them for a real run.
 
 ### Legs
 
 | Leg | Sink | Tap | Status |
 |---|---|---|---|
 | Native (recomp2jam) | per-run `rig_null_<pid>` | `parec` monitor → wav | proven: #279 acceptance run captured non-silent game audio |
-| Wine (OTwo.exe) | same sink, same tap | same tap | Proven (#240): a blob-launched boot bound to the run's own sink — `pactl` showed `OTwo.exe` on `rig_null_<pid>`, and the tap measured peak 0.0 dBFS over 90 s (`docs/captures/t240/findings.md`). The historical pack's sidecar says `route=unseen` because the guard matched only the launcher; #311 added the exe stream alias (stub-verified here). The level sidecar, not `route=unseen`, is the silence evidence |
+| Wine (OTwo.exe) | same sink, same tap | same tap | Proven (#240): a blob-launched boot bound to the run's own sink — `pactl` showed `OTwo.exe` on `rig_null_<pid>`, and the tap measured peak 0.0 dBFS over 90 s (`docs/captures/t240/findings.md`). The historical pack's sidecar says `route=unseen` because the guard matched only the launcher; #311 added the exe stream alias and #319 made matching run-scoped with a boot-time graph (both stub-verified here). A live re-run with `route=sink` and a non-silent tap is still required. The level sidecar, not `route=unseen`, is the silence evidence |
 
 `--no-sound` stays available for runs that must not emit audio at all;
 such a run declares `expect=silence` and its artifact is the proof that
