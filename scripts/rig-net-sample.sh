@@ -51,9 +51,11 @@ write_sample() {
     sed 's/.*socket:/socket:/' | sort | uniq -c | tr '\n' ' '
   printf '\n'
   printf 'ss: '
-  ss -tanup 2>/dev/null | grep "pid=$pid" | tr '\n' ';'
+  ss -tanup 2>/dev/null | grep "pid=$pid" | tr '\n' ';' || true
   printf '\n'
 }
+
+exec > "$out_file" 2>&1
 
 deadline=$((SECONDS + duration))
 while [ "$SECONDS" -lt "$deadline" ]; do
