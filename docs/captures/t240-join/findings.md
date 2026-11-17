@@ -119,7 +119,7 @@ repaints the list from fresh 2005 data.
    `room-row-hover.png` with the X-warp highlight delta, send exactly one
    press, and record `0BBA` (or the negative) with the run's manifest.
 
-## #319 resolution — qualified boot with `route=sink` (2026-11-17)
+## #319 resolution - qualified boot with route=sink (2026-11-17)
 
 `~/scratch/240-join/hover319-final`, build `ea0502a`, display `:226`,
 per-run sink `rig_null_3144570`. All checks PASS: manifest, audio,
@@ -134,4 +134,11 @@ probe_streams_seen=1    baseline_streams=0
 ```
 
 The boot-time graph attributes `application.name=OTwo.exe`,
-`media.name=audio stream #1`, `Sink: 13105` to this runs
+`media.name=audio stream #1`, `Sink: 13105` to this run by process id.
+`probe_streams_seen=1` proves the guard polled past the unbound Wine
+`format test stream` (`Sink: 4294967295`) before the real playback stream
+opened. Both `audio/route-baseline.txt` and `audio/route-snapshot.txt` are
+hashed in provenance. This resolves the #319 audio question; the drive still
+stopped at the room stage (`room row painted=False`, no `0BBA`), which is
+#320 subject. Whether audible sound reached the owner speakers during the
+earlier boot 2 remains undetermined and is recorded OPEN above.
