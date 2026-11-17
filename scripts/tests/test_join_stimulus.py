@@ -115,6 +115,57 @@ class HoverPressStimulusTest(unittest.TestCase):
         self.assertEqual(1, sum(1 for c in injector.calls if c[0] == "press"))
 
 
+class WaitingObservationTest(unittest.TestCase):
+    def test_distinct_frames_are_saved_with_wire_times_without_a_scene_claim(self) -> None:
+        import numpy as np
+
+        class ChangingFrames:
+            def __init__(self) -> None:
+                self.frames = [
+                    np.zeros((8, 8, 3), dtype=np.int16),
+                    np.full((8, 8, 3), 90, dtype=np.int16),
+                ]
+                self.saved: list[str] = []
+                self.grab_count = 0
+
+            def grab(self):
+                frame = self.frames[min(self.grab_count, 1)]
+                self.grab_count += 1
+                return frame
+
+            def capture(self, path: Path) -> float:
+                self.saved.append(path.name)
+                return 0.0
+
+            def scene_label(self) -> str:
+                return "room"
+
+            def mean_luma(self) -> float:
+                return 0.0
+
+        class JoinedWire:
+            def opcodes_since(self, opcode: int) -> list[str]:
+                assert 3002 == opcode
+                return ["C2S:3002@+0.0s", "S2C:3003@+0.0s"]
+
+        frames, log = ChangingFrames(), FakeLog()
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(scene.time, "sleep"), patch.object(
+                scene.time, "time", side_effect=[0, 0.1, 1.1, 1.2, 2.1, 2.2]
+            ):
+                scene.observe_waiting_transition(
+                    frames, JoinedWire(), log, Path(tmp), 2.0)
+        self.assertEqual(
+            ["waiting-observe-001.png", "waiting-observe-002.png"],
+            frames.saved,
+        )
+        self.assertEqual(2, len(log.events))
+        self.assertTrue(all("waiting observe t=+" in line for line in log.events))
+        self.assertTrue(all("wire=C2S:3002@+0.0s,S2C:3003@+0.0s" in line
+                            for line in log.events))
+        self.assertFalse(any(line.startswith("frame ") for line in log.events))
+
+
 class NoJoinLogTest(unittest.TestCase):
     def test_hover_press_failure_names_one_stimulus(self) -> None:
         self.assertEqual(

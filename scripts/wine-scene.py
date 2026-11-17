@@ -47,12 +47,16 @@ Options:
   --server-log PATH     Memoryer log (default ~/memoryer-local/server.log)
   --host-user-index-id  host account (default 3); 0 disables the host bot
   --join-timeout S      seconds to wait for 0BBA after the row double-click
+  --observe-waiting-seconds S
+                        after a joined 0BBA, poll frames and wire for S
+                        seconds without claiming a Waiting scene (cue leg)
   --no-host             drive without the host bot (room stage only)
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import re
 import subprocess
@@ -286,6 +290,22 @@ class WireTapLog:
         events = self.take()
         first = f" first={events[0]}" if events else ""
         log.event(f"wire {label} S2C 2005 count={self.room_created_count}{first}")
+
+    def opcodes_since(self, opcode: int) -> list[str]:
+        """Name every frame from the first matching opcode, in wire order."""
+        self.take()
+        start = next(
+            (seconds for seconds, direction, value in self.events
+             if direction == "C2S" and value == opcode),
+            None,
+        )
+        if start is None:
+            return []
+        return [
+            f"{direction}:{value}@+{seconds - start:.1f}s"
+            for seconds, direction, value in self.events
+            if seconds >= start
+        ]
 
     def note_boundaries(self, log: SceneLog, label: str) -> None:
         """Log the frame timeline since 03EC at one exe-visible boundary."""
@@ -588,6 +608,37 @@ def capture_scene(frames: Frames, log: SceneLog, shots: Path, name: str,
     return True
 
 
+def observe_waiting_transition(frames: Frames, wire: WireTapLog,
+                               log: SceneLog, shots: Path, timeout: float,
+                               interval: float = 1.0) -> None:
+    """Poll frames and wire after 0BBA, without claiming a scene.
+
+    Each distinct frame is saved as a hash-pinned observation capture; a
+    repeated frame is not saved twice. The wire view names every frame since
+    the join so a later transition can be timed against the exe's own traffic.
+    """
+    started = time.time()
+    last_digest = ""
+    capture_count = 0
+    while time.time() - started < timeout:
+        frame = frames.grab()
+        elapsed = time.time() - started
+        digest = hashlib.sha256(frame.tobytes()).hexdigest()
+        shot = ""
+        if digest != last_digest:
+            capture_count += 1
+            name = f"waiting-observe-{capture_count:03}.png"
+            frames.capture(shots / name)
+            shot = f" shot={name}"
+            last_digest = digest
+        opcodes = ",".join(wire.opcodes_since(3002))
+        log.event(
+            f"waiting observe t=+{elapsed:.1f}s label={frames.scene_label()} "
+            f"mean={frames.mean_luma():.1f} wire={opcodes}{shot}"
+        )
+        time.sleep(interval)
+
+
 def wait_until(probe, timeout: float, interval: float = 1.0) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -844,6 +895,11 @@ def drive(arguments, frames: Frames, server: ServerLog, injector: Input,
             log.event(no_join_failure_message(arguments.join_mode))
             frames.capture(shots / "probe-failure.png")
             return reached
+        if arguments.observe_waiting_seconds > 0:
+            observe_waiting_transition(
+                frames, wire, log, shots, arguments.observe_waiting_seconds)
+            log.event("stage waiting NOT claimed reason=observation-only")
+            return reached
         time.sleep(3)
         dismiss_popup(frames, injector, log)
         if not capture_scene(frames, log, shots, "waiting", "server:0BBA",
@@ -902,6 +958,9 @@ def main() -> int:
                         default=str(Path.home() / "memoryer-local" / "server.log"))
     parser.add_argument("--host-user-index-id", type=int, default=3)
     parser.add_argument("--join-timeout", type=float, default=12.0)
+    parser.add_argument("--observe-waiting-seconds", type=float, default=0.0,
+                        help="poll frames and wire after a joined 0BBA without "
+                             "claiming a Waiting scene (cue-discovery leg)")
     parser.add_argument("--row-dismiss", choices=["auto", "none"],
                         default="auto",
                         help="auto clears the no-response modal; none keeps "

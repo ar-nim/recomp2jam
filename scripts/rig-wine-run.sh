@@ -14,6 +14,9 @@
 #   --row-dismiss MODE        auto clears the no-response modal; none keeps
 #                             the session its OK button ends with FFF0
 #   --wire-tap                log the exe's game-TCP frames pass-through
+#   --observe-waiting-seconds S
+#                             after a joined 0BBA, poll frames and wire for S
+#                             seconds without claiming a Waiting scene
 #                             (mint mirrors to :15012; hash the log in provenance)
 #   --user-index-id N         guest account (default 1 = tester)
 #   --host-user-index-id N    host account (default 3 = t207probe; 0 = no host)
@@ -64,6 +67,7 @@ ROW_REPAINT="none"
 REPAINT_DELAY=0
 ROW_DISMISS="auto"
 WIRE_TAP=0
+OBSERVE_WAITING_SECONDS=0
 WIRE_TAP_PORT="${RIG_WIRE_TAP_PORT:-15012}"
 GATEWAY_PORT=15010
 USER_INDEX_ID=1
@@ -81,6 +85,7 @@ while [ "$#" -gt 0 ]; do
     --repaint-delay) REPAINT_DELAY="$2"; shift 2 ;;
     --row-dismiss) ROW_DISMISS="$2"; shift 2 ;;
     --wire-tap) WIRE_TAP=1; shift ;;
+    --observe-waiting-seconds) OBSERVE_WAITING_SECONDS="$2"; shift 2 ;;
     --user-index-id) USER_INDEX_ID="$2"; shift 2 ;;
     --host-user-index-id) HOST_USER_INDEX_ID="$2"; shift 2 ;;
     --cross) CROSS_DIR="$2"; shift 2 ;;
@@ -250,6 +255,7 @@ phase_drive() {
     --music-id "$MUSIC_ID" --join-mode "$JOIN_MODE" \
     --row-repaint "$ROW_REPAINT" --repaint-delay "$REPAINT_DELAY" \
     --row-dismiss "$ROW_DISMISS" --wire-log "$WIRE_LOG" \
+    --observe-waiting-seconds "$OBSERVE_WAITING_SECONDS" \
     --host-user-index-id "$HOST_USER_INDEX_ID" \
     --wineprefix "$WINEPREFIX" > "$OUT_DIR/phases-drive.log" 2>&1 || true
   local reached
