@@ -701,5 +701,141 @@ class StartCueDiscoveryTest(unittest.TestCase):
         self.assertIn("--host-start-delay", result.stdout)
 
 
+class ReadyPillRetryTest(unittest.TestCase):
+    """Seam proof for drive() -> arm_start_gate() -> ReadyPillGate.run().
+
+    A boot owns the pixels and the TCP tap; this seam pins only the stimulus
+    order. The e2-playing-qualified pack is the negative fixture (one early
+    click, no C2S 4008), and c1-start-cue is the positive fixture (4008 seen).
+    The room-row join stimulus is out of scope: no extra row press is added.
+    """
+
+    class Clock:
+        def __init__(self) -> None:
+            self.now = 1000.0
+            self.sleeps: list[float] = []
+
+        def time(self) -> float:
+            return self.now
+
+        def sleep(self, seconds: float) -> None:
+            self.sleeps.append(seconds)
+            self.now += seconds
+
+    class ReadyWire:
+        def __init__(self, live_after_click: int) -> None:
+            self.live_after_click = live_after_click
+            self.clicks = 0
+
+        def record_click(self) -> None:
+            self.clicks += 1
+
+        def saw_direction(self, direction: str, opcode: int) -> bool:
+            return (direction == "C2S" and opcode == 4008
+                    and self.clicks >= self.live_after_click)
+
+        def opcodes_since(self, opcode: int) -> list[str]:
+            assert 3002 == opcode
+            state = ["C2S:3002@+0.0s", "S2C:3003@+0.0s"]
+            if self.clicks >= self.live_after_click:
+                state.append("C2S:4008@+12.0s")
+            return state
+
+    class PillInjector:
+        def __init__(self, wire: "ReadyPillRetryTest.ReadyWire") -> None:
+            self.wire = wire
+            self.aims: list[str] = []
+
+        def send_click(self, aim: str) -> None:
+            self.aims.append(aim)
+            self.wire.record_click()
+
+    class ReadyServer:
+        def __init__(self, confirms: bool) -> None:
+            self.confirms = confirms
+            self.waits: list[tuple[str, float]] = []
+
+        def wait_for(self, opcode: str, timeout: float) -> bool:
+            self.waits.append((opcode, timeout))
+            return self.confirms
+
+    class StartHost:
+        def __init__(self, log: FakeLog) -> None:
+            self.log = log
+            self.commands: list[str] = []
+
+        def command(self, token: str) -> None:
+            self.commands.append(token)
+            self.log.event(f"host command queued {token}")
+
+    def run_gate(self, live_after_click: int, confirms: bool = True):
+        log, clock = FakeLog(), self.Clock()
+        wire = self.ReadyWire(live_after_click)
+        injector = self.PillInjector(wire)
+        server, host = self.ReadyServer(confirms), self.StartHost(log)
+        with patch.object(scene.time, "time", clock.time), patch.object(
+            scene.time, "sleep", clock.sleep
+        ):
+            armed = scene.arm_start_gate(wire, injector, server, host, log)
+        return armed, wire, injector, server, host, log, clock
+
+    def test_first_c2s_4008_stops_retry_and_arms_the_start(self) -> None:
+        armed, _, injector, server, host, log, clock = self.run_gate(1)
+
+        self.assertTrue(armed)
+        self.assertEqual(["ready-pill"], injector.aims)
+        self.assertEqual([], clock.sleeps)
+        self.assertEqual([("0FA8", 20.0)], server.waits)
+        self.assertEqual(["start"], host.commands)
+        self.assertTrue(any("C2S 4008 confirmed" in line
+                            for line in log.events))
+
+    def test_e2_early_click_without_4008_retries_every_three_seconds(self) -> None:
+        armed, _, injector, _, _, log, clock = self.run_gate(4)
+
+        self.assertTrue(armed)
+        self.assertEqual(["ready-pill"] * 4, injector.aims)
+        self.assertEqual([3.0, 3.0, 3.0], clock.sleeps)
+        retries = [line for line in log.events
+                   if line.startswith("ready retry attempt=")]
+        self.assertEqual(3, len(retries))
+        self.assertTrue(all("c2s_4008=no" in line
+                            and "wire=C2S:3002@+0.0s,S2C:3003@+0.0s" in line
+                            for line in retries))
+
+    def test_host_start_is_not_queued_before_guest_0fa8_confirms(self) -> None:
+        armed, _, _, server, host, log, _ = self.run_gate(1, confirms=False)
+
+        self.assertFalse(armed)
+        self.assertEqual([], host.commands)
+        self.assertFalse(any("host command queued" in line
+                             for line in log.events))
+        self.assertTrue(any("0FA8" in line and "FAILED" in line
+                            for line in log.events))
+        self.assertEqual([("0FA8", 20.0)], server.waits)
+
+    def test_confirmed_guest_ready_precedes_the_host_start_event(self) -> None:
+        armed, _, _, _, host, log, _ = self.run_gate(1)
+
+        self.assertTrue(armed)
+        self.assertEqual(["start"], host.commands)
+        ready = next(index for index, line in enumerate(log.events)
+                     if "guest 0FA8 confirmed" in line)
+        start = next(index for index, line in enumerate(log.events)
+                     if "host command queued start" == line)
+        self.assertLess(ready, start)
+
+    def test_no_c2s_4008_within_thirty_seconds_leaves_start_unarmed(self) -> None:
+        armed, _, injector, server, host, log, clock = self.run_gate(99)
+
+        self.assertFalse(armed)
+        self.assertEqual(["ready-pill"] * 10, injector.aims)
+        self.assertEqual(1030.0, clock.now)
+        self.assertEqual([], server.waits)
+        self.assertEqual([], host.commands)
+        self.assertTrue(any("no C2S 4008" in line and "FAILED" in line
+                            for line in log.events))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -29,9 +29,11 @@ Stage transitions are logged with the cue that established them: the exe's
 own wire frames observed in the Memoryer server log (`03EA` channel list
 answer, `03EC` room-list request, `0BBA` join-waiting, `4008` ready,
 `4012` confirm-music-loaded) plus a mean-luma sample of the captured frame.
-A stage that times out is logged as FAILED and the run keeps what it has:
-nothing is invented, and no capture is written for a scene that did not
-appear.
+The READY pill is retried after the Waiting capture: an early click is
+silently swallowed by the exe, so only a C2S `4008` plus the guest's `0FA8`
+server line arms the host's start command. A stage that times out is logged
+as FAILED and the run keeps what it has: nothing is invented, and no capture
+is written for a scene that did not appear.
 
 Usage:
   scripts/wine-scene.py --attach OUT_DIR --display :N [options]
@@ -123,6 +125,16 @@ AIMS = {
         "(680,143) and sends 4008",
     ),
 }
+
+# The exe swallows a READY click until the pill is live. e2-playing-qualified
+# clicked ~1 s after 0BBA with no 4008; c1-start-cue/drive.log:52-63 pins the
+# successful click and its C2S 4008 / S2C 4009 pair. Retry on a short cadence,
+# but never queue the host start on an unconfirmed guest.
+READY_RETRY_SECONDS = 3.0
+READY_RETRY_WINDOW_SECONDS = 30.0
+READY_CONFIRM_SECONDS = 20.0
+JOIN_WIRE_OPCODE = 3002          # 0BBA, the wire clock's zero point
+C2S_READY_OPCODE = 4008          # 0FA8, the guest's READY press
 
 # Probe boxes, measured from this leg's own live frames (the captures that
 # fed them are cited in docs/captures/t240/findings.md).
@@ -503,6 +515,12 @@ class WireTapLog:
         self.take()
         return any(value == opcode for _, _, value in self.events)
 
+    def saw_direction(self, direction: str, opcode: int) -> bool:
+        """Whether the tap has logged this opcode from one side of the pair."""
+        self.take()
+        return any(direction == side and opcode == value
+                   for _, side, value in self.events)
+
     def note_boundaries(self, log: SceneLog, label: str) -> None:
         """Log the frame timeline since 03EC at one exe-visible boundary."""
         self.take()
@@ -871,6 +889,65 @@ def wait_until(probe, timeout: float, interval: float = 1.0) -> bool:
     return False
 
 
+class ReadyPillGate:
+    """Press the waiting-room pill until the guest's 4008 reaches the wire.
+
+    Live caller chain: rig-wine-run.sh phase_drive -> wine-scene.py drive ->
+    arm_start_gate -> ReadyPillGate.run. Each miss is logged with the wire
+    state so an early-click failure can be cited without guessing.
+    """
+
+    def __init__(self, wire: WireTapLog, injector: Input, log: SceneLog) -> None:
+        self.wire = wire
+        self.injector = injector
+        self.log = log
+
+    def wire_state(self) -> str:
+        return ",".join(self.wire.opcodes_since(JOIN_WIRE_OPCODE)) or "none"
+
+    def run(self) -> bool:
+        started = time.time()
+        deadline = started + READY_RETRY_WINDOW_SECONDS
+        attempt = 0
+        while time.time() < deadline:
+            attempt += 1
+            self.injector.send_click("ready-pill")
+            if self.wire.saw_direction("C2S", C2S_READY_OPCODE):
+                self.log.event(
+                    f"ready attempt={attempt} C2S 4008 confirmed "
+                    f"t=+{time.time() - started:.1f}s wire={self.wire_state()}")
+                return True
+            remaining = max(0.0, deadline - time.time())
+            wait = min(remaining, READY_RETRY_SECONDS)
+            self.log.event(
+                f"ready retry attempt={attempt} "
+                f"t=+{time.time() - started:.1f}s c2s_4008=no "
+                f"next_retry_in={wait:.1f}s wire={self.wire_state()}")
+            if remaining <= 0.0:
+                break
+            time.sleep(wait)
+        self.log.event(
+            f"ready FAILED reason=no C2S 4008 after {attempt} attempts "
+            f"in {READY_RETRY_WINDOW_SECONDS:.0f}s wire={self.wire_state()}")
+        return False
+
+
+def arm_start_gate(wire: WireTapLog, injector: Input, server: ServerLog,
+                   host: Host | None, log: SceneLog) -> bool:
+    """Only the ready guest may receive the host's explicit start command."""
+    if not ReadyPillGate(wire, injector, log).run():
+        return False
+    if not server.wait_for("0FA8", READY_CONFIRM_SECONDS):
+        log.event("ready FAILED reason=no 0FA8 after C2S 4008")
+        return False
+    log.event("ready guest 0FA8 confirmed (guest is ready)")
+    if host is None:
+        log.event("host start FAILED reason=no host bot")
+        return False
+    host.command("start")
+    return True
+
+
 class Host:
     """The room host bot: created before entry, driven by a command file."""
 
@@ -1222,11 +1299,9 @@ def drive(arguments, frames: Frames, server: ServerLog, injector: Input,
         if "loading" not in wanted:
             return reached
 
-        injector.send_click("ready-pill")
-        if not server.wait_for("0FA8", 20.0):
-            log.event("ready FAILED reason=no 0FA8 (the start may still arrive)")
-        if host is not None:
-            host.command("start")
+        if not arm_start_gate(wire, injector, server, host, log):
+            frames.capture(shots / "probe-failure.png")
+            return reached
         if not server.wait_for("0FAC", 30.0):
             log.event("stage loading FAILED reason=no 0FAC confirm")
             return reached
