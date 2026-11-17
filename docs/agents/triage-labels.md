@@ -135,13 +135,20 @@ Rules for closing playtest-class tickets (retro 2026-11-11, issues #26/#30/#53â€
    Example: `## Guards` followed by `staged_play_time_font_paints_nothing`,
    with its PASS and FAIL lines recorded in the same closing report.
 
-6. Every commit hash cited as evidence in a tracker comment is verified to
-   exist before the comment is posted: run `git cat-file -t <sha>` and confirm
-   it prints `commit`. Failure mode prevented: an agent stalls on "commit not
-   found" when a later step (or a reviewer) tries to resolve the cited object,
-   because the hash was mistyped or never existed (precedent: #167 cited
-   `ea4e098b`, which resolves to nothing; the real fix was `ea4f098`). This
-   check runs before any `gh issue comment`.
+6. Every commit hash in any tracker comment (issue body or later comment)
+   must resolve via `git cat-file -t <sha>` and print `commit` at posting time,
+   not merely once at close. Re-check after each rebase and before every
+   `gh issue comment` or body edit. Failure mode prevented: an agent stalls on
+   "commit not found" when a later step (or a reviewer) tries to resolve the
+   cited object, because the hash was mistyped or never existed (precedent:
+   #167 cited `ea4e098b`, which resolves to nothing; the real fix was
+   `ea4f098`). A token that fails is replaced by a verified SHA from
+   `git log --all` or marked explicitly UNVERIFIED with the rebased-away branch
+   name. Version stamps that only look like hashes (for example `v: 9692d41`
+   in the parity ledger) are labeled as stamps, not commits.
+   `scripts/tracker-audit.sh` cannot enforce this rule: it reads issue text
+   and checks guard names against `crates/`, with no git-object check and no
+   posting hook. The reviewer check is the enforcement point.
 
 
 7. **Live-path reachability for behavior guards.** Every guard named under

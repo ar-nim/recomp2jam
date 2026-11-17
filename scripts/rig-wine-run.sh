@@ -8,6 +8,7 @@
 #   --display :N              private X display (default: first free in :160-:179)
 #   --target SCENE            last scene the drive must reach (default loading)
 #   --music-id ID             room music (default 757)
+#   --join-mode MODE          dclick (qualified) or hover-press (#240 OPEN arm 1)
 #   --user-index-id N         guest account (default 1 = tester)
 #   --host-user-index-id N    host account (default 3 = t207probe; 0 = no host)
 #   --cross DIR               an A/B partner run dir; verify checks the two
@@ -52,6 +53,7 @@ shift
 DISPLAY_NAME=""
 TARGET="loading"
 MUSIC_ID=757
+JOIN_MODE="dclick"
 USER_INDEX_ID=1
 HOST_USER_INDEX_ID=3
 CROSS_DIR=""
@@ -62,6 +64,7 @@ while [ "$#" -gt 0 ]; do
     --display) DISPLAY_NAME="$2"; shift 2 ;;
     --target) TARGET="$2"; shift 2 ;;
     --music-id) MUSIC_ID="$2"; shift 2 ;;
+    --join-mode) JOIN_MODE="$2"; shift 2 ;;
     --user-index-id) USER_INDEX_ID="$2"; shift 2 ;;
     --host-user-index-id) HOST_USER_INDEX_ID="$2"; shift 2 ;;
     --cross) CROSS_DIR="$2"; shift 2 ;;
@@ -69,6 +72,11 @@ while [ "$#" -gt 0 ]; do
     *) die "unknown option: $1" ;;
   esac
 done
+
+case "$JOIN_MODE" in
+  dclick|hover-press) ;;
+  *) die "unknown --join-mode '$JOIN_MODE' (want dclick|hover-press)" ;;
+esac
 
 RIG_WINE_EXE="${RIG_WINE_EXE:-$HOME/scratch/run-full/OTwo.exe}"
 RIG_WINE_EXE_SHA256="${RIG_WINE_EXE_SHA256:-83a045418b6219ba340681766b33de2bfbb5ff51b813ef4e2e9dd1def72c823b}"
@@ -139,7 +147,8 @@ phase_drive() {
   note "phase drive (target $TARGET)"
   timeout "$RIG_WINE_DRIVE_TIMEOUT" python3 "$SCRIPT_DIR/wine-scene.py" \
     --attach "$OUT_DIR" --display "$DISPLAY_NAME" --target "$TARGET" \
-    --music-id "$MUSIC_ID" --host-user-index-id "$HOST_USER_INDEX_ID" \
+    --music-id "$MUSIC_ID" --join-mode "$JOIN_MODE" \
+    --host-user-index-id "$HOST_USER_INDEX_ID" \
     --wineprefix "$WINEPREFIX" > "$OUT_DIR/phases-drive.log" 2>&1 || true
   local reached
   reached="$(bash "$SCRIPT_DIR/scene-probe.sh" "$OUT_DIR/drive.log" 2>/dev/null || echo none)"
@@ -165,7 +174,7 @@ phase_package() {
   bash "$SCRIPT_DIR/run-manifest.sh" write "$OUT_DIR" \
     --pair "$PAIR" \
     --build "$(git -C "$REPO_ROOT" rev-parse HEAD)" \
-    --script "scripts/wine-scene.py (target $TARGET, music $MUSIC_ID)" \
+    --script "scripts/wine-scene.py (target $TARGET, music $MUSIC_ID, join $JOIN_MODE)" \
     --params "display=$DISPLAY_NAME sink=$(sed -n "s/^export PULSE_SINK='\([^']*\)'$/\1/p" "$OUT_DIR/env.sh" | head -1) exe_sha256=$RIG_WINE_EXE_SHA256" \
     --input-log "$OUT_DIR/drive.log" >> "$REPORT_FILE" 2>&1 \
     || { note "manifest write FAILED"; return 1; }

@@ -4,7 +4,7 @@
 # Usage:
 #   scripts/rig-wine.sh build-injector [OUT_DIR]
 #   scripts/rig-wine.sh launch <argv-file>
-#   scripts/rig-wine.sh send <move|click|down|up|key|type> [args...]
+#   scripts/rig-wine.sh send <move|click|dclick|press|down|up|key|type> [args...]
 #   scripts/rig-wine.sh reset
 #
 # Everything the Wine pair needs to start the 7.55 exe and to put input
@@ -108,7 +108,7 @@ cmd_launch() {
 }
 
 cmd_send() {
-  [ "$#" -ge 1 ] || die "send: a helper command is required (move|click|down|up|key|type)"
+  [ "$#" -ge 1 ] || die "send: a helper command is required (move|click|dclick|press|down|up|key|type)"
   require_prefix
   [ -f "$(injector_path)" ] || die "send: no injector at $(injector_path); run build-injector first"
   LANG="$RIG_WINE_LOCALE" wine "$(injector_path)" "$@"

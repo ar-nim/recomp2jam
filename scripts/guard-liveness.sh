@@ -1,4 +1,15 @@
 #!/usr/bin/env bash
+# guard-liveness.sh — compare guard-section tokens with `cargo test --list`.
+#
+# Usage: scripts/guard-liveness.sh [TEST_LIST_CACHE] [ISSUE_NUMBER]
+# The DEAD list is advisory. Close-discipline rule 7 asks closing comments
+# to put live caller chains under `## Guards`; the shared extractor returns
+# every snake_case token there, including chain functions such as
+# `run_play`, `paint_room`, and `load_worn_figure`. Those names are expected
+# to miss the test list and are not rot. `scripts/tracker-audit.sh` is the
+# authoritative guard-name gate. Exit semantics are unchanged: exit 1 while
+# any extracted token is absent from the test list (issue #186 requires no
+# behavior change to the shared extractor).
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CACHE="${1:-/tmp/guard-liveness-list.txt}"

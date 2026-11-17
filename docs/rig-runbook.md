@@ -31,6 +31,23 @@ One manifest per run records `pair`, `build`, `params`, `script`, and
 `seed`. One artifact layout per run holds the manifest copy, the input
 log, screenshots, and stats. A verifier rejects incomplete sets (#236).
 
+### Screenshot layout contract (#302)
+
+Every manifest declares `artifacts/screenshots` relative to the run
+out-dir, and every writer lands its screenshots there. The Wine runner
+captures directly into that path. The AFK runner leaves the client's
+`frames/*.png` where the client wrote them and copies them into
+`artifacts/screenshots` at package time before writing the manifest, so a
+fresh native pack has the same comparable layout as a Wine pack.
+
+`run-manifest.sh verify PACK1 PACK2` compares those directories. It fails
+loudly when either side has zero screenshot files (`CROSS-PAIR has no
+comparable screenshots`) and when any screenshot bytes repeat across the
+pair (`CROSS-PAIR duplicate screenshots`). An empty comparison is never a
+pass. The hermetic `scripts/run-manifest.sh selftest` pins three scenario
+names: `empty-screenshot-set-is-rejected`,
+`cross-pair-duplicate-is-rejected`, and `cross-pair-distinct-is-accepted`.
+
 Capture provenance is emitted, not hand-written (#281,
 `docs/reversing.md` section 6):
 
@@ -55,6 +72,25 @@ would have refused the #278 retraction. A run dir written before
 `rig-run.sh` recorded `pids` has no discoverable command: pass
 `--command` and `--build` by hand, or `verify` fails loud (an unnamed
 command is not provenance).
+
+### Committed capture records (#308)
+
+A committed record such as `docs/captures/t240/` is a hash-pinned pointer,
+not a citable run dir: binary captures stay in the git-ignored local pack,
+and the committed copies are prefixed (`wine-provenance.json`,
+`wine-manifest.json`, `wine-citation.txt`). `record-hashes.txt` pins their
+sha256 values.
+
+```
+bash scripts/rig-provenance.sh check-record docs/captures/t240
+```
+
+`check-record` needs only the committed directory, so it works in CI: it
+verifies all three hashes and checks that `wine-citation.txt` quotes the
+manifest hash and every artifact hash in the pinned provenance. A changed
+byte is a loud nonzero exit. Re-citing with `cite ... --claim exe` requires
+the local, git-ignored pack `~/scratch/240-fix/wine2`; `cite` still refuses
+the committed directory by design.
 
 The scheduled injector stamps one epoch per press to its own record file
 across all lanes; the pairing script matches epochs to judged lines,
@@ -99,10 +135,11 @@ only when its pixels match a measured signature — a frame that shows
 another scene is reported, never relabelled.
 
 Known gaps from the qualification run (each with its next step in
-`docs/captures/t240/findings.md`): the waiting-room join, a loading-gate
-pixel signature, the route guard matching the launcher instead of
-`OTwo.exe`, and `run-manifest.sh`'s `artifacts/screenshots` versus the AFK
-runner's `frames/`.
+`docs/captures/t240/findings.md`): the waiting-room join and a loading-gate
+pixel signature. The `artifacts/screenshots` versus `frames/` split was
+closed by #302 with the shared layout contract above, and the launcher-vs-
+`OTwo.exe` route guard gap was closed by #311 with the exe stream alias
+(stub-verified; a live re-run belongs to the next exe leg).
 
 ## AFK end-to-end runner (#280)
 
@@ -125,7 +162,7 @@ It composes the kit instead of repeating it:
 | drive | the scene script in `--attach` mode | `scripts/planet-to-waiting.sh` |
 | inject | `scripts/rig-inject.sh` (own record file) | `scripts/rig-inject.sh` |
 | stop | `scripts/rig-run.sh stop` (pidfile only) | `scripts/rig-run.sh` |
-| package | `run-manifest.sh write` + `rig-provenance.sh emit` | those scripts |
+| package | stage `frames/*.png` into `artifacts/screenshots`, then `run-manifest.sh write` + `rig-provenance.sh emit` | those scripts |
 | check | scene probe, frame count, `pair-stats.sh`, `rig-audio.sh verify`, `run-manifest.sh verify` | those scripts |
 
 The native session argv (binary, login, room, frame dump, input log) lives in
@@ -144,8 +181,8 @@ Self-checks, all of them red on failure and quoted verbatim in
    `SKIP ... (menu-only drive)` instead of passing silently.
 4. `audio` — the sidecar must declare `expect=sound`, `state=captured`, and
    `rig-audio.sh verify` must measure above the floor.
-5. `manifest` — `run-manifest.sh verify` (artifact set, screenshots distinct,
-   provenance complete, audio verified).
+5. `manifest` — `run-manifest.sh verify` (artifact set, staged screenshots
+   distinct, provenance complete, audio verified).
 
 `<out-dir>/status` holds `PASS` or `FAILED`; the runner exits 0 or 1. A failed
 check keeps the whole pack — nothing is deleted and nothing is cleaned up — and
@@ -177,7 +214,9 @@ when the bar is met.
 Rig artifacts never share a path with client outputs. The injector keeps
 its own record file; it never writes into the client input log. Manifest,
 input log, screenshots, and stats live in the run's out-dir. Client
-outputs (input log, frame dump) stay on the paths the client wrote them.
+outputs (input log, frame dump) stay on the paths the client wrote them:
+`frames/` remains the client's frame dump, and the staged copy in
+`artifacts/screenshots` is the pack's comparable screenshot set (#302).
 
 ## Commit-or-lose-it rule
 
@@ -294,13 +333,19 @@ touched.
 
 After the client starts, `run` reads `pactl list sink-inputs`, maps sink
 indices to names, and looks for streams whose `node.name` /
-`application.name` carries the client's basename. A client stream on the
-system default sink aborts the run: exit 12, `CONTAINMENT BREACH` on
-stderr, `route=default-sink-breach` in the sidecar, and the run is
-stopped immediately. The check polls for up to `RIG_AUDIO_ROUTE_TRIES`
-ticks (100, so 10 s): the native client opens its stream about 4 s into
-the boot, after chart and bank decode. A client that opens no stream
-leaves `route=unseen` and the loudness probe still judges the artifact.
+`application.name` carries the client's basename **or** the Wine exe
+stream name `OTwo.exe` (#311). A matching stream on the system default
+sink aborts the run: exit 12, `CONTAINMENT BREACH` on stderr,
+`route=default-sink-breach` in the sidecar, and the run is stopped
+immediately. The check polls for up to `RIG_AUDIO_ROUTE_TRIES` ticks (100,
+so 10 s): the native client opens its stream about 4 s into the boot,
+after chart and bank decode. A graph with no matching stream leaves
+`route=unseen`: that verdict only says the guard saw nothing. It is **not**
+proof of silence; the level sidecar (`expect`, `state`, `peak_dbfs`,
+`mean_dbfs`) and `rig-audio.sh verify` judge the artifact. The hermetic
+`scripts/rig-audio.sh selftest` pins both Wine exe cases:
+`wine-exe-run-sink` (green, `route=sink`) and `wine-exe-default-sink`
+(red, breach + exit 12).
 
 ### Validation bar
 
@@ -327,7 +372,7 @@ Knobs: `RIG_AUDIO_CAPTURE` (1, the default), `RIG_AUDIO_RATE` (48000),
 | Leg | Sink | Tap | Status |
 |---|---|---|---|
 | Native (recomp2jam) | per-run `rig_null_<pid>` | `parec` monitor → wav | proven: #279 acceptance run captured non-silent game audio |
-| Wine (OTwo.exe) | same sink, same tap | same tap | Proven (#240): a blob-launched boot bound to the run's own sink — `pactl` showed `OTwo.exe` on `rig_null_<pid>`, and the tap measured peak 0.0 dBFS over 90 s (`docs/captures/t240/findings.md`). The launcher's basename is not the exe's, so `rig-run.sh`'s route guard reports `route=unseen`; the level probe still judges the artifact, and closing that guard is a named follow-up |
+| Wine (OTwo.exe) | same sink, same tap | same tap | Proven (#240): a blob-launched boot bound to the run's own sink — `pactl` showed `OTwo.exe` on `rig_null_<pid>`, and the tap measured peak 0.0 dBFS over 90 s (`docs/captures/t240/findings.md`). The historical pack's sidecar says `route=unseen` because the guard matched only the launcher; #311 added the exe stream alias (stub-verified here). The level sidecar, not `route=unseen`, is the silence evidence |
 
 `--no-sound` stays available for runs that must not emit audio at all;
 such a run declares `expect=silence` and its artifact is the proof that

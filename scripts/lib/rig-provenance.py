@@ -23,6 +23,11 @@ SCHEMA_ID = "rig-provenance-v1"
 MANIFEST_NAME = "provenance.json"
 MANIFEST_HASH_KEY = "manifest_sha256"
 
+# A committed capture record is a hash-pinned pointer: copyrighted bytes
+# stay in the local, git-ignored run dir.
+RECORD_HASHES_NAME = "record-hashes.txt"
+RECORD_COPIES = ("wine-provenance.json", "wine-manifest.json", "wine-citation.txt")
+
 EXE_KIND = "exe"
 CLIENT_BUILD_KIND = "client-build"
 PRODUCER_KINDS = (EXE_KIND, CLIENT_BUILD_KIND)
@@ -415,6 +420,109 @@ def cmd_check(args: argparse.Namespace) -> int:
     return report(problems, notes, "rig-provenance: manifest complete")
 
 
+# --- committed record -------------------------------------------------------
+
+
+def invalid_sha256(digest: str) -> bool:
+    return len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest.lower())
+
+
+def read_record_pins(path: Path) -> tuple[dict[str, str], list[str]]:
+    """Read the pinned sha256 values; a missing pin is a record failure."""
+    if not path.is_file():
+        return {}, [f"record: no hash pins at {path}"]
+    pins: dict[str, str] = {}
+    problems = []
+    for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        fields = line.split()
+        if len(fields) != 2 or invalid_sha256(fields[0]):
+            problems.append(f"record: malformed pin on line {number}")
+            continue
+        digest, name = fields
+        if "/" in name or "\\" in name:
+            problems.append(f"record: pin on line {number} is not a file name")
+        elif name in pins:
+            problems.append(f"record: duplicate pin for {name}")
+        else:
+            pins[name] = digest
+    for name in RECORD_COPIES:
+        if name not in pins:
+            problems.append(f"record: no pin for {name}")
+    return pins, problems
+
+
+def record_copy_problems(record_dir: Path, pins: dict[str, str]) -> list[str]:
+    problems = []
+    for name in RECORD_COPIES:
+        digest = pins.get(name)
+        if digest is None:
+            continue
+        path = record_dir / name
+        if not path.is_file():
+            problems.append(f"record: {name} missing from the committed record")
+            continue
+        actual = sha256_of(path)
+        if actual != digest:
+            problems.append(f"record: {name} sha256 {actual} != pinned {digest}")
+    return problems
+
+
+def citation_link_problems(record_dir: Path) -> list[str]:
+    """The citation must quote the pinned provenance, not merely exist."""
+    try:
+        document = json.loads((record_dir / RECORD_COPIES[0]).read_text(encoding="utf-8"))
+        citation = (record_dir / RECORD_COPIES[2]).read_text(encoding="utf-8")
+    except (OSError, json.JSONDecodeError) as error:
+        return [f"record: cannot read the pinned provenance or citation ({error})"]
+    problems = []
+    digest = document.get(MANIFEST_HASH_KEY, "")
+    if digest != canonical_digest(document):
+        problems.append("record: provenance manifest_sha256 does not match its content")
+    if f"manifest sha256 {digest}" not in citation:
+        problems.append("record: citation does not quote the pinned manifest sha256")
+    artifacts = document.get("artifacts") or []
+    if not isinstance(artifacts, list) or not artifacts:
+        problems.append("record: pinned provenance lists no artifacts")
+    else:
+        for entry in artifacts:
+            name = entry.get("path", "")
+            phrase = f"{name} sha256 {entry.get('sha256', '')}"
+            if phrase not in citation:
+                problems.append(f"record: citation omits artifact hash {name}")
+    return problems
+
+
+def report_record_problems(problems: list[str]) -> int:
+    print("rig-provenance: RECORD CHECK FAILED", file=sys.stderr)
+    for problem in problems:
+        print(f"  {problem}", file=sys.stderr)
+    print(
+        "rig-provenance: a drifting pointer is not evidence "
+        "(docs/captures/t240/findings.md)",
+        file=sys.stderr,
+    )
+    return EXIT_INCOMPLETE
+
+
+def cmd_check_record(args: argparse.Namespace) -> int:
+    record_dir = Path(args.record_dir).resolve()
+    if not record_dir.is_dir():
+        return usage_error(f"record dir not found: {record_dir}")
+    pins, problems = read_record_pins(record_dir / RECORD_HASHES_NAME)
+    problems += record_copy_problems(record_dir, pins)
+    if not problems:
+        problems += citation_link_problems(record_dir)
+    if problems:
+        return report_record_problems(problems)
+    for name in RECORD_COPIES:
+        print(f"rig-provenance: {name} sha256 {pins[name]} (pinned)")
+    print("rig-provenance: record check OK; citation quotes the pinned provenance")
+    return 0
+
+
 # --- cite ------------------------------------------------------------------
 
 
@@ -522,6 +630,9 @@ def build_parser() -> argparse.ArgumentParser:
     check = commands.add_parser("check", help="enforce a run dir's provenance")
     check.add_argument("run_dir")
 
+    record = commands.add_parser("check-record", help="verify a hash-pinned committed record")
+    record.add_argument("record_dir")
+
     cite = commands.add_parser("cite", help="print a citation paragraph")
     cite.add_argument("run_dir")
     cite.add_argument("--claim", choices=("none", "exe"), default="none")
@@ -530,7 +641,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str]) -> int:
     args = build_parser().parse_args(argv[1:])
-    handler = {"emit": cmd_emit, "check": cmd_check, "cite": cmd_cite}[args.command]
+    handler = {
+        "emit": cmd_emit,
+        "check": cmd_check,
+        "check-record": cmd_check_record,
+        "cite": cmd_cite,
+    }[args.command]
     return handler(args)
 
 

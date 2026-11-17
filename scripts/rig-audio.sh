@@ -20,7 +20,10 @@
 #     measurement and duration into the sidecar `<out-dir>/audio/manifest`.
 # assert-route: fails loud (exit 12) when a stream of the run's client is
 #     linked to the system default sink: the agent path must never reach
-#     the owner's speakers.
+#     the owner's speakers. Wine streams carry the exe name, so the exe
+#     stream name is matched in addition to the launcher basename (#311).
+#     route=unseen means the guard saw no stream, not that the tap was
+#     silent; the level sidecar judges silence.
 # probe: prints `peak_dbfs=` and `mean_dbfs=`; exit 0 when the peak is
 #     above the silence floor, 1 when the file is silent, 2 when unreadable.
 # verify: the audio verifier for a finished run — fails a run whose audio
@@ -43,6 +46,9 @@ RIG_AUDIO_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/rig-preflight.s
 RIG_AUDIO_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 
 die() { echo "rig-audio: $*" >&2; exit 2; }
+
+# Wine's PulseAudio stream is named after the exe, not the launcher (#311).
+RIG_AUDIO_EXE_STREAM_NAME="OTwo.exe"
 
 # --- lane layout ------------------------------------------------------------
 rig_audio_dir() { printf '%s/audio' "$1"; }
@@ -355,15 +361,16 @@ rig_audio_capture_stop() {
 # lines: route, client_streams, on_default_sink, default_sink,
 # run_sink_streams, muted_run_sink_streams. Empty output = unreadable graph.
 rig_audio_route_verdict() {
-  local client="$1" sink="$2" scratch
+  local client="$1" sink="$2" exe_stream="$3" scratch
   scratch="$(mktemp -d)"
   pactl list sinks short > "$scratch/sinks" 2>/dev/null || : > "$scratch/sinks"
   pactl list sink-inputs > "$scratch/inputs" 2>/dev/null || : > "$scratch/inputs"
   pactl get-default-sink > "$scratch/default" 2>/dev/null || : > "$scratch/default"
-  python3 - "$scratch/sinks" "$scratch/inputs" "$scratch/default" "$client" "$sink" <<'PYEOF' || true
+  python3 - "$scratch/sinks" "$scratch/inputs" "$scratch/default" \
+    "$client" "$sink" "$exe_stream" <<'PYEOF' || true
 import sys
 
-sinks_file, inputs_file, default_file, client, sink = sys.argv[1:6]
+sinks_file, inputs_file, default_file, client, sink, exe_stream = sys.argv[1:7]
 name_of_index = {}
 with open(sinks_file, encoding="utf-8", errors="replace") as fh:
     for line in fh:
@@ -406,7 +413,12 @@ for line in lines:
 
 flush()
 
-client_streams = [s for s in streams if any(client in name for name in s["names"])]
+# The launcher basename misses Wine's exe stream: match both names.
+client_aliases = [alias.lower() for alias in (client, exe_stream) if alias]
+client_streams = [
+    s for s in streams
+    if any(alias in name.lower() for name in s["names"] for alias in client_aliases)
+]
 on_default = [s for s in client_streams if s["sink"] == default_sink]
 on_run_sink = [s for s in client_streams if sink and s["sink"] == sink]
 if not client_streams:
@@ -433,7 +445,7 @@ rig_audio_assert_route() {
   [ -f "$sidecar" ] || return 0
   [ "$(rig_audio_field "$out_dir" state || true)" = "capturing" ] || return 0
   sink="$(rig_audio_field "$out_dir" sink || true)"
-  verdict="$(rig_audio_route_verdict "$client" "$sink")"
+  verdict="$(rig_audio_route_verdict "$client" "$sink" "$RIG_AUDIO_EXE_STREAM_NAME")"
   if [ -z "$verdict" ]; then
     rig_note "audio route: not verified (pactl could not be parsed)"
     return 0
@@ -865,12 +877,17 @@ selftest_capture_legs() {
   echo "rig-audio: selftest leg capture-source-mismatch PASS (wrong source rejected, recorder reaped)"
 }
 
-# asserts the route verdict and the stream bookkeeping of one stub graph
-route_leg() {
-  local leg="$1" state="$2" run="$3" want_route="$4" want_muted="$5"; shift 5
+# Asserts the exit code, route verdict and stream bookkeeping of one stub graph.
+route_leg() {  # <leg> <state> <run> <want-route> <want-muted> <want-code>
+  local leg="$1" state="$2" run="$3" want_route="$4" want_muted="$5" want_code="$6"; shift 6
   rig_audio_set_field "$run" state "capturing"
   rm -f "$state/stream-ops"
-  env "$@" bash -c ". '$RIG_AUDIO_SCRIPT'; rig_audio_assert_route '$run' stub-client" >/dev/null 2>&1
+  local code=0
+  env "$@" bash -c ". '$RIG_AUDIO_SCRIPT'; rig_audio_assert_route '$run' stub-client" >/dev/null 2>&1 || code=$?
+  if [ "$code" -ne "$want_code" ]; then
+    selftest_fail "$leg" "assert-route exited $code, want $want_code"
+    return 1
+  fi
   local route
   route="$(rig_audio_field "$run" route)"
   if [ "$route" != "$want_route" ]; then
@@ -889,7 +906,7 @@ selftest_route_legs() {
   local env_common=(PATH="$bin:$PATH" STUBSTATE="$state")
   # A client stream on the run sink: contained and normalized (an unmuted
   # stream still gets mute 0 / volume 100%, which is harmless on our sink).
-  route_leg "route-run-sink" "$state" "$run" "sink" "0" \
+  route_leg "route-run-sink" "$state" "$run" "sink" "0" 0 \
     "${env_common[@]}" STUB_SINKINPUT_NAME=stub-client STUB_SINKINPUT_SINK=stub_sink || return 1
   [ "$(rig_audio_field "$run" streams_normalized)" = "1" ] || {
     selftest_fail "route-run-sink" "streams_normalized is '$(rig_audio_field "$run" streams_normalized)', want 1"
@@ -897,7 +914,7 @@ selftest_route_legs() {
   }
   echo "rig-audio: selftest leg route-run-sink PASS (contained, normalized)"
   # A remembered mute leaves the tap silent: the lane must count and clear it.
-  route_leg "route-muted-stream" "$state" "$run" "sink" "1" \
+  route_leg "route-muted-stream" "$state" "$run" "sink" "1" 0 \
     "${env_common[@]}" STUB_SINKINPUT_NAME=stub-client STUB_SINKINPUT_SINK=stub_sink \
     STUB_SINKINPUT_MUTE=1 || return 1
   grep -q "^set-sink-input-mute 900 0$" "$state/stream-ops" || {
@@ -906,7 +923,7 @@ selftest_route_legs() {
   }
   echo "rig-audio: selftest leg route-muted-stream PASS (mute counted and cleared)"
   # A stream on a foreign sink is never touched: only this run's sink is ours.
-  route_leg "route-foreign-sink" "$state" "$run" "foreign-sink" "" \
+  route_leg "route-foreign-sink" "$state" "$run" "foreign-sink" "" 0 \
     "${env_common[@]}" STUB_SINKINPUT_NAME=stub-client STUB_SINKINPUT_SINK=wine_null || return 1
   if [ -s "$state/stream-ops" ]; then
     selftest_fail "route-foreign-sink" "the lane touched a foreign stream ($(cat "$state/stream-ops"))"
@@ -914,17 +931,18 @@ selftest_route_legs() {
   fi
   echo "rig-audio: selftest leg route-foreign-sink PASS (foreign stream untouched)"
   # A client stream on the system default sink is a breach.
-  if env "${env_common[@]}" STUB_SINKINPUT_NAME=stub-client \
-    STUB_SINKINPUT_SINK=alsa_output.default \
-    bash -c ". '$RIG_AUDIO_SCRIPT'; rig_audio_assert_route '$run' stub-client" >/dev/null 2>&1; then
-    selftest_fail "route-default-sink" "a client stream on the default sink was not a breach"
-    return 1
-  fi
-  [ "$(rig_audio_field "$run" route)" = "default-sink-breach" ] || {
-    selftest_fail "route-default-sink" "route is '$(rig_audio_field "$run" route)', want 'default-sink-breach'"
-    return 1
-  }
+  route_leg "route-default-sink" "$state" "$run" "default-sink-breach" "" "$RIG_E_AUDIO" \
+    "${env_common[@]}" STUB_SINKINPUT_NAME=stub-client \
+    STUB_SINKINPUT_SINK=alsa_output.default || return 1
   echo "rig-audio: selftest leg route-default-sink PASS (breach rejected)"
+  # Wine's stream is named after the exe, not the launcher basename (#311).
+  route_leg "wine-exe-run-sink" "$state" "$run" "sink" "0" 0 \
+    "${env_common[@]}" STUB_SINKINPUT_NAME=OTwo.exe STUB_SINKINPUT_SINK=stub_sink || return 1
+  echo "rig-audio: selftest leg wine-exe-run-sink PASS (OTwo.exe on run sink recognized)"
+  route_leg "wine-exe-default-sink" "$state" "$run" "default-sink-breach" "" "$RIG_E_AUDIO" \
+    "${env_common[@]}" STUB_SINKINPUT_NAME=OTwo.exe \
+    STUB_SINKINPUT_SINK=alsa_output.default || return 1
+  echo "rig-audio: selftest leg wine-exe-default-sink PASS (OTwo.exe on default sink rejected)"
 }
 
 cmd_selftest() {

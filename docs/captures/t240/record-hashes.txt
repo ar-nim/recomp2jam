@@ -1,0 +1,9 @@
+# Hash pins for the committed t240 capture record (#308).
+# This directory is a hash-pinned pointer, not a citable run dir: binary
+# captures are git-ignored (copyrighted bytes stay local). Re-citing with
+# `rig-provenance.sh cite ... --claim exe` needs the local pack
+# ~/scratch/240-fix/wine2; CI must use `check-record` instead.
+# Format: sha256 then committed file name (sha256sum-compatible).
+f6f7f52ceaa70fe26e9dffde9fba1d252bac50a68410f83296b52a35ee3be994  wine-provenance.json
+57089d0365191ebba4261abe5f5d38785908f528a3e7ca80e905e357cf3f3cfa  wine-manifest.json
+15442fbffd60aee7e305d64329dc43c045aea56183b931a76a153e358948b6c3  wine-citation.txt

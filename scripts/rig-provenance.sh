@@ -4,6 +4,7 @@
 # Usage:
 #   scripts/rig-provenance.sh emit OUT_DIR --producer BINARY [options]
 #   scripts/rig-provenance.sh check OUT_DIR
+#   scripts/rig-provenance.sh check-record DIR
 #   scripts/rig-provenance.sh cite OUT_DIR [--claim none|exe]
 #
 # emit: probes the tool versions (python3, Xvfb, wine, capture tool,
@@ -17,6 +18,9 @@
 # cite: prints the one-paragraph citation block for a manifest-complete run.
 #     --claim exe also demands that the exe itself produced the pixels
 #     (producer kind exe + wine version), which is the #278 check.
+# check-record: verifies the three prefixed copies in a committed capture
+#     record against record-hashes.txt, and that the citation quotes the
+#     pinned provenance. It never reads the local, git-ignored run dir (#308).
 #
 # Options for emit:
 #   --producer BINARY            the binary that produced the captures
@@ -295,6 +299,13 @@ cmd_check() {
   python3 "$LIB" check "$out_dir"
 }
 
+cmd_check_record() {
+  local record_dir="${1:-}"
+  [ -n "$record_dir" ] || die "check-record: record directory required"
+  require_python
+  python3 "$LIB" check-record "$record_dir"
+}
+
 cmd_cite() {
   local out_dir="${1:-}" claim="none"
   [ -n "$out_dir" ] || die "cite: run directory required"
@@ -314,8 +325,9 @@ main() {
   case "$command" in
     emit) cmd_emit "$@" ;;
     check) cmd_check "$@" ;;
+    check-record) cmd_check_record "$@" ;;
     cite) cmd_cite "$@" ;;
-    *) die "usage: rig-provenance.sh {emit|check|cite} OUT_DIR [options]" ;;
+    *) die "usage: rig-provenance.sh {emit|check|check-record|cite} DIR [options]" ;;
   esac
 }
 

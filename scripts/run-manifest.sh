@@ -4,6 +4,13 @@
 # verify also enforces capture provenance (docs/reversing.md section 6,
 # scripts/rig-provenance.sh): a run dir that holds captures needs a
 # complete provenance.json, or the run fails.
+#
+# Layout contract (#302): every pack writes screenshots to the relative path
+# artifacts/screenshots; both the Wine runner and rig-afk.sh (which stages
+# its frames there) obey it. A cross-pair verify with zero comparable
+# screenshots on either side fails instead of certifying an empty check.
+# `selftest` red-proves the empty and duplicate cases and green-proves
+# distinct screenshots.
 set -euo pipefail
 
 die() { echo "run-manifest: $*" >&2; exit 2; }
@@ -152,7 +159,8 @@ cmd_verify() {
     other_dir="$(cd "$(dirname "$other_manifest")" && pwd)"
   fi
 
-  python3 - "$manifest" "$base_dir" "$other_dir" <<'PY'
+  local artifact_code=0
+  python3 - "$manifest" "$base_dir" "$other_dir" <<'PY' || artifact_code=$?
 import json, os, sys
 manifest_path, base_dir, other_dir = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(manifest_path, "r", encoding="utf-8") as fh:
@@ -180,51 +188,69 @@ if missing:
 # Screenshots must be pairwise distinct: a copied file renamed per
 # scene proves nothing (seen: byte-identical loading/waiting shots).
 import hashlib
-shots_dir = os.path.join(base_dir, "artifacts", "screenshots")
-if os.path.isdir(shots_dir):
-    seen = {}
-    dupes = []
-    for name in sorted(os.listdir(shots_dir)):
-        full = os.path.join(shots_dir, name)
+
+
+def screenshot_hashes(directory):
+    """Map each screenshot digest to the names of files holding those bytes."""
+    hashes = {}
+    if not os.path.isdir(directory):
+        return hashes
+    for name in sorted(os.listdir(directory)):
+        full = os.path.join(directory, name)
         if not os.path.isfile(full):
             continue
         with open(full, "rb") as fh:
             digest = hashlib.md5(fh.read()).hexdigest()
-        if digest in seen:
-            dupes.append("%s duplicates %s" % (name, seen[digest]))
-        else:
-            seen[digest] = name
-    if dupes:
-        print("run-manifest: DUPLICATE screenshots", file=sys.stderr)
-        for item in dupes:
-            print("  dupe: " + item, file=sys.stderr)
-        sys.exit(1)
+        hashes.setdefault(digest, []).append(name)
+    return hashes
+
+
+base_shots_dir = os.path.join(base_dir, "artifacts", "screenshots")
+base_hashes = screenshot_hashes(base_shots_dir)
+dupes = [
+    "%s duplicates %s" % (name, names[0])
+    for names in base_hashes.values()
+    for name in names[1:]
+]
+if dupes:
+    print("run-manifest: DUPLICATE screenshots", file=sys.stderr)
+    for item in dupes:
+        print("  dupe: " + item, file=sys.stderr)
+    sys.exit(1)
 
 # An A/B proof with identical files across pairs proves nothing
-# (seen: seat shots byte-identical to native). With a second
-# manifest, every screenshot hash must be unique across both sets.
+# (seen: seat shots byte-identical to native). With a second manifest,
+# every screenshot hash must be unique across both sets. A pack with no
+# screenshots has no comparable evidence, so refuse the cross-pair verdict.
 if other_dir:
-    other_shots = os.path.join(other_dir, "artifacts", "screenshots")
-    if os.path.isdir(other_shots):
-        cross = []
-        for name in sorted(os.listdir(other_shots)):
-            full = os.path.join(other_shots, name)
-            if not os.path.isfile(full):
-                continue
-            with open(full, "rb") as fh:
-                digest = hashlib.md5(fh.read()).hexdigest()
-            if digest in seen:
-                cross.append("%s duplicates %s" % (name, seen[digest]))
-        if cross:
-            print("run-manifest: CROSS-PAIR duplicate screenshots", file=sys.stderr)
-            for item in cross:
-                print("  dupe: " + item, file=sys.stderr)
-            sys.exit(1)
+    other_shots_dir = os.path.join(other_dir, "artifacts", "screenshots")
+    other_hashes = screenshot_hashes(other_shots_dir)
+    if not base_hashes or not other_hashes:
+        print("run-manifest: CROSS-PAIR has no comparable screenshots", file=sys.stderr)
+        for label, directory, hashes in (
+            ("base", base_shots_dir, base_hashes),
+            ("other", other_shots_dir, other_hashes),
+        ):
+            if not hashes:
+                print("  missing: screenshots in %s (%s pack)" % (directory, label), file=sys.stderr)
+        sys.exit(1)
+    cross = [
+        "%s duplicates %s" % (name, base_hashes[digest][0])
+        for digest, names in other_hashes.items()
+        if digest in base_hashes
+        for name in names
+    ]
+    if cross:
+        print("run-manifest: CROSS-PAIR duplicate screenshots", file=sys.stderr)
+        for item in cross:
+            print("  dupe: " + item, file=sys.stderr)
+        sys.exit(1)
 
 print("run-manifest: artifact set complete")
 PY
 
-  check_capture_provenance "$base_dir"
+  [ "$artifact_code" -eq 0 ] || return "$artifact_code"
+  check_capture_provenance "$base_dir" || return $?
   # Audio artifact validation (#279): when the run declares audio,
   # rig-audio verify enforces presence + non-silence + manifest fields.
   if compgen -G "$base_dir/audio/manifest" >/dev/null; then
@@ -236,6 +262,87 @@ check_capture_provenance() {
   local run_dir="$1"
   [ -r "$PROVENANCE_LIB" ] || die "verify: missing provenance checker: $PROVENANCE_LIB"
   python3 "$PROVENANCE_LIB" check "$run_dir"
+}
+
+# --- selftest ---------------------------------------------------------------
+# Synthetic packs: no game, no display, no copyrighted bytes. The fake
+# Xvfb exists only so emit can pin a tool that is absent from this host.
+selftest_fail() {
+  echo "run-manifest: selftest leg $1 FAIL: $2" >&2
+  exit 1
+}
+
+selftest_pass() { echo "selftest: leg $1 PASS ($2)"; }
+
+selftest_make_pack() {  # <dir> <pair> <shot-1 bytes> <shot-2 bytes>
+  local dir="$1" pair="$2" first_shot="$3" second_shot="$4"
+  cmd_write "$dir" --pair "$pair" --build selftest --script selftest \
+    --params selftest --seed 1 >/dev/null
+  if [ -n "$first_shot" ]; then
+    printf '%s\n' "$first_shot" >"$dir/artifacts/screenshots/frame-0001.png"
+    printf '%s\n' "$second_shot" >"$dir/artifacts/screenshots/frame-0002.png"
+  fi
+  "$SCRIPT_DIR/rig-provenance.sh" emit "$dir" \
+    --producer "$SELFTEST_PRODUCER" --cargo-profile debug \
+    --git-commit selftest --command selftest --display :777 \
+    --tool-version xvfb selftest-21.1 >/dev/null
+}
+
+selftest_assert_cross_pair() {  # <leg> <want-code> <needle> <detail>
+  local leg="$1" want_code="$2" needle="$3" detail="$4"
+  local log="$TMP/${leg}.log" code=0
+  cmd_verify "$TMP/wine/manifest.json" "$TMP/afk/manifest.json" >"$log" 2>&1 || code=$?
+  if [ "$code" -ne "$want_code" ]; then
+    sed -n '1,20p' "$log" >&2
+    selftest_fail "$leg" "cross-verify exited $code, want $want_code"
+  fi
+  if ! grep -qF -- "$needle" "$log"; then
+    sed -n '1,20p' "$log" >&2
+    selftest_fail "$leg" "verifier output lacks '$needle'"
+  fi
+  selftest_pass "$leg" "$detail"
+}
+
+selftest_leg_empty_screenshot_set_is_rejected() {
+  local leg="empty-screenshot-set-is-rejected"
+  selftest_make_pack "$TMP/wine" wine wine-shot-a wine-shot-b
+  selftest_make_pack "$TMP/afk" native "" ""
+  selftest_assert_cross_pair "$leg" 1 \
+    "CROSS-PAIR has no comparable screenshots" \
+    "a fresh AFK pack with no staged screenshots is refused"
+}
+
+selftest_leg_cross_pair_duplicate_is_rejected() {
+  local leg="cross-pair-duplicate-is-rejected"
+  selftest_make_pack "$TMP/wine" wine wine-shot-a wine-shot-b
+  selftest_make_pack "$TMP/afk" native wine-shot-a afk-shot-b
+  selftest_assert_cross_pair "$leg" 1 \
+    "CROSS-PAIR duplicate screenshots" \
+    "one injected duplicate across the two packs is refused"
+}
+
+selftest_leg_cross_pair_distinct_is_accepted() {
+  local leg="cross-pair-distinct-is-accepted"
+  selftest_make_pack "$TMP/wine" wine wine-shot-a wine-shot-b
+  selftest_make_pack "$TMP/afk" native afk-shot-a afk-shot-b
+  selftest_assert_cross_pair "$leg" 0 \
+    "artifact set complete" \
+    "genuinely distinct screenshots pass the cross-pair check"
+}
+
+cmd_selftest() {
+  TMP="$(mktemp -d)"
+  trap 'rm -rf "$TMP"' EXIT
+  mkdir -p "$TMP/bin"
+  printf '#!/bin/sh\nexit 0\n' >"$TMP/bin/Xvfb"
+  printf '#!/bin/sh\nexit 0\n' >"$TMP/bin/producer"
+  chmod +x "$TMP/bin/Xvfb" "$TMP/bin/producer"
+  SELFTEST_PRODUCER="$TMP/bin/producer"
+  export PATH="$TMP/bin:$PATH"
+  selftest_leg_empty_screenshot_set_is_rejected
+  selftest_leg_cross_pair_duplicate_is_rejected
+  selftest_leg_cross_pair_distinct_is_accepted
+  echo "run-manifest: selftest OK"
 }
 
 cmd_rerun() {
@@ -326,7 +433,8 @@ main() {
     verify) [ "$#" -ge 1 ] || die "usage: run-manifest.sh verify MANIFEST_OR_DIR [OTHER_FOR_CROSS_PAIR_CHECK]"; cmd_verify "$1" "${2:-}" ;;
     rerun) [ "$#" -ge 1 ] || die "usage: run-manifest.sh rerun MANIFEST [options]"; cmd_rerun "$@" ;;
     sequence) [ "$#" -ge 1 ] || die "usage: run-manifest.sh sequence INPUT_LOG"; cmd_sequence "$1" ;;
-    *) die "usage: run-manifest.sh {write|verify|rerun|sequence} ..." ;;
+    selftest) cmd_selftest ;;
+    *) die "usage: run-manifest.sh {write|verify|rerun|sequence|selftest} ..." ;;
   esac
 }
 

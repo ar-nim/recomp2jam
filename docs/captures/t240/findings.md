@@ -80,6 +80,21 @@ Aim points used, each printed with its evidence into `wine-drive.log`:
 version 7.55, pinned sha256, full command, tool versions, every capture
 hashed). The printed paragraph is committed as `wine-citation.txt`.
 
+This committed directory is a **hash-pinned pointer**, not a citable run
+dir: `record-hashes.txt` pins the sha256 of the three prefixed copies
+(`wine-provenance.json`, `wine-manifest.json`, `wine-citation.txt`), and the
+copyrighted binary artifacts stay in the git-ignored local pack. To re-cite
+the exe claim, use that local pack `~/scratch/240-fix/wine2`; running `cite
+--claim exe` on `docs/captures/t240` fails by design. CI checks the pointer
+without the local pack:
+
+```
+bash scripts/rig-provenance.sh check-record docs/captures/t240
+```
+
+The check also confirms that `wine-citation.txt` quotes the manifest hash
+and all six artifact hashes in the pinned provenance (#308).
+
 Audio: the exe's stream landed on the run's own sink (verified live:
 `pactl list sink-inputs` showed `application.name = "OTwo.exe"` on
 `rig_null_1179011` in the first boot of this leg) and the tap measured
@@ -175,13 +190,16 @@ which is the one mechanical difference from the proven `siclick3` usage
   are gated on measured signatures; the waiting room and the loading gate
   are accepted as "none of the three calibrated scenes" on their wire cue
   only. This run never reached them, so the arm is untested, not closed.
-- **Route guard cannot see the Wine stream.** `scripts/rig-run.sh`'s
-  containment check maps client streams by the *client basename*, which for
-  this leg is the launcher `scripts/rig-wine.sh`, so it reports
-  `route=unseen` while `OTwo.exe` sits on the run sink. The level probe
-  still judges the artifact (0.0 dBFS here), and this leg checked the route
-  by hand; the guard should match the exe's own stream name for the Wine
-  leg (follow-up ticket).
+- **Route guard could not see the Wine stream.** `scripts/rig-run.sh`'s
+  containment check mapped client streams by the *client basename*, which
+  for this leg is the launcher `scripts/rig-wine.sh`, so it reported
+  `route=unseen` while `OTwo.exe` sat on the run sink. The level probe
+  still judged the artifact (0.0 dBFS here), and this leg checked the route
+  by hand. Ticket #311 closed this: the guard now also matches the exe's
+  own stream name, with stub legs `wine-exe-run-sink` (`route=sink`) and
+  `wine-exe-default-sink` (breach, exit 12). That is a seam proof only —
+  no live Wine re-run accompanied the fix. `route=unseen` is never proof of
+  silence; the level sidecar is.
 - **`run-manifest.sh write` and `rig-afk.sh` disagree about screenshots.**
   The manifest declares `artifacts/screenshots`, the AFK pack writes
   `frames/`, so a cross-pair verify against a fresh AFK pack compares

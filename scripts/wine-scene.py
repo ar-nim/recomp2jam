@@ -14,6 +14,13 @@ Two input paths, both documented (never a bare XTEST click on the canvas):
   * chrome that answers the message queue may also use XTEST, but this
     drive keeps one path per click and records which it used.
 
+The `hover-press` join mode follows the #240 OPEN arm 1 evidence step:
+warp the X pointer onto the painted room row, capture the exe's own
+hover highlight, then ONE SendInput press with no SetCursorPos. That is
+the mechanical difference from the proven `siclick3` shape
+(`~/scratch/button-unblock/siclick3.c`) and from this drive's default
+`dclick` path, which calls SetCursorPos inside Wine before sending.
+
 Every aim point carries the pinned evidence that placed it. The drive
 prints one `aim <name> at (x,y) evidence=<...>` line per target before the
 first click, so a reviewer can check the target without reading pixels.
@@ -87,7 +94,9 @@ AIMS = {
         100,
         100,
         "docs/wine-boot.md Attempt 13: the row TITLE bar is the hot zone "
-        "(100,100 joins first try; the panel middle never emits 0BBA)",
+        "(100,100 joins first try; the panel middle never emits 0BBA). "
+        "The #240 leg saw no 0BBA from this aim, so hover-press verifies "
+        "the hotspot from the exe's own highlight before pressing.",
     ),
     "normal-emblem": (
         255,
@@ -110,6 +119,7 @@ TAB_BAND = (50, 140)            # emblem/tab strip along the board's head
 PLATE_BOX = (300, 160, 500, 185)  # channel dialog's grey title plate
 POPUP_BOX = (300, 240, 500, 340)  # blue message-box body
 ROW_BANNER_BOX = (40, 120, 330, 148)  # hosted row's green music banner
+ROW_TITLE_BOX = (40, 85, 330, 120)    # title strip; hover highlight lands here
 
 # Scene signatures, measured from this leg's own frames (captures cited in
 # docs/captures/t240/findings.md). A capture is labelled only when its own
@@ -225,6 +235,14 @@ class Frames:
         banner = (green > 110) & (green - blue > 25) & (green - red > 15)
         return bool(banner.mean() > 0.04)
 
+    def row_highlight_delta(self, rest: np.ndarray) -> float:
+        """Mean absolute pixel change in the title strip after the X warp."""
+        frame = self.last if self.last is not None else self.grab()
+        left, top, right, bottom = ROW_TITLE_BOX
+        changed = np.abs(frame[top:bottom, left:right] -
+                         rest[top:bottom, left:right])
+        return float(changed.mean())
+
 
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -315,6 +333,33 @@ class Input:
         self.log.event(f"inject send-double-click {aim} ({x},{y}) {detail}")
         if result.returncode != 0:
             self.log.event(f"inject send-double-click {aim} FAILED rc={result.returncode}")
+
+    def warp_pointer(self, x: int, y: int) -> None:
+        """Move the X pointer with XTEST motion; the canvas polls motion."""
+        result = subprocess.run(
+            ["python3", str(SCRIPT_DIR / "rig-xtest.py"),
+             "--display", self.display, "move", str(x), str(y)],
+            env=self.env, capture_output=True, text=True, timeout=60,
+        )
+        detail = result.stdout.strip().splitlines()
+        self.log.event(f"inject x-warp ({x},{y}) rc={result.returncode} "
+                       f"{detail[-1] if detail else ''}")
+        if result.returncode != 0:
+            self.log.event(f"inject x-warp ({x},{y}) FAILED")
+
+    def send_press(self) -> None:
+        """One SendInput press at the current pointer, with no SetCursorPos."""
+        result = subprocess.run(
+            [str(SCRIPT_DIR / "rig-wine.sh"), "send", "press"],
+            env=self.env, capture_output=True, text=True, timeout=120,
+        )
+        detail = " ".join(
+            line for line in result.stdout.splitlines()
+            if line.startswith(("opendesktop", "setthreaddesktop", "press"))
+        )
+        self.log.event(f"inject send-press {detail}")
+        if result.returncode != 0:
+            self.log.event(f"inject send-press FAILED rc={result.returncode}")
 
     def send_click_xy(self, x: int, y: int) -> None:
         result = subprocess.run(
@@ -454,6 +499,27 @@ class Host:
         self.log.event("host stopped")
 
 
+def hover_press_join(frames: Frames, injector: Input, server: ServerLog,
+                     log: SceneLog, shots: Path, join_timeout: float) -> bool:
+    """One #240 OPEN arm 1 stimulus: hover, capture the highlight, press.
+
+    One stimulus per boot. The X warp settles the exe's own row highlight;
+    the capture is the evidence that the hot zone is under the pointer.
+    The press carries no SetCursorPos, so it lands on that same hovered
+    control instead of a Wine-relative cursor position.
+    """
+    x, y = injector.cite("room-row-title")
+    rest = frames.grab()
+    injector.warp_pointer(x, y)
+    time.sleep(0.6)
+    frames.grab()
+    delta = frames.row_highlight_delta(rest)
+    frames.capture(shots / "room-row-hover.png")
+    log.event(f"room row hover delta={delta:.2f} at ({x},{y})")
+    injector.send_press()
+    return server.wait_for("0BBA", join_timeout)
+
+
 def drive(arguments, frames: Frames, server: ServerLog, injector: Input,
           log: SceneLog, shots: Path) -> list[str]:
     reached: list[str] = []
@@ -562,6 +628,9 @@ def drive(arguments, frames: Frames, server: ServerLog, injector: Input,
         def attempt_join() -> bool:
             if not dismiss_popup(frames, injector, log, tries=2):
                 log.event("join attempt with the message box still up")
+            if arguments.join_mode == "hover-press":
+                return hover_press_join(frames, injector, server, log, shots,
+                                        arguments.join_timeout)
             injector.send_double_click("room-row-title")
             return server.wait_for("0BBA", arguments.join_timeout)
 
@@ -661,6 +730,10 @@ def main() -> int:
                         default=str(Path.home() / "memoryer-local" / "server.log"))
     parser.add_argument("--host-user-index-id", type=int, default=3)
     parser.add_argument("--join-timeout", type=float, default=12.0)
+    parser.add_argument("--join-mode", choices=["dclick", "hover-press"],
+                        default="dclick",
+                        help="join stimulus: the qualified double-click or the "
+                             "#240 OPEN arm 1 X-warp hover then one press")
     parser.add_argument("--wineprefix", default=os.environ.get("WINEPREFIX", ""))
     parser.add_argument("--no-host", action="store_true")
     arguments = parser.parse_args()

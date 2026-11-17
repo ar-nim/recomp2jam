@@ -15,6 +15,10 @@
  *                                            # 120 ms apart (one process, so
  *                                            # the pair lands inside the
  *                                            # client's double-click time)
+ *   sendinput_helper.exe.so press            # one down/up pair at the
+ *                                            # pointer's current position,
+ *                                            # with NO SetCursorPos (the
+ *                                            # siclick3 shape; #240 join leg)
  *   sendinput_helper.exe.so down X Y         # move then left-down
  *   sendinput_helper.exe.so up X Y           # move then left-up
  *   sendinput_helper.exe.so key <name> down|up
@@ -22,11 +26,16 @@
  *
  * Key names: a-z, 0-9, space, return, escape, up, down, left, right.
  * All coordinates are in the native 800x600 canvas space; SetCursorPos
- * places the pointer there before the SendInput call.
+ * places the pointer there before the SendInput call. `press` is the one
+ * exception: the caller warps the X pointer first, so a Wine-side
+ * SetCursorPos here would move it away from the hovered control.
  */
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
+
+/* The proven siclick3 helper settled the joined desktop before sending. */
+#define PRESS_SETTLE_MS 300
 
 static void join_game_desktop(void) {
     HDESK desk = OpenDesktopA("o2jam", 0, FALSE, MAXIMUM_ALLOWED);
@@ -44,20 +53,32 @@ static void move_to(int x, int y) {
     Sleep(20);
 }
 
-static void left_down(void) {
+static UINT left_down(void) {
     INPUT inp;
     ZeroMemory(&inp, sizeof(inp));
     inp.type = INPUT_MOUSE;
     inp.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
-    SendInput(1, &inp, sizeof(inp));
+    return SendInput(1, &inp, sizeof(INPUT));
 }
 
-static void left_up(void) {
+static UINT left_up(void) {
     INPUT inp;
     ZeroMemory(&inp, sizeof(inp));
     inp.type = INPUT_MOUSE;
     inp.mi.dwFlags = MOUSEEVENTF_LEFTUP;
-    SendInput(1, &inp, sizeof(inp));
+    return SendInput(1, &inp, sizeof(INPUT));
+}
+
+/* One press at the pointer's current position. No cursor move: the caller
+ * warped the X pointer onto the hovered row (docs/captures/t240 OPEN arm 1). */
+static void press_at_pointer(void) {
+    Sleep(PRESS_SETTLE_MS);
+    SetLastError(0);
+    UINT down = left_down();
+    Sleep(150);
+    UINT up = left_up();
+    printf("press down=%u up=%u err=%lu\n", down, up,
+           (unsigned long)GetLastError());
 }
 
 static WORD vk_for_name(const char *name) {
@@ -80,12 +101,16 @@ static WORD vk_for_name(const char *name) {
 int main(int argc, char **argv) {
     join_game_desktop();
     if (argc < 2) {
-        fprintf(stderr, "usage: %s <move|click|down|up|key|type> ...\n", argv[0]);
+        fprintf(stderr, "usage: %s <move|click|dclick|press|down|up|key|type> ...\n", argv[0]);
         return 2;
     }
     if (strcmp(argv[1], "move") == 0 && argc >= 4) {
         move_to(atoi(argv[2]), atoi(argv[3]));
         printf("moved %s %s\n", argv[2], argv[3]);
+        return 0;
+    }
+    if (strcmp(argv[1], "press") == 0) {
+        press_at_pointer();
         return 0;
     }
     if (strcmp(argv[1], "down") == 0 && argc >= 4) {

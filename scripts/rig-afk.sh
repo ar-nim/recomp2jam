@@ -22,7 +22,8 @@
 #      own epoch-stamped record (never the client's input log).
 #   5. stop: `scripts/rig-run.sh stop` — recorded PIDs only, never a pattern
 #      kill; the audio lane closes and measures its artifact.
-#   6. package: `run-manifest.sh write` + `rig-provenance.sh emit`.
+#   6. package: stage frames into `artifacts/screenshots`, then
+#      `run-manifest.sh write` + `rig-provenance.sh emit`.
 #   7. self-check: scene reached, frame floor, judged count vs injector,
 #      audio non-silent, `run-manifest.sh verify` green.
 #
@@ -324,6 +325,24 @@ manifest_params_field() {
   printf '%s' "$field"
 }
 
+# One layout contract (#302): manifests declare artifacts/screenshots, and
+# the client writes frames/. Copy each frame into the declared path before
+# the manifest is written, and keep frames/ as the client's own output.
+stage_screenshots() {
+  local frames screenshots frame copied=0
+  frames="$(rig_session_frames "$OUT_DIR")"
+  screenshots="$(out_path artifacts/screenshots)"
+  mkdir -p "$screenshots"
+  [ -d "$frames" ] || return 0
+  for frame in "$frames"/*.png; do
+    [ -f "$frame" ] || continue
+    cp -f "$frame" "$screenshots/$(basename "$frame")"
+    copied=$((copied + 1))
+  done
+  echo "rig-afk: staged $copied frame(s) into artifacts/screenshots" \
+    >>"$(phase_log package)"
+}
+
 write_manifest() {
   timeout 120 "$SCRIPT_DIR/run-manifest.sh" write "$OUT_DIR" \
     --pair "$PAIR" \
@@ -353,7 +372,10 @@ emit_provenance() {
 package_pack() {
   local code=0
   : >"$(phase_log package)"
-  write_manifest || code=$?
+  stage_screenshots || code=$?
+  if [ "$code" -eq 0 ]; then
+    write_manifest || code=$?
+  fi
   if [ "$code" -eq 0 ] && [ -r "$(rig_session_log "$OUT_DIR")" ]; then
     if [ "${RIG_AFK_FAULT:-}" = "drop-provenance" ]; then
       # Selftest-only: the manifest self-check must go red when a capture
