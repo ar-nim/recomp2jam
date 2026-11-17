@@ -657,7 +657,10 @@ def drive(arguments, frames: Frames, server: ServerLog, injector: Input,
         log.event(f"room row painted={painted}")
         joined = painted and attempt_join()
         log.event(f"join attempt 1 joined={joined}")
-        if not joined:
+        # The #240 OPEN arm 1 calls for one stimulus per boot. The warm
+        # re-entry is the qualified dclick path's second attempt; the
+        # hover-press experiment must not send a second press in one boot.
+        if not joined and arguments.join_mode == "dclick":
             # Warm re-entry (docs/wine-boot.md, Attempt 13 "reliable loop"):
             # the idle stage fuse makes the client send FFF0 and authorise
             # again by itself, and the next room entry paints its row at
