@@ -313,7 +313,13 @@ def relay_wire(source: socket.socket, target: socket.socket, direction: str,
     pending = b""
     try:
         while True:
-            chunk = source.recv(65536)
+            try:
+                chunk = source.recv(65536)
+            except socket.timeout:
+                # An idle game connection is normal. The upstream socket
+                # keeps its 10 s connect timeout, so a quiet room stage
+                # must not be logged as the end of the relay (TT-320 B1).
+                continue
             if not chunk:
                 return
             pending += chunk

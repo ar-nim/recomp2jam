@@ -17,6 +17,7 @@ from unittest.mock import patch
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 MODULE_PATH = SCRIPTS_DIR / "wine-scene.py"
 HOST_PATH = SCRIPTS_DIR / "wine-room-host.py"
+RUNNER_PATH = SCRIPTS_DIR / "rig-wine-run.sh"
 
 
 def load_module(name: str, path: Path):
@@ -164,6 +165,86 @@ class WireEvidenceTest(unittest.TestCase):
         self.assertEqual([], [c for c in injector.calls if c[0] == "press"])
         self.assertFalse(any(c[0] == "click" for c in injector.calls))
         self.assertTrue(any("popup_up=True" in line for line in log.events))
+
+
+class ManifestVerdictTest(unittest.TestCase):
+    @staticmethod
+    def join_fields(out_dir: Path, wire_log: Path) -> str:
+        source = RUNNER_PATH.read_text()
+        start = source.index("join_outcome_fields() {")
+        end = source.index("\n}\n", start) + 3
+        script = source[start:end] + "\njoin_outcome_fields\n"
+        result = subprocess.run(
+            ["bash", "-c", script],
+            env={"OUT_DIR": str(out_dir), "WIRE_LOG": str(wire_log)},
+            capture_output=True, text=True, check=True,
+        )
+        return result.stdout.strip()
+
+    def test_manifest_records_absent_join_and_one_press(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir, wire_log = Path(tmp), Path(tmp) / "wire.log"
+            wire_log.write_text(
+                "12:00:00 S2C opcode=2005 (07D5) len=21\n", encoding="utf-8")
+            (out_dir / "drive.log").write_text(
+                "12:00:01 inject send-press down=1 up=1\n", encoding="utf-8")
+            self.assertEqual(
+                "join_0BBA=absent join_press_count=1",
+                self.join_fields(out_dir, wire_log),
+            )
+            with wire_log.open("a", encoding="utf-8") as handle:
+                handle.write("12:00:02 C2S opcode=3002 (0BBA) len=0\n")
+            self.assertEqual(
+                "join_0BBA=present join_press_count=1",
+                self.join_fields(out_dir, wire_log),
+            )
+
+
+class IdleRelayTest(unittest.TestCase):
+    def test_idle_timeout_does_not_end_the_wire_relay(self) -> None:
+        import socket as socket_module
+
+        relay_frame = host.frame(1003, b"ok")
+
+        class TimeoutThenFrameSource:
+            def __init__(self) -> None:
+                self.recv_count = 0
+
+            def recv(self, size: int) -> bytes:
+                self.recv_count += 1
+                if self.recv_count == 1:
+                    raise socket_module.timeout("idle")
+                if self.recv_count == 2:
+                    return relay_frame
+                return b""
+
+        class RecordingTarget:
+            def __init__(self) -> None:
+                self.sent: list[bytes] = []
+
+            def sendall(self, data: bytes) -> None:
+                self.sent.append(data)
+
+            def shutdown(self, how: int) -> None:
+                pass
+
+        class RecordingWireLog:
+            def __init__(self) -> None:
+                self.frames: list[tuple[str, bytes]] = []
+                self.connections: list[str] = []
+
+            def frame(self, direction: str, data: bytes) -> None:
+                self.frames.append((direction, data))
+
+            def connection(self, message: str) -> None:
+                self.connections.append(message)
+
+        source, target, wire_log = (
+            TimeoutThenFrameSource(), RecordingTarget(), RecordingWireLog())
+        host.relay_wire(source, target, "S2C", wire_log)
+        self.assertEqual([relay_frame], target.sent)
+        self.assertEqual([("S2C", relay_frame)], wire_log.frames)
+        self.assertFalse(any("timed out" in line for line in wire_log.connections))
 
 
 class PressShapeTest(unittest.TestCase):
