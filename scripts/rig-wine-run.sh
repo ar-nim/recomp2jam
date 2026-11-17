@@ -179,12 +179,19 @@ phase_stop() {
 
 phase_package() {
   note "phase package"
+  # A --no-drive diagnostic boot has no drive.log. Omitting --input-log
+  # keeps the manifest honest: the pack declares no input log rather than
+  # inventing one.
+  local -a input_log_args=()
+  if [ "$NO_DRIVE" -eq 0 ]; then
+    input_log_args=(--input-log "$OUT_DIR/drive.log")
+  fi
   bash "$SCRIPT_DIR/run-manifest.sh" write "$OUT_DIR" \
     --pair "$PAIR" \
     --build "$(git -C "$REPO_ROOT" rev-parse HEAD)" \
     --script "scripts/wine-scene.py (target $TARGET, music $MUSIC_ID, join $JOIN_MODE, repaint $ROW_REPAINT)" \
     --params "display=$DISPLAY_NAME sink=$(sed -n "s/^export PULSE_SINK='\([^']*\)'$/\1/p" "$OUT_DIR/env.sh" | head -1) exe_sha256=$RIG_WINE_EXE_SHA256" \
-    --input-log "$OUT_DIR/drive.log" >> "$REPORT_FILE" 2>&1 \
+    "${input_log_args[@]}" >> "$REPORT_FILE" 2>&1 \
     || { note "manifest write FAILED"; return 1; }
   local injector="$RIG_WINE_INJECTOR_DIR/sendinput-helper.exe.so"
   local -a injector_args=()
