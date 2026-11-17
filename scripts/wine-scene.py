@@ -293,7 +293,11 @@ class WireTapLog:
         if not self.events:
             log.event(f"wire boundary {label} no frames")
             return
-        origin = self.events[0][0]
+        channel_enter = next(
+            (seconds for seconds, direction, opcode in self.events
+             if direction == "C2S" and opcode == 1004),
+            self.events[0][0],
+        )
         markers = []
         for opcode, name in self.BOUNDARY_OPCODES:
             seen = next(
@@ -301,13 +305,13 @@ class WireTapLog:
                 None,
             )
             if seen is not None:
-                markers.append(f"{name}@+{seen - origin:.1f}s")
+                markers.append(f"{name}@+{seen - channel_enter:.1f}s")
         last = self.events[-1]
         c2s = sum(1 for _, direction, _ in self.events if direction == "C2S")
         s2c = len(self.events) - c2s
         log.event(
             f"wire boundary {label} {' '.join(markers)} "
-            f"last={last[1]}:{last[2]}@+{last[0] - origin:.1f}s "
+            f"last={last[1]}:{last[2]}@+{last[0] - channel_enter:.1f}s "
             f"frames=C2S:{c2s}/S2C:{s2c}"
         )
 
