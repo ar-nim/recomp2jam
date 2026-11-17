@@ -37,6 +37,8 @@
 # Knobs: RIG_AUDIO_CAPTURE (1 = capture, default), RIG_AUDIO_RATE (48000),
 #     RIG_AUDIO_CHANNELS (2), RIG_AUDIO_FORMAT (float32le),
 #     RIG_AUDIO_FLOOR_DBFS (-60), RIG_AUDIO_IDENTITY_TRIES (40).
+# Selftest-only seams (never set them for a real run):
+#     RIG_AUDIO_TEST_STREAM_PIDS, RIG_AUDIO_SKIP_STREAM_BASELINE.
 set -euo pipefail
 
 RIG_AUDIO_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/rig-preflight.sh"
@@ -55,6 +57,8 @@ rig_audio_dir() { printf '%s/audio' "$1"; }
 rig_audio_sidecar() { printf '%s/audio/manifest' "$1"; }
 rig_audio_artifact() { printf '%s/audio/audio.wav' "$1"; }
 rig_audio_recorder_pidfile() { printf '%s/audio/recorder.pid' "$1"; }
+rig_audio_route_snapshot_path() { printf '%s/audio/route-snapshot.txt' "$1"; }
+rig_audio_route_baseline_path() { printf '%s/audio/route-baseline.txt' "$1"; }
 
 rig_audio_rate() { printf '%s' "${RIG_AUDIO_RATE:-48000}"; }
 rig_audio_channels() { printf '%s' "${RIG_AUDIO_CHANNELS:-2}"; }
@@ -355,106 +359,253 @@ rig_audio_capture_stop() {
 }
 
 # --- containment assertion --------------------------------------------------
+# The route guard preserves the raw PipeWire graph at two moments: before
+# boot (the baseline of streams owned by somebody else) and at the verdict.
+# Both files are text provenance artifacts, never audio bytes. The verdict
+# names the owning process of every stream it attributes to this run.
+rig_audio_write_graph_snapshot() {
+  local path="$1"
+  {
+    echo "# pactl get-default-sink"
+    pactl get-default-sink 2>/dev/null || :
+    echo "# pactl list sinks short"
+    pactl list sinks short 2>/dev/null || :
+    echo "# pactl list sink-inputs"
+    pactl list sink-inputs 2>/dev/null || :
+  } > "$path"
+}
+
+rig_audio_record_route_baseline() {
+  local out_dir="$1" path
+  path="$(rig_audio_route_baseline_path "$out_dir")"
+  # Hermetic stub seam: a stub stream cannot predate a stub boot.
+  if [ "${RIG_AUDIO_SKIP_STREAM_BASELINE:-0}" = "1" ]; then
+    : > "$path"
+  else
+    rig_audio_write_graph_snapshot "$path"
+  fi
+  rig_audio_set_field "$out_dir" route_baseline "audio/route-baseline.txt"
+  rig_note "audio route: recorded the pre-boot stream baseline at $path"
+  return 0
+}
+
+rig_audio_client_pid() {
+  awk '$1 == "client" { print $2; exit }' "$1/pids" 2>/dev/null || true
+}
+
 # Every stream that looks like this run's client must sit on the run's
-# sink; one that landed on the system default sink is a containment breach.
-# Reads the PipeWire graph and prints the route verdict as `key=value`
-# lines: route, client_streams, on_default_sink, default_sink,
-# run_sink_streams, muted_run_sink_streams. Empty output = unreadable graph.
+# sink. A name alias alone is not ownership: another Wine session can own
+# an OTwo.exe stream. A stream belongs to this run when its process is a
+# descendant of the launched client, or its environment carries this run's
+# display, sink, and Wine prefix. Pre-boot streams are never ours.
+# Prints `key=value` lines, including the process id and binary of each
+# attributed stream.
 rig_audio_route_verdict() {
-  local client="$1" sink="$2" exe_stream="$3" scratch
-  scratch="$(mktemp -d)"
-  pactl list sinks short > "$scratch/sinks" 2>/dev/null || : > "$scratch/sinks"
-  pactl list sink-inputs > "$scratch/inputs" 2>/dev/null || : > "$scratch/inputs"
-  pactl get-default-sink > "$scratch/default" 2>/dev/null || : > "$scratch/default"
-  python3 - "$scratch/sinks" "$scratch/inputs" "$scratch/default" \
-    "$client" "$sink" "$exe_stream" <<'PYEOF' || true
+  local out_dir="$1" client="$2" sink="$3" exe_stream="$4"
+  local snapshot baseline client_pid display prefix test_pids
+  snapshot="$(rig_audio_route_snapshot_path "$out_dir")"
+  baseline="$(rig_audio_route_baseline_path "$out_dir")"
+  rig_audio_write_graph_snapshot "$snapshot"
+  [ -f "$baseline" ] || : > "$baseline"
+  client_pid="$(rig_audio_client_pid "$out_dir")"
+  display="$(rig_audio_field "$out_dir" client_display || true)"
+  prefix="$(rig_audio_field "$out_dir" client_prefix || true)"
+  test_pids="${RIG_AUDIO_TEST_STREAM_PIDS:-}"
+  python3 - "$snapshot" "$baseline" "$client" "$sink" "$exe_stream" \
+    "$client_pid" "$display" "$prefix" "$test_pids" <<'PYEOF' || true
 import sys
 
-sinks_file, inputs_file, default_file, client, sink, exe_stream = sys.argv[1:7]
-name_of_index = {}
-with open(sinks_file, encoding="utf-8", errors="replace") as fh:
-    for line in fh:
-        fields = line.split("\t")
-        if len(fields) >= 2:
-            name_of_index[fields[0]] = fields[1]
-with open(default_file, encoding="utf-8", errors="replace") as fh:
-    default_sink = fh.read().strip()
-
-streams = []
-index, sink_index, names, muted = "", "", [], False
-with open(inputs_file, encoding="utf-8", errors="replace") as fh:
-    lines = fh.readlines()
+(snapshot_file, baseline_file, client, sink, exe_stream,
+ client_pid, display, prefix, test_pids) = sys.argv[1:10]
+HEADER = "# pactl "
 
 
-def flush():
-    if sink_index:
-        streams.append({
-            "index": index,
-            "sink": name_of_index.get(sink_index, "unknown"),
-            "names": names,
-            "muted": muted,
-        })
+def read_graph(path):
+    sections, current = {}, None
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for line in fh.read().splitlines():
+            if line.startswith(HEADER):
+                current = line[len(HEADER):]
+                sections[current] = []
+            elif current is not None:
+                sections[current].append(line)
+    return sections
 
 
-for line in lines:
-    if line.startswith("Sink Input #"):
-        flush()
-        index, sink_index, names, muted = line.split("#", 1)[1].strip(), "", [], False
-        continue
-    if line.startswith("\tSink: "):
-        sink_index = line.split(":", 1)[1].strip()
-        continue
-    if line.startswith("\tMute: "):
-        muted = line.split(":", 1)[1].strip() == "yes"
-        continue
-    for key in ("\t\tnode.name = ", "\t\tapplication.name = "):
-        if line.startswith(key):
-            names.append(line.split("=", 1)[1].strip().strip('"'))
+def unquote(value):
+    return value.strip().strip('"')
 
-flush()
 
-# The launcher basename misses Wine's exe stream: match both names.
-client_aliases = [alias.lower() for alias in (client, exe_stream) if alias]
-client_streams = [
-    s for s in streams
-    if any(alias in name.lower() for name in s["names"] for alias in client_aliases)
-]
-on_default = [s for s in client_streams if s["sink"] == default_sink]
-on_run_sink = [s for s in client_streams if sink and s["sink"] == sink]
-if not client_streams:
-    route = "unseen"
-elif on_default:
+def parse_streams(lines, sink_names):
+    streams, current = [], None
+    for line in lines:
+        if line.startswith("Sink Input #"):
+            current = {
+                "index": line.split("#", 1)[1].strip(),
+                "sink_index": "", "names": [], "node_names": [],
+                "muted": False, "pid": "", "binary": "",
+            }
+            streams.append(current)
+        elif current is None:
+            continue
+        elif line.startswith("\tSink: "):
+            current["sink_index"] = line.split(":", 1)[1].strip()
+        elif line.startswith("\tMute: "):
+            current["muted"] = line.split(":", 1)[1].strip() == "yes"
+        elif line.startswith("\t\tapplication.process.id = "):
+            current["pid"] = unquote(line.split("=", 1)[1])
+        elif line.startswith("\t\tapplication.process.binary = "):
+            current["binary"] = unquote(line.split("=", 1)[1])
+        elif line.startswith("\t\tnode.name = "):
+            value = unquote(line.split("=", 1)[1])
+            current["node_names"].append(value)
+            current["names"].append(value)
+        elif line.startswith("\t\tapplication.name = "):
+            current["names"].append(unquote(line.split("=", 1)[1]))
+    for stream in streams:
+        stream["sink"] = sink_names.get(stream["sink_index"], "unknown")
+    return streams
+
+
+def stream_identity(stream):
+    return (stream["pid"], ",".join(stream["node_names"]))
+
+
+def descendants(root):
+    seen, pending = set(), [root] if root.isdigit() else []
+    while pending:
+        pid = pending.pop()
+        if pid in seen:
+            continue
+        seen.add(pid)
+        try:
+            path = "/proc/%s/task/%s/children" % (pid, pid)
+            with open(path, encoding="ascii") as fh:
+                pending.extend(fh.read().split())
+        except OSError:
+            pass
+    return seen
+
+
+def environment_of(pid):
+    try:
+        with open("/proc/%s/environ" % pid, "rb") as fh:
+            raw = fh.read()
+    except OSError:
+        return {}
+    values = {}
+    for item in raw.split(b"\0"):
+        if b"=" in item:
+            key, value = item.split(b"=", 1)
+            values[key.decode("utf-8", "replace")] = value.decode("utf-8", "replace")
+    return values
+
+
+snapshot = read_graph(snapshot_file)
+baseline = read_graph(baseline_file)
+sink_names = {}
+for line in snapshot.get("list sinks short", []):
+    fields = line.split("\t")
+    if len(fields) >= 2:
+        sink_names[fields[0]] = fields[1]
+default_lines = [line.strip() for line in snapshot.get("get-default-sink", []) if line.strip()]
+default_sink = default_lines[0] if default_lines else ""
+
+streams = parse_streams(snapshot.get("list sink-inputs", []), sink_names)
+baseline_streams = parse_streams(baseline.get("list sink-inputs", []), {})
+baseline_indices = {s["index"] for s in baseline_streams}
+baseline_identities = {stream_identity(s) for s in baseline_streams if s["pid"]}
+
+aliases = [alias.lower() for alias in (client, exe_stream) if alias]
+matched = [s for s in streams
+           if any(alias in name.lower() for name in s["names"] for alias in aliases)]
+leftovers = [s for s in matched
+             if s["index"] in baseline_indices
+             or (s["pid"] and stream_identity(s) in baseline_identities)]
+candidates = [s for s in matched if s not in leftovers]
+
+allowed_pids = {p for p in test_pids.replace(",", " ").split() if p.isdigit()}
+allowed_pids.update(descendants(client_pid))
+
+
+def belongs_to_run(pid):
+    if not pid.isdigit():
+        return False
+    if pid in allowed_pids:
+        return True
+    values = environment_of(pid)
+    if not values or not display or values.get("DISPLAY") != display:
+        return False
+    if sink and values.get("PULSE_SINK") != sink:
+        return False
+    if prefix and values.get("WINEPREFIX") != prefix:
+        return False
+    return True
+
+
+owned = [s for s in candidates if belongs_to_run(s["pid"])]
+foreign = [s for s in candidates if s not in owned]
+unattributed_default = [s for s in foreign
+                        if not s["pid"] and default_sink and s["sink"] == default_sink]
+on_default = [s for s in owned if default_sink and s["sink"] == default_sink]
+on_default += unattributed_default
+on_run_sink = [s for s in owned if sink and s["sink"] == sink]
+
+if on_default:
     route = "default-sink-breach"
+elif not owned:
+    route = "unseen"
 elif on_run_sink:
     route = "sink"
 else:
     route = "foreign-sink"
+
 print("route=" + route)
-print("client_streams=%d" % len(client_streams))
+print("client_streams=%d" % len(owned))
 print("on_default_sink=%d" % len(on_default))
 print("default_sink=" + (default_sink or "unknown"))
 print("run_sink_streams=" + ",".join(s["index"] for s in on_run_sink))
 print("muted_run_sink_streams=%d" % len([s for s in on_run_sink if s["muted"]]))
+print("client_stream_pid=" + ",".join(s["pid"] for s in owned))
+print("client_stream_binary=" + ",".join(s["binary"] for s in owned))
+print("foreign_process_streams=%d" % len(foreign))
+print("baseline_streams=%d" % len(baseline_streams))
+print("baseline_streams_excluded=%d" % len(leftovers))
+print("unattributed_default_streams=%d" % len(unattributed_default))
 PYEOF
-  rm -rf "$scratch"
+}
+
+# Writes every verdict fact, including the breach facts, before the abort:
+# a failed run must leave an auditable sidecar and a raw graph snapshot.
+rig_audio_persist_verdict() {
+  local out_dir="$1" verdict="$2" key
+  local keys=(route client_streams on_default_sink default_sink run_sink_streams
+    muted_run_sink_streams client_stream_pid client_stream_binary
+    foreign_process_streams baseline_streams baseline_streams_excluded
+    unattributed_default_streams)
+  for key in "${keys[@]}"; do
+    rig_audio_set_field "$out_dir" "$key" "$(rig_audio_verdict_field "$verdict" "$key")"
+  done
+  rig_audio_set_field "$out_dir" route_snapshot "audio/route-snapshot.txt"
+  rig_audio_set_field "$out_dir" route_baseline "audio/route-baseline.txt"
 }
 
 rig_audio_assert_route() {
-  local out_dir="$1" client="$2" sidecar sink verdict breaches run_streams muted
-  sidecar="$(rig_audio_sidecar "$out_dir")"
-  [ -f "$sidecar" ] || return 0
+  local out_dir="$1" client="$2" verdict breaches run_streams muted owners
+  [ -f "$(rig_audio_sidecar "$out_dir")" ] || return 0
   [ "$(rig_audio_field "$out_dir" state || true)" = "capturing" ] || return 0
-  sink="$(rig_audio_field "$out_dir" sink || true)"
-  verdict="$(rig_audio_route_verdict "$client" "$sink" "$RIG_AUDIO_EXE_STREAM_NAME")"
+  verdict="$(rig_audio_route_verdict "$out_dir" "$client" \
+    "$(rig_audio_field "$out_dir" sink || true)" "$RIG_AUDIO_EXE_STREAM_NAME")"
   if [ -z "$verdict" ]; then
     rig_note "audio route: not verified (pactl could not be parsed)"
     return 0
   fi
-  rig_audio_set_field "$out_dir" route "$(rig_audio_verdict_field "$verdict" route)"
-  rig_audio_set_field "$out_dir" client_streams "$(rig_audio_verdict_field "$verdict" client_streams)"
+  rig_audio_persist_verdict "$out_dir" "$verdict"
   breaches="$(rig_audio_verdict_field "$verdict" on_default_sink)"
   if [ "${breaches:-0}" != "0" ]; then
-    rig_fail "$RIG_E_AUDIO" audio-route "$(rig_audio_verdict_field "$verdict" client_streams) stream(s) of client '$client' on the default sink '$(rig_audio_verdict_field "$verdict" default_sink)'; agent audio must never reach the owner's speakers"
+    owners="$(rig_audio_verdict_field "$verdict" client_stream_pid)"
+    rig_fail "$RIG_E_AUDIO" audio-route \
+      "$(rig_audio_verdict_field "$verdict" client_streams) stream(s) of client '$client' (process ${owners:-unknown}) on the default sink '$(rig_audio_verdict_field "$verdict" default_sink)'; agent audio must never reach the owner's speakers"
     return "$RIG_E_AUDIO"
   fi
   run_streams="$(rig_audio_verdict_field "$verdict" run_sink_streams)"
@@ -645,6 +796,7 @@ def emit_list_sink_inputs():
     entries = list(lines("sinkinputs"))
     if seeded:
         entries.append("%s\t%s\t%s" % (seeded, seeded_sink, "yes" if seeded_muted else "no"))
+    stream_pid = os.environ.get("STUB_SINKINPUT_PID", "4242")
     for number, entry in enumerate(entries):
         fields = entry.split("\t")
         node, sink = fields[0], fields[1] if len(fields) > 1 else ""
@@ -658,6 +810,9 @@ def emit_list_sink_inputs():
         print('\t\tapplication.name = "PipeWire ALSA [%s]"' % node)
         print('\t\tnode.name = "alsa_playback.%s"' % node)
         print('\t\ttarget.object = "%s"' % sink)
+        if stream_pid:
+            print('\t\tapplication.process.id = "%s"' % stream_pid)
+            print('\t\tapplication.process.binary = "wine-preloader"')
 
 
 def load_module(arguments):
@@ -707,8 +862,9 @@ STUBEOF
 }
 
 # A stub recorder: registers itself for the requested device, writes a wav
-# (tone unless STUB_AUDIO_SILENT=1), then stays alive until the lane
-# signals its process group.
+# (tone unless STUB_AUDIO_SILENT=1), then stays briefly so the lane can
+# verify and stop it. The bound keeps an interrupted selftest from leaving
+# a `sleep` orphan; a real run's recorder is stopped by process group.
 rig_audio_write_stub_parec() {
   cat > "$1/parec" <<'STUBEOF'
 #!/bin/sh
@@ -740,7 +896,7 @@ if [ -n "$out" ]; then
   fi
   ffmpeg -hide_banner -loglevel error -f lavfi -i "$source" -t 3 -ac 2 "$out" || :
 fi
-exec sleep 300
+exec sleep 5
 STUBEOF
   chmod +x "$1/parec"
 }
@@ -881,6 +1037,10 @@ selftest_capture_legs() {
 route_leg() {  # <leg> <state> <run> <want-route> <want-muted> <want-code>
   local leg="$1" state="$2" run="$3" want_route="$4" want_muted="$5" want_code="$6"; shift 6
   rig_audio_set_field "$run" state "capturing"
+  local field
+  for field in client_stream_pid client_stream_binary foreign_process_streams baseline_streams_excluded; do
+    rig_audio_set_field "$run" "$field" ""
+  done
   rm -f "$state/stream-ops"
   local code=0
   env "$@" bash -c ". '$RIG_AUDIO_SCRIPT'; rig_audio_assert_route '$run' stub-client" >/dev/null 2>&1 || code=$?
@@ -903,7 +1063,11 @@ route_leg() {  # <leg> <state> <run> <want-route> <want-muted> <want-code>
 
 selftest_route_legs() {
   local bin="$1" state="$2" run="$3"
-  local env_common=(PATH="$bin:$PATH" STUBSTATE="$state")
+  # The stub stream's process id is not a child of this shell. Name it as
+  # this run's process through the stub seam; the /proc checks are excluded
+  # from the hermetic leg on purpose.
+  local env_common=(PATH="$bin:$PATH" STUBSTATE="$state"
+    STUB_SINKINPUT_PID=4242 RIG_AUDIO_TEST_STREAM_PIDS=4242)
   # A client stream on the run sink: contained and normalized (an unmuted
   # stream still gets mute 0 / volume 100%, which is harmless on our sink).
   route_leg "route-run-sink" "$state" "$run" "sink" "0" 0 \
@@ -943,6 +1107,45 @@ selftest_route_legs() {
     "${env_common[@]}" STUB_SINKINPUT_NAME=OTwo.exe \
     STUB_SINKINPUT_SINK=alsa_output.default || return 1
   echo "rig-audio: selftest leg wine-exe-default-sink PASS (OTwo.exe on default sink rejected)"
+  # A leftover exe stream from ANOTHER process is not this run's client.
+  route_leg "wine-exe-foreign-process-id" "$state" "$run" "unseen" "" 0 \
+    "${env_common[@]}" STUB_SINKINPUT_NAME=OTwo.exe STUB_SINKINPUT_SINK=stub_sink \
+    STUB_SINKINPUT_PID=7777 || return 1
+  [ "$(rig_audio_field "$run" foreign_process_streams)" = "1" ] || {
+    selftest_fail "wine-exe-foreign-process-id" "foreign stream was not counted separately"
+    return 1
+  }
+  [ -z "$(rig_audio_field "$run" client_stream_pid)" ] || {
+    selftest_fail "wine-exe-foreign-process-id" "foreign pid was recorded as this run's client"
+    return 1
+  }
+  echo "rig-audio: selftest leg wine-exe-foreign-process-id PASS (leftover owner not attributed)"
+  # The same leftover on the owner's sink must not abort an innocent run.
+  route_leg "wine-exe-foreign-process-id-default-sink" "$state" "$run" "unseen" "" 0 \
+    "${env_common[@]}" STUB_SINKINPUT_NAME=OTwo.exe \
+    STUB_SINKINPUT_SINK=alsa_output.default STUB_SINKINPUT_PID=7777 || return 1
+  echo "rig-audio: selftest leg wine-exe-foreign-process-id-default-sink PASS (leftover does not abort)"
+  # An exe stream with no process id cannot be attributed; fail safe on the
+  # owner's sink rather than pretend it belongs to another process.
+  route_leg "wine-exe-unknown-pid-default-sink" "$state" "$run" "default-sink-breach" "" "$RIG_E_AUDIO" \
+    "${env_common[@]}" STUB_SINKINPUT_NAME=OTwo.exe \
+    STUB_SINKINPUT_SINK=alsa_output.default STUB_SINKINPUT_PID= || return 1
+  echo "rig-audio: selftest leg wine-exe-unknown-pid-default-sink PASS (unattributed stream rejected)"
+  # A stream already present before boot is a leftover, whatever its pid.
+  env "${env_common[@]}" STUB_SINKINPUT_NAME=OTwo.exe \
+    STUB_SINKINPUT_SINK=alsa_output.default \
+    bash "$0" record-baseline "$run" >/dev/null || {
+    selftest_fail "wine-exe-baseline-stream-excluded" "record-baseline failed"
+    return 1
+  }
+  route_leg "wine-exe-baseline-stream-excluded" "$state" "$run" "unseen" "" 0 \
+    "${env_common[@]}" STUB_SINKINPUT_NAME=OTwo.exe \
+    STUB_SINKINPUT_SINK=alsa_output.default || return 1
+  [ "$(rig_audio_field "$run" baseline_streams_excluded)" = "1" ] || {
+    selftest_fail "wine-exe-baseline-stream-excluded" "pre-boot stream was not excluded"
+    return 1
+  }
+  echo "rig-audio: selftest leg wine-exe-baseline-stream-excluded PASS (pre-boot stream is not ours)"
 }
 
 cmd_selftest() {
@@ -970,6 +1173,7 @@ main() {
     capture-start) [ "$#" -ge 4 ] || die "capture-start: <out-dir> <sink> <expect> <client>"; rig_audio_capture_start "$@" ;;
     capture-stop) [ "$#" -ge 1 ] || die "capture-stop: <out-dir>"; rig_audio_capture_stop "$1" ;;
     assert-route) [ "$#" -ge 2 ] || die "assert-route: <out-dir> <client>"; rig_audio_assert_route "$@" ;;
+    record-baseline) [ "$#" -ge 1 ] || die "record-baseline: <out-dir>"; rig_audio_record_route_baseline "$1" ;;
     probe) [ "$#" -ge 1 ] || die "probe: <wav> [floor-dbfs]"; rig_audio_probe "$@" ;;
     verify) [ "$#" -ge 1 ] || die "verify: <out-dir>"; rig_audio_verify "$1" ;;
     stub-tools) [ "$#" -ge 2 ] || die "stub-tools: <bin-dir> <state-dir>"; rig_audio_stub_tools "$@" ;;
