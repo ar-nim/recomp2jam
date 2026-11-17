@@ -94,6 +94,9 @@ unpainted ones.
 18:31:42 stage waiting FAILED reason=no 0BBA after two joins
 ```
 
+The B3 pack predates the log-wording fix: new hover-press runs report
+`after one hover-press`. That old line is a verbatim artifact quote.
+
 Exactly one `inject send-press` line in the drive log; no `SetCursorPos`
 in the `press` verb. `room-row-hover.png` (sha256
 `db8cd3dc7211e6deb83e18305eabeeb9fd61c4f0a7c9042199f245003fb0fae9`)

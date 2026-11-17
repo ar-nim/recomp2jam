@@ -601,6 +601,13 @@ def hover_press_join(frames: Frames, injector: Input, server: ServerLog,
     return server.wait_for("0BBA", join_timeout)
 
 
+def no_join_failure_message(join_mode: str) -> str:
+    """Name the stimulus count that this join mode can actually send."""
+    if join_mode == "hover-press":
+        return "stage waiting FAILED reason=no 0BBA after one hover-press"
+    return "stage waiting FAILED reason=no 0BBA after two joins"
+
+
 def drive(arguments, frames: Frames, server: ServerLog, injector: Input,
           log: SceneLog, shots: Path, wire: WireTapLog) -> list[str]:
     reached: list[str] = []
@@ -744,7 +751,7 @@ def drive(arguments, frames: Frames, server: ServerLog, injector: Input,
                     joined = attempt_join()
                     log.event(f"join attempt 2 joined={joined}")
         if not joined:
-            log.event("stage waiting FAILED reason=no 0BBA after two joins")
+            log.event(no_join_failure_message(arguments.join_mode))
             frames.capture(shots / "probe-failure.png")
             return reached
         time.sleep(3)

@@ -115,6 +115,20 @@ class HoverPressStimulusTest(unittest.TestCase):
         self.assertEqual(1, sum(1 for c in injector.calls if c[0] == "press"))
 
 
+class NoJoinLogTest(unittest.TestCase):
+    def test_hover_press_failure_names_one_stimulus(self) -> None:
+        self.assertEqual(
+            "stage waiting FAILED reason=no 0BBA after one hover-press",
+            scene.no_join_failure_message("hover-press"),
+        )
+
+    def test_dclick_failure_keeps_two_join_wording(self) -> None:
+        self.assertEqual(
+            "stage waiting FAILED reason=no 0BBA after two joins",
+            scene.no_join_failure_message("dclick"),
+        )
+
+
 class WireEvidenceTest(unittest.TestCase):
     def test_wire_tap_splits_partial_frames_without_loss(self) -> None:
         first = host.frame(1002, b"ab")
