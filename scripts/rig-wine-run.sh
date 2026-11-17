@@ -195,6 +195,8 @@ phase_package() {
     --capture-tool ffmpeg --pair "$PAIR" \
     --command "scripts/rig-wine.sh launch $OUT_DIR/argv.txt (wine explorer /desktop=o2jam,800x600 $RIG_WINE_EXE, argv = AuthParameters blob + 5 |test|??|addr|port mirrors from argv.txt)" \
     --artifact argv.txt --artifact argv.txt.fields \
+    --artifact audio/route-snapshot.txt \
+    --artifact audio/route-baseline.txt \
     "${injector_args[@]}" >> "$REPORT_FILE" 2>&1 \
     || { note "provenance emit FAILED"; return 1; }
   return 0
