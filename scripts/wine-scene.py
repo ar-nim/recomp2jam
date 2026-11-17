@@ -125,6 +125,19 @@ POPUP_BOX = (300, 240, 500, 340)  # blue message-box body
 ROW_BANNER_BOX = (40, 120, 330, 148)  # hosted row's green music banner
 ROW_TITLE_BOX = (40, 85, 330, 120)    # title strip; hover highlight lands here
 
+# Waiting-room signature, measured on build 9b4b0ea from the c1-waiting-observe
+# pack: drive.log:36 and wire/room-stage.log:21-22 pin the frame to 0BBA/0BBB,
+# and artifacts/screenshots/waiting-observe-001.png measures
+# 0.615 / 0.298 / 0.681. The pack's room.png measures 0.000 / 0.032 / 0.273.
+# All three boxes are needed: the room and waiting stages share the bright
+# top strip that the older scene_label rule used as its room cue.
+WAITING_GREEN_TOP_BOX = (570, 15, 780, 40)
+WAITING_READY_PILL_BOX = (625, 125, 780, 165)
+WAITING_SKILL_PANEL_BOX = (625, 190, 780, 420)
+WAITING_GREEN_TOP_FRACTION = 0.35
+WAITING_READY_PILL_FRACTION = 0.15
+WAITING_SKILL_PANEL_FRACTION = 0.45
+
 # Scene signatures, measured from this leg's own frames (captures cited in
 # docs/captures/t240/findings.md). A capture is labelled only when its own
 # pixels match; a stage that is not on screen is reported, never labelled.
@@ -133,6 +146,31 @@ BOARD_TAB_BRIGHT = 0.10     # board emblem strip 0.133
 ROOM_TAB_BRIGHT = 0.55      # room stage 0.694-0.709
 CHANNEL_PLATE_SAT = 6.0     # channel title plate 1.9; board promo area 30-61
 CHANNEL_PLATE_LUMA = (100.0, 145.0)
+
+
+def green_top_fraction(frame: np.ndarray, box: tuple[int, int, int, int]) -> float:
+    """Share of a box painted with the room-settings bar's green fill."""
+    left, top, right, bottom = box
+    red, green, blue = (frame[top:bottom, left:right, channel]
+                        for channel in range(3))
+    return float(((green > 130) & (green - red > 35) &
+                  (green - blue > 15)).mean())
+
+
+def orange_pill_fraction(frame: np.ndarray, box: tuple[int, int, int, int]) -> float:
+    """Share of a box painted with the READY pill's orange fill."""
+    left, top, right, bottom = box
+    red, green, blue = (frame[top:bottom, left:right, channel]
+                        for channel in range(3))
+    return float(((red > 170) & (green > 80) & (green < 190) &
+                  (blue < 120) & (red - blue > 80)).mean())
+
+
+def bright_panel_fraction(frame: np.ndarray, box: tuple[int, int, int, int]) -> float:
+    """Share of a box brighter than the room stage's dark blue side panel."""
+    left, top, right, bottom = box
+    panel = frame[top:bottom, left:right].mean(axis=2)
+    return float((panel > 120).mean())
 
 
 class SceneLog:
@@ -210,6 +248,21 @@ class Frames:
         # bare board (measured 0.83) while a real message box measures 0.99.
         return self.popup_fraction() > 0.9
 
+    def waiting_metrics(self) -> tuple[float, float, float]:
+        """Green bar, READY pill and side panel fractions for this frame."""
+        frame = self.last if self.last is not None else self.grab()
+        return (
+            green_top_fraction(frame, WAITING_GREEN_TOP_BOX),
+            orange_pill_fraction(frame, WAITING_READY_PILL_BOX),
+            bright_panel_fraction(frame, WAITING_SKILL_PANEL_BOX),
+        )
+
+    def waiting_is_up(self) -> bool:
+        green, orange, bright = self.waiting_metrics()
+        return (green > WAITING_GREEN_TOP_FRACTION
+                and orange > WAITING_READY_PILL_FRACTION
+                and bright > WAITING_SKILL_PANEL_FRACTION)
+
     def scene_label(self) -> str:
         """Which scene these pixels are, by this leg's own signatures."""
         frame = self.last if self.last is not None else self.grab()
@@ -220,6 +273,8 @@ class Frames:
         plate = frame[top:bottom, left:right]
         plate_luma = float(plate.mean())
         plate_sat = float((plate.max(axis=2) - plate.min(axis=2)).mean())
+        if self.waiting_is_up():
+            return "waiting"
         if menu > BOARD_MENU_LUMA and tabs > ROOM_TAB_BRIGHT:
             return "room"
         if menu <= BOARD_MENU_LUMA:
@@ -589,18 +644,11 @@ def dismiss_popup(frames: Frames, injector: Input, log: SceneLog, tries: int = 4
 
 
 def capture_scene(frames: Frames, log: SceneLog, shots: Path, name: str,
-                  cue: str, accept: tuple[str, ...] = ()) -> bool:
-    """Write <name>.png only when the frame's own pixels show that scene.
-
-    `accept` lists additional pixel labels that count as this scene. The
-    waiting room and the loading gate have no measured signature yet, so
-    they are accepted as "unknown" — a screen that is none of the three
-    calibrated scenes — and only ever on their own wire cue (0BBA / 4012),
-    which the caller has already matched. The gap is named in the findings.
-    """
+                  cue: str) -> bool:
+    """Write <name>.png only when the frame's own pixels show that scene."""
     frames.grab()
     label = frames.scene_label()
-    if label != name and label not in accept:
+    if label != name:
         log.event(f"stage {name} NOT captured: screen shows '{label}' cue={cue}")
         return False
     mean = frames.capture(shots / f"{name}.png")
@@ -630,13 +678,25 @@ def observe_waiting_transition(frames: Frames, wire: WireTapLog,
             name = f"waiting-observe-{capture_count:03}.png"
             frames.capture(shots / name)
             shot = f" shot={name}"
-            last_digest = digest
+            # capture() re-grabs: hash the pixels actually saved, so a
+            # byte-identical PNG is never written twice into the pack.
+            last_digest = hashlib.sha256(frames.last.tobytes()).hexdigest()
         opcodes = ",".join(wire.opcodes_since(3002))
         log.event(
             f"waiting observe t=+{elapsed:.1f}s label={frames.scene_label()} "
             f"mean={frames.mean_luma():.1f} wire={opcodes}{shot}"
         )
         time.sleep(interval)
+
+
+def waiting_evidence_line(metrics: tuple[float, float, float]) -> str:
+    """Name the measured pixels and the pack lines that pinned them."""
+    green, orange, bright = metrics
+    return (
+        f"waiting signature green={green:.3f} orange={orange:.3f} "
+        f"bright={bright:.3f} evidence=c1-waiting-observe/drive.log:36 "
+        f"c1-waiting-observe/wire/room-stage.log:21-22"
+    )
 
 
 def wait_until(probe, timeout: float, interval: float = 1.0) -> bool:
@@ -902,8 +962,8 @@ def drive(arguments, frames: Frames, server: ServerLog, injector: Input,
             return reached
         time.sleep(3)
         dismiss_popup(frames, injector, log)
-        if not capture_scene(frames, log, shots, "waiting", "server:0BBA",
-                             accept=("unknown",)):
+        log.event(waiting_evidence_line(frames.waiting_metrics()))
+        if not capture_scene(frames, log, shots, "waiting", "server:0BBA"):
             frames.capture(shots / "probe-failure.png")
             return reached
         reached.append("waiting")

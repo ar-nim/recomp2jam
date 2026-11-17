@@ -59,6 +59,9 @@ class FakeFrames:
     def row_highlight_delta(self, rest) -> float:
         return 42.0
 
+    def scene_label(self) -> str:
+        return "room"
+
 
 class FakeServer:
     def __init__(self, joined: bool = True) -> None:
@@ -131,6 +134,7 @@ class WaitingObservationTest(unittest.TestCase):
             def grab(self):
                 frame = self.frames[min(self.grab_count, 1)]
                 self.grab_count += 1
+                self.last = frame
                 return frame
 
             def capture(self, path: Path) -> float:
@@ -164,6 +168,67 @@ class WaitingObservationTest(unittest.TestCase):
         self.assertTrue(all("wire=C2S:3002@+0.0s,S2C:3003@+0.0s" in line
                             for line in log.events))
         self.assertFalse(any(line.startswith("frame ") for line in log.events))
+
+
+class WaitingSignatureTest(unittest.TestCase):
+    """Seam proof for the live chain rig-wine-run -> wine-scene.drive ->
+    capture_scene -> Frames.scene_label; the qualification pack proves the
+    boot-time reachability, so these tests need no game process.
+    """
+
+    @staticmethod
+    def scene_frame(is_waiting: bool):
+        import numpy as np
+
+        frame = np.zeros((600, 800, 3), dtype=np.int16)
+        frame[40:140, :] = 120      # bright tab strip, as in the room stage
+        frame[555:595, :] = 110     # menu luma above BOARD_MENU_LUMA
+        if is_waiting:
+            frame[15:40, 570:780] = (40, 200, 60)
+            frame[125:165, 625:780] = (220, 140, 40)
+            frame[190:420, 625:780] = 170
+        else:
+            frame[15:40, 570:780] = (40, 70, 140)
+            frame[125:165, 625:780] = (40, 70, 140)
+            frame[190:420, 625:780] = (40, 70, 120)
+        return frame
+
+    def waiting_frames(self, is_waiting: bool):
+        import numpy as np
+
+        frames = scene.Frames(":299", Path(tempfile.mkdtemp()))
+        frames.last = self.scene_frame(is_waiting)
+        return frames
+
+    def test_waiting_pixels_outrank_the_room_menu_rule(self) -> None:
+        frames = self.waiting_frames(is_waiting=True)
+        green, orange, bright = frames.waiting_metrics()
+        self.assertGreater(green, scene.WAITING_GREEN_TOP_FRACTION)
+        self.assertGreater(orange, scene.WAITING_READY_PILL_FRACTION)
+        self.assertGreater(bright, scene.WAITING_SKILL_PANEL_FRACTION)
+        self.assertEqual("waiting", frames.scene_label())
+
+    def test_room_pixels_are_not_relabelled_waiting(self) -> None:
+        frames = self.waiting_frames(is_waiting=False)
+        self.assertEqual("room", frames.scene_label())
+
+    def test_unproven_waiting_scene_writes_no_screenshot(self) -> None:
+        frames, log = FakeFrames(), FakeLog()
+        with tempfile.TemporaryDirectory() as tmp:
+            captured = scene.capture_scene(
+                frames, log, Path(tmp), "waiting", "server:0BBA")
+            self.assertFalse(captured)
+            self.assertEqual([], list(Path(tmp).glob("*.png")))
+        self.assertTrue(any("stage waiting NOT captured" in line
+                            for line in log.events))
+
+    def test_evidence_line_names_metrics_and_pack_lines(self) -> None:
+        line = scene.waiting_evidence_line((0.615, 0.298, 0.681))
+        self.assertIn("green=0.615", line)
+        self.assertIn("orange=0.298", line)
+        self.assertIn("bright=0.681", line)
+        self.assertIn("c1-waiting-observe/drive.log:36", line)
+        self.assertIn("c1-waiting-observe/wire/room-stage.log:21-22", line)
 
 
 class NoJoinLogTest(unittest.TestCase):
