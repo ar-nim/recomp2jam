@@ -84,6 +84,11 @@ template instead of a description.
 
 The senior re-runs **every** PASS/FAIL line a junior reports.
 
+The senior also verifies every acceptance criterion before a merge or close;
+the authoritative rule and its table live in
+`docs/agents/issue-tracker.md` ("Acceptance-criteria review before any
+close") and close-discipline rule 2 in `docs/agents/triage-labels.md`.
+
 - Re-run the gates via `scripts/gate-check.sh` (fmt, clippy, both
   test arms, push, origin-verify) on the junior's commit, not on the
   junior's word. Equivalent manual form: `cargo fmt --check`,

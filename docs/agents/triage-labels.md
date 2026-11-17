@@ -110,7 +110,11 @@ Rules for closing playtest-class tickets (retro 2026-11-11, issues #26/#30/#53â€
 1. A hand-playtest ticket closes only with live `:99` rig evidence: frame/content-hash
    before/after plus the wall run. Seam guards alone never close one.
 2. Only the merge/close step closes a ticket, after review and gates. Implementer
-   branches never close.
+   branches never close. The closer first verifies EVERY acceptance criterion
+   against the implementation and records `MET` / `NOT MET` / `OPEN` per
+   criterion with its command and output (`docs/agents/issue-tracker.md`,
+   "Acceptance-criteria review before any close"). Any NOT MET or OPEN blocks
+   the close; green gates alone never tick a box.
 3. File tracker issues sequentially in one chain and read back the title per number;
    never assume parallel `gh issue create` output order.
 4. Closing includes triage-label cleanup: `needs-triage` and `needs-info` never

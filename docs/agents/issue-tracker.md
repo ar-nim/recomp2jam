@@ -15,6 +15,28 @@ Issues and specs for this repo live as GitHub issues in `ar-nim/recomp2jam`
 - **Apply / remove labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
 - **Close**: post the explanation with `gh issue comment <number> --body "..."`, then `gh issue close <number>`. On an already-closed issue, `gh issue close --comment` drops the comment and still exits 0. Playtest-class tickets follow the close discipline in `docs/agents/triage-labels.md`.
 
+## Acceptance-criteria review before any close
+
+Owner rule 2026-11-17. A ticket closes only when EVERY acceptance criterion
+is met and ticked. An agent reporting "done" is a claim, not evidence.
+
+When a subagent finishes a ticket, the senior verifies each criterion
+himself, against the actual implementation, BEFORE merging or closing:
+
+1. Read the ticket body and quote each criterion verbatim.
+2. For each, run the command or read the code that proves it; write the
+   verdict `MET`, `NOT MET`, or `OPEN` next to the criterion text with the
+   command and its output. Green gates are necessary but never sufficient:
+   a junior can pass every test and still leave a criterion untouched.
+3. If one or more are NOT MET or OPEN, do NOT merge or close. Steer or
+   respawn the junior (see `docs/agents/delegation.md`), then re-verify.
+4. Post the criterion-by-criterion table in the merge/close comment so the
+   owner can audit it. Tick the boxes only for MET criteria.
+
+Historical tickets with `## Acceptance criteria` were found closed with all
+boxes blank (the 2026-11-17 acceptance audit); this rule is the guard against
+that failure recurring.
+
 Infer the repo from `git remote -v`; `gh` does this automatically when run inside a clone.
 
 ## Merge protocol (multi-agent pushes)
