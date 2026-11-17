@@ -311,6 +311,8 @@ per fact: `sink`, `source`, `client`, `rate`, `channels`, `format`,
 `muted_run_sink_streams`, `client_stream_pid`, `client_stream_binary`,
 `foreign_process_streams`, `baseline_streams`,
 `baseline_streams_excluded`, `unattributed_default_streams`,
+`probe_streams`, `probe_target`, `probe_streams_seen`, `preboot_streams`,
+`preboot_breach`, `preboot_sink`, `preboot_stream_index`, `preboot_pid`,
 `route_snapshot`, `route_baseline`. The route facts are written before
 any breach abort, so a failed run remains auditable (#319).
 
@@ -338,12 +340,22 @@ touched.
 ### Route guard (no path to the default sink)
 
 Before the client starts, `run` records the graph baseline
-(`audio/route-baseline.txt`). After the client starts, `run` writes a full
-graph snapshot (`audio/route-snapshot.txt`) at each route check: `pactl
+(`audio/route-baseline.txt`) and applies the **pre-boot stream check**:
+if an `OTwo.exe` stream whose process carries this run's `WINEPREFIX` and
+`DISPLAY` is already bound to the default sink, the launch is refused with
+exit 12 before the exe can open an audio device. A stale stream from
+another Wine prefix is recorded but left alone. This is the deterministic
+pre-boot part of the Wine routing fence (#319); it does not flip PipeWire
+stream-restore, but it prevents launching into a graph that already holds
+the owner's sink. The live hover319 baseline held only spotifast and Brave,
+so this check would have passed.
+
+After the client starts, `run` writes a full graph snapshot
+(`audio/route-snapshot.txt`) at each route check: `pactl
 get-default-sink`, `pactl list sinks short`, and `pactl list sink-inputs`,
 including each stream's `application.process.id`, `application.process.binary`,
-`node.name`, `application.name`, `Sink`, and `Mute`. Both files are text
-provenance artifacts, never audio bytes. Pass
+`node.name`, `application.name`, `media.name`, `Sink`, `Corked`, and
+`Mute`. Both files are text provenance artifacts, never audio bytes. Pass
 `--artifact audio/route-snapshot.txt --artifact audio/route-baseline.txt`
 to `rig-provenance.sh emit` so they appear in the pack's provenance.
 
@@ -358,22 +370,35 @@ never normalized or treated as this run's client. An exe-named stream with
 no process id on the default sink still aborts: an unattributed stream is
 not assumed harmless.
 
-A matching stream on the system default sink aborts the run: exit 12,
-`CONTAINMENT BREACH` on stderr, `route=default-sink-breach` in the sidecar,
-and the run is stopped immediately. The abort message and sidecar name the
-owning process id. The check polls for up to `RIG_AUDIO_ROUTE_TRIES` ticks
-(100, so 10 s): the native client opens its stream about 4 s into the boot,
-after chart and bank decode. `route=unseen` now means no stream was
-attributed to this run; check `foreign_process_streams` and the snapshot
-before claiming the graph was empty. It is **not** proof of silence; the
-level sidecar (`expect`, `state`, `peak_dbfs`, `mean_dbfs`) and
-`rig-audio.sh verify` judge the artifact. The hermetic
-`scripts/rig-audio.sh selftest` pins the Wine cases:
-`wine-exe-run-sink` (green, `route=sink`), `wine-exe-default-sink` (red,
-breach + exit 12), `wine-exe-foreign-process-id` (a leftover is not
-attributed), `wine-exe-foreign-process-id-default-sink` (a leftover does
-not abort an innocent run), `wine-exe-unknown-pid-default-sink` (red), and
+Wine first opens a corked, unbound `media.name = "format test stream"`
+(`Sink: 4294967295`, SPA_ID_INVALID). It is a format query, not a playback
+route. The verdict labels it `probe-only`, records `probe_streams` and
+`probe_target`, and leaves `client_streams` and `run_sink_streams` empty.
+The guard keeps polling until a bound stream appears; `probe_streams_seen`
+records that the probe was observed. This closes the hover319 gap where a
+`route=foreign-sink` probe stopped the poll and hid the later playback
+stream that produced 0.0 dBFS on the run sink.
+
+A bound stream of this run on the system default sink aborts the run:
+exit 12, `CONTAINMENT BREACH` on stderr, `route=default-sink-breach` in the
+sidecar, and the run is stopped immediately. The abort message and sidecar
+name the owning process id. The check polls for up to
+`RIG_AUDIO_ROUTE_TRIES` ticks (100, so 10 s): the native client opens its
+stream about 4 s into the boot, after chart and bank decode. Both
+`route=unseen` and `route=probe-only` stay provisional; check
+`foreign_process_streams`, `probe_streams`, and the snapshot before
+claiming the graph was empty. They are **not** proof of silence; the level
+sidecar (`expect`, `state`, `peak_dbfs`, `mean_dbfs`) and `rig-audio.sh
+verify` judge the artifact. The hermetic `scripts/rig-audio.sh selftest`
+pins `wine-exe-run-sink` (green, `route=sink`), `wine-exe-default-sink`
+(red, breach + exit 12), `wine-exe-unbound-format-probe` (`probe-only`),
+`wine-exe-foreign-process-id` (a leftover is not attributed),
+`wine-exe-foreign-process-id-default-sink` (a leftover does not abort an
+innocent run), `wine-exe-unknown-pid-default-sink` (red), and
 `wine-exe-baseline-stream-excluded` (a pre-boot stream is not ours).
+`scripts/rig-run.sh selftest` adds `audio-preboot-stream-breach` (exit 12
+before the client is launched) and `audio-route-probe-then-playback`
+(polling continues until the bound stream reaches the run sink).
 
 ### Validation bar
 

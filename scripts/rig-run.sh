@@ -142,18 +142,25 @@ client_basename() { printf '%s' "${1##*/}"; }
 
 # A client stream on the system default sink is a containment breach: stop
 # the run loudly instead of letting the owner path receive agent audio.
+# An unbound Wine format test stream is only a probe; keep polling for the
+# bound playback stream. Both `unseen` and `probe-only` stay provisional.
 assert_audio_route() {
-  local out_dir="$1" client="$2" attempt code route
+  local out_dir="$1" client="$2" attempt code route probes probe_seen=0
   local tries="${RIG_AUDIO_ROUTE_TRIES:-100}"
   for attempt in $(seq 1 "$tries"); do
     code=0
     rig_audio_assert_route "$out_dir" "$client" || code=$?
     [ "$code" -eq "$RIG_E_AUDIO" ] && return "$code"
+    probes="$(rig_audio_field "$out_dir" probe_streams || echo 0)"
+    if [ "${probes:-0}" -gt "$probe_seen" ]; then probe_seen="$probes"; fi
     route="$(rig_audio_field "$out_dir" route || echo unseen)"
-    [ "$route" = "unseen" ] || return 0
-    sleep 0.1
+    case "$route" in
+      unseen | probe-only) sleep 0.1 ;;
+      *) rig_audio_set_field "$out_dir" probe_streams_seen "$probe_seen"; return 0 ;;
+    esac
   done
-  rig_note "client '$client' opened no audio stream in the route check (declared: $(rig_audio_field "$out_dir" expect || echo unknown)); the level probe still judges the artifact"
+  rig_audio_set_field "$out_dir" probe_streams_seen "$probe_seen"
+  rig_note "client '$client' opened no bound audio stream in the route check (declared: $(rig_audio_field "$out_dir" expect || echo unknown); probe streams $probe_seen); the level probe still judges the artifact"
   return 0
 }
 
@@ -203,6 +210,10 @@ cmd_run() {
   rig_audio_set_field "$out_dir" client_display "$display"
   rig_audio_set_field "$out_dir" client_prefix "${WINEPREFIX:-}"
   rig_audio_record_route_baseline "$out_dir"
+  if ! rig_audio_check_preboot_streams "$out_dir"; then
+    preflight_release "$out_dir"
+    exit "$RIG_E_AUDIO"
+  fi
 
   local client_pid
   if command -v setsid >/dev/null 2>&1; then
@@ -673,16 +684,43 @@ audio_lane_legs() {
   assert_lane_field "audio-route-breach" "$tmp/o-route-bad" route "default-sink-breach"
   attempt "$tmp/err-route-bad-stop" "${senv[@]}" bash "$0" stop "$tmp/o-route-bad"
 
-  # 6. An exe-named stream that predates the boot is a leftover. With the
-  #    baseline recorded, it is excluded and an innocent run proceeds.
+  # 6. An exe-named stream from ANOTHER process that predates the boot is a
+  #    leftover. The baseline excludes it and an innocent run proceeds.
   attempt_then "audio-route-baseline" "$tmp/err-route-baseline" "${senv[@]}" \
     RIG_AUDIO_SKIP_STREAM_BASELINE=0 STUB_SINKINPUT_NAME=OTwo.exe \
-    STUB_SINKINPUT_SINK=alsa_output.default \
+    STUB_SINKINPUT_SINK=alsa_output.default STUB_SINKINPUT_PID=7777 \
     bash "$0" run :204 "$tmp/o-route-baseline" -- sleep 30
   assert_lane_field "audio-route-baseline" "$tmp/o-route-baseline" route "unseen"
   assert_lane_field "audio-route-baseline" "$tmp/o-route-baseline" baseline_streams "1"
   attempt "$tmp/err-route-baseline-stop" "${senv[@]}" bash "$0" stop "$tmp/o-route-baseline"
-  echo "selftest: leg audio-route-baseline PASS (pre-boot stream not attributed)"
+  echo "selftest: leg audio-route-baseline PASS (foreign pre-boot stream excluded)"
+
+  # 7. A pre-boot exe stream of THIS run's prefix refuses the launch before
+  #    the client can open a device (criterion 2).
+  attempt "$tmp/err-preboot" "${senv[@]}" \
+    RIG_AUDIO_SKIP_STREAM_BASELINE=0 STUB_SINKINPUT_NAME=OTwo.exe \
+    STUB_SINKINPUT_SINK=alsa_output.default \
+    bash "$0" run :205 "$tmp/o-preboot" -- sleep 30
+  assert_reject "audio-preboot-stream-breach" 12 "before boot" "$tmp/err-preboot"
+  assert_lane_field "audio-preboot-stream-breach" "$tmp/o-preboot" preboot_breach "1"
+  if grep -q '^client ' "$tmp/o-preboot/pids" 2>/dev/null; then
+    die "selftest: leg audio-preboot-stream-breach FAILED: client launched despite the breach"
+  fi
+  attempt "$tmp/err-preboot-stop" "${senv[@]}" bash "$0" stop "$tmp/o-preboot"
+  echo "selftest: leg audio-preboot-stream-breach PASS (launch refused before exe opens a device)"
+
+  # 8. Wine's corked, unbound format probe must not satisfy the route guard.
+  #    Polling continues until the later playback stream binds to our sink.
+  attempt_then "audio-route-probe-then-playback" "$tmp/err-probe" "${senv[@]}" \
+    RIG_SINK_NAME=rig_null_probe_play STUB_SINKINPUT_NAME=OTwo.exe \
+    STUB_SINKINPUT_SINK=rig_null_probe_play STUB_SINKINPUT_PROBE_TRANSITION=1 \
+    bash "$0" run :206 "$tmp/o-probe" -- sleep 30
+  assert_lane_field "audio-route-probe-then-playback" "$tmp/o-probe" route "sink"
+  assert_lane_field "audio-route-probe-then-playback" "$tmp/o-probe" probe_streams_seen "1"
+  [ -n "$(lane_field "$tmp/o-probe" run_sink_streams)" ] ||
+    die "selftest: leg audio-route-probe-then-playback FAILED: run_sink_streams is empty"
+  attempt "$tmp/err-probe-stop" "${senv[@]}" bash "$0" stop "$tmp/o-probe"
+  echo "selftest: leg audio-route-probe-then-playback PASS (probe kept polling until playback)"
 }
 
 main() {

@@ -393,13 +393,124 @@ rig_audio_client_pid() {
   awk '$1 == "client" { print $2; exit }' "$1/pids" 2>/dev/null || true
 }
 
-# Every stream that looks like this run's client must sit on the run's
+# A Wine prefix must not be launched into a graph that already holds one of
+# its exe streams on the owner's default sink. The baseline snapshot is
+# taken before boot, so this check can refuse the launch before the exe
+# opens an audio device. A stale stream from another Wine prefix is not
+# this run's stream and is left alone.
+rig_audio_check_preboot_streams() {
+  local out_dir="$1" baseline prefix display test_pids verdict breach
+  baseline="$(rig_audio_route_baseline_path "$out_dir")"
+  [ -f "$baseline" ] || return 0
+  prefix="$(rig_audio_field "$out_dir" client_prefix || true)"
+  display="$(rig_audio_field "$out_dir" client_display || true)"
+  test_pids="${RIG_AUDIO_TEST_STREAM_PIDS:-}"
+  verdict="$(python3 - "$baseline" "$prefix" "$display" "$test_pids" \
+    "$RIG_AUDIO_EXE_STREAM_NAME" <<'PYEOF' || true
+import os
+import sys
+
+baseline_file, prefix, display, test_pids, exe_stream = sys.argv[1:6]
+HEADER = "# pactl "
+
+
+def read_graph(path):
+    sections, current = {}, None
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for line in fh.read().splitlines():
+            if line.startswith(HEADER):
+                current = line[len(HEADER):]
+                sections[current] = []
+            elif current is not None:
+                sections[current].append(line)
+    return sections
+
+
+def unquote(value):
+    return value.strip().strip('"')
+
+
+baseline = read_graph(baseline_file)
+sink_names = {}
+for line in baseline.get("list sinks short", []):
+    fields = line.split("\t")
+    if len(fields) >= 2:
+        sink_names[fields[0]] = fields[1]
+default_lines = [line.strip() for line in baseline.get("get-default-sink", []) if line.strip()]
+default_sink = default_lines[0] if default_lines else ""
+
+streams, current = [], None
+for line in baseline.get("list sink-inputs", []):
+    if line.startswith("Sink Input #"):
+        current = {"index": line.split("#", 1)[1].strip(),
+                   "sink_index": "", "names": [], "pid": ""}
+        streams.append(current)
+    elif current is None:
+        continue
+    elif line.startswith("\tSink: "):
+        current["sink_index"] = line.split(":", 1)[1].strip()
+    elif line.startswith("\t\tapplication.process.id = "):
+        current["pid"] = unquote(line.split("=", 1)[1])
+    elif line.startswith("\t\tnode.name = ") or line.startswith("\t\tapplication.name = "):
+        current["names"].append(unquote(line.split("=", 1)[1]).lower())
+
+allowed = {pid for pid in test_pids.replace(",", " ").split() if pid.isdigit()}
+
+
+def belongs_to_this_prefix(pid):
+    if not pid.isdigit():
+        return False
+    if pid in allowed:
+        return True
+    if not prefix:
+        return False
+    try:
+        with open("/proc/%s/environ" % pid, "rb") as fh:
+            raw = fh.read()
+    except OSError:
+        return False
+    values = dict(item.decode("utf-8", "replace").split("=", 1)
+                  for item in raw.split(b"\0") if b"=" in item)
+    if values.get("WINEPREFIX") != prefix:
+        return False
+    return not display or values.get("DISPLAY") == display
+
+
+matched = [s for s in streams
+           if any(exe_stream.lower() in name for name in s["names"])]
+breaches = [s for s in matched
+            if s["sink_index"] != "4294967295"
+            and sink_names.get(s["sink_index"]) == default_sink
+            and belongs_to_this_prefix(s["pid"])]
+print("preboot_streams=%d" % len(matched))
+print("preboot_breach=%d" % len(breaches))
+print("preboot_sink=" + (default_sink or "unknown"))
+print("preboot_stream_index=" + (breaches[0]["index"] if breaches else ""))
+print("preboot_pid=" + (breaches[0]["pid"] if breaches else ""))
+PYEOF
+)"
+  [ -n "$verdict" ] || return 0
+  local key
+  for key in preboot_streams preboot_breach preboot_sink preboot_stream_index preboot_pid; do
+    rig_audio_set_field "$out_dir" "$key" "$(rig_audio_verdict_field "$verdict" "$key")"
+  done
+  breach="$(rig_audio_verdict_field "$verdict" preboot_breach)"
+  if [ "${breach:-0}" != "0" ]; then
+    rig_fail "$RIG_E_AUDIO" pre-boot-stream \
+      "exe stream $(rig_audio_verdict_field "$verdict" preboot_stream_index) of process $(rig_audio_verdict_field "$verdict" preboot_pid) already holds the default sink '$(rig_audio_verdict_field "$verdict" preboot_sink)' before boot; agent audio must never reach the owner's speakers"
+    return "$RIG_E_AUDIO"
+  fi
+  return 0
+}
+
+# Every bound stream that looks like this run's client must sit on the run's
 # sink. A name alias alone is not ownership: another Wine session can own
 # an OTwo.exe stream. A stream belongs to this run when its process is a
 # descendant of the launched client, or its environment carries this run's
-# display, sink, and Wine prefix. Pre-boot streams are never ours.
-# Prints `key=value` lines, including the process id and binary of each
-# attributed stream.
+# display, sink, and Wine prefix. Pre-boot streams are never ours. Wine also
+# opens a corked, unbound "format test stream" before playback; it is a
+# probe, so it cannot satisfy the route guard (observed in the live
+# hover319 pack). Prints `key=value` facts, including process ids.
 rig_audio_route_verdict() {
   local out_dir="$1" client="$2" sink="$3" exe_stream="$4"
   local snapshot baseline client_pid display prefix test_pids
@@ -443,7 +554,8 @@ def parse_streams(lines, sink_names):
             current = {
                 "index": line.split("#", 1)[1].strip(),
                 "sink_index": "", "names": [], "node_names": [],
-                "muted": False, "pid": "", "binary": "",
+                "muted": False, "corked": False, "media_name": "",
+                "target": "", "pid": "", "binary": "",
             }
             streams.append(current)
         elif current is None:
@@ -452,6 +564,12 @@ def parse_streams(lines, sink_names):
             current["sink_index"] = line.split(":", 1)[1].strip()
         elif line.startswith("\tMute: "):
             current["muted"] = line.split(":", 1)[1].strip() == "yes"
+        elif line.startswith("\tCorked: "):
+            current["corked"] = line.split(":", 1)[1].strip() == "yes"
+        elif line.startswith("\t\tmedia.name = "):
+            current["media_name"] = unquote(line.split("=", 1)[1])
+        elif line.startswith("\t\ttarget.object = "):
+            current["target"] = unquote(line.split("=", 1)[1])
         elif line.startswith("\t\tapplication.process.id = "):
             current["pid"] = unquote(line.split("=", 1)[1])
         elif line.startswith("\t\tapplication.process.binary = "):
@@ -469,6 +587,12 @@ def parse_streams(lines, sink_names):
 
 def stream_identity(stream):
     return (stream["pid"], ",".join(stream["node_names"]))
+
+
+def is_format_probe(stream):
+    """A corked, unbound PulseAudio format query is not a playback route."""
+    return (stream["sink_index"] == "4294967295" or
+            (stream["corked"] and "format test" in stream["media_name"].lower()))
 
 
 def descendants(root):
@@ -543,8 +667,11 @@ def belongs_to_run(pid):
     return True
 
 
-owned = [s for s in candidates if belongs_to_run(s["pid"])]
-foreign = [s for s in candidates if s not in owned]
+probes = [s for s in candidates if is_format_probe(s)]
+playback = [s for s in candidates if s not in probes]
+owned_probes = [s for s in probes if belongs_to_run(s["pid"])]
+owned = [s for s in playback if belongs_to_run(s["pid"])]
+foreign = [s for s in playback if s not in owned]
 unattributed_default = [s for s in foreign
                         if not s["pid"] and default_sink and s["sink"] == default_sink]
 on_default = [s for s in owned if default_sink and s["sink"] == default_sink]
@@ -553,12 +680,14 @@ on_run_sink = [s for s in owned if sink and s["sink"] == sink]
 
 if on_default:
     route = "default-sink-breach"
-elif not owned:
-    route = "unseen"
 elif on_run_sink:
     route = "sink"
-else:
+elif owned:
     route = "foreign-sink"
+elif owned_probes:
+    route = "probe-only"
+else:
+    route = "unseen"
 
 print("route=" + route)
 print("client_streams=%d" % len(owned))
@@ -568,6 +697,8 @@ print("run_sink_streams=" + ",".join(s["index"] for s in on_run_sink))
 print("muted_run_sink_streams=%d" % len([s for s in on_run_sink if s["muted"]]))
 print("client_stream_pid=" + ",".join(s["pid"] for s in owned))
 print("client_stream_binary=" + ",".join(s["binary"] for s in owned))
+print("probe_streams=%d" % len(owned_probes))
+print("probe_target=" + (owned_probes[0]["target"] if owned_probes else ""))
 print("foreign_process_streams=%d" % len(foreign))
 print("baseline_streams=%d" % len(baseline_streams))
 print("baseline_streams_excluded=%d" % len(leftovers))
@@ -581,8 +712,8 @@ rig_audio_persist_verdict() {
   local out_dir="$1" verdict="$2" key
   local keys=(route client_streams on_default_sink default_sink run_sink_streams
     muted_run_sink_streams client_stream_pid client_stream_binary
-    foreign_process_streams baseline_streams baseline_streams_excluded
-    unattributed_default_streams)
+    probe_streams probe_target foreign_process_streams baseline_streams
+    baseline_streams_excluded unattributed_default_streams)
   for key in "${keys[@]}"; do
     rig_audio_set_field "$out_dir" "$key" "$(rig_audio_verdict_field "$verdict" "$key")"
   done
@@ -789,6 +920,20 @@ def emit_list_source_outputs():
         print('\t\tapplication.process.binary = "pacat"')
 
 
+def probe_phase():
+    """First stub reads are the corked format probe; later reads play."""
+    path = os.path.join(state, "probe-calls")
+    try:
+        with open(path, encoding="ascii") as fh:
+            count = int(fh.read().strip() or 0)
+    except (OSError, ValueError):
+        count = 0
+    count += 1
+    with open(path, "w", encoding="ascii") as fh:
+        fh.write(str(count))
+    return count <= 2
+
+
 def emit_list_sink_inputs():
     seeded = os.environ.get("STUB_SINKINPUT_NAME", "")
     seeded_sink = os.environ.get("STUB_SINKINPUT_SINK", "alsa_output.default")
@@ -797,19 +942,27 @@ def emit_list_sink_inputs():
     if seeded:
         entries.append("%s\t%s\t%s" % (seeded, seeded_sink, "yes" if seeded_muted else "no"))
     stream_pid = os.environ.get("STUB_SINKINPUT_PID", "4242")
+    unbound = os.environ.get("STUB_SINKINPUT_UNBOUND") == "1"
+    if os.environ.get("STUB_SINKINPUT_PROBE_TRANSITION") == "1":
+        unbound = probe_phase()
     for number, entry in enumerate(entries):
         fields = entry.split("\t")
         node, sink = fields[0], fields[1] if len(fields) > 1 else ""
         muted = fields[2] if len(fields) > 2 else "no"
         print("Sink Input #%d" % (900 + number))
-        print("\tSink: %s" % sink_index_for(sink))
-        print("\tCorked: no")
+        print("\tSink: %s" % ("4294967295" if unbound else sink_index_for(sink)))
+        print("\tCorked: %s" % ("yes" if unbound else "no"))
         print("\tMute: %s" % muted)
         print("\tVolume: front-left: 65536 / 100% / 0.00 dB")
         print("\tProperties:")
         print('\t\tapplication.name = "PipeWire ALSA [%s]"' % node)
         print('\t\tnode.name = "alsa_playback.%s"' % node)
-        print('\t\ttarget.object = "%s"' % sink)
+        print('\t\tmedia.name = "%s"' %
+              ("format test stream" if unbound else "Playback"))
+        print('\t\ttarget.object = "%s"' %
+              os.environ.get("STUB_SINKINPUT_TARGET", sink))
+        if unbound:
+            print('\t\tpulse.corked = "true"')
         if stream_pid:
             print('\t\tapplication.process.id = "%s"' % stream_pid)
             print('\t\tapplication.process.binary = "wine-preloader"')
@@ -1038,7 +1191,7 @@ route_leg() {  # <leg> <state> <run> <want-route> <want-muted> <want-code>
   local leg="$1" state="$2" run="$3" want_route="$4" want_muted="$5" want_code="$6"; shift 6
   rig_audio_set_field "$run" state "capturing"
   local field
-  for field in client_stream_pid client_stream_binary foreign_process_streams baseline_streams_excluded; do
+  for field in client_stream_pid client_stream_binary probe_streams probe_target foreign_process_streams baseline_streams_excluded; do
     rig_audio_set_field "$run" "$field" ""
   done
   rm -f "$state/stream-ops"
@@ -1107,6 +1260,21 @@ selftest_route_legs() {
     "${env_common[@]}" STUB_SINKINPUT_NAME=OTwo.exe \
     STUB_SINKINPUT_SINK=alsa_output.default || return 1
   echo "rig-audio: selftest leg wine-exe-default-sink PASS (OTwo.exe on default sink rejected)"
+  # The live hover319 graph: a corked, unbound format query aimed at the
+  # owner's sink. It must stay provisional and never count as a route.
+  route_leg "wine-exe-unbound-format-probe" "$state" "$run" "probe-only" "" 0 \
+    "${env_common[@]}" STUB_SINKINPUT_NAME=OTwo.exe \
+    STUB_SINKINPUT_SINK=alsa_output.default STUB_SINKINPUT_UNBOUND=1 \
+    STUB_SINKINPUT_TARGET=spotifast.soloist.output || return 1
+  [ "$(rig_audio_field "$run" probe_streams)" = "1" ] || {
+    selftest_fail "wine-exe-unbound-format-probe" "probe stream was not counted"
+    return 1
+  }
+  [ -z "$(rig_audio_field "$run" run_sink_streams)" ] || {
+    selftest_fail "wine-exe-unbound-format-probe" "probe stream was written to run_sink_streams"
+    return 1
+  }
+  echo "rig-audio: selftest leg wine-exe-unbound-format-probe PASS (probe-only, no bound route)"
   # A leftover exe stream from ANOTHER process is not this run's client.
   route_leg "wine-exe-foreign-process-id" "$state" "$run" "unseen" "" 0 \
     "${env_common[@]}" STUB_SINKINPUT_NAME=OTwo.exe STUB_SINKINPUT_SINK=stub_sink \
