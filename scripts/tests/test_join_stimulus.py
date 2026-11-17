@@ -231,6 +231,117 @@ class WaitingSignatureTest(unittest.TestCase):
         self.assertIn("c1-waiting-observe/wire/room-stage.log:21-22", line)
 
 
+class LoadingSignatureTest(unittest.TestCase):
+    """Seam proof for the live chain rig-wine-run -> wine-scene.drive ->
+    wait_until(loading_is_up) -> capture_scene -> Frames.scene_label. The
+    qualification boot's pack is the live proof; these tests need no game.
+    """
+
+    @staticmethod
+    def frame(with_warm: bool = True, with_badge: bool = True,
+              with_logo: bool = True):
+        import numpy as np
+
+        frame = np.full((600, 800, 3), 60, dtype=np.int16)
+        if with_warm:
+            frame[100:500, 100:350] = (190, 140, 100)
+        if with_badge:
+            frame[410:490, 700:800] = (240, 240, 240)
+        if with_logo:
+            frame[0:40, 700:800] = (240, 30, 20)
+        return frame
+
+    def frames_for(self, frame):
+        frames = scene.Frames(":299", Path(tempfile.mkdtemp()))
+        frames.last = frame
+        return frames
+
+    def test_loading_pixels_outrank_the_planet_rule(self) -> None:
+        frames = self.frames_for(self.frame())
+        warm, badge, logo = frames.loading_metrics()
+        self.assertGreater(warm, scene.LOADING_WARM_ART_FRACTION)
+        self.assertGreater(badge, scene.LOADING_BADGE_BRIGHT_FRACTION)
+        self.assertGreater(logo, scene.LOADING_LOGO_SATURATION)
+        self.assertEqual("loading", frames.scene_label())
+
+    def test_planet_frame_is_not_relabelled_loading(self) -> None:
+        import numpy as np
+
+        planet = np.full((600, 800, 3), 60, dtype=np.int16)
+        planet[50:140, :200] = 150     # bright emblem strip, dark MENU bar
+        self.assertEqual("planet", self.frames_for(planet).scene_label())
+
+    def test_one_missing_box_is_not_a_loading_scene(self) -> None:
+        for missing in ("with_warm", "with_badge", "with_logo"):
+            frame = self.frame(**{missing: False})
+            self.assertNotEqual("loading", self.frames_for(frame).scene_label())
+
+    def test_unproven_loading_scene_writes_no_screenshot(self) -> None:
+        frames, log = FakeFrames(), FakeLog()
+        with tempfile.TemporaryDirectory() as tmp:
+            captured = scene.capture_scene(
+                frames, log, Path(tmp), "loading", "server:4012")
+            self.assertFalse(captured)
+            self.assertEqual([], list(Path(tmp).glob("*.png")))
+        self.assertTrue(any("stage loading NOT captured" in line
+                            for line in log.events))
+
+    def test_evidence_line_names_metrics_and_pack_files(self) -> None:
+        line = scene.loading_evidence_line((0.284, 0.278, 54.0))
+        self.assertIn("warm=0.284", line)
+        self.assertIn("badge=0.278", line)
+        self.assertIn("logo_sat=54.0", line)
+        self.assertIn("c1-start-cue/drive.log:63", line)
+        self.assertIn("c1-start-cue/wire/room-stage.log:28-31", line)
+        self.assertIn("c1-start-cue/artifacts/screenshots/waiting-cue-012.png",
+                      line)
+
+
+class PlayingSignatureTest(unittest.TestCase):
+    """Seam proof for the live chain rig-wine-run -> wine-scene.drive ->
+    wait_until(play observe) -> capture_scene -> Frames.scene_label. The
+    Playing pack is the live proof; these tests need no game process.
+    """
+
+    @staticmethod
+    def frame(is_playing: bool):
+        import numpy as np
+
+        frame = np.full((600, 800, 3), 60, dtype=np.int16)
+        if is_playing:
+            frame[0:520, 0:205] = 30                    # dark play highway
+            frame[520:600, 200:800] = (40, 120, 220)    # blue play HUD
+        return frame
+
+    def test_play_pixels_outrank_the_loading_rule(self) -> None:
+        frames = scene.Frames(":299", Path(tempfile.mkdtemp()))
+        frames.last = self.frame(is_playing=True)
+        lane, hud = frames.playing_metrics()
+        self.assertGreater(lane, scene.PLAYING_LANE_DARK_FRACTION)
+        self.assertGreater(hud, scene.PLAYING_HUD_BLUE_FRACTION)
+        self.assertEqual("playing", frames.scene_label())
+
+    def test_loading_pixels_are_not_relabelled_playing(self) -> None:
+        frames = scene.Frames(":299", Path(tempfile.mkdtemp()))
+        frames.last = self.frame(is_playing=False)
+        self.assertNotEqual("playing", frames.scene_label())
+
+    def test_evidence_line_names_metrics_and_wire_cue(self) -> None:
+        line = scene.playing_evidence_line((0.92, 0.48))
+        self.assertIn("lane_dark=0.920", line)
+        self.assertIn("hud_blue=0.480", line)
+        self.assertIn("cue=server:4014", line)
+        self.assertIn("artifacts/screenshots/playing.png", line)
+
+    def test_drive_accepts_playing_target(self) -> None:
+        self.assertIn("playing", scene.SCENE_TARGETS)
+        result = subprocess.run(
+            [sys.executable, str(MODULE_PATH), "--help"],
+            capture_output=True, text=True, check=True,
+        )
+        self.assertIn("playing", result.stdout)
+
+
 class NoJoinLogTest(unittest.TestCase):
     def test_hover_press_failure_names_one_stimulus(self) -> None:
         self.assertEqual(
@@ -369,6 +480,30 @@ class ManifestVerdictTest(unittest.TestCase):
             )
 
 
+class ServerOpcodeVocabularyTest(unittest.TestCase):
+    def test_ready_and_confirm_are_hex_opcodes_not_decimal_labels(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "server.log"
+            ready_line = (
+                "2026-11-18T01:20:29.236+08:00 INFO  0FA8 --- "
+                "[ WaitingController ] [ tester ]: ready\n")
+            confirm_line = (
+                "2026-11-18T01:20:45.171+08:00 INFO  0FAC --- "
+                "[ WaitingController ] [ tester ]: music loaded\n")
+            with patch.object(scene.time, "sleep"):
+                path.write_text(ready_line, encoding="utf-8")
+                hex_view = scene.ServerLog(path, "tester")
+                hex_view.offset = 0      # fixture predates the reader
+                self.assertTrue(hex_view.wait_for("0FA8", 0.1))
+                with path.open("a", encoding="utf-8") as handle:
+                    handle.write(confirm_line)
+                self.assertTrue(hex_view.wait_for("0FAC", 0.1))
+                decimal_view = scene.ServerLog(path, "tester")
+                decimal_view.offset = 0
+                self.assertFalse(decimal_view.wait_for("4008", 0.1))
+                self.assertFalse(decimal_view.wait_for("4012", 0.1))
+
+
 class IdleRelayTest(unittest.TestCase):
     def test_idle_timeout_does_not_end_the_wire_relay(self) -> None:
         import socket as socket_module
@@ -436,6 +571,134 @@ class PressShapeTest(unittest.TestCase):
         self.assertIn("--join-mode", result.stdout)
         self.assertIn("hover-press", result.stdout)
         self.assertIn("dclick", result.stdout)
+
+
+class StartCueDiscoveryTest(unittest.TestCase):
+    """Seam proof for the live chain rig-wine-run -> wine-scene.drive ->
+    observe_start_cue -> StartCueObserver. The cue boot's pack is the live
+    evidence; these tests only pin the inventory/stimulus order.
+    """
+
+    class AdvancingClock:
+        def __init__(self) -> None:
+            self.now = 1000.0
+
+        def time(self) -> float:
+            return self.now
+
+        def sleep(self, seconds: float) -> None:
+            self.now += seconds
+
+    class CueFrames:
+        def __init__(self, changing: bool = False) -> None:
+            import numpy as np
+
+            self.changing = changing
+            self.frame = np.zeros((600, 800, 3), dtype=np.int16)
+            self.last = self.frame
+            self.grabs = 0
+            self.saved: list[str] = []
+
+        def grab(self):
+            self.grabs += 1
+            if self.changing and self.grabs > 1:
+                self.frame = self.frame + 1
+            self.last = self.frame
+            return self.frame
+
+        def capture(self, path: Path) -> float:
+            self.saved.append(path.name)
+            return 0.0
+
+        def scene_label(self) -> str:
+            return "waiting"
+
+        def mean_luma(self) -> float:
+            return 100.0
+
+    class CueWire:
+        def __init__(self, gate: bool = False) -> None:
+            self.gate = gate
+
+        def opcodes_since(self, opcode: int) -> list[str]:
+            assert 3002 == opcode
+            return ["C2S:3002@+0.0s", "S2C:3003@+0.0s"]
+
+        def saw(self, opcode: int) -> bool:
+            return self.gate and 4011 == opcode
+
+    class CueHost:
+        def __init__(self) -> None:
+            self.commands: list[str] = []
+            self.boundaries: list[str] = []
+
+        def command(self, token: str) -> None:
+            self.commands.append(token)
+
+        def note_boundaries(self, log: FakeLog, label: str) -> None:
+            self.boundaries.append(label)
+
+    class CueInjector:
+        def __init__(self) -> None:
+            self.aims: list[str] = []
+
+        def send_click(self, aim: str) -> None:
+            self.aims.append(aim)
+
+    def test_affordance_inventory_names_controls_without_a_scene_claim(self) -> None:
+        frames, log = self.CueFrames(), FakeLog()
+        scene.waiting_affordance_lines(frames, log)
+        self.assertEqual(len(scene.WAITING_AFFORDANCE_BOXES), len(log.events))
+        self.assertTrue(all(line.startswith("cue affordance ") for line in log.events))
+        self.assertTrue(any("ready_pill box=625,125,780,165" in line
+                            for line in log.events))
+        self.assertFalse(any(line.startswith("frame ") for line in log.events))
+
+    def test_guest_ready_probe_precedes_the_host_start_command(self) -> None:
+        clock = self.AdvancingClock()
+        frames = self.CueFrames()
+        log, host, injector = FakeLog(), self.CueHost(), self.CueInjector()
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(scene.time, "time", clock.time), patch.object(
+                scene.time, "sleep", clock.sleep
+            ):
+                scene.observe_start_cue(
+                    frames, self.CueWire(), injector, host, log, Path(tmp), 20.0)
+        stimuli = [line for line in log.events if "cue stimulus" in line]
+        self.assertEqual(2, len(stimuli))
+        self.assertIn("guest ready-pill", stimuli[0])
+        self.assertIn("host start command", stimuli[1])
+        self.assertEqual(["ready-pill"], injector.aims)
+        self.assertEqual(["start"], host.commands)
+        self.assertEqual(["start-cue"], host.boundaries)
+        self.assertFalse(any(line.startswith("frame ") for line in log.events))
+
+    def test_gate_wire_and_distinct_frames_are_logged(self) -> None:
+        clock = self.AdvancingClock()
+        frames = self.CueFrames(changing=True)
+        log, host, injector = FakeLog(), self.CueHost(), self.CueInjector()
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(scene.time, "time", clock.time), patch.object(
+                scene.time, "sleep", clock.sleep
+            ):
+                scene.observe_start_cue(
+                    frames, self.CueWire(gate=True), injector, host, log,
+                    Path(tmp), 3.0)
+        self.assertEqual(3, len(frames.saved))
+        self.assertTrue(all(line.startswith("waiting-cue-")
+                            for line in frames.saved))
+        self.assertTrue(any("S2C 4011 seen" in line for line in log.events))
+        polls = [line for line in log.events if line.startswith("cue t=+")]
+        self.assertTrue(all("wire=C2S:3002@+0.0s,S2C:3003@+0.0s" in line
+                            for line in polls))
+
+    def test_drive_accepts_cue_options(self) -> None:
+        result = subprocess.run(
+            [sys.executable, str(MODULE_PATH), "--help"],
+            capture_output=True, text=True, check=True,
+        )
+        self.assertIn("--cue-discover-seconds", result.stdout)
+        self.assertIn("--host-start-delay", result.stdout)
 
 
 if __name__ == "__main__":

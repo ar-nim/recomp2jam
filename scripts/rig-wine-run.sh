@@ -18,6 +18,9 @@
 #                             after a joined 0BBA, poll frames and wire for S
 #                             seconds without claiming a Waiting scene
 #                             (mint mirrors to :15012; hash the log in provenance)
+#   --cue-discover-seconds S   after a proven Waiting capture, inventory controls,
+#                             probe READY, then queue the host start command
+#   --host-start-delay S      host's automatic start delay (default 20)
 #   --user-index-id N         guest account (default 1 = tester)
 #   --host-user-index-id N    host account (default 3 = t207probe; 0 = no host)
 #   --cross DIR               an A/B partner run dir; verify checks the two
@@ -68,6 +71,8 @@ REPAINT_DELAY=0
 ROW_DISMISS="auto"
 WIRE_TAP=0
 OBSERVE_WAITING_SECONDS=0
+CUE_DISCOVER_SECONDS=0
+HOST_START_DELAY=20
 WIRE_TAP_PORT="${RIG_WIRE_TAP_PORT:-15012}"
 GATEWAY_PORT=15010
 USER_INDEX_ID=1
@@ -86,6 +91,8 @@ while [ "$#" -gt 0 ]; do
     --row-dismiss) ROW_DISMISS="$2"; shift 2 ;;
     --wire-tap) WIRE_TAP=1; shift ;;
     --observe-waiting-seconds) OBSERVE_WAITING_SECONDS="$2"; shift 2 ;;
+    --cue-discover-seconds) CUE_DISCOVER_SECONDS="$2"; shift 2 ;;
+    --host-start-delay) HOST_START_DELAY="$2"; shift 2 ;;
     --user-index-id) USER_INDEX_ID="$2"; shift 2 ;;
     --host-user-index-id) HOST_USER_INDEX_ID="$2"; shift 2 ;;
     --cross) CROSS_DIR="$2"; shift 2 ;;
@@ -256,6 +263,8 @@ phase_drive() {
     --row-repaint "$ROW_REPAINT" --repaint-delay "$REPAINT_DELAY" \
     --row-dismiss "$ROW_DISMISS" --wire-log "$WIRE_LOG" \
     --observe-waiting-seconds "$OBSERVE_WAITING_SECONDS" \
+    --cue-discover-seconds "$CUE_DISCOVER_SECONDS" \
+    --host-start-delay "$HOST_START_DELAY" \
     --host-user-index-id "$HOST_USER_INDEX_ID" \
     --wineprefix "$WINEPREFIX" > "$OUT_DIR/phases-drive.log" 2>&1 || true
   local reached

@@ -41,7 +41,7 @@ Options:
   --display :N          that run's X display
   --shots DIR           screenshot dir (default OUT_DIR/artifacts/screenshots)
   --target SCENE        last scene the drive must reach (default loading;
-                        accepts planet|channel|room|waiting|loading)
+                        accepts planet|channel|room|waiting|loading|playing)
   --music-id ID         room music the host sets (default 757)
   --account NAME        guest account name in the server log (default tester)
   --server-log PATH     Memoryer log (default ~/memoryer-local/server.log)
@@ -50,6 +50,14 @@ Options:
   --observe-waiting-seconds S
                         after a joined 0BBA, poll frames and wire for S
                         seconds without claiming a Waiting scene (cue leg)
+  --cue-discover-seconds S
+                        after a proven Waiting capture, inventory the room
+                        affordances, probe the guest READY control, then queue
+                        the host start command while polling frames and wire;
+                        writes observation PNGs only, no Loading/Playing claim
+  --host-start-delay S   host's automatic start delay after the guest joins
+                        (default 20; the cue leg raises it so only the
+                        explicit command can start the song)
   --no-host             drive without the host bot (room stage only)
 """
 
@@ -138,6 +146,46 @@ WAITING_GREEN_TOP_FRACTION = 0.35
 WAITING_READY_PILL_FRACTION = 0.15
 WAITING_SKILL_PANEL_FRACTION = 0.45
 
+# Probe boxes for the #326 cue leg, read off c3-waiting-qualified's
+# artifacts/screenshots/waiting.png (native 800x600 canvas). These name
+# controls to inspect; they are NOT a scene classifier.
+WAITING_AFFORDANCE_BOXES = {
+    "settings_bar": (570, 15, 780, 40),
+    "ready_pill": (625, 125, 780, 165),
+    "team_grid": (635, 55, 775, 130),
+    "skill_panel": (625, 190, 780, 355),
+    "speed_panel": (625, 350, 780, 420),
+    "song_slots": (610, 445, 790, 565),
+    "back_button": (700, 570, 790, 598),
+}
+CUE_QUIET_SECONDS = 6.0     # watch the joined room before any stimulus
+CUE_HOST_START_SECONDS = 14.0  # after the READY probe has been read
+
+# Loading signature, measured on the c1-start-cue pack's own pixels:
+# drive.log:63 pins the frame to the 4011/4012 start gate
+# (wire/room-stage.log:28-31), and
+# artifacts/screenshots/waiting-cue-012.png measures 0.284 / 0.278 / 54.0.
+# The same boxes on planet measure 0.044 / 0.067 / 10.9; on channel
+# 0.018 / 0.067 / 10.9. The old planet rule mislabelled this art.
+LOADING_WARM_ART_BOX = (100, 100, 350, 500)   # song art's warm centre-left
+LOADING_BADGE_BOX = (700, 410, 800, 490)      # white 3KEY VERSION badge
+LOADING_LOGO_BOX = (700, 0, 800, 40)          # O2Jam logo at top right
+LOADING_WARM_ART_FRACTION = 0.15
+LOADING_BADGE_BRIGHT_FRACTION = 0.15
+LOADING_LOGO_SATURATION = 30.0
+
+# Provisional Playing boxes, taken from the lane/HUD geometry in
+# docs/geometry-audit.md:31 and the native design reference
+# ~/scratch/smoke-finish/05-playing-03.png (that frame is NOT exe evidence).
+# The boot's own pack must name the measured pixels before this is cited.
+PLAYING_LANE_BOX = (0, 0, 205, 520)
+PLAYING_HUD_BOX = (200, 520, 800, 600)
+PLAYING_LANE_DARK_FRACTION = 0.60
+PLAYING_HUD_BLUE_FRACTION = 0.20
+PLAYING_TIMEOUT_SECONDS = 90.0
+
+SCENE_TARGETS = ["planet", "channel", "room", "waiting", "loading", "playing"]
+
 # Scene signatures, measured from this leg's own frames (captures cited in
 # docs/captures/t240/findings.md). A capture is labelled only when its own
 # pixels match; a stage that is not on screen is reported, never labelled.
@@ -164,6 +212,59 @@ def orange_pill_fraction(frame: np.ndarray, box: tuple[int, int, int, int]) -> f
                         for channel in range(3))
     return float(((red > 170) & (green > 80) & (green < 190) &
                   (blue < 120) & (red - blue > 80)).mean())
+
+
+def box_color_observation(frame: np.ndarray,
+                          box: tuple[int, int, int, int]) -> tuple[str, float]:
+    """Mean RGB and bright-pixel share of one probed control box."""
+    left, top, right, bottom = box
+    pixels = frame[top:bottom, left:right]
+    mean_rgb = tuple(float(value) for value in pixels.mean(axis=(0, 1)))
+    bright = float((pixels.mean(axis=2) > 120).mean())
+    text = "(" + ", ".join(f"{value:.0f}" for value in mean_rgb) + ")"
+    return text, bright
+
+
+def dark_fraction(frame: np.ndarray, box: tuple[int, int, int, int]) -> float:
+    """Share of a box darker than the play highway's navy lane fill."""
+    left, top, right, bottom = box
+    pixels = frame[top:bottom, left:right]
+    return float((pixels.mean(axis=2) < 60).mean())
+
+
+def blue_fraction(frame: np.ndarray, box: tuple[int, int, int, int]) -> float:
+    """Share of a box painted blue, as in the play HUD's gauge panel."""
+    left, top, right, bottom = box
+    red, green, blue = (frame[top:bottom, left:right, channel]
+                        for channel in range(3))
+    return float(((blue > red + 20) & (blue > green + 10)).mean())
+
+
+def warm_art_fraction(frame: np.ndarray, box: tuple[int, int, int, int]) -> float:
+    """Share of a box painted with the song art's warm ochre/skin tones."""
+    left, top, right, bottom = box
+    red, green, blue = (frame[top:bottom, left:right, channel]
+                        for channel in range(3))
+    warm = ((red > 120) & (red - blue > 25) &
+            (green > 80) & (green - blue > 20))
+    return float(warm.mean())
+
+
+def mean_saturation(frame: np.ndarray, box: tuple[int, int, int, int]) -> float:
+    """Mean per-pixel channel spread, high for the O2Jam logo's colours."""
+    left, top, right, bottom = box
+    pixels = frame[top:bottom, left:right]
+    return float((pixels.max(axis=2) - pixels.min(axis=2)).mean())
+
+
+def waiting_affordance_lines(frames: Frames, log: SceneLog) -> None:
+    """Inventory the controls visible in the joined room, without a claim."""
+    frame = frames.last if frames.last is not None else frames.grab()
+    for name, box in WAITING_AFFORDANCE_BOXES.items():
+        mean_rgb, bright = box_color_observation(frame, box)
+        coordinates = ",".join(str(value) for value in box)
+        log.event(f"cue affordance {name} box={coordinates} "
+                  f"mean_rgb={mean_rgb} bright={bright:.3f}")
 
 
 def bright_panel_fraction(frame: np.ndarray, box: tuple[int, int, int, int]) -> float:
@@ -248,6 +349,37 @@ class Frames:
         # bare board (measured 0.83) while a real message box measures 0.99.
         return self.popup_fraction() > 0.9
 
+    def playing_metrics(self) -> tuple[float, float]:
+        """Dark-lane and blue-HUD shares for this frame."""
+        frame = self.last if self.last is not None else self.grab()
+        return (
+            dark_fraction(frame, PLAYING_LANE_BOX),
+            blue_fraction(frame, PLAYING_HUD_BOX),
+        )
+
+    def playing_is_up(self) -> bool:
+        lane, hud = self.playing_metrics()
+        return (lane > PLAYING_LANE_DARK_FRACTION
+                and hud > PLAYING_HUD_BLUE_FRACTION)
+
+    def loading_metrics(self) -> tuple[float, float, float]:
+        """Warm art, bright badge and saturated logo fractions for this frame."""
+        frame = self.last if self.last is not None else self.grab()
+        badge = frame[LOADING_BADGE_BOX[1]:LOADING_BADGE_BOX[3],
+                      LOADING_BADGE_BOX[0]:LOADING_BADGE_BOX[2]]
+        badge_bright = float((badge.mean(axis=2) > 150).mean())
+        return (
+            warm_art_fraction(frame, LOADING_WARM_ART_BOX),
+            badge_bright,
+            mean_saturation(frame, LOADING_LOGO_BOX),
+        )
+
+    def loading_is_up(self) -> bool:
+        warm, badge, logo = self.loading_metrics()
+        return (warm > LOADING_WARM_ART_FRACTION
+                and badge > LOADING_BADGE_BRIGHT_FRACTION
+                and logo > LOADING_LOGO_SATURATION)
+
     def waiting_metrics(self) -> tuple[float, float, float]:
         """Green bar, READY pill and side panel fractions for this frame."""
         frame = self.last if self.last is not None else self.grab()
@@ -273,6 +405,10 @@ class Frames:
         plate = frame[top:bottom, left:right]
         plate_luma = float(plate.mean())
         plate_sat = float((plate.max(axis=2) - plate.min(axis=2)).mean())
+        if self.playing_is_up():
+            return "playing"
+        if self.loading_is_up():
+            return "loading"
         if self.waiting_is_up():
             return "waiting"
         if menu > BOARD_MENU_LUMA and tabs > ROOM_TAB_BRIGHT:
@@ -361,6 +497,11 @@ class WireTapLog:
             for seconds, direction, value in self.events
             if seconds >= start
         ]
+
+    def saw(self, opcode: int) -> bool:
+        """Whether the tap has logged this opcode in either direction."""
+        self.take()
+        return any(value == opcode for _, _, value in self.events)
 
     def note_boundaries(self, log: SceneLog, label: str) -> None:
         """Log the frame timeline since 03EC at one exe-visible boundary."""
@@ -689,6 +830,28 @@ def observe_waiting_transition(frames: Frames, wire: WireTapLog,
         time.sleep(interval)
 
 
+def playing_evidence_line(metrics: tuple[float, float]) -> str:
+    """Name the measured play pixels and the live wire cue for this frame."""
+    lane, hud = metrics
+    return (
+        f"playing signature lane_dark={lane:.3f} hud_blue={hud:.3f} "
+        f"cue=server:4014 evidence=this pack's wire/room-stage.log "
+        f"and artifacts/screenshots/playing.png"
+    )
+
+
+def loading_evidence_line(metrics: tuple[float, float, float]) -> str:
+    """Name the measured Loading pixels and the pack lines that pinned them."""
+    warm, badge, logo = metrics
+    return (
+        f"loading signature warm={warm:.3f} badge={badge:.3f} "
+        f"logo_sat={logo:.1f} "
+        f"evidence=c1-start-cue/drive.log:63 "
+        f"c1-start-cue/wire/room-stage.log:28-31 "
+        f"c1-start-cue/artifacts/screenshots/waiting-cue-012.png"
+    )
+
+
 def waiting_evidence_line(metrics: tuple[float, float, float]) -> str:
     """Name the measured pixels and the pack lines that pinned them."""
     green, orange, bright = metrics
@@ -711,11 +874,13 @@ def wait_until(probe, timeout: float, interval: float = 1.0) -> bool:
 class Host:
     """The room host bot: created before entry, driven by a command file."""
 
-    def __init__(self, out_dir: Path, music_id: int, user_index_id: int, log: SceneLog):
+    def __init__(self, out_dir: Path, music_id: int, user_index_id: int,
+                 log: SceneLog, start_delay: float = 20.0):
         self.out_dir = out_dir
         self.music_id = music_id
         self.user_index_id = user_index_id
         self.log = log
+        self.start_delay = start_delay
         self.dir = out_dir / "host"
         self.dir.mkdir(parents=True, exist_ok=True)
         self.cmd_file = self.dir / "host.cmd"
@@ -728,7 +893,7 @@ class Host:
              "--out-dir", str(self.dir),
              "--user-index-id", str(self.user_index_id),
              "--music-id", str(self.music_id),
-             "--hold", "600", "--start-delay", "20"],
+             "--hold", "600", "--start-delay", str(self.start_delay)],
             stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
             start_new_session=True,
         )
@@ -798,6 +963,85 @@ def hover_press_join(frames: Frames, injector: Input, server: ServerLog,
     return server.wait_for("0BBA", join_timeout)
 
 
+class StartCueObserver:
+    """Frames and wire around the first song start, with no scene claim.
+
+    The cue leg first inventories the joined room's controls, then probes
+    the guest READY pill, then queues the host's explicit start command.
+    Every poll names the wire frames since 0BBA; the distinct frame PNGs
+    are observations for the later signature legs, not Loading/Playing
+    evidence by themselves.
+    """
+
+    def __init__(self, frames: Frames, wire: WireTapLog, injector: Input,
+                 host: Host, log: SceneLog, shots: Path) -> None:
+        self.frames = frames
+        self.wire = wire
+        self.injector = injector
+        self.host = host
+        self.log = log
+        self.shots = shots
+        self.started_at = time.time()
+        self.last_digest = ""
+        self.captures = 0
+        self.ready_sent = False
+        self.host_started = False
+        self.gate_logged = False
+
+    def poll(self, elapsed: float) -> None:
+        frame = self.frames.grab()
+        digest = hashlib.sha256(frame.tobytes()).hexdigest()
+        shot = ""
+        if digest != self.last_digest:
+            self.captures += 1
+            name = f"waiting-cue-{self.captures:03}.png"
+            self.frames.capture(self.shots / name)
+            shot = f" shot={name}"
+            # capture() re-grabs, so hash the bytes actually saved.
+            self.last_digest = hashlib.sha256(
+                self.frames.last.tobytes()).hexdigest()
+        opcodes = ",".join(self.wire.opcodes_since(3002))
+        self.log.event(
+            f"cue t=+{elapsed:.1f}s label={self.frames.scene_label()} "
+            f"mean={self.frames.mean_luma():.1f} wire={opcodes}{shot}"
+        )
+        if not self.gate_logged and self.wire.saw(4011):
+            self.log.event("cue wire S2C 4011 seen (start gate answered)")
+            self.gate_logged = True
+
+    def run(self, seconds: float) -> None:
+        self.log.event(
+            f"cue discovery begin seconds={seconds:.1f}s "
+            f"quiet={CUE_QUIET_SECONDS:.1f}s "
+            f"host_start_at={CUE_HOST_START_SECONDS:.1f}s"
+        )
+        while time.time() - self.started_at < seconds:
+            elapsed = time.time() - self.started_at
+            if not self.ready_sent and elapsed >= CUE_QUIET_SECONDS:
+                self.log.event("cue stimulus guest ready-pill (visible control)")
+                self.injector.send_click("ready-pill")
+                self.ready_sent = True
+            if not self.host_started and elapsed >= CUE_HOST_START_SECONDS:
+                self.log.event(
+                    "cue stimulus host start command (host owns 4010 StartGame)")
+                self.host.command("start")
+                self.host_started = True
+            self.poll(elapsed)
+            time.sleep(1.0)
+        opcodes = ",".join(self.wire.opcodes_since(3002))
+        self.log.event(
+            f"cue discovery end frames={self.captures} wire={opcodes}")
+        self.host.note_boundaries(self.log, "start-cue")
+
+
+def observe_start_cue(frames: Frames, wire: WireTapLog, injector: Input,
+                      host: Host, log: SceneLog, shots: Path,
+                      seconds: float) -> None:
+    """Inventory the Waiting controls, then time the first start stimuli."""
+    waiting_affordance_lines(frames, log)
+    StartCueObserver(frames, wire, injector, host, log, shots).run(seconds)
+
+
 def no_join_failure_message(join_mode: str) -> str:
     """Name the stimulus count that this join mode can actually send."""
     if join_mode == "hover-press":
@@ -808,7 +1052,7 @@ def no_join_failure_message(join_mode: str) -> str:
 def drive(arguments, frames: Frames, server: ServerLog, injector: Input,
           log: SceneLog, shots: Path, wire: WireTapLog) -> list[str]:
     reached: list[str] = []
-    targets = ["planet", "channel", "room", "waiting", "loading"]
+    targets = SCENE_TARGETS
     wanted = targets[: targets.index(arguments.target) + 1]
 
     def board_ready() -> bool:
@@ -848,7 +1092,8 @@ def drive(arguments, frames: Frames, server: ServerLog, injector: Input,
     host = None
     if arguments.host_user_index_id:
         host = Host(Path(arguments.attach), arguments.music_id,
-                    arguments.host_user_index_id, log)
+                    arguments.host_user_index_id, log,
+                    arguments.host_start_delay)
         host.start()
         # The room must exist BEFORE the guest asks for the list: a room
         # created afterwards needs another 2005 event to reach the client
@@ -967,24 +1212,59 @@ def drive(arguments, frames: Frames, server: ServerLog, injector: Input,
             frames.capture(shots / "probe-failure.png")
             return reached
         reached.append("waiting")
+        if arguments.cue_discover_seconds > 0:
+            if host is None:
+                log.event("cue discovery FAILED reason=no host bot")
+            else:
+                observe_start_cue(frames, wire, injector, host, log, shots,
+                                  arguments.cue_discover_seconds)
+            return reached
         if "loading" not in wanted:
             return reached
 
         injector.send_click("ready-pill")
-        if not server.wait_for("4008", 20.0):
-            log.event("ready FAILED reason=no 4008 (the start may still arrive)")
+        if not server.wait_for("0FA8", 20.0):
+            log.event("ready FAILED reason=no 0FA8 (the start may still arrive)")
         if host is not None:
             host.command("start")
-        if not server.wait_for("4012", 30.0):
-            log.event("stage loading FAILED reason=no 4012 confirm")
+        if not server.wait_for("0FAC", 30.0):
+            log.event("stage loading FAILED reason=no 0FAC confirm")
             return reached
-        time.sleep(2)
-        # No pixel signature for the loading gate yet: the scene is claimed
-        # by the client's own 4012 ConfirmMusicLoaded, and the capture is
-        # recorded as cue-free pixels under that claim (docs note the gap).
-        mean = frames.capture(shots / "loading.png")
-        log.scene("loading", mean, "server:4012", "loading.png")
+        def loading_frame_up() -> bool:
+            frames.grab()
+            return frames.loading_is_up()
+
+        if not wait_until(loading_frame_up, 20.0, 1.0):
+            log.event("stage loading FAILED reason=4012 answered but pixels "
+                      "did not match the measured signature")
+            frames.capture(shots / "probe-failure.png")
+            return reached
+        log.event(loading_evidence_line(frames.loading_metrics()))
+        if not capture_scene(frames, log, shots, "loading", "server:4012"):
+            frames.capture(shots / "probe-failure.png")
+            return reached
         reached.append("loading")
+        if "playing" not in wanted:
+            return reached
+
+        def poll_play() -> bool:
+            frames.grab()
+            lane, hud = frames.playing_metrics()
+            opcodes = ",".join(wire.opcodes_since(3002))
+            log.event(
+                f"play observe lane={lane:.3f} hud={hud:.3f} "
+                f"label={frames.scene_label()} wire={opcodes}")
+            return frames.playing_is_up() and wire.saw(4014)
+
+        if not wait_until(poll_play, PLAYING_TIMEOUT_SECONDS, 2.0):
+            log.event("stage playing FAILED reason=no 4014 with play pixels")
+            frames.capture(shots / "probe-failure.png")
+            return reached
+        log.event(playing_evidence_line(frames.playing_metrics()))
+        if not capture_scene(frames, log, shots, "playing", "server:4014"):
+            frames.capture(shots / "probe-failure.png")
+            return reached
+        reached.append("playing")
     finally:
         if host is not None:
             host.stop()
@@ -1011,7 +1291,7 @@ def main() -> int:
     parser.add_argument("--display", required=True)
     parser.add_argument("--shots", default="")
     parser.add_argument("--target", default="loading",
-                        choices=["planet", "channel", "room", "waiting", "loading"])
+                        choices=SCENE_TARGETS)
     parser.add_argument("--music-id", type=int, default=757)
     parser.add_argument("--account", default="tester")
     parser.add_argument("--server-log",
@@ -1021,6 +1301,11 @@ def main() -> int:
     parser.add_argument("--observe-waiting-seconds", type=float, default=0.0,
                         help="poll frames and wire after a joined 0BBA without "
                              "claiming a Waiting scene (cue-discovery leg)")
+    parser.add_argument("--cue-discover-seconds", type=float, default=0.0,
+                        help="after a proven Waiting capture, inventory the "
+                             "controls and observe the first song start")
+    parser.add_argument("--host-start-delay", type=float, default=20.0,
+                        help="host's automatic start delay after JOINED")
     parser.add_argument("--row-dismiss", choices=["auto", "none"],
                         default="auto",
                         help="auto clears the no-response modal; none keeps "
