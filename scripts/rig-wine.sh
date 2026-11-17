@@ -3,6 +3,7 @@
 #
 # Usage:
 #   scripts/rig-wine.sh build-injector [OUT_DIR]
+#   scripts/rig-wine.sh build-relay-fastfail [OUT_DIR]
 #   scripts/rig-wine.sh launch <argv-file>
 #   scripts/rig-wine.sh send <move|click|dclick|press|down|up|key|type> [args...]
 #   scripts/rig-wine.sh reset
@@ -15,6 +16,16 @@
 #                   <OUT_DIR>/sendinput-helper.exe.so (default OUT_DIR is
 #                   $RIG_WINE_INJECTOR_DIR or ~/scratch/240-fix/injector).
 #                   The build needs winegcc only; the source is committed.
+#   build-relay-fastfail
+#                   gcc-build scripts/rig-relay-fastfail.c into
+#                   <OUT_DIR>/relay-fastfail.so (same default OUT_DIR).
+#                   It is a Linux LD_PRELOAD interposer (not a Wine PE), so
+#                   it builds with the system gcc. launch loads it when
+#                   present: it fails only the 7.55 exe's dead relay
+#                   connect 203.238.136.52:7788 in 0 ms instead of letting
+#                   the UI thread block 35.785 s to STATUS_IO_TIMEOUT
+#                   (issues #321/#323/#324, docs in the source header).
+#                   Set RIG_RELAY_FASTFAIL=0 to launch without it.
 #   launch          exec the client with the pinned argv shape
 #                   `OTwo.exe <blob> (|test|??|<addr>|<port>) x5` read from
 #                   argv-file, one argument per line, exactly as
@@ -84,12 +95,37 @@ cmd_build_injector() {
   echo "rig-wine: built $built ($(sha256sum "$built" | cut -c1-12))"
 }
 
+relay_fastfail_path() { printf '%s/relay-fastfail.so' "$RIG_WINE_INJECTOR_DIR"; }
+
+cmd_build_relay_fastfail() {
+  local out_dir="${1:-$RIG_WINE_INJECTOR_DIR}"
+  command -v gcc >/dev/null || die "gcc not found (install gcc)"
+  mkdir -p "$out_dir"
+  # A Linux .so preloaded into wine/wineserver, not a Wine PE: plain gcc.
+  gcc -shared -fPIC -O2 -o "$out_dir/relay-fastfail.so" \
+    "$SCRIPT_DIR/rig-relay-fastfail.c" -ldl || die "gcc failed for rig-relay-fastfail.c"
+  echo "rig-wine: built $out_dir/relay-fastfail.so ($(sha256sum "$out_dir/relay-fastfail.so" | cut -c1-12))"
+}
+
+# The dead-relay connect blocks the UI thread for the whole Wine pair, so
+# the interposer is ON whenever the built .so is present. Prepending keeps
+# any caller-supplied LD_PRELOAD entries alive; RIG_RELAY_FASTFAIL=0 is the
+# documented escape hatch for falsification boots (b6 vs b8, issue #324).
+export_relay_fastfail() {
+  [ "${RIG_RELAY_FASTFAIL:-1}" != "0" ] || return 0
+  local so
+  so="$(relay_fastfail_path)"
+  [ -f "$so" ] || return 0
+  export LD_PRELOAD="$so${LD_PRELOAD:+:$LD_PRELOAD}"
+}
+
 cmd_launch() {
   local argv_file="${1:-}"
   [ -n "$argv_file" ] || die "launch: argv file required (one argument per line)"
   [ -r "$argv_file" ] || die "launch: cannot read $argv_file"
   require_prefix
   require_exe
+  export_relay_fastfail
   local -a argv=()
   mapfile -t argv < "$argv_file"
   [ "${#argv[@]}" -ge 6 ] || die "launch: $argv_file holds ${#argv[@]} arguments; the pinned shape needs a blob plus 5 mirrors"
@@ -124,10 +160,11 @@ main() {
   local command="${1:-}"; shift || true
   case "$command" in
     build-injector) cmd_build_injector "$@" ;;
+    build-relay-fastfail) cmd_build_relay_fastfail "$@" ;;
     launch) cmd_launch "$@" ;;
     send) cmd_send "$@" ;;
     reset) cmd_reset ;;
-    *) die "usage: rig-wine.sh {build-injector|launch|send|reset} ..." ;;
+    *) die "usage: rig-wine.sh {build-injector|build-relay-fastfail|launch|send|reset} ..." ;;
   esac
 }
 

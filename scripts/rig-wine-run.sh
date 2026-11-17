@@ -119,6 +119,11 @@ export WINEPREFIX RIG_WINE_EXE RIG_WINE_INJECTOR_DIR
 
 mkdir -p "$OUT_DIR"
 OUT_DIR="$(cd "$OUT_DIR" && pwd)"
+# The relay-fastfail interposer appends its interception line here (the
+# stderr copy lands in client.log either way); rig-wine.sh launch loads
+# the .so through LD_PRELOAD, scoped to the Wine pair's own process tree.
+RELAY_FASTFAIL_LOG="$OUT_DIR/relay-fastfail.log"
+export RELAY_FASTFAIL_LOG
 STATUS_FILE="$OUT_DIR/status"
 REPORT_FILE="$OUT_DIR/report.md"
 WIRE_LOG="$OUT_DIR/wire/room-stage.log"
@@ -127,6 +132,25 @@ WIRE_PID_FILE="$OUT_DIR/wire/tap.pid"
 echo "FAILED" > "$STATUS_FILE"
 
 note() { echo "rig-wine-run: $*"; echo "- $*" >> "$REPORT_FILE"; }
+
+# The dead-relay interposer is part of every room boot: without it the
+# exe's synchronous connect to 203.238.136.52:7788 blocks the UI thread
+# 35.785 s (issue #323). Auto-build once from the committed source, the
+# same scratch home the SendInput injector uses. RIG_RELAY_FASTFAIL=0
+# keeps the falsification arm (b6 vs b8, issue #324) reachable.
+ensure_relay_fastfail() {
+  local so="$RIG_WINE_INJECTOR_DIR/relay-fastfail.so"
+  if [ "${RIG_RELAY_FASTFAIL:-1}" = "0" ]; then
+    note "relay-fastfail: disabled (RIG_RELAY_FASTFAIL=0, falsification arm)"
+    return 0
+  fi
+  if [ ! -f "$so" ]; then
+    note "relay-fastfail: building $so from scripts/rig-relay-fastfail.c"
+    bash "$SCRIPT_DIR/rig-wine.sh" build-relay-fastfail "$RIG_WINE_INJECTOR_DIR" >> "$REPORT_FILE" 2>&1 \
+      || die "relay-fastfail build failed"
+  fi
+  note "relay-fastfail: $(sha256sum "$so" | cut -c1-12) preloaded, log $RELAY_FASTFAIL_LOG"
+}
 
 exe_sha256() { sha256sum "$RIG_WINE_EXE" | cut -d' ' -f1; }
 
@@ -257,11 +281,15 @@ phase_package() {
   if [ "$NO_DRIVE" -eq 0 ]; then
     input_log_args=(--input-log "$OUT_DIR/drive.log")
   fi
+  local relay_sha=off
+  if [ "${RIG_RELAY_FASTFAIL:-1}" != "0" ] && [ -f "$RIG_WINE_INJECTOR_DIR/relay-fastfail.so" ]; then
+    relay_sha="$(sha256sum "$RIG_WINE_INJECTOR_DIR/relay-fastfail.so" | cut -c1-12)"
+  fi
   bash "$SCRIPT_DIR/run-manifest.sh" write "$OUT_DIR" \
     --pair "$PAIR" \
     --build "$(git -C "$REPO_ROOT" rev-parse HEAD)" \
     --script "scripts/wine-scene.py (target $TARGET, music $MUSIC_ID, join $JOIN_MODE, repaint $ROW_REPAINT, dismiss $ROW_DISMISS)" \
-    --params "display=$DISPLAY_NAME sink=$(sed -n "s/^export PULSE_SINK='\([^']*\)'$/\1/p" "$OUT_DIR/env.sh" | head -1) exe_sha256=$RIG_WINE_EXE_SHA256 wire_tap=$WIRE_TAP gateway_port=$GATEWAY_PORT $(join_outcome_fields)" \
+    --params "display=$DISPLAY_NAME sink=$(sed -n "s/^export PULSE_SINK='\([^']*\)'$/\1/p" "$OUT_DIR/env.sh" | head -1) exe_sha256=$RIG_WINE_EXE_SHA256 wire_tap=$WIRE_TAP gateway_port=$GATEWAY_PORT relay_fastfail=$relay_sha $(join_outcome_fields)" \
     "${input_log_args[@]}" >> "$REPORT_FILE" 2>&1 \
     || { note "manifest write FAILED"; return 1; }
   local injector="$RIG_WINE_INJECTOR_DIR/sendinput-helper.exe.so"
@@ -272,6 +300,8 @@ phase_package() {
     [ -s "$WIRE_LOG" ] || { note "wire log missing or empty: $WIRE_LOG"; return 1; }
     wire_args=(--artifact wire/room-stage.log)
   fi
+  local -a relay_args=()
+  [ -s "$OUT_DIR/relay-fastfail.log" ] && relay_args=(--artifact relay-fastfail.log)
   bash "$SCRIPT_DIR/rig-provenance.sh" emit "$OUT_DIR" \
     --producer "$RIG_WINE_EXE" --producer-kind exe --producer-version 7.55 \
     --expect-producer-sha256 "$RIG_WINE_EXE_SHA256" \
@@ -281,6 +311,7 @@ phase_package() {
     --artifact audio/route-snapshot.txt \
     --artifact audio/route-baseline.txt \
     "${wire_args[@]}" \
+    "${relay_args[@]}" \
     "${injector_args[@]}" >> "$REPORT_FILE" 2>&1 \
     || { note "provenance emit FAILED"; return 1; }
   return 0
@@ -324,6 +355,7 @@ phase_verify() {
 
 main() {
   verify_pins
+  ensure_relay_fastfail
   if [ -z "$DISPLAY_NAME" ]; then
     DISPLAY_NAME="$(allocate_display)" || die "no free display in :160-:179"
   fi
