@@ -297,14 +297,17 @@ class HostSession:
         )
         create_room(self.sock, self.frames, self.log, self.title, self.music_id)
 
-    def recreate(self) -> None:
+    def recreate(self, started_at: float) -> None:
+        self.log.write(f"host recreate start t+{time.time() - started_at:.1f}s")
         self.sock.close()
         time.sleep(2)
         self.sock = socket.create_connection(GATEWAY, timeout=10)
         self.sock.settimeout(0.5)
         self.frames = Frames(self.sock)
         self.open()
-        self.log.write("host recreate done (fuse suppression)")
+        self.log.write(
+            f"host recreate done t+{time.time() - started_at:.1f}s (fuse suppression)"
+        )
 
 
 def relay_wire(source: socket.socket, target: socket.socket, direction: str,
@@ -367,14 +370,16 @@ def hold_session(session: HostSession, log: Log, start_delay: float, hold: float
                  stop_file: Path, cmd_file: Path) -> None:
     joined_at: float | None = None
     started = False
-    deadline = time.time() + hold
+    opened_at = time.time()
+    idle_pings = 0
+    deadline = opened_at + hold
     while time.time() < deadline:
         if stop_file.is_file():
             log.write("host stop file seen")
             return
         for token in take_commands(cmd_file):
             if token == "recreate" and joined_at is None:
-                session.recreate()
+                session.recreate(opened_at)
             elif token == "start" and not started:
                 send_start(session.sock, log)
                 started = True
@@ -383,13 +388,22 @@ def hold_session(session: HostSession, log: Log, start_delay: float, hold: float
         event = session.frames.next_frame(0.5)
         if event is None:
             send(session.sock, PING, b"")
+            idle_pings += 1
+            if idle_pings == 1 or idle_pings % 40 == 0:
+                log.write(
+                    f"host keepalive sent {PING:04X} count={idle_pings} "
+                    f"t+{time.time() - opened_at:.1f}s"
+                )
         else:
             opcode, body = event
             if opcode == JOIN_WAITING_EVENT:
                 joined_at = time.time()
                 log.write("host guest JOINED")
             elif opcode != PING:
-                log.write(f"host opcode {opcode:04X} len={len(body)} hex={body[:64].hex()}")
+                log.write(
+                    f"host opcode {opcode:04X} len={len(body)} "
+                    f"t+{time.time() - opened_at:.1f}s hex={body[:64].hex()}"
+                )
         if joined_at is not None and not started and time.time() - joined_at >= start_delay:
             send_start(session.sock, log)
             started = True

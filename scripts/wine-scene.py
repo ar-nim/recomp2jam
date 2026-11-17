@@ -253,11 +253,16 @@ class WireTapLog:
     """
 
     ROOM_CREATED = 2005
+    BOUNDARY_OPCODES = (
+        (1004, "03EC"), (2005, "2005"), (2010, "07DA"),
+        (2024, "07E8"), (3002, "0BBA"), (65520, "FFF0"),
+    )
 
     def __init__(self, path: Path) -> None:
         self.path = path
         self.offset = 0
         self.room_created_count = 0
+        self.events: list[tuple[float, str, int]] = []
 
     def take(self) -> list[str]:
         if not self.path.is_file():
@@ -268,6 +273,10 @@ class WireTapLog:
             self.offset = handle.tell()
         fresh = []
         for line in text.splitlines():
+            seconds = wire_seconds(line)
+            match = WIRE_OPCODE.search(line)
+            if seconds is not None and match is not None:
+                self.events.append((seconds, match.group(1), int(match.group(2))))
             if "S2C" in line and f"opcode={self.ROOM_CREATED} " in line:
                 self.room_created_count += 1
                 fresh.append(line)
@@ -277,6 +286,30 @@ class WireTapLog:
         events = self.take()
         first = f" first={events[0]}" if events else ""
         log.event(f"wire {label} S2C 2005 count={self.room_created_count}{first}")
+
+    def note_boundaries(self, log: SceneLog, label: str) -> None:
+        """Log the frame timeline since 03EC at one exe-visible boundary."""
+        self.take()
+        if not self.events:
+            log.event(f"wire boundary {label} no frames")
+            return
+        origin = self.events[0][0]
+        markers = []
+        for opcode, name in self.BOUNDARY_OPCODES:
+            seen = next(
+                (seconds for seconds, _, value in self.events if value == opcode),
+                None,
+            )
+            if seen is not None:
+                markers.append(f"{name}@+{seen - origin:.1f}s")
+        last = self.events[-1]
+        c2s = sum(1 for _, direction, _ in self.events if direction == "C2S")
+        s2c = len(self.events) - c2s
+        log.event(
+            f"wire boundary {label} {' '.join(markers)} "
+            f"last={last[1]}:{last[2]}@+{last[0] - origin:.1f}s "
+            f"frames=C2S:{c2s}/S2C:{s2c}"
+        )
 
 
 class RoomPaintWait:
@@ -289,13 +322,19 @@ class RoomPaintWait:
     """
 
     def __init__(self, frames: Frames, injector: Input, wire: WireTapLog,
-                 log: SceneLog, row_dismiss: str) -> None:
+                 log: SceneLog, row_dismiss: str, server: ServerLog | None = None) -> None:
         self.frames = frames
         self.injector = injector
         self.wire = wire
         self.log = log
         self.row_dismiss = row_dismiss
+        self.server = server
         self.popup_was_up = False
+
+    def log_boundaries(self, label: str) -> None:
+        self.wire.note_boundaries(self.log, label)
+        if self.server is not None:
+            self.server.note_boundaries(self.log, label)
 
     def observe_popup(self) -> None:
         is_up = self.frames.popup_is_up()
@@ -304,6 +343,8 @@ class RoomPaintWait:
             time.sleep(1.0)
         elif is_up != self.popup_was_up:
             self.log.event(f"paint wait popup_up={is_up} row_dismiss={self.row_dismiss}")
+            if is_up:
+                self.log_boundaries("popup-up")
         self.popup_was_up = is_up
 
     def run(self, timeout: float, repaint=None, repaint_after: float = 0.0) -> bool:
@@ -319,13 +360,30 @@ class RoomPaintWait:
             self.observe_popup()
             if self.frames.row_painted():
                 self.wire.note(self.log, "row painted")
+                self.log_boundaries("row-painted")
                 return True
             time.sleep(0.5)
         self.wire.note(self.log, "row window closed")
+        self.log_boundaries("row-window-closed")
         return False
 
 
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
+WIRE_CLOCK = re.compile(r"^(\d\d):(\d\d):(\d\d) ")
+WIRE_OPCODE = re.compile(r"(C2S|S2C) opcode=(\d+) ")
+SERVER_OPCODES = {
+    "03EC", "0FBE", "07D0", "07D2", "13A4", "07DA", "07E8",
+    "07D4", "0BBA", "FFF0",
+}
+
+
+def wire_seconds(line: str) -> float | None:
+    """Clock seconds for a wire line, or None for a non-frame line."""
+    match = WIRE_CLOCK.match(line)
+    if match is None:
+        return None
+    hours, minutes, seconds = (int(part) for part in match.groups())
+    return float(hours * 3600 + minutes * 60 + seconds)
 
 
 class ServerLog:
@@ -335,6 +393,7 @@ class ServerLog:
         self.path = path
         self.account = account
         self.offset = path.stat().st_size if path.is_file() else 0
+        self.trace: list[str] = []
 
     def take(self) -> list[str]:
         if not self.path.is_file():
@@ -357,8 +416,16 @@ class ServerLog:
             for token in line.split():
                 if len(token) == 4 and all(c in "0123456789ABCDEF" for c in token):
                     opcodes.append(token)
+                    if token in SERVER_OPCODES:
+                        self.trace.append(line)
                     break
         return opcodes
+
+    def note_boundaries(self, log: SceneLog, label: str) -> None:
+        """Write the server's opcode trace into drive.log for this run."""
+        self.take()
+        for line in self.trace[-24:]:
+            log.event(f"server boundary {label} {line}")
 
     def wait_for(self, opcode: str, timeout: float) -> bool:
         deadline = time.time() + timeout
@@ -558,6 +625,21 @@ class Host:
             handle.write(token + "\n")
         self.log.event(f"host command queued {token}")
 
+    def note_boundaries(self, log: SceneLog, label: str) -> None:
+        """Log the host bot's pulse and keepalive witness for this run."""
+        host_log = self.dir / "host.log"
+        if not host_log.is_file():
+            log.event(f"host boundary {label} no host.log")
+            return
+        lines = [
+            line for line in host_log.read_text(encoding="utf-8").splitlines()
+            if any(marker in line for marker in (
+                "recreate", "keepalive", "guest JOINED", "room created",
+            ))
+        ]
+        for line in lines[-12:]:
+            log.event(f"host boundary {label} {line}")
+
     def wait_for_room(self, timeout: float = 30.0) -> bool:
         deadline = time.time() + timeout
         log_file = self.dir / "host.log"
@@ -730,9 +812,12 @@ def drive(arguments, frames: Frames, server: ServerLog, injector: Input,
             # 2005 data while the guest sits on the room stage (Attempt 12).
             def repaint() -> None:
                 host.command("recreate")
-        room_wait = RoomPaintWait(frames, injector, wire, log, arguments.row_dismiss)
+        room_wait = RoomPaintWait(
+            frames, injector, wire, log, arguments.row_dismiss, server)
         painted = room_wait.run(40.0, repaint, arguments.repaint_delay)
         log.event(f"room row painted={painted}")
+        if host is not None:
+            host.note_boundaries(log, "row-paint")
         joined = painted and attempt_join()
         log.event(f"join attempt 1 joined={joined}")
         # The #240 OPEN arm 1 calls for one stimulus per boot. The warm
@@ -746,7 +831,8 @@ def drive(arguments, frames: Frames, server: ServerLog, injector: Input,
             # 36 s poll.
             if server.wait_for("03EA", 150.0):
                 dismiss_popup(frames, injector, log)
-                warm_wait = RoomPaintWait(frames, injector, wire, log, "auto")
+                warm_wait = RoomPaintWait(
+                    frames, injector, wire, log, "auto", server)
                 if enter_room_stage() and warm_wait.run(25.0):
                     joined = attempt_join()
                     log.event(f"join attempt 2 joined={joined}")

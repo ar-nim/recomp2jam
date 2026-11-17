@@ -181,6 +181,45 @@ class WireEvidenceTest(unittest.TestCase):
         self.assertTrue(any("popup_up=True" in line for line in log.events))
 
 
+class BoundaryInstrumentationTest(unittest.TestCase):
+    def test_wire_boundary_names_first_frames_since_channel_enter(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "wire.log"
+            path.write_text(
+                "20:56:23 C2S opcode=1004 (03EC) len=4 hex=\n"
+                "20:56:43 S2C opcode=2005 (07D5) len=21 hex=\n"
+                "20:56:59 C2S opcode=2010 (07DA) len=0 hex=\n"
+                "20:56:59 C2S opcode=2024 (07E8) len=30 hex=\n",
+                encoding="utf-8",
+            )
+            log = FakeLog()
+            scene.WireTapLog(path).note_boundaries(log, "popup-up")
+        self.assertEqual(1, len(log.events))
+        line = log.events[0]
+        self.assertIn("03EC@+0.0s", line)
+        self.assertIn("2005@+20.0s", line)
+        self.assertIn("07DA@+36.0s", line)
+        self.assertIn("07E8@+36.0s", line)
+        self.assertIn("frames=C2S:3/S2C:1", line)
+
+    def test_host_boundary_reports_pulses_without_changing_host_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            (out_dir / "host").mkdir()
+            (out_dir / "host" / "host.log").write_text(
+                "20:56:20 host room created number=0 title=WINEJOIN\n"
+                "20:56:30 host keepalive sent 6001 count=1 t+10.0s\n"
+                "20:56:41 host recreate start t+21.0s\n"
+                "20:56:43 host recreate done t+23.0s (fuse suppression)\n",
+                encoding="utf-8",
+            )
+            log = FakeLog()
+            fake_host = scene.Host(out_dir, 757, 3, log)
+            fake_host.note_boundaries(log, "row-paint")
+        self.assertEqual(4, len(log.events))
+        self.assertTrue(all("host boundary row-paint" in line for line in log.events))
+
+
 class ManifestVerdictTest(unittest.TestCase):
     @staticmethod
     def join_fields(out_dir: Path, wire_log: Path) -> str:
