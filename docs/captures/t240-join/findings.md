@@ -118,3 +118,20 @@ repaints the list from fresh 2005 data.
 4. **Stimulus.** Next step: once the row paints, capture
    `room-row-hover.png` with the X-warp highlight delta, send exactly one
    press, and record `0BBA` (or the negative) with the run's manifest.
+
+## #319 resolution — qualified boot with `route=sink` (2026-11-17)
+
+`~/scratch/240-join/hover319-final`, build `ea0502a`, display `:226`,
+per-run sink `rig_null_3144570`. All checks PASS: manifest, audio,
+`cite --claim exe`. Sidecar:
+
+```
+route=sink              run_sink_streams=13228
+on_default_sink=0       client_streams=1
+peak_dbfs=0.0           preboot_breach=0
+client_stream_pid=3146455   client_stream_binary=wine-preloader
+probe_streams_seen=1    baseline_streams=0
+```
+
+The boot-time graph attributes `application.name=OTwo.exe`,
+`media.name=audio stream #1`, `Sink: 13105` to this runs
