@@ -234,12 +234,16 @@ main() {
     DISPLAY_NAME="$(allocate_display)" || die "no free display in :160-:179"
   fi
   note "run dir $OUT_DIR, display $DISPLAY_NAME, pair $PAIR"
-  local failed=0
+  local failed=0 booted=0
   phase_mint || failed=1
-  if [ "$failed" -eq 0 ]; then phase_boot || failed=1; fi
+  if [ "$failed" -eq 0 ]; then
+    if phase_boot; then booted=1; else failed=1; fi
+  fi
   if [ "$failed" -eq 0 ] && [ "$NO_DRIVE" -eq 0 ]; then phase_drive || failed=1; fi
   phase_stop || true
-  if [ "$failed" -eq 0 ]; then
+  # A drive that stopped short is still evidence: package and verify it so
+  # the negative result carries a manifest instead of an unlabelled pack.
+  if [ "$booted" -eq 1 ]; then
     phase_package || failed=1
     phase_verify || failed=1
   fi
