@@ -9,6 +9,7 @@
 #   --target SCENE            last scene the drive must reach (default loading)
 #   --music-id ID             room music (default 757)
 #   --join-mode MODE          dclick (qualified) or hover-press (#240 OPEN arm 1)
+#   --row-repaint MODE        none or recreate (host-side 2005 repaint)
 #   --user-index-id N         guest account (default 1 = tester)
 #   --host-user-index-id N    host account (default 3 = t207probe; 0 = no host)
 #   --cross DIR               an A/B partner run dir; verify checks the two
@@ -54,6 +55,7 @@ DISPLAY_NAME=""
 TARGET="loading"
 MUSIC_ID=757
 JOIN_MODE="dclick"
+ROW_REPAINT="none"
 USER_INDEX_ID=1
 HOST_USER_INDEX_ID=3
 CROSS_DIR=""
@@ -65,6 +67,7 @@ while [ "$#" -gt 0 ]; do
     --target) TARGET="$2"; shift 2 ;;
     --music-id) MUSIC_ID="$2"; shift 2 ;;
     --join-mode) JOIN_MODE="$2"; shift 2 ;;
+    --row-repaint) ROW_REPAINT="$2"; shift 2 ;;
     --user-index-id) USER_INDEX_ID="$2"; shift 2 ;;
     --host-user-index-id) HOST_USER_INDEX_ID="$2"; shift 2 ;;
     --cross) CROSS_DIR="$2"; shift 2 ;;
@@ -76,6 +79,10 @@ done
 case "$JOIN_MODE" in
   dclick|hover-press) ;;
   *) die "unknown --join-mode '$JOIN_MODE' (want dclick|hover-press)" ;;
+esac
+case "$ROW_REPAINT" in
+  none|recreate) ;;
+  *) die "unknown --row-repaint '$ROW_REPAINT' (want none|recreate)" ;;
 esac
 
 RIG_WINE_EXE="${RIG_WINE_EXE:-$HOME/scratch/run-full/OTwo.exe}"
@@ -148,6 +155,7 @@ phase_drive() {
   timeout "$RIG_WINE_DRIVE_TIMEOUT" python3 "$SCRIPT_DIR/wine-scene.py" \
     --attach "$OUT_DIR" --display "$DISPLAY_NAME" --target "$TARGET" \
     --music-id "$MUSIC_ID" --join-mode "$JOIN_MODE" \
+    --row-repaint "$ROW_REPAINT" \
     --host-user-index-id "$HOST_USER_INDEX_ID" \
     --wineprefix "$WINEPREFIX" > "$OUT_DIR/phases-drive.log" 2>&1 || true
   local reached
@@ -174,7 +182,7 @@ phase_package() {
   bash "$SCRIPT_DIR/run-manifest.sh" write "$OUT_DIR" \
     --pair "$PAIR" \
     --build "$(git -C "$REPO_ROOT" rev-parse HEAD)" \
-    --script "scripts/wine-scene.py (target $TARGET, music $MUSIC_ID, join $JOIN_MODE)" \
+    --script "scripts/wine-scene.py (target $TARGET, music $MUSIC_ID, join $JOIN_MODE, repaint $ROW_REPAINT)" \
     --params "display=$DISPLAY_NAME sink=$(sed -n "s/^export PULSE_SINK='\([^']*\)'$/\1/p" "$OUT_DIR/env.sh" | head -1) exe_sha256=$RIG_WINE_EXE_SHA256" \
     --input-log "$OUT_DIR/drive.log" >> "$REPORT_FILE" 2>&1 \
     || { note "manifest write FAILED"; return 1; }

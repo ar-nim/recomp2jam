@@ -653,6 +653,11 @@ def drive(arguments, frames: Frames, server: ServerLog, injector: Input,
         if "waiting" not in wanted:
             return reached
 
+        if arguments.row_repaint == "recreate" and host is not None:
+            # The idle fuse can return the client to the board before its
+            # member/music poll paints the row. A host rebuild sends fresh
+            # 2005 data while the guest sits on the room stage (Attempt 12).
+            host.command("recreate")
         painted = paint_with_clear_view(40.0)
         log.event(f"room row painted={painted}")
         joined = painted and attempt_join()
@@ -737,6 +742,10 @@ def main() -> int:
                         default="dclick",
                         help="join stimulus: the qualified double-click or the "
                              "#240 OPEN arm 1 X-warp hover then one press")
+    parser.add_argument("--row-repaint", choices=["none", "recreate"],
+                        default="none",
+                        help="host-side room rebuild that repaints the list from "
+                             "fresh 2005 data (docs/wine-boot.md Attempt 12)")
     parser.add_argument("--wineprefix", default=os.environ.get("WINEPREFIX", ""))
     parser.add_argument("--no-host", action="store_true")
     arguments = parser.parse_args()
