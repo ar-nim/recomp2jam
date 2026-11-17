@@ -858,6 +858,24 @@ def playing_evidence_line(metrics: tuple[float, float]) -> str:
     )
 
 
+def capture_probe_failure(frames: Frames, shots: Path) -> None:
+    """Keep the failing frame unless the pack already holds its bytes.
+
+    A wedged client freezes on the last painted scene (f1's probe-failure
+    was byte-identical to loading.png), and the manifest requires distinct
+    screenshots — a duplicate turns a citable negative pack into a
+    packaging FAIL. The scene shot already proves the frozen frame, so
+    the duplicate is dropped, not kept.
+    """
+    target = shots / "probe-failure.png"
+    frames.capture(target)
+    frozen = target.read_bytes()
+    for sibling in shots.glob("*.png"):
+        if sibling != target and sibling.read_bytes() == frozen:
+            target.unlink()
+            return
+
+
 def loading_evidence_line(metrics: tuple[float, float, float]) -> str:
     """Name the measured Loading pixels and the pack lines that pinned them."""
     warm, badge, logo = metrics
@@ -1333,7 +1351,7 @@ def drive(arguments, frames: Frames, server: ServerLog, injector: Input,
 
         if not wait_until(poll_play, PLAYING_TIMEOUT_SECONDS, 2.0):
             log.event("stage playing FAILED reason=no 4014 with play pixels")
-            frames.capture(shots / "probe-failure.png")
+            capture_probe_failure(frames, shots)
             return reached
         log.event(playing_evidence_line(frames.playing_metrics()))
         if not capture_scene(frames, log, shots, "playing", "server:4014"):

@@ -837,5 +837,41 @@ class ReadyPillRetryTest(unittest.TestCase):
                             for line in log.events))
 
 
+class ProbeFailureCaptureTest(unittest.TestCase):
+    """A wedged client freezes on a frame the pack already holds (f1: the
+    probe-failure bytes equalled loading.png and the manifest distinct check
+    failed). The duplicate is dropped so the negative stays citable."""
+
+    def test_duplicate_of_a_scene_shot_is_dropped(self) -> None:
+        import numpy as np
+
+        class FrozenFrames:
+            def __init__(self, pixels: bytes) -> None:
+                self.pixels = pixels
+
+            def capture(self, path: Path) -> float:
+                path.write_bytes(self.pixels)
+                return 0.0
+
+        with tempfile.TemporaryDirectory() as tmp:
+            shots = Path(tmp)
+            pixels = np.zeros((4, 4, 3), dtype=np.uint8).tobytes()
+            (shots / "loading.png").write_bytes(pixels)
+            scene.capture_probe_failure(FrozenFrames(pixels), shots)
+            self.assertFalse((shots / "probe-failure.png").exists())
+
+    def test_unique_failing_frame_is_kept(self) -> None:
+        class UniqueFrames:
+            def capture(self, path: Path) -> float:
+                path.write_bytes(b"never-seen pixels")
+                return 0.0
+
+        with tempfile.TemporaryDirectory() as tmp:
+            shots = Path(tmp)
+            (shots / "loading.png").write_bytes(b"frozen loading art")
+            scene.capture_probe_failure(UniqueFrames(), shots)
+            self.assertTrue((shots / "probe-failure.png").exists())
+
+
 if __name__ == "__main__":
     unittest.main()
