@@ -364,6 +364,46 @@ and cleanup failures keep the evidence instead of deleting it.
   `--frame-dump`; audio from the run's virtual sink through the monitor
   tap described below (`<out-dir>/audio/`, #279).
 
+## Supervised seat sessions
+
+A supervised seat run is owner path. A background agent never starts one,
+never announces one, and never treats a probe result as a grant. The owner
+calls the session, announces it, confirms the seat is free and unlocked,
+and states the scope before any pointer, key, or window is touched (#242).
+An agent under a no-tracker-writes rule cannot grant its own scope, so the
+run stays OPEN. The seat pair qualifies procedure only; it never feeds a
+budget number (see "Scope and pairing" and "Two-path architecture").
+
+No-go conditions (stop before acting):
+
+- The screen is locked or a screensaver is active.
+- The owner has resumed seat use, or owner presence is unconfirmed.
+- The grant scope is unclear: no named session, time box, or command list.
+- Any containment check is red: a leaked Wayland env, default-sink audio,
+  or a claim not owned by this run.
+
+Procedure (from the dry-run in `docs/captures/t242/seat-dry-run.txt`):
+
+1. Announce: the owner posts the session, scope, and time box; the agent
+   repeats the scope and names the driver commands before touching input.
+2. Unlock check: `scripts/rig-seat-probe.sh` must print `seat ready`
+   (exit 0), and the pointer position must be read before the run. A
+   read-only probe is not owner presence and is not a grant.
+3. Act: reuse the release build, music id, input trace, and stats shape of
+   the qualified native baseline. Drive through `scripts/rig-drive.sh
+   --backend ydotool` on the real seat. No fullscreen takeover, no
+   pattern-kill, no hand-rolled display handling; keep both path fences.
+4. Restore: stop the client by its PID file, restore the pointer to the
+   position read in step 2, and confirm with another pointer read. Keep
+   the whole pack, including a failed one.
+5. Report: a fresh manifest, input log, stats, and distinct screenshots
+   in a seat pack; `run-manifest.sh verify` on both packs and with the
+   cross-pair flag; `docs/captures/t242/comparison.md` filled from the two
+   stats files. Copies of native pixels are not seat evidence.
+6. Abort: on any no-go condition, stop by PID, restore the pointer, keep
+   the partial pack, and report the gap as OPEN. A lock or owner mid-use
+   needs a new announcement and grant before any relaunch.
+
 ## Audio capture (agent path, #279)
 
 Automated runs never reach the speakers, and they no longer suppress
