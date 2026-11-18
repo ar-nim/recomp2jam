@@ -1,0 +1,54 @@
+{
+  "schema_version": "recomp2jam-options-session-v1",
+  "scenario": "Options configure/restart/verify by real X11 input",
+  "notes": [
+    "Only click/key/text ops are injected; ini/snapshot ops record evidence.",
+    "Aims are native 800x600: dialog origin (217,42) from docs/geometry-audit.md plus Dialog_Option_*.bnd rect centres queried with o2jam-dump rect.",
+    "Gear (729,580) from scripts/wine-scene.py AIMS['option-gear']."
+  ],
+  "aims": {
+    "gear": [729, 580],
+    "key1": [320, 362],
+    "key-save": [409, 532],
+    "sound-tab": [405, 123],
+    "bgm-down": [301, 212],
+    "sound-save": [409, 532],
+    "game-tab": [509, 123],
+    "guide-short": [404, 403],
+    "game-save": [409, 532],
+    "game-exit": [473, 532]
+  },
+  "phases": [
+    {
+      "name": "configure",
+      "events": [
+        {"sequence": 1, "time_ms": 200, "op": "key", "key": "Escape", "label": "dismiss Avi to planet"},
+        {"sequence": 2, "time_ms": 700, "op": "click", "aim": "gear", "label": "open options dialog"},
+        {"sequence": 3, "time_ms": 1200, "op": "click", "aim": "key1", "label": "arm KEY1 rebind"},
+        {"sequence": 4, "time_ms": 1600, "op": "text", "text": "a", "label": "rebind lane 0 from S to A"},
+        {"sequence": 5, "time_ms": 1900, "op": "click", "aim": "key-save", "label": "commit Key tab"},
+        {"sequence": 6, "time_ms": 2200, "op": "ini", "label": "after-key-tab-save", "expect": {"Key": {"KEY_1": "30"}}},
+        {"sequence": 7, "time_ms": 2400, "op": "click", "aim": "sound-tab", "label": "switch Key -> Sound"},
+        {"sequence": 8, "time_ms": 2700, "op": "click", "aim": "bgm-down", "label": "step BGM volume down once"},
+        {"sequence": 9, "time_ms": 3000, "op": "click", "aim": "sound-save", "label": "commit Sound tab"},
+        {"sequence": 10, "time_ms": 3300, "op": "ini", "label": "after-sound-tab-save", "expect": {"Sound": {"GameBGVolume": "247"}}},
+        {"sequence": 11, "time_ms": 3600, "op": "click", "aim": "game-tab", "label": "switch Sound -> Game"},
+        {"sequence": 12, "time_ms": 3900, "op": "click", "aim": "guide-short", "label": "toggle note guide to Short"},
+        {"sequence": 13, "time_ms": 4200, "op": "click", "aim": "game-save", "label": "commit Game tab"},
+        {"sequence": 14, "time_ms": 4500, "op": "ini", "label": "after-game-tab-save", "expect": {"NOTE": {"NoteTail": "1"}}},
+        {"sequence": 15, "time_ms": 4800, "op": "key", "key": "Escape", "label": "close options dialog"},
+        {"sequence": 16, "time_ms": 5200, "op": "ini", "label": "before-restart"}
+      ]
+    },
+    {
+      "name": "verify",
+      "events": [
+        {"sequence": 1, "time_ms": 200, "op": "key", "key": "s", "label": "old lane-0 key must not answer", "expect_no_lane": 0},
+        {"sequence": 2, "time_ms": 800, "op": "key", "key": "a", "label": "rebound lane-0 key must answer", "expect_lane": 0},
+        {"sequence": 3, "time_ms": 1400, "op": "ini", "label": "after-restart", "expect": {"Key": {"KEY_1": "30"}, "Sound": {"GameBGVolume": "247"}, "NOTE": {"NoteTail": "1"}}},
+        {"sequence": 4, "time_ms": 1700, "op": "click", "aim": "gear", "label": "reopen options after restart"},
+        {"sequence": 5, "time_ms": 2200, "op": "ini", "label": "after-restart-dialog"}
+      ]
+    }
+  ]
+}
