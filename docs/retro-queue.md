@@ -169,6 +169,10 @@ Findings and the rules that now carry them:
   itself NOT a git object; the verified commit is `6f4a130`. Lesson updated
   and pending owner approval. The verify-at-posting rule caught the
   lesson itself.
+- Self-caught drift (owner caught it): the #363 close table verified 2 of 4
+  acceptance criteria; the body held 4. Rule restated: the close table covers
+  EVERY body criterion verbatim (memory 2fe8a), supplementary comments are the
+  fix, not the norm.
 - Positive: the needs-owner flag worked as designed — a 10-minute owner
   glance session closed three tickets and produced two well-pinned new ones
   (#348 regression, #349 rendering cluster).
