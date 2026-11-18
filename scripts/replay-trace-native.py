@@ -62,6 +62,7 @@ class ReplayOptions:
     music_id: int | None
     frames_dir: Path
     input_log: Path
+    silent: bool = True
 
 
 def parse_gateway(endpoint: str) -> tuple[str, int]:
@@ -120,8 +121,12 @@ def build_client_command(options: ReplayOptions) -> list[str]:
             command += ["--music-id", str(options.music_id)]
     else:
         command += ["play", "--window"]
+    # A rig-owned boot routes audio to its own null sink; that boot
+    # omits --no-sound so the lane can prove route=sink. Every driver-
+    # owned boot stays silent by construction (#283 fence).
+    if options.silent:
+        command.append("--no-sound")
     command += [
-        "--no-sound",
         "--frame-dump", str(options.frames_dir),
         "--input-log", str(options.input_log),
     ]
@@ -191,6 +196,16 @@ def validate(trace):
         elif control == "await-screen":
             if action != "reach" or event.get("screen") not in KNOWN_SCREENS:
                 errors.append(f"{at}: unknown screen {event.get('screen')!r}")
+        elif control == "pause-ms":
+            if action != "wait" or not isinstance(event.get("ms"), int):
+                errors.append(f"{at}: pause needs action wait and integer ms")
+        elif control in ("state-shot", "await-file"):
+            name = event.get("name", "")
+            if not isinstance(name, str) or not name.replace("-", "").isalnum():
+                errors.append(f"{at}: {control} needs a simple name")
+            wanted = "capture" if control == "state-shot" else "exists"
+            if action != wanted:
+                errors.append(f"{at}: {control} needs action {wanted!r}")
         else:
             errors.append(f"{at}: unknown control {control!r}")
     for control in held:
@@ -311,6 +326,21 @@ def trace_has_lane_events(trace):
     )
 
 
+def capture_state_shot(display, geometry, path: Path) -> None:
+    """Save one native 800x600 framebuffer at a named scenario state."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "x11grab", "-video_size", "800x600",
+            "-i", f"{display}+{geometry.x},{geometry.y}",
+            "-frames:v", "1", str(path),
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+
 def record_applied_event(applied, applied_log, event, status):
     """Append one applied-event record and its plain-text log line."""
     entry = {
@@ -320,11 +350,15 @@ def record_applied_event(applied, applied_log, event, status):
         "time_ms": intended_ms(event),
         "time_us": event.get("time_us"),
     }
+    if "name" in event:
+        entry["name"] = event["name"]
     applied.append(entry)
     with applied_log.open("a") as handle:
+        suffix = f"name={entry['name']} " if "name" in entry else ""
         handle.write(
             f"seq={entry['sequence']} control={entry['control']} "
-            f"action={entry['action']} intended_ms={entry['time_ms']} status={status}\n"
+            f"action={entry['action']} intended_ms={entry['time_ms']} "
+            f"{suffix}status={status}\n"
         )
     return entry
 
@@ -345,7 +379,15 @@ def main():
     parser.add_argument("--await-timeout", type=float, default=120.0)
     parser.add_argument(
         "--no-sound", action="store_true",
-        help="accepted for CLI compatibility; the client is always silent",
+        help="accepted for CLI compatibility; driver-owned boots are silent",
+    )
+    parser.add_argument(
+        "--sound", action="store_true",
+        help="let a rig-owned boot open its per-run null sink instead of --no-sound",
+    )
+    parser.add_argument(
+        "--attach-rig", action="store_true",
+        help="attach to a client booted by rig-run.sh; never spawn or stop one",
     )
     args = parser.parse_args()
 
@@ -388,11 +430,16 @@ def main():
         music_id=args.music_id,
         frames_dir=frames_dir,
         input_log=input_log,
+        silent=not args.sound,
     )
     env = child_environment(args.display)
+    attached = args.attach_rig
+    if attached and not (out / "env.sh").is_file():
+        print(f"rig env missing: {out / 'env.sh'}", file=sys.stderr)
+        return 2
 
     lock = Path(f"/tmp/.X{args.display[1:]}-lock")
-    started_xvfb = not lock.exists()
+    started_xvfb = not attached and not lock.exists()
     xvfb = None
     if started_xvfb:
         xvfb = subprocess.Popen(
@@ -403,9 +450,12 @@ def main():
         )
         time.sleep(0.7)
 
-    client_log = (out / "client.log").open("w")
     command = build_client_command(options)
-    client = subprocess.Popen(command, stdout=client_log, stderr=client_log, env=env)
+    client_log = None
+    client = None
+    if not attached:
+        client_log = (out / "client.log").open("w")
+        client = subprocess.Popen(command, stdout=client_log, stderr=client_log, env=env)
 
     applied = []
     applied_log = out / "applied.log"
@@ -415,6 +465,7 @@ def main():
         "binary": str(binary.resolve()),
         "command": command,
         "display": args.display,
+        "attached_rig": attached,
         "started_at": time.time(),
     }
     verdict = 0
@@ -478,6 +529,20 @@ def main():
                 )
                 record_applied_event(applied, applied_log, event, "accepted")
                 continue
+            if control == "await-file":
+                marker = out / f"{event['name']}.ready"
+                wait_for(marker.is_file, args.await_timeout, f"marker {marker}")
+                record_applied_event(applied, applied_log, event, "accepted")
+                continue
+            if control == "pause-ms":
+                time.sleep(event["ms"] / 1000.0)
+                record_applied_event(applied, applied_log, event, "accepted")
+                continue
+            if control == "state-shot":
+                capture_state_shot(args.display, geometry,
+                                   out / "states" / f"{event['name']}.png")
+                record_applied_event(applied, applied_log, event, "captured")
+                continue
 
             action = event["action"]
             if control in MENU_KEYS:
@@ -501,12 +566,14 @@ def main():
         manifest["failure"] = repr(source)
         verdict = 1
     finally:
-        client.terminate()
-        try:
-            client.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            client.kill()
-        client_log.close()
+        if client is not None:
+            client.terminate()
+            try:
+                client.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                client.kill()
+        if client_log is not None:
+            client_log.close()
         manifest["applied_events"] = applied
         manifest["applied_event_log"] = applied_log.read_text().splitlines()
         manifest["finished_at"] = time.time()

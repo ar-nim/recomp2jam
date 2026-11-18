@@ -81,6 +81,9 @@ CREATE_ROOM = 2004
 CREATE_ROOM_ANSWER = 2006
 SET_ROOM_MUSIC = 4000
 SET_ROOM_ARENA = 4002
+SEND_MUSIC_LIST = 2024
+UPDATE_MUSIC_STATE = 4025
+UPDATE_SLOT = 3008
 SYNC_MEMBER_MUSIC_STATE = 4036
 SET_DOWNLOAD_PROGRESS = 4038
 START_GAME = 4010
@@ -310,6 +313,78 @@ class HostSession:
         )
 
 
+def parse_scenario_command(token: str) -> tuple[int, bytes]:
+    """Translate one documented state-matrix command into a game frame.
+
+    The host owns the room, so its 2024 list and 4025 state name the
+    member whose DOWNLOADING badge the A/B scene compares. Server state
+    (not a client-side fixture) is the sole source of the broadcast.
+    """
+    name, _, argument = token.partition("=")
+    if name == "music-list":
+        ids = [int(value.strip()) for value in argument.split(",") if value.strip()]
+        return SEND_MUSIC_LIST, struct.pack("<i", len(ids)) + struct.pack(
+            f"<{len(ids)}H", *ids
+        )
+    if name == "music-state":
+        return UPDATE_MUSIC_STATE, bytes([int(argument)])
+    if name == "sync-member":
+        return SYNC_MEMBER_MUSIC_STATE, bytes([int(argument)])
+    if name == "update-slot":
+        return UPDATE_SLOT, bytes([int(argument)])
+    raise ValueError(f"unknown scenario command {token!r}")
+
+
+def hold_session(session: HostSession, log: Log, start_delay: float, hold: float,
+                 stop_file: Path, cmd_file: Path) -> None:
+    joined_at: float | None = None
+    started = False
+    opened_at = time.time()
+    idle_pings = 0
+    deadline = opened_at + hold
+    while time.time() < deadline:
+        if stop_file.is_file():
+            log.write("host stop file seen")
+            return
+        for token in take_commands(cmd_file):
+            if token == "recreate" and joined_at is None:
+                session.recreate(opened_at)
+            elif token == "start" and not started:
+                send_start(session.sock, log)
+                started = True
+            else:
+                try:
+                    opcode, body = parse_scenario_command(token)
+                except ValueError as error:
+                    log.write(f"host command ignored: {error}")
+                    continue
+                send(session.sock, opcode, body)
+                log.write(f"host scenario command {token} opcode={opcode:04X} "
+                          f"hex={body[:64].hex()}")
+        event = session.frames.next_frame(0.5)
+        if event is None:
+            send(session.sock, PING, b"")
+            idle_pings += 1
+            if idle_pings == 1 or idle_pings % 40 == 0:
+                log.write(
+                    f"host keepalive sent {PING:04X} count={idle_pings} "
+                    f"t+{time.time() - opened_at:.1f}s"
+                )
+        else:
+            opcode, body = event
+            if opcode == JOIN_WAITING_EVENT:
+                joined_at = time.time()
+                log.write("host guest JOINED")
+            elif opcode != PING:
+                log.write(
+                    f"host opcode {opcode:04X} len={len(body)} "
+                    f"t+{time.time() - opened_at:.1f}s hex={body[:64].hex()}"
+                )
+        if joined_at is not None and not started and time.time() - joined_at >= start_delay:
+            send_start(session.sock, log)
+            started = True
+
+
 def relay_wire(source: socket.socket, target: socket.socket, direction: str,
                wire_log: WireLog) -> None:
     """Forward frames unchanged while recording them; never rewrite."""
@@ -364,49 +439,6 @@ def serve_wire_tap(listen_port: int, upstream_port: int, wire_log: WireLog) -> N
         client.close()
         upstream.close()
         wire_log.connection("wire-tap client disconnected")
-
-
-def hold_session(session: HostSession, log: Log, start_delay: float, hold: float,
-                 stop_file: Path, cmd_file: Path) -> None:
-    joined_at: float | None = None
-    started = False
-    opened_at = time.time()
-    idle_pings = 0
-    deadline = opened_at + hold
-    while time.time() < deadline:
-        if stop_file.is_file():
-            log.write("host stop file seen")
-            return
-        for token in take_commands(cmd_file):
-            if token == "recreate" and joined_at is None:
-                session.recreate(opened_at)
-            elif token == "start" and not started:
-                send_start(session.sock, log)
-                started = True
-            else:
-                log.write(f"host command ignored token={token} joined={joined_at is not None} started={started}")
-        event = session.frames.next_frame(0.5)
-        if event is None:
-            send(session.sock, PING, b"")
-            idle_pings += 1
-            if idle_pings == 1 or idle_pings % 40 == 0:
-                log.write(
-                    f"host keepalive sent {PING:04X} count={idle_pings} "
-                    f"t+{time.time() - opened_at:.1f}s"
-                )
-        else:
-            opcode, body = event
-            if opcode == JOIN_WAITING_EVENT:
-                joined_at = time.time()
-                log.write("host guest JOINED")
-            elif opcode != PING:
-                log.write(
-                    f"host opcode {opcode:04X} len={len(body)} "
-                    f"t+{time.time() - opened_at:.1f}s hex={body[:64].hex()}"
-                )
-        if joined_at is not None and not started and time.time() - joined_at >= start_delay:
-            send_start(session.sock, log)
-            started = True
 
 
 def main() -> None:

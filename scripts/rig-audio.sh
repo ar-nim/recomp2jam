@@ -652,9 +652,14 @@ allowed_pids = {p for p in test_pids.replace(",", " ").split() if p.isdigit()}
 allowed_pids.update(descendants(client_pid))
 
 
-def belongs_to_run(pid):
+def belongs_to_run(pid, stream=None):
     if not pid.isdigit():
-        return False
+        # PipeWire's ALSA plugin exposes no process id for its sink input.
+        # A post-boot stream that names the client and targets THIS run's
+        # sink is still contained evidence; an unnamed default-sink stream
+        # stays unattributed (and is a breach) because the sink differs.
+        return bool(stream and sink and stream["sink"] == sink
+                    and stream["target"] == sink)
     if pid in allowed_pids:
         return True
     values = environment_of(pid)
@@ -669,8 +674,8 @@ def belongs_to_run(pid):
 
 probes = [s for s in candidates if is_format_probe(s)]
 playback = [s for s in candidates if s not in probes]
-owned_probes = [s for s in probes if belongs_to_run(s["pid"])]
-owned = [s for s in playback if belongs_to_run(s["pid"])]
+owned_probes = [s for s in probes if belongs_to_run(s["pid"], s)]
+owned = [s for s in playback if belongs_to_run(s["pid"], s)]
 foreign = [s for s in playback if s not in owned]
 unattributed_default = [s for s in foreign
                         if not s["pid"] and default_sink and s["sink"] == default_sink]
@@ -1299,6 +1304,16 @@ selftest_route_legs() {
     "${env_common[@]}" STUB_SINKINPUT_NAME=OTwo.exe \
     STUB_SINKINPUT_SINK=alsa_output.default STUB_SINKINPUT_PID= || return 1
   echo "rig-audio: selftest leg wine-exe-unknown-pid-default-sink PASS (unattributed stream rejected)"
+  # Native ALSA clients reach PipeWire without a process id on the sink
+  # input; a post-boot stream aimed at the run sink is still our route.
+  route_leg "native-alsa-no-pid-on-run-sink" "$state" "$run" "sink" "0" 0 \
+    "${env_common[@]}" STUB_SINKINPUT_NAME=stub-client \
+    STUB_SINKINPUT_SINK=stub_sink STUB_SINKINPUT_PID= || return 1
+  [ "$(rig_audio_field "$run" on_default_sink)" = "0" ] || {
+    selftest_fail "native-alsa-no-pid-on-run-sink" "no-pid stream reached the default sink"
+    return 1
+  }
+  echo "rig-audio: selftest leg native-alsa-no-pid-on-run-sink PASS (contained route)"
   # A stream already present before boot is a leftover, whatever its pid.
   env "${env_common[@]}" STUB_SINKINPUT_NAME=OTwo.exe \
     STUB_SINKINPUT_SINK=alsa_output.default \

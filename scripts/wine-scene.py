@@ -1535,6 +1535,13 @@ def drive(arguments, frames: Frames, server: ServerLog, injector: Input,
                 if server.wait_for("03EC", 15.0):
                     return True
                 log.event(f"enter attempt {attempt} got no 03EC")
+                if attempt == 1:
+                    # The 07D2 room list can still be painting when the
+                    # channel capture lands; repeat the same aim before
+                    # forcing a family switch (which re-logs the session).
+                    log.event("channel row settle retry (no family switch)")
+                    time.sleep(3.0)
+                    continue
                 if attempt < 3 and not reopen_live_list():
                     log.event("reopen_live_list failed")
             return False
