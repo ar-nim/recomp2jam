@@ -10617,6 +10617,29 @@ mod game_tests {
         );
     }
 
+    #[test]
+    fn staged_pick_leaves_the_musicname_plate_without_a_scrim() {
+        // Live chain: main.rs::run_play -> Shell::run ->
+        //   ScreenGame::paint -> ScreenGame::paint_at -> paint_waiting ->
+        //   paint_waiting_scene -> paint_waiting_staged ->
+        //   paint_waiting_music
+        // Ticket #274: the chosen title must ink the `.bnd` plate
+        // alone. The old caption scrim filled the four pixels just
+        // outside its top-left corner; those pixels stay clear.
+        let mut picked = musicname_pick_game(0, Some(757));
+        let rect = staged_musicname_rect(&picked);
+        let frame = paint_waiting_frame(&mut picked, 800, 600);
+        let corner = (
+            usize::try_from(rect.x - 4).unwrap_or(0),
+            usize::try_from(rect.y - 2).unwrap_or(0),
+        );
+        assert_ne!(
+            frame[corner.1 * 800 + corner.0],
+            pack_xrgb(0x08, 0x08, 0x10),
+            "the pinned plate must not carry a shell scrim"
+        );
+    }
+
     /// Bottom edge of the lowest staged seat cover: the seat grid's
     /// lower bound. The chat box sits under it, and the #274 readout
     /// panel used to ink exactly that band (`(w/8, h*3/4)`).

@@ -4327,6 +4327,13 @@ const WAITING_ROOMNAME_ID: &str = "IDC_TEXT_SWAIT_ROOMNAME";
 /// Selected-song text (`TEXT_SWAIT_MUSICNAME`, code `0x16400017` →
 /// rect 22, top bar beside the title).
 const WAITING_MUSICNAME_ID: &str = "IDC_TEXT_SWAIT_MUSICNAME";
+/// First ink pixel inside a bound Waiting caption rect, in native
+/// pixels. 7.55 Wine capture `~/scratch/ab-wait.png`: the `MUSICNAME`
+/// rect starts `(573,15)` and its `디젤오 (O2Ver.1)[3K]` ink starts
+/// `(579,22)`. The rect is still the `.bnd` pin; this is only the
+/// GDI cell bearing our rasterizer must add so bare caption ink lands
+/// where the exe's glyphs do (no shell scrim).
+const WAITING_CAPTION_INK_BEARING: (i32, i32) = (6, 7);
 /// Difficulty/speed badge art (`LEVEL`, code `0x1650001B` → rect 26
 /// `(218,12)-(273,40)`, immediately left of the room title).
 const WAITING_LEVEL_ID: &str = "IDC_IMAGE_SWAIT_LEVEL";
@@ -4649,6 +4656,45 @@ fn waiting_bnd_origin(
     Some((scaled.x, scaled.y))
 }
 
+/// Scaled origin of a caption's first ink pixel: its bound rect origin
+/// plus the reference-measured GDI cell bearing
+/// ([`WAITING_CAPTION_INK_BEARING`]), both in frame pixels.
+fn waiting_caption_ink_origin(
+    placements: &[ScenePlacement],
+    id: &str,
+    frame: &Frame<'_>,
+) -> Option<(i32, i32)> {
+    let (rect_x, rect_y) = waiting_bnd_origin(placements, id, frame)?;
+    let bearing = scale_rect_to_frame(
+        &Rect {
+            x: 0,
+            y: 0,
+            w: u32::try_from(WAITING_CAPTION_INK_BEARING.0).unwrap_or(0),
+            h: u32::try_from(WAITING_CAPTION_INK_BEARING.1).unwrap_or(0),
+        },
+        frame.w,
+        frame.h,
+    );
+    Some((
+        rect_x.saturating_add(i32::try_from(bearing.w).unwrap_or(0)),
+        rect_y.saturating_add(i32::try_from(bearing.h).unwrap_or(0)),
+    ))
+}
+
+/// Ink one staged caption without any shell plate: the exe's captions
+/// are transparent TEXT controls over their own art, so only glyphs
+/// land in the rect ([`waiting_caption_ink_origin`]).
+fn paint_waiting_bare_caption(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    id: &str,
+    text: &str,
+) {
+    if let Some((x, y)) = waiting_caption_ink_origin(placements, id, frame) {
+        draw_text(frame, x, y, text, art_title_ink());
+    }
+}
+
 /// True while one cover binds the staged cover body (or a
 /// sprite-less slot, as in synthetic probes): any other body on the
 /// cover id stays untouched, like the exe's unmatched icons.
@@ -4855,11 +4901,16 @@ fn paint_waiting_wins(frame: &mut Frame<'_>, room: &JoinedRoom, placements: &[Sc
 }
 
 /// Scroll-speed label at the `SPEED_NUM` rect (rect 101): the shared
-/// `X0.5`..`XR` chain (`room-enums.md`, codes 0..11).
+/// `X0.5`..`XR` chain (`room-enums.md`, codes 0..11). The exe's chip
+/// art carries its own plate, so the caption inks bare glyphs at the
+/// reference bearing — no black box over the chip.
 fn paint_waiting_speed(frame: &mut Frame<'_>, room: &JoinedRoom, placements: &[ScenePlacement]) {
-    if let Some((x, y)) = waiting_bnd_origin(placements, WAITING_SPEED_NUM_ID, frame) {
-        paint_room_detail_line(frame, x, y, &room_speed_label(room.speed), art_title_ink());
-    }
+    paint_waiting_bare_caption(
+        frame,
+        placements,
+        WAITING_SPEED_NUM_ID,
+        &room_speed_label(room.speed),
+    );
 }
 
 /// Skill-ring ids at the `1/2/3SKILL` rects (rects 87..89, the X
@@ -4983,7 +5034,9 @@ fn paint_waiting_skillcounts(
 /// caption names the master's staged pick at once and the joined
 /// room's song otherwise ([`WaitingSong`]); ticket #274 removed the
 /// shell-invented readout panel that used to ink this data above the
-/// chat rows.
+/// chat rows. Its remaining black scrim is gone too: the title now
+/// rides the staged plate as bare glyphs at the reference bearing
+/// ([`paint_waiting_bare_caption`]).
 /// The `COVERMUSIC` button, the select arrow, the `Random` cards, and
 /// BACK stay staged art — recorded negatives, not gaps (chat now has a
 /// live source: [`paint_waiting_chat`]):
@@ -5003,15 +5056,12 @@ fn paint_waiting_music(
     let Some(song) = song else {
         return;
     };
-    if let Some((x, y)) = waiting_bnd_origin(placements, WAITING_MUSICNAME_ID, frame) {
-        paint_room_detail_line(
-            frame,
-            x,
-            y,
-            &waiting_music_caption(song.music_id, song.title),
-            art_title_ink(),
-        );
-    }
+    paint_waiting_bare_caption(
+        frame,
+        placements,
+        WAITING_MUSICNAME_ID,
+        &waiting_music_caption(song.music_id, song.title),
+    );
 }
 
 /// `MUSICNAME` caption for one room song: the staged catalog title
@@ -12929,9 +12979,12 @@ mod paint_tests {
     }
 
     #[test]
-    fn speed_value_anchors_to_the_speed_num_rect() {
-        // `SPEED_NUM` rect 101 `(681,378,735,413)`: speed code 5
-        // reads `X3` through the shared label chain (reference row).
+    fn speed_suffix_inks_the_bound_chip_without_a_shell_plate() {
+        // `SPEED_NUM` rect 101 `(681,378,735,413)`: speed code 5 reads
+        // `X3` through the shared label chain. The 7.55 Wine capture
+        // (`ab-wait.png`) shows `X1` bare on the staged blue chip, so
+        // the painter must ink text at the reference bearing and never
+        // fill the chip corner with shell scrim.
         let placements = vec![waiting_probe(
             "IDC_IMAGE_SWAIT_SPEED_NUM",
             None,
@@ -12947,8 +13000,20 @@ mod paint_tests {
             &champion_room(),
             &placements,
         );
-        assert_eq!(buf[376 * 800 + 677], scrim_color());
-        assert!(has_ink_near(&buf, art_title_ink()));
+        assert_eq!(buf[376 * 800 + 677], 0, "the chip has no shell scrim");
+        let mut expected = vec![0u32; 800 * 600];
+        draw_text(
+            &mut Frame {
+                buf: &mut expected,
+                w: 800,
+                h: 600,
+            },
+            681 + 6,
+            378 + 7,
+            "X3",
+            art_title_ink(),
+        );
+        assert_eq!(buf, expected, "speed ink must use the bare GDI bearing");
     }
 
     #[test]
@@ -12974,10 +13039,12 @@ mod paint_tests {
     }
 
     #[test]
-    fn song_title_anchors_to_the_musicname_rect() {
+    fn song_title_inks_the_bound_plate_without_a_shell_plate() {
         // `MUSICNAME` rect 22 `(573,15,773,38)`: bare song id while
-        // the staged catalog names no such song (the song table
-        // lives server-side, as in the lobby).
+        // the staged catalog names no such song. The 7.55 Wine capture
+        // (`ab-wait.png`) inks the title at `(579,22)` — six px right
+        // and seven px down from the rect origin — on the staged green
+        // plate, with no black rectangle behind it.
         let placements = vec![waiting_probe(
             "IDC_TEXT_SWAIT_MUSICNAME",
             None,
@@ -12996,8 +13063,20 @@ mod paint_tests {
                 title: None,
             }),
         );
-        assert_eq!(buf[13 * 800 + 569], scrim_color());
-        assert!(has_ink_near(&buf, art_title_ink()));
+        assert_eq!(buf[13 * 800 + 569], 0, "the plate has no shell scrim");
+        let mut expected = vec![0u32; 800 * 600];
+        draw_text(
+            &mut Frame {
+                buf: &mut expected,
+                w: 800,
+                h: 600,
+            },
+            573 + 6,
+            15 + 7,
+            "M757",
+            art_title_ink(),
+        );
+        assert_eq!(buf, expected, "title ink must use the bare GDI bearing");
     }
 
     #[test]
@@ -13038,7 +13117,7 @@ mod paint_tests {
                 title: Some("First"),
             }),
         );
-        assert_eq!(buf[13 * 800 + 569], scrim_color());
+        assert!(!buf.contains(&scrim_color()));
         assert!(has_ink_near(&buf, art_title_ink()));
     }
 

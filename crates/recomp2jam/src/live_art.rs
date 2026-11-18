@@ -1307,6 +1307,41 @@ mod live_art_tests {
         );
     }
 
+    #[test]
+    fn live_waiting_pick_leaves_the_musicname_plate_unscrimmed() {
+        // Live chain: main.rs::run_play -> setup_online ->
+        //   stage_online_identity -> stage_live_scenes ->
+        //   stage_interface_scenes(State::Waiting) ->
+        //   ScreenGame::set_selected_music -> ScreenGame::paint_at ->
+        //   paint_waiting -> paint_waiting_scene -> paint_waiting_staged ->
+        //   paint_waiting_music
+        // Ticket #274: the shell used to fill the pixels just outside
+        // the bound `MUSICNAME` rect with near-black scrim. Real 7.55
+        // art paints its own plate there, so a pick must leave them
+        // untouched.
+        //
+        // Archives absent -> skip cleanly (CI has no game data).
+        if skip_without_archives() {
+            return;
+        }
+        let Some(songs) = installed_catalog_songs() else {
+            println!("skip: missing installed song catalog");
+            return;
+        };
+        let song_id = u16::try_from(songs[0].song_id).expect("catalog song id fits u16");
+        let mut picked = staged_waiting_pick_game(0, Some(ex_pick(song_id)));
+        let rect = staged_musicname_rect(&picked);
+        let frame = painted_pixels(&mut picked, 0);
+        let width = usize::try_from(NATIVE_WIDTH).unwrap_or(1);
+        let corner_x = usize::try_from(rect.x - 4).unwrap_or(0);
+        let corner_y = usize::try_from(rect.y - 2).unwrap_or(0);
+        assert_ne!(
+            frame[corner_y * width + corner_x],
+            o2jam_render::pack_xrgb(0x08, 0x08, 0x10),
+            "the staged plate corner must not carry the shell scrim"
+        );
+    }
+
     /// Bottom edge of the lowest staged seat cover: the seat grid's
     /// lower bound (the chat box sits under it, where the #274 readout
     /// panel used to ink).

@@ -110,6 +110,7 @@ supply sizes only.
 | paint.rs:2328 `WAITING_CHAT_VISIBLE_ROWS` | 6 | derived (98/17 slots) | — | RUNTIME | Keep (re-derives once ROW_H is pinned) |
 | paint.rs:2333 `WAITING_CHAT_CARET_INSET` | (5,5) | none: caret chrome | reference photo (caret at (25,568)) | OPEN | Rig: exe caret placement |
 | paint.rs:2335 `WAITING_CHAT_CARET_SIZE` | (2,10) | none | same photo | OPEN | same |
+| paint.rs `WAITING_CAPTION_INK_BEARING` | (6,7) | none: GDI cell bearing, not a layout rect | 7.55 Wine capture `~/scratch/ab-wait.png`: `MUSICNAME` rect origin `(573,15)`, first title ink `(579,22)`; no scrim behind title or `SPEED_NUM` chip (owner re-check #274, 2026-11-18) | DONE (presentation) | Keep; rect still comes from `State_Waiting.bnd`; bearing offsets the bare ink only |
 
 ## Channel chat (paint.rs:2497–2499)
 

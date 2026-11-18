@@ -97,6 +97,18 @@ shell leaves unpainted (`MAPNAME`/`INSTNAME` per the
   its own room struct before the echo is OPEN (next step: a capture
   with a provenance manifest under #240); rect and caption control are
   static pins either way.
+- **Caption plate and bearing - PINNED** (owner re-check 2026-11-18, #274
+  second leg). The shell used `paint_room_detail_line` for `MUSICNAME`
+  and `SPEED_NUM`, which filled `(x-4,y-2,text_w+8,9)` with near-black
+  scrim. The 7.55 Wine capture `~/scratch/ab-wait.png` (800x600 game
+  area) shows both captions bare on their staged plates: `MUSICNAME`
+  rect `(573,15)` carries `디젤오 (O2Ver.1)[3K]` ink from `(579,22)`,
+  and the `SPEED_NUM` chip shows `X1` with no dark rectangle. The
+  shell now inks bare glyphs at that reference bearing `(6,7)` from
+  the `.bnd` rect origin, scaled with the frame; the bearing is a GDI
+  cell/presentation pin, not geometry. The speed *value* source is
+  still OPEN (waiting speed cannot be changed yet), so only its plate
+  is fixed.
 
 - **LEVEL badge - PINNED** (control, rect, frame formula; ticket #275).
   Local static data: `ControlList_Interface.txt` names
