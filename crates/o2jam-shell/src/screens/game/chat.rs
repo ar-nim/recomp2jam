@@ -2,6 +2,14 @@
 //! (#139). The game seam keeps flow, dialog focus, and song-caption
 //! lookup; this module owns chat words and their pure decisions.
 
+use super::super::paint::{ChannelChatMessage, WaitingChatMessage};
+use super::{MAX_CHAT_INPUT_CHARS, MAX_MAIN_ROOM_CHAT_ROWS, MAX_WAITING_CHAT_ROWS};
+use crate::screen::Screen;
+use o2jam_net::rooms::{
+    Announcement, MainRoomAdminMessage, MainRoomUserMessage, RankNotification, ReceiveWhisper,
+    SendMainRoomMessage, SendWaitingMessage, SendWhisper, WaitingAdminMessage, WaitingUserMessage,
+};
+
 /// Parsed chat draft behind the lobby/waiting slash grammar: the exe
 /// lobbies its 2017 whisper send behind `/w`, `/r`, `/h`, `/help`
 /// literals (VAs `0x647d60`+, send at file `0x8fa02`), and the waiting
@@ -69,7 +77,7 @@ fn parse_reply_text(rest: &str, reply_to: Option<&str>) -> Option<(String, Strin
 /// Parse one draft through the slash grammar. The draft stays whole
 /// for `Chat` (unknown or incomplete commands send as-is); `Help`
 /// carries no packet; `Empty` names the empty draft.
-pub(super) fn parse_slash_draft(draft: &str, reply_to: Option<&str>) -> SlashCommand {
+fn parse_slash_draft(draft: &str, reply_to: Option<&str>) -> SlashCommand {
     if draft.is_empty() {
         return SlashCommand::Empty;
     }
@@ -90,5 +98,395 @@ pub(super) fn parse_slash_draft(draft: &str, reply_to: Option<&str>) -> SlashCom
         ),
         "h" | "help" => SlashCommand::Help,
         _ => SlashCommand::Chat(draft.to_owned()),
+    }
+}
+
+/// One lobby chat panel that carries the main-room feed: the unsent
+/// draft line plus the live history, oldest first. The Channel scene
+/// and the Room lobby each own one (the room's chat IS the main-room
+/// chat, ticket #37: `SendMainRoomMessage` 2012 out, 2013/2014 in), so
+/// the row folding, the draft cap, and the history bound live here
+/// once.
+#[derive(Debug, Clone, Default)]
+pub struct LobbyChatPanel {
+    draft: String,
+    history: Vec<ChannelChatMessage>,
+}
+
+impl LobbyChatPanel {
+    /// Unsent draft line (the 2012 content source).
+    #[must_use]
+    pub fn draft(&self) -> &str {
+        &self.draft
+    }
+
+    /// Live history rows, oldest first (empty until a packet arrives).
+    #[must_use]
+    pub fn history(&self) -> &[ChannelChatMessage] {
+        &self.history
+    }
+
+    /// Type one character into the draft: control characters never
+    /// enter the line and the draft stops at [`MAX_CHAT_INPUT_CHARS`]
+    /// characters.
+    fn type_char(&mut self, typed: char) {
+        if typed.is_control() || self.draft.chars().count() >= MAX_CHAT_INPUT_CHARS {
+            return;
+        }
+        self.draft.push(typed);
+    }
+
+    /// Erase the last draft character (Backspace; one whole character,
+    /// never half of a multibyte one).
+    fn erase_char(&mut self) {
+        self.draft.pop();
+    }
+
+    /// Stage the draft line, truncated to [`MAX_CHAT_INPUT_CHARS`].
+    fn set_draft(&mut self, line: &str) {
+        self.draft = line.chars().take(MAX_CHAT_INPUT_CHARS).collect();
+    }
+
+    /// Forget the unsent draft.
+    fn clear_draft(&mut self) {
+        self.draft.clear();
+    }
+
+    /// Append one row and bound the history to
+    /// [`MAX_MAIN_ROOM_CHAT_ROWS`] (oldest rows drop first).
+    fn push_row(&mut self, row: ChannelChatMessage) {
+        self.history.push(row);
+        let overflow = self.history.len().saturating_sub(MAX_MAIN_ROOM_CHAT_ROWS);
+        self.history.drain(..overflow);
+    }
+
+    /// Outgoing 2012 body for the draft (`None` while the draft is
+    /// empty, so no empty send is invented).
+    #[must_use]
+    fn send_message(&self) -> Option<SendMainRoomMessage> {
+        if self.draft.is_empty() {
+            return None;
+        }
+        Some(SendMainRoomMessage {
+            content: self.draft.as_bytes().to_vec(),
+        })
+    }
+
+    /// Outgoing 2017 whisper body for the draft (`None` while the draft
+    /// or the recipient is empty, so no empty send is invented).
+    #[must_use]
+    fn whisper_message(&self, recipient: &str) -> Option<SendWhisper> {
+        if self.draft.is_empty() || recipient.is_empty() {
+            return None;
+        }
+        Some(SendWhisper {
+            recipient: recipient.to_owned(),
+            content: self.draft.clone(),
+        })
+    }
+}
+
+/// Which lobby chat panel a call addresses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LobbyChat {
+    /// Channel scene panel.
+    Channel,
+    /// Room lobby panel (staged `IDC_LIST_SROOM_CHAT`).
+    Room,
+}
+
+impl LobbyChat {
+    /// Panel the on-screen scene owns (`None`: the scene shows no lobby
+    /// chat panel).
+    #[must_use]
+    pub fn of_screen(screen: Screen) -> Option<Self> {
+        match screen {
+            Screen::Channel => Some(Self::Channel),
+            Screen::Room => Some(Self::Room),
+            _ => None,
+        }
+    }
+}
+
+/// Every chat word the shell owns: two lobby panels, the waiting
+/// room's draft and history, and the last whisper peer. The game seam
+/// gates typing by screen and dialog focus and resolves rank-notice
+/// song titles; this state owns the words, row bounds, send bodies,
+/// and slash decisions (#139 chat cluster).
+#[derive(Default)]
+pub(super) struct ChatState {
+    channel_panel: LobbyChatPanel,
+    room_panel: LobbyChatPanel,
+    waiting_draft: String,
+    waiting_history: Vec<WaitingChatMessage>,
+    last_whisper_peer: Option<String>,
+}
+
+impl ChatState {
+    /// Immutable panel behind [`LobbyChat`].
+    pub(super) fn panel(&self, chat: LobbyChat) -> &LobbyChatPanel {
+        match chat {
+            LobbyChat::Channel => &self.channel_panel,
+            LobbyChat::Room => &self.room_panel,
+        }
+    }
+
+    fn panel_mut(&mut self, chat: LobbyChat) -> &mut LobbyChatPanel {
+        match chat {
+            LobbyChat::Channel => &mut self.channel_panel,
+            LobbyChat::Room => &mut self.room_panel,
+        }
+    }
+
+    /// Live waiting-room rows, oldest first.
+    pub(super) fn waiting_history(&self) -> &[WaitingChatMessage] {
+        &self.waiting_history
+    }
+
+    /// Unsent waiting-room draft (the 3011 source).
+    pub(super) fn waiting_draft(&self) -> &str {
+        &self.waiting_draft
+    }
+
+    /// Last whisper peer behind `/r` (`None` until a whisper flows).
+    pub(super) fn last_whisper_peer(&self) -> Option<&str> {
+        self.last_whisper_peer.as_deref()
+    }
+
+    /// A fresh channel list resets its chat draft beside the rows.
+    pub(super) fn clear_channel_panel(&mut self) {
+        *self.panel_mut(LobbyChat::Channel) = LobbyChatPanel::default();
+    }
+
+    /// A new room gets its own 3012/3013 history and draft.
+    pub(super) fn clear_waiting(&mut self) {
+        self.waiting_history.clear();
+        self.waiting_draft.clear();
+    }
+
+    /// Append one waiting 3012 row.
+    pub(super) fn push_waiting_user(&mut self, message: &WaitingUserMessage) {
+        self.push_waiting_row(&message.sender, &message.content_text(), false);
+    }
+
+    /// Append one waiting 3013 admin row.
+    pub(super) fn push_waiting_admin(&mut self, message: &WaitingAdminMessage) {
+        self.push_waiting_row(&message.sender, &message.content_text(), true);
+    }
+
+    fn push_waiting_row(&mut self, sender: &str, text: &str, admin: bool) {
+        self.waiting_history.push(WaitingChatMessage {
+            sender: sender.to_owned(),
+            text: text.to_owned(),
+            admin,
+        });
+        let overflow = self
+            .waiting_history
+            .len()
+            .saturating_sub(MAX_WAITING_CHAT_ROWS);
+        self.waiting_history.drain(..overflow);
+    }
+
+    /// Append one 2013 lobby row.
+    pub(super) fn push_lobby_user(&mut self, chat: LobbyChat, message: &MainRoomUserMessage) {
+        let row = ChannelChatMessage::user(&message.sender, &message.content_text());
+        self.panel_mut(chat).push_row(row);
+    }
+
+    /// Append one 2014 lobby admin row.
+    pub(super) fn push_lobby_admin(&mut self, chat: LobbyChat, message: &MainRoomAdminMessage) {
+        let row = ChannelChatMessage::admin(&message.sender, &message.content_text());
+        self.panel_mut(chat).push_row(row);
+    }
+
+    /// Append one 2019 whisper row; the sender becomes the `/r` peer.
+    pub(super) fn push_lobby_whisper(
+        &mut self,
+        chat: LobbyChat,
+        message: &ReceiveWhisper,
+        recipient: &str,
+    ) {
+        let row = ChannelChatMessage::whisper(&message.sender, recipient, &message.content);
+        self.panel_mut(chat).push_row(row);
+        self.remember_whisper_peer(&message.sender);
+    }
+
+    /// Append one 2016 announcement row, unless the notice is empty.
+    pub(super) fn push_lobby_announcement(&mut self, chat: LobbyChat, message: &Announcement) {
+        if message.content.is_empty() {
+            return;
+        }
+        let row = ChannelChatMessage::announcement(&message.content);
+        self.panel_mut(chat).push_row(row);
+    }
+
+    /// Append one 2029 rank row, unless the packet carries no rank.
+    /// `song_title` is the game seam's catalog lookup for the wire id.
+    pub(super) fn push_lobby_rank(
+        &mut self,
+        chat: LobbyChat,
+        message: &RankNotification,
+        song_title: &str,
+    ) {
+        if message.invalid {
+            return;
+        }
+        let row = ChannelChatMessage::rank(&message.nickname, song_title, message.ranking);
+        self.panel_mut(chat).push_row(row);
+    }
+
+    /// Stage the waiting draft, truncated to the character cap.
+    pub(super) fn set_waiting_draft(&mut self, line: &str) {
+        self.waiting_draft = line.chars().take(MAX_CHAT_INPUT_CHARS).collect();
+    }
+
+    /// Type one waiting character (controls and overlong drafts drop).
+    pub(super) fn type_waiting_char(&mut self, typed: char) {
+        if typed.is_control() || self.waiting_draft.chars().count() >= MAX_CHAT_INPUT_CHARS {
+            return;
+        }
+        self.waiting_draft.push(typed);
+    }
+
+    /// Erase one waiting draft character.
+    pub(super) fn erase_waiting_char(&mut self) {
+        self.waiting_draft.pop();
+    }
+
+    /// Forget the waiting draft.
+    pub(super) fn clear_waiting_draft(&mut self) {
+        self.waiting_draft.clear();
+    }
+
+    /// Outgoing 3011 body for the waiting draft.
+    pub(super) fn waiting_send_message(&self) -> Option<SendWaitingMessage> {
+        if self.waiting_draft.is_empty() {
+            return None;
+        }
+        Some(SendWaitingMessage {
+            content: self.waiting_draft.as_bytes().to_vec(),
+        })
+    }
+
+    /// Take the 3011 body and clear the draft so one Enter sends once.
+    pub(super) fn take_waiting_message(&mut self) -> Option<SendWaitingMessage> {
+        let message = self.waiting_send_message()?;
+        self.clear_waiting_draft();
+        Some(message)
+    }
+
+    /// Outgoing 2017 whisper body for the waiting draft.
+    pub(super) fn waiting_whisper_message(&self, recipient: &str) -> Option<SendWhisper> {
+        if self.waiting_draft.is_empty() || recipient.is_empty() {
+            return None;
+        }
+        Some(SendWhisper {
+            recipient: recipient.to_owned(),
+            content: self.waiting_draft.clone(),
+        })
+    }
+
+    /// Take the 2017 body, clear the draft, and remember the peer.
+    pub(super) fn take_waiting_whisper(&mut self, recipient: &str) -> Option<SendWhisper> {
+        let message = self.waiting_whisper_message(recipient)?;
+        self.clear_waiting_draft();
+        self.remember_whisper_peer(recipient);
+        Some(message)
+    }
+
+    /// Stage one lobby draft, truncated to the character cap.
+    pub(super) fn set_lobby_draft(&mut self, chat: LobbyChat, line: &str) {
+        self.panel_mut(chat).set_draft(line);
+    }
+
+    /// Type one character into one lobby draft.
+    pub(super) fn type_lobby_char(&mut self, chat: LobbyChat, typed: char) {
+        self.panel_mut(chat).type_char(typed);
+    }
+
+    /// Erase one character from one lobby draft.
+    pub(super) fn erase_lobby_char(&mut self, chat: LobbyChat) {
+        self.panel_mut(chat).erase_char();
+    }
+
+    /// Outgoing 2012 body for one lobby draft.
+    pub(super) fn lobby_send_message(&self, chat: LobbyChat) -> Option<SendMainRoomMessage> {
+        self.panel(chat).send_message()
+    }
+
+    /// Outgoing 2017 body for one lobby draft.
+    pub(super) fn lobby_whisper_message(
+        &self,
+        chat: LobbyChat,
+        recipient: &str,
+    ) -> Option<SendWhisper> {
+        self.panel(chat).whisper_message(recipient)
+    }
+
+    /// Forget one lobby draft.
+    pub(super) fn clear_lobby_draft(&mut self, chat: LobbyChat) {
+        self.panel_mut(chat).clear_draft();
+    }
+
+    /// Take the 2012 body and clear one lobby draft.
+    pub(super) fn take_lobby_message(&mut self, chat: LobbyChat) -> Option<SendMainRoomMessage> {
+        let message = self.lobby_send_message(chat)?;
+        self.clear_lobby_draft(chat);
+        Some(message)
+    }
+
+    /// Take the 2017 body, clear one lobby draft, and remember the peer.
+    pub(super) fn take_lobby_whisper(
+        &mut self,
+        chat: LobbyChat,
+        recipient: &str,
+    ) -> Option<SendWhisper> {
+        let message = self.lobby_whisper_message(chat, recipient)?;
+        self.clear_lobby_draft(chat);
+        self.remember_whisper_peer(recipient);
+        Some(message)
+    }
+
+    /// Remember one whisper peer for `/r`: the newest name wins; an
+    /// empty name never becomes the peer.
+    pub(super) fn remember_whisper_peer(&mut self, peer: &str) {
+        if !peer.is_empty() {
+            self.last_whisper_peer = Some(peer.to_owned());
+        }
+    }
+
+    /// Peek one lobby draft through the slash grammar.
+    pub(super) fn lobby_slash_command(&self, chat: LobbyChat) -> SlashCommand {
+        parse_slash_draft(self.panel(chat).draft(), self.last_whisper_peer())
+    }
+
+    /// Peek the waiting draft through the same slash grammar.
+    pub(super) fn waiting_slash_command(&self) -> SlashCommand {
+        parse_slash_draft(self.waiting_draft(), self.last_whisper_peer())
+    }
+
+    /// Take one lobby draft through the slash grammar, clearing a
+    /// non-empty command and remembering a whisper recipient.
+    pub(super) fn take_lobby_slash(&mut self, chat: LobbyChat) -> SlashCommand {
+        let command = self.lobby_slash_command(chat);
+        if command != SlashCommand::Empty {
+            self.clear_lobby_draft(chat);
+        }
+        if let SlashCommand::Whisper { recipient, .. } = &command {
+            self.remember_whisper_peer(recipient);
+        }
+        command
+    }
+
+    /// Take the waiting draft through the slash grammar.
+    pub(super) fn take_waiting_slash(&mut self) -> SlashCommand {
+        let command = self.waiting_slash_command();
+        if command != SlashCommand::Empty {
+            self.clear_waiting_draft();
+        }
+        if let SlashCommand::Whisper { recipient, .. } = &command {
+            self.remember_whisper_peer(recipient);
+        }
+        command
     }
 }

@@ -12,8 +12,8 @@ mod waiting;
 use std::collections::HashMap;
 
 use self::channel::{ChannelPress, ChannelScene};
-use self::chat::parse_slash_draft;
-pub use self::chat::SlashCommand;
+use self::chat::ChatState;
+pub use self::chat::{LobbyChat, LobbyChatPanel, SlashCommand};
 use self::lanking::LankingState;
 use self::musicshop::MusicShopState;
 use self::planet::PlanetBoardState;
@@ -140,91 +140,6 @@ const MAX_WAITING_CHAT_ROWS: usize = 50;
 /// waiting-box bound, reused so a loud channel or room cannot grow
 /// memory without limit (PERF-07: `usize`, never `as`).
 const MAX_MAIN_ROOM_CHAT_ROWS: usize = 50;
-
-/// One lobby chat panel that carries the main-room feed: the unsent
-/// draft line plus the live history, oldest first. The Channel scene
-/// and the Room lobby each own one (the room's chat IS the main-room
-/// chat, ticket #37: `SendMainRoomMessage` 2012 out, 2013/2014 in), so
-/// the row folding, the draft cap, and the history bound live here
-/// once.
-#[derive(Debug, Clone, Default)]
-pub struct LobbyChatPanel {
-    draft: String,
-    history: Vec<ChannelChatMessage>,
-}
-
-impl LobbyChatPanel {
-    /// Unsent draft line (the 2012 content source).
-    #[must_use]
-    pub fn draft(&self) -> &str {
-        &self.draft
-    }
-
-    /// Live history rows, oldest first (empty until a packet arrives).
-    #[must_use]
-    pub fn history(&self) -> &[ChannelChatMessage] {
-        &self.history
-    }
-
-    /// Type one character into the draft: control characters never
-    /// enter the line and the draft stops at [`MAX_CHAT_INPUT_CHARS`]
-    /// characters.
-    fn type_char(&mut self, typed: char) {
-        if typed.is_control() || self.draft.chars().count() >= MAX_CHAT_INPUT_CHARS {
-            return;
-        }
-        self.draft.push(typed);
-    }
-
-    /// Erase the last draft character (Backspace; one whole character,
-    /// never half of a multibyte one).
-    fn erase_char(&mut self) {
-        self.draft.pop();
-    }
-
-    /// Stage the draft line, truncated to [`MAX_CHAT_INPUT_CHARS`].
-    fn set_draft(&mut self, line: &str) {
-        self.draft = line.chars().take(MAX_CHAT_INPUT_CHARS).collect();
-    }
-
-    /// Forget the unsent draft.
-    fn clear_draft(&mut self) {
-        self.draft.clear();
-    }
-
-    /// Append one row and bound the history to
-    /// [`MAX_MAIN_ROOM_CHAT_ROWS`] (oldest rows drop first).
-    fn push_row(&mut self, row: ChannelChatMessage) {
-        self.history.push(row);
-        let overflow = self.history.len().saturating_sub(MAX_MAIN_ROOM_CHAT_ROWS);
-        self.history.drain(..overflow);
-    }
-
-    /// Outgoing 2012 body for the draft (`None` while the draft is
-    /// empty, so no empty send is invented).
-    #[must_use]
-    fn send_message(&self) -> Option<SendMainRoomMessage> {
-        if self.draft.is_empty() {
-            return None;
-        }
-        Some(SendMainRoomMessage {
-            content: self.draft.as_bytes().to_vec(),
-        })
-    }
-
-    /// Outgoing 2017 whisper body for the draft (`None` while the draft
-    /// or the recipient is empty, so no empty send is invented).
-    #[must_use]
-    fn whisper_message(&self, recipient: &str) -> Option<SendWhisper> {
-        if self.draft.is_empty() || recipient.is_empty() {
-            return None;
-        }
-        Some(SendWhisper {
-            recipient: recipient.to_owned(),
-            content: self.draft.clone(),
-        })
-    }
-}
 
 use RoomControlAction::{Back, Create, Options, Side};
 
@@ -376,28 +291,6 @@ fn opening_default_title_index() -> usize {
 /// Hover over them resolves to nothing, so the painter never repaints
 /// frame 1 with frame 0.
 const ROOM_ACTIVE_CHROME_CODES: [u32; 2] = [0x1320_1003, 0x1320_100E];
-
-/// Which lobby chat panel a call addresses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LobbyChat {
-    /// Channel scene panel.
-    Channel,
-    /// Room lobby panel (staged `IDC_LIST_SROOM_CHAT`).
-    Room,
-}
-
-impl LobbyChat {
-    /// Panel the on-screen scene owns (`None`: the scene shows no lobby
-    /// chat panel).
-    #[must_use]
-    pub fn of_screen(screen: Screen) -> Option<Self> {
-        match screen {
-            Screen::Channel => Some(Self::Channel),
-            Screen::Room => Some(Self::Room),
-            _ => None,
-        }
-    }
-}
 
 /// Unsent chat draft cap (characters, not bytes: multibyte input
 /// counts once per character so no slice ever splits UTF-8).
@@ -636,6 +529,10 @@ pub struct ScreenGame {
     /// (#259 scene cluster): every row word lives behind the scene
     /// seam; queries, presses, and drag motion go through its methods.
     channel_scene: ChannelScene,
+    /// Chat words behind one seam (#139): Channel/Room lobby panels,
+    /// Waiting draft and history, and the last whisper peer. The
+    /// module owns row bounds, send bodies, and slash decisions.
+    chat: ChatState,
     /// Channel rows held behind the relay-unavailable notice until
     /// its OK is pressed (#244). Empty except while that modal is up.
     relay_down_pending_channels: Vec<ChannelState>,
@@ -644,20 +541,10 @@ pub struct ScreenGame {
     /// art (the channel select bar). Test affordance and live input both
     /// feed it through [`GameLoop::ingest_snapshot`].
     pointer: Option<(i32, i32)>,
-    /// Channel-scene lobby chat panel (main-room 2013/2014/2016/2019/
-    /// 2029 rows plus the 2012 draft).
-    channel_chat: LobbyChatPanel,
-    /// Room-lobby chat panel: the same main-room feed, painted inside
-    /// the staged `IDC_LIST_SROOM_CHAT`/`IDC_EDIT_SROOM_CHAT` rects.
-    room_chat: LobbyChatPanel,
     /// Last staged room chrome control the router answered without an
     /// evidenced target (see [`RoomControlNoop`]); `None` until such a
     /// press happens.
     last_room_control_noop: Option<RoomControlNoop>,
-    /// Last whisper peer behind `/r` (the most recent incoming 2019
-    /// sender or outgoing 2017 recipient; `None` until a whisper
-    /// flows either way, so a reply with no peer falls back to chat).
-    last_whisper_peer: Option<String>,
     rooms: Vec<RoomListEntry>,
     room_highlight: usize,
     waiting: Option<JoinedRoom>,
@@ -679,10 +566,6 @@ pub struct ScreenGame {
     /// plus the running flag the START control and the waiting scene
     /// read (`state+0x4fc`). Empty until a member lacks the room song.
     music_download: MusicDownload,
-    /// Live waiting-room chat rows (3012/3013 packets only, oldest first).
-    waiting_chat: Vec<WaitingChatMessage>,
-    /// Unsent chat draft for the input line (3011 source).
-    chat_input: String,
     selected_music: Option<SetRoomMusic>,
     /// Live loading status (walk fraction + title–artist, lifecycle
     /// §9): `None` leaves the (gated-off) indeterminate bar unset.
@@ -1071,16 +954,12 @@ impl ScreenGame {
             avatar: None,
             channel_scene: ChannelScene::default(),
             pointer: None,
-            channel_chat: LobbyChatPanel::default(),
-            room_chat: LobbyChatPanel::default(),
+            chat: ChatState::default(),
             last_room_control_noop: None,
-            last_whisper_peer: None,
             rooms: Vec::new(),
             room_highlight: 0,
             waiting: None,
             waiting_start_armed: false,
-            waiting_chat: Vec::new(),
-            chat_input: String::new(),
             selected_music: None,
             loading_status: None,
             loading_gate_phase: 0,
@@ -1477,8 +1356,8 @@ impl ScreenGame {
     pub fn set_channels(&mut self, channels: Vec<ChannelState>) -> &mut Self {
         self.channel_scene.set_rows(channels);
         // The chat draft is shared with the Room lobby, so it stays
-        // owned here and is reset beside the new list (ticket #259).
-        self.channel_chat = LobbyChatPanel::default();
+        // in the chat state and is reset beside the new list (#259).
+        self.chat.clear_channel_panel();
         self
     }
 
@@ -1556,8 +1435,7 @@ impl ScreenGame {
             self.arena_stage = stage;
         }
         self.waiting = Some(room);
-        self.waiting_chat.clear();
-        self.chat_input.clear();
+        self.chat.clear_waiting();
         // A new room means new seats: drop the old per-seat figures,
         // then peers wear their wire equipment as soon as the snapshot
         // lands (no-op without a staged avatar source).
@@ -1994,13 +1872,13 @@ impl ScreenGame {
     }
     /// Append one player chat line (3012) to the waiting history.
     pub fn push_waiting_user_message(&mut self, message: &WaitingUserMessage) -> &mut Self {
-        self.push_chat_row(&message.sender, &message.content_text(), false);
+        self.chat.push_waiting_user(message);
         self
     }
 
     /// Append one administrator chat line (3013) to the waiting history.
     pub fn push_waiting_admin_message(&mut self, message: &WaitingAdminMessage) -> &mut Self {
-        self.push_chat_row(&message.sender, &message.content_text(), true);
+        self.chat.push_waiting_admin(message);
         self
     }
 
@@ -2008,16 +1886,13 @@ impl ScreenGame {
     /// 3012/3013 packet arrives).
     #[must_use]
     pub fn waiting_chat(&self) -> &[WaitingChatMessage] {
-        &self.waiting_chat
+        self.chat.waiting_history()
     }
 
-    /// The Channel scene's lobby chat panel.
+    /// The lobby chat panel the on-screen scene owns.
     #[must_use]
     pub fn lobby_chat(&self, chat: LobbyChat) -> &LobbyChatPanel {
-        match chat {
-            LobbyChat::Channel => &self.channel_chat,
-            LobbyChat::Room => &self.room_chat,
-        }
+        self.chat.panel(chat)
     }
 
     /// Append one player chat line (2013) to `chat`'s history.
@@ -2026,8 +1901,7 @@ impl ScreenGame {
         chat: LobbyChat,
         message: &MainRoomUserMessage,
     ) -> &mut Self {
-        let row = ChannelChatMessage::user(&message.sender, &message.content_text());
-        self.lobby_panel_mut(chat).push_row(row);
+        self.chat.push_lobby_user(chat, message);
         self
     }
 
@@ -2037,14 +1911,11 @@ impl ScreenGame {
         chat: LobbyChat,
         message: &MainRoomAdminMessage,
     ) -> &mut Self {
-        let row = ChannelChatMessage::admin(&message.sender, &message.content_text());
-        self.lobby_panel_mut(chat).push_row(row);
+        self.chat.push_lobby_admin(chat, message);
         self
     }
 
-    /// Append one incoming whisper (2019) to `chat`'s history.
-    /// `recipient` names the local addressee (the wire event carries
-    /// only the sender), so the row keeps its whisper context. The
+    /// Append one incoming whisper (2019) to `chat`'s history; the
     /// sender becomes the `/r` peer.
     pub fn push_lobby_whisper(
         &mut self,
@@ -2052,48 +1923,30 @@ impl ScreenGame {
         message: &ReceiveWhisper,
         recipient: &str,
     ) -> &mut Self {
-        let row = ChannelChatMessage::whisper(&message.sender, recipient, &message.content);
-        self.lobby_panel_mut(chat).push_row(row);
-        self.remember_whisper_peer(&message.sender);
+        self.chat.push_lobby_whisper(chat, message, recipient);
         self
     }
 
-    /// Append one lobby announcement (2016) to `chat`'s history: the
-    /// exe fans the notice text out as `0x7de` admin-message rows
-    /// (`docs/net-protocol.md`), so the row paints bare in the admin
-    /// amber — no sender brackets a sender-less notice. Empty notices
-    /// stage no row, so they never consume a visible slot.
+    /// Append one lobby announcement (2016), unless the notice is empty.
     pub fn push_lobby_announcement(
         &mut self,
         chat: LobbyChat,
         message: &Announcement,
     ) -> &mut Self {
-        if message.content.is_empty() {
-            return self;
-        }
-        let row = ChannelChatMessage::announcement(&message.content);
-        self.lobby_panel_mut(chat).push_row(row);
+        self.chat.push_lobby_announcement(chat, message);
         self
     }
 
-    /// Append one rank notice (2029) to `chat`'s history, unless the
-    /// packet carries no rank: the exe drops the packet when the
-    /// invalid word is nonzero (`docs/net-protocol.md`). The row paints
-    /// the pinned notice-board sentence (`rank_notice_board_text` field
-    /// order nickname/title/rank, `docs/gifts.md`) in the admin amber;
-    /// the song title resolves through the staged catalog, `M{id}`
+    /// Append one rank notice (2029) unless the wire rank is invalid.
+    /// The song title resolves through the staged catalog, `M{id}`
     /// while it names no such song.
     pub fn push_lobby_rank_notification(
         &mut self,
         chat: LobbyChat,
         message: &RankNotification,
     ) -> &mut Self {
-        if message.invalid {
-            return self;
-        }
         let song_title = self.rank_notice_song_title(message.music_id);
-        let row = ChannelChatMessage::rank(&message.nickname, &song_title, message.ranking);
-        self.lobby_panel_mut(chat).push_row(row);
+        self.chat.push_lobby_rank(chat, message, &song_title);
         self
     }
 
@@ -2122,16 +1975,10 @@ impl ScreenGame {
         self.push_lobby_rank_notification(LobbyChat::Channel, message)
     }
 
-    /// Mutable panel behind [`Self::lobby_chat`].
-    fn lobby_panel_mut(&mut self, chat: LobbyChat) -> &mut LobbyChatPanel {
-        match chat {
-            LobbyChat::Channel => &mut self.channel_chat,
-            LobbyChat::Room => &mut self.room_chat,
-        }
-    }
-
     /// Song title of one 2029 rank notice: the staged catalog's title,
-    /// `M{id}` while it names no such song.
+    /// `M{id}` while it names no such song. The catalog is game state,
+    /// so this lookup stays on the seam; the chat module only paints
+    /// the resolved title into the row.
     fn rank_notice_song_title(&self, music_id: i32) -> String {
         match u16::try_from(music_id)
             .ok()
@@ -2142,18 +1989,16 @@ impl ScreenGame {
         }
     }
 
-    /// Live channel chat rows, oldest first (empty until a
-    /// 2013/2014/2016/2019/2029 packet arrives).
+    /// Live channel chat rows, oldest first.
     #[must_use]
     pub fn channel_chat(&self) -> &[ChannelChatMessage] {
-        self.channel_chat.history()
+        self.chat.panel(LobbyChat::Channel).history()
     }
 
-    /// Live room-lobby chat rows, oldest first (the same main-room
-    /// feed as [`Self::channel_chat`], painted in the room panel).
+    /// Live room-lobby chat rows, oldest first.
     #[must_use]
     pub fn room_chat(&self) -> &[ChannelChatMessage] {
-        self.room_chat.history()
+        self.chat.panel(LobbyChat::Room).history()
     }
 
     /// Last staged room chrome control the router answered without an
@@ -2167,7 +2012,7 @@ impl ScreenGame {
     /// Stage the unsent input line (the 3011 source on send).
     /// Overlong lines truncate to [`MAX_CHAT_INPUT_CHARS`] characters.
     pub fn set_chat_input(&mut self, line: &str) -> &mut Self {
-        self.chat_input = line.chars().take(MAX_CHAT_INPUT_CHARS).collect();
+        self.chat.set_waiting_draft(line);
         self
     }
 
@@ -2175,113 +2020,89 @@ impl ScreenGame {
     /// scene accepts typing; control characters never enter the line
     /// and the draft stops at [`MAX_CHAT_INPUT_CHARS`] characters.
     pub fn push_chat_char(&mut self, typed: char) {
-        if self.flow.current() != Screen::Waiting || typed.is_control() {
-            return;
+        if self.flow.current() == Screen::Waiting {
+            self.chat.type_waiting_char(typed);
         }
-        if self.chat_input.chars().count() >= MAX_CHAT_INPUT_CHARS {
-            return;
-        }
-        self.chat_input.push(typed);
     }
 
     /// Type one character into the lobby chat draft the on-screen
-    /// scene owns: the Channel panel or the Room panel (every other
-    /// scene accepts no lobby typing). While a room dialog is open it
-    /// owns the keyboard, so the character feeds the dialog form
-    /// instead (ticket #37).
+    /// scene owns. An open room dialog owns the keyboard first
+    /// (ticket #37).
     pub fn push_lobby_char(&mut self, typed: char) {
         if self.room_dialog.is_some() {
             self.push_room_dialog_char(typed);
             return;
         }
         if let Some(chat) = LobbyChat::of_screen(self.flow.current()) {
-            self.lobby_panel_mut(chat).type_char(typed);
+            self.chat.type_lobby_char(chat, typed);
         }
     }
 
-    /// Erase the last draft character (Backspace). Only the Waiting
-    /// scene accepts it; an empty draft stays empty (`String::pop`
-    /// removes one whole character, never half of a multibyte one).
+    /// Erase the last waiting draft character (Backspace).
     pub fn delete_chat_char(&mut self) {
-        if self.flow.current() != Screen::Waiting {
-            return;
+        if self.flow.current() == Screen::Waiting {
+            self.chat.erase_waiting_char();
         }
-        self.chat_input.pop();
     }
 
-    /// Erase the last character of the lobby chat draft the on-screen
-    /// scene owns (Backspace; an empty draft stays empty). The open
-    /// room dialog owns Backspace first.
+    /// Erase the last character of the on-screen lobby draft. The
+    /// open room dialog owns Backspace first.
     pub fn delete_lobby_char(&mut self) {
         if self.room_dialog.is_some() {
             self.delete_room_dialog_char();
             return;
         }
         if let Some(chat) = LobbyChat::of_screen(self.flow.current()) {
-            self.lobby_panel_mut(chat).erase_char();
+            self.chat.erase_lobby_char(chat);
         }
-    }
-    #[must_use]
-    pub fn chat_input(&self) -> &str {
-        &self.chat_input
     }
 
-    /// Outgoing chat packet for the draft (`None` while the input
-    /// line is empty, so no empty send is invented). Callers send
-    /// the returned body, then [`Self::clear_chat_input`].
+    /// Unsent waiting-room input line.
+    #[must_use]
+    pub fn chat_input(&self) -> &str {
+        self.chat.waiting_draft()
+    }
+
+    /// Outgoing 3011 body for the draft (`None` while the input line
+    /// is empty, so no empty send is invented).
     #[must_use]
     pub fn chat_send_message(&self) -> Option<SendWaitingMessage> {
-        if self.chat_input.is_empty() {
-            return None;
-        }
-        Some(SendWaitingMessage {
-            content: self.chat_input.as_bytes().to_vec(),
-        })
+        self.chat.waiting_send_message()
     }
 
     /// Forget the unsent input line.
     pub fn clear_chat_input(&mut self) -> &mut Self {
-        self.chat_input.clear();
+        self.chat.clear_waiting_draft();
         self
     }
 
-    /// Take the 3011 body for the draft and clear the input line so
-    /// one Enter sends once (`None` while the draft is empty). The
-    /// online session transmits the packet (see `recomp2jam::session`);
-    /// the shell owns no transport, so offline takes still drop it here.
+    /// Take the 3011 body and clear the input line so one Enter sends
+    /// once.
     pub fn take_chat_message(&mut self) -> Option<SendWaitingMessage> {
-        let message = self.chat_send_message()?;
-        self.clear_chat_input();
-        Some(message)
+        self.chat.take_waiting_message()
     }
 
-    /// Stage one lobby chat draft (the 2012 source on send). Overlong
-    /// lines truncate to [`MAX_CHAT_INPUT_CHARS`] characters.
+    /// Stage one lobby chat draft (the 2012 source on send).
     pub fn set_lobby_input(&mut self, chat: LobbyChat, line: &str) -> &mut Self {
-        self.lobby_panel_mut(chat).set_draft(line);
+        self.chat.set_lobby_draft(chat, line);
         self
     }
 
-    /// Outgoing 2012 body for one lobby chat draft (`None` while the
-    /// draft is empty, so no empty send is invented). Callers send the
-    /// returned body, then [`Self::clear_lobby_input`].
+    /// Outgoing 2012 body for one lobby chat draft.
     #[must_use]
     pub fn lobby_send_message(&self, chat: LobbyChat) -> Option<SendMainRoomMessage> {
-        self.lobby_chat(chat).send_message()
+        self.chat.lobby_send_message(chat)
     }
 
-    /// Outgoing 2017 body for one lobby chat draft to `recipient`
-    /// (`None` while the draft or the recipient is empty). The draft
-    /// carries the whisper text; the recipient rides beside it (the
-    /// wire 2017 shape).
+    /// Outgoing 2017 body for one lobby chat draft to `recipient`.
     #[must_use]
     pub fn lobby_whisper_message(&self, chat: LobbyChat, recipient: &str) -> Option<SendWhisper> {
-        self.lobby_chat(chat).whisper_message(recipient)
+        self.chat.lobby_whisper_message(chat, recipient)
     }
 
     /// Forget one lobby chat draft.
     pub fn clear_lobby_input(&mut self, chat: LobbyChat) -> &mut Self {
-        self.lobby_panel_mut(chat).clear_draft();
+        self.chat.clear_lobby_draft(chat);
         self
     }
 
@@ -2313,82 +2134,43 @@ impl ScreenGame {
         self.clear_lobby_input(LobbyChat::Channel)
     }
 
-    /// Take the 2012 body for the Channel draft and clear the input
-    /// line so one Enter sends once (`None` while the draft is
-    /// empty). The online session transmits the packet (see
-    /// `recomp2jam::session`); the shell owns no transport, so
-    /// offline takes still drop it here.
+    /// Take the 2012 body for the Channel draft and clear the input.
     pub fn take_channel_message(&mut self) -> Option<SendMainRoomMessage> {
-        let message = self.channel_send_message()?;
-        self.clear_channel_input();
-        Some(message)
+        self.chat.take_lobby_message(LobbyChat::Channel)
     }
 
-    /// Take the 2017 body for the Channel draft to `recipient` and
-    /// clear the input line so one action sends once (`None` while
-    /// the draft or the recipient is empty). The recipient becomes
-    /// the `/r` peer, like an incoming whisper does.
+    /// Take the 2017 body to `recipient` and clear the Channel draft.
     pub fn take_channel_whisper(&mut self, recipient: &str) -> Option<SendWhisper> {
-        let message = self.channel_whisper_message(recipient)?;
-        self.clear_channel_input();
-        self.remember_whisper_peer(recipient);
-        Some(message)
+        self.chat.take_lobby_whisper(LobbyChat::Channel, recipient)
     }
 
-    /// Outgoing whisper packet for the waiting draft to `recipient`
-    /// (`None` while the draft or the recipient is empty, so no empty
-    /// send is invented). The draft carries the whisper text; the
-    /// recipient rides beside it (the wire 2017 shape, like the
-    /// Channel whisper — the exe sends 2017 from the waiting room too,
-    /// files `0xb8ffc`/`0xb9369`).
+    /// Outgoing whisper packet for the waiting draft to `recipient`.
     #[must_use]
     pub fn chat_whisper_message(&self, recipient: &str) -> Option<SendWhisper> {
-        if self.chat_input.is_empty() || recipient.is_empty() {
-            return None;
-        }
-        Some(SendWhisper {
-            recipient: recipient.to_owned(),
-            content: self.chat_input.clone(),
-        })
+        self.chat.waiting_whisper_message(recipient)
     }
 
-    /// Take the 2017 body for the waiting draft to `recipient` and
-    /// clear the input line so one action sends once (`None` while
-    /// the draft or the recipient is empty). The recipient becomes
-    /// the `/r` peer.
+    /// Take the 2017 body for the waiting draft and clear it.
     pub fn take_chat_whisper(&mut self, recipient: &str) -> Option<SendWhisper> {
-        let message = self.chat_whisper_message(recipient)?;
-        self.clear_chat_input();
-        self.remember_whisper_peer(recipient);
-        Some(message)
+        self.chat.take_waiting_whisper(recipient)
     }
 
-    /// Last whisper peer behind `/r` (`None` until a whisper flows
-    /// either way).
+    /// Last whisper peer behind `/r`.
     #[must_use]
     pub fn last_whisper_peer(&self) -> Option<&str> {
-        self.last_whisper_peer.as_deref()
+        self.chat.last_whisper_peer()
     }
 
-    /// Remember one whisper peer for `/r`: the newest incoming 2019
-    /// sender or outgoing 2017 recipient wins. Empty names never
-    /// become the peer (a reply to nobody falls back to chat).
+    /// Remember one whisper peer for `/r`: the newest name wins.
     pub fn remember_whisper_peer(&mut self, peer: &str) -> &mut Self {
-        if !peer.is_empty() {
-            self.last_whisper_peer = Some(peer.to_owned());
-        }
+        self.chat.remember_whisper_peer(peer);
         self
     }
 
-    /// Peek one lobby chat draft through the slash grammar (the exe
-    /// lobby parser beside the 2012 send at file `0x8fa1e` and the 2017
-    /// send at file `0x8fa02`).
+    /// Peek one lobby chat draft through the slash grammar.
     #[must_use]
     pub fn lobby_slash_command(&self, chat: LobbyChat) -> SlashCommand {
-        parse_slash_draft(
-            self.lobby_chat(chat).draft(),
-            self.last_whisper_peer.as_deref(),
-        )
+        self.chat.lobby_slash_command(chat)
     }
 
     /// Peek the Channel draft through the slash grammar.
@@ -2397,25 +2179,15 @@ impl ScreenGame {
         self.lobby_slash_command(LobbyChat::Channel)
     }
 
-    /// Peek the waiting draft through the same slash grammar (the exe
-    /// sends 2017 from the waiting room too, files `0xb8ffc`/`0xb9369`).
+    /// Peek the waiting draft through the same slash grammar.
     #[must_use]
     pub fn chat_slash_command(&self) -> SlashCommand {
-        parse_slash_draft(&self.chat_input, self.last_whisper_peer.as_deref())
+        self.chat.waiting_slash_command()
     }
 
-    /// Take one lobby chat draft through the slash grammar and clear
-    /// the input line so one Enter acts once (`Empty` leaves the empty
-    /// draft alone). A whisper take remembers its recipient for `/r`.
+    /// Take one lobby draft through the slash grammar and clear it.
     pub fn take_lobby_slash(&mut self, chat: LobbyChat) -> SlashCommand {
-        let command = self.lobby_slash_command(chat);
-        if command != SlashCommand::Empty {
-            self.clear_lobby_input(chat);
-        }
-        if let SlashCommand::Whisper { ref recipient, .. } = command {
-            self.remember_whisper_peer(recipient);
-        }
-        command
+        self.chat.take_lobby_slash(chat)
     }
 
     /// Take the Channel draft through the slash grammar.
@@ -2428,38 +2200,9 @@ impl ScreenGame {
         self.take_lobby_slash(LobbyChat::Room)
     }
 
-    /// Take the waiting draft through the slash grammar and clear the
-    /// input line so one Enter acts once (`Empty` leaves the empty
-    /// draft alone). A whisper take remembers its recipient for `/r`.
+    /// Take the waiting draft through the slash grammar.
     pub fn take_chat_slash(&mut self) -> SlashCommand {
-        let command = self.chat_slash_command();
-        if command != SlashCommand::Empty {
-            self.clear_chat_input();
-        }
-        if let SlashCommand::Whisper { ref recipient, .. } = command {
-            self.remember_whisper_peer(recipient);
-        }
-        command
-    }
-
-    /// Append one chat row and bound the history to
-    /// [`MAX_WAITING_CHAT_ROWS`] (oldest rows drop first).
-    fn push_chat_row(&mut self, sender: &str, text: &str, admin: bool) {
-        self.waiting_chat.push(WaitingChatMessage {
-            sender: sender.to_owned(),
-            text: text.to_owned(),
-            admin,
-        });
-        self.truncate_waiting_chat();
-    }
-
-    /// Drop the oldest rows past the history cap.
-    fn truncate_waiting_chat(&mut self) {
-        let overflow = self
-            .waiting_chat
-            .len()
-            .saturating_sub(MAX_WAITING_CHAT_ROWS);
-        self.waiting_chat.drain(..overflow);
+        self.chat.take_waiting_slash()
     }
 
     /// Room arena stage the Playing `_` sprites resolve through: the
@@ -6038,7 +5781,7 @@ impl ScreenGame {
         }
         paint_channel_chat(
             frame,
-            self.channel_chat.history(),
+            self.chat.panel(LobbyChat::Channel).history(),
             self.channel_scene.rows().len(),
         );
     }
@@ -6069,8 +5812,8 @@ impl ScreenGame {
         if let Some(art) = self.scene_art(Screen::Room) {
             paint_room_chat(
                 frame,
-                self.room_chat.history(),
-                self.room_chat.draft(),
+                self.chat.panel(LobbyChat::Room).history(),
+                self.chat.panel(LobbyChat::Room).draft(),
                 &art.placements,
             );
             // The user panel rides its staged wells: the worn figure in
@@ -6227,12 +5970,22 @@ impl ScreenGame {
                         now_ms,
                     );
                 }
-                paint_waiting_chat(frame, &self.waiting_chat, &self.chat_input, &art.placements);
+                paint_waiting_chat(
+                    frame,
+                    self.chat.waiting_history(),
+                    self.chat.waiting_draft(),
+                    &art.placements,
+                );
             }
             (Some(art), None) => paint_lobby_backdrop(frame, Screen::Waiting, art),
             (None, Some(room)) => {
                 paint_waiting_members(frame, room);
-                paint_waiting_chat(frame, &self.waiting_chat, &self.chat_input, &[]);
+                paint_waiting_chat(
+                    frame,
+                    self.chat.waiting_history(),
+                    self.chat.waiting_draft(),
+                    &[],
+                );
             }
             (None, None) => paint_screen(frame, Screen::Waiting),
         }
@@ -6844,16 +6597,16 @@ fn planet_press_word(press: Option<PlanetAction>) -> u64 {
 fn observable_state_hash(game: &ScreenGame) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
     hash_str(&mut hash, game.screen_name());
-    hash_str(&mut hash, &game.chat_input);
-    hash_str(&mut hash, game.channel_chat.draft());
-    hash_str(&mut hash, game.room_chat.draft());
-    for row in &game.waiting_chat {
+    hash_str(&mut hash, game.chat.waiting_draft());
+    hash_str(&mut hash, game.chat.panel(LobbyChat::Channel).draft());
+    hash_str(&mut hash, game.chat.panel(LobbyChat::Room).draft());
+    for row in game.chat.waiting_history() {
         hash_str(&mut hash, &row.text);
     }
-    for row in game.channel_chat.history() {
+    for row in game.chat.panel(LobbyChat::Channel).history() {
         hash_str(&mut hash, &row.text);
     }
-    for row in game.room_chat.history() {
+    for row in game.chat.panel(LobbyChat::Room).history() {
         hash_str(&mut hash, &row.text);
     }
     if let Some(selection) = &game.selected_music {
