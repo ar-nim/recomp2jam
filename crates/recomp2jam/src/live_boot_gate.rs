@@ -482,6 +482,81 @@ mod live_boot_gate_tests {
         server.join().unwrap();
     }
 
+    /// Reopened #362: the b8 click is delivered as a pointer snapshot, not
+    /// as a direct `click_shop` call. This guard drives that whole live
+    /// chain and reads pixels before and after, so a Shop -> Payment
+    /// switch that stops painting the staged chrome fails here.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online -> assemble_online_session
+    ///   -> OnlineSession::ingest_snapshot(InputSnapshot::click_at(92,355))
+    ///   -> ScreenGame::ingest_snapshot -> apply_pointer_down -> click_dispatch
+    ///   -> click_side_screen -> click_shop(92,355)
+    ///   -> shop_action_at(SHOP_CHARGE_MONEY_CODE) -> leave_side
+    ///   -> visit_side(Payment) -> mount_staged_side_art(Payment)
+    ///   -> paint_side -> paint_cash_charge_frame
+    #[test]
+    fn live_boot_charge_plate_snapshot_click_paints_chrome() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let (port, server) = spawn_boot_gateway();
+        let (report, gateway) =
+            connect::connect_and_login_with_transport(&boot_options(port)).unwrap();
+        let mut game = o2jam_shell::ScreenGame::new();
+        stage_online_identity(&mut game, report.character.as_ref());
+        let mut session =
+            assemble_online_session(game, gateway, Some("gate"), None, None, None).unwrap();
+        for lobby in [Screen::Planet, Screen::Channel, Screen::Room] {
+            assert!(
+                session.game_mut().enter_screen(lobby),
+                "gate reaches the shop lobby through {lobby:?}"
+            );
+        }
+        assert!(
+            session.game_mut().cash_charge_art_staged(),
+            "live boot stages the Cash Charge chrome"
+        );
+        assert!(session.game_mut().visit_side(SideScreen::Shop));
+        let mut before = vec![0u32; 800 * 600];
+        let mut after = vec![0u32; 800 * 600];
+        let paint = |session: &mut crate::session::OnlineSession, buf: &mut [u32]| {
+            session.paint(&mut RenderFrame {
+                buf,
+                w: 800,
+                h: 600,
+            });
+        };
+        paint(&mut session, &mut before);
+
+        session.ingest_snapshot(&o2jam_shell::InputSnapshot::click_at(92, 355));
+
+        assert_eq!(
+            session.game_mut().side(),
+            Some(SideScreen::Payment),
+            "the live snapshot click opens the Cash Charge view"
+        );
+        paint(&mut session, &mut after);
+        let changed = (58..564)
+            .flat_map(|y| (190..630).map(move |x| y * 800 + x))
+            .filter(|index| before[*index] != after[*index])
+            .count();
+        assert!(
+            changed > (564 - 58) * (630 - 190) / 2,
+            "the click repaints the b8 web-client region, changed={changed}"
+        );
+        let client = after[300 * 800 + 400];
+        let channels = [(client >> 16) as u8, (client >> 8) as u8, client as u8];
+        for (painted, captured) in channels.into_iter().zip([25, 24, 25]) {
+            assert!(
+                painted.abs_diff(captured) <= 1,
+                "exe-pinned web client colour after the live click: {channels:?}"
+            );
+        }
+        server.join().unwrap();
+    }
+
     /// Ticket #191 reopen: the shop board must not be empty on the
     /// DEFAULT live boot (no --gateway-id/--channel-id, no
     /// --avatar-opa). The seam guard
