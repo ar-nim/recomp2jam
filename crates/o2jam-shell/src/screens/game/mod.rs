@@ -16605,6 +16605,10 @@ mod game_tests {
         assert_eq!(game.shop_visible_goods()[1].item_id, 2);
     }
 
+    /// Live caller chain (issue #363 criterion 3): boot -> visit_side(Shop)
+    /// -> set_catalog -> staged ITEMSHOW placements -> paint_shop_item_icons.
+    /// The seam guard pins the painted bytes; the live gate
+    /// live_boot_default_stages_shop_catalog pins the staging chain.
     #[test]
     fn shop_item_cards_paint_slot_zero_portraits_at_staged_itemshow_rects() {
         // Live caller chain (paint guard, #363):
