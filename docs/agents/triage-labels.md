@@ -86,6 +86,15 @@ state or one cross-cutting domain. Rules:
 
 - Specs stay OPEN while any story is uncovered; a spec closes only when
   every story box is checked AND each has a covering ticket closure.
+- A checked box requires the covering ticket to close the SAME claim, not
+  a neighboring one. Read the covering ticket's own closing record: if it
+  leaves the claim OPEN or invalidates its own coverage, the box stays
+  unchecked with a RIG annotation naming that ticket and the next evidence
+  step. Retro #312: #278 closed the music-select control symptom while
+  leaving the exe host/peer display rule OPEN; #57's own final comment says
+  the overlap was ROOM-side, so it cannot cover Waiting placements.
+  Keep those covering tickets closed — an invalidated cover is a spec
+  evidence gap, not a reason to reopen the execution work.
 - Execution tickets map to their spec as GitHub sub-issues; the spec
   body holds the story list, comments hold the audit trail.
 - One spec per state (the STAGE_TABLE states plus Channel and Loading);

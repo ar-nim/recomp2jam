@@ -84,6 +84,22 @@ Items parked for the next retrospective (owner calls the retro skill).
 - Ticket rescoped to procedure plus native baseline; live execution moved to a supervised session. Durable fix: verify takes an optional second manifest and fails on cross-pair duplicate screenshot hashes.
 - Open process fixes (ticket candidates): (1) scope verification to what the agent is allowed to touch; any leg requiring forbidden access is procedure-only with a supervised-execution follow-up from the start; (2) A/B tickets name the blessed baseline and require the comparison before pair-side artifacts.
 
+## 2026-11-17 — #312 checked spec stories with narrower-claim covers (#291)
+
+Two story boxes on the Waiting spec were checked from covering tickets whose
+own closing records cover a narrower claim. The boxes are now unchecked with
+RIG 2026-11-17 annotations on `#291`; the covering tickets stay closed.
+
+| Story | Cover | Why it does not cover the story | Re-pinned next evidence step |
+| --- | --- | --- | --- |
+| 2 — host MUSELECT / peer BPM with exe display rule | #278 | Closing record: "No exe-evidence claim is used — the exe display rule stays OPEN pending a qualified capture with provenance manifest"; owner decision and Rust guards only (`docs/room-enums.md:393-430`). | Qualified host and peer Waiting MUSELECT frames with provenance manifest (version, hash, offsets, evidence IDs, capture manifest), gated by #240/#229 lineage. |
+| 4 — dialog placements in parity, no overlap / mis-bound controls | #57 | Final comment: overlap was ROOM-side, not Waiting; the ticket explicitly invalidates itself as Waiting placement coverage. Guard `waiting_top_buttons_sit_on_their_own_block_rects` is green but pins a different symptom. | Music-select rect parity sweep against the pinned BND rects, including the `?` overlap (#272, #285). |
+
+Durable rule added to the spec section of `docs/agents/triage-labels.md`:
+a checked box needs a covering ticket that closes the SAME claim, not a
+neighboring one. A cover that leaves the claim OPEN or invalidates itself
+leaves the box unchecked with a RIG annotation and a named next evidence step.
+
 ## 2026-11-17 — #309 unresolvable commit hashes in tracker comments (#193, #139)
 
 - The closing comments on #193 and #139 cite short tokens from rebased-away
