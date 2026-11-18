@@ -105,6 +105,14 @@ close") and close-discipline rule 2 in `docs/agents/triage-labels.md`.
   reproduces it.
 - If a reported PASS does not reproduce, treat it as a FAIL and
   respawn or steer per the rule above.
+- Gates: `scripts/gate-check.sh --no-push` output is the only accepted gate
+  evidence (retro 2026-11-18). A "pre-existing failure" claim must quote
+  gate-check output re-run FROM THE NAMED BASE COMMIT — the #341 agent
+  reported its own hidden-arm regression as "pre-existing on d191bb8" while
+  main was green.
+- Multi-commit legs arrive as branches; the senior merges `--no-ff`. Reserve
+  cherry-picks for single commits — a 2026-11-18 cherry-pick abort silently
+  reset local main and lost a pushed commit; the merge was needed anyway.
 
 ## Brief requirements
 
@@ -132,8 +140,11 @@ Pre-flight: git rev-parse --show-toplevel == <path>
 Base SHA: <full 40-hex SHA>; git cat-file -t <sha> prints commit
 Acceptance: <paste every criterion verbatim; no paraphrase>
 Deliverables: <exact filenames>; no aliases or variants without asking
-Evidence: <paths / evidence ids>; reviewer opens each artifact (pixel rule)
-Gates: <exact commands, both test arms>; wrap blocking runs in timeout 600
+Evidence: <paths / evidence ids + sha256 for metrics artifacts>; reviewer
+opens each artifact (pixel rule) and re-reads metrics JSONs rather than
+re-running scorers blind (stale packs can hold pre-fix frames)
+Gates: `bash scripts/gate-check.sh --no-push` (the only accepted evidence;
+both install-root arms); wrap any ad-hoc run in timeout 600
 Thinking: medium | Skips left: 3 | Exemplars: <verified SHAs or doc entries>
 Never push; never comment on or close issues. Report: the template below.
 ```

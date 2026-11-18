@@ -110,6 +110,29 @@ if [ -n "${TRACKER_AUDIT_EXTRA_GUARD:-}" ]; then
 fi
 
 echo "tracker-audit: $total closed issues, $guard_issues with ## Guards, $exempt exempt, ${#missing[@]} missing guards"
+
+# --- blocked-by leg (retro 2026-11-18) ---------------------------------------
+# Wave planning blind spot: #260 was scheduled while its own body declared
+# "no agent starts" on its blockedBy edges; the planning query fetched labels
+# but not blockedBy. This leg lists every OPEN ready-for-agent ticket that
+# still carries blockedBy edges, so a pre-wave audit read catches it. The
+# edges are often stale (closed blockers) — informational, never an exit
+# code: the wave planner removes stale edges, the ticket body decides the
+# rest. Uses --template because `gh issue view --json blockedBy` errors on
+# the array shape ("expected an object but got: array"); the template path
+# is the working recipe (now also in docs/agents/issue-tracker.md).
+if [ "$#" -eq 0 ] && [ "${TRACKER_AUDIT_SKIP_BLOCKED:-0}" != "1" ]; then
+  open_ready="$(gh issue list --state open --label ready-for-agent --limit 500 --json number --jq '.[].number' 2>/dev/null || true)"
+  if [ -n "$open_ready" ]; then
+    while read -r onum; do
+      [ -n "$onum" ] || continue
+      blockers="$(gh issue view "$onum" --template '{{range .blockedBy.nodes}}{{.number}} {{end}}' 2>/dev/null | sed 's/[[:space:]]*$//')"
+      if [ -n "$blockers" ]; then
+        echo "blocked #$onum -> $blockers"
+      fi
+    done <<< "$open_ready"
+  fi
+fi
 if [ "${#missing[@]}" -gt 0 ]; then
   printf 'missing: %s\n' "${missing[@]}"
   exit 1

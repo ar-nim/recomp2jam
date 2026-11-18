@@ -138,3 +138,41 @@ leaves the box unchecked with a RIG annotation and a named next evidence step.
 
 - Told the owner twice that the enter path never checks channel.active, quoting the ticket's gap analysis. Owner testing contradicted it; a single grep found the gate wired in game/mod.rs plus paint dims. The ticket was stale; the error was presenting prose as verified fact.
 - Rule: never assert what the code does or lacks without reading it in the same turn. Ticket prose is a lead, never evidence.
+## 2026-11-18 — P2 wave retrospective (25+ tickets closed)
+
+Findings and the rules that now carry them:
+
+1. **False "pre-existing" gate claim (#341).** Agent reported its own
+   hidden-arm regression as pre-existing on a stale base while main was
+   green. Rule: `scripts/gate-check.sh --no-push` is the only accepted gate
+   evidence; "pre-existing" claims quote gate-check output from the named
+   base commit. Landed in docs/agents/delegation.md.
+2. **Cherry-pick abort reset main.** A multi-commit cherry-pick chain ended
+   in `--abort`, which silently reset local main and lost a pushed commit.
+   Rule: multi-commit legs merge `--no-ff`; cherry-picks are single-commit
+   only. Landed in docs/agents/delegation.md. Tracker record: #351.
+3. **blockedBy invisible to wave planning (#260 scheduled while blocked).**
+   Guardrail: `scripts/tracker-audit.sh` now has a blocked-by leg listing
+   open ready-for-agent tickets that still carry blockedBy edges (run the
+   audit before every wave). Informational, never an exit code.
+   Tracker record: #352.
+4. **Stale-artifact metric trap (#342).** A scorer re-run showed pre-fix
+   numbers because the pack held stale frames; the real numbers lived in a
+   sibling metrics JSON. Rule: metric claims name artifact + sha256;
+   verifiers re-read the JSON instead of re-running blind. Landed in the
+   delegation brief/report templates. Tracker record: #353.
+5. **gh CLI traps.** REST sub-issue DELETE 404s (GraphQL removeSubIssue
+   works); `--json blockedBy` errors, `--template '{{range .blockedBy.nodes}}'`
+   works. Landed in docs/agents/issue-tracker.md "Tracker CLI recipes".
+
+- Also recorded: memory lesson 56198's "real hash" for #167 (`ea4f098`) is
+  itself NOT a git object; the verified commit is `6f4a130`. Lesson updated
+  and pending owner approval. The verify-at-posting rule caught the
+  lesson itself.
+- Positive: the needs-owner flag worked as designed — a 10-minute owner
+  glance session closed three tickets and produced two well-pinned new ones
+  (#348 regression, #349 rendering cluster).
+- Memoryer liveness (#345) is now code, not lore: memoryer-start.sh
+  --check-only, preflight server identity in pack provenance. Attended
+  exe-run recipe: ~/scratch/owner-exe-run.sh (windowed virtual desktop
+  needs Decorated=Y + Managed=Y in HKCU\Software\Wine\X11 Driver).

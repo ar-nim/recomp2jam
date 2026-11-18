@@ -145,3 +145,22 @@ enables the ext transport locally, so `git push` fails locally with a clear
 message before touching origin. The main checkout is never configured this
 way; `worktree-setup.sh` refuses to run there, keeping the orchestrator's
 push path intact. See retro-queue entry "agent pushed to origin (fix-175)".
+
+## Tracker CLI recipes (working snippets)
+
+`gh` field shapes that differ from intuition; each recipe here was burned in
+once — use them verbatim (retro 2026-11-18).
+
+- **Sub-issue link**: add via
+  `id=$(gh api repos/ar-nim/recomp2jam/issues/<child> --jq .id) &&
+  gh api repos/ar-nim/recomp2jam/issues/<parent>/sub_issues -X POST -F sub_issue_id=$id`.
+  The REST DELETE (`.../sub_issues/<id>`) 404s on this repo — remove with
+  GraphQL instead:
+  `gh api graphql -f query='mutation($i:ID!,$s:ID!){ removeSubIssue(input:{issueId:$i, subIssueId:$s}){ issue{number} subIssue{number} } }' -F i=<parentNodeId> -F s=<childNodeId>`
+  (node IDs from `gh issue view <n> --json id`).
+- **blockedBy / blocking**: `gh issue view <n> --json blockedBy` ERRORS
+  ("expected an object but got: array"); use
+  `gh issue view <n> --template '{{range .blockedBy.nodes}}{{.number}} {{end}}'`.
+  Edits: `gh issue edit <n> --add-blocked-by <m> / --remove-blocked-by <m>`.
+- **Issue type**: `gh issue edit <n> --type Bug|Task|Feature` (the old
+  `bug`/`enhancement` labels are retired; triage sets type, not a label).
