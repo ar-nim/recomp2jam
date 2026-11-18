@@ -44,14 +44,14 @@ use super::side::{
     planet_caption_for_code, planet_plate_clip, shop_bag_page_rects, shop_cart_page_rects,
     shop_cart_slots, wallet_row_caption, LankingSong, MusicShopRow, MyRoomAction, MyRoomState,
     PlanetAction, PlanetBand, PlanetOptionTab, PlanetPromo, ShopGood, WalletRow, WalletState,
-    GEM_LABEL, LANKING_LVIEW_TEXT_CODES, LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES,
-    MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS, MSHOP_ROW_TEXT_CODES,
-    MYROOM_AVATAR_CODE, MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_SLOT_FIRST_CODE,
-    O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949, SHOP_AVATAR_CODE,
-    SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE, SHOP_CART_ITEMNAME_CODE,
-    SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE,
-    SHOP_ITEMCOMMENT_CODE, SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS,
-    SHOP_MGASH_CODE,
+    GEM_LABEL, INFORMATION_MESSAGE_CODE, LANKING_LVIEW_TEXT_CODES, LANKING_MUSICNAME_CODE,
+    LANKING_RVIEW_TEXT_CODES, MSHOP_CART_ITEMNAME_CODE, MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS,
+    MSHOP_ROW_TEXT_CODES, MYROOM_AVATAR_CODE, MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE,
+    MYROOM_SLOT_FIRST_CODE, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949,
+    RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE, SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE,
+    SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS,
+    SHOP_GEMMONEY_CODE, SHOP_ITEMCOMMENT_CODE, SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMWON_FIRST_CODE,
+    SHOP_ITEM_ROWS, SHOP_MGASH_CODE,
 };
 use o2jam_file::ControlList;
 use o2jam_game::RoomTeams;
@@ -2122,6 +2122,22 @@ pub(crate) fn dialog_rect_hit(placements: &[ScenePlacement], code: u32, x: i32, 
         })
 }
 
+/// Archive-less fallback for the one-OK information sheet: the
+/// `Dialog_Information.bnd` back origin (241,206) plus its OK rect
+/// (102,150,117,26), the geometry the exe paints and the qualified
+/// capture shows (`docs/bnd-semantics.md:41`, #244). Used only when
+/// the Interface archive is absent; staged boots read the `.bnd`
+/// placement directly.
+#[must_use]
+pub(crate) fn information_ok_fallback_rect() -> Rect {
+    Rect {
+        x: 343,
+        y: 356,
+        w: 117,
+        h: 26,
+    }
+}
+
 /// Frame-centered quit-fallback boxes (native 800x600 space): used
 /// only while no dialog art is staged, so the popup still shows
 /// and clicks without archives. Returns (message, OK, CANCEL)
@@ -2196,6 +2212,50 @@ pub fn paint_planet_quit(frame: &mut Frame<'_>, art: Option<&SceneArt>) {
         fill_rect(frame, &scaled, CHANNEL_ENTER_TONE);
         draw_text(frame, scaled.x + 8, scaled.y + 8, word, art_title_ink());
     }
+}
+
+/// Relay-unavailable message box over the planet board: the staged
+/// `Dialog_Information` sheet with the exe string in its TEXT rect,
+/// or the same frame-centred fallback plate the other one-button
+/// notices use. Geometry comes from `Dialog_Information.bnd`
+/// rects when art is staged (code-ordinal pairing,
+/// `docs/bnd-semantics.md:41`); the fallback is only the
+/// archive-less stand-in. There is exactly one `OK` (#244 capture).
+pub fn paint_relay_down_dialog(frame: &mut Frame<'_>, art: Option<&SceneArt>) {
+    if let Some(art) = art.filter(|art| art.has_figures()) {
+        paint_dialog_scene(frame, art);
+        let origin = dialog_origin(&art.placements);
+        for placement in &art.placements {
+            if placement.code == INFORMATION_MESSAGE_CODE {
+                paint_cp949_into_rect(
+                    frame,
+                    Rect {
+                        x: placement.rect.x + origin.0,
+                        y: placement.rect.y + origin.1,
+                        w: placement.rect.w,
+                        h: placement.rect.h,
+                    },
+                    RELAY_DOWN_MESSAGE_CP949,
+                );
+            }
+        }
+        return;
+    }
+    fill_rect(
+        frame,
+        &Rect {
+            x: 0,
+            y: 0,
+            w: frame.w as u32,
+            h: frame.h as u32,
+        },
+        scrim_color(),
+    );
+    let (message, _, _) = quit_fallback_rects();
+    paint_cp949_into_rect(frame, message, RELAY_DOWN_MESSAGE_CP949);
+    let scaled = scale_rect_to_frame(&information_ok_fallback_rect(), frame.w, frame.h);
+    fill_rect(frame, &scaled, CHANNEL_ENTER_TONE);
+    draw_text(frame, scaled.x + 8, scaled.y + 8, "OK", art_title_ink());
 }
 
 /// Options dialog over the bare board: the staged

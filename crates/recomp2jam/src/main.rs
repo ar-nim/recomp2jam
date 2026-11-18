@@ -19,6 +19,7 @@ mod live_guard;
 mod live_stats;
 mod loading;
 mod menu_trace_replay;
+mod relay_gate;
 mod session;
 mod session_walk;
 mod shots;
@@ -531,6 +532,7 @@ fn run_online(opts: OnlineCli) -> Result<()> {
     let mut game = o2jam_shell::ScreenGame::new();
     game.load_options(&install_root());
     setup_splash(&mut game, &opts.interface)?;
+    live_art::stage_relay_down_from_install(&mut game);
     let connect_options = connect::ConnectOptions {
         host: opts.host.clone(),
         port: opts.port,
@@ -552,11 +554,15 @@ fn run_online(opts: OnlineCli) -> Result<()> {
     };
     let owned_ids = owned_music_ids();
     tracing::info!(ids = owned_ids.len(), "room-stage music ids staged");
+    // Probe before any channel-list exchange: the exe's relay check
+    // sits on the reconnect that precedes `03EA` (files `0x8e340`/
+    // `0x474630`, capture `~/scratch/p244-capture`).
+    let relay_down = relay_gate::relay_down_now();
     let (report, gateway) =
         connect::connect_and_login_with_room_stage(&connect_options, &owned_ids)?;
     tracing::info!(channels = report.channels.len(), "channels listed");
     stage_online_identity(&mut game, report.character.as_ref());
-    game.set_channels(report.channels);
+    stage_channel_list_after_relay_gate(&mut game, report.channels, relay_down);
     if !report.rooms.is_empty() {
         tracing::info!(rooms = report.rooms.len(), "rooms listed");
         game.set_rooms(report.rooms);
@@ -1036,6 +1042,7 @@ fn run_play(opts: PlayOptions) -> Result<()> {
         let mut game = o2jam_shell::ScreenGame::new();
         game.load_options(&install_root());
         setup_splash(&mut game, &opts.interface)?;
+        live_art::stage_relay_down_from_install(&mut game);
         let gateway = setup_online(
             &mut game,
             opts.online,
@@ -1329,6 +1336,26 @@ type OnlineTransport = (
     Option<session::SongChoice>,
 );
 
+/// One boundary for the relay-down channel-list gate (#244).
+///
+/// Live callers: `run_online` and `run_play --online` call
+/// [`relay_gate::relay_down_now`] on the boot path, connect and
+/// fetch the rows, then hand them here. Down: the one-OK notice
+/// holds the rows until its button (or Back) dismisses it. Up:
+/// the existing `set_channels` path is untouched. Scenario tests
+/// in `live_boot_gate` call this same function with both arms.
+fn stage_channel_list_after_relay_gate(
+    game: &mut o2jam_shell::ScreenGame,
+    channels: Vec<o2jam_net::ChannelState>,
+    relay_down: bool,
+) {
+    if relay_down {
+        game.open_relay_down_dialog(channels);
+    } else {
+        game.set_channels(channels);
+    }
+}
+
 /// Authenticate and list channels/rooms into a windowed game.
 ///
 /// Returns the live gateway plus the Room Confirm join intent when
@@ -1373,10 +1400,11 @@ fn setup_online(
     let pending_room = params.pending_room_join();
     let pending_song = params.pending_song_choice();
     let options = params.into_connect_options();
+    let relay_down = relay_gate::relay_down_now();
     let (report, gateway) = connect::connect_and_login_with_transport(&options)?;
     tracing::info!(channels = report.channels.len(), "channels listed");
     stage_online_identity(game, report.character.as_ref());
-    game.set_channels(report.channels);
+    stage_channel_list_after_relay_gate(game, report.channels, relay_down);
     if !report.rooms.is_empty() {
         tracing::info!(rooms = report.rooms.len(), "rooms listed");
         game.set_rooms(report.rooms);

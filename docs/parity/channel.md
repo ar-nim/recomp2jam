@@ -86,3 +86,52 @@ flank promo art and the footer strip are server-vintage/capture-scenario
 deltas, not pinned painter faults. The full per-region metrics are local-only
 (`~/scratch/blit-pass/pack/region-metrics.json` SHA-256
 `dbc8401d69a973a221f1fd5be1877094a8cccafd258688de411035741aaeff5b`).
+
+## Ticket #244 — one-OK notice before the channel list (2026-11-18)
+
+Qualified exe oracle: `~/scratch/p244-capture` (local, git-ignored),
+one Wine boot on private display `:249`, owned null sink
+(`route=sink`, 0.0 dBFS), `rig-wine-run.sh` checks
+`manifest: PASS`, `audio: PASS`, `cite: PASS`, `status PASS`.
+`citation.txt` pins manifest SHA-256
+`e211cc6e8016f7e7048276e3f2fa247744efbaeca6f766a36130a1984e535b20`,
+exe 7.55 SHA-256
+`83a045418b6219ba340681766b33de2bfbb5ff51b813ef4e2e9dd1def72c823b`
+(5,029,888 B), and the blue one-OK frame
+`artifacts/screenshots/message-box.png` SHA-256
+`baf781b8caa6823b60047901e5a135d3ab77cb7fc60a7031fda02d90e408c1bf`
+(157,603 B). `drive.log:10-16`: popup captured 15:15:21, OK click at
+`(400,365)`, popup gone, then channel frame with `server:03EA` at
+15:15:27. The message is the CP949 string at exe file `0x244d98`
+(VA `0x644d98`), three lines meaning "network problem; NORMAL mode
+only; LIVE BATTLE unavailable"; its channel/planet emitters are
+files `0x474eca` / `0x8e340` (parent queue helper VA `0x478c90`,
+one-OK information sheet). The geometry is `Dialog_Information.bnd`
+rect 0 `(241,206)-(559,393)` and rect 1 `(102,150,117,26)` under the
+code-ordinal pairing (`docs/bnd-semantics.md:41`); ControlList codes
+`0X21200002` (OK) and `0X21400003` (TEXT) come from
+`ControlList_Interface.txt`'s `DIALOG_INFORMATION` block.
+
+Contradiction kept, not silently resolved: a second exe string at
+file `0x2471e8` literally says "no response from RELAY server", but
+its only two handlers (files `0x74796`/`0x8e340`) test the shared
+reconnect helper at VA `0x58c6c0`, whose body returns 1 on every
+path. That branch is dead in 7.55; the observable dialog is the
+NORMAL-mode string above.
+
+Shell: `relay_gate` probes the pinned relay hosts/ports before the
+channel exchange; `stage_channel_list_after_relay_gate` either holds
+the fetched rows behind `ScreenGame::open_relay_down_dialog` or
+keeps the original `set_channels` path. OK (or Back) dismisses and
+opens Channel with the rows. Live caller chain: `run_online` /
+`run_play --online` → `relay_gate::relay_down_now` → connect →
+`stage_channel_list_after_relay_gate` → `ScreenGame::open_relay_down_dialog`
+→ `paint_planet_modal` → `paint_relay_down_dialog` → OK →
+`dismiss_relay_down_dialog` → `paint_channel`. Guards:
+`relay_down_dialog_holds_the_channel_list_until_ok_is_pressed`,
+`relay_down_boot_holds_channel_rows_behind_the_notice`,
+`relay_up_boot_keeps_the_existing_channel_path`,
+`relay_down_sheet_stages_from_the_installed_information_block`,
+`information_dialog_stages_the_one_ok_sheet`,
+`relay_up_when_a_pinned_style_endpoint_answers`,
+`relay_down_when_every_pinned_style_endpoint_refuses`.

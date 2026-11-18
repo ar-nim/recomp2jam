@@ -24,22 +24,23 @@ use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
     battle_verdict, channel_dialog_x_hit, channel_face_hit, channel_row_hit, channel_scroll_hit,
-    channel_viewport_from_top, dialog_origin, dialog_rect_hit, has_room_panels, list_row_hit,
-    paint_avi_scene, paint_channel_chat, paint_channel_list, paint_channel_scene,
-    paint_dialog_scene, paint_lanking_board, paint_lanking_scene, paint_loading_scene,
-    paint_loading_scene_with_status, paint_lobby_backdrop, paint_lobby_backdrop_live,
-    paint_music_shop_board, paint_music_shop_cart, paint_myroom_data, paint_myroom_figure,
-    paint_myroom_scene, paint_payment_notice, paint_planet_options, paint_planet_quit,
-    paint_planet_scene, paint_playing_backdrop, paint_playing_foreground, paint_result,
-    paint_result_scene, paint_room_chat, paint_room_hover, paint_room_list, paint_room_scene,
-    paint_room_user_panel, paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board,
-    paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
-    paint_waiting_scene, paint_waiting_seat_avatar, paint_waiting_seat_avatars,
-    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
-    scene_index, staged_rect_hit, waiting_confirm_control_id, BattleVerdict, ChannelChatMessage,
-    ChannelScroll, LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt,
-    WaitingCaptions, WaitingChatMessage, WaitingLevel, WaitingSong, CHANNEL_VISIBLE_ROWS,
-    RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    channel_viewport_from_top, dialog_origin, dialog_rect_hit, has_room_panels,
+    information_ok_fallback_rect, list_row_hit, paint_avi_scene, paint_channel_chat,
+    paint_channel_list, paint_channel_scene, paint_dialog_scene, paint_lanking_board,
+    paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
+    paint_lobby_backdrop, paint_lobby_backdrop_live, paint_music_shop_board, paint_music_shop_cart,
+    paint_myroom_data, paint_myroom_figure, paint_myroom_scene, paint_payment_notice,
+    paint_planet_options, paint_planet_quit, paint_planet_scene, paint_playing_backdrop,
+    paint_playing_foreground, paint_relay_down_dialog, paint_result, paint_result_scene,
+    paint_room_chat, paint_room_hover, paint_room_list, paint_room_scene, paint_room_user_panel,
+    paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board, paint_shop_preview,
+    paint_shop_scene, paint_waiting_chat, paint_waiting_members, paint_waiting_scene,
+    paint_waiting_seat_avatar, paint_waiting_seat_avatars, playing_backdrop_staged,
+    quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit, scene_index,
+    staged_rect_hit, waiting_confirm_control_id, BattleVerdict, ChannelChatMessage, ChannelScroll,
+    LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions,
+    WaitingChatMessage, WaitingLevel, WaitingSong, CHANNEL_VISIBLE_ROWS, RESULT_BACK_ID,
+    RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::select_paint::{paint_select_text, SelectTextSlots};
 use super::side::{
@@ -53,8 +54,8 @@ use super::side::{
     CreateRoomForm, LankingSong, LankingSort, MusicShopRow, MyRoomAction, MyRoomState,
     PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog,
     SelectMusicFilter, SelectMusicRow, SelectMusicSong, ShopAction, ShopGiftNoop, ShopGood,
-    SideScreen, WalletRow, WalletState, GEM_LABEL, O2_CASH_LABEL, OPTION_GAME_BLEND_NO,
-    OPTION_GAME_BLEND_YES, OPTION_GAME_EFFECT_HIGH, OPTION_GAME_EFFECT_LOW,
+    SideScreen, WalletRow, WalletState, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL,
+    OPTION_GAME_BLEND_NO, OPTION_GAME_BLEND_YES, OPTION_GAME_EFFECT_HIGH, OPTION_GAME_EFFECT_LOW,
     OPTION_GAME_EFFECT_NORMAL, OPTION_GAME_GUIDE_LONG, OPTION_GAME_GUIDE_MIDDLE,
     OPTION_GAME_GUIDE_NOUSE, OPTION_GAME_GUIDE_SHORT, OPTION_GAME_LONGNOTE_NONE,
     OPTION_GAME_LONGNOTE_USED, OPTION_GAME_MODE_FULL, OPTION_GAME_MODE_WIN, OPTION_GAME_NOTETYPE1,
@@ -390,6 +391,9 @@ pub enum PlanetModal {
     /// Options dialog (`Dialog_Option_*` sheet): the tab's EXIT
     /// button or Escape closes it; tab switching stays OPEN.
     Options,
+    /// Relay-unavailable notice (`Dialog_Information`, one OK):
+    /// OK reveals the staged Channel dialog (#244).
+    RelayDown,
 }
 
 /// Native click canvas width (the shell maps window pixels into
@@ -605,6 +609,9 @@ pub struct ScreenGame {
     audio: Option<AudioRig>,
     avatar: Option<AvatarFigure>,
     channels: Vec<ChannelState>,
+    /// Channel rows held behind the relay-unavailable notice until
+    /// its OK is pressed (#244). Empty except while that modal is up.
+    relay_down_pending_channels: Vec<ChannelState>,
     highlight: usize,
     /// Channel list-top offset (the scrolled origin): the
     /// `CDChannelInfo+0x184` analog. The scroll arrows step this
@@ -712,6 +719,9 @@ pub struct ScreenGame {
     /// plus figures; `None` until staged, the fallback popup then
     /// paints instead).
     planet_quit_art: Option<SceneArt>,
+    /// Staged one-OK information sheet for the relay-unavailable
+    /// notice (`Dialog_Information.bnd`, #244).
+    relay_down_art: Option<SceneArt>,
     /// Staged select-music catalog (`OJNList.dat` order, owned copies;
     /// see [`Self::set_song_catalog`]).
     catalog_songs: Vec<SelectMusicSong>,
@@ -1144,6 +1154,8 @@ impl ScreenGame {
             option_rebind: None,
             play_longnote: None,
             planet_quit_art: None,
+            relay_down_art: None,
+            relay_down_pending_channels: Vec::new(),
             catalog_songs: Vec::new(),
             catalog_bpm: HashMap::new(),
             catalog_chart_files: HashMap::new(),
@@ -1502,6 +1514,14 @@ impl ScreenGame {
         self.flow.current()
     }
 
+    /// Channel rows currently loaded for the Channel dialog. Read-only
+    /// query for the boot-chain guards (#244): empty while the
+    /// relay-down notice holds them pending.
+    #[must_use]
+    pub fn channel_rows(&self) -> &[ChannelState] {
+        &self.channels
+    }
+
     /// Channels from the last online list (empty offline). Refreshing
     /// the list clears the channel chat history: rows come from that
     /// list's 2013/2014/2016/2019/2029 packets only, never carried
@@ -1516,6 +1536,51 @@ impl ScreenGame {
         self.channel_drag = false;
         self.channel_chat = LobbyChatPanel::default();
         self
+    }
+
+    /// Stage the relay-unavailable notice before the Channel dialog
+    /// loads (#244). The fetched rows stay pending behind the modal,
+    /// so no list paint or row input can reach them until OK. The
+    /// exe posts the message from its channel/planet reconnect
+    /// failure (file `0x474eca`/`0x8e340`) before the `03EA` frame;
+    /// the qualified capture is `~/scratch/p244-capture`.
+    pub fn open_relay_down_dialog(&mut self, channels: Vec<ChannelState>) -> &mut Self {
+        if self.flow.current() == Screen::Avi {
+            self.enter(Screen::Planet);
+        }
+        self.channels.clear();
+        self.relay_down_pending_channels = channels;
+        self.planet_board.open_modal(PlanetModal::RelayDown);
+        self
+    }
+
+    /// True while the relay-unavailable notice owns input (#244).
+    #[must_use]
+    pub fn relay_down_dialog_open(&self) -> bool {
+        self.planet_modal() == Some(PlanetModal::RelayDown)
+    }
+
+    /// True after the one-OK information sheet stages from the
+    /// `DIALOG_INFORMATION` block (archive-less boots stay false).
+    #[must_use]
+    pub fn relay_down_art_staged(&self) -> bool {
+        self.relay_down_art
+            .as_ref()
+            .is_some_and(SceneArt::has_figures)
+    }
+
+    /// OK (or Back) on the relay notice: reveal the held rows and
+    /// open the Channel dialog, the exe's post-dialog state (#244).
+    /// Returns `false` when no notice was open.
+    pub fn dismiss_relay_down_dialog(&mut self) -> bool {
+        if self.planet_modal() != Some(PlanetModal::RelayDown) {
+            return false;
+        }
+        self.planet_board.close_modal();
+        let channels = std::mem::take(&mut self.relay_down_pending_channels);
+        self.set_channels(channels);
+        self.enter(Screen::Channel);
+        true
     }
 
     /// Rooms from the last online list (empty offline). Free slots are
@@ -4338,6 +4403,21 @@ impl ScreenGame {
         self
     }
 
+    /// Stage the one-OK information sheet (`Dialog_Information.bnd`
+    /// placements plus figures) for the relay-down notice. Staging
+    /// never opens the modal (#244).
+    pub fn load_relay_down_scene(
+        &mut self,
+        placements: Vec<ScenePlacement>,
+        figures: HashMap<String, AvatarFigure>,
+    ) -> &mut Self {
+        self.relay_down_art = Some(SceneArt {
+            placements,
+            figures,
+        });
+        self
+    }
+
     /// Modal click: the quit popup's OK/CANCEL (staged dialog
     /// rects when art is staged, the fallback boxes otherwise) or
     /// the options dialog's staged buttons (EXIT closes without
@@ -4360,6 +4440,10 @@ impl ScreenGame {
             Some(PlanetModal::Options) => {
                 self.click_options_dialog(x, y);
             }
+            Some(PlanetModal::RelayDown) if self.relay_ok_hit(x, y) => {
+                self.dismiss_relay_down_dialog();
+            }
+            Some(PlanetModal::RelayDown) => {}
             None => {}
         }
     }
@@ -4530,6 +4614,18 @@ impl ScreenGame {
         } else {
             let (_, ok, cancel) = quit_fallback_rects();
             (rect_hit(&ok, x, y), rect_hit(&cancel, x, y))
+        }
+    }
+
+    /// Relay notice OK hit: the staged `0X21200002` button rect when
+    /// the sheet is staged, else the same fallback plate the other
+    /// one-button notices use (no invented staged geometry).
+    fn relay_ok_hit(&self, x: i32, y: i32) -> bool {
+        let staged = self.relay_down_art.as_ref().filter(|art| art.has_figures());
+        if let Some(art) = staged {
+            dialog_rect_hit(&art.placements, INFORMATION_OK_CODE, x, y)
+        } else {
+            rect_hit(&information_ok_fallback_rect(), x, y)
         }
     }
 
@@ -5839,6 +5935,9 @@ impl ScreenGame {
                     self.planet_option_tab,
                 );
             }
+            Some(PlanetModal::RelayDown) => {
+                paint_relay_down_dialog(frame, self.relay_down_art.as_ref());
+            }
             None => {}
         }
     }
@@ -6423,8 +6522,12 @@ impl GameLoop for ScreenGame {
             // (Escape closes the options dialog, live-pinned).
             // Confirm stays inert so the quit needs the explicit OK.
             if key == MenuKey::Back {
-                self.planet_board.close_modal();
-                self.option_rebind = None;
+                if self.planet_modal() == Some(PlanetModal::RelayDown) {
+                    self.dismiss_relay_down_dialog();
+                } else {
+                    self.planet_board.close_modal();
+                    self.option_rebind = None;
+                }
             }
             return;
         }
@@ -20627,5 +20730,37 @@ mod game_tests {
             None,
             "switching tabs disarms the pending rebind"
         );
+    }
+
+    /// Ticket #244, live caller chain: `run_online` -> `setup_online`
+    /// -> `connect::connect_and_login_with_room_stage` ->
+    /// `stage_online_identity` -> `ScreenGame::open_relay_down_dialog`
+    /// -> `paint_planet` -> `paint_planet_modal` -> `InputSnapshot`
+    /// OK at the `.bnd` button rect -> `dismiss_relay_down_dialog`
+    /// -> `set_channels` -> `paint_channel`. The exe's qualified
+    /// capture (`~/scratch/p244-capture`, manifest sha256
+    /// `e211cc6e…`, popup `baf781b8…`) pins the blue one-OK box
+    /// before the `03EA` channel frame and the Channel dialog as
+    /// the post-dialog state.
+    #[test]
+    fn relay_down_dialog_holds_the_channel_list_until_ok_is_pressed() {
+        let mut game = ScreenGame::new();
+        let channels = vec![ChannelState {
+            gateway_id: 1,
+            channel_id: 2,
+            capacity: 10,
+            population: 3,
+            active: true,
+        }];
+        game.open_relay_down_dialog(channels.clone());
+        assert_eq!(game.planet_modal(), Some(PlanetModal::RelayDown));
+        assert!(
+            game.channels.is_empty(),
+            "the dialog owns input before the channel list loads"
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(400, 365));
+        assert_eq!(game.planet_modal(), None, "OK dismisses the dialog");
+        assert_eq!(game.channels, channels, "OK reveals the staged list");
+        assert_eq!(game.screen(), Screen::Channel, "exe's post-dialog state");
     }
 }

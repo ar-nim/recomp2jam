@@ -574,4 +574,60 @@ mod live_boot_gate_tests {
         );
         server.join().unwrap();
     }
+
+    /// Ticket #244, live caller chain: `run_online` ->
+    /// `relay_gate::relay_down_now` ->
+    /// `stage_channel_list_after_relay_gate` ->
+    /// `ScreenGame::open_relay_down_dialog` -> `paint_planet_modal`.
+    /// The exe's qualified pack (`~/scratch/p244-capture`, popup
+    /// sha256 `baf781b8…`) pins the one-OK box before the `03EA`
+    /// channel frame. This arm holds the rows behind the notice.
+    #[test]
+    fn relay_down_boot_holds_channel_rows_behind_the_notice() {
+        let channels = vec![o2jam_net::ChannelState {
+            gateway_id: 1,
+            channel_id: 2,
+            capacity: 10,
+            population: 1,
+            active: true,
+        }];
+        let mut game = o2jam_shell::ScreenGame::new();
+        crate::stage_channel_list_after_relay_gate(&mut game, channels, true);
+        assert!(game.relay_down_dialog_open());
+        assert!(game.channel_rows().is_empty());
+    }
+
+    /// Same boot chain, relay-up arm: no notice, the existing
+    /// `set_channels` path still loads the rows immediately.
+    #[test]
+    fn relay_up_boot_keeps_the_existing_channel_path() {
+        let channels = vec![o2jam_net::ChannelState {
+            gateway_id: 1,
+            channel_id: 2,
+            capacity: 10,
+            population: 1,
+            active: true,
+        }];
+        let mut game = o2jam_shell::ScreenGame::new();
+        crate::stage_channel_list_after_relay_gate(&mut game, channels.clone(), false);
+        assert!(!game.relay_down_dialog_open());
+        assert_eq!(game.channel_rows(), channels);
+    }
+
+    /// The information sheet comes from `Dialog_Information.bnd`
+    /// via the same declaration the live boot stages; skip cleanly
+    /// in CI without archives (#0a3ba).
+    #[test]
+    fn relay_down_sheet_stages_from_the_installed_information_block() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let archive = o2jam_shell::staging::read_install_archives(&install_root())
+            .interface
+            .expect("interface archive present");
+        let mut game = o2jam_shell::ScreenGame::new();
+        crate::live_art::stage_relay_down_sheet(&mut game, &archive);
+        assert!(game.relay_down_art_staged());
+    }
 }

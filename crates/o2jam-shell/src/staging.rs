@@ -20,8 +20,8 @@ use crate::avatar::{
 use crate::screen::Screen;
 use crate::screens::side::{
     PlanetOptionTab, SideScreen, CHANNEL_INFO_DIALOG_BLOCK, CREATE_ROOM_DIALOG_BLOCK,
-    PASSWORD_DIALOG_BLOCK, PLANET_OPTION_FIRST_TAB, QUIT_DIALOG_BLOCK, SELECT_MUSIC_DIALOG_BLOCK,
-    TUTORIAL_BACKGROUND_SPRITE,
+    INFORMATION_DIALOG_BLOCK, PASSWORD_DIALOG_BLOCK, PLANET_OPTION_FIRST_TAB, QUIT_DIALOG_BLOCK,
+    SELECT_MUSIC_DIALOG_BLOCK, TUTORIAL_BACKGROUND_SPRITE,
 };
 
 /// State value keyed by its `STATE_*` Block name.
@@ -284,6 +284,9 @@ pub enum Dialog {
     PlanetOptionGame,
     /// Quit confirm (`DIALOG_QUESTION1`) over Planet.
     PlanetQuit,
+    /// Relay-unavailable notice (`DIALOG_INFORMATION`, one OK) over
+    /// Planet, before the Channel dialog loads (#244).
+    Information,
     /// Room create sheet (`DIALOG_CREATEROOM`) over Room: declared
     /// and tested only, no caller stages it yet.
     CreateRoom,
@@ -303,6 +306,7 @@ impl Dialog {
             Dialog::PlanetOptionSound => PlanetOptionTab::Sound.block_name(),
             Dialog::PlanetOptionGame => PlanetOptionTab::Game.block_name(),
             Dialog::PlanetQuit => QUIT_DIALOG_BLOCK,
+            Dialog::Information => INFORMATION_DIALOG_BLOCK,
             Dialog::CreateRoom => CREATE_ROOM_DIALOG_BLOCK,
             Dialog::InputPassword => PASSWORD_DIALOG_BLOCK,
         }
@@ -320,6 +324,7 @@ impl Dialog {
             | Dialog::PlanetOptionSound
             | Dialog::PlanetOptionGame
             | Dialog::PlanetQuit
+            | Dialog::Information
             | Dialog::CreateRoom
             | Dialog::InputPassword => &[],
         }
@@ -334,7 +339,8 @@ impl Dialog {
             | Dialog::PlanetOption
             | Dialog::PlanetOptionSound
             | Dialog::PlanetOptionGame
-            | Dialog::PlanetQuit => State::Planet,
+            | Dialog::PlanetQuit
+            | Dialog::Information => State::Planet,
             Dialog::CreateRoom | Dialog::InputPassword => State::Room,
         }
     }
@@ -398,6 +404,11 @@ pub const DIALOG_TABLE: &[DialogRow] = &[
         dialog: Dialog::PlanetQuit,
         host: State::Planet,
         block: QUIT_DIALOG_BLOCK,
+    },
+    DialogRow {
+        dialog: Dialog::Information,
+        host: State::Planet,
+        block: INFORMATION_DIALOG_BLOCK,
     },
     DialogRow {
         dialog: Dialog::CreateRoom,

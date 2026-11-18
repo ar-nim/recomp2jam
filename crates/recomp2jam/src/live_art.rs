@@ -100,7 +100,30 @@ pub(crate) fn stage_planet_dialogs(game: &mut ScreenGame, archive: &[u8]) {
     if let Some(art) = stage_dialog(archive, Dialog::PlanetQuit, ctx).art {
         game.load_planet_quit_scene(art.placements, art.figures);
     }
+    stage_relay_down_sheet(game, archive);
     stage_room_dialogs(game, archive);
+}
+
+/// Stage the one-OK `Dialog_Information` sheet the relay-down notice
+/// paints (#244). `stage_planet_dialogs` loads it on every live
+/// boot that stages art; `stage_relay_down_sheet` is the pre-connect
+/// entry the boot gate calls so the popup has real `.bnd` geometry
+/// before any channel list is shown. Missing archive leaves the
+/// fallback plate, never an invented placement.
+pub(crate) fn stage_relay_down_sheet(game: &mut ScreenGame, archive: &[u8]) {
+    if let Some(art) = stage_dialog(archive, Dialog::Information, StageContext::default()).art {
+        game.load_relay_down_scene(art.placements, art.figures);
+    }
+}
+
+/// Read the installed Interface archive and stage the relay sheet
+/// from it. Used by the windowed boot entries before they connect,
+/// so the notice is paintable at the moment the gate opens it.
+pub(crate) fn stage_relay_down_from_install(game: &mut ScreenGame) {
+    let Some(archive) = read_install_archives(&install_root()).interface else {
+        return;
+    };
+    stage_relay_down_sheet(game, &archive);
 }
 
 /// Stage the room-lobby dialog sheets (ticket #53): `DIALOG_CREATEROOM`

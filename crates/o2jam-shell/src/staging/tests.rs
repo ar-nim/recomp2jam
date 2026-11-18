@@ -1083,7 +1083,7 @@ fn scrollbar_params_never_warn() {
 }
 #[test]
 fn dialog_rows_name_host_state_and_block() {
-    assert_eq!(DIALOG_TABLE.len(), 8);
+    assert_eq!(DIALOG_TABLE.len(), 9);
     for row in DIALOG_TABLE {
         assert_eq!(row.block, row.dialog.block_name());
         assert_eq!(row.host, row.dialog.host());
@@ -1230,6 +1230,30 @@ fn planet_sheets_stage_over_planet() {
         .expect("quit sheet stages");
     assert!(option_art.figures.contains_key("Dialog_Option_Key.ojs"));
     assert!(quit_art.figures.contains_key("Dialog_Question1.ojs"));
+}
+
+/// Ticket #244: the relay-down notice uses the same declaration as
+/// every other popup. `DIALOG_INFORMATION` is a named block over
+/// Planet, and its `Info_OK.ojs` body stages with the sheet.
+#[test]
+fn information_dialog_stages_the_one_ok_sheet() {
+    assert_eq!(Dialog::Information.block_name(), "DIALOG_INFORMATION");
+    assert_eq!(Dialog::Information.host(), State::Planet);
+    assert_eq!(
+        Dialog::from_block("DIALOG_INFORMATION"),
+        Some(Dialog::Information)
+    );
+    let archive = dialog_archive(
+        "DIALOG_INFORMATION",
+        "Dialog_Information.bnd",
+        &["Dialog_Information.ojs", "Info_OK.ojs"],
+        &[],
+    );
+    let art = stage_dialog(&archive, Dialog::Information, StageContext::default())
+        .art
+        .expect("information sheet stages with synthetic bytes");
+    assert!(art.figures.contains_key("Dialog_Information.ojs"));
+    assert!(art.figures.contains_key("Info_OK.ojs"));
 }
 
 #[test]
