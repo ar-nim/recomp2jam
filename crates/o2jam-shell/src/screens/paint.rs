@@ -48,11 +48,11 @@ use super::side::{
     CASH_CHARGE_WEB_CODE, GEM_LABEL, INFORMATION_MESSAGE_CODE, LANKING_LVIEW_TEXT_CODES,
     LANKING_MUSICNAME_CODE, LANKING_RVIEW_TEXT_CODES, MSHOP_CART_ITEMNAME_CODE,
     MSHOP_CART_NUM_CODE, MSHOP_CART_ROWS, MSHOP_ROW_TEXT_CODES, MYROOM_AVATAR_CODE,
-    MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_SLOT_FIRST_CODE, O2_CASH_LABEL,
-    PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949, RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE,
-    SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE, SHOP_CART_ITEMNAME_CODE,
-    SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS, SHOP_GEMMONEY_CODE,
-    SHOP_ITEMCOMMENT_CODE, SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE,
+    MYROOM_BAG_FIRST_CODE, MYROOM_GIFT_FIRST_CODE, MYROOM_SLOT_FIRST_CODE,
+    NO_RESPONSE_MESSAGE_CP949, O2_CASH_LABEL, PLANET_PROMO_IMAGE_CODE, QUIT_MESSAGE_CP949,
+    RELAY_DOWN_MESSAGE_CP949, SHOP_AVATAR_CODE, SHOP_CART_CHECKGEM_CODE, SHOP_CART_CHECKMONEY_CODE,
+    SHOP_CART_ITEMNAME_CODE, SHOP_CART_NUM_CODE, SHOP_CART_PRICE_CODE, SHOP_CART_ROWS,
+    SHOP_GEMMONEY_CODE, SHOP_ITEMCOMMENT_CODE, SHOP_ITEMNAME_FIRST_CODE, SHOP_ITEMSHOW_FIRST_CODE,
     SHOP_ITEMWON_FIRST_CODE, SHOP_ITEM_ROWS, SHOP_MGASH_CODE,
 };
 use o2jam_file::ControlList;
@@ -2318,6 +2318,19 @@ pub fn paint_planet_quit(frame: &mut Frame<'_>, art: Option<&SceneArt>) {
 /// `docs/bnd-semantics.md:41`); the fallback is only the
 /// archive-less stand-in. There is exactly one `OK` (#244 capture).
 pub fn paint_relay_down_dialog(frame: &mut Frame<'_>, art: Option<&SceneArt>) {
+    paint_information_sheet(frame, art, RELAY_DOWN_MESSAGE_CP949);
+}
+
+/// Room-state no-response sheet (#367): the very same staged
+/// Information block, with the exe's generic fuse string in TEXT
+/// `0x21400003`. Geometry still comes only from the parsed `.bnd`
+/// rects (owner rule `f38f3`); the fallback is archive-less only.
+pub fn paint_room_no_response_dialog(frame: &mut Frame<'_>, art: Option<&SceneArt>) {
+    paint_information_sheet(frame, art, NO_RESPONSE_MESSAGE_CP949);
+}
+
+/// One-OK sheet painter shared by the relay notice and Room fuse.
+fn paint_information_sheet(frame: &mut Frame<'_>, art: Option<&SceneArt>, message: &[u8]) {
     if let Some(art) = art.filter(|art| art.has_figures()) {
         paint_dialog_scene(frame, art);
         let origin = dialog_origin(&art.placements);
@@ -2331,7 +2344,7 @@ pub fn paint_relay_down_dialog(frame: &mut Frame<'_>, art: Option<&SceneArt>) {
                         w: placement.rect.w,
                         h: placement.rect.h,
                     },
-                    RELAY_DOWN_MESSAGE_CP949,
+                    message,
                 );
             }
         }
@@ -2347,8 +2360,8 @@ pub fn paint_relay_down_dialog(frame: &mut Frame<'_>, art: Option<&SceneArt>) {
         },
         scrim_color(),
     );
-    let (message, _, _) = quit_fallback_rects();
-    paint_cp949_into_rect(frame, message, RELAY_DOWN_MESSAGE_CP949);
+    let (text, _, _) = quit_fallback_rects();
+    paint_cp949_into_rect(frame, text, message);
     let scaled = scale_rect_to_frame(&information_ok_fallback_rect(), frame.w, frame.h);
     fill_rect(frame, &scaled, CHANNEL_ENTER_TONE);
     draw_text(frame, scaled.x + 8, scaled.y + 8, "OK", art_title_ink());

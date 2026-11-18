@@ -1413,6 +1413,9 @@ fn stage_channel_list_after_relay_gate(
     channels: Vec<o2jam_net::ChannelState>,
     relay_down: bool,
 ) {
+    // #367: carry the same boot observation into Room state. This
+    // enables our 07DA/07DB fuse; it never opens a dialog by itself.
+    game.set_room_no_response_relay_down(relay_down);
     if relay_down {
         game.hold_channel_rows_for_relay_notice(channels);
     } else {

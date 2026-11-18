@@ -27,7 +27,7 @@ re-generated here.
 
 | Task | Status | Answer |
 |---|---|---|
-| 1. Arming request / node creation | **PARTIAL — arming request OPEN** | Node creation and every room-entry tracked send are pinned; no room-list idle request arms a surviving node. `07DA` and `07E8` are both untracked. |
+| 1. Arming request / node creation | **SUPERSEDED BY LIVE READ** | Static scan missed the 07DA tracked-send site. Stopped-state winedbg (live-367b, issue comment 5) found the sole pending node expecting `07DB`; the exe arms on its own `07DA` GetUserList poll. See §3 correction below. |
 | 2. Paint resource + OK | **MET (static)** | One-OK `Dialog_Information` sheet, TEXT code `0x21400003`, OK code `0x21200002`; OK closes the top dialog via queue type 100. Static OK path sends no packet. |
 | 3. +37–44 s vs 20 s watchdog | **PARTIAL** | 20,000 ms is a wall-clock threshold; ~35.785 s is the OS relay connect, not an exe timer literal. The modal needs an armed node that this leg could not name. |
 
@@ -102,13 +102,19 @@ not wire "OK ⇒ FFF0" from this pin alone.
 - third argument nonzero: duplicate-send path checks/refreshes an existing node
   (files `0x15628d`–`0x156416`).
 
-Room-list poll requests are explicitly **not** arming candidates:
+Room-list poll requests: **correction applied when #367's fix landed.**
 
-- `07DA` (2010): pushed directly through state vtable `+0x5c` at VA `0x490cfc`–`0x490d14`
-  (file `0x90cfc`–`0x90d14`); no helper call.
 - `07E8` (2024): opcode staged at VA `0x4938a1` (file `0x938a1`); the send at VA `0x4939ce`
   (file `0x939ce`) passes `(packet, 0, 0)`. This refutes the #321/"wait for `07E8` reply"
-  hypothesis, matching `TT-323-B2`.
+  hypothesis, matching `TT-323-B2`. Still stands.
+- `07DA` (2010): the static read at VA `0x490cfc`–`0x490d14` (file `0x90cfc`–`0x90d14`) saw a
+  direct vtable `+0x5c` send and recorded "no helper call; untracked". **That S367-3 note is
+  contradicted by the live read and is corrected here.** The stopped-state winedbg read in
+  live-367b (issue comment 5; debugger log `c5c4a95f…`, wire `5ba48090…`, manifest
+  `4083f3ee…`) found the tracked-send queue at `[0x76835c+0x4348]` holding exactly one node,
+  `node+0 = 0x000007DB` — the expected reply to `07DA` — when the modal was up. The exe is the
+  behavior oracle; the live read wins. A tracked-send site for 07DA exists even though this
+  static scan did not find it. The contradiction is kept visible, not silently resolved.
 
 Tracked room-entry sends and the replies observed in `TT-323-B1`'s wire log:
 
@@ -172,8 +178,9 @@ reply should reset the fuse. Keep the arming item OPEN per the next-evidence-ste
    wire frame is statically attributable to OK alone.
 4. Gate on the exe's wall-clock behavior (20 s overdue node, 5 s queue pass, 15 s keepalive),
    but do **not** invent a 37 s timer: the observed delay comes from the blocking relay
-   connect. Until the node is pinned, model the fuse as an OPEN behavior and keep the exact
-   arming request out of any claim.
+   connect. The arming node is now pinned to `07DA`/`07DB` by the live read above; use that
+   pair, not an invented timeout. Our client has no 36 s relay block, so the fix must choose
+   and document an observable equivalent arming condition (see #367 fix findings).
 5. Close discipline: a seam-level dialog test is not a player-visible fix. The live caller
    chain must reach `boot → Room state → fuse armed → Information sheet → OK`, with guards
    named for that chain, before #367 can close.

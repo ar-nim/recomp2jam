@@ -159,7 +159,7 @@ use o2jam_net::{
     ChannelState, CharacterInfo, ConfirmMusicLoaded, CreateResult, CreateRoom, CreateRoomResponse,
     DownloadProgressChanged, Event, ExitPlaying, FinalizeRank, Frame, GameMode, GameStatsUpdate,
     GatewayConnection, Generic, GetMusicList, JoinResult, JoinRoom, JoinRoomResponse, JoinedRoom,
-    KeyMode, MemberReadyStateChanged, MusicState, Ready, Request, SetDownloadProgress,
+    KeyMode, MemberReadyStateChanged, MusicState, Ready, Request, Response, SetDownloadProgress,
     SetRoomArena, SetRoomMusic, StartGame, SubmitScore, SyncMemberMusicStateEvent,
     SyncMusicDownload, UpdateMusicState, WaitingMusicChanged, WireMessage,
 };
@@ -3164,6 +3164,47 @@ impl OnlineSession {
         }
     }
 
+    /// #367: on a relay-down Room visit, send our own 07DA poll and
+    /// keep a tracked 2011 node until its answer is processed. The
+    /// shell owns the 20 s wall-clock gate; this seam only moves the
+    /// frames and calls the pump. No sleep, no synthetic timer.
+    fn poll_room_user_list_fuse(&mut self) {
+        if !self.game.room_no_response_fuse_enabled() || self.game.room_no_response_dialog_open() {
+            return;
+        }
+        if self.game.room_user_list_poll_tracked() {
+            self.drain_room_user_list_reply();
+        } else {
+            self.send_room_user_list_poll();
+        }
+        self.game.pump_room_user_list_fuse();
+    }
+
+    fn send_room_user_list_poll(&mut self) {
+        if let Err(source) = self.gateway.send_frame(Request::GetUserList.id(), &[]) {
+            tracing::warn!(%source, "room user-list poll not sent; fuse unarmed");
+            return;
+        }
+        self.game.track_room_user_list_send();
+    }
+
+    fn drain_room_user_list_reply(&mut self) {
+        self.with_drain_timeout(
+            PENDING_DRAIN_TIMEOUT,
+            "room user list",
+            |session| match session.gateway.next_frame() {
+                Ok(frame) if frame.id == Response::GetUserList as u16 => {
+                    session.game.track_room_user_list_reply();
+                }
+                Ok(frame) if Generic::from_id(frame.id).is_some() => {}
+                Ok(frame) => {
+                    tracing::debug!(id = frame.id, "skipping non-07DB frame in fuse drain");
+                }
+                Err(_) => {}
+            },
+        );
+    }
+
     /// `true` while a Confirm-paced attempt still awaits its answers
     /// (see the drain-order note on [`Self::poll_wire`]).
     fn wire_attempt_pending(&self) -> bool {
@@ -3198,8 +3239,15 @@ impl OnlineSession {
     fn poll_wire(&mut self) {
         self.flush_channel_logout();
         self.poll_attempts();
+        if self.game.screen() == Screen::Room {
+            self.poll_room_user_list_fuse();
+        }
         self.poll_stats();
-        if self.wire_attempt_pending() {
+        // A pending 07DA node must own the drains below; otherwise a
+        // 07DB landing between two of them would be skipped as a
+        // foreign frame and the fuse would starve on a live reply.
+        let room_poll_pending = self.game.room_user_list_poll_tracked();
+        if self.wire_attempt_pending() || room_poll_pending {
             self.poll_start();
         } else {
             self.poll_lobby_chat();
@@ -3415,14 +3463,14 @@ pub(super) mod session_tests {
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use o2jam_game::PEER_SLOT_COUNT;
     use o2jam_net::frame::{decode_frame, encode_frame};
     use o2jam_net::{
         AcquireMusic, Frame, GameStatsUpdate, GatewayConnection, MemberMusicState, MusicState,
-        Request, StatKind, SyncMemberMusicStateEvent, UpdateGameStats, WaitingMusicChanged,
-        WireMessage, HEADER_LEN,
+        Request, Response, StatKind, SyncMemberMusicStateEvent, UpdateGameStats,
+        WaitingMusicChanged, WireMessage, HEADER_LEN,
     };
     use o2jam_shell::screens::game::{LobbyChat, ResultMemberRecord};
     use o2jam_shell::{GameLoop, InputSnapshot, MenuKey, Screen, ScreenGame};
@@ -8009,5 +8057,140 @@ pub(super) mod session_tests {
         assert!(session.game_mut().take_join().is_none());
 
         server.join().unwrap();
+    }
+
+    /// #367 live chain: `main.rs::run_online` ->
+    /// `stage_channel_list_after_relay_gate` ->
+    /// `ScreenGame::set_room_no_response_relay_down` -> Room entry ->
+    /// `OnlineSession::paint` -> `poll_wire` -> `poll_room_user_list_fuse`
+    /// -> `ScreenGame::track_room_user_list_send_at` /
+    /// `track_room_user_list_reply`. This tier-2 scripted-gateway
+    /// round trip uses the real boot staging seam and a real socket.
+    #[test]
+    fn relay_down_room_poll_sends_07da_and_clears_on_07db() {
+        let (port, server) = fake_gateway(|mut stream| {
+            let request = read_frame(&mut stream);
+            assert_eq!(request.id, Request::GetUserList.id(), "our 07DA poll");
+            stream
+                .write_all(&encode_frame(Response::GetUserList as u16, &[]))
+                .unwrap();
+        });
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        assert_eq!(game.screen(), Screen::Room);
+        crate::stage_channel_list_after_relay_gate(&mut game, vec![], true);
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+
+        paint_frame(&mut session);
+        assert!(
+            session.game.room_user_list_poll_tracked(),
+            "send stamps the tracked 07DB node"
+        );
+        thread::sleep(Duration::from_millis(20));
+        paint_frame(&mut session);
+        assert!(
+            !session.game.room_user_list_poll_tracked(),
+            "07DB clears the node"
+        );
+        assert!(!session.game.room_no_response_dialog_open());
+        server.join().unwrap();
+    }
+
+    /// #367 dismissal pin: the shared one-OK sheet's OK posts queue
+    /// type 100; the pump closes the top dialog; no FFF0 (or any other
+    /// frame) goes on the wire. Live chain: boot staging -> Room entry
+    /// -> fuse arm -> `paint_room_no_response_dialog` ->
+    /// `information_ok_hit` -> `post_room_no_response_dismissal` ->
+    /// `pump_dialog_queue`. Enter/Escape/Space share the OK path
+    /// through [`ScreenGame::menu_key`] / lane key 3.
+    #[test]
+    fn room_fuse_ok_posts_queue_type_100_and_sends_no_fff0() {
+        let (port, server) = fake_gateway(|mut stream| {
+            stream
+                .set_read_timeout(Some(Duration::from_millis(120)))
+                .unwrap();
+            let mut bytes = [0u8; 64];
+            match stream.read(&mut bytes) {
+                Ok(0) => panic!("gateway closed"),
+                Ok(count) => {
+                    let frame = decode_frame(&bytes[..count]).unwrap();
+                    assert_ne!(frame.id, 0xfff0, "OK must not post FFF0");
+                    panic!("unexpected frame {} after OK", frame.id);
+                }
+                Err(error) => assert!(
+                    matches!(
+                        error.kind(),
+                        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                    ),
+                    "OK must leave the socket quiet: {error}"
+                ),
+            }
+        });
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        crate::stage_channel_list_after_relay_gate(&mut game, vec![], true);
+        let now = Instant::now();
+        assert!(game.track_room_user_list_send_at(
+            now.checked_sub(Duration::from_secs(21))
+                .expect("clock margin")
+        ));
+        assert!(game.pump_room_user_list_fuse_at(now));
+        assert!(game.room_no_response_dialog_open());
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(game, gateway);
+
+        session.ingest_snapshot(&o2jam_shell::InputSnapshot::click_at(400, 365));
+        assert_eq!(
+            session.game.room_no_response_dismissal_queued(),
+            Some(100),
+            "the OK handler posts queue type 100"
+        );
+        paint_frame(&mut session);
+        assert!(!session.game.room_no_response_dialog_open());
+        server.join().unwrap();
+    }
+
+    /// Enter, Escape, and Space (our lane-3 key) share the one OK
+    /// path; a second dismissal posts nothing once the dialog is gone.
+    #[test]
+    fn room_fuse_key_dismissals_share_the_type_100_path() {
+        for key in [MenuKey::Confirm, MenuKey::Back] {
+            let mut game = ScreenGame::new();
+            game.menu_key(MenuKey::Back, true);
+            game.click_planet(136, 88);
+            game.menu_key(MenuKey::Confirm, true);
+            crate::stage_channel_list_after_relay_gate(&mut game, vec![], true);
+            let now = Instant::now();
+            assert!(game.track_room_user_list_send_at(
+                now.checked_sub(Duration::from_secs(21))
+                    .expect("clock margin")
+            ));
+            assert!(game.pump_room_user_list_fuse_at(now));
+            game.menu_key(key, true);
+            assert_eq!(game.room_no_response_dismissal_queued(), Some(100));
+            game.pump_dialog_queue();
+            assert!(!game.room_no_response_dialog_open());
+        }
+
+        let mut game = ScreenGame::new();
+        game.menu_key(MenuKey::Back, true);
+        game.click_planet(136, 88);
+        game.menu_key(MenuKey::Confirm, true);
+        crate::stage_channel_list_after_relay_gate(&mut game, vec![], true);
+        let now = Instant::now();
+        assert!(game.track_room_user_list_send_at(
+            now.checked_sub(Duration::from_secs(21))
+                .expect("clock margin")
+        ));
+        assert!(game.pump_room_user_list_fuse_at(now));
+        game.lane_key(3, true);
+        assert_eq!(game.room_no_response_dismissal_queued(), Some(100));
+        game.pump_dialog_queue();
+        assert!(!game.room_no_response_dialog_open());
     }
 }

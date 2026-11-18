@@ -977,4 +977,95 @@ mod live_boot_gate_tests {
         crate::live_art::stage_relay_down_sheet(&mut game, &archive);
         assert!(game.relay_down_art_staged());
     }
+
+    /// #367 arming boundary: the same Information sheet the relay
+    /// notice uses stages on relay-down + Room + a starved tracked
+    /// 07DA poll, never at boot or on the bare planet board (#348).
+    /// `Instant` is injected: the exe's 20 s wall-clock gate is
+    /// checked with an old stamp, with no fabricated 36 s sleep.
+    ///
+    /// Live caller chain: `main.rs::run_online` ->
+    /// `stage_channel_list_after_relay_gate` ->
+    /// `ScreenGame::set_room_no_response_relay_down` -> Room entry ->
+    /// `OnlineSession::poll_wire` -> `poll_room_user_list_fuse` ->
+    /// `ScreenGame::pump_room_user_list_fuse_at` -> `RoomNoResponseFuse::pump`
+    /// -> `paint_room_no_response_dialog`. This boot-gate test drives
+    /// the same staging seam at tier 3; only the socket and `Instant`
+    /// are injected.
+    #[test]
+    fn room_fuse_sheet_opens_only_in_room_after_07da_poll_starves() {
+        use std::time::Instant;
+
+        let mut game = o2jam_shell::ScreenGame::new();
+        crate::stage_channel_list_after_relay_gate(&mut game, vec![], true);
+
+        game.pump_room_user_list_fuse();
+        assert!(!game.room_no_response_fuse_enabled(), "fuse is Room-only");
+        assert!(
+            !game.room_no_response_dialog_open(),
+            "boot Avi never shows the Room fuse"
+        );
+        game.enter_screen(Screen::Planet);
+        game.pump_room_user_list_fuse();
+        assert!(!game.room_no_response_fuse_enabled());
+        assert!(
+            !game.room_no_response_dialog_open(),
+            "the bare planet board never shows the Room fuse"
+        );
+
+        game.enter_screen(Screen::Channel);
+        assert!(!game.room_no_response_fuse_enabled());
+        game.enter_screen(Screen::Room);
+        assert!(game.room_no_response_fuse_enabled());
+        let now = Instant::now();
+        assert!(game.track_room_user_list_send_at(
+            now.checked_sub(Duration::from_secs(21))
+                .expect("clock margin")
+        ));
+        game.pump_room_user_list_fuse_at(now);
+        assert!(
+            game.room_no_response_dialog_open(),
+            "starved 07DA node opens the sheet in Room"
+        );
+    }
+
+    /// The sheet and its OK rect come from the installed
+    /// `Dialog_Information.bnd` block staging, not from the shared
+    /// fallback aim. Skips cleanly in CI without archives (#0a3ba).
+    #[test]
+    fn room_fuse_ok_uses_the_staged_information_block_rect() {
+        if !archives_present() {
+            println!("skip: missing install-root interface archive");
+            return;
+        }
+        let archive = o2jam_shell::staging::read_install_archives(&install_root())
+            .interface
+            .expect("interface archive present");
+        let mut game = o2jam_shell::ScreenGame::new();
+        crate::live_art::stage_relay_down_sheet(&mut game, &archive);
+        crate::stage_channel_list_after_relay_gate(&mut game, vec![], true);
+        game.enter_screen(Screen::Planet);
+        game.enter_screen(Screen::Channel);
+        game.enter_screen(Screen::Room);
+        let now = Instant::now();
+        assert!(game.track_room_user_list_send_at(
+            now.checked_sub(Duration::from_secs(21))
+                .expect("clock margin")
+        ));
+        game.pump_room_user_list_fuse_at(now);
+        assert!(game.room_no_response_sheet_staged());
+
+        game.ingest_snapshot(&o2jam_shell::InputSnapshot::click_at(175, 150));
+        assert!(
+            game.room_no_response_dialog_open(),
+            "a click outside the staged OK rect does not dismiss"
+        );
+        game.ingest_snapshot(&o2jam_shell::InputSnapshot::click_at(400, 365));
+        assert_eq!(game.room_no_response_dismissal_queued(), Some(100));
+        game.pump_dialog_queue();
+        assert!(
+            !game.room_no_response_dialog_open(),
+            "the staged OK rect dismisses through the dialog queue"
+        );
+    }
 }

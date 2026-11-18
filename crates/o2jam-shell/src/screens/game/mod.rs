@@ -7,10 +7,12 @@ mod lanking;
 mod musicshop;
 mod planet;
 mod result_records;
+mod room_fuse;
 mod shop;
 mod waiting;
 
 use std::collections::HashMap;
+use std::time::Instant;
 
 use self::channel::{ChannelPress, ChannelScene};
 use self::chat::ChatState;
@@ -19,6 +21,7 @@ use self::lanking::LankingState;
 use self::musicshop::MusicShopState;
 use self::planet::PlanetBoardState;
 pub use self::result_records::ResultMemberRecord;
+use self::room_fuse::RoomNoResponseFuse;
 use self::shop::ShopState;
 use self::waiting::PendingOutbox;
 use super::super::avatar::{
@@ -37,15 +40,15 @@ use super::paint::{
     paint_myroom_data, paint_myroom_figure, paint_payment_notice, paint_planet_options,
     paint_planet_quit, paint_planet_scene, paint_playing_backdrop, paint_playing_foreground,
     paint_relay_down_dialog, paint_result, paint_result_scene, paint_room_chat, paint_room_hover,
-    paint_room_list, paint_room_scene_with_hover, paint_room_user_panel, paint_screen,
-    paint_shop_avatar, paint_shop_bag_pager, paint_shop_board, paint_shop_item_icons,
-    paint_shop_preview, paint_shop_scene, paint_waiting_chat, paint_waiting_members,
-    paint_waiting_scene, paint_waiting_seat_avatar, paint_waiting_seat_avatars,
-    playing_backdrop_staged, quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit,
-    scene_index, staged_rect_hit, waiting_confirm_control_id, BattleVerdict, CashChargeArt,
-    ChannelChatMessage, LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt,
-    StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingLevel, WaitingSong,
-    RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    paint_room_list, paint_room_no_response_dialog, paint_room_scene_with_hover,
+    paint_room_user_panel, paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board,
+    paint_shop_item_icons, paint_shop_preview, paint_shop_scene, paint_waiting_chat,
+    paint_waiting_members, paint_waiting_scene, paint_waiting_seat_avatar,
+    paint_waiting_seat_avatars, playing_backdrop_staged, quit_fallback_rects, rect_hit,
+    room_chrome_visible, room_panel_hit, scene_index, staged_rect_hit, waiting_confirm_control_id,
+    BattleVerdict, CashChargeArt, ChannelChatMessage, LoadingStatus, ResultPaint, ResultRankRow,
+    ResultVerdict, SceneArt, StagedPlanetBoard, WaitingCaptions, WaitingChatMessage, WaitingLevel,
+    WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots, ROW_BAND_ID_PREFIX};
 use super::side::{
@@ -320,6 +323,10 @@ pub enum PlanetModal {
     /// OK reveals the staged Channel dialog (#244).
     RelayDown,
 }
+
+/// The shell's Space lane (`crate::lane_key(3)`): while the fuse's
+/// sheet owns Room, Space shares the Information OK handler (#367).
+const ROOM_FUSE_SPACE_LANE: usize = 3;
 
 /// Native click canvas width (the shell maps window pixels into
 /// 800x600 and freezes them into the per-frame [`InputSnapshot`](crate::InputSnapshot)
@@ -695,6 +702,9 @@ pub struct ScreenGame {
     select_music_notice: Option<&'static str>,
     /// Open room dialog, if any (create-room or password entry over Room).
     room_dialog: Option<RoomDialog>,
+    /// Room-state no-response fuse: our 07DA/07DB wall-clock node and
+    /// the type-100 dismissal queue (#367).
+    room_no_response: RoomNoResponseFuse,
     /// Create-room form behind the dialog (cleared on open).
     create_room_form: CreateRoomForm,
     /// Password form behind the join dialog (cleared on open).
@@ -1028,6 +1038,7 @@ impl ScreenGame {
             waiting_notice: None,
             music_download: MusicDownload::default(),
             room_dialog: None,
+            room_no_response: RoomNoResponseFuse::default(),
             create_room_form: CreateRoomForm::new(),
             password_form: PasswordForm::new(),
             create_room_art: None,
@@ -1318,6 +1329,10 @@ impl ScreenGame {
             }
             if next == Screen::Room {
                 self.room_dialog = None;
+            } else {
+                // The fuse owns the Room visit only; leaving Room
+                // drops its node, sheet, and queued dismissal (#348).
+                self.room_no_response.clear();
             }
             if next == Screen::Channel && self.relay_down_notice_pending {
                 self.open_relay_down_dialog();
@@ -1458,6 +1473,89 @@ impl ScreenGame {
         let channels = std::mem::take(&mut self.relay_down_pending_channels);
         self.set_channels(channels);
         true
+    }
+
+    /// Carry the boot relay probe forward as the only observable
+    /// equivalent of the exe's dead-relay connect (#367). This never
+    /// opens a dialog; the Room poll and 20 s gate still have to fire.
+    pub fn set_room_no_response_relay_down(&mut self, relay_down: bool) -> &mut Self {
+        self.room_no_response.set_relay_down_observed(relay_down);
+        self
+    }
+
+    /// `true` when a down relay was observed and the game is in Room.
+    #[must_use]
+    pub fn room_no_response_fuse_enabled(&self) -> bool {
+        self.room_no_response
+            .enabled(self.flow.current() == Screen::Room)
+    }
+
+    /// `true` between our 07DA send and its processed 07DB answer.
+    #[must_use]
+    pub fn room_user_list_poll_tracked(&self) -> bool {
+        self.room_no_response.poll_tracked()
+    }
+
+    /// Stamp a tracked 07DA send at `now`.
+    pub fn track_room_user_list_send_at(&mut self, now: Instant) -> bool {
+        let in_room = self.flow.current() == Screen::Room;
+        self.room_no_response.track_send(in_room, now)
+    }
+
+    /// Stamp a tracked 07DA send at the current wall clock.
+    pub fn track_room_user_list_send(&mut self) -> bool {
+        self.track_room_user_list_send_at(Instant::now())
+    }
+
+    /// Process our 07DB answer: erase the node.
+    pub fn track_room_user_list_reply(&mut self) -> bool {
+        self.room_no_response.track_reply()
+    }
+
+    /// Walk the overdue-node watchdog at `now`; `true` means one
+    /// sheet was staged. No timer sleeps, and no sheet outside Room.
+    pub fn pump_room_user_list_fuse_at(&mut self, now: Instant) -> bool {
+        let in_room = self.flow.current() == Screen::Room;
+        self.room_no_response.pump(in_room, now)
+    }
+
+    /// Watchdog pass at the current wall clock.
+    pub fn pump_room_user_list_fuse(&mut self) -> bool {
+        self.pump_room_user_list_fuse_at(Instant::now())
+    }
+
+    #[must_use]
+    pub const fn room_no_response_dialog_open(&self) -> bool {
+        self.room_no_response.sheet_open()
+    }
+
+    /// The fuse paints the same staged `Dialog_Information` sheet the
+    /// relay notice uses; `false` when no interface archive landed.
+    #[must_use]
+    pub fn room_no_response_sheet_staged(&self) -> bool {
+        self.relay_down_art
+            .as_ref()
+            .is_some_and(SceneArt::has_figures)
+    }
+
+    /// Queue type posted by the fuse's OK handler (`None` when idle).
+    #[must_use]
+    pub fn room_no_response_dismissal_queued(&self) -> Option<u16> {
+        self.room_no_response.queued_dismissal()
+    }
+
+    /// OK/Enter/Escape/Space handler: post queue type 100 only.
+    fn post_room_no_response_dismissal(&mut self) {
+        if self.room_no_response_dialog_open() {
+            self.room_no_response.post_dismiss_top();
+        }
+    }
+
+    /// Pump one queued type-100 dismissal: pop the top dialog. This
+    /// is the exe's pump handler 100 (VA `0x47748f`); the OK handler
+    /// itself sends no packet and attributes no FFF0.
+    pub fn pump_dialog_queue(&mut self) -> bool {
+        self.room_no_response.take_dismissal()
     }
 
     /// Rooms from the last online list (empty offline). Free slots are
@@ -2696,6 +2794,11 @@ impl ScreenGame {
     /// Replaces four separate public queries (#258).
     #[must_use]
     pub fn press_kind_at(&self, x: i32, y: i32) -> PressKind {
+        // The fuse's sheet owns the pointer: a click under it never
+        // reaches a Room row (the exe's dialog manager consumes it).
+        if self.room_no_response_dialog_open() {
+            return PressKind::Local;
+        }
         match self.flow.current() {
             Screen::Channel => self
                 .channel_enter_at(x, y)
@@ -4053,6 +4156,12 @@ impl ScreenGame {
     }
 
     fn click_dispatch(&mut self, x: i32, y: i32) {
+        if self.room_no_response_dialog_open() {
+            if self.information_ok_hit(x, y) {
+                self.post_room_no_response_dismissal();
+            }
+            return;
+        }
         if self.click_side_screen(x, y) {
             return;
         }
@@ -4592,16 +4701,21 @@ impl ScreenGame {
         }
     }
 
-    /// Relay notice OK hit: the staged `0X21200002` button rect when
-    /// the sheet is staged, else the same fallback plate the other
-    /// one-button notices use (no invented staged geometry).
-    fn relay_ok_hit(&self, x: i32, y: i32) -> bool {
+    /// One-OK Information sheet hit for `0X21200002`: its staged
+    /// `.bnd` rect when art is staged, else the archive-less fallback
+    /// plate. Shared by the relay notice and the Room fuse (#367).
+    fn information_ok_hit(&self, x: i32, y: i32) -> bool {
         let staged = self.relay_down_art.as_ref().filter(|art| art.has_figures());
         if let Some(art) = staged {
             dialog_rect_hit(&art.placements, INFORMATION_OK_CODE, x, y)
         } else {
             rect_hit(&information_ok_fallback_rect(), x, y)
         }
+    }
+
+    /// Relay notice OK hit on the same Information sheet.
+    fn relay_ok_hit(&self, x: i32, y: i32) -> bool {
+        self.information_ok_hit(x, y)
     }
 
     /// Picked planet difficulty band, if any (paint/hit-test driver).
@@ -6105,6 +6219,11 @@ impl ScreenGame {
             }
             None => {}
         }
+        // The fuse owns the top layer in Room: the same Information
+        // sheet with the exe's no-response string (#367).
+        if self.room_no_response_dialog_open() {
+            paint_room_no_response_dialog(frame, self.relay_down_art.as_ref());
+        }
         // The options dialog layers over the lobby exactly as over
         // the Planet board (EXIT/Escape closes back onto Room).
         self.paint_planet_modal(frame);
@@ -6685,6 +6804,13 @@ impl GameLoop for ScreenGame {
         if !down {
             return;
         }
+        // Space is lane 3 in our key map (`crate::lane_key(3)`); the
+        // exe's Space shares the Information OK handler, so while
+        // the fuse is up it posts the same type-100 dismissal.
+        if lane == ROOM_FUSE_SPACE_LANE && self.room_no_response_dialog_open() {
+            self.post_room_no_response_dismissal();
+            return;
+        }
         // Splash lane presses stay inert (#356): the exe keeps the
         // splash on Space and the other lane binds; only Escape and
         // the pinned wall hold dismiss it. The former any-lane-key
@@ -6697,6 +6823,12 @@ impl GameLoop for ScreenGame {
 
     fn menu_key(&mut self, key: MenuKey, down: bool) {
         if !down {
+            return;
+        }
+        if self.room_no_response_dialog_open() {
+            if key == MenuKey::Confirm || key == MenuKey::Back {
+                self.post_room_no_response_dismissal();
+            }
             return;
         }
         if self.side.is_some() {
@@ -6846,6 +6978,7 @@ impl GameLoop for ScreenGame {
     }
 
     fn paint(&mut self, frame: &mut Frame<'_>) {
+        self.pump_dialog_queue();
         self.advance_splash_on_wall_clock();
         let now = self.now_ms();
         self.paint_at(frame, now);

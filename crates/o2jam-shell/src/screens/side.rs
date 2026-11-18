@@ -3187,6 +3187,15 @@ pub const RELAY_DOWN_MESSAGE_CP949: &[u8] = &[
     0xBF, 0xEB, 0x20, 0xBA, 0xD2, 0xB0, 0xA1, 0x20, 0x29,
 ];
 
+/// Room-state no-response notice (`서버로 부터 응답이 없습니다.`),
+/// CP949 bytes for the string at exe file `0x24d02c` (VA `0x64d02c`),
+/// painted in the same Information sheet's TEXT rect by the watchdog
+/// (file `0x158f8b`; `docs/captures/static-367/pin.md`, #367).
+pub const NO_RESPONSE_MESSAGE_CP949: &[u8] = &[
+    0xBC, 0xAD, 0xB9, 0xF6, 0xB7, 0xCE, 0x20, 0xBA, 0xCE, 0xC5, 0xCD, 0x20, 0xC0, 0xC0, 0xB4, 0xE4,
+    0xC0, 0xCC, 0x20, 0xBE, 0xF8, 0xBD, 0xC0, 0xB4, 0xCF, 0xB4, 0xD9, 0x2E,
+];
+
 /// Create-room dialog block (`CDCreateRoom`; `ControlList_Interface.txt`
 /// `DIALOG_CREATEROOM`, decl `0x09`/`docs/file-formats/opi.md`).
 pub const CREATE_ROOM_DIALOG_BLOCK: &str = "DIALOG_CREATEROOM";
