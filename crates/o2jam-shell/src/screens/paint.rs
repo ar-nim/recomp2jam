@@ -13658,6 +13658,193 @@ mod paint_tests {
             "room paint generation changed; re-check the exe pins before updating"
         );
     }
+
+    #[test]
+    fn chat_boxes_pin_rows_ink_geometry_and_painted_pixels() {
+        // Seam pin for the three live chat boxes. The caller chain is
+        // `ScreenGame::paint_at` → `paint_waiting` / `paint_channel` /
+        // `paint_room` → `paint_waiting_chat` / `paint_channel_chat` /
+        // `paint_room_chat`; reaching it from boot needs a decoded
+        // 3012/3013/2013/2014/2016/2019/2029 packet stream and staged
+        // `State_Waiting`/`State_Room` rects. Staged fixtures drive
+        // these same painters below, so the seam test covers their
+        // generated ink and pixels without the wire.
+        let mut hash = 0u64;
+
+        let waiting_rows = vec![
+            WaitingChatMessage::user("host", "hello"),
+            WaitingChatMessage::admin("op", "quiet"),
+            WaitingChatMessage::user("a-longer-nick", "a longer line"),
+        ];
+        for row in &waiting_rows {
+            fold_pin_text(&mut hash, &waiting_chat_row_text(row));
+            fold_pin_word(&mut hash, u64::from(row.admin));
+            fold_pin_word(&mut hash, u64::from(chat_row_ink(row.admin)));
+        }
+        fold_pin_word(&mut hash, u64::from(chat_user_ink()));
+        fold_pin_word(&mut hash, u64::from(chat_admin_ink()));
+
+        let channel_rows = vec![
+            ChannelChatMessage::user("host", "hello"),
+            ChannelChatMessage::admin("op", "quiet"),
+            ChannelChatMessage::whisper("host", "me", "psst"),
+            ChannelChatMessage::announcement("notice"),
+            ChannelChatMessage::rank("host", "M757", 1),
+        ];
+        for row in &channel_rows {
+            fold_pin_text(&mut hash, &channel_chat_row_text(row));
+            fold_pin_word(&mut hash, u64::from(row.admin));
+            fold_pin_word(&mut hash, u64::from(chat_row_ink(row.admin)));
+        }
+        fold_pin_text(&mut hash, &rank_notice_board_text("host", "M757", 1));
+
+        let mut long_waiting = Vec::new();
+        for index in 0..WAITING_CHAT_VISIBLE_ROWS + 2 {
+            long_waiting.push(WaitingChatMessage::user("host", &format!("line{index}")));
+        }
+        for row in waiting_chat_visible_messages(&long_waiting) {
+            fold_pin_text(&mut hash, &row.text);
+        }
+        let mut long_channel = Vec::new();
+        for index in 0..CHANNEL_CHAT_VISIBLE_ROWS + 2 {
+            long_channel.push(ChannelChatMessage::user("host", &format!("line{index}")));
+        }
+        for row in channel_chat_visible_messages(&long_channel) {
+            fold_pin_text(&mut hash, &row.text);
+        }
+
+        for rect in [WAITING_CHAT_LIST_RECT, WAITING_CHAT_EDIT_RECT] {
+            for word in [rect.x, rect.y, rect.w as i32, rect.h as i32] {
+                fold_pin_word(&mut hash, u64::try_from(word).unwrap_or(u64::MAX));
+            }
+        }
+        for word in [
+            WAITING_CHAT_ROW_H,
+            WAITING_CHAT_VISIBLE_ROWS as i32,
+            WAITING_CHAT_CARET_INSET.0,
+            WAITING_CHAT_CARET_INSET.1,
+            WAITING_CHAT_CARET_SIZE.0 as i32,
+            WAITING_CHAT_CARET_SIZE.1 as i32,
+            CHANNEL_CHAT_VISIBLE_ROWS as i32,
+            CHANNEL_CHAT_ROW_H,
+            ROOM_CHAT_ROW_H,
+            ROOM_CHAT_CARET_INSET.0,
+            ROOM_CHAT_CARET_INSET.1,
+        ] {
+            fold_pin_word(&mut hash, u64::try_from(word).unwrap_or(u64::MAX));
+        }
+        fold_pin_word(&mut hash, u64::from(ROOM_CHAT_LIST_CODE));
+        fold_pin_word(&mut hash, u64::from(ROOM_CHAT_EDIT_CODE));
+
+        let staged_waiting = vec![
+            waiting_probe("IDC_LIST_SWAIT_CHAT", None, (24, 455, 511, 553)),
+            waiting_probe("IDC_EDIT_SWAIT_CHAT", None, (20, 563, 460, 583)),
+        ];
+        let mut scratch = vec![0u32; 800 * 600];
+        let frame = Frame {
+            buf: &mut scratch,
+            w: 800,
+            h: 600,
+        };
+        for placements in [Some(staged_waiting.as_slice()), None] {
+            let placements = placements.unwrap_or(&[]);
+            for origin in [
+                waiting_chat_list_origin(&frame, placements),
+                waiting_chat_edit_origin(&frame, placements),
+            ] {
+                fold_pin_word(&mut hash, u64::try_from(origin.0).unwrap_or(u64::MAX));
+                fold_pin_word(&mut hash, u64::try_from(origin.1).unwrap_or(u64::MAX));
+            }
+        }
+        for offset in 0..WAITING_CHAT_VISIBLE_ROWS {
+            fold_pin_word(
+                &mut hash,
+                u64::try_from(waiting_chat_row_y(455, offset)).unwrap_or(u64::MAX),
+            );
+        }
+
+        let mut waiting_staged_pixels = vec![0u32; 800 * 600];
+        paint_waiting_chat(
+            &mut Frame {
+                buf: &mut waiting_staged_pixels,
+                w: 800,
+                h: 600,
+            },
+            &long_waiting,
+            "go",
+            &staged_waiting,
+        );
+        fold_pin_pixels(&mut hash, &waiting_staged_pixels);
+
+        let mut waiting_native_pixels = vec![0u32; 800 * 600];
+        paint_waiting_chat(
+            &mut Frame {
+                buf: &mut waiting_native_pixels,
+                w: 800,
+                h: 600,
+            },
+            &waiting_rows,
+            "",
+            &[],
+        );
+        fold_pin_pixels(&mut hash, &waiting_native_pixels);
+
+        let mut channel_pixels = vec![0u32; 800 * 600];
+        paint_channel_chat(
+            &mut Frame {
+                buf: &mut channel_pixels,
+                w: 800,
+                h: 600,
+            },
+            &long_channel,
+            3,
+        );
+        fold_pin_pixels(&mut hash, &channel_pixels);
+
+        let room_stage = vec![
+            ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_LIST_SROOM_CHAT".to_owned(),
+                code: ROOM_CHAT_LIST_CODE,
+                sprite: None,
+                rect: Rect {
+                    x: 171,
+                    y: 432,
+                    w: 412,
+                    h: 119,
+                },
+            },
+            ScenePlacement {
+                role: PlacementRole::Single,
+                id: "IDC_EDIT_SROOM_CHAT".to_owned(),
+                code: ROOM_CHAT_EDIT_CODE,
+                sprite: None,
+                rect: Rect {
+                    x: 167,
+                    y: 561,
+                    w: 335,
+                    h: 19,
+                },
+            },
+        ];
+        let mut room_pixels = vec![0u32; 800 * 600];
+        paint_room_chat(
+            &mut Frame {
+                buf: &mut room_pixels,
+                w: 800,
+                h: 600,
+            },
+            &channel_rows,
+            "draft",
+            &room_stage,
+        );
+        fold_pin_pixels(&mut hash, &room_pixels);
+
+        assert_eq!(
+            hash, 0x0ADA_B313_1DE3_E861,
+            "chat box generation changed; re-check the exe pins before updating"
+        );
+    }
 }
 
 #[cfg(test)]
