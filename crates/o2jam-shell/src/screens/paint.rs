@@ -14595,6 +14595,146 @@ mod paint_tests {
             "result paint generation changed; re-check the exe pins before updating"
         );
     }
+
+    #[test]
+    fn room_screen_generation_pins_rows_details_icons_and_painted_pixels() {
+        // Seam pin for the Room paint generator. The live chain is
+        // `ScreenGame::paint_at` → `paint_room_scene_with_hover` and
+        // `paint_room_user_panel`; reaching it from boot needs a live
+        // lobby with staged `State_Room` art. Staged fixtures drive
+        // that same generator here, so the pin covers the painter's
+        // outputs without depending on the shell loop or the wire.
+        let mut hash = 0u64;
+
+        let mut rooms = two_rooms();
+        rooms.push(detailed_room());
+        for room in &rooms {
+            fold_pin_text(&mut hash, &room_row_text(room));
+        }
+        for game_mode in [0u8, 1, 9, 255] {
+            fold_pin_text(&mut hash, &room_mode_label(game_mode));
+        }
+        for music_id in [0u16, 100, 757] {
+            fold_pin_text(&mut hash, &room_music_label(music_id));
+        }
+        for difficulty in [0u8, 1, 2, 3, 255] {
+            fold_pin_text(&mut hash, &room_difficulty_label(difficulty));
+        }
+        for key_mode in [0u8, 1, 2, 7, 255] {
+            fold_pin_text(&mut hash, &room_key_label(key_mode));
+        }
+        for speed in [0u8, 1, 3, 11, 255] {
+            fold_pin_text(&mut hash, &room_speed_label(speed));
+        }
+        for room in &rooms {
+            for (id, text) in room_detail_entries(room) {
+                fold_pin_text(&mut hash, id);
+                fold_pin_text(&mut hash, &text);
+            }
+            fold_pin_word(&mut hash, u64::from(room_lock_ink(room.has_password)));
+        }
+        for state_code in [0u8, 1, 2, 7, 255] {
+            fold_pin_word(&mut hash, u64::from(room_state_icon_frame(state_code)));
+        }
+        for key_mode in [0u8, 1, 2, 3, 7, 255] {
+            fold_pin_word(
+                &mut hash,
+                u64::from(room_key_icon_frame(key_mode).unwrap_or(0xF0)),
+            );
+        }
+        for (music_id, level) in [
+            (0u16, None),
+            (99, Some(1u16)),
+            (100, Some(1)),
+            (757, Some(2)),
+            (757, Some(8)),
+            (757, None),
+        ] {
+            fold_pin_word(
+                &mut hash,
+                u64::from(room_om_icon_frame(music_id, level).unwrap_or(0xF0)),
+            );
+        }
+        for (frame, layers) in [(0u8, 0usize), (0, 4), (1, 4), (4, 4), (9, 4)] {
+            let layer = icon_frame_layer(frame, layers);
+            fold_pin_word(
+                &mut hash,
+                layer.map_or(u64::MAX, |index| u64::try_from(index).unwrap_or(u64::MAX)),
+            );
+        }
+        for id in ROOM_PANEL_IDS {
+            fold_pin_text(&mut hash, id);
+        }
+        let art = room_icon_art();
+        for id in room_panel_instances(&art.placements) {
+            fold_pin_text(&mut hash, id);
+        }
+        for code in [0x1320_0038, 0x1320_0039, 0x1320_003A, 0x1350_002E] {
+            fold_pin_word(&mut hash, u64::from(room_chrome_visible(code)));
+        }
+        for (x, y) in [(26, 82), (317, 177), (0, 0)] {
+            let panel = room_panel_hit(&art.placements, x, y);
+            fold_pin_word(
+                &mut hash,
+                panel.map_or(u64::MAX, |index| u64::try_from(index).unwrap_or(u64::MAX)),
+            );
+        }
+
+        let mut flat = vec![0u32; 800 * 600];
+        paint_room_list(
+            &mut Frame {
+                buf: &mut flat,
+                w: 800,
+                h: 600,
+            },
+            &rooms,
+            1,
+        );
+        fold_pin_pixels(&mut hash, &flat);
+
+        let mut staged = vec![0u32; 800 * 600];
+        paint_room_scene_with_hover(
+            &mut Frame {
+                buf: &mut staged,
+                w: 800,
+                h: 600,
+            },
+            &rooms,
+            1,
+            &art,
+            None,
+            Some(1),
+        );
+        fold_pin_pixels(&mut hash, &staged);
+
+        let character = CharacterInfo {
+            nickname: "tester".to_owned(),
+            level: 2,
+            experience: 2_133,
+            bonus_point: 7,
+            penalty_count: 1,
+            penalty_level: 3,
+            ..CharacterInfo::default()
+        };
+        let mut panel = vec![0u32; 800 * 600];
+        paint_room_user_panel(
+            &mut Frame {
+                buf: &mut panel,
+                w: 800,
+                h: 600,
+            },
+            &room_user_panel_placements(),
+            Some(&character),
+            None,
+            1_234,
+        );
+        fold_pin_pixels(&mut hash, &panel);
+
+        assert_eq!(
+            hash, 0xBAD4_1640_C080_E23A,
+            "room paint generation changed; re-check the exe pins before updating"
+        );
+    }
 }
 
 #[cfg(test)]
