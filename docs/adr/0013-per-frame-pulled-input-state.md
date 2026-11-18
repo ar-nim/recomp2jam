@@ -47,3 +47,11 @@ The game consumes input as a **per-frame snapshot**:
   too — the existing seam guards cover this).
 - The migration is guard-backed and green-to-green; scenario tests that
   drive the game directly keep working (they construct snapshots).
+
+## Implementation note (#260)
+
+The capture adapter stamps judged lane-down edges from a borrow of the
+pending queue before the frame boundary. The one `pending_edges.drain(..)`
+and the one `ingest_snapshot` call stay in `WindowHandler::deliver_snapshot`;
+the adapter never drains or forwards. `judged_lines_precede_drained_edges_in_fake_sink`
+pins that order and the single intake per frame.
