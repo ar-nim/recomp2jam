@@ -93,6 +93,11 @@ jq -r '[.params, .created_at] | @tsv' leg-a/manifest.json leg-b/manifest.json
 # different memoryer_boot_epoch (or memoryer_pid) = a new server: continuity void
 ```
 
+Both clients use that one server, so server state matches by construction.
+A scenario delta is still no dismissal without wire and server-log proof;
+A/B packs must agree on visible chrome — DOWNLOADING badges (07E8) and the
+closed gate — before a pixel verdict.
+
 A preflight that expects Memoryer but cannot name the listener fails
 with exit 13; it never restarts or signals the server. `RIG_EXPECT_MEMORYER=0`
 records `unknown` fields and is for hermetic tests only. Never restart
@@ -202,6 +207,12 @@ scripts/rig-wine-run.sh OUT_DIR [--target room|loading] [--display :N]
 | stop | `scripts/rig-run.sh stop` (pidfile only) | `scripts/rig-run.sh` |
 | package | `run-manifest.sh write` + `rig-provenance.sh emit --producer-kind exe` | those scripts |
 | check | `run-manifest.sh verify [--cross partner]`, `rig-audio.sh verify`, `cite --claim exe` | those scripts |
+
+Wine UI evidence under winedbg launches on `OTwo.exe` directly (never
+`explorer`); read stopped state only — `cont` and breakpoints die on the
+wow64 helper fault `c0000005@0xffbc11b0`. In the PTY, `\r` ends commands
+and Ctrl-C is `\x03`; stop once, then queue all `x` reads
+(`docs/wine-boot.md`).
 
 Pins the leg enforces: the exe sha256 (default `83a04541…72c823b`, 7.55),
 `WINEPREFIX` (a Korean-locale prefix, claimed by the preflight), the
@@ -316,6 +327,8 @@ committed. (#264)
 `scripts/rig-run.sh` records every PID it started in `<out-dir>/pids`
 and every claim it owns in `<out-dir>/claims`; it never pattern-kills,
 and cleanup failures keep the evidence instead of deleting it.
+`pgrep -f`/`pkill -f` patterns self-match the invoking shell as well as the
+target; use the recorded PIDs, never a pattern, for rig processes.
 
 ## Boot, drive, aim, observe
 
@@ -353,7 +366,9 @@ and cleanup failures keep the evidence instead of deleting it.
   dismisses the NORMAL-mode message box when its pinned blue body is up
   (`scripts/lib/planet_popup.py`, OK face at `(400,365)`), and joins the room
   row named by the client's own room number: a shared Memoryer can put other
-  sessions in row 0.
+  sessions in row 0. Dialog-up is detected from the pinned X-plate NCC
+  template (`docs/captures/t207/channel.md`); the blue NORMAL-mode body must
+  clear before any canvas click, including under winedbg (`docs/wine-boot.md`).
 - Aim: chrome coords resolve from staged BND rects, never hand-read
   pixels. Native aim uses the dump tool's rect query for a BND control
   id (#235); unknown ids fail loudly. Wine aim cites pinned reference
@@ -723,3 +738,18 @@ RIG_STATE_DIR=/tmp/rig-registry-demo scripts/rig-run.sh registry
 
 The native audio row is closed by #279 (see "Audio capture" above); the
 Wine row closes with #240 using the same sink, tap, and verifier.
+
+## Superseded memory lessons (retro #254)
+
+This runbook is the single home for the rig lessons below. Each memory
+entry is superseded by the named section here (and its linked evidence),
+not silently dropped; the owner approves each removal in the Memory UI.
+
+| ID | Lesson | Runbook home |
+|---|---|---|
+| `979fb` | Virtual-framebuffer runs must not reach the speakers | Audio capture (agent path, #279); Containment fence for test arms (#283); Two-path architecture |
+| `c16e4` | Wine canvas clicks need the winegcc SendInput helper, not XTEST | Negatives (do not re-prove); Wine leg (#240); `docs/wine-boot.md` |
+| `a0066` | Wine dialog-up detection and popup-before-click order | Boot, drive, aim, observe (Drive); Wine leg (#240); `docs/wine-boot.md` |
+| `9e297` | winedbg launch and stopped-state read discipline | Wine leg (#240); `docs/wine-boot.md` |
+| `635dc` | `pgrep -f`/`pkill -f` self-match; use recorded PIDs | Commit-or-lose-it rule; Two-path architecture |
+| `d5ebf` | One shared Memoryer; scenario delta needs wire and log proof | Memoryer liveness, identity, and dumps (#345) |
