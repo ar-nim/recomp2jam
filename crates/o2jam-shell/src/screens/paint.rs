@@ -13428,6 +13428,248 @@ mod paint_tests {
             "chat box generation changed; re-check the exe pins before updating"
         );
     }
+
+    /// Synthetic Waiting art with two backdrop records, one live seat
+    /// clone, a confirm face, a 60-cell badge, and every caption rect.
+    fn waiting_golden_art() -> SceneArt {
+        let mut art = waiting_role_art();
+        let star = solid_figure(1, 1, [0x1F, 0x00]);
+        let mut badge = AvatarFigure::default();
+        for cell in 0u8..60 {
+            let word = 0x7C00 | (u16::from(cell % 8) << 6) | u16::from(cell / 8);
+            badge.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&word.to_le_bytes(), 1, 1).unwrap(),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+        }
+        let mut confirm = AvatarFigure::default();
+        for word in [[0x00, 0x7C], [0xE0, 0x03], [0x1F, 0x00]] {
+            confirm.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&word, 1, 1).unwrap(),
+                dx: 0,
+                dy: 0,
+                colorkey: 0xFFFF,
+            });
+        }
+        let caption = |id: &'static str, rect: (i32, i32, i32, i32)| waiting_probe(id, None, rect);
+        art.placements.extend([
+            ScenePlacement {
+                code: 0x1650_002F,
+                ..waiting_probe(
+                    WAITING_SEAT_PARENT_IDS[0],
+                    Some("Wait_BossMark.ojs"),
+                    (20, 60, 40, 80),
+                )
+            },
+            waiting_probe(WAITING_LEVEL_ID, Some("Wait_Level.ojs"), (218, 12, 273, 40)),
+            waiting_probe(
+                "IDC_BUTTON_SWAIT_START",
+                Some("Wait_Start.ojs"),
+                (10, 10, 50, 30),
+            ),
+            caption(WAITING_ROOMNAME_ID, (280, 12, 560, 36)),
+            caption(WAITING_MUSICNAME_ID, (573, 15, 773, 38)),
+            caption(WAITING_MAPNAME_ID, (400, 40, 560, 60)),
+            caption(WAITING_BPM_ID, (600, 40, 660, 60)),
+            caption(WAITING_SPEED_NUM_ID, (660, 40, 720, 60)),
+            caption(WAITING_WINNERSCORE_ID, (720, 80, 780, 100)),
+            caption(WAITING_TEAM_IDS[1], (260, 100, 320, 120)),
+            caption(WAITING_AVATAR_SLOT_ID, (0, 0, 123, 150)),
+            caption(WAITING_SEAT_PARENT_IDS[0], (37, 55, 160, 205)),
+        ]);
+        art.placements.extend(
+            WAITING_SKILL_IDS
+                .iter()
+                .zip(WAITING_SKILLCOUNT_IDS)
+                .enumerate()
+                .flat_map(|(slot, (skill, count))| {
+                    let y = 200 + slot as i32 * 20;
+                    [
+                        caption(skill, (620, y, 650, y + 15)),
+                        caption(count, (660, y, 720, y + 15)),
+                    ]
+                }),
+        );
+        art.figures.insert("Wait_BossMark.ojs".to_owned(), star);
+        art.figures.insert("Wait_Level.ojs".to_owned(), badge);
+        art.figures.insert("Wait_Start.ojs".to_owned(), confirm);
+        art
+    }
+
+    #[test]
+    fn waiting_scene_generation_pins_captions_faces_and_painted_pixels() {
+        // Seam pin for the Waiting paint generator. The live chain is
+        // `ScreenGame::paint_at` → `paint_waiting` → `paint_waiting_scene`,
+        // with `paint_waiting_members` and `paint_waiting_seat_avatars`
+        // on the same screen. Reaching it from boot needs a joined room
+        // and staged `State_Waiting` art. Synthetic probes drive those
+        // same painters here, so the pin covers their generated text
+        // and full painted frames without the wire or the archives.
+        let mut hash = 0u64;
+        let room = waiting_room();
+        let champion = champion_room();
+
+        for (index, seat) in waiting_seats(&champion).iter().enumerate() {
+            fold_pin_text(&mut hash, &waiting_row_text(index, seat));
+            fold_pin_word(&mut hash, u64::from(ready_dot_color(seat.is_ready())));
+            let (x, y) = seat_origin(index, 800, 600);
+            fold_pin_word(&mut hash, u64::try_from(x).unwrap_or(u64::MAX));
+            fold_pin_word(&mut hash, u64::try_from(y).unwrap_or(u64::MAX));
+        }
+        let staged_seats = staged_seats(&champion);
+        for seat in &staged_seats {
+            let role = staged_role(champion.champion.is_some(), seat);
+            fold_pin_text(&mut hash, &staged_seat_text(seat, role));
+        }
+        for arena in [0, 1, 2, 3, 4, 9] {
+            fold_pin_text(&mut hash, waiting_map_name(arena));
+        }
+        for bpm in [None, Some(0.0), Some(124.4), Some(f32::NAN)] {
+            fold_pin_text(&mut hash, &waiting_bpm_caption(bpm));
+        }
+        for (count, capped) in [(0, false), (7, false), (42, true), (1500, true)] {
+            fold_pin_text(&mut hash, &waiting_skillcount_text(count, capped));
+        }
+        for (music_id, title) in [(757, None), (757, Some("Song")), (0, None)] {
+            fold_pin_text(&mut hash, &waiting_music_caption(music_id, title));
+        }
+        for level in [
+            WaitingLevel {
+                difficulty: 0,
+                speed: 0,
+            },
+            WaitingLevel {
+                difficulty: 2,
+                speed: 5,
+            },
+            WaitingLevel {
+                difficulty: 4,
+                speed: 11,
+            },
+            WaitingLevel {
+                difficulty: 1,
+                speed: 12,
+            },
+        ] {
+            let layer = waiting_level_layer(level).unwrap_or(usize::MAX);
+            fold_pin_word(&mut hash, u64::try_from(layer).unwrap_or(u64::MAX));
+        }
+        for id in [
+            "IDC_BUTTON_SWAIT_START",
+            "IDC_BUTTON_SWAIT_READY",
+            "IDC_IMAGE_SWAIT_ALBUMMODE",
+        ] {
+            for master in [false, true] {
+                fold_pin_word(
+                    &mut hash,
+                    u64::from(waiting_control_armed_for_role(id, master)),
+                );
+            }
+        }
+
+        let mut flat = vec![0u32; 800 * 600];
+        paint_waiting_members(
+            &mut Frame {
+                buf: &mut flat,
+                w: 800,
+                h: 600,
+            },
+            &room,
+        );
+        fold_pin_pixels(&mut hash, &flat);
+
+        let art = waiting_golden_art();
+        let captions = WaitingCaptions {
+            song: Some(WaitingSong {
+                music_id: 757,
+                title: Some("Painted Title"),
+            }),
+            song_bpm: Some(168.4),
+            skill_counts: [2101, 42, 1500],
+            level: Some(WaitingLevel {
+                difficulty: 2,
+                speed: 5,
+            }),
+            notice: None,
+        };
+        let mut staged = vec![0u32; 800 * 600];
+        paint_waiting_scene(
+            &mut Frame {
+                buf: &mut staged,
+                w: 800,
+                h: 600,
+            },
+            &room,
+            &art,
+            &captions,
+            false,
+            false,
+            MemberRole::Spectator,
+        );
+        fold_pin_pixels(&mut hash, &staged);
+
+        let noticed = WaitingCaptions {
+            notice: Some("MAINTENANCE"),
+            ..captions
+        };
+        let mut armed = vec![0u32; 800 * 600];
+        paint_waiting_scene(
+            &mut Frame {
+                buf: &mut armed,
+                w: 800,
+                h: 600,
+            },
+            &champion,
+            &art,
+            &noticed,
+            true,
+            true,
+            MemberRole::Champion,
+        );
+        fold_pin_pixels(&mut hash, &armed);
+
+        let mut scaled = vec![0u32; 400 * 300];
+        paint_waiting_scene(
+            &mut Frame {
+                buf: &mut scaled,
+                w: 400,
+                h: 300,
+            },
+            &champion,
+            &art,
+            &captions,
+            false,
+            false,
+            MemberRole::Challenger,
+        );
+        fold_pin_pixels(&mut hash, &scaled);
+
+        let figures = [
+            Some(solid_figure(4, 4, [0x00, 0x7C])),
+            None,
+            Some(solid_figure(4, 4, [0x1F, 0x00])),
+        ];
+        let mut avatars = vec![0u32; 800 * 600];
+        paint_waiting_seat_avatars(
+            &mut Frame {
+                buf: &mut avatars,
+                w: 800,
+                h: 600,
+            },
+            &art.placements,
+            &champion,
+            &figures,
+            1_234,
+        );
+        fold_pin_pixels(&mut hash, &avatars);
+
+        assert_eq!(
+            hash, 0x326A_5C00_B2FB_A849,
+            "waiting paint generation changed; re-check the exe pins before updating"
+        );
+    }
 }
 
 #[cfg(test)]
