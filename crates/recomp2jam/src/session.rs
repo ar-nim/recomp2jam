@@ -1556,15 +1556,29 @@ impl OnlineSession {
         }
     }
 
-    /// Channel Confirm with an empty draft: queue the login for the
-    /// highlighted row; the per-frame poll advances like the offline
-    /// walk once the identity stages. With no listed rows the bare
-    /// local advance stays.
+    /// Whether the boot already logged into this row. Both entry
+    /// gestures must skip the 1004 then: Memoryer answers a second
+    /// login with 1001 and never stages the channel (issue #331).
+    fn is_resident_channel(&self, channel: &ChannelState) -> bool {
+        self.resident_channel.as_ref().is_some_and(|resident| {
+            (resident.gateway_id, resident.channel_id) == (channel.gateway_id, channel.channel_id)
+        })
+    }
+
+    /// Channel Confirm with an empty draft: replay the local advance
+    /// on a resident row, otherwise queue the login for the highlighted
+    /// row; the per-frame poll advances like the offline walk once the
+    /// identity stages. With no listed rows the bare local advance
+    /// stays.
     fn confirm_channel(&mut self) {
         let Some(channel) = self.game.highlighted_channel() else {
             self.game.menu_key(MenuKey::Confirm, true);
             return;
         };
+        if self.is_resident_channel(&channel) {
+            self.game.menu_key(MenuKey::Confirm, true);
+            return;
+        }
         self.begin_channel_login(channel, EntryOrigin::Confirm);
     }
 
@@ -3066,12 +3080,7 @@ impl OnlineSession {
             if let Some(channel) = self.game.channel_enter_at(x, y) {
                 // Resident channel: skip the wire round trip and replay
                 // the press through the same Room transition.
-                if self
-                    .resident_channel
-                    .as_ref()
-                    .map(|c| (c.gateway_id, c.channel_id))
-                    == Some((channel.gateway_id, channel.channel_id))
-                {
+                if self.is_resident_channel(&channel) {
                     self.resident_press = Some((x, y));
                     self.game.ingest_snapshot(&InputSnapshot::click_at(x, y));
                     return true;
@@ -3150,6 +3159,10 @@ impl GameLoop for OnlineSession {
             return;
         }
         if key == MenuKey::Confirm && self.game.screen() == Screen::Channel {
+            // A Room Back can queue the 2021 leave without a paint in
+            // between. Send it first: the stale resident row must not
+            // replay locally while the server still holds the channel.
+            self.flush_channel_logout();
             match self.flush_channel_action() {
                 Ok(sent) if !sent => self.confirm_channel(),
                 Ok(_) => {}
@@ -4345,6 +4358,65 @@ mod session_tests {
             "resident face press enters Room with no wire round trip"
         );
         server.join().unwrap();
+    }
+
+    #[test]
+    fn tt331_resident_channel_confirm_replays_without_second_login() {
+        // Live chain: run_online boot 1004/1005 -> set_resident_channel
+        // -> GameLoop::menu_key(Confirm) -> confirm_channel. Confirm on
+        // the resident row must advance locally: a second 1004 draws a
+        // 1001 -1 from Memoryer and strands the walk in Channel (issue
+        // #331 red proof).
+        use std::io::Read;
+        let (mut session, server) = channel_session(|mut stream| {
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut header = [0u8; 4];
+            assert!(
+                stream.read_exact(&mut header).is_err(),
+                "resident Confirm sent a second ChannelLogin on the wire"
+            );
+        });
+        session.game.set_channels(vec![entry_channel()]);
+        session.set_resident_channel(entry_channel());
+        session.menu_key(MenuKey::Confirm, true);
+        paint_frame(&mut session);
+        assert_eq!(
+            session.game.screen(),
+            Screen::Room,
+            "resident Confirm enters Room with no wire round trip"
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn tt331_confirm_on_nonresident_channel_still_sends_login() {
+        // The residency shortcut must stay row-specific: a different
+        // row still logs in and stages the 2001 identity.
+        let (mut session, server) = channel_session(|mut stream| {
+            answer_entry_login(&mut stream);
+        });
+        let other_channel = o2jam_net::ChannelState {
+            channel_id: 1,
+            ..entry_channel()
+        };
+        session.game.set_channels(vec![entry_channel()]);
+        session.set_resident_channel(other_channel);
+        session.menu_key(MenuKey::Confirm, true);
+        paint_until(&mut session, |session| {
+            session.game.screen() == Screen::Room
+        });
+        server.join().unwrap();
+        assert_eq!(session.game.screen(), Screen::Room);
+        assert_eq!(
+            session
+                .game
+                .myroom_character()
+                .expect("non-resident Confirm stages the identity")
+                .nickname,
+            "gate"
+        );
     }
 
     #[test]
