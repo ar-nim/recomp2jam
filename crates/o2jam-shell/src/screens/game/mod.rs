@@ -7530,6 +7530,60 @@ mod game_tests {
         ]
     }
 
+    /// Baseline golden: every pixel of the flat channel row painter
+    /// for two synthetic rows with row 1 highlighted (no archives).
+    #[test]
+    fn channel_rows_render_golden() {
+        let mut buf = vec![0u32; 800 * 600];
+        let channels = two_channels();
+        paint_channel_list(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &channels,
+            0,
+            1,
+        );
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        for pixel in &buf {
+            hash_u64(&mut hash, u64::from(*pixel));
+        }
+        println!("CHANNEL_ROWS_GOLDEN_FLAT={hash:#018x}");
+
+        // Second scenario: scrolled viewport plus a hovered row on
+        // the art-less staged path (no install-root read).
+        let channels: Vec<ChannelState> = (0u16..6)
+            .map(|id| ChannelState {
+                gateway_id: 0,
+                channel_id: id,
+                capacity: 100,
+                population: 5,
+                active: true,
+            })
+            .collect();
+        let mut buf = vec![0u32; 800 * 600];
+        paint_channel_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &channels,
+            2,
+            5,
+            &SceneArt::default(),
+            None,
+            Some(3),
+        );
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        for pixel in &buf {
+            hash_u64(&mut hash, u64::from(*pixel));
+        }
+        println!("CHANNEL_ROWS_GOLDEN_HOVER={hash:#018x}");
+    }
+
     #[test]
     fn channel_arrow_keys_leave_list_top_and_highlight_untouched() {
         // Ticket #189 (rig-pin, closes the #174 key-rule OPEN): the exe
