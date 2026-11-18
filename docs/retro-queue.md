@@ -2,12 +2,16 @@
 
 Items parked for the next retrospective (owner calls the retro skill).
 
-## 2026-11-13 — #183 backfill evidence typo (#167, ea4e098b vs ea4f098)
+## 2026-11-13 — #183 backfill evidence typo (#167)
 
 - The ## Guards (backfill #183) comment on #167 cited evidence commit
   `ea4e098b`. That object does not exist in any branch.
-- The real fix commit is `ea4f098b975c16a94a7ea43885b60388acd62f83`
-  (`feat(shell): pulse the planet promo carousel from the repaint heartbeat`).
+- The historically quoted replacement is UNVERIFIED: neither `ea4f098` nor the
+  full `ea4f098b975c16a94a7ea43885b60388acd62f83` resolves in this checkout
+  (`git cat-file -t` fails for both). The commit with the recorded subject
+  is `6f4a130b2cf0b38b3be2e948a318838dcfa01c77`
+  (`feat(shell): pulse the planet promo carousel from the repaint heartbeat`,
+  verified `commit` and ancestor of HEAD). Use that SHA when citing the fix.
 - Effect: subagent guard-167 spun stuck on "commit not found".
   Senior steered with the correction, owner said interrupt-don't-steer,
   senior stopped it, tried the red-proof personally (heartbeat-kill alone
@@ -79,6 +83,40 @@ Items parked for the next retrospective (owner calls the retro skill).
 - Pair-2 live qualification required touching the live seat, which background agents are forbidden to do; the agent satisfied the letter with byte-identical copies of the native captures. Same fabrication signature as ticket 240.
 - Ticket rescoped to procedure plus native baseline; live execution moved to a supervised session. Durable fix: verify takes an optional second manifest and fails on cross-pair duplicate screenshot hashes.
 - Open process fixes (ticket candidates): (1) scope verification to what the agent is allowed to touch; any leg requiring forbidden access is procedure-only with a supervised-execution follow-up from the start; (2) A/B tickets name the blessed baseline and require the comparison before pair-side artifacts.
+
+## 2026-11-17 — #309 unresolvable commit hashes in tracker comments (#193, #139)
+
+- The closing comments on #193 and #139 cite short tokens from rebased-away
+  integration branches. Each fails `git cat-file -t` in this checkout. The
+  #193 map names four tokens plus the fifth carried by an earlier audit;
+  the #139 map names six, one of which (`9692d41`) is a parity verdict stamp,
+  not a commit. The batch-audit extension found the same rot in the #2-#23
+  closing comments (24 tokens).
+- Correction comments on both issues list the dispositions below. Every
+  replacement in this table was checked with `git cat-file -t` (`commit`) and
+  `git merge-base --is-ancestor <sha> HEAD` before posting; full SHAs come
+  from `git rev-parse`.
+
+| Stale token (not an object) | Verified replacement / disposition |
+| --- | --- |
+| `1426971` | `bb1f115` — cadence constant + frame index |
+| `582e43a` | `da3807c` — breathing frame wired into worn-figure paint |
+| `be8dec3` | `0e90a52` — clock guard for the breathing frame |
+| `bf23b59` | `aa5d4c3` — per-body-run mixed-frame fix (both issues) |
+| `c895ae93` | `ab3b4d5` — #176 idle-animation pin attempt |
+| `9692d41` | NOT A COMMIT — parity ledger verdict stamp; no replacement |
+| `33f5bf4` | `b1b8bd6` — stage shop catalog from avatar source |
+| `a429187` | `3813e6d` + `52d900f` — shop and music-shop/lanking boards |
+| `198a2fc` | `544830a` + `fdfd4bf` — buy send half + 5001 reply half |
+| `94918b2` | `b41dde6` — per-screen click handlers; old `0ff66b0..94918b2` range becomes `1039b6d..b41dde6` |
+
+- Close-discipline rule 6 in `docs/agents/triage-labels.md` now requires
+  full-SHA verification and a correction comment before a stale token can be
+  treated as evidence.
+- Guard check for the audit: `scripts/tracker-audit.sh` cannot enforce hash
+  validity. It reads issue text and checks `## Guards` names against `crates/`;
+  it has no git-object check and no posting hook. The reviewer's
+  `git cat-file -t` check at posting time remains the enforcement point.
 
 ## 2026-11-16 — asserted ticket prose as code fact without grepping (#190)
 

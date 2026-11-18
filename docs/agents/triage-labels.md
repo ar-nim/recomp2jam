@@ -145,11 +145,20 @@ Rules for closing playtest-class tickets (retro 2026-11-11, issues #26/#30/#53â€
    `gh issue comment` or body edit. Failure mode prevented: an agent stalls on
    "commit not found" when a later step (or a reviewer) tries to resolve the
    cited object, because the hash was mistyped or never existed (precedent:
-   #167 cited `ea4e098b`, which resolves to nothing; the real fix was
-   `ea4f098`). A token that fails is replaced by a verified SHA from
+   #167 cited `ea4e098b`, which resolves to nothing; both that token and the
+   historically quoted `ea4f098` fail verification in this checkout, so treat
+   the older record as UNVERIFIED and search `git log --all` for the subject).
+   A token that fails is replaced by a verified SHA from
    `git log --all` or marked explicitly UNVERIFIED with the rebased-away branch
    name. Version stamps that only look like hashes (for example `v: 9692d41`
    in the parity ledger) are labeled as stamps, not commits.
+   Verify a replacement with `git rev-parse <sha>` (full 40-hex form),
+   `git cat-file -t <sha>` (`commit`), and `git show -s --format='%H %s' <sha>`
+   (subject matches the claim); add `git merge-base --is-ancestor <sha> HEAD`
+   when the commit must be on the current line. Cite the full SHA in the
+   correction. Post a correction comment on the affected issue; do not let a
+   stale token stand in a closed comment's history (retro #309,
+   `docs/retro-queue.md`).
    `scripts/tracker-audit.sh` cannot enforce this rule: it reads issue text
    and checks guard names against `crates/`, with no git-object check and no
    posting hook. The reviewer check is the enforcement point.
