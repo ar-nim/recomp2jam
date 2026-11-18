@@ -1813,10 +1813,7 @@ pub fn paint_planet_scene(
     // banner placement, then lay only the selected frame over it —
     // its colorkey holes show the backdrop, never a sibling frame
     // (#170 ghosting; the exe refresh arm VA `0x48e4b0`).
-    art.paint_backdrop_live(frame, Screen::Planet, |placed| {
-        placed.code != PLANET_PROMO_IMAGE_CODE
-    });
-    paint_planet_promo_frame(frame, art, promo_index);
+    paint_planet_board(frame, art, promo_index);
     paint_planet_hover(frame, art, hover);
     paint_planet_press(frame, art, press);
     paint_planet_captions(frame, &art.placements);
@@ -1824,6 +1821,28 @@ pub fn paint_planet_scene(
         let rect = planet_band_rect(band);
         paint_cursor(frame, rect.x + 10, rect.y + rect.h as i32 / 2);
     }
+}
+
+/// Staged planet board plus the banner frame the exe's image control
+/// mounts. The channel dialog paints this same board behind its sheet,
+/// so it needs the carousel index, not just the staged art.
+#[derive(Debug, Clone, Copy)]
+pub struct StagedPlanetBoard<'a> {
+    /// Bound `State_Planet` scene art.
+    pub art: &'a SceneArt,
+    /// One-based carousel frame; `0` paints no banner.
+    pub promo_index: u32,
+}
+
+/// Planet board beneath a scene: the exe's image control mounts ONE
+/// banner frame (refresh arm VA `0x48e4b0`), so the rest stack omits
+/// the banner placement and the selected layer is laid over it. Both
+/// the bare board and the board under the channel dialog use this path.
+fn paint_planet_board(frame: &mut Frame<'_>, art: &SceneArt, promo_index: u32) {
+    art.paint_backdrop_live(frame, Screen::Planet, |placed| {
+        placed.code != PLANET_PROMO_IMAGE_CODE
+    });
+    paint_planet_promo_frame(frame, art, promo_index);
 }
 
 /// Promotion-banner frame: the exe's image control paints one frame
@@ -2539,28 +2558,31 @@ fn paint_channel_dialog_body(frame: &mut Frame<'_>, art: &SceneArt) -> bool {
 /// starts from device black (the live loop reuses one backbuffer
 /// across screens while the exe rebuilds every frame); pixels no art
 /// covers stay untouched, and without board art the strip below the
-/// dialog stays byte-identical to the art-less frame.
+/// dialog stays byte-identical to the art-less frame. The board's
+/// promotion image follows `promo_index`: the exe's image control
+/// mounts one frame, so the flanks show that frame, not all three
+/// stacked raw layers.
 pub fn paint_channel_scene(
     frame: &mut Frame<'_>,
     channels: &[ChannelState],
     top: usize,
     highlight: usize,
     art: &SceneArt,
-    board: Option<&SceneArt>,
+    board: Option<StagedPlanetBoard<'_>>,
     hovered_row: Option<usize>,
 ) {
-    if !art.has_figures() && !board.is_some_and(|board| board.has_figures()) {
+    if !art.has_figures() && !board.is_some_and(|board| board.art.has_figures()) {
         frame.buf.fill(0);
     }
-    if let Some(board) = board.filter(|board| board.has_figures()) {
-        board.paint_backdrop(frame, Screen::Planet);
+    if let Some(board) = board.filter(|board| board.art.has_figures()) {
+        paint_planet_board(frame, board.art, board.promo_index);
     }
     paint_channel_dialog_body(frame, art);
     art.paint_backdrop(frame, Screen::Channel);
     // An art-less channel scene has no label ink of its own, so the
     // shell title keeps it readable (the pinned no-fill test); staged
     // art never gets the stamp (#36).
-    if !art.has_figures() && !board.is_some_and(|board| board.has_figures()) {
+    if !art.has_figures() && !board.is_some_and(|board| board.art.has_figures()) {
         paint_title_over_art(frame, Screen::Channel);
     }
     paint_channel_rows(frame, channels, top, highlight, Some(art), hovered_row);
@@ -7914,6 +7936,65 @@ mod paint_tests {
         assert_eq!(buf[0], pack_xrgb(255, 0, 0));
         assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xFF, 0xFF)));
         assert!(has_ink_near(&buf, pack_xrgb(0xFF, 0xD0, 0x20)));
+    }
+
+    #[test]
+    fn channel_flanks_paint_the_selected_promo_frame_not_the_stack_top() {
+        // The exe mounts ONE banner frame in the planet image control
+        // (refresh arm VA `0x48e4b0`); the channel dialog opens over that
+        // same board, so its flanks must show that frame, never the last
+        // raw layer of the three-frame body.
+        use super::super::side::PLANET_PROMO_IMAGE_CODE;
+        let sprite = "Planet_Promotion.ojs";
+        let mut banner = AvatarFigure::default();
+        for word in [0x7C00u16, 0x03E0, 0x001F] {
+            banner.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&word.to_le_bytes().repeat(16), 4, 4).unwrap(),
+                dx: 49,
+                dy: 163,
+                colorkey: 0xFFFF,
+            });
+        }
+        let board = SceneArt {
+            placements: vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code: PLANET_PROMO_IMAGE_CODE,
+                sprite: Some(sprite.to_owned()),
+                rect: Rect {
+                    x: 49,
+                    y: 163,
+                    w: 701,
+                    h: 333,
+                },
+            }],
+            figures: HashMap::from([(sprite.to_owned(), banner)]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_channel_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &[],
+            0,
+            0,
+            &SceneArt {
+                placements: Vec::new(),
+                figures: HashMap::new(),
+            },
+            Some(StagedPlanetBoard {
+                art: &board,
+                promo_index: 1,
+            }),
+            None,
+        );
+        assert_eq!(
+            buf[164 * 800 + 50],
+            pack_xrgb(0xFF, 0x00, 0x00),
+            "the channel board must show the carousel-selected first frame"
+        );
     }
 
     /// One wire 1003 row; the fields the label must NOT read are
@@ -14421,7 +14502,10 @@ mod paint_tests {
             0,
             0,
             &art,
-            Some(&board),
+            Some(StagedPlanetBoard {
+                art: &board,
+                promo_index: 0,
+            }),
             None,
         );
         let blue = pack_xrgb(0x00, 0x00, 0xFF);
@@ -14462,7 +14546,10 @@ mod paint_tests {
             0,
             0,
             &art,
-            Some(&empty_board),
+            Some(StagedPlanetBoard {
+                art: &empty_board,
+                promo_index: 0,
+            }),
             None,
         );
         assert_eq!(buf[599 * 800 + 799], 0, "no-fill corner untouched");

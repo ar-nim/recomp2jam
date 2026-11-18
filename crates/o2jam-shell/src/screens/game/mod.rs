@@ -38,9 +38,9 @@ use super::paint::{
     paint_waiting_seat_avatar, paint_waiting_seat_avatars, playing_backdrop_staged,
     quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit, scene_index,
     staged_rect_hit, waiting_confirm_control_id, BattleVerdict, ChannelChatMessage, ChannelScroll,
-    LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, WaitingCaptions,
-    WaitingChatMessage, WaitingLevel, WaitingSong, CHANNEL_VISIBLE_ROWS, RESULT_BACK_ID,
-    RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, StagedPlanetBoard,
+    WaitingCaptions, WaitingChatMessage, WaitingLevel, WaitingSong, CHANNEL_VISIBLE_ROWS,
+    RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::select_paint::{paint_select_text, SelectTextSlots};
 use super::side::{
@@ -5968,7 +5968,10 @@ impl ScreenGame {
                     self.channel_top,
                     self.highlight,
                     art,
-                    self.scene_art(Screen::Planet),
+                    self.scene_art(Screen::Planet).map(|art| StagedPlanetBoard {
+                        art,
+                        promo_index: self.planet_board.planet_promo_carousel.index(),
+                    }),
                     self.hovered_channel_row(),
                 );
             }

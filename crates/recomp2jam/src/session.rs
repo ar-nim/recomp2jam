@@ -5116,6 +5116,91 @@ mod session_tests {
     }
 
     #[test]
+    fn synthetic_2026_body_leaves_the_channel_promo_selection_to_the_carousel() {
+        // Live caller chain: fake gateway S2C:2026 ->
+        // OnlineSession::paint -> poll_lobby_chat (foreign-id skip) ->
+        // ScreenGame::paint -> paint_channel_scene -> paint_planet_board
+        // -> paint_planet_promo_frame. Neither 1003 nor the 2026
+        // MusicPremiumTimeList carries a banner field; the exe's
+        // carousel word `this+0x80` is the only selector (docs/planet.md).
+        use o2jam_render::{pack_xrgb, Rgb555Image};
+        use o2jam_shell::avatar::{AvatarFigure, FigureLayer, PlacementRole, ScenePlacement};
+        use o2jam_shell::screens::side::PLANET_PROMO_IMAGE_CODE;
+
+        let mut premium_body = Vec::new();
+        premium_body.extend_from_slice(&1i32.to_le_bytes());
+        premium_body.extend_from_slice(&757i32.to_le_bytes());
+        premium_body.extend_from_slice(&3600i32.to_le_bytes());
+        let (mut session, server) = channel_session(move |mut stream| {
+            stream
+                .write_all(&encode_frame(2026, &premium_body))
+                .unwrap();
+            assert_quiet(&mut stream);
+        });
+        session
+            .game_mut()
+            .set_channels(vec![o2jam_net::ChannelState {
+                gateway_id: 0,
+                channel_id: 2,
+                capacity: 100,
+                population: 5,
+                active: true,
+            }]);
+        // Live boot stages the art-less STATE_CHANNEL block, so the
+        // staged channel painter (and the board beneath it) runs.
+        session.game_mut().load_scene(
+            Screen::Channel,
+            Vec::new(),
+            std::collections::HashMap::new(),
+        );
+
+        let sprite = "Planet_Promotion.ojs";
+        let mut banner = AvatarFigure::default();
+        for word in [0x7C00u16, 0x03E0, 0x001F] {
+            banner.push_layer(FigureLayer {
+                image: Rgb555Image::decode(&word.to_le_bytes().repeat(16), 4, 4).unwrap(),
+                dx: 49,
+                dy: 163,
+                colorkey: 0xFFFF,
+            });
+        }
+        session.game_mut().load_scene(
+            Screen::Planet,
+            vec![ScenePlacement {
+                role: PlacementRole::Single,
+                id: String::new(),
+                code: PLANET_PROMO_IMAGE_CODE,
+                sprite: Some(sprite.to_owned()),
+                rect: o2jam_render::Rect {
+                    x: 49,
+                    y: 163,
+                    w: 701,
+                    h: 333,
+                },
+            }],
+            std::collections::HashMap::from([(sprite.to_owned(), banner)]),
+        );
+
+        let paint_frame = |session: &mut OnlineSession| {
+            let mut buf = vec![0u32; 800 * 600];
+            session.paint(&mut o2jam_render::Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            });
+            buf[164 * 800 + 50]
+        };
+        assert_eq!(paint_frame(&mut session), pack_xrgb(0xFF, 0x00, 0x00));
+        server.join().unwrap();
+        session.game_mut().tick_planet_promo();
+        assert_eq!(
+            paint_frame(&mut session),
+            pack_xrgb(0x00, 0xFF, 0x00),
+            "the carousel index, not the wire body, moves the banner"
+        );
+    }
+
+    #[test]
     fn room_enter_sends_the_draft_as_one_2012() {
         // Ticket #37: the room lobby chat is the main-room chat, so
         // Enter sends the same 2012 body the Channel scene sends.
