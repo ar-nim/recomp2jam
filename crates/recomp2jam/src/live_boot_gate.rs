@@ -20,8 +20,8 @@ mod live_boot_gate_tests {
 
     use o2jam_net::frame::decode_frame;
     use o2jam_net::{
-        AuthResponse, ChannelList, ChannelLoginResponse, CharacterInfo, Frame, Gender, Request,
-        RoomList, WireMessage, HEADER_LEN,
+        AuthResponse, ChannelList, ChannelLoginResponse, CharacterInfo, Frame, Gender, JoinedRoom,
+        Request, RoomList, WireMessage, HEADER_LEN,
     };
     use o2jam_render::Frame as RenderFrame;
     use o2jam_shell::screens::SideScreen;
@@ -63,6 +63,14 @@ mod live_boot_gate_tests {
     /// login, room list, then the `GetCharacterInfo` 2001 fetch the
     /// gate asserts. Returns the port and the served character.
     fn spawn_boot_gateway() -> (u16, thread::JoinHandle<CharacterInfo>) {
+        spawn_boot_gateway_with_equipment([0; 17])
+    }
+
+    /// Same boot, but the fetched hero wears the given equipment table
+    /// (the live tester's face-only kit is the #243 oracle).
+    fn spawn_boot_gateway_with_equipment(
+        equipment: [i32; 17],
+    ) -> (u16, thread::JoinHandle<CharacterInfo>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let server = thread::spawn(move || {
@@ -93,12 +101,36 @@ mod live_boot_gate_tests {
                 nickname: "gate".to_owned(),
                 gender: Gender::Male,
                 level: 3,
+                equipment,
                 ..Default::default()
             };
             stream.write_all(&hero.encode()).unwrap();
             hero
         });
         (port, server)
+    }
+
+    /// Waiting room with no wire peers: the self seat still restages
+    /// from the fetched hero when the avatar source lands.
+    fn self_only_room() -> JoinedRoom {
+        JoinedRoom {
+            member_id: 0,
+            team: 0,
+            title: "Jam".to_owned(),
+            music_id: 0,
+            arena: 2,
+            key_mode: 2,
+            game_mode: 0,
+            difficulty: 0,
+            speed: 1,
+            has_super_manager: false,
+            user_count: 1,
+            slots: Vec::new(),
+            skills: Vec::new(),
+            premium: false,
+            champion: None,
+            champion_streak: None,
+        }
     }
 
     /// Boot options the windowed entries assemble for a channel login
@@ -425,6 +457,70 @@ mod live_boot_gate_tests {
             game.shop_avatar_staged(),
             "channel login stages the shop avatar pane from the equipped hero"
         );
+        server.join().unwrap();
+    }
+
+    /// Ticket #243: the live tester's empty body slot still carries
+    /// the default face (item 35, `Equip12`, wire slot 11), so the exe
+    /// paints the naked default body under it. The #336 pins the kit:
+    /// item 30 body under item 35 face (EV-336-A..D, `docs/equip.md`).
+    /// The scripted hero carries that face-only wire table.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online
+    ///   -> connect::connect_and_login_with_transport
+    ///   -> stage_online_identity -> connect::stack_worn_figure
+    ///   -> o2jam_shell::load_worn_figure
+    ///   -> ScreenGame::load_room_avatar + ScreenGame::set_avatar_source
+    ///   -> stage_seat_figures + restage_shop_avatar.
+    /// Archives absent -> skip cleanly (CI has no game data).
+    #[test]
+    fn live_boot_empty_body_slot_stages_the_default_naked_figure() {
+        if !install_root().join("O2Jam/Image/avatar.opa").exists() {
+            println!("skip: missing install-root avatar.opa");
+            return;
+        }
+        let mut face_only = [0; 17];
+        face_only[11] = 35;
+        let (port, server) = spawn_boot_gateway_with_equipment(face_only);
+        let (report, gateway) =
+            connect::connect_and_login_with_transport(&boot_options(port)).unwrap();
+        assert!(
+            report
+                .character
+                .as_ref()
+                .is_some_and(|hero| hero.equipment[11] == 35
+                    && hero
+                        .equipment
+                        .iter()
+                        .enumerate()
+                        .all(|(slot, id)| { slot == 11 || *id == 0 })),
+            "the gateway hero carries the live face-only equipment table"
+        );
+        let mut game = o2jam_shell::ScreenGame::new();
+        stage_online_identity(&mut game, report.character.as_ref());
+        game.set_joined_room(self_only_room());
+        let mut session =
+            assemble_online_session(game, gateway, Some("gate"), None, None, None).unwrap();
+        let game = session.game_mut();
+
+        let (archive, _) = connect::read_avatar_source(
+            install_root()
+                .join("O2Jam/Image/avatar.opa")
+                .to_string_lossy()
+                .as_ref(),
+        )
+        .unwrap();
+        let pinned = connect::stack_worn_figure(&archive, &[30, 35], true).unwrap();
+        assert_eq!(pinned.len(), 24, "body and face each carry 12 frames");
+
+        let room = game.room_avatar().expect("room card stages a figure");
+        assert_eq!(room.len(), pinned.len(), "room card stages the default kit");
+        assert_eq!(room.extent(), pinned.extent());
+        assert!(game.shop_avatar_staged(), "character card stages a figure");
+        let seat = game.waiting_avatar(0).expect("self seat stages a figure");
+        assert_eq!(seat.len(), pinned.len(), "seat stages the default kit");
+        assert_eq!(seat.extent(), pinned.extent());
         server.join().unwrap();
     }
 

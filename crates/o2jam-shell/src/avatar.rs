@@ -776,6 +776,49 @@ fn resolved_archive_entry(
     }
 }
 
+/// Item type word of the base body (local `Itemdata_Korea.dat`:
+/// only rows 30 `몸통` and 761 `초록몬스터몸통` carry it).
+const BODY_ITEM_TYPE: u32 = 0x0100_0000;
+/// Default naked body the exe paints beneath a kit with no body item.
+/// Pinned by #336 EV-336-A/B/C (`01M13T0000001.ojs` at `avatar.opa`
+/// offset `6,129,704`, anchor `(133,110)`) and the exe offsets in
+/// `docs/equip.md` (EV-336-D).
+const DEFAULT_BODY_ITEM_ID: u32 = 30;
+/// Default male face of that kit (`01M160000001.ojs`, anchor `(134,81)`).
+const DEFAULT_MALE_FACE_ITEM_ID: u32 = 35;
+/// Female parity of the default face (local `Itemdata_Korea.dat` row
+/// `여자얼굴 기본`, item id 36; the body row stages female art itself).
+const DEFAULT_FEMALE_FACE_ITEM_ID: u32 = 36;
+
+/// Rows the shared stacker composes: the equipped set, or the exe's
+/// naked default kit prepended when the set has no body item. Ids the
+/// kit already wears are not staged twice. Missing table rows are
+/// skipped like any other unresolved item.
+fn compose_worn_rows<'a>(
+    equipped: Vec<&'a o2jam_file::AvatarItemRow>,
+    rows: &HashMap<u32, &'a o2jam_file::AvatarItemRow>,
+    male: bool,
+) -> Vec<&'a o2jam_file::AvatarItemRow> {
+    if equipped.iter().any(|row| row.item_type == BODY_ITEM_TYPE) {
+        return equipped;
+    }
+    let face_id = if male {
+        DEFAULT_MALE_FACE_ITEM_ID
+    } else {
+        DEFAULT_FEMALE_FACE_ITEM_ID
+    };
+    let mut composed = Vec::with_capacity(equipped.len() + 2);
+    for id in [DEFAULT_BODY_ITEM_ID, face_id] {
+        if !equipped.iter().any(|row| row.item_id == id) {
+            if let Some(row) = rows.get(&id) {
+                composed.push(*row);
+            }
+        }
+    }
+    composed.extend(equipped);
+    composed
+}
+
 /// Find one avatar-shop row by id (file order; `None` when unknown).
 /// Single-lookup companion to the bulk map inside [`load_worn_figure`];
 /// side screens list equipment through it.
@@ -791,10 +834,12 @@ pub fn avatar_item_by_id(
 /// family (instrument or idle, [`worn_pose`]), then per nonzero item id
 /// (in slot order) resolve the item row, pick its wear bodies (one per
 /// part block in that pose, [`pick_wear_sprites`]), and stack every
-/// decodable body as layers. Unresolvable pieces —
-/// unknown ids, missing archive entries, non-sprite or undecodable
-/// bodies — are skipped, never fatal: one bad sprite must not blank
-/// the whole avatar. Empty when nothing resolves.
+/// decodable body as layers. A set with no body-type item composes the
+/// exe's naked default kit ([`compose_worn_rows`]) beneath the worn
+/// pieces; a set with a body item keeps its own composition.
+/// Unresolvable pieces — unknown ids, missing archive entries,
+/// non-sprite or undecodable bodies — are skipped, never fatal: one
+/// bad sprite must not blank the whole avatar.
 #[must_use]
 pub fn load_worn_figure(
     archive: &[u8],
@@ -804,12 +849,13 @@ pub fn load_worn_figure(
 ) -> AvatarFigure {
     let rows: HashMap<u32, _> = table.rows.iter().map(|row| (row.item_id, row)).collect();
     let entries = o2jam_file::parse_opi(archive).unwrap_or_default();
-    let worn_rows: Vec<&o2jam_file::AvatarItemRow> = equipment
+    let equipped_rows: Vec<&o2jam_file::AvatarItemRow> = equipment
         .iter()
         .copied()
         .filter(|id| *id != 0)
         .filter_map(|id| rows.get(&(id as u32)).copied())
         .collect();
+    let worn_rows = compose_worn_rows(equipped_rows, &rows, male);
     let pose = worn_pose(worn_rows.iter().copied());
     let mut figure = AvatarFigure::default();
     for row in worn_rows {
@@ -2484,6 +2530,85 @@ mod avatar_figure_tests {
             0,
         );
         assert_eq!(buf[0], o2jam_render::pack_xrgb(0, 255, 0));
+    }
+
+    /// Ticket #243: empty equipment stages the exe's naked default
+    /// body and face (#336 EV-336-A..D, `docs/equip.md`), not an empty
+    /// figure. Synthetic sprites stand in for the pinned ids 30/35/36.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online -> stage_online_identity
+    ///   -> connect::stack_worn_figure -> o2jam_shell::load_worn_figure
+    ///   (also ScreenGame::stage_seat_figures and restage_shop_avatar).
+    /// Archives absent -> N/A (synthetic archive and table).
+    #[test]
+    fn empty_equipment_stages_the_pinned_default_naked_kit() {
+        let body = sprite55_blob(1, 0, 2, 1, &[0, 0, 0, 0x7C]);
+        let male_face = sprite55_blob(1, 0, 1, 1, &[0xE0, 0x03]);
+        let female_face = sprite55_blob(1, 0, 1, 1, &[0x1F, 0x00]);
+        let archive = opa_blob(&[
+            ("default-body.ojs", &body),
+            ("male-face.ojs", &male_face),
+            ("female-face.ojs", &female_face),
+        ]);
+        let table = o2jam_file::AvatarItemTable {
+            rows: vec![
+                item_row(
+                    30,
+                    &[
+                        "icon.oji",
+                        "icon.oji",
+                        "default-body.oji",
+                        "default-body.oji",
+                    ],
+                ),
+                item_row(35, &["icon.oji", "icon.oji", "male-face.oji"]),
+                item_row(36, &["icon.oji", "icon.oji", "", "female-face.oji"]),
+            ],
+        };
+
+        let male = load_worn_figure(&archive, &table, &[0; 17], true);
+        assert_eq!(male.len(), 2, "default body and male face are staged");
+        assert_eq!(male.layer(0).unwrap().image.words, vec![0, 0x7C00]);
+        assert_eq!(male.layer(1).unwrap().image.words, vec![0x03E0]);
+
+        let female = load_worn_figure(&archive, &table, &[0; 17], false);
+        assert_eq!(female.len(), 2, "default body and female face are staged");
+        assert_eq!(female.layer(1).unwrap().image.words, vec![0x001F]);
+
+        // The live tester's 2001 wire carries the default face and no
+        // body cell (#336 EV-336-B, `Equip12 = 35`, slot 11). The exe
+        // paints the pinned body under that face.
+        let mut face_only = [0; 17];
+        face_only[11] = 35;
+        let face_only = load_worn_figure(&archive, &table, &face_only, true);
+        assert_eq!(face_only.len(), 2, "face-only wire gains the default body");
+        assert_eq!(face_only.layer(0).unwrap().image.words, vec![0, 0x7C00]);
+        assert_eq!(face_only.layer(1).unwrap().image.words, vec![0x03E0]);
+    }
+
+    /// Ticket #243: a kit with a body item keeps its own layers. The
+    /// default kit is a fallback for a missing body row, never an
+    /// extra layer on an avatar that already wears item 30.
+    ///
+    /// Live caller chain:
+    ///   main.rs::run_play -> setup_online -> stage_online_identity
+    ///   -> connect::stack_worn_figure -> o2jam_shell::load_worn_figure.
+    /// Archives absent -> N/A (synthetic archive and table).
+    #[test]
+    fn equipped_figure_keeps_its_own_layers_without_default_fallback() {
+        let worn = sprite55_blob(1, 0, 1, 1, &[0, 0x7C]);
+        let body = sprite55_blob(1, 0, 1, 1, &[0xE0, 0x03]);
+        let archive = opa_blob(&[("worn.ojs", &worn), ("default-body.ojs", &body)]);
+        let mut body_row = item_row(30, &["icon.oji", "icon.oji", "default-body.oji"]);
+        body_row.item_type = BODY_ITEM_TYPE;
+        let table = o2jam_file::AvatarItemTable {
+            rows: vec![item_row(5, &["icon.oji", "icon.oji", "worn.oji"]), body_row],
+        };
+        let figure = load_worn_figure(&archive, &table, &[5, 30], true);
+        assert_eq!(figure.len(), 2, "both equipped items are staged");
+        assert_eq!(figure.layer(0).unwrap().image.words, vec![0x7C00]);
+        assert_eq!(figure.layer(1).unwrap().image.words, vec![0x03E0]);
     }
 
     #[test]

@@ -60,8 +60,9 @@ The slot is derived from the item record (looked up via the
 
 ## Equipment id rules
 
-- `0` = slot empty (matches `CharacterInfo` and
-  `load_worn_figure`, which skips `0`).
+- `0` = slot empty (`CharacterInfo`; `load_worn_figure` skips zero
+  cells, then substitutes the default body when no equipped row is a
+  body-type item — see #243 below).
 - `1..=1541` = `Itemdata_Korea.dat` row ids (walk lands exact at
   EOF; `docs/file-formats/opi.md`).
 - Unknown ids, missing archive entries, and non-sprite bodies are
@@ -105,6 +106,47 @@ carries `Bag1..3 = 376, 383, 35` (zeros elsewhere, `BAG_EXT_COUNT`
 0), so the probed 2001 `inventory` reads `[376, 383, 35, 0×27]` —
 the owned-items source the bag pages live (DB backup
 `~/memoryer-local/O2JAM.db.pre200.bak`; local DB rows only).
+
+## Empty body slot — default naked figure (#243, 2026-11-16/18)
+
+The local tester's 2001 wire is not a wholly empty table: `Equip12`
+holds face item 35 and the other 16 cells are zero (live DB read-only
+query: `t_o2jam_item` for accounts 1 and 3, `Equip12=35`;
+`t_o2jam_char_attr_item` count 0 is a different table). The exe paints
+a full naked body beneath that face; our client painted only the head.
+This is the same wire as EV-336-B, so the default body is item 30.
+
+Pinned oracle: `~/scratch/exe-avatar2/waiting-full.png` (800x600 exe
+waiting room, naked default avatar at seat 2, READY tag; MD5
+`a4254cb47d3c458c5f836e4fee89cc81`) and `avatar-closeup.png` (MD5
+`13659098704828e695a703c50df855a0`), verified by senior eyes in the
+#243 thread. Exe pin: `AngelO2Jam.exe`, 5,029,888 B, SHA-256
+`83a04541b8219ba340681766b33de2bfbb5ff51b813ef4d2e9dd1def72c823b`.
+Part evidence: EV-336-B (`Itemdata_Korea.dat` at `avatar.opa` file
+offset `142,934,156`, 740,945 B; body row 30, face row 35) and
+EV-336-C (body `01M13T0000001.ojs` at file offset `6,129,704`, anchor
+`(133,110)`, 34×89, 12 frames; face `01M160000001.ojs` at offset
+`6,495,728`, anchor `(134,81)`, 32×35, 12 frames). EV-336-D exe sites
+in this file: CAvatar ctor VA `0x52b290` (file `0x12b290`, 66 ms
+step), restage VA `0x52b480` (file `0x12b480`), paint VA `0x52b9b0`
+(file `0x12b9b0`, 48-step phase). File offset = VA − `0x400000`.
+
+Behavior: when the equipped rows contain no body-type item (type word
+`0x01000000`, local table rows 30 and 761), `load_worn_figure` stages
+default body 30 beneath the worn pieces, plus default face 35 for a
+male wearer or 36 (`여자얼굴 기본`) for a female wearer. Ids already
+equipped are not staged twice, so a face-only kit gains only the body
+and a kit with item 30 is unchanged. The fallback lives at the shared
+compose seam, so live seats, the card/room figure, and the shop pane
+all use it. A face-only kit is the live case; an all-zero table gets
+the same default pair.
+
+Guards: `empty_equipment_stages_the_pinned_default_naked_kit` and
+`equipped_figure_keeps_its_own_layers_without_default_fallback`
+(synthetic sprites; live chain named in each test), plus
+`live_boot_empty_body_slot_stages_the_default_naked_figure` (scripted
+gateway boot with the face-only wire table, skipped when
+`install-root` is absent). No copyrighted bytes were added.
 
 ## Worn-figure animation (pinned: 66 ms step, 48-step phase)
 

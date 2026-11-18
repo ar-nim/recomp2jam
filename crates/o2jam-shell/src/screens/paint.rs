@@ -11904,8 +11904,9 @@ mod paint_tests {
     /// copies the row 1:1 into the 17-slot `CharacterInfo.equipment`
     /// (live wire probe under the stack-every-slot picker read 60 and
     /// 447 layers; the picker now wears one body per part block, so the
-    /// face-only row stages one 12-frame body and the kitted row 8
-    /// bodies — the panel rightly painted head-only for the face row).
+    /// face-only row now stages the pinned default body beneath its
+    /// face (ticket #243: exe oracle, `docs/equip.md`), and the kitted
+    /// row 8 bodies).
     /// Column placement of the five kit ids is fixture freedom (the
     /// stacker resolves ids, not slot semantics); only the face column
     /// is pinned.
@@ -12088,14 +12089,12 @@ mod paint_tests {
     }
 
     #[test]
-    fn room_user_panel_paints_head_only_for_the_face_only_row() {
-        // Ticket #171 round 2 diagnosis: the live tester2 row carried
-        // exactly one worn item (the default male face 35 at
-        // `Equip12`), so the head-only panel render was CORRECT for
-        // that data — the stacker stacks what the 2001 reply carries
-        // and invents no body parts. This guard pins that reading: the
-        // face-only row inks a head-sized blob (under half the slot
-        // height), never a full-body figure.
+    fn room_user_panel_paints_default_body_for_the_face_only_row() {
+        // Ticket #243 supersedes #171 round 2: the live face-only wire
+        // carried item 35 at `Equip12`, and the exe still paints the
+        // naked default body (item 30) beneath it — #336 EV-336-A..D,
+        // `docs/equip.md`. This guard pins the full-height ink in the
+        // room user panel, not the old head-only reading.
         let mut face_only = [0i32; 17];
         face_only[11] = 35;
         let Some(figure) = stacked_figure_for_row(&face_only, true) else {
@@ -12135,8 +12134,8 @@ mod paint_tests {
         let (x0, y0, x1, y1) =
             figure_only_bbox(&buf, &bare).expect("the face stack must ink the scene");
         assert!(
-            y1 - y0 + 1 < 75,
-            "the face-only row must paint head-only ink ({h} tall), not a body",
+            y1 - y0 + 1 >= 75,
+            "the face-only row must paint the default body ({h} tall), not head-only ink",
             h = y1 - y0 + 1,
         );
         assert!(
@@ -12144,7 +12143,7 @@ mod paint_tests {
                 && y0 >= slot.y
                 && x1 < slot.x + slot.w as i32
                 && y1 < slot.y + slot.h as i32,
-            "face ink ({x0},{y0})-({x1},{y1}) must stay inside its slot {slot:?}"
+            "default figure ink ({x0},{y0})-({x1},{y1}) must stay inside its slot {slot:?}"
         );
     }
 
