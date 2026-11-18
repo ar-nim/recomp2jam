@@ -42,19 +42,20 @@ use super::paint::{
     WaitingCaptions, WaitingChatMessage, WaitingLevel, WaitingSong, CHANNEL_VISIBLE_ROWS,
     RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
-use super::select_paint::{paint_select_text, SelectTextSlots};
+use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots};
 use super::side::{
     can_return_side, can_visit_side, create_room_action_at, default_room_title, lanking_action_at,
     music_shop_action_at, myroom_action_at, myroom_bag_pages, myroom_bag_rows, myroom_equip_slot,
     myroom_gift_captions, myroom_gift_page, myroom_gift_pages, myroom_gift_views,
     myroom_identity_captions, myroom_record_slot, myroom_wallet_captions, paint_side_scene,
-    password_action_at, payment_side_notice, planet_action_at, select_filter_choice_at,
-    select_music_rows, select_music_songs_with_labels, select_row_hit, shop_action_at,
-    side_scene_slot, song_installed, waiting_team_for_code, wallet_row_caption, CreateRoomAction,
-    CreateRoomForm, LankingSong, LankingSort, MusicShopRow, MyRoomAction, MyRoomState,
-    PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog,
-    SelectMusicFilter, SelectMusicRow, SelectMusicSong, ShopAction, ShopGiftNoop, ShopGood,
-    SideScreen, WalletRow, WalletState, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL,
+    password_action_at, payment_side_notice, planet_action_at, select_chrome_action_at,
+    select_filter_choice_at, select_music_rows, select_music_songs_with_labels, select_row_hit,
+    shop_action_at, side_scene_slot, song_installed, waiting_team_for_code, wallet_row_caption,
+    CreateRoomAction, CreateRoomForm, LankingSong, LankingSort, MusicShopRow, MyRoomAction,
+    MyRoomState, PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo,
+    RoomDialog, SelectChromeAction, SelectHelpSheet, SelectMusicFilter, SelectMusicMode,
+    SelectMusicRow, SelectMusicSong, SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop,
+    ShopGood, SideScreen, WalletRow, WalletState, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL,
     OPTION_GAME_BLEND_NO, OPTION_GAME_BLEND_YES, OPTION_GAME_EFFECT_HIGH, OPTION_GAME_EFFECT_LOW,
     OPTION_GAME_EFFECT_NORMAL, OPTION_GAME_GUIDE_LONG, OPTION_GAME_GUIDE_MIDDLE,
     OPTION_GAME_GUIDE_NOUSE, OPTION_GAME_GUIDE_SHORT, OPTION_GAME_LONGNOTE_NONE,
@@ -64,7 +65,8 @@ use super::side::{
     OPTION_SOUND_BG_MUSIC_DOWN, OPTION_SOUND_BG_MUSIC_UP, OPTION_SOUND_GAME_EFFECT_DOWN,
     OPTION_SOUND_GAME_EFFECT_UP, OPTION_SOUND_GAME_MUSIC_DOWN, OPTION_SOUND_GAME_MUSIC_UP,
     PLANET_OPTION_FIRST_TAB, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE,
-    SELECT_NOT_DOWNLOADED_NOTICE, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP, SHOP_ITEMGIFT_IDS,
+    SELECT_NOT_DOWNLOADED_NOTICE, SELECT_VISIBLE_ROWS, SHOP_GIFTITEM_ID, SHOP_GIFT_NEXT_STEP,
+    SHOP_ITEMGIFT_IDS,
 };
 use crate::music_download::{MusicDownload, MusicDownloadCompletion};
 use crate::{menu_of, InputEdge, InputSnapshot, MenuKey};
@@ -752,6 +754,20 @@ pub struct ScreenGame {
     /// [`SelectMusicFilter::ALL`] whenever the dialog opens, the exe's
     /// ctor sentinels.
     select_filter: SelectMusicFilter,
+    /// Which selection panel the song dialog paints (#285). The
+    /// opening frame uses the song panel (VA `0x44f8a0`).
+    select_mode: SelectMusicMode,
+    /// Which help sheet the `?` buttons show (#285); none at open.
+    select_help: SelectHelpSheet,
+    /// Zero-based result page the pager shows (#285).
+    select_page: usize,
+    /// Column the next search applies to (exe field `+0x188`).
+    select_search_field: SelectSearchField,
+    /// Text typed into the dialog's search edit box.
+    select_search_draft: String,
+    /// Applied search query: the field and text the last SERACH press
+    /// submitted. `None` until then, so typing alone never narrows.
+    select_search_query: Option<(SelectSearchField, String)>,
     /// Local music seat from the install's `Music` folder scan
     /// (`docs/music-availability.md` §1): which catalog songs have a
     /// chart file on disk. `None` while no scan ran (no local
@@ -1164,6 +1180,12 @@ impl ScreenGame {
             select_music_art: None,
             select_music_art_cache: None,
             select_filter: SelectMusicFilter::ALL,
+            select_mode: SelectMusicMode::SongSelect,
+            select_help: SelectHelpSheet::None,
+            select_page: 0,
+            select_search_field: SelectSearchField::Title,
+            select_search_draft: String::new(),
+            select_search_query: None,
             installed_music: None,
             select_music_notice: None,
             waiting_notice: None,
@@ -3212,9 +3234,7 @@ impl ScreenGame {
         if self.waiting.is_none() {
             return false;
         }
-        let row = select_music_rows(&self.catalog_songs, self.select_filter)
-            .get(index)
-            .copied();
+        let row = self.select_rows().get(index).copied();
         let Some(row) = row else {
             return false;
         };
@@ -3234,20 +3254,19 @@ impl ScreenGame {
     /// song through [`Self::pick_select_music_row`]. Only the room
     /// master sees the dialog (paint gates it) and only masters pick
     /// — the `MUSELECT 0x16200003` click handler drops non-master
-    /// clicks (file `0xb2622`). The three filter columns narrow the
-    /// table first (ticket #273, [`Self::click_select_filter`]). The
-    /// rest of the chrome (pager, search, chosung) has no evidenced
-    /// click behavior, so it stays display-only and BACK stays
-    /// reachable. The OK button is the other evidenced exception
-    /// (ticket #232): with a staged pick it confirms and closes the
-    /// dialog so START can proceed. `true` consumed.
+    /// clicks (file `0xb2622`). The filter columns (#273), OK (#232),
+    /// mode switch, help sheets, pager and search (#285,
+    /// [`Self::click_select_chrome`]) each answer on their staged
+    /// `.bnd` rect; other chrome stays display-only and BACK stays
+    /// reachable. `true` consumed.
     fn click_select_music(&mut self, x: i32, y: i32) -> bool {
         if !self.is_room_master() || self.select_music_art.is_none() {
             return false;
         }
-        let rows = select_music_rows(&self.catalog_songs, self.select_filter);
+        let rows = self.select_rows();
         if let Some(index) = select_row_hit(x, y, rows.len()) {
-            return self.pick_select_music_row(index);
+            let page_row = self.select_page.saturating_mul(SELECT_VISIBLE_ROWS);
+            return self.pick_select_music_row(page_row.saturating_add(index));
         }
         // Dialog OK confirms the staged pick (ticket #232): the
         // BND-paired OK button (Dialog_SelectMusic.bnd rect [1])
@@ -3265,7 +3284,85 @@ impl ScreenGame {
                 return true;
             }
         }
+        if self.click_select_chrome(x, y) {
+            return true;
+        }
         self.click_select_filter(x, y)
+    }
+
+    /// Search-result rows the dialog currently shows: the three
+    /// filter columns first (#273), then the submitted search query
+    /// (#285). Typing alone never narrows the table — the SERACH
+    /// button submits the draft, as in the exe's search arm.
+    fn select_rows(&self) -> Vec<SelectMusicRow<'_>> {
+        let rows = select_music_rows(&self.catalog_songs, self.select_filter);
+        let Some((field, query)) = self.select_search_query.as_ref() else {
+            return rows;
+        };
+        if query.trim().is_empty() {
+            return rows;
+        }
+        let needle = query.trim().to_lowercase();
+        rows.into_iter()
+            .filter(|row| {
+                let text = match field {
+                    SelectSearchField::Title => &row.song.title,
+                    SelectSearchField::Artist => &row.song.artist,
+                };
+                text.to_lowercase().contains(&needle)
+            })
+            .collect()
+    }
+
+    /// Chrome actions of the song dialog (#285, `docs/select-chrome.md`).
+    /// Every hit test reads a staged `.bnd` rect, never a literal.
+    /// `true` consumed.
+    fn click_select_chrome(&mut self, x: i32, y: i32) -> bool {
+        let Some(action) = self
+            .select_music_art
+            .as_ref()
+            .and_then(|art| select_chrome_action_at(&art.placements, x, y))
+        else {
+            return false;
+        };
+        match action {
+            SelectChromeAction::Mode(mode) => {
+                self.select_mode = mode;
+                self.select_help = SelectHelpSheet::None;
+            }
+            SelectChromeAction::Help(sheet) => self.select_help = sheet,
+            SelectChromeAction::Reorder(_) => {
+                // Exe arms VA `0x43e8bd`/`0x43e8f9` reorder a *playlist*
+                // row; the result tab disables both buttons (VA
+                // `0x43e52d`/`0x43e550`), which is the tab we stage.
+            }
+            SelectChromeAction::Page(step) => {
+                let pages = self
+                    .select_rows()
+                    .len()
+                    .div_ceil(SELECT_VISIBLE_ROWS)
+                    .max(1);
+                self.select_page = match step {
+                    SelectPagerStep::Previous => self.select_page.saturating_sub(1),
+                    SelectPagerStep::Next => (self.select_page + 1).min(pages - 1),
+                };
+            }
+            SelectChromeAction::SearchField(field) => self.select_search_field = field,
+            SelectChromeAction::Search => {
+                let query = self.select_search_draft.trim().to_owned();
+                self.select_search_query =
+                    (!query.is_empty()).then_some((self.select_search_field, query));
+                self.select_page = 0;
+            }
+            SelectChromeAction::SearchIndex(_index) => {
+                // Chosung key grid: the `+0x680` keyed filter rebuild
+                // (VA `0x444630`, key names at VA `0x6454d8`) is its own
+                // slice; the inventory pins every button in
+                // `docs/select-chrome.md`. No invented key here.
+                return false;
+            }
+        }
+        true
     }
 
     /// Song-dialog filter columns (ticket #273): a click on a
@@ -3291,6 +3388,49 @@ impl ScreenGame {
     #[must_use]
     pub fn select_filter(&self) -> SelectMusicFilter {
         self.select_filter
+    }
+
+    /// Live selection panel (`SongSelect` on open).
+    #[must_use]
+    pub fn select_mode(&self) -> SelectMusicMode {
+        self.select_mode
+    }
+
+    /// Help sheet currently painted (`None` on open).
+    #[must_use]
+    pub fn select_help_sheet(&self) -> SelectHelpSheet {
+        self.select_help
+    }
+
+    /// Zero-based result page the pager shows.
+    #[must_use]
+    pub fn select_page(&self) -> usize {
+        self.select_page
+    }
+
+    /// Column the next SERACH press applies to.
+    #[must_use]
+    pub fn select_search_field(&self) -> SelectSearchField {
+        self.select_search_field
+    }
+
+    /// Text currently in the dialog's search edit box.
+    #[must_use]
+    pub fn select_search_draft(&self) -> &str {
+        &self.select_search_draft
+    }
+
+    /// Append one typed character to the dialog's search edit box.
+    /// The open dialog owns keyboard text; chat waits until it closes.
+    pub fn push_select_search_char(&mut self, typed: char) {
+        if !typed.is_control() {
+            self.select_search_draft.push(typed);
+        }
+    }
+
+    /// Erase the last search-draft character (Backspace).
+    pub fn delete_select_search_char(&mut self) {
+        self.select_search_draft.pop();
     }
     /// Whether a click hits a staged Waiting confirm button
     /// (START/READY ids only; art-less clicks land nowhere — no pinned
@@ -3339,7 +3479,7 @@ impl ScreenGame {
             if self.select_music_art.is_none() {
                 // A reopened dialog starts unfiltered, like the exe's
                 // ctor sentinels (VAs `0x43d324`/`0x43d331`/`0x43d33e`).
-                self.select_filter = SelectMusicFilter::ALL;
+                self.reset_select_chrome();
                 if let Some(cached) = self.select_music_art_cache.clone() {
                     self.select_music_art = Some(cached);
                 } else {
@@ -3728,10 +3868,23 @@ impl ScreenGame {
             placements,
             figures,
         };
-        self.select_filter = SelectMusicFilter::ALL;
+        self.reset_select_chrome();
         self.select_music_art_cache = Some(art.clone());
         self.select_music_art = Some(art);
         self
+    }
+
+    /// Opening state of the song dialog's chrome: song panel, no help
+    /// sheet, first page, empty search draft (exe ctor VAs
+    /// `0x43d324`/`0x43d331`/`0x43d33e` plus the empty edit box).
+    fn reset_select_chrome(&mut self) {
+        self.select_filter = SelectMusicFilter::ALL;
+        self.select_mode = SelectMusicMode::SongSelect;
+        self.select_help = SelectHelpSheet::None;
+        self.select_page = 0;
+        self.select_search_field = SelectSearchField::Title;
+        self.select_search_draft.clear();
+        self.select_search_query = None;
     }
 
     /// Staged select-music catalog songs (catalog order, dead slots
@@ -6225,23 +6378,57 @@ impl ScreenGame {
             return;
         };
         let slots = SelectTextSlots::from_placements(&art.placements);
-        let rows = select_music_rows(&self.catalog_songs, self.select_filter);
-        paint_select_text(
-            frame,
-            &slots,
-            &rows,
-            self.selected_music,
-            self.select_music_notice,
-        );
+        let rows = self.select_rows();
+        let page_start = self.select_page.saturating_mul(SELECT_VISIBLE_ROWS);
+        let visible = rows.get(page_start..).unwrap_or(&[]);
+        let search_banner = self
+            .select_search_query
+            .as_ref()
+            .map(|(field, query)| super::side::select_search_status(*field, query));
+        let status = self.select_music_notice.or(search_banner.as_deref());
+        let live = SelectTextLive {
+            page: self.select_page,
+            status,
+        };
+        paint_select_text(frame, &slots, visible, self.selected_music, live);
+    }
+
+    /// Which staged bodies the current song-dialog frame paints (#285).
+    /// The mode switch shows one of the two level-column families; the
+    /// `?` buttons show at most one help sheet. Every rect still comes
+    /// from `.bnd` staging.
+    fn select_sprite_visible(&self, placement: &ScenePlacement) -> bool {
+        let Some(sprite) = placement.sprite.as_deref() else {
+            return true;
+        };
+        if crate::staging::SELECT_MUSIC_RANDOM_SPRITES.contains(&sprite) {
+            return self.select_mode == SelectMusicMode::Random;
+        }
+        if crate::staging::SELECT_MUSIC_LEVEL_SPRITES.contains(&sprite) {
+            return self.select_mode == SelectMusicMode::SongSelect;
+        }
+        if crate::staging::SELECT_MUSIC_PAINT_GATED_SPRITES.contains(&sprite) {
+            return self.select_help
+                == match sprite {
+                    crate::staging::SELECT_MUSIC_LABEL_GUIDE => SelectHelpSheet::Label,
+                    crate::staging::SELECT_MUSIC_SEARCH_GUIDE => SelectHelpSheet::Search,
+                    crate::staging::SELECT_MUSIC_LIST_GUIDE => SelectHelpSheet::List,
+                    _ => SelectHelpSheet::None,
+                };
+        }
+        true
     }
 
     /// Layer staged song-select dialog figures over the waiting seats.
-    /// Placements without a loaded figure paint nothing.
+    /// Placements without a loaded figure or gated out by the current
+    /// mode/help state paint nothing.
     fn paint_select_music_art(&self, frame: &mut Frame<'_>) {
         let Some(art) = self.select_music_art.as_ref() else {
             return;
         };
-        art.paint_overlay(frame);
+        art.paint_backdrop_live(frame, Screen::Waiting, |placement| {
+            self.select_sprite_visible(placement)
+        });
     }
 
     /// Loading gate: staged art, then title–artist. The OPEN progress
@@ -6573,7 +6760,9 @@ impl GameLoop for ScreenGame {
 
     fn text_input(&mut self, text: &str) {
         for typed in text.chars() {
-            if self.flow.current() == Screen::Waiting {
+            if self.select_music_dialog_open() {
+                self.push_select_search_char(typed);
+            } else if self.flow.current() == Screen::Waiting {
                 self.push_chat_char(typed);
             } else {
                 self.push_lobby_char(typed);
@@ -6582,7 +6771,9 @@ impl GameLoop for ScreenGame {
     }
 
     fn delete_text(&mut self) {
-        if self.flow.current() == Screen::Waiting {
+        if self.select_music_dialog_open() {
+            self.delete_select_search_char();
+        } else if self.flow.current() == Screen::Waiting {
             self.delete_chat_char();
         } else {
             self.delete_lobby_char();
@@ -14993,6 +15184,325 @@ mod game_tests {
             member_key: 42,
         };
         assert_eq!(game.apply_room_team_changed(&wide), None);
+    }
+
+    /// Synthetic `.bnd` placements for one chrome control each. The
+    /// ids and hit tests are the real ones; the fixture rects keep the
+    /// guards independent of installed game data (CI arm).
+    fn select_chrome_placements() -> Vec<ScenePlacement> {
+        const IDS: [&str; 11] = [
+            "IDC_BUTTON_DSMUSIC_MUISCSELECT",
+            "IDC_BUTTON_DSMUSIC_RANDOMSELECT",
+            "IDC_BUTTON_DSMUSIC_LABELQUESTION",
+            "IDC_BUTTON_DSMUSIC_SEARCHQUESTION",
+            "IDC_BUTTON_DSMUSIC_LEFT",
+            "IDC_BUTTON_DSMUSIC_RIGHT",
+            "IDC_BUTTON_DSMUSIC_UP",
+            "IDC_BUTTON_DSMUSIC_DOWN",
+            "IDC_BUTTON_DSMUSIC_SEARCH_TITLE",
+            "IDC_BUTTON_DSMUSIC_SEARCH_ARTIST",
+            "IDC_BUTTON_DSMUSIC_SERACH",
+        ];
+        IDS.iter()
+            .enumerate()
+            .map(|(index, id)| ScenePlacement {
+                role: PlacementRole::Single,
+                id: (*id).to_owned(),
+                code: 0,
+                sprite: None,
+                rect: Rect {
+                    x: 20,
+                    y: 20 + i32::try_from(index * 30).unwrap_or(0),
+                    w: 30,
+                    h: 20,
+                },
+            })
+            .collect()
+    }
+
+    /// Click a synthetic chrome placement by its inventory index.
+    fn click_chrome(game: &mut ScreenGame, index: usize) {
+        let y = 20 + i32::try_from(index * 30).unwrap_or(0);
+        game.ingest_snapshot(&InputSnapshot::click_at(35, y + 10));
+    }
+
+    /// Gated sprite bodies at unique origins, one solid pixel each, so
+    /// a paint guard can tell which family the dialog shows.
+    fn gated_select_art() -> (Vec<ScenePlacement>, HashMap<String, AvatarFigure>) {
+        const GATED: [(&str, &str); 4] = [
+            (
+                "IDC_IMAGE_DSMUSIC_STEP1_ALL",
+                "SelectMusic_Btn_Step1_all.ojs",
+            ),
+            ("IDC_IMAGE_DSMUSIC_RANDOM1_BG", "SelectMusic_Random1_BG.ojs"),
+            (
+                "IDC_IMAGE_DSMUSIC_LABELGUIDIMG",
+                "SelectMusic_LabelGuidImg.ojs",
+            ),
+            (
+                "IDC_IMAGE_DSMUSIC_SEARCHGUIDIMG",
+                "SelectMusic_SearchGuidImg.ojs",
+            ),
+        ];
+        let colors: [[u8; 2]; 4] = [[0x00, 0x1F], [0xE0, 0x00], [0xF8, 0x00], [0x00, 0xF8]];
+        let mut placements = Vec::new();
+        let mut figures = HashMap::new();
+        for (index, ((id, sprite), color)) in GATED.iter().zip(colors).enumerate() {
+            placements.push(ScenePlacement {
+                role: PlacementRole::Single,
+                id: (*id).to_owned(),
+                code: 0,
+                sprite: Some((*sprite).to_owned()),
+                rect: Rect {
+                    x: 20 + i32::try_from(index * 30).unwrap_or(0),
+                    y: 420,
+                    w: 12,
+                    h: 12,
+                },
+            });
+            figures.insert((*sprite).to_owned(), solid_test_figure(color));
+        }
+        (placements, figures)
+    }
+
+    #[test]
+    fn a_mode_switch_click_paints_the_random_panel_instead_of_the_level_buttons() {
+        // docs/select-chrome.md, live chain: `main.rs::run_play` ->
+        // `stage_session_catalog` -> MUSELECT -> `load_select_music_scene`
+        // -> `click_waiting` -> `click_select_music` ->
+        // `click_select_chrome` -> `paint_select_music_art` ->
+        // `SceneArt::paint_backdrop_live`. The rects are a synthetic
+        // stand-in for the bound `.bnd` slots (seam: no game data).
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        let mut placements = select_chrome_placements();
+        let (gated, figures) = gated_select_art();
+        placements.extend(gated);
+        game.load_select_music_scene(placements, figures);
+        let before = paint_waiting_frame(&mut game, 800, 600);
+        assert!(ink_near(
+            &before,
+            800,
+            600,
+            (20, 420),
+            (12, 12),
+            pack_xrgb(0x00, 0xC0, 0x00)
+        ));
+        assert_eq!(game.select_mode(), SelectMusicMode::SongSelect);
+
+        click_chrome(&mut game, 1);
+        let after = paint_waiting_frame(&mut game, 800, 600);
+        assert_eq!(game.select_mode(), SelectMusicMode::Random);
+        assert!(ink_near(
+            &after,
+            800,
+            600,
+            (50, 420),
+            (12, 12),
+            pack_xrgb(0x00, 57, 0x00)
+        ));
+        assert!(!ink_near(
+            &after,
+            800,
+            600,
+            (20, 420),
+            (12, 12),
+            pack_xrgb(0x00, 0xC0, 0x00)
+        ));
+    }
+
+    #[test]
+    fn a_help_button_click_shows_its_guide_sheet_and_hides_the_other() {
+        // Same live chain as the mode guard; the help arms are VA
+        // `0x441a06`/`0x441a0f` and helper VA `0x44f800`.
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        walk_to_waiting(&mut game);
+        let mut placements = select_chrome_placements();
+        let (gated, figures) = gated_select_art();
+        placements.extend(gated);
+        game.load_select_music_scene(placements, figures);
+        assert_eq!(game.select_help_sheet(), SelectHelpSheet::None);
+        let before = paint_waiting_frame(&mut game, 800, 600);
+        assert!(!ink_near(
+            &before,
+            800,
+            600,
+            (80, 420),
+            (12, 12),
+            pack_xrgb(0x00, 56, 192)
+        ));
+
+        click_chrome(&mut game, 2);
+        let after = paint_waiting_frame(&mut game, 800, 600);
+        assert_eq!(game.select_help_sheet(), SelectHelpSheet::Label);
+        assert!(ink_near(
+            &after,
+            800,
+            600,
+            (80, 420),
+            (12, 12),
+            pack_xrgb(0x00, 56, 192)
+        ));
+        click_chrome(&mut game, 3);
+        let after = paint_waiting_frame(&mut game, 800, 600);
+        assert_eq!(game.select_help_sheet(), SelectHelpSheet::Search);
+        assert!(ink_near(
+            &after,
+            800,
+            600,
+            (110, 420),
+            (12, 12),
+            pack_xrgb(0xF8, 0x00, 0x00)
+        ));
+        assert!(!ink_near(
+            &after,
+            800,
+            600,
+            (80, 420),
+            (12, 12),
+            pack_xrgb(0x00, 56, 192)
+        ));
+    }
+
+    #[test]
+    fn a_pager_press_moves_the_result_page_and_inks_the_new_caption() {
+        // Live chain: MUSELECT -> `load_select_music_scene` ->
+        // `click_select_music` -> `click_select_chrome` -> `select_rows`
+        // -> `paint_select_music_text` -> `select_pager_caption`. The
+        // LEFT/RIGHT arms are VA `0x43e303`/`0x43e3e3` in the pager
+        // jump table, clamped by `dialog+0x6b4`/`+0x6b8`.
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        let blob = super::super::side::select_chrome_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_song_catalog(&entries);
+        let mut placements = select_sheet_placements();
+        placements.extend(select_chrome_placements());
+        game.load_select_music_scene(placements, HashMap::new());
+        walk_to_waiting(&mut game);
+        assert_eq!(game.select_page(), 0);
+        let before = paint_waiting_frame(&mut game, 800, 600);
+
+        click_chrome(&mut game, 5);
+        assert_eq!(game.select_page(), 1);
+        let after = paint_waiting_frame(&mut game, 800, 600);
+        assert_ne!(
+            rect_pixels(
+                &before,
+                800,
+                Rect {
+                    x: 669,
+                    y: 390,
+                    w: 54,
+                    h: 13
+                }
+            ),
+            rect_pixels(
+                &after,
+                800,
+                Rect {
+                    x: 669,
+                    y: 390,
+                    w: 54,
+                    h: 13
+                }
+            ),
+            "the pager caption follows the page"
+        );
+        click_chrome(&mut game, 4);
+        assert_eq!(game.select_page(), 0);
+        for _ in 0..12 {
+            click_chrome(&mut game, 5);
+        }
+        assert_eq!(game.select_page(), 4, "the pager clamps at the last page");
+    }
+
+    #[test]
+    fn a_search_submit_narrows_the_table_by_title_or_artist() {
+        // Same chain as the pager guard; SEARCH_TITLE/ARTIST set the
+        // field (`+0x188`, VAs `0x43e92f`/`0x43e957`) and the SERACH
+        // button submits the typed draft (VA `0x44195e`).
+        let mut game = ScreenGame::new();
+        game.set_joined_room(waiting_room());
+        let blob = super::super::side::select_chrome_catalog_blob();
+        let entries = o2jam_file::parse_ojn_list(&blob).unwrap();
+        game.set_song_catalog(&entries);
+        let mut placements = select_sheet_placements();
+        placements.extend(select_chrome_placements());
+        game.load_select_music_scene(placements, HashMap::new());
+        walk_to_waiting(&mut game);
+        let blank = paint_waiting_frame(&mut game, 800, 600);
+        game.text_input("Title03");
+        game.text_input("x");
+        game.delete_text();
+        assert_eq!(game.select_search_draft(), "Title03");
+        assert_eq!(
+            select_music_rows(game.select_songs(), game.select_filter()).len(),
+            45
+        );
+        click_chrome(&mut game, 10);
+        assert_eq!(game.select_filter(), SelectMusicFilter::ALL);
+        assert_eq!(game.select_page(), 0);
+
+        click_chrome(&mut game, 8);
+        assert_eq!(game.select_search_field(), SelectSearchField::Title);
+        click_chrome(&mut game, 10);
+        let buf = paint_waiting_frame(&mut game, 800, 600);
+        assert_ne!(
+            rect_pixels(
+                &buf,
+                800,
+                Rect {
+                    x: 338,
+                    y: 390,
+                    w: 315,
+                    h: 14
+                }
+            ),
+            rect_pixels(
+                &blank,
+                800,
+                Rect {
+                    x: 338,
+                    y: 390,
+                    w: 315,
+                    h: 14
+                }
+            ),
+            "the search banner inks the status line"
+        );
+        click_chrome(&mut game, 9);
+        game.text_input("Other");
+        click_chrome(&mut game, 10);
+        assert_eq!(game.select_search_field(), SelectSearchField::Artist);
+        // The draft appended to "Title03" is "Title03Other", so no
+        // row matches: the artist column replaces the search target,
+        // not the text (the edit box is one draft in the exe).
+        let frame = paint_waiting_frame(&mut game, 800, 600);
+        assert_ne!(
+            rect_pixels(
+                &frame,
+                800,
+                Rect {
+                    x: 338,
+                    y: 390,
+                    w: 315,
+                    h: 14
+                }
+            ),
+            rect_pixels(
+                &buf,
+                800,
+                Rect {
+                    x: 338,
+                    y: 390,
+                    w: 315,
+                    h: 14
+                }
+            )
+        );
     }
 
     #[test]

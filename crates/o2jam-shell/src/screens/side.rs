@@ -1560,6 +1560,23 @@ fn filter_song_record(song_id: u32, levels: [u32; 3], genre: u32) -> Vec<u8> {
     rec
 }
 
+/// Fifteen synthetic catalog records with distinct titles and two
+/// artists: 45 rows, enough to exercise the result pager and the
+/// search column without game data (#285).
+#[cfg(test)]
+pub(crate) fn select_chrome_catalog_blob() -> Vec<u8> {
+    let mut blob = Vec::new();
+    for index in 0..15u32 {
+        let mut record = filter_song_record(200 + index, [1, 2, 3], 0);
+        let title = format!("Title{index:02}");
+        let artist = if index % 2 == 0 { "Band" } else { "Other" };
+        record[112..112 + title.len()].copy_from_slice(title.as_bytes());
+        record[176..176 + artist.len()].copy_from_slice(artist.as_bytes());
+        blob.extend_from_slice(&record);
+    }
+    blob
+}
+
 /// Table-5 buckets of [`filter_catalog_blob`]: GOLD for song 101,
 /// BLACK for song 102, none for song 103.
 #[cfg(test)]
@@ -1781,6 +1798,227 @@ fn button_choice_at<T: Copy>(
         .map(|(_, value)| *value)
 }
 
+// --- Song-dialog chrome (ticket #285, `docs/select-chrome.md`) ---
+//
+// The controls below share the sheet with the row table and the three
+// filter columns. Codes and click arms are pinned in
+// `docs/select-chrome.md`; geometry always comes from the staged
+// `.bnd` placements, never from literals in this dispatcher.
+
+/// Which of the song dialog's two selection panels is live.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SelectMusicMode {
+    /// Search-result rows and the STEP1 level column (opening state).
+    #[default]
+    SongSelect,
+    /// Random-panel buttons at the same `.bnd` rects as STEP1.
+    Random,
+}
+
+/// Which help sheet the `?` buttons show.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SelectHelpSheet {
+    /// No guide sheet (opening state, pinned reference capture).
+    #[default]
+    None,
+    /// STEP2 bucket guide behind `LABELQUESTION`.
+    Label,
+    /// Search-row guide behind `SEARCHQUESTION`.
+    Search,
+    /// Playlist guide shared by the result/playlist tabs.
+    List,
+}
+
+/// Column the next search applies to (`+0x188` in the exe).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SelectSearchField {
+    /// Song title (search-field code 0).
+    #[default]
+    Title,
+    /// Song artist (search-field code 1).
+    Artist,
+}
+
+/// Direction of one pager or playlist-reorder press.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectPagerStep {
+    /// Toward the first row/page.
+    Previous,
+    /// Toward the last row/page.
+    Next,
+}
+
+/// One actionable song-dialog chrome press.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectChromeAction {
+    /// Switch between the song and random panels.
+    Mode(SelectMusicMode),
+    /// Show one help sheet.
+    Help(SelectHelpSheet),
+    /// Reorder a playlist row (inert on the result tab).
+    Reorder(SelectPagerStep),
+    /// Turn one result page.
+    Page(SelectPagerStep),
+    /// Choose the title or artist search column.
+    SearchField(SelectSearchField),
+    /// Run the search with the staged draft.
+    Search,
+    /// Enter one chosung key from the INDEX grid (0..=41).
+    SearchIndex(u8),
+}
+
+const SELECT_MODE_BUTTONS: [(&str, SelectMusicMode); 2] = [
+    (
+        "IDC_BUTTON_DSMUSIC_MUISCSELECT",
+        SelectMusicMode::SongSelect,
+    ),
+    ("IDC_BUTTON_DSMUSIC_RANDOMSELECT", SelectMusicMode::Random),
+];
+const SELECT_HELP_BUTTONS: [(&str, SelectHelpSheet); 2] = [
+    ("IDC_BUTTON_DSMUSIC_LABELQUESTION", SelectHelpSheet::Label),
+    ("IDC_BUTTON_DSMUSIC_SEARCHQUESTION", SelectHelpSheet::Search),
+];
+const SELECT_PAGER_BUTTONS: [(&str, SelectPagerStep); 4] = [
+    ("IDC_BUTTON_DSMUSIC_UP", SelectPagerStep::Previous),
+    ("IDC_BUTTON_DSMUSIC_DOWN", SelectPagerStep::Next),
+    ("IDC_BUTTON_DSMUSIC_LEFT", SelectPagerStep::Previous),
+    ("IDC_BUTTON_DSMUSIC_RIGHT", SelectPagerStep::Next),
+];
+const SELECT_SEARCH_BUTTONS: [(&str, SelectSearchField); 2] = [
+    ("IDC_BUTTON_DSMUSIC_SEARCH_TITLE", SelectSearchField::Title),
+    (
+        "IDC_BUTTON_DSMUSIC_SEARCH_ARTIST",
+        SelectSearchField::Artist,
+    ),
+];
+
+/// Count of chosung INDEX buttons (`0x27200058..=0x27200081`).
+pub const SELECT_SEARCH_INDEX_COUNT: u8 = 42;
+
+/// One INDEX button's staged placement id (ordinal `0x27200058 + n`).
+#[must_use]
+pub fn select_index_button_id(index: u8) -> String {
+    format!("IDC_BUTTON_DSMUSIC_SERACH_INDEX{index}")
+}
+
+/// Chrome action under a staged-dialog click (`None` on a display-only
+/// body or outside every actionable band).
+#[must_use]
+pub fn select_chrome_action_at(
+    placements: &[ScenePlacement],
+    x: i32,
+    y: i32,
+) -> Option<SelectChromeAction> {
+    button_choice_at(placements, &SELECT_MODE_BUTTONS, x, y)
+        .map(SelectChromeAction::Mode)
+        .or_else(|| {
+            button_choice_at(placements, &SELECT_HELP_BUTTONS, x, y).map(SelectChromeAction::Help)
+        })
+        .or_else(|| pager_action_at(placements, x, y))
+        .or_else(|| {
+            button_choice_at(placements, &SELECT_SEARCH_BUTTONS, x, y)
+                .map(SelectChromeAction::SearchField)
+        })
+        .or_else(|| {
+            staged_button_hit(placements, "IDC_BUTTON_DSMUSIC_SERACH", x, y)
+                .then_some(SelectChromeAction::Search)
+        })
+        .or_else(|| index_action_at(placements, x, y))
+}
+
+/// Pager press at a staged button: UP/DOWN reorder, LEFT/RIGHT page.
+fn pager_action_at(placements: &[ScenePlacement], x: i32, y: i32) -> Option<SelectChromeAction> {
+    for (id, step) in SELECT_PAGER_BUTTONS {
+        if staged_button_hit(placements, id, x, y) {
+            let action = if id.ends_with("UP") || id.ends_with("DOWN") {
+                SelectChromeAction::Reorder(step)
+            } else {
+                SelectChromeAction::Page(step)
+            };
+            return Some(action);
+        }
+    }
+    None
+}
+
+/// First chosung INDEX button whose staged rect contains the click.
+fn index_action_at(placements: &[ScenePlacement], x: i32, y: i32) -> Option<SelectChromeAction> {
+    (0..SELECT_SEARCH_INDEX_COUNT).find_map(|index| {
+        staged_button_hit(placements, &select_index_button_id(index), x, y)
+            .then_some(SelectChromeAction::SearchIndex(index))
+    })
+}
+
+/// Whether one named control's staged `.bnd` rect contains the click.
+fn staged_button_hit(placements: &[ScenePlacement], id: &str, x: i32, y: i32) -> bool {
+    placements
+        .iter()
+        .find(|placed| placed.id == id)
+        .is_some_and(|placed| super::paint::rect_hit(&placed.rect, x, y))
+}
+
+/// Ordered id fragments that classify every bound control. The
+/// first match wins, so narrow families (OK, chosung, sort) sit before
+/// broad ones (display images).
+const SELECT_CHROME_FAMILY_NEEDLES: [(&str, &str); 25] = [
+    ("BUTTON_DSMUSIC_OK", "confirm"),
+    ("BUTTON_DSMUSIC_CANCEL", "cancel"),
+    ("EXTEND", "row"),
+    ("INDEX", "search-key"),
+    ("SERACH_NEW", "search-key"),
+    ("SERACH_SPECIAL", "search-key"),
+    ("MUISCSELECT", "mode"),
+    ("RANDOMSELECT", "mode"),
+    ("QUESTION", "help"),
+    ("GUIDIMG", "help"),
+    ("STEP1_", "level/random"),
+    ("RANDOM1", "level/random"),
+    ("STEP2_", "filter"),
+    ("STEP3_", "filter"),
+    ("BUTTON_DSMUSIC_UP", "pager/reorder"),
+    ("BUTTON_DSMUSIC_DOWN", "pager/reorder"),
+    ("BUTTON_DSMUSIC_LEFT", "pager/reorder"),
+    ("BUTTON_DSMUSIC_RIGHT", "pager/reorder"),
+    ("SEARCH_TITLE", "search"),
+    ("SEARCH_ARTIST", "search"),
+    ("BUTTON_DSMUSIC_SERACH", "search"),
+    ("EDIT_DSMUSIC_SEARCH", "search"),
+    ("TAB", "tab"),
+    ("TEXT", "display"),
+    ("IDC_IMAGE_", "display"),
+];
+
+/// Inventory family of one bound control. Every control in
+/// `DAILOG_SELECTMUSIC` resolves to a family; wiring states are listed
+/// in `docs/select-chrome.md`.
+#[must_use]
+pub fn select_chrome_family(id: &str) -> Option<&'static str> {
+    if id.starts_with("IDC_BACK_") || id == "IDC_DIALOG_SELECTMUSIC" {
+        return Some("display");
+    }
+    if id.contains("CHECKALL")
+        || id.contains("REMOVEALL")
+        || id.contains("SORT_NEW")
+        || id.contains("POPULAR")
+        || matches!(
+            id,
+            "IDC_BUTTON_DSMUSIC_COLOR"
+                | "IDC_BUTTON_DSMUSIC_DIFF"
+                | "IDC_BUTTON_DSMUSIC_TITLE"
+                | "IDC_BUTTON_DSMUSIC_ARTIST"
+                | "IDC_BUTTON_DSMUSIC_DIFF_LEVEL"
+                | "IDC_BUTTON_DSMUSIC_ISDOWN"
+                | "IDC_BUTTON_DSMUSIC_RANK"
+        )
+    {
+        return Some("playlist-sort");
+    }
+    SELECT_CHROME_FAMILY_NEEDLES
+        .iter()
+        .find(|(needle, _)| id.contains(needle))
+        .map(|(_, family)| *family)
+}
+
 /// Search-tab caption for the row count (reference `검색결과 (1608곡)`).
 #[must_use]
 pub fn select_search_caption(row_count: usize) -> String {
@@ -1807,13 +2045,26 @@ pub fn select_status_line() -> &'static str {
     "ALL -> ALL SEARCH RESULT."
 }
 
-/// Pager caption `page/pages` (reference `3/161`): ten rows per page,
-/// page 1 while no paging input is staged; an empty table still names
-/// page 1.
+/// Pager caption `page/pages` (reference `3/161`): ten rows per page.
+/// The exe keeps the page index beside the count in the pager arms
+/// (`dialog+0x6b4`/`+0x6b8`, VAs `0x43e3f7`/`0x43e40c`), so the caption
+/// follows the staged page. An empty table still names page 1.
 #[must_use]
-pub fn select_pager_caption(row_count: usize) -> String {
+pub fn select_pager_caption(row_count: usize, page: usize) -> String {
     let pages = row_count.div_ceil(SELECT_VISIBLE_ROWS).max(1);
-    format!("1/{pages}")
+    let shown = page.saturating_add(1).min(pages);
+    format!("{shown}/{pages}")
+}
+
+/// Status line after a search (exe banner `%s 검색 결과입니다.`,
+/// VA `0x645a50`): names the column and the submitted text.
+#[must_use]
+pub fn select_search_status(field: SelectSearchField, query: &str) -> String {
+    let column = match field {
+        SelectSearchField::Title => "TITLE",
+        SelectSearchField::Artist => "ARTIST",
+    };
+    format!("{column}: {query} SEARCH RESULT.")
 }
 
 /// Search-table click band (native pixels): first row top, row pitch,
@@ -6519,10 +6770,12 @@ mod side_tests {
     fn select_captions_count_rows_and_pages() {
         assert_eq!(select_search_caption(1608), "SEARCH RESULTS (1608)");
         assert_eq!(select_picked_caption(), "SELECTED (0)");
-        assert_eq!(select_pager_caption(1608), "1/161");
-        assert_eq!(select_pager_caption(0), "1/1");
-        assert_eq!(select_pager_caption(10), "1/1");
-        assert_eq!(select_pager_caption(11), "1/2");
+        assert_eq!(select_pager_caption(1608, 0), "1/161");
+        assert_eq!(select_pager_caption(1608, 2), "3/161");
+        assert_eq!(select_pager_caption(1608, 999), "161/161");
+        assert_eq!(select_pager_caption(0, 0), "1/1");
+        assert_eq!(select_pager_caption(10, 0), "1/1");
+        assert_eq!(select_pager_caption(11, 1), "2/2");
     }
 
     #[test]
@@ -6594,6 +6847,39 @@ mod side_tests {
             },
         }];
         assert_eq!(select_chosung_layout(&unrelated), None);
+    }
+
+    #[test]
+    fn select_chrome_inventory_covers_every_bound_control() {
+        // docs/select-chrome.md #285: every control in the installed
+        // DAILOG_SELECTMUSIC block must resolve to an inventoried
+        // family. CI has no game data, so the installed archive is a
+        // skip, not an invented control list.
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../install-root/O2Jam/Image/Interface1.opi");
+        let Some(archive) = std::fs::read(path).ok() else {
+            println!("skip: missing installed Interface1.opi");
+            return;
+        };
+        let entries = o2jam_file::parse_opi(&archive).expect("opi parses");
+        let list_entry = o2jam_file::find_opi_entry(&entries, "ControlList_Interface.txt")
+            .expect("control list exists");
+        let body = o2jam_file::opi_entry_body(&archive, list_entry).expect("body reads");
+        let text = o2jam_file::decode_control_text(body).expect("control text decodes");
+        let list = o2jam_file::parse_control_list(&text).expect("control list parses");
+        let block = list
+            .blocks
+            .iter()
+            .find(|block| block.name == super::SELECT_MUSIC_DIALOG_BLOCK)
+            .expect("song-dialog block exists");
+        let controls = block.all_entries();
+        assert_eq!(controls.len(), 134, "7.55 block inventory");
+        let unmapped: Vec<&str> = controls
+            .iter()
+            .filter(|entry| select_chrome_family(&entry.id).is_none())
+            .map(|entry| entry.id.as_str())
+            .collect();
+        assert!(unmapped.is_empty(), "unmapped controls: {unmapped:?}");
     }
 
     #[test]
