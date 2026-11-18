@@ -22,7 +22,7 @@ use crate::screens::paint::ROOM_HOVER_SPRITE;
 use crate::screens::side::{
     PlanetOptionTab, SideScreen, CHANNEL_INFO_DIALOG_BLOCK, CREATE_ROOM_DIALOG_BLOCK,
     INFORMATION_DIALOG_BLOCK, PASSWORD_DIALOG_BLOCK, QUIT_DIALOG_BLOCK, SELECT_MUSIC_DIALOG_BLOCK,
-    TUTORIAL_BACKGROUND_SPRITE,
+    TUTORIAL_BACKGROUND_SPRITE, TUTORIAL_COACH_SPRITE, TUTORIAL_INSTRUCTION_SPRITE,
 };
 
 /// State value keyed by its `STATE_*` Block name.
@@ -261,7 +261,14 @@ pub const STAGE_TABLE: &[StageRow] = &[
         block: None,
         archive: StagingArchive::Playing,
         arm: PlacementArm::FullCanvas,
-        extra_sprites: &[TUTORIAL_BACKGROUND_SPRITE],
+        // B7 exe frame `612830b5…e77b8`: backdrop, frame-0 lesson
+        // bubble (with `1/13`) and frame-0 coach are all in this scene.
+        // Their record anchors stage them; the painter picks frame 0.
+        extra_sprites: &[
+            TUTORIAL_BACKGROUND_SPRITE,
+            TUTORIAL_INSTRUCTION_SPRITE,
+            TUTORIAL_COACH_SPRITE,
+        ],
     },
 ];
 

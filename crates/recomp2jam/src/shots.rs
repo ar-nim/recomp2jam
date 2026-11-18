@@ -2542,6 +2542,57 @@ mod tests {
     }
 
     #[test]
+    fn tutorial_shot_inks_the_b7_bubble_and_coach_rects() {
+        // B7 qualified pack: manifest `064bec85c998dbeb5d9073f312ef949d490a4f8a2cc9d62adfccdb0c1183272d`,
+        // screenshot `612830b57103ce808b6f28739ce9bf71018223d84701516681c1a8ced10e77b8`.
+        // The two rects are the parsed record anchors of `Guide_Text.ojs`
+        // frame 0 (bubble + `1/13`) and `Guide_Ani.ojs` frame 0 (coach).
+        let Some((placements, figures)) = side_stage_data(SideScreen::Tutorial) else {
+            println!("skip: missing {PLAYING_ARCHIVE}");
+            return;
+        };
+        for (name, layers, x, y) in [
+            ("Guide_Text.ojs", 13, 374, 297),
+            ("Guide_Ani.ojs", 12, 645, 350),
+        ] {
+            let body = figures.get(name).unwrap_or_else(|| panic!("{name} stages"));
+            assert_eq!(body.len(), layers, "{name} record count");
+            let first = body.layer(0).expect("frame 0");
+            assert_eq!((first.dx, first.dy), (x, y), "{name} parsed anchor");
+        }
+        let backdrop_only: std::collections::HashMap<_, _> = figures
+            .iter()
+            .filter(|(name, _)| {
+                name.as_str() != "Guide_Text.ojs" && name.as_str() != "Guide_Ani.ojs"
+            })
+            .map(|(name, figure)| (name.clone(), figure.clone()))
+            .collect();
+        let paint_tutorial =
+            |figures: std::collections::HashMap<String, o2jam_shell::avatar::AvatarFigure>| {
+                let mut game = seeded_game();
+                walk_to_waiting(&mut game);
+                game.load_side_scene(placements.clone(), figures);
+                assert!(game.visit_side(SideScreen::Tutorial));
+                paint_native_frame(&mut game, 0)
+            };
+        let with_overlay = paint_tutorial(figures);
+        let without_overlay = paint_tutorial(backdrop_only);
+        for (name, x, y, w, h) in [
+            ("instruction bubble + 1/13", 374, 297, 322, 156),
+            ("coach figure", 645, 350, 138, 183),
+        ] {
+            let changed = (y..y + h)
+                .flat_map(|row| (x..x + w).map(move |col| row * 800 + col))
+                .filter(|&at| with_overlay[at] != without_overlay[at])
+                .count();
+            assert!(
+                changed > 100,
+                "{name} painted only {changed} pixels in its pinned rect"
+            );
+        }
+    }
+
+    #[test]
     fn musicselect_chosung_grid_matches_the_bind_inventory() {
         // FILE wiring proof against the genuine bind: the staged
         // DAILOG_SELECTMUSIC placements carry 27 + 15 INDEX buttons

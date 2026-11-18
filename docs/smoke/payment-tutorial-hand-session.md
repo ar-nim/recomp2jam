@@ -39,8 +39,11 @@ states the stall instead of staying a silent dead view.
 ## Paint seen
 
 White notice ink inside the largest staged rect; the small rect
-stays black. Tutorial paints its staged backdrop alone
-(`tutorial.png` byte-identical in the shots oracle — no new ink).
+stays black. Tutorial paints its staged backdrop plus the B7-pinned
+frame-0 instruction bubble (`1/13` baked in the art) and coach figure;
+chart-timed note bodies remain OPEN under #326. The shots oracle holds
+the regenerated `tutorial.png` (sha256
+`01b6a4bfd92636e47e47f954713442f5c293cec3dfcc93a8d359cdd5d92ca24e`).
 
 ## Deltas found (new rows, never silent fixes)
 

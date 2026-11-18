@@ -9,8 +9,8 @@ use std::collections::HashMap;
 
 use super::super::avatar::{
     avatar_item_by_id, bind_scene_rects, load_archive_sprite, load_scene_figures,
-    paint_scene_figures, paint_scene_figures_live, scene_block, scene_sprite_names, AvatarFigure,
-    ScenePlacement,
+    paint_scene_figures, paint_scene_figures_live, paint_scene_figures_selected, scene_block,
+    scene_sprite_names, AvatarFigure, ScenePlacement,
 };
 use super::super::screen::Screen;
 use o2jam_file::OJN_LEVEL_COUNT;
@@ -65,6 +65,19 @@ pub const PAYMENT2_BIND_FILE: &str = "State_Payment2.bnd";
 /// Tutorial backdrop in `Playing1.opi` (stub `0x00` block, so no
 /// `ControlList` entries; `CStateTutorial`).
 pub const TUTORIAL_BACKGROUND_SPRITE: &str = "Playing_TutorialBG.ojs";
+
+/// First-page instruction bubble (`Guide_Text.ojs` record 0, anchor
+/// `(374,297)`, 322x156). The body stores 13 full pages; record 0 bakes
+/// the Korean lesson text and the `1/13` counter seen in the B7 exe
+/// frame (manifest `064bec85…3272d`, frame `612830b5…e77b8`), so no
+/// glyph rasterizer is involved. Later page timing is OPEN (#326).
+pub const TUTORIAL_INSTRUCTION_SPRITE: &str = "Guide_Text.ojs";
+
+/// Frame-0 coach figure (`Guide_Ani.ojs` record 0, anchor `(645,350)`,
+/// 138x183) in the same B7 frame. The 12 records are animation frames;
+/// their cadence is OPEN, so the exe-visible frame 0 is the only one
+/// painted.
+pub const TUTORIAL_COACH_SPRITE: &str = "Guide_Ani.ojs";
 
 /// Side views from lifecycle §12 (state IDs in
 /// `ControlList_Interface.txt`; counts in `docs/file-formats/opi.md`).
@@ -181,8 +194,8 @@ impl SideScreen {
 /// Full-screen scene slot holding the same declaration State behind
 /// one side screen (`state_of_screen` == `state_of_side` for every
 /// pair, ticket #136); `None` while the side owns no scene slot
-/// (Payment parks in the dedicated payment slot, Tutorial stages
-/// Playing-archive art through the shots walk only).
+/// (Payment parks in its dedicated slot; Tutorial stages
+/// Playing-archive art in its own slot, not a State scene slot).
 #[must_use]
 pub const fn side_scene_slot(side: SideScreen) -> Option<Screen> {
     match side {
@@ -4385,6 +4398,28 @@ pub fn paint_side_scene_live(
     keep: impl Fn(&ScenePlacement) -> bool,
 ) {
     paint_scene_figures_live(frame, placements, figures, keep);
+}
+
+/// Tutorial side painter: the full-canvas backdrop keeps its stacked
+/// art, while the two guide bodies show only the exe-visible frame 0.
+/// An image control swaps one surface per view; stacking all 13 text
+/// pages would cover `1/13` with page 13 (B7 frame hash
+/// `612830b5…e77b8`). Geometry stays the parsed record anchors.
+pub fn paint_tutorial_scene(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    figures: &HashMap<String, AvatarFigure>,
+) {
+    paint_scene_figures_selected(
+        frame,
+        placements,
+        figures,
+        |_| true,
+        |placed| match placed.sprite.as_deref() {
+            Some(TUTORIAL_INSTRUCTION_SPRITE | TUTORIAL_COACH_SPRITE) => Some(0),
+            _ => None,
+        },
+    );
 }
 
 #[cfg(test)]

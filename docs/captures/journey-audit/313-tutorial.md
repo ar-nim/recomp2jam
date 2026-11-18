@@ -38,8 +38,14 @@ timing → **#326** (Playing evidence wedge); stories 10/17 → **#245/#249/#250
 Post-audit disposition: #358 replaced `TUTORIAL_ENTRY_NEXT_STEP` with
 `PLANET_TUTORIAL_PLATE_NEXT_STEP` and wired the Room FIRSTSTEP helper
 globals; story 19's stale parity note is rewritten, and story 13's
-condition is refuted by `S-PLAY-B3`. The Planet plate entry stays
-BLOCKED (and is statically dead); chart/audio joins stay under #326.
+condition is refuted by `S-PLAY-B3`. #357 staged `Guide_Text.ojs` frame 0
+(bubble + `1/13`) and `Guide_Ani.ojs` frame 0 (coach) at their parsed
+anchors and mounted them on the live FIRSTSTEP→tutorial path; our
+`R-TUT` shot is now sha256
+`01b6a4bfd92636e47e47f954713442f5c293cec3dfcc93a8d359cdd5d92ca24e`.
+Chart-timed note bodies/key guides, page cadence and audio stay OPEN
+under #326. The Planet plate entry stays BLOCKED (and is statically
+dead).
 
 BLOCKED for live lane: Planet TUTORIAL plate entry sweep; Tutorial.ojm cue
 moment and BGM re-cue; key-effect press sweep in tutorial; qualified exit

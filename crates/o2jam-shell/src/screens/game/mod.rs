@@ -53,22 +53,22 @@ use super::side::{
     music_shop_action_at, myroom_action_at, myroom_bag_pages, myroom_bag_rows, myroom_equip_slot,
     myroom_gift_captions, myroom_gift_page, myroom_gift_pages, myroom_gift_views,
     myroom_identity_captions, myroom_panel_kept, myroom_record_slot, myroom_wallet_captions,
-    paint_side_scene, paint_side_scene_live, password_action_at, payment_side_notice,
-    planet_action_at, select_chrome_action_at, select_filter_button_id, select_filter_choice_at,
-    select_music_rows, select_music_songs_with_labels, select_row_hit, shop_action_at,
-    side_scene_slot, song_installed, waiting_team_for_code, wallet_row_caption, CreateRoomAction,
-    CreateRoomForm, LankingSong, LankingSort, MusicShopRow, MyRoomAction, MyRoomPanel, MyRoomState,
-    PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog,
-    SelectChromeAction, SelectFilterChoice, SelectHelpSheet, SelectMusicFilter, SelectMusicMode,
-    SelectMusicRow, SelectMusicSong, SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop,
-    ShopGood, SideScreen, TutorialChartGlobals, WalletRow, WalletState, GEM_LABEL,
-    INFORMATION_OK_CODE, O2_CASH_LABEL, OPTION_GAME_BLEND_NO, OPTION_GAME_BLEND_YES,
-    OPTION_GAME_EFFECT_HIGH, OPTION_GAME_EFFECT_LOW, OPTION_GAME_EFFECT_NORMAL,
-    OPTION_GAME_GUIDE_LONG, OPTION_GAME_GUIDE_MIDDLE, OPTION_GAME_GUIDE_NOUSE,
-    OPTION_GAME_GUIDE_SHORT, OPTION_GAME_LONGNOTE_NONE, OPTION_GAME_LONGNOTE_USED,
-    OPTION_GAME_MODE_FULL, OPTION_GAME_MODE_WIN, OPTION_GAME_NOTETYPE1, OPTION_GAME_NOTETYPE2,
-    OPTION_KEY_3KEY_FIRST, OPTION_KEY_3KEY_MODE, OPTION_KEY_7KEY_MODE, OPTION_KEY_LANE_FIRST,
-    OPTION_KEY_TEST, OPTION_SOUND_BG_EFFECT_DOWN, OPTION_SOUND_BG_EFFECT_UP,
+    paint_side_scene, paint_side_scene_live, paint_tutorial_scene, password_action_at,
+    payment_side_notice, planet_action_at, select_chrome_action_at, select_filter_button_id,
+    select_filter_choice_at, select_music_rows, select_music_songs_with_labels, select_row_hit,
+    shop_action_at, side_scene_slot, song_installed, waiting_team_for_code, wallet_row_caption,
+    CreateRoomAction, CreateRoomForm, LankingSong, LankingSort, MusicShopRow, MyRoomAction,
+    MyRoomPanel, MyRoomState, PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab,
+    PlanetPromo, RoomDialog, SelectChromeAction, SelectFilterChoice, SelectHelpSheet,
+    SelectMusicFilter, SelectMusicMode, SelectMusicRow, SelectMusicSong, SelectPagerStep,
+    SelectSearchField, ShopAction, ShopGiftNoop, ShopGood, SideScreen, TutorialChartGlobals,
+    WalletRow, WalletState, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL, OPTION_GAME_BLEND_NO,
+    OPTION_GAME_BLEND_YES, OPTION_GAME_EFFECT_HIGH, OPTION_GAME_EFFECT_LOW,
+    OPTION_GAME_EFFECT_NORMAL, OPTION_GAME_GUIDE_LONG, OPTION_GAME_GUIDE_MIDDLE,
+    OPTION_GAME_GUIDE_NOUSE, OPTION_GAME_GUIDE_SHORT, OPTION_GAME_LONGNOTE_NONE,
+    OPTION_GAME_LONGNOTE_USED, OPTION_GAME_MODE_FULL, OPTION_GAME_MODE_WIN, OPTION_GAME_NOTETYPE1,
+    OPTION_GAME_NOTETYPE2, OPTION_KEY_3KEY_FIRST, OPTION_KEY_3KEY_MODE, OPTION_KEY_7KEY_MODE,
+    OPTION_KEY_LANE_FIRST, OPTION_KEY_TEST, OPTION_SOUND_BG_EFFECT_DOWN, OPTION_SOUND_BG_EFFECT_UP,
     OPTION_SOUND_BG_MUSIC_DOWN, OPTION_SOUND_BG_MUSIC_UP, OPTION_SOUND_GAME_EFFECT_DOWN,
     OPTION_SOUND_GAME_EFFECT_UP, OPTION_SOUND_GAME_MUSIC_DOWN, OPTION_SOUND_GAME_MUSIC_UP,
     PLANET_OPTION_FIRST_TAB, PLANET_PROMO_IMAGE_CODE, QUIT_CANCEL_CODE, QUIT_OK_CODE,
@@ -708,6 +708,10 @@ pub struct ScreenGame {
     /// until the live boot stages them; the painter still reads the
     /// side slots, so paint wiring rides a later ticket.
     payment_art: Option<SceneArt>,
+    /// Playing-archive Tutorial art staged at boot: backdrop plus the
+    /// pinned frame-0 guide bodies. Mounted into the side slots when
+    /// FIRSTSTEP opens the tutorial, like the Payment sheet.
+    tutorial_art: Option<SceneArt>,
     /// Staged exe-literal Playing sheets (`State_Playing_network` +
     /// `Avatar_Info` + `Map_Avatar` placements, no figures — no block
     /// names a body), keyed by bind file. Empty until the live boot
@@ -1026,6 +1030,7 @@ impl ScreenGame {
             create_room_art: None,
             password_art: None,
             payment_art: None,
+            tutorial_art: None,
             byname_art: HashMap::new(),
             outbox: PendingOutbox::default(),
             create_focus_password: false,
@@ -1744,6 +1749,28 @@ impl ScreenGame {
     #[must_use]
     pub fn payment_art_staged(&self) -> bool {
         self.payment_art.is_some()
+    }
+
+    /// Stage the Playing-archive Tutorial bodies through the shared
+    /// declaration: the live boot path parks them here, and
+    /// [`Self::visit_side`] mounts them when FIRSTSTEP opens the
+    /// tutorial. Missing archives leave the slot empty.
+    pub fn load_tutorial_scene(
+        &mut self,
+        placements: Vec<ScenePlacement>,
+        figures: HashMap<String, AvatarFigure>,
+    ) -> &mut Self {
+        self.tutorial_art = Some(SceneArt {
+            placements,
+            figures,
+        });
+        self
+    }
+
+    /// True while the live boot staged the tutorial guide art.
+    #[must_use]
+    pub const fn tutorial_art_staged(&self) -> bool {
+        self.tutorial_art.is_some()
     }
 
     /// Stage one exe-literal Playing sheet beside the Playing scene:
@@ -5058,9 +5085,17 @@ impl ScreenGame {
     /// staged scene art reproduces the walk's backdrop on the live
     /// path. Paint and click dispatch both read the side slots, so
     /// the mount fixes the black screen and the dead clicks
-    /// together. No staged art (the walk-only Tutorial backdrop)
-    /// leaves walk-staged slots untouched.
+    /// together. Tutorial has no State scene slot: its Playing-archive
+    /// bodies park in their own slot and mount here on entry. An
+    /// unstaged slot leaves walk-staged slots untouched.
     fn mount_staged_side_art(&mut self, side: SideScreen) {
+        if side == SideScreen::Tutorial {
+            if let Some(art) = self.tutorial_art.clone() {
+                self.side_placements = art.placements;
+                self.side_figures = art.figures;
+            }
+            return;
+        }
         if side == SideScreen::Payment {
             if let Some(art) = self.payment_art.clone() {
                 self.side_placements = art.placements;
@@ -5690,6 +5725,8 @@ impl ScreenGame {
             paint_side_scene_live(frame, &self.side_placements, &self.side_figures, |placed| {
                 myroom_panel_kept(placed, panel)
             });
+        } else if self.side == Some(SideScreen::Tutorial) {
+            paint_tutorial_scene(frame, &self.side_placements, &self.side_figures);
         } else {
             paint_side_scene(frame, &self.side_placements, &self.side_figures);
         }
@@ -6966,6 +7003,7 @@ mod game_tests {
     use crate::avatar::PlacementRole;
     use crate::avatar::{AvatarFigure, FigureLayer};
     use crate::screen::Screen;
+    use crate::screens::side::TUTORIAL_INSTRUCTION_SPRITE;
     use crate::{GameLoop, MenuKey};
     use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
     use o2jam_render::{has_ink_near, near_xrgb};
@@ -21118,6 +21156,58 @@ mod game_tests {
         ));
         assert_eq!(game.side(), Some(SideScreen::Tutorial));
         assert_eq!(game.tutorial_chart_globals(), Some(TUTORIAL_CHART_GLOBALS));
+    }
+
+    #[test]
+    fn firststep_tutorial_painter_shows_the_first_pinned_guide_frame() {
+        // Live chain: boot → Planet → Channel → Room → staged FIRSTSTEP
+        // click → tutorial painter. The synthetic Guide bodies carry two
+        // records each: frame 0 must win (the exe's `1/13` bubble and
+        // the frame-0 coach in B7, manifest `064bec85…3272d`, frame
+        // `612830b5…e77b8`), never a stack of all frames.
+        let mut game = room_lobby_with_control(0x1320_0032, "IDC_BUTTON_SROOM_FIRSTSTEP");
+        let mut instruction = AvatarFigure::default();
+        for word in [0x7C00u16, 0x03E0u16] {
+            use crate::avatar::FigureLayer;
+            let pixels = [word.to_le_bytes(); 16].concat();
+            instruction.push_layer(FigureLayer {
+                image: o2jam_render::Rgb555Image::decode(&pixels, 4, 4).unwrap(),
+                dx: 374,
+                dy: 297,
+                colorkey: 0xFFFF,
+            });
+        }
+        let placement = ScenePlacement {
+            role: crate::avatar::PlacementRole::Single,
+            id: String::new(),
+            code: 0,
+            sprite: Some(TUTORIAL_INSTRUCTION_SPRITE.to_owned()),
+            rect: Rect {
+                x: 0,
+                y: 0,
+                w: 800,
+                h: 600,
+            },
+        };
+        game.load_tutorial_scene(
+            vec![placement],
+            HashMap::from([(TUTORIAL_INSTRUCTION_SPRITE.to_owned(), instruction)]),
+        );
+        game.ingest_snapshot(&InputSnapshot::click_at(
+            ROOM_CONTROL_TEST_CLICK.0,
+            ROOM_CONTROL_TEST_CLICK.1,
+        ));
+        assert_eq!(game.side(), Some(SideScreen::Tutorial));
+        let mut buf = vec![0u32; 800 * 600];
+        game.paint_at(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            0,
+        );
+        assert_eq!(buf[298 * 800 + 375], pack_xrgb(255, 0, 0));
     }
 
     #[test]

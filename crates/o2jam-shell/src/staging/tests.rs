@@ -172,7 +172,7 @@ fn full_canvas_rows_name_their_archive_and_extras() {
     assert_eq!(tutorial.archive, StagingArchive::Playing);
     assert_eq!(
         tutorial.extra_sprites,
-        &["Playing_TutorialBG.ojs"] as &[&str]
+        &["Playing_TutorialBG.ojs", "Guide_Text.ojs", "Guide_Ani.ojs",] as &[&str]
     );
 }
 
@@ -318,20 +318,32 @@ fn loading_stages_its_named_body_with_no_block() {
 }
 
 #[test]
-fn tutorial_stages_its_named_body_with_no_block() {
-    let archive = o2jam_file::test_archive::build_archive(&[(
-        "Playing_TutorialBG.ojs",
-        &sprite55_blob(2, 2, &[3; 8]),
-    )]);
+fn tutorial_stages_backdrop_and_both_guide_bodies_with_no_block() {
+    // Block-less full-canvas row: the B7 frame's backdrop, instruction
+    // bubble (`1/13`) and coach come from three parsed records. Synthetic
+    // bodies stand in for the archive bytes; the real layer counts and
+    // anchors are pinned by the shots guard.
+    let backdrop = sprite55_blob(2, 2, &[3; 8]);
+    let instruction = sprite55_blob(2, 2, &[5; 8]);
+    let coach = sprite55_blob(2, 2, &[7; 8]);
+    let archive = o2jam_file::test_archive::build_archive(&[
+        ("Playing_TutorialBG.ojs", &backdrop),
+        ("Guide_Text.ojs", &instruction),
+        ("Guide_Ani.ojs", &coach),
+    ]);
     let report = stage_state(&archive, State::Tutorial, StageContext::default());
     assert!(report.misses.is_empty(), "no block, no bind, no miss");
     let art = report.art.expect("tutorial stages with synthetic bytes");
-    assert_eq!(art.placements.len(), 1);
-    assert_eq!(
-        art.placements[0].sprite.as_deref(),
-        Some("Playing_TutorialBG.ojs")
-    );
-    assert!(art.figures.contains_key("Playing_TutorialBG.ojs"));
+    assert_eq!(art.placements.len(), 3);
+    for name in ["Playing_TutorialBG.ojs", "Guide_Text.ojs", "Guide_Ani.ojs"] {
+        assert!(art.figures.contains_key(name), "{name} stages");
+        assert!(
+            art.placements
+                .iter()
+                .any(|placed| placed.sprite.as_deref() == Some(name)),
+            "{name} has a placement"
+        );
+    }
 }
 
 #[test]

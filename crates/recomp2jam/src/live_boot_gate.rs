@@ -182,6 +182,10 @@ mod live_boot_gate_tests {
             "live boot stages the payment sheets"
         );
         if playing_present() {
+            assert!(
+                game.tutorial_art_staged(),
+                "live boot stages the tutorial guide bodies before FIRSTSTEP"
+            );
             for sheet in [
                 "State_Playing_network.bnd",
                 "Avatar_Info.bnd",

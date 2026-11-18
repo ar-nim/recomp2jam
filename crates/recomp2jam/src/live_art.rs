@@ -214,6 +214,12 @@ fn stage_playing_scenes(game: &mut ScreenGame, archive: &[u8]) {
     if let Some(art) = stage_state(archive, State::Loading, StageContext::default()).art {
         game.load_scene(Screen::Loading, art.placements, art.figures);
     }
+    // Tutorial is a block-less full-canvas row of this archive. Its
+    // frame-0 guide art must be parked before FIRSTSTEP can mount it;
+    // a miss keeps the fallback backdrop, never an invented plate.
+    if let Some(art) = stage_state(archive, State::Tutorial, StageContext::default()).art {
+        game.load_tutorial_scene(art.placements, art.figures);
+    }
     let mode = live_playing_mode(game);
     let chart_slot = game
         .selected_music()
