@@ -32,6 +32,10 @@ pub(crate) fn net_context(source: impl std::fmt::Display) -> anyhow::Error {
     anyhow::anyhow!("{source}")
 }
 
+// The report shape and its renderer live together in the library; the
+// login flow keeps these names as its local vocabulary.
+pub use o2jam_net::connect_report::{name_result, ConnectReport, SongFlowReport, WalletReport};
+
 /// Login options (see `recomp2jam connect --help`).
 #[derive(Debug, Clone)]
 pub struct ConnectOptions {
@@ -66,30 +70,6 @@ pub struct ConnectOptions {
     /// Host song flow after the room join (`None` skips; needs a
     /// room the gateway lets us host).
     pub song: Option<SongFlowOptions>,
-}
-
-/// What the login flow learned.
-#[derive(Debug)]
-pub struct ConnectReport {
-    /// Authorize result code (always success — else this errors).
-    pub auth_code: u32,
-    /// Character info, when requested.
-    pub character: Option<CharacterInfo>,
-    /// Wallet balances, when requested with character info.
-    pub wallet: Option<WalletReport>,
-    /// Worn figure layers stacked from `avatar.opa`, when requested.
-    pub avatar_layers: usize,
-    /// Channels the gateway listed.
-    pub channels: Vec<ChannelState>,
-    /// Channel login answer, when a channel was requested.
-    pub channel_login: Option<ChannelLoginResponse>,
-    /// Join answer, when a room was requested.
-    pub join: Option<JoinRoomResponse>,
-    /// Room rows, fetched only after a channel login (the room
-    /// controller rejects channel outsiders).
-    pub rooms: Vec<RoomListEntry>,
-    /// Song-flow answer, when requested with a room join.
-    pub song: Option<SongFlowReport>,
 }
 
 /// Parse a `--gender` word.
@@ -229,46 +209,6 @@ impl SongFlowOptions {
             ),
         }
     }
-}
-
-/// What the host song flow learned.
-#[derive(Debug)]
-pub struct SongFlowReport {
-    /// Catalog rows in the `GetMusicList` 4031 answer.
-    pub music_entries: usize,
-    /// Gateway `FreeMusic` flag from the 4031 answer.
-    pub free_music: bool,
-    /// Stage word the gateway echoed for our arena select.
-    pub arena_echo: RoomArenaEcho,
-    /// Peer lifebar echo after our tick (`None` on quiet rooms).
-    pub peer_bar: Option<GameStatsUpdate>,
-    /// Mirror after applying the echo (untouched on quiet rooms).
-    pub peers: PeerBars,
-    /// Queue forward from the echo (`None` when quiet/unknown).
-    pub peer_queue: Option<QueueEvent>,
-    /// Rank deliveries from the echo (empty when quiet).
-    pub peer_ranks: Vec<RankDelivery>,
-    /// Broadcast ids skipped while awaiting answers (kept, not lost).
-    pub skipped: Vec<u16>,
-}
-
-/// Wallet balances the login flow learned.
-///
-/// `gem`/`cash_point` come from the `SyncCashPoint` 5029 answer;
-/// `point`/`o2_cash` come from the `SyncItemPurchase` 5001 prefix
-/// words (the entry list after the prefix is not decoded).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WalletReport {
-    /// Gem balance (5029 first word).
-    pub gem: i32,
-    /// Cash points (5029 second word).
-    pub cash_point: i32,
-    /// Distribution points (5001 prefix second word).
-    pub point: i32,
-    /// Premium cash (5001 prefix third word).
-    pub o2_cash: i32,
-    /// Broadcast ids skipped while awaiting answers (kept, not lost).
-    pub skipped: Vec<u16>,
 }
 
 /// How long a blocking read waits outside the peer-bar window.
@@ -666,15 +606,6 @@ fn fetch_rooms_lenient(
         .map_err(net_context)?;
     let frame = await_lenient(gateway, RoomList::COMMAND, skipped).map_err(net_context)?;
     Ok(RoomList::decode_frame(&frame)?.rooms)
-}
-
-/// Human-readable authorize/channel result code.
-#[must_use]
-pub fn name_result(code: u32) -> String {
-    match AuthResult::from_code(code) {
-        Some(named) => format!("{named:?} ({code})"),
-        None => format!("unknown code {code}"),
-    }
 }
 
 /// Our socket address as IPv4 (login endpoints are IPv4-only).
