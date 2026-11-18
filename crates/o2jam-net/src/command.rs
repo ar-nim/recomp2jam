@@ -16,6 +16,11 @@ wire_enum! {
         SessionKeys = 1007,
         GetCharacterInfo = 2000,
         GetChannelInfo = 2002,
+        /// Room-stage member list the exe asks before it reports its
+        /// own music (opcode `0x07da`, #341).
+        GetUserList = 2010,
+        /// Client's installed catalog ids (opcode `0x07e8`, #341).
+        SendMusicList = 2024,
         CreateRoom = 2004,
         SendMainRoomMessage = 2012,
         Announce = 2015,
@@ -94,6 +99,8 @@ wire_enum! {
         SessionKeys = 1008,
         GetCharacterInfo = 2001,
         RoomList = 2003,
+        /// `GetUserList` 2010 answer (opcode `0x07db`, #341).
+        GetUserList = 2011,
         CreateRoom = 2006,
         MainRoomUserMessage = 2013,
         MainRoomAdminMessage = 2014,
@@ -161,6 +168,8 @@ mod tests {
         assert_eq!(Request::from_id(2000), Some(Request::GetCharacterInfo));
         assert_eq!(Request::from_id(3002), Some(Request::JoinWaiting));
         assert_eq!(Request::from_id(2002), Some(Request::GetChannelInfo));
+        assert_eq!(Request::from_id(2010), Some(Request::GetUserList));
+        assert_eq!(Request::from_id(2024), Some(Request::SendMusicList));
         assert_eq!(Request::from_id(65520), Some(Request::Terminate));
     }
 
@@ -178,6 +187,8 @@ mod tests {
             Request::SessionKeys,
             Request::GetCharacterInfo,
             Request::GetChannelInfo,
+            Request::GetUserList,
+            Request::SendMusicList,
             Request::CreateRoom,
             Request::SendMainRoomMessage,
             Request::Announce,

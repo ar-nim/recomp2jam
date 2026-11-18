@@ -6,8 +6,10 @@
 
 use std::net::{Ipv4Addr, SocketAddrV4};
 
+use super::command::Request;
 use super::error::Error;
 use super::frame::{encode_frame, Frame};
+use super::reader::Reader;
 use super::rows::rows_reject_negative_exact;
 use super::strings::{decode_null_terminated, encode_null_terminated, MAX_STRING_LEN};
 
@@ -119,6 +121,46 @@ empty_message!(MultiSessionError, 52);
 // reads nothing but the session), so the request is an empty body.
 empty_message!(GetCharacterInfo, 2000);
 empty_message!(GetChannelInfo, 2002);
+empty_message!(GetUserList, 2010);
+
+/// Client's installed catalog ids (`SendMusicList` 2024, #341).
+///
+/// Memoryer `MusicListRequest` carries an `i32` count then one `u16`
+/// per id; the exe sets the high nibble `0xf000` as the "New" label
+/// (`Source/Memoryer/Memoryer/Controllers/MainRoomController.cs:144-167`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SendMusicList {
+    /// Installed catalog ids, high nibble already flagged.
+    pub music_ids: Vec<u16>,
+}
+
+impl WireMessage for SendMusicList {
+    const COMMAND: u16 = Request::SendMusicList as u16;
+
+    fn encode_body(&self) -> Vec<u8> {
+        let mut body = Vec::with_capacity(4 + self.music_ids.len() * 2);
+        body.extend_from_slice(
+            &i32::try_from(self.music_ids.len())
+                .unwrap_or(i32::MAX)
+                .to_le_bytes(),
+        );
+        for id in &self.music_ids {
+            body.extend_from_slice(&id.to_le_bytes());
+        }
+        body
+    }
+
+    fn decode_body(body: &[u8]) -> Result<Self, Error> {
+        let mut reader = Reader::new(body);
+        let count = reader.read_count("music ids", true)?;
+        let mut music_ids = Vec::with_capacity(count);
+        for _ in 0..count {
+            music_ids.push(reader.read_u16()?);
+        }
+        reader.finish()?;
+        Ok(Self { music_ids })
+    }
+}
 
 /// Client identifier every 7.55 client sends (Memoryer `AuthRequest.Id`,
 /// byte-identical to the in-exe constant at file `0x2472c8`).
@@ -1102,6 +1144,12 @@ mod command_consistency_tests {
     use crate::command::{Event, Generic, Request, Response};
 
     #[test]
+    fn room_stage_messages_match_their_opcodes() {
+        assert_eq!(GetUserList::COMMAND, Request::GetUserList as u16);
+        assert_eq!(SendMusicList::COMMAND, Request::SendMusicList as u16);
+    }
+
+    #[test]
     fn command_ids_match_message_types() {
         assert_eq!(AuthorizeRequest::COMMAND, Request::Authorize as u16);
         assert_eq!(ChannelLogin::COMMAND, Request::ChannelLogin as u16);
@@ -1178,6 +1226,24 @@ mod command_consistency_tests {
 mod tests {
     use super::*;
     use crate::frame::decode_frame;
+
+    #[test]
+    fn send_music_list_encodes_the_exe_thirteen_id_body() {
+        // Live exe tap (#339): `C2S 2024 len=30` with a 13-word list.
+        let body = hex_body("0d00000061f360f35df35cf3fdf202f301f300f3fff2fef2fbf2f6f2f5f2");
+        let report = SendMusicList::decode_body(&body).unwrap();
+        assert_eq!(report.music_ids.len(), 13);
+        assert_eq!(report.music_ids[0], 0xf361);
+        assert_eq!(report.music_ids[12], 0xf2f5);
+        assert_eq!(report.encode_body(), body);
+    }
+
+    fn hex_body(text: &str) -> Vec<u8> {
+        (0..text.len())
+            .step_by(2)
+            .map(|at| u8::from_str_radix(&text[at..at + 2], 16).unwrap())
+            .collect()
+    }
 
     #[test]
     fn authorize_encodes_memoryer_field_order() {

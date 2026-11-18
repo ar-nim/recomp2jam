@@ -550,7 +550,10 @@ fn run_online(opts: OnlineCli) -> Result<()> {
         room_password: String::new(),
         song: None,
     };
-    let (report, gateway) = connect::connect_and_login_with_transport(&connect_options)?;
+    let owned_ids = owned_music_ids();
+    tracing::info!(ids = owned_ids.len(), "room-stage music ids staged");
+    let (report, gateway) =
+        connect::connect_and_login_with_room_stage(&connect_options, &owned_ids)?;
     tracing::info!(channels = report.channels.len(), "channels listed");
     stage_online_identity(&mut game, report.character.as_ref());
     game.set_channels(report.channels);
@@ -1236,6 +1239,78 @@ const INSTALLED_INTERFACE_OPI: &str = "../../install-root/O2Jam/Image/Interface1
 /// defaults, so CI stays green without game data).
 fn install_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../install-root")
+}
+
+/// High nibble the exe puts on every id in its `SendMusicList` report
+/// (Memoryer `MainRoomController.cs:144-167`: the "New" label flag).
+const NEW_LABEL_FLAG: u16 = 0xf000;
+
+/// Ids the installed client owns and reports in `SendMusicList` 2024.
+///
+/// The local catalog (`OJNList.dat`) names the rows; the `Music`
+/// directory scan says which rows carry a chart. This install ships
+/// thirteen charts beside the catalog and the rest with the later
+/// `Music_Full` pack, so the installer batch is the set of chart files
+/// within one hour of the catalog timestamp — exactly the thirteen
+/// ids in the exe's live report
+/// (`~/scratch/matched-ab-339/exe/wire/room-stage.log`). Missing game
+/// data answers an empty list; no id is invented.
+fn owned_music_ids() -> Vec<u16> {
+    let root = install_root();
+    let catalog_path = root.join(SESSION_CATALOG);
+    let Ok(catalog_bytes) = std::fs::read(&catalog_path) else {
+        return Vec::new();
+    };
+    let Ok(snapshot) = catalog_path.metadata().and_then(|meta| meta.modified()) else {
+        return Vec::new();
+    };
+    let known: std::collections::HashSet<u16> = o2jam_file::parse_ojn_list(&catalog_bytes)
+        .map(|rows| {
+            rows.into_iter()
+                .filter(|row| row.is_song())
+                .filter_map(|row| u16::try_from(row.song_id).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    let Ok(charts) = std::fs::read_dir(root.join("O2Jam/Music")) else {
+        return Vec::new();
+    };
+    recent_catalog_ids(
+        charts.filter_map(|entry| {
+            let entry = entry.ok()?;
+            let installed = entry.metadata().ok()?.modified().ok()?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let digits = name.strip_prefix("o2ma")?.split('.').next()?;
+            Some((digits.parse::<u16>().ok()?, installed))
+        }),
+        snapshot,
+        &known,
+    )
+}
+
+/// Pure half of the install scan: catalog rows whose chart belongs to
+/// the installer batch around the catalog timestamp, flagged as the
+/// exe flags them.
+fn recent_catalog_ids<I>(
+    charts: I,
+    snapshot: std::time::SystemTime,
+    known: &std::collections::HashSet<u16>,
+) -> Vec<u16>
+where
+    I: IntoIterator<Item = (u16, std::time::SystemTime)>,
+{
+    let installer_batch = std::time::Duration::from_secs(60 * 60);
+    let mut ids: Vec<u16> = charts
+        .into_iter()
+        .filter(|(id, installed)| {
+            known.contains(id)
+                && snapshot.duration_since(*installed).unwrap_or_default() <= installer_batch
+        })
+        .map(|(id, _)| id | NEW_LABEL_FLAG)
+        .collect();
+    ids.sort_unstable_by(|left, right| right.cmp(left));
+    ids.dedup();
+    ids
 }
 
 /// Genuine interface archive bytes, if present (read-only;
@@ -2489,6 +2564,27 @@ mod cli_build_tests {
             "mirror: no queue forward (0 ranks)\n",
         );
         assert_eq!(format_connect_report(&report), expected);
+    }
+
+    #[test]
+    fn installer_charts_report_flagged_catalog_ids_in_descending_order() {
+        use std::time::{Duration, SystemTime};
+
+        let catalog_snapshot = SystemTime::now();
+        let installed = catalog_snapshot - Duration::from_secs(21);
+        let earlier_pack = catalog_snapshot - Duration::from_secs(86_400);
+        let known = std::collections::HashSet::from([757, 865, 100]);
+        let ids = recent_catalog_ids(
+            [
+                (757, installed),
+                (865, installed),
+                (100, earlier_pack),
+                (999, installed),
+            ],
+            catalog_snapshot,
+            &known,
+        );
+        assert_eq!(ids, [0xf361, 0xf2f5]);
     }
 
     #[test]

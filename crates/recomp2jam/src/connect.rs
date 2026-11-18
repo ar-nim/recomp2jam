@@ -21,8 +21,8 @@ use o2jam_net::{
     AuthResponse, AuthResult, AuthorizeRequest, ChannelList, ChannelLogin, ChannelLoginResponse,
     ChannelState, CharacterInfo, ConfirmMusicLoaded, ExitPlaying, FinalizeRank, GameStatsUpdate,
     GatewayConnection, Gender, Generic, GetMusicList, JoinRoom, JoinRoomResponse, MusicState,
-    Request, RoomList, RoomListEntry, SetRoomArena, SetRoomMusic, StartGame, StatKind, SubmitScore,
-    UpdateGameStats, UpdateMusicState, WireMessage,
+    Request, Response, RoomList, RoomListEntry, SendMusicList, SetRoomArena, SetRoomMusic,
+    StartGame, StatKind, SubmitScore, UpdateGameStats, UpdateMusicState, WireMessage,
 };
 
 /// Lift one wire decode/IO error into an anyhow error, preserving the
@@ -483,6 +483,30 @@ fn send_tally(gateway: &mut GatewayConnection, options: &SongFlowOptions) -> Res
 pub fn connect_and_login_with_transport(
     options: &ConnectOptions,
 ) -> Result<(ConnectReport, GatewayConnection)> {
+    connect_and_login_staged(options, None)
+}
+
+/// Same boot, plus the exe's room-stage wire set after channel login:
+/// 4030/4031, 2000/2001, 2002/2003, 2010/2011, then 2024 (`#341`).
+///
+/// The ids are the client's installed catalog rows (see
+/// [`crate::owned_music_ids`]); the 2024 report drives member
+/// DOWNLOADING badges on every other client in the room.
+///
+/// # Errors
+///
+/// Whatever the gateway login flow reports.
+pub fn connect_and_login_with_room_stage(
+    options: &ConnectOptions,
+    installed_music_ids: &[u16],
+) -> Result<(ConnectReport, GatewayConnection)> {
+    connect_and_login_staged(options, Some(installed_music_ids))
+}
+
+fn connect_and_login_staged(
+    options: &ConnectOptions,
+    installed_music_ids: Option<&[u16]>,
+) -> Result<(ConnectReport, GatewayConnection)> {
     let address = format!("{}:{}", options.host, options.port);
     let mut gateway = GatewayConnection::connect(address.as_str())
         .with_context(|| format!("connecting to {address}"))?;
@@ -494,11 +518,39 @@ pub fn connect_and_login_with_transport(
         ),
         None => None,
     };
+    let staged_ids = channel_login
+        .is_some()
+        .then_some(installed_music_ids)
+        .flatten();
+    let mut staged_skipped = Vec::new();
+    if staged_ids.is_some() {
+        // #341: the exe asks for the room catalog before the identity
+        // and room-list reads, then polls members and reports its own
+        // installed ids. Both reads tolerate channel broadcasts.
+        fetch_music_list(&mut gateway, &mut staged_skipped)
+            .context("fetching room-stage catalog")?;
+    }
+    let mut character = if options.character && staged_ids.is_some() {
+        Some(fetch_character(&mut gateway).context("fetching character")?)
+    } else {
+        None
+    };
     let rooms = if channel_login.is_some() {
-        fetch_rooms(&mut gateway).context("listing rooms")?
+        if staged_ids.is_some() {
+            fetch_rooms_lenient(&mut gateway, &mut staged_skipped).context("listing rooms")?
+        } else {
+            fetch_rooms(&mut gateway).context("listing rooms")?
+        }
     } else {
         Vec::new()
     };
+    if let Some(ids) = staged_ids {
+        request_user_list(&mut gateway, &mut staged_skipped).context("listing room users")?;
+        report_installed_music(&mut gateway, ids).context("reporting installed music")?;
+        if !staged_skipped.is_empty() {
+            tracing::debug!(ids = ?staged_skipped, "skipped broadcasts during room stage");
+        }
+    }
     let join = match (options.join_room, &channel_login) {
         (Some(number), Some(_)) => {
             Some(join_room(&mut gateway, number, &options.room_password).context("joining room")?)
@@ -512,13 +564,11 @@ pub fn connect_and_login_with_transport(
         _ => None,
     };
     // Character info requires channel membership (server-verified:
-    // `ChannelAuthorizeAttribute` rejects 2000 outside a channel),
-    // so it runs last and only with a channel login.
-    let character = if options.character {
-        Some(fetch_character(&mut gateway).context("fetching character")?)
-    } else {
-        None
-    };
+    // `ChannelAuthorizeAttribute` rejects 2000 outside a channel).
+    // Without the room stage it still runs after the join.
+    if character.is_none() && options.character {
+        character = Some(fetch_character(&mut gateway).context("fetching character")?);
+    }
     let avatar_layers = match (&options.avatar_opa, &character) {
         (Some(path), Some(hero)) => fetch_avatar(path, hero).context("loading avatar")?.len(),
         _ => 0,
@@ -555,6 +605,28 @@ pub fn connect_and_login(options: &ConnectOptions) -> Result<ConnectReport> {
     connect_and_login_with_transport(options).map(|(report, _)| report)
 }
 
+/// Ask for the room's user list (2010) and drain its 2011 answer,
+/// skipping channel broadcasts the way the wallet reads do.
+fn request_user_list(gateway: &mut GatewayConnection, skipped: &mut Vec<u16>) -> Result<()> {
+    gateway
+        .send_frame(Request::GetUserList.id(), &[])
+        .map_err(net_context)?;
+    await_lenient(gateway, Response::GetUserList as u16, skipped).map_err(net_context)?;
+    Ok(())
+}
+
+/// Report the client's installed catalog ids under `SendMusicList`
+/// 2024. There is no response: the gateway stores the ids on the
+/// session actor and publishes them to the other room members.
+fn report_installed_music(gateway: &mut GatewayConnection, ids: &[u16]) -> Result<()> {
+    let report = SendMusicList {
+        music_ids: ids.to_vec(),
+    };
+    gateway
+        .send_frame(Request::SendMusicList.id(), &report.encode_body())
+        .map_err(net_context)
+}
+
 fn join_room(
     gateway: &mut GatewayConnection,
     number: i32,
@@ -579,6 +651,20 @@ fn join_room(
 
 fn fetch_rooms(gateway: &mut GatewayConnection) -> Result<Vec<RoomListEntry>> {
     let frame = gateway.exchange(Request::GetChannelInfo.id(), &[], RoomList::COMMAND)?;
+    Ok(RoomList::decode_frame(&frame)?.rooms)
+}
+
+/// Room-stage variant: the 2026 channel broadcast can race the 2003
+/// answer after the catalog and identity reads, so skip it instead of
+/// failing the boot (`connect_and_login_staged`).
+fn fetch_rooms_lenient(
+    gateway: &mut GatewayConnection,
+    skipped: &mut Vec<u16>,
+) -> Result<Vec<RoomListEntry>> {
+    gateway
+        .send_frame(Request::GetChannelInfo.id(), &[])
+        .map_err(net_context)?;
+    let frame = await_lenient(gateway, RoomList::COMMAND, skipped).map_err(net_context)?;
     Ok(RoomList::decode_frame(&frame)?.rooms)
 }
 
@@ -934,6 +1020,87 @@ mod connect_flow_tests {
                 restricted: Some(false),
             })
         );
+    }
+
+    /// Live caller chain: `run_online` ->
+    /// `connect_and_login_with_room_stage` -> staged boot exchanges.
+    /// The script mirrors the #339 exe tap: 4030, 2000, 2002, 2010,
+    /// 2024 before any room join; the report carries the install's ids.
+    #[test]
+    fn room_stage_gateway_sends_exe_wire_sequence() {
+        let installed_ids = [0xf361, 0xf2f5];
+        let (port, server) = o2jam_net::testing::fake_gateway(move |mut stream| {
+            assert_eq!(read_frame(&mut stream).id, Request::Authorize.id());
+            stream
+                .write_all(
+                    &AuthResponse {
+                        result_code: 0,
+                        tail: vec![],
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetChannelList.id());
+            stream
+                .write_all(&ChannelList { channels: vec![] }.encode())
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::ChannelLogin.id());
+            stream
+                .write_all(
+                    &ChannelLoginResponse {
+                        result_code: 0,
+                        restricted: Some(false),
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            assert_eq!(
+                read_frame(&mut stream).id,
+                Request::GetMusicList.id(),
+                "4030 must be asked in the room stage"
+            );
+            stream
+                .write_all(
+                    &MusicListAnswer {
+                        entries: vec![],
+                        free_music: false,
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            assert_eq!(
+                read_frame(&mut stream).id,
+                Request::GetCharacterInfo.id(),
+                "2000 must precede 2002"
+            );
+            stream
+                .write_all(&CharacterInfo::default().encode())
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetChannelInfo.id());
+            stream
+                .write_all(&RoomList { rooms: vec![] }.encode())
+                .unwrap();
+            assert_eq!(read_frame(&mut stream).id, Request::GetUserList.id());
+            stream
+                .write_all(&o2jam_net::testing::encode(
+                    Response::GetUserList as u16,
+                    &[],
+                ))
+                .unwrap();
+            let report = read_frame(&mut stream);
+            assert_eq!(report.id, Request::SendMusicList.id());
+            assert_eq!(
+                SendMusicList::decode_body(&report.payload)
+                    .unwrap()
+                    .music_ids,
+                installed_ids,
+                "2024 must carry the client's installed catalog ids"
+            );
+        });
+        let options = test_options(port, Some((1, 2)), true, None);
+        let (_report, _gateway) =
+            connect_and_login_with_room_stage(&options, &installed_ids).unwrap();
+        server.join().unwrap();
     }
 
     #[test]

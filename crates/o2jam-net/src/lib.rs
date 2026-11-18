@@ -46,9 +46,9 @@ pub use frame::{Frame, FrameSplitter, HEADER_LEN, ID_OFFSET};
 pub use message::{
     AuthResponse, AuthResult, AuthorizeRequest, ChannelList, ChannelLogin, ChannelLoginResponse,
     ChannelLoginResult, ChannelState, CreateResult, CreateRoom, CreateRoomResponse, CreatedRoom,
-    EmptyMessage, ForceReauthorize, GameMode, Gender, GetChannelList, GetCharacterInfo, KeyMode,
-    LegacyPing, MultiSessionError, Ping, RoomCreated, SessionKeys, SessionKeysRequest,
-    SubscriptionAlert, Terminate, WireMessage, MEMORYER_CLIENT_ID,
+    EmptyMessage, ForceReauthorize, GameMode, Gender, GetChannelList, GetCharacterInfo,
+    GetUserList, KeyMode, LegacyPing, MultiSessionError, Ping, RoomCreated, SendMusicList,
+    SessionKeys, SessionKeysRequest, SubscriptionAlert, Terminate, WireMessage, MEMORYER_CLIENT_ID,
 };
 pub use play::{
     AcquireMusic, AcquireMusicRequest, ConfirmMusicLoaded, DownloadProgressChanged, ExitPlaying,
