@@ -16,6 +16,7 @@ pub mod auth_parameters;
 pub mod character;
 pub mod client;
 pub mod command;
+pub mod connect_report;
 pub mod error;
 pub mod frame;
 mod inflate;

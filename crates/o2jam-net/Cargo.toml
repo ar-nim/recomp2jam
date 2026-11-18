@@ -5,4 +5,5 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+o2jam-game = { path = "../o2jam-game" }
 thiserror.workspace = true
