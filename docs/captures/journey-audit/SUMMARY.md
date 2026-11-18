@@ -196,3 +196,10 @@ Measured after-fix scores live in each close comment; all merges senior-verified
 on both install-root arms. The BLOCKED taxonomy above stands unchanged; the
 capture-tooling classes (#245/#249-class) are themselves superseded or in
 remediation (residual taxonomy + triage mode).
+
+Late-wave additions: #362 re-closed (capture fault, live-path guard earned);
+#370 fixed (population segment math, proxy-pinned); #372 fixed (seat indexing +
+header glyph layers, named residuals); #371/#373 fixed via the shared
+zero-colorkey correction (regions ~0.99); regression #374 filed (lanking
+black band - key-0 semantic is surface-specific, P1, rides main). Residual
+taxonomy + annotation pipeline feeds the filing queue (scripts triage mode).
