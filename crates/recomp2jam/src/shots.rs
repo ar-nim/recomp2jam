@@ -1500,8 +1500,8 @@ mod tests {
 
     use o2jam_shell::avatar::PlacementRole;
     use o2jam_shell::avatar::{
-        anchor_in_frame, load_archive_sprite, paint_foreground_placements, paint_scene_figures,
-        playing_member_selected, PlayingArtMode,
+        anchor_in_frame, load_archive_sprite, paint_foreground_placements, paint_placement_layer,
+        paint_scene_figures, playing_member_selected, PlayingArtMode,
     };
     use o2jam_shell::avatar::{scene_block, scene_sprite_names};
     use o2jam_shell::screens::paint::RESULT_WINLOSE_SPRITE;
@@ -4080,6 +4080,19 @@ mod tests {
             return;
         };
         let (art, actual) = painted_select_music_frame(&archive);
+        use o2jam_shell::screens::side::{
+            select_filter_button_id, SelectFilterChoice, SelectGenreFilter, SelectLabelFilter,
+            SelectLevelBand,
+        };
+        let active_filter_ids = [
+            SelectFilterChoice::Level(SelectLevelBand::All),
+            SelectFilterChoice::Label(SelectLabelFilter::All),
+            SelectFilterChoice::Genre(SelectGenreFilter::All),
+        ];
+        let active_filter_ids: Vec<&str> = active_filter_ids
+            .into_iter()
+            .filter_map(select_filter_button_id)
+            .collect();
         for sprite in SELECT_DIALOG_BUTTON_SPRITES {
             let placed = art
                 .placements
@@ -4092,15 +4105,129 @@ mod tests {
                 art.figures.contains_key(sprite),
                 "{sprite} body decodes at stage time"
             );
+            let frames = art.figures[sprite].len();
+            assert!(frames > 1, "{sprite} carries state frames");
+            let index = usize::from(active_filter_ids.contains(&placed.id.as_str())) * (frames - 1);
             let mut expected = native_probe();
             paint_probe(&mut expected, |frame| {
-                paint_scene_figures(frame, std::slice::from_ref(placed), &art.figures);
+                paint_placement_layer(frame, placed, &art.figures, index, false, None);
             });
             assert!(
                 expected.iter().any(|pixel| *pixel != PROBE_BACKDROP),
                 "{sprite} probe inks nothing"
             );
             assert_pixels_came_from_font(&actual, &expected, sprite);
+        }
+    }
+
+    #[test]
+    fn song_dialog_question_buttons_leave_the_baked_backdrop_plate_visible() {
+        // Live chain: `capture_all` -> `seeded_game` -> `walk_to_waiting`
+        // -> `stage_select_music_scene` -> `stage_dialog` (same staging as
+        // `live_art::stage_select_dialog_art`) -> `paint_at` ->
+        // `paint_waiting` -> `paint_select_music_art` + text. The block
+        // backdrop bakes both dark `?` plates; a `?` button body painted
+        // on top covers them with its grey variant, so the exe's plate
+        // and its click band no longer agree (#272 placement residual).
+        let Some(archive) = read_install_archives(&install_root()).interface else {
+            println!("skip: missing {INTERFACE_ARCHIVE}");
+            return;
+        };
+        let (art, actual) = painted_select_music_frame(&archive);
+        let backdrop = art
+            .placements
+            .iter()
+            .find(|placed| placed.sprite.as_deref() == Some("Dialog_SelectMusic.ojs"))
+            .expect("sheet backdrop stages");
+        let mut expected = native_probe();
+        paint_probe(&mut expected, |frame| {
+            paint_scene_figures(frame, std::slice::from_ref(backdrop), &art.figures);
+        });
+        for id in [
+            "IDC_BUTTON_DSMUSIC_LABELQUESTION",
+            "IDC_BUTTON_DSMUSIC_SEARCHQUESTION",
+        ] {
+            let placed = art
+                .placements
+                .iter()
+                .find(|placed| placed.id == id)
+                .unwrap_or_else(|| panic!("{id} stages"));
+            let right = placed
+                .rect
+                .x
+                .saturating_add(i32::try_from(placed.rect.w).expect("rect width fits i32"));
+            let bottom = placed
+                .rect
+                .y
+                .saturating_add(i32::try_from(placed.rect.h).expect("rect height fits i32"));
+            let mismatched = (placed.rect.y..bottom)
+                .flat_map(|y| {
+                    (placed.rect.x..right)
+                        .map(move |x| usize::try_from(y * 800 + x).expect("native index"))
+                })
+                .filter(|at| actual[*at] != expected[*at])
+                .count();
+            assert_eq!(
+                mismatched, 0,
+                "{id} must leave the backdrop's baked `?` plate visible"
+            );
+        }
+    }
+
+    #[test]
+    fn song_dialog_inactive_button_bodies_paint_one_state_frame() {
+        // Live chain: `capture_all` -> `seeded_game` -> `walk_to_waiting`
+        // -> `stage_select_music_scene` -> `stage_dialog` -> `paint_at`
+        // -> `paint_waiting` -> `paint_select_music_art`. Sprite-55
+        // frames of a button are states, not stacked layers: the exe's
+        // opening OK pill and inactive GOLD bucket show frame 0, while
+        // stacking every frame lets the dark state cover the lit art.
+        let Some(archive) = read_install_archives(&install_root()).interface else {
+            println!("skip: missing {INTERFACE_ARCHIVE}");
+            return;
+        };
+        let (art, actual) = painted_select_music_frame(&archive);
+        let backdrop = art
+            .placements
+            .iter()
+            .find(|placed| placed.sprite.as_deref() == Some("Dialog_SelectMusic.ojs"))
+            .expect("sheet backdrop stages");
+        let mut expected = native_probe();
+        paint_probe(&mut expected, |frame| {
+            paint_scene_figures(frame, std::slice::from_ref(backdrop), &art.figures);
+        });
+        for sprite in ["SelectMusic_OK.ojs", "SelectMusic_Btn_Step2_Gold.ojs"] {
+            let placed = art
+                .placements
+                .iter()
+                .find(|placed| placed.sprite.as_deref() == Some(sprite))
+                .unwrap_or_else(|| panic!("{sprite} stages"));
+            assert!(
+                art.figures[sprite].len() > 1,
+                "{sprite} carries state frames to select"
+            );
+            paint_probe(&mut expected, |frame| {
+                paint_placement_layer(frame, placed, &art.figures, 0, false, None);
+            });
+            let right = placed
+                .rect
+                .x
+                .saturating_add(i32::try_from(placed.rect.w).expect("width fits i32"));
+            let bottom = placed
+                .rect
+                .y
+                .saturating_add(i32::try_from(placed.rect.h).expect("height fits i32"));
+            let mismatched = (placed.rect.y..bottom)
+                .flat_map(|y| {
+                    (placed.rect.x..right)
+                        .map(move |x| usize::try_from(y * 800 + x).expect("native index"))
+                })
+                .filter(|at| actual[*at] != expected[*at])
+                .count();
+            assert_eq!(
+                mismatched, 0,
+                "{sprite} must paint frame 0, not the stack of states"
+            );
         }
     }
 

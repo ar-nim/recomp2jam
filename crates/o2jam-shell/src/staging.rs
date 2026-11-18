@@ -312,14 +312,15 @@ impl Dialog {
         }
     }
 
-    /// Bodies the sheet declares but the opening frame does not
-    /// paint. The song dialog stages all of them; the painter gates
-    /// the two mode panels and the three help sheets through
+    /// Bodies the sheet declares but never paints: the song dialog's
+    /// `?` buttons are hit bands over plates already baked into the
+    /// backdrop body (#272). The two mode panels and the three help
+    /// sheets stage as figures and paint through
     /// [`SELECT_MUSIC_PAINT_GATED_SPRITES`] (#285).
     #[must_use]
     pub const fn hidden_sprites(self) -> &'static [&'static str] {
         match self {
-            Dialog::SelectMusic => &[],
+            Dialog::SelectMusic => SELECT_MUSIC_BACKDROP_BAKED_SPRITES,
             Dialog::ChannelInfo
             | Dialog::PlanetOption
             | Dialog::PlanetOptionSound
@@ -469,6 +470,18 @@ pub const BYNAME_TABLE: &[ByNameRow] = &[
         archive: StagingArchive::Playing,
         host: State::Playing,
     },
+];
+
+/// Bodies the song-select sheet declares whose art the backdrop already
+/// bakes: the `LABELQUESTION 0x27200053` and `SEARCHQUESTION 0x27200055`
+/// rects pair to grey `?` sprites, while `Dialog_SelectMusic.ojs` carries
+/// the dark `?` plates the exe shows at those same coordinates. Their
+/// rects still stage for clicks; the figures stay unloaded so no grey
+/// variant covers the plate (#272 placement residual). Whether the exe
+/// ever shows the grey variant (hover or help-active state) stays OPEN.
+pub const SELECT_MUSIC_BACKDROP_BAKED_SPRITES: &[&str] = &[
+    "SelectMusic_LabelQuestion.ojs",
+    "SelectMusic_SearchQuestion.ojs",
 ];
 
 /// Bodies the song-select sheet stages but does not paint at open

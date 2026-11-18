@@ -1750,13 +1750,32 @@ pub fn paint_scene_figures_live(
     figures: &HashMap<String, AvatarFigure>,
     keep: impl Fn(&ScenePlacement) -> bool,
 ) {
+    paint_scene_figures_selected(frame, placements, figures, keep, |_| None);
+}
+
+/// [`paint_scene_figures_live`] with one state frame selected per body.
+/// A `Some(index)` means the exe's image control shows that frame only
+/// (the frame setter swaps surfaces instead of stacking them); `None`
+/// keeps the verified all-layers stack for backdrops and stacked kits.
+pub fn paint_scene_figures_selected(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    figures: &HashMap<String, AvatarFigure>,
+    keep: impl Fn(&ScenePlacement) -> bool,
+    frame_index: impl Fn(&ScenePlacement) -> Option<usize>,
+) {
     let shared = shared_sprite_names(placements);
     for placement in placements.iter().filter(|placement| keep(placement)) {
         let shares_body = placement
             .sprite
             .as_deref()
             .is_some_and(|sprite| shared.contains(sprite));
-        paint_placed_figure(frame, placement, figures, shares_body);
+        match frame_index(placement) {
+            Some(index) => {
+                paint_placement_layer(frame, placement, figures, index, shares_body, None);
+            }
+            None => paint_placed_figure(frame, placement, figures, shares_body),
+        }
     }
 }
 

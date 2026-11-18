@@ -28,11 +28,12 @@ use std::collections::HashMap;
 
 use super::super::avatar::{
     anchor_in_frame, clone_instance_live, paint_behind_placements, paint_foreground_placements,
-    paint_placement_layer, paint_scene_figures, paint_scene_figures_live, placement_is_behind,
-    scene_block, scene_sprite_names, shared_sprite_names, AvatarFigure, FigureLayer, PlacementRole,
-    ScenePlacement, AVI_BLOCK, CHANNEL_BLOCK, LANKING_BLOCK, LOADING_BLOCK, LOADING_COVER_SPRITE,
-    LOADING_SPRITE, MUSICSHOP_BLOCK, MYROOM_BLOCK, PLANET_BLOCK, RESULT_BLOCK, ROOM_BLOCK,
-    SHOP_BLOCK, WAITING_BLOCK, WAIT_COVER_SPRITE, WAIT_TEAM_SPRITES,
+    paint_placement_layer, paint_scene_figures, paint_scene_figures_live,
+    paint_scene_figures_selected, placement_is_behind, scene_block, scene_sprite_names,
+    shared_sprite_names, AvatarFigure, FigureLayer, PlacementRole, ScenePlacement, AVI_BLOCK,
+    CHANNEL_BLOCK, LANKING_BLOCK, LOADING_BLOCK, LOADING_COVER_SPRITE, LOADING_SPRITE,
+    MUSICSHOP_BLOCK, MYROOM_BLOCK, PLANET_BLOCK, RESULT_BLOCK, ROOM_BLOCK, SHOP_BLOCK,
+    WAITING_BLOCK, WAIT_COVER_SPRITE, WAIT_TEAM_SPRITES,
 };
 use super::super::playing::{HighwayGeometry, PlayingView};
 use super::super::screen::Screen;
@@ -133,6 +134,22 @@ impl SceneArt {
             return;
         }
         paint_scene_figures_live(frame, &self.placements, &self.figures, keep);
+    }
+
+    /// [`Self::paint_backdrop_live`] with one state frame selected per
+    /// body (`None` keeps the normal all-layers stack). Used by scenes
+    /// whose button bodies store their states as sprite-55 frames.
+    pub fn paint_backdrop_live_selected(
+        &self,
+        frame: &mut Frame<'_>,
+        _screen: Screen,
+        keep: impl Fn(&ScenePlacement) -> bool,
+        frame_index: impl Fn(&ScenePlacement) -> Option<usize>,
+    ) {
+        if !self.has_figures() {
+            return;
+        }
+        paint_scene_figures_selected(frame, &self.placements, &self.figures, keep, frame_index);
     }
 }
 

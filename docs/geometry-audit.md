@@ -216,6 +216,17 @@ from the staged art at its file rects, and the live text layer
 click band below (FILE-backed by the EXTEND rects) and the INDEX
 inventory probe.
 
+**Placement residual (same ticket, 2026-11-18).** The `?` rects pair to
+unique `.bnd` records (`LABELQUESTION` ord 82 `(198,93)-(214,108)`;
+`SEARCHQUESTION` ord 84 `(755,50)-(771,65)`), so no ordinal fix is
+needed. `Dialog_SelectMusic.ojs` already bakes both dark `?` plates; the
+button bodies' grey faces were an extra layer. They now stage hidden
+while their rects keep taking clicks. Button bodies also store their
+states as sprite-55 records: painting all records stacked a dark state
+over the lit face, so the dialog paints one frame per control (frame 0
+inactive, last frame for the chosen filter column). No painted
+constant was reintroduced.
+
 | Constant | Status |
 |---|---|
 | `SELECT_FILTER_COLUMNS`, `SELECT_FILTER_BUTTON_TOP/PITCH/H` | Removed — art owns the column plates |

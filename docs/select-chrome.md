@@ -26,7 +26,16 @@ back; #285 makes them paint-gated families instead of absent art.
   body (`0x27500054` / `0x27500056`) through helper VA `0x44f800`
   and hides the shared `LISTGUIDIMG 0x27500057`. The common
   hide-all arm is VA `0x441aa0`. The help ? buttons share rects with
-  static art (#272 placement half).
+  static art (#272 placement half): `Dialog_SelectMusic.ojs` bakes the
+  dark plates at `(198,93)` and `(755,50)`, so `SelectMusic_LabelQuestion.ojs`
+  and `SelectMusic_SearchQuestion.ojs` stage hidden — their grey faces
+  would cover the exe's plates. Their rects still take clicks. Whether
+  the grey faces paint on hover or help-active stays OPEN.
+- **Button frames** — sprite-55 records of one button body are states,
+  not stacked layers. The exe swaps a frame per control state; the
+  dialog paints frame 0 for inactive bodies and the last frame for the
+  chosen filter in each column (the opening `STEP1_ALL`/`STEP2_ALL`/
+  `STEP3_ALL` faces in `reference-musicselect-4x3.png`).
 - **Pager** — `UP/DOWN 0x27200044/0x27200045` and `LEFT/RIGHT
   0x27200046/0x27200047` land in the four-arm jump table at VA
   `0x43e9a0` (dispatch VA `0x43e2a8`: `code - 0x27200044`, `cmp 3`).
@@ -216,7 +225,13 @@ song-dialog tests and name the live chain from boot staging to
   typing, field radios, SERACH submit, status banner.
 
 All four wired-family guards were red-proved by disabling the
-`click_select_chrome` call in `ScreenGame::click_select_music`.
+`click_select_chrome` call in `ScreenGame::click_select_music`. The
+#272 placement guards are
+`song_dialog_question_buttons_leave_the_baked_backdrop_plate_visible`
+(red: 237 differing pixels in the label `?` rect) and
+`song_dialog_inactive_button_bodies_paint_one_state_frame` (red: 4115
+differing pixels in the OK body). Both red arms were reproduced by
+running the tests before the fix; both now pass.
 
 ## OPEN after this leg
 

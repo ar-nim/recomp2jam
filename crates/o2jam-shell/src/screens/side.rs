@@ -1762,6 +1762,28 @@ const SELECT_GENRE_BUTTONS: [(&str, SelectGenreFilter); 8] = [
     ("IDC_BUTTON_DSMUSIC_STEP3_ETC", SelectGenreFilter::Etc),
 ];
 
+/// Staged control id of one chosen filter button (`None` when the
+/// choice names no button in its column). The inverse of
+/// [`select_filter_choice_at`], so a live state can select the same
+/// `.bnd`-paired body the click would store (#272 frame state).
+#[must_use]
+pub fn select_filter_button_id(choice: SelectFilterChoice) -> Option<&'static str> {
+    match choice {
+        SelectFilterChoice::Level(band) => SELECT_LEVEL_BUTTONS
+            .iter()
+            .find(|(_, value)| *value == band)
+            .map(|(id, _)| *id),
+        SelectFilterChoice::Label(label) => SELECT_LABEL_BUTTONS
+            .iter()
+            .find(|(_, value)| *value == label)
+            .map(|(id, _)| *id),
+        SelectFilterChoice::Genre(genre) => SELECT_GENRE_BUTTONS
+            .iter()
+            .find(|(_, value)| *value == genre)
+            .map(|(id, _)| *id),
+    }
+}
+
 /// Filter button under a staged-dialog click (`None` outside every
 /// filter band, and while the dialog stages no filter buttons).
 #[must_use]

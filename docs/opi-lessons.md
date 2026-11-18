@@ -41,13 +41,25 @@ bytes corroborated along the way.
    (`SelectMusic_*GuidImg.ojs`). Both families start hidden — the
    reference capture shows the dialog open without them — so they stage
    as rects with no body (`Dialog::hidden_sprites`).
-8. **Half-res frames must be scaled to their placement**, not blitted
+8. **A control rect can ride art baked into the sheet backdrop.**
+   `Dialog_SelectMusic.bnd` pairs `LABELQUESTION 0x27200053` and
+   `SEARCHQUESTION 0x27200055` to unique rects `(198,93)-(214,108)`
+   and `(755,50)-(771,65)`, but `Dialog_SelectMusic.ojs` already draws
+   the dark `?` plates there. Their grey button bodies are extra state
+   art: painting them stacks a grey plate over the exe's plate (#272).
+   Both figures stage hidden; the rects still answer clicks. Sprite-55
+   records of one button are *states*, not simultaneous layers: the
+   exe's frame setter swaps them, so painting every record lets a dark
+   state cover the lit face. The song dialog selects one frame per
+   button (frame 0 for inactive, the selected frame for the chosen
+   filter column).
+9. **Half-res frames must be scaled to their placement**, not blitted
    1:1 — the exe scales, our 1:1 shortcut showed quarter art.
-9. **Digits and captions are sprites too**: `Scroe`/`PlayTimeNum`/
-   `Note_ComboNum` are ten-frame fonts (0–9); bind all ten or fall
-   back. Room numbers use the same pattern (`ROOMNO1/10/100`).
+10. **Digits and captions are sprites too**: `Scroe`/`PlayTimeNum`/
+    `Note_ComboNum` are ten-frame fonts (0–9); bind all ten or fall
+    back. Room numbers use the same pattern (`ROOMNO1/10/100`).
 
-10. **Baked labels are not missing text.** A button body carries its
+11. **Baked labels are not missing text.** A button body carries its
     own word (`SelectMusic_Btn_Step1_all.ojs` names its 전체), so a
     painter must not fake a caption over it: an ASCII stand-in plus a
     scrim plate paints dark rectangles over real art (ticket #272).

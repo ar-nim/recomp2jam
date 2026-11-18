@@ -49,13 +49,14 @@ use super::side::{
     myroom_gift_captions, myroom_gift_page, myroom_gift_pages, myroom_gift_views,
     myroom_identity_captions, myroom_record_slot, myroom_wallet_captions, paint_side_scene,
     password_action_at, payment_side_notice, planet_action_at, select_chrome_action_at,
-    select_filter_choice_at, select_music_rows, select_music_songs_with_labels, select_row_hit,
-    shop_action_at, side_scene_slot, song_installed, waiting_team_for_code, wallet_row_caption,
-    CreateRoomAction, CreateRoomForm, LankingSong, LankingSort, MusicShopRow, MyRoomAction,
-    MyRoomState, PasswordAction, PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo,
-    RoomDialog, SelectChromeAction, SelectHelpSheet, SelectMusicFilter, SelectMusicMode,
-    SelectMusicRow, SelectMusicSong, SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop,
-    ShopGood, SideScreen, WalletRow, WalletState, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL,
+    select_filter_button_id, select_filter_choice_at, select_music_rows,
+    select_music_songs_with_labels, select_row_hit, shop_action_at, side_scene_slot,
+    song_installed, waiting_team_for_code, wallet_row_caption, CreateRoomAction, CreateRoomForm,
+    LankingSong, LankingSort, MusicShopRow, MyRoomAction, MyRoomState, PasswordAction,
+    PasswordForm, PlanetAction, PlanetOptionTab, PlanetPromo, RoomDialog, SelectChromeAction,
+    SelectFilterChoice, SelectHelpSheet, SelectMusicFilter, SelectMusicMode, SelectMusicRow,
+    SelectMusicSong, SelectPagerStep, SelectSearchField, ShopAction, ShopGiftNoop, ShopGood,
+    SideScreen, WalletRow, WalletState, GEM_LABEL, INFORMATION_OK_CODE, O2_CASH_LABEL,
     OPTION_GAME_BLEND_NO, OPTION_GAME_BLEND_YES, OPTION_GAME_EFFECT_HIGH, OPTION_GAME_EFFECT_LOW,
     OPTION_GAME_EFFECT_NORMAL, OPTION_GAME_GUIDE_LONG, OPTION_GAME_GUIDE_MIDDLE,
     OPTION_GAME_GUIDE_NOUSE, OPTION_GAME_GUIDE_SHORT, OPTION_GAME_LONGNOTE_NONE,
@@ -6388,16 +6389,54 @@ impl ScreenGame {
         true
     }
 
+    /// One state frame of a staged song-dialog body, if it stores its
+    /// button faces as sprite-55 frames. The exe's image control swaps
+    /// frames; stacking them lets the dark state cover the lit art.
+    /// Inactive bodies paint frame 0; each column's chosen filter body
+    /// paints its last (selected) frame. Bodies that genuinely stack
+    /// layers keep the all-layers arm (`None`).
+    fn select_sprite_frame(
+        &self,
+        placement: &ScenePlacement,
+        figures: &HashMap<String, AvatarFigure>,
+        active_filter_ids: &[&str],
+    ) -> Option<usize> {
+        let sprite = placement.sprite.as_deref()?;
+        let figure = figures.get(sprite)?;
+        let [body_layers] = figure.part_lens() else {
+            return None;
+        };
+        if *body_layers != figure.len() || figure.len() <= 1 {
+            return None;
+        }
+        let last = figure.len() - 1;
+        let selected = active_filter_ids.contains(&placement.id.as_str());
+        Some(if selected { last } else { 0 })
+    }
+
     /// Layer staged song-select dialog figures over the waiting seats.
     /// Placements without a loaded figure or gated out by the current
-    /// mode/help state paint nothing.
+    /// mode/help state paint nothing; button bodies paint one state
+    /// frame at their staged rect.
     fn paint_select_music_art(&self, frame: &mut Frame<'_>) {
         let Some(art) = self.select_music_art.as_ref() else {
             return;
         };
-        art.paint_backdrop_live(frame, Screen::Waiting, |placement| {
-            self.select_sprite_visible(placement)
-        });
+        let active_filter_ids = [
+            SelectFilterChoice::Level(self.select_filter.level),
+            SelectFilterChoice::Label(self.select_filter.label),
+            SelectFilterChoice::Genre(self.select_filter.genre),
+        ];
+        let active_filter_ids: Vec<&str> = active_filter_ids
+            .into_iter()
+            .filter_map(select_filter_button_id)
+            .collect();
+        art.paint_backdrop_live_selected(
+            frame,
+            Screen::Waiting,
+            |placement| self.select_sprite_visible(placement),
+            |placement| self.select_sprite_frame(placement, &art.figures, &active_filter_ids),
+        );
     }
 
     /// Loading gate: staged art, then title–artist. The OPEN progress
