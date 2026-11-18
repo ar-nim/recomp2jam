@@ -622,9 +622,15 @@ pub struct JoinedRoom {
     pub champion_streak: Option<i32>,
 }
 
+/// Empty-password padding of the 7.55 `JoinWaiting` 3002 send.
+///
+/// Live matched A/B wire (2026-11-18, room WINEJOIN on one Memoryer):
+/// the exe sends `i32 room + u8 state + 4 zero bytes`; our client sent
+/// only one terminator. Both unlock the room, but the server sees
+/// different frames. Mirror the exe's four-byte field.
+const EXE_JOIN_PASSWORD_PAD: usize = 4;
+
 /// `JoinWaiting` 3002 request: room number, song state, password.
-/// An empty password encodes as one terminator (which the server
-/// reads as empty either way).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JoinRoom {
     /// Room number.
@@ -642,7 +648,11 @@ impl WireMessage for JoinRoom {
         let mut body = Vec::new();
         body.extend_from_slice(&self.number.to_le_bytes());
         body.push(self.music_state);
-        body.extend_from_slice(&encode_null_terminated(&self.password, MAX_STRING_LEN));
+        if self.password.is_empty() {
+            body.resize(5 + EXE_JOIN_PASSWORD_PAD, 0);
+        } else {
+            body.extend_from_slice(&encode_null_terminated(&self.password, MAX_STRING_LEN));
+        }
         body
     }
 
@@ -655,7 +665,7 @@ impl WireMessage for JoinRoom {
         }
         let (password, used) = decode_null_terminated(&body[5..], MAX_STRING_LEN)?;
         let rest = &body[5 + used..];
-        if !rest.is_empty() {
+        if !rest.iter().all(|byte| *byte == 0) || rest.len() > EXE_JOIN_PASSWORD_PAD - 1 {
             return Err(Error::TrailingBytes(rest.len()));
         }
         Ok(Self {
@@ -2220,6 +2230,18 @@ mod room_list_tests {
         };
         let frame = decode_frame(&request.encode()).unwrap();
         assert_eq!(frame.id, 3002);
+        assert_eq!(JoinRoom::decode_frame(&frame), Ok(request));
+    }
+
+    #[test]
+    fn matched_join_sends_the_exe_empty_password_padding() {
+        let request = JoinRoom {
+            number: 0,
+            music_state: 0,
+            password: String::new(),
+        };
+        let frame = decode_frame(&request.encode()).unwrap();
+        assert_eq!(frame.payload, vec![0, 0, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(JoinRoom::decode_frame(&frame), Ok(request));
     }
 
