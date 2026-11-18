@@ -15270,6 +15270,159 @@ mod paint_tests {
         assert_eq!(buf[455 * 800 + 100], 0, "notice text untouched");
         assert_eq!(buf[480 * 800 + 100], 0, "notice board untouched");
     }
+
+    /// Fold one word into a stable characterization hash (FNV-style
+    /// mixing; no dependency on `DefaultHasher` keys).
+    fn fold_pin_word(hash: &mut u64, word: u64) {
+        *hash = hash.wrapping_mul(0x100_0000_01B3).rotate_left(17) ^ word;
+    }
+
+    fn fold_pin_text(hash: &mut u64, text: &str) {
+        fold_pin_word(hash, 0xA1A1);
+        for byte in text.as_bytes() {
+            fold_pin_word(hash, u64::from(*byte));
+        }
+        fold_pin_word(hash, 0xB2B2);
+    }
+
+    fn fold_pin_pixels(hash: &mut u64, pixels: &[u32]) {
+        fold_pin_word(hash, 0xC3C3);
+        for pixel in pixels {
+            fold_pin_word(hash, u64::from(*pixel));
+        }
+        fold_pin_word(hash, 0xD4D4);
+    }
+
+    #[test]
+    fn result_screen_generation_pins_verdict_grade_readouts_rows_and_painted_pixels() {
+        // Seam pin for the result paint generator. The live chain is
+        // `ScreenGame::paint_at` → `paint_result` → `paint_result_content`
+        // and `paint_result_scene`; reaching it from boot needs a
+        // finished chart and live 4018 rank rows. Staged fixtures drive
+        // that same generator here, so the pin covers the painter's
+        // outputs without depending on the shell loop or the wire.
+        let mut hash = 0u64;
+
+        for sprite in result_loader_sprites() {
+            fold_pin_text(&mut hash, sprite);
+        }
+        for verdict in [
+            ResultVerdict::Solo,
+            ResultVerdict::Battle(Some(BattleVerdict::Win)),
+            ResultVerdict::Battle(Some(BattleVerdict::Lose)),
+            ResultVerdict::Battle(Some(BattleVerdict::Other)),
+            ResultVerdict::Battle(None),
+        ] {
+            fold_pin_word(&mut hash, u64::from(winlose_frame(verdict).unwrap_or(0)));
+        }
+        let teams = battle_room();
+        for self_team in [Some(1u8), Some(0), None] {
+            let standing = match battle_verdict(&teams, self_team) {
+                Some(BattleVerdict::Win) => 1,
+                Some(BattleVerdict::Lose) => 2,
+                Some(BattleVerdict::Other) => 3,
+                None => 0,
+            };
+            fold_pin_word(&mut hash, standing);
+        }
+
+        let score = full_score();
+        for note_count in [0u16, 100, 500, 800, 1_200] {
+            fold_pin_word(
+                &mut hash,
+                u64::from(result_grade_frame(&score, note_count).unwrap_or(0)),
+            );
+        }
+        for text in [
+            result_judgements_text(score.counts),
+            result_combos_text((score.max_combo, 5)),
+            result_score_text(87_654_321),
+            result_bonus_text(50),
+            truncate_result_name(&"x".repeat(120)),
+        ] {
+            fold_pin_text(&mut hash, &text);
+        }
+        for row in [0usize, 1, 7, usize::MAX] {
+            for y in [result_rank_text_y(row), result_rank_name_y(row)] {
+                let signed = y.map_or(0i64, i64::from);
+                fold_pin_word(&mut hash, u64::try_from(signed).unwrap_or(u64::MAX));
+            }
+        }
+        for mode in [
+            RESULT_DISPLAY_MODE_TABLE_F,
+            RESULT_DISPLAY_MODE_TABLE_10,
+            0x11,
+        ] {
+            let slots = result_portrait_slots(mode);
+            fold_pin_word(&mut hash, u64::from(slots.is_some()));
+            if let Some(slots) = slots {
+                for slot in slots {
+                    fold_pin_word(&mut hash, u64::from(slot.word));
+                }
+                for byte in [1u8, 8, 0, 9] {
+                    let resolved = portrait_slot_for_seat_byte(byte, &slots)
+                        .map_or(0, |slot| u64::from(slot.word));
+                    fold_pin_word(&mut hash, resolved);
+                }
+            }
+        }
+
+        let rows = [
+            live_row(),
+            ResultRankRow {
+                rank: Some(2),
+                name: Some("RIVAL".to_owned()),
+                judgements: Some([700, 50, 10, 4]),
+                combos: Some((211, 3)),
+                score: Some(98_765),
+                bonus: Some(7),
+                speed: Some(1),
+                seat_byte: Some(8),
+            },
+        ];
+        let cover = tiny_cover();
+        let flat_slots = result_portrait_slots(RESULT_DISPLAY_MODE_TABLE_F);
+        let mut flat = vec![0u32; 800 * 600];
+        paint_result(
+            &mut Frame {
+                buf: &mut flat,
+                w: 800,
+                h: 600,
+            },
+            &score,
+            &rows,
+            Some(&cover),
+            flat_slots.as_ref(),
+        );
+        fold_pin_pixels(&mut hash, &flat);
+
+        let art = rank_art();
+        let mut staged = vec![0u32; 800 * 600];
+        paint_result_scene(
+            &mut Frame {
+                buf: &mut staged,
+                w: 800,
+                h: 600,
+            },
+            &ResultPaint {
+                portrait_slots: flat_slots,
+                score: &score,
+                rows: &rows,
+                art: &art,
+                verdict: ResultVerdict::Solo,
+                grade: result_grade_frame(&score, 1_000),
+                album: Some(&cover),
+                life_readout: Some(1_234),
+                bottom_counter: Some(4_321),
+            },
+        );
+        fold_pin_pixels(&mut hash, &staged);
+
+        assert_eq!(
+            hash, 0x03C9_E63D_B6B7_ECA8,
+            "result paint generation changed; re-check the exe pins before updating"
+        );
+    }
 }
 
 #[cfg(test)]
