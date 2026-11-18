@@ -20019,6 +20019,50 @@ mod game_tests {
     }
 
     #[test]
+    fn chat_cluster_pins_drafts_history_and_slash_outputs_hash() {
+        // Golden guard for the #139 chat module move: folds the
+        // waiting and lobby drafts, histories, peer memory, and the
+        // send/slash decisions into one word. Delegates must preserve it.
+        let mut game = ScreenGame::new();
+        game.push_waiting_user_message(&chat_user("host", "hello"));
+        game.push_waiting_admin_message(&chat_admin("op", "quiet"));
+        game.set_chat_input("go");
+        let waiting_send = game
+            .chat_send_message()
+            .map(|message| String::from_utf8_lossy(&message.content).into_owned());
+        game.push_lobby_user_message(LobbyChat::Channel, &channel_user("host", "chan"));
+        game.push_lobby_whisper(LobbyChat::Room, &channel_whisper("guest", "psst"), "me");
+        game.set_channel_input("/w bob hi");
+        let channel_slash = format!("{:?}", game.channel_slash_command());
+        let channel_send = game
+            .take_channel_message()
+            .map(|message| String::from_utf8_lossy(&message.content).into_owned());
+        game.set_lobby_input(LobbyChat::Room, "/r hi again");
+        let room_reply = format!("{:?}", game.take_lobby_slash(LobbyChat::Room));
+        let waiting_whisper = format!("{:?}", game.chat_whisper_message("eve"));
+
+        let observed = format!(
+            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{waiting_send:?}|{channel_slash}|{channel_send:?}|{room_reply}|{waiting_whisper}",
+            game.waiting_chat(),
+            game.chat_input(),
+            game.channel_chat(),
+            game.room_chat(),
+            game.lobby_chat(LobbyChat::Channel).draft(),
+            game.lobby_chat(LobbyChat::Room).draft(),
+            game.last_whisper_peer(),
+        );
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        for byte in observed.bytes() {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
+        }
+        assert_eq!(
+            hash, 0x03C2_0C45_BBE7_220F,
+            "chat outputs drifted: {observed}"
+        );
+    }
+
+    #[test]
     fn reply_without_text_falls_back_to_plain_chat() {
         let mut game = ScreenGame::new();
         game.push_channel_whisper(&channel_whisper("host", "psst"), "me");
