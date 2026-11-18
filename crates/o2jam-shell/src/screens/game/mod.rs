@@ -1,6 +1,7 @@
 //! [`ScreenGame`]: the window's game loop, owning the [`ScreenFlow`]
 //! and walking screens on input.
 
+mod channel;
 mod lanking;
 mod musicshop;
 mod planet;
@@ -9,6 +10,7 @@ mod waiting;
 
 use std::collections::HashMap;
 
+use self::channel::{ChannelPress, ChannelScene};
 use self::lanking::LankingState;
 use self::musicshop::MusicShopState;
 use self::planet::PlanetBoardState;
@@ -23,10 +25,8 @@ use super::super::playing::{HighwayGeometry, LivePlay, PlaySkin};
 use super::super::screen::{Screen, ScreenFlow};
 use super::super::GameLoop;
 use super::paint::{
-    battle_verdict, channel_dialog_x_hit, channel_face_hit, channel_row_hit, channel_scroll_hit,
-    channel_viewport_from_top, dialog_origin, dialog_rect_hit, has_room_panels,
-    information_ok_fallback_rect, list_row_hit, paint_avi_scene, paint_channel_chat,
-    paint_channel_list, paint_channel_scene, paint_dialog_scene, paint_lanking_board,
+    battle_verdict, dialog_origin, dialog_rect_hit, has_room_panels, information_ok_fallback_rect,
+    list_row_hit, paint_avi_scene, paint_channel_chat, paint_dialog_scene, paint_lanking_board,
     paint_lanking_scene, paint_loading_scene, paint_loading_scene_with_status,
     paint_lobby_backdrop, paint_lobby_backdrop_live, paint_music_shop_board, paint_music_shop_cart,
     paint_myroom_data, paint_myroom_figure, paint_myroom_scene, paint_payment_notice,
@@ -37,10 +37,10 @@ use super::paint::{
     paint_shop_scene, paint_waiting_chat, paint_waiting_members, paint_waiting_scene,
     paint_waiting_seat_avatar, paint_waiting_seat_avatars, playing_backdrop_staged,
     quit_fallback_rects, rect_hit, room_chrome_visible, room_panel_hit, scene_index,
-    staged_rect_hit, waiting_confirm_control_id, BattleVerdict, ChannelChatMessage, ChannelScroll,
-    LoadingStatus, ResultPaint, ResultRankRow, ResultVerdict, SceneArt, StagedPlanetBoard,
-    WaitingCaptions, WaitingChatMessage, WaitingLevel, WaitingSong, CHANNEL_VISIBLE_ROWS,
-    RESULT_BACK_ID, RESULT_BACK_RECT, RESULT_RETRY_ID, RESULT_RETRY_RECT,
+    staged_rect_hit, waiting_confirm_control_id, BattleVerdict, ChannelChatMessage, LoadingStatus,
+    ResultPaint, ResultRankRow, ResultVerdict, SceneArt, StagedPlanetBoard, WaitingCaptions,
+    WaitingChatMessage, WaitingLevel, WaitingSong, RESULT_BACK_ID, RESULT_BACK_RECT,
+    RESULT_RETRY_ID, RESULT_RETRY_RECT,
 };
 use super::select_paint::{paint_select_text, SelectTextLive, SelectTextSlots};
 use super::side::{
@@ -610,21 +610,13 @@ pub struct ScreenGame {
     avi_entered_wall: Option<std::time::Instant>,
     audio: Option<AudioRig>,
     avatar: Option<AvatarFigure>,
-    channels: Vec<ChannelState>,
+    /// Channel rows, highlight, scrolled list top, and drag capture
+    /// (#259 scene cluster): every row word lives behind the scene
+    /// seam; queries, presses, and drag motion go through its methods.
+    channel_scene: ChannelScene,
     /// Channel rows held behind the relay-unavailable notice until
     /// its OK is pressed (#244). Empty except while that modal is up.
     relay_down_pending_channels: Vec<ChannelState>,
-    highlight: usize,
-    /// Channel list-top offset (the scrolled origin): the
-    /// `CDChannelInfo+0x184` analog. The scroll arrows step this
-    /// offset (`0x50ebf0`→`0x50ec20` mutates the scrollbar's own
-    /// position and forwards the delta to the list, handlers
-    /// `0x4749a0`/`0x4749f0`); the highlight/selection is never
-    /// touched on that path (ticket #130). Row clicks map
-    /// slot-through-top (`code + top`); Up/Down keys never touch the
-    /// highlight or the top (rig-pinned no-ops, ticket #189).
-    channel_top: usize,
-    channel_drag: bool,
     /// Native pointer position from the last snapshot (`None` until
     /// the pointer moves): the hover source for scenes with pinned hover
     /// art (the channel select bar). Test affordance and live input both
@@ -1141,10 +1133,7 @@ impl ScreenGame {
             avi_entered_wall: Some(std::time::Instant::now()),
             audio: None,
             avatar: None,
-            channels: Vec::new(),
-            highlight: 0,
-            channel_top: 0,
-            channel_drag: false,
+            channel_scene: ChannelScene::default(),
             pointer: None,
             channel_chat: LobbyChatPanel::default(),
             room_chat: LobbyChatPanel::default(),
@@ -1541,7 +1530,7 @@ impl ScreenGame {
     /// relay-down notice holds them pending.
     #[must_use]
     pub fn channel_rows(&self) -> &[ChannelState] {
-        &self.channels
+        self.channel_scene.rows()
     }
 
     /// Channels from the last online list (empty offline). Refreshing
@@ -1549,13 +1538,9 @@ impl ScreenGame {
     /// list's 2013/2014/2016/2019/2029 packets only, never carried
     /// across lists.
     pub fn set_channels(&mut self, channels: Vec<ChannelState>) -> &mut Self {
-        self.channels = channels;
-        self.highlight = 0;
-        // The exe zeroes the list top beside the populate (the
-        // `+0x184 = 0` + scrollbar `+0xb8 = 0` joint reset, file
-        // `0x747ba`): a fresh list always opens unscrolled.
-        self.channel_top = 0;
-        self.channel_drag = false;
+        self.channel_scene.set_rows(channels);
+        // The chat draft is shared with the Room lobby, so it stays
+        // owned here and is reset beside the new list (ticket #259).
         self.channel_chat = LobbyChatPanel::default();
         self
     }
@@ -1570,7 +1555,7 @@ impl ScreenGame {
         if self.flow.current() == Screen::Avi {
             self.enter(Screen::Planet);
         }
-        self.channels.clear();
+        self.channel_scene.clear_rows();
         self.relay_down_pending_channels = channels;
         self.planet_board.open_modal(PlanetModal::RelayDown);
         self
@@ -2878,10 +2863,7 @@ impl ScreenGame {
         if self.flow.current() != Screen::Channel || self.side.is_some() {
             return None;
         }
-        let (x, y) = self.pointer?;
-        let (top, shown) = channel_viewport_from_top(self.channel_top, self.channels.len());
-        let slot = channel_row_hit(x, y, shown)?;
-        (top + slot < self.channels.len()).then_some(top + slot)
+        self.channel_scene.hovered(self.pointer)
     }
 
     /// Highlighted channel row (the keyboard Confirm target;
@@ -2892,7 +2874,7 @@ impl ScreenGame {
         if self.flow.current() != Screen::Channel {
             return None;
         }
-        self.channels.get(self.highlight).copied()
+        self.channel_scene.highlighted()
     }
 
     /// Channel row whose enter face covers (`x`, `y`) (the mouse
@@ -2906,29 +2888,9 @@ impl ScreenGame {
         if self.flow.current() != Screen::Channel {
             return None;
         }
-        if channel_dialog_x_hit(x, y) || channel_scroll_hit(x, y).is_some() {
-            return None;
-        }
-        let (top, shown) = channel_viewport_from_top(self.channel_top, self.channels.len());
-        let slot = channel_row_hit(x, y, shown)?;
-        let index = top + slot;
-        if index >= self.channels.len() {
-            return None;
-        }
-        if !channel_face_hit(x, y, slot) {
-            return None;
-        }
-        let channel = self.channels.get(index)?;
-        if !channel.active {
-            return None;
-        }
-        // A slash draft consumes the click instead of entering
-        // (the click path takes it); peek here so the query stays
-        // side-effect free.
-        if self.channel_slash_command() != SlashCommand::Empty {
-            return None;
-        }
-        self.channels.get(index).copied()
+        // The draft stays owned here; the query only peeks at it.
+        let draft_busy = self.channel_slash_command() != SlashCommand::Empty;
+        self.channel_scene.enter_at(x, y, draft_busy)
     }
 
     /// Board control under the pointer, through the same staged
@@ -2949,60 +2911,20 @@ impl ScreenGame {
         planet_action_at(placements, x, y)
     }
 
-    /// Channel dialog click: the bnd-pinned X button rect
-    /// (541,151)-(589,189) closes the dialog back to the bare planet
-    /// board (verified native close click (577,171); `docs/planet.md`),
-    /// otherwise a click inside a pinned row rect highlights the
-    /// entry and advances like Confirm while the draft is action-free
-    /// (slash drafts consume the click instead of starting).
-    /// Step the channel list-top offset one row toward `scroll`,
-    /// clamped to `[0, len - shown]`: the scroll-arrow path. The exe
-    /// scrollbar owns its position (`this+0xb8`, clamped
-    /// `[0, max-page]` in `0x50ec20`, file `0x10ec20`) and the arrow
-    /// zones (mouse arm `0x50e8d0`, files `0x10ea1a`/`0x10ea6b`)
-    /// step it by `∓1` through `0x50ebf0` (file `0x10ebf0`),
-    /// forwarding each delta to the list top (`CDChannelInfo+0x184`,
-    /// handlers `0x4749a0`/`0x4749f0`); the highlight is never
-    /// touched on that path. Observed with GNU objdump 2.47 slices
-    /// plus Python 3.14.10 byte scans over the read-only 7.55 copy.
-    fn step_channel_list(&mut self, scroll: ChannelScroll) {
-        let max_top = self.channels.len().saturating_sub(CHANNEL_VISIBLE_ROWS);
-        match scroll {
-            ChannelScroll::Up => {
-                self.channel_top = self.channel_top.saturating_sub(1);
-            }
-            ChannelScroll::Down => {
-                self.channel_top = (self.channel_top + 1).min(max_top);
-            }
-        }
-    }
-
+    /// Channel dialog click: the scene resolves the X close, the
+    /// scroll arrows, the row highlight, and the enter-face target
+    /// (#259). This seam still owns the flow steps and the shared
+    /// slash draft: a face click landing while a draft holds it is
+    /// reported back so the draft is consumed exactly once.
     fn click_channel_row(&mut self, x: i32, y: i32) {
-        if channel_dialog_x_hit(x, y) {
-            self.enter(Screen::Planet);
-            return;
-        }
-        // Scroll-column arrows scroll the list top (`step_channel_list`);
-        // the bar body between them answers nothing to a click.
-        if let Some(scroll) = channel_scroll_hit(x, y) {
-            self.step_channel_list(scroll);
-            return;
-        }
-        // Viewport-relative bands: the visible slot maps back through
-        // the stored list top (see `channel_viewport_from_top`).
-        let (top, shown) = channel_viewport_from_top(self.channel_top, self.channels.len());
-        let Some(slot) = channel_row_hit(x, y, shown) else {
-            return;
-        };
-        let index = top + slot;
-        self.highlight = index;
-        // Only the Korean-text enter face enters Room (ticket #56);
-        // a body click moves the highlight and leaves the dialog up.
-        if channel_face_hit(x, y, slot)
-            && self.take_channel_slash() == SlashCommand::Empty
-            && self.channels.get(index).map(|c| c.active).unwrap_or(false)
-        {
-            self.enter(Screen::Room);
+        let draft_busy = self.channel_slash_command() != SlashCommand::Empty;
+        match self.channel_scene.press(x, y, draft_busy) {
+            ChannelPress::Close => self.enter(Screen::Planet),
+            ChannelPress::Enter => self.enter(Screen::Room),
+            ChannelPress::ConsumeDraft => {
+                let _ = self.take_channel_slash();
+            }
+            ChannelPress::Noop => {}
         }
     }
 
@@ -4380,11 +4302,7 @@ impl ScreenGame {
         // Channel scrollbar drag arm (#174): press on the bar body
         // (track between the two arrows) sets the drag capture;
         // arrows still click-step via click_dispatch.
-        if self.flow.current() == Screen::Channel
-            && (573..=593).contains(&x)
-            && (233..=364).contains(&y)
-        {
-            self.channel_drag = true;
+        if self.flow.current() == Screen::Channel && self.channel_scene.arm_drag(x, y) {
             return;
         }
         // Every other scene keeps its down-dispatch (no press-split
@@ -4402,7 +4320,7 @@ impl ScreenGame {
             self.planet_pointer_up(x, y);
         }
         if self.flow.current() == Screen::Channel {
-            self.channel_drag = false;
+            self.channel_scene.end_drag();
         }
     }
 
@@ -6138,28 +6056,28 @@ impl ScreenGame {
     /// 2013/2014/2019 rows paint below the list in both cases; empty
     /// histories paint nothing.
     fn paint_channel(&self, frame: &mut Frame<'_>) {
-        match (self.scene_art(Screen::Channel), self.channels.is_empty()) {
-            (Some(art), false) => {
-                paint_channel_scene(
-                    frame,
-                    &self.channels,
-                    self.channel_top,
-                    self.highlight,
+        match (
+            self.scene_art(Screen::Channel),
+            self.channel_scene.rows().is_empty(),
+        ) {
+            (Some(art), false) => self.channel_scene.paint(
+                frame,
+                Some(art),
+                self.scene_art(Screen::Planet).map(|art| StagedPlanetBoard {
                     art,
-                    self.scene_art(Screen::Planet).map(|art| StagedPlanetBoard {
-                        art,
-                        promo_index: self.planet_board.planet_promo_carousel.index(),
-                    }),
-                    self.hovered_channel_row(),
-                );
-            }
+                    promo_index: self.planet_board.planet_promo_carousel.index(),
+                }),
+                self.hovered_channel_row(),
+            ),
             (Some(art), true) => paint_lobby_backdrop(frame, Screen::Channel, art),
-            (None, false) => {
-                paint_channel_list(frame, &self.channels, self.channel_top, self.highlight)
-            }
+            (None, false) => self.channel_scene.paint(frame, None, None, None),
             (None, true) => paint_screen(frame, Screen::Channel),
         }
-        paint_channel_chat(frame, self.channel_chat.history(), self.channels.len());
+        paint_channel_chat(
+            frame,
+            self.channel_chat.history(),
+            self.channel_scene.rows().len(),
+        );
     }
 
     /// Room lobby: staged art behind the live list, flat card fallback.
@@ -6786,14 +6704,8 @@ impl GameLoop for ScreenGame {
         // arrival order through the press/release helpers.
         if let Some((x, y)) = snapshot.pointer() {
             self.pointer = Some((x, y));
-            if self.flow.current() == Screen::Channel && self.channel_drag {
-                let max_top = self.channels.len().saturating_sub(CHANNEL_VISIBLE_ROWS);
-                let track_top = 233i32;
-                let track_bot_origin = 364i32;
-                let frac = ((y.clamp(track_top, track_bot_origin) - track_top) as f32
-                    / (track_bot_origin - track_top) as f32)
-                    .clamp(0.0, 1.0);
-                self.channel_top = (frac * max_top as f32).round() as usize;
+            if self.flow.current() == Screen::Channel {
+                self.channel_scene.drag_to(y);
             }
         }
         for edge in snapshot.edges() {
@@ -7530,60 +7442,6 @@ mod game_tests {
         ]
     }
 
-    /// Baseline golden: every pixel of the flat channel row painter
-    /// for two synthetic rows with row 1 highlighted (no archives).
-    #[test]
-    fn channel_rows_render_golden() {
-        let mut buf = vec![0u32; 800 * 600];
-        let channels = two_channels();
-        paint_channel_list(
-            &mut Frame {
-                buf: &mut buf,
-                w: 800,
-                h: 600,
-            },
-            &channels,
-            0,
-            1,
-        );
-        let mut hash = 0xcbf2_9ce4_8422_2325u64;
-        for pixel in &buf {
-            hash_u64(&mut hash, u64::from(*pixel));
-        }
-        println!("CHANNEL_ROWS_GOLDEN_FLAT={hash:#018x}");
-
-        // Second scenario: scrolled viewport plus a hovered row on
-        // the art-less staged path (no install-root read).
-        let channels: Vec<ChannelState> = (0u16..6)
-            .map(|id| ChannelState {
-                gateway_id: 0,
-                channel_id: id,
-                capacity: 100,
-                population: 5,
-                active: true,
-            })
-            .collect();
-        let mut buf = vec![0u32; 800 * 600];
-        paint_channel_scene(
-            &mut Frame {
-                buf: &mut buf,
-                w: 800,
-                h: 600,
-            },
-            &channels,
-            2,
-            5,
-            &SceneArt::default(),
-            None,
-            Some(3),
-        );
-        let mut hash = 0xcbf2_9ce4_8422_2325u64;
-        for pixel in &buf {
-            hash_u64(&mut hash, u64::from(*pixel));
-        }
-        println!("CHANNEL_ROWS_GOLDEN_HOVER={hash:#018x}");
-    }
-
     #[test]
     fn channel_arrow_keys_leave_list_top_and_highlight_untouched() {
         // Ticket #189 (rig-pin, closes the #174 key-rule OPEN): the exe
@@ -7606,26 +7464,26 @@ mod game_tests {
         game.menu_key(MenuKey::Up, true);
         game.menu_key(MenuKey::Up, true);
         game.menu_key(MenuKey::Up, true);
-        assert_eq!(game.highlight, 0);
-        assert_eq!(game.channel_top, 0);
+        assert_eq!(game.channel_scene.highlight, 0);
+        assert_eq!(game.channel_scene.top, 0);
         // Keys never disturb an armed selection or a scrolled top either.
         game.ingest_snapshot(&InputSnapshot::click_at(300, 340));
-        assert_eq!(game.highlight, 2);
+        assert_eq!(game.channel_scene.highlight, 2);
         game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
-        assert_eq!(game.channel_top, 1);
+        assert_eq!(game.channel_scene.top, 1);
         for _ in 0..4 {
             game.menu_key(MenuKey::Down, true);
             game.menu_key(MenuKey::Up, true);
         }
-        assert_eq!(game.highlight, 2);
-        assert_eq!(game.channel_top, 1);
+        assert_eq!(game.channel_scene.highlight, 2);
+        assert_eq!(game.channel_scene.top, 1);
         assert_eq!(game.screen(), Screen::Channel);
         // Empty list never moves.
         let mut bare = ScreenGame::new();
         bare.lane_key(0, true);
         bare.click_planet(136, 88);
         bare.menu_key(MenuKey::Down, true);
-        assert_eq!(bare.highlight, 0);
+        assert_eq!(bare.channel_scene.highlight, 0);
     }
 
     #[test]
@@ -7639,10 +7497,10 @@ mod game_tests {
         // Ticket #189: Up/Down are rig-pinned no-ops, so the highlight
         // Confirm enters stays where the dialog opened it (row 0).
         game.menu_key(MenuKey::Down, true);
-        assert_eq!(game.highlight, 0);
+        assert_eq!(game.channel_scene.highlight, 0);
         game.menu_key(MenuKey::Confirm, true);
         assert_eq!(game.screen(), Screen::Room);
-        assert_eq!(game.highlight, 0);
+        assert_eq!(game.channel_scene.highlight, 0);
     }
 
     fn waiting_game_with_button(id: &str, rect: Rect) -> ScreenGame {
@@ -7686,7 +7544,7 @@ mod game_tests {
         game.lane_key(3, true);
         game.click_planet(136, 88);
         game.ingest_snapshot(&InputSnapshot::click_at(524, 246));
-        assert_eq!(game.highlight, 0);
+        assert_eq!(game.channel_scene.highlight, 0);
         assert_eq!(game.screen(), Screen::Room);
     }
 
@@ -7701,7 +7559,7 @@ mod game_tests {
         game.click_planet(136, 88);
         assert_eq!(game.channel_enter_at(524, 297), None);
         game.ingest_snapshot(&InputSnapshot::click_at(524, 297));
-        assert_eq!(game.highlight, 1);
+        assert_eq!(game.channel_scene.highlight, 1);
         assert_eq!(game.screen(), Screen::Channel);
     }
 
@@ -7714,7 +7572,7 @@ mod game_tests {
         game.lane_key(3, true);
         game.click_planet(136, 88);
         game.ingest_snapshot(&InputSnapshot::click_at(524, 246));
-        assert_eq!(game.highlight, 0);
+        assert_eq!(game.channel_scene.highlight, 0);
         assert_eq!(game.screen(), Screen::Room);
     }
 
@@ -8018,10 +7876,10 @@ mod game_tests {
         game.lane_key(3, true);
         game.click_planet(136, 88);
         game.ingest_snapshot(&InputSnapshot::click_at(300, 240));
-        assert_eq!(game.highlight, 0);
+        assert_eq!(game.channel_scene.highlight, 0);
         assert_eq!(game.screen(), Screen::Channel);
         game.ingest_snapshot(&InputSnapshot::click_at(300, 290));
-        assert_eq!(game.highlight, 1);
+        assert_eq!(game.channel_scene.highlight, 1);
         assert_eq!(game.screen(), Screen::Channel);
     }
 
@@ -8033,7 +7891,7 @@ mod game_tests {
         game.click_planet(136, 88);
         game.ingest_snapshot(&InputSnapshot::click_at(10, 10));
         game.ingest_snapshot(&InputSnapshot::click_at(700, 152));
-        assert_eq!(game.highlight, 0);
+        assert_eq!(game.channel_scene.highlight, 0);
         assert_eq!(game.screen(), Screen::Channel);
     }
 
@@ -8048,13 +7906,13 @@ mod game_tests {
         game.click_planet(136, 88);
         // y = 240 sits inside row 0's band (224-275).
         game.ingest_snapshot(&InputSnapshot::click_at(583, 240));
-        assert_eq!(game.highlight, 0);
+        assert_eq!(game.channel_scene.highlight, 0);
         assert_eq!(game.screen(), Screen::Channel);
         game.ingest_snapshot(&InputSnapshot::click_at(100, 240));
-        assert_eq!(game.highlight, 0);
+        assert_eq!(game.channel_scene.highlight, 0);
         assert_eq!(game.screen(), Screen::Channel);
         game.ingest_snapshot(&InputSnapshot::click_at(700, 290));
-        assert_eq!(game.highlight, 0);
+        assert_eq!(game.channel_scene.highlight, 0);
         assert_eq!(game.screen(), Screen::Channel);
     }
 
@@ -8076,8 +7934,8 @@ mod game_tests {
         // the list-top offset while the highlight stays put.
         let mut game = six_channel_game();
         game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
-        assert_eq!(game.highlight, 0);
-        assert_eq!(game.channel_top, 1);
+        assert_eq!(game.channel_scene.highlight, 0);
+        assert_eq!(game.channel_scene.top, 1);
         assert_eq!(game.screen(), Screen::Channel);
     }
 
@@ -8088,8 +7946,8 @@ mod game_tests {
         // clamps at 0 and the highlight stays put.
         let mut game = six_channel_game();
         game.ingest_snapshot(&InputSnapshot::click_at(583, 223));
-        assert_eq!(game.highlight, 0);
-        assert_eq!(game.channel_top, 0);
+        assert_eq!(game.channel_scene.highlight, 0);
+        assert_eq!(game.channel_scene.top, 0);
         assert_eq!(game.screen(), Screen::Channel);
     }
 
@@ -8102,16 +7960,16 @@ mod game_tests {
         let mut game = six_channel_game();
         game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
         game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
-        assert_eq!(game.channel_top, 2);
+        assert_eq!(game.channel_scene.top, 2);
         game.ingest_snapshot(&InputSnapshot::click_at(300, 400));
-        assert_eq!(game.highlight, 5);
-        assert_eq!(game.channel_top, 2);
+        assert_eq!(game.channel_scene.highlight, 5);
+        assert_eq!(game.channel_scene.top, 2);
         game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
-        assert_eq!(game.highlight, 5);
-        assert_eq!(game.channel_top, 2);
+        assert_eq!(game.channel_scene.highlight, 5);
+        assert_eq!(game.channel_scene.top, 2);
         game.ingest_snapshot(&InputSnapshot::click_at(583, 223));
-        assert_eq!(game.highlight, 5);
-        assert_eq!(game.channel_top, 1);
+        assert_eq!(game.channel_scene.highlight, 5);
+        assert_eq!(game.channel_scene.top, 1);
         assert_eq!(game.screen(), Screen::Channel);
     }
 
@@ -8123,9 +7981,9 @@ mod game_tests {
         // to the slot, files `0x7459a`/`0x74678`).
         let mut game = six_channel_game();
         game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
-        assert_eq!(game.channel_top, 1);
+        assert_eq!(game.channel_scene.top, 1);
         game.ingest_snapshot(&InputSnapshot::click_at(300, 240));
-        assert_eq!(game.highlight, 1);
+        assert_eq!(game.channel_scene.highlight, 1);
         assert_eq!(game.screen(), Screen::Channel);
     }
 
@@ -8140,13 +7998,13 @@ mod game_tests {
         // carried selection rides a mouse row click instead of key steps.
         let mut game = six_channel_game();
         game.ingest_snapshot(&InputSnapshot::click_at(300, 340));
-        assert_eq!(game.highlight, 2);
+        assert_eq!(game.channel_scene.highlight, 2);
         game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
-        assert_eq!(game.channel_top, 1);
-        assert_eq!(game.highlight, 2);
+        assert_eq!(game.channel_scene.top, 1);
+        assert_eq!(game.channel_scene.highlight, 2);
         game.set_channels(six_channels());
-        assert_eq!(game.channel_top, 0);
-        assert_eq!(game.highlight, 0);
+        assert_eq!(game.channel_scene.top, 0);
+        assert_eq!(game.channel_scene.highlight, 0);
     }
 
     #[test]
@@ -8198,8 +8056,8 @@ mod game_tests {
         // The dialog carries no pager readout (NO PAGER).
         let mut game = six_channel_game();
         game.ingest_snapshot(&InputSnapshot::click_at(583, 320));
-        assert_eq!(game.highlight, 0);
-        assert_eq!(game.channel_top, 0);
+        assert_eq!(game.channel_scene.highlight, 0);
+        assert_eq!(game.channel_scene.top, 0);
         assert_eq!(game.screen(), Screen::Channel);
     }
 
@@ -8210,11 +8068,14 @@ mod game_tests {
         // OPEN scale over track y233-409).
         let mut game = six_channel_game();
         game.ingest_snapshot(&InputSnapshot::press_at(583, 320));
-        assert!(game.channel_drag, "press on bar body sets drag capture");
+        assert!(
+            game.channel_scene.dragging,
+            "press on bar body sets drag capture"
+        );
         assert_eq!(game.screen(), Screen::Channel);
         game.ingest_snapshot(&InputSnapshot::motion_to(583, 409));
         assert_eq!(
-            game.channel_top, 2,
+            game.channel_scene.top, 2,
             "motion drags the list top to the bottom"
         );
         assert_eq!(game.screen(), Screen::Channel);
@@ -8241,7 +8102,10 @@ mod game_tests {
         assert_eq!(game.screen(), Screen::Channel);
         game.ingest_snapshot(&InputSnapshot::press_at(583, 320));
         game.ingest_snapshot(&InputSnapshot::motion_to(583, 364));
-        assert_eq!(game.channel_top, 3, "motion to track bottom sets top 3");
+        assert_eq!(
+            game.channel_scene.top, 3,
+            "motion to track bottom sets top 3"
+        );
     }
 
     #[test]
@@ -8250,12 +8114,15 @@ mod game_tests {
         // release no longer moves the list top.
         let mut game = six_channel_game();
         game.ingest_snapshot(&InputSnapshot::press_at(583, 320));
-        assert!(game.channel_drag);
+        assert!(game.channel_scene.dragging);
         game.ingest_snapshot(&InputSnapshot::release_at(583, 320));
-        assert!(!game.channel_drag, "release clears drag capture");
-        let before = game.channel_top;
+        assert!(!game.channel_scene.dragging, "release clears drag capture");
+        let before = game.channel_scene.top;
         game.ingest_snapshot(&InputSnapshot::motion_to(583, 409));
-        assert_eq!(game.channel_top, before, "motion after release is ignored");
+        assert_eq!(
+            game.channel_scene.top, before,
+            "motion after release is ignored"
+        );
         assert_eq!(game.screen(), Screen::Channel);
     }
 
@@ -8265,7 +8132,10 @@ mod game_tests {
         // and never arms the bar-body drag capture.
         let mut game = six_channel_game();
         game.ingest_snapshot(&InputSnapshot::press_at(583, 419));
-        assert!(!game.channel_drag, "arrow press does not capture drag");
+        assert!(
+            !game.channel_scene.dragging,
+            "arrow press does not capture drag"
+        );
         assert_eq!(game.screen(), Screen::Channel);
     }
 
@@ -8281,7 +8151,7 @@ mod game_tests {
         game.ingest_snapshot(&InputSnapshot::motion_to(300, 240));
         assert_eq!(game.hovered_channel_row(), None);
         game.ingest_snapshot(&InputSnapshot::click_at(300, 240));
-        assert_eq!(game.highlight, 0);
+        assert_eq!(game.channel_scene.highlight, 0);
         assert_eq!(game.screen(), Screen::Channel);
     }
 
@@ -8297,11 +8167,11 @@ mod game_tests {
         game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
         game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
         game.ingest_snapshot(&InputSnapshot::click_at(300, 400));
-        assert_eq!(game.highlight, 5);
+        assert_eq!(game.channel_scene.highlight, 5);
         game.ingest_snapshot(&InputSnapshot::motion_to(300, 400));
         assert_eq!(game.hovered_channel_row(), Some(5));
         game.ingest_snapshot(&InputSnapshot::click_at(300, 400));
-        assert_eq!(game.highlight, 5);
+        assert_eq!(game.channel_scene.highlight, 5);
         assert_eq!(game.screen(), Screen::Channel);
     }
 
@@ -11594,49 +11464,6 @@ mod game_tests {
         assert_eq!(game.take_gift_list_request(), None);
     }
 
-    /// Highlighted channel row (the keyboard Confirm target).
-    #[test]
-    fn highlighted_channel_names_the_confirm_target() {
-        let mut game = ScreenGame::new();
-        assert_eq!(game.highlighted_channel(), None);
-        game.set_channels(two_channels());
-        game.lane_key(3, true);
-        game.click_planet(136, 88);
-        assert_eq!(game.screen(), Screen::Channel);
-        assert_eq!(
-            game.highlighted_channel().map(|row| row.channel_id),
-            Some(2)
-        );
-        // Ticket #189: Up/Down are rig-pinned no-ops, so the Confirm
-        // target stays on the opening row (id 2), never advancing to 9.
-        game.menu_key(MenuKey::Down, true);
-        assert_eq!(
-            game.highlighted_channel().map(|row| row.channel_id),
-            Some(2)
-        );
-    }
-
-    /// Mouse entry target: only an enter-face click names its row.
-    #[test]
-    fn channel_enter_at_names_only_face_clicks() {
-        let mut game = ScreenGame::new();
-        game.set_channels(two_channels());
-        game.lane_key(3, true);
-        game.click_planet(136, 88);
-        // Row 0 enter face (ticket #56: (502,236)-(546,257)).
-        assert_eq!(
-            game.channel_enter_at(524, 246).map(|row| row.channel_id),
-            Some(2)
-        );
-        // Row bodies highlight only, never enter.
-        assert_eq!(game.channel_enter_at(300, 240), None);
-        assert_eq!(game.channel_enter_at(300, 290), None);
-        // Off the rows entirely.
-        assert_eq!(game.channel_enter_at(10, 10), None);
-        // The X chrome closes instead of entering.
-        assert_eq!(game.channel_enter_at(577, 171), None);
-    }
-
     /// Minimal sprite55 body (mirrors the avatar-figure builders): a
     /// 1x1 red pixel with a black colorkey.
     fn worn_test_sprite() -> Vec<u8> {
@@ -14264,76 +14091,6 @@ mod game_tests {
     }
 
     #[test]
-    fn channel_rows_ink_at_measured_native_tops() {
-        // Row-text anchors on a native frame, scaled like staged
-        // placements elsewhere. Re-measured 2026-11-11 with the
-        // pinned `Ch. NN` fallback label (#93): the Gulimche 'C'
-        // glyph tops sit 8 px above the old digit-led stand-in
-        // (224+50·index was 232+50·index).
-        let mut game = ScreenGame::new();
-        game.set_channels(two_channels());
-        game.lane_key(3, true);
-        game.click_planet(136, 88);
-        assert_eq!(game.screen(), Screen::Channel);
-        let mut buf = vec![0u32; 800 * 600];
-        game.paint_at(
-            &mut Frame {
-                buf: &mut buf,
-                w: 800,
-                h: 600,
-            },
-            0,
-        );
-        assert!(white_near(&buf, 800, 600, (200, 224)));
-        assert_eq!(buf[240 * 800 + 230], pack_xrgb(19, 20, 21));
-        assert_eq!(buf[229 * 800 + 350], pack_xrgb(230, 227, 230));
-        assert!(ink_near(
-            &buf,
-            800,
-            600,
-            (502, 236),
-            (24, 12),
-            pack_xrgb(150, 148, 151)
-        ));
-        assert!(ink_near(
-            &buf,
-            800,
-            600,
-            (200, 282),
-            (64, 9),
-            pack_xrgb(0x70, 0x70, 0x70)
-        ));
-    }
-
-    #[test]
-    fn channel_row_hit_maps_the_exe_pinned_rects() {
-        // Exe-pinned slot rects (CStatePlanet dialog+0x94):
-        // (216,224,572,275), (216,275,572,324), (216,324,572,375),
-        // (216,375,572,436) — left/top inclusive, right/bottom
-        // exclusive. x = 300 sits inside every band's x range.
-        assert_eq!(channel_row_hit(300, 224, 10), Some(0));
-        assert_eq!(channel_row_hit(300, 240, 10), Some(0));
-        assert_eq!(channel_row_hit(300, 274, 10), Some(0));
-        assert_eq!(channel_row_hit(300, 275, 10), Some(1));
-        assert_eq!(channel_row_hit(300, 282, 10), Some(1));
-        assert_eq!(channel_row_hit(300, 375, 10), Some(3));
-        assert_eq!(channel_row_hit(300, 435, 10), Some(3));
-        assert_eq!(channel_row_hit(300, 436, 10), None);
-        assert_eq!(channel_row_hit(300, 100, 10), None);
-        assert_eq!(channel_row_hit(300, 732, 10), None);
-        assert_eq!(channel_row_hit(300, 240, 0), None);
-        // Issue #29: the y band alone is not a hit — x must sit
-        // inside the pinned rect too. The scroll track (x573-593)
-        // and the dialog margins share the bands' y range.
-        assert_eq!(channel_row_hit(583, 240, 10), None);
-        assert_eq!(channel_row_hit(100, 240, 10), None);
-        assert_eq!(channel_row_hit(700, 290, 10), None);
-        assert_eq!(channel_row_hit(216, 240, 10), Some(0));
-        assert_eq!(channel_row_hit(571, 240, 10), Some(0));
-        assert_eq!(channel_row_hit(572, 240, 10), None);
-    }
-
-    #[test]
     fn bound_room_panels_paint_numbered_rows() {
         // Live Room stages bound panels yet shows no row ink: narrow
         // whether the panel path drops rows when data is present.
@@ -14417,11 +14174,11 @@ mod game_tests {
         game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
         game.ingest_snapshot(&InputSnapshot::click_at(583, 419));
         game.ingest_snapshot(&InputSnapshot::click_at(300, 400));
-        assert_eq!(game.highlight, 5);
+        assert_eq!(game.channel_scene.highlight, 5);
         // Ticket #56: the face of visible slot 0 enters; the
         // viewport maps it back to row 2.
         game.ingest_snapshot(&InputSnapshot::click_at(524, 246));
-        assert_eq!(game.highlight, 2);
+        assert_eq!(game.channel_scene.highlight, 2);
         assert_eq!(game.screen(), Screen::Room);
     }
 
@@ -21396,12 +21153,12 @@ mod game_tests {
         game.open_relay_down_dialog(channels.clone());
         assert_eq!(game.planet_modal(), Some(PlanetModal::RelayDown));
         assert!(
-            game.channels.is_empty(),
+            game.channel_rows().is_empty(),
             "the dialog owns input before the channel list loads"
         );
         game.ingest_snapshot(&InputSnapshot::click_at(400, 365));
         assert_eq!(game.planet_modal(), None, "OK dismisses the dialog");
-        assert_eq!(game.channels, channels, "OK reveals the staged list");
+        assert_eq!(game.channel_rows(), channels, "OK reveals the staged list");
         assert_eq!(game.screen(), Screen::Channel, "exe's post-dialog state");
     }
 }
