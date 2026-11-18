@@ -169,3 +169,30 @@ component label and `P2`. Titles below are the live issue titles.
 
 - [Residual taxonomy in region metrics](residual-taxonomy.md) — #250 schema fields, evidence rules, triage report, and the linked-Bug filing flow.
 - [Paired-video assessment](paired-video-assessment.md) — #249 consumer audit and close recommendation; no video capture was implemented.
+
+## Phase 2 — fix-wave outcomes (same night)
+
+Every MISMATCHED story above with a filed issue was worked the same night.
+Current disposition of the 14 journey issues:
+
+| Issue | Disposition |
+|---|---|
+| #356 splash dismiss keys | **fixed** (`309e8c9`) |
+| #357 tutorial bubble/coach/counter | **fixed** (`04e331d`) |
+| #358 FIRSTSTEP entry | **fixed** (`04e331d`); Planet-plate entry narrowed to dead text per exe pin |
+| #359 options first tab | **fixed** (`309e8c9`, Sound pinned from b3/b4) |
+| #360 loading credits | **closed** — credits baked into the OJN cover JPEG; folded into #355 |
+| #361 planet emblem rest art | **fixed** (`4261cd3`, 0.963) |
+| #362 payment Cash Charge chrome | **fixed** (`22ac4ef`) |
+| #363 item-shop card art | **fixed** (`007c38c`) |
+| #364 channel select-bar row | **pin corrected** (`4261cd3`) — pointer-state input gap, not a painter bug |
+| #365 result 4018 read-side | **fixed** (`b80ed6f`) |
+| #366 result ticket GET | **OPEN** — blocked by the #326 Playing wedge (needs a qualified Result pack) |
+| #367 Room no-response dialog | **fixed** (`ece8a99`) — armed by the exe's own 07DA poll starving past 20 s |
+| #368 room hover outline | **fixed** (`4261cd3`, 0.966) |
+| #369 MyRoom default panel | **fixed** (`007c38c`) |
+
+Measured after-fix scores live in each close comment; all merges senior-verified
+on both install-root arms. The BLOCKED taxonomy above stands unchanged; the
+capture-tooling classes (#245/#249-class) are themselves superseded or in
+remediation (residual taxonomy + triage mode).
