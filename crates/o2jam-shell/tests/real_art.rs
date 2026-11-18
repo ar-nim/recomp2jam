@@ -13,7 +13,7 @@ use o2jam_file::{
     decode_control_text, find_opi_entry, opi_entry_body, parse_bnd, parse_control_list, parse_opi,
     Bnd,
 };
-use o2jam_net::{ChannelState, JoinedRoom, RoomListEntry, RoomMember, RoomSlot};
+use o2jam_net::{ChannelState, JoinedRoom, MemberRole, RoomListEntry, RoomMember, RoomSlot};
 use o2jam_render::{pack_xrgb, rect_from_corners, Frame};
 use o2jam_shell::avatar::{paint_scene_figures, AvatarFigure, PlacementRole, ScenePlacement};
 use o2jam_shell::screens::paint::RESULT_WINLOSE_SPRITE;
@@ -622,6 +622,56 @@ fn waiting_layers_seats_over_bound_waiting_art() {
     assert_eq!(game.screen(), Screen::Waiting);
     let frame = painted(&mut game, 0);
     assert_composed(&frame, &staged, &[WHITE_TEXT, READY_GREEN], "waiting");
+}
+
+/// #343: the shipped `State_Waiting.ojs` carries a plain eight-card
+/// record and a VS record. At a normal base-ready room the exe selects
+/// the plain record and leaves the select overlay unpainted; only a
+/// Challenger role selects the VS record and arms the popup.
+#[test]
+fn waiting_real_art_selects_one_backdrop_record_per_role() {
+    let path = archive_path(INTERFACE_ARCHIVE);
+    let Some(archive) = install_archives().interface else {
+        println!("skip waiting backdrop: missing {}", path.display());
+        return;
+    };
+    let art = stage_state(&archive, State::Waiting, StageContext::default())
+        .art
+        .expect("waiting: STATE_WAITING staged no art");
+    let backdrop = art
+        .figures
+        .get("State_Waiting.ojs")
+        .expect("waiting: backdrop sheet staged");
+    assert!(backdrop.layer(1).is_some(), "the VS record is in the sheet");
+    assert!(
+        art.placements
+            .iter()
+            .any(|placed| placed.code == 0x1650_0074),
+        "the select popup control pairs with the bnd"
+    );
+    let mut game = ScreenGame::new();
+    game.set_joined_room(seated_room());
+    game.load_scene(Screen::Waiting, art.placements, art.figures);
+    for screen in [
+        Screen::Planet,
+        Screen::Channel,
+        Screen::Room,
+        Screen::Waiting,
+    ] {
+        assert!(game.enter_screen(screen), "walk to {screen:?}");
+    }
+    let base = painted(&mut game, 0);
+    game.set_waiting_member_role(MemberRole::Challenger);
+    let challenger = painted(&mut game, 100);
+    // Probe frames are half native resolution (400x300).
+    let card = 50 * PROBE_W + 50;
+    assert_ne!(
+        base[card], challenger[card],
+        "seat-card backing follows role"
+    );
+    let popup_ink =
+        (105..140).any(|y| (90..220).any(|x| base[y * PROBE_W + x] != challenger[y * PROBE_W + x]));
+    assert!(popup_ink, "popup overlay follows Challenger role");
 }
 
 /// Bottom edge (native px) of the Waiting scene's top button band:
