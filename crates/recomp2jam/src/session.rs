@@ -752,6 +752,7 @@ impl OnlineSession {
             champion_streak: None,
         };
         self.stage_hosted_room(room.clone());
+        self.game.set_waiting_room_number(number);
         // Refresh the list too: the login-time snapshot predates the
         // create, and empty slots filter out downstream, so the Room
         // screen shows exactly the numbered rows.
@@ -804,6 +805,7 @@ impl OnlineSession {
     /// auto-login or a resolved login), so a face press on it skips
     /// the wire round trip.
     pub fn set_resident_channel(&mut self, channel: ChannelState) {
+        self.game.set_waiting_channel_number(channel.channel_id);
         self.resident_channel = Some(channel);
     }
 
@@ -1580,6 +1582,10 @@ impl OnlineSession {
     /// replays the originating input — the old synchronous Confirm
     /// shape, deferred to the poll.
     fn resolve_channel_login(&mut self, hero: CharacterInfo, origin: EntryEcho) {
+        if let Some(attempt) = &self.login_attempt {
+            self.game
+                .set_waiting_channel_number(u16::try_from(attempt.channel_id).unwrap_or_default());
+        }
         crate::stage_online_identity(&mut self.game, Some(&hero));
         self.echo_entry(origin);
     }
@@ -1700,6 +1706,7 @@ impl OnlineSession {
                         tracing::warn!("room join answered without a snapshot; staying in Room");
                         return None;
                     };
+                    self.game.set_waiting_room_number(attempt.number);
                     self.resolve_room_join(room, attempt.origin);
                     return None;
                 }
@@ -4959,6 +4966,32 @@ pub(super) mod session_tests {
         server.join().unwrap();
         assert!(session.game.is_room_master());
         assert_eq!(session.game.room_key_mode(), 2);
+        assert_eq!(
+            session.game.waiting_room_number(),
+            Some(3),
+            "the accepted 3002 number reaches the waiting header"
+        );
+    }
+
+    #[test]
+    fn resident_channel_stages_the_waiting_header_number() {
+        // Live caller chain:
+        //   main.rs::run_play -> setup_online -> OnlineSession::set_resident_channel
+        //   -> ScreenGame::set_waiting_channel_number. Boot residency
+        //   and a resolved 1005 login both take this setter.
+        let (port, server) = fake_gateway(|mut stream| {
+            assert_quiet(&mut stream);
+        });
+        let gateway = GatewayConnection::connect(format!("127.0.0.1:{port}").as_str()).unwrap();
+        let mut session = OnlineSession::new(ScreenGame::new(), gateway);
+        let channel = entry_channel();
+        session.set_resident_channel(channel);
+        assert_eq!(
+            session.game.waiting_channel_number(),
+            Some(channel.channel_id),
+            "header uses the wire channel id, not the list ordinal"
+        );
+        server.join().unwrap();
     }
 
     #[test]

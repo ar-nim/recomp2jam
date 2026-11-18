@@ -45,7 +45,7 @@ use super::paint::{
     paint_room_list, paint_room_no_response_dialog, paint_room_scene_with_hover,
     paint_room_user_panel, paint_screen, paint_shop_avatar, paint_shop_bag_pager, paint_shop_board,
     paint_shop_item_icons, paint_shop_preview, paint_shop_scene, paint_waiting_chat,
-    paint_waiting_members, paint_waiting_scene, paint_waiting_seat_avatar,
+    paint_waiting_members, paint_waiting_scene, paint_waiting_seat_avatar_at,
     paint_waiting_seat_avatars, playing_backdrop_staged, quit_fallback_rects, rect_hit,
     room_chrome_visible, room_panel_hit, scene_index, staged_rect_hit, waiting_confirm_control_id,
     BattleVerdict, CashChargeArt, ChannelChatMessage, LoadingStatus, ResultPaint, ResultRankRow,
@@ -559,6 +559,12 @@ pub struct ScreenGame {
     rooms: Vec<RoomListEntry>,
     room_highlight: usize,
     waiting: Option<JoinedRoom>,
+    /// One-based channel number for the waiting `CHNUM` digit wells
+    /// (`1003 channel_id + 1`), staged on resident channel login.
+    waiting_channel_number: Option<u16>,
+    /// Room number for the waiting `RMNUM` digit wells, staged from
+    /// the accepted `3002` join request (`None` leaves the wells bare).
+    waiting_room_number: Option<i32>,
     /// The master's START control shows its armed face: the local start
     /// request stands and the game has not begun. The exe keeps this in
     /// the control's press state word (`[ctrl+0x60]`, setter VA
@@ -978,6 +984,8 @@ impl ScreenGame {
             rooms: Vec::new(),
             room_highlight: 0,
             waiting: None,
+            waiting_channel_number: None,
+            waiting_room_number: None,
             waiting_start_armed: false,
             selected_music: None,
             loading_status: None,
@@ -1549,6 +1557,34 @@ impl ScreenGame {
     /// Whether a room-list row names a real room (see [`Self::set_rooms`]).
     fn is_listed_room(room: &RoomListEntry) -> bool {
         room.number != 0 || !room.title.is_empty()
+    }
+
+    /// Stage the resident channel id for the waiting header wells.
+    /// Called by the session on both boot residency and a resolved
+    /// login; the painter adds one for the displayed number.
+    pub fn set_waiting_channel_number(&mut self, channel_id: u16) -> &mut Self {
+        self.waiting_channel_number = Some(channel_id);
+        self
+    }
+
+    /// Stage the accepted room number for the waiting header wells.
+    /// The 3003 snapshot does not carry it, so the join request owns
+    /// this source; `None` until then leaves the wells unpainted.
+    pub fn set_waiting_room_number(&mut self, number: i32) -> &mut Self {
+        self.waiting_room_number = Some(number);
+        self
+    }
+
+    /// Channel number staged for the waiting header wells.
+    #[must_use]
+    pub fn waiting_channel_number(&self) -> Option<u16> {
+        self.waiting_channel_number
+    }
+
+    /// Room number staged for the waiting header wells.
+    #[must_use]
+    pub fn waiting_room_number(&self) -> Option<i32> {
+        self.waiting_room_number
     }
 
     /// Remember the joined room; Waiting paints its eight seats, and
@@ -6127,6 +6163,12 @@ impl ScreenGame {
             skill_counts: self.skill_counts,
             level: self.waiting_level(),
             notice: self.waiting_notice,
+            channel_number: self.waiting_channel_number,
+            room_number: self.waiting_room_number,
+            local_name: self
+                .myroom_character
+                .as_ref()
+                .map(|character| character.nickname.as_str()),
         };
         match (self.scene_art(Screen::Waiting), &self.waiting) {
             (Some(art), Some(room)) => {
@@ -6152,11 +6194,12 @@ impl ScreenGame {
                 // covers seat 0 only until the fetched character lands
                 // (the windowed entries fetch it on channel login).
                 if self.waiting_figures[0].is_none() {
-                    paint_waiting_seat_avatar(
+                    paint_waiting_seat_avatar_at(
                         frame,
                         &art.placements,
                         self.room_avatar.as_ref(),
                         now_ms,
+                        usize::from(room.member_id),
                     );
                 }
                 paint_waiting_chat(
@@ -10233,8 +10276,8 @@ mod game_tests {
             0,
         );
         assert_eq!(buf[0], background_of(Screen::Waiting));
-        // Ready host sits at seat 1: green ready dot left of its row.
-        let (x, y) = seat_origin(1, 80, 64);
+        // The wire host owns slot 0: green ready dot left of cover 0.
+        let (x, y) = seat_origin(0, 80, 64);
         assert_eq!(
             buf[(y + 1) as usize * 80 + (x - 6 + 1) as usize],
             pack_xrgb(0x30, 0xE0, 0x30)

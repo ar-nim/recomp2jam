@@ -8,8 +8,6 @@ use super::*;
 
 /// Seats shown on the waiting screen: self plus the seven wire slots.
 pub(crate) const WAITING_SEATS: usize = 8;
-/// Peer slots carried beside self in [`JoinedRoom`].
-const WAITING_PEERS: usize = 7;
 /// Waiting rows share the lobby row height.
 const WAITING_ROW_H: i32 = 8;
 
@@ -102,21 +100,23 @@ fn peer_seat(slot: &RoomSlot) -> WaitingSeat {
 
 /// Eight seat views: our seat first, then the wire slots, padded empty.
 ///
-/// The wire carries seven peer slots beside self (`JoinedRoom.slots`);
-/// together they are the eight waiting-room seats. OPEN: `slots`
-/// includes our own index (`member_id`), so this view paints our
-/// member twice — the seat-to-cover mapping needs evidence (next step:
-/// a 7.55 waiting capture with two players seated in known slots, then
-/// compare which cover each name lands on).
+/// Wire slot `i` owns cover `i`; the local member owns cover
+/// `member_id` when the 3003 snapshot has no row for it. Peers are no
+/// longer shifted by one, and self is no longer forced to cover 0.
 #[must_use]
 pub(crate) fn waiting_seats(room: &JoinedRoom) -> Vec<WaitingSeat> {
-    let mut seats = Vec::with_capacity(WAITING_SEATS);
-    seats.push(self_seat(room));
-    for slot in room.slots.iter().take(WAITING_PEERS) {
-        seats.push(peer_seat(slot));
+    let mut seats: Vec<WaitingSeat> = (0..WAITING_SEATS).map(|_| empty_seat()).collect();
+    for slot in room.slots.iter() {
+        if let Some(seat) = seats.get_mut(usize::from(slot.index)) {
+            *seat = peer_seat(slot);
+        }
     }
-    while seats.len() < WAITING_SEATS {
-        seats.push(empty_seat());
+    let own = usize::from(room.member_id);
+    if seats
+        .get(own)
+        .is_some_and(|seat| matches!(seat.kind, SeatKind::Empty))
+    {
+        seats[own] = self_seat(room);
     }
     seats
 }
@@ -211,6 +211,15 @@ pub struct WaitingCaptions<'a> {
     /// notice box above the START control,
     /// `docs/music-availability.md` §4); `None` paints the room title.
     pub notice: Option<&'static str>,
+    /// One-based channel number behind the two `CHNUM` digit wells:
+    /// the resident 1003 `channel_id` plus one, staged on login.
+    pub channel_number: Option<u16>,
+    /// Room number behind the three `RMNUM` digit wells: the number
+    /// from the accepted 3002 join request, staged on join.
+    pub room_number: Option<i32>,
+    /// Local nickname from 2001, used on the self cover when the 3003
+    /// slot list does not carry the guest's own member.
+    pub local_name: Option<&'a str>,
 }
 
 /// Difficulty and speed behind the `LEVEL` badge: the two bytes the
@@ -297,7 +306,7 @@ pub fn paint_waiting_scene(
     worn_figures_staged: bool,
     member_role: MemberRole,
 ) {
-    let seats = staged_seats(room);
+    let seats = staged_seats(room, captions.local_name);
     // Seam: `ScreenGame::is_room_master` (seat id 0), mirrored here as
     // `room.member_id == 0`. See [`waiting_control_armed_for_role`].
     let is_room_master = room.member_id == 0;
@@ -307,6 +316,7 @@ pub fn paint_waiting_scene(
             && waiting_seat_clone_live(placed, &seats)
             && waiting_control_armed_for_role(&placed.id, is_room_master)
             && !waiting_paints_one_record(&placed.id)
+            && !waiting_header_chip_hidden(&placed.id)
             && !(worn_figures_staged && placed.sprite.as_deref() == Some(WAIT_COVER_SPRITE))
             && !(member_role != MemberRole::Challenger
                 && WAITING_SELECT_OVERLAY_CODES.contains(&placed.code))
@@ -324,17 +334,29 @@ pub fn paint_waiting_scene(
 
 /// Whether a Waiting control paints one selected record instead of its
 /// staged layer stack, so the rest stack leaves it out: the `LEVEL`
-/// badge ([`paint_waiting_level_badge`]) and the role-owned confirm
-/// body ([`paint_waiting_confirm_face`]). The exe's image control
+/// badge ([`paint_waiting_level_badge`]), the role-owned confirm
+/// body ([`paint_waiting_confirm_face`]), and the five top-bar number
+/// wells ([`paint_waiting_header_numbers`]). The exe's image control
 /// draws the one frame its setter staged (`docs/ui-draw.md` steps 3-6;
 /// a frame swap never stacks frames), so stacking the badge's 60
-/// frames would paint the last one (`MXR`) over the live pick, and
-/// stacking the confirm body's 3 frames would paint its armed face
-/// over the rest face forever.
+/// frames would paint the last one (`MXR`), stacking the confirm body's
+/// 3 frames would paint its armed face forever, and stacking
+/// `Wait_RoomNumber`'s ten glyphs would show `99`/`999`.
 fn waiting_paints_one_record(id: &str) -> bool {
     id == WAITING_LEVEL_ID
         || id == waiting_confirm_control_id(true)
         || id == waiting_confirm_control_id(false)
+        || WAITING_CHANNEL_NUMBER_IDS.contains(&id)
+        || WAITING_ROOM_NUMBER_IDS.contains(&id)
+}
+
+/// Header class chips have no staged wire source. The p343 matched exe
+/// base frame leaves both wells at the sheet's baked art; stacking the
+/// `Wait_Premium.ojs` and `Wait_FreeUser.ojs` layers paints captions
+/// the exe does not show. No field arms them in the 3003 snapshot, so
+/// they stay out until a pinned source stages one.
+fn waiting_header_chip_hidden(id: &str) -> bool {
+    matches!(id, "IDC_IMAGE_SWAIT_SKILLSHOW" | "IDC_IMAGE_SWAIT_FREEUSER")
 }
 
 /// Record index of the armed confirm face: the third record of
@@ -505,10 +527,22 @@ pub fn paint_waiting_seat_avatar(
     figure: Option<&AvatarFigure>,
     now_ms: u64,
 ) {
+    paint_waiting_seat_avatar_at(frame, placements, figure, now_ms, 0);
+}
+
+/// Same self-figure fallback as [`paint_waiting_seat_avatar`], but at
+/// the wire `member_id` cover (a guest is not necessarily seat 0).
+pub fn paint_waiting_seat_avatar_at(
+    frame: &mut Frame<'_>,
+    placements: &[ScenePlacement],
+    figure: Option<&AvatarFigure>,
+    now_ms: u64,
+    seat_index: usize,
+) {
     let Some(figure) = figure else {
         return;
     };
-    if let Some(slot) = waiting_seat_slot_rect(placements, 0) {
+    if let Some(slot) = waiting_seat_slot_rect(placements, seat_index) {
         paint_figure_in_seat_slot(frame, figure, &slot, now_ms);
     }
 }
@@ -526,7 +560,7 @@ pub fn paint_waiting_seat_avatars(
     figures: &[Option<AvatarFigure>],
     now_ms: u64,
 ) {
-    let seats = staged_seats(room);
+    let seats = staged_seats(room, None);
     for (index, staged_figure) in figures.iter().enumerate() {
         if seats.get(index).is_none_or(|seat| !seat.present) {
             continue;
@@ -776,46 +810,47 @@ fn paint_waiting_seat_marks(frame: &mut Frame<'_>, seats: &[StagedSeat], art: &S
     }
 }
 
-/// Staged seats in cover order: self first, then the seven wire slots
-/// (`JoinedRoom.slots`), padded empty — the same eight seats as
-/// [`waiting_seats`], with levels and the champion mark kept.
-pub(crate) fn staged_seats(room: &JoinedRoom) -> Vec<StagedSeat> {
-    let mut seats = Vec::with_capacity(WAITING_SEATS);
-    let own = room.slots.iter().find(|slot| slot.index == room.member_id);
-    seats.push(StagedSeat {
-        name: "YOU".to_owned(),
-        level: None,
-        team: room.team,
-        ready: own
-            .and_then(|slot| slot.member.as_ref())
-            .is_some_and(|member| member.ready),
-        present: true,
-        locked: false,
-        champion: room.champion == Some(0),
-        master: room.member_id == 0,
-        playing: own
-            .and_then(|slot| slot.member.as_ref())
-            .is_some_and(|member| member.playing_state != 0),
-        has_song: room.music_id != 0,
-    });
-    for (offset, slot) in room.slots.iter().take(WAITING_PEERS).enumerate() {
-        let index = u8::try_from(offset + 1).unwrap_or(u8::MAX);
-        seats.push(staged_peer_seat(
+/// Staged seats in cover order: wire slot `i` owns cover `i`, and our
+/// own seat owns cover `member_id` when the 3003 snapshot does not
+/// list it. The p343 matched capture pins both: the slot-0 master
+/// (star, PC, READY) on the left cover, the guest on the next one.
+pub(crate) fn staged_seats(room: &JoinedRoom, local_name: Option<&str>) -> Vec<StagedSeat> {
+    let mut seats: Vec<StagedSeat> = (0..WAITING_SEATS).map(|_| empty_staged_seat()).collect();
+    for slot in room.slots.iter() {
+        let index = usize::from(slot.index);
+        let Some(seat) = seats.get_mut(index) else {
+            continue;
+        };
+        *seat = staged_slot_seat(
             slot,
-            slot.index != room.member_id,
-            room.champion == Some(index),
-        ));
+            room.champion == Some(u8::try_from(index).unwrap_or(u8::MAX)),
+        );
     }
-    while seats.len() < WAITING_SEATS {
-        seats.push(empty_staged_seat());
+    let own = usize::from(room.member_id);
+    if seats.get(own).is_some_and(|seat| !seat.present) {
+        let own_slot = room
+            .slots
+            .iter()
+            .find(|slot| slot.index == room.member_id)
+            .and_then(|slot| slot.member.as_ref());
+        seats[own] = StagedSeat {
+            name: local_name.unwrap_or("YOU").to_owned(),
+            level: own_slot.map(|member| member.level),
+            team: own_slot.map_or(room.team, |member| member.team),
+            ready: own_slot.is_some_and(|member| member.ready),
+            present: true,
+            locked: false,
+            champion: room.champion == Some(room.member_id),
+            master: own_slot.is_some_and(|member| member.master),
+            playing: own_slot.is_some_and(|member| member.playing_state != 0),
+            has_song: own_slot.is_some_and(|member| !member.music_ids.is_empty()),
+        };
     }
     seats
 }
 
-/// Staged view of one wire slot. The local member already has seat 0;
-/// its wire slot is also present in `slots`, and a duplicate master
-/// flag there would paint the creator emblem on a second seat.
-fn staged_peer_seat(slot: &RoomSlot, is_peer: bool, champion: bool) -> StagedSeat {
+/// Staged view of one wire slot, including its own master flag.
+fn staged_slot_seat(slot: &RoomSlot, champion: bool) -> StagedSeat {
     match &slot.member {
         Some(member) => StagedSeat {
             name: member.nickname.clone(),
@@ -825,7 +860,7 @@ fn staged_peer_seat(slot: &RoomSlot, is_peer: bool, champion: bool) -> StagedSea
             present: true,
             locked: false,
             champion,
-            master: is_peer && member.master,
+            master: member.master,
             playing: member.playing_state != 0,
             has_song: !member.music_ids.is_empty(),
         },
@@ -985,8 +1020,9 @@ pub(crate) fn paint_waiting_staged(
         Some(notice) => paint_waiting_top_line(frame, notice, placements),
         None => paint_waiting_title(frame, room, placements),
     }
+    paint_waiting_header_numbers(frame, art, captions.channel_number, captions.room_number);
     paint_waiting_level_badge(frame, captions.level, art);
-    paint_waiting_covers(frame, room, placements);
+    paint_waiting_covers(frame, room, placements, captions.local_name);
     paint_waiting_team_highlight(frame, room, placements);
     paint_waiting_wins(frame, room, placements);
     paint_waiting_speed(frame, room, placements);
@@ -995,6 +1031,76 @@ pub(crate) fn paint_waiting_staged(
     paint_waiting_mapname(frame, room, placements);
     paint_waiting_bpm(frame, captions.song_bpm, placements);
     paint_waiting_music(frame, placements, captions.song);
+}
+
+/// Top-bar digit wells: `IDC_IMAGE_SWAIT_CHNUM_10/01` show the one-
+/// based channel number and `IDC_IMAGE_SWAIT_RMNUM_100/010/001` show
+/// the joined room number. `Wait_RoomNumber.ojs` decodes ten glyph
+/// layers in digit order, so each well paints exactly its own layer.
+/// The values come from the accepted wire rows: 1003 `channel_id + 1`
+/// (the same rule as the Channel dialog digits) and the 3002 room
+/// number. An unstaged value leaves its well untouched.
+const WAITING_CHANNEL_NUMBER_IDS: [&str; 2] =
+    ["IDC_IMAGE_SWAIT_CHNUM_10", "IDC_IMAGE_SWAIT_CHNUM_01"];
+const WAITING_ROOM_NUMBER_IDS: [&str; 3] = [
+    "IDC_IMAGE_SWAIT_RMNUM_100",
+    "IDC_IMAGE_SWAIT_RMNUM_010",
+    "IDC_IMAGE_SWAIT_RMNUM_001",
+];
+
+/// Decimal digit of `value` at one weight (100, 10, or 1).
+fn waiting_number_digit(value: u32, weight: u32) -> usize {
+    usize::try_from(value / weight % 10).unwrap_or(0)
+}
+
+/// Paint one selected digit layer at its bound well.
+fn paint_waiting_number_well(
+    frame: &mut Frame<'_>,
+    art: &SceneArt,
+    id: &str,
+    digit: usize,
+    shares_body: bool,
+) {
+    let Some(placed) = art.placements.iter().find(|placed| placed.id == id) else {
+        return;
+    };
+    paint_placement_layer(frame, placed, &art.figures, digit, shares_body, None);
+}
+
+/// Paint the five top-bar wells from the staged wire values. The body
+/// is shared across the wells, so its rects (not its record anchors)
+/// position each glyph ([`shared_sprite_names`]).
+fn paint_waiting_header_numbers(
+    frame: &mut Frame<'_>,
+    art: &SceneArt,
+    channel_number: Option<u16>,
+    room_number: Option<i32>,
+) {
+    let shares_body = shared_sprite_names(&art.placements).contains("Wait_RoomNumber.ojs");
+    if let Some(channel) = channel_number {
+        let shown = u32::from(channel).saturating_add(1);
+        for (id, weight) in WAITING_CHANNEL_NUMBER_IDS.iter().zip([10, 1]) {
+            paint_waiting_number_well(
+                frame,
+                art,
+                id,
+                waiting_number_digit(shown, weight),
+                shares_body,
+            );
+        }
+    }
+    if let Some(room) = room_number {
+        let shown = u32::try_from(room.max(0)).unwrap_or(0);
+        for (id, weight) in WAITING_ROOM_NUMBER_IDS.iter().zip([100, 10, 1]) {
+            paint_waiting_number_well(
+                frame,
+                art,
+                id,
+                waiting_number_digit(shown, weight),
+                shares_body,
+            );
+        }
+    }
 }
 
 /// Room title at the `ROOMNAME` rect (top bar, rect 21).
@@ -1081,9 +1187,10 @@ pub(crate) fn paint_waiting_covers(
     frame: &mut Frame<'_>,
     room: &JoinedRoom,
     placements: &[ScenePlacement],
+    local_name: Option<&str>,
 ) {
     let has_champion = room.champion.is_some();
-    for (cover_id, seat) in WAITING_COVER_IDS.iter().zip(staged_seats(room)) {
+    for (cover_id, seat) in WAITING_COVER_IDS.iter().zip(staged_seats(room, local_name)) {
         if !cover_stages_body(placements, cover_id) {
             continue;
         }

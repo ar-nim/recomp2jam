@@ -8,3 +8,41 @@
 | Transitions | `Waiting → Loading`, `Waiting → Room` | Implemented + tested (guards: `waiting_hand_session_joins_team_readies_and_starts`, `waiting_backs_out_to_room_list`, `flow_allows_every_documented_edge`) (ev: guard `waiting_hand_session_joins_team_readies_and_starts` + `flow_allows_every_documented_edge`) | PASS (R, v: 9692d41) |
 | Gameplay | 8 seats, team 0..7, winner art only (no per-team panel) | Seats + ready flags; champion/challenger roles, the wins box, and the team highlight paint from live room data (guards above); no per-team panels beyond the highlight. Live fold gap, narrowed 2026-11-09: the guest toggle folds into game slots and self-seat reads slot readiness, but live snapshots number members off the slot indices (wire: member 1, no slot 1), so the fold misses silently — paint proven, lookup convention OPEN (next step: gateway replay pinning the member→slot convention). Scoping #72 (2026-11-12): the room-team tie-break display order is minted as claim D26 and rides evidence issue #94 — static sweep 2026-11 sharpened it: no in-exe team-total comparison exists, the winner rides the server-written win-flag byte, display order is fixed seat/button order (ev: B42 member table `0x77ee90` stride `0x2190` ev `b16e614c…`; D16 reader sites `0x159d38`–`0x159f82`; result-variants.md §Team tie-break) | OPEN (R+G, v: 9692d41) |
 | Music-select | Song dialog decl `0x7A`/134 entries (`DAILOG_SELECTMUSIC`, `CDSelectMusic`, lifecycle §8); host pick commits the room song (`MUSELECT 0x16200003` drops non-master clicks, file `0xb2622`); rows name the catalog songs | Ticket #15 (2026-11-11): the dialog stages over the seats through the bound arm (shared ordinal pairing — the every-bound-entry proof now covers `DAILOG_SELECTMUSIC`: 154 entries paint on their own rect origins, incl. the EXTEND rows behind the staged table bands; the multi-layer probe fix attributes overpaint to the topmost inked layer). A master row click commits the room song — the row's song id plus its difficulty slot become the `SetRoomMusic` 4000 body queued for the session bridge, the room state takes it at once (title/speed captions repaint), and only the picked row's title inks the active orange (stand-in highlight, exe rendering unpinned). Catalog rows read the CP949 decode (`docs/file-formats/ojn.md` already pinned CP949 titles; the parser read UTF-8-lossy tofu — fixed, so table/panel/caption ink carries real glyphs through the embedded Noto face). Catalog order, easy-first, ten visible rows; per-chart level/grade stay blank (never staged), 다운/듣기/정보 icons blank (no staged art). Guards: `select_row_hit_maps_the_search_table_bands`, `click_staged_select_row_commits_song_and_queues_4004`, `select_row_click_without_master_or_art_commits_nothing`, `waiting_hand_session_picks_song_then_starts`, `picked_select_row_highlights_its_title`, side `select_music_songs`/`select_music_rows` family, shots `musicselect_shot_repaints_waiting_with_song_panel` + `musicselect_fallback_catalog_lists_four_synthetic_songs` + `musicselect_dialog_text_layer_inks_the_staged_tab_slot` + `song_dialog_buttons_paint_their_staged_bodies`; smoke `docs/smoke/selectmusic-hand-session.md` (offline hand session: waiting→waiting→loading, 4000 staged). Ticket #272 (2026-11-16, owner playtest): the dialog's black rectangles were our own structure plates — caption scrims painted over the bound button bodies. The overlay is now glyphs only (`paint_select_music_text`): tab counts, status, pager and per-row title/artist/level at the sheet's `TEXT` slots (their `.bnd` rects; row slots = band origin + the `SET 0x0B` template rect), with the filter buttons, table header, INDEX letters and OK pill painted from their OPI bodies. The sheet's two hidden families (the random panel at the same rects as the STEP1 column, and the three `*GuidImg` help sheets) no longer stage (`Dialog::hidden_sprites`, `SELECT_MUSIC_HIDDEN_AT_OPEN`), which is what the reference capture shows. Still OPEN: the mode/help switch handlers behind `0x2720001A/1B` and `0x27200053/55`; the row note/grade icon frame per chart; dialog chrome clicks fall through (filters/pager/search/chosung/OK unevidenced — next step: rig chrome sweep plus captures, or dossier offsets); picked-row highlight rendering (next step: live row-click capture per the `~/scratch/planet-verify/` recipe); the queued 4000 has no session drain yet (next step: gateway replay through `SetRoomMusic` 4000 confirming the room echo); exe key codes (next step: SendInput sweep on the live dialog). Scoping #73 (2026-11-12): the xTd paired table (`0x2454d8`–`0x2455dc`, `?Td/?Sd/?Bd` codes + u16 rows + pointer table — the key-name-table guess is refuted by C18) is minted as claim C39; its consumer classification (#95) decides whether a cell is minted here or the table is ruled out as launcher/patcher-only (ev: `MUSELECT 0x16200003` file `0xb2622`; shots `musicselect_shot_repaints_waiting_with_song_panel`; smoke `docs/smoke/selectmusic-hand-session.md`) | PASS (R+G, v: 9692d41) (dialog + host pick; chrome + highlight rendering + wire send + key codes OPEN with named next steps) |
+
+## #372 matched residual pass (2026-11-19)
+
+Two player-visible residuals from the p343 annotated pack are fixed:
+
+- **`top_header`**: the staged `Wait_RoomNumber.ojs` body has ten glyph
+  layers, and the old backdrop pass stacked all of them in each well,
+  so the wells read `Ch.99 / No.999`. `paint_waiting_header_numbers`
+  now paints one selected layer per `CHNUM_10/01` and `RMNUM_100/010/001`
+  well, from the resident 1003 `channel_id + 1` and the accepted 3002
+  room number staged by `OnlineSession`. `Wait_Premium.ojs` and
+  `Wait_FreeUser.ojs` no longer stack unconditionally: the exe base
+  frame shows neither, and no wire field arms them here. Guards:
+  `waiting_header_wells_show_one_wire_digit_each`,
+  `waiting_header_class_chips_stay_unpainted_without_a_source`,
+  `resident_channel_stages_the_waiting_header_number`,
+  `room_confirm_joins_pending_room_and_enters_waiting`.
+- **`seat_grid_left`**: `staged_seats` used to put a synthetic self seat
+  on cover 0 and shift wire slots by one. The 3003 snapshot gives
+  `member_id` without a guest member row, so the exe seats the peer
+  slots by their own `slot.index` and the local member at cover
+  `member_id`. The master star, PC badge and READY plate now land with
+  the slot-0 master on the left and the guest on the right. Guards:
+  `guest_sees_the_wire_master_on_the_left_cover`,
+  `guest_self_seat_lands_at_its_member_id_cover`.
+
+Matched rerun against the p343 exe frame: `top_header` SSIM 0.809921 →
+0.859627, `seat_grid_left` 0.878300 → 0.893151. Both stay below 0.95
+for named presentation residuals: glyph size/rasterization on the same
+WINEJOIN title and manner-level caption (owner decision e8d01), and
+worn-avatar bodies/rings plus name-plate ink. No seat-order or badge
+residual remains.
+
+Post-rebase note: `origin/main` later made stored colorkey `0` opaque in
+`o2jam-render`, so a fresh matched leg now shows a full-width black
+`Lanking_NoticeBoard.oji` band over the header (`top_header` 0.451423).
+That band is outside #372; the pre-rebase build of this patch scored
+0.859627 with no band. It needs its own exe pin before any verdict.

@@ -1194,13 +1194,13 @@ fn master_emblem_stages_only_on_the_creator_seat_with_real_art() {
     });
     game.set_joined_room(guest);
     assert_eq!(
-        ink_at_seat(&mut game, 1),
-        star_ink,
-        "guest sees the emblem on the master peer"
-    );
-    assert_ne!(
         ink_at_seat(&mut game, 0),
         star_ink,
-        "guest's own seat has no master emblem"
+        "guest sees the emblem on slot 0, the master peer"
+    );
+    assert_ne!(
+        ink_at_seat(&mut game, 1),
+        star_ink,
+        "guest's own slot 1 has no master emblem"
     );
 }

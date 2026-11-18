@@ -3060,9 +3060,9 @@ pub use self::room::{
 };
 pub(crate) use self::waiting::{paint_waiting_members, waiting_bnd_origin};
 pub use self::waiting::{
-    paint_waiting_scene, paint_waiting_seat_avatar, paint_waiting_seat_avatars,
-    waiting_bpm_caption, waiting_confirm_control_id, waiting_map_name, waiting_skillcount_text,
-    WaitingCaptions, WaitingLevel, WaitingSong,
+    paint_waiting_scene, paint_waiting_seat_avatar, paint_waiting_seat_avatar_at,
+    paint_waiting_seat_avatars, waiting_bpm_caption, waiting_confirm_control_id, waiting_map_name,
+    waiting_skillcount_text, WaitingCaptions, WaitingLevel, WaitingSong,
 };
 // The existing paint guards exercise the Waiting block's private metrics;
 // keep that seam test-only so the library build has no unused re-export.
@@ -3909,25 +3909,166 @@ mod paint_tests {
     }
 
     #[test]
-    fn waiting_seats_pad_self_plus_slots_to_eight() {
+    fn waiting_seats_follow_wire_slots_and_pad_to_eight() {
         let seats = waiting_seats(&waiting_room());
         assert_eq!(seats.len(), WAITING_SEATS);
-        assert_eq!(seats[0].display_name(), Some("YOU"));
-        assert_eq!(seats[1].display_name(), Some("host"));
-        assert!(seats[1].is_ready());
+        assert_eq!(seats[0].display_name(), Some("host"));
         assert!(seats[0].is_ready());
-        assert_eq!(seats[2].display_name(), None);
-        assert_eq!(seats[3].kind, SeatKind::Locked);
-        assert!(seats[4..].iter().all(|seat| seat.kind == SeatKind::Empty));
+        assert_eq!(seats[1].display_name(), None);
+        assert_eq!(seats[2].kind, SeatKind::Locked);
+        assert!(seats[3..].iter().all(|seat| seat.kind == SeatKind::Empty));
     }
 
     #[test]
     fn waiting_row_text_shows_name_team_and_ready() {
         let seats = waiting_seats(&waiting_room());
-        assert_eq!(waiting_row_text(1, &seats[1]), "1 A host R");
-        assert_eq!(waiting_row_text(0, &seats[0]), "0 B YOU R");
-        assert_eq!(waiting_row_text(2, &seats[2]), "2 - ---");
-        assert_eq!(waiting_row_text(3, &seats[3]), "3 - LOCK");
+        assert_eq!(waiting_row_text(0, &seats[0]), "0 A host R");
+        assert_eq!(waiting_row_text(1, &seats[1]), "1 - ---");
+        assert_eq!(waiting_row_text(2, &seats[2]), "2 - LOCK");
+    }
+
+    #[test]
+    fn waiting_header_wells_show_one_wire_digit_each() {
+        // Live caller chain:
+        //   main.rs::run_play -> setup_online -> OnlineSession::paint
+        //   -> ScreenGame::paint -> ScreenGame::paint_waiting
+        //   -> paint_waiting_scene -> paint_waiting_staged
+        //   -> paint_waiting_header_numbers.
+        // p343 exe frame: Ch.01 / No.000 under byte-equal wire. The
+        // old stacked figure showed the last glyph (9) in every well.
+        let mut placements = vec![waiting_probe(
+            "IDC_IMAGE_SWAIT_COVERAVATAR1",
+            Some("Wait_Cover_Avatar.ojs"),
+            (10, 200, 151, 375),
+        )];
+        for (id, x) in [
+            ("IDC_IMAGE_SWAIT_CHNUM_10", 100),
+            ("IDC_IMAGE_SWAIT_CHNUM_01", 117),
+            ("IDC_IMAGE_SWAIT_RMNUM_100", 159),
+            ("IDC_IMAGE_SWAIT_RMNUM_010", 176),
+            ("IDC_IMAGE_SWAIT_RMNUM_001", 193),
+        ] {
+            placements.push(waiting_probe(
+                id,
+                Some("Wait_RoomNumber.ojs"),
+                (x, 19, x + 13, 32),
+            ));
+        }
+        let art = SceneArt {
+            placements,
+            figures: HashMap::from([
+                ("Wait_Cover_Avatar.ojs".to_owned(), red_figure()),
+                ("Wait_RoomNumber.ojs".to_owned(), digit_figure()),
+            ]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &waiting_room(),
+            &art,
+            &WaitingCaptions {
+                channel_number: Some(0),
+                room_number: Some(0),
+                ..Default::default()
+            },
+            false,
+            false,
+            MemberRole::Spectator,
+        );
+        assert_eq!(buf[22 * 800 + 103], digit_ink(0), "Ch.01 tens well");
+        assert_eq!(buf[22 * 800 + 120], digit_ink(1), "Ch.01 ones well");
+        assert_eq!(buf[22 * 800 + 162], digit_ink(0), "No.000 hundreds");
+        assert_eq!(buf[22 * 800 + 179], digit_ink(0), "No.000 tens");
+        assert_eq!(buf[22 * 800 + 196], digit_ink(0), "No.000 ones");
+    }
+
+    #[test]
+    fn waiting_header_class_chips_stay_unpainted_without_a_source() {
+        // Live caller chain: same as
+        // `waiting_header_wells_show_one_wire_digit_each`.
+        // p343 exe frame has neither the premium nor the free-room
+        // caption; both staged bodies used to stack unconditionally.
+        let mut placements = vec![waiting_probe(
+            "IDC_IMAGE_SWAIT_COVERAVATAR1",
+            Some("Wait_Cover_Avatar.ojs"),
+            (10, 200, 151, 375),
+        )];
+        for (id, rect) in [
+            ("IDC_IMAGE_SWAIT_SKILLSHOW", (407, 13, 454, 39)),
+            ("IDC_IMAGE_SWAIT_FREEUSER", (571, 13, 770, 39)),
+        ] {
+            placements.push(waiting_probe(id, Some("Wait_Premium.ojs"), rect));
+        }
+        let art = SceneArt {
+            placements,
+            figures: HashMap::from([
+                ("Wait_Cover_Avatar.ojs".to_owned(), red_figure()),
+                ("Wait_Premium.ojs".to_owned(), red_figure()),
+            ]),
+        };
+        let mut buf = vec![0u32; 800 * 600];
+        paint_waiting_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &waiting_room(),
+            &art,
+            &WaitingCaptions::default(),
+            false,
+            false,
+            MemberRole::Spectator,
+        );
+        let red = pack_xrgb(255, 0, 0);
+        assert_ne!(buf[13 * 800 + 407], red, "premium chip stays hidden");
+        assert_ne!(buf[13 * 800 + 571], red, "free-room chip stays hidden");
+    }
+
+    #[test]
+    fn guest_sees_the_wire_master_on_the_left_cover() {
+        // Live caller chain:
+        //   main.rs::run_play -> setup_online -> OnlineSession::paint
+        //   -> ScreenGame::paint -> ScreenGame::paint_waiting
+        //   -> paint_waiting_scene -> staged_seats.
+        // p343 wire body: member_id 1, slot 0 t207probe master/ready,
+        // slot 1 tester. The exe crop puts the master on cover 0.
+        let mut room = waiting_room();
+        room.member_id = 1;
+        let mut guest = room.slots[0].member.clone().unwrap();
+        guest.master = false;
+        room.slots[1] = RoomSlot {
+            index: 1,
+            state_code: 1,
+            member: Some(guest),
+        };
+        let seats = staged_seats(&room, None);
+        assert_eq!(seats[0].name, "host", "slot 0 stays on the left");
+        assert!(seats[0].master, "the slot-0 master keeps its star");
+        assert!(seats[0].ready, "the slot-0 READY plate stays left");
+        assert_eq!(seats[1].name, "host", "the guest slot follows in order");
+        assert!(!seats[1].master, "no duplicate master emblem");
+    }
+
+    #[test]
+    fn guest_self_seat_lands_at_its_member_id_cover() {
+        // Live caller chain:
+        //   main.rs::run_play -> setup_online -> OnlineSession::paint
+        //   -> ScreenGame::paint -> ScreenGame::paint_waiting
+        //   -> paint_waiting_scene -> staged_seats.
+        // p343 snapshot: member_id 1, slot 0 occupied by the master;
+        // the guest's own cover is slot 1, not cover 0.
+        let mut room = waiting_room();
+        room.member_id = 1;
+        let seats = staged_seats(&room, Some("tester"));
+        assert_eq!(seats[0].name, "host", "master keeps cover 0");
+        assert_eq!(seats[1].name, "tester", "self uses cover member_id");
+        assert!(seats[1].present, "the self cover is occupied");
+        assert!(!seats[1].master, "no duplicate master emblem");
     }
 
     /// Staged waiting art holding one control pair at the same rect:
@@ -4139,18 +4280,20 @@ mod paint_tests {
         let waiting_bg = background_of(Screen::Waiting);
         let ready_green = pack_xrgb(0x30, 0xE0, 0x30);
         assert_eq!(buf[0], waiting_bg);
-        // Seat 1 (ready host) sits in column 1, row 0 of the 4x2 grid.
-        let (host_x, host_y) = seat_origin(1, 80, 64);
-        assert_eq!((host_x, host_y), (25, 16));
+        // Slot 0 (ready wire host) sits in column 0, row 0 of the
+        // 4x2 grid; the guest's own slot is not painted first.
+        let (host_x, host_y) = seat_origin(0, 80, 64);
+        assert_eq!((host_x, host_y), (5, 16));
         assert_eq!(
             buf[(host_y + 1) as usize * 80 + (host_x - 6 + 1) as usize],
             ready_green
         );
-        // Seat 0 (self, ready host) keeps a green dot like any ready seat.
-        let (self_x, self_y) = seat_origin(0, 80, 64);
-        assert_eq!(
-            buf[(self_y + 1) as usize * 80 + (self_x - 6 + 1) as usize],
-            ready_green
+        // Slot 1 is empty in this snapshot: no second ready dot.
+        let (empty_x, empty_y) = seat_origin(1, 80, 64);
+        assert_ne!(
+            buf[(empty_y + 1) as usize * 80 + (empty_x - 6 + 1) as usize],
+            ready_green,
+            "empty slot stays unready"
         );
         // Seat 2 (empty) has no dot: the seat scrim shows through.
         let (empty_x, empty_y) = seat_origin(2, 80, 64);
@@ -8269,9 +8412,10 @@ mod paint_tests {
             MemberRole::Spectator,
         );
         let red = pack_xrgb(255, 0, 0);
-        // Empty seat 2 keeps its staged art pixel: no live line.
-        assert_eq!(buf[290 * 800 + 130], red, "empty cover stays art-only");
-        // Occupied seat 0 takes the live line: scrim opens at
+        // Empty wire slot 1 keeps its staged art pixel: no live line.
+        // Slot 2 is locked in this snapshot and legitimately inks LOCK.
+        assert_eq!(buf[245 * 800 + 70], red, "empty cover stays art-only");
+        // Occupied slot 0 takes the live line: scrim opens at
         // (10 − 4, 200 − 2), covering the art pixel.
         assert_eq!(buf[198 * 800 + 6], scrim_color(), "seat line scrim");
         assert_ne!(buf[200 * 800 + 10], red, "live line covers art");
@@ -8476,6 +8620,13 @@ mod paint_tests {
     /// streak 3, song 757, speed code 5 (`X3`), one skill ring.
     fn champion_room() -> JoinedRoom {
         let mut room = waiting_room();
+        let mut challenger = room.slots[0].member.clone().unwrap();
+        challenger.master = false;
+        room.slots[1] = RoomSlot {
+            index: 1,
+            state_code: 1,
+            member: Some(challenger),
+        };
         room.champion = Some(1);
         room.champion_streak = Some(3);
         room.music_id = 757;
@@ -8487,8 +8638,8 @@ mod paint_tests {
     #[test]
     fn staged_covers_name_champion_and_challenger() {
         // Cover rects 60/61 `(28,53,169,228)`/`(170,53,311,228)`:
-        // seat 1 (wire host) names CHAMPION with its wire level,
-        // seat 0 (self, no wire level) names CHALLENGER with `-`.
+        // wire slot 0 names CHALLENGER, slot 1 (the champion here)
+        // names CHAMPION. Both take their wire level.
         let placements = vec![
             waiting_probe("IDC_IMAGE_SWAIT_COVERAVATAR1", None, (28, 53, 169, 228)),
             waiting_probe("IDC_IMAGE_SWAIT_COVERAVATAR2", None, (170, 53, 311, 228)),
@@ -8502,15 +8653,21 @@ mod paint_tests {
             },
             &champion_room(),
             &placements,
+            None,
         );
-        assert_eq!(buf[51 * 800 + 166], scrim_color(), "champion scrim");
-        assert_eq!(buf[51 * 800 + 24], scrim_color(), "challenger scrim");
+        assert_eq!(buf[51 * 800 + 166], scrim_color(), "challenger scrim");
+        assert!(
+            buf[51 * 800 + 170..51 * 800 + 311].contains(&scrim_color()),
+            "champion line paints on cover 1"
+        );
         assert!(has_ink_near(&buf, art_title_ink()));
-        // Ready dots ride the cover lines: both seats carry their own
-        // wire ready flag (the self seat reads `slots[member_id]`, the
-        // same source the flat fallback and the READY toggle use).
+        // Ready dots ride the cover lines: each wire slot carries its
+        // own ready flag, never a synthetic self-first duplicate.
         assert_eq!(buf[55 * 800 + 165], pack_xrgb(0x30, 0xE0, 0x30));
-        assert_eq!(buf[55 * 800 + 23], pack_xrgb(0x30, 0xE0, 0x30));
+        assert!(
+            buf[55 * 800 + 160..55 * 800 + 311].contains(&pack_xrgb(0x30, 0xE0, 0x30)),
+            "cover 1 ready dot"
+        );
     }
 
     /// The room panel's staged wells plus its avatar slot, at the rect
@@ -9136,10 +9293,10 @@ mod paint_tests {
 
     #[test]
     fn waiting_seat_avatars_paint_each_occupied_seat_slot() {
-        // `waiting_room` seats self (seat 0) plus the wire host
-        // (seat 1); seats 2.. stay empty/locked. Both occupied slots
-        // take their figure through the same slot path — never the
-        // raw `(0,0,123,150)` rect.
+        // `waiting_room` has one occupied wire slot (the host at
+        // slot 0); slots 1.. stay empty/locked. The occupied slot
+        // takes its figure through the clone rect — never the raw
+        // `(0,0,123,150)` rect.
         let placements = waiting_avatar_placements();
         let room = waiting_room();
         let figures: Vec<Option<AvatarFigure>> = (0..WAITING_SEATS)
@@ -9159,11 +9316,12 @@ mod paint_tests {
         );
         assert!(
             ink_in_rect(&buf, 800, waiting_slot_box(0)) > 0,
-            "self seat takes its figure"
+            "the occupied wire slot takes its figure"
         );
-        assert!(
-            ink_in_rect(&buf, 800, waiting_slot_box(1)) > 0,
-            "occupied peer seat takes its figure"
+        assert_eq!(
+            ink_in_rect(&buf, 800, waiting_slot_box(1)),
+            0,
+            "the vacant slot stays empty"
         );
         assert_eq!(
             ink_in_rect(
@@ -9207,12 +9365,12 @@ mod paint_tests {
 
     #[test]
     fn empty_covers_leave_the_staged_panels_untouched() {
-        // Cover rect 62 `(312,53,453,228)` is seat 2 (empty wire
-        // slot): no scrim, no dot — the staged empty panel shows.
+        // Cover rect 61 `(170,53,311,228)` is wire slot 1: empty in
+        // `waiting_room`, so no scrim, no dot — the staged panel shows.
         let placements = vec![waiting_probe(
-            "IDC_IMAGE_SWAIT_COVERAVATAR3",
+            "IDC_IMAGE_SWAIT_COVERAVATAR2",
             None,
-            (312, 53, 453, 228),
+            (170, 53, 311, 228),
         )];
         let calm = background_of(Screen::Waiting);
         let mut buf = vec![calm; 800 * 600];
@@ -9222,10 +9380,11 @@ mod paint_tests {
                 w: 800,
                 h: 600,
             },
-            &champion_room(),
+            &waiting_room(),
             &placements,
+            None,
         );
-        assert_eq!(buf[53 * 800 + 312], calm);
+        assert_eq!(buf[53 * 800 + 170], calm);
         assert!(!buf.contains(&scrim_color()));
     }
 
@@ -9238,12 +9397,12 @@ mod paint_tests {
         // figures are staged the placeholder plate must stand down.
         let placements = vec![ScenePlacement {
             role: PlacementRole::Single,
-            id: "IDC_IMAGE_SWAIT_COVERAVATAR3".to_owned(),
-            code: 0x1650_003F,
+            id: "IDC_IMAGE_SWAIT_COVERAVATAR2".to_owned(),
+            code: 0x1650_003E,
             sprite: Some("Wait_Cover_Avatar.ojs".to_owned()),
             rect: Rect {
-                x: 130,
-                y: 290,
+                x: 170,
+                y: 53,
                 w: 141,
                 h: 175,
             },
@@ -9267,7 +9426,7 @@ mod paint_tests {
             MemberRole::Spectator,
         );
         assert_eq!(
-            buf[290 * 800 + 130],
+            buf[53 * 800 + 170],
             0,
             "staged figures leave no baked cover sketch"
         );
@@ -12277,7 +12436,7 @@ mod paint_tests {
             fold_pin_word(&mut hash, u64::try_from(x).unwrap_or(u64::MAX));
             fold_pin_word(&mut hash, u64::try_from(y).unwrap_or(u64::MAX));
         }
-        let staged_seats = staged_seats(&champion);
+        let staged_seats = staged_seats(&champion, None);
         for seat in &staged_seats {
             let role = staged_role(champion.champion.is_some(), seat);
             fold_pin_text(&mut hash, &staged_seat_text(seat, role));
@@ -12352,6 +12511,7 @@ mod paint_tests {
                 speed: 5,
             }),
             notice: None,
+            ..Default::default()
         };
         let mut staged = vec![0u32; 800 * 600];
         paint_waiting_scene(
@@ -12424,8 +12584,12 @@ mod paint_tests {
         );
         fold_pin_pixels(&mut hash, &avatars);
 
+        // #372 re-pinned after the exe-matched seat-index mapping:
+        // peer slots keep their `slot.index` cover and the local member
+        // sits at `member_id`; header class chips stay unpainted.
+        // Named guards + the p343 matched rerun carry the exe evidence.
         assert_eq!(
-            hash, 0x326A_5C00_B2FB_A849,
+            hash, 0x7E96_06C7_AA25_D885,
             "waiting paint generation changed; re-check the exe pins before updating"
         );
     }
