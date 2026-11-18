@@ -1399,21 +1399,22 @@ type OnlineTransport = (
     Option<session::SongChoice>,
 );
 
-/// One boundary for the relay-down channel-list gate (#244).
+/// One boundary for the relay-down channel-list gate (#244, #348).
 ///
 /// Live callers: `run_online` and `run_play --online` call
 /// [`relay_gate::relay_down_now`] on the boot path, connect and
-/// fetch the rows, then hand them here. Down: the one-OK notice
-/// holds the rows until its button (or Back) dismisses it. Up:
-/// the existing `set_channels` path is untouched. Scenario tests
-/// in `live_boot_gate` call this same function with both arms.
+/// fetch the rows, then hand them here. Down: boot holds the rows
+/// without a dialog; the one-OK notice opens at channel entry and
+/// holds them until its button (or Back) dismisses it. Up: the
+/// existing `set_channels` path is untouched. Scenario tests in
+/// `live_boot_gate` call this same function with both arms.
 fn stage_channel_list_after_relay_gate(
     game: &mut o2jam_shell::ScreenGame,
     channels: Vec<o2jam_net::ChannelState>,
     relay_down: bool,
 ) {
     if relay_down {
-        game.open_relay_down_dialog(channels);
+        game.hold_channel_rows_for_relay_notice(channels);
     } else {
         game.set_channels(channels);
     }

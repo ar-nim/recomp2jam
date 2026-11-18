@@ -121,20 +121,38 @@ NORMAL-mode string above.
 
 Shell: `relay_gate` probes the pinned relay hosts/ports before the
 channel exchange; `stage_channel_list_after_relay_gate` either holds
-the fetched rows behind `ScreenGame::open_relay_down_dialog` or
-keeps the original `set_channels` path. OK (or Back) dismisses and
-opens Channel with the rows. Live caller chain: `run_online` /
-`run_play --online` → `relay_gate::relay_down_now` → connect →
-`stage_channel_list_after_relay_gate` → `ScreenGame::open_relay_down_dialog`
-→ `paint_planet_modal` → `paint_relay_down_dialog` → OK →
-`dismiss_relay_down_dialog` → `paint_channel`. Guards:
+the fetched rows with `ScreenGame::hold_channel_rows_for_relay_notice`
+or keeps the original `set_channels` path. Boot leaves the splash and
+bare planet board clean; the Planet → Channel entry hook opens the
+notice above the channel frame, and OK (or Back) reveals the held rows
+in Channel. Live caller chain: `run_online` / `run_play --online` →
+`relay_gate::relay_down_now` → connect →
+`stage_channel_list_after_relay_gate` →
+`ScreenGame::hold_channel_rows_for_relay_notice` →
+`enter_screen(Channel)` → `open_relay_down_dialog` →
+`paint_channel` → `paint_planet_modal` → `paint_relay_down_dialog`
+→ OK → `dismiss_relay_down_dialog` → `paint_channel`. Guards:
+`relay_down_notice_waits_for_channel_entry_and_leaves_boot_on_avi`,
 `relay_down_dialog_holds_the_channel_list_until_ok_is_pressed`,
-`relay_down_boot_holds_channel_rows_behind_the_notice`,
+`relay_down_boot_holds_channel_rows_for_the_notice`,
 `relay_up_boot_keeps_the_existing_channel_path`,
 `relay_down_sheet_stages_from_the_installed_information_block`,
 `information_dialog_stages_the_one_ok_sheet`,
 `relay_up_when_a_pinned_style_endpoint_answers`,
 `relay_down_when_every_pinned_style_endpoint_refuses`.
+
+## Ticket #348 — notice boundary corrected (2026-11-18)
+
+Owner regression report: the notice opened at boot instead of channel
+entry. The #244 implementation called `open_relay_down_dialog` inside
+the boot staging and forced `Screen::Avi → Screen::Planet`, so the
+splash never landed. Exe oracle unchanged: the #244 frame shows the
+one-OK sheet over the Channel dialog (its title bar and row wells are
+visible behind the sheet), then the `03EA` channel frame after OK.
+The contradiction is between that frame and the boot-time placement,
+not between two exe observations. Correction: split hold (boot) from
+paint (channel entry); no geometry, string, or probe change. The one-OK
+hold and relay-up path keep their #244 pins.
 
 Harness note: the default `online` boot applies the gate. The
 `input-drive` X11 routing probe passes `--no-relay-gate` so its gear

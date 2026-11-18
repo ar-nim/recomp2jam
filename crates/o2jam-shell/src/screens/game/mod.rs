@@ -533,9 +533,12 @@ pub struct ScreenGame {
     /// Waiting draft and history, and the last whisper peer. The
     /// module owns row bounds, send bodies, and slash decisions.
     chat: ChatState,
-    /// Channel rows held behind the relay-unavailable notice until
-    /// its OK is pressed (#244). Empty except while that modal is up.
+    /// Channel rows held for the relay-unavailable notice (#244).
+    /// Boot stages them while the splash is up; OK reveals them after
+    /// the channel-entry edge opens the notice (#348).
     relay_down_pending_channels: Vec<ChannelState>,
+    /// Whether a boot-staged notice still waits for channel entry.
+    relay_down_notice_pending: bool,
     /// Native pointer position from the last snapshot (`None` until
     /// the pointer moves): the hover source for scenes with pinned hover
     /// art (the channel select bar). Test affordance and live input both
@@ -976,6 +979,7 @@ impl ScreenGame {
             planet_quit_art: None,
             relay_down_art: None,
             relay_down_pending_channels: Vec::new(),
+            relay_down_notice_pending: false,
             catalog_songs: Vec::new(),
             catalog_bpm: HashMap::new(),
             catalog_chart_files: HashMap::new(),
@@ -1255,7 +1259,9 @@ impl ScreenGame {
     /// invented. The Loading-to-Playing edge is the gate: it holds
     /// unless [`Self::loading_gate_ready`], so an unvalidated,
     /// unstaged, undecrypted, or audio-less gate never invents the
-    /// transition and never arms the clock. Entering Loading seeds
+    /// transition and never arms the clock. A boot-staged relay notice
+    /// opens over the channel frame on Planet -> Channel entry (#348),
+    /// never on the splash or the bare board. Entering Loading seeds
     /// the gate from any status the loader already staged (the
     /// session stages the clock-armed caption before the 4011 edge),
     /// else starts it at entry. On a held Playing entry the song
@@ -1280,6 +1286,9 @@ impl ScreenGame {
             }
             if next == Screen::Room {
                 self.room_dialog = None;
+            }
+            if next == Screen::Channel && self.relay_down_notice_pending {
+                self.open_relay_down_dialog();
             }
             if next == Screen::Loading {
                 self.loading_gate_failed = false;
@@ -1361,18 +1370,25 @@ impl ScreenGame {
         self
     }
 
-    /// Stage the relay-unavailable notice before the Channel dialog
-    /// loads (#244). The fetched rows stay pending behind the modal,
-    /// so no list paint or row input can reach them until OK. The
-    /// exe posts the message from its channel/planet reconnect
-    /// failure (file `0x474eca`/`0x8e340`) before the `03EA` frame;
-    /// the qualified capture is `~/scratch/p244-capture`.
-    pub fn open_relay_down_dialog(&mut self, channels: Vec<ChannelState>) -> &mut Self {
-        if self.flow.current() == Screen::Avi {
-            self.enter(Screen::Planet);
-        }
+    /// Hold the fetched channel rows for the relay-unavailable notice
+    /// (#244) without painting it. Boot calls this on the splash; the
+    /// rows stay unseen until the channel-entry edge opens the notice.
+    /// No list paint or row input can reach them before OK. The exe
+    /// posts the message from its channel/planet reconnect failure
+    /// (file `0x474eca`/`0x8e340`) before the `03EA` frame; the
+    /// qualified capture is `~/scratch/p244-capture`.
+    pub fn hold_channel_rows_for_relay_notice(&mut self, channels: Vec<ChannelState>) -> &mut Self {
         self.channel_scene.clear_rows();
         self.relay_down_pending_channels = channels;
+        self.relay_down_notice_pending = true;
+        self
+    }
+
+    /// Paint the held one-OK notice over the entered channel frame
+    /// (#348). Only the Planet -> Channel entry hook calls this on
+    /// the live path; boot never skips the splash for it.
+    pub fn open_relay_down_dialog(&mut self) -> &mut Self {
+        self.relay_down_notice_pending = false;
         self.planet_board.open_modal(PlanetModal::RelayDown);
         self
     }
@@ -1381,6 +1397,12 @@ impl ScreenGame {
     #[must_use]
     pub fn relay_down_dialog_open(&self) -> bool {
         self.planet_modal() == Some(PlanetModal::RelayDown)
+    }
+
+    /// True while boot-held rows wait for the channel-entry notice.
+    #[must_use]
+    pub const fn relay_down_notice_pending(&self) -> bool {
+        self.relay_down_notice_pending
     }
 
     /// True after the one-OK information sheet stages from the
@@ -1392,9 +1414,10 @@ impl ScreenGame {
             .is_some_and(SceneArt::has_figures)
     }
 
-    /// OK (or Back) on the relay notice: reveal the held rows and
-    /// open the Channel dialog, the exe's post-dialog state (#244).
-    /// Returns `false` when no notice was open.
+    /// OK (or Back) on the relay notice: reveal the held rows in the
+    /// already-entered Channel dialog, the exe's post-dialog state
+    /// (#244, boundary corrected in #348). Returns `false` when no
+    /// notice was open.
     pub fn dismiss_relay_down_dialog(&mut self) -> bool {
         if self.planet_modal() != Some(PlanetModal::RelayDown) {
             return false;
@@ -1402,7 +1425,6 @@ impl ScreenGame {
         self.planet_board.close_modal();
         let channels = std::mem::take(&mut self.relay_down_pending_channels);
         self.set_channels(channels);
-        self.enter(Screen::Channel);
         true
     }
 
@@ -5784,6 +5806,9 @@ impl ScreenGame {
             self.chat.panel(LobbyChat::Channel).history(),
             self.channel_scene.rows().len(),
         );
+        // The relay notice opens here, above the channel frame the
+        // exe shows behind it (#244 capture, boundary fixed in #348).
+        self.paint_planet_modal(frame);
     }
 
     /// Room lobby: staged art behind the live list, flat card fallback.
@@ -20929,16 +20954,17 @@ mod game_tests {
         );
     }
 
-    /// Ticket #244, live caller chain: `run_online` -> `setup_online`
-    /// -> `connect::connect_and_login_with_room_stage` ->
-    /// `stage_online_identity` -> `ScreenGame::open_relay_down_dialog`
-    /// -> `paint_planet` -> `paint_planet_modal` -> `InputSnapshot`
+    /// Ticket #244 with the #348 entry boundary, live caller chain:
+    /// `run_online` -> `setup_online` -> connect ->
+    /// `stage_channel_list_after_relay_gate` ->
+    /// `ScreenGame::hold_channel_rows_for_relay_notice` ->
+    /// `enter_screen(Channel)` -> `open_relay_down_dialog` ->
+    /// `paint_channel` -> `paint_planet_modal` -> `InputSnapshot`
     /// OK at the `.bnd` button rect -> `dismiss_relay_down_dialog`
-    /// -> `set_channels` -> `paint_channel`. The exe's qualified
-    /// capture (`~/scratch/p244-capture`, manifest sha256
-    /// `e211cc6e…`, popup `baf781b8…`) pins the blue one-OK box
-    /// before the `03EA` channel frame and the Channel dialog as
-    /// the post-dialog state.
+    /// -> `set_channels`. The exe's qualified capture
+    /// (`~/scratch/p244-capture`, manifest sha256 `e211cc6e…`,
+    /// popup `baf781b8…`) pins the blue one-OK box over the channel
+    /// dialog before the `03EA` channel frame.
     #[test]
     fn relay_down_dialog_holds_the_channel_list_until_ok_is_pressed() {
         let mut game = ScreenGame::new();
@@ -20949,7 +20975,10 @@ mod game_tests {
             population: 3,
             active: true,
         }];
-        game.open_relay_down_dialog(channels.clone());
+        game.hold_channel_rows_for_relay_notice(channels.clone());
+        assert!(game.enter_screen(Screen::Planet));
+        assert!(game.enter_screen(Screen::Channel));
+        assert_eq!(game.screen(), Screen::Channel, "notice is at channel entry");
         assert_eq!(game.planet_modal(), Some(PlanetModal::RelayDown));
         assert!(
             game.channel_rows().is_empty(),

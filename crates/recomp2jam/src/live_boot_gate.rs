@@ -672,15 +672,15 @@ mod live_boot_gate_tests {
         server.join().unwrap();
     }
 
-    /// Ticket #244, live caller chain: `run_online` ->
+    /// Ticket #244 with the #348 boundary: `run_online` ->
     /// `relay_gate::relay_down_now` ->
     /// `stage_channel_list_after_relay_gate` ->
-    /// `ScreenGame::open_relay_down_dialog` -> `paint_planet_modal`.
-    /// The exe's qualified pack (`~/scratch/p244-capture`, popup
-    /// sha256 `baf781b8…`) pins the one-OK box before the `03EA`
-    /// channel frame. This arm holds the rows behind the notice.
+    /// `ScreenGame::hold_channel_rows_for_relay_notice`. The exe's
+    /// qualified pack (`~/scratch/p244-capture`, popup sha256
+    /// `baf781b8…`) pins the one-OK box at channel entry; boot only
+    /// holds the rows, leaving the splash and board untouched.
     #[test]
-    fn relay_down_boot_holds_channel_rows_behind_the_notice() {
+    fn relay_down_boot_holds_channel_rows_for_the_notice() {
         let channels = vec![o2jam_net::ChannelState {
             gateway_id: 1,
             channel_id: 2,
@@ -690,8 +690,73 @@ mod live_boot_gate_tests {
         }];
         let mut game = o2jam_shell::ScreenGame::new();
         crate::stage_channel_list_after_relay_gate(&mut game, channels, true);
-        assert!(game.relay_down_dialog_open());
+        assert!(game.relay_down_notice_pending());
+        assert!(!game.relay_down_dialog_open());
         assert!(game.channel_rows().is_empty());
+    }
+
+    /// Boot boundary (#348): the live chain
+    /// `run_online` -> `stage_channel_list_after_relay_gate` holds the
+    /// relay-down rows without opening the notice. The splash and the
+    /// bare planet board stay clean; the notice opens only at the
+    /// Planet -> Channel entry edge, over the channel frame. OK still
+    /// reveals the held rows in Channel (#244).
+    #[test]
+    fn relay_down_notice_waits_for_channel_entry_and_leaves_boot_on_avi() {
+        let channels = vec![o2jam_net::ChannelState {
+            gateway_id: 1,
+            channel_id: 2,
+            capacity: 10,
+            population: 1,
+            active: true,
+        }];
+        let mut game = o2jam_shell::ScreenGame::new();
+        crate::stage_channel_list_after_relay_gate(&mut game, channels.clone(), true);
+
+        assert_eq!(game.screen(), Screen::Avi, "boot still lands on the splash");
+        assert!(
+            !game.relay_down_dialog_open(),
+            "the notice is not painted before channel entry"
+        );
+        assert!(game.channel_rows().is_empty(), "rows stay held");
+        assert!(
+            game.relay_down_notice_pending(),
+            "the held rows wait for channel entry"
+        );
+
+        assert!(game.enter_screen(Screen::Planet));
+        assert_eq!(
+            game.screen(),
+            Screen::Planet,
+            "splash dismiss lands on planet"
+        );
+        assert!(
+            !game.relay_down_dialog_open(),
+            "the bare planet board stays clean"
+        );
+
+        assert!(game.enter_screen(Screen::Channel));
+        assert!(
+            game.relay_down_dialog_open(),
+            "channel entry opens the notice"
+        );
+        assert!(
+            !game.relay_down_notice_pending(),
+            "the notice is open, no longer waiting"
+        );
+        assert!(
+            game.channel_rows().is_empty(),
+            "rows stay held behind the notice"
+        );
+        assert_eq!(
+            game.screen(),
+            Screen::Channel,
+            "the notice sits over the channel frame"
+        );
+
+        assert!(game.dismiss_relay_down_dialog());
+        assert_eq!(game.channel_rows(), channels, "OK reveals the held rows");
+        assert_eq!(game.screen(), Screen::Channel, "OK keeps the channel frame");
     }
 
     /// Same boot chain, relay-up arm: no notice, the existing

@@ -53,7 +53,9 @@ mod relay_gate_tests {
 
     /// Live caller chain: `run_online`/`run_play --online` ->
     /// `relay_gate::relay_down_now` -> `setup_online`/`stage_online`
-    /// -> `ScreenGame::open_relay_down_dialog`. This seam pins the
+    /// -> `stage_channel_list_after_relay_gate` ->
+    /// `ScreenGame::hold_channel_rows_for_relay_notice` ->
+    /// channel entry -> `open_relay_down_dialog`. This seam pins the
     /// probe end of that chain with a local socket instead of the
     /// pinned Internet hosts.
     #[test]
@@ -63,8 +65,8 @@ mod relay_gate_tests {
         assert!(!relay_down_for(&[address]), "listening relay is up");
     }
 
-    /// Same chain, negative arm: no socket answers, so boot stages
-    /// the information notice before the channel list.
+    /// Same chain, negative arm: no socket answers, so boot holds
+    /// the channel list for the notice at channel entry (#348).
     #[test]
     fn relay_down_when_every_pinned_style_endpoint_refuses() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("reserved relay port");
