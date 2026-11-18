@@ -2312,8 +2312,8 @@ mod avatar_figure_tests {
 
     #[test]
     fn decodes_first_image_with_colorkey() {
-        // 2x1: colorkey black, then red.
-        let blob = sprite55_blob(1, 0x0000, 2, 1, &[0x00, 0x00, 0x00, 0x7C]);
+        // 2x1: magenta colorkey, then red.
+        let blob = sprite55_blob(1, 0x7D5F, 2, 1, &[0x5F, 0x7D, 0x00, 0x7C]);
         let sprite = parse_sprite55(&blob).unwrap();
         let figure = AvatarFigure::from_sprite55(&sprite);
         assert_eq!(figure.len(), 1);

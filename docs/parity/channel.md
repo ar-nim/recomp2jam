@@ -87,6 +87,15 @@ deltas, not pinned painter faults. The full per-region metrics are local-only
 (`~/scratch/blit-pass/pack/region-metrics.json` SHA-256
 `dbc8401d69a973a221f1fd5be1877094a8cccafd258688de411035741aaeff5b`).
 
+Correction (#371, after #342 selected the right promo frame): the flank
+residual was a pinned painter fault, not a capture-scenario delta.
+`Planet_Promotion.ojs` carries stored colorkey `0`; 7.55 installs a
+source colorkey only for a nonzero key (`docs/claims-render.md` rule 4),
+so its black vinyl pixels are opaque. Our blit skipped them and showed
+the board art under the dialog's `0x7D5F` holes. The shared blit fix
+(`crates/o2jam-render/src/lib.rs`, `transparent_rgb`) raised the p361
+flanks from 0.871279/0.903726 to 0.999828/0.998838 SSIM.
+
 ## Ticket #244 — one-OK notice before the channel list (2026-11-18)
 
 Qualified exe oracle: `~/scratch/p244-capture` (local, git-ignored),

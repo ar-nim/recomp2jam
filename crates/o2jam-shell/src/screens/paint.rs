@@ -10475,6 +10475,108 @@ mod paint_tests {
     }
 
     #[test]
+    fn planet_zero_key_black_plates_cover_the_board_art() {
+        // Live caller chain: main.rs::run_play -> setup_online ->
+        // live_art::stage_interface_scenes -> ScreenGame::paint_planet ->
+        // paint_planet_scene -> paint_planet_board. Both bodies stage
+        // with colorkey 0; 7.55 installs a DirectDraw source colorkey
+        // only for a nonzero key (docs/claims-render.md rule 4), so a
+        // stored black pixel must cover the board art beneath it.
+        let Some(archive) = interface_archive() else {
+            return;
+        };
+        let staged = stage_state(&archive, State::Planet, StageContext::default())
+            .art
+            .expect("planet scene stages with real bytes");
+        let art = SceneArt {
+            placements: staged.placements,
+            figures: staged.figures,
+        };
+        let sentinel = pack_xrgb(0xFF, 0x00, 0xFF);
+        let mut buf = vec![sentinel; 800 * 600];
+        paint_planet_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &art,
+            None,
+            None,
+            None,
+            1,
+        );
+        let black = pack_xrgb(0, 0, 0);
+        assert_eq!(
+            buf[452 * 800 + 586],
+            black,
+            "State_Planet black plate pixel paints over the board art"
+        );
+        assert_eq!(
+            buf[258 * 800 + 345],
+            black,
+            "Planet_Promotion black plate pixel hides the board art"
+        );
+    }
+
+    #[test]
+    fn channel_flanks_show_opaque_vinyl_through_zero_key_black_pixels() {
+        // Live caller chain: main.rs::run_play -> setup_online ->
+        // live_art::stage_channel_dialog -> ScreenGame::paint_channel ->
+        // paint_channel_scene -> paint_planet_board ->
+        // paint_planet_promo_frame. The dialog sheet's key is 0x7D5F
+        // (transparent), but the board and promo bodies carry key 0:
+        // their black pixels are opaque in 7.55, so the flanks show
+        // dark vinyl instead of the board art under the dialog holes.
+        let Some(archive) = interface_archive() else {
+            return;
+        };
+        let staged_board = stage_state(&archive, State::Planet, StageContext::default())
+            .art
+            .expect("planet scene stages with real bytes");
+        let staged_dialog = crate::staging::stage_dialog(
+            &archive,
+            crate::staging::Dialog::ChannelInfo,
+            StageContext::default(),
+        )
+        .art
+        .expect("channel dialog stages with real bytes");
+        let board = SceneArt {
+            placements: staged_board.placements,
+            figures: staged_board.figures,
+        };
+        let dialog = SceneArt {
+            placements: staged_dialog.placements,
+            figures: staged_dialog.figures,
+        };
+        let mut buf = vec![pack_xrgb(0xFF, 0x00, 0xFF); 800 * 600];
+        paint_channel_scene(
+            &mut Frame {
+                buf: &mut buf,
+                w: 800,
+                h: 600,
+            },
+            &[],
+            0,
+            0,
+            &dialog,
+            Some(StagedPlanetBoard {
+                art: &board,
+                promo_index: 1,
+            }),
+            None,
+        );
+        let black = pack_xrgb(0, 0, 0);
+        for (x, y) in [(182, 171), (62, 226), (170, 279), (66, 289)] {
+            assert_eq!(
+                buf[y * 800 + x],
+                black,
+                "flank pixel ({x},{y}) is opaque vinyl, not staged board art"
+            );
+        }
+    }
+
+    #[test]
     fn gear_hover_restores_the_first_frame() {
         // OPTION/EXIT and the promo arrows (`docs/hover.md`): hover
         // repaints body frame 0 at full colour over the dimmed rest.

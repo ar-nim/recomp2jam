@@ -84,9 +84,14 @@ matches our all-zero-rect + anchor behavior.
 
 - **Colorkey 0**: the reference maps a stored key of `0` to a default
   magenta (`255,82,255`) matched with a tolerance threshold; ours
-  blits `0x0000` literally and matches exactly. Our archive walks
-  show `0x0000` stored in 3444/5787 bodies, but stored-0 semantics
-  (alias vs literal black) are NEEDS-EXE-CHECK.
+  blits `0x0000` literally. Our archive walks show `0x0000` stored
+  in 3444/5787 bodies. The exe resolves the stored-0 question:
+  `DXSurface::Load` (file `0x4249F0`) installs a source colorkey only
+  when the stored key is nonzero (`docs/claims-render.md` rule 4), so
+  black pixels in key-0 bodies are opaque. The third-party reference's
+  magenta default and our former `Some(0)` transparency both diverged
+  from the exe; #371/#373 pinned the plate/flank bleed and the shared
+  blit now treats key `0` as no colorkey.
 - **Origin shift on states too**: the reference shifts every bound
   block, not only dialogs — a no-op while `State_*.bnd` rect 0 is
   `(0,0)-(800,600)` (CONFIRMED-BY-EXE span), but mechanistically
